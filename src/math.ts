@@ -38,12 +38,7 @@ export function twoProduct(a: number, b: number): [number, number] {
 // Computes the modulo where the result is always non-negative.
 export function pmod(num: number, other: number): number {
 	const rem = num % other
-
-	if (rem < 0) {
-		return rem + other
-	} else {
-		return rem
-	}
+	return rem < 0 ? rem + other : rem
 }
 
 // Returns a pair containing the quotient and the remainder when [num] is divided by [other].
@@ -52,11 +47,5 @@ export function divmod(num: number, other: number): [number, number] {
 }
 
 export function roundToNearestWholeNumber(a: number): number {
-	if (Math.abs(a) < 0.5) {
-		return 0.0
-	} else if (a < 0.0) {
-		return Math.ceil(a - 0.5)
-	} else {
-		return Math.floor(a + 0.5)
-	}
+	return Math.abs(a) < 0.5 ? 0 : a < 0 ? Math.ceil(a - 0.5) : Math.floor(a + 0.5)
 }
