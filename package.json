@@ -2,8 +2,13 @@
 	"name": "nebulosa",
 	"module": "main.ts",
 	"type": "module",
+	"scripts": {
+		"lint": "eslint ."
+	},
 	"devDependencies": {
-		"@types/bun": "latest"
+        "@types/bun": "latest",
+        "eslint": "9.14.0",
+        "typescript-eslint": "8.14.0"
 	},
 	"peerDependencies": {
 		"typescript": "5.6.3"
