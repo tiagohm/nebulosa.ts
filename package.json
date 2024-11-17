@@ -1,0 +1,11 @@
+{
+	"name": "nebulosa",
+	"module": "main.ts",
+	"type": "module",
+	"devDependencies": {
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "5.6.3"
+	}
+}
