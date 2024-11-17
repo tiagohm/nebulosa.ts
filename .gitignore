@@ -176,3 +176,7 @@ dist
 
 # Bun
 bun.lockb
+
+# Executable
+nebulosa
+nebulosa.exe
