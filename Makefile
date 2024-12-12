@@ -1,7 +1,10 @@
-.PHONY: run test compile
+.PHONY: run lint test compile
 
 run:
 	bun .
+
+lint:
+	bun lint
 
 test:
 	bun test
