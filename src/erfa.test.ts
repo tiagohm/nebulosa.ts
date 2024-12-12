@@ -1,34 +1,64 @@
 import { expect, test } from 'bun:test'
-import { eraCalToJd, eraDat, eraJdToCal, eraSp00, eraTaiUt1, eraTaiUtc, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+import { eraCalToJd, eraDat, eraJdToCal, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTdbTt, eraTtTai, eraTtTdb, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 
 test('eraTaiUt1', () => {
-	const [u1, u2] = eraTaiUt1(2453750.5, 0.892482639, -32.6659)
-	expect(u1).toBe(2453750.5)
-	expect(u2).toBeCloseTo(0.8921045614537037037, 12)
+	const [a, b] = eraTaiUt1(2453750.5, 0.892482639, -32.6659)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8921045614537037037, 12)
 })
 
 test('eraTaiUtc', () => {
-	const [u1, u2] = eraTaiUtc(2453750.5, 0.892482639)
-	expect(u1).toBe(2453750.5)
-	expect(u2).toBeCloseTo(0.8921006945555555556, 12)
+	const [a, b] = eraTaiUtc(2453750.5, 0.892482639)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8921006945555555556, 12)
 })
 
 test('eraUtcTai', () => {
-	const [u1, u2] = eraUtcTai(2453750.5, 0.892100694)
-	expect(u1).toBe(2453750.5)
-	expect(u2).toBeCloseTo(0.8924826384444444444, 12)
+	const [a, b] = eraUtcTai(2453750.5, 0.892100694)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8924826384444444444, 12)
 })
 
 test('eraUtcUt1', () => {
-	const [u1, u2] = eraUtcUt1(2453750.5, 0.892100694, 0.3341)
-	expect(u1).toBe(2453750.5)
-	expect(u2).toBeCloseTo(0.8921045608981481481, 12)
+	const [a, b] = eraUtcUt1(2453750.5, 0.892100694, 0.3341)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8921045608981481481, 12)
 })
 
 test('eraUt1Utc', () => {
-	const [u1, u2] = eraUt1Utc(2453750.5, 0.892104561, 0.3341)
-	expect(u1).toBe(2453750.5)
-	expect(u2).toBeCloseTo(0.8921006941018518519, 12)
+	const [a, b] = eraUt1Utc(2453750.5, 0.892104561, 0.3341)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8921006941018518519, 12)
+})
+
+test('eraTaiTt', () => {
+	const [a, b] = eraTaiTt(2453750.5, 0.892482639)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.892855139, 12)
+})
+
+test('eraTtTai', () => {
+	const [a, b] = eraTtTai(2453750.5, 0.892482639)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.892110139, 12)
+})
+
+test('eraTaiTt', () => {
+	const [a, b] = eraTaiTt(2453750.5, 0.892482639)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.892855139, 12)
+})
+
+test('eraTtTdb', () => {
+	const [a, b] = eraTtTdb(2453750.5, 0.892855139, -0.000201)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8928551366736111111, 12)
+})
+
+test('eraTdbTt', () => {
+	const [a, b] = eraTdbTt(2453750.5, 0.892855137, -0.000201)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8928551393263888889, 12)
 })
 
 test('eraDat', () => {

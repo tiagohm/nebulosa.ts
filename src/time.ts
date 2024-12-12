@@ -1,7 +1,7 @@
 /* eslint-disable no-extra-semi */
 import type { Angle } from './angle'
 import { DAYSEC, DAYSPERJY, DTY, J2000, MJD0 } from './constants'
-import { eraCalToJd, eraSp00, eraUt1Utc, eraUtcUt1 } from './erfa'
+import { eraCalToJd, eraSp00, eraTaiTt, eraTaiUtc, eraUt1Utc, eraUtcUt1 } from './erfa'
 import { iersab } from './iers'
 import { twoProduct, twoSum } from './math'
 import type { Mat3 } from './matrix'
@@ -172,9 +172,35 @@ export function utc(time: Time): Time {
 			;[ret[0], ret[1]] = eraUt1Utc(time[0], time[1], iersab.delta(time))
 			break
 		case Timescale.TAI:
-			return time
+			;[ret[0], ret[1]] = eraTaiUtc(time[0], time[1])
+			break
 		case Timescale.TT:
 			return time
+		case Timescale.TCG:
+			return time
+		case Timescale.TDB:
+			return time
+		case Timescale.TCB:
+			return time
+		default:
+			return time
+	}
+
+	return ret as Time
+}
+
+/// Converts to TAI Time.
+export function tai(time: Time): Time {
+	const ret = [0, 0, Timescale.TAI]
+
+	switch (time[2]) {
+		case Timescale.UT1:
+			return time
+		case Timescale.UTC:
+			return time
+		case Timescale.TT:
+			;[ret[0], ret[1]] = eraTaiTt(time[0], time[1])
+			break
 		case Timescale.TCG:
 			return time
 		case Timescale.TDB:
@@ -198,7 +224,8 @@ export function tt(time: Time): Time {
 		case Timescale.UTC:
 			return time
 		case Timescale.TAI:
-			return time
+			;[ret[0], ret[1]] = eraTaiTt(time[0], time[1])
+			break
 		case Timescale.TCG:
 			return time
 		case Timescale.TDB:
