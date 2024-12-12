@@ -5,13 +5,13 @@ import { roundToNearestWholeNumber } from './math'
 const DBL_EPSILON = 2.220446049250313e-16
 
 // International Atomic Time, TAI, to Universal Time, UT1.
-export function eraTaiUt1(tai1: number, tai2: number, ut1_minus_tai: number): [number, number] {
-	return [tai1, tai2 + ut1_minus_tai / DAYSEC]
+export function eraTaiUt1(tai1: number, tai2: number, ut1MinusTai: number): [number, number] {
+	return [tai1, tai2 + ut1MinusTai / DAYSEC]
 }
 
 // Universal Time, UT1, to International Atomic Time, TAI.
-export function eraUt1Tai(ut11: number, ut12: number, ut1_minus_tai: number): [number, number] {
-	return [ut11, ut12 - ut1_minus_tai / DAYSEC]
+export function eraUt1Tai(ut11: number, ut12: number, ut1MinusTai: number): [number, number] {
+	return [ut11, ut12 - ut1MinusTai / DAYSEC]
 }
 
 // International Atomic Time, TAI, to Coordinated Universal Time, UTC.

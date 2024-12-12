@@ -1,9 +1,3 @@
-// Rectangular array of numbers with two rows and two columns.
-export type Matrix2 = [number, number, number, number]
-
-// Rectangular array of numbers with three rows and three columns.
-export type Matrix3 = [number, number, number, number, number, number, number, number, number]
-
 // Adds [a] and [b] exactly, returning the result as two 64-bit floats.
 export function twoSum(a: number, b: number): [number, number] {
 	const x = a + b
