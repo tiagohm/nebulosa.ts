@@ -1,45 +1,72 @@
-import { arcsec, type Angle } from './angle'
-import { DAYSEC, DAYSPERJC, J2000, MJD0, TTMINUSTAI } from './constants'
-import { roundToNearestWholeNumber } from './math'
+import { file } from 'bun'
+import fairheadFile from '../data/fairhead.dat' with { type: 'file' }
+import { arcsec, deg, type Angle } from './angle'
+import { DAYSEC, DAYSPERJC, DAYSPERJM, ELB, ELG, J2000, MJD0, MJD1977, TAU, TDB0, TTMINUSTAI } from './constants'
+import { toKm, type Distance } from './distance'
+import { pmod, roundToNearestWholeNumber } from './math'
+import { Timescale, type Time } from './time'
 
 const DBL_EPSILON = 2.220446049250313e-16
 
+// Barycentric Coordinate Time, TCB, to Barycentric Dynamical Time, TDB.
+export function eraTcbTdb(tcb1: number, tcb2: number): Time {
+	const d = tcb1 - (MJD0 + MJD1977)
+	const tdb2 = tcb2 + TDB0 / DAYSEC - (d + (tcb2 - TTMINUSTAI / DAYSEC)) * ELB
+	return [tcb1, tdb2, Timescale.TDB]
+}
+
+// Geocentric Coordinate Time, TCG, to Terrestrial Time, TT.
+export function eraTcgTt(tcg1: number, tcg2: number): Time {
+	const tt2 = tcg2 - (tcg1 - MJD0 + (tcg2 - (MJD1977 + TTMINUSTAI / DAYSEC))) * ELG
+	return [tcg1, tt2, Timescale.TT]
+}
+
+// Barycentric Dynamical Time, TDB, to Barycentric Coordinate Time, TCB.
+export function eraTdbTcb(tdb1: number, tdb2: number): Time {
+	const d = MJD0 + MJD1977 - tdb1
+	const f = tdb2 - TDB0 / DAYSEC
+	const tcb2 = f - (d - (f - TTMINUSTAI / DAYSEC)) * (ELB / (1.0 - ELB))
+	return [tdb1, tcb2, Timescale.TCB]
+}
+
+// Terrestrial Time, TT, to Geocentric Coordinate Time, TCG.
+export function eraTtTcg(tt1: number, tt2: number): Time {
+	const tcg2 = tt2 + (tt1 - MJD0 + (tt2 - (MJD1977 + TTMINUSTAI / DAYSEC))) * (ELG / (1.0 - ELG))
+	return [tt1, tcg2, Timescale.TCG]
+}
+
 // International Atomic Time, TAI, to Universal Time, UT1.
-export function eraTaiUt1(tai1: number, tai2: number, ut1MinusTai: number): [number, number] {
-	return [tai1, tai2 + ut1MinusTai / DAYSEC]
+export function eraTaiUt1(tai1: number, tai2: number, ut1MinusTai: number): Time {
+	return [tai1, tai2 + ut1MinusTai / DAYSEC, Timescale.UT1]
 }
 
 // Universal Time, UT1, to International Atomic Time, TAI.
-export function eraUt1Tai(ut11: number, ut12: number, ut1MinusTai: number): [number, number] {
-	return [ut11, ut12 - ut1MinusTai / DAYSEC]
+export function eraUt1Tai(ut11: number, ut12: number, ut1MinusTai: number): Time {
+	return [ut11, ut12 - ut1MinusTai / DAYSEC, Timescale.TAI]
 }
 
 // International Atomic Time, TAI, to Terrestrial Time, TT.
-export function eraTaiTt(tai1: number, tai2: number): [number, number] {
-	return [tai1, tai2 + TTMINUSTAI / DAYSEC]
+export function eraTaiTt(tai1: number, tai2: number): Time {
+	return [tai1, tai2 + TTMINUSTAI / DAYSEC, Timescale.TT]
 }
 
 // Terrestrial Time, TT, to International Atomic Time, TAI.
-export function eraTtTai(tt1: number, tt2: number): [number, number] {
-	return [tt1, tt2 - TTMINUSTAI / DAYSEC]
+export function eraTtTai(tt1: number, tt2: number): Time {
+	return [tt1, tt2 - TTMINUSTAI / DAYSEC, Timescale.TAI]
 }
 
-/**
- * Terrestrial Time, TT, to Barycentric Dynamical Time, TDB.
- */
-export function eraTtTdb(tt1: number, tt2: number, tdbMinusTt: number): [number, number] {
-	return [tt1, tt2 + tdbMinusTt / DAYSEC]
+// Terrestrial Time, TT, to Barycentric Dynamical Time, TDB.
+export function eraTtTdb(tt1: number, tt2: number, tdbMinusTt: number): Time {
+	return [tt1, tt2 + tdbMinusTt / DAYSEC, Timescale.TDB]
 }
 
-/**
- * Barycentric Dynamical Time, TDB, to Terrestrial Time, TT.
- */
-export function eraTdbTt(tdb1: number, tdb2: number, tdbMinusTt: number): [number, number] {
-	return [tdb1, tdb2 - tdbMinusTt / DAYSEC]
+// Barycentric Dynamical Time, TDB, to Terrestrial Time, TT.
+export function eraTdbTt(tdb1: number, tdb2: number, tdbMinusTt: number): Time {
+	return [tdb1, tdb2 - tdbMinusTt / DAYSEC, Timescale.TT]
 }
 
 // International Atomic Time, TAI, to Coordinated Universal Time, UTC.
-export function eraTaiUtc(tai1: number, tai2: number): [number, number] {
+export function eraTaiUtc(tai1: number, tai2: number): Time {
 	let u2 = tai2
 
 	// Iterate(though in most cases just once is enough).
@@ -51,10 +78,10 @@ export function eraTaiUtc(tai1: number, tai2: number): [number, number] {
 		u2 += tai2 - g2
 	}
 
-	return [tai1, u2]
+	return [tai1, u2, Timescale.UTC]
 }
 
-export function eraUtcTai(utc1: number, utc2: number): [number, number] {
+export function eraUtcTai(utc1: number, utc2: number): Time {
 	const u1 = Math.max(utc1, utc2)
 	const u2 = Math.min(utc1, utc2)
 
@@ -85,10 +112,10 @@ export function eraUtcTai(utc1: number, utc2: number): [number, number] {
 	// Assemble the TAI result, preserving the UTC split and order.
 	const a2 = MJD0 - u1 + z + (fd + dat0 / DAYSEC)
 
-	return [u1, a2]
+	return [u1, a2, Timescale.TAI]
 }
 
-export function eraUtcUt1(utc1: number, utc2: number, dut1: number): [number, number] {
+export function eraUtcUt1(utc1: number, utc2: number, dut1: number): Time {
 	const cal = eraJdToCal(utc1, utc2)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
 
@@ -99,7 +126,7 @@ export function eraUtcUt1(utc1: number, utc2: number, dut1: number): [number, nu
 	return eraTaiUt1(tai1, tai2, dta)
 }
 
-export function eraUt1Utc(ut11: number, ut12: number, dut1: number): [number, number] {
+export function eraUt1Utc(ut11: number, ut12: number, dut1: number): Time {
 	const u1 = Math.max(ut11, ut12)
 	let u2 = Math.min(ut11, ut12)
 
@@ -153,7 +180,7 @@ export function eraUt1Utc(ut11: number, ut12: number, dut1: number): [number, nu
 	// Subtract the (possibly adjusted) UT1-UTC from UT1 to give UTC.
 	u2 -= duts / DAYSEC
 
-	return [u1, u2]
+	return [u1, u2, Timescale.UTC]
 }
 
 export function eraJdToCal(dj1: number, dj2: number): [number, number, number, number] {
@@ -323,4 +350,68 @@ export function eraSp00(tt1: number, tt2: number): Angle {
 	const t = (tt1 - J2000 + tt2) / DAYSPERJC
 	const sp = -47e-6 * t
 	return arcsec(sp)
+}
+
+// TODO: Can be lazy loaded?
+const fairhead = new Float64Array(await file(fairheadFile).arrayBuffer())
+
+// An approximation to TDB-TT, the difference between barycentric
+// dynamical time and terrestrial time, for an observer on the Earth.
+export function eraDtDb(tdb1: number, tdb2: number, ut: number, elong: Angle = 0, u: Distance = 0, v: Distance = 0) {
+	// Time since J2000.0 in Julian millennia.
+	const t = (tdb1 - J2000 + tdb2) / DAYSPERJM
+	// Convert UT to local solar time in radians.
+	const tsol = pmod(ut, 1) * TAU + elong
+	// Combine time argument (millennia) with deg/arcsec factor.
+	const w = t / 3600.0
+	// Sun Mean Meridian.
+	const elsun = deg(280.46645683 + 1296027711.03429 * w)
+	// Sun Mean Anomaly.
+	const emsun = deg(357.52910918 + 1295965810.481 * w)
+	// Mean Elongation of Moon from Sun.
+	const d = deg(297.85019547 + 16029616012.09 * w)
+	// Mean Longitude of Jupiter.
+	const elj = deg(34.35151874 + 109306899.89453 * w)
+	// Mean Longitude of Saturn.
+	const els = deg(50.0774443 + 44046398.47038 * w)
+	// TOPOCENTRIC TERMS: Moyer 1981 and Murray 1983.
+	const ukm = toKm(u)
+	const vkm = toKm(v)
+	const wt = 0.00029e-10 * ukm * Math.sin(tsol + elsun - els) + 0.001e-10 * ukm * Math.sin(tsol - 2.0 * emsun) + 0.00133e-10 * ukm * Math.sin(tsol - d) + 0.00133e-10 * ukm * Math.sin(tsol + elsun - elj) - 0.00229e-10 * ukm * Math.sin(tsol + 2.0 * elsun + emsun) - 0.022e-10 * vkm * Math.cos(elsun + emsun) + 0.05312e-10 * ukm * Math.sin(tsol - emsun) - 0.13677e-10 * ukm * Math.sin(tsol + 2.0 * elsun) - 1.3184e-10 * vkm * Math.cos(elsun) + 3.17679e-10 * ukm * Math.sin(tsol)
+
+	const wn = [0, 0, 0, 0, 0]
+
+	// T^0
+	for (let j = 1419; j >= 0; j -= 3) {
+		wn[0] += fairhead[j] * Math.sin(fairhead[j + 1] * t + fairhead[j + 2])
+	}
+
+	// T^1
+	for (let j = 2034; j >= 1422; j -= 3) {
+		wn[1] += fairhead[j] * Math.sin(fairhead[j + 1] * t + fairhead[j + 2])
+	}
+
+	// T^2
+	for (let j = 2289; j >= 2037; j -= 3) {
+		wn[2] += fairhead[j] * Math.sin(fairhead[j + 1] * t + fairhead[j + 2])
+	}
+
+	// T^3
+	for (let j = 2349; j >= 2292; j -= 3) {
+		wn[3] += fairhead[j] * Math.sin(fairhead[j + 1] * t + fairhead[j + 2])
+	}
+
+	// T^4
+	for (let j = 2358; j >= 2352; j -= 3) {
+		wn[4] += fairhead[j] * Math.sin(fairhead[j + 1] * t + fairhead[j + 2])
+	}
+
+	// Multiply by powers of T and combine.
+	const wf = t * (t * (t * (t * wn[4] + wn[3]) + wn[2]) + wn[1]) + wn[0]
+
+	// Adjustments to use JPL planetary masses instead of IAU.
+	const wj = 0.00065e-6 * Math.sin(6069.776754 * t + 4.021194) + 0.00033e-6 * Math.sin(213.299095 * t + 5.543132) + -0.00196e-6 * Math.sin(6208.294251 * t + 5.696701) + -0.00173e-6 * Math.sin(74.781599 * t + 2.4359) + 0.03638e-6 * t * t
+
+	// TDB-TT in seconds.
+	return wt + wf + wj
 }

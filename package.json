@@ -3,7 +3,8 @@
 	"module": "main.ts",
 	"type": "module",
 	"scripts": {
-		"lint": "eslint ."
+		"lint": "eslint .",
+		"prettier": "prettier \"**/*.ts\" --write"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",

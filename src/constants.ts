@@ -51,3 +51,21 @@ export const ELB = 1.550519768e-8
 
 // TDB (s) at TAI 1977/1/1.0.
 export const TDB0 = -6.55e-5
+
+// Astronomical unit (m, IAU 2012).
+export const AU_M = 149597870700.0
+
+// Astronomical unit (km, IAU 2012).
+export const AU_KM = AU_M / 1000.0
+
+// Speed of light (m/s).
+export const SPEED_OF_LIGHT = 299792458.0
+
+// Light time for 1 AU in s.
+export const LIGHT_TIME_AU = AU_M / SPEED_OF_LIGHT
+
+// Schwarzschild radius of the Sun (AU).
+export const SCHWARZSCHILD_RADIUS_OF_THE_SUN = 1.97412574336e-8
+
+// Speed of light (AU per day).
+export const SPEED_OF_LIGHT_AU_DAY = (SPEED_OF_LIGHT * DAYSEC) / AU_M

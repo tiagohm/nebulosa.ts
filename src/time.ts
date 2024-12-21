@@ -1,14 +1,13 @@
-/* eslint-disable no-extra-semi */
 import type { Angle } from './angle'
-import { DAYSEC, DAYSPERJY, DTY, J2000, MJD0 } from './constants'
-import { eraCalToJd, eraSp00, eraTaiTt, eraTaiUtc, eraUt1Utc, eraUtcUt1 } from './erfa'
+import { DAYSEC, DAYSPERJY, DTY, J2000, MJD0, TTMINUSTAI } from './constants'
+import { eraCalToJd, eraDat, eraDtDb, eraJdToCal, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import { iersab } from './iers'
 import { twoProduct, twoSum } from './math'
 import type { Mat3 } from './matrix'
 import { rotX } from './matrix'
 
 // Holds the number of Julian days and the fraction of the day.
-export type Time = [number, number, Timescale]
+export type Time = readonly [number, number, Timescale]
 
 export enum Timescale {
 	UT1,
@@ -26,20 +25,17 @@ export enum JulianCalendarCutOff {
 	GregorianStartEngland = 2361222,
 }
 
-// Computes the ΔT in seconds at [time].
-export interface TimeDelta {
-	delta(time: Time): number
-}
+// Computes the ΔT in seconds at time.
+export type TimeDelta = (time: Time) => number
 
-export interface PolarMotion {
-	xy(time: Time): [Angle, Angle]
-}
+// The displaced angles (longitude and latitude) of rotation of the Earth’s spin axis about its geographic axis.
+export type PolarMotion = (time: Time) => [Angle, Angle]
 
 // Computes the motion angles (sprime, x, y) from the specified [time].
 export function pmAngles(pm: PolarMotion, time: Time): [Angle, Angle, Angle] {
 	time = tt(time)
 	const sprime = eraSp00(time[0], time[1])
-	const [x, y] = pm.xy(time)
+	const [x, y] = pm(time)
 	return [sprime, x, y]
 }
 
@@ -140,101 +136,101 @@ export function normalize(day: number, fraction: number, divisor: number = 0, sc
 
 /// Converts to UT1 Time.
 export function ut1(time: Time): Time {
-	const ret = [0, 0, Timescale.UT1]
-
-	switch (time[2]) {
-		case Timescale.UTC:
-			;[ret[0], ret[1]] = eraUtcUt1(time[0], time[1], iersab.delta(time))
-			break
-		case Timescale.TAI:
-			return time
-		case Timescale.TT:
-			return time
-		case Timescale.TCG:
-			return time
-		case Timescale.TDB:
-			return time
-		case Timescale.TCB:
-			return time
-		default:
-			return time
-	}
-
-	return ret as Time
+	const [a, b, scale] = time
+	if (scale === Timescale.UT1) return time
+	else if (scale === Timescale.TAI) return eraTaiUt1(a, b, ut1MinusTai(time))
+	else if (scale === Timescale.UTC) return eraUtcUt1(a, b, iersab.delta(time))
+	else return ut1(utc(time))
 }
 
 /// Converts to UTC Time.
 export function utc(time: Time): Time {
-	const ret = [0, 0, Timescale.UTC]
-
-	switch (time[2]) {
-		case Timescale.UT1:
-			;[ret[0], ret[1]] = eraUt1Utc(time[0], time[1], iersab.delta(time))
-			break
-		case Timescale.TAI:
-			;[ret[0], ret[1]] = eraTaiUtc(time[0], time[1])
-			break
-		case Timescale.TT:
-			return time
-		case Timescale.TCG:
-			return time
-		case Timescale.TDB:
-			return time
-		case Timescale.TCB:
-			return time
-		default:
-			return time
-	}
-
-	return ret as Time
+	const [a, b, scale] = time
+	if (scale === Timescale.UTC) return time
+	else if (scale === Timescale.UT1) return eraUt1Utc(a, b, iersab.delta(time))
+	else if (scale === Timescale.TAI) return eraTaiUtc(a, b)
+	else return utc(tai(time))
 }
 
 /// Converts to TAI Time.
 export function tai(time: Time): Time {
-	const ret = [0, 0, Timescale.TAI]
-
-	switch (time[2]) {
-		case Timescale.UT1:
-			return time
-		case Timescale.UTC:
-			return time
-		case Timescale.TT:
-			;[ret[0], ret[1]] = eraTaiTt(time[0], time[1])
-			break
-		case Timescale.TCG:
-			return time
-		case Timescale.TDB:
-			return time
-		case Timescale.TCB:
-			return time
-		default:
-			return time
-	}
-
-	return ret as Time
+	const [a, b, scale] = time
+	if (scale === Timescale.TAI) return time
+	else if (scale === Timescale.UT1) return eraUt1Tai(a, b, ut1MinusTai(time))
+	else if (scale === Timescale.UTC) return eraUtcTai(a, b)
+	else if (scale === Timescale.TT) return eraTtTai(a, b)
+	else return tai(tt(time))
 }
 
 /// Converts to TT Time.
 export function tt(time: Time): Time {
-	const ret = [0, 0, Timescale.TT]
+	const [a, b, scale] = time
+	if (scale === Timescale.TT) return time
+	else if (scale === Timescale.TAI) return eraTaiTt(a, b)
+	else if (scale === Timescale.TCG) return eraTcgTt(a, b)
+	else if (scale === Timescale.TDB) return eraTdbTt(a, b, tdbMinusTt(time))
+	else if (scale < Timescale.TAI) return tt(tai(time))
+	else return tt(tdb(time))
+}
 
-	switch (time[2]) {
-		case Timescale.UT1:
-			return time
-		case Timescale.UTC:
-			return time
-		case Timescale.TAI:
-			;[ret[0], ret[1]] = eraTaiTt(time[0], time[1])
-			break
-		case Timescale.TCG:
-			return time
-		case Timescale.TDB:
-			return time
-		case Timescale.TCB:
-			return time
-		default:
-			return time
+/// Converts to TCG Time.
+export function tcg(time: Time): Time {
+	const [a, b, scale] = time
+	if (scale === Timescale.TCG) return time
+	else if (scale === Timescale.TT) return eraTtTcg(a, b)
+	else return tcg(tt(time))
+}
+
+/// Converts to TDB Time.
+export function tdb(time: Time): Time {
+	const [a, b, scale] = time
+	if (scale === Timescale.TDB) return time
+	else if (scale === Timescale.TT) return eraTtTdb(a, b, tdbMinusTt(time))
+	else if (scale === Timescale.TCB) return eraTcbTdb(a, b)
+	else return tdb(tt(time))
+}
+
+/// Converts to TCB Time.
+export function tcb(time: Time): Time {
+	const [a, b, scale] = time
+	if (scale === Timescale.TCB) return time
+	else if (scale === Timescale.TDB) return eraTdbTcb(a, b)
+	else return tcb(tdb(time))
+}
+
+// Computes TDB - TT in seconds at time.
+export const tdbMinusTt: TimeDelta = (time) => {
+	const [whole, fraction, scale] = time
+
+	if (scale === Timescale.TDB || scale === Timescale.TT) {
+		const ut = normalize(whole - 0.5, fraction - TTMINUSTAI / DAYSEC)[1]
+
+		// TODO:
+		// return if (time.location != null) {
+		//     val (x, y, z) = time.location
+		//     val rxy = hypot(x, y) / 1000.0
+		//     val elong = if (location is GeodeticLocation) location.longitude else 0.0
+		//     eraDtDb(whole, fraction, ut, elong, rxy, z / 1000.0)
+		// } else {
+		//     eraDtDb(time.whole, time.fraction, ut)
+		// }
+
+		return eraDtDb(whole, fraction, ut)
 	}
 
-	return ret as Time
+	return 0
+}
+
+// Computes TAI - UTC in seconds at time.
+export const taiMinusUtc: TimeDelta = (time) => {
+	const cal = eraJdToCal(time[0], time[1])
+	return eraDat(cal[0], cal[1], cal[2], cal[3])
+}
+
+// Computes UT1 - TAI in seconds at time.
+export const ut1MinusTai: TimeDelta = (time) => {
+	const cal = eraJdToCal(time[0], time[1])
+	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
+	const dut1 = iersab.delta(time)
+	return dut1 - dat
 }

@@ -24,52 +24,52 @@ export const TURNAS = 1296000.0
 // Represents an angle in radians.
 export type Angle = number
 
-// Creates a new [Angle] from degrees.
-export function deg(num: number): Angle {
-	return num * DEG2RAD
+// Creates a new Angle from degrees.
+export function deg(value: number): Angle {
+	return value * DEG2RAD
 }
 
-// Creates a new [Angle] from hours.
-export function hours(num: number): Angle {
-	return num * (PI / 12)
+// Creates a new Angle from hours.
+export function hour(value: number): Angle {
+	return value * (PI / 12)
 }
 
-// Creates a new [Angle] from arcmin.
-export function arcmin(num: number): Angle {
-	return num * AMIN2RAD
+// Creates a new Angle from arcmin.
+export function arcmin(value: number): Angle {
+	return value * AMIN2RAD
 }
 
-// Creates a new [Angle] from arcseconds.
-export function arcsec(num: number): Angle {
-	return num * ASEC2RAD
+// Creates a new Angle from arcseconds.
+export function arcsec(value: number): Angle {
+	return value * ASEC2RAD
 }
 
-// Creates a new [Angle] from milliarcseconds.
-export function mas(num: number): Angle {
-	return num * MILLIASEC2RAD
+// Creates a new Angle from milliarcseconds.
+export function mas(value: number): Angle {
+	return value * MILLIASEC2RAD
 }
 
-// Converts the [Angle] to degrees.
+// Converts the angle to degrees.
 export function toDeg(angle: Angle): number {
 	return angle * RAD2DEG
 }
 
-// Converts the [Angle] to hours.
-export function toHours(angle: Angle): number {
+// Converts the angle to hours.
+export function toHour(angle: Angle): number {
 	return angle * (12 / PI)
 }
 
-// Converts the [Angle] to arcmin.
+// Converts the angle to arcmin.
 export function toArcmin(angle: Angle): number {
 	return angle / AMIN2RAD
 }
 
-// Converts the [Angle] to arcseconds.
+// Converts the angle to arcseconds.
 export function toArcsec(angle: Angle): number {
 	return angle / ASEC2RAD
 }
 
-// Converts the [Angle] to milliarcseconds.
+// Converts the angle to milliarcseconds.
 export function toMas(angle: Angle): number {
 	return angle / MILLIASEC2RAD
 }

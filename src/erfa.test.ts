@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { eraCalToJd, eraDat, eraJdToCal, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTdbTt, eraTtTai, eraTtTdb, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+import { kilometer } from './distance'
+import { eraCalToJd, eraDat, eraDtDb, eraJdToCal, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 
 test('eraTaiUt1', () => {
 	const [a, b] = eraTaiUt1(2453750.5, 0.892482639, -32.6659)
@@ -61,6 +62,30 @@ test('eraTdbTt', () => {
 	expect(b).toBeCloseTo(0.8928551393263888889, 12)
 })
 
+test('eraTcbTdb', () => {
+	const [a, b] = eraTcbTdb(2453750.5, 0.893019599)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8928551362746343397, 12)
+})
+
+test('eraTcgTt', () => {
+	const [a, b] = eraTcgTt(2453750.5, 0.892862531)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8928551387488816828, 12)
+})
+
+test('eraTdbTcb', () => {
+	const [a, b] = eraTdbTcb(2453750.5, 0.892855137)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8930195997253656716, 12)
+})
+
+test('eraTtTcg', () => {
+	const [a, b] = eraTtTcg(2453750.5, 0.892482639)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8924900312508587113, 12)
+})
+
 test('eraDat', () => {
 	expect(eraDat(2003, 6, 1, 0.0)).toBe(32.0)
 	expect(eraDat(2008, 1, 17, 0.0)).toBe(33.0)
@@ -81,4 +106,8 @@ test('eraJdToCal', () => {
 
 test('eraSp00', () => {
 	expect(eraSp00(2400000.5, 52541.0)).toBeCloseTo(-0.6216698469981019309e-11, 12)
+})
+
+test('eraDtDb', () => {
+	expect(eraDtDb(2448939.5, 0.123, 0.76543, 5.0123, kilometer(5525.242), kilometer(3190))).toBeCloseTo(-0.1280368005936998991e-2, 15)
 })
