@@ -1,5 +1,6 @@
-import { expect, test, type CustomMatcher } from 'bun:test'
+import { beforeAll, expect, test, type CustomMatcher } from 'bun:test'
 import { J2000 } from './constants'
+import { iersa, iersb } from './iers'
 import { normalize, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, tt, ut1, utc, type Time } from './time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
@@ -27,6 +28,11 @@ declare module 'bun:test' {
 		toMatchTime(expected: Time, precision?: number): void
 	}
 }
+
+beforeAll(async () => {
+	await iersa.load(await Bun.file('data/finals2000A.txt').arrayBuffer())
+	await iersb.load(await Bun.file('data/eopc04.1962-now.txt').arrayBuffer())
+})
 
 test('time', () => {
 	const t = time(2449353.623, 0, Timescale.TT)
@@ -103,12 +109,12 @@ test('ut1', () => {
 	expect(t.fraction).toBe(0)
 
 	expect(ut1(t)).toMatchTime(time(2459130.0, 0.0, Timescale.UT1, false))
-	// expect(utc(t)).toMatchTime(time(2459130.0, 0.000001988640612458, Timescale.UTC, false))
-	// expect(tai(t)).toMatchTime(time(2459130.0, 0.000430229381353175, Timescale.TAI, false))
-	// expect(tt(t)).toMatchTime(time(2459130.0, 0.000802729381353175, Timescale.TT, false))
-	// expect(tcg(t)).toMatchTime(time(2459130.0, 0.000813870140404485, Timescale.TCG, false))
-	// expect(tdb(t)).toMatchTime(time(2459130.0, 0.000802709826729233, Timescale.TDB, false))
-	// expect(tcb(t)).toMatchTime(time(2459130.0, 0.001050568932858317, Timescale.TCB, false))
+	expect(utc(t)).toMatchTime(time(2459130.0, 0.000001988640612458, Timescale.UTC, false), 1e-13)
+	expect(tai(t)).toMatchTime(time(2459130.0, 0.000430229381353175, Timescale.TAI, false), 1e-13)
+	expect(tt(t)).toMatchTime(time(2459130.0, 0.000802729381353175, Timescale.TT, false), 1e-13)
+	expect(tcg(t)).toMatchTime(time(2459130.0, 0.000813870140404485, Timescale.TCG, false), 1e-13)
+	expect(tdb(t)).toMatchTime(time(2459130.0, 0.000802709826729233, Timescale.TDB, false), 1e-13)
+	expect(tcb(t)).toMatchTime(time(2459130.0, 0.001050568932858317, Timescale.TCB, false), 1e-13)
 })
 
 test('utc', () => {
@@ -116,7 +122,7 @@ test('utc', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	// expect(ut1(t)).toMatchTime(time(2459130.0, -0.00000198864062497, Timescale.UT1, false))
+	expect(ut1(t)).toMatchTime(time(2459130.0, -0.00000198864062497, Timescale.UT1, false))
 	expect(utc(t)).toMatchTime(time(2459130.0, 0.0, Timescale.UTC, false))
 	expect(tai(t)).toMatchTime(time(2459130.0, 0.000428240740740771, Timescale.TAI, false))
 	expect(tt(t)).toMatchTime(time(2459130.0, 0.000800740740740771, Timescale.TT, false))
@@ -130,7 +136,7 @@ test('tai', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	// expect(ut1(t)).toMatchTime(time(2459130.0, -0.000430229384066532, Timescale.UT1, false))
+	expect(ut1(t)).toMatchTime(time(2459130.0, -0.000430229384066532, Timescale.UT1, false), 1e-11)
 	expect(utc(t)).toMatchTime(time(2459130.0, -0.000428240740740715, Timescale.UTC, false))
 	expect(tai(t)).toMatchTime(time(2459130.0, 0.0, Timescale.TAI, false))
 	expect(tt(t)).toMatchTime(time(2459130.0, 0.0003725, Timescale.TT, false))
@@ -144,7 +150,7 @@ test('tt', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	// expect(ut1(t)).toMatchTime(time(2459130.0, -0.000802729386415781, Timescale.UT1, false))
+	expect(ut1(t)).toMatchTime(time(2459130.0, -0.000802729386415781, Timescale.UT1, false))
 	expect(utc(t)).toMatchTime(time(2459130.0, -0.000800740740740721, Timescale.UTC, false))
 	expect(tai(t)).toMatchTime(time(2459130.0, -0.0003725, Timescale.TAI, false))
 	expect(tt(t)).toMatchTime(time(2459130.0, 0.0, Timescale.TT, false))
@@ -158,7 +164,7 @@ test('tcg', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	// expect(ut1(t)).toMatchTime(time(2459130.0, -0.000813870144970116, Timescale.UT1, false))
+	expect(ut1(t)).toMatchTime(time(2459130.0, -0.000813870144970116, Timescale.UT1, false))
 	expect(utc(t)).toMatchTime(time(2459130.0, -0.000811881499224787, Timescale.UTC, false))
 	expect(tai(t)).toMatchTime(time(2459130.0, -0.0003836407584841, Timescale.TAI, false))
 	expect(tt(t)).toMatchTime(time(2459130.0, -0.0000111407584841, Timescale.TT, false))
@@ -172,7 +178,7 @@ test('tdb', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	// expect(ut1(t)).toMatchTime(time(2459130.0, -0.000802709831783577, Timescale.UT1, false))
+	expect(ut1(t)).toMatchTime(time(2459130.0, -0.000802709831783577, Timescale.UT1, false))
 	expect(utc(t)).toMatchTime(time(2459130.0, -0.000800721186108623, Timescale.UTC, false))
 	expect(tai(t)).toMatchTime(time(2459130.0, -0.000372480445367887, Timescale.TAI, false))
 	expect(tt(t)).toMatchTime(time(2459130.0, 0.000000019554632113, Timescale.TT, false))
@@ -186,7 +192,7 @@ test('tcb', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	// expect(ut1(t)).toMatchTime(time(2459130.0, -0.001050568923184019, Timescale.UT1, false))
+	expect(ut1(t)).toMatchTime(time(2459130.0, -0.001050568923184019, Timescale.UT1, false))
 	expect(utc(t)).toMatchTime(time(2459130.0, -0.001048580275945906, Timescale.UTC, false))
 	expect(tai(t)).toMatchTime(time(2459130.0, -0.000620339535205171, Timescale.TAI, false))
 	expect(tt(t)).toMatchTime(time(2459130.0, -0.000247839535205171, Timescale.TT, false))

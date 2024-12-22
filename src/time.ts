@@ -52,7 +52,7 @@ export type TimeDelta = (time: Time) => number
 // The displaced angles (longitude and latitude) of rotation of the Earth’s spin axis about its geographic axis.
 export type PolarMotion = (time: Time) => [Angle, Angle]
 
-// Computes the motion angles (sprime, x, y) from the specified [time].
+// Computes the motion angles (sprime, x, y) from the specified time.
 export function pmAngles(pm: PolarMotion, time: Time): [Angle, Angle, Angle] {
 	time = tt(time)
 	const sprime = eraSp00(time.day, time.fraction)
@@ -60,7 +60,7 @@ export function pmAngles(pm: PolarMotion, time: Time): [Angle, Angle, Angle] {
 	return [sprime, x, y]
 }
 
-// Computes the motion matrix from the specified [time].
+// Computes the motion matrix from the specified time.
 export function pmMatrix(pm: PolarMotion, time: Time): Mat3 {
 	const [sprime, x, y] = pmAngles(pm, time)
 	return rotX(y).rotY(x).rotZ(-sprime)
