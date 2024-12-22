@@ -1,4 +1,4 @@
-.PHONY: run lint prettier test compile
+.PHONY: run lint prettier test compile astropy
 
 run:
 	bun .
@@ -11,6 +11,9 @@ prettier:
 
 test:
 	bun test
+
+astropy:
+	python scripts/astropy/$(name).py
 
 ifeq ($(OS),Windows_NT)
 compile:
