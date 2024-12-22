@@ -4,69 +4,68 @@ import { arcsec, deg, type Angle } from './angle'
 import { DAYSEC, DAYSPERJC, DAYSPERJM, ELB, ELG, J2000, MJD0, MJD1977, TAU, TDB0, TTMINUSTAI } from './constants'
 import { toKm, type Distance } from './distance'
 import { pmod, roundToNearestWholeNumber } from './math'
-import { Timescale, type Time } from './time'
 
 const DBL_EPSILON = 2.220446049250313e-16
 
 // Barycentric Coordinate Time, TCB, to Barycentric Dynamical Time, TDB.
-export function eraTcbTdb(tcb1: number, tcb2: number): Time {
+export function eraTcbTdb(tcb1: number, tcb2: number): [number, number] {
 	const d = tcb1 - (MJD0 + MJD1977)
 	const tdb2 = tcb2 + TDB0 / DAYSEC - (d + (tcb2 - TTMINUSTAI / DAYSEC)) * ELB
-	return [tcb1, tdb2, Timescale.TDB]
+	return [tcb1, tdb2]
 }
 
 // Geocentric Coordinate Time, TCG, to Terrestrial Time, TT.
-export function eraTcgTt(tcg1: number, tcg2: number): Time {
+export function eraTcgTt(tcg1: number, tcg2: number): [number, number] {
 	const tt2 = tcg2 - (tcg1 - MJD0 + (tcg2 - (MJD1977 + TTMINUSTAI / DAYSEC))) * ELG
-	return [tcg1, tt2, Timescale.TT]
+	return [tcg1, tt2]
 }
 
 // Barycentric Dynamical Time, TDB, to Barycentric Coordinate Time, TCB.
-export function eraTdbTcb(tdb1: number, tdb2: number): Time {
+export function eraTdbTcb(tdb1: number, tdb2: number): [number, number] {
 	const d = MJD0 + MJD1977 - tdb1
 	const f = tdb2 - TDB0 / DAYSEC
 	const tcb2 = f - (d - (f - TTMINUSTAI / DAYSEC)) * (ELB / (1.0 - ELB))
-	return [tdb1, tcb2, Timescale.TCB]
+	return [tdb1, tcb2]
 }
 
 // Terrestrial Time, TT, to Geocentric Coordinate Time, TCG.
-export function eraTtTcg(tt1: number, tt2: number): Time {
+export function eraTtTcg(tt1: number, tt2: number): [number, number] {
 	const tcg2 = tt2 + (tt1 - MJD0 + (tt2 - (MJD1977 + TTMINUSTAI / DAYSEC))) * (ELG / (1.0 - ELG))
-	return [tt1, tcg2, Timescale.TCG]
+	return [tt1, tcg2]
 }
 
 // International Atomic Time, TAI, to Universal Time, UT1.
-export function eraTaiUt1(tai1: number, tai2: number, ut1MinusTai: number): Time {
-	return [tai1, tai2 + ut1MinusTai / DAYSEC, Timescale.UT1]
+export function eraTaiUt1(tai1: number, tai2: number, ut1MinusTai: number): [number, number] {
+	return [tai1, tai2 + ut1MinusTai / DAYSEC]
 }
 
 // Universal Time, UT1, to International Atomic Time, TAI.
-export function eraUt1Tai(ut11: number, ut12: number, ut1MinusTai: number): Time {
-	return [ut11, ut12 - ut1MinusTai / DAYSEC, Timescale.TAI]
+export function eraUt1Tai(ut11: number, ut12: number, ut1MinusTai: number): [number, number] {
+	return [ut11, ut12 - ut1MinusTai / DAYSEC]
 }
 
 // International Atomic Time, TAI, to Terrestrial Time, TT.
-export function eraTaiTt(tai1: number, tai2: number): Time {
-	return [tai1, tai2 + TTMINUSTAI / DAYSEC, Timescale.TT]
+export function eraTaiTt(tai1: number, tai2: number): [number, number] {
+	return [tai1, tai2 + TTMINUSTAI / DAYSEC]
 }
 
 // Terrestrial Time, TT, to International Atomic Time, TAI.
-export function eraTtTai(tt1: number, tt2: number): Time {
-	return [tt1, tt2 - TTMINUSTAI / DAYSEC, Timescale.TAI]
+export function eraTtTai(tt1: number, tt2: number): [number, number] {
+	return [tt1, tt2 - TTMINUSTAI / DAYSEC]
 }
 
 // Terrestrial Time, TT, to Barycentric Dynamical Time, TDB.
-export function eraTtTdb(tt1: number, tt2: number, tdbMinusTt: number): Time {
-	return [tt1, tt2 + tdbMinusTt / DAYSEC, Timescale.TDB]
+export function eraTtTdb(tt1: number, tt2: number, tdbMinusTt: number): [number, number] {
+	return [tt1, tt2 + tdbMinusTt / DAYSEC]
 }
 
 // Barycentric Dynamical Time, TDB, to Terrestrial Time, TT.
-export function eraTdbTt(tdb1: number, tdb2: number, tdbMinusTt: number): Time {
-	return [tdb1, tdb2 - tdbMinusTt / DAYSEC, Timescale.TT]
+export function eraTdbTt(tdb1: number, tdb2: number, tdbMinusTt: number): [number, number] {
+	return [tdb1, tdb2 - tdbMinusTt / DAYSEC]
 }
 
 // International Atomic Time, TAI, to Coordinated Universal Time, UTC.
-export function eraTaiUtc(tai1: number, tai2: number): Time {
+export function eraTaiUtc(tai1: number, tai2: number): [number, number] {
 	let u2 = tai2
 
 	// Iterate(though in most cases just once is enough).
@@ -78,10 +77,10 @@ export function eraTaiUtc(tai1: number, tai2: number): Time {
 		u2 += tai2 - g2
 	}
 
-	return [tai1, u2, Timescale.UTC]
+	return [tai1, u2]
 }
 
-export function eraUtcTai(utc1: number, utc2: number): Time {
+export function eraUtcTai(utc1: number, utc2: number): [number, number] {
 	const u1 = Math.max(utc1, utc2)
 	const u2 = Math.min(utc1, utc2)
 
@@ -112,10 +111,10 @@ export function eraUtcTai(utc1: number, utc2: number): Time {
 	// Assemble the TAI result, preserving the UTC split and order.
 	const a2 = MJD0 - u1 + z + (fd + dat0 / DAYSEC)
 
-	return [u1, a2, Timescale.TAI]
+	return [u1, a2]
 }
 
-export function eraUtcUt1(utc1: number, utc2: number, dut1: number): Time {
+export function eraUtcUt1(utc1: number, utc2: number, dut1: number): [number, number] {
 	const cal = eraJdToCal(utc1, utc2)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
 
@@ -126,7 +125,7 @@ export function eraUtcUt1(utc1: number, utc2: number, dut1: number): Time {
 	return eraTaiUt1(tai1, tai2, dta)
 }
 
-export function eraUt1Utc(ut11: number, ut12: number, dut1: number): Time {
+export function eraUt1Utc(ut11: number, ut12: number, dut1: number): [number, number] {
 	const u1 = Math.max(ut11, ut12)
 	let u2 = Math.min(ut11, ut12)
 
@@ -180,7 +179,7 @@ export function eraUt1Utc(ut11: number, ut12: number, dut1: number): Time {
 	// Subtract the (possibly adjusted) UT1-UTC from UT1 to give UTC.
 	u2 -= duts / DAYSEC
 
-	return [u1, u2, Timescale.UTC]
+	return [u1, u2]
 }
 
 export function eraJdToCal(dj1: number, dj2: number): [number, number, number, number] {
