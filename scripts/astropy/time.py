@@ -1,4 +1,10 @@
 from astropy.time import Time
+from astropy.utils import iers
+
+iers.conf.auto_download = False
+
+iers_b = iers.IERS_B.open('data/eopc04.1962-now.txt')
+iers.earth_orientation_table.set(iers_b)
 
 def time(scale):
     t = Time('2020-10-07T12:00:00', format='isot', scale=scale)
