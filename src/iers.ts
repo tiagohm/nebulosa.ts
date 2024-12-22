@@ -83,7 +83,6 @@ export class IersA extends IersBase {
 		this.clear()
 
 		return readLinesFromArrayBuffer(buffer, (line) => {
-			const mjd = parseFloat(line.substring(7, 15).trim())
 			const pmXa = parseFloat(line.substring(18, 27).trim())
 			const pmYa = parseFloat(line.substring(37, 46).trim())
 			const pmXb = parseFloat(line.substring(134, 144).trim())
@@ -91,10 +90,13 @@ export class IersA extends IersBase {
 			const dut1a = parseFloat(line.substring(58, 68).trim())
 			const dut1b = parseFloat(line.substring(154, 165).trim())
 
-			this.mjd.push(mjd)
-			this.pmX.push(pmXb || pmXa)
-			this.pmY.push(pmYb || pmYa)
-			this.dut1.push(dut1b || dut1a)
+			if ((pmXb || pmXa) && (pmYb || pmYa) && (dut1b || dut1a)) {
+				const mjd = parseFloat(line.substring(7, 15).trim())
+				this.mjd.push(mjd)
+				this.pmX.push(pmXb || pmXa)
+				this.pmY.push(pmYb || pmYa)
+				this.dut1.push(dut1b || dut1a)
+			}
 		})
 	}
 }
@@ -108,15 +110,17 @@ export class IersB extends IersBase {
 		return readLinesFromArrayBuffer(buffer, (line) => {
 			if (line.startsWith('#')) return
 
-			const mjd = parseFloat(line.substring(16, 26).trim())
 			const pmX = parseFloat(line.substring(26, 38).trim())
 			const pmY = parseFloat(line.substring(38, 50).trim())
 			const dut1 = parseFloat(line.substring(50, 62).trim())
 
-			this.mjd.push(mjd)
-			this.pmX.push(pmX)
-			this.pmY.push(pmY)
-			this.dut1.push(dut1)
+			if (pmX && pmY && dut1) {
+				const mjd = parseFloat(line.substring(16, 26).trim())
+				this.mjd.push(mjd)
+				this.pmX.push(pmX)
+				this.pmY.push(pmY)
+				this.dut1.push(dut1)
+			}
 		})
 	}
 }

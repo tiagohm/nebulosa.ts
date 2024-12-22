@@ -5,6 +5,7 @@ from astropy.utils import iers
 # https://docs.astropy.org/en/stable/api/astropy.utils.iers.IERS.html
 
 iers.conf.auto_download = False
+iers.conf.iers_degraded_accuracy = 'warn'
 
 t = Time('2020-10-07T12:34:56', format='isot', scale='utc')
 
