@@ -195,6 +195,36 @@ test('tcb', () => {
 	expect(tcb(t)).toMatchTime(time(2459130.0, 0.0, Timescale.TCB, false))
 })
 
+test('memoize', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TCB)
+
+	for (let i = 0; i < 10000; i++) {
+		const a = ut1(t)
+		expect(a.memoize?.tcb).toEqual(t)
+		expect(t.memoize?.ut1).toEqual(a)
+
+		const b = utc(t)
+		expect(b.memoize?.tcb).toEqual(t)
+		expect(t.memoize?.utc).toEqual(b)
+
+		const c = tai(t)
+		expect(c.memoize?.tcb).toEqual(t)
+		expect(t.memoize?.tai).toEqual(c)
+
+		const d = tt(t)
+		expect(d.memoize?.tcb).toEqual(t)
+		expect(t.memoize?.tt).toEqual(d)
+
+		const e = tcg(t)
+		expect(e.memoize?.tcb).toEqual(t)
+		expect(t.memoize?.tcg).toEqual(e)
+
+		const f = tdb(t)
+		expect(f.memoize?.tcb).toEqual(t)
+		expect(t.memoize?.tdb).toEqual(f)
+	}
+}, 1000)
+
 test('tdbMinusTtByFairheadAndBretagnon1990', () => {
 	expect(tdbMinusTtByFairheadAndBretagnon1990(time(2448031, 0.5, Timescale.TDB))).toBeCloseTo(0.0011585185926349208, 16)
 

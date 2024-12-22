@@ -17,6 +17,16 @@ export enum Timescale {
 	TCB,
 }
 
+export interface TimeMemoize {
+	ut1?: Time
+	utc?: Time
+	tai?: Time
+	tt?: Time
+	tcg?: Time
+	tdb?: Time
+	tcb?: Time
+}
+
 // Represents and manipulates an instant of time for astronomy.
 export interface Time {
 	readonly day: number
@@ -26,6 +36,8 @@ export interface Time {
 	tdbMinusTt?: TimeDelta
 	// taiMinusUtc?: TimeDelta
 	ut1MinusTai?: TimeDelta
+
+	memoize?: TimeMemoize
 }
 
 export enum JulianCalendarCutOff {
@@ -147,68 +159,159 @@ function makeTime(a: [number, number], time: Time, scale: Timescale = time.scale
 	return { ...time, day: a[0], fraction: a[1], scale }
 }
 
+function memoize(source: Time, target: Time, scale: Timescale = target.scale) {
+	source.memoize ??= {}
+
+	switch (scale) {
+		case Timescale.UT1:
+			source.memoize.ut1 = target
+			break
+		case Timescale.UTC:
+			source.memoize.utc = target
+			break
+		case Timescale.TAI:
+			source.memoize.tai = target
+			break
+		case Timescale.TT:
+			source.memoize.tt = target
+			break
+		case Timescale.TCG:
+			source.memoize.tcg = target
+			break
+		case Timescale.TDB:
+			source.memoize.tdb = target
+			break
+		case Timescale.TCB:
+			source.memoize.tcb = target
+			break
+	}
+}
+
 /// Converts to UT1 Time.
 export function ut1(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UT1) return time
-	else if (scale === Timescale.TAI) return makeTime(eraTaiUt1(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.UT1)
-	else if (scale === Timescale.UTC) return makeTime(eraUtcUt1(day, fraction, iersab.delta(time)), time, Timescale.UT1)
-	else return ut1(utc(time))
+	if (time.memoize?.ut1) return time.memoize.ut1
+
+	let ret: Time
+
+	if (scale === Timescale.TAI) ret = makeTime(eraTaiUt1(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.UT1)
+	else if (scale === Timescale.UTC) ret = makeTime(eraUtcUt1(day, fraction, iersab.delta(time)), time, Timescale.UT1)
+	else ret = ut1(utc(time))
+
+	memoize(ret, time)
+	memoize(time, ret)
+
+	return ret
 }
 
 /// Converts to UTC Time.
 export function utc(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UTC) return time
-	else if (scale === Timescale.UT1) return makeTime(eraUt1Utc(day, fraction, iersab.delta(time)), time, Timescale.UTC)
-	else if (scale === Timescale.TAI) return makeTime(eraTaiUtc(day, fraction), time, Timescale.UTC)
-	else return utc(tai(time))
+	if (time.memoize?.utc) return time.memoize.utc
+
+	let ret: Time
+
+	if (scale === Timescale.UT1) ret = makeTime(eraUt1Utc(day, fraction, iersab.delta(time)), time, Timescale.UTC)
+	else if (scale === Timescale.TAI) ret = makeTime(eraTaiUtc(day, fraction), time, Timescale.UTC)
+	else ret = utc(tai(time))
+
+	memoize(ret, time)
+	memoize(time, ret)
+
+	return ret
 }
 
 /// Converts to TAI Time.
 export function tai(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TAI) return time
-	else if (scale === Timescale.UT1) return makeTime(eraUt1Tai(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.TAI)
-	else if (scale === Timescale.UTC) return makeTime(eraUtcTai(day, fraction), time, Timescale.TAI)
-	else if (scale === Timescale.TT) return makeTime(eraTtTai(day, fraction), time, Timescale.TAI)
-	else return tai(tt(time))
+	if (time.memoize?.tai) return time.memoize.tai
+
+	let ret: Time
+
+	if (scale === Timescale.UT1) ret = makeTime(eraUt1Tai(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.TAI)
+	else if (scale === Timescale.UTC) ret = makeTime(eraUtcTai(day, fraction), time, Timescale.TAI)
+	else if (scale === Timescale.TT) ret = makeTime(eraTtTai(day, fraction), time, Timescale.TAI)
+	else ret = tai(tt(time))
+
+	memoize(ret, time)
+	memoize(time, ret)
+
+	return ret
 }
 
 /// Converts to TT Time.
 export function tt(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TT) return time
-	else if (scale === Timescale.TAI) return makeTime(eraTaiTt(day, fraction), time, Timescale.TT)
-	else if (scale === Timescale.TCG) return makeTime(eraTcgTt(day, fraction), time, Timescale.TT)
-	else if (scale === Timescale.TDB) return makeTime(eraTdbTt(day, fraction, (time.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TT)
+	if (time.memoize?.tt) return time.memoize.tt
+
+	let ret: Time
+
+	if (scale === Timescale.TAI) ret = makeTime(eraTaiTt(day, fraction), time, Timescale.TT)
+	else if (scale === Timescale.TCG) ret = makeTime(eraTcgTt(day, fraction), time, Timescale.TT)
+	else if (scale === Timescale.TDB) ret = makeTime(eraTdbTt(day, fraction, (time.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TT)
 	else if (scale < Timescale.TAI) return tt(tai(time))
-	else return tt(tdb(time))
+	else ret = tt(tdb(time))
+
+	memoize(ret, time)
+	memoize(time, ret)
+
+	return ret
 }
 
 /// Converts to TCG Time.
 export function tcg(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCG) return time
-	else if (scale === Timescale.TT) return makeTime(eraTtTcg(day, fraction), time, Timescale.TCG)
-	else return tcg(tt(time))
+	if (time.memoize?.tcg) return time.memoize.tcg
+
+	let ret: Time
+
+	if (scale === Timescale.TT) ret = makeTime(eraTtTcg(day, fraction), time, Timescale.TCG)
+	else ret = tcg(tt(time))
+
+	memoize(ret, time)
+	memoize(time, ret)
+
+	return ret
 }
 
 /// Converts to TDB Time.
 export function tdb(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TDB) return time
-	else if (scale === Timescale.TT) return makeTime(eraTtTdb(day, fraction, (time.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TDB)
-	else if (scale === Timescale.TCB) return makeTime(eraTcbTdb(day, fraction), time, Timescale.TDB)
-	else return tdb(tt(time))
+	if (time.memoize?.tdb) return time.memoize.tdb
+
+	let ret: Time
+
+	if (scale === Timescale.TT) ret = makeTime(eraTtTdb(day, fraction, (time.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TDB)
+	else if (scale === Timescale.TCB) ret = makeTime(eraTcbTdb(day, fraction), time, Timescale.TDB)
+	else ret = tdb(tt(time))
+
+	memoize(ret, time)
+	memoize(time, ret)
+
+	return ret
 }
 
 /// Converts to TCB Time.
 export function tcb(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCB) return time
-	else if (scale === Timescale.TDB) return makeTime(eraTdbTcb(day, fraction), time, Timescale.TCB)
-	else return tcb(tdb(time))
+	if (time.memoize?.tcb) return time.memoize.tcb
+
+	let ret: Time
+
+	if (scale === Timescale.TDB) ret = makeTime(eraTdbTcb(day, fraction), time, Timescale.TCB)
+	else ret = tcb(tdb(time))
+
+	memoize(ret, time)
+	memoize(time, ret)
+
+	return ret
 }
 
 // Computes TDB - TT in seconds at time.
