@@ -6,6 +6,9 @@
 		"lint": "eslint .",
 		"prettier": "prettier \"**/*.ts\" --write"
 	},
+	"dependencies": {
+		"utility-types": "3.11.0"
+	},
 	"devDependencies": {
 		"@types/bun": "latest",
 		"eslint": "latest",

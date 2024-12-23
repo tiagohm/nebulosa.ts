@@ -3,8 +3,7 @@ import { DAYSEC, DAYSPERJY, DTY, J2000, MJD0, TTMINUSTAI } from './constants'
 import { eraCalToJd, eraDat, eraDtDb, eraJdToCal, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import { iersab } from './iers'
 import { twoProduct, twoSum } from './math'
-import type { Mat3 } from './matrix'
-import { rotX } from './matrix'
+import { rotX, rotY, rotZ, type MutMat3 } from './matrix'
 
 // The specification for measuring time.
 export enum Timescale {
@@ -52,6 +51,9 @@ export type TimeDelta = (time: Time) => number
 // The displaced angles (longitude and latitude) of rotation of the Earth’s spin axis about its geographic axis.
 export type PolarMotion = (time: Time) => [Angle, Angle]
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export const noPolarMotion = (time: Time) => [0, 0]
+
 // Computes the motion angles (sprime, x, y) from the specified time.
 export function pmAngles(pm: PolarMotion, time: Time): [Angle, Angle, Angle] {
 	time = tt(time)
@@ -61,9 +63,9 @@ export function pmAngles(pm: PolarMotion, time: Time): [Angle, Angle, Angle] {
 }
 
 // Computes the motion matrix from the specified time.
-export function pmMatrix(pm: PolarMotion, time: Time): Mat3 {
+export function pmMatrix(pm: PolarMotion, time: Time): MutMat3 {
 	const [sprime, x, y] = pmAngles(pm, time)
-	return rotX(y).rotY(x).rotZ(-sprime)
+	return rotZ(-sprime, rotY(x, rotX(y)))
 }
 
 export function time(day: number, fraction: number = 0, scale: Timescale = Timescale.UTC, normalized: boolean = true): Time {
