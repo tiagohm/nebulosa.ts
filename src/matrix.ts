@@ -7,6 +7,11 @@ export type Mat3 = readonly [number, number, number, number, number, number, num
 // Like Mat3 but mutable.
 export type MutMat3 = Mutable<Mat3>
 
+// Creates a new empty Matrix.
+export function zero(): MutMat3 {
+	return [0, 0, 0, 0, 0, 0, 0, 0, 0]
+}
+
 // Creates a new Identity Matrix.
 export function identity(): MutMat3 {
 	return [1, 0, 0, 0, 1, 0, 0, 0, 1]
@@ -90,7 +95,7 @@ export function rotZ(angle: Angle, m?: MutMat3): MutMat3 {
 	}
 }
 
-// Creates a new mutable Matrix from matrix.
+// Creates a new mutable Matrix from the given matrix.
 export function clone(m: Mat3): MutMat3 {
 	return [...m]
 }
