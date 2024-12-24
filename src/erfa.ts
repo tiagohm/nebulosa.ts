@@ -24,13 +24,13 @@ export function eraTcgTt(tcg1: number, tcg2: number): [number, number] {
 export function eraTdbTcb(tdb1: number, tdb2: number): [number, number] {
 	const d = MJD0 + MJD1977 - tdb1
 	const f = tdb2 - TDB0 / DAYSEC
-	const tcb2 = f - (d - (f - TTMINUSTAI / DAYSEC)) * (ELB / (1.0 - ELB))
+	const tcb2 = f - (d - (f - TTMINUSTAI / DAYSEC)) * (ELB / (1 - ELB))
 	return [tdb1, tcb2]
 }
 
 // Terrestrial Time, TT, to Geocentric Coordinate Time, TCG.
 export function eraTtTcg(tt1: number, tt2: number): [number, number] {
-	const tcg2 = tt2 + (tt1 - MJD0 + (tt2 - (MJD1977 + TTMINUSTAI / DAYSEC))) * (ELG / (1.0 - ELG))
+	const tcg2 = tt2 + (tt1 - MJD0 + (tt2 - (MJD1977 + TTMINUSTAI / DAYSEC))) * (ELG / (1 - ELG))
 	return [tt1, tcg2]
 }
 
@@ -86,17 +86,17 @@ export function eraUtcTai(utc1: number, utc2: number): [number, number] {
 
 	// Get TAI-UTC at 0h today.
 	const cal = eraJdToCal(u1, u2)
-	const dat0 = eraDat(cal[0], cal[1], cal[2], 0.0)
+	const dat0 = eraDat(cal[0], cal[1], cal[2], 0)
 
 	// Get TAI-UTC at 12h today (to detect drift).
 	const dat12 = eraDat(cal[0], cal[1], cal[2], 0.5)
 
 	// Get TAI-UTC at 0h tomorrow (to detect jumps).
 	const calt = eraJdToCal(u1 + 1.5, u2 - cal[3])
-	const dat24 = eraDat(calt[0], calt[1], calt[2], 0.0)
+	const dat24 = eraDat(calt[0], calt[1], calt[2], 0)
 
 	// Separate TAI-UTC change into per-day (DLOD) and any jump (DLEAP).
-	const dlod = 2.0 * (dat12 - dat0)
+	const dlod = 2 * (dat12 - dat0)
 	const dleap = dat24 - (dat0 + dlod)
 
 	// Remove any scaling applied to spread leap into preceding day.
@@ -133,12 +133,12 @@ export function eraUt1Utc(ut11: number, ut12: number, dut1: number): [number, nu
 
 	// See if the UT1 can possibly be in a leap-second day.
 	let d1 = u1
-	let dats1 = 0.0
+	let dats1 = 0
 
 	for (let i = -1; i < 4; i++) {
 		let d2 = u2 + i
 		const cal = eraJdToCal(d1, d2)
-		const dats2 = eraDat(cal[0], cal[1], cal[2], 0.0)
+		const dats2 = eraDat(cal[0], cal[1], cal[2], 0)
 
 		if (i == -1) {
 			dats1 = dats2
@@ -148,7 +148,7 @@ export function eraUt1Utc(ut11: number, ut12: number, dut1: number): [number, nu
 
 		if (Math.abs(ddats) >= 0.5) {
 			// Yes, leap second nearby: ensure UT1-UTC is "before" value.
-			if (ddats * duts >= 0.0) {
+			if (ddats * duts >= 0) {
 				duts -= ddats
 			}
 
@@ -157,17 +157,17 @@ export function eraUt1Utc(ut11: number, ut12: number, dut1: number): [number, nu
 			d2 = eraCalToJd(cal[0], cal[1], cal[2])
 
 			const us1 = d1
-			const us2 = d2 - 1.0 + duts / DAYSEC
+			const us2 = d2 - 1 + duts / DAYSEC
 
 			// Is the UT1 after this point?
 			const du = u1 - us1 + (u2 - us2)
 
-			if (du > 0.0) {
+			if (du > 0) {
 				// Yes: fraction of the current UTC day that has elapsed.
 				const fd = (du * DAYSEC) / (DAYSEC + ddats)
 
 				// Ramp UT1-UTC to bring about ERFA's JD(UTC) convention.
-				duts += ddats * fd <= 1.0 ? fd : 1.0
+				duts += ddats * fd <= 1 ? fd : 1
 			}
 
 			break
@@ -194,7 +194,7 @@ export function eraJdToCal(dj1: number, dj2: number): [number, number, number, n
 
 	// Compute f1+f2+0.5 using compensated summation (Klein 2006).
 	let s = 0.5
-	let cs = 0.0
+	let cs = 0
 
 	for (const x of [f1, f2]) {
 		const t = s + x
@@ -212,7 +212,7 @@ export function eraJdToCal(dj1: number, dj2: number): [number, number, number, n
 	cs = f - s
 
 	// Deal with negative f.
-	if (f < 0.0) {
+	if (f < 0) {
 		// Compensated summation: assume that |s| <= 1.
 		f = s + 1
 		cs += 1 - f + s
@@ -275,51 +275,51 @@ const LEAP_SECOND_CHANGES: LeapSecondChange[] = [
 	[1965, 9, 3.84013],
 	[1966, 1, 4.31317],
 	[1968, 2, 4.21317],
-	[1972, 1, 10.0],
-	[1972, 7, 11.0],
-	[1973, 1, 12.0],
-	[1974, 1, 13.0],
-	[1975, 1, 14.0],
-	[1976, 1, 15.0],
-	[1977, 1, 16.0],
-	[1978, 1, 17.0],
-	[1979, 1, 18.0],
-	[1980, 1, 19.0],
-	[1981, 7, 20.0],
-	[1982, 7, 21.0],
-	[1983, 7, 22.0],
-	[1985, 7, 23.0],
-	[1988, 1, 24.0],
-	[1990, 1, 25.0],
-	[1991, 1, 26.0],
-	[1992, 7, 27.0],
-	[1993, 7, 28.0],
-	[1994, 7, 29.0],
-	[1996, 1, 30.0],
-	[1997, 7, 31.0],
-	[1999, 1, 32.0],
-	[2006, 1, 33.0],
-	[2009, 1, 34.0],
-	[2012, 7, 35.0],
-	[2015, 7, 36.0],
-	[2017, 1, 37.0],
+	[1972, 1, 10],
+	[1972, 7, 11],
+	[1973, 1, 12],
+	[1974, 1, 13],
+	[1975, 1, 14],
+	[1976, 1, 15],
+	[1977, 1, 16],
+	[1978, 1, 17],
+	[1979, 1, 18],
+	[1980, 1, 19],
+	[1981, 7, 20],
+	[1982, 7, 21],
+	[1983, 7, 22],
+	[1985, 7, 23],
+	[1988, 1, 24],
+	[1990, 1, 25],
+	[1991, 1, 26],
+	[1992, 7, 27],
+	[1993, 7, 28],
+	[1994, 7, 29],
+	[1996, 1, 30],
+	[1997, 7, 31],
+	[1999, 1, 32],
+	[2006, 1, 33],
+	[2009, 1, 34],
+	[2012, 7, 35],
+	[2015, 7, 36],
+	[2017, 1, 37],
 ]
 
 const LEAP_SECOND_DRIFT: LeapSecondDrift[] = [
-	[37300.0, 0.001296],
-	[37300.0, 0.001296],
-	[37300.0, 0.001296],
-	[37665.0, 0.0011232],
-	[37665.0, 0.0011232],
-	[38761.0, 0.001296],
-	[38761.0, 0.001296],
-	[38761.0, 0.001296],
-	[38761.0, 0.001296],
-	[38761.0, 0.001296],
-	[38761.0, 0.001296],
-	[38761.0, 0.001296],
-	[39126.0, 0.002592],
-	[39126.0, 0.002592],
+	[37300, 0.001296],
+	[37300, 0.001296],
+	[37300, 0.001296],
+	[37665, 0.0011232],
+	[37665, 0.0011232],
+	[38761, 0.001296],
+	[38761, 0.001296],
+	[38761, 0.001296],
+	[38761, 0.001296],
+	[38761, 0.001296],
+	[38761, 0.001296],
+	[38761, 0.001296],
+	[39126, 0.002592],
+	[39126, 0.002592],
 ]
 
 // For a given UTC date, calculate Delta(AT) = TAI-UTC.
@@ -362,7 +362,7 @@ export function eraDtDb(tdb1: number, tdb2: number, ut: number, elong: Angle = 0
 	// Convert UT to local solar time in radians.
 	const tsol = pmod(ut, 1) * TAU + elong
 	// Combine time argument (millennia) with deg/arcsec factor.
-	const w = t / 3600.0
+	const w = t / 3600
 	// Sun Mean Meridian.
 	const elsun = deg(280.46645683 + 1296027711.03429 * w)
 	// Sun Mean Anomaly.
@@ -376,7 +376,7 @@ export function eraDtDb(tdb1: number, tdb2: number, ut: number, elong: Angle = 0
 	// TOPOCENTRIC TERMS: Moyer 1981 and Murray 1983.
 	const ukm = toKm(u)
 	const vkm = toKm(v)
-	const wt = 0.00029e-10 * ukm * Math.sin(tsol + elsun - els) + 0.001e-10 * ukm * Math.sin(tsol - 2.0 * emsun) + 0.00133e-10 * ukm * Math.sin(tsol - d) + 0.00133e-10 * ukm * Math.sin(tsol + elsun - elj) - 0.00229e-10 * ukm * Math.sin(tsol + 2.0 * elsun + emsun) - 0.022e-10 * vkm * Math.cos(elsun + emsun) + 0.05312e-10 * ukm * Math.sin(tsol - emsun) - 0.13677e-10 * ukm * Math.sin(tsol + 2.0 * elsun) - 1.3184e-10 * vkm * Math.cos(elsun) + 3.17679e-10 * ukm * Math.sin(tsol)
+	const wt = 0.00029e-10 * ukm * Math.sin(tsol + elsun - els) + 0.001e-10 * ukm * Math.sin(tsol - 2 * emsun) + 0.00133e-10 * ukm * Math.sin(tsol - d) + 0.00133e-10 * ukm * Math.sin(tsol + elsun - elj) - 0.00229e-10 * ukm * Math.sin(tsol + 2 * elsun + emsun) - 0.022e-10 * vkm * Math.cos(elsun + emsun) + 0.05312e-10 * ukm * Math.sin(tsol - emsun) - 0.13677e-10 * ukm * Math.sin(tsol + 2 * elsun) - 1.3184e-10 * vkm * Math.cos(elsun) + 3.17679e-10 * ukm * Math.sin(tsol)
 
 	const wn = [0, 0, 0, 0, 0]
 

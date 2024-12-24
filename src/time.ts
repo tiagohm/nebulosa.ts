@@ -1,5 +1,5 @@
 import type { Angle } from './angle'
-import { DAYSEC, DAYSPERJY, DTY, J2000, MJD0, TTMINUSTAI } from './constants'
+import { DAYSEC, DAYSPERJC, DAYSPERJY, DTY, J2000, MJD0, TTMINUSTAI } from './constants'
 import { eraCalToJd, eraDat, eraDtDb, eraJdToCal, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import { iersab } from './iers'
 import { twoProduct, twoSum } from './math'
@@ -16,16 +16,6 @@ export enum Timescale {
 	TCB,
 }
 
-export interface TimeMemoize {
-	ut1?: Time
-	utc?: Time
-	tai?: Time
-	tt?: Time
-	tcg?: Time
-	tdb?: Time
-	tcb?: Time
-}
-
 // Represents and manipulates an instant of time for astronomy.
 export interface Time {
 	readonly day: number
@@ -36,7 +26,13 @@ export interface Time {
 	// taiMinusUtc?: TimeDelta
 	ut1MinusTai?: TimeDelta
 
-	memoize?: TimeMemoize
+	ut1?: Time
+	utc?: Time
+	tai?: Time
+	tt?: Time
+	tcg?: Time
+	tdb?: Time
+	tcb?: Time
 }
 
 export enum JulianCalendarCutOff {
@@ -75,7 +71,7 @@ export function time(day: number, fraction: number = 0, scale: Timescale = Times
 // Times that represent the interval from a particular epoch as
 // a floating point multiple of a unit time interval (e.g. seconds or days).
 export function timeFromEpoch(epoch: number, unit: number, day: number, fraction: number = 0, scale: Timescale = Timescale.UTC): Time {
-	const normalized = normalize(epoch, 0.0, unit)
+	const normalized = normalize(epoch, 0, unit)
 	day += normalized.day
 	fraction += normalized.fraction
 
@@ -94,7 +90,7 @@ export function timeFromEpoch(epoch: number, unit: number, day: number, fraction
 // second at midnight on leap second days while this class value is monotonically increasing
 // at 86400 seconds per UTC day.
 export function timeUnix(seconds: number, scale: Timescale = Timescale.UTC) {
-	return timeFromEpoch(seconds, DAYSEC, 2440588.0, -0.5, scale)
+	return timeFromEpoch(seconds, DAYSEC, 2440588, -0.5, scale)
 }
 
 // Current time as Unix time.
@@ -111,30 +107,30 @@ export function timeMJD(mjd: number, scale: Timescale = Timescale.UTC) {
 
 // Julian epoch year as floating point value like 2000.0.
 export function timeJulian(epoch: number, scale: Timescale = Timescale.UTC) {
-	return time(J2000 + (epoch - 2000.0) * DAYSPERJY, 0, scale)
+	return time(J2000 + (epoch - 2000) * DAYSPERJY, 0, scale)
 }
 
 // Besselian epoch year as floating point value like 1950.0.
 export function timeBesselian(epoch: number, scale: Timescale = Timescale.UTC) {
-	return timeMJD(15019.81352 + (epoch - 1900.0) * DTY, scale)
+	return timeMJD(15019.81352 + (epoch - 1900) * DTY, scale)
 }
 
-// Time from [year], [month], [day], [hour], [minute] and [second].
+// Time from year, month, day, hour, minute and second.
 export function timeYMDHMS(year: number, month: number = 1, day: number = 1, hour: number = 0, minute: number = 0, second: number = 0, scale: Timescale = Timescale.UTC) {
-	return time(MJD0 + eraCalToJd(year, month, day), (second + minute * 60.0 + hour * 3600.0) / DAYSEC, scale)
+	return time(MJD0 + eraCalToJd(year, month, day), (second + minute * 60 + hour * 3600) / DAYSEC, scale)
 }
 
 /// GPS time from 1980-01-06 00:00:00 UTC.
 export function timeGPS(seconds: number) {
-	return timeFromEpoch(seconds, DAYSEC, 2444245.0, -0.4997800925925926, Timescale.TAI)
+	return timeFromEpoch(seconds, DAYSEC, 2444245, -0.4997800925925926, Timescale.TAI)
 }
 
-// Returns the sum of [day] and [fraction] as two 64-bit floats,
+// Returns the sum of day and fraction as two 64-bit floats,
 // with the latter guaranteed to be within -0.5 and 0.5 (inclusive on
 // either side, as the integer is rounded to even).
 // The arithmetic is all done with exact floating point operations so no
 // precision is lost to rounding error. It is assumed the sum is less
-// than about 1E16, otherwise the remainder will be greater than 1.0.
+// than about 1E16, otherwise the remainder will be greater than 1.
 export function normalize(day: number, fraction: number, divisor: number = 0, scale: Timescale = Timescale.UTC): Time {
 	let [sum, err] = twoSum(day, fraction)
 	day = Math.round(sum)
@@ -161,30 +157,28 @@ function makeTime(a: [number, number], time: Time, scale: Timescale = time.scale
 	return { ...time, day: a[0], fraction: a[1], scale }
 }
 
-function memoize(source: Time, target: Time, scale: Timescale = target.scale) {
-	source.memoize ??= {}
-
+function memoize(target: Time, source: Time, scale: Timescale = source.scale) {
 	switch (scale) {
 		case Timescale.UT1:
-			source.memoize.ut1 = target
+			target.ut1 = source
 			break
 		case Timescale.UTC:
-			source.memoize.utc = target
+			target.utc = source
 			break
 		case Timescale.TAI:
-			source.memoize.tai = target
+			target.tai = source
 			break
 		case Timescale.TT:
-			source.memoize.tt = target
+			target.tt = source
 			break
 		case Timescale.TCG:
-			source.memoize.tcg = target
+			target.tcg = source
 			break
 		case Timescale.TDB:
-			source.memoize.tdb = target
+			target.tdb = source
 			break
 		case Timescale.TCB:
-			source.memoize.tcb = target
+			target.tcb = source
 			break
 	}
 }
@@ -193,7 +187,7 @@ function memoize(source: Time, target: Time, scale: Timescale = target.scale) {
 export function ut1(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UT1) return time
-	if (time.memoize?.ut1) return time.memoize.ut1
+	if (time.ut1) return time.ut1
 
 	let ret: Time
 
@@ -211,7 +205,7 @@ export function ut1(time: Time): Time {
 export function utc(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UTC) return time
-	if (time.memoize?.utc) return time.memoize.utc
+	if (time.utc) return time.utc
 
 	let ret: Time
 
@@ -229,7 +223,7 @@ export function utc(time: Time): Time {
 export function tai(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TAI) return time
-	if (time.memoize?.tai) return time.memoize.tai
+	if (time.tai) return time.tai
 
 	let ret: Time
 
@@ -248,7 +242,7 @@ export function tai(time: Time): Time {
 export function tt(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TT) return time
-	if (time.memoize?.tt) return time.memoize.tt
+	if (time.tt) return time.tt
 
 	let ret: Time
 
@@ -268,7 +262,7 @@ export function tt(time: Time): Time {
 export function tcg(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCG) return time
-	if (time.memoize?.tcg) return time.memoize.tcg
+	if (time.tcg) return time.tcg
 
 	let ret: Time
 
@@ -285,7 +279,7 @@ export function tcg(time: Time): Time {
 export function tdb(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TDB) return time
-	if (time.memoize?.tdb) return time.memoize.tdb
+	if (time.tdb) return time.tdb
 
 	let ret: Time
 
@@ -303,7 +297,7 @@ export function tdb(time: Time): Time {
 export function tcb(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCB) return time
-	if (time.memoize?.tcb) return time.memoize.tcb
+	if (time.tcb) return time.tcb
 
 	let ret: Time
 
@@ -326,9 +320,9 @@ export const tdbMinusTt: TimeDelta = (time) => {
 		// TODO:
 		// return if (time.location != null) {
 		//     val (x, y, z) = time.location
-		//     val rxy = hypot(x, y) / 1000.0
-		//     val elong = if (location is GeodeticLocation) location.longitude else 0.0
-		//     eraDtDb(day, fraction, ut, elong, rxy, z / 1000.0)
+		//     val rxy = hypot(x, y) / 1000
+		//     val elong = if (location is GeodeticLocation) location.longitude else 0
+		//     eraDtDb(day, fraction, ut, elong, rxy, z / 1000)
 		// } else {
 		//     eraDtDb(time.day, time.fraction, ut)
 		// }
@@ -345,7 +339,7 @@ export const tdbMinusTtByFairheadAndBretagnon1990: TimeDelta = (time) => {
 	// can also be given as the argument to perform the conversion in the
 	// other direction.
 	if (time.scale === Timescale.TDB || time.scale === Timescale.TT) {
-		const t = (time.day - J2000 + time.fraction) / 36525.0
+		const t = (time.day - J2000 + time.fraction) / DAYSPERJC
 
 		// USNO Circular 179, eq. 2.6.
 		return 0.001657 * Math.sin(628.3076 * t + 6.2401) + 0.000022 * Math.sin(575.3385 * t + 4.297) + 0.000014 * Math.sin(1256.6152 * t + 6.1969) + 0.000005 * Math.sin(606.9777 * t + 4.0212) + 0.000005 * Math.sin(52.9691 * t + 0.4444) + 0.000002 * Math.sin(21.3299 * t + 5.5431) + 0.00001 * t * Math.sin(628.3076 * t + 4.249)

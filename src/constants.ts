@@ -8,25 +8,25 @@ export const PIOVERTWO = PI / 2
 export const TAU = PI * 2
 
 // Reference epoch (J2000.0), Julian Date.
-export const J2000 = 2451545.0
+export const J2000 = 2451545
 
 // Reference epoch (B1950.0), Julian Date.
 export const B1950 = 2433282.4235
 
 // Seconds per day.
-export const DAYSEC = 86400.0
+export const DAYSEC = 86400
 
 // Minutes per day.
-export const DAYMIN = 1440.0
+export const DAYMIN = 1440
 
 // Days per Julian year.
 export const DAYSPERJY = 365.25
 
 // Days per Julian century.
-export const DAYSPERJC = 36525.0
+export const DAYSPERJC = 36525
 
 // Days per Julian millennium.
-export const DAYSPERJM = 365250.0
+export const DAYSPERJM = 365250
 
 // Julian Date of Modified Julian Date zero.
 export const MJD0 = 2400000.5
@@ -35,7 +35,7 @@ export const MJD0 = 2400000.5
 export const MJD2000 = 51544.5
 
 // 1977 Jan 1.0 as MJD.
-export const MJD1977 = 43144.0
+export const MJD1977 = 43144
 
 // Length of tropical year B1900 (days).
 export const DTY = 365.242198781
@@ -53,13 +53,13 @@ export const ELB = 1.550519768e-8
 export const TDB0 = -6.55e-5
 
 // Astronomical unit (m, IAU 2012).
-export const AU_M = 149597870700.0
+export const AU_M = 149597870700
 
 // Astronomical unit (km, IAU 2012).
-export const AU_KM = AU_M / 1000.0
+export const AU_KM = AU_M / 1000
 
 // Speed of light (m/s).
-export const SPEED_OF_LIGHT = 299792458.0
+export const SPEED_OF_LIGHT = 299792458
 
 // Light time for 1 AU in s.
 export const LIGHT_TIME_AU = AU_M / SPEED_OF_LIGHT

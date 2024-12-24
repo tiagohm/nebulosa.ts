@@ -1,4 +1,4 @@
-// Adds [a] and [b] exactly, returning the result as two 64-bit floats.
+// Adds a and b exactly, returning the result as two 64-bit floats.
 export function twoSum(a: number, b: number): [number, number] {
 	const x = a + b
 	let eb = x - a
@@ -8,15 +8,15 @@ export function twoSum(a: number, b: number): [number, number] {
 	return [x, ea + eb]
 }
 
-// Splits [a] in two aligned parts.
+// Splits a in two aligned parts.
 export function split(a: number): [number, number] {
-	const c = 134217729.0 * a
+	const c = 134217729 * a
 	const abig = c - a
 	const ah = c - abig
 	return [ah, a - ah]
 }
 
-// Multiples [a] and [b] exactly, returning the result as two 64-bit floats.
+// Multiples a and b exactly, returning the result as two 64-bit floats.
 // The first is the approximate product (with some floating point error)
 // and the second is the error of the product.
 export function twoProduct(a: number, b: number): [number, number] {
@@ -35,7 +35,7 @@ export function pmod(num: number, other: number): number {
 	return rem < 0 ? rem + other : rem
 }
 
-// Returns a pair containing the quotient and the remainder when [num] is divided by [other].
+// Returns a pair containing the quotient and the remainder when given num is divided by other.
 export function divmod(num: number, other: number): [number, number] {
 	return [Math.trunc(num / other), pmod(num, other)]
 }

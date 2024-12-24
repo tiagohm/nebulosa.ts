@@ -4,7 +4,7 @@ import { AU_KM, AU_M, SPEED_OF_LIGHT } from './constants'
 export const ONE_PARSEC: Distance = 206264.806245480309552772371736702884
 
 // 1000000000 parsecs in AU.
-export const ONE_GIGAPARSEC: Distance = 1000000000.0 * ONE_PARSEC
+export const ONE_GIGAPARSEC: Distance = 1000000000 * ONE_PARSEC
 
 // Represents a distance value in AU.
 export type Distance = number

@@ -75,6 +75,7 @@ test('rotateByRodrigues', () => {
 
 	const o: MutVec3 = [0, 0, 0]
 	rotateByRodrigues(v, axis, deg(29.6512852), o)
+	expect(o).not.toEqual(v)
 	expect(o).toEqual([1.2132585570946925, 1.7306199385433279, 3.087548914908522])
 })
 

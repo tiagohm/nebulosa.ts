@@ -87,13 +87,13 @@ test('eraTtTcg', () => {
 })
 
 test('eraDat', () => {
-	expect(eraDat(2003, 6, 1, 0.0)).toBe(32.0)
-	expect(eraDat(2008, 1, 17, 0.0)).toBe(33.0)
-	expect(eraDat(2017, 9, 1, 0.0)).toBe(37.0)
+	expect(eraDat(2003, 6, 1, 0)).toBe(32)
+	expect(eraDat(2008, 1, 17, 0)).toBe(33)
+	expect(eraDat(2017, 9, 1, 0)).toBe(37)
 })
 
 test('eraCalToJd', () => {
-	expect(eraCalToJd(2003, 6, 1)).toBe(52791.0)
+	expect(eraCalToJd(2003, 6, 1)).toBe(52791)
 })
 
 test('eraJdToCal', () => {
@@ -105,7 +105,7 @@ test('eraJdToCal', () => {
 })
 
 test('eraSp00', () => {
-	expect(eraSp00(2400000.5, 52541.0)).toBeCloseTo(-0.6216698469981019309e-11, 12)
+	expect(eraSp00(2400000.5, 52541)).toBeCloseTo(-0.6216698469981019309e-11, 12)
 })
 
 test('eraDtDb', () => {

@@ -7,12 +7,12 @@ export type Mat3 = readonly [number, number, number, number, number, number, num
 // Like Mat3 but mutable.
 export type MutMat3 = Mutable<Mat3>
 
-// Creates a new empty Matrix.
+// Creates a new zeroed matrix.
 export function zero(): MutMat3 {
 	return [0, 0, 0, 0, 0, 0, 0, 0, 0]
 }
 
-// Creates a new Identity Matrix.
+// Creates a new identity matrix.
 export function identity(): MutMat3 {
 	return [1, 0, 0, 0, 1, 0, 0, 0, 1]
 }

@@ -56,25 +56,28 @@ export function angle(a: Vec3, b: Vec3): Angle {
 
 	const d = dot(a, b)
 	const v = d / (length(a) * length(b))
-	if (Math.abs(v) > 1.0)
-		if (v < 0.0) return PI
+	if (Math.abs(v) > 1)
+		if (v < 0) return PI
 		else return 0
 	else return Math.acos(v)
 }
 
-// Creates a new empty vector.
+// Creates a new zeroed vector.
 export function zero(): MutVec3 {
 	return [0, 0, 0]
 }
 
+// Creates a new x-axis vector.
 export function xAxis(): MutVec3 {
 	return [1, 0, 0]
 }
 
+// Creates a new y-axis vector.
 export function yAxis(): MutVec3 {
 	return [0, 1, 0]
 }
 
+// Creates a new z-axis vector.
 export function zAxis(): MutVec3 {
 	return [0, 0, 1]
 }
@@ -146,13 +149,13 @@ export function normalize(v: Vec3, o?: MutVec3): MutVec3 {
 // Efficient algorithm for rotating a vector in space, given an axis and angle of rotation.
 export function rotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, o?: MutVec3): Vec3 {
 	const cosa = Math.cos(angle)
-	const b: MutVec3 = [0, 0, 0]
-	const c: MutVec3 = [0, 0, 0]
+	const b = zero()
+	const c = zero()
 	const k = normalize(axis, o)
 	mulScalar(cross(k, v, b), Math.sin(angle), b)
 	mulScalar(k, dot(k, v), c)
 	plus(mulScalar(v, cosa, k), b, b)
-	return plus(b, mulScalar(c, 1.0 - cosa, c), o)
+	return plus(b, mulScalar(c, 1 - cosa, c), o)
 }
 
 export function plane(a: Vec3, b: Vec3, c: Vec3, o?: MutVec3): MutVec3 {
