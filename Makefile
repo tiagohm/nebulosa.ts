@@ -1,4 +1,4 @@
-.PHONY: run lint prettier test compile astropy
+.PHONY: run lint prettier test compile astropy skyfield
 
 run:
 	bun .
@@ -13,7 +13,10 @@ test:
 	bun test
 
 astropy:
-	python scripts/astropy/$(name).py
+	python scripts/astropy/$(name).py $(arg)
+
+skyfield:
+	python scripts/skyfield/$(name).py $(arg)
 
 ifeq ($(OS),Windows_NT)
 compile:

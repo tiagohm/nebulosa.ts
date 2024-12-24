@@ -1,3 +1,4 @@
+import sys
 from astropy.time import Time
 from astropy.utils import iers
 
@@ -16,4 +17,6 @@ def time(scale):
     print('expect(tdb(time)).toMatchTime([{0}, {1:.18f}, Timescale.TDB])'.format(t.tdb.jd1, t.tdb.jd2))
     print('expect(tcb(time)).toMatchTime([{0}, {1:.18f}, Timescale.TCB])'.format(t.tcb.jd1, t.tcb.jd2))
 
-time('utc')
+match sys.argv[1]:
+    case 'ut1' | 'utc' | 'tai' | 'tt' | 'tcg' | 'tdb' | 'tcb':
+        time(sys.argv[1])

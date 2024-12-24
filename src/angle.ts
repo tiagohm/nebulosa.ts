@@ -17,7 +17,7 @@ export const ASEC2RAD: Angle = PI / 180 / 3600
 export const MILLIASEC2RAD: Angle = PI / 180 / 3600000
 
 // Angular velocity in radians/s.
-export const ANGULAR_VELOCITY = 7.292115e-5
+export const ANGVEL = 7.292115e-5
 
 // Arcseconds in a full circle.
 export const TURNAS = 1296000
