@@ -1,11 +1,18 @@
 import { expect, test } from 'bun:test'
 import { kilometer } from './distance'
-import { eraCalToJd, eraDat, eraDtDb, eraJdToCal, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+import { eraCalToJd, eraDat, eraDtDb, eraEors, eraEra00, eraFad03, eraFae03, eraFaf03, eraFaju03, eraFal03, eraFalp03, eraFama03, eraFame03, eraFaom03, eraFapa03, eraFasa03, eraFaur03, eraFave03, eraFw2m, eraGst06, eraGst06a, eraJdToCal, eraNut00a, eraNut06a, eraObl06, eraPfw06, eraPnm06a, eraS06, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+import type { Mat3 } from './matrix'
 
 test('eraTaiUt1', () => {
 	const [a, b] = eraTaiUt1(2453750.5, 0.892482639, -32.6659)
 	expect(a).toBe(2453750.5)
 	expect(b).toBeCloseTo(0.8921045614537037037, 12)
+})
+
+test('eraUt1Tai', () => {
+	const [a, b] = eraUt1Tai(2453750.5, 0.892104561, -32.6659)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8924826385462962963, 12)
 })
 
 test('eraTaiUtc', () => {
@@ -110,4 +117,128 @@ test('eraSp00', () => {
 
 test('eraDtDb', () => {
 	expect(eraDtDb(2448939.5, 0.123, 0.76543, 5.0123, kilometer(5525.242), kilometer(3190))).toBeCloseTo(-0.1280368005936998991e-2, 15)
+})
+
+test('eraGst06a', () => {
+	expect(eraGst06a(2453736.0, 0.5, 2453736.0, 0.5)).toBeCloseTo(1.754166137675019159, 12)
+})
+
+test('eraGst06', () => {
+	const rnpb: Mat3 = [0.9999989440476103608, -0.1332881761240011518e-2, -0.5790767434730085097e-3, 0.1332858254308954453e-2, 0.9999991109044505944, -0.4097782710401555759e-4, 0.579130847216815332e-3, 0.4020595661593994396e-4, 0.9999998314954572365]
+	expect(eraGst06(2453736.0, 0.5, 2453736.0, 0.5, rnpb)).toBeCloseTo(1.754166138018167568, 12)
+})
+
+test('eraEra00', () => {
+	expect(eraEra00(2454388.0, 0.5)).toBeCloseTo(0.4022837240028158102, 12)
+})
+
+test('eraEra00', () => {
+	const rnpb: Mat3 = [0.9999989440476103608, -0.1332881761240011518e-2, -0.5790767434730085097e-3, 0.1332858254308954453e-2, 0.9999991109044505944, -0.4097782710401555759e-4, 0.579130847216815332e-3, 0.4020595661593994396e-4, 0.9999998314954572365]
+	expect(eraEors(rnpb, -0.1220040848472271978e-7)).toBeCloseTo(-0.1332882715130744606e-2, 14)
+})
+
+test('eraS06', () => {
+	expect(eraS06(2400000.5, 53736.0, 0.5791308486706011e-3, 0.4020579816732961219e-4)).toBeCloseTo(-0.1220032213076463117e-7, 18)
+})
+
+test('eraObl06', () => {
+	expect(eraObl06(2400000.5, 54388.0)).toBeCloseTo(0.4090749229387258204, 14)
+})
+
+test('eraFal03', () => {
+	expect(eraFal03(0.8)).toBeCloseTo(5.13236975110868415, 12)
+})
+
+test('eraFaf03', () => {
+	expect(eraFaf03(0.8)).toBeCloseTo(0.2597711366745499518, 11)
+})
+
+test('eraFaom03', () => {
+	expect(eraFaom03(0.8)).toBeCloseTo(-5.973618440951302183, 12)
+})
+
+test('eraFapa03', () => {
+	expect(eraFapa03(0.8)).toBeCloseTo(0.195088476224e-1, 12)
+})
+
+test('eraFame03', () => {
+	expect(eraFame03(0.8)).toBeCloseTo(5.417338184297289661, 12)
+})
+
+test('eraFave03', () => {
+	expect(eraFave03(0.8)).toBeCloseTo(3.424900460533758, 12)
+})
+
+test('eraFae03', () => {
+	expect(eraFae03(0.8)).toBeCloseTo(1.744713738913081846, 12)
+})
+
+test('eraFama03', () => {
+	expect(eraFama03(0.8)).toBeCloseTo(3.275506840277781492, 12)
+})
+
+test('eraFaju03', () => {
+	expect(eraFaju03(0.8)).toBeCloseTo(5.275711665202481138, 12)
+})
+
+test('eraFasa03', () => {
+	expect(eraFasa03(0.8)).toBeCloseTo(5.371574539440827046, 12)
+})
+
+test('eraFaur03', () => {
+	expect(eraFaur03(0.8)).toBeCloseTo(5.180636450180413523, 12)
+})
+
+test('eraFalp03', () => {
+	expect(eraFalp03(0.8)).toBeCloseTo(6.226797973505507345, 12)
+})
+
+test('eraFad03', () => {
+	expect(eraFad03(0.8)).toBeCloseTo(1.946709205396925672, 12)
+})
+
+test('eraFw2m', () => {
+	const m = eraFw2m(-0.2243387670997992368e-5, 0.4091014602391312982, -0.9501954178013015092e-3, 0.4091014316587367472)
+	expect(m[0]).toBeCloseTo(0.9999995505176007047, 12)
+	expect(m[1]).toBeCloseTo(0.8695404617348192957e-3, 12)
+	expect(m[2]).toBeCloseTo(0.3779735201865582571e-3, 12)
+	expect(m[3]).toBeCloseTo(-0.8695404723772016038e-3, 12)
+	expect(m[4]).toBeCloseTo(0.9999996219496027161, 12)
+	expect(m[5]).toBeCloseTo(-0.1361752496887100026e-6, 12)
+	expect(m[6]).toBeCloseTo(-0.377973495703408279e-3, 12)
+	expect(m[7]).toBeCloseTo(-0.1924880848087615651e-6, 12)
+	expect(m[8]).toBeCloseTo(0.9999999285679971958, 12)
+})
+
+test('eraPfw06', () => {
+	const a = eraPfw06(2400000.5, 50123.9999)
+	expect(a[0]).toBeCloseTo(-0.224338767099799569e-5, 16)
+	expect(a[1]).toBeCloseTo(0.4091014602391312808, 12)
+	expect(a[2]).toBeCloseTo(-0.9501954178013031895e-3, 14)
+	expect(a[3]).toBeCloseTo(0.4091014316587367491, 12)
+})
+
+test('eraPnm06a', () => {
+	const m = eraPnm06a(2400000.5, 50123.9999)
+	expect(m[0]).toBeCloseTo(0.9999995832794205484, 12)
+	expect(m[1]).toBeCloseTo(0.8372382772630962111e-3, 14)
+	expect(m[2]).toBeCloseTo(0.3639684771140623099e-3, 14)
+	expect(m[3]).toBeCloseTo(-0.8372533744743683605e-3, 14)
+	expect(m[4]).toBeCloseTo(0.9999996486492861646, 12)
+	expect(m[5]).toBeCloseTo(0.4132905944611019498e-4, 14)
+	expect(m[6]).toBeCloseTo(-0.3639337469629464969e-3, 14)
+	expect(m[7]).toBeCloseTo(-0.4163377605910663999e-4, 14)
+	expect(m[8]).toBeCloseTo(0.9999999329094260057, 12)
+})
+
+test('eraNut06a', () => {
+	const a = eraNut06a(2400000.5, 53736.0)
+	expect(a[0]).toBeCloseTo(-0.9630912025820308797e-5, 13)
+	expect(a[1]).toBeCloseTo(0.4063238496887249798e-4, 13)
+})
+
+test('eraNut00a', () => {
+	const a = eraNut00a(2400000.5, 53736.0)
+	expect(a[0]).toBeCloseTo(-0.9630909107115518431e-5, 13)
+	expect(a[1]).toBeCloseTo(0.406323917400167871e-4, 13)
 })
