@@ -1,7 +1,8 @@
 import { beforeAll, expect, test, type CustomMatcher } from 'bun:test'
+import { hour } from './angle'
 import { J2000 } from './constants'
 import { iersa, iersb } from './iers'
-import { normalize, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, tt, ut1, utc, type Time } from './time'
+import { era, gast, gmst, normalize, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, tt, ut1, utc, type Time } from './time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = normalize(expected.day, expected.fraction)
@@ -206,28 +207,28 @@ test('memoize', () => {
 
 	for (let i = 0; i < 10000; i++) {
 		const a = ut1(t)
-		expect(a.tcb).toEqual(t)
-		expect(t.ut1).toEqual(a)
+		expect(a.extra?.tcb).toEqual(t)
+		expect(t.extra?.ut1).toEqual(a)
 
 		const b = utc(t)
-		expect(b.tcb).toEqual(t)
-		expect(t.utc).toEqual(b)
+		expect(b.extra?.tcb).toEqual(t)
+		expect(t.extra?.utc).toEqual(b)
 
 		const c = tai(t)
-		expect(c.tcb).toEqual(t)
-		expect(t.tai).toEqual(c)
+		expect(c.extra?.tcb).toEqual(t)
+		expect(t.extra?.tai).toEqual(c)
 
 		const d = tt(t)
-		expect(d.tcb).toEqual(t)
-		expect(t.tt).toEqual(d)
+		expect(d.extra?.tcb).toEqual(t)
+		expect(t.extra?.tt).toEqual(d)
 
 		const e = tcg(t)
-		expect(e.tcb).toEqual(t)
-		expect(t.tcg).toEqual(e)
+		expect(e.extra?.tcb).toEqual(t)
+		expect(t.extra?.tcg).toEqual(e)
 
 		const f = tdb(t)
-		expect(f.tcb).toEqual(t)
-		expect(t.tdb).toEqual(f)
+		expect(f.extra?.tcb).toEqual(t)
+		expect(t.extra?.tdb).toEqual(f)
 	}
 }, 1000)
 
@@ -243,4 +244,22 @@ test('tdbMinusTtByFairheadAndBretagnon1990', () => {
 	expect(tdb(t1)).toMatchTime(time(2459130, -0.000000019554632113, Timescale.TDB, false), 1e-10)
 
 	expect(tdbMinusTtByFairheadAndBretagnon1990(t0)).toBeCloseTo(tdbMinusTt(t0), 5)
+})
+
+test('gast', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	expect(gast(t)).toBe(t.extra!.gast!)
+	expect(t.extra?.gast).toBeCloseTo(hour(13.106038262872143463), 15)
+})
+
+test('gmst', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	expect(gmst(t)).toBe(t.extra!.gmst!)
+	expect(t.extra?.gmst).toBeCloseTo(hour(13.106345240224241522), 15)
+})
+
+test('era', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	expect(era(t)).toBe(t.extra!.era!)
+	expect(t.extra?.era).toBeCloseTo(hour(13.088607043262001639), 15)
 })

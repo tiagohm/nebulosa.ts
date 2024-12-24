@@ -1,6 +1,6 @@
 import type { Angle } from './angle'
 import { DAYSEC, DAYSPERJC, DAYSPERJY, DTY, J2000, MJD0, TTMINUSTAI } from './constants'
-import { eraCalToJd, eraDat, eraDtDb, eraJdToCal, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+import { eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import { iersab } from './iers'
 import { twoProduct, twoSum } from './math'
 import { rotX, rotY, rotZ, type MutMat3 } from './matrix'
@@ -16,6 +16,20 @@ export enum Timescale {
 	TCB,
 }
 
+export interface TimeExtra {
+	ut1?: Time
+	utc?: Time
+	tai?: Time
+	tt?: Time
+	tcg?: Time
+	tdb?: Time
+	tcb?: Time
+
+	gast?: Angle
+	gmst?: Angle
+	era?: Angle
+}
+
 // Represents and manipulates an instant of time for astronomy.
 export interface Time {
 	readonly day: number
@@ -26,13 +40,7 @@ export interface Time {
 	// taiMinusUtc?: TimeDelta
 	ut1MinusTai?: TimeDelta
 
-	ut1?: Time
-	utc?: Time
-	tai?: Time
-	tt?: Time
-	tcg?: Time
-	tdb?: Time
-	tcb?: Time
+	extra?: TimeExtra
 }
 
 export enum JulianCalendarCutOff {
@@ -157,29 +165,37 @@ function makeTime(a: [number, number], time: Time, scale: Timescale = time.scale
 	return { ...time, day: a[0], fraction: a[1], scale }
 }
 
-function memoize(target: Time, source: Time, scale: Timescale = source.scale) {
-	switch (scale) {
-		case Timescale.UT1:
-			target.ut1 = source
-			break
-		case Timescale.UTC:
-			target.utc = source
-			break
-		case Timescale.TAI:
-			target.tai = source
-			break
-		case Timescale.TT:
-			target.tt = source
-			break
-		case Timescale.TCG:
-			target.tcg = source
-			break
-		case Timescale.TDB:
-			target.tdb = source
-			break
-		case Timescale.TCB:
-			target.tcb = source
-			break
+function extra(target: Time, source?: Time, extra?: Partial<TimeExtra>) {
+	target.extra ??= source?.extra ?? extra ?? {}
+
+	if (source) {
+		switch (source.scale) {
+			case Timescale.UT1:
+				target.extra.ut1 = source
+				break
+			case Timescale.UTC:
+				target.extra.utc = source
+				break
+			case Timescale.TAI:
+				target.extra.tai = source
+				break
+			case Timescale.TT:
+				target.extra.tt = source
+				break
+			case Timescale.TCG:
+				target.extra.tcg = source
+				break
+			case Timescale.TDB:
+				target.extra.tdb = source
+				break
+			case Timescale.TCB:
+				target.extra.tcb = source
+				break
+		}
+	} else if (extra) {
+		if (extra.gast) target.extra.gast = extra.gast
+		if (extra.gmst) target.extra.gmst = extra.gmst
+		if (extra.era) target.extra.era = extra.era
 	}
 }
 
@@ -187,7 +203,7 @@ function memoize(target: Time, source: Time, scale: Timescale = source.scale) {
 export function ut1(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UT1) return time
-	if (time.ut1) return time.ut1
+	if (time.extra?.ut1) return time.extra.ut1
 
 	let ret: Time
 
@@ -195,8 +211,8 @@ export function ut1(time: Time): Time {
 	else if (scale === Timescale.UTC) ret = makeTime(eraUtcUt1(day, fraction, iersab.delta(time)), time, Timescale.UT1)
 	else ret = ut1(utc(time))
 
-	memoize(ret, time)
-	memoize(time, ret)
+	extra(ret, time)
+	extra(time, ret)
 
 	return ret
 }
@@ -205,7 +221,7 @@ export function ut1(time: Time): Time {
 export function utc(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UTC) return time
-	if (time.utc) return time.utc
+	if (time.extra?.utc) return time.extra.utc
 
 	let ret: Time
 
@@ -213,8 +229,8 @@ export function utc(time: Time): Time {
 	else if (scale === Timescale.TAI) ret = makeTime(eraTaiUtc(day, fraction), time, Timescale.UTC)
 	else ret = utc(tai(time))
 
-	memoize(ret, time)
-	memoize(time, ret)
+	extra(ret, time)
+	extra(time, ret)
 
 	return ret
 }
@@ -223,7 +239,7 @@ export function utc(time: Time): Time {
 export function tai(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TAI) return time
-	if (time.tai) return time.tai
+	if (time.extra?.tai) return time.extra.tai
 
 	let ret: Time
 
@@ -232,8 +248,8 @@ export function tai(time: Time): Time {
 	else if (scale === Timescale.TT) ret = makeTime(eraTtTai(day, fraction), time, Timescale.TAI)
 	else ret = tai(tt(time))
 
-	memoize(ret, time)
-	memoize(time, ret)
+	extra(ret, time)
+	extra(time, ret)
 
 	return ret
 }
@@ -242,7 +258,7 @@ export function tai(time: Time): Time {
 export function tt(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TT) return time
-	if (time.tt) return time.tt
+	if (time.extra?.tt) return time.extra.tt
 
 	let ret: Time
 
@@ -252,8 +268,8 @@ export function tt(time: Time): Time {
 	else if (scale < Timescale.TAI) return tt(tai(time))
 	else ret = tt(tdb(time))
 
-	memoize(ret, time)
-	memoize(time, ret)
+	extra(ret, time)
+	extra(time, ret)
 
 	return ret
 }
@@ -262,15 +278,15 @@ export function tt(time: Time): Time {
 export function tcg(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCG) return time
-	if (time.tcg) return time.tcg
+	if (time.extra?.tcg) return time.extra.tcg
 
 	let ret: Time
 
 	if (scale === Timescale.TT) ret = makeTime(eraTtTcg(day, fraction), time, Timescale.TCG)
 	else ret = tcg(tt(time))
 
-	memoize(ret, time)
-	memoize(time, ret)
+	extra(ret, time)
+	extra(time, ret)
 
 	return ret
 }
@@ -279,7 +295,7 @@ export function tcg(time: Time): Time {
 export function tdb(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TDB) return time
-	if (time.tdb) return time.tdb
+	if (time.extra?.tdb) return time.extra.tdb
 
 	let ret: Time
 
@@ -287,8 +303,8 @@ export function tdb(time: Time): Time {
 	else if (scale === Timescale.TCB) ret = makeTime(eraTcbTdb(day, fraction), time, Timescale.TDB)
 	else ret = tdb(tt(time))
 
-	memoize(ret, time)
-	memoize(time, ret)
+	extra(ret, time)
+	extra(time, ret)
 
 	return ret
 }
@@ -297,17 +313,46 @@ export function tdb(time: Time): Time {
 export function tcb(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCB) return time
-	if (time.tcb) return time.tcb
+	if (time.extra?.tcb) return time.extra.tcb
 
 	let ret: Time
 
 	if (scale === Timescale.TDB) ret = makeTime(eraTdbTcb(day, fraction), time, Timescale.TCB)
 	else ret = tcb(tdb(time))
 
-	memoize(ret, time)
-	memoize(time, ret)
+	extra(ret, time)
+	extra(time, ret)
 
 	return ret
+}
+
+// Computes the Greenwich Apparent Sidereal Time (GAST) at given time.
+export function gast(time: Time): Angle {
+	if (time.extra?.gast) return time.extra.gast
+	const u = ut1(time)
+	const t = tt(time)
+	const gast = eraGst06a(u.day, u.fraction, t.day, t.fraction)
+	extra(time, undefined, { gast })
+	return gast
+}
+
+// Computes the Greenwich Mean Sidereal Time (GMST) at given time.
+export function gmst(time: Time): Angle {
+	if (time.extra?.gmst) return time.extra.gmst
+	const u = ut1(time)
+	const t = tt(time)
+	const gmst = eraGmst06(u.day, u.fraction, t.day, t.fraction)
+	extra(time, undefined, { gmst })
+	return gmst
+}
+
+// Computes the Earth rotation angle (IAU 2000 model) at given time.
+export function era(time: Time): Angle {
+	if (time.extra?.era) return time.extra.era
+	const u = ut1(time)
+	const era = eraEra00(u.day, u.fraction)
+	extra(time, undefined, { era })
+	return era
 }
 
 // Computes TDB - TT in seconds at time.

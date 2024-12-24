@@ -443,6 +443,14 @@ export function eraGst06(ut11: number, ut12: number, tt1: number, tt2: number, r
 	return normalize(era - eors)
 }
 
+// Greenwich mean sidereal time (model consistent with IAU 2006 precession).
+export function eraGmst06(ut11: number, ut12: number, tt1: number, tt2: number): Angle {
+	// TT Julian centuries since J2000.0.
+	const t = (tt1 - J2000 + tt2) / DAYSPERJC
+
+	return normalize(eraEra00(ut11, ut12) + arcsec(0.014506 + (4612.156534 + (1.3915817 + (-0.00000044 + (-0.000029956 + -0.0000000368 * t) * t) * t) * t) * t))
+}
+
 // Earth rotation angle (IAU 2000 model).
 export function eraEra00(ut11: number, ut12: number): Angle {
 	const t = ut12 + (ut11 - J2000)
@@ -451,7 +459,7 @@ export function eraEra00(ut11: number, ut12: number): Angle {
 	const f = (ut12 % 1.0) + (ut11 % 1.0)
 
 	// Earth rotation angle at this UT1.
-	return eraAnpm(TAU * (f + 0.779057273264 + 0.00273781191135448 * t))
+	return normalize(TAU * (f + 0.779057273264 + 0.00273781191135448 * t))
 }
 
 // Equation of the origins, given the classical NPB matrix and the quantity [s].

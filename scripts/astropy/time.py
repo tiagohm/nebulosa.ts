@@ -17,6 +17,24 @@ def time(scale):
     print('expect(tdb(time)).toMatchTime([{0}, {1:.18f}, Timescale.TDB])'.format(t.tdb.jd1, t.tdb.jd2))
     print('expect(tcb(time)).toMatchTime([{0}, {1:.18f}, Timescale.TCB])'.format(t.tcb.jd1, t.tcb.jd2))
 
+def gast():
+    t = Time('2020-10-07T12:00:00', format='isot', scale='utc')
+    print('GAST: {0:.18f}'.format(t.sidereal_time('apparent', 'tio')))
+
+def gmst():
+    t = Time('2020-10-07T12:00:00', format='isot', scale='utc')
+    print('GMST: {0:.18f}'.format(t.sidereal_time('mean', 'tio')))
+
+def era():
+    t = Time('2020-10-07T12:00:00', format='isot', scale='utc')
+    print('ERA: {0:.18f}'.format(t.earth_rotation_angle('tio')))
+
 match sys.argv[1]:
     case 'ut1' | 'utc' | 'tai' | 'tt' | 'tcg' | 'tdb' | 'tcb':
         time(sys.argv[1])
+    case 'gast':
+        gast()
+    case 'gmst':
+        gmst()
+    case 'era':
+        era()
