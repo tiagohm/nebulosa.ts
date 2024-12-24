@@ -1,47 +1,75 @@
 import { expect, test } from 'bun:test'
-import { arcmin, arcsec, deg, hour, mas, toArcmin, toArcsec, toDeg, toHour, toMas } from './angle'
+import { arcmin, arcsec, deg, dms, hms, hour, mas, normalize, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from './angle'
+import { PI, TAU } from './constants'
+
+test('normalize', () => {
+	expect(normalize(0)).toBeCloseTo(0, 16)
+	expect(normalize(0.5)).toBeCloseTo(0.5, 16)
+	expect(normalize(PI)).toBeCloseTo(PI, 16)
+	expect(normalize(TAU)).toBeCloseTo(0, 16)
+	expect(normalize(TAU + PI)).toBeCloseTo(PI, 16)
+	expect(normalize(-0.5)).toBeCloseTo(TAU - 0.5, 16)
+	expect(normalize(-PI)).toBeCloseTo(PI, 16)
+	expect(normalize(-TAU)).toBeCloseTo(0, 16)
+	expect(normalize(-TAU - PI)).toBeCloseTo(PI, 16)
+})
 
 test('mas', () => {
-	const radians = mas(37000)
-	expect(radians).toBeCloseTo(0.000179381, 8)
-	expect(toArcsec(radians)).toBeCloseTo(37, 1)
-	expect(toArcmin(radians)).toBeCloseTo(0.616666667, 8)
-	expect(toDeg(radians)).toBeCloseTo(0.01027778, 8)
-	expect(toHour(radians)).toBeCloseTo(0.000685185, 8)
+	expect(mas(37000)).toBeCloseTo(0.00017938106201052831762826821774, 16)
 })
 
 test('arcsec', () => {
-	const radians = arcsec(37)
-	expect(radians).toBeCloseTo(0.000179381, 8)
-	expect(toMas(radians)).toBeCloseTo(37000, 1)
-	expect(toArcmin(radians)).toBeCloseTo(0.616666667, 8)
-	expect(toDeg(radians)).toBeCloseTo(0.01027778, 8)
-	expect(toHour(radians)).toBeCloseTo(0.000685185, 8)
+	expect(arcsec(37)).toBeCloseTo(0.00017938106201052831762826821774, 16)
 })
 
 test('arcmin', () => {
-	const radians = arcmin(45)
-	expect(radians).toBeCloseTo(0.01308997, 8)
-	expect(toMas(radians)).toBeCloseTo(2700000, 1)
-	expect(toArcsec(radians)).toBeCloseTo(2700, 1)
-	expect(toDeg(radians)).toBeCloseTo(0.75, 8)
-	expect(toHour(radians)).toBeCloseTo(0.05, 8)
+	expect(arcmin(45)).toBeCloseTo(0.01308996938995747182692768076345, 16)
 })
 
 test('deg', () => {
-	const radians = deg(6)
-	expect(radians).toBeCloseTo(0.104719755, 8)
-	expect(toMas(radians)).toBeCloseTo(21600000, 1)
-	expect(toArcsec(radians)).toBeCloseTo(21600, 1)
-	expect(toArcmin(radians)).toBeCloseTo(360, 1)
-	expect(toHour(radians)).toBeCloseTo(0.4, 8)
+	expect(deg(6)).toBeCloseTo(0.10471975511965977461542144610932, 16)
 })
 
 test('hour', () => {
-	const radians = hour(4)
-	expect(radians).toBeCloseTo(1.04719755, 8)
-	expect(toMas(radians)).toBeCloseTo(216000000, 1)
-	expect(toArcsec(radians)).toBeCloseTo(216000, 1)
-	expect(toArcmin(radians)).toBeCloseTo(3600, 1)
-	expect(toDeg(radians)).toBeCloseTo(60, 1)
+	expect(hour(4)).toBeCloseTo(1.04719755119659774615421446109317, 15)
+})
+
+test('dms', () => {
+	expect(dms(45, 12, 56.22)).toBeCloseTo(deg(45.21561666666666666666666666666667), 16)
+	expect(dms(-45, 12, 56.22)).toBeCloseTo(deg(-45.21561666666666666666666666666667), 16)
+})
+
+test('hms', () => {
+	expect(hms(23, 44, 2.22)).toBeCloseTo(hour(23.73395), 16)
+	expect(hms(-23, 44, 2.22)).toBeCloseTo(hour(-23.73395), 16)
+})
+
+test('toMas', () => {
+	expect(toMas(0.00017938106201052831762826821774)).toBeCloseTo(37000, 16)
+})
+
+test('toArcsec', () => {
+	expect(toArcsec(0.00017938106201052831762826821774)).toBeCloseTo(37, 16)
+})
+
+test('toArcmin', () => {
+	expect(toArcmin(0.01308996938995747182692768076345)).toBeCloseTo(45, 13)
+})
+
+test('toDeg', () => {
+	expect(toDeg(0.10471975511965977461542144610932)).toBeCloseTo(6, 14)
+})
+
+test('toHour', () => {
+	expect(toHour(1.04719755119659774615421446109317)).toBeCloseTo(4, 16)
+})
+
+test('toDms', () => {
+	expect(toDms(deg(45.21561666666666666666666666666667))).toEqual([45, 12, 56.220000000009236])
+	expect(toDms(-deg(45.21561666666666666666666666666667))).toEqual([-45, 12, 56.220000000009236])
+})
+
+test('toHms', () => {
+	expect(toHms(hour(23.73395))).toEqual([23, 44, 2.2199999999875786])
+	expect(toHms(-hour(23.73395))).toEqual([0, 15, 57.780000000004854])
 })

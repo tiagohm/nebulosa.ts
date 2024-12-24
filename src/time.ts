@@ -120,7 +120,7 @@ export function timeYMDHMS(year: number, month: number = 1, day: number = 1, hou
 	return time(MJD0 + eraCalToJd(year, month, day), (second + minute * 60 + hour * 3600) / DAYSEC, scale)
 }
 
-/// GPS time from 1980-01-06 00:00:00 UTC.
+// GPS time from 1980-01-06 00:00:00 UTC.
 export function timeGPS(seconds: number) {
 	return timeFromEpoch(seconds, DAYSEC, 2444245, -0.4997800925925926, Timescale.TAI)
 }
@@ -183,7 +183,7 @@ function memoize(target: Time, source: Time, scale: Timescale = source.scale) {
 	}
 }
 
-/// Converts to UT1 Time.
+// Converts to UT1 Time.
 export function ut1(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UT1) return time
@@ -201,7 +201,7 @@ export function ut1(time: Time): Time {
 	return ret
 }
 
-/// Converts to UTC Time.
+// Converts to UTC Time.
 export function utc(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UTC) return time
@@ -219,7 +219,7 @@ export function utc(time: Time): Time {
 	return ret
 }
 
-/// Converts to TAI Time.
+// Converts to TAI Time.
 export function tai(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TAI) return time
@@ -238,7 +238,7 @@ export function tai(time: Time): Time {
 	return ret
 }
 
-/// Converts to TT Time.
+// Converts to TT Time.
 export function tt(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TT) return time
@@ -258,7 +258,7 @@ export function tt(time: Time): Time {
 	return ret
 }
 
-/// Converts to TCG Time.
+// Converts to TCG Time.
 export function tcg(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCG) return time
@@ -275,7 +275,7 @@ export function tcg(time: Time): Time {
 	return ret
 }
 
-/// Converts to TDB Time.
+// Converts to TDB Time.
 export function tdb(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TDB) return time
@@ -293,7 +293,7 @@ export function tdb(time: Time): Time {
 	return ret
 }
 
-/// Converts to TCB Time.
+// Converts to TCB Time.
 export function tcb(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCB) return time
