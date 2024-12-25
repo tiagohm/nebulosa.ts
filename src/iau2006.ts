@@ -1,8 +1,8 @@
 // nfa, s, c
-export type Iau2006Term = [[number, number, number, number, number, number, number, number], number, number]
+export type Iau2006Term = readonly [readonly [number, number, number, number, number, number, number, number], number, number]
 
 // Polynomial coefficients
-export const IAU2006_SP = [94.0e-6, 3808.65e-6, -122.68e-6, -72574.11e-6, 27.98e-6, 15.62e-6]
+export const IAU2006_SP = [94.0e-6, 3808.65e-6, -122.68e-6, -72574.11e-6, 27.98e-6, 15.62e-6] as const
 
 // Terms of order t^0
 const IAU2006_S0: Iau2006Term[] = [
