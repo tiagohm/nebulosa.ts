@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { clone, determinant, div, divScalar, flipX, flipY, identity, minus, minusScalar, mul, mulScalar, mulVec, plus, plusScalar, rotX, rotY, rotZ, transpose, zero, type MutMat3 } from './matrix'
+import { clone, determinant, divScalar, flipX, flipY, identity, minus, minusScalar, mul, mulScalar, mulVec, plus, plusScalar, rotX, rotY, rotZ, transpose, zero, type MutMat3 } from './matrix'
 import type { MutVec3 } from './vector'
 
 test('determinant', () => {
@@ -174,19 +174,8 @@ test('mul', () => {
 	const n: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 	const u = mul(m, n)
 	expect(u).not.toEqual(m)
-	expect(u).toEqual([1, 4, 9, 16, 25, 36, 49, 64, 81])
+	expect(u).toEqual([30, 36, 42, 66, 81, 96, 102, 126, 150])
 
 	mul(m, n, m)
-	expect(m).toEqual(u)
-})
-
-test('div', () => {
-	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	const n: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	const u = div(m, n)
-	expect(u).not.toEqual(m)
-	expect(u).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1])
-
-	div(m, n, m)
 	expect(m).toEqual(u)
 })

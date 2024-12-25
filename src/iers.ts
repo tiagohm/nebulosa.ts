@@ -13,6 +13,10 @@ export interface Iers {
 }
 
 export function interpolate(time: Time, input: number[], ...data: number[][]): number[] {
+	const ret = new Array<number>(data.length)
+
+	if (!input.length) return ret
+
 	// const value = time.value
 	const mjd = Math.floor(time.day - MJD0 + time.fraction)
 	const utc = time.day - (MJD0 + mjd) + time.fraction
@@ -21,8 +25,6 @@ export function interpolate(time: Time, input: number[], ...data: number[][]): n
 	const k = Math.max(1, Math.min(i + 1, input.length - 1))
 	const t0 = input[k - 1]
 	const t1 = input[k]
-
-	const ret: number[] = []
 
 	for (let z = 0; z < data.length; z++) {
 		// Do not extrapolate outside range, instead just propagate last values.

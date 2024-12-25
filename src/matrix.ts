@@ -168,16 +168,20 @@ export function minus(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
 	return [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3], a[4] - b[4], a[5] - b[5], a[6] - b[6], a[7] - b[7], a[8] - b[8]]
 }
 
-// Computes the sum multiplication the matrices.
+// Computes the multiplication between the matrices.
 export function mul(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, a[0] * b[0], a[1] * b[1], a[2] * b[2], a[3] * b[3], a[4] * b[4], a[5] * b[5], a[6] * b[6], a[7] * b[7], a[8] * b[8])
-	return [a[0] * b[0], a[1] * b[1], a[2] * b[2], a[3] * b[3], a[4] * b[4], a[5] * b[5], a[6] * b[6], a[7] * b[7], a[8] * b[8]]
-}
+	const c = a[0] * b[0] + a[1] * b[3] + a[2] * b[6]
+	const d = a[0] * b[1] + a[1] * b[4] + a[2] * b[7]
+	const e = a[0] * b[2] + a[1] * b[5] + a[2] * b[8]
+	const f = a[3] * b[0] + a[4] * b[3] + a[5] * b[6]
+	const g = a[3] * b[1] + a[4] * b[4] + a[5] * b[7]
+	const h = a[3] * b[2] + a[4] * b[5] + a[5] * b[8]
+	const i = a[6] * b[0] + a[7] * b[3] + a[8] * b[6]
+	const j = a[6] * b[1] + a[7] * b[4] + a[8] * b[7]
+	const k = a[6] * b[2] + a[7] * b[5] + a[8] * b[8]
 
-// Computes the division between the matrices.
-export function div(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, a[0] / b[0], a[1] / b[1], a[2] / b[2], a[3] / b[3], a[4] / b[4], a[5] / b[5], a[6] / b[6], a[7] / b[7], a[8] / b[8])
-	return [a[0] / b[0], a[1] / b[1], a[2] / b[2], a[3] / b[3], a[4] / b[4], a[5] / b[5], a[6] / b[6], a[7] / b[7], a[8] / b[8]]
+	if (o) return fill(o, c, d, e, f, g, h, i, j, k)
+	return [c, d, e, f, g, h, i, j, k]
 }
 
 // Computes the multiplication of the matrix by a vector.

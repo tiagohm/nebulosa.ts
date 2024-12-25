@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { kilometer } from './distance'
-import { eraCalToJd, eraDat, eraDtDb, eraEors, eraEra00, eraFad03, eraFae03, eraFaf03, eraFaju03, eraFal03, eraFalp03, eraFama03, eraFame03, eraFaom03, eraFapa03, eraFasa03, eraFaur03, eraFave03, eraFw2m, eraGmst06, eraGst06, eraGst06a, eraJdToCal, eraNut00a, eraNut00b, eraNut06a, eraObl06, eraPfw06, eraPnm06a, eraS06, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+import { eraCalToJd, eraDat, eraDtDb, eraEors, eraEra00, eraFad03, eraFae03, eraFaf03, eraFaju03, eraFal03, eraFalp03, eraFama03, eraFame03, eraFaom03, eraFapa03, eraFasa03, eraFaur03, eraFave03, eraFw2m, eraGmst06, eraGst06, eraGst06a, eraJdToCal, eraNut00a, eraNut00b, eraNut06a, eraObl06, eraPfw06, eraPmat06, eraPnm06a, eraS06, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import type { Mat3 } from './matrix'
 
 test('eraTaiUt1', () => {
@@ -233,6 +233,19 @@ test('eraPnm06a', () => {
 	expect(m[6]).toBeCloseTo(-0.3639337469629464969e-3, 14)
 	expect(m[7]).toBeCloseTo(-0.4163377605910663999e-4, 14)
 	expect(m[8]).toBeCloseTo(0.9999999329094260057, 12)
+})
+
+test('eraPmat06', () => {
+	const m = eraPmat06(2400000.5, 50123.9999)
+	expect(m[0]).toBeCloseTo(0.9999995505176007047, 12)
+	expect(m[1]).toBeCloseTo(0.8695404617348208406e-3, 14)
+	expect(m[2]).toBeCloseTo(0.3779735201865589104e-3, 14)
+	expect(m[3]).toBeCloseTo(-0.8695404723772031414e-3, 14)
+	expect(m[4]).toBeCloseTo(0.9999996219496027161, 12)
+	expect(m[5]).toBeCloseTo(-0.1361752497080270143e-6, 14)
+	expect(m[6]).toBeCloseTo(-0.377973495703408949e-3, 14)
+	expect(m[7]).toBeCloseTo(-0.1924880847894457113e-6, 14)
+	expect(m[8]).toBeCloseTo(0.9999999285679971958, 12)
 })
 
 test('eraNut06a', () => {

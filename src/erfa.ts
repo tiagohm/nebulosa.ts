@@ -766,3 +766,11 @@ export function eraNut00b(tt1: number, tt2: number): [Angle, Angle] {
 	// Add luni-solar and planetary components.
 	return [arcsec(dp) / 10000000 + DPPLAN, arcsec(de) / 10000000 + DEPLAN]
 }
+
+// Precession matrix (including frame bias) from GCRS to a specified date, IAU 2006 model.
+export function eraPmat06(tt1: number, tt2: number): MutMat3 {
+	// Bias-precession Fukushima-Williams angles.
+	const [gamb, phib, psib, epsa] = eraPfw06(tt1, tt2)
+	// Form the matrix.
+	return eraFw2m(gamb, phib, psib, epsa)
+}

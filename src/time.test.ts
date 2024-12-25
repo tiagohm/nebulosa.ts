@@ -2,7 +2,7 @@ import { beforeAll, expect, test, type CustomMatcher } from 'bun:test'
 import { hour } from './angle'
 import { J2000 } from './constants'
 import { iersa, iersb } from './iers'
-import { era, gast, gmst, normalize, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, tt, ut1, utc, type Time } from './time'
+import { equationOfOrigins, era, gast, gmst, meanObliquity, normalize, nutation, precession, precessionNutation, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, tt, ut1, utc, type Time } from './time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = normalize(expected.day, expected.fraction)
@@ -262,4 +262,34 @@ test('era', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	expect(era(t)).toBe(t.extra!.era!)
 	expect(t.extra?.era).toBeCloseTo(hour(13.088607043262001639), 15)
+})
+
+test('meanObliquity', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	expect(meanObliquity(t)).toBe(t.extra!.meanObliquity!)
+	expect(t.extra?.meanObliquity).toBeCloseTo(0.409045445708786315, 15)
+})
+
+test('nutation', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	expect(nutation(t)).toBe(t.extra!.nutation!)
+	expect(t.extra?.nutation).toEqual([-0.00008760676099523273, 0.00000755771193699156])
+})
+
+test('precession', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	expect(precession(t)).toBe(t.extra!.precession!)
+	expect(t.extra?.precession).toEqual([0.9999871819115399, -0.004643833528063321, -0.0020176280083981767, 0.004643833647273387, 0.9999892173356966, -0.000004625710173677966, 0.0020176277340206686, -0.000004743877952184672, 0.9999979645758397])
+})
+
+test('precessionNutation', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	expect(precessionNutation(t)).toBe(t.extra!.precessionNutation!)
+	expect(t.extra?.precessionNutation).toEqual([0.9999876216446774, -0.004563455260357874, -0.0019827842818092144, 0.004563440392430343, 0.9999895873794092, -0.000012022632120134435, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
+})
+
+test('equationOfOrigins', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	expect(equationOfOrigins(t)).toBe(t.extra!.equationOfOrigins!)
+	expect(t.extra?.equationOfOrigins).toEqual([0.9999980342134646, 0.000000011522914443798382, -0.001982818500615607, -0.00000001742012200722093, 0.9999999999955772, -0.0000029741367242157103, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
 })
