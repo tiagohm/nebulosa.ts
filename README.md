@@ -24,6 +24,8 @@ toArcsec(PI) // Convert radian to arcsecond
 toMas(PI) // Convert radian to milliarcsecond
 toDms(PI) // Convert radian to degree-minute-second
 toHms(PI) // Convert radian to hour-minute-second
+parseAngle('12h 45m 14.56s') // Parse the dms/hms angle represented as string
+formatAngle(PI, { isHour: true }) // Format the angle to string
 ```
 
 ### Distance

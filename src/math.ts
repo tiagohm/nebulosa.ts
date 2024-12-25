@@ -41,9 +41,5 @@ export function divmod(num: number, other: number): [number, number] {
 }
 
 export function roundToNearestWholeNumber(a: number): number {
-	return (
-		Math.abs(a) < 0.5 ? 0
-		: a < 0 ? Math.ceil(a - 0.5)
-		: Math.floor(a + 0.5)
-	)
+	return Math.abs(a) < 0.5 ? 0 : a < 0 ? Math.ceil(a - 0.5) : Math.floor(a + 0.5)
 }

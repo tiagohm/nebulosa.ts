@@ -33,7 +33,7 @@
 		{
 			"files": "*.ts",
 			"options": {
-				"experimentalTernaries": true,
+				"experimentalTernaries": false,
 				"parser": "typescript"
 			}
 		}

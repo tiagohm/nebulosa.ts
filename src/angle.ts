@@ -22,8 +22,33 @@ export const ANGVEL = 7.292115e-5
 // Arcseconds in a full circle.
 export const TURNAS = 1296000
 
+const DEFAULT_FORMAT_ANGLE_OPTIONS: FormatAngleOptions = {
+	isHour: false,
+	noSign: false,
+	noSecond: false,
+	fractionDigits: 2,
+	separators: [],
+	minusSign: '-',
+	plusSign: '+',
+}
+
 // Represents an angle in radians.
 export type Angle = number
+
+export interface ParseAngleOptions {
+	isHour: boolean
+	defaultValue: Angle
+}
+
+export interface FormatAngleOptions {
+	isHour: boolean
+	noSign: boolean
+	noSecond: boolean
+	fractionDigits: number
+	separators: string[]
+	minusSign: string
+	plusSign: string
+}
 
 export function normalize(angle: Angle): Angle {
 	return pmod(angle, TAU)
@@ -94,11 +119,11 @@ export function toMas(angle: Angle): number {
 }
 
 // Extracts the degrees, minutes and seconds from the angle.
-export function toDms(angle: Angle): [number, number, number] {
+export function toDms(angle: Angle): [number, number, number, boolean] {
 	const d = Math.abs(toDeg(angle))
 	const m = ((d - Math.trunc(d)) * 60) % 60
 	const s = ((m - Math.trunc(m)) * 60) % 60
-	return [Math.trunc(angle < 0 ? -d : d), Math.trunc(m), s]
+	return [Math.abs(Math.trunc(d)), Math.trunc(m), s, angle < 0]
 }
 
 // Extracts the hours, minutes and seconds from the angle.
@@ -107,4 +132,97 @@ export function toHms(angle: Angle): [number, number, number] {
 	const m = ((h - Math.trunc(h)) * 60) % 60
 	const s = ((m - Math.trunc(m)) * 60) % 60
 	return [Math.trunc(h), Math.trunc(m), s]
+}
+
+const ANGLE = '\\d+(?:\\.\\d+)?'
+const SIGNED_ANGLE = `[-+]?${ANGLE}`
+const UNIT = '[^\\d-+\\s]'
+
+// -12d 45m 23.123s
+const PARSE_ANGLE_DHMS_REGEX = new RegExp(`(${SIGNED_ANGLE})(${UNIT})?\\D*(?:(${ANGLE})(${UNIT})?\\D*)?(?:(${ANGLE})(${UNIT})?\\D*)?`)
+
+const UNICODE_SIGNS = '−′″'
+const REPLACE_UNICODE_SIGNS = '-\'"'
+const UNICODE_SIGN_REGEX = new RegExp(`[${UNICODE_SIGNS}]`, 'g')
+
+function replaceUnicodeSign(s: string) {
+	return REPLACE_UNICODE_SIGNS[UNICODE_SIGNS.indexOf(s)]
+}
+
+function isHourSign(input?: string) {
+	return !!input && input === 'h'
+}
+
+function isMinuteSign(input?: string) {
+	return !!input && (input === 'm' || input === "'")
+}
+
+function isSecondSign(input?: string) {
+	return !!input && (input === 's' || input === '"')
+}
+
+export function parseAngle(input?: string | number, options?: Partial<ParseAngleOptions>): Angle | undefined {
+	if (typeof input === 'number') {
+		return options?.isHour ? hour(input) : deg(input)
+	}
+
+	input = input?.trim().replaceAll(UNICODE_SIGN_REGEX, replaceUnicodeSign)
+
+	if (!input) return options?.defaultValue
+
+	const res = PARSE_ANGLE_DHMS_REGEX.exec(input)
+
+	let isHour = !!options?.isHour
+	let neg = false
+	let angle = 0
+
+	if (res?.[1]) {
+		const a = parseFloat(res[1])
+		const b = res[3] ? parseFloat(res[3]) : 0
+		const c = res[5] ? parseFloat(res[5]) : 0
+
+		neg = a < 0
+		if (options?.isHour === undefined) isHour = isHourSign(res[2])
+
+		if (isMinuteSign(res[2])) angle += Math.abs(a) / 60
+		else if (isSecondSign(res[2])) angle += Math.abs(a) / 3600
+		else angle += Math.abs(a)
+
+		if (b) {
+			if (isSecondSign(res[4])) angle += Math.abs(b) / 3600
+			else angle += Math.abs(b) / 60
+		}
+
+		if (c) {
+			angle += Math.abs(c) / 3600
+		}
+
+		angle = isHour ? hour(angle) : deg(angle)
+
+		return neg ? -angle : angle
+	}
+
+	return options?.defaultValue
+}
+
+export function formatAngle(angle: Angle, options?: Partial<FormatAngleOptions>) {
+	const isHour = options?.isHour ?? DEFAULT_FORMAT_ANGLE_OPTIONS.isHour
+	const noSecond = options?.noSecond ?? DEFAULT_FORMAT_ANGLE_OPTIONS.noSecond
+	const noSign = options?.noSign ?? DEFAULT_FORMAT_ANGLE_OPTIONS.noSign
+	const minusSign = options?.minusSign ?? DEFAULT_FORMAT_ANGLE_OPTIONS.minusSign
+	const plusSign = options?.plusSign ?? DEFAULT_FORMAT_ANGLE_OPTIONS.plusSign
+	const separators = options?.separators ?? DEFAULT_FORMAT_ANGLE_OPTIONS.separators
+	const fractionDigits = options?.fractionDigits ?? DEFAULT_FORMAT_ANGLE_OPTIONS.fractionDigits
+
+	const [a, b, c, neg] = isHour ? toHms(angle) : toDms(angle)
+	const sign = noSign && !neg ? '' : neg ? minusSign : plusSign
+	const sa = separators[0] ?? ' '
+	const sb = separators[1] ?? (noSecond ? '' : sa)
+	const sc = separators[2] ?? ''
+
+	const d = `${Math.abs(a)}`.padStart(2, '0')
+	const m = `${Math.abs(b)}`.padStart(2, '0')
+	const s = noSecond ? '' : c.toFixed(fractionDigits)
+
+	return `${sign}${d}${sa}${m}${sb}${s}${sc}`
 }
