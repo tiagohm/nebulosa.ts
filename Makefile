@@ -10,7 +10,7 @@ prettier:
 	bun prettier
 
 test:
-	bun test
+	bun test --timeout 1000
 
 astropy:
 	python scripts/astropy/$(name).py $(arg)

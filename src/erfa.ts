@@ -1,8 +1,9 @@
-import { arcsec, deg, normalize, TURNAS, type Angle } from './angle'
+import { arcsec, deg, MILLIASEC2RAD, normalize, TURNAS, type Angle } from './angle'
 import { DAYSEC, DAYSPERJC, DAYSPERJM, ELB, ELG, J2000, MJD0, MJD1977, PI, TAU, TDB0, TTMINUSTAI } from './constants'
 import { toKm, type Distance } from './distance'
 import { FAIRHEAD } from './fairhead'
-import { IAU2000A_XLS, IAU2000A_XPL } from './iau2000a'
+import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
+import { IAU2000B_LS } from './iau2000b'
 import { IAU2006_S, IAU2006_SP } from './iau2006'
 import { pmod, roundToNearestWholeNumber } from './math'
 import { rotX, rotZ, type Mat3, type MutMat3 } from './matrix'
@@ -649,8 +650,8 @@ export function eraNut00a(tt1: number, tt2: number): [Angle, Angle] {
 	let de = 0.0
 
 	// Summation of luni-solar nutation series (in reverse order).
-	for (let i = IAU2000A_XLS.length - 1; i >= 0; i--) {
-		const [nl, nlp, nf, nd, nom, sp, spt, cp, ce, cet, se] = IAU2000A_XLS[i]
+	for (let i = IAU2000A_LS.length - 1; i >= 0; i--) {
+		const [nl, nlp, nf, nd, nom, sp, spt, cp, ce, cet, se] = IAU2000A_LS[i]
 		const arg = (nl * el + nlp * elp + nf * f + nd * d + nom * om) % TAU
 
 		const sarg = Math.sin(arg)
@@ -693,8 +694,8 @@ export function eraNut00a(tt1: number, tt2: number): [Angle, Angle] {
 	dp = 0.0
 	de = 0.0
 
-	for (let i = IAU2000A_XPL.length - 1; i >= 0; i--) {
-		const [nl, nf, nd, nom, nme, nve, nea, nma, nju, nsa, nur, nne, npa, sp, cp, se, ce] = IAU2000A_XPL[i]
+	for (let i = IAU2000A_PL.length - 1; i >= 0; i--) {
+		const [nl, nf, nd, nom, nme, nve, nea, nma, nju, nsa, nur, nne, npa, sp, cp, se, ce] = IAU2000A_PL[i]
 		const arg = (nl * al + nf * af + nd * ad + nom * aom + nme * alme + nve * alve + nea * alea + nma * alma + nju * alju + nsa * alsa + nur * alur + nne * alne + npa * apa) % TAU
 
 		const sarg = Math.sin(arg)
@@ -724,4 +725,44 @@ export function eraNut06a(tt1: number, tt2: number): [Angle, Angle] {
 	const deps = de + de * fj2
 
 	return [dpsi, deps]
+}
+
+const DPPLAN = -0.135 * MILLIASEC2RAD
+const DEPLAN = 0.388 * MILLIASEC2RAD
+
+// Nutation, IAU 2000B model.
+export function eraNut00b(tt1: number, tt2: number): [Angle, Angle] {
+	// Interval between fundamental epoch J2000.0 and given date (JC).
+	const t = (tt1 - J2000 + tt2) / DAYSPERJC
+
+	// Fundamental (Delaunay) arguments from Simon et al. (1994)
+
+	// Mean anomaly of the Moon.
+	const el = arcsec((485868.249036 + 1717915923.2178 * t) % TURNAS)
+	// Mean anomaly of the Sun.
+	const elp = arcsec((1287104.79305 + 129596581.0481 * t) % TURNAS)
+	// Mean argument of the latitude of the Moon.
+	const f = arcsec((335779.526232 + 1739527262.8478 * t) % TURNAS)
+	// Mean elongation of the Moon from the Sun.
+	const d = arcsec((1072260.70369 + 1602961601.209 * t) % TURNAS)
+	// Mean longitude of the ascending node of the Moon.
+	const om = arcsec((450160.398036 - 6962890.5431 * t) % TURNAS)
+
+	let dp = 0.0
+	let de = 0.0
+
+	for (let i = IAU2000B_LS.length - 1; i >= 0; i--) {
+		const [nl, nlp, nf, nd, nom, ps, pst, pc, ec, ect, es] = IAU2000B_LS[i]
+		const arg = (nl * el + nlp * elp + nf * f + nd * d + nom * om) % TAU
+
+		const sarg = Math.sin(arg)
+		const carg = Math.cos(arg)
+
+		// Term.
+		dp += (ps + pst * t) * sarg + pc * carg
+		de += (ec + ect * t) * carg + es * sarg
+	}
+
+	// Add luni-solar and planetary components.
+	return [arcsec(dp) / 10000000 + DPPLAN, arcsec(de) / 10000000 + DEPLAN]
 }

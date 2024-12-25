@@ -202,35 +202,35 @@ test('tcb', () => {
 	expect(tcb(t)).toMatchTime(time(2459130, 0, Timescale.TCB, false))
 })
 
-test('memoize', () => {
+test('extra', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TCB)
 
 	for (let i = 0; i < 10000; i++) {
 		const a = ut1(t)
-		expect(a.extra?.tcb).toEqual(t)
-		expect(t.extra?.ut1).toEqual(a)
+		expect(a.extra?.tcb).toBe(t)
+		expect(t.extra?.ut1).toBe(a)
 
 		const b = utc(t)
-		expect(b.extra?.tcb).toEqual(t)
-		expect(t.extra?.utc).toEqual(b)
+		expect(b.extra?.tcb).toBe(t)
+		expect(t.extra?.utc).toBe(b)
 
 		const c = tai(t)
-		expect(c.extra?.tcb).toEqual(t)
-		expect(t.extra?.tai).toEqual(c)
+		expect(c.extra?.tcb).toBe(t)
+		expect(t.extra?.tai).toBe(c)
 
 		const d = tt(t)
-		expect(d.extra?.tcb).toEqual(t)
-		expect(t.extra?.tt).toEqual(d)
+		expect(d.extra?.tcb).toBe(t)
+		expect(t.extra?.tt).toBe(d)
 
 		const e = tcg(t)
-		expect(e.extra?.tcb).toEqual(t)
-		expect(t.extra?.tcg).toEqual(e)
+		expect(e.extra?.tcb).toBe(t)
+		expect(t.extra?.tcg).toBe(e)
 
 		const f = tdb(t)
-		expect(f.extra?.tcb).toEqual(t)
-		expect(t.extra?.tdb).toEqual(f)
+		expect(f.extra?.tcb).toBe(t)
+		expect(t.extra?.tdb).toBe(f)
 	}
-}, 1000)
+})
 
 test('tdbMinusTtByFairheadAndBretagnon1990', () => {
 	expect(tdbMinusTtByFairheadAndBretagnon1990(time(2448031, 0.5, Timescale.TDB))).toBeCloseTo(0.0011585185926349208, 16)

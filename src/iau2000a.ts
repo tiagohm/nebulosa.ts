@@ -7,7 +7,7 @@ export type Iau2000ALunisolarNut = [number, number, number, number, number, numb
 export type Iau2000APlanetaryNut = [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number]
 
 // https://github.com/liberfa/erfa/blob/master/src/nut00a.c#L174
-export const IAU2000A_XLS: Iau2000ALunisolarNut[] = [
+export const IAU2000A_LS: Iau2000ALunisolarNut[] = [
 	[0, 0, 0, 0, 1, -172064161.0, -174666.0, 33386.0, 92052331.0, 9086.0, 15377.0],
 	[0, 0, 2, -2, 2, -13170906.0, -1675.0, -13696.0, 5730336.0, -3015.0, -4587.0],
 	[0, 0, 2, 0, 2, -2276413.0, -234.0, 2796.0, 978459.0, -485.0, 1374.0],
@@ -823,7 +823,7 @@ export const IAU2000A_XLS: Iau2000ALunisolarNut[] = [
 ]
 
 // https://github.com/liberfa/erfa/blob/master/src/nut00a.c#L1007
-export const IAU2000A_XPL: Iau2000APlanetaryNut[] = [
+export const IAU2000A_PL: Iau2000APlanetaryNut[] = [
 	// 1-10
 	[0, 0, 0, 0, 0, 0, 8, -16, 4, 5, 0, 0, 0, 1440, 0, 0, 0],
 	[0, 0, 0, 0, 0, 0, -8, 16, -4, -5, 0, 0, 2, 56, -117, -42, -40],

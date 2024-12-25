@@ -1,5 +1,12 @@
 import { expect, test } from 'bun:test'
-import { clone, determinant, flipX, flipXMut, flipY, flipYMut, identity, rotX, rotY, rotZ, transpose, transposeMut, type MutMat3 } from './matrix'
+import { clone, determinant, div, divScalar, flipX, flipY, identity, minus, minusScalar, mul, mulScalar, mulVec, plus, plusScalar, rotX, rotY, rotZ, transpose, zero, type MutMat3 } from './matrix'
+import type { MutVec3 } from './vector'
+
+test('determinant', () => {
+	expect(determinant([1, 2, 3, 4, 5, 6, 7, 8, 9])).toBe(0)
+	expect(determinant(identity())).toBe(1)
+	expect(determinant([2, 3, 2, 3, 2, 3, 3, 4, 5])).toBe(-10)
+})
 
 test('rotX', () => {
 	const m: MutMat3 = [2, 3, 2, 3, 2, 3, 3, 4, 5]
@@ -64,12 +71,9 @@ test('transpose', () => {
 	const n = transpose(m)
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([1, 4, 7, 2, 5, 8, 3, 6, 9])
-})
 
-test('transposeMut', () => {
-	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	transposeMut(m)
-	expect(m).toEqual([1, 4, 7, 2, 5, 8, 3, 6, 9])
+	transpose(m, m)
+	expect(m).toEqual(n)
 })
 
 test('flipX', () => {
@@ -77,12 +81,9 @@ test('flipX', () => {
 	const n = flipX(m)
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([7, 8, 9, 4, 5, 6, 1, 2, 3])
-})
 
-test('flipXMut', () => {
-	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	flipXMut(m)
-	expect(m).toEqual([7, 8, 9, 4, 5, 6, 1, 2, 3])
+	flipX(m, m)
+	expect(m).toEqual(n)
 })
 
 test('flipY', () => {
@@ -90,16 +91,102 @@ test('flipY', () => {
 	const n = flipY(m)
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([3, 2, 1, 6, 5, 4, 9, 8, 7])
+
+	flipY(m, m)
+	expect(m).toEqual(n)
 })
 
-test('flipYMut', () => {
+test('mulVec', () => {
+	const m: MutMat3 = [2, 3, 2, 3, 2, 3, 3, 4, 5]
+	const v: MutVec3 = [2, 3, 2]
+	const u = mulVec(m, v)
+	expect(u).not.toEqual(v)
+	expect(u).toEqual([17, 18, 28])
+
+	mulVec(m, v, v)
+	expect(v).toEqual(u)
+})
+
+test('plusScalar', () => {
 	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	flipYMut(m)
-	expect(m).toEqual([3, 2, 1, 6, 5, 4, 9, 8, 7])
+	const n = plusScalar(m, 1)
+	expect(n).not.toEqual(m)
+	expect(n).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10])
+
+	plusScalar(m, 1, m)
+	expect(m).toEqual(n)
 })
 
-test('determinant', () => {
-	expect(determinant([1, 2, 3, 4, 5, 6, 7, 8, 9])).toBe(0)
-	expect(determinant(identity())).toBe(1)
-	expect(determinant([2, 3, 2, 3, 2, 3, 3, 4, 5])).toBe(-10)
+test('minusScalar', () => {
+	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const n = minusScalar(m, 1)
+	expect(n).not.toEqual(m)
+	expect(n).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
+
+	minusScalar(m, 1, m)
+	expect(m).toEqual(n)
+})
+
+test('mulScalar', () => {
+	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const n = mulScalar(m, 2)
+	expect(n).not.toEqual(m)
+	expect(n).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 18])
+
+	mulScalar(m, 2, m)
+	expect(m).toEqual(n)
+})
+
+test('divScalar', () => {
+	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const n = divScalar(m, 2)
+	expect(n).not.toEqual(m)
+	expect(n).toEqual([0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5])
+
+	divScalar(m, 2, m)
+	expect(m).toEqual(n)
+})
+
+test('plus', () => {
+	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const n: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const u = plus(m, n)
+	expect(u).not.toEqual(m)
+	expect(u).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 18])
+
+	plus(m, n, m)
+	expect(m).toEqual(u)
+})
+
+test('minus', () => {
+	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const n: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const u = minus(m, n)
+	expect(u).not.toEqual(m)
+	expect(u).toEqual(zero())
+
+	minus(m, n, m)
+	expect(m).toEqual(u)
+})
+
+test('mul', () => {
+	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const n: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const u = mul(m, n)
+	expect(u).not.toEqual(m)
+	expect(u).toEqual([1, 4, 9, 16, 25, 36, 49, 64, 81])
+
+	mul(m, n, m)
+	expect(m).toEqual(u)
+})
+
+test('div', () => {
+	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const n: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const u = div(m, n)
+	expect(u).not.toEqual(m)
+	expect(u).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1])
+
+	div(m, n, m)
+	expect(m).toEqual(u)
 })

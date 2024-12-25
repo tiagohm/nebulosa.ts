@@ -8,7 +8,7 @@ export type Vec3 = readonly [number, number, number]
 // Like Vec3 but mutable.
 export type MutVec3 = Mutable<Vec3>
 
-// Scalar product between the vectors a and b.
+// Computes the scalar product between the vectors.
 export function dot(a: Vec3, b: Vec3) {
 	return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
@@ -21,7 +21,7 @@ export function fill(v: MutVec3, a: number, b: number, c: number): MutVec3 {
 	return v
 }
 
-// Cross product between the vectors a and b.
+// Cross product between the vectors.
 export function cross(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 	const c = a[1] * b[2] - a[2] * b[1]
 	const d = a[2] * b[0] - a[0] * b[2]
@@ -31,10 +31,12 @@ export function cross(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 	else return [c, d, e]
 }
 
+// Computes the length of the vector.
 export function length(v: Vec3) {
 	return Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
 }
 
+// Computes the distance between the vectors.
 export function distance(a: Vec3, b: Vec3) {
 	const c = a[0] - b[0]
 	const d = a[1] - b[1]
@@ -47,7 +49,7 @@ export function clone(v: Vec3): MutVec3 {
 	return [...v]
 }
 
-// Computes the angle between the vectors a and b.
+// Computes the angle between the vectors.
 export function angle(a: Vec3, b: Vec3): Angle {
 	// https://people.eecs.berkeley.edu/~wkahan/Mindless.pdf
 	// const c = mulScalar(a, length(b))
@@ -96,41 +98,49 @@ export function negate(a: Vec3, o?: MutVec3): MutVec3 {
 	else return [-a[0], -a[1], -a[2]]
 }
 
+// Computes the sum of the vector by scalar.
 export function plusScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
 	if (o) return fill(o, a[0] + scalar, a[1] + scalar, a[2] + scalar)
 	else return [a[0] + scalar, a[1] + scalar, a[2] + scalar]
 }
 
+// Computes the subtraction of the vector by scalar.
 export function minusScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
 	if (o) return fill(o, a[0] - scalar, a[1] - scalar, a[2] - scalar)
 	else return [a[0] - scalar, a[1] - scalar, a[2] - scalar]
 }
 
+// Computes the multiplication of the vector by scalar.
 export function mulScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
 	if (o) return fill(o, a[0] * scalar, a[1] * scalar, a[2] * scalar)
 	else return [a[0] * scalar, a[1] * scalar, a[2] * scalar]
 }
 
+// Computes the division of the vector by scalar.
 export function divScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
 	if (o) return fill(o, a[0] / scalar, a[1] / scalar, a[2] / scalar)
 	else return [a[0] / scalar, a[1] / scalar, a[2] / scalar]
 }
 
+// Computes the sum between the vectors.
 export function plus(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 	if (o) return fill(o, a[0] + b[0], a[1] + b[1], a[2] + b[2])
 	else return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
+// Computes the subtraction between the vectors.
 export function minus(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 	if (o) return fill(o, a[0] - b[0], a[1] - b[1], a[2] - b[2])
 	else return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
+// Computes the multiplication between the vectors.
 export function mul(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 	if (o) return fill(o, a[0] * b[0], a[1] * b[1], a[2] * b[2])
 	else return [a[0] * b[0], a[1] * b[1], a[2] * b[2]]
 }
 
+// Computes the division between the vectors.
 export function div(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 	if (o) return fill(o, a[0] / b[0], a[1] / b[1], a[2] / b[2])
 	else return [a[0] / b[0], a[1] / b[1], a[2] / b[2]]
