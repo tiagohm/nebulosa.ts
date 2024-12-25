@@ -1,9 +1,9 @@
 import type { Angle } from './angle'
 import { DAYSEC, DAYSPERJC, DAYSPERJY, DTY, J2000, MJD0, TTMINUSTAI } from './constants'
-import { eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+import { eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import { iersab } from './iers'
 import { twoProduct, twoSum } from './math'
-import { clone, identity, mul, rotX, rotY, rotZ, type Mat3, type MutMat3 } from './matrix'
+import { clone, identity, mul, rotX, rotZ, type Mat3, type MutMat3 } from './matrix'
 
 // The specification for measuring time.
 export enum Timescale {
@@ -32,7 +32,8 @@ export interface TimeExtra {
 	nutation?: readonly [Angle, Angle]
 	precession?: Mat3
 	precessionNutation?: Mat3
-	polarMotion?: Mat3
+	pmAngles?: readonly [Angle, Angle, Angle] // sprime, x, y
+	pmMatrix?: Mat3
 	equationOfOrigins?: Mat3
 }
 
@@ -58,27 +59,30 @@ export enum JulianCalendarCutOff {
 // Computes the ΔT in seconds at time.
 export type TimeDelta = (time: Time) => number
 
-// The displaced angles (longitude and latitude) of rotation of the Earth’s spin axis about its geographic axis.
+// The displaced angles (longitude and latitude) of rotation of the Earth's spin axis about its geographic axis.
 export type PolarMotion = (time: Time) => [Angle, Angle]
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export const noPolarMotion = (time: Time) => [0, 0]
 
 // Computes the motion angles (sprime, x, y) from the specified time.
-export function pmAngles(pm: PolarMotion, time: Time): [Angle, Angle, Angle] {
-	time = tt(time)
-	const sprime = eraSp00(time.day, time.fraction)
+export function pmAngles(pm: PolarMotion, time: Time): readonly [Angle, Angle, Angle] {
+	if (time.extra?.pmAngles) return time.extra.pmAngles
+	const t = tt(time)
+	const sprime = eraSp00(t.day, t.fraction)
 	const [x, y] = pm(time)
-	return [sprime, x, y]
+	const a: [Angle, Angle, Angle] = [sprime, x, y]
+	extra(time, undefined, { pmAngles: a })
+	return a
 }
 
 // Computes the polar motion matrix from the specified time.
 export function pmMatrix(pm: PolarMotion, time: Time): Mat3 {
-	if (time.extra?.polarMotion) return time.extra.polarMotion
+	if (time.extra?.pmMatrix) return time.extra.pmMatrix
 	const [sprime, x, y] = pmAngles(pm, time)
-	const polarMotion = rotZ(-sprime, rotY(x, rotX(y)))
-	extra(time, undefined, { polarMotion })
-	return polarMotion
+	const m = eraPom00(x, y, sprime)
+	extra(time, undefined, { pmMatrix: m })
+	return m
 }
 
 export function time(day: number, fraction: number = 0, scale: Timescale = Timescale.UTC, normalized: boolean = true): Time {
@@ -209,7 +213,8 @@ function extra(target: Time, source?: Time, extra?: Partial<TimeExtra>) {
 		if (extra.nutation) target.extra.nutation = extra.nutation
 		if (extra.precession) target.extra.precession = extra.precession
 		if (extra.precessionNutation) target.extra.precessionNutation = extra.precessionNutation
-		if (extra.polarMotion) target.extra.polarMotion = extra.polarMotion
+		if (extra.pmAngles) target.extra.pmAngles = extra.pmAngles
+		if (extra.pmMatrix) target.extra.pmMatrix = extra.pmMatrix
 		if (extra.equationOfOrigins) target.extra.equationOfOrigins = extra.equationOfOrigins
 	}
 }

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { clone, determinant, divScalar, flipX, flipY, identity, minus, minusScalar, mul, mulScalar, mulVec, plus, plusScalar, rotX, rotY, rotZ, transpose, zero, type MutMat3 } from './matrix'
+import { clone, determinant, divScalar, divScalarMut, flipX, flipXMut, flipY, flipYMut, identity, minus, minusScalar, minusScalarMut, mul, mulScalar, mulScalarMut, mulVec, plus, plusScalar, plusScalarMut, rotX, rotY, rotZ, transpose, transposeMut, zero, type MutMat3 } from './matrix'
 import type { MutVec3 } from './vector'
 
 test('determinant', () => {
@@ -72,7 +72,7 @@ test('transpose', () => {
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([1, 4, 7, 2, 5, 8, 3, 6, 9])
 
-	transpose(m, m)
+	transposeMut(m)
 	expect(m).toEqual(n)
 })
 
@@ -82,7 +82,7 @@ test('flipX', () => {
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([7, 8, 9, 4, 5, 6, 1, 2, 3])
 
-	flipX(m, m)
+	flipXMut(m)
 	expect(m).toEqual(n)
 })
 
@@ -92,7 +92,7 @@ test('flipY', () => {
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([3, 2, 1, 6, 5, 4, 9, 8, 7])
 
-	flipY(m, m)
+	flipYMut(m)
 	expect(m).toEqual(n)
 })
 
@@ -113,7 +113,7 @@ test('plusScalar', () => {
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10])
 
-	plusScalar(m, 1, m)
+	plusScalarMut(m, 1)
 	expect(m).toEqual(n)
 })
 
@@ -123,7 +123,7 @@ test('minusScalar', () => {
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
 
-	minusScalar(m, 1, m)
+	minusScalarMut(m, 1)
 	expect(m).toEqual(n)
 })
 
@@ -133,7 +133,7 @@ test('mulScalar', () => {
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 18])
 
-	mulScalar(m, 2, m)
+	mulScalarMut(m, 2)
 	expect(m).toEqual(n)
 })
 
@@ -143,7 +143,7 @@ test('divScalar', () => {
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5])
 
-	divScalar(m, 2, m)
+	divScalarMut(m, 2)
 	expect(m).toEqual(n)
 })
 

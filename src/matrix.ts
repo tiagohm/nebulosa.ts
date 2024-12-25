@@ -193,3 +193,43 @@ export function mulVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
 	if (o) return fillVec(o, c, d, e)
 	return [c, d, e]
 }
+
+// Transposes the matrix.
+export function transposeMut(m: MutMat3): MutMat3 {
+	return transpose(m, m)
+}
+
+// Flips the matrix around x-axis.
+export function flipXMut(m: MutMat3): MutMat3 {
+	return flipX(m, m)
+}
+
+// Flips the matrix around y-axis.
+export function flipYMut(m: MutMat3): MutMat3 {
+	return flipY(m, m)
+}
+
+// Negates the matrix.
+export function negateMut(m: MutMat3): MutMat3 {
+	return negate(m, m)
+}
+
+// Computes the sum of the matrix by scalar.
+export function plusScalarMut(m: MutMat3, scalar: number): MutMat3 {
+	return plusScalar(m, scalar, m)
+}
+
+// Computes the subtraction of the matrix by scalar.
+export function minusScalarMut(m: MutMat3, scalar: number): MutMat3 {
+	return minusScalar(m, scalar, m)
+}
+
+// Computes the multiplication of the matrix by scalar.
+export function mulScalarMut(m: MutMat3, scalar: number): MutMat3 {
+	return mulScalar(m, scalar, m)
+}
+
+// Computes the division of the matrix by scalar.
+export function divScalarMut(m: MutMat3, scalar: number): MutMat3 {
+	return divScalar(m, scalar, m)
+}
