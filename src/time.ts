@@ -27,6 +27,11 @@ export interface TimeExtra {
 	tdb?: Time
 	tcb?: Time
 
+	ut1MinusUtc?: number
+	ut1MinusTai?: number
+	taiMinusUtc?: number
+	tdbMinusTt?: number
+
 	gast?: Angle
 	gmst?: Angle
 	era?: Angle
@@ -212,6 +217,10 @@ function extra(target: Time, source?: Time, extra?: Partial<TimeExtra>) {
 
 		if (source.location) target.location = source.location
 	} else if (extra) {
+		if (extra.ut1MinusUtc) target.extra.ut1MinusUtc = extra.ut1MinusUtc
+		if (extra.ut1MinusTai) target.extra.ut1MinusTai = extra.ut1MinusTai
+		if (extra.taiMinusUtc) target.extra.taiMinusUtc = extra.taiMinusUtc
+		if (extra.tdbMinusTt) target.extra.tdbMinusTt = extra.tdbMinusTt
 		if (extra.gast) target.extra.gast = extra.gast
 		if (extra.gmst) target.extra.gmst = extra.gmst
 		if (extra.era) target.extra.era = extra.era
@@ -438,19 +447,23 @@ export function equationOfOrigins(time: Time): Mat3 {
 
 // Computes UT1 - UTC in seconds at time.
 export const ut1MinusUtc: TimeDelta = (time) => {
+	if (time.extra?.ut1MinusUtc) return time.extra.ut1MinusUtc
+
 	// https://github.com/astropy/astropy/blob/71a2eafd6c09f1992f8b4132e6e40ba68a675bde/astropy/time/core.py#L2554
 	// Interpolate UT1-UTC in IERS table
-	const d = delta(time)
+	let dt = delta(time)
 
 	// If we interpolated using UT1, we may be off by one
 	// second near leap seconds (and very slightly off elsewhere)
 	if (time.scale === Timescale.UT1) {
-		const a = eraUt1Utc(time.day, time.fraction, d)
+		const a = eraUt1Utc(time.day, time.fraction, dt)
 		// Calculate a better estimate using the nearly correct UTC
-		return delta({ day: a[0], fraction: a[1], scale: Timescale.UTC })
+		dt = delta({ day: a[0], fraction: a[1], scale: Timescale.UTC })
 	}
 
-	return d
+	extra(time, undefined, { ut1MinusUtc: dt })
+
+	return dt
 }
 
 // Computes TDB - TT in seconds at time.
@@ -458,6 +471,8 @@ export const tdbMinusTt: TimeDelta = (time) => {
 	const { day, fraction, scale } = time
 
 	if (scale === Timescale.TDB || scale === Timescale.TT) {
+		if (time.extra?.tdbMinusTt) return time.extra.tdbMinusTt
+
 		// First go from the current input time (which is either
 		// TDB or TT) to an approximate UT1. Since TT and TDB are
 		// pretty close (few msec?), assume TT. Similarly, since the
@@ -468,12 +483,18 @@ export const tdbMinusTt: TimeDelta = (time) => {
 		// Subtract 0.5, so UT is fraction of the day from midnight
 		const ut = normalize(a[0] - 0.5, a[1]).fraction
 
+		let dt = 0
+
 		if (time.location) {
 			const [x, y, z] = itrs(time.location)
-			return eraDtDb(day, fraction, ut, time.location.longitude, Math.hypot(x, y), z)
+			dt = eraDtDb(day, fraction, ut, time.location.longitude, Math.hypot(x, y), z)
 		} else {
-			return eraDtDb(day, fraction, ut)
+			dt = eraDtDb(day, fraction, ut)
 		}
+
+		extra(time, undefined, { tdbMinusTt: dt })
+
+		return dt
 	}
 
 	return 0
@@ -496,14 +517,20 @@ export const tdbMinusTtByFairheadAndBretagnon1990: TimeDelta = (time) => {
 
 // Computes TAI - UTC in seconds at time.
 export const taiMinusUtc: TimeDelta = (time) => {
+	if (time.extra?.taiMinusUtc) return time.extra.taiMinusUtc
 	const cal = eraJdToCal(time.day, time.fraction)
-	return eraDat(cal[0], cal[1], cal[2], cal[3])
+	const dt = eraDat(cal[0], cal[1], cal[2], cal[3])
+	extra(time, undefined, { taiMinusUtc: dt })
+	return dt
 }
 
 // Computes UT1 - TAI in seconds at time.
 export const ut1MinusTai: TimeDelta = (time) => {
+	if (time.extra?.ut1MinusTai) return time.extra.ut1MinusTai
 	const cal = eraJdToCal(time.day, time.fraction)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
 	const dut1 = (time.ut1MinusUtc ?? ut1MinusUtc)(time)
-	return dut1 - dat
+	const dt = dut1 - dat
+	extra(time, undefined, { ut1MinusTai: dt })
+	return dt
 }

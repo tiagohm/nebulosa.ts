@@ -118,6 +118,10 @@ test('ut1', () => {
 	expect(tcg(t)).toMatchTime(time(2459130, 0.000813870140404485, Timescale.TCG, false))
 	expect(tdb(t)).toMatchTime(time(2459130, 0.000802709826729233, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.001050568932858317, Timescale.TCB, false))
+
+	expect(t.extra?.ut1MinusUtc).not.toBeUndefined()
+	expect(t.extra?.ut1MinusTai).not.toBeUndefined()
+	expect(t.extra?.tdbMinusTt).not.toBeUndefined()
 })
 
 test('utc', () => {
@@ -132,6 +136,9 @@ test('utc', () => {
 	expect(tcg(t)).toMatchTime(time(2459130, 0.000811881499790694, Timescale.TCG, false))
 	expect(tdb(t)).toMatchTime(time(2459130, 0.000800721186116808, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.001048580292215058, Timescale.TCB, false))
+
+	expect(t.extra?.ut1MinusUtc).not.toBeUndefined()
+	expect(t.extra?.tdbMinusTt).not.toBeUndefined()
 })
 
 test('tai', () => {
@@ -146,6 +153,10 @@ test('tai', () => {
 	expect(tcg(t)).toMatchTime(time(2459130, 0.00038364075875147, Timescale.TCG, false))
 	expect(tdb(t)).toMatchTime(time(2459130, 0.000372480445371678, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.000620339544829971, Timescale.TCB, false))
+
+	expect(t.extra?.ut1MinusUtc).not.toBeUndefined()
+	expect(t.extra?.ut1MinusTai).not.toBeUndefined()
+	expect(t.extra?.tdbMinusTt).not.toBeUndefined()
 })
 
 test('tt', () => {
@@ -160,6 +171,9 @@ test('tt', () => {
 	expect(tcg(t)).toMatchTime(time(2459130, 0.000011140758491864, Timescale.TCG, false))
 	expect(tdb(t)).toMatchTime(time(2459130, -0.000000019554632113, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.000247839539050494, Timescale.TCB, false))
+
+	expect(t.extra?.ut1MinusUtc).not.toBeUndefined()
+	expect(t.extra?.tdbMinusTt).not.toBeUndefined()
 })
 
 test('tcg', () => {
@@ -174,6 +188,9 @@ test('tcg', () => {
 	expect(tcg(t)).toMatchTime(time(2459130, 0, Timescale.TCG, false))
 	expect(tdb(t)).toMatchTime(time(2459130, -0.000011160313116326, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.000236698780393541, Timescale.TCB, false))
+
+	expect(t.extra?.ut1MinusUtc).not.toBeUndefined()
+	expect(t.extra?.tdbMinusTt).not.toBeUndefined()
 })
 
 test('tdb', () => {
@@ -188,6 +205,9 @@ test('tdb', () => {
 	expect(tcg(t)).toMatchTime(time(2459130, 0.00001116031312399, Timescale.TCG, false))
 	expect(tdb(t)).toMatchTime(time(2459130, 0, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.00024785909368291, Timescale.TCB, false))
+
+	expect(t.extra?.ut1MinusUtc).not.toBeUndefined()
+	expect(t.extra?.tdbMinusTt).not.toBeUndefined()
 })
 
 test('tcb', () => {
@@ -202,6 +222,9 @@ test('tcb', () => {
 	expect(tcg(t)).toMatchTime(time(2459130, -0.000236698776886034, Timescale.TCG, false))
 	expect(tdb(t)).toMatchTime(time(2459130, -0.000247859089839806, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0, Timescale.TCB, false))
+
+	expect(t.extra?.ut1MinusUtc).not.toBeUndefined()
+	expect(t.extra?.tdbMinusTt).not.toBeUndefined()
 })
 
 test('location', () => {
