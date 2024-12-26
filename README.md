@@ -1,7 +1,8 @@
 # Nebulosa
 
-The complete integrated solution for all of your astronomical imaging needs.
+Elegant astronomy for TypeScript. Supercharged by Bun.
 
+[![Active Development](https://img.shields.io/badge/Maintenance%20Level-Actively%20Developed-brightgreen.svg)](https://gist.github.com/cheerfulstoic/d107229326a01ff0f333a1d3476e068d)
 [![CI](https://github.com/tiagohm/nebulosa.ts/actions/workflows/ci.yml/badge.svg?event=workflow_dispatch)](https://github.com/tiagohm/nebulosa.ts/actions/workflows/ci.yml)
 
 ## API
@@ -76,38 +77,42 @@ dRdtTimesRtAt(location, time)
 ### Math
 
 ```ts
-pmod(-PI, TAU)
-divmod(10, 4)
+pmod(-PI, TAU) // Modulo where the result is always non-negative
+divmod(10, 4) // The quotient and the remainder of division
 roundToNearestWholeNumber(5.6)
-twoSum(0.1, 0.2)
-split(0.5)
-twoProduct(0.5, 0.4)
+twoSum(0.1, 0.2) // Sum both exactly in two 64-bit floats
+split(0.5) // Split in two aligned parts
+twoProduct(0.5, 0.4) // Multiply both exactly in two 64-bit floats
 ```
 
 ### Matrix
 
 ```ts
 const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-zero()
-identity()
-rotX(PI, m)
-rotY(PI, m)
-rotZ(PI, m)
-clone(m)
-determinant(m)
-trace(m)
-transpose(m)
-flipX(m)
-flipY(m)
-negate(m)
-plusScalar(m, 2)
-minusScalar(m, 2)
-mulScalar(m, 2)
-divScalar(m, 2)
-plus(m, n)
-minus(m, n)
-mul(m, n)
-mulVec(m, v)
+zero() // Matrix filled with zeroes
+identity() // Identity matrix
+rotX(PI, m) // Rotate the matrix around x-axis
+rotY(PI, m) // Rotate the matrix around y-axis
+rotZ(PI, m) // Rotate the matrix around z-axis
+clone(m) // Clone the matrix
+determinant(m) // Determinant of the matrix
+trace(m) // Trace of the matrix
+transpose(m) // Transpose the matrix
+transposeMut(m) // Transpose the matrix on it
+flipX(m) // Flip the x-axis of the matrix
+flipXMut(m) // Flip the x-axis of the matrix on it
+flipY(m) // Flip the y-axis of the matrix
+flipYMut(m) // Flip the y-axis of the matrix on it
+negate(m) // Negate the matrix
+negateMut(m) // Negate the matrix on it
+plusScalar(m, 2) // Sum the matrix by a scalar
+minusScalar(m, 2) // Subtract the matrix by a scalar
+mulScalar(m, 2) // Multiply the matrix by a scalar
+divScalar(m, 2) // Divide the matrix by a scalar
+plus(m, n) // Sum two matrices
+minus(m, n) // Subtract two matrices
+mul(m, n) // Multiply two matrices
+mulVec(m, v) // Multiply the matrix by a vector
 ```
 
 ### Time
@@ -139,8 +144,8 @@ nutation(time)
 precession(time)
 precessionNutation(time)
 equationOfOrigins(time)
-pmAngles(iersab, time)
-pmMatrix(iersab, time)
+pmAngles(xy, time)
+pmMatrix(xy, time)
 ```
 
 ### TIRS
@@ -178,3 +183,10 @@ div(v, u)
 rotateByRodrigues(v, axis, PI / 4)
 plane(v, u, w)
 ```
+
+## Inspirations
+
+- [Skyfield](https://github.com/skyfielders/python-skyfield)
+- [Astropy](https://github.com/astropy/astropy)
+- [ERFA](https://github.com/liberfa/erfa)
+- [Astronomia](https://github.com/commenthol/astronomia)
