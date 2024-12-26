@@ -112,12 +112,12 @@ test('ut1', () => {
 	expect(t.fraction).toBe(0)
 
 	expect(ut1(t)).toMatchTime(time(2459130, 0, Timescale.UT1, false))
-	expect(utc(t)).toMatchTime(time(2459130, 0.000001988640612458, Timescale.UTC, false), 1e-13)
-	expect(tai(t)).toMatchTime(time(2459130, 0.000430229381353175, Timescale.TAI, false), 1e-13)
-	expect(tt(t)).toMatchTime(time(2459130, 0.000802729381353175, Timescale.TT, false), 1e-13)
-	expect(tcg(t)).toMatchTime(time(2459130, 0.000813870140404485, Timescale.TCG, false), 1e-13)
-	expect(tdb(t)).toMatchTime(time(2459130, 0.000802709826729233, Timescale.TDB, false), 1e-13)
-	expect(tcb(t)).toMatchTime(time(2459130, 0.001050568932858317, Timescale.TCB, false), 1e-13)
+	expect(utc(t)).toMatchTime(time(2459130, 0.000001988640612458, Timescale.UTC, false))
+	expect(tai(t)).toMatchTime(time(2459130, 0.000430229381353175, Timescale.TAI, false))
+	expect(tt(t)).toMatchTime(time(2459130, 0.000802729381353175, Timescale.TT, false))
+	expect(tcg(t)).toMatchTime(time(2459130, 0.000813870140404485, Timescale.TCG, false))
+	expect(tdb(t)).toMatchTime(time(2459130, 0.000802709826729233, Timescale.TDB, false))
+	expect(tcb(t)).toMatchTime(time(2459130, 0.001050568932858317, Timescale.TCB, false))
 })
 
 test('utc', () => {
@@ -211,16 +211,27 @@ test('location', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expect(tt(t)).toMatchTime(time(2459130, 0.000000019543382764, Timescale.TT, false), 13)
-	expect(ut1(t).location).toBe(t.location)
+	expect(ut1(t)).toMatchTime(time(2459130, -0.000802709843032912, Timescale.UT1, false))
+	expect(utc(t)).toMatchTime(time(2459130, -0.000800721197357957, Timescale.UTC, false))
+	expect(tai(t)).toMatchTime(time(2459130, -0.000372480456617236, Timescale.TAI, false))
+	expect(tt(t)).toMatchTime(time(2459130, 0.000000019543382764, Timescale.TT, false))
+	expect(tcg(t)).toMatchTime(time(2459130, 0.000011160301874642, Timescale.TCG, false))
+	expect(tdb(t)).toMatchTime(time(2459130, 0, Timescale.TDB, false))
+	expect(tcb(t)).toMatchTime(time(2459130, 0.00024785909368291, Timescale.TCB, false))
 
-	t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TT)
+	t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UT1)
 	t.location = location(deg(-45), deg(-23), meter(890), GeoId.WGS84)
 
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expect(tdb(t)).toMatchTime(time(2459130, -0.000000019543382764, Timescale.TDB, false), 13)
+	expect(ut1(t)).toMatchTime(time(2459130, 0, Timescale.UT1, false))
+	expect(utc(t)).toMatchTime(time(2459130, 0.000001988640612458, Timescale.UTC, false))
+	expect(tai(t)).toMatchTime(time(2459130, 0.000430229381353175, Timescale.TAI, false))
+	expect(tt(t)).toMatchTime(time(2459130, 0.000802729381353175, Timescale.TT, false))
+	expect(tcg(t)).toMatchTime(time(2459130, 0.000813870140404485, Timescale.TCG, false))
+	expect(tdb(t)).toMatchTime(time(2459130, 0.000802709837905048, Timescale.TDB, false))
+	expect(tcb(t)).toMatchTime(time(2459130, 0.001050568944034133, Timescale.TCB, false))
 })
 
 test('extra', () => {

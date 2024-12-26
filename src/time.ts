@@ -1,7 +1,7 @@
 import type { Angle } from './angle'
-import { DAYSEC, DAYSPERJC, DAYSPERJY, DTY, J2000, MJD0, TTMINUSTAI } from './constants'
+import { DAYSEC, DAYSPERJC, DAYSPERJY, DTY, J2000, MJD0 } from './constants'
 import { eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
-import { iersab } from './iers'
+import { delta } from './iers'
 import { itrs } from './itrs'
 import { type Location } from './location'
 import { twoProduct, twoSum } from './math'
@@ -48,6 +48,7 @@ export interface Time {
 	tdbMinusTt?: TimeDelta
 	// taiMinusUtc?: TimeDelta
 	ut1MinusTai?: TimeDelta
+	ut1MinusUtc?: TimeDelta
 
 	location?: Location
 	extra?: TimeExtra
@@ -233,7 +234,7 @@ export function ut1(time: Time): Time {
 	let ret: Time
 
 	if (scale === Timescale.TAI) ret = makeTime(eraTaiUt1(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.UT1)
-	else if (scale === Timescale.UTC) ret = makeTime(eraUtcUt1(day, fraction, iersab.delta(time)), time, Timescale.UT1)
+	else if (scale === Timescale.UTC) ret = makeTime(eraUtcUt1(day, fraction, (time.ut1MinusUtc ?? ut1MinusUtc)(time)), time, Timescale.UT1)
 	else ret = ut1(utc(time))
 
 	extra(ret, time)
@@ -250,7 +251,7 @@ export function utc(time: Time): Time {
 
 	let ret: Time
 
-	if (scale === Timescale.UT1) ret = makeTime(eraUt1Utc(day, fraction, iersab.delta(time)), time, Timescale.UTC)
+	if (scale === Timescale.UT1) ret = makeTime(eraUt1Utc(day, fraction, (time.ut1MinusUtc ?? ut1MinusUtc)(time)), time, Timescale.UTC)
 	else if (scale === Timescale.TAI) ret = makeTime(eraTaiUtc(day, fraction), time, Timescale.UTC)
 	else ret = utc(tai(time))
 
@@ -435,12 +436,37 @@ export function equationOfOrigins(time: Time): Mat3 {
 	return equationOfOrigins
 }
 
+// Computes UT1 - UTC in seconds at time.
+export const ut1MinusUtc: TimeDelta = (time) => {
+	// https://github.com/astropy/astropy/blob/71a2eafd6c09f1992f8b4132e6e40ba68a675bde/astropy/time/core.py#L2554
+	// Interpolate UT1-UTC in IERS table
+	const d = delta(time)
+
+	// If we interpolated using UT1, we may be off by one
+	// second near leap seconds (and very slightly off elsewhere)
+	if (time.scale === Timescale.UT1) {
+		const a = eraUt1Utc(time.day, time.fraction, d)
+		// Calculate a better estimate using the nearly correct UTC
+		return delta({ day: a[0], fraction: a[1], scale: Timescale.UTC })
+	}
+
+	return d
+}
+
 // Computes TDB - TT in seconds at time.
 export const tdbMinusTt: TimeDelta = (time) => {
 	const { day, fraction, scale } = time
 
 	if (scale === Timescale.TDB || scale === Timescale.TT) {
-		const ut = normalize(day - 0.5, fraction - TTMINUSTAI / DAYSEC).fraction
+		// First go from the current input time (which is either
+		// TDB or TT) to an approximate UT1. Since TT and TDB are
+		// pretty close (few msec?), assume TT. Similarly, since the
+		// UT1 terms are very small, use UTC instead of UT1.
+		// https://github.com/astropy/astropy/blob/71a2eafd6c09f1992f8b4132e6e40ba68a675bde/astropy/time/core.py#L2597
+		const a = eraTaiUtc(...eraTtTai(day, fraction))
+
+		// Subtract 0.5, so UT is fraction of the day from midnight
+		const ut = normalize(a[0] - 0.5, a[1]).fraction
 
 		if (time.location) {
 			const [x, y, z] = itrs(time.location)
@@ -478,6 +504,6 @@ export const taiMinusUtc: TimeDelta = (time) => {
 export const ut1MinusTai: TimeDelta = (time) => {
 	const cal = eraJdToCal(time.day, time.fraction)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
-	const dut1 = iersab.delta(time)
+	const dut1 = (time.ut1MinusUtc ?? ut1MinusUtc)(time)
 	return dut1 - dat
 }
