@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { kilometer } from './distance'
-import { eraCalToJd, eraDat, eraDtDb, eraEors, eraEra00, eraFad03, eraFae03, eraFaf03, eraFaju03, eraFal03, eraFalp03, eraFama03, eraFame03, eraFaom03, eraFapa03, eraFasa03, eraFaur03, eraFave03, eraFw2m, eraGmst06, eraGst06, eraGst06a, eraJdToCal, eraNut00a, eraNut00b, eraNut06a, eraObl06, eraPfw06, eraPmat06, eraPnm06a, eraPom00, eraS06, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+import { eraC2teqx, eraCalToJd, eraDat, eraDtDb, eraEors, eraEra00, eraFad03, eraFae03, eraFaf03, eraFaju03, eraFal03, eraFalp03, eraFama03, eraFame03, eraFaom03, eraFapa03, eraFasa03, eraFaur03, eraFave03, eraFw2m, eraGmst06, eraGst06, eraGst06a, eraJdToCal, eraNut00a, eraNut00b, eraNut06a, eraObl06, eraPfw06, eraPmat06, eraPnm06a, eraPom00, eraS06, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import type { Mat3 } from './matrix'
 
 test('eraTaiUt1', () => {
@@ -277,4 +277,20 @@ test('eraPom00', () => {
 	expect(m[6]).toBeCloseTo(-0.2550602379741215021e-6, 12)
 	expect(m[7]).toBeCloseTo(0.1860359247002414021e-5, 12)
 	expect(m[8]).toBeCloseTo(0.9999999999982370039, 12)
+})
+
+test('eraC2teqx', () => {
+	const rbpn: Mat3 = [0.9999989440476103608, -0.1332881761240011518e-2, -0.5790767434730085097e-3, 0.1332858254308954453e-2, 0.9999991109044505944, -0.4097782710401555759e-4, 0.579130847216815332e-3, 0.4020595661593994396e-4, 0.9999998314954572365]
+	const rpom: Mat3 = [0.9999999999999674705, -0.1367174580728847031e-10, 0.2550602379999972723e-6, 0.1414624947957029721e-10, 0.9999999999982694954, -0.1860359246998866338e-5, -0.2550602379741215275e-6, 0.1860359247002413923e-5, 0.9999999999982369658]
+
+	const m = eraC2teqx(rbpn, 1.754166138040730516, rpom)
+	expect(m[0]).toBeCloseTo(-0.181033212852868573, 12)
+	expect(m[1]).toBeCloseTo(0.9834769806897685071, 12)
+	expect(m[2]).toBeCloseTo(0.6555535639982634449e-4, 12)
+	expect(m[3]).toBeCloseTo(-0.9834768134095211257, 12)
+	expect(m[4]).toBeCloseTo(-0.18103322038710238, 12)
+	expect(m[5]).toBeCloseTo(0.5749801116126438962e-3, 12)
+	expect(m[6]).toBeCloseTo(0.5773474014081539467e-3, 12)
+	expect(m[7]).toBeCloseTo(0.3961832391768640871e-4, 12)
+	expect(m[8]).toBeCloseTo(0.9999998325501691969, 12)
 })

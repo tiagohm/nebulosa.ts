@@ -52,16 +52,25 @@ TODO
 ```ts
 iersa.load(await Bun.file('finals2000A.txt').arrayBuffer())
 iersb.load(await Bun.file('eopc04.1962-now.txt').arrayBuffer())
-iersab.delta(time) // UT1-UTC at time
-iersab.xy(time) // Polar motion angles at time
+delta(time) // UT1-UTC at time
+xy(time) // Polar motion angles at time
+```
+
+### ITRS
+
+```ts
+itrs(location) // ITRS xyz position for location
+rotationAt(time) // ITRS rotation matrix at time
+dRdtTimesRtAt(time)
 ```
 
 ### Location
 
 ```ts
-location(dms(10, 11, 12), dms(25, 26, 27), meter(123))
-itrs(location, Geoid.IERS2010)
-polarRadius(Geoid.IERS2010)
+location(dms(10, 11, 12), dms(25, 26, 27), meter(123), Geoid.IERS2010) // Create new location from longitude, latitude, elevation and model
+polarRadius(Geoid.IERS2010) // Earth's polar radius
+rotationAt(location, time) // GCRS rotation of the location at time
+dRdtTimesRtAt(location, time)
 ```
 
 ### Math
@@ -132,6 +141,13 @@ precessionNutation(time)
 equationOfOrigins(time)
 pmAngles(iersab, time)
 pmMatrix(iersab, time)
+```
+
+### TIRS
+
+```ts
+rotationAt(time) // TIRS rotation matrix at time
+dRdtTimesRtAt(time)
 ```
 
 ### Vector

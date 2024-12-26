@@ -2,6 +2,8 @@ import type { Angle } from './angle'
 import { DAYSEC, DAYSPERJC, DAYSPERJY, DTY, J2000, MJD0, TTMINUSTAI } from './constants'
 import { eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import { iersab } from './iers'
+import { itrs } from './itrs'
+import { type Location } from './location'
 import { twoProduct, twoSum } from './math'
 import { clone, identity, mul, rotX, rotZ, type Mat3, type MutMat3 } from './matrix'
 
@@ -47,6 +49,7 @@ export interface Time {
 	// taiMinusUtc?: TimeDelta
 	ut1MinusTai?: TimeDelta
 
+	location?: Location
 	extra?: TimeExtra
 }
 
@@ -205,6 +208,8 @@ function extra(target: Time, source?: Time, extra?: Partial<TimeExtra>) {
 				target.extra.tcb = source
 				break
 		}
+
+		if (source.location) target.location = source.location
 	} else if (extra) {
 		if (extra.gast) target.extra.gast = extra.gast
 		if (extra.gmst) target.extra.gmst = extra.gmst
@@ -437,17 +442,12 @@ export const tdbMinusTt: TimeDelta = (time) => {
 	if (scale === Timescale.TDB || scale === Timescale.TT) {
 		const ut = normalize(day - 0.5, fraction - TTMINUSTAI / DAYSEC).fraction
 
-		// TODO:
-		// return if (time.location != null) {
-		//     val (x, y, z) = time.location
-		//     val rxy = hypot(x, y) / 1000
-		//     val elong = if (location is GeodeticLocation) location.longitude else 0
-		//     eraDtDb(day, fraction, ut, elong, rxy, z / 1000)
-		// } else {
-		//     eraDtDb(time.day, time.fraction, ut)
-		// }
-
-		return eraDtDb(day, fraction, ut)
+		if (time.location) {
+			const [x, y, z] = itrs(time.location)
+			return eraDtDb(day, fraction, ut, time.location.longitude, Math.hypot(x, y), z)
+		} else {
+			return eraDtDb(day, fraction, ut)
+		}
 	}
 
 	return 0

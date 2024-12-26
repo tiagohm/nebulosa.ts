@@ -157,3 +157,11 @@ export class IersAB implements Iers {
 export const iersa = new IersA()
 export const iersb = new IersB()
 export const iersab = new IersAB(iersa, iersb)
+
+export const delta: TimeDelta = (time) => {
+	return iersab.delta(time)
+}
+
+export const xy: PolarMotion = (time) => {
+	return iersab.xy(time)
+}

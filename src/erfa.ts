@@ -6,7 +6,7 @@ import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
 import { IAU2000B_LS } from './iau2000b'
 import { IAU2006_S, IAU2006_SP } from './iau2006'
 import { pmod, roundToNearestWholeNumber } from './math'
-import { rotX, rotY, rotZ, type Mat3, type MutMat3 } from './matrix'
+import { mul, rotX, rotY, rotZ, type Mat3, type MutMat3 } from './matrix'
 
 const DBL_EPSILON = 2.220446049250313e-16
 
@@ -778,4 +778,12 @@ export function eraPmat06(tt1: number, tt2: number): MutMat3 {
 // Form the matrix of polar motion for a given date, IAU 2000.
 export function eraPom00(xp: Angle, yp: Angle, sp: Angle): MutMat3 {
 	return rotZ(sp, rotY(-xp, rotX(-yp)))
+}
+
+// Assemble the celestial to terrestrial matrix from equinox-based
+// components (the celestial-to-true matrix, the Greenwich Apparent
+// Sidereal Time and the polar motion matrix).
+export function eraC2teqx(rbpn: Mat3, gast: Angle, rpom: Mat3): MutMat3 {
+	const m = rotZ(gast)
+	return mul(rpom, mul(m, rbpn, m), m)
 }

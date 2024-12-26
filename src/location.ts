@@ -1,6 +1,8 @@
-import { ANGVEL, type Angle } from './angle'
-import { DAYSEC } from './constants'
+import { type Angle } from './angle'
 import { meter, type Distance } from './distance'
+import { EARTH_ANGULAR_VELOCITY_VECTOR, rotationAt as itrsRotationAt } from './itrs'
+import { flipXMut, mul, mulVec, rotY, rotZ, type Mat3, type MutMat3 } from './matrix'
+import { type Time } from './time'
 import { type Vec3 } from './vector'
 
 // An Earth ellipsoid that maps latitudes and longitudes to |xyz| positions.
@@ -42,41 +44,43 @@ export const GEO_ID_PARAMETERS: Readonly<Record<GeoId, GeoIdParameters>> = {
 	},
 }
 
-const EARTH_ANGULAR_VELOCITY: Vec3 = [0, 0, DAYSEC * ANGVEL]
-
 export interface Location {
 	readonly longitude: Angle
 	readonly latitude: Angle
 	readonly elevation: Distance
+    readonly model: GeoId
 
-	itrs?: Record<GeoId, Vec3 | undefined>
+	itrs?: Vec3
+	rLat?: Mat3
+	rLatLon?: Mat3
 }
 
-export function location(longitude: Angle = 0, latitude: Angle = 0, elevation: Distance = 0): Location {
-	return { longitude, latitude, elevation }
+export function location(longitude: Angle = 0, latitude: Angle = 0, elevation: Distance = 0, model: GeoId = GeoId.IERS2010): Location {
+	return { longitude, latitude, elevation, model }
 }
 
-// An |xyz| position in the Earth-centered Earth-fixed (ECEF) ITRS frame.
-export function itrs(location: Location, model: GeoId = GeoId.IERS2010): Vec3 {
-	if (location.itrs?.[model]) return location.itrs[model]
+function rLat(location: Location) {
+	if (location.rLat) return location.rLat
+	location.rLat = flipXMut(rotY(-location.latitude))
+	return location.rLat
+}
 
-	const sinphi = Math.sin(location.latitude)
-	const cosphi = Math.cos(location.latitude)
-	const { radius, oneMinusFlatteningSquared } = GEO_ID_PARAMETERS[model]
+function rLatLon(location: Location) {
+	if (location.rLatLon) return location.rLatLon
+	const m = rotZ(location.longitude)
+	location.rLatLon = mul(rLat(location), m, m)
+	return location.rLatLon
+}
 
-	const c = 1.0 / Math.sqrt(cosphi * cosphi + sinphi * sinphi * oneMinusFlatteningSquared)
-	const s = oneMinusFlatteningSquared * c
+// Computes rotation from GCRS to this location's altazimuth system.
+export function rotationAt(location: Location, time: Time): MutMat3 {
+	return mul(rLatLon(location), itrsRotationAt(time))
+}
 
-	const xy = (radius * c + location.elevation) * cosphi
-	const x = xy * Math.cos(location.longitude)
-	const y = xy * Math.sin(location.longitude)
-	const z = (radius * s + location.elevation) * sinphi
-
-	const itrs: Vec3 = [x, y, z]
-	location.itrs ??= { 0: undefined, 1: undefined, 2: undefined, 3: undefined }
-	location.itrs[model] = itrs
-
-	return itrs
+export function dRdtTimesRtAt(location: Location, time: Time): MutMat3 {
+	// TODO: taking the derivative of the instantaneous angular velocity would provide a more accurate transform.
+	const [x, y, z] = mulVec(rLat(location), EARTH_ANGULAR_VELOCITY_VECTOR)
+	return [0, -z, y, z, 0, -x, -y, x, 0]
 }
 
 // The Earth's polar radius.

@@ -1,7 +1,9 @@
 import { beforeAll, expect, test, type CustomMatcher } from 'bun:test'
-import { hour } from './angle'
+import { deg, hour } from './angle'
 import { J2000 } from './constants'
+import { meter } from './distance'
 import { iersa, iersb } from './iers'
+import { GeoId, location } from './location'
 import { equationOfOrigins, era, gast, gmst, meanObliquity, normalize, nutation, precession, precessionNutation, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, tt, ut1, utc, type Time } from './time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
@@ -200,6 +202,25 @@ test('tcb', () => {
 	expect(tcg(t)).toMatchTime(time(2459130, -0.000236698776886034, Timescale.TCG, false))
 	expect(tdb(t)).toMatchTime(time(2459130, -0.000247859089839806, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0, Timescale.TCB, false))
+})
+
+test('location', () => {
+	let t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TDB)
+	t.location = location(deg(-45), deg(-23), meter(890), GeoId.WGS84)
+
+	expect(t.day).toBe(2459130)
+	expect(t.fraction).toBe(0)
+
+	expect(tt(t)).toMatchTime(time(2459130, 0.000000019543382764, Timescale.TT, false), 13)
+	expect(ut1(t).location).toBe(t.location)
+
+	t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TT)
+	t.location = location(deg(-45), deg(-23), meter(890), GeoId.WGS84)
+
+	expect(t.day).toBe(2459130)
+	expect(t.fraction).toBe(0)
+
+	expect(tdb(t)).toMatchTime(time(2459130, -0.000000019543382764, Timescale.TDB, false), 13)
 })
 
 test('extra', () => {
