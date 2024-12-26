@@ -81,7 +81,7 @@ export function pmAngles(pm: PolarMotion, time: Time): readonly [Angle, Angle, A
 	const sprime = eraSp00(t.day, t.fraction)
 	const [x, y] = pm(time)
 	const a: [Angle, Angle, Angle] = [sprime, x, y]
-	extra(time, undefined, { pmAngles: a })
+	extra(time).pmAngles = a
 	return a
 }
 
@@ -90,7 +90,7 @@ export function pmMatrix(pm: PolarMotion, time: Time): Mat3 {
 	if (time.extra?.pmMatrix) return time.extra.pmMatrix
 	const [sprime, x, y] = pmAngles(pm, time)
 	const m = eraPom00(x, y, sprime)
-	extra(time, undefined, { pmMatrix: m })
+	extra(time).pmMatrix = m
 	return m
 }
 
@@ -187,51 +187,38 @@ function makeTime(a: [number, number], time: Time, scale: Timescale = time.scale
 	return { ...time, day: a[0], fraction: a[1], scale }
 }
 
-function extra(target: Time, source?: Time, extra?: Partial<TimeExtra>) {
-	target.extra ??= source?.extra ?? extra ?? {}
+function timescale(target: Time, source: Time) {
+	const e = extra(target, source.extra)
 
-	if (source) {
-		switch (source.scale) {
-			case Timescale.UT1:
-				target.extra.ut1 = source
-				break
-			case Timescale.UTC:
-				target.extra.utc = source
-				break
-			case Timescale.TAI:
-				target.extra.tai = source
-				break
-			case Timescale.TT:
-				target.extra.tt = source
-				break
-			case Timescale.TCG:
-				target.extra.tcg = source
-				break
-			case Timescale.TDB:
-				target.extra.tdb = source
-				break
-			case Timescale.TCB:
-				target.extra.tcb = source
-				break
-		}
-
-		if (source.location) target.location = source.location
-	} else if (extra) {
-		if (extra.ut1MinusUtc) target.extra.ut1MinusUtc = extra.ut1MinusUtc
-		if (extra.ut1MinusTai) target.extra.ut1MinusTai = extra.ut1MinusTai
-		if (extra.taiMinusUtc) target.extra.taiMinusUtc = extra.taiMinusUtc
-		if (extra.tdbMinusTt) target.extra.tdbMinusTt = extra.tdbMinusTt
-		if (extra.gast) target.extra.gast = extra.gast
-		if (extra.gmst) target.extra.gmst = extra.gmst
-		if (extra.era) target.extra.era = extra.era
-		if (extra.meanObliquity) target.extra.meanObliquity = extra.meanObliquity
-		if (extra.nutation) target.extra.nutation = extra.nutation
-		if (extra.precession) target.extra.precession = extra.precession
-		if (extra.precessionNutation) target.extra.precessionNutation = extra.precessionNutation
-		if (extra.pmAngles) target.extra.pmAngles = extra.pmAngles
-		if (extra.pmMatrix) target.extra.pmMatrix = extra.pmMatrix
-		if (extra.equationOfOrigins) target.extra.equationOfOrigins = extra.equationOfOrigins
+	switch (source.scale) {
+		case Timescale.UT1:
+			e.ut1 = source
+			break
+		case Timescale.UTC:
+			e.utc = source
+			break
+		case Timescale.TAI:
+			e.tai = source
+			break
+		case Timescale.TT:
+			e.tt = source
+			break
+		case Timescale.TCG:
+			e.tcg = source
+			break
+		case Timescale.TDB:
+			e.tdb = source
+			break
+		case Timescale.TCB:
+			e.tcb = source
+			break
 	}
+
+	if (source.location) target.location = source.location
+}
+
+function extra(target: Time, extra?: TimeExtra) {
+	return (target.extra ??= extra ?? {})
 }
 
 // Converts to UT1 Time.
@@ -246,8 +233,8 @@ export function ut1(time: Time): Time {
 	else if (scale === Timescale.UTC) ret = makeTime(eraUtcUt1(day, fraction, (time.ut1MinusUtc ?? ut1MinusUtc)(time)), time, Timescale.UT1)
 	else ret = ut1(utc(time))
 
-	extra(ret, time)
-	extra(time, ret)
+	timescale(ret, time)
+	timescale(time, ret)
 
 	return ret
 }
@@ -264,8 +251,8 @@ export function utc(time: Time): Time {
 	else if (scale === Timescale.TAI) ret = makeTime(eraTaiUtc(day, fraction), time, Timescale.UTC)
 	else ret = utc(tai(time))
 
-	extra(ret, time)
-	extra(time, ret)
+	timescale(ret, time)
+	timescale(time, ret)
 
 	return ret
 }
@@ -283,8 +270,8 @@ export function tai(time: Time): Time {
 	else if (scale === Timescale.TT) ret = makeTime(eraTtTai(day, fraction), time, Timescale.TAI)
 	else ret = tai(tt(time))
 
-	extra(ret, time)
-	extra(time, ret)
+	timescale(ret, time)
+	timescale(time, ret)
 
 	return ret
 }
@@ -303,8 +290,8 @@ export function tt(time: Time): Time {
 	else if (scale < Timescale.TAI) return tt(tai(time))
 	else ret = tt(tdb(time))
 
-	extra(ret, time)
-	extra(time, ret)
+	timescale(ret, time)
+	timescale(time, ret)
 
 	return ret
 }
@@ -320,8 +307,8 @@ export function tcg(time: Time): Time {
 	if (scale === Timescale.TT) ret = makeTime(eraTtTcg(day, fraction), time, Timescale.TCG)
 	else ret = tcg(tt(time))
 
-	extra(ret, time)
-	extra(time, ret)
+	timescale(ret, time)
+	timescale(time, ret)
 
 	return ret
 }
@@ -338,8 +325,8 @@ export function tdb(time: Time): Time {
 	else if (scale === Timescale.TCB) ret = makeTime(eraTcbTdb(day, fraction), time, Timescale.TDB)
 	else ret = tdb(tt(time))
 
-	extra(ret, time)
-	extra(time, ret)
+	timescale(ret, time)
+	timescale(time, ret)
 
 	return ret
 }
@@ -355,8 +342,8 @@ export function tcb(time: Time): Time {
 	if (scale === Timescale.TDB) ret = makeTime(eraTdbTcb(day, fraction), time, Timescale.TCB)
 	else ret = tcb(tdb(time))
 
-	extra(ret, time)
-	extra(time, ret)
+	timescale(ret, time)
+	timescale(time, ret)
 
 	return ret
 }
@@ -367,7 +354,7 @@ export function gast(time: Time): Angle {
 	const u = ut1(time)
 	const t = tt(time)
 	const gast = eraGst06a(u.day, u.fraction, t.day, t.fraction)
-	extra(time, undefined, { gast })
+	extra(time).gast = gast
 	return gast
 }
 
@@ -377,7 +364,7 @@ export function gmst(time: Time): Angle {
 	const u = ut1(time)
 	const t = tt(time)
 	const gmst = eraGmst06(u.day, u.fraction, t.day, t.fraction)
-	extra(time, undefined, { gmst })
+	extra(time).gmst = gmst
 	return gmst
 }
 
@@ -386,7 +373,7 @@ export function era(time: Time): Angle {
 	if (time.extra?.era) return time.extra.era
 	const u = ut1(time)
 	const era = eraEra00(u.day, u.fraction)
-	extra(time, undefined, { era })
+	extra(time).era = era
 	return era
 }
 
@@ -395,7 +382,7 @@ export function meanObliquity(time: Time): Angle {
 	if (time.extra?.meanObliquity) return time.extra.meanObliquity
 	const t = tt(time)
 	const meanObliquity = eraObl06(t.day, t.fraction)
-	extra(time, undefined, { meanObliquity })
+	extra(time).meanObliquity = meanObliquity
 	return meanObliquity
 }
 
@@ -414,7 +401,7 @@ export function nutation(time: Time): readonly [Angle, Angle] {
 	if (time.extra?.nutation) return time.extra.nutation
 	const t = tt(time)
 	const nutation = eraNut06a(t.day, t.fraction)
-	extra(time, undefined, { nutation })
+	extra(time).nutation = nutation
 	return nutation
 }
 
@@ -423,7 +410,7 @@ export function precession(time: Time): Mat3 {
 	if (time.extra?.precession) return time.extra.precession
 	const t = tt(time)
 	const precession = eraPmat06(t.day, t.fraction)
-	extra(time, undefined, { precession })
+	extra(time).precession = precession
 	return precession
 }
 
@@ -432,7 +419,7 @@ export function precessionNutation(time: Time): Mat3 {
 	if (time.extra?.precessionNutation) return time.extra.precessionNutation
 	const t = tt(time)
 	const precessionNutation = eraPnm06a(t.day, t.fraction)
-	extra(time, undefined, { precessionNutation })
+	extra(time).precessionNutation = precessionNutation
 	return precessionNutation
 }
 
@@ -441,7 +428,7 @@ export function equationOfOrigins(time: Time): Mat3 {
 	if (time.extra?.equationOfOrigins) return time.extra.equationOfOrigins
 	const equationOfOrigins = identity()
 	mul(rotZ(gast(time) - era(time), equationOfOrigins), precessionNutation(time), equationOfOrigins)
-	extra(time, undefined, { equationOfOrigins })
+	extra(time).equationOfOrigins = equationOfOrigins
 	return equationOfOrigins
 }
 
@@ -461,7 +448,7 @@ export const ut1MinusUtc: TimeDelta = (time) => {
 		dt = delta({ day: a[0], fraction: a[1], scale: Timescale.UTC })
 	}
 
-	extra(time, undefined, { ut1MinusUtc: dt })
+	extra(time).ut1MinusUtc = dt
 
 	return dt
 }
@@ -492,7 +479,7 @@ export const tdbMinusTt: TimeDelta = (time) => {
 			dt = eraDtDb(day, fraction, ut)
 		}
 
-		extra(time, undefined, { tdbMinusTt: dt })
+		extra(time).tdbMinusTt = dt
 
 		return dt
 	}
@@ -520,7 +507,7 @@ export const taiMinusUtc: TimeDelta = (time) => {
 	if (time.extra?.taiMinusUtc) return time.extra.taiMinusUtc
 	const cal = eraJdToCal(time.day, time.fraction)
 	const dt = eraDat(cal[0], cal[1], cal[2], cal[3])
-	extra(time, undefined, { taiMinusUtc: dt })
+	extra(time).taiMinusUtc = dt
 	return dt
 }
 
@@ -531,6 +518,6 @@ export const ut1MinusTai: TimeDelta = (time) => {
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
 	const dut1 = (time.ut1MinusUtc ?? ut1MinusUtc)(time)
 	const dt = dut1 - dat
-	extra(time, undefined, { ut1MinusTai: dt })
+	extra(time).ut1MinusTai = dt
 	return dt
 }
