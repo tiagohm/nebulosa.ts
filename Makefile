@@ -13,10 +13,10 @@ test:
 	bun test --timeout 1000
 
 astropy:
-	python scripts/astropy/$(name).py $(arg)
+	python scripts/astropy/$(name).py $(a)
 
 skyfield:
-	python scripts/skyfield/$(name).py $(arg)
+	python scripts/skyfield/$(name).py $(a)
 
 ifeq ($(OS),Windows_NT)
 compile:

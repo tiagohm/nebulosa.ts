@@ -1,12 +1,13 @@
 import { arcsec, deg, MILLIASEC2RAD, normalize, TURNAS, type Angle } from './angle'
-import { DAYSEC, DAYSPERJC, DAYSPERJM, ELB, ELG, J2000, MJD0, MJD1977, PI, PIOVERTWO, TAU, TDB0, TTMINUSTAI } from './constants'
+import { DAYSEC, DAYSPERJC, DAYSPERJM, ELB, ELG, J2000, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, TAU, TDB0, TTMINUSTAI } from './constants'
 import { toKm, type Distance } from './distance'
 import { FAIRHEAD } from './fairhead'
 import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
 import { IAU2000B_LS } from './iau2000b'
 import { IAU2006_S, IAU2006_SP } from './iau2006'
 import { pmod, roundToNearestWholeNumber } from './math'
-import { mul, rotX, rotY, rotZ, type Mat3, type MutMat3 } from './matrix'
+import { mul, rotX, rotY, rotZ, transpose, type Mat3, type MutMat3 } from './matrix'
+import type { MutVec3 } from './vector'
 
 const DBL_EPSILON = 2.220446049250313e-16
 
@@ -81,6 +82,36 @@ export function eraAnpm(angle: Angle): Angle {
 	let w = angle % TAU
 	if (Math.abs(w) >= PI) w -= angle >= 0 ? TAU : -TAU
 	return w
+}
+
+// P-vector to spherical polar coordinates.
+export function eraP2s(x: Distance, y: Distance, z: Distance): [Angle, Angle, Distance] {
+	const [theta, phi] = eraC2s(x, y, z)
+	const r = Math.sqrt(x * x + y * y + z * z)
+	return [theta, phi, r]
+}
+
+// P-vector to spherical coordinates.
+export function eraC2s(x: Distance, y: Distance, z: Distance): [Angle, Angle] {
+	const d2 = x * x + y * y
+	const theta = d2 === 0 ? 0 : Math.atan2(y, x)
+	const phi = z === 0 ? 0 : Math.atan2(z, Math.sqrt(d2))
+	return [theta, phi]
+}
+
+// Spherical coordinates to Cartesian coordinates.
+export function eraS2c(theta: Angle, phi: Angle): MutVec3 {
+	const cp = Math.cos(phi)
+	return [Math.cos(theta) * cp, Math.sin(theta) * cp, Math.sin(phi)]
+}
+
+// Spherical polar coordinates to P-vector.
+export function eraS2p(theta: Angle, phi: Angle, r: Distance): [Distance, Distance, Distance] {
+	const u = eraS2c(theta, phi)
+	u[0] *= r
+	u[1] *= r
+	u[2] *= r
+	return u
 }
 
 // Barycentric Coordinate Time, TCB, to Barycentric Dynamical Time, TDB.
@@ -863,4 +894,20 @@ export function eraGd2Gce(radius: Distance, flattening: number, elong: Angle, ph
 	const z = (aS + height) * sp
 
 	return [x, y, z]
+}
+
+// Frame bias and precession, IAU 2006.
+export function eraBp06(tt1: number, tt2: number): [MutMat3, MutMat3, MutMat3] {
+	// B matrix.
+	const [gamb, phib, psib, epsa] = eraPfw06(MJD0, MJD2000)
+	const rb = eraFw2m(gamb, phib, psib, epsa)
+
+	// PxB matrix (temporary).
+	const rbpw = eraPmat06(tt1, tt2)
+
+	// P matrix.
+	const rp = transpose(rb)
+    mul(rbpw, rp, rp)
+
+	return [rb, rp, rbpw]
 }
