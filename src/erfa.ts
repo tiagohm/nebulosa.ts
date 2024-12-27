@@ -1,5 +1,5 @@
 import { arcsec, deg, MILLIASEC2RAD, normalize, TURNAS, type Angle } from './angle'
-import { DAYSEC, DAYSPERJC, DAYSPERJM, ELB, ELG, J2000, MJD0, MJD1977, PI, TAU, TDB0, TTMINUSTAI } from './constants'
+import { DAYSEC, DAYSPERJC, DAYSPERJM, ELB, ELG, J2000, MJD0, MJD1977, PI, PIOVERTWO, TAU, TDB0, TTMINUSTAI } from './constants'
 import { toKm, type Distance } from './distance'
 import { FAIRHEAD } from './fairhead'
 import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
@@ -457,7 +457,7 @@ export function eraEra00(ut11: number, ut12: number): Angle {
 	const t = ut12 + (ut11 - J2000)
 
 	// Fractional part of T (days).
-	const f = (ut12 % 1.0) + (ut11 % 1.0)
+	const f = (ut12 % 1) + (ut11 % 1)
 
 	// Earth rotation angle at this UT1.
 	return normalize(TAU * (f + 0.779057273264 + 0.00273781191135448 * t))
@@ -466,8 +466,8 @@ export function eraEra00(ut11: number, ut12: number): Angle {
 // Equation of the origins, given the classical NPB matrix and the quantity [s].
 export function eraEors(rnpb: Mat3, s: Angle): Angle {
 	const x = rnpb[6]
-	const ax = x / (1.0 + rnpb[8])
-	const xs = 1.0 - ax * x
+	const ax = x / (1 + rnpb[8])
+	const xs = 1 - ax * x
 	const ys = -ax * rnpb[7]
 	const zs = -x
 	const p = rnpb[0] * xs + rnpb[1] * ys + rnpb[2] * zs
@@ -508,7 +508,7 @@ export function eraS06(tt1: number, tt2: number, x: Angle, y: Angle): Angle {
 	for (let k = 0; k < IAU2006_S.length; k++) {
 		for (let i = IAU2006_S[k].length - 1; i >= 0; i--) {
 			const [nfa, s, c] = IAU2006_S[k][i]
-			let a = 0.0
+			let a = 0
 
 			for (let j = 0; j < 8; j++) {
 				a += nfa[j] * fa[j]
@@ -518,7 +518,7 @@ export function eraS06(tt1: number, tt2: number, x: Angle, y: Angle): Angle {
 		}
 	}
 
-	return arcsec(w[0] + (w[1] + (w[2] + (w[3] + (w[4] + w[5] * t) * t) * t) * t) * t) - (x * y) / 2.0
+	return arcsec(w[0] + (w[1] + (w[2] + (w[3] + (w[4] + w[5] * t) * t) * t) * t) * t) - (x * y) / 2
 }
 
 // Form the matrix of precession-nutation for a given date (including
@@ -646,8 +646,8 @@ export function eraNut00a(tt1: number, tt2: number): [Angle, Angle] {
 	// Mean longitude of the ascending node of the Moon (IERS 2003).
 	const om = eraFaom03(t)
 
-	let dp = 0.0
-	let de = 0.0
+	let dp = 0
+	let de = 0
 
 	// Summation of luni-solar nutation series (in reverse order).
 	for (let i = IAU2000A_LS.length - 1; i >= 0; i--) {
@@ -691,8 +691,8 @@ export function eraNut00a(tt1: number, tt2: number): [Angle, Angle] {
 	// Neptune longitude (MHB2000).
 	const alne = (5.321159 + 3.8127774 * t) % TAU
 
-	dp = 0.0
-	de = 0.0
+	dp = 0
+	de = 0
 
 	for (let i = IAU2000A_PL.length - 1; i >= 0; i--) {
 		const [nl, nf, nd, nom, nme, nve, nea, nma, nju, nsa, nur, nne, npa, sp, cp, se, ce] = IAU2000A_PL[i]
@@ -748,8 +748,8 @@ export function eraNut00b(tt1: number, tt2: number): [Angle, Angle] {
 	// Mean longitude of the ascending node of the Moon.
 	const om = arcsec((450160.398036 - 6962890.5431 * t) % TURNAS)
 
-	let dp = 0.0
-	let de = 0.0
+	let dp = 0
+	let de = 0
 
 	for (let i = IAU2000B_LS.length - 1; i >= 0; i--) {
 		const [nl, nlp, nf, nd, nom, ps, pst, pc, ec, ect, es] = IAU2000B_LS[i]
@@ -786,4 +786,81 @@ export function eraPom00(xp: Angle, yp: Angle, sp: Angle): MutMat3 {
 export function eraC2teqx(rbpn: Mat3, gast: Angle, rpom: Mat3): MutMat3 {
 	const m = rotZ(gast)
 	return mul(rpom, mul(m, rbpn, m), m)
+}
+
+// Transform geocentric coordinates to geodetic for a reference ellipsoid of specified form.
+export function eraGc2Gde(radius: Distance, flattening: number, x: Distance, y: Distance, z: Distance): [Angle, Angle, Distance] {
+	const aeps2 = radius * radius * 1e-32
+	const e2 = (2 - flattening) * flattening
+
+	const e4t = e2 * e2 * 1.5
+	const ec2 = 1 - e2
+
+	const ec = Math.sqrt(ec2)
+	const b = radius * ec
+
+	const p2 = x * x + y * y
+
+	const elong = p2 > 0 ? Math.atan2(y, x) : 0
+
+	const absz = Math.abs(z)
+
+	let phi = 0
+	let height = 0
+
+	// Proceed unless polar case.
+	if (p2 > aeps2) {
+		// Distance from polar axis.
+		const p = Math.sqrt(p2)
+
+		// Normalization.
+		const s0 = absz / radius
+		const pn = p / radius
+		const zc = ec * s0
+
+		// Prepare Newton correction factors.
+		const c0 = ec * pn
+		const c02 = c0 * c0
+		const c03 = c02 * c0
+		const s02 = s0 * s0
+		const s03 = s02 * s0
+		const a02 = c02 + s02
+		const a0 = Math.sqrt(a02)
+		const a03 = a02 * a0
+		const d0 = zc * a03 + e2 * s03
+		const f0 = pn * a03 - e2 * c03
+
+		const b0 = e4t * s02 * c02 * pn * (a0 - ec)
+		const s1 = d0 * f0 - b0 * s0
+		const cc = ec * (f0 * f0 - b0 * c0)
+
+		phi = Math.sign(z) * Math.atan(s1 / cc)
+		const s12 = s1 * s1
+		const cc2 = cc * cc
+		height = (p * cc + absz * s1 - radius * Math.sqrt(ec2 * s12 + cc2)) / Math.sqrt(s12 + cc2)
+	} else {
+		phi = Math.sign(z) * PIOVERTWO
+		height = absz - b
+	}
+
+	return [elong, phi, height]
+}
+
+// Transform geodetic coordinates to geocentric using the specified reference ellipsoid.
+export function eraGd2Gce(radius: Distance, flattening: number, elong: Angle, phi: Angle, height: Distance): [Distance, Distance, Distance] {
+	const sp = Math.sin(phi)
+	const cp = Math.cos(phi)
+	const omf = 1 - flattening
+	const w = omf * omf
+	const d = cp * cp + w * sp * sp
+
+	const ac = radius / Math.sqrt(d)
+	const aS = w * ac
+
+	const r = (ac + height) * cp
+	const x = r * Math.cos(elong)
+	const y = r * Math.sin(elong)
+	const z = (aS + height) * sp
+
+	return [x, y, z]
 }

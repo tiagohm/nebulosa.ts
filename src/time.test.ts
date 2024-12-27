@@ -3,7 +3,7 @@ import { deg, hour } from './angle'
 import { J2000 } from './constants'
 import { meter } from './distance'
 import { iersa, iersb } from './iers'
-import { GeoId, location } from './location'
+import { Ellipsoid, geodetic } from './location'
 import { equationOfOrigins, era, gast, gmst, meanObliquity, normalize, nutation, precession, precessionNutation, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, tt, ut1, utc, type Time } from './time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
@@ -229,7 +229,7 @@ test('tcb', () => {
 
 test('location', () => {
 	let t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TDB)
-	t.location = location(deg(-45), deg(-23), meter(890), GeoId.WGS84)
+	t.location = geodetic(deg(-45), deg(-23), meter(890), Ellipsoid.WGS84)
 
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
@@ -243,7 +243,7 @@ test('location', () => {
 	expect(tcb(t)).toMatchTime(time(2459130, 0.00024785909368291, Timescale.TCB, false))
 
 	t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UT1)
-	t.location = location(deg(-45), deg(-23), meter(890), GeoId.WGS84)
+	t.location = geodetic(deg(-45), deg(-23), meter(890), Ellipsoid.WGS84)
 
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)

@@ -55,7 +55,7 @@ export abstract class IersBase implements Iers {
 	protected dut1: number[] = []
 
 	delta(time: Time): number {
-		return interpolate(time, this.mjd, this.dut1)[0]
+		return interpolate(time, this.mjd, this.dut1)[0] || 0
 	}
 
 	xy(time: Time): [Angle, Angle] {

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { kilometer } from './distance'
-import { eraC2teqx, eraCalToJd, eraDat, eraDtDb, eraEors, eraEra00, eraFad03, eraFae03, eraFaf03, eraFaju03, eraFal03, eraFalp03, eraFama03, eraFame03, eraFaom03, eraFapa03, eraFasa03, eraFaur03, eraFave03, eraFw2m, eraGmst06, eraGst06, eraGst06a, eraJdToCal, eraNut00a, eraNut00b, eraNut06a, eraObl06, eraPfw06, eraPmat06, eraPnm06a, eraPom00, eraS06, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+import { eraC2teqx, eraCalToJd, eraDat, eraDtDb, eraEors, eraEra00, eraFad03, eraFae03, eraFaf03, eraFaju03, eraFal03, eraFalp03, eraFama03, eraFame03, eraFaom03, eraFapa03, eraFasa03, eraFaur03, eraFave03, eraFw2m, eraGc2Gde, eraGd2Gce, eraGmst06, eraGst06, eraGst06a, eraJdToCal, eraNut00a, eraNut00b, eraNut06a, eraObl06, eraPfw06, eraPmat06, eraPnm06a, eraPom00, eraS06, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import type { Mat3 } from './matrix'
 
 test('eraTaiUt1', () => {
@@ -120,20 +120,20 @@ test('eraDtDb', () => {
 })
 
 test('eraGst06a', () => {
-	expect(eraGst06a(2453736.0, 0.5, 2453736.0, 0.5)).toBeCloseTo(1.754166137675019159, 12)
+	expect(eraGst06a(2453736, 0.5, 2453736, 0.5)).toBeCloseTo(1.754166137675019159, 12)
 })
 
 test('eraGst06', () => {
 	const rnpb: Mat3 = [0.9999989440476103608, -0.1332881761240011518e-2, -0.5790767434730085097e-3, 0.1332858254308954453e-2, 0.9999991109044505944, -0.4097782710401555759e-4, 0.579130847216815332e-3, 0.4020595661593994396e-4, 0.9999998314954572365]
-	expect(eraGst06(2453736.0, 0.5, 2453736.0, 0.5, rnpb)).toBeCloseTo(1.754166138018167568, 12)
+	expect(eraGst06(2453736, 0.5, 2453736, 0.5, rnpb)).toBeCloseTo(1.754166138018167568, 12)
 })
 
 test('eraGmst06', () => {
-	expect(eraGmst06(2453736.0, 0.5, 2453736.0, 0.5)).toBeCloseTo(1.754174971870091203, 12)
+	expect(eraGmst06(2453736, 0.5, 2453736, 0.5)).toBeCloseTo(1.754174971870091203, 12)
 })
 
 test('eraEra00', () => {
-	expect(eraEra00(2454388.0, 0.5)).toBeCloseTo(0.4022837240028158102, 12)
+	expect(eraEra00(2454388, 0.5)).toBeCloseTo(0.4022837240028158102, 12)
 })
 
 test('eraEra00', () => {
@@ -142,11 +142,11 @@ test('eraEra00', () => {
 })
 
 test('eraS06', () => {
-	expect(eraS06(2400000.5, 53736.0, 0.5791308486706011e-3, 0.4020579816732961219e-4)).toBeCloseTo(-0.1220032213076463117e-7, 18)
+	expect(eraS06(2400000.5, 53736, 0.5791308486706011e-3, 0.4020579816732961219e-4)).toBeCloseTo(-0.1220032213076463117e-7, 18)
 })
 
 test('eraObl06', () => {
-	expect(eraObl06(2400000.5, 54388.0)).toBeCloseTo(0.4090749229387258204, 14)
+	expect(eraObl06(2400000.5, 54388)).toBeCloseTo(0.4090749229387258204, 14)
 })
 
 test('eraFal03', () => {
@@ -249,19 +249,19 @@ test('eraPmat06', () => {
 })
 
 test('eraNut06a', () => {
-	const a = eraNut06a(2400000.5, 53736.0)
+	const a = eraNut06a(2400000.5, 53736)
 	expect(a[0]).toBeCloseTo(-0.9630912025820308797e-5, 13)
 	expect(a[1]).toBeCloseTo(0.4063238496887249798e-4, 13)
 })
 
 test('eraNut00a', () => {
-	const a = eraNut00a(2400000.5, 53736.0)
+	const a = eraNut00a(2400000.5, 53736)
 	expect(a[0]).toBeCloseTo(-0.9630909107115518431e-5, 13)
 	expect(a[1]).toBeCloseTo(0.406323917400167871e-4, 13)
 })
 
 test('eraNut00b', () => {
-	const a = eraNut00b(2400000.5, 53736.0)
+	const a = eraNut00b(2400000.5, 53736)
 	expect(a[0]).toBeCloseTo(-0.9632552291148362783e-5, 13)
 	expect(a[1]).toBeCloseTo(0.4063197106621159367e-4, 13)
 })
@@ -293,4 +293,18 @@ test('eraC2teqx', () => {
 	expect(m[6]).toBeCloseTo(0.5773474014081539467e-3, 12)
 	expect(m[7]).toBeCloseTo(0.3961832391768640871e-4, 12)
 	expect(m[8]).toBeCloseTo(0.9999998325501691969, 12)
+})
+
+test('eraGc2Gde', () => {
+	const [a, b, c] = eraGc2Gde(6378137, 1 / 298.257223563, 2e6, 3e6, 5.244e6)
+	expect(a).toBeCloseTo(0.982793723247329068, 14)
+	expect(b).toBeCloseTo(0.97160184819075459, 14)
+	expect(c).toBeCloseTo(331.4172461426059892, 8)
+})
+
+test('eraGd2Gce', () => {
+	const [x, y, z] = eraGd2Gce(6378137, 1 / 298.257223563, 3.1, -0.5, 2500.0)
+	expect(x).toBeCloseTo(-5599000.5577049947, 7)
+	expect(y).toBeCloseTo(233011.67223479203, 7)
+	expect(z).toBeCloseTo(-3040909.4706983363, 7)
 })

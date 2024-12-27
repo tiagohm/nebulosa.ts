@@ -16,7 +16,7 @@ test('roundToNearestWholeNumber', () => {
 	expect(roundToNearestWholeNumber(0.5)).toBe(1)
 	expect(roundToNearestWholeNumber(0.4)).toBe(0)
 	expect(roundToNearestWholeNumber(0.1)).toBe(0)
-	expect(roundToNearestWholeNumber(0.0)).toBe(0)
+	expect(roundToNearestWholeNumber(0)).toBe(0)
 	expect(roundToNearestWholeNumber(-0.1)).toBe(0)
 	expect(roundToNearestWholeNumber(-0.4)).toBe(0)
 	expect(roundToNearestWholeNumber(-0.5)).toBe(-1)

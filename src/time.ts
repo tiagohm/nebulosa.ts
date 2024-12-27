@@ -3,7 +3,7 @@ import { DAYSEC, DAYSPERJC, DAYSPERJY, DTY, J2000, MJD0 } from './constants'
 import { eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import { delta } from './iers'
 import { itrs } from './itrs'
-import { type Location } from './location'
+import { type GeographicPosition } from './location'
 import { twoProduct, twoSum } from './math'
 import { clone, identity, mul, rotX, rotZ, type Mat3, type MutMat3 } from './matrix'
 
@@ -55,7 +55,7 @@ export interface Time {
 	ut1MinusTai?: TimeDelta
 	ut1MinusUtc?: TimeDelta
 
-	location?: Location
+	location?: GeographicPosition
 	extra?: TimeExtra
 }
 

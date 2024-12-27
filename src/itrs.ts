@@ -1,8 +1,8 @@
 import { ANGVEL } from './angle'
 import { DAYSEC } from './constants'
-import { eraC2teqx } from './erfa'
+import { eraC2teqx, eraGd2Gce } from './erfa'
 import { xy } from './iers'
-import { GEO_ID_PARAMETERS, type Location } from './location'
+import { ELLIPSOID_PARAMETERS, type GeographicPosition } from './location'
 import type { MutMat3 } from './matrix'
 import { gast, pmMatrix, precessionNutation, type Time } from './time'
 import type { Vec3 } from './vector'
@@ -12,23 +12,11 @@ export const EARTH_ANGULAR_VELOCITY_VECTOR = [0, 0, ANGVEL_PER_DAY] as const
 export const EARTH_ANGULAR_VELOCITY_MATRIX = [0, ANGVEL_PER_DAY, 0, -ANGVEL_PER_DAY, 0, 0, 0, 0, 0] as const
 
 // An |xyz| position in the Earth-centered Earth-fixed (ECEF) ITRS frame.
-export function itrs(location: Location): Vec3 {
+export function itrs(location: GeographicPosition): Vec3 {
 	if (location.itrs) return location.itrs
 
-	const sinphi = Math.sin(location.latitude)
-	const cosphi = Math.cos(location.latitude)
-	const { radius, oneMinusFlatteningSquared } = GEO_ID_PARAMETERS[location.model]
-
-	const c = 1.0 / Math.sqrt(cosphi * cosphi + sinphi * sinphi * oneMinusFlatteningSquared)
-	const s = oneMinusFlatteningSquared * c
-
-	const xy = (radius * c + location.elevation) * cosphi
-	const x = xy * Math.cos(location.longitude)
-	const y = xy * Math.sin(location.longitude)
-	const z = (radius * s + location.elevation) * sinphi
-
-	location.itrs = [x, y, z]
-
+	const params = ELLIPSOID_PARAMETERS[location.ellipsoid]
+	location.itrs = eraGd2Gce(params.radius, params.flattening, location.longitude, location.latitude, location.elevation)
 	return location.itrs
 }
 

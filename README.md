@@ -68,8 +68,10 @@ dRdtTimesRtAt(time)
 ### Location
 
 ```ts
-location(dms(10, 11, 12), dms(25, 26, 27), meter(123), Geoid.IERS2010) // Create new location from longitude, latitude, elevation and model
-polarRadius(Geoid.IERS2010) // Earth's polar radius
+geodetic(longitude, latitude, elevation, Ellipsoid.IERS2010) // Location from longitude, latitude, elevation and ellipsoid form
+geocentric(x, y, z, Ellipsoid.IERS2010) // Location from |xyz| geocentric coordinates and ellipsoid form
+lst(location, time, false, false) // Mean/apparent Local Sidereal Time
+polarRadius(Ellipsoid.IERS2010) // Earth's polar radius
 rotationAt(location, time) // GCRS rotation of the location at time
 dRdtTimesRtAt(location, time)
 ```

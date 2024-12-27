@@ -28,5 +28,9 @@
 	},
 	"[jsonc]": {
 		"editor.defaultFormatter": "esbenp.prettier-vscode"
-	}
+	},
+	"[python]": {
+		"editor.defaultFormatter": "ms-python.autopep8"
+	},
+	"autopep8.args": ["--max-line-length", "999", "--experimental"]
 }
