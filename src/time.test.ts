@@ -2,7 +2,7 @@ import { beforeAll, expect, test, type CustomMatcher } from 'bun:test'
 import { deg, hour } from './angle'
 import { J2000 } from './constants'
 import { meter } from './distance'
-import { iersa, iersb } from './iers'
+import { iersb } from './iers'
 import { Ellipsoid, geodetic } from './location'
 import { equationOfOrigins, era, gast, gmst, meanObliquity, normalize, nutation, precession, precessionNutation, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, tt, ut1, utc, type Time } from './time'
 
@@ -33,8 +33,7 @@ declare module 'bun:test' {
 }
 
 beforeAll(async () => {
-	await iersa.load(await Bun.file('data/finals2000A.txt').arrayBuffer())
-	await iersb.load(await Bun.file('data/eopc04.1962-now.txt').arrayBuffer())
+	await iersb.load(Bun.file('data/eopc04.1962-now.txt').stream())
 })
 
 test('time', () => {

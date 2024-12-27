@@ -1,14 +1,14 @@
 import { arcsec, type Angle } from './angle'
 import { MJD0 } from './constants'
 import { binarySearch } from './helper'
-import { readLinesFromArrayBuffer } from './io'
+import { readableStreamToLines } from './io'
 import type { PolarMotion, Time, TimeDelta } from './time'
 
 export interface Iers {
 	delta: TimeDelta
 	xy: PolarMotion
 
-	load: (buffer: AllowSharedBufferSource) => Promise<void>
+	load: (stream: ReadableStream<Uint8Array>) => Promise<void>
 	clear: () => void
 }
 
@@ -68,7 +68,7 @@ export abstract class IersBase implements Iers {
 		}
 	}
 
-	abstract load(buffer: AllowSharedBufferSource): Promise<void>
+	abstract load(stream: ReadableStream<Uint8Array>): Promise<void>
 
 	clear() {
 		this.mjd = []
@@ -81,10 +81,10 @@ export abstract class IersBase implements Iers {
 // https://datacenter.iers.org/data/9/finals2000A.all
 // https://maia.usno.navy.mil/ser7/readme.finals2000A
 export class IersA extends IersBase {
-	load(buffer: AllowSharedBufferSource) {
+	async load(stream: ReadableStream<Uint8Array>) {
 		this.clear()
 
-		return readLinesFromArrayBuffer(buffer, (line) => {
+		for await (const line of readableStreamToLines(stream)) {
 			const pmXa = parseFloat(line.substring(18, 27).trim())
 			const pmYa = parseFloat(line.substring(37, 46).trim())
 			const pmXb = parseFloat(line.substring(134, 144).trim())
@@ -99,18 +99,18 @@ export class IersA extends IersBase {
 				this.pmY.push(pmYb || pmYa)
 				this.dut1.push(dut1b || dut1a)
 			}
-		})
+		}
 	}
 }
 
 // https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now
 // https://hpiers.obspm.fr/eoppc/eop/eopc04/eopc04.txt
 export class IersB extends IersBase {
-	async load(buffer: AllowSharedBufferSource) {
+	async load(stream: ReadableStream<Uint8Array>) {
 		this.clear()
 
-		return readLinesFromArrayBuffer(buffer, (line) => {
-			if (line.startsWith('#')) return
+		for await (const line of readableStreamToLines(stream)) {
+			if (line.startsWith('#')) continue
 
 			const pmX = parseFloat(line.substring(26, 38).trim())
 			const pmY = parseFloat(line.substring(38, 50).trim())
@@ -123,7 +123,7 @@ export class IersB extends IersBase {
 				this.pmY.push(pmY)
 				this.dut1.push(dut1)
 			}
-		})
+		}
 	}
 }
 
@@ -143,8 +143,7 @@ export class IersAB implements Iers {
 		return b
 	}
 
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
-	load(buffer: AllowSharedBufferSource): Promise<void> {
+	load(stream: ReadableStream<Uint8Array>): Promise<void> {
 		throw new Error('not supported')
 	}
 

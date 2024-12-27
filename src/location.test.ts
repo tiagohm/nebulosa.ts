@@ -6,7 +6,7 @@ import { Ellipsoid, geocentric, geodetic, lst, polarRadius } from './location'
 import { Timescale, timeYMDHMS } from './time'
 
 beforeAll(async () => {
-	await iersb.load(await Bun.file('data/eopc04.1962-now.txt').arrayBuffer())
+	await iersb.load(Bun.file('data/eopc04.1962-now.txt').stream())
 })
 
 test('lst', () => {
