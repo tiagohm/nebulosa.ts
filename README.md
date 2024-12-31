@@ -29,6 +29,17 @@ parseAngle('12h 45m 14.56s') // Parse the dms/hms angle represented as string
 formatAngle(PI, { isHour: true }) // Format the angle to string
 ```
 
+### Astrometry
+
+```ts
+distance(p) // Distance in AU
+lightTime(p) // Days of light travel time
+equatorial(p) // Transform to equatorial coordinates
+hourAngle(p, time) // Hour angle coordinates
+parallacticAngle(p, time)
+separationFrom(a, b) // Angle between the positions
+```
+
 ### Distance
 
 ```ts
@@ -48,11 +59,28 @@ toParsec(1) // Convert AU to parsec
 TODO
 ```
 
+### FK5
+
+```ts
+fk5(ra, dec, distance) // FK5 coordinate from given equatorial coordinates
+fk5ToIcrs(frame) // Convert FK5 coordinate to ICRS coordinate
+precessFk5(frame, from, to) // Precess the FK5 coordinate from equinox to other
+precessFk5FromJ2000(frame, equinox) // Precess the FK5 coordinate from J2000 to equinox
+precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to J2000
+```
+
+### ICRS
+
+```ts
+icrs(ra, dec, distance) // ICRS coordinates from given equatorial coordinates
+icrsToFk5(frame) // Convert ICRS coordinate to FK5 coordinate
+```
+
 ### IERS
 
 ```ts
-iersa.load(await Bun.file('finals2000A.txt').arrayBuffer())
-iersb.load(await Bun.file('eopc04.1962-now.txt').arrayBuffer())
+iersa.load(Bun.file('finals2000A.txt').stream())
+iersb.load(Bun.file('eopc04.1962-now.txt').stream())
 delta(time) // UT1-UTC at time
 xy(time) // Polar motion angles at time
 ```
@@ -115,6 +143,7 @@ plus(m, n) // Sum two matrices
 minus(m, n) // Subtract two matrices
 mul(m, n) // Multiply two matrices
 mulVec(m, v) // Multiply the matrix by a vector
+mulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
 ```
 
 ### Time

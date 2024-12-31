@@ -82,12 +82,22 @@ test('timeYMDHMS', () => {
 	expect(t.day).toBe(2461041)
 	expect(t.fraction).toBeCloseTo(0.24980324074074078, 14)
 	expect(t.scale).toBe(Timescale.TDB)
+
+	t = timeYMDHMS(1975, 1, 1, 12, 0, 0, Timescale.TCG)
+	expect(t.day).toBe(2442414)
+	expect(t.fraction).toBeCloseTo(0, 14)
+	expect(t.scale).toBe(Timescale.TCG)
 })
 
 test('timeJulian', () => {
-	const t = timeJulian(2024, Timescale.TCG)
+	let t = timeJulian(2024, Timescale.TCG)
 	expect(t.day).toBe(2460311)
 	expect(t.fraction).toBe(0)
+	expect(t.scale).toBe(Timescale.TCG)
+
+	t = timeJulian(1975, Timescale.TCG)
+	expect(t.day).toBe(2442414)
+	expect(t.fraction).toBe(-0.25)
 	expect(t.scale).toBe(Timescale.TCG)
 })
 

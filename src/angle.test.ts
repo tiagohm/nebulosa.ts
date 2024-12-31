@@ -257,7 +257,7 @@ describe('formatAngle', () => {
 		expect(formatAngle(deg(-23.5634453), options)).toBe(`-23 33 48.40`)
 	})
 
-	test('isHour and noSign', () => {
+	test('isHourAndNoSign', () => {
 		const options: Partial<FormatAngleOptions> = { isHour: true, noSign: true }
 		expect(formatAngle(hour(23.5634453), options)).toBe(`23 33 48.40`)
 		expect(formatAngle(hour(-23.5634453), options)).toBe(`00 26 11.60`)
@@ -269,13 +269,13 @@ describe('formatAngle', () => {
 		expect(formatAngle(deg(-23.5634453), options)).toBe(`-23 33`)
 	})
 
-	test('isHour and noSecond', () => {
+	test('isHourAndNoSecond', () => {
 		const options: Partial<FormatAngleOptions> = { isHour: true, noSecond: true }
 		expect(formatAngle(hour(23.5634453), options)).toBe(`+23 33`)
 		expect(formatAngle(hour(-23.5634453), options)).toBe(`+00 26`)
 	})
 
-	test('hour, noSign and noSecond', () => {
+	test('hourAndNoSignAndNoSecond', () => {
 		const options: Partial<FormatAngleOptions> = { isHour: true, noSign: true, noSecond: true }
 		expect(formatAngle(hour(23.5634453), options)).toBe(`23 33`)
 		expect(formatAngle(hour(-23.5634453), options)).toBe(`00 26`)
@@ -287,7 +287,7 @@ describe('formatAngle', () => {
 		expect(formatAngle(deg(-23.5634453), options)).toBe(`-23 33 48.40308000`)
 	})
 
-	test('ishour and fractionDigits', () => {
+	test('ishourAndFractionDigits', () => {
 		const options: Partial<FormatAngleOptions> = { isHour: true, fractionDigits: 8 }
 		expect(formatAngle(hour(23.5634453), options)).toBe(`+23 33 48.40308000`)
 		expect(formatAngle(hour(-23.5634453), options)).toBe(`+00 26 11.59692000`)
@@ -299,7 +299,7 @@ describe('formatAngle', () => {
 		expect(formatAngle(deg(-23.5634453), options)).toBe(`-23a33b48.40c`)
 	})
 
-	test('isHour and separators', () => {
+	test('isHourAndSeparators', () => {
 		const options: Partial<FormatAngleOptions> = { isHour: true, separators: [':'] }
 		expect(formatAngle(hour(23.5634453), options)).toBe(`+23:33:48.40`)
 		expect(formatAngle(hour(-23.5634453), options)).toBe(`+00:26:11.60`)

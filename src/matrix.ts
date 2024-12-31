@@ -194,6 +194,16 @@ export function mulVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
 	return [c, d, e]
 }
 
+// Computes the multiplication of the transposed matrix by a vector.
+export function mulTransposeVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
+	const c = a[0] * b[0] + a[3] * b[1] + a[6] * b[2]
+	const d = a[1] * b[0] + a[4] * b[1] + a[7] * b[2]
+	const e = a[2] * b[0] + a[5] * b[1] + a[8] * b[2]
+
+	if (o) return fillVec(o, c, d, e)
+	return [c, d, e]
+}
+
 // Transposes the matrix.
 export function transposeMut(m: MutMat3): MutMat3 {
 	return transpose(m, m)

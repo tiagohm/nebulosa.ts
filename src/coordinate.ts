@@ -1,8 +1,10 @@
 import type { Angle } from './angle'
 import type { Distance } from './distance'
 
+// Representation of points in 3D spherical coordinates.
 export type SphericalCoordinate = [Angle, Angle, Distance]
 
+// Representation of points in 3D cartesian coordinates.
 export type CartesianCoordinate = [Distance, Distance, Distance]
 
 export function angularDistance(a: SphericalCoordinate, b: SphericalCoordinate): Angle {

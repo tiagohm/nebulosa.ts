@@ -1,4 +1,4 @@
-.PHONY: run lint prettier test compile astropy skyfield
+.PHONY: run lint prettier test compile astro
 
 run:
 	bun .
@@ -12,11 +12,8 @@ prettier:
 test:
 	bun test --timeout 1000
 
-astropy:
-	python scripts/astropy/$(name).py $(a)
-
-skyfield:
-	python scripts/skyfield/$(name).py $(a)
+astro:
+	python scripts/$(name).py $(a)
 
 ifeq ($(OS),Windows_NT)
 compile:

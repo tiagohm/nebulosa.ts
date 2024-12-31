@@ -1,10 +1,12 @@
+import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa'
 import { clone, identity, mul, rotX, transposeMut, type Mat3, type MutMat3 } from './matrix'
 import { precessionNutation, timeJulian, Timescale, trueObliquity, tt, type Time } from './time'
 
+export type CoordinateFrame = CartesianCoordinate
+
 export interface Frame {
-	readonly rotationAt: (time: Time) => MutMat3
-	readonly dRdtTimesRtAt?: (time: Time) => MutMat3
+	readonly rotationAt: (time: Time) => Mat3
 }
 
 const DEFAULT_EQUINOX_J2000 = timeJulian(2000, Timescale.TT)
@@ -17,56 +19,56 @@ export const FK5_MATRIX = [0.9999999999999928638, -0.0000001110223329741, -0.000
 export const GALACTIC_MATRIX = [-0.0548756577126196781, -0.8734370519557791298, -0.4838350736164183803, 0.4941094371971076412, -0.4448297212220537635, 0.7469821839845094133, -0.8676661375571625615, -0.1980763372750705946, 0.4559838136911523476] as const
 export const SUPERGALACTIC_MATRIX = [0.3750155557060191496, 0.3413588718572082374, 0.8618801851666388868, -0.8983204377254853439, -0.0957271002509969235, 0.4287851600069993011, 0.2288749093788964371, -0.9350456902643365859, 0.2707504994914917474] as const
 
-function equinoxFrame(m: Mat3, from: Time, to: Time) {
+function equinoxFrameByCapitaine(m: Mat3, from: Time, to: Time): Frame {
 	const a = precessionMatrixCapitaine(from, to)
 	mul(a, m, a)
 
 	return {
 		rotationAt: () => {
-			return clone(a)
+			return a
 		},
 	}
 }
 
 // Reference frame of the Earth's mean equator and equinox at B1950.
 export const B1950_FRAME: Frame = {
-	rotationAt: () => [...B1950_MATRIX],
+	rotationAt: () => B1950_MATRIX,
 }
 
 // Ecliptic coordinates based upon the B1950 frame.
 export const ECLIPTIC_B1950_FRAME: Frame = {
-	rotationAt: () => [...ECLIPTIC_B9150_MATRIX],
+	rotationAt: () => ECLIPTIC_B9150_MATRIX,
 }
 
 // Ecliptic coordinates based upon the J2000 frame.
 export const ECLIPTIC_J2000_FRAME: Frame = {
-	rotationAt: () => [...ECLIPTIC_J2000_MATRIX],
+	rotationAt: () => ECLIPTIC_J2000_MATRIX,
 }
 
 // The FK4 reference frame is derived from the B1950 frame by
 // applying the equinox offset determined by Fricke.
 export const FK4_FRAME: Frame = {
-	rotationAt: () => [...FK4_MATRIX],
+	rotationAt: () => FK4_MATRIX,
 }
 
 // The FK5 reference frame based on J2000 position.
 export const FK5_FRAME: Frame = {
-	rotationAt: () => [...FK5_MATRIX],
+	rotationAt: () => FK5_MATRIX,
 }
 
 // The FK5 reference frame based on position at equinox.
 export function fk5Frame(equinox: Time): Frame {
-	return equinoxFrame(FK5_MATRIX, DEFAULT_EQUINOX_J2000, equinox)
+	return equinoxFrameByCapitaine(FK5_MATRIX, DEFAULT_EQUINOX_J2000, equinox)
 }
 
 // Galactic System reference frame.
 export const GALACTIC_FRAME: Frame = {
-	rotationAt: () => [...GALACTIC_MATRIX],
+	rotationAt: () => GALACTIC_MATRIX,
 }
 
 // Supergalactic System reference frame.
 export const SUPERGALACTIC_FRAME: Frame = {
-	rotationAt: () => [...SUPERGALACTIC_MATRIX],
+	rotationAt: () => SUPERGALACTIC_MATRIX,
 }
 
 // The dynamical frame of the Earth's true equator and equinox of date.
@@ -88,9 +90,10 @@ export const ECLIPTIC_FRAME: Frame = {
 }
 
 // Computes the precession matrix from one time to another, per IAU 2006.
-export function precessionMatrixCapitaine(from: Time, to: Time) {
+export function precessionMatrixCapitaine(from: Time, to: Time): MutMat3 {
 	const t0 = tt(from)
 	const t1 = tt(to)
+	if (t0.day === t1.day && t0.fraction === t1.fraction) return identity()
 	// Hilton, J. et al., 2006, Celest.Mech.Dyn.Astron. 94, 351
 	const a = transposeMut(eraBp06(t0.day, t0.fraction)[1])
 	const b = eraBp06(t1.day, t1.fraction)[1]
