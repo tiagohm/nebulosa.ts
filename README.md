@@ -93,7 +93,6 @@ xy(time) // Polar motion angles at time
 ```ts
 itrs(location) // ITRS xyz position for location
 rotationAt(time) // ITRS rotation matrix at time
-dRdtTimesRtAt(time)
 ```
 
 ### Location
@@ -104,7 +103,6 @@ geocentric(x, y, z, Ellipsoid.IERS2010) // Location from |xyz| geocentric coordi
 lst(location, time, false, false) // Mean/apparent Local Sidereal Time
 polarRadius(Ellipsoid.IERS2010) // Earth's polar radius
 rotationAt(location, time) // GCRS rotation of the location at time
-dRdtTimesRtAt(location, time)
 ```
 
 ### Math
@@ -186,7 +184,6 @@ pmMatrix(xy, time)
 
 ```ts
 rotationAt(time) // TIRS rotation matrix at time
-dRdtTimesRtAt(time)
 ```
 
 ### Vector

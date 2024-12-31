@@ -2,8 +2,8 @@ import { normalize, type Angle } from './angle'
 import { meter, type Distance } from './distance'
 import { eraGc2Gde, eraSp00 } from './erfa'
 import { xy } from './iers'
-import { EARTH_ANGULAR_VELOCITY_VECTOR, rotationAt as itrsRotationAt } from './itrs'
-import { flipXMut, mul, mulVec, rotX, rotY, rotZ, type Mat3, type MutMat3 } from './matrix'
+import { rotationAt as itrsRotationAt } from './itrs'
+import { flipXMut, mul, rotX, rotY, rotZ, type Mat3, type MutMat3 } from './matrix'
 import { gast, gmst, pmAngles, tt, type Time } from './time'
 import { type Vec3 } from './vector'
 
@@ -98,12 +98,6 @@ export function lst(location: GeographicPosition, time: Time, mean: boolean = fa
 // Computes rotation from GCRS to this location's altazimuth system.
 export function rotationAt(location: GeographicPosition, time: Time): MutMat3 {
 	return mul(rLatLon(location), itrsRotationAt(time))
-}
-
-export function dRdtTimesRtAt(location: GeographicPosition, time: Time): MutMat3 {
-	// TODO: taking the derivative of the instantaneous angular velocity would provide a more accurate transform.
-	const [x, y, z] = mulVec(rLat(location), EARTH_ANGULAR_VELOCITY_VECTOR)
-	return [0, -z, y, z, 0, -x, -y, x, 0]
 }
 
 // The Earth's polar radius.
