@@ -45,7 +45,7 @@ export interface FormatAngleOptions {
 	noSign: boolean
 	noSecond: boolean
 	fractionDigits: number
-	separators: string[]
+	separators: string[] | string
 	minusSign: string
 	plusSign: string
 }
@@ -225,4 +225,23 @@ export function formatAngle(angle: Angle, options?: Partial<FormatAngleOptions>)
 	const s = noSecond ? '' : c.toFixed(fractionDigits)
 
 	return `${sign}${d}${sa}${m}${sb}${s}${sc}`
+}
+
+const DEFAULT_HMS_FORMAT: Partial<FormatAngleOptions> = { isHour: true, separators: ':' }
+const DEFAULT_DMS_FORMAT: Partial<FormatAngleOptions> = { noSign: true, separators: 'dms' }
+const DEFAULT_SIGNED_DMS_FORMAT: Partial<FormatAngleOptions> = { ...DEFAULT_DMS_FORMAT, noSign: false }
+
+// Format the angle as 00:00:00.00.
+export function formatHMS(angle: Angle) {
+	return formatAngle(angle, DEFAULT_HMS_FORMAT)
+}
+
+// Format the angle as 00d00m00.00s, signed only if negative
+export function formatDMS(angle: Angle) {
+	return formatAngle(angle, DEFAULT_DMS_FORMAT)
+}
+
+// Format the angle as +00d00m00.00s, always signed
+export function formatSignedDMS(angle: Angle) {
+	return formatAngle(angle, DEFAULT_SIGNED_DMS_FORMAT)
 }

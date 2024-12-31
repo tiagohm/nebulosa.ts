@@ -26,7 +26,10 @@ toMas(PI) // Convert radian to milliarcsecond
 toDms(PI) // Convert radian to degree-minute-second
 toHms(PI) // Convert radian to hour-minute-second
 parseAngle('12h 45m 14.56s') // Parse the dms/hms angle represented as string
-formatAngle(PI, { isHour: true }) // Format the angle to string
+formatAngle(PI, { isHour: true }) // Format the angle with custom representation
+formatHMS(PI) // Format the angle as 00:00:00.00
+formatDMS(PI) // Format the angle as 00d00m00.00s
+formatSignedDMS(PI) // Format the angle as +00d00m00.00s
 ```
 
 ### Astrometry
@@ -34,8 +37,8 @@ formatAngle(PI, { isHour: true }) // Format the angle to string
 ```ts
 distance(p) // Distance in AU
 lightTime(p) // Days of light travel time
-equatorial(p) // Transform to equatorial coordinates
-hourAngle(p, time) // Hour angle coordinates
+equatorial(p) // Transform to equatorial coordinate
+hourAngle(p, time) // Hour angle coordinate
 parallacticAngle(p, time)
 separationFrom(a, b) // Angle between the positions
 ```
@@ -62,7 +65,7 @@ TODO
 ### FK5
 
 ```ts
-fk5(ra, dec, distance) // FK5 coordinate from given equatorial coordinates
+fk5(ra, dec, distance) // FK5 coordinate from given spherical coordinate
 fk5ToIcrs(frame) // Convert FK5 coordinate to ICRS coordinate
 precessFk5(frame, from, to) // Precess the FK5 coordinate from equinox to other
 precessFk5FromJ2000(frame, equinox) // Precess the FK5 coordinate from J2000 to equinox
@@ -72,7 +75,7 @@ precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to 
 ### ICRS
 
 ```ts
-icrs(ra, dec, distance) // ICRS coordinates from given equatorial coordinates
+icrs(ra, dec, distance) // ICRS coordinate from given spherical coordinate
 icrsToFk5(frame) // Convert ICRS coordinate to FK5 coordinate
 ```
 
@@ -97,7 +100,7 @@ dRdtTimesRtAt(time)
 
 ```ts
 geodetic(longitude, latitude, elevation, Ellipsoid.IERS2010) // Location from longitude, latitude, elevation and ellipsoid form
-geocentric(x, y, z, Ellipsoid.IERS2010) // Location from |xyz| geocentric coordinates and ellipsoid form
+geocentric(x, y, z, Ellipsoid.IERS2010) // Location from |xyz| geocentric coordinate and ellipsoid form
 lst(location, time, false, false) // Mean/apparent Local Sidereal Time
 polarRadius(Ellipsoid.IERS2010) // Earth's polar radius
 rotationAt(location, time) // GCRS rotation of the location at time

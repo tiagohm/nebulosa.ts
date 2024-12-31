@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { arcmin, arcsec, deg, dms, formatAngle, hms, hour, mas, normalize, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas, type FormatAngleOptions } from './angle'
+import { arcmin, arcsec, deg, dms, formatAngle, formatDMS, formatHMS, formatSignedDMS, hms, hour, mas, normalize, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas, type FormatAngleOptions } from './angle'
 import { PI, PIOVERTWO, TAU } from './constants'
 
 test('normalize', () => {
@@ -315,4 +315,19 @@ describe('formatAngle', () => {
 		const options: Partial<FormatAngleOptions> = { minusSign: '#' }
 		expect(formatAngle(deg(-23.5634453), options)).toBe(`#23 33 48.40`)
 	})
+})
+
+test('formatHMS', () => {
+	expect(formatHMS(hour(23.5634453))).toBe(`+23:33:48.40`)
+	expect(formatHMS(hour(-23.5634453))).toBe(`+00:26:11.60`)
+})
+
+test('formatDMS', () => {
+	expect(formatDMS(deg(23.5634453))).toBe(`23d33m48.40s`)
+	expect(formatDMS(deg(-23.5634453))).toBe(`-23d33m48.40s`)
+})
+
+test('formatSignedDMS', () => {
+	expect(formatSignedDMS(deg(23.5634453))).toBe(`+23d33m48.40s`)
+	expect(formatSignedDMS(deg(-23.5634453))).toBe(`-23d33m48.40s`)
 })
