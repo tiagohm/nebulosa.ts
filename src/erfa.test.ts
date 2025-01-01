@@ -447,3 +447,11 @@ test('eraPmsafe', () => {
 	expect(toArcsec(px)).toBeCloseTo(0.9999997295356830666e-2, 12)
 	expect(toKilometerPerSecond(rv)).toBeCloseTo(10.38468380293920069, 10)
 })
+
+test('eraPmpx', () => {
+	const [x, y, z] = erfa.eraPmpx(1.234, 0.789, 1e-5, -2e-5, arcsec(1e-2), kilometerPerSecond(10), 8.75, [0.9, 0.4, 0.1])
+
+	expect(x).toBeCloseTo(0.2328137623960308438, 12)
+	expect(y).toBeCloseTo(0.6651097085397855328, 12)
+	expect(z).toBeCloseTo(0.7095257765896359837, 12)
+})

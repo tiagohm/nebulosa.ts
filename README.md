@@ -41,6 +41,7 @@ equatorial(p) // Transform to equatorial coordinate
 hourAngle(p, time) // Hour angle coordinate
 parallacticAngle(p, time)
 separationFrom(a, b) // Angle between the positions
+astrometric(bcrs, mas(10), ebp) // Apply parallax correction to BCRS cartesian coordinate
 ```
 
 ### Distance
@@ -147,6 +148,12 @@ mulVec(m, v) // Multiply the matrix by a vector
 mulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
 ```
 
+### Star
+
+```ts
+star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // Body from star parameters
+```
+
 ### Time
 
 ```ts
@@ -213,6 +220,15 @@ mul(v, u)
 div(v, u)
 rotateByRodrigues(v, axis, PI / 4)
 plane(v, u, w)
+```
+
+### Velocity
+
+```ts
+kilometerPerSecond(10) // Convert km/s to AU/d
+meterPerSecond(1000) // Convert m/s to AU/d
+toKilometerPerSecond(1) // Convert AU/d to km/s
+toMeterPerSecond(1) // Convert AU/d to m/s
 ```
 
 ## Inspirations

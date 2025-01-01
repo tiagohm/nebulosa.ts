@@ -156,6 +156,11 @@ export function normalize(v: Vec3, o?: MutVec3): MutVec3 {
 	else return divScalar(v, len, o)
 }
 
+// Normalizes the vector.
+export function normalizeMut(v: MutVec3): MutVec3 {
+	return normalize(v, v)
+}
+
 // Efficient algorithm for rotating a vector in space, given an axis and angle of rotation.
 export function rotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, o?: MutVec3): Vec3 {
 	const cosa = Math.cos(angle)

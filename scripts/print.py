@@ -12,3 +12,12 @@ def print_cartesian_sky_coord(c: SkyCoord):
 
 def print_spherical_sky_coord(c: SkyCoord):
     print('X: {0:.18f} Y: {1:.18f}, Z: {2:.18f}'.format(c.spherical.lon.to(u.rad), c.spherical.lat.to(u.rad), c.spherical.distance.to(u.au)))
+
+
+def print_equatorial_sky_coord(c: SkyCoord):
+    print('X: {0:.18f} Y: {1:.18f}, Z: {2:.18f}'.format(c.spherical.lon.to(u.deg), c.spherical.lat.to(u.deg), c.spherical.distance.to(u.au)))
+
+
+def print_speed_sky_coord(c: SkyCoord):
+    s = c.cartesian.differentials['s'].get_d_xyz().to(u.au/u.d)
+    print('X: {0:.18f} Y: {1:.18f}, Z: {2:.18f}'.format(s[0], s[1], s[2]))

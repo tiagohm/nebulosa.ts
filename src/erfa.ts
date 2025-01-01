@@ -1,5 +1,5 @@
 import { arcsec, ASEC2RAD, deg, MILLIASEC2RAD, normalize, TURNAS, type Angle } from './angle'
-import { DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI } from './constants'
+import { DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI } from './constants'
 import { toKilometer, type Distance } from './distance'
 import { FAIRHEAD } from './fairhead'
 import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
@@ -7,7 +7,7 @@ import { IAU2000B_LS } from './iau2000b'
 import { IAU2006_S, IAU2006_SP } from './iau2006'
 import { pmod, roundToNearestWholeNumber } from './math'
 import { mul, rotX, rotY, rotZ, transpose, type Mat3, type MutMat3 } from './matrix'
-import { cross, divScalar, dot, fill, length, minus, mulScalar, normalize as normalizeVec, plus, type MutVec3, type Vec3 } from './vector'
+import { cross, divScalar, dot, fill, length, minus, mulScalar, normalizeMut, normalize as normalizeVec, plus, type MutVec3, type Vec3 } from './vector'
 import type { Velocity } from './velocity'
 
 const DBL_EPSILON = 2.220446049250313e-16
@@ -1168,4 +1168,36 @@ export function eraSepp(a: Vec3, b: Vec3) {
 	const cs = dot(a, b)
 
 	return ss != 0 || cs != 0 ? Math.atan2(ss, cs) : 0
+}
+
+const AULTY = LIGHT_TIME_AU / DAYSEC / DAYSPERJY
+
+// Proper motion and parallax.
+export function eraPmpx(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Angle, rv: Angle, pmt: number, pob: Vec3): Vec3 {
+	// Spherical coordinates to unit vector (and useful functions).
+	const sr = Math.sin(rc)
+	const cr = Math.cos(rc)
+	const sd = Math.sin(dc)
+	const cd = Math.cos(dc)
+	const x = cr * cd
+	const y = sr * cd
+	const z = sd
+
+	// Proper motion time interval (y) including Roemer effect.
+	const dt = pmt + (x * pob[0] + y * pob[1] + z * pob[2]) * AULTY
+
+	// Space motion (radians per year).
+	const pxr = Math.max(px, PXMIN)
+	const w = rv * DAYSPERJY * pxr
+	const pdz = pd * z
+	const pm0 = -pr * y - pdz * cr + w * x
+	const pm1 = pr * x - pdz * sr + w * y
+	const pm2 = pd * cd + w * z
+
+	// Coordinate direction of star (unit vector, BCRS).
+	const p0 = x + dt * pm0 - pxr * pob[0]
+	const p1 = y + dt * pm1 - pxr * pob[1]
+	const p2 = z + dt * pm2 - pxr * pob[2]
+
+	return normalizeMut([p0, p1, p2])
 }

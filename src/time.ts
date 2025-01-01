@@ -183,6 +183,11 @@ export function normalize(day: number, fraction: number, divisor: number = 0, sc
 	return { day, fraction, scale }
 }
 
+// Subtract between two Time.
+export function subtract(a: Time, b: Time) {
+	return a.day - b.day + (a.fraction - b.fraction)
+}
+
 function makeTime(a: [number, number], time: Time, scale: Timescale = time.scale): Time {
 	return { ...time, day: a[0], fraction: a[1], scale }
 }

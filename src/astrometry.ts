@@ -6,7 +6,7 @@ import { eraP2s } from './erfa'
 import { ITRS_FRAME } from './itrs'
 import { mulVec } from './matrix'
 import { equationOfOrigins, type Time } from './time'
-import { angle, length } from './vector'
+import { angle, length, minus, mulScalar, type Vec3 } from './vector'
 
 // Computes the position at time.
 export type PositionOverTime = (time: Time) => CartesianCoordinate
@@ -79,4 +79,10 @@ export function sphericalCirs(p: CartesianCoordinate, time: Time): SphericalCoor
 // Computes the angle between two positions.
 export function separationFrom(a: CartesianCoordinate, b: CartesianCoordinate): Angle {
 	return angle(a, b)
+}
+
+// Apply parallax effect to BCRS cartesian coordinate given observer's barycentric position.
+export function astrometric(bcrs: CartesianCoordinate, px: Angle, bp: Vec3) {
+	const pxbp = mulScalar(bp, px * distance(bcrs))
+	return minus(bcrs, pxbp, pxbp)
 }

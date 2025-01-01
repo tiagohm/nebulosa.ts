@@ -22,7 +22,7 @@ export function star(ra: Angle, dec: Angle, pmRa: Angle = 0, pmDec: Angle = 0, p
 			if (ret) {
 				return ret[0]
 			} else {
-				const vte = mulScalar(pv[1], t.day - e.day + t.fraction - e.fraction)
+				const vte = mulScalar(pv[1], t.day - e.day + (t.fraction - e.fraction))
 				return plus(pv[0], vte, vte)
 			}
 		},

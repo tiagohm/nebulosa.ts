@@ -20,3 +20,4 @@
 *.dll           binary
 *.so            binary
 *.zip           binary
+*.pdf           binary
