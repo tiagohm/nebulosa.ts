@@ -1,13 +1,14 @@
-import { arcsec, deg, MILLIASEC2RAD, normalize, TURNAS, type Angle } from './angle'
-import { DAYSEC, DAYSPERJC, DAYSPERJM, ELB, ELG, J2000, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, TAU, TDB0, TTMINUSTAI } from './constants'
-import { toKm, type Distance } from './distance'
+import { arcsec, ASEC2RAD, deg, MILLIASEC2RAD, normalize, TURNAS, type Angle } from './angle'
+import { DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI } from './constants'
+import { toKilometer, type Distance } from './distance'
 import { FAIRHEAD } from './fairhead'
 import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
 import { IAU2000B_LS } from './iau2000b'
 import { IAU2006_S, IAU2006_SP } from './iau2006'
 import { pmod, roundToNearestWholeNumber } from './math'
 import { mul, rotX, rotY, rotZ, transpose, type Mat3, type MutMat3 } from './matrix'
-import type { MutVec3 } from './vector'
+import { cross, divScalar, dot, fill, length, minus, mulScalar, normalize as normalizeVec, plus, type MutVec3, type Vec3 } from './vector'
+import type { Velocity } from './velocity'
 
 const DBL_EPSILON = 2.220446049250313e-16
 
@@ -73,9 +74,11 @@ const LEAP_SECOND_DRIFT: LeapSecondDrift[] = [
 	[39126, 0.002592],
 ]
 
-export type LeapSecondChange = [number, number, number]
+export type LeapSecondChange = readonly [number, number, number]
 
-export type LeapSecondDrift = [number, number]
+export type LeapSecondDrift = readonly [number, number]
+
+export type PositionAndVelocity = readonly [MutVec3, MutVec3]
 
 // Normalizes [angle] into the range -[PI] <= a < +[PI].
 export function eraAnpm(angle: Angle): Angle {
@@ -413,8 +416,8 @@ export function eraDtDb(tdb1: number, tdb2: number, ut: number, elong: Angle = 0
 	// Mean Longitude of Saturn.
 	const els = deg(50.0774443 + 44046398.47038 * w)
 	// TOPOCENTRIC TERMS: Moyer 1981 and Murray 1983.
-	const ukm = toKm(u)
-	const vkm = toKm(v)
+	const ukm = toKilometer(u)
+	const vkm = toKilometer(v)
 	const wt = 0.00029e-10 * ukm * Math.sin(tsol + elsun - els) + 0.001e-10 * ukm * Math.sin(tsol - 2 * emsun) + 0.00133e-10 * ukm * Math.sin(tsol - d) + 0.00133e-10 * ukm * Math.sin(tsol + elsun - elj) - 0.00229e-10 * ukm * Math.sin(tsol + 2 * elsun + emsun) - 0.022e-10 * vkm * Math.cos(elsun + emsun) + 0.05312e-10 * ukm * Math.sin(tsol - emsun) - 0.13677e-10 * ukm * Math.sin(tsol + 2 * elsun) - 1.3184e-10 * vkm * Math.cos(elsun) + 3.17679e-10 * ukm * Math.sin(tsol)
 
 	const wn = [0, 0, 0, 0, 0]
@@ -907,7 +910,262 @@ export function eraBp06(tt1: number, tt2: number): [MutMat3, MutMat3, MutMat3] {
 
 	// P matrix.
 	const rp = transpose(rb)
-    mul(rbpw, rp, rp)
+	mul(rbpw, rp, rp)
 
 	return [rb, rp, rbpw]
+}
+
+const PXMIN = 5e-7 * ASEC2RAD
+
+//  Convert star catalog coordinates to position+velocity vector.
+export function eraStarpv(ra: Angle, dec: Angle, pmRa: Angle, pmDec: Angle, parallax: Angle, rv: Velocity) {
+	// Distance (au).
+	const r = 1 / Math.max(parallax, PXMIN)
+	// const r = parallax === 0 ? ONE_GIGAPARSEC : (ONE_PARSEC * PI) / 648000 / Math.max(parallax, PXMIN)
+
+	// To pv-vector (au, au/day).
+	const pv = eraS2pv(ra, dec, r, pmRa / DAYSPERJY, pmDec / DAYSPERJY, rv)
+
+	// Largest allowed speed (fraction of c).
+	if (length(pv[1]) / SPEED_OF_LIGHT_AU_DAY > 0.5) {
+		fill(pv[1], 0, 0, 0)
+		return pv
+	}
+
+	// Isolate the radial component of the velocity (au/day).
+	const pu = normalizeVec(pv[0])
+	const vsr = dot(pu, pv[1])
+	const usr = mulScalar(pu, vsr)
+
+	// Isolate the transverse component of the velocity (au/day).
+	const ust = minus(pv[1], usr, usr)
+	const vst = length(ust)
+
+	// Special-relativity dimensionless parameters.
+	const betsr = vsr / SPEED_OF_LIGHT_AU_DAY
+	const betst = vst / SPEED_OF_LIGHT_AU_DAY
+
+	// Determine the observed-to-inertial correction terms.
+	let bett = betst
+	let betr = betsr
+
+	let d = 0
+	let del = 0
+	let odd = 0
+	let oddel = 0
+	let od = 0
+	let odel = 0
+
+	for (let i = 0; i < 100; i++) {
+		d = 1 + betr
+		const w = betr * betr + bett * bett
+		del = -w / (Math.sqrt(1 - w) + 1)
+		betr = d * betsr + del
+		bett = d * betst
+
+		if (i > 0) {
+			const dd = Math.abs(d - od)
+			const ddel = Math.abs(del - odel)
+			if (i > 1 && dd >= odd && ddel >= oddel) break
+			odd = dd
+			oddel = ddel
+		}
+
+		od = d
+		odel = del
+	}
+
+	// Scale observed tangential velocity vector into inertial (au/d).
+	const ut = mulScalar(ust, d, ust)
+
+	// Compute inertial radial velocity vector (au/d).
+	const ur = mulScalar(pu, SPEED_OF_LIGHT_AU_DAY * (d * betsr + del), pu)
+
+	// Combine the two to obtain the inertial space velocity vector.
+	plus(ur, ut, pv[1])
+
+	return pv
+}
+
+// Convert position+velocity from spherical to cartesian coordinates.
+export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: Angle, rd: Velocity): PositionAndVelocity {
+	const st = Math.sin(theta)
+	const ct = Math.cos(theta)
+	const sp = Math.sin(phi)
+	const cp = Math.cos(phi)
+	const rcp = r * cp
+	const x = rcp * ct
+	const y = rcp * st
+	const rpd = r * pd
+	const w = rpd * sp - cp * rd
+
+	const p: MutVec3 = [x, y, r * sp]
+	const v: MutVec3 = [-y * td - w * ct, x * td - w * st, rpd * cp + sp * rd]
+	return [p, v]
+}
+
+// NOT PRESENT IN ERFA!
+// Update star position+velocity vector for space motion.
+export function eraStarpmpv(pv1: PositionAndVelocity, ep1a: number, ep1b: number, ep2a: number, ep2b: number): PositionAndVelocity | false {
+	// Light time when observed (days).
+	const tl1 = length(pv1[0]) / SPEED_OF_LIGHT_AU_DAY
+
+	// Time interval, "before" to "after" (days).
+	const dt = ep2a - ep1a + (ep2b - ep1b)
+
+	// Move star along track from the "before" observed position to the"after" geometric position.
+	const p1 = eraPpsp(pv1[0], dt + tl1, pv1[1])
+
+	// From this geometric position, deduce the observed light time (days)
+	// at the "after" epoch (with theoretically unneccessary error check).
+	const v2 = dot(pv1[1], pv1[1])
+	const c2mv2 = SPEED_OF_LIGHT_AU_DAY * SPEED_OF_LIGHT_AU_DAY - v2
+	if (c2mv2 <= 0) return false
+
+	const r2 = dot(p1, p1)
+	const rdv = dot(p1, pv1[1])
+	const tl2 = (-rdv + Math.sqrt(rdv * rdv + c2mv2 * r2)) / c2mv2
+
+	// Move the position along track from the observed place at the
+	// "before" epoch to the observed place at the "after" epoch.
+	const p = eraPpsp(pv1[0], dt + (tl1 - tl2), pv1[1], p1)
+
+	// Space motion pv-vector at the "after" epoch.
+	return [p, pv1[1]]
+}
+
+// Update star catalog data for space motion.
+// ra(rad), dec(rad), pmRa(rad/y), pmDec(rad/y), parallax(rad), rv(AU/d)
+export function eraStarpm(ra1: Angle, dec1: Angle, pmr1: Angle, pmd1: Angle, px1: Angle, rv1: Velocity, ep1a: number, ep1b: number, ep2a: number, ep2b: number) {
+	// RA,Dec etc. at the "before" epoch to space motion pv-vector.
+	const pv1 = eraStarpv(ra1, dec1, pmr1, pmd1, Math.max(px1, PXMIN), rv1)
+
+	// Space motion pv-vector at the "after" epoch.
+	const pv2 = eraStarpmpv(pv1, ep1a, ep1b, ep2a, ep2b)
+
+	// Space motion pv-vector to RA,Dec etc. at the "after" epoch.
+	return pv2 && eraPvstar(pv2[0], pv2[1])
+}
+
+// Convert star position+velocity vector to catalog coordinates.
+// ra(rad), dec(rad), pmRa(rad/y), pmDec(rad/y), parallax(rad), rv(AU/d)
+export function eraPvstar(p: Vec3, v: Vec3): [Angle, Angle, Angle, Angle, Angle, Velocity] | false {
+	// Isolate the radial component of the velocity (au/day, inertial).
+	const pu = normalizeVec(p)
+	const vr = dot(pu, v)
+	const ur = mulScalar(pu, vr)
+
+	// Isolate the transverse component of the velocity (au/day, inertial).
+	const ut = minus(v, ur, ur)
+	const vt = length(ut)
+
+	// Special-relativity dimensionless parameters.
+	const bett = vt / SPEED_OF_LIGHT_AU_DAY
+	const betr = vr / SPEED_OF_LIGHT_AU_DAY
+
+	// The observed-to-inertial correction terms.
+	const d = 1 + betr
+	const w = betr * betr + bett * bett
+	if (d === 0 || w > 1) return false
+	const del = -w / (Math.sqrt(1 - w) + 1)
+
+	// Scale inertial tangential velocity vector into observed (au/d).
+	const ust = divScalar(ut, d, ut)
+
+	// Compute observed radial velocity vector (au/d).
+	const usr = mulScalar(pu, (SPEED_OF_LIGHT_AU_DAY * (betr - del)) / d)
+
+	// Combine the two to obtain the observed velocity vector.
+	const ov = plus(usr, ust, usr)
+
+	// Cartesian to spherical.
+	// [ra, dec, r, rad, decd, rd]
+	const ret = eraPv2s(p, ov)
+
+	if (ret[2] === 0) return false
+
+	// Return RA in range 0 to 2pi.
+	ret[0] = normalize(ret[0])
+
+	// Return proper motions in radians per year.
+	ret[3] *= DAYSPERJY
+	ret[4] *= DAYSPERJY
+
+	// Return parallax.
+	const px = ret[2]
+
+	// Adjust the return order.
+	ret[2] = ret[3]
+	ret[3] = ret[4]
+	ret[4] = 1 / px
+
+	return ret
+}
+
+// Convert position+velocity from cartesian to spherical coordinates.
+export function eraPv2s(p: Vec3, v: Vec3): [Angle, Angle, Angle, number, number, number] {
+	// Components of position+velocity vector.
+	let [x, y, z] = p
+	const [xd, yd, zd] = v
+
+	// Component of r in XY plane squared.
+	let rxy2 = x * x + y * y
+
+	// Modulus squared.
+	let r2 = rxy2 + z * z
+
+	// Modulus.
+	const rtrue = Math.sqrt(r2)
+
+	// If null vector, move the origin along the direction of movement.
+	let rw = rtrue
+
+	if (rtrue === 0) {
+		x = xd
+		y = yd
+		z = zd
+		rxy2 = x * x + y * y
+		r2 = rxy2 + z * z
+		rw = Math.sqrt(r2)
+	}
+
+	// Position and velocity in spherical coordinates.
+	const rxy = Math.sqrt(rxy2)
+	const xyp = x * xd + y * yd
+
+	const rd = rw !== 0 ? (xyp + z * zd) / rw : 0
+
+	if (rxy2 !== 0) {
+		const theta = Math.atan2(y, x)
+		const phi = Math.atan2(z, rxy)
+		const td = (x * yd - y * xd) / rxy2
+		const pd = (zd * rxy2 - z * xyp) / (r2 * rxy)
+		return [theta, phi, rtrue, td, pd, rd]
+	} else {
+		const phi = z !== 0 ? Math.atan2(z, rxy) : 0
+		return [0, phi, rtrue, 0, 0, rd]
+	}
+}
+
+// P-vector plus scaled p-vector: a + s*b.
+export function eraPpsp(a: Vec3, s: number, b: Vec3, o?: MutVec3) {
+	const sb = mulScalar(b, s, o)
+	return plus(a, sb, o ?? sb)
+}
+
+// Angular separation between two sets of spherical coordinates.
+export function eraSeps(al: Angle, ap: Angle, bl: Angle, bp: Angle) {
+	return eraSepp(eraS2c(al, ap), eraS2c(bl, bp))
+}
+
+// Angular separation between two p-vectors.
+export function eraSepp(a: Vec3, b: Vec3) {
+	// Sine of angle between the vectors, multiplied by the two moduli.
+	const axb = cross(a, b)
+	const ss = length(axb)
+
+	// Cosine of the angle, multiplied by the two moduli.
+	const cs = dot(a, b)
+
+	return ss != 0 || cs != 0 ? Math.atan2(ss, cs) : 0
 }

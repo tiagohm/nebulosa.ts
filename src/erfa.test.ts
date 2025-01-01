@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test'
+import { arcsec, toArcsec } from './angle'
 import { kilometer } from './distance'
 import * as erfa from './erfa'
 import type { Mat3 } from './matrix'
+import type { MutVec3 } from './vector'
+import { kilometerPerSecond, toKilometerPerSecond } from './velocity'
 
 test('eraP2s', () => {
 	const [theta, phi, distance] = erfa.eraP2s(100, -50, 25)
@@ -361,4 +364,86 @@ test('eraBp06', () => {
 	expect(rbp[6]).toBeCloseTo(-0.377973495703408949e-3, 14)
 	expect(rbp[7]).toBeCloseTo(-0.1924880847894457113e-6, 14)
 	expect(rbp[8]).toBeCloseTo(0.9999999285679971958, 12)
+})
+
+test('eraS2pv', () => {
+	const [p, v] = erfa.eraS2pv(-3.21, 0.123, 0.456, -7.8e-6, 9.01e-6, -1.23e-5)
+
+	expect(p[0]).toBeCloseTo(-0.4514964673880165228, 12)
+	expect(p[1]).toBeCloseTo(0.0309339427734258688, 12)
+	expect(p[2]).toBeCloseTo(0.0559466810510877933, 12)
+	expect(v[0]).toBeCloseTo(0.129227085066326017e-4, 16)
+	expect(v[1]).toBeCloseTo(0.2652814182060691422e-5, 16)
+	expect(v[2]).toBeCloseTo(0.2568431853930292259e-5, 16)
+})
+
+test('eraStarpv', () => {
+	const [p, v] = erfa.eraStarpv(0.01686756, -1.093989828, -1.78323516e-5, 2.336024047e-6, arcsec(0.74723), kilometerPerSecond(-21.6))
+
+	expect(p[0]).toBeCloseTo(126668.5912743160601, 10)
+	expect(p[1]).toBeCloseTo(2136.792716839935195, 12)
+	expect(p[2]).toBeCloseTo(-245251.2339876830091, 10)
+	expect(v[0]).toBeCloseTo(-0.4051854008955659551e-2, 13)
+	expect(v[1]).toBeCloseTo(-0.625391975441477797e-2, 15)
+	expect(v[2]).toBeCloseTo(0.1189353714588109341e-1, 13)
+})
+
+test('eraSepp', () => {
+	expect(erfa.eraSepp([1, 0.1, 0.2], [-3, 1e-3, 0.2])).toBeCloseTo(2.860391919024660768, 12)
+})
+
+test('eraSeps', () => {
+	expect(erfa.eraSeps(1, 0.1, 0.2, -3)).toBeCloseTo(2.346722016996998842, 14)
+})
+
+test('eraPpsp', () => {
+	expect(erfa.eraPpsp([2, 2, 3], 5, [1, 3, 4])).toEqual([7, 17, 23])
+})
+
+test('eraPv2s', () => {
+	const p: MutVec3 = [-0.4514964673880165, 0.03093394277342585, 0.05594668105108779]
+	const v: MutVec3 = [1.29227085066326e-5, 2.652814182060692e-6, 2.568431853930293e-6]
+	const [theta, phi, r, td, pd, rd] = erfa.eraPv2s(p, v)
+
+	expect(theta).toBeCloseTo(3.073185307179586515, 12)
+	expect(phi).toBeCloseTo(0.1229999999999999992, 12)
+	expect(r).toBeCloseTo(0.4559999999999999757, 12)
+	expect(td).toBeCloseTo(-0.7800000000000000364e-5, 16)
+	expect(pd).toBeCloseTo(0.9010000000000001639e-5, 16)
+	expect(rd).toBeCloseTo(-0.1229999999999999832e-4, 16)
+})
+
+test('eraPvstar', () => {
+	const p: MutVec3 = [126668.5912743160601, 2136.792716839935195, -245251.2339876830091]
+	const v: MutVec3 = [-0.4051854035740712739e-2, -0.6253919754866173866e-2, 0.1189353719774107189e-1]
+	const [ra, dec, pmr, pmd, px, rv] = erfa.eraPvstar(p, v) as Exclude<ReturnType<typeof erfa.eraPvstar>, false>
+
+	expect(ra).toBeCloseTo(0.1686756e-1, 12)
+	expect(dec).toBeCloseTo(-1.093989828, 12)
+	expect(pmr).toBeCloseTo(-0.1783235160000472788e-4, 16)
+	expect(pmd).toBeCloseTo(0.2336024047000619347e-5, 16)
+	expect(toArcsec(px)).toBeCloseTo(0.74723, 12)
+	expect(toKilometerPerSecond(rv)).toBeCloseTo(-21.6000001010730601, 13)
+})
+
+test('eraStarpm', () => {
+	const [ra, dec, pmr, pmd, px, rv] = erfa.eraStarpm(0.01686756, -1.093989828, -1.78323516e-5, 2.336024047e-6, arcsec(0.74723), kilometerPerSecond(-21.6), 2400000.5, 50083.0, 2400000.5, 53736.0) as Exclude<ReturnType<typeof erfa.eraStarpm>, false>
+
+	expect(ra).toBeCloseTo(0.01668919069414256149, 13)
+	expect(dec).toBeCloseTo(-1.093966454217127897, 13)
+	expect(pmr).toBeCloseTo(-0.1783662682153176524e-4, 17)
+	expect(pmd).toBeCloseTo(0.2338092915983989595e-5, 17)
+	expect(toArcsec(px)).toBeCloseTo(0.7473533835317719243, 10)
+	expect(toKilometerPerSecond(rv)).toBeCloseTo(-21.59905170476417175, 11)
+})
+
+test('eraPmsafe', () => {
+	const [ra, dec, pmr, pmd, px, rv] = erfa.eraStarpm(1.234, 0.789, 1e-5, -2e-5, arcsec(1e-2), kilometerPerSecond(10), 2400000.5, 48348.5625, 2400000.5, 51544.5) as Exclude<ReturnType<typeof erfa.eraStarpm>, false>
+
+	expect(ra).toBeCloseTo(1.234087484501017061, 12)
+	expect(dec).toBeCloseTo(0.7888249982450468567, 12)
+	expect(pmr).toBeCloseTo(0.9996457663586073988e-5, 12)
+	expect(pmd).toBeCloseTo(-0.2000040085106754565e-4, 16)
+	expect(toArcsec(px)).toBeCloseTo(0.9999997295356830666e-2, 12)
+	expect(toKilometerPerSecond(rv)).toBeCloseTo(10.38468380293920069, 10)
 })

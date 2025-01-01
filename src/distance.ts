@@ -35,7 +35,7 @@ export function toMeter(distance: Distance): number {
 }
 
 // Converts the distance to kilometers.
-export function toKm(distance: Distance): number {
+export function toKilometer(distance: Distance): number {
 	return distance * AU_KM
 }
 

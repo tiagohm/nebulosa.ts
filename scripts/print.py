@@ -1,4 +1,5 @@
 from astropy.coordinates import SkyCoord
+import astropy.units as u
 
 
 def print_matrix(m):
@@ -6,4 +7,8 @@ def print_matrix(m):
 
 
 def print_cartesian_sky_coord(c: SkyCoord):
-    print('X: {0:.18f} Y: {1:.18f}, Z: {2:.18f} | EQUINOX: {3}'.format(c.cartesian.x, c.cartesian.y, c.cartesian.z, c.equinox))
+    print('X: {0:.18f} Y: {1:.18f}, Z: {2:.18f}'.format(c.cartesian.x.to(u.au), c.cartesian.y.to(u.au), c.cartesian.z.to(u.au)))
+
+
+def print_spherical_sky_coord(c: SkyCoord):
+    print('X: {0:.18f} Y: {1:.18f}, Z: {2:.18f}'.format(c.spherical.lon.to(u.rad), c.spherical.lat.to(u.rad), c.spherical.distance.to(u.au)))

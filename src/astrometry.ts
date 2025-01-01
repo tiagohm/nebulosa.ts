@@ -8,8 +8,19 @@ import { mulVec } from './matrix'
 import { equationOfOrigins, type Time } from './time'
 import { angle, length } from './vector'
 
-// Computes the position at given time.
+// Computes the position at time.
 export type PositionOverTime = (time: Time) => CartesianCoordinate
+
+// Computes the position relative to observer's position at time.
+export type ObservedPositionOverTime = (observer: CartesianCoordinate, time: Time) => CartesianCoordinate
+
+// Represents a celestial body.
+export interface Body {
+	readonly position: CartesianCoordinate
+	// readonly velocity?: CartesianCoordinate
+	readonly at: PositionOverTime
+	readonly observedAt: ObservedPositionOverTime
+}
 
 // Length of position component in AU.
 export function distance(p: CartesianCoordinate): Distance {
