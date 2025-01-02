@@ -1,10 +1,10 @@
 import { beforeAll, expect, test, type CustomMatcher } from 'bun:test'
 import { deg, hour } from './angle'
-import { J2000 } from './constants'
+import { DAYSEC, J2000 } from './constants'
 import { meter } from './distance'
 import { iersb } from './iers'
 import { Ellipsoid, geodetic } from './location'
-import { equationOfOrigins, era, gast, gmst, meanObliquity, normalize, nutation, precession, precessionNutation, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, tt, ut1, utc, type Time } from './time'
+import { equationOfOrigins, era, gast, gmst, meanObliquity, normalize, nutation, precession, precessionNutation, subtract, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, toDate, tt, ut1, utc, type Time } from './time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = normalize(expected.day, expected.fraction)
@@ -113,6 +113,20 @@ test('timGPS', () => {
 	expect(t.day).toBe(J2000)
 	expect(t.fraction).toBe(-0.4996296167373657)
 	expect(t.scale).toBe(Timescale.TAI)
+})
+
+test('subtract', () => {
+	const dt = subtract(timeYMDHMS(2020, 1, 1, 12, 0, 0), timeYMDHMS(2020, 1, 1, 10, 0, 0))
+	expect(dt).toBeCloseTo((2 * 60 * 60) / DAYSEC, 16)
+})
+
+test('toDate', () => {
+	expect(toDate(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toEqual([2020, 1, 1, 12, 0, 0, 0])
+	expect(toDate(timeYMDHMS(2020, 1, 1, 23, 59, 59))).toEqual([2020, 1, 1, 23, 59, 59, 0])
+	expect(toDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))).toEqual([2020, 1, 1, 23, 59, 59, 500000000])
+	expect(toDate(time(2460677, 0.503116, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
+	expect(toDate(time(2460678, -0.496884, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
+	expect(toDate(timeJulian(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
 })
 
 test('ut1', () => {

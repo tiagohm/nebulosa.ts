@@ -151,21 +151,24 @@ mulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
 ### Star
 
 ```ts
-star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // Body from star parameters
+const sirius = star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // Body from star parameters
+sirius.at(time) // BCRS cartesian coordinate at time
 ```
 
 ### Time
 
 ```ts
-time(2460650, 0.37456, Timescale.UTC)
-timeUnix(1735133314, Timescale.UTC)
-timeNow()
-timeMJD(51544, Timescale.UTC)
-timeJulian(2000.5, Timescale.UTC)
-timeBesselian(1950.5, Timescale.UTC)
-timeYMDHMS(2024, 12, 25, 9, 10, 11.5, Timescale.UTC)
-timeGPS(630720013)
-normalize(2460650, 8.37456, 0, Timescale.UTC)
+time(2460650, 0.37456, Timescale.UTC, true) // Time from day and fraction
+timeUnix(1735133314, Timescale.UTC) // Time from unix seconds
+timeNow() // Time from now
+timeMJD(51544, Timescale.UTC) // Time from MJD date
+timeJulian(2000.5, Timescale.UTC) // Time from Julian date
+timeBesselian(1950.5, Timescale.UTC) // Time from Besselian date
+timeYMDHMS(2024, 12, 25, 9, 10, 11.5, Timescale.UTC) // Time from year, month, day, hour, minute and second
+timeGPS(630720013) // Time from GPS seconds
+normalize(2460650, 8.37456, 0, Timescale.UTC) // Normalize day and fraction
+subtract(a, b) // Subtract two Times
+toDate(time) // Convert the time to year, month, day, hour, minute, second and nanosecond
 ut1(time) // Convert the time to UT1 scale
 utc(time) // Convert the time to UTC scale
 tai(time) // Convert the time to TAI scale
@@ -173,18 +176,18 @@ tt(time) // Convert the time to TT scale
 tcg(time) // Convert the time to TCG scale
 tdb(time) // Convert the time to TDB scale
 tcb(time) // Convert the time to TCB scale
-gast(time)
-gmst(time)
-era(time)
-meanObliquity(time)
-trueObliquity(time)
-trueEclipticRotation(time)
-nutation(time)
-precession(time)
-precessionNutation(time)
-equationOfOrigins(time)
-pmAngles(xy, time)
-pmMatrix(xy, time)
+gast(time) // Greenwich Apparent Sidereal Time at time
+gmst(time) // Greenwich Mean Sidereal Time at time
+era(time) // Earth Rotation Angle at time
+meanObliquity(time) // Mean Obliquity at time
+trueObliquity(time) // True Oblioquity at time
+trueEclipticRotation(time) // True Ecliptic Rotation matrix at time
+nutation(time) // Nutation angles at time
+precession(time) // Precession matrix at time
+precessionNutation(time) // Precession-Nutation matrix at time
+equationOfOrigins(time) // Equation of Origins matrix at time
+pmAngles(xy, time) // Polar Motion angles at time
+pmMatrix(xy, time) // Polar Motion matrix at time
 ```
 
 ### TIRS
@@ -196,30 +199,30 @@ rotationAt(time) // TIRS rotation matrix at time
 ### Vector
 
 ```ts
-zero()
-xAxis()
-yAxis()
-zAxis()
-clone(v)
-normalize(v)
-length(v)
-distance(v, u)
-angle(v, u)
-dot(v, u)
-cross(v, u)
+zero() // Vector filled with zeroes
+xAxis() // X-axis vector
+yAxis() // Y-axis vector
+zAxis() // Z-axis vector
+clone(v) // Clone the vector
+normalize(v) // Normalize the vector
+length(v) // Length of the vector
+distance(v, u) // Distance between vectors
+angle(v, u) // Angle between vectors
+dot(v, u) // Dot product between vectors
+cross(v, u) // Cross product between vectors
 latitude(v)
 longitude(v)
-negate(v)
-plusScalar(v, 2)
-minusScalar(v, 2)
-mulScalar(v, 2)
-divScalar(v, 2)
-plus(v, u)
-minus(v, u)
-mul(v, u)
-div(v, u)
-rotateByRodrigues(v, axis, PI / 4)
-plane(v, u, w)
+negate(v) // Negate the vector
+plusScalar(v, 2) // Sum the vector by a scalar
+minusScalar(v, 2) // Subtract the vector by a scalar
+mulScalar(v, 2) // Multiply the vector by a scalar
+divScalar(v, 2) // Divide the vector by a scalar
+plus(v, u) // Sum two vectors
+minus(v, u) // Subtract two vectors
+mul(v, u) // Multiply two vectors
+div(v, u) // Divide two vectors
+rotateByRodrigues(v, axis, PI / 4) // Rotate the vector around an axis
+plane(v, u, w) // Vector from plane of three vectors
 ```
 
 ### Velocity
