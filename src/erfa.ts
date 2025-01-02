@@ -1006,7 +1006,7 @@ export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: An
 
 // NOT PRESENT IN ERFA!
 // Update star position+velocity vector for space motion.
-export function eraStarpmpv(pv1: PositionAndVelocity, ep1a: number, ep1b: number, ep2a: number, ep2b: number): PositionAndVelocity | false {
+export function eraStarpmpv(pv1: PositionAndVelocity, ep1a: number, ep1b: number, ep2a: number, ep2b: number): PositionAndVelocity {
 	// Light time when observed (days).
 	const tl1 = length(pv1[0]) / SPEED_OF_LIGHT_AU_DAY
 
@@ -1020,7 +1020,7 @@ export function eraStarpmpv(pv1: PositionAndVelocity, ep1a: number, ep1b: number
 	// at the "after" epoch (with theoretically unneccessary error check).
 	const v2 = dot(pv1[1], pv1[1])
 	const c2mv2 = SPEED_OF_LIGHT_AU_DAY * SPEED_OF_LIGHT_AU_DAY - v2
-	if (c2mv2 <= 0) return false
+    // if (c2mv2 <= 0) return false
 
 	const r2 = dot(p1, p1)
 	const rdv = dot(p1, pv1[1])
@@ -1044,7 +1044,7 @@ export function eraStarpm(ra1: Angle, dec1: Angle, pmr1: Angle, pmd1: Angle, px1
 	const pv2 = eraStarpmpv(pv1, ep1a, ep1b, ep2a, ep2b)
 
 	// Space motion pv-vector to RA,Dec etc. at the "after" epoch.
-	return pv2 && eraPvstar(pv2[0], pv2[1])
+	return eraPvstar(pv2[0], pv2[1])
 }
 
 // Convert star position+velocity vector to catalog coordinates.
@@ -1173,7 +1173,7 @@ export function eraSepp(a: Vec3, b: Vec3) {
 const AULTY = LIGHT_TIME_AU / DAYSEC / DAYSPERJY
 
 // Proper motion and parallax.
-export function eraPmpx(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Angle, rv: Angle, pmt: number, pob: Vec3): Vec3 {
+export function eraPmpx(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Angle, rv: Angle, pmt: number, pob: Vec3): MutVec3 {
 	// Spherical coordinates to unit vector (and useful functions).
 	const sr = Math.sin(rc)
 	const cr = Math.cos(rc)

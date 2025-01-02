@@ -8,16 +8,16 @@ import { mulVec } from './matrix'
 import { equationOfOrigins, type Time } from './time'
 import { angle, length, minus, mulScalar, type Vec3 } from './vector'
 
+export type PositionAndVelocity = readonly [CartesianCoordinate, CartesianCoordinate]
+
 // Computes the position at time.
-export type PositionOverTime = (time: Time) => CartesianCoordinate
+export type PositionOverTime = (time: Time) => PositionAndVelocity
 
 // Computes the position relative to observer's position at time.
-export type ObservedPositionOverTime = (observer: CartesianCoordinate, time: Time) => CartesianCoordinate
+export type ObservedPositionOverTime = (observer: Body, time: Time) => PositionAndVelocity
 
 // Represents a celestial body.
 export interface Body {
-	readonly position: CartesianCoordinate
-	// readonly velocity?: CartesianCoordinate
 	readonly at: PositionOverTime
 	readonly observedAt: ObservedPositionOverTime
 }
@@ -82,7 +82,7 @@ export function separationFrom(a: CartesianCoordinate, b: CartesianCoordinate): 
 }
 
 // Apply parallax effect to BCRS cartesian coordinate given observer's barycentric position.
-export function astrometric(bcrs: CartesianCoordinate, px: Angle, bp: Vec3) {
+export function parallax(bcrs: CartesianCoordinate, px: Angle, bp: Vec3) {
 	const pxbp = mulScalar(bp, px * distance(bcrs))
 	return minus(bcrs, pxbp, pxbp)
 }

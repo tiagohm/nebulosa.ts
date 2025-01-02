@@ -1,11 +1,24 @@
 import { expect, test } from 'bun:test'
 import { deg, mas, normalize, toDeg } from './angle'
-import { astrometric, equatorial } from './astrometry'
+import { equatorial, parallax, type Body } from './astrometry'
 import { meter } from './distance'
 import { geodetic } from './location'
 import { star } from './star'
 import { Timescale, timeYMDHMS } from './time'
 import { kilometerPerSecond } from './velocity'
+import { zero } from './vector'
+
+const earth: Body = {
+	at: () => {
+		return [
+			[0.898130398596, -0.433663195906, -0.188058184682],
+			[0.007714484109, 0.013933051305, 0.00604025885],
+		]
+	},
+	observedAt: () => {
+		return [zero(), zero()]
+	},
+}
 
 // https://syrte.obspm.fr/iau/iauWGnfa/ExPW04.html
 test('patrickWallace', () => {
@@ -23,12 +36,12 @@ test('patrickWallace', () => {
 
 	// BCRS
 	const bcrs = body.at(time)
-	eq = equatorial(bcrs)
+	eq = equatorial(bcrs[0])
 	expect(toDeg(normalize(eq[0]))).toBeCloseTo(353.22991549972, 10)
 	expect(toDeg(eq[1])).toBeCloseTo(52.27730034185, 10)
 
 	// Astrometric
-	const astrom = astrometric(bcrs, mas(23), [0.898130398596, -0.433663195906, -0.188058184682])
+	const astrom = parallax(bcrs[0], mas(23), earth.at(time)[0])
 	eq = equatorial(astrom)
 	expect(toDeg(normalize(eq[0]))).toBeCloseTo(353.22991889091, 10)
 	expect(toDeg(eq[1])).toBeCloseTo(52.27730584235, 10)
