@@ -1,7 +1,7 @@
 import type { Angle } from './angle'
 import { DAYSEC, DAYSPERJC, DAYSPERJY, DTY, J2000, MJD0 } from './constants'
 import { eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
-import { delta } from './iers'
+import { delta, xy } from './iers'
 import { itrs } from './itrs'
 import { type GeographicPosition } from './location'
 import { twoProduct, twoSum } from './math'
@@ -50,6 +50,9 @@ export interface Time {
 	readonly fraction: number
 	readonly scale: Timescale
 
+	polarMotion?: PolarMotion
+	delta?: TimeDelta
+
 	tdbMinusTt?: TimeDelta
 	// taiMinusUtc?: TimeDelta
 	ut1MinusTai?: TimeDelta
@@ -74,21 +77,21 @@ export type PolarMotion = (time: Time) => [Angle, Angle]
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export const noPolarMotion = (time: Time) => [0, 0]
 
-// Computes the motion angles (sprime, x, y) from the specified time.
-export function pmAngles(pm: PolarMotion, time: Time): readonly [Angle, Angle, Angle] {
+// Computes the motion angles (sprime, x, y) from the given time.
+export function pmAngles(time: Time, pm?: PolarMotion): readonly [Angle, Angle, Angle] {
 	if (time.extra?.pmAngles) return time.extra.pmAngles
 	const t = tt(time)
 	const sprime = eraSp00(t.day, t.fraction)
-	const [x, y] = pm(time)
+	const [x, y] = (pm ?? time.polarMotion ?? xy)(time)
 	const a: [Angle, Angle, Angle] = [sprime, x, y]
 	extra(time).pmAngles = a
 	return a
 }
 
-// Computes the polar motion matrix from the specified time.
-export function pmMatrix(pm: PolarMotion, time: Time): Mat3 {
+// Computes the polar motion matrix from the given time.
+export function pmMatrix(time: Time, pm?: PolarMotion): Mat3 {
 	if (time.extra?.pmMatrix) return time.extra.pmMatrix
-	const [sprime, x, y] = pmAngles(pm, time)
+	const [sprime, x, y] = pmAngles(time, pm)
 	const m = eraPom00(x, y, sprime)
 	extra(time).pmMatrix = m
 	return m
@@ -451,16 +454,18 @@ export function equationOfOrigins(time: Time): Mat3 {
 export const ut1MinusUtc: TimeDelta = (time) => {
 	if (time.extra?.ut1MinusUtc) return time.extra.ut1MinusUtc
 
+	const d = time.delta ?? delta
+
 	// https://github.com/astropy/astropy/blob/71a2eafd6c09f1992f8b4132e6e40ba68a675bde/astropy/time/core.py#L2554
 	// Interpolate UT1-UTC in IERS table
-	let dt = delta(time)
+	let dt = d(time)
 
 	// If we interpolated using UT1, we may be off by one
 	// second near leap seconds (and very slightly off elsewhere)
 	if (time.scale === Timescale.UT1) {
 		const a = eraUt1Utc(time.day, time.fraction, dt)
 		// Calculate a better estimate using the nearly correct UTC
-		dt = delta({ day: a[0], fraction: a[1], scale: Timescale.UTC })
+		dt = d({ day: a[0], fraction: a[1], scale: Timescale.UTC })
 	}
 
 	extra(time).ut1MinusUtc = dt

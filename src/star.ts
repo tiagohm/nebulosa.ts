@@ -2,7 +2,7 @@ import type { Angle } from './angle'
 import type { Body } from './astrometry'
 import { SPEED_OF_LIGHT_AU_DAY } from './constants'
 import { eraStarpmpv, eraStarpv } from './erfa'
-import { tdb, timeJulian, Timescale, type Time } from './time'
+import { subtract, tdb, timeJulian, Timescale, type Time } from './time'
 import { dot, minus, mulScalar, normalize, plus } from './vector'
 import type { Velocity } from './velocity'
 
@@ -22,7 +22,7 @@ export function star(ra: Angle, dec: Angle, pmRa: Angle = 0, pmDec: Angle = 0, p
 			if (ret) {
 				return ret[0]
 			} else {
-				const vte = mulScalar(pv[1], t.day - e.day + (t.fraction - e.fraction))
+				const vte = mulScalar(pv[1], subtract(t, e))
 				return plus(pv[0], vte, vte)
 			}
 		},

@@ -186,8 +186,8 @@ nutation(time) // Nutation angles at time
 precession(time) // Precession matrix at time
 precessionNutation(time) // Precession-Nutation matrix at time
 equationOfOrigins(time) // Equation of Origins matrix at time
-pmAngles(xy, time) // Polar Motion angles at time
-pmMatrix(xy, time) // Polar Motion matrix at time
+pmAngles(time) // Polar Motion angles at time
+pmMatrix(time) // Polar Motion matrix at time
 ```
 
 ### TIRS

@@ -1,7 +1,6 @@
 import { normalize, type Angle } from './angle'
 import { meter, type Distance } from './distance'
 import { eraGc2Gde, eraSp00 } from './erfa'
-import { xy } from './iers'
 import { rotationAt as itrsRotationAt } from './itrs'
 import { flipXMut, mul, rotX, rotY, rotZ, type Mat3, type MutMat3 } from './matrix'
 import { gast, gmst, pmAngles, tt, type Time } from './time'
@@ -81,7 +80,7 @@ export function lst(location: GeographicPosition, time: Time, mean: boolean = fa
 	const theta = mean ? gmst(time) : gast(time)
 
 	if (tio === true) {
-		const [sprime, xp, yp] = pmAngles(xy, time)
+		const [sprime, xp, yp] = pmAngles(time)
 		// The order of operation must be reversed in relation to astropy?
 		const r = rotZ(location.longitude, rotX(-yp, rotY(-xp, rotZ(theta + sprime))))
 		return Math.atan2(r[1], r[0])

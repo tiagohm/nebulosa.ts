@@ -3,7 +3,6 @@ import { DAYSEC } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import { eraC2teqx, eraGd2Gce } from './erfa'
 import type { Frame } from './frame'
-import { xy } from './iers'
 import { ELLIPSOID_PARAMETERS, type GeographicPosition } from './location'
 import type { MutMat3 } from './matrix'
 import { gast, pmMatrix, precessionNutation, type Time } from './time'
@@ -23,7 +22,7 @@ export function itrs(location: GeographicPosition): Readonly<CartesianCoordinate
 
 // Computes the ITRS rotation matrix at time.
 export function rotationAt(time: Time): MutMat3 {
-	return eraC2teqx(precessionNutation(time), gast(time), pmMatrix(xy, time))
+	return eraC2teqx(precessionNutation(time), gast(time), pmMatrix(time))
 }
 
 export const ITRS_FRAME: Frame = {
