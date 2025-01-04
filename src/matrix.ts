@@ -8,14 +8,16 @@ export type Mat3 = readonly [number, number, number, number, number, number, num
 // Like Mat3 but mutable.
 export type MutMat3 = Mutable<Mat3>
 
-// Creates a new zeroed matrix.
-export function zero(): MutMat3 {
-	return [0, 0, 0, 0, 0, 0, 0, 0, 0]
+// Creates or fills a matrix with zeroes.
+export function zero(o?: MutMat3): MutMat3 {
+	if (o) return fillWith(o, 0)
+	else return [0, 0, 0, 0, 0, 0, 0, 0, 0]
 }
 
-// Creates a new identity matrix.
-export function identity(): MutMat3 {
-	return [1, 0, 0, 0, 1, 0, 0, 0, 1]
+// Creates or fills an identity matrix.
+export function identity(o?: MutMat3): MutMat3 {
+	if (o) return fill(o, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+	else return [1, 0, 0, 0, 1, 0, 0, 0, 1]
 }
 
 // Fills the matrix.
@@ -29,6 +31,12 @@ export function fill(m: MutMat3, a: number, b: number, c: number, d: number, e: 
 	m[6] = g
 	m[7] = h
 	m[8] = i
+	return m
+}
+
+// Fills the matrix with a value.
+export function fillWith(m: MutMat3, v: number) {
+	for (let i = 0; i < 9; i++) m[i] = v
 	return m
 }
 
@@ -92,6 +100,12 @@ export function rotZ(angle: Angle, m?: MutMat3): MutMat3 {
 // Creates a new mutable Matrix from the given matrix.
 export function clone(m: Mat3): MutMat3 {
 	return [...m]
+}
+
+// Copies the matrix to another matrix.
+export function copy(m: Mat3, o: MutMat3): MutMat3 {
+	if (m !== o) for (let i = 0; i < 9; i++) o[i] = m[i]
+	return o
 }
 
 // Computes the determinant of the matrix.

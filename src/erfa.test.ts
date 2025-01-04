@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test'
 import { arcsec, toArcsec } from './angle'
 import { kilometer } from './distance'
 import * as erfa from './erfa'
-import type { Mat3 } from './matrix'
-import type { MutVec3 } from './vector'
+import type { Mat3, MutMat3 } from './matrix'
+import type { MutVec3, Vec3 } from './vector'
 import { kilometerPerSecond, toKilometerPerSecond } from './velocity'
 
 test('eraP2s', () => {
@@ -454,4 +454,126 @@ test('eraPmpx', () => {
 	expect(x).toBeCloseTo(0.2328137623960308438, 12)
 	expect(y).toBeCloseTo(0.6651097085397855328, 12)
 	expect(z).toBeCloseTo(0.7095257765896359837, 12)
+})
+
+test('eraAb', () => {
+	const pnat: Vec3 = [-0.76321968546737951, -0.60869453983060384, -0.21676408580639883]
+	const v: Vec3 = [2.1044018893653786e-5, -8.9108923304429319e-5, -3.8633714797716569e-5]
+	const [x, y, z] = erfa.eraAb(pnat, v, 0.99980921395708788, 0.99999999506209258)
+
+	expect(x).toBeCloseTo(-0.7631631094219556269, 12)
+	expect(y).toBeCloseTo(-0.6087553082505590832, 12)
+	expect(z).toBeCloseTo(-0.2167926269368471279, 12)
+})
+
+test('eraLd', () => {
+	const p: Vec3 = [-0.763276255, -0.608633767, -0.216735543]
+	const q: Vec3 = [-0.763276255, -0.608633767, -0.216735543]
+	const e: Vec3 = [0.76700421, 0.605629598, 0.211937094]
+	const [x, y, z] = erfa.eraLd(0.00028574, p, q, e, 8.91276983, 3e-10)
+
+	expect(x).toBeCloseTo(-0.7632762548968159627, 12)
+	expect(y).toBeCloseTo(-0.6086337670823762701, 12)
+	expect(z).toBeCloseTo(-0.2167355431320546947, 12)
+})
+
+test('eraLdSun', () => {
+	const p: Vec3 = [-0.763276255, -0.608633767, -0.216735543]
+	const e: Vec3 = [-0.973644023, -0.20925523, -0.0907169552]
+	const [x, y, z] = erfa.eraLdSun(p, e, 0.999809214)
+
+	expect(x).toBeCloseTo(-0.7632762580731413169, 12)
+	expect(y).toBeCloseTo(-0.60863376352626479, 12)
+	expect(z).toBeCloseTo(-0.2167355419322321302, 12)
+})
+
+test('eraLdn', () => {
+	const b: erfa.LdBody[] = [
+		{
+			bm: 0.00028574,
+			dl: 3e-10,
+			p: [-7.81014427, -5.60956681, -1.98079819],
+			v: [0.0030723249, -0.00406995477, -0.00181335842],
+		},
+		{
+			bm: 0.00095435,
+			dl: 3e-9,
+			p: [0.738098796, 4.63658692, 1.9693136],
+			v: [-0.00755816922, 0.00126913722, 0.000727999001],
+		},
+		{
+			bm: 1.0,
+			dl: 6e-6,
+			p: [-0.000712174377, -0.00230478303, -0.00105865966],
+			v: [6.29235213e-6, -3.30888387e-7, -2.96486623e-7],
+		},
+	]
+
+	const ob: Vec3 = [-0.974170437, -0.2115201, -0.0917583114]
+	const sc: Vec3 = [-0.763276255, -0.608633767, -0.216735543]
+
+	const [x, y, z] = erfa.eraLdn(b, ob, sc)
+
+	expect(x).toBeCloseTo(-0.7632762579693333866, 12)
+	expect(y).toBeCloseTo(-0.608633763609300266, 12)
+	expect(z).toBeCloseTo(-0.2167355420646328159, 12)
+})
+
+test('eraC2tcio', () => {
+	const rc2i: MutMat3 = [0.9999998323037164738, 0.5581526271714303683e-9, -0.5791308477073443903e-3, -0.2384266227524722273e-7, 0.9999999991917404296, -0.4020594955030704125e-4, 0.579130847216815332e-3, 0.4020595661593994396e-4, 0.9999998314954572365]
+	const rpom: Mat3 = [0.9999999999999674705, -0.1367174580728847031e-10, 0.2550602379999972723e-6, 0.1414624947957029721e-10, 0.9999999999982694954, -0.1860359246998866338e-5, -0.2550602379741215275e-6, 0.1860359247002413923e-5, 0.9999999999982369658]
+	const r = erfa.eraC2tcio(rc2i, 1.75283325530307, rpom, rc2i)
+
+	expect(r).toBe(rc2i)
+	expect(r[0]).toBeCloseTo(-0.1810332128307110439, 12)
+	expect(r[1]).toBeCloseTo(0.9834769806938470149, 12)
+	expect(r[2]).toBeCloseTo(0.6555535638685466874e-4, 12)
+	expect(r[3]).toBeCloseTo(-0.9834768134135996657, 12)
+	expect(r[4]).toBeCloseTo(-0.1810332203649448367, 12)
+	expect(r[5]).toBeCloseTo(0.5749801116141106528e-3, 12)
+	expect(r[6]).toBeCloseTo(0.5773474014081407076e-3, 12)
+	expect(r[7]).toBeCloseTo(0.3961832391772658944e-4, 12)
+	expect(r[8]).toBeCloseTo(0.9999998325501691969, 12)
+})
+
+test('eraC2ixys', () => {
+	const r = erfa.eraC2ixys(0.5791308486706011e-3, 0.4020579816732961219e-4, -0.1220040848472271978e-7)
+
+	expect(r[0]).toBeCloseTo(0.9999998323037157138, 12)
+	expect(r[1]).toBeCloseTo(0.5581984869168499149e-9, 12)
+	expect(r[2]).toBeCloseTo(-0.579130849161128218e-3, 12)
+	expect(r[3]).toBeCloseTo(-0.2384261642670440317e-7, 12)
+	expect(r[4]).toBeCloseTo(0.9999999991917468964, 12)
+	expect(r[5]).toBeCloseTo(-0.4020579110169668931e-4, 12)
+	expect(r[6]).toBeCloseTo(0.5791308486706011e-3, 12)
+	expect(r[7]).toBeCloseTo(0.4020579816732961219e-4, 12)
+	expect(r[8]).toBeCloseTo(0.999999831495462759, 12)
+})
+
+test('eraC2i06a', () => {
+	const r = erfa.eraC2i06a(2400000.5, 53736.0)
+
+	expect(r[0]).toBeCloseTo(0.9999998323037159379, 12)
+	expect(r[1]).toBeCloseTo(0.5581121329587613787e-9, 12)
+	expect(r[2]).toBeCloseTo(-0.5791308487740529749e-3, 12)
+	expect(r[3]).toBeCloseTo(-0.2384253169452306581e-7, 12)
+	expect(r[4]).toBeCloseTo(0.9999999991917467827, 12)
+	expect(r[5]).toBeCloseTo(-0.4020579392895682558e-4, 12)
+	expect(r[6]).toBeCloseTo(0.5791308482835292617e-3, 12)
+	expect(r[7]).toBeCloseTo(0.402058009945402031e-4, 12)
+	expect(r[8]).toBeCloseTo(0.9999998314954628695, 12)
+})
+
+test('eraC2t06a', () => {
+	const r = erfa.eraC2t06a(2400000.5, 53736.0, 2400000.5, 53736.0, 2.55060238e-7, 1.860359247e-6)
+
+	expect(r[0]).toBeCloseTo(-0.1810332128305897282, 12)
+	expect(r[1]).toBeCloseTo(0.9834769806938592296, 12)
+	expect(r[2]).toBeCloseTo(0.6555550962998436505e-4, 12)
+	expect(r[3]).toBeCloseTo(-0.9834768134136214897, 12)
+	expect(r[4]).toBeCloseTo(-0.1810332203649130832, 12)
+	expect(r[5]).toBeCloseTo(0.574980084490559411e-3, 12)
+	expect(r[6]).toBeCloseTo(0.5773474024748545878e-3, 12)
+	expect(r[7]).toBeCloseTo(0.3961816829632690581e-4, 12)
+	expect(r[8]).toBeCloseTo(0.9999998325501747785, 12)
 })

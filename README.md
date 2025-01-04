@@ -41,7 +41,6 @@ equatorial(p) // Transform to equatorial coordinate
 hourAngle(p, time) // Hour angle coordinate
 parallacticAngle(p, time)
 separationFrom(a, b) // Angle between the positions
-astrometric(bcrs, mas(10), ebp) // Apply parallax correction to BCRS cartesian coordinate
 ```
 
 ### Distance
@@ -127,6 +126,7 @@ rotX(PI, m) // Rotate the matrix around x-axis
 rotY(PI, m) // Rotate the matrix around y-axis
 rotZ(PI, m) // Rotate the matrix around z-axis
 clone(m) // Clone the matrix
+copy(m, n) // Copy the matrix to another matrix
 determinant(m) // Determinant of the matrix
 trace(m) // Trace of the matrix
 transpose(m) // Transpose the matrix
@@ -152,7 +152,8 @@ mulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
 
 ```ts
 const sirius = star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // Body from star parameters
-sirius.at(time) // BCRS cartesian coordinate at time
+at(sirius, time) // BCRS cartesian coordinate at time
+observedAt(sirius, time, [obp, obv]) // GCSR cartesian coordinate from observer at time
 ```
 
 ### Time

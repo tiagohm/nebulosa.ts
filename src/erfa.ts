@@ -1,13 +1,13 @@
 import { arcsec, ASEC2RAD, deg, MILLIASEC2RAD, normalize, TURNAS, type Angle } from './angle'
-import { DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI } from './constants'
+import { DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI } from './constants'
 import { toKilometer, type Distance } from './distance'
 import { FAIRHEAD } from './fairhead'
 import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
 import { IAU2000B_LS } from './iau2000b'
 import { IAU2006_S, IAU2006_SP } from './iau2006'
 import { pmod, roundToNearestWholeNumber } from './math'
-import { mul, rotX, rotY, rotZ, transpose, type Mat3, type MutMat3 } from './matrix'
-import { cross, divScalar, dot, fill, length, minus, mulScalar, normalizeMut, normalize as normalizeVec, plus, type MutVec3, type Vec3 } from './vector'
+import { clone as cloneMat, copy, identity, mul, rotX, rotY, rotZ, transpose, type Mat3, type MutMat3 } from './matrix'
+import { clone, cross, divScalar, dot, fill, length, minus, mulScalar, normalizeMut, normalize as normalizeVec, plus, zero, type MutVec3, type Vec3 } from './vector'
 import type { Velocity } from './velocity'
 
 const DBL_EPSILON = 2.220446049250313e-16
@@ -77,8 +77,6 @@ const LEAP_SECOND_DRIFT: LeapSecondDrift[] = [
 export type LeapSecondChange = readonly [number, number, number]
 
 export type LeapSecondDrift = readonly [number, number]
-
-export type PositionAndVelocity = readonly [MutVec3, MutVec3]
 
 // Normalizes [angle] into the range -[PI] <= a < +[PI].
 export function eraAnpm(angle: Angle): Angle {
@@ -497,7 +495,7 @@ export function eraEra00(ut11: number, ut12: number): Angle {
 	return normalize(TAU * (f + 0.779057273264 + 0.00273781191135448 * t))
 }
 
-// Equation of the origins, given the classical NPB matrix and the quantity [s].
+// Equation of the origins, given the classical NPB matrix and the CIO locator.
 export function eraEors(rnpb: Mat3, s: Angle): Angle {
 	const x = rnpb[6]
 	const ax = x / (1 + rnpb[8])
@@ -988,7 +986,7 @@ export function eraStarpv(ra: Angle, dec: Angle, pmRa: Angle, pmDec: Angle, para
 }
 
 // Convert position+velocity from spherical to cartesian coordinates.
-export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: Angle, rd: Velocity): PositionAndVelocity {
+export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: Angle, rd: Velocity): [MutVec3, MutVec3] {
 	const st = Math.sin(theta)
 	const ct = Math.cos(theta)
 	const sp = Math.sin(phi)
@@ -1006,7 +1004,7 @@ export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: An
 
 // NOT PRESENT IN ERFA!
 // Update star position+velocity vector for space motion.
-export function eraStarpmpv(pv1: PositionAndVelocity, ep1a: number, ep1b: number, ep2a: number, ep2b: number): PositionAndVelocity {
+export function eraStarpmpv(pv1: readonly [Vec3, Vec3], ep1a: number, ep1b: number, ep2a: number, ep2b: number): [MutVec3, MutVec3] {
 	// Light time when observed (days).
 	const tl1 = length(pv1[0]) / SPEED_OF_LIGHT_AU_DAY
 
@@ -1020,7 +1018,7 @@ export function eraStarpmpv(pv1: PositionAndVelocity, ep1a: number, ep1b: number
 	// at the "after" epoch (with theoretically unneccessary error check).
 	const v2 = dot(pv1[1], pv1[1])
 	const c2mv2 = SPEED_OF_LIGHT_AU_DAY * SPEED_OF_LIGHT_AU_DAY - v2
-    // if (c2mv2 <= 0) return false
+	// if (c2mv2 <= 0) return false
 
 	const r2 = dot(p1, p1)
 	const rdv = dot(p1, pv1[1])
@@ -1031,7 +1029,7 @@ export function eraStarpmpv(pv1: PositionAndVelocity, ep1a: number, ep1b: number
 	const p = eraPpsp(pv1[0], dt + (tl1 - tl2), pv1[1], p1)
 
 	// Space motion pv-vector at the "after" epoch.
-	return [p, pv1[1]]
+	return [p, clone(pv1[1])]
 }
 
 // Update star catalog data for space motion.
@@ -1200,4 +1198,143 @@ export function eraPmpx(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Angle, r
 	const p2 = z + dt * pm2 - pxr * pob[2]
 
 	return normalizeMut([p0, p1, p2])
+}
+
+// Apply aberration to transform natural direction into proper direction.
+export function eraAb(pnat: Vec3, v: Vec3, s: number, bm1: number): MutVec3 {
+	const pdv = dot(pnat, v)
+	const w1 = 1 + pdv / (1 + bm1)
+	const w2 = SCHWARZSCHILD_RADIUS_OF_THE_SUN / s
+	let r2 = 0
+
+	const p = zero()
+
+	for (let i = 0; i < 3; i++) {
+		const w = pnat[i] * bm1 + w1 * v[i] + w2 * (v[i] - pdv * pnat[i])
+		p[i] = w
+		r2 += w * w
+	}
+
+	return divScalar(p, Math.sqrt(r2), p)
+}
+
+export interface LdBody {
+	bm: number // mass of the body (solar masses)
+	dl: number // deflection limiter (radians^2/2)
+	// barycentric PV of the body (au, au/day)
+	p: Vec3
+	v: Vec3
+}
+
+// For a star, apply light deflection by multiple solar-system bodies,
+// as part of transforming coordinate direction into natural direction.
+export function eraLdn(b: LdBody[], ob: Vec3, sc: Vec3) {
+	const v = zero()
+	const ev = zero()
+
+	// Star direction prior to deflection.
+	const sn = clone(sc)
+
+	for (let i = 0; i < b.length; i++) {
+		// Body to observer vector at epoch of observation (au).
+		minus(ob, b[i].p, v)
+
+		// Minus the time since the light passed the body (days).
+		// Neutralize if the star is "behind" the observer.
+		const dt = Math.min(dot(sn, v) * (LIGHT_TIME_AU / DAYSEC), 0)
+
+		// Backtrack the body to the time the light was passing the body.
+		eraPpsp(v, -dt, b[i].v, ev)
+
+		// Body to observer vector as magnitude and direction.
+		const em = length(ev)
+		divScalar(ev, em, ev)
+
+		// Apply light deflection for this body.
+		eraLd(b[i].bm, sn, sn, ev, em, b[i].dl, sn)
+	}
+
+	return sn
+}
+
+// Apply light deflection by a solar-system body, as part of
+// transforming coordinate direction into natural direction.
+export function eraLd(bm: number, p: Vec3, q: Vec3, e: Vec3, em: number, dlim: number, p1?: MutVec3) {
+	// q . (q + e).
+	const qpe = plus(q, e)
+	const qdqpe = dot(q, qpe)
+
+	// 2 x G x bm / ( em x c^2 x ( q . (q + e) ) ).
+	const w = (bm * SCHWARZSCHILD_RADIUS_OF_THE_SUN) / em / Math.max(qdqpe, dlim)
+
+	// p x (e x q).
+	cross(p, cross(e, q, qpe), qpe)
+
+	// Apply the deflection.
+	return plus(p, mulScalar(qpe, w, qpe), p1 ?? qpe)
+}
+
+// Deflection of starlight by the Sun.
+export function eraLdSun(p: Vec3, e: Vec3, em: number) {
+	// Deflection limiter (smaller for distant observers).
+	const em2 = Math.max(1, em * em)
+
+	// Apply the deflection.
+	return eraLd(1, p, p, e, em, 1e-6 / em2)
+}
+
+// Form the celestial to terrestrial matrix given the date, the UT1 and
+// the polar motion, using the IAU 2006/2000A precession-nutation model.
+export function eraC2t06a(tt1: number, tt2: number, ut11: number, ut12: number, xp: Angle, yp: Angle) {
+	// Form the celestial-to-intermediate matrix for this TT.
+	const rc2i = eraC2i06a(tt1, tt2)
+
+	// Predict the Earth rotation angle for this UT1.
+	const era = eraEra00(ut11, ut12)
+
+	// Estimate s'.
+	const sp = eraSp00(tt1, tt2)
+
+	// Form the polar motion matrix.
+	const rpom = eraPom00(xp, yp, sp)
+
+	// Combine to form the celestial-to-terrestrial matrix.
+	return eraC2tcio(rc2i, era, rpom, rc2i)
+}
+
+// Form the celestial-to-intermediate matrix for a given date using the
+// IAU 2006 precession and IAU 2000A nutation models.
+export function eraC2i06a(tt1: number, tt2: number) {
+	// Obtain the celestial-to-true matrix (IAU 2006/2000A).
+	const rbpn = eraPnm06a(tt1, tt2)
+
+	// Extract the X,Y coordinates.
+	const x = rbpn[6]
+	const y = rbpn[7]
+
+	// Obtain the CIO locator.
+	const s = eraS06(tt1, tt2, x, y)
+
+	// Form the celestial-to-intermediate matrix.
+	return eraC2ixys(x, y, s, rbpn)
+}
+
+// Form the celestial to intermediate-frame-of-date matrix given the CIP X,Y and the CIO locator s.
+export function eraC2ixys(x: Angle, y: Angle, s: Angle, o?: MutMat3) {
+	// Obtain the spherical angles E and d.
+	const r2 = x * x + y * y
+	const e = r2 > 0 ? Math.atan2(y, x) : 0
+	const d = Math.atan(Math.sqrt(r2 / (1 - r2)))
+
+	// Form the matrix.
+	if (o) identity(o)
+	return rotZ(-(e + s), rotY(d, rotZ(e, o)))
+}
+
+// Assemble the celestial to terrestrial matrix from CIO-based
+// components (the celestial-to-intermediate matrix, the Earth Rotation
+// Angle and the polar motion matrix).
+export function eraC2tcio(rc2i: Mat3, era: Angle, rpom: Mat3, o?: MutMat3) {
+	o = o ? copy(rc2i, o) : cloneMat(rc2i)
+	return mul(rpom, rotZ(era, o), o)
 }

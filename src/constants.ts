@@ -65,7 +65,8 @@ export const SPEED_OF_LIGHT = 299792458
 export const LIGHT_TIME_AU = AU_M / SPEED_OF_LIGHT
 
 // Schwarzschild radius of the Sun (AU).
-export const SCHWARZSCHILD_RADIUS_OF_THE_SUN = 1.97412574336e-8
+// 2 * 1.32712440041e20 / (2.99792458e8)^2 / 1.49597870700e11
+export const SCHWARZSCHILD_RADIUS_OF_THE_SUN = 1.974125743363687131156424e-8
 
 // Speed of light (AU per day).
 export const SPEED_OF_LIGHT_AU_DAY = (SPEED_OF_LIGHT * DAYSEC) / AU_M
