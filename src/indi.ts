@@ -38,13 +38,7 @@ export enum VectorType {
 	BLOB = 'BLOB',
 }
 
-export type CommandType = 'message' | 'delProperty' | `def${VectorType}Vector` | `set${VectorType}Vector` | `new${VectorType}Vector`
-
 export type ValueType = string | number | boolean
-
-export interface Command {
-	type: CommandType
-}
 
 // Commands from Device to Client:
 
@@ -59,7 +53,6 @@ export interface GetProperties {
 
 // Define a property that holds one or more text elements.
 export interface DefTextVector {
-	type: CommandType
 	device: string
 	name: string
 	label?: string
@@ -81,7 +74,6 @@ export interface DefText {
 
 // Define a property that holds one or more numeric values.
 export interface DefNumberVector {
-	type: CommandType
 	device: string
 	name: string
 	label?: string
@@ -108,7 +100,6 @@ export interface DefNumber {
 // Define a collection of switches. Rule is only a hint for use by a GUI to decide a suitable
 // presentation style. Rules are actually implemented wholly within the Device.
 export interface DefSwitchVector {
-	type: CommandType
 	device: string
 	name: string
 	label?: string
@@ -131,7 +122,6 @@ export interface DefSwitch {
 
 // Define a collection of passive indicator lights.
 export interface DefLightVector {
-	type: CommandType
 	device: string
 	name: string
 	label?: string
@@ -151,7 +141,6 @@ export interface DefLight {
 
 // Define a property that holds one or more Binary Large Objects, BLOBs.
 export interface DefBlobVector {
-	type: CommandType
 	device: string
 	name: string
 	label?: string
@@ -174,33 +163,8 @@ export interface DefBlob {
 export type DefVector = DefTextVector | DefNumberVector | DefSwitchVector | DefLightVector | DefBlobVector
 export type DefElement = DefText | DefNumber | DefSwitch | DefLight | DefBlob
 
-export function isDefTextVector(command: Command): command is DefTextVector {
-	return command.type === 'defTextVector'
-}
-
-export function isDefNumberVector(command: Command): command is DefNumberVector {
-	return command.type === 'defNumberVector'
-}
-
-export function isDefSwitchVector(command: Command): command is DefSwitchVector {
-	return command.type === 'defSwitchVector'
-}
-
-export function isDefLightVector(command: Command): command is DefLightVector {
-	return command.type === 'defLightVector'
-}
-
-export function isDefBlobVector(command: Command): command is DefBlobVector {
-	return command.type === 'defBLOBVector'
-}
-
-export function isDefVector(command: Command): command is DefVector {
-	return command.type.startsWith('def')
-}
-
 // Send a new set of values for a Text vector, with optional new timeout, state and message.
 export interface SetTextVector {
-	type: CommandType
 	device: string
 	name: string
 	state?: PropertyState
@@ -212,7 +176,6 @@ export interface SetTextVector {
 
 // Send a new set of values for a Number vector, with optional new timeout, state and message.
 export interface SetNumberVector {
-	type: CommandType
 	device: string
 	name: string
 	state?: PropertyState
@@ -224,7 +187,6 @@ export interface SetNumberVector {
 
 // Send a new set of values for a Switch vector, with optional new timeout, state and message.
 export interface SetSwitchVector {
-	type: CommandType
 	device: string
 	name: string
 	state?: PropertyState
@@ -236,7 +198,6 @@ export interface SetSwitchVector {
 
 // Send a new set of values for a Light vector, with optional new state and message.
 export interface SetLightVector {
-	type: CommandType
 	device: string
 	name: string
 	state?: PropertyState
@@ -247,7 +208,6 @@ export interface SetLightVector {
 
 // Send a new set of values for a BLOB vector, with optional new timeout, state and message.
 export interface SetBlobVector {
-	type: CommandType
 	device: string
 	name: string
 	state?: PropertyState
@@ -259,33 +219,8 @@ export interface SetBlobVector {
 
 export type SetVector = SetTextVector | SetNumberVector | SetSwitchVector | SetLightVector | SetBlobVector
 
-export function isSetTextVector(command: Command): command is SetTextVector {
-	return command.type === 'setTextVector'
-}
-
-export function isSetNumberVector(command: Command): command is SetNumberVector {
-	return command.type === 'setNumberVector'
-}
-
-export function isSetSwitchVector(command: Command): command is SetSwitchVector {
-	return command.type === 'setSwitchVector'
-}
-
-export function isSetLightVector(command: Command): command is SetLightVector {
-	return command.type === 'setLightVector'
-}
-
-export function isSetBlobVector(command: Command): command is SetBlobVector {
-	return command.type === 'setBLOBVector'
-}
-
-export function isSetVector(command: Command): command is SetVector {
-	return command.type.startsWith('set')
-}
-
 // Send a message associated with a device or entire system.
 export interface Message {
-	type: CommandType
 	device?: string
 	timestamp?: string
 	message: string
@@ -293,19 +228,10 @@ export interface Message {
 
 // Delete the given property, or entire device if no property is specified.
 export interface DelProperty {
-	type: CommandType
 	device: string
 	name?: string
 	timestamp?: string
 	message?: string
-}
-
-export function isMessage(command: Command): command is Message {
-	return command.type === 'message'
-}
-
-export function isDelProperty(command: Command): command is DelProperty {
-	return command.type === 'delProperty'
 }
 
 // Send a message to specify state of one member of a Light vector.
@@ -399,25 +325,17 @@ export interface OneBlob {
 
 export type OneElement = OneText | OneNumber | OneSwitch | OneLight | OneBlob
 
-export function isText(command: Command) {
-	return isDefTextVector(command) || isSetTextVector(command)
-}
+export type TextVector = DefTextVector | SetTextVector | NewTextVector
+export type NumberVector = DefNumberVector | SetNumberVector | NewNumberVector
+export type SwitchVector = DefSwitchVector | SetSwitchVector | NewSwitchVector
+export type LightVector = DefLightVector | SetLightVector
+export type BlobVector = DefBlobVector | SetBlobVector | NewBlobVector
 
-export function isNumber(command: Command) {
-	return isDefNumberVector(command) || isSetNumberVector(command)
-}
-
-export function isSwitch(command: Command) {
-	return isDefSwitchVector(command) || isSetSwitchVector(command)
-}
-
-export function isLight(command: Command) {
-	return isDefLightVector(command) || isSetLightVector(command)
-}
-
-export function isBlob(command: Command) {
-	return isDefBlobVector(command) || isSetBlobVector(command)
-}
+export type TextElement = OneText | DefText
+export type NumberElement = OneNumber | DefNumber
+export type SwitchElement = OneSwitch | DefSwitch
+export type LightElement = OneLight | DefLight
+export type BlobElement = OneBlob | DefBlob
 
 export interface IndiClientOptions {
 	onMessage?: (message: Message) => void
@@ -427,13 +345,14 @@ export interface IndiClientOptions {
 	onDefSwitchVector?: (message: DefSwitchVector) => void
 	onDefLightVector?: (message: DefLightVector) => void
 	onDefBlobVector?: (message: DefBlobVector) => void
-	onDefVector?: (message: DefVector, name: string) => void
+	onDefVector?: (message: DefVector, name: `def${VectorType}Vector`) => void
 	onSetTextVector?: (message: SetTextVector) => void
 	onSetNumberVector?: (message: SetNumberVector) => void
 	onSetSwitchVector?: (message: SetSwitchVector) => void
 	onSetLightVector?: (message: SetLightVector) => void
 	onSetBlobVector?: (message: SetBlobVector) => void
-	onSetVector?: (message: SetVector, name: string) => void
+	onSetVector?: (message: SetVector, name: `set${VectorType}Vector`) => void
+	onClose?: () => void
 }
 
 export class IndiClient {
@@ -457,15 +376,19 @@ export class IndiClient {
 					this.socket = socket
 					this.getProperties()
 				},
-				// close(socket) {},
-				// drain(socket) {},
-				// error(socket, error) {},
-
+				close: () => {
+					console.warn('connection closed by client')
+					this.options?.onClose?.()
+				},
+				error: (_, error) => {
+					console.error('connection failed', error)
+				},
 				connectError: (_, error) => {
 					console.error('connection failed', error)
 				},
 				end: () => {
 					console.warn('connection closed by server')
+					this.options?.onClose?.()
 				},
 				timeout: () => {
 					console.warn('connection timed out')
@@ -487,7 +410,6 @@ export class IndiClient {
 
 	private parseDefVector(tag: SimpleXmlElement) {
 		const message = {
-			type: tag.name,
 			device: tag.attributes.device,
 			name: tag.attributes.name,
 			label: tag.attributes.label,
@@ -501,28 +423,28 @@ export class IndiClient {
 		} as DefVector
 
 		for (const child of tag.children) {
-			switch (tag.name) {
-				case 'defTextVector': {
+			switch (child.name) {
+				case 'defText': {
 					const element = { name: child.attributes.name, label: child.attributes.label, value: child.text } as DefText
 					;(message as DefTextVector).elements.push(element)
 					break
 				}
-				case 'defNumberVector': {
+				case 'defNumber': {
 					const element = { name: child.attributes.name, label: child.attributes.label, format: child.attributes.format, min: parseFloat(child.attributes.min), max: parseFloat(child.attributes.max), step: parseFloat(child.attributes.step), value: parseFloat(child.text) } as DefNumber
 					;(message as DefNumberVector).elements.push(element)
 					break
 				}
-				case 'defSwitchVector': {
+				case 'defSwitch': {
 					const element = { name: child.attributes.name, label: child.attributes.label, value: child.text === 'On' } as DefSwitch
 					;(message as DefSwitchVector).elements.push(element)
 					break
 				}
-				case 'defLightVector': {
+				case 'defLight': {
 					const element = { name: child.attributes.name, label: child.attributes.label, value: child.text } as DefLight
 					;(message as DefLightVector).elements.push(element)
 					break
 				}
-				case 'defBLOBVector': {
+				case 'defBLOB': {
 					const element = { name: child.attributes.name, label: child.attributes.label } as DefBlob
 					;(message as DefBlobVector).elements.push(element)
 					break
@@ -535,7 +457,6 @@ export class IndiClient {
 
 	private parseSetVector(tag: SimpleXmlElement) {
 		const message = {
-			type: tag.name,
 			device: tag.attributes.device,
 			name: tag.attributes.name,
 			state: tag.attributes.state,
@@ -546,28 +467,28 @@ export class IndiClient {
 		} as SetVector
 
 		for (const child of tag.children) {
-			switch (tag.name) {
-				case 'setTextVector': {
+			switch (child.name) {
+				case 'oneText': {
 					const e = { name: child.attributes.name, value: child.text } as OneText
 					;(message as SetTextVector).elements.push(e)
 					break
 				}
-				case 'setNumberVector': {
+				case 'oneNumber': {
 					const e = { name: child.attributes.name, value: parseFloat(child.text) } as OneNumber
 					;(message as SetNumberVector).elements.push(e)
 					break
 				}
-				case 'setSwitchVector': {
+				case 'oneSwitch': {
 					const e = { name: child.attributes.name, value: child.text === 'On' } as OneSwitch
 					;(message as SetSwitchVector).elements.push(e)
 					break
 				}
-				case 'setLightVector': {
+				case 'oneLight': {
 					const e = { name: child.attributes.name, value: child.text } as OneLight
 					;(message as SetLightVector).elements.push(e)
 					break
 				}
-				case 'setBLOBVector': {
+				case 'oneBLOB': {
 					const e = { name: child.attributes.name, size: child.attributes.size, format: child.attributes.format, value: child.text } as OneBlob
 					;(message as SetBlobVector).elements.push(e)
 					break
@@ -584,12 +505,12 @@ export class IndiClient {
 		switch (tag.name) {
 			case 'message':
 				if (this.options?.onMessage) {
-					this.options.onMessage({ type: tag.name, device: a.device, timestamp: a.timestamp, message: a.message })
+					this.options.onMessage({ device: a.device, timestamp: a.timestamp, message: a.message })
 				}
 				break
 			case 'delProperty':
 				if (this.options?.onDelProperty) {
-					this.options.onDelProperty({ type: tag.name, device: a.device, name: a.name, timestamp: a.timestamp, message: a.message })
+					this.options.onDelProperty({ device: a.device, name: a.name, timestamp: a.timestamp, message: a.message })
 				}
 				break
 			case 'defTextVector':
@@ -895,7 +816,7 @@ export class SimpleXmlParser {
 
 				break
 			default:
-				throw new Error('unknown state')
+				console.warn(`unknown state: ${context.state}`)
 		}
 
 		this.prevCode = code
