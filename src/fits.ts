@@ -10,20 +10,20 @@ export interface FitsHeaderItem {
 }
 
 export interface FitsData {
-	handle?: FileHandle
-	buffer?: Buffer
-	size: number
-	offset: number
+	readonly handle?: FileHandle
+	readonly buffer?: Buffer
+	readonly size: number
+	readonly offset: number
 }
 
 export interface FitsHdu {
-	header: FitsHeader
-	data?: FitsData
+	readonly header: FitsHeader
+	readonly data?: FitsData
 }
 
 export interface Fits {
-	hdus: FitsHdu[]
-	close: () => Promise<void>
+	readonly hdus: FitsHdu[]
+	readonly close: () => Promise<void>
 }
 
 export enum BitPix {
@@ -62,14 +62,10 @@ export async function read(path: PathLike): Promise<Fits | undefined> {
 	}
 
 	let position = 0
+	let header: FitsHeader = {}
 	const hdus: FitsHdu[] = []
 
 	while (true) {
-		if (position > 0 && hdus.length === 0) {
-			await handle.close()
-			return undefined
-		}
-
 		const result = await handle.read(buffer, 0, BLOCK_SIZE, position)
 		if (result.bytesRead === 0) break
 		position += BLOCK_SIZE
@@ -78,36 +74,29 @@ export async function read(path: PathLike): Promise<Fits | undefined> {
 			const [keyword, item] = parseHeader(buffer, i)
 
 			if (keyword === 'SIMPLE' || keyword === 'XTENSION') {
-				hdus.push({ header: { [keyword]: item } })
+				header = { [keyword]: item }
+			} else if (!keyword) {
+				await handle.close()
+				console.warn('Invalid FITS file')
+				return undefined
+			} else if (keyword === 'END') {
+				const size = naxis(header) * naxisn(header, 1) * naxisn(header, 2) * Math.abs(bitPix(header) / 8)
+				const offset = position
+
+				if (size % BLOCK_SIZE !== 0) position += BLOCK_SIZE - (size % BLOCK_SIZE)
+				position += size
+
+				hdus.push({ header, data: { handle, size, offset } })
+				break
+			} else if (item.value === undefined && !item.comment) {
+				continue
+			} else if (item.value === undefined) {
+				const card = header[keyword]
+
+				if (card) card.comment! += `\n${item.comment}`
+				else header[keyword] = item
 			} else {
-				const hdu = hdus[hdus.length - 1]
-				const { header } = hdu
-
-				if (!keyword || keyword === 'END') {
-					const size = naxis(header) * naxisn(header, 1) * naxisn(header, 2) * Math.abs(bitPix(header) / 8)
-
-					if (size <= 0) {
-						await handle.close()
-						return undefined
-					}
-
-					const offset = position
-
-					if (size % BLOCK_SIZE !== 0) position += BLOCK_SIZE - (size % BLOCK_SIZE)
-					position += size
-
-					hdu.data = { handle, size, offset }
-					break
-				} else if (item.value === undefined && !item.comment) {
-					continue
-				} else if (item.value === undefined) {
-					const card = header[keyword]
-
-					if (card) card.comment! += `\n${item.comment}`
-					else header[keyword] = item
-				} else {
-					header[keyword] = item
-				}
+				header[keyword] = item
 			}
 		}
 	}
