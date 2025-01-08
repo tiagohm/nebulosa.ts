@@ -986,7 +986,7 @@ export function eraStarpv(ra: Angle, dec: Angle, pmRa: Angle, pmDec: Angle, para
 }
 
 // Convert position+velocity from spherical to cartesian coordinates.
-export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: Angle, rd: Velocity): [MutVec3, MutVec3] {
+export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: Angle, rd: Velocity): readonly [MutVec3, MutVec3] {
 	const st = Math.sin(theta)
 	const ct = Math.cos(theta)
 	const sp = Math.sin(phi)

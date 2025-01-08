@@ -65,6 +65,12 @@ export default tseslint.config(
 					allowTernary: true,
 				},
 			],
+			'@typescript-eslint/no-unnecessary-condition': [
+				'error',
+				{
+					allowConstantLoopConditions: true,
+				},
+			],
 		},
 	},
 )
