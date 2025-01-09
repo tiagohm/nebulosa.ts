@@ -62,6 +62,12 @@ toParsec(1) // Convert AU to parsec
 TODO
 ```
 
+### Fits
+
+```ts
+read(path) // Read FITS file
+```
+
 ### FK5
 
 ```ts
@@ -86,6 +92,14 @@ iersa.load(Bun.file('finals2000A.txt').stream())
 iersb.load(Bun.file('eopc04.1962-now.txt').stream())
 delta(time) // UT1-UTC at time
 xy(time) // Polar motion angles at time
+```
+
+### Image
+
+```ts
+fromFits(path) // Create image from FITS file
+toFormat(image, path, format) // Save image to path as png, jpeg, webp, etc
+stf(image, midtone, shadow, highlight) // Apply STF to image
 ```
 
 ### ITRS
@@ -151,9 +165,9 @@ mulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
 ### Star
 
 ```ts
-const sirius = star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // Body from star parameters
+const sirius = star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // ICRS cartesian coordinate from star parameters
 at(sirius, time) // BCRS cartesian coordinate at time
-observedAt(sirius, time, [obp, obv]) // GCSR cartesian coordinate from observer at time
+observedAt(sirius, time, [obp, obv]) // GCRS cartesian coordinate from observer at time
 ```
 
 ### Time
