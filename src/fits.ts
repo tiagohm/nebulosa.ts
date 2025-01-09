@@ -26,7 +26,7 @@ export interface Fits {
 	readonly close: () => Promise<void>
 }
 
-export enum BitPix {
+export enum Bitpix {
 	BYTE = 8,
 	SHORT = 16,
 	INTEGER = 32,
@@ -43,8 +43,8 @@ export function naxisn(header: FitsHeader, n: number, value: number = 0) {
 	return (header[`NAXIS${n}`]?.value as number | undefined) ?? value
 }
 
-export function bitPix(header: FitsHeader): BitPix | 0 {
-	return (header.BITPIX?.value as BitPix | undefined) ?? 0
+export function bitpix(header: FitsHeader): Bitpix | 0 {
+	return (header.BITPIX?.value as Bitpix | undefined) ?? 0
 }
 
 const BLOCK_SIZE = 2880
@@ -80,7 +80,7 @@ export async function read(path: PathLike): Promise<Fits | undefined> {
 				console.warn('Invalid FITS file')
 				return undefined
 			} else if (keyword === 'END') {
-				const size = naxis(header) * naxisn(header, 1) * naxisn(header, 2) * Math.abs(bitPix(header) / 8)
+				const size = naxis(header) * naxisn(header, 1) * naxisn(header, 2) * Math.abs(bitpix(header) / 8)
 				const offset = position
 
 				if (size % BLOCK_SIZE !== 0) position += BLOCK_SIZE - (size % BLOCK_SIZE)

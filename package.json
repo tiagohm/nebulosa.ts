@@ -18,5 +18,8 @@
 		"@types/bun": "latest",
 		"@types/node": "latest",
 		"typescript": "~5.7.2"
+	},
+	"optionalDependencies": {
+		"sharp": "0.33.5"
 	}
 }
