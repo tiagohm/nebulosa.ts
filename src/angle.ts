@@ -119,11 +119,11 @@ export function toMas(angle: Angle): number {
 }
 
 // Extracts the degrees, minutes and seconds from the angle.
-export function toDms(angle: Angle): [number, number, number, boolean] {
+export function toDms(angle: Angle): [number, number, number, number] {
 	const d = Math.abs(toDeg(angle))
 	const m = ((d - Math.trunc(d)) * 60) % 60
 	const s = ((m - Math.trunc(m)) * 60) % 60
-	return [Math.abs(Math.trunc(d)), Math.trunc(m), s, angle < 0]
+	return [Math.abs(Math.trunc(d)), Math.trunc(m), s, Math.sign(angle)]
 }
 
 // Extracts the hours, minutes and seconds from the angle.
@@ -214,20 +214,34 @@ export function formatAngle(angle: Angle, options?: Partial<FormatAngleOptions>)
 	const separators = options?.separators ?? DEFAULT_FORMAT_ANGLE_OPTIONS.separators
 	const fractionDigits = options?.fractionDigits ?? DEFAULT_FORMAT_ANGLE_OPTIONS.fractionDigits
 
-	const [a, b, c, neg] = isHour ? toHms(angle) : toDms(angle)
-	const sign = noSign && !neg ? '' : neg ? minusSign : plusSign
+	const hdms = isHour ? toHms(angle) : toDms(angle)
+	const sign = noSign && (hdms[3] === undefined || hdms[3] === 1) ? '' : hdms[3] === -1 ? minusSign : plusSign
 	const sa = separators[0] ?? ' '
 	const sb = separators[1] ?? (noSecond ? '' : sa)
 	const sc = separators[2] ?? ''
 
-	const d = `${Math.abs(a)}`.padStart(2, '0')
-	const m = `${Math.abs(b)}`.padStart(2, '0')
-	const s = noSecond ? '' : c.toFixed(fractionDigits)
+	if (hdms[2].toFixed(fractionDigits).startsWith('60')) {
+		hdms[2] = 0
+		hdms[1]++
+
+		if (hdms[1] >= 60) {
+			hdms[1] = 0
+			hdms[0]++
+
+			if (isHour && hdms[0] == 24) {
+				hdms[0] = 0
+			}
+		}
+	}
+
+	const d = `${Math.abs(hdms[0])}`.padStart(2, '0')
+	const m = `${Math.abs(hdms[1])}`.padStart(2, '0')
+	const s = noSecond ? '' : hdms[2].toFixed(fractionDigits).padStart(fractionDigits === 0 ? 2 : fractionDigits + 3, '0')
 
 	return `${sign}${d}${sa}${m}${sb}${s}${sc}`
 }
 
-const DEFAULT_HMS_FORMAT: Partial<FormatAngleOptions> = { isHour: true, separators: ':' }
+const DEFAULT_HMS_FORMAT: Partial<FormatAngleOptions> = { isHour: true, separators: ':', noSign: true }
 const DEFAULT_DMS_FORMAT: Partial<FormatAngleOptions> = { noSign: true, separators: 'dms' }
 const DEFAULT_SIGNED_DMS_FORMAT: Partial<FormatAngleOptions> = { ...DEFAULT_DMS_FORMAT, noSign: false }
 

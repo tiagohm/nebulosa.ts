@@ -65,10 +65,10 @@ test('toHour', () => {
 })
 
 test('toDms', () => {
-	expect(toDms(deg(45.21561666666666666666666666666667))).toEqual([45, 12, 56.220000000009236, false])
-	expect(toDms(-deg(45.21561666666666666666666666666667))).toEqual([45, 12, 56.220000000009236, true])
-	expect(toDms(deg(0.1))).toEqual([0, 6, 0, false])
-	expect(toDms(-deg(0.1))).toEqual([0, 6, 0, true])
+	expect(toDms(deg(45.21561666666666666666666666666667))).toEqual([45, 12, 56.220000000009236, 1])
+	expect(toDms(-deg(45.21561666666666666666666666666667))).toEqual([45, 12, 56.220000000009236, -1])
+	expect(toDms(deg(0.1))).toEqual([0, 6, 0, 1])
+	expect(toDms(-deg(0.1))).toEqual([0, 6, 0, -1])
 })
 
 test('toHms', () => {
@@ -241,93 +241,100 @@ describe('parseAngle', () => {
 
 describe('formatAngle', () => {
 	test('default', () => {
-		expect(formatAngle(deg(23.5634453))).toBe(`+23 33 48.40`)
-		expect(formatAngle(deg(-23.5634453))).toBe(`-23 33 48.40`)
+		expect(formatAngle(deg(23.5634453))).toBe('+23 33 48.40')
+		expect(formatAngle(deg(-23.5634453))).toBe('-23 33 48.40')
 	})
 
 	test('isHour', () => {
 		const options: Partial<FormatAngleOptions> = { isHour: true }
-		expect(formatAngle(hour(23.5634453), options)).toBe(`+23 33 48.40`)
-		expect(formatAngle(hour(-23.5634453), options)).toBe(`+00 26 11.60`)
+		expect(formatAngle(hour(23.5634453), options)).toBe('+23 33 48.40')
+		expect(formatAngle(hour(-23.5634453), options)).toBe('+00 26 11.60')
 	})
 
 	test('noSign', () => {
 		const options: Partial<FormatAngleOptions> = { noSign: true }
-		expect(formatAngle(deg(23.5634453), options)).toBe(`23 33 48.40`)
-		expect(formatAngle(deg(-23.5634453), options)).toBe(`-23 33 48.40`)
+		expect(formatAngle(deg(23.5634453), options)).toBe('23 33 48.40')
+		expect(formatAngle(deg(-23.5634453), options)).toBe('-23 33 48.40')
 	})
 
 	test('isHourAndNoSign', () => {
 		const options: Partial<FormatAngleOptions> = { isHour: true, noSign: true }
-		expect(formatAngle(hour(23.5634453), options)).toBe(`23 33 48.40`)
-		expect(formatAngle(hour(-23.5634453), options)).toBe(`00 26 11.60`)
+		expect(formatAngle(hour(23.5634453), options)).toBe('23 33 48.40')
+		expect(formatAngle(hour(-23.5634453), options)).toBe('00 26 11.60')
 	})
 
 	test('noSecond', () => {
 		const options: Partial<FormatAngleOptions> = { noSecond: true }
-		expect(formatAngle(deg(23.5634453), options)).toBe(`+23 33`)
-		expect(formatAngle(deg(-23.5634453), options)).toBe(`-23 33`)
+		expect(formatAngle(deg(23.5634453), options)).toBe('+23 33')
+		expect(formatAngle(deg(-23.5634453), options)).toBe('-23 33')
 	})
 
 	test('isHourAndNoSecond', () => {
 		const options: Partial<FormatAngleOptions> = { isHour: true, noSecond: true }
-		expect(formatAngle(hour(23.5634453), options)).toBe(`+23 33`)
-		expect(formatAngle(hour(-23.5634453), options)).toBe(`+00 26`)
+		expect(formatAngle(hour(23.5634453), options)).toBe('+23 33')
+		expect(formatAngle(hour(-23.5634453), options)).toBe('+00 26')
 	})
 
 	test('hourAndNoSignAndNoSecond', () => {
 		const options: Partial<FormatAngleOptions> = { isHour: true, noSign: true, noSecond: true }
-		expect(formatAngle(hour(23.5634453), options)).toBe(`23 33`)
-		expect(formatAngle(hour(-23.5634453), options)).toBe(`00 26`)
+		expect(formatAngle(hour(23.5634453), options)).toBe('23 33')
+		expect(formatAngle(hour(-23.5634453), options)).toBe('00 26')
 	})
 
 	test('fractionDigits', () => {
 		const options: Partial<FormatAngleOptions> = { fractionDigits: 8 }
-		expect(formatAngle(deg(23.5634453), options)).toBe(`+23 33 48.40308000`)
-		expect(formatAngle(deg(-23.5634453), options)).toBe(`-23 33 48.40308000`)
+		expect(formatAngle(deg(23.5634453), options)).toBe('+23 33 48.40308000')
+		expect(formatAngle(deg(-23.5634453), options)).toBe('-23 33 48.40308000')
 	})
 
 	test('ishourAndFractionDigits', () => {
 		const options: Partial<FormatAngleOptions> = { isHour: true, fractionDigits: 8 }
-		expect(formatAngle(hour(23.5634453), options)).toBe(`+23 33 48.40308000`)
-		expect(formatAngle(hour(-23.5634453), options)).toBe(`+00 26 11.59692000`)
+		expect(formatAngle(hour(23.5634453), options)).toBe('+23 33 48.40308000')
+		expect(formatAngle(hour(-23.5634453), options)).toBe('+00 26 11.59692000')
 	})
 
 	test('separators', () => {
 		const options: Partial<FormatAngleOptions> = { separators: ['a', 'b', 'c'] }
-		expect(formatAngle(deg(23.5634453), options)).toBe(`+23a33b48.40c`)
-		expect(formatAngle(deg(-23.5634453), options)).toBe(`-23a33b48.40c`)
+		expect(formatAngle(deg(23.5634453), options)).toBe('+23a33b48.40c')
+		expect(formatAngle(deg(-23.5634453), options)).toBe('-23a33b48.40c')
 	})
 
 	test('isHourAndSeparators', () => {
 		const options: Partial<FormatAngleOptions> = { isHour: true, separators: [':'] }
-		expect(formatAngle(hour(23.5634453), options)).toBe(`+23:33:48.40`)
-		expect(formatAngle(hour(-23.5634453), options)).toBe(`+00:26:11.60`)
+		expect(formatAngle(hour(23.5634453), options)).toBe('+23:33:48.40')
+		expect(formatAngle(hour(-23.5634453), options)).toBe('+00:26:11.60')
 	})
 
 	test('plusSign', () => {
 		const options: Partial<FormatAngleOptions> = { plusSign: '*' }
-		expect(formatAngle(deg(23.5634453), options)).toBe(`*23 33 48.40`)
-		expect(formatAngle(hour(23.5634453), { ...options, isHour: true })).toBe(`*23 33 48.40`)
+		expect(formatAngle(deg(23.5634453), options)).toBe('*23 33 48.40')
+		expect(formatAngle(hour(23.5634453), { ...options, isHour: true })).toBe('*23 33 48.40')
 	})
 
 	test('minusSign', () => {
 		const options: Partial<FormatAngleOptions> = { minusSign: '#' }
-		expect(formatAngle(deg(-23.5634453), options)).toBe(`#23 33 48.40`)
+		expect(formatAngle(deg(-23.5634453), options)).toBe('#23 33 48.40')
 	})
 })
 
 test('formatHMS', () => {
-	expect(formatHMS(hour(23.5634453))).toBe(`+23:33:48.40`)
-	expect(formatHMS(hour(-23.5634453))).toBe(`+00:26:11.60`)
+	expect(formatHMS(hour(23.5634453))).toBe('23:33:48.40')
+	expect(formatHMS(hour(-23.5634453))).toBe('00:26:11.60')
+	expect(formatHMS(hour(10))).toBe('10:00:00.00')
+	expect(formatHMS(hour(24))).toBe('00:00:00.00')
+	expect(formatHMS(hour(25))).toBe('01:00:00.00')
 })
 
 test('formatDMS', () => {
-	expect(formatDMS(deg(23.5634453))).toBe(`23d33m48.40s`)
-	expect(formatDMS(deg(-23.5634453))).toBe(`-23d33m48.40s`)
+	expect(formatDMS(deg(23.5634453))).toBe('23d33m48.40s')
+	expect(formatDMS(deg(-23.5634453))).toBe('-23d33m48.40s')
+	expect(formatDMS(deg(10))).toBe('10d00m00.00s')
+	expect(formatDMS(deg(-10))).toBe('-10d00m00.00s')
 })
 
 test('formatSignedDMS', () => {
-	expect(formatSignedDMS(deg(23.5634453))).toBe(`+23d33m48.40s`)
-	expect(formatSignedDMS(deg(-23.5634453))).toBe(`-23d33m48.40s`)
+	expect(formatSignedDMS(deg(23.5634453))).toBe('+23d33m48.40s')
+	expect(formatSignedDMS(deg(-23.5634453))).toBe('-23d33m48.40s')
+	expect(formatSignedDMS(deg(10))).toBe('+10d00m00.00s')
+	expect(formatSignedDMS(deg(-10))).toBe('-10d00m00.00s')
 })
