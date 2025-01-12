@@ -219,16 +219,19 @@ export function formatAngle(angle: Angle, options?: Partial<FormatAngleOptions>)
 	const sa = separators[0] ?? ' '
 	const sb = separators[1] ?? (noSecond ? '' : sa)
 	const sc = separators[2] ?? ''
+	let s = hdms[2].toFixed(fractionDigits)
 
-	if (hdms[2].toFixed(fractionDigits).startsWith('60')) {
+	if (s.startsWith('60')) {
 		hdms[2] = 0
 		hdms[1]++
+
+		if (!noSecond) s = hdms[2].toFixed(fractionDigits)
 
 		if (hdms[1] >= 60) {
 			hdms[1] = 0
 			hdms[0]++
 
-			if (isHour && hdms[0] == 24) {
+			if (isHour && hdms[0] === 24) {
 				hdms[0] = 0
 			}
 		}
@@ -236,7 +239,7 @@ export function formatAngle(angle: Angle, options?: Partial<FormatAngleOptions>)
 
 	const d = `${Math.abs(hdms[0])}`.padStart(2, '0')
 	const m = `${Math.abs(hdms[1])}`.padStart(2, '0')
-	const s = noSecond ? '' : hdms[2].toFixed(fractionDigits).padStart(fractionDigits === 0 ? 2 : fractionDigits + 3, '0')
+	s = noSecond ? '' : s.padStart(fractionDigits === 0 ? 2 : fractionDigits + 3, '0')
 
 	return `${sign}${d}${sa}${m}${sb}${s}${sc}`
 }
