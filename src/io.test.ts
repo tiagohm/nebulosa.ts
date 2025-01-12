@@ -1,32 +1,8 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { arrayBufferToLines, bufferSink, bufferSource, fileHandleSink, fileHandleSource, readableStreamToLines } from './io'
-
-test('arrayBufferToLines', async () => {
-	const blob = new Blob(['line 1\n', 'line 2\n', '', 'line 3\nline 4\n\n'])
-	const lines: string[] = []
-
-	for await (const line of arrayBufferToLines(await blob.arrayBuffer())) {
-		lines.push(line)
-	}
-
-	expect(lines).toHaveLength(4)
-	expect(lines).toContainAllValues(['line 1', 'line 2', 'line 3', 'line 4'])
-})
-
-test('readableStreamToLines', async () => {
-	const blob = new Blob(['line 1\n', 'line 2\n', '', 'line 3\nline 4\n\n'])
-	const lines: string[] = []
-
-	for await (const line of readableStreamToLines(blob.stream())) {
-		lines.push(line)
-	}
-
-	expect(lines).toHaveLength(4)
-	expect(lines).toContainAllValues(['line 1', 'line 2', 'line 3', 'line 4'])
-})
+import { bufferSink, bufferSource, fileHandleSink, fileHandleSource, readableStreamSource, readLines } from './io'
 
 test('bufferSink', () => {
 	const buffer = Buffer.alloc(16)
@@ -81,13 +57,13 @@ test('bufferSink', () => {
 })
 
 test('fileHandleSink', async () => {
-	const path = join(tmpdir(), 'fhs.tmp')
+	const path = join(tmpdir(), 'a.txt')
 	const handle = await fs.open(path, 'w+', 0o666)
-	const sink = fileHandleSink(handle)
+	await using sink = fileHandleSink(handle)
 
 	async function read() {
 		const buffer = Buffer.alloc(16)
-		const ret = await handle.read(buffer, 0, buffer.length, 0)
+		const ret = await handle.read(buffer, 0, buffer.byteLength, 0)
 		return ret.buffer.toString()
 	}
 
@@ -124,8 +100,6 @@ test('fileHandleSink', async () => {
 	expect(await sink.write(Buffer.from('xyz'), 1, 1)).toBe(1)
 
 	expect(await read()).toBe('xyzyzycdijklmnop')
-
-	await fs.unlink(path)
 })
 
 test('bufferSource', () => {
@@ -158,9 +132,9 @@ test('bufferSource', () => {
 })
 
 test('fileHandleSource', async () => {
-	const path = join(tmpdir(), 'fhs.tmp')
+	const path = join(tmpdir(), 'b.txt')
 	const handle = await fs.open(path, 'w+', 0o666)
-	const source = fileHandleSource(handle)
+	await using source = fileHandleSource(handle)
 	const buffer = Buffer.alloc(17)
 
 	await handle.write('abcdefghijklmnop ', 0, 'ascii')
@@ -184,4 +158,93 @@ test('fileHandleSource', async () => {
 	expect(await source.read(buffer, undefined, 1)).toBe(1)
 
 	expect(buffer.toString()).toBe('gabcdef          ')
+})
+
+describe('readableStreamSource', async () => {
+	const path = join(tmpdir(), 'c.txt')
+	const handle = await fs.open(path, 'w+', 0o666)
+
+	await handle.write('abcdefghijklmnop ', 0, 'ascii')
+	await handle.close()
+
+	test('fully', async () => {
+		await using source = readableStreamSource(Bun.file(path).stream())
+		const buffer = Buffer.alloc(17)
+
+		expect(await source.read(buffer)).toBe(17)
+		expect(buffer.toString()).toBe('abcdefghijklmnop ')
+		expect(await source.read(buffer)).toBe(0)
+	})
+
+	test('withOffset', async () => {
+		await using source = readableStreamSource(Bun.file(path).stream())
+		const buffer = Buffer.alloc(17)
+
+		buffer.fill(32)
+		expect(await source.read(buffer, 6)).toBe(11)
+		expect(buffer.toString()).toBe('      abcdefghijk')
+		expect(await source.read(buffer)).toBe(6)
+	})
+
+	test('withSize', async () => {
+		await using source = readableStreamSource(Bun.file(path).stream())
+		const buffer = Buffer.alloc(17)
+
+		buffer.fill(32)
+		expect(await source.read(buffer, undefined, 8)).toBe(8)
+		expect(buffer.toString()).toBe('abcdefgh         ')
+		expect(await source.read(buffer)).toBe(9)
+	})
+
+	test('withOffsetAndSize', async () => {
+		await using source = readableStreamSource(Bun.file(path).stream())
+		const buffer = Buffer.alloc(17)
+
+		buffer.fill(32)
+		expect(await source.read(buffer, 2, 8)).toBe(8)
+		expect(buffer.toString()).toBe('  abcdefgh       ')
+		expect(await source.read(buffer)).toBe(9)
+	})
+})
+
+describe('readLines', () => {
+	test('withoutFinalNewLine', async () => {
+		const data = Buffer.from('C\nJava\nPython\nC++\nC#\nJavaScript\nPHP\n\nGo')
+
+		for (let i = 1; i <= 64; i++) {
+			const source = bufferSource(data)
+			const lines = await Array.fromAsync(readLines(source, i))
+			expect(lines).toEqual(['C', 'Java', 'Python', 'C++', 'C#', 'JavaScript', 'PHP', '', 'Go'])
+		}
+	})
+
+	test('withFinalNewLine', async () => {
+		const data = Buffer.from('C\nJava\nPython\nC++\nC#\nJavaScript\nPHP\n\nGo\n')
+
+		for (let i = 1; i <= 64; i++) {
+			const source = bufferSource(data)
+			const lines = await Array.fromAsync(readLines(source, i))
+			expect(lines).toEqual(['C', 'Java', 'Python', 'C++', 'C#', 'JavaScript', 'PHP', '', 'Go', ''])
+		}
+	})
+
+	test('excludeEmptyLines', async () => {
+		const data = Buffer.from('C\nJava\nPython\nC++\nC#\nJavaScript\nPHP\n\nGo\n')
+
+		for (let i = 1; i <= 64; i++) {
+			const source = bufferSource(data)
+			const lines = await Array.fromAsync(readLines(source, i, undefined, { includeEmptyLines: false }))
+			expect(lines).toEqual(['C', 'Java', 'Python', 'C++', 'C#', 'JavaScript', 'PHP', 'Go'])
+		}
+	})
+
+	test('unicode', async () => {
+		const data = new Uint8Array([0xf0, 0x9f, 0x87, 0xaf, 0xf0, 0x9f, 0x87, 0xb5, 0x0a, 0xf0, 0x9f, 0x87, 0xb0, 0xf0, 0x9f, 0x87, 0xb7, 0x0a, 0xf0, 0x9f, 0x87, 0xa9, 0xf0, 0x9f, 0x87, 0xaa, 0x0a, 0xf0, 0x9f, 0x87, 0xa8, 0xf0, 0x9f, 0x87, 0xb3, 0xf0, 0x9f, 0x87, 0xba, 0xf0, 0x9f, 0x87, 0xb8, 0x0a, 0xf0, 0x9f, 0x87, 0xab, 0xf0, 0x9f, 0x87, 0xb7, 0x0a, 0xf0, 0x9f, 0x87, 0xaa, 0xf0, 0x9f, 0x87, 0xb8, 0xf0, 0x9f, 0x87, 0xae, 0xf0, 0x9f, 0x87, 0xb9, 0xf0, 0x9f, 0x87, 0xb7, 0xf0, 0x9f, 0x87, 0xba, 0x0a, 0xf0, 0x9f, 0x87, 0xac, 0xf0, 0x9f, 0x87, 0xa7])
+
+		for (let i = 1; i <= 64; i++) {
+			const source = bufferSource(Buffer.from(data))
+			const lines = await Array.fromAsync(readLines(source, i, 'utf-8'))
+			expect(lines).toEqual(['🇯🇵', '🇰🇷', '🇩🇪', '🇨🇳🇺🇸', '🇫🇷', '🇪🇸🇮🇹🇷🇺', '🇬🇧'])
+		}
+	})
 })

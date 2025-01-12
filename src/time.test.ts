@@ -1,8 +1,10 @@
 import { beforeAll, expect, test, type CustomMatcher } from 'bun:test'
+import fs from 'fs/promises'
 import { deg, hour } from './angle'
 import { DAYSEC, J2000 } from './constants'
 import { meter } from './distance'
 import { iersb } from './iers'
+import { fileHandleSource } from './io'
 import { Ellipsoid, geodetic } from './location'
 import { equationOfOrigins, era, gast, gmst, meanObliquity, normalize, nutation, precession, precessionNutation, subtract, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, toDate, tt, ut1, utc, type Time } from './time'
 
@@ -33,7 +35,10 @@ declare module 'bun:test' {
 }
 
 beforeAll(async () => {
-	await iersb.load(Bun.file('data/eopc04.1962-now.txt').stream())
+	const handle = await fs.open('data/eopc04.1962-now.txt')
+	await using source = fileHandleSource(handle)
+	source.seek(4640029)
+	await iersb.load(source)
 })
 
 test('time', () => {

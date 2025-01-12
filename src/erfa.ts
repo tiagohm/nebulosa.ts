@@ -1219,11 +1219,11 @@ export function eraAb(pnat: Vec3, v: Vec3, s: number, bm1: number): MutVec3 {
 }
 
 export interface LdBody {
-	bm: number // mass of the body (solar masses)
-	dl: number // deflection limiter (radians^2/2)
+	readonly bm: number // mass of the body (solar masses)
+	readonly dl: number // deflection limiter (radians^2/2)
 	// barycentric PV of the body (au, au/day)
-	p: Vec3
-	v: Vec3
+	readonly p: Vec3
+	readonly v: Vec3
 }
 
 // For a star, apply light deflection by multiple solar-system bodies,

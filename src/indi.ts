@@ -378,6 +378,7 @@ export class IndiClient {
 				},
 				close: () => {
 					console.warn('connection closed by client')
+					this.socket = undefined
 					this.options?.onClose?.()
 				},
 				error: (_, error) => {
@@ -388,6 +389,7 @@ export class IndiClient {
 				},
 				end: () => {
 					console.warn('connection closed by server')
+					this.socket = undefined
 					this.options?.onClose?.()
 				},
 				timeout: () => {

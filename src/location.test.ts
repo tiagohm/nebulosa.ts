@@ -1,12 +1,17 @@
 import { beforeAll, expect, test } from 'bun:test'
+import fs from 'fs/promises'
 import { deg, toHour } from './angle'
 import { meter } from './distance'
 import { iersb } from './iers'
+import { fileHandleSource } from './io'
 import { Ellipsoid, geocentric, geodetic, lst, polarRadius } from './location'
 import { Timescale, timeYMDHMS } from './time'
 
 beforeAll(async () => {
-	await iersb.load(Bun.file('data/eopc04.1962-now.txt').stream())
+	const handle = await fs.open('data/eopc04.1962-now.txt')
+	await using source = fileHandleSource(handle)
+	source.seek(4640029)
+	await iersb.load(source)
 })
 
 test('lst', () => {

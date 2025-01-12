@@ -1,15 +1,15 @@
 import { arcsec, type Angle } from './angle'
 import { MJD0 } from './constants'
 import { binarySearch } from './helper'
-import { readableStreamToLines } from './io'
+import { readLines, type Source } from './io'
 import type { PolarMotion, Time, TimeDelta } from './time'
 
 export interface Iers {
-	delta: TimeDelta
-	xy: PolarMotion
+	readonly delta: TimeDelta
+	readonly xy: PolarMotion
 
-	load: (stream: ReadableStream<Uint8Array>) => Promise<void>
-	clear: () => void
+	readonly load: (source: Source) => Promise<void>
+	readonly clear: () => void
 }
 
 export function interpolate(time: Time, input: number[], ...data: number[][]): number[] {
@@ -68,7 +68,7 @@ export abstract class IersBase implements Iers {
 		}
 	}
 
-	abstract load(stream: ReadableStream<Uint8Array>): Promise<void>
+	abstract load(source: Source): Promise<void>
 
 	clear() {
 		this.mjd = []
@@ -81,10 +81,10 @@ export abstract class IersBase implements Iers {
 // https://datacenter.iers.org/data/9/finals2000A.all
 // https://maia.usno.navy.mil/ser7/readme.finals2000A
 export class IersA extends IersBase {
-	async load(stream: ReadableStream<Uint8Array>) {
+	async load(source: Source) {
 		this.clear()
 
-		for await (const line of readableStreamToLines(stream)) {
+		for await (const line of readLines(source, 188)) {
 			const pmXa = parseFloat(line.substring(18, 27).trim())
 			const pmYa = parseFloat(line.substring(37, 46).trim())
 			const pmXb = parseFloat(line.substring(134, 144).trim())
@@ -106,10 +106,10 @@ export class IersA extends IersBase {
 // https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now
 // https://hpiers.obspm.fr/eoppc/eop/eopc04/eopc04.txt
 export class IersB extends IersBase {
-	async load(stream: ReadableStream<Uint8Array>) {
+	async load(source: Source) {
 		this.clear()
 
-		for await (const line of readableStreamToLines(stream)) {
+		for await (const line of readLines(source, 219)) {
 			if (line.startsWith('#')) continue
 
 			const pmX = parseFloat(line.substring(26, 38).trim())
@@ -143,7 +143,7 @@ export class IersAB implements Iers {
 		return b
 	}
 
-	load(stream: ReadableStream<Uint8Array>): Promise<void> {
+	load(source: Source): Promise<void> {
 		throw new Error('not supported')
 	}
 

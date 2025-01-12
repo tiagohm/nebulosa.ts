@@ -88,8 +88,8 @@ icrsToFk5(frame) // Convert ICRS coordinate to FK5 coordinate
 ### IERS
 
 ```ts
-iersa.load(Bun.file('finals2000A.txt').stream())
-iersb.load(Bun.file('eopc04.1962-now.txt').stream())
+iersa.load(source)
+iersb.load(source)
 delta(time) // UT1-UTC at time
 xy(time) // Polar motion angles at time
 ```
@@ -100,6 +100,18 @@ xy(time) // Polar motion angles at time
 fromFits(path) // Create image from FITS file
 toFormat(image, path, format) // Save image to path as png, jpeg, webp, etc
 stf(image, midtone, shadow, highlight) // Apply STF to image
+```
+
+### IO
+
+```ts
+bufferSink(sink) // Create a seekable sink from Buffer
+fileHandleSink(sink) // Create a seekable sink from FileHandle
+bufferSource(buffer) // Create a seekable source from Buffer
+fileHandleSource(handle) // Create a seekable source from FileHandle
+readableStreamSource(stream) // Create a source from ReadableStream
+readUntil(source, buffer, size, offset) // Read n bytes from source
+readLines(source, chunkSize) // Read lines from source
 ```
 
 ### ITRS
