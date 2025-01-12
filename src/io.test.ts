@@ -5,7 +5,7 @@ import { join } from 'path'
 import { bufferSink, bufferSource, fileHandleSink, fileHandleSource, readableStreamSource, readLines } from './io'
 
 test('bufferSink', () => {
-	const buffer = Buffer.alloc(16)
+	const buffer = Buffer.allocUnsafe(16)
 	const sink = bufferSink(buffer)
 
 	expect(sink.write('abcdefg')).toBe(7)
@@ -62,7 +62,7 @@ test('fileHandleSink', async () => {
 	await using sink = fileHandleSink(handle)
 
 	async function read() {
-		const buffer = Buffer.alloc(16)
+		const buffer = Buffer.allocUnsafe(16)
 		const ret = await handle.read(buffer, 0, buffer.byteLength, 0)
 		return ret.buffer.toString()
 	}
@@ -135,7 +135,7 @@ test('fileHandleSource', async () => {
 	const path = join(tmpdir(), 'b.txt')
 	const handle = await fs.open(path, 'w+', 0o666)
 	await using source = fileHandleSource(handle)
-	const buffer = Buffer.alloc(17)
+	const buffer = Buffer.allocUnsafe(17)
 
 	await handle.write('abcdefghijklmnop ', 0, 'ascii')
 
@@ -169,7 +169,7 @@ describe('readableStreamSource', async () => {
 
 	test('fully', async () => {
 		await using source = readableStreamSource(Bun.file(path).stream())
-		const buffer = Buffer.alloc(17)
+		const buffer = Buffer.allocUnsafe(17)
 
 		expect(await source.read(buffer)).toBe(17)
 		expect(buffer.toString()).toBe('abcdefghijklmnop ')
@@ -178,7 +178,7 @@ describe('readableStreamSource', async () => {
 
 	test('withOffset', async () => {
 		await using source = readableStreamSource(Bun.file(path).stream())
-		const buffer = Buffer.alloc(17)
+		const buffer = Buffer.allocUnsafe(17)
 
 		buffer.fill(32)
 		expect(await source.read(buffer, 6)).toBe(11)
@@ -188,7 +188,7 @@ describe('readableStreamSource', async () => {
 
 	test('withSize', async () => {
 		await using source = readableStreamSource(Bun.file(path).stream())
-		const buffer = Buffer.alloc(17)
+		const buffer = Buffer.allocUnsafe(17)
 
 		buffer.fill(32)
 		expect(await source.read(buffer, undefined, 8)).toBe(8)
@@ -198,7 +198,7 @@ describe('readableStreamSource', async () => {
 
 	test('withOffsetAndSize', async () => {
 		await using source = readableStreamSource(Bun.file(path).stream())
-		const buffer = Buffer.alloc(17)
+		const buffer = Buffer.allocUnsafe(17)
 
 		buffer.fill(32)
 		expect(await source.read(buffer, 2, 8)).toBe(8)
@@ -233,7 +233,7 @@ describe('readLines', () => {
 
 		for (let i = 1; i <= 64; i++) {
 			const source = bufferSource(data)
-			const lines = await Array.fromAsync(readLines(source, i, undefined, { includeEmptyLines: false }))
+			const lines = await Array.fromAsync(readLines(source, i, { emptyLines: false }))
 			expect(lines).toEqual(['C', 'Java', 'Python', 'C++', 'C#', 'JavaScript', 'PHP', 'Go'])
 		}
 	})
@@ -243,7 +243,7 @@ describe('readLines', () => {
 
 		for (let i = 1; i <= 64; i++) {
 			const source = bufferSource(Buffer.from(data))
-			const lines = await Array.fromAsync(readLines(source, i, 'utf-8'))
+			const lines = await Array.fromAsync(readLines(source, i, { encoding: 'utf-8' }))
 			expect(lines).toEqual(['🇯🇵', '🇰🇷', '🇩🇪', '🇨🇳🇺🇸', '🇫🇷', '🇪🇸🇮🇹🇷🇺', '🇬🇧'])
 		}
 	})

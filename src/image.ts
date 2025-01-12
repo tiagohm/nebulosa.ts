@@ -33,7 +33,7 @@ export async function fromFits(path: PathLike | Fits): Promise<Image | undefined
 		const pixelSizeInBytes = Math.trunc(Math.abs(bp) / 8)
 		const pixelCount = width * height
 		const stride = width * pixelSizeInBytes
-		const buffer = Buffer.alloc(stride)
+		const buffer = Buffer.allocUnsafe(stride)
 		const { handle, offset } = data!
 		const raw = new Float64Array(pixelCount * channels)
 		const minMax = [1, 0]

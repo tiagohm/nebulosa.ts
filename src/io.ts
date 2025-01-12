@@ -216,14 +216,16 @@ export async function readUntil(source: Source, buffer: Buffer, size: number, of
 }
 
 export interface ReadLinesOptions {
-	readonly includeEmptyLines: boolean
+	readonly encoding?: 'ascii' | 'utf8' | 'utf-8'
+	readonly emptyLines: boolean
 }
 
-export async function* readLines(source: Source, chunkSize: number, encoding?: 'ascii' | 'utf8' | 'utf-8', options?: Partial<ReadLinesOptions>) {
-	const buffer = Buffer.alloc(chunkSize)
-	const includeEmptyLines = options?.includeEmptyLines ?? true
+export async function* readLines(source: Source, chunkSize: number, options?: Partial<ReadLinesOptions>) {
+	const buffer = Buffer.allocUnsafe(chunkSize)
+	const emptyLines = options?.emptyLines ?? true
+	const encoding = options?.encoding
 
-	let line = Buffer.alloc(0)
+	let line = Buffer.allocUnsafe(0)
 
 	while (true) {
 		const n = await readUntil(source, buffer, chunkSize)
@@ -237,10 +239,11 @@ export async function* readLines(source: Source, chunkSize: number, encoding?: '
 			const index = slice.indexOf(10)
 
 			if (index >= 0) {
-				start = start + index + 1
-				line = Buffer.concat([line, slice.subarray(0, index)])
-				if (line.byteLength || includeEmptyLines) yield line.toString(encoding)
-				line = Buffer.alloc(0)
+				start += index + 1
+				const found = slice.subarray(0, index)
+				line = !line.byteLength ? found : Buffer.concat([line, found])
+				if (line.byteLength || emptyLines) yield line.toString(encoding)
+				line = Buffer.allocUnsafe(0)
 			} else {
 				line = Buffer.concat([line, slice])
 				break
@@ -248,5 +251,5 @@ export async function* readLines(source: Source, chunkSize: number, encoding?: '
 		}
 	}
 
-	if (line.byteLength || includeEmptyLines) yield line.toString(encoding)
+	if (line.byteLength || emptyLines) yield line.toString(encoding)
 }

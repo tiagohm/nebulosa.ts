@@ -62,7 +62,7 @@ export class StellariumProtocolServer {
 
 	send(ra: Angle, dec: Angle) {
 		if (this.sockets.length) {
-			const buffer = Buffer.alloc(24)
+			const buffer = Buffer.allocUnsafe(24)
 			buffer.writeInt16LE(24, 0) // length
 			buffer.writeInt16LE(0, 2) // type
 			// buffer.writeBigInt64LE(BigInt(Date.now() * 1000)) // time
