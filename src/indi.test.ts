@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { SimpleXmlParser, type SimpleXmlElement } from './indi'
+import { IndiXmlParser, type IndiXmlElement } from './indi'
 
-function parse(parser: SimpleXmlParser, text: string) {
-	const tags: SimpleXmlElement[] = []
+function parse(parser: IndiXmlParser, text: string) {
+	const tags: IndiXmlElement[] = []
 
 	for (const chunk of text) {
 		tags.push(...parser.parse(Buffer.from(chunk)))
@@ -12,16 +12,16 @@ function parse(parser: SimpleXmlParser, text: string) {
 }
 
 describe('parse', () => {
-	test('simple', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTag', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a></a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBe('')
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withText', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithText', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a>b</a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBe('b')
@@ -29,8 +29,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withBreakLineAsText', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithBreakLineAsText', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a>\nb\n</a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBe('b')
@@ -38,8 +38,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withOneAttribute', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithOneAttribute', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<person age="30"></person>')[0]
 		expect(tag.name).toBe('person')
 		expect(tag.text).toBe('')
@@ -47,8 +47,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({ age: '30' })
 	})
 
-	test('withEmptyAttribute', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithEmptyAttribute', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<person gender=""></person>')[0]
 		expect(tag.name).toBe('person')
 		expect(tag.text).toBe('')
@@ -56,8 +56,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({ gender: '' })
 	})
 
-	test('withTwoAttributes', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithTwoAttributes', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<person age="32" gender="male"></person>')[0]
 		expect(tag.name).toBe('person')
 		expect(tag.text).toBe('')
@@ -65,8 +65,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({ age: '32', gender: 'male' })
 	})
 
-	test('withTwoAttributesAndText', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithTwoAttributesAndText', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<person age="32" gender="male">Text</person>')[0]
 		expect(tag.name).toBe('person')
 		expect(tag.text).toBe('Text')
@@ -74,8 +74,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({ age: '32', gender: 'male' })
 	})
 
-	test('withOneNestedTag', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithOneNestedTag', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a><b></b></a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBeEmpty()
@@ -83,8 +83,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withOneNestedTagAndAttributes', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithOneNestedTagAndAttributes', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a><person age="32" gender="male"></person></a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBeEmpty()
@@ -92,8 +92,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withOneNestedTagAndAttributesAndText', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithOneNestedTagAndAttributesAndText', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a><person age="32" gender="male">Text</person></a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBeEmpty()
@@ -101,8 +101,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withTwoNestedTags', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithTwoNestedTags', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a><b></b><c></c></a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBeEmpty()
@@ -113,8 +113,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withTwoNestedTagsAndAttributes', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithTwoNestedTagsAndAttributes', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a><person age="32" gender="male"></person><person age="32" gender="male"></person></a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBeEmpty()
@@ -125,8 +125,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withTwoNestedTagsAndAttributesAndText', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithTwoNestedTagsAndAttributesAndText', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a><person age="32" gender="male">Text</person><person age="32" gender="male">Text</person></a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBeEmpty()
@@ -137,8 +137,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withMultipleNestedTags', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithMultipleNestedTags', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a><b><c><d><e></e></d></c></b></a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBeEmpty()
@@ -146,8 +146,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withOneNestedTagAndText', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithOneNestedTagAndText', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a>Te<b></b>xt</a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBe('Text')
@@ -155,8 +155,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withTwoNestedTagsAndText', () => {
-		const parser = new SimpleXmlParser()
+	test('oneTagWithTwoNestedTagsAndText', () => {
+		const parser = new IndiXmlParser()
 		const tag = parse(parser, '<a>Te<b></b>x<c></d>t</a>')[0]
 		expect(tag.name).toBe('a')
 		expect(tag.text).toBe('Text')
@@ -167,8 +167,8 @@ describe('parse', () => {
 		expect(tag.attributes).toEqual({})
 	})
 
-	test('withMultipleTags', () => {
-		const parser = new SimpleXmlParser()
+	test('multipleTags', () => {
+		const parser = new IndiXmlParser()
 		const tags = parse(parser, '<a></a><b></b>')
 		expect(tags).toHaveLength(2)
 		expect(tags[0].name).toBe('a')

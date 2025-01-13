@@ -3,10 +3,14 @@ import { normalize, type Angle } from './angle'
 import { PI } from './constants'
 import { eraAnpm } from './erfa'
 
+export interface StellariumProtocolHandler {
+	connect: () => void
+	goto?: (ra: Angle, dec: Angle) => void
+	close?: () => void
+}
+
 export interface StellariumProtocolServerOptions {
-	onConnect: () => void
-	onGoto?: (ra: Angle, dec: Angle) => void
-	onClose?: () => void
+	protocol?: StellariumProtocolHandler
 }
 
 // https://free-astro.org/images/b/b7/Stellarium_telescope_protocol.txt
@@ -36,13 +40,13 @@ export class StellariumProtocolServer {
 				open: (socket) => {
 					console.info('connection open')
 					this.sockets.push(socket)
-					this.options?.onConnect()
+					this.options?.protocol?.connect()
 				},
 				close: (socket) => {
 					console.warn('connection closed')
 					const index = this.sockets.indexOf(socket)
 					if (index >= 0) this.sockets.splice(index, 1)
-					this.options?.onClose?.()
+					this.options?.protocol?.close?.()
 				},
 				error: (_, error) => {
 					console.error('connection failed', error)
@@ -80,10 +84,10 @@ export class StellariumProtocolServer {
 	}
 
 	private handleData(buffer: Buffer) {
-		if (buffer.byteLength >= 20 && this.options?.onGoto) {
+		if (buffer.byteLength >= 20 && this.options?.protocol?.goto) {
 			const ra = normalize((buffer.readUInt32LE(12) * PI) / 0x80000000)
 			const dec = (buffer.readInt32LE(16) * PI) / 0x80000000
-			this.options.onGoto(ra, dec)
+			this.options.protocol.goto(ra, dec)
 		}
 	}
 }
