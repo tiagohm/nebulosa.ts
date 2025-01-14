@@ -1,6 +1,6 @@
-import type { PathLike } from 'fs'
 import sharp, { type AvifOptions, type FormatEnum, type GifOptions, type HeifOptions, type Jp2Options, type JpegOptions, type JxlOptions, type OutputInfo, type OutputOptions, type PngOptions, type TiffOptions, type WebpOptions } from 'sharp'
-import { Bitpix, bitpix, naxisn, read, type Fits, type FitsHeader } from './fits'
+import { Bitpix, bitpix, channels, height, width, type Fits, type FitsHdu, type FitsHeader } from './fits'
+import { readUntil } from './io'
 
 export type ImageChannel = 'RED' | 'GREEN' | 'BLUE'
 
@@ -20,64 +20,62 @@ export interface ImageMetadata {
 	readonly pixelSizeInBytes: number
 }
 
-export async function fromFits(path: PathLike | Fits): Promise<Image | undefined> {
-	const fits = typeof path === 'object' && 'hdus' in path ? path : await read(path)
+export async function fromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Image | undefined> {
+	const hdu = !fitsOrHdu || 'header' in fitsOrHdu ? fitsOrHdu : fitsOrHdu.hdus[0]
+	if (!hdu) return undefined
+	const { header, data } = hdu
+	const bp = bitpix(header)
+	if (bp === Bitpix.LONG) return undefined
+	const sw = width(header)
+	const sh = height(header)
+	const nc = Math.max(1, Math.min(3, channels(header)))
+	const pixelSizeInBytes = Math.trunc(Math.abs(bp) / 8)
+	const pixelCount = sw * sh
+	const stride = sw * pixelSizeInBytes
+	const buffer = Buffer.allocUnsafe(stride)
+	const { source, offset } = data!
+	const raw = new Float64Array(pixelCount * nc)
+	const minMax = [1, 0]
 
-	if (fits) {
-		const { header, data } = fits.hdus[0]
-		const bp = bitpix(header)
-		if (bp === Bitpix.LONG) return undefined
-		const width = naxisn(header, 1)
-		const height = naxisn(header, 2)
-		const channels = Math.max(1, Math.min(3, naxisn(header, 3, 1)))
-		const pixelSizeInBytes = Math.trunc(Math.abs(bp) / 8)
-		const pixelCount = width * height
-		const stride = width * pixelSizeInBytes
-		const buffer = Buffer.allocUnsafe(stride)
-		const { handle, offset } = data!
-		const raw = new Float64Array(pixelCount * channels)
-		const minMax = [1, 0]
+	source.seek(offset)
 
-		for (let channel = 0; channel < channels; channel++) {
-			let index = 0
+	for (let channel = 0; channel < nc; channel++) {
+		let index = channel
 
-			for (let i = 0, position = offset + channel * pixelCount * pixelSizeInBytes; i < height; i++, position += stride) {
-				const ret = await handle!.read(buffer, 0, stride, position)
+		for (let i = 0; i < sh; i++) {
+			const n = await readUntil(source, buffer, stride)
 
-				for (let k = 0; k < ret.bytesRead; k += pixelSizeInBytes, index++) {
-					let pixel = 0
+			if (n !== stride) return undefined
 
-					if (bp === Bitpix.BYTE) pixel = buffer.readUInt8(k) / 255.0
-					else if (bp === Bitpix.SHORT) pixel = (buffer.readInt16BE(k) + 32768) / 65535.0
-					else if (bp === Bitpix.INTEGER) pixel = (buffer.readInt32BE(k) + 2147483648) / 4294967295.0
-					else if (bp === Bitpix.FLOAT) pixel = buffer.readFloatBE(k)
-					else if (bp === Bitpix.DOUBLE) pixel = buffer.readDoubleBE(k)
+			for (let k = 0; k < n; k += pixelSizeInBytes, index += nc) {
+				let pixel = 0
 
-					raw[channel + index * channels] = pixel
-					minMax[0] = Math.min(pixel, minMax[0])
-					minMax[1] = Math.max(pixel, minMax[1])
-				}
+				if (bp === Bitpix.BYTE) pixel = buffer.readUInt8(k) / 255.0
+				else if (bp === Bitpix.SHORT) pixel = (buffer.readInt16BE(k) + 32768) / 65535.0
+				else if (bp === Bitpix.INTEGER) pixel = (buffer.readInt32BE(k) + 2147483648) / 4294967295.0
+				else if (bp === Bitpix.FLOAT) pixel = buffer.readFloatBE(k)
+				else if (bp === Bitpix.DOUBLE) pixel = buffer.readDoubleBE(k)
+
+				raw[index] = pixel
+				minMax[0] = Math.min(pixel, minMax[0])
+				minMax[1] = Math.max(pixel, minMax[1])
 			}
 		}
-
-		if (minMax[0] < 0 || minMax[1] > 1) {
-			const [min, max] = minMax
-			const delta = max - min
-
-			console.info(`rescaling [${min}, ${max}] to [0, 1]`)
-
-			for (let i = 0; i < raw.length; i++) {
-				raw[i] = (raw[i] - min) / delta
-			}
-		}
-
-		await fits.close()
-
-		const metadata: ImageMetadata = { width, height, channels, pixelCount, pixelSizeInBytes }
-		return { header, metadata, raw }
 	}
 
-	return undefined
+	if (minMax[0] < 0 || minMax[1] > 1) {
+		const [min, max] = minMax
+		const delta = max - min
+
+		console.info(`rescaling [${min}, ${max}] to [0, 1]`)
+
+		for (let i = 0; i < raw.length; i++) {
+			raw[i] = (raw[i] - min) / delta
+		}
+	}
+
+	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, pixelCount, pixelSizeInBytes }
+	return { header, metadata, raw }
 }
 
 export type ToFormatOptions = OutputOptions | JpegOptions | PngOptions | WebpOptions | AvifOptions | HeifOptions | JxlOptions | GifOptions | Jp2Options | TiffOptions
