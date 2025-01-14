@@ -72,7 +72,7 @@ const INT_REGEX = new RegExp('^[+-]?\\d+$')
 export async function read(source: Source & Seekable): Promise<Fits | undefined> {
 	const buffer = Buffer.allocUnsafe(HEADER_CARD_SIZE)
 
-	if ((await readUntil(source, buffer, HEADER_CARD_SIZE)) !== HEADER_CARD_SIZE) {
+	if ((await readUntil(source, buffer)) !== HEADER_CARD_SIZE) {
 		return undefined
 	}
 
@@ -268,7 +268,7 @@ export async function read(source: Source & Seekable): Promise<Fits | undefined>
 	parseCard()
 
 	while (true) {
-		const size = await readUntil(source, buffer, HEADER_CARD_SIZE)
+		const size = await readUntil(source, buffer)
 		if (size !== HEADER_CARD_SIZE) break
 		parseCard()
 	}

@@ -200,7 +200,7 @@ export function readableStreamSource(stream: ReadableStream): Source & AsyncDisp
 }
 
 // Reads the source until it reaches size or be exhausted.
-export async function readUntil(source: Source, buffer: Buffer, size: number, offset: number = 0) {
+export async function readUntil(source: Source, buffer: Buffer, size: number = buffer.byteLength, offset: number = 0) {
 	let remaining = size
 
 	while (remaining > 0) {
@@ -228,7 +228,7 @@ export async function* readLines(source: Source, chunkSize: number, options?: Pa
 	let line = Buffer.allocUnsafe(0)
 
 	while (true) {
-		const n = await readUntil(source, buffer, chunkSize)
+		const n = await readUntil(source, buffer)
 
 		if (!n) break
 

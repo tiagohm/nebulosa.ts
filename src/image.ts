@@ -43,7 +43,7 @@ export async function fromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Image | unde
 		let index = channel
 
 		for (let i = 0; i < sh; i++) {
-			const n = await readUntil(source, buffer, stride)
+			const n = await readUntil(source, buffer)
 
 			if (n !== stride) return undefined
 
