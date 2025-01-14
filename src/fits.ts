@@ -90,7 +90,7 @@ export async function read(source: Source & Seekable): Promise<Fits | undefined>
 		// The stem is in the first 8 characters or what precedes an '=' character
 		// before that.
 		position = ieq >= 0 && ieq <= MAX_KEYWORD_LENGTH ? ieq : MAX_KEYWORD_LENGTH
-		const key = buffer.subarray(0, position).toString('ascii').trim().toUpperCase()
+		const key = buffer.toString('ascii', 0, position).trim().toUpperCase()
 
 		// If not using HIERARCH, then be very resilient,
 		// and return whatever key the first 8 chars make...
@@ -172,7 +172,7 @@ export async function read(source: Source & Seekable): Promise<Fits | undefined>
 				end = buffer.byteLength
 			}
 
-			const value = buffer.subarray(position, end).toString('ascii').trim()
+			const value = buffer.toString('ascii', position, end).trim()
 			position = end
 			return parseValueType(value)
 		}
@@ -210,7 +210,7 @@ export async function read(source: Source & Seekable): Promise<Fits | undefined>
 			}
 		}
 
-		return end < 0 ? '' : buffer.subarray(start, end + 1).toString('ascii')
+		return end < 0 ? '' : buffer.toString('ascii', start, end + 1)
 	}
 
 	function parseComment(value: boolean) {
@@ -225,7 +225,7 @@ export async function read(source: Source & Seekable): Promise<Fits | undefined>
 			}
 		}
 
-		return buffer.subarray(position).toString('ascii').trim()
+		return buffer.toString('ascii', position).trim()
 	}
 
 	function parseCard() {
