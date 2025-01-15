@@ -4,9 +4,9 @@ import { read } from './daf'
 import { fileHandleSource } from './io'
 import { Naif } from './naif'
 import { spk } from './spk'
-import { timeYMDHMS } from './time'
+import { Timescale, timeYMDHMS } from './time'
 
-const time = timeYMDHMS(2022, 12, 8, 20, 7, 15.0)
+const time = timeYMDHMS(2025, 1, 15, 9, 20, 50, Timescale.TDB)
 
 test('DE405', async () => {
 	await using source = fileHandleSource(await fs.open('data/de405.bsp'))
@@ -15,7 +15,17 @@ test('DE405', async () => {
 
 	const segment = s.segment(Naif.SSB, Naif.EMB)
 	expect(segment).not.toBeUndefined()
-	segment!.compute(time)
+	const [p, v] = await segment!.compute(time)
+
+	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
+	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
+	expect(p[0]).toBeCloseTo(-4.233964762021999e-1, 5)
+	expect(p[1]).toBeCloseTo(8.124609657969613e-1, 6)
+	expect(p[2]).toBeCloseTo(3.523864507181277e-1, 6)
+
+	expect(v[0]).toBeCloseTo(-1.584863352414356e-2, 9)
+	expect(v[1]).toBeCloseTo(-6.766164807834689e-3, 9)
+	expect(v[2]).toBeCloseTo(-2.933074405477159e-3, 9)
 })
 
 test('DE421', async () => {
@@ -25,8 +35,38 @@ test('DE421', async () => {
 
 	const segment = s.segment(Naif.SSB, Naif.EMB)
 	expect(segment).not.toBeUndefined()
-	segment!.compute(time)
+	const [p, v] = await segment!.compute(time)
+
+	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
+	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
+	expect(p[0]).toBeCloseTo(-4.233964762021999e-1, 5)
+	expect(p[1]).toBeCloseTo(8.124609657969613e-1, 6)
+	expect(p[2]).toBeCloseTo(3.523864507181277e-1, 6)
+
+	expect(v[0]).toBeCloseTo(-1.584863352414356e-2, 9)
+	expect(v[1]).toBeCloseTo(-6.766164807834689e-3, 9)
+	expect(v[2]).toBeCloseTo(-2.933074405477159e-3, 9)
 })
+
+test('DE440', async () => {
+	await using source = fileHandleSource(await fs.open('data/de440s.bsp'))
+	const daf = await read(source)
+	const s = spk(daf)
+
+	const segment = s.segment(Naif.SSB, Naif.EMB)
+	expect(segment).not.toBeUndefined()
+	const [p, v] = await segment!.compute(time)
+
+	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
+	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
+	expect(p[0]).toBeCloseTo(-4.233964762021999e-1, 15)
+	expect(p[1]).toBeCloseTo(8.124609657969613e-1, 15)
+	expect(p[2]).toBeCloseTo(3.523864507181277e-1, 15)
+
+	expect(v[0]).toBeCloseTo(-1.584863352414356e-2, 15)
+	expect(v[1]).toBeCloseTo(-6.766164807834689e-3, 15)
+	expect(v[2]).toBeCloseTo(-2.933074405477159e-3, 15)
+}, 15000)
 
 test('65803 Didymos', async () => {
 	await using source = fileHandleSource(await fs.open('data/65803_Didymos.bsp'))
@@ -35,5 +75,5 @@ test('65803 Didymos', async () => {
 
 	const segment = s.segment(Naif.SUN, Naif.DIDYMOS_BARYCENTER)
 	expect(segment).not.toBeUndefined()
-	segment!.compute(time)
+	await segment!.compute(time)
 })
