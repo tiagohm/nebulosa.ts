@@ -64,7 +64,7 @@ export class BufferSink implements Sink, Seekable, Exhaustible {
 }
 
 // Create a seekable sink from Buffer.
-export function bufferSink(buffer: Buffer): Sink & Seekable {
+export function bufferSink(buffer: Buffer): Sink & Seekable & Exhaustible {
 	return new BufferSink(buffer)
 }
 
@@ -133,7 +133,7 @@ export class BufferSource implements Source, Seekable {
 }
 
 // Create a seekable source from Buffer.
-export function bufferSource(buffer: Buffer): Source & Seekable {
+export function bufferSource(buffer: Buffer): Source & Seekable & Exhaustible {
 	return new BufferSource(buffer)
 }
 
@@ -200,7 +200,7 @@ export class ReadableStreamSource implements Source, AsyncDisposable {
 	}
 }
 
-export function readableStreamSource(stream: ReadableStream): Source & AsyncDisposable {
+export function readableStreamSource(stream: ReadableStream<Uint8Array>): Source & AsyncDisposable {
 	return new ReadableStreamSource(stream)
 }
 
@@ -217,10 +217,18 @@ export class RangeHttpSource implements Source, Seekable {
 
 	async read(buffer: Buffer, offset?: number, size?: number) {
 		size ??= buffer.byteLength - (offset ?? 0)
+
 		if (size === 0) return 0
+
 		const response = await fetch(this.uri, { headers: { 'Accept-Encoding': 'identity', Range: `bytes=${this.position}-${this.position + size - 1}` } })
-		const data = Buffer.from(await response.arrayBuffer())
-		return data.copy(buffer, offset)
+
+		if (size > 0x10000) {
+			await using source = readableStreamSource(response.body!)
+			return await source.read(buffer, offset, size)
+		} else {
+			const data = Buffer.from(await response.arrayBuffer())
+			return data.copy(buffer, offset)
+		}
 	}
 }
 

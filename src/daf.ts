@@ -53,7 +53,7 @@ export async function read(source: Source & Seekable): Promise<Daf> {
 			read: (start, end) => read(start, end, record),
 		}
 	} else if (format.startsWith('DAF/')) {
-		if (FTPSTR.equals(buffer.subarray(699, 699 + FTPSTR.byteLength))) {
+		if (FTPSTR.equals(buffer.subarray(699, 699 + 28))) {
 			const be = buffer.toString('ascii', 88, 96).toUpperCase() !== 'LTL-IEEE'
 			const record = readNaifDafRecord(buffer, be)
 			const summaries = await readSummaries(source, record)
@@ -147,7 +147,7 @@ function readSummaryControl(buffer: Buffer, { be }: DafRecord) {
 	return { next, prev, nsum }
 }
 
-function readSummaryElements(buffer: Buffer, { be, nd, ni }: DafRecord): readonly [number[], number[]] {
+function readSummaryElements(buffer: Buffer, { be, nd, ni }: DafRecord): readonly [readonly number[], readonly number[]] {
 	const doubles = new Array<number>(nd)
 	const ints = new Array<number>(ni)
 
