@@ -8,9 +8,16 @@ export function isFlushable(o: object): o is Flushable {
 	return 'flush' in o
 }
 
+export interface Exhaustible {
+	readonly exhausted: boolean
+}
+
+export function isExhaustible(o: object): o is Exhaustible {
+	return 'exhausted' in o
+}
+
 export interface Seekable {
 	readonly position: number
-	readonly exhausted: boolean
 
 	readonly seek: (position: number) => boolean
 }
@@ -23,7 +30,7 @@ export interface Sink {
 	readonly write: (chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) => Promise<number> | number
 }
 
-export class BufferSink implements Sink, Seekable {
+export class BufferSink implements Sink, Seekable, Exhaustible {
 	position = 0
 
 	constructor(private readonly buffer: Buffer) {}
@@ -63,7 +70,6 @@ export function bufferSink(buffer: Buffer): Sink & Seekable {
 
 export class FileHandleSink implements Sink, Seekable, AsyncDisposable {
 	position = 0
-	readonly exhausted = false
 
 	constructor(private readonly handle: FileHandle) {}
 
@@ -133,7 +139,6 @@ export function bufferSource(buffer: Buffer): Source & Seekable {
 
 export class FileHandleSource implements Source, Seekable, AsyncDisposable {
 	position = 0
-	exhausted = false
 
 	constructor(private readonly handle: FileHandle) {}
 
@@ -197,6 +202,30 @@ export class ReadableStreamSource implements Source, AsyncDisposable {
 
 export function readableStreamSource(stream: ReadableStream): Source & AsyncDisposable {
 	return new ReadableStreamSource(stream)
+}
+
+export class RangeHttpSource implements Source, Seekable {
+	position = 0
+
+	constructor(private readonly uri: string | URL) {}
+
+	seek(position: number) {
+		if (position < 0) return false
+		this.position = position
+		return true
+	}
+
+	async read(buffer: Buffer, offset?: number, size?: number) {
+		size ??= buffer.byteLength - (offset ?? 0)
+		if (size === 0) return 0
+		const response = await fetch(this.uri, { headers: { 'Accept-Encoding': 'identity', Range: `bytes=${this.position}-${this.position + size - 1}` } })
+		const data = Buffer.from(await response.arrayBuffer())
+		return data.copy(buffer, offset)
+	}
+}
+
+export function rangeHttpSource(uri: string | URL): Source & Seekable {
+	return new RangeHttpSource(uri)
 }
 
 // Reads the source until it reaches size or be exhausted.

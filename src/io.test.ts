@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { bufferSink, bufferSource, fileHandleSink, fileHandleSource, readableStreamSource, readLines } from './io'
+import { bufferSink, bufferSource, fileHandleSink, fileHandleSource, rangeHttpSource, readableStreamSource, readLines } from './io'
 
 test('bufferSink', () => {
 	const buffer = Buffer.allocUnsafe(16)
@@ -247,4 +247,12 @@ describe('readLines', () => {
 			expect(lines).toEqual(['🇯🇵', '🇰🇷', '🇩🇪', '🇨🇳🇺🇸', '🇫🇷', '🇪🇸🇮🇹🇷🇺', '🇬🇧'])
 		}
 	})
+})
+
+test('rangeHttpSource', async () => {
+	const buffer = Buffer.allocUnsafe(10)
+	const source = rangeHttpSource('https://raw.githubusercontent.com/tiagohm/nebulosa.ts/refs/heads/main/LICENSE')
+	source.seek(32)
+	expect(await source.read(buffer)).toBe(10)
+	expect(buffer.toString()).toBe('Tiago Melo')
 })
