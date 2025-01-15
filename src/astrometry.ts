@@ -11,14 +11,14 @@ import { angle, length, minus, mulScalar, type Vec3 } from './vector'
 export type PositionAndVelocity = readonly [CartesianCoordinate, CartesianCoordinate]
 
 // Computes the position at time.
-export type PositionOverTime = (time: Time) => PositionAndVelocity
+export type PositionAndVelocityOverTime = (time: Time) => PositionAndVelocity
 
 // Computes the position relative to observer's position at time.
 export type ObservedPositionOverTime = (observer: Body, time: Time) => PositionAndVelocity
 
 // Represents a celestial body.
 export interface Body {
-	readonly at: PositionOverTime
+	readonly at: PositionAndVelocityOverTime
 	readonly observedAt: ObservedPositionOverTime
 }
 

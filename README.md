@@ -43,6 +43,12 @@ parallacticAngle(p, time)
 separationFrom(a, b) // Angle between the positions
 ```
 
+### Daf
+
+```ts
+read(source) // Read NASA DAF file
+```
+
 ### Distance
 
 ```ts
@@ -172,6 +178,13 @@ minus(m, n) // Subtract two matrices
 mul(m, n) // Multiply two matrices
 mulVec(m, v) // Multiply the matrix by a vector
 mulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
+```
+
+### Spk
+
+```ts
+const s = spk(daf) // Read a SPK file
+s.segment(Naif.SSB, Naif.EMB)!.compute(time) // Compute the position and velocity at time
 ```
 
 ### Star

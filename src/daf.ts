@@ -21,6 +21,7 @@ export interface DafRecord {
 
 const FTPSTR = Buffer.from('FTPSTR:\r:\n:\r\n:\r\x00:\x81:\x10\xCE:ENDFTP', 'ascii')
 
+// https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/req/daf.html
 export async function read(source: Source & Seekable): Promise<Daf> {
 	const buffer = Buffer.allocUnsafe(1024)
 
