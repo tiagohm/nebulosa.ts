@@ -3,16 +3,53 @@ import { DAYSPERJM, J2000 } from './constants'
 import { mulVec, type Mat3 } from './matrix'
 import { tdb, type Time } from './time'
 import { zero } from './vector'
-import { VSOP87E_MERCURY_DATA, VSOP87E_SUN_DATA } from './vsop87e.data'
+import { VSOP87E_EARTH_DATA, VSOP87E_JUPITER_DATA, VSOP87E_MARS_DATA, VSOP87E_MERCURY_DATA, VSOP87E_NEPTUNE_DATA, VSOP87E_SATURN_DATA, VSOP87E_SUN_DATA, VSOP87E_URANUS_DATA, VSOP87E_VENUS_DATA } from './vsop87e.data'
 
 // https://vizier.cfa.harvard.edu/ftp/cats/6/81/vsop87.txt
 
-export function sun(time: Time): PositionAndVelocity {
+// Computes the barycentric position and velocity of the Sun.
+export function sun(time: Time) {
 	return compute(time, VSOP87E_SUN_DATA)
 }
 
-export function mercury(time: Time): PositionAndVelocity {
+// Computes the barycentric position and velocity of Mercury.
+export function mercury(time: Time) {
 	return compute(time, VSOP87E_MERCURY_DATA)
+}
+
+// Computes the barycentric position and velocity of Venus.
+export function venus(time: Time) {
+	return compute(time, VSOP87E_VENUS_DATA)
+}
+
+// Computes the barycentric position and velocity of Earth.
+export function earth(time: Time) {
+	return compute(time, VSOP87E_EARTH_DATA)
+}
+
+// Computes the barycentric position and velocity of Mars.
+export function mars(time: Time) {
+	return compute(time, VSOP87E_MARS_DATA)
+}
+
+// Computes the barycentric position and velocity of Jupiter.
+export function jupiter(time: Time) {
+	return compute(time, VSOP87E_JUPITER_DATA)
+}
+
+// Computes the barycentric position and velocity of Saturn.
+export function saturn(time: Time) {
+	return compute(time, VSOP87E_SATURN_DATA)
+}
+
+// Computes the barycentric position and velocity of Uranus.
+export function uranus(time: Time) {
+	return compute(time, VSOP87E_URANUS_DATA)
+}
+
+// Computes the barycentric position and velocity of Neptune.
+export function neptune(time: Time) {
+	return compute(time, VSOP87E_NEPTUNE_DATA)
 }
 
 // The coordinates of the main version VSOP87 and of the version A, B, and E are
@@ -59,5 +96,5 @@ function compute(time: Time, data: readonly number[][][]): PositionAndVelocity {
 		v[k] /= DAYSPERJM
 	}
 
-	return [mulVec(REFERENCE_FRAME_MATRIX, p), mulVec(REFERENCE_FRAME_MATRIX, v)]
+	return [mulVec(REFERENCE_FRAME_MATRIX, p, p), mulVec(REFERENCE_FRAME_MATRIX, v, v)]
 }

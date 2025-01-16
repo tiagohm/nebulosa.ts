@@ -274,6 +274,20 @@ toKilometerPerSecond(1) // Convert AU/d to km/s
 toMeterPerSecond(1) // Convert AU/d to m/s
 ```
 
+### VSOP87E
+
+```ts
+sun(time) // Compute the position and velocity of the Sun
+mercury(time) // Compute the position and velocity of Mercury
+venus(time) // Compute the position and velocity of Venus
+earth(time) // Compute the position and velocity of Earth
+mars(time) // Compute the position and velocity of Mars
+jupiter(time) // Compute the position and velocity of Jupiter
+saturn(time) // Compute the position and velocity of Saturn
+uranus(time) // Compute the position and velocity of Uranus
+neptune(time) // Compute the position and velocity of Neptune
+```
+
 ## Inspirations
 
 - [Skyfield](https://github.com/skyfielders/python-skyfield)
