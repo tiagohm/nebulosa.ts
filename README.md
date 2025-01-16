@@ -180,6 +180,12 @@ mulVec(m, v) // Multiply the matrix by a vector
 mulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
 ```
 
+### Small Body Database
+
+```ts
+search('C/2017 K2')
+```
+
 ### Spk
 
 ```ts
