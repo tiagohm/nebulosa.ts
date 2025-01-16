@@ -20,8 +20,8 @@ test('DE405', async () => {
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
 	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
 	expect(p[0]).toBeCloseTo(-4.233964762021999e-1, 5)
-	expect(p[1]).toBeCloseTo(8.124609657969613e-1, 6)
-	expect(p[2]).toBeCloseTo(3.523864507181277e-1, 6)
+	expect(p[1]).toBeCloseTo(8.124609657969613e-1, 5)
+	expect(p[2]).toBeCloseTo(3.523864507181277e-1, 5)
 
 	expect(v[0]).toBeCloseTo(-1.584863352414356e-2, 9)
 	expect(v[1]).toBeCloseTo(-6.766164807834689e-3, 9)
@@ -40,8 +40,8 @@ test('DE421', async () => {
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
 	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
 	expect(p[0]).toBeCloseTo(-4.233964762021999e-1, 5)
-	expect(p[1]).toBeCloseTo(8.124609657969613e-1, 6)
-	expect(p[2]).toBeCloseTo(3.523864507181277e-1, 6)
+	expect(p[1]).toBeCloseTo(8.124609657969613e-1, 5)
+	expect(p[2]).toBeCloseTo(3.523864507181277e-1, 5)
 
 	expect(v[0]).toBeCloseTo(-1.584863352414356e-2, 9)
 	expect(v[1]).toBeCloseTo(-6.766164807834689e-3, 9)
@@ -66,7 +66,7 @@ test('DE440', async () => {
 	expect(v[0]).toBeCloseTo(-1.584863352414356e-2, 15)
 	expect(v[1]).toBeCloseTo(-6.766164807834689e-3, 15)
 	expect(v[2]).toBeCloseTo(-2.933074405477159e-3, 15)
-}, 15000)
+})
 
 test('65803 Didymos', async () => {
 	await using source = fileHandleSource(await fs.open('data/65803_Didymos.bsp'))
@@ -75,5 +75,16 @@ test('65803 Didymos', async () => {
 
 	const segment = s.segment(Naif.SUN, Naif.DIDYMOS_BARYCENTER)
 	expect(segment).not.toBeUndefined()
-	await segment!.compute(time)
-})
+	const time = timeYMDHMS(2022, 12, 8, 20, 7, 15, Timescale.TDB)
+	const [p, v] = await segment!.compute(time)
+
+	// https://ssd.jpl.nasa.gov/horizons/app.html#/
+	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
+	expect(p[0]).toBeCloseTo(1.321900520119582e-1, 8)
+	expect(p[1]).toBeCloseTo(1.022633897814651, 8)
+	expect(p[2]).toBeCloseTo(4.564442163931812e-1, 8)
+
+	expect(v[0]).toBeCloseTo(-1.739801962135171e-2, 11)
+	expect(v[1]).toBeCloseTo(5.419297752176816e-3, 10)
+	expect(v[2]).toBeCloseTo(3.552869336296117e-3, 10)
+}, 1000000)

@@ -85,8 +85,6 @@ export class Type2And3Segment implements SpkSegment {
 
 	async compute(time: Time): Promise<PositionAndVelocity> {
 		if (!this.initialized) {
-			this.initialized = true
-
 			// INIT: is the initial epoch of the first record, given in ephemeris seconds past J2000.
 			// INTLEN: is the length of the interval covered by each record, in seconds.
 			// RSIZE: is the total size of (number of array elements in) each record.
@@ -96,6 +94,7 @@ export class Type2And3Segment implements SpkSegment {
 			this.intervalLength = b
 			this.rsize = Math.trunc(c)
 			this.n = Math.trunc(d)
+			this.initialized = true
 		}
 
 		const t = tdb(time)
@@ -112,12 +111,12 @@ export class Type2And3Segment implements SpkSegment {
 		const s = (2 * (d - (c.mid - c.radius))) / this.intervalLength - 1
 		const ss = 2 * s
 
-		const w0: MutVec3 = [0, 0, 0]
-		const w1: MutVec3 = [0, 0, 0]
-		const w2: MutVec3 = [0, 0, 0]
-		const dw0: MutVec3 = [0, 0, 0]
-		const dw1: MutVec3 = [0, 0, 0]
-		const dw2: MutVec3 = [0, 0, 0]
+		const w0 = zero()
+		const w1 = zero()
+		const w2 = zero()
+		const dw0 = zero()
+		const dw1 = zero()
+		const dw2 = zero()
 
 		for (let i = c.count - 1; i >= 1; i--) {
 			// Polynomial.
@@ -213,7 +212,26 @@ export class Type9Segment implements SpkSegment {
 	}
 }
 
+interface Type21Coefficent {
+	readonly tl: number
+	readonly g: Float64Array
+	readonly p: number[]
+	readonly v: number[]
+	readonly dt: number[][]
+	readonly kqmax1: number
+	readonly kq: number[]
+}
+
 export class Type21Segment implements SpkSegment {
+	private initialized = false
+	private n = 0
+	private epochDirCount = 0
+	private maxdim = 0
+	private dlsize = 0
+	private epochTable: Float64Array = new Float64Array(0)
+	private epochDir: Float64Array = new Float64Array(0)
+	private readonly coefficients = new Map<number, Type21Coefficent>()
+
 	constructor(
 		readonly daf: Daf,
 		readonly source: string,
@@ -228,6 +246,192 @@ export class Type21Segment implements SpkSegment {
 	) {}
 
 	async compute(time: Time): Promise<PositionAndVelocity> {
-		return [zero(), zero()]
+		if (!this.initialized) {
+			const [a, b] = await this.daf.read(this.endIndex - 1, this.endIndex)
+			this.maxdim = Math.trunc(a) // Difference line size.
+			this.dlsize = 4 * this.maxdim + 11
+			this.n = Math.trunc(b) // The number of records in a segment.
+			// Epochs for all records in this segment.
+			const start = this.startIndex + this.n * this.dlsize
+			this.epochTable = await this.daf.read(start, start + this.n - 1)
+			this.epochDirCount = Math.trunc(this.n / 100)
+			if (this.epochDirCount > 0) this.epochDir = await this.daf.read(this.endIndex - this.epochDirCount - 1, this.endIndex - 2)
+			this.initialized = true
+		}
+
+		const t = tdb(time)
+		const seconds = (t.day - J2000 + t.fraction) * DAYSEC
+		const index = this.searchCoefficientIndex(seconds)
+
+		if (!(await this.computeCoefficient(index))) {
+			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
+		}
+
+		const c = this.coefficients.get(index)!
+
+		// Next we set up for the computation of the various differences.
+		const delta = seconds - c.tl
+		let tp = delta
+		const mpq2 = c.kqmax1 - 2
+		let ks = c.kqmax1 - 1
+
+		// TP starts out as the delta t between the request time and the
+		// difference line's reference epoch. We then change it from DELTA
+		// by the components of the stepsize vector G.
+		const fc = new Float64Array(25)
+		const wc = new Float64Array(25 - 1)
+		const w = new Float64Array(25 + 3)
+
+		fc[0] = 1
+
+		for (let i = 0; i < mpq2; i++) {
+			fc[i + 1] = tp / c.g[i]
+			wc[i] = delta / c.g[i]
+			tp = delta + c.g[i]
+		}
+
+		// Collect KQMAX1 reciprocals.
+
+		for (let i = 0; i < c.kqmax1; i++) {
+			w[i] = 1 / (i + 1)
+		}
+
+		// Compute the W(K) terms needed for the position interpolation
+		// (Note, it is assumed throughout this routine that KS, which
+		// starts out as KQMAX1-1 (the maximum integration) is at least 2.
+
+		let jx = 0
+
+		while (ks >= 2) {
+			jx++
+
+			for (let i = 0; i < jx; i++) {
+				w[i + ks] = fc[i + 1] * w[i + ks - 1] - wc[i] * w[i + ks]
+			}
+
+			ks--
+		}
+
+		// Perform position interpolation: (Note that KS = 1 right now.
+		// We don't know much more than that.)
+		const p = zero()
+		const v = zero()
+
+		for (let i = 0; i < 3; i++) {
+			const kqq = c.kq[i]
+			let sum = 0
+
+			for (let j = kqq - 1; j >= 0; j--) {
+				sum += c.dt[j][i] * w[j + ks]
+			}
+
+			p[i] = (c.p[i] + delta * (c.v[i] + delta * sum)) / AU_KM
+		}
+
+		// Again we need to compute the W(K) coefficients that are
+		// going to be used in the velocity interpolation.
+		// (Note, at this point, KS = 1, KS1 = 0.)
+
+		for (let i = 0; i < jx; i++) {
+			w[i + ks] = fc[i + 1] * w[i + ks - 1] - wc[i] * w[i + ks]
+		}
+
+		ks--
+
+		// Perform velocity interpolation.
+		for (let i = 0; i < 3; i++) {
+			const kqq = c.kq[i]
+			let sum = 0
+
+			for (let j = kqq - 1; j >= 0; j--) {
+				sum += c.dt[j][i] * w[j + ks]
+			}
+
+			v[i] = ((c.v[i] + delta * sum) * DAYSEC) / AU_KM
+		}
+
+		return [p, v]
+	}
+
+	private searchCoefficientIndex(seconds: number): number {
+		let a: number
+		let b: number
+
+		if (this.epochDirCount > 0) {
+			// TODO: Not tested!
+			let subdir = 0
+
+			while (subdir < this.epochDirCount && this.epochDir[subdir] < seconds) {
+				subdir++
+			}
+
+			a = subdir * 100
+			b = (subdir + 1) * 100
+		} else {
+			a = 0
+			b = this.n
+		}
+
+		let index = -1
+
+		// Search target epoch in epoch table.
+		for (let i = a; i < b; i++) {
+			if (i < this.epochTable.length && this.epochTable[i] >= seconds) {
+				index = i
+				break
+			}
+		}
+
+		if (index === -1) {
+			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
+		}
+
+		return index
+	}
+
+	private async computeCoefficient(index: number) {
+		if (index < 0) return false
+		if (this.coefficients.has(index)) return true
+
+		const mdaRecord = await this.daf.read(this.startIndex + index * this.dlsize, this.startIndex + (index + 1) * this.dlsize - 1)
+
+		// Reference epoch of record.
+		const tl = mdaRecord[0]
+		// Stepsize function vector.
+		const g = mdaRecord.subarray(1, this.maxdim + 1)
+
+		// Reference position & velocity vector.
+		const p = zero()
+		const v = zero()
+
+		p[0] = mdaRecord[this.maxdim + 1]
+		v[0] = mdaRecord[this.maxdim + 2]
+
+		p[1] = mdaRecord[this.maxdim + 3]
+		v[1] = mdaRecord[this.maxdim + 4]
+
+		p[2] = mdaRecord[this.maxdim + 5]
+		v[2] = mdaRecord[this.maxdim + 6]
+
+		// dt = mdaRecord.sliceArray(maxdim + 7 until 4 * maxdim + 7)
+		const dt = new Array<MutVec3>(this.maxdim)
+		const dto = this.maxdim + 7
+
+		for (let p = 0; p < this.maxdim; p++) {
+			dt[p] = [mdaRecord[dto + p], mdaRecord[dto + this.maxdim + p], mdaRecord[dto + 2 * this.maxdim + p]]
+		}
+
+		const kqo = 4 * this.maxdim
+
+		// Initializing the difference table.
+		const kqmax1 = Math.trunc(mdaRecord[kqo + 7])
+		const kq = zero()
+		kq[0] = Math.trunc(mdaRecord[kqo + 8])
+		kq[1] = Math.trunc(mdaRecord[kqo + 9])
+		kq[2] = Math.trunc(mdaRecord[kqo + 10])
+
+		this.coefficients.set(index, { tl, g, p, v, dt, kqmax1, kq })
+
+		return true
 	}
 }
