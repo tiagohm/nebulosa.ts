@@ -20,7 +20,7 @@ export function fk5ToIcrs(p: CartesianCoordinate): CartesianCoordinate {
 
 // Precess the FK5 cartesian coordinate from equinox to other.
 export function precessFk5(p: CartesianCoordinate, from: Time, to: Time): CartesianCoordinate {
-	return mulVec(precessionMatrixCapitaine(from, to), p, p)
+	return mulVec(precessionMatrixCapitaine(from, to), p)
 }
 
 // Precess the FK5 cartesian coordinate from given equinox to J2000.
