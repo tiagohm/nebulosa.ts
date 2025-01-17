@@ -184,6 +184,8 @@ mulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
 
 ```ts
 search('C/2017 K2')
+identify(date, longitude, latitude, elevation, fovRa, fovDec, fovRaWidth, fovDecWidth, magLimit, magRequired)
+closeApproaches(dateMin, dateMax, distance)
 ```
 
 ### Spk

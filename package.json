@@ -6,9 +6,6 @@
 		"lint": "eslint .",
 		"prettier": "prettier \"**/*.ts\" --write"
 	},
-	"dependencies": {
-		"utility-types": "3.11.0"
-	},
 	"devDependencies": {
 		"eslint": "latest",
 		"prettier": "latest",
@@ -17,7 +14,9 @@
 	"peerDependencies": {
 		"@types/bun": "latest",
 		"@types/node": "latest",
-		"typescript": "~5.7.2"
+		"date-fns": "4.1.0",
+		"typescript": "~5.7.2",
+		"utility-types": "3.11.0"
 	},
 	"optionalDependencies": {
 		"sharp": "0.33.5"

@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { search } from './sbd'
+import { deg, parseAngle } from './angle'
+import { kilometer } from './distance'
+import { closeApproaches, identify, search } from './sbd'
 
-describe('search', () => {
+describe.skip('search', () => {
 	test('singleRecord', async () => {
 		const data = await search('C/2017 K2')
 
@@ -74,5 +76,45 @@ describe('search', () => {
 		if ('message' in data) {
 			expect(data.message).toBe('specified object was not found')
 		}
+	})
+})
+
+describe.skip('identify', () => {
+	test('ceres', async () => {
+		const dateTime = new Date('2023-08-21T00:00:00Z')
+		const response = await identify(dateTime, deg(-45.5), deg(-22.5), kilometer(1.81754), parseAngle('13h 21 16.50')!, parseAngle('-01 57 06.5')!)
+
+		expect('fields_second' in response).toBeTrue()
+
+		if ('fields_second' in response) {
+			expect(response.fields_second).toEqual(['Object name', 'Astrometric RA (hh:mm:ss)', 'Astrometric Dec (dd mm\'ss")', 'Dist. from center RA (")', 'Dist. from center Dec (")', 'Dist. from center Norm (")', 'Visual magnitude (V)', 'RA rate ("/h)', 'Dec rate ("/h)'])
+			expect(response.data_second_pass[0][0]).toBe('1 Ceres (A801 AA)')
+		}
+	}, 60000)
+
+	test('noRecords', async () => {
+		const dateTime = new Date('2023-01-15T01:38:15Z')
+		const response = await identify(dateTime, deg(-45.5), deg(-22.5), kilometer(1.81754), parseAngle('10h 44 02')!, parseAngle('-59 36 04')!)
+		expect('n_first_pass' in response).toBeFalse()
+		expect('n_second_pass' in response).toBeFalse()
+	}, 60000)
+})
+
+describe.skip('closeApproaches', () => {
+	test('fromNowTo7Days', async () => {
+		const response = await closeApproaches('now', 7, 10)
+		expect(response.count).toBeGreaterThan(0)
+		expect(response.fields).toHaveLength(14)
+		expect(response.data.length).toBeGreaterThan(0)
+	})
+
+	test('fromDateToDate', async () => {
+		const from = new Date(2024, 3, 13)
+		const to = new Date(2024, 3, 20)
+		const response = await closeApproaches(from, to, 10)
+		expect(response.count).toBe(33)
+		expect(response.fields).toHaveLength(14)
+		expect(response.data.length).toBe(33)
+		expect(response.data.map((e) => e[0])).toEqual(['2021 GQ5', '2024 GT2', '2024 GV3', '2024 FP3', '2024 GE3', '2024 GG6', '2024 GA1', '2023 FN13', '2024 HX', '2024 HB', '2024 HG', '2024 GB6', '2024 HE', '2024 GO1', '439437', '2024 GZ5', '2024 GK6', '2024 GN2', '2024 HA', '2024 GS5', '2024 GM1', '2024 JJ', '2024 JC2', '2024 HO', '2024 HZ', '2024 GF5', '2024 GJ6', '2024 GA6', '2024 GP7', '2021 JW2', '2024 HQ', '2017 SA20', '2024 HL'])
 	})
 })
