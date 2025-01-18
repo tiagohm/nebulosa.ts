@@ -2,30 +2,15 @@ import eslint from '@eslint/js'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
-	{
-		ignores: ['**/*.mjs', '**/*.js', '**/node_modules'],
-	},
-	{
-		files: ['**/*.ts'],
-		...eslint.configs.recommended,
-	},
-	...tseslint.configs.strictTypeChecked.map((config) => {
-		return {
-			files: ['**/*.ts'],
-			...config,
-		}
-	}),
-	...tseslint.configs.stylisticTypeCheckedOnly.map((config) => {
-		return {
-			files: ['**/*.ts'],
-			...config,
-		}
-	}),
+	eslint.configs.recommended,
+	tseslint.configs.strictTypeChecked,
+	tseslint.configs.stylisticTypeCheckedOnly,
 	{
 		languageOptions: {
 			parserOptions: {
-				ecmaVersion: 2022,
-				parser: '@typescript-eslint/parser',
+				ecmaVersion: 2024,
+				parser: tseslint.parser,
+				projectService: true,
 				project: './tsconfig.json',
 				tsconfigRootDir: import.meta.dirname,
 			},
@@ -37,13 +22,10 @@ export default tseslint.config(
 			'no-unused-vars': 'off',
 			'no-loss-of-precision': 'off',
 			'no-extra-semi': 'warn',
-			'@typescript-eslint/no-unused-vars': 'warn',
-			'@typescript-eslint/no-loss-of-precision': 'off',
+			'@typescript-eslint/no-unused-vars': 'off',
 			'@typescript-eslint/restrict-template-expressions': 'off',
-			'@typescript-eslint/no-unsafe-argument': 'off',
 			'@typescript-eslint/no-misused-promises': 'off',
 			'@typescript-eslint/no-unsafe-return': 'off',
-			'@typescript-eslint/no-extraneous-class': 'off',
 			'@typescript-eslint/no-non-null-assertion': 'off',
 			'@typescript-eslint/consistent-type-imports': 'error',
 			'@typescript-eslint/no-empty-interface': 'error',

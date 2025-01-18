@@ -71,7 +71,7 @@ TODO
 ### Fits
 
 ```ts
-read(path) // Read FITS file
+read(source) // Read FITS file
 ```
 
 ### FK5
@@ -103,7 +103,7 @@ xy(time) // Polar motion angles at time
 ### Image
 
 ```ts
-fromFits(path) // Create image from FITS file
+fromFits(fits) // Create image from FITS file
 toFormat(image, path, format) // Save image to path as png, jpeg, webp, etc
 stf(image, midtone, shadow, highlight) // Apply STF to image
 ```
@@ -201,6 +201,17 @@ s.segment(Naif.SSB, Naif.EMB)!.compute(time) // Compute the position and velocit
 const sirius = star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // ICRS cartesian coordinate from star parameters
 at(sirius, time) // BCRS cartesian coordinate at time
 observedAt(sirius, time, [obp, obv]) // GCRS cartesian coordinate from observer at time
+```
+
+### Stellarium
+
+```ts
+const server = new StellariumProtocolServer('0.0.0.0', 10002, {})
+server.start() // Start server
+server.send(ra, dec) // Send the current coordinate
+server.stop() // Stop server
+catalog(source) // Read Stellarium's catalog.dat file
+searchAround(catalog, ra, dec, fov) // Search around coordinate
 ```
 
 ### Time

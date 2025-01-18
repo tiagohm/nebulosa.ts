@@ -74,7 +74,6 @@ export type TimeDelta = (time: Time) => number
 // The displaced angles (longitude and latitude) of rotation of the Earth's spin axis about its geographic axis.
 export type PolarMotion = (time: Time) => [Angle, Angle]
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export const noPolarMotion = (time: Time) => [0, 0]
 
 // Computes the motion angles (sprime, x, y) from the given time.
