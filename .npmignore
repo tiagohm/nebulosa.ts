@@ -1,0 +1,15 @@
+.github/
+.vscode/
+data/
+docs/
+scripts/
+.cache/
+*.test.ts
+*.mjs
+Makefile
+.gitattributes
+.editorconfig
+.prettierignore
+.prettierrc
+tsconfig.json
+main.ts
