@@ -8,8 +8,8 @@ const SEARCH_PATH = 'sbdb.api?alt-des=1&alt-orbits=1&ca-data=1&ca-time=both&ca-t
 const IDENTIFY_PATH = 'sb_ident.api?two-pass=true&suppress-first-pass=true'
 const CLOSE_APPROACHES_PATH = 'cad.api?neo=false&diameter=true&fullname=true'
 
-const FOV_RA_FORMAT: Partial<FormatAngleOptions> = { isHour: true, separators: '-', minusSign: 'M', noSign: true, fractionDigits: 2 }
-const FOV_DEC_FORMAT: Partial<FormatAngleOptions> = { separators: '-', minusSign: 'M', plusSign: '', fractionDigits: 2 }
+const FOV_RA_FORMAT: FormatAngleOptions = { isHour: true, separators: '-', minusSign: 'M', noSign: true, fractionDigits: 2 }
+const FOV_DEC_FORMAT: FormatAngleOptions = { separators: '-', minusSign: 'M', plusSign: '', fractionDigits: 2 }
 
 export interface Signature {
 	readonly version: string

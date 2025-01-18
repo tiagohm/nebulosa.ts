@@ -22,7 +22,7 @@ export const ANGVEL = 7.292115e-5
 // Arcseconds in a full circle.
 export const TURNAS = 1296000
 
-const DEFAULT_FORMAT_ANGLE_OPTIONS: FormatAngleOptions = {
+const DEFAULT_FORMAT_ANGLE_OPTIONS: Required<FormatAngleOptions> = {
 	isHour: false,
 	noSign: false,
 	noSecond: false,
@@ -36,18 +36,18 @@ const DEFAULT_FORMAT_ANGLE_OPTIONS: FormatAngleOptions = {
 export type Angle = number
 
 export interface ParseAngleOptions {
-	isHour: boolean
-	defaultValue: Angle
+	isHour?: boolean
+	defaultValue?: Angle
 }
 
 export interface FormatAngleOptions {
-	isHour: boolean
-	noSign: boolean
-	noSecond: boolean
-	fractionDigits: number
-	separators: string[] | string
-	minusSign: string
-	plusSign: string
+	isHour?: boolean
+	noSign?: boolean
+	noSecond?: boolean
+	fractionDigits?: number
+	separators?: string[] | string
+	minusSign?: string
+	plusSign?: string
 }
 
 export function normalize(angle: Angle): Angle {
@@ -161,7 +161,7 @@ function isSecondSign(input?: string) {
 	return !!input && (input === 's' || input === '"')
 }
 
-export function parseAngle(input?: string | number, options?: Partial<ParseAngleOptions>): Angle | undefined {
+export function parseAngle(input?: string | number, options?: ParseAngleOptions): Angle | undefined {
 	if (typeof input === 'number') {
 		return options?.isHour ? hour(input) : deg(input)
 	}
@@ -205,7 +205,7 @@ export function parseAngle(input?: string | number, options?: Partial<ParseAngle
 	return options?.defaultValue
 }
 
-export function formatAngle(angle: Angle, options?: Partial<FormatAngleOptions>) {
+export function formatAngle(angle: Angle, options?: FormatAngleOptions) {
 	const isHour = options?.isHour ?? DEFAULT_FORMAT_ANGLE_OPTIONS.isHour
 	const noSecond = options?.noSecond ?? DEFAULT_FORMAT_ANGLE_OPTIONS.noSecond
 	const noSign = options?.noSign ?? DEFAULT_FORMAT_ANGLE_OPTIONS.noSign
@@ -244,9 +244,9 @@ export function formatAngle(angle: Angle, options?: Partial<FormatAngleOptions>)
 	return `${sign}${d}${sa}${m}${sb}${s}${sc}`
 }
 
-const DEFAULT_HMS_FORMAT: Partial<FormatAngleOptions> = { isHour: true, separators: ':', noSign: true }
-const DEFAULT_DMS_FORMAT: Partial<FormatAngleOptions> = { noSign: true, separators: 'dms' }
-const DEFAULT_SIGNED_DMS_FORMAT: Partial<FormatAngleOptions> = { ...DEFAULT_DMS_FORMAT, noSign: false }
+const DEFAULT_HMS_FORMAT: FormatAngleOptions = { isHour: true, separators: ':', noSign: true }
+const DEFAULT_DMS_FORMAT: FormatAngleOptions = { noSign: true, separators: 'dms' }
+const DEFAULT_SIGNED_DMS_FORMAT: FormatAngleOptions = { ...DEFAULT_DMS_FORMAT, noSign: false }
 
 // Format the angle as 00:00:00.00.
 export function formatHMS(angle: Angle) {

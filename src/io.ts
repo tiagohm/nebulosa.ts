@@ -253,11 +253,11 @@ export async function readUntil(source: Source, buffer: Buffer, size: number = b
 }
 
 export interface ReadLinesOptions {
-	readonly encoding?: 'ascii' | 'utf8' | 'utf-8'
-	readonly emptyLines: boolean
+	encoding?: 'ascii' | 'utf8' | 'utf-8'
+	emptyLines?: boolean
 }
 
-export async function* readLines(source: Source, chunkSize: number, options?: Partial<ReadLinesOptions>) {
+export async function* readLines(source: Source, chunkSize: number, options?: ReadLinesOptions) {
 	const buffer = Buffer.allocUnsafe(chunkSize)
 	const emptyLines = options?.emptyLines ?? true
 	const encoding = options?.encoding
