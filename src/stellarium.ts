@@ -177,7 +177,7 @@ export enum ObjectType {
 }
 
 export async function* catalog(source: Source & Seekable) {
-	const buffer = Buffer.allocUnsafe(1024)
+	const buffer = Buffer.allocUnsafe(1024 * 32)
 	let position = 0
 	let size = 0
 
