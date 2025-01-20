@@ -59,7 +59,18 @@ export function neptune(time: Time) {
 // The rectangular coordinates of VSOP87A and VSOP87E defined in dynamical ecliptic
 // frame J2000 can be connected to the equatorial frame FK5 J2000 with the
 // following rotation:
-const REFERENCE_FRAME_MATRIX: Mat3 = [1, 0.00000044036, -0.000000190919, -0.000000479966, 0.917482137087, -0.397776982902, 0, 0.397776982902, 0.917482137087] as const
+// const REFERENCE_FRAME_MATRIX: Mat3 = [1, 0.00000044036, -0.000000190919, -0.000000479966, 0.917482137087, -0.397776982902, 0, 0.397776982902, 0.917482137087] as const
+
+// If XE, YE, ZE are the rectangular coordinates of a planet computed from
+// VSOP2010, the rectangular coordinates of the planet in equatorial frame of
+// the ICRF, XQ, YQ, ZQ, may be obtained by the following rotation:
+// [XQ, YQ, ZQ] = [cosφ, -sinφcose, sinφsine, sinφ, cosφcose, -cosφsine, 0, sine, cose] * [XE, YE, ZE]
+// with: e = 23° 26' 21.40960" et φ = -0.05028"
+const COSE = 0.91748213612272390217403306013324
+const SINE = 0.39777698512569015670849714551792
+const COSQ = 0.99999999999997028947842490328689
+const SINQ = -0.00000024376431886187228345532388
+const REFERENCE_FRAME_MATRIX: Mat3 = [COSQ, -SINQ * COSE, SINQ * SINE, SINQ, COSQ * COSE, -COSQ * SINE, 0, SINE, COSE] as const
 
 function compute(time: Time, data: readonly number[][][]): PositionAndVelocity {
 	const t = tdb(time)
