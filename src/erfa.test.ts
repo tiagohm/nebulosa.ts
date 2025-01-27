@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
 import { arcsec, toArcsec } from './angle'
-import { kilometer } from './distance'
+import { kilometer, meter } from './distance'
 import * as erfa from './erfa'
 import type { Mat3, MutMat3 } from './matrix'
 import type { MutVec3, Vec3 } from './vector'
-import { kilometerPerSecond, toKilometerPerSecond } from './velocity'
+import { kilometerPerSecond, meterPerSecond, toKilometerPerSecond } from './velocity'
 
 test('eraP2s', () => {
 	const [theta, phi, distance] = erfa.eraP2s(100, -50, 25)
@@ -576,4 +576,156 @@ test('eraC2t06a', () => {
 	expect(r[6]).toBeCloseTo(0.5773474024748545878e-3, 12)
 	expect(r[7]).toBeCloseTo(0.3961816829632690581e-4, 12)
 	expect(r[8]).toBeCloseTo(0.9999998325501747785, 12)
+})
+
+test('eraApci13', () => {
+	const ph: Vec3 = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775]
+	// const vh: Vec3 = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732]
+	const pb: Vec3 = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775]
+	const vb: Vec3 = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545]
+
+	const [astrom, eo] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+
+	expect(astrom.pmt).toBeCloseTo(12.65133794027378508, 11)
+	expect(astrom.eb[0]).toBeCloseTo(0.9013108747340644755, 12)
+	expect(astrom.eb[1]).toBeCloseTo(-0.4174026640406119957, 12)
+	expect(astrom.eb[2]).toBeCloseTo(-0.1809822877867817771, 12)
+	expect(astrom.eh[0]).toBeCloseTo(0.8940025429255499549, 12)
+	expect(astrom.eh[1]).toBeCloseTo(-0.4110930268331896318, 12)
+	expect(astrom.eh[2]).toBeCloseTo(-0.178218900601974985, 12)
+	expect(astrom.em).toBeCloseTo(1.010465295964664178, 12)
+	expect(astrom.v[0]).toBeCloseTo(0.4289638912941341125e-4, 16)
+	expect(astrom.v[1]).toBeCloseTo(0.8115034032405042132e-4, 16)
+	expect(astrom.v[2]).toBeCloseTo(0.3517555135536470279e-4, 16)
+	expect(astrom.bm1).toBeCloseTo(0.9999999951686013142, 12)
+	expect(astrom.bpn[0]).toBeCloseTo(0.999999206037676171, 12)
+	expect(astrom.bpn[3]).toBeCloseTo(0.4124244860106037157e-7, 12)
+	expect(astrom.bpn[6]).toBeCloseTo(0.126012857105170967e-2, 12)
+	expect(astrom.bpn[1]).toBeCloseTo(-0.128229198722213069e-7, 12)
+	expect(astrom.bpn[4]).toBeCloseTo(0.9999999997456835325, 12)
+	expect(astrom.bpn[7]).toBeCloseTo(-0.2255288829420524935e-4, 12)
+	expect(astrom.bpn[2]).toBeCloseTo(-0.1260128571661374559e-2, 12)
+	expect(astrom.bpn[5]).toBeCloseTo(0.2255285422953395494e-4, 12)
+	expect(astrom.bpn[8]).toBeCloseTo(0.9999992057833604343, 12)
+	expect(eo).toBeCloseTo(-0.2900618712657375647e-2, 12)
+})
+
+test('eraApci', () => {
+	const ph: Vec3 = [0.903358544, -0.415395237, -0.180084014]
+	const pb: Vec3 = [0.901310875, -0.417402664, -0.180982288]
+	const vb: Vec3 = [0.00742727954, 0.0140507459, 0.00609045792]
+
+	const astrom = erfa.eraApci(2456165.5, 0.401182685, [pb, vb], ph, 0.0013122272, -2.92808623e-5, 3.05749468e-8)
+
+	expect(astrom.pmt).toBeCloseTo(12.65133794027378508, 11)
+	expect(astrom.eb[0]).toBeCloseTo(0.901310875, 12)
+	expect(astrom.eb[1]).toBeCloseTo(-0.417402664, 12)
+	expect(astrom.eb[2]).toBeCloseTo(-0.180982288, 12)
+	expect(astrom.eh[0]).toBeCloseTo(0.8940025429324143045, 12)
+	expect(astrom.eh[1]).toBeCloseTo(-0.4110930268679817955, 12)
+	expect(astrom.eh[2]).toBeCloseTo(-0.1782189004872870264, 12)
+	expect(astrom.em).toBeCloseTo(1.010465295811013146, 12)
+	expect(astrom.v[0]).toBeCloseTo(0.4289638913597693554e-4, 16)
+	expect(astrom.v[1]).toBeCloseTo(0.8115034051581320575e-4, 16)
+	expect(astrom.v[2]).toBeCloseTo(0.3517555136380563427e-4, 16)
+	expect(astrom.bm1).toBeCloseTo(0.9999999951686012981, 12)
+	expect(astrom.bpn[0]).toBeCloseTo(0.9999991390295159156, 12)
+	expect(astrom.bpn[3]).toBeCloseTo(0.4978650072505016932e-7, 12)
+	expect(astrom.bpn[6]).toBeCloseTo(0.13122272e-2, 12)
+	expect(astrom.bpn[1]).toBeCloseTo(-0.113633665377160963e-7, 12)
+	expect(astrom.bpn[4]).toBeCloseTo(0.9999999995713154868, 12)
+	expect(astrom.bpn[7]).toBeCloseTo(-0.292808623e-4, 12)
+	expect(astrom.bpn[2]).toBeCloseTo(-0.1312227200895260194e-2, 12)
+	expect(astrom.bpn[5]).toBeCloseTo(0.292808221787231568e-4, 12)
+	expect(astrom.bpn[8]).toBeCloseTo(0.9999991386008323373, 12)
+})
+
+test('eraApcg', () => {
+	const ph: Vec3 = [0.903358544, -0.415395237, -0.180084014]
+	const pb: Vec3 = [0.901310875, -0.417402664, -0.180982288]
+	const vb: Vec3 = [0.00742727954, 0.0140507459, 0.00609045792]
+
+	const astrom = erfa.eraApcg(2456165.5, 0.401182685, [pb, vb], ph)
+
+	expect(astrom.pmt).toBeCloseTo(12.65133794027378508, 11)
+	expect(astrom.eb[0]).toBeCloseTo(0.901310875, 12)
+	expect(astrom.eb[1]).toBeCloseTo(-0.417402664, 12)
+	expect(astrom.eb[2]).toBeCloseTo(-0.180982288, 12)
+	expect(astrom.eh[0]).toBeCloseTo(0.8940025429324143045, 12)
+	expect(astrom.eh[1]).toBeCloseTo(-0.4110930268679817955, 12)
+	expect(astrom.eh[2]).toBeCloseTo(-0.1782189004872870264, 12)
+	expect(astrom.em).toBeCloseTo(1.010465295811013146, 12)
+	expect(astrom.v[0]).toBeCloseTo(0.4289638913597693554e-4, 16)
+	expect(astrom.v[1]).toBeCloseTo(0.8115034051581320575e-4, 16)
+	expect(astrom.v[2]).toBeCloseTo(0.3517555136380563427e-4, 16)
+	expect(astrom.bm1).toBeCloseTo(0.9999999951686012981, 12)
+	expect(astrom.bpn[0]).toBeCloseTo(1, 12)
+	expect(astrom.bpn[3]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[6]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[1]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[4]).toBeCloseTo(1, 12)
+	expect(astrom.bpn[7]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[2]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[5]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[8]).toBeCloseTo(1, 12)
+})
+
+test('eraApcs', () => {
+	const p: Vec3 = [meter(-1836024.09), meter(1056607.72), meter(-5998795.26)]
+	const v: Vec3 = [meterPerSecond(-77.0361767), meterPerSecond(-133.310856), meterPerSecond(0.0971855934)]
+	const ph: Vec3 = [-0.973458265, -0.209215307, -0.0906996477]
+	const pb: Vec3 = [-0.974170438, -0.211520082, -0.0917583024]
+	const vb: Vec3 = [0.00364365824, -0.0154287319, -0.00668922024]
+
+	const astrom = erfa.eraApcs(2456384.5, 0.970031644, [p, v], [pb, vb], ph)
+
+	expect(astrom.pmt).toBeCloseTo(13.25248468622587269, 11)
+	expect(astrom.eb[0]).toBeCloseTo(-0.9741827110629881886, 12)
+	expect(astrom.eb[1]).toBeCloseTo(-0.2115130190136415986, 12)
+	expect(astrom.eb[2]).toBeCloseTo(-0.09179840186954412099, 12)
+	expect(astrom.eh[0]).toBeCloseTo(-0.9736425571689454706, 12)
+	expect(astrom.eh[1]).toBeCloseTo(-0.209245212585043593, 12)
+	expect(astrom.eh[2]).toBeCloseTo(-0.09075578152248299218, 12)
+	expect(astrom.em).toBeCloseTo(0.9998233241709796859, 12)
+	expect(astrom.v[0]).toBeCloseTo(0.207870499328268551e-4, 16)
+	expect(astrom.v[1]).toBeCloseTo(-0.8955360106989405683e-4, 16)
+	expect(astrom.v[2]).toBeCloseTo(-0.3863338994289409097e-4, 16)
+	expect(astrom.bm1).toBeCloseTo(0.9999999950277561237, 12)
+	expect(astrom.bpn[0]).toBeCloseTo(1, 12)
+	expect(astrom.bpn[3]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[6]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[1]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[4]).toBeCloseTo(1, 12)
+	expect(astrom.bpn[7]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[2]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[5]).toBeCloseTo(0, 12)
+	expect(astrom.bpn[8]).toBeCloseTo(1, 12)
+})
+
+test('eraAtccq', () => {
+	const ph: Vec3 = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775]
+	// const vh: Vec3 = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732]
+	const pb: Vec3 = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775]
+	const vb: Vec3 = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545]
+
+	const [astrom] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+	const p = erfa.eraAtccq(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), astrom)
+	const [ra, dec] = erfa.eraC2s(...p)
+
+	expect(ra).toBeCloseTo(2.710126504531372384, 12)
+	expect(dec).toBeCloseTo(0.1740632537628350152, 12)
+})
+
+test('eraAtciq', () => {
+	const ph: Vec3 = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775]
+	// const vh: Vec3 = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732]
+	const pb: Vec3 = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775]
+	const vb: Vec3 = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545]
+
+	const [astrom] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+	const p = erfa.eraAtciq(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), astrom)
+	const [ra, dec] = erfa.eraC2s(...p)
+
+	expect(ra).toBeCloseTo(2.710121572968696744, 12)
+	expect(dec).toBeCloseTo(0.1729371367219539137, 12)
 })

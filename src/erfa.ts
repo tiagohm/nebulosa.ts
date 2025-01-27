@@ -6,7 +6,7 @@ import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
 import { IAU2000B_LS } from './iau2000b'
 import { IAU2006_S, IAU2006_SP } from './iau2006'
 import { pmod, roundToNearestWholeNumber } from './math'
-import { clone as cloneMat, copy, identity, mul, rotX, rotY, rotZ, transpose, type Mat3, type MutMat3 } from './matrix'
+import { clone as cloneMat, copy, identity, mul, mulVec, rotX, rotY, rotZ, transpose, type Mat3, type MutMat3 } from './matrix'
 import { clone, cross, divScalar, dot, fill, length, minus, mulScalar, normalizeMut, normalize as normalizeVec, plus, zero, type MutVec3, type Vec3 } from './vector'
 import type { Velocity } from './velocity'
 
@@ -74,9 +74,49 @@ const LEAP_SECOND_DRIFT: LeapSecondDrift[] = [
 	[39126, 0.002592],
 ]
 
+const EMPTY_ERA_ASTROM: EraAstrom = {
+	pmt: 0,
+	eb: [0, 0, 0],
+	eh: [0, 0, 0],
+	em: 0,
+	v: [0, 0, 0],
+	bm1: 0,
+	bpn: [0, 0, 0, 0, 0, 0, 0, 0, 0],
+	along: 0,
+	phi: 0,
+	xpl: 0,
+	ypl: 0,
+	sphi: 0,
+	cphi: 0,
+	diurab: 0,
+	eral: 0,
+	refa: 0,
+	refb: 0,
+}
+
 export type LeapSecondChange = readonly [number, number, number]
 
 export type LeapSecondDrift = readonly [number, number]
+
+export interface EraAstrom {
+	pmt: number // PM time interval (SSB, Julian years)
+	eb: MutVec3 // SSB to observer (vector, au)
+	eh: MutVec3 // Sun to observer (unit vector)
+	em: Distance // distance from Sun to observer (au)
+	v: MutVec3 // barycentric observer velocity (vector, c)
+	bm1: number // sqrt(1-|v|^2): reciprocal of Lorenz factor
+	bpn: MutMat3 // bias-precession-nutation matrix
+	along: number // longitude + s' + dERA(DUT) (radians)
+	phi: number // geodetic latitude (radians)
+	xpl: number // polar motion xp wrt local meridian (radians)
+	ypl: number // polar motion yp wrt local meridian (radians)
+	sphi: number // sine of geodetic latitude
+	cphi: number // cosine of geodetic latitude
+	diurab: number // magnitude of diurnal aberration vector
+	eral: number // "local" Earth rotation angle (radians)
+	refa: number // refraction constant A (radians)
+	refb: number // refraction constant B (radians)
+}
 
 // Normalizes [angle] into the range -[PI] <= a < +[PI].
 export function eraAnpm(angle: Angle): Angle {
@@ -463,6 +503,7 @@ export function eraGst06a(ut11: number, ut12: number, tt1: number, tt2: number):
 
 // Greenwich apparent sidereal time, IAU 2006, given the NPB matrix.
 export function eraGst06(ut11: number, ut12: number, tt1: number, tt2: number, rnpb: Mat3): Angle {
+	// Extract CIP X,Y.
 	const x = rnpb[6] // 2x0
 	const y = rnpb[7] // 2x1
 
@@ -1201,13 +1242,13 @@ export function eraPmpx(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Angle, r
 }
 
 // Apply aberration to transform natural direction into proper direction.
-export function eraAb(pnat: Vec3, v: Vec3, s: number, bm1: number): MutVec3 {
+export function eraAb(pnat: Vec3, v: Vec3, s: number, bm1: number, o?: MutVec3): MutVec3 {
 	const pdv = dot(pnat, v)
 	const w1 = 1 + pdv / (1 + bm1)
 	const w2 = SCHWARZSCHILD_RADIUS_OF_THE_SUN / s
 	let r2 = 0
 
-	const p = zero()
+	const p = o ?? zero()
 
 	for (let i = 0; i < 3; i++) {
 		const w = pnat[i] * bm1 + w1 * v[i] + w2 * (v[i] - pdv * pnat[i])
@@ -1259,7 +1300,7 @@ export function eraLdn(b: LdBody[], ob: Vec3, sc: Vec3) {
 
 // Apply light deflection by a solar-system body, as part of
 // transforming coordinate direction into natural direction.
-export function eraLd(bm: number, p: Vec3, q: Vec3, e: Vec3, em: number, dlim: number, p1?: MutVec3) {
+export function eraLd(bm: number, p: Vec3, q: Vec3, e: Vec3, em: number, dlim: number, o?: MutVec3) {
 	// q . (q + e).
 	const qpe = plus(q, e)
 	const qdqpe = dot(q, qpe)
@@ -1271,16 +1312,16 @@ export function eraLd(bm: number, p: Vec3, q: Vec3, e: Vec3, em: number, dlim: n
 	cross(p, cross(e, q, qpe), qpe)
 
 	// Apply the deflection.
-	return plus(p, mulScalar(qpe, w, qpe), p1 ?? qpe)
+	return plus(p, mulScalar(qpe, w, qpe), o ?? qpe)
 }
 
 // Deflection of starlight by the Sun.
-export function eraLdSun(p: Vec3, e: Vec3, em: number) {
+export function eraLdSun(p: Vec3, e: Vec3, em: number, o?: MutVec3) {
 	// Deflection limiter (smaller for distant observers).
 	const em2 = Math.max(1, em * em)
 
 	// Apply the deflection.
-	return eraLd(1, p, p, e, em, 1e-6 / em2)
+	return eraLd(1, p, p, e, em, 1e-6 / em2, o)
 }
 
 // Form the celestial to terrestrial matrix given the date, the UT1 and
@@ -1326,8 +1367,9 @@ export function eraC2ixys(x: Angle, y: Angle, s: Angle, o?: MutMat3) {
 	const e = r2 > 0 ? Math.atan2(y, x) : 0
 	const d = Math.atan(Math.sqrt(r2 / (1 - r2)))
 
-	// Form the matrix.
 	if (o) identity(o)
+
+	// Form the matrix.
 	return rotZ(-(e + s), rotY(d, rotZ(e, o)))
 }
 
@@ -1337,4 +1379,139 @@ export function eraC2ixys(x: Angle, y: Angle, s: Angle, o?: MutMat3) {
 export function eraC2tcio(rc2i: Mat3, era: Angle, rpom: Mat3, o?: MutMat3) {
 	o = o ? copy(rc2i, o) : cloneMat(rc2i)
 	return mul(rpom, rotZ(era, o), o)
+}
+
+// For a terrestrial observer, prepare star-independent astrometry
+// parameters for transformations between ICRS and geocentric CIRS
+// coordinates. The caller supplies the date, and ERFA models are used
+// to predict the Earth ephemeris and CIP/CIO.
+export function eraApci13(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom): readonly [EraAstrom, Angle] {
+	// Form the equinox based BPN matrix, IAU 2006/2000A.
+	const r = eraPnm06a(tdb1, tdb2)
+
+	// Extract CIP X,Y.
+	const x = r[6] // 2x0
+	const y = r[7] // 2x1
+
+	// Obtain CIO locator s.
+	const s = eraS06(tdb1, tdb2, x, y)
+
+	// Compute the star-independent astrometry parameters.
+	astrom = eraApci(tdb1, tdb2, ebpv, ehp, x, y, s, astrom)
+
+	// Equation of the origins.
+	const eo = eraEors(r, s)
+
+	return [astrom, eo]
+}
+
+// For a terrestrial observer, prepare star-independent astrometry
+// parameters for transformations between ICRS and geocentric CIRS
+// coordinates. The Earth ephemeris and CIP/CIO are supplied by the
+// caller.
+export function eraApci(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, x: Angle, y: Angle, s: Angle, astrom?: EraAstrom) {
+	// Star-independent astrometry parameters for geocenter.
+	astrom = eraApcg(tdb1, tdb2, ebpv, ehp, astrom)
+
+	// CIO based BPN matrix.
+	astrom.bpn = eraC2ixys(x, y, s, astrom.bpn)
+
+	return astrom
+}
+
+const ZERO_PV: readonly [Vec3, Vec3] = [zero(), zero()] as const
+
+// For a geocentric observer, prepare star-independent astrometry
+// parameters for transformations between ICRS and GCRS coordinates.
+// The Earth ephemeris is supplied by the caller.
+export function eraApcg(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, astrom?: EraAstrom) {
+	// Compute the star-independent astrometry parameters.
+	return eraApcs(tdb1, tdb2, ZERO_PV, ebpv, ehp, astrom)
+}
+
+// For an observer whose geocentric position and velocity are known,
+// prepare star-independent astrometry parameters for transformations
+// between ICRS and GCRS. The Earth ephemeris is supplied by the caller.
+export function eraApcs(tdb1: number, tdb2: number, pv: readonly [Vec3, Vec3], ebpv: readonly [Vec3, Vec3], ehp: Vec3, astrom?: EraAstrom) {
+	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
+
+	// Time since reference epoch, years (for proper motion calculation).
+	astrom.pmt = (tdb1 - J2000 + tdb2) / DAYSPERJY
+
+	// Adjust Earth ephemeris to observer.
+	for (let i = 0; i < 3; i++) {
+		const dp = pv[0][i]
+		const dv = pv[1][i]
+		astrom.eb[i] = ebpv[0][i] + dp
+		astrom.v[i] = ebpv[1][i] + dv
+		astrom.eh[i] = ehp[i] + dp
+	}
+
+	// Heliocentric direction and distance (unit vector and au).
+	astrom.em = length(astrom.eh)
+	astrom.eh = divScalar(astrom.eh, astrom.em, astrom.eh)
+
+	// Barycentric vel. in units of c, and reciprocal of Lorenz factor.
+	let v2 = 0
+
+	for (let i = 0; i < 3; i++) {
+		const w = astrom.v[i] * (LIGHT_TIME_AU / DAYSEC)
+		astrom.v[i] = w
+		v2 += w * w
+	}
+
+	astrom.bm1 = Math.sqrt(1.0 - v2)
+
+	// Reset the NPB matrix.
+	astrom.bpn = identity(astrom.bpn)
+
+	return astrom
+}
+
+// Quick transformation of a star's ICRS catalog entry (epoch J2000.0)
+// into ICRS astrometric place, given precomputed star-independent
+// astrometry parameters.
+// NOTE: Changed to return cartesian coordinate instead of spherical coordinate.
+export function eraAtccq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, astrom: EraAstrom) {
+	// Proper motion and parallax, giving BCRS coordinate direction.
+	const p = eraPmpx(rc, dc, pr, pd, px, rv, astrom.pmt, astrom.eb)
+
+	// ICRS astrometric RA,Dec.
+	// const s = eraC2s(...p)
+	// s[0] = pmod(s[0], TAU)
+	// return s
+
+	return p
+}
+
+// Quick ICRS, epoch J2000.0, to CIRS transformation, given precomputed
+// star-independent astrometry parameters.
+// NOTE: Changed to return cartesian coordinate instead of spherical coordinate.
+export function eraAtciq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, astrom: EraAstrom): MutVec3 {
+	// Proper motion and parallax, giving BCRS coordinate direction.
+	const pco = eraPmpx(rc, dc, pr, pd, px, rv, astrom.pmt, astrom.eb)
+
+	// BCRS to CIRS transformation.
+	return eraAtciqpmpx(pco, astrom, pco)
+}
+
+// Quick ICRS, epoch J2000.0, to CIRS transformation, given precomputed
+// star-independent astrometry parameters.
+// NOTE: Changed to return cartesian coordinate instead of spherical coordinate.
+export function eraAtciqpmpx(pco: Vec3, astrom: EraAstrom, o?: MutVec3): MutVec3 {
+	// Light deflection by the Sun, giving BCRS natural direction.
+	const pnat = eraLdSun(pco, astrom.eh, astrom.em, o)
+
+	// Aberration, giving GCRS proper direction.
+	const ppr = eraAb(pnat, astrom.v, astrom.em, astrom.bm1, pnat)
+
+	// Bias-precession-nutation, giving CIRS proper direction.
+	const pi = mulVec(astrom.bpn, ppr, ppr)
+
+	// ICRS astrometric RA,Dec.
+	// const s = eraC2s(...pi)
+	// s[0] = pmod(s[0], TAU)
+	// return s
+
+	return pi
 }
