@@ -15,7 +15,7 @@ def print_spherical_sky_coord(c: SkyCoord):
 
 
 def print_equatorial_sky_coord(c: SkyCoord):
-    print('X: {0:.18f} Y: {1:.18f}, Z: {2:.18f}'.format(c.spherical.lon.to(u.deg), c.spherical.lat.to(u.deg), c.spherical.distance.to(u.au)))
+    print('RA: {0:.18f} DEC: {1:.18f}'.format(c.spherical.lon.to(u.deg), c.spherical.lat.to(u.deg)))
 
 
 def print_speed_sky_coord(c: SkyCoord):
