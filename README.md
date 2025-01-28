@@ -43,6 +43,8 @@ parallacticAngle(p, time)
 separationFrom(a, b) // Angle between the positions
 gcrs(icrs, time, [ebp, ebv], ehp) // Compute the GCRS cartesian coordinate from ICRS at time
 cirs(icrs, time, [ebp, ebv], ehp) // Compute the CIRS cartesian coordinate from ICRS at time
+hadec(icrs, time, [ebp, ebv], ehp, { pressure, temperature, relativeHumidity, wl }) // Compute the HA/DEC spherical coordinate from ICRS
+altaz(icrs, time, [ebp, ebv], ehp, { pressure, temperature, relativeHumidity, wl }) // Compute the AZ/ALT spherical coordinate from ICRS
 ```
 
 ### Daf
@@ -182,6 +184,15 @@ mulVec(m, v) // Multiply the matrix by a vector
 mulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
 ```
 
+### Pressure
+
+```ts
+pascal(1) // Convert pascal to millibar
+atm(1) // Convert atm to millibar
+toPascal(1) // Convert millibar to pascal
+toAtm(1) // Convert millibar to atm
+```
+
 ### Small Body Database
 
 ```ts
@@ -213,6 +224,15 @@ server.send(ra, dec) // Send the current coordinate
 server.stop() // Stop server
 catalog(source) // Read Stellarium's catalog.dat file
 searchAround(catalog, ra, dec, fov) // Search around coordinate
+```
+
+### Temperature
+
+```ts
+fahrenheit(1) // Convert fahrenheit to celsius
+kelvin(1) // Convert Kelvin to celsius
+toFahrenheit(1) // Convert celsius to fahrenheit
+toKelvin(1) // Convert celsius to Kelvin
 ```
 
 ### Time

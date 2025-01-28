@@ -1,12 +1,14 @@
 import { arcsec, ASEC2RAD, deg, MILLIASEC2RAD, normalize, TURNAS, type Angle } from './angle'
-import { DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI } from './constants'
+import { AU_M, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI } from './constants'
 import { toKilometer, type Distance } from './distance'
 import { FAIRHEAD } from './fairhead'
 import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
 import { IAU2000B_LS } from './iau2000b'
 import { IAU2006_S, IAU2006_SP } from './iau2006'
 import { pmod, roundToNearestWholeNumber } from './math'
-import { clone as cloneMat, copy, identity, mul, mulVec, rotX, rotY, rotZ, transpose, type Mat3, type MutMat3 } from './matrix'
+import { clone as cloneMat, copy, identity, mul, mulTransposeVec, mulVec, rotX, rotY, rotZ, transpose, type Mat3, type MutMat3 } from './matrix'
+import type { Pressure } from './pressure'
+import type { Temperature } from './temperature'
 import { clone, cross, divScalar, dot, fill, length, minus, mulScalar, normalizeMut, normalize as normalizeVec, plus, zero, type MutVec3, type Vec3 } from './vector'
 import type { Velocity } from './velocity'
 
@@ -861,6 +863,9 @@ export function eraC2teqx(rbpn: Mat3, gast: Angle, rpom: Mat3): MutMat3 {
 	return mul(rpom, mul(m, rbpn, m), m)
 }
 
+const WGS84_RADIUS = 6378137 / AU_M
+const WGS84_FLATTENING = 1 / 298.257223563
+
 // Transform geocentric coordinates to geodetic for a reference ellipsoid of specified form.
 export function eraGc2Gde(radius: Distance, flattening: number, x: Distance, y: Distance, z: Distance): [Angle, Angle, Distance] {
 	const aeps2 = radius * radius * 1e-32
@@ -1027,7 +1032,7 @@ export function eraStarpv(ra: Angle, dec: Angle, pmRa: Angle, pmDec: Angle, para
 }
 
 // Convert position+velocity from spherical to cartesian coordinates.
-export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: Angle, rd: Velocity): readonly [MutVec3, MutVec3] {
+export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: Angle, rd: Velocity) {
 	const st = Math.sin(theta)
 	const ct = Math.cos(theta)
 	const sp = Math.sin(phi)
@@ -1040,7 +1045,7 @@ export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: An
 
 	const p: MutVec3 = [x, y, r * sp]
 	const v: MutVec3 = [-y * td - w * ct, x * td - w * st, rpd * cp + sp * rd]
-	return [p, v]
+	return [p, v] as const
 }
 
 // NOT PRESENT IN ERFA!
@@ -1380,7 +1385,7 @@ export function eraC2tcio(rc2i: Mat3, era: Angle, rpom: Mat3, o?: MutMat3) {
 // parameters for transformations between ICRS and geocentric CIRS
 // coordinates. The caller supplies the date, and ERFA models are used
 // to predict the Earth ephemeris and CIP/CIO.
-export function eraApci13(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom): readonly [EraAstrom, Angle] {
+export function eraApci13(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	// Form the equinox based BPN matrix, IAU 2006/2000A.
 	const r = eraPnm06a(tdb1, tdb2)
 
@@ -1397,7 +1402,7 @@ export function eraApci13(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3
 	// Equation of the origins.
 	const eo = eraEors(r, s)
 
-	return [astrom, eo]
+	return [astrom, eo] as const
 }
 
 // For a terrestrial observer, prepare star-independent astrometry
@@ -1511,4 +1516,309 @@ export function eraAtciqpmpx(pco: Vec3, astrom: EraAstrom, o?: MutVec3): MutVec3
 	// return s
 
 	return pi
+}
+
+// For a terrestrial observer, prepare star-independent astrometry
+// parameters for transformations between ICRS and observed
+// coordinates.  The caller supplies the Earth ephemeris, the Earth
+// rotation information and the refraction constants as well as the
+// site coordinates.
+export function eraApco(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, x: number, y: number, s: Angle, theta: Angle, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle, refa: number, refb: number, radius: Distance = WGS84_RADIUS, flattening: number = WGS84_FLATTENING, astrom?: EraAstrom) {
+	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
+
+	// Form the rotation matrix, CIRS to apparent [HA,Dec].
+	const r = rotZ(elong, rotX(-yp, rotY(-xp, rotZ(theta + sp))))
+
+	// Solve for local Earth rotation angle.
+	let a = r[0]
+	let b = r[1]
+	astrom.eral = a != 0 || b != 0 ? Math.atan2(b, a) : 0
+
+	// Solve for polar motion [X,Y] with respect to local meridian.
+	a = r[0]
+	const c = r[2]
+	astrom.xpl = Math.atan2(c, Math.sqrt(a * a + b * b))
+	a = r[5]
+	b = r[8]
+	astrom.ypl = a != 0 || b != 0 ? -Math.atan2(a, b) : 0
+
+	// Adjusted longitude.
+	astrom.along = eraAnpm(astrom.eral - theta)
+
+	// Functions of latitude.
+	astrom.sphi = Math.sin(phi)
+	astrom.cphi = Math.cos(phi)
+
+	// Refraction constants.
+	astrom.refa = refa
+	astrom.refb = refb
+
+	// Disable the (redundant) diurnal aberration step.
+	astrom.diurab = 0.0
+
+	// CIO based BPN matrix.
+	eraC2ixys(x, y, s, r)
+
+	// Observer's geocentric position and velocity (AU, AU/day, CIRS).
+	const pvc = eraPvtob(elong, phi, hm, xp, yp, sp, theta, radius, flattening)
+
+	// Rotate into GCRS.
+	mulTransposeVec(r, pvc[0], pvc[0])
+	mulTransposeVec(r, pvc[1], pvc[1])
+
+	// ICRS <-> GCRS parameters.
+	astrom = eraApcs(tdb1, tdb2, pvc, ebpv, ehp, astrom)
+
+	// Store the CIO based BPN matrix.
+	astrom.bpn = r
+
+	return astrom
+}
+
+// Earth rotation rate in radians per UT1 second.
+// const OM = (1.00273781191135448 * TAU) / DAYSEC
+const OM = 1.00273781191135448 * TAU // as unit is AU/day
+
+// Position and velocity of a terrestrial observing station.
+export function eraPvtob(elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle, theta: Angle, radius: Distance = WGS84_RADIUS, flattening: number = WGS84_FLATTENING): readonly [MutVec3, MutVec3] {
+	// Geodetic to geocentric transformation (ERFA_WGS84).
+	const xyzm = eraGd2Gce(radius, flattening, elong, phi, hm)
+
+	// Polar motion and TIO position.
+	const rpm = eraPom00(xp, yp, sp)
+	const xyz = mulTransposeVec(rpm, xyzm, xyzm)
+	const [x, y, z] = xyz
+
+	// Functions of ERA.
+	const s = Math.sin(theta)
+	const c = Math.cos(theta)
+
+	// Position.
+	xyz[0] = c * x - s * y
+	xyz[1] = s * x + c * y
+	xyz[2] = z
+
+	// Velocity.
+	const vx = OM * (-s * x - c * y)
+	const vy = OM * (c * x - s * y)
+
+	return [xyz, [vx, vy, 0]]
+}
+
+// For a terrestrial observer, prepare star-independent astrometry
+// parameters for transformations between ICRS and observed
+// coordinates. The caller supplies UTC, site coordinates, ambient air
+// conditions and observing wavelength, and ERFA models are used to
+// obtain the Earth ephemeris, CIP/CIO and refraction constants.
+export function eraApco13(tt1: number, tt2: number, ut11: number, ut12: number, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle, phpa: Pressure, tc: Temperature, rh: number, wl: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, radius: Distance = WGS84_RADIUS, flattening: number = WGS84_FLATTENING, astrom?: EraAstrom) {
+	// Form the equinox based BPN matrix, IAU 2006/2000A.
+	const r = eraPnm06a(tt1, tt2)
+
+	// Extract CIP X,Y.
+	const x = r[6] // 2x0
+	const y = r[7] // 2x1
+
+	// Obtain CIO locator s.
+	const s = eraS06(tt1, tt2, x, y)
+
+	// Earth rotation angle.
+	const theta = eraEra00(ut11, ut12)
+
+	// TIO locator s'.
+	if (sp === 0) sp = eraSp00(tt1, tt2)
+
+	// Refraction constants A and B.
+	const ref = eraRefco(phpa, tc, rh, wl)
+
+	// Compute the star-independent astrometry parameters.
+	astrom = eraApco(tt1, tt2, ebpv, ehp, x, y, s, theta, elong, phi, hm, xp, yp, sp, ref[0], ref[1], radius, flattening, astrom)
+
+	// Equation of the origins.
+	const eo = eraEors(r, s)
+
+	return [astrom, eo] as const
+}
+
+// Determine the constants A and B in the atmospheric refraction model dZ = A tan Z + B tan^3 Z.
+// Z is the "observed" zenith distance (i.e. affected by refraction)
+// and dZ is what to add to Z to give the "topocentric" (i.e. in vacuo)
+// zenith distance.
+export function eraRefco(phpa: Pressure, tc: Temperature, rh: number, wl: number) {
+	if (phpa === 0) return [0, 0] as const
+
+	// Decide whether optical/IR or radio case:  switch at 100 microns.
+	const optic = wl <= 100
+
+	// Restrict parameters to safe values.
+	const t = Math.max(-150, Math.min(tc, 200))
+	const p = Math.max(0, Math.min(phpa, 10000))
+	const r = Math.max(0, Math.min(rh, 1))
+	const w = Math.max(0.1, Math.min(wl, 1e6))
+
+	let pw = 0
+
+	// Water vapour pressure at the observer.
+	if (p > 0) {
+		const ps = Math.pow(10, (0.7859 + 0.03477 * t) / (1 + 0.00412 * t)) * (1 + p * (4.5e-6 + 6e-10 * t * t))
+		pw = (r * ps) / (1 - ((1 - r) * ps) / p)
+	}
+
+	// Refractive index minus 1 at the observer.
+	const tk = t + 273.15
+	let gamma = 0
+
+	if (optic) {
+		const wlsq = w * w
+		gamma = ((77.53484e-6 + (4.39108e-7 + 3.666e-9 / wlsq) / wlsq) * p - 11.2684e-6 * pw) / tk
+	} else {
+		gamma = (77.689e-6 * p - (6.3938e-6 - 0.375463 / tk) * pw) / tk
+	}
+
+	// Formula for beta from Stone, with empirical adjustments.
+	let beta = 4.4474e-6 * tk
+	if (!optic) beta -= 0.0074 * pw * beta
+
+	// Refraction constants from Green.
+	const refa = gamma * (1 - beta)
+	const refb = -gamma * (beta - gamma / 2)
+
+	return [refa, refb] as const
+}
+
+// For a terrestrial observer, prepare star-independent astrometry
+// parameters for transformations between CIRS and observed
+// coordinates.  The caller supplies UTC, site coordinates, ambient air
+// conditions and observing wavelength.
+export function eraApio13(tt1: number, tt2: number, ut11: number, ut12: number, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, phpa: Pressure, tc: Temperature, rh: number, wl: number, astrom?: EraAstrom) {
+	// TIO locator s'.
+	const sp = eraSp00(tt1, tt2)
+
+	// Earth rotation angle.
+	const theta = eraEra00(ut11, ut12)
+
+	// Refraction constants A and B.
+	const ref = eraRefco(phpa, tc, rh, wl)
+
+	// CIRS <-> observed astrometry parameters.
+	astrom = eraApio(sp, theta, elong, phi, hm, xp, yp, ref[0], ref[1], astrom)
+
+	return astrom
+}
+
+// For a terrestrial observer, prepare star-independent astrometry
+// parameters for transformations between CIRS and observed
+// coordinates.  The caller supplies the Earth orientation information
+// and the refraction constants as well as the site coordinates.
+export function eraApio(sp: Angle, theta: Angle, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, refa: number, refb: number, astrom?: EraAstrom) {
+	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
+
+	// Form the rotation matrix, CIRS to apparent [HA,Dec].
+	const r = rotZ(elong, rotX(-yp, rotY(-xp, rotZ(theta + sp))))
+
+	// Solve for local Earth rotation angle.
+	let a = r[0]
+	let b = r[1]
+	astrom.eral = a != 0 || b != 0 ? Math.atan2(b, a) : 0
+
+	// Solve for polar motion [X,Y] with respect to local meridian.
+	a = r[0]
+	const c = r[2]
+	astrom.xpl = Math.atan2(c, Math.sqrt(a * a + b * b))
+	a = r[5]
+	b = r[8]
+	astrom.ypl = a != 0 || b != 0 ? -Math.atan2(a, b) : 0
+
+	// Adjusted longitude.
+	astrom.along = eraAnpm(astrom.eral - theta)
+
+	// Functions of latitude.
+	astrom.sphi = Math.sin(phi)
+	astrom.cphi = Math.cos(phi)
+
+	// Observer's geocentric position and velocity (m, m/s, CIRS).
+	const pv = eraPvtob(elong, phi, hm, xp, yp, sp, theta)
+
+	// Magnitude of diurnal aberration vector.
+	astrom.diurab = Math.sqrt(pv[1][0] * pv[1][0] + pv[1][1] * pv[1][1]) / SPEED_OF_LIGHT_AU_DAY
+
+	// Refraction constants.
+	astrom.refa = refa
+	astrom.refb = refb
+
+	return astrom
+}
+
+// Quick CIRS to observed place transformation.
+export function eraAtioq(ri: Angle, di: Angle, astrom: EraAstrom) {
+	// CIRS RA,Dec to Cartesian -HA,Dec.
+	const v = eraS2c(ri - astrom.eral, di)
+	const x = v[0]
+	const y = v[1]
+	let z = v[2]
+
+	// Polar motion.
+	const sx = Math.sin(astrom.xpl)
+	const cx = Math.cos(astrom.xpl)
+	const sy = Math.sin(astrom.ypl)
+	const cy = Math.cos(astrom.ypl)
+	const xhd = cx * x + sx * z
+	const yhd = sx * sy * x + cy * y - cx * sy * z
+	const zhd = -sx * cy * x + sy * y + cx * cy * z
+
+	// Diurnal aberration.
+	let f = 1 - astrom.diurab * yhd
+	const xhdt = f * xhd
+	const yhdt = f * (yhd + astrom.diurab)
+	const zhdt = f * zhd
+
+	// Cartesian -HA,Dec to Cartesian Az,El (S=0,E=90).
+	const xaet = astrom.sphi * xhdt - astrom.cphi * zhdt
+	const yaet = yhdt
+	const zaet = astrom.cphi * xhdt + astrom.sphi * zhdt
+
+	// Azimuth (N=0,E=90).
+	const azobs = xaet != 0 || yaet != 0 ? Math.atan2(yaet, -xaet) : 0.0
+
+	// ----------
+	// Refraction
+	// ----------
+
+	// Cosine and sine of altitude, with precautions.
+	const r = Math.max(1e-6, Math.sqrt(xaet * xaet + yaet * yaet))
+	z = Math.max(0.05, zaet)
+
+	// A*tan(z)+B*tan^3(z) model, with Newton-Raphson correction.
+	const tz = r / z
+	const w = astrom.refb * tz * tz
+	const del = ((astrom.refa + w) * tz) / (1.0 + (astrom.refa + 3.0 * w) / (z * z))
+
+	// Apply the change, giving observed vector.
+	const cosdel = 1.0 - (del * del) / 2.0
+	f = cosdel - (del * z) / r
+	const xaeo = xaet * f
+	const yaeo = yaet * f
+	const zaeo = cosdel * zaet + del * r
+
+	// Observed ZD.
+	const zdobs = Math.atan2(Math.sqrt(xaeo * xaeo + yaeo * yaeo), zaeo)
+
+	// Az/El vector to HA,Dec vector (both right-handed).
+	v[0] = astrom.sphi * xaeo + astrom.cphi * zaeo
+	v[1] = yaeo
+	v[2] = -astrom.cphi * xaeo + astrom.sphi * zaeo
+
+	// To spherical -HA,Dec.
+	const [hmobs, dcobs] = eraC2s(...v)
+
+	// Right ascension (with respect to CIO).
+	const raobs = astrom.eral + hmobs
+
+	// Return the results.
+	const aob = pmod(azobs, TAU)
+	const zob = zdobs
+	const hob = -hmobs
+	const dob = dcobs
+	const rob = pmod(raobs, TAU)
+
+	return [aob, zob, hob, dob, rob] as const
 }

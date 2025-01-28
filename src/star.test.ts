@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test'
 import { deg, mas, normalize, toDeg } from './angle'
-import { cirs, equatorial, gcrs } from './astrometry'
+import { altaz, cirs, equatorial, gcrs, hadec } from './astrometry'
 import type { CartesianCoordinate } from './coordinate'
+import { meter } from './distance'
+import { Ellipsoid, geodetic } from './location'
+import { ONE_ATM } from './pressure'
 import { bcrs, star } from './star'
 import { Timescale, timeYMDHMS } from './time'
 import { kilometerPerSecond } from './velocity'
@@ -80,4 +83,40 @@ test('cirs', () => {
 	const eq = equatorial(c)
 	expect(toDeg(normalize(eq[0]))).toBeCloseTo(353.232964105577707414, 11)
 	expect(toDeg(eq[1])).toBeCloseTo(52.295543854747897683, 11)
+})
+
+test('hadec', () => {
+	const time = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
+	time.location = geodetic(deg(9.712156), deg(52.385639), meter(200), Ellipsoid.WGS84)
+	time.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
+	time.delta = () => -0.3495186114062241
+	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
+	const c = hadec(s[0], time, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION)!
+
+	expect(toDeg(c[0])).toBeCloseTo(-0.295041500325083861, 11)
+	expect(toDeg(c[1])).toBeCloseTo(52.295492760874715543, 11)
+})
+
+test('altaz', () => {
+	const time = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
+	time.location = geodetic(deg(9.712156), deg(52.385639), meter(200), Ellipsoid.WGS84)
+	time.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
+	time.delta = () => -0.3495186114062241
+	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
+	const c = altaz(s[0], time, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION)!
+
+	expect(toDeg(c[0])).toBeCloseTo(116.452274040350133077, 9)
+	expect(toDeg(c[1])).toBeCloseTo(89.798455668201469848, 11)
+})
+
+test('observedAltaz', () => {
+	const time = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
+	time.location = geodetic(deg(9.712156), deg(52.385639), meter(200), Ellipsoid.WGS84)
+	time.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
+	time.delta = () => -0.3495186114062241
+	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
+	const c = altaz(s[0], time, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, { pressure: ONE_ATM })!
+
+	expect(toDeg(c[0])).toBeCloseTo(116.452274040350133077, 9)
+	expect(toDeg(c[1])).toBeCloseTo(89.798511588010399009, 11)
 })

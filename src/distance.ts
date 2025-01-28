@@ -1,4 +1,6 @@
 import { AU_KM, AU_M, SPEED_OF_LIGHT } from './constants'
+import { ONE_ATM, type Pressure } from './pressure'
+import { toKelvin, type Temperature } from './temperature'
 
 // 1 parsec in AU.
 export const ONE_PARSEC: Distance = 206264.806245480309552772371736702884
@@ -47,4 +49,11 @@ export function toLightYear(distance: Distance): number {
 // Converts the distance to parsecs.
 export function toParsec(distance: Distance): number {
 	return distance / ONE_PARSEC
+}
+
+// Calculates the altitude given the pressure and temperature.
+export function fromPressure(pressure: Pressure, temperature: Temperature = 15): Distance {
+	const k = toKelvin(temperature) / 0.0065
+	const e = (8.31447 * 0.0065) / (9.80665 * 0.0289644) // R * L / (g * M)
+	return meter(k * (1 - Math.pow(pressure / ONE_ATM, e)))
 }

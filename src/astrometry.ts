@@ -1,18 +1,36 @@
 import type { Mutable } from 'utility-types'
 import { normalize, type Angle } from './angle'
-import { AU_M, DAYSEC, SPEED_OF_LIGHT } from './constants'
+import { AU_M, DAYSEC, PIOVERTWO, SPEED_OF_LIGHT, TAU } from './constants'
 import type { CartesianCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
-import { eraApcg, eraApci13, eraAtciqpmpx, eraP2s } from './erfa'
+import { eraApcg, eraApci13, eraApco13, eraAtciqpmpx, eraAtioq, eraC2s, eraP2s } from './erfa'
 import { ITRS_FRAME } from './itrs'
+import { ELLIPSOID_PARAMETERS } from './location'
+import { pmod } from './math'
 import { mulVec } from './matrix'
-import { tdb, Timescale, tt, type Time } from './time'
+import type { Pressure } from './pressure'
+import type { Temperature } from './temperature'
+import { pmAngles, tdb, Timescale, tt, ut1, type Time } from './time'
 import { angle, length, minus, normalize as normalizeVec } from './vector'
 
 export type PositionAndVelocity = readonly [CartesianCoordinate, CartesianCoordinate]
 
 // Computes the position at time.
 export type PositionAndVelocityOverTime = (time: Time) => PositionAndVelocity
+
+export interface RefractionParameters {
+	pressure?: Pressure
+	temperature?: Temperature
+	relativeHumidity?: number
+	wl?: number
+}
+
+export const DEFAULT_REFRACTION_PAREMETERS: Readonly<Required<RefractionParameters>> = {
+	pressure: 0,
+	temperature: 15,
+	relativeHumidity: 0,
+	wl: 0.55,
+}
 
 // Length of position component in AU.
 export function distance(p: CartesianCoordinate): Distance {
@@ -73,12 +91,9 @@ export function gcrs(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVel
 	// astrometric coordinate direction and then run the ERFA transform for
 	// no parallax/PM. This ensures reversibility and is more sensible for
 	// inside solar system objects.
-	const nc = minus(icrs, ebpv[0])
+	const nc = minus(icrs, astrom.eb)
 
-	// const d = length(star[0])
-	const g = eraAtciqpmpx(normalizeVec(nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
-	// mulScalar(g, d, g as unknown as MutVec3)
-	return g
+	return eraAtciqpmpx(normalizeVec(nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
 }
 
 // TODO: Use era or vsop87 to compute Earth barycentric and heliocentric position. Make the parameter optional.
@@ -91,10 +106,44 @@ export function cirs(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVel
 	// astrometric coordinate direction and then run the ERFA transform for
 	// no parallax/PM. This ensures reversibility and is more sensible for
 	// inside solar system objects.
-	const nc = minus(icrs, ebpv[0])
+	const nc = minus(icrs, astrom.eb)
 
-	// const d = length(star[0])
-	const g = eraAtciqpmpx(normalizeVec(nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
-	// mulScalar(g, d, g as unknown as MutVec3)
-	return g
+	return eraAtciqpmpx(normalizeVec(nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
+}
+
+function hadecAltaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate, refraction?: RefractionParameters) {
+	if (!time.location) return undefined
+
+	const a = tt(time)
+	const b = ut1(time)
+	const { longitude, latitude, elevation, ellipsoid } = time.location
+	const [sp, xp, yp] = pmAngles(time)
+	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
+
+	// First set up the astrometry context for ICRS<->observed
+	const pressure = refraction?.pressure ?? DEFAULT_REFRACTION_PAREMETERS.pressure
+	const temperature = refraction?.temperature ?? DEFAULT_REFRACTION_PAREMETERS.temperature
+	const relativeHumidity = refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PAREMETERS.relativeHumidity
+	const wl = refraction?.wl ?? DEFAULT_REFRACTION_PAREMETERS.wl
+	const [astrom] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp ?? ebpv[0], radius, flattening)
+	// Correct for parallax to find BCRS direction from observer (as in erfa.pmpx)
+	const nc = minus(icrs, astrom.eb)
+	// Convert to topocentric CIRS
+	const [ri, di] = eraC2s(...eraAtciqpmpx(normalizeVec(nc), astrom, nc))
+	// Now perform observed conversion
+	return eraAtioq(pmod(ri, TAU), di, astrom)
+}
+
+// https://en.wikipedia.org/wiki/Standard_temperature_and_pressure
+
+export function hadec(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate, refraction?: RefractionParameters) {
+	const r = hadecAltaz(icrs, time, ebpv, ehp, refraction)
+	if (!r) return r
+	return [r[2], r[3]] as const
+}
+
+export function altaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate, refraction?: RefractionParameters) {
+	const r = hadecAltaz(icrs, time, ebpv, ehp, refraction)
+	if (!r) return r
+	return [r[0], PIOVERTWO - r[1]] as const
 }

@@ -319,17 +319,17 @@ test('eraC2teqx', () => {
 })
 
 test('eraGc2Gde', () => {
-	const [a, b, c] = erfa.eraGc2Gde(6378137, 1 / 298.257223563, 2e6, 3e6, 5.244e6)
+	const [a, b, c] = erfa.eraGc2Gde(meter(6378137), 1 / 298.257223563, meter(2e6), meter(3e6), meter(5.244e6))
 	expect(a).toBeCloseTo(0.982793723247329068, 14)
 	expect(b).toBeCloseTo(0.97160184819075459, 14)
-	expect(c).toBeCloseTo(331.4172461426059892, 8)
+	expect(c).toBeCloseTo(meter(331.4172461426059892), 17)
 })
 
 test('eraGd2Gce', () => {
-	const [x, y, z] = erfa.eraGd2Gce(6378137, 1 / 298.257223563, 3.1, -0.5, 2500)
-	expect(x).toBeCloseTo(-5599000.5577049947, 7)
-	expect(y).toBeCloseTo(233011.67223479203, 7)
-	expect(z).toBeCloseTo(-3040909.4706983363, 7)
+	const [x, y, z] = erfa.eraGd2Gce(meter(6378137), 1 / 298.257223563, 3.1, -0.5, meter(2500))
+	expect(x).toBeCloseTo(meter(-5599000.5577049947), 18)
+	expect(y).toBeCloseTo(meter(233011.67223479203), 18)
+	expect(z).toBeCloseTo(meter(-3040909.4706983363), 18)
 })
 
 test('eraBp06', () => {
@@ -728,4 +728,145 @@ test('eraAtciq', () => {
 
 	expect(ra).toBeCloseTo(2.710121572968696744, 12)
 	expect(dec).toBeCloseTo(0.1729371367219539137, 12)
+})
+
+test('eraPvtob', () => {
+	const pv = erfa.eraPvtob(2, 0.5, meter(3000), 1e-6, -0.5e-6, 1e-8, 5)
+
+	expect(pv[0][0]).toBeCloseTo(meter(4225081.367071159207), 16)
+	expect(pv[0][1]).toBeCloseTo(meter(3681943.215856198144), 16)
+	expect(pv[0][2]).toBeCloseTo(meter(3041149.399241260785), 16)
+	expect(pv[1][0]).toBeCloseTo(meterPerSecond(-268.4915389365998787), 15)
+	expect(pv[1][1]).toBeCloseTo(meterPerSecond(308.0977983288903123), 15)
+	expect(pv[1][2]).toBe(0)
+})
+
+test('eraApco', () => {
+	const ebp: Vec3 = [-0.974170438, -0.211520082, -0.0917583024]
+	const ebv: Vec3 = [0.00364365824, -0.0154287319, -0.00668922024]
+	const ehp: Vec3 = [-0.973458265, -0.209215307, -0.0906996477]
+
+	const astrom = erfa.eraApco(2456384.5, 0.970031644, [ebp, ebv], ehp, 0.0013122272, -2.92808623e-5, 3.05749468e-8, 3.14540971, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, -3.01974337e-11, 0.000201418779, -2.36140831e-7)
+
+	expect(astrom.pmt).toBeCloseTo(13.25248468622587269, 11)
+	expect(astrom.eb[0]).toBeCloseTo(-0.974182711063032272, 12)
+	expect(astrom.eb[1]).toBeCloseTo(-0.2115130190135344832, 12)
+	expect(astrom.eb[2]).toBeCloseTo(-0.09179840186949532298, 12)
+	expect(astrom.eh[0]).toBeCloseTo(-0.9736425571689739035, 12)
+	expect(astrom.eh[1]).toBeCloseTo(-0.2092452125849330936, 12)
+	expect(astrom.eh[2]).toBeCloseTo(-0.09075578152243272599, 12)
+	expect(astrom.em).toBeCloseTo(0.9998233241709957653, 12)
+	expect(astrom.v[0]).toBeCloseTo(0.2078704992916728762e-4, 16)
+	expect(astrom.v[1]).toBeCloseTo(-0.8955360107151952319e-4, 16)
+	expect(astrom.v[2]).toBeCloseTo(-0.3863338994288951082e-4, 16)
+	expect(astrom.bm1).toBeCloseTo(0.9999999950277561236, 12)
+	expect(astrom.bpn[0]).toBeCloseTo(0.9999991390295159156, 12)
+	expect(astrom.bpn[3]).toBeCloseTo(0.4978650072505016932e-7, 12)
+	expect(astrom.bpn[6]).toBeCloseTo(0.13122272e-2, 12)
+	expect(astrom.bpn[1]).toBeCloseTo(-0.113633665377160963e-7, 12)
+	expect(astrom.bpn[4]).toBeCloseTo(0.9999999995713154868, 12)
+	expect(astrom.bpn[7]).toBeCloseTo(-0.292808623e-4, 12)
+	expect(astrom.bpn[2]).toBeCloseTo(-0.1312227200895260194e-2, 12)
+	expect(astrom.bpn[5]).toBeCloseTo(0.292808221787231568e-4, 12)
+	expect(astrom.bpn[8]).toBeCloseTo(0.9999991386008323373, 12)
+	expect(astrom.along).toBeCloseTo(-0.5278008060295995734, 12)
+	expect(astrom.xpl).toBeCloseTo(0.1133427418130752958e-5, 17)
+	expect(astrom.ypl).toBeCloseTo(0.1453347595780646207e-5, 17)
+	expect(astrom.sphi).toBeCloseTo(-0.9440115679003211329, 12)
+	expect(astrom.cphi).toBeCloseTo(0.3299123514971474711, 12)
+	expect(astrom.diurab).toBe(0)
+	expect(astrom.eral).toBeCloseTo(2.617608903970400427, 12)
+	expect(astrom.refa).toBeCloseTo(0.201418779e-3, 15)
+	expect(astrom.refb).toBeCloseTo(-0.236140831e-6, 18)
+})
+
+test('eraApco13', () => {
+	const ebp: Vec3 = [-0.974170437669016342, -0.211520082035387968, -0.091758302425478583]
+	const ebv: Vec3 = [0.003643658242375083, -0.015428731944935825, -0.006689220237864495]
+	const ehp: Vec3 = [-0.973458265012157486, -0.209215306558769298, -0.090699647709202746]
+
+	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
+	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
+	const [astrom, eo] = erfa.eraApco13(tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731.0, 12.8, 0.59, 0.55, [ebp, ebv], ehp)
+
+	expect(astrom.pmt).toBeCloseTo(13.25248468622475727, 11)
+	expect(astrom.eb[0]).toBeCloseTo(-0.9741827107320875162, 12)
+	expect(astrom.eb[1]).toBeCloseTo(-0.2115130190489716682, 12)
+	expect(astrom.eb[2]).toBeCloseTo(-0.09179840189496755339, 12)
+	expect(astrom.eh[0]).toBeCloseTo(-0.9736425572586935247, 12)
+	expect(astrom.eh[1]).toBeCloseTo(-0.2092452121603336166, 12)
+	expect(astrom.eh[2]).toBeCloseTo(-0.09075578153885665295, 12)
+	expect(astrom.em).toBeCloseTo(0.9998233240913898141, 12)
+	expect(astrom.v[0]).toBeCloseTo(0.2078704994520489246e-4, 16)
+	expect(astrom.v[1]).toBeCloseTo(-0.8955360133238868938e-4, 16)
+	expect(astrom.v[2]).toBeCloseTo(-0.3863338993055887398e-4, 16)
+	expect(astrom.bm1).toBeCloseTo(0.9999999950277561004, 12)
+	expect(astrom.bpn[0]).toBeCloseTo(0.9999991390295147999, 12)
+	expect(astrom.bpn[3]).toBeCloseTo(0.4978650075315529277e-7, 12)
+	expect(astrom.bpn[6]).toBeCloseTo(0.001312227200850293372, 12)
+	expect(astrom.bpn[1]).toBeCloseTo(-0.1136336652812486604e-7, 12)
+	expect(astrom.bpn[4]).toBeCloseTo(0.9999999995713154865, 12)
+	expect(astrom.bpn[7]).toBeCloseTo(-0.2928086230975367296e-4, 12)
+	expect(astrom.bpn[2]).toBeCloseTo(-0.001312227201745553566, 12)
+	expect(astrom.bpn[5]).toBeCloseTo(0.2928082218847679162e-4, 12)
+	expect(astrom.bpn[8]).toBeCloseTo(0.9999991386008312212, 12)
+	expect(astrom.along).toBeCloseTo(-0.5278008060295995733, 12)
+	expect(astrom.xpl).toBeCloseTo(0.1133427418130752958e-5, 17)
+	expect(astrom.ypl).toBeCloseTo(0.1453347595780646207e-5, 17)
+	expect(astrom.sphi).toBeCloseTo(-0.9440115679003211329, 12)
+	expect(astrom.cphi).toBeCloseTo(0.3299123514971474711, 12)
+	expect(astrom.diurab).toBe(0)
+	expect(astrom.eral).toBeCloseTo(2.617608909189664, 12)
+	expect(astrom.refa).toBeCloseTo(0.2014187785940396921e-3, 15)
+	expect(astrom.refb).toBeCloseTo(-0.2361408314943696227e-6, 18)
+	expect(eo).toBeCloseTo(-0.003020548354802412839, 14)
+})
+
+test('eraRefco', () => {
+	const [refa, refb] = erfa.eraRefco(800, 10, 0.9, 0.4)
+	expect(refa).toBeCloseTo(0.2264949956241415009e-3, 15)
+	expect(refb).toBeCloseTo(-0.259865826172934397e-6, 18)
+})
+
+test('eraApio', () => {
+	const astrom = erfa.eraApio(-3.01974337e-11, 3.14540971, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0.000201418779, -2.36140831e-7)
+
+	expect(astrom.along).toBeCloseTo(-0.5278008060295995734, 12)
+	expect(astrom.xpl).toBeCloseTo(0.1133427418130752958e-5, 17)
+	expect(astrom.ypl).toBeCloseTo(0.1453347595780646207e-5, 17)
+	expect(astrom.sphi).toBeCloseTo(-0.9440115679003211329, 12)
+	expect(astrom.cphi).toBeCloseTo(0.3299123514971474711, 12)
+	expect(astrom.diurab).toBeCloseTo(0.5135843661699913529e-6, 12)
+	expect(astrom.eral).toBeCloseTo(2.617608903970400427, 12)
+	expect(astrom.refa).toBeCloseTo(0.201418779e-3, 15)
+	expect(astrom.refb).toBeCloseTo(-0.236140831e-6, 18)
+})
+
+test('eraApio13', () => {
+	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
+	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
+	const astrom = erfa.eraApio13(tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 731.0, 12.8, 0.59, 0.55)
+
+	expect(astrom.along).toBeCloseTo(-0.5278008060295995733, 12)
+	expect(astrom.xpl).toBeCloseTo(0.1133427418130752958e-5, 17)
+	expect(astrom.ypl).toBeCloseTo(0.1453347595780646207e-5, 17)
+	expect(astrom.sphi).toBeCloseTo(-0.9440115679003211329, 12)
+	expect(astrom.cphi).toBeCloseTo(0.3299123514971474711, 12)
+	expect(astrom.diurab).toBeCloseTo(0.5135843661699913529e-6, 12)
+	expect(astrom.eral).toBeCloseTo(2.617608909189664, 12)
+	expect(astrom.refa).toBeCloseTo(0.2014187785940396921e-3, 15)
+	expect(astrom.refb).toBeCloseTo(-0.2361408314943696227e-6, 18)
+})
+
+test('eraAtioq', () => {
+	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
+	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
+	const astrom = erfa.eraApio13(tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 731.0, 12.8, 0.59, 0.55)
+	const [aob, zob, hob, dob, rob] = erfa.eraAtioq(2.710121572969038991, 0.1729371367218230438, astrom)
+
+	expect(aob).toBeCloseTo(0.9233952224895122499e-1, 12)
+	expect(zob).toBeCloseTo(1.407758704513549991, 12)
+	expect(hob).toBeCloseTo(-0.924761987988169814e-1, 12)
+	expect(dob).toBeCloseTo(0.1717653435756234676, 12)
+	expect(rob).toBeCloseTo(2.710085107988480746, 12)
 })
