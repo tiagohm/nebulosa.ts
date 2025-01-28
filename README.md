@@ -41,6 +41,8 @@ equatorial(p) // Transform to equatorial coordinate
 hourAngle(p, time) // Hour angle coordinate
 parallacticAngle(p, time)
 separationFrom(a, b) // Angle between the positions
+gcrs(icrs, time, [ebp, ebv], ehp) // Compute the GCRS cartesian coordinate from ICRS at time
+cirs(icrs, time, [ebp, ebv], ehp) // Compute the CIRS cartesian coordinate from ICRS at time
 ```
 
 ### Daf
@@ -199,8 +201,7 @@ s.segment(Naif.SSB, Naif.EMB)!.compute(time) // Compute the position and velocit
 
 ```ts
 const sirius = star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // ICRS cartesian coordinate from star parameters
-at(sirius, time) // BCRS cartesian coordinate at time
-observedAt(sirius, time, [obp, obv]) // GCRS cartesian coordinate from observer at time
+bcrs(sirius, time) // BCRS cartesian coordinate at time
 ```
 
 ### Stellarium

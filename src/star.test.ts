@@ -1,31 +1,83 @@
 import { expect, test } from 'bun:test'
-import { deg, mas } from './angle'
-import { equatorial } from './astrometry'
-import { at, star } from './star'
+import { deg, mas, normalize, toDeg } from './angle'
+import { cirs, equatorial, gcrs } from './astrometry'
+import type { CartesianCoordinate } from './coordinate'
+import { bcrs, star } from './star'
 import { Timescale, timeYMDHMS } from './time'
 import { kilometerPerSecond } from './velocity'
 
-test('star', () => {
-	const dec = deg(41.2)
+const STAR = {
+	ra: deg(353.22987757),
+	dec: deg(52.27730247),
 	// astropy works with pm_ra * cos(dec)
-	const icrs = star(deg(10.625), dec, mas(2) / Math.cos(dec), mas(1), mas(10000), kilometerPerSecond(10), timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TCB))
+	pmRa: mas(22.9) / Math.cos(deg(52.27730247)),
+	pmDec: mas(-2.1),
+	parallax: mas(23),
+	radialVelocity: kilometerPerSecond(25),
+}
 
-	expect(icrs[0][0]).toBeCloseTo(15253.58664217385739903, 11)
-	expect(icrs[0][1]).toBeCloseTo(2861.52044579003495528, 12)
-	expect(icrs[0][2]).toBeCloseTo(13586.445386838409831398, 11)
+const EARTH_BARYCENTRIC_POSITION: CartesianCoordinate = [0.898130398596, -0.433663195906, -0.188058184682]
+const EARTH_BARYCENTRIC_VELOCITY: CartesianCoordinate = [0.007714484109, 0.013933051305, 0.00604025885]
+const EARTH_HELIOCENTRIC_POSITION: CartesianCoordinate = [0.895306712607, -0.430362177777, -0.186583142292]
 
-	let e = equatorial(icrs[0])
-	expect(e[0]).toBeCloseTo(0.185441233024397523, 15)
-	expect(e[1]).toBeCloseTo(0.719075651821663775, 15)
-	expect(e[2]).toBeCloseTo(20626.480624709631229052, 11)
+test('icrs', () => {
+	const i = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
 
-	const bcrs = at(icrs, timeYMDHMS(2021, 10, 7, 12, 0, 0, Timescale.TCB))
-	expect(bcrs[0][0]).toBeCloseTo(15255.14544970152201131, 11)
-	expect(bcrs[0][1]).toBeCloseTo(2861.813076076006836956, 12)
-	expect(bcrs[0][2]).toBeCloseTo(13587.83399008352716919, 11)
+	expect(i[0][0]).toBeCloseTo(5448746.190298263914883137, 12)
+	expect(i[0][1]).toBeCloseTo(-646842.111761026666499674, 12)
+	expect(i[0][2]).toBeCloseTo(7093547.2769207460805773, 12)
+	// astropy is less accurate?
+	expect(i[1][0]).toBeCloseTo(0.009290286063694588, 6)
+	expect(i[1][1]).toBeCloseTo(0.001642201835270349, 6)
+	expect(i[1][2]).toBeCloseTo(0.011267800512088356, 6)
 
-	e = equatorial(bcrs[0])
-	expect(e[0]).toBeCloseTo(0.18544124590113148, 15)
-	expect(e[1]).toBeCloseTo(0.719075656665987051, 15)
-	expect(e[2]).toBeCloseTo(20628.588640913312701741, 11)
+	const eq = equatorial(i[0])
+	expect(toDeg(normalize(eq[0]))).toBeCloseTo(353.229877569999985099, 18)
+	expect(toDeg(eq[1])).toBeCloseTo(52.277302470000002188, 18)
+})
+
+test('bcrs', () => {
+	const time = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
+	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
+	const b = bcrs(s, time)
+
+	expect(b[0][0]).toBeCloseTo(5448758.569350527599453926, 5)
+	expect(b[0][1]).toBeCloseTo(-646839.923422771040350199, 5)
+	expect(b[0][2]).toBeCloseTo(7093562.290912019088864326, 5)
+
+	const eq = equatorial(b[0])
+	expect(toDeg(normalize(eq[0]))).toBeCloseTo(353.229915499721528249, 11)
+	expect(toDeg(eq[1])).toBeCloseTo(52.277300341846739684, 11)
+})
+
+test('gcrs', () => {
+	const time = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
+	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
+	const g = gcrs(s[0], time, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION)
+
+	const d = 1 // distance(s[0])
+
+	expect(g[0]).toBeCloseTo(d * 0.6075889443530471, 10)
+	expect(g[1]).toBeCloseTo(d * -0.07204348576104898, 11)
+	expect(g[2]).toBeCloseTo(d * 0.7909775033838493, 10)
+
+	const eq = equatorial(g)
+	expect(toDeg(normalize(eq[0]))).toBeCloseTo(353.237855279679308751, 11)
+	expect(toDeg(eq[1])).toBeCloseTo(52.276954755952054654, 11)
+})
+
+test('cirs', () => {
+	const time = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
+	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
+	const c = cirs(s[0], time, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION)
+
+	const d = 1 // distance(s[0])
+
+	expect(c[0]).toBeCloseTo(d * 0.6073279222993754, 10)
+	expect(c[1]).toBeCloseTo(d * -0.07206511093641904, 11)
+	expect(c[2]).toBeCloseTo(d * 0.7911759694159357, 10)
+
+	const eq = equatorial(c)
+	expect(toDeg(normalize(eq[0]))).toBeCloseTo(353.232964105577707414, 11)
+	expect(toDeg(eq[1])).toBeCloseTo(52.295543854747897683, 11)
 })

@@ -1045,7 +1045,7 @@ export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: An
 
 // NOT PRESENT IN ERFA!
 // Update star position+velocity vector for space motion.
-export function eraStarpmpv(pv1: readonly [Vec3, Vec3], ep1a: number, ep1b: number, ep2a: number, ep2b: number): [MutVec3, MutVec3] {
+export function eraStarpmpv(pv1: readonly [Vec3, Vec3], ep1a: number, ep1b: number, ep2a: number, ep2b: number): MutVec3 {
 	// Light time when observed (days).
 	const tl1 = length(pv1[0]) / SPEED_OF_LIGHT_AU_DAY
 
@@ -1067,10 +1067,7 @@ export function eraStarpmpv(pv1: readonly [Vec3, Vec3], ep1a: number, ep1b: numb
 
 	// Move the position along track from the observed place at the
 	// "before" epoch to the observed place at the "after" epoch.
-	const p = eraPpsp(pv1[0], dt + (tl1 - tl2), pv1[1], p1)
-
-	// Space motion pv-vector at the "after" epoch.
-	return [p, clone(pv1[1])]
+	return eraPpsp(pv1[0], dt + (tl1 - tl2), pv1[1], p1)
 }
 
 // Update star catalog data for space motion.
@@ -1079,11 +1076,9 @@ export function eraStarpm(ra1: Angle, dec1: Angle, pmr1: Angle, pmd1: Angle, px1
 	// RA,Dec etc. at the "before" epoch to space motion pv-vector.
 	const pv1 = eraStarpv(ra1, dec1, pmr1, pmd1, Math.max(px1, PXMIN), rv1)
 
-	// Space motion pv-vector at the "after" epoch.
-	const pv2 = eraStarpmpv(pv1, ep1a, ep1b, ep2a, ep2b)
-
 	// Space motion pv-vector to RA,Dec etc. at the "after" epoch.
-	return eraPvstar(pv2[0], pv2[1])
+	const pv2 = eraStarpmpv(pv1, ep1a, ep1b, ep2a, ep2b)
+	return eraPvstar(pv2, pv1[1])
 }
 
 // Convert star position+velocity vector to catalog coordinates.
@@ -1407,8 +1402,8 @@ export function eraApci13(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3
 
 // For a terrestrial observer, prepare star-independent astrometry
 // parameters for transformations between ICRS and geocentric CIRS
-// coordinates. The Earth ephemeris and CIP/CIO are supplied by the
-// caller.
+// coordinates. The Earth ephemeris and CIP/CIO are supplied by the caller.
+// TT can be used instead of TDB without any significant impact on accuracy.
 export function eraApci(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, x: Angle, y: Angle, s: Angle, astrom?: EraAstrom) {
 	// Star-independent astrometry parameters for geocenter.
 	astrom = eraApcg(tdb1, tdb2, ebpv, ehp, astrom)
@@ -1424,6 +1419,7 @@ const ZERO_PV: readonly [Vec3, Vec3] = [zero(), zero()] as const
 // For a geocentric observer, prepare star-independent astrometry
 // parameters for transformations between ICRS and GCRS coordinates.
 // The Earth ephemeris is supplied by the caller.
+// TT can be used instead of TDB without any significant impact on accuracy.
 export function eraApcg(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, astrom?: EraAstrom) {
 	// Compute the star-independent astrometry parameters.
 	return eraApcs(tdb1, tdb2, ZERO_PV, ebpv, ehp, astrom)
@@ -1432,6 +1428,7 @@ export function eraApcg(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3],
 // For an observer whose geocentric position and velocity are known,
 // prepare star-independent astrometry parameters for transformations
 // between ICRS and GCRS. The Earth ephemeris is supplied by the caller.
+// TT can be used instead of TDB without any significant impact on accuracy.
 export function eraApcs(tdb1: number, tdb2: number, pv: readonly [Vec3, Vec3], ebpv: readonly [Vec3, Vec3], ehp: Vec3, astrom?: EraAstrom) {
 	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
 

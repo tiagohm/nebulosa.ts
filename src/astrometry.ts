@@ -1,26 +1,18 @@
+import type { Mutable } from 'utility-types'
 import { normalize, type Angle } from './angle'
 import { AU_M, DAYSEC, SPEED_OF_LIGHT } from './constants'
 import type { CartesianCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
-import { eraP2s } from './erfa'
+import { eraApcg, eraApci13, eraAtciqpmpx, eraP2s } from './erfa'
 import { ITRS_FRAME } from './itrs'
 import { mulVec } from './matrix'
-import { equationOfOrigins, type Time } from './time'
-import { angle, length, minus, mulScalar, type Vec3 } from './vector'
+import { tdb, Timescale, tt, type Time } from './time'
+import { angle, length, minus, normalize as normalizeVec } from './vector'
 
 export type PositionAndVelocity = readonly [CartesianCoordinate, CartesianCoordinate]
 
 // Computes the position at time.
 export type PositionAndVelocityOverTime = (time: Time) => PositionAndVelocity
-
-// Computes the position relative to observer's position at time.
-export type ObservedPositionOverTime = (observer: Body, time: Time) => PositionAndVelocity
-
-// Represents a celestial body.
-export interface Body {
-	readonly at: PositionAndVelocityOverTime
-	readonly observedAt: ObservedPositionOverTime
-}
 
 // Length of position component in AU.
 export function distance(p: CartesianCoordinate): Distance {
@@ -66,23 +58,43 @@ export function parallacticAngle(p: CartesianCoordinate, time: Time): Angle | un
 	}
 }
 
-// Computes the cartesian CIRS coordinates at time.
-export function cirs(p: CartesianCoordinate, time: Time): CartesianCoordinate {
-	return mulVec(equationOfOrigins(time), p)
-}
-
-// Computes the spherical CIRS coordinates at time.
-export function sphericalCirs(p: CartesianCoordinate, time: Time): SphericalCoordinate {
-	return eraP2s(...cirs(p, time))
-}
-
 // Computes the angle between two positions.
 export function separationFrom(a: CartesianCoordinate, b: CartesianCoordinate): Angle {
 	return angle(a, b)
 }
 
-// Apply parallax effect to BCRS cartesian coordinate given observer's barycentric position.
-export function parallax(bcrs: CartesianCoordinate, px: Angle, bp: Vec3) {
-	const pxbp = mulScalar(bp, px * distance(bcrs))
-	return minus(bcrs, pxbp, pxbp)
+// TODO: Use era or vsop87 to compute Earth barycentric and heliocentric position. Make the parameter optional.
+export function gcrs(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate): CartesianCoordinate {
+	const t = time.scale === Timescale.TDB ? time : tt(time)
+	// TODO: Pass observer position and velocity?
+	const astrom = eraApcg(t.day, t.fraction, ebpv, ehp ?? ebpv[0])
+
+	// When there is a distance, we first offset for parallax to get the
+	// astrometric coordinate direction and then run the ERFA transform for
+	// no parallax/PM. This ensures reversibility and is more sensible for
+	// inside solar system objects.
+	const nc = minus(icrs, ebpv[0])
+
+	// const d = length(star[0])
+	const g = eraAtciqpmpx(normalizeVec(nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
+	// mulScalar(g, d, g as unknown as MutVec3)
+	return g
+}
+
+// TODO: Use era or vsop87 to compute Earth barycentric and heliocentric position. Make the parameter optional.
+export function cirs(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate): CartesianCoordinate {
+	const t = tdb(time)
+	// TODO: Pass observer position and velocity?
+	const [astrom] = eraApci13(t.day, t.fraction, ebpv, ehp ?? ebpv[0])
+
+	// When there is a distance, we first offset for parallax to get the
+	// astrometric coordinate direction and then run the ERFA transform for
+	// no parallax/PM. This ensures reversibility and is more sensible for
+	// inside solar system objects.
+	const nc = minus(icrs, ebpv[0])
+
+	// const d = length(star[0])
+	const g = eraAtciqpmpx(normalizeVec(nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
+	// mulScalar(g, d, g as unknown as MutVec3)
+	return g
 }
