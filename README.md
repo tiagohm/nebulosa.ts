@@ -68,7 +68,7 @@ toParsec(1) // Convert AU to parsec
 
 ### Erfa
 
-```
+```ts
 TODO
 ```
 
@@ -146,6 +146,7 @@ rotationAt(location, time) // GCRS rotation of the location at time
 ```ts
 pmod(-PI, TAU) // Modulo where the result is always non-negative
 divmod(10, 4) // The quotient and the remainder of division
+floorDiv(10, 4) // The integer floor of the fractional value (x / y)
 roundToNearestWholeNumber(5.6)
 twoSum(0.1, 0.2) // Sum both exactly in two 64-bit floats
 split(0.5) // Split in two aligned parts
@@ -182,6 +183,12 @@ minus(m, n) // Subtract two matrices
 mul(m, n) // Multiply two matrices
 mulVec(m, v) // Multiply the matrix by a vector
 mulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
+```
+
+### Meeus
+
+```ts
+TODO
 ```
 
 ### Pressure

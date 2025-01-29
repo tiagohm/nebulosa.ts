@@ -10,6 +10,9 @@ export const TAU = PI * 2
 // Reference epoch (J2000.0), Julian Date.
 export const J2000 = 2451545
 
+// Reference epoch (B1900.0), Julian Date.
+export const B1900 = 2415020.3135
+
 // Reference epoch (B1950.0), Julian Date.
 export const B1950 = 2433282.4235
 
@@ -38,7 +41,7 @@ export const MJD2000 = 51544.5
 export const MJD1977 = 43144
 
 // Length of tropical year B1900 (days).
-export const DTY = 365.242198781
+export const DAYSPERTY = 365.242198781
 
 // TT minus TAI (s).
 export const TTMINUSTAI = 32.184

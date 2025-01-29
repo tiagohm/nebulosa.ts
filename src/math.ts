@@ -40,6 +40,11 @@ export function divmod(num: number, other: number): [number, number] {
 	return [Math.trunc(num / other), pmod(num, other)]
 }
 
+// Returns the integer floor of the fractional value (x / y).
+export function floorDiv(x: number, y: number) {
+	return Math.floor(x / y)
+}
+
 export function roundToNearestWholeNumber(a: number): number {
 	return Math.abs(a) < 0.5 ? 0 : a < 0 ? Math.ceil(a - 0.5) : Math.floor(a + 0.5)
 }

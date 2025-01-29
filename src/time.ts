@@ -1,5 +1,5 @@
 import type { Angle } from './angle'
-import { DAYSEC, DAYSPERJC, DAYSPERJY, DTY, J2000, MJD0 } from './constants'
+import { DAYSEC, DAYSPERJC, DAYSPERJY, DAYSPERTY, J2000, MJD0 } from './constants'
 import { eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import { delta, xy } from './iers'
 import { itrs } from './itrs'
@@ -144,7 +144,7 @@ export function timeJulian(epoch: number, scale: Timescale = Timescale.UTC) {
 
 // Besselian epoch year as floating point value like 1950.0.
 export function timeBesselian(epoch: number, scale: Timescale = Timescale.UTC) {
-	return timeMJD(15019.81352 + (epoch - 1900) * DTY, scale)
+	return timeMJD(15019.81352 + (epoch - 1900) * DAYSPERTY, scale)
 }
 
 // Time from year, month, day, hour, minute and second.
