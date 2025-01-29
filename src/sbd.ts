@@ -2,11 +2,11 @@ import { format } from 'date-fns'
 import { DEG2RAD, formatAngle, toDeg, type Angle, type FormatAngleOptions } from './angle'
 import { toKilometer, type Distance } from './distance'
 
-export const MAIN_URL = 'https://ssd-api.jpl.nasa.gov/'
+export const BASE_URL = 'https://ssd-api.jpl.nasa.gov/'
 
-const SEARCH_PATH = 'sbdb.api?alt-des=1&alt-orbits=1&ca-data=1&ca-time=both&ca-tunc=both&cd-epoch=1&cd-tp=1&discovery=1&full-prec=1&nv-fmt=both&orbit-defs=1&phys-par=1&r-notes=1&r-observer=1&radar-obs=1&sat=1&vi-data=1&www=1'
-const IDENTIFY_PATH = 'sb_ident.api?two-pass=true&suppress-first-pass=true'
-const CLOSE_APPROACHES_PATH = 'cad.api?neo=false&diameter=true&fullname=true'
+export const SEARCH_PATH = 'sbdb.api?alt-des=1&alt-orbits=1&ca-data=1&ca-time=both&ca-tunc=both&cd-epoch=1&cd-tp=1&discovery=1&full-prec=1&nv-fmt=both&orbit-defs=1&phys-par=1&r-notes=1&r-observer=1&radar-obs=1&sat=1&vi-data=1&www=1'
+export const IDENTIFY_PATH = 'sb_ident.api?two-pass=true&suppress-first-pass=true'
+export const CLOSE_APPROACHES_PATH = 'cad.api?neo=false&diameter=true&fullname=true'
 
 const FOV_RA_FORMAT: FormatAngleOptions = { isHour: true, separators: '-', minusSign: 'M', noSign: true, fractionDigits: 2 }
 const FOV_DEC_FORMAT: FormatAngleOptions = { separators: '-', minusSign: 'M', plusSign: '', fractionDigits: 2 }
@@ -134,21 +134,20 @@ export interface SmallBodyCloseApproach {
 }
 
 export async function search(text: string) {
-	const uri = `${MAIN_URL}${SEARCH_PATH}&sstr=${encodeURIComponent(text)}`
+	const uri = `${BASE_URL}${SEARCH_PATH}&sstr=${encodeURIComponent(text)}`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodySearch
 }
 
 export async function identify(dateTime: Date, longitude: Angle, latitude: Angle, elevation: Distance, fovRa: Angle, fovDec: Angle, fovRaWidth: number = DEG2RAD, fovDecWidth: number = fovRaWidth, magLimit: number = 18, magRequired: boolean = true) {
-	const uri = `${MAIN_URL}${IDENTIFY_PATH}&obs-time=${format(dateTime, 'yyyy-MM-dd_HH:mm:ss')}&lat=${toDeg(latitude)}&lon=${toDeg(longitude)}&alt=${toKilometer(elevation)}&fov-ra-center=${formatAngle(fovRa, FOV_RA_FORMAT)}&fov-dec-center=${formatAngle(fovDec, FOV_DEC_FORMAT)}&fov-ra-hwidth=${toDeg(fovRaWidth)}&fov-dec-hwidth=${toDeg(fovDecWidth)}&vmag-lim=${magLimit}&mag-required=${magRequired && magLimit < 30}`
+	const uri = `${BASE_URL}${IDENTIFY_PATH}&obs-time=${format(dateTime, 'yyyy-MM-dd_HH:mm:ss')}&lat=${toDeg(latitude)}&lon=${toDeg(longitude)}&alt=${toKilometer(elevation)}&fov-ra-center=${formatAngle(fovRa, FOV_RA_FORMAT)}&fov-dec-center=${formatAngle(fovDec, FOV_DEC_FORMAT)}&fov-ra-hwidth=${toDeg(fovRaWidth)}&fov-dec-hwidth=${toDeg(fovDecWidth)}&vmag-lim=${magLimit}&mag-required=${magRequired && magLimit < 30}`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodyIdentify
 }
 
 export async function closeApproaches(dateMin?: Date | number | 'now', dateMax: Date | number = 7, distance: number = 10) {
 	dateMin = !dateMin || dateMin === 'now' ? Date.now() : dateMin
-	const uri = `${MAIN_URL}${CLOSE_APPROACHES_PATH}&date-min=${format(dateMin, 'yyyy-MM-dd')}&date-max=${typeof dateMax === 'number' ? `%2B${dateMax}` : format(dateMax, 'yyyy-MM-dd')}&dist-max=${distance}LD`
-	console.log(uri)
+	const uri = `${BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${format(dateMin, 'yyyy-MM-dd')}&date-max=${typeof dateMax === 'number' ? `%2B${dateMax}` : format(dateMax, 'yyyy-MM-dd')}&dist-max=${distance}LD`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodyCloseApproach
 }

@@ -67,8 +67,6 @@ export async function fromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Image | unde
 		const [min, max] = minMax
 		const delta = max - min
 
-		console.info(`rescaling [${min}, ${max}] to [0, 1]`)
-
 		for (let i = 0; i < raw.length; i++) {
 			raw[i] = (raw[i] - min) / delta
 		}

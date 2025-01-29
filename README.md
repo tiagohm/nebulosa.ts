@@ -88,6 +88,15 @@ precessFk5FromJ2000(frame, equinox) // Precess the FK5 coordinate from J2000 to 
 precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to J2000
 ```
 
+### Horizons
+
+```ts
+observer(command, center, coord, startTime, endTime, quantities, options)
+observerWithOsculatingElements(parameters, coord, startTime, endTime, quantities, options)
+observerWithTle(tle, coord, startTime, endTime, quantities, options)
+spk(id, startTime, endTime)
+```
+
 ### ICRS
 
 ```ts

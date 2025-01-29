@@ -258,8 +258,6 @@ export async function read(source: Source & Seekable): Promise<Fits | undefined>
 				source.seek(source.position + size + computeRemainingBytes(size))
 				;(hdu as Mutable<FitsHdu>).data = { source, size, offset }
 			}
-
-			// console.info(`key=${key}, value=${value}, comment=${comment}`)
 		}
 
 		return key

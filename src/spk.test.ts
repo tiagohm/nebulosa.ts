@@ -80,11 +80,13 @@ test('65803 Didymos', async () => {
 
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/
 	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
-	expect(p[0]).toBeCloseTo(1.321900520119582e-1, 8)
-	expect(p[1]).toBeCloseTo(1.022633897814651, 8)
-	expect(p[2]).toBeCloseTo(4.564442163931812e-1, 8)
+	// Target body name: 65803 Didymos (1996 GT)         {source: JPL#219}
+	// Center body name: Sun (10)                        {source: DE441}
+	expect(p[0]).toBeCloseTo(1.321900534972707e-1, 15)
+	expect(p[1]).toBeCloseTo(1.022633896837742, 15)
+	expect(p[2]).toBeCloseTo(4.564442166808176e-1, 15)
 
-	expect(v[0]).toBeCloseTo(-1.739801962135171e-2, 11)
-	expect(v[1]).toBeCloseTo(5.419297752176816e-3, 10)
-	expect(v[2]).toBeCloseTo(3.552869336296117e-3, 10)
+	expect(v[0]).toBeCloseTo(-1.739801961691489e-2, 16)
+	expect(v[1]).toBeCloseTo(5.41929776178759e-3, 16)
+	expect(v[2]).toBeCloseTo(3.552869344161516e-3, 16)
 }, 1000000)
