@@ -1,4 +1,3 @@
-import { isWhiteSpaceLike } from 'typescript'
 import type { Mutable } from 'utility-types'
 import { type Seekable, type Source, readUntil } from './io'
 
@@ -109,7 +108,7 @@ export async function read(source: Source & Seekable): Promise<Fits | undefined>
 		while (position < buffer.byteLength) {
 			const c = buffer.readUInt8(position)
 
-			if (!isWhiteSpaceLike(c)) {
+			if (c !== WHITESPACE) {
 				// Line has non-space characters left to parse...
 				return true
 			}
