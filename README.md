@@ -38,8 +38,7 @@ formatSignedDMS(PI) // Format the angle as +00d00m00.00s
 distance(p) // Distance in AU
 lightTime(p) // Days of light travel time
 equatorial(p) // Transform to equatorial coordinate
-hourAngle(p, time) // Hour angle coordinate
-parallacticAngle(p, time)
+parallacticAngle(ha, dec, latitude) // The deviation between zenith angle and north angle
 separationFrom(a, b) // Angle between the positions
 gcrs(icrs, time, [ebp, ebv], ehp) // Compute the GCRS cartesian coordinate from ICRS at time
 cirs(icrs, time, [ebp, ebv], ehp) // Compute the CIRS cartesian coordinate from ICRS at time

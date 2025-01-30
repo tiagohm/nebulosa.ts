@@ -1,13 +1,11 @@
 import type { Mutable } from 'utility-types'
-import { type Angle, normalize } from './angle'
+import type { Angle } from './angle'
 import { AU_M, DAYSEC, PIOVERTWO, SPEED_OF_LIGHT, TAU } from './constants'
 import type { CartesianCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { eraApcg, eraApci13, eraApco13, eraAtciqpmpx, eraAtioq, eraC2s, eraP2s } from './erfa'
-import { ITRS_FRAME } from './itrs'
 import { ELLIPSOID_PARAMETERS } from './location'
 import { pmod } from './math'
-import { mulVec } from './matrix'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { type Time, Timescale, pmAngles, tdb, tt, ut1 } from './time'
@@ -47,33 +45,10 @@ export function equatorial(p: CartesianCoordinate): SphericalCoordinate {
 	return eraP2s(...p)
 }
 
-// Computes the hour angle, declination, and distance at time.
-// This only works for positions whose center is a geographic location,
-// otherwise, there is no local meridian from which to measure the hour angle.
-// Because this declination is measured from the plane of the Earth's physical geographic equator,
-// it will be slightly different than the declination returned by equatorial.
-// The coordinates are not adjusted for atmospheric refraction near the horizon.
-export function hourAngle(p: CartesianCoordinate, time: Time): SphericalCoordinate | undefined {
-	if (!time.location) return undefined
-
-	const r = ITRS_FRAME.rotationAt(time)
-	const [sublongitude, dec, distance] = mulVec(r, p)
-	const ha = normalize(time.location.longitude - sublongitude)
-
-	return [ha, dec, distance]
-}
-
 // Computes the deviation between zenith angle and north angle.
-export function parallacticAngle(p: CartesianCoordinate, time: Time): Angle | undefined {
-	const ha = hourAngle(p, time)
-
-	if (ha) {
-		const phi = time.location!.latitude
-		// A rare condition! Object exactly in zenith, avoid undefined result.
-		return ha[0] === 0 && ha[1] - phi === 0 ? 0 : Math.atan2(Math.sin(ha[0]), Math.tan(phi) * Math.cos(ha[1]) - Math.sin(ha[1]) * Math.cos(ha[0]))
-	} else {
-		return undefined
-	}
+export function parallacticAngle(ha: Angle, dec: Angle, latitude: Angle): Angle {
+	// A rare condition! Object exactly in zenith, avoid undefined result.
+	return ha === 0 && dec - latitude === 0 ? 0 : Math.atan2(Math.sin(ha), Math.tan(latitude) * Math.cos(dec) - Math.sin(dec) * Math.cos(ha))
 }
 
 // Computes the angle between two positions.
