@@ -1,6 +1,6 @@
 import { isWhiteSpaceLike } from 'typescript'
 import type { Mutable } from 'utility-types'
-import { readUntil, type Seekable, type Source } from './io'
+import { type Seekable, type Source, readUntil } from './io'
 
 export type FitsHeaderKey = string
 export type FitsHeaderValue = string | number | boolean | undefined
@@ -66,8 +66,8 @@ const SINGLE_QUOTE = 39
 const SLASH = 47
 const EQUAL = 61
 
-const DECIMAL_REGEX = new RegExp('^[+-]?\\d+(\\.\\d*)?([dDeE][+-]?\\d+)?$')
-const INT_REGEX = new RegExp('^[+-]?\\d+$')
+const DECIMAL_REGEX = /^[+-]?\d+(\.\d*)?([dDeE][+-]?\d+)?$/
+const INT_REGEX = /^[+-]?\d+$/
 
 export async function read(source: Source & Seekable): Promise<Fits | undefined> {
 	const buffer = Buffer.allocUnsafe(HEADER_CARD_SIZE)
@@ -122,7 +122,7 @@ export async function read(source: Source & Seekable): Promise<Fits | undefined>
 
 	function parseValue(key: string) {
 		// nothing left to parse.
-		if (!key.length || !skipSpaces()) return undefined
+		if (!(key.length && skipSpaces())) return undefined
 
 		if (key === 'CONTINUE') {
 			return parseValueBody()
@@ -145,7 +145,7 @@ export async function read(source: Source & Seekable): Promise<Fits | undefined>
 
 	function isNextQuote() {
 		if (position >= buffer.byteLength) return false
-		else return buffer.readUInt8(position) == SINGLE_QUOTE
+		else return buffer.readUInt8(position) === SINGLE_QUOTE
 	}
 
 	function parseValueType(value: string) {

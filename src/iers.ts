@@ -36,7 +36,7 @@ export function interpolate(time: Time, input: number[], ...data: number[][]): n
 			const a = data[z][k - 1]
 			const b = data[z][k]
 
-			if (isFinite(a) && isFinite(b)) {
+			if (Number.isFinite(a) && Number.isFinite(b)) {
 				// a + ((b - a) / (t1 - t0)) * (value - t0)
 				ret[z] = a + ((mjd - t0 + utc) / (t1 - t0)) * (b - a)
 			} else {
@@ -61,7 +61,7 @@ export abstract class IersBase implements Iers {
 	xy(time: Time): [Angle, Angle] {
 		const [x, y] = interpolate(time, this.mjd, this.pmX, this.pmY)
 
-		if (isFinite(x) && isFinite(y)) {
+		if (Number.isFinite(x) && Number.isFinite(y)) {
 			return [arcsec(x), arcsec(y)]
 		} else {
 			return [0, 0]
@@ -139,7 +139,7 @@ export class IersAB implements Iers {
 
 	xy(time: Time): [Angle, Angle] {
 		const b = this.b.xy(time)
-		if (!b[0] || !b[1]) return this.a.xy(time)
+		if (!(b[0] && b[1])) return this.a.xy(time)
 		return b
 	}
 

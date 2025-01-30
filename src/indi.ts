@@ -599,7 +599,7 @@ export class IndiClient {
 			this.socket.write(`<getProperties version="1.7"`)
 			if (command?.device) this.socket.write(` device="${command.device}"`)
 			if (command?.name) this.socket.write(` name="${command.name}"`)
-			this.socket.write(`></getProperties>`)
+			this.socket.write('></getProperties>')
 			this.socket.flush()
 		}
 	}
@@ -615,36 +615,36 @@ export class IndiClient {
 
 	text(command: NewTextVector) {
 		if (this.socket) {
-			this.socket.write(`<newTextVector`)
+			this.socket.write('<newTextVector')
 			this.socket.write(` device="${command.device}"`)
 			this.socket.write(` name="${command.name}"`)
 			if (command.timestamp) this.socket.write(` timestamp="${command.timestamp}">`)
 			for (const element of command.elements) this.socket.write(`<oneText name="${element.name}">${element.value}</oneText>`)
-			this.socket.write(`</newTextVector>`)
+			this.socket.write('</newTextVector>')
 			this.socket.flush()
 		}
 	}
 
 	number(command: NewNumberVector) {
 		if (this.socket) {
-			this.socket.write(`<newNumberVector`)
+			this.socket.write('<newNumberVector')
 			this.socket.write(` device="${command.device}"`)
 			this.socket.write(` name="${command.name}"`)
 			if (command.timestamp) this.socket.write(` timestamp="${command.timestamp}">`)
 			for (const element of command.elements) this.socket.write(`<oneNumber name="${element.name}">${element.value}</oneNumber>`)
-			this.socket.write(`</newNumberVector>`)
+			this.socket.write('</newNumberVector>')
 			this.socket.flush()
 		}
 	}
 
 	switch(command: NewSwitchVector) {
 		if (this.socket) {
-			this.socket.write(`<newSwitchVector`)
+			this.socket.write('<newSwitchVector')
 			this.socket.write(` device="${command.device}"`)
 			this.socket.write(` name="${command.name}"`)
 			if (command.timestamp) this.socket.write(` timestamp="${command.timestamp}">`)
 			for (const element of command.elements) this.socket.write(`<oneSwitch name="${element.name}">${element.value ? 'On' : 'Off'}</oneSwitch>`)
-			this.socket.write(`</newSwitchVector>`)
+			this.socket.write('</newSwitchVector>')
 			this.socket.flush()
 		}
 	}

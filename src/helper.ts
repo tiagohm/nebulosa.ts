@@ -17,14 +17,12 @@ export function binarySearch(input: number[], key: number, options?: BinarySearc
 			a = index + 1
 		} else if (value > key) {
 			b = index - 1
+		} else if (value === key) {
+			return index
+		} else if (value < key) {
+			a = index + 1
 		} else {
-			if (value === key) {
-				return index
-			} else if (value < key) {
-				a = index + 1
-			} else {
-				b = index - 1
-			}
+			b = index - 1
 		}
 	}
 

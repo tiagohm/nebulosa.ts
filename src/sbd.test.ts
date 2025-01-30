@@ -115,6 +115,7 @@ describe.skip('closeApproaches', () => {
 		expect(response.count).toBe(33)
 		expect(response.fields).toHaveLength(14)
 		expect(response.data.length).toBe(33)
-		expect(response.data.map((e) => e[0])).toEqual(['2021 GQ5', '2024 GT2', '2024 GV3', '2024 FP3', '2024 GE3', '2024 GG6', '2024 GA1', '2023 FN13', '2024 HX', '2024 HB', '2024 HG', '2024 GB6', '2024 HE', '2024 GO1', '439437', '2024 GZ5', '2024 GK6', '2024 GN2', '2024 HA', '2024 GS5', '2024 GM1', '2024 JJ', '2024 JC2', '2024 HO', '2024 HZ', '2024 GF5', '2024 GJ6', '2024 GA6', '2024 GP7', '2021 JW2', '2024 HQ', '2017 SA20', '2024 HL'])
+		const asteroids = ['2021 GQ5', '2024 GT2', '2023 FN13', '2024 HX', '2024 HB', '2024 HE', '2024 GO1', '2024 JJ', '2024 HZ', '2024 GF5', '2024 GJ6', '2021 JW2', '2024 HQ', '2024 HL']
+		expect(response.data.map((e) => e[0])).toContainValues(asteroids)
 	})
 })

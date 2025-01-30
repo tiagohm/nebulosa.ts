@@ -1,4 +1,4 @@
-import { type Angle } from './angle'
+import type { Angle } from './angle'
 import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { eraS2p } from './erfa'

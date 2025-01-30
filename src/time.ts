@@ -3,9 +3,9 @@ import { DAYSEC, DAYSPERJC, DAYSPERJY, DAYSPERTY, J2000, MJD0 } from './constant
 import { eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import { delta, xy } from './iers'
 import { itrs } from './itrs'
-import { type GeographicPosition } from './location'
+import type { GeographicPosition } from './location'
 import { twoProduct, twoSum } from './math'
-import { clone, identity, mul, rotX, rotZ, type Mat3, type MutMat3 } from './matrix'
+import { type Mat3, type MutMat3, clone, identity, mul, rotX, rotZ } from './matrix'
 
 // The specification for measuring time.
 export enum Timescale {
@@ -169,7 +169,7 @@ export function normalize(day: number, fraction: number, divisor: number = 0, sc
 	let [extra, frac] = twoSum(sum, -day)
 	frac += extra + err
 
-	if (divisor && isFinite(divisor)) {
+	if (divisor && Number.isFinite(divisor)) {
 		const q = sum / divisor
 		const [a, b] = twoProduct(q, divisor)
 		const [c, d] = twoSum(sum, -a)
@@ -515,10 +515,18 @@ export const tdbMinusTtByFairheadAndBretagnon1990: TimeDelta = (time) => {
 		const t = (time.day - J2000 + time.fraction) / DAYSPERJC
 
 		// USNO Circular 179, eq. 2.6.
-		return 0.001657 * Math.sin(628.3076 * t + 6.2401) + 0.000022 * Math.sin(575.3385 * t + 4.297) + 0.000014 * Math.sin(1256.6152 * t + 6.1969) + 0.000005 * Math.sin(606.9777 * t + 4.0212) + 0.000005 * Math.sin(52.9691 * t + 0.4444) + 0.000002 * Math.sin(21.3299 * t + 5.5431) + 0.00001 * t * Math.sin(628.3076 * t + 4.249)
-	} else {
-		return 0
+		return (
+			0.001657 * Math.sin(628.3076 * t + 6.2401) +
+			0.000022 * Math.sin(575.3385 * t + 4.297) +
+			0.000014 * Math.sin(1256.6152 * t + 6.1969) +
+			0.000005 * Math.sin(606.9777 * t + 4.0212) +
+			0.000005 * Math.sin(52.9691 * t + 0.4444) +
+			0.000002 * Math.sin(21.3299 * t + 5.5431) +
+			0.00001 * t * Math.sin(628.3076 * t + 4.249)
+		)
 	}
+
+	return 0
 }
 
 // Computes TAI - UTC in seconds at time.

@@ -55,5 +55,5 @@ export function toParsec(distance: Distance): number {
 export function fromPressure(pressure: Pressure, temperature: Temperature = 15): Distance {
 	const k = toKelvin(temperature) / 0.0065
 	const e = (8.31447 * 0.0065) / (9.80665 * 0.0289644) // R * L / (g * M)
-	return meter(k * (1 - Math.pow(pressure / ONE_ATM, e)))
+	return meter(k * (1 - (pressure / ONE_ATM) ** e))
 }

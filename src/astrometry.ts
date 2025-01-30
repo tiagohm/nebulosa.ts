@@ -1,5 +1,5 @@
 import type { Mutable } from 'utility-types'
-import { normalize, type Angle } from './angle'
+import { type Angle, normalize } from './angle'
 import { AU_M, DAYSEC, PIOVERTWO, SPEED_OF_LIGHT, TAU } from './constants'
 import type { CartesianCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
@@ -10,7 +10,7 @@ import { pmod } from './math'
 import { mulVec } from './matrix'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
-import { pmAngles, tdb, Timescale, tt, ut1, type Time } from './time'
+import { type Time, Timescale, pmAngles, tdb, tt, ut1 } from './time'
 import { angle, length, minus, normalize as normalizeVec } from './vector'
 
 export type PositionAndVelocity = readonly [CartesianCoordinate, CartesianCoordinate]

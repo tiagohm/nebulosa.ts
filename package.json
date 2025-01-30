@@ -4,19 +4,17 @@
 	"module": "main.ts",
 	"type": "module",
 	"scripts": {
-		"lint": "eslint .",
-		"prettier": "prettier \"**/*.ts\" --write"
+		"lint": "biome lint --write src/",
+		"format": "biome format --write src/"
 	},
 	"devDependencies": {
-		"eslint": "latest",
-		"prettier": "latest",
-		"typescript-eslint": "latest"
-	},
-	"peerDependencies": {
+		"@biomejs/biome": "latest",
 		"@types/bun": "latest",
 		"@types/node": "latest",
+		"typescript": "latest"
+	},
+	"peerDependencies": {
 		"date-fns": "4.1.0",
-		"typescript": "~5.7.2",
 		"utility-types": "3.11.0"
 	},
 	"optionalDependencies": {

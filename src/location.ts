@@ -4,7 +4,7 @@ import { eraGc2Gde, eraSp00 } from './erfa'
 import { rotationAt as itrsRotationAt } from './itrs'
 import { flipXMut, mul, rotX, rotY, rotZ, type Mat3, type MutMat3 } from './matrix'
 import { gast, gmst, pmAngles, tt, type Time } from './time'
-import { type Vec3 } from './vector'
+import type { Vec3 } from './vector'
 
 // An Earth ellipsoid that maps latitudes and longitudes to |xyz| positions.
 export enum Ellipsoid {

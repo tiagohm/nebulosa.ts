@@ -105,7 +105,7 @@ export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, hig
 
 	function df(value: number) {
 		const p = Math.max(0, Math.min(Math.trunc(value * 65535), 65535))
-		if (!isNaN(lut[p])) return lut[p]
+		if (!Number.isNaN(lut[p])) return lut[p]
 		if (value < shadow) return 0
 		if (value > highlight) return 1
 

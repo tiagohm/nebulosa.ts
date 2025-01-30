@@ -1,0 +1,66 @@
+{
+	"$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+	"formatter": {
+		"enabled": true,
+		"formatWithErrors": false,
+		"ignore": ["**/*.data.ts"],
+		"attributePosition": "auto",
+		"indentStyle": "tab",
+		"indentWidth": 4,
+		"lineWidth": 320,
+		"lineEnding": "lf"
+	},
+	"javascript": {
+		"formatter": {
+			"enabled": true,
+			"arrowParentheses": "always",
+			"bracketSameLine": true,
+			"bracketSpacing": true,
+			"jsxQuoteStyle": "single",
+			"quoteProperties": "asNeeded",
+			"semicolons": "asNeeded",
+			"trailingCommas": "all",
+			"quoteStyle": "single"
+		}
+	},
+	"json": {
+		"formatter": {
+			"enabled": true,
+			"trailingCommas": "none"
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"ignore": ["**/*.data.ts"],
+		"rules": {
+			"style": {
+				"noInferrableTypes": "off",
+				"noNonNullAssertion": "off",
+				"noParameterAssign": "off",
+				"noUselessElse": "off",
+				"noYodaExpression": "error",
+				"useCollapsedElseIf": "error",
+				"useEnumInitializers": "off",
+				"useForOf": "error",
+				"useNodejsImportProtocol": "off",
+				"useNumberNamespace": "off",
+				"useThrowOnlyError": "error"
+			},
+			"correctness": {
+				"noPrecisionLoss": "off"
+			},
+			"suspicious": {
+				"noAssignInExpressions": "off",
+				"noConsoleLog": "off"
+			},
+			"complexity": {
+				"noUselessStringConcat": "error",
+				"useDateNow": "error",
+				"useSimplifiedLogicExpression": "error"
+			}
+		}
+	},
+	"organizeImports": {
+		"enabled": true
+	}
+}

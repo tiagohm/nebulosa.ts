@@ -23,7 +23,7 @@ test('toMeter', () => {
 })
 
 test('toKilometer', () => {
-	expect(toKilometer(1)).toBeCloseTo(149597870.700, 18)
+	expect(toKilometer(1)).toBeCloseTo(149597870.7, 18)
 })
 
 test('toLightYear', () => {

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { deg, parseAngle } from './angle'
 import { fileHandleSource } from './io'
-import { catalog, ObjectType, searchAround, type CatalogEntry } from './stellarium'
+import { type CatalogEntry, ObjectType, catalog, searchAround } from './stellarium'
 
 test.skip('catalog', async () => {
 	// https://github.com/Stellarium/stellarium/raw/refs/heads/master/nebulae/default/catalog.dat

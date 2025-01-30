@@ -1,15 +1,15 @@
-import { arcsec, ASEC2RAD, deg, MILLIASEC2RAD, normalize, TURNAS, type Angle } from './angle'
+import { ASEC2RAD, type Angle, MILLIASEC2RAD, TURNAS, arcsec, deg, normalize } from './angle'
 import { AU_M, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI } from './constants'
-import { toKilometer, type Distance } from './distance'
+import { type Distance, toKilometer } from './distance'
 import { FAIRHEAD } from './fairhead'
 import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
 import { IAU2000B_LS } from './iau2000b'
 import { IAU2006_S, IAU2006_SP } from './iau2006'
 import { pmod, roundToNearestWholeNumber } from './math'
-import { clone as cloneMat, copy, identity, mul, mulTransposeVec, mulVec, rotX, rotY, rotZ, transpose, type Mat3, type MutMat3 } from './matrix'
+import { type Mat3, type MutMat3, clone as cloneMat, copy, identity, mul, mulTransposeVec, mulVec, rotX, rotY, rotZ, transpose } from './matrix'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
-import { clone, cross, divScalar, dot, fill, length, minus, mulScalar, normalizeMut, normalize as normalizeVec, plus, zero, type MutVec3, type Vec3 } from './vector'
+import { type MutVec3, type Vec3, clone, cross, divScalar, dot, fill, length, minus, mulScalar, normalizeMut, normalize as normalizeVec, plus, zero } from './vector'
 import type { Velocity } from './velocity'
 
 const DBL_EPSILON = 2.220446049250313e-16
@@ -290,7 +290,7 @@ export function eraUt1Utc(ut11: number, ut12: number, dut1: number): [number, nu
 		const cal = eraJdToCal(d1, d2)
 		const dats2 = eraDat(cal[0], cal[1], cal[2], 0)
 
-		if (i == -1) {
+		if (i === -1) {
 			dats1 = dats2
 		}
 
@@ -458,7 +458,17 @@ export function eraDtDb(tdb1: number, tdb2: number, ut: number, elong: Angle = 0
 	// TOPOCENTRIC TERMS: Moyer 1981 and Murray 1983.
 	const ukm = toKilometer(u)
 	const vkm = toKilometer(v)
-	const wt = 0.00029e-10 * ukm * Math.sin(tsol + elsun - els) + 0.001e-10 * ukm * Math.sin(tsol - 2 * emsun) + 0.00133e-10 * ukm * Math.sin(tsol - d) + 0.00133e-10 * ukm * Math.sin(tsol + elsun - elj) - 0.00229e-10 * ukm * Math.sin(tsol + 2 * elsun + emsun) - 0.022e-10 * vkm * Math.cos(elsun + emsun) + 0.05312e-10 * ukm * Math.sin(tsol - emsun) - 0.13677e-10 * ukm * Math.sin(tsol + 2 * elsun) - 1.3184e-10 * vkm * Math.cos(elsun) + 3.17679e-10 * ukm * Math.sin(tsol)
+	const wt =
+		0.00029e-10 * ukm * Math.sin(tsol + elsun - els) +
+		0.001e-10 * ukm * Math.sin(tsol - 2 * emsun) +
+		0.00133e-10 * ukm * Math.sin(tsol - d) +
+		0.00133e-10 * ukm * Math.sin(tsol + elsun - elj) -
+		0.00229e-10 * ukm * Math.sin(tsol + 2 * elsun + emsun) -
+		0.022e-10 * vkm * Math.cos(elsun + emsun) +
+		0.05312e-10 * ukm * Math.sin(tsol - emsun) -
+		0.13677e-10 * ukm * Math.sin(tsol + 2 * elsun) -
+		1.3184e-10 * vkm * Math.cos(elsun) +
+		3.17679e-10 * ukm * Math.sin(tsol)
 
 	const wn = [0, 0, 0, 0, 0]
 
@@ -547,7 +557,7 @@ export function eraEors(rnpb: Mat3, s: Angle): Angle {
 	const zs = -x
 	const p = rnpb[0] * xs + rnpb[1] * ys + rnpb[2] * zs
 	const q = rnpb[3] * xs + rnpb[4] * ys + rnpb[5] * zs
-	return p != 0 || q != 0 ? s - Math.atan2(q, p) : s
+	return p !== 0 || q !== 0 ? s - Math.atan2(q, p) : s
 }
 
 // The CIO locator s, positioning the Celestial Intermediate Origin on
@@ -1206,7 +1216,7 @@ export function eraSepp(a: Vec3, b: Vec3) {
 	// Cosine of the angle, multiplied by the two moduli.
 	const cs = dot(a, b)
 
-	return ss != 0 || cs != 0 ? Math.atan2(ss, cs) : 0
+	return ss !== 0 || cs !== 0 ? Math.atan2(ss, cs) : 0
 }
 
 const AULTY = LIGHT_TIME_AU / DAYSEC / DAYSPERJY
@@ -1276,23 +1286,23 @@ export function eraLdn(b: LdBody[], ob: Vec3, sc: Vec3) {
 	// Star direction prior to deflection.
 	const sn = clone(sc)
 
-	for (let i = 0; i < b.length; i++) {
+	for (const a of b) {
 		// Body to observer vector at epoch of observation (au).
-		minus(ob, b[i].p, v)
+		minus(ob, a.p, v)
 
 		// Minus the time since the light passed the body (days).
 		// Neutralize if the star is "behind" the observer.
 		const dt = Math.min(dot(sn, v) * (LIGHT_TIME_AU / DAYSEC), 0)
 
 		// Backtrack the body to the time the light was passing the body.
-		eraPpsp(v, -dt, b[i].v, ev)
+		eraPpsp(v, -dt, a.v, ev)
 
 		// Body to observer vector as magnitude and direction.
 		const em = length(ev)
 		divScalar(ev, em, ev)
 
 		// Apply light deflection for this body.
-		eraLd(b[i].bm, sn, sn, ev, em, b[i].dl, sn)
+		eraLd(a.bm, sn, sn, ev, em, a.dl, sn)
 	}
 
 	return sn
@@ -1523,7 +1533,27 @@ export function eraAtciqpmpx(pco: Vec3, astrom: EraAstrom, o?: MutVec3): MutVec3
 // coordinates.  The caller supplies the Earth ephemeris, the Earth
 // rotation information and the refraction constants as well as the
 // site coordinates.
-export function eraApco(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, x: number, y: number, s: Angle, theta: Angle, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle, refa: number, refb: number, radius: Distance = WGS84_RADIUS, flattening: number = WGS84_FLATTENING, astrom?: EraAstrom) {
+export function eraApco(
+	tdb1: number,
+	tdb2: number,
+	ebpv: readonly [Vec3, Vec3],
+	ehp: Vec3,
+	x: number,
+	y: number,
+	s: Angle,
+	theta: Angle,
+	elong: Angle,
+	phi: Angle,
+	hm: Distance,
+	xp: Angle,
+	yp: Angle,
+	sp: Angle,
+	refa: number,
+	refb: number,
+	radius: Distance = WGS84_RADIUS,
+	flattening: number = WGS84_FLATTENING,
+	astrom?: EraAstrom,
+) {
 	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
 
 	// Form the rotation matrix, CIRS to apparent [HA,Dec].
@@ -1532,7 +1562,7 @@ export function eraApco(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3],
 	// Solve for local Earth rotation angle.
 	let a = r[0]
 	let b = r[1]
-	astrom.eral = a != 0 || b != 0 ? Math.atan2(b, a) : 0
+	astrom.eral = a !== 0 || b !== 0 ? Math.atan2(b, a) : 0
 
 	// Solve for polar motion [X,Y] with respect to local meridian.
 	a = r[0]
@@ -1540,7 +1570,7 @@ export function eraApco(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3],
 	astrom.xpl = Math.atan2(c, Math.sqrt(a * a + b * b))
 	a = r[5]
 	b = r[8]
-	astrom.ypl = a != 0 || b != 0 ? -Math.atan2(a, b) : 0
+	astrom.ypl = a !== 0 || b !== 0 ? -Math.atan2(a, b) : 0
 
 	// Adjusted longitude.
 	astrom.along = eraAnpm(astrom.eral - theta)
@@ -1610,7 +1640,27 @@ export function eraPvtob(elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: 
 // coordinates. The caller supplies UTC, site coordinates, ambient air
 // conditions and observing wavelength, and ERFA models are used to
 // obtain the Earth ephemeris, CIP/CIO and refraction constants.
-export function eraApco13(tt1: number, tt2: number, ut11: number, ut12: number, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle, phpa: Pressure, tc: Temperature, rh: number, wl: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, radius: Distance = WGS84_RADIUS, flattening: number = WGS84_FLATTENING, astrom?: EraAstrom) {
+export function eraApco13(
+	tt1: number,
+	tt2: number,
+	ut11: number,
+	ut12: number,
+	elong: Angle,
+	phi: Angle,
+	hm: Distance,
+	xp: Angle,
+	yp: Angle,
+	sp: Angle,
+	phpa: Pressure,
+	tc: Temperature,
+	rh: number,
+	wl: number,
+	ebpv: readonly [Vec3, Vec3],
+	ehp: Vec3,
+	radius: Distance = WGS84_RADIUS,
+	flattening: number = WGS84_FLATTENING,
+	astrom?: EraAstrom,
+) {
 	// Form the equinox based BPN matrix, IAU 2006/2000A.
 	const r = eraPnm06a(tt1, tt2)
 
@@ -1659,7 +1709,7 @@ export function eraRefco(phpa: Pressure, tc: Temperature, rh: number, wl: number
 
 	// Water vapour pressure at the observer.
 	if (p > 0) {
-		const ps = Math.pow(10, (0.7859 + 0.03477 * t) / (1 + 0.00412 * t)) * (1 + p * (4.5e-6 + 6e-10 * t * t))
+		const ps = 10 ** ((0.7859 + 0.03477 * t) / (1 + 0.00412 * t)) * (1 + p * (4.5e-6 + 6e-10 * t * t))
 		pw = (r * ps) / (1 - ((1 - r) * ps) / p)
 	}
 
@@ -1718,7 +1768,7 @@ export function eraApio(sp: Angle, theta: Angle, elong: Angle, phi: Angle, hm: D
 	// Solve for local Earth rotation angle.
 	let a = r[0]
 	let b = r[1]
-	astrom.eral = a != 0 || b != 0 ? Math.atan2(b, a) : 0
+	astrom.eral = a !== 0 || b !== 0 ? Math.atan2(b, a) : 0
 
 	// Solve for polar motion [X,Y] with respect to local meridian.
 	a = r[0]
@@ -1726,7 +1776,7 @@ export function eraApio(sp: Angle, theta: Angle, elong: Angle, phi: Angle, hm: D
 	astrom.xpl = Math.atan2(c, Math.sqrt(a * a + b * b))
 	a = r[5]
 	b = r[8]
-	astrom.ypl = a != 0 || b != 0 ? -Math.atan2(a, b) : 0
+	astrom.ypl = a !== 0 || b !== 0 ? -Math.atan2(a, b) : 0
 
 	// Adjusted longitude.
 	astrom.along = eraAnpm(astrom.eral - theta)
@@ -1777,7 +1827,7 @@ export function eraAtioq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	const zaet = astrom.cphi * xhdt + astrom.sphi * zhdt
 
 	// Azimuth (N=0,E=90).
-	const azobs = xaet != 0 || yaet != 0 ? Math.atan2(yaet, -xaet) : 0.0
+	const azobs = xaet !== 0 || yaet !== 0 ? Math.atan2(yaet, -xaet) : 0.0
 
 	// ----------
 	// Refraction

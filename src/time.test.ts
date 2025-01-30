@@ -1,4 +1,4 @@
-import { beforeAll, expect, test, type CustomMatcher } from 'bun:test'
+import { type CustomMatcher, beforeAll, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { deg, hour } from './angle'
 import { DAYSEC, J2000 } from './constants'
@@ -6,7 +6,37 @@ import { meter } from './distance'
 import { iersb } from './iers'
 import { fileHandleSource } from './io'
 import { Ellipsoid, geodetic } from './location'
-import { equationOfOrigins, era, gast, gmst, meanObliquity, normalize, nutation, precession, precessionNutation, subtract, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, Timescale, timeUnix, timeYMDHMS, toDate, tt, ut1, utc, type Time } from './time'
+import {
+	type Time,
+	Timescale,
+	equationOfOrigins,
+	era,
+	gast,
+	gmst,
+	meanObliquity,
+	normalize,
+	nutation,
+	precession,
+	precessionNutation,
+	subtract,
+	tai,
+	tcb,
+	tcg,
+	tdb,
+	tdbMinusTt,
+	tdbMinusTtByFairheadAndBretagnon1990,
+	time,
+	timeBesselian,
+	timeGPS,
+	timeJulian,
+	timeMJD,
+	timeUnix,
+	timeYMDHMS,
+	toDate,
+	tt,
+	ut1,
+	utc,
+} from './time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = normalize(expected.day, expected.fraction)

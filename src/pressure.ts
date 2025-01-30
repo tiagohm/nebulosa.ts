@@ -34,9 +34,9 @@ export function pressureFrom(altitude: Distance, temperature: Temperature = 15):
 	const m = toMeter(altitude)
 
 	if (m < 11000) {
-		return ONE_ATM * Math.pow(k / (k - 0.0065 * m), e)
+		return ONE_ATM * (k / (k - 0.0065 * m)) ** e
 	} else {
-		const a = ONE_ATM * Math.pow(k / (k + -0.0065 * 11000.0), e)
+		const a = ONE_ATM * (k / (k + -0.0065 * 11000.0)) ** e
 		const c = k + 11000 * -0.0065
 		return a * Math.exp((-9.80665 * 0.0289644 * (m - 11000.0)) / (8.31432 * c))
 	}
