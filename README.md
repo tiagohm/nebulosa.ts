@@ -94,7 +94,7 @@ precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to 
 observer(command, center, coord, startTime, endTime, quantities, options)
 observerWithOsculatingElements(parameters, coord, startTime, endTime, quantities, options)
 observerWithTle(tle, coord, startTime, endTime, quantities, options)
-spk(id, startTime, endTime)
+spkFile(id, startTime, endTime)
 ```
 
 ### ICRS

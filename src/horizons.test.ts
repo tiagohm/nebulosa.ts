@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test'
 import { deg } from './angle'
 import { read as readDaf } from './daf'
 import { meter } from './distance'
-import { observer, observerWithOsculatingElements, observerWithTle, Quantity, spk, type ObserverWithOsculatingElementsParameters } from './horizons'
+import { observer, observerWithOsculatingElements, observerWithTle, Quantity, spkFile, type ObserverWithOsculatingElementsParameters } from './horizons'
 import { bufferSource } from './io'
 import { extendedPermanentAsteroidNumber } from './naif'
-import { spk as readSpk } from './spk'
+import { spk } from './spk'
 import { Timescale, timeYMDHMS } from './time'
 
 test.skip('observer', async () => {
@@ -104,16 +104,16 @@ test.skip('observerWithTle', async () => {
 	expect(table!.data[12]).toEqual(['2025-Jan-29 14:05', '22.50027', '-17.81843'])
 })
 
-test.skip('spk', async () => {
+test.skip('spkFile', async () => {
 	const startTime = new Date('2025-01-29T13:05:00Z')
 	const endTime = new Date('2025-01-29T14:05:00Z')
-	const spkFile = await spk(extendedPermanentAsteroidNumber(3517), startTime, endTime)
+	const file = await spkFile(extendedPermanentAsteroidNumber(3517), startTime, endTime)
 
-	expect(spkFile.spk).not.toBeEmpty()
+	expect(file.spk).not.toBeEmpty()
 
-	const buffer = Buffer.from(spkFile.spk!, 'base64')
+	const buffer = Buffer.from(file.spk!, 'base64')
 	const daf = await readDaf(bufferSource(buffer))
-	const s = readSpk(daf)
+	const s = spk(daf)
 
 	expect(s.segments).toHaveLength(1)
 	expect(s.segment(10, 20003517)).not.toBeUndefined()

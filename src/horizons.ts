@@ -13,7 +13,7 @@ export const SPK_QUERY = 'format=json&EPHEM_TYPE=SPK&OBJ_DATA=NO'
 
 export type ApparentRefractionCorrection = 'AIRLESS' | 'REFRACTED'
 
-export type ObserverSiteCenter = `geo@${number}` | `coord@${number}` | 'coord'
+export type ObserverSiteCenter = `geo@${number}` | `coord@${number}` | 'coord' | `${number}@${number}`
 
 export type ObserverSiteCoord = readonly [Angle, Angle, Distance] | `${number},${number},${number}` | 0 | false | undefined
 
@@ -50,8 +50,8 @@ export interface ObserverWithOsculatingElementsParameters {
 }
 
 export interface SpkFile {
-	spk?: string
-	error?: string
+	readonly spk?: string
+	readonly error?: string
 }
 
 export interface ObserverTable {
@@ -136,9 +136,9 @@ export async function observerWithOsculatingElements(parameters: ObserverWithOsc
 	const stepSizeInMinutes = options?.stepSizeInMinutes ?? DEFAULT_OBSERVER_OPTIONS.stepSizeInMinutes
 	const apparent = options?.apparent ?? DEFAULT_OBSERVER_OPTIONS.apparent
 	const extraPrecision = options?.extraPrecision ?? DEFAULT_OBSERVER_OPTIONS.extraPrecision
-	const { epoch, pdt, ec, om, w, i } = parameters
+	const { epoch, pdt, ec, om, w, i, h, g } = parameters
 	const tpqr = 'a' in pdt ? `&MA='${toDeg(pdt.ma)}'&A='${pdt.a}'` : 'tp' in pdt ? `&QR='${pdt.qr}'&TP='${pdt.tp}'` : `&MA='${toDeg(pdt.ma)}'&N='${toDeg(pdt.n)}'`
-	const query = `?${OBSERVER_OSCULATING_QUERY}&EPOCH='${epoch}'${tpqr}&EC='${ec}'&OM='${toDeg(om)}'&W='${toDeg(w)}'&IN='${toDeg(i)}'&SITE_COORD='${siteCoord}'&START_TIME='${formatDate(startTime)}'&STOP_TIME='${formatDate(endTime)}'&STEP_SIZE='${stepSizeInMinutes}m'&APPARENT='${apparent}'&EXTRA_PREC='${extraPrecision ? 'YES' : 'NO'}'&QUANTITIES='${quantities.join(',')}'`
+	const query = `?${OBSERVER_OSCULATING_QUERY}&EPOCH='${epoch}'${tpqr}&EC='${ec}'&OM='${toDeg(om)}'&W='${toDeg(w)}'&IN='${toDeg(i)}'${h ? `&H='${h}'` : ''}${g ? `&G='${g}'` : ''}&SITE_COORD='${siteCoord}'&START_TIME='${formatDate(startTime)}'&STOP_TIME='${formatDate(endTime)}'&STEP_SIZE='${stepSizeInMinutes}m'&APPARENT='${apparent}'&EXTRA_PREC='${extraPrecision ? 'YES' : 'NO'}'&QUANTITIES='${quantities.join(',')}'`
 	const response = await fetch(`${BASE_URL}${query}`)
 	const text = await response.text()
 	return parseTable(text)
@@ -156,7 +156,7 @@ export async function observerWithTle(tle: string, coord: ObserverSiteCoord, sta
 	return parseTable(text)
 }
 
-export async function spk(id: number, startTime: Date, endTime: Date) {
+export async function spkFile(id: number, startTime: Date, endTime: Date) {
 	const query = `?${SPK_QUERY}&COMMAND='DES%3D${id}%3B'&START_TIME='${formatDate(startTime)}'&STOP_TIME='${formatDate(endTime)}'`
 	const response = await fetch(`${BASE_URL}${query}`)
 	return (await response.json()) as SpkFile
