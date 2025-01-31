@@ -1,4 +1,4 @@
-.PHONY: run lint prettier test compile astro
+.PHONY: run lint format test compile astropy
 
 run:
 	bun .
@@ -6,14 +6,11 @@ run:
 lint:
 	bun lint
 
-prettier:
-	bun prettier
+format:
+	bun format
 
 test:
 	bun test --timeout 1000
-
-astro:
-	python scripts/$(name).py $(a)
 
 ifeq ($(OS),Windows_NT)
 compile:
@@ -22,3 +19,6 @@ else
 compile:
 	bun build --compile --minify --bytecode . --outfile nebulosa
 endif
+
+astropy:
+	python scripts/$(name).py $(a)
