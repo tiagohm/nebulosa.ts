@@ -5,9 +5,17 @@ on:
         branches: [main]
         paths:
             - '**.ts'
+            - 'package.json'
+            - 'tsconfig.json'
+            - 'native/**'
+            - 'data/**'
     pull_request:
         paths:
             - '**.ts'
+            - 'package.json'
+            - 'tsconfig.json'
+            - 'native/**'
+            - 'data/**'
     workflow_dispatch:
 
 jobs:
