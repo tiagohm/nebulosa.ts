@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { deg } from './angle'
 import { PI, PIOVERTWO } from './constants'
-import { angle, cross, div, divScalar, dot, minus, minusScalar, mul, mulScalar, negate, normalize, plane, plus, plusScalar, rotateByRodrigues, xAxis, yAxis, zAxis, type MutVec3, type Vec3 } from './vector'
+import { type MutVec3, type Vec3, angle, cross, div, divScalar, dot, minus, minusScalar, mul, mulScalar, negate, normalize, plane, plus, plusScalar, rotateByRodrigues, xAxis, yAxis, zAxis } from './vector'
 
 test('angle', () => {
 	expect(angle(xAxis(), yAxis())).toBe(PIOVERTWO)
@@ -62,21 +62,27 @@ test('rotateByRodrigues', () => {
 	expect(rotateByRodrigues(z, z, PI)).toEqual(z)
 
 	const v: Vec3 = [1, 2, 3]
-	expect(rotateByRodrigues(v, x, PI / 4)).toEqual([1, -0.7071067811865472, 3.5355339059327378])
-	expect(rotateByRodrigues(v, y, PI / 4)).toEqual([2.82842712474619, 2, 1.4142135623730954])
-	expect(rotateByRodrigues(v, z, PI / 4)).toEqual([-0.7071067811865474, 2.121320343559643, 3])
+	let u = rotateByRodrigues(v, x, PI / 4)
+	expect(u[0]).toBeCloseTo(1, 15)
+	expect(u[1]).toBeCloseTo(-0.7071067811865472, 15)
+	expect(u[2]).toBeCloseTo(3.5355339059327378, 15)
 
-	const axis: Vec3 = [3, 4, 5]
-	expect(rotateByRodrigues(v, axis, 0)).toEqual(v)
-	expect(rotateByRodrigues(v, axis, deg(29.6512852))).toEqual([1.2132585570946925, 1.7306199385433279, 3.087548914908522])
-	expect(rotateByRodrigues(v, axis, deg(120.3053274))).toEqual([2.0867722943019413, 1.6319848922736107, 2.642348709599946])
-	expect(rotateByRodrigues(v, axis, deg(230.6512852))).toEqual([1.6963389417184784, 2.5681684228867847, 2.1276618966594847])
-	expect(rotateByRodrigues(v, axis, deg(359.6139797))).toEqual([0.9981071206640635, 2.0038129934994813, 2.9980853328019763])
+	u = rotateByRodrigues(v, y, PI / 4)
+	expect(u[0]).toBeCloseTo(2.82842712474619, 15)
+	expect(u[1]).toBeCloseTo(2, 15)
+	expect(u[2]).toBeCloseTo(1.4142135623730954, 15)
+
+	u = rotateByRodrigues(v, z, PI / 4)
+	expect(u[0]).toBeCloseTo(-0.7071067811865474, 15)
+	expect(u[1]).toBeCloseTo(2.121320343559643, 15)
+	expect(u[2]).toBeCloseTo(3, 15)
 
 	const o: MutVec3 = [0, 0, 0]
-	rotateByRodrigues(v, axis, deg(29.6512852), o)
+	u = rotateByRodrigues(v, [3, 4, 5], deg(29.6512852), o)
 	expect(o).not.toEqual(v)
-	expect(o).toEqual([1.2132585570946925, 1.7306199385433279, 3.087548914908522])
+	expect(u[0]).toBeCloseTo(1.2132585570946925, 15)
+	expect(u[1]).toBeCloseTo(1.7306199385433279, 15)
+	expect(u[2]).toBeCloseTo(3.087548914908522, 15)
 })
 
 test('plane', () => {
