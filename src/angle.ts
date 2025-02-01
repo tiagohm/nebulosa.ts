@@ -153,6 +153,10 @@ function isHourSign(input?: string) {
 	return !!input && input === 'h'
 }
 
+function isDegSign(input?: string) {
+	return !!input && (input === 'd' || input === '°')
+}
+
 function isMinuteSign(input?: string) {
 	return !!input && (input === 'm' || input === "'")
 }
@@ -170,6 +174,12 @@ export function parseAngle(input?: string | number, options?: ParseAngleOptions)
 
 	if (!input) return options?.defaultValue
 
+	const numericInput = +input
+
+	if (!Number.isNaN(numericInput)) {
+		return options?.isHour ? hour(numericInput) : deg(numericInput)
+	}
+
 	const res = PARSE_ANGLE_DHMS_REGEX.exec(input)
 
 	let isHour = !!options?.isHour
@@ -182,7 +192,9 @@ export function parseAngle(input?: string | number, options?: ParseAngleOptions)
 		const c = res[5] ? parseFloat(res[5]) : 0
 
 		neg = a < 0
-		if (options?.isHour === undefined) isHour = isHourSign(res[2])
+
+		if (isHourSign(res[2])) isHour = true
+		else if (isDegSign(res[2])) isHour = false
 
 		if (isMinuteSign(res[2])) angle += Math.abs(a) / 60
 		else if (isSecondSign(res[2])) angle += Math.abs(a) / 3600
