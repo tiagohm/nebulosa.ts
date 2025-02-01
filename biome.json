@@ -51,9 +51,11 @@
 			},
 			"suspicious": {
 				"noAssignInExpressions": "off",
-				"noConsoleLog": "off"
+				"noConsoleLog": "off",
+				"useAwait": "error"
 			},
 			"complexity": {
+				"noForEach": "off",
 				"noUselessStringConcat": "error",
 				"useDateNow": "error",
 				"useSimplifiedLogicExpression": "error"
