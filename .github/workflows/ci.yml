@@ -19,7 +19,7 @@ on:
     workflow_dispatch:
 
 jobs:
-    my-job:
+    test:
         name: Test
         strategy:
             matrix:
