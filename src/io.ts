@@ -41,7 +41,7 @@ export class BufferSink implements Sink, Seekable, Exhaustible {
 
 	seek(position: number): boolean {
 		const length = this.buffer.byteLength
-		if (position >= length || position <= -length) return false
+		position = Math.max(-length, Math.min(position, length))
 		if (position >= 0) this.position = position
 		else this.position = length + position
 		return true
@@ -117,7 +117,7 @@ export class BufferSource implements Source, Seekable {
 
 	seek(position: number): boolean {
 		const length = this.buffer.byteLength
-		if (position >= length || position <= -length) return false
+		position = Math.max(-length, Math.min(position, length))
 		if (position >= 0) this.position = position
 		else this.position = length + position
 		return true
