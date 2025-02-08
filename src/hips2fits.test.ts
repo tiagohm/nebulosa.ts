@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { deg } from './angle'
 import { read } from './fits'
-import { type Hips2FitsOptions, hips2Fits, hipsSurveys } from './hip2fits'
+import { type Hips2FitsOptions, hips2Fits, hipsSurveys } from './hips2fits'
 import { bufferSource } from './io'
 
 test.skip('fits', async () => {
