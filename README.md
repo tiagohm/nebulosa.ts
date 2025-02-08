@@ -87,6 +87,13 @@ precessFk5FromJ2000(frame, equinox) // Precess the FK5 coordinate from J2000 to 
 precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to J2000
 ```
 
+### Hips2Fits
+
+```ts
+hips2Fits(survey, ra, dec, options) // Extract a FITS image from a HiPS 
+hipsSurveys() // List available HiPS
+```
+
 ### Horizons
 
 ```ts
