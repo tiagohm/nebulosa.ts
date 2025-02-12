@@ -1,5 +1,5 @@
-import { format } from 'date-fns'
 import { type Angle, toDeg } from './angle'
+import { type DateTime, formatDate } from './datetime'
 import { type Distance, toKilometer } from './distance'
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html
@@ -120,19 +120,19 @@ const DEFAULT_OBSERVER_OPTIONS: Required<ObserverOptions> = {
 	extraPrecision: false,
 }
 
-export async function observer(command: string, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Date, endTime: Date, quantities?: Quantity[], options?: ObserverOptions) {
+export async function observer(command: string, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: DateTime, endTime: DateTime, quantities?: Quantity[], options?: ObserverOptions) {
 	if (!quantities?.length) quantities = DEFAULT_QUANTITIES
 	const siteCoord = !coord ? '0,0,0' : typeof coord === 'string' ? coord : `${toDeg(coord[0])},${toDeg(coord[1])},${toKilometer(coord[2])}`
 	const stepSizeInMinutes = options?.stepSizeInMinutes ?? DEFAULT_OBSERVER_OPTIONS.stepSizeInMinutes
 	const apparent = options?.apparent ?? DEFAULT_OBSERVER_OPTIONS.apparent
 	const extraPrecision = options?.extraPrecision ?? DEFAULT_OBSERVER_OPTIONS.extraPrecision
-	const query = `?${OBSERVER_QUERY}&COMMAND='${encodeURIComponent(command)}'&CENTER='${center}'&SITE_COORD='${siteCoord}'&START_TIME='${formatDate(startTime)}'&STOP_TIME='${formatDate(endTime)}'&STEP_SIZE='${stepSizeInMinutes}m'&APPARENT='${apparent}'&EXTRA_PREC='${extraPrecision ? 'YES' : 'NO'}'&QUANTITIES='${quantities.join(',')}'`
+	const query = `?${OBSERVER_QUERY}&COMMAND='${encodeURIComponent(command)}'&CENTER='${center}'&SITE_COORD='${siteCoord}'&START_TIME='${formatTime(startTime)}'&STOP_TIME='${formatTime(endTime)}'&STEP_SIZE='${stepSizeInMinutes}m'&APPARENT='${apparent}'&EXTRA_PREC='${extraPrecision ? 'YES' : 'NO'}'&QUANTITIES='${quantities.join(',')}'`
 	const response = await fetch(`${BASE_URL}${query}`)
 	const text = await response.text()
 	return parseTable(text)
 }
 
-export async function observerWithOsculatingElements(parameters: ObserverWithOsculatingElementsParameters, coord: ObserverSiteCoord, startTime: Date, endTime: Date, quantities?: Quantity[], options?: ObserverOptions) {
+export async function observerWithOsculatingElements(parameters: ObserverWithOsculatingElementsParameters, coord: ObserverSiteCoord, startTime: DateTime, endTime: DateTime, quantities?: Quantity[], options?: ObserverOptions) {
 	if (!quantities?.length) quantities = DEFAULT_QUANTITIES
 	const siteCoord = !coord ? '0,0,0' : typeof coord === 'string' ? coord : `${toDeg(coord[0])},${toDeg(coord[1])},${toKilometer(coord[2])}`
 	const stepSizeInMinutes = options?.stepSizeInMinutes ?? DEFAULT_OBSERVER_OPTIONS.stepSizeInMinutes
@@ -140,26 +140,26 @@ export async function observerWithOsculatingElements(parameters: ObserverWithOsc
 	const extraPrecision = options?.extraPrecision ?? DEFAULT_OBSERVER_OPTIONS.extraPrecision
 	const { epoch, pdt, ec, om, w, i, h, g } = parameters
 	const tpqr = 'a' in pdt ? `&MA='${toDeg(pdt.ma)}'&A='${pdt.a}'` : 'tp' in pdt ? `&QR='${pdt.qr}'&TP='${pdt.tp}'` : `&MA='${toDeg(pdt.ma)}'&N='${toDeg(pdt.n)}'`
-	const query = `?${OBSERVER_OSCULATING_QUERY}&EPOCH='${epoch}'${tpqr}&EC='${ec}'&OM='${toDeg(om)}'&W='${toDeg(w)}'&IN='${toDeg(i)}'${h ? `&H='${h}'` : ''}${g ? `&G='${g}'` : ''}&SITE_COORD='${siteCoord}'&START_TIME='${formatDate(startTime)}'&STOP_TIME='${formatDate(endTime)}'&STEP_SIZE='${stepSizeInMinutes}m'&APPARENT='${apparent}'&EXTRA_PREC='${extraPrecision ? 'YES' : 'NO'}'&QUANTITIES='${quantities.join(',')}'`
+	const query = `?${OBSERVER_OSCULATING_QUERY}&EPOCH='${epoch}'${tpqr}&EC='${ec}'&OM='${toDeg(om)}'&W='${toDeg(w)}'&IN='${toDeg(i)}'${h ? `&H='${h}'` : ''}${g ? `&G='${g}'` : ''}&SITE_COORD='${siteCoord}'&START_TIME='${formatTime(startTime)}'&STOP_TIME='${formatTime(endTime)}'&STEP_SIZE='${stepSizeInMinutes}m'&APPARENT='${apparent}'&EXTRA_PREC='${extraPrecision ? 'YES' : 'NO'}'&QUANTITIES='${quantities.join(',')}'`
 	const response = await fetch(`${BASE_URL}${query}`)
 	const text = await response.text()
 	return parseTable(text)
 }
 
-export async function observerWithTle(tle: string, coord: ObserverSiteCoord, startTime: Date, endTime: Date, quantities?: Quantity[], options?: ObserverOptions) {
+export async function observerWithTle(tle: string, coord: ObserverSiteCoord, startTime: DateTime, endTime: DateTime, quantities?: Quantity[], options?: ObserverOptions) {
 	if (!quantities?.length) quantities = DEFAULT_QUANTITIES
 	const siteCoord = !coord ? '0,0,0' : typeof coord === 'string' ? coord : `${toDeg(coord[0])},${toDeg(coord[1])},${toKilometer(coord[2])}`
 	const stepSizeInMinutes = options?.stepSizeInMinutes ?? DEFAULT_OBSERVER_OPTIONS.stepSizeInMinutes
 	const apparent = options?.apparent ?? DEFAULT_OBSERVER_OPTIONS.apparent
 	const extraPrecision = options?.extraPrecision ?? DEFAULT_OBSERVER_OPTIONS.extraPrecision
-	const query = `?${OBSERVER_TLE_QUERY}&TLE='${encodeURIComponent(tle)}'&SITE_COORD='${siteCoord}'&START_TIME='${formatDate(startTime)}'&STOP_TIME='${formatDate(endTime)}'&STEP_SIZE='${stepSizeInMinutes}m'&APPARENT='${apparent}'&EXTRA_PREC='${extraPrecision ? 'YES' : 'NO'}'&QUANTITIES='${quantities.join(',')}'`
+	const query = `?${OBSERVER_TLE_QUERY}&TLE='${encodeURIComponent(tle)}'&SITE_COORD='${siteCoord}'&START_TIME='${formatTime(startTime)}'&STOP_TIME='${formatTime(endTime)}'&STEP_SIZE='${stepSizeInMinutes}m'&APPARENT='${apparent}'&EXTRA_PREC='${extraPrecision ? 'YES' : 'NO'}'&QUANTITIES='${quantities.join(',')}'`
 	const response = await fetch(`${BASE_URL}${query}`)
 	const text = await response.text()
 	return parseTable(text)
 }
 
-export async function spkFile(id: number, startTime: Date, endTime: Date) {
-	const query = `?${SPK_QUERY}&COMMAND='DES%3D${id}%3B'&START_TIME='${formatDate(startTime)}'&STOP_TIME='${formatDate(endTime)}'`
+export async function spkFile(id: number, startTime: DateTime, endTime: DateTime) {
+	const query = `?${SPK_QUERY}&COMMAND='DES%3D${id}%3B'&START_TIME='${formatTime(startTime)}'&STOP_TIME='${formatTime(endTime)}'`
 	const response = await fetch(`${BASE_URL}${query}`)
 	return (await response.json()) as SpkFile
 }
@@ -187,6 +187,6 @@ function parseTable(text: string): ObserverTable | undefined {
 	return undefined
 }
 
-function formatDate(date: Date) {
-	return format(date, 'yyyy-MM-dd HH:mm')
+function formatTime(date: DateTime) {
+	return formatDate(date, 'YYYY-MM-DD HH:mm')
 }

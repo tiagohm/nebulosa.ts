@@ -1,6 +1,6 @@
-import { format } from 'date-fns'
-import { DEG2RAD, formatAngle, toDeg, type Angle, type FormatAngleOptions } from './angle'
-import { toKilometer, type Distance } from './distance'
+import { type Angle, DEG2RAD, type FormatAngleOptions, formatAngle, toDeg } from './angle'
+import { type DateTime, dateUnix, formatDate, now } from './datetime'
+import { type Distance, toKilometer } from './distance'
 
 export const BASE_URL = 'https://ssd-api.jpl.nasa.gov/'
 
@@ -139,15 +139,15 @@ export async function search(text: string) {
 	return (await response.json()) as SmallBodySearch
 }
 
-export async function identify(dateTime: Date, longitude: Angle, latitude: Angle, elevation: Distance, fovRa: Angle, fovDec: Angle, fovRaWidth: number = DEG2RAD, fovDecWidth: number = fovRaWidth, magLimit: number = 18, magRequired: boolean = true) {
-	const uri = `${BASE_URL}${IDENTIFY_PATH}&obs-time=${format(dateTime, 'yyyy-MM-dd_HH:mm:ss')}&lat=${toDeg(latitude)}&lon=${toDeg(longitude)}&alt=${toKilometer(elevation)}&fov-ra-center=${formatAngle(fovRa, FOV_RA_FORMAT)}&fov-dec-center=${formatAngle(fovDec, FOV_DEC_FORMAT)}&fov-ra-hwidth=${toDeg(fovRaWidth)}&fov-dec-hwidth=${toDeg(fovDecWidth)}&vmag-lim=${magLimit}&mag-required=${magRequired && magLimit < 30}`
+export async function identify(dateTime: DateTime, longitude: Angle, latitude: Angle, elevation: Distance, fovRa: Angle, fovDec: Angle, fovRaWidth: number = DEG2RAD, fovDecWidth: number = fovRaWidth, magLimit: number = 18, magRequired: boolean = true) {
+	const uri = `${BASE_URL}${IDENTIFY_PATH}&obs-time=${formatDate(dateTime, 'YYYY-MM-DD_HH:mm:ss')}&lat=${toDeg(latitude)}&lon=${toDeg(longitude)}&alt=${toKilometer(elevation)}&fov-ra-center=${formatAngle(fovRa, FOV_RA_FORMAT)}&fov-dec-center=${formatAngle(fovDec, FOV_DEC_FORMAT)}&fov-ra-hwidth=${toDeg(fovRaWidth)}&fov-dec-hwidth=${toDeg(fovDecWidth)}&vmag-lim=${magLimit}&mag-required=${magRequired && magLimit < 30}`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodyIdentify
 }
 
-export async function closeApproaches(dateMin?: Date | number | 'now', dateMax: Date | number = 7, distance: number = 10) {
-	dateMin = !dateMin || dateMin === 'now' ? Date.now() : dateMin
-	const uri = `${BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${format(dateMin, 'yyyy-MM-dd')}&date-max=${typeof dateMax === 'number' ? `%2B${dateMax}` : format(dateMax, 'yyyy-MM-dd')}&dist-max=${distance}LD`
-	const response = await fetch(uri)
+export async function closeApproaches(dateMin?: DateTime | number | 'now', dateMax: DateTime | number = 7, distance: number = 10) {
+	dateMin = !dateMin || dateMin === 'now' ? now() : typeof dateMin === 'number' ? dateUnix(dateMin) : dateMin
+	const uri = `${BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatDate(dateMin, 'YYYY-MM-DD')}&date-max=${typeof dateMax === 'number' ? `%2B${dateMax}` : formatDate(dateMax, 'YYYY-MM-DD')}&dist-max=${distance}LD`
+    const response = await fetch(uri)
 	return (await response.json()) as SmallBodyCloseApproach
 }

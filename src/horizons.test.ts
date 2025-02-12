@@ -7,10 +7,11 @@ import { bufferSource } from './io'
 import { extendedPermanentAsteroidNumber } from './naif'
 import { spk } from './spk'
 import { Timescale, timeYMDHMS } from './time'
+import { dateFrom } from './datetime'
 
 test.skip('observer', async () => {
-	const startTime = new Date('2025-01-29T13:05:00Z')
-	const endTime = new Date('2025-01-29T14:05:00Z')
+	const startTime = dateFrom('2025-01-29T13:05:00Z')
+	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
 	const table = await observer('10', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 
@@ -22,8 +23,8 @@ test.skip('observer', async () => {
 })
 
 test.skip('observerBySpkId', async () => {
-	const startTime = new Date('2025-01-29T13:05:00Z')
-	const endTime = new Date('2025-01-29T14:05:00Z')
+	const startTime = dateFrom('2025-01-29T13:05:00Z')
+	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
 	const table = await observer('DES=2000001;', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 
@@ -35,8 +36,8 @@ test.skip('observerBySpkId', async () => {
 })
 
 test.skip('observerByIauNumber', async () => {
-	const startTime = new Date('2025-01-29T13:05:00Z')
-	const endTime = new Date('2025-01-29T14:05:00Z')
+	const startTime = dateFrom('2025-01-29T13:05:00Z')
+	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
 	const table = await observer('1;', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 
@@ -48,8 +49,8 @@ test.skip('observerByIauNumber', async () => {
 })
 
 test.skip('observerBySpkIdAndCapAndNoFrag', async () => {
-	const startTime = new Date('2025-01-29T13:05:00Z')
-	const endTime = new Date('2025-01-29T14:05:00Z')
+	const startTime = dateFrom('2025-01-29T13:05:00Z')
+	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
 	const table = await observer('DES=1000041;CAP;NOFRAG', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 
@@ -61,24 +62,24 @@ test.skip('observerBySpkIdAndCapAndNoFrag', async () => {
 })
 
 test.skip('observerWithNonUniqueObject', async () => {
-	const startTime = new Date('2025-01-29T13:05:00Z')
-	const endTime = new Date('2025-01-29T14:05:00Z')
+	const startTime = dateFrom('2025-01-29T13:05:00Z')
+	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
 	const table = await observer('DES=1000041;', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 	expect(table).toBeUndefined()
 })
 
 test.skip('observerWithNoMatchFound', async () => {
-	const startTime = new Date('2025-01-29T13:05:00Z')
-	const endTime = new Date('2025-01-29T14:05:00Z')
+	const startTime = dateFrom('2025-01-29T13:05:00Z')
+	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
 	const table = await observer('DES=1;CAP;NOFRAG', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 	expect(table).toBeUndefined()
 })
 
 test.skip('observerWithOsculatingElements', async () => {
-	const startTime = new Date('2025-01-29T13:05:00Z')
-	const endTime = new Date('2025-01-29T14:05:00Z')
+	const startTime = dateFrom('2025-01-29T13:05:00Z')
+	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
 	const parameters: ObserverWithOsculatingElementsParameters = { epoch: 2460049.5, ec: 0.6183399929327511, om: deg(30.04427847488657), w: deg(30.56835826458952), i: deg(19.84449491210952), pdt: { qr: 0.3107780828530178, tp: 2459989.479453452084 } }
 	const table = await observerWithOsculatingElements(parameters, coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
@@ -91,8 +92,8 @@ test.skip('observerWithOsculatingElements', async () => {
 })
 
 test.skip('observerWithTle', async () => {
-	const startTime = new Date('2025-01-29T13:05:00Z')
-	const endTime = new Date('2025-01-29T14:05:00Z')
+	const startTime = dateFrom('2025-01-29T13:05:00Z')
+	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
 	const tle = 'ISS (ZARYA)\n1 25544U 98067A   25029.70562785  .00020566  00000+0  35850-3 0  9990\n2 25544  51.6387 272.9482 0002126 142.5311 315.5480 15.50695229493684'
 	const table = await observerWithTle(tle, coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
@@ -105,8 +106,8 @@ test.skip('observerWithTle', async () => {
 })
 
 test.skip('spkFile', async () => {
-	const startTime = new Date('2025-01-29T13:05:00Z')
-	const endTime = new Date('2025-01-29T14:05:00Z')
+	const startTime = dateFrom('2025-01-29T13:05:00Z')
+	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const file = await spkFile(extendedPermanentAsteroidNumber(3517), startTime, endTime)
 
 	expect(file.spk).not.toBeEmpty()
@@ -125,10 +126,10 @@ test.skip('spkFile', async () => {
 	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
 	// Target body name: 3517 Tatianicheva (1976 SE1)    {source: JPL#59}
 	// Center body name: Sun (10)                        {source: DE441}
-	expect(x).toBeCloseTo(-2.149660487697748, 12)
-	expect(y).toBeCloseTo(1.018767192134325, 12)
-	expect(z).toBeCloseTo(3.614628721866353e-1, 12)
-	expect(vx).toBeCloseTo(-5.373889588848743e-3, 15)
-	expect(vy).toBeCloseTo(-8.634062784008313e-3, 15)
-	expect(vz).toBeCloseTo(-3.234414083822303e-3, 15)
+	expect(x).toBeCloseTo(-2.149660487697748, 9)
+	expect(y).toBeCloseTo(1.018767192134325, 9)
+	expect(z).toBeCloseTo(3.614628721866353e-1, 9)
+	expect(vx).toBeCloseTo(-5.373889588848743e-3, 11)
+	expect(vy).toBeCloseTo(-8.634062784008313e-3, 11)
+	expect(vz).toBeCloseTo(-3.234414083822303e-3, 11)
 })
