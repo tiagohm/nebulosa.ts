@@ -1,7 +1,9 @@
-export const BASE_URL = 'https://simbad.cds.unistra.fr/'
-export const ALTERNATIVE_URL = 'https://simbad.u-strasbg.fr/'
+export const SIMBAD_URL = 'https://simbad.cds.unistra.fr/'
+export const SIMBAD_ALTERNATIVE_URL = 'https://simbad.u-strasbg.fr/'
+export const VIZIER_URL = 'http://tapvizier.cds.unistra.fr/'
 
-const SEARCH_PATH = 'simbad/sim-tap/sync'
+const SIMBAD_SEARCH_PATH = 'simbad/sim-tap/sync'
+const VIZIER_SEARCH_PATH = 'TAPVizieR/tap/sync'
 
 export interface SimbadTable {
 	readonly headers: string[]
@@ -9,7 +11,22 @@ export interface SimbadTable {
 }
 
 export async function simbadSearch(query: string, baseUrl?: string) {
-	const uri = `${baseUrl || BASE_URL}${SEARCH_PATH}`
+	const uri = `${baseUrl || SIMBAD_URL}${SIMBAD_SEARCH_PATH}`
+
+	const body = new FormData()
+	body.append('request', 'doQuery')
+	body.append('lang', 'adql')
+	body.append('format', 'tsv')
+	body.append('query', query)
+
+	const response = await fetch(uri, { method: 'POST', body })
+	if (response.status >= 300) return undefined
+	const text = await response.text()
+	return parseTable(text)
+}
+
+export async function vizierSearch(query: string, baseUrl?: string) {
+	const uri = `${baseUrl || VIZIER_URL}${VIZIER_SEARCH_PATH}`
 
 	const body = new FormData()
 	body.append('request', 'doQuery')
