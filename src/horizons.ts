@@ -1,4 +1,5 @@
 import { type Angle, toDeg } from './angle'
+import type { CsvTable } from './csv'
 import { type DateTime, formatDate } from './datetime'
 import { type Distance, toKilometer } from './distance'
 
@@ -54,11 +55,6 @@ export interface ObserverWithOsculatingElementsParameters {
 export interface SpkFile {
 	readonly spk?: string
 	readonly error?: string
-}
-
-export interface ObserverTable {
-	readonly headers: string[]
-	readonly data: string[][]
 }
 
 export enum Quantity {
@@ -164,7 +160,7 @@ export async function spkFile(id: number, startTime: DateTime, endTime: DateTime
 	return (await response.json()) as SpkFile
 }
 
-function parseTable(text: string): ObserverTable | undefined {
+function parseTable(text: string): CsvTable | undefined {
 	const lines = text.split('\n')
 	const startIdx = lines.findIndex((e) => e.startsWith('$$SOE')) + 1
 	const endIdx = lines.findLastIndex((e) => e.startsWith('$$EOE')) - 1
@@ -181,7 +177,7 @@ function parseTable(text: string): ObserverTable | undefined {
 			data[k] = item
 		}
 
-		return { headers: indexes.map((e) => headers[e]), data }
+		return { header: indexes.map((e) => headers[e]), data }
 	}
 
 	return undefined
