@@ -50,7 +50,7 @@ export interface FormatAngleOptions {
 	plusSign?: string
 }
 
-export function normalize(angle: Angle): Angle {
+export function normalizeAngle(angle: Angle): Angle {
 	return pmod(angle, TAU)
 }
 
@@ -128,7 +128,7 @@ export function toDms(angle: Angle): [number, number, number, number] {
 
 // Extracts the hours, minutes and seconds from the angle.
 export function toHms(angle: Angle): [number, number, number] {
-	const h = toHour(normalize(angle))
+	const h = toHour(normalizeAngle(angle))
 	const m = ((h - Math.trunc(h)) * 60) % 60
 	const s = ((m - Math.trunc(m)) * 60) % 60
 	return [Math.trunc(h), Math.trunc(m), s]
@@ -261,16 +261,16 @@ const DEFAULT_DMS_FORMAT: FormatAngleOptions = { noSign: true, separators: 'dms'
 const DEFAULT_SIGNED_DMS_FORMAT: FormatAngleOptions = { ...DEFAULT_DMS_FORMAT, noSign: false }
 
 // Format the angle as 00:00:00.00.
-export function formatHMS(angle: Angle) {
+export function formatHms(angle: Angle) {
 	return formatAngle(angle, DEFAULT_HMS_FORMAT)
 }
 
 // Format the angle as 00d00m00.00s, signed only if negative
-export function formatDMS(angle: Angle) {
+export function formatDms(angle: Angle) {
 	return formatAngle(angle, DEFAULT_DMS_FORMAT)
 }
 
 // Format the angle as +00d00m00.00s, always signed
-export function formatSignedDMS(angle: Angle) {
+export function formatSignedDms(angle: Angle) {
 	return formatAngle(angle, DEFAULT_SIGNED_DMS_FORMAT)
 }

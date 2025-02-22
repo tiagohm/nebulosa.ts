@@ -5,7 +5,7 @@ import { DAYSEC, J2000 } from './constants'
 import { meter } from './distance'
 import { iersb } from './iers'
 import { fileHandleSource } from './io'
-import { Ellipsoid, geodetic } from './location'
+import { Ellipsoid, geodeticLocation } from './location'
 import {
 	type Time,
 	Timescale,
@@ -14,11 +14,11 @@ import {
 	gast,
 	gmst,
 	meanObliquity,
-	normalize,
-	nutation,
-	precession,
-	precessionNutation,
-	subtract,
+	normalizeTime,
+	nutationAngles,
+	precessionMatrix,
+	precessionNutationMatrix,
+	subtractTime,
 	tai,
 	tcb,
 	tcg,
@@ -39,7 +39,7 @@ import {
 } from './time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
-	const b = normalize(expected.day, expected.fraction)
+	const b = normalizeTime(expected.day, expected.fraction)
 
 	if (actual.day !== b.day) {
 		return { pass: false, message: () => `failed to match day. expected ${b.day}, but ${actual.day}` }
@@ -151,7 +151,7 @@ test('timGPS', () => {
 })
 
 test('subtract', () => {
-	const dt = subtract(timeYMDHMS(2020, 1, 1, 12, 0, 0), timeYMDHMS(2020, 1, 1, 10, 0, 0))
+	const dt = subtractTime(timeYMDHMS(2020, 1, 1, 12, 0, 0), timeYMDHMS(2020, 1, 1, 10, 0, 0))
 	expect(dt).toBeCloseTo((2 * 60 * 60) / DAYSEC, 16)
 })
 
@@ -287,7 +287,7 @@ test('tcb', () => {
 
 test('location', () => {
 	let t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TDB)
-	t.location = geodetic(deg(-45), deg(-23), meter(890), Ellipsoid.WGS84)
+	t.location = geodeticLocation(deg(-45), deg(-23), meter(890), Ellipsoid.WGS84)
 
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
@@ -301,7 +301,7 @@ test('location', () => {
 	expect(tcb(t)).toMatchTime(time(2459130, 0.00024785909368291, Timescale.TCB, false))
 
 	t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UT1)
-	t.location = geodetic(deg(-45), deg(-23), meter(890), Ellipsoid.WGS84)
+	t.location = geodeticLocation(deg(-45), deg(-23), meter(890), Ellipsoid.WGS84)
 
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
@@ -385,19 +385,19 @@ test('meanObliquity', () => {
 
 test('nutation', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(nutation(t)).toBe(t.extra!.nutation!)
+	expect(nutationAngles(t)).toBe(t.extra!.nutation!)
 	expect(t.extra?.nutation).toEqual([-0.00008760676099523273, 0.00000755771193699156])
 })
 
 test('precession', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(precession(t)).toBe(t.extra!.precession!)
+	expect(precessionMatrix(t)).toBe(t.extra!.precession!)
 	expect(t.extra?.precession).toEqual([0.9999871819115399, -0.004643833528063321, -0.0020176280083981767, 0.004643833647273387, 0.9999892173356966, -0.000004625710173677966, 0.0020176277340206686, -0.000004743877952184672, 0.9999979645758397])
 })
 
 test('precessionNutation', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(precessionNutation(t)).toBe(t.extra!.precessionNutation!)
+	expect(precessionNutationMatrix(t)).toBe(t.extra!.precessionNutation!)
 	expect(t.extra?.precessionNutation).toEqual([0.9999876216446774, -0.004563455260357874, -0.0019827842818092144, 0.004563440392430343, 0.9999895873794092, -0.000012022632120134435, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
 })
 

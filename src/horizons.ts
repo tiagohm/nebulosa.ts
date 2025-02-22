@@ -5,7 +5,7 @@ import { type Distance, toKilometer } from './distance'
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html
 
-export const BASE_URL = 'https://ssd.jpl.nasa.gov/api/horizons.api'
+export const HORIZONS_BASE_URL = 'https://ssd.jpl.nasa.gov/api/horizons.api'
 
 export const OBSERVER_QUERY = "format=text&MAKE_EPHEM=YES&EPHEM_TYPE=OBSERVER&COORD_TYPE=GEODETIC&REF_SYSTEM='ICRF'&CAL_FORMAT='CAL'&TIME_DIGITS='MINUTES'&ANG_FORMAT='DEG'&RANGE_UNITS='AU'&SUPPRESS_RANGE_RATE='YES'&SKIP_DAYLT='NO'&SOLAR_ELONG='0,180'&OBJ_DATA='NO'&CSV_FORMAT='YES'&ELEV_CUT='-90'"
 export const OBSERVER_OSCULATING_QUERY =
@@ -123,7 +123,7 @@ export async function observer(command: string, center: ObserverSiteCenter, coor
 	const apparent = options?.apparent ?? DEFAULT_OBSERVER_OPTIONS.apparent
 	const extraPrecision = options?.extraPrecision ?? DEFAULT_OBSERVER_OPTIONS.extraPrecision
 	const query = `?${OBSERVER_QUERY}&COMMAND='${encodeURIComponent(command)}'&CENTER='${center}'&SITE_COORD='${siteCoord}'&START_TIME='${formatTime(startTime)}'&STOP_TIME='${formatTime(endTime)}'&STEP_SIZE='${stepSizeInMinutes}m'&APPARENT='${apparent}'&EXTRA_PREC='${extraPrecision ? 'YES' : 'NO'}'&QUANTITIES='${quantities.join(',')}'`
-	const response = await fetch(`${BASE_URL}${query}`)
+	const response = await fetch(`${HORIZONS_BASE_URL}${query}`)
 	const text = await response.text()
 	return parseTable(text)
 }
@@ -137,7 +137,7 @@ export async function observerWithOsculatingElements(parameters: ObserverWithOsc
 	const { epoch, pdt, ec, om, w, i, h, g } = parameters
 	const tpqr = 'a' in pdt ? `&MA='${toDeg(pdt.ma)}'&A='${pdt.a}'` : 'tp' in pdt ? `&QR='${pdt.qr}'&TP='${pdt.tp}'` : `&MA='${toDeg(pdt.ma)}'&N='${toDeg(pdt.n)}'`
 	const query = `?${OBSERVER_OSCULATING_QUERY}&EPOCH='${epoch}'${tpqr}&EC='${ec}'&OM='${toDeg(om)}'&W='${toDeg(w)}'&IN='${toDeg(i)}'${h ? `&H='${h}'` : ''}${g ? `&G='${g}'` : ''}&SITE_COORD='${siteCoord}'&START_TIME='${formatTime(startTime)}'&STOP_TIME='${formatTime(endTime)}'&STEP_SIZE='${stepSizeInMinutes}m'&APPARENT='${apparent}'&EXTRA_PREC='${extraPrecision ? 'YES' : 'NO'}'&QUANTITIES='${quantities.join(',')}'`
-	const response = await fetch(`${BASE_URL}${query}`)
+	const response = await fetch(`${HORIZONS_BASE_URL}${query}`)
 	const text = await response.text()
 	return parseTable(text)
 }
@@ -149,14 +149,14 @@ export async function observerWithTle(tle: string, coord: ObserverSiteCoord, sta
 	const apparent = options?.apparent ?? DEFAULT_OBSERVER_OPTIONS.apparent
 	const extraPrecision = options?.extraPrecision ?? DEFAULT_OBSERVER_OPTIONS.extraPrecision
 	const query = `?${OBSERVER_TLE_QUERY}&TLE='${encodeURIComponent(tle)}'&SITE_COORD='${siteCoord}'&START_TIME='${formatTime(startTime)}'&STOP_TIME='${formatTime(endTime)}'&STEP_SIZE='${stepSizeInMinutes}m'&APPARENT='${apparent}'&EXTRA_PREC='${extraPrecision ? 'YES' : 'NO'}'&QUANTITIES='${quantities.join(',')}'`
-	const response = await fetch(`${BASE_URL}${query}`)
+	const response = await fetch(`${HORIZONS_BASE_URL}${query}`)
 	const text = await response.text()
 	return parseTable(text)
 }
 
 export async function spkFile(id: number, startTime: DateTime, endTime: DateTime) {
 	const query = `?${SPK_QUERY}&COMMAND='DES%3D${id}%3B'&START_TIME='${formatTime(startTime)}'&STOP_TIME='${formatTime(endTime)}'`
-	const response = await fetch(`${BASE_URL}${query}`)
+	const response = await fetch(`${HORIZONS_BASE_URL}${query}`)
 	return (await response.json()) as SpkFile
 }
 

@@ -1,13 +1,13 @@
 import type { Frame } from './frame'
-import { mul, rotZ, type MutMat3 } from './matrix'
-import { gast, precessionNutation, type Time } from './time'
+import { type MutMat3, mulMat, rotZ } from './matrix'
+import { type Time, gast, precessionNutationMatrix } from './time'
 
 // Computes the TIRS rotation matrix at time.
-export function rotationAt(time: Time): MutMat3 {
+export function tirsRotationAt(time: Time): MutMat3 {
 	const m = rotZ(gast(time))
-	return mul(m, precessionNutation(time), m)
+	return mulMat(m, precessionNutationMatrix(time), m)
 }
 
 export const TIRS_FRAME: Frame = {
-	rotationAt,
+	rotationAt: tirsRotationAt,
 }

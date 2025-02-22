@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test'
 import { deg } from './angle'
-import { read as readDaf } from './daf'
+import { readDaf } from './daf'
+import { dateFrom } from './datetime'
 import { meter } from './distance'
-import { observer, observerWithOsculatingElements, observerWithTle, Quantity, spkFile, type ObserverWithOsculatingElementsParameters } from './horizons'
+import { type ObserverWithOsculatingElementsParameters, Quantity, observer, observerWithOsculatingElements, observerWithTle, spkFile } from './horizons'
 import { bufferSource } from './io'
 import { extendedPermanentAsteroidNumber } from './naif'
-import { spk } from './spk'
+import { readSpk } from './spk'
 import { Timescale, timeYMDHMS } from './time'
-import { dateFrom } from './datetime'
 
 test.skip('observer', async () => {
 	const startTime = dateFrom('2025-01-29T13:05:00Z')
@@ -114,7 +114,7 @@ test.skip('spkFile', async () => {
 
 	const buffer = Buffer.from(file.spk!, 'base64')
 	const daf = await readDaf(bufferSource(buffer))
-	const s = spk(daf)
+	const s = readSpk(daf)
 
 	expect(s.segments).toHaveLength(1)
 	expect(s.segment(10, 20003517)).not.toBeUndefined()

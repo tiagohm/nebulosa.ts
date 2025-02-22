@@ -1,7 +1,7 @@
 import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa'
-import { clone, identity, mul, rotX, transposeMut, type Mat3, type MutMat3 } from './matrix'
-import { precessionNutation, timeJulian, Timescale, trueObliquity, tt, type Time } from './time'
+import { type Mat3, type MutMat3, cloneMat, identity, mulMat, rotX, transposeMut } from './matrix'
+import { type Time, Timescale, precessionNutationMatrix, timeJulian, trueObliquity, tt } from './time'
 
 export type CoordinateFrame = CartesianCoordinate
 
@@ -21,7 +21,7 @@ export const SUPERGALACTIC_MATRIX = [0.3750155557060191496, 0.341358871857208237
 
 function equinoxFrameByCapitaine(m: Mat3, from: Time, to: Time): Frame {
 	const a = precessionMatrixCapitaine(from, to)
-	mul(a, m, a)
+	mulMat(a, m, a)
 
 	return {
 		rotationAt: () => {
@@ -73,7 +73,7 @@ export const SUPERGALACTIC_FRAME: Frame = {
 
 // The dynamical frame of the Earth's true equator and equinox of date.
 export const TRUE_EQUATOR_AND_EQUINOX_OF_DATE_FRAME: Frame = {
-	rotationAt: (time) => clone(precessionNutation(time)),
+	rotationAt: (time) => cloneMat(precessionNutationMatrix(time)),
 }
 
 // The International Celestial Reference System (ICRS).
@@ -85,7 +85,7 @@ export const ICRS: Frame = {
 export const ECLIPTIC_FRAME: Frame = {
 	rotationAt: (time) => {
 		const ecliptic = identity()
-		return mul(rotX(-trueObliquity(time), ecliptic), precessionNutation(time), ecliptic)
+		return mulMat(rotX(-trueObliquity(time), ecliptic), precessionNutationMatrix(time), ecliptic)
 	},
 }
 
@@ -97,5 +97,5 @@ export function precessionMatrixCapitaine(from: Time, to: Time): MutMat3 {
 	// Hilton, J. et al., 2006, Celest.Mech.Dyn.Astron. 94, 351
 	const a = transposeMut(eraBp06(t0.day, t0.fraction)[1])
 	const b = eraBp06(t1.day, t1.fraction)[1]
-	return mul(b, a)
+	return mulMat(b, a)
 }

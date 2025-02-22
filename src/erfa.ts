@@ -1,4 +1,4 @@
-import { ASEC2RAD, type Angle, MILLIASEC2RAD, TURNAS, arcsec, deg, normalize } from './angle'
+import { ASEC2RAD, type Angle, MILLIASEC2RAD, TURNAS, arcsec, deg, normalizeAngle } from './angle'
 import { AU_M, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI } from './constants'
 import { type Distance, toKilometer } from './distance'
 import { FAIRHEAD } from './fairhead'
@@ -6,10 +6,10 @@ import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
 import { IAU2000B_LS } from './iau2000b'
 import { IAU2006_S, IAU2006_SP } from './iau2006'
 import { pmod, roundToNearestWholeNumber } from './math'
-import { type Mat3, type MutMat3, clone as cloneMat, copy, identity, mul, mulTransposeVec, mulVec, rotX, rotY, rotZ, transpose } from './matrix'
+import { type Mat3, type MutMat3, cloneMat, copyMat, identity, mulMat, mulMatVec, mulTransposeMatVec, rotX, rotY, rotZ, transpose } from './matrix'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
-import { type MutVec3, type Vec3, clone, cross, divScalar, dot, fill, length, minus, mulScalar, normalizeMut, normalize as normalizeVec, plus, zero } from './vector'
+import { type MutVec3, type Vec3, cloneVec, cross, divVecScalar, dot, fillVec, length, minusVec, mulVecScalar, normalizeMutVec, normalizeVec, plusVec, zeroVec } from './vector'
 import type { Velocity } from './velocity'
 
 const DBL_EPSILON = 2.220446049250313e-16
@@ -526,7 +526,7 @@ export function eraGst06(ut11: number, ut12: number, tt1: number, tt2: number, r
 	const era = eraEra00(ut11, ut12)
 	const eors = eraEors(rnpb, s)
 
-	return normalize(era - eors)
+	return normalizeAngle(era - eors)
 }
 
 // Greenwich mean sidereal time (model consistent with IAU 2006 precession).
@@ -534,7 +534,7 @@ export function eraGmst06(ut11: number, ut12: number, tt1: number, tt2: number):
 	// TT Julian centuries since J2000.0.
 	const t = (tt1 - J2000 + tt2) / DAYSPERJC
 
-	return normalize(eraEra00(ut11, ut12) + arcsec(0.014506 + (4612.156534 + (1.3915817 + (-0.00000044 + (-0.000029956 + -0.0000000368 * t) * t) * t) * t) * t))
+	return normalizeAngle(eraEra00(ut11, ut12) + arcsec(0.014506 + (4612.156534 + (1.3915817 + (-0.00000044 + (-0.000029956 + -0.0000000368 * t) * t) * t) * t) * t))
 }
 
 // Earth rotation angle (IAU 2000 model).
@@ -545,7 +545,7 @@ export function eraEra00(ut11: number, ut12: number): Angle {
 	const f = (ut12 % 1) + (ut11 % 1)
 
 	// Earth rotation angle at this UT1.
-	return normalize(TAU * (f + 0.779057273264 + 0.00273781191135448 * t))
+	return normalizeAngle(TAU * (f + 0.779057273264 + 0.00273781191135448 * t))
 }
 
 // Equation of the origins, given the classical NPB matrix and the CIO locator.
@@ -870,7 +870,7 @@ export function eraPom00(xp: Angle, yp: Angle, sp: Angle): MutMat3 {
 // Sidereal Time and the polar motion matrix).
 export function eraC2teqx(rbpn: Mat3, gast: Angle, rpom: Mat3): MutMat3 {
 	const m = rotZ(gast)
-	return mul(rpom, mul(m, rbpn, m), m)
+	return mulMat(rpom, mulMat(m, rbpn, m), m)
 }
 
 const WGS84_RADIUS = 6378137 / AU_M
@@ -964,7 +964,7 @@ export function eraBp06(tt1: number, tt2: number): [MutMat3, MutMat3, MutMat3] {
 
 	// P matrix.
 	const rp = transpose(rb)
-	mul(rbpw, rp, rp)
+	mulMat(rbpw, rp, rp)
 
 	return [rb, rp, rbpw]
 }
@@ -982,17 +982,17 @@ export function eraStarpv(ra: Angle, dec: Angle, pmRa: Angle, pmDec: Angle, para
 
 	// Largest allowed speed (fraction of c).
 	if (length(pv[1]) / SPEED_OF_LIGHT_AU_DAY > 0.5) {
-		fill(pv[1], 0, 0, 0)
+		fillVec(pv[1], 0, 0, 0)
 		return pv
 	}
 
 	// Isolate the radial component of the velocity (au/day).
 	const pu = normalizeVec(pv[0])
 	const vsr = dot(pu, pv[1])
-	const usr = mulScalar(pu, vsr)
+	const usr = mulVecScalar(pu, vsr)
 
 	// Isolate the transverse component of the velocity (au/day).
-	const ust = minus(pv[1], usr, usr)
+	const ust = minusVec(pv[1], usr, usr)
 	const vst = length(ust)
 
 	// Special-relativity dimensionless parameters.
@@ -1030,13 +1030,13 @@ export function eraStarpv(ra: Angle, dec: Angle, pmRa: Angle, pmDec: Angle, para
 	}
 
 	// Scale observed tangential velocity vector into inertial (au/d).
-	const ut = mulScalar(ust, d, ust)
+	const ut = mulVecScalar(ust, d, ust)
 
 	// Compute inertial radial velocity vector (au/d).
-	const ur = mulScalar(pu, SPEED_OF_LIGHT_AU_DAY * (d * betsr + del), pu)
+	const ur = mulVecScalar(pu, SPEED_OF_LIGHT_AU_DAY * (d * betsr + del), pu)
 
 	// Combine the two to obtain the inertial space velocity vector.
-	plus(ur, ut, pv[1])
+	plusVec(ur, ut, pv[1])
 
 	return pv
 }
@@ -1102,10 +1102,10 @@ export function eraPvstar(p: Vec3, v: Vec3): [Angle, Angle, Angle, Angle, Angle,
 	// Isolate the radial component of the velocity (au/day, inertial).
 	const pu = normalizeVec(p)
 	const vr = dot(pu, v)
-	const ur = mulScalar(pu, vr)
+	const ur = mulVecScalar(pu, vr)
 
 	// Isolate the transverse component of the velocity (au/day, inertial).
-	const ut = minus(v, ur, ur)
+	const ut = minusVec(v, ur, ur)
 	const vt = length(ut)
 
 	// Special-relativity dimensionless parameters.
@@ -1119,13 +1119,13 @@ export function eraPvstar(p: Vec3, v: Vec3): [Angle, Angle, Angle, Angle, Angle,
 	const del = -w / (Math.sqrt(1 - w) + 1)
 
 	// Scale inertial tangential velocity vector into observed (au/d).
-	const ust = divScalar(ut, d, ut)
+	const ust = divVecScalar(ut, d, ut)
 
 	// Compute observed radial velocity vector (au/d).
-	const usr = mulScalar(pu, (SPEED_OF_LIGHT_AU_DAY * (betr - del)) / d)
+	const usr = mulVecScalar(pu, (SPEED_OF_LIGHT_AU_DAY * (betr - del)) / d)
 
 	// Combine the two to obtain the observed velocity vector.
-	const ov = plus(usr, ust, usr)
+	const ov = plusVec(usr, ust, usr)
 
 	// Cartesian to spherical.
 	// [ra, dec, r, rad, decd, rd]
@@ -1134,7 +1134,7 @@ export function eraPvstar(p: Vec3, v: Vec3): [Angle, Angle, Angle, Angle, Angle,
 	if (ret[2] === 0) return false
 
 	// Return RA in range 0 to 2pi.
-	ret[0] = normalize(ret[0])
+	ret[0] = normalizeAngle(ret[0])
 
 	// Return proper motions in radians per year.
 	ret[3] *= DAYSPERJY
@@ -1198,8 +1198,8 @@ export function eraPv2s(p: Vec3, v: Vec3): [Angle, Angle, Angle, number, number,
 
 // P-vector plus scaled p-vector: a + s*b.
 export function eraPpsp(a: Vec3, s: number, b: Vec3, o?: MutVec3) {
-	const sb = mulScalar(b, s, o)
-	return plus(a, sb, o ?? sb)
+	const sb = mulVecScalar(b, s, o)
+	return plusVec(a, sb, o ?? sb)
 }
 
 // Angular separation between two sets of spherical coordinates.
@@ -1248,7 +1248,7 @@ export function eraPmpx(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Angle, r
 	const p1 = y + dt * pm1 - pxr * pob[1]
 	const p2 = z + dt * pm2 - pxr * pob[2]
 
-	return normalizeMut([p0, p1, p2])
+	return normalizeMutVec([p0, p1, p2])
 }
 
 // Apply aberration to transform natural direction into proper direction.
@@ -1258,7 +1258,7 @@ export function eraAb(pnat: Vec3, v: Vec3, s: number, bm1: number, o?: MutVec3):
 	const w2 = SCHWARZSCHILD_RADIUS_OF_THE_SUN / s
 	let r2 = 0
 
-	const p = o ?? zero()
+	const p = o ?? zeroVec()
 
 	for (let i = 0; i < 3; i++) {
 		const w = pnat[i] * bm1 + w1 * v[i] + w2 * (v[i] - pdv * pnat[i])
@@ -1266,7 +1266,7 @@ export function eraAb(pnat: Vec3, v: Vec3, s: number, bm1: number, o?: MutVec3):
 		r2 += w * w
 	}
 
-	return divScalar(p, Math.sqrt(r2), p)
+	return divVecScalar(p, Math.sqrt(r2), p)
 }
 
 export interface LdBody {
@@ -1280,15 +1280,15 @@ export interface LdBody {
 // For a star, apply light deflection by multiple solar-system bodies,
 // as part of transforming coordinate direction into natural direction.
 export function eraLdn(b: LdBody[], ob: Vec3, sc: Vec3) {
-	const v = zero()
-	const ev = zero()
+	const v = zeroVec()
+	const ev = zeroVec()
 
 	// Star direction prior to deflection.
-	const sn = clone(sc)
+	const sn = cloneVec(sc)
 
 	for (const a of b) {
 		// Body to observer vector at epoch of observation (au).
-		minus(ob, a.p, v)
+		minusVec(ob, a.p, v)
 
 		// Minus the time since the light passed the body (days).
 		// Neutralize if the star is "behind" the observer.
@@ -1299,7 +1299,7 @@ export function eraLdn(b: LdBody[], ob: Vec3, sc: Vec3) {
 
 		// Body to observer vector as magnitude and direction.
 		const em = length(ev)
-		divScalar(ev, em, ev)
+		divVecScalar(ev, em, ev)
 
 		// Apply light deflection for this body.
 		eraLd(a.bm, sn, sn, ev, em, a.dl, sn)
@@ -1312,7 +1312,7 @@ export function eraLdn(b: LdBody[], ob: Vec3, sc: Vec3) {
 // transforming coordinate direction into natural direction.
 export function eraLd(bm: number, p: Vec3, q: Vec3, e: Vec3, em: number, dlim: number, o?: MutVec3) {
 	// q . (q + e).
-	const qpe = plus(q, e)
+	const qpe = plusVec(q, e)
 	const qdqpe = dot(q, qpe)
 
 	// 2 x G x bm / ( em x c^2 x ( q . (q + e) ) ).
@@ -1322,7 +1322,7 @@ export function eraLd(bm: number, p: Vec3, q: Vec3, e: Vec3, em: number, dlim: n
 	cross(p, cross(e, q, qpe), qpe)
 
 	// Apply the deflection.
-	return plus(p, mulScalar(qpe, w, qpe), o ?? qpe)
+	return plusVec(p, mulVecScalar(qpe, w, qpe), o ?? qpe)
 }
 
 // Deflection of starlight by the Sun.
@@ -1387,8 +1387,8 @@ export function eraC2ixys(x: Angle, y: Angle, s: Angle, o?: MutMat3) {
 // components (the celestial-to-intermediate matrix, the Earth Rotation
 // Angle and the polar motion matrix).
 export function eraC2tcio(rc2i: Mat3, era: Angle, rpom: Mat3, o?: MutMat3) {
-	o = o ? copy(rc2i, o) : cloneMat(rc2i)
-	return mul(rpom, rotZ(era, o), o)
+	o = o ? copyMat(rc2i, o) : cloneMat(rc2i)
+	return mulMat(rpom, rotZ(era, o), o)
 }
 
 // For a terrestrial observer, prepare star-independent astrometry
@@ -1429,7 +1429,7 @@ export function eraApci(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3],
 	return astrom
 }
 
-const ZERO_PV: readonly [Vec3, Vec3] = [zero(), zero()] as const
+const ZERO_PV: readonly [Vec3, Vec3] = [zeroVec(), zeroVec()] as const
 
 // For a geocentric observer, prepare star-independent astrometry
 // parameters for transformations between ICRS and GCRS coordinates.
@@ -1461,7 +1461,7 @@ export function eraApcs(tdb1: number, tdb2: number, pv: readonly [Vec3, Vec3], e
 
 	// Heliocentric direction and distance (unit vector and au).
 	astrom.em = length(astrom.eh)
-	astrom.eh = divScalar(astrom.eh, astrom.em, astrom.eh)
+	astrom.eh = divVecScalar(astrom.eh, astrom.em, astrom.eh)
 
 	// Barycentric vel. in units of c, and reciprocal of Lorenz factor.
 	let v2 = 0
@@ -1518,7 +1518,7 @@ export function eraAtciqpmpx(pco: Vec3, astrom: EraAstrom, o?: MutVec3): MutVec3
 	const ppr = eraAb(pnat, astrom.v, astrom.em, astrom.bm1, pnat)
 
 	// Bias-precession-nutation, giving CIRS proper direction.
-	const pi = mulVec(astrom.bpn, ppr, ppr)
+	const pi = mulMatVec(astrom.bpn, ppr, ppr)
 
 	// ICRS astrometric RA,Dec.
 	// const s = eraC2s(...pi)
@@ -1593,8 +1593,8 @@ export function eraApco(
 	const pvc = eraPvtob(elong, phi, hm, xp, yp, sp, theta, radius, flattening)
 
 	// Rotate into GCRS.
-	mulTransposeVec(r, pvc[0], pvc[0])
-	mulTransposeVec(r, pvc[1], pvc[1])
+	mulTransposeMatVec(r, pvc[0], pvc[0])
+	mulTransposeMatVec(r, pvc[1], pvc[1])
 
 	// ICRS <-> GCRS parameters.
 	astrom = eraApcs(tdb1, tdb2, pvc, ebpv, ehp, astrom)
@@ -1616,7 +1616,7 @@ export function eraPvtob(elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: 
 
 	// Polar motion and TIO position.
 	const rpm = eraPom00(xp, yp, sp)
-	const xyz = mulTransposeVec(rpm, xyzm, xyzm)
+	const xyz = mulTransposeMatVec(rpm, xyzm, xyzm)
 	const [x, y, z] = xyz
 
 	// Functions of ERA.

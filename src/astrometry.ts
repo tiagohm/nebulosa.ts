@@ -9,7 +9,7 @@ import { pmod } from './math'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { type Time, Timescale, pmAngles, tdb, tt, ut1 } from './time'
-import { angle, length, minus, normalize as normalizeVec } from './vector'
+import { angle, length, minusVec, normalizeVec } from './vector'
 
 export type PositionAndVelocity = readonly [CartesianCoordinate, CartesianCoordinate]
 
@@ -66,7 +66,7 @@ export function gcrs(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVel
 	// astrometric coordinate direction and then run the ERFA transform for
 	// no parallax/PM. This ensures reversibility and is more sensible for
 	// inside solar system objects.
-	const nc = minus(icrs, astrom.eb)
+	const nc = minusVec(icrs, astrom.eb)
 
 	return eraAtciqpmpx(normalizeVec(nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
 }
@@ -81,7 +81,7 @@ export function cirs(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVel
 	// astrometric coordinate direction and then run the ERFA transform for
 	// no parallax/PM. This ensures reversibility and is more sensible for
 	// inside solar system objects.
-	const nc = minus(icrs, astrom.eb)
+	const nc = minusVec(icrs, astrom.eb)
 
 	return eraAtciqpmpx(normalizeVec(nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
 }
@@ -102,7 +102,7 @@ function hadecAltaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelo
 	const wl = refraction?.wl ?? DEFAULT_REFRACTION_PAREMETERS.wl
 	const [astrom] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp ?? ebpv[0], radius, flattening)
 	// Correct for parallax to find BCRS direction from observer (as in erfa.pmpx)
-	const nc = minus(icrs, astrom.eb)
+	const nc = minusVec(icrs, astrom.eb)
 	// Convert to topocentric CIRS
 	const [ri, di] = eraC2s(...eraAtciqpmpx(normalizeVec(nc), astrom, nc))
 	// Now perform observed conversion

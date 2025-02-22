@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { read } from './fits'
+import { readFits } from './fits'
 import { fromFits, stf, toFormat } from './image'
 import { fileHandleSource } from './io'
 
@@ -8,7 +8,7 @@ describe('fits', () => {
 	describe('mono', () => {
 		test('byte', async () => {
 			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-mono-byte.fits'))
-			const image = await fromFits(await read(source))
+			const image = await fromFits(await readFits(source))
 			expect(image).not.toBeUndefined()
 			expect(image!.raw.length).toBe(256 * 174)
 
@@ -18,7 +18,7 @@ describe('fits', () => {
 
 		test('short', async () => {
 			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-mono-short.fits'))
-			const image = await fromFits(await read(source))
+			const image = await fromFits(await readFits(source))
 			expect(image).not.toBeUndefined()
 			expect(image!.raw.length).toBe(256 * 174)
 
@@ -28,7 +28,7 @@ describe('fits', () => {
 
 		test('integer', async () => {
 			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-mono-integer.fits'))
-			const image = await fromFits(await read(source))
+			const image = await fromFits(await readFits(source))
 			expect(image).not.toBeUndefined()
 			expect(image!.raw.length).toBe(256 * 174)
 
@@ -38,7 +38,7 @@ describe('fits', () => {
 
 		test('float', async () => {
 			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-mono-float.fits'))
-			const image = await fromFits(await read(source))
+			const image = await fromFits(await readFits(source))
 			expect(image).not.toBeUndefined()
 			expect(image!.raw.length).toBe(256 * 174)
 
@@ -48,7 +48,7 @@ describe('fits', () => {
 
 		test('double', async () => {
 			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-mono-double.fits'))
-			const image = await fromFits(await read(source))
+			const image = await fromFits(await readFits(source))
 			expect(image).not.toBeUndefined()
 			expect(image!.raw.length).toBe(256 * 174)
 
@@ -60,7 +60,7 @@ describe('fits', () => {
 	describe('color', () => {
 		test('byte', async () => {
 			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-color-byte.fits'))
-			const image = await fromFits(await read(source))
+			const image = await fromFits(await readFits(source))
 			expect(image).not.toBeUndefined()
 			expect(image!.raw.length).toBe(256 * 174 * 3)
 
@@ -70,7 +70,7 @@ describe('fits', () => {
 
 		test('short', async () => {
 			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-color-short.fits'))
-			const image = await fromFits(await read(source))
+			const image = await fromFits(await readFits(source))
 			expect(image).not.toBeUndefined()
 			expect(image!.raw.length).toBe(256 * 174 * 3)
 
@@ -80,7 +80,7 @@ describe('fits', () => {
 
 		test('integer', async () => {
 			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-color-integer.fits'))
-			const image = await fromFits(await read(source))
+			const image = await fromFits(await readFits(source))
 			expect(image).not.toBeUndefined()
 			expect(image!.raw.length).toBe(256 * 174 * 3)
 
@@ -90,7 +90,7 @@ describe('fits', () => {
 
 		test('float', async () => {
 			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-color-float.fits'))
-			const image = await fromFits(await read(source))
+			const image = await fromFits(await readFits(source))
 			expect(image).not.toBeUndefined()
 			expect(image!.raw.length).toBe(256 * 174 * 3)
 
@@ -100,7 +100,7 @@ describe('fits', () => {
 
 		test('double', async () => {
 			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-color-double.fits'))
-			const image = await fromFits(await read(source))
+			const image = await fromFits(await readFits(source))
 			expect(image).not.toBeUndefined()
 			expect(image!.raw.length).toBe(256 * 174 * 3)
 

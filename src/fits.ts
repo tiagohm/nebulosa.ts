@@ -68,7 +68,7 @@ const EQUAL = 61
 const DECIMAL_REGEX = /^[+-]?\d+(\.\d*)?([dDeE][+-]?\d+)?$/
 const INT_REGEX = /^[+-]?\d+$/
 
-export async function read(source: Source & Seekable): Promise<Fits | undefined> {
+export async function readFits(source: Source & Seekable): Promise<Fits | undefined> {
 	const buffer = Buffer.allocUnsafe(HEADER_CARD_SIZE)
 
 	if ((await readUntil(source, buffer)) !== HEADER_CARD_SIZE) {

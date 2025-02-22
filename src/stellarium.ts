@@ -1,5 +1,5 @@
 import type { Socket, TCPSocketListener } from 'bun'
-import { deg, mas, normalize, type Angle } from './angle'
+import { type Angle, deg, mas, normalizeAngle } from './angle'
 import { PI } from './constants'
 import { eraAnpm } from './erfa'
 import type { Seekable, Source } from './io'
@@ -86,7 +86,7 @@ export class StellariumProtocolServer {
 
 	private handleData(buffer: Buffer) {
 		if (buffer.byteLength >= 20 && this.options?.protocol?.goto) {
-			const ra = normalize((buffer.readUInt32LE(12) * PI) / 0x80000000)
+			const ra = normalizeAngle((buffer.readUInt32LE(12) * PI) / 0x80000000)
 			const dec = (buffer.readInt32LE(16) * PI) / 0x80000000
 			this.options.protocol.goto(ra, dec)
 		}
@@ -176,7 +176,7 @@ export enum ObjectType {
 	REGION_OF_THE_SKY,
 }
 
-export async function* catalog(source: Source & Seekable) {
+export async function* readCatalogDat(source: Source & Seekable) {
 	const buffer = Buffer.allocUnsafe(1024 * 32)
 	let position = 0
 	let size = 0

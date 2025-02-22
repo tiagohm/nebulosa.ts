@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
-import { deg, mas, normalize, toDeg } from './angle'
+import { deg, mas, normalizeAngle, toDeg } from './angle'
 import { altaz, cirs, equatorial, gcrs, hadec } from './astrometry'
 import type { CartesianCoordinate } from './coordinate'
 import { meter } from './distance'
-import { Ellipsoid, geodetic } from './location'
+import { Ellipsoid, geodeticLocation } from './location'
 import { ONE_ATM } from './pressure'
 import { bcrs, star } from './star'
 import { Timescale, timeYMDHMS } from './time'
@@ -35,7 +35,7 @@ test('icrs', () => {
 	expect(i[1][2]).toBeCloseTo(0.011267800512088356, 6)
 
 	const eq = equatorial(i[0])
-	expect(toDeg(normalize(eq[0]))).toBeCloseTo(353.229877569999985099, 18)
+	expect(toDeg(normalizeAngle(eq[0]))).toBeCloseTo(353.229877569999985099, 18)
 	expect(toDeg(eq[1])).toBeCloseTo(52.277302470000002188, 18)
 })
 
@@ -49,7 +49,7 @@ test('bcrs', () => {
 	expect(b[0][2]).toBeCloseTo(7093562.290912019088864326, 5)
 
 	const eq = equatorial(b[0])
-	expect(toDeg(normalize(eq[0]))).toBeCloseTo(353.229915499721528249, 11)
+	expect(toDeg(normalizeAngle(eq[0]))).toBeCloseTo(353.229915499721528249, 11)
 	expect(toDeg(eq[1])).toBeCloseTo(52.277300341846739684, 11)
 })
 
@@ -65,7 +65,7 @@ test('gcrs', () => {
 	expect(g[2]).toBeCloseTo(d * 0.7909775033838493, 10)
 
 	const eq = equatorial(g)
-	expect(toDeg(normalize(eq[0]))).toBeCloseTo(353.237855279679308751, 11)
+	expect(toDeg(normalizeAngle(eq[0]))).toBeCloseTo(353.237855279679308751, 11)
 	expect(toDeg(eq[1])).toBeCloseTo(52.276954755952054654, 11)
 })
 
@@ -81,13 +81,13 @@ test('cirs', () => {
 	expect(c[2]).toBeCloseTo(d * 0.7911759694159357, 10)
 
 	const eq = equatorial(c)
-	expect(toDeg(normalize(eq[0]))).toBeCloseTo(353.232964105577707414, 11)
+	expect(toDeg(normalizeAngle(eq[0]))).toBeCloseTo(353.232964105577707414, 11)
 	expect(toDeg(eq[1])).toBeCloseTo(52.295543854747897683, 11)
 })
 
 test('hadec', () => {
 	const time = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
-	time.location = geodetic(deg(9.712156), deg(52.385639), meter(200), Ellipsoid.WGS84)
+	time.location = geodeticLocation(deg(9.712156), deg(52.385639), meter(200), Ellipsoid.WGS84)
 	time.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
 	time.delta = () => -0.3495186114062241
 	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
@@ -99,7 +99,7 @@ test('hadec', () => {
 
 test('altaz', () => {
 	const time = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
-	time.location = geodetic(deg(9.712156), deg(52.385639), meter(200), Ellipsoid.WGS84)
+	time.location = geodeticLocation(deg(9.712156), deg(52.385639), meter(200), Ellipsoid.WGS84)
 	time.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
 	time.delta = () => -0.3495186114062241
 	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
@@ -111,7 +111,7 @@ test('altaz', () => {
 
 test('observedAltaz', () => {
 	const time = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
-	time.location = geodetic(deg(9.712156), deg(52.385639), meter(200), Ellipsoid.WGS84)
+	time.location = geodeticLocation(deg(9.712156), deg(52.385639), meter(200), Ellipsoid.WGS84)
 	time.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
 	time.delta = () => -0.3495186114062241
 	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)

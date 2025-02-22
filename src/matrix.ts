@@ -1,6 +1,6 @@
 import type { Mutable } from 'utility-types'
 import type { Angle } from './angle'
-import { type MutVec3, type Vec3, fill as fillVec } from './vector'
+import { type MutVec3, type Vec3, fillVec } from './vector'
 
 // Rectangular array of numbers with three rows and three columns.
 export type Mat3 = readonly [number, number, number, number, number, number, number, number, number]
@@ -9,19 +9,19 @@ export type Mat3 = readonly [number, number, number, number, number, number, num
 export type MutMat3 = Mutable<Mat3>
 
 // Creates or fills a matrix with zeroes.
-export function zero(o?: MutMat3): MutMat3 {
-	if (o) return fillWith(o, 0)
+export function zeroMat(o?: MutMat3): MutMat3 {
+	if (o) return fillMatWith(o, 0)
 	else return [0, 0, 0, 0, 0, 0, 0, 0, 0]
 }
 
 // Creates or fills an identity matrix.
 export function identity(o?: MutMat3): MutMat3 {
-	if (o) return fill(o, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+	if (o) return fillMat(o, 1, 0, 0, 0, 1, 0, 0, 0, 1)
 	else return [1, 0, 0, 0, 1, 0, 0, 0, 1]
 }
 
 // Fills the matrix.
-export function fill(m: MutMat3, a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number): MutMat3 {
+export function fillMat(m: MutMat3, a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number): MutMat3 {
 	m[0] = a
 	m[1] = b
 	m[2] = c
@@ -35,7 +35,7 @@ export function fill(m: MutMat3, a: number, b: number, c: number, d: number, e: 
 }
 
 // Fills the matrix with a value.
-export function fillWith(m: MutMat3, v: number) {
+export function fillMatWith(m: MutMat3, v: number) {
 	for (let i = 0; i < 9; i++) m[i] = v
 	return m
 }
@@ -53,7 +53,7 @@ export function rotX(angle: Angle, m?: MutMat3): MutMat3 {
 		const h = -sa * m[4] + ca * m[7]
 		const i = -sa * m[5] + ca * m[8]
 
-		return fill(m, m[0], m[1], m[2], d, e, f, g, h, i)
+		return fillMat(m, m[0], m[1], m[2], d, e, f, g, h, i)
 	} else {
 		return [1, 0, 0, 0, ca, sa, 0, -sa, ca]
 	}
@@ -72,7 +72,7 @@ export function rotY(angle: Angle, m?: MutMat3): MutMat3 {
 		const h = sa * m[1] + ca * m[7]
 		const i = sa * m[2] + ca * m[8]
 
-		return fill(m, a, b, c, m[3], m[4], m[5], g, h, i)
+		return fillMat(m, a, b, c, m[3], m[4], m[5], g, h, i)
 	} else {
 		return [ca, 0, -sa, 0, 1, 0, sa, 0, ca]
 	}
@@ -91,19 +91,19 @@ export function rotZ(angle: Angle, m?: MutMat3): MutMat3 {
 		const e = -sa * m[1] + ca * m[4]
 		const f = -sa * m[2] + ca * m[5]
 
-		return fill(m, a, b, c, d, e, f, m[6], m[7], m[8])
+		return fillMat(m, a, b, c, d, e, f, m[6], m[7], m[8])
 	} else {
 		return [ca, sa, 0, -sa, ca, 0, 0, 0, 1]
 	}
 }
 
 // Creates a new mutable Matrix from the given matrix.
-export function clone(m: Mat3): MutMat3 {
+export function cloneMat(m: Mat3): MutMat3 {
 	return [...m]
 }
 
 // Copies the matrix to another matrix.
-export function copy(m: Mat3, o: MutMat3): MutMat3 {
+export function copyMat(m: Mat3, o: MutMat3): MutMat3 {
 	if (m !== o) for (let i = 0; i < 9; i++) o[i] = m[i]
 	return o
 }
@@ -124,66 +124,66 @@ export function trace(m: Mat3) {
 
 // Transposes the matrix.
 export function transpose(m: Mat3, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8])
+	if (o) return fillMat(o, m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8])
 	return [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]
 }
 
 // Flips the matrix around x-axis.
 export function flipX(m: Mat3, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, m[6], m[7], m[8], m[3], m[4], m[5], m[0], m[1], m[2])
+	if (o) return fillMat(o, m[6], m[7], m[8], m[3], m[4], m[5], m[0], m[1], m[2])
 	return [m[6], m[7], m[8], m[3], m[4], m[5], m[0], m[1], m[2]]
 }
 
 // Flips the matrix around y-axis.
 export function flipY(m: Mat3, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, m[2], m[1], m[0], m[5], m[4], m[3], m[8], m[7], m[6])
+	if (o) return fillMat(o, m[2], m[1], m[0], m[5], m[4], m[3], m[8], m[7], m[6])
 	return [m[2], m[1], m[0], m[5], m[4], m[3], m[8], m[7], m[6]]
 }
 
 // Negates the matrix.
-export function negate(m: Mat3, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, -m[0], -m[1], -m[2], -m[3], -m[4], -m[5], -m[6], -m[7], -m[8])
+export function negateMat(m: Mat3, o?: MutMat3): MutMat3 {
+	if (o) return fillMat(o, -m[0], -m[1], -m[2], -m[3], -m[4], -m[5], -m[6], -m[7], -m[8])
 	return [-m[0], -m[1], -m[2], -m[3], -m[4], -m[5], -m[6], -m[7], -m[8]]
 }
 
 // Computes the sum of the matrix by scalar.
-export function plusScalar(m: Mat3, scalar: number, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, m[0] + scalar, m[1] + scalar, m[2] + scalar, m[3] + scalar, m[4] + scalar, m[5] + scalar, m[6] + scalar, m[7] + scalar, m[8] + scalar)
+export function plusMatScalar(m: Mat3, scalar: number, o?: MutMat3): MutMat3 {
+	if (o) return fillMat(o, m[0] + scalar, m[1] + scalar, m[2] + scalar, m[3] + scalar, m[4] + scalar, m[5] + scalar, m[6] + scalar, m[7] + scalar, m[8] + scalar)
 	return [m[0] + scalar, m[1] + scalar, m[2] + scalar, m[3] + scalar, m[4] + scalar, m[5] + scalar, m[6] + scalar, m[7] + scalar, m[8] + scalar]
 }
 
 // Computes the subtraction of the matrix by scalar.
-export function minusScalar(m: Mat3, scalar: number, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, m[0] - scalar, m[1] - scalar, m[2] - scalar, m[3] - scalar, m[4] - scalar, m[5] - scalar, m[6] - scalar, m[7] - scalar, m[8] - scalar)
+export function minusMatScalar(m: Mat3, scalar: number, o?: MutMat3): MutMat3 {
+	if (o) return fillMat(o, m[0] - scalar, m[1] - scalar, m[2] - scalar, m[3] - scalar, m[4] - scalar, m[5] - scalar, m[6] - scalar, m[7] - scalar, m[8] - scalar)
 	return [m[0] - scalar, m[1] - scalar, m[2] - scalar, m[3] - scalar, m[4] - scalar, m[5] - scalar, m[6] - scalar, m[7] - scalar, m[8] - scalar]
 }
 
 // Computes the multiplication of the matrix by scalar.
-export function mulScalar(m: Mat3, scalar: number, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, m[0] * scalar, m[1] * scalar, m[2] * scalar, m[3] * scalar, m[4] * scalar, m[5] * scalar, m[6] * scalar, m[7] * scalar, m[8] * scalar)
+export function mulMatScalar(m: Mat3, scalar: number, o?: MutMat3): MutMat3 {
+	if (o) return fillMat(o, m[0] * scalar, m[1] * scalar, m[2] * scalar, m[3] * scalar, m[4] * scalar, m[5] * scalar, m[6] * scalar, m[7] * scalar, m[8] * scalar)
 	return [m[0] * scalar, m[1] * scalar, m[2] * scalar, m[3] * scalar, m[4] * scalar, m[5] * scalar, m[6] * scalar, m[7] * scalar, m[8] * scalar]
 }
 
 // Computes the division of the matrix by scalar.
-export function divScalar(m: Mat3, scalar: number, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, m[0] / scalar, m[1] / scalar, m[2] / scalar, m[3] / scalar, m[4] / scalar, m[5] / scalar, m[6] / scalar, m[7] / scalar, m[8] / scalar)
+export function divMatScalar(m: Mat3, scalar: number, o?: MutMat3): MutMat3 {
+	if (o) return fillMat(o, m[0] / scalar, m[1] / scalar, m[2] / scalar, m[3] / scalar, m[4] / scalar, m[5] / scalar, m[6] / scalar, m[7] / scalar, m[8] / scalar)
 	return [m[0] / scalar, m[1] / scalar, m[2] / scalar, m[3] / scalar, m[4] / scalar, m[5] / scalar, m[6] / scalar, m[7] / scalar, m[8] / scalar]
 }
 
 // Computes the sum between the matrices.
-export function plus(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3], a[4] + b[4], a[5] + b[5], a[6] + b[6], a[7] + b[7], a[8] + b[8])
+export function plusMat(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
+	if (o) return fillMat(o, a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3], a[4] + b[4], a[5] + b[5], a[6] + b[6], a[7] + b[7], a[8] + b[8])
 	return [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3], a[4] + b[4], a[5] + b[5], a[6] + b[6], a[7] + b[7], a[8] + b[8]]
 }
 
 // Computes the subtraction between the matrices.
-export function minus(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
-	if (o) return fill(o, a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3], a[4] - b[4], a[5] - b[5], a[6] - b[6], a[7] - b[7], a[8] - b[8])
+export function minusMat(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
+	if (o) return fillMat(o, a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3], a[4] - b[4], a[5] - b[5], a[6] - b[6], a[7] - b[7], a[8] - b[8])
 	return [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3], a[4] - b[4], a[5] - b[5], a[6] - b[6], a[7] - b[7], a[8] - b[8]]
 }
 
 // Computes the multiplication between the matrices.
-export function mul(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
+export function mulMat(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
 	const c = a[0] * b[0] + a[1] * b[3] + a[2] * b[6]
 	const d = a[0] * b[1] + a[1] * b[4] + a[2] * b[7]
 	const e = a[0] * b[2] + a[1] * b[5] + a[2] * b[8]
@@ -194,12 +194,12 @@ export function mul(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
 	const j = a[6] * b[1] + a[7] * b[4] + a[8] * b[7]
 	const k = a[6] * b[2] + a[7] * b[5] + a[8] * b[8]
 
-	if (o) return fill(o, c, d, e, f, g, h, i, j, k)
+	if (o) return fillMat(o, c, d, e, f, g, h, i, j, k)
 	return [c, d, e, f, g, h, i, j, k]
 }
 
 // Computes the multiplication of the matrix by a vector.
-export function mulVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
+export function mulMatVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
 	const c = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 	const d = a[3] * b[0] + a[4] * b[1] + a[5] * b[2]
 	const e = a[6] * b[0] + a[7] * b[1] + a[8] * b[2]
@@ -209,7 +209,7 @@ export function mulVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
 }
 
 // Computes the multiplication of the transposed matrix by a vector.
-export function mulTransposeVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
+export function mulTransposeMatVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
 	const c = a[0] * b[0] + a[3] * b[1] + a[6] * b[2]
 	const d = a[1] * b[0] + a[4] * b[1] + a[7] * b[2]
 	const e = a[2] * b[0] + a[5] * b[1] + a[8] * b[2]
@@ -234,26 +234,26 @@ export function flipYMut(m: MutMat3): MutMat3 {
 }
 
 // Negates the matrix.
-export function negateMut(m: MutMat3): MutMat3 {
-	return negate(m, m)
+export function negateMutMat(m: MutMat3): MutMat3 {
+	return negateMat(m, m)
 }
 
 // Computes the sum of the matrix by scalar.
-export function plusScalarMut(m: MutMat3, scalar: number): MutMat3 {
-	return plusScalar(m, scalar, m)
+export function plusScalarMutMat(m: MutMat3, scalar: number): MutMat3 {
+	return plusMatScalar(m, scalar, m)
 }
 
 // Computes the subtraction of the matrix by scalar.
-export function minusScalarMut(m: MutMat3, scalar: number): MutMat3 {
-	return minusScalar(m, scalar, m)
+export function minusScalarMutMat(m: MutMat3, scalar: number): MutMat3 {
+	return minusMatScalar(m, scalar, m)
 }
 
 // Computes the multiplication of the matrix by scalar.
-export function mulScalarMut(m: MutMat3, scalar: number): MutMat3 {
-	return mulScalar(m, scalar, m)
+export function mulScalarMutMat(m: MutMat3, scalar: number): MutMat3 {
+	return mulMatScalar(m, scalar, m)
 }
 
 // Computes the division of the matrix by scalar.
-export function divScalarMut(m: MutMat3, scalar: number): MutMat3 {
-	return divScalar(m, scalar, m)
+export function divScalarMutMat(m: MutMat3, scalar: number): MutMat3 {
+	return divMatScalar(m, scalar, m)
 }

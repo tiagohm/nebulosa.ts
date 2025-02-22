@@ -3,7 +3,7 @@ import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { eraS2p } from './erfa'
 import { FK5_MATRIX } from './frame'
-import { mulVec } from './matrix'
+import { mulMatVec } from './matrix'
 
 // Convert the ICRS spherical coordinate to ICRS cartesian coordinate.
 export function icrs(ra: Angle, dec: Angle, distance: Distance = 1): CartesianCoordinate {
@@ -12,5 +12,5 @@ export function icrs(ra: Angle, dec: Angle, distance: Distance = 1): CartesianCo
 
 // Convert the ICRS cartesian coordinate to FK5 cartesian coordinate.
 export function icrsToFk5(p: CartesianCoordinate): CartesianCoordinate {
-	return mulVec(FK5_MATRIX, p)
+	return mulMatVec(FK5_MATRIX, p)
 }

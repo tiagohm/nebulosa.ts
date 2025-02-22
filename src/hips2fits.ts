@@ -1,6 +1,6 @@
 import { type Angle, DEG2RAD, toDeg } from './angle'
 
-export const BASE_URL = 'https://alasky.cds.unistra.fr/'
+export const HIPS2FITS_BASE_URL = 'https://alasky.cds.unistra.fr/'
 
 export type CoordinateFrameType = 'icrs' | 'galactic'
 
@@ -20,7 +20,7 @@ export interface Hips2FitsOptions {
 }
 
 const DEFAULT_HIPS_TO_FITS_OPTIONS: Required<Hips2FitsOptions> = {
-	baseUrl: BASE_URL,
+	baseUrl: HIPS2FITS_BASE_URL,
 	width: 1200,
 	height: 900,
 	rotation: 0,

@@ -1,17 +1,17 @@
 import { describe, expect, test } from 'bun:test'
-import { type FormatAngleOptions, arcmin, arcsec, deg, dms, formatAngle, formatDMS, formatHMS, formatSignedDMS, hms, hour, mas, normalize, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from './angle'
+import { type FormatAngleOptions, arcmin, arcsec, deg, dms, formatAngle, formatDms, formatHms, formatSignedDms, hms, hour, mas, normalizeAngle, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from './angle'
 import { PI, PIOVERTWO, TAU } from './constants'
 
 test('normalize', () => {
-	expect(normalize(0)).toBeCloseTo(0, 16)
-	expect(normalize(0.5)).toBeCloseTo(0.5, 16)
-	expect(normalize(PI)).toBeCloseTo(PI, 16)
-	expect(normalize(TAU)).toBeCloseTo(0, 16)
-	expect(normalize(TAU + PI)).toBeCloseTo(PI, 16)
-	expect(normalize(-0.5)).toBeCloseTo(TAU - 0.5, 16)
-	expect(normalize(-PI)).toBeCloseTo(PI, 16)
-	expect(normalize(-TAU)).toBeCloseTo(0, 16)
-	expect(normalize(-TAU - PI)).toBeCloseTo(PI, 16)
+	expect(normalizeAngle(0)).toBeCloseTo(0, 16)
+	expect(normalizeAngle(0.5)).toBeCloseTo(0.5, 16)
+	expect(normalizeAngle(PI)).toBeCloseTo(PI, 16)
+	expect(normalizeAngle(TAU)).toBeCloseTo(0, 16)
+	expect(normalizeAngle(TAU + PI)).toBeCloseTo(PI, 16)
+	expect(normalizeAngle(-0.5)).toBeCloseTo(TAU - 0.5, 16)
+	expect(normalizeAngle(-PI)).toBeCloseTo(PI, 16)
+	expect(normalizeAngle(-TAU)).toBeCloseTo(0, 16)
+	expect(normalizeAngle(-TAU - PI)).toBeCloseTo(PI, 16)
 })
 
 test('mas', () => {
@@ -318,24 +318,24 @@ describe('formatAngle', () => {
 	})
 })
 
-test('formatHMS', () => {
-	expect(formatHMS(hour(23.5634453))).toBe('23:33:48.40')
-	expect(formatHMS(hour(-23.5634453))).toBe('00:26:11.60')
-	expect(formatHMS(hour(10))).toBe('10:00:00.00')
-	expect(formatHMS(hour(24))).toBe('00:00:00.00')
-	expect(formatHMS(hour(25))).toBe('01:00:00.00')
+test('formatHms', () => {
+	expect(formatHms(hour(23.5634453))).toBe('23:33:48.40')
+	expect(formatHms(hour(-23.5634453))).toBe('00:26:11.60')
+	expect(formatHms(hour(10))).toBe('10:00:00.00')
+	expect(formatHms(hour(24))).toBe('00:00:00.00')
+	expect(formatHms(hour(25))).toBe('01:00:00.00')
 })
 
-test('formatDMS', () => {
-	expect(formatDMS(deg(23.5634453))).toBe('23d33m48.40s')
-	expect(formatDMS(deg(-23.5634453))).toBe('-23d33m48.40s')
-	expect(formatDMS(deg(10))).toBe('10d00m00.00s')
-	expect(formatDMS(deg(-10))).toBe('-10d00m00.00s')
+test('formatDms', () => {
+	expect(formatDms(deg(23.5634453))).toBe('23d33m48.40s')
+	expect(formatDms(deg(-23.5634453))).toBe('-23d33m48.40s')
+	expect(formatDms(deg(10))).toBe('10d00m00.00s')
+	expect(formatDms(deg(-10))).toBe('-10d00m00.00s')
 })
 
-test('formatSignedDMS', () => {
-	expect(formatSignedDMS(deg(23.5634453))).toBe('+23d33m48.40s')
-	expect(formatSignedDMS(deg(-23.5634453))).toBe('-23d33m48.40s')
-	expect(formatSignedDMS(deg(10))).toBe('+10d00m00.00s')
-	expect(formatSignedDMS(deg(-10))).toBe('-10d00m00.00s')
+test('formatSignedDms', () => {
+	expect(formatSignedDms(deg(23.5634453))).toBe('+23d33m48.40s')
+	expect(formatSignedDms(deg(-23.5634453))).toBe('-23d33m48.40s')
+	expect(formatSignedDms(deg(10))).toBe('+10d00m00.00s')
+	expect(formatSignedDms(deg(-10))).toBe('-10d00m00.00s')
 })

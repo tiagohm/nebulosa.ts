@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { read } from './daf'
+import { readDaf } from './daf'
 import { fileHandleSource } from './io'
 
 test('NAIF/DAF', async () => {
 	await using source = fileHandleSource(await fs.open('data/de405.bsp'))
-	const daf = await read(source)
+	const daf = await readDaf(source)
 
 	expect(daf).not.toBeUndefined()
 	expect(daf.summaries).toHaveLength(15)
@@ -31,7 +31,7 @@ test('NAIF/DAF', async () => {
 
 test('DAF/SPK', async () => {
 	await using source = fileHandleSource(await fs.open('data/de421.bsp'))
-	const daf = await read(source)
+	const daf = await readDaf(source)
 
 	expect(daf).not.toBeUndefined()
 	expect(daf.summaries).toHaveLength(15)
@@ -57,7 +57,7 @@ test('DAF/SPK', async () => {
 
 test('DAF/PCK', async () => {
 	await using source = fileHandleSource(await fs.open('data/moon_pa_de421_1900-2050.bpc'))
-	const daf = await read(source)
+	const daf = await readDaf(source)
 
 	expect(daf).not.toBeUndefined()
 	expect(daf.summaries).toHaveLength(1)

@@ -5,7 +5,7 @@ import { delta, xy } from './iers'
 import { itrs } from './itrs'
 import type { GeographicPosition } from './location'
 import { twoProduct, twoSum } from './math'
-import { type Mat3, type MutMat3, clone, identity, mul, rotX, rotZ } from './matrix'
+import { type Mat3, type MutMat3, cloneMat, identity, mulMat, rotX, rotZ } from './matrix'
 
 // The specification for measuring time.
 export enum Timescale {
@@ -97,13 +97,13 @@ export function pmMatrix(time: Time, pm?: PolarMotion): Mat3 {
 }
 
 export function time(day: number, fraction: number = 0, scale: Timescale = Timescale.UTC, normalized: boolean = true): Time {
-	return normalized ? normalize(day, fraction, 0, scale) : { day, fraction, scale }
+	return normalized ? normalizeTime(day, fraction, 0, scale) : { day, fraction, scale }
 }
 
 // Times that represent the interval from a particular epoch as
 // a floating point multiple of a unit time interval (e.g. seconds or days).
 export function timeFromEpoch(epoch: number, unit: number, day: number, fraction: number = 0, scale: Timescale = Timescale.UTC): Time {
-	const normalized = normalize(epoch, 0, unit)
+	const normalized = normalizeTime(epoch, 0, unit)
 	day += normalized.day
 	fraction += normalized.fraction
 
@@ -163,7 +163,7 @@ export function timeGPS(seconds: number) {
 // The arithmetic is all done with exact floating point operations so no
 // precision is lost to rounding error. It is assumed the sum is less
 // than about 1E16, otherwise the remainder will be greater than 1.
-export function normalize(day: number, fraction: number, divisor: number = 0, scale: Timescale = Timescale.UTC): Time {
+export function normalizeTime(day: number, fraction: number, divisor: number = 0, scale: Timescale = Timescale.UTC): Time {
 	let [sum, err] = twoSum(day, fraction)
 	day = Math.round(sum)
 	let [extra, frac] = twoSum(sum, -day)
@@ -186,7 +186,7 @@ export function normalize(day: number, fraction: number, divisor: number = 0, sc
 }
 
 // Subtracts two Times.
-export function subtract(a: Time, b: Time) {
+export function subtractTime(a: Time, b: Time) {
 	return a.day - b.day + (a.fraction - b.fraction)
 }
 
@@ -405,16 +405,16 @@ export function meanObliquity(time: Time): Angle {
 
 // Computes the true obliquity of the ecliptic.
 export function trueObliquity(time: Time): Angle {
-	return meanObliquity(time) + nutation(time)[1]
+	return meanObliquity(time) + nutationAngles(time)[1]
 }
 
 // Computes the rotation matrix of the true obliquity of the ecliptic.
 export function trueEclipticRotation(time: Time): MutMat3 {
-	return rotX(trueObliquity(time), clone(precessionNutation(time)))
+	return rotX(trueObliquity(time), cloneMat(precessionNutationMatrix(time)))
 }
 
 // Computes the nutation angles.
-export function nutation(time: Time): readonly [Angle, Angle] {
+export function nutationAngles(time: Time): readonly [Angle, Angle] {
 	if (time.extra?.nutation) return time.extra.nutation
 	const t = tt(time)
 	const nutation = eraNut06a(t.day, t.fraction)
@@ -423,7 +423,7 @@ export function nutation(time: Time): readonly [Angle, Angle] {
 }
 
 // Computes the 3x3 precession matrix.
-export function precession(time: Time): Mat3 {
+export function precessionMatrix(time: Time): Mat3 {
 	if (time.extra?.precession) return time.extra.precession
 	const t = tt(time)
 	const precession = eraPmat06(t.day, t.fraction)
@@ -432,7 +432,7 @@ export function precession(time: Time): Mat3 {
 }
 
 // Computes the 3x3 precession-nutation matrix (including frame bias).
-export function precessionNutation(time: Time): Mat3 {
+export function precessionNutationMatrix(time: Time): Mat3 {
 	if (time.extra?.precessionNutation) return time.extra.precessionNutation
 	const t = tt(time)
 	const precessionNutation = eraPnm06a(t.day, t.fraction)
@@ -444,7 +444,7 @@ export function precessionNutation(time: Time): Mat3 {
 export function equationOfOrigins(time: Time): Mat3 {
 	if (time.extra?.equationOfOrigins) return time.extra.equationOfOrigins
 	const equationOfOrigins = identity()
-	mul(rotZ(gast(time) - era(time), equationOfOrigins), precessionNutation(time), equationOfOrigins)
+	mulMat(rotZ(gast(time) - era(time), equationOfOrigins), precessionNutationMatrix(time), equationOfOrigins)
 	extra(time).equationOfOrigins = equationOfOrigins
 	return equationOfOrigins
 }
@@ -487,7 +487,7 @@ export const tdbMinusTt: TimeDelta = (time) => {
 		const a = eraTaiUtc(...eraTtTai(day, fraction))
 
 		// Subtract 0.5, so UT is fraction of the day from midnight
-		const ut = normalize(a[0] - 0.5, a[1]).fraction
+		const ut = normalizeTime(a[0] - 0.5, a[1]).fraction
 
 		let dt = 0
 

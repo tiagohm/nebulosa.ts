@@ -1,8 +1,8 @@
 import type { PositionAndVelocity } from './astrometry'
 import { DAYSPERJM, J2000 } from './constants'
-import { mulVec, type Mat3 } from './matrix'
-import { tdb, type Time } from './time'
-import { zero } from './vector'
+import { type Mat3, mulMatVec } from './matrix'
+import { type Time, tdb } from './time'
+import { zeroVec } from './vector'
 import { VSOP87E_EARTH_DATA, VSOP87E_JUPITER_DATA, VSOP87E_MARS_DATA, VSOP87E_MERCURY_DATA, VSOP87E_NEPTUNE_DATA, VSOP87E_SATURN_DATA, VSOP87E_SUN_DATA, VSOP87E_URANUS_DATA, VSOP87E_VENUS_DATA } from './vsop87e.data'
 
 // https://vizier.cfa.harvard.edu/ftp/cats/6/81/vsop87.txt
@@ -80,8 +80,8 @@ function compute(time: Time, data: readonly number[][][]): PositionAndVelocity {
 	m[1] = (t.day - J2000 + t.fraction) / DAYSPERJM
 	for (let i = 2; i <= 5; i++) m[i] = m[i - 1] * m[1]
 
-	const p = zero()
-	const v = zero()
+	const p = zeroVec()
+	const v = zeroVec()
 
 	for (let k = 0; k <= 2; k++) {
 		for (let e = 0; e <= 5; e++) {
@@ -107,5 +107,5 @@ function compute(time: Time, data: readonly number[][][]): PositionAndVelocity {
 		v[k] /= DAYSPERJM
 	}
 
-	return [mulVec(REFERENCE_FRAME_MATRIX, p, p), mulVec(REFERENCE_FRAME_MATRIX, v, v)]
+	return [mulMatVec(REFERENCE_FRAME_MATRIX, p, p), mulMatVec(REFERENCE_FRAME_MATRIX, v, v)]
 }

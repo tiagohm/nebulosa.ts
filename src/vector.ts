@@ -14,7 +14,7 @@ export function dot(a: Vec3, b: Vec3) {
 }
 
 // Fills the vector.
-export function fill(v: MutVec3, a: number, b: number, c: number): MutVec3 {
+export function fillVec(v: MutVec3, a: number, b: number, c: number): MutVec3 {
 	v[0] = a
 	v[1] = b
 	v[2] = c
@@ -27,7 +27,7 @@ export function cross(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 	const d = a[2] * b[0] - a[0] * b[2]
 	const e = a[0] * b[1] - a[1] * b[0]
 
-	if (o) return fill(o, c, d, e)
+	if (o) return fillVec(o, c, d, e)
 	else return [c, d, e]
 }
 
@@ -37,7 +37,7 @@ export function length(v: Vec3) {
 }
 
 // Computes the distance between the vectors.
-export function distance(a: Vec3, b: Vec3) {
+export function distanceBetween(a: Vec3, b: Vec3) {
 	const c = a[0] - b[0]
 	const d = a[1] - b[1]
 	const e = a[2] - b[2]
@@ -45,7 +45,7 @@ export function distance(a: Vec3, b: Vec3) {
 }
 
 // Creates a new mutable vector from the given vector.
-export function clone(v: Vec3): MutVec3 {
+export function cloneVec(v: Vec3): MutVec3 {
 	return [...v]
 }
 
@@ -65,7 +65,7 @@ export function angle(a: Vec3, b: Vec3): Angle {
 }
 
 // Creates a new zeroed vector.
-export function zero(): MutVec3 {
+export function zeroVec(): MutVec3 {
 	return [0, 0, 0]
 }
 
@@ -93,88 +93,88 @@ export function longitude(v: Vec3) {
 }
 
 // Negates the vector.
-export function negate(a: Vec3, o?: MutVec3): MutVec3 {
-	if (o) return fill(o, -a[0], -a[1], -a[2])
+export function negateVec(a: Vec3, o?: MutVec3): MutVec3 {
+	if (o) return fillVec(o, -a[0], -a[1], -a[2])
 	else return [-a[0], -a[1], -a[2]]
 }
 
 // Computes the sum of the vector by scalar.
-export function plusScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
-	if (o) return fill(o, a[0] + scalar, a[1] + scalar, a[2] + scalar)
+export function plusVecScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
+	if (o) return fillVec(o, a[0] + scalar, a[1] + scalar, a[2] + scalar)
 	else return [a[0] + scalar, a[1] + scalar, a[2] + scalar]
 }
 
 // Computes the subtraction of the vector by scalar.
-export function minusScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
-	if (o) return fill(o, a[0] - scalar, a[1] - scalar, a[2] - scalar)
+export function minusVecScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
+	if (o) return fillVec(o, a[0] - scalar, a[1] - scalar, a[2] - scalar)
 	else return [a[0] - scalar, a[1] - scalar, a[2] - scalar]
 }
 
 // Computes the multiplication of the vector by scalar.
-export function mulScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
-	if (o) return fill(o, a[0] * scalar, a[1] * scalar, a[2] * scalar)
+export function mulVecScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
+	if (o) return fillVec(o, a[0] * scalar, a[1] * scalar, a[2] * scalar)
 	else return [a[0] * scalar, a[1] * scalar, a[2] * scalar]
 }
 
 // Computes the division of the vector by scalar.
-export function divScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
-	if (o) return fill(o, a[0] / scalar, a[1] / scalar, a[2] / scalar)
+export function divVecScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
+	if (o) return fillVec(o, a[0] / scalar, a[1] / scalar, a[2] / scalar)
 	else return [a[0] / scalar, a[1] / scalar, a[2] / scalar]
 }
 
 // Computes the sum between the vectors.
-export function plus(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
-	if (o) return fill(o, a[0] + b[0], a[1] + b[1], a[2] + b[2])
+export function plusVec(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
+	if (o) return fillVec(o, a[0] + b[0], a[1] + b[1], a[2] + b[2])
 	else return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
 // Computes the subtraction between the vectors.
-export function minus(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
-	if (o) return fill(o, a[0] - b[0], a[1] - b[1], a[2] - b[2])
+export function minusVec(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
+	if (o) return fillVec(o, a[0] - b[0], a[1] - b[1], a[2] - b[2])
 	else return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 // Computes the multiplication between the vectors.
-export function mul(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
-	if (o) return fill(o, a[0] * b[0], a[1] * b[1], a[2] * b[2])
+export function mulVec(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
+	if (o) return fillVec(o, a[0] * b[0], a[1] * b[1], a[2] * b[2])
 	else return [a[0] * b[0], a[1] * b[1], a[2] * b[2]]
 }
 
 // Computes the division between the vectors.
-export function div(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
-	if (o) return fill(o, a[0] / b[0], a[1] / b[1], a[2] / b[2])
+export function divVec(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
+	if (o) return fillVec(o, a[0] / b[0], a[1] / b[1], a[2] / b[2])
 	else return [a[0] / b[0], a[1] / b[1], a[2] / b[2]]
 }
 
 // Normalizes the vector.
-export function normalize(v: Vec3, o?: MutVec3): MutVec3 {
+export function normalizeVec(v: Vec3, o?: MutVec3): MutVec3 {
 	const len = length(v)
 
 	if (len === 0)
-		if (o) return fill(o, ...v)
-		else return clone(v)
-	else return divScalar(v, len, o)
+		if (o) return fillVec(o, ...v)
+		else return cloneVec(v)
+	else return divVecScalar(v, len, o)
 }
 
 // Normalizes the vector.
-export function normalizeMut(v: MutVec3): MutVec3 {
-	return normalize(v, v)
+export function normalizeMutVec(v: MutVec3): MutVec3 {
+	return normalizeVec(v, v)
 }
 
 // Efficient algorithm for rotating a vector in space, given an axis and angle of rotation.
 export function rotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, o?: MutVec3): Vec3 {
 	const cosa = Math.cos(angle)
-	const b = zero()
-	const c = zero()
-	const k = normalize(axis, o)
-	mulScalar(cross(k, v, b), Math.sin(angle), b)
-	mulScalar(k, dot(k, v), c)
-	plus(mulScalar(v, cosa, k), b, b)
-	return plus(b, mulScalar(c, 1 - cosa, c), o)
+	const b = zeroVec()
+	const c = zeroVec()
+	const k = normalizeVec(axis, o)
+	mulVecScalar(cross(k, v, b), Math.sin(angle), b)
+	mulVecScalar(k, dot(k, v), c)
+	plusVec(mulVecScalar(v, cosa, k), b, b)
+	return plusVec(b, mulVecScalar(c, 1 - cosa, c), o)
 }
 
 export function plane(a: Vec3, b: Vec3, c: Vec3, o?: MutVec3): MutVec3 {
-	const d = minus(b, a, o)
-	const e = minus(c, b)
+	const d = minusVec(b, a, o)
+	const e = minusVec(c, b)
 	return cross(d, e, o)
 }

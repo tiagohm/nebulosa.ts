@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { deg } from './angle'
 import { PI, PIOVERTWO } from './constants'
-import { type MutVec3, type Vec3, angle, cross, div, divScalar, dot, minus, minusScalar, mul, mulScalar, negate, normalize, plane, plus, plusScalar, rotateByRodrigues, xAxis, yAxis, zAxis } from './vector'
+import { type MutVec3, type Vec3, angle, cross, divVec, divVecScalar, dot, minusVec, minusVecScalar, mulVec, mulVecScalar, negateVec, normalizeVec, plane, plusVec, plusVecScalar, rotateByRodrigues, xAxis, yAxis, zAxis } from './vector'
 
 test('angle', () => {
 	expect(angle(xAxis(), yAxis())).toBe(PIOVERTWO)
@@ -12,39 +12,39 @@ test('angle', () => {
 
 test('normalize', () => {
 	const a = Math.sqrt(14)
-	expect(normalize([3, 2, -1])).toEqual([3 / a, 2 / a, -1 / a])
+	expect(normalizeVec([3, 2, -1])).toEqual([3 / a, 2 / a, -1 / a])
 
 	const o: MutVec3 = [0, 0, 0]
-	expect(normalize(o)).toEqual([0, 0, 0])
+	expect(normalizeVec(o)).toEqual([0, 0, 0])
 
-	normalize([3, 2, -1], o)
+	normalizeVec([3, 2, -1], o)
 	expect(o).not.toEqual(a)
 	expect(o).toEqual([3 / a, 2 / a, -1 / a])
 })
 
 test('plus', () => {
-	expect(plusScalar([2, 3, 2], 2)).toEqual([4, 5, 4])
-	expect(plus([2, 3, 2], [2, 3, 2])).toEqual([4, 6, 4])
+	expect(plusVecScalar([2, 3, 2], 2)).toEqual([4, 5, 4])
+	expect(plusVec([2, 3, 2], [2, 3, 2])).toEqual([4, 6, 4])
 })
 
 test('minus', () => {
-	expect(minusScalar([2, 3, 2], 2)).toEqual([0, 1, 0])
-	expect(minus([2, 3, 2], [-2, -3, -2])).toEqual([4, 6, 4])
+	expect(minusVecScalar([2, 3, 2], 2)).toEqual([0, 1, 0])
+	expect(minusVec([2, 3, 2], [-2, -3, -2])).toEqual([4, 6, 4])
 })
 
 test('mul', () => {
-	expect(mulScalar([2, 3, 2], 2)).toEqual([4, 6, 4])
-	expect(mul([2, 3, 2], [2, 3, 2])).toEqual([4, 9, 4])
+	expect(mulVecScalar([2, 3, 2], 2)).toEqual([4, 6, 4])
+	expect(mulVec([2, 3, 2], [2, 3, 2])).toEqual([4, 9, 4])
 })
 
 test('div', () => {
-	expect(divScalar([2, 3, 2], 2)).toEqual([1, 1.5, 1])
-	expect(div([2, 3, 2], [2, 3, 2])).toEqual([1, 1, 1])
+	expect(divVecScalar([2, 3, 2], 2)).toEqual([1, 1.5, 1])
+	expect(divVec([2, 3, 2], [2, 3, 2])).toEqual([1, 1, 1])
 })
 
 test('dot', () => {
 	expect(dot([2, 3, 2], [2, 3, 2])).toBe(17)
-	expect(dot([2, 3, 2], negate([2, 3, 2]))).toBe(-17)
+	expect(dot([2, 3, 2], negateVec([2, 3, 2]))).toBe(-17)
 })
 
 test('cross', () => {

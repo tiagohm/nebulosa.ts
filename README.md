@@ -10,7 +10,7 @@ Elegant astronomy for TypeScript. Supercharged by Bun.
 ### Angle
 
 ```ts
-normalize(TAU + PI) // Normalize the angle in radians
+normalizeAngle(TAU + PI) // Normalize the angle in radians
 deg(90) // Convert degree to radian
 hour(22) // Convert hour to radian
 arcmin(10) // Convert arcminute to radian
@@ -27,9 +27,9 @@ toDms(PI) // Convert radian to degree-minute-second
 toHms(PI) // Convert radian to hour-minute-second
 parseAngle('12h 45m 14.56s') // Parse the dms/hms angle represented as string
 formatAngle(PI, { isHour: true }) // Format the angle with custom representation
-formatHMS(PI) // Format the angle as 00:00:00.00
-formatDMS(PI) // Format the angle as 00d00m00.00s
-formatSignedDMS(PI) // Format the angle as +00d00m00.00s
+formatHms(PI) // Format the angle as 00:00:00.00
+formatDms(PI) // Format the angle as 00d00m00.00s
+formatSignedDms(PI) // Format the angle as +00d00m00.00s
 ```
 
 ### Astrobin
@@ -66,7 +66,7 @@ const { header, data } = readCsv(lines, options) // Read CSV file
 ### Daf
 
 ```ts
-read(source) // Read NASA DAF file
+readDaf(source) // Read NASA DAF file
 ```
 
 ### Distance
@@ -91,7 +91,7 @@ TODO
 ### Fits
 
 ```ts
-read(source) // Read FITS file
+readFits(source) // Read FITS file
 ```
 
 ### FK5
@@ -160,17 +160,25 @@ readLines(source, chunkSize) // Read lines from source
 
 ```ts
 itrs(location) // ITRS xyz position for location
-rotationAt(time) // ITRS rotation matrix at time
+itrsRotationAt(time) // ITRS rotation matrix at time
 ```
 
 ### Location
 
 ```ts
-geodetic(longitude, latitude, elevation, Ellipsoid.IERS2010) // Location from longitude, latitude, elevation and ellipsoid form
-geocentric(x, y, z, Ellipsoid.IERS2010) // Location from |xyz| geocentric coordinate and ellipsoid form
+geodeticLocation(longitude, latitude, elevation, Ellipsoid.IERS2010) // Location from longitude, latitude, elevation and ellipsoid form
+geocentricLocation(x, y, z, Ellipsoid.IERS2010) // Location from |xyz| geocentric coordinate and ellipsoid form
 lst(location, time, false, false) // Mean/apparent Local Sidereal Time
 polarRadius(Ellipsoid.IERS2010) // Earth's polar radius
-rotationAt(location, time) // GCRS rotation of the location at time
+gcrsRotationAt(location, time) // GCRS rotation of the location at time
+```
+
+### Lx200
+
+```ts
+const server = new Lx200ProtocolServer(host, port, options)
+server.start() // Start server
+server.stop() // Stop server
 ```
 
 ### Math
@@ -189,13 +197,13 @@ twoProduct(0.5, 0.4) // Multiply both exactly in two 64-bit floats
 
 ```ts
 const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-zero() // Matrix filled with zeroes
+zeroMat() // Matrix filled with zeroes
 identity() // Identity matrix
 rotX(PI, m) // Rotate the matrix around x-axis
 rotY(PI, m) // Rotate the matrix around y-axis
 rotZ(PI, m) // Rotate the matrix around z-axis
-clone(m) // Clone the matrix
-copy(m, n) // Copy the matrix to another matrix
+cloneMat(m) // Clone the matrix
+copyMat(m, n) // Copy the matrix to another matrix
 determinant(m) // Determinant of the matrix
 trace(m) // Trace of the matrix
 transpose(m) // Transpose the matrix
@@ -204,17 +212,17 @@ flipX(m) // Flip the x-axis of the matrix
 flipXMut(m) // Flip the x-axis of the matrix on it
 flipY(m) // Flip the y-axis of the matrix
 flipYMut(m) // Flip the y-axis of the matrix on it
-negate(m) // Negate the matrix
-negateMut(m) // Negate the matrix on it
-plusScalar(m, 2) // Sum the matrix by a scalar
-minusScalar(m, 2) // Subtract the matrix by a scalar
-mulScalar(m, 2) // Multiply the matrix by a scalar
-divScalar(m, 2) // Divide the matrix by a scalar
-plus(m, n) // Sum two matrices
-minus(m, n) // Subtract two matrices
-mul(m, n) // Multiply two matrices
-mulVec(m, v) // Multiply the matrix by a vector
-mulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
+negateMat(m) // Negate the matrix
+negateMatMut(m) // Negate the matrix on it
+plusMatScalar(m, 2) // Sum the matrix by a scalar
+minusMatScalar(m, 2) // Subtract the matrix by a scalar
+mulMatScalar(m, 2) // Multiply the matrix by a scalar
+divMatScalar(m, 2) // Divide the matrix by a scalar
+plusMat(m, n) // Sum two matrices
+minusMat(m, n) // Subtract two matrices
+mulMat(m, n) // Multiply two matrices
+mulMatVec(m, v) // Multiply the matrix by a vector
+mulTransposeMatVec(m, v) // Multiply the transpose of the matrix by a vector
 ```
 
 ### Meeus
@@ -249,7 +257,7 @@ const { header, data } = simbadQuery(query) // Search on Simbad TAP service
 ### Spk
 
 ```ts
-const s = spk(daf) // Read a SPK file
+const s = readSpk(daf) // Read a SPK file
 s.segment(Naif.SSB, Naif.EMB)!.compute(time) // Compute the position and velocity at time
 ```
 
@@ -263,11 +271,11 @@ bcrs(sirius, time) // BCRS cartesian coordinate at time
 ### Stellarium
 
 ```ts
-const server = new StellariumProtocolServer('0.0.0.0', 10002, {})
+const server = new StellariumProtocolServer(host, port, options)
 server.start() // Start server
 server.send(ra, dec) // Send the current coordinate
 server.stop() // Stop server
-catalog(source) // Read Stellarium's catalog.dat file
+readCatalogDat(source) // Read Stellarium's catalog.dat file
 searchAround(catalog, ra, dec, fov) // Search around coordinate
 ```
 
@@ -291,8 +299,8 @@ timeJulian(2000.5, Timescale.UTC) // Time from Julian date
 timeBesselian(1950.5, Timescale.UTC) // Time from Besselian date
 timeYMDHMS(2024, 12, 25, 9, 10, 11.5, Timescale.UTC) // Time from year, month, day, hour, minute and second
 timeGPS(630720013) // Time from GPS seconds
-normalize(2460650, 8.37456, 0, Timescale.UTC) // Normalize day and fraction
-subtract(a, b) // Subtract two Times
+normalizeTime(2460650, 8.37456, 0, Timescale.UTC) // Normalize day and fraction
+subtractTime(a, b) // Subtract two Times
 toDate(time) // Convert the time to year, month, day, hour, minute, second and nanosecond
 ut1(time) // Convert the time to UT1 scale
 utc(time) // Convert the time to UTC scale
@@ -307,9 +315,9 @@ era(time) // Earth Rotation Angle at time
 meanObliquity(time) // Mean Obliquity at time
 trueObliquity(time) // True Oblioquity at time
 trueEclipticRotation(time) // True Ecliptic Rotation matrix at time
-nutation(time) // Nutation angles at time
-precession(time) // Precession matrix at time
-precessionNutation(time) // Precession-Nutation matrix at time
+nutationAngles(time) // Nutation angles at time
+precessionMatrix(time) // Precession matrix at time
+precessionNutationMatrix(time) // Precession-Nutation matrix at time
 equationOfOrigins(time) // Equation of Origins matrix at time
 pmAngles(time) // Polar Motion angles at time
 pmMatrix(time) // Polar Motion matrix at time
@@ -318,34 +326,34 @@ pmMatrix(time) // Polar Motion matrix at time
 ### TIRS
 
 ```ts
-rotationAt(time) // TIRS rotation matrix at time
+tirsRotationAt(time) // TIRS rotation matrix at time
 ```
 
 ### Vector
 
 ```ts
-zero() // Vector filled with zeroes
+zeroVec() // Vector filled with zeroes
 xAxis() // X-axis vector
 yAxis() // Y-axis vector
 zAxis() // Z-axis vector
-clone(v) // Clone the vector
-normalize(v) // Normalize the vector
+cloneVec(v) // Clone the vector
+normalizeVec(v) // Normalize the vector
 length(v) // Length of the vector
-distance(v, u) // Distance between vectors
+distanceBetween(v, u) // Distance between vectors
 angle(v, u) // Angle between vectors
 dot(v, u) // Dot product between vectors
 cross(v, u) // Cross product between vectors
 latitude(v)
 longitude(v)
-negate(v) // Negate the vector
-plusScalar(v, 2) // Sum the vector by a scalar
-minusScalar(v, 2) // Subtract the vector by a scalar
-mulScalar(v, 2) // Multiply the vector by a scalar
-divScalar(v, 2) // Divide the vector by a scalar
-plus(v, u) // Sum two vectors
-minus(v, u) // Subtract two vectors
-mul(v, u) // Multiply two vectors
-div(v, u) // Divide two vectors
+negateVec(v) // Negate the vector
+plusVecScalar(v, 2) // Sum the vector by a scalar
+minusVecScalar(v, 2) // Subtract the vector by a scalar
+mulSVeccalar(v, 2) // Multiply the vector by a scalar
+divVecScalar(v, 2) // Divide the vector by a scalar
+plusVec(v, u) // Sum two vectors
+minusVec(v, u) // Subtract two vectors
+mulVec(v, u) // Multiply two vectors
+divVec(v, u) // Divide two vectors
 rotateByRodrigues(v, axis, PI / 4) // Rotate the vector around an axis
 plane(v, u, w) // Vector from plane of three vectors
 ```

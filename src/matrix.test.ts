@@ -1,5 +1,32 @@
 import { expect, test } from 'bun:test'
-import { clone, determinant, divScalar, divScalarMut, flipX, flipXMut, flipY, flipYMut, identity, minus, minusScalar, minusScalarMut, mul, mulScalar, mulScalarMut, mulVec, plus, plusScalar, plusScalarMut, rotX, rotY, rotZ, transpose, transposeMut, zero, type MutMat3 } from './matrix'
+import {
+	type MutMat3,
+	cloneMat,
+	determinant,
+	divMatScalar,
+	divScalarMutMat,
+	flipX,
+	flipXMut,
+	flipY,
+	flipYMut,
+	identity,
+	minusMat,
+	minusMatScalar,
+	minusScalarMutMat,
+	mulMat,
+	mulMatScalar,
+	mulMatVec,
+	mulScalarMutMat,
+	plusMat,
+	plusMatScalar,
+	plusScalarMutMat,
+	rotX,
+	rotY,
+	rotZ,
+	transpose,
+	transposeMut,
+	zeroMat,
+} from './matrix'
 import type { MutVec3 } from './vector'
 
 test('determinant', () => {
@@ -61,7 +88,7 @@ test('rotZ', () => {
 
 test('clone', () => {
 	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	const n = clone(m)
+	const n = cloneMat(m)
 	expect(n).toEqual(m)
 	expect(m === n).toBe(false)
 })
@@ -99,83 +126,83 @@ test('flipY', () => {
 test('mulVec', () => {
 	const m: MutMat3 = [2, 3, 2, 3, 2, 3, 3, 4, 5]
 	const v: MutVec3 = [2, 3, 2]
-	const u = mulVec(m, v)
+	const u = mulMatVec(m, v)
 	expect(u).not.toEqual(v)
 	expect(u).toEqual([17, 18, 28])
 
-	mulVec(m, v, v)
+	mulMatVec(m, v, v)
 	expect(v).toEqual(u)
 })
 
 test('plusScalar', () => {
 	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	const n = plusScalar(m, 1)
+	const n = plusMatScalar(m, 1)
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10])
 
-	plusScalarMut(m, 1)
+	plusScalarMutMat(m, 1)
 	expect(m).toEqual(n)
 })
 
 test('minusScalar', () => {
 	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	const n = minusScalar(m, 1)
+	const n = minusMatScalar(m, 1)
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
 
-	minusScalarMut(m, 1)
+	minusScalarMutMat(m, 1)
 	expect(m).toEqual(n)
 })
 
 test('mulScalar', () => {
 	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	const n = mulScalar(m, 2)
+	const n = mulMatScalar(m, 2)
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 18])
 
-	mulScalarMut(m, 2)
+	mulScalarMutMat(m, 2)
 	expect(m).toEqual(n)
 })
 
 test('divScalar', () => {
 	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	const n = divScalar(m, 2)
+	const n = divMatScalar(m, 2)
 	expect(n).not.toEqual(m)
 	expect(n).toEqual([0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5])
 
-	divScalarMut(m, 2)
+	divScalarMutMat(m, 2)
 	expect(m).toEqual(n)
 })
 
 test('plus', () => {
 	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 	const n: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	const u = plus(m, n)
+	const u = plusMat(m, n)
 	expect(u).not.toEqual(m)
 	expect(u).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 18])
 
-	plus(m, n, m)
+	plusMat(m, n, m)
 	expect(m).toEqual(u)
 })
 
 test('minus', () => {
 	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 	const n: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	const u = minus(m, n)
+	const u = minusMat(m, n)
 	expect(u).not.toEqual(m)
-	expect(u).toEqual(zero())
+	expect(u).toEqual(zeroMat())
 
-	minus(m, n, m)
+	minusMat(m, n, m)
 	expect(m).toEqual(u)
 })
 
 test('mul', () => {
 	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 	const n: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	const u = mul(m, n)
+	const u = mulMat(m, n)
 	expect(u).not.toEqual(m)
 	expect(u).toEqual([30, 36, 42, 66, 81, 96, 102, 126, 150])
 
-	mul(m, n, m)
+	mulMat(m, n, m)
 	expect(m).toEqual(u)
 })

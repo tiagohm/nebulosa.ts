@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { deg } from './angle'
-import { read } from './fits'
+import { readFits } from './fits'
 import { type Hips2FitsOptions, hips2Fits, hipsSurveys } from './hips2fits'
 import { bufferSource } from './io'
 
@@ -10,7 +10,7 @@ test.skip('fits', async () => {
 	const buffer = Buffer.from(bytes)
 	console.log(bytes.byteLength)
 	const source = bufferSource(buffer)
-	const fits = await read(source)
+	const fits = await readFits(source)
 	const header = fits!.hdus[0].header
 
 	expect(header.SIMPLE).toBeTrue()

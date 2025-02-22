@@ -1,17 +1,17 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { read } from './daf'
+import { readDaf } from './daf'
 import { fileHandleSource } from './io'
 import { Naif } from './naif'
-import { spk } from './spk'
+import { readSpk } from './spk'
 import { Timescale, timeYMDHMS } from './time'
 
 const time = timeYMDHMS(2025, 1, 15, 9, 20, 50, Timescale.TDB)
 
 test('DE405', async () => {
 	await using source = fileHandleSource(await fs.open('data/de405.bsp'))
-	const daf = await read(source)
-	const s = spk(daf)
+	const daf = await readDaf(source)
+	const s = readSpk(daf)
 
 	const segment = s.segment(Naif.SSB, Naif.EMB)
 	expect(segment).not.toBeUndefined()
@@ -30,8 +30,8 @@ test('DE405', async () => {
 
 test('DE421', async () => {
 	await using source = fileHandleSource(await fs.open('data/de421.bsp'))
-	const daf = await read(source)
-	const s = spk(daf)
+	const daf = await readDaf(source)
+	const s = readSpk(daf)
 
 	const segment = s.segment(Naif.SSB, Naif.EMB)
 	expect(segment).not.toBeUndefined()
@@ -50,8 +50,8 @@ test('DE421', async () => {
 
 test('DE440', async () => {
 	await using source = fileHandleSource(await fs.open('data/de440s.bsp'))
-	const daf = await read(source)
-	const s = spk(daf)
+	const daf = await readDaf(source)
+	const s = readSpk(daf)
 
 	const segment = s.segment(Naif.SSB, Naif.EMB)
 	expect(segment).not.toBeUndefined()
@@ -70,8 +70,8 @@ test('DE440', async () => {
 
 test('65803 Didymos', async () => {
 	await using source = fileHandleSource(await fs.open('data/65803_Didymos.bsp'))
-	const daf = await read(source)
-	const s = spk(daf)
+	const daf = await readDaf(source)
+	const s = readSpk(daf)
 
 	const segment = s.segment(Naif.SUN, Naif.DIDYMOS_BARYCENTER)
 	expect(segment).not.toBeUndefined()

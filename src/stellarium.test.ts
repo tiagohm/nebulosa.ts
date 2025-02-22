@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { deg, parseAngle } from './angle'
 import { fileHandleSource } from './io'
-import { type CatalogEntry, ObjectType, catalog, searchAround } from './stellarium'
+import { type CatalogEntry, ObjectType, readCatalogDat, searchAround } from './stellarium'
 
 test.skip('catalog', async () => {
 	// https://github.com/Stellarium/stellarium/raw/refs/heads/master/nebulae/default/catalog.dat
@@ -11,7 +11,7 @@ test.skip('catalog', async () => {
 	const entries = new Array<CatalogEntry>(94660)
 	let i = 0
 
-	for await (const entry of catalog(source)) {
+	for await (const entry of readCatalogDat(source)) {
 		entries[i++] = entry
 	}
 

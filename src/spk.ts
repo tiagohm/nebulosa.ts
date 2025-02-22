@@ -1,8 +1,8 @@
 import type { PositionAndVelocity } from './astrometry'
 import { AU_KM, DAYSEC, J2000 } from './constants'
 import type { Daf, Summary } from './daf'
-import { tdb, type Time } from './time'
-import { zero, type MutVec3 } from './vector'
+import { type Time, tdb } from './time'
+import { type MutVec3, zeroVec } from './vector'
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/FORTRAN/req/spk.html
 export interface Spk {
@@ -25,7 +25,7 @@ export interface SpkSegment {
 	readonly compute: (time: Time) => Promise<PositionAndVelocity>
 }
 
-export function spk(daf: Daf): Spk {
+export function readSpk(daf: Daf): Spk {
 	const segments = daf.summaries.map((e) => [e.ints[1], e.ints[0], makeSegment(e, daf)] as Spk['segments'][number])
 
 	return {
@@ -111,12 +111,12 @@ export class Type2And3Segment implements SpkSegment {
 		const s = (2 * (d - (c.mid - c.radius))) / this.intervalLength - 1
 		const ss = 2 * s
 
-		const w0 = zero()
-		const w1 = zero()
-		const w2 = zero()
-		const dw0 = zero()
-		const dw1 = zero()
-		const dw2 = zero()
+		const w0 = zeroVec()
+		const w1 = zeroVec()
+		const w2 = zeroVec()
+		const dw0 = zeroVec()
+		const dw1 = zeroVec()
+		const dw2 = zeroVec()
 
 		for (let i = c.count - 1; i >= 1; i--) {
 			// Polynomial.
@@ -206,9 +206,9 @@ export class Type9Segment implements SpkSegment {
 		readonly endIndex: number,
 	) {}
 
-	// eslint-disable-next-line @typescript-eslint/require-await
+	// biome-ignore lint/suspicious/useAwait:
 	async compute(time: Time): Promise<PositionAndVelocity> {
-		return [zero(), zero()]
+		return [zeroVec(), zeroVec()]
 	}
 }
 
@@ -314,8 +314,8 @@ export class Type21Segment implements SpkSegment {
 
 		// Perform position interpolation: (Note that KS = 1 right now.
 		// We don't know much more than that.)
-		const p = zero()
-		const v = zero()
+		const p = zeroVec()
+		const v = zeroVec()
 
 		for (let i = 0; i < 3; i++) {
 			const kqq = c.kq[i]
@@ -401,8 +401,8 @@ export class Type21Segment implements SpkSegment {
 		const g = mdaRecord.subarray(1, this.maxdim + 1)
 
 		// Reference position & velocity vector.
-		const p = zero()
-		const v = zero()
+		const p = zeroVec()
+		const v = zeroVec()
 
 		p[0] = mdaRecord[this.maxdim + 1]
 		v[0] = mdaRecord[this.maxdim + 2]
@@ -425,7 +425,7 @@ export class Type21Segment implements SpkSegment {
 
 		// Initializing the difference table.
 		const kqmax1 = Math.trunc(mdaRecord[kqo + 7])
-		const kq = zero()
+		const kq = zeroVec()
 		kq[0] = Math.trunc(mdaRecord[kqo + 8])
 		kq[1] = Math.trunc(mdaRecord[kqo + 9])
 		kq[2] = Math.trunc(mdaRecord[kqo + 10])

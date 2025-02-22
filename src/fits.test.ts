@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { read } from './fits'
+import { readFits } from './fits'
 import { fileHandleSource } from './io'
 
 test('read', async () => {
 	const handle = await fs.open('data/fits/NGC3372-color-byte.fits')
 	await using source = fileHandleSource(handle)
-	const fits = await read(source)
+	const fits = await readFits(source)
 	expect(fits!.hdus).toHaveLength(1)
 
 	const { header, data } = fits!.hdus[0]
