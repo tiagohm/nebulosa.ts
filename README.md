@@ -32,6 +32,17 @@ formatDMS(PI) // Format the angle as 00d00m00.00s
 formatSignedDMS(PI) // Format the angle as +00d00m00.00s
 ```
 
+### Astrobin
+
+```ts
+sensors(page) // List sensors
+sensor(id) // Get sensor by id
+cameras(page) // List cameras
+camera(id) // Get camera by id
+telescopes(page) // List telescopes
+telescope(id) // Get telescope by id
+```
+
 ### Astrometry
 
 ```ts
@@ -44,6 +55,12 @@ gcrs(icrs, time, [ebp, ebv], ehp) // Compute the GCRS cartesian coordinate from 
 cirs(icrs, time, [ebp, ebv], ehp) // Compute the CIRS cartesian coordinate from ICRS at time
 hadec(icrs, time, [ebp, ebv], ehp, { pressure, temperature, relativeHumidity, wl }) // Compute the HA/DEC spherical coordinate from ICRS
 altaz(icrs, time, [ebp, ebv], ehp, { pressure, temperature, relativeHumidity, wl }) // Compute the AZ/ALT spherical coordinate from ICRS
+```
+
+### Csv
+
+```ts
+const { header, data } = readCsv(lines, options) // Read CSV file
 ```
 
 ### Daf
@@ -223,6 +240,12 @@ identify(date, longitude, latitude, elevation, fovRa, fovDec, fovRaWidth, fovDec
 closeApproaches(dateMin, dateMax, distance)
 ```
 
+### Simbad
+
+```ts
+const { header, data } = simbadQuery(query) // Search on Simbad TAP service
+```
+
 ### Spk
 
 ```ts
@@ -336,6 +359,12 @@ toKilometerPerSecond(1) // Convert AU/d to km/s
 toMeterPerSecond(1) // Convert AU/d to m/s
 ```
 
+### Vizier
+
+```ts
+const { header, data } = vizierQuery(query) // Search on Vizier TAP service
+```
+
 ### VSOP87E
 
 ```ts
@@ -350,7 +379,9 @@ uranus(time) // Compute the position and velocity of Uranus
 neptune(time) // Compute the position and velocity of Neptune
 ```
 
-## Inspirations
+## Inspired by
+
+Thanks to all these projects:
 
 - [Skyfield](https://github.com/skyfielders/python-skyfield)
 - [Astropy](https://github.com/astropy/astropy)
