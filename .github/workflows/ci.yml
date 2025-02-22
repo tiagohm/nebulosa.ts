@@ -4,14 +4,14 @@ on:
     push:
         branches: [main]
         paths:
-            - '**.ts'
+            - 'src/**.ts'
             - 'package.json'
             - 'tsconfig.json'
             - 'native/**'
             - 'data/**'
     pull_request:
         paths:
-            - '**.ts'
+            - 'src/**.ts'
             - 'package.json'
             - 'tsconfig.json'
             - 'native/**'

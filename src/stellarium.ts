@@ -7,7 +7,7 @@ import type { Seekable, Source } from './io'
 export interface StellariumProtocolHandler {
 	connect?: () => void
 	goto?: (ra: Angle, dec: Angle) => void
-	close?: () => void
+	disconnect?: () => void
 }
 
 export interface StellariumProtocolServerOptions {
@@ -47,7 +47,7 @@ export class StellariumProtocolServer {
 					console.warn('connection closed')
 					const index = this.sockets.indexOf(socket)
 					if (index >= 0) this.sockets.splice(index, 1)
-					this.options?.protocol?.close?.()
+					this.options?.protocol?.disconnect?.()
 				},
 				error: (_, error) => {
 					console.error('connection failed', error)
