@@ -1,7 +1,7 @@
-import { arcsec, type Angle } from './angle'
+import { type Angle, arcsec } from './angle'
 import { MJD0 } from './constants'
 import { binarySearch } from './helper'
-import { readLines, type Source } from './io'
+import { type Source, readLines } from './io'
 import type { PolarMotion, Time, TimeDelta } from './time'
 
 export interface Iers {
@@ -85,15 +85,15 @@ export class IersA extends IersBase {
 		this.clear()
 
 		for await (const line of readLines(source, 188)) {
-			const pmXa = parseFloat(line.substring(18, 27).trim())
-			const pmYa = parseFloat(line.substring(37, 46).trim())
-			const pmXb = parseFloat(line.substring(134, 144).trim())
-			const pmYb = parseFloat(line.substring(144, 154).trim())
-			const dut1a = parseFloat(line.substring(58, 68).trim())
-			const dut1b = parseFloat(line.substring(154, 165).trim())
+			const pmXa = +line.substring(18, 27)
+			const pmYa = +line.substring(37, 46)
+			const pmXb = +line.substring(134, 144)
+			const pmYb = +line.substring(144, 154)
+			const dut1a = +line.substring(58, 68)
+			const dut1b = +line.substring(154, 165)
 
 			if ((pmXb || pmXa) && (pmYb || pmYa) && (dut1b || dut1a)) {
-				const mjd = parseFloat(line.substring(7, 15).trim())
+				const mjd = +line.substring(7, 15)
 				this.mjd.push(mjd)
 				this.pmX.push(pmXb || pmXa)
 				this.pmY.push(pmYb || pmYa)
@@ -112,12 +112,12 @@ export class IersB extends IersBase {
 		for await (const line of readLines(source, 219)) {
 			if (line.startsWith('#')) continue
 
-			const pmX = parseFloat(line.substring(26, 38).trim())
-			const pmY = parseFloat(line.substring(38, 50).trim())
-			const dut1 = parseFloat(line.substring(50, 62).trim())
+			const pmX = +line.substring(26, 38)
+			const pmY = +line.substring(38, 50)
+			const dut1 = +line.substring(50, 62)
 
 			if (pmX && pmY && dut1) {
-				const mjd = parseFloat(line.substring(16, 26).trim())
+				const mjd = +line.substring(16, 26)
 				this.mjd.push(mjd)
 				this.pmX.push(pmX)
 				this.pmY.push(pmY)
