@@ -1,15 +1,19 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { readFits } from './fits'
-import { fileHandleSource } from './io'
+import { readFits, writeFits } from './fits'
+import { bufferSink, bufferSource, fileHandleSource } from './io'
 
 test('read', async () => {
 	const handle = await fs.open('data/fits/NGC3372-color-byte.fits')
 	await using source = fileHandleSource(handle)
 	const fits = await readFits(source)
+
 	expect(fits!.hdus).toHaveLength(1)
 
-	const { header, data } = fits!.hdus[0]
+	const [hdu] = fits!.hdus
+	const { header, data } = hdu
+
+	expect(hdu.offset).toBe(0)
 	expect(header.SIMPLE).toBe(true)
 	expect(header.BITPIX).toBe(8)
 	expect(header.NAXIS).toBe(3)
@@ -73,4 +77,25 @@ test('read', async () => {
 
 	expect(data?.size).toBe(256 * 174 * 3 * 1)
 	expect(data?.offset).toBe(5760)
+})
+
+test('write', async () => {
+	const handle = await fs.open('data/fits/NGC3372-color-byte.fits')
+	await using fileSource = fileHandleSource(handle)
+	const fits0 = await readFits(fileSource)
+
+	const size = (await handle.stat()).size
+	const buffer = Buffer.allocUnsafe(size)
+	const sink = bufferSink(buffer)
+
+	await writeFits(sink, fits0!)
+
+	expect(sink.position).toBe(size)
+
+	const source = bufferSource(buffer)
+	const fits1 = await readFits(source)
+
+	expect(fits1!.hdus[0].header).toEqual(fits0!.hdus[0].header)
+	expect(fits1!.hdus[0].data.size).toEqual(fits0!.hdus[0].data.size)
+	expect(fits1!.hdus[0].data.offset).toEqual(fits0!.hdus[0].data.offset)
 })

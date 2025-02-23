@@ -1,6 +1,6 @@
 import sharp, { type AvifOptions, type FormatEnum, type GifOptions, type HeifOptions, type Jp2Options, type JpegOptions, type JxlOptions, type OutputInfo, type OutputOptions, type PngOptions, type TiffOptions, type WebpOptions } from 'sharp'
-import { Bitpix, bitpix, channels, height, width, type Fits, type FitsHdu, type FitsHeader } from './fits'
-import { readUntil } from './io'
+import { Bitpix, type Fits, type FitsHdu, type FitsHeader, bitpix, height, numberOfChannels, width } from './fits'
+import { bufferSource, readUntil } from './io'
 
 export type ImageChannel = 'RED' | 'GREEN' | 'BLUE'
 
@@ -28,14 +28,15 @@ export async function fromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Image | unde
 	if (bp === Bitpix.LONG) return undefined
 	const sw = width(header)
 	const sh = height(header)
-	const nc = Math.max(1, Math.min(3, channels(header)))
+	const nc = Math.max(1, Math.min(3, numberOfChannels(header)))
 	const pixelSizeInBytes = Math.trunc(Math.abs(bp) / 8)
 	const pixelCount = sw * sh
 	const stride = sw * pixelSizeInBytes
 	const buffer = Buffer.allocUnsafe(stride)
-	const { source, offset } = data!
+	const { source: sourceOrBuffer, offset } = data!
 	const raw = new Float64Array(pixelCount * nc)
 	const minMax = [1, 0]
+	const source = Buffer.isBuffer(sourceOrBuffer) ? bufferSource(sourceOrBuffer) : sourceOrBuffer
 
 	source.seek(offset)
 

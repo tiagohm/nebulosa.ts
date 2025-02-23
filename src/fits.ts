@@ -1,19 +1,20 @@
 import type { Mutable } from 'utility-types'
-import { type Seekable, type Source, readUntil } from './io'
+import { type Seekable, type Sink, type Source, readUntil, sourceTransferToSink } from './io'
 
 export type FitsHeaderKey = string
 export type FitsHeaderValue = string | number | boolean | undefined
-export type FitsHeader = Record<string, FitsHeaderValue>
+export type FitsHeader = Record<FitsHeaderKey, FitsHeaderValue>
 
 export interface FitsData {
-	readonly source: Source & Seekable
+	readonly source: (Source & Seekable) | Buffer
 	readonly size: number
 	readonly offset: number
 }
 
 export interface FitsHdu {
+	readonly offset: number
 	readonly header: FitsHeader
-	readonly data?: FitsData
+	readonly data: FitsData
 }
 
 export interface Fits {
@@ -29,28 +30,51 @@ export enum Bitpix {
 	DOUBLE = -64,
 }
 
-export function numeric(header: FitsHeader, key: string, value: number = 0) {
-	return (header[key] as number | undefined) ?? value
+export function hasKeyword(header: FitsHeader, key: keyof FitsHeader) {
+	return header[key] !== undefined
 }
 
-export function naxis(header: FitsHeader, value: number = 0) {
-	return numeric(header, 'NAXIS', value)
+export function numericKeyword(header: FitsHeader, key: keyof FitsHeader, defaultValue: number = 0) {
+	const value = header[key]
+	if (value === undefined) return defaultValue
+	else if (typeof value === 'number') return value
+	else if (typeof value === 'boolean') return value ? 1 : 0
+	else return parseFloat(value)
 }
 
-export function width(header: FitsHeader, value: number = 0) {
-	return numeric(header, 'NAXIS1', value)
+export function booleanKeyword(header: FitsHeader, key: keyof FitsHeader, defaultValue: boolean = false) {
+	const value = header[key]
+	if (value === undefined) return defaultValue
+	else if (typeof value === 'number') return value !== 0
+	else if (typeof value === 'string') return value === 'T' || value.toLowerCase() === 'true'
+	else return value
 }
 
-export function height(header: FitsHeader, value: number = 0) {
-	return numeric(header, 'NAXIS2', value)
+export function textKeyword(header: FitsHeader, key: keyof FitsHeader, defaultValue: string = '') {
+	const value = header[key]
+	if (value === undefined) return defaultValue
+	else if (typeof value === 'string') return value
+	else return `${value}`
 }
 
-export function channels(header: FitsHeader, value: number = 1) {
-	return numeric(header, 'NAXIS3', value)
+export function naxis(header: FitsHeader, defaultValue: number = 0) {
+	return numericKeyword(header, 'NAXIS', defaultValue)
 }
 
-export function bitpix(header: FitsHeader): Bitpix | 0 {
-	return numeric(header, 'BITPIX')
+export function width(header: FitsHeader, defaultValue: number = 0) {
+	return numericKeyword(header, 'NAXIS1', defaultValue)
+}
+
+export function height(header: FitsHeader, defaultValue: number = 0) {
+	return numericKeyword(header, 'NAXIS2', defaultValue)
+}
+
+export function numberOfChannels(header: FitsHeader, defaultValue: number = 1) {
+	return numericKeyword(header, 'NAXIS3', defaultValue)
+}
+
+export function bitpix(header: FitsHeader, defaultValue: Bitpix | 0 = 0): Bitpix | 0 {
+	return numericKeyword(header, 'BITPIX', defaultValue)
 }
 
 const MAGIC_BYTES = Buffer.from('SIMPLE', 'ascii')
@@ -59,6 +83,7 @@ const BLOCK_SIZE = 2880
 const HEADER_CARD_SIZE = 80
 const MAX_KEYWORD_LENGTH = 8
 const MAX_VALUE_LENGTH = 70
+const MIN_STRING_END = 19
 
 const WHITESPACE = 32
 const SINGLE_QUOTE = 39
@@ -184,6 +209,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 		position++
 
 		const start = position
+		let hasDoubleQuotes = false
 
 		while (position < buffer.byteLength) {
 			if (isNextQuote()) {
@@ -191,17 +217,19 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 
 				if (!isNextQuote()) {
 					// Closing single quote
-					return retrieveNoTrailingSpaceText(start, position - 1)
+					return retrieveNoTrailingSpaceText(start, position - 1, hasDoubleQuotes)
+				} else {
+					hasDoubleQuotes = true
 				}
 			}
 
 			position++
 		}
 
-		return retrieveNoTrailingSpaceText(start, start + (MAX_VALUE_LENGTH - 1))
+		return retrieveNoTrailingSpaceText(start, start + (MAX_VALUE_LENGTH - 1), hasDoubleQuotes)
 	}
 
-	function retrieveNoTrailingSpaceText(start: number, end: number) {
+	function retrieveNoTrailingSpaceText(start: number, end: number, hasDoubleQuotes: boolean) {
 		// Remove trailing spaces only!
 		while (end-- >= start) {
 			if (buffer.readUint8(end) !== WHITESPACE) {
@@ -209,7 +237,10 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 			}
 		}
 
-		return end < 0 ? '' : buffer.toString('ascii', start, end + 1)
+		if (end < 0) return ''
+
+		const text = buffer.toString('ascii', start, end + 1)
+		return hasDoubleQuotes ? unescapeQuotedText(text) : text
 	}
 
 	function parseComment(value: boolean) {
@@ -224,7 +255,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 			}
 		}
 
-		return buffer.toString('ascii', position).trim()
+		return unescapeQuotedText(buffer.toString('ascii', position)).trim()
 	}
 
 	function parseCard() {
@@ -236,7 +267,8 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 
 		if (key) {
 			if (key === 'SIMPLE' || key === 'XTENSION') {
-				hdus.push({ header: { [key]: value } })
+				const offset = source.position - HEADER_CARD_SIZE
+				hdus.push({ header: { [key]: value }, offset } as unknown as FitsHdu)
 			} else if (key !== 'END') {
 				const { header } = hdus[hdus.length - 1]
 
@@ -253,7 +285,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 				const offset = source.position
 
 				const { header } = hdu
-				const size = width(header) * height(header) * channels(header) * (Math.abs(bitpix(header)) / 8)
+				const size = width(header) * height(header) * numberOfChannels(header) * (Math.abs(bitpix(header)) / 8)
 				source.seek(source.position + size + computeRemainingBytes(size))
 				;(hdu as Mutable<FitsHdu>).data = { source, size, offset }
 			}
@@ -273,7 +305,214 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 	return { hdus }
 }
 
+export async function writeFits(sink: Sink & Partial<Seekable>, hdus: FitsHdu[] | Fits) {
+	let offset = 'position' in sink ? (sink.position ?? 0) : 0
+	const buffer = Buffer.allocUnsafe(BLOCK_SIZE)
+	let bufferPos = 0
+
+	hdus = 'hdus' in hdus ? hdus.hdus : hdus
+
+	function appendText(text: string) {
+		if (text.length) {
+			bufferPos += buffer.write(text, bufferPos, 'ascii')
+		}
+	}
+
+	function padTo(n: number) {
+		for (let i = bufferPos; i < n; i++) {
+			bufferPos += buffer.write(' ', bufferPos, 'ascii')
+		}
+	}
+
+	function availableCharCount() {
+		return (HEADER_CARD_SIZE - (bufferPos % HEADER_CARD_SIZE)) % HEADER_CARD_SIZE
+	}
+
+	async function flushBuffer() {
+		if (bufferPos > 0) {
+			padTo(HEADER_CARD_SIZE)
+			offset += await sink.write(buffer, 0, HEADER_CARD_SIZE)
+			bufferPos = 0
+		}
+	}
+
+	function appendKey(key: string) {
+		appendText(key)
+		padTo(MAX_KEYWORD_LENGTH)
+	}
+
+	function appendQuotedValue(value: string, from: number = 0, hasQuote: boolean = true) {
+		// Always leave room for an extra & character at the end...
+		let available = availableCharCount() - (hasQuote ? 2 : 0)
+
+		// The remaining part of the string fits in the space with the
+		// quoted quotes, then it's easy...
+		if (available >= value.length - from) {
+			const escaped = escapeQuotedText(value.substring(from))
+
+			if (escaped.length <= available) {
+				// Opening quote.
+				if (hasQuote) appendText("'")
+				appendText(escaped)
+				// Earlier versions of the FITS standard required that the closing quote
+				// does not come before byte 20. It's no longer required but older tools
+				// may still expect it, so let's conform. This only affects single
+				// record card, but not continued long strings...
+				padTo(MIN_STRING_END)
+				// Closing quote.
+				if (hasQuote) appendText("'")
+
+				return value.length - from
+			}
+		}
+
+		// Now, we definitely need space for '&' at the end...
+		if (hasQuote) available--
+
+		// Opening quote.
+		if (hasQuote) appendText("'")
+
+		// For counting the characters consumed from the input.
+		let consumed = 0
+		let i = 0
+
+		while (i < available) {
+			const c = value[from + consumed]
+
+			if (c === "'") {
+				// Quoted quotes take up 2 spaces...
+				i++
+
+				if (i + 1 >= available) {
+					// Otherwise leave the value quote unconsumed.
+					break
+				}
+
+				// Only append the quoted quote if there is room for both.
+				appendText("''")
+			} else {
+				// Append a non-quote character.
+				appendText(c)
+			}
+
+			i++
+			consumed++
+		}
+
+		// & and Closing quote.
+		if (hasQuote) appendText("&'")
+
+		return consumed
+	}
+
+	async function appendQuotedValueWithContinue(value: string) {
+		let from = appendQuotedValue(value, 0)
+
+		while (from < value.length) {
+			await flushBuffer()
+			appendText('CONTINUE  ')
+			from += appendQuotedValue(value, from)
+		}
+	}
+
+	async function appendLongStringComment(key: keyof FitsHeader, value: string) {
+		const parts = value.split('\n')
+
+		if (parts[0]) {
+			appendKey(key)
+			appendQuotedValue(parts[0], 0, false)
+
+			for (let i = 1; i < parts.length; i++) {
+				await flushBuffer()
+				appendKey(key)
+				appendQuotedValue(parts[i], 0, false)
+			}
+		}
+	}
+
+	async function appendValue(key: keyof FitsHeader, value: FitsHeaderValue) {
+		// Comment-style card. Nothing to do here...
+		if (value === undefined) return
+
+		// Add assignment sequence "= "
+		appendText('= ')
+
+		// 'null' value, nothing more to append.
+		// if (value === '') return
+
+		if (typeof value === 'string') {
+			await appendQuotedValueWithContinue(value)
+		} else {
+			const text = typeof value === 'number' ? `${value}` : value ? 'T' : 'F'
+			const available = availableCharCount()
+			const n = Math.min(available, text.length)
+
+			if (n >= 1) {
+				appendText(text.substring(0, n))
+			}
+		}
+	}
+
+	async function writeHeader(key: keyof FitsHeader, value: FitsHeaderValue) {
+		if (key === 'COMMENT' || key === 'HISTORY') {
+			if (value) {
+				await appendLongStringComment(key, value as string)
+			}
+		} else {
+			appendKey(key)
+			await appendValue(key, value)
+			// appendComment(comment)
+		}
+
+		await flushBuffer()
+	}
+
+	async function writeData(sink: Sink, data: FitsData) {
+		const { source, offset } = data
+
+		if (Buffer.isBuffer(source)) {
+			await sink.write(source)
+		} else {
+			source.seek(offset)
+			await sourceTransferToSink(source, sink)
+		}
+	}
+
+	async function fillWithRemainingBytes() {
+		const remaining = computeRemainingBytes(offset)
+
+		if (remaining > 0) {
+			buffer.fill(0, 0, remaining)
+			offset += await sink.write(buffer, 0, remaining)
+		}
+	}
+
+	for (const hdu of hdus) {
+		const { header, data } = hdu
+		let end = false
+
+		for (const key in header) {
+			if (key === 'END') end = true
+			await writeHeader(key, header[key])
+		}
+
+		if (!end) await writeHeader('END', undefined)
+
+		await fillWithRemainingBytes()
+		await writeData(sink, data)
+		await fillWithRemainingBytes()
+	}
+}
+
 function computeRemainingBytes(size: number) {
 	const remaining = size % BLOCK_SIZE
 	return remaining === 0 ? 0 : BLOCK_SIZE - remaining
+}
+
+function escapeQuotedText(text: string) {
+	return text.replace("'", "''")
+}
+
+function unescapeQuotedText(text: string) {
+	return text.replace("''", "'")
 }

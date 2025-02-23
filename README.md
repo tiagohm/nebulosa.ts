@@ -91,7 +91,8 @@ TODO
 ### Fits
 
 ```ts
-readFits(source) // Read FITS file
+readFits(source) // Read FITS file from source
+writeFits(sink, fits) // Write FITS file to sink
 ```
 
 ### FK5
@@ -154,6 +155,7 @@ fileHandleSource(handle) // Create a seekable source from FileHandle
 readableStreamSource(stream) // Create a source from ReadableStream
 readUntil(source, buffer, size, offset) // Read n bytes from source
 readLines(source, chunkSize) // Read lines from source
+sourceTransferToSink(source, sink) // Transfer from sink to source
 ```
 
 ### ITRS
