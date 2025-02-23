@@ -291,8 +291,8 @@ export async function* readLines(source: Source, chunkSize: number, options?: Re
 	if (line.byteLength || emptyLines) yield line.toString(encoding)
 }
 
-export async function sourceTransferToSink(source: Source, sink: Sink, bufferSize: number = 1024) {
-	const buffer = Buffer.allocUnsafe(bufferSize)
+export async function sourceTransferToSink(source: Source, sink: Sink, size: number | Buffer = 1024) {
+	const buffer = Buffer.isBuffer(size) ? size : Buffer.allocUnsafe(size)
 
 	while (true) {
 		const n = await source.read(buffer)

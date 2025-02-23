@@ -79,10 +79,10 @@ export function bitpix(header: FitsHeader, defaultValue: Bitpix | 0 = 0): Bitpix
 
 const MAGIC_BYTES = Buffer.from('SIMPLE', 'ascii')
 
-const BLOCK_SIZE = 2880
-const HEADER_CARD_SIZE = 80
-const MAX_KEYWORD_LENGTH = 8
-const MAX_VALUE_LENGTH = 70
+export const FITS_BLOCK_SIZE = 2880
+export const FITS_HEADER_CARD_SIZE = 80
+export const FITS_MAX_KEYWORD_LENGTH = 8
+export const FITS_MAX_VALUE_LENGTH = 70
 const MIN_STRING_END = 19
 
 const WHITESPACE = 32
@@ -94,9 +94,9 @@ const DECIMAL_REGEX = /^[+-]?\d+(\.\d*)?([dDeE][+-]?\d+)?$/
 const INT_REGEX = /^[+-]?\d+$/
 
 export async function readFits(source: Source & Seekable): Promise<Fits | undefined> {
-	const buffer = Buffer.allocUnsafe(HEADER_CARD_SIZE)
+	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE)
 
-	if ((await readUntil(source, buffer)) !== HEADER_CARD_SIZE) {
+	if ((await readUntil(source, buffer)) !== FITS_HEADER_CARD_SIZE) {
 		return undefined
 	}
 
@@ -113,7 +113,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 
 		// The stem is in the first 8 characters or what precedes an '=' character
 		// before that.
-		position = ieq >= 0 && ieq <= MAX_KEYWORD_LENGTH ? ieq : MAX_KEYWORD_LENGTH
+		position = ieq >= 0 && ieq <= FITS_MAX_KEYWORD_LENGTH ? ieq : FITS_MAX_KEYWORD_LENGTH
 		const key = buffer.toString('ascii', 0, position).trim().toUpperCase()
 
 		// If not using HIERARCH, then be very resilient,
@@ -144,6 +144,8 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 		return false
 	}
 
+	let continueKey = ''
+
 	function parseValue(key: string) {
 		// nothing left to parse.
 		if (!(key.length && skipSpaces())) return undefined
@@ -151,7 +153,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 		if (key === 'CONTINUE') {
 			return parseValueBody()
 		} else if (buffer.readUInt8(position) === EQUAL) {
-			if (position > MAX_KEYWORD_LENGTH) {
+			if (position > FITS_MAX_KEYWORD_LENGTH) {
 				// equal sign = after the 9th char -- only supported with hierarch keys...
 				if (!key.startsWith('HIERARCH')) {
 					// It's not a HIERARCH key
@@ -161,7 +163,15 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 
 			position++
 
-			return parseValueBody()
+			const value = parseValueBody()
+
+			if (typeof value === 'string' && value.endsWith('&')) {
+				continueKey = key
+			} else {
+				continueKey = ''
+			}
+
+			return value
 		} else {
 			return undefined
 		}
@@ -226,7 +236,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 			position++
 		}
 
-		return retrieveNoTrailingSpaceText(start, start + (MAX_VALUE_LENGTH - 1), hasDoubleQuotes)
+		return retrieveNoTrailingSpaceText(start, start + (FITS_MAX_VALUE_LENGTH - 1), hasDoubleQuotes)
 	}
 
 	function retrieveNoTrailingSpaceText(start: number, end: number, hasDoubleQuotes: boolean) {
@@ -267,12 +277,15 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 
 		if (key) {
 			if (key === 'SIMPLE' || key === 'XTENSION') {
-				const offset = source.position - HEADER_CARD_SIZE
+				const offset = source.position - FITS_HEADER_CARD_SIZE
 				hdus.push({ header: { [key]: value }, offset } as unknown as FitsHdu)
 			} else if (key !== 'END') {
 				const { header } = hdus[hdus.length - 1]
 
-				if (value === undefined && comment) {
+				if (continueKey && key === 'CONTINUE' && typeof value === 'string') {
+					const currentValue = header[continueKey] as string
+					header[continueKey] = currentValue.substring(0, currentValue.length - 1) + value
+				} else if (value === undefined && comment) {
 					if (key in header) (header[key] as string) += `\n${comment}`
 					else header[key] = comment
 				} else {
@@ -298,7 +311,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 
 	while (true) {
 		const size = await readUntil(source, buffer)
-		if (size !== HEADER_CARD_SIZE) break
+		if (size !== FITS_HEADER_CARD_SIZE) break
 		parseCard()
 	}
 
@@ -307,7 +320,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 
 export async function writeFits(sink: Sink & Partial<Seekable>, hdus: FitsHdu[] | Fits) {
 	let offset = 'position' in sink ? (sink.position ?? 0) : 0
-	const buffer = Buffer.allocUnsafe(BLOCK_SIZE)
+	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE)
 	let bufferPos = 0
 
 	hdus = 'hdus' in hdus ? hdus.hdus : hdus
@@ -325,20 +338,20 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: FitsHdu[] 
 	}
 
 	function availableCharCount() {
-		return (HEADER_CARD_SIZE - (bufferPos % HEADER_CARD_SIZE)) % HEADER_CARD_SIZE
+		return (FITS_HEADER_CARD_SIZE - (bufferPos % FITS_HEADER_CARD_SIZE)) % FITS_HEADER_CARD_SIZE
 	}
 
 	async function flushBuffer() {
 		if (bufferPos > 0) {
-			padTo(HEADER_CARD_SIZE)
-			offset += await sink.write(buffer, 0, HEADER_CARD_SIZE)
+			padTo(FITS_HEADER_CARD_SIZE)
+			offset += await sink.write(buffer, 0, FITS_HEADER_CARD_SIZE)
 			bufferPos = 0
 		}
 	}
 
 	function appendKey(key: string) {
 		appendText(key)
-		padTo(MAX_KEYWORD_LENGTH)
+		padTo(FITS_MAX_KEYWORD_LENGTH)
 	}
 
 	function appendQuotedValue(value: string, from: number = 0, hasQuote: boolean = true) {
@@ -474,7 +487,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: FitsHdu[] 
 			await sink.write(source)
 		} else {
 			source.seek(offset)
-			await sourceTransferToSink(source, sink)
+			await sourceTransferToSink(source, sink, buffer)
 		}
 	}
 
@@ -505,8 +518,8 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: FitsHdu[] 
 }
 
 function computeRemainingBytes(size: number) {
-	const remaining = size % BLOCK_SIZE
-	return remaining === 0 ? 0 : BLOCK_SIZE - remaining
+	const remaining = size % FITS_BLOCK_SIZE
+	return remaining === 0 ? 0 : FITS_BLOCK_SIZE - remaining
 }
 
 function escapeQuotedText(text: string) {

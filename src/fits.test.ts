@@ -1,6 +1,6 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { readFits, writeFits } from './fits'
+import { FITS_BLOCK_SIZE, readFits, writeFits } from './fits'
 import { bufferSink, bufferSource, fileHandleSource } from './io'
 
 test('read', async () => {
@@ -98,4 +98,76 @@ test('write', async () => {
 	expect(fits1!.hdus[0].header).toEqual(fits0!.hdus[0].header)
 	expect(fits1!.hdus[0].data.size).toEqual(fits0!.hdus[0].data.size)
 	expect(fits1!.hdus[0].data.offset).toEqual(fits0!.hdus[0].data.offset)
+})
+
+describe('header', () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE, ' ')
+
+	test('SIMPLE', async () => {
+		buffer.write('SIMPLE  = T', 0)
+		buffer.write('END', 80)
+
+		const fits = await readFits(bufferSource(buffer))
+		const { header } = fits!.hdus[0]
+
+		expect(header.SIMPLE).toBeTrue()
+	})
+
+	test('NAXIS', async () => {
+		buffer.write('SIMPLE  = T', 0)
+		buffer.write('NAXIS   = 3', 80)
+		buffer.write('END', 160)
+
+		const fits = await readFits(bufferSource(buffer))
+		const { header } = fits!.hdus[0]
+
+		expect(header.NAXIS).toBe(3)
+	})
+
+	test('INSTRUME', async () => {
+		buffer.write('SIMPLE  = T', 0)
+		buffer.write("INSTRUME= 'ASI Camera (1)'", 80)
+		buffer.write('END', 160)
+
+		const fits = await readFits(bufferSource(buffer))
+		const { header } = fits!.hdus[0]
+
+		expect(header.INSTRUME).toBe('ASI Camera (1)')
+	})
+
+	test('DEC', async () => {
+		buffer.write('SIMPLE  = T', 0)
+		buffer.write('DEC     =       -59.6022705034 / Declination of the center of the image (deg)', 80)
+		buffer.write('END', 160)
+
+		const fits = await readFits(bufferSource(buffer))
+		const { header } = fits!.hdus[0]
+
+		expect(header.DEC).toBe(-59.6022705034)
+	})
+
+	test('COMMENT', async () => {
+		buffer.write('SIMPLE  = T', 0)
+		buffer.write("COMMENT   FITS (Flexible Image Transport System) format is defined in 'Astronomy", 80)
+		buffer.write("COMMENT   and Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H ", 160)
+		buffer.write('END', 240)
+
+		const fits = await readFits(bufferSource(buffer))
+		const { header } = fits!.hdus[0]
+
+		expect(header.COMMENT).toBe("FITS (Flexible Image Transport System) format is defined in 'Astronomy\nand Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H")
+	})
+
+	test('CONTINUE', async () => {
+		buffer.write('SIMPLE  = T', 0)
+		buffer.write("SVALUE  = 'This is a long string value &'", 80)
+		buffer.write("CONTINUE  'extending&     '", 160)
+		buffer.write("CONTINUE  ' over 3 lines. '", 240)
+		buffer.write('END', 320)
+
+		const fits = await readFits(bufferSource(buffer))
+		const { header } = fits!.hdus[0]
+
+		expect(header.SVALUE).toBe('This is a long string value extending over 3 lines.')
+	})
 })
