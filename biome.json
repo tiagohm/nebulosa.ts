@@ -1,9 +1,8 @@
 {
-	"$schema": "https://biomejs.dev/schemas/latest/schema.json",
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
 	"formatter": {
 		"enabled": true,
 		"formatWithErrors": false,
-		"ignore": ["**/*.data.ts"],
 		"attributePosition": "auto",
 		"indentStyle": "tab",
 		"indentWidth": 4,

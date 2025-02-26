@@ -870,3 +870,10 @@ test('eraAtioq', () => {
 	expect(dob).toBeCloseTo(0.1717653435756234676, 12)
 	expect(rob).toBeCloseTo(2.710085107988480746, 12)
 })
+
+test('eraBi00', () => {
+	const [dpsibi, depsbi, dra] = erfa.eraBi00()
+	expect(dpsibi).toBeCloseTo(-0.2025309152835086613e-6, 12)
+	expect(depsbi).toBeCloseTo(-0.3306041454222147847e-7, 12)
+	expect(dra).toBeCloseTo(-0.7078279744199225506e-7, 12)
+})

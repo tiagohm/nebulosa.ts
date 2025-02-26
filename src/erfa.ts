@@ -1,10 +1,7 @@
 import { ASEC2RAD, type Angle, MILLIASEC2RAD, TURNAS, arcsec, deg, normalizeAngle } from './angle'
 import { AU_M, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI } from './constants'
 import { type Distance, toKilometer } from './distance'
-import { FAIRHEAD } from './fairhead'
-import { IAU2000A_LS, IAU2000A_PL } from './iau2000a'
-import { IAU2000B_LS } from './iau2000b'
-import { IAU2006_S, IAU2006_SP } from './iau2006'
+import { FAIRHEAD, IAU2000A_LS, IAU2000A_PL, IAU2000B_LS, IAU2006_S, IAU2006_SP } from './erfa.data'
 import { pmod, roundToNearestWholeNumber } from './math'
 import { type Mat3, type MutMat3, cloneMat, copyMat, identity, mulMat, mulMatVec, mulTransposeMatVec, rotX, rotY, rotZ, transpose } from './matrix'
 import type { Pressure } from './pressure'
@@ -1871,4 +1868,12 @@ export function eraAtioq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	const rob = pmod(raobs, TAU)
 
 	return [aob, zob, hob, dob, rob] as const
+}
+
+// Frame bias components of IAU 2000 precession-nutation models;  part
+// of the Mathews-Herring-Buffett (MHB2000) nutation series, with
+// additions. Returns longitude and obliquity corrections,
+// and the ICRS RA of the J2000.0 mean equinox.
+export function eraBi00() {
+	return [-0.041775 * ASEC2RAD, -0.0068192 * ASEC2RAD, -0.0146 * ASEC2RAD] as const
 }
