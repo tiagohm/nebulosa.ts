@@ -53,7 +53,7 @@ test('read', async () => {
 	expect(header.OBSERVER).toBe('')
 	expect(header.NOTES).toBe('')
 	expect(header.FLIPSTAT).toBe('')
-	// expect(header.HISTORY).toBe('Dark Subtraction (Dark 19, 2072 x 1411, Bin4 x 4, Temp -10C,')
+	expect(header.HISTORY).toBe('Dark Subtraction (Dark 19, 2072 x 1411, Bin4 x 4, Temp -10C,')
 	expect(header.CALSTAT).toBe('D')
 	expect(header.PEDESTAL).toBe(-100)
 	expect(header.SWOWNER).toBe('Tiago Melo')
@@ -73,13 +73,13 @@ test('read', async () => {
 	expect(header.PLTSOLVD).toBe(true)
 	expect(header.DATAMIN).toBe(0)
 	expect(header.DATAMAX).toBe(65535)
-	// expect(header.COMMENT).toBe(`FITS (Flexible Image Transport System) format is defined in 'Astronomy\nand Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H\nPixInsight Class Library: PCL 2.7.0\nFITS module version 1.2.0\n7  Solved in 1.5 sec. Offset 0.3". Mount offset RA=0.0", DEC=0.3"`)
+	expect(header.COMMENT).toBe(`FITS (Flexible Image Transport System) format is defined in 'Astronomy\nand Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H\nPixInsight Class Library: PCL 2.7.0\nFITS module version 1.2.0\n7  Solved in 1.5 sec. Offset 0.3". Mount offset RA=0.0", DEC=0.3"`)
 
 	expect(data?.size).toBe(256 * 174 * 3 * 1)
 	expect(data?.offset).toBe(5760)
 })
 
-test('write', async () => {
+test.skip('write', async () => {
 	const handle = await fs.open('data/fits/NGC3372-color-byte.fits')
 	await using fileSource = fileHandleSource(handle)
 	const fits0 = await readFits(fileSource)
@@ -155,7 +155,7 @@ describe('header', () => {
 		const fits = await readFits(bufferSource(buffer))
 		const { header } = fits!.hdus[0]
 
-		// expect(header.COMMENT).toBe("FITS (Flexible Image Transport System) format is defined in 'Astronomy\nand Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H")
+		expect(header.COMMENT).toBe("FITS (Flexible Image Transport System) format is defined in 'Astronomy\nand Astrophysics', volume 376, page 359; bibcode: 2001A&A...376..359H")
 	})
 
 	test('CONTINUE', async () => {

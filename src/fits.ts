@@ -89,7 +89,7 @@ export const FITS_MAX_KEYWORD_LENGTH = 8
 export const FITS_MAX_VALUE_LENGTH = 70
 const MIN_STRING_END = 19
 
-const COMMENT_KEYWORDS = ['COMMENT', 'HISTORY']
+const NO_VALUE_KEYWORDS = ['COMMENT', 'HISTORY']
 
 export async function readFits(source: Source & Seekable): Promise<Fits | undefined> {
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE)
@@ -120,9 +120,9 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 				if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
 					prev[1] = prev[1].substring(0, prev[1].length - 1) + value
 					header[prev[0]] = prev[1]
-				} else if (COMMENT_KEYWORDS.includes(key)) {
-					if (header[key] === undefined) header[key] = value
-					else header[key] += `\n${value}`
+				} else if (NO_VALUE_KEYWORDS.includes(key)) {
+					if (header[key] === undefined) header[key] = comment
+					else header[key] += `\n${comment}`
 					prev = undefined
 				} else {
 					header[key] = value
@@ -442,6 +442,8 @@ export class FitsKeywordReader {
 
 	private parseStringValue(line: Buffer) {
 		let size = 0
+		let escaped = false
+
 		const start = ++this.position
 
 		// Build the string value, up to the end quote and paying attention to double
@@ -453,18 +455,21 @@ export class FitsKeywordReader {
 
 				if (!this.isNextQuote(line)) {
 					// Closing single quote
-					return this.noTrailingSpaceString(line, start, start + size)
+					break
+				} else {
+					escaped = true
 				}
 			}
 
 			size++
 		}
 
-		return this.noTrailingSpaceString(line, start, start + size)
+		return this.noTrailingSpaceString(line, start, start + size, escaped)
 	}
 
-	private noTrailingSpaceString(line: Buffer, start: number, end: number) {
-		return line.toString('ascii', start, end).trimEnd()
+	private noTrailingSpaceString(line: Buffer, start: number, end: number, escaped: boolean) {
+		const text = line.toString('ascii', start, end).trimEnd()
+		return escaped ? unescapeQuotedText(text) : text
 	}
 
 	private parseComment(line: Buffer, value?: string) {
@@ -511,3 +516,134 @@ export class FitsKeywordReader {
 		return this.position < line.byteLength && line.readInt8(this.position) === SINGLE_QUOTE
 	}
 }
+
+// https://fits.gsfc.nasa.gov/fits_dictionary.html
+
+export type FitsKeywords = FitsStandardKeywords | FitsCommonlyUsedKeywords
+
+// https://heasarc.gsfc.nasa.gov/docs/fcg/standard_dict.html
+
+export type FitsStandardKeywords =
+	| 'AUTHOR' // author of the data
+	| 'BITPIX' // bits per data value
+	| 'BLANK' // value used for undefined array elements
+	| 'BLOCKED' // is physical blocksize a multiple of 2880?
+	| 'BSCALE' // linear factor in scaling equation
+	| 'BUNIT' // physical units of the array values
+	| 'BZERO' // zero point in scaling equation
+	| `CDELT${number}` // coordinate increment along axis
+	| 'MMENT' // descriptive comment
+	| `CROTA${number}` // coordinate system rotation angle
+	| `CRPIX${number}` // coordinate system reference pixel
+	| `CRVAL${number}` // coordinate system value at reference pixel
+	| `CTYPE${number}` // name of the coordinate axis
+	| 'DATAMAX' // maximum data value
+	| 'DATAMIN' // minimum data value
+	| 'DATE' // date of file creation
+	| 'DATE-OBS' // date of the observation
+	| 'END' // marks the end of the header keywords
+	| 'EPOCH' // equinox of celestial coordinate system
+	| 'EQUINOX' // equinox of celestial coordinate system
+	| 'EXTEND' // may the FITS file contain extensions?
+	| 'EXTLEVEL' // hierarchical level of the extension
+	| 'EXTNAME' // name of the extension
+	| 'EXTVER' // version of the extension
+	| 'GCOUNT' // group count
+	| 'GROUPS' // indicates random groups structure
+	| 'HISTORY' // processing history of the data
+	| 'INSTRUME' // name of instrument
+	| 'NAXIS' // number of axes
+	| `NAXIS${number}` // size of the axis
+	| 'OBJECT' // name of observed object
+	| 'OBSERVER' // observer who acquired the data
+	| 'ORIGIN' // organization responsible for the data
+	| 'PCOUNT' // parameter count
+	| `PSCAL${number}` // parameter scaling factor
+	| `PTYPE${number}` // name of random groups parameter
+	| `PZERO${number}` // parameter scaling zero point
+	| 'REFERENC' // bibliographic reference
+	| 'SIMPLE' // does file conform to the Standard?
+	| `TBCOL${number}` // begining column number
+	| `TDIM${number}` // dimensionality of the array
+	| `TDISP${number}` // display format
+	| 'TELESCOP' // name of telescope
+	| 'TFIELDS' // number of columns in the table
+	| `TFORM${number}` // column data format
+	| 'THEAP' // offset to starting data heap address
+	| `TNULL${number}` // value used to indicate undefined table element
+	| `TSCAL${number}` // linear data scaling factor
+	| `TTYPE${number}` // column name
+	| `TUNIT${number}` // column units
+	| `TZERO${number}` // column scaling zero point
+	| 'XTENSION' // marks beginning of new HDU
+
+// https://heasarc.gsfc.nasa.gov/docs/fcg/common_dict.html
+
+export type FitsCommonlyUsedKeywords =
+	| 'AIRMASS' // air mass
+	| 'APERTURE' // name of field of view aperture
+	| 'CHECKSUM' // checksum for the current HDU
+	| 'CHECKVER' // version of checksum algorithm
+	| 'CONFIGUR' // software configuration used to process the data
+	| 'CONTINUE' // denotes the CONTINUE long string keyword convention
+	| 'CREATOR' // the name of the software task that created the file
+	| 'DATAMODE' // pre-processor data mode
+	| 'DATASUM' // checksum of the data records
+	| 'DATE-END' // date of the end of observation
+	| 'DEC' // declination of the observed object
+	| 'DEC_NOM' // nominal declination of the observation
+	| 'DEC_OBJ' // declination of the observed object
+	| 'DEC_PNT' // declination of the pointed direction of the instrument
+	| 'DEC_SCX' // declination of the X spacecraft axis
+	| 'DEC_SCY' // declination of the Y spacecraft axis
+	| 'DEC_SCZ' // declination of the Z spacecraft axis
+	| 'DETNAM' // name of the detector used to make the observation
+	| 'ELAPTIME' // elapsed time of the observation
+	| 'EXPOSURE' // exposure time
+	| 'EXPTIME' // exposure time
+	| 'FILENAME' // name of the file
+	| 'FILETYPE' // type of file
+	| 'FILTER' // name of filter used during the observation
+	| `FILTER${number}` // name of filters used during the observation
+	| 'GRATING' // name of the grating used during the observation.
+	| `GRATING${number}` // name of gratings used during the observation.
+	| 'HDUCLASS' // general identifier for the classification of the data
+	| `HDUCLAS${number}` // hierarchical classification of the data
+	| 'HDUDOC' // reference to document describing the data format
+	| 'HDULEVEL' // hierarchical level of the HDU
+	| 'HDUNAME ' // descriptive name of the HDU
+	| 'HDUVER' // version number of the HDU
+	| 'HDUVERS' // specific version of the document referenced by HDUDOC
+	| 'HIERARCH' // denotes the HIERARCH keyword convention
+	| 'INHERIT' // denotes the INHERIT keyword convention
+	| 'LATITUDE' // geographic latitude of the observation
+	| 'LIVETIME' // exposure time after deadtime correction
+	| 'MOONANGL' // angle between the observation and the moon
+	| 'NEXTEND' // Number of standard extensions
+	| 'OBJNAME' // IAU name of observed object
+	| 'OBS_ID' // unique observation ID
+	| 'OBS_MODE' // instrumental mode of the observation
+	| 'ONTIME' // integration time during the observation
+	| 'ORIENTAT' //  position angle of image y axis (deg. E of N)
+	| 'PA_PNT' // position angle of the pointing
+	| 'PROGRAM' // the name of the software task that created the file
+	| 'RA' // R.A. of the observation
+	| 'RA_NOM' // nominal R.A. of the observation
+	| 'RA_OBJ' // R.A. of the observed object
+	| 'RA_PNT' // R.A. of the pointed direction of the instrument
+	| 'RA_SCX' // R.A. of the X spacecraft axis
+	| 'RA_SCY' // R.A. of the Y spacecraft axis
+	| 'RA_SCZ' // R.A. of the Z spacecraft axis
+	| 'ROOTNAME' // rootname of the file
+	| 'SATURATE' //  Data value at which saturation occurs
+	| 'SUNANGLE' // angle between the observation and the sun
+	| `TDBIN${number}` // default histogram bin size for the column
+	| `TDMAX${number}` // maximum physical value in the column
+	| `TDMIN${number}` // minimum physical value in the column
+	| 'TELAPSE' // elapsed time of the observation
+	| 'TIME-END' // time at the end of the observation
+	| 'TIME-OBS' // time at the start of the observation
+	| 'TITLE' // title for the observation or data
+	| `TLMAX${number}` // maximum legal value in the column
+	| `TLMIN${number}` // minimum legal value in the column
+	| 'TSORTKEY' // defines the sort order of a table
