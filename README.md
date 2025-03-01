@@ -60,7 +60,7 @@ altaz(icrs, time, [ebp, ebv], ehp, { pressure, temperature, relativeHumidity, wl
 ### Csv
 
 ```ts
-const { header, data } = readCsv(lines, options) // Read CSV file
+const [header, ...data] = readCsv(lines, options) // Read CSV file
 ```
 
 ### Daf
@@ -253,7 +253,7 @@ closeApproaches(dateMin, dateMax, distance)
 ### Simbad
 
 ```ts
-const { header, data } = simbadQuery(query) // Search on Simbad TAP service
+const [header, ...data] = simbadQuery(query) // Search on Simbad TAP service
 ```
 
 ### Spk
@@ -372,7 +372,7 @@ toMeterPerSecond(1) // Convert AU/d to m/s
 ### Vizier
 
 ```ts
-const { header, data } = vizierQuery(query) // Search on Vizier TAP service
+const [header, ...data] = vizierQuery(query) // Search on Vizier TAP service
 ```
 
 ### VSOP87E

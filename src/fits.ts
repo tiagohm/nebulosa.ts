@@ -1,8 +1,12 @@
 import type { Mutable } from 'utility-types'
 import { type Seekable, type Sink, type Source, readUntil, sourceTransferToSink } from './io'
 
+export const FITS_IMAGE_MIME_TYPE = 'image/fits'
+export const FITS_APPLICATION_MIME_TYPE = 'application/fits'
+
 export type FitsHeaderKey = string
 export type FitsHeaderValue = string | number | boolean | undefined
+export type FitsHeaderCard = [string, FitsHeaderValue, string?]
 export type FitsHeader = Record<FitsHeaderKey, FitsHeaderValue>
 
 export interface FitsData {
@@ -85,16 +89,11 @@ export const FITS_MAX_KEYWORD_LENGTH = 8
 export const FITS_MAX_VALUE_LENGTH = 70
 const MIN_STRING_END = 19
 
-const WHITESPACE = 32
-const SINGLE_QUOTE = 39
-const SLASH = 47
-const EQUAL = 61
-
-const DECIMAL_REGEX = /^[+-]?\d+(\.\d*)?([dDeE][+-]?\d+)?$/
-const INT_REGEX = /^[+-]?\d+$/
+const COMMENT_KEYWORDS = ['COMMENT', 'HISTORY']
 
 export async function readFits(source: Source & Seekable): Promise<Fits | undefined> {
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE)
+	const reader = new FitsKeywordReader()
 
 	if ((await readUntil(source, buffer)) !== FITS_HEADER_CARD_SIZE) {
 		return undefined
@@ -105,191 +104,29 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 	}
 
 	const hdus: FitsHdu[] = []
-	let position = 0
-
-	function parseKey() {
-		// Find the '=' in the line, if any...
-		const ieq = buffer.indexOf(EQUAL)
-
-		// The stem is in the first 8 characters or what precedes an '=' character
-		// before that.
-		position = ieq >= 0 && ieq <= FITS_MAX_KEYWORD_LENGTH ? ieq : FITS_MAX_KEYWORD_LENGTH
-		const key = buffer.toString('ascii', 0, position).trim().toUpperCase()
-
-		// If not using HIERARCH, then be very resilient,
-		// and return whatever key the first 8 chars make...
-
-		// If the line does not have an '=', can only be a simple key
-		// If it's not a HIERARCH keyword, then return the simple key.
-		if (ieq < 0 || key !== 'HIERARCH') {
-			return key
-		}
-
-		// TODO: Handle HIERARCH keyword
-		return key
-	}
-
-	function skipSpaces() {
-		while (position < buffer.byteLength) {
-			const c = buffer.readUInt8(position)
-
-			if (c !== WHITESPACE) {
-				// Line has non-space characters left to parse...
-				return true
-			}
-
-			position++
-		}
-
-		return false
-	}
-
-	let continueKey = ''
-
-	function parseValue(key: string) {
-		// nothing left to parse.
-		if (!(key.length && skipSpaces())) return undefined
-
-		if (key === 'CONTINUE') {
-			return parseValueBody()
-		} else if (buffer.readUInt8(position) === EQUAL) {
-			if (position > FITS_MAX_KEYWORD_LENGTH) {
-				// equal sign = after the 9th char -- only supported with hierarch keys...
-				if (!key.startsWith('HIERARCH')) {
-					// It's not a HIERARCH key
-					return undefined
-				}
-			}
-
-			position++
-
-			const value = parseValueBody()
-
-			if (typeof value === 'string' && value.endsWith('&')) {
-				continueKey = key
-			} else {
-				continueKey = ''
-			}
-
-			return value
-		} else {
-			return undefined
-		}
-	}
-
-	function isNextQuote() {
-		if (position >= buffer.byteLength) return false
-		else return buffer.readUInt8(position) === SINGLE_QUOTE
-	}
-
-	function parseValueType(value: string) {
-		if (!value) return undefined
-		else if (value === 'T') return true
-		else if (value === 'F') return false
-		// else if (value.startsWith("'") && value.endsWith("'")) return value.substring(1, value.length - 1).trim()
-		else if (DECIMAL_REGEX.test(value)) return parseFloat(value.toUpperCase().replace('D', 'E'))
-		else if (INT_REGEX.test(value)) return parseInt(value)
-		else return value
-	}
-
-	function parseValueBody() {
-		// nothing left to parse.
-		if (!skipSpaces()) return undefined
-
-		if (isNextQuote()) {
-			// Parse as a string value, or else throw an exception.
-			return parseStringValue()
-		} else {
-			let end = buffer.indexOf(SLASH, position)
-
-			if (end < 0) {
-				end = buffer.byteLength
-			}
-
-			const value = buffer.toString('ascii', position, end).trim()
-			position = end
-			return parseValueType(value)
-		}
-	}
-
-	function parseStringValue() {
-		// Build the string value, up to the end quote and paying attention to double
-		// quotes inside the string, which are translated to single quotes within
-		// the string value itself.
-		position++
-
-		const start = position
-		let hasDoubleQuotes = false
-
-		while (position < buffer.byteLength) {
-			if (isNextQuote()) {
-				position++
-
-				if (!isNextQuote()) {
-					// Closing single quote
-					return retrieveNoTrailingSpaceText(start, position - 1, hasDoubleQuotes)
-				} else {
-					hasDoubleQuotes = true
-				}
-			}
-
-			position++
-		}
-
-		return retrieveNoTrailingSpaceText(start, start + (FITS_MAX_VALUE_LENGTH - 1), hasDoubleQuotes)
-	}
-
-	function retrieveNoTrailingSpaceText(start: number, end: number, hasDoubleQuotes: boolean) {
-		// Remove trailing spaces only!
-		while (end-- >= start) {
-			if (buffer.readUint8(end) !== WHITESPACE) {
-				break
-			}
-		}
-
-		if (end < 0) return ''
-
-		const text = buffer.toString('ascii', start, end + 1)
-		return hasDoubleQuotes ? unescapeQuotedText(text) : text
-	}
-
-	function parseComment(value: boolean) {
-		// nothing left to parse.
-		if (!skipSpaces()) return undefined
-
-		// if no value, then everything is comment from here on...
-		if (value) {
-			if (buffer.readUInt8(position) === SLASH) {
-				// Skip the '/' itself, the comment is whatever is after it.
-				position++
-			}
-		}
-
-		return unescapeQuotedText(buffer.toString('ascii', position)).trim()
-	}
+	let prev: FitsHeaderCard | undefined
 
 	function parseCard() {
-		position = 0
-
-		const key = parseKey()
-		const value = parseValue(key)
-		const comment = parseComment(!!value)
+		const card = reader.read(buffer)
+		const [key, value, comment] = card
 
 		if (key) {
 			if (key === 'SIMPLE' || key === 'XTENSION') {
 				const offset = source.position - FITS_HEADER_CARD_SIZE
-				hdus.push({ header: { [key]: value }, offset } as unknown as FitsHdu)
+				hdus.push({ header: { [key]: value }, offset } as never)
 			} else if (key !== 'END') {
 				const { header } = hdus[hdus.length - 1]
 
-				if (continueKey && key === 'CONTINUE' && typeof value === 'string') {
-					const currentValue = header[continueKey] as string
-					header[continueKey] = currentValue.substring(0, currentValue.length - 1) + value
-				} else if (value === undefined && comment) {
-					if (key in header) (header[key] as string) += `\n${comment}`
-					else header[key] = comment
+				if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
+					prev[1] = prev[1].substring(0, prev[1].length - 1) + value
+					header[prev[0]] = prev[1]
+				} else if (COMMENT_KEYWORDS.includes(key)) {
+					if (header[key] === undefined) header[key] = value
+					else header[key] += `\n${value}`
+					prev = undefined
 				} else {
 					header[key] = value
+					prev = card
 				}
 			} else {
 				const hdu = hdus[hdus.length - 1]
@@ -528,4 +365,149 @@ function escapeQuotedText(text: string) {
 
 function unescapeQuotedText(text: string) {
 	return text.replace("''", "'")
+}
+
+const WHITESPACE = 32
+const SINGLE_QUOTE = 39
+const SLASH = 47
+const EQUAL = 61
+
+const DECIMAL_REGEX = /^[+-]?\d+(\.\d*)?([dDeE][+-]?\d+)?$/
+const INT_REGEX = /^[+-]?\d+$/
+
+// https://fits.gsfc.nasa.gov/fits_dictionary.html
+// Registered Conventions: https://fits.gsfc.nasa.gov/registry/ https://fits.gsfc.nasa.gov/fits_registry.html
+// https://github.com/nom-tam-fits/nom-tam-fits/blob/master/src/main/java/nom/tam/fits/HeaderCardParser.java
+
+export class FitsKeywordReader {
+	private position = 0
+
+	read(line: Buffer): FitsHeaderCard {
+		this.position = 0
+		const key = this.parseKey(line)
+		const [value, quoted] = this.parseValue(line, key)
+		const comment = this.parseComment(line, value)
+		return [key, this.parseValueType(value, quoted), comment?.trim()]
+	}
+
+	private parseKey(line: Buffer) {
+		// Find the '=' in the line, if any...
+		const iEq = line.indexOf(EQUAL, this.position)
+
+		// The stem is in the first 8 characters or what precedes an '=' character before that.
+		const endStem = Math.min(iEq >= 0 && iEq <= FITS_MAX_KEYWORD_LENGTH ? iEq : FITS_MAX_KEYWORD_LENGTH, line.byteLength)
+		const stem = line.toString('ascii', this.position, endStem)
+
+		// If not using HIERARCH, then be very resilient, and return whatever key the first 8 chars make...
+		const key = stem.trim().toUpperCase()
+		this.position = endStem
+		return key
+	}
+
+	private parseValue(line: Buffer, key: string): readonly [string | undefined, boolean] {
+		if (!(key.length && this.skipSpaces(line))) {
+			// nothing left to parse.
+			return [undefined, false]
+		}
+
+		if (key === 'CONTINUE') {
+			return this.parseValueBody(line)
+		} else if (line.readInt8(this.position) === EQUAL) {
+			this.position++
+			return this.parseValueBody(line)
+		} else {
+			return [undefined, false]
+		}
+	}
+
+	private parseValueBody(line: Buffer): readonly [string | undefined, boolean] {
+		if (!this.skipSpaces(line)) {
+			// Nothing left to parse.
+			return [undefined, false]
+		}
+
+		if (this.isNextQuote(line)) {
+			// Parse as a string value.
+			return [this.parseStringValue(line), true]
+		} else {
+			let end = line.indexOf(SLASH, this.position)
+
+			if (end < 0) end = line.byteLength
+
+			const value = line.toString('ascii', this.position, end).trim()
+			this.position = end
+			return [value, false]
+		}
+	}
+
+	private parseStringValue(line: Buffer) {
+		let size = 0
+		const start = ++this.position
+
+		// Build the string value, up to the end quote and paying attention to double
+		// quotes inside the string, which are translated to single quotes within
+		// the string value itself.
+		for (; this.position < line.byteLength; this.position++) {
+			if (this.isNextQuote(line)) {
+				this.position++
+
+				if (!this.isNextQuote(line)) {
+					// Closing single quote
+					return this.noTrailingSpaceString(line, start, start + size)
+				}
+			}
+
+			size++
+		}
+
+		return this.noTrailingSpaceString(line, start, start + size)
+	}
+
+	private noTrailingSpaceString(line: Buffer, start: number, end: number) {
+		return line.toString('ascii', start, end).trimEnd()
+	}
+
+	private parseComment(line: Buffer, value?: string) {
+		if (!this.skipSpaces(line)) {
+			// Nothing left to parse.
+			return
+		}
+
+		// If no value, then everything is comment from here on...
+		if (value) {
+			if (line.readInt8(this.position) === SLASH) {
+				// Skip the '/' itself, the comment is whatever is after it.
+				this.position++
+			}
+		}
+
+		return line.toString('ascii', this.position)
+	}
+
+	private parseValueType(value: string | undefined, quoted: boolean) {
+		if (quoted) return value
+		else if (!value) return undefined
+		else if (value === 'T') return true
+		else if (value === 'F') return false
+		// else if (value.startsWith("'") && value.endsWith("'")) return value.substring(1, value.length - 1).trim()
+		else if (DECIMAL_REGEX.test(value)) return parseFloat(value.toUpperCase().replace('D', 'E'))
+		else if (INT_REGEX.test(value)) return parseInt(value)
+		else return value
+	}
+
+	private skipSpaces(line: Buffer) {
+		for (; this.position < line.byteLength; this.position++) {
+			if (line.readInt8(this.position) !== WHITESPACE) {
+				// Line has non-space characters left to parse...
+				return true
+			}
+		}
+
+		// Nothing left to parse.
+		return false
+	}
+
+	private isNextQuote(line: Buffer) {
+		return this.position < line.byteLength && line.readInt8(this.position) === SINGLE_QUOTE
+	}
 }
