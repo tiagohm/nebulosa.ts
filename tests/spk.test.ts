@@ -89,4 +89,4 @@ test('65803 Didymos', async () => {
 	expect(v[0]).toBeCloseTo(-1.739801961691489e-2, 16)
 	expect(v[1]).toBeCloseTo(5.41929776178759e-3, 16)
 	expect(v[2]).toBeCloseTo(3.552869344161516e-3, 16)
-}, 1000000)
+})
