@@ -1,5 +1,5 @@
 import { type Angle, toDeg } from './angle'
-import type { CsvTable } from './csv'
+import { readCsv } from './csv'
 import { type DateTime, formatDate } from './datetime'
 import { type Distance, toKilometer } from './distance'
 
@@ -160,27 +160,24 @@ export async function spkFile(id: number, startTime: DateTime, endTime: DateTime
 	return (await response.json()) as SpkFile
 }
 
-function parseTable(text: string): CsvTable | undefined {
+const START_TABLE_PREFIX = '$$SOE'
+const END_TABLE_PREFIX = '$$EOE'
+
+function parseTable(text: string) {
 	const lines = text.split('\n')
-	const startIdx = lines.findIndex((e) => e.startsWith('$$SOE')) + 1
-	const endIdx = lines.findLastIndex((e) => e.startsWith('$$EOE')) - 1
+	const start = lines.findIndex((e) => e.startsWith(START_TABLE_PREFIX))
 
-	if (startIdx > 3 && endIdx > startIdx) {
-		const headers = lines[startIdx - 3].split(',').map((e) => e.trim())
-		const indexes = headers.map((_, i) => i).filter((e) => !!headers[e].length)
-		const data = new Array<string[]>(endIdx - startIdx + 1)
+	if (start >= 3) lines.splice(0, start - 2)
+	else return []
 
-		for (let i = startIdx, k = 0; i <= endIdx; i++, k++) {
-			const parts = lines[i].split(',')
-			const item = new Array<string>(indexes.length)
-			indexes.forEach((e, m) => (item[m] = parts[e].trim()))
-			data[k] = item
-		}
+	const end = lines.findLastIndex((e) => e.startsWith(END_TABLE_PREFIX))
 
-		return { header: indexes.map((e) => headers[e]), data }
-	}
+	if (end > 0) lines.splice(end, lines.length - end)
+	else return []
 
-	return undefined
+	lines.splice(1, 2)
+
+	return readCsv(lines)
 }
 
 function formatTime(date: DateTime) {

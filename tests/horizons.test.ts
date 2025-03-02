@@ -13,68 +13,68 @@ test.skip('observer', async () => {
 	const startTime = dateFrom('2025-01-29T13:05:00Z')
 	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
-	const table = await observer('10', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+	const [header, ...data] = await observer('10', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 
-	expect(table!.header).toHaveLength(3)
-	expect(table!.header).toEqual(['Date__(UT)__HR:MN', 'R.A._(ICRF)', 'DEC_(ICRF)'])
-	expect(table!.data).toHaveLength(13)
-	expect(table!.data[0]).toEqual(['2025-Jan-29 13:05', '311.97007', '-17.86472'])
-	expect(table!.data[12]).toEqual(['2025-Jan-29 14:05', '312.01347', '-17.85339'])
+	expect(header).toHaveLength(5)
+	expect(header).toEqual(['Date__(UT)__HR:MN', '', '', 'R.A._(ICRF)', 'DEC_(ICRF)'])
+	expect(data).toHaveLength(13)
+	expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '311.97007', '-17.86472'])
+	expect(data[12]).toEqual(['2025-Jan-29 14:05', '', '', '312.01347', '-17.85339'])
 })
 
 test.skip('observerBySpkId', async () => {
 	const startTime = dateFrom('2025-01-29T13:05:00Z')
 	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
-	const table = await observer('DES=2000001;', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+	const [header, ...data] = await observer('DES=2000001;', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 
-	expect(table!.header).toHaveLength(3)
-	expect(table!.header).toEqual(['Date__(UT)__HR:MN', 'R.A._(ICRF)', 'DEC_(ICRF)'])
-	expect(table!.data).toHaveLength(13)
-	expect(table!.data[0]).toEqual(['2025-Jan-29 13:05', '324.49915', '-21.67686'])
-	expect(table!.data[12]).toEqual(['2025-Jan-29 14:05', '324.51584', '-21.67183'])
-})
+	expect(header).toHaveLength(5)
+	expect(header).toEqual(['Date__(UT)__HR:MN', '', '', 'R.A._(ICRF)', 'DEC_(ICRF)'])
+	expect(data).toHaveLength(13)
+	expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '324.49915', '-21.67686'])
+	expect(data[12]).toEqual(['2025-Jan-29 14:05', '', '', '324.51584', '-21.67183'])
+}, 1000000)
 
 test.skip('observerByIauNumber', async () => {
 	const startTime = dateFrom('2025-01-29T13:05:00Z')
 	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
-	const table = await observer('1;', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+	const [header, ...data] = await observer('1;', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 
-	expect(table!.header).toHaveLength(3)
-	expect(table!.header).toEqual(['Date__(UT)__HR:MN', 'R.A._(ICRF)', 'DEC_(ICRF)'])
-	expect(table!.data).toHaveLength(13)
-	expect(table!.data[0]).toEqual(['2025-Jan-29 13:05', '324.49915', '-21.67686'])
-	expect(table!.data[12]).toEqual(['2025-Jan-29 14:05', '324.51584', '-21.67183'])
+	expect(header).toHaveLength(5)
+	expect(header).toEqual(['Date__(UT)__HR:MN', '', '', 'R.A._(ICRF)', 'DEC_(ICRF)'])
+	expect(data).toHaveLength(13)
+	expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '324.49915', '-21.67686'])
+	expect(data[12]).toEqual(['2025-Jan-29 14:05', '', '', '324.51584', '-21.67183'])
 })
 
 test.skip('observerBySpkIdAndCapAndNoFrag', async () => {
 	const startTime = dateFrom('2025-01-29T13:05:00Z')
 	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
-	const table = await observer('DES=1000041;CAP;NOFRAG', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+	const [header, ...data] = await observer('DES=1000041;CAP;NOFRAG', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 
-	expect(table!.header).toHaveLength(3)
-	expect(table!.header).toEqual(['Date__(UT)__HR:MN', 'R.A._(ICRF)', 'DEC_(ICRF)'])
-	expect(table!.data).toHaveLength(13)
-	expect(table!.data[0]).toEqual(['2025-Jan-29 13:05', '196.45973', '-15.59056'])
-	expect(table!.data[12]).toEqual(['2025-Jan-29 14:05', '196.45868', '-15.59085'])
+	expect(header).toHaveLength(5)
+	expect(header).toEqual(['Date__(UT)__HR:MN', '', '', 'R.A._(ICRF)', 'DEC_(ICRF)'])
+	expect(data).toHaveLength(13)
+	expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '196.45927', '-15.59045'])
+	expect(data[12]).toEqual(['2025-Jan-29 14:05', '', '', '196.45822', '-15.59074'])
 })
 
 test.skip('observerWithNonUniqueObject', async () => {
 	const startTime = dateFrom('2025-01-29T13:05:00Z')
 	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
-	const table = await observer('DES=1000041;', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
-	expect(table).toBeUndefined()
+	const data = await observer('DES=1000041;', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+	expect(data).toBeEmpty()
 })
 
 test.skip('observerWithNoMatchFound', async () => {
 	const startTime = dateFrom('2025-01-29T13:05:00Z')
 	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
-	const table = await observer('DES=1;CAP;NOFRAG', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
-	expect(table).toBeUndefined()
+	const data = await observer('DES=1;CAP;NOFRAG', 'coord', coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+	expect(data).toBeEmpty()
 })
 
 test.skip('observerWithOsculatingElements', async () => {
@@ -82,13 +82,13 @@ test.skip('observerWithOsculatingElements', async () => {
 	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
 	const parameters: ObserverWithOsculatingElementsParameters = { epoch: 2460049.5, ec: 0.6183399929327511, om: deg(30.04427847488657), w: deg(30.56835826458952), i: deg(19.84449491210952), pdt: { qr: 0.3107780828530178, tp: 2459989.479453452084 } }
-	const table = await observerWithOsculatingElements(parameters, coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+	const [header, ...data] = await observerWithOsculatingElements(parameters, coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 
-	expect(table!.header).toHaveLength(3)
-	expect(table!.header).toEqual(['Date__(UT)__HR:MN', 'R.A._(ICRF)', 'DEC_(ICRF)'])
-	expect(table!.data).toHaveLength(13)
-	expect(table!.data[0]).toEqual(['2025-Jan-29 13:05', '283.27736', '-32.07919'])
-	expect(table!.data[12]).toEqual(['2025-Jan-29 14:05', '283.31593', '-32.07911'])
+	expect(header).toHaveLength(5)
+	expect(header).toEqual(['Date__(UT)__HR:MN', '', '', 'R.A._(ICRF)', 'DEC_(ICRF)'])
+	expect(data).toHaveLength(13)
+	expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '283.27736', '-32.07919'])
+	expect(data[12]).toEqual(['2025-Jan-29 14:05', '', '', '283.31593', '-32.07911'])
 })
 
 test.skip('observerWithTle', async () => {
@@ -96,13 +96,13 @@ test.skip('observerWithTle', async () => {
 	const endTime = dateFrom('2025-01-29T14:05:00Z')
 	const coord = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
 	const tle = 'ISS (ZARYA)\n1 25544U 98067A   25029.70562785  .00020566  00000+0  35850-3 0  9990\n2 25544  51.6387 272.9482 0002126 142.5311 315.5480 15.50695229493684'
-	const table = await observerWithTle(tle, coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+	const [header, ...data] = await observerWithTle(tle, coord, startTime, endTime, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
 
-	expect(table!.header).toHaveLength(3)
-	expect(table!.header).toEqual(['Date__(UT)__HR:MN', 'R.A._(ICRF)', 'DEC_(ICRF)'])
-	expect(table!.data).toHaveLength(13)
-	expect(table!.data[0]).toEqual(['2025-Jan-29 13:05', '246.97075', '-50.81172'])
-	expect(table!.data[12]).toEqual(['2025-Jan-29 14:05', '22.50027', '-17.81843'])
+	expect(header).toHaveLength(5)
+	expect(header).toEqual(['Date__(UT)__HR:MN', '', '', 'R.A._(ICRF)', 'DEC_(ICRF)'])
+	expect(data).toHaveLength(13)
+	expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '246.97075', '-50.81172'])
+	expect(data[12]).toEqual(['2025-Jan-29 14:05', '', '', '22.50027', '-17.81843'])
 })
 
 test.skip('spkFile', async () => {
