@@ -293,10 +293,14 @@ export async function* readLines(source: Source, chunkSize: number, options?: Re
 
 export async function sourceTransferToSink(source: Source, sink: Sink, size: number | Buffer = 1024) {
 	const buffer = Buffer.isBuffer(size) ? size : Buffer.allocUnsafe(size)
+	let read = 0
 
 	while (true) {
 		const n = await source.read(buffer)
 		const m = n && (await sink.write(buffer, 0, n))
+		read += n
 		if (!m) break
 	}
+
+	return read
 }
