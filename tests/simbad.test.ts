@@ -11,9 +11,12 @@ test.skip('query', async () => {
 	const table = await simbadQuery(query)
 
 	expect(table).not.toBeUndefined()
-	expect(table!.header).toHaveLength(10)
-	expect(table!.header).toEqual(['oid', 'otype', 'ra', 'dec', 'pmra', 'pmdec', 'plx_value', 'rvz_radvel', 'rvz_redshift', 'main_id'])
-	expect(table!.data).toHaveLength(1)
-	expect(table!.data[0]).toHaveLength(10)
-	expect(table!.data[0]).toEqual(['3392496', 'Sy2', '201.36506337683332', '-43.019112508083325', '', '', '', '562.1673793553026', '0.00187695', 'NAME Centaurus A'])
+
+	const [header, ...data] = table!
+
+	expect(header).toHaveLength(10)
+	expect(header).toEqual(['oid', 'otype', 'ra', 'dec', 'pmra', 'pmdec', 'plx_value', 'rvz_radvel', 'rvz_redshift', 'main_id'])
+	expect(data).toHaveLength(1)
+	expect(data[0]).toHaveLength(10)
+	expect(data[0]).toEqual(['3392496', 'Sy2', '201.36506337683332', '-43.019112508083325', '', '', '', '562.1673793553026', '0.00187695', 'NAME Centaurus A'])
 })
