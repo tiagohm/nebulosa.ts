@@ -96,8 +96,8 @@ test('write', async () => {
 	const fits1 = await readFits(source)
 
 	expect(fits1!.hdus[0].header).toEqual(fits0!.hdus[0].header)
-	expect(fits1!.hdus[0].data.size).toEqual(fits0!.hdus[0].data.size)
-	expect(fits1!.hdus[0].data.offset).toEqual(fits0!.hdus[0].data.offset)
+	expect(fits1!.hdus[0].data.size).toEqual(fits0!.hdus[0].data.size!)
+	expect(fits1!.hdus[0].data.offset).toEqual(fits0!.hdus[0].data.offset!)
 })
 
 test('reader', () => {

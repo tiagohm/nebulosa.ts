@@ -11,13 +11,13 @@ export type FitsHeaderCard = [FitsHeaderKey, FitsHeaderValue, FitsHeaderComment?
 export type FitsHeader = Record<FitsHeaderKey, FitsHeaderValue>
 
 export interface FitsData {
-	readonly source: (Source & Seekable) | Buffer
-	readonly size: number
-	readonly offset: number
+	readonly source: (Source & Partial<Seekable>) | Buffer
+	readonly size?: number
+	readonly offset?: number
 }
 
 export interface FitsHdu {
-	readonly offset: number
+	readonly offset?: number
 	readonly header: FitsHeader
 	readonly data: FitsData
 }
@@ -82,6 +82,10 @@ export function bitpix(header: FitsHeader, defaultValue: Bitpix | 0 = 0): Bitpix
 	return numeric(header, 'BITPIX', defaultValue)
 }
 
+export function bitpixInBytes(bitpix: Bitpix | 0) {
+	return Math.trunc(Math.abs(bitpix) / 8)
+}
+
 const MAGIC_BYTES = Buffer.from('SIMPLE', 'ascii')
 
 export const FITS_BLOCK_SIZE = 2880
@@ -136,7 +140,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 				const offset = source.position
 
 				const { header } = hdu
-				const size = width(header) * height(header) * numberOfChannels(header) * (Math.abs(bitpix(header)) / 8)
+				const size = width(header) * height(header) * numberOfChannels(header) * bitpixInBytes(bitpix(header))
 				source.seek(source.position + size + computeRemainingBytes(size))
 				;(hdu as Mutable<FitsHdu>).data = { source, size, offset }
 			}
@@ -181,7 +185,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, fits: FitsHdu[] 
 		if (Buffer.isBuffer(source)) {
 			offset += await sink.write(source)
 		} else {
-			source.seek(data.offset)
+			source.seek?.(data.offset ?? 0)
 			offset += await sourceTransferToSink(source, sink, buffer)
 		}
 	}
@@ -219,7 +223,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, fits: FitsHdu[] 
 	}
 }
 
-function computeRemainingBytes(size: number) {
+export function computeRemainingBytes(size: number) {
 	const remaining = size % FITS_BLOCK_SIZE
 	return remaining === 0 ? 0 : FITS_BLOCK_SIZE - remaining
 }

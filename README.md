@@ -140,8 +140,9 @@ xy(time) // Polar motion angles at time
 ### Image
 
 ```ts
-fromFits(fits) // Create image from FITS file
-toFormat(image, path, format) // Save image to path as png, jpeg, webp, etc
+readImageFromFits(fits) // Read image from FITS file
+writeImageToFormat(image, path, format) // Write image to path as png, jpeg, webp, etc
+writeImageToFits(image, sink) // Write image to sink as FITS format
 stf(image, midtone, shadow, highlight) // Apply STF to image
 ```
 
