@@ -1,309 +1,86 @@
-import { describe, expect, test } from 'bun:test'
+import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { Bitpix, readFits } from '../src/fits'
-import { FitsDataSource, readImageFromFits, stf, writeImageToFits, writeImageToFormat } from '../src/image'
+import { Bitpix, bitpixInBytes, readFits } from '../src/fits'
+import { FitsDataSource, readImageFromFits, writeImageToFits, writeImageToFormat } from '../src/image'
 import { fileHandleSink, fileHandleSource } from '../src/io'
+import { BITPIXES, CHANNELS, generateFits } from './fits.generator'
 
-describe('readImageFromFits', () => {
-	describe('mono', () => {
-		test('byte', async () => {
-			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-mono-byte.fits'))
-			const image = await readImageFromFits(await readFits(source))
-			expect(image).not.toBeUndefined()
-			expect(image!.raw.length).toBe(256 * 174)
+test('readImageFromFits', async () => {
+	for (const bitpix of BITPIXES) {
+		for (const channel of CHANNELS) {
+			const fits = generateFits(8, 8, bitpix, channel)
+			const image = await readImageFromFits(fits)
 
-			await writeImageToFormat(stf(image!, 0.001), '.cache/NGC3372-mono-byte.png', 'png')
-			expect(Bun.MD5.hash(await Bun.file('.cache/NGC3372-mono-byte.png').arrayBuffer(), 'hex')).toBe('f56de59c02a6ba90a0159c972ba1b0b5')
-		})
+			expect(image!.header).toBe(fits.hdus[0].header)
 
-		test('short', async () => {
-			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-mono-short.fits'))
-			const image = await readImageFromFits(await readFits(source))
-			expect(image).not.toBeUndefined()
-			expect(image!.raw.length).toBe(256 * 174)
+			const output = `data/out/riff-${channel}-${bitpix}.png`
+			await writeImageToFormat(image!, output, 'png')
 
-			await writeImageToFormat(stf(image!, 0.001), '.cache/NGC3372-mono-short.png', 'png')
-			expect(Bun.MD5.hash(await Bun.file('.cache/NGC3372-mono-short.png').arrayBuffer(), 'hex')).toBe('468ec0bb58e382228977c1f109c426d2')
-		})
+			const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
 
-		test('integer', async () => {
-			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-mono-integer.fits'))
-			const image = await readImageFromFits(await readFits(source))
-			expect(image).not.toBeUndefined()
-			expect(image!.raw.length).toBe(256 * 174)
-
-			await writeImageToFormat(stf(image!, 0.001), '.cache/NGC3372-mono-integer.png', 'png')
-			expect(Bun.MD5.hash(await Bun.file('.cache/NGC3372-mono-integer.png').arrayBuffer(), 'hex')).toBe('e02aafba8e06005cef8666d425d6476d')
-		})
-
-		test('float', async () => {
-			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-mono-float.fits'))
-			const image = await readImageFromFits(await readFits(source))
-			expect(image).not.toBeUndefined()
-			expect(image!.raw.length).toBe(256 * 174)
-
-			await writeImageToFormat(stf(image!, 0.001), '.cache/NGC3372-mono-float.png', 'png')
-			expect(Bun.MD5.hash(await Bun.file('.cache/NGC3372-mono-float.png').arrayBuffer(), 'hex')).toBe('e67940309bcc520ff79bbbde35530750')
-		})
-
-		test('double', async () => {
-			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-mono-double.fits'))
-			const image = await readImageFromFits(await readFits(source))
-			expect(image).not.toBeUndefined()
-			expect(image!.raw.length).toBe(256 * 174)
-
-			await writeImageToFormat(stf(image!, 0.001), '.cache/NGC3372-mono-double.png', 'png')
-			expect(Bun.MD5.hash(await Bun.file('.cache/NGC3372-mono-double.png').arrayBuffer(), 'hex')).toBe('e67940309bcc520ff79bbbde35530750')
-		})
-	})
-
-	describe('color', () => {
-		test('byte', async () => {
-			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-color-byte.fits'))
-			const image = await readImageFromFits(await readFits(source))
-			expect(image).not.toBeUndefined()
-			expect(image!.raw.length).toBe(256 * 174 * 3)
-
-			await writeImageToFormat(stf(image!, 0.001), '.cache/NGC3372-color-byte.png', 'png')
-			expect(Bun.MD5.hash(await Bun.file('.cache/NGC3372-color-byte.png').arrayBuffer(), 'hex')).toBe('870ac19a84ef38ec58f27c9f3fcf9624')
-		})
-
-		test('short', async () => {
-			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-color-short.fits'))
-			const image = await readImageFromFits(await readFits(source))
-			expect(image).not.toBeUndefined()
-			expect(image!.raw.length).toBe(256 * 174 * 3)
-
-			await writeImageToFormat(stf(image!, 0.001), '.cache/NGC3372-color-short.png', 'png')
-			expect(Bun.MD5.hash(await Bun.file('.cache/NGC3372-color-short.png').arrayBuffer(), 'hex')).toBe('425102b2ef786309ac746e0af5ec463f')
-		})
-
-		test('integer', async () => {
-			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-color-integer.fits'))
-			const image = await readImageFromFits(await readFits(source))
-			expect(image).not.toBeUndefined()
-			expect(image!.raw.length).toBe(256 * 174 * 3)
-
-			await writeImageToFormat(stf(image!, 0.001), '.cache/NGC3372-color-integer.png', 'png')
-			expect(Bun.MD5.hash(await Bun.file('.cache/NGC3372-color-integer.png').arrayBuffer(), 'hex')).toBe('5879055756829ed1455ab50de84babe8')
-		})
-
-		test('float', async () => {
-			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-color-float.fits'))
-			const image = await readImageFromFits(await readFits(source))
-			expect(image).not.toBeUndefined()
-			expect(image!.raw.length).toBe(256 * 174 * 3)
-
-			await writeImageToFormat(stf(image!, 0.001), '.cache/NGC3372-color-float.png', 'png')
-			expect(Bun.MD5.hash(await Bun.file('.cache/NGC3372-color-float.png').arrayBuffer(), 'hex')).toBe('edefee01963ff38abbb83e258fc18310')
-		})
-
-		test('double', async () => {
-			await using source = fileHandleSource(await fs.open('data/fits/NGC3372-color-double.fits'))
-			const image = await readImageFromFits(await readFits(source))
-			expect(image).not.toBeUndefined()
-			expect(image!.raw.length).toBe(256 * 174 * 3)
-
-			await writeImageToFormat(stf(image!, 0.001), '.cache/NGC3372-color-double.png', 'png')
-			expect(Bun.MD5.hash(await Bun.file('.cache/NGC3372-color-double.png').arrayBuffer(), 'hex')).toBe('edefee01963ff38abbb83e258fc18310')
-		})
-	})
+			if (channel === 1) expect(md5).toBe('7a361f42788e229ce6edd0d864efb0a6')
+			else expect(md5).toBe('60d01613155ab17ababba10082e61d72')
+		}
+	}
 })
 
-describe('writeImageToFits', () => {
-	describe('mono', async () => {
-		await using source = fileHandleSource(await fs.open('data/fits/NGC3372-mono-double.fits'))
-		const image = (await readImageFromFits(await readFits(source)))!
+test('writeImageToFits', async () => {
+	for (const bitpix of BITPIXES) {
+		for (const channel of CHANNELS) {
+			const fits = generateFits(8, 8, bitpix, channel)
+			let image = await readImageFromFits(fits)
 
-		expect(image).not.toBeUndefined()
-
-		test('byte', async () => {
-			image.header.BITPIX = Bitpix.BYTE
-			const handle = await fs.open('.cache/NGC3372-mono-byte.fits', 'w+')
+			let handle = await fs.open(`data/out/witf-${channel}-${bitpix}.fits`, 'w+')
 			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image, sink)
-		})
+			await writeImageToFits(image!, sink)
 
-		test('short', async () => {
-			image.header.BITPIX = Bitpix.SHORT
-			const handle = await fs.open('.cache/NGC3372-mono-short.fits', 'w+')
-			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image, sink)
-		})
+			handle = await fs.open(`data/out/witf-${channel}-${bitpix}.fits`, 'r')
+			await using source = fileHandleSource(handle)
+			image = await readImageFromFits(await readFits(source))
 
-		test('integer', async () => {
-			image.header.BITPIX = Bitpix.INTEGER
-			const handle = await fs.open('.cache/NGC3372-mono-integer.fits', 'w+')
-			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image, sink)
-		})
+			expect(image!.header).toEqual(fits.hdus[0].header)
 
-		test('float', async () => {
-			image.header.BITPIX = Bitpix.FLOAT
-			const handle = await fs.open('.cache/NGC3372-mono-float.fits', 'w+')
-			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image, sink)
-		})
+			const output = `data/out/witf-${channel}-${bitpix}.png`
+			await writeImageToFormat(image!, output, 'png')
 
-		test('double', async () => {
-			image.header.BITPIX = Bitpix.DOUBLE
-			const handle = await fs.open('.cache/NGC3372-mono-double.fits', 'w+')
-			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image, sink)
-		})
-	})
+			const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
 
-	describe('color', async () => {
-		await using source = fileHandleSource(await fs.open('data/fits/NGC3372-color-double.fits'))
-		const image = (await readImageFromFits(await readFits(source)))!
-
-		expect(image).not.toBeUndefined()
-
-		test('byte', async () => {
-			image.header.BITPIX = Bitpix.BYTE
-			const handle = await fs.open('.cache/NGC3372-color-byte.fits', 'w+')
-			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image, sink)
-		})
-
-		test('short', async () => {
-			image.header.BITPIX = Bitpix.SHORT
-			const handle = await fs.open('.cache/NGC3372-color-short.fits', 'w+')
-			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image, sink)
-		})
-
-		test('integer', async () => {
-			image.header.BITPIX = Bitpix.INTEGER
-			const handle = await fs.open('.cache/NGC3372-color-integer.fits', 'w+')
-			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image, sink)
-		})
-
-		test('float', async () => {
-			image.header.BITPIX = Bitpix.FLOAT
-			const handle = await fs.open('.cache/NGC3372-color-float.fits', 'w+')
-			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image, sink)
-		})
-
-		test('double', async () => {
-			image.header.BITPIX = Bitpix.DOUBLE
-			const handle = await fs.open('.cache/NGC3372-color-double.fits', 'w+')
-			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image, sink)
-		})
-	})
+			if (channel === 1) expect(md5).toBe('7a361f42788e229ce6edd0d864efb0a6')
+			else expect(md5).toBe('60d01613155ab17ababba10082e61d72')
+		}
+	}
 })
 
-describe('fitsDataSource', () => {
+test('fitsDataSource', () => {
 	const buffer = Buffer.allocUnsafe(64)
+	const data = new Float64Array([0.5, 1, 0])
 
-	describe('mono', () => {
-		const data = new Float64Array([0.6])
+	const expectedByte: Record<Bitpix, number[]> = {
+		[Bitpix.BYTE]: [127, 255, 0],
+		[Bitpix.SHORT]: [-1, 32767, -32768],
+		[Bitpix.INTEGER]: [-1, 2147483647, -2147483648],
+		[Bitpix.LONG]: [0, 0, 0],
+		[Bitpix.FLOAT]: [0.5, 1, 0],
+		[Bitpix.DOUBLE]: [0.5, 1, 0],
+	}
 
-		test('byte', () => {
-			const source = new FitsDataSource(data, Bitpix.BYTE, 1)
+	for (const bitpix of BITPIXES) {
+		const pixelSizeInBytes = bitpixInBytes(bitpix)
 
-			expect(source.read(buffer)).toBe(1)
-			expect(buffer.readUint8(0)).toBe(153)
+		for (const channel of CHANNELS) {
+			const source = new FitsDataSource(data.subarray(0, channel), bitpix, channel)
+
+			for (let i = 0; i < channel; i++) {
+				expect(source.read(buffer)).toBe(pixelSizeInBytes)
+
+				if (bitpix === Bitpix.BYTE) expect(buffer.readUInt8(0)).toBe(expectedByte[bitpix][i])
+				else if (bitpix === Bitpix.SHORT) expect(buffer.readInt16BE(0)).toBe(expectedByte[bitpix][i])
+				else if (bitpix === Bitpix.INTEGER) expect(buffer.readInt32BE(0)).toBe(expectedByte[bitpix][i])
+				else if (bitpix === Bitpix.FLOAT) expect(buffer.readFloatBE(0)).toBe(expectedByte[bitpix][i])
+				else if (bitpix === Bitpix.DOUBLE) expect(buffer.readDoubleBE(0)).toBe(expectedByte[bitpix][i])
+			}
+
 			expect(source.read(buffer)).toBe(0)
-		})
-
-		test('short', () => {
-			const source = new FitsDataSource(data, Bitpix.SHORT, 1)
-
-			expect(source.read(buffer)).toBe(2)
-			expect(buffer.readUInt16BE(0)).toBe(39321)
-			expect(source.read(buffer)).toBe(0)
-		})
-
-		test('integer', () => {
-			const source = new FitsDataSource(data, Bitpix.INTEGER, 1)
-
-			expect(source.read(buffer)).toBe(4)
-			expect(buffer.readUInt32BE(0)).toBe(2576980377)
-			expect(source.read(buffer)).toBe(0)
-		})
-
-		test('float', () => {
-			const source = new FitsDataSource(data, Bitpix.FLOAT, 1)
-
-			expect(source.read(buffer)).toBe(4)
-			expect(buffer.readFloatBE(0)).toBeCloseTo(0.6, 6)
-			expect(source.read(buffer)).toBe(0)
-		})
-
-		test('double', () => {
-			const source = new FitsDataSource(data, Bitpix.DOUBLE, 1)
-
-			expect(source.read(buffer)).toBe(8)
-			expect(buffer.readDoubleBE(0)).toBe(0.6)
-			expect(source.read(buffer)).toBe(0)
-		})
-	})
-
-	describe('color', () => {
-		const data = new Float64Array([0.6, 0.1, 0.9])
-
-		test('byte', () => {
-			const source = new FitsDataSource(data, Bitpix.BYTE, 3)
-
-			expect(source.read(buffer)).toBe(1)
-			expect(buffer.readUint8(0)).toBe(153)
-			expect(source.read(buffer)).toBe(1)
-			expect(buffer.readUint8(0)).toBe(25)
-			expect(source.read(buffer)).toBe(1)
-			expect(buffer.readUint8(0)).toBe(229)
-			expect(source.read(buffer)).toBe(0)
-		})
-
-		test('short', () => {
-			const source = new FitsDataSource(data, Bitpix.SHORT, 3)
-
-			expect(source.read(buffer)).toBe(2)
-			expect(buffer.readUInt16BE(0)).toBe(39321)
-			expect(source.read(buffer)).toBe(2)
-			expect(buffer.readUInt16BE(0)).toBe(6553)
-			expect(source.read(buffer)).toBe(2)
-			expect(buffer.readUInt16BE(0)).toBe(58981)
-			expect(source.read(buffer)).toBe(0)
-		})
-
-		test('integer', () => {
-			const source = new FitsDataSource(data, Bitpix.INTEGER, 3)
-
-			expect(source.read(buffer)).toBe(4)
-			expect(buffer.readUInt32BE(0)).toBe(2576980377)
-			expect(source.read(buffer)).toBe(4)
-			expect(buffer.readUInt32BE(0)).toBe(429496729)
-			expect(source.read(buffer)).toBe(4)
-			expect(buffer.readUInt32BE(0)).toBe(3865470565)
-			expect(source.read(buffer)).toBe(0)
-		})
-
-		test('float', () => {
-			const source = new FitsDataSource(data, Bitpix.FLOAT, 3)
-
-			expect(source.read(buffer)).toBe(4)
-			expect(buffer.readFloatBE(0)).toBeCloseTo(0.6, 6)
-			expect(source.read(buffer)).toBe(4)
-			expect(buffer.readFloatBE(0)).toBeCloseTo(0.1, 6)
-			expect(source.read(buffer)).toBe(4)
-			expect(buffer.readFloatBE(0)).toBeCloseTo(0.9, 6)
-			expect(source.read(buffer)).toBe(0)
-		})
-
-		test('double', () => {
-			const source = new FitsDataSource(data, Bitpix.DOUBLE, 3)
-
-			expect(source.read(buffer)).toBe(8)
-			expect(buffer.readDoubleBE(0)).toBe(0.6)
-			expect(source.read(buffer)).toBe(8)
-			expect(buffer.readDoubleBE(0)).toBe(0.1)
-			expect(source.read(buffer)).toBe(8)
-			expect(buffer.readDoubleBE(0)).toBe(0.9)
-			expect(source.read(buffer)).toBe(0)
-		})
-	})
+		}
+	}
 })

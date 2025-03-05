@@ -63,7 +63,3 @@ bun.lock
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Executable
-nebulosa
-nebulosa.exe

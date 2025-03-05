@@ -1,2 +1,4 @@
 catalog.dat
 apod*.csv
+/out/**
+!**/.gitkeep

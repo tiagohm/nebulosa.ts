@@ -129,23 +129,11 @@ export class FitsDataSource implements Source {
 		for (; this.position < this.raw.length && n < size; this.position += this.channels, n += this.pixelSizeInBytes, offset += this.pixelSizeInBytes) {
 			const pixel = this.raw[this.position]
 
-			switch (this.bitpix) {
-				case Bitpix.BYTE:
-					buffer.writeUint8(pixel * 255, offset)
-					break
-				case Bitpix.SHORT:
-					buffer.writeInt16BE(Math.trunc(pixel * 65535) - 32768, offset)
-					break
-				case Bitpix.INTEGER:
-					buffer.writeInt32BE(Math.trunc(pixel * 4294967295) - 2147483648, offset)
-					break
-				case Bitpix.FLOAT:
-					buffer.writeFloatBE(pixel, offset)
-					break
-				case Bitpix.DOUBLE:
-					buffer.writeDoubleBE(pixel, offset)
-					break
-			}
+			if (this.bitpix === Bitpix.BYTE) buffer.writeUInt8(pixel * 255, offset)
+			else if (this.bitpix === Bitpix.SHORT) buffer.writeInt16BE(Math.trunc(pixel * 65535) - 32768, offset)
+			else if (this.bitpix === Bitpix.INTEGER) buffer.writeInt32BE(Math.trunc(pixel * 4294967295) - 2147483648, offset)
+			else if (this.bitpix === Bitpix.FLOAT) buffer.writeFloatBE(pixel, offset)
+			else if (this.bitpix === Bitpix.DOUBLE) buffer.writeDoubleBE(pixel, offset)
 		}
 
 		return n
