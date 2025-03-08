@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
 import { dirname, join } from 'path'
-import { astapStarDetect } from '../src/astap'
+import { astapDetectStars } from '../src/astap'
 
-test.skip('starDetect', async () => {
-	const stars = await astapStarDetect(join(dirname(__dirname), 'data', 'apod4.jpg'))
+test.skip('detectStars', async () => {
+	const stars = await astapDetectStars(join(dirname(__dirname), 'data', 'apod4.jpg'))
 
 	expect(stars).toHaveLength(344)
 	expect(stars[0].x).toBe(86.0705)

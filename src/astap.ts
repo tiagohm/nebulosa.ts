@@ -9,7 +9,7 @@ export interface AstapStarDetectOptions {
 	outputDirectory?: string
 }
 
-export async function astapStarDetect(input: string, options?: AstapStarDetectOptions): Promise<DetectedStar[]> {
+export async function astapDetectStars(input: string, options?: AstapStarDetectOptions): Promise<DetectedStar[]> {
 	const cwd = options?.outputDirectory || dirname(input)
 	const minSNR = options?.minSNR ?? 0
 	const executable = options?.executable || defaultExecutableForPlatform()
@@ -18,23 +18,26 @@ export async function astapStarDetect(input: string, options?: AstapStarDetectOp
 
 	if (exitCode === 0) {
 		const file = Bun.file(`${join(cwd, basename(input, '.jpg'))}.csv`)
-		const csv = readCsv(await file.text())
 
-		if (csv.length > 1) {
-			const stars = new Array<DetectedStar>(csv.length - 1)
+		if (await file.exists()) {
+			const csv = readCsv(await file.text())
 
-			for (let i = 1; i < csv.length; i++) {
-				const row = csv[i]
-				const x = +row[0]
-				const y = +row[1]
-				const hfd = +row[2]
-				const snr = +row[3]
-				const flux = +row[4]
+			if (csv.length > 1) {
+				const stars = new Array<DetectedStar>(csv.length - 1)
 
-				stars[i - 1] = { x, y, hfd, snr, flux }
+				for (let i = 1; i < csv.length; i++) {
+					const row = csv[i]
+					const x = +row[0]
+					const y = +row[1]
+					const hfd = +row[2]
+					const snr = +row[3]
+					const flux = +row[4]
+
+					stars[i - 1] = { x, y, hfd, snr, flux }
+				}
+
+				return stars
 			}
-
-			return stars
 		}
 	}
 
