@@ -62,7 +62,7 @@ export interface DefTextVector {
 	timeout?: number
 	timestamp?: string
 	message?: string
-	elements: DefText[]
+	elements: Record<string, DefText>
 }
 
 // Define one member of a text vector.
@@ -83,7 +83,7 @@ export interface DefNumberVector {
 	timeout?: number
 	timestamp?: string
 	message?: string
-	elements: DefNumber[]
+	elements: Record<string, DefNumber>
 }
 
 // Define one member of a number vector.
@@ -110,7 +110,7 @@ export interface DefSwitchVector {
 	timeout?: number
 	timestamp?: string
 	message?: string
-	elements: DefSwitch[]
+	elements: Record<string, DefSwitch>
 }
 
 // Define one member of a switch vector.
@@ -129,7 +129,7 @@ export interface DefLightVector {
 	state: PropertyState
 	timestamp?: string
 	message?: string
-	elements: DefLight[]
+	elements: Record<string, DefLight>
 }
 
 // Define one member of a light vector.
@@ -150,7 +150,7 @@ export interface DefBlobVector {
 	timeout?: number
 	timestamp?: string
 	message?: string
-	elements: DefBlob[]
+	elements: Record<string, DefBlob>
 }
 
 // Define one member of a BLOB vector. Unlike other defXXX elements, this does not contain an
@@ -171,7 +171,7 @@ export interface SetTextVector {
 	timeout?: number
 	timestamp?: string
 	message?: string
-	elements: OneText[]
+	elements: Record<string, OneText>
 }
 
 // Send a new set of values for a Number vector, with optional new timeout, state and message.
@@ -182,7 +182,7 @@ export interface SetNumberVector {
 	timeout?: number
 	timestamp?: string
 	message?: string
-	elements: OneNumber[]
+	elements: Record<string, OneNumber>
 }
 
 // Send a new set of values for a Switch vector, with optional new timeout, state and message.
@@ -193,7 +193,7 @@ export interface SetSwitchVector {
 	timeout?: number
 	timestamp?: string
 	message?: string
-	elements: OneSwitch[]
+	elements: Record<string, OneSwitch>
 }
 
 // Send a new set of values for a Light vector, with optional new state and message.
@@ -203,7 +203,7 @@ export interface SetLightVector {
 	state?: PropertyState
 	timestamp?: string
 	message?: string
-	elements: OneLight[]
+	elements: Record<string, OneLight>
 }
 
 // Send a new set of values for a BLOB vector, with optional new timeout, state and message.
@@ -214,7 +214,7 @@ export interface SetBlobVector {
 	timeout?: number
 	timestamp?: string
 	message?: string
-	elements: OneBlob[]
+	elements: Record<string, OneBlob>
 }
 
 export type SetVector = SetTextVector | SetNumberVector | SetSwitchVector | SetLightVector | SetBlobVector
@@ -259,28 +259,28 @@ export interface NewTextVector {
 	device: string
 	name: string
 	timestamp?: string
-	elements: OneText[]
+	elements: Record<string, OneText>
 }
 
 export interface NewNumberVector {
 	device: string
 	name: string
 	timestamp?: string
-	elements: OneNumber[]
+	elements: Record<string, OneNumber>
 }
 
 export interface NewSwitchVector {
 	device: string
 	name: string
 	timestamp?: string
-	elements: OneSwitch[]
+	elements: Record<string, OneSwitch>
 }
 
 export interface NewBlobVector {
 	device: string
 	name: string
 	timestamp?: string
-	elements: OneBlob[]
+	elements: Record<string, OneBlob>
 }
 
 export type NewVector = NewTextVector | NewNumberVector | NewSwitchVector | NewBlobVector
@@ -338,20 +338,25 @@ export type LightElement = OneLight | DefLight
 export type BlobElement = OneBlob | DefBlob
 
 export interface IndiClientHandler {
-	message?: (message: Message) => void
-	delProperty?: (message: DelProperty) => void
-	defTextVector?: (message: DefTextVector) => void
-	defNumberVector?: (message: DefNumberVector) => void
-	defSwitchVector?: (message: DefSwitchVector) => void
-	defLightVector?: (message: DefLightVector) => void
-	defBlobVector?: (message: DefBlobVector) => void
-	defVector?: (message: DefVector, name: `def${VectorType}Vector`) => void
-	setTextVector?: (message: SetTextVector) => void
-	setNumberVector?: (message: SetNumberVector) => void
-	setSwitchVector?: (message: SetSwitchVector) => void
-	setLightVector?: (message: SetLightVector) => void
-	setBlobVector?: (message: SetBlobVector) => void
-	setVector?: (message: SetVector, name: `set${VectorType}Vector`) => void
+	message?: (client: IndiClient, message: Message) => void
+	delProperty?: (client: IndiClient, message: DelProperty) => void
+	defTextVector?: (client: IndiClient, message: DefTextVector) => void
+	defNumberVector?: (client: IndiClient, message: DefNumberVector) => void
+	defSwitchVector?: (client: IndiClient, message: DefSwitchVector) => void
+	defLightVector?: (client: IndiClient, message: DefLightVector) => void
+	defBlobVector?: (client: IndiClient, message: DefBlobVector) => void
+	defVector?: (client: IndiClient, message: DefVector, name: `def${VectorType}Vector`) => void
+	setTextVector?: (client: IndiClient, message: SetTextVector) => void
+	setNumberVector?: (client: IndiClient, message: SetNumberVector) => void
+	setSwitchVector?: (client: IndiClient, message: SetSwitchVector) => void
+	setLightVector?: (client: IndiClient, message: SetLightVector) => void
+	setBlobVector?: (client: IndiClient, message: SetBlobVector) => void
+	setVector?: (client: IndiClient, message: SetVector, name: `set${VectorType}Vector`) => void
+	textVector?: (client: IndiClient, message: DefTextVector | SetTextVector, name: 'defTextVector' | 'setTextVector') => void
+	numberVector?: (client: IndiClient, message: DefNumberVector | SetNumberVector, name: 'defNumberVector' | 'setNumberVector') => void
+	switchVector?: (client: IndiClient, message: DefSwitchVector | SetSwitchVector, name: 'defSwitchVector' | 'setSwitchVector') => void
+	lightVector?: (client: IndiClient, message: DefLightVector | SetLightVector, name: 'defLightVector' | 'setLightVector') => void
+	blobVector?: (client: IndiClient, message: DefBlobVector | SetBlobVector, name: 'defBLOBVector' | 'setBLOBVector') => void
 	close?: () => void
 }
 
@@ -364,6 +369,14 @@ export class IndiClient {
 	private socket?: Socket
 
 	constructor(private readonly options?: IndiClientOptions) {}
+
+	get host() {
+		return this.socket?.remoteAddress
+	}
+
+	get port() {
+		return this.socket?.localPort
+	}
 
 	async connect(hostname: string, port: number = 7624) {
 		if (this.socket) return
@@ -410,7 +423,7 @@ export class IndiClient {
 
 	private parse(data: Buffer) {
 		for (const tag of this.parser.parse(data)) {
-			this.parseTag(tag)
+			this.handleTag(tag)
 		}
 	}
 
@@ -425,34 +438,34 @@ export class IndiClient {
 			timeout: tag.attributes.timeout,
 			timestamp: tag.attributes.timestamp,
 			message: tag.attributes.message,
-			elements: [],
+			elements: {},
 		} as DefVector
 
 		for (const child of tag.children) {
 			switch (child.name) {
 				case 'defText': {
 					const element = { name: child.attributes.name, label: child.attributes.label, value: child.text } as DefText
-					;(message as DefTextVector).elements.push(element)
+					;(message as DefTextVector).elements[element.name] = element
 					break
 				}
 				case 'defNumber': {
 					const element = { name: child.attributes.name, label: child.attributes.label, format: child.attributes.format, min: parseFloat(child.attributes.min), max: parseFloat(child.attributes.max), step: parseFloat(child.attributes.step), value: parseFloat(child.text) } as DefNumber
-					;(message as DefNumberVector).elements.push(element)
+					;(message as DefNumberVector).elements[element.name] = element
 					break
 				}
 				case 'defSwitch': {
 					const element = { name: child.attributes.name, label: child.attributes.label, value: child.text === 'On' } as DefSwitch
-					;(message as DefSwitchVector).elements.push(element)
+					;(message as DefSwitchVector).elements[element.name] = element
 					break
 				}
 				case 'defLight': {
 					const element = { name: child.attributes.name, label: child.attributes.label, value: child.text } as DefLight
-					;(message as DefLightVector).elements.push(element)
+					;(message as DefLightVector).elements[element.name] = element
 					break
 				}
 				case 'defBLOB': {
 					const element = { name: child.attributes.name, label: child.attributes.label } as DefBlob
-					;(message as DefBlobVector).elements.push(element)
+					;(message as DefBlobVector).elements[element.name] = element
 					break
 				}
 			}
@@ -469,34 +482,34 @@ export class IndiClient {
 			timeout: tag.attributes.timeout,
 			timestamp: tag.attributes.timestamp,
 			message: tag.attributes.message,
-			elements: [],
+			elements: {},
 		} as SetVector
 
 		for (const child of tag.children) {
 			switch (child.name) {
 				case 'oneText': {
-					const e = { name: child.attributes.name, value: child.text } as OneText
-					;(message as SetTextVector).elements.push(e)
+					const element = { name: child.attributes.name, value: child.text } as OneText
+					;(message as SetTextVector).elements[element.name] = element
 					break
 				}
 				case 'oneNumber': {
-					const e = { name: child.attributes.name, value: parseFloat(child.text) } as OneNumber
-					;(message as SetNumberVector).elements.push(e)
+					const element = { name: child.attributes.name, value: parseFloat(child.text) } as OneNumber
+					;(message as SetNumberVector).elements[element.name] = element
 					break
 				}
 				case 'oneSwitch': {
-					const e = { name: child.attributes.name, value: child.text === 'On' } as OneSwitch
-					;(message as SetSwitchVector).elements.push(e)
+					const element = { name: child.attributes.name, value: child.text === 'On' } as OneSwitch
+					;(message as SetSwitchVector).elements[element.name] = element
 					break
 				}
 				case 'oneLight': {
-					const e = { name: child.attributes.name, value: child.text } as OneLight
-					;(message as SetLightVector).elements.push(e)
+					const element = { name: child.attributes.name, value: child.text } as OneLight
+					;(message as SetLightVector).elements[element.name] = element
 					break
 				}
 				case 'oneBLOB': {
-					const e = { name: child.attributes.name, size: child.attributes.size, format: child.attributes.format, value: child.text } as OneBlob
-					;(message as SetBlobVector).elements.push(e)
+					const element = { name: child.attributes.name, size: child.attributes.size, format: child.attributes.format, value: child.text } as OneBlob
+					;(message as SetBlobVector).elements[element.name] = element
 					break
 				}
 			}
@@ -505,88 +518,99 @@ export class IndiClient {
 		return message
 	}
 
-	private parseTag(tag: IndiXmlElement) {
+	protected handleTag(tag: IndiXmlElement) {
 		const a = tag.attributes
+		const protocol = this.options?.protocol
 
 		switch (tag.name) {
 			case 'message':
-				if (this.options?.protocol?.message) {
-					this.options.protocol.message({ device: a.device, timestamp: a.timestamp, message: a.message })
+				if (protocol?.message) {
+					protocol.message(this, { device: a.device, timestamp: a.timestamp, message: a.message })
 				}
 				break
 			case 'delProperty':
-				if (this.options?.protocol?.delProperty) {
-					this.options.protocol.delProperty({ device: a.device, name: a.name, timestamp: a.timestamp, message: a.message })
+				if (protocol?.delProperty) {
+					protocol.delProperty(this, { device: a.device, name: a.name, timestamp: a.timestamp, message: a.message })
 				}
 				break
 			case 'defTextVector':
-				if (this.options?.protocol?.defVector || this.options?.protocol?.defTextVector) {
+				if (protocol?.defVector || protocol?.defTextVector || protocol?.textVector) {
 					const message = this.parseDefVector(tag)
-					this.options.protocol.defVector?.(message, tag.name)
-					this.options.protocol.defTextVector?.(message as DefTextVector)
+					protocol.defVector?.(this, message, tag.name)
+					protocol.defTextVector?.(this, message as DefTextVector)
+					protocol.textVector?.(this, message as TextVector, tag.name)
 				}
 				break
 			case 'defNumberVector':
-				if (this.options?.protocol?.defVector || this.options?.protocol?.defNumberVector) {
+				if (protocol?.defVector || protocol?.defNumberVector || protocol?.numberVector) {
 					const message = this.parseDefVector(tag)
-					this.options.protocol.defVector?.(message, tag.name)
-					this.options.protocol.defNumberVector?.(message as DefNumberVector)
+					protocol.defVector?.(this, message, tag.name)
+					protocol.defNumberVector?.(this, message as DefNumberVector)
+					protocol.numberVector?.(this, message as NumberVector, tag.name)
 				}
 				break
 			case 'defSwitchVector':
-				if (this.options?.protocol?.defVector || this.options?.protocol?.defSwitchVector) {
+				if (protocol?.defVector || protocol?.defSwitchVector || protocol?.switchVector) {
 					const message = this.parseDefVector(tag)
-					this.options.protocol.defVector?.(message, tag.name)
-					this.options.protocol.defSwitchVector?.(message as DefSwitchVector)
+					protocol.defVector?.(this, message, tag.name)
+					protocol.defSwitchVector?.(this, message as DefSwitchVector)
+					protocol.switchVector?.(this, message as SwitchVector, tag.name)
 				}
 				break
 			case 'defLightVector':
-				if (this.options?.protocol?.defVector || this.options?.protocol?.defLightVector) {
+				if (protocol?.defVector || protocol?.defLightVector || protocol?.lightVector) {
 					const message = this.parseDefVector(tag)
-					this.options.protocol.defVector?.(message, tag.name)
-					this.options.protocol.defLightVector?.(message as DefLightVector)
+					protocol.defVector?.(this, message, tag.name)
+					protocol.defLightVector?.(this, message as DefLightVector)
+					protocol.lightVector?.(this, message as LightVector, tag.name)
 				}
 				break
 			case 'defBLOBVector':
-				if (this.options?.protocol?.defVector || this.options?.protocol?.defBlobVector) {
+				if (protocol?.defVector || protocol?.defBlobVector || protocol?.blobVector) {
 					const message = this.parseDefVector(tag)
-					this.options.protocol.defVector?.(message, tag.name)
-					this.options.protocol.defBlobVector?.(message as DefBlobVector)
+					protocol.defVector?.(this, message, tag.name)
+					protocol.defBlobVector?.(this, message as DefBlobVector)
+					protocol.blobVector?.(this, message as BlobVector, tag.name)
 				}
 				break
 			case 'setTextVector':
-				if (this.options?.protocol?.setVector || this.options?.protocol?.setTextVector) {
+				if (protocol?.setVector || protocol?.setTextVector || protocol?.textVector) {
 					const message = this.parseSetVector(tag)
-					this.options.protocol.setVector?.(message, tag.name)
-					this.options.protocol.setTextVector?.(message as SetTextVector)
+					protocol.setVector?.(this, message, tag.name)
+					protocol.setTextVector?.(this, message as SetTextVector)
+					protocol.textVector?.(this, message as TextVector, tag.name)
 				}
 				break
 			case 'setNumberVector':
-				if (this.options?.protocol?.setVector || this.options?.protocol?.setNumberVector) {
+				if (protocol?.setVector || protocol?.setNumberVector || protocol?.numberVector) {
 					const message = this.parseSetVector(tag)
-					this.options.protocol.setVector?.(message, tag.name)
-					this.options.protocol.setNumberVector?.(message as SetNumberVector)
+					protocol.setVector?.(this, message, tag.name)
+					protocol.setNumberVector?.(this, message as SetNumberVector)
+					protocol.numberVector?.(this, message as NumberVector, tag.name)
 				}
 				break
 			case 'setSwitchVector':
-				if (this.options?.protocol?.setVector || this.options?.protocol?.setSwitchVector) {
+				if (protocol?.setVector || protocol?.setSwitchVector || protocol?.switchVector) {
 					const message = this.parseSetVector(tag)
-					this.options.protocol.setVector?.(message, tag.name)
-					this.options.protocol.setSwitchVector?.(message as SetSwitchVector)
+					protocol.setVector?.(this, message, tag.name)
+					protocol.setSwitchVector?.(this, message as SetSwitchVector)
+					protocol.switchVector?.(this, message as SwitchVector, tag.name)
 				}
 				break
 			case 'setLightVector':
-				if (this.options?.protocol?.setVector || this.options?.protocol?.setLightVector) {
+				if (protocol?.setVector || protocol?.setLightVector || protocol?.lightVector) {
 					const message = this.parseSetVector(tag)
-					this.options.protocol.setVector?.(message, tag.name)
-					this.options.protocol.setLightVector?.(message as SetLightVector)
+					protocol.setVector?.(this, message, tag.name)
+					protocol.setLightVector?.(this, message as SetLightVector)
+					protocol.lightVector?.(this, message as LightVector, tag.name)
 				}
 				break
 			case 'setBLOBVector':
-				if (this.options?.protocol?.setVector || this.options?.protocol?.setBlobVector) {
+				if (protocol?.setVector || protocol?.setBlobVector || protocol?.blobVector) {
 					const message = this.parseSetVector(tag)
-					this.options.protocol.setVector?.(message, tag.name)
-					this.options.protocol.setBlobVector?.(message as SetBlobVector)
+					protocol.setVector?.(this, message, tag.name)
+					protocol.setBlobVector?.(this, message as SetBlobVector)
+					protocol.blobVector?.(this, message as BlobVector, tag.name)
 				}
 				break
 			default:
@@ -619,7 +643,7 @@ export class IndiClient {
 			this.socket.write(` device="${command.device}"`)
 			this.socket.write(` name="${command.name}"`)
 			if (command.timestamp) this.socket.write(` timestamp="${command.timestamp}">`)
-			for (const element of command.elements) this.socket.write(`<oneText name="${element.name}">${element.value}</oneText>`)
+			for (const name in command.elements) this.socket.write(`<oneText name="${name}">${command.elements[name].value}</oneText>`)
 			this.socket.write('</newTextVector>')
 			this.socket.flush()
 		}
@@ -631,7 +655,7 @@ export class IndiClient {
 			this.socket.write(` device="${command.device}"`)
 			this.socket.write(` name="${command.name}"`)
 			if (command.timestamp) this.socket.write(` timestamp="${command.timestamp}">`)
-			for (const element of command.elements) this.socket.write(`<oneNumber name="${element.name}">${element.value}</oneNumber>`)
+			for (const name in command.elements) this.socket.write(`<oneNumber name="${name}">${command.elements[name].value}</oneNumber>`)
 			this.socket.write('</newNumberVector>')
 			this.socket.flush()
 		}
@@ -643,7 +667,7 @@ export class IndiClient {
 			this.socket.write(` device="${command.device}"`)
 			this.socket.write(` name="${command.name}"`)
 			if (command.timestamp) this.socket.write(` timestamp="${command.timestamp}">`)
-			for (const element of command.elements) this.socket.write(`<oneSwitch name="${element.name}">${element.value ? 'On' : 'Off'}</oneSwitch>`)
+			for (const name in command.elements) this.socket.write(`<oneSwitch name="${name}">${command.elements[name].value ? 'On' : 'Off'}</oneSwitch>`)
 			this.socket.write('</newSwitchVector>')
 			this.socket.flush()
 		}
