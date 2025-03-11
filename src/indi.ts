@@ -1,6 +1,7 @@
 // http://www.clearskyinstitute.com/INDI/INDI.pdf
 
 import type { Socket } from 'bun'
+import { SimpleXmlParser, type XmlNode } from './xml'
 
 // A simple XML-like communications protocol is described for
 // interactive and automated remote control of diverse instrumentation.
@@ -259,21 +260,21 @@ export interface NewTextVector {
 	device: string
 	name: string
 	timestamp?: string
-	elements: Record<string, OneText>
+	elements: Record<string, string>
 }
 
 export interface NewNumberVector {
 	device: string
 	name: string
 	timestamp?: string
-	elements: Record<string, OneNumber>
+	elements: Record<string, number>
 }
 
 export interface NewSwitchVector {
 	device: string
 	name: string
 	timestamp?: string
-	elements: Record<string, OneSwitch>
+	elements: Record<string, boolean>
 }
 
 export interface NewBlobVector {
@@ -340,23 +341,24 @@ export type BlobElement = OneBlob | DefBlob
 export interface IndiClientHandler {
 	message?: (client: IndiClient, message: Message) => void
 	delProperty?: (client: IndiClient, message: DelProperty) => void
+	vector?: (client: IndiClient, message: DefVector | SetVector, tag: `def${VectorType}Vector` | `set${VectorType}Vector`) => void
 	defTextVector?: (client: IndiClient, message: DefTextVector) => void
 	defNumberVector?: (client: IndiClient, message: DefNumberVector) => void
 	defSwitchVector?: (client: IndiClient, message: DefSwitchVector) => void
 	defLightVector?: (client: IndiClient, message: DefLightVector) => void
 	defBlobVector?: (client: IndiClient, message: DefBlobVector) => void
-	defVector?: (client: IndiClient, message: DefVector, name: `def${VectorType}Vector`) => void
+	defVector?: (client: IndiClient, message: DefVector, tag: `def${VectorType}Vector`) => void
 	setTextVector?: (client: IndiClient, message: SetTextVector) => void
 	setNumberVector?: (client: IndiClient, message: SetNumberVector) => void
 	setSwitchVector?: (client: IndiClient, message: SetSwitchVector) => void
 	setLightVector?: (client: IndiClient, message: SetLightVector) => void
 	setBlobVector?: (client: IndiClient, message: SetBlobVector) => void
-	setVector?: (client: IndiClient, message: SetVector, name: `set${VectorType}Vector`) => void
-	textVector?: (client: IndiClient, message: DefTextVector | SetTextVector, name: 'defTextVector' | 'setTextVector') => void
-	numberVector?: (client: IndiClient, message: DefNumberVector | SetNumberVector, name: 'defNumberVector' | 'setNumberVector') => void
-	switchVector?: (client: IndiClient, message: DefSwitchVector | SetSwitchVector, name: 'defSwitchVector' | 'setSwitchVector') => void
-	lightVector?: (client: IndiClient, message: DefLightVector | SetLightVector, name: 'defLightVector' | 'setLightVector') => void
-	blobVector?: (client: IndiClient, message: DefBlobVector | SetBlobVector, name: 'defBLOBVector' | 'setBLOBVector') => void
+	setVector?: (client: IndiClient, message: SetVector, tag: `set${VectorType}Vector`) => void
+	textVector?: (client: IndiClient, message: DefTextVector | SetTextVector, tag: 'defTextVector' | 'setTextVector') => void
+	numberVector?: (client: IndiClient, message: DefNumberVector | SetNumberVector, tag: 'defNumberVector' | 'setNumberVector') => void
+	switchVector?: (client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: 'defSwitchVector' | 'setSwitchVector') => void
+	lightVector?: (client: IndiClient, message: DefLightVector | SetLightVector, tag: 'defLightVector' | 'setLightVector') => void
+	blobVector?: (client: IndiClient, message: DefBlobVector | SetBlobVector, tag: 'defBLOBVector' | 'setBLOBVector') => void
 	close?: () => void
 }
 
@@ -364,8 +366,10 @@ export interface IndiClientOptions {
 	protocol?: IndiClientHandler
 }
 
+export const DEFAULT_INDI_PORT = 7624
+
 export class IndiClient {
-	private readonly parser = new IndiXmlParser()
+	private readonly parser = new SimpleXmlParser()
 	private socket?: Socket
 
 	constructor(private readonly options?: IndiClientOptions) {}
@@ -378,7 +382,7 @@ export class IndiClient {
 		return this.socket?.localPort
 	}
 
-	async connect(hostname: string, port: number = 7624) {
+	async connect(hostname: string, port: number = DEFAULT_INDI_PORT) {
 		if (this.socket) return
 
 		this.socket = await Bun.connect({
@@ -422,26 +426,26 @@ export class IndiClient {
 	}
 
 	private parse(data: Buffer) {
-		for (const tag of this.parser.parse(data)) {
-			this.handleTag(tag)
+		for (const node of this.parser.parse(data)) {
+			this.processNode(node)
 		}
 	}
 
-	private parseDefVector(tag: IndiXmlElement) {
+	private parseDefVector(node: XmlNode) {
 		const message = {
-			device: tag.attributes.device,
-			name: tag.attributes.name,
-			label: tag.attributes.label,
-			group: tag.attributes.group,
-			state: tag.attributes.state,
-			permission: tag.attributes.perm,
-			timeout: tag.attributes.timeout,
-			timestamp: tag.attributes.timestamp,
-			message: tag.attributes.message,
+			device: node.attributes.device,
+			name: node.attributes.name,
+			label: node.attributes.label,
+			group: node.attributes.group,
+			state: node.attributes.state,
+			permission: node.attributes.perm,
+			timeout: node.attributes.timeout,
+			timestamp: node.attributes.timestamp,
+			message: node.attributes.message,
 			elements: {},
 		} as DefVector
 
-		for (const child of tag.children) {
+		for (const child of node.children) {
 			switch (child.name) {
 				case 'defText': {
 					const element = { name: child.attributes.name, label: child.attributes.label, value: child.text } as DefText
@@ -449,7 +453,7 @@ export class IndiClient {
 					break
 				}
 				case 'defNumber': {
-					const element = { name: child.attributes.name, label: child.attributes.label, format: child.attributes.format, min: parseFloat(child.attributes.min), max: parseFloat(child.attributes.max), step: parseFloat(child.attributes.step), value: parseFloat(child.text) } as DefNumber
+					const element = { name: child.attributes.name, label: child.attributes.label, format: child.attributes.format, min: +child.attributes.min, max: +child.attributes.max, step: +child.attributes.step, value: +child.text } as DefNumber
 					;(message as DefNumberVector).elements[element.name] = element
 					break
 				}
@@ -474,18 +478,18 @@ export class IndiClient {
 		return message
 	}
 
-	private parseSetVector(tag: IndiXmlElement) {
+	private parseSetVector(node: XmlNode) {
 		const message = {
-			device: tag.attributes.device,
-			name: tag.attributes.name,
-			state: tag.attributes.state,
-			timeout: tag.attributes.timeout,
-			timestamp: tag.attributes.timestamp,
-			message: tag.attributes.message,
+			device: node.attributes.device,
+			name: node.attributes.name,
+			state: node.attributes.state,
+			timeout: node.attributes.timeout,
+			timestamp: node.attributes.timestamp,
+			message: node.attributes.message,
 			elements: {},
 		} as SetVector
 
-		for (const child of tag.children) {
+		for (const child of node.children) {
 			switch (child.name) {
 				case 'oneText': {
 					const element = { name: child.attributes.name, value: child.text } as OneText
@@ -493,7 +497,7 @@ export class IndiClient {
 					break
 				}
 				case 'oneNumber': {
-					const element = { name: child.attributes.name, value: parseFloat(child.text) } as OneNumber
+					const element = { name: child.attributes.name, value: +child.text } as OneNumber
 					;(message as SetNumberVector).elements[element.name] = element
 					break
 				}
@@ -518,11 +522,11 @@ export class IndiClient {
 		return message
 	}
 
-	protected handleTag(tag: IndiXmlElement) {
-		const a = tag.attributes
+	private processNode(node: XmlNode) {
+		const a = node.attributes
 		const protocol = this.options?.protocol
 
-		switch (tag.name) {
+		switch (node.name) {
 			case 'message':
 				if (protocol?.message) {
 					protocol.message(this, { device: a.device, timestamp: a.timestamp, message: a.message })
@@ -534,87 +538,97 @@ export class IndiClient {
 				}
 				break
 			case 'defTextVector':
-				if (protocol?.defVector || protocol?.defTextVector || protocol?.textVector) {
-					const message = this.parseDefVector(tag)
-					protocol.defVector?.(this, message, tag.name)
-					protocol.defTextVector?.(this, message as DefTextVector)
-					protocol.textVector?.(this, message as TextVector, tag.name)
+				if (protocol?.defVector || protocol?.defTextVector || protocol?.textVector || protocol?.vector) {
+					const message = this.parseDefVector(node)
+					protocol.defVector?.(this, message, node.name)
+					protocol.defTextVector?.(this, message as never)
+					protocol.textVector?.(this, message as never, node.name)
+					protocol.vector?.(this, message, node.name)
 				}
 				break
 			case 'defNumberVector':
-				if (protocol?.defVector || protocol?.defNumberVector || protocol?.numberVector) {
-					const message = this.parseDefVector(tag)
-					protocol.defVector?.(this, message, tag.name)
-					protocol.defNumberVector?.(this, message as DefNumberVector)
-					protocol.numberVector?.(this, message as NumberVector, tag.name)
+				if (protocol?.defVector || protocol?.defNumberVector || protocol?.numberVector || protocol?.vector) {
+					const message = this.parseDefVector(node)
+					protocol.defVector?.(this, message, node.name)
+					protocol.defNumberVector?.(this, message as never)
+					protocol.numberVector?.(this, message as never, node.name)
+					protocol.vector?.(this, message, node.name)
 				}
 				break
 			case 'defSwitchVector':
-				if (protocol?.defVector || protocol?.defSwitchVector || protocol?.switchVector) {
-					const message = this.parseDefVector(tag)
-					protocol.defVector?.(this, message, tag.name)
-					protocol.defSwitchVector?.(this, message as DefSwitchVector)
-					protocol.switchVector?.(this, message as SwitchVector, tag.name)
+				if (protocol?.defVector || protocol?.defSwitchVector || protocol?.switchVector || protocol?.vector) {
+					const message = this.parseDefVector(node)
+					protocol.defVector?.(this, message, node.name)
+					protocol.defSwitchVector?.(this, message as never)
+					protocol.switchVector?.(this, message as never, node.name)
+					protocol.vector?.(this, message, node.name)
 				}
 				break
 			case 'defLightVector':
-				if (protocol?.defVector || protocol?.defLightVector || protocol?.lightVector) {
-					const message = this.parseDefVector(tag)
-					protocol.defVector?.(this, message, tag.name)
-					protocol.defLightVector?.(this, message as DefLightVector)
-					protocol.lightVector?.(this, message as LightVector, tag.name)
+				if (protocol?.defVector || protocol?.defLightVector || protocol?.lightVector || protocol?.vector) {
+					const message = this.parseDefVector(node)
+					protocol.defVector?.(this, message, node.name)
+					protocol.defLightVector?.(this, message as never)
+					protocol.lightVector?.(this, message as never, node.name)
+					protocol.vector?.(this, message, node.name)
 				}
 				break
 			case 'defBLOBVector':
-				if (protocol?.defVector || protocol?.defBlobVector || protocol?.blobVector) {
-					const message = this.parseDefVector(tag)
-					protocol.defVector?.(this, message, tag.name)
-					protocol.defBlobVector?.(this, message as DefBlobVector)
-					protocol.blobVector?.(this, message as BlobVector, tag.name)
+				if (protocol?.defVector || protocol?.defBlobVector || protocol?.blobVector || protocol?.vector) {
+					const message = this.parseDefVector(node)
+					protocol.defVector?.(this, message, node.name)
+					protocol.defBlobVector?.(this, message as never)
+					protocol.blobVector?.(this, message as never, node.name)
+					protocol.vector?.(this, message, node.name)
 				}
 				break
 			case 'setTextVector':
-				if (protocol?.setVector || protocol?.setTextVector || protocol?.textVector) {
-					const message = this.parseSetVector(tag)
-					protocol.setVector?.(this, message, tag.name)
-					protocol.setTextVector?.(this, message as SetTextVector)
-					protocol.textVector?.(this, message as TextVector, tag.name)
+				if (protocol?.setVector || protocol?.setTextVector || protocol?.textVector || protocol?.vector) {
+					const message = this.parseSetVector(node)
+					protocol.setVector?.(this, message, node.name)
+					protocol.setTextVector?.(this, message as never)
+					protocol.textVector?.(this, message as never, node.name)
+					protocol.vector?.(this, message, node.name)
 				}
 				break
 			case 'setNumberVector':
-				if (protocol?.setVector || protocol?.setNumberVector || protocol?.numberVector) {
-					const message = this.parseSetVector(tag)
-					protocol.setVector?.(this, message, tag.name)
-					protocol.setNumberVector?.(this, message as SetNumberVector)
-					protocol.numberVector?.(this, message as NumberVector, tag.name)
+				if (protocol?.setVector || protocol?.setNumberVector || protocol?.numberVector || protocol?.vector) {
+					const message = this.parseSetVector(node)
+					protocol.setVector?.(this, message, node.name)
+					protocol.setNumberVector?.(this, message as never)
+					protocol.numberVector?.(this, message as never, node.name)
+					protocol.vector?.(this, message, node.name)
 				}
 				break
 			case 'setSwitchVector':
-				if (protocol?.setVector || protocol?.setSwitchVector || protocol?.switchVector) {
-					const message = this.parseSetVector(tag)
-					protocol.setVector?.(this, message, tag.name)
-					protocol.setSwitchVector?.(this, message as SetSwitchVector)
-					protocol.switchVector?.(this, message as SwitchVector, tag.name)
+				if (protocol?.setVector || protocol?.setSwitchVector || protocol?.switchVector || protocol?.vector) {
+					const message = this.parseSetVector(node)
+					protocol.setVector?.(this, message, node.name)
+					protocol.setSwitchVector?.(this, message as never)
+					protocol.switchVector?.(this, message as never, node.name)
+					protocol.vector?.(this, message, node.name)
 				}
 				break
 			case 'setLightVector':
-				if (protocol?.setVector || protocol?.setLightVector || protocol?.lightVector) {
-					const message = this.parseSetVector(tag)
-					protocol.setVector?.(this, message, tag.name)
-					protocol.setLightVector?.(this, message as SetLightVector)
-					protocol.lightVector?.(this, message as LightVector, tag.name)
+				if (protocol?.setVector || protocol?.setLightVector || protocol?.lightVector || protocol?.vector) {
+					const message = this.parseSetVector(node)
+					protocol.setVector?.(this, message, node.name)
+					protocol.setLightVector?.(this, message as never)
+					protocol.lightVector?.(this, message as never, node.name)
+					protocol.vector?.(this, message, node.name)
 				}
 				break
 			case 'setBLOBVector':
-				if (protocol?.setVector || protocol?.setBlobVector || protocol?.blobVector) {
-					const message = this.parseSetVector(tag)
-					protocol.setVector?.(this, message, tag.name)
-					protocol.setBlobVector?.(this, message as SetBlobVector)
-					protocol.blobVector?.(this, message as BlobVector, tag.name)
+				if (protocol?.setVector || protocol?.setBlobVector || protocol?.blobVector || protocol?.vector) {
+					const message = this.parseSetVector(node)
+					protocol.setVector?.(this, message, node.name)
+					protocol.setBlobVector?.(this, message as never)
+					protocol.blobVector?.(this, message as never, node.name)
+					protocol.vector?.(this, message, node.name)
 				}
 				break
 			default:
-				console.warn(`unknown tag: ${tag.name}`)
+				console.warn(`unknown tag: ${node.name}`)
 		}
 	}
 
@@ -637,220 +651,39 @@ export class IndiClient {
 		}
 	}
 
-	text(command: NewTextVector) {
+	sendText(vector: NewTextVector) {
 		if (this.socket) {
 			this.socket.write('<newTextVector')
-			this.socket.write(` device="${command.device}"`)
-			this.socket.write(` name="${command.name}"`)
-			if (command.timestamp) this.socket.write(` timestamp="${command.timestamp}">`)
-			for (const name in command.elements) this.socket.write(`<oneText name="${name}">${command.elements[name].value}</oneText>`)
+			this.socket.write(` device="${vector.device}"`)
+			this.socket.write(` name="${vector.name}"`)
+			this.socket.write(` timestamp="${vector.timestamp}">`)
+			for (const name in vector.elements) this.socket.write(`<oneText name="${name}">${vector.elements[name]}</oneText>`)
 			this.socket.write('</newTextVector>')
 			this.socket.flush()
 		}
 	}
 
-	number(command: NewNumberVector) {
+	sendNumber(vector: NewNumberVector) {
 		if (this.socket) {
 			this.socket.write('<newNumberVector')
-			this.socket.write(` device="${command.device}"`)
-			this.socket.write(` name="${command.name}"`)
-			if (command.timestamp) this.socket.write(` timestamp="${command.timestamp}">`)
-			for (const name in command.elements) this.socket.write(`<oneNumber name="${name}">${command.elements[name].value}</oneNumber>`)
+			this.socket.write(` device="${vector.device}"`)
+			this.socket.write(` name="${vector.name}"`)
+			this.socket.write(` timestamp="${vector.timestamp}">`)
+			for (const name in vector.elements) this.socket.write(`<oneNumber name="${name}">${vector.elements[name]}</oneNumber>`)
 			this.socket.write('</newNumberVector>')
 			this.socket.flush()
 		}
 	}
 
-	switch(command: NewSwitchVector) {
+	sendSwitch(vector: NewSwitchVector) {
 		if (this.socket) {
 			this.socket.write('<newSwitchVector')
-			this.socket.write(` device="${command.device}"`)
-			this.socket.write(` name="${command.name}"`)
-			if (command.timestamp) this.socket.write(` timestamp="${command.timestamp}">`)
-			for (const name in command.elements) this.socket.write(`<oneSwitch name="${name}">${command.elements[name].value ? 'On' : 'Off'}</oneSwitch>`)
+			this.socket.write(` device="${vector.device}"`)
+			this.socket.write(` name="${vector.name}"`)
+			this.socket.write(` timestamp="${vector.timestamp ?? ''}">`)
+			for (const name in vector.elements) this.socket.write(`<oneSwitch name="${name}">${vector.elements[name] ? 'On' : 'Off'}</oneSwitch>`)
 			this.socket.write('</newSwitchVector>')
 			this.socket.flush()
 		}
-	}
-}
-
-enum IndiXmlState {
-	START,
-	OPEN_TAG,
-	ATTR,
-	TAG_CONTENT,
-	CLOSE_TAG,
-}
-
-export interface IndiXmlElement {
-	name: string
-	attributes: Record<string, string>
-	text: string
-	children: IndiXmlElement[]
-}
-
-const EMPTY_INDI_XML_ELEMENT: IndiXmlElement = {
-	name: '',
-	attributes: {},
-	text: '',
-	children: [],
-}
-
-const WHITESPACE = 32
-const QUOTE = 34
-const SLASH = 47
-const OPEN_ANGLE = 60
-const EQUAL = 61
-const CLOSE_ANGLE = 62
-const A_UPPER = 65
-const Z_UPPER = 90
-const A_LOWER = 97
-const Z_LOWER = 122
-
-interface ParsedTagContext {
-	tags: IndiXmlElement[]
-	state: IndiXmlState
-	key: string
-	value: string
-	attrState: number
-}
-
-const EMPTY_PARSED_TAG_CONTEXT: ParsedTagContext = {
-	tags: [],
-	state: IndiXmlState.START,
-	key: '',
-	value: '',
-	attrState: 0,
-}
-
-export class IndiXmlParser {
-	private readonly context: ParsedTagContext[] = []
-	private prevCode = 0
-
-	private get currentLevel() {
-		return this.context.length - 1
-	}
-
-	private get currentContext(): ParsedTagContext | undefined {
-		return this.context[this.currentLevel]
-	}
-
-	private get currentTag(): IndiXmlElement | undefined {
-		const context = this.currentContext
-		return context?.tags[context.tags.length - 1]
-	}
-
-	private newContext(state: IndiXmlState = IndiXmlState.START) {
-		const context: ParsedTagContext = {
-			state,
-			tags: [],
-			key: '',
-			value: '',
-			attrState: 0,
-		}
-
-		this.context.push(context)
-
-		return context
-	}
-
-	private removeContext() {
-		return this.context.splice(this.currentLevel, 1)[0]
-	}
-
-	parse(data: Buffer) {
-		const tags: IndiXmlElement[] = []
-
-		for (let i = 0; i < data.length; i++) {
-			const tag = this.parseByte(data.readUInt8(i))
-
-			if (tag) {
-				tags.push(tag)
-			}
-		}
-
-		return tags
-	}
-
-	parseByte(code: number) {
-		const char = String.fromCharCode(code)
-		const context = this.currentContext ?? EMPTY_PARSED_TAG_CONTEXT
-		const tag = context.tags[context.tags.length - 1]
-
-		switch (context.state) {
-			case IndiXmlState.START:
-				if (code === OPEN_ANGLE) {
-					const context = this.newContext(IndiXmlState.OPEN_TAG)
-					context.tags.push(structuredClone(EMPTY_INDI_XML_ELEMENT))
-				}
-
-				break
-			case IndiXmlState.OPEN_TAG:
-				if ((code >= A_UPPER && code <= Z_UPPER) || (code >= A_LOWER && code <= Z_LOWER)) {
-					tag.name += char
-				} else if (code === WHITESPACE) {
-					context.state = IndiXmlState.ATTR
-				} else if (code === CLOSE_ANGLE) {
-					context.state = IndiXmlState.TAG_CONTENT
-				}
-
-				break
-			case IndiXmlState.ATTR:
-				if (code === QUOTE) {
-					if (context.attrState === 1) {
-						context.attrState = 2
-					} else {
-						tag.attributes[context.key] = context.value
-						context.key = ''
-						context.value = ''
-						context.attrState = 0
-					}
-				} else if (context.attrState === 2) {
-					context.value += char
-				} else if ((code >= A_UPPER && code <= Z_UPPER) || (code >= A_LOWER && code <= Z_LOWER)) {
-					context.key += char
-				} else if (code === EQUAL) {
-					context.attrState = 1
-				} else if (code === CLOSE_ANGLE) {
-					context.state = IndiXmlState.TAG_CONTENT
-				}
-
-				break
-			case IndiXmlState.TAG_CONTENT:
-				if (code === OPEN_ANGLE) {
-					// can be "/" or letter
-				} else if (code === SLASH && this.prevCode === OPEN_ANGLE) {
-					tag.text = tag.text.trim()
-					context.state = IndiXmlState.CLOSE_TAG
-				} else if (this.prevCode === OPEN_ANGLE) {
-					const context = this.newContext(IndiXmlState.OPEN_TAG)
-					const tag = structuredClone(EMPTY_INDI_XML_ELEMENT)
-					tag.name = char
-					context.tags.push(tag)
-				} else if (code !== OPEN_ANGLE && code !== 13 && code !== 10) {
-					tag.text += char
-				}
-
-				break
-			case IndiXmlState.CLOSE_TAG:
-				if (code === CLOSE_ANGLE) {
-					const child = this.removeContext()
-
-					if (!this.context.length) {
-						return child.tags[0]
-					} else {
-						const tag = this.currentTag!
-						tag.children.push(...child.tags)
-					}
-				}
-
-				break
-			default:
-				console.warn(`unknown state: ${context.state}`)
-		}
-
-		this.prevCode = code
-
-		return undefined
 	}
 }
