@@ -425,13 +425,13 @@ export class IndiClient {
 		this.socket = undefined
 	}
 
-	private parse(data: Buffer) {
+	parse(data: Buffer) {
 		for (const node of this.parser.parse(data)) {
 			this.processNode(node)
 		}
 	}
 
-	private parseDefVector(node: XmlNode) {
+	parseDefVector(node: XmlNode) {
 		const message = {
 			device: node.attributes.device,
 			name: node.attributes.name,
@@ -439,11 +439,15 @@ export class IndiClient {
 			group: node.attributes.group,
 			state: node.attributes.state,
 			permission: node.attributes.perm,
-			timeout: node.attributes.timeout,
+			timeout: parseInt(node.attributes.timeout),
 			timestamp: node.attributes.timestamp,
 			message: node.attributes.message,
 			elements: {},
 		} as DefVector
+
+		if (node.name === 'defSwitchVector') {
+			;(message as DefSwitchVector).rule = node.attributes.rule as SwitchRule
+		}
 
 		for (const child of node.children) {
 			switch (child.name) {
@@ -478,7 +482,7 @@ export class IndiClient {
 		return message
 	}
 
-	private parseSetVector(node: XmlNode) {
+	parseSetVector(node: XmlNode) {
 		const message = {
 			device: node.attributes.device,
 			name: node.attributes.name,
