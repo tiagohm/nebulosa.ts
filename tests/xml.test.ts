@@ -3,7 +3,9 @@ import { SimpleXmlParser } from '../src/xml'
 
 const input = `
 <person id="1" type="student">
-    <name>John Doe</name>
+    <name>
+    John Doe
+    </name>
     <age>25</age>
     <address city="New York"/>
 </person>

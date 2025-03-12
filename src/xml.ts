@@ -156,11 +156,14 @@ export class SimpleXmlParser {
 
 				this.tag = ''
 				this.state = XmlState.START
-				this.prevCode = undefined
 
-				if (node && this.tree.length === 0) {
+				if (node) {
 					node.text = node.text.trim()
-					return node
+
+					if (this.tree.length === 0) {
+						this.prevCode = undefined
+						return node
+					}
 				}
 			}
 		}

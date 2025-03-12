@@ -35,7 +35,7 @@ formatSignedDms(PI) // Format the angle as +00d00m00.00s
 ### Astap
 
 ```ts
-const stars = astapDetectStars(options) // Detect stars on image using astap
+const stars = astapDetectStars(path, options) // Detect stars on image using astap
 ```
 
 ### Astrobin
@@ -394,6 +394,13 @@ jupiter(time) // Compute the position and velocity of Jupiter
 saturn(time) // Compute the position and velocity of Saturn
 uranus(time) // Compute the position and velocity of Uranus
 neptune(time) // Compute the position and velocity of Neptune
+```
+
+### XML
+
+```ts
+const parser = new SimpleXmlParser()
+const tags = parser.parse(xml) // Parse one or more XML tags
 ```
 
 ## Inspired by
