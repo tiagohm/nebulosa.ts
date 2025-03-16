@@ -159,6 +159,7 @@ export interface DefBlobVector {
 export interface DefBlob {
 	name: string
 	label?: string
+    value?: never
 }
 
 export type DefVector = DefTextVector | DefNumberVector | DefSwitchVector | DefLightVector | DefBlobVector
@@ -371,19 +372,24 @@ export const DEFAULT_INDI_PORT = 7624
 export class IndiClient {
 	private readonly parser = new SimpleXmlParser()
 	private socket?: Socket
+	private readonly info: [string?, number?, string?] = []
 
 	constructor(private readonly options?: IndiClientOptions) {}
 
 	get host() {
-		return this.socket?.remoteAddress
+		return this.info[0]
 	}
 
 	get port() {
-		return this.socket?.localPort
+		return this.info[1]
+	}
+
+	get id() {
+		return this.info[2]
 	}
 
 	async connect(hostname: string, port: number = DEFAULT_INDI_PORT) {
-		if (this.socket) return
+		if (this.socket) return true
 
 		this.socket = await Bun.connect({
 			hostname,
@@ -418,6 +424,13 @@ export class IndiClient {
 				},
 			},
 		})
+
+		const ip = this.socket.remoteAddress
+		this.info[0] = ip
+		this.info[1] = port
+		this.info[2] = Bun.MD5.hash(`${ip}:${port}:INDI`, 'hex')
+
+		return true
 	}
 
 	close() {
@@ -660,7 +673,7 @@ export class IndiClient {
 			this.socket.write('<newTextVector')
 			this.socket.write(` device="${vector.device}"`)
 			this.socket.write(` name="${vector.name}"`)
-			this.socket.write(` timestamp="${vector.timestamp}">`)
+			this.socket.write(` timestamp="${vector.timestamp ?? ''}">`)
 			for (const name in vector.elements) this.socket.write(`<oneText name="${name}">${vector.elements[name]}</oneText>`)
 			this.socket.write('</newTextVector>')
 			this.socket.flush()
@@ -672,7 +685,7 @@ export class IndiClient {
 			this.socket.write('<newNumberVector')
 			this.socket.write(` device="${vector.device}"`)
 			this.socket.write(` name="${vector.name}"`)
-			this.socket.write(` timestamp="${vector.timestamp}">`)
+			this.socket.write(` timestamp="${vector.timestamp ?? ''}">`)
 			for (const name in vector.elements) this.socket.write(`<oneNumber name="${name}">${vector.elements[name]}</oneNumber>`)
 			this.socket.write('</newNumberVector>')
 			this.socket.flush()
