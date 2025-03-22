@@ -58,7 +58,6 @@ export class SimpleXmlParser {
 			for (let i = 0; i < input.byteLength; i++) {
 				const code = input.readInt8(i)
 				const node = this.processByte(code)
-
 				if (node) nodes.push(node)
 			}
 		}
@@ -120,13 +119,30 @@ export class SimpleXmlParser {
 				this.name.writeInt8(code)
 			} else if (code === EQUAL) {
 				this.state = XmlState.ATTR_VALUE
-			} else if (code === CLOSE_ANGLE) {
-				this.appendNode(this.attributes, this.prevCode !== SLASH)
-				this.state = XmlState.TEXT
+			} else if (code === CLOSE_ANGLE || code === WHITESPACE) {
+				const name = this.name.toString()
+
+				if (name) {
+					this.attributes[name] = ''
+					this.name.reset()
+				}
+
+				if (code === CLOSE_ANGLE) {
+					const node = this.appendNode(this.attributes, this.prevCode !== SLASH)
+					this.attributes = {}
+
+					if (this.tree.length === 0) {
+						this.state = XmlState.START
+						this.prevCode = undefined
+						return node
+					}
+
+					this.state = XmlState.TEXT
+				}
 			}
 		} else if (this.state === XmlState.ATTR_VALUE) {
 			if (code === QUOTE) {
-				if (this.value.length > 0) {
+				if (this.value.length > 0 || this.prevCode === QUOTE) {
 					const name = this.name.toString()
 					this.attributes[name] = this.value.toString()
 					this.name.reset()
@@ -148,25 +164,22 @@ export class SimpleXmlParser {
 			}
 		} else if (this.state === XmlState.SELF_CLOSE) {
 			if (code === CLOSE_ANGLE) {
-				this.appendNode(this.attributes)
+				const node = this.appendNode(this.attributes, false)
 				this.state = XmlState.START
+
+				if (this.tree.length === 0) {
+					this.prevCode = undefined
+					return node
+				}
 			}
 		} else if (this.state === XmlState.TAG_CLOSE) {
-			if (isAlphaNumeric(code)) {
-				this.tag.writeInt8(code)
-			} else if (code === CLOSE_ANGLE) {
+			if (code === CLOSE_ANGLE) {
 				const node = this.tree.pop()
-
-				this.tag.reset()
 				this.state = XmlState.START
 
-				if (node) {
-					// node.text = node.text.trim()
-
-					if (this.tree.length === 0) {
-						this.prevCode = undefined
-						return node
-					}
+				if (node && this.tree.length === 0) {
+					this.prevCode = undefined
+					return node
 				}
 			}
 		}

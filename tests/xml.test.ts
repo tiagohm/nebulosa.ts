@@ -86,4 +86,52 @@ describe('parse', () => {
 		expect(tag.children[2].text).toBe('')
 		expect(tag.children[2].children).toBeEmpty()
 	})
+
+	test('edge cases', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<person></person>')).toEqual([{ name: 'person', attributes: {}, children: [], text: '' }])
+		expect(parser.parse('<person name="John"></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: '' }])
+		expect(parser.parse('<person name="John" disabled student></person>')).toEqual([{ name: 'person', attributes: { name: 'John', disabled: '', student: '' }, children: [], text: '' }])
+		expect(parser.parse('<person gender=""></person>')).toEqual([{ name: 'person', attributes: { gender: '' }, children: [], text: '' }])
+		expect(parser.parse('<person>Text</person>')).toEqual([{ name: 'person', attributes: {}, children: [], text: 'Text' }])
+		expect(parser.parse('<person name="John"><phone number="5511987654321"></phone></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'phone', attributes: { number: '5511987654321' }, children: [], text: '' }], text: '' }])
+		expect(parser.parse('<person name="John"><phone number="5511987654321" /></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'phone', attributes: { number: '5511987654321' }, children: [], text: '' }], text: '' }])
+		expect(parser.parse('<person name="John"><phone country="55">11987654321</phone></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'phone', attributes: { country: '55' }, children: [], text: '11987654321' }], text: '' }])
+		expect(parser.parse('<person name="John"><phone number="5511987654321"></phone><phone country="55">11976543210</phone></person>')).toEqual([
+			{
+				name: 'person',
+				attributes: { name: 'John' },
+				children: [
+					{ name: 'phone', attributes: { number: '5511987654321' }, children: [], text: '' },
+					{ name: 'phone', attributes: { country: '55' }, children: [], text: '11976543210' },
+				],
+				text: '',
+			},
+		])
+		expect(parser.parse('<person name="John"><address><city>New York</city></address></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'address', attributes: {}, children: [{ name: 'city', attributes: {}, children: [], text: 'New York' }], text: '' }], text: '' }])
+		expect(parser.parse('<person name="John"><address><city>New York</city><complement/></address></person>')).toEqual([
+			{
+				name: 'person',
+				attributes: { name: 'John' },
+				children: [
+					{
+						name: 'address',
+						attributes: {},
+						children: [
+							{ name: 'city', attributes: {}, children: [], text: 'New York' },
+							{ name: 'complement', attributes: {}, children: [], text: '' },
+						],
+						text: '',
+					},
+				],
+				text: '',
+			},
+		])
+
+		expect(parser.parse('<person/>')).toEqual([{ name: 'person', attributes: {}, children: [], text: '' }])
+		expect(parser.parse('<person name="John"/>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: '' }])
+		expect(parser.parse('<person name="John" disabled student/>')).toEqual([{ name: 'person', attributes: { name: 'John', disabled: '', student: '' }, children: [], text: '' }])
+		expect(parser.parse('<person gender=""/>')).toEqual([{ name: 'person', attributes: { gender: '' }, children: [], text: '' }])
+	})
 })
