@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { bufferSink, bufferSource, fileHandleSink, fileHandleSource, rangeHttpSource, readLines, readableStreamSource } from '../src/io'
+import { GrowableBuffer, bufferSink, bufferSource, fileHandleSink, fileHandleSource, rangeHttpSource, readLines, readableStreamSource } from '../src/io'
 
 test('bufferSink', () => {
 	const buffer = Buffer.allocUnsafe(16)
@@ -258,4 +258,32 @@ test('rangeHttpSource', async () => {
 	source.seek(32)
 	expect(await source.read(buffer)).toBe(10)
 	expect(buffer.toString()).toBe('Tiago Melo')
+})
+
+describe('growableBuffer', () => {
+	test('writeInt8', () => {
+		const buffer = new GrowableBuffer(4)
+		buffer.writeInt8(48)
+		buffer.writeInt8(49)
+		buffer.writeInt8(50)
+		buffer.writeInt8(51)
+
+		expect(buffer.length).toBe(4)
+
+		buffer.writeInt8(52)
+
+		expect(buffer.length).toBe(5)
+		expect(buffer.toString()).toBe('01234')
+
+		buffer.reset()
+
+		expect(buffer.length).toBe(0)
+
+		buffer.writeInt8(10)
+		buffer.writeInt8(33)
+		buffer.writeInt8(10)
+
+		expect(buffer.length).toBe(3)
+		expect(buffer.toString('ascii', true)).toBe('!')
+	})
 })

@@ -304,3 +304,51 @@ export async function sourceTransferToSink(source: Source, sink: Sink, size: num
 
 	return read
 }
+
+export class GrowableBuffer {
+	private position = 0
+	private buffer: Buffer
+
+	constructor(size: number = 1024) {
+		this.buffer = Buffer.allocUnsafe(Math.max(1, size))
+	}
+
+	get length() {
+		return this.position
+	}
+
+	writeInt8(value: number) {
+		this.ensureCapacity(this.position + 1)
+		this.position = this.buffer.writeInt8(value, this.position)
+	}
+
+	reset() {
+		this.position = 0
+	}
+
+	toString(encoding?: BufferEncoding, trim?: boolean) {
+		if (this.position <= 0) return ''
+
+		let start = 0
+		let end = this.position - 1
+
+		if (trim) {
+			while (start <= end && this.buffer.readInt8(start) <= 32) start++
+			while (end > start && this.buffer.readInt8(end) <= 32) end--
+		}
+
+		return this.buffer.toString(encoding, start, end + 1)
+	}
+
+	private ensureCapacity(min: number) {
+		if (min - this.buffer.length > 0) {
+			this.resize()
+		}
+	}
+
+	private resize() {
+		const buffer = Buffer.allocUnsafe(this.buffer.byteLength * 2)
+		this.buffer.copy(buffer, 0, 0, this.position)
+		this.buffer = buffer
+	}
+}

@@ -1,5 +1,7 @@
 // https://x.com/i/grok/share/3i6xCCEtUvQWeNnbiVMaermCl
 
+import { GrowableBuffer } from './io'
+
 export type XmlNodeAtrributes = Record<string, string>
 
 export interface XmlNode {
@@ -36,10 +38,10 @@ const COLON = 58
 
 export class SimpleXmlParser {
 	private state = XmlState.START
-	private tag = ''
-	private name = ''
-	private value?: string
-	private text = ''
+	private readonly tag = new GrowableBuffer(32)
+	private readonly name = new GrowableBuffer(32)
+	private readonly value = new GrowableBuffer(128)
+	private readonly text = new GrowableBuffer()
 	private attributes: XmlNodeAtrributes = {}
 	private tree: XmlNode[] = []
 	private prevCode?: number
@@ -49,7 +51,7 @@ export class SimpleXmlParser {
 
 		if (typeof input === 'string') {
 			for (let i = 0; i < input.length; i++) {
-				const node = this.processByte(input.charCodeAt(i), input[i])
+				const node = this.processByte(input.charCodeAt(i))
 				if (node) nodes.push(node)
 			}
 		} else {
@@ -66,17 +68,17 @@ export class SimpleXmlParser {
 
 	reset() {
 		this.state = XmlState.START
-		this.tag = ''
-		this.name = ''
-		this.value = undefined
-		this.text = ''
+		this.tag.reset()
+		this.name.reset()
+		this.value.reset()
+		this.text.reset()
 		this.attributes = {}
 		this.tree = []
 		this.prevCode = undefined
 	}
 
 	private appendNode(attributes: XmlNodeAtrributes, push: boolean = true) {
-		const node: XmlNode = { name: this.tag, attributes, children: [], text: '' }
+		const node: XmlNode = { name: this.tag.toString(), attributes, children: [], text: '' }
 
 		if (this.tree.length) {
 			this.tree[this.tree.length - 1].children.push(node)
@@ -84,26 +86,26 @@ export class SimpleXmlParser {
 
 		if (push) this.tree.push(node)
 
-		this.tag = ''
+		this.tag.reset()
 
 		return node
 	}
 
-	private processByte(code: number, char?: string) {
+	private processByte(code: number) {
 		if (this.state === XmlState.START) {
 			if (code === OPEN_ANGLE) {
 				this.state = XmlState.TAG_OPEN
 			}
 		} else if (this.state === XmlState.TAG_OPEN) {
 			if (isAlphaNumeric(code)) {
-				this.tag += char ?? String.fromCharCode(code)
+				this.tag.writeInt8(code)
 				this.state = XmlState.TAG_NAME
 			} else if (code === SLASH) {
 				this.state = XmlState.TAG_CLOSE
 			}
 		} else if (this.state === XmlState.TAG_NAME) {
 			if (isAlphaNumeric(code) || code === COLON) {
-				this.tag += char ?? String.fromCharCode(code)
+				this.tag.writeInt8(code)
 			} else if (code === WHITESPACE) {
 				this.attributes = {}
 				this.state = XmlState.ATTR_NAME
@@ -115,7 +117,7 @@ export class SimpleXmlParser {
 			}
 		} else if (this.state === XmlState.ATTR_NAME) {
 			if (isAlphaNumeric(code)) {
-				this.name += char ?? String.fromCharCode(code)
+				this.name.writeInt8(code)
 			} else if (code === EQUAL) {
 				this.state = XmlState.ATTR_VALUE
 			} else if (code === CLOSE_ANGLE) {
@@ -124,24 +126,25 @@ export class SimpleXmlParser {
 			}
 		} else if (this.state === XmlState.ATTR_VALUE) {
 			if (code === QUOTE) {
-				if (this.value !== undefined) {
-					this.attributes[this.name] = this.value
-					this.name = ''
-					this.value = undefined
+				if (this.value.length > 0) {
+					const name = this.name.toString()
+					this.attributes[name] = this.value.toString()
+					this.name.reset()
+					this.value.reset()
 					this.state = XmlState.ATTR_NAME
 				} else {
-					this.value = ''
+					this.value.reset()
 				}
 			} else {
-				this.value += char ?? String.fromCharCode(code)
+				this.value.writeInt8(code)
 			}
 		} else if (this.state === XmlState.TEXT) {
 			if (code === OPEN_ANGLE) {
-				this.tree[this.tree.length - 1].text += this.text
-				this.text = ''
+				this.tree[this.tree.length - 1].text = this.text.toString(undefined, true)
+				this.text.reset()
 				this.state = XmlState.TAG_OPEN
 			} else {
-				this.text += char ?? String.fromCharCode(code)
+				this.text.writeInt8(code)
 			}
 		} else if (this.state === XmlState.SELF_CLOSE) {
 			if (code === CLOSE_ANGLE) {
@@ -150,15 +153,15 @@ export class SimpleXmlParser {
 			}
 		} else if (this.state === XmlState.TAG_CLOSE) {
 			if (isAlphaNumeric(code)) {
-				this.tag += char ?? String.fromCharCode(code)
+				this.tag.writeInt8(code)
 			} else if (code === CLOSE_ANGLE) {
 				const node = this.tree.pop()
 
-				this.tag = ''
+				this.tag.reset()
 				this.state = XmlState.START
 
 				if (node) {
-					node.text = node.text.trim()
+					// node.text = node.text.trim()
 
 					if (this.tree.length === 0) {
 						this.prevCode = undefined
