@@ -159,7 +159,7 @@ export interface DefBlobVector {
 export interface DefBlob {
 	name: string
 	label?: string
-    value?: never
+	value?: never
 }
 
 export type DefVector = DefTextVector | DefNumberVector | DefSwitchVector | DefLightVector | DefBlobVector
@@ -372,24 +372,28 @@ export const DEFAULT_INDI_PORT = 7624
 export class IndiClient {
 	private readonly parser = new SimpleXmlParser()
 	private socket?: Socket
-	private readonly info: [string?, number?, string?] = []
+	private readonly metadata: [string?, number?] = []
 
 	constructor(private readonly options?: IndiClientOptions) {}
 
-	get host() {
-		return this.info[0]
+	get remoteHost() {
+		return this.metadata[0]
 	}
 
-	get port() {
-		return this.info[1]
+	get remotePort() {
+		return this.metadata[1]
 	}
 
-	get id() {
-		return this.info[2]
+	get remoteIp() {
+		return this.socket?.remoteAddress
+	}
+
+	get localPort() {
+		return this.socket?.localPort
 	}
 
 	async connect(hostname: string, port: number = DEFAULT_INDI_PORT) {
-		if (this.socket) return true
+		if (this.socket) return false
 
 		this.socket = await Bun.connect({
 			hostname,
@@ -425,10 +429,8 @@ export class IndiClient {
 			},
 		})
 
-		const ip = this.socket.remoteAddress
-		this.info[0] = ip
-		this.info[1] = port
-		this.info[2] = Bun.MD5.hash(`${ip}:${port}:INDI`, 'hex')
+		this.metadata[0] = hostname
+		this.metadata[1] = port
 
 		return true
 	}
