@@ -4,6 +4,7 @@
 	"module": "main.ts",
 	"type": "module",
 	"scripts": {
+		"postinstall": "bun run native/copy.ts",
 		"lint": "biome lint --write src/",
 		"format": "biome format --write src/"
 	},
