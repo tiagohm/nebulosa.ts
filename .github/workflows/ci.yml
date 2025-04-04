@@ -29,4 +29,5 @@ jobs:
             - uses: actions/checkout@v4
             - uses: oven-sh/setup-bun@v2
             - run: bun install --production
+            - run: bun run native/copy.ts
             - run: bun test --timeout 1000
