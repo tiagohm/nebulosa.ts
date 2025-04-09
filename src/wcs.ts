@@ -1,7 +1,7 @@
 import { type Pointer, dlopen, ptr, read } from 'bun:ffi'
 import wcsPath from '../native/libwcs.shared' with { type: 'file' }
 import { type Angle, deg, toDeg } from './angle'
-import type { FitsHeader } from './fits'
+import { type FitsHeader, numeric } from './fits'
 
 type LibWcs = ReturnType<typeof open>
 
@@ -31,7 +31,7 @@ export class Wcs implements Disposable {
 	}
 
 	load(header: FitsHeader) {
-		const [buffer, n] = makeBufferFromHeader(header)
+		const [buffer, n] = bufferFromHeader(header)
 		const mem = Buffer.allocUnsafe(4 + 4 + 8)
 		const nreject = ptr(mem, 0)
 		const nwcs = ptr(mem, 4)
@@ -105,7 +105,59 @@ export class Wcs implements Disposable {
 	}
 }
 
-function isValidHeaderKey(key: string) {
+export function hasCd(header: FitsHeader) {
+	return 'CD1_1' in header || ('CDELT1' in header && 'CROTA2' in header) || ('CDELT1' in header && 'PC1_1' in header)
+}
+
+export function cdMatrix(header: FitsHeader) {
+	if (hasCd(header)) {
+		return [cd(header, 1, 1), cd(header, 1, 2), cd(header, 2, 1), cd(header, 2, 2)] as const
+	} else {
+		const a = numeric(header, 'CDELT1')
+		const b = numeric(header, 'CDELT2')
+		const c = deg(numeric(header, 'CROTA2'))
+		return cdFromCdelt(a, b, c)
+	}
+}
+
+export function cd(header: FitsHeader, i: number, j: number): number {
+	if ('CD1_1' in header) {
+		return numeric(header, `CD${i}_${j}`)
+	} else if ('CROTA2' in header) {
+		const a = numeric(header, 'CDELT1')
+		const b = numeric(header, 'CDELT2')
+		const c = deg(numeric(header, 'CROTA2'))
+		const cd = cdFromCdelt(a, b, c)
+		return cd[2 * i + j - 3]
+	} else if ('PC1_1' in header) {
+		const pc11 = numeric(header, 'PC1_1')
+		const pc12 = numeric(header, 'PC1_2')
+		const pc21 = numeric(header, 'PC2_1')
+		const pc22 = numeric(header, 'PC2_2')
+		const a = numeric(header, 'CDELT1')
+		const b = numeric(header, 'CDELT2')
+		const cd = pc2cd(pc11, pc12, pc21, pc22, a, b)
+		return cd[2 * i + j - 3]
+	} else {
+		return 0
+	}
+}
+
+export function cdFromCdelt(cdelt1: number, cdelt2: number, crota: Angle) {
+	const cos0 = Math.cos(crota)
+	const sin0 = Math.sin(crota)
+	const cd11 = cdelt1 * cos0
+	const cd12 = Math.abs(cdelt2) * Math.sign(cdelt1) * sin0
+	const cd21 = -Math.abs(cdelt1) * Math.sign(cdelt2) * sin0
+	const cd22 = cdelt2 * cos0
+	return [cd11, cd12, cd21, cd22] as const
+}
+
+export function pc2cd(pc11: number, pc10: number, pc21: number, pc22: number, cdelt1: number, cdelt2: number) {
+	return [cdelt1 * pc11, cdelt2 * pc21, cdelt1 * pc10, cdelt2 * pc22] as const
+}
+
+function isValidFitsHeaderKey(key: keyof FitsHeader) {
 	return (
 		key.startsWith('NAXIS') ||
 		key.startsWith('CUNIT') ||
@@ -129,12 +181,12 @@ function isValidHeaderKey(key: string) {
 	)
 }
 
-function makeBufferFromHeader(header: FitsHeader) {
+function bufferFromHeader(header: FitsHeader) {
 	let text = ''
 	let n = 0
 
 	for (const key in header) {
-		if (isValidHeaderKey(key)) {
+		if (isValidFitsHeaderKey(key)) {
 			const value = header[key]
 
 			text += key.padEnd(8, ' ')
