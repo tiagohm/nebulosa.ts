@@ -148,6 +148,6 @@ export async function identify(dateTime: DateTime, longitude: Angle, latitude: A
 export async function closeApproaches(dateMin?: DateTime | number | 'now', dateMax: DateTime | number = 7, distance: number = 10) {
 	dateMin = !dateMin || dateMin === 'now' ? now() : typeof dateMin === 'number' ? dateUnix(dateMin) : dateMin
 	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatDate(dateMin, 'YYYY-MM-DD')}&date-max=${typeof dateMax === 'number' ? `%2B${dateMax}` : formatDate(dateMax, 'YYYY-MM-DD')}&dist-max=${distance}LD`
-    const response = await fetch(uri)
+	const response = await fetch(uri)
 	return (await response.json()) as SmallBodyCloseApproach
 }

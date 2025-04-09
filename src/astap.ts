@@ -1,4 +1,3 @@
-import { $ } from 'bun'
 import { basename, dirname, join } from 'path'
 import { readCsv } from './csv'
 import type { DetectedStar } from './stardetector'
@@ -9,12 +8,14 @@ export interface AstapStarDetectOptions {
 	outputDirectory?: string
 }
 
-export async function astapDetectStars(input: string, options?: AstapStarDetectOptions): Promise<DetectedStar[]> {
+export async function astapDetectStars(input: string, options?: AstapStarDetectOptions, signal?: AbortSignal): Promise<DetectedStar[]> {
 	const cwd = options?.outputDirectory || dirname(input)
 	const minSNR = options?.minSNR ?? 0
-	const executable = options?.executable || defaultExecutableForPlatform()
+	const executable = options?.executable || executableForCurrentPlatform()
 
-	const { exitCode } = await $`${executable} -f ${input} -z 0 -extract ${minSNR}`.cwd(cwd).quiet().nothrow()
+	const process = Bun.spawn([executable, '-f', input, '-z', '0', '-extract', minSNR.toFixed(0)], { cwd, signal })
+
+	const exitCode = await process.exited
 
 	if (exitCode === 0) {
 		const file = Bun.file(`${join(cwd, basename(input, '.jpg'))}.csv`)
@@ -44,7 +45,7 @@ export async function astapDetectStars(input: string, options?: AstapStarDetectO
 	return []
 }
 
-function defaultExecutableForPlatform() {
+function executableForCurrentPlatform() {
 	switch (process.platform) {
 		case 'win32':
 			return 'C:\\Program Files\\astap\\astap.exe'
