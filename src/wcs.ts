@@ -1,7 +1,7 @@
 import { type Pointer, dlopen, ptr, read } from 'bun:ffi'
 import wcsPath from '../native/libwcs.shared' with { type: 'file' }
 import { type Angle, deg, toDeg } from './angle'
-import { type FitsHeader, numeric } from './fits'
+import { type FitsHeader, FitsKeywordWriter, numeric } from './fits'
 
 type LibWcs = ReturnType<typeof open>
 
@@ -182,21 +182,18 @@ function isValidFitsHeaderKey(key: keyof FitsHeader) {
 }
 
 function bufferFromHeader(header: FitsHeader) {
-	let text = ''
-	let n = 0
+	const writer = new FitsKeywordWriter()
+	const keys = Object.keys(header).filter(isValidFitsHeaderKey)
+	const output = Buffer.allocUnsafe(keys.length * 80)
 
-	for (const key in header) {
-		if (isValidFitsHeaderKey(key)) {
+	if (keys.length > 0) {
+		let n = 0
+
+		for (const key of keys) {
 			const value = header[key]
-
-			text += key.padEnd(8, ' ')
-			text += '= '
-			if (typeof value === 'string') text += `'${value}'`.padEnd(70, ' ')
-			else text += `${value}`.padEnd(70, ' ')
-
-			n++
+			n += writer.write([key, value], output, n)
 		}
 	}
 
-	return [Buffer.from(text, 'ascii'), n] as const
+	return [output, keys.length] as const
 }
