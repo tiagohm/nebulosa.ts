@@ -48,11 +48,12 @@ test('reader', () => {
 test('writer', () => {
 	const writer = new FitsKeywordWriter()
 	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE)
+	const offset = Math.trunc(Math.random() * (FITS_BLOCK_SIZE / 2)) + 1
 
 	function write(card: FitsHeaderCard, expectedLength: number = FITS_HEADER_CARD_SIZE) {
-		const n = writer.write(card, buffer)
+		const n = writer.write(card, buffer, offset)
 		expect(n).toBe(expectedLength)
-		return buffer.toString('ascii', 0, n)
+		return buffer.toString('ascii', offset, offset + n)
 	}
 
 	expect(write(['SIMPLE', true, 'file does conform to FITS standard'])).toBe('SIMPLE  =                    T / file does conform to FITS standard             ')

@@ -393,98 +393,112 @@ const LONG_COMMENT_PREFIX = ' /'
 
 // https://github.com/nom-tam-fits/nom-tam-fits/blob/master/src/main/java/nom/tam/fits/HeaderCardFormatter.java
 
-export class FitsKeywordWriter {
-	private position = 0
+class Position {
+	constructor(
+		public offset: number,
+		public size: number = 0,
+		public readonly start: number = offset,
+	) {}
 
-	write(card: FitsHeaderCard, output: Buffer) {
-		this.position = 0
-		this.appendKey(output, card)
-		const valueStart = this.appendValue(output, card)
-		const valueEnd = this.position
-		this.appendComment(output, card)
+	increment(n: number = 1) {
+		this.offset += n
+		this.size += n
+	}
+}
+
+export class FitsKeywordWriter {
+	write(card: FitsHeaderCard, output: Buffer, offset: number = 0) {
+		if (output.byteLength - offset < FITS_HEADER_CARD_SIZE) return 0
+
+		const position = new Position(offset)
+		this.appendKey(output, card, position)
+		const valueStart = this.appendValue(output, card, position)
+		const valueEnd = position.size
+		this.appendComment(output, card, position)
 
 		if (!isCommentStyleCard(card)) {
 			// Strings must be left aligned with opening quote in byte 11 (counted from 1)
-			this.realign(output, typeof card[1] === 'string' ? valueEnd : valueStart, valueEnd)
+			this.realign(output, typeof card[1] === 'string' ? valueEnd : valueStart, valueEnd, position)
 		}
 
-		this.pad(output)
+		this.pad(output, position)
 
-		return this.position
+		return position.size
 	}
 
-	private appendKey(output: Buffer, card: FitsHeaderCard) {
-		this.appendText(output, card[0])
-		this.padTo(output, FITS_MAX_KEYWORD_LENGTH)
+	private appendKey(output: Buffer, card: FitsHeaderCard, position: Position) {
+		this.appendText(output, card[0], position)
+		this.padTo(output, FITS_MAX_KEYWORD_LENGTH, position)
 	}
 
-	private appendValue(output: Buffer, card: FitsHeaderCard) {
+	private appendValue(output: Buffer, card: FitsHeaderCard, position: Position) {
 		const [, value, comment] = card
 
 		if (isCommentStyleCard(card)) {
 			// Comment-style card. Nothing to do here...
-			return this.position
+			return position.size
 		}
 
 		// Add assignment sequence "= "
-		this.appendText(output, '= ')
+		this.appendText(output, '= ', position)
 
 		if (value === undefined) {
 			// 'null' value, nothing more to append.
-			return this.position
+			return position.size
 		}
 
-		const start = this.position
+		const start = position.size
 
 		if (typeof value === 'string') {
-			let from = this.appendQuotedValue(output, value, comment, 0)
+			let from = this.appendQuotedValue(output, value, comment, 0, position)
 
 			while (from < value.length) {
-				this.pad(output)
-				this.appendText(output, 'CONTINUE  ')
-				from += this.appendQuotedValue(output, value, comment, from)
+				this.pad(output, position)
+				this.appendText(output, 'CONTINUE  ', position)
+				from += this.appendQuotedValue(output, value, comment, from, position)
 			}
 		} else if (typeof value === 'boolean') {
-			this.appendText(output, value ? 'T' : 'F')
+			this.appendText(output, value ? 'T' : 'F', position)
 		} else if (Number.isInteger(value)) {
-			this.appendText(output, value.toFixed(0))
+			this.appendText(output, value.toFixed(0), position)
 		} else {
-			this.appendText(output, value.toExponential(20).toUpperCase())
+			this.appendText(output, value.toExponential(20).toUpperCase(), position)
 		}
 
 		return start
 	}
 
-	private appendComment(output: Buffer, card: FitsHeaderCard) {
+	private appendComment(output: Buffer, card: FitsHeaderCard, position: Position) {
 		const commentStyleCard = isCommentStyleCard(card)
 		const comment = commentStyleCard ? card[2] || (typeof card[1] === 'string' ? card[1] : undefined) : card[2]
 
 		if (!comment) return true
 
-		const available = this.getAvailable() - (commentStyleCard ? 1 : COMMENT_PREFIX.length)
+		const available = this.getAvailable(output, position) - (commentStyleCard ? 1 : COMMENT_PREFIX.length)
 
-		this.appendText(output, commentStyleCard ? ' ' : COMMENT_PREFIX)
+		this.appendText(output, commentStyleCard ? ' ' : COMMENT_PREFIX, position)
 
 		if (available >= comment.length) {
-			this.appendText(output, comment)
+			this.appendText(output, comment, position)
 			return true
 		}
 
-		this.appendText(output, comment.substring(0, available))
+		this.appendText(output, comment.substring(0, available), position)
 
 		return false
 	}
 
-	private appendText(output: Buffer, text: string) {
-		this.position += output.write(text, this.position, 'ascii')
+	private appendText(output: Buffer, text: string, position: Position) {
+		const n = output.write(text, position.offset, 'ascii')
+		position.increment(n)
 	}
 
-	private appendQuotedValue(output: Buffer, value: string, comment: FitsHeaderComment, from: number) {
+	private appendQuotedValue(output: Buffer, value: string, comment: FitsHeaderComment, from: number, position: Position) {
 		// Always leave room for an extra & character at the end...
-		let available = this.getAvailable() - 2
+		let available = this.getAvailable(output, position) - 2
 
 		// If long strings are enabled leave space for '&' at the end.
-		if (comment?.length && this.isLongStringsEnabled(output)) available--
+		if (comment?.length && this.isLongStringsEnabled(output, position)) available--
 
 		// The the remaining part of the string fits in the space with the
 		// quoted quotes, then it's easy...
@@ -492,30 +506,30 @@ export class FitsKeywordWriter {
 			const escaped = escapeQuotedText(from === 0 ? value : value.substring(from))
 
 			if (escaped.length <= available) {
-				this.appendText(output, "'")
-				this.appendText(output, escaped)
+				this.appendText(output, "'", position)
+				this.appendText(output, escaped, position)
 
 				// Earlier versions of the FITS standard required that the closing quote
 				// does not come before byte 20. It's no longer required but older tools
 				// may still expect it, so let's conform. This only affects single
 				// record card, but not continued long strings...
-				this.padTo(output, FITS_MIN_STRING_END)
+				this.padTo(output, FITS_MIN_STRING_END, position)
 
-				this.appendText(output, "'")
+				this.appendText(output, "'", position)
 
 				return value.length - from
 			}
 		}
 
-		if (!this.isLongStringsEnabled(output)) {
+		if (!this.isLongStringsEnabled(output, position)) {
 			return value.length - from
 		}
 
 		// Now, we definitely need space for '&' at the end...
-		available = this.getAvailable() - 3
+		available = this.getAvailable(output, position) - 3
 
 		// Opening quote
-		this.appendText(output, "'")
+		this.appendText(output, "'", position)
 
 		// For counting the characters consumed from the input
 		let consumed = 0
@@ -533,64 +547,71 @@ export class FitsKeywordWriter {
 				}
 
 				// Only append the quoted quote if there is room for both.
-				this.appendText(output, "''")
+				this.appendText(output, "''", position)
 			} else {
 				// Append a non-quote character.
-				this.appendText(output, c)
+				this.appendText(output, c, position)
 			}
 		}
 
 		// & and closing quote.
-		this.appendText(output, "&'")
+		this.appendText(output, "&'", position)
 
 		return consumed
 	}
 
-	private getAvailable() {
-		return (FITS_HEADER_CARD_SIZE - (this.position % FITS_HEADER_CARD_SIZE)) % FITS_HEADER_CARD_SIZE
+	private getAvailable(output: Buffer, position: Position) {
+		const remaining = (FITS_HEADER_CARD_SIZE - (position.size % FITS_HEADER_CARD_SIZE)) % FITS_HEADER_CARD_SIZE
+		if (remaining > 0 && position.offset !== position.size && position.offset + remaining > output.byteLength) return output.byteLength - position.offset
+		return remaining
 	}
 
-	private realign(output: Buffer, at: number, from: number) {
-		if (this.position >= FITS_HEADER_CARD_SIZE || from >= DEFAULT_COMMENT_ALIGN_POSITION) {
+	private realign(output: Buffer, at: number, from: number, position: Position) {
+		if (position.size >= FITS_HEADER_CARD_SIZE || from >= DEFAULT_COMMENT_ALIGN_POSITION) {
 			// We are beyond the alignment point already...
 			return false
 		}
 
 		const spaces = DEFAULT_COMMENT_ALIGN_POSITION - from
 
-		if (spaces > this.getAvailable()) {
+		if (spaces > this.getAvailable(output, position)) {
 			// No space left in card to align the the specified position.
 			return false
 		}
 
+		const { start, offset } = position
+
 		// Shift value + comment
-		for (let i = this.position - 1, k = this.position + spaces - 1; i >= at; i--, k--) {
+		for (let i = offset - 1, k = offset + spaces - 1, end = start + at; i >= end; i--, k--) {
 			output.writeInt8(output.readInt8(i), k)
 		}
 
-		this.position += spaces
+		position.increment(spaces)
 
 		// Fill
-		output.fill(WHITESPACE, at, at + spaces)
+		output.fill(WHITESPACE, start + at, start + at + spaces)
 
 		return true
 	}
 
-	private padTo(output: Buffer, to: number) {
-		for (let pos = this.position % FITS_HEADER_CARD_SIZE; pos < to; pos++) {
-			output.writeInt8(WHITESPACE, this.position++)
+	private padTo(output: Buffer, to: number, position: Position) {
+		for (let pos = position.size % FITS_HEADER_CARD_SIZE; pos < to; pos++) {
+			output.writeInt8(WHITESPACE, position.offset)
+			position.increment()
 		}
 	}
 
-	private pad(output: Buffer, n: number = this.getAvailable()) {
+	private pad(output: Buffer, position: Position, n: number = this.getAvailable(output, position)) {
 		if (n > 0) {
-			output.fill(WHITESPACE, this.position, this.position + n)
-			this.position += n
+			output.fill(WHITESPACE, position.offset, position.offset + n)
+			position.increment(n)
 		}
 	}
 
-	private isLongStringsEnabled(output: Buffer) {
-		return Math.floor(output.byteLength / FITS_HEADER_CARD_SIZE) > 1
+	private isLongStringsEnabled(output: Buffer, position: Position) {
+		// return Math.floor((output.byteLength) / FITS_HEADER_CARD_SIZE) > 1
+		const start = position.offset - position.size
+		return Math.floor((output.byteLength - start) / FITS_HEADER_CARD_SIZE) > 1
 	}
 }
 
