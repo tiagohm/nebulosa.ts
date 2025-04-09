@@ -2,6 +2,7 @@
 	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
 	"formatter": {
 		"enabled": true,
+		"ignore": ["**/*.data.ts"],
 		"formatWithErrors": false,
 		"attributePosition": "auto",
 		"indentStyle": "tab",
