@@ -253,88 +253,86 @@ const INT_REGEX = /^[+-]?\d+$/
 // https://github.com/nom-tam-fits/nom-tam-fits/blob/master/src/main/java/nom/tam/fits/HeaderCardParser.java
 
 export class FitsKeywordReader {
-	private position = 0
-
-	read(line: Buffer): FitsHeaderCard {
-		this.position = 0
-		const key = this.parseKey(line)
-		const [value, quoted] = this.parseValue(line, key)
-		const comment = this.parseComment(line, value)
+	read(line: Buffer, offset: number = 0): FitsHeaderCard {
+		const position = new Position(offset)
+		const key = this.parseKey(line, position)
+		const [value, quoted] = this.parseValue(line, key, position)
+		const comment = this.parseComment(line, position, value)
 		return [key, this.parseValueType(value, quoted), comment?.trim()]
 	}
 
-	private parseKey(line: Buffer) {
+	private parseKey(line: Buffer, position: Position) {
 		// Find the '=' in the line, if any...
-		const iEq = line.indexOf(EQUAL, this.position)
+		const iEq = line.indexOf(EQUAL, position.offset) - position.offset
 
 		// The stem is in the first 8 characters or what precedes an '=' character before that.
-		const endStem = Math.min(iEq >= 0 && iEq <= FITS_MAX_KEYWORD_LENGTH ? iEq : FITS_MAX_KEYWORD_LENGTH, line.byteLength)
-		const stem = line.toString('ascii', this.position, endStem)
+		const endStem = Math.min(iEq >= 0 && iEq <= FITS_MAX_KEYWORD_LENGTH ? iEq : FITS_MAX_KEYWORD_LENGTH, FITS_HEADER_CARD_SIZE)
+		const stem = line.toString('ascii', position.offset, position.offset + endStem)
 
 		// If not using HIERARCH, then be very resilient, and return whatever key the first 8 chars make...
 		const key = stem.trim().toUpperCase()
-		this.position = endStem
+		position.offset += stem.length
 		return key
 	}
 
-	private parseValue(line: Buffer, key: string): readonly [string | undefined, boolean] {
-		if (!(key.length && this.skipSpaces(line))) {
+	private parseValue(line: Buffer, key: string, position: Position): readonly [string | undefined, boolean] {
+		if (!(key.length && this.skipSpaces(line, position))) {
 			// nothing left to parse.
 			return [undefined, false]
 		}
 
 		if (key === 'CONTINUE') {
-			return this.parseValueBody(line)
-		} else if (line.readInt8(this.position) === EQUAL) {
-			this.position++
-			return this.parseValueBody(line)
+			return this.parseValueBody(line, position)
+		} else if (line.readInt8(position.offset) === EQUAL) {
+			position.offset++
+			return this.parseValueBody(line, position)
 		} else {
 			return [undefined, false]
 		}
 	}
 
-	private parseValueBody(line: Buffer): readonly [string | undefined, boolean] {
-		if (!this.skipSpaces(line)) {
+	private parseValueBody(line: Buffer, position: Position): readonly [string | undefined, boolean] {
+		if (!this.skipSpaces(line, position)) {
 			// Nothing left to parse.
 			return [undefined, false]
 		}
 
-		if (this.isNextQuote(line)) {
+		if (this.isNextQuote(line, position)) {
 			// Parse as a string value.
-			return [this.parseStringValue(line), true]
+			return [this.parseStringValue(line, position), true]
 		} else {
-			let end = line.indexOf(SLASH, this.position)
+			let end = line.indexOf(SLASH, position.offset)
 
-			if (end < 0) end = line.byteLength
+			if (end < 0) end = position.start + FITS_HEADER_CARD_SIZE
 
-			const value = line.toString('ascii', this.position, end).trim()
-			this.position = end
+			const value = line.toString('ascii', position.offset, end).trim()
+			position.offset = end
 			return [value, false]
 		}
 	}
 
-	private parseStringValue(line: Buffer) {
+	private parseStringValue(line: Buffer, position: Position) {
 		let escaped = false
 
-		const start = ++this.position
+		const start = ++position.offset
 
 		// Build the string value, up to the end quote and paying attention to double
 		// quotes inside the string, which are translated to single quotes within
 		// the string value itself.
-		for (; this.position < line.byteLength; this.position++) {
-			if (this.isNextQuote(line)) {
-				this.position++
+		for (; position.offset < line.byteLength; position.offset++) {
+			if (this.isNextQuote(line, position)) {
+				position.offset++
 
-				if (!this.isNextQuote(line)) {
+				if (!this.isNextQuote(line, position)) {
 					// Closing single quote
-					return this.noTrailingSpaceString(line, start, this.position - 1, escaped)
+					return this.noTrailingSpaceString(line, start, position.offset - 1, escaped)
 				} else {
 					escaped = true
 				}
 			}
 		}
 
-		return this.noTrailingSpaceString(line, start, this.position, escaped)
+		return this.noTrailingSpaceString(line, start, position.offset, escaped)
 	}
 
 	private noTrailingSpaceString(line: Buffer, start: number, end: number, escaped: boolean) {
@@ -342,21 +340,21 @@ export class FitsKeywordReader {
 		return escaped ? unescapeQuotedText(text) : text
 	}
 
-	private parseComment(line: Buffer, value?: string) {
-		if (!this.skipSpaces(line)) {
+	private parseComment(line: Buffer, position: Position, value?: string) {
+		if (!this.skipSpaces(line, position)) {
 			// Nothing left to parse.
 			return
 		}
 
 		// If no value, then everything is comment from here on...
 		if (value) {
-			if (line.readInt8(this.position) === SLASH) {
+			if (line.readInt8(position.offset) === SLASH) {
 				// Skip the '/' itself, the comment is whatever is after it.
-				this.position++
+				position.offset++
 			}
 		}
 
-		return line.toString('ascii', this.position)
+		return line.toString('ascii', position.offset)
 	}
 
 	private parseValueType(value: string | undefined, quoted: boolean) {
@@ -365,14 +363,14 @@ export class FitsKeywordReader {
 		else if (value === 'T') return true
 		else if (value === 'F') return false
 		// else if (value.startsWith("'") && value.endsWith("'")) return value.substring(1, value.length - 1).trim()
-		else if (DECIMAL_REGEX.test(value)) return parseFloat(value.toUpperCase().replace('D', 'E'))
+		else if (DECIMAL_REGEX.test(value)) return +value.toUpperCase().replace('D', 'E')
 		else if (INT_REGEX.test(value)) return parseInt(value)
 		else return value
 	}
 
-	private skipSpaces(line: Buffer) {
-		for (; this.position < line.byteLength; this.position++) {
-			if (line.readInt8(this.position) !== WHITESPACE) {
+	private skipSpaces(line: Buffer, position: Position) {
+		for (; position.offset < line.byteLength; position.offset++) {
+			if (line.readInt8(position.offset) !== WHITESPACE) {
 				// Line has non-space characters left to parse...
 				return true
 			}
@@ -382,8 +380,8 @@ export class FitsKeywordReader {
 		return false
 	}
 
-	private isNextQuote(line: Buffer) {
-		return this.position < line.byteLength && line.readInt8(this.position) === SINGLE_QUOTE
+	private isNextQuote(line: Buffer, position: Position) {
+		return position.offset < line.byteLength && line.readInt8(position.offset) === SINGLE_QUOTE
 	}
 }
 

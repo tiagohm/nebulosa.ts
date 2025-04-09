@@ -28,11 +28,12 @@ test('readAndWrite', async () => {
 
 test('reader', () => {
 	const reader = new FitsKeywordReader()
-	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE)
+	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE * 2)
+	const offset = Math.trunc(Math.random() * FITS_HEADER_CARD_SIZE)
 
 	function read(line: string) {
-		buffer.fill(' ').write(line)
-		return reader.read(buffer)
+		buffer.fill(32).write(line, offset, 'ascii')
+		return reader.read(buffer, offset)
 	}
 
 	expect(read('SIMPLE  =                    T / file does conform to FITS standard')).toEqual(['SIMPLE', true, 'file does conform to FITS standard'])
