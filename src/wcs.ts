@@ -8,9 +8,9 @@ type LibWcs = ReturnType<typeof open>
 function open() {
 	return dlopen(wcsPath, {
 		wcspih: { args: ['buffer', 'int', 'int', 'int', 'ptr', 'ptr', 'ptr'], returns: 'int' },
-		wcsp2s: { args: ['ptr', 'int', 'int', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'], returns: 'int' },
-		wcss2p: { args: ['ptr', 'int', 'int', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'], returns: 'int' },
-		wcsfree: { args: ['ptr'], returns: 'int' },
+		wcsp2s: { args: ['usize', 'int', 'int', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'], returns: 'int' },
+		wcss2p: { args: ['usize', 'int', 'int', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'], returns: 'int' },
+		wcsfree: { args: ['usize'], returns: 'int' },
 	})
 }
 
