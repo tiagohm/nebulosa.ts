@@ -3,9 +3,34 @@ import wcsPath from '../native/libwcs.shared' with { type: 'file' }
 import { type Angle, deg, toDeg } from './angle'
 import { type FitsHeader, FitsKeywordWriter, numeric } from './fits'
 
-type LibWcs = ReturnType<typeof open>
+export type WcsFitsHeaderKey =
+	| 'WCSAXES'
+	| `CUNIT${number}`
+	| `CTYPE${number}`
+	| `CRPIX${number}`
+	| `CRVAL${number}`
+	| `PS_${number}_${number}`
+	| `PV_${number}_${number}`
+	| `CD_${number}_${number}`
+	| `PC_${number}_${number}`
+	| `CDELT${number}`
+	| `CROTA${number}`
+	| 'RADESYS'
+	| 'LONPOLE'
+	| 'LATPOLE'
+	| 'EQUINOX'
+	| `A_${number}_${number}`
+	| `AP__${number}_${number}`
+	| `B__${number}_${number}`
+	| `BP__${number}_${number}`
+	| 'A_ORDER'
+	| 'AP_ORDER'
+	| 'B_ORDER'
+	| 'BP_ORDER'
 
-function open() {
+export type LibWcs = ReturnType<typeof open>
+
+export function open() {
 	return dlopen(wcsPath, {
 		wcspih: { args: ['buffer', 'int', 'int', 'int', 'ptr', 'ptr', 'ptr'], returns: 'int' },
 		wcsp2s: { args: ['usize', 'int', 'int', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'], returns: 'int' },
@@ -16,8 +41,13 @@ function open() {
 
 let libwcs: LibWcs | undefined
 
-function load() {
-	return (libwcs ??= open())
+export function load() {
+	return (libwcs ??= open()).symbols
+}
+
+export function unload() {
+	libwcs?.close()
+	libwcs = undefined
 }
 
 export class Wcs implements Disposable {
@@ -32,16 +62,19 @@ export class Wcs implements Disposable {
 
 	load(header: FitsHeader) {
 		const [buffer, n] = bufferFromHeader(header)
-		const mem = Buffer.allocUnsafe(4 + 4 + 8)
-		const nreject = ptr(mem, 0)
-		const nwcs = ptr(mem, 4)
-		const wcsprm = ptr(mem, 8)
-		const ret = this.lib.symbols.wcspih(buffer, n, 0x000fffff, 0, nreject, nwcs, wcsprm)
 
-		if (ret === 0 && read.i32(nwcs) === 1) {
-			this[Symbol.dispose]()
-			this.pointer = read.ptr(wcsprm) as Pointer
-			return true
+		if (n > 0) {
+			const mem = Buffer.allocUnsafe(4 + 4 + 8)
+			const nreject = ptr(mem, 0)
+			const nwcs = ptr(mem, 4)
+			const wcsprm = ptr(mem, 8)
+			const ret = this.lib.wcspih(buffer, n, 0x000fffff, 0, nreject, nwcs, wcsprm)
+
+			if (ret === 0 && read.i32(nwcs) === 1) {
+				this[Symbol.dispose]()
+				this.pointer = read.ptr(wcsprm) as Pointer
+				return true
+			}
 		}
 
 		return false
@@ -60,7 +93,7 @@ export class Wcs implements Disposable {
 			const world = ptr(mem, 48)
 			const stat = ptr(mem, 64)
 
-			const ret = this.lib.symbols.wcsp2s(this.pointer, 1, 2, pixcrd, imgcrd, phi, theta, world, stat)
+			const ret = this.lib.wcsp2s(this.pointer, 1, 2, pixcrd, imgcrd, phi, theta, world, stat)
 
 			if (ret === 0) {
 				return [deg(read.f64(world)), deg(read.f64(world, 8))]
@@ -85,7 +118,7 @@ export class Wcs implements Disposable {
 			const world = ptr(mem, 48)
 			const stat = ptr(mem, 64)
 
-			const ret = this.lib.symbols.wcss2p(this.pointer, 1, 2, world, phi, theta, imgcrd, pixcrd, stat)
+			const ret = this.lib.wcss2p(this.pointer, 1, 2, world, phi, theta, imgcrd, pixcrd, stat)
 
 			if (ret === 0) {
 				return [read.f64(pixcrd), read.f64(pixcrd, 8)]
@@ -99,7 +132,7 @@ export class Wcs implements Disposable {
 
 	[Symbol.dispose]() {
 		if (this.pointer) {
-			this.lib.symbols.wcsfree(this.pointer)
+			this.lib.wcsfree(this.pointer)
 			this.pointer = undefined
 		}
 	}
@@ -157,9 +190,9 @@ export function pc2cd(pc11: number, pc10: number, pc21: number, pc22: number, cd
 	return [cdelt1 * pc11, cdelt2 * pc21, cdelt1 * pc10, cdelt2 * pc22] as const
 }
 
-function isValidFitsHeaderKey(key: keyof FitsHeader) {
+export function isWcsFitsHeaderKey(key: keyof FitsHeader): key is WcsFitsHeaderKey {
 	return (
-		key.startsWith('NAXIS') ||
+		key.startsWith('WCSAXES') ||
 		key.startsWith('CUNIT') ||
 		key.startsWith('CTYPE') ||
 		key.startsWith('CRPIX') ||
@@ -183,7 +216,7 @@ function isValidFitsHeaderKey(key: keyof FitsHeader) {
 
 function bufferFromHeader(header: FitsHeader) {
 	const writer = new FitsKeywordWriter()
-	const keys = Object.keys(header).filter(isValidFitsHeaderKey)
+	const keys = Object.keys(header).filter(isWcsFitsHeaderKey)
 	const output = Buffer.allocUnsafe(keys.length * 80)
 
 	if (keys.length > 0) {

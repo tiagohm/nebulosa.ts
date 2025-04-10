@@ -399,7 +399,7 @@ neptune(time) // Compute the position and velocity of Neptune
 ### WCS
 
 ```ts
-const wcs = new Wcs(headers)
+using wcs = new Wcs(headers)
 const [ra, dec] = wcs.pixToSky(x, y)
 const [x, y] = wcs.skyToPix(ra, dec)
 ```
