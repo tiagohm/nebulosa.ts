@@ -58,7 +58,7 @@
 				"noForEach": "off",
 				"noUselessStringConcat": "error",
 				"useDateNow": "error",
-				"useSimplifiedLogicExpression": "error"
+				"useSimplifiedLogicExpression": "off"
 			}
 		}
 	},

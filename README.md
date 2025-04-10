@@ -36,6 +36,7 @@ formatSignedDms(PI) // Format the angle as +00d00m00.00s
 
 ```ts
 const stars = astapDetectStars(path, options) // Detect stars on image using astap
+const solution = astapPlateSolve(path, options) // Plate solve the image using astap
 ```
 
 ### Astrobin
