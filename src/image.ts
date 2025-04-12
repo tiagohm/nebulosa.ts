@@ -1,10 +1,12 @@
 import sharp, { type AvifOptions, type FormatEnum, type GifOptions, type HeifOptions, type Jp2Options, type JpegOptions, type JxlOptions, type OutputInfo, type OutputOptions, type PngOptions, type TiffOptions, type WebpOptions } from 'sharp'
-import { Bitpix, type Fits, type FitsData, type FitsHdu, type FitsHeader, bitpix, bitpixInBytes, height, numberOfChannels, width, writeFits } from './fits'
+import { Bitpix, type Fits, type FitsData, type FitsHdu, type FitsHeader, bitpix, bitpixInBytes, height, numberOfChannels, text, width, writeFits } from './fits'
 import { type Sink, type Source, bufferSink, bufferSource, readUntil } from './io'
 
 export type ImageChannel = 'RED' | 'GREEN' | 'BLUE'
 
 export type ImageFormat = keyof FormatEnum | 'fits' | 'xisf'
+
+export type CfaPattern = 'RGGB' | 'BGGR' | 'GBRG' | 'GRBG' | 'GRGB' | 'GBGR' | 'RGBG' | 'BGRG'
 
 export interface WriteImageToFormatOptions {
 	format: OutputOptions | JpegOptions | PngOptions | WebpOptions | AvifOptions | HeifOptions | JxlOptions | GifOptions | Jp2Options | TiffOptions
@@ -22,6 +24,12 @@ export interface ImageMetadata {
 	readonly channels: number
 	readonly pixelCount: number
 	readonly pixelSizeInBytes: number
+	readonly bitpix: Bitpix
+	readonly bayer?: CfaPattern
+}
+
+export function cfaPattern(header: FitsHeader) {
+	return text(header, 'BAYERPAT') as CfaPattern | undefined
 }
 
 export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Image | undefined> {
@@ -76,7 +84,7 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 		}
 	}
 
-	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, pixelCount, pixelSizeInBytes }
+	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPattern(header) }
 	return { header, metadata, raw }
 }
 
