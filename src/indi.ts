@@ -364,7 +364,7 @@ export interface IndiClientHandler {
 }
 
 export interface IndiClientOptions {
-	protocol?: IndiClientHandler
+	handler?: IndiClientHandler
 }
 
 export const DEFAULT_INDI_PORT = 7624
@@ -410,7 +410,7 @@ export class IndiClient {
 				close: () => {
 					console.warn('connection closed by client')
 					this.socket = undefined
-					this.options?.protocol?.close?.()
+					this.options?.handler?.close?.()
 				},
 				error: (_, error) => {
 					console.error('connection failed', error)
@@ -421,7 +421,7 @@ export class IndiClient {
 				end: () => {
 					console.warn('connection closed by server')
 					this.socket = undefined
-					this.options?.protocol?.close?.()
+					this.options?.handler?.close?.()
 				},
 				timeout: () => {
 					console.warn('connection timed out')
@@ -543,107 +543,107 @@ export class IndiClient {
 
 	private processNode(node: XmlNode) {
 		const a = node.attributes
-		const protocol = this.options?.protocol
+		const handler = this.options?.handler
 
 		switch (node.name) {
 			case 'message':
-				if (protocol?.message) {
-					protocol.message(this, { device: a.device, timestamp: a.timestamp, message: a.message })
+				if (handler?.message) {
+					handler.message(this, { device: a.device, timestamp: a.timestamp, message: a.message })
 				}
 				break
 			case 'delProperty':
-				if (protocol?.delProperty) {
-					protocol.delProperty(this, { device: a.device, name: a.name, timestamp: a.timestamp, message: a.message })
+				if (handler?.delProperty) {
+					handler.delProperty(this, { device: a.device, name: a.name, timestamp: a.timestamp, message: a.message })
 				}
 				break
 			case 'defTextVector':
-				if (protocol?.defVector || protocol?.defTextVector || protocol?.textVector || protocol?.vector) {
+				if (handler?.defVector || handler?.defTextVector || handler?.textVector || handler?.vector) {
 					const message = this.parseDefVector(node)
-					protocol.defVector?.(this, message, node.name)
-					protocol.defTextVector?.(this, message as never)
-					protocol.textVector?.(this, message as never, node.name)
-					protocol.vector?.(this, message, node.name)
+					handler.defVector?.(this, message, node.name)
+					handler.defTextVector?.(this, message as never)
+					handler.textVector?.(this, message as never, node.name)
+					handler.vector?.(this, message, node.name)
 				}
 				break
 			case 'defNumberVector':
-				if (protocol?.defVector || protocol?.defNumberVector || protocol?.numberVector || protocol?.vector) {
+				if (handler?.defVector || handler?.defNumberVector || handler?.numberVector || handler?.vector) {
 					const message = this.parseDefVector(node)
-					protocol.defVector?.(this, message, node.name)
-					protocol.defNumberVector?.(this, message as never)
-					protocol.numberVector?.(this, message as never, node.name)
-					protocol.vector?.(this, message, node.name)
+					handler.defVector?.(this, message, node.name)
+					handler.defNumberVector?.(this, message as never)
+					handler.numberVector?.(this, message as never, node.name)
+					handler.vector?.(this, message, node.name)
 				}
 				break
 			case 'defSwitchVector':
-				if (protocol?.defVector || protocol?.defSwitchVector || protocol?.switchVector || protocol?.vector) {
+				if (handler?.defVector || handler?.defSwitchVector || handler?.switchVector || handler?.vector) {
 					const message = this.parseDefVector(node)
-					protocol.defVector?.(this, message, node.name)
-					protocol.defSwitchVector?.(this, message as never)
-					protocol.switchVector?.(this, message as never, node.name)
-					protocol.vector?.(this, message, node.name)
+					handler.defVector?.(this, message, node.name)
+					handler.defSwitchVector?.(this, message as never)
+					handler.switchVector?.(this, message as never, node.name)
+					handler.vector?.(this, message, node.name)
 				}
 				break
 			case 'defLightVector':
-				if (protocol?.defVector || protocol?.defLightVector || protocol?.lightVector || protocol?.vector) {
+				if (handler?.defVector || handler?.defLightVector || handler?.lightVector || handler?.vector) {
 					const message = this.parseDefVector(node)
-					protocol.defVector?.(this, message, node.name)
-					protocol.defLightVector?.(this, message as never)
-					protocol.lightVector?.(this, message as never, node.name)
-					protocol.vector?.(this, message, node.name)
+					handler.defVector?.(this, message, node.name)
+					handler.defLightVector?.(this, message as never)
+					handler.lightVector?.(this, message as never, node.name)
+					handler.vector?.(this, message, node.name)
 				}
 				break
 			case 'defBLOBVector':
-				if (protocol?.defVector || protocol?.defBlobVector || protocol?.blobVector || protocol?.vector) {
+				if (handler?.defVector || handler?.defBlobVector || handler?.blobVector || handler?.vector) {
 					const message = this.parseDefVector(node)
-					protocol.defVector?.(this, message, node.name)
-					protocol.defBlobVector?.(this, message as never)
-					protocol.blobVector?.(this, message as never, node.name)
-					protocol.vector?.(this, message, node.name)
+					handler.defVector?.(this, message, node.name)
+					handler.defBlobVector?.(this, message as never)
+					handler.blobVector?.(this, message as never, node.name)
+					handler.vector?.(this, message, node.name)
 				}
 				break
 			case 'setTextVector':
-				if (protocol?.setVector || protocol?.setTextVector || protocol?.textVector || protocol?.vector) {
+				if (handler?.setVector || handler?.setTextVector || handler?.textVector || handler?.vector) {
 					const message = this.parseSetVector(node)
-					protocol.setVector?.(this, message, node.name)
-					protocol.setTextVector?.(this, message as never)
-					protocol.textVector?.(this, message as never, node.name)
-					protocol.vector?.(this, message, node.name)
+					handler.setVector?.(this, message, node.name)
+					handler.setTextVector?.(this, message as never)
+					handler.textVector?.(this, message as never, node.name)
+					handler.vector?.(this, message, node.name)
 				}
 				break
 			case 'setNumberVector':
-				if (protocol?.setVector || protocol?.setNumberVector || protocol?.numberVector || protocol?.vector) {
+				if (handler?.setVector || handler?.setNumberVector || handler?.numberVector || handler?.vector) {
 					const message = this.parseSetVector(node)
-					protocol.setVector?.(this, message, node.name)
-					protocol.setNumberVector?.(this, message as never)
-					protocol.numberVector?.(this, message as never, node.name)
-					protocol.vector?.(this, message, node.name)
+					handler.setVector?.(this, message, node.name)
+					handler.setNumberVector?.(this, message as never)
+					handler.numberVector?.(this, message as never, node.name)
+					handler.vector?.(this, message, node.name)
 				}
 				break
 			case 'setSwitchVector':
-				if (protocol?.setVector || protocol?.setSwitchVector || protocol?.switchVector || protocol?.vector) {
+				if (handler?.setVector || handler?.setSwitchVector || handler?.switchVector || handler?.vector) {
 					const message = this.parseSetVector(node)
-					protocol.setVector?.(this, message, node.name)
-					protocol.setSwitchVector?.(this, message as never)
-					protocol.switchVector?.(this, message as never, node.name)
-					protocol.vector?.(this, message, node.name)
+					handler.setVector?.(this, message, node.name)
+					handler.setSwitchVector?.(this, message as never)
+					handler.switchVector?.(this, message as never, node.name)
+					handler.vector?.(this, message, node.name)
 				}
 				break
 			case 'setLightVector':
-				if (protocol?.setVector || protocol?.setLightVector || protocol?.lightVector || protocol?.vector) {
+				if (handler?.setVector || handler?.setLightVector || handler?.lightVector || handler?.vector) {
 					const message = this.parseSetVector(node)
-					protocol.setVector?.(this, message, node.name)
-					protocol.setLightVector?.(this, message as never)
-					protocol.lightVector?.(this, message as never, node.name)
-					protocol.vector?.(this, message, node.name)
+					handler.setVector?.(this, message, node.name)
+					handler.setLightVector?.(this, message as never)
+					handler.lightVector?.(this, message as never, node.name)
+					handler.vector?.(this, message, node.name)
 				}
 				break
 			case 'setBLOBVector':
-				if (protocol?.setVector || protocol?.setBlobVector || protocol?.blobVector || protocol?.vector) {
+				if (handler?.setVector || handler?.setBlobVector || handler?.blobVector || handler?.vector) {
 					const message = this.parseSetVector(node)
-					protocol.setVector?.(this, message, node.name)
-					protocol.setBlobVector?.(this, message as never)
-					protocol.blobVector?.(this, message as never, node.name)
-					protocol.vector?.(this, message, node.name)
+					handler.setVector?.(this, message, node.name)
+					handler.setBlobVector?.(this, message as never)
+					handler.blobVector?.(this, message as never, node.name)
+					handler.vector?.(this, message, node.name)
 				}
 				break
 			default:

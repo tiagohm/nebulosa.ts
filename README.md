@@ -161,6 +161,19 @@ writeImageToFits(image, sink) // Write image to sink as FITS format
 stf(image, midtone, shadow, highlight) // Apply STF to image
 ```
 
+### INDI
+
+```ts
+const client = new IndiClient({ handler })
+await client.connect(host, port)
+client.close()
+client.getProperties()
+client.enableBlob(command)
+client.sendText(vector)
+client.sendNumber(vector)
+client.sendSwitch(vector)
+```
+
 ### IO
 
 ```ts
