@@ -95,6 +95,14 @@ toParsec(1) // Convert AU to parsec
 TODO
 ```
 
+### Firmata
+
+```ts
+const client = new FirmataTcpClient(host, port, handler)
+await client.connect()
+client.disconnect()
+```
+
 ### Fits
 
 ```ts
