@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { type AnalogMapping, type FirmataClientHandler, FirmataSimpleClient, PinMode, decodeBufferAs7Bit, encodeBufferAs7Bit } from '../src/firmata'
+import { type AnalogMapping, FirmataClient, type FirmataClientHandler, PinMode, decodeBufferAs7Bit, encodeBufferAs7Bit } from '../src/firmata'
 
 describe('simple', () => {
 	const result: unknown[] = []
@@ -18,7 +18,7 @@ describe('simple', () => {
 		customMessage: (a, b) => result.push(a, b),
 	}
 
-	const client = new FirmataSimpleClient(protocol)
+	const client = new FirmataClient(protocol)
 
 	afterEach(() => {
 		result.length = 0
@@ -38,7 +38,6 @@ describe('simple', () => {
 	})
 
 	test('systemReset', () => {
-		const client = new FirmataSimpleClient(protocol)
 		client.parse(Buffer.from([0xff]))
 		expect(result[0]).toBe(true)
 	})

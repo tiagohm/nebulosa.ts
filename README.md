@@ -98,9 +98,11 @@ TODO
 ### Firmata
 
 ```ts
-const client = new FirmataTcpClient(handler)
-await client.connect(host, port)
-client.disconnect()
+const client = new FirmataClient(handler)
+await client.connectTcp(host, port) // Connect to Firmata Device via TCP
+client.disconnect() // Disconnect from current connection
+client.process(buffer) // Process the buffer
+client.parse(byte) // Process the byte
 ```
 
 ### Fits

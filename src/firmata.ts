@@ -4,10 +4,6 @@ import type { Socket } from 'bun'
 
 export type AnalogMapping = Record<number, number>
 
-export interface FirmataClient {
-	handler: FirmataClientHandler
-}
-
 export interface FirmataClientHandler {
 	readonly customMessage?: (data: Buffer, length: number) => void
 	readonly version?: (major: number, minor: number) => void
@@ -469,13 +465,37 @@ export class FirmataFsm {
 	}
 }
 
-export class FirmataSimpleClient implements FirmataClient {
+export class FirmataClient {
+	private socket?: Socket
 	private readonly fsm: FirmataFsm
 	private readonly parser: FirmataParser
 
-	constructor(readonly handler: FirmataClientHandler) {
+	constructor(handler: FirmataClientHandler) {
 		this.fsm = new FirmataFsm(WAITING_FOR_MESSAGE_STATE, handler)
 		this.parser = new FirmataParser(this.fsm)
+	}
+
+	async connectTcp(hostname: string, port: number) {
+		if (this.socket) return
+
+		this.socket = await Bun.connect({
+			hostname,
+			port,
+			socket: {
+				data: (_, buffer) => {
+					this.parse(buffer)
+				},
+				error: () => {
+					this.reset()
+				},
+			},
+		})
+	}
+
+	disconnect() {
+		this.socket?.terminate()
+		this.socket = undefined
+		this.reset()
 	}
 
 	parse(data: Buffer) {
@@ -488,37 +508,5 @@ export class FirmataSimpleClient implements FirmataClient {
 
 	reset() {
 		this.fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
-	}
-}
-
-export class FirmataTcpClient implements FirmataClient {
-	private socket?: Socket
-	private readonly client: FirmataSimpleClient
-
-	constructor(readonly handler: FirmataClientHandler) {
-		this.client = new FirmataSimpleClient(handler)
-	}
-
-	async connect(hostname: string, port: number) {
-		if (this.socket) return
-
-		this.socket = await Bun.connect({
-			hostname,
-			port,
-			socket: {
-				data: (_, buffer) => {
-					this.client.parse(buffer)
-				},
-				error: () => {
-					this.client.reset()
-				},
-			},
-		})
-	}
-
-	disconnect() {
-		this.socket?.terminate()
-		this.socket = undefined
-		this.client.reset()
 	}
 }
