@@ -158,7 +158,7 @@ export function encodeBufferAs7Bit(data: Buffer, offset: number = 0, length: num
 	return output
 }
 
-export class ParsingVersionMessageState implements FirmataFsmState {
+class ParsingVersionMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (fsm.offset === 0) {
 			fsm.write(b)
@@ -171,7 +171,7 @@ export class ParsingVersionMessageState implements FirmataFsmState {
 
 const PARSING_VERSION_MESSAGE_STATE = new ParsingVersionMessageState()
 
-export class ParsingCustomSysexMessageState implements FirmataFsmState {
+class ParsingCustomSysexMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
 			fsm.handler.customMessage?.(fsm.buffer, fsm.offset)
@@ -184,7 +184,7 @@ export class ParsingCustomSysexMessageState implements FirmataFsmState {
 
 const PARSING_CUSTOM_SYSEX_MESSAGE_STATE = new ParsingCustomSysexMessageState()
 
-export class ParsingFirmwareMessageState implements FirmataFsmState {
+class ParsingFirmwareMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
 			fsm.handler.firmwareMessage?.(fsm.read(0), fsm.read(1), fsm.readText(2))
@@ -197,7 +197,7 @@ export class ParsingFirmwareMessageState implements FirmataFsmState {
 
 const PARSING_FIRMWARE_MESSAGE_STATE = new ParsingFirmwareMessageState()
 
-export class ParsingExtendedAnalogMessageState implements FirmataFsmState {
+class ParsingExtendedAnalogMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
 			if (fsm.handler.analogMessage) {
@@ -220,27 +220,29 @@ export class ParsingExtendedAnalogMessageState implements FirmataFsmState {
 
 const PARSING_EXTENDED_ANALOG_MESSAGE_STATE = new ParsingExtendedAnalogMessageState()
 
-export class ParsingCapabilityResponseState implements FirmataFsmState {
-	constructor(private readonly pin: number = 0) {}
-
+class ParsingCapabilityResponseState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
 			fsm.handler.pinCapabilitiesFinished?.()
 			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 		} else if (b === 127) {
+			const pin = fsm.read(0)
+
 			if (fsm.handler.pinCapability) {
 				const modes = new Set<PinMode>()
 
-				for (let i = 0; i < fsm.offset; i += 2) {
+				for (let i = 1; i < fsm.offset; i += 2) {
 					// Every second byte contains mode's resolution of pin.
 					modes.add(resolvePinMode(fsm.read(i)))
 				}
 
-				fsm.handler.pinCapability(this.pin, modes)
+				fsm.handler.pinCapability(pin, modes)
 			}
 
-			fsm.transitTo(new ParsingCapabilityResponseState(this.pin + 1))
+			fsm.transitTo(this)
+			fsm.write(pin + 1) // next pin at byte 0
 		} else {
+			if (fsm.offset === 0) fsm.write(0) // first pin is 0
 			fsm.write(b)
 		}
 	}
@@ -248,24 +250,31 @@ export class ParsingCapabilityResponseState implements FirmataFsmState {
 
 const PARSING_CAPABILITY_RESPONSE_STATE = new ParsingCapabilityResponseState()
 
-export class ParsingAnalogMappingState implements FirmataFsmState {
-	private portId = 0
-	private readonly mapping: AnalogMapping = {}
-
+class ParsingAnalogMappingState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
-			fsm.handler.analogMapping?.(this.mapping)
+			if (fsm.handler.analogMapping) {
+				const mapping: AnalogMapping = {}
+
+				for (let i = 0; i < fsm.offset; i++) {
+					const m = fsm.read(i)
+					if (m !== 127) mapping[m] = i
+				}
+
+				fsm.handler.analogMapping(mapping)
+			}
+
 			return fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
-		} else if (b !== 127) {
-			// If pin does support analog, corresponding analog id is in the byte.
-			this.mapping[b] = this.portId
 		}
 
-		this.portId++
+		// If pin does support analog, corresponding analog id is in the byte.
+		fsm.write(b)
 	}
 }
 
-export class PinStateParsingState implements FirmataFsmState {
+const PARSING_ANALOG_MAPPING_STATE = new ParsingAnalogMappingState()
+
+class PinStateParsingState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
 			if (fsm.handler.pinState) {
@@ -287,7 +296,7 @@ export class PinStateParsingState implements FirmataFsmState {
 
 const PIN_STATE_PARSING_STATE = new PinStateParsingState()
 
-export class ParsingStringMessageState implements FirmataFsmState {
+class ParsingStringMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
 			fsm.handler.textMessage?.(fsm.readText())
@@ -300,7 +309,7 @@ export class ParsingStringMessageState implements FirmataFsmState {
 
 const PARSING_STRING_MESSAGE_STATE = new ParsingStringMessageState()
 
-export class ParsingTwoWireMessageState implements FirmataFsmState {
+class ParsingTwoWireMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
 			if (fsm.handler.twoWireMessage) {
@@ -320,14 +329,14 @@ export class ParsingTwoWireMessageState implements FirmataFsmState {
 
 const PARSING_TWO_WIRE_MESSAGE_STATE = new ParsingTwoWireMessageState()
 
-export class ParsingSysexMessageState implements FirmataFsmState {
+class ParsingSysexMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		let next: FirmataFsmState | undefined
 
 		if (b === REPORT_FIRMWARE) next = PARSING_FIRMWARE_MESSAGE_STATE
 		else if (b === EXTENDED_ANALOG) next = PARSING_EXTENDED_ANALOG_MESSAGE_STATE
 		else if (b === CAPABILITY_RESPONSE) next = PARSING_CAPABILITY_RESPONSE_STATE
-		else if (b === ANALOG_MAPPING_RESPONSE) next = new ParsingAnalogMappingState()
+		else if (b === ANALOG_MAPPING_RESPONSE) next = PARSING_ANALOG_MAPPING_STATE
 		else if (b === PIN_STATE_RESPONSE) next = PIN_STATE_PARSING_STATE
 		else if (b === STRING_DATA) next = PARSING_STRING_MESSAGE_STATE
 		else if (b === TWO_WIRE_REPLY) next = PARSING_TWO_WIRE_MESSAGE_STATE
@@ -344,16 +353,15 @@ export class ParsingSysexMessageState implements FirmataFsmState {
 
 const PARSING_SYSEX_MESSAGE_STATE = new ParsingSysexMessageState()
 
-export class ParsingDigitalMessageState implements FirmataFsmState {
-	constructor(private readonly portId: number) {}
-
+class ParsingDigitalMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (fsm.offset === 0) {
 			fsm.write(b)
 		} else if (fsm.offset === 1) {
 			if (fsm.handler.digitalMessage) {
 				const value = fsm.read(0) | (b << 7)
-				const pin = this.portId * 8
+				const portId = fsm.data as number
+				const pin = portId * 8
 
 				for (let i = 0; i < 8; i++) {
 					fsm.handler.digitalMessage(pin + i, (value >>> i) & 0x01)
@@ -365,16 +373,17 @@ export class ParsingDigitalMessageState implements FirmataFsmState {
 	}
 }
 
-export class ParsingAnalogMessageState implements FirmataFsmState {
-	constructor(private readonly portId: number) {}
+const PARSING_DIGITAL_MESSAGE_STATE = new ParsingDigitalMessageState()
 
+class ParsingAnalogMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (fsm.offset === 0) {
 			fsm.write(b)
 		} else if (fsm.offset === 1) {
 			if (fsm.handler.analogMessage) {
 				const value = fsm.read(0) | (b << 7)
-				fsm.handler.analogMessage(this.portId, value)
+				const portId = fsm.data as number
+				fsm.handler.analogMessage(portId, value)
 			}
 
 			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
@@ -382,17 +391,21 @@ export class ParsingAnalogMessageState implements FirmataFsmState {
 	}
 }
 
-export class WaitingForMessageState implements FirmataFsmState {
+const PARSING_ANALOG_MESSAGE_STATE = new ParsingAnalogMessageState()
+
+class WaitingForMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		// First byte may contain not only command but additional information as well.
 		const command = b < 0xf0 ? b & 0xf0 : b
 
 		switch (command) {
 			case DIGITAL_MESSAGE:
-				fsm.transitTo(new ParsingDigitalMessageState(b & 0x0f))
+				fsm.data = b & 0x0f
+				fsm.transitTo(PARSING_DIGITAL_MESSAGE_STATE)
 				break
 			case ANALOG_MESSAGE:
-				fsm.transitTo(new ParsingAnalogMessageState(b & 0x0f))
+				fsm.data = b & 0x0f
+				fsm.transitTo(PARSING_ANALOG_MESSAGE_STATE)
 				break
 			case REPORT_VERSION:
 				fsm.transitTo(PARSING_VERSION_MESSAGE_STATE)
@@ -416,6 +429,7 @@ const WAITING_FOR_MESSAGE_STATE = new WaitingForMessageState()
 export class FirmataFsm {
 	readonly buffer = Buffer.alloc(256)
 	offset = 0
+	data?: unknown
 
 	constructor(
 		private state: FirmataFsmState,
@@ -481,20 +495,16 @@ export class FirmataTcpClient implements FirmataClient {
 	private socket?: Socket
 	private readonly client: FirmataSimpleClient
 
-	constructor(
-		readonly host: string,
-		readonly port: number,
-		readonly handler: FirmataClientHandler,
-	) {
+	constructor(readonly handler: FirmataClientHandler) {
 		this.client = new FirmataSimpleClient(handler)
 	}
 
-	async connect() {
+	async connect(hostname: string, port: number) {
 		if (this.socket) return
 
 		this.socket = await Bun.connect({
-			hostname: this.host,
-			port: this.port,
+			hostname,
+			port,
 			socket: {
 				data: (_, buffer) => {
 					this.client.parse(buffer)

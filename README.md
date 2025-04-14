@@ -98,8 +98,8 @@ TODO
 ### Firmata
 
 ```ts
-const client = new FirmataTcpClient(host, port, handler)
-await client.connect()
+const client = new FirmataTcpClient(handler)
+await client.connect(host, port)
 client.disconnect()
 ```
 
