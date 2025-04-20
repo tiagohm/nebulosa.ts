@@ -128,7 +128,7 @@ export function decodeByteAs7Bit(data: Buffer, offset: number) {
 }
 
 export function encodeByteAs7Bit(data: Buffer | number, offset: number) {
-	const byte = typeof data === 'number' ? data : data.readUint8(offset)
+	const byte = typeof data === 'number' ? data : data.readUInt8(offset)
 	return [byte & 0x7f, (byte >>> 7) & 1] as const
 }
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { GrowableBuffer, bufferSink, bufferSource, fileHandleSink, fileHandleSource, rangeHttpSource, readLines, readableStreamSource } from '../src/io'
+import { type Base64Alphabet, GrowableBuffer, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, rangeHttpSource, readLines, readUntil, readableStreamSource } from '../src/io'
 
 test('bufferSink', () => {
 	const buffer = Buffer.allocUnsafe(16)
@@ -287,3 +287,37 @@ describe('growableBuffer', () => {
 		expect(buffer.toString('ascii', true)).toBe('!')
 	})
 })
+
+describe('base64', () => {
+	const output = Buffer.allocUnsafe(8192)
+
+	test('source', async () => {
+		for (let i = 0; i <= 1000; i++) {
+			const [encoded, raw] = randomBase64(i, i % 2 === 0 ? 'base64' : 'base64url')
+			const source = base64Source(bufferSource(encoded))
+			const n = await readUntil(source, output, i)
+
+			expect(n).toBe(i)
+			expect(raw.subarray(0, n)).toEqual(output.subarray(0, n))
+		}
+	})
+
+	test('sink', async () => {
+		for (let i = 0; i <= 1000; i++) {
+			const alphabet = i % 2 === 0 ? 'base64' : 'base64url'
+			const sink = base64Sink(bufferSink(output), alphabet)
+			const [encoded, raw] = randomBase64(i, alphabet)
+			const n = (await sink.write(raw)) + sink.end()
+
+			expect(n).toBe(encoded.byteLength)
+			expect(output.subarray(0, n)).toEqual(encoded.subarray(0, n))
+		}
+	})
+})
+
+function randomBase64(n: number, alphabet: Base64Alphabet) {
+	const bytes = Buffer.allocUnsafe(n)
+	for (let i = 0; i < n; i++) bytes.writeUInt8(Math.trunc(Math.random() * 256), i)
+	const base64 = bytes.toBase64({ alphabet })
+	return [Buffer.from(base64, 'ascii'), bytes] as const
+}

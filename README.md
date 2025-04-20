@@ -179,11 +179,13 @@ client.sendSwitch(vector)
 ### IO
 
 ```ts
-bufferSink(sink) // Create a seekable sink from Buffer
-fileHandleSink(sink) // Create a seekable sink from FileHandle
+bufferSink(buffer) // Create a seekable sink from Buffer
+fileHandleSink(handle) // Create a seekable sink from FileHandle
+base64Sink(sink) // Create a sink that base64 encodes to sink
 bufferSource(buffer) // Create a seekable source from Buffer
 fileHandleSource(handle) // Create a seekable source from FileHandle
 readableStreamSource(stream) // Create a source from ReadableStream
+base64Source(source) // Create a source that decodes a base64-encoded source
 readUntil(source, buffer, size, offset) // Read n bytes from source
 readLines(source, chunkSize) // Read lines from source
 sourceTransferToSink(source, sink) // Transfer from source to sink
