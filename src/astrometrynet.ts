@@ -1,10 +1,13 @@
 // https://astrometry.net/doc/net/api.html
 
+import fs from 'fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import type { Required } from 'utility-types'
-import { type Angle, toDeg } from './angle'
+import { type Angle, normalizeAngle, toDeg } from './angle'
 import { readFits } from './fits'
-import { bufferSource } from './io'
-import { EMPTY_PLATE_SOLUTION, type PlateSolution, type PlateSolveOptions, plateSolutionFrom } from './platesolver'
+import { bufferSource, fileHandleSource } from './io'
+import { type PlateSolution, type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 
 export type ScaleUnit = 'degwidth' | 'arcminwidth' | 'arcsecperpix'
 
@@ -32,7 +35,7 @@ export interface Upload<T> extends NovaAstrometryNetPlateSolveOptions {
 	scaleLower?: Angle
 	scaleUpper?: Angle
 	scaleType?: ScaleType
-	scaleEstimated?: number
+	scaleEstimated?: Angle
 	scaleError?: number
 	tweakOrder?: number
 	crpixCenter?: boolean
@@ -56,6 +59,11 @@ export interface SubmissionStatus {
 
 export interface NovaAstrometryNetPlateSolveOptions extends PlateSolveOptions, RequestOptions {}
 
+export interface LocalAstrometryNetPlateSolveOptions extends PlateSolveOptions {
+	executable?: string
+	fov?: Angle
+}
+
 export const NOVA_ASTROMETRY_NET_URL = 'https://nova.astrometry.net'
 export const NOVA_ASTROMETRY_NET_ANONYMOUS_API_KEY = 'XXXXXXXX'
 
@@ -72,15 +80,15 @@ export function upload(upload: Upload<string | Blob>, signal?: AbortSignal) {
 		allow_modifications: upload.allowModifications ? 'y' : 'n',
 		publicly_visible: upload.publiclyVisible ? 'y' : 'n',
 		scale_units: upload.scaleUnits || 'degwidth',
-		scale_lower: upload.scaleLower ?? 0.1,
-		scale_upper: upload.scaleUpper ?? 180,
+		scale_lower: upload.scaleLower === undefined ? 0.1 : toDeg(upload.scaleLower),
+		scale_upper: upload.scaleUpper === undefined ? 180 : toDeg(upload.scaleUpper),
 		scale_type: upload.scaleType ?? 'ul',
-		scale_est: upload.scaleEstimated,
+		scale_est: upload.scaleEstimated === undefined ? undefined : toDeg(upload.scaleEstimated),
 		scale_err: upload.scaleError,
-		center_ra: upload.ra !== undefined ? toDeg(upload.ra) : undefined,
+		center_ra: upload.ra !== undefined ? toDeg(normalizeAngle(upload.ra)) : undefined,
 		center_dec: upload.dec !== undefined ? toDeg(upload.dec) : undefined,
 		radius: upload.radius !== undefined ? toDeg(upload.radius) : undefined,
-		downsample_factor: Math.max(2, upload.downsampleFactor ?? 2),
+		downsample_factor: Math.max(2, upload.downsample ?? 2),
 		tweak_order: upload.tweakOrder ?? 2,
 		crpix_center: upload.crpixCenter ?? true,
 		parity: upload.parity ?? 2,
@@ -102,7 +110,7 @@ export function wcsFile(jobId: number, options: Required<Omit<RequestOptions, 'a
 	return requestBlob(`${options.apiUrl || NOVA_ASTROMETRY_NET_URL}/wcs_file/${jobId}`, 'GET', undefined, signal ?? options.signal)
 }
 
-export async function novaAstrometryNetPlateSolve(input: string | Blob, options?: Omit<Upload<never>, 'input'>, signal?: AbortSignal): Promise<PlateSolution> {
+export async function novaAstrometryNetPlateSolve(input: string | Blob, options?: Omit<Upload<never>, 'input'>, signal?: AbortSignal): Promise<PlateSolution | undefined> {
 	const session = options?.session || (await login(options, signal))
 
 	if (session) {
@@ -134,7 +142,76 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 		}
 	}
 
-	return structuredClone(EMPTY_PLATE_SOLUTION)
+	return undefined
+}
+
+// https://astrometry.net/doc/readme.html
+
+export async function localAstrometryNetPlateSolve(input: string, options: Required<LocalAstrometryNetPlateSolveOptions, 'executable'>, signal?: AbortSignal) {
+	const timeout = options.timeout ?? 0
+	const downsample = options.downsample ?? 2
+	const r = options?.radius ? Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180)) : 0
+	const ra = options?.ra ? toDeg(normalizeAngle(options.ra)) : 0
+	const dec = options?.dec ? toDeg(options.dec) : 90
+	const fov = Math.max(0, Math.min(toDeg(options?.fov ?? 0), 360))
+	const outDir = join(tmpdir(), Bun.randomUUIDv7())
+	const wcs = join(outDir, 'nebulosa.wcs')
+
+	const commands = [
+		options.executable,
+		'--out',
+		'nebulosa',
+		'--overwrite',
+		'--dir',
+		outDir,
+		'--cpulimit',
+		timeout >= 1000 ? Math.trunc(timeout / 1000).toFixed(0) : '300',
+		'--crpix-center',
+		'--downsample',
+		Math.max(downsample, 2).toFixed(0),
+		'--no-verify',
+		'--no-plots',
+		'--skip-solved',
+		'--no-remove-lines',
+		'--uniformize',
+		'0',
+	]
+
+	if (fov > 0) {
+		commands.push('--scale-units', 'degwidth')
+		commands.push('--scale-low', `${fov * 0.7}`)
+		commands.push('--scale-high', `${fov * 1.3}`)
+	} else {
+		commands.push('--guess-scale')
+	}
+
+	if (r) {
+		commands.push('--ra', `${ra}`)
+		commands.push('--dec', `${dec}`)
+		commands.push('--radius', `${r}`)
+	}
+
+	commands.push(input)
+
+	const process = Bun.spawn(commands, { signal, timeout: options?.timeout || 300000 })
+	const exitCode = await process.exited
+
+	try {
+		if (exitCode === 0 && (await fs.exists(wcs))) {
+			const handle = await fs.open(wcs)
+			await using source = fileHandleSource(handle)
+			const fits = await readFits(source)
+
+			if (fits?.hdus.length) {
+				const header = fits.hdus[0].header
+				return plateSolutionFrom(header)
+			}
+		}
+	} finally {
+		await fs.rm(outDir, { recursive: true, force: true })
+	}
+
+	return undefined
 }
 
 async function request<T>(url: string | URL, method: string, body?: BodyInit, signal?: AbortSignal): Promise<T | undefined> {

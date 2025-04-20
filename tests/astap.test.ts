@@ -3,7 +3,7 @@ import { dirname, join } from 'path'
 import { toArcmin, toArcsec, toDeg, toHour } from '../src/angle'
 import { astapDetectStars, astapPlateSolve } from '../src/astap'
 
-test.skip('detectStars', async () => {
+test.skip('detect stars', async () => {
 	const stars = await astapDetectStars(join(dirname(__dirname), 'data', 'apod4.jpg'))
 
 	expect(stars).toHaveLength(344)
@@ -14,8 +14,8 @@ test.skip('detectStars', async () => {
 	expect(stars[0].flux).toBe(110205)
 })
 
-test.skip('plateSolve', async () => {
-	const solution = await astapPlateSolve('/home/tiagohm/Imagens/NGC3372-LRGB_ASTAP.fit')
+test.skip('plate solve', async () => {
+	const solution = await astapPlateSolve('/tmp/NGC3372-LRGB_ASTAP.fit')
 
 	expect(solution).not.toBeUndefined()
 	expect(solution!.solved).toBeTrue()

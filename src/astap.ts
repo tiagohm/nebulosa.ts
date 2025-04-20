@@ -61,7 +61,7 @@ const DIMENSIONS_REGEX = /DIMENSIONS=(\d+)\s*x\s*(\d+)/
 
 export async function astapPlateSolve(input: string, options?: AstapPlateSolveOptions, signal?: AbortSignal) {
 	const fov = Math.max(0, Math.min(toDeg(options?.fov ?? 0), 360))
-	const z = Math.max(0, options?.downsampleFactor ?? 0)
+	const z = Math.max(0, options?.downsample ?? 0)
 	const wcs = join(tmpdir(), `${Bun.randomUUIDv7()}.wcs`)
 	const ini = wcs.replace('.wcs', '.ini')
 	const r = options?.radius ? Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180)) : 0
@@ -78,7 +78,7 @@ export async function astapPlateSolve(input: string, options?: AstapPlateSolveOp
 	if (r) commands.push('-ra', `${ra}`, '-spd', `${spd}`, '-r', `${r}`)
 	else commands.push('-r', '180')
 
-	const process = Bun.spawn(commands, { signal, timeout: options?.timeout })
+	const process = Bun.spawn(commands, { signal, timeout: options?.timeout || 300000 })
 	const exitCode = await process.exited
 
 	if (exitCode === 0 && (await fs.exists(wcs))) {

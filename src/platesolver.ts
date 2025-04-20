@@ -10,7 +10,7 @@ export interface PlateSolveOptions {
 	ra?: Angle
 	dec?: Angle
 	radius?: Angle
-	downsampleFactor?: number
+	downsample?: number
 	timeout?: number
 }
 
