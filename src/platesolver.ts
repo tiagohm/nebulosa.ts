@@ -4,6 +4,16 @@ import { cdMatrix } from './wcs'
 
 export type Parity = 'NORMAL' | 'FLIPPED'
 
+export type PlateSolver = (input: string, options?: PlateSolveOptions, signal?: AbortSignal) => PlateSolution | undefined
+
+export interface PlateSolveOptions {
+	ra?: Angle
+	dec?: Angle
+	radius?: Angle
+	downsampleFactor?: number
+	timeout?: number
+}
+
 export interface PlateSolution extends FitsHeader {
 	solved: boolean
 	orientation: Angle
@@ -18,7 +28,7 @@ export interface PlateSolution extends FitsHeader {
 	heightInPixels: number
 }
 
-const EMPTY_PLATE_SOLUTION: PlateSolution = {
+export const EMPTY_PLATE_SOLUTION: Readonly<PlateSolution> = {
 	solved: false,
 	orientation: 0,
 	scale: 0,
@@ -64,10 +74,15 @@ export function plateSolutionFrom(header: FitsHeader): PlateSolution {
 	solution.declination = crval2
 	solution.width = Math.abs(cdelt1 * width)
 	solution.height = Math.abs(cdelt2 * height)
-    solution.radius = Math.hypot(solution.width, solution.height) / 2
+	solution.radius = Math.hypot(solution.width, solution.height) / 2
 	solution.parity = parity
 	solution.widthInPixels = width
 	solution.heightInPixels = height
 
 	return solution
+}
+
+// Computes the FOV in arcsec/pixel from `focalLength` in mm and `pixelSize` in µm.
+export function fovFrom(focalLength: number, pixelSize: number) {
+	return focalLength <= 0 ? 0 : (pixelSize / focalLength) * 206.265
 }

@@ -5,7 +5,7 @@ import { type Angle, normalizeAngle, toDeg, toHour } from './angle'
 import { readCsv } from './csv'
 import { readFits } from './fits'
 import { fileHandleSource } from './io'
-import { plateSolutionFrom } from './platesolver'
+import { type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 import type { DetectedStar } from './stardetector'
 
 export interface AstapStarDetectOptions {
@@ -14,14 +14,9 @@ export interface AstapStarDetectOptions {
 	outputDirectory?: string
 }
 
-export interface AstapPlateSolveOptions {
+export interface AstapPlateSolveOptions extends PlateSolveOptions {
 	executable?: string
 	fov?: Angle
-	ra?: Angle
-	dec?: Angle
-	radius?: Angle
-	downsample?: number
-	timeout?: number
 	sip?: boolean
 }
 
@@ -66,7 +61,7 @@ const DIMENSIONS_REGEX = /DIMENSIONS=(\d+)\s*x\s*(\d+)/
 
 export async function astapPlateSolve(input: string, options?: AstapPlateSolveOptions, signal?: AbortSignal) {
 	const fov = Math.max(0, Math.min(toDeg(options?.fov ?? 0), 360))
-	const z = Math.max(0, options?.downsample ?? 0)
+	const z = Math.max(0, options?.downsampleFactor ?? 0)
 	const wcs = join(tmpdir(), `${Bun.randomUUIDv7()}.wcs`)
 	const ini = wcs.replace('.wcs', '.ini')
 	const r = options?.radius ? Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180)) : 0
