@@ -66,7 +66,7 @@ describe.skip('nova', () => {
 		}
 	})
 
-	// https://nova.astrometry.net/status/12189507
+	// https://nova.astrometry.net/status/12190450
 	test('plate solve url', async () => {
 		const input = 'https://github.com/dstndstn/astrometry.net/blob/main/demo/apod1.jpg?raw=true'
 		const solution = await novaAstrometryNetPlateSolve(input)

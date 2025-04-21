@@ -89,6 +89,12 @@ toLightYear(1) // Convert AU to light year
 toParsec(1) // Convert AU to parsec
 ```
 
+### ELPMPP02
+
+```ts
+const [p, v] = moonELPMPP02(time)
+```
+
 ### Erfa
 
 ```ts
