@@ -1,5 +1,13 @@
 {
 	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"files": {
+		"ignoreUnknown": true
+	},
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
 	"formatter": {
 		"enabled": true,
 		"ignore": ["**/*.data.ts"],
@@ -52,7 +60,8 @@
 			"suspicious": {
 				"noAssignInExpressions": "off",
 				"noConsoleLog": "off",
-				"useAwait": "error"
+				"useAwait": "error",
+				"noApproximativeNumericConstant": "off"
 			},
 			"complexity": {
 				"noForEach": "off",
