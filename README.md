@@ -64,6 +64,12 @@ hadec(icrs, time, [ebp, ebv], ehp, { pressure, temperature, relativeHumidity, wl
 altaz(icrs, time, [ebp, ebv], ehp, { pressure, temperature, relativeHumidity, wl }) // Compute the AZ/ALT spherical coordinate from ICRS
 ```
 
+### Constellation
+
+```ts
+constellation(ra, dec, equinox) // Constellation at RA/DEC coordinate
+```
+
 ### Csv
 
 ```ts
@@ -92,7 +98,7 @@ toParsec(1) // Convert AU to parsec
 ### ELPMPP02
 
 ```ts
-const [p, v] = moonELPMPP02(time)
+const [p, v] = moonELPMPP02(time) // Geocentric cartesian position & velocity of Moon at time
 ```
 
 ### Erfa
