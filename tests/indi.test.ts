@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { type DefSwitchVector, IndiClient, PropertyPermission, PropertyState, SwitchRule } from '../src/indi'
+import { type DefSwitchVector, IndiClient } from '../src/indi'
 import { SimpleXmlParser } from '../src/xml'
 
 const text = await Bun.file('data/indi.log').text()
@@ -134,9 +134,9 @@ describe('parse', () => {
 		expect(vector.label).toBe('Connection')
 		expect(vector.group).toBe('Main Control')
 		expect(vector.message).toBeUndefined()
-		expect(vector.permission).toBe(PropertyPermission.READ_WRITE)
-		expect(vector.rule).toBe(SwitchRule.ONE_OF_MANY)
-		expect(vector.state).toBe(PropertyState.IDLE)
+		expect(vector.permission).toBe('rw')
+		expect(vector.rule).toBe('OneOfMany')
+		expect(vector.state).toBe('Idle')
 		expect(vector.timeout).toBe(60)
 		expect(vector.timestamp).toBe('2025-03-11T12:43:02')
 		expect(vector.elements.CONNECT.name).toBe('CONNECT')

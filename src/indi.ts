@@ -6,38 +6,15 @@ import { SimpleXmlParser, type XmlNode } from './xml'
 // A simple XML-like communications protocol is described for
 // interactive and automated remote control of diverse instrumentation.
 
-export enum PropertyState {
-	IDLE = 'Idle',
-	OK = 'Ok',
-	BUSY = 'Busy',
-	ALERT = 'Alert',
-}
+export type PropertyState = 'Idle' | 'Ok' | 'Busy' | 'Alert'
 
-export enum SwitchRule {
-	ONE_OF_MANY = 'OneOfMany',
-	AT_MOST_ONE = 'AtMostOne',
-	ANY_OF_MANY = 'AnyOfMany',
-}
+export type SwitchRule = 'OneOfMany' | 'AtMostOne' | 'AnyOfMany'
 
-export enum PropertyPermission {
-	READ_ONLY = 'ro',
-	WRITE_ONLY = 'wo',
-	READ_WRITE = 'rw',
-}
+export type PropertyPermission = 'ro' | 'wo' | 'rw'
 
-export enum BlobEnable {
-	NEVER = 'Never',
-	ALSO = 'Also',
-	ONLY = 'Only',
-}
+export type BlobEnable = 'Never' | 'Also' | 'Only'
 
-export enum VectorType {
-	TEXT = 'Text',
-	NUMBER = 'Number',
-	SWITCH = 'Switch',
-	LIGHT = 'Light',
-	BLOB = 'BLOB',
-}
+export type VectorType = 'Text' | 'Number' | 'Switch' | 'Light' | 'BLOB'
 
 export type ValueType = string | number | boolean
 
