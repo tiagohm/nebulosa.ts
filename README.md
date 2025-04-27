@@ -278,6 +278,20 @@ mulTransposeMatVec(m, v) // Multiply the transpose of the matrix by a vector
 TODO
 ```
 
+### PHD2
+
+```ts
+const client = new Phd2Client({ handler })
+await client.connect(host, port)
+client.close()
+await client.findStar()
+await client.startCapture(exposure)
+await client.stopCapture()
+await client.clearCalibration()
+await client.deselectStar()
+await client.shutdown()
+```
+
 ### Pressure
 
 ```ts
