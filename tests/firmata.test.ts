@@ -25,25 +25,25 @@ describe('simple', () => {
 	})
 
 	test('version', () => {
-		client.parse(Buffer.from([0xf9, 1, 2]))
+		client.process(Buffer.from([0xf9, 1, 2]))
 		expect(result[0]).toBe(1)
 		expect(result[1]).toBe(2)
 	})
 
 	test('firmwareMessage', () => {
-		client.parse(Buffer.from([0xf0, 0x79, 2, 3, 65, 0, 66, 0, 67, 0, 0xf7]))
+		client.process(Buffer.from([0xf0, 0x79, 2, 3, 65, 0, 66, 0, 67, 0, 0xf7]))
 		expect(result[0]).toBe(2)
 		expect(result[1]).toBe(3)
 		expect(result[2]).toBe('ABC')
 	})
 
 	test('systemReset', () => {
-		client.parse(Buffer.from([0xff]))
+		client.process(Buffer.from([0xff]))
 		expect(result[0]).toBe(true)
 	})
 
 	test('digitalMessage', () => {
-		client.parse(Buffer.from([0x91, 0x55, 0]))
+		client.process(Buffer.from([0x91, 0x55, 0]))
 
 		for (let i = 0; i < 16; i += 2) {
 			expect(result[i]).toBe(8 + i / 2)
@@ -52,13 +52,13 @@ describe('simple', () => {
 	})
 
 	test('analogMessage', () => {
-		client.parse(Buffer.from([0xf0, 0x6f, 1, 4, 4, 0xf7]))
+		client.process(Buffer.from([0xf0, 0x6f, 1, 4, 4, 0xf7]))
 		expect(result[0]).toBe(1)
 		expect(result[1]).toBe(516)
 	})
 
 	test('pinCapability', () => {
-		client.parse(Buffer.from([0xf0, 0x6c, 1, 0, 2, 0, 11, 0, 0x7f, 3, 0, 4, 0, 0x7f, 0xf7]))
+		client.process(Buffer.from([0xf0, 0x6c, 1, 0, 2, 0, 11, 0, 0x7f, 3, 0, 4, 0, 0x7f, 0xf7]))
 		expect(result[0]).toBe(0)
 		expect(result[1]).toEqual([1, 2, 11])
 		expect(result[2]).toBe(1)
@@ -67,7 +67,7 @@ describe('simple', () => {
 	})
 
 	test('analogMapping', () => {
-		client.parse(Buffer.from([0xf0, 0x6a, 0x7f, 0x7f, 1, 2, 3, 0xf7]))
+		client.process(Buffer.from([0xf0, 0x6a, 0x7f, 0x7f, 1, 2, 3, 0xf7]))
 		const mapping = result[0] as AnalogMapping
 		expect(Object.keys(mapping)).toEqual(['1', '2', '3'])
 		expect(mapping[1]).toBe(2)
@@ -76,19 +76,19 @@ describe('simple', () => {
 	})
 
 	test('pinState', () => {
-		client.parse(Buffer.from([0xf0, 0x6e, 5, 1, 3, 0xf7]))
+		client.process(Buffer.from([0xf0, 0x6e, 5, 1, 3, 0xf7]))
 		expect(result[0]).toBe(5)
 		expect(result[1]).toBe(PinMode.OUTPUT)
 		expect(result[2]).toBe(3)
 	})
 
 	test('textMessage', () => {
-		client.parse(Buffer.from([0xf0, 0x71, 112, 1, 31, 1, 24, 1, 10, 1, 0xf7]))
+		client.process(Buffer.from([0xf0, 0x71, 112, 1, 31, 1, 24, 1, 10, 1, 0xf7]))
 		expect(result[0]).toBe('😊')
 	})
 
 	test('customMessage', () => {
-		client.parse(Buffer.from([0xf0, 1, 65, 0, 66, 0, 67, 0, 0xf7]))
+		client.process(Buffer.from([0xf0, 1, 65, 0, 66, 0, 67, 0, 0xf7]))
 		const buffer = result[0] as Buffer
 		expect(buffer.readInt8(0)).toBe(1)
 		expect(buffer.toString('utf-16le', 1, 7)).toBe('ABC')

@@ -50,13 +50,13 @@ function resolvePinMode(mode: number) {
 export class FirmataParser {
 	constructor(private readonly fsm: FirmataFsm) {}
 
-	parse(data: Buffer) {
+	process(data: Buffer) {
 		for (let i = 0; i < data.byteLength; i++) {
-			this.process(data.readUInt8(i))
+			this.processByte(data.readUInt8(i))
 		}
 	}
 
-	process(b: number) {
+	processByte(b: number) {
 		this.fsm.process(b)
 	}
 }
@@ -483,7 +483,7 @@ export class FirmataClient {
 			port,
 			socket: {
 				data: (_, buffer) => {
-					this.parse(buffer)
+					this.process(buffer)
 				},
 				error: () => {
 					this.reset()
@@ -498,12 +498,12 @@ export class FirmataClient {
 		this.reset()
 	}
 
-	parse(data: Buffer) {
-		this.parser.parse(data)
+	process(data: Buffer) {
+		this.parser.process(data)
 	}
 
-	process(b: number) {
-		this.parser.process(b)
+	processByte(b: number) {
+		this.parser.processByte(b)
 	}
 
 	reset() {

@@ -114,7 +114,7 @@ const client = new FirmataClient(handler)
 await client.connectTcp(host, port) // Connect to Firmata Device via TCP
 client.disconnect() // Disconnect from current connection
 client.process(buffer) // Process the buffer
-client.parse(byte) // Process the byte
+client.processByte(byte) // Process the byte
 ```
 
 ### Fits
