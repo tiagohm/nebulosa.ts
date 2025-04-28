@@ -278,6 +278,14 @@ mulTransposeMatVec(m, v) // Multiply the transpose of the matrix by a vector
 TODO
 ```
 
+### MPCORB
+
+```ts
+mpcorb(line) // Minor planet orbital elements from MPCORB database
+unpackDate('K01AM') // Packed date to year-month-day
+packDate(year, month, day) // year-month-day to packed date format
+```
+
 ### PHD2
 
 ```ts
