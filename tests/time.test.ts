@@ -6,37 +6,8 @@ import { meter } from '../src/distance'
 import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
 import { Ellipsoid, geodeticLocation } from '../src/location'
-import {
-	type Time,
-	Timescale,
-	equationOfOrigins,
-	era,
-	gast,
-	gmst,
-	meanObliquity,
-	normalizeTime,
-	nutationAngles,
-	precessionMatrix,
-	precessionNutationMatrix,
-	subtractTime,
-	tai,
-	tcb,
-	tcg,
-	tdb,
-	tdbMinusTt,
-	tdbMinusTtByFairheadAndBretagnon1990,
-	time,
-	timeBesselian,
-	timeGPS,
-	timeJulian,
-	timeMJD,
-	timeUnix,
-	timeYMDHMS,
-	toDate,
-	tt,
-	ut1,
-	utc,
-} from '../src/time'
+// biome-ignore format:
+import { type Time, Timescale, equationOfOrigins, era, gast, gmst, meanObliquity, normalizeTime, nutationAngles, precessionMatrix, precessionNutationMatrix, subtractTime, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, timeUnix, timeYMD, timeYMDHMS, toDate, tt, ut1, utc, } from '../src/time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = normalizeTime(expected.day, expected.fraction)
@@ -122,6 +93,12 @@ test('timeYMDHMS', () => {
 	expect(t.day).toBe(2442414)
 	expect(t.fraction).toBeCloseTo(0, 14)
 	expect(t.scale).toBe(Timescale.TCG)
+})
+
+test('timeYMD', () => {
+	const t = timeYMD(2025, 5, 5, Timescale.TT)
+	expect(t.day + t.fraction).toBe(2460800.5)
+	expect(t.scale).toBe(Timescale.TT)
 })
 
 test('timeJulian', () => {

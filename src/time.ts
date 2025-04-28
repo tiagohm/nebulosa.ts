@@ -152,6 +152,11 @@ export function timeYMDHMS(year: number, month: number = 1, day: number = 1, hou
 	return time(MJD0 + eraCalToJd(year, month, day), (second + minute * 60 + hour * 3600) / DAYSEC, scale)
 }
 
+// Time from year, month, day.
+export function timeYMD(year: number, month: number = 1, day: number = 1, scale: Timescale = Timescale.UTC) {
+	return time(MJD0, eraCalToJd(year, month, day), scale)
+}
+
 // GPS time from 1980-01-06 00:00:00 UTC.
 export function timeGPS(seconds: number) {
 	return timeFromEpoch(seconds, DAYSEC, 2444245, -0.4997800925925926, Timescale.TAI)
