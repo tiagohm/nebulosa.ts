@@ -1,5 +1,4 @@
-import { ASEC2RAD, DEG2RAD } from './angle'
-import { AU_KM, DAYSPERJC, J2000 } from './constants'
+import { ASEC2RAD, AU_KM, DAYSPERJC, DEG2RAD, J2000 } from './constants'
 import { ELPMPP02_MAIN, ELPMPP02_PERT } from './elpmpp02.data'
 import { type Mat3, mulMatVec } from './matrix'
 import { type Time, tdb } from './time'

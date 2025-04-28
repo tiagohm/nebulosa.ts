@@ -1,26 +1,5 @@
-import { PI, TAU } from './constants'
+import { AMIN2RAD, ASEC2RAD, DEG2RAD, MILLIASEC2RAD, PI, RAD2DEG, TAU } from './constants'
 import { pmod } from './math'
-
-// Radians to degrees.
-export const RAD2DEG: Angle = 180 / PI
-
-// Degrees to radians.
-export const DEG2RAD: Angle = PI / 180
-
-// Arcminutes to radians.
-export const AMIN2RAD: Angle = PI / 180 / 60
-
-// Arcsecconds to radians.
-export const ASEC2RAD: Angle = PI / 180 / 3600
-
-// Milliarcsecconds to radians.
-export const MILLIASEC2RAD: Angle = PI / 180 / 3600000
-
-// Angular velocity in radians/s.
-export const ANGVEL = 7.292115e-5
-
-// Arcseconds in a full circle.
-export const TURNAS = 1296000
 
 const DEFAULT_FORMAT_ANGLE_OPTIONS: Required<FormatAngleOptions> = {
 	isHour: false,

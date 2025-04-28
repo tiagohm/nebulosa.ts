@@ -73,3 +73,36 @@ export const SCHWARZSCHILD_RADIUS_OF_THE_SUN = 1.974125743363687131156424e-8
 
 // Speed of light (AU per day).
 export const SPEED_OF_LIGHT_AU_DAY = (SPEED_OF_LIGHT * DAYSEC) / AU_M
+
+// Radians to degrees.
+export const RAD2DEG = 180 / PI
+
+// Degrees to radians.
+export const DEG2RAD = PI / 180
+
+// Arcminutes to radians.
+export const AMIN2RAD = PI / 180 / 60
+
+// Arcsecconds to radians.
+export const ASEC2RAD = PI / 180 / 3600
+
+// Milliarcsecconds to radians.
+export const MILLIASEC2RAD = PI / 180 / 3600000
+
+// Angular velocity in radians/s.
+export const ANGVEL = 7.292115e-5
+
+// Arcseconds in a full circle.
+export const TURNAS = 1296000
+
+export const OBL_J2000 = 23.43928030555555555555555555555556 * DEG2RAD //  23d 26m 21.4091s
+export const COS_OBL = 0.91748213708696252157561611593023
+export const SIN_OBL = 0.39777698290165069671031615737433
+
+export const GM_SUN_PITJEVA_2005_KM3_S2 = 1.3271244004193938e11
+export const GM_SUN_PITJEVA_2005 = (GM_SUN_PITJEVA_2005_KM3_S2 * DAYSEC * DAYSEC) / AU_KM / AU_KM / AU_KM // AU³/day²
+export const MU_KM3_S2_TO_AU3_D2 = (DAYSEC * DAYSEC) / AU_KM / AU_KM / AU_KM
+export const MU_AU3_D2_TO_KM3_S2 = (AU_KM * AU_KM * AU_KM) / (DAYSEC * DAYSEC)
+
+// Heliocentric gravitational constant in meters^3 / second^2, from DE-405.
+export const GS = 1.32712440017987e20

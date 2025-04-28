@@ -1,5 +1,4 @@
-import { ANGVEL } from './angle'
-import { DAYSEC } from './constants'
+import { ANGVEL, DAYSEC } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import { eraC2teqx, eraGd2Gce } from './erfa'
 import type { Frame } from './frame'

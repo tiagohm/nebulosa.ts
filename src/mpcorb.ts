@@ -1,4 +1,5 @@
-import { type Angle, DEG2RAD } from './angle'
+import type { Angle } from './angle'
+import { DEG2RAD } from './constants'
 import type { Distance } from './distance'
 
 // https://www.minorplanetcenter.net/iau/info/MPOrbitFormat.html

@@ -1,4 +1,5 @@
-import { type Angle, DEG2RAD, type FormatAngleOptions, formatAngle, toDeg } from './angle'
+import { type Angle, type FormatAngleOptions, formatAngle, toDeg } from './angle'
+import { DEG2RAD } from './constants'
 import { type DateTime, dateUnix, formatDate, now } from './datetime'
 import { type Distance, toKilometer } from './distance'
 

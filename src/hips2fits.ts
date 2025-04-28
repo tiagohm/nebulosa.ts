@@ -1,4 +1,5 @@
-import { type Angle, DEG2RAD, toDeg } from './angle'
+import { type Angle, toDeg } from './angle'
+import { DEG2RAD } from './constants'
 
 export const HIPS2FITS_BASE_URL = 'https://alasky.cds.unistra.fr/'
 
