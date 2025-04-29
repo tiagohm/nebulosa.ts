@@ -39,6 +39,14 @@ const stars = astapDetectStars(path, options) // Detect stars on image using ast
 const solution = astapPlateSolve(path, options) // Plate solve the image using astap
 ```
 
+### Asteroid
+
+```ts
+const ceres = asteroid(semiMajorAxis, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, meanAnomaly, epoch) // Kepler Orbit from asteroid orbital elements
+const ceres = mpcAsteroid(mpcorb) // Kepler Orbit from MPC orbit
+const [p, v] = ceres.at(time) // ICRF position & velocity cartesian coordinate at time
+```
+
 ### Astrobin
 
 ```ts

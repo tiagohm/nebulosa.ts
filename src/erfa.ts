@@ -398,9 +398,10 @@ export function eraJdToCal(dj1: number, dj2: number): [number, number, number, n
 	return [iy, im, id, f]
 }
 
+// Gregorian Calendar to Julian Date.
 export function eraCalToJd(iy: number, im: number, id: number): number {
-	const my = Math.trunc((Math.trunc(im) - 14) / 12)
-	const iypmy = Math.trunc(iy) + my
+	const my = Math.trunc((im - 14) / 12)
+	const iypmy = iy + my
 	return Math.trunc((1461 * (iypmy + 4800)) / 4) + Math.trunc((367 * (im - 2 - 12 * my)) / 12) - Math.trunc((3 * Math.trunc((iypmy + 4900) / 100)) / 4) + Math.trunc(id) - 2432076
 }
 
