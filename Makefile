@@ -1,4 +1,4 @@
-.PHONY: run lint format test astropy
+.PHONY: run lint format test
 
 run:
 	bun .
@@ -11,6 +11,3 @@ format:
 
 test:
 	bun test --timeout 1000
-
-astropy:
-	python scripts/$(name).py $(a)

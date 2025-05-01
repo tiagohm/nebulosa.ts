@@ -7,7 +7,7 @@ import { ECLIPTIC_J2000_MATRIX } from './frame'
 import { type Mat3, mulMatVec, transpose } from './matrix'
 import { type MPCOrbit, unpackDate } from './mpcorb'
 import { type Time, Timescale, subtractTime, timeYMD, tt } from './time'
-import { cross, divVecScalar, dot, length, minusVec, mulVecScalar, plusVec } from './vector'
+import { cross, divVecScalar, dot, length, minusVec, mulVecScalar, plusVec, zeroVec } from './vector'
 
 const REFERENCE_FRAME: Mat3 = transpose(ECLIPTIC_J2000_MATRIX)
 
@@ -20,6 +20,8 @@ const REFERENCE_FRAME: Mat3 = transpose(ECLIPTIC_J2000_MATRIX)
 // om: longitude of ascending node (radians)
 // w: argument of perihelion (radians)
 // ma: mean anomaly (radians)
+
+export type StumpffOutput = [number, number, number, number]
 
 // Creates a `KeplerOrbit` for asteroid from semi-major axis, eccentricity, inclination, longitude of ascending node, argument of perihelion and mean anomaly at epoch.
 export function asteroid(a: Distance, e: number, i: Angle, om: Angle, w: Angle, ma: Angle, epoch: Time) {
@@ -56,13 +58,13 @@ export class KeplerOrbit {
 
 // Creates a `KeplerOrbit` from orbital elements using mean anomaly.
 export function meanAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, ma: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
-	let ta: number
+	let v: number
 
-	if (e < 1) ta = trueAnomalyClosed(e, eccentricAnomaly(e, ma))
-	else if (e > 1) ta = trueAnomalyHyperbolic(e, eccentricAnomaly(e, ma))
-	else ta = trueAnomalyParabolic(p, mu, ma)
+	if (e < 1) v = trueAnomalyClosed(e, eccentricAnomaly(e, ma))
+	else if (e > 1) v = trueAnomalyHyperbolic(e, eccentricAnomaly(e, ma))
+	else v = trueAnomalyParabolic(p, mu, ma)
 
-	return trueAnomaly(p, e, i, om, w, ta, epoch, mu, rotation)
+	return trueAnomaly(p, e, i, om, w, v, epoch, mu, rotation)
 }
 
 // Creates a `KeplerOrbit` from orbital elements using true anomaly.
@@ -168,8 +170,9 @@ function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate,
 		throw new Error('motion is not conical')
 	}
 
-	const eqvec = minusVec(divVecScalar(cross(velocity, hvec), mu), divVecScalar(position, r0))
-	const e = length(eqvec)
+	divVecScalar(cross(velocity, hvec, hvec), mu, hvec)
+	minusVec(hvec, divVecScalar(position, r0), hvec)
+	const e = length(hvec)
 	const q = h2 / (mu * (1 + e))
 
 	const f = 1 - e
@@ -192,8 +195,10 @@ function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate,
 		bound = Math.exp((LN_1_5 + LN_DOUBLE_MAX - Math.log(maxc)) / 3)
 	}
 
+	const s: StumpffOutput = [0, 0, 0, 0]
+
 	function kepler(x: number) {
-		const c = stumpff(f * x * x)
+		const c = stumpff(f * x * x, s)
 		return x * (br0 * c[1] + x * (b2rv * c[2] + x * bq * c[3]))
 	}
 
@@ -243,48 +248,58 @@ function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate,
 	}
 
 	const x2 = x * x
-	const c = stumpff(f * x2)
-	const br = br0 * c[0] + x * (b2rv * c[1] + x * bq * c[2])
+	const c = stumpff(f * x2, s)
+	const br = br0 * c[0] + x * b2rv * c[1] + x2 * bq * c[2]
 
 	const pc = 1 - qovr0 * x2 * c[2]
 	const vc = dt - bq * x2 * x * c[3]
-	const pcdot = (-qovr0 / br) * x * c[1]
+	const pcdot = -(qovr0 / br) * x * c[1]
 	const vcdot = 1 - (bq / br) * x2 * c[2]
 
-	const pos = plusVec(mulVecScalar(position, pc), mulVecScalar(velocity, vc))
-	const vel = plusVec(mulVecScalar(position, pcdot), mulVecScalar(velocity, vcdot))
+	const p = zeroVec()
+	const v = zeroVec()
 
-	return [pos, vel]
+	plusVec(mulVecScalar(position, pc, s as never), mulVecScalar(velocity, vc, p), p)
+	plusVec(mulVecScalar(position, pcdot, s as never), mulVecScalar(velocity, vcdot, v), v)
+
+	return [p, v]
 }
 
-const ODD_FACTORIALS = [6, 120, 5040, 362880, 39916800, 6227020800, 1307674368000, 355687428096000, 121645100408832000.0]
-
-const EVEN_FACTORIALS = [2, 24, 720, 40320, 3628800, 479001600, 87178291200, 20922789888000, 6402373705728000]
+const C2_DIV = [1 * 2, 3 * 4, 5 * 6, 7 * 8, 9 * 10, 11 * 12, 13 * 14, 15 * 16, 17 * 18].map((e) => 1 / e)
+const C3_DIV = [2 * 3, 4 * 5, 6 * 7, 8 * 9, 10 * 11, 12 * 13, 14 * 15, 16 * 17, 18 * 19].map((e) => 1 / e)
 
 // Computes Stumpff functions.
 // Based on the function toolkit/src/spicelib/stmp03.f from the SPICE toolkit.
-export function stumpff(x: number) {
-	const z = Math.sqrt(Math.abs(x))
+export function stumpff(x: number, o?: StumpffOutput) {
+	const c = o ?? [0, 0, 0, 0]
 
-	let a = x < -1 ? Math.cosh(z) : x > 1 ? Math.cos(z) : x
-	let b = x < -1 ? Math.sinh(z) / z : x > 1 ? Math.sin(z) / z : x
-	let c = 0
-	let d = 0
+	if (x < -1) {
+		const z = Math.sqrt(-x)
+		c[0] = Math.cosh(z)
+		c[1] = Math.sinh(z) / z
+		c[2] = (1 - c[0]) / x
+		c[3] = (1 - c[1]) / x
+	} else if (x > 1) {
+		const z = Math.sqrt(x)
+		c[0] = Math.cos(z)
+		c[1] = Math.sin(z) / z
+		c[2] = (1 - c[0]) / x
+		c[3] = (1 - c[1]) / x
+	} else {
+		c[2] = 1
+		c[3] = 1
 
-	if (x >= -1 && x <= 1) {
-		for (let i = 0; i <= 8; i++) {
-			const n = i % 2 === 0 ? x : -x
-			const k = n ** i
-			d += k / ODD_FACTORIALS[i]
-			c += k / EVEN_FACTORIALS[i]
+		for (let i = 8; i >= 1; i--) {
+			c[2] = 1 - x * C2_DIV[i] * c[2]
+			c[3] = 1 - x * C3_DIV[i] * c[3]
 		}
 
-		a = 1 - x * c
-		b = 1 - x * d
-	} else {
-		c = (1 - a) / x
-		d = (1 - b) / x
+		c[2] *= C2_DIV[0]
+		c[3] *= C3_DIV[0]
+
+		c[1] = 1 - x * c[3]
+		c[0] = 1 - x * c[2]
 	}
 
-	return [a, b, c, d] as const
+	return c
 }

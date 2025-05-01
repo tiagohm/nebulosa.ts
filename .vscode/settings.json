@@ -8,6 +8,7 @@
 	"html.format.wrapAttributes": "force-aligned",
 	"html.format.wrapLineLength": 300,
 	"json.format.keepLines": true,
+	"python.defaultInterpreterPath": "./scripts/.venv/bin/python",
 	"editor.codeActionsOnSave": {
 		"source.organizeImports": "explicit"
 	},
@@ -19,9 +20,5 @@
 	},
 	"[jsonc]": {
 		"editor.defaultFormatter": "biomejs.biome"
-	},
-	"[python]": {
-		"editor.defaultFormatter": "ms-python.autopep8"
-	},
-	"autopep8.args": ["--max-line-length", "999", "--experimental"]
+	}
 }
