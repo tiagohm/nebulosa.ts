@@ -33,6 +33,10 @@ export function normalizeAngle(angle: Angle): Angle {
 	return pmod(angle, TAU)
 }
 
+export function normalizePI(angle: Angle): Angle {
+	return ((angle + PI) % TAU) - PI
+}
+
 // Creates a new Angle from degrees.
 export function deg(value: number): Angle {
 	return value * DEG2RAD

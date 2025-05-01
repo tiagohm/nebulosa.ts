@@ -1,31 +1,83 @@
-import type { Angle } from './angle'
+import type { Mutable } from 'utility-types'
+import { type Angle, normalizeAngle, normalizePI } from './angle'
 import type { PositionAndVelocity } from './astrometry'
-import { GM_SUN_PITJEVA_2005, PI, TAU } from './constants'
+import { GM_SUN_PITJEVA_2005, TAU } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { ECLIPTIC_J2000_MATRIX } from './frame'
 import { type Mat3, mulMatVec, transpose } from './matrix'
 import { type MPCOrbit, unpackDate } from './mpcorb'
-import { type Time, Timescale, subtractTime, timeYMD, tt } from './time'
-import { cross, divVecScalar, dot, length, minusVec, mulVecScalar, plusVec, zeroVec } from './vector'
+import { type Time, Timescale, subtractTime, tdb, time, timeYMD, tt } from './time'
+import { type MutVec3, type Vec3, angleBetween, cross, divVecScalar, dot, length, minusVec, mulVecScalar, plusVec, zeroVec } from './vector'
 
 const REFERENCE_FRAME: Mat3 = transpose(ECLIPTIC_J2000_MATRIX)
 
 // Glossary
 
-// a: semi-major axis (au)
-// p: semilatus rectum (au)
-// e: eccentricity
-// i: inclination (radians)
-// om: longitude of ascending node (radians)
-// w: argument of perihelion (radians)
-// ma: mean anomaly (radians)
+// a = semi-major axis (au)
+// b = semi-minor axis (au)
+// e = eccentricity
+// E = eccentric anomaly
+// h = specific angular momentum
+// i = inclination (rad)
+// l = true longitude (rad)
+// L = mean longitude (rad)
+// M = mean anomaly (rad)
+// n = mean motion (rad)
+// om = longitude of ascending node (rad)
+// p = semi-latus rectum (au)
+// P = period (d)
+// q = periapsis distance (au)
+// Q = apoapsis distance (au)
+// t = time
+// u = argument of latitude (rad)
+// v = true anomaly (rad)
+// w = argument of periapsis (rad)
+// lp = longitude of periapsis (rad)
 
 export type StumpffOutput = [number, number, number, number]
 
+interface PropagationParameters {
+	readonly f: number
+	readonly hv: Vec3 // cross product between position & velocity
+	readonly hvl: number // length of hv
+	readonly r0: number // length of position vector
+	readonly v0: number // length of velocity vector
+	readonly rv: number // dot product between position & velocity
+	readonly br0: number
+	readonly b2rv: number
+	readonly bq: number
+	readonly qovr0: number
+	readonly maxc: number
+}
+
+export interface OsculatingElements {
+	readonly apoapsisDistance: Distance
+	readonly argumentOfLatitude: Angle
+	readonly argumentOfPeriapsis: Angle
+	readonly eccentricAnomaly: Angle
+	readonly eccentricityVector: Vec3
+	readonly eccentricity: number
+	readonly inclination: Angle
+	readonly longitudeOfAscendingNode: Angle
+	readonly longitudeOfPeriapsis: Angle
+	readonly meanAnomaly: Angle
+	readonly meanLongitude: Angle
+	readonly meanMotionPerDay: Angle
+	readonly nodeVector: Vec3
+	readonly periapsisDistance: Distance
+	readonly periapsisTime: Time
+	readonly periodInDays: number
+	readonly semiLatusRectum: Distance
+	readonly semiMajorAxis: Distance
+	readonly semiMinorAxis: Distance
+	readonly trueAnomaly: Angle
+	readonly trueLongitude: Angle
+}
+
 // Creates a `KeplerOrbit` for asteroid from semi-major axis, eccentricity, inclination, longitude of ascending node, argument of perihelion and mean anomaly at epoch.
-export function asteroid(a: Distance, e: number, i: Angle, om: Angle, w: Angle, ma: Angle, epoch: Time) {
-	return meanAnomaly(a * (1 - e * e), e, i, om, w, ma, epoch)
+export function asteroid(a: Distance, e: number, i: Angle, om: Angle, w: Angle, M: Angle, epoch: Time) {
+	return KeplerOrbit.meanAnomaly(a * (1 - e * e), e, i, om, w, M, epoch)
 }
 
 // Creates a `KeplerOrbit` for asteroid from MPC orbit.
@@ -35,17 +87,151 @@ export function mpcAsteroid(mpcorb: MPCOrbit) {
 	return asteroid(semiMajorAxis, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, meanAnomaly, epoch)
 }
 
-export class KeplerOrbit {
+export class KeplerOrbit implements OsculatingElements {
+	private readonly oe: Partial<Mutable<OsculatingElements>> = {}
+	private readonly propagation: PropagationParameters
+
 	constructor(
 		readonly position: CartesianCoordinate,
 		readonly velocity: CartesianCoordinate,
 		readonly epoch: Time,
 		readonly mu: number = GM_SUN_PITJEVA_2005,
 		readonly rotation: Mat3 = REFERENCE_FRAME,
-	) {}
+	) {
+		this.propagation = propagationParameters(position, velocity, mu)
+	}
+
+	get apoapsisDistance() {
+		if (this.oe.apoapsisDistance) return this.oe.apoapsisDistance
+		this.oe.apoapsisDistance = apoapsisDistance(this.semiLatusRectum, this.eccentricity)
+		return this.oe.apoapsisDistance
+	}
+
+	get argumentOfLatitude() {
+		if (this.oe.argumentOfLatitude) return this.oe.argumentOfLatitude
+		this.oe.argumentOfLatitude = argumentOfLatitude(this.argumentOfPeriapsis, this.trueAnomaly)
+		return this.oe.argumentOfLatitude
+	}
+
+	get argumentOfPeriapsis() {
+		if (this.oe.argumentOfPeriapsis) return this.oe.argumentOfPeriapsis
+		this.oe.argumentOfPeriapsis = argumentOfPeriapsis(this.eccentricityVector, this.nodeVector, this.propagation.hv)
+		return this.oe.argumentOfPeriapsis
+	}
+
+	get eccentricAnomaly() {
+		if (this.oe.eccentricAnomaly) return this.oe.eccentricAnomaly
+		this.oe.eccentricAnomaly = eccentricAnomaly(this.trueAnomaly, this.eccentricity)
+		return this.oe.eccentricAnomaly
+	}
+
+	get eccentricityVector() {
+		if (this.oe.eccentricityVector) return this.oe.eccentricityVector
+		const rv0 = mulVecScalar(this.position, this.propagation.v0 ** 2 - this.mu / this.propagation.r0)
+		const vrv = mulVecScalar(this.velocity, this.propagation.rv)
+		this.oe.eccentricityVector = divVecScalar(minusVec(rv0, vrv, rv0), this.mu, rv0)
+		return this.oe.eccentricityVector
+	}
+
+	get eccentricity() {
+		if (this.oe.eccentricity) return this.oe.eccentricity
+		this.oe.eccentricity = length(this.eccentricityVector)
+		return this.oe.eccentricity
+	}
+
+	get inclination() {
+		if (this.oe.inclination) return this.oe.inclination
+		this.oe.inclination = Math.acos(this.propagation.hv[2] / this.propagation.hvl)
+		return this.oe.inclination
+	}
+
+	get longitudeOfAscendingNode() {
+		if (this.oe.longitudeOfAscendingNode) return this.oe.longitudeOfAscendingNode
+		this.oe.longitudeOfAscendingNode = longitudeOfAscendingNode(this.propagation.hv, this.inclination)
+		return this.oe.longitudeOfAscendingNode
+	}
+
+	get longitudeOfPeriapsis() {
+		if (this.oe.longitudeOfPeriapsis) return this.oe.longitudeOfPeriapsis
+		this.oe.longitudeOfPeriapsis = longitudeOfPeriapsis(this.longitudeOfAscendingNode, this.argumentOfPeriapsis)
+		return this.oe.longitudeOfPeriapsis
+	}
+
+	get meanAnomaly() {
+		if (this.oe.meanAnomaly) return this.oe.meanAnomaly
+		this.oe.meanAnomaly = meanAnomaly(this.eccentricAnomaly, this.eccentricity)
+		return this.oe.meanAnomaly
+	}
+
+	get meanLongitude() {
+		if (this.oe.meanLongitude) return this.oe.meanLongitude
+		this.oe.meanLongitude = meanLongitude(this.longitudeOfAscendingNode, this.argumentOfPeriapsis, this.meanAnomaly)
+		return this.oe.meanLongitude
+	}
+
+	get meanMotionPerDay() {
+		if (this.oe.meanMotionPerDay) return this.oe.meanMotionPerDay
+		this.oe.meanMotionPerDay = meanMotion(this.semiMajorAxis, this.mu)
+		return this.oe.meanMotionPerDay
+	}
+
+	get nodeVector() {
+		if (this.oe.nodeVector) return this.oe.nodeVector
+		this.oe.nodeVector = nodeVector(this.propagation.hv)
+		return this.oe.nodeVector
+	}
+
+	get periapsisDistance() {
+		if (this.oe.periapsisDistance) return this.oe.periapsisDistance
+		this.oe.periapsisDistance = periapsisDistance(this.semiLatusRectum, this.eccentricity)
+		return this.oe.periapsisDistance
+	}
+
+	get periapsisTime() {
+		const M = meanAnomaly(this.eccentricAnomaly, this.eccentricity, false)
+		const tp = timeSincePeriapsis(M, this.meanMotionPerDay, this.trueAnomaly, this.semiLatusRectum, this.mu)
+		const t = tdb(this.epoch)
+		return time(t.day - tp, t.fraction, Timescale.TDB)
+	}
+
+	get periodInDays() {
+		if (this.oe.periodInDays) return this.oe.periodInDays
+		this.oe.periodInDays = period(this.semiMajorAxis, this.mu)
+		return this.oe.periodInDays
+	}
+
+	get semiLatusRectum() {
+		if (this.oe.semiLatusRectum) return this.oe.semiLatusRectum
+		this.oe.semiLatusRectum = this.propagation.hvl ** 2 / this.mu
+		return this.oe.semiLatusRectum
+	}
+
+	get semiMajorAxis() {
+		if (this.oe.semiMajorAxis) return this.oe.semiMajorAxis
+		this.oe.semiMajorAxis = semiMajorAxis(this.semiLatusRectum, this.eccentricity)
+		return this.oe.semiMajorAxis
+	}
+
+	get semiMinorAxis() {
+		if (this.oe.semiMinorAxis) return this.oe.semiMinorAxis
+		this.oe.semiMinorAxis = semiMinorAxis(this.semiLatusRectum, this.eccentricity)
+		return this.oe.semiMinorAxis
+	}
+
+	get trueAnomaly() {
+		if (this.oe.trueAnomaly) return this.oe.trueAnomaly
+		this.oe.trueAnomaly = trueAnomaly(this.eccentricityVector, this.position, this.velocity, this.nodeVector)
+		return this.oe.trueAnomaly
+	}
+
+	get trueLongitude() {
+		if (this.oe.trueLongitude) return this.oe.trueLongitude
+		this.oe.trueLongitude = meanLongitude(this.longitudeOfAscendingNode, this.argumentOfPeriapsis, this.trueAnomaly)
+		return this.oe.trueLongitude
+	}
 
 	at(time: Time) {
-		const pv = propagate(this.position, this.velocity, tt(this.epoch), tt(time), this.mu)
+		const pv = propagate(this.position, this.velocity, tt(this.epoch), tt(time), this.propagation)
 
 		if (this.rotation) {
 			mulMatVec(this.rotation, pv[0], pv[0] as never)
@@ -54,30 +240,30 @@ export class KeplerOrbit {
 
 		return pv
 	}
-}
 
-// Creates a `KeplerOrbit` from orbital elements using mean anomaly.
-export function meanAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, ma: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
-	let v: number
+	// Creates a `KeplerOrbit` from orbital elements using mean anomaly.
+	static meanAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, M: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
+		let v: number
 
-	if (e < 1) v = trueAnomalyClosed(e, eccentricAnomaly(e, ma))
-	else if (e > 1) v = trueAnomalyHyperbolic(e, eccentricAnomaly(e, ma))
-	else v = trueAnomalyParabolic(p, mu, ma)
+		if (e < 1) v = trueAnomalyClosed(e, solveEccentricAnomaly(e, M))
+		else if (e > 1) v = trueAnomalyHyperbolic(e, solveEccentricAnomaly(e, M))
+		else v = trueAnomalyParabolic(p, mu, M)
 
-	return trueAnomaly(p, e, i, om, w, v, epoch, mu, rotation)
-}
+		return KeplerOrbit.trueAnomaly(p, e, i, om, w, v, epoch, mu, rotation)
+	}
 
-// Creates a `KeplerOrbit` from orbital elements using true anomaly.
-export function trueAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, ma: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
-	const [position, velocity] = computePositionAndVelocityFromOrbitalElements(p, e, i, om, w, ma, mu)
-	return new KeplerOrbit(position, velocity, epoch, mu, rotation)
+	// Creates a `KeplerOrbit` from orbital elements using true anomaly.
+	static trueAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, M: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
+		const [position, velocity] = computePositionAndVelocityFromOrbitalElements(p, e, i, om, w, M, mu)
+		return new KeplerOrbit(position, velocity, epoch, mu, rotation)
+	}
 }
 
 // Iterates to solve Kepler's equation to find eccentric anomaly.
 // Based on the algorithm in section 8.10.2 of the Explanatory Supplement
 // to the Astronomical Almanac, 3rd ed.
-function eccentricAnomaly(e: number, M: Angle): Angle {
-	const m = ((M + PI) % TAU) - PI
+function solveEccentricAnomaly(e: number, M: Angle): Angle {
+	const m = normalizePI(M)
 	let E = m + e * Math.sin(m)
 
 	for (let i = 0; i <= 99; i++) {
@@ -151,26 +337,21 @@ const LN_1_5 = 0.4054651081081644
 const LN_HALF_DOUBLE_MAX = 709.0895657128241
 const LN_DOUBLE_MAX = 709.782712893384
 
-/**
- * Propagates a `position` and `velocity` vector over time.
- *
- * @param position Position in km.
- * @param velocity Velocity in km/s.
- * @param t0 `Time` corresponding to `position` and `velocity`.
- * @param t1 `Time` to propagate to.
- * @param mu Gravitational parameter in units that match the other arguments.
- */
-function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate, t0: Time, t1: Time, mu: number): PositionAndVelocity {
-	const r0 = length(position)
-	const rv = dot(position, velocity)
-	const hvec = cross(position, velocity)
-	const h2 = dot(hvec, hvec)
+function propagationParameters(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number = GM_SUN_PITJEVA_2005): PropagationParameters {
+	const hv = cross(position, velocity)
+	const h2 = dot(hv, hv)
 
 	if (h2 === 0) {
 		throw new Error('motion is not conical')
 	}
 
-	divVecScalar(cross(velocity, hvec, hvec), mu, hvec)
+	const r0 = length(position)
+	const rv = dot(position, velocity)
+	const hvl = Math.sqrt(h2)
+	const v0 = length(velocity)
+
+	const hvec = cross(velocity, hv)
+	divVecScalar(hvec, mu, hvec)
 	minusVec(hvec, divVecScalar(position, r0), hvec)
 	const e = length(hvec)
 	const q = h2 / (mu * (1 + e))
@@ -184,6 +365,22 @@ function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate,
 	const qovr0 = q / r0
 
 	const maxc = Math.max(Math.abs(br0), Math.max(Math.abs(b2rv), Math.max(Math.abs(bq), Math.abs(qovr0))))
+
+	return { hv, hvl, r0, v0, rv, f, br0, b2rv, bq, qovr0, maxc }
+}
+
+/**
+ * Propagates a `position` and `velocity` vector over time.
+ *
+ * @param position Position in km.
+ * @param velocity Velocity in km/s.
+ * @param t0 `Time` corresponding to `position` and `velocity`.
+ * @param t1 `Time` to propagate to.
+ * @param mu Gravitational parameter in units that match the other arguments.
+ */
+function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate, t0: Time, t1: Time, mu: number | PropagationParameters): PositionAndVelocity {
+	const { f, maxc, br0, b2rv, bq, qovr0 } = typeof mu === 'number' ? propagationParameters(position, velocity, mu) : mu
+
 	let bound: number
 
 	// Hyperbolic
@@ -302,4 +499,128 @@ export function stumpff(x: number, o?: StumpffOutput) {
 	}
 
 	return c
+}
+
+export function apoapsisDistance(p: Distance, e: number): Distance {
+	return e >= 1 ? Infinity : (p * (1 + e)) / (1 - e * e)
+}
+
+export function argumentOfLatitude(w: Angle, v: Angle) {
+	return normalizeAngle(w + v)
+}
+
+export function argumentOfPeriapsis(ev: Vec3, nv: Vec3, hv: Vec3): Angle {
+	// Circular
+	if (length(ev) < 1e-15) return 0
+
+	// Equatorial and not circular
+	if (length(nv) < 1e-15) {
+		const a = normalizeAngle(Math.atan2(ev[1], ev[0]))
+		return hv[2] >= 0 ? a : normalizeAngle(-a)
+	}
+
+	// Not circular and not equatorial
+	const a = angleBetween(nv, ev)
+	return ev[2] > 0 ? a : normalizeAngle(-a)
+}
+
+export function eccentricAnomaly(v: number, e: number) {
+	if (e < 1) return 2 * Math.atan(Math.sqrt((1 - e) / (1 + e)) * Math.tan(v / 2))
+	else if (e > 1) return normalizePI(2 * Math.atanh(Math.tan(v / 2) / Math.sqrt((e + 1) / (e - 1))))
+	else return 0
+}
+
+export function eccentricityVector(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number, o?: MutVec3): MutVec3 {
+	const r = length(position)
+	const v = length(velocity)
+	const a = mulVecScalar(position, v ** 2 - mu / r, o)
+	const b = mulVecScalar(velocity, dot(position, velocity))
+	return divVecScalar(minusVec(a, b, a), mu, a)
+}
+
+export function inclination(hv: Vec3) {
+	// return angleBetween(hv, [0, 0, 1])
+	return Math.acos(hv[2] / length(hv))
+}
+
+export function longitudeOfAscendingNode(hv: Vec3, i: Angle): Angle {
+	return i !== 0 ? normalizeAngle(Math.atan2(hv[0], -hv[1])) : 0
+}
+
+export function longitudeOfPeriapsis(om: Angle, w: Angle) {
+	return normalizeAngle(om + w)
+}
+
+export function meanAnomaly(E: Angle, e: number, norm: boolean = true) {
+	if (e < 1) return normalizeAngle(E - e * Math.sin(E))
+	else if (e > 1) {
+		const M = e * Math.sinh(E) - E
+		return norm ? normalizePI(M) : M
+	} else return 0
+}
+
+export function meanLongitude(om: Angle, w: Angle, M: Angle) {
+	return normalizeAngle(om + w + M)
+}
+
+export function meanMotion(a: Distance, mu: number): Angle {
+	return Math.sqrt(mu / Math.abs(a) ** 3)
+}
+
+export function nodeVector(hv: Vec3) {
+	const nv: Vec3 = [-hv[1], hv[0], 0]
+	const n = length(nv)
+	return n !== 0 ? divVecScalar(nv, n, nv as never) : nv
+}
+
+export function periapsisDistance(p: Distance, e: number): Distance {
+	return e === 1 ? p / 2 : (p * (1 - e)) / (1 - e ** 2)
+}
+
+export function period(a: Distance, mu: number) {
+	return a > 0 ? TAU * Math.sqrt(a ** 3 / mu) : Infinity
+}
+
+export function semiLatusRectum(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number) {
+	return length(cross(position, velocity)) ** 2 / mu
+}
+
+export function semiMajorAxis(p: Distance, e: number) {
+	return e !== 1 ? p / (1 - e ** 2) : Infinity
+}
+
+export function semiMinorAxis(p: Distance, e: number) {
+	return e < 1 ? p / Math.sqrt(1 - e ** 2) : e > 1 ? (p * Math.sqrt(e ** 2 - 1)) / (1 - e ** 2) : 0
+}
+
+export function timeSincePeriapsis(M: Angle, n: Angle, v: Angle, p: Distance, mu: number) {
+	if (n >= 8.64e-15) {
+		return M / n
+	} else {
+		const D = Math.tan(v / 2)
+		return Math.sqrt((2 * (p / 2) ** 3) / mu) * (D + D ** 3 / 3)
+	}
+}
+
+export function trueAnomaly(ev: Vec3, position: CartesianCoordinate, velocity: CartesianCoordinate, nv: Vec3) {
+	let v = 0
+	const evl = length(ev)
+
+	// Not circular
+	if (evl > 1e-15) {
+		const a = angleBetween(ev, position)
+		v = dot(position, velocity) > 0 ? a : normalizeAngle(-a)
+	}
+	// Circular and equatorial
+	else if (length(nv) < 1e-15) {
+		const a = Math.acos(position[0] / length(position))
+		v = velocity[0] < 0 ? a : normalizeAngle(-a)
+	}
+	// Circular and not equatorial
+	else {
+		const a = angleBetween(nv, position)
+		v = position[2] >= 0 ? a : normalizeAngle(-a)
+	}
+
+	return evl < 1 - 1e-15 ? v : normalizePI(v)
 }

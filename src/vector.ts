@@ -50,7 +50,7 @@ export function cloneVec(v: Vec3): MutVec3 {
 }
 
 // Computes the angle between the vectors.
-export function angle(a: Vec3, b: Vec3): Angle {
+export function angleBetween(a: Vec3, b: Vec3): Angle {
 	// https://people.eecs.berkeley.edu/~wkahan/Mindless.pdf
 	// const c = mulScalar(a, length(b))
 	// const d = mulScalar(b, length(a))
@@ -58,9 +58,7 @@ export function angle(a: Vec3, b: Vec3): Angle {
 
 	const d = dot(a, b)
 	const v = d / (length(a) * length(b))
-	if (Math.abs(v) > 1)
-		if (v < 0) return PI
-		else return 0
+	if (Math.abs(v) > 1) return v < 0 ? PI : 0
 	else return Math.acos(v)
 }
 
@@ -149,10 +147,7 @@ export function divVec(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 // Normalizes the vector.
 export function normalizeVec(v: Vec3, o?: MutVec3): MutVec3 {
 	const len = length(v)
-
-	if (len === 0)
-		if (o) return fillVec(o, ...v)
-		else return cloneVec(v)
+	if (len === 0) return o ? fillVec(o, ...v) : cloneVec(v)
 	else return divVecScalar(v, len, o)
 }
 

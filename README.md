@@ -42,9 +42,31 @@ const solution = astapPlateSolve(path, options) // Plate solve the image using a
 ### Asteroid
 
 ```ts
-const ceres = asteroid(semiMajorAxis, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, meanAnomaly, epoch) // Kepler Orbit from asteroid orbital elements
+const ceres = asteroid(semiMajorAxis, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, meanAnomaly, epoch) // Kepler Orbit from asteroid's orbital elements
 const ceres = mpcAsteroid(mpcorb) // Kepler Orbit from MPC orbit
 const [p, v] = ceres.at(time) // ICRF position & velocity cartesian coordinate at time
+
+// Osculating elements from position & velocity at epoch
+const vesta = new KeplerOrbit(position, velocity, epoch)
+vesta.apoapsisDistance // Farthest distance in AU between the orbiting body and the central body in its orbit
+vesta.argumentOfLatitude // Angle from the ascending node to the orbiting body’s current position
+vesta.argumentOfPeriapsis // Angle from the ascending node to the periapsis
+vesta.eccentricAnomaly // Angular parameter that defines a point in the elliptical orbit as a function of time
+vesta.eccentricity // How much the orbit deviates from a perfect circle
+vesta.inclination // Tilt of the orbit's plane relative to the reference plane
+vesta.longitudeOfAscendingNode // Angle from a fixed reference direction to the ascending node of the orbit
+vesta.longitudeOfPeriapsis // Angle from the reference direction to the periapsis, combining the longitude of the ascending node and the argument of periapsis
+vesta.meanAnomaly // A measure of time in the orbit, representing where the object would be if it moved at constant speed in a circular orbit
+vesta.meanLongitude // Sum of the longitude of the ascending node, argument of periapsis, and mean anomaly
+vesta.meanMotionPerDay // Average rate (in radians per day) at which the orbiting body progresses along its orbit
+vesta.periapsisDistance // Shortest distance in AU between the orbiting body and the central body in its orbit
+vesta.periapsisTime // Time at which the orbiting body passes closest to the central body
+vesta.periodInDays // Orbital period in days
+vesta.semiLatusRectum // A geometric parameter related to the shape of the orbit
+vesta.semiMajorAxis // Half of the longest diameter of the elliptical orbit
+vesta.semiMinorAxis // Half of the shortest diameter of the ellipse
+vesta.trueAnomaly // Angle between the direction of periapsis and the current position of the body, measured at the focus of the ellipse
+vesta.trueLongitude // Angle from the reference direction to the body's current position, combining several angular parameters
 ```
 
 ### Astrobin

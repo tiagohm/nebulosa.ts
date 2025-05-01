@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { PI, PIOVERTWO } from '../src/constants'
-import { type MutVec3, type Vec3, angle, cross, divVec, divVecScalar, dot, minusVec, minusVecScalar, mulVec, mulVecScalar, negateVec, normalizeVec, plane, plusVec, plusVecScalar, rotateByRodrigues, xAxis, yAxis, zAxis } from '../src/vector'
+import { type MutVec3, type Vec3, angleBetween, cross, divVec, divVecScalar, dot, minusVec, minusVecScalar, mulVec, mulVecScalar, negateVec, normalizeVec, plane, plusVec, plusVecScalar, rotateByRodrigues, xAxis, yAxis, zAxis } from '../src/vector'
 
-test('angle', () => {
-	expect(angle(xAxis(), yAxis())).toBe(PIOVERTWO)
-	expect(angle([1, 2, 3], [-1, -2, -3])).toBe(PI)
-	expect(angle([2, -3, 1], [4, -6, 2])).toBe(0)
-	expect(angle([3, 4, 5], [1, 2, 2])).toBeCloseTo(Math.acos(1.4 / Math.sqrt(2)), 14)
+test('angleBetween', () => {
+	expect(angleBetween(xAxis(), yAxis())).toBe(PIOVERTWO)
+	expect(angleBetween([1, 2, 3], [-1, -2, -3])).toBe(PI)
+	expect(angleBetween([2, -3, 1], [4, -6, 2])).toBe(0)
+	expect(angleBetween([3, 4, 5], [1, 2, 2])).toBeCloseTo(Math.acos(1.4 / Math.sqrt(2)), 14)
 })
 
 test('normalize', () => {

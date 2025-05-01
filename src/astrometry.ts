@@ -9,7 +9,7 @@ import { pmod } from './math'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { type Time, Timescale, pmAngles, tdb, tt, ut1 } from './time'
-import { angle, length, minusVec, normalizeVec } from './vector'
+import { angleBetween, length, minusVec, normalizeVec } from './vector'
 
 export type PositionAndVelocity = readonly [CartesianCoordinate, CartesianCoordinate]
 
@@ -53,7 +53,7 @@ export function parallacticAngle(ha: Angle, dec: Angle, latitude: Angle): Angle 
 
 // Computes the angle between two positions.
 export function separationFrom(a: CartesianCoordinate, b: CartesianCoordinate): Angle {
-	return angle(a, b)
+	return angleBetween(a, b)
 }
 
 // TODO: Use era or vsop87 to compute Earth barycentric and heliocentric position. Make the parameter optional.
