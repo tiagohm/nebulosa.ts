@@ -23,7 +23,7 @@ export interface RefractionParameters {
 	wl?: number
 }
 
-export const DEFAULT_REFRACTION_PAREMETERS: Readonly<Required<RefractionParameters>> = {
+export const DEFAULT_REFRACTION_PARAMETERS: Readonly<Required<RefractionParameters>> = {
 	pressure: 0,
 	temperature: 15,
 	relativeHumidity: 0,
@@ -96,10 +96,10 @@ function hadecAltaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelo
 	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
 
 	// First set up the astrometry context for ICRS<->observed
-	const pressure = refraction?.pressure ?? DEFAULT_REFRACTION_PAREMETERS.pressure
-	const temperature = refraction?.temperature ?? DEFAULT_REFRACTION_PAREMETERS.temperature
-	const relativeHumidity = refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PAREMETERS.relativeHumidity
-	const wl = refraction?.wl ?? DEFAULT_REFRACTION_PAREMETERS.wl
+	const pressure = refraction?.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure
+	const temperature = refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature
+	const relativeHumidity = refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity
+	const wl = refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl
 	const [astrom] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp ?? ebpv[0], radius, flattening)
 	// Correct for parallax to find BCRS direction from observer (as in erfa.pmpx)
 	const nc = minusVec(icrs, astrom.eb)
