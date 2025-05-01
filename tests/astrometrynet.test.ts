@@ -72,7 +72,6 @@ describe.skip('nova', () => {
 		const solution = await novaAstrometryNetPlateSolve(input)
 
 		expect(solution).not.toBeUndefined()
-		expect(solution!.solved).toBeTrue()
 
 		using wcs = new Wcs(solution)
 
@@ -88,7 +87,6 @@ describe.skip('nova', () => {
 		const solution = await novaAstrometryNetPlateSolve(input)
 
 		expect(solution).not.toBeUndefined()
-		expect(solution!.solved).toBeTrue()
 
 		using wcs = new Wcs(solution)
 
@@ -105,7 +103,6 @@ test.skip('local', async () => {
 	})
 
 	expect(solution).not.toBeUndefined()
-	expect(solution!.solved).toBeTrue()
 	expect(toDeg(solution!.orientation)).toBeCloseTo(58.5073, 3)
 	expect(toArcsec(solution!.scale)).toBeCloseTo(171.041, 3)
 	expect(toHour(solution!.rightAscension)).toBeCloseTo(12.4786, 3)

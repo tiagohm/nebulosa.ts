@@ -59,19 +59,18 @@ test('M101', () => {
 
 	const solution = plateSolutionFrom(header)
 
-	expect(solution.solved).toBeTrue()
-	expect(180 - toDeg(solution.orientation)).toBeCloseTo(191.8, 1)
-	expect(toArcsec(solution.scale)).toBeCloseTo(0.887, 3)
-	expect(toDeg(solution.rightAscension)).toBeCloseTo(211.79, 3)
-	expect(toDeg(solution.declination)).toBeCloseTo(54.325, 3)
-	expect(toDeg(solution.width)).toBeCloseTo(2.26, 2)
-	expect(toDeg(solution.height)).toBeCloseTo(1.69, 2)
-	expect(toDeg(solution.radius)).toBeCloseTo(1.411, 3)
-	expect(solution.parity).toBe('NORMAL')
-	expect(solution.widthInPixels).toBe(9176)
-	expect(solution.heightInPixels).toBe(6870)
+	expect(180 - toDeg(solution!.orientation)).toBeCloseTo(191.8, 1)
+	expect(toArcsec(solution!.scale)).toBeCloseTo(0.887, 3)
+	expect(toDeg(solution!.rightAscension)).toBeCloseTo(211.79, 3)
+	expect(toDeg(solution!.declination)).toBeCloseTo(54.325, 3)
+	expect(toDeg(solution!.width)).toBeCloseTo(2.26, 2)
+	expect(toDeg(solution!.height)).toBeCloseTo(1.69, 2)
+	expect(toDeg(solution!.radius)).toBeCloseTo(1.411, 3)
+	expect(solution!.parity).toBe('NORMAL')
+	expect(solution!.widthInPixels).toBe(9176)
+	expect(solution!.heightInPixels).toBe(6870)
 
 	for (const key in header) {
-		expect(solution[key]).toBe(header[key]!)
+		expect(solution![key]).toBe(header[key]!)
 	}
 })

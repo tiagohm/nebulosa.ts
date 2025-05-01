@@ -9,7 +9,7 @@ export interface ReadCsvOptions {
 	quote?: string | false
 }
 
-export const DEFAULT_READ_CSV_OPTIONS: Required<ReadCsvOptions> = {
+export const DEFAULT_READ_CSV_OPTIONS: Readonly<Required<ReadCsvOptions>> = {
 	delimiter: CSV_DELIMITER,
 	comment: '#',
 	quote: '"',

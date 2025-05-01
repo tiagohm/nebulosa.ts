@@ -15,7 +15,6 @@ export interface PlateSolveOptions {
 }
 
 export interface PlateSolution extends FitsHeader {
-	solved: boolean
 	orientation: Angle
 	scale: Angle
 	rightAscension: Angle
@@ -29,7 +28,6 @@ export interface PlateSolution extends FitsHeader {
 }
 
 export const EMPTY_PLATE_SOLUTION: Readonly<PlateSolution> = {
-	solved: false,
 	orientation: 0,
 	scale: 0,
 	rightAscension: 0,
@@ -42,18 +40,16 @@ export const EMPTY_PLATE_SOLUTION: Readonly<PlateSolution> = {
 	heightInPixels: 0,
 }
 
-export function plateSolutionFrom(header: FitsHeader): PlateSolution {
-	const solution = { ...header, ...EMPTY_PLATE_SOLUTION }
-
+export function plateSolutionFrom(header: FitsHeader): PlateSolution | undefined {
 	// https://www.aanda.org/articles/aa/full/2002/45/aah3859/aah3859.right.html
 	const crval1 = deg(numeric(header, 'CRVAL1', NaN))
-	if (Number.isNaN(crval1)) return solution
+	if (Number.isNaN(crval1)) return undefined
 
 	const crval2 = deg(numeric(header, 'CRVAL2', NaN))
-	if (Number.isNaN(crval2)) return solution
+	if (Number.isNaN(crval2)) return undefined
 
 	const [cd11, cd12, cd21, cd22] = cdMatrix(header)
-	if (cd11 === 0 && cd12 === 0) return solution
+	if (cd11 === 0 && cd12 === 0) return undefined
 	const crota2 = deg(numeric(header, 'CROTA2', NaN)) || Math.atan2(cd12, cd11)
 	const parity = cd11 * cd22 - cd12 * cd21 >= 0 ? 'NORMAL' : 'FLIPPED'
 
@@ -64,22 +60,24 @@ export function plateSolutionFrom(header: FitsHeader): PlateSolution {
 	let cdelt2 = numeric(header, 'CDELT2', NaN)
 	cdelt2 = cdelt2 === 1 || Number.isNaN(cdelt2) ? deg(cd22 / Math.cos(crota2)) : deg(cdelt2)
 
-	const width = numeric(header, 'NAXIS1') || numeric(header, 'IMAGEW')
-	const height = numeric(header, 'NAXIS2') || numeric(header, 'IMAGEH')
+	const widthInPixels = numeric(header, 'NAXIS1') || numeric(header, 'IMAGEW')
+	const heightInPixels = numeric(header, 'NAXIS2') || numeric(header, 'IMAGEH')
+	const width = Math.abs(cdelt1 * widthInPixels)
+	const height = Math.abs(cdelt2 * heightInPixels)
 
-	solution.solved = true
-	solution.orientation = crota2
-	solution.scale = Math.abs(cdelt2)
-	solution.rightAscension = crval1
-	solution.declination = crval2
-	solution.width = Math.abs(cdelt1 * width)
-	solution.height = Math.abs(cdelt2 * height)
-	solution.radius = Math.hypot(solution.width, solution.height) / 2
-	solution.parity = parity
-	solution.widthInPixels = width
-	solution.heightInPixels = height
-
-	return solution
+	return {
+		...header,
+		orientation: crota2,
+		scale: Math.abs(cdelt2),
+		rightAscension: crval1,
+		declination: crval2,
+		width: Math.abs(cdelt1 * widthInPixels),
+		height: Math.abs(cdelt2 * heightInPixels),
+		radius: Math.hypot(width, height) / 2,
+		parity: parity,
+		widthInPixels: widthInPixels,
+		heightInPixels: heightInPixels,
+	}
 }
 
 // Computes the FOV in arcsec/pixel from `focalLength` in mm and `pixelSize` in µm.

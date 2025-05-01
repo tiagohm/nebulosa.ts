@@ -18,7 +18,6 @@ test.skip('plate solve', async () => {
 	const solution = await astapPlateSolve('/tmp/NGC3372-LRGB_ASTAP.fit')
 
 	expect(solution).not.toBeUndefined()
-	expect(solution!.solved).toBeTrue()
 	expect(toDeg(solution!.orientation)).toBeCloseTo(-110.117, 3)
 	expect(toArcsec(solution!.scale)).toBeCloseTo(1.369, 3)
 	expect(toHour(solution!.rightAscension)).toBeCloseTo(10.7345, 3)
