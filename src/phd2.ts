@@ -1,4 +1,5 @@
 import type { Socket } from 'bun'
+import type { Mutable, Optional } from 'utility-types'
 
 export const DEFAULT_PHD2_PORT = 4400
 
@@ -32,9 +33,9 @@ export type PHD2EventType =
 
 export type AppState = 'Stopped' | 'Selected' | 'Calibrating' | 'Guiding' | 'LostLock' | 'Paused' | 'Looping'
 
-export type AlertType = 'INFO' | 'QUESTION' | 'WARNING' | 'ERROR'
+export type AlertType = 'Info' | 'Question' | 'Warning' | 'Error'
 
-export type GuideDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
+export type GuideDirection = 'North' | 'South' | 'West' | 'East'
 
 export type WhichMount = 'MOUNT' | 'AO' | 'BOTH'
 
@@ -43,6 +44,8 @@ export type DeclinationGuideMode = 'Off' | 'Auto' | 'North' | 'South'
 export type RateUnit = 'arcsec/hr' | 'pixels/hr'
 
 export type ShiftAxis = 'RA/Dec' | 'X/Y'
+
+export type GuideAxis = 'RA' | 'DEC'
 
 export type PHD2ConfigurationChangeEvent = PHD2Event<'ConfigurationChange'>
 
@@ -62,7 +65,7 @@ export type PHD2SettleBeginEvent = PHD2Event<'SettleBegin'>
 
 export type PHD2StartGuidingEvent = PHD2Event<'StartGuiding'>
 
-export type PHD2CommandResult<T> = { success: false; error: PHD2Error | 'timeout' } | { success: true; result: T }
+export type PHD2CommandResult<T> = { success: false; error: PHD2Error | 'timeout'; result?: never } | { success: true; result: T }
 
 export interface PHD2Event<E extends PHD2EventType> {
 	readonly Event: E
@@ -230,38 +233,38 @@ export interface PHD2Command {
 	readonly params?: Record<string, unknown> | unknown[]
 }
 
-export interface PHD2Device {
+export interface Device {
 	readonly name: string
 	readonly connected: boolean
 }
 
-export interface PHD2Equipment {
-	readonly camera?: PHD2Device
-	readonly mount?: PHD2Device
-	readonly aux_mount?: PHD2Device
-	readonly AO?: PHD2Device
-	readonly rotator?: PHD2Device
+export interface Equipment {
+	readonly camera?: Device
+	readonly mount?: Device
+	readonly aux_mount?: Device
+	readonly AO?: Device
+	readonly rotator?: Device
 }
 
-export interface PHD2StarPos {
+export interface StarPos {
 	readonly x: number
 	readonly y: number
 }
 
-export interface PHD2Roi {
+export interface Roi {
 	x: number
 	y: number
 	width: number
 	height: number
 }
 
-export interface PHD2DitherSettle {
+export interface Settle {
 	pixels: number
 	time: number
 	timeout: number
 }
 
-export interface PHD2CalibrationData {
+export interface CalibrationData {
 	readonly calibrated: boolean
 	readonly xAngle: number
 	readonly xRate: number
@@ -271,24 +274,24 @@ export interface PHD2CalibrationData {
 	readonly yParity: '+' | '-'
 }
 
-export interface PHD2LockShiftParams {
+export interface LockShiftParams {
 	readonly enabled: boolean
 	readonly rate: readonly [number, number]
 	readonly units: RateUnit
 	readonly axes: ShiftAxis
 }
 
-export interface PHD2Profile {
+export interface Profile {
 	readonly id: number
 	readonly name: string
 	readonly selected: boolean
 }
 
-export interface PHD2StarImage {
+export interface StarImage {
 	readonly frame: number
 	readonly width: number
 	readonly height: number
-	readonly star_pos: PHD2StarPos
+	readonly star_pos: StarPos
 	readonly pixels: string
 }
 
@@ -301,14 +304,14 @@ export interface PHD2ClientHandler {
 	command?: (client: PHD2Client, command: PHD2Command, success: boolean, result: PHD2Error | unknown) => void
 }
 
-const DEFAULT_PHD2_SUBFRAME: PHD2Roi = {
+const DEFAULT_ROI: Roi = {
 	x: 0,
 	y: 0,
 	width: 0,
 	height: 0,
 }
 
-const DEFAULT_PHD2_DITHER_SETTLE: PHD2DitherSettle = {
+const DEFAULT_SETTLE: Settle = {
 	pixels: 1.5, // px
 	time: 10, // s
 	timeout: 30, // s
@@ -366,14 +369,14 @@ export class PHD2Client {
 		return promise?.promise
 	}
 
-	findStar(roi?: Partial<PHD2Roi>) {
-		const { x, y, width, height } = mergeInto(roi, DEFAULT_PHD2_SUBFRAME)
+	findStar(roi?: Partial<Roi>) {
+		const { x, y, width, height } = mergeInto(roi, DEFAULT_ROI)
 		const subframe = width && height ? [x, y, width, height] : undefined
 		return this.send<[number, number]>('find_star', subframe)
 	}
 
-	startCapture(exposure: number, roi?: Partial<PHD2Roi>) {
-		const { x, y, width, height } = mergeInto(roi, DEFAULT_PHD2_SUBFRAME)
+	startCapture(exposure: number, roi?: Partial<Roi>) {
+		const { x, y, width, height } = mergeInto(roi, DEFAULT_ROI)
 		const subframe = width && height ? [x, y, width, height] : undefined
 		return this.send<number>('capture_single_frame', { exposure, subframe })
 	}
@@ -390,8 +393,8 @@ export class PHD2Client {
 		return this.send<number>('deselect_star')
 	}
 
-	dither(amount: number, raOnly: boolean = false, settle?: Partial<PHD2DitherSettle>) {
-		settle = mergeInto(settle, DEFAULT_PHD2_DITHER_SETTLE)
+	dither(amount: number, raOnly: boolean = false, settle?: Partial<Settle>) {
+		settle = mergeInto(settle, DEFAULT_SETTLE)
 		return this.send<number>('shutdown', { amount, raOnly, settle })
 	}
 
@@ -399,11 +402,11 @@ export class PHD2Client {
 		return this.send<number>('flip_calibration')
 	}
 
-	getAlgorithmParam(axis: 'RA' | 'DEC', name: string) {
+	getAlgorithmParam(axis: GuideAxis, name: string) {
 		return this.send<unknown>('get_algo_param', { axis, name })
 	}
 
-	getAlgorithmParamNames(axis: 'RA' | 'DEC') {
+	getAlgorithmParamNames(axis: GuideAxis) {
 		return this.send<string[]>('get_algo_param_names', { axis })
 	}
 
@@ -416,7 +419,7 @@ export class PHD2Client {
 	}
 
 	getCalibrationData(which: WhichMount) {
-		return this.send<PHD2CalibrationData>('get_calibration_data', [which])
+		return this.send<CalibrationData>('get_calibration_data', [which])
 	}
 
 	getCameraBinning() {
@@ -432,7 +435,7 @@ export class PHD2Client {
 	}
 
 	getCurrentEquipment() {
-		return this.send<PHD2Equipment>('get_current_equipment')
+		return this.send<Equipment>('get_current_equipment')
 	}
 
 	getDeclinationGuideMode() {
@@ -460,7 +463,7 @@ export class PHD2Client {
 	}
 
 	getLockShiftParams() {
-		return this.send<PHD2LockShiftParams>('get_lock_shift_params')
+		return this.send<LockShiftParams>('get_lock_shift_params')
 	}
 
 	getPaused() {
@@ -472,11 +475,11 @@ export class PHD2Client {
 	}
 
 	getProfile() {
-		return this.send<Omit<PHD2Profile, 'selected'>>('get_profile')
+		return this.send<Omit<Profile, 'selected'>>('get_profile')
 	}
 
 	getProfiles() {
-		return this.send<PHD2Profile[]>('get_profiles')
+		return this.send<Profile[]>('get_profiles')
 	}
 
 	getSearchRegion() {
@@ -488,11 +491,72 @@ export class PHD2Client {
 	}
 
 	getStarImage() {
-		return this.send<PHD2StarImage>('get_star_image')
+		return this.send<StarImage>('get_star_image')
 	}
 
 	getUseSubframes() {
 		return this.send<boolean>('get_use_subframes')
+	}
+
+	guide(recalibrate: boolean = false, roi?: Roi, settle?: Settle) {
+		settle = mergeInto(settle, DEFAULT_SETTLE)
+		const { x, y, width, height } = mergeInto(roi, DEFAULT_ROI)
+		const subframe = width && height ? [x, y, width, height] : undefined
+		return this.send<number>('guide', { recalibrate, roi: subframe, settle })
+	}
+
+	guidePulse(amount: number, direction: GuideDirection, which: WhichMount) {
+		return this.send<number>('guide_pulse', [amount, direction, which])
+	}
+
+	loop() {
+		return this.send<number>('loop')
+	}
+
+	saveImage() {
+		return this.send<{ filename: string }>('save_image')
+	}
+
+	setAlgorithmParam(axis: GuideAxis, name: string, value: unknown) {
+		return this.send<number>('set_algo_param', [axis, name, value])
+	}
+
+	setConnected(connected: number) {
+		return this.send<number>('set_connected', [connected])
+	}
+
+	setDeclinationGuideMode(mode: DeclinationGuideMode) {
+		return this.send<number>('set_dec_guide_mode', [mode])
+	}
+
+	setExposure(exposure: number) {
+		return this.send<number>('set_exposure', [exposure])
+	}
+
+	setGuideOutputEnabled(enabled: boolean) {
+		return this.send<number>('set_guide_output_enabled', [enabled])
+	}
+
+	setLockPosition(x: number, y: number, exact: boolean = false) {
+		return this.send<number>('set_lock_position', [x, y, exact])
+	}
+
+	setLockShiftEnabled(enabled: boolean) {
+		return this.send<number>('set_lock_shift_enabled', [enabled])
+	}
+
+	setLockShiftParams(params: Optional<Omit<Mutable<LockShiftParams>, 'enabled'>, 'units'>) {
+		params.units ||= params.axes === 'RA/Dec' ? 'arcsec/hr' : 'pixels/hr'
+		return this.send<number>('set_lock_shift_params', params)
+	}
+
+	setPaused(paused: boolean, full: boolean = true) {
+		return this.send<number>('set_paused', [paused, full ? 'full' : null])
+	}
+
+	setProfile(profile: number | Profile) {
+		const id = typeof profile === 'number' ? profile : profile.id
+		return this.send<number>('set_profile', [id])
 	}
 
 	shutdown() {
