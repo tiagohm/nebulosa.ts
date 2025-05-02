@@ -157,6 +157,11 @@ export function timeYMD(year: number, month: number = 1, day: number = 1, scale:
 	return time(MJD0, eraCalToJd(year, month, day), scale)
 }
 
+// Time from year, month, day and fraction of day.
+export function timeYMDF(year: number, month: number = 1, day: number = 1, fraction: number = 0, scale: Timescale = Timescale.UTC) {
+	return time(MJD0, eraCalToJd(year, month, day) + fraction, scale)
+}
+
 // GPS time from 1980-01-06 00:00:00 UTC.
 export function timeGPS(seconds: number) {
 	return timeFromEpoch(seconds, DAYSEC, 2444245, -0.4997800925925926, Timescale.TAI)

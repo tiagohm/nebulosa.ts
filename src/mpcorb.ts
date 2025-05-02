@@ -30,6 +30,30 @@ const MPCORB_COLUMNS: readonly [keyof MPCOrbit, number, number][] = [
 	['lastObservationDate', 194, 202],
 ]
 
+const MPCORB_COMET_COLUMNS: readonly [keyof MPCOrbitComet, number, number][] = [
+	['number', 0, 4],
+	['orbitType', 4, 5],
+	['designationPacked', 5, 12],
+	['perihelionYear', 14, 18],
+	['perihelionMonth', 19, 21],
+	['perihelionDay', 22, 24],
+	['perihelionDayFraction', 24, 29],
+	['perihelionDistance', 30, 39], // AU
+	['eccentricity', 41, 49],
+	['argumentOfPerihelion', 51, 59], // deg
+	['longitudeOfAscendingNode', 61, 69], // deg
+	['inclination', 71, 79], // deg
+	// ['perturbedEpochYear', 81, 85],
+	// ['perturbedEpochMonth', 85, 87],
+	// ['perturbedEpochDay', 87, 89],
+	['magnitudeG', 91, 95],
+	['magnitudeK', 96, 100],
+	['designation', 102, 158],
+	// ['reference', 159, 168],
+]
+
+export type CometOrbitType = 'P' | 'C' | 'D'
+
 export interface MPCOrbit {
 	readonly designationPacked: string
 	readonly magnitudeH: number
@@ -56,7 +80,26 @@ export interface MPCOrbit {
 	readonly lastObservationDate: string
 }
 
-// Extract orbital elements of minor planet from given line.
+export interface MPCOrbitComet {
+	readonly number?: number
+	readonly orbitType: CometOrbitType
+	readonly designationPacked: string
+	readonly perihelionYear: number
+	readonly perihelionMonth: number
+	readonly perihelionDay: number
+	readonly perihelionDayFraction: number
+	readonly perihelionDistance: Distance
+	readonly eccentricity: number
+	readonly argumentOfPerihelion: Angle
+	readonly longitudeOfAscendingNode: Angle
+	readonly inclination: Angle
+	readonly magnitudeG: number // Absolute magnitude
+	readonly magnitudeK: number // slope parameter
+	readonly designation: string
+	// readonly reference: string
+}
+
+// Extract orbital elements of asteroid given its MPCORB line.
 export function mpcorb(line: string) {
 	if (!line) return undefined
 
@@ -81,6 +124,34 @@ export function mpcorb(line: string) {
 	data.rmsResidual = +data.rmsResidual
 
 	return data as MPCOrbit
+}
+
+// https://www.minorplanetcenter.net/iau/MPCORB/CometEls.txt
+
+// Extract orbital elements of comet given its MPCORB line.
+export function mpcorbComet(line: string) {
+	if (!line) return undefined
+
+	const data = {} as Record<keyof MPCOrbitComet, string | number>
+
+	for (const item of MPCORB_COMET_COLUMNS) {
+		const value = line.substring(item[1], item[2])
+		data[item[0]] = value.trim()
+	}
+
+	data.magnitudeG = +data.magnitudeG
+	data.magnitudeK = +data.magnitudeK
+	data.perihelionYear = +data.perihelionYear
+	data.perihelionMonth = +data.perihelionMonth
+	data.perihelionDay = +data.perihelionDay
+	data.perihelionDayFraction = +data.perihelionDayFraction || 0
+	data.argumentOfPerihelion = +data.argumentOfPerihelion * DEG2RAD
+	data.longitudeOfAscendingNode = +data.longitudeOfAscendingNode * DEG2RAD
+	data.inclination = +data.inclination * DEG2RAD
+	data.eccentricity = +data.eccentricity
+	data.perihelionDistance = +data.perihelionDistance
+
+	return data as MPCOrbitComet
 }
 
 // https://www.minorplanetcenter.net/iau/info/PackedDates.html

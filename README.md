@@ -43,10 +43,14 @@ const solution = astapPlateSolve(path, options) // Plate solve the image using a
 
 ```ts
 const ceres = asteroid(semiMajorAxis, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, meanAnomaly, epoch) // Kepler Orbit from asteroid's orbital elements
-const ceres = mpcAsteroid(mpcorb) // Kepler Orbit from MPC orbit
+const ceres = mpcAsteroid(mpcorb) // Kepler Orbit given its MPC orbit
 const [p, v] = ceres.at(time) // ICRF position & velocity cartesian coordinate at time
 
-// Osculating elements from position & velocity at epoch
+const halley = comet(semiLatusRectum, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, epoch) // Keplet Orbit from comet's orbital elements
+const halley = mpcComet(mpcorb) // Kepler Orbit given its MPC orbit
+const [p, v] = halley.at(time) // ICRF position & velocity cartesian coordinate at time
+
+// Osculating orbital elements from position & velocity at epoch
 const vesta = new KeplerOrbit(position, velocity, epoch)
 vesta.apoapsisDistance // Farthest distance in AU between the orbiting body and the central body in its orbit
 vesta.argumentOfLatitude // Angle from the ascending node to the orbiting body’s current position
@@ -311,7 +315,8 @@ TODO
 ### MPCORB
 
 ```ts
-mpcorb(line) // Minor planet orbital elements from MPCORB database
+mpcorb(line) // Asteroid orbital elements from MPCORB database
+mpcorbComet(line) // Comet orbital elements from MPCORB database
 unpackDate('K01AM') // Packed date to year-month-day
 packDate(year, month, day) // year-month-day to packed date format
 ```
@@ -423,6 +428,8 @@ timeMJD(51544, Timescale.UTC) // Time from MJD date
 timeJulian(2000.5, Timescale.UTC) // Time from Julian date
 timeBesselian(1950.5, Timescale.UTC) // Time from Besselian date
 timeYMDHMS(2024, 12, 25, 9, 10, 11.5, Timescale.UTC) // Time from year, month, day, hour, minute and second
+timeYMD(2024, 12, 25, Timescale.UTC) // Time from year, month and day
+timeYMDF(2024, 12, 25, 0.5, Timescale.UTC) // Time from year, month, day and fraction of day
 timeGPS(630720013) // Time from GPS seconds
 normalizeTime(2460650, 8.37456, 0, Timescale.UTC) // Normalize day and fraction
 subtractTime(a, b) // Subtract two Times

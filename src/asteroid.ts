@@ -6,8 +6,8 @@ import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { ECLIPTIC_J2000_MATRIX } from './frame'
 import { type Mat3, mulMatVec, transpose } from './matrix'
-import { type MPCOrbit, unpackDate } from './mpcorb'
-import { type Time, Timescale, subtractTime, tdb, time, timeYMD, tt } from './time'
+import { type MPCOrbit, type MPCOrbitComet, unpackDate } from './mpcorb'
+import { type Time, Timescale, subtractTime, tdb, time, timeYMD, timeYMDF, tt } from './time'
 import { type MutVec3, type Vec3, angleBetween, cross, divVecScalar, dot, length, minusVec, mulVecScalar, plusVec, zeroVec } from './vector'
 
 const REFERENCE_FRAME: Mat3 = transpose(ECLIPTIC_J2000_MATRIX)
@@ -75,16 +75,29 @@ export interface OsculatingElements {
 	readonly trueLongitude: Angle
 }
 
-// Creates a `KeplerOrbit` for asteroid from semi-major axis, eccentricity, inclination, longitude of ascending node, argument of perihelion and mean anomaly at epoch.
+// Creates a `KeplerOrbit` for asteroid given is semi-major axis, eccentricity, inclination, longitude of ascending node, argument of perihelion, mean anomaly and epoch parameters.
 export function asteroid(a: Distance, e: number, i: Angle, om: Angle, w: Angle, M: Angle, epoch: Time) {
 	return KeplerOrbit.meanAnomaly(a * (1 - e * e), e, i, om, w, M, epoch)
 }
 
-// Creates a `KeplerOrbit` for asteroid from MPC orbit.
-export function mpcAsteroid(mpcorb: MPCOrbit) {
-	const { semiMajorAxis, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, meanAnomaly, epochPacked } = mpcorb
+// Creates a `KeplerOrbit` for asteroid using MPCORB parameters.
+export function mpcAsteroid(mpc: MPCOrbit) {
+	const { semiMajorAxis, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, meanAnomaly, epochPacked } = mpc
 	const epoch = timeYMD(...unpackDate(epochPacked), Timescale.TT)
 	return asteroid(semiMajorAxis, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, meanAnomaly, epoch)
+}
+
+// Creates a `KeplerOrbit` for comet given its semi-latus rectum, eccentricity, inclination, longitude of ascending node, argument of perihelion and epoch parameters.
+export function comet(p: Distance, e: number, i: Angle, om: Angle, w: Angle, epoch: Time) {
+	return KeplerOrbit.periapsis(p, e, i, om, w, epoch)
+}
+
+// Creates a `KeplerOrbit` for comet using MPCORB parameters.
+export function mpcComet(mpc: MPCOrbitComet) {
+	const { eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion } = mpc
+	const p = mpc.perihelionDistance * (1 + eccentricity)
+	const epoch = timeYMDF(mpc.perihelionYear, mpc.perihelionMonth, mpc.perihelionDay, mpc.perihelionDayFraction, Timescale.TT)
+	return comet(p, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, epoch)
 }
 
 export class KeplerOrbit implements OsculatingElements {
@@ -255,6 +268,12 @@ export class KeplerOrbit implements OsculatingElements {
 	// Creates a `KeplerOrbit` from orbital elements using true anomaly.
 	static trueAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, M: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
 		const [position, velocity] = computePositionAndVelocityFromOrbitalElements(p, e, i, om, w, M, mu)
+		return new KeplerOrbit(position, velocity, epoch, mu, rotation)
+	}
+
+	// Creates a `KeplerOrbit` given its parameters and date of periapsis.
+	static periapsis(p: Distance, e: number, i: Angle, om: Angle, w: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
+		const [position, velocity] = computePositionAndVelocityFromOrbitalElements(p, e, i, om, w, 0, mu)
 		return new KeplerOrbit(position, velocity, epoch, mu, rotation)
 	}
 }

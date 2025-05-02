@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
 import { toDeg } from '../src/angle'
-import { mpcorb, packDate, unpackDate } from '../src/mpcorb'
+import { mpcorb, mpcorbComet, packDate, unpackDate } from '../src/mpcorb'
 
 const CERES = '00001    3.34  0.15 K2555 188.70269   73.27343   80.25221   10.58780  0.0794013  0.21424651   2.7660512  0 E2024-V47  7330 125 1801-2024 0.80 M-v 30k MPCLINUX   4000      (1) Ceres              20241101'
+const HALLEY = '0001P         2061 08 31.8266  0.583972  0.967311  112.5470   59.6368  162.2146  20250501   4.0  6.0  1P/Halley                                                 98, 1083'
 
 test('asteroid', () => {
 	const ceres = mpcorb(CERES)
@@ -32,6 +33,27 @@ test('asteroid', () => {
 	expect(ceres!.hexFlags).toBe('4000')
 	expect(ceres!.designation).toBe('(1) Ceres')
 	expect(ceres!.lastObservationDate).toBe('20241101')
+})
+
+test('comet', () => {
+	const halley = mpcorbComet(HALLEY)
+
+	expect(halley).not.toBeUndefined()
+
+	expect(halley!.designationPacked).toBe('')
+	expect(halley!.magnitudeK).toBe(6)
+	expect(halley!.magnitudeG).toBe(4)
+	expect(halley!.perihelionDistance).toBe(0.583972)
+	expect(toDeg(halley!.argumentOfPerihelion)).toBeCloseTo(112.547, 3)
+	expect(toDeg(halley!.longitudeOfAscendingNode)).toBe(59.6368)
+	expect(toDeg(halley!.inclination)).toBe(162.2146)
+	expect(halley!.eccentricity).toBe(0.967311)
+	expect(halley!.designation).toBe('1P/Halley')
+	expect(halley!.orbitType).toBe('P')
+	expect(halley!.perihelionYear).toBe(2061)
+	expect(halley!.perihelionMonth).toBe(8)
+	expect(halley!.perihelionDay).toBe(31)
+	expect(halley!.perihelionDayFraction).toBe(0.8266)
 })
 
 test('unpack date', () => {
