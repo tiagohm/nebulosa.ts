@@ -154,12 +154,12 @@ export function timeYMDHMS(year: number, month: number = 1, day: number = 1, hou
 
 // Time from year, month, day.
 export function timeYMD(year: number, month: number = 1, day: number = 1, scale: Timescale = Timescale.UTC) {
-	return time(MJD0, eraCalToJd(year, month, day), scale)
+	return time(MJD0 + eraCalToJd(year, month, day), 0, scale)
 }
 
 // Time from year, month, day and fraction of day.
 export function timeYMDF(year: number, month: number = 1, day: number = 1, fraction: number = 0, scale: Timescale = Timescale.UTC) {
-	return time(MJD0, eraCalToJd(year, month, day) + fraction, scale)
+	return time(MJD0 + eraCalToJd(year, month, day), fraction, scale)
 }
 
 // GPS time from 1980-01-06 00:00:00 UTC.
