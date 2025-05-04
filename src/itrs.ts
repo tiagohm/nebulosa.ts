@@ -6,10 +6,6 @@ import { ELLIPSOID_PARAMETERS, type GeographicPosition } from './location'
 import type { MutMat3 } from './matrix'
 import { type Time, gast, pmMatrix, precessionNutationMatrix } from './time'
 
-export const ANGVEL_PER_DAY = DAYSEC * ANGVEL
-export const EARTH_ANGULAR_VELOCITY_VECTOR = [0, 0, ANGVEL_PER_DAY] as const
-export const EARTH_ANGULAR_VELOCITY_MATRIX = [0, ANGVEL_PER_DAY, 0, -ANGVEL_PER_DAY, 0, 0, 0, 0, 0] as const
-
 // An |xyz| position in the Earth-centered Earth-fixed (ECEF) ITRS frame.
 export function itrs(location: GeographicPosition): Readonly<CartesianCoordinate> {
 	if (location.itrs) return location.itrs

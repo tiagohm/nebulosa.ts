@@ -120,7 +120,7 @@ test.skip('spkFile', async () => {
 	expect(s.segment(10, 20003517)).not.toBeUndefined()
 
 	const time = timeYMDHMS(2025, 1, 29, 13, 30, 0, Timescale.TDB)
-	const [[x, y, z], [vx, vy, vz]] = await s.segment(10, 20003517)!.compute(time)
+	const [[x, y, z], [vx, vy, vz]] = await s.segment(10, 20003517)!.at(time)
 
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/
 	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)

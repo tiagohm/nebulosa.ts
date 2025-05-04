@@ -1,10 +1,9 @@
-import { toMeter, type Distance } from './distance'
-import { toKelvin, type Temperature } from './temperature'
+import { ONE_ATM } from './constants'
+import { type Distance, toMeter } from './distance'
+import { type Temperature, toKelvin } from './temperature'
 
 // Represents a pressure quantity in (hPa = millibar).
 export type Pressure = number
-
-export const ONE_ATM: Pressure = 1013.25
 
 // Creates a new Pressure from Pascal.
 export function pascal(value: number): Pressure {

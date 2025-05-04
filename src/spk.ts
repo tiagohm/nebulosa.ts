@@ -22,7 +22,7 @@ export interface SpkSegment {
 	readonly startIndex: number
 	readonly endIndex: number
 
-	readonly compute: (time: Time) => Promise<PositionAndVelocity>
+	readonly at: (time: Time) => Promise<PositionAndVelocity>
 }
 
 export function readSpk(daf: Daf): Spk {
@@ -83,7 +83,7 @@ export class Type2And3Segment implements SpkSegment {
 		readonly endIndex: number,
 	) {}
 
-	async compute(time: Time): Promise<PositionAndVelocity> {
+	async at(time: Time): Promise<PositionAndVelocity> {
 		if (!this.initialized) {
 			// INIT: is the initial epoch of the first record, given in ephemeris seconds past J2000.
 			// INTLEN: is the length of the interval covered by each record, in seconds.
@@ -207,7 +207,7 @@ export class Type9Segment implements SpkSegment {
 	) {}
 
 	// biome-ignore lint/suspicious/useAwait:
-	async compute(time: Time): Promise<PositionAndVelocity> {
+	async at(time: Time): Promise<PositionAndVelocity> {
 		return [zeroVec(), zeroVec()]
 	}
 }
@@ -245,7 +245,7 @@ export class Type21Segment implements SpkSegment {
 		readonly endIndex: number,
 	) {}
 
-	async compute(time: Time): Promise<PositionAndVelocity> {
+	async at(time: Time): Promise<PositionAndVelocity> {
 		if (!this.initialized) {
 			const [a, b] = await this.daf.read(this.endIndex - 1, this.endIndex)
 			this.maxdim = Math.trunc(a) // Difference line size.

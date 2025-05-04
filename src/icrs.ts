@@ -1,8 +1,8 @@
 import type { Angle } from './angle'
+import { FK5_MATRIX } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { eraS2p } from './erfa'
-import { FK5_MATRIX } from './frame'
 import { mulMatVec } from './matrix'
 
 // Convert the ICRS spherical coordinate to ICRS cartesian coordinate.

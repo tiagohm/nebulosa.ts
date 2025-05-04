@@ -15,7 +15,7 @@ test('DE405', async () => {
 
 	const segment = s.segment(Naif.SSB, Naif.EMB)
 	expect(segment).not.toBeUndefined()
-	const [p, v] = await segment!.compute(time)
+	const [p, v] = await segment!.at(time)
 
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
 	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
@@ -31,11 +31,11 @@ test('DE405', async () => {
 test('DE421', async () => {
 	await using source = fileHandleSource(await fs.open('data/de421.bsp'))
 	const daf = await readDaf(source)
-	const s = readSpk(daf)
+	const spk = readSpk(daf)
 
-	const segment = s.segment(Naif.SSB, Naif.EMB)
+	const segment = spk.segment(Naif.SSB, Naif.EMB)
 	expect(segment).not.toBeUndefined()
-	const [p, v] = await segment!.compute(time)
+	const [p, v] = await segment!.at(time)
 
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
 	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
@@ -55,7 +55,7 @@ test('DE440', async () => {
 
 	const segment = s.segment(Naif.SSB, Naif.EMB)
 	expect(segment).not.toBeUndefined()
-	const [p, v] = await segment!.compute(time)
+	const [p, v] = await segment!.at(time)
 
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
 	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
@@ -76,7 +76,7 @@ test('65803 Didymos', async () => {
 	const segment = s.segment(Naif.SUN, Naif.DIDYMOS_BARYCENTER)
 	expect(segment).not.toBeUndefined()
 	const time = timeYMDHMS(2022, 12, 8, 20, 7, 15, Timescale.TDB)
-	const [p, v] = await segment!.compute(time)
+	const [p, v] = await segment!.at(time)
 
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/
 	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)

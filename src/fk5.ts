@@ -1,8 +1,9 @@
 import type { Angle } from './angle'
+import { FK5_MATRIX } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { eraS2p } from './erfa'
-import { FK5_MATRIX, precessionMatrixCapitaine } from './frame'
+import { precessionMatrixCapitaine } from './frame'
 import { mulMatVec, mulTransposeMatVec } from './matrix'
 import { type Time, Timescale, timeJulian } from './time'
 

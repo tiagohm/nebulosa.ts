@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
+import { ONE_ATM } from '../src/constants'
 import { fromPressure, kilometer, lightYear, meter, parsec, toKilometer, toLightYear, toMeter, toParsec } from '../src/distance'
-import { ONE_ATM, pascal } from '../src/pressure'
+import { pascal } from '../src/pressure'
 
 test('meter', () => {
 	expect(meter(1)).toBeCloseTo(6.684587e-12, 18)

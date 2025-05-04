@@ -1,6 +1,6 @@
 import type { PositionAndVelocity } from './astrometry'
-import { DAYSPERJM, J2000 } from './constants'
-import { type Mat3, mulMatVec } from './matrix'
+import { COS_OBL_J2000, DAYSPERJM, J2000, SIN_OBL_J2000 } from './constants'
+import { mulMatVec } from './matrix'
 import { type Time, tdb } from './time'
 import { zeroVec } from './vector'
 import { VSOP87E_EARTH_DATA, VSOP87E_JUPITER_DATA, VSOP87E_MARS_DATA, VSOP87E_MERCURY_DATA, VSOP87E_NEPTUNE_DATA, VSOP87E_SATURN_DATA, VSOP87E_SUN_DATA, VSOP87E_URANUS_DATA, VSOP87E_VENUS_DATA } from './vsop87e.data'
@@ -56,21 +56,22 @@ export function neptune(time: Time) {
 // are given in the inertial frame defined by the dynamical equinox and ecliptic
 // J2000 (JD2451545.0).
 
-// The rectangular coordinates of VSOP87A and VSOP87E defined in dynamical ecliptic
-// frame J2000 can be connected to the equatorial frame FK5 J2000 with the
-// following rotation:
-// const REFERENCE_FRAME_MATRIX: Mat3 = [1, 0.00000044036, -0.000000190919, -0.000000479966, 0.917482137087, -0.397776982902, 0, 0.397776982902, 0.917482137087] as const
+// The solution VSOP2013 is fitted to the numerical integration INPOP10a over
+// the time interval [1890-2000].
 
+// The VSOP2013 coordinates are referred to the inertial frame defined by the
+// dynamical equinox and ecliptic J2000 (JD 2451545.0).
+
+// The planetary coordinates of INPOP10a are referred in ICRF.
 // If XE, YE, ZE are the rectangular coordinates of a planet computed from
-// VSOP2010, the rectangular coordinates of the planet in equatorial frame of
+// VSOP2013, the rectangular coordinates of the planet in equatorial frame of
 // the ICRF, XQ, YQ, ZQ, may be obtained by the following rotation:
-// [XQ, YQ, ZQ] = [cosφ, -sinφcose, sinφsine, sinφ, cosφcose, -cosφsine, 0, sine, cose] * [XE, YE, ZE]
-// with: e = 23° 26' 21.40960" et φ = -0.05028"
-const COSE = 0.91748213612272390217403306013324
-const SINE = 0.39777698512569015670849714551792
-const COSQ = 0.99999999999997028947842490328689
-const SINQ = -0.00000024376431886187228345532388
-const REFERENCE_FRAME_MATRIX: Mat3 = [COSQ, -SINQ * COSE, SINQ * SINE, SINQ, COSQ * COSE, -COSQ * SINE, 0, SINE, COSE] as const
+
+// with: e = 23° 26' 21.41136" et φ = -0.05188"
+
+const COSQ = 0.999999999999968368508326
+const SINQ = -0.000000251521337759624621
+const REFERENCE_FRAME_MATRIX = [COSQ, -SINQ * COS_OBL_J2000, SINQ * SIN_OBL_J2000, SINQ, COSQ * COS_OBL_J2000, -COSQ * SIN_OBL_J2000, 0, SIN_OBL_J2000, COS_OBL_J2000] as const
 
 function compute(time: Time, data: readonly number[][][]): PositionAndVelocity {
 	const t = tdb(time)

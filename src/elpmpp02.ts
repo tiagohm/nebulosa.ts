@@ -63,7 +63,7 @@ const RA0 = 384747.961370173 / 384747.980674318
 const REFERENCE_FRAME: Mat3 = [1, 0.00000044036, -0.000000190919, -0.000000479966, 0.917482137087, -0.397776982902, 0, 0.397776982902, 0.917482137087]
 
 // Geocentric cartesian position & velocity of Moon.
-export function moonELPMPP02(time: Time) {
+export function moon(time: Time) {
 	const { day, fraction } = tdb(time)
 	const t = [1, 0, 0, 0, 0]
 	t[1] = (day - J2000 + fraction) / DAYSPERJC

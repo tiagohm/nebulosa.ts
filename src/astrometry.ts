@@ -1,11 +1,10 @@
 import type { Mutable } from 'utility-types'
-import type { Angle } from './angle'
-import { AU_M, DAYSEC, PIOVERTWO, SPEED_OF_LIGHT, TAU } from './constants'
+import { type Angle, normalizeAngle } from './angle'
+import { AU_M, DAYSEC, PIOVERTWO, SPEED_OF_LIGHT } from './constants'
 import type { CartesianCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { eraApcg, eraApci13, eraApco13, eraAtciqpmpx, eraAtioq, eraC2s, eraP2s } from './erfa'
 import { ELLIPSOID_PARAMETERS } from './location'
-import { pmod } from './math'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { type Time, Timescale, pmAngles, tdb, tt, ut1 } from './time'
@@ -104,9 +103,9 @@ function hadecAltaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelo
 	// Correct for parallax to find BCRS direction from observer (as in erfa.pmpx)
 	const nc = minusVec(icrs, astrom.eb)
 	// Convert to topocentric CIRS
-	const [ri, di] = eraC2s(...eraAtciqpmpx(normalizeVec(nc), astrom, nc))
+	const [ri, di] = eraC2s(...eraAtciqpmpx(normalizeVec(nc, nc), astrom, nc))
 	// Now perform observed conversion
-	return eraAtioq(pmod(ri, TAU), di, astrom)
+	return eraAtioq(normalizeAngle(ri), di, astrom)
 }
 
 // https://en.wikipedia.org/wiki/Standard_temperature_and_pressure

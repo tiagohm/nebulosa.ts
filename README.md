@@ -132,7 +132,7 @@ toParsec(1) // Convert AU to parsec
 ### ELPMPP02
 
 ```ts
-const [p, v] = moonELPMPP02(time) // Geocentric cartesian position & velocity of Moon at time
+const [p, v] = moon(time) // Geocentric cartesian position & velocity of Moon at time
 ```
 
 ### Erfa
@@ -401,8 +401,8 @@ const [header, ...data] = simbadQuery(query) // Search on Simbad TAP service
 ### Spk
 
 ```ts
-const s = readSpk(daf) // Read a SPK file
-s.segment(Naif.SSB, Naif.EMB)!.compute(time) // Compute the position and velocity at time
+const s = await readSpk(daf) // Read a SPK file
+await s.segment(Naif.SSB, Naif.EMB)!.at(time) // Compute the position and velocity at time
 ```
 
 ### Star
