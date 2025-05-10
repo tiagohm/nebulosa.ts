@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes, readFits } from '../src/fits'
-import { FitsDataSource, readImageFromFits, writeImageToFits, writeImageToFormat } from '../src/image'
+import { FitsDataSource, horizontalFlip, readImageFromFits, scnr, stf, verticalFlip, writeImageToFits, writeImageToFormat } from '../src/image'
 import { fileHandleSink, fileHandleSource } from '../src/io'
 import { BITPIXES, CHANNELS, generateFits } from './fits.generator'
 
@@ -83,4 +83,49 @@ test('fitsDataSource', () => {
 			expect(source.read(buffer)).toBe(0)
 		}
 	}
+})
+
+test.skip('stf', async () => {
+	const fits = generateFits(8, 8, Bitpix.DOUBLE, 3)
+	const image = await readImageFromFits(fits)
+	const output = 'data/out/stf.png'
+	await writeImageToFormat(stf(image!, 0.5), output, 'png')
+	const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
+	console.log(md5)
+})
+
+test('scnr', async () => {
+	const fits = generateFits(8, 8, Bitpix.DOUBLE, 3)
+	const image = await readImageFromFits(fits)
+	const output = 'data/out/scnr.png'
+	await writeImageToFormat(scnr(image!, 'GREEN', 0.9), output, 'png')
+	const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
+	expect(md5).toBe('bb1d7cb7e843a0fb5afd8e930002e9b8')
+})
+
+test('horizontal flip', async () => {
+	const fits = generateFits(8, 8, Bitpix.DOUBLE, 3)
+	const image = await readImageFromFits(fits)
+	const output = 'data/out/hf.png'
+	await writeImageToFormat(horizontalFlip(image!), output, 'png')
+	const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
+	expect(md5).toBe('0e2c97f0c78fc8692a1c5d8aaf2402bb')
+})
+
+test('vertical flip', async () => {
+	const fits = generateFits(8, 8, Bitpix.DOUBLE, 3)
+	const image = await readImageFromFits(fits)
+	const output = 'data/out/vf.png'
+	await writeImageToFormat(verticalFlip(image!), output, 'png')
+	const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
+	expect(md5).toBe('6e601f915745dcd6ab7bf1f600248037')
+})
+
+test('horizontal & vertical flip', async () => {
+	const fits = generateFits(8, 8, Bitpix.DOUBLE, 3)
+	const image = await readImageFromFits(fits)
+	const output = 'data/out/hvf.png'
+	await writeImageToFormat(verticalFlip(horizontalFlip(image!)), output, 'png')
+	const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
+	expect(md5).toBe('d6cfba9d41b828ef7e8b65c4585b3507')
 })

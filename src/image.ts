@@ -8,6 +8,10 @@ export type ImageFormat = keyof FormatEnum | 'fits' | 'xisf'
 
 export type CfaPattern = 'RGGB' | 'BGGR' | 'GBRG' | 'GRBG' | 'GRGB' | 'GBGR' | 'RGBG' | 'BGRG'
 
+export type SCNRProtectionMethod = 'MAXIMUM_MASK' | 'ADDITIVE_MASK' | 'AVERAGE_NEUTRAL' | 'MAXIMUM_NEUTRAL' | 'MINIMUM_NEUTRAL'
+
+export type SCNRAlgorithm = (a: number, b: number, c: number, amount: number) => number
+
 export interface WriteImageToFormatOptions {
 	format: OutputOptions | JpegOptions | PngOptions | WebpOptions | AvifOptions | HeifOptions | JxlOptions | GifOptions | Jp2Options | TiffOptions
 }
@@ -22,6 +26,8 @@ export interface ImageMetadata {
 	readonly width: number
 	readonly height: number
 	readonly channels: number
+	readonly strideInBytes: number
+	readonly strideInPixels: number
 	readonly pixelCount: number
 	readonly pixelSizeInBytes: number
 	readonly bitpix: Bitpix
@@ -43,8 +49,9 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 	const nc = Math.max(1, Math.min(3, numberOfChannels(header)))
 	const pixelSizeInBytes = bitpixInBytes(bp)
 	const pixelCount = sw * sh
-	const stride = sw * pixelSizeInBytes
-	const buffer = Buffer.allocUnsafe(stride)
+	const strideInBytes = sw * pixelSizeInBytes
+	const strideInPixels = sw * nc
+	const buffer = Buffer.allocUnsafe(strideInBytes)
 	const raw = new Float64Array(pixelCount * nc)
 	const minMax = [1, 0]
 	const source = Buffer.isBuffer(data.source) ? bufferSource(data.source) : data.source
@@ -57,7 +64,7 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 		for (let i = 0; i < sh; i++) {
 			const n = await readUntil(source, buffer)
 
-			if (n !== stride) return undefined
+			if (n !== strideInBytes) return undefined
 
 			for (let k = 0; k < n; k += pixelSizeInBytes, index += nc) {
 				let pixel = 0
@@ -84,7 +91,7 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 		}
 	}
 
-	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPattern(header) }
+	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, strideInBytes, strideInPixels, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPattern(header) }
 	return { header, metadata, raw }
 }
 
@@ -184,8 +191,113 @@ export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, hig
 		return value
 	}
 
-	for (let i = 0; i < image.raw.length; i++) {
-		image.raw[i] = df(image.raw[i])
+	const { raw } = image
+
+	for (let i = 0; i < raw.length; i++) {
+		raw[i] = df(raw[i])
+	}
+
+	return image
+}
+
+export function scnrMaximumMask(a: number, b: number, c: number, amount: number) {
+	const m = Math.max(b, c)
+	return a * (1 - amount) * (1 - m) + m * a
+}
+
+export function scnrAdditiveMask(a: number, b: number, c: number, amount: number) {
+	const m = Math.min(1, b + c)
+	return a * (1 - amount) * (1 - m) + m * a
+}
+
+export function scnrAverageNeutral(a: number, b: number, c: number, amount: number) {
+	const m = 0.5 * (b + c)
+	return Math.min(a, m)
+}
+
+export function scnrMaximumNeutral(a: number, b: number, c: number, amount: number) {
+	const m = Math.max(b, c)
+	return Math.min(a, m)
+}
+
+export function scnrMimimumNeutral(a: number, b: number, c: number, amount: number) {
+	const m = Math.min(b, c)
+	return Math.min(a, m)
+}
+
+const SCNR_ALGORITHMS: Readonly<Record<SCNRProtectionMethod, SCNRAlgorithm>> = {
+	MAXIMUM_MASK: scnrMaximumMask,
+	ADDITIVE_MASK: scnrAdditiveMask,
+	AVERAGE_NEUTRAL: scnrAverageNeutral,
+	MAXIMUM_NEUTRAL: scnrMaximumNeutral,
+	MINIMUM_NEUTRAL: scnrMimimumNeutral,
+}
+
+// Subtractive Chromatic Noise Reduction
+export function scnr(image: Image, channel: ImageChannel | 'GRAY' = 'GREEN', amount: number = 0.5, method: SCNRProtectionMethod = 'MAXIMUM_MASK') {
+	if (image.metadata.channels === 3 && channel !== 'GRAY') {
+		const p0 = channel === 'RED' ? 0 : channel === 'GREEN' ? 1 : 2
+		const p1 = channel === 'RED' ? 1 : channel === 'GREEN' ? 2 : 0
+		const p2 = channel === 'RED' ? 2 : channel === 'GREEN' ? 0 : 1
+
+		const { raw } = image
+		const algorithm = SCNR_ALGORITHMS[method]
+
+		for (let i = 0; i < raw.length; i += 3) {
+			const k = i + p0
+			const a = raw[k]
+			const b = raw[i + p1]
+			const c = raw[i + p2]
+			raw[k] = algorithm(a, b, c, amount)
+		}
+	}
+
+	return image
+}
+
+export function horizontalFlip(image: Image) {
+	const { raw, metadata } = image
+	const { height, channels, strideInPixels } = metadata
+
+	for (let y = 0; y < height; y++) {
+		const k = y * strideInPixels
+
+		for (let x = 0; x < strideInPixels / 2; x += channels) {
+			const sx = strideInPixels - x - channels
+
+			const si = k + sx
+			const ei = k + x
+
+			for (let i = 0; i < channels; i++) {
+				const p = raw[si + i]
+				raw[si + i] = raw[ei + i]
+				raw[ei + i] = p
+			}
+		}
+	}
+
+	return image
+}
+
+export function verticalFlip(image: Image) {
+	const { raw, metadata } = image
+	const { height, channels, strideInPixels } = metadata
+	const sh = (height - 1) * strideInPixels
+
+	for (let y = 0; y < height / 2; y++) {
+		const k = y * strideInPixels
+		const ek = sh - k
+
+		for (let x = 0; x < strideInPixels; x += channels) {
+			const si = k + x
+			const ei = ek + x
+
+			for (let i = 0; i < channels; i++) {
+				const p = raw[si + i]
+				raw[si + i] = raw[ei + i]
+				raw[ei + i] = p
+			}
+		}
 	}
 
 	return image
