@@ -49,7 +49,7 @@
 				"noYodaExpression": "error",
 				"useCollapsedElseIf": "error",
 				"useEnumInitializers": "off",
-				"useForOf": "error",
+				"useForOf": "off",
 				"useNodejsImportProtocol": "off",
 				"useNumberNamespace": "off",
 				"useThrowOnlyError": "error"
