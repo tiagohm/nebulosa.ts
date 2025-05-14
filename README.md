@@ -553,6 +553,13 @@ const [ra, dec] = wcs.pixToSky(x, y)
 const [x, y] = wcs.skyToPix(ra, dec)
 ```
 
+### Xisf
+
+```ts
+byteShuffle(input, output, itemSize)
+byteUnshuffle(input, output, itemSize)
+```
+
 ### XML
 
 ```ts
