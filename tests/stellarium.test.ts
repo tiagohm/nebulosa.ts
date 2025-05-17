@@ -4,7 +4,7 @@ import { deg, parseAngle } from '../src/angle'
 import { fileHandleSource } from '../src/io'
 import { type CatalogEntry, ObjectType, readCatalogDat, searchAround } from '../src/stellarium'
 
-test.skip('catalog', async () => {
+test('catalog', async () => {
 	// https://github.com/Stellarium/stellarium/raw/refs/heads/master/nebulae/default/catalog.dat
 	const handle = await fs.open('data/catalog.dat')
 	const source = fileHandleSource(handle)
@@ -61,4 +61,4 @@ test.skip('catalog', async () => {
 
 	expect(searchAround(entries, parseAngle('05h 35 16.8')!, parseAngle('-05 23 24')!, deg(1))).toHaveLength(11)
 	expect(searchAround(entries, parseAngle('18h 02 42.0')!, parseAngle('-22 58 18')!, deg(1))).toHaveLength(19)
-}, 30000)
+}, 10000)

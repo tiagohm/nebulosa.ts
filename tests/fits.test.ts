@@ -3,7 +3,7 @@ import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywor
 import { bufferSink, bufferSource } from '../src/io'
 import { BITPIXES, CHANNELS, openFits } from './image.util'
 
-test.skip('read and write', async () => {
+test('read and write', async () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 32) // 32MB
 
 	for (const bitpix of BITPIXES) {
@@ -13,7 +13,6 @@ test.skip('read and write', async () => {
 			await writeFits(sink, a)
 
 			const size = width(a.hdus[0].header) * height(a.hdus[0].header) * bitpixInBytes(bitpix) * channel
-
 			expect(sink.position).toBe(5760 + size + computeRemainingBytes(size))
 
 			const source = bufferSource(buffer)
@@ -23,9 +22,11 @@ test.skip('read and write', async () => {
 			expect(b!.hdus[0].header).toEqual(a.hdus[0].header)
 			expect(b!.hdus[0].data.size).toEqual(a.hdus[0].data.size!)
 			expect(b!.hdus[0].data.offset).toEqual(5760)
+
+			buffer.fill(0, 0, sink.position)
 		}
 	}
-})
+}, 15000)
 
 test('reader', () => {
 	const reader = new FitsKeywordReader()
