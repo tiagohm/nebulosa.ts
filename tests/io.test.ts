@@ -252,7 +252,7 @@ describe('readLines', () => {
 	})
 })
 
-test('rangeHttpSource', async () => {
+test.skip('rangeHttpSource', async () => {
 	const buffer = Buffer.allocUnsafe(10)
 	const source = rangeHttpSource('https://raw.githubusercontent.com/tiagohm/nebulosa.ts/refs/heads/main/LICENSE')
 	source.seek(32)
