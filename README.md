@@ -384,6 +384,19 @@ toPascal(1) // Convert millibar to pascal
 toAtm(1) // Convert millibar to atm
 ```
 
+### Random
+
+```ts
+const random = mulberry32(seed)
+uniform(random, min, max)
+bernoulli(random, p)
+weibull(random, lambda, k)
+exponential(random, lambda)
+geometric(random, p)
+pareto(random, alpha)
+normal(random, mu, sigma)
+```
+
 ### Small Body Database
 
 ```ts

@@ -1,3 +1,5 @@
+export type HistogramData = Float16Array | Float32Array | Float64Array | Int32Array | Uint32Array | Int16Array | Uint16Array | Int8Array | Uint8Array | Uint8ClampedArray | number[]
+
 interface HistogramCache {
 	mode?: readonly [number, number]
 	count?: number
@@ -9,7 +11,7 @@ interface HistogramCache {
 export class Histogram {
 	private readonly cache: HistogramCache = {}
 
-	constructor(private readonly histogram: Int32Array | number[]) {}
+	constructor(private readonly histogram: HistogramData) {}
 
 	reset(key?: keyof HistogramCache) {
 		if (key) {
