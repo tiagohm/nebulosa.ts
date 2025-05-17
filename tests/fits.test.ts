@@ -4,7 +4,7 @@ import { bufferSink, bufferSource } from '../src/io'
 import { BITPIXES, CHANNELS, openFits } from './image.util'
 
 test('read and write', async () => {
-	const buffer = Buffer.allocUnsafe(1024 * 1024 * 32) // 32MB
+	const buffer = Buffer.alloc(1024 * 1024 * 18)
 
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
@@ -23,7 +23,7 @@ test('read and write', async () => {
 			expect(b!.hdus[0].data.size).toEqual(a.hdus[0].data.size!)
 			expect(b!.hdus[0].data.offset).toEqual(5760)
 
-			buffer.fill(0, 0, sink.position)
+			buffer.fill(0)
 		}
 	}
 }, 15000)
