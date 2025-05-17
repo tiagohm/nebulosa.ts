@@ -1,55 +1,45 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes, readFits } from '../src/fits'
-import { FitsDataSource, horizontalFlip, readImageFromFits, scnr, stf, verticalFlip, writeImageToFits, writeImageToFormat } from '../src/image'
+import { FitsDataSource, autoStf, horizontalFlip, readImageFromFits, scnr, stf, verticalFlip, writeImageToFits } from '../src/image'
 import { fileHandleSink, fileHandleSource } from '../src/io'
-import { BITPIXES, CHANNELS, generateFits } from './fits.generator'
+import { BITPIXES, CHANNELS, readImage, readImageAndTransformAndSaveImage, saveImage } from './image.util'
 
 test('readImageFromFits', async () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			const fits = generateFits(8, 8, bitpix, channel)
-			const image = await readImageFromFits(fits)
+			const [fits, image] = await readImage(bitpix, channel)
 
-			expect(image!.header).toBe(fits.hdus[0].header)
+			expect(image!.header).toBe(fits!.hdus[0].header)
 
-			const output = `data/out/riff-${channel}-${bitpix}.png`
-			await writeImageToFormat(image!, output, 'png')
+			const hash = channel === 1 ? 'fb9ca4a1edb3588a2cf678227ed4b364' : '3d0e63969cdbffcf75bb1450ce6e61da'
 
-			const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
-
-			if (channel === 1) expect(md5).toBe('7a361f42788e229ce6edd0d864efb0a6')
-			else expect(md5).toBe('60d01613155ab17ababba10082e61d72')
+			await readImageAndTransformAndSaveImage((i) => i, `read-${bitpix}.${channel}`, hash, bitpix, channel)
 		}
 	}
-})
+}, 15000)
 
 test('writeImageToFits', async () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			const fits = generateFits(8, 8, bitpix, channel)
-			let image = await readImageFromFits(fits)
+			const [, image0] = await readImage(bitpix, channel)
 
-			let handle = await fs.open(`data/out/witf-${channel}-${bitpix}.fits`, 'w+')
+			let handle = await fs.open(`out/witf-${channel}-${bitpix}.fit`, 'w+')
 			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image!, sink)
+			await writeImageToFits(image0!, sink)
 
-			handle = await fs.open(`data/out/witf-${channel}-${bitpix}.fits`, 'r')
+			handle = await fs.open(`out/witf-${channel}-${bitpix}.fit`, 'r')
 			await using source = fileHandleSource(handle)
-			image = await readImageFromFits(await readFits(source))
+			const image1 = await readImageFromFits(await readFits(source))
 
-			expect(image!.header).toEqual(fits.hdus[0].header)
+			expect(image0!.header).toEqual(image1!.header)
 
-			const output = `data/out/witf-${channel}-${bitpix}.png`
-			await writeImageToFormat(image!, output, 'png')
+			const hash = channel === 1 ? 'fb9ca4a1edb3588a2cf678227ed4b364' : '3d0e63969cdbffcf75bb1450ce6e61da'
 
-			const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
-
-			if (channel === 1) expect(md5).toBe('7a361f42788e229ce6edd0d864efb0a6')
-			else expect(md5).toBe('60d01613155ab17ababba10082e61d72')
+			await saveImage(image1!, `write-${bitpix}.${channel}`, hash)
 		}
 	}
-})
+}, 15000)
 
 test('fitsDataSource', () => {
 	const buffer = Buffer.allocUnsafe(64)
@@ -85,47 +75,26 @@ test('fitsDataSource', () => {
 	}
 })
 
-test.skip('stf', async () => {
-	const fits = generateFits(8, 8, Bitpix.DOUBLE, 3)
-	const image = await readImageFromFits(fits)
-	const output = 'data/out/stf.png'
-	await writeImageToFormat(stf(image!, 0.5), output, 'png')
-	const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
-	console.log(md5)
+test('stf', async () => {
+	return readImageAndTransformAndSaveImage((i) => stf(i, 0.005), 'stf', 'b690674f467c3416d09d551157f4e3c2')
+})
+
+test('auto stf', async () => {
+	return readImageAndTransformAndSaveImage((i) => stf(i, ...autoStf(i)), 'astf', '3e1d22fb79df143993138e5b28611f6d')
 })
 
 test('scnr', async () => {
-	const fits = generateFits(8, 8, Bitpix.DOUBLE, 3)
-	const image = await readImageFromFits(fits)
-	const output = 'data/out/scnr.png'
-	await writeImageToFormat(scnr(image!, 'GREEN', 0.9), output, 'png')
-	const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
-	expect(md5).toBe('bb1d7cb7e843a0fb5afd8e930002e9b8')
+	return readImageAndTransformAndSaveImage((i) => scnr(i, 'GREEN', 0.9), 'scnr', '56e93f2a267d35779b428e0a62e32882')
 })
 
 test('horizontal flip', async () => {
-	const fits = generateFits(8, 8, Bitpix.DOUBLE, 3)
-	const image = await readImageFromFits(fits)
-	const output = 'data/out/hf.png'
-	await writeImageToFormat(horizontalFlip(image!), output, 'png')
-	const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
-	expect(md5).toBe('0e2c97f0c78fc8692a1c5d8aaf2402bb')
+	return readImageAndTransformAndSaveImage((i) => horizontalFlip(i), 'hf', '613209919daf05ac07c60906458c070c')
 })
 
 test('vertical flip', async () => {
-	const fits = generateFits(8, 8, Bitpix.DOUBLE, 3)
-	const image = await readImageFromFits(fits)
-	const output = 'data/out/vf.png'
-	await writeImageToFormat(verticalFlip(image!), output, 'png')
-	const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
-	expect(md5).toBe('6e601f915745dcd6ab7bf1f600248037')
+	return readImageAndTransformAndSaveImage((i) => verticalFlip(i), 'vf', 'b7dac23121498363105254fb78c3ae7f')
 })
 
-test('horizontal & vertical flip', async () => {
-	const fits = generateFits(8, 8, Bitpix.DOUBLE, 3)
-	const image = await readImageFromFits(fits)
-	const output = 'data/out/hvf.png'
-	await writeImageToFormat(verticalFlip(horizontalFlip(image!)), output, 'png')
-	const md5 = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
-	expect(md5).toBe('d6cfba9d41b828ef7e8b65c4585b3507')
+test('horizontal & vertical flip', () => {
+	return readImageAndTransformAndSaveImage((i) => verticalFlip(horizontalFlip(i)), 'hvf', 'b3707db8d6b6d1ea89e90dd03fc8af4c')
 })

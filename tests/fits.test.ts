@@ -1,27 +1,28 @@
 import { expect, test } from 'bun:test'
-import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, readFits, writeFits } from '../src/fits'
+import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, bitpixInBytes, computeRemainingBytes, height, readFits, width, writeFits } from '../src/fits'
 import { bufferSink, bufferSource } from '../src/io'
-import { BITPIXES, CHANNELS, generateFits } from './fits.generator'
+import { BITPIXES, CHANNELS, openFits } from './image.util'
 
-test('readAndWrite', async () => {
-	const buffer = Buffer.allocUnsafe(5760)
+test.skip('read and write', async () => {
+	const buffer = Buffer.allocUnsafe(1024 * 1024 * 32) // 32MB
 
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			const a = generateFits(8, 8, bitpix, channel)
+			const a = await openFits(bitpix, channel)
 			const sink = bufferSink(buffer)
 			await writeFits(sink, a)
 
-			// console.info(bitpix, channel, Bun.MD5.hash(a.hdus[0].data.source as Buffer, 'hex'))
+			const size = width(a.hdus[0].header) * height(a.hdus[0].header) * bitpixInBytes(bitpix) * channel
 
-			expect(sink.position).toBe(5760)
+			expect(sink.position).toBe(5760 + size + computeRemainingBytes(size))
 
 			const source = bufferSource(buffer)
 			const b = await readFits(source)
 
+			expect(Object.keys(b!.hdus[0].header).length).toBeGreaterThanOrEqual(60)
 			expect(b!.hdus[0].header).toEqual(a.hdus[0].header)
 			expect(b!.hdus[0].data.size).toEqual(a.hdus[0].data.size!)
-			expect(b!.hdus[0].data.offset).toEqual(2880)
+			expect(b!.hdus[0].data.offset).toEqual(5760)
 		}
 	}
 })

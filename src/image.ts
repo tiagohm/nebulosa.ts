@@ -35,7 +35,6 @@ export interface ImageMetadata {
 	readonly width: number
 	readonly height: number
 	readonly channels: number
-	readonly strideInBytes: number
 	readonly strideInPixels: number
 	readonly pixelCount: number
 	readonly pixelSizeInBytes: number
@@ -116,16 +115,16 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 		}
 	}
 
-	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, strideInBytes, strideInPixels, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPattern(header) }
+	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, strideInPixels, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPattern(header) }
 	return { header, metadata, raw }
 }
 
 export async function writeImageToFormat(image: Image, output: string | NodeJS.WritableStream, format: Exclude<ImageFormat, 'fits' | 'xisf'>, options?: WriteImageToFormatOptions) {
 	const { raw, metadata } = image
 	const { width, height, channels } = metadata
-	const input = new Uint8Array(raw.length)
+	const input = new Uint8ClampedArray(raw.length)
 
-	for (let i = 0; i < input.length; i++) input[i] = Math.trunc(raw[i] * 255)
+	for (let i = 0; i < input.length; i++) input[i] = raw[i] * 255
 
 	const s = sharp(input, { raw: { width, height, channels: channels as OutputInfo['channels'], premultiplied: false } }).toFormat(format, options?.format)
 
@@ -242,7 +241,7 @@ export function autoStf(image: Image, channel?: ImageChannelOrGray, meanBackgrou
 	const x = upperHalf ? meanBackground : med - shadow
 	const m = upperHalf ? highlight - med : meanBackground
 	const midtone = x === 0 ? 0 : x === m ? 0.5 : x === 1 ? 1 : ((m - 1) * x) / ((2 * m - 1) * x - m)
-	return { shadow, midtone, highlight } as const
+	return [midtone, shadow, highlight] as const
 }
 
 export function scnrMaximumMask(a: number, b: number, c: number, amount: number) {

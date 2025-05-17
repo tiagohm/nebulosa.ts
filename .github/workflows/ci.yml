@@ -29,6 +29,9 @@ jobs:
         runs-on: ${{ matrix.os }}
         steps:
             - uses: actions/checkout@v4
+              with:
+                submodules: 'recursive'
+                lfs: true
             - uses: oven-sh/setup-bun@v2
             - run: bun install --production
             - run: bun run native/copy.ts
