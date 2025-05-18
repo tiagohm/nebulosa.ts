@@ -488,6 +488,16 @@ export function verticalFlip(image: Image) {
 	return image
 }
 
+export function invert(image: Image) {
+	const { raw } = image
+
+	for (let i = 0; i < raw.length; i++) {
+		raw[i] = 1 - raw[i]
+	}
+
+	return image
+}
+
 export function histogram(image: Image, channel?: ImageChannelOrGray, transform?: HistogramPixelTransform) {
 	const histogram = new Int32Array(65536)
 	const { raw, metadata } = image

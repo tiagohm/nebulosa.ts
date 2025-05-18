@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes, readFits } from '../src/fits'
-import { FitsDataSource, adf, debayer, horizontalFlip, readImageFromFits, scnr, stf, verticalFlip, writeImageToFits } from '../src/image'
+import { FitsDataSource, adf, debayer, horizontalFlip, invert, readImageFromFits, scnr, stf, verticalFlip, writeImageToFits } from '../src/image'
 import { fileHandleSink, fileHandleSource } from '../src/io'
 import { BITPIXES, CHANNELS, readImage, readImageAndTransformAndSaveImage, saveImageAndCompareHash } from './image.util'
 
@@ -106,4 +106,8 @@ test('vertical flip', async () => {
 
 test('horizontal & vertical flip', () => {
 	return readImageAndTransformAndSaveImage((i) => verticalFlip(horizontalFlip(i)), 'hvf', 'b3707db8d6b6d1ea89e90dd03fc8af4c')
+})
+
+test('invert', () => {
+	return readImageAndTransformAndSaveImage((i) => invert(i), 'invert', 'aca42e7bfb9c8823068f4d8efa1615bf')
 })

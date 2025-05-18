@@ -15,7 +15,7 @@
 	},
 	"peerDependencies": {
 		"dayjs": "1.11.13",
-		"utility-types": "3.11.0"
+		"utility-types": "latest"
 	},
 	"optionalDependencies": {
 		"sharp": "0.34.1"
