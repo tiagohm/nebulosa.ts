@@ -30,7 +30,7 @@ export async function readImage(bitpix: Bitpix, channel: number, format: string 
 	return [fits, image!] as const
 }
 
-export async function saveImage(image: Image, name: string, hash?: string) {
+export async function saveImageAndCompareHash(image: Image, name: string, hash?: string) {
 	const output = `out/${name}.png`
 	await writeImageToFormat(image, output, 'png')
 	const hex = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
@@ -38,8 +38,9 @@ export async function saveImage(image: Image, name: string, hash?: string) {
 	else console.info(name, hex)
 }
 
-export async function readImageAndTransformAndSaveImage(action: (image: Image) => Image, name: string, hash?: string, bitpix: Bitpix = Bitpix.DOUBLE, channel: number = 3) {
-	const a = await readImage(bitpix, channel)
-	saveImage(action(a[1]), name, hash)
-	return a
+export async function readImageAndTransformAndSaveImage(action: (image: Image) => Image, outputName: string, hash?: string, bitpix: Bitpix = Bitpix.DOUBLE, channel: number = 3, format?: string, inputName?: string) {
+	const a = await readImage(bitpix, channel, format, inputName)
+	const b = action(a[1])
+	await saveImageAndCompareHash(b, outputName, hash)
+	return b
 }

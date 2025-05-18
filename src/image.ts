@@ -1,4 +1,4 @@
-import sharp, { type AvifOptions, type FormatEnum, type GifOptions, type HeifOptions, type Jp2Options, type JpegOptions, type JxlOptions, type OutputInfo, type OutputOptions, type PngOptions, type TiffOptions, type WebpOptions } from 'sharp'
+import sharp, { type AvifOptions, type FormatEnum, type GifOptions, type HeifOptions, type Jp2Options, type JpegOptions, type JxlOptions, type OutputOptions, type PngOptions, type TiffOptions, type WebpOptions } from 'sharp'
 import { Bitpix, type Fits, type FitsData, type FitsHdu, type FitsHeader, bitpix, bitpixInBytes, height, numberOfChannels, text, width, writeFits } from './fits'
 import { type Sink, type Source, bufferSink, bufferSource, readUntil } from './io'
 import { Histogram } from './statistics'
@@ -126,7 +126,7 @@ export async function writeImageToFormat(image: Image, output: string | NodeJS.W
 
 	for (let i = 0; i < input.length; i++) input[i] = raw[i] * 255
 
-	const s = sharp(input, { raw: { width, height, channels: channels as OutputInfo['channels'], premultiplied: false } }).toFormat(format, options?.format)
+	const s = sharp(input, { raw: { width, height, channels: channels as never, premultiplied: false } }).toFormat(format, options?.format)
 
 	if (typeof output === 'string') {
 		return await s.toFile(output)
@@ -232,7 +232,9 @@ export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, hig
 export const DEFAULT_MEAN_BACKGROUND = 0.25
 export const DEFAULT_CLIPPING_POINT = -2.8
 
-export function autoStf(image: Image, channel?: ImageChannelOrGray, meanBackground: number = DEFAULT_MEAN_BACKGROUND, clippingPoint: number = DEFAULT_CLIPPING_POINT) {
+// Adaptive Display Function Algorithm
+// https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Adaptive_Display_Function_Algorithm__
+export function adf(image: Image, channel?: ImageChannelOrGray, meanBackground: number = DEFAULT_MEAN_BACKGROUND, clippingPoint: number = DEFAULT_CLIPPING_POINT) {
 	const med = median(image, channel)
 	const mad = medianAbsoluteDiviation(image, channel, true, med)
 	const upperHalf = med > 0.5
@@ -242,6 +244,144 @@ export function autoStf(image: Image, channel?: ImageChannelOrGray, meanBackgrou
 	const m = upperHalf ? highlight - med : meanBackground
 	const midtone = x === 0 ? 0 : x === m ? 0.5 : x === 1 ? 1 : ((m - 1) * x) / ((2 * m - 1) * x - m)
 	return [midtone, shadow, highlight] as const
+}
+
+const CFA_PATTERNS: Record<CfaPattern, number[][]> = {
+	RGGB: [
+		[0, 1],
+		[1, 2],
+	],
+	BGGR: [
+		[2, 1],
+		[1, 0],
+	],
+	GBRG: [
+		[1, 2],
+		[0, 1],
+	],
+	GRBG: [
+		[1, 0],
+		[2, 1],
+	],
+	GRGB: [
+		[1, 0],
+		[1, 2],
+	],
+	GBGR: [
+		[1, 2],
+		[1, 0],
+	],
+	RGBG: [
+		[0, 1],
+		[2, 1],
+	],
+	BGRG: [
+		[2, 1],
+		[0, 1],
+	],
+}
+
+export function debayer(image: Image, pattern?: CfaPattern) {
+	const { metadata, raw } = image
+
+	if (metadata.channels === 1) {
+		pattern ??= metadata.bayer
+
+		if (pattern) {
+			const cfa = CFA_PATTERNS[pattern]
+			const values = new Float64Array(3)
+			const counters = new Uint8Array(3)
+			const output = new Float64Array(raw.length * 3)
+
+			const { width, height } = metadata
+
+			for (let y = 0; y < height; y++) {
+				const ri = y * width
+
+				for (let x = 0; x < width; x++) {
+					const ci = ri + x
+
+					values.fill(0)
+					counters.fill(0)
+
+					// center
+					let bi = cfa[y & 1][x & 1]
+					values[bi] += raw[ci]
+					counters[bi]++
+
+					// left
+					if (x !== 0) {
+						bi = cfa[y & 1][(x - 1) & 1]
+						values[bi] += raw[ci - 1]
+						counters[bi]++
+					}
+
+					// right
+					if (x !== width - 1) {
+						bi = cfa[y & 1][(x + 1) & 1]
+						values[bi] += raw[ci + 1]
+						counters[bi]++
+					}
+
+					if (y !== 0) {
+						// top center
+						bi = cfa[(y - 1) & 1][x & 1]
+						values[bi] += raw[ci - width]
+						counters[bi]++
+
+						// top left
+						if (x !== 0) {
+							bi = cfa[(y - 1) & 1][(x - 1) & 1]
+							values[bi] += raw[ci - width - 1]
+							counters[bi]++
+						}
+
+						// top right
+						if (x !== width - 1) {
+							bi = cfa[(y - 1) & 1][(x + 1) & 1]
+							values[bi] += raw[ci - width + 1]
+							counters[bi]++
+						}
+					}
+
+					if (y !== height - 1) {
+						// bottom center
+						bi = cfa[(y + 1) & 1][x & 1]
+						values[bi] += raw[ci + width]
+						counters[bi]++
+
+						// bottom left
+						if (x !== 0) {
+							bi = cfa[(y + 1) & 1][(x - 1) & 1]
+							values[bi] += raw[ci + width - 1]
+							counters[bi]++
+						}
+
+						// bottom right
+						if (x !== width - 1) {
+							bi = cfa[(y + 1) & 1][(x + 1) & 1]
+							values[bi] += raw[ci + width + 1]
+							counters[bi]++
+						}
+					}
+
+					let oi = ci * 3
+
+					output[oi++] = values[0] / counters[0]
+					output[oi++] = values[1] / counters[1]
+					output[oi] = values[2] / counters[2]
+				}
+			}
+
+			return {
+				header: { ...image.header, NAXIS: 3, NAXIS3: 3 },
+				metadata: { ...metadata, channels: 3, strideInPixels: width * 3 },
+				raw: output,
+			}
+		}
+	}
+
+	return undefined
 }
 
 export function scnrMaximumMask(a: number, b: number, c: number, amount: number) {

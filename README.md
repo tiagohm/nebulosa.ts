@@ -206,7 +206,15 @@ xy(time) // Polar motion angles at time
 readImageFromFits(fits) // Read image from FITS file
 writeImageToFormat(image, path, format) // Write image to path as png, jpeg, webp, etc
 writeImageToFits(image, sink) // Write image to sink as FITS format
-stf(image, midtone, shadow, highlight) // Apply STF to image
+stf(image, midtone, shadow, highlight, channel) // Apply STF to image
+adf(image, channel, meanBackground, clippingPoint) // Calculate the STF parameters
+debayer(image) // Debayer the image
+scnr(image, channel, amount, method) // Apply SCNR to image
+horizontalFlip(image) // Horizontal flip the image
+verticalFlip(image) // Vertical flip the image
+histogram(image, channel) // Generate the histogram from image
+median(image, channel) // Calculate the median from image
+medianAbsoluteDiviation(image, channel) // Calculate the MAD from image
 ```
 
 ### INDI

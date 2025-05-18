@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes, readFits } from '../src/fits'
-import { FitsDataSource, autoStf, horizontalFlip, readImageFromFits, scnr, stf, verticalFlip, writeImageToFits } from '../src/image'
+import { FitsDataSource, adf, debayer, horizontalFlip, readImageFromFits, scnr, stf, verticalFlip, writeImageToFits } from '../src/image'
 import { fileHandleSink, fileHandleSource } from '../src/io'
-import { BITPIXES, CHANNELS, readImage, readImageAndTransformAndSaveImage, saveImage } from './image.util'
+import { BITPIXES, CHANNELS, readImage, readImageAndTransformAndSaveImage, saveImageAndCompareHash } from './image.util'
 
 test('readImageFromFits', async () => {
 	for (const bitpix of BITPIXES) {
@@ -23,12 +23,13 @@ test('writeImageToFits', async () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
 			const [, image0] = await readImage(bitpix, channel)
+			const key = `${bitpix}.${channel}`
 
-			let handle = await fs.open(`out/witf-${channel}-${bitpix}.fit`, 'w+')
+			let handle = await fs.open(`out/witf-${key}.fit`, 'w+')
 			await using sink = fileHandleSink(handle)
 			await writeImageToFits(image0!, sink)
 
-			handle = await fs.open(`out/witf-${channel}-${bitpix}.fit`, 'r')
+			handle = await fs.open(`out/witf-${key}.fit`, 'r')
 			await using source = fileHandleSource(handle)
 			const image1 = await readImageFromFits(await readFits(source))
 
@@ -36,7 +37,7 @@ test('writeImageToFits', async () => {
 
 			const hash = channel === 1 ? 'fb9ca4a1edb3588a2cf678227ed4b364' : '3d0e63969cdbffcf75bb1450ce6e61da'
 
-			await saveImage(image1!, `write-${bitpix}.${channel}`, hash)
+			await saveImageAndCompareHash(image1!, `write-${key}`, hash)
 		}
 	}
 }, 15000)
@@ -75,12 +76,20 @@ test('fitsDataSource', () => {
 	}
 })
 
+test('debayer', async () => {
+	const image = await readImageAndTransformAndSaveImage((i) => stf(debayer(i) ?? i, 0.05), 'grbg', '3f049c06d25eec196b3d37471776de01', Bitpix.SHORT, 1, 'fit', 'GRBG')
+
+	expect(image.header.NAXIS).toBe(3)
+	expect(image.header.NAXIS3).toBe(3)
+	expect(image.metadata.channels).toBe(3)
+})
+
 test('stf', async () => {
 	return readImageAndTransformAndSaveImage((i) => stf(i, 0.005), 'stf', 'b690674f467c3416d09d551157f4e3c2')
 })
 
 test('auto stf', async () => {
-	return readImageAndTransformAndSaveImage((i) => stf(i, ...autoStf(i)), 'astf', '3e1d22fb79df143993138e5b28611f6d')
+	return readImageAndTransformAndSaveImage((i) => stf(i, ...adf(i)), 'astf', '3e1d22fb79df143993138e5b28611f6d')
 })
 
 test('scnr', async () => {
