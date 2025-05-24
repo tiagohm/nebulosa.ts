@@ -405,6 +405,16 @@ pareto(random, alpha)
 normal(random, mu, sigma)
 ```
 
+### Regression
+
+```ts
+const regresion = simpleLinearRegression(x, y) // Compute OLS regression
+
+regression.predict(x)
+
+const { r, r2, chi2, rmsd } = regressionScore(regression, x, y)
+```
+
 ### Small Body Database
 
 ```ts
