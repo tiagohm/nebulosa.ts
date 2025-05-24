@@ -22,7 +22,17 @@ export type ImageChannelOrGray = ImageChannel | GrayscaleAlgorithm | 'GRAY'
 export type HistogramPixelTransform = (p: number) => number
 
 export interface WriteImageToFormatOptions {
-	format: OutputOptions | JpegOptions | PngOptions | WebpOptions | AvifOptions | HeifOptions | JxlOptions | GifOptions | Jp2Options | TiffOptions
+	format?: OutputOptions | JpegOptions | PngOptions | WebpOptions | AvifOptions | HeifOptions | JxlOptions | GifOptions | Jp2Options | TiffOptions
+	horizontalFlip?: boolean
+	verticalFlip?: boolean
+	sharpen?: boolean
+	median?: boolean
+	blur?: boolean
+	gamma?: number // 1 - 3
+	normalize?: boolean // Enhance output image contrast
+	brightness?: number
+	saturation?: number
+	negate?: boolean
 }
 
 export interface Image {
@@ -127,6 +137,16 @@ export async function writeImageToFormat(image: Image, output: string | NodeJS.W
 	for (let i = 0; i < input.length; i++) input[i] = raw[i] * 255
 
 	const s = sharp(input, { raw: { width, height, channels: channels as never, premultiplied: false } }).toFormat(format, options?.format)
+
+	if (options?.horizontalFlip) s.flop()
+	if (options?.verticalFlip) s.flip()
+	if (options?.normalize) s.normalise()
+	if (options?.brightness !== undefined || options?.saturation !== undefined) s.modulate({ brightness: options.brightness ?? 1, saturation: options.saturation ?? 1 })
+	if (options?.gamma !== undefined) s.gamma(options.gamma)
+	if (options?.sharpen) s.sharpen()
+	if (options?.median) s.median()
+	if (options?.blur) s.blur()
+	if (options?.negate) s.negate()
 
 	if (typeof output === 'string') {
 		return await s.toFile(output)
