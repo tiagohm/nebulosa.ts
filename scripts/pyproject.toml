@@ -7,3 +7,11 @@ dependencies = [
     "pandas>=2.2.3",
     "skyfield>=1.53",
 ]
+
+[tool.ruff]
+line-length = 999
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+docstring-code-format = true

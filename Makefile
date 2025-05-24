@@ -1,4 +1,4 @@
-.PHONY: run lint format test
+.PHONY: run lint format test astro
 
 run:
 	bun .
@@ -11,3 +11,6 @@ format:
 
 test:
 	bun test --timeout 1000
+
+astro:
+	uv run scripts/astro.py $(a)
