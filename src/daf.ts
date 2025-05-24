@@ -2,8 +2,8 @@ import { type Seekable, type Source, readUntil } from './io'
 
 export interface Summary {
 	readonly name: string
-	readonly doubles: readonly number[]
-	readonly ints: readonly number[]
+	readonly doubles: Float64Array
+	readonly ints: Int32Array
 }
 
 export interface Daf {
@@ -147,13 +147,13 @@ function readSummaryControl(buffer: Buffer, { be }: DafRecord) {
 	return { next, prev, nsum }
 }
 
-function readSummaryElements(buffer: Buffer, { be, nd, ni }: DafRecord): readonly [readonly number[], readonly number[]] {
-	const doubles = new Array<number>(nd)
-	const ints = new Array<number>(ni)
+function readSummaryElements(buffer: Buffer, { be, nd, ni }: DafRecord) {
+	const doubles = new Float64Array(nd)
+	const ints = new Int32Array(ni)
 
 	let offset = 0
 	for (let i = 0; i < nd; i++, offset += 8) doubles[i] = be ? buffer.readDoubleBE(offset) : buffer.readDoubleLE(offset)
 	for (let i = 0; i < ni; i++, offset += 4) ints[i] = be ? buffer.readInt32BE(offset) : buffer.readInt32LE(offset)
 
-	return [doubles, ints]
+	return [doubles, ints] as const
 }

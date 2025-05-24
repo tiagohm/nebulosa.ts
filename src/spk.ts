@@ -2,7 +2,7 @@ import type { PositionAndVelocity } from './astrometry'
 import { AU_KM, DAYSEC, J2000 } from './constants'
 import type { Daf, Summary } from './daf'
 import { type Time, tdb } from './time'
-import { type MutVec3, zeroVec } from './vector'
+import type { MutVec3 } from './vector'
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/FORTRAN/req/spk.html
 export interface Spk {
@@ -111,12 +111,12 @@ export class Type2And3Segment implements SpkSegment {
 		const s = (2 * (d - (c.mid - c.radius))) / this.intervalLength - 1
 		const ss = 2 * s
 
-		const w0 = zeroVec()
-		const w1 = zeroVec()
-		const w2 = zeroVec()
-		const dw0 = zeroVec()
-		const dw1 = zeroVec()
-		const dw2 = zeroVec()
+		const w0: MutVec3 = [0, 0, 0]
+		const w1: MutVec3 = [0, 0, 0]
+		const w2 = new Float64Array(3)
+		const dw0 = new Float64Array(3)
+		const dw1 = new Float64Array(3)
+		const dw2 = new Float64Array(3)
 
 		for (let i = c.count - 1; i >= 1; i--) {
 			// Polynomial.
@@ -208,18 +208,20 @@ export class Type9Segment implements SpkSegment {
 
 	// biome-ignore lint/suspicious/useAwait:
 	async at(time: Time): Promise<PositionAndVelocity> {
-		return [zeroVec(), zeroVec()]
+		const p = [0, 0, 0] as const
+		const v = [0, 0, 0] as const
+		return [p, v]
 	}
 }
 
 interface Type21Coefficent {
 	readonly tl: number
 	readonly g: Float64Array
-	readonly p: number[]
-	readonly v: number[]
-	readonly dt: number[][]
+	readonly p: Float64Array
+	readonly v: Float64Array
+	readonly dt: Float64Array[]
 	readonly kqmax1: number
-	readonly kq: number[]
+	readonly kq: Float64Array
 }
 
 export class Type21Segment implements SpkSegment {
@@ -314,8 +316,8 @@ export class Type21Segment implements SpkSegment {
 
 		// Perform position interpolation: (Note that KS = 1 right now.
 		// We don't know much more than that.)
-		const p = zeroVec()
-		const v = zeroVec()
+		const p: MutVec3 = [0, 0, 0]
+		const v: MutVec3 = [0, 0, 0]
 
 		for (let i = 0; i < 3; i++) {
 			const kqq = c.kq[i]
@@ -401,8 +403,8 @@ export class Type21Segment implements SpkSegment {
 		const g = mdaRecord.subarray(1, this.maxdim + 1)
 
 		// Reference position & velocity vector.
-		const p = zeroVec()
-		const v = zeroVec()
+		const p = new Float64Array(3)
+		const v = new Float64Array(3)
 
 		p[0] = mdaRecord[this.maxdim + 1]
 		v[0] = mdaRecord[this.maxdim + 2]
@@ -414,18 +416,22 @@ export class Type21Segment implements SpkSegment {
 		v[2] = mdaRecord[this.maxdim + 6]
 
 		// dt = mdaRecord.sliceArray(maxdim + 7 until 4 * maxdim + 7)
-		const dt = new Array<MutVec3>(this.maxdim)
+		const dt = new Array<Float64Array>(this.maxdim)
 		const dto = this.maxdim + 7
 
 		for (let p = 0; p < this.maxdim; p++) {
-			dt[p] = [mdaRecord[dto + p], mdaRecord[dto + this.maxdim + p], mdaRecord[dto + 2 * this.maxdim + p]]
+			const a = new Float64Array(3)
+			a[0] = mdaRecord[dto + p]
+			a[1] = mdaRecord[dto + this.maxdim + p]
+			a[2] = mdaRecord[dto + 2 * this.maxdim + p]
+			dt[p] = a
 		}
 
 		const kqo = 4 * this.maxdim
 
 		// Initializing the difference table.
 		const kqmax1 = Math.trunc(mdaRecord[kqo + 7])
-		const kq = zeroVec()
+		const kq = new Float64Array(3)
 		kq[0] = Math.trunc(mdaRecord[kqo + 8])
 		kq[1] = Math.trunc(mdaRecord[kqo + 9])
 		kq[2] = Math.trunc(mdaRecord[kqo + 10])

@@ -2,6 +2,7 @@ import { type Angle, arcsec } from './angle'
 import { MJD0 } from './constants'
 import { binarySearch } from './helper'
 import { type Source, readLines } from './io'
+import type { NumberArray } from './math'
 import type { PolarMotion, Time, TimeDelta } from './time'
 
 export interface Iers {
@@ -12,8 +13,8 @@ export interface Iers {
 	readonly clear: () => void
 }
 
-export function interpolate(time: Time, input: number[], ...data: number[][]): number[] {
-	const ret = new Array<number>(data.length)
+export function interpolate(time: Time, input: NumberArray, ...data: NumberArray[]): NumberArray {
+	const ret = new Float64Array(data.length)
 
 	if (!input.length) return ret
 

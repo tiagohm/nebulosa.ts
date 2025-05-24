@@ -1,3 +1,5 @@
+import type { NumberArray } from './math'
+
 export interface BinarySearchOptions {
 	from?: number
 	to?: number
@@ -5,7 +7,7 @@ export interface BinarySearchOptions {
 }
 
 // Searches in the specified input using the range [from, to) for the specified key.
-export function binarySearch(input: number[], key: number, options?: BinarySearchOptions) {
+export function binarySearch(input: NumberArray, key: number, options?: BinarySearchOptions) {
 	let a = Math.trunc(options?.from ?? 0)
 	let b = Math.trunc(options?.to ?? input.length) - 1
 
