@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test'
 import { arcsec, toArcsec } from '../src/angle'
+import type { CartesianCoordinate } from '../src/coordinate'
 import { kilometer, meter } from '../src/distance'
 import * as erfa from '../src/erfa'
 import type { Mat3 } from '../src/matrix'
-import type { MutVec3, Vec3 } from '../src/vector'
+import type { Vector3 } from '../src/vector'
 import { kilometerPerSecond, meterPerSecond, toKilometerPerSecond } from '../src/velocity'
 
 test('eraP2s', () => {
@@ -401,8 +402,8 @@ test('eraPpsp', () => {
 })
 
 test('eraPv2s', () => {
-	const p: MutVec3 = [-0.4514964673880165, 0.03093394277342585, 0.05594668105108779]
-	const v: MutVec3 = [1.29227085066326e-5, 2.652814182060692e-6, 2.568431853930293e-6]
+	const p: Vector3.Vector = [-0.4514964673880165, 0.03093394277342585, 0.05594668105108779]
+	const v: Vector3.Vector = [1.29227085066326e-5, 2.652814182060692e-6, 2.568431853930293e-6]
 	const [theta, phi, r, td, pd, rd] = erfa.eraPv2s(p, v)
 
 	expect(theta).toBeCloseTo(3.073185307179586515, 12)
@@ -414,8 +415,8 @@ test('eraPv2s', () => {
 })
 
 test('eraPvstar', () => {
-	const p: MutVec3 = [126668.5912743160601, 2136.792716839935195, -245251.2339876830091]
-	const v: MutVec3 = [-0.4051854035740712739e-2, -0.6253919754866173866e-2, 0.1189353719774107189e-1]
+	const p = [126668.5912743160601, 2136.792716839935195, -245251.2339876830091] as const
+	const v = [-0.4051854035740712739e-2, -0.6253919754866173866e-2, 0.1189353719774107189e-1] as const
 	const [ra, dec, pmr, pmd, px, rv] = erfa.eraPvstar(p, v) as Exclude<ReturnType<typeof erfa.eraPvstar>, false>
 
 	expect(ra).toBeCloseTo(0.1686756e-1, 12)
@@ -457,8 +458,8 @@ test('eraPmpx', () => {
 })
 
 test('eraAb', () => {
-	const pnat: Vec3 = [-0.76321968546737951, -0.60869453983060384, -0.21676408580639883]
-	const v: Vec3 = [2.1044018893653786e-5, -8.9108923304429319e-5, -3.8633714797716569e-5]
+	const pnat = [-0.76321968546737951, -0.60869453983060384, -0.21676408580639883] as const
+	const v = [2.1044018893653786e-5, -8.9108923304429319e-5, -3.8633714797716569e-5] as const
 	const [x, y, z] = erfa.eraAb(pnat, v, 0.99980921395708788, 0.99999999506209258)
 
 	expect(x).toBeCloseTo(-0.7631631094219556269, 12)
@@ -467,9 +468,9 @@ test('eraAb', () => {
 })
 
 test('eraLd', () => {
-	const p: Vec3 = [-0.763276255, -0.608633767, -0.216735543]
-	const q: Vec3 = [-0.763276255, -0.608633767, -0.216735543]
-	const e: Vec3 = [0.76700421, 0.605629598, 0.211937094]
+	const p = [-0.763276255, -0.608633767, -0.216735543] as const
+	const q = [-0.763276255, -0.608633767, -0.216735543] as const
+	const e = [0.76700421, 0.605629598, 0.211937094] as const
 	const [x, y, z] = erfa.eraLd(0.00028574, p, q, e, 8.91276983, 3e-10)
 
 	expect(x).toBeCloseTo(-0.7632762548968159627, 12)
@@ -478,8 +479,8 @@ test('eraLd', () => {
 })
 
 test('eraLdSun', () => {
-	const p: Vec3 = [-0.763276255, -0.608633767, -0.216735543]
-	const e: Vec3 = [-0.973644023, -0.20925523, -0.0907169552]
+	const p = [-0.763276255, -0.608633767, -0.216735543] as const
+	const e = [-0.973644023, -0.20925523, -0.0907169552] as const
 	const [x, y, z] = erfa.eraLdSun(p, e, 0.999809214)
 
 	expect(x).toBeCloseTo(-0.7632762580731413169, 12)
@@ -509,8 +510,8 @@ test('eraLdn', () => {
 		},
 	]
 
-	const ob: Vec3 = [-0.974170437, -0.2115201, -0.0917583114]
-	const sc: Vec3 = [-0.763276255, -0.608633767, -0.216735543]
+	const ob = [-0.974170437, -0.2115201, -0.0917583114] as const
+	const sc = [-0.763276255, -0.608633767, -0.216735543] as const
 
 	const [x, y, z] = erfa.eraLdn(b, ob, sc)
 
@@ -579,10 +580,10 @@ test('eraC2t06a', () => {
 })
 
 test('eraApci13', () => {
-	const ph: Vec3 = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775]
-	// const vh: Vec3 = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732]
-	const pb: Vec3 = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775]
-	const vb: Vec3 = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545]
+	const ph: CartesianCoordinate = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775]
+	// const vh: CartesianCoordinate = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732]
+	const pb: CartesianCoordinate = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775]
+	const vb: CartesianCoordinate = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545]
 
 	const [astrom, eo] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
 
@@ -611,9 +612,9 @@ test('eraApci13', () => {
 })
 
 test('eraApci', () => {
-	const ph: Vec3 = [0.903358544, -0.415395237, -0.180084014]
-	const pb: Vec3 = [0.901310875, -0.417402664, -0.180982288]
-	const vb: Vec3 = [0.00742727954, 0.0140507459, 0.00609045792]
+	const ph: CartesianCoordinate = [0.903358544, -0.415395237, -0.180084014]
+	const pb: CartesianCoordinate = [0.901310875, -0.417402664, -0.180982288]
+	const vb: CartesianCoordinate = [0.00742727954, 0.0140507459, 0.00609045792]
 
 	const astrom = erfa.eraApci(2456165.5, 0.401182685, [pb, vb], ph, 0.0013122272, -2.92808623e-5, 3.05749468e-8)
 
@@ -641,9 +642,9 @@ test('eraApci', () => {
 })
 
 test('eraApcg', () => {
-	const ph: Vec3 = [0.903358544, -0.415395237, -0.180084014]
-	const pb: Vec3 = [0.901310875, -0.417402664, -0.180982288]
-	const vb: Vec3 = [0.00742727954, 0.0140507459, 0.00609045792]
+	const ph: CartesianCoordinate = [0.903358544, -0.415395237, -0.180084014]
+	const pb: CartesianCoordinate = [0.901310875, -0.417402664, -0.180982288]
+	const vb: CartesianCoordinate = [0.00742727954, 0.0140507459, 0.00609045792]
 
 	const astrom = erfa.eraApcg(2456165.5, 0.401182685, [pb, vb], ph)
 
@@ -671,11 +672,11 @@ test('eraApcg', () => {
 })
 
 test('eraApcs', () => {
-	const p: Vec3 = [meter(-1836024.09), meter(1056607.72), meter(-5998795.26)]
-	const v: Vec3 = [meterPerSecond(-77.0361767), meterPerSecond(-133.310856), meterPerSecond(0.0971855934)]
-	const ph: Vec3 = [-0.973458265, -0.209215307, -0.0906996477]
-	const pb: Vec3 = [-0.974170438, -0.211520082, -0.0917583024]
-	const vb: Vec3 = [0.00364365824, -0.0154287319, -0.00668922024]
+	const p: CartesianCoordinate = [meter(-1836024.09), meter(1056607.72), meter(-5998795.26)]
+	const v: CartesianCoordinate = [meterPerSecond(-77.0361767), meterPerSecond(-133.310856), meterPerSecond(0.0971855934)]
+	const ph: CartesianCoordinate = [-0.973458265, -0.209215307, -0.0906996477]
+	const pb: CartesianCoordinate = [-0.974170438, -0.211520082, -0.0917583024]
+	const vb: CartesianCoordinate = [0.00364365824, -0.0154287319, -0.00668922024]
 
 	const astrom = erfa.eraApcs(2456384.5, 0.970031644, [p, v], [pb, vb], ph)
 
@@ -703,10 +704,10 @@ test('eraApcs', () => {
 })
 
 test('eraAtccq', () => {
-	const ph: Vec3 = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775]
-	// const vh: Vec3 = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732]
-	const pb: Vec3 = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775]
-	const vb: Vec3 = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545]
+	const ph: CartesianCoordinate = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775]
+	// const: CartesianCoordinate vh = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732]
+	const pb: CartesianCoordinate = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775]
+	const vb: CartesianCoordinate = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545]
 
 	const [astrom] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
 	const p = erfa.eraAtccq(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), astrom)
@@ -717,10 +718,10 @@ test('eraAtccq', () => {
 })
 
 test('eraAtciq', () => {
-	const ph: Vec3 = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775]
-	// const vh: Vec3 = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732]
-	const pb: Vec3 = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775]
-	const vb: Vec3 = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545]
+	const ph: CartesianCoordinate = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775]
+	// const: CartesianCoordinate vh = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732]
+	const pb: CartesianCoordinate = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775]
+	const vb: CartesianCoordinate = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545]
 
 	const [astrom] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
 	const p = erfa.eraAtciq(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), astrom)
@@ -742,9 +743,9 @@ test('eraPvtob', () => {
 })
 
 test('eraApco', () => {
-	const ebp: Vec3 = [-0.974170438, -0.211520082, -0.0917583024]
-	const ebv: Vec3 = [0.00364365824, -0.0154287319, -0.00668922024]
-	const ehp: Vec3 = [-0.973458265, -0.209215307, -0.0906996477]
+	const ebp: CartesianCoordinate = [-0.974170438, -0.211520082, -0.0917583024]
+	const ebv: CartesianCoordinate = [0.00364365824, -0.0154287319, -0.00668922024]
+	const ehp: CartesianCoordinate = [-0.973458265, -0.209215307, -0.0906996477]
 
 	const astrom = erfa.eraApco(2456384.5, 0.970031644, [ebp, ebv], ehp, 0.0013122272, -2.92808623e-5, 3.05749468e-8, 3.14540971, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, -3.01974337e-11, 0.000201418779, -2.36140831e-7)
 
@@ -781,9 +782,9 @@ test('eraApco', () => {
 })
 
 test('eraApco13', () => {
-	const ebp: Vec3 = [-0.974170437669016342, -0.211520082035387968, -0.091758302425478583]
-	const ebv: Vec3 = [0.003643658242375083, -0.015428731944935825, -0.006689220237864495]
-	const ehp: Vec3 = [-0.973458265012157486, -0.209215306558769298, -0.090699647709202746]
+	const ebp: CartesianCoordinate = [-0.974170437669016342, -0.211520082035387968, -0.091758302425478583]
+	const ebv: CartesianCoordinate = [0.003643658242375083, -0.015428731944935825, -0.006689220237864495]
+	const ehp: CartesianCoordinate = [-0.973458265012157486, -0.209215306558769298, -0.090699647709202746]
 
 	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
 	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)

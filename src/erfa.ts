@@ -1,12 +1,14 @@
 import { type Angle, arcsec, deg, normalizeAngle } from './angle'
+import type { PositionAndVelocity } from './astrometry'
 import { ASEC2RAD, AU_M, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MILLIASEC2RAD, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI, TURNAS } from './constants'
+import type { CartesianCoordinate } from './coordinate'
 import { type Distance, toKilometer } from './distance'
 import { FAIRHEAD, IAU2000A_LS, IAU2000A_PL, IAU2000B_LS, IAU2006_S, IAU2006_SP } from './erfa.data'
 import { pmod, roundToNearestWholeNumber } from './math'
 import { Mat3 } from './matrix'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
-import { type MutVec3, type Vec3, cloneVec, cross, divVecScalar, dot, fillVec, length, minusVec, mulVecScalar, normalizeMutVec, normalizeVec, plusVec, zeroVec } from './vector'
+import { Vector3 } from './vector'
 import type { Velocity } from './velocity'
 
 const DBL_EPSILON = 2.220446049250313e-16
@@ -99,10 +101,10 @@ export type LeapSecondDrift = readonly [number, number]
 
 export interface EraAstrom {
 	pmt: number // PM time interval (SSB, Julian years)
-	eb: MutVec3 // SSB to observer (vector, au)
-	eh: MutVec3 // Sun to observer (unit vector)
+	eb: CartesianCoordinate // SSB to observer (vector, au)
+	eh: CartesianCoordinate // Sun to observer (unit vector)
 	em: Distance // distance from Sun to observer (au)
-	v: MutVec3 // barycentric observer velocity (vector, c)
+	v: CartesianCoordinate // barycentric observer velocity (vector, c)
 	bm1: number // sqrt(1-|v|^2): reciprocal of Lorenz factor
 	bpn: Mat3.Matrix // bias-precession-nutation matrix
 	along: number // longitude + s' + dERA(DUT) (radians)
@@ -140,7 +142,7 @@ export function eraC2s(x: Distance, y: Distance, z: Distance): [Angle, Angle] {
 }
 
 // Spherical coordinates to Cartesian coordinates.
-export function eraS2c(theta: Angle, phi: Angle): MutVec3 {
+export function eraS2c(theta: Angle, phi: Angle): CartesianCoordinate {
 	const cp = Math.cos(phi)
 	return [Math.cos(theta) * cp, Math.sin(theta) * cp, Math.sin(phi)]
 }
@@ -979,19 +981,19 @@ export function eraStarpv(ra: Angle, dec: Angle, pmRa: Angle, pmDec: Angle, para
 	const pv = eraS2pv(ra, dec, r, pmRa / DAYSPERJY, pmDec / DAYSPERJY, rv)
 
 	// Largest allowed speed (fraction of c).
-	if (length(pv[1]) / SPEED_OF_LIGHT_AU_DAY > 0.5) {
-		fillVec(pv[1], 0, 0, 0)
+	if (Vector3.length(pv[1]) / SPEED_OF_LIGHT_AU_DAY > 0.5) {
+		Vector3.fill(pv[1], 0, 0, 0)
 		return pv
 	}
 
 	// Isolate the radial component of the velocity (au/day).
-	const pu = normalizeVec(pv[0])
-	const vsr = dot(pu, pv[1])
-	const usr = mulVecScalar(pu, vsr)
+	const pu = Vector3.normalize(pv[0])
+	const vsr = Vector3.dot(pu, pv[1])
+	const usr = Vector3.mulScalar(pu, vsr)
 
 	// Isolate the transverse component of the velocity (au/day).
-	const ust = minusVec(pv[1], usr, usr)
-	const vst = length(ust)
+	const ust = Vector3.minus(pv[1], usr, usr)
+	const vst = Vector3.length(ust)
 
 	// Special-relativity dimensionless parameters.
 	const betsr = vsr / SPEED_OF_LIGHT_AU_DAY
@@ -1028,13 +1030,13 @@ export function eraStarpv(ra: Angle, dec: Angle, pmRa: Angle, pmDec: Angle, para
 	}
 
 	// Scale observed tangential velocity vector into inertial (au/d).
-	const ut = mulVecScalar(ust, d, ust)
+	const ut = Vector3.mulScalar(ust, d, ust)
 
 	// Compute inertial radial velocity vector (au/d).
-	const ur = mulVecScalar(pu, SPEED_OF_LIGHT_AU_DAY * (d * betsr + del), pu)
+	const ur = Vector3.mulScalar(pu, SPEED_OF_LIGHT_AU_DAY * (d * betsr + del), pu)
 
 	// Combine the two to obtain the inertial space velocity vector.
-	plusVec(ur, ut, pv[1])
+	Vector3.plus(ur, ut, pv[1])
 
 	return pv
 }
@@ -1051,16 +1053,16 @@ export function eraS2pv(theta: Angle, phi: Angle, r: Distance, td: Angle, pd: An
 	const rpd = r * pd
 	const w = rpd * sp - cp * rd
 
-	const p: MutVec3 = [x, y, r * sp]
-	const v: MutVec3 = [-y * td - w * ct, x * td - w * st, rpd * cp + sp * rd]
+	const p: CartesianCoordinate = [x, y, r * sp]
+	const v: CartesianCoordinate = [-y * td - w * ct, x * td - w * st, rpd * cp + sp * rd]
 	return [p, v] as const
 }
 
 // NOT PRESENT IN ERFA!
 // Update star position+velocity vector for space motion.
-export function eraStarpmpv(pv1: readonly [Vec3, Vec3], ep1a: number, ep1b: number, ep2a: number, ep2b: number): MutVec3 {
+export function eraStarpmpv(pv1: PositionAndVelocity, ep1a: number, ep1b: number, ep2a: number, ep2b: number): CartesianCoordinate {
 	// Light time when observed (days).
-	const tl1 = length(pv1[0]) / SPEED_OF_LIGHT_AU_DAY
+	const tl1 = Vector3.length(pv1[0]) / SPEED_OF_LIGHT_AU_DAY
 
 	// Time interval, "before" to "after" (days).
 	const dt = ep2a - ep1a + (ep2b - ep1b)
@@ -1070,12 +1072,12 @@ export function eraStarpmpv(pv1: readonly [Vec3, Vec3], ep1a: number, ep1b: numb
 
 	// From this geometric position, deduce the observed light time (days)
 	// at the "after" epoch (with theoretically unneccessary error check).
-	const v2 = dot(pv1[1], pv1[1])
+	const v2 = Vector3.dot(pv1[1], pv1[1])
 	const c2mv2 = SPEED_OF_LIGHT_AU_DAY * SPEED_OF_LIGHT_AU_DAY - v2
 	// if (c2mv2 <= 0) return false
 
-	const r2 = dot(p1, p1)
-	const rdv = dot(p1, pv1[1])
+	const r2 = Vector3.dot(p1, p1)
+	const rdv = Vector3.dot(p1, pv1[1])
 	const tl2 = (-rdv + Math.sqrt(rdv * rdv + c2mv2 * r2)) / c2mv2
 
 	// Move the position along track from the observed place at the
@@ -1096,15 +1098,15 @@ export function eraStarpm(ra1: Angle, dec1: Angle, pmr1: Angle, pmd1: Angle, px1
 
 // Convert star position+velocity vector to catalog coordinates.
 // ra(rad), dec(rad), pmRa(rad/y), pmDec(rad/y), parallax(rad), rv(AU/d)
-export function eraPvstar(p: Vec3, v: Vec3): [Angle, Angle, Angle, Angle, Angle, Velocity] | false {
+export function eraPvstar(p: Readonly<CartesianCoordinate>, v: Readonly<CartesianCoordinate>): [Angle, Angle, Angle, Angle, Angle, Velocity] | false {
 	// Isolate the radial component of the velocity (au/day, inertial).
-	const pu = normalizeVec(p)
-	const vr = dot(pu, v)
-	const ur = mulVecScalar(pu, vr)
+	const pu = Vector3.normalize(p)
+	const vr = Vector3.dot(pu, v)
+	const ur = Vector3.mulScalar(pu, vr)
 
 	// Isolate the transverse component of the velocity (au/day, inertial).
-	const ut = minusVec(v, ur, ur)
-	const vt = length(ut)
+	const ut = Vector3.minus(v, ur, ur)
+	const vt = Vector3.length(ut)
 
 	// Special-relativity dimensionless parameters.
 	const bett = vt / SPEED_OF_LIGHT_AU_DAY
@@ -1117,13 +1119,13 @@ export function eraPvstar(p: Vec3, v: Vec3): [Angle, Angle, Angle, Angle, Angle,
 	const del = -w / (Math.sqrt(1 - w) + 1)
 
 	// Scale inertial tangential velocity vector into observed (au/d).
-	const ust = divVecScalar(ut, d, ut)
+	const ust = Vector3.divScalar(ut, d, ut)
 
 	// Compute observed radial velocity vector (au/d).
-	const usr = mulVecScalar(pu, (SPEED_OF_LIGHT_AU_DAY * (betr - del)) / d)
+	const usr = Vector3.mulScalar(pu, (SPEED_OF_LIGHT_AU_DAY * (betr - del)) / d)
 
 	// Combine the two to obtain the observed velocity vector.
-	const ov = plusVec(usr, ust, usr)
+	const ov = Vector3.plus(usr, ust, usr)
 
 	// Cartesian to spherical.
 	// [ra, dec, r, rad, decd, rd]
@@ -1150,7 +1152,7 @@ export function eraPvstar(p: Vec3, v: Vec3): [Angle, Angle, Angle, Angle, Angle,
 }
 
 // Convert position+velocity from cartesian to spherical coordinates.
-export function eraPv2s(p: Vec3, v: Vec3): [Angle, Angle, Angle, number, number, number] {
+export function eraPv2s(p: Readonly<CartesianCoordinate>, v: Readonly<CartesianCoordinate>): [Angle, Angle, Angle, number, number, number] {
 	// Components of position+velocity vector.
 	let [x, y, z] = p
 	const [xd, yd, zd] = v
@@ -1195,9 +1197,9 @@ export function eraPv2s(p: Vec3, v: Vec3): [Angle, Angle, Angle, number, number,
 }
 
 // P-vector plus scaled p-vector: a + s*b.
-export function eraPpsp(a: Vec3, s: number, b: Vec3, o?: MutVec3) {
-	const sb = mulVecScalar(b, s, o)
-	return plusVec(a, sb, o ?? sb)
+export function eraPpsp(a: Readonly<Vector3.Vector>, s: number, b: Readonly<Vector3.Vector>, o?: Vector3.Vector) {
+	const sb = Vector3.mulScalar(b, s, o)
+	return Vector3.plus(a, sb, o ?? sb)
 }
 
 // Angular separation between two sets of spherical coordinates.
@@ -1206,13 +1208,13 @@ export function eraSeps(al: Angle, ap: Angle, bl: Angle, bp: Angle) {
 }
 
 // Angular separation between two p-vectors.
-export function eraSepp(a: Vec3, b: Vec3) {
+export function eraSepp(a: Readonly<CartesianCoordinate>, b: Readonly<CartesianCoordinate>) {
 	// Sine of angle between the vectors, multiplied by the two moduli.
-	const axb = cross(a, b)
-	const ss = length(axb)
+	const axb = Vector3.cross(a, b)
+	const ss = Vector3.length(axb)
 
 	// Cosine of the angle, multiplied by the two moduli.
-	const cs = dot(a, b)
+	const cs = Vector3.dot(a, b)
 
 	return ss !== 0 || cs !== 0 ? Math.atan2(ss, cs) : 0
 }
@@ -1220,7 +1222,7 @@ export function eraSepp(a: Vec3, b: Vec3) {
 const AULTY = LIGHT_TIME_AU / DAYSEC / DAYSPERJY
 
 // Proper motion and parallax.
-export function eraPmpx(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Angle, rv: Angle, pmt: number, pob: Vec3): MutVec3 {
+export function eraPmpx(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Angle, rv: Angle, pmt: number, pob: Readonly<CartesianCoordinate>): CartesianCoordinate {
 	// Spherical coordinates to unit vector (and useful functions).
 	const sr = Math.sin(rc)
 	const cr = Math.cos(rc)
@@ -1245,18 +1247,19 @@ export function eraPmpx(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Angle, r
 	const p0 = x + dt * pm0 - pxr * pob[0]
 	const p1 = y + dt * pm1 - pxr * pob[1]
 	const p2 = z + dt * pm2 - pxr * pob[2]
+	const p: CartesianCoordinate = [p0, p1, p2]
 
-	return normalizeMutVec([p0, p1, p2])
+	return Vector3.normalize(p, p)
 }
 
 // Apply aberration to transform natural direction into proper direction.
-export function eraAb(pnat: Vec3, v: Vec3, s: number, bm1: number, o?: MutVec3): MutVec3 {
-	const pdv = dot(pnat, v)
+export function eraAb(pnat: Readonly<CartesianCoordinate>, v: Readonly<CartesianCoordinate>, s: number, bm1: number, o?: CartesianCoordinate): CartesianCoordinate {
+	const pdv = Vector3.dot(pnat, v)
 	const w1 = 1 + pdv / (1 + bm1)
 	const w2 = SCHWARZSCHILD_RADIUS_OF_THE_SUN / s
 	let r2 = 0
 
-	const p = o ?? zeroVec()
+	const p = o ?? Vector3.zero()
 
 	for (let i = 0; i < 3; i++) {
 		const w = pnat[i] * bm1 + w1 * v[i] + w2 * (v[i] - pdv * pnat[i])
@@ -1264,40 +1267,40 @@ export function eraAb(pnat: Vec3, v: Vec3, s: number, bm1: number, o?: MutVec3):
 		r2 += w * w
 	}
 
-	return divVecScalar(p, Math.sqrt(r2), p)
+	return Vector3.divScalar(p, Math.sqrt(r2), p)
 }
 
 export interface LdBody {
 	readonly bm: number // mass of the body (solar masses)
 	readonly dl: number // deflection limiter (radians^2/2)
 	// barycentric PV of the body (au, au/day)
-	readonly p: Vec3
-	readonly v: Vec3
+	readonly p: Readonly<Vector3.Vector>
+	readonly v: Readonly<Vector3.Vector>
 }
 
 // For a star, apply light deflection by multiple solar-system bodies,
 // as part of transforming coordinate direction into natural direction.
-export function eraLdn(b: LdBody[], ob: Vec3, sc: Vec3) {
-	const v = zeroVec()
-	const ev = zeroVec()
+export function eraLdn(b: LdBody[], ob: Readonly<CartesianCoordinate>, sc: Readonly<CartesianCoordinate>) {
+	const v = Vector3.zero()
+	const ev = Vector3.zero()
 
 	// Star direction prior to deflection.
-	const sn = cloneVec(sc)
+	const sn = Vector3.clone(sc)
 
 	for (const a of b) {
 		// Body to observer vector at epoch of observation (au).
-		minusVec(ob, a.p, v)
+		Vector3.minus(ob, a.p, v)
 
 		// Minus the time since the light passed the body (days).
 		// Neutralize if the star is "behind" the observer.
-		const dt = Math.min(dot(sn, v) * (LIGHT_TIME_AU / DAYSEC), 0)
+		const dt = Math.min(Vector3.dot(sn, v) * (LIGHT_TIME_AU / DAYSEC), 0)
 
 		// Backtrack the body to the time the light was passing the body.
 		eraPpsp(v, -dt, a.v, ev)
 
 		// Body to observer vector as magnitude and direction.
-		const em = length(ev)
-		divVecScalar(ev, em, ev)
+		const em = Vector3.length(ev)
+		Vector3.divScalar(ev, em, ev)
 
 		// Apply light deflection for this body.
 		eraLd(a.bm, sn, sn, ev, em, a.dl, sn)
@@ -1308,23 +1311,23 @@ export function eraLdn(b: LdBody[], ob: Vec3, sc: Vec3) {
 
 // Apply light deflection by a solar-system body, as part of
 // transforming coordinate direction into natural direction.
-export function eraLd(bm: number, p: Vec3, q: Vec3, e: Vec3, em: number, dlim: number, o?: MutVec3) {
+export function eraLd(bm: number, p: Readonly<CartesianCoordinate>, q: Readonly<CartesianCoordinate>, e: Readonly<CartesianCoordinate>, em: number, dlim: number, o?: CartesianCoordinate) {
 	// q . (q + e).
-	const qpe = plusVec(q, e)
-	const qdqpe = dot(q, qpe)
+	const qpe = Vector3.plus(q, e)
+	const qdqpe = Vector3.dot(q, qpe)
 
 	// 2 x G x bm / ( em x c^2 x ( q . (q + e) ) ).
 	const w = (bm * SCHWARZSCHILD_RADIUS_OF_THE_SUN) / em / Math.max(qdqpe, dlim)
 
 	// p x (e x q).
-	cross(p, cross(e, q, qpe), qpe)
+	Vector3.cross(p, Vector3.cross(e, q, qpe), qpe)
 
 	// Apply the deflection.
-	return plusVec(p, mulVecScalar(qpe, w, qpe), o ?? qpe)
+	return Vector3.plus(p, Vector3.mulScalar(qpe, w, qpe), o ?? qpe)
 }
 
 // Deflection of starlight by the Sun.
-export function eraLdSun(p: Vec3, e: Vec3, em: number, o?: MutVec3) {
+export function eraLdSun(p: Readonly<CartesianCoordinate>, e: Readonly<CartesianCoordinate>, em: number, o?: CartesianCoordinate) {
 	// Deflection limiter (smaller for distant observers).
 	const em2 = Math.max(1, em * em)
 
@@ -1393,7 +1396,7 @@ export function eraC2tcio(rc2i: Readonly<Mat3.Matrix>, era: Angle, rpom: Readonl
 // parameters for transformations between ICRS and geocentric CIRS
 // coordinates. The caller supplies the date, and ERFA models are used
 // to predict the Earth ephemeris and CIP/CIO.
-export function eraApci13(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+export function eraApci13(tdb1: number, tdb2: number, ebpv: PositionAndVelocity, ehp: Readonly<CartesianCoordinate> = ebpv[0], astrom?: EraAstrom) {
 	// Form the equinox based BPN matrix, IAU 2006/2000A.
 	const r = eraPnm06a(tdb1, tdb2)
 
@@ -1417,7 +1420,7 @@ export function eraApci13(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3
 // parameters for transformations between ICRS and geocentric CIRS
 // coordinates. The Earth ephemeris and CIP/CIO are supplied by the caller.
 // TT can be used instead of TDB without any significant impact on accuracy.
-export function eraApci(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, x: Angle, y: Angle, s: Angle, astrom?: EraAstrom) {
+export function eraApci(tdb1: number, tdb2: number, ebpv: PositionAndVelocity, ehp: Readonly<CartesianCoordinate>, x: Angle, y: Angle, s: Angle, astrom?: EraAstrom) {
 	// Star-independent astrometry parameters for geocenter.
 	astrom = eraApcg(tdb1, tdb2, ebpv, ehp, astrom)
 
@@ -1427,13 +1430,13 @@ export function eraApci(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3],
 	return astrom
 }
 
-const ZERO_PV: readonly [Vec3, Vec3] = [zeroVec(), zeroVec()] as const
+const ZERO_PV = [Vector3.zero(), Vector3.zero()] as const
 
 // For a geocentric observer, prepare star-independent astrometry
 // parameters for transformations between ICRS and GCRS coordinates.
 // The Earth ephemeris is supplied by the caller.
 // TT can be used instead of TDB without any significant impact on accuracy.
-export function eraApcg(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3, astrom?: EraAstrom) {
+export function eraApcg(tdb1: number, tdb2: number, ebpv: PositionAndVelocity, ehp: Readonly<CartesianCoordinate>, astrom?: EraAstrom) {
 	// Compute the star-independent astrometry parameters.
 	return eraApcs(tdb1, tdb2, ZERO_PV, ebpv, ehp, astrom)
 }
@@ -1442,7 +1445,7 @@ export function eraApcg(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3],
 // prepare star-independent astrometry parameters for transformations
 // between ICRS and GCRS. The Earth ephemeris is supplied by the caller.
 // TT can be used instead of TDB without any significant impact on accuracy.
-export function eraApcs(tdb1: number, tdb2: number, pv: readonly [Vec3, Vec3], ebpv: readonly [Vec3, Vec3], ehp: Vec3, astrom?: EraAstrom) {
+export function eraApcs(tdb1: number, tdb2: number, pv: PositionAndVelocity, ebpv: PositionAndVelocity, ehp: Readonly<CartesianCoordinate>, astrom?: EraAstrom) {
 	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
 
 	// Time since reference epoch, years (for proper motion calculation).
@@ -1458,8 +1461,8 @@ export function eraApcs(tdb1: number, tdb2: number, pv: readonly [Vec3, Vec3], e
 	}
 
 	// Heliocentric direction and distance (unit vector and au).
-	astrom.em = length(astrom.eh)
-	astrom.eh = divVecScalar(astrom.eh, astrom.em, astrom.eh)
+	astrom.em = Vector3.length(astrom.eh)
+	astrom.eh = Vector3.divScalar(astrom.eh, astrom.em, astrom.eh)
 
 	// Barycentric vel. in units of c, and reciprocal of Lorenz factor.
 	let v2 = 0
@@ -1497,7 +1500,7 @@ export function eraAtccq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distanc
 // Quick ICRS, epoch J2000.0, to CIRS transformation, given precomputed
 // star-independent astrometry parameters.
 // NOTE: Changed to return cartesian coordinate instead of spherical coordinate.
-export function eraAtciq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, astrom: EraAstrom): MutVec3 {
+export function eraAtciq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, astrom: EraAstrom) {
 	// Proper motion and parallax, giving BCRS coordinate direction.
 	const pco = eraPmpx(rc, dc, pr, pd, px, rv, astrom.pmt, astrom.eb)
 
@@ -1508,7 +1511,7 @@ export function eraAtciq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distanc
 // Quick ICRS, epoch J2000.0, to CIRS transformation, given precomputed
 // star-independent astrometry parameters.
 // NOTE: Changed to return cartesian coordinate instead of spherical coordinate.
-export function eraAtciqpmpx(pco: Vec3, astrom: EraAstrom, o?: MutVec3): MutVec3 {
+export function eraAtciqpmpx(pco: Readonly<CartesianCoordinate>, astrom: EraAstrom, o?: CartesianCoordinate) {
 	// Light deflection by the Sun, giving BCRS natural direction.
 	const pnat = eraLdSun(pco, astrom.eh, astrom.em, o)
 
@@ -1534,8 +1537,8 @@ export function eraAtciqpmpx(pco: Vec3, astrom: EraAstrom, o?: MutVec3): MutVec3
 export function eraApco(
 	tdb1: number,
 	tdb2: number,
-	ebpv: readonly [Vec3, Vec3],
-	ehp: Vec3,
+	ebpv: PositionAndVelocity,
+	ehp: CartesianCoordinate,
 	x: number,
 	y: number,
 	s: Angle,
@@ -1608,7 +1611,7 @@ export function eraApco(
 const OM = 1.00273781191135448 * TAU // as unit is AU/day
 
 // Position and velocity of a terrestrial observing station.
-export function eraPvtob(elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle, theta: Angle, radius: Distance = WGS84_RADIUS, flattening: number = WGS84_FLATTENING): readonly [MutVec3, MutVec3] {
+export function eraPvtob(elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle, theta: Angle, radius: Distance = WGS84_RADIUS, flattening: number = WGS84_FLATTENING): PositionAndVelocity {
 	// Geodetic to geocentric transformation (ERFA_WGS84).
 	const xyzm = eraGd2Gce(radius, flattening, elong, phi, hm)
 
@@ -1653,8 +1656,8 @@ export function eraApco13(
 	tc: Temperature,
 	rh: number,
 	wl: number,
-	ebpv: readonly [Vec3, Vec3],
-	ehp: Vec3,
+	ebpv: PositionAndVelocity,
+	ehp: CartesianCoordinate,
 	radius: Distance = WGS84_RADIUS,
 	flattening: number = WGS84_FLATTENING,
 	astrom?: EraAstrom,

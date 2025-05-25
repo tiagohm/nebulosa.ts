@@ -8,7 +8,7 @@ import { ELLIPSOID_PARAMETERS } from './location'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { type Time, Timescale, pmAngles, tdb, tt, ut1 } from './time'
-import { angleBetween, length, minusVec, normalizeVec } from './vector'
+import { Vector3 } from './vector'
 
 export type PositionAndVelocity = readonly [CartesianCoordinate, CartesianCoordinate]
 
@@ -31,7 +31,7 @@ export const DEFAULT_REFRACTION_PARAMETERS: Readonly<Required<RefractionParamete
 
 // Length of position component in AU.
 export function distance(p: CartesianCoordinate): Distance {
-	return length(p)
+	return Vector3.length(p)
 }
 
 // Length of position component in days of light travel time.
@@ -52,7 +52,7 @@ export function parallacticAngle(ha: Angle, dec: Angle, latitude: Angle): Angle 
 
 // Computes the angle between two positions.
 export function separationFrom(a: CartesianCoordinate, b: CartesianCoordinate): Angle {
-	return angleBetween(a, b)
+	return Vector3.angle(a, b)
 }
 
 // TODO: Use era or vsop87 to compute Earth barycentric and heliocentric position. Make the parameter optional.
@@ -65,9 +65,9 @@ export function gcrs(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVel
 	// astrometric coordinate direction and then run the ERFA transform for
 	// no parallax/PM. This ensures reversibility and is more sensible for
 	// inside solar system objects.
-	const nc = minusVec(icrs, astrom.eb)
+	const nc = Vector3.minus(icrs, astrom.eb)
 
-	return eraAtciqpmpx(normalizeVec(nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
+	return eraAtciqpmpx(Vector3.normalize(nc, nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
 }
 
 // TODO: Use era or vsop87 to compute Earth barycentric and heliocentric position. Make the parameter optional.
@@ -80,9 +80,9 @@ export function cirs(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVel
 	// astrometric coordinate direction and then run the ERFA transform for
 	// no parallax/PM. This ensures reversibility and is more sensible for
 	// inside solar system objects.
-	const nc = minusVec(icrs, astrom.eb)
+	const nc = Vector3.minus(icrs, astrom.eb)
 
-	return eraAtciqpmpx(normalizeVec(nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
+	return eraAtciqpmpx(Vector3.normalize(nc, nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
 }
 
 function hadecAltaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate, refraction?: RefractionParameters) {
@@ -101,9 +101,9 @@ function hadecAltaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelo
 	const wl = refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl
 	const [astrom] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp ?? ebpv[0], radius, flattening)
 	// Correct for parallax to find BCRS direction from observer (as in erfa.pmpx)
-	const nc = minusVec(icrs, astrom.eb)
+	const nc = Vector3.minus(icrs, astrom.eb)
 	// Convert to topocentric CIRS
-	const [ri, di] = eraC2s(...eraAtciqpmpx(normalizeVec(nc, nc), astrom, nc))
+	const [ri, di] = eraC2s(...eraAtciqpmpx(Vector3.normalize(nc, nc), astrom, nc))
 	// Now perform observed conversion
 	return eraAtioq(normalizeAngle(ri), di, astrom)
 }

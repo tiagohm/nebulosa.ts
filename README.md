@@ -517,30 +517,30 @@ tirsRotationAt(time) // TIRS rotation matrix at time
 ### Vector
 
 ```ts
-zeroVec() // Vector filled with zeroes
-xAxis() // X-axis vector
-yAxis() // Y-axis vector
-zAxis() // Z-axis vector
-cloneVec(v) // Clone the vector
-normalizeVec(v) // Normalize the vector
-length(v) // Length of the vector
-distanceBetween(v, u) // Distance between vectors
-angle(v, u) // Angle between vectors
-dot(v, u) // Dot product between vectors
-cross(v, u) // Cross product between vectors
-latitude(v)
-longitude(v)
-negateVec(v) // Negate the vector
-plusVecScalar(v, 2) // Sum the vector by a scalar
-minusVecScalar(v, 2) // Subtract the vector by a scalar
-mulSVeccalar(v, 2) // Multiply the vector by a scalar
-divVecScalar(v, 2) // Divide the vector by a scalar
-plusVec(v, u) // Sum two vectors
-minusVec(v, u) // Subtract two vectors
-mulVec(v, u) // Multiply two vectors
-divVec(v, u) // Divide two vectors
-rotateByRodrigues(v, axis, PI / 4) // Rotate the vector around an axis
-plane(v, u, w) // Vector from plane of three vectors
+Vector3.zero() // Vector filled with zeroes
+Vector3.xAxis() // X-axis vector
+Vector3.yAxis() // Y-axis vector
+Vector3.zAxis() // Z-axis vector
+Vector3.clone(v) // Clone the vector
+Vector3.normalize(v) // Normalize the vector
+Vector3.length(v) // Length of the vector
+Vector3.distance(v, u) // Distance between vectors
+Vector3.angle(v, u) // Angle between vectors
+Vector3.dot(v, u) // Dot product between vectors
+Vector3.cross(v, u) // Cross product between vectors
+Vector3.latitude(v)
+Vector3.longitude(v)
+Vector3.negate(v) // Negate the vector
+Vector3.plusScalar(v, 2) // Sum the vector by a scalar
+Vector3.minusScalar(v, 2) // Subtract the vector by a scalar
+Vector3.mulScalar(v, 2) // Multiply the vector by a scalar
+Vector3.divScalar(v, 2) // Divide the vector by a scalar
+Vector3.plus(v, u) // Sum two vectors
+Vector3.minus(v, u) // Subtract two vectors
+Vector3.mul(v, u) // Multiply two vectors
+Vector3.div(v, u) // Divide two vectors
+Vector3.rotateByRodrigues(v, axis, PI / 4) // Rotate the vector around an axis
+Vector3.plane(v, u, w) // Vector from plane of three vectors
 ```
 
 ### Velocity

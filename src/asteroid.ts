@@ -7,7 +7,7 @@ import type { Distance } from './distance'
 import { Mat3 } from './matrix'
 import { type MPCOrbit, type MPCOrbitComet, unpackDate } from './mpcorb'
 import { type Time, Timescale, subtractTime, tdb, time, timeYMD, timeYMDF, tt } from './time'
-import { type MutVec3, type Vec3, angleBetween, cross, divVecScalar, dot, length, minusVec, mulVecScalar, plusVec, zeroVec } from './vector'
+import { Vector3 } from './vector'
 
 const REFERENCE_FRAME = Mat3.transpose(ECLIPTIC_J2000_MATRIX)
 
@@ -38,7 +38,7 @@ export type StumpffOutput = [number, number, number, number]
 
 interface PropagationParameters {
 	readonly f: number
-	readonly hv: Vec3 // cross product between position & velocity
+	readonly hv: Vector3.Vector // cross product between position & velocity
 	readonly hvl: number // length of hv
 	readonly r0: number // length of position vector
 	readonly v0: number // length of velocity vector
@@ -55,7 +55,7 @@ export interface OsculatingElements {
 	readonly argumentOfLatitude: Angle
 	readonly argumentOfPeriapsis: Angle
 	readonly eccentricAnomaly: Angle
-	readonly eccentricityVector: Vec3
+	readonly eccentricityVector: Readonly<Vector3.Vector>
 	readonly eccentricity: number
 	readonly inclination: Angle
 	readonly longitudeOfAscendingNode: Angle
@@ -63,7 +63,7 @@ export interface OsculatingElements {
 	readonly meanAnomaly: Angle
 	readonly meanLongitude: Angle
 	readonly meanMotionPerDay: Angle
-	readonly nodeVector: Vec3
+	readonly nodeVector: Readonly<Vector3.Vector>
 	readonly periapsisDistance: Distance
 	readonly periapsisTime: Time
 	readonly periodInDays: number
@@ -139,15 +139,15 @@ export class KeplerOrbit implements OsculatingElements {
 
 	get eccentricityVector() {
 		if (this.oe.eccentricityVector) return this.oe.eccentricityVector
-		const rv0 = mulVecScalar(this.position, this.propagation.v0 ** 2 - this.mu / this.propagation.r0)
-		const vrv = mulVecScalar(this.velocity, this.propagation.rv)
-		this.oe.eccentricityVector = divVecScalar(minusVec(rv0, vrv, rv0), this.mu, rv0)
+		const rv0 = Vector3.mulScalar(this.position, this.propagation.v0 ** 2 - this.mu / this.propagation.r0)
+		const vrv = Vector3.mulScalar(this.velocity, this.propagation.rv)
+		this.oe.eccentricityVector = Vector3.divScalar(Vector3.minus(rv0, vrv, rv0), this.mu, rv0)
 		return this.oe.eccentricityVector
 	}
 
 	get eccentricity() {
 		if (this.oe.eccentricity) return this.oe.eccentricity
-		this.oe.eccentricity = length(this.eccentricityVector)
+		this.oe.eccentricity = Vector3.length(this.eccentricityVector)
 		return this.oe.eccentricity
 	}
 
@@ -356,22 +356,22 @@ const LN_HALF_DOUBLE_MAX = 709.0895657128241
 const LN_DOUBLE_MAX = 709.782712893384
 
 function propagationParameters(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number = GM_SUN_PITJEVA_2005): PropagationParameters {
-	const hv = cross(position, velocity)
-	const h2 = dot(hv, hv)
+	const hv = Vector3.cross(position, velocity)
+	const h2 = Vector3.dot(hv, hv)
 
 	if (h2 === 0) {
 		throw new Error('motion is not conical')
 	}
 
-	const r0 = length(position)
-	const rv = dot(position, velocity)
+	const r0 = Vector3.length(position)
+	const rv = Vector3.dot(position, velocity)
 	const hvl = Math.sqrt(h2)
-	const v0 = length(velocity)
+	const v0 = Vector3.length(velocity)
 
-	const hvec = cross(velocity, hv)
-	divVecScalar(hvec, mu, hvec)
-	minusVec(hvec, divVecScalar(position, r0), hvec)
-	const e = length(hvec)
+	const hvec = Vector3.cross(velocity, hv)
+	Vector3.divScalar(hvec, mu, hvec)
+	Vector3.minus(hvec, Vector3.divScalar(position, r0), hvec)
+	const e = Vector3.length(hvec)
 	const q = h2 / (mu * (1 + e))
 
 	const f = 1 - e
@@ -471,11 +471,11 @@ function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate,
 	const pcdot = -(qovr0 / br) * x * c[1]
 	const vcdot = 1 - (bq / br) * x2 * c[2]
 
-	const p = zeroVec()
-	const v = zeroVec()
+	const p = Vector3.zero()
+	const v = Vector3.zero()
 
-	plusVec(mulVecScalar(position, pc, s as never), mulVecScalar(velocity, vc, p), p)
-	plusVec(mulVecScalar(position, pcdot, s as never), mulVecScalar(velocity, vcdot, v), v)
+	Vector3.plus(Vector3.mulScalar(position, pc, s as never), Vector3.mulScalar(velocity, vc, p), p)
+	Vector3.plus(Vector3.mulScalar(position, pcdot, s as never), Vector3.mulScalar(velocity, vcdot, v), v)
 
 	return [p, v]
 }
@@ -527,18 +527,18 @@ export function argumentOfLatitude(w: Angle, v: Angle) {
 	return normalizeAngle(w + v)
 }
 
-export function argumentOfPeriapsis(ev: Vec3, nv: Vec3, hv: Vec3): Angle {
+export function argumentOfPeriapsis(ev: Readonly<Vector3.Vector>, nv: Readonly<Vector3.Vector>, hv: Readonly<Vector3.Vector>): Angle {
 	// Circular
-	if (length(ev) < 1e-15) return 0
+	if (Vector3.length(ev) < 1e-15) return 0
 
 	// Equatorial and not circular
-	if (length(nv) < 1e-15) {
+	if (Vector3.length(nv) < 1e-15) {
 		const a = normalizeAngle(Math.atan2(ev[1], ev[0]))
 		return hv[2] >= 0 ? a : normalizeAngle(-a)
 	}
 
 	// Not circular and not equatorial
-	const a = angleBetween(nv, ev)
+	const a = Vector3.angle(nv, ev)
 	return ev[2] > 0 ? a : normalizeAngle(-a)
 }
 
@@ -548,20 +548,20 @@ export function eccentricAnomaly(v: number, e: number) {
 	else return 0
 }
 
-export function eccentricityVector(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number, o?: MutVec3): MutVec3 {
-	const r = length(position)
-	const v = length(velocity)
-	const a = mulVecScalar(position, v ** 2 - mu / r, o)
-	const b = mulVecScalar(velocity, dot(position, velocity))
-	return divVecScalar(minusVec(a, b, a), mu, a)
+export function eccentricityVector(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number, o?: Vector3.Vector): Vector3.Vector {
+	const r = Vector3.length(position)
+	const v = Vector3.length(velocity)
+	const a = Vector3.mulScalar(position, v ** 2 - mu / r, o)
+	const b = Vector3.mulScalar(velocity, Vector3.dot(position, velocity))
+	return Vector3.divScalar(Vector3.minus(a, b, a), mu, a)
 }
 
-export function inclination(hv: Vec3) {
-	// return angleBetween(hv, [0, 0, 1])
-	return Math.acos(hv[2] / length(hv))
+export function inclination(hv: Readonly<Vector3.Vector>) {
+	// return Vector3.angle(hv, [0, 0, 1])
+	return Math.acos(hv[2] / Vector3.length(hv))
 }
 
-export function longitudeOfAscendingNode(hv: Vec3, i: Angle): Angle {
+export function longitudeOfAscendingNode(hv: Readonly<Vector3.Vector>, i: Angle): Angle {
 	return i !== 0 ? normalizeAngle(Math.atan2(hv[0], -hv[1])) : 0
 }
 
@@ -585,10 +585,10 @@ export function meanMotion(a: Distance, mu: number): Angle {
 	return Math.sqrt(mu / Math.abs(a) ** 3)
 }
 
-export function nodeVector(hv: Vec3) {
-	const nv: Vec3 = [-hv[1], hv[0], 0]
-	const n = length(nv)
-	return n !== 0 ? divVecScalar(nv, n, nv as never) : nv
+export function nodeVector(hv: Readonly<Vector3.Vector>) {
+	const nv = [-hv[1], hv[0], 0] as const
+	const n = Vector3.length(nv)
+	return n !== 0 ? Vector3.divScalar(nv, n, nv as never) : nv
 }
 
 export function periapsisDistance(p: Distance, e: number): Distance {
@@ -600,7 +600,7 @@ export function period(a: Distance, mu: number) {
 }
 
 export function semiLatusRectum(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number) {
-	return length(cross(position, velocity)) ** 2 / mu
+	return Vector3.length(Vector3.cross(position, velocity)) ** 2 / mu
 }
 
 export function semiMajorAxis(p: Distance, e: number) {
@@ -620,23 +620,23 @@ export function timeSincePeriapsis(M: Angle, n: Angle, v: Angle, p: Distance, mu
 	}
 }
 
-export function trueAnomaly(ev: Vec3, position: CartesianCoordinate, velocity: CartesianCoordinate, nv: Vec3) {
+export function trueAnomaly(ev: Readonly<Vector3.Vector>, position: CartesianCoordinate, velocity: CartesianCoordinate, nv: Readonly<Vector3.Vector>) {
 	let v = 0
-	const evl = length(ev)
+	const evl = Vector3.length(ev)
 
 	// Not circular
 	if (evl > 1e-15) {
-		const a = angleBetween(ev, position)
-		v = dot(position, velocity) > 0 ? a : normalizeAngle(-a)
+		const a = Vector3.angle(ev, position)
+		v = Vector3.dot(position, velocity) > 0 ? a : normalizeAngle(-a)
 	}
 	// Circular and equatorial
-	else if (length(nv) < 1e-15) {
-		const a = Math.acos(position[0] / length(position))
+	else if (Vector3.length(nv) < 1e-15) {
+		const a = Math.acos(position[0] / Vector3.length(position))
 		v = velocity[0] < 0 ? a : normalizeAngle(-a)
 	}
 	// Circular and not equatorial
 	else {
-		const a = angleBetween(nv, position)
+		const a = Vector3.angle(nv, position)
 		v = position[2] >= 0 ? a : normalizeAngle(-a)
 	}
 

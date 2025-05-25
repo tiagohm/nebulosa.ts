@@ -4,7 +4,7 @@ import { eraGc2Gde, eraSp00 } from './erfa'
 import { itrsRotationAt } from './itrs'
 import { Mat3 } from './matrix'
 import { type Time, gast, gmst, pmAngles, tt } from './time'
-import type { Vec3 } from './vector'
+import type { Vector3 } from './vector'
 
 // An Earth ellipsoid that maps latitudes and longitudes to |xyz| positions.
 export enum Ellipsoid {
@@ -46,9 +46,9 @@ export interface GeographicPosition {
 	readonly elevation: Distance
 	readonly ellipsoid: Ellipsoid
 
-	itrs?: Vec3
-	rLat?: Mat3.Matrix
-	rLatLon?: Mat3.Matrix
+	itrs?: Readonly<Vector3.Vector>
+	rLat?: Readonly<Mat3.Matrix>
+	rLatLon?: Readonly<Mat3.Matrix>
 }
 
 export function geodeticLocation(longitude: Angle = 0, latitude: Angle = 0, elevation: Distance = 0, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
@@ -56,7 +56,7 @@ export function geodeticLocation(longitude: Angle = 0, latitude: Angle = 0, elev
 }
 
 export function geocentricLocation(x: number, y: number, z: number, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
-	const itrs: Vec3 = [x, y, z]
+	const itrs = [x, y, z] as const
 	const params = ELLIPSOID_PARAMETERS[ellipsoid]
 	const [longitude, latitude, elevation] = eraGc2Gde(params.radius, params.flattening, x, y, z)
 	return { longitude, latitude, elevation, ellipsoid, itrs }
