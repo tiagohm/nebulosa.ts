@@ -286,32 +286,28 @@ twoProduct(0.5, 0.4) // Multiply both exactly in two 64-bit floats
 
 ```ts
 const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-zeroMat() // Matrix filled with zeroes
-identity() // Identity matrix
-rotX(PI, m) // Rotate the matrix around x-axis
-rotY(PI, m) // Rotate the matrix around y-axis
-rotZ(PI, m) // Rotate the matrix around z-axis
-cloneMat(m) // Clone the matrix
-copyMat(m, n) // Copy the matrix to another matrix
-determinant(m) // Determinant of the matrix
-trace(m) // Trace of the matrix
-transpose(m) // Transpose the matrix
-transposeMut(m) // Transpose the matrix on it
-flipX(m) // Flip the x-axis of the matrix
-flipXMut(m) // Flip the x-axis of the matrix on it
-flipY(m) // Flip the y-axis of the matrix
-flipYMut(m) // Flip the y-axis of the matrix on it
-negateMat(m) // Negate the matrix
-negateMatMut(m) // Negate the matrix on it
-plusMatScalar(m, 2) // Sum the matrix by a scalar
-minusMatScalar(m, 2) // Subtract the matrix by a scalar
-mulMatScalar(m, 2) // Multiply the matrix by a scalar
-divMatScalar(m, 2) // Divide the matrix by a scalar
-plusMat(m, n) // Sum two matrices
-minusMat(m, n) // Subtract two matrices
-mulMat(m, n) // Multiply two matrices
-mulMatVec(m, v) // Multiply the matrix by a vector
-mulTransposeMatVec(m, v) // Multiply the transpose of the matrix by a vector
+Matrix3.zero() // Matrix filled with zeroes
+Matrix3.identity() // Identity matrix
+Matrix3.rotX(PI, m) // Rotate the matrix around x-axis
+Matrix3.rotY(PI, m) // Rotate the matrix around y-axis
+Matrix3.rotZ(PI, m) // Rotate the matrix around z-axis
+Matrix3.clone(m) // Clone the matrix
+Matrix3.copy(m, n) // Copy the matrix to another matrix
+Matrix3.determinant(m) // Determinant of the matrix
+Matrix3.trace(m) // Trace of the matrix
+Matrix3.transpose(m) // Transpose the matrix
+Matrix3.flipX(m) // Flip the x-axis of the matrix
+Matrix3.flipY(m) // Flip the y-axis of the matrix
+Matrix3.negate(m) // Negate the matrix
+Matrix3.plusScalar(m, 2) // Sum the matrix by a scalar
+Matrix3.minusScalar(m, 2) // Subtract the matrix by a scalar
+Matrix3.mulScalar(m, 2) // Multiply the matrix by a scalar
+Matrix3.divScalar(m, 2) // Divide the matrix by a scalar
+Matrix3.plus(m, n) // Sum two matrices
+Matrix3.minus(m, n) // Subtract two matrices
+Matrix3.mul(m, n) // Multiply two matrices
+Matrix3.mulVec3(m, v) // Multiply the matrix by a vector
+Matrix3.mulTransposeVec3(m, v) // Multiply the transpose of the matrix by a vector
 ```
 
 ### Meeus

@@ -6,7 +6,8 @@
 	"scripts": {
 		"postinstall": "bun run native/copy.ts",
 		"lint": "biome lint --write src/",
-		"format": "biome format --write src/"
+		"format": "biome format --write src/",
+        "typecheck": "tsc"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "latest",
@@ -15,6 +16,7 @@
 	},
 	"peerDependencies": {
 		"dayjs": "1.11.13",
+		"typescript": "latest",
 		"utility-types": "latest"
 	},
 	"optionalDependencies": {

@@ -28,11 +28,24 @@ jobs:
                 os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025]
         runs-on: ${{ matrix.os }}
         steps:
-            - uses: actions/checkout@v4
+            - name: Checkout
+              uses: actions/checkout@v4
               with:
                 submodules: 'recursive'
                 lfs: true
-            - uses: oven-sh/setup-bun@v2
-            - run: bun install --production
-            - run: bun run native/copy.ts
-            - run: bun test --timeout 1000
+
+            - name: Setup Bun
+              uses: oven-sh/setup-bun@v2
+
+            - name: Install Dependencies
+              run: bun i --production
+
+            - name: Copy Native Files
+              run: bun run native/copy.ts
+
+            - name: Type Check
+              if: ${{ matrix.os == 'ubuntu-24.04' }}
+              run: bun typecheck
+
+            - name: Run Tests
+              run: bun test --timeout 1000

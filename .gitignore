@@ -1,7 +1,7 @@
-.cache
 node_modules/
 *.tsbuildinfo
 bun.lockb
 bun.lock
 __pycache__/
 *.shared
+.dist/

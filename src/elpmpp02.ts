@@ -1,6 +1,6 @@
 import { ASEC2RAD, AU_KM, DAYSPERJC, DEG2RAD, J2000 } from './constants'
 import { ELPMPP02_MAIN, ELPMPP02_PERT } from './elpmpp02.data'
-import { type Mat3, mulMatVec } from './matrix'
+import { Mat3 } from './matrix'
 import { type Time, tdb } from './time'
 import type { MutVec3 } from './vector'
 
@@ -59,8 +59,7 @@ const Q4 = -0.1371808e-11
 const Q5 = -0.320334e-14
 
 const RA0 = 384747.961370173 / 384747.980674318
-
-const REFERENCE_FRAME: Mat3 = [1, 0.00000044036, -0.000000190919, -0.000000479966, 0.917482137087, -0.397776982902, 0, 0.397776982902, 0.917482137087]
+const REFERENCE_FRAME = [1, 0.00000044036, -0.000000190919, -0.000000479966, 0.917482137087, -0.397776982902, 0, 0.397776982902, 0.917482137087] as const
 
 // Geocentric cartesian position & velocity of Moon.
 export function moon(time: Time) {
@@ -155,5 +154,5 @@ export function moon(time: Time) {
 	v[1] = (pwqw * xp1 + qw2 * xp2 - qwra * xp3 + ppwqpw * x1 + qpw2 * x2 - qpwra * x3) / DAYSPERJC / AU_KM
 	v[2] = (-pwra * xp1 + qwra * xp2 + (pw2 + qw2 - 1) * xp3 - ppwra * x1 + qpwra * x2 + (ppw2 + qpw2) * x3) / DAYSPERJC / AU_KM
 
-	return [mulMatVec(REFERENCE_FRAME, p, p), mulMatVec(REFERENCE_FRAME, v, v)] as const
+	return [Mat3.mulVec3(REFERENCE_FRAME, p, p), Mat3.mulVec3(REFERENCE_FRAME, v, v)] as const
 }

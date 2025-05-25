@@ -2,7 +2,7 @@ import { type Angle, normalizeAngle } from './angle'
 import { type Distance, meter } from './distance'
 import { eraGc2Gde, eraSp00 } from './erfa'
 import { itrsRotationAt } from './itrs'
-import { type Mat3, type MutMat3, flipXMut, mulMat, rotX, rotY, rotZ } from './matrix'
+import { Mat3 } from './matrix'
 import { type Time, gast, gmst, pmAngles, tt } from './time'
 import type { Vec3 } from './vector'
 
@@ -47,8 +47,8 @@ export interface GeographicPosition {
 	readonly ellipsoid: Ellipsoid
 
 	itrs?: Vec3
-	rLat?: Mat3
-	rLatLon?: Mat3
+	rLat?: Mat3.Matrix
+	rLatLon?: Mat3.Matrix
 }
 
 export function geodeticLocation(longitude: Angle = 0, latitude: Angle = 0, elevation: Distance = 0, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
@@ -64,14 +64,15 @@ export function geocentricLocation(x: number, y: number, z: number, ellipsoid: E
 
 function rLat(location: GeographicPosition) {
 	if (location.rLat) return location.rLat
-	location.rLat = flipXMut(rotY(-location.latitude))
+	const m = Mat3.rotY(-location.latitude)
+	location.rLat = Mat3.flipX(m, m)
 	return location.rLat
 }
 
 function rLatLon(location: GeographicPosition) {
 	if (location.rLatLon) return location.rLatLon
-	const m = rotZ(location.longitude)
-	location.rLatLon = mulMat(rLat(location), m, m)
+	const m = Mat3.rotZ(location.longitude)
+	location.rLatLon = Mat3.mul(rLat(location), m, m)
 	return location.rLatLon
 }
 
@@ -82,7 +83,7 @@ export function lst(location: GeographicPosition, time: Time, mean: boolean = fa
 	if (tio === true) {
 		const [sprime, xp, yp] = pmAngles(time)
 		// The order of operation must be reversed in relation to astropy?
-		const r = rotZ(location.longitude, rotX(-yp, rotY(-xp, rotZ(theta + sprime))))
+		const r = Mat3.rotZ(location.longitude, Mat3.rotX(-yp, Mat3.rotY(-xp, Mat3.rotZ(theta + sprime))))
 		return Math.atan2(r[1], r[0])
 	} else if (tio === 'sp') {
 		const t = tt(time)
@@ -95,8 +96,8 @@ export function lst(location: GeographicPosition, time: Time, mean: boolean = fa
 }
 
 // Computes rotation from GCRS to this location's altazimuth system.
-export function gcrsRotationAt(location: GeographicPosition, time: Time): MutMat3 {
-	return mulMat(rLatLon(location), itrsRotationAt(time))
+export function gcrsRotationAt(location: GeographicPosition, time: Time) {
+	return Mat3.mul(rLatLon(location), itrsRotationAt(time))
 }
 
 // The Earth's polar radius.

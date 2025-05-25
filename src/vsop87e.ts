@@ -1,6 +1,6 @@
 import type { PositionAndVelocity } from './astrometry'
 import { COS_OBL_J2000, DAYSPERJM, J2000, SIN_OBL_J2000 } from './constants'
-import { mulMatVec } from './matrix'
+import { Mat3 } from './matrix'
 import { type Time, tdb } from './time'
 import { zeroVec } from './vector'
 import { VSOP87E_EARTH_DATA, VSOP87E_JUPITER_DATA, VSOP87E_MARS_DATA, VSOP87E_MERCURY_DATA, VSOP87E_NEPTUNE_DATA, VSOP87E_SATURN_DATA, VSOP87E_SUN_DATA, VSOP87E_URANUS_DATA, VSOP87E_VENUS_DATA } from './vsop87e.data'
@@ -108,5 +108,5 @@ function compute(time: Time, data: readonly number[][][]): PositionAndVelocity {
 		v[k] /= DAYSPERJM
 	}
 
-	return [mulMatVec(REFERENCE_FRAME_MATRIX, p, p), mulMatVec(REFERENCE_FRAME_MATRIX, v, v)]
+	return [Mat3.mulVec3(REFERENCE_FRAME_MATRIX, p, p), Mat3.mulVec3(REFERENCE_FRAME_MATRIX, v, v)]
 }

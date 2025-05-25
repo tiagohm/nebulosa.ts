@@ -5,7 +5,7 @@ import { delta, xy } from './iers'
 import { itrs } from './itrs'
 import type { GeographicPosition } from './location'
 import { twoProduct, twoSum } from './math'
-import { type Mat3, type MutMat3, cloneMat, identity, mulMat, rotX, rotZ } from './matrix'
+import { Mat3 } from './matrix'
 
 // The specification for measuring time.
 export enum Timescale {
@@ -37,11 +37,11 @@ export interface TimeExtra {
 	era?: Angle
 	meanObliquity?: Angle
 	nutation?: readonly [Angle, Angle]
-	precession?: Mat3
-	precessionNutation?: Mat3
+	precession?: Mat3.Matrix
+	precessionNutation?: Mat3.Matrix
 	pmAngles?: readonly [Angle, Angle, Angle] // sprime, x, y
-	pmMatrix?: Mat3
-	equationOfOrigins?: Mat3
+	pmMatrix?: Mat3.Matrix
+	equationOfOrigins?: Mat3.Matrix
 }
 
 // Represents and manipulates an instant of time for astronomy.
@@ -88,7 +88,7 @@ export function pmAngles(time: Time, pm?: PolarMotion): readonly [Angle, Angle, 
 }
 
 // Computes the polar motion matrix from the given time.
-export function pmMatrix(time: Time, pm?: PolarMotion): Mat3 {
+export function pmMatrix(time: Time, pm?: PolarMotion): Mat3.Matrix {
 	if (time.extra?.pmMatrix) return time.extra.pmMatrix
 	const [sprime, x, y] = pmAngles(time, pm)
 	const m = eraPom00(x, y, sprime)
@@ -419,8 +419,8 @@ export function trueObliquity(time: Time): Angle {
 }
 
 // Computes the rotation matrix of the true obliquity of the ecliptic.
-export function trueEclipticRotation(time: Time): MutMat3 {
-	return rotX(trueObliquity(time), cloneMat(precessionNutationMatrix(time)))
+export function trueEclipticRotation(time: Time): Mat3.Matrix {
+	return Mat3.rotX(trueObliquity(time), Mat3.clone(precessionNutationMatrix(time)))
 }
 
 // Computes the nutation angles.
@@ -433,7 +433,7 @@ export function nutationAngles(time: Time): readonly [Angle, Angle] {
 }
 
 // Computes the 3x3 precession matrix.
-export function precessionMatrix(time: Time): Mat3 {
+export function precessionMatrix(time: Time): Mat3.Matrix {
 	if (time.extra?.precession) return time.extra.precession
 	const t = tt(time)
 	const precession = eraPmat06(t.day, t.fraction)
@@ -442,7 +442,7 @@ export function precessionMatrix(time: Time): Mat3 {
 }
 
 // Computes the 3x3 precession-nutation matrix (including frame bias).
-export function precessionNutationMatrix(time: Time): Mat3 {
+export function precessionNutationMatrix(time: Time): Mat3.Matrix {
 	if (time.extra?.precessionNutation) return time.extra.precessionNutation
 	const t = tt(time)
 	const precessionNutation = eraPnm06a(t.day, t.fraction)
@@ -451,10 +451,10 @@ export function precessionNutationMatrix(time: Time): Mat3 {
 }
 
 // Computes the 3x3 matrix of Equation of Origins in cycles.
-export function equationOfOrigins(time: Time): Mat3 {
+export function equationOfOrigins(time: Time): Mat3.Matrix {
 	if (time.extra?.equationOfOrigins) return time.extra.equationOfOrigins
-	const equationOfOrigins = identity()
-	mulMat(rotZ(gast(time) - era(time), equationOfOrigins), precessionNutationMatrix(time), equationOfOrigins)
+	const equationOfOrigins = Mat3.identity()
+	Mat3.mul(Mat3.rotZ(gast(time) - era(time), equationOfOrigins), precessionNutationMatrix(time), equationOfOrigins)
 	extra(time).equationOfOrigins = equationOfOrigins
 	return equationOfOrigins
 }
