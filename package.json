@@ -7,14 +7,14 @@
 		"postinstall": "bun run native/copy.ts",
 		"lint": "biome lint --write src/",
 		"format": "biome format --write src/",
-        "typecheck": "tsc"
+		"typecheck": "tsc"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "latest",
-		"@types/bun": "latest",
-		"@types/node": "latest"
+		"@biomejs/biome": "latest"
 	},
 	"peerDependencies": {
+		"@types/bun": "latest",
+		"@types/node": "latest",
 		"dayjs": "1.11.13",
 		"typescript": "latest",
 		"utility-types": "latest"
