@@ -246,8 +246,8 @@ export class KeplerOrbit implements OsculatingElements {
 		const pv = propagate(this.position, this.velocity, tt(this.epoch), tt(time), this.propagation)
 
 		if (this.rotation) {
-			Mat3.mulVec3(this.rotation, pv[0], pv[0] as never)
-			Mat3.mulVec3(this.rotation, pv[1], pv[1] as never)
+			Mat3.mulVec(this.rotation, pv[0], pv[0] as never)
+			Mat3.mulVec(this.rotation, pv[1], pv[1] as never)
 		}
 
 		return pv

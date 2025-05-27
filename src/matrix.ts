@@ -196,7 +196,7 @@ export namespace Mat3 {
 	}
 
 	// Multiplies the matrix by a vector.
-	export function mulVec3(a: Readonly<Matrix>, b: Readonly<Vector3.Vector>, o?: Vector3.Vector): Vector3.Vector {
+	export function mulVec(a: Readonly<Matrix>, b: Readonly<Vector3.Vector>, o?: Vector3.Vector): Vector3.Vector {
 		const c = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 		const d = a[3] * b[0] + a[4] * b[1] + a[5] * b[2]
 		const e = a[6] * b[0] + a[7] * b[1] + a[8] * b[2]

@@ -90,11 +90,11 @@ test('flipY', () => {
 test('mulVec', () => {
 	const m: Mat3.Matrix = [2, 3, 2, 3, 2, 3, 3, 4, 5]
 	const v: Vector3.Vector = [2, 3, 2]
-	const u = Mat3.mulVec3(m, v)
+	const u = Mat3.mulVec(m, v)
 	expect(u).not.toEqual(v)
 	expect(u).toEqual([17, 18, 28])
 
-	Mat3.mulVec3(m, v, v)
+	Mat3.mulVec(m, v, v)
 	expect(v).toEqual(u)
 })
 

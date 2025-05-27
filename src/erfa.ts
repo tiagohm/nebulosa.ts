@@ -1519,7 +1519,7 @@ export function eraAtciqpmpx(pco: Readonly<CartesianCoordinate>, astrom: EraAstr
 	const ppr = eraAb(pnat, astrom.v, astrom.em, astrom.bm1, pnat)
 
 	// Bias-precession-nutation, giving CIRS proper direction.
-	const pi = Mat3.mulVec3(astrom.bpn, ppr, ppr)
+	const pi = Mat3.mulVec(astrom.bpn, ppr, ppr)
 
 	// ICRS astrometric RA,Dec.
 	// const s = eraC2s(...pi)

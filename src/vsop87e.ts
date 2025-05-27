@@ -108,5 +108,5 @@ function compute(time: Time, data: readonly number[][][]): PositionAndVelocity {
 		v[k] /= DAYSPERJM
 	}
 
-	return [Mat3.mulVec3(REFERENCE_FRAME_MATRIX, p, p), Mat3.mulVec3(REFERENCE_FRAME_MATRIX, v, v)]
+	return [Mat3.mulVec(REFERENCE_FRAME_MATRIX, p, p), Mat3.mulVec(REFERENCE_FRAME_MATRIX, v, v)]
 }

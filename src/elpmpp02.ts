@@ -154,5 +154,5 @@ export function moon(time: Time) {
 	v[1] = (pwqw * xp1 + qw2 * xp2 - qwra * xp3 + ppwqpw * x1 + qpw2 * x2 - qpwra * x3) / DAYSPERJC / AU_KM
 	v[2] = (-pwra * xp1 + qwra * xp2 + (pw2 + qw2 - 1) * xp3 - ppwra * x1 + qpwra * x2 + (ppw2 + qpw2) * x3) / DAYSPERJC / AU_KM
 
-	return [Mat3.mulVec3(REFERENCE_FRAME, p, p), Mat3.mulVec3(REFERENCE_FRAME, v, v)] as const
+	return [Mat3.mulVec(REFERENCE_FRAME, p, p), Mat3.mulVec(REFERENCE_FRAME, v, v)] as const
 }

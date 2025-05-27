@@ -12,5 +12,5 @@ export function icrs(ra: Angle, dec: Angle, distance: Distance = 1): CartesianCo
 
 // Convert the ICRS cartesian coordinate to FK5 cartesian coordinate.
 export function icrsToFk5(p: CartesianCoordinate): CartesianCoordinate {
-	return Mat3.mulVec3(FK5_MATRIX, p)
+	return Mat3.mulVec(FK5_MATRIX, p)
 }
