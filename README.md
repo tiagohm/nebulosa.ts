@@ -308,6 +308,11 @@ Matrix3.minus(m, n) // Subtract two matrices
 Matrix3.mul(m, n) // Multiply two matrices
 Matrix3.mulVec3(m, v) // Multiply the matrix by a vector
 Matrix3.mulTransposeVec3(m, v) // Multiply the transpose of the matrix by a vector
+
+const LU = new LUDecomposition(m)
+LU.determinant // Determinant of the matrix
+LU.invert() // Invert the matrix
+LU.solve(v) // Solve A*x=B
 ```
 
 ### Meeus

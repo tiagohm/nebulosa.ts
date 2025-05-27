@@ -1,5 +1,5 @@
-import { expect, test } from 'bun:test'
-import { Mat3 } from '../src/matrix'
+import { describe, expect, test } from 'bun:test'
+import { LUDecomposition, Mat3 } from '../src/matrix'
 import type { Vector3 } from '../src/vector'
 
 test('determinant', () => {
@@ -157,4 +157,74 @@ test('mul', () => {
 
 	Mat3.mul(m, n, m)
 	expect(m).toEqual(u)
+})
+
+describe('LU decomposition', () => {
+	test('3x3', () => {
+		const matrix = [2, 7, 1, 3, -2, 0, 1, 5, 3] as const
+
+		const decomposition = new LUDecomposition(matrix)
+
+		const det = decomposition.determinant
+		expect(det).toBeCloseTo(-58, 12)
+		expect(det).toBeCloseTo(Mat3.determinant(matrix), 12)
+
+		const inv = decomposition.invert()
+		expect(inv[0][0]).toBeCloseTo(3 / 29, 12)
+		expect(inv[0][1]).toBeCloseTo(8 / 29, 12)
+		expect(inv[0][2]).toBeCloseTo(-1 / 29, 12)
+		expect(inv[1][0]).toBeCloseTo(9 / 58, 12)
+		expect(inv[1][1]).toBeCloseTo(-5 / 58, 12)
+		expect(inv[1][2]).toBeCloseTo(-3 / 58, 12)
+		expect(inv[2][0]).toBeCloseTo(-17 / 58, 12)
+		expect(inv[2][1]).toBeCloseTo(3 / 58, 12)
+		expect(inv[2][2]).toBeCloseTo(25 / 58, 12)
+
+		const x = decomposition.solve([1, 1, 1])
+		expect(x[0]).toBeCloseTo(0.3448275862068966, 12)
+		expect(x[1]).toBeCloseTo(0.017241379310344827, 12)
+		expect(x[2]).toBeCloseTo(0.1896551724137931, 12)
+	})
+
+	test('5x5', () => {
+		const matrix = [4, 2, 3, 1, 5, 6, 7, 2, 8, 1, 5, 9, 4, 3, 2, 8, 1, 7, 6, 5, 3, 4, 5, 2, 9] as const
+
+		const decomposition = new LUDecomposition(matrix)
+
+		expect(decomposition.determinant).toBeCloseTo(5025, 12)
+
+		const inv = decomposition.invert()
+		expect(inv[0][0]).toBeCloseTo(457 / 1005, 12)
+		expect(inv[0][1]).toBeCloseTo(26 / 1005, 12)
+		expect(inv[0][2]).toBeCloseTo(-61 / 5025, 12)
+		expect(inv[0][3]).toBeCloseTo(-41 / 1675, 12)
+		expect(inv[0][4]).toBeCloseTo(-1202 / 5025, 12)
+		expect(inv[1][0]).toBeCloseTo(-7 / 335, 12)
+		expect(inv[1][1]).toBeCloseTo(4 / 335, 12)
+		expect(inv[1][2]).toBeCloseTo(171 / 1675, 12)
+		expect(inv[1][3]).toBeCloseTo(-122 / 1675, 12)
+		expect(inv[1][4]).toBeCloseTo(47 / 1675, 12)
+		expect(inv[2][0]).toBeCloseTo(-416 / 1005, 12)
+		expect(inv[2][1]).toBeCloseTo(-193 / 1005, 12)
+		expect(inv[2][2]).toBeCloseTo(878 / 5025, 12)
+		expect(inv[2][3]).toBeCloseTo(343 / 1675, 12)
+		expect(inv[2][4]).toBeCloseTo(496 / 5025, 12)
+		expect(inv[3][0]).toBeCloseTo(-238 / 1005, 12)
+		expect(inv[3][1]).toBeCloseTo(136 / 1005, 12)
+		expect(inv[3][2]).toBeCloseTo(-551 / 5025, 12)
+		expect(inv[3][3]).toBeCloseTo(69 / 1675, 12)
+		expect(inv[3][4]).toBeCloseTo(593 / 5025, 12)
+		expect(inv[4][0]).toBeCloseTo(47 / 335, 12)
+		expect(inv[4][1]).toBeCloseTo(21 / 335, 12)
+		expect(inv[4][2]).toBeCloseTo(-191 / 1675, 12)
+		expect(inv[4][3]).toBeCloseTo(-138 / 1675, 12)
+		expect(inv[4][4]).toBeCloseTo(163 / 1675, 12)
+
+		const x = decomposition.solve([12, 25, 18, 30, 17])
+		expect(x[0]).toBeCloseTo(1.084179104477611, 12)
+		expect(x[1]).toBeCloseTo(0.17731343283582093, 12)
+		expect(x[2]).toBeCloseTo(1.1982089552238815, 12)
+		expect(x[3]).toBeCloseTo(1.8095522388059702, 12)
+		expect(x[4]).toBeCloseTo(0.3808955223880599, 12)
+	})
 })

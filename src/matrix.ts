@@ -1,4 +1,5 @@
 import type { Angle } from './angle'
+import type { NumberArray } from './math'
 import { Vector3 } from './vector'
 
 export namespace Mat3 {
@@ -106,8 +107,8 @@ export namespace Mat3 {
 	}
 
 	// Computes the determinant of the matrix.
+	// Potentially less stable than using LU decomposition.
 	export function determinant(m: Readonly<Matrix>) {
-		// TODO: Potentially less stable than using LU decomposition
 		const a = m[0] * (m[4] * m[8] - m[5] * m[7])
 		const b = m[1] * (m[3] * m[8] - m[5] * m[6])
 		const c = m[2] * (m[3] * m[7] - m[6] * m[4])
@@ -213,5 +214,133 @@ export namespace Mat3 {
 
 		if (o) return Vector3.fill(o, c, d, e)
 		return [c, d, e]
+	}
+}
+
+// https://en.wikipedia.org/wiki/LU_decomposition
+export class LUDecomposition {
+	private readonly A: Array<Float64Array>
+	private readonly P: Int32Array
+
+	constructor(matrix: Readonly<NumberArray>) {
+		if (matrix.length === 0) throw new Error('Matrix is not square')
+
+		const n = Math.trunc(Math.sqrt(matrix.length))
+
+		if (n <= 1 || n * n !== matrix.length) throw new Error('Matrix is not square')
+
+		const A = new Array<Float64Array>(n)
+
+		for (let i = 0, p = 0; i < n; i++) {
+			A[i] = new Float64Array(n)
+
+			for (let k = 0; k < n; k++) {
+				A[i][k] = matrix[p++]
+			}
+		}
+
+		// Unit permutation matrix
+		const P = new Int32Array(n + 1)
+		for (let i = 0; i <= n; i++) P[i] = i
+
+		for (let i = 0; i < n; i++) {
+			let maxA = 0
+			let maxI = i
+
+			for (let k = i; k < n; k++) {
+				const a = Math.abs(matrix[k * n + i])
+
+				if (a > maxA) {
+					maxA = a
+					maxI = k
+				}
+			}
+
+			// if (maxA < Tol) throw new Error('Matrix is degenerate')
+
+			if (maxI !== i) {
+				// Pivoting
+				const j = P[i]
+				P[i] = P[maxI]
+				P[maxI] = j
+
+				// Pivoting rows of A
+				const p = A[i]
+				A[i] = A[maxI]
+				A[maxI] = p
+
+				// Counting pivots starting from N (for determinant)
+				P[n]++
+			}
+
+			for (let j = i + 1; j < n; j++) {
+				A[j][i] /= A[i][i]
+
+				for (let k = i + 1; k < n; k++) {
+					A[j][k] -= A[j][i] * A[i][k]
+				}
+			}
+		}
+
+		this.A = A
+		this.P = P
+	}
+
+	get determinant() {
+		const n = this.A.length
+		let det = this.A[0][0]
+		for (let i = 1; i < n; i++) det *= this.A[i][i]
+		return (this.P[n] - n) % 2 === 0 ? det : -det
+	}
+
+	invert() {
+		const n = this.A.length
+
+		const I = new Array<Float64Array>(n)
+		for (let i = 0; i < n; i++) I[i] = new Float64Array(n)
+
+		for (let j = 0; j < n; j++) {
+			for (let i = 0; i < n; i++) {
+				I[i][j] = this.P[i] === j ? 1 : 0
+
+				for (let k = 0; k < i; k++) {
+					I[i][j] -= this.A[i][k] * I[k][j]
+				}
+			}
+
+			for (let i = n - 1; i >= 0; i--) {
+				for (let k = i + 1; k < n; k++) {
+					I[i][j] -= this.A[i][k] * I[k][j]
+				}
+
+				I[i][j] /= this.A[i][i]
+			}
+		}
+
+		return I
+	}
+
+	// Solves A*x=B
+	solve(B: NumberArray) {
+		const n = this.A.length
+		const x = new Float64Array(n)
+
+		for (let i = 0; i < n; i++) {
+			x[i] = B[this.P[i]]
+
+			for (let k = 0; k < i; k++) {
+				x[i] -= this.A[i][k] * x[k]
+			}
+		}
+
+		for (let i = n - 1; i >= 0; i--) {
+			for (let k = i + 1; k < n; k++) {
+				x[i] -= this.A[i][k] * x[k]
+			}
+
+			x[i] /= this.A[i][i]
+		}
+
+		return x
 	}
 }
