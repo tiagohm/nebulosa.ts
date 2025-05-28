@@ -306,13 +306,16 @@ Matrix3.divScalar(m, 2) // Divide the matrix by a scalar
 Matrix3.plus(m, n) // Sum two matrices
 Matrix3.minus(m, n) // Subtract two matrices
 Matrix3.mul(m, n) // Multiply two matrices
-Matrix3.mulVec3(m, v) // Multiply the matrix by a vector
+Matrix3.mulVec(m, v) // Multiply the matrix by a vector
 Matrix3.mulTransposeVec3(m, v) // Multiply the transpose of the matrix by a vector
 
-const LU = new LUDecomposition(m)
+const LU = new LuDecomposition(m)
 LU.determinant // Determinant of the matrix
 LU.invert() // Invert the matrix
 LU.solve(v) // Solve A*x=B
+
+const QR = new QrDecomposition(m)
+QR.solve(v) // Solve A*x=B
 ```
 
 ### Meeus

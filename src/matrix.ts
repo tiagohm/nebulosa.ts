@@ -218,7 +218,7 @@ export namespace Mat3 {
 }
 
 // https://en.wikipedia.org/wiki/LU_decomposition
-export class LUDecomposition {
+export class LuDecomposition {
 	private readonly A: Array<Float64Array>
 	private readonly P: Int32Array
 
@@ -286,6 +286,18 @@ export class LUDecomposition {
 		this.P = P
 	}
 
+	get singular() {
+		const n = this.A.length
+
+		for (let j = 0; j < n; j++) {
+			if (this.A[j][j] === 0) {
+				return true
+			}
+		}
+
+		return false
+	}
+
 	get determinant() {
 		const n = this.A.length
 		let det = this.A[0][0]
@@ -321,7 +333,7 @@ export class LUDecomposition {
 	}
 
 	// Solves A*x=B
-	solve(B: NumberArray) {
+	solve(B: Readonly<NumberArray>) {
 		const n = this.A.length
 		const x = new Float64Array(n)
 
@@ -342,5 +354,122 @@ export class LUDecomposition {
 		}
 
 		return x
+	}
+}
+
+// https://github.com/mljs/matrix/blob/main/src/dc/qr.js
+export class QrDecomposition {
+	private readonly QR: Float64Array[]
+	private readonly rdiag: Float64Array
+
+	constructor(
+		matrix: Readonly<NumberArray>,
+		private readonly rows: number,
+		private readonly cols: number,
+	) {
+		const QR = new Array<Float64Array>(rows)
+		const rdiag = new Float64Array(cols)
+
+		for (let i = 0, p = 0; i < rows; i++) {
+			QR[i] = new Float64Array(cols)
+
+			for (let k = 0; k < cols; k++) {
+				QR[i][k] = matrix[p++]
+			}
+		}
+
+		for (let k = 0; k < cols; k++) {
+			let nrm = 0
+
+			for (let i = k; i < rows; i++) {
+				nrm = hypotenuse(nrm, QR[i][k])
+			}
+
+			if (nrm !== 0) {
+				if (QR[k][k] < 0) {
+					nrm = -nrm
+				}
+
+				for (let i = k; i < rows; i++) {
+					QR[i][k] /= nrm
+				}
+
+				QR[k][k]++
+
+				for (let j = k + 1; j < cols; j++) {
+					let s = 0
+
+					for (let i = k; i < rows; i++) {
+						s += QR[i][k] * QR[i][j]
+					}
+
+					s = -s / QR[k][k]
+
+					for (let i = k; i < rows; i++) {
+						QR[i][j] += s * QR[i][k]
+					}
+				}
+			}
+
+			rdiag[k] = -nrm
+		}
+
+		this.QR = QR
+		this.rdiag = rdiag
+	}
+
+	get fullRank() {
+		return this.rdiag.indexOf(0) < 0
+	}
+
+	solve(value: Readonly<NumberArray>) {
+		if (value.length !== this.QR.length) {
+			throw new Error('Matrix row dimensions must agree')
+		}
+
+		if (!this.fullRank) {
+			throw new Error('Matrix is rank deficient')
+		}
+
+		const X = new Float64Array(value)
+
+		for (let k = 0; k < this.cols; k++) {
+			let s = 0
+
+			for (let i = k; i < this.rows; i++) {
+				s += this.QR[i][k] * X[i]
+			}
+
+			s = -s / this.QR[k][k]
+
+			for (let i = k; i < this.rows; i++) {
+				X[i] += s * this.QR[i][k]
+			}
+		}
+
+		for (let k = this.cols - 1; k >= 0; k--) {
+			X[k] /= this.rdiag[k]
+
+			for (let i = 0; i < k; i++) {
+				X[i] -= X[k] * this.QR[i][k]
+			}
+		}
+
+		return X
+	}
+}
+
+function hypotenuse(a: number, b: number) {
+	const aa = Math.abs(a)
+	const ab = Math.abs(b)
+
+	if (aa > ab) {
+		const r = b / a
+		return aa * Math.sqrt(1 + r * r)
+	} else if (b !== 0) {
+		const r = a / b
+		return ab * Math.sqrt(1 + r * r)
+	} else {
+		return 0
 	}
 }
