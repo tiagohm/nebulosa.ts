@@ -217,25 +217,115 @@ export namespace Mat3 {
 	}
 }
 
+// Computes the product of two matrices, MxN and NxP.
+// The result is a new matrix MxP.
+export function mulMxN(a: Readonly<Readonly<NumberArray>[]>, b: Readonly<Readonly<NumberArray>[]>): NumberArray[] {
+	const m = a.length
+	const n = b[0].length
+
+	const o = new Array<Float64Array>(m)
+	for (let i = 0; i < m; i++) o[i] = new Float64Array(n)
+
+	for (let i = 0; i < m; i++) {
+		for (let j = 0; j < n; j++) {
+			let s = 0
+
+			for (let k = 0; k < a[i].length; k++) {
+				s += a[i][k] * b[k][j]
+			}
+
+			o[i][j] = s
+		}
+	}
+
+	return o
+}
+
+// Computes the product of two matrices, transpose of MxN (NxM) and MxP.
+// The result is a new symmetric matrix NxP.
+export function mulMTxN(a: Readonly<Readonly<NumberArray>[]>, b: Readonly<Readonly<NumberArray>[]>): NumberArray[] {
+	const m = a[0].length
+	const n = b[0].length
+
+	const o = new Array<Float64Array>(m)
+	for (let i = 0; i < m; i++) o[i] = new Float64Array(n)
+
+	for (let i = 0; i < m; i++) {
+		for (let j = 0; j < n; j++) {
+			let s = 0
+
+			for (let k = 0; k < a.length; k++) {
+				s += a[k][i] * b[k][j]
+			}
+
+			o[i][j] = s
+		}
+	}
+
+	return o
+}
+
+// Computes the product of two matrices, MxN and transpose of PxN (NxP).
+// The result is a new matrix MxP.
+export function mulMxNT(a: Readonly<Readonly<NumberArray>[]>, b: Readonly<Readonly<NumberArray>[]>): NumberArray[] {
+	const m = a.length
+	const n = b.length
+
+	const o = new Array<Float64Array>(m)
+	for (let i = 0; i < m; i++) o[i] = new Float64Array(n)
+
+	for (let i = 0; i < m; i++) {
+		for (let j = 0; j < n; j++) {
+			let s = 0
+
+			for (let k = 0; k < b[i].length; k++) {
+				s += a[i][k] * b[j][k]
+			}
+
+			o[i][j] = s
+		}
+	}
+
+	return o
+}
+
 // https://en.wikipedia.org/wiki/LU_decomposition
 export class LuDecomposition {
 	private readonly A: Array<Float64Array>
 	private readonly P: Int32Array
 
-	constructor(matrix: Readonly<NumberArray>) {
+	constructor(matrix: Readonly<NumberArray> | Readonly<Readonly<NumberArray>[]>) {
 		if (matrix.length === 0) throw new Error('Matrix is not square')
 
-		const n = Math.trunc(Math.sqrt(matrix.length))
+		let n = 0
+		let A: Array<Float64Array>
 
-		if (n <= 1 || n * n !== matrix.length) throw new Error('Matrix is not square')
+		if (Array.isArray(matrix[0]) || ArrayBuffer.isView(matrix[0])) {
+			if (matrix.length !== matrix[0].length) throw new Error('Matrix is not square')
 
-		const A = new Array<Float64Array>(n)
+			n = matrix.length
+			A = new Array<Float64Array>(n)
 
-		for (let i = 0, p = 0; i < n; i++) {
-			A[i] = new Float64Array(n)
+			for (let i = 0; i < n; i++) {
+				A[i] = new Float64Array(n)
 
-			for (let k = 0; k < n; k++) {
-				A[i][k] = matrix[p++]
+				for (let k = 0; k < n; k++) {
+					A[i][k] = (matrix[i] as NumberArray)[k]
+				}
+			}
+		} else {
+			n = Math.trunc(Math.sqrt(matrix.length))
+
+			if (n <= 1 || n * n !== matrix.length) throw new Error('Matrix is not square')
+
+			A = new Array<Float64Array>(n)
+
+			for (let i = 0, p = 0; i < n; i++) {
+				A[i] = new Float64Array(n)
+
+				for (let k = 0; k < n; k++) {
+					A[i][k] = matrix[p++] as number
+				}
 			}
 		}
 
@@ -248,7 +338,7 @@ export class LuDecomposition {
 			let maxI = i
 
 			for (let k = i; k < n; k++) {
-				const a = Math.abs(matrix[k * n + i])
+				const a = Math.abs(A[k][i])
 
 				if (a > maxA) {
 					maxA = a

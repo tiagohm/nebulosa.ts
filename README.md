@@ -413,8 +413,9 @@ normal(random, mu, sigma)
 
 ```ts
 const regresion = simpleLinearRegression(x, y) // Compute OLS regression
+const regression = polynomialRegression(x, y, degree, interceptAtZero) // Compute polynomial regression
 
-regression.predict(x)
+regression.predict(x) // Compute y at x
 
 const { r, r2, chi2, rmsd } = regressionScore(regression, x, y)
 ```
