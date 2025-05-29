@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { polynomialRegression, regressionScore, simpleLinearRegression, theilSenRegression } from '../src/regression'
+import { polynomialRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
 
 test('simple linear', () => {
 	const x = [80, 60, 10, 20, 30]
@@ -110,6 +110,46 @@ describe('theil-sen', () => {
 		expect(regression.slope).toBeCloseTo(0, 8)
 		expect(regression.intercept).toBeCloseTo(2, 8)
 		expect(regression.predict(1)).toBeCloseTo(2, 8)
+	})
+})
+
+describe('trend line regression', () => {
+	describe('perfect v-curve with only one minimum point', () => {
+		const x = [1, 2, 3, 4, 9, 8, 7, 6, 5]
+		const y = [10, 8, 6, 4, 10, 8, 6, 4, 2]
+
+		test('simple', () => {
+			const regression = trendLineRegression(x, y)
+
+			expect(regression.intersection[0]).toBeCloseTo(5, 8)
+			expect(regression.intersection[1]).toBeCloseTo(2, 8)
+		})
+
+		test('theil-sen', () => {
+			const regression = trendLineRegression(x, y, 'theil-sen')
+
+			expect(regression.intersection[0]).toBeCloseTo(5, 8)
+			expect(regression.intersection[1]).toBeCloseTo(2, 8)
+		})
+	})
+
+	describe('perfect v-curve with flat tip with multiple points', () => {
+		const x = [1, 2, 3, 4, 11, 10, 9, 8, 5, 6, 7]
+		const y = [10, 8, 6, 4, 10, 8, 6, 4, 2.1, 2, 2.1]
+
+		test('simple', () => {
+			const regression = trendLineRegression(x, y)
+
+			expect(regression.intersection[0]).toBeCloseTo(6, 8)
+			expect(regression.intersection[1]).toBeCloseTo(0, 0)
+		})
+
+		test('theil-sen', () => {
+			const regression = trendLineRegression(x, y, 'theil-sen')
+
+			expect(regression.intersection[0]).toBeCloseTo(6, 8)
+			expect(regression.intersection[1]).toBeCloseTo(0, 8)
+		})
 	})
 })
 

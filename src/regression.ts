@@ -1,5 +1,8 @@
-import { type NumberArray, isNumberArray } from './math'
+import { isNumberArray, minOf } from './helper'
+import type { NumberArray } from './math'
 import { LuDecomposition } from './matrix'
+
+export type TrendLineRegressionMethod = 'simple' | 'theil-sen'
 
 export interface Regression {
 	readonly predict: (x: number) => number
@@ -20,6 +23,13 @@ export interface LinearRegression extends Regression {
 
 export interface PolynomialRegression extends Regression {
 	readonly coefficients: Float64Array
+}
+
+export interface TrendLineRegression extends Regression {
+	readonly left: LinearRegression
+	readonly right: LinearRegression
+	readonly minimum: readonly [number, number]
+	readonly intersection: readonly [number, number]
 }
 
 // Calculates intercept and slope using the ordinary least squares method
@@ -182,6 +192,43 @@ export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberA
 	}
 }
 
+export function trendLineRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, method: TrendLineRegressionMethod = 'simple'): TrendLineRegression {
+	const minimum = minOf(y)
+	const minY = minimum[0]
+	const minX = x[minimum[1]]
+
+	const a = new Array<number>()
+	const b = new Array<number>()
+	const c = new Array<number>()
+	const d = new Array<number>()
+
+	for (let i = 0; i < x.length; i++) {
+		const xi = x[i]
+		const yi = y[i]
+
+		if (xi < minX && yi > minY) {
+			a.push(xi)
+			b.push(yi)
+		}
+		if (xi > minX && yi > minY) {
+			c.push(xi)
+			d.push(yi)
+		}
+	}
+
+	const regression = method === 'theil-sen' ? theilSenRegression : simpleLinearRegression
+	const left = regression(a, b)
+	const right = regression(c, d)
+
+	return {
+		left,
+		right,
+		minimum: [minX, minY],
+		intersection: intersect(left, right),
+		predict: (x: number) => (x < minX ? left.predict(x) : x > minX ? right.predict(x) : minY),
+	}
+}
+
 export function regressionScore(regression: Regression, x: Readonly<NumberArray>, y: Readonly<NumberArray>): RegressionScore {
 	const n = Math.min(x.length, y.length)
 
@@ -208,4 +255,14 @@ export function regressionScore(regression: Regression, x: Readonly<NumberArray>
 	// const r2Adjusted = 1 - (1 - r2) * (n - 1) / (n - 2)
 
 	return { r, r2, chi2, rmsd }
+}
+
+export function intersect(a: LinearRegression, b: LinearRegression): readonly [number, number] {
+	// Parallel lines do not intersect
+	if (a.slope === b.slope) return [0, 0]
+
+	const x = (b.intercept - a.intercept) / (a.slope - b.slope)
+	const y = a.slope * x + a.intercept
+
+	return [x, y]
 }

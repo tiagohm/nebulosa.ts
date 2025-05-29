@@ -1,5 +1,6 @@
 import type { Angle } from './angle'
-import { type NumberArray, isNumberArray } from './math'
+import { isNumberArray } from './helper'
+import type { NumberArray } from './math'
 import { Vector3 } from './vector'
 
 export namespace Mat3 {

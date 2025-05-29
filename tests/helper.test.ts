@@ -1,5 +1,49 @@
 import { expect, test } from 'bun:test'
-import { binarySearch } from '../src/helper'
+import { binarySearch, isNumberArray, maxOf, minOf } from '../src/helper'
+
+test('isNumberArray', () => {
+	expect(isNumberArray([1, 2, 3])).toBe(true)
+	expect(isNumberArray(new Float64Array([1, 2, 3]))).toBe(true)
+	expect(isNumberArray(new Int32Array([1, 2, 3]))).toBe(true)
+	expect(isNumberArray(new Uint32Array([1, 2, 3]))).toBe(true)
+	expect(isNumberArray(new Int16Array([1, 2, 3]))).toBe(true)
+	expect(isNumberArray(new Uint16Array([1, 2, 3]))).toBe(true)
+	expect(isNumberArray(new Int8Array([1, 2, 3]))).toBe(true)
+	expect(isNumberArray(new Uint8Array([1, 2, 3]))).toBe(true)
+	expect(isNumberArray(new Uint8ClampedArray([1, 2, 3]))).toBe(true)
+	expect(isNumberArray(new Float32Array([1, 2, 3]))).toBe(true)
+	expect(isNumberArray(new Float16Array([1, 2, 3]))).toBe(true)
+	expect(isNumberArray([])).toBe(true)
+	expect(isNumberArray(new ArrayBuffer(8))).toBe(false)
+	expect(isNumberArray('[1, 2, 3]')).toBe(false)
+	expect(isNumberArray({})).toBe(false)
+	expect(isNumberArray(null)).toBe(false)
+	expect(isNumberArray(undefined)).toBe(false)
+	expect(isNumberArray(123)).toBe(false)
+	expect(isNumberArray(true)).toBe(false)
+})
+
+test('minOf', () => {
+	expect(minOf([1, 2, 3])).toEqual([1, 0])
+	expect(minOf([3, 2, 1])).toEqual([1, 2])
+	expect(minOf([2, 3, 1])).toEqual([1, 2])
+	expect(minOf([1])).toEqual([1, 0])
+	expect(minOf([])).toEqual([NaN, -1])
+	expect(minOf([NaN, NaN, NaN])).toEqual([Number.MAX_VALUE, -1])
+	expect(minOf([1, 2, NaN])).toEqual([1, 0])
+	expect(minOf([NaN, 2, 1])).toEqual([1, 2])
+})
+
+test('maxOf', () => {
+	expect(maxOf([1, 2, 3])).toEqual([3, 2])
+	expect(maxOf([3, 2, 1])).toEqual([3, 0])
+	expect(maxOf([2, 3, 1])).toEqual([3, 1])
+	expect(maxOf([1])).toEqual([1, 0])
+	expect(maxOf([])).toEqual([NaN, -1])
+	expect(maxOf([NaN, NaN, NaN])).toEqual([Number.MIN_VALUE, -1])
+	expect(maxOf([1, 2, NaN])).toEqual([2, 1])
+	expect(maxOf([NaN, 2, 1])).toEqual([2, 1])
+})
 
 test('binarySearch', () => {
 	expect(binarySearch([0, 1, 2, 3, 4], 3)).toBe(3)
