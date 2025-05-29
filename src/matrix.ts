@@ -1,5 +1,5 @@
 import type { Angle } from './angle'
-import type { NumberArray } from './math'
+import { type NumberArray, isNumberArray } from './math'
 import { Vector3 } from './vector'
 
 export namespace Mat3 {
@@ -242,7 +242,7 @@ export function mulMxN(a: Readonly<Readonly<NumberArray>[]>, b: Readonly<Readonl
 }
 
 // Computes the product of two matrices, transpose of MxN (NxM) and MxP.
-// The result is a new symmetric matrix NxP.
+// The result is a new matrix NxP.
 export function mulMTxN(a: Readonly<Readonly<NumberArray>[]>, b: Readonly<Readonly<NumberArray>[]>): NumberArray[] {
 	const m = a[0].length
 	const n = b[0].length
@@ -300,7 +300,7 @@ export class LuDecomposition {
 		let n = 0
 		let A: Array<Float64Array>
 
-		if (Array.isArray(matrix[0]) || ArrayBuffer.isView(matrix[0])) {
+		if (isNumberArray(matrix[0])) {
 			if (matrix.length !== matrix[0].length) throw new Error('Matrix is not square')
 
 			n = matrix.length
@@ -323,8 +323,8 @@ export class LuDecomposition {
 			for (let i = 0, p = 0; i < n; i++) {
 				A[i] = new Float64Array(n)
 
-				for (let k = 0; k < n; k++) {
-					A[i][k] = matrix[p++] as number
+				for (let k = 0; k < n; k++, p++) {
+					A[i][k] = matrix[p] as number
 				}
 			}
 		}

@@ -413,6 +413,7 @@ normal(random, mu, sigma)
 
 ```ts
 const regresion = simpleLinearRegression(x, y) // Compute OLS regression
+const regresion = theilSenRegression(x, y) // Compute linear regression using Theil–Sen estimator
 const regression = polynomialRegression(x, y, degree, interceptAtZero) // Compute polynomial regression
 
 regression.predict(x) // Compute y at x

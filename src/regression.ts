@@ -1,4 +1,4 @@
-import type { NumberArray } from './math'
+import { type NumberArray, isNumberArray } from './math'
 import { LuDecomposition } from './matrix'
 
 export interface Regression {
@@ -51,21 +51,27 @@ export function simpleLinearRegression(x: Readonly<NumberArray>, y: Readonly<Num
 	}
 }
 
-export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, degree: number, interceptAtZero: boolean = false): PolynomialRegression {
-	const n = Math.min(x.length, y.length)
-	const powers = new Int32Array(interceptAtZero ? degree : degree + 1)
+export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, degree: number | NumberArray, interceptAtZero: boolean = false): PolynomialRegression {
+	let powers: NumberArray
 
-	if (interceptAtZero) {
-		for (let k = 0; k < degree; k++) {
-			powers[k] = k + 1
-		}
+	if (isNumberArray(degree)) {
+		powers = degree
+		interceptAtZero = false
 	} else {
-		for (let k = 0; k <= degree; k++) {
-			powers[k] = k
+		powers = new Float64Array(interceptAtZero ? degree : degree + 1)
+
+		if (interceptAtZero) {
+			for (let k = 0; k < degree; k++) {
+				powers[k] = k + 1
+			}
+		} else {
+			for (let k = 0; k <= degree; k++) {
+				powers[k] = k
+			}
 		}
 	}
 
-	// Avoid creating a new Float64Array for each x value
+	// Avoid creating a matrix of powers, but the drawback is that we have to calculate the powers on the fly
 
 	// const F = new Array<Float64Array>(n)
 
@@ -80,6 +86,8 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	// 		}
 	// 	}
 	// }
+
+	const n = Math.min(x.length, y.length)
 
 	// https://github.com/mljs/regression-polynomial/blob/ce1c94bcb03f0f244ef26bae6ba7529bcdd8894e/src/index.ts#L183C18-L183C37
 
@@ -106,10 +114,10 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	// const B = mulMxN([y], F) // Fᵀ*Yᵀ = (Y*F)ᵀ
 	const B = new Float64Array(powers.length)
 
-	for (let j = 0; j < n; j++) {
+	for (let j = 0; j < powers.length; j++) {
 		let s = 0
 
-		for (let k = 0; k < y.length; k++) {
+		for (let k = 0; k < n; k++) {
 			const s1 = powers[j] === 0 ? 1 : x[k] ** powers[j]
 
 			s += y[k] * s1
@@ -129,6 +137,48 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 			for (let k = 0; k < powers.length; k++) y += coefficients[k] * x ** powers[k]
 			return y
 		},
+	}
+}
+
+// https://en.wikipedia.org/wiki/Theil%E2%80%93Sen_estimator
+export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): LinearRegression {
+	const data = new Float64Array(x.length * x.length)
+
+	// slopes
+
+	let n = 0
+
+	for (let i = 0; i < x.length; ++i) {
+		for (let j = i + 1; j < x.length; ++j) {
+			if (x[i] !== x[j]) {
+				data[n++] = (y[j] - y[i]) / (x[j] - x[i])
+			}
+		}
+	}
+
+	data.subarray(0, n).sort()
+
+	// median
+	const slope = n % 2 === 0 ? (data[n / 2 - 1] + data[n / 2]) / 2 : data[Math.floor(n / 2)]
+
+	// cuts
+
+	n = x.length
+
+	for (let i = 0; i < n; i++) {
+		data[i] = y[i] - slope * x[i]
+	}
+
+	data.subarray(0, n).sort()
+
+	// median
+	const intercept = n % 2 === 0 ? (data[n / 2 - 1] + data[n / 2]) / 2 : data[Math.floor(n / 2)]
+
+	return {
+		slope,
+		intercept,
+		predict: (x: number) => slope * x + intercept,
+		x: (y: number) => (y - intercept) / slope,
 	}
 }
 

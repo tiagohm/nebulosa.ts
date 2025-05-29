@@ -1,5 +1,9 @@
 export type NumberArray = Float16Array | Float32Array | Float64Array | Int32Array | Uint32Array | Int16Array | Uint16Array | Int8Array | Uint8Array | Uint8ClampedArray | number[]
 
+export function isNumberArray(array: unknown): array is NumberArray {
+	return Array.isArray(array) || ArrayBuffer.isView(array)
+}
+
 // Adds a and b exactly, returning the result as two 64-bit floats.
 export function twoSum(a: number, b: number): [number, number] {
 	const x = a + b
