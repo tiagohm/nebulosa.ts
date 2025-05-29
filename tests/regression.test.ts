@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { polynomialRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
+import { exponentialRegression, polynomialRegression, powerRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
 
 test('simple linear', () => {
 	const x = [80, 60, 10, 20, 30]
@@ -151,6 +151,40 @@ describe('trend line regression', () => {
 			expect(regression.intersection[1]).toBeCloseTo(0, 8)
 		})
 	})
+})
+
+test('exponential regression', () => {
+	const x = [0, 1, 2, 3, 4]
+	const y = [1.5, 2.5, 3.5, 5.0, 7.5]
+	const regression = exponentialRegression(x, y)
+
+	expect(regression.a).toBeCloseTo(0.3912023, 6)
+	expect(regression.b).toBeCloseTo(1.5799091, 6)
+	expect(regression.predict(2)).toBeCloseTo(3.454825, 6)
+	expect(regression.x(3.454825)).toBeCloseTo(2, 6)
+
+	const score = regressionScore(regression, x, y)
+
+	expect(score.r).toBeCloseTo(0.998, 2)
+	expect(score.r2).toBeGreaterThan(0.9)
+	expect(score.chi2).toBeLessThan(0.1)
+	expect(score.rmsd).toBeCloseTo(0.1, 3)
+})
+
+test('power regression', () => {
+	const x = [17.6, 26, 31.9, 38.9, 45.8, 51.2, 58.1, 64.7, 66.7, 80.8, 82.9]
+	const y = [159.9, 206.9, 236.8, 269.9, 300.6, 323.6, 351.7, 377.6, 384.1, 437.2, 444.7]
+	const regression = powerRegression(x, y)
+
+	expect(regression.a).toBeCloseTo(24.12989312, 6)
+	expect(regression.b).toBeCloseTo(0.65949782, 6)
+	expect(regression.predict(20)).toBeCloseTo(174.0130599, 6)
+	expect(regression.x(174.0130599)).toBeCloseTo(20, 6)
+
+	const score = regressionScore(regression, x, y)
+
+	expect(score.r2).toBeCloseTo(0.999, 2)
+	expect(score.chi2).toBeCloseTo(0.03, 1)
 })
 
 test('regression score', () => {

@@ -412,9 +412,12 @@ normal(random, mu, sigma)
 ### Regression
 
 ```ts
-const regresion = simpleLinearRegression(x, y) // Compute OLS regression
-const regresion = theilSenRegression(x, y) // Compute linear regression using Theil–Sen estimator
+const regression = simpleLinearRegression(x, y) // Compute linear regression using OLS
+const regression = theilSenRegression(x, y) // Compute linear regression using Theil–Sen estimator
 const regression = polynomialRegression(x, y, degree, interceptAtZero) // Compute polynomial regression
+const regression = trendLineRegression(x, y, method) // Compute trendline regression
+const regression = exponentialRegression(x, y) // Compute exponential regression for y = B * e^(A * x)
+const regression = powerRegression(x, y) // Compute power regression for y = A * x^B
 
 regression.predict(x) // Compute y at x
 

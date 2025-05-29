@@ -25,6 +25,12 @@ export interface PolynomialRegression extends Regression {
 	readonly coefficients: Float64Array
 }
 
+export interface ExponentialRegression extends Regression {
+	readonly a: number
+	readonly b: number
+	readonly x: (y: number) => number
+}
+
 export interface TrendLineRegression extends Regression {
 	readonly left: LinearRegression
 	readonly right: LinearRegression
@@ -32,7 +38,7 @@ export interface TrendLineRegression extends Regression {
 	readonly intersection: readonly [number, number]
 }
 
-// Calculates intercept and slope using the ordinary least squares method
+// Computes intercept and slope using the ordinary least squares method
 // https://en.wikipedia.org/wiki/Ordinary_least_squares
 export function simpleLinearRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): LinearRegression {
 	const n = Math.min(x.length, y.length)
@@ -61,6 +67,7 @@ export function simpleLinearRegression(x: Readonly<NumberArray>, y: Readonly<Num
 	}
 }
 
+// Computes the coefficients of a polynomial regression
 export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, degree: number | NumberArray, interceptAtZero: boolean = false): PolynomialRegression {
 	let powers: NumberArray
 
@@ -151,6 +158,7 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 }
 
 // https://en.wikipedia.org/wiki/Theil%E2%80%93Sen_estimator
+// Computes the coefficients of a linear regression using the Theil-Sen method
 export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): LinearRegression {
 	const data = new Float64Array(x.length * x.length)
 
@@ -192,6 +200,7 @@ export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberA
 	}
 }
 
+// Computes the coefficients of a trend line regression, which is a piecewise linear regression with a minimum point
 export function trendLineRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, method: TrendLineRegressionMethod = 'simple'): TrendLineRegression {
 	const minimum = minOf(y)
 	const minY = minimum[0]
@@ -229,6 +238,52 @@ export function trendLineRegression(x: Readonly<NumberArray>, y: Readonly<Number
 	}
 }
 
+// Computes the coefficients of an exponential regression of the form y = b * exp(a * x)
+export function exponentialRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): ExponentialRegression {
+	const n = Math.min(x.length, y.length)
+	const logY = new Float64Array(n)
+
+	for (let i = 0; i < n; i++) {
+		logY[i] = Math.log(y[i])
+	}
+
+	const regression = simpleLinearRegression(x, logY)
+	const a = regression.slope
+	const b = Math.exp(regression.intercept)
+
+	return {
+		a,
+		b,
+		predict: (x: number) => b * Math.exp(a * x),
+		x: (y: number) => Math.log(y / b) / a,
+	}
+}
+
+// Computes the coefficients of a power regression of the form y = A * x^B
+export function powerRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): ExponentialRegression {
+	const n = Math.min(x.length, y.length)
+	const logX = new Float64Array(n)
+	const logY = new Float64Array(n)
+
+	for (let i = 0; i < n; i++) {
+		logX[i] = Math.log(x[i])
+		logY[i] = Math.log(y[i])
+	}
+
+	const regression = simpleLinearRegression(logX, logY)
+	const a = Math.exp(regression.intercept)
+	const b = regression.slope
+
+	return {
+		a,
+		b,
+		predict: (x: number) => a * x ** b,
+		x: (y: number) => Math.exp(Math.log(y / a) / b) || 0,
+	}
+}
+
+// Computes the score of a regression against a set of x and y values
+// Returns the correlation coefficient (r), coefficient of determination (r²), chi-squared statistic, and root mean square deviation (RMSD)
 export function regressionScore(regression: Regression, x: Readonly<NumberArray>, y: Readonly<NumberArray>): RegressionScore {
 	const n = Math.min(x.length, y.length)
 
@@ -238,15 +293,14 @@ export function regressionScore(regression: Regression, x: Readonly<NumberArray>
 	let chi2 = 0
 
 	for (let i = 0; i < n; i++) {
-		const xi = x[i]
 		const yi = y[i]
-		const yiHat = regression.predict(xi)
+		const yp = regression.predict(x[i])
 
-		const d2 = (yi - yiHat) ** 2
+		const d2 = (yi - yp) ** 2
 		sum += d2
 		ySquared += yi ** 2
 		sumY += yi
-		chi2 += d2 / yi
+		if (yi !== 0) chi2 += d2 / yi
 	}
 
 	const r2 = 1 - sum / (ySquared - sumY ** 2 / n)
