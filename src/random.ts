@@ -1,11 +1,38 @@
 export type Random = () => number
 
+// https://stackoverflow.com/questions/521295/seeding-the-random-number-generator-in-javascript
+
+// A simple 32-bit generator, but is extremely fast and has acceptable quality randomness
+// https://gist.github.com/tommyettinger/46a874533244883189143505d203312c
 export function mulberry32(seed: number): Random {
 	return () => {
 		let z = (seed += 0x6d2b79f5)
 		z = Math.imul(z ^ (z >>> 15), z | 1)
 		z ^= z + Math.imul(z ^ (z >>> 7), z | 61)
 		return ((z ^ (z >>> 14)) >>> 0) / 4294967296
+	}
+}
+
+// Extremely simple and fast pseudorandom number generator.
+export function xorshift32(seed: number): Random {
+	return () => {
+		seed ^= seed << 13
+		seed ^= seed >> 17
+		seed ^= seed << 5
+		return (seed >>> 0) / 4294967296
+	}
+}
+
+// A fast, high-quality generator that is suitable for most applications
+export function splitmix32(a: number) {
+	return () => {
+		a |= 0
+		a = (a + 0x9e3779b9) | 0
+		let t = a ^ (a >>> 16)
+		t = Math.imul(t, 0x21f0aaad)
+		t = t ^ (t >>> 15)
+		t = Math.imul(t, 0x735a2d97)
+		return ((t = t ^ (t >>> 15)) >>> 0) / 4294967296
 	}
 }
 

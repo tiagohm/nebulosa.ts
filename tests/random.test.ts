@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { type Random, bernoulli, exponential, geometric, mulberry32, normal, pareto, uniform, weibull } from '../src/random'
+import { type Random, bernoulli, exponential, geometric, mulberry32, normal, pareto, splitmix32, uniform, weibull, xorshift32 } from '../src/random'
 
 test('mulberry32', () => {
 	const random = mulberry32(1066)
@@ -9,85 +9,75 @@ test('mulberry32', () => {
 	expect(random()).toBeCloseTo(0.6966334171593189, 14)
 })
 
+test('xorshift32', () => {
+	const random = xorshift32(1066)
+
+	expect(random()).toBeCloseTo(0.0631986502557993, 14)
+	expect(random()).toBeCloseTo(0.5355930868536234, 14)
+	expect(random()).toBeCloseTo(0.7390806321054697, 14)
+})
+
+test('splitmix32', () => {
+	const random = splitmix32(1066)
+
+	expect(random()).toBeCloseTo(0.048834215151146054, 14)
+	expect(random()).toBeCloseTo(0.7997270019259304, 14)
+	expect(random()).toBeCloseTo(0.8385824684519321, 14)
+})
+
+const algorithms = [Math.random, mulberry32(1), xorshift32(1), splitmix32(1)]
+
 function mean(random: Random, expected: number, n: number = 10000) {
 	let sum = 0
 	for (let i = 0; i < n; i++, sum += random());
 	expect(sum / n).toBeCloseTo(expected, 1)
 }
 
-describe('uniform', () => {
-	test('Math.random', () => {
-		mean(uniform(Math.random), 0.5)
-	})
-
-	test('mulberry32', () => {
-		mean(uniform(mulberry32(1)), 0.5)
-	})
+test('uniform', () => {
+	for (const random of algorithms) {
+		mean(uniform(random), 0.5)
+	}
 })
 
 // mean = p
-describe('bernoulli', () => {
-	test('Math.random', () => {
-		mean(bernoulli(Math.random, 0.7), 0.7)
-	})
-
-	test('mulberry32', () => {
-		mean(bernoulli(mulberry32(1), 0.7), 0.7)
-	})
+test('bernoulli', () => {
+	for (const random of algorithms) {
+		mean(bernoulli(random, 0.7), 0.7)
+	}
 })
 
 // mean = lambda * Γ(1 + 1 / k)
 // Online Gamma function: https://planetcalc.com/4520/
-describe('weibull', () => {
-	test('Math.random', () => {
-		mean(weibull(Math.random, 1, 5), 0.92)
-	})
-
-	test('mulberry32', () => {
-		mean(weibull(mulberry32(1), 1, 5), 0.92)
-	})
+test('weibull', () => {
+	for (const random of algorithms) {
+		mean(weibull(random, 1, 5), 0.92)
+	}
 })
 
 // mean = 1 / lambda
-describe('exponential', () => {
-	test('Math.random', () => {
-		mean(exponential(Math.random, 2), 0.5)
-	})
-
-	test('mulberry32', () => {
-		mean(exponential(mulberry32(1), 2), 0.5)
-	})
+test('exponential', () => {
+	for (const random of algorithms) {
+		mean(exponential(random, 2), 0.5)
+	}
 })
 
 // mean = 1 / p
-describe('geometric', () => {
-	test('Math.random', () => {
-		mean(geometric(Math.random, 0.5), 2)
-	})
-
-	test('mulberry32', () => {
-		mean(geometric(mulberry32(1), 0.5), 2)
-	})
+test('geometric', () => {
+	for (const random of algorithms) {
+		mean(geometric(random, 0.5), 2)
+	}
 })
 
 // mean = alpha / (alpha - 1)
 describe('pareto', () => {
-	test('Math.random', () => {
-		mean(pareto(Math.random, 5), 1.25)
-	})
-
-	test('mulberry32', () => {
-		mean(pareto(mulberry32(1), 5), 1.25)
-	})
+	for (const random of algorithms) {
+		mean(pareto(random, 5), 1.25)
+	}
 })
 
 // mean = mu
 describe('normal', () => {
-	test('Math.random', () => {
-		mean(normal(Math.random, 0.8), 0.8)
-	})
-
-	test('mulberry32', () => {
-		mean(normal(mulberry32(1), 0.8), 0.8)
-	})
+	for (const random of algorithms) {
+		mean(normal(random, 0.8), 0.8)
+	}
 })

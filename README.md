@@ -400,6 +400,9 @@ toAtm(1) // Convert millibar to atm
 
 ```ts
 const random = mulberry32(seed)
+const random = xorshift32(seed)
+const random = splitmix32(seed)
+
 uniform(random, min, max)
 bernoulli(random, p)
 weibull(random, lambda, k)
