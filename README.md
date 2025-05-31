@@ -309,13 +309,15 @@ Matrix3.mul(m, n) // Multiply two matrices
 Matrix3.mulVec(m, v) // Multiply the matrix by a vector
 Matrix3.mulTransposeVec3(m, v) // Multiply the transpose of the matrix by a vector
 
-const LU = new LuDecomposition(m)
+const LU = new LuDecomposition(A)
 LU.determinant // Determinant of the matrix
 LU.invert() // Invert the matrix
-LU.solve(v) // Solve A*x=B
+const x = LU.solve(B) // Solve A*x=B
 
-const QR = new QrDecomposition(m)
-QR.solve(v) // Solve A*x=B
+const QR = new QrDecomposition(A)
+const x = QR.solve(B) // Solve A*x=B
+
+const x = gaussianElimination(A, B) // Solve A*x=B using Gaussian elimination
 ```
 
 ### Meeus
@@ -422,10 +424,13 @@ const regression = polynomialRegression(x, y, degree, interceptAtZero) // Comput
 const regression = trendLineRegression(x, y, method) // Compute trendline regression
 const regression = exponentialRegression(x, y) // Compute exponential regression for y = B * e^(A * x)
 const regression = powerRegression(x, y) // Compute power regression for y = A * x^B
+const regression = hyperbolicRegression(x, y) // Compute hyperbolic regression for y = a * cosh(asinh((p - x) / b))
 
-regression.predict(x) // Compute y at x
+const y = regression.predict(x) // Compute y at x
 
 const { r, r2, chi2, rmsd } = regressionScore(regression, x, y)
+
+const [a, b, c] = levenbergMarquardt(x, y, model, [a0, b0, c0]) // Compute Levenberg-Marquardt regression coefficents
 ```
 
 ### Small Body Database

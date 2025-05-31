@@ -14,6 +14,7 @@ test('isNumberArray', () => {
 	expect(isNumberArray(new Float32Array([1, 2, 3]))).toBe(true)
 	expect(isNumberArray(new Float16Array([1, 2, 3]))).toBe(true)
 	expect(isNumberArray([])).toBe(true)
+	expect(isNumberArray(['1'])).toBe(false)
 	expect(isNumberArray(new ArrayBuffer(8))).toBe(false)
 	expect(isNumberArray('[1, 2, 3]')).toBe(false)
 	expect(isNumberArray({})).toBe(false)

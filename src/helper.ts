@@ -6,8 +6,9 @@ export interface BinarySearchOptions {
 	positive?: boolean
 }
 
+// Checks if the input is a number array.
 export function isNumberArray(array: unknown): array is NumberArray {
-	return Array.isArray(array) || ArrayBuffer.isView(array)
+	return (Array.isArray(array) && (!array.length || typeof array[0] === 'number')) || ArrayBuffer.isView(array)
 }
 
 // Finds the minimum value in an array of numbers.
@@ -47,26 +48,25 @@ export function maxOf(array: Readonly<NumberArray>): readonly [number, number] {
 }
 
 // Searches in the specified input using the range [from, to) for the specified key.
-export function binarySearch(input: NumberArray, key: number, options?: BinarySearchOptions) {
-	let a = Math.trunc(options?.from ?? 0)
-	let b = Math.trunc(options?.to ?? input.length) - 1
+export function binarySearch(input: NumberArray, key: number, { from = 0, to = input.length, positive }: BinarySearchOptions = {}) {
+	to--
 
-	while (a <= b) {
-		const index = (a + b) >>> 1
+	while (from <= to) {
+		const index = (from + to) >>> 1
 		const value = input[index]
 
 		if (value < key) {
-			a = index + 1
+			from = index + 1
 		} else if (value > key) {
-			b = index - 1
+			to = index - 1
 		} else if (value === key) {
 			return index
 		} else if (value < key) {
-			a = index + 1
+			from = index + 1
 		} else {
-			b = index - 1
+			to = index - 1
 		}
 	}
 
-	return options?.positive ? a : -(a + 1)
+	return positive ? from : -(from + 1)
 }

@@ -308,11 +308,7 @@ export class LuDecomposition {
 			A = new Array<Float64Array>(n)
 
 			for (let i = 0; i < n; i++) {
-				A[i] = new Float64Array(n)
-
-				for (let k = 0; k < n; k++) {
-					A[i][k] = (matrix[i] as NumberArray)[k]
-				}
+				A[i] = new Float64Array(matrix[i] as never)
 			}
 		} else {
 			n = Math.trunc(Math.sqrt(matrix.length))
@@ -423,7 +419,7 @@ export class LuDecomposition {
 		return I
 	}
 
-	// Solves A*x=B
+	// Solves the system of linear equations A*x = B, where A is the matrix and B is the right-hand side vector.
 	solve(B: Readonly<NumberArray>) {
 		const n = this.A.length
 		const x = new Float64Array(n)
@@ -452,20 +448,35 @@ export class LuDecomposition {
 export class QrDecomposition {
 	private readonly QR: Float64Array[]
 	private readonly rdiag: Float64Array
+	private readonly rows: number
+	private readonly cols: number
 
-	constructor(
-		matrix: Readonly<NumberArray>,
-		private readonly rows: number,
-		private readonly cols: number,
-	) {
-		const QR = new Array<Float64Array>(rows)
-		const rdiag = new Float64Array(cols)
+	constructor(matrix: Readonly<NumberArray> | Readonly<Readonly<NumberArray>[]>, rows?: number, cols?: number) {
+		let QR: Float64Array[]
+		let rdiag: Float64Array
 
-		for (let i = 0, p = 0; i < rows; i++) {
-			QR[i] = new Float64Array(cols)
+		if (isNumberArray(matrix[0])) {
+			rows = matrix.length
+			cols = matrix[0].length
 
-			for (let k = 0; k < cols; k++) {
-				QR[i][k] = matrix[p++]
+			QR = new Array<Float64Array>(rows)
+			rdiag = new Float64Array(cols)
+
+			for (let i = 0; i < rows; i++) {
+				QR[i] = new Float64Array(matrix[i] as never)
+			}
+		} else {
+			if (!rows || !cols) throw new Error('Matrix dimensions must be specified')
+
+			QR = new Array<Float64Array>(rows)
+			rdiag = new Float64Array(cols)
+
+			for (let i = 0, p = 0; i < rows; i++) {
+				QR[i] = new Float64Array(cols)
+
+				for (let k = 0; k < cols; k++) {
+					QR[i][k] = matrix[p++] as never
+				}
 			}
 		}
 
@@ -507,12 +518,15 @@ export class QrDecomposition {
 
 		this.QR = QR
 		this.rdiag = rdiag
+		this.rows = rows
+		this.cols = cols
 	}
 
 	get fullRank() {
 		return this.rdiag.indexOf(0) < 0
 	}
 
+	// Solves the system of linear equations A*x = B, where A is the matrix and B is the right-hand side vector.
 	solve(value: Readonly<NumberArray>) {
 		if (value.length !== this.QR.length) {
 			throw new Error('Matrix row dimensions must agree')
@@ -563,4 +577,53 @@ function hypotenuse(a: number, b: number) {
 	} else {
 		return 0
 	}
+}
+
+// Solves a system of linear equations using Gaussian elimination
+// A is a matrix of coefficients, b is a vector of constants
+// https://en.wikipedia.org/wiki/Gaussian_elimination
+export function gaussianElimination(A: NumberArray[], B: NumberArray, o?: NumberArray) {
+	const n = A.length
+
+	for (let i = 0; i < n; i++) {
+		// Pivot
+		let maxRow = i
+
+		for (let k = i + 1; k < n; k++) {
+			if (Math.abs(A[k][i]) > Math.abs(A[maxRow][i])) maxRow = k
+		}
+
+		const tempM = A[maxRow]
+		A[maxRow] = A[i]
+		A[i] = tempM
+
+		const tempB = B[maxRow]
+		B[maxRow] = B[i]
+		B[i] = tempB
+
+		const divisor = A[i][i]
+		for (let j = i; j < n; j++) A[i][j] /= divisor
+		B[i] /= divisor
+
+		for (let k = i + 1; k < n; k++) {
+			const factor = A[k][i]
+			for (let j = i; j < n; j++) A[k][j] -= factor * A[i][j]
+			B[k] -= factor * B[i]
+		}
+	}
+
+	const x = o ?? new Float64Array(n)
+
+	for (let i = n - 1; i >= 0; i--) {
+		const AI = A[i]
+		let sum = 0
+
+		for (let k = i + 1; k < AI.length; k++) {
+			sum += AI[k] * x[k]
+		}
+
+		x[i] = B[i] - sum
+	}
+
+	return x
 }

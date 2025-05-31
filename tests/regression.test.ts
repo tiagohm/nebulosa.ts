@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { exponentialRegression, polynomialRegression, powerRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
+import { exponentialRegression, hyperbolicRegression, levenbergMarquardt, polynomialRegression, powerRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
 
 test('simple linear', () => {
 	const x = [80, 60, 10, 20, 30]
@@ -187,6 +187,18 @@ test('power regression', () => {
 	expect(score.chi2).toBeCloseTo(0.03, 1)
 })
 
+test('hyperbolic regression', () => {
+	const x = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+	const y = [18, 11, 6, 3, 2, 3, 6, 11, 18]
+
+	const regression = hyperbolicRegression(x, y)
+
+	expect(regression.minimum[0]).toBeCloseTo(5, 7)
+	expect(regression.minimum[1]).toBeCloseTo(1.02, 3)
+	expect(regression.predict(5)).toBeCloseTo(1.2, 0)
+	expect(regression.x(1.02)).toBeCloseTo(5, 3)
+})
+
 test('regression score', () => {
 	// https://en.wikipedia.org/wiki/Simple_linear_regression#Numerical_example
 	const x = [1.47, 1.5, 1.52, 1.55, 1.57, 1.6, 1.63, 1.65, 1.68, 1.7, 1.73, 1.75, 1.78, 1.8, 1.83]
@@ -201,4 +213,134 @@ test('regression score', () => {
 	expect(score.r2).toBe(score.r * score.r)
 	expect(score.chi2).toBeLessThan(1)
 	expect(score.rmsd).toBeLessThan(1)
+})
+
+// https://github.com/mljs/levenberg-marquardt/blob/main/src/__tests__/curve.test.js
+describe('Levenberg-Marquardt regression', () => {
+	test('line', () => {
+		function line(x: number, [a, b]: number[]) {
+			return a * x + b
+		}
+
+		const x = [0, 1, 2, 3, 4, 5, 6]
+		const y = [-2, 0, 2, 4, 6, 8, 10]
+		const result = levenbergMarquardt(x, y, line, [1, 0])
+
+		expect(result[0]).toBeCloseTo(2, 8)
+		expect(result[1]).toBeCloseTo(-2, 8)
+
+		for (let i = 0; i < x.length; i++) {
+			expect(line(x[i], result)).toBeCloseTo(y[i], 8)
+		}
+	})
+
+	test('quadratic', () => {
+		function quadratic(x: number, [a, b, c]: number[]) {
+			return a * x * x + b * x + c
+		}
+
+		const x = [0, 1, 2, 3, 4, 5, 6]
+		const y = [1, 2, 3, 4, 5, 6, 7]
+		const result = levenbergMarquardt(x, y, quadratic, [1, 0, 0])
+
+		expect(result[0]).toBeCloseTo(0, 6)
+		expect(result[1]).toBeCloseTo(1, 6)
+		expect(result[2]).toBeCloseTo(1, 6)
+
+		for (let i = 0; i < x.length; i++) {
+			expect(quadratic(x[i], result)).toBeCloseTo(y[i], 6)
+		}
+	})
+
+	test('cubic', () => {
+		function cubic(x: number, [a, b, c, d]: number[]) {
+			return a * x * x * x + b * x * x + c * x + d
+		}
+
+		const x = [0, 1, 2, 3, 4, 5, 6]
+		const y = [1, 2, 3, 4, 5, 6, 7]
+		const result = levenbergMarquardt(x, y, cubic, [1, 0, 0, 0])
+
+		expect(result[0]).toBeCloseTo(0, 6)
+		expect(result[1]).toBeCloseTo(0, 6)
+		expect(result[2]).toBeCloseTo(1, 6)
+		expect(result[3]).toBeCloseTo(1, 6)
+
+		for (let i = 0; i < x.length; i++) {
+			expect(cubic(x[i], result)).toBeCloseTo(y[i], 6)
+		}
+	})
+
+	test('exponential', () => {
+		function exponential(x: number, [a, b]: number[]) {
+			return a * Math.exp(b * x)
+		}
+
+		const x = [0, 1, 2, 3, 4, 5, 6]
+		const y = [1, 2.718, 7.389, 20.085, 54.598, 148.413, 403.429]
+		const result = levenbergMarquardt(x, y, exponential, [1, 1])
+
+		expect(result[0]).toBeCloseTo(1, 5)
+		expect(result[1]).toBeCloseTo(1, 5)
+
+		for (let i = 0; i < x.length; i++) {
+			expect(exponential(x[i], result)).toBeCloseTo(y[i], 2)
+		}
+	})
+
+	test('sine', () => {
+		function sine(x: number, [a, b, c]: number[]) {
+			return a * Math.sin(b * x + c)
+		}
+
+		const x = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2, 2 * Math.PI]
+		const y = [0, 1, 0, -1, 0]
+		const result = levenbergMarquardt(x, y, sine, [1, 1, 0])
+
+		expect(result[0]).toBeCloseTo(1, 8)
+		expect(result[1]).toBeCloseTo(1, 8)
+		expect(result[2]).toBeCloseTo(0, 8)
+
+		expect(sine(Math.PI / 4, result)).toBeCloseTo(0.7071067811865475, 8)
+
+		for (let i = 0; i < x.length; i++) {
+			expect(sine(x[i], result)).toBeCloseTo(y[i], 8)
+		}
+	})
+
+	test('logarithmic', () => {
+		function logarithmic(x: number, [a, b]: number[]) {
+			return a * Math.log(b * x)
+		}
+
+		const x = [1, 2, 3, 4, 5, 6]
+		const y = [0, 0.693, 1.099, 1.386, 1.609, 1.792]
+		const result = levenbergMarquardt(x, y, logarithmic, [1, 3])
+
+		expect(result[0]).toBeCloseTo(1, 4)
+		expect(result[1]).toBeCloseTo(1, 4)
+
+		for (let i = 0; i < x.length; i++) {
+			expect(logarithmic(x[i], result)).toBeCloseTo(y[i], 3)
+		}
+	})
+
+	test('complex', () => {
+		function complex(x: number, [a, b, c, d]: number[]) {
+			return a + (b - a) / (1 + c ** d * x ** -d)
+		}
+
+		const x = [9.22e-12, 5.53e-11, 3.32e-10, 1.99e-9, 1.19e-8, 7.17e-8, 4.3e-7, 0.00000258, 0.0000155, 0.0000929]
+		const y = [7.3, 8.61, 10.13, 11.88, 13.89, 16.18, 18.76, 21.64, 24.83, 28.32]
+		const result = levenbergMarquardt(x, y, complex, [0, 100, 1, 0.1])
+
+		expect(result[0]).toBeCloseTo(0, 1)
+		expect(result[1]).toBeCloseTo(99.4, 1)
+		expect(result[2]).toBeCloseTo(0.9, 1)
+		expect(result[3]).toBeCloseTo(0.1, 1)
+
+		for (let i = 0; i < x.length; i++) {
+			expect(complex(x[i], result)).toBeCloseTo(y[i], 1)
+		}
+	})
 })

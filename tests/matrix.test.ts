@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { LuDecomposition, Mat3, QrDecomposition, mulMTxN, mulMxN, mulMxNT } from '../src/matrix'
+import { LuDecomposition, Mat3, QrDecomposition, gaussianElimination, mulMTxN, mulMxN, mulMxNT } from '../src/matrix'
 import type { Vector3 } from '../src/vector'
 
 describe('Mat3', () => {
@@ -199,6 +199,7 @@ describe('LU decomposition', () => {
 		expect(det).toBeCloseTo(Mat3.determinant(matrix), 12)
 
 		const inv = decomposition.invert()
+
 		expect(inv[0][0]).toBeCloseTo(3 / 29, 12)
 		expect(inv[0][1]).toBeCloseTo(8 / 29, 12)
 		expect(inv[0][2]).toBeCloseTo(-1 / 29, 12)
@@ -210,6 +211,7 @@ describe('LU decomposition', () => {
 		expect(inv[2][2]).toBeCloseTo(25 / 58, 12)
 
 		const x = decomposition.solve([1, 1, 1])
+
 		expect(x[0]).toBeCloseTo(0.3448275862068966, 12)
 		expect(x[1]).toBeCloseTo(0.017241379310344827, 12)
 		expect(x[2]).toBeCloseTo(0.1896551724137931, 12)
@@ -222,6 +224,7 @@ describe('LU decomposition', () => {
 		expect(decomposition.determinant).toBeCloseTo(-2.1875, 12)
 
 		const inv = decomposition.invert()
+
 		expect(inv[0][0]).toBeCloseTo(0.74285714, 7)
 		expect(inv[0][1]).toBeCloseTo(-0.11428571, 7)
 		expect(inv[0][2]).toBeCloseTo(-0.68571429, 7)
@@ -240,6 +243,7 @@ describe('LU decomposition', () => {
 		expect(inv[3][3]).toBeCloseTo(0.74285714, 7)
 
 		const x = decomposition.solve([20001, 20003, 20005, 20007])
+
 		expect(x[0]).toBeCloseTo(8000.1714, 4)
 		expect(x[1]).toBeCloseTo(8000.7429, 4)
 		expect(x[2]).toBeCloseTo(8002.45714, 4)
@@ -254,6 +258,7 @@ describe('LU decomposition', () => {
 		expect(decomposition.determinant).toBeCloseTo(5025, 11)
 
 		const inv = decomposition.invert()
+
 		expect(inv[0][0]).toBeCloseTo(457 / 1005, 12)
 		expect(inv[0][1]).toBeCloseTo(26 / 1005, 12)
 		expect(inv[0][2]).toBeCloseTo(-61 / 5025, 12)
@@ -281,6 +286,7 @@ describe('LU decomposition', () => {
 		expect(inv[4][4]).toBeCloseTo(163 / 1675, 12)
 
 		const x = decomposition.solve([12, 25, 18, 30, 17])
+
 		expect(x[0]).toBeCloseTo(1.084179104477611, 12)
 		expect(x[1]).toBeCloseTo(0.17731343283582093, 12)
 		expect(x[2]).toBeCloseTo(1.1982089552238815, 12)
@@ -291,10 +297,11 @@ describe('LU decomposition', () => {
 
 describe('QR decomposition', () => {
 	test('3x3', () => {
-		const matrix = [2, 7, 1, 3, -2, 0, 1, 5, 3] as const
-		const decomposition = new QrDecomposition(matrix, 3, 3)
-
+		// biome-ignore format:
+		const matrix = [[2, 7, 1], [3, -2, 0], [1, 5, 3]] as const
+		const decomposition = new QrDecomposition(matrix)
 		const x = decomposition.solve([1, 1, 1])
+
 		expect(x[0]).toBeCloseTo(0.3448275862068966, 12)
 		expect(x[1]).toBeCloseTo(0.017241379310344827, 12)
 		expect(x[2]).toBeCloseTo(0.1896551724137931, 12)
@@ -303,8 +310,8 @@ describe('QR decomposition', () => {
 	test('4x4', () => {
 		const matrix = [3 / 2, 1, 0, 0, 1, 1 / 2, 1, 0, 0, 1, 1 / 2, 1, 0, 0, 1, 3 / 2] as const
 		const decomposition = new QrDecomposition(matrix, 4, 4)
-
 		const x = decomposition.solve([20001, 20003, 20005, 20007])
+
 		expect(x[0]).toBeCloseTo(8000.1714, 4)
 		expect(x[1]).toBeCloseTo(8000.7429, 4)
 		expect(x[2]).toBeCloseTo(8002.45714, 4)
@@ -314,8 +321,8 @@ describe('QR decomposition', () => {
 	test('5x5', () => {
 		const matrix = [4, 2, 3, 1, 5, 6, 7, 2, 8, 1, 5, 9, 4, 3, 2, 8, 1, 7, 6, 5, 3, 4, 5, 2, 9] as const
 		const decomposition = new QrDecomposition(matrix, 5, 5)
-
 		const x = decomposition.solve([12, 25, 18, 30, 17])
+
 		expect(x[0]).toBeCloseTo(1.084179104477611, 12)
 		expect(x[1]).toBeCloseTo(0.17731343283582093, 12)
 		expect(x[2]).toBeCloseTo(1.1982089552238815, 12)
@@ -324,11 +331,23 @@ describe('QR decomposition', () => {
 	})
 
 	test('5x2', () => {
-		const matrix = [10000, 10001, 10002, 10003, 10004, 10001, 10002, 10003, 10004, 10005] as const
-		const decomposition = new QrDecomposition(matrix, 5, 2)
-
+		const matrix = [Float64Array.from([10000, 10001]), Float64Array.from([10002, 10003]), Float64Array.from([10004, 10001]), Float64Array.from([10002, 10003]), Float64Array.from([10004, 10005])] as const
+		const decomposition = new QrDecomposition(matrix)
 		const x = decomposition.solve([20001, 20003, 20005, 20007, 20009])
+
 		expect(x[0]).toBeCloseTo(1, 12)
 		expect(x[1]).toBeCloseTo(1, 12)
 	})
+})
+
+// https://matrix.reshish.com/gauss-jordanElimination.php
+test('gaussian elimination', () => {
+	// biome-ignore format:
+	const a = [[2, 1, -1], [-3, -1, 2], [-2, 1, 2]]
+	const b = [8, -11, -3]
+	const x = gaussianElimination(a, b)
+
+	expect(x[0]).toBeCloseTo(2, 12)
+	expect(x[1]).toBeCloseTo(3, 12)
+	expect(x[2]).toBeCloseTo(-1, 12)
 })

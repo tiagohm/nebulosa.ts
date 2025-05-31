@@ -1,11 +1,15 @@
 import { isNumberArray, minOf } from './helper'
 import type { NumberArray } from './math'
-import { LuDecomposition } from './matrix'
+import { LuDecomposition, gaussianElimination } from './matrix'
 
 export type TrendLineRegressionMethod = 'simple' | 'theil-sen'
 
 export interface Regression {
 	readonly predict: (x: number) => number
+}
+
+export interface InverseRegression {
+	readonly x: (x: number) => number
 }
 
 export interface RegressionScore {
@@ -15,20 +19,25 @@ export interface RegressionScore {
 	readonly rmsd: number
 }
 
-export interface LinearRegression extends Regression {
+export interface LinearRegression extends Regression, InverseRegression {
 	readonly slope: number
 	readonly intercept: number
-	readonly x: (y: number) => number
 }
 
 export interface PolynomialRegression extends Regression {
 	readonly coefficients: Float64Array
 }
 
-export interface ExponentialRegression extends Regression {
+export interface ExponentialRegression extends Regression, InverseRegression {
 	readonly a: number
 	readonly b: number
-	readonly x: (y: number) => number
+}
+
+export interface HyperbolicRegression extends Regression, InverseRegression {
+	readonly a: number
+	readonly b: number
+	readonly p: number
+	readonly minimum: readonly [number, number]
 }
 
 export interface TrendLineRegression extends Regression {
@@ -36,6 +45,12 @@ export interface TrendLineRegression extends Regression {
 	readonly right: LinearRegression
 	readonly minimum: readonly [number, number]
 	readonly intersection: readonly [number, number]
+}
+
+export interface LevenbergMarquardtOptions {
+	maxIterations?: number
+	lambda?: number
+	tolerance?: number
 }
 
 // Computes intercept and slope using the ordinary least squares method
@@ -278,7 +293,53 @@ export function powerRegression(x: Readonly<NumberArray>, y: Readonly<NumberArra
 		a,
 		b,
 		predict: (x: number) => a * x ** b,
-		x: (y: number) => Math.exp(Math.log(y / a) / b) || 0,
+		x: (y: number) => (a && b ? (y / a) ** (1 / b) : 0), // Math.exp(Math.log(y / a) / b)
+	}
+}
+
+export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): HyperbolicRegression {
+	const n = Math.min(x.length, y.length)
+
+	const lowestPoint: [number, number] = [x[0], y[0]]
+	const highestPoint: [number, number] = [x[0], y[0]]
+
+	for (let i = 1; i < n; i++) {
+		if (y[i] < lowestPoint[1]) {
+			lowestPoint[0] = x[i]
+			lowestPoint[1] = y[i]
+		}
+		if (y[i] > highestPoint[1]) {
+			highestPoint[0] = x[i]
+			highestPoint[1] = y[i]
+		}
+	}
+
+	// Always go up
+	if (highestPoint[0] < lowestPoint[0]) {
+		highestPoint[0] = 2 * lowestPoint[0] - highestPoint[0]
+	}
+
+	const ae = lowestPoint[1] // y(0) = a * cosh(0) = a * 1 = a
+	// const be = highestPoint[0] / Math.acosh(highestPoint[1] / ae) // b = x / arcosh(y/a)
+	// Alternative hyperbola formula: sqrt(y)/sqrt(a)-sqrt(x)/sqrt(b)=1 ==>  sqrt(b)=sqrt(x)*sqrt(a)/(sqrt(y)-sqrt(a)
+	const be = Math.sqrt(((highestPoint[0] - lowestPoint[0]) * (highestPoint[0] - lowestPoint[0]) * ae * ae) / (highestPoint[1] * highestPoint[1] - ae * ae))
+	const pe = lowestPoint[0]
+
+	function hyperbolic(x: number, [a, b, p]: number[]) {
+		return a * Math.cosh(Math.asinh((p - x) / b))
+	}
+
+	// Use Levenberg-Marquardt to optimize the parameters a and b
+	const [a, b, p] = levenbergMarquardt(x, y, hyperbolic, [ae, be, pe], { maxIterations: 1000, tolerance: 1e-8 })
+
+	return {
+		a,
+		b,
+		p,
+		minimum: [p, a],
+		predict: (x: number) => a * Math.cosh(Math.asinh((p - x) / b)),
+		// https://www.wolframalpha.com/input?i=isolate+x+for+y+%3D+a+*+cosh%28asinh%28%28p+-+x%29+%2F+b%29%29
+		x: (y: number) => (y > a ? Math.sqrt(b * b * (y * y - a * a)) / a + p : p),
 	}
 }
 
@@ -306,7 +367,6 @@ export function regressionScore(regression: Regression, x: Readonly<NumberArray>
 	const r2 = 1 - sum / (ySquared - sumY ** 2 / n)
 	const r = Math.sqrt(r2)
 	const rmsd = Math.sqrt(sum / n)
-	// const r2Adjusted = 1 - (1 - r2) * (n - 1) / (n - 2)
 
 	return { r, r2, chi2, rmsd }
 }
@@ -319,4 +379,86 @@ export function intersect(a: LinearRegression, b: LinearRegression): readonly [n
 	const y = a.slope * x + a.intercept
 
 	return [x, y]
+}
+
+const LEVENBERG_MARQUARDT_DELTA = 1e-8
+
+// Computes the coefficients of a Levenberg-Marquardt regression
+// This is a non-linear least squares optimization algorithm
+// It minimizes the sum of squared residuals between the model and the data
+export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberArray>, model: (x: number, params: number[]) => number, params: number[], { maxIterations = 100, lambda = 0.01, tolerance = 1e-6 }: LevenbergMarquardtOptions = {}) {
+	const n = Math.min(x.length, y.length)
+	const m = params.length
+
+	const J = new Array<NumberArray>(m)
+	const PJ = new Array<number>(m)
+	const JTJ = new Array<Float64Array>(m)
+	const JTR = new Float64Array(m)
+
+	const R = new Float64Array(n)
+	const UP = new Array<number>(m)
+	const DP = new Float64Array(m)
+
+	const YP = new Float64Array(n)
+	const YPJ = new Float64Array(n)
+
+	for (let i = 0; i < m; i++) {
+		J[i] = new Float64Array(n)
+		JTJ[i] = new Float64Array(m)
+	}
+
+	const predict = (params: number[], o: NumberArray) => {
+		for (let i = 0; i < o.length; i++) o[i] = model(x[i], params)
+	}
+
+	while (maxIterations-- > 0) {
+		predict(params, YP)
+
+		// residual
+		for (let i = 0; i < n; i++) R[i] = y[i] - YP[i]
+
+		// Jacobian
+		for (let j = 0; j < m; j++) {
+			for (let k = 0; k < m; k++) PJ[k] = params[k]
+			PJ[j] += LEVENBERG_MARQUARDT_DELTA
+			predict(PJ, YPJ)
+
+			for (let k = 0; k < n; k++) {
+				J[j][k] = (YPJ[k] - YP[k]) / LEVENBERG_MARQUARDT_DELTA
+			}
+		}
+
+		// Jᵀ * J and Jᵀ * r
+		for (let i = 0; i < m; i++) {
+			// Jᵀ * J
+			for (let j = 0; j < m; j++) {
+				JTJ[i][j] = (J[i] as number[]).reduce((sum, v, k) => sum + v * J[j][k], 0)
+			}
+
+			// Jᵀ * residuals
+			JTR[i] = (J[i] as number[]).reduce((sum, v, k) => sum + v * R[k], 0)
+		}
+
+		for (let i = 0; i < m; i++) {
+			JTJ[i][i] *= 1 + lambda
+		}
+
+		// Solve JTJ * dp = JTr
+		gaussianElimination(JTJ, JTR, DP)
+
+		// Update parameters
+		for (let i = 0; i < m; i++) UP[i] = params[i] + DP[i]
+		const error = R.reduce((sum, r) => sum + r * r, 0)
+		const newError = (y as number[]).reduce((sum, r, i) => sum + (r - model(x[i], UP)) ** 2, 0)
+
+		if (newError < error) {
+			params = UP
+			if (Math.abs(error - newError) < tolerance) break
+			lambda /= 10
+		} else {
+			lambda *= 10
+		}
+	}
+
+	return params
 }
