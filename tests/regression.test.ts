@@ -343,4 +343,40 @@ describe('Levenberg-Marquardt regression', () => {
 			expect(complex(x[i], result)).toBeCloseTo(y[i], 1)
 		}
 	})
+
+	// https://github.com/accord-net/framework/blob/development/Unit%20Tests/Accord.Tests.Statistics/Models/Regression/LevenbergMarquardtTest.cs
+	test('misra1a', () => {
+		function misra1a(x: number, [a, b]: number[]) {
+			return a * (1 - Math.exp(-b * x))
+		}
+
+		const x = [77.6, 114.9, 141.1, 190.8, 239.9, 289.0, 332.8, 378.4, 434.8, 477.3, 536.8, 593.1, 689.1, 760.0]
+		const y = [10.07, 14.73, 17.94, 23.93, 29.61, 35.18, 40.02, 44.82, 50.76, 55.05, 61.01, 66.4, 75.47, 81.78]
+		const result = levenbergMarquardt(x, y, misra1a, [250, 0.0005])
+
+		expect(result[0]).toBeCloseTo(238.944658680792, 2)
+		expect(result[1]).toBeCloseTo(0.00055014847409921093, 5)
+
+		for (let i = 0; i < x.length; i++) {
+			expect(misra1a(x[i], result)).toBeCloseTo(y[i], 0)
+		}
+	})
+
+	// https://en.wikipedia.org/wiki/Gauss%E2%80%93Newton_algorithm
+	test('biology experiment', () => {
+		function biology(x: number, [a, b]: number[]) {
+			return (a * x) / (b + x)
+		}
+
+		const x = [0.03, 0.1947, 0.425, 0.626, 1.253, 2.5, 3.74]
+		const y = [0.05, 0.127, 0.094, 0.2122, 0.2729, 0.2665, 0.3317]
+		const result = levenbergMarquardt(x, y, biology, [0.9, 0.2])
+
+		expect(result[0]).toBeCloseTo(0.362, 3)
+		expect(result[1]).toBeCloseTo(0.558, 3)
+
+		for (let i = 0; i < x.length; i++) {
+			expect(biology(x[i], result)).toBeCloseTo(y[i], 0)
+		}
+	})
 })

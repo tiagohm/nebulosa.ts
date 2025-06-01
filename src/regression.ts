@@ -1,6 +1,6 @@
 import { isNumberArray, minOf } from './helper'
 import type { NumberArray } from './math'
-import { LuDecomposition, gaussianElimination } from './matrix'
+import { gaussianElimination } from './matrix'
 
 export type TrendLineRegressionMethod = 'simple' | 'theil-sen'
 
@@ -125,10 +125,12 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 
 	// DxN * NxD = DxD
 	// const A = mulMTxN(F, F) // Fᵀ*F
-	const A = new Float64Array(powers.length * powers.length)
+	const A = new Array<Float64Array>(powers.length)
 
-	for (let i = 0, p = 0; i < powers.length; i++) {
-		for (let j = 0; j < powers.length; j++, p++) {
+	for (let i = 0; i < powers.length; i++) {
+		const row = new Float64Array(powers.length)
+
+		for (let j = 0; j < powers.length; j++) {
 			let s = 0
 
 			for (let k = 0; k < n; k++) {
@@ -138,8 +140,10 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 				s += s0 * s1
 			}
 
-			A[p] = s
+			row[j] = s
 		}
+
+		A[i] = row
 	}
 
 	// 1xN * NxD = 1xD
@@ -159,8 +163,9 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	}
 
 	// Solve A*x=B
-	const LU = new LuDecomposition(A)
-	const coefficients = LU.solve(B)
+	// const LU = new LuDecomposition(A)
+	// const coefficients = LU.solve(B)
+	const coefficients = gaussianElimination(A, B, B)
 
 	return {
 		coefficients: new Float64Array(coefficients),
