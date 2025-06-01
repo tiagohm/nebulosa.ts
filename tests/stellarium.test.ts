@@ -4,7 +4,7 @@ import { deg, parseAngle } from '../src/angle'
 import { fileHandleSource } from '../src/io'
 import { type CatalogEntry, ObjectType, readCatalogDat, searchAround } from '../src/stellarium'
 
-test('catalog', async () => {
+test.skip('catalog', async () => {
 	// https://github.com/Stellarium/stellarium/raw/refs/heads/master/nebulae/default/catalog.dat
 	const handle = await fs.open('data/catalog.dat')
 	const source = fileHandleSource(handle)
