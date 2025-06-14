@@ -34,9 +34,9 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 	const process = Bun.spawn([executable, '-f', input, '-z', '0', '-extract', minSNR.toFixed(0)], { cwd, signal, timeout })
 	const exitCode = await process.exited
 
-	if (exitCode === 0) {
-		const file = `${join(cwd, basename(input, extname(input)))}.csv`
+	const file = `${join(cwd, basename(input, extname(input)))}.csv`
 
+	if (await fs.exists(file)) {
 		try {
 			const csv = readCsv(await fs.readFile(file, 'utf-8'))
 
