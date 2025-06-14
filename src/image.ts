@@ -148,6 +148,8 @@ export async function writeImageToFormat(image: Image, output: string | NodeJS.W
 	if (options?.blur) s.blur()
 	if (options?.negate) s.negate()
 
+	if (channels === 1) s.toColourspace('b-w')
+
 	if (typeof output === 'string') {
 		return await s.toFile(output)
 	} else {
