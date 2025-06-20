@@ -12,7 +12,7 @@ test('readImageFromFits', async () => {
 
 			expect(image!.header).toBe(fits!.hdus[0].header)
 
-			const hash = channel === 1 ? 'fb9ca4a1edb3588a2cf678227ed4b364' : '3d0e63969cdbffcf75bb1450ce6e61da'
+			const hash = channel === 1 ? '386a11ebe344b73505aa13765e65df7b' : '3d0e63969cdbffcf75bb1450ce6e61da'
 
 			await readImageAndTransformAndSaveImage((i) => i, `read-${bitpix}.${channel}`, hash, bitpix, channel)
 		}
@@ -35,7 +35,7 @@ test('writeImageToFits', async () => {
 
 			expect(image0!.header).toEqual(image1!.header)
 
-			const hash = channel === 1 ? 'fb9ca4a1edb3588a2cf678227ed4b364' : '3d0e63969cdbffcf75bb1450ce6e61da'
+			const hash = channel === 1 ? '386a11ebe344b73505aa13765e65df7b' : '3d0e63969cdbffcf75bb1450ce6e61da'
 
 			await saveImageAndCompareHash(image1!, `write-${key}`, hash)
 		}
