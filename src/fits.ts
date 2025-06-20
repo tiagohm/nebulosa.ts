@@ -1,4 +1,5 @@
 import type { Mutable } from 'utility-types'
+import { type Angle, type ParseAngleOptions, deg, parseAngle } from './angle'
 import { type Seekable, type Sink, type Source, readUntil, sourceTransferToSink } from './io'
 
 export const FITS_IMAGE_MIME_TYPE = 'image/fits'
@@ -36,6 +37,10 @@ export enum Bitpix {
 }
 
 export type BitpixOrZero = Bitpix | 0
+
+export function hasKeyword(header: FitsHeader, key: FitsHeaderKey) {
+	return key in header && header[key] !== undefined
+}
 
 export function numericKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue: number = 0) {
 	const value = header[key]
@@ -78,6 +83,48 @@ export function numberOfChannels(header: FitsHeader, defaultValue: number = 1) {
 
 export function bitpix(header: FitsHeader, defaultValue: BitpixOrZero = 0): BitpixOrZero {
 	return numericKeyword(header, 'BITPIX', defaultValue)
+}
+
+const RA_PARSE_OPTIONS: ParseAngleOptions = {
+	isHour: true,
+}
+
+export function rightAscension(header: FitsHeader, defaultValue: Angle = 0) {
+	if (hasKeyword(header, 'RA')) {
+		const value = deg(numericKeyword(header, 'RA', defaultValue))
+		if (value && value !== defaultValue) return value
+	}
+
+	if (hasKeyword(header, 'OBJCTRA')) {
+		const value = parseAngle(textKeyword(header, 'OBJCTRA', ''), RA_PARSE_OPTIONS)
+		if (value && value !== defaultValue) return value
+	}
+
+	if (hasKeyword(header, 'RA_OBJ')) {
+		const value = deg(numericKeyword(header, 'RA_OBJ', defaultValue))
+		if (value && value !== defaultValue) return value
+	}
+
+	return defaultValue
+}
+
+export function declination(header: FitsHeader, defaultValue: Angle = 0) {
+	if (hasKeyword(header, 'DEC')) {
+		const value = deg(numericKeyword(header, 'DEC', defaultValue))
+		if (value && value !== defaultValue) return value
+	}
+
+	if (hasKeyword(header, 'OBJCTDEC')) {
+		const value = parseAngle(textKeyword(header, 'OBJCTDEC', ''))
+		if (value && value !== defaultValue) return value
+	}
+
+	if (hasKeyword(header, 'DEC_OBJ')) {
+		const value = deg(numericKeyword(header, 'DEC_OBJ', defaultValue))
+		if (value && value !== defaultValue) return value
+	}
+
+	return defaultValue
 }
 
 export function bitpixInBytes(bitpix: BitpixOrZero) {

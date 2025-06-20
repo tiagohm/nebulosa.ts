@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, bitpixInBytes, computeRemainingBytes, height, readFits, width, writeFits } from '../src/fits'
+import { dms, hms } from '../src/angle'
+import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, bitpixInBytes, computeRemainingBytes, declination, height, readFits, rightAscension, width, writeFits } from '../src/fits'
 import { bufferSink, bufferSource } from '../src/io'
 import { BITPIXES, CHANNELS, openFits } from './image.util'
 
@@ -108,4 +109,24 @@ test('escape', async () => {
 	await writeFits(bufferSink(sink), fits!)
 
 	expect(sink).toEqual(source)
+})
+
+test('width', () => {
+	expect(width({ NAXIS1: 1200 })).toBe(1200)
+	expect(width({ IMAGEW: 1200 })).toBe(1200)
+})
+
+test('height', () => {
+	expect(height({ NAXIS2: 1200 })).toBe(1200)
+	expect(height({ IMAGEH: 1200 })).toBe(1200)
+})
+
+test('rightAscension', () => {
+	expect(rightAscension({ OBJCTRA: '10 44 04.261' })).toBeCloseTo(hms(10, 44, 4.261), 12)
+	expect(rightAscension({ RA: 161.0177548315 })).toBeCloseTo(hms(10, 44, 4.26115956), 12)
+})
+
+test('declination', () => {
+	expect(declination({ OBJCTDEC: '-59 36 08.17' })).toBeCloseTo(dms(-59, 36, 8.17), 12)
+	expect(declination({ DEC: -59.6022705034 })).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
 })
