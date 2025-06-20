@@ -285,29 +285,35 @@ twoProduct(0.5, 0.4) // Multiply both exactly in two 64-bit floats
 ### Matrix
 
 ```ts
-const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-Matrix3.zero() // Matrix filled with zeroes
-Matrix3.identity() // Identity matrix
-Matrix3.rotX(PI, m) // Rotate the matrix around x-axis
-Matrix3.rotY(PI, m) // Rotate the matrix around y-axis
-Matrix3.rotZ(PI, m) // Rotate the matrix around z-axis
-Matrix3.clone(m) // Clone the matrix
-Matrix3.copy(m, n) // Copy the matrix to another matrix
-Matrix3.determinant(m) // Determinant of the matrix
-Matrix3.trace(m) // Trace of the matrix
-Matrix3.transpose(m) // Transpose the matrix
-Matrix3.flipX(m) // Flip the x-axis of the matrix
-Matrix3.flipY(m) // Flip the y-axis of the matrix
-Matrix3.negate(m) // Negate the matrix
-Matrix3.plusScalar(m, 2) // Sum the matrix by a scalar
-Matrix3.minusScalar(m, 2) // Subtract the matrix by a scalar
-Matrix3.mulScalar(m, 2) // Multiply the matrix by a scalar
-Matrix3.divScalar(m, 2) // Divide the matrix by a scalar
-Matrix3.plus(m, n) // Sum two matrices
-Matrix3.minus(m, n) // Subtract two matrices
-Matrix3.mul(m, n) // Multiply two matrices
-Matrix3.mulVec(m, v) // Multiply the matrix by a vector
-Matrix3.mulTransposeVec3(m, v) // Multiply the transpose of the matrix by a vector
+const m = new Matrix(rows, cols, data) // Create a new matrix with given rows, columns and data
+
+m.rows // Number of rows in the matrix
+m.cols // Number of columns in the matrix
+m.at(index) // Get the value at the given index (row-major order)
+m.get(row, col) // Get the value at row and col
+m.set(row, col, value) // Set the value at row and col
+m.isSquare // Check if the matrix is square
+m.isIdentity // Check if the matrix is identity
+m.isZero // Check if the matrix is filled with zeroes
+m.transposed // Get the transpose of the matrix
+m.determinant // Get the determinant of the matrix
+m.trace // Get the trace of the matrix
+m.fill(value) // Fill the matrix with the given value
+m.negate() // Negate the matrix
+m.plusScalar(scalar) // Add a scalar to the matrix
+m.minusScalar(scalar) // Subtract a scalar from the matrix
+m.mulScalar(scalar) // Multiply the matrix by a scalar
+m.divScalar(scalar) // Divide the matrix by a scalar
+m.plus(other) // Add another matrix to the matrix
+m.minus(other) // Subtract another matrix from the matrix
+m.mul(other) // Multiply the matrix by another matrix
+m.mulVec(vector) // Multiply the matrix by a vector
+m.flipX() // Flip the x-axis of the matrix
+m.flipY() // Flip the y-axis of the matrix
+m.rotX(angle) // Rotate the matrix around x-axis by angle
+m.rotY(angle) // Rotate the matrix around y-axis by angle
+m.rotZ(angle) // Rotate the matrix around z-axis by angle
+m.invert() // Invert the matrix
 
 const LU = new LuDecomposition(A)
 LU.determinant // Determinant of the matrix
