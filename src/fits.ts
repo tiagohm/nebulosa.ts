@@ -86,7 +86,7 @@ export function bitpixInBytes(bitpix: Bitpix | 0) {
 	return Math.trunc(Math.abs(bitpix) / 8)
 }
 
-const MAGIC_BYTES = Buffer.from('SIMPLE', 'ascii')
+const MAGIC_BYTES = 'SIMPLE'
 
 export const FITS_BLOCK_SIZE = 2880
 export const FITS_HEADER_CARD_SIZE = 80
@@ -104,7 +104,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 		return undefined
 	}
 
-	if (!buffer.subarray(0, 6).equals(MAGIC_BYTES)) {
+	if (buffer.subarray(0, 6).toString('ascii') !== MAGIC_BYTES) {
 		return undefined
 	}
 
