@@ -1,5 +1,5 @@
 import sharp, { type AvifOptions, type FormatEnum, type GifOptions, type HeifOptions, type Jp2Options, type JpegOptions, type JxlOptions, type OutputOptions, type PngOptions, type TiffOptions, type WebpOptions } from 'sharp'
-import { Bitpix, type Fits, type FitsData, type FitsHdu, type FitsHeader, bitpix, bitpixInBytes, height, numberOfChannels, text, width, writeFits } from './fits'
+import { Bitpix, type Fits, type FitsData, type FitsHdu, type FitsHeader, bitpix, bitpixInBytes, height, numberOfChannels, textKeyword, width, writeFits } from './fits'
 import { type Sink, type Source, bufferSink, bufferSource, readUntil } from './io'
 import { Histogram } from './statistics'
 
@@ -61,7 +61,7 @@ export const BLUE_GRAYSCALE: Grayscale = { red: 0, green: 0, blue: 1 }
 export const DEFAULT_GRAYSCALE = BT709_GRAYSCALE
 
 export function cfaPattern(header: FitsHeader) {
-	return text(header, 'BAYERPAT') as CfaPattern | undefined
+	return textKeyword(header, 'BAYERPAT') as CfaPattern | undefined
 }
 
 export function channelIndex(channel?: ImageChannelOrGray) {

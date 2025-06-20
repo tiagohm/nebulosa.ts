@@ -1,7 +1,7 @@
 import { type Pointer, dlopen, ptr, read } from 'bun:ffi'
 import wcsPath from '../native/libwcs.shared' with { type: 'file' }
 import { type Angle, deg, toDeg } from './angle'
-import { type FitsHeader, FitsKeywordWriter, numeric } from './fits'
+import { type FitsHeader, FitsKeywordWriter, numericKeyword } from './fits'
 
 export type WcsFitsHeaderKey =
 	| 'WCSAXES'
@@ -146,29 +146,29 @@ export function cdMatrix(header: FitsHeader) {
 	if (hasCd(header)) {
 		return [cd(header, 1, 1), cd(header, 1, 2), cd(header, 2, 1), cd(header, 2, 2)] as const
 	} else {
-		const a = numeric(header, 'CDELT1')
-		const b = numeric(header, 'CDELT2')
-		const c = deg(numeric(header, 'CROTA2'))
+		const a = numericKeyword(header, 'CDELT1')
+		const b = numericKeyword(header, 'CDELT2')
+		const c = deg(numericKeyword(header, 'CROTA2'))
 		return cdFromCdelt(a, b, c)
 	}
 }
 
 export function cd(header: FitsHeader, i: number, j: number): number {
 	if ('CD1_1' in header) {
-		return numeric(header, `CD${i}_${j}`)
+		return numericKeyword(header, `CD${i}_${j}`)
 	} else if ('CROTA2' in header) {
-		const a = numeric(header, 'CDELT1')
-		const b = numeric(header, 'CDELT2')
-		const c = deg(numeric(header, 'CROTA2'))
+		const a = numericKeyword(header, 'CDELT1')
+		const b = numericKeyword(header, 'CDELT2')
+		const c = deg(numericKeyword(header, 'CROTA2'))
 		const cd = cdFromCdelt(a, b, c)
 		return cd[2 * i + j - 3]
 	} else if ('PC1_1' in header) {
-		const pc11 = numeric(header, 'PC1_1')
-		const pc12 = numeric(header, 'PC1_2')
-		const pc21 = numeric(header, 'PC2_1')
-		const pc22 = numeric(header, 'PC2_2')
-		const a = numeric(header, 'CDELT1')
-		const b = numeric(header, 'CDELT2')
+		const pc11 = numericKeyword(header, 'PC1_1')
+		const pc12 = numericKeyword(header, 'PC1_2')
+		const pc21 = numericKeyword(header, 'PC2_1')
+		const pc22 = numericKeyword(header, 'PC2_2')
+		const a = numericKeyword(header, 'CDELT1')
+		const b = numericKeyword(header, 'CDELT2')
 		const cd = pc2cd(pc11, pc12, pc21, pc22, a, b)
 		return cd[2 * i + j - 3]
 	} else {

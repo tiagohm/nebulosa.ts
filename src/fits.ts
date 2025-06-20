@@ -35,11 +35,9 @@ export enum Bitpix {
 	DOUBLE = -64,
 }
 
-export function hasKeyword(header: FitsHeader, key: FitsHeaderKey) {
-	return header[key] !== undefined
-}
+export type BitpixOrZero = Bitpix | 0
 
-export function numeric(header: FitsHeader, key: FitsHeaderKey, defaultValue: number = 0) {
+export function numericKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue: number = 0) {
 	const value = header[key]
 	if (value === undefined) return defaultValue
 	else if (typeof value === 'number') return value
@@ -47,7 +45,7 @@ export function numeric(header: FitsHeader, key: FitsHeaderKey, defaultValue: nu
 	else return parseFloat(value)
 }
 
-export function logic(header: FitsHeader, key: FitsHeaderKey, defaultValue: boolean = false) {
+export function booleanKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue: boolean = false) {
 	const value = header[key]
 	if (value === undefined) return defaultValue
 	else if (typeof value === 'number') return value !== 0
@@ -55,7 +53,7 @@ export function logic(header: FitsHeader, key: FitsHeaderKey, defaultValue: bool
 	else return value
 }
 
-export function text(header: FitsHeader, key: FitsHeaderKey, defaultValue: string = '') {
+export function textKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue: string = '') {
 	const value = header[key]
 	if (value === undefined) return defaultValue
 	else if (typeof value === 'string') return value
@@ -63,26 +61,26 @@ export function text(header: FitsHeader, key: FitsHeaderKey, defaultValue: strin
 }
 
 export function naxis(header: FitsHeader, defaultValue: number = 0) {
-	return numeric(header, 'NAXIS', defaultValue)
+	return numericKeyword(header, 'NAXIS', defaultValue)
 }
 
 export function width(header: FitsHeader, defaultValue: number = 0) {
-	return numeric(header, 'NAXIS1', defaultValue)
+	return numericKeyword(header, 'NAXIS1') || numericKeyword(header, 'IMAGEW', defaultValue)
 }
 
 export function height(header: FitsHeader, defaultValue: number = 0) {
-	return numeric(header, 'NAXIS2', defaultValue)
+	return numericKeyword(header, 'NAXIS2') || numericKeyword(header, 'IMAGEH', defaultValue)
 }
 
 export function numberOfChannels(header: FitsHeader, defaultValue: number = 1) {
-	return numeric(header, 'NAXIS3', defaultValue)
+	return numericKeyword(header, 'NAXIS3', defaultValue)
 }
 
-export function bitpix(header: FitsHeader, defaultValue: Bitpix | 0 = 0): Bitpix | 0 {
-	return numeric(header, 'BITPIX', defaultValue)
+export function bitpix(header: FitsHeader, defaultValue: BitpixOrZero = 0): BitpixOrZero {
+	return numericKeyword(header, 'BITPIX', defaultValue)
 }
 
-export function bitpixInBytes(bitpix: Bitpix | 0) {
+export function bitpixInBytes(bitpix: BitpixOrZero) {
 	return Math.trunc(Math.abs(bitpix) / 8)
 }
 
