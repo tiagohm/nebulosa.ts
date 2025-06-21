@@ -76,7 +76,7 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 const DIMENSIONS_REGEX = /DIMENSIONS=(\d+)\s*x\s*(\d+)/
 
 export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, timeout = 300000, ra = 0, dec = 0, radius = 0, executable, sip = true }: AstapPlateSolveOptions = {}, signal?: AbortSignal) {
-	fov = Math.max(0, Math.min(toDeg(fov), 360))
+	fov = Math.max(0, Math.min(toDeg(fov), 360)) // Specify 0 for auto
 	const wcs = join(tmpdir(), `${Bun.randomUUIDv7()}.wcs`)
 	const ini = wcs.replace('.wcs', '.ini')
 	radius = Math.max(0, Math.min(Math.ceil(toDeg(radius)), 180))
@@ -87,7 +87,7 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 
 	const commands = [executable, '-o', wcs, '-z', downsample.toFixed(0), '-wcs', '-f', input]
 
-	if (fov) commands.push('-fov', `${fov}`)
+	commands.push('-fov', `${fov}`)
 	if (sip) commands.push('-sip')
 	if (radius) commands.push('-ra', `${ra}`, '-spd', `${spd}`, '-r', `${radius}`)
 	else commands.push('-r', '180')
