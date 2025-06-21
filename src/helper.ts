@@ -61,8 +61,6 @@ export function binarySearch(input: NumberArray, key: number, { from = 0, to = i
 			to = index - 1
 		} else if (value === key) {
 			return index
-		} else if (value < key) {
-			from = index + 1
 		} else {
 			to = index - 1
 		}

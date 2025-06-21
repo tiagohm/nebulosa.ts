@@ -10,7 +10,7 @@
 	},
 	"formatter": {
 		"enabled": true,
-		"ignore": ["**/*.data.ts"],
+		"includes": ["**", "!**/*.data.ts"],
 		"formatWithErrors": false,
 		"attributePosition": "auto",
 		"indentStyle": "tab",
@@ -35,11 +35,14 @@
 		"formatter": {
 			"enabled": true,
 			"trailingCommas": "none"
+		},
+		"assist": {
+			"enabled": false
 		}
 	},
 	"linter": {
 		"enabled": true,
-		"ignore": ["**/*.data.ts"],
+		"includes": ["**", "!**/*.data.ts"],
 		"rules": {
 			"style": {
 				"noInferrableTypes": "off",
@@ -52,26 +55,48 @@
 				"useForOf": "off",
 				"useNodejsImportProtocol": "off",
 				"useNumberNamespace": "off",
-				"useThrowOnlyError": "error"
+				"useThrowOnlyError": "error",
+				"useSelfClosingElements": "off",
+				"useAsConstAssertion": "error",
+				"useDefaultParameterLast": "error",
+				"useSingleVarDeclarator": "error",
+				"noUnusedTemplateLiteral": "error"
 			},
 			"correctness": {
-				"noPrecisionLoss": "off"
+				"noPrecisionLoss": "off",
+				"useExhaustiveDependencies": "off",
+				"noUnusedFunctionParameters": "off",
+				"noUnusedVariables": "off"
 			},
 			"suspicious": {
 				"noAssignInExpressions": "off",
-				"noConsoleLog": "off",
 				"useAwait": "error",
-				"noApproximativeNumericConstant": "off"
+				"noApproximativeNumericConstant": "off",
+				"noEmptyInterface": "off",
+				"noConsole": {
+					"level": "error",
+					"options": {
+						"allow": ["info", "warn", "error", "debug"]
+					}
+				}
 			},
 			"complexity": {
 				"noForEach": "off",
 				"noUselessStringConcat": "error",
 				"useDateNow": "error",
 				"useSimplifiedLogicExpression": "off"
+			},
+			"nursery": {
+				"noFloatingPromises": "error"
 			}
 		}
 	},
-	"organizeImports": {
-		"enabled": true
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on",
+				"useSortedAttributes": "on"
+			}
+		}
 	}
 }

@@ -206,7 +206,7 @@ export class Type9Segment implements SpkSegment {
 		readonly endIndex: number,
 	) {}
 
-	// biome-ignore lint/suspicious/useAwait:
+	// biome-ignore lint/suspicious/useAwait: not implemented yet
 	async at(time: Time): Promise<PositionAndVelocity> {
 		const p: CartesianCoordinate = [0, 0, 0]
 		const v: CartesianCoordinate = [0, 0, 0]

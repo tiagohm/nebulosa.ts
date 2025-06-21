@@ -226,10 +226,10 @@ export function trendLineRegression(x: Readonly<NumberArray>, y: Readonly<Number
 	const minY = minimum[0]
 	const minX = x[minimum[1]]
 
-	const a = new Array<number>()
-	const b = new Array<number>()
-	const c = new Array<number>()
-	const d = new Array<number>()
+	const a: number[] = []
+	const b: number[] = []
+	const c: number[] = []
+	const d: number[] = []
 
 	for (let i = 0; i < x.length; i++) {
 		const xi = x[i]

@@ -10,7 +10,9 @@
 	"json.format.keepLines": true,
 	"python.defaultInterpreterPath": "./scripts/.venv/bin/python",
 	"editor.codeActionsOnSave": {
-		"source.organizeImports": "explicit"
+		"source.removeUnusedImports": "explicit",
+		"source.action.useSortedAttributes.biome": "explicit",
+		"source.fixAll.biome": "explicit"
 	},
 	"[typescript]": {
 		"editor.defaultFormatter": "biomejs.biome"

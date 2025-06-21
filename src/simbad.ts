@@ -1,4 +1,4 @@
-import { TSV_DELIMITER, readCsv } from './csv'
+import { readCsv, TSV_DELIMITER } from './csv'
 
 // https://simbad.cds.unistra.fr/simbad/sim-tap/
 
