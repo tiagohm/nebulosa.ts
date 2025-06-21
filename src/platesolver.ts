@@ -79,8 +79,3 @@ export function plateSolutionFrom(header: FitsHeader): PlateSolution | undefined
 		heightInPixels,
 	}
 }
-
-// Computes the FOV in arcsec/pixel from `focalLength` in mm and `pixelSize` in µm.
-export function fovFrom(focalLength: number, pixelSize: number) {
-	return focalLength <= 0 ? 0 : (pixelSize / focalLength) * 206.265
-}

@@ -536,6 +536,12 @@ pmMatrix(time) // Polar Motion matrix at time
 tirsRotationAt(time) // TIRS rotation matrix at time
 ```
 
+### Util
+
+```ts
+angularSizeOfPixel(focalLength, pixelSize) // CCD Resolution in arcsec/pixel
+```
+
 ### Vector
 
 ```ts
