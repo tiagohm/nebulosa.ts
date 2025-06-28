@@ -165,7 +165,7 @@ describe('Mat3', () => {
 })
 
 test('mulMxN', () => {
-	// biome-ignore format:
+	// biome-ignore format: matrix
 	const m = mulMxN([[1, 2], [3, 4], [5, 6]], [[7, 8, 9], [10, 11, 12]])
 
 	expect(m[0]).toEqual(Float64Array.from([27, 30, 33]))
@@ -174,7 +174,7 @@ test('mulMxN', () => {
 })
 
 test('mulMTxN', () => {
-	// biome-ignore format:
+	// biome-ignore format: matrix
 	const m = mulMTxN([[1, 2], [3, 4], [5, 6]], [[1, 2], [3, 4], [5, 6]])
 
 	expect(m[0]).toEqual(Float64Array.from([35, 44]))
@@ -182,7 +182,7 @@ test('mulMTxN', () => {
 })
 
 test('mulMxNT', () => {
-	// biome-ignore format:
+	// biome-ignore format: matrix
 	const m = mulMxNT([[1, 2, 3], [4, 5, 6]], [[1, 2, 3], [4, 5, 6]])
 
 	expect(m[0]).toEqual(Float64Array.from([14, 32]))
@@ -251,7 +251,7 @@ describe('LU decomposition', () => {
 	})
 
 	test('5x5', () => {
-		// biome-ignore format:
+		// biome-ignore format: matrix
 		const matrix = [[4, 2, 3, 1, 5], [6, 7, 2, 8, 1], [5, 9, 4, 3, 2], [8, 1, 7, 6, 5], [3, 4, 5, 2, 9]] as const
 		const decomposition = new LuDecomposition(matrix)
 
@@ -297,7 +297,7 @@ describe('LU decomposition', () => {
 
 describe('QR decomposition', () => {
 	test('3x3', () => {
-		// biome-ignore format:
+		// biome-ignore format: matrix
 		const matrix = [[2, 7, 1], [3, -2, 0], [1, 5, 3]] as const
 		const decomposition = new QrDecomposition(matrix)
 		const x = decomposition.solve([1, 1, 1])
@@ -342,7 +342,7 @@ describe('QR decomposition', () => {
 
 // https://matrix.reshish.com/gauss-jordanElimination.php
 test('gaussian elimination', () => {
-	// biome-ignore format:
+	// biome-ignore format: matrix
 	const a = [[2, 1, -1], [-3, -1, 2], [-2, 1, 2]]
 	const b = [8, -11, -3]
 	const x = gaussianElimination(a, b)

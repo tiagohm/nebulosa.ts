@@ -6,7 +6,7 @@ import { meter } from '../src/distance'
 import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
 import { Ellipsoid, geodeticLocation } from '../src/location'
-// biome-ignore format:
+// biome-ignore format: too long
 import { type Time, Timescale, equationOfOrigins, era, gast, gmst, meanObliquity, normalizeTime, nutationAngles, precessionMatrix, precessionNutationMatrix, subtractTime, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, timeUnix, timeYMD, timeYMDHMS, toDate, tt, ut1, utc, } from '../src/time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {

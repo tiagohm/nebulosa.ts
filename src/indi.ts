@@ -337,7 +337,7 @@ export interface IndiClientHandler {
 	switchVector?: (client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: 'defSwitchVector' | 'setSwitchVector') => void
 	lightVector?: (client: IndiClient, message: DefLightVector | SetLightVector, tag: 'defLightVector' | 'setLightVector') => void
 	blobVector?: (client: IndiClient, message: DefBlobVector | SetBlobVector, tag: 'defBLOBVector' | 'setBLOBVector') => void
-	close?: () => void
+	close?: (client: IndiClient, server: boolean) => void
 }
 
 export interface IndiClientOptions {
@@ -387,18 +387,18 @@ export class IndiClient {
 				close: () => {
 					console.warn('connection closed by client')
 					this.socket = undefined
-					this.options?.handler?.close?.()
+					this.options?.handler?.close?.(this, false)
 				},
 				error: (_, error) => {
-					console.error('connection failed', error)
+					console.error('error', error)
 				},
 				connectError: (_, error) => {
-					console.error('connection failed', error)
+					console.error('connection error', error)
 				},
 				end: () => {
 					console.warn('connection closed by server')
 					this.socket = undefined
-					this.options?.handler?.close?.()
+					this.options?.handler?.close?.(this, true)
 				},
 				timeout: () => {
 					console.warn('connection timed out')

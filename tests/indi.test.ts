@@ -8,7 +8,7 @@ const tags = parser.parse(text)
 
 expect(tags).toHaveLength(85)
 
-describe('parseXml', async () => {
+describe('parseXml', () => {
 	test('defSwitchVector', () => {
 		const node = tags.find((e) => e.name === 'defSwitchVector' && e.attributes.name === 'CONNECTION')!
 
