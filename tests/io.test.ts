@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { type Base64Alphabet, GrowableBuffer, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, rangeHttpSource, readLines, readUntil, readableStreamSource } from '../src/io'
+import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readUntil } from '../src/io'
 
 test('bufferSink', () => {
 	const buffer = Buffer.allocUnsafe(16)
@@ -284,7 +284,7 @@ describe('growableBuffer', () => {
 		buffer.writeInt8(10)
 
 		expect(buffer.length).toBe(3)
-		expect(buffer.toString('ascii', true)).toBe('!')
+		expect(buffer.toString(true, 'ascii')).toBe('!')
 	})
 })
 

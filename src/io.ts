@@ -598,24 +598,8 @@ export class GrowableBuffer {
 		this.position = 0
 	}
 
-	toString(encoding?: BufferEncoding, trim?: boolean) {
-		if (this.position <= 0) return ''
-
-		let start = 0
-		let end = this.position - 1
-
-		if (trim) {
-			while (start <= end && this.buffer.readInt8(start) <= 32) start++
-			while (end > start && this.buffer.readInt8(end) <= 32) end--
-		}
-
-		return this.buffer.toString(encoding, start, end + 1)
-	}
-
 	private ensureCapacity(min: number) {
-		if (min - this.buffer.length > 0) {
-			this.resize()
-		}
+		if (min - this.buffer.length > 0) this.resize()
 	}
 
 	private resize() {
@@ -623,4 +607,23 @@ export class GrowableBuffer {
 		this.buffer.copy(buffer, 0, 0, this.position)
 		this.buffer = buffer
 	}
+
+	toString(trim: boolean = false, encoding?: BufferEncoding) {
+		if (this.position <= 0) return ''
+		if (!trim) return this.buffer.toString(encoding, 0, this.position)
+		const [start, end] = trimStartEnd(this.buffer, 0, this.position - 1)
+		return this.buffer.toString(encoding, start, end + 1)
+	}
+
+	toBuffer(trim: boolean = false) {
+		if (!trim) return this.buffer.subarray(0, this.position)
+		const [start, end] = trimStartEnd(this.buffer, 0, this.position - 1)
+		return this.buffer.subarray(start, end + 1)
+	}
+}
+
+function trimStartEnd(buffer: Buffer, start: number, end: number) {
+	while (start <= end && buffer.readInt8(start) <= 32) start++
+	while (end > start && buffer.readInt8(end) <= 32) end--
+	return [start, end] as const
 }

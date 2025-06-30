@@ -41,7 +41,7 @@ export class SimpleXmlParser {
 	private readonly tag = new GrowableBuffer(32)
 	private readonly name = new GrowableBuffer(32)
 	private readonly value = new GrowableBuffer(128)
-	private readonly text = new GrowableBuffer()
+	private readonly text = new GrowableBuffer(1024 * 16)
 	private attributes: XmlNodeAtrributes = {}
 	private tree: XmlNode[] = []
 	private prevCode?: number
@@ -156,7 +156,7 @@ export class SimpleXmlParser {
 			}
 		} else if (this.state === XmlState.TEXT) {
 			if (code === OPEN_ANGLE) {
-				this.tree[this.tree.length - 1].text = this.text.toString(undefined, true)
+				this.tree[this.tree.length - 1].text = this.text.toString(true)
 				this.text.reset()
 				this.state = XmlState.TAG_OPEN
 			} else {
