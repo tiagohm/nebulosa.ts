@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { type FormatAngleOptions, arcmin, arcsec, deg, dms, formatAngle, formatDEC, formatDms, formatHms, formatRA, formatSignedDms, hms, hour, mas, normalizeAngle, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from '../src/angle'
+import { arcmin, arcsec, deg, dms, type FormatAngleOptions, formatAngle, formatAZ, formatDEC, formatDms, formatHms, formatRA, formatSignedDms, hms, hour, mas, normalizeAngle, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas, formatALT } from '../src/angle'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 
 test('normalize', () => {
@@ -349,8 +349,20 @@ test('formatRA', () => {
 })
 
 test('formatDEC', () => {
-	expect(formatDEC(deg(23.5634453))).toBe('+023 33 48.40')
-	expect(formatDEC(deg(-23.5634453))).toBe('-023 33 48.40')
-	expect(formatDEC(deg(10))).toBe('+010 00 00.00')
-	expect(formatDEC(deg(-10))).toBe('-010 00 00.00')
+	expect(formatDEC(deg(23.5634453))).toBe('+23 33 48.40')
+	expect(formatDEC(deg(-23.5634453))).toBe('-23 33 48.40')
+	expect(formatDEC(deg(10))).toBe('+10 00 00.00')
+	expect(formatDEC(deg(-10))).toBe('-10 00 00.00')
+})
+
+test('formatAZ', () => {
+	expect(formatAZ(deg(123.5634453))).toBe('123 33 48.40')
+	expect(formatAZ(deg(10))).toBe('010 00 00.00')
+})
+
+test('formatALT', () => {
+	expect(formatALT(deg(83.5634453))).toBe('+83 33 48.40')
+	expect(formatALT(deg(-83.5634453))).toBe('-83 33 48.40')
+	expect(formatALT(deg(10))).toBe('+10 00 00.00')
+	expect(formatALT(deg(-10))).toBe('-10 00 00.00')
 })

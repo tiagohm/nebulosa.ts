@@ -242,11 +242,13 @@ export function formatAngle(angle: Angle, options?: FormatAngleOptions) {
 	return `${sign}${d}${sa}${m}${sb}${s}${sc}`
 }
 
-const DEFAULT_HMS_FORMAT: FormatAngleOptions = { isHour: true, separators: ':', noSign: true }
-const DEFAULT_DMS_FORMAT: FormatAngleOptions = { noSign: true, separators: 'dms' }
-const DEFAULT_SIGNED_DMS_FORMAT: FormatAngleOptions = { ...DEFAULT_DMS_FORMAT, noSign: false }
-const DEFAULT_RA_FORMAT = { ...DEFAULT_HMS_FORMAT, separators: ' ' }
-const DEFAULT_DEC_FORMAT: FormatAngleOptions = { ...DEFAULT_SIGNED_DMS_FORMAT, separators: ' ', padLength: 3 }
+export const DEFAULT_HMS_FORMAT: FormatAngleOptions = { isHour: true, separators: ':', noSign: true }
+export const DEFAULT_DMS_FORMAT: FormatAngleOptions = { noSign: true, separators: 'dms' }
+export const DEFAULT_SIGNED_DMS_FORMAT: FormatAngleOptions = { ...DEFAULT_DMS_FORMAT, noSign: false }
+export const DEFAULT_RA_FORMAT = { ...DEFAULT_HMS_FORMAT, separators: ' ' }
+export const DEFAULT_DEC_FORMAT: FormatAngleOptions = { ...DEFAULT_SIGNED_DMS_FORMAT, separators: ' ' }
+export const DEFAULT_AZ_FORMAT: FormatAngleOptions = { ...DEFAULT_DMS_FORMAT, separators: ' ', padLength: 3 }
+export const DEFAULT_ALT_FORMAT = DEFAULT_DEC_FORMAT
 
 // Format the angle as 00:00:00.00.
 export function formatHms(angle: Angle) {
@@ -268,7 +270,17 @@ export function formatRA(angle: Angle) {
 	return formatAngle(angle, DEFAULT_RA_FORMAT)
 }
 
-// Format the angle as +000 00 00.00, always signed
+// Format the angle as +00 00 00.00, always signed
 export function formatDEC(angle: Angle) {
 	return formatAngle(angle, DEFAULT_DEC_FORMAT)
+}
+
+// Format the angle as 000 00 00.00
+export function formatAZ(angle: Angle) {
+	return formatAngle(angle, DEFAULT_AZ_FORMAT)
+}
+
+// Format the angle as +00 00 00.00, always signed
+export function formatALT(angle: Angle) {
+	return formatAngle(angle, DEFAULT_ALT_FORMAT)
 }
