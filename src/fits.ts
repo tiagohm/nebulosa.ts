@@ -1,6 +1,6 @@
 import type { Mutable } from 'utility-types'
-import { type Angle, type ParseAngleOptions, deg, parseAngle } from './angle'
-import { type Seekable, type Sink, type Source, readUntil, sourceTransferToSink } from './io'
+import { type Angle, deg, type ParseAngleOptions, parseAngle } from './angle'
+import { readUntil, type Seekable, type Sink, type Source, sourceTransferToSink } from './io'
 
 export const FITS_IMAGE_MIME_TYPE = 'image/fits'
 export const FITS_APPLICATION_MIME_TYPE = 'application/fits'
@@ -83,6 +83,11 @@ export function numberOfChannels(header: FitsHeader, defaultValue: number = 1) {
 
 export function bitpix(header: FitsHeader, defaultValue: BitpixOrZero = 0): BitpixOrZero {
 	return numericKeyword(header, 'BITPIX', defaultValue)
+}
+
+export function exposureTime(header: FitsHeader, defaultValue: number = 0) {
+	if (hasKeyword(header, 'EXPTIME')) return numericKeyword(header, 'EXPTIME', defaultValue)
+	else return numericKeyword(header, 'EXPOSURE', defaultValue)
 }
 
 const RA_PARSE_OPTIONS: ParseAngleOptions = {

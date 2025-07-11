@@ -1,6 +1,6 @@
 import sharp, { type AvifOptions, type FormatEnum, type GifOptions, type HeifOptions, type Jp2Options, type JpegOptions, type JxlOptions, type OutputOptions, type PngOptions, type TiffOptions, type WebpOptions } from 'sharp'
-import { Bitpix, type Fits, type FitsData, type FitsHdu, type FitsHeader, bitpix, bitpixInBytes, height, numberOfChannels, textKeyword, width, writeFits } from './fits'
-import { type Sink, type Source, bufferSink, bufferSource, readUntil } from './io'
+import { Bitpix, bitpix, bitpixInBytes, exposureTime, type Fits, type FitsData, type FitsHdu, type FitsHeader, height, numberOfChannels, textKeyword, width, writeFits } from './fits'
+import { bufferSink, bufferSource, readUntil, type Sink, type Source } from './io'
 import { Histogram } from './statistics'
 
 export type ImageChannel = 'RED' | 'GREEN' | 'BLUE'
@@ -561,4 +561,104 @@ export function medianAbsoluteDiviation(image: Image, channel?: ImageChannelOrGr
 	m ||= median(image, channel)
 	const mad = median(image, channel, (p) => Math.abs(p - m))
 	return normalized ? STANDARD_DEVIATION_SCALE * mad : mad
+}
+
+export interface DarkBiasSubtractionOptions {
+	darkCorrected?: boolean
+	exposureNormalization?: boolean
+}
+
+const DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS: Readonly<Required<DarkBiasSubtractionOptions>> = {
+	darkCorrected: false,
+	exposureNormalization: true,
+}
+
+// Subtract dark and bias frames from image.
+// If darkCorrected is true, the dark frame will be already corrected for bias.
+export function darkBiasSubtraction(image: Image, dark?: Image, bias?: Image, options?: DarkBiasSubtractionOptions) {
+	if (dark && (image.metadata.width !== dark.metadata.width || image.metadata.height !== dark.metadata.height || image.metadata.channels !== dark.metadata.channels)) {
+		// throw new Error('image and dark frame must have the same dimensions and channels')
+		return image
+	}
+	if (bias && (image.metadata.width !== bias.metadata.width || image.metadata.height !== bias.metadata.height || image.metadata.channels !== bias.metadata.channels)) {
+		// throw new Error('image and bias frame must have the same dimensions and channels')
+		return image
+	}
+
+	const { raw } = image
+	const { darkCorrected = false, exposureNormalization = true } = options ?? DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS
+	const normalizationFactor = exposureNormalization && dark ? exposureTime(image.header, 1) / exposureTime(dark.header, 1) : 1
+
+	let pedestal = 0
+
+	// corrected = image - bias - (dark - bias) # subtrai bias do dark primeiro
+	// or
+	// corrected = image - bias - dark_corrected
+
+	if (dark && bias) {
+		for (let i = 0; i < raw.length; i++) {
+			const d = raw[i] - bias.raw[i] - (darkCorrected ? dark.raw[i] : dark.raw[i] - bias.raw[i]) * normalizationFactor
+			if (d < 0) pedestal = Math.max(pedestal, -d)
+			raw[i] = Math.max(0, d)
+		}
+	} else if (dark) {
+		for (let i = 0; i < raw.length; i++) {
+			const d = raw[i] - dark.raw[i] * normalizationFactor
+			if (d < 0) pedestal = Math.max(pedestal, -d)
+			raw[i] = Math.max(0, d)
+		}
+	} else if (bias) {
+		for (let i = 0; i < raw.length; i++) {
+			const d = raw[i] - bias.raw[i]
+			if (d < 0) pedestal = Math.max(pedestal, -d)
+			raw[i] = Math.max(0, d)
+		}
+	}
+
+    // If pedestal is greater than 0, it means that the image has a negative offset
+    //  that should be added to all pixels.
+	if (pedestal) {
+		for (let i = 0; i < raw.length; i++) {
+			raw[i] = Math.min(1, raw[i] + pedestal)
+		}
+
+		image.header.PEDESTAL = pedestal
+	}
+
+	return image
+}
+
+// Apply flat correction to image.
+export function flatCorrection(image: Image, flat: Image) {
+	if (image.metadata.width !== flat.metadata.width || image.metadata.height !== flat.metadata.height || image.metadata.channels !== flat.metadata.channels) {
+		// throw new Error('image and flat frame must have the same dimensions and channels')
+		return image
+	}
+
+	const { raw, metadata } = image
+	const { channels } = metadata
+	const mean = new Float64Array(channels)
+
+	// Calculate mean for each channel.
+	for (let i = 0; i < mean.length; i++) {
+		let sum = 0
+		let n = 0
+
+		for (let j = i; j < raw.length; j += channels, n++) {
+			sum += raw[j]
+		}
+
+		mean[i] = sum / n
+	}
+
+	// Apply flat correction.
+	for (let i = 0; i < mean.length; i++) {
+		const m = mean[i]
+
+		for (let j = i; j < raw.length; j += channels) {
+			raw[j] = (raw[j] * m) / flat.raw[j] // raw / (flat / mean)
+		}
+	}
+
+	return image
 }
