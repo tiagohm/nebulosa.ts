@@ -77,7 +77,7 @@ function rLatLon(location: GeographicPosition) {
 }
 
 // Local Sidereal Time at location and time.
-export function lst(location: GeographicPosition, time: Time, mean: boolean = false, tio: boolean | 'sp' = false) {
+export function lst(time: Time, location: GeographicPosition = time.location!, mean: boolean = false, tio: boolean | 'sp' = false) {
 	const theta = mean ? gmst(time) : gast(time)
 
 	if (tio === true) {

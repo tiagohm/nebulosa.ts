@@ -17,12 +17,12 @@ beforeAll(async () => {
 test('lst', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
-	expect(toHour(lst(p, t, false, false))).toBeCloseTo(10.106038262872143463, 14)
-	expect(toHour(lst(p, t, true, false))).toBeCloseTo(10.106345240224239745, 14)
-	expect(toHour(lst(p, t, false, 'sp'))).toBeCloseTo(10.106038262691395602, 14)
-	expect(toHour(lst(p, t, true, 'sp'))).toBeCloseTo(10.10634524004349899, 13)
-	expect(toHour(lst(p, t, false, true))).toBeCloseTo(10.106038262690191232, 15)
-	expect(toHour(lst(p, t, true, true))).toBeCloseTo(10.106345240042289291, 14)
+	expect(toHour(lst(t, p, false, false))).toBeCloseTo(10.106038262872143463, 14)
+	expect(toHour(lst(t, p, true, false))).toBeCloseTo(10.106345240224239745, 14)
+	expect(toHour(lst(t, p, false, 'sp'))).toBeCloseTo(10.106038262691395602, 14)
+	expect(toHour(lst(t, p, true, 'sp'))).toBeCloseTo(10.10634524004349899, 13)
+	expect(toHour(lst(t, p, false, true))).toBeCloseTo(10.106038262690191232, 15)
+	expect(toHour(lst(t, p, true, true))).toBeCloseTo(10.106345240042289291, 14)
 })
 
 test('geocentric', () => {
