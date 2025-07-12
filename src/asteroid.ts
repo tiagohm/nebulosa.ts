@@ -6,7 +6,7 @@ import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { Mat3 } from './matrix'
 import { type MPCOrbit, type MPCOrbitComet, unpackDate } from './mpcorb'
-import { type Time, Timescale, subtractTime, tdb, time, timeYMD, timeYMDF, tt } from './time'
+import { subtractTime, type Time, Timescale, tdb, time, timeYMD, timeYMDF, tt } from './time'
 import { Vector3 } from './vector'
 
 const REFERENCE_FRAME = Mat3.transpose(ECLIPTIC_J2000_MATRIX)

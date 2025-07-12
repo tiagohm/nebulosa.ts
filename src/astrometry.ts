@@ -7,7 +7,7 @@ import { eraApcg, eraApci13, eraApco13, eraAtciqpmpx, eraAtioq, eraC2s, eraP2s }
 import { ELLIPSOID_PARAMETERS } from './location'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
-import { type Time, Timescale, pmAngles, tdb, tt, ut1 } from './time'
+import { pmAngles, type Time, Timescale, tdb, tt, ut1 } from './time'
 import { Vector3 } from './vector'
 
 export type PositionAndVelocity = readonly [CartesianCoordinate, CartesianCoordinate]
@@ -85,7 +85,7 @@ export function cirs(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVel
 	return eraAtciqpmpx(Vector3.normalize(nc, nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
 }
 
-function hadecAltaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate, refraction?: RefractionParameters) {
+function observed(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp: CartesianCoordinate = ebpv[0], refraction?: RefractionParameters) {
 	if (!time.location) return undefined
 
 	const a = tt(time)
@@ -99,7 +99,7 @@ function hadecAltaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelo
 	const temperature = refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature
 	const relativeHumidity = refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity
 	const wl = refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl
-	const [astrom] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp ?? ebpv[0], radius, flattening)
+	const [astrom] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
 	// Correct for parallax to find BCRS direction from observer (as in erfa.pmpx)
 	const nc = Vector3.minus(icrs, astrom.eb)
 	// Convert to topocentric CIRS
@@ -111,13 +111,13 @@ function hadecAltaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelo
 // https://en.wikipedia.org/wiki/Standard_temperature_and_pressure
 
 export function hadec(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate, refraction?: RefractionParameters) {
-	const r = hadecAltaz(icrs, time, ebpv, ehp, refraction)
+	const r = observed(icrs, time, ebpv, ehp, refraction)
 	if (!r) return r
 	return [r[2], r[3]] as const
 }
 
 export function altaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate, refraction?: RefractionParameters) {
-	const r = hadecAltaz(icrs, time, ebpv, ehp, refraction)
+	const r = observed(icrs, time, ebpv, ehp, refraction)
 	if (!r) return r
 	return [r[0], PIOVERTWO - r[1]] as const
 }

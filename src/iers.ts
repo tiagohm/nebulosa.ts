@@ -1,7 +1,7 @@
 import { type Angle, arcsec } from './angle'
 import { MJD0 } from './constants'
 import { binarySearch } from './helper'
-import { type Source, readLines } from './io'
+import { readLines, type Source } from './io'
 import type { NumberArray } from './math'
 import type { PolarMotion, Time, TimeDelta } from './time'
 

@@ -1,4 +1,4 @@
-import { type Seekable, type Source, readUntil } from './io'
+import { readUntil, type Seekable, type Source } from './io'
 
 export interface Summary {
 	readonly name: string

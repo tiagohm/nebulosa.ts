@@ -3,7 +3,7 @@ import { type Distance, meter } from './distance'
 import { eraGc2Gde, eraSp00 } from './erfa'
 import { itrsRotationAt } from './itrs'
 import { Mat3 } from './matrix'
-import { type Time, gast, gmst, pmAngles, tt } from './time'
+import { gast, gmst, pmAngles, type Time, tt } from './time'
 import type { Vector3 } from './vector'
 
 // An Earth ellipsoid that maps latitudes and longitudes to |xyz| positions.

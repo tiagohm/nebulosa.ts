@@ -1,4 +1,4 @@
-import { type Pointer, dlopen, ptr, read } from 'bun:ffi'
+import { dlopen, type Pointer, ptr, read } from 'bun:ffi'
 import wcsPath from '../native/libwcs.shared' with { type: 'file' }
 import { type Angle, deg, toDeg } from './angle'
 import { type FitsHeader, FitsKeywordWriter, numericKeyword } from './fits'

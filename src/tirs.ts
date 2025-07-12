@@ -1,6 +1,6 @@
 import type { Frame } from './frame'
 import { Mat3 } from './matrix'
-import { type Time, gast, precessionNutationMatrix } from './time'
+import { gast, precessionNutationMatrix, type Time } from './time'
 
 // Computes the TIRS rotation matrix at time.
 export function tirsRotationAt(time: Time) {
