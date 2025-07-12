@@ -251,17 +251,17 @@ export const DEFAULT_AZ_FORMAT: FormatAngleOptions = { ...DEFAULT_DMS_FORMAT, se
 export const DEFAULT_ALT_FORMAT = DEFAULT_DEC_FORMAT
 
 // Format the angle as 00:00:00.00.
-export function formatHms(angle: Angle) {
+export function formatHMS(angle: Angle) {
 	return formatAngle(angle, DEFAULT_HMS_FORMAT)
 }
 
 // Format the angle as 00d00m00.00s, signed only if negative
-export function formatDms(angle: Angle) {
+export function formatDMS(angle: Angle) {
 	return formatAngle(angle, DEFAULT_DMS_FORMAT)
 }
 
 // Format the angle as +00d00m00.00s, always signed
-export function formatSignedDms(angle: Angle) {
+export function formatSignedDMS(angle: Angle) {
 	return formatAngle(angle, DEFAULT_SIGNED_DMS_FORMAT)
 }
 

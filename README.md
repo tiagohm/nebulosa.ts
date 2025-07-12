@@ -27,9 +27,9 @@ toDms(PI) // Convert radian to degree-minute-second
 toHms(PI) // Convert radian to hour-minute-second
 parseAngle('12h 45m 14.56s') // Parse the dms/hms angle represented as string
 formatAngle(PI, { isHour: true }) // Format the angle with custom representation
-formatHms(PI) // Format the angle as 00:00:00.00
-formatDms(PI) // Format the angle as 00d00m00.00s
-formatSignedDms(PI) // Format the angle as +00d00m00.00s
+formatHMS(PI) // Format the angle as 00:00:00.00
+formatDMS(PI) // Format the angle as 00d00m00.00s
+formatSignedDMS(PI) // Format the angle as +00d00m00.00s
 ```
 
 ### Astap
