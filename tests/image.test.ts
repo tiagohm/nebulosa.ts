@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { Bitpix, bitpixInBytes, readFits } from '../src/fits'
-import { FitsDataSource, adf, debayer, horizontalFlip, invert, readImageFromFits, scnr, stf, verticalFlip, writeImageToFits } from '../src/image'
+import { Bitpix, readFits } from '../src/fits'
+import { bitpixInBytes } from '../src/fits.util'
+import { adf, debayer, FitsDataSource, horizontalFlip, invert, readImageFromFits, scnr, stf, verticalFlip, writeImageToFits } from '../src/image'
 import { fileHandleSink, fileHandleSource } from '../src/io'
 import { BITPIXES, CHANNELS, readImage, readImageAndSaveImageWithOptions, readImageAndTransformAndSaveImage, saveImageAndCompareHash } from './image.util'
 

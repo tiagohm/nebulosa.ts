@@ -1,5 +1,6 @@
 import sharp, { type AvifOptions, type FormatEnum, type GifOptions, type HeifOptions, type Jp2Options, type JpegOptions, type JxlOptions, type OutputOptions, type PngOptions, type TiffOptions, type WebpOptions } from 'sharp'
-import { Bitpix, bitpix, bitpixInBytes, exposureTime, type Fits, type FitsData, type FitsHdu, type FitsHeader, height, numberOfChannels, textKeyword, width, writeFits } from './fits'
+import { Bitpix, type Fits, type FitsData, type FitsHdu, type FitsHeader, writeFits } from './fits'
+import { bitpix, bitpixInBytes, cfaPattern, exposureTime, height, numberOfChannels, width } from './fits.util'
 import { bufferSink, bufferSource, readUntil, type Sink, type Source } from './io'
 import { Histogram } from './statistics'
 
@@ -59,10 +60,6 @@ export const RED_GRAYSCALE: Grayscale = { red: 1, green: 0, blue: 0 }
 export const GREEN_GRAYSCALE: Grayscale = { red: 0, green: 1, blue: 0 }
 export const BLUE_GRAYSCALE: Grayscale = { red: 0, green: 0, blue: 1 }
 export const DEFAULT_GRAYSCALE = BT709_GRAYSCALE
-
-export function cfaPattern(header: FitsHeader) {
-	return textKeyword(header, 'BAYERPAT') as CfaPattern | undefined
-}
 
 export function channelIndex(channel?: ImageChannelOrGray) {
 	return channel === 'GREEN' ? 1 : channel === 'BLUE' ? 2 : 0
@@ -615,8 +612,8 @@ export function darkBiasSubtraction(image: Image, dark?: Image, bias?: Image, op
 		}
 	}
 
-    // If pedestal is greater than 0, it means that the image has a negative offset
-    //  that should be added to all pixels.
+	// If pedestal is greater than 0, it means that the image has a negative offset
+	//  that should be added to all pixels.
 	if (pedestal) {
 		for (let i = 0; i < raw.length; i++) {
 			raw[i] = Math.min(1, raw[i] + pedestal)

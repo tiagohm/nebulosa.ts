@@ -158,6 +158,25 @@ readFits(source) // Read FITS file from source
 writeFits(sink, fits) // Write FITS file to sink
 ```
 
+### Fits Util
+
+```ts
+hasKeyword(header, keyword) // Check if the FITS header has a keyword
+textKeyword(header, keyword) // Get the text value of a keyword from the FITS header
+numericKeyword(header, keyword) // Get the number value of a keyword from the FITS header
+booleanKeyword(header, keyword) // Get the boolean value of a keyword from the FITS header
+bitpix(bitpix) // Get the bitpix value for a given FITS data type
+bitpixInBytes(bitpix) // Get the number of bytes per pixel for a given bitpix
+declination(header) // Get the declination from the FITS header
+rightAscension(header) // Get the right ascension from the FITS header
+naxis(header) // Get the NAXIS value from the FITS header
+height(header) // Get the height from the FITS header
+width(header) // Get the width from the FITS header
+numberOfChannels(header) // Get the number of channels from the FITS header
+exposureTime(header) // Get the exposure time from the FITS header
+cfaPattern(header) // Get the CFA pattern from the FITS header
+```
+
 ### FK5
 
 ```ts

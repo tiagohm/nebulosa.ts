@@ -1,6 +1,6 @@
 import type { Angle } from './angle'
-import { isNumberArray } from './helper'
 import type { NumberArray } from './math'
+import { isNumberArray } from './util'
 import { Vector3 } from './vector'
 
 export namespace Mat3 {

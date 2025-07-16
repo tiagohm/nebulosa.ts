@@ -1,9 +1,9 @@
 import { type Angle, arcsec } from './angle'
 import { MJD0 } from './constants'
-import { binarySearch } from './helper'
 import { readLines, type Source } from './io'
 import type { NumberArray } from './math'
 import type { PolarMotion, Time, TimeDelta } from './time'
+import { binarySearch } from './util'
 
 export interface Iers {
 	readonly delta: TimeDelta

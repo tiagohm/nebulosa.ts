@@ -1,6 +1,6 @@
-import { isNumberArray, minOf } from './helper'
 import type { NumberArray } from './math'
 import { gaussianElimination } from './matrix'
+import { isNumberArray, minOf } from './util'
 
 export type TrendLineRegressionMethod = 'simple' | 'theil-sen'
 

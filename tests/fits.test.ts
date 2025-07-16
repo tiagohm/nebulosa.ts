@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { dms, hms } from '../src/angle'
-import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, bitpixInBytes, computeRemainingBytes, declination, height, readFits, rightAscension, width, writeFits } from '../src/fits'
+import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, readFits, writeFits } from '../src/fits'
+import { bitpixInBytes, declination, height, rightAscension, width } from '../src/fits.util'
 import { bufferSink, bufferSource } from '../src/io'
 import { BITPIXES, CHANNELS, openFits } from './image.util'
 

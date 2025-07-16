@@ -1,5 +1,6 @@
 import { type Angle, deg } from './angle'
-import { type FitsHeader, height, numericKeyword, width } from './fits'
+import type { FitsHeader } from './fits'
+import { height, numericKeyword, width } from './fits.util'
 import { cdMatrix } from './wcs'
 
 export type Parity = 'NORMAL' | 'FLIPPED'

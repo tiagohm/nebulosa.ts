@@ -1,8 +1,8 @@
 import { type Angle, normalizeAngle, toDeg, toHour } from './angle'
 import { equatorial } from './astrometry'
 import { fk5, precessFk5 } from './fk5'
-import { type BinarySearchOptions, binarySearch } from './helper'
 import { type Time, Timescale, timeBesselian, timeJulian } from './time'
+import { type BinarySearchOptions, binarySearch } from './util'
 
 export type Constellation = (typeof CONSTELLATION)[number]
 
