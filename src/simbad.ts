@@ -22,6 +22,8 @@ export async function simbadQuery(query: string, baseUrl?: string) {
 	return readCsv(text, TSV_DELIMITER)
 }
 
+// https://vizier.cds.unistra.fr/cgi-bin/OType
+
 export const SIMBAD_OBJECT_TYPES = {
 	ACTIVE_GALAXY_NUCLEUS: { id: 200, description: 'Active Galaxy Nucleus', classification: 'GALAXY', codes: ['AGN', 'AG?'] },
 	ALPHA2_CVN_VARIABLE: { id: 0, description: 'alpha2 CVn Variable', classification: 'STAR', codes: ['a2*', 'a2?'] },

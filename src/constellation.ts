@@ -1,28 +1,29 @@
 import { type Angle, normalizeAngle, toDeg, toHour } from './angle'
-import { equatorial } from './astrometry'
+import { eraC2s } from './erfa'
 import { fk5, precessFk5 } from './fk5'
 import { type Time, Timescale, timeBesselian, timeJulian } from './time'
 import { type BinarySearchOptions, binarySearch } from './util'
 
-export type Constellation = (typeof CONSTELLATION)[number]
+export type Constellation = (typeof CONSTELLATIONS)[number]
 
 const J2000 = timeJulian(2000, Timescale.TT)
 const B1875 = timeBesselian(1875, Timescale.TT)
 
 const BINARY_SEARCH_OPTIONS: BinarySearchOptions = { positive: true }
 
-export function constellation(ra: Angle, dec: Angle, equinox: Time = J2000): Constellation {
-	if (equinox.day !== B1875.day || equinox.fraction !== B1875.fraction) {
-		;[ra, dec] = equatorial(precessFk5(fk5(ra, dec), equinox, B1875))
+// Returns the constellation for a given right ascension and declination at a specific epoch.
+export function constellation(ra: Angle, dec: Angle, equinox: Time | false = J2000): Constellation {
+	if (equinox !== false && (equinox.day !== B1875.day || equinox.fraction !== B1875.fraction)) {
+		;[ra, dec] = eraC2s(...precessFk5(fk5(ra, dec), equinox, B1875))
 	}
 
 	const i = binarySearch(RA, toHour(normalizeAngle(ra)), BINARY_SEARCH_OPTIONS)
 	const k = binarySearch(DEC, toDeg(dec), BINARY_SEARCH_OPTIONS)
 	const p = RA_TO_INDEX[i * 202 + k]
-	return CONSTELLATION[p]
+	return CONSTELLATIONS[p]
 }
 
-const CONSTELLATION = [
+export const CONSTELLATIONS = [
 	'AND', // Andromeda.
 	'ANT', // Antlia.
 	'APS', // Apus.
