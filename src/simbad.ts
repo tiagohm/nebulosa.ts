@@ -7,7 +7,12 @@ export const SIMBAD_ALTERNATIVE_URL = 'https://simbad.u-strasbg.fr/'
 
 const SIMBAD_QUERY_PATH = 'simbad/sim-tap/sync'
 
-export async function simbadQuery(query: string, baseUrl?: string) {
+export interface SimbadQueryOptions extends Omit<RequestInit, 'method' | 'body'> {
+	baseUrl?: string
+	timeout?: number
+}
+
+export async function simbadQuery(query: string, { baseUrl, timeout = 60000, signal, ...options }: SimbadQueryOptions = {}): Promise<string[][] | undefined> {
 	const uri = `${baseUrl || SIMBAD_URL}${SIMBAD_QUERY_PATH}`
 
 	const body = new FormData()
@@ -16,7 +21,7 @@ export async function simbadQuery(query: string, baseUrl?: string) {
 	body.append('format', 'tsv')
 	body.append('query', query)
 
-	const response = await fetch(uri, { method: 'POST', body })
+	const response = await fetch(uri, { method: 'POST', body, signal: signal ?? AbortSignal.timeout(timeout), ...options })
 	if (response.status >= 300) return undefined
 	const text = await response.text()
 	return readCsv(text, TSV_DELIMITER)

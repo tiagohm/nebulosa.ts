@@ -463,7 +463,7 @@ closeApproaches(dateMin, dateMax, distance)
 ### Simbad
 
 ```ts
-const [header, ...data] = simbadQuery(query) // Search on Simbad TAP service
+const [header, ...data] = simbadQuery(query, options) // Search on Simbad TAP service
 ```
 
 ### Spk
