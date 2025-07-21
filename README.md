@@ -500,6 +500,7 @@ server.start() // Start server
 server.send(ra, dec) // Send the current coordinate
 server.stop() // Stop server
 readCatalogDat(source) // Read Stellarium's catalog.dat file
+readNamesDat(source) // Read Stellarium's names.dat file
 searchAround(catalog, ra, dec, fov) // Search around coordinate
 ```
 

@@ -136,7 +136,7 @@ export interface CatalogEntry {
 	readonly vdbha: number
 }
 
-export enum ObjectType {
+export enum StellariumObjectType {
 	UNKNOWN,
 	GALAXY,
 	ACTIVE_GALAXY,
@@ -176,6 +176,8 @@ export enum ObjectType {
 	REGION_OF_THE_SKY,
 }
 
+// https://github.com/Stellarium/stellarium/blob/master/nebulae/default/catalog.dat
+
 export async function* readCatalogDat(source: Source & Seekable) {
 	const buffer = Buffer.allocUnsafe(1024 * 32)
 	let position = 0
@@ -189,6 +191,7 @@ export async function* readCatalogDat(source: Source & Seekable) {
 	async function checkAvailableSpaceToRead(n: number) {
 		if (position > size - n) {
 			source.seek(source.position - size + position)
+
 			await read()
 
 			if (size === 0) return false
@@ -282,6 +285,68 @@ export async function* readCatalogDat(source: Source & Seekable) {
 		const vdbha = await readInt()
 
 		yield { id, ra, dec, mB, mV, type, majorAxis, minorAxis, orientation, redshift, parallax, ngc, ic, m, c, b, sh2, vdb, rcw, ldn, lbn, cr, mel, pgc, ugc, ced, arp, vv, pk, png, snrg, aco, hcg, eso, vdbh, dwb, tr, st, ru, vdbha } as CatalogEntry
+	}
+}
+
+export interface NameEntry {
+	readonly prefix: string
+	readonly id: string
+	readonly name: string
+}
+
+const NAME_FORMAT_REGEX = /^_\("([^"]+)"\).*$/
+
+export async function* readNamesDat(source: Source & Seekable) {
+	const buffer = Buffer.allocUnsafe(1024)
+	let position = 0
+	let size = 0
+
+	async function read() {
+		position = 0
+		size = await source.read(buffer)
+	}
+
+	async function checkAvailableSpaceToRead(n: number) {
+		if (position > size - n) {
+			source.seek(source.position - size + position)
+
+			await read()
+
+			if (size === 0) return false
+		}
+
+		return true
+	}
+
+	async function readLine() {
+		if (!(await checkAvailableSpaceToRead(300))) return false
+
+		const index = buffer.indexOf(0x0a, position)
+
+		if (index >= 0) {
+			const line = buffer.subarray(position, index).toString('utf-8')
+			position = index + 1
+			return line
+		}
+
+		return false
+	}
+
+	await read()
+
+	while (true) {
+		const line = await readLine()
+
+		if (!line) break
+		if (line.startsWith('#')) continue
+
+		const prefix = line.substring(0, 5).trim()
+		const id = line.substring(5, 20).trim()
+		const name = NAME_FORMAT_REGEX.exec(line.substring(20).trim())?.[1] ?? ''
+
+		if (!name) continue
+
+		yield { prefix, id, name } as NameEntry
 	}
 }
 
