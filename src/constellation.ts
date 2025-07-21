@@ -4,7 +4,9 @@ import { fk5, precessFk5 } from './fk5'
 import { type Time, Timescale, timeBesselian, timeJulian } from './time'
 import { type BinarySearchOptions, binarySearch } from './util'
 
-export type Constellation = (typeof CONSTELLATIONS)[number]
+export type Constellation = keyof typeof CONSTELLATIONS
+
+export type ConstellationIAU = (typeof CONSTELLATIONS)[Constellation]['iau']
 
 const J2000 = timeJulian(2000, Timescale.TT)
 const B1875 = timeBesselian(1875, Timescale.TT)
@@ -20,99 +22,100 @@ export function constellation(ra: Angle, dec: Angle, equinox: Time | false = J20
 	const i = binarySearch(RA, toHour(normalizeAngle(ra)), BINARY_SEARCH_OPTIONS)
 	const k = binarySearch(DEC, toDeg(dec), BINARY_SEARCH_OPTIONS)
 	const p = RA_TO_INDEX[i * 202 + k]
-	return CONSTELLATIONS[p]
+	return CONSTELLATION_LIST[p]
 }
 
-export const CONSTELLATIONS = [
-	'AND', // Andromeda.
-	'ANT', // Antlia.
-	'APS', // Apus.
-	'AQL', // Aquila.
-	'AQR', // Aquarius.
-	'ARA', // Ara.
-	'ARI', // Aries.
-	'AUR', // Auriga.
-	'BOO', // Boötes.
-	'CMA', // Canis Major.
-	'CMI', // Canis Minor.
-	'CVN', // Canes Venatici.
-	'CAE', // Caelum.
-	'CAM', // Camelopardalis.
-	'CAP', // Capricornus.
-	'CAR', // Carina.
-	'CAS', // Cassiopeia.
-	'CEN', // Centaurus.
-	'CEP', // Cepheus.
-	'CET', // Cetus.
-	'CHA', // Chamaeleon.
-	'CIR', // Circinus.
-	'CNC', // Cancer.
-	'COL', // Columba.
-	'COM', // Coma Berenices.
-	'CRA', // Corona Australis.
-	'CRB', // Corona Borealis.
-	'CRT', // Crater.
-	'CRU', // Crux.
-	'CRV', // Corvus.
-	'CYG', // Cygnus.
-	'DEL', // Delphinus.
-	'DOR', // Dorado.
-	'DRA', // Draco.
-	'EQU', // Equuleus.
-	'ERI', // Eridanus.
-	'FOR', // Fornax.
-	'GEM', // Gemini.
-	'GRU', // Grus.
-	'HER', // Hercules.
-	'HOR', // Horologium.
-	'HYA', // Hydra.
-	'HYI', // Hydrus.
-	'IND', // Indus.
-	'LMI', // Leo Minor.
-	'LAC', // Lacerta.
-	'LEO', // Leo.
-	'LEP', // Lepus.
-	'LIB', // Libra.
-	'LUP', // Lupus.
-	'LYN', // Lynx.
-	'LYR', // Lyra.
-	'MEN', // Mensa.
-	'MIC', // Microscopium.
-	'MON', // Monoceros.
-	'MUS', // Musca.
-	'NOR', // Norma.
-	'OCT', // Octans.
-	'OPH', // Ophiuchus.
-	'ORI', // Orion.
-	'PAV', // Pavo.
-	'PEG', // Pegasus.
-	'PER', // Perseus.
-	'PHE', // Phoenix.
-	'PIC', // Pictor.
-	'PSA', // Piscis Austrinus.
-	'PSC', // Pisces.
-	'PUP', // Puppis.
-	'PYX', // Pyxis.
-	'RET', // Reticulum.
-	'SCL', // Sculptor.
-	'SCO', // Scorpius.
-	'SCT', // Scutum.
-	'SER', // Serpens.
-	'SEX', // Sextans.
-	'SGE', // Sagitta.
-	'SGR', // Sagittarius.
-	'TAU', // Taurus.
-	'TEL', // Telescopium.
-	'TRA', // Triangulum Australe.
-	'TRI', // Triangulum.
-	'TUC', // Tucana.
-	'UMA', // Ursa Major.
-	'UMI', // Ursa Minor.
-	'VEL', // Vela.
-	'VIR', // Virgo.
-	'VOL', // Volans.
-	'VUL', // Vulpecula.
-] as const
+export const CONSTELLATIONS = {
+	AND: { name: 'Andromeda', iau: 'And', genitive: 'Andromedae', description: 'Princess of Ethiopia' },
+	ANT: { name: 'Antlia', iau: 'Ant', genitive: 'Antliae', description: 'Air pump' },
+	APS: { name: 'Apus', iau: 'Aps', genitive: 'Apodis', description: 'Bird of Paradise' },
+	AQL: { name: 'Aquila', iau: 'Aql', genitive: 'Aquilae', description: 'Eagle' },
+	AQR: { name: 'Aquarius', iau: 'Aqr', genitive: 'Aquarii', description: 'Water bearer' },
+	ARA: { name: 'Ara', iau: 'Ara', genitive: 'Arae', description: 'Altar' },
+	ARI: { name: 'Aries', iau: 'Ari', genitive: 'Arietis', description: 'Ram' },
+	AUR: { name: 'Auriga', iau: 'Aur', genitive: 'Aurigae', description: 'Charioteer' },
+	BOO: { name: 'Boötes', iau: 'Boo', genitive: 'Boötis', description: 'Herdsman' },
+	CMA: { name: 'Canis Major', iau: 'CMa', genitive: 'Canis Majoris', description: 'Big dog' },
+	CMI: { name: 'Canis Minor', iau: 'CMi', genitive: 'Canis Minoris', description: 'Little dog' },
+	CVN: { name: 'Canes Venatici', iau: 'CVn', genitive: 'Canum Venaticorum', description: 'Hunting dogs' },
+	CAE: { name: 'Caelum', iau: 'Cae', genitive: 'Caeli', description: 'Graving tool' },
+	CAM: { name: 'Camelopardalis', iau: 'Cam', genitive: 'Camelopardalis', description: 'Giraffe' },
+	CAP: { name: 'Capricornus', iau: 'Cap', genitive: 'Capricorni', description: 'Sea goat' },
+	CAR: { name: 'Carina', iau: 'Car', genitive: 'Carinae', description: "Keel of Argonauts' ship" },
+	CAS: { name: 'Cassiopeia', iau: 'Cas', genitive: 'Cassiopeiae', description: 'Queen of Ethiopia' },
+	CEN: { name: 'Centaurus', iau: 'Cen', genitive: 'Centauri', description: 'Centaur' },
+	CEP: { name: 'Cepheus', iau: 'Cep', genitive: 'Cephei', description: 'King of Ethiopia' },
+	CET: { name: 'Cetus', iau: 'Cet', genitive: 'Ceti', description: 'Sea monster (whale)' },
+	CHA: { name: 'Chamaeleon', iau: 'Cha', genitive: 'Chamaeleontis', description: 'Chameleon' },
+	CIR: { name: 'Circinus', iau: 'Cir', genitive: 'Circini', description: 'Compasses' },
+	CNC: { name: 'Cancer', iau: 'Cnc', genitive: 'Cancri', description: 'Crab' },
+	COL: { name: 'Columba', iau: 'Col', genitive: 'Columbae', description: 'Dove' },
+	COM: { name: 'Coma Berenices', iau: 'Com', genitive: 'Comae Berenices', description: "Berenice's hair" },
+	CRA: { name: 'Corona Australis', iau: 'CrA', genitive: 'Coronae Australis', description: 'Southern crown' },
+	CRB: { name: 'Corona Borealis', iau: 'CrB', genitive: 'Coronae Borealis', description: 'Northern crown' },
+	CRT: { name: 'Crater', iau: 'Crt', genitive: 'Crateris', description: 'Cup' },
+	CRU: { name: 'Crux', iau: 'Cru', genitive: 'Crucis', description: 'Cross' },
+	CRV: { name: 'Corvus', iau: 'Crv', genitive: 'Corvi', description: 'Crow' },
+	CYG: { name: 'Cygnus', iau: 'Cyg', genitive: 'Cygni', description: 'Swan' },
+	DEL: { name: 'Delphinus', iau: 'Del', genitive: 'Delphini', description: 'Porpoise' },
+	DOR: { name: 'Dorado', iau: 'Dor', genitive: 'Doradus', description: 'Swordfish' },
+	DRA: { name: 'Draco', iau: 'Dra', genitive: 'Draconis', description: 'Dragon' },
+	EQU: { name: 'Equuleus', iau: 'Equ', genitive: 'Equulei', description: 'Little horse' },
+	ERI: { name: 'Eridanus', iau: 'Eri', genitive: 'Eridani', description: 'River' },
+	FOR: { name: 'Fornax', iau: 'For', genitive: 'Fornacis', description: 'Furnace' },
+	GEM: { name: 'Gemini', iau: 'Gem', genitive: 'Geminorum', description: 'Twins' },
+	GRU: { name: 'Grus', iau: 'Gru', genitive: 'Gruis', description: 'Crane' },
+	HER: { name: 'Hercules', iau: 'Her', genitive: 'Herculis', description: 'Hercules, son of Zeus' },
+	HOR: { name: 'Horologium', iau: 'Hor', genitive: 'Horologii', description: 'Clock' },
+	HYA: { name: 'Hydra', iau: 'Hya', genitive: 'Hydrae', description: 'Sea serpent' },
+	HYI: { name: 'Hydrus', iau: 'Hyi', genitive: 'Hydri', description: 'Water snake' },
+	IND: { name: 'Indus', iau: 'Ind', genitive: 'Indi', description: 'Indian' },
+	LMI: { name: 'Leo Minor', iau: 'LMi', genitive: 'Leonis Minoris', description: 'Little lion' },
+	LAC: { name: 'Lacerta', iau: 'Lac', genitive: 'Lacertae', description: 'Lizard' },
+	LEO: { name: 'Leo', iau: 'Leo', genitive: 'Leonis', description: 'Lion' },
+	LEP: { name: 'Lepus', iau: 'Lep', genitive: 'Leporis', description: 'Hare' },
+	LIB: { name: 'Libra', iau: 'Lib', genitive: 'Librae', description: 'Balance' },
+	LUP: { name: 'Lupus', iau: 'Lup', genitive: 'Lupi', description: 'Wolf' },
+	LYN: { name: 'Lynx', iau: 'Lyn', genitive: 'Lyncis', description: 'Lynx' },
+	LYR: { name: 'Lyra', iau: 'Lyr', genitive: 'Lyrae', description: 'Lyre' },
+	MEN: { name: 'Mensa', iau: 'Men', genitive: 'Mensae', description: 'Table mountain' },
+	MIC: { name: 'Microscopium', iau: 'Mic', genitive: 'Microscopii', description: 'Microscope' },
+	MON: { name: 'Monoceros', iau: 'Mon', genitive: 'Monocerotis', description: 'Unicorn' },
+	MUS: { name: 'Musca', iau: 'Mus', genitive: 'Muscae', description: 'Fly' },
+	NOR: { name: 'Norma', iau: 'Nor', genitive: 'Normae', description: "Carpenter's Level" },
+	OCT: { name: 'Octans', iau: 'Oct', genitive: 'Octantis', description: 'Octant' },
+	OPH: { name: 'Ophiuchus', iau: 'Oph', genitive: 'Ophiuchi', description: 'Holder of serpent' },
+	ORI: { name: 'Orion', iau: 'Ori', genitive: 'Orionis', description: 'Orion, the hunter' },
+	PAV: { name: 'Pavo', iau: 'Pav', genitive: 'Pavonis', description: 'Peacock' },
+	PEG: { name: 'Pegasus', iau: 'Peg', genitive: 'Pegasi', description: 'Pegasus, the winged horse' },
+	PER: { name: 'Perseus', iau: 'Per', genitive: 'Persei', description: 'Perseus, hero who saved Andromeda' },
+	PHE: { name: 'Phoenix', iau: 'Phe', genitive: 'Phoenicis', description: 'Phoenix' },
+	PIC: { name: 'Pictor', iau: 'Pic', genitive: 'Pictoris', description: 'Easel' },
+	PSA: { name: 'Piscis Austrinus', iau: 'PsA', genitive: 'Piscis Austrini', description: 'Southern fish' },
+	PSC: { name: 'Pisces', iau: 'Psc', genitive: 'Piscium', description: 'Fishes' },
+	PUP: { name: 'Puppis', iau: 'Pup', genitive: 'Puppis', description: "Stern of the Argonauts' ship" },
+	PYX: { name: 'Pyxis', iau: 'Pyx', genitive: 'Pyxidis', description: "Compass on the Argonauts' ship" },
+	RET: { name: 'Reticulum', iau: 'Ret', genitive: 'Reticuli', description: 'Net' },
+	SCL: { name: 'Sculptor', iau: 'Scl', genitive: 'Sculptoris', description: "Sculptor's tools" },
+	SCO: { name: 'Scorpius', iau: 'Sco', genitive: 'Scorpii', description: 'Scorpion' },
+	SCT: { name: 'Scutum', iau: 'Sct', genitive: 'Scuti', description: 'Shield' },
+	SER: { name: 'Serpens', iau: 'Ser', genitive: 'Serpentis', description: 'Serpent' },
+	SEX: { name: 'Sextans', iau: 'Sex', genitive: 'Sextantis', description: 'Sextant' },
+	SGE: { name: 'Sagitta', iau: 'Sge', genitive: 'Sagittae', description: 'Arrow' },
+	SGR: { name: 'Sagittarius', iau: 'Sgr', genitive: 'Sagittarii', description: 'Archer' },
+	TAU: { name: 'Taurus', iau: 'Tau', genitive: 'Tauri', description: 'Bull' },
+	TEL: { name: 'Telescopium', iau: 'Tel', genitive: 'Telescopii', description: 'Telescope' },
+	TRA: { name: 'Triangulum Australe', iau: 'TrA', genitive: 'Trianguli Australis', description: 'Southern triangle' },
+	TRI: { name: 'Triangulum', iau: 'Tri', genitive: 'Trianguli', description: 'Triangle' },
+	TUC: { name: 'Tucana', iau: 'Tuc', genitive: 'Tucanae', description: 'Toucan' },
+	UMA: { name: 'Ursa Major', iau: 'UMa', genitive: 'Ursae Majoris', description: 'Big bear' },
+	UMI: { name: 'Ursa Minor', iau: 'UMi', genitive: 'Ursae Minoris', description: 'Little bear' },
+	VEL: { name: 'Vela', iau: 'Vel', genitive: 'Velorum', description: "Sail of the Argonauts' ship" },
+	VIR: { name: 'Virgo', iau: 'Vir', genitive: 'Virginis', description: 'Virgin' },
+	VOL: { name: 'Volans', iau: 'Vol', genitive: 'Volantis', description: 'Flying fish' },
+} as const
+
+export const CONSTELLATION_LIST = Object.keys(CONSTELLATIONS) as Constellation[]
 
 const RA = [
 	0.06666666666666667, 0.14166666666666666, 0.16666666666666666, 0.3333333333333333, 0.7166666666666667, 0.75, 0.85, 0.8666666666666667, 1.1166666666666667, 1.3333333333333333, 1.3666666666666667, 1.4083333333333334, 1.5833333333333333, 1.6666666666666667, 1.7, 1.8333333333333333, 1.9083333333333334,
