@@ -186,30 +186,16 @@ export async function* readCatalogDat(source: Source & Seekable) {
 	async function read() {
 		position = 0
 		size = await source.read(buffer)
+		return size > 0
 	}
 
-	async function checkAvailableSpaceToRead(n: number) {
-		if (position > size - n) {
-			source.seek(source.position - size + position)
-
-			await read()
-
-			if (size === 0) return false
-			if (position > size - n) throw new Error('unexpected end of file')
-		}
-
-		return true
-	}
-
-	async function readInt() {
-		await checkAvailableSpaceToRead(4)
+	function readInt() {
 		const value = buffer.readUint32BE(position)
 		position += 4
 		return value
 	}
 
-	async function readDouble() {
-		await checkAvailableSpaceToRead(8)
+	function readDouble() {
 		const value = buffer.readDoubleBE(position)
 		position += 8
 		return value
@@ -217,9 +203,8 @@ export async function* readCatalogDat(source: Source & Seekable) {
 
 	const decoder = new TextDecoder('utf-16be', { ignoreBOM: true })
 
-	async function readText() {
-		const n = await readInt()
-		await checkAvailableSpaceToRead(n)
+	function readText() {
+		const n = readInt()
 
 		if (n > 0) {
 			const value = decoder.decode(buffer.subarray(position, position + n))
@@ -232,57 +217,62 @@ export async function* readCatalogDat(source: Source & Seekable) {
 
 	await read()
 
-	await readText() // version
-	await readText() // edition
+	readText() // version
+	readText() // edition
 
 	while (true) {
-		if (!(await checkAvailableSpaceToRead(4))) break
+		if (position > 1024 * 31) {
+			source.seek(source.position - size + position)
+			if (!(await read())) break
+		} else if (position >= size) {
+			break
+		}
 
-		const id = await readInt()
-		const ra = await readDouble()
-		const dec = await readDouble()
-		const mB = await readDouble()
-		const mV = await readDouble()
-		const type = ((await readInt()) + 1) % 37
-		await readText() // Morphological type
-		const majorAxis = deg(await readDouble())
-		const minorAxis = deg(await readDouble())
-		const orientation = deg(await readInt())
-		const redshift = await readDouble()
-		await readDouble() // Redshift error
-		const parallax = mas(await readDouble())
-		await readDouble() // Parallax error
-		await readDouble() // Distance
-		await readDouble() // Distance error
-		const ngc = await readInt()
-		const ic = await readInt()
-		const m = await readInt()
-		const c = await readInt()
-		const b = await readInt()
-		const sh2 = await readInt()
-		const vdb = await readInt()
-		const rcw = await readInt()
-		const ldn = await readInt()
-		const lbn = await readInt()
-		const cr = await readInt()
-		const mel = await readInt()
-		const pgc = await readInt()
-		const ugc = await readInt()
-		const ced = await readText()
-		const arp = await readInt()
-		const vv = await readInt()
-		const pk = await readText()
-		const png = await readText()
-		const snrg = await readText()
-		const aco = await readText()
-		const hcg = await readText()
-		const eso = await readText()
-		const vdbh = await readText()
-		const dwb = await readInt()
-		const tr = await readInt()
-		const st = await readInt()
-		const ru = await readInt()
-		const vdbha = await readInt()
+		const id = readInt()
+		const ra = readDouble()
+		const dec = readDouble()
+		const mB = readDouble()
+		const mV = readDouble()
+		const type = (readInt() + 1) % 37
+		readText() // Morphological type
+		const majorAxis = deg(readDouble())
+		const minorAxis = deg(readDouble())
+		const orientation = deg(readInt())
+		const redshift = readDouble()
+		readDouble() // Redshift error
+		const parallax = mas(readDouble())
+		readDouble() // Parallax error
+		readDouble() // Distance
+		readDouble() // Distance error
+		const ngc = readInt()
+		const ic = readInt()
+		const m = readInt()
+		const c = readInt()
+		const b = readInt()
+		const sh2 = readInt()
+		const vdb = readInt()
+		const rcw = readInt()
+		const ldn = readInt()
+		const lbn = readInt()
+		const cr = readInt()
+		const mel = readInt()
+		const pgc = readInt()
+		const ugc = readInt()
+		const ced = readText()
+		const arp = readInt()
+		const vv = readInt()
+		const pk = readText()
+		const png = readText()
+		const snrg = readText()
+		const aco = readText()
+		const hcg = readText()
+		const eso = readText()
+		const vdbh = readText()
+		const dwb = readInt()
+		const tr = readInt()
+		const st = readInt()
+		const ru = readInt()
+		const vdbha = readInt()
 
 		yield { id, ra, dec, mB, mV, type, majorAxis, minorAxis, orientation, redshift, parallax, ngc, ic, m, c, b, sh2, vdb, rcw, ldn, lbn, cr, mel, pgc, ugc, ced, arp, vv, pk, png, snrg, aco, hcg, eso, vdbh, dwb, tr, st, ru, vdbha } as CatalogEntry
 	}
