@@ -12,8 +12,14 @@ export interface SimbadQueryOptions extends Omit<RequestInit, 'method' | 'body'>
 	timeout?: number
 }
 
-export async function simbadQuery(query: string, { baseUrl, timeout = 60000, signal, ...options }: SimbadQueryOptions = {}): Promise<string[][] | undefined> {
+const DEFAULT_SIMBAD_QUERY_OPTIONS: SimbadQueryOptions = {
+	baseUrl: SIMBAD_URL,
+	timeout: 60000,
+}
+
+export async function simbadQuery(query: string, { baseUrl, timeout = 60000, signal, ...options }: SimbadQueryOptions = DEFAULT_SIMBAD_QUERY_OPTIONS): Promise<string[][] | undefined> {
 	const uri = `${baseUrl || SIMBAD_URL}${SIMBAD_QUERY_PATH}`
+	signal ??= timeout ? AbortSignal.timeout(timeout) : undefined
 
 	const body = new FormData()
 	body.append('request', 'doQuery')
@@ -21,7 +27,7 @@ export async function simbadQuery(query: string, { baseUrl, timeout = 60000, sig
 	body.append('format', 'tsv')
 	body.append('query', query)
 
-	const response = await fetch(uri, { method: 'POST', body, signal: signal ?? AbortSignal.timeout(timeout), ...options })
+	const response = await fetch(uri, { method: 'POST', body, signal, ...options })
 	if (response.status >= 300) return undefined
 	const text = await response.text()
 	return readCsv(text, TSV_DELIMITER)

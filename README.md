@@ -603,7 +603,7 @@ toMeterPerSecond(1) // Convert AU/d to m/s
 ### Vizier
 
 ```ts
-const [header, ...data] = vizierQuery(query) // Search on Vizier TAP service
+const [header, ...data] = vizierQuery(query, options) // Search on Vizier TAP service
 ```
 
 ### VSOP87E
