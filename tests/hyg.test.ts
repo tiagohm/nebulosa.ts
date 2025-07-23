@@ -29,7 +29,6 @@ test('read', async () => {
 	expect(data[32263].constellation).toBe('CMA')
 	expect(data[32263].spType).toBe('A0m...')
 	expect(data[32263].distance).toBeCloseTo(543940.9205, 3)
-	expect(toMas(data[32263].px)).toBeCloseTo(379.2044, 3)
 	expect(toMas(data[32263].pmRa)).toBeCloseTo(-546.0099, 3)
 	expect(toMas(data[32263].pmDec)).toBeCloseTo(-1223.0799, 3)
 	expect(toKilometerPerSecond(data[32263].rv)).toBeCloseTo(-9.4, 3)

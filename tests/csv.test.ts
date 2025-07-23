@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import fs from 'fs/promises'
 import { type CsvRow, type ReadCsvStreamOptions, readCsv, readCsvStream, TSV_DELIMITER } from '../src/csv'
-import { bufferSource } from '../src/io'
+import { bufferSource, fileHandleSource } from '../src/io'
 
 const TSV = 'HIP\tRA\tDEC\tMAG\n1\t00 00 00.22\t+01 05 20.4\t9.10\n2\t00 00 00.91\t-19 29 55.8\t9.27'
 const TSV_WITH_EMPTY_COLUMN = 'HIP\tRA\tDEC\tMAG\t\n1\t00 00 00.22\t+01 05 20.4\t9.10\t\n2\t00 00 00.91\t-19 29 55.8\t9.27\t'
@@ -141,4 +142,16 @@ describe('stream', () => {
 			await readCsvAndTest(Buffer.from(TSV), { delimiter: TSV_DELIMITER, bufferSize: i })
 		}
 	})
+})
+
+test('IAU-CSN', async () => {
+	const rows: CsvRow[] = []
+
+	for await (const row of readCsvStream(fileHandleSource(await fs.open('data/IAU-CSN.tsv', 'r')), { delimiter: TSV_DELIMITER, skipFirstLine: false })) {
+		rows.push(row)
+	}
+
+	expect(rows).toHaveLength(452)
+	expect(rows[0]).toEqual(['Name/ASCII', 'Name/Diacritics', 'Designation', 'ID', 'ID/Diacritics', 'Con', '#', 'WDS_J', 'mag', 'bnd', 'HIP', 'HD', 'RA(J2000)', 'Dec(J2000)', 'Date', 'notes'])
+	expect(rows[451]).toEqual(['Zubeneschamali', 'Zubeneschamali', 'HR 5685', 'bet', 'β', 'Lib', '_', '_', '2.61', 'V', '74785', '135742', '229.251724', '-9.382914', '2016-08-21', ''])
 })

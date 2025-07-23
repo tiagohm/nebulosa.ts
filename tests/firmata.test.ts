@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { type AnalogMapping, FirmataClient, type FirmataClientHandler, PinMode, decodeBufferAs7Bit, encodeBufferAs7Bit } from '../src/firmata'
+import { type AnalogMapping, decodeBufferAs7Bit, encodeBufferAs7Bit, FirmataClient, type FirmataClientHandler, PinMode } from '../src/firmata'
 
 describe('simple', () => {
 	const result: unknown[] = []

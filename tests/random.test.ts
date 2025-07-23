@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { type Random, bernoulli, exponential, geometric, mt19937, mulberry32, normal, pareto, splitmix32, uniform, weibull, xorshift32 } from '../src/random'
+import { bernoulli, exponential, geometric, mt19937, mulberry32, normal, pareto, type Random, splitmix32, uniform, weibull, xorshift32 } from '../src/random'
 
 test('mulberry32', () => {
 	const random = mulberry32(1066)

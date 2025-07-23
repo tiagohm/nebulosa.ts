@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { LuDecomposition, Mat3, QrDecomposition, gaussianElimination, mulMTxN, mulMxN, mulMxNT } from '../src/matrix'
+import { gaussianElimination, LuDecomposition, Mat3, mulMTxN, mulMxN, mulMxNT, QrDecomposition } from '../src/matrix'
 import type { Vector3 } from '../src/vector'
 
 describe('Mat3', () => {
