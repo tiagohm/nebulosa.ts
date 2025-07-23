@@ -19,7 +19,6 @@ export interface HygDatabaseEntry {
 	readonly declination: Angle
 	readonly pmRa: Angle
 	readonly pmDec: Angle
-	readonly px: Angle
 	readonly rv: Velocity
 	readonly magnitude: number
 	readonly distance: Distance
@@ -42,7 +41,6 @@ function processRow(row: CsvRow): HygDatabaseEntry {
 	const name = row[6] || undefined
 	const dist = +row[9]
 	const distance = dist > 0 && dist < 100000 ? parsec(dist) : 0
-	const px = distance !== 0 ? 1 / distance : 0
 	const rv = kilometerPerSecond(+row[12])
 	const magnitude = row[13] ? +row[13] : 99
 	const spType = row[15] || undefined
@@ -54,5 +52,5 @@ function processRow(row: CsvRow): HygDatabaseEntry {
 	const flamsteed = +row[28]
 	const constellation = row[29].toUpperCase() as Constellation
 
-	return { id, hip, hd, hr, bayer, flamsteed, name, rightAscension, declination, pmRa, pmDec, px, rv, magnitude, distance, spType, constellation }
+	return { id, hip, hd, hr, bayer, flamsteed, name, rightAscension, declination, pmRa, pmDec, rv, magnitude, distance, spType, constellation }
 }

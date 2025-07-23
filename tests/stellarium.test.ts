@@ -1,13 +1,14 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { deg, parseAngle } from '../src/angle'
+import { toLightYear } from '../src/distance'
 import { fileHandleSource } from '../src/io'
-import { type CatalogEntry, type NameEntry, readCatalogDat, readNamesDat, StellariumObjectType, searchAround } from '../src/stellarium'
+import { readCatalogDat, readNamesDat, type StellariumCatalogEntry, type StellariumNameEntry, StellariumObjectType, searchAround } from '../src/stellarium'
 
 test('catalog', async () => {
 	const handle = await fs.open('data/catalog.dat')
 	const source = fileHandleSource(handle)
-	const entries = new Array<CatalogEntry>(94660)
+	const entries = new Array<StellariumCatalogEntry>(94660)
 	let i = 0
 
 	for await (const entry of readCatalogDat(source)) {
@@ -18,8 +19,8 @@ test('catalog', async () => {
 
 	expect(entries[0].id).toBe(1)
 	expect(entries[0].m).toBe(40)
-	expect(entries[0].ra).toBe(3.238497018814087)
-	expect(entries[0].dec).toBe(1.0137385129928589)
+	expect(entries[0].rightAscension).toBe(3.238497018814087)
+	expect(entries[0].declination).toBe(1.0137385129928589)
 	expect(entries[0].mB).toBe(99)
 	expect(entries[0].mV).toBe(9.649999618530273)
 	expect(entries[0].type).toBe(StellariumObjectType.STAR)
@@ -34,8 +35,8 @@ test('catalog', async () => {
 	expect(entries[311].sh2).toBe(184)
 	expect(entries[311].lbn).toBe(616)
 	expect(entries[311].ced).toBe('3')
-	expect(entries[311].ra).toBe(0.22871841490268707)
-	expect(entries[311].dec).toBe(0.9872454404830933)
+	expect(entries[311].rightAscension).toBe(0.22871841490268707)
+	expect(entries[311].declination).toBe(0.9872454404830933)
 	expect(entries[311].mB).toBe(99)
 	expect(entries[311].mV).toBe(99)
 	expect(entries[311].type).toBe(StellariumObjectType.HII_REGION)
@@ -43,12 +44,13 @@ test('catalog', async () => {
 	expect(entries[311].minorAxis).toBe(0.008726646259971648)
 	expect(entries[311].orientation).toBe(0)
 	expect(entries[311].redshift).toBe(99)
-	expect(entries[311].parallax).toBe(2.908882202245805e-9)
+	expect(entries[311].px).toBe(2.908882202245805e-9)
+	expect(toLightYear(entries[311].distance)).toBeCloseTo(5544.6, 0)
 
 	expect(entries[94659].id).toBe(94660)
 	expect(entries[94659].vdbha).toBe(197)
-	expect(entries[94659].ra).toBe(4.391684532165527)
-	expect(entries[94659].dec).toBe(-0.8004080057144165)
+	expect(entries[94659].rightAscension).toBe(4.391684532165527)
+	expect(entries[94659].declination).toBe(-0.8004080057144165)
 	expect(entries[94659].mB).toBe(99)
 	expect(entries[94659].mV).toBe(99)
 	expect(entries[94659].type).toBe(StellariumObjectType.OPEN_STAR_CLUSTER)
@@ -65,7 +67,7 @@ test('catalog', async () => {
 test('names', async () => {
 	const handle = await fs.open('data/names.dat')
 	const source = fileHandleSource(handle)
-	const entries = new Array<NameEntry>(2000)
+	const entries = new Array<StellariumNameEntry>(2000)
 	let i = 0
 
 	for await (const entry of readNamesDat(source)) {

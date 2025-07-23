@@ -1,6 +1,7 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import { type Angle, deg, mas, normalizeAngle } from './angle'
 import { PI } from './constants'
+import { type Distance, parsec } from './distance'
 import { eraAnpm } from './erfa'
 import type { Seekable, Source } from './io'
 
@@ -93,10 +94,10 @@ export class StellariumProtocolServer {
 	}
 }
 
-export interface CatalogEntry {
+export interface StellariumCatalogEntry {
 	readonly id: number
-	readonly ra: Angle
-	readonly dec: Angle
+	readonly rightAscension: Angle
+	readonly declination: Angle
 	readonly mB: number
 	readonly mV: number
 	readonly type: number
@@ -104,7 +105,8 @@ export interface CatalogEntry {
 	readonly minorAxis: Angle
 	readonly orientation: Angle
 	readonly redshift: number
-	readonly parallax: Angle
+	readonly px: Angle
+	readonly distance: Distance
 	readonly ngc: number
 	readonly ic: number
 	readonly m: number
@@ -229,8 +231,8 @@ export async function* readCatalogDat(source: Source & Seekable) {
 		}
 
 		const id = readInt()
-		const ra = readDouble()
-		const dec = readDouble()
+		const rightAscension = readDouble()
+		const declination = readDouble()
 		const mB = readDouble()
 		const mV = readDouble()
 		const type = (readInt() + 1) % 37
@@ -240,9 +242,9 @@ export async function* readCatalogDat(source: Source & Seekable) {
 		const orientation = deg(readInt())
 		const redshift = readDouble()
 		readDouble() // Redshift error
-		const parallax = mas(readDouble())
+		const px = mas(readDouble())
 		readDouble() // Parallax error
-		readDouble() // Distance
+		const distance = parsec(readDouble() * 1000) // Distance
 		readDouble() // Distance error
 		const ngc = readInt()
 		const ic = readInt()
@@ -274,11 +276,11 @@ export async function* readCatalogDat(source: Source & Seekable) {
 		const ru = readInt()
 		const vdbha = readInt()
 
-		yield { id, ra, dec, mB, mV, type, majorAxis, minorAxis, orientation, redshift, parallax, ngc, ic, m, c, b, sh2, vdb, rcw, ldn, lbn, cr, mel, pgc, ugc, ced, arp, vv, pk, png, snrg, aco, hcg, eso, vdbh, dwb, tr, st, ru, vdbha } as CatalogEntry
+		yield { id, rightAscension, declination, mB, mV, type, majorAxis, minorAxis, orientation, redshift, px, distance, ngc, ic, m, c, b, sh2, vdb, rcw, ldn, lbn, cr, mel, pgc, ugc, ced, arp, vv, pk, png, snrg, aco, hcg, eso, vdbh, dwb, tr, st, ru, vdbha } as StellariumCatalogEntry
 	}
 }
 
-export interface NameEntry {
+export interface StellariumNameEntry {
 	readonly prefix: string
 	readonly id: string
 	readonly name: string
@@ -336,17 +338,17 @@ export async function* readNamesDat(source: Source & Seekable) {
 
 		if (!name) continue
 
-		yield { prefix, id, name } as NameEntry
+		yield { prefix, id, name } as StellariumNameEntry
 	}
 }
 
-export function searchAround(entries: CatalogEntry[], ra: Angle, dec: Angle, fov: Angle) {
-	const cdec = Math.cos(dec)
-	const sdec = Math.sin(dec)
+export function searchAround(entries: Pick<StellariumCatalogEntry, 'rightAscension' | 'declination'>[], rightAscension: Angle, declination: Angle, fov: Angle) {
+	const cdec = Math.cos(declination)
+	const sdec = Math.sin(declination)
 
 	function distance(ra0: Angle, dec0: Angle) {
-		return Math.acos(sdec * Math.sin(dec0) + cdec * Math.cos(dec0) * Math.cos(ra - ra0))
+		return Math.acos(sdec * Math.sin(dec0) + cdec * Math.cos(dec0) * Math.cos(rightAscension - ra0))
 	}
 
-	return entries.filter((e) => distance(e.ra, e.dec) <= fov)
+	return entries.filter((e) => distance(e.rightAscension, e.declination) <= fov)
 }
