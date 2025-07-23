@@ -107,7 +107,8 @@ constellation(ra, dec, equinox) // Constellation at RA/DEC coordinate
 ### Csv
 
 ```ts
-const [header, ...data] = readCsv(lines, options) // Read CSV file
+const [header, ...data] = readCsv(lines, options) // Read CSV file from lines
+const rows = await readCsvStream(source, options) // Read CSV file from source
 ```
 
 ### Daf
