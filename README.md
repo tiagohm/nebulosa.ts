@@ -204,6 +204,12 @@ observerWithTle(tle, coord, startTime, endTime, quantities, options)
 spkFile(id, startTime, endTime)
 ```
 
+### HYG
+
+```ts
+const rows = await readHygDatabase(source) // Read HYG star database from source
+```
+
 ### ICRS
 
 ```ts

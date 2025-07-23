@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import fs from 'fs/promises'
 import { type CsvRow, type ReadCsvStreamOptions, readCsv, readCsvStream, TSV_DELIMITER } from '../src/csv'
-import { bufferSource, fileHandleSource } from '../src/io'
+import { bufferSource } from '../src/io'
 
 const TSV = 'HIP\tRA\tDEC\tMAG\n1\t00 00 00.22\t+01 05 20.4\t9.10\n2\t00 00 00.91\t-19 29 55.8\t9.27'
 const TSV_WITH_EMPTY_COLUMN = 'HIP\tRA\tDEC\tMAG\t\n1\t00 00 00.22\t+01 05 20.4\t9.10\t\n2\t00 00 00.91\t-19 29 55.8\t9.27\t'
@@ -142,20 +141,4 @@ describe('stream', () => {
 			await readCsvAndTest(Buffer.from(TSV), { delimiter: TSV_DELIMITER, bufferSize: i })
 		}
 	})
-})
-
-test('hygdata_v41', async () => {
-	const data: CsvRow[] = []
-	const source = fileHandleSource(await fs.open('data/hygdata_v41.csv', 'r'))
-
-	for await (const row of readCsvStream(source, { skipFirstLine: false })) {
-		data.push(row)
-	}
-
-	expect(data).toHaveLength(119627)
-	for (let i = 0; i < data.length; i++) expect(data[i]).toHaveLength(37)
-	expect(data[0]).toEqual(['id', 'hip', 'hd', 'hr', 'gl', 'bf', 'proper', 'ra', 'dec', 'dist', 'pmra', 'pmdec', 'rv', 'mag', 'absmag', 'spect', 'ci', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'rarad', 'decrad', 'pmrarad', 'pmdecrad', 'bayer', 'flam', 'con', 'comp', 'comp_primary', 'base', 'lum', 'var', 'var_min', 'var_max'])
-	expect(data[1]).toEqual(['0', '', '', '', '', '', 'Sol', '0.0', '0.0', '0.0', '0.0', '0.0', '0.0', '-26.7', '4.85', 'G2V', '0.656', '0.000005', '0.0', '0.0', '0.0', '0.0', '0.0', '0.0', '0.0', '0.0', '0.0', '', '', '', '1', '0', '', '1.0', '', '', ''])
-	// biome-ignore format: too long!
-	expect(data[119626]).toEqual(['119630', '', '224960', '9090', '', '', '', '0.03536111', '-14.67611111', '100000.0', '-13.0', '-16.0', '13.0', '7.1', '-12.9', 'S7.3e', '', '96733.2018040608', '895.53483839403', '-25335.4630130983', '0.0', '0.0', '0.0', '0.00925752', '-0.25614646', '-0.0000000630257785', '-0.00000007', '', '', 'Cet', '1', '119630', '', '12589254.1179417', 'W', '14.8', '7.1'])
 })
