@@ -100,7 +100,7 @@ export interface StellariumCatalogEntry {
 	readonly declination: Angle
 	readonly mB: number
 	readonly mV: number
-	readonly type: number
+	readonly type: StellariumObjectType
 	readonly majorAxis: Angle
 	readonly minorAxis: Angle
 	readonly orientation: Angle
@@ -235,7 +235,7 @@ export async function* readCatalogDat(source: Source & Seekable) {
 		const declination = readDouble()
 		const mB = readDouble()
 		const mV = readDouble()
-		const type = (readInt() + 1) % 37
+		const type = readInt() + 1
 		readText() // Morphological type
 		const majorAxis = deg(readDouble())
 		const minorAxis = deg(readDouble())
