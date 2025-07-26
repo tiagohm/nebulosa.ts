@@ -351,8 +351,8 @@ export function base64Source(source: Source) {
 	return new Base64Source(source)
 }
 
-const BASE64_ALPHABET = Buffer.from('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', 'ascii')
-const BASE64_URL_SAFE_ALPHABET = Buffer.from('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_', 'ascii')
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+const BASE64_URL_SAFE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
 
 const TRAILING = 61 // =
 
@@ -369,7 +369,7 @@ export class Base64Sink implements Sink {
 		private readonly sink: Sink,
 		alphabet: Base64Alphabet = 'base64',
 	) {
-		this.map = alphabet === 'base64' ? BASE64_ALPHABET : BASE64_URL_SAFE_ALPHABET
+		this.map = Buffer.from(alphabet === 'base64' ? BASE64_ALPHABET : BASE64_URL_SAFE_ALPHABET, 'ascii')
 	}
 
 	async write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
