@@ -36,4 +36,4 @@ test('read', async () => {
 	expect(formatDEC(data[32263].declination)).toBe('-16 42 58.02')
 
 	expect(data[119625].id).toBe(119630)
-})
+}, 5000)
