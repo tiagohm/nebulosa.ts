@@ -113,6 +113,7 @@ export const CONSTELLATIONS = {
 	VEL: { name: 'Vela', iau: 'Vel', genitive: 'Velorum', description: "Sail of the Argonauts' ship" },
 	VIR: { name: 'Virgo', iau: 'Vir', genitive: 'Virginis', description: 'Virgin' },
 	VOL: { name: 'Volans', iau: 'Vol', genitive: 'Volantis', description: 'Flying fish' },
+	VUL: { name: 'Vulpecula', iau: 'Vul', genitive: 'Vulpeculae', description: 'Fox' },
 } as const
 
 export const CONSTELLATION_LIST = Object.keys(CONSTELLATIONS) as Constellation[]
