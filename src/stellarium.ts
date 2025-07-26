@@ -100,7 +100,7 @@ export interface StellariumCatalogEntry {
 	readonly declination: Angle
 	readonly mB: number
 	readonly mV: number
-	readonly type: number
+	readonly type: StellariumObjectType
 	readonly majorAxis: Angle
 	readonly minorAxis: Angle
 	readonly orientation: Angle
