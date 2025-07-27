@@ -4,6 +4,8 @@ import { altaz, cirs, equatorial, gcrs, hadec } from '../src/astrometry'
 import { ONE_ATM } from '../src/constants'
 import type { CartesianCoordinate } from '../src/coordinate'
 import { meter } from '../src/distance'
+import { eraC2s } from '../src/erfa'
+import { precessFk5FromJ2000 } from '../src/fk5'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 import { bcrs, star } from '../src/star'
 import { Timescale, timeYMDHMS } from '../src/time'
@@ -91,7 +93,7 @@ test('hadec', () => {
 	time.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
 	time.delta = () => -0.3495186114062241
 	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
-	const c = hadec(s[0], time, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION)!
+	const c = hadec(s[0], time, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)!
 
 	expect(toDeg(c[0])).toBeCloseTo(-0.295041500325083861, 11)
 	expect(toDeg(c[1])).toBeCloseTo(52.295492760874715543, 11)
@@ -103,20 +105,30 @@ test('altaz', () => {
 	time.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
 	time.delta = () => -0.3495186114062241
 	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
-	const c = altaz(s[0], time, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION)!
+	const c = altaz(s[0], time, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)!
 
 	expect(toDeg(c[0])).toBeCloseTo(116.452274040350133077, 9)
 	expect(toDeg(c[1])).toBeCloseTo(89.798455668201469848, 11)
 })
 
-test('observedAltaz', () => {
+test('observed altaz', () => {
 	const time = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
 	time.location = geodeticLocation(deg(9.712156), deg(52.385639), meter(200), Ellipsoid.WGS84)
 	time.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
 	time.delta = () => -0.3495186114062241
 	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
-	const c = altaz(s[0], time, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, { pressure: ONE_ATM })!
+	const c = altaz(s[0], time, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, { pressure: ONE_ATM, relativeHumidity: 0 })!
 
 	expect(toDeg(c[0])).toBeCloseTo(116.452274040350133077, 9)
 	expect(toDeg(c[1])).toBeCloseTo(89.798511588010399009, 11)
+})
+
+test('sirius', () => {
+	const sirius = star(deg(101.27724), deg(-16.7225), mas(-415.12), mas(-1163.79), mas(378.932), kilometerPerSecond(-10))
+	const time = timeYMDHMS(2025, 7, 27, 15, 0, 0, Timescale.UTC)
+	const pv = bcrs(sirius, time)
+	const [ra, dec] = eraC2s(...precessFk5FromJ2000(pv[0], time))
+
+	expect(toDeg(ra)).toBeCloseTo(101.559918, 5)
+	expect(toDeg(dec)).toBeCloseTo(-16.75894, 5)
 })

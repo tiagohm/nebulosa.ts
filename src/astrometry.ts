@@ -23,9 +23,9 @@ export interface RefractionParameters {
 }
 
 export const DEFAULT_REFRACTION_PARAMETERS: Readonly<Required<RefractionParameters>> = {
-	pressure: 0,
+	pressure: 1013.25,
 	temperature: 15,
-	relativeHumidity: 0,
+	relativeHumidity: 0.5,
 	wl: 0.55,
 }
 
@@ -85,7 +85,7 @@ export function cirs(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVel
 	return eraAtciqpmpx(Vector3.normalize(nc, nc), astrom, nc) as unknown as Mutable<CartesianCoordinate>
 }
 
-function observed(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp: CartesianCoordinate = ebpv[0], refraction?: RefractionParameters) {
+function observed(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp: CartesianCoordinate = ebpv[0], refraction?: RefractionParameters | false) {
 	if (!time.location) return undefined
 
 	const a = tt(time)
@@ -95,10 +95,10 @@ function observed(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVeloci
 	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
 
 	// First set up the astrometry context for ICRS<->observed
-	const pressure = refraction?.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure
-	const temperature = refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature
-	const relativeHumidity = refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity
-	const wl = refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl
+	const pressure = refraction === false ? 0 : (refraction?.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure)
+	const temperature = refraction === false ? 0 : (refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
+	const relativeHumidity = refraction === false ? 0 : (refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity)
+	const wl = refraction === false ? 0 : (refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl)
 	const [astrom] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
 	// Correct for parallax to find BCRS direction from observer (as in erfa.pmpx)
 	const nc = Vector3.minus(icrs, astrom.eb)
@@ -110,13 +110,13 @@ function observed(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVeloci
 
 // https://en.wikipedia.org/wiki/Standard_temperature_and_pressure
 
-export function hadec(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate, refraction?: RefractionParameters) {
+export function hadec(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate, refraction?: RefractionParameters | false) {
 	const r = observed(icrs, time, ebpv, ehp, refraction)
 	if (!r) return r
 	return [r[2], r[3]] as const
 }
 
-export function altaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate, refraction?: RefractionParameters) {
+export function altaz(icrs: CartesianCoordinate, time: Time, ebpv: PositionAndVelocity, ehp?: CartesianCoordinate, refraction?: RefractionParameters | false) {
 	const r = observed(icrs, time, ebpv, ehp, refraction)
 	if (!r) return r
 	return [r[0], PIOVERTWO - r[1]] as const

@@ -21,7 +21,7 @@ export type Barycentric = PositionAndVelocity & {
 	readonly star: Star
 }
 
-// Compute the ICRS position and velocity of a star.
+// Computes the ICRS position and velocity of a star.
 export function star(ra: Angle, dec: Angle, pmRa: Angle = 0, pmDec: Angle = 0, parallax: Angle = 0, radialVelocity: Velocity = 0, epoch?: Time): Star {
 	const s = eraStarpv(ra, dec, pmRa, pmDec, parallax, radialVelocity) as unknown as Mutable<Star>
 	s.ra = ra
@@ -34,7 +34,7 @@ export function star(ra: Angle, dec: Angle, pmRa: Angle = 0, pmDec: Angle = 0, p
 	return s
 }
 
-// Compute the BCRS position and velocity of a star.
+// Computes the BCRS position and velocity of a star.
 export function bcrs(star: Star, time: Time): Barycentric {
 	const e = tdb(star.epoch)
 	const a = tdb(time)

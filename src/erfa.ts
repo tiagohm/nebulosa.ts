@@ -1067,7 +1067,7 @@ export function eraStarpmpv(pv1: PositionAndVelocity, ep1a: number, ep1b: number
 	// Time interval, "before" to "after" (days).
 	const dt = ep2a - ep1a + (ep2b - ep1b)
 
-	// Move star along track from the "before" observed position to the"after" geometric position.
+	// Move star along track from the "before" observed position to the "after" geometric position.
 	const p1 = eraPpsp(pv1[0], dt + tl1, pv1[1])
 
 	// From this geometric position, deduce the observed light time (days)
