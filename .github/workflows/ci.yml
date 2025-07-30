@@ -7,17 +7,17 @@ on:
             - 'src/**.ts'
             - 'tests/**.ts'
             - 'package.json'
+            - 'bun.lock'
             - 'tsconfig.json'
             - 'native/**'
-            - 'data/**'
     pull_request:
         paths:
             - 'src/**.ts'
             - 'tests/**.ts'
             - 'package.json'
+            - 'bun.lock'
             - 'tsconfig.json'
             - 'native/**'
-            - 'data/**'
     workflow_dispatch:
 
 jobs:
