@@ -20,7 +20,8 @@ describe('polynomial', () => {
 		const regression = polynomialRegression(x, y, 1)
 
 		expect(regression.coefficients).toHaveLength(2)
-		expect(regression.coefficients).toEqual(Float64Array.from([1, 0]))
+		expect(regression.coefficients[0]).toBeCloseTo(1, 12)
+		expect(regression.coefficients[1]).toBeCloseTo(0, 12)
 	})
 
 	test('degree 2', () => {

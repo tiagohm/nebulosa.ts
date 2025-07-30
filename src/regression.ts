@@ -4,6 +4,8 @@ import { isNumberArray, minOf } from './util'
 
 export type TrendLineRegressionMethod = 'simple' | 'theil-sen'
 
+export type Point = [number, number]
+
 export interface Regression {
 	readonly predict: (x: number) => number
 }
@@ -25,7 +27,11 @@ export interface LinearRegression extends Regression, InverseRegression {
 }
 
 export interface PolynomialRegression extends Regression {
-	readonly coefficients: Float64Array
+	readonly coefficients: number[]
+}
+
+export interface QuadraticRegression extends PolynomialRegression {
+	readonly minimum: Readonly<Point>
 }
 
 export interface ExponentialRegression extends Regression, InverseRegression {
@@ -37,14 +43,14 @@ export interface HyperbolicRegression extends Regression, InverseRegression {
 	readonly a: number
 	readonly b: number
 	readonly p: number
-	readonly minimum: readonly [number, number]
+	readonly minimum: Readonly<Point>
 }
 
 export interface TrendLineRegression extends Regression {
 	readonly left: LinearRegression
 	readonly right: LinearRegression
-	readonly minimum: readonly [number, number]
-	readonly intersection: readonly [number, number]
+	readonly minimum: Readonly<Point>
+	readonly intersection: Readonly<Point>
 }
 
 export interface LevenbergMarquardtOptions {
@@ -168,13 +174,22 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	const coefficients = gaussianElimination(A, B, B)
 
 	return {
-		coefficients: new Float64Array(coefficients),
+		coefficients: Array.isArray(coefficients) ? coefficients : Array.from(coefficients),
 		predict: (x) => {
 			let y = 0
 			for (let k = 0; k < powers.length; k++) y += coefficients[k] * x ** powers[k]
 			return y
 		},
 	}
+}
+
+// Computes the coefficients of a quadratic regression
+export function quadraticRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, interceptAtZero?: boolean): QuadraticRegression {
+	const regression: QuadraticRegression = polynomialRegression(x, y, 2, interceptAtZero) as never
+	const [_, b, a] = regression.coefficients
+	const minX = -b / (2 * a)
+	;(regression as { minimum: Readonly<Point> }).minimum = [minX, regression.predict(minX)]
+	return regression
 }
 
 // https://en.wikipedia.org/wiki/Theil%E2%80%93Sen_estimator
@@ -305,8 +320,8 @@ export function powerRegression(x: Readonly<NumberArray>, y: Readonly<NumberArra
 export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): HyperbolicRegression {
 	const n = Math.min(x.length, y.length)
 
-	const lowestPoint: [number, number] = [x[0], y[0]]
-	const highestPoint: [number, number] = [x[0], y[0]]
+	const lowestPoint: Point = [x[0], y[0]]
+	const highestPoint: Point = [x[0], y[0]]
 
 	for (let i = 1; i < n; i++) {
 		if (y[i] < lowestPoint[1]) {
@@ -376,7 +391,7 @@ export function regressionScore(regression: Regression, x: Readonly<NumberArray>
 	return { r, r2, chi2, rmsd }
 }
 
-export function intersect(a: LinearRegression, b: LinearRegression): readonly [number, number] {
+export function intersect(a: LinearRegression, b: LinearRegression): Readonly<Point> {
 	// Parallel lines do not intersect
 	if (a.slope === b.slope) return [0, 0]
 
@@ -451,6 +466,8 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		// Solve JTJ * dp = JTr
 		gaussianElimination(JTJ, JTR, DP)
 
+		if (Number.isNaN(DP[0])) break
+
 		// Update parameters
 		for (let i = 0; i < m; i++) UP[i] = params[i] + DP[i]
 		const error = R.reduce((sum, r) => sum + r * r, 0)
@@ -458,7 +475,7 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 
 		if (newError < error) {
 			params = UP
-			if (Math.abs(error - newError) < tolerance) break
+			if (Math.abs(error - newError) <= tolerance) break
 			lambda /= 10
 		} else {
 			lambda *= 10
