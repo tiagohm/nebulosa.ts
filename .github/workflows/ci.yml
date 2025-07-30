@@ -37,6 +37,14 @@ jobs:
             - name: Install Dependencies
               run: bun i --production
 
+            - name: Cache Data Files
+              uses: actions/cache@v4
+              with:
+                  path: data/
+                  key: data-cache-${{ hashFiles('tests/setup.ts') }}
+                  restore-keys: |
+                      data-cache-
+
             - name: Copy Native Files
               run: bun run native/copy.ts
 
