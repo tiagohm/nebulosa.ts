@@ -6,7 +6,7 @@ import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { Mat3 } from './matrix'
 import { type MPCOrbit, type MPCOrbitComet, unpackDate } from './mpcorb'
-import { subtractTime, type Time, Timescale, tdb, time, timeYMD, timeYMDF, tt } from './time'
+import { type Time, Timescale, tdb, time, timeSubtract, timeYMD, tt } from './time'
 import { Vector3 } from './vector'
 
 const REFERENCE_FRAME = Mat3.transpose(ECLIPTIC_J2000_MATRIX)
@@ -82,7 +82,7 @@ export function asteroid(a: Distance, e: number, i: Angle, om: Angle, w: Angle, 
 // Creates a `KeplerOrbit` for asteroid using MPCORB parameters.
 export function mpcAsteroid(mpc: MPCOrbit) {
 	const { semiMajorAxis, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, meanAnomaly, epochPacked } = mpc
-	const epoch = timeYMD(...unpackDate(epochPacked), Timescale.TT)
+	const epoch = timeYMD(...unpackDate(epochPacked), 0, Timescale.TT)
 	return asteroid(semiMajorAxis, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, meanAnomaly, epoch)
 }
 
@@ -95,7 +95,7 @@ export function comet(p: Distance, e: number, i: Angle, om: Angle, w: Angle, epo
 export function mpcComet(mpc: MPCOrbitComet) {
 	const { eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion } = mpc
 	const p = mpc.perihelionDistance * (1 + eccentricity)
-	const epoch = timeYMDF(mpc.perihelionYear, mpc.perihelionMonth, mpc.perihelionDay, mpc.perihelionDayFraction, Timescale.TT)
+	const epoch = timeYMD(mpc.perihelionYear, mpc.perihelionMonth, mpc.perihelionDay, mpc.perihelionDayFraction, Timescale.TT)
 	return comet(p, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, epoch)
 }
 
@@ -417,7 +417,7 @@ function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate,
 		return x * (br0 * c[1] + x * (b2rv * c[2] + x * bq * c[3]))
 	}
 
-	const dt = subtractTime(t1, t0) // T1 - T0
+	const dt = timeSubtract(t1, t0) // T1 - T0
 	let x = Math.max(-bound, Math.min(dt / bq, bound))
 
 	let kfun = kepler(x)

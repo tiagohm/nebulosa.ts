@@ -1,8 +1,7 @@
 import { dlopen, type Pointer, ptr, read } from 'bun:ffi'
 import wcsPath from '../native/libwcs.shared' with { type: 'file' }
 import { type Angle, deg, toDeg } from './angle'
-import { type FitsHeader, FitsKeywordWriter } from './fits'
-import { numericKeyword } from './fits.util'
+import { type FitsHeader, FitsKeywordWriter, numericKeyword } from './fits'
 
 export type WcsFitsHeaderKey =
 	| 'WCSAXES'

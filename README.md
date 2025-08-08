@@ -157,25 +157,20 @@ client.processByte(byte) // Process the byte
 ```ts
 readFits(source) // Read FITS file from source
 writeFits(sink, fits) // Write FITS file to sink
-```
-
-### Fits Util
-
-```ts
 hasKeyword(header, keyword) // Check if the FITS header has a keyword
 textKeyword(header, keyword) // Get the text value of a keyword from the FITS header
 numericKeyword(header, keyword) // Get the number value of a keyword from the FITS header
 booleanKeyword(header, keyword) // Get the boolean value of a keyword from the FITS header
-bitpix(bitpix) // Get the bitpix value for a given FITS data type
+bitpixKeyword(bitpix) // Get the bitpix value for a given FITS data type
 bitpixInBytes(bitpix) // Get the number of bytes per pixel for a given bitpix
-declination(header) // Get the declination from the FITS header
-rightAscension(header) // Get the right ascension from the FITS header
-naxis(header) // Get the NAXIS value from the FITS header
-height(header) // Get the height from the FITS header
-width(header) // Get the width from the FITS header
-numberOfChannels(header) // Get the number of channels from the FITS header
-exposureTime(header) // Get the exposure time from the FITS header
-cfaPattern(header) // Get the CFA pattern from the FITS header
+declinationKeyword(header) // Get the declination from the FITS header
+rightAscensionKeyword(header) // Get the right ascension from the FITS header
+numberOfAxesKeyword(header) // Get the NAXIS value from the FITS header
+heightKeyword(header) // Get the height (NAXIS1) from the FITS header
+widthKeyword(header) // Get the width (NAXIS2) from the FITS header
+numberOfChannelsKeyword(header) // Get the number of channels (NAXIS3) from the FITS header
+exposureTimeKeyword(header) // Get the exposure time from the FITS header
+cfaPatternKeyword(header) // Get the CFA pattern from the FITS header
 ```
 
 ### FK5
@@ -352,6 +347,14 @@ const x = gaussianElimination(A, B) // Solve A*x=B using Gaussian elimination
 TODO
 ```
 
+### Moon
+
+```ts
+moonParallax(distance) // Compute the moon parallax at a given distance
+moonSemidiameter(distance) // Compute the moon semidiameter at a given distance
+lunation(time, system) // Compute the lunation at a given time and system
+```
+
 ### MPCORB
 
 ```ts
@@ -511,6 +514,17 @@ readNamesDat(source) // Read Stellarium's names.dat file
 searchAround(catalog, ra, dec, fov) // Search around coordinate
 ```
 
+### Sun
+
+```ts
+parallax(distance) // Compute the parallax of the Sun at a given distance
+semidiameter(distance) // Compute the semidiameter of the Sun at a given distance
+carringtonRotationNumber(time) // Compute the Carrington rotation number of the Sun at time
+season(year, name) // Compute the date of the solstice or equinox for a given year and season name
+nearestSolarEclipse(time, true) // Nearest solar eclipse to time
+solarSaros(time) // Compute the saros series number for the solar eclipse at time
+```
+
 ### Temperature
 
 ```ts
@@ -533,9 +547,10 @@ timeYMDHMS(2024, 12, 25, 9, 10, 11.5, Timescale.UTC) // Time from year, month, d
 timeYMD(2024, 12, 25, Timescale.UTC) // Time from year, month and day
 timeYMDF(2024, 12, 25, 0.5, Timescale.UTC) // Time from year, month, day and fraction of day
 timeGPS(630720013) // Time from GPS seconds
-normalizeTime(2460650, 8.37456, 0, Timescale.UTC) // Normalize day and fraction
-subtractTime(a, b) // Subtract two Times
+timeNormalize(2460650, 8.37456, 0, Timescale.UTC) // Normalize day and fraction
+timeSubtract(a, b) // Subtract two Times
 toDate(time) // Convert the time to year, month, day, hour, minute, second and nanosecond
+toJulianDay(time) // Convert the time to Julian Day
 ut1(time) // Convert the time to UT1 scale
 utc(time) // Convert the time to UTC scale
 tai(time) // Convert the time to TAI scale

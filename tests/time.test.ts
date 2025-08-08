@@ -7,10 +7,10 @@ import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // biome-ignore format: too long
-import { equationOfOrigins, era, gast, gmst, meanObliquity, normalizeTime, nutationAngles, precessionMatrix, precessionNutationMatrix, subtractTime, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, timeUnix, timeYMD, timeYMDHMS, toDate, tt, ut1, utc, } from '../src/time'
+import { equationOfOrigins, era, gast, gmst, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, tt, ut1, utc, } from '../src/time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
-	const b = normalizeTime(expected.day, expected.fraction)
+	const b = timeNormalize(expected.day, expected.fraction)
 
 	if (actual.day !== b.day) {
 		return { pass: false, message: () => `failed to match day. expected ${b.day}, but ${actual.day}` }
@@ -96,7 +96,7 @@ test('timeYMDHMS', () => {
 })
 
 test('timeYMD', () => {
-	const t = timeYMD(2025, 5, 5, Timescale.TT)
+	const t = timeYMD(2025, 5, 5, 0, Timescale.TT)
 	expect(t.day + t.fraction).toBe(2460800.5)
 	expect(t.scale).toBe(Timescale.TT)
 })
@@ -128,7 +128,7 @@ test('timGPS', () => {
 })
 
 test('subtract', () => {
-	const dt = subtractTime(timeYMDHMS(2020, 1, 1, 12, 0, 0), timeYMDHMS(2020, 1, 1, 10, 0, 0))
+	const dt = timeSubtract(timeYMDHMS(2020, 1, 1, 12, 0, 0), timeYMDHMS(2020, 1, 1, 10, 0, 0))
 	expect(dt).toBeCloseTo((2 * 60 * 60) / DAYSEC, 16)
 })
 

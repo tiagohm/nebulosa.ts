@@ -96,14 +96,14 @@ export function pmMatrix(time: Time, pm?: PolarMotion): Mat3.Matrix {
 	return m
 }
 
-export function time(day: number, fraction: number = 0, scale: Timescale = Timescale.UTC, normalized: boolean = true): Time {
-	return normalized ? normalizeTime(day, fraction, 0, scale) : { day, fraction, scale }
+export function time(day: number, fraction: number = 0, scale: Timescale = Timescale.UTC, normalize: boolean = true): Time {
+	return normalize ? timeNormalize(day, fraction, 0, scale) : { day, fraction, scale }
 }
 
 // Times that represent the interval from a particular epoch as
 // a floating point multiple of a unit time interval (e.g. seconds or days).
 export function timeFromEpoch(epoch: number, unit: number, day: number, fraction: number = 0, scale: Timescale = Timescale.UTC): Time {
-	const normalized = normalizeTime(epoch, 0, unit)
+	const normalized = timeNormalize(epoch, 0, unit)
 	day += normalized.day
 	fraction += normalized.fraction
 
@@ -153,12 +153,7 @@ export function timeYMDHMS(year: number, month: number = 1, day: number = 1, hou
 }
 
 // Time from year, month, day.
-export function timeYMD(year: number, month: number = 1, day: number = 1, scale: Timescale = Timescale.UTC) {
-	return time(MJD0 + eraCalToJd(year, month, day), 0, scale)
-}
-
-// Time from year, month, day and fraction of day.
-export function timeYMDF(year: number, month: number = 1, day: number = 1, fraction: number = 0, scale: Timescale = Timescale.UTC) {
+export function timeYMD(year: number, month: number = 1, day: number = 1, fraction: number = 0, scale: Timescale = Timescale.UTC) {
 	return time(MJD0 + eraCalToJd(year, month, day), fraction, scale)
 }
 
@@ -173,7 +168,7 @@ export function timeGPS(seconds: number) {
 // The arithmetic is all done with exact floating point operations so no
 // precision is lost to rounding error. It is assumed the sum is less
 // than about 1E16, otherwise the remainder will be greater than 1.
-export function normalizeTime(day: number, fraction: number, divisor: number = 0, scale: Timescale = Timescale.UTC): Time {
+export function timeNormalize(day: number, fraction: number, divisor: number = 0, scale: Timescale = Timescale.UTC): Time {
 	let [sum, err] = twoSum(day, fraction)
 	day = Math.round(sum)
 	let [extra, frac] = twoSum(sum, -day)
@@ -196,7 +191,7 @@ export function normalizeTime(day: number, fraction: number, divisor: number = 0
 }
 
 // Subtracts two Times.
-export function subtractTime(a: Time, b: Time) {
+export function timeSubtract(a: Time, b: Time) {
 	return a.day - b.day + (a.fraction - b.fraction)
 }
 
@@ -208,6 +203,11 @@ export function toDate(time: Time): [number, number, number, number, number, num
 	const second = ((minute - Math.trunc(minute)) * 60) % 60
 	const nano = (second - Math.trunc(second)) * 1000000000
 	return [year, month, day, Math.trunc(hour), Math.trunc(minute), Math.trunc(second), Math.trunc(nano)]
+}
+
+// Converts the time to Julian day.
+export function toJulianDay(time: Time): number {
+	return time.day + time.fraction
 }
 
 function timescale(target: Time, source: Time) {
@@ -497,7 +497,7 @@ export const tdbMinusTt: TimeDelta = (time) => {
 		const a = eraTaiUtc(...eraTtTai(day, fraction))
 
 		// Subtract 0.5, so UT is fraction of the day from midnight
-		const ut = normalizeTime(a[0] - 0.5, a[1]).fraction
+		const ut = timeNormalize(a[0] - 0.5, a[1]).fraction
 
 		let dt = 0
 

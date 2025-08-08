@@ -43,6 +43,26 @@ export const MJD1977 = 43144
 // Length of tropical year B1900 (days).
 export const DAYSPERTY = 365.242198781
 
+// Period that takes the Moon to return to a similar position among the stars, in days.
+export const MOON_SIDEREAL_DAYS = 27.321661
+
+// Period between two same successive lunar phases, in days.
+export const MOON_SINODIC_DAYS = 29.53058867
+
+// The time that elapses between two passages of the Moon at its perigee/apogee, in days.
+// Librations in longitude have same periodicity too.
+export const MOON_ANOMALISTIC_DAYS = 27.55455
+
+// The period in which the Moon returns to the same node of its orbit, in days.
+// Librations in latitude have same periodicity too.
+export const MOON_DRACONIC_DAYS = 27.2122204
+
+// Length of saros cycle, in days.
+export const SAROS = 6585.3211
+
+// Average apparent daily motion of the Moon, among the stars, in radians per day.
+export const MOON_AVERAGE_DAILY_MOTION = TAU / MOON_SIDEREAL_DAYS
+
 // TT minus TAI (s).
 export const TTMINUSTAI = 32.184
 

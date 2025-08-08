@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test'
 import { dms, hms } from '../src/angle'
-import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, readFits, writeFits } from '../src/fits'
-import { bitpixInBytes, declination, height, rightAscension, width } from '../src/fits.util'
+import { bitpixInBytes, computeRemainingBytes, declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, heightKeyword, readFits, rightAscensionKeyword, widthKeyword, writeFits } from '../src/fits'
 import { bufferSink, bufferSource } from '../src/io'
 import { BITPIXES, CHANNELS, openFits } from './image.util'
 
@@ -14,7 +13,7 @@ test('read and write', async () => {
 			const sink = bufferSink(buffer)
 			await writeFits(sink, a)
 
-			const size = width(a.hdus[0].header) * height(a.hdus[0].header) * bitpixInBytes(bitpix) * channel
+			const size = widthKeyword(a.hdus[0].header) * heightKeyword(a.hdus[0].header) * bitpixInBytes(bitpix) * channel
 			expect(sink.position).toBe(5760 + size + computeRemainingBytes(size))
 
 			const source = bufferSource(buffer)
@@ -113,21 +112,21 @@ test('escape', async () => {
 })
 
 test('width', () => {
-	expect(width({ NAXIS1: 1200 })).toBe(1200)
-	expect(width({ IMAGEW: 1200 })).toBe(1200)
+	expect(widthKeyword({ NAXIS1: 1200 })).toBe(1200)
+	expect(widthKeyword({ IMAGEW: 1200 })).toBe(1200)
 })
 
 test('height', () => {
-	expect(height({ NAXIS2: 1200 })).toBe(1200)
-	expect(height({ IMAGEH: 1200 })).toBe(1200)
+	expect(heightKeyword({ NAXIS2: 1200 })).toBe(1200)
+	expect(heightKeyword({ IMAGEH: 1200 })).toBe(1200)
 })
 
 test('rightAscension', () => {
-	expect(rightAscension({ OBJCTRA: '10 44 04.261' })).toBeCloseTo(hms(10, 44, 4.261), 12)
-	expect(rightAscension({ RA: 161.0177548315 })).toBeCloseTo(hms(10, 44, 4.26115956), 12)
+	expect(rightAscensionKeyword({ OBJCTRA: '10 44 04.261' })).toBeCloseTo(hms(10, 44, 4.261), 12)
+	expect(rightAscensionKeyword({ RA: 161.0177548315 })).toBeCloseTo(hms(10, 44, 4.26115956), 12)
 })
 
 test('declination', () => {
-	expect(declination({ OBJCTDEC: '-59 36 08.17' })).toBeCloseTo(dms(-59, 36, 8.17), 12)
-	expect(declination({ DEC: -59.6022705034 })).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
+	expect(declinationKeyword({ OBJCTDEC: '-59 36 08.17' })).toBeCloseTo(dms(-59, 36, 8.17), 12)
+	expect(declinationKeyword({ DEC: -59.6022705034 })).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
 })

@@ -1,6 +1,5 @@
 import { type Angle, deg } from './angle'
-import type { FitsHeader } from './fits'
-import { height, numericKeyword, width } from './fits.util'
+import { type FitsHeader, heightKeyword, numericKeyword, widthKeyword } from './fits'
 import { cdMatrix } from './wcs'
 
 export type Parity = 'NORMAL' | 'FLIPPED'
@@ -61,8 +60,8 @@ export function plateSolutionFrom(header: FitsHeader): PlateSolution | undefined
 	let cdelt2 = numericKeyword(header, 'CDELT2', NaN)
 	cdelt2 = cdelt2 === 1 || Number.isNaN(cdelt2) ? deg(cd22 / Math.cos(crota2)) : deg(cdelt2)
 
-	const widthInPixels = width(header)
-	const heightInPixels = height(header)
+	const widthInPixels = widthKeyword(header)
+	const heightInPixels = heightKeyword(header)
 	const w = Math.abs(cdelt1 * widthInPixels)
 	const h = Math.abs(cdelt2 * heightInPixels)
 

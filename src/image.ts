@@ -1,6 +1,5 @@
 import sharp, { type AvifOptions, type FormatEnum, type GifOptions, type HeifOptions, type Jp2Options, type JpegOptions, type JxlOptions, type OutputOptions, type PngOptions, type TiffOptions, type WebpOptions } from 'sharp'
-import { Bitpix, type Fits, type FitsData, type FitsHdu, type FitsHeader, writeFits } from './fits'
-import { bitpix, bitpixInBytes, cfaPattern, exposureTime, height, numberOfChannels, width } from './fits.util'
+import { Bitpix, bitpixInBytes, bitpixKeyword, cfaPatternKeyword, exposureTimeKeyword, type Fits, type FitsData, type FitsHdu, type FitsHeader, heightKeyword, numberOfChannelsKeyword, widthKeyword, writeFits } from './fits'
 import { bufferSink, bufferSource, readUntil, type Sink, type Source } from './io'
 import { Histogram } from './statistics'
 
@@ -73,11 +72,11 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 	const hdu = !fitsOrHdu || 'header' in fitsOrHdu ? fitsOrHdu : fitsOrHdu.hdus[0]
 	if (!hdu) return undefined
 	const { header, data } = hdu
-	const bp = bitpix(header)
+	const bp = bitpixKeyword(header)
 	if (bp === 0 || bp === Bitpix.LONG) return undefined
-	const sw = width(header)
-	const sh = height(header)
-	const nc = Math.max(1, Math.min(3, numberOfChannels(header)))
+	const sw = widthKeyword(header)
+	const sh = heightKeyword(header)
+	const nc = Math.max(1, Math.min(3, numberOfChannelsKeyword(header)))
 	const pixelSizeInBytes = bitpixInBytes(bp)
 	const pixelCount = sw * sh
 	const strideInBytes = sw * pixelSizeInBytes
@@ -122,7 +121,7 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 		}
 	}
 
-	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, strideInPixels, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPattern(header) }
+	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, strideInPixels, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPatternKeyword(header) }
 	return { header, metadata, raw }
 }
 
@@ -167,7 +166,7 @@ export class FitsDataSource implements Source {
 		this.raw = image instanceof Float64Array ? image : image.raw
 		this.bitpix = image instanceof Float64Array ? bitpix! : (image.header.BITPIX as Bitpix)
 		this.pixelSizeInBytes = bitpixInBytes(this.bitpix)
-		this.channels = image instanceof Float64Array ? channels! : numberOfChannels(image.header)
+		this.channels = image instanceof Float64Array ? channels! : numberOfChannelsKeyword(image.header)
 	}
 
 	read(buffer: Buffer, offset?: number, size?: number): number {
@@ -584,7 +583,7 @@ export function darkBiasSubtraction(image: Image, dark?: Image, bias?: Image, op
 
 	const { raw } = image
 	const { darkCorrected = false, exposureNormalization = true } = options ?? DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS
-	const normalizationFactor = exposureNormalization && dark ? exposureTime(image.header, 1) / exposureTime(dark.header, 1) : 1
+	const normalizationFactor = exposureNormalization && dark ? exposureTimeKeyword(image.header, 1) / exposureTimeKeyword(dark.header, 1) : 1
 
 	let pedestal = 0
 

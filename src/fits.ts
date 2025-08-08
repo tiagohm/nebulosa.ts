@@ -1,5 +1,6 @@
 import type { Mutable } from 'utility-types'
-import { bitpix, bitpixInBytes, height, numberOfChannels, width } from './fits.util'
+import { type Angle, deg, parseAngle } from './angle'
+import type { CfaPattern } from './image'
 import { readUntil, type Seekable, type Sink, type Source, sourceTransferToSink } from './io'
 
 export type FitsHeaderKey = string
@@ -35,13 +36,114 @@ export enum Bitpix {
 
 export type BitpixOrZero = Bitpix | 0
 
-const MAGIC_BYTES = 'SIMPLE'
-
 export const FITS_BLOCK_SIZE = 2880
 export const FITS_HEADER_CARD_SIZE = 80
 export const FITS_MAX_KEYWORD_LENGTH = 8
 export const FITS_MAX_VALUE_LENGTH = 70
 export const FITS_MIN_STRING_END = 19
+
+export const FITS_IMAGE_MIME_TYPE = 'image/fits'
+export const FITS_APPLICATION_MIME_TYPE = 'application/fits'
+
+export const MAGIC_BYTES = 'SIMPLE'
+
+export function hasKeyword(header: FitsHeader, key: FitsHeaderKey) {
+	return key in header && header[key] !== undefined
+}
+
+export function numericKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue: number = 0) {
+	const value = header[key]
+	if (value === undefined) return defaultValue
+	else if (typeof value === 'number') return value
+	else if (typeof value === 'boolean') return value ? 1 : 0
+	else return parseFloat(value)
+}
+
+export function booleanKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue: boolean = false) {
+	const value = header[key]
+	if (value === undefined) return defaultValue
+	else if (typeof value === 'number') return value !== 0
+	else if (typeof value === 'string') return value === 'T' || value.toLowerCase() === 'true'
+	else return value
+}
+
+export function textKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue: string = '') {
+	const value = header[key]
+	if (value === undefined) return defaultValue
+	else if (typeof value === 'string') return value
+	else return `${value}`
+}
+
+export function numberOfAxesKeyword(header: FitsHeader, defaultValue: number = 0) {
+	return numericKeyword(header, 'NAXIS', defaultValue)
+}
+
+export function widthKeyword(header: FitsHeader, defaultValue: number = 0) {
+	return numericKeyword(header, 'NAXIS1') || numericKeyword(header, 'IMAGEW', defaultValue)
+}
+
+export function heightKeyword(header: FitsHeader, defaultValue: number = 0) {
+	return numericKeyword(header, 'NAXIS2') || numericKeyword(header, 'IMAGEH', defaultValue)
+}
+
+export function numberOfChannelsKeyword(header: FitsHeader, defaultValue: number = 1) {
+	return numericKeyword(header, 'NAXIS3', defaultValue)
+}
+
+export function bitpixKeyword(header: FitsHeader, defaultValue: BitpixOrZero = 0): BitpixOrZero {
+	return numericKeyword(header, 'BITPIX', defaultValue)
+}
+
+export function exposureTimeKeyword(header: FitsHeader, defaultValue: number = 0) {
+	if (hasKeyword(header, 'EXPTIME')) return numericKeyword(header, 'EXPTIME', defaultValue)
+	else return numericKeyword(header, 'EXPOSURE', defaultValue)
+}
+
+export function cfaPatternKeyword(header: FitsHeader) {
+	return textKeyword(header, 'BAYERPAT') as CfaPattern | undefined
+}
+
+export function rightAscensionKeyword(header: FitsHeader, defaultValue: Angle = 0) {
+	if (hasKeyword(header, 'RA')) {
+		const value = deg(numericKeyword(header, 'RA', defaultValue))
+		if (value && value !== defaultValue) return value
+	}
+
+	if (hasKeyword(header, 'OBJCTRA')) {
+		const value = parseAngle(textKeyword(header, 'OBJCTRA', ''), { isHour: true })
+		if (value && value !== defaultValue) return value
+	}
+
+	if (hasKeyword(header, 'RA_OBJ')) {
+		const value = deg(numericKeyword(header, 'RA_OBJ', defaultValue))
+		if (value && value !== defaultValue) return value
+	}
+
+	return defaultValue
+}
+
+export function declinationKeyword(header: FitsHeader, defaultValue: Angle = 0) {
+	if (hasKeyword(header, 'DEC')) {
+		const value = deg(numericKeyword(header, 'DEC', defaultValue))
+		if (value && value !== defaultValue) return value
+	}
+
+	if (hasKeyword(header, 'OBJCTDEC')) {
+		const value = parseAngle(textKeyword(header, 'OBJCTDEC', ''))
+		if (value && value !== defaultValue) return value
+	}
+
+	if (hasKeyword(header, 'DEC_OBJ')) {
+		const value = deg(numericKeyword(header, 'DEC_OBJ', defaultValue))
+		if (value && value !== defaultValue) return value
+	}
+
+	return defaultValue
+}
+
+export function bitpixInBytes(bitpix: BitpixOrZero) {
+	return Math.trunc(Math.abs(bitpix) / 8)
+}
 
 const NO_VALUE_KEYWORDS = ['COMMENT', 'HISTORY', 'END']
 
@@ -89,7 +191,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 				const offset = source.position
 
 				const { header } = hdu
-				const size = width(header) * height(header) * numberOfChannels(header) * bitpixInBytes(bitpix(header))
+				const size = widthKeyword(header) * heightKeyword(header) * numberOfChannelsKeyword(header) * bitpixInBytes(bitpixKeyword(header))
 				source.seek(source.position + size + computeRemainingBytes(size))
 				;(hdu as Mutable<FitsHdu>).data = { source, size, offset }
 			}
