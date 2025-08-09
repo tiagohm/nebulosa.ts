@@ -45,7 +45,7 @@ export function toParsec(distance: Distance): number {
 	return distance / ONE_PARSEC
 }
 
-// Calculates the altitude given the pressure and temperature.
+// Computes the altitude given the pressure and temperature.
 export function fromPressure(pressure: Pressure, temperature: Temperature = 15): Distance {
 	const k = toKelvin(temperature) / 0.0065
 	const e = (8.31447 * 0.0065) / (9.80665 * 0.0289644) // R * L / (g * M)

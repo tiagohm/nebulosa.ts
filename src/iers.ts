@@ -13,7 +13,7 @@ export interface Iers {
 	readonly clear: () => void
 }
 
-export function interpolate(time: Time, input: NumberArray, ...data: NumberArray[]): NumberArray {
+function interpolate(time: Time, input: NumberArray, ...data: NumberArray[]): NumberArray {
 	const ret = new Float64Array(data.length)
 
 	if (!input.length) return ret

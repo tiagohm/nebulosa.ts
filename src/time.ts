@@ -248,7 +248,7 @@ function newTime(a: [number, number], time: Time, scale: Timescale = time.scale)
 	return { ...time, day: a[0], fraction: a[1], scale }
 }
 
-// Converts to UT1 Time.
+// Converts the given time to UT1 Time.
 export function ut1(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UT1) return time
@@ -266,7 +266,7 @@ export function ut1(time: Time): Time {
 	return ret
 }
 
-// Converts to UTC Time.
+// Converts the given time to UTC Time.
 export function utc(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UTC) return time
@@ -284,7 +284,7 @@ export function utc(time: Time): Time {
 	return ret
 }
 
-// Converts to TAI Time.
+// Converts the given time to TAI Time.
 export function tai(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TAI) return time
@@ -303,7 +303,7 @@ export function tai(time: Time): Time {
 	return ret
 }
 
-// Converts to TT Time.
+// Converts the given time to TT Time.
 export function tt(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TT) return time
@@ -323,7 +323,7 @@ export function tt(time: Time): Time {
 	return ret
 }
 
-// Converts to TCG Time.
+// Converts the given time to TCG Time.
 export function tcg(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCG) return time
@@ -340,7 +340,7 @@ export function tcg(time: Time): Time {
 	return ret
 }
 
-// Converts to TDB Time.
+// Converts the given time to TDB Time.
 export function tdb(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TDB) return time
@@ -358,7 +358,7 @@ export function tdb(time: Time): Time {
 	return ret
 }
 
-// Converts to TCB Time.
+// Converts the given time to TCB Time.
 export function tcb(time: Time): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCB) return time
@@ -376,7 +376,7 @@ export function tcb(time: Time): Time {
 }
 
 // Computes the Greenwich Apparent Sidereal Time (GAST) at given time.
-export function gast(time: Time): Angle {
+export function greenwichApparentSiderealTime(time: Time): Angle {
 	if (time.extra?.gast) return time.extra.gast
 	const u = ut1(time)
 	const t = tt(time)
@@ -386,7 +386,7 @@ export function gast(time: Time): Angle {
 }
 
 // Computes the Greenwich Mean Sidereal Time (GMST) at given time.
-export function gmst(time: Time): Angle {
+export function greenwichMeanSiderealTime(time: Time): Angle {
 	if (time.extra?.gmst) return time.extra.gmst
 	const u = ut1(time)
 	const t = tt(time)
@@ -396,7 +396,7 @@ export function gmst(time: Time): Angle {
 }
 
 // Computes the Earth rotation angle (IAU 2000 model) at given time.
-export function era(time: Time): Angle {
+export function earthRotationAngle(time: Time): Angle {
 	if (time.extra?.era) return time.extra.era
 	const u = ut1(time)
 	const era = eraEra00(u.day, u.fraction)
@@ -454,7 +454,7 @@ export function precessionNutationMatrix(time: Time): Mat3.Matrix {
 export function equationOfOrigins(time: Time): Mat3.Matrix {
 	if (time.extra?.equationOfOrigins) return time.extra.equationOfOrigins
 	const equationOfOrigins = Mat3.identity()
-	Mat3.mul(Mat3.rotZ(gast(time) - era(time), equationOfOrigins), precessionNutationMatrix(time), equationOfOrigins)
+	Mat3.mul(Mat3.rotZ(greenwichApparentSiderealTime(time) - earthRotationAngle(time), equationOfOrigins), precessionNutationMatrix(time), equationOfOrigins)
 	extra(time).equationOfOrigins = equationOfOrigins
 	return equationOfOrigins
 }

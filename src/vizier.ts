@@ -14,6 +14,7 @@ const DEFAULT_VIZIER_QUERY_OPTIONS: VizierQueryOptions = {
 	timeout: 60000,
 }
 
+// Executes a VizieR query.
 export async function vizierQuery(query: string, { baseUrl, timeout = 60000, signal, ...options }: VizierQueryOptions = DEFAULT_VIZIER_QUERY_OPTIONS) {
 	const uri = `${baseUrl || VIZIER_URL}${VIZIER_QUERY_PATH}`
 	signal ??= timeout ? AbortSignal.timeout(timeout) : undefined

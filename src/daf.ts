@@ -19,7 +19,7 @@ export interface DafRecord {
 	readonly bward: number
 }
 
-const FTPSTR = Buffer.from('FTPSTR:\r:\n:\r\n:\r\x00:\x81:\x10\xCE:ENDFTP', 'ascii')
+const FTPSTR = 'FTPSTR:\r:\n:\r\n:\r\x00:\x81:\x10\xCE:ENDFTP'
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/req/daf.html
 export async function readDaf(source: Source & Seekable): Promise<Daf> {
@@ -53,7 +53,7 @@ export async function readDaf(source: Source & Seekable): Promise<Daf> {
 			read: (start, end) => read(start, end, record),
 		}
 	} else if (format.startsWith('DAF/')) {
-		if (FTPSTR.equals(buffer.subarray(699, 699 + 28))) {
+		if (Buffer.from(FTPSTR, 'ascii').equals(buffer.subarray(699, 699 + 28))) {
 			const be = buffer.toString('ascii', 88, 96).toUpperCase() !== 'LTL-IEEE'
 			const record = readNaifDafRecord(buffer, be)
 			const summaries = await readSummaries(source, record)

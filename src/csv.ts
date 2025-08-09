@@ -1,6 +1,8 @@
 import type { Source } from './io'
 
-export type CsvRow = string[]
+export type CsvColumn = string
+
+export type CsvRow = CsvColumn[]
 
 export const CSV_DELIMITER = ','
 export const TSV_DELIMITER = '\t'

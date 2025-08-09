@@ -7,7 +7,7 @@ import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // biome-ignore format: too long
-import { equationOfOrigins, era, gast, gmst, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, tt, ut1, utc, } from '../src/time'
+import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, tt, ut1, utc, } from '../src/time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = timeNormalize(expected.day, expected.fraction)
@@ -338,19 +338,19 @@ test('tdbMinusTtByFairheadAndBretagnon1990', () => {
 
 test('gast', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(gast(t)).toBe(t.extra!.gast!)
+	expect(greenwichApparentSiderealTime(t)).toBe(t.extra!.gast!)
 	expect(t.extra?.gast).toBeCloseTo(hour(13.106038262872143463), 15)
 })
 
 test('gmst', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(gmst(t)).toBe(t.extra!.gmst!)
+	expect(greenwichMeanSiderealTime(t)).toBe(t.extra!.gmst!)
 	expect(t.extra?.gmst).toBeCloseTo(hour(13.106345240224241522), 15)
 })
 
 test('era', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(era(t)).toBe(t.extra!.era!)
+	expect(earthRotationAngle(t)).toBe(t.extra!.era!)
 	expect(t.extra?.era).toBeCloseTo(hour(13.088607043262001639), 15)
 })
 

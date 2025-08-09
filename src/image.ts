@@ -68,6 +68,7 @@ export function grayscaleFromChannel(channel?: ImageChannelOrGray): Grayscale {
 	return channel === 'BT709' ? BT709_GRAYSCALE : channel === 'RMY' ? RMY_GRAYSCALE : channel === 'Y' ? Y_GRAYSCALE : channel === 'GRAY' ? DEFAULT_GRAYSCALE : channel === 'RED' ? RED_GRAYSCALE : channel === 'GREEN' ? GREEN_GRAYSCALE : channel === 'BLUE' ? BLUE_GRAYSCALE : (channel ?? DEFAULT_GRAYSCALE)
 }
 
+// Reads an image from a FITS file
 export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Image | undefined> {
 	const hdu = !fitsOrHdu || 'header' in fitsOrHdu ? fitsOrHdu : fitsOrHdu.hdus[0]
 	if (!hdu) return undefined

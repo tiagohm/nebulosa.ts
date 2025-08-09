@@ -26,6 +26,7 @@ export interface HygDatabaseEntry {
 	readonly constellation: Constellation
 }
 
+// Reads the HYG catalog from a CSV source
 export async function* readHygCatalog(source: Source) {
 	for await (const row of readCsvStream(source)) {
 		yield processRow(row)

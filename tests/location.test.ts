@@ -4,7 +4,7 @@ import { deg, toHour } from '../src/angle'
 import { meter } from '../src/distance'
 import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
-import { Ellipsoid, geocentricLocation, geodeticLocation, lst, polarRadius } from '../src/location'
+import { Ellipsoid, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius } from '../src/location'
 import { Timescale, timeYMDHMS } from '../src/time'
 
 beforeAll(async () => {
@@ -17,12 +17,12 @@ beforeAll(async () => {
 test('lst', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
-	expect(toHour(lst(t, p, false, false))).toBeCloseTo(10.106038262872143463, 14)
-	expect(toHour(lst(t, p, true, false))).toBeCloseTo(10.106345240224239745, 14)
-	expect(toHour(lst(t, p, false, 'sp'))).toBeCloseTo(10.106038262691395602, 14)
-	expect(toHour(lst(t, p, true, 'sp'))).toBeCloseTo(10.10634524004349899, 13)
-	expect(toHour(lst(t, p, false, true))).toBeCloseTo(10.106038262690191232, 15)
-	expect(toHour(lst(t, p, true, true))).toBeCloseTo(10.106345240042289291, 14)
+	expect(toHour(localSiderealTime(t, p, false, false))).toBeCloseTo(10.106038262872143463, 14)
+	expect(toHour(localSiderealTime(t, p, true, false))).toBeCloseTo(10.106345240224239745, 14)
+	expect(toHour(localSiderealTime(t, p, false, 'sp'))).toBeCloseTo(10.106038262691395602, 14)
+	expect(toHour(localSiderealTime(t, p, true, 'sp'))).toBeCloseTo(10.10634524004349899, 13)
+	expect(toHour(localSiderealTime(t, p, false, true))).toBeCloseTo(10.106038262690191232, 15)
+	expect(toHour(localSiderealTime(t, p, true, true))).toBeCloseTo(10.106345240042289291, 14)
 })
 
 test('geocentric', () => {

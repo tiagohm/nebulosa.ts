@@ -7,7 +7,7 @@ import { readCatalogDat, readNamesDat, type StellariumCatalogEntry, type Stellar
 
 test('catalog', async () => {
 	const handle = await fs.open('data/catalog.dat')
-	const source = fileHandleSource(handle)
+	await using source = fileHandleSource(handle)
 	const entries = new Array<StellariumCatalogEntry>(94660)
 	let i = 0
 
@@ -66,7 +66,7 @@ test('catalog', async () => {
 
 test('names', async () => {
 	const handle = await fs.open('data/names.dat')
-	const source = fileHandleSource(handle)
+	await using source = fileHandleSource(handle)
 	const entries = new Array<StellariumNameEntry>(2000)
 	let i = 0
 

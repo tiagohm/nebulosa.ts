@@ -2,7 +2,7 @@ import { B1950_MATRIX, ECLIPTIC_B9150_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX,
 import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa'
 import { Mat3 } from './matrix'
-import { type Time, Timescale, precessionNutationMatrix, timeJulian, trueObliquity, tt } from './time'
+import { precessionNutationMatrix, type Time, Timescale, timeJulian, trueObliquity, tt } from './time'
 
 export type CoordinateFrame = CartesianCoordinate
 

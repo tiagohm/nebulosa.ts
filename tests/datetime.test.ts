@@ -1,5 +1,5 @@
 import { beforeAll, expect, setSystemTime, test } from 'bun:test'
-import { dateFrom, dateUnix, dateYMDHMS, formatDate, now } from '../src/datetime'
+import { dateFrom, dateNow, dateUnix, dateYMDHMS } from '../src/datetime'
 
 beforeAll(() => {
 	setSystemTime(new Date('2025-01-09T12:34:56.000-03:00'))
@@ -69,16 +69,16 @@ test('ymdhms', () => {
 
 test('format', () => {
 	const dateTime = dateFrom('2025-01-09 12:34:56')
-	expect(formatDate(dateTime)).toBe('2025-01-09T12:34:56+00:00')
-	expect(formatDate(dateTime, 'YYYY-MM-DD')).toBe('2025-01-09')
-	expect(formatDate(dateTime, 'HH:mm:ss')).toBe('12:34:56')
-	expect(formatDate(dateTime, 'HH:mm:ss.SSS')).toBe('12:34:56.000')
-	expect(formatDate(dateTime, 'HH:mm:ssZ')).toBe('12:34:56+00:00')
+	expect(dateTime.format()).toBe('2025-01-09T12:34:56+00:00')
+	expect(dateTime.format('YYYY-MM-DD')).toBe('2025-01-09')
+	expect(dateTime.format('HH:mm:ss')).toBe('12:34:56')
+	expect(dateTime.format('HH:mm:ss.SSS')).toBe('12:34:56.000')
+	expect(dateTime.format('HH:mm:ssZ')).toBe('12:34:56+00:00')
 })
 
 test('now', () => {
-	expect(now().format()).toBe('2025-01-09T15:34:56+00:00')
-	expect(now(true).format()).toBe('2025-01-09T15:34:56Z')
+	expect(dateNow().format()).toBe('2025-01-09T15:34:56+00:00')
+	expect(dateNow(true).format()).toBe('2025-01-09T15:34:56Z')
 })
 
 test('add', () => {

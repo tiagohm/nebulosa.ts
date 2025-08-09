@@ -8,7 +8,7 @@ import { fileHandleSource } from './io'
 import { type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 import type { DetectedStar } from './stardetector'
 
-export interface AstapStarDetectOptions {
+export interface AstapStarDetectionOptions {
 	executable?: string
 	minSNR?: number
 	maxStars?: number
@@ -24,7 +24,7 @@ export interface AstapPlateSolveOptions extends PlateSolveOptions {
 
 const DEFAULT_TIMEOUT = 300000 // 5 minutes
 
-export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, outputDirectory, executable, timeout }: AstapStarDetectOptions = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
+export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, outputDirectory, executable, timeout }: AstapStarDetectionOptions = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
 	if (!input || !(await fs.exists(input))) return []
 
 	const cwd = outputDirectory || dirname(input)

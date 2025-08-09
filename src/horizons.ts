@@ -1,6 +1,6 @@
 import { type Angle, toDeg } from './angle'
 import { readCsv } from './csv'
-import { type DateTime, formatDate } from './datetime'
+import type { DateTime } from './datetime'
 import { type Distance, toKilometer } from './distance'
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html
@@ -181,5 +181,5 @@ function parseTable(text: string) {
 }
 
 function formatTime(date: DateTime) {
-	return formatDate(date, 'YYYY-MM-DD HH:mm')
+	return date.format('YYYY-MM-DD HH:mm')
 }

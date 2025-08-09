@@ -31,10 +31,12 @@ export interface FormatAngleOptions {
 	padLength?: number
 }
 
+// Normalizes the angle to the range [0, TAU].
 export function normalizeAngle(angle: Angle): Angle {
 	return pmod(angle, TAU)
 }
 
+// Normalizes the angle to the range [-PI, PI].
 export function normalizePI(angle: Angle): Angle {
 	return ((angle + PI) % TAU) - PI
 }
@@ -150,6 +152,7 @@ function isSecondSign(input?: string) {
 	return !!input && (input === 's' || input === '"')
 }
 
+// Parses an angle from a string or number input.
 export function parseAngle(input?: string | number, options?: ParseAngleOptions): Angle | undefined {
 	if (typeof input === 'number') {
 		return options?.isHour ? hour(input) : deg(input)
@@ -202,6 +205,7 @@ export function parseAngle(input?: string | number, options?: ParseAngleOptions)
 	return options?.defaultValue
 }
 
+// Formats the angle as a string.
 export function formatAngle(angle: Angle, options?: FormatAngleOptions) {
 	const isHour = options?.isHour ?? DEFAULT_FORMAT_ANGLE_OPTIONS.isHour
 	const noSecond = options?.noSecond ?? DEFAULT_FORMAT_ANGLE_OPTIONS.noSecond
@@ -250,37 +254,37 @@ export const DEFAULT_DEC_FORMAT: FormatAngleOptions = { ...DEFAULT_SIGNED_DMS_FO
 export const DEFAULT_AZ_FORMAT: FormatAngleOptions = { ...DEFAULT_DMS_FORMAT, separators: ' ', padLength: 3 }
 export const DEFAULT_ALT_FORMAT = DEFAULT_DEC_FORMAT
 
-// Format the angle as 00:00:00.00.
+// Formats the angle as 00:00:00.00.
 export function formatHMS(angle: Angle) {
 	return formatAngle(angle, DEFAULT_HMS_FORMAT)
 }
 
-// Format the angle as 00d00m00.00s, signed only if negative
+// Formats the angle as 00d00m00.00s, signed only if negative
 export function formatDMS(angle: Angle) {
 	return formatAngle(angle, DEFAULT_DMS_FORMAT)
 }
 
-// Format the angle as +00d00m00.00s, always signed
+// Formats the angle as +00d00m00.00s, always signed
 export function formatSignedDMS(angle: Angle) {
 	return formatAngle(angle, DEFAULT_SIGNED_DMS_FORMAT)
 }
 
-// Format the angle as 00 00 00.00
+// Formats the angle as 00 00 00.00
 export function formatRA(angle: Angle) {
 	return formatAngle(angle, DEFAULT_RA_FORMAT)
 }
 
-// Format the angle as +00 00 00.00, always signed
+// Formats the angle as +00 00 00.00, always signed
 export function formatDEC(angle: Angle) {
 	return formatAngle(angle, DEFAULT_DEC_FORMAT)
 }
 
-// Format the angle as 000 00 00.00
+// Formats the angle as 000 00 00.00
 export function formatAZ(angle: Angle) {
 	return formatAngle(angle, DEFAULT_AZ_FORMAT)
 }
 
-// Format the angle as +00 00 00.00, always signed
+// Formats the angle as +00 00 00.00, always signed
 export function formatALT(angle: Angle) {
 	return formatAngle(angle, DEFAULT_ALT_FORMAT)
 }

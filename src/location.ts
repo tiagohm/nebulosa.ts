@@ -3,7 +3,7 @@ import { type Distance, meter } from './distance'
 import { eraGc2Gde, eraSp00 } from './erfa'
 import { itrsRotationAt } from './itrs'
 import { Mat3 } from './matrix'
-import { gast, gmst, pmAngles, type Time, tt } from './time'
+import { greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmAngles, type Time, tt } from './time'
 import type { Vector3 } from './vector'
 
 // An Earth ellipsoid that maps latitudes and longitudes to |xyz| positions.
@@ -51,10 +51,12 @@ export interface GeographicPosition {
 	rLatLon?: Readonly<Mat3.Matrix>
 }
 
+// Creates a geographic position from longitude, latitude, elevation, and ellipsoid.
 export function geodeticLocation(longitude: Angle = 0, latitude: Angle = 0, elevation: Distance = 0, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
 	return { longitude, latitude, elevation, ellipsoid }
 }
 
+// Creates a geographic position from a geocentric (Cartesian) coordinate.
 export function geocentricLocation(x: number, y: number, z: number, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
 	const itrs = [x, y, z] as const
 	const params = ELLIPSOID_PARAMETERS[ellipsoid]
@@ -77,8 +79,8 @@ function rLatLon(location: GeographicPosition) {
 }
 
 // Local Sidereal Time at location and time.
-export function lst(time: Time, location: GeographicPosition = time.location!, mean: boolean = false, tio: boolean | 'sp' = false) {
-	const theta = mean ? gmst(time) : gast(time)
+export function localSiderealTime(time: Time, location: GeographicPosition = time.location!, mean: boolean = false, tio: boolean | 'sp' = false) {
+	const theta = mean ? greenwichMeanSiderealTime(time) : greenwichApparentSiderealTime(time)
 
 	if (tio === true) {
 		const [sprime, xp, yp] = pmAngles(time)

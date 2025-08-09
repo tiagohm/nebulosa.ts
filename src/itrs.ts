@@ -2,7 +2,7 @@ import type { CartesianCoordinate } from './coordinate'
 import { eraC2teqx, eraGd2Gce } from './erfa'
 import type { Frame } from './frame'
 import { ELLIPSOID_PARAMETERS, type GeographicPosition } from './location'
-import { type Time, gast, pmMatrix, precessionNutationMatrix } from './time'
+import { greenwichApparentSiderealTime, pmMatrix, precessionNutationMatrix, type Time } from './time'
 
 // An |xyz| position in the Earth-centered Earth-fixed (ECEF) ITRS frame.
 export function itrs(location: GeographicPosition): Readonly<CartesianCoordinate> {
@@ -15,7 +15,7 @@ export function itrs(location: GeographicPosition): Readonly<CartesianCoordinate
 
 // Computes the ITRS rotation matrix at time.
 export function itrsRotationAt(time: Time) {
-	return eraC2teqx(precessionNutationMatrix(time), gast(time), pmMatrix(time))
+	return eraC2teqx(precessionNutationMatrix(time), greenwichApparentSiderealTime(time), pmMatrix(time))
 }
 
 export const ITRS_FRAME: Frame = {

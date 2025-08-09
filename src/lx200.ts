@@ -1,6 +1,6 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import { type Angle, parseAngle, toDms, toHms } from './angle'
-import { type DateTime, formatDate, now } from './datetime'
+import { type DateTime, dateNow } from './datetime'
 
 // http://www.company7.com/library/meade/LX200CommandSet.pdf
 // https://soundstepper.sourceforge.net/LX200_Compatible_Commands.html
@@ -39,7 +39,7 @@ export class Lx200ProtocolServer {
 	private server?: TCPSocketListener
 
 	private readonly coordinates: [Angle, Angle] = [0, 0]
-	private dateTime = now()
+	private dateTime = dateNow()
 
 	constructor(
 		private readonly host: string,
@@ -230,13 +230,13 @@ export class Lx200ProtocolServer {
 
 	private date(socket: Socket<unknown>) {
 		const a = this.options.protocol.dateTime()
-		const command = `${formatDate(a, 'MM/DD/YY')}#`
+		const command = `${a.format('MM/DD/YY')}#`
 		this.text(socket, command)
 	}
 
 	private time(socket: Socket<unknown>) {
 		const a = this.options.protocol.dateTime()
-		const command = `${formatDate(a, 'HH:mm:ss')}#`
+		const command = `${a.format('HH:mm:ss')}#`
 		this.text(socket, command)
 	}
 

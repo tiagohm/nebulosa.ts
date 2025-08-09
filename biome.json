@@ -73,12 +73,7 @@
 				"useAwait": "error",
 				"noApproximativeNumericConstant": "off",
 				"noEmptyInterface": "off",
-				"noConsole": {
-					"level": "error",
-					"options": {
-						"allow": ["info", "warn", "error", "debug"]
-					}
-				}
+				"noConsole": "off"
 			},
 			"complexity": {
 				"noForEach": "off",
@@ -87,7 +82,8 @@
 				"useSimplifiedLogicExpression": "off"
 			},
 			"nursery": {
-				"noFloatingPromises": "error"
+				"noFloatingPromises": "error",
+				"noNonNullAssertedOptionalChain": "error"
 			}
 		}
 	},

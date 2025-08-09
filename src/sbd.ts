@@ -1,6 +1,6 @@
 import { type Angle, type FormatAngleOptions, formatAngle, toDeg } from './angle'
 import { DEG2RAD } from './constants'
-import { type DateTime, dateUnix, formatDate, now } from './datetime'
+import { type DateTime, dateNow, dateUnix } from './datetime'
 import { type Distance, toKilometer } from './distance'
 
 export const SBD_BASE_URL = 'https://ssd-api.jpl.nasa.gov/'
@@ -134,21 +134,24 @@ export interface SmallBodyCloseApproach {
 	readonly data: readonly string[][]
 }
 
+// Searches for small bodies by name or designation
 export async function search(text: string) {
 	const uri = `${SBD_BASE_URL}${SEARCH_PATH}&sstr=${encodeURIComponent(text)}`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodySearch
 }
 
+// Identifies small bodies in a given field of view around a specific coordinate, location and time
 export async function identify(dateTime: DateTime, longitude: Angle, latitude: Angle, elevation: Distance, fovRa: Angle, fovDec: Angle, fovRaWidth: number = DEG2RAD, fovDecWidth: number = fovRaWidth, magLimit: number = 18, magRequired: boolean = true) {
-	const uri = `${SBD_BASE_URL}${IDENTIFY_PATH}&obs-time=${formatDate(dateTime, 'YYYY-MM-DD_HH:mm:ss')}&lat=${toDeg(latitude)}&lon=${toDeg(longitude)}&alt=${toKilometer(elevation)}&fov-ra-center=${formatAngle(fovRa, FOV_RA_FORMAT)}&fov-dec-center=${formatAngle(fovDec, FOV_DEC_FORMAT)}&fov-ra-hwidth=${toDeg(fovRaWidth)}&fov-dec-hwidth=${toDeg(fovDecWidth)}&vmag-lim=${magLimit}&mag-required=${magRequired && magLimit < 30}`
+	const uri = `${SBD_BASE_URL}${IDENTIFY_PATH}&obs-time=${dateTime.format('YYYY-MM-DD_HH:mm:ss')}&lat=${toDeg(latitude)}&lon=${toDeg(longitude)}&alt=${toKilometer(elevation)}&fov-ra-center=${formatAngle(fovRa, FOV_RA_FORMAT)}&fov-dec-center=${formatAngle(fovDec, FOV_DEC_FORMAT)}&fov-ra-hwidth=${toDeg(fovRaWidth)}&fov-dec-hwidth=${toDeg(fovDecWidth)}&vmag-lim=${magLimit}&mag-required=${magRequired && magLimit < 30}`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodyIdentify
 }
 
+// Retrieves close approaches of small bodies to Earth
 export async function closeApproaches(dateMin?: DateTime | number | 'now', dateMax: DateTime | number = 7, distance: number = 10) {
-	dateMin = !dateMin || dateMin === 'now' ? now() : typeof dateMin === 'number' ? dateUnix(dateMin) : dateMin
-	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatDate(dateMin, 'YYYY-MM-DD')}&date-max=${typeof dateMax === 'number' ? `%2B${dateMax}` : formatDate(dateMax, 'YYYY-MM-DD')}&dist-max=${distance}LD`
+	dateMin = !dateMin || dateMin === 'now' ? dateNow() : typeof dateMin === 'number' ? dateUnix(dateMin) : dateMin
+	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${dateMin.format('YYYY-MM-DD')}&date-max=${typeof dateMax === 'number' ? `%2B${dateMax}` : dateMax.format('YYYY-MM-DD')}&dist-max=${distance}LD`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodyCloseApproach
 }
