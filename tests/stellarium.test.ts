@@ -28,7 +28,7 @@ test('catalog', async () => {
 	expect(entries[0].minorAxis).toBe(0)
 	expect(entries[0].orientation).toBe(0)
 	expect(entries[0].redshift).toBe(99)
-	expect(entries[0].aco).toBe('')
+	expect(entries[0].aco).toBeUndefined()
 
 	expect(entries[311].id).toBe(312)
 	expect(entries[311].ngc).toBe(281)
@@ -58,7 +58,9 @@ test('catalog', async () => {
 	expect(entries[94659].minorAxis).toBe(0.0011635528953468956)
 	expect(entries[94659].orientation).toBe(1.5707963267948966)
 	expect(entries[94659].redshift).toBe(99)
-	expect(entries[94659].aco).toBe('')
+	expect(entries[94659].aco).toBeUndefined()
+
+	expect(entries[254].mType).toBe('SA(s)b')
 
 	expect(searchAround(entries, parseAngle('05h 35 16.8')!, parseAngle('-05 23 24')!, deg(1))).toHaveLength(11)
 	expect(searchAround(entries, parseAngle('18h 02 42.0')!, parseAngle('-22 58 18')!, deg(1))).toHaveLength(19)

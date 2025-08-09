@@ -107,6 +107,7 @@ export interface StellariumCatalogEntry {
 	readonly redshift: number
 	readonly px: Angle
 	readonly distance: Distance
+	readonly mType?: string
 	readonly ngc: number
 	readonly ic: number
 	readonly m: number
@@ -121,16 +122,16 @@ export interface StellariumCatalogEntry {
 	readonly mel: number
 	readonly pgc: number
 	readonly ugc: number
-	readonly ced: string
+	readonly ced?: string
 	readonly arp: number
 	readonly vv: number
-	readonly pk: string
-	readonly png: string
-	readonly snrg: string
-	readonly aco: string
-	readonly hcg: string
-	readonly eso: string
-	readonly vdbh: string
+	readonly pk?: string
+	readonly png?: string
+	readonly snrg?: string
+	readonly aco?: string
+	readonly hcg?: string
+	readonly eso?: string
+	readonly vdbh?: string
 	readonly dwb: number
 	readonly tr: number
 	readonly st: number
@@ -236,7 +237,7 @@ export async function* readCatalogDat(source: Source & Seekable) {
 		const mB = readDouble()
 		const mV = readDouble()
 		const type = (readInt() + 1) % 37
-		readText() // Morphological type
+		const mType = readText() || undefined // Morphological type
 		const majorAxis = deg(readDouble())
 		const minorAxis = deg(readDouble())
 		const orientation = deg(readInt())
@@ -260,23 +261,23 @@ export async function* readCatalogDat(source: Source & Seekable) {
 		const mel = readInt()
 		const pgc = readInt()
 		const ugc = readInt()
-		const ced = readText()
+		const ced = readText() || undefined
 		const arp = readInt()
 		const vv = readInt()
-		const pk = readText()
-		const png = readText()
-		const snrg = readText()
-		const aco = readText()
-		const hcg = readText()
-		const eso = readText()
-		const vdbh = readText()
+		const pk = readText() || undefined
+		const png = readText() || undefined
+		const snrg = readText() || undefined
+		const aco = readText() || undefined
+		const hcg = readText() || undefined
+		const eso = readText() || undefined
+		const vdbh = readText() || undefined
 		const dwb = readInt()
 		const tr = readInt()
 		const st = readInt()
 		const ru = readInt()
 		const vdbha = readInt()
 
-		yield { id, rightAscension, declination, mB, mV, type, majorAxis, minorAxis, orientation, redshift, px, distance, ngc, ic, m, c, b, sh2, vdb, rcw, ldn, lbn, cr, mel, pgc, ugc, ced, arp, vv, pk, png, snrg, aco, hcg, eso, vdbh, dwb, tr, st, ru, vdbha } as StellariumCatalogEntry
+		yield { id, rightAscension, declination, mB, mV, type, majorAxis, minorAxis, orientation, redshift, px, distance, mType, ngc, ic, m, c, b, sh2, vdb, rcw, ldn, lbn, cr, mel, pgc, ugc, ced, arp, vv, pk, png, snrg, aco, hcg, eso, vdbh, dwb, tr, st, ru, vdbha } as StellariumCatalogEntry
 	}
 }
 
