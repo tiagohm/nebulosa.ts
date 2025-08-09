@@ -307,28 +307,28 @@ twoProduct(0.5, 0.4) // Multiply both exactly in two 64-bit floats
 
 ```ts
 const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-Matrix3.zero() // Matrix filled with zeroes
-Matrix3.identity() // Identity matrix
-Matrix3.rotX(PI, m) // Rotate the matrix around x-axis
-Matrix3.rotY(PI, m) // Rotate the matrix around y-axis
-Matrix3.rotZ(PI, m) // Rotate the matrix around z-axis
-Matrix3.clone(m) // Clone the matrix
-Matrix3.copy(m, n) // Copy the matrix to another matrix
-Matrix3.determinant(m) // Determinant of the matrix
-Matrix3.trace(m) // Trace of the matrix
-Matrix3.transpose(m) // Transpose the matrix
-Matrix3.flipX(m) // Flip the x-axis of the matrix
-Matrix3.flipY(m) // Flip the y-axis of the matrix
-Matrix3.negate(m) // Negate the matrix
-Matrix3.plusScalar(m, 2) // Sum the matrix by a scalar
-Matrix3.minusScalar(m, 2) // Subtract the matrix by a scalar
-Matrix3.mulScalar(m, 2) // Multiply the matrix by a scalar
-Matrix3.divScalar(m, 2) // Divide the matrix by a scalar
-Matrix3.plus(m, n) // Sum two matrices
-Matrix3.minus(m, n) // Subtract two matrices
-Matrix3.mul(m, n) // Multiply two matrices
-Matrix3.mulVec(m, v) // Multiply the matrix by a vector
-Matrix3.mulTransposeVec3(m, v) // Multiply the transpose of the matrix by a vector
+matZero() // Matrix filled with zeroes
+matIdentity() // Identity matrix
+matRotX(PI, m) // Rotate the matrix around x-axis
+matRotY(PI, m) // Rotate the matrix around y-axis
+matRotZ(PI, m) // Rotate the matrix around z-axis
+matClone(m) // Clone the matrix
+matCopy(m, n) // Copy the matrix to another matrix
+matDeterminant(m) // Determinant of the matrix
+matTrace(m) // Trace of the matrix
+matTranspose(m) // Transpose the matrix
+matFlipX(m) // Flip the x-axis of the matrix
+matFlipY(m) // Flip the y-axis of the matrix
+matNegate(m) // Negate the matrix
+matPlusScalar(m, scalar) // Sum the matrix by a scalar
+matMinusScalar(m, scalar) // Subtract the matrix by a scalar
+matMulScalar(m, scalar) // Multiply the matrix by a scalar
+matDivScalar(m, scalar) // Divide the matrix by a scalar
+matPlus(m, n) // Sum two matrices
+matMinus(m, n) // Subtract two matrices
+matMul(m, n) // Multiply two matrices
+matMulVec(m, v) // Multiply the matrix by a vector
+matMulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
 
 const LU = new LuDecomposition(A)
 LU.determinant // Determinant of the matrix

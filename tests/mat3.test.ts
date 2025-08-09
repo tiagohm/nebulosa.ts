@@ -1,17 +1,18 @@
 import { describe, expect, test } from 'bun:test'
-import { gaussianElimination, LuDecomposition, Mat3, mulMTxN, mulMxN, mulMxNT, QrDecomposition } from '../src/matrix'
+// biome-ignore format: too long!
+import { gaussianElimination, LuDecomposition, type MutMat3, matClone, matDeterminant, matDivScalar, matFlipX, matFlipY, matIdentity, matMinus, matMinusScalar, matMul, matMulScalar, matMulVec, matPlus, matPlusScalar, matRotX, matRotY, matRotZ, matTranspose, matZero, mulMTxN, mulMxN, mulMxNT, QrDecomposition } from '../src/mat3'
 import type { MutVec3 } from '../src/vec3'
 
 describe('Mat3', () => {
 	test('determinant', () => {
-		expect(Mat3.determinant([1, 2, 3, 4, 5, 6, 7, 8, 9])).toBe(0)
-		expect(Mat3.determinant(Mat3.identity())).toBe(1)
-		expect(Mat3.determinant([2, 3, 2, 3, 2, 3, 3, 4, 5])).toBe(-10)
+		expect(matDeterminant([1, 2, 3, 4, 5, 6, 7, 8, 9])).toBe(0)
+		expect(matDeterminant(matIdentity())).toBe(1)
+		expect(matDeterminant([2, 3, 2, 3, 2, 3, 3, 4, 5])).toBe(-10)
 	})
 
 	test('rotX', () => {
-		const m: Mat3.Matrix = [2, 3, 2, 3, 2, 3, 3, 4, 5]
-		Mat3.rotX(0.3456789, m)
+		const m: MutMat3 = [2, 3, 2, 3, 2, 3, 3, 4, 5]
+		matRotX(0.3456789, m)
 
 		expect(m[0]).toBeCloseTo(2, 12)
 		expect(m[1]).toBeCloseTo(3, 12)
@@ -23,12 +24,12 @@ describe('Mat3', () => {
 		expect(m[7]).toBeCloseTo(3.085711545336372503, 12)
 		expect(m[8]).toBeCloseTo(3.687721683977873065, 12)
 
-		expect(Mat3.rotX(0.3456789, Mat3.identity())).toEqual(Mat3.rotX(0.3456789))
+		expect(matRotX(0.3456789, matIdentity())).toEqual(matRotX(0.3456789))
 	})
 
 	test('rotY', () => {
-		const m: Mat3.Matrix = [2, 3, 2, 3, 2, 3, 3, 4, 5]
-		Mat3.rotY(0.3456789, m)
+		const m: MutMat3 = [2, 3, 2, 3, 2, 3, 3, 4, 5]
+		matRotY(0.3456789, m)
 
 		expect(m[0]).toBeCloseTo(0.865184781897815993, 12)
 		expect(m[1]).toBeCloseTo(1.467194920539316554, 12)
@@ -40,12 +41,12 @@ describe('Mat3', () => {
 		expect(m[7]).toBeCloseTo(4.77988902226229815, 12)
 		expect(m[8]).toBeCloseTo(5.381899160903798712, 12)
 
-		expect(Mat3.rotY(0.3456789, Mat3.identity())).toEqual(Mat3.rotY(0.3456789))
+		expect(matRotY(0.3456789, matIdentity())).toEqual(matRotY(0.3456789))
 	})
 
 	test('rotZ', () => {
-		const m: Mat3.Matrix = [2, 3, 2, 3, 2, 3, 3, 4, 5]
-		Mat3.rotZ(0.3456789, m)
+		const m: MutMat3 = [2, 3, 2, 3, 2, 3, 3, 4, 5]
+		matRotZ(0.3456789, m)
 
 		expect(m[0]).toBeCloseTo(2.898197754208926769, 12)
 		expect(m[1]).toBeCloseTo(3.50020789285042733, 12)
@@ -57,109 +58,109 @@ describe('Mat3', () => {
 		expect(m[7]).toBeCloseTo(4, 12)
 		expect(m[8]).toBeCloseTo(5, 12)
 
-		expect(Mat3.rotZ(0.3456789, Mat3.identity())).toEqual(Mat3.rotZ(0.3456789))
+		expect(matRotZ(0.3456789, matIdentity())).toEqual(matRotZ(0.3456789))
 	})
 
 	test('clone', () => {
-		const m: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const n = Mat3.clone(m)
+		const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+		const n = matClone(m)
 		expect(n).toEqual(m)
 		expect(m === n).toBe(false)
 	})
 
 	test('transpose', () => {
-		const m: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const n = Mat3.transpose(m)
+		const m = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+		const n = matTranspose(m)
 		expect(n).not.toEqual(m)
 		expect(n).toEqual([1, 4, 7, 2, 5, 8, 3, 6, 9])
 	})
 
 	test('flipX', () => {
-		const m: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const n = Mat3.flipX(m)
+		const m = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+		const n = matFlipX(m)
 		expect(n).not.toEqual(m)
 		expect(n).toEqual([7, 8, 9, 4, 5, 6, 1, 2, 3])
 	})
 
 	test('flipY', () => {
-		const m: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const n = Mat3.flipY(m)
+		const m = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+		const n = matFlipY(m)
 		expect(n).not.toEqual(m)
 		expect(n).toEqual([3, 2, 1, 6, 5, 4, 9, 8, 7])
 	})
 
 	test('mulVec', () => {
-		const m: Mat3.Matrix = [2, 3, 2, 3, 2, 3, 3, 4, 5]
+		const m = [2, 3, 2, 3, 2, 3, 3, 4, 5] as const
 		const v: MutVec3 = [2, 3, 2]
-		const u = Mat3.mulVec(m, v)
+		const u = matMulVec(m, v)
 		expect(u).not.toEqual(v)
 		expect(u).toEqual([17, 18, 28])
 
-		Mat3.mulVec(m, v, v)
+		matMulVec(m, v, v)
 		expect(v).toEqual(u)
 	})
 
 	test('plusScalar', () => {
-		const m: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const n = Mat3.plusScalar(m, 1)
+		const m = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+		const n = matPlusScalar(m, 1)
 		expect(n).not.toEqual(m)
 		expect(n).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10])
 	})
 
 	test('minusScalar', () => {
-		const m: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const n = Mat3.minusScalar(m, 1)
+		const m = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+		const n = matMinusScalar(m, 1)
 		expect(n).not.toEqual(m)
 		expect(n).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
 	})
 
 	test('mulScalar', () => {
-		const m: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const n = Mat3.mulScalar(m, 2)
+		const m = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+		const n = matMulScalar(m, 2)
 		expect(n).not.toEqual(m)
 		expect(n).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 18])
 	})
 
 	test('divScalar', () => {
-		const m: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const n = Mat3.divScalar(m, 2)
+		const m = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+		const n = matDivScalar(m, 2)
 		expect(n).not.toEqual(m)
 		expect(n).toEqual([0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5])
 	})
 
 	test('plus', () => {
-		const m: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const n: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const u = Mat3.plus(m, n)
+		const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+		const n = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+		const u = matPlus(m, n)
 		expect(u).not.toEqual(m)
 		expect(u).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 18])
 
-		Mat3.plus(m, n, m)
+		matPlus(m, n, m)
 		expect(m).toEqual(u)
 	})
 
 	test('minus', () => {
-		const m: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const n: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const u = Mat3.minus(m, n)
+		const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+		const n = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+		const u = matMinus(m, n)
 		expect(u).not.toEqual(m)
-		expect(u).toEqual(Mat3.zero())
+		expect(u).toEqual(matZero())
 
-		Mat3.minus(m, n, m)
+		matMinus(m, n, m)
 		expect(m).toEqual(u)
 	})
 
 	test('mul', () => {
-		const m: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const n: Mat3.Matrix = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-		const u = Mat3.mul(m, n)
+		const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+		const n = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+		const u = matMul(m, n)
 		expect(u).not.toEqual(m)
 		expect(u).toEqual([30, 36, 42, 66, 81, 96, 102, 126, 150])
 
 		// Aᵀ x A = symmetric matrix
-		expect(Mat3.mul(Mat3.transpose(m), n)).toEqual([66, 78, 90, 78, 93, 108, 90, 108, 126])
+		expect(matMul(matTranspose(m), n)).toEqual([66, 78, 90, 78, 93, 108, 90, 108, 126])
 
-		Mat3.mul(m, n, m)
+		matMul(m, n, m)
 		expect(m).toEqual(u)
 	})
 })
@@ -196,7 +197,7 @@ describe('LU decomposition', () => {
 
 		const det = decomposition.determinant
 		expect(det).toBeCloseTo(-58, 12)
-		expect(det).toBeCloseTo(Mat3.determinant(matrix), 12)
+		expect(det).toBeCloseTo(matDeterminant(matrix), 12)
 
 		const inv = decomposition.invert()
 

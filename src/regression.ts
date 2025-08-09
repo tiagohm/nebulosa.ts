@@ -1,5 +1,5 @@
+import { gaussianElimination } from './mat3'
 import type { NumberArray } from './math'
-import { gaussianElimination } from './matrix'
 import { isNumberArray, minOf } from './util'
 
 export type TrendLineRegressionMethod = 'simple' | 'theil-sen'

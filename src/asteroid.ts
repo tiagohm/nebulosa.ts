@@ -4,12 +4,12 @@ import type { PositionAndVelocity } from './astrometry'
 import { ECLIPTIC_J2000_MATRIX, GM_SUN_PITJEVA_2005, TAU } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
-import { Mat3 } from './matrix'
+import { type Mat3, matMulVec, matTranspose } from './mat3'
 import { type MPCOrbit, type MPCOrbitComet, unpackDate } from './mpcorb'
 import { type Time, Timescale, tdb, time, timeSubtract, timeYMD, tt } from './time'
 import { type MutVec3, type Vec3, vecAngle, vecCross, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecPlus } from './vec3'
 
-const REFERENCE_FRAME = Mat3.transpose(ECLIPTIC_J2000_MATRIX)
+const REFERENCE_FRAME = matTranspose(ECLIPTIC_J2000_MATRIX)
 
 // Glossary
 
@@ -108,7 +108,7 @@ export class KeplerOrbit implements OsculatingElements {
 		readonly velocity: CartesianCoordinate,
 		readonly epoch: Time,
 		readonly mu: number = GM_SUN_PITJEVA_2005,
-		readonly rotation: Mat3.Matrix = REFERENCE_FRAME,
+		readonly rotation: Mat3 = REFERENCE_FRAME,
 	) {
 		this.propagation = propagationParameters(position, velocity, mu)
 	}
@@ -246,15 +246,15 @@ export class KeplerOrbit implements OsculatingElements {
 		const pv = propagate(this.position, this.velocity, tt(this.epoch), tt(time), this.propagation)
 
 		if (this.rotation) {
-			Mat3.mulVec(this.rotation, pv[0], pv[0] as never)
-			Mat3.mulVec(this.rotation, pv[1], pv[1] as never)
+			matMulVec(this.rotation, pv[0], pv[0] as never)
+			matMulVec(this.rotation, pv[1], pv[1] as never)
 		}
 
 		return pv
 	}
 
 	// Creates a `KeplerOrbit` from orbital elements using mean anomaly.
-	static meanAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, M: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3.Matrix = REFERENCE_FRAME) {
+	static meanAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, M: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
 		let v: number
 
 		if (e < 1) v = trueAnomalyClosed(e, solveEccentricAnomaly(e, M))
@@ -265,13 +265,13 @@ export class KeplerOrbit implements OsculatingElements {
 	}
 
 	// Creates a `KeplerOrbit` from orbital elements using true anomaly.
-	static trueAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, M: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3.Matrix = REFERENCE_FRAME) {
+	static trueAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, M: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
 		const [position, velocity] = computePositionAndVelocityFromOrbitalElements(p, e, i, om, w, M, mu)
 		return new KeplerOrbit(position, velocity, epoch, mu, rotation)
 	}
 
 	// Creates a `KeplerOrbit` given its parameters and date of periapsis.
-	static periapsis(p: Distance, e: number, i: Angle, om: Angle, w: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3.Matrix = REFERENCE_FRAME) {
+	static periapsis(p: Distance, e: number, i: Angle, om: Angle, w: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
 		const [position, velocity] = computePositionAndVelocityFromOrbitalElements(p, e, i, om, w, 0, mu)
 		return new KeplerOrbit(position, velocity, epoch, mu, rotation)
 	}

@@ -2,8 +2,8 @@ import { type Angle, arcsec, deg, normalizeAngle } from './angle'
 import { ASEC2RAD, AU_M, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MILLIASEC2RAD, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI, TURNAS } from './constants'
 import { type Distance, toKilometer } from './distance'
 import { FAIRHEAD, IAU2000A_LS, IAU2000A_PL, IAU2000B_LS, IAU2006_S, IAU2006_SP } from './erfa.data'
+import { type Mat3, type MutMat3, matClone, matCopy, matIdentity, matMul, matMulTransposeVec, matMulVec, matRotX, matRotY, matRotZ, matTranspose } from './mat3'
 import { pmod, roundToNearestWholeNumber } from './math'
-import { Mat3 } from './matrix'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { type MutVec3, type Vec3, vecClone, vecCross, vecDivScalar, vecDot, vecFill, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus, vecZero } from './vec3'
@@ -104,7 +104,7 @@ export interface EraAstrom {
 	em: Distance // distance from Sun to observer (au)
 	v: MutVec3 // barycentric observer velocity (vector, c)
 	bm1: number // sqrt(1-|v|^2): reciprocal of Lorenz factor
-	bpn: Mat3.Matrix // bias-precession-nutation matrix
+	bpn: MutMat3 // bias-precession-nutation matrix
 	along: number // longitude + s' + dERA(DUT) (radians)
 	phi: number // geodetic latitude (radians)
 	xpl: number // polar motion xp wrt local meridian (radians)
@@ -512,7 +512,7 @@ export function eraGst06a(ut11: number, ut12: number, tt1: number, tt2: number):
 }
 
 // Greenwich apparent sidereal time, IAU 2006, given the NPB matrix.
-export function eraGst06(ut11: number, ut12: number, tt1: number, tt2: number, rnpb: Readonly<Mat3.Matrix>): Angle {
+export function eraGst06(ut11: number, ut12: number, tt1: number, tt2: number, rnpb: Mat3): Angle {
 	// Extract CIP X,Y.
 	const x = rnpb[6] // 2x0
 	const y = rnpb[7] // 2x1
@@ -547,7 +547,7 @@ export function eraEra00(ut11: number, ut12: number): Angle {
 }
 
 // Equation of the origins, given the classical NPB matrix and the CIO locator.
-export function eraEors(rnpb: Readonly<Mat3.Matrix>, s: Angle): Angle {
+export function eraEors(rnpb: Mat3, s: Angle): Angle {
 	const x = rnpb[6]
 	const ax = x / (1 + rnpb[8])
 	const xs = 1 - ax * x
@@ -618,7 +618,7 @@ export function eraPnm06a(tt1: number, tt2: number) {
 
 // Form rotation matrix given the Fukushima-Williams angles.
 export function eraFw2m(gamb: Angle, phib: Angle, psi: Angle, eps: Angle) {
-	return Mat3.rotX(-eps, Mat3.rotZ(-psi, Mat3.rotX(phib, Mat3.rotZ(gamb))))
+	return matRotX(-eps, matRotZ(-psi, matRotX(phib, matRotZ(gamb))))
 }
 
 // Precession angles, IAU 2006 (Fukushima-Williams 4-angle formulation).
@@ -860,15 +860,15 @@ export function eraPmat06(tt1: number, tt2: number) {
 
 // Form the matrix of polar motion for a given date, IAU 2000.
 export function eraPom00(xp: Angle, yp: Angle, sp: Angle) {
-	return Mat3.rotZ(sp, Mat3.rotY(-xp, Mat3.rotX(-yp)))
+	return matRotZ(sp, matRotY(-xp, matRotX(-yp)))
 }
 
 // Assemble the celestial to terrestrial matrix from equinox-based
 // components (the celestial-to-true matrix, the Greenwich Apparent
 // Sidereal Time and the polar motion matrix).
-export function eraC2teqx(rbpn: Readonly<Mat3.Matrix>, gast: Angle, rpom: Readonly<Mat3.Matrix>) {
-	const m = Mat3.rotZ(gast)
-	return Mat3.mul(rpom, Mat3.mul(m, rbpn, m), m)
+export function eraC2teqx(rbpn: Mat3, gast: Angle, rpom: Mat3) {
+	const m = matRotZ(gast)
+	return matMul(rpom, matMul(m, rbpn, m), m)
 }
 
 const WGS84_RADIUS = 6378137 / AU_M
@@ -961,8 +961,8 @@ export function eraBp06(tt1: number, tt2: number) {
 	const rbpw = eraPmat06(tt1, tt2)
 
 	// P matrix.
-	const rp = Mat3.transpose(rb)
-	Mat3.mul(rbpw, rp, rp)
+	const rp = matTranspose(rb)
+	matMul(rbpw, rp, rp)
 
 	return [rb, rp, rbpw] as const
 }
@@ -1370,24 +1370,24 @@ export function eraC2i06a(tt1: number, tt2: number) {
 }
 
 // Form the celestial to intermediate-frame-of-date matrix given the CIP X,Y and the CIO locator s.
-export function eraC2ixys(x: Angle, y: Angle, s: Angle, o?: Mat3.Matrix) {
+export function eraC2ixys(x: Angle, y: Angle, s: Angle, o?: MutMat3) {
 	// Obtain the spherical angles E and d.
 	const r2 = x * x + y * y
 	const e = r2 > 0 ? Math.atan2(y, x) : 0
 	const d = Math.atan(Math.sqrt(r2 / (1 - r2)))
 
-	if (o) Mat3.identity(o)
+	if (o) matIdentity(o)
 
 	// Form the matrix.
-	return Mat3.rotZ(-(e + s), Mat3.rotY(d, Mat3.rotZ(e, o)))
+	return matRotZ(-(e + s), matRotY(d, matRotZ(e, o)))
 }
 
 // Assemble the celestial to terrestrial matrix from CIO-based
 // components (the celestial-to-intermediate matrix, the Earth Rotation
 // Angle and the polar motion matrix).
-export function eraC2tcio(rc2i: Readonly<Mat3.Matrix>, era: Angle, rpom: Readonly<Mat3.Matrix>, o?: Mat3.Matrix) {
-	o = o ? Mat3.copy(rc2i, o) : Mat3.clone(rc2i)
-	return Mat3.mul(rpom, Mat3.rotZ(era, o), o)
+export function eraC2tcio(rc2i: Mat3, era: Angle, rpom: Mat3, o?: MutMat3) {
+	o = o ? matCopy(rc2i, o) : matClone(rc2i)
+	return matMul(rpom, matRotZ(era, o), o)
 }
 
 // For a terrestrial observer, prepare star-independent astrometry
@@ -1474,7 +1474,7 @@ export function eraApcs(tdb1: number, tdb2: number, pv: readonly [Vec3, Vec3], e
 	astrom.bm1 = Math.sqrt(1.0 - v2)
 
 	// Reset the NPB matrix.
-	astrom.bpn = Mat3.identity(astrom.bpn)
+	astrom.bpn = matIdentity(astrom.bpn)
 
 	return astrom
 }
@@ -1517,7 +1517,7 @@ export function eraAtciqpmpx(pco: Vec3, astrom: EraAstrom, o?: MutVec3) {
 	const ppr = eraAb(pnat, astrom.v, astrom.em, astrom.bm1, pnat)
 
 	// Bias-precession-nutation, giving CIRS proper direction.
-	const pi = Mat3.mulVec(astrom.bpn, ppr, ppr)
+	const pi = matMulVec(astrom.bpn, ppr, ppr)
 
 	// ICRS astrometric RA,Dec.
 	// const s = eraC2s(...pi)
@@ -1556,7 +1556,7 @@ export function eraApco(
 	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
 
 	// Form the rotation matrix, CIRS to apparent [HA,Dec].
-	const r = Mat3.rotZ(elong, Mat3.rotX(-yp, Mat3.rotY(-xp, Mat3.rotZ(theta + sp))))
+	const r = matRotZ(elong, matRotX(-yp, matRotY(-xp, matRotZ(theta + sp))))
 
 	// Solve for local Earth rotation angle.
 	let a = r[0]
@@ -1592,8 +1592,8 @@ export function eraApco(
 	const pvc = eraPvtob(elong, phi, hm, xp, yp, sp, theta, radius, flattening)
 
 	// Rotate into GCRS.
-	Mat3.mulTransposeVec3(r, pvc[0], pvc[0])
-	Mat3.mulTransposeVec3(r, pvc[1], pvc[1])
+	matMulTransposeVec(r, pvc[0], pvc[0])
+	matMulTransposeVec(r, pvc[1], pvc[1])
 
 	// ICRS <-> GCRS parameters.
 	astrom = eraApcs(tdb1, tdb2, pvc, ebpv, ehp, astrom)
@@ -1615,7 +1615,7 @@ export function eraPvtob(elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: 
 
 	// Polar motion and TIO position.
 	const rpm = eraPom00(xp, yp, sp)
-	const p = Mat3.mulTransposeVec3(rpm, xyzm, xyzm)
+	const p = matMulTransposeVec(rpm, xyzm, xyzm)
 	const [x, y, z] = p
 
 	// Functions of ERA.
@@ -1763,7 +1763,7 @@ export function eraApio(sp: Angle, theta: Angle, elong: Angle, phi: Angle, hm: D
 	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
 
 	// Form the rotation matrix, CIRS to apparent [HA,Dec].
-	const r = Mat3.rotZ(elong, Mat3.rotX(-yp, Mat3.rotY(-xp, Mat3.rotZ(theta + sp))))
+	const r = matRotZ(elong, matRotX(-yp, matRotY(-xp, matRotZ(theta + sp))))
 
 	// Solve for local Earth rotation angle.
 	let a = r[0]

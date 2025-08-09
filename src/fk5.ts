@@ -4,7 +4,7 @@ import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { eraS2p } from './erfa'
 import { precessionMatrixCapitaine } from './frame'
-import { Mat3 } from './matrix'
+import { matMulTransposeVec, matMulVec } from './mat3'
 import { type Time, Timescale, timeJulian } from './time'
 
 const J2000 = timeJulian(2000, Timescale.TT)
@@ -16,12 +16,12 @@ export function fk5(ra: Angle, dec: Angle, distance: Distance = 1): CartesianCoo
 
 // Convert the FK5 cartesian coordinate at equinox to ICRS cartesian coordinate.
 export function fk5ToIcrs(p: CartesianCoordinate): CartesianCoordinate {
-	return Mat3.mulTransposeVec3(FK5_MATRIX, p)
+	return matMulTransposeVec(FK5_MATRIX, p)
 }
 
 // Precess the FK5 cartesian coordinate from equinox to other.
 export function precessFk5(p: CartesianCoordinate, from: Time, to: Time): CartesianCoordinate {
-	return Mat3.mulVec(precessionMatrixCapitaine(from, to), p)
+	return matMulVec(precessionMatrixCapitaine(from, to), p)
 }
 
 // Precess the FK5 cartesian coordinate from given equinox to J2000.
