@@ -1,5 +1,5 @@
-import { gaussianElimination } from './mat3'
 import type { NumberArray } from './math'
+import { gaussianElimination, Matrix } from './matrix'
 import { isNumberArray, minOf } from './util'
 
 export type TrendLineRegressionMethod = 'simple' | 'theil-sen'
@@ -131,12 +131,10 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 
 	// DxN * NxD = DxD
 	// const A = mulMTxN(F, F) // Fᵀ*F
-	const A = new Array<Float64Array>(powers.length)
+	const A = Matrix.square(powers.length)
 
-	for (let i = 0; i < powers.length; i++) {
-		const row = new Float64Array(powers.length)
-
-		for (let j = 0; j < powers.length; j++) {
+	for (let i = 0, p = 0; i < powers.length; i++) {
+		for (let j = 0; j < powers.length; j++, p++) {
 			let s = 0
 
 			for (let k = 0; k < n; k++) {
@@ -146,10 +144,8 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 				s += s0 * s1
 			}
 
-			row[j] = s
+			A.data[p] = s
 		}
-
-		A[i] = row
 	}
 
 	// 1xN * NxD = 1xD
@@ -412,7 +408,7 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 
 	const J = new Array<NumberArray>(m)
 	const PJ = new Array<number>(m)
-	const JTJ = new Array<Float64Array>(m)
+	const JTJ = Matrix.square(m)
 	const JTR = new Float64Array(m)
 
 	const R = new Float64Array(n)
@@ -424,7 +420,6 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 
 	for (let i = 0; i < m; i++) {
 		J[i] = new Float64Array(n)
-		JTJ[i] = new Float64Array(m)
 	}
 
 	const predict = (params: number[], o: NumberArray) => {
@@ -449,18 +444,18 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		}
 
 		// Jᵀ * J and Jᵀ * r
-		for (let i = 0; i < m; i++) {
+		for (let i = 0, p = 0; i < m; i++) {
 			// Jᵀ * J
-			for (let j = 0; j < m; j++) {
-				JTJ[i][j] = (J[i] as number[]).reduce((sum, v, k) => sum + v * J[j][k], 0)
+			for (let j = 0; j < m; j++, p++) {
+				JTJ.data[p] = (J[i] as number[]).reduce((sum, v, k) => sum + v * J[j][k], 0)
 			}
 
 			// Jᵀ * residuals
 			JTR[i] = (J[i] as number[]).reduce((sum, v, k) => sum + v * R[k], 0)
 		}
 
-		for (let i = 0; i < m; i++) {
-			JTJ[i][i] *= 1 + lambda
+		for (let i = 0, p = 0; i < m; i++, p += m) {
+			JTJ.data[p + i] *= 1 + lambda
 		}
 
 		// Solve JTJ * dp = JTr

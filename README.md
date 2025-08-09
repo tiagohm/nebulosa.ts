@@ -330,6 +330,7 @@ matMul(m, n) // Multiply two matrices
 matMulVec(m, v) // Multiply the matrix by a vector
 matMulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
 
+const A = new Matrix(5, 5, data)
 const LU = new LuDecomposition(A)
 LU.determinant // Determinant of the matrix
 LU.invert() // Invert the matrix
