@@ -10,7 +10,7 @@ export type SolarEclipseType = 'TOTAL' | 'PARTIAL' | 'ANNULAR' | 'HYBRID'
 
 export interface SolarEclipse {
 	lunation: number
-	maximal: Time // Instant of maximal eclipse
+	maximalTime: Time // Instant of maximal eclipse
 	magnitude: number
 	// Least distance from the axis of the Moon's shadow to the center of the Earth,
 	// in units of equatorial radius of the Earth.
@@ -98,7 +98,11 @@ export function solarSaros(time: Time) {
 	const ns = 136 + 38 * nd
 	const nx = -61 * nd
 	const nc = Math.floor(nx / 358.0 + 0.5 - nd / (12.0 * 358 * 358))
-	return ((ns + nc * 223 - 1) % 223) + 1
+	const s = ns + nc * 223 - 1
+	let saros = (s % 223) + 1
+	if (s < 0) saros -= 223
+	if (saros < -223) saros += 223
+	return saros
 }
 
 // Computes the nearest (previous or next) solar eclipse for a given time
@@ -109,7 +113,7 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 
 	const eclipse: SolarEclipse = {
 		lunation: k,
-		maximal: DEFAULT_MINIMAL_SOLAR_ECLIPSE_TIME,
+		maximalTime: DEFAULT_MINIMAL_SOLAR_ECLIPSE_TIME,
 		magnitude: 0,
 		gamma: 0,
 		u: 0,
@@ -160,8 +164,8 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 				continue
 			}
 
-			const timeOfGreatestEclipseDay = 2451550 + 29.530588861 * k
-			const timeOfGreatestEclipseFraction = 0.09766 + 0.00015437 * T - 0.00000015 * T2 + 0.00000000073 * T3
+			const timeOfGreatestEclipseDay = 2451550 + 29 * k
+			const timeOfGreatestEclipseFraction = 0.530588861 * k + 0.09766 + 0.00015437 * T - 0.00000015 * T2 + 0.00000000073 * T3
 			const timeOfGreatestEclipseCorrection =
 				-0.4075 * Math.sin(MM) +
 				0.1721 * E * Math.sin(SM) +
@@ -189,7 +193,7 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 
 			eclipse.u = u
 			eclipse.gamma = gamma
-			eclipse.maximal = timeNormalize(timeOfGreatestEclipseDay, timeOfGreatestEclipseFraction + timeOfGreatestEclipseCorrection, 0, Timescale.TT)
+			eclipse.maximalTime = timeNormalize(timeOfGreatestEclipseDay, timeOfGreatestEclipseFraction + timeOfGreatestEclipseCorrection, 0, Timescale.TT)
 			eclipse.lunation = k
 
 			// non-central eclipse

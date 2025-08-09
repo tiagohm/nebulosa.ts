@@ -38,14 +38,14 @@ describe('nearest solar eclipse', () => {
 	test('total', () => {
 		// https://www.timeanddate.com/eclipse/solar/2024-april-8
 		const eclipse = nearestSolarEclipse(timeYMD(2024, 3, 1), true)
-		expect(toDate(utc(eclipse.maximal)).slice(0, 5)).toEqual([2024, 4, 8, 18, 17])
+		expect(toDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 4, 8, 18, 17])
 		expect(eclipse.type).toBe('TOTAL')
 	})
 
 	test('annular', () => {
 		// https://www.timeanddate.com/eclipse/solar/2024-october-2
 		const eclipse = nearestSolarEclipse(timeYMD(2024, 4, 9), true)
-		expect(toDate(utc(eclipse.maximal)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
+		expect(toDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
 		expect(eclipse.type).toBe('ANNULAR')
 	})
 
@@ -56,18 +56,20 @@ describe('nearest solar eclipse', () => {
 		expect(eclipse.type).toBe('PARTIAL')
 		expect(eclipse.magnitude).toBeCloseTo(0.8557, 4)
 		expect(eclipse.gamma).toBeCloseTo(-1.0643, 4)
-		expect(toDate(utc(eclipse.maximal)).slice(0, 5)).toEqual([2025, 9, 21, 19, 41])
+		expect(toDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2025, 9, 21, 19, 41])
 	})
 
 	test('previous', () => {
 		const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 46), false)
-		expect(toDate(utc(eclipse.maximal)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
+		expect(toDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
 		expect(eclipse.type).toBe('ANNULAR')
+		expect(toDate(utc(nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 44), false).maximalTime)).slice(0, 5)).toEqual([2024, 4, 8, 18, 17])
 	})
 
 	test('next', () => {
 		const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 44), true)
-		expect(toDate(utc(eclipse.maximal)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
+		expect(toDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
 		expect(eclipse.type).toBe('ANNULAR')
+		expect(toDate(utc(nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 46), true).maximalTime)).slice(0, 5)).toEqual([2025, 3, 29, 10, 48])
 	})
 })

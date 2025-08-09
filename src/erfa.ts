@@ -415,7 +415,7 @@ export function eraDat(iy: number, im: number, id: number, fd: number): number {
 	const m = 12 * iy + im
 	const i = LEAP_SECOND_CHANGES.findLastIndex((x) => m >= 12 * x[0] + x[1])
 
-	if (i < 0) return NaN
+	if (i < 0) return 0
 
 	// Get the Delta(AT).
 	let da = LEAP_SECOND_CHANGES[i][2]
