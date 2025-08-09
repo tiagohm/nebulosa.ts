@@ -4,7 +4,7 @@ import { eraGc2Gde, eraSp00 } from './erfa'
 import { itrsRotationAt } from './itrs'
 import { Mat3 } from './matrix'
 import { greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmAngles, type Time, tt } from './time'
-import type { Vector3 } from './vector'
+import type { Vec3 } from './vec3'
 
 // An Earth ellipsoid that maps latitudes and longitudes to |xyz| positions.
 export enum Ellipsoid {
@@ -46,7 +46,7 @@ export interface GeographicPosition {
 	readonly elevation: Distance
 	readonly ellipsoid: Ellipsoid
 
-	itrs?: Readonly<Vector3.Vector>
+	itrs?: Vec3
 	rLat?: Readonly<Mat3.Matrix>
 	rLatLon?: Readonly<Mat3.Matrix>
 }

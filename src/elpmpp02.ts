@@ -2,7 +2,7 @@ import { ASEC2RAD, AU_KM, DAYSPERJC, DEG2RAD, J2000 } from './constants'
 import { ELPMPP02_MAIN, ELPMPP02_PERT } from './elpmpp02.data'
 import { Mat3 } from './matrix'
 import { type Time, tdb } from './time'
-import type { Vector3 } from './vector'
+import type { MutVec3 } from './vec3'
 
 // Éphéméride Lunaire Parisienne is a lunar theory developed by Jean Chapront, Michelle Chapront-Touzé,
 // and others at the Bureau des Longitudes in the 1970s to 1990s.
@@ -68,8 +68,8 @@ export function moon(time: Time) {
 	t[1] = (day - J2000 + fraction) / DAYSPERJC
 	for (let i = 2; i <= 4; i++) t[i] = t[i - 1] * t[1]
 
-	const p: Vector3.Vector = [0, 0, 0]
-	const v: Vector3.Vector = [0, 0, 0]
+	const p: MutVec3 = [0, 0, 0]
+	const v: MutVec3 = [0, 0, 0]
 
 	for (let iv = 0; iv <= 2; iv++) {
 		const [cmpb, fmpb] = ELPMPP02_MAIN[iv]

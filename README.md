@@ -353,6 +353,8 @@ TODO
 moonParallax(distance) // Compute the moon parallax at a given distance
 moonSemidiameter(distance) // Compute the moon semidiameter at a given distance
 lunation(time, system) // Compute the lunation at a given time and system
+nearestLunarEclipse(time, true) // Compute the nearest lunar eclipse at a given time
+lunarSaros(time) // Compute the saros series number for the lunar eclipse at time
 ```
 
 ### MPCORB
@@ -587,30 +589,30 @@ angularSizeOfPixel(focalLength, pixelSize) // CCD Resolution in arcsec/pixel
 ### Vector
 
 ```ts
-Vector3.zero() // Vector filled with zeroes
-Vector3.xAxis() // X-axis vector
-Vector3.yAxis() // Y-axis vector
-Vector3.zAxis() // Z-axis vector
-Vector3.clone(v) // Clone the vector
-Vector3.normalize(v) // Normalize the vector
-Vector3.length(v) // Length of the vector
-Vector3.distance(v, u) // Distance between vectors
-Vector3.angle(v, u) // Angle between vectors
-Vector3.dot(v, u) // Dot product between vectors
-Vector3.cross(v, u) // Cross product between vectors
-Vector3.latitude(v)
-Vector3.longitude(v)
-Vector3.negate(v) // Negate the vector
-Vector3.plusScalar(v, 2) // Sum the vector by a scalar
-Vector3.minusScalar(v, 2) // Subtract the vector by a scalar
-Vector3.mulScalar(v, 2) // Multiply the vector by a scalar
-Vector3.divScalar(v, 2) // Divide the vector by a scalar
-Vector3.plus(v, u) // Sum two vectors
-Vector3.minus(v, u) // Subtract two vectors
-Vector3.mul(v, u) // Multiply two vectors
-Vector3.div(v, u) // Divide two vectors
-Vector3.rotateByRodrigues(v, axis, PI / 4) // Rotate the vector around an axis
-Vector3.plane(v, u, w) // Vector from plane of three vectors
+vecZero() // Vector filled with zeroes
+vecXAxis() // X-axis vector
+vecYAxis() // Y-axis vector
+vecZAxis() // Z-axis vector
+vecClone(v) // Clone the vector
+vecNormalize(v) // Normalize the vector
+vecLength(v) // Length of the vector
+vecDistance(v, u) // Distance between vectors
+vecAngle(v, u) // Angle between vectors
+vecDot(v, u) // Dot product between vectors
+vecCross(v, u) // Cross product between vectors
+vecLatitude(v)
+vecLongitude(v)
+vecNegate(v) // Negate the vector
+vecPlusScalar(v, 2) // Sum the vector by a scalar
+vecMinusScalar(v, 2) // Subtract the vector by a scalar
+vecMulScalar(v, 2) // Multiply the vector by a scalar
+vecDivScalar(v, 2) // Divide the vector by a scalar
+vecPlus(v, u) // Sum two vectors
+vecMinus(v, u) // Subtract two vectors
+vecMul(v, u) // Multiply two vectors
+vecDiv(v, u) // Divide two vectors
+vecRotateByRodrigues(v, axis, PI / 4) // Rotate the vector around an axis
+vecPlane(v, u, w) // Vector from plane of three vectors
 ```
 
 ### Velocity

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { gaussianElimination, LuDecomposition, Mat3, mulMTxN, mulMxN, mulMxNT, QrDecomposition } from '../src/matrix'
-import type { Vector3 } from '../src/vector'
+import type { MutVec3 } from '../src/vec3'
 
 describe('Mat3', () => {
 	test('determinant', () => {
@@ -90,7 +90,7 @@ describe('Mat3', () => {
 
 	test('mulVec', () => {
 		const m: Mat3.Matrix = [2, 3, 2, 3, 2, 3, 3, 4, 5]
-		const v: Vector3.Vector = [2, 3, 2]
+		const v: MutVec3 = [2, 3, 2]
 		const u = Mat3.mulVec(m, v)
 		expect(u).not.toEqual(v)
 		expect(u).toEqual([17, 18, 28])

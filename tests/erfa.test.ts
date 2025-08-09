@@ -4,7 +4,6 @@ import type { CartesianCoordinate } from '../src/coordinate'
 import { kilometer, meter } from '../src/distance'
 import * as erfa from '../src/erfa'
 import type { Mat3 } from '../src/matrix'
-import type { Vector3 } from '../src/vector'
 import { kilometerPerSecond, meterPerSecond, toKilometerPerSecond } from '../src/velocity'
 
 test('eraP2s', () => {
@@ -402,8 +401,8 @@ test('eraPpsp', () => {
 })
 
 test('eraPv2s', () => {
-	const p: Vector3.Vector = [-0.4514964673880165, 0.03093394277342585, 0.05594668105108779]
-	const v: Vector3.Vector = [1.29227085066326e-5, 2.652814182060692e-6, 2.568431853930293e-6]
+	const p = [-0.4514964673880165, 0.03093394277342585, 0.05594668105108779] as const
+	const v = [1.29227085066326e-5, 2.652814182060692e-6, 2.568431853930293e-6] as const
 	const [theta, phi, r, td, pd, rd] = erfa.eraPv2s(p, v)
 
 	expect(theta).toBeCloseTo(3.073185307179586515, 12)
@@ -580,10 +579,10 @@ test('eraC2t06a', () => {
 })
 
 test('eraApci13', () => {
-	const ph: CartesianCoordinate = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775]
-	// const vh: CartesianCoordinate = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732]
-	const pb: CartesianCoordinate = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775]
-	const vb: CartesianCoordinate = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545]
+	const ph = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775] as const
+	// const vh = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732] as const
+	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
+	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
 
 	const [astrom, eo] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
 

@@ -1,8 +1,8 @@
 import type { PositionAndVelocity } from './astrometry'
 import { AU_KM, DAYSEC, J2000 } from './constants'
-import type { CartesianCoordinate } from './coordinate'
 import type { Daf, Summary } from './daf'
 import { type Time, tdb } from './time'
+import type { MutVec3 } from './vec3'
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/FORTRAN/req/spk.html
 export interface Spk {
@@ -111,8 +111,8 @@ export class Type2And3Segment implements SpkSegment {
 		const s = (2 * (d - (c.mid - c.radius))) / this.intervalLength - 1
 		const ss = 2 * s
 
-		const w0: CartesianCoordinate = [0, 0, 0]
-		const w1: CartesianCoordinate = [0, 0, 0]
+		const w0: MutVec3 = [0, 0, 0]
+		const w1: MutVec3 = [0, 0, 0]
 		const w2 = new Float64Array(3)
 		const dw0 = new Float64Array(3)
 		const dw1 = new Float64Array(3)
@@ -208,8 +208,8 @@ export class Type9Segment implements SpkSegment {
 
 	// biome-ignore lint/suspicious/useAwait: not implemented yet
 	async at(time: Time): Promise<PositionAndVelocity> {
-		const p: CartesianCoordinate = [0, 0, 0]
-		const v: CartesianCoordinate = [0, 0, 0]
+		const p: MutVec3 = [0, 0, 0]
+		const v: MutVec3 = [0, 0, 0]
 		return [p, v]
 	}
 }
@@ -316,8 +316,8 @@ export class Type21Segment implements SpkSegment {
 
 		// Perform position interpolation: (Note that KS = 1 right now.
 		// We don't know much more than that.)
-		const p: CartesianCoordinate = [0, 0, 0]
-		const v: CartesianCoordinate = [0, 0, 0]
+		const p: MutVec3 = [0, 0, 0]
+		const v: MutVec3 = [0, 0, 0]
 
 		for (let i = 0; i < 3; i++) {
 			const kqq = c.kq[i]

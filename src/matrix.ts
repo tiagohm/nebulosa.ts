@@ -1,7 +1,7 @@
 import type { Angle } from './angle'
 import type { NumberArray } from './math'
 import { isNumberArray } from './util'
-import { Vector3 } from './vector'
+import { type MutVec3, type Vec3, vecFill } from './vec3'
 
 export namespace Mat3 {
 	// Rectangular array of numbers with three rows and three columns.
@@ -198,22 +198,22 @@ export namespace Mat3 {
 	}
 
 	// Multiplies the matrix by a vector.
-	export function mulVec(a: Readonly<Matrix>, b: Readonly<Vector3.Vector>, o?: Vector3.Vector): Vector3.Vector {
+	export function mulVec(a: Readonly<Matrix>, b: Vec3, o?: MutVec3): MutVec3 {
 		const c = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 		const d = a[3] * b[0] + a[4] * b[1] + a[5] * b[2]
 		const e = a[6] * b[0] + a[7] * b[1] + a[8] * b[2]
 
-		if (o) return Vector3.fill(o, c, d, e)
+		if (o) return vecFill(o, c, d, e)
 		return [c, d, e]
 	}
 
 	// Multiplies the transposed matrix by a vector.
-	export function mulTransposeVec3(a: Readonly<Matrix>, b: Readonly<Vector3.Vector>, o?: Vector3.Vector): Vector3.Vector {
+	export function mulTransposeVec3(a: Readonly<Matrix>, b: Vec3, o?: MutVec3): MutVec3 {
 		const c = a[0] * b[0] + a[3] * b[1] + a[6] * b[2]
 		const d = a[1] * b[0] + a[4] * b[1] + a[7] * b[2]
 		const e = a[2] * b[0] + a[5] * b[1] + a[8] * b[2]
 
-		if (o) return Vector3.fill(o, c, d, e)
+		if (o) return vecFill(o, c, d, e)
 		return [c, d, e]
 	}
 }

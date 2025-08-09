@@ -4,7 +4,7 @@ import { cirs, equatorial } from '../src/astrometry'
 import { toKilometer } from '../src/distance'
 import { moon } from '../src/elpmpp02'
 import { Timescale, time } from '../src/time'
-import { Vector3 } from '../src/vector'
+import { vecPlus } from '../src/vec3'
 import { toKilometerPerSecond } from '../src/velocity'
 import { earth } from '../src/vsop87e'
 
@@ -27,8 +27,8 @@ test('barycentric moon', () => {
 	const a = earth(t)
 	const b = moon(t)
 
-	const p = Vector3.plus(a[0], b[0])
-	const v = Vector3.plus(a[1], b[1])
+	const p = vecPlus(a[0], b[0])
+	const v = vecPlus(a[1], b[1])
 
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/ -> Solar System Barycenter -> Moon, Start=2025-Apr-21 12:00:00.0000 TDB, x-y axes
 	expect(toKilometer(p[0])).toBeCloseTo(-1.289981444523174e8, -4) // ~1000 km
