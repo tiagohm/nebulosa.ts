@@ -41,7 +41,7 @@ jobs:
               uses: actions/cache@v4
               with:
                   path: data/
-                  key: data-cache-${{ hashFiles('tests/setup.ts') }}
+                  key: data-cache-${{ hashFiles('data/.version') }}
                   restore-keys: |
                       data-cache-
 
