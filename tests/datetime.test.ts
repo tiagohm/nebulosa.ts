@@ -1,5 +1,6 @@
 import { beforeAll, expect, setSystemTime, test } from 'bun:test'
-import { dateFrom, dateNow, dateUnix, dateYMDHMS } from '../src/datetime'
+import { dateFrom, dateFromTime, dateNow, dateUnix, dateYMDHMS } from '../src/datetime'
+import { timeYMDHMS } from '../src/time'
 
 beforeAll(() => {
 	setSystemTime(new Date('2025-01-09T12:34:56.000-03:00'))
@@ -52,7 +53,7 @@ test('millisecond', () => {
 	expect(dateTime.millisecond(555).millisecond()).toBe(555)
 })
 
-test('dayOfYear', () => {
+test('day of year', () => {
 	const dateTime = dateFrom('2025-01-09 12:34:56')
 	expect(dateTime.dayOfYear()).toBe(9)
 })
@@ -63,7 +64,17 @@ test('unix', () => {
 })
 
 test('ymdhms', () => {
-	const dateTime = dateYMDHMS(2025, 1, 9, 12, 34, 56)
+	const dateTime = dateYMDHMS(2025, 1, 9, 12, 34, 56, 456)
+	expect(dateTime.format('YYYY-MM-DDTHH:mm:ss.SSSZ')).toBe('2025-01-09T12:34:56.456+00:00')
+})
+
+test('array', () => {
+	const dateTime = dateFrom([2025, 1, 9, 12, 34, 56, 456])
+	expect(dateTime.format('YYYY-MM-DDTHH:mm:ss.SSSZ')).toBe('2025-01-09T12:34:56.456+00:00')
+})
+
+test('time', () => {
+	const dateTime = dateFromTime(timeYMDHMS(2025, 1, 9, 12, 34, 56))
 	expect(dateTime.format()).toBe('2025-01-09T12:34:56+00:00')
 })
 
@@ -101,7 +112,7 @@ test('subtract', () => {
 	expect(dateTime.subtract(1, 'y').format()).toBe('2024-01-09T12:34:56+00:00')
 })
 
-test('startOf', () => {
+test('start of', () => {
 	const dateTime = dateFrom('2025-02-09 12:34:56')
 	expect(dateTime.startOf('ms').format()).toBe('2025-02-09T12:34:56+00:00')
 	expect(dateTime.startOf('s').format()).toBe('2025-02-09T12:34:56+00:00')
@@ -112,7 +123,7 @@ test('startOf', () => {
 	expect(dateTime.startOf('y').format()).toBe('2025-01-01T00:00:00+00:00')
 })
 
-test('endOf', () => {
+test('end of', () => {
 	const dateTime = dateFrom('2025-02-09 12:34:56')
 	expect(dateTime.endOf('ms').format()).toBe('2025-02-09T12:34:56+00:00')
 	expect(dateTime.endOf('s').format()).toBe('2025-02-09T12:34:56+00:00')
@@ -128,14 +139,14 @@ test('utc', () => {
 	expect(dateTime.utc().format()).toBe('2025-02-09T11:34:56Z')
 })
 
-test('utcOffset', () => {
+test('utc offset', () => {
 	const dateTime = dateFrom('2025-02-09 12:34:56+01:00')
 	expect(dateTime.utcOffset(-3).format()).toBe('2025-02-09T08:34:56-03:00')
 	expect(dateTime.utcOffset(-3).utc().format()).toBe('2025-02-09T11:34:56Z')
 	expect(dateTime.utcOffset(-3).utc().utcOffset(-3).format()).toBe('2025-02-09T08:34:56-03:00')
 })
 
-test('utcOffsetAndKeepLocalTime', () => {
+test('utc offset and keep local time', () => {
 	const dateTime = dateFrom('2025-02-09 12:34:56+01:00')
 	expect(dateTime.utcOffset(3, true).format()).toBe('2025-02-09T11:34:56+03:00')
 })

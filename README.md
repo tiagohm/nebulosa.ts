@@ -117,6 +117,16 @@ const rows = await readCsvStream(source, options) // Read CSV file from source
 readDaf(source) // Read NASA DAF file
 ```
 
+### DateTime
+
+```ts
+dateNow() // Get the current date
+dateFrom(input) // Create a date from a string, array or timestamp
+dateFromTime(time) // Create a date from a Time instance
+dateYMDHMS(year, month, day, hour, minute, second) // Create a date from year, month, day, hour, minute and second
+dateUnix(seconds) // Create a date from Unix timestamp
+```
+
 ### Distance
 
 ```ts
@@ -554,6 +564,8 @@ timeNormalize(2460650, 8.37456, 0, Timescale.UTC) // Normalize day and fraction
 timeSubtract(a, b) // Subtract two Times
 toDate(time) // Convert the time to year, month, day, hour, minute, second and nanosecond
 toJulianDay(time) // Convert the time to Julian Day
+toUnix(time) // Convert the time to Unix timestamp
+toUnixMillis(time) // Convert the time to Unix milliseconds
 ut1(time) // Convert the time to UT1 scale
 utc(time) // Convert the time to UTC scale
 tai(time) // Convert the time to TAI scale

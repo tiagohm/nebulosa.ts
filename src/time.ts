@@ -205,8 +205,19 @@ export function toDate(time: Time): [number, number, number, number, number, num
 	return [year, month, day, Math.trunc(hour), Math.trunc(minute), Math.trunc(second), Math.trunc(nano)]
 }
 
+// Converts the time to Unix timestamp.
+export function toUnix(time: Time) {
+	return Math.trunc(toUnixMillis(time) / 1000)
+}
+
+// Converts the time to Unix timestamp in milliseconds.
+export function toUnixMillis(time: Time) {
+	time = utc(time)
+	return Math.trunc(time.day * (DAYSEC * 1000) + time.fraction * (DAYSEC * 1000) - 2440587.5 * DAYSEC * 1000)
+}
+
 // Converts the time to Julian day.
-export function toJulianDay(time: Time): number {
+export function toJulianDay(time: Time) {
 	return time.day + time.fraction
 }
 

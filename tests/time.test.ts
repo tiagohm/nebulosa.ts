@@ -7,7 +7,7 @@ import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // biome-ignore format: too long
-import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, tt, ut1, utc, } from '../src/time'
+import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, toUnix, toUnixMillis, tt, ut1, utc, } from '../src/time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = timeNormalize(expected.day, expected.fraction)
@@ -49,7 +49,7 @@ test('time', () => {
 	expect(t.scale).toBe(Timescale.TT)
 })
 
-test('timeUnix', () => {
+test('time unix', () => {
 	let t = timeUnix(0)
 	expect(t.day).toBe(2440588)
 	expect(t.fraction).toBe(-0.5)
@@ -61,14 +61,14 @@ test('timeUnix', () => {
 	expect(t.scale).toBe(Timescale.TAI)
 })
 
-test('timeMJD', () => {
+test('time MJD', () => {
 	const t = timeMJD(51544, Timescale.UT1)
 	expect(t.day).toBe(J2000)
 	expect(t.fraction).toBe(-0.5)
 	expect(t.scale).toBe(Timescale.UT1)
 })
 
-test('timeYMDHMS', () => {
+test('time YMDHMS', () => {
 	let t = timeYMDHMS(2022, 1, 1, 12, 0, 0)
 	expect(t.day).toBe(2459581)
 	expect(t.fraction).toBeCloseTo(0, 14)
@@ -95,13 +95,13 @@ test('timeYMDHMS', () => {
 	expect(t.scale).toBe(Timescale.TCG)
 })
 
-test('timeYMD', () => {
+test('time YMD', () => {
 	const t = timeYMD(2025, 5, 5, 0, Timescale.TT)
 	expect(t.day + t.fraction).toBe(2460800.5)
 	expect(t.scale).toBe(Timescale.TT)
 })
 
-test('timeJulian', () => {
+test('time julian', () => {
 	let t = timeJulian(2024, Timescale.TCG)
 	expect(t.day).toBe(2460311)
 	expect(t.fraction).toBe(0)
@@ -113,14 +113,14 @@ test('timeJulian', () => {
 	expect(t.scale).toBe(Timescale.TCG)
 })
 
-test('timeBesselian', () => {
+test('time besselian', () => {
 	const t = timeBesselian(1950, Timescale.TCB)
 	expect(t.day).toBe(2433282)
 	expect(t.fraction).toBe(0.42345904977992177)
 	expect(t.scale).toBe(Timescale.TCB)
 })
 
-test('timGPS', () => {
+test('tim GPS', () => {
 	const t = timeGPS(630720013)
 	expect(t.day).toBe(J2000)
 	expect(t.fraction).toBe(-0.4996296167373657)
@@ -132,13 +132,30 @@ test('subtract', () => {
 	expect(dt).toBeCloseTo((2 * 60 * 60) / DAYSEC, 16)
 })
 
-test('toDate', () => {
+test('to date', () => {
 	expect(toDate(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toEqual([2020, 1, 1, 12, 0, 0, 0])
 	expect(toDate(timeYMDHMS(2020, 1, 1, 23, 59, 59))).toEqual([2020, 1, 1, 23, 59, 59, 0])
 	expect(toDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))).toEqual([2020, 1, 1, 23, 59, 59, 500000000])
 	expect(toDate(time(2460677, 0.503116, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
 	expect(toDate(time(2460678, -0.496884, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
 	expect(toDate(timeJulian(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
+})
+
+test('to unix', () => {
+	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toBe(1577880000)
+})
+
+test('to unix milliseconds', () => {
+	expect(toUnixMillis(timeYMDHMS(2020, 1, 1, 12, 0, 0.005))).toBe(1577880000005)
+})
+
+test('to unix with scale', () => {
+	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TAI))).toBe(1577879963)
+	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TT))).toBe(1577879930)
+	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TCG))).toBe(1577879929)
+	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TDB))).toBe(1577879930)
+	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.UT1))).toBe(1577880000)
+	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.UTC))).toBe(1577880000)
 })
 
 test('ut1', () => {
@@ -320,9 +337,9 @@ test('extra', () => {
 		expect(f.extra?.tcb).toBe(t)
 		expect(t.extra?.tdb).toBe(f)
 	}
-})
+}, 200)
 
-test('tdbMinusTtByFairheadAndBretagnon1990', () => {
+test('tdb minus tt by Fairhead and Bretagnon 1990', () => {
 	expect(tdbMinusTtByFairheadAndBretagnon1990(time(2448031, 0.5, Timescale.TDB))).toBeCloseTo(0.0011585185926349208, 16)
 
 	const t0 = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TDB)
@@ -354,7 +371,7 @@ test('era', () => {
 	expect(t.extra?.era).toBeCloseTo(hour(13.088607043262001639), 15)
 })
 
-test('meanObliquity', () => {
+test('mean obliquity', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	expect(meanObliquity(t)).toBe(t.extra!.meanObliquity!)
 	expect(t.extra?.meanObliquity).toBeCloseTo(0.409045445708786315, 15)
@@ -372,13 +389,13 @@ test('precession', () => {
 	expect(t.extra?.precession).toEqual([0.9999871819115399, -0.004643833528063321, -0.0020176280083981767, 0.004643833647273387, 0.9999892173356966, -0.000004625710173677966, 0.0020176277340206686, -0.000004743877952184672, 0.9999979645758397])
 })
 
-test('precessionNutation', () => {
+test('precession-nutation matrix', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	expect(precessionNutationMatrix(t)).toBe(t.extra!.precessionNutation!)
 	expect(t.extra?.precessionNutation).toEqual([0.9999876216446774, -0.004563455260357874, -0.0019827842818092144, 0.004563440392430343, 0.9999895873794092, -0.000012022632120134435, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
 })
 
-test('equationOfOrigins', () => {
+test('equation of origins', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	expect(equationOfOrigins(t)).toBe(t.extra!.equationOfOrigins!)
 	expect(t.extra?.equationOfOrigins).toEqual([0.9999980342134646, 0.000000011522914443798382, -0.001982818500615607, -0.00000001742012200722093, 0.9999999999955772, -0.0000029741367242157103, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])

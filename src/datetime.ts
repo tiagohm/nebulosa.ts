@@ -1,4 +1,4 @@
-import dayjs, { type ConfigType, type ConfigTypeMap, type Dayjs } from 'dayjs'
+import dayjs, { type ConfigType, type Dayjs } from 'dayjs'
 import arraySupport from 'dayjs/plugin/arraySupport'
 import dayOfYear from 'dayjs/plugin/dayOfYear'
 import isBetween from 'dayjs/plugin/isBetween'
@@ -11,6 +11,7 @@ import isYesterday from 'dayjs/plugin/isYesterday'
 import minMax from 'dayjs/plugin/minMax'
 // import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
+import { type Time, toUnix } from './time'
 
 dayjs.extend(utc)
 dayjs.extend(arraySupport)
@@ -33,13 +34,19 @@ export function dateNow(isUtc: boolean = false): DateTime {
 }
 
 // Creates a date from a variety of input formats
-export function dateFrom(date: Exclude<ConfigType, ConfigTypeMap['arraySupport'] | null | undefined>, isUtc: boolean = false): DateTime {
+export function dateFrom(date: Exclude<ConfigType, null | undefined>, isUtc: boolean = false): DateTime {
+	if (Array.isArray(date) && date[1] !== undefined) date[1]--
 	return isUtc ? dayjs.utc(date) : dayjs(date)
 }
 
+// Creates a date from a Time instance.
+export function dateFromTime(time: Time) {
+	return dateUnix(toUnix(time))
+}
+
 // Creates a date from year, month, day, hour, minute, second, and millisecond
-export function dateYMDHMS(year: number, month: number = 1, day: number = 1, hour: number = 0, minute: number = 0, second: number = 0, millsecond: number = 0): DateTime {
-	return dayjs([year, month - 1, day, hour, minute, second, millsecond])
+export function dateYMDHMS(year: number, month: number = 1, day: number = 1, hour: number = 0, minute: number = 0, second: number = 0, millisecond: number = 0, isUtc: boolean = false): DateTime {
+	return dateFrom([year, month, day, hour, minute, second, millisecond], isUtc)
 }
 
 // Creates a date from a Unix timestamp
