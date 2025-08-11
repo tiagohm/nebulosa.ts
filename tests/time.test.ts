@@ -7,7 +7,7 @@ import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // biome-ignore format: too long
-import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselian, timeGPS, timeJulian, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, toUnix, toUnixMillis, tt, ut1, utc, } from '../src/time'
+import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, toUnix, toUnixMillis, tt, ut1, utc, } from '../src/time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = timeNormalize(expected.day, expected.fraction)
@@ -102,19 +102,19 @@ test('time YMD', () => {
 })
 
 test('time julian', () => {
-	let t = timeJulian(2024, Timescale.TCG)
+	let t = timeJulianYear(2024)
 	expect(t.day).toBe(2460311)
 	expect(t.fraction).toBe(0)
-	expect(t.scale).toBe(Timescale.TCG)
+	expect(t.scale).toBe(Timescale.TT)
 
-	t = timeJulian(1975, Timescale.TCG)
+	t = timeJulianYear(1975, Timescale.TCG)
 	expect(t.day).toBe(2442414)
 	expect(t.fraction).toBe(-0.25)
 	expect(t.scale).toBe(Timescale.TCG)
 })
 
 test('time besselian', () => {
-	const t = timeBesselian(1950, Timescale.TCB)
+	const t = timeBesselianYear(1950, Timescale.TCB)
 	expect(t.day).toBe(2433282)
 	expect(t.fraction).toBe(0.42345904977992177)
 	expect(t.scale).toBe(Timescale.TCB)
@@ -138,7 +138,7 @@ test('to date', () => {
 	expect(toDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))).toEqual([2020, 1, 1, 23, 59, 59, 500000000])
 	expect(toDate(time(2460677, 0.503116, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
 	expect(toDate(time(2460678, -0.496884, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
-	expect(toDate(timeJulian(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
+	expect(toDate(timeJulianYear(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
 })
 
 test('to unix', () => {

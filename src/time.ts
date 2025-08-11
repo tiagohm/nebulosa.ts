@@ -138,12 +138,12 @@ export function timeMJD(mjd: number, scale: Timescale = Timescale.UTC) {
 }
 
 // Julian epoch year as floating point value like 2000.0.
-export function timeJulian(epoch: number, scale: Timescale = Timescale.UTC) {
+export function timeJulianYear(epoch: number, scale: Timescale = Timescale.TT) {
 	return time(J2000 + (epoch - 2000) * DAYSPERJY, 0, scale)
 }
 
 // Besselian epoch year as floating point value like 1950.0.
-export function timeBesselian(epoch: number, scale: Timescale = Timescale.UTC) {
+export function timeBesselianYear(epoch: number, scale: Timescale = Timescale.TT) {
 	return timeMJD(15019.81352 + (epoch - 1900) * DAYSPERTY, scale)
 }
 

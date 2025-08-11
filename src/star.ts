@@ -2,10 +2,10 @@ import type { Mutable } from 'utility-types'
 import type { Angle } from './angle'
 import type { PositionAndVelocity } from './astrometry'
 import { eraStarpmpv, eraStarpv } from './erfa'
-import { type Time, Timescale, tdb, timeJulian } from './time'
+import { type Time, Timescale, tdb, timeJulianYear } from './time'
 import type { Velocity } from './velocity'
 
-const DEFAULT_EPOCH = timeJulian(2000, Timescale.TDB)
+const DEFAULT_EPOCH = timeJulianYear(2000, Timescale.TDB)
 
 export type Star = PositionAndVelocity & {
 	readonly ra: Angle

@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
 import { deg, hour } from '../src/angle'
 import { constellation } from '../src/constellation'
-import { Timescale, timeBesselian } from '../src/time'
+import { Timescale, timeBesselianYear } from '../src/time'
 
-const B1875 = timeBesselian(1875, Timescale.TT)
-const B1950 = timeBesselian(1950, Timescale.TT)
+const B1875 = timeBesselianYear(1875, Timescale.TT)
+const B1950 = timeBesselianYear(1950, Timescale.TT)
 
 test('constellation', () => {
 	expect(constellation(hour(9), deg(65), B1950)).toBe('UMA')

@@ -2,7 +2,7 @@ import { B1950_MATRIX, ECLIPTIC_B9150_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX,
 import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa'
 import { type Mat3, matClone, matIdentity, matMul, matRotX, matTranspose } from './mat3'
-import { precessionNutationMatrix, type Time, Timescale, timeJulian, trueObliquity, tt } from './time'
+import { precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from './time'
 
 export type CoordinateFrame = CartesianCoordinate
 
@@ -10,7 +10,7 @@ export interface Frame {
 	readonly rotationAt: (time: Time) => Readonly<Mat3>
 }
 
-const EQUINOX_J2000 = timeJulian(2000, Timescale.TT)
+const EQUINOX_J2000 = timeJulianYear(2000, Timescale.TT)
 
 function equinoxFrameByCapitaine(m: Readonly<Mat3>, from: Time, to: Time): Frame {
 	const a = precessionMatrixCapitaine(from, to)

@@ -5,9 +5,9 @@ import type { Distance } from './distance'
 import { eraS2p } from './erfa'
 import { precessionMatrixCapitaine } from './frame'
 import { matMulTransposeVec, matMulVec } from './mat3'
-import { type Time, Timescale, timeJulian } from './time'
+import { type Time, Timescale, timeJulianYear } from './time'
 
-const J2000 = timeJulian(2000, Timescale.TT)
+const J2000 = timeJulianYear(2000, Timescale.TT)
 
 // Convert the FK5 spherical coordinate to FK5 cartesian coordinate.
 export function fk5(ra: Angle, dec: Angle, distance: Distance = 1): CartesianCoordinate {

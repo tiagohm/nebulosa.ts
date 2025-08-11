@@ -1,15 +1,15 @@
 import { type Angle, normalizeAngle, toDeg, toHour } from './angle'
 import { eraC2s } from './erfa'
 import { fk5, precessFk5 } from './fk5'
-import { type Time, Timescale, timeBesselian, timeJulian } from './time'
+import { type Time, Timescale, timeBesselianYear, timeJulianYear } from './time'
 import { type BinarySearchOptions, binarySearch } from './util'
 
 export type Constellation = keyof typeof CONSTELLATIONS
 
 export type ConstellationIAU = (typeof CONSTELLATIONS)[Constellation]['iau']
 
-const J2000 = timeJulian(2000, Timescale.TT)
-const B1875 = timeBesselian(1875, Timescale.TT)
+const J2000 = timeJulianYear(2000, Timescale.TT)
+const B1875 = timeBesselianYear(1875, Timescale.TT)
 
 const BINARY_SEARCH_OPTIONS: BinarySearchOptions = { positive: true }
 

@@ -554,8 +554,8 @@ time(2460650, 0.37456, Timescale.UTC, true) // Time from day and fraction
 timeUnix(1735133314, Timescale.UTC) // Time from unix seconds
 timeNow() // Time from now
 timeMJD(51544, Timescale.UTC) // Time from MJD date
-timeJulian(2000.5, Timescale.UTC) // Time from Julian date
-timeBesselian(1950.5, Timescale.UTC) // Time from Besselian date
+timeJulianYear(2000.5, Timescale.UTC) // Time from Julian epoch year
+timeBesselianYear(1950.5, Timescale.UTC) // Time from Besselian epoch year
 timeYMDHMS(2024, 12, 25, 9, 10, 11.5, Timescale.UTC) // Time from year, month, day, hour, minute and second
 timeYMD(2024, 12, 25, Timescale.UTC) // Time from year, month and day
 timeYMDF(2024, 12, 25, 0.5, Timescale.UTC) // Time from year, month, day and fraction of day
