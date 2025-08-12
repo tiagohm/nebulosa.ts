@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 dependencies = [
     "astropy>=7.0.1",
     "pandas>=2.2.3",
+    "sgp4>=2.24",
     "skyfield>=1.53",
 ]
 

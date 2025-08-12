@@ -7,6 +7,7 @@ from astropy.coordinates.builtin_frames import CIRS, FK5, GCRS, ICRS, AltAz, HAD
 from astropy.coordinates.earth_orientation import precession_matrix_Capitaine
 from astropy.time import Time
 from astropy.utils import iers
+from sgp4.api import Satrec
 
 iers.conf.auto_download = False
 iers.conf.iers_degraded_accuracy = 'warn'
@@ -168,11 +169,24 @@ def hadec_star():
     print_sky_coord(c)
 
 
+def satellite():
+    s = '1 25544U 98067A   25222.48428578  .00007827  00000+0  14282-3 0  9992'
+    t = '2 25544  51.6367  37.9417 0001853 175.3844 230.1801 15.50428464523587'
+    satellite = Satrec.twoline2rv(s, t)
+    _, r, v = satellite.sgp4(2460898, 0.24919927015596788)
+    print_vector(r)
+    print_vector(v)
+
+
 # UTILS
 
 
 def print_matrix(m):
     print('{0:.18f}, {1:.18f}, {2:.18f}, {3:.18f}, {4:.18f}, {5:.18f}, {6:.18f}, {7:.18f}, {8:.18f}'.format(m[0, 0], m[0, 1], m[0, 2], m[1, 0], m[1, 1], m[1, 2], m[2, 0], m[2, 1], m[2, 2]))
+
+
+def print_vector(v):
+    print('{0:.18f}, {1:.18f}, {2:.18f}'.format(v[0], v[1], v[2]))
 
 
 def print_cartesian_sky_coord(c: SkyCoord):
@@ -249,3 +263,5 @@ match args[0]:
         observed_altaz_star()
     case 'hadec_star':
         hadec_star()
+    case 'satellite':
+        satellite()
