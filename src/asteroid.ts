@@ -6,7 +6,7 @@ import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { type Mat3, matMulVec, matTranspose } from './mat3'
 import { type MPCOrbit, type MPCOrbitComet, unpackDate } from './mpcorb'
-import { type Time, Timescale, tdb, time, timeSubtract, timeYMD, tt } from './time'
+import { type Time, Timescale, tdb, time, timeSubtract, timeYMD } from './time'
 import { type MutVec3, type Vec3, vecAngle, vecCross, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecPlus } from './vec3'
 
 const REFERENCE_FRAME = matTranspose(ECLIPTIC_J2000_MATRIX)
@@ -243,7 +243,7 @@ export class KeplerOrbit implements OsculatingElements {
 	}
 
 	at(time: Time) {
-		const pv = propagate(this.position, this.velocity, tt(this.epoch), tt(time), this.propagation)
+		const pv = propagate(this.position, this.velocity, this.epoch, time, this.propagation)
 
 		if (this.rotation) {
 			matMulVec(this.rotation, pv[0], pv[0] as never)
@@ -417,7 +417,7 @@ function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate,
 		return x * (br0 * c[1] + x * (b2rv * c[2] + x * bq * c[3]))
 	}
 
-	const dt = timeSubtract(t1, t0) // T1 - T0
+	const dt = timeSubtract(t1, t0, Timescale.TT) // T1 - T0
 	let x = Math.max(-bound, Math.min(dt / bq, bound))
 
 	let kfun = kepler(x)

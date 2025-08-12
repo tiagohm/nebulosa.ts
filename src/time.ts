@@ -191,8 +191,10 @@ export function timeNormalize(day: number, fraction: number, divisor: number = 0
 }
 
 // Subtracts two Times.
-export function timeSubtract(a: Time, b: Time) {
-	return a.day - b.day + (a.fraction - b.fraction)
+export function timeSubtract(a: Time, b: Time, scale: Timescale = a.scale) {
+	const c = timeConvert(a, scale)
+	const d = timeConvert(b, scale)
+	return c.day - d.day + (c.fraction - d.fraction)
 }
 
 // Converts the time to year, month, day, hour, minute, second and nanosecond.
@@ -221,42 +223,41 @@ export function toJulianDay(time: Time) {
 	return time.day + time.fraction
 }
 
+// Caches the timescale for target based on source.
 function timescale(target: Time, source: Time) {
 	const e = extra(target, source.extra)
 
-	switch (source.scale) {
-		case Timescale.UT1:
-			e.ut1 = source
-			break
-		case Timescale.UTC:
-			e.utc = source
-			break
-		case Timescale.TAI:
-			e.tai = source
-			break
-		case Timescale.TT:
-			e.tt = source
-			break
-		case Timescale.TCG:
-			e.tcg = source
-			break
-		case Timescale.TDB:
-			e.tdb = source
-			break
-		case Timescale.TCB:
-			e.tcb = source
-			break
-	}
+	if (source.scale === Timescale.UT1) e.ut1 = source
+	else if (source.scale === Timescale.UTC) e.utc = source
+	else if (source.scale === Timescale.TAI) e.tai = source
+	else if (source.scale === Timescale.TT) e.tt = source
+	else if (source.scale === Timescale.TCG) e.tcg = source
+	else if (source.scale === Timescale.TDB) e.tdb = source
+	else if (source.scale === Timescale.TCB) e.tcb = source
 
 	if (source.location) target.location = source.location
 }
 
+// Returns the extra object, creating it if necessary.
 function extra(target: Time, extra?: TimeExtra) {
 	return (target.extra ??= extra ?? {})
 }
 
-function newTime(a: [number, number], time: Time, scale: Timescale = time.scale): Time {
-	return { ...time, day: a[0], fraction: a[1], scale }
+// Copies the day and fraction from source to a new Time.
+function newTime(source: [number, number], time: Time, scale: Timescale = time.scale): Time {
+	return { ...time, day: source[0], fraction: source[1], scale }
+}
+
+// Converts the given time to the specified scale.
+export function timeConvert(time: Time, scale: Timescale) {
+	if (time.scale === scale) return time
+	else if (scale === Timescale.UTC) return utc(time)
+	else if (scale === Timescale.UT1) return ut1(time)
+	else if (scale === Timescale.TAI) return tai(time)
+	else if (scale === Timescale.TT) return tt(time)
+	else if (scale === Timescale.TCG) return tcg(time)
+	else if (scale === Timescale.TDB) return tdb(time)
+	return time
 }
 
 // Converts the given time to UT1 Time.

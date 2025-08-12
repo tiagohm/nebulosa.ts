@@ -7,7 +7,7 @@ import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // biome-ignore format: too long
-import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, toUnix, toUnixMillis, tt, ut1, utc, } from '../src/time'
+import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, toUnix, toUnixMillis, tt, ut1, utc } from '../src/time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = timeNormalize(expected.day, expected.fraction)
@@ -101,7 +101,7 @@ test('time YMD', () => {
 	expect(t.scale).toBe(Timescale.TT)
 })
 
-test('time julian', () => {
+test('time julian year', () => {
 	let t = timeJulianYear(2024)
 	expect(t.day).toBe(2460311)
 	expect(t.fraction).toBe(0)
@@ -113,7 +113,7 @@ test('time julian', () => {
 	expect(t.scale).toBe(Timescale.TCG)
 })
 
-test('time besselian', () => {
+test('time besselian year', () => {
 	const t = timeBesselianYear(1950, Timescale.TCB)
 	expect(t.day).toBe(2433282)
 	expect(t.fraction).toBe(0.42345904977992177)
