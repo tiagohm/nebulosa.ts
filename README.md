@@ -203,9 +203,8 @@ hipsSurveys() // List available HiPS
 ### Horizons
 
 ```ts
-observer(command, center, coord, startTime, endTime, quantities, options)
-observerWithOsculatingElements(parameters, coord, startTime, endTime, quantities, options)
-observerWithTle(tle, coord, startTime, endTime, quantities, options)
+observer(input, center, coord, startTime, endTime, quantities, options)
+vector(input, center, coord, startTime, endTime, options)
 spkFile(id, startTime, endTime)
 ```
 
