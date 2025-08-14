@@ -3,7 +3,7 @@ import { deg } from '../src/angle'
 import { readDaf } from '../src/daf'
 import { dateFrom } from '../src/datetime'
 import { meter } from '../src/distance'
-import { type ObserverWithOsculatingElements, type ObserverWithTLE, observer, Quantity, spkFile, vector } from '../src/horizons'
+import { elements, type ObserverWithOsculatingElements, type ObserverWithTLE, observer, Quantity, spkFile, vector } from '../src/horizons'
 import { bufferSource } from '../src/io'
 import { extendedPermanentAsteroidNumber } from '../src/naif'
 import { readSpk } from '../src/spk'
@@ -15,7 +15,7 @@ const COORD = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as 
 
 describe.skip('observer', () => {
 	test('sun', async () => {
-		const data = await observer('10', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+		const data = await observer('10', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '311.97007', '-17.86472', ''])
@@ -23,7 +23,7 @@ describe.skip('observer', () => {
 	})
 
 	test('ceres using spk id', async () => {
-		const data = await observer('DES=2000001;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+		const data = await observer('DES=2000001;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '324.49915', '-21.67686', ''])
@@ -31,7 +31,7 @@ describe.skip('observer', () => {
 	})
 
 	test('ceres using iau number', async () => {
-		const data = await observer('1;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+		const data = await observer('1;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '324.49915', '-21.67686', ''])
@@ -39,7 +39,7 @@ describe.skip('observer', () => {
 	})
 
 	test('103P/Hartley 2', async () => {
-		const data = await observer('DES=1000041;CAP;NOFRAG', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+		const data = await observer('DES=1000041;CAP;NOFRAG', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '196.45927', '-15.59045', ''])
@@ -47,7 +47,7 @@ describe.skip('observer', () => {
 	})
 
 	test('heliocentric', async () => {
-		const data = await observer('3517;', '500@10', false, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+		const data = await observer('3517;', '500@10', false, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '154.63538', '8.64237', ''])
@@ -55,7 +55,7 @@ describe.skip('observer', () => {
 	})
 
 	test('baricentric', async () => {
-		const data = await observer('3517;', '500@0', false, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+		const data = await observer('3517;', '500@0', false, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '154.79375', '8.58857', ''])
@@ -63,7 +63,7 @@ describe.skip('observer', () => {
 	})
 
 	test('geocentric', async () => {
-		const data = await observer('3517;', 'geo', false, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+		const data = await observer('3517;', 'geo', false, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '168.06103', '2.18497', ''])
@@ -72,7 +72,7 @@ describe.skip('observer', () => {
 
 	test('osculating elements', async () => {
 		const input: ObserverWithOsculatingElements = { epoch: 2460049.5, ec: 0.6183399929327511, om: deg(30.04427847488657), w: deg(30.56835826458952), i: deg(19.84449491210952), tpqr: { qr: 0.3107780828530178, tp: 2459989.479453452084 } }
-		const data = await observer(input, 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+		const data = await observer(input, 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '283.27736', '-32.07919', ''])
@@ -81,21 +81,29 @@ describe.skip('observer', () => {
 
 	test('tle', async () => {
 		const input: ObserverWithTLE = { line1: 'ISS (ZARYA)', line2: '1 25544U 98067A   25029.70562785  .00020566  00000+0  35850-3 0  9990', line3: '2 25544  51.6387 272.9482 0002126 142.5311 315.5480 15.50695229493684' }
-		const data = await observer(input, 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+		const data = await observer(input, 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2025-Jan-29 13:05', '', '', '246.97075', '-50.81172', ''])
 		expect(data[12]).toEqual(['2025-Jan-29 14:05', '', '', '22.50027', '-17.81843', ''])
 	})
 
+	test('timezone', async () => {
+		const data = await observer('10', 'coord', COORD, START_TIME.subtract(3, 'h'), END_TIME.subtract(3, 'h'), [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5, timeZone: -180 })
+
+		expect(data).toHaveLength(13)
+		expect(data[0]).toEqual(['2025-Jan-29 10:05', '', '', '311.97007', '-17.86472', ''])
+		expect(data[12]).toEqual(['2025-Jan-29 11:05', '', '', '312.01347', '-17.85339', ''])
+	})
+
 	test('multiple matches', async () => {
-		const data = await observer('DES=1000041;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+		const data = await observer('DES=1000041;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toBeEmpty()
 	})
 
 	test('no matches found', async () => {
-		const data = await observer('DES=1;CAP;NOFRAG', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSizeInMinutes: 5 })
+		const data = await observer('DES=1;CAP;NOFRAG', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toBeEmpty()
 	})
@@ -103,7 +111,7 @@ describe.skip('observer', () => {
 
 describe.skip('vector', () => {
 	test('heliocentric', async () => {
-		const data = await vector('3517;', '500@10', false, START_TIME, END_TIME, { stepSizeInMinutes: 5 })
+		const data = await vector('3517;', '500@10', false, START_TIME, END_TIME, { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', '-2.149567184894454E+00', '1.018917084516906E+00', '3.615190236263389E-01', '-5.374682433448360E-03', '-8.633686995748143E-03', '-3.234280751454736E-03', ''])
@@ -111,7 +119,7 @@ describe.skip('vector', () => {
 	})
 
 	test('baricentric', async () => {
-		const data = await vector('3517;', '500@0', false, START_TIME, END_TIME, { stepSizeInMinutes: 5 })
+		const data = await vector('3517;', '500@0', false, START_TIME, END_TIME, { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', '-2.155092115916659E+00', '1.014250359144854E+00', '3.596876812112615E-01', '-5.367440495937387E-03', '-8.636673520083184E-03', '-3.235707998257602E-03', ''])
@@ -119,7 +127,7 @@ describe.skip('vector', () => {
 	})
 
 	test('geocentric', async () => {
-		const data = await vector('3517;', 'geo', false, START_TIME, END_TIME, { stepSizeInMinutes: 5 })
+		const data = await vector('3517;', 'geo', false, START_TIME, END_TIME, { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', '-1.522579194562664E+00', '3.218490800192935E-01', '5.934383951825029E-02', '8.180206701248126E-03', '1.476927601421201E-03', '1.148949424888624E-03', ''])
@@ -127,11 +135,43 @@ describe.skip('vector', () => {
 	})
 
 	test('coord', async () => {
-		const data = await vector('3517;', 'coord', COORD, START_TIME, END_TIME, { stepSizeInMinutes: 5 })
+		const data = await vector('3517;', 'coord', COORD, START_TIME, END_TIME, { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', '-1.522571179446716E+00', '3.218151992904175E-01', '5.931926904376639E-02', '8.393662092679492E-03', '1.527803485374843E-03', '1.148426752101660E-03', ''])
 		expect(data[12]).toEqual(['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', '-1.522221951859907E+00', '3.218801637522551E-01', '5.936719611723293E-02', '8.366910724741850E-03', '1.589591091720874E-03', '1.152078125220753E-03', ''])
+	})
+})
+
+describe.skip('elements', () => {
+	test('geocentric', async () => {
+		const data = await elements('3517;', 'geo', START_TIME, END_TIME, { stepSize: 5 })
+
+		expect(data).toHaveLength(13)
+		// biome-ignore format: too long!
+		expect(data[0]).toEqual(['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', '5.075989856598472E+04', '6.406629484159172E-01', '1.767762192320328E+02', '1.110590308148978E+02', '8.556232886619721E+00', '2.460874201469467E+06', '3.809263484325090E+04', '-6.443610332109937E+06', '2.942907470343795E+02', '-1.262168735956867E-05', '9.999999999999998E+99', '9.999999999999998E+99', ''])
+		// biome-ignore format: too long!
+		expect(data[12]).toEqual(['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', '5.084415528751679E+04', '6.423611902514889E-01', '1.767742701450048E+02', '1.111126379080121E+02', '8.541177967401689E+00', '2.460874193559542E+06', '3.803618421497873E+04', '-6.432175646621299E+06', '2.943646228293845E+02', '-1.263417241945257E-05', '9.999999999999998E+99', '9.999999999999998E+99', ''])
+	})
+
+	test('heliocentric', async () => {
+		const data = await elements('3517;', '500@10', START_TIME, END_TIME, { stepSize: 5 })
+
+		expect(data).toHaveLength(13)
+		// biome-ignore format: too long!
+		expect(data[0]).toEqual(['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', '9.626125065683018E-02', '2.024805809650671E+00', '3.153931420013101E+00', '1.870973460247965E+02', '1.826155633837200E+02', '2.460240063130166E+06', '2.938957881663205E-01', '1.366562539368875E+02', '1.435996917076657E+02', '2.240476920041642E+00', '2.456148030432614E+00', '1.224923984947583E+03', ''])
+		// biome-ignore format: too long!
+		expect(data[12]).toEqual(['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', '9.626123315860895E-02', '2.024805848446700E+00', '3.153931414822223E+00', '1.870973460879077E+02', '1.826155521514409E+02', '2.460240063081718E+06', '2.938957882552231E-01', '1.366685138746856E+02', '1.436102708938890E+02', '2.240476919589817E+00', '2.456147990732935E+00', '1.224923984577047E+03', ''])
+	})
+
+	test('baricentric', async () => {
+		const data = await elements('3517;', '500@0', START_TIME, END_TIME, { stepSize: 5 })
+
+		expect(data).toHaveLength(13)
+		// biome-ignore format: too long!
+		expect(data[0]).toEqual(['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', '9.790299987687517E-02', '2.022744140036757E+00', '3.153227454124507E+00', '1.871371001231866E+02', '1.834551901325484E+02', '2.460243064997569E+06', '2.937404025330726E-01', '1.357022326736086E+02', '1.428859289833058E+02', '2.242269001848668E+00', '2.461793863660579E+00', '1.225571957059830E+03', ''])
+		// biome-ignore format: too long!
+		expect(data[12]).toEqual(['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', '9.790212975450596E-02', '2.022747896009554E+00', '3.153227315497593E+00', '1.871371018010009E+02', '1.834554671611777E+02', '2.460243065249070E+06', '2.937400093705607E-01', '1.357142163316099E+02', '1.428962042586936E+02', '2.242271002656385E+00', '2.461794109303217E+00', '1.225573597452469E+03', ''])
 	})
 })
 

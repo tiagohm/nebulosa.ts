@@ -16,6 +16,7 @@ export type OutputFormat = 'json' | 'text'
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html#center
 export type ObserverSiteCenter = `coord@${number}` | 'coord' | `${string}@${number}` | 'geo' | '@TLE'
+export type BodyCenter = 'geo' | `500@${number}`
 
 export type ObserverSiteCoord = readonly [Angle, Angle, Distance] | `${number},${number},${number}` | 0 | false | undefined
 
@@ -49,12 +50,15 @@ export type RangeUnit = 'AU' | 'KM'
 
 export type TimeOfPeriapsisType = 'ABSOLUTE' | 'RELATIVE'
 
+export type StepSizeUnit = 'd' | 'm' | 'h' | 'y' | 'mo' | 'days' | 'minutes' | 'hours' | 'years' | 'months' | 'unitless'
+
 export type HorizonsQueryParameterKey = keyof HorizonsEphemerisSpecificParameters | keyof HorizonsSpkFileParameters | keyof HorizonsHeliocentricEclipticOsculatingElementParameters | keyof HorizonsTLEParameters
 
 export type HorizonsQueryParameters = Record<HorizonsQueryParameterKey, unknown>
 
 export interface ObserverVectorElementsOptions extends Pick<ReadCsvOptions, 'skipFirstLine'> {
-	stepSizeInMinutes?: number
+	stepSize?: number
+	stepSizeUnit?: StepSizeUnit
 	refractionCorrection?: boolean
 	extraPrecision?: boolean
 	coordinateType?: CoordinateType
@@ -69,6 +73,8 @@ export interface ObserverVectorElementsOptions extends Pick<ReadCsvOptions, 'ski
 	outputUnits?: OutputUnits
 	suppressRangeRate?: boolean
 	vectorCorrection?: VectorCorrection
+	timeZone?: string | number // +00:00 or UTC offset in minutes
+	timeOfPeriapsisType?: TimeOfPeriapsisType
 }
 
 export interface PerihelionDistanceAndTime {
@@ -270,7 +276,8 @@ export enum Quantity {
 const DEFAULT_QUANTITIES: Quantity[] = [1, 9, 20, 23, 24, 47, 48]
 
 const DEFAULT_OVE_OPTIONS: Required<ObserverVectorElementsOptions> = {
-	stepSizeInMinutes: 1,
+	stepSize: 60,
+	stepSizeUnit: 'm',
 	refractionCorrection: true,
 	extraPrecision: false,
 	coordinateType: 'GEODETIC',
@@ -286,6 +293,8 @@ const DEFAULT_OVE_OPTIONS: Required<ObserverVectorElementsOptions> = {
 	outputUnits: 'AU-D',
 	vectorCorrection: 'NONE',
 	skipFirstLine: true,
+	timeZone: '',
+	timeOfPeriapsisType: 'ABSOLUTE',
 }
 
 export async function observer(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: DateTime, endTime: DateTime, quantities: Quantity[] = DEFAULT_QUANTITIES, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
@@ -304,6 +313,17 @@ export async function vector(input: string | ObserverWithOsculatingElements | Ob
 	const parameters = structuredClone(DEFAULT_VECTOR_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, coord, options)
+	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
+	makeParametersFromOptions(parameters, options)
+	parameters.CSV_FORMAT = 'YES'
+	const response = await makeRequestAndGetResponse(parameters, 'text')
+	return parseCsvTable(await response.text(), options)
+}
+
+export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: DateTime, endTime: DateTime, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
+	const parameters = structuredClone(DEFAULT_ELEMENTS_PARAMETERS) as HorizonsQueryParameters
+	makeParametersFromInput(parameters, input)
+	makeParametersFromCenterAndCoordinates(parameters, center, undefined, options)
 	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
 	makeParametersFromOptions(parameters, options)
 	parameters.CSV_FORMAT = 'YES'
@@ -390,32 +410,33 @@ function makeParametersFromCenterAndCoordinates(parameters: HorizonsQueryParamet
 }
 
 function makeParametersFromOptions(parameters: HorizonsQueryParameters, options?: ObserverVectorElementsOptions) {
-	if (options) {
-		parameters.REF_SYSTEM = options.referenceSystem || DEFAULT_OVE_OPTIONS.referenceSystem
-		parameters.REF_PLANE = options.referencePlane || DEFAULT_OVE_OPTIONS.referencePlane
-		parameters.CAL_FORMAT = options.calendarFormat || DEFAULT_OVE_OPTIONS.calendarFormat
-		parameters.CAL_TYPE = options.calendarType || DEFAULT_OVE_OPTIONS.calendarType
-		parameters.APPARENT = (options.refractionCorrection ?? DEFAULT_OVE_OPTIONS.refractionCorrection) ? 'REFRACTED' : 'AIRLESS'
-		parameters.EXTRA_PREC = (options.extraPrecision ?? DEFAULT_OVE_OPTIONS.extraPrecision) ? 'YES' : 'NO'
-		parameters.TIME_DIGITS = options.timeDigitsPrecision || DEFAULT_OVE_OPTIONS.timeDigitsPrecision
-		parameters.ANG_FORMAT = options.angleFormat || DEFAULT_OVE_OPTIONS.angleFormat
-		parameters.RANGE_UNITS = options.rangeUnits || DEFAULT_OVE_OPTIONS.rangeUnits
-		parameters.SUPPRESS_RANGE_RATE = (options.suppressRangeRate ?? DEFAULT_OVE_OPTIONS.suppressRangeRate) ? 'YES' : 'NO'
-		parameters.SKIP_DAYLT = (options.skipDaylight ?? DEFAULT_OVE_OPTIONS.skipDaylight) ? 'YES' : 'NO'
-		parameters.OUT_UNITS = options.outputUnits ?? DEFAULT_OVE_OPTIONS.outputUnits
-		parameters.VEC_TABLE = '2' // State vector (x, y, z, vx, vy, vz)
-		parameters.VEC_CORR = options.vectorCorrection || DEFAULT_OVE_OPTIONS.vectorCorrection
+	if (options && parameters.EPHEM_TYPE !== 'SPK') {
+		const isObserver = parameters.EPHEM_TYPE === 'OBSERVER'
+		const isVector = parameters.EPHEM_TYPE === 'VECTOR'
+		const isElements = parameters.EPHEM_TYPE === 'ELEMENTS'
 
-		// TODO: Improve step size to accept other units.
-		// https://ssd-api.jpl.nasa.gov/doc/horizons.html#stepping
-		if (options.stepSizeInMinutes && parameters.EPHEM_TYPE !== 'SPK') {
-			parameters.STEP_SIZE = `${options.stepSizeInMinutes} m`
-		}
+		parameters.REF_SYSTEM = options.referenceSystem || DEFAULT_OVE_OPTIONS.referenceSystem
+		if (!isObserver) parameters.REF_PLANE = options.referencePlane || parameters.REF_PLANE || DEFAULT_OVE_OPTIONS.referencePlane
+		if (isObserver) parameters.CAL_FORMAT = options.calendarFormat || DEFAULT_OVE_OPTIONS.calendarFormat
+		parameters.CAL_TYPE = options.calendarType || DEFAULT_OVE_OPTIONS.calendarType
+		if (isObserver) parameters.APPARENT = (options.refractionCorrection ?? DEFAULT_OVE_OPTIONS.refractionCorrection) ? 'REFRACTED' : 'AIRLESS'
+		if (isObserver) parameters.EXTRA_PREC = (options.extraPrecision ?? DEFAULT_OVE_OPTIONS.extraPrecision) ? 'YES' : 'NO'
+		parameters.TIME_DIGITS = options.timeDigitsPrecision || DEFAULT_OVE_OPTIONS.timeDigitsPrecision
+		if (isObserver) parameters.ANG_FORMAT = options.angleFormat || DEFAULT_OVE_OPTIONS.angleFormat
+		if (isObserver) parameters.RANGE_UNITS = options.rangeUnits || DEFAULT_OVE_OPTIONS.rangeUnits
+		if (isObserver) parameters.SUPPRESS_RANGE_RATE = (options.suppressRangeRate ?? DEFAULT_OVE_OPTIONS.suppressRangeRate) ? 'YES' : 'NO'
+		if (isObserver) parameters.SKIP_DAYLT = (options.skipDaylight ?? DEFAULT_OVE_OPTIONS.skipDaylight) ? 'YES' : 'NO'
+		if (!isObserver) parameters.OUT_UNITS = options.outputUnits ?? DEFAULT_OVE_OPTIONS.outputUnits
+		if (isVector) parameters.VEC_TABLE = '2' // State vector (x, y, z, vx, vy, vz)
+		if (isVector) parameters.VEC_CORR = options.vectorCorrection || DEFAULT_OVE_OPTIONS.vectorCorrection
+		if (isObserver) parameters.TIME_ZONE = typeof options.timeZone === 'number' ? formatTimeZone(options.timeZone) : options.timeZone
+		if (isElements) parameters.TP_TYPE = options.timeOfPeriapsisType || DEFAULT_OVE_OPTIONS.timeOfPeriapsisType
+		if (options.stepSize) parameters.STEP_SIZE = formatStepSize(options.stepSize, options.stepSizeUnit)
 	}
 }
 
 function makeParametersFromQuantities(parameters: HorizonsQueryParameters, quantities?: Quantity[]) {
-	if (quantities?.length) {
+	if (quantities?.length && parameters.EPHEM_TYPE === 'OBSERVER') {
 		parameters.QUANTITIES = quantities.join(',')
 	}
 }
@@ -431,8 +452,21 @@ function makeQueryFromParameters(parameters: HorizonsQueryParameters) {
 		.join('&')
 }
 
+// https://ssd-api.jpl.nasa.gov/doc/horizons.html#stepping
+function formatStepSize(stepSize: number = DEFAULT_OVE_OPTIONS.stepSize, unit: StepSizeUnit = DEFAULT_OVE_OPTIONS.stepSizeUnit) {
+	return unit === 'unitless' ? stepSize.toFixed(0) : `${stepSize.toFixed(0)} ${unit}`
+}
+
+function formatTimeZone(minutes: number) {
+	const sign = minutes >= 0 ? '+' : '-'
+	const m = Math.abs(minutes)
+	const h = Math.floor(m / 60)
+	return `${sign}${h.toFixed(0).padStart(2, '0')}:${`${m % 60}`.padStart(2, '0')}`
+}
+
 function makeRequestAndGetResponse(parameters: HorizonsQueryParameters, format: OutputFormat) {
 	const query = makeQueryFromParameters(parameters)
+	console.info(`${HORIZONS_BASE_URL}?format=${format}&${query}`)
 	return fetch(`${HORIZONS_BASE_URL}?format=${format}&${query}`)
 }
 
@@ -469,6 +503,12 @@ const DEFAULT_OBSERVER_PARAMETERS: HorizonsCommonParameters = {
 const DEFAULT_VECTOR_PARAMETERS: HorizonsCommonParameters = {
 	...DEFAULT_COMMON_PARAMETERS,
 	EPHEM_TYPE: 'VECTOR',
+}
+
+const DEFAULT_ELEMENTS_PARAMETERS: HorizonsEphemerisSpecificParameters = {
+	...DEFAULT_COMMON_PARAMETERS,
+	EPHEM_TYPE: 'ELEMENTS',
+	REF_PLANE: 'ECLIPTIC',
 }
 
 const DEFAULT_SPK_PARAMETERS: HorizonsCommonParameters = {

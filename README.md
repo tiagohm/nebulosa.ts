@@ -205,6 +205,7 @@ hipsSurveys() // List available HiPS
 ```ts
 observer(input, center, coord, startTime, endTime, quantities, options)
 vector(input, center, coord, startTime, endTime, options)
+elements(input, center, startTime, endTime, options)
 spkFile(id, startTime, endTime)
 ```
 
