@@ -441,14 +441,14 @@ function makeParametersFromQuantities(parameters: HorizonsQueryParameters, quant
 	}
 }
 
-function formatQueryParameterValue(key: HorizonsQueryParameterKey, value: unknown) {
+function formatQueryParameterValue(value: unknown) {
 	return `'${encodeURIComponent(`${value}`)}'`
 }
 
 function makeQueryFromParameters(parameters: HorizonsQueryParameters) {
 	return Object.entries(parameters)
-		.filter((e) => e[1] !== undefined && e[1] !== '')
-		.map(([key, value]) => `${key}=${formatQueryParameterValue(key as never, value)}`)
+		.filter((e) => e[1] !== undefined && e[1] !== null && e[1] !== '')
+		.map(([key, value]) => `${key}=${formatQueryParameterValue(value)}`)
 		.join('&')
 }
 
@@ -461,12 +461,11 @@ function formatTimeZone(minutes: number) {
 	const sign = minutes >= 0 ? '+' : '-'
 	const m = Math.abs(minutes)
 	const h = Math.floor(m / 60)
-	return `${sign}${h.toFixed(0).padStart(2, '0')}:${`${m % 60}`.padStart(2, '0')}`
+	return `${sign}${h.toFixed(0).padStart(2, '0')}:${(m % 60).toFixed(0).padStart(2, '0')}`
 }
 
 function makeRequestAndGetResponse(parameters: HorizonsQueryParameters, format: OutputFormat) {
 	const query = makeQueryFromParameters(parameters)
-	console.info(`${HORIZONS_BASE_URL}?format=${format}&${query}`)
 	return fetch(`${HORIZONS_BASE_URL}?format=${format}&${query}`)
 }
 

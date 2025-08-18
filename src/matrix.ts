@@ -6,10 +6,10 @@ export class Matrix {
 	constructor(
 		readonly rows: number,
 		readonly cols: number,
-		data?: NumberArray,
+		data?: Readonly<NumberArray>,
 		copy: boolean = true,
 	) {
-		this.data = copy || data === undefined ? (data ? new Float64Array(data) : new Float64Array(rows * cols)) : data
+		this.data = copy || data === undefined ? (data ? new Float64Array(data) : new Float64Array(rows * cols)) : data as never
 	}
 
 	// Gets the number of cells in the matrix.
