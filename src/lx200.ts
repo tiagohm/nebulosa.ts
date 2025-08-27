@@ -6,25 +6,27 @@ import { type DateTime, dateNow } from './datetime'
 // https://soundstepper.sourceforge.net/LX200_Compatible_Commands.html
 // https://www.cloudynights.com/topic/72166-lx-200-gps-serial-commands/
 
+export type MoveDirection = 'n' | 's' | 'e' | 'w'
+
 export interface Lx200ProtocolHandler {
-	connect?: () => void
-	rightAscension: () => Angle // J2000
-	declination: () => Angle // J2000
-	longitude: (longitude?: Angle) => Angle
-	latitude: (latitude?: Angle) => Angle
-	dateTime: (date?: DateTime) => DateTime
-	tracking?: () => boolean
-	parked?: () => boolean
-	slewing?: () => boolean
-	sync?: (ra: Angle, dec: Angle) => void
-	goto?: (ra: Angle, dec: Angle) => void
-	move?: (direction: 'n' | 's' | 'w' | 'e', enabled: boolean) => void
-	abort?: () => void
-	disconnect?: () => void
+	connect?: (server: Lx200ProtocolServer) => void
+	rightAscension: (server: Lx200ProtocolServer) => Angle // J2000
+	declination: (server: Lx200ProtocolServer) => Angle // J2000
+	longitude: (server: Lx200ProtocolServer, longitude?: Angle) => Angle
+	latitude: (server: Lx200ProtocolServer, latitude?: Angle) => Angle
+	dateTime: (server: Lx200ProtocolServer, date?: DateTime) => DateTime
+	tracking?: (server: Lx200ProtocolServer) => boolean
+	parked?: (server: Lx200ProtocolServer) => boolean
+	slewing?: (server: Lx200ProtocolServer) => boolean
+	sync?: (server: Lx200ProtocolServer, ra: Angle, dec: Angle) => void
+	goto?: (server: Lx200ProtocolServer, ra: Angle, dec: Angle) => void
+	move?: (server: Lx200ProtocolServer, direction: MoveDirection, enabled: boolean) => void
+	abort?: (server: Lx200ProtocolServer) => void
+	disconnect?: (server: Lx200ProtocolServer) => void
 }
 
 export interface Lx200ProtocolServerOptions {
-	protocol: Lx200ProtocolHandler
+	handler: Lx200ProtocolHandler
 	name?: string
 	version?: string
 }
@@ -42,13 +44,13 @@ export class Lx200ProtocolServer {
 	private dateTime = dateNow()
 
 	constructor(
-		private readonly host: string,
-		private readonly port: number,
-		private readonly options: Lx200ProtocolServerOptions,
+		readonly host: string,
+		readonly port: number,
+		readonly options: Readonly<Lx200ProtocolServerOptions>,
 	) {}
 
 	start() {
-		if (this.server) return
+		if (this.server) return false
 
 		this.server = Bun.listen({
 			hostname: this.host,
@@ -61,16 +63,16 @@ export class Lx200ProtocolServer {
 				open: (socket) => {
 					console.info('connection open')
 					this.sockets.push(socket)
-					this.options.protocol.connect?.()
+					this.options.handler.connect?.(this)
 
-					this.coordinates[0] = this.options.protocol.rightAscension()
-					this.coordinates[1] = this.options.protocol.declination()
+					this.coordinates[0] = this.options.handler.rightAscension(this)
+					this.coordinates[1] = this.options.handler.declination(this)
 				},
 				close: (socket) => {
 					console.warn('connection closed')
 					const index = this.sockets.indexOf(socket)
 					if (index >= 0) this.sockets.splice(index, 1)
-					this.options.protocol.disconnect?.()
+					this.options.handler.disconnect?.(this)
 				},
 				error: (_, error) => {
 					console.error('connection failed', error)
@@ -80,6 +82,8 @@ export class Lx200ProtocolServer {
 				},
 			},
 		})
+
+		return true
 	}
 
 	stop() {
@@ -129,10 +133,10 @@ export class Lx200ProtocolServer {
 				case '#:D#':
 					return this.slewing(socket)
 				case '#:CM#':
-					this.options.protocol.sync?.(...this.coordinates)
+					this.options.handler.sync?.(this, ...this.coordinates)
 					return this.zero(socket)
 				case '#:MS#':
-					this.options.protocol.goto?.(...this.coordinates)
+					this.options.handler.goto?.(this, ...this.coordinates)
 					return this.zero(socket)
 				case '#:Me#':
 				case '#:Mn#':
@@ -142,10 +146,10 @@ export class Lx200ProtocolServer {
 				case '#:Qn#':
 				case '#:Qs#':
 				case '#:Qw#':
-					this.options.protocol.move?.(command[3] as never, command[2] === 'M')
+					this.options.handler.move?.(this, command[3] as never, command[2] === 'M')
 					return
 				case '#:Q#':
-					this.options.protocol.abort?.()
+					this.options.handler.abort?.(this)
 					return
 				default:
 					if (command.startsWith('#:Sr')) {
@@ -158,11 +162,11 @@ export class Lx200ProtocolServer {
 						return this.one(socket)
 					} else if (command.startsWith('#:Sg')) {
 						const lng = parseAngle(command.substring(4))
-						if (lng !== undefined) this.options.protocol.longitude(lng)
+						if (lng !== undefined) this.options.handler.longitude(this, lng)
 						return this.one(socket)
 					} else if (command.startsWith('#:St')) {
 						const lat = parseAngle(command.substring(4))
-						if (lat !== undefined) this.options.protocol.latitude(lat)
+						if (lat !== undefined) this.options.handler.latitude(this, lat)
 						return this.one(socket)
 					} else if (command.startsWith('#:SG')) {
 						const hours = -command.substring(4, command.length - 1)
@@ -201,41 +205,41 @@ export class Lx200ProtocolServer {
 	}
 
 	private rightAscension(socket: Socket<unknown>) {
-		const ra = this.options.protocol.rightAscension()
+		const ra = this.options.handler.rightAscension(this)
 		const [h, m, s] = toHms(ra)
 		const command = `+${formatNumber(h)}:${formatNumber(m)}:${formatNumber(s)}#`
 		this.text(socket, command)
 	}
 
 	private declination(socket: Socket<unknown>) {
-		const dec = this.options.protocol.declination()
+		const dec = this.options.handler.declination(this)
 		const [d, m, s, neg] = toDms(dec)
 		const command = `${neg < 0 ? '-' : '+'}${formatNumber(d)}*${formatNumber(m)}:${formatNumber(s)}#`
 		this.text(socket, command)
 	}
 
 	private longitude(socket: Socket<unknown>) {
-		const lng = this.options.protocol.longitude()
+		const lng = this.options.handler.longitude(this)
 		const [d, m, , neg] = toDms(lng)
 		const command = `${neg < 0 ? '+' : '-'}${formatNumber(d, 3)}*${formatNumber(m)}#`
 		this.text(socket, command)
 	}
 
 	private latitude(socket: Socket<unknown>) {
-		const lat = this.options.protocol.latitude()
+		const lat = this.options.handler.latitude(this)
 		const [d, m, , neg] = toDms(lat)
 		const command = `${neg < 0 ? '-' : '+'}${formatNumber(d)}*${formatNumber(m)}#`
 		this.text(socket, command)
 	}
 
 	private date(socket: Socket<unknown>) {
-		const a = this.options.protocol.dateTime()
+		const a = this.options.handler.dateTime(this)
 		const command = `${a.format('MM/DD/YY')}#`
 		this.text(socket, command)
 	}
 
 	private time(socket: Socket<unknown>) {
-		const a = this.options.protocol.dateTime()
+		const a = this.options.handler.dateTime(this)
 		const command = `${a.format('HH:mm:ss')}#`
 		this.text(socket, command)
 	}
@@ -247,14 +251,14 @@ export class Lx200ProtocolServer {
 	}
 
 	private status(socket: Socket<unknown>, type: string = 'G') {
-		const a = this.options.protocol.tracking?.() ?? false
-		const b = this.options.protocol.parked?.() ?? false
+		const a = this.options.handler.tracking?.(this) ?? false
+		const b = this.options.handler.parked?.(this) ?? false
 		const command = `${type}${a ? 'T' : 'N'}${b ? 'P' : 'H'}#`
 		this.text(socket, command)
 	}
 
 	private slewing(socket: Socket<unknown>) {
-		const s = this.options.protocol.slewing?.() ?? false
+		const s = this.options.handler.slewing?.(this) ?? false
 		const command = `${s ? '|' : ''}#`
 		this.text(socket, command)
 	}

@@ -73,7 +73,8 @@
 				"useAwait": "error",
 				"noApproximativeNumericConstant": "off",
 				"noEmptyInterface": "off",
-				"noConsole": "off"
+				"noConsole": "off",
+				"useIterableCallbackReturn": "off"
 			},
 			"complexity": {
 				"noForEach": "off",

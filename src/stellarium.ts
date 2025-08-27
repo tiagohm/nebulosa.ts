@@ -6,13 +6,13 @@ import { eraAnpm } from './erfa'
 import type { Seekable, Source } from './io'
 
 export interface StellariumProtocolHandler {
-	connect?: () => void
-	goto?: (ra: Angle, dec: Angle) => void
-	disconnect?: () => void
+	connect?: (server: StellariumProtocolServer) => void
+	goto?: (server: StellariumProtocolServer, ra: Angle, dec: Angle) => void
+	disconnect?: (server: StellariumProtocolServer) => void
 }
 
 export interface StellariumProtocolServerOptions {
-	protocol?: StellariumProtocolHandler
+	handler: StellariumProtocolHandler
 }
 
 // https://free-astro.org/images/b/b7/Stellarium_telescope_protocol.txt
@@ -23,13 +23,13 @@ export class StellariumProtocolServer {
 	private server?: TCPSocketListener
 
 	constructor(
-		private readonly host: string,
-		private readonly port: number,
-		private readonly options?: StellariumProtocolServerOptions,
+		readonly host: string,
+		readonly port: number,
+		readonly options: Readonly<StellariumProtocolServerOptions>,
 	) {}
 
 	start() {
-		if (this.server) return
+		if (this.server) return false
 
 		this.server = Bun.listen({
 			hostname: this.host,
@@ -37,18 +37,18 @@ export class StellariumProtocolServer {
 			allowHalfOpen: false,
 			socket: {
 				data: (_, data) => {
-					this.handleData(data)
+					this.processData(data)
 				},
 				open: (socket) => {
 					console.info('connection open')
 					this.sockets.push(socket)
-					this.options?.protocol?.connect?.()
+					this.options.handler.connect?.(this)
 				},
 				close: (socket) => {
 					console.warn('connection closed')
 					const index = this.sockets.indexOf(socket)
 					if (index >= 0) this.sockets.splice(index, 1)
-					this.options?.protocol?.disconnect?.()
+					this.options.handler.disconnect?.(this)
 				},
 				error: (_, error) => {
 					console.error('connection failed', error)
@@ -58,6 +58,8 @@ export class StellariumProtocolServer {
 				},
 			},
 		})
+
+		return true
 	}
 
 	stop() {
@@ -85,11 +87,11 @@ export class StellariumProtocolServer {
 		}
 	}
 
-	private handleData(buffer: Buffer) {
-		if (buffer.byteLength >= 20 && this.options?.protocol?.goto) {
+	private processData(buffer: Buffer) {
+		if (buffer.byteLength >= 20 && this.options.handler.goto) {
 			const ra = normalizeAngle((buffer.readUInt32LE(12) * PI) / 0x80000000)
 			const dec = (buffer.readInt32LE(16) * PI) / 0x80000000
-			this.options.protocol.goto(ra, dec)
+			this.options.handler.goto(this, ra, dec)
 		}
 	}
 }

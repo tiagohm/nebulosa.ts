@@ -15,7 +15,7 @@
 	},
 	"peerDependencies": {
 		"@types/bun": "latest",
-		"dayjs": "1.11.13",
+		"dayjs": "latest",
 		"typescript": "latest",
 		"utility-types": "latest"
 	},
