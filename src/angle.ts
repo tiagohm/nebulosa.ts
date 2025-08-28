@@ -217,7 +217,7 @@ export function formatAngle(angle: Angle, options?: FormatAngleOptions) {
 	const padLength = options?.padLength ?? DEFAULT_FORMAT_ANGLE_OPTIONS.padLength
 
 	const hdms = isHour ? toHms(angle) : toDms(angle)
-	const sign = noSign && (hdms[3] === undefined || hdms[3] === 1) ? '' : hdms[3] === -1 ? minusSign : plusSign
+	const sign = noSign && (hdms[3] === undefined || hdms[3] >= 0) ? '' : hdms[3] === -1 ? minusSign : plusSign
 	const sa = separators[0] ?? ' '
 	const sb = separators[1] ?? (noSecond ? '' : sa)
 	const sc = separators[2] ?? ''
