@@ -50,14 +50,23 @@ test('time', () => {
 })
 
 test('time unix', () => {
-	let t = timeUnix(0)
+	let t = timeUnix(0, undefined, false)
 	expect(t.day).toBe(2440588)
 	expect(t.fraction).toBe(-0.5)
 	expect(t.scale).toBe(Timescale.UTC)
 
-	t = timeUnix(946684800, Timescale.TAI)
+	t = timeUnix(946684800, Timescale.TAI, false)
 	expect(t.day).toBe(J2000)
 	expect(t.fraction).toBe(-0.5)
+	expect(t.scale).toBe(Timescale.TAI)
+
+	t = timeUnix(0, undefined, true)
+	expect(t.day).toBe(2440587)
+	expect(t.fraction).toBe(0.5)
+	expect(t.scale).toBe(Timescale.UTC)
+
+	t = timeUnix(946684800, Timescale.TAI, true)
+	expect(t.day + t.fraction).toBe(J2000 - 0.5)
 	expect(t.scale).toBe(Timescale.TAI)
 })
 
@@ -120,7 +129,7 @@ test('time besselian year', () => {
 	expect(t.scale).toBe(Timescale.TCB)
 })
 
-test('tim GPS', () => {
+test('time GPS', () => {
 	const t = timeGPS(630720013)
 	expect(t.day).toBe(J2000)
 	expect(t.fraction).toBe(-0.4996296167373657)

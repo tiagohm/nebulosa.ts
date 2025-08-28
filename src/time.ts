@@ -121,13 +121,19 @@ export function timeFromEpoch(epoch: number, unit: number, day: number, fraction
 // by up to 1 second on days with a leap second. POSIX unix time actually jumps backward by 1
 // second at midnight on leap second days while this class value is monotonically increasing
 // at 86400 seconds per UTC day.
-export function timeUnix(seconds: number, scale: Timescale = Timescale.UTC) {
-	return timeFromEpoch(seconds, DAYSEC, 2440588, -0.5, scale)
+export function timeUnix(seconds: number, scale: Timescale = Timescale.UTC, fast: boolean = false) {
+	if (fast) {
+		const day = 2440587 + Math.trunc(seconds / DAYSEC)
+		const fraction = (seconds % DAYSEC) / DAYSEC + 0.5
+		return { day, fraction, scale }
+	} else {
+		return timeFromEpoch(seconds, DAYSEC, 2440588, -0.5, scale)
+	}
 }
 
 // Current time as Unix time.
-export function timeNow() {
-	return timeUnix(Date.now() / 1000, Timescale.UTC)
+export function timeNow(fast: boolean = false) {
+	return timeUnix(Date.now() / 1000, Timescale.UTC, fast)
 }
 
 // Modified Julian Date time format.
