@@ -1,16 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { readDaf } from '../src/daf'
-import { dateFrom } from '../src/datetime'
 import { meter } from '../src/distance'
 import { elements, type ObserverWithOsculatingElements, type ObserverWithTLE, observer, Quantity, spkFile, vector } from '../src/horizons'
 import { bufferSource } from '../src/io'
 import { extendedPermanentAsteroidNumber } from '../src/naif'
 import { readSpk } from '../src/spk'
+import { temporalAdd, temporalFromDate } from '../src/temporal'
 import { Timescale, timeYMDHMS } from '../src/time'
 
-const START_TIME = dateFrom('2025-01-29T13:05:00Z')
-const END_TIME = dateFrom('2025-01-29T14:05:00Z')
+const START_TIME = temporalFromDate(2025, 1, 29, 13, 5, 0, 0)
+const END_TIME = temporalFromDate(2025, 1, 29, 14, 5, 0, 0)
 const COORD = [deg(138.73119026648095), deg(35.36276754848444), meter(3776)] as const
 
 describe.skip('observer', () => {
@@ -89,7 +89,7 @@ describe.skip('observer', () => {
 	})
 
 	test('timezone', async () => {
-		const data = await observer('10', 'coord', COORD, START_TIME.subtract(3, 'h'), END_TIME.subtract(3, 'h'), [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5, timeZone: -180 })
+		const data = await observer('10', 'coord', COORD, temporalAdd(START_TIME, -3, 'h'), temporalAdd(END_TIME, -3, 'h'), [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5, timeZone: -180 })
 
 		expect(data).toHaveLength(13)
 		expect(data[0]).toEqual(['2025-Jan-29 10:05', '', '', '311.97007', '-17.86472', ''])

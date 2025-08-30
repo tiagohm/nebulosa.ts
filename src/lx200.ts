@@ -1,6 +1,6 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import { type Angle, parseAngle, toDms, toHms } from './angle'
-import { type DateTime, dateFrom } from './datetime'
+import { formatTemporal, type Temporal, type TemporalDate, temporalAdd, temporalFromDate } from './temporal'
 
 // http://www.company7.com/library/meade/LX200CommandSet.pdf
 // https://soundstepper.sourceforge.net/LX200_Compatible_Commands.html
@@ -16,7 +16,7 @@ export interface Lx200ProtocolHandler {
 	declination: (server: Lx200ProtocolServer) => Angle // J2000
 	longitude: (server: Lx200ProtocolServer, longitude?: Angle) => Angle
 	latitude: (server: Lx200ProtocolServer, latitude?: Angle) => Angle
-	dateTime: (server: Lx200ProtocolServer, date?: DateTime) => DateTime
+	dateTime: (server: Lx200ProtocolServer, date?: readonly [Temporal, number]) => readonly [Temporal, number]
 	tracking: (server: Lx200ProtocolServer) => boolean
 	parked: (server: Lx200ProtocolServer) => boolean
 	slewing: (server: Lx200ProtocolServer) => boolean
@@ -38,14 +38,18 @@ const ACK = Buffer.from([71]) // G
 const ONE = Buffer.from([49]) // 1
 const ZERO = Buffer.from([48]) // 0
 
+const DATE_FORMAT = Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: '2-digit', month: '2-digit', day: '2-digit', hour: undefined, minute: undefined, second: undefined, fractionalSecondDigits: undefined })
+const TIME_FORMAT = Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour12: false, year: undefined, month: undefined, day: undefined, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: undefined })
+
 // Meade Telescope Serial Command Protocol Server.
 export class Lx200ProtocolServer {
 	private readonly sockets: Socket<unknown>[] = []
 	private server?: TCPSocketListener
 
 	private readonly coordinates: [Angle, Angle] = [0, 0]
-	private readonly utcDate: [number, number, number, number, number, number] = [2025, 1, 1, 0, 0, 0]
+	private readonly utc: TemporalDate = [2025, 1, 1, 0, 0, 0, 0]
 	private utcOffset = 0
+	private utcStep = 0
 
 	constructor(
 		readonly host: string,
@@ -204,24 +208,25 @@ export class Lx200ProtocolServer {
 					else if (command.startsWith('#:SG')) {
 						const hours = -command.substring(4, command.length - 1)
 						this.utcOffset = Math.trunc(hours * 60)
-						const date = dateFrom(this.utcDate, true).utcOffset(this.utcOffset)
-						this.options.handler.dateTime(this, date)
+						this.handleDateTimeAndOffset()
 						return this.one(socket)
 					}
 					// Set the local Time
 					else if (command.startsWith('#:SL')) {
 						const [h, m, s] = command.substring(4, command.length - 1).split(':')
-						this.utcDate[3] = +h
-						this.utcDate[4] = +m
-						this.utcDate[5] = +s
+						this.utc[3] = +h
+						this.utc[4] = +m
+						this.utc[5] = +s
+						this.handleDateTimeAndOffset()
 						return this.one(socket)
 					}
 					// Change Handbox Date to MM/DD/YY
 					else if (command.startsWith('#:SC')) {
 						const [m, d, y] = command.substring(4, command.length - 1).split('/')
-						this.utcDate[0] = 2000 + +y
-						this.utcDate[1] = +m
-						this.utcDate[2] = +d
+						this.utc[0] = 2000 + +y
+						this.utc[1] = +m
+						this.utc[2] = +d
+						this.handleDateTimeAndOffset()
 						return this.text(socket, '1Updating planetary data       #                              #')
 					}
 
@@ -246,6 +251,15 @@ export class Lx200ProtocolServer {
 
 	private text(socket: Socket<unknown>, value: string) {
 		socket.write(Buffer.from(value, 'ascii'))
+	}
+
+	private handleDateTimeAndOffset() {
+		this.utcStep++
+
+		if (this.utcStep >= 3) {
+			this.utcStep = 0
+			this.options.handler.dateTime(this, [temporalAdd(temporalFromDate(...this.utc), -this.utcOffset, 'm'), this.utcOffset])
+		}
 	}
 
 	private rightAscension(socket: Socket<unknown>) {
@@ -273,18 +287,18 @@ export class Lx200ProtocolServer {
 	}
 
 	private date(socket: Socket<unknown>) {
-		const command = `${this.options.handler.dateTime(this).format('MM/DD/YY')}#`
+		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], DATE_FORMAT)}#`
 		this.text(socket, command)
 	}
 
 	private time(socket: Socket<unknown>) {
-		const command = `${this.options.handler.dateTime(this).format('HH:mm:ss')}#`
+		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], TIME_FORMAT)}#`
 		this.text(socket, command)
 	}
 
 	private zoneOffset(socket: Socket<unknown>) {
-		const m = this.options.handler.dateTime(this).utcOffset()
-		const command = `${m < 0 ? '+' : '-'}${formatNumber(Math.abs(m) / 60, 4, 1)}#`
+		const [, offset] = this.options.handler.dateTime(this)
+		const command = `${offset < 0 ? '+' : '-'}${formatNumber(Math.abs(offset) / 60, 4, 1)}#`
 		this.text(socket, command)
 	}
 

@@ -1,5 +1,5 @@
-import { dateNow } from '../src/datetime'
 import { Lx200ProtocolServer } from '../src/lx200'
+import { temporalAdd, temporalNow } from '../src/temporal'
 
 const state = {
 	rightAscension: 0,
@@ -36,7 +36,7 @@ const server = new Lx200ProtocolServer('0.0.0.0', 10001, {
 		},
 		dateTime: (server, date) => {
 			console.info('date time', date)
-			return date ?? dateNow()
+			return date ?? [temporalAdd(temporalNow(), -3, 'h'), -180]
 		},
 		tracking: (server) => {
 			console.info('tracking')

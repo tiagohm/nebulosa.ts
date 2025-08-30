@@ -117,16 +117,6 @@ const rows = await readCsvStream(source, options) // Read CSV file from source
 readDaf(source) // Read NASA DAF file
 ```
 
-### DateTime
-
-```ts
-dateNow() // Get the current date
-dateFrom(input) // Create a date from a string, array or timestamp
-dateFromTime(time) // Create a date from a Time instance
-dateYMDHMS(year, month, day, hour, minute, second) // Create a date from year, month, day, hour, minute and second
-dateUnix(seconds) // Create a date from Unix timestamp
-```
-
 ### Distance
 
 ```ts
@@ -545,6 +535,19 @@ fahrenheit(1) // Convert fahrenheit to celsius
 kelvin(1) // Convert Kelvin to celsius
 toFahrenheit(1) // Convert celsius to fahrenheit
 toKelvin(1) // Convert celsius to Kelvin
+```
+
+### Temporal
+
+```ts
+temporalNow() // Get the current temporal
+temporalUnix(seconds) // Create a temporal from Unix timestamp
+temporalFromDate(year, month, day, hour, minute, second, millisecond) // Create a temporal from year, month, day, hour, minute, second and millisecond
+temporalToDate(temporal) // Convert a temporal to year, month, day, hour, minute, second and millisecond
+temporalAdd(temporal, duration, unit) // Add duration to temporal
+temporalStartOfDay(temporal) // Get the start of the day for a temporal
+temporalEndOfDay(temporal) // Get the end of the day for a temporal
+formatTemporal(temporal, format) // Format a temporal to a string
 ```
 
 ### Time

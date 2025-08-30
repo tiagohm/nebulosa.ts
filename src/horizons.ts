@@ -1,14 +1,12 @@
 import { type Angle, toDeg } from './angle'
 import { type ReadCsvOptions, readCsv } from './csv'
-import type { DateTime } from './datetime'
 import { type Distance, toKilometer } from './distance'
+import { formatTemporal, type Temporal } from './temporal'
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html
 // https://ssd-api.jpl.nasa.gov/doc/horizons.html
 
 export const HORIZONS_BASE_URL = 'https://ssd.jpl.nasa.gov/api/horizons.api'
-
-const DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss.SSS'
 
 export type YesNo = 'NO' | 'YES'
 
@@ -297,7 +295,7 @@ const DEFAULT_OVE_OPTIONS: Required<ObserverVectorElementsOptions> = {
 	timeOfPeriapsisType: 'ABSOLUTE',
 }
 
-export async function observer(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: DateTime, endTime: DateTime, quantities: Quantity[] = DEFAULT_QUANTITIES, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
+export async function observer(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal, endTime: Temporal, quantities: Quantity[] = DEFAULT_QUANTITIES, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
 	const parameters = structuredClone(DEFAULT_OBSERVER_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, coord, options)
@@ -309,7 +307,7 @@ export async function observer(input: string | ObserverWithOsculatingElements | 
 	return parseCsvTable(await response.text(), options)
 }
 
-export async function vector(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: DateTime, endTime: DateTime, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
+export async function vector(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal, endTime: Temporal, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
 	const parameters = structuredClone(DEFAULT_VECTOR_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, coord, options)
@@ -320,7 +318,7 @@ export async function vector(input: string | ObserverWithOsculatingElements | Ob
 	return parseCsvTable(await response.text(), options)
 }
 
-export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: DateTime, endTime: DateTime, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
+export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: Temporal, endTime: Temporal, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
 	const parameters = structuredClone(DEFAULT_ELEMENTS_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, undefined, options)
@@ -331,7 +329,7 @@ export async function elements(input: string | ObserverWithOsculatingElements | 
 	return parseCsvTable(await response.text(), options)
 }
 
-export async function spkFile(id: number, startTime: DateTime, endTime: DateTime) {
+export async function spkFile(id: number, startTime: Temporal, endTime: Temporal) {
 	const parameters = structuredClone(DEFAULT_SPK_PARAMETERS) as HorizonsQueryParameters
 	parameters.COMMAND = `DES=${id};`
 	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
@@ -395,9 +393,9 @@ function makeParametersFromInput(parameters: HorizonsQueryParameters, input: str
 }
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html#time
-function makeParametersFromStartAndStopTime(parameters: HorizonsQueryParameters, startTime: DateTime, endTime: DateTime) {
-	parameters.START_TIME = startTime.format(DATE_TIME_FORMAT)
-	parameters.STOP_TIME = endTime.format(DATE_TIME_FORMAT)
+function makeParametersFromStartAndStopTime(parameters: HorizonsQueryParameters, startTime: Temporal, endTime: Temporal) {
+	parameters.START_TIME = formatTemporal(startTime)
+	parameters.STOP_TIME = formatTemporal(endTime)
 }
 
 function makeParametersFromCenterAndCoordinates(parameters: HorizonsQueryParameters, center: ObserverSiteCenter, coord?: ObserverSiteCoord, options?: ObserverVectorElementsOptions) {

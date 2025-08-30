@@ -1,7 +1,8 @@
 import { type Angle, type FormatAngleOptions, formatAngle, toDeg } from './angle'
 import { DEG2RAD } from './constants'
-import { type DateTime, dateNow, dateUnix } from './datetime'
 import { type Distance, toKilometer } from './distance'
+import { formatTemporal, type Temporal, temporalNow } from './temporal'
+import type { Time } from './time'
 
 export const SBD_BASE_URL = 'https://ssd-api.jpl.nasa.gov/'
 
@@ -11,6 +12,9 @@ export const CLOSE_APPROACHES_PATH = 'cad.api?neo=false&diameter=true&fullname=t
 
 const FOV_RA_FORMAT: FormatAngleOptions = { isHour: true, separators: '-', minusSign: 'M', noSign: true, fractionDigits: 2 }
 const FOV_DEC_FORMAT: FormatAngleOptions = { separators: '-', minusSign: 'M', plusSign: '', fractionDigits: 2 }
+
+const DATE_FORMAT = Intl.DateTimeFormat('zu-ZA', { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: undefined, minute: undefined, second: undefined, fractionalSecondDigits: undefined })
+const DATE_TIME_FORMAT = Intl.DateTimeFormat('zu-ZA', { timeZone: 'UTC', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: undefined })
 
 export interface Signature {
 	readonly version: string
@@ -142,16 +146,17 @@ export async function search(text: string) {
 }
 
 // Identifies small bodies in a given field of view around a specific coordinate, location and time
-export async function identify(dateTime: DateTime, longitude: Angle, latitude: Angle, elevation: Distance, fovRa: Angle, fovDec: Angle, fovRaWidth: number = DEG2RAD, fovDecWidth: number = fovRaWidth, magLimit: number = 18, magRequired: boolean = true) {
-	const uri = `${SBD_BASE_URL}${IDENTIFY_PATH}&obs-time=${dateTime.format('YYYY-MM-DD_HH:mm:ss')}&lat=${toDeg(latitude)}&lon=${toDeg(longitude)}&alt=${toKilometer(elevation)}&fov-ra-center=${formatAngle(fovRa, FOV_RA_FORMAT)}&fov-dec-center=${formatAngle(fovDec, FOV_DEC_FORMAT)}&fov-ra-hwidth=${toDeg(fovRaWidth)}&fov-dec-hwidth=${toDeg(fovDecWidth)}&vmag-lim=${magLimit}&mag-required=${magRequired && magLimit < 30}`
+export async function identify(dateTime: Temporal | Time, longitude: Angle, latitude: Angle, elevation: Distance, fovRa: Angle, fovDec: Angle, fovRaWidth: number = DEG2RAD, fovDecWidth: number = fovRaWidth, magLimit: number = 18, magRequired: boolean = true) {
+	const obsTime = typeof dateTime === 'number' ? formatTemporal(dateTime, DATE_TIME_FORMAT).replace(' ', '_') : dateTime.day + dateTime.fraction
+	const uri = `${SBD_BASE_URL}${IDENTIFY_PATH}&obs-time=${obsTime}&lat=${toDeg(latitude)}&lon=${toDeg(longitude)}&alt=${toKilometer(elevation)}&fov-ra-center=${formatAngle(fovRa, FOV_RA_FORMAT)}&fov-dec-center=${formatAngle(fovDec, FOV_DEC_FORMAT)}&fov-ra-hwidth=${toDeg(fovRaWidth)}&fov-dec-hwidth=${toDeg(fovDecWidth)}&vmag-lim=${magLimit}&mag-required=${magRequired && magLimit < 30}`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodyIdentify
 }
 
 // Retrieves close approaches of small bodies to Earth
-export async function closeApproaches(dateMin?: DateTime | number | 'now', dateMax: DateTime | number = 7, distance: number = 10) {
-	dateMin = !dateMin || dateMin === 'now' ? dateNow() : typeof dateMin === 'number' ? dateUnix(dateMin) : dateMin
-	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${dateMin.format('YYYY-MM-DD')}&date-max=${typeof dateMax === 'number' ? `%2B${dateMax}` : dateMax.format('YYYY-MM-DD')}&dist-max=${distance}LD`
+export async function closeApproaches(dateMin?: Temporal | 'now', dateMax: Temporal | `${number}d` = '7d', distance: number = 10) {
+	dateMin = !dateMin || dateMin === 'now' ? temporalNow() : dateMin
+	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatTemporal(dateMin, DATE_FORMAT)}&date-max=${typeof dateMax === 'string' ? `%2B${dateMax.substring(0, dateMax.length - 1)}` : formatTemporal(dateMax, DATE_FORMAT)}&dist-max=${distance}LD`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodyCloseApproach
 }
