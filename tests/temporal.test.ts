@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { DATE_FORMAT, daysInMonth, formatTemporal, isLeapYear, TIME_FORMAT, temporalAdd, temporalEndOfDay, temporalFromDate, temporalStartOfDay, temporalToDate } from '../src/temporal'
+import { DATE_FORMAT, daysInMonth, formatTemporal, isLeapYear, TIME_FORMAT, temporalAdd, temporalEndOfDay, temporalExtract, temporalFromDate, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
 
 test('is leap year', () => {
 	expect(isLeapYear(2020)).toBe(true)
@@ -90,35 +90,35 @@ describe('add', () => {
 describe('subtract', () => {
 	test('start of year', () => {
 		const date = 1738193698123
-		expect(temporalToDate(temporalAdd(date, -1, 'ms'))).toEqual([2025, 1, 29, 23, 34, 58, 122])
-		expect(temporalToDate(temporalAdd(date, -1, 's'))).toEqual([2025, 1, 29, 23, 34, 57, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'm'))).toEqual([2025, 1, 29, 23, 33, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'h'))).toEqual([2025, 1, 29, 22, 34, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'd'))).toEqual([2025, 1, 28, 23, 34, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'mo'))).toEqual([2024, 12, 29, 23, 34, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'y'))).toEqual([2024, 1, 29, 23, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'ms'))).toEqual([2025, 1, 29, 23, 34, 58, 122])
+		expect(temporalToDate(temporalSubtract(date, 1, 's'))).toEqual([2025, 1, 29, 23, 34, 57, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'm'))).toEqual([2025, 1, 29, 23, 33, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'h'))).toEqual([2025, 1, 29, 22, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'd'))).toEqual([2025, 1, 28, 23, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'mo'))).toEqual([2024, 12, 29, 23, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'y'))).toEqual([2024, 1, 29, 23, 34, 58, 123])
 	})
 
 	test('mid of year', () => {
 		const date = 1756510498123
-		expect(temporalToDate(temporalAdd(date, -1, 'ms'))).toEqual([2025, 8, 29, 23, 34, 58, 122])
-		expect(temporalToDate(temporalAdd(date, -1, 's'))).toEqual([2025, 8, 29, 23, 34, 57, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'm'))).toEqual([2025, 8, 29, 23, 33, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'h'))).toEqual([2025, 8, 29, 22, 34, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'd'))).toEqual([2025, 8, 28, 23, 34, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'mo'))).toEqual([2025, 7, 29, 23, 34, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'y'))).toEqual([2024, 8, 29, 23, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'ms'))).toEqual([2025, 8, 29, 23, 34, 58, 122])
+		expect(temporalToDate(temporalSubtract(date, 1, 's'))).toEqual([2025, 8, 29, 23, 34, 57, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'm'))).toEqual([2025, 8, 29, 23, 33, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'h'))).toEqual([2025, 8, 29, 22, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'd'))).toEqual([2025, 8, 28, 23, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'mo'))).toEqual([2025, 7, 29, 23, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'y'))).toEqual([2024, 8, 29, 23, 34, 58, 123])
 	})
 
 	test('end of year', () => {
 		const date = 1767051298123
-		expect(temporalToDate(temporalAdd(date, -1, 'ms'))).toEqual([2025, 12, 29, 23, 34, 58, 122])
-		expect(temporalToDate(temporalAdd(date, -1, 's'))).toEqual([2025, 12, 29, 23, 34, 57, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'm'))).toEqual([2025, 12, 29, 23, 33, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'h'))).toEqual([2025, 12, 29, 22, 34, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'd'))).toEqual([2025, 12, 28, 23, 34, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'mo'))).toEqual([2025, 11, 29, 23, 34, 58, 123])
-		expect(temporalToDate(temporalAdd(date, -1, 'y'))).toEqual([2024, 12, 29, 23, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'ms'))).toEqual([2025, 12, 29, 23, 34, 58, 122])
+		expect(temporalToDate(temporalSubtract(date, 1, 's'))).toEqual([2025, 12, 29, 23, 34, 57, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'm'))).toEqual([2025, 12, 29, 23, 33, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'h'))).toEqual([2025, 12, 29, 22, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'd'))).toEqual([2025, 12, 28, 23, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'mo'))).toEqual([2025, 11, 29, 23, 34, 58, 123])
+		expect(temporalToDate(temporalSubtract(date, 1, 'y'))).toEqual([2024, 12, 29, 23, 34, 58, 123])
 	})
 })
 
@@ -130,6 +130,16 @@ test('start of day', () => {
 test('end of day', () => {
 	expect(temporalToDate(temporalEndOfDay(1709210096000))).toEqual([2024, 2, 29, 23, 59, 59, 999])
 	expect(temporalToDate(temporalEndOfDay(1756510498123))).toEqual([2025, 8, 29, 23, 59, 59, 999])
+})
+
+test('extract', () => {
+	expect(temporalExtract(1709210096000, 'y')).toBe(2024)
+	expect(temporalExtract(1709210096000, 'mo')).toBe(2)
+	expect(temporalExtract(1709210096000, 'd')).toBe(29)
+	expect(temporalExtract(1709210096000, 'h')).toBe(12)
+	expect(temporalExtract(1709210096000, 'm')).toBe(34)
+	expect(temporalExtract(1709210096000, 's')).toBe(56)
+	expect(temporalExtract(1709210096128, 'ms')).toBe(128)
 })
 
 describe('format', () => {

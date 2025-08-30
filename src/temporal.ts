@@ -103,12 +103,27 @@ export function temporalAdd(temporal: Temporal, duration: number, unit: Temporal
 	}
 }
 
+export function temporalSubtract(temporal: Temporal, duration: number, unit: TemporalUnit | TemporalUnitShort): Temporal {
+	return temporalAdd(temporal, -duration, unit)
+}
+
 export function temporalStartOfDay(temporal: Temporal): Temporal {
 	return temporal - (temporal % DAYS)
 }
 
 export function temporalEndOfDay(temporal: Temporal): Temporal {
 	return temporal + (DAYS - (temporal % DAYS)) - 1
+}
+
+export function temporalExtract(temporal: Temporal, unit: TemporalUnit | TemporalUnitShort) {
+	if (unit === 'ms' || unit === 'millisecond') return temporal % 1000
+	else if (unit === 's' || unit === 'second') return Math.floor(temporal / 1000) % 60
+	else if (unit === 'm' || unit === 'minute') return Math.floor(temporal / 60000) % 60
+	else if (unit === 'h' || unit === 'hour') return Math.floor(temporal / 3600000) % 24
+	else if (unit === 'd' || unit === 'day') return temporalToDate(temporal)[2]
+	else if (unit === 'mo' || unit === 'month') return temporalToDate(temporal)[1]
+	else if (unit === 'y' || unit === 'year') return temporalToDate(temporal)[0]
+	return 0
 }
 
 export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat = DATE_TIME_FORMAT) {
