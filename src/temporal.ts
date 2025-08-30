@@ -32,7 +32,7 @@ export function temporalFromDate(year: number, month: number = 1, day: number = 
 	return days * DAYS + hour * HOURS + minute * MINUTES + second * SECONDS + millisecond
 }
 
-export function temporalToDate(temporal: Temporal): Readonly<TemporalDate> {
+export function temporalToDate(temporal: Temporal): TemporalDate {
 	let day = Math.floor(temporal / DAYS)
 	let time = temporal % DAYS
 
@@ -88,7 +88,7 @@ export function temporalAdd(temporal: Temporal, duration: number, unit: Temporal
 	else if (unit === 'h' || unit === 'hour') return temporal + duration * HOURS
 	else if (unit === 'd' || unit === 'day') return temporal + duration * DAYS
 	else {
-		const date = temporalToDate(temporal) as TemporalDate
+		const date = temporalToDate(temporal)
 
 		if (unit === 'y' || unit === 'year') {
 			date[0] += duration
@@ -115,7 +115,7 @@ export function temporalEndOfDay(temporal: Temporal): Temporal {
 	return temporal + (DAYS - (temporal % DAYS)) - 1
 }
 
-export function temporalExtract(temporal: Temporal, unit: TemporalUnit | TemporalUnitShort) {
+export function temporalGet(temporal: Temporal, unit: TemporalUnit | TemporalUnitShort) {
 	if (unit === 'ms' || unit === 'millisecond') return temporal % 1000
 	else if (unit === 's' || unit === 'second') return Math.floor(temporal / 1000) % 60
 	else if (unit === 'm' || unit === 'minute') return Math.floor(temporal / 60000) % 60
@@ -124,6 +124,29 @@ export function temporalExtract(temporal: Temporal, unit: TemporalUnit | Tempora
 	else if (unit === 'mo' || unit === 'month') return temporalToDate(temporal)[1]
 	else if (unit === 'y' || unit === 'year') return temporalToDate(temporal)[0]
 	return 0
+}
+
+export function temporalSet(temporal: Temporal, value: number, unit: TemporalUnit | TemporalUnitShort) {
+	if (unit === 'ms' || unit === 'millisecond') return temporal - (temporal % 1000) + value
+	else if (unit === 's' || unit === 'second') return temporal - (temporal % 60000) + value * 1000 + (temporal % 1000)
+	else if (unit === 'm' || unit === 'minute') return temporal - (temporal % 3600000) + value * 60000 + (temporal % 60000)
+	else if (unit === 'h' || unit === 'hour') return temporal - (temporal % 86400000) + value * 3600000 + (temporal % 3600000)
+	else if (unit === 'd' || unit === 'day') {
+		const date = temporalToDate(temporal)
+		date[2] = value
+		return temporalFromDate(...date)
+	} else if (unit === 'mo' || unit === 'month') {
+		const date = temporalToDate(temporal)
+		date[1] = value
+		date[2] = Math.min(date[2], daysInMonth(date[0], date[1]))
+		return temporalFromDate(...date)
+	} else if (unit === 'y' || unit === 'year') {
+		const date = temporalToDate(temporal)
+		date[0] = value
+		return temporalFromDate(...date)
+	}
+
+	return temporal
 }
 
 export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat = DATE_TIME_FORMAT) {

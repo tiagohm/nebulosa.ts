@@ -548,7 +548,8 @@ temporalAdd(temporal, duration, unit) // Add duration to temporal
 temporalSubtract(temporal, duration, unit) // Subtract duration from temporal
 temporalStartOfDay(temporal) // Get the start of the day for a temporal
 temporalEndOfDay(temporal) // Get the end of the day for a temporal
-temporalExtract(temporal, unit) // Extract a specific unit from a temporal
+temporalGet(temporal, unit) // Get a specific unit from a temporal
+temporalSet(temporal, value, unit) // Set a specific unit in a temporal
 formatTemporal(temporal, format) // Format a temporal to a string
 ```
 

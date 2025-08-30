@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { DATE_FORMAT, daysInMonth, formatTemporal, isLeapYear, TIME_FORMAT, temporalAdd, temporalEndOfDay, temporalExtract, temporalFromDate, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
+import { DATE_FORMAT, daysInMonth, formatTemporal, isLeapYear, TIME_FORMAT, temporalAdd, temporalEndOfDay, temporalFromDate, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
 
 test('is leap year', () => {
 	expect(isLeapYear(2020)).toBe(true)
@@ -132,14 +132,26 @@ test('end of day', () => {
 	expect(temporalToDate(temporalEndOfDay(1756510498123))).toEqual([2025, 8, 29, 23, 59, 59, 999])
 })
 
-test('extract', () => {
-	expect(temporalExtract(1709210096000, 'y')).toBe(2024)
-	expect(temporalExtract(1709210096000, 'mo')).toBe(2)
-	expect(temporalExtract(1709210096000, 'd')).toBe(29)
-	expect(temporalExtract(1709210096000, 'h')).toBe(12)
-	expect(temporalExtract(1709210096000, 'm')).toBe(34)
-	expect(temporalExtract(1709210096000, 's')).toBe(56)
-	expect(temporalExtract(1709210096128, 'ms')).toBe(128)
+test('get', () => {
+	expect(temporalGet(1709210096000, 'y')).toBe(2024)
+	expect(temporalGet(1709210096000, 'mo')).toBe(2)
+	expect(temporalGet(1709210096000, 'd')).toBe(29)
+	expect(temporalGet(1709210096000, 'h')).toBe(12)
+	expect(temporalGet(1709210096000, 'm')).toBe(34)
+	expect(temporalGet(1709210096000, 's')).toBe(56)
+	expect(temporalGet(1709210096128, 'ms')).toBe(128)
+})
+
+test('set', () => {
+	const date = 1756510498123
+	expect(temporalToDate(temporalSet(date, 1, 'ms'))).toEqual([2025, 8, 29, 23, 34, 58, 1])
+	expect(temporalToDate(temporalSet(date, 0, 's'))).toEqual([2025, 8, 29, 23, 34, 0, 123])
+	expect(temporalToDate(temporalSet(date, 59, 'm'))).toEqual([2025, 8, 29, 23, 59, 58, 123])
+	expect(temporalToDate(temporalSet(date, 12, 'h'))).toEqual([2025, 8, 29, 12, 34, 58, 123])
+	expect(temporalToDate(temporalSet(date, 1, 'd'))).toEqual([2025, 8, 1, 23, 34, 58, 123])
+	expect(temporalToDate(temporalSet(date, 12, 'mo'))).toEqual([2025, 12, 29, 23, 34, 58, 123])
+	expect(temporalToDate(temporalSet(date, 2, 'mo'))).toEqual([2025, 2, 28, 23, 34, 58, 123])
+	expect(temporalToDate(temporalSet(date, 2000, 'y'))).toEqual([2000, 8, 29, 23, 34, 58, 123])
 })
 
 describe('format', () => {
