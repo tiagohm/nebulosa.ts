@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { DATE_FORMAT, daysInMonth, formatTemporal, isLeapYear, TIME_FORMAT, temporalAdd, temporalEndOfDay, temporalFromDate, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
+import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
 
 test('is leap year', () => {
 	expect(isLeapYear(2020)).toBe(true)
@@ -23,15 +23,15 @@ test('temporal from date', () => {
 	expect(temporalFromDate(2025, 8, 29, 23, 34, 58, 123)).toBe(1756510498123)
 	expect(temporalFromDate(2026, 8, 29, 23, 34, 58, 123)).toBe(1788046498123)
 
-	let ms = temporalFromDate(2020, 1, 1, 0, 0, 0, 0)
+	let ms = temporalFromDate(2020, 1, 1, 0, 0, 0, 789)
 
-	for (let y = 2020; y < 2025; y++) {
+	for (let y = 2020; y < 2028; y++) {
 		for (let mo = 1; mo <= 12; mo++) {
 			const nd = daysInMonth(y, mo)
 
 			for (let d = 1; d <= nd; d++) {
 				for (let h = 0; h < 24; h++, ms += 1000 * 60 * 60) {
-					expect(temporalFromDate(y, mo, d, h, 0, 0, 0)).toBe(ms)
+					expect(temporalFromDate(y, mo, d, h, 0, 0, 789)).toBe(ms)
 				}
 			}
 		}
@@ -50,6 +50,20 @@ test('temporal to date', () => {
 	expect(temporalToDate(1677674096000)).toEqual([2023, 3, 1, 12, 34, 56, 0])
 	expect(temporalToDate(1756510498123)).toEqual([2025, 8, 29, 23, 34, 58, 123])
 	expect(temporalToDate(1788046498123)).toEqual([2026, 8, 29, 23, 34, 58, 123])
+
+	let ms = temporalFromDate(2020, 1, 1, 0, 0, 0, 456)
+
+	for (let y = 2020; y < 2028; y++) {
+		for (let mo = 1; mo <= 12; mo++) {
+			const nd = daysInMonth(y, mo)
+
+			for (let d = 1; d <= nd; d++) {
+				for (let h = 0; h < 24; h++, ms += 1000 * 60 * 60) {
+					expect(temporalToDate(ms)).toEqual([y, mo, d, h, 0, 0, 456])
+				}
+			}
+		}
+	}
 })
 
 describe('add', () => {
@@ -132,6 +146,11 @@ test('end of day', () => {
 	expect(temporalToDate(temporalEndOfDay(1756510498123))).toEqual([2025, 8, 29, 23, 59, 59, 999])
 })
 
+test('day of week', () => {
+	expect(temporalDayOfWeek(1709210096000)).toBe(4)
+	expect(temporalDayOfWeek(1756510498123)).toBe(5)
+})
+
 test('get', () => {
 	expect(temporalGet(1709210096000, 'y')).toBe(2024)
 	expect(temporalGet(1709210096000, 'mo')).toBe(2)
@@ -168,5 +187,84 @@ describe('format', () => {
 	test('time', () => {
 		expect(formatTemporal(1709210096000, TIME_FORMAT)).toEqual('12:34:56.000')
 		expect(formatTemporal(1756510498123, TIME_FORMAT)).toEqual('23:34:58.123')
+	})
+})
+
+describe('format using pattern', () => {
+	const date = 1849334947008
+
+	test('year', () => {
+		expect(formatTemporalFromPattern(date, 'YYYY')).toEqual('2028')
+		expect(formatTemporalFromPattern(date, 'YY')).toEqual('28')
+	})
+
+	test('month', () => {
+		expect(formatTemporalFromPattern(date, 'MMMM')).toEqual('August')
+		expect(formatTemporalFromPattern(date, 'MMM')).toEqual('Aug')
+		expect(formatTemporalFromPattern(date, 'MM')).toEqual('08')
+		expect(formatTemporalFromPattern(date, 'M')).toEqual('8')
+	})
+
+	test('year and month', () => {
+		expect(formatTemporalFromPattern(date, 'YYYY-MM')).toEqual('2028-08')
+		expect(formatTemporalFromPattern(date, 'YY-MM')).toEqual('28-08')
+		expect(formatTemporalFromPattern(date, 'YYYY/MM')).toEqual('2028/08')
+		expect(formatTemporalFromPattern(date, 'YY/MM')).toEqual('28/08')
+	})
+
+	test('day', () => {
+		expect(formatTemporalFromPattern(date, 'DD')).toEqual('08')
+		expect(formatTemporalFromPattern(date, 'D')).toEqual('8')
+	})
+
+	test('month and day', () => {
+		expect(formatTemporalFromPattern(date, 'MM/DD')).toEqual('08/08')
+		expect(formatTemporalFromPattern(date, 'M-D')).toEqual('8-8')
+	})
+
+	test('year, month and day', () => {
+		expect(formatTemporalFromPattern(date, 'YYYY-MM-DD')).toEqual('2028-08-08')
+		expect(formatTemporalFromPattern(date, 'YY-MM-DD')).toEqual('28-08-08')
+		expect(formatTemporalFromPattern(date, 'YYYY/MM/DD')).toEqual('2028/08/08')
+		expect(formatTemporalFromPattern(date, 'YY/MM/DD')).toEqual('28/08/08')
+	})
+
+	test('hour', () => {
+		expect(formatTemporalFromPattern(date, 'HH')).toEqual('08')
+		expect(formatTemporalFromPattern(date, 'H')).toEqual('8')
+	})
+
+	test('minute', () => {
+		expect(formatTemporalFromPattern(date, 'mm')).toEqual('09')
+		expect(formatTemporalFromPattern(date, 'm')).toEqual('9')
+	})
+
+	test('second', () => {
+		expect(formatTemporalFromPattern(date, 'ss')).toEqual('07')
+		expect(formatTemporalFromPattern(date, 's')).toEqual('7')
+	})
+
+	test('millisecond', () => {
+		expect(formatTemporalFromPattern(date, 'SSS')).toEqual('008')
+		expect(formatTemporalFromPattern(date, 'S')).toEqual('8')
+	})
+
+	test('hour, minute and second', () => {
+		expect(formatTemporalFromPattern(date, 'HH:mm:ss')).toEqual('08:09:07')
+		expect(formatTemporalFromPattern(date, 'H:m:s')).toEqual('8:9:7')
+	})
+
+	test('hour, minute, second and millisecond', () => {
+		expect(formatTemporalFromPattern(date, 'HH:mm:ss.SSS')).toEqual('08:09:07.008')
+		expect(formatTemporalFromPattern(date, 'H:m:s.S')).toEqual('8:9:7.8')
+	})
+
+	test('full', () => {
+		expect(formatTemporalFromPattern(date, 'YYYY-MM-DD HH:mm:ss.SSS')).toEqual('2028-08-08 08:09:07.008')
+		expect(formatTemporalFromPattern(date, 'YY/MM/DD H:m:s.S')).toEqual('28/08/08 8:9:7.8')
+	})
+
+	test('ISO 8601', () => {
+		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss.SSSZ')).toEqual('2028-08-08T08:09:07.008Z')
 	})
 })

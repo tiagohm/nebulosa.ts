@@ -1,7 +1,8 @@
 // gv-IM, mg-MG, sn-ZW, zu-ZA
-export const DATE_FORMAT = Intl.DateTimeFormat('zu-ZA', { timeZone: 'UTC', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: undefined, minute: undefined, second: undefined, fractionalSecondDigits: undefined })
-export const TIME_FORMAT = Intl.DateTimeFormat('zu-ZA', { timeZone: 'UTC', hour12: false, year: undefined, month: undefined, day: undefined, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 })
-export const DATE_TIME_FORMAT = Intl.DateTimeFormat('zu-ZA', { timeZone: 'UTC', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 })
+export const DATE_FORMAT = 'YYYY-MM-DD'
+export const TIME_FORMAT = 'HH:mm:ss.SSS'
+export const DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss.SSS'
+export const ISO8601_FORMAT = 'YYYY-MM-DDTHH:mm:ss.SSSZ'
 
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 const DAYS_UNTIL_MONTH = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
@@ -37,24 +38,24 @@ export function temporalToDate(temporal: Temporal): TemporalDate {
 	let time = temporal % DAYS
 
 	if (time < 0) {
-		time += DAYS
-		day -= 1
+		const offset = Math.ceil(Math.abs(time) / DAYS)
+		time += offset * DAYS
+		day -= offset
 	}
 
-	let year = 1970
+	let year = 1970 + Math.floor(day / 365.2425)
+	let daysUpToYear = daysFromEpochToYear(year)
 
-	while (true) {
-		const a = isLeapYear(year) ? 366 : 365
-
-		if (day >= a) {
-			day -= a
-			year++
-		} else if (day < 0) {
-			day += isLeapYear(--year) ? 366 : 365
-		} else {
-			break
-		}
+	// Adjust year if overshot or undershot
+	while (day < daysUpToYear) {
+		daysUpToYear = daysFromEpochToYear(--year)
 	}
+
+	while (day >= daysFromEpochToYear(year + 1)) {
+		daysUpToYear = daysFromEpochToYear(++year)
+	}
+
+	day -= daysUpToYear
 
 	let month = 1
 
@@ -78,7 +79,7 @@ export function temporalToDate(temporal: Temporal): TemporalDate {
 	const second = Math.floor(time / SECONDS)
 	const millisecond = time % SECONDS
 
-	return [year, month, day, hour, minute, second, millisecond] as const
+	return [year, month, day, hour, minute, second, millisecond]
 }
 
 export function temporalAdd(temporal: Temporal, duration: number, unit: TemporalUnit | TemporalUnitShort): Temporal {
@@ -115,6 +116,10 @@ export function temporalEndOfDay(temporal: Temporal): Temporal {
 	return temporal + (DAYS - (temporal % DAYS)) - 1
 }
 
+export function temporalDayOfWeek(temporal: Temporal) {
+	return (((Math.floor(temporal / DAYS) + 4) % 7) + 7) % 7
+}
+
 export function temporalGet(temporal: Temporal, unit: TemporalUnit | TemporalUnitShort) {
 	if (unit === 'ms' || unit === 'millisecond') return temporal % 1000
 	else if (unit === 's' || unit === 'second') return Math.floor(temporal / 1000) % 60
@@ -149,8 +154,52 @@ export function temporalSet(temporal: Temporal, value: number, unit: TemporalUni
 	return temporal
 }
 
-export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat = DATE_TIME_FORMAT) {
-	return format.format(temporal)
+export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat | string = DATE_TIME_FORMAT) {
+	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format) : format.format(temporal)
+}
+
+const PATTERN_VALID_CHARS = 'YMDHmsS'
+const SHORT_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
+export function formatTemporalFromPattern(temporal: Temporal, pattern: string) {
+	const date = temporalToDate(temporal)
+	let pc = pattern[0]
+	let text = ''
+	let sz = 0
+
+	for (let i = 0; i <= pattern.length; i++) {
+		const c = pattern[i]
+
+		if (PATTERN_VALID_CHARS.includes(c)) {
+			pc = c
+			sz++
+		} else if (sz > 0) {
+			if (pc === 'Y') {
+				text += sz === 2 ? (date[0] % 100).toFixed(0).padStart(2, '0') : date[0].toFixed()
+			} else if (pc === 'M') {
+				text += sz === 1 ? date[1].toFixed(0) : sz === 2 ? date[1].toFixed(0).padStart(2, '0') : sz === 3 ? SHORT_MONTH_NAMES[date[1] - 1] : MONTH_NAMES[date[1] - 1]
+			} else if (pc === 'D') {
+				text += sz === 1 ? date[2].toFixed(0) : date[2].toFixed(0).padStart(2, '0')
+			} else if (pc === 'H') {
+				text += sz === 1 ? date[3].toFixed(0) : date[3].toFixed(0).padStart(2, '0')
+			} else if (pc === 'm') {
+				text += sz === 1 ? date[4].toFixed(0) : date[4].toFixed(0).padStart(2, '0')
+			} else if (pc === 's') {
+				text += sz === 1 ? date[5].toFixed(0) : date[5].toFixed(0).padStart(2, '0')
+			} else if (pc === 'S') {
+				text += sz === 1 ? date[6].toFixed(0) : date[6].toFixed(0).padStart(3, '0')
+			}
+
+			sz = 0
+			i--
+		} else if (c) {
+			text += c
+			sz = 0
+		}
+	}
+
+	return text
 }
 
 export function isLeapYear(year: number) {

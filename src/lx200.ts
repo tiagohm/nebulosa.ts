@@ -38,8 +38,8 @@ const ACK = Buffer.from([71]) // G
 const ONE = Buffer.from([49]) // 1
 const ZERO = Buffer.from([48]) // 0
 
-const DATE_FORMAT = Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: '2-digit', month: '2-digit', day: '2-digit', hour: undefined, minute: undefined, second: undefined, fractionalSecondDigits: undefined })
-const TIME_FORMAT = Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour12: false, year: undefined, month: undefined, day: undefined, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: undefined })
+const DATE_FORMAT = 'MM/DD/YY'
+const TIME_FORMAT = 'HH:mm:ss'
 
 // Meade Telescope Serial Command Protocol Server.
 export class Lx200ProtocolServer {
