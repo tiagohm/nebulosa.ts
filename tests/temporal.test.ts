@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
+import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
 
 test('is leap year', () => {
 	expect(isLeapYear(2020)).toBe(true)
@@ -227,6 +227,7 @@ describe('format using pattern', () => {
 		expect(formatTemporalFromPattern(date, 'YY-MM-DD')).toEqual('28-08-08')
 		expect(formatTemporalFromPattern(date, 'YYYY/MM/DD')).toEqual('2028/08/08')
 		expect(formatTemporalFromPattern(date, 'YY/MM/DD')).toEqual('28/08/08')
+		expect(formatTemporalFromPattern(date, 'YYYYMMDD')).toEqual('20280808')
 	})
 
 	test('hour', () => {
@@ -252,19 +253,42 @@ describe('format using pattern', () => {
 	test('hour, minute and second', () => {
 		expect(formatTemporalFromPattern(date, 'HH:mm:ss')).toEqual('08:09:07')
 		expect(formatTemporalFromPattern(date, 'H:m:s')).toEqual('8:9:7')
+		expect(formatTemporalFromPattern(date, 'HHmmss')).toEqual('080907')
 	})
 
 	test('hour, minute, second and millisecond', () => {
 		expect(formatTemporalFromPattern(date, 'HH:mm:ss.SSS')).toEqual('08:09:07.008')
 		expect(formatTemporalFromPattern(date, 'H:m:s.S')).toEqual('8:9:7.8')
+		expect(formatTemporalFromPattern(date, 'HHmmssSSS')).toEqual('080907008')
 	})
 
 	test('full', () => {
 		expect(formatTemporalFromPattern(date, 'YYYY-MM-DD HH:mm:ss.SSS')).toEqual('2028-08-08 08:09:07.008')
 		expect(formatTemporalFromPattern(date, 'YY/MM/DD H:m:s.S')).toEqual('28/08/08 8:9:7.8')
+		expect(formatTemporalFromPattern(date, 'YYYYMMDDHHmmssSSS')).toEqual('20280808080907008')
 	})
 
 	test('ISO 8601', () => {
 		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss.SSSZ')).toEqual('2028-08-08T08:09:07.008Z')
+	})
+})
+
+describe('parse', () => {
+	test('date', () => {
+		expect(temporalToDate(parseTemporal('2028-01-01', 'YYYY-MM-DD'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
+		expect(temporalToDate(parseTemporal('01-01-2028', 'DD-MM-YYYY'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
+		expect(temporalToDate(parseTemporal('02-01-2028', 'MM-DD-YYYY'))).toEqual([2028, 2, 1, 0, 0, 0, 0])
+		expect(temporalToDate(parseTemporal('28-01-01', 'YY-MM-DD'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
+		expect(temporalToDate(parseTemporal('01-01-28', 'DD-MM-YY'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
+		expect(temporalToDate(parseTemporal('02-01-28', 'MM-DD-YY'))).toEqual([2028, 2, 1, 0, 0, 0, 0])
+		expect(temporalToDate(parseTemporal('2028-Jan-01', 'YYYY-MMM-DD'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
+		expect(temporalToDate(parseTemporal('20280101', 'YYYYMMDD'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
+	})
+
+	test('date and time', () => {
+		expect(temporalToDate(parseTemporal('2028-01-01T08:09:07.008Z', 'YYYY-MM-DDTHH:mm:ss.SSSZ'))).toEqual([2028, 1, 1, 8, 9, 7, 8])
+		expect(temporalToDate(parseTemporal('01-01-2028 08:09:07.008', 'DD-MM-YYYY HH:mm:ss.SSS'))).toEqual([2028, 1, 1, 8, 9, 7, 8])
+		expect(temporalToDate(parseTemporal('02-01-2028 08:09:07', 'MM-DD-YYYY HH:mm:ss'))).toEqual([2028, 2, 1, 8, 9, 7, 0])
+		expect(temporalToDate(parseTemporal('20280101080907008Z', 'YYYYMMDDHHmmssSSSZ'))).toEqual([2028, 1, 1, 8, 9, 7, 8])
 	})
 })

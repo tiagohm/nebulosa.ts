@@ -157,49 +157,86 @@ export function temporalSet(temporal: Temporal, value: number, unit: TemporalUni
 export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat | string = DATE_TIME_FORMAT) {
 	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format) : format.format(temporal)
 }
-
-const PATTERN_VALID_CHARS = 'YMDHmsS'
 const SHORT_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
-export function formatTemporalFromPattern(temporal: Temporal, pattern: string) {
-	const date = temporalToDate(temporal)
-	let pc = pattern[0]
-	let text = ''
-	let sz = 0
+export function parseTemporal(text: string, pattern: string): Temporal {
+	const date: TemporalDate = [0, 0, 0, 0, 0, 0, 0]
 
-	for (let i = 0; i <= pattern.length; i++) {
-		const c = pattern[i]
-
-		if (PATTERN_VALID_CHARS.includes(c)) {
-			pc = c
-			sz++
-		} else if (sz > 0) {
-			if (pc === 'Y') {
-				text += sz === 2 ? (date[0] % 100).toFixed(0).padStart(2, '0') : date[0].toFixed()
-			} else if (pc === 'M') {
-				text += sz === 1 ? date[1].toFixed(0) : sz === 2 ? date[1].toFixed(0).padStart(2, '0') : sz === 3 ? SHORT_MONTH_NAMES[date[1] - 1] : MONTH_NAMES[date[1] - 1]
-			} else if (pc === 'D') {
-				text += sz === 1 ? date[2].toFixed(0) : date[2].toFixed(0).padStart(2, '0')
-			} else if (pc === 'H') {
-				text += sz === 1 ? date[3].toFixed(0) : date[3].toFixed(0).padStart(2, '0')
-			} else if (pc === 'm') {
-				text += sz === 1 ? date[4].toFixed(0) : date[4].toFixed(0).padStart(2, '0')
-			} else if (pc === 's') {
-				text += sz === 1 ? date[5].toFixed(0) : date[5].toFixed(0).padStart(2, '0')
-			} else if (pc === 'S') {
-				text += sz === 1 ? date[6].toFixed(0) : date[6].toFixed(0).padStart(3, '0')
-			}
-
-			sz = 0
-			i--
-		} else if (c) {
-			text += c
-			sz = 0
-		}
+	function numeric(text: string, start: number, end: number) {
+		let res = 0
+		for (let i = start; i < end; i++) res = res * 10 + (text.charCodeAt(i) - 48)
+		return res
 	}
 
-	return text
+	function year(text: string, start: number, end: number) {
+		return 2000 + numeric(text, start, end)
+	}
+
+	function month(text: string, start: number, end: number) {
+		return SHORT_MONTH_NAMES.indexOf(text.substring(start, end)) + 1
+	}
+
+	function replace(format: string, index: number, value: (text: string, start: number, end: number) => number) {
+		const i = pattern.indexOf(format)
+
+		if (i >= 0) {
+			date[index] = value(text, i, i + format.length)
+			pattern = pattern.replace(format, '#'.padStart(format.length, '#'))
+			return true
+		}
+
+		return false
+	}
+
+	while (true) {
+		let found = replace('YYYY', 0, numeric)
+		found = replace('YY', 0, year) || found
+		found = replace('DD', 2, numeric) || found
+		found = replace('HH', 3, numeric) || found
+		found = replace('mm', 4, numeric) || found
+		found = replace('ss', 5, numeric) || found
+		found = replace('SSS', 6, numeric) || found
+		found = replace('MMM', 1, month) || found
+		found = replace('MM', 1, numeric) || found
+
+		if (!found) break
+	}
+
+	if (date[0] === 0 || date[1] === 0 || date[2] === 0) {
+		throw new Error('invalid date')
+	}
+
+	return temporalFromDate(...date)
+}
+
+export function formatTemporalFromPattern(temporal: Temporal, pattern: string) {
+	const date = temporalToDate(temporal)
+
+	if (pattern.includes('Y')) pattern = pattern.replaceAll('YYYY', date[0].toFixed(0).padStart(4, '0'))
+	if (pattern.includes('Y')) pattern = pattern.replaceAll('YY', (date[0] % 100).toFixed(0).padStart(2, '0'))
+
+	if (pattern.includes('D')) pattern = pattern.replaceAll('DD', date[2].toFixed(0).padStart(2, '0'))
+	if (pattern.includes('D')) pattern = pattern.replaceAll('D', date[2].toFixed(0))
+
+	if (pattern.includes('H')) pattern = pattern.replaceAll('HH', date[3].toFixed(0).padStart(2, '0'))
+	if (pattern.includes('H')) pattern = pattern.replaceAll('H', date[3].toFixed(0))
+
+	if (pattern.includes('m')) pattern = pattern.replaceAll('mm', date[4].toFixed(0).padStart(2, '0'))
+	if (pattern.includes('m')) pattern = pattern.replaceAll('m', date[4].toFixed(0))
+
+	if (pattern.includes('s')) pattern = pattern.replaceAll('ss', date[5].toFixed(0).padStart(2, '0'))
+	if (pattern.includes('s')) pattern = pattern.replaceAll('s', date[5].toFixed(0))
+
+	if (pattern.includes('S')) pattern = pattern.replaceAll('SSS', date[6].toFixed(0).padStart(3, '0'))
+	if (pattern.includes('S')) pattern = pattern.replaceAll('S', date[6].toFixed(0))
+
+	if (pattern.includes('M')) pattern = pattern.replaceAll('MMMM', MONTH_NAMES[date[1] - 1])
+	if (pattern.includes('M')) pattern = pattern.replaceAll('MMM', SHORT_MONTH_NAMES[date[1] - 1])
+	if (pattern.includes('M')) pattern = pattern.replaceAll('MM', date[1].toFixed(0).padStart(2, '0'))
+	if (pattern.includes('M')) pattern = pattern.replaceAll('M', date[1].toFixed(0))
+
+	return pattern
 }
 
 export function isLeapYear(year: number) {
