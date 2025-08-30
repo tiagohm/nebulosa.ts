@@ -1,24 +1,30 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { type AnalogMapping, decodeBufferAs7Bit, encodeBufferAs7Bit, FirmataClient, type FirmataClientHandler, PinMode } from '../src/firmata'
+import { type AnalogMapping, decodeBufferAs7Bit, encodeBufferAs7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
 
 describe('simple', () => {
 	const result: unknown[] = []
 
 	const protocol: FirmataClientHandler = {
-		version: (a, b) => result.push(a, b),
-		firmwareMessage: (a, b, c) => result.push(a, b, c),
+		version: (_, a, b) => result.push(a, b),
+		firmwareMessage: (_, a, b, c) => result.push(a, b, c),
 		systemReset: () => result.push(true),
-		digitalMessage: (a, b) => result.push(a, b),
-		analogMessage: (a, b) => result.push(a, b),
-		pinCapability: (a, b) => result.push(a, Array.from(b.values())),
+		digitalMessage: (_, a, b) => result.push(a, b),
+		analogMessage: (_, a, b) => result.push(a, b),
+		pinCapability: (_, a, b) => result.push(a, Array.from(b.values())),
 		pinCapabilitiesFinished: () => result.push(true),
-		analogMapping: (a) => result.push(a),
-		pinState: (a, b, c) => result.push(a, b, c),
-		textMessage: (a) => result.push(a),
-		customMessage: (a, b) => result.push(a, b),
+		analogMapping: (_, a) => result.push(a),
+		pinState: (_, a, b, c) => result.push(a, b, c),
+		textMessage: (_, a) => result.push(a),
+		customMessage: (_, a, b) => result.push(a, b),
 	}
 
-	const client = new FirmataClient(protocol)
+	const transport: Transport = {
+		write: () => {},
+		close: () => {},
+	}
+
+	const client = new FirmataClient(transport)
+	client.addHandler(protocol)
 
 	afterEach(() => {
 		result.length = 0

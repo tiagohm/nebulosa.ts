@@ -1,6 +1,3 @@
-**main.cpp**
-
-```cpp
 #include <Arduino.h>
 #include <ConfigurableFirmata.h>
 
@@ -75,8 +72,8 @@ FirmataExt firmataExt;
 FirmataReporting reporting;
 
 #ifdef ENABLE_WIFI
-const char *WIFI_SSID = "ABCD";
-const char *WIFI_PASSWORD = "12345678";
+const char *WIFI_SSID = "Tiago";
+const char *WIFI_PASSWORD = "27042151";
 const int NETWORK_PORT = 27016;
 
 #include <ESP8266WiFi.h>
@@ -90,7 +87,7 @@ void systemResetCallback()
 #ifndef ESP32
     for (byte i = 0; i < TOTAL_PINS; i++)
     {
-        if (IS_PIN_ANALOG(i))
+        if (FIRMATA_IS_PIN_ANALOG(i))
         {
             Firmata.setPinMode(i, PIN_MODE_ANALOG);
         }
@@ -211,18 +208,3 @@ void loop()
     serverStream.maintain();
 #endif
 }
-```
-
-**platformio.ini**
-
-```ini
-[platformio]
-default_envs = nodemcu
-
-[env:nodemcu]
-platform = espressif8266
-board = esp12e
-framework = arduino
-lib_deps = 
-	https://github.com/tiagohm/ConfigurableFirmata.git
-```
