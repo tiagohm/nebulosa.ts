@@ -415,7 +415,7 @@ export class FitsKeywordReader {
 		else if (value === 'F') return false
 		// else if (value.startsWith("'") && value.endsWith("'")) return value.substring(1, value.length - 1).trim()
 		else if (DECIMAL_REGEX.test(value)) return +value.toUpperCase().replace('D', 'E')
-		else if (INT_REGEX.test(value)) return parseInt(value)
+		else if (INT_REGEX.test(value)) return +value
 		else return value
 	}
 

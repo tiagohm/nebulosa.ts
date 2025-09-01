@@ -359,7 +359,7 @@ test('formatAZ', () => {
 	expect(formatAZ(deg(123.5634453))).toBe('123 33 48.40')
 	expect(formatAZ(deg(10))).toBe('010 00 00.00')
 	expect(formatAZ(0)).toBe('000 00 00.00')
-    expect(formatAZ(-0)).toBe('000 00 00.00')
+	expect(formatAZ(-0)).toBe('000 00 00.00')
 })
 
 test('formatALT', () => {

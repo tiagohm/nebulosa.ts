@@ -84,7 +84,7 @@ export function cirs(icrs: CartesianCoordinate, time: Time, ebpv: readonly [Vec3
 	return eraAtciqpmpx(vecNormalize(nc, nc), astrom, nc)
 }
 
-function observed(icrs: Vec3, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false) {
+export function observed(icrs: Vec3, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false) {
 	if (!time.location) return undefined
 
 	const a = tt(time)

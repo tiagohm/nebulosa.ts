@@ -17,9 +17,7 @@ function equinoxFrameByCapitaine(m: Readonly<Mat3>, from: Time, to: Time): Frame
 	matMul(a, m, a)
 
 	return {
-		rotationAt: () => {
-			return a
-		},
+		rotationAt: () => a,
 	}
 }
 

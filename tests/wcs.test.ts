@@ -1,15 +1,15 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { deg, parseAngle } from '../src/angle'
 import type { FitsHeader } from '../src/fits'
-import { Wcs } from '../src/wcs'
+import { cd, Wcs } from '../src/wcs'
 
 // https://fits.gsfc.nasa.gov/registry/sip/sipsample.txt
 // https://www.atnf.csiro.au/computing/software/wcs/WCS/example_data.html
 
-const centerRA = parseAngle('18h 59m 51s')!
-const centerDEC = parseAngle('-66d 15m 57s')!
+const CENTER_RA = parseAngle('18h 59m 51s')!
+const CENTER_DEC = parseAngle('-66d 15m 57s')!
 
-function project(header: FitsHeader, precision = 12, px = 97, py = 97, pra = centerRA, pdec = centerDEC) {
+function project(header: FitsHeader, precision = 12, px = 97, py = 97, pra = CENTER_RA, pdec = CENTER_DEC) {
 	using wcs = new Wcs(header)
 	const [ra, dec] = wcs.pixToSky(px, py)!
 
@@ -241,4 +241,23 @@ test('sip', () => {
 	}
 
 	project(header, 13, 128, 128, deg(202.482322805429), deg(47.1751189300101))
+})
+
+describe('cd', () => {
+	test('CD keywords', () => {
+		const header = { CD1_1: 1, CD1_2: 2, CD2_1: 3, CD2_2: 4 }
+
+		expect(cd(header, 1, 1)).toBe(1)
+		expect(cd(header, 1, 2)).toBe(2)
+		expect(cd(header, 2, 1)).toBe(3)
+		expect(cd(header, 2, 2)).toBe(4)
+	})
+
+	test('CROTA2', () => {
+		const header = { CROTA2: -1.101214133109e2, CDELT1: 7.602831325648e-4, CDELT2: 7.597431522795e-4 }
+		expect(cd(header, 1, 1)).toBeCloseTo(-2.618428778471e-4, 5)
+		expect(cd(header, 1, 2)).toBeCloseTo(-7.137707958324e-4, 5)
+		expect(cd(header, 2, 1)).toBeCloseTo(7.133727984992e-4, 5)
+		expect(cd(header, 2, 2)).toBeCloseTo(-2.613597287207e-4, 15)
+	})
 })

@@ -423,7 +423,7 @@ export function scnrMaximumNeutral(a: number, b: number, c: number, amount: numb
 	return Math.min(a, m)
 }
 
-export function scnrMimimumNeutral(a: number, b: number, c: number, amount: number) {
+export function scnrMinimumNeutral(a: number, b: number, c: number, amount: number) {
 	const m = Math.min(b, c)
 	return Math.min(a, m)
 }
@@ -433,7 +433,7 @@ const SCNR_ALGORITHMS: Readonly<Record<SCNRProtectionMethod, SCNRAlgorithm>> = {
 	ADDITIVE_MASK: scnrAdditiveMask,
 	AVERAGE_NEUTRAL: scnrAverageNeutral,
 	MAXIMUM_NEUTRAL: scnrMaximumNeutral,
-	MINIMUM_NEUTRAL: scnrMimimumNeutral,
+	MINIMUM_NEUTRAL: scnrMinimumNeutral,
 }
 
 // Subtractive Chromatic Noise Reduction
@@ -653,7 +653,7 @@ export function flatCorrection(image: Image, flat: Image) {
 		const m = mean[i]
 
 		for (let j = i; j < raw.length; j += channels) {
-			raw[j] = (raw[j] * m) / flat.raw[j] // raw / (flat / mean)
+			raw[j] = flat.raw[j] !== 0 ? (raw[j] * m) / flat.raw[j] : 0 // Avoid division by zero
 		}
 	}
 

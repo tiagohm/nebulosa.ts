@@ -2,11 +2,11 @@
 
 import { GrowableBuffer } from './io'
 
-export type XmlNodeAtrributes = Record<string, string>
+export type XmlNodeAttributes = Record<string, string>
 
 export interface XmlNode {
 	name: string
-	attributes: XmlNodeAtrributes
+	attributes: XmlNodeAttributes
 	children: XmlNode[]
 	text: string
 }
@@ -42,7 +42,7 @@ export class SimpleXmlParser {
 	private readonly name = new GrowableBuffer(32)
 	private readonly value = new GrowableBuffer(128)
 	private readonly text = new GrowableBuffer(1024 * 16)
-	private attributes: XmlNodeAtrributes = {}
+	private attributes: XmlNodeAttributes = {}
 	private tree: XmlNode[] = []
 	private prevCode?: number
 
@@ -76,7 +76,7 @@ export class SimpleXmlParser {
 		this.prevCode = undefined
 	}
 
-	private appendNode(attributes: XmlNodeAtrributes, push: boolean = true) {
+	private appendNode(attributes: XmlNodeAttributes, push: boolean = true) {
 		const node: XmlNode = { name: this.tag.toString(), attributes, children: [], text: '' }
 
 		if (this.tree.length) {

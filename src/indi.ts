@@ -431,7 +431,7 @@ export class IndiClient {
 			group: node.attributes.group,
 			state: node.attributes.state,
 			permission: node.attributes.perm,
-			timeout: parseInt(node.attributes.timeout),
+			timeout: +node.attributes.timeout,
 			timestamp: node.attributes.timestamp,
 			message: node.attributes.message,
 			elements: {},
@@ -479,7 +479,7 @@ export class IndiClient {
 			device: node.attributes.device,
 			name: node.attributes.name,
 			state: node.attributes.state,
-			timeout: node.attributes.timeout,
+			timeout: +node.attributes.timeout,
 			timestamp: node.attributes.timestamp,
 			message: node.attributes.message,
 			elements: {},
@@ -622,6 +622,12 @@ export class IndiClient {
 					handler.blobVector?.(this, message as never, node.name)
 					handler.vector?.(this, message, node.name)
 				}
+				break
+			case 'newSwitchVector':
+			case 'newNumberVector':
+			case 'newTextVector':
+			case 'newBLOBVector':
+				// Ignore it
 				break
 			default:
 				console.warn(`unknown tag: ${node.name}`)

@@ -53,8 +53,8 @@ function mapHipsSurvey(survey: Record<string, unknown>): HipsSurvey {
 		category: survey.client_category as string,
 		frame: survey.hips_frame as string,
 		regime: (survey.obs_regime as string).toLowerCase() as HipsSurvey['regime'],
-		bitpix: parseInt(survey.hips_pixel_bitpix as string),
-		pixelScale: parseFloat(survey.hips_pixel_scale as string),
-		skyFraction: parseFloat(survey.moc_sky_fraction as string),
+		bitpix: +(survey.hips_pixel_bitpix as string),
+		pixelScale: +(survey.hips_pixel_scale as string),
+		skyFraction: +(survey.moc_sky_fraction as string),
 	}
 }

@@ -161,7 +161,7 @@ export function cd(header: FitsHeader, i: number, j: number): number {
 		const b = numericKeyword(header, 'CDELT2')
 		const c = deg(numericKeyword(header, 'CROTA2'))
 		const cd = cdFromCdelt(a, b, c)
-		return cd[2 * i + j - 3]
+		return cd[(i - 1) * 2 + (j - 1)]
 	} else if ('PC1_1' in header) {
 		const pc11 = numericKeyword(header, 'PC1_1')
 		const pc12 = numericKeyword(header, 'PC1_2')
@@ -170,7 +170,7 @@ export function cd(header: FitsHeader, i: number, j: number): number {
 		const a = numericKeyword(header, 'CDELT1')
 		const b = numericKeyword(header, 'CDELT2')
 		const cd = pc2cd(pc11, pc12, pc21, pc22, a, b)
-		return cd[2 * i + j - 3]
+		return cd[(i - 1) * 2 + (j - 1)]
 	} else {
 		return 0
 	}

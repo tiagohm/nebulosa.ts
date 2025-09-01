@@ -38,7 +38,7 @@ export function normalizeAngle(angle: Angle): Angle {
 
 // Normalizes the angle to the range [-PI, PI].
 export function normalizePI(angle: Angle): Angle {
-	return ((angle + PI) % TAU) - PI
+	return pmod(angle + PI, TAU) - PI
 }
 
 // Creates a new Angle from degrees.
@@ -217,7 +217,7 @@ export function formatAngle(angle: Angle, options?: FormatAngleOptions) {
 	const padLength = options?.padLength ?? DEFAULT_FORMAT_ANGLE_OPTIONS.padLength
 
 	const hdms = isHour ? toHms(angle) : toDms(angle)
-	const sign = noSign && (hdms[3] === undefined || hdms[3] >= 0) ? '' : hdms[3] === -1 ? minusSign : plusSign
+	const sign = hdms[3] === -1 ? minusSign : noSign ? '' : plusSign
 	const sa = separators[0] ?? ' '
 	const sb = separators[1] ?? (noSecond ? '' : sa)
 	const sc = separators[2] ?? ''

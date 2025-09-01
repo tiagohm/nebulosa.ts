@@ -117,8 +117,8 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 				return plateSolutionFrom(header)
 			}
 		} finally {
-			fs.unlink(wcs)
-			fs.unlink(ini)
+			await fs.unlink(wcs)
+			await fs.unlink(ini)
 		}
 	} else {
 		console.error('astap plate solve failed with exit code', exitCode)

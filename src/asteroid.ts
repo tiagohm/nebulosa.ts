@@ -444,7 +444,7 @@ function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate,
 
 		const px = x
 		x = Math.max(-bound, Math.min(upper, bound))
-		if (x === px) throw new Error('The delta time $dt is beyond the range')
+		if (x === px) throw new Error(`The delta time ${dt} is beyond the range`)
 
 		kfun = kepler(x)
 	}
@@ -621,8 +621,8 @@ export function timeSincePeriapsis(M: Angle, n: Angle, v: Angle, p: Distance, mu
 }
 
 export function trueAnomaly(ev: Vec3, position: CartesianCoordinate, velocity: CartesianCoordinate, nv: Vec3) {
-	let v = 0
 	const evl = vecLength(ev)
+	let v = 0
 
 	// Not circular
 	if (evl > 1e-15) {
@@ -632,7 +632,7 @@ export function trueAnomaly(ev: Vec3, position: CartesianCoordinate, velocity: C
 	// Circular and equatorial
 	else if (vecLength(nv) < 1e-15) {
 		const a = Math.acos(position[0] / vecLength(position))
-		v = velocity[0] < 0 ? a : normalizeAngle(-a)
+		v = velocity[0] < 0 ? normalizeAngle(-a) : a
 	}
 	// Circular and not equatorial
 	else {
@@ -640,5 +640,6 @@ export function trueAnomaly(ev: Vec3, position: CartesianCoordinate, velocity: C
 		v = position[2] >= 0 ? a : normalizeAngle(-a)
 	}
 
+	// If the orbit is not nearly parabolic, return v; otherwise, normalize to [-π, π] for parabolic/hyperbolic cases.
 	return evl < 1 - 1e-15 ? v : normalizePI(v)
 }
