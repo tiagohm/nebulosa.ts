@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes, readFits } from '../src/fits'
 import { adf, debayer, FitsDataSource, horizontalFlip, invert, readImageFromFits, scnr, stf, verticalFlip, writeImageToFits } from '../src/image'
 import { fileHandleSink, fileHandleSource } from '../src/io'
-import { BITPIXES, CHANNELS, readImage, readImageAndSaveImageWithOptions, readImageAndTransformAndSaveImage, saveImageAndCompareHash } from './image.util'
+import { BITPIXES, CHANNELS, readImage, readImageAndSaveWithOptions, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
 test('readImageFromFits', async () => {
 	for (const bitpix of BITPIXES) {
@@ -14,7 +14,7 @@ test('readImageFromFits', async () => {
 
 			const hash = channel === 1 ? '386a11ebe344b73505aa13765e65df7b' : '3d0e63969cdbffcf75bb1450ce6e61da'
 
-			await readImageAndTransformAndSaveImage((i) => i, `read-${bitpix}.${channel}`, hash, bitpix, channel)
+			await readImageTransformAndSave((i) => i, `read-${bitpix}.${channel}`, hash, bitpix, channel)
 		}
 	}
 }, 15000)
@@ -77,7 +77,7 @@ test('fitsDataSource', () => {
 })
 
 test('debayer', async () => {
-	const image = await readImageAndTransformAndSaveImage((i) => stf(debayer(i) ?? i, 0.05), 'grbg', '3f049c06d25eec196b3d37471776de01', Bitpix.SHORT, 1, 'fit', 'GRBG')
+	const image = await readImageTransformAndSave((i) => stf(debayer(i) ?? i, 0.05), 'grbg', '3f049c06d25eec196b3d37471776de01', Bitpix.SHORT, 1, 'fit', 'GRBG')
 
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
@@ -85,73 +85,77 @@ test('debayer', async () => {
 })
 
 test('stf', () => {
-	return readImageAndTransformAndSaveImage((i) => stf(i, 0.005), 'stf', 'b690674f467c3416d09d551157f4e3c2')
+	return readImageTransformAndSave((i) => stf(i, 0.005), 'stf', 'b690674f467c3416d09d551157f4e3c2')
 })
 
 test('auto stf', () => {
-	return readImageAndTransformAndSaveImage((i) => stf(i, ...adf(i)), 'astf', '3e1d22fb79df143993138e5b28611f6d')
+	return readImageTransformAndSave((i) => stf(i, ...adf(i)), 'astf', '3e1d22fb79df143993138e5b28611f6d')
 })
 
 test('scnr', () => {
-	return readImageAndTransformAndSaveImage((i) => scnr(i, 'GREEN', 0.9), 'scnr', '56e93f2a267d35779b428e0a62e32882')
+	return readImageTransformAndSave((i) => scnr(i, 'GREEN', 0.9), 'scnr', '56e93f2a267d35779b428e0a62e32882')
 })
 
 test('horizontal flip', () => {
-	return readImageAndTransformAndSaveImage((i) => horizontalFlip(i), 'hf', '613209919daf05ac07c60906458c070c')
+	return readImageTransformAndSave((i) => horizontalFlip(i), 'hf', '613209919daf05ac07c60906458c070c')
 })
 
 test('vertical flip', () => {
-	return readImageAndTransformAndSaveImage((i) => verticalFlip(i), 'vf', 'b7dac23121498363105254fb78c3ae7f')
+	return readImageTransformAndSave((i) => verticalFlip(i), 'vf', 'b7dac23121498363105254fb78c3ae7f')
 })
 
 test('horizontal & vertical flip', () => {
-	return readImageAndTransformAndSaveImage((i) => verticalFlip(horizontalFlip(i)), 'hvf', 'b3707db8d6b6d1ea89e90dd03fc8af4c')
+	return readImageTransformAndSave((i) => verticalFlip(horizontalFlip(i)), 'hvf', 'b3707db8d6b6d1ea89e90dd03fc8af4c')
 })
 
 test('invert', () => {
-	return readImageAndTransformAndSaveImage((i) => invert(i), 'invert', 'aca42e7bfb9c8823068f4d8efa1615bf')
+	return readImageTransformAndSave((i) => invert(i), 'invert', 'aca42e7bfb9c8823068f4d8efa1615bf')
 })
 
 test('horizontal flip', () => {
-	return readImageAndSaveImageWithOptions({ horizontalFlip: true }, 'hf2', '613209919daf05ac07c60906458c070c')
+	return readImageAndSaveWithOptions({ horizontalFlip: true }, 'hf2', '613209919daf05ac07c60906458c070c')
 })
 
 test('vertical flip', () => {
-	return readImageAndSaveImageWithOptions({ verticalFlip: true }, 'vf2', 'b7dac23121498363105254fb78c3ae7f')
+	return readImageAndSaveWithOptions({ verticalFlip: true }, 'vf2', 'b7dac23121498363105254fb78c3ae7f')
 })
 
 test('sharpen', () => {
-	return readImageAndSaveImageWithOptions({ sharpen: true }, 'sharpen', 'b77cdbb38f603e75c3e847d5dc0f872c')
+	return readImageAndSaveWithOptions({ sharpen: true }, 'sharpen', 'b77cdbb38f603e75c3e847d5dc0f872c')
 })
 
 test('normalize', () => {
-	return readImageAndSaveImageWithOptions({ normalize: true }, 'normalize', '3d0e63969cdbffcf75bb1450ce6e61da')
+	return readImageAndSaveWithOptions({ normalize: true }, 'normalize', '3d0e63969cdbffcf75bb1450ce6e61da')
 })
 
 test('brightness', () => {
-	return readImageAndSaveImageWithOptions({ brightness: 30 }, 'brightness', 'e9c024713c6e71861b09b791cac9ffe9')
+	return readImageAndSaveWithOptions({ brightness: 30 }, 'brightness', 'e9c024713c6e71861b09b791cac9ffe9')
+})
+
+test('contrast', () => {
+	return readImageAndSaveWithOptions({ contrast: 5 }, 'contrast', 'd4e3a5d42f02dd33096d851021273b68')
 })
 
 test('saturation', () => {
-	return readImageAndSaveImageWithOptions({ saturation: 30 }, 'saturation', 'f099129b0ba7d3b0c8f277cec45084a6')
+	return readImageAndSaveWithOptions({ saturation: 30 }, 'saturation', 'f099129b0ba7d3b0c8f277cec45084a6')
 })
 
 test('brightness & saturation', () => {
-	return readImageAndSaveImageWithOptions({ brightness: 30, saturation: 30 }, 'brightness-saturation', 'bf17190e159247f13a6f86c4ebf5a63f')
+	return readImageAndSaveWithOptions({ brightness: 30, saturation: 30 }, 'brightness-saturation', 'bf17190e159247f13a6f86c4ebf5a63f')
 })
 
 test('gamma', () => {
-	return readImageAndSaveImageWithOptions({ gamma: 2.2 }, 'gamma', '95a81d1d960fb96aa95d84c40f17bb17')
+	return readImageAndSaveWithOptions({ gamma: 2.2 }, 'gamma', '95a81d1d960fb96aa95d84c40f17bb17')
 })
 
 test('median', () => {
-	return readImageAndSaveImageWithOptions({ median: true }, 'median', 'eba8ab1e9cee53361accd564f7c93ca0')
+	return readImageAndSaveWithOptions({ median: true }, 'median', 'eba8ab1e9cee53361accd564f7c93ca0')
 })
 
 test('blur', () => {
-	return readImageAndSaveImageWithOptions({ blur: true }, 'blur', '0b05253f6713e19932ab2c6eb2edd15a')
+	return readImageAndSaveWithOptions({ blur: true }, 'blur', '0b05253f6713e19932ab2c6eb2edd15a')
 })
 
 test('negate', () => {
-	return readImageAndSaveImageWithOptions({ negate: true }, 'negate', 'aca42e7bfb9c8823068f4d8efa1615bf')
+	return readImageAndSaveWithOptions({ negate: true }, 'negate', 'aca42e7bfb9c8823068f4d8efa1615bf')
 })

@@ -4,7 +4,7 @@ import { fk5, fk5ToIcrs, precessFk5FromJ2000, precessFk5ToJ2000 } from '../src/f
 import { Timescale, timeYMDHMS } from '../src/time'
 
 test('fk5', () => {
-	const p = fk5(deg(10.625), deg(41.2))
+	const p = fk5(deg(10.625), deg(41.2), 1)
 	expect(p[0]).toBeCloseTo(0.7395147490115556, 15)
 	expect(p[1]).toBeCloseTo(0.13873042608936675, 15)
 	expect(p[2]).toBeCloseTo(0.6586894601186805, 15)

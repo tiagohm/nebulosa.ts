@@ -39,13 +39,13 @@ export async function saveImageAndCompareHash(image: Image, name: string, hash?:
 	return image
 }
 
-export async function readImageAndTransformAndSaveImage(action: (image: Image) => Image, outputName: string, hash?: string, bitpix: Bitpix = Bitpix.FLOAT, channel: number = 3, format?: string, inputName?: string) {
+export async function readImageTransformAndSave(action: (image: Image) => Image, outputName: string, hash?: string, bitpix: Bitpix = Bitpix.FLOAT, channel: number = 3, format?: string, inputName?: string) {
 	const a = await readImage(bitpix, channel, format, inputName)
 	const b = action(a[1])
 	return saveImageAndCompareHash(b, outputName, hash)
 }
 
-export async function readImageAndSaveImageWithOptions(options: WriteImageToFormatOptions, outputName: string, hash?: string, bitpix: Bitpix = Bitpix.FLOAT, channel: number = 3, format?: string, inputName?: string) {
+export async function readImageAndSaveWithOptions(options: WriteImageToFormatOptions, outputName: string, hash?: string, bitpix: Bitpix = Bitpix.FLOAT, channel: number = 3, format?: string, inputName?: string) {
 	const a = await readImage(bitpix, channel, format, inputName)
 	return saveImageAndCompareHash(a[1], outputName, hash, options)
 }

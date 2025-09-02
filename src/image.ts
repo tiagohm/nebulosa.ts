@@ -31,6 +31,7 @@ export interface WriteImageToFormatOptions {
 	gamma?: number // 1 - 3
 	normalize?: boolean // Enhance output image contrast
 	brightness?: number
+	contrast?: number
 	saturation?: number
 	negate?: boolean
 }
@@ -140,6 +141,7 @@ export async function writeImageToFormat(image: Image, output: string | NodeJS.W
 	if (options?.normalize) s.normalise()
 	if (options?.brightness !== undefined || options?.saturation !== undefined) s.modulate({ brightness: options.brightness ?? 1, saturation: options.saturation ?? 1 })
 	if (options?.gamma !== undefined) s.gamma(options.gamma)
+	if (options?.contrast !== undefined && options.contrast !== 1) s.linear(options.contrast, -(128 * options.contrast) + 128)
 	if (options?.sharpen) s.sharpen()
 	if (options?.median) s.median()
 	if (options?.blur) s.blur()
