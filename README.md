@@ -489,8 +489,9 @@ await s.segment(Naif.SSB, Naif.EMB)!.at(time) // Compute the position and veloci
 ### Star
 
 ```ts
-const sirius = star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // ICRS cartesian coordinate from star parameters
-bcrs(sirius, time) // BCRS cartesian coordinate at time
+const sirius = star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // BCRS cartesian coordinate from star parameters
+spaceMotion(sirius, time) // BCRS cartesian coordinate at time applying space motion
+sirius.observedAt(time, [ebp, ebv], ehp, refraction) // Observed spherical coordinate at time
 ```
 
 ### Statistics
@@ -551,6 +552,7 @@ temporalEndOfDay(temporal) // Get the end of the day for a temporal
 temporalGet(temporal, unit) // Get a specific unit from a temporal
 temporalSet(temporal, value, unit) // Set a specific unit in a temporal
 formatTemporal(temporal, format) // Format a temporal to a string
+parseTemportal(text, format) // Parse a temporal from a string
 ```
 
 ### Time

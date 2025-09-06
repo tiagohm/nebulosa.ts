@@ -5,3 +5,4 @@ bun.lock
 __pycache__/
 *.shared
 .dist/
+*.exe

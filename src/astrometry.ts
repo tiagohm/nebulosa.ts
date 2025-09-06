@@ -2,12 +2,12 @@ import { type Angle, normalizeAngle } from './angle'
 import { AU_M, DAYSEC, PIOVERTWO, SPEED_OF_LIGHT } from './constants'
 import type { CartesianCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
-import { eraApcg, eraApci13, eraApco13, eraAtciqpmpx, eraAtioq, eraC2s, eraP2s } from './erfa'
+import { eraApco13, eraAtioq, eraC2s, eraP2s } from './erfa'
 import { ELLIPSOID_PARAMETERS } from './location'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
-import { pmAngles, type Time, Timescale, tdb, tt, ut1 } from './time'
-import { type MutVec3, type Vec3, vecAngle, vecLength, vecMinus, vecNormalize } from './vec3'
+import { pmAngles, type Time, tt, ut1 } from './time'
+import { type MutVec3, type Vec3, vecAngle, vecLength } from './vec3'
 
 export type PositionAndVelocity = [MutVec3, MutVec3]
 
@@ -21,6 +21,16 @@ export interface RefractionParameters {
 	wl?: number
 }
 
+export interface Observed {
+	readonly azimuth: Angle
+	readonly altitude: Angle
+	readonly hourAngle: Angle
+	readonly declination: Angle
+	readonly rightAscension: Angle // CIO-based
+	readonly equationOfTheOrigins: Angle // ERA-GST
+}
+
+// https://en.wikipedia.org/wiki/Standard_temperature_and_pressure
 export const DEFAULT_REFRACTION_PARAMETERS: Readonly<Required<RefractionParameters>> = {
 	pressure: 1013.25,
 	temperature: 15,
@@ -54,69 +64,25 @@ export function separationFrom(a: CartesianCoordinate, b: CartesianCoordinate): 
 	return vecAngle(a, b)
 }
 
-// TODO: Use era or vsop87 to compute Earth barycentric and heliocentric position. Make the parameter optional.
-export function gcrs(icrs: CartesianCoordinate, time: Time, ebpv: readonly [Vec3, Vec3], ehp?: CartesianCoordinate): CartesianCoordinate {
-	const t = time.scale === Timescale.TDB ? time : tt(time)
-	// TODO: Pass observer position and velocity?
-	const astrom = eraApcg(t.day, t.fraction, ebpv, ehp ?? ebpv[0])
-
-	// When there is a distance, we first offset for parallax to get the
-	// astrometric coordinate direction and then run the ERFA transform for
-	// no parallax/PM. This ensures reversibility and is more sensible for
-	// inside solar system objects.
-	const nc = vecMinus(icrs, astrom.eb)
-
-	return eraAtciqpmpx(vecNormalize(nc, nc), astrom, nc)
-}
-
-// TODO: Use era or vsop87 to compute Earth barycentric and heliocentric position. Make the parameter optional.
-export function cirs(icrs: CartesianCoordinate, time: Time, ebpv: readonly [Vec3, Vec3], ehp?: Vec3) {
-	const t = tdb(time)
-	// TODO: Pass observer position and velocity?
-	const [astrom] = eraApci13(t.day, t.fraction, ebpv, ehp ?? ebpv[0])
-
-	// When there is a distance, we first offset for parallax to get the
-	// astrometric coordinate direction and then run the ERFA transform for
-	// no parallax/PM. This ensures reversibility and is more sensible for
-	// inside solar system objects.
-	const nc = vecMinus(icrs, astrom.eb)
-
-	return eraAtciqpmpx(vecNormalize(nc, nc), astrom, nc)
-}
-
-export function observed(icrs: Vec3, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false) {
-	if (!time.location) return undefined
+// Computes observed coordinates from CIRS cartesian/spherical coordinates.
+export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): Observed {
+	if (!time.location) throw new Error('location is required')
 
 	const a = tt(time)
 	const b = ut1(time)
-	const { longitude, latitude, elevation, ellipsoid } = time.location
+	const { longitude, latitude, elevation, ellipsoid } = time.location!
 	const [sp, xp, yp] = pmAngles(time)
 	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
+	const pressure = refraction === false ? 0 : (refraction.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure)
+	const temperature = refraction === false ? 0 : (refraction.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
+	const relativeHumidity = refraction === false ? 0 : (refraction.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity)
+	const wl = refraction === false ? 0 : (refraction.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl)
 
 	// First set up the astrometry context for ICRS<->observed
-	const pressure = refraction === false ? 0 : (refraction?.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure)
-	const temperature = refraction === false ? 0 : (refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
-	const relativeHumidity = refraction === false ? 0 : (refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity)
-	const wl = refraction === false ? 0 : (refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl)
-	const [astrom] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
-	// Correct for parallax to find BCRS direction from observer (as in erfa.pmpx)
-	const nc = vecMinus(icrs, astrom.eb)
-	// Convert to topocentric CIRS
-	const [ri, di] = eraC2s(...eraAtciqpmpx(vecNormalize(nc, nc), astrom, nc))
-	// Now perform observed conversion
-	return eraAtioq(normalizeAngle(ri), di, astrom)
-}
+	const [astrom, equationOfTheOrigins] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
 
-// https://en.wikipedia.org/wiki/Standard_temperature_and_pressure
+	const [ri, di] = cirs.length === 2 ? cirs : eraC2s(...cirs)
+	const [azimuth, zenith, hourAngle, declination, rightAscension] = eraAtioq(normalizeAngle(ri), di, astrom)
 
-export function hadec(icrs: Vec3, time: Time, ebpv: readonly [Vec3, Vec3], ehp?: Vec3, refraction?: RefractionParameters | false) {
-	const r = observed(icrs, time, ebpv, ehp, refraction)
-	if (!r) return r
-	return [r[2], r[3]] as const
-}
-
-export function altaz(icrs: Vec3, time: Time, ebpv: readonly [Vec3, Vec3], ehp?: Vec3, refraction?: RefractionParameters | false) {
-	const r = observed(icrs, time, ebpv, ehp, refraction)
-	if (!r) return r
-	return [r[0], PIOVERTWO - r[1]] as const
+	return { azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscension, equationOfTheOrigins } as const
 }

@@ -723,8 +723,7 @@ test('eraAtciq', () => {
 	const vb: CartesianCoordinate = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545]
 
 	const [astrom] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
-	const p = erfa.eraAtciq(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), astrom)
-	const [ra, dec] = erfa.eraC2s(...p)
+	const [ra, dec] = erfa.eraAtciq(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), astrom)
 
 	expect(ra).toBeCloseTo(2.710121572968696744, 12)
 	expect(dec).toBeCloseTo(0.1729371367219539137, 12)

@@ -1,6 +1,4 @@
 import { expect, test } from 'bun:test'
-import { normalizeAngle, toDeg } from '../src/angle'
-import { cirs, equatorial } from '../src/astrometry'
 import { toKilometer } from '../src/distance'
 import { moon } from '../src/elpmpp02'
 import { Timescale, time } from '../src/time'
@@ -38,8 +36,4 @@ test('barycentric moon', () => {
 	expect(toKilometerPerSecond(v[0])).toBeCloseTo(1.576750706886595e1, 5)
 	expect(toKilometerPerSecond(v[1])).toBeCloseTo(-2.289427596080699e1, 5)
 	expect(toKilometerPerSecond(v[2])).toBeCloseTo(-9.855697816042639, 5)
-
-	const [ra, dec] = equatorial(cirs(p, t, a))
-	expect(toDeg(normalizeAngle(ra))).toBeCloseTo(309.98653, 0)
-	expect(toDeg(dec)).toBeCloseTo(-22.50197, 0)
 })

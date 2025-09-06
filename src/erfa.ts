@@ -1503,15 +1503,8 @@ export function eraAtciq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distanc
 	const pco = eraPmpx(rc, dc, pr, pd, px, rv, astrom.pmt, astrom.eb)
 
 	// BCRS to CIRS transformation.
-	return eraAtciqpmpx(pco, astrom, pco)
-}
-
-// Quick ICRS, epoch J2000.0, to CIRS transformation, given precomputed
-// star-independent astrometry parameters.
-// NOTE: Changed to return cartesian coordinate instead of spherical coordinate.
-export function eraAtciqpmpx(pco: Vec3, astrom: EraAstrom, o?: MutVec3) {
 	// Light deflection by the Sun, giving BCRS natural direction.
-	const pnat = eraLdSun(pco, astrom.eh, astrom.em, o)
+	const pnat = eraLdSun(pco, astrom.eh, astrom.em, pco)
 
 	// Aberration, giving GCRS proper direction.
 	const ppr = eraAb(pnat, astrom.v, astrom.em, astrom.bm1, pnat)
@@ -1520,11 +1513,9 @@ export function eraAtciqpmpx(pco: Vec3, astrom: EraAstrom, o?: MutVec3) {
 	const pi = matMulVec(astrom.bpn, ppr, ppr)
 
 	// ICRS astrometric RA,Dec.
-	// const s = eraC2s(...pi)
-	// s[0] = pmod(s[0], TAU)
-	// return s
-
-	return pi
+	const s = eraC2s(...pi)
+	s[0] = pmod(s[0], TAU)
+	return s
 }
 
 // For a terrestrial observer, prepare star-independent astrometry
@@ -1873,10 +1864,12 @@ export function eraAtioq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	return [aob, zob, hob, dob, rob] as const
 }
 
+const FRAME_BIAS_IAU2000 = [-0.041775 * ASEC2RAD, -0.0068192 * ASEC2RAD, -0.0146 * ASEC2RAD] as const
+
 // Frame bias components of IAU 2000 precession-nutation models;  part
 // of the Mathews-Herring-Buffett (MHB2000) nutation series, with
 // additions. Returns longitude and obliquity corrections,
 // and the ICRS RA of the J2000.0 mean equinox.
 export function eraBi00() {
-	return [-0.041775 * ASEC2RAD, -0.0068192 * ASEC2RAD, -0.0146 * ASEC2RAD] as const
+	return FRAME_BIAS_IAU2000
 }

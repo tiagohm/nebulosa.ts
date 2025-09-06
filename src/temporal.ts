@@ -157,6 +157,7 @@ export function temporalSet(temporal: Temporal, value: number, unit: TemporalUni
 export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat | string = DATE_TIME_FORMAT) {
 	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format) : format.format(temporal)
 }
+
 const SHORT_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 

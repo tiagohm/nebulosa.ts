@@ -14,3 +14,6 @@ test:
 
 astro:
 	uv run scripts/astro.py $(a)
+
+erfa:
+	gcc scripts/erfa.c -lerfa -o erfa.exe && ./erfa.exe
