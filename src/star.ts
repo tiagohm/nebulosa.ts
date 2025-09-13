@@ -29,7 +29,8 @@ export interface ObservedStar<T extends Star | StarPositionAndVelocity> {
 	readonly altitude: Angle
 	readonly hourAngle: Angle
 	readonly declination: Angle
-	readonly rightAscension: Angle // CIO-based
+	readonly rightAscension: Angle // equinoctial
+	readonly rightAscensionCIO: Angle // CIO-based
 }
 
 // Computes the BCRS position and velocity of a star.
@@ -66,12 +67,12 @@ export function observeStar<T extends Star | StarPositionAndVelocity>(star: T, t
 	const temperature = refraction === false ? 0 : (refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
 	const relativeHumidity = refraction === false ? 0 : (refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity)
 	const wl = refraction === false ? 0 : (refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl)
-	const [astrom] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
+	const [astrom, eo] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
 
 	// Convert to topocentric CIRS
 	const [ri, di] = eraAtciq(star.rightAscension, star.declination, star.pmRa, star.pmDec, star.parallax, star.rv, astrom)
 
 	// Now perform observed conversion
-	const [azimuth, zenith, hourAngle, rightAscension, declination] = eraAtioq(normalizeAngle(ri), di, astrom)
-	return { star, azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscension } as const
+	const [azimuth, zenith, hourAngle, rightAscensionCIO, declination] = eraAtioq(normalizeAngle(ri), di, astrom)
+	return { star, azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscensionCIO, rightAscension: normalizeAngle(rightAscensionCIO + eo) } as const
 }
