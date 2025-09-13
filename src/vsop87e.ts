@@ -1,7 +1,7 @@
 import type { PositionAndVelocity } from './astrometry'
 import { COS_OBL_J2000, DAYSPERJM, J2000, SIN_OBL_J2000 } from './constants'
 import { matMulVec } from './mat3'
-import { type Time, tdb } from './time'
+import { type Time, tt } from './time'
 import type { MutVec3 } from './vec3'
 import { VSOP87E_EARTH_DATA, VSOP87E_JUPITER_DATA, VSOP87E_MARS_DATA, VSOP87E_MERCURY_DATA, VSOP87E_NEPTUNE_DATA, VSOP87E_SATURN_DATA, VSOP87E_SUN_DATA, VSOP87E_URANUS_DATA, VSOP87E_VENUS_DATA } from './vsop87e.data'
 
@@ -74,7 +74,7 @@ const SINQ = -0.000000251521337759624621
 const REFERENCE_FRAME_MATRIX = [COSQ, -SINQ * COS_OBL_J2000, SINQ * SIN_OBL_J2000, SINQ, COSQ * COS_OBL_J2000, -COSQ * SIN_OBL_J2000, 0, SIN_OBL_J2000, COS_OBL_J2000] as const
 
 function compute(time: Time, data: readonly number[][][]): PositionAndVelocity {
-	const t = tdb(time)
+	const t = tt(time)
 
 	const m = new Float64Array(6)
 	m[0] = 1

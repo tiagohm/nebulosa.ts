@@ -1,7 +1,7 @@
 import { ASEC2RAD, AU_KM, DAYSPERJC, DEG2RAD, J2000 } from './constants'
 import { ELPMPP02_MAIN, ELPMPP02_PERT } from './elpmpp02.data'
 import { matMulVec } from './mat3'
-import { type Time, tdb } from './time'
+import { type Time, tt } from './time'
 import type { MutVec3 } from './vec3'
 
 // Éphéméride Lunaire Parisienne is a lunar theory developed by Jean Chapront, Michelle Chapront-Touzé,
@@ -63,7 +63,7 @@ const REFERENCE_FRAME = [1, 0.00000044036, -0.000000190919, -0.000000479966, 0.9
 
 // Geocentric cartesian position & velocity of Moon.
 export function moon(time: Time) {
-	const { day, fraction } = tdb(time)
+	const { day, fraction } = tt(time)
 	const t = [1, 0, 0, 0, 0]
 	t[1] = (day - J2000 + fraction) / DAYSPERJC
 	for (let i = 2; i <= 4; i++) t[i] = t[i - 1] * t[1]
