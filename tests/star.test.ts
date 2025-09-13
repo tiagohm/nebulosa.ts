@@ -58,24 +58,21 @@ test('space motion', () => {
 })
 
 test('hadec', () => {
-	const s = star(STAR.rightAscension, STAR.declination, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.rv)
-	const c = observeStar(s, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
+	const c = observeStar(STAR, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
 
 	expect(toDeg(c.hourAngle)).toBeCloseTo(-0.295079443830661481, 16)
 	expect(toDeg(c.declination)).toBeCloseTo(52.295490632814043863, 16)
 })
 
 test('altaz', () => {
-	const s = star(STAR.rightAscension, STAR.declination, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.rv)
-	const c = observeStar(s, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
+	const c = observeStar(STAR, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
 
 	expect(toDeg(c.azimuth)).toBeCloseTo(116.449852106047814004, 16)
 	expect(toDeg(c.altitude)).toBeCloseTo(89.798433978304871061, 16)
 })
 
 test('observed altaz', () => {
-	const s = star(STAR.rightAscension, STAR.declination, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.rv)
-	const c = observeStar(s, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, undefined)
+	const c = observeStar(STAR, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, undefined)
 
 	expect(toDeg(c.azimuth)).toBeCloseTo(116.449852106047814004, 16)
 	expect(toDeg(c.altitude)).toBeCloseTo(89.798489836226210059, 16)

@@ -23,8 +23,8 @@ export type StarPositionAndVelocity = (Star & PositionAndVelocity) & {
 	readonly epoch: Time
 }
 
-export interface ObservedStar {
-	readonly star: StarPositionAndVelocity
+export interface ObservedStar<T extends Star | StarPositionAndVelocity> {
+	readonly star: T
 	readonly azimuth: Angle
 	readonly altitude: Angle
 	readonly hourAngle: Angle
@@ -54,7 +54,7 @@ export function spaceMotion(star: StarPositionAndVelocity, time: Time): Position
 	return [p, star[1]]
 }
 
-export function observeStar(star: StarPositionAndVelocity, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false): ObservedStar {
+export function observeStar<T extends Star | StarPositionAndVelocity>(star: T, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false): ObservedStar<T> {
 	const a = tt(time)
 	const b = ut1(time)
 	const { longitude, latitude, elevation, ellipsoid } = time.location!
