@@ -7,6 +7,17 @@ Elegant astronomy for TypeScript. Supercharged by Bun.
 
 ## API
 
+### Alignment
+
+```ts
+const [ra, dec] = polarAlignmentError(ra, dec, latitude, lst, dAz, dAlt) // Compute the apparent RA/DEC of a star given polar alignment error
+const result = threePointPolarAlignmentError(p1, p2, p3, refraction) // Compute the polar alignment error given three stars
+const result = threePointPolarAlignmentErrorAfterAdjustment(result, from, to, refraction) // Compute the polar alignment error after azimuth/altitude adjustments and given a new star
+
+const polarAlignment = new ThreePointPolarAlignment(refraction)
+const result = polarAlignment.add(ra, dec, time)
+```
+
 ### Angle
 
 ```ts
@@ -92,10 +103,9 @@ lightTime(p) // Days of light travel time
 equatorial(p) // Transform to equatorial coordinate
 parallacticAngle(ha, dec, latitude) // The deviation between zenith angle and north angle
 separationFrom(a, b) // Angle between the positions
-gcrs(icrs, time, [ebp, ebv], ehp) // Compute the GCRS cartesian coordinate from ICRS at time
-cirs(icrs, time, [ebp, ebv], ehp) // Compute the CIRS cartesian coordinate from ICRS at time
-hadec(icrs, time, [ebp, ebv], ehp, { pressure, temperature, relativeHumidity, wl }) // Compute the HA/DEC spherical coordinate from ICRS
-altaz(icrs, time, [ebp, ebv], ehp, { pressure, temperature, relativeHumidity, wl }) // Compute the AZ/ALT spherical coordinate from ICRS
+cirsToObserved(cirs, time, refraction) // Convert CIRS to observed coordinate
+observedToCirs(az, alt, time, refraction) // Convert observed to CIRS coordinate
+equatorialToHorizontal(ra, dec, latitude, lst) // Convert equatorial to horizontal coordinate
 ```
 
 ### Constellation
@@ -329,6 +339,7 @@ matMinus(m, n) // Subtract two matrices
 matMul(m, n) // Multiply two matrices
 matMulVec(m, v) // Multiply the matrix by a vector
 matMulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
+matRodriguesRotation(axis, angle) // Create a rotation matrix around an axis
 
 const A = new Matrix(5, 5, data)
 const LU = new LuDecomposition(A)
@@ -634,6 +645,9 @@ vecMul(v, u) // Multiply two vectors
 vecDiv(v, u) // Divide two vectors
 vecRotateByRodrigues(v, axis, PI / 4) // Rotate the vector around an axis
 vecPlane(v, u, w) // Vector from plane of three vectors
+vecRotX(v, angle) // Rotate the vector around x-axis
+vecRotY(v, angle) // Rotate the vector around y-axis
+vecRotZ(v, angle) // Rotate the vector around z-axis
 ```
 
 ### Velocity

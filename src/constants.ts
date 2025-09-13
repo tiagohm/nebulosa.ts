@@ -19,6 +19,9 @@ export const B1950 = 2433282.4235
 // Seconds per day.
 export const DAYSEC = 86400
 
+// Sidereal seconds per day.
+export const SIDEREAL_DAYSEC = 86164.0905
+
 // Minutes per day.
 export const DAYMIN = 1440
 
@@ -124,6 +127,10 @@ export const ONE_GIGAPARSEC = 1000000000 * ONE_PARSEC
 // 1 ATM.
 export const ONE_ATM = 1013.25
 
+// Sidereal rate in arcseconds per mean solar second.
+export const SIDEREAL_RATE = 1296000 / SIDEREAL_DAYSEC // 360° = 1296000 arcseconds
+
+// Earth's angular velocity in radians per day.
 export const ANGVEL_PER_DAY = DAYSEC * ANGVEL
 export const EARTH_ANGULAR_VELOCITY_VECTOR = [0, 0, ANGVEL_PER_DAY] as const
 export const EARTH_ANGULAR_VELOCITY_MATRIX = [0, ANGVEL_PER_DAY, 0, -ANGVEL_PER_DAY, 0, 0, 0, 0, 0] as const

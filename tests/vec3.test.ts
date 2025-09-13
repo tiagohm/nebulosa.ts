@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { PI, PIOVERTWO } from '../src/constants'
-import { type MutVec3, type Vec3, vecAngle, vecCross, vecDiv, vecDivScalar, vecDot, vecMinus, vecMinusScalar, vecMul, vecMulScalar, vecNegate, vecNormalize, vecPlane, vecPlus, vecPlusScalar, vecRotateByRodrigues, vecXAxis, vecYAxis, vecZAxis } from '../src/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecCross, vecDiv, vecDivScalar, vecDot, vecMinus, vecMinusScalar, vecMul, vecMulScalar, vecNegate, vecNormalize, vecPlane, vecPlus, vecPlusScalar, vecRotateByRodrigues, vecRotX, vecRotY, vecRotZ, vecXAxis, vecYAxis, vecZAxis } from '../src/vec3'
 
 test('angle', () => {
 	expect(vecAngle(vecXAxis(), vecYAxis())).toBe(PIOVERTWO)
@@ -51,7 +51,7 @@ test('cross', () => {
 	expect(vecCross([2, 3, 2], [3, 2, 3])).toEqual([5, 0, -5])
 })
 
-test('rotateByRodrigues', () => {
+test('rotate by rodrigues', () => {
 	const x = vecXAxis()
 	expect(vecRotateByRodrigues(x, x, PI)).toEqual(x)
 
@@ -87,4 +87,25 @@ test('rotateByRodrigues', () => {
 
 test('plane', () => {
 	expect(vecPlane([1, -2, 1], [4, -2, -2], [4, 1, 4])).toEqual([9, -18, 9])
+})
+
+test('rotate around X', () => {
+	const v = vecRotX([0, 1, 0], PIOVERTWO)
+	expect(v[0]).toBeCloseTo(0, 15)
+	expect(v[1]).toBeCloseTo(0, 15)
+	expect(v[2]).toBeCloseTo(1, 15)
+})
+
+test('rotate around Y', () => {
+	const v = vecRotY([1, 0, 0], PIOVERTWO)
+	expect(v[0]).toBeCloseTo(0, 15)
+	expect(v[1]).toBeCloseTo(0, 15)
+	expect(v[2]).toBeCloseTo(-1, 15)
+})
+
+test('rotate around Z', () => {
+	const v = vecRotZ([0, 1, 0], PI)
+	expect(v[0]).toBeCloseTo(0, 15)
+	expect(v[1]).toBeCloseTo(-1, 15)
+	expect(v[2]).toBeCloseTo(0, 15)
 })

@@ -176,13 +176,13 @@ export function cd(header: FitsHeader, i: number, j: number): number {
 	}
 }
 
-export function cdFromCdelt(cdelt1: number, cdelt2: number, crota: Angle) {
+export function cdFromCdelt(cdelt1: number, cdelt2: number, crota: Angle, flipH: boolean = false, flipV: boolean = false) {
 	const cos0 = Math.cos(crota)
 	const sin0 = Math.sin(crota)
-	const cd11 = cdelt1 * cos0
-	const cd12 = Math.abs(cdelt2) * Math.sign(cdelt1) * sin0
-	const cd21 = -Math.abs(cdelt1) * Math.sign(cdelt2) * sin0
-	const cd22 = cdelt2 * cos0
+	const cd11 = (flipH ? -cdelt1 : cdelt1) * cos0
+	const cd12 = (flipV ? -Math.abs(cdelt2) : Math.abs(cdelt2)) * Math.sign(cdelt1) * sin0
+	const cd21 = (flipH ? Math.abs(cdelt1) : -Math.abs(cdelt1)) * Math.sign(cdelt2) * sin0
+	const cd22 = (flipV ? -cdelt2 : cdelt2) * cos0
 	return [cd11, cd12, cd21, cd22] as const
 }
 

@@ -101,6 +101,11 @@ export function vecNegate(a: Vec3, o?: MutVec3): MutVec3 {
 	else return [-a[0], -a[1], -a[2]]
 }
 
+// Negates the vector in place.
+export function vecNegateMut(a: MutVec3): MutVec3 {
+	return vecNegate(a, a)
+}
+
 // Computes the sum of the vector by scalar.
 export function vecPlusScalar(a: Vec3, scalar: number, o?: MutVec3): MutVec3 {
 	if (o) return vecFill(o, a[0] + scalar, a[1] + scalar, a[2] + scalar)
@@ -156,20 +161,65 @@ export function vecNormalize(v: Vec3, o?: MutVec3): MutVec3 {
 	else return vecDivScalar(v, len, o)
 }
 
+// Normalizes the vector in place.
+export function vecNormalizeMut(v: MutVec3): MutVec3 {
+	return vecNormalize(v, v)
+}
+
 // Efficient algorithm for rotating a vector in space, given an axis and angle of rotation.
-export function vecRotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, o?: MutVec3): Vec3 {
+export function vecRotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
 	const cosa = Math.cos(angle)
 	const b: MutVec3 = [0, 0, 0]
 	const c: MutVec3 = [0, 0, 0]
-	const k = vecNormalize(axis, o)
+	const k = vecNormalize(axis)
 	vecMulScalar(vecCross(k, v, b), Math.sin(angle), b)
 	vecMulScalar(k, vecDot(k, v), c)
 	vecPlus(vecMulScalar(v, cosa, k), b, b)
-	return vecPlus(b, vecMulScalar(c, 1 - cosa, c), o)
+	return vecPlus(b, vecMulScalar(c, 1 - cosa, c), o ?? c)
 }
 
+// Obtains the normal vector of the plane defined by three points.
 export function vecPlane(a: Vec3, b: Vec3, c: Vec3, o?: MutVec3): MutVec3 {
 	const d = vecMinus(b, a, o)
 	const e = vecMinus(c, b)
 	return vecCross(d, e, o)
+}
+
+// Rotates the vector around the x axis.
+export function vecRotX(v: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
+	const ct = Math.cos(angle)
+	const st = Math.sin(angle)
+	if (o) return vecFill(o, v[0], ct * v[1] - st * v[2], st * v[1] + ct * v[2])
+	else return [v[0], ct * v[1] - st * v[2], st * v[1] + ct * v[2]]
+}
+
+// Rotates the vector around the x axis in place.
+export function vecRotXMut(v: MutVec3, angle: Angle): MutVec3 {
+	return vecRotX(v, angle, v)
+}
+
+// Rotates the vector around the y axis.
+export function vecRotY(v: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
+	const ct = Math.cos(angle)
+	const st = Math.sin(angle)
+	if (o) return vecFill(o, ct * v[0] + st * v[2], v[1], -st * v[0] + ct * v[2])
+	else return [ct * v[0] + st * v[2], v[1], -st * v[0] + ct * v[2]]
+}
+
+// Rotates the vector around the y axis in place.
+export function vecRotYMut(v: MutVec3, angle: Angle): MutVec3 {
+	return vecRotY(v, angle, v)
+}
+
+// Rotates the vector around the z axis.
+export function vecRotZ(v: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
+	const ct = Math.cos(angle)
+	const st = Math.sin(angle)
+	if (o) return vecFill(o, ct * v[0] - st * v[1], st * v[0] + ct * v[1], v[2])
+	else return [ct * v[0] - st * v[1], st * v[0] + ct * v[1], v[2]]
+}
+
+// Rotates the vector around the z axis in place.
+export function vecRotZMut(v: MutVec3, angle: Angle): MutVec3 {
+	return vecRotZ(v, angle, v)
 }

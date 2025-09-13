@@ -1,6 +1,6 @@
 import type { Mutable } from 'utility-types'
 import { type Angle, normalizeAngle } from './angle'
-import { DEFAULT_REFRACTION_PARAMETERS, type Observed, type PositionAndVelocity, type RefractionParameters } from './astrometry'
+import { DEFAULT_REFRACTION_PARAMETERS, type PositionAndVelocity, type RefractionParameters } from './astrometry'
 import { PIOVERTWO } from './constants'
 import { eraApco13, eraAtciq, eraAtioq, eraStarpmpv, eraStarpv } from './erfa'
 import { ELLIPSOID_PARAMETERS } from './location'
@@ -25,8 +25,13 @@ export type BarycentricStar = Readonly<PositionAndVelocity> & {
 	readonly observeAt: (time: Time, ebpv: readonly [Vec3, Vec3], ehp?: Vec3, refraction?: RefractionParameters | false) => ObservedStar
 }
 
-export interface ObservedStar extends Observed {
+export interface ObservedStar {
 	readonly star: Star
+	readonly azimuth: Angle
+	readonly altitude: Angle
+	readonly hourAngle: Angle
+	readonly declination: Angle
+	readonly rightAscension: Angle // CIO-based
 }
 
 // Computes the BCRS position and velocity of a star.
@@ -68,12 +73,12 @@ function observed(star: Star, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3
 	const temperature = refraction === false ? 0 : (refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
 	const relativeHumidity = refraction === false ? 0 : (refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity)
 	const wl = refraction === false ? 0 : (refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl)
-	const [astrom, equationOfTheOrigins] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
+	const [astrom] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
 
 	// Convert to topocentric CIRS
 	const [ri, di] = eraAtciq(star.ra, star.dec, star.pmRa, star.pmDec, star.parallax, star.radialVelocity, astrom)
 
 	// Now perform observed conversion
-	const [azimuth, zenith, hourAngle, declination, rightAscension] = eraAtioq(normalizeAngle(ri), di, astrom)
-	return { star, azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscension, equationOfTheOrigins } as const
+	const [azimuth, zenith, hourAngle, rightAscension, declination] = eraAtioq(normalizeAngle(ri), di, astrom)
+	return { star, azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscension } as const
 }

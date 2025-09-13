@@ -6,7 +6,7 @@ import { type Mat3, type MutMat3, matClone, matCopy, matIdentity, matMul, matMul
 import { pmod, roundToNearestWholeNumber } from './math'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
-import { type MutVec3, type Vec3, vecClone, vecCross, vecDivScalar, vecDot, vecFill, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus, vecZero } from './vec3'
+import { type MutVec3, type Vec3, vecClone, vecCross, vecDivScalar, vecDot, vecFill, vecLength, vecMinus, vecMulScalar, vecNormalize, vecNormalizeMut, vecPlus, vecZero } from './vec3'
 import type { Velocity } from './velocity'
 
 const DBL_EPSILON = 2.220446049250313e-16
@@ -1247,7 +1247,7 @@ export function eraPmpx(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Angle, r
 	const p2 = z + dt * pm2 - pxr * pob[2]
 	const p: MutVec3 = [p0, p1, p2]
 
-	return vecNormalize(p, p) as MutVec3
+	return vecNormalizeMut(p)
 }
 
 // Apply aberration to transform natural direction into proper direction.
@@ -1335,7 +1335,7 @@ export function eraLdSun(p: Vec3, e: Vec3, em: number, o?: MutVec3) {
 
 // Form the celestial to terrestrial matrix given the date, the UT1 and
 // the polar motion, using the IAU 2006/2000A precession-nutation model.
-export function eraC2t06a(tt1: number, tt2: number, ut11: number, ut12: number, xp: Angle, yp: Angle) {
+export function eraC2t06a(tt1: number, tt2: number, ut11: number, ut12: number, xp: Angle, yp: Angle, sp: Angle | undefined) {
 	// Form the celestial-to-intermediate matrix for this TT.
 	const rc2i = eraC2i06a(tt1, tt2)
 
@@ -1343,7 +1343,7 @@ export function eraC2t06a(tt1: number, tt2: number, ut11: number, ut12: number, 
 	const era = eraEra00(ut11, ut12)
 
 	// Estimate s'.
-	const sp = eraSp00(tt1, tt2)
+	sp ??= eraSp00(tt1, tt2)
 
 	// Form the polar motion matrix.
 	const rpom = eraPom00(xp, yp, sp)
@@ -1520,7 +1520,7 @@ export function eraAtciq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distanc
 
 // For a terrestrial observer, prepare star-independent astrometry
 // parameters for transformations between ICRS and observed
-// coordinates.  The caller supplies the Earth ephemeris, the Earth
+// coordinates. The caller supplies the Earth ephemeris, the Earth
 // rotation information and the refraction constants as well as the
 // site coordinates.
 export function eraApco(
@@ -1574,7 +1574,7 @@ export function eraApco(
 	astrom.refb = refb
 
 	// Disable the (redundant) diurnal aberration step.
-	astrom.diurab = 0.0
+	astrom.diurab = 0
 
 	// CIO based BPN matrix.
 	eraC2ixys(x, y, s, r)
@@ -1728,11 +1728,11 @@ export function eraRefco(phpa: Pressure, tc: Temperature, rh: number, wl: number
 
 // For a terrestrial observer, prepare star-independent astrometry
 // parameters for transformations between CIRS and observed
-// coordinates.  The caller supplies UTC, site coordinates, ambient air
+// coordinates. The caller supplies UTC, site coordinates, ambient air
 // conditions and observing wavelength.
-export function eraApio13(tt1: number, tt2: number, ut11: number, ut12: number, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, phpa: Pressure, tc: Temperature, rh: number, wl: number, astrom?: EraAstrom) {
+export function eraApio13(tt1: number, tt2: number, ut11: number, ut12: number, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle | undefined, phpa: Pressure, tc: Temperature, rh: number, wl: number, astrom?: EraAstrom) {
 	// TIO locator s'.
-	const sp = eraSp00(tt1, tt2)
+	sp ??= eraSp00(tt1, tt2)
 
 	// Earth rotation angle.
 	const theta = eraEra00(ut11, ut12)
@@ -1748,7 +1748,7 @@ export function eraApio13(tt1: number, tt2: number, ut11: number, ut12: number, 
 
 // For a terrestrial observer, prepare star-independent astrometry
 // parameters for transformations between CIRS and observed
-// coordinates.  The caller supplies the Earth orientation information
+// coordinates. The caller supplies the Earth orientation information
 // and the refraction constants as well as the site coordinates.
 export function eraApio(sp: Angle, theta: Angle, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, refa: number, refb: number, astrom?: EraAstrom) {
 	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
@@ -1790,6 +1790,7 @@ export function eraApio(sp: Angle, theta: Angle, elong: Angle, phi: Angle, hm: D
 }
 
 // Quick CIRS to observed place transformation.
+// Returns observed azimuth, zenith distance, hour angle, right ascension (CIO-based) and declination.
 export function eraAtioq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	// CIRS RA,Dec to Cartesian -HA,Dec.
 	const v = eraS2c(ri - astrom.eral, di)
@@ -1818,7 +1819,7 @@ export function eraAtioq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	const zaet = astrom.cphi * xhdt + astrom.sphi * zhdt
 
 	// Azimuth (N=0,E=90).
-	const azobs = xaet !== 0 || yaet !== 0 ? Math.atan2(yaet, -xaet) : 0.0
+	const azobs = xaet !== 0 || yaet !== 0 ? Math.atan2(yaet, -xaet) : 0
 
 	// ----------
 	// Refraction
@@ -1861,7 +1862,8 @@ export function eraAtioq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	const dob = dcobs
 	const rob = pmod(raobs, TAU)
 
-	return [aob, zob, hob, dob, rob] as const
+	// NOTE: rob and dob are swapped in relation to the original erfaAtioq
+	return [aob, zob, hob, rob, dob] as const
 }
 
 const FRAME_BIAS_IAU2000 = [-0.041775 * ASEC2RAD, -0.0068192 * ASEC2RAD, -0.0146 * ASEC2RAD] as const
@@ -1872,4 +1874,86 @@ const FRAME_BIAS_IAU2000 = [-0.041775 * ASEC2RAD, -0.0068192 * ASEC2RAD, -0.0146
 // and the ICRS RA of the J2000.0 mean equinox.
 export function eraBi00() {
 	return FRAME_BIAS_IAU2000
+}
+
+// Quick observed place to CIRS, given the star-independent astrometry parameters.
+// Use of this function is appropriate when efficiency is important and
+// where many star positions are all to be transformed for one date.
+// The star-independent astrometry parameters can be obtained by
+// calling eraApio[13] or eraApco[13].
+// ob1: observed Az, HA or RA (radians; Az is N=0,E=90)
+// ob2: observed ZD or Dec (radians)
+export function eraAtoiq(type: 'R' | 'H' | 'A', ob1: number, ob2: number, astrom: EraAstrom) {
+	const { sphi, cphi, eral, diurab, refa, refb, xpl, ypl } = astrom
+
+	let xaeo = 0
+	let yaeo = 0
+	let zaeo = 0
+
+	// If Az,ZD, convert to Cartesian (S=0,E=90).
+	if (type === 'A') {
+		const ce = Math.sin(ob2)
+		xaeo = -Math.cos(ob1) * ce
+		yaeo = Math.sin(ob1) * ce
+		zaeo = Math.cos(ob2)
+	} else {
+		// If RA,Dec, convert to HA,Dec.
+		if (type === 'R') ob1 = eral - ob1
+
+		// To Cartesian -HA,Dec.
+		const [xmhdo, ymhdo, zmhdo] = eraS2c(-ob1, ob2)
+
+		// To Cartesian Az,El (S=0,E=90).
+		xaeo = sphi * xmhdo - cphi * zmhdo
+		yaeo = ymhdo
+		zaeo = cphi * xmhdo + sphi * zmhdo
+	}
+
+	// Azimuth (S=0,E=90).
+	const az = xaeo !== 0 || yaeo !== 0 ? Math.atan2(yaeo, xaeo) : 0
+
+	// Sine of observed ZD, and observed ZD.
+	const sz = Math.sqrt(xaeo * xaeo + yaeo * yaeo)
+	const zdo = Math.atan2(sz, zaeo)
+
+	// Refraction
+
+	// Fast algorithm using two constant model.
+	const tz = sz / (zaeo > 0.05 ? zaeo : 0.05)
+	const dref = (refa + refb * tz * tz) * tz
+	const zdt = zdo + dref
+
+	// To Cartesian Az,ZD.
+	const ce = Math.sin(zdt)
+	const xaet = Math.cos(az) * ce
+	const yaet = Math.sin(az) * ce
+	const zaet = Math.cos(zdt)
+
+	// Cartesian Az,ZD to Cartesian -HA,Dec.
+	const xmhda = sphi * xaet + cphi * zaet
+	const ymhda = yaet
+	const zmhda = -cphi * xaet + sphi * zaet
+
+	// Diurnal aberration.
+	const f = 1 + diurab * ymhda
+	const xhd = f * xmhda
+	const yhd = f * (ymhda - diurab)
+	const zhd = f * zmhda
+
+	// Polar motion.
+	const sx = Math.sin(xpl)
+	const cx = Math.cos(xpl)
+	const sy = Math.sin(ypl)
+	const cy = Math.cos(ypl)
+	const v0 = cx * xhd + sx * sy * yhd - sx * cy * zhd
+	const v1 = cy * yhd + sy * zhd
+	const v2 = sx * xhd - cx * sy * yhd + cx * cy * zhd
+
+	// To spherical -HA,Dec.
+	const [hma, di] = eraC2s(v0, v1, v2)
+
+	// Right ascension.
+	const ri = pmod(eral + hma, TAU)
+
+	return [ri, di] as const
 }
