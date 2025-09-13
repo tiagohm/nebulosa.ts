@@ -1518,6 +1518,28 @@ export function eraAtciq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distanc
 	return s
 }
 
+// Quick ICRS to CIRS transformation, given precomputed star-
+// independent astrometry parameters, and assuming zero parallax and
+// proper motion.
+export function eraAtciqz(rc: Angle, dc: Angle, astrom: EraAstrom) {
+	// BCRS coordinate direction (unit vector).
+	const pco = eraS2c(rc, dc)
+
+	// Light deflection by the Sun, giving BCRS natural direction.
+	const pnat = eraLdSun(pco, astrom.eh, astrom.em)
+
+	// Aberration, giving GCRS proper direction.
+	const ppr = eraAb(pnat, astrom.v, astrom.em, astrom.bm1)
+
+	// Bias-precession-nutation, giving CIRS proper direction.
+	const pi = matMulVec(astrom.bpn, ppr, ppr)
+
+	// CIRS RA,Dec.
+	const [w, di] = eraC2s(...pi)
+	const ri = pmod(w, TAU)
+	return [ri, di]
+}
+
 // For a terrestrial observer, prepare star-independent astrometry
 // parameters for transformations between ICRS and observed
 // coordinates. The caller supplies the Earth ephemeris, the Earth
@@ -1956,4 +1978,77 @@ export function eraAtoiq(type: 'R' | 'H' | 'A', ob1: number, ob2: number, astrom
 	const ri = pmod(eral + hma, TAU)
 
 	return [ri, di] as const
+}
+
+// Quick CIRS RA,Dec to ICRS astrometric place, given the star-
+// independent astrometry parameters.
+export function eraAticq(ri: Angle, di: Angle, astrom: EraAstrom) {
+	// CIRS RA,Dec to Cartesian.
+	const pi = eraS2c(ri, di)
+
+	// Bias-precession-nutation, giving GCRS proper direction.
+	const ppr = matMulTransposeVec(astrom.bpn, pi)
+
+	// Aberration, giving GCRS natural direction.
+	const d = vecZero()
+	const before = vecZero()
+	const after = vecZero()
+	const pnat = vecZero()
+	const pco = vecZero()
+
+	for (let j = 0; j < 2; j++) {
+		let r2 = 0
+
+		for (let i = 0; i < 3; i++) {
+			const w = ppr[i] - d[i]
+			before[i] = w
+			r2 += w * w
+		}
+
+		vecDivScalar(before, Math.sqrt(r2), before)
+
+		eraAb(before, astrom.v, astrom.em, astrom.bm1, after)
+		r2 = 0
+
+		for (let i = 0; i < 3; i++) {
+			d[i] = after[i] - before[i]
+			const w = ppr[i] - d[i]
+			pnat[i] = w
+			r2 += w * w
+		}
+
+		vecDivScalar(pnat, Math.sqrt(r2), pnat)
+	}
+
+	// Light deflection by the Sun, giving BCRS coordinate direction.
+	d.fill(0)
+
+	for (let j = 0; j < 5; j++) {
+		let r2 = 0
+
+		for (let i = 0; i < 3; i++) {
+			const w = pnat[i] - d[i]
+			before[i] = w
+			r2 += w * w
+		}
+
+		vecDivScalar(before, Math.sqrt(r2), before)
+
+		eraLdSun(before, astrom.eh, astrom.em, after)
+		r2 = 0
+
+		for (let i = 0; i < 3; i++) {
+			d[i] = after[i] - before[i]
+			const w = pnat[i] - d[i]
+			pco[i] = w
+			r2 += w * w
+		}
+
+		vecDivScalar(pco, Math.sqrt(r2), pco)
+	}
+
+	// ICRS astrometric RA,Dec.
+	const [w, dc] = eraC2s(...pco)
+	const rc = pmod(w, TAU)
+	return [rc, dc] as const
 }

@@ -5,7 +5,7 @@ import { meter } from '../src/distance'
 import { eraC2s } from '../src/erfa'
 import { precessFk5FromJ2000 } from '../src/fk5'
 import { Ellipsoid, geodeticLocation } from '../src/location'
-import { spaceMotion, star } from '../src/star'
+import { observeStar, spaceMotion, star } from '../src/star'
 import { Timescale, timeYMDHMS } from '../src/time'
 import { kilometerPerSecond } from '../src/velocity'
 
@@ -59,8 +59,7 @@ test('space motion', () => {
 
 test('hadec', () => {
 	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
-	const b = spaceMotion(s, TIME)
-	const c = b.observeAt(TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
+	const c = observeStar(s, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
 
 	expect(toDeg(c.hourAngle)).toBeCloseTo(-0.295079443830661481, 16)
 	expect(toDeg(c.declination)).toBeCloseTo(52.295490632814043863, 16)
@@ -68,8 +67,7 @@ test('hadec', () => {
 
 test('altaz', () => {
 	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
-	const b = spaceMotion(s, TIME)
-	const c = b.observeAt(TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
+	const c = observeStar(s, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
 
 	expect(toDeg(c.azimuth)).toBeCloseTo(116.449852106047814004, 16)
 	expect(toDeg(c.altitude)).toBeCloseTo(89.798433978304871061, 16)
@@ -77,8 +75,7 @@ test('altaz', () => {
 
 test('observed altaz', () => {
 	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
-	const b = spaceMotion(s, TIME)
-	const c = b.observeAt(TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, undefined)
+	const c = observeStar(s, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, undefined)
 
 	expect(toDeg(c.azimuth)).toBeCloseTo(116.449852106047814004, 16)
 	expect(toDeg(c.altitude)).toBeCloseTo(89.798489836226210059, 16)

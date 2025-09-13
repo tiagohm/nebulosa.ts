@@ -20,11 +20,6 @@ export type Star = PositionAndVelocity & {
 	readonly epoch: Time
 }
 
-export type BarycentricStar = Readonly<PositionAndVelocity> & {
-	readonly star: Star
-	readonly observeAt: (time: Time, ebpv: readonly [Vec3, Vec3], ehp?: Vec3, refraction?: RefractionParameters | false) => ObservedStar
-}
-
 export interface ObservedStar {
 	readonly star: Star
 	readonly azimuth: Angle
@@ -48,18 +43,15 @@ export function star(ra: Angle, dec: Angle, pmRa: Angle = 0, pmDec: Angle = 0, p
 }
 
 // Computes the BCRS position and velocity of a star at time applying space motion.
-export function spaceMotion(star: Star, time: Time): BarycentricStar {
+export function spaceMotion(star: Star, time: Time): PositionAndVelocity {
 	// Use TT instead of TDB for speed without any significant impact on accuracy
 	const e = tt(star.epoch)
 	const a = tt(time)
 	const p = eraStarpmpv(star, e.day, e.fraction, a.day, a.fraction)
-	const b = [p, star[1]] as unknown as Mutable<BarycentricStar>
-	b.star = star
-	b.observeAt = (time, ebpv, ehp, refraction) => observed(star, time, ebpv, ehp, refraction)
-	return b
+	return [p, star[1]]
 }
 
-function observed(star: Star, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false): ObservedStar {
+export function observeStar(star: Star, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false): ObservedStar {
 	if (!time.location) throw new Error('location is required')
 
 	const a = tt(time)

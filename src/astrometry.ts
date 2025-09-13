@@ -2,7 +2,7 @@ import { type Angle, arcsec, normalizeAngle } from './angle'
 import { AU_M, DAYSEC, PI, PIOVERTWO, SPEED_OF_LIGHT, TAU } from './constants'
 import type { CartesianCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
-import { type EraAstrom, eraApio13, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa'
+import { type EraAstrom, eraApci13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { pmAngles, type Time, tt, ut1 } from './time'
@@ -54,6 +54,26 @@ export function separationFrom(a: CartesianCoordinate, b: CartesianCoordinate): 
 	return vecAngle(a, b)
 }
 
+// Computes CIRS coordinates from ICRS cartesian/spherical coordinates (assuming zero parallax and proper motion).
+export function icrsToCirs(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+	const a = tt(time)
+
+	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp)[0]
+
+	const [rc, dc] = icrs.length === 2 ? icrs : eraC2s(...icrs)
+	return eraAtciqz(rc, dc, astrom)
+}
+
+// Computes ICRS coordinates from CIRS cartesian/spherical coordinates.
+export function cirsToIcrs(cirs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+	const a = tt(time)
+
+	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp)[0]
+
+	const [rc, dc] = cirs.length === 2 ? cirs : eraC2s(...cirs)
+	return eraAticq(rc, dc, astrom)
+}
+
 // Computes observed coordinates from CIRS cartesian/spherical coordinates.
 export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, astrom?: EraAstrom) {
 	if (!time.location) throw new Error('location is required')
@@ -79,6 +99,7 @@ export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time,
 	return ret
 }
 
+// Computes CIRS coordinates from observed coordinates.
 export function observedToCirs(azimuth: Angle, altitude: Angle, time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, astrom?: EraAstrom): readonly [Angle, Angle] {
 	if (!time.location) throw new Error('location is required')
 

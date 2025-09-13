@@ -728,6 +728,19 @@ test('eraAtciq', () => {
 	expect(dec).toBeCloseTo(0.1729371367219539137, 13)
 })
 
+test('eraAtciqz', () => {
+	const ph = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775] as const
+	// const vh = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732] as const
+	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
+	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
+
+	const [astrom] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+	const [ri, di] = erfa.eraAtciqz(2.71, 0.174, astrom)
+
+	expect(ri).toBeCloseTo(2.709994899247256984, 13)
+	expect(di).toBeCloseTo(0.1728740720984931891, 13)
+})
+
 test('eraPvtob', () => {
 	const pv = erfa.eraPvtob(2, 0.5, meter(3000), 1e-6, -0.5e-6, 1e-8, 5)
 
@@ -893,4 +906,17 @@ test('eraAtoiq', () => {
 	;[ri, di] = erfa.eraAtoiq('A', 0.09233952224794989993, 1.407758704513722461, astrom)
 	expect(ri).toBeCloseTo(2.710121574448138676, 13)
 	expect(di).toBeCloseTo(0.1729371839116608781, 13)
+})
+
+test('eraAticq', () => {
+	const ph = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775] as const
+	// const vh = [0.007421582502777622, 0.01405317261474486, 0.006091644528484732] as const
+	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
+	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
+
+	const [astrom] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+	const [rc, dc] = erfa.eraAticq(2.710121572969038991, 0.1729371367218230438, astrom)
+
+	expect(rc).toBeCloseTo(2.710126504531716819, 13)
+	expect(dc).toBeCloseTo(0.1740632537627034482, 13)
 })
