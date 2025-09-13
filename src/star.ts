@@ -10,18 +10,21 @@ import type { Velocity } from './velocity'
 
 const DEFAULT_EPOCH = timeJulianYear(2000, Timescale.TDB)
 
-export type Star = PositionAndVelocity & {
-	readonly ra: Angle
-	readonly dec: Angle
+export interface Star {
+	readonly rightAscension: Angle
+	readonly declination: Angle
 	readonly pmRa: Angle
 	readonly pmDec: Angle
 	readonly parallax: Angle
-	readonly radialVelocity: Velocity
+	readonly rv: Velocity
+}
+
+export type StarPositionAndVelocity = (Star & PositionAndVelocity) & {
 	readonly epoch: Time
 }
 
 export interface ObservedStar {
-	readonly star: Star
+	readonly star: StarPositionAndVelocity
 	readonly azimuth: Angle
 	readonly altitude: Angle
 	readonly hourAngle: Angle
@@ -30,20 +33,20 @@ export interface ObservedStar {
 }
 
 // Computes the BCRS position and velocity of a star.
-export function star(ra: Angle, dec: Angle, pmRa: Angle = 0, pmDec: Angle = 0, parallax: Angle = 0, radialVelocity: Velocity = 0, epoch: Time = DEFAULT_EPOCH): Star {
-	const s = eraStarpv(ra, dec, pmRa, pmDec, parallax, radialVelocity) as unknown as Mutable<Star>
-	s.ra = ra
-	s.dec = dec
+export function star(ra: Angle, dec: Angle, pmRa: Angle = 0, pmDec: Angle = 0, parallax: Angle = 0, rv: Velocity = 0, epoch: Time = DEFAULT_EPOCH): StarPositionAndVelocity {
+	const s = eraStarpv(ra, dec, pmRa, pmDec, parallax, rv) as unknown as Mutable<StarPositionAndVelocity>
+	s.rightAscension = ra
+	s.declination = dec
 	s.pmRa = pmRa
 	s.pmDec = pmDec
 	s.parallax = parallax
-	s.radialVelocity = radialVelocity
+	s.rv = rv
 	s.epoch = epoch
 	return s
 }
 
 // Computes the BCRS position and velocity of a star at time applying space motion.
-export function spaceMotion(star: Star, time: Time): PositionAndVelocity {
+export function spaceMotion(star: StarPositionAndVelocity, time: Time): PositionAndVelocity {
 	// Use TT instead of TDB for speed without any significant impact on accuracy
 	const e = tt(star.epoch)
 	const a = tt(time)
@@ -51,12 +54,10 @@ export function spaceMotion(star: Star, time: Time): PositionAndVelocity {
 	return [p, star[1]]
 }
 
-export function observeStar(star: Star, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false): ObservedStar {
-	if (!time.location) throw new Error('location is required')
-
+export function observeStar(star: StarPositionAndVelocity, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false): ObservedStar {
 	const a = tt(time)
 	const b = ut1(time)
-	const { longitude, latitude, elevation, ellipsoid } = time.location
+	const { longitude, latitude, elevation, ellipsoid } = time.location!
 	const [sp, xp, yp] = pmAngles(time)
 	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
 
@@ -68,7 +69,7 @@ export function observeStar(star: Star, time: Time, ebpv: readonly [Vec3, Vec3],
 	const [astrom] = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
 
 	// Convert to topocentric CIRS
-	const [ri, di] = eraAtciq(star.ra, star.dec, star.pmRa, star.pmDec, star.parallax, star.radialVelocity, astrom)
+	const [ri, di] = eraAtciq(star.rightAscension, star.declination, star.pmRa, star.pmDec, star.parallax, star.rv, astrom)
 
 	// Now perform observed conversion
 	const [azimuth, zenith, hourAngle, rightAscension, declination] = eraAtioq(normalizeAngle(ri), di, astrom)

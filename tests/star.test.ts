@@ -5,19 +5,19 @@ import { meter } from '../src/distance'
 import { eraC2s } from '../src/erfa'
 import { precessFk5FromJ2000 } from '../src/fk5'
 import { Ellipsoid, geodeticLocation } from '../src/location'
-import { observeStar, spaceMotion, star } from '../src/star'
+import { observeStar, type Star, spaceMotion, star } from '../src/star'
 import { Timescale, timeYMDHMS } from '../src/time'
 import { kilometerPerSecond } from '../src/velocity'
 
 const STAR = {
-	ra: deg(353.22987757),
-	dec: deg(52.27730247),
+	rightAscension: deg(353.22987757),
+	declination: deg(52.27730247),
 	// astropy works with pm_ra * cos(dec)
 	pmRa: mas(22.9) / Math.cos(deg(52.27730247)),
 	pmDec: mas(-2.1),
 	parallax: mas(23),
-	radialVelocity: kilometerPerSecond(25),
-}
+	rv: kilometerPerSecond(25),
+} as Star
 
 const EARTH_BARYCENTRIC_POSITION = [0.898130398596482138, -0.433663195905678422, -0.188058184681577339] as const
 const EARTH_BARYCENTRIC_VELOCITY = [0.00771448410893727, 0.013933051305241721, 0.006040258849858089] as const
@@ -29,7 +29,7 @@ TIME.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
 TIME.delta = () => -0.3495186114062241
 
 test('icrs', () => {
-	const i = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
+	const i = star(STAR.rightAscension, STAR.declination, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.rv)
 
 	expect(i[0][0]).toBeCloseTo(5448746.190298263914883137, 12)
 	expect(i[0][1]).toBeCloseTo(-646842.111761026666499674, 12)
@@ -45,7 +45,7 @@ test('icrs', () => {
 })
 
 test('space motion', () => {
-	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
+	const s = star(STAR.rightAscension, STAR.declination, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.rv)
 	const b = spaceMotion(s, TIME)
 
 	expect(b[0][0]).toBeCloseTo(5448758.569350527599453926, 5)
@@ -58,7 +58,7 @@ test('space motion', () => {
 })
 
 test('hadec', () => {
-	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
+	const s = star(STAR.rightAscension, STAR.declination, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.rv)
 	const c = observeStar(s, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
 
 	expect(toDeg(c.hourAngle)).toBeCloseTo(-0.295079443830661481, 16)
@@ -66,7 +66,7 @@ test('hadec', () => {
 })
 
 test('altaz', () => {
-	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
+	const s = star(STAR.rightAscension, STAR.declination, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.rv)
 	const c = observeStar(s, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
 
 	expect(toDeg(c.azimuth)).toBeCloseTo(116.449852106047814004, 16)
@@ -74,7 +74,7 @@ test('altaz', () => {
 })
 
 test('observed altaz', () => {
-	const s = star(STAR.ra, STAR.dec, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.radialVelocity)
+	const s = star(STAR.rightAscension, STAR.declination, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.rv)
 	const c = observeStar(s, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, undefined)
 
 	expect(toDeg(c.azimuth)).toBeCloseTo(116.449852106047814004, 16)
