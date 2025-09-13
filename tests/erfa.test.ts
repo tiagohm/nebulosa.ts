@@ -583,7 +583,7 @@ test('eraApci13', () => {
 	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
 	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
 
-	const [astrom, eo] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+	const astrom = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
 
 	expect(astrom.pmt).toBeCloseTo(12.65133794027378508, 12)
 	expect(astrom.eb[0]).toBeCloseTo(0.9013108747340644755, 13)
@@ -606,7 +606,7 @@ test('eraApci13', () => {
 	expect(astrom.bpn[2]).toBeCloseTo(-0.1260128571661374559e-2, 13)
 	expect(astrom.bpn[5]).toBeCloseTo(0.2255285422953395494e-4, 13)
 	expect(astrom.bpn[8]).toBeCloseTo(0.9999992057833604343, 13)
-	expect(eo).toBeCloseTo(-0.2900618712657375647e-2, 13)
+	expect(astrom.eo).toBeCloseTo(-0.2900618712657375647e-2, 13)
 })
 
 test('eraApci', () => {
@@ -707,7 +707,7 @@ test('eraAtccq', () => {
 	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
 	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
 
-	const [astrom] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+	const astrom = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
 	const p = erfa.eraAtccq(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), astrom)
 	const [ra, dec] = erfa.eraC2s(...p)
 
@@ -721,7 +721,7 @@ test('eraAtciq', () => {
 	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
 	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
 
-	const [astrom] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+	const astrom = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
 	const [ra, dec] = erfa.eraAtciq(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), astrom)
 
 	expect(ra).toBeCloseTo(2.710121572968696744, 13)
@@ -734,7 +734,7 @@ test('eraAtciqz', () => {
 	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
 	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
 
-	const [astrom] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+	const astrom = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
 	const [ri, di] = erfa.eraAtciqz(2.71, 0.174, astrom)
 
 	expect(ri).toBeCloseTo(2.709994899247256984, 13)
@@ -798,7 +798,7 @@ test('eraApco13', () => {
 
 	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
 	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
-	const [astrom, eo] = erfa.eraApco13(tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731.0, 12.8, 0.59, 0.55, [ebp, ebv], ehp)
+	const astrom = erfa.eraApco13(tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731.0, 12.8, 0.59, 0.55, [ebp, ebv], ehp)
 
 	expect(astrom.pmt).toBeCloseTo(13.25248468622475727, 11)
 	expect(astrom.eb[0]).toBeCloseTo(-0.9741827107320875162, 13)
@@ -830,7 +830,7 @@ test('eraApco13', () => {
 	expect(astrom.eral).toBeCloseTo(2.617608909189664, 13)
 	expect(astrom.refa).toBeCloseTo(0.2014187785940396921e-3, 16)
 	expect(astrom.refb).toBeCloseTo(-0.2361408314943696227e-6, 19)
-	expect(eo).toBeCloseTo(-0.003020548354802412839, 15)
+	expect(astrom.eo).toBeCloseTo(-0.003020548354802412839, 15)
 })
 
 test('eraRefco', () => {
@@ -914,7 +914,7 @@ test('eraAticq', () => {
 	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
 	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
 
-	const [astrom] = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+	const astrom = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
 	const [rc, dc] = erfa.eraAticq(2.710121572969038991, 0.1729371367218230438, astrom)
 
 	expect(rc).toBeCloseTo(2.710126504531716819, 13)

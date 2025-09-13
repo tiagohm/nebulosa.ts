@@ -2,7 +2,8 @@ import { type Angle, arcsec, normalizeAngle } from './angle'
 import { AU_M, DAYSEC, PI, PIOVERTWO, SPEED_OF_LIGHT, TAU } from './constants'
 import type { CartesianCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
-import { type EraAstrom, eraApci13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa'
+import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa'
+import { ELLIPSOID_PARAMETERS } from './location'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { pmAngles, type Time, tt, ut1 } from './time'
@@ -18,6 +19,15 @@ export interface RefractionParameters {
 	temperature?: Temperature
 	relativeHumidity?: number
 	wl?: number
+}
+
+export interface Observed {
+	readonly azimuth: Angle
+	readonly altitude: Angle
+	readonly hourAngle: Angle
+	readonly declination: Angle
+	readonly rightAscension: Angle // equinoctial
+	readonly rightAscensionCIO: Angle // CIO-based
 }
 
 // https://en.wikipedia.org/wiki/Standard_temperature_and_pressure
@@ -58,7 +68,7 @@ export function separationFrom(a: CartesianCoordinate, b: CartesianCoordinate): 
 export function icrsToCirs(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	const a = tt(time)
 
-	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp)[0]
+	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp)
 
 	const [rc, dc] = icrs.length === 2 ? icrs : eraC2s(...icrs)
 	return eraAtciqz(rc, dc, astrom)
@@ -68,16 +78,14 @@ export function icrsToCirs(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebp
 export function cirsToIcrs(cirs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	const a = tt(time)
 
-	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp)[0]
+	astrom ??= eraApci13(a.day, a.fraction, ebpv, ehp)
 
 	const [rc, dc] = cirs.length === 2 ? cirs : eraC2s(...cirs)
 	return eraAticq(rc, dc, astrom)
 }
 
 // Computes observed coordinates from CIRS cartesian/spherical coordinates.
-export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, astrom?: EraAstrom) {
-	if (!time.location) throw new Error('location is required')
-
+export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, astrom?: EraAstrom): Observed {
 	if (!astrom) {
 		const a = tt(time)
 		const b = ut1(time)
@@ -93,16 +101,14 @@ export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time,
 	}
 
 	const [ri, di] = cirs.length === 2 ? cirs : eraC2s(...cirs)
-	// Return azimuth, altitude, hour angle, right ascension, declination
-	const ret = eraAtioq(normalizeAngle(ri), di, astrom)
-	;(ret as unknown as number[])[1] = PIOVERTWO - ret[1] // Convert from zenith angle to altitude
-	return ret
+
+	// Now perform observed conversion
+	const [azimuth, zenith, hourAngle, rightAscensionCIO, declination] = eraAtioq(normalizeAngle(ri), di, astrom)
+	return { azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscensionCIO, rightAscension: normalizeAngle(rightAscensionCIO + astrom.eo) } as const
 }
 
 // Computes CIRS coordinates from observed coordinates.
 export function observedToCirs(azimuth: Angle, altitude: Angle, time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, astrom?: EraAstrom): readonly [Angle, Angle] {
-	if (!time.location) throw new Error('location is required')
-
 	if (!astrom) {
 		const a = tt(time)
 		const b = ut1(time)
@@ -118,6 +124,30 @@ export function observedToCirs(azimuth: Angle, altitude: Angle, time: Time, refr
 	}
 
 	return eraAtoiq('A', azimuth, PIOVERTWO - altitude, astrom)
+}
+
+export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, astrom?: EraAstrom): Observed {
+	if (!astrom) {
+		const a = tt(time)
+		const b = ut1(time)
+		const { longitude, latitude, elevation } = time.location!
+		const [sp, xp, yp] = pmAngles(time)
+		const pressure = refraction === false ? 0 : (refraction.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure)
+		const temperature = refraction === false ? 0 : (refraction.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
+		const relativeHumidity = refraction === false ? 0 : (refraction.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity)
+		const wl = refraction === false ? 0 : (refraction.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl)
+		const { radius, flattening } = ELLIPSOID_PARAMETERS[time.location!.ellipsoid]
+
+		// First set up the astrometry context for observed<->CIRS
+		astrom = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
+	}
+
+	// Convert to topocentric CIRS
+	const [ri, di] = eraAtciqz(...(icrs.length === 2 ? icrs : eraC2s(...icrs)), astrom)
+
+	// Now perform observed conversion
+	const [azimuth, zenith, hourAngle, rightAscensionCIO, declination] = eraAtioq(normalizeAngle(ri), di, astrom)
+	return { azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscensionCIO, rightAscension: normalizeAngle(rightAscensionCIO + astrom.eo) } as const
 }
 
 // Converts equatorial coordinates (right ascension and declination) to horizontal coordinates (azimuth and altitude) using just trigonometry (no refraction).

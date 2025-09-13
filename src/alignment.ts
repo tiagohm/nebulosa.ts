@@ -39,7 +39,7 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle, Time],
 	// Compute pole ⋅ Z to ensure the mount pole is pointing "up" (above the horizon)
 	if (pole[2] < 0) pole = vecNegateMut(pole)
 	// Find the azimuth and altitude of the mount pole (normal to the plane defined by the three reference stars)
-	const [azimuth, altitude] = cirsToObserved(pole, p3[2], refraction)
+	const { azimuth, altitude } = cirsToObserved(pole, p3[2], refraction)
 	const latitude = refraction === false ? refractedAltitude(p3[2].location!.latitude, DEFAULT_REFRACTION_PARAMETERS) : p3[2].location!.latitude
 	const azimuthError = normalizePI(azimuth)
 	const altitudeError = altitude - latitude
@@ -64,14 +64,13 @@ export function threePointPolarAlignmentAfterAdjustment(result: ThreePointPolarA
 	// Rotate the original 3rd point around that axis, simulating the mount's tracking movements (mount is actually unaligned).
 	const p3Point = vecRotateByRodrigues(eraS2c(from[0], from[1]), result.pole, p3Angle)
 
-	const rotatedPoint = cirsToObserved(p3Point, from[2], refraction)
+	const p3AzAltPoint = cirsToObserved(p3Point, from[2], refraction)
 	const newAzAltPoint = cirsToObserved(eraS2c(to[0], to[1]), to[2], refraction)
 
 	// Find the adjustment the user must have made by examining the change from point3 to newPoint
 	// (i.e. the rotation caused by the user adjusting the azimuth and altitude knobs).
 	// We assume that this was a rotation around a level mount's y axis and z axis.
-	// const zyAdjustment = rotationAngles(p3Point, eraS2c(to[0], to[1]))
-	const zyAdjustment = rotationAngles(eraS2c(rotatedPoint[0], rotatedPoint[1]), eraS2c(newAzAltPoint[0], newAzAltPoint[1]))
+	const zyAdjustment = rotationAngles(eraS2c(p3AzAltPoint.azimuth, p3AzAltPoint.altitude), eraS2c(newAzAltPoint.azimuth, newAzAltPoint.altitude))
 
 	if (zyAdjustment === false) return false
 

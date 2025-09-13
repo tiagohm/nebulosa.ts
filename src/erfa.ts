@@ -91,6 +91,7 @@ const EMPTY_ERA_ASTROM: EraAstrom = {
 	eral: 0,
 	refa: 0,
 	refb: 0,
+    eo: 0,
 }
 
 export type LeapSecondChange = readonly [number, number, number]
@@ -115,6 +116,7 @@ export interface EraAstrom {
 	eral: number // "local" Earth rotation angle (radians)
 	refa: number // refraction constant A (radians)
 	refb: number // refraction constant B (radians)
+	eo: number // Equation of the origins (radians)
 }
 
 // Normalizes [angle] into the range -[PI] <= a < +[PI].
@@ -1409,9 +1411,9 @@ export function eraApci13(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3
 	astrom = eraApci(tdb1, tdb2, ebpv, ehp, x, y, s, astrom)
 
 	// Equation of the origins.
-	const eo = eraEors(r, s)
+	astrom.eo = eraEors(r, s)
 
-	return [astrom, eo] as const
+	return astrom
 }
 
 // For a terrestrial observer, prepare star-independent astrometry
@@ -1537,7 +1539,7 @@ export function eraAtciqz(rc: Angle, dc: Angle, astrom: EraAstrom) {
 	// CIRS RA,Dec.
 	const [w, di] = eraC2s(...pi)
 	const ri = pmod(w, TAU)
-	return [ri, di]
+	return [ri, di] as const
 }
 
 // For a terrestrial observer, prepare star-independent astrometry
@@ -1697,9 +1699,9 @@ export function eraApco13(
 	astrom = eraApco(tt1, tt2, ebpv, ehp, x, y, s, theta, elong, phi, hm, xp, yp, sp, ref[0], ref[1], radius, flattening, astrom)
 
 	// Equation of the origins.
-	const eo = eraEors(r, s)
+	astrom.eo = eraEors(r, s)
 
-	return [astrom, eo] as const
+	return astrom
 }
 
 // Determine the constants A and B in the atmospheric refraction model dZ = A tan Z + B tan^3 Z.

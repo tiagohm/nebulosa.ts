@@ -105,6 +105,7 @@ parallacticAngle(ha, dec, latitude) // The deviation between zenith angle and no
 separationFrom(a, b) // Angle between the positions
 cirsToObserved(cirs, time, refraction) // Convert CIRS to observed coordinate
 observedToCirs(az, alt, time, refraction) // Convert observed to CIRS coordinate
+icrsToObserved(icrs, ebpv, ehp, time, refraction) // Convert ICRS to observed coordinate
 equatorialToHorizontal(ra, dec, latitude, lst) // Convert equatorial to horizontal coordinate
 refractedAltitude(altitude, refraction) // Compute the refracted altitude given the true altitude and refraction parameters
 ```
