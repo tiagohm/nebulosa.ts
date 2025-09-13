@@ -1,8 +1,8 @@
-import { type Angle, normalizeAngle } from './angle'
+import { type Angle, arcsec, normalizeAngle } from './angle'
 import { AU_M, DAYSEC, PI, PIOVERTWO, SPEED_OF_LIGHT, TAU } from './constants'
 import type { CartesianCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
-import { type EraAstrom, eraApio13, eraAtioq, eraAtoiq, eraC2s, eraP2s } from './erfa'
+import { type EraAstrom, eraApio13, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { pmAngles, type Time, tt, ut1 } from './time'
@@ -116,4 +116,40 @@ export function equatorialToHorizontal(rightAscension: Angle, declination: Angle
 	let azimuth = a <= -1 ? PI : a >= 1 ? 0 : Math.acos(a)
 	if (sinHA > 0 && azimuth !== 0) azimuth = TAU - azimuth
 	return [azimuth, altitude]
+}
+
+// https://bitbucket.org/Isbeorn/nina/src/master/NINA.Astrometry/AstroUtil.cs
+// Computes the refracted altitude given the true altitude and refraction parameters
+export function refractedAltitude(altitude: Angle, refraction: RefractionParameters, iterationIncrementInArcsec = 1, maxIterations = 1000) {
+	if (altitude < 0) return altitude
+
+	const pressure = refraction.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure
+	const temperature = refraction.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature
+	const relativeHumidity = refraction.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity
+	const wl = refraction.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl
+	const [refa, refb] = eraRefco(pressure, temperature, relativeHumidity, wl)
+
+	const z = PIOVERTWO - altitude
+	const increment = arcsec(iterationIncrementInArcsec)
+	let roller = increment
+
+	while (maxIterations-- > 0) {
+		const refractedZenithDistance = z - roller
+		// dZ = A tan Z + B tan^3 Z.
+		const dZ = refa * Math.tan(refractedZenithDistance) + refb * Math.tan(refractedZenithDistance) ** 3
+
+		if (Number.isNaN(dZ)) {
+			return NaN
+		}
+
+		const originalZenithDistance = refractedZenithDistance + dZ
+
+		if (Math.abs(originalZenithDistance - z) < increment) {
+			return PIOVERTWO - refractedZenithDistance
+		}
+
+		roller += increment
+	}
+
+	return NaN
 }

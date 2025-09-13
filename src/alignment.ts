@@ -1,8 +1,8 @@
 import { type Angle, arcsec, normalizePI } from './angle'
-import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters } from './astrometry'
+import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from './astrometry'
 import { PI, SIDEREAL_RATE } from './constants'
 import { eraC2s, eraS2c } from './erfa'
-import type { GeographicPosition } from './location'
+import { precessFk5FromJ2000 } from './fk5'
 import { type Time, toUnix } from './time'
 import { type Vec3, vecNegateMut, vecPlane, vecRotateByRodrigues, vecRotY, vecRotZ } from './vec3'
 
@@ -40,8 +40,9 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle, Time],
 	if (pole[2] < 0) pole = vecNegateMut(pole)
 	// Find the azimuth and altitude of the mount pole (normal to the plane defined by the three reference stars)
 	const [azimuth, altitude] = cirsToObserved(pole, p3[2], refraction)
+	const latitude = refraction === false ? refractedAltitude(p3[2].location!.latitude, DEFAULT_REFRACTION_PARAMETERS) : p3[2].location!.latitude
 	const azimuthError = normalizePI(azimuth)
-	const altitudeError = altitude - p3[2].location!.latitude
+	const altitudeError = altitude - latitude
 	return { azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment: 0, altitudeAdjustment: 0 }
 }
 
@@ -91,17 +92,10 @@ export class ThreePointPolarAlignment {
 	private initialError: ThreePointPolarAlignmentResult | false = false
 	private currentError: ThreePointPolarAlignmentResult | false = false
 
-	constructor(
-		private readonly location: GeographicPosition,
-		private refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS,
-	) {}
+	constructor(private refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS) {}
 
-	get isNorthernHemisphere() {
-		return this.location.latitude >= 0
-	}
-
-	add(rightAscension: Angle, declination: Angle, time: Time) {
-		const point = [rightAscension, declination, time] as const
+	add(rightAscension: Angle, declination: Angle, time: Time, isJ2000: boolean = false) {
+		const point = isJ2000 ? ([...eraC2s(...precessFk5FromJ2000(eraS2c(rightAscension, declination), time)), time] as const) : ([rightAscension, declination, time] as const)
 
 		if (this.position < 3) {
 			this.points[this.position] = point

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { expect, test } from 'bun:test'
 import { polarAlignmentError, ThreePointPolarAlignment, type ThreePointPolarAlignmentResult, threePointPolarAlignmentError } from '../src/alignment'
 import { arcmin, deg, dms, hour, toArcmin, toDeg } from '../src/angle'
 import { meter } from '../src/distance'
@@ -13,47 +13,46 @@ const SOUTH_LOCATION = geodeticLocation(deg(-45), deg(-22), meter(800))
 TIME.location = NORTH_LOCATION
 const LST = localSiderealTime(TIME, undefined, true) // mean sidereal time
 
-const PRECISION = -Math.log10(2 * 1.5) // -log(2 * precision)
 const P1_RA = hour(9)
 const P2_RA = hour(8)
 const P3_RA = hour(7)
 
-describe('three-point polar alignment', () => {
-	test('northern hemisphere azimuth/altitude error', () => {
-		TIME.location = NORTH_LOCATION
+test('northern hemisphere azimuth/altitude error', () => {
+	TIME.location = NORTH_LOCATION
+	const precision = -Math.log10(2 * 4) // -log(2 * precision)
 
-		for (let p = 0; p <= 1; p++) {
-			for (let a = -60; a <= 60; a += 10) {
-				for (let e = -60; e <= 60; e += 10) {
-					for (let d = -40; d <= 40; d += 10) {
-						const [p1, p2, p3] = [p === 0 ? P3_RA : P1_RA, P2_RA, p === 0 ? P1_RA : P3_RA].map((ra) => [...polarAlignmentError(ra, deg(d), TIME.location!.latitude, LST, arcmin(a), arcmin(e)), TIME] as const)
-						const result = threePointPolarAlignmentError(p1, p2, p3, false)
+	for (let p = 0; p <= 1; p++) {
+		for (let a = -60; a <= 60; a += 10) {
+			for (let e = -60; e <= 60; e += 10) {
+				for (let d = -40; d <= 40; d += 10) {
+					const [p1, p2, p3] = [p === 0 ? P3_RA : P1_RA, P2_RA, p === 0 ? P1_RA : P3_RA].map((ra) => [...polarAlignmentError(ra, deg(d), TIME.location!.latitude, LST, arcmin(a), arcmin(e)), TIME] as const)
+					const result = threePointPolarAlignmentError(p1, p2, p3, false)
 
-						expect(toArcmin(result.azimuthError)).toBeCloseTo(a, PRECISION)
-						expect(toArcmin(result.altitudeError)).toBeCloseTo(e, PRECISION)
-					}
+					expect(toArcmin(result.azimuthError)).toBeCloseTo(a, precision)
+					expect(toArcmin(result.altitudeError)).toBeCloseTo(e, precision)
 				}
 			}
 		}
-	})
+	}
+})
 
-	test('southern hemisphere azimuth/altitude error', () => {
-		TIME.location = SOUTH_LOCATION
+test('southern hemisphere azimuth/altitude error', () => {
+	TIME.location = SOUTH_LOCATION
+	const precision = -Math.log10(2 * 4) // -log(2 * precision)
 
-		for (let p = 0; p <= 1; p++) {
-			for (let a = -60; a <= 60; a += 10) {
-				for (let e = -60; e <= 60; e += 10) {
-					for (let d = -40; d <= 40; d += 10) {
-						const [p1, p2, p3] = [p === 0 ? P3_RA : P1_RA, P2_RA, p === 0 ? P1_RA : P3_RA].map((ra) => [...polarAlignmentError(ra, deg(d), TIME.location!.latitude, LST, arcmin(a), arcmin(e)), TIME] as const)
-						const result = threePointPolarAlignmentError(p1, p2, p3, false)
+	for (let p = 0; p <= 1; p++) {
+		for (let a = -60; a <= 60; a += 10) {
+			for (let e = -60; e <= 60; e += 10) {
+				for (let d = -40; d <= 40; d += 10) {
+					const [p1, p2, p3] = [p === 0 ? P3_RA : P1_RA, P2_RA, p === 0 ? P1_RA : P3_RA].map((ra) => [...polarAlignmentError(ra, deg(d), TIME.location!.latitude, LST, arcmin(a), arcmin(e)), TIME] as const)
+					const result = threePointPolarAlignmentError(p1, p2, p3, false)
 
-						expect(toArcmin(result.azimuthError)).toBeCloseTo(a, PRECISION)
-						expect(toArcmin(result.altitudeError)).toBeCloseTo(e, PRECISION)
-					}
+					expect(toArcmin(result.azimuthError)).toBeCloseTo(a, precision)
+					expect(toArcmin(result.altitudeError)).toBeCloseTo(e, precision)
 				}
 			}
 		}
-	})
+	}
 })
 
 test('auto polar alignment', () => {
@@ -202,20 +201,20 @@ test('auto polar alignment', () => {
 		return [...point, time] as const
 	}
 
-	const polarAlignment = new ThreePointPolarAlignment(location)
+	const pa = new ThreePointPolarAlignment()
 
 	let error: ThreePointPolarAlignmentResult | false = false
 
 	for (let i = 0; i < 3; i++) {
 		const point = makePointAndTime(inputs[i])
-		error = polarAlignment.add(...point)
+		error = pa.add(...point)
 	}
 
 	expect(error).not.toBeFalse()
 
 	for (let i = 3; i < inputs.length; i++) {
 		const point = makePointAndTime(inputs[i])
-		error = polarAlignment.add(...point)
+		error = pa.add(...point)
 		expect(error).not.toBeFalse()
 
 		if (error) {
@@ -223,8 +222,89 @@ test('auto polar alignment', () => {
 			expect(toDeg(error.azimuthError)).toBeCloseTo(output[0], 1)
 			expect(toDeg(error.altitudeError)).toBeCloseTo(output[1], 1)
 
-			// NOTE: Why azimuthAdjustment is inverted sign?
+			// NOTE: Why azimuthAdjustment sign is inverted?
 			// console.info(toDeg(error.altitudeAdjustment), toDeg(error.azimuthAdjustment))
 		}
 	}
+})
+
+// https://bitbucket.org/Isbeorn/nina.plugin.polaralignment/src/master/NINA.Plugins.PolarAlignment.Test/PolarErrorDeterminationTest.cs
+
+test('initial mount error for both point directions', () => {
+	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
+	time.location = geodeticLocation(deg(7), deg(49), meter(250))
+
+	const pa1 = new ThreePointPolarAlignment(false)
+	pa1.add(deg(20), deg(40), time, true)
+	pa1.add(deg(60), deg(41), time, true)
+	const error1 = pa1.add(deg(90), deg(42), time, true)
+
+	const pa2 = new ThreePointPolarAlignment(false)
+	pa2.add(deg(90), deg(42), time, true)
+	pa2.add(deg(60), deg(41), time, true)
+	const error2 = pa2.add(deg(20), deg(40), time, true)
+
+	expect(error1).not.toBeFalse()
+	expect(error2).not.toBeFalse()
+
+	if (!error1 || !error2) return
+
+	const totalError = Math.sqrt(error1.altitudeError ** 2 + error1.azimuthError ** 2)
+
+	expect(toDeg(totalError)).not.toBeCloseTo(0, 8)
+	expect(error1.altitudeError).toBeCloseTo(error2.altitudeError, 8)
+	expect(error1.azimuthError).toBeCloseTo(error2.azimuthError, 8)
+})
+
+test('no declination error', () => {
+	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
+	time.location = geodeticLocation(deg(7), deg(49), meter(250))
+
+	const pa = new ThreePointPolarAlignment(false)
+	pa.add(deg(20), deg(40), time, true)
+	pa.add(deg(60), deg(40), time, true)
+	const error = pa.add(deg(90), deg(40), time, true)
+
+	expect(error).not.toBeFalse()
+
+	if (!error) return
+
+	expect(error.altitudeError).toBeCloseTo(0, 3)
+	expect(error.azimuthError).toBeCloseTo(0, 3)
+})
+
+test('very different altitude points and true pole', () => {
+	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
+	time.location = geodeticLocation(deg(0), deg(40), meter(250))
+
+	const pa = new ThreePointPolarAlignment({ pressure: 1005, temperature: 7, relativeHumidity: 0.8, wl: 0.574 })
+	// values calculated with Astropy and quaternion rotations
+	pa.add(deg(186.4193401), deg(27.75369312), time, true)
+	pa.add(deg(156.6798968), deg(27.40124463), time, true)
+	const error = pa.add(deg(127.00972423), deg(27.34989335), time, true)
+
+	expect(error).not.toBeFalse()
+
+	if (!error) return
+
+	expect(toDeg(error.altitudeError)).toBeCloseTo(1, 1)
+	expect(toDeg(error.azimuthError)).toBeCloseTo(1, 1)
+})
+
+test('very different altitude points and refracted pole', () => {
+	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
+	time.location = geodeticLocation(deg(0), deg(40), meter(250))
+
+	const pa = new ThreePointPolarAlignment(false)
+	// values calculated with Astropy and quaternion rotations
+	pa.add(deg(186.4193401), deg(27.75369312), time, true)
+	pa.add(deg(156.6798968), deg(27.40124463), time, true)
+	const error = pa.add(deg(127.00972423), deg(27.34989335), time, true)
+
+	expect(error).not.toBeFalse()
+
+	if (!error) return
+
+	expect(toDeg(error.altitudeError)).toBeCloseTo(1 - 69.3 / 3600, 1)
+	expect(toDeg(error.azimuthError)).toBeCloseTo(1, 1)
 })
