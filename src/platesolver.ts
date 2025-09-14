@@ -7,8 +7,8 @@ export type Parity = 'NORMAL' | 'FLIPPED'
 export type PlateSolver = (input: string, options?: PlateSolveOptions, signal?: AbortSignal) => PlateSolution | undefined
 
 export interface PlateSolveOptions {
-	ra?: Angle
-	dec?: Angle
+	rightAscension?: Angle
+	declination?: Angle
 	radius?: Angle
 	downsample?: number
 	timeout?: number

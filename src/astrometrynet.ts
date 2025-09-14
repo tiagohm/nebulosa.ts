@@ -85,8 +85,8 @@ export function upload(upload: Upload<string | Blob>, signal?: AbortSignal) {
 		scale_type: upload.scaleType ?? 'ul',
 		scale_est: upload.scaleEstimated === undefined ? undefined : toDeg(upload.scaleEstimated),
 		scale_err: upload.scaleError,
-		center_ra: upload.ra !== undefined ? toDeg(normalizeAngle(upload.ra)) : undefined,
-		center_dec: upload.dec !== undefined ? toDeg(upload.dec) : undefined,
+		center_ra: upload.rightAscension !== undefined ? toDeg(normalizeAngle(upload.rightAscension)) : undefined,
+		center_dec: upload.declination !== undefined ? toDeg(upload.declination) : undefined,
 		radius: upload.radius !== undefined ? toDeg(upload.radius) : undefined,
 		downsample_factor: Math.max(2, upload.downsample ?? 2),
 		tweak_order: upload.tweakOrder ?? 2,
@@ -151,8 +151,8 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 	const timeout = options.timeout ?? 0
 	const downsample = options.downsample ?? 2
 	const r = options?.radius ? Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180)) : 0
-	const ra = options?.ra ? toDeg(normalizeAngle(options.ra)) : 0
-	const dec = options?.dec ? toDeg(options.dec) : 90
+	const ra = options?.rightAscension ? toDeg(normalizeAngle(options.rightAscension)) : 0
+	const dec = options?.declination ? toDeg(options.declination) : 90
 	const fov = Math.max(0, Math.min(toDeg(options?.fov ?? 0), 360))
 	const outDir = join(tmpdir(), Bun.randomUUIDv7())
 	const wcs = join(outDir, 'nebulosa.wcs')
