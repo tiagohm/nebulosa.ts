@@ -74,11 +74,11 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 	const hdu = !fitsOrHdu || 'header' in fitsOrHdu ? fitsOrHdu : fitsOrHdu.hdus[0]
 	if (!hdu) return undefined
 	const { header, data } = hdu
-	const bp = bitpixKeyword(header)
+	const bp = bitpixKeyword(header, 0)
 	if (bp === 0 || bp === Bitpix.LONG) return undefined
-	const sw = widthKeyword(header)
-	const sh = heightKeyword(header)
-	const nc = Math.max(1, Math.min(3, numberOfChannelsKeyword(header)))
+	const sw = widthKeyword(header, 0)
+	const sh = heightKeyword(header, 0)
+	const nc = Math.max(1, Math.min(3, numberOfChannelsKeyword(header, 1)))
 	const pixelSizeInBytes = bitpixInBytes(bp)
 	const pixelCount = sw * sh
 	const strideInBytes = sw * pixelSizeInBytes
@@ -169,7 +169,7 @@ export class FitsDataSource implements Source {
 		this.raw = image instanceof Float64Array ? image : image.raw
 		this.bitpix = image instanceof Float64Array ? bitpix! : (image.header.BITPIX as Bitpix)
 		this.pixelSizeInBytes = bitpixInBytes(this.bitpix)
-		this.channels = image instanceof Float64Array ? channels! : numberOfChannelsKeyword(image.header)
+		this.channels = image instanceof Float64Array ? channels! : numberOfChannelsKeyword(image.header, 1)
 	}
 
 	read(buffer: Buffer, offset?: number, size?: number): number {

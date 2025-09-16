@@ -13,7 +13,7 @@ test('read and write', async () => {
 			const sink = bufferSink(buffer)
 			await writeFits(sink, a)
 
-			const size = widthKeyword(a.hdus[0].header) * heightKeyword(a.hdus[0].header) * bitpixInBytes(bitpix) * channel
+			const size = widthKeyword(a.hdus[0].header, 0) * heightKeyword(a.hdus[0].header, 0) * bitpixInBytes(bitpix) * channel
 			expect(sink.position).toBe(5760 + size + computeRemainingBytes(size))
 
 			const source = bufferSource(buffer)
@@ -112,21 +112,25 @@ test('escape', async () => {
 })
 
 test('width', () => {
-	expect(widthKeyword({ NAXIS1: 1200 })).toBe(1200)
-	expect(widthKeyword({ IMAGEW: 1200 })).toBe(1200)
+	expect(widthKeyword({ NAXIS1: 1200 }, undefined)).toBe(1200)
+	expect(widthKeyword({ IMAGEW: 1400 }, undefined)).toBe(1400)
+	expect(widthKeyword({ NAXIS1: 1100, IMAGEW: 1400 }, undefined)).toBe(1100)
 })
 
 test('height', () => {
-	expect(heightKeyword({ NAXIS2: 1200 })).toBe(1200)
-	expect(heightKeyword({ IMAGEH: 1200 })).toBe(1200)
+	expect(heightKeyword({ NAXIS2: 1200 }, undefined)).toBe(1200)
+	expect(heightKeyword({ IMAGEH: 1400 }, undefined)).toBe(1400)
+	expect(heightKeyword({ NAXIS2: 1100, IMAGEH: 1400 }, undefined)).toBe(1100)
 })
 
 test('rightAscension', () => {
-	expect(rightAscensionKeyword({ OBJCTRA: '10 44 04.261' })).toBeCloseTo(hms(10, 44, 4.261), 12)
-	expect(rightAscensionKeyword({ RA: 161.0177548315 })).toBeCloseTo(hms(10, 44, 4.26115956), 12)
+	expect(rightAscensionKeyword({ OBJCTRA: '12 44 04.261' }, undefined)).toBeCloseTo(hms(12, 44, 4.261), 12)
+	expect(rightAscensionKeyword({ RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
+	expect(rightAscensionKeyword({ OBJCTRA: '11 44 04.261', RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
 })
 
 test('declination', () => {
-	expect(declinationKeyword({ OBJCTDEC: '-59 36 08.17' })).toBeCloseTo(dms(-59, 36, 8.17), 12)
-	expect(declinationKeyword({ DEC: -59.6022705034 })).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
+	expect(declinationKeyword({ OBJCTDEC: '59 36 08.17' }, undefined)).toBeCloseTo(dms(59, 36, 8.17), 12)
+	expect(declinationKeyword({ DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
+	expect(declinationKeyword({ OBJCTDEC: '59 36 08.17', DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
 })

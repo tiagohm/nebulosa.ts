@@ -12,6 +12,8 @@ const DEFAULT_FORMAT_ANGLE_OPTIONS: Required<FormatAngleOptions> = {
 	padLength: 2,
 }
 
+export const PARSE_HOUR_ANGLE: Readonly<ParseAngleOptions> = { isHour: true }
+
 // Represents an angle in radians.
 export type Angle = number
 

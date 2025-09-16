@@ -1,5 +1,5 @@
 import type { Mutable } from 'utility-types'
-import { type Angle, deg, parseAngle } from './angle'
+import { type Angle, deg, PARSE_HOUR_ANGLE, parseAngle } from './angle'
 import type { CfaPattern } from './image'
 import { readUntil, type Seekable, type Sink, type Source, sourceTransferToSink } from './io'
 
@@ -51,7 +51,7 @@ export function hasKeyword(header: FitsHeader, key: FitsHeaderKey) {
 	return key in header && header[key] !== undefined
 }
 
-export function numericKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue: number = 0) {
+export function numericKeyword<T extends number | undefined = number>(header: FitsHeader, key: FitsHeaderKey, defaultValue: NoInfer<T>) {
 	const value = header[key]
 	if (value === undefined) return defaultValue
 	else if (typeof value === 'number') return value
@@ -74,57 +74,56 @@ export function textKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue
 	else return `${value}`
 }
 
-export function numberOfAxesKeyword(header: FitsHeader, defaultValue: number = 0) {
-	return numericKeyword(header, 'NAXIS', defaultValue)
+export function numberOfAxesKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
+	return numericKeyword<T>(header, 'NAXIS', defaultValue)
 }
 
-export function widthKeyword(header: FitsHeader, defaultValue: number = 0) {
-	return numericKeyword(header, 'NAXIS1') || numericKeyword(header, 'IMAGEW', defaultValue)
+export function widthKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
+	return numericKeyword<T | undefined>(header, 'NAXIS1', undefined) ?? numericKeyword<T>(header, 'IMAGEW', defaultValue)
 }
 
-export function heightKeyword(header: FitsHeader, defaultValue: number = 0) {
-	return numericKeyword(header, 'NAXIS2') || numericKeyword(header, 'IMAGEH', defaultValue)
+export function heightKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
+	return numericKeyword<T | undefined>(header, 'NAXIS2', undefined) ?? numericKeyword<T>(header, 'IMAGEH', defaultValue)
 }
 
-export function numberOfChannelsKeyword(header: FitsHeader, defaultValue: number = 1) {
-	return numericKeyword(header, 'NAXIS3', defaultValue)
+export function numberOfChannelsKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
+	return numericKeyword<T>(header, 'NAXIS3', defaultValue)
 }
 
-export function bitpixKeyword(header: FitsHeader, defaultValue: BitpixOrZero = 0): BitpixOrZero {
-	return numericKeyword(header, 'BITPIX', defaultValue)
+export function bitpixKeyword<T extends BitpixOrZero | undefined = BitpixOrZero>(header: FitsHeader, defaultValue: NoInfer<T>) {
+	return numericKeyword<T>(header, 'BITPIX', defaultValue) as T
 }
 
-export function exposureTimeKeyword(header: FitsHeader, defaultValue: number = 0) {
-	if (hasKeyword(header, 'EXPTIME')) return numericKeyword(header, 'EXPTIME', defaultValue)
-	else return numericKeyword(header, 'EXPOSURE', defaultValue)
+export function exposureTimeKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
+	return numericKeyword<T | undefined>(header, 'EXPTIME', undefined) ?? numericKeyword<T>(header, 'EXPOSURE', defaultValue)
 }
 
 export function cfaPatternKeyword(header: FitsHeader) {
 	return textKeyword(header, 'BAYERPAT') as CfaPattern | undefined
 }
 
-export function rightAscensionKeyword(header: FitsHeader, defaultValue: Angle = 0) {
+export function rightAscensionKeyword<T extends Angle | undefined = Angle>(header: FitsHeader, defaultValue: NoInfer<T>) {
 	if (hasKeyword(header, 'RA')) {
-		const value = deg(numericKeyword(header, 'RA', defaultValue))
+		const value = deg(numericKeyword(header, 'RA', 0))
 		if (value && value !== defaultValue) return value
 	}
 
 	if (hasKeyword(header, 'OBJCTRA')) {
-		const value = parseAngle(textKeyword(header, 'OBJCTRA', ''), { isHour: true })
+		const value = parseAngle(textKeyword(header, 'OBJCTRA', ''), PARSE_HOUR_ANGLE)
 		if (value && value !== defaultValue) return value
 	}
 
 	if (hasKeyword(header, 'RA_OBJ')) {
-		const value = deg(numericKeyword(header, 'RA_OBJ', defaultValue))
+		const value = deg(numericKeyword(header, 'RA_OBJ', 0))
 		if (value && value !== defaultValue) return value
 	}
 
 	return defaultValue
 }
 
-export function declinationKeyword(header: FitsHeader, defaultValue: Angle = 0) {
+export function declinationKeyword<T extends Angle | undefined = Angle>(header: FitsHeader, defaultValue: NoInfer<T>) {
 	if (hasKeyword(header, 'DEC')) {
-		const value = deg(numericKeyword(header, 'DEC', defaultValue))
+		const value = deg(numericKeyword(header, 'DEC', 0))
 		if (value && value !== defaultValue) return value
 	}
 
@@ -134,7 +133,7 @@ export function declinationKeyword(header: FitsHeader, defaultValue: Angle = 0) 
 	}
 
 	if (hasKeyword(header, 'DEC_OBJ')) {
-		const value = deg(numericKeyword(header, 'DEC_OBJ', defaultValue))
+		const value = deg(numericKeyword(header, 'DEC_OBJ', 0))
 		if (value && value !== defaultValue) return value
 	}
 
@@ -191,7 +190,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 				const offset = source.position
 
 				const { header } = hdu
-				const size = widthKeyword(header) * heightKeyword(header) * numberOfChannelsKeyword(header) * bitpixInBytes(bitpixKeyword(header))
+				const size = widthKeyword(header, 0) * heightKeyword(header, 0) * numberOfChannelsKeyword(header, 1) * bitpixInBytes(bitpixKeyword(header, 0))
 				source.seek(source.position + size + computeRemainingBytes(size))
 				;(hdu as Mutable<FitsHdu>).data = { source, size, offset }
 			}

@@ -1,5 +1,5 @@
 import type { Socket, TCPSocketListener } from 'bun'
-import { type Angle, parseAngle, toDms, toHms } from './angle'
+import { type Angle, PARSE_HOUR_ANGLE, parseAngle, toDms, toHms } from './angle'
 import { formatTemporal, type Temporal, type TemporalDate, temporalAdd, temporalFromDate } from './temporal'
 
 // http://www.company7.com/library/meade/LX200CommandSet.pdf
@@ -182,7 +182,7 @@ export class Lx200ProtocolServer {
 				default:
 					// Set target object RA
 					if (command.startsWith('#:Sr')) {
-						const ra = parseAngle(command.substring(4), { isHour: true })
+						const ra = parseAngle(command.substring(4), PARSE_HOUR_ANGLE)
 						if (ra !== undefined) this.coordinates[0] = ra
 						return this.one(socket)
 					}
