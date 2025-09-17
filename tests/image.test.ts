@@ -12,7 +12,7 @@ test('readImageFromFits', async () => {
 
 			expect(image!.header).toBe(fits!.hdus[0].header)
 
-			const hash = channel === 1 ? '386a11ebe344b73505aa13765e65df7b' : '3d0e63969cdbffcf75bb1450ce6e61da'
+			const hash = channel === 1 ? 'e298f4abb217bac172a36f027ac6d8db' : '0a1b903f8612fa73756c266fddee0706'
 
 			await readImageTransformAndSave((i) => i, `read-${bitpix}.${channel}`, hash, bitpix, channel)
 		}
@@ -35,7 +35,7 @@ test('writeImageToFits', async () => {
 
 			expect(image0!.header).toEqual(image1!.header)
 
-			const hash = channel === 1 ? '386a11ebe344b73505aa13765e65df7b' : '3d0e63969cdbffcf75bb1450ce6e61da'
+			const hash = channel === 1 ? 'e298f4abb217bac172a36f027ac6d8db' : '0a1b903f8612fa73756c266fddee0706'
 
 			await saveImageAndCompareHash(image1!, `write-${key}`, hash)
 		}
@@ -93,69 +93,69 @@ test('auto stf', () => {
 })
 
 test('scnr', () => {
-	return readImageTransformAndSave((i) => scnr(i, 'GREEN', 0.9), 'scnr', '56e93f2a267d35779b428e0a62e32882')
+	return readImageTransformAndSave((i) => scnr(i, 'GREEN', 0.9), 'scnr', '73f4a8308f0e234610b913400cce2adb')
 })
 
 test('horizontal flip', () => {
-	return readImageTransformAndSave((i) => horizontalFlip(i), 'hf', '613209919daf05ac07c60906458c070c')
+	return readImageTransformAndSave((i) => horizontalFlip(i), 'hf', '56b0ed9d8c265f1eb1d5ca2cdea1d619')
 })
 
 test('vertical flip', () => {
-	return readImageTransformAndSave((i) => verticalFlip(i), 'vf', 'b7dac23121498363105254fb78c3ae7f')
+	return readImageTransformAndSave((i) => verticalFlip(i), 'vf', '0c07e73e73bd7383c799874da41ee284')
 })
 
 test('horizontal & vertical flip', () => {
-	return readImageTransformAndSave((i) => verticalFlip(horizontalFlip(i)), 'hvf', 'b3707db8d6b6d1ea89e90dd03fc8af4c')
+	return readImageTransformAndSave((i) => verticalFlip(horizontalFlip(i)), 'hvf', 'fd71d2b9372436699bf54f58f9dbadf5')
 })
 
 test('invert', () => {
-	return readImageTransformAndSave((i) => invert(i), 'invert', 'aca42e7bfb9c8823068f4d8efa1615bf')
+	return readImageTransformAndSave((i) => invert(i), 'invert', 'a9b92211de5965f5afb1aab2f0427b79')
 })
 
 test('horizontal flip', () => {
-	return readImageAndSaveWithOptions({ horizontalFlip: true }, 'hf2', '613209919daf05ac07c60906458c070c')
+	return readImageAndSaveWithOptions({ horizontalFlip: true }, 'hf2', '56b0ed9d8c265f1eb1d5ca2cdea1d619')
 })
 
 test('vertical flip', () => {
-	return readImageAndSaveWithOptions({ verticalFlip: true }, 'vf2', 'b7dac23121498363105254fb78c3ae7f')
+	return readImageAndSaveWithOptions({ verticalFlip: true }, 'vf2', '0c07e73e73bd7383c799874da41ee284')
 })
 
 test('sharpen', () => {
-	return readImageAndSaveWithOptions({ sharpen: true }, 'sharpen', 'b77cdbb38f603e75c3e847d5dc0f872c')
+	return readImageAndSaveWithOptions({ sharpen: true }, 'sharpen', 'e45a3f735e0a2ac6a55509f0c618e55b')
 })
 
 test('normalize', () => {
-	return readImageAndSaveWithOptions({ normalize: true }, 'normalize', '3d0e63969cdbffcf75bb1450ce6e61da')
+	return readImageAndSaveWithOptions({ normalize: true }, 'normalize', '0a1b903f8612fa73756c266fddee0706')
 })
 
 test('brightness', () => {
-	return readImageAndSaveWithOptions({ brightness: 30 }, 'brightness', 'e9c024713c6e71861b09b791cac9ffe9')
+	return readImageAndSaveWithOptions({ brightness: 30 }, 'brightness', '06b7df04c9110fd6b5fa04d15d0c0b48')
 })
 
 test('contrast', () => {
-	return readImageAndSaveWithOptions({ contrast: 5 }, 'contrast', 'd4e3a5d42f02dd33096d851021273b68')
+	return readImageAndSaveWithOptions({ contrast: 5 }, 'contrast', 'd407e71e6fc4108082249dc0bb3c0bf6')
 })
 
 test('saturation', () => {
-	return readImageAndSaveWithOptions({ saturation: 30 }, 'saturation', 'f099129b0ba7d3b0c8f277cec45084a6')
+	return readImageAndSaveWithOptions({ saturation: 30 }, 'saturation', '2103ecbf94a8006ea7dfd1a2551ccfe2')
 })
 
 test('brightness & saturation', () => {
-	return readImageAndSaveWithOptions({ brightness: 30, saturation: 30 }, 'brightness-saturation', 'bf17190e159247f13a6f86c4ebf5a63f')
+	return readImageAndSaveWithOptions({ brightness: 30, saturation: 30 }, 'brightness-saturation', 'ce8ad38b1ccf90f227e568523df94326')
 })
 
 test('gamma', () => {
-	return readImageAndSaveWithOptions({ gamma: 2.2 }, 'gamma', '95a81d1d960fb96aa95d84c40f17bb17')
+	return readImageAndSaveWithOptions({ gamma: 2.2 }, 'gamma', '22c9e73c1ec3f917896503370b06548e')
 })
 
 test('median', () => {
-	return readImageAndSaveWithOptions({ median: true }, 'median', 'eba8ab1e9cee53361accd564f7c93ca0')
+	return readImageAndSaveWithOptions({ median: true }, 'median', '18ab1f9f14e5776e00b3c3b7eddff13d')
 })
 
 test('blur', () => {
-	return readImageAndSaveWithOptions({ blur: true }, 'blur', '0b05253f6713e19932ab2c6eb2edd15a')
+	return readImageAndSaveWithOptions({ blur: true }, 'blur', 'e71d4f269e5d5a483fce3f5e8b0d3584')
 })
 
 test('negate', () => {
-	return readImageAndSaveWithOptions({ negate: true }, 'negate', 'aca42e7bfb9c8823068f4d8efa1615bf')
+	return readImageAndSaveWithOptions({ negate: true }, 'negate', 'a9b92211de5965f5afb1aab2f0427b79')
 })
