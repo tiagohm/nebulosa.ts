@@ -367,6 +367,7 @@ TODO
 moonParallax(distance) // Compute the moon parallax at a given distance
 moonSemidiameter(distance) // Compute the moon semidiameter at a given distance
 lunation(time, system) // Compute the lunation at a given time and system
+nearestLunarPhase(time, phase, true) // Compute the nearest lunar phase at a given time
 nearestLunarEclipse(time, true) // Compute the nearest lunar eclipse at a given time
 lunarSaros(time) // Compute the saros series number for the lunar eclipse at time
 ```
@@ -557,6 +558,7 @@ toKelvin(1) // Convert celsius to Kelvin
 temporalNow() // Get the current temporal
 temporalUnix(seconds) // Create a temporal from Unix timestamp
 temporalFromDate(year, month, day, hour, minute, second, millisecond) // Create a temporal from year, month, day, hour, minute, second and millisecond
+temporalFromTime(time) // Create a temporal from Time
 temporalToDate(temporal) // Convert a temporal to year, month, day, hour, minute, second and millisecond
 temporalAdd(temporal, duration, unit) // Add duration to temporal
 temporalSubtract(temporal, duration, unit) // Subtract duration from temporal

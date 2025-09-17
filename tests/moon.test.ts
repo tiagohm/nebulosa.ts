@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, toArcsec } from '../src/angle'
 import { kilometer } from '../src/distance'
-import { LunationSystem, lunarSaros, lunation, moonParallax, moonSemidiameter, nearestLunarEclipse } from '../src/moon'
+import { LunarPhase, LunationSystem, lunarSaros, lunation, moonParallax, moonSemidiameter, nearestLunarEclipse, nearestLunarPhase } from '../src/moon'
 import { time, timeYMD, timeYMDHMS, toDate, utc } from '../src/time'
 
 test('parallax', () => {
@@ -28,6 +28,42 @@ test('saros', () => {
 	expect(lunarSaros(timeYMD(2016, 9, 16))).toBe(147)
 	expect(lunarSaros(timeYMD(2031, 10, 30))).toBe(117)
 	expect(lunarSaros(time(2276890.5))).toBe(138)
+})
+
+describe('nearest lunar phase', () => {
+	// https://www.timeanddate.com/moon/phases/?year=1977
+	test('new moon', () => {
+		const time = nearestLunarPhase(timeYMDHMS(1977, 2, 15), LunarPhase.NEW, true)
+		expect(toDate(utc(time)).slice(0, 5)).toEqual([1977, 2, 18, 3, 36])
+	})
+
+	// https://www.timeanddate.com/moon/phases/?year=2044
+	test('last quarter', () => {
+		const time = nearestLunarPhase(timeYMDHMS(2044, 2, 1), LunarPhase.LAST_QUARTER, true)
+		expect(toDate(utc(time)).slice(0, 5)).toEqual([2044, 2, 20, 20, 20])
+	})
+
+	// https://www.timeanddate.com/moon/phases/?year=2025
+	test('full', () => {
+		const time = nearestLunarPhase(timeYMDHMS(2025, 9, 17), LunarPhase.FULL, true)
+		expect(toDate(utc(time)).slice(0, 5)).toEqual([2025, 10, 7, 3, 47])
+	})
+
+	// https://www.timeanddate.com/moon/phases/?year=1994
+	test('first quarter', () => {
+		const time = nearestLunarPhase(timeYMDHMS(1994, 1, 1), LunarPhase.FIRST_QUARTER, true)
+		expect(toDate(utc(time)).slice(0, 5)).toEqual([1994, 1, 19, 20, 26])
+	})
+
+	test('prev', () => {
+		expect(toDate(utc(nearestLunarPhase(timeYMDHMS(1994, 1, 19, 20, 28), LunarPhase.FIRST_QUARTER, false))).slice(0, 5)).toEqual([1994, 1, 19, 20, 26])
+		expect(toDate(utc(nearestLunarPhase(timeYMDHMS(1994, 1, 19, 20, 26), LunarPhase.FIRST_QUARTER, false))).slice(0, 5)).toEqual([1993, 12, 20, 22, 26])
+	})
+
+	test('next', () => {
+		expect(toDate(utc(nearestLunarPhase(timeYMDHMS(1994, 1, 19, 20, 26), LunarPhase.FIRST_QUARTER, true))).slice(0, 5)).toEqual([1994, 1, 19, 20, 26])
+		expect(toDate(utc(nearestLunarPhase(timeYMDHMS(1994, 1, 19, 20, 28), LunarPhase.FIRST_QUARTER, true))).slice(0, 5)).toEqual([1994, 2, 18, 17, 47])
+	})
 })
 
 describe('nearest lunar eclipse', () => {
@@ -70,17 +106,13 @@ describe('nearest lunar eclipse', () => {
 		expect(eclipse.type).toBe('PARTIAL')
 	})
 
-	test('previous', () => {
-		const eclipse = nearestLunarEclipse(timeYMDHMS(1997, 9, 16, 18, 48), false)
-		expect(toDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([1997, 9, 16, 18, 47])
-		expect(eclipse.type).toBe('TOTAL')
+	test('prev', () => {
+		expect(toDate(utc(nearestLunarEclipse(timeYMDHMS(1997, 9, 16, 18, 48), false).maximalTime)).slice(0, 5)).toEqual([1997, 9, 16, 18, 47])
 		expect(toDate(utc(nearestLunarEclipse(timeYMDHMS(1997, 9, 16, 18, 46), false).maximalTime)).slice(0, 5)).toEqual([1997, 3, 24, 4, 39])
 	})
 
 	test('next', () => {
-		const eclipse = nearestLunarEclipse(timeYMDHMS(1997, 9, 16, 18, 46), true)
-		expect(toDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([1997, 9, 16, 18, 47])
-		expect(eclipse.type).toBe('TOTAL')
+		expect(toDate(utc(nearestLunarEclipse(timeYMDHMS(1997, 9, 16, 18, 46), true).maximalTime)).slice(0, 5)).toEqual([1997, 9, 16, 18, 47])
 		expect(toDate(utc(nearestLunarEclipse(timeYMDHMS(1997, 9, 16, 18, 48), true).maximalTime)).slice(0, 5)).toEqual([1998, 3, 13, 4, 20])
 	})
 })

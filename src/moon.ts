@@ -1,7 +1,8 @@
 import { deg } from './angle'
-import { ASEC2RAD, AU_KM, DEG2RAD, MOON_SINODIC_DAYS } from './constants'
+import { ASEC2RAD, AU_KM, DAYSPERJY, DEG2RAD, MOON_SINODIC_DAYS } from './constants'
 import type { Distance } from './distance'
-import { type Time, Timescale, time, timeNormalize, toJulianDay, tt } from './time'
+import { temporalFromTime, temporalGet } from './temporal'
+import { type Time, Timescale, time, timeNormalize, timeSubtract, timeYMD, toJulianDay, tt } from './time'
 
 export type LunarEclipseType = 'TOTAL' | 'PARTIAL' | 'PENUMBRAL'
 
@@ -12,6 +13,13 @@ export enum LunationSystem {
 	HEBREW,
 	ISLAMIC,
 	THAI,
+}
+
+export enum LunarPhase {
+	NEW = 0, // 0
+	FIRST_QUARTER = 1, // 25
+	FULL = 2, // 50
+	LAST_QUARTER = 3, // 75
 }
 
 export interface LunarEclipse {
@@ -62,6 +70,176 @@ export function lunarSaros(time: Time) {
 	const LN = Math.round((time.day - 2452656 + (time.fraction - 0.94931)) / MOON_SINODIC_DAYS)
 	const SNL = ((192 + LN * 38 - 1) % 223) + 1
 	return SNL < 0 ? SNL + 223 : SNL
+}
+
+// Computes the nearest (previous or next) lunar phase for a given time
+export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean): Time {
+	const t = tt(time)
+	const jd = toJulianDay(t)
+
+	let year = temporalGet(temporalFromTime(t), 'year')
+	year += timeSubtract(t, timeYMD(year)) / DAYSPERJY
+	let k = Math.floor((year - 2000) * 12.3685) + phase / 4 + (next ? 0 : 1)
+
+	while (true) {
+		const T = k / 1236.85
+		const T2 = T * T
+		const T3 = T2 * T
+		const T4 = T3 * T
+
+		const timeOfEclipseDay = 2451550 + 29 * k
+		const timeOfEclipseFraction = 0.530588861 * k + 0.09766 + 0.00015437 * T - 0.00000015 * T2 + 0.00000000073 * T3
+
+		// Sun's mean anomaly
+		const SM = deg(2.5534 + 29.1053567 * k - 0.0000014 * T2 - 0.00000011 * T3)
+
+		// Moon's mean anomaly
+		const MM = deg(201.5643 + 385.81693528 * k + 0.0107582 * T2 + 0.00001238 * T3 - 0.000000058 * T4)
+
+		// Moon's argument of latitude (mean distance of the Moon from its ascending node)
+		const F = deg(160.7108 + 390.67050284 * k - 0.0016118 * T2 - 0.00000227 * T3 + 0.000000011 * T4)
+
+		// Mean longitude of ascending node
+		const omega = deg(124.7746 - 1.56375588 * k + 0.0020672 * T2 + 0.00000215 * T3)
+
+		const A1 = 299.77 * DEG2RAD + 0.107408 * DEG2RAD * k - 0.009173 * DEG2RAD * T2
+		const A2 = 251.88 * DEG2RAD + 0.016321 * DEG2RAD * k
+		const A3 = 251.83 * DEG2RAD + 26.651866 * DEG2RAD * k
+		const A4 = 349.42 * DEG2RAD + 36.412478 * DEG2RAD * k
+		const A5 = 84.66 * DEG2RAD + 18.206239 * DEG2RAD * k
+		const A6 = 141.74 * DEG2RAD + 53.303771 * DEG2RAD * k
+		const A7 = 207.14 * DEG2RAD + 2.453732 * DEG2RAD * k
+		const A8 = 154.84 * DEG2RAD + 7.30686 * DEG2RAD * k
+		const A9 = 34.52 * DEG2RAD + 27.261239 * DEG2RAD * k
+		const A10 = 207.19 * DEG2RAD + 0.121824 * DEG2RAD * k
+		const A11 = 291.34 * DEG2RAD + 1.844379 * DEG2RAD * k
+		const A12 = 161.72 * DEG2RAD + 24.198154 * DEG2RAD * k
+		const A13 = 239.56 * DEG2RAD + 25.513099 * DEG2RAD * k
+		const A14 = 331.55 * DEG2RAD + 3.592518 * DEG2RAD * k
+
+		// Multiplier related to the eccentricity of the Earth orbit
+		const E = 1 - 0.002516 * T - 0.0000074 * T2
+
+		let addition = 0
+
+		if (phase === LunarPhase.NEW) {
+			addition =
+				-0.4072 * Math.sin(MM) +
+				0.17241 * E * Math.sin(SM) +
+				0.01608 * Math.sin(2 * MM) +
+				0.01039 * Math.sin(2 * F) +
+				0.00739 * E * Math.sin(MM - SM) -
+				0.00514 * E * Math.sin(MM + SM) +
+				0.00208 * E * E * Math.sin(2 * SM) -
+				0.00111 * Math.sin(MM - 2 * F) -
+				0.00057 * Math.sin(MM + 2 * F) +
+				0.00056 * E * Math.sin(2 * MM + SM) -
+				0.00042 * Math.sin(3 * MM) +
+				0.00042 * E * Math.sin(SM + 2 * F) +
+				0.00038 * E * Math.sin(SM - 2 * F) -
+				0.00024 * E * Math.sin(2 * MM - SM) -
+				0.00017 * Math.sin(omega) -
+				0.00007 * Math.sin(MM + 2 * SM) +
+				0.00004 * Math.sin(2 * MM - 2 * F) +
+				0.00004 * Math.sin(3 * SM) +
+				0.00003 * Math.sin(MM + SM - 2 * F) +
+				0.00003 * Math.sin(2 * MM + 2 * F) -
+				0.00003 * Math.sin(MM + SM + 2 * F) +
+				0.00003 * Math.sin(MM - SM + 2 * F) -
+				0.00002 * Math.sin(MM - SM - 2 * F) -
+				0.00002 * Math.sin(3 * MM + SM) +
+				0.00002 * Math.sin(4 * MM)
+		}
+
+		if (phase === LunarPhase.FULL) {
+			addition =
+				-0.40614 * Math.sin(MM) +
+				0.17302 * E * Math.sin(SM) +
+				0.01614 * Math.sin(2 * MM) +
+				0.01043 * Math.sin(2 * F) +
+				0.00734 * E * Math.sin(MM - SM) -
+				0.00515 * E * Math.sin(MM + SM) +
+				0.00209 * E * E * Math.sin(2 * SM) -
+				0.00111 * Math.sin(MM - 2 * F) -
+				0.00057 * Math.sin(MM + 2 * F) +
+				0.00056 * E * Math.sin(2 * MM + SM) -
+				0.00042 * Math.sin(3 * MM) +
+				0.00042 * E * Math.sin(SM + 2 * F) +
+				0.00038 * E * Math.sin(SM - 2 * F) -
+				0.00024 * E * Math.sin(2 * MM - SM) -
+				0.00017 * Math.sin(omega) -
+				0.00007 * Math.sin(MM + 2 * SM) +
+				0.00004 * Math.sin(2 * MM - 2 * F) +
+				0.00004 * Math.sin(3 * SM) +
+				0.00003 * Math.sin(MM + SM - 2 * F) +
+				0.00003 * Math.sin(2 * MM + 2 * F) -
+				0.00003 * Math.sin(MM + SM + 2 * F) +
+				0.00003 * Math.sin(MM - SM + 2 * F) -
+				0.00002 * Math.sin(MM - SM - 2 * F) -
+				0.00002 * Math.sin(3 * MM + SM) +
+				0.00002 * Math.sin(4 * MM)
+		}
+
+		if (phase === LunarPhase.FIRST_QUARTER || phase === LunarPhase.LAST_QUARTER) {
+			addition =
+				-0.62801 * Math.sin(MM) +
+				0.17172 * E * Math.sin(SM) -
+				0.01183 * E * Math.sin(MM + SM) +
+				0.00862 * Math.sin(2 * MM) +
+				0.00804 * Math.sin(2 * F) +
+				0.00454 * E * Math.sin(MM - SM) +
+				0.00204 * E * E * Math.sin(2 * SM) -
+				0.0018 * Math.sin(MM - 2 * F) -
+				0.0007 * Math.sin(MM + 2 * F) -
+				0.0004 * Math.sin(3 * MM) -
+				0.00034 * E * Math.sin(2 * MM - SM) +
+				0.00032 * E * Math.sin(SM + 2 * F) +
+				0.00032 * E * Math.sin(SM - 2 * F) -
+				0.00028 * E * E * Math.sin(MM + 2 * SM) +
+				0.00027 * E * Math.sin(2 * MM + SM) -
+				0.00017 * Math.sin(omega) -
+				0.00005 * Math.sin(MM - SM - 2 * F) +
+				0.00004 * Math.sin(2 * MM + 2 * F) -
+				0.00004 * Math.sin(MM + SM + 2 * F) +
+				0.00004 * Math.sin(MM - 2 * SM) +
+				0.00003 * Math.sin(MM + SM - 2 * F) +
+				0.00003 * Math.sin(3 * SM) +
+				0.00002 * Math.sin(2 * MM - 2 * F) +
+				0.00002 * Math.sin(MM - SM + 2 * F) -
+				0.00002 * Math.sin(3 * MM + SM)
+
+			const W = 0.00306 - 0.00038 * E * Math.cos(SM) + 0.00026 * Math.cos(MM) - 0.00002 * Math.cos(MM - SM) + 0.00002 * Math.cos(MM + SM) + 0.00002 * Math.cos(2 * F)
+
+			if (phase === LunarPhase.FIRST_QUARTER) addition += W
+			else addition -= W
+		}
+
+		const timeOfEclipseCorrection =
+			0.000325 * Math.sin(A1) +
+			0.000165 * Math.sin(A2) +
+			0.000164 * Math.sin(A3) +
+			0.000126 * Math.sin(A4) +
+			0.00011 * Math.sin(A5) +
+			0.000062 * Math.sin(A6) +
+			0.00006 * Math.sin(A7) +
+			0.000056 * Math.sin(A8) +
+			0.000047 * Math.sin(A9) +
+			0.000042 * Math.sin(A10) +
+			0.00004 * Math.sin(A11) +
+			0.000037 * Math.sin(A12) +
+			0.000035 * Math.sin(A13) +
+			0.000023 * Math.sin(A14)
+
+		const fraction = timeOfEclipseFraction + timeOfEclipseCorrection + addition
+
+		if (timeOfEclipseDay + fraction > jd !== next) {
+			if (next) k++
+			else k--
+			continue
+		}
+
+		return timeNormalize(timeOfEclipseDay, fraction, 0, Timescale.TT)
+	}
 }
 
 // Computes the nearest (previous or next) solar eclipse for a given time
@@ -164,14 +342,16 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 			}
 			// Eclipse found
 			else {
-				if (timeOfGreatestEclipseDay + timeOfGreatestEclipseFraction + timeOfGreatestEclipseCorrection > jd !== next) {
+				const fraction = timeOfGreatestEclipseFraction + timeOfGreatestEclipseCorrection
+
+				if (timeOfGreatestEclipseDay + fraction > jd !== next) {
 					found = false
 					if (next) k++
 					else k--
 					continue
 				}
 
-				eclipse.maximalTime = timeNormalize(timeOfGreatestEclipseDay, timeOfGreatestEclipseFraction + timeOfGreatestEclipseCorrection, 0, Timescale.TT)
+				eclipse.maximalTime = timeNormalize(timeOfGreatestEclipseDay, fraction, 0, Timescale.TT)
 				eclipse.magnitude = mag
 				eclipse.rho = rho
 				eclipse.gamma = gamma

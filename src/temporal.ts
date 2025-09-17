@@ -1,3 +1,5 @@
+import { type Time, toUnixMillis } from './time'
+
 // gv-IM, mg-MG, sn-ZW, zu-ZA
 export const DATE_FORMAT = 'YYYY-MM-DD'
 export const TIME_FORMAT = 'HH:mm:ss.SSS'
@@ -80,6 +82,10 @@ export function temporalToDate(temporal: Temporal): TemporalDate {
 	const millisecond = time % SECONDS
 
 	return [year, month, day, hour, minute, second, millisecond]
+}
+
+export function temporalFromTime(time: Time): Temporal {
+	return toUnixMillis(time)
 }
 
 export function temporalAdd(temporal: Temporal, duration: number, unit: TemporalUnit | TemporalUnitShort): Temporal {

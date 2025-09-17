@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
+import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalFromTime, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
+import { timeYMDHMS } from '../src/time'
 
 test('is leap year', () => {
 	expect(isLeapYear(2020)).toBe(true)
@@ -64,6 +65,12 @@ test('temporal to date', () => {
 			}
 		}
 	}
+})
+
+test('temporal from time', () => {
+	const time = timeYMDHMS(2024, 2, 29, 12, 34, 56.789)
+	expect(temporalFromTime(time)).toBe(1709210096789)
+	expect(temporalToDate(temporalFromTime(time))).toEqual([2024, 2, 29, 12, 34, 56, 789])
 })
 
 describe('add', () => {

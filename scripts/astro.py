@@ -43,8 +43,8 @@ def iersb():
     print('IERSB: DUT1: {0:.18f}, PM: {1:.18f} {2:.18f}'.format(dut1, xy[0], xy[1]))
 
 
-def jyear():
-    t = Time(1975, format='jyear', scale='tt')
+def jyear(year: int):
+    t = Time(year, format='jyear', scale='tt')
     print('YEAR: {0:.0f}, {1:.18f}'.format(t.tt.jd1, t.tt.jd2))
 
 
@@ -216,7 +216,7 @@ match args[0]:
     case 'iersb':
         iersb()
     case 'jyear':
-        jyear()
+        jyear(int(args[1]))
     case 'lst':
         lst()
     case 'capitaine':

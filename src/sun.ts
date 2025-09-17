@@ -184,7 +184,9 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 				0.0002 * E * Math.sin(2 * MM - SM) -
 				0.0002 * Math.sin(omega)
 
-			if (timeOfGreatestEclipseDay + timeOfGreatestEclipseFraction + timeOfGreatestEclipseCorrection > jd !== next) {
+			const fraction = timeOfGreatestEclipseFraction + timeOfGreatestEclipseCorrection
+
+			if (timeOfGreatestEclipseDay + fraction > jd !== next) {
 				found = false
 				if (next) k++
 				else k--
@@ -193,7 +195,7 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 
 			eclipse.u = u
 			eclipse.gamma = gamma
-			eclipse.maximalTime = timeNormalize(timeOfGreatestEclipseDay, timeOfGreatestEclipseFraction + timeOfGreatestEclipseCorrection, 0, Timescale.TT)
+			eclipse.maximalTime = timeNormalize(timeOfGreatestEclipseDay, fraction, 0, Timescale.TT)
 			eclipse.lunation = k
 
 			// non-central eclipse

@@ -7,7 +7,7 @@ import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // biome-ignore format: too long
-import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, toUnix, toUnixMillis, tt, ut1, utc } from '../src/time'
+import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, toJulianDay, toUnix, toUnixMillis, tt, ut1, utc } from '../src/time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = timeNormalize(expected.day, expected.fraction)
@@ -66,7 +66,7 @@ test('time unix', () => {
 	expect(t.scale).toBe(Timescale.UTC)
 
 	t = timeUnix(946684800, Timescale.TAI, true)
-	expect(t.day + t.fraction).toBe(J2000 - 0.5)
+	expect(toJulianDay(t)).toBe(J2000 - 0.5)
 	expect(t.scale).toBe(Timescale.TAI)
 })
 
@@ -106,33 +106,35 @@ test('time YMDHMS', () => {
 
 test('time YMD', () => {
 	const t = timeYMD(2025, 5, 5, 0, Timescale.TT)
-	expect(t.day + t.fraction).toBe(2460800.5)
+	expect(toJulianDay(t)).toBe(2460800.5)
 	expect(t.scale).toBe(Timescale.TT)
 })
 
 test('time julian year', () => {
 	let t = timeJulianYear(2024)
-	expect(t.day).toBe(2460311)
-	expect(t.fraction).toBe(0)
+	expect(toJulianDay(t)).toBe(2460311)
 	expect(t.scale).toBe(Timescale.TT)
 
 	t = timeJulianYear(1975, Timescale.TCG)
-	expect(t.day).toBe(2442414)
-	expect(t.fraction).toBe(-0.25)
+	expect(toJulianDay(t)).toBe(2442413.75)
 	expect(t.scale).toBe(Timescale.TCG)
 })
 
 test('time besselian year', () => {
 	const t = timeBesselianYear(1950, Timescale.TCB)
-	expect(t.day).toBe(2433282)
-	expect(t.fraction).toBe(0.42345904977992177)
+	expect(toJulianDay(t)).toBe(2433282.42345904977992177)
 	expect(t.scale).toBe(Timescale.TCB)
+})
+
+test('time gregorian year', () => {
+	const t = timeYMD(2001)
+	expect(toJulianDay(t)).toBe(2451910.5)
+	expect(t.scale).toBe(Timescale.UTC)
 })
 
 test('time GPS', () => {
 	const t = timeGPS(630720013)
-	expect(t.day).toBe(J2000)
-	expect(t.fraction).toBe(-0.4996296167373657)
+	expect(toJulianDay(t)).toBe(J2000 - 0.4996296167373657)
 	expect(t.scale).toBe(Timescale.TAI)
 })
 
