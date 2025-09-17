@@ -1,5 +1,5 @@
 import { deg } from './angle'
-import { ASEC2RAD, AU_KM, DAYSPERJY, DEG2RAD, MOON_SINODIC_DAYS } from './constants'
+import { ASEC2RAD, AU_KM, DAYSPERJY, DEG2RAD, MOON_SYNODIC_DAYS } from './constants'
 import type { Distance } from './distance'
 import { temporalFromTime, temporalGet } from './temporal'
 import { type Time, Timescale, time, timeNormalize, timeSubtract, timeYMD, toJulianDay, tt } from './time'
@@ -54,7 +54,7 @@ export function moonSemidiameter(distance: Distance) {
 // Computes the lunation number for a given time and system
 export function lunation(time: Time, system: LunationSystem = LunationSystem.BROWN) {
 	// The first New Moon of 2000 (6th January, ~ 18:14 UTC)
-	const LN = Math.round((time.day - 2451550 + (time.fraction - 0.25972)) / MOON_SINODIC_DAYS - 0.25) || 0
+	const LN = Math.round((time.day - 2451550 + (time.fraction - 0.25972)) / MOON_SYNODIC_DAYS - 0.25) || 0
 
 	if (system === LunationSystem.MEEUS) return LN
 	else if (system === LunationSystem.GOLDSTINE) return LN + 37105
@@ -67,7 +67,7 @@ export function lunation(time: Time, system: LunationSystem = LunationSystem.BRO
 // Computes the saros series number for the lunar eclipse.
 export function lunarSaros(time: Time) {
 	// Full moon 18 Jan 2003
-	const LN = Math.round((time.day - 2452656 + (time.fraction - 0.94931)) / MOON_SINODIC_DAYS)
+	const LN = Math.round((time.day - 2452656 + (time.fraction - 0.94931)) / MOON_SYNODIC_DAYS)
 	const SNL = ((192 + LN * 38 - 1) % 223) + 1
 	return SNL < 0 ? SNL + 223 : SNL
 }

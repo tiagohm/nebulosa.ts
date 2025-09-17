@@ -50,7 +50,7 @@ export const DAYSPERTY = 365.242198781
 export const MOON_SIDEREAL_DAYS = 27.321661
 
 // Period between two same successive lunar phases, in days.
-export const MOON_SINODIC_DAYS = 29.53058867
+export const MOON_SYNODIC_DAYS = 29.53058867
 
 // The time that elapses between two passages of the Moon at its perigee/apogee, in days.
 // Librations in longitude have same periodicity too.
