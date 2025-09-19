@@ -479,6 +479,12 @@ const { r, r2, chi2, rmsd } = regressionScore(regression, x, y)
 const [a, b, c] = levenbergMarquardt(x, y, model, [a0, b0, c0]) // Compute Levenberg-Marquardt regression coefficents
 ```
 
+### SAO
+
+```ts
+readSaoCatalog(source, bigEndian) // Read SAO star catalog from source
+```
+
 ### Small Body Database
 
 ```ts

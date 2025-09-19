@@ -23,16 +23,17 @@ const FILES: Readonly<Record<string, string>> = {
 	'NGC3372-32.3.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/NGC3372-32.3.fit',
 	'NGC3372--32.3.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/NGC3372--32.3.fit',
 	'NGC3372--64.3.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/NGC3372--64.3.fit',
+	'SAO.pc.dat': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/SAO.pc.dat',
 }
 
 async function download(type: keyof typeof FILES) {
 	const file = Bun.file(`data/${type}`)
 	if (await file.exists()) return file
 	const url = FILES[type]
+	console.info('downloading:', type)
 	const response = await fetch(url)
 	await Bun.write(file, await response.blob())
 	return file
 }
 
-const downloads = Object.keys(FILES).map((key) => download(key as never))
-await Promise.all(downloads)
+await Promise.all(Object.keys(FILES).map((key) => download(key as never)))
