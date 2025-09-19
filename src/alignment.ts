@@ -1,6 +1,6 @@
 import { type Angle, arcsec, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from './astrometry'
-import { PI, SIDEREAL_RATE } from './constants'
+import { PI, SIDEREAL_RATE, TAU } from './constants'
 import { eraC2s, eraS2c } from './erfa'
 import { precessFk5FromJ2000 } from './fk5'
 import { type Time, toUnix } from './time'
@@ -40,9 +40,12 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle, Time],
 	if (pole[2] < 0) pole = vecNegateMut(pole)
 	// Find the azimuth and altitude of the mount pole (normal to the plane defined by the three reference stars)
 	const { azimuth, altitude } = cirsToObserved(pole, p3[2], refraction)
+
+	// Compute the azimuth and altitude error
 	const latitude = refraction === false ? refractedAltitude(p3[2].location!.latitude, DEFAULT_REFRACTION_PARAMETERS) : p3[2].location!.latitude
 	const azimuthError = normalizePI(azimuth)
 	const altitudeError = altitude - latitude
+
 	return { azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment: 0, altitudeAdjustment: 0 }
 }
 
@@ -78,9 +81,12 @@ export function threePointPolarAlignmentAfterAdjustment(result: ThreePointPolarA
 	const azimuthAdjustment = zyAdjustment[0]
 	const altitudeAdjustment = zyAdjustment[1]
 	const pole = vecRotZ(vecRotY(eraS2c(result.azimuth, result.altitude), altitudeAdjustment), azimuthAdjustment)
+
+	// Recompute the azimuth and altitude error
 	const [azimuth, altitude] = eraC2s(...pole)
+	const latitude = refraction === false ? refractedAltitude(to[2].location!.latitude, DEFAULT_REFRACTION_PARAMETERS) : to[2].location!.latitude
 	const azimuthError = normalizePI(azimuth)
-	const altitudeError = altitude - to[2].location!.latitude
+	const altitudeError = altitude - latitude
 
 	return { azimuth, altitude, pole: result.pole, azimuthError, altitudeError, azimuthAdjustment, altitudeAdjustment }
 }
@@ -137,7 +143,7 @@ function findSmallestThetaY(from: Vec3, goal: Vec3): Angle | false {
 	const A = -x
 	const B = z
 	const C = zPrime
-	const D = Math.sqrt(A * A + B * B)
+	const D = Math.hypot(A, B)
 
 	if (Math.abs(C) > D + 1e-6 || D === 0) {
 		console.debug('no solution: |C| > D')
@@ -150,11 +156,11 @@ function findSmallestThetaY(from: Vec3, goal: Vec3): Angle | false {
 	const thetaY2 = phi - alpha // range is -2pi to pi
 
 	// Find all equivalent angles in [-pi, pi)
-	const allAngles = [thetaY1, thetaY2, thetaY1 - 2 * PI, thetaY2 - 2 * PI, thetaY1 + 2 * PI, thetaY2 + 2 * PI]
-	const angles = []
+	const allAngles = [thetaY1, thetaY2, thetaY1 - TAU, thetaY2 - TAU, thetaY1 + TAU, thetaY2 + TAU]
+	const angles: number[] = []
 
 	for (const angle of allAngles) {
-		if (-PI <= angle && angle < PI) {
+		if (angle > -PI && angle < PI) {
 			angles.push(angle)
 		}
 	}
@@ -166,6 +172,7 @@ function findSmallestThetaY(from: Vec3, goal: Vec3): Angle | false {
 
 	// Pick the angle with the smallest absolute value
 	let thetaY = angles[0]
+
 	for (let i = 1; i < angles.length; i++) {
 		if (Math.abs(angles[i]) < Math.abs(thetaY)) {
 			thetaY = angles[i]
