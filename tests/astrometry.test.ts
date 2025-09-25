@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
-import { deg, toArcsec } from '../src/angle'
-import { refractedAltitude } from '../src/astrometry'
+import { arcsec, deg, formatDEC, formatRA, PARSE_HOUR_ANGLE, parseAngle, toArcsec } from '../src/angle'
+import { refractedAltitude, topocentric } from '../src/astrometry'
+import { geodeticLocation } from '../src/location'
 
 // https://bitbucket.org/Isbeorn/nina/src/master/NINA.Test/AstrometryTest/AstrometryTest.cs
 test('refracted altitude', () => {
@@ -27,4 +28,13 @@ test('refracted altitude', () => {
 	refract(60, 33.61, 1)
 	refract(70, 21.2, 1)
 	refract(80, 10.27, 1)
+})
+
+test('topocentric', () => {
+	const location = geodeticLocation(parseAngle('7 47 27', PARSE_HOUR_ANGLE), parseAngle('+33 21 22'), 1706)
+	const theta = parseAngle('1 40 45', PARSE_HOUR_ANGLE)!
+	const [ra, dec] = topocentric(deg(339.530208), deg(-15.771083), location, theta, arcsec(23.592))
+
+	expect(formatRA(ra)).toBe('22 38 08.54')
+	expect(formatDEC(dec)).toBe('-15 46 30.04')
 })

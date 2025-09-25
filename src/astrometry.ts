@@ -3,7 +3,7 @@ import { AU_M, DAYSEC, PI, PIOVERTWO, SPEED_OF_LIGHT, TAU } from './constants'
 import type { CartesianCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa'
-import { ELLIPSOID_PARAMETERS } from './location'
+import { ELLIPSOID_PARAMETERS, type GeographicPosition, rhoCosPhi } from './location'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { pmAngles, type Time, tt, ut1 } from './time'
@@ -203,4 +203,24 @@ export function refractedAltitude(altitude: Angle, refraction: RefractionParamet
 	}
 
 	return NaN
+}
+
+// Calculates topocentric equatorial coordinates of celestial body
+// with taking into account correction for parallax,
+// Method is taken from AA(II), formulae 40.6-40.7.
+export function topocentric(rightAscension: Angle, declination: Angle, location: GeographicPosition, gast: Angle, px: Angle) {
+	const H = gast - location.longitude - rightAscension // Hour angle
+
+	const sinD = Math.sin(declination)
+	const cosD = Math.cos(declination)
+
+	const rcp = rhoCosPhi(location) * Math.sin(px)
+	const A = cosD * Math.sin(H)
+	const B = cosD * Math.cos(H) - rcp
+	const C = sinD - rcp
+
+	const q = Math.sqrt(A * A + B * B + C * C)
+	const h = Math.atan2(A, B)
+
+	return [normalizeAngle(gast - location.longitude - h), Math.asin(C / q)] as const
 }

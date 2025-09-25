@@ -1,8 +1,8 @@
-import { deg } from './angle'
+import { type Angle, deg, normalizeAngle } from './angle'
 import { ASEC2RAD, AU_KM, DAYSPERJY, DEG2RAD, MOON_SYNODIC_DAYS } from './constants'
 import type { Distance } from './distance'
 import { temporalFromTime, temporalGet } from './temporal'
-import { type Time, Timescale, time, timeNormalize, timeSubtract, timeYMD, toJulianDay, tt } from './time'
+import { greenwichApparentSiderealTime, type Time, Timescale, time, timeNormalize, timeSubtract, timeYMD, toJulianDay, tt } from './time'
 
 export type LunarEclipseType = 'TOTAL' | 'PARTIAL' | 'PENUMBRAL'
 
@@ -387,4 +387,101 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 	}
 
 	return eclipse
+}
+
+export interface PolynomialLunarEclipseElements {
+	readonly time: Time
+	readonly maximumTime: Time
+	readonly step: number // Step, in days, between each item in instant Besselian elements series used to produce this polynomial coefficients.
+	readonly X: number[] // Coefficients of X (X-coordinate of center of the Moon in fundamental plane), index is a power of t.
+	readonly Y: number[] // Coefficients of Y (Y-coordinate of center of the Moon in fundamental plane), index is a power of t.
+	readonly F1: Angle[] // Coefficients of F1 (Earth penumbra radius, in radians), index is a power of t.
+	readonly F2: Angle[] // Coefficients of F2 (Earth umbra radius, in radians), index is a power of t.
+	readonly F3: Angle[] // Coefficients of F3 (Lunar radius (semidiameter), in radians), index is a power of t.
+	readonly A: Angle[] // Coefficients of Alpha (Geocentric right ascension of the Moon, in radians), index is a power of t.
+	readonly D: Angle[] // Coefficients of Delta (Geocentric declination of the Moon, in radians), index is a power of t.
+}
+
+export interface InstantLunarEclipseElements {
+	readonly time: Time // Instant of the elements.
+	readonly X: number // X-coordinate of center of the Moon in fundamental plane.
+	readonly Y: number // Y-coordinate of center of the Moon in fundamental plane.
+	readonly F1: Angle // Earth penumbra radius, in radians.
+	readonly F2: Angle // Earth umbra radius, in radians.
+	readonly F3: Angle // Lunar radius (semidiameter), in radians.
+	readonly A: Angle // Geocentric right ascension of the Moon, in radians.
+	readonly D: Angle // Geocentric declination of the Moon, in radians.
+}
+
+export function instantBesselianElements(p: PolynomialLunarEclipseElements, time: Time): InstantLunarEclipseElements {
+	// Difference, with t0, in step units
+	const t = timeSubtract(time, p.time) / p.step
+	const n = p.X.length
+
+	let X = 0
+	let Y = 0
+	let F1 = 0
+	let F2 = 0
+	let F3 = 0
+	let A = 0
+	let D = 0
+
+	for (let i = 0; i < n; i++) {
+		const e = t ** i
+		X += p.X[i] * e
+		Y += p.Y[i] * e
+		F1 += p.F1[i] * e
+		F2 += p.F2[i] * e
+		F3 += p.F3[i] * e
+		A += p.A[i] * e
+		D += p.D[i] * e
+	}
+
+	return { time, X, Y, F1, F2, F3, A: normalizeAngle(A), D }
+}
+
+export function besselianElements() {}
+
+// Finds horizon circle point for a given geographical longitude
+// for an instant of lunar eclipse, where Moon has zero altitude.
+// Geographical longitude is positive west, negative east, from -180 to +180 degrees.
+// The method core is based on formulae from the book:
+// Seidelmann, P. K.: Explanatory Supplement to The Astronomical Almanac,
+// University Science Book, Mill Valley (California), 1992,
+// Chapter 8 "Eclipses of the Sun and Moon"
+// https://archive.org/download/131123ExplanatorySupplementAstronomicalAlmanac/131123-explanatory-supplement-astronomical-almanac.pdf
+function project(e: InstantLunarEclipseElements, longitude: Angle) {
+	// Greenwich apparent sidereal time
+	const siderealTime = greenwichApparentSiderealTime(e.time)
+
+	// Geocentric distance to the Moon, in km
+	const dist = (358473400 * ASEC2RAD) / e.F3
+
+	// Horizontal parallax of the Moon
+	const parallax = moonParallax(dist)
+
+	// Equatorial coordinates of the Moon, initial value is geocentric
+	const eq = [e.A, e.D]
+
+	// two iterations:
+	// 1st: find geo location needed to perform topocentric correction
+	// 2nd: correct sublunar point with topocentric position and find true geoposition
+	for (let i = 0; i < 2; i++) {
+		// sublunar point latitude, preserve sign!
+		const phi0 = Math.sign(e.D) * Math.abs(eq.D)
+
+		// sublunar point longitude (formula 8.426-1)
+		const lambda0 = siderealTime - eq.A
+
+		// sublunar point latitude (formula 8.426-2)
+		const tanPhi = (-1 / Math.tan(phi0)) * Math.cos(lambda0 - longitude)
+		const phi = Math.atan(tanPhi)
+
+		g = new CrdsGeographical(longitude, phi)
+
+		if (i === 0) {
+			// correct to topocentric
+			eq = eq.ToTopocentric(g, siderealTime, parallax)
+		}
+	}
 }
