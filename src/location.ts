@@ -4,7 +4,6 @@ import { eraGc2Gde, eraSp00 } from './erfa'
 import { itrsRotationAt } from './itrs'
 import { type Mat3, matFlipX, matMul, matRotX, matRotY, matRotZ } from './mat3'
 import { greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmAngles, type Time, tt } from './time'
-import type { Vec3 } from './vec3'
 
 // An Earth ellipsoid that maps latitudes and longitudes to |xyz| positions.
 export enum Ellipsoid {
@@ -46,9 +45,10 @@ export interface GeographicPosition {
 	readonly elevation: Distance
 	readonly ellipsoid: Ellipsoid
 
-	itrs?: Vec3
 	rLat?: Mat3
 	rLatLon?: Mat3
+	rhoCosPhi?: number
+	rhoSinPhi?: number
 }
 
 // Creates a geographic position from longitude, latitude, elevation, and ellipsoid.
@@ -58,10 +58,9 @@ export function geodeticLocation(longitude: Angle = 0, latitude: Angle = 0, elev
 
 // Creates a geographic position from a geocentric (Cartesian) coordinate.
 export function geocentricLocation(x: number, y: number, z: number, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
-	const itrs = [x, y, z] as const
-	const params = ELLIPSOID_PARAMETERS[ellipsoid]
-	const [longitude, latitude, elevation] = eraGc2Gde(params.radius, params.flattening, x, y, z)
-	return { longitude, latitude, elevation, ellipsoid, itrs }
+	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
+	const [longitude, latitude, elevation] = eraGc2Gde(radius, flattening, x, y, z)
+	return { longitude, latitude, elevation, ellipsoid }
 }
 
 function rLat(location: GeographicPosition) {
@@ -106,4 +105,26 @@ export function gcrsRotationAt(location: GeographicPosition, time: Time) {
 export function polarRadius(ellipsoid: Ellipsoid): Distance {
 	const { radius, flattening: inverseFlattening } = ELLIPSOID_PARAMETERS[ellipsoid]
 	return radius * (1 - inverseFlattening)
+}
+
+// Term needed for calculation of parallax effect.
+// Taken from from PAWC, p.66.
+export function rhoCosPhi(location: GeographicPosition) {
+	if (location.rhoCosPhi) return location.rhoCosPhi
+	const { latitude, elevation, ellipsoid } = location
+	const u = Math.atan(0.99664719 * Math.tan(latitude))
+	const r = ELLIPSOID_PARAMETERS[ellipsoid].radius
+	location.rhoCosPhi = Math.cos(u) + (elevation / r) * Math.cos(latitude)
+	return location.rhoCosPhi
+}
+
+// Term needed for calculation of parallax effect.
+// Taken from from PAWC, p.66.
+export function rhoSinPhi(location: GeographicPosition) {
+	if (location.rhoSinPhi) return location.rhoSinPhi
+	const { latitude, elevation, ellipsoid } = location
+	const u = Math.atan(0.99664719 * Math.tan(latitude))
+	const r = ELLIPSOID_PARAMETERS[ellipsoid].radius
+	location.rhoSinPhi = 0.99664719 * Math.sin(u) + (elevation / r) * Math.sin(latitude)
+	return location.rhoSinPhi
 }

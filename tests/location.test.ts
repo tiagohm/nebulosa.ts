@@ -4,7 +4,7 @@ import { deg, toHour } from '../src/angle'
 import { meter } from '../src/distance'
 import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
-import { Ellipsoid, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius } from '../src/location'
+import { Ellipsoid, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi } from '../src/location'
 import { Timescale, timeYMDHMS } from '../src/time'
 
 beforeAll(async () => {
@@ -30,10 +30,19 @@ test('geocentric', () => {
 	expect(p.longitude).toBeCloseTo(deg(-45), 22)
 	expect(p.latitude).toBeCloseTo(deg(-23), 22)
 	expect(p.elevation).toBeCloseTo(meter(890), 20)
-	expect(p.itrs).not.toBeUndefined()
 })
 
-test('polarRadius', () => {
+test('polar radius', () => {
 	expect(polarRadius(Ellipsoid.IERS2010)).toBeCloseTo(0.000042492261609253282, 20)
 	expect(polarRadius(Ellipsoid.WGS84)).toBeCloseTo(0.000042492264659253469, 20)
+})
+
+test('rhoCosPhi', () => {
+	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
+	expect(rhoCosPhi(p)).toBeCloseTo(0.9211040554231795, 8)
+})
+
+test('rhoSinPhi', () => {
+	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
+	expect(rhoSinPhi(p)).toBeCloseTo(-0.388368434808665, 8)
 })

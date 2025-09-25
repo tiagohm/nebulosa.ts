@@ -719,3 +719,4 @@ Thanks to all these projects:
 - [Astropy](https://github.com/astropy/astropy)
 - [ERFA](https://github.com/liberfa/erfa)
 - [Astronomia](https://github.com/commenthol/astronomia)
+- [Astrarium](https://github.com/Astrarium/Astrarium)
