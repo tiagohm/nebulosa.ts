@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { NumberArray } from '../src/math'
 import { exponentialRegression, hyperbolicRegression, levenbergMarquardt, polynomialRegression, powerRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
 
 test('simple linear', () => {
@@ -189,15 +190,25 @@ test('power regression', () => {
 })
 
 test('hyperbolic regression', () => {
-	const x = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-	const y = [18, 11, 6, 3, 2, 3, 6, 11, 18]
+	const x = [29000, 29100, 29200, 29300, 29400, 29500, 29600, 29700, 29800, 29900, 30000, 30100, 30200, 30300, 30400, 30500, 30600, 30700, 30800, 30900, 31000]
+	const y = [40.5, 36.2, 31.4, 28.6, 23.1, 21.2, 16.6, 13.7, 6.21, 4.21, 3.98, 4.01, 4.85, 11.1, 15.3, 22.1, 21.9, 27.4, 32.1, 36.5, 39.7]
 
 	const regression = hyperbolicRegression(x, y)
 
-	expect(regression.minimum[0]).toBeCloseTo(5, 7)
-	expect(regression.minimum[1]).toBeCloseTo(1.02, 3)
-	expect(regression.predict(5)).toBeCloseTo(1.2, 0)
-	expect(regression.x(1.02)).toBeCloseTo(5, 3)
+	expect(Math.round(regression.minimum[0])).toBe(30009)
+	expect(regression.minimum[1]).toBeCloseTo(2.23, 2)
+	expect(regression.predict(30000)).toBeCloseTo(2.26, 2)
+	expect(regression.x(23.1)).toBeCloseTo(29431, 0)
+})
+
+test('hyperbolic regression using ASCOM Sky Simulator (few points)', () => {
+	const x = [6100, 6600, 7100, 7600, 8100, 8600, 9100, 9600, 10100]
+	const y = [13.662644615384618, 12.428210576923071, 9.326303846153845, 5.063299489795917, 2.9738176470588247, 6.891483673469387, 10.640856213017754, 12.879208888888888, 13.892408928571431]
+
+	const regression = hyperbolicRegression(x, y)
+
+	expect(Math.round(regression.minimum[0])).toBe(8033)
+	expect(regression.minimum[1]).toBeCloseTo(4.5849, 3)
 })
 
 test('regression score', () => {
@@ -219,7 +230,7 @@ test('regression score', () => {
 // https://github.com/mljs/levenberg-marquardt/blob/main/src/__tests__/curve.test.js
 describe('Levenberg-Marquardt regression', () => {
 	test('line', () => {
-		function line(x: number, [a, b]: number[]) {
+		function line(x: number, [a, b]: NumberArray) {
 			return a * x + b
 		}
 
@@ -236,7 +247,7 @@ describe('Levenberg-Marquardt regression', () => {
 	})
 
 	test('quadratic', () => {
-		function quadratic(x: number, [a, b, c]: number[]) {
+		function quadratic(x: number, [a, b, c]: NumberArray) {
 			return a * x * x + b * x + c
 		}
 
@@ -254,7 +265,7 @@ describe('Levenberg-Marquardt regression', () => {
 	})
 
 	test('cubic', () => {
-		function cubic(x: number, [a, b, c, d]: number[]) {
+		function cubic(x: number, [a, b, c, d]: NumberArray) {
 			return a * x * x * x + b * x * x + c * x + d
 		}
 
@@ -273,7 +284,7 @@ describe('Levenberg-Marquardt regression', () => {
 	})
 
 	test('exponential', () => {
-		function exponential(x: number, [a, b]: number[]) {
+		function exponential(x: number, [a, b]: NumberArray) {
 			return a * Math.exp(b * x)
 		}
 
@@ -290,7 +301,7 @@ describe('Levenberg-Marquardt regression', () => {
 	})
 
 	test('sine', () => {
-		function sine(x: number, [a, b, c]: number[]) {
+		function sine(x: number, [a, b, c]: NumberArray) {
 			return a * Math.sin(b * x + c)
 		}
 
@@ -310,7 +321,7 @@ describe('Levenberg-Marquardt regression', () => {
 	})
 
 	test('logarithmic', () => {
-		function logarithmic(x: number, [a, b]: number[]) {
+		function logarithmic(x: number, [a, b]: NumberArray) {
 			return a * Math.log(b * x)
 		}
 
@@ -327,7 +338,7 @@ describe('Levenberg-Marquardt regression', () => {
 	})
 
 	test('complex', () => {
-		function complex(x: number, [a, b, c, d]: number[]) {
+		function complex(x: number, [a, b, c, d]: NumberArray) {
 			return a + (b - a) / (1 + c ** d * x ** -d)
 		}
 
@@ -336,8 +347,8 @@ describe('Levenberg-Marquardt regression', () => {
 		const result = levenbergMarquardt(x, y, complex, [0, 100, 1, 0.1])
 
 		expect(result[0]).toBeCloseTo(0, 1)
-		expect(result[1]).toBeCloseTo(99.4, 1)
-		expect(result[2]).toBeCloseTo(0.9, 1)
+		expect(result[1]).toBeCloseTo(99.8, 1)
+		expect(result[2]).toBeCloseTo(0.98, 1)
 		expect(result[3]).toBeCloseTo(0.1, 1)
 
 		for (let i = 0; i < x.length; i++) {
@@ -347,7 +358,7 @@ describe('Levenberg-Marquardt regression', () => {
 
 	// https://github.com/accord-net/framework/blob/development/Unit%20Tests/Accord.Tests.Statistics/Models/Regression/LevenbergMarquardtTest.cs
 	test('misra1a', () => {
-		function misra1a(x: number, [a, b]: number[]) {
+		function misra1a(x: number, [a, b]: NumberArray) {
 			return a * (1 - Math.exp(-b * x))
 		}
 
@@ -365,7 +376,7 @@ describe('Levenberg-Marquardt regression', () => {
 
 	// https://en.wikipedia.org/wiki/Gauss%E2%80%93Newton_algorithm
 	test('biology experiment', () => {
-		function biology(x: number, [a, b]: number[]) {
+		function biology(x: number, [a, b]: NumberArray) {
 			return (a * x) / (b + x)
 		}
 

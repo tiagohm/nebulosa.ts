@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
-import { angularSizeOfPixel, binarySearch, isNumberArray, maxOf, minOf } from '../src/util'
+import { angularSizeOfPixel, binarySearch, isNumberArray, maxOf, meanOf, minOf } from '../src/util'
 
-test('isNumberArray', () => {
+test('is number array', () => {
 	expect(isNumberArray([1, 2, 3])).toBe(true)
 	expect(isNumberArray(new Float64Array([1, 2, 3]))).toBe(true)
 	expect(isNumberArray(new Int32Array([1, 2, 3]))).toBe(true)
@@ -24,7 +24,7 @@ test('isNumberArray', () => {
 	expect(isNumberArray(true)).toBe(false)
 })
 
-test('minOf', () => {
+test('min of', () => {
 	expect(minOf([1, 2, 3])).toEqual([1, 0])
 	expect(minOf([3, 2, 1])).toEqual([1, 2])
 	expect(minOf([2, 3, 1])).toEqual([1, 2])
@@ -35,7 +35,7 @@ test('minOf', () => {
 	expect(minOf([NaN, 2, 1])).toEqual([1, 2])
 })
 
-test('maxOf', () => {
+test('max of', () => {
 	expect(maxOf([1, 2, 3])).toEqual([3, 2])
 	expect(maxOf([3, 2, 1])).toEqual([3, 0])
 	expect(maxOf([2, 3, 1])).toEqual([3, 1])
@@ -46,7 +46,16 @@ test('maxOf', () => {
 	expect(maxOf([NaN, 2, 1])).toEqual([2, 1])
 })
 
-test('binarySearch', () => {
+test('mean of', () => {
+	expect(meanOf([1, 2, 3])).toBe(2)
+	expect(meanOf([3, 2, 1])).toBe(2)
+	expect(meanOf([2, 3, 1])).toBe(2)
+	expect(meanOf([1, 2, 3, 4])).toBe(2.5)
+	expect(meanOf([1])).toBe(1)
+	expect(meanOf([])).toBeNaN()
+})
+
+test('binary search', () => {
 	expect(binarySearch([0, 1, 2, 3, 4], 3)).toBe(3)
 	expect(binarySearch([0, 1, 2, 3, 4], 3, { from: 2, to: 5 })).toBe(3)
 	expect(binarySearch([0, 1, 2, 3, 4], 3, { from: 0, to: 3 })).toBe(-4)
@@ -60,6 +69,6 @@ test('binarySearch', () => {
 	expect(binarySearch([NaN, NaN, NaN], 3)).toBe(-1)
 })
 
-test('angularSizeOfPixel', () => {
+test('angular size of pixel', () => {
 	expect(angularSizeOfPixel(1000, 3.75)).toBeCloseTo(0.773, 3)
 })

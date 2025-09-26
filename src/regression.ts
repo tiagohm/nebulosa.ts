@@ -1,6 +1,6 @@
 import type { NumberArray } from './math'
 import { gaussianElimination, Matrix } from './matrix'
-import { isNumberArray, minOf } from './util'
+import { isNumberArray, meanOf, minOf } from './util'
 
 export type TrendLineRegressionMethod = 'simple' | 'theil-sen'
 
@@ -42,7 +42,7 @@ export interface ExponentialRegression extends Regression, InverseRegression {
 export interface HyperbolicRegression extends Regression, InverseRegression {
 	readonly a: number
 	readonly b: number
-	readonly p: number
+	readonly c: number
 	readonly minimum: Readonly<Point>
 }
 
@@ -313,49 +313,34 @@ export function powerRegression(x: Readonly<NumberArray>, y: Readonly<NumberArra
 	}
 }
 
+// Computes the coefficients of a hyperbolic regression of the form y = b * sqrt(1 + ((x - c) / a)^2)
 export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): HyperbolicRegression {
-	const n = Math.min(x.length, y.length)
+	// Get the initial guess for A, for A, we take the mean value of the y
+	const A = meanOf(y)
 
-	const lowestPoint: Point = [x[0], y[0]]
-	const highestPoint: Point = [x[0], y[0]]
+	// Get the initial guess for B, for B, we take the min value of the y
+	const B = minOf(y)[0]
 
-	for (let i = 1; i < n; i++) {
-		if (y[i] < lowestPoint[1]) {
-			lowestPoint[0] = x[i]
-			lowestPoint[1] = y[i]
-		}
-		if (y[i] > highestPoint[1]) {
-			highestPoint[0] = x[i]
-			highestPoint[1] = y[i]
-		}
+	// Get the initial guess for C, for C, we take the mean value of the x
+	const C = meanOf(x)
+
+	// https://github.com/observerly/iris/blob/main/pkg/vcurve/vcurve.go
+	function hyperbolic(x: number, [a, b, c]: NumberArray) {
+		return b * Math.sqrt(1 + ((x - c) / a) ** 2)
 	}
 
-	// Always go up
-	if (highestPoint[0] < lowestPoint[0]) {
-		highestPoint[0] = 2 * lowestPoint[0] - highestPoint[0]
-	}
-
-	const ae = lowestPoint[1] // y(0) = a * cosh(0) = a * 1 = a
-	// const be = highestPoint[0] / Math.acosh(highestPoint[1] / ae) // b = x / arcosh(y/a)
-	// Alternative hyperbola formula: sqrt(y)/sqrt(a)-sqrt(x)/sqrt(b)=1 ==>  sqrt(b)=sqrt(x)*sqrt(a)/(sqrt(y)-sqrt(a)
-	const be = Math.sqrt(((highestPoint[0] - lowestPoint[0]) * (highestPoint[0] - lowestPoint[0]) * ae * ae) / (highestPoint[1] * highestPoint[1] - ae * ae))
-	const pe = lowestPoint[0]
-
-	function hyperbolic(x: number, [a, b, p]: number[]) {
-		return a * Math.cosh(Math.asinh((p - x) / b))
-	}
-
-	// Use Levenberg-Marquardt to optimize the parameters a and b
-	const [a, b, p] = levenbergMarquardt(x, y, hyperbolic, [ae, be, pe], { maxIterations: 1000, tolerance: 1e-8 })
+	// Use Levenberg-Marquardt to optimize the parameters
+	const [a, b, c] = levenbergMarquardt(x, y, hyperbolic, [Math.round(A), B, C], { maxIterations: 1000, tolerance: 1e-8 })
 
 	return {
 		a,
 		b,
-		p,
-		minimum: [p, a],
-		predict: (x: number) => a * Math.cosh(Math.asinh((p - x) / b)),
-		// https://www.wolframalpha.com/input?i=isolate+x+for+y+%3D+a+*+cosh%28asinh%28%28p+-+x%29+%2F+b%29%29
-		x: (y: number) => (y > a ? Math.sqrt(b * b * (y * y - a * a)) / a + p : p),
+		c,
+		minimum: [c, b],
+		predict: (x: number) => b * Math.sqrt(1 + ((x - c) / a) ** 2),
+		// wolfram: solve y = b sqrt(1 + ((x - c)/a)^2) for x
+		// x = c - sqrt(a^2 y^2 - a^2 b^2)/b
+		x: (y: number) => c - Math.sqrt(a * a * (y * y - b * b)) / b,
 	}
 }
 
@@ -402,17 +387,17 @@ const LEVENBERG_MARQUARDT_DELTA = 1e-8
 // Computes the coefficients of a Levenberg-Marquardt regression
 // This is a non-linear least squares optimization algorithm
 // It minimizes the sum of squared residuals between the model and the data
-export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberArray>, model: (x: number, params: number[]) => number, params: number[], { maxIterations = 100, lambda = 0.01, tolerance = 1e-6 }: LevenbergMarquardtOptions = {}) {
+export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberArray>, model: (x: number, params: NumberArray) => number, params: number[], { maxIterations = 100, lambda = 0.01, tolerance = 1e-6 }: LevenbergMarquardtOptions = {}) {
 	const n = Math.min(x.length, y.length)
 	const m = params.length
 
 	const J = new Array<NumberArray>(m)
-	const PJ = new Array<number>(m)
+	const PJ = new Float64Array(m)
 	const JTJ = Matrix.square(m)
 	const JTR = new Float64Array(m)
 
 	const R = new Float64Array(n)
-	const UP = new Array<number>(m)
+	const UP = new Float64Array(m)
 	const DP = new Float64Array(m)
 
 	const YP = new Float64Array(n)
@@ -422,7 +407,7 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		J[i] = new Float64Array(n)
 	}
 
-	const predict = (params: number[], o: NumberArray) => {
+	const predict = (params: NumberArray, o: NumberArray) => {
 		for (let i = 0; i < o.length; i++) o[i] = model(x[i], params)
 	}
 
@@ -469,7 +454,7 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		const newError = (y as number[]).reduce((sum, r, i) => sum + (r - model(x[i], UP)) ** 2, 0)
 
 		if (newError < error) {
-			params = UP
+			for (let i = 0; i < m; i++) params[i] = UP[i]
 			if (Math.abs(error - newError) <= tolerance) break
 			lambda /= 10
 		} else {
