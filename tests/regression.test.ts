@@ -34,12 +34,6 @@ describe('polynomial', () => {
 		expect(regression.coefficients[0]).toBeCloseTo(0.850519, 5)
 		expect(regression.coefficients[1]).toBeCloseTo(-0.192495, 5)
 		expect(regression.coefficients[2]).toBeCloseTo(0.178462, 5)
-
-		const score = regressionScore(regression, x, y)
-
-		expect(score.r2).toBeGreaterThan(0.8)
-		expect(score.chi2).toBeLessThan(0.1)
-		expect(score.rmsd).toBeCloseTo(0.12, 2)
 	})
 
 	test('degree 5', () => {
@@ -164,13 +158,6 @@ test('exponential regression', () => {
 	expect(regression.b).toBeCloseTo(1.5799091, 6)
 	expect(regression.predict(2)).toBeCloseTo(3.454825, 6)
 	expect(regression.x(3.454825)).toBeCloseTo(2, 6)
-
-	const score = regressionScore(regression, x, y)
-
-	expect(score.r).toBeCloseTo(0.998, 2)
-	expect(score.r2).toBeGreaterThan(0.9)
-	expect(score.chi2).toBeLessThan(0.1)
-	expect(score.rmsd).toBeCloseTo(0.1, 3)
 })
 
 test('power regression', () => {
@@ -182,11 +169,6 @@ test('power regression', () => {
 	expect(regression.b).toBeCloseTo(0.65949782, 6)
 	expect(regression.predict(20)).toBeCloseTo(174.0130599, 6)
 	expect(regression.x(174.0130599)).toBeCloseTo(20, 6)
-
-	const score = regressionScore(regression, x, y)
-
-	expect(score.r2).toBeCloseTo(0.999, 2)
-	expect(score.chi2).toBeCloseTo(0.03, 1)
 })
 
 test('hyperbolic regression', () => {

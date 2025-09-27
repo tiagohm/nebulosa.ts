@@ -349,25 +349,32 @@ export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 export function regressionScore(regression: Regression, x: Readonly<NumberArray>, y: Readonly<NumberArray>): RegressionScore {
 	const n = Math.min(x.length, y.length)
 
-	let sum = 0
-	let ySquared = 0
-	let sumY = 0
+	let sx = 0
+	let sx2 = 0
+	let sy = 0
+	let sxy = 0
+	let sy2 = 0
 	let chi2 = 0
 
 	for (let i = 0; i < n; i++) {
+		const xi = x[i]
 		const yi = y[i]
-		const yp = regression.predict(x[i])
+        const p = regression.predict(xi)
 
-		const d2 = (yi - yp) ** 2
-		sum += d2
-		ySquared += yi ** 2
-		sumY += yi
-		if (yi !== 0) chi2 += d2 / yi
+		sx += xi
+		sx2 += xi * xi
+		sy += yi
+		sy2 += yi * yi
+		sxy += xi * yi
+		chi2 += (yi - p) ** 2 / yi
 	}
 
-	const r2 = 1 - sum / (ySquared - sumY ** 2 / n)
-	const r = Math.sqrt(r2)
-	const rmsd = Math.sqrt(sum / n)
+	// const B = (n * sxy - sx * sy) / (n * sx2 - sx * sx)
+	// const A = (sy - B * sx) / n
+
+	const r = (n * sxy - sx * sy) / Math.sqrt((n * sx2 - sx * sx) * (n * sy2 - sy * sy))
+	const r2 = r * r
+	const rmsd = Math.sqrt(chi2)
 
 	return { r, r2, chi2, rmsd }
 }
