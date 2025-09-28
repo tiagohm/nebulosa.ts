@@ -41,6 +41,8 @@ formatAngle(PI, { isHour: true }) // Format the angle with custom representation
 formatHMS(PI) // Format the angle as 00:00:00.00
 formatDMS(PI) // Format the angle as 00d00m00.00s
 formatSignedDMS(PI) // Format the angle as +00d00m00.00s
+formatRA(PI) // Format the angle as 00 00 00.00
+formatDEC(PI) // Format the angle as +00 00 00.00
 ```
 
 ### Astap
@@ -157,11 +159,23 @@ TODO
 ### Firmata
 
 ```ts
-const client = new FirmataClient(handler)
-await client.connectTcp(host, port) // Connect to Firmata Device via TCP
+const client = new FirmataClient(transport)
+client.addHandler(handler) // Add a handler for incoming messages
+client.removeHandler(handler) // Remove a handler
 client.disconnect() // Disconnect from current connection
 client.process(buffer) // Process the buffer
 client.processByte(byte) // Process the byte
+client.reset()
+client.requestFirmware()
+client.requestPinCapability()
+client.requestPinState(pin)
+client.requestAnalogMapping()
+client.requestDigitalReport(enable)
+client.requestDigitalPinReport(pin, enable, mapper)
+client.requestAnalogReport(enable)
+client.requestAnalogPinReport(pin, enable, mapper)
+client.pinMode(pin, mode)
+client.digitalWrite(pin, value)
 ```
 
 ### Fits
@@ -193,6 +207,16 @@ fk5ToIcrs(frame) // Convert FK5 coordinate to ICRS coordinate
 precessFk5(frame, from, to) // Precess the FK5 coordinate from equinox to other
 precessFk5FromJ2000(frame, equinox) // Precess the FK5 coordinate from J2000 to equinox
 precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to J2000
+```
+
+### GUST86
+
+```ts
+ariel(time) // Position and velocity of Ariel at given time
+umbriel(time) // Position and velocity of Umbriel at given time
+oberon(time) // Position and velocity of Oberon at given time
+titania(time) // Position and velocity of Titania at given time
+miranda(time) // Position and velocity of Miranda at given time
 ```
 
 ### Hips2Fits
@@ -290,7 +314,7 @@ itrsRotationAt(time) // ITRS rotation matrix at time
 ```ts
 geodeticLocation(longitude, latitude, elevation, Ellipsoid.IERS2010) // Location from longitude, latitude, elevation and ellipsoid form
 geocentricLocation(x, y, z, Ellipsoid.IERS2010) // Location from |xyz| geocentric coordinate and ellipsoid form
-lst(location, time, false, false) // Mean/apparent Local Sidereal Time
+localSiderealTime(location, time, false, false) // Mean/apparent Local Sidereal Time
 polarRadius(Ellipsoid.IERS2010) // Earth's polar radius
 gcrsRotationAt(location, time) // GCRS rotation of the location at time
 ```
@@ -470,7 +494,7 @@ const regression = polynomialRegression(x, y, degree, interceptAtZero) // Comput
 const regression = trendLineRegression(x, y, method) // Compute trendline regression
 const regression = exponentialRegression(x, y) // Compute exponential regression for y = B * e^(A * x)
 const regression = powerRegression(x, y) // Compute power regression for y = A * x^B
-const regression = hyperbolicRegression(x, y) // Compute hyperbolic regression for y = a * cosh(asinh((p - x) / b))
+const regression = hyperbolicRegression(x, y) // Compute hyperbolic regression for y = b * sqrt(1 + ((x - c) / a)^2)
 
 const y = regression.predict(x) // Compute y at x
 
@@ -541,8 +565,8 @@ searchAround(catalog, ra, dec, fov) // Search around coordinate
 ### Sun
 
 ```ts
-parallax(distance) // Compute the parallax of the Sun at a given distance
-semidiameter(distance) // Compute the semidiameter of the Sun at a given distance
+sunParallax(distance) // Compute the parallax of the Sun at a given distance
+sunSemidiameter(distance) // Compute the semidiameter of the Sun at a given distance
 carringtonRotationNumber(time) // Compute the Carrington rotation number of the Sun at time
 season(year, name) // Compute the date of the solstice or equinox for a given year and season name
 nearestSolarEclipse(time, true) // Nearest solar eclipse to time
@@ -602,9 +626,9 @@ tt(time) // Convert the time to TT scale
 tcg(time) // Convert the time to TCG scale
 tdb(time) // Convert the time to TDB scale
 tcb(time) // Convert the time to TCB scale
-gast(time) // Greenwich Apparent Sidereal Time at time
-gmst(time) // Greenwich Mean Sidereal Time at time
-era(time) // Earth Rotation Angle at time
+greenwichApparentSiderealTime(time) // Greenwich Apparent Sidereal Time at time
+greenwichMeanSiderealTime(time) // Greenwich Mean Sidereal Time at time
+earthRotationAngle(time) // Earth Rotation Angle at time
 meanObliquity(time) // Mean Obliquity at time
 trueObliquity(time) // True Oblioquity at time
 trueEclipticRotation(time) // True Ecliptic Rotation matrix at time
@@ -626,6 +650,10 @@ tirsRotationAt(time) // TIRS rotation matrix at time
 
 ```ts
 angularSizeOfPixel(focalLength, pixelSize) // CCD Resolution in arcsec/pixel
+minOf(array) // Minimum value of the array
+maxOf(array) // Maximum value of the array
+meanOf(array) // Mean value of the array
+binarySearch(array, value, options) // Binary search on a sorted array
 ```
 
 ### Vector
@@ -720,3 +748,4 @@ Thanks to all these projects:
 - [ERFA](https://github.com/liberfa/erfa)
 - [Astronomia](https://github.com/commenthol/astronomia)
 - [Astrarium](https://github.com/Astrarium/Astrarium)
+- [Iris](https://github.com/observerly/iris)
