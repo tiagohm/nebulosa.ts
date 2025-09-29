@@ -7,27 +7,21 @@ import { fileHandleSource } from '../src/io'
 export const BITPIXES: readonly Bitpix[] = [8, 16, 32, -32, -64]
 export const CHANNELS = [1, 3] as const
 
-const bucket = new Map<string, readonly [Fits, fs.FileHandle]>()
-
-export async function openFits(bitpix: Bitpix, channel: number, format: string = 'fit', name: string = 'NGC3372') {
+export async function openFits<T = void>(bitpix: Bitpix, channel: number, action: (fits: Fits, key: string) => Promise<T> | T, format: string = 'fit', name: string = 'NGC3372') {
 	const key = `${name}-${bitpix}.${channel}.${format}`
-
-	let fits = bucket.get(key)
-
-	if (!fits) {
-		const handle = await fs.open(`data/${key}`)
-		const source = fileHandleSource(handle)
-		fits = [(await readFits(source))!, handle]
-		bucket.set(key, fits)
-	}
-
-	return fits[0]
+	const handle = await fs.open(`data/${key}`)
+	await using source = fileHandleSource(handle)
+	const fits = await readFits(source)
+	return await action(fits!, key)
 }
 
-export async function readImage(bitpix: Bitpix, channel: number, format: string = 'fit', name: string = 'NGC3372') {
-	const fits = await openFits(bitpix, channel, format, name)
-	const image = await readImageFromFits(fits)
-	return [fits, image!] as const
+export function readImage(bitpix: Bitpix, channel: number, action?: (image: Image, fits: Fits) => Promise<Image> | Image, format: string = 'fit', name: string = 'NGC3372') {
+	const readImageFromFitsAndAction = async (fits: Fits, key: string) => {
+		const image = await readImageFromFits(fits)
+		return [(await action?.(image!, fits)) ?? image!, fits] as const
+	}
+
+	return openFits(bitpix, channel, readImageFromFitsAndAction, format, name)
 }
 
 export async function saveImageAndCompareHash(image: Image, name: string, hash?: string, options?: WriteImageToFormatOptions) {
@@ -39,13 +33,12 @@ export async function saveImageAndCompareHash(image: Image, name: string, hash?:
 	return image
 }
 
-export async function readImageTransformAndSave(action: (image: Image) => Image, outputName: string, hash?: string, bitpix: Bitpix = Bitpix.FLOAT, channel: number = 3, format?: string, inputName?: string) {
-	const a = await readImage(bitpix, channel, format, inputName)
-	const b = action(a[1])
-	return saveImageAndCompareHash(b, outputName, hash)
+export async function readImageTransformAndSave(action: (image: Image) => Promise<Image> | Image, outputName: string, hash?: string, bitpix: Bitpix = Bitpix.FLOAT, channel: number = 3, format?: string, inputName?: string) {
+	const [image] = await readImage(bitpix, channel, action, format, inputName)
+	return saveImageAndCompareHash(image, outputName, hash)
 }
 
 export async function readImageAndSaveWithOptions(options: WriteImageToFormatOptions, outputName: string, hash?: string, bitpix: Bitpix = Bitpix.FLOAT, channel: number = 3, format?: string, inputName?: string) {
-	const a = await readImage(bitpix, channel, format, inputName)
-	return saveImageAndCompareHash(a[1], outputName, hash, options)
+	const [image] = await readImage(bitpix, channel, undefined, format, inputName)
+	return saveImageAndCompareHash(image, outputName, hash, options)
 }

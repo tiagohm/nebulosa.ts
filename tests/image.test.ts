@@ -8,7 +8,7 @@ import { BITPIXES, CHANNELS, readImage, readImageAndSaveWithOptions, readImageTr
 test('readImageFromFits', async () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			const [fits, image] = await readImage(bitpix, channel)
+			const [image, fits] = await readImage(bitpix, channel)
 
 			expect(image!.header).toBe(fits!.hdus[0].header)
 
@@ -22,18 +22,18 @@ test('readImageFromFits', async () => {
 test('writeImageToFits', async () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			const [, image0] = await readImage(bitpix, channel)
+			const [image0] = await readImage(bitpix, channel)
 			const key = `${bitpix}.${channel}`
 
 			let handle = await fs.open(`out/witf-${key}.fit`, 'w+')
 			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image0!, sink)
+			await writeImageToFits(image0, sink)
 
 			handle = await fs.open(`out/witf-${key}.fit`, 'r')
 			await using source = fileHandleSource(handle)
 			const image1 = await readImageFromFits(await readFits(source))
 
-			expect(image0!.header).toEqual(image1!.header)
+			expect(image0.header).toEqual(image1!.header)
 
 			const hash = channel === 1 ? 'e298f4abb217bac172a36f027ac6d8db' : '0a1b903f8612fa73756c266fddee0706'
 

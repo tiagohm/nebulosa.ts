@@ -9,25 +9,27 @@ test('read and write', async () => {
 
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			const a = await openFits(bitpix, channel)
 			const sink = bufferSink(buffer)
-			await writeFits(sink, a)
 
-			const size = widthKeyword(a.hdus[0].header, 0) * heightKeyword(a.hdus[0].header, 0) * bitpixInBytes(bitpix) * channel
-			expect(sink.position).toBe(5760 + size + computeRemainingBytes(size))
+			await openFits(bitpix, channel, async (a) => {
+				await writeFits(sink, a)
 
-			const source = bufferSource(buffer)
-			const b = await readFits(source)
+				const size = widthKeyword(a.hdus[0].header, 0) * heightKeyword(a.hdus[0].header, 0) * bitpixInBytes(bitpix) * channel
+				expect(sink.position).toBe(5760 + size + computeRemainingBytes(size))
 
-			expect(Object.keys(b!.hdus[0].header).length).toBeGreaterThanOrEqual(60)
-			expect(b!.hdus[0].header).toEqual(a.hdus[0].header)
-			expect(b!.hdus[0].data.size).toEqual(a.hdus[0].data.size!)
-			expect(b!.hdus[0].data.offset).toEqual(5760)
+				const source = bufferSource(buffer)
+				const b = await readFits(source)
+
+				expect(Object.keys(b!.hdus[0].header).length).toBeGreaterThanOrEqual(60)
+				expect(b!.hdus[0].header).toEqual(a.hdus[0].header)
+				expect(b!.hdus[0].data.size).toEqual(a.hdus[0].data.size!)
+				expect(b!.hdus[0].data.offset).toEqual(5760)
+			})
 
 			buffer.fill(0)
 		}
 	}
-}, 15000)
+}, 10000)
 
 test('reader', () => {
 	const reader = new FitsKeywordReader()
