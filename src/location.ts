@@ -1,9 +1,8 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
-import type { PositionAndVelocity } from './astrometry'
 import { EARTH_ANGULAR_VELOCITY_VECTOR } from './constants'
 import { type Distance, meter } from './distance'
 import { eraGc2Gde, eraSp00 } from './erfa'
-import { type Frame, frameAt } from './frame'
+import type { Frame } from './frame'
 import { ITRS, itrsRotationAt } from './itrs'
 import { type Mat3, type MutMat3, matFlipX, matMul, matMulVec, matRotX, matRotY, matRotZ } from './mat3'
 import { greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmAngles, type Time, tt } from './time'
@@ -148,10 +147,9 @@ export function rhoSinPhi(location: GeographicPosition) {
 }
 
 // Computes Earth latitude and longitude beneath a celestial position at time.
-export function subpoint(geocentric: Readonly<PositionAndVelocity> | Vec3, time: Time, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
-	const itrs = frameAt(geocentric, ITRS, time)
-	const xyz = itrs.length === 2 ? itrs[0] : itrs
-	const [x, y, z] = xyz
+export function subpoint(geocentric: Vec3, time: Time, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
+	const itrs = matMulVec(ITRS.rotationAt(time), geocentric)
+	const [x, y, z] = itrs
 
 	const r = Math.hypot(x, y)
 	const longitude = normalizePI(Math.atan2(y, x))
@@ -170,5 +168,5 @@ export function subpoint(geocentric: Readonly<PositionAndVelocity> | Vec3, time:
 
 	const elevation = r / Math.cos(latitude) - radius * c
 
-	return { longitude, latitude, elevation: elevation * radius, ellipsoid, itrs: xyz }
+	return { longitude, latitude, elevation: elevation * radius, ellipsoid, itrs }
 }
