@@ -209,6 +209,17 @@ precessFk5FromJ2000(frame, equinox) // Precess the FK5 coordinate from J2000 to 
 precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to J2000
 ```
 
+### Frame
+
+```ts
+precessionMatrixCapitaine(from, to) // Precession matrix using Capitaine et al. 2003
+frameAt(pv, frame, time) // Apply frame rotation to position and velocity at time
+galactic(pv)
+supergalactic(pv)
+eclipticJ2000(pv)
+ecliptic(pv, time)
+```
+
 ### GUST86
 
 ```ts
@@ -312,11 +323,12 @@ itrsRotationAt(time) // ITRS rotation matrix at time
 ### Location
 
 ```ts
-geodeticLocation(longitude, latitude, elevation, Ellipsoid.IERS2010) // Location from longitude, latitude, elevation and ellipsoid form
-geocentricLocation(x, y, z, Ellipsoid.IERS2010) // Location from |xyz| geocentric coordinate and ellipsoid form
+geodeticLocation(longitude, latitude, elevation, ellipsoid) // Location from longitude, latitude, elevation and ellipsoid form
+geocentricLocation(x, y, z, ellipsoid) // Location from |xyz| geocentric coordinate and ellipsoid form
 localSiderealTime(location, time, false, false) // Mean/apparent Local Sidereal Time
-polarRadius(Ellipsoid.IERS2010) // Earth's polar radius
+polarRadius(ellipsoid) // Earth's polar radius
 gcrsRotationAt(location, time) // GCRS rotation of the location at time
+subpoint(geocentric, time, ellipsoid)
 ```
 
 ### Lx200

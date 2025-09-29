@@ -1,10 +1,11 @@
 import { beforeAll, expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { deg, toHour } from '../src/angle'
+import { deg, formatDEC, hour, toHour } from '../src/angle'
 import { meter } from '../src/distance'
+import { eraS2c } from '../src/erfa'
 import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
-import { Ellipsoid, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi } from '../src/location'
+import { Ellipsoid, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi, subpoint } from '../src/location'
 import { Timescale, timeYMDHMS } from '../src/time'
 
 beforeAll(async () => {
@@ -45,4 +46,12 @@ test('rhoCosPhi', () => {
 test('rhoSinPhi', () => {
 	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
 	expect(rhoSinPhi(p)).toBeCloseTo(-0.388368434808665, 8)
+})
+
+test('subpoint', () => {
+	const t = timeYMDHMS(2020, 1, 3, 12, 45, 0, Timescale.UTC)
+	const p = subpoint(eraS2c(hour(3.79), deg(24.1167)), t)
+
+	expect(formatDEC(p.latitude)).toBe('+24 10 33.80')
+	expect(formatDEC(p.longitude)).toBe('+123 16 53.90')
 })

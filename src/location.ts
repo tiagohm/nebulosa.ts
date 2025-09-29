@@ -1,8 +1,11 @@
-import { type Angle, normalizeAngle } from './angle'
+import { type Angle, normalizeAngle, normalizePI } from './angle'
+import type { PositionAndVelocity } from './astrometry'
+import { EARTH_ANGULAR_VELOCITY_VECTOR } from './constants'
 import { type Distance, meter } from './distance'
 import { eraGc2Gde, eraSp00 } from './erfa'
-import { itrsRotationAt } from './itrs'
-import { type Mat3, matFlipX, matMul, matRotX, matRotY, matRotZ } from './mat3'
+import { type Frame, frameAt } from './frame'
+import { ITRS, itrsRotationAt } from './itrs'
+import { type Mat3, type MutMat3, matFlipX, matMul, matMulVec, matRotX, matRotY, matRotZ } from './mat3'
 import { greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmAngles, type Time, tt } from './time'
 import type { Vec3 } from './vec3'
 
@@ -100,7 +103,20 @@ export function localSiderealTime(time: Time, location: GeographicPosition = tim
 
 // Computes rotation from GCRS to this location's altazimuth system.
 export function gcrsRotationAt(location: GeographicPosition, time: Time) {
-	return matMul(rLatLon(location), itrsRotationAt(time))
+	const m = itrsRotationAt(time) as MutMat3
+	return matMul(rLatLon(location), m, m)
+}
+
+// The Geocentric Celestial Reference System (GCRS) at location.
+export function gcrs(location: GeographicPosition): Frame {
+	return {
+		rotationAt: (time) => gcrsRotationAt(location, time),
+		dRdtTimesRtAt: () => {
+			// TODO: taking the derivative of the instantaneous angular velocity would provide a more accurate transform.
+			const [x, y, z] = matMulVec(rLat(location), EARTH_ANGULAR_VELOCITY_VECTOR)
+			return [0, -z, y, z, 0, -x, -y, x, 0]
+		},
+	}
 }
 
 // The Earth's polar radius.
@@ -129,4 +145,30 @@ export function rhoSinPhi(location: GeographicPosition) {
 	const r = ELLIPSOID_PARAMETERS[ellipsoid].radius
 	location.rhoSinPhi = 0.99664719 * Math.sin(u) + (elevation / r) * Math.sin(latitude)
 	return location.rhoSinPhi
+}
+
+// Computes Earth latitude and longitude beneath a celestial position at time.
+export function subpoint(geocentric: Readonly<PositionAndVelocity> | Vec3, time: Time, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
+	const itrs = frameAt(geocentric, ITRS, time)
+	const xyz = itrs.length === 2 ? itrs[0] : itrs
+	const [x, y, z] = xyz
+
+	const r = Math.hypot(x, y)
+	const longitude = normalizePI(Math.atan2(y, x))
+	let latitude = Math.atan2(z, r)
+
+	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
+	const e2 = 2 * flattening - flattening * flattening
+	let c = 0
+
+	for (let i = 0; i < 3; i++) {
+		const sLat = Math.sin(latitude)
+		const sLatE2 = sLat * e2
+		c = radius / Math.sqrt(1 - sLatE2 * sLat)
+		latitude = Math.atan2(z + c * sLatE2, r)
+	}
+
+	const elevation = r / Math.cos(latitude) - radius * c
+
+	return { longitude, latitude, elevation: elevation * radius, ellipsoid, itrs: xyz }
 }

@@ -8,6 +8,6 @@ export function tirsRotationAt(time: Time) {
 	return matMul(m, precessionNutationMatrix(time), m)
 }
 
-export const TIRS_FRAME: Frame = {
+export const TIRS: Frame = {
 	rotationAt: tirsRotationAt,
 }

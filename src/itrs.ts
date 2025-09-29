@@ -1,3 +1,4 @@
+import { EARTH_ANGULAR_VELOCITY_MATRIX } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import { eraC2teqx, eraGd2Gce } from './erfa'
 import type { Frame } from './frame'
@@ -17,6 +18,14 @@ export function itrsRotationAt(time: Time) {
 	return eraC2teqx(precessionNutationMatrix(time), greenwichApparentSiderealTime(time), pmMatrix(time))
 }
 
-export const ITRS_FRAME: Frame = {
+// The International Terrestrial Reference System (ITRS).
+// This is the IAU standard for an Earth-centered Earth-fixed (ECEF)
+// coordinate system, anchored to the Earth’s crust and continents.
+// This reference frame combines three other reference frames: the
+// Earth’s true equator and equinox of date, the Earth’s rotation with
+// respect to the stars, and the polar wobble of the crust with respect
+// to the Earth’s pole of rotation.
+export const ITRS: Frame = {
 	rotationAt: itrsRotationAt,
+	dRdtTimesRtAt: () => EARTH_ANGULAR_VELOCITY_MATRIX,
 }
