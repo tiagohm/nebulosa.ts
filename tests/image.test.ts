@@ -82,80 +82,80 @@ test('debayer', async () => {
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
 	expect(image.metadata.channels).toBe(3)
-})
+}, 5000)
 
 test('stf', () => {
 	return readImageTransformAndSave((i) => stf(i, 0.005), 'stf', 'b690674f467c3416d09d551157f4e3c2')
-})
+}, 5000)
 
 test('auto stf', () => {
 	return readImageTransformAndSave((i) => stf(i, ...adf(i)), 'astf', '3e1d22fb79df143993138e5b28611f6d')
-})
+}, 5000)
 
 test('scnr', () => {
 	return readImageTransformAndSave((i) => scnr(i, 'GREEN', 0.9), 'scnr', '73f4a8308f0e234610b913400cce2adb')
-})
+}, 5000)
 
 test('horizontal flip', () => {
 	return readImageTransformAndSave((i) => horizontalFlip(i), 'hf', '56b0ed9d8c265f1eb1d5ca2cdea1d619')
-})
+}, 5000)
 
 test('vertical flip', () => {
 	return readImageTransformAndSave((i) => verticalFlip(i), 'vf', '0c07e73e73bd7383c799874da41ee284')
-})
+}, 5000)
 
 test('horizontal & vertical flip', () => {
 	return readImageTransformAndSave((i) => verticalFlip(horizontalFlip(i)), 'hvf', 'fd71d2b9372436699bf54f58f9dbadf5')
-})
+}, 5000)
 
 test('invert', () => {
 	return readImageTransformAndSave((i) => invert(i), 'invert', 'a9b92211de5965f5afb1aab2f0427b79')
-})
+}, 5000)
 
 test('horizontal flip', () => {
 	return readImageAndSaveWithOptions({ horizontalFlip: true }, 'hf2', '56b0ed9d8c265f1eb1d5ca2cdea1d619')
-})
+}, 5000)
 
 test('vertical flip', () => {
 	return readImageAndSaveWithOptions({ verticalFlip: true }, 'vf2', '0c07e73e73bd7383c799874da41ee284')
-})
+}, 5000)
 
 test('sharpen', () => {
 	return readImageAndSaveWithOptions({ sharpen: true }, 'sharpen', 'e45a3f735e0a2ac6a55509f0c618e55b')
-})
+}, 5000)
 
 test('normalize', () => {
 	return readImageAndSaveWithOptions({ normalize: true }, 'normalize', '0a1b903f8612fa73756c266fddee0706')
-})
+}, 5000)
 
 test('brightness', () => {
 	return readImageAndSaveWithOptions({ brightness: 30 }, 'brightness', '06b7df04c9110fd6b5fa04d15d0c0b48')
-})
+}, 5000)
 
 test('contrast', () => {
 	return readImageAndSaveWithOptions({ contrast: 5 }, 'contrast', 'd407e71e6fc4108082249dc0bb3c0bf6')
-})
+}, 5000)
 
 test('saturation', () => {
 	return readImageAndSaveWithOptions({ saturation: 30 }, 'saturation', '2103ecbf94a8006ea7dfd1a2551ccfe2')
-})
+}, 5000)
 
 test('brightness & saturation', () => {
 	return readImageAndSaveWithOptions({ brightness: 30, saturation: 30 }, 'brightness-saturation', 'ce8ad38b1ccf90f227e568523df94326')
-})
+}, 5000)
 
 test('gamma', () => {
 	return readImageAndSaveWithOptions({ gamma: 2.2 }, 'gamma', '22c9e73c1ec3f917896503370b06548e')
-})
+}, 5000)
 
 test('median', () => {
 	return readImageAndSaveWithOptions({ median: true }, 'median', '18ab1f9f14e5776e00b3c3b7eddff13d')
-})
+}, 5000)
 
 test('blur', () => {
 	return readImageAndSaveWithOptions({ blur: true }, 'blur', 'e71d4f269e5d5a483fce3f5e8b0d3584')
-})
+}, 5000)
 
 test('negate', () => {
 	return readImageAndSaveWithOptions({ negate: true }, 'negate', 'a9b92211de5965f5afb1aab2f0427b79')
-})
+}, 5000)
