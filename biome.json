@@ -84,7 +84,8 @@
 			},
 			"nursery": {
 				"noFloatingPromises": "error",
-				"noNonNullAssertedOptionalChain": "error"
+				"noNonNullAssertedOptionalChain": "error",
+				"noImportCycles": "error"
 			}
 		}
 	},

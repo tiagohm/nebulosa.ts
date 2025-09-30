@@ -1,5 +1,5 @@
 import { type Angle, arcsec, deg, normalizeAngle } from './angle'
-import { ASEC2RAD, AU_M, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MILLIASEC2RAD, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI, TURNAS } from './constants'
+import { ASEC2RAD, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MILLIASEC2RAD, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI, TURNAS, WGS84_FLATTENING, WGS84_RADIUS } from './constants'
 import { type Distance, toKilometer } from './distance'
 import { FAIRHEAD, IAU2000A_LS, IAU2000A_PL, IAU2000B_LS, IAU2006_S, IAU2006_SP } from './erfa.data'
 import { type Mat3, type MutMat3, matClone, matCopy, matIdentity, matMul, matMulTransposeVec, matMulVec, matRotX, matRotY, matRotZ, matTranspose } from './mat3'
@@ -91,7 +91,7 @@ const EMPTY_ERA_ASTROM: EraAstrom = {
 	eral: 0,
 	refa: 0,
 	refb: 0,
-    eo: 0,
+	eo: 0,
 }
 
 export type LeapSecondChange = readonly [number, number, number]
@@ -872,9 +872,6 @@ export function eraC2teqx(rbpn: Mat3, gast: Angle, rpom: Mat3) {
 	const m = matRotZ(gast)
 	return matMul(rpom, matMul(m, rbpn, m), m)
 }
-
-const WGS84_RADIUS = 6378137 / AU_M
-const WGS84_FLATTENING = 1 / 298.257223563
 
 // Transform geocentric coordinates to geodetic for a reference ellipsoid of specified form.
 export function eraGc2Gde(radius: Distance, flattening: number, x: Distance, y: Distance, z: Distance): [Angle, Angle, Distance] {

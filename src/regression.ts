@@ -359,7 +359,7 @@ export function regressionScore(regression: Regression, x: Readonly<NumberArray>
 	for (let i = 0; i < n; i++) {
 		const xi = x[i]
 		const yi = y[i]
-        const p = regression.predict(xi)
+		const p = regression.predict(xi)
 
 		sx += xi
 		sx2 += xi * xi

@@ -159,7 +159,7 @@ export function mpcorbComet(line: string) {
 const PACKED_DATE_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUV'
 
 export function unpackDate(epoch: string) {
-	const year = 100 * n(epoch.charCodeAt(0)) + parseInt(epoch.substring(1, 3))
+	const year = 100 * n(epoch.charCodeAt(0)) + +epoch.substring(1, 3)
 	return [year, n(epoch.charCodeAt(3)), n(epoch.charCodeAt(4))] as const
 }
 

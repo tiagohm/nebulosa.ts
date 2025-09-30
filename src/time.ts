@@ -1,6 +1,6 @@
 import type { Angle } from './angle'
 import { DAYSEC, DAYSPERJC, DAYSPERJY, DAYSPERTY, J2000, MJD0 } from './constants'
-import { eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+import { eraC2teqx, eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import { delta, xy } from './iers'
 import { itrs } from './itrs'
 import type { GeographicPosition } from './location'
@@ -59,6 +59,7 @@ export interface Time {
 	ut1MinusUtc?: TimeDelta
 
 	location?: GeographicPosition
+	gcrsToItrsRotationMatrix?: Mat3
 	extra?: TimeExtra
 }
 
@@ -475,6 +476,13 @@ export function equationOfOrigins(time: Time): Mat3 {
 	matMul(matRotZ(greenwichApparentSiderealTime(time) - earthRotationAngle(time), equationOfOrigins), precessionNutationMatrix(time), equationOfOrigins)
 	extra(time).equationOfOrigins = equationOfOrigins
 	return equationOfOrigins
+}
+
+// Computes the GCRS to ITRS rotation matrix at time.
+export function gcrsToItrsRotationMatrix(time: Time) {
+	if (time.gcrsToItrsRotationMatrix) return time.gcrsToItrsRotationMatrix
+	time.gcrsToItrsRotationMatrix = eraC2teqx(precessionNutationMatrix(time), greenwichApparentSiderealTime(time), pmMatrix(time))
+	return time.gcrsToItrsRotationMatrix
 }
 
 // Computes UT1 - UTC in seconds at time.

@@ -1,9 +1,9 @@
 import type { PositionAndVelocity } from './astrometry'
-import { ECLIPTIC_B9150_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from './constants'
+import { EARTH_ANGULAR_VELOCITY_MATRIX, ECLIPTIC_B9150_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa'
 import { type Mat3, matIdentity, matMul, matMulVec, matRotX, matTranspose } from './mat3'
-import { precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from './time'
+import { gcrsToItrsRotationMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from './time'
 import { type Vec3, vecPlus } from './vec3'
 
 export type CoordinateFrame = CartesianCoordinate
@@ -90,6 +90,18 @@ export function precessionMatrixCapitaine(from: Time, to: Time) {
 	const a = matTranspose(rp, rp)
 	const b = eraBp06(t1.day, t1.fraction)[1]
 	return matMul(b, a, b)
+}
+
+// The International Terrestrial Reference System (ITRS).
+// This is the IAU standard for an Earth-centered Earth-fixed (ECEF)
+// coordinate system, anchored to the Earth’s crust and continents.
+// This reference frame combines three other reference frames: the
+// Earth’s true equator and equinox of date, the Earth’s rotation with
+// respect to the stars, and the polar wobble of the crust with respect
+// to the Earth’s pole of rotation.
+export const ITRS: Frame = {
+	rotationAt: gcrsToItrsRotationMatrix,
+	dRdtTimesRtAt: () => EARTH_ANGULAR_VELOCITY_MATRIX,
 }
 
 // Applies a frame rotation to a position and velocity at time.

@@ -1,11 +1,10 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
-import { EARTH_ANGULAR_VELOCITY_VECTOR } from './constants'
-import { type Distance, meter } from './distance'
+import { EARTH_ANGULAR_VELOCITY_VECTOR, ELLIPSOID_PARAMETERS } from './constants'
+import type { Distance } from './distance'
 import { eraGc2Gde, eraSp00 } from './erfa'
 import type { Frame } from './frame'
-import { ITRS, itrsRotationAt } from './itrs'
 import { type Mat3, type MutMat3, matFlipX, matMul, matMulVec, matRotX, matRotY, matRotZ } from './mat3'
-import { greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmAngles, type Time, tt } from './time'
+import { gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmAngles, type Time, tt } from './time'
 import type { Vec3 } from './vec3'
 
 // An Earth ellipsoid that maps latitudes and longitudes to |xyz| positions.
@@ -21,25 +20,6 @@ export enum Ellipsoid {
 export interface EllipsoidParameters {
 	readonly radius: Distance
 	readonly flattening: number
-}
-
-export const ELLIPSOID_PARAMETERS: Readonly<Record<Ellipsoid, EllipsoidParameters>> = {
-	[Ellipsoid.GRS80]: {
-		radius: meter(6378137),
-		flattening: 1 / 298.257222101,
-	},
-	[Ellipsoid.WGS72]: {
-		radius: meter(6378135),
-		flattening: 1 / 298.26,
-	},
-	[Ellipsoid.WGS84]: {
-		radius: meter(6378137),
-		flattening: 1 / 298.257223563,
-	},
-	[Ellipsoid.IERS2010]: {
-		radius: meter(6378136.6),
-		flattening: 1 / 298.25642,
-	},
 }
 
 export interface GeographicPosition {
@@ -102,7 +82,7 @@ export function localSiderealTime(time: Time, location: GeographicPosition = tim
 
 // Computes rotation from GCRS to this location's altazimuth system.
 export function gcrsRotationAt(location: GeographicPosition, time: Time) {
-	const m = itrsRotationAt(time) as MutMat3
+	const m = gcrsToItrsRotationMatrix(time) as MutMat3
 	return matMul(rLatLon(location), m, m)
 }
 
@@ -148,7 +128,7 @@ export function rhoSinPhi(location: GeographicPosition) {
 
 // Computes Earth latitude and longitude beneath a celestial position at time.
 export function subpoint(geocentric: Vec3, time: Time, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
-	const itrs = matMulVec(ITRS.rotationAt(time), geocentric)
+	const itrs = matMulVec(gcrsToItrsRotationMatrix(time), geocentric)
 	const [x, y, z] = itrs
 
 	const r = Math.hypot(x, y)
