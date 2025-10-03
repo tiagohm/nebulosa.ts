@@ -219,10 +219,12 @@ export function toUnix(time: Time) {
 	return Math.trunc(toUnixMillis(time) / 1000)
 }
 
+const DAYSEC_MS = DAYSEC * 1000
+
 // Converts the time to Unix timestamp in milliseconds.
 export function toUnixMillis(time: Time) {
-	time = utc(time)
-	return Math.trunc(time.day * (DAYSEC * 1000) + time.fraction * (DAYSEC * 1000) - 2440587.5 * DAYSEC * 1000)
+	const { day, fraction } = utc(time)
+	return Math.trunc(day * DAYSEC_MS + fraction * DAYSEC_MS - 2440587.5 * DAYSEC_MS)
 }
 
 // Converts the time to Julian day.
@@ -251,8 +253,15 @@ function extra(target: Time, extra?: TimeExtra) {
 }
 
 // Copies the day and fraction from source to a new Time.
-function newTime(source: [number, number], time: Time, scale: Timescale = time.scale): Time {
-	return { ...time, day: source[0], fraction: source[1], scale }
+function newTime(source: [number, number], time: Time, scale: Timescale = time.scale, normalize: boolean = false): Time {
+	const [day, fraction] = source
+
+	if (normalize) {
+		const n = timeNormalize(day, fraction, 0, scale)
+		return { ...time, ...n }
+	}
+
+	return { ...time, day, fraction, scale }
 }
 
 // Converts the given time to the specified scale.
@@ -268,16 +277,16 @@ export function timeConvert(time: Time, scale: Timescale) {
 }
 
 // Converts the given time to UT1 Time.
-export function ut1(time: Time): Time {
+export function ut1(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UT1) return time
 	if (time.extra?.ut1) return time.extra.ut1
 
 	let ret: Time
 
-	if (scale === Timescale.TAI) ret = newTime(eraTaiUt1(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.UT1)
-	else if (scale === Timescale.UTC) ret = newTime(eraUtcUt1(day, fraction, (time.ut1MinusUtc ?? ut1MinusUtc)(time)), time, Timescale.UT1)
-	else ret = ut1(utc(time))
+	if (scale === Timescale.TAI) ret = newTime(eraTaiUt1(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.UT1, normalize)
+	else if (scale === Timescale.UTC) ret = newTime(eraUtcUt1(day, fraction, (time.ut1MinusUtc ?? ut1MinusUtc)(time)), time, Timescale.UT1, normalize)
+	else ret = ut1(utc(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -286,16 +295,16 @@ export function ut1(time: Time): Time {
 }
 
 // Converts the given time to UTC Time.
-export function utc(time: Time): Time {
+export function utc(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UTC) return time
 	if (time.extra?.utc) return time.extra.utc
 
 	let ret: Time
 
-	if (scale === Timescale.UT1) ret = newTime(eraUt1Utc(day, fraction, (time.ut1MinusUtc ?? ut1MinusUtc)(time)), time, Timescale.UTC)
-	else if (scale === Timescale.TAI) ret = newTime(eraTaiUtc(day, fraction), time, Timescale.UTC)
-	else ret = utc(tai(time))
+	if (scale === Timescale.UT1) ret = newTime(eraUt1Utc(day, fraction, (time.ut1MinusUtc ?? ut1MinusUtc)(time)), time, Timescale.UTC, normalize)
+	else if (scale === Timescale.TAI) ret = newTime(eraTaiUtc(day, fraction), time, Timescale.UTC, normalize)
+	else ret = utc(tai(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -304,17 +313,17 @@ export function utc(time: Time): Time {
 }
 
 // Converts the given time to TAI Time.
-export function tai(time: Time): Time {
+export function tai(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TAI) return time
 	if (time.extra?.tai) return time.extra.tai
 
 	let ret: Time
 
-	if (scale === Timescale.UT1) ret = newTime(eraUt1Tai(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.TAI)
-	else if (scale === Timescale.UTC) ret = newTime(eraUtcTai(day, fraction), time, Timescale.TAI)
-	else if (scale === Timescale.TT) ret = newTime(eraTtTai(day, fraction), time, Timescale.TAI)
-	else ret = tai(tt(time))
+	if (scale === Timescale.UT1) ret = newTime(eraUt1Tai(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.TAI, normalize)
+	else if (scale === Timescale.UTC) ret = newTime(eraUtcTai(day, fraction), time, Timescale.TAI, normalize)
+	else if (scale === Timescale.TT) ret = newTime(eraTtTai(day, fraction), time, Timescale.TAI, normalize)
+	else ret = tai(tt(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -323,18 +332,18 @@ export function tai(time: Time): Time {
 }
 
 // Converts the given time to TT Time.
-export function tt(time: Time): Time {
+export function tt(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TT) return time
 	if (time.extra?.tt) return time.extra.tt
 
 	let ret: Time
 
-	if (scale === Timescale.TAI) ret = newTime(eraTaiTt(day, fraction), time, Timescale.TT)
-	else if (scale === Timescale.TCG) ret = newTime(eraTcgTt(day, fraction), time, Timescale.TT)
-	else if (scale === Timescale.TDB) ret = newTime(eraTdbTt(day, fraction, (time.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TT)
-	else if (scale < Timescale.TAI) return tt(tai(time))
-	else ret = tt(tdb(time))
+	if (scale === Timescale.TAI) ret = newTime(eraTaiTt(day, fraction), time, Timescale.TT, normalize)
+	else if (scale === Timescale.TCG) ret = newTime(eraTcgTt(day, fraction), time, Timescale.TT, normalize)
+	else if (scale === Timescale.TDB) ret = newTime(eraTdbTt(day, fraction, (time.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TT, normalize)
+	else if (scale < Timescale.TAI) return tt(tai(time, normalize), normalize)
+	else ret = tt(tdb(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -343,15 +352,15 @@ export function tt(time: Time): Time {
 }
 
 // Converts the given time to TCG Time.
-export function tcg(time: Time): Time {
+export function tcg(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCG) return time
 	if (time.extra?.tcg) return time.extra.tcg
 
 	let ret: Time
 
-	if (scale === Timescale.TT) ret = newTime(eraTtTcg(day, fraction), time, Timescale.TCG)
-	else ret = tcg(tt(time))
+	if (scale === Timescale.TT) ret = newTime(eraTtTcg(day, fraction), time, Timescale.TCG, normalize)
+	else ret = tcg(tt(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -360,16 +369,16 @@ export function tcg(time: Time): Time {
 }
 
 // Converts the given time to TDB Time.
-export function tdb(time: Time): Time {
+export function tdb(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TDB) return time
 	if (time.extra?.tdb) return time.extra.tdb
 
 	let ret: Time
 
-	if (scale === Timescale.TT) ret = newTime(eraTtTdb(day, fraction, (time.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TDB)
-	else if (scale === Timescale.TCB) ret = newTime(eraTcbTdb(day, fraction), time, Timescale.TDB)
-	else ret = tdb(tt(time))
+	if (scale === Timescale.TT) ret = newTime(eraTtTdb(day, fraction, (time.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TDB, normalize)
+	else if (scale === Timescale.TCB) ret = newTime(eraTcbTdb(day, fraction), time, Timescale.TDB, normalize)
+	else ret = tdb(tt(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -378,15 +387,15 @@ export function tdb(time: Time): Time {
 }
 
 // Converts the given time to TCB Time.
-export function tcb(time: Time): Time {
+export function tcb(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCB) return time
 	if (time.extra?.tcb) return time.extra.tcb
 
 	let ret: Time
 
-	if (scale === Timescale.TDB) ret = newTime(eraTdbTcb(day, fraction), time, Timescale.TCB)
-	else ret = tcb(tdb(time))
+	if (scale === Timescale.TDB) ret = newTime(eraTdbTcb(day, fraction), time, Timescale.TCB, normalize)
+	else ret = tcb(tdb(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)

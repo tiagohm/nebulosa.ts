@@ -290,6 +290,34 @@ test('tcb', () => {
 	expect(t.extra?.tdbMinusTt).not.toBeUndefined()
 })
 
+test('normalize', () => {
+	const t = timeYMDHMS(2020, 10, 7, 0, 0, 0, Timescale.TCB)
+
+	const a = ut1(t, true)
+	expect(a.day).toBe(2459129)
+	expect(a.fraction).toBeCloseTo(0.498949435681883102, 14)
+
+	const b = utc(t, true)
+	expect(b.day).toBe(2459129)
+	expect(b.fraction).toBeCloseTo(0.498951427480941123, 14)
+
+	const c = tai(t, true)
+	expect(c.day).toBe(2459129)
+	expect(c.fraction).toBeCloseTo(0.499379668221681894, 14)
+
+	const d = tt(t, true)
+	expect(d.day).toBe(2459129)
+	expect(d.fraction).toBeCloseTo(0.499752168221681892, 14)
+
+	const e = tcg(t, true)
+	expect(e.day).toBe(2459129)
+	expect(e.fraction).toBeCloseTo(0.499763308631536507, 14)
+
+	const f = tdb(t, true)
+	expect(f.day).toBe(2459129)
+	expect(f.fraction).toBeCloseTo(0.499752148662759077, 14)
+})
+
 test('location', () => {
 	let t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TDB)
 	t.location = geodeticLocation(deg(-45), deg(-23), meter(890), Ellipsoid.WGS84)
