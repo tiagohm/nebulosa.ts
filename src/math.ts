@@ -37,6 +37,12 @@ export function pmod(num: number, other: number): number {
 	return rem < 0 ? rem + other : rem
 }
 
+// Computes the modulo where the result is always positive.
+export function amod(num: number, other: number): number {
+	const rem = num % other
+	return rem <= 0 ? rem + other : rem
+}
+
 // Returns a pair containing the quotient and the remainder when given num is divided by other.
 export function divmod(num: number, other: number): [number, number] {
 	return [Math.trunc(num / other), pmod(num, other)]

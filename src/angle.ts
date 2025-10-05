@@ -249,26 +249,29 @@ export function formatAngle(angle: Angle, options?: FormatAngleOptions) {
 }
 
 export const DEFAULT_HMS_FORMAT: FormatAngleOptions = { isHour: true, separators: ':', noSign: true }
+export const DEFAULT_HMS_NO_FRACTION_FORMAT: FormatAngleOptions = { ...DEFAULT_HMS_FORMAT, fractionDigits: 0 }
 export const DEFAULT_DMS_FORMAT: FormatAngleOptions = { noSign: true, separators: 'dms' }
+export const DEFAULT_DMS_NO_FRACTION_FORMAT: FormatAngleOptions = { ...DEFAULT_DMS_FORMAT, fractionDigits: 0 }
 export const DEFAULT_SIGNED_DMS_FORMAT: FormatAngleOptions = { ...DEFAULT_DMS_FORMAT, noSign: false }
+export const DEFAULT_SIGNED_DMS_NO_FRACTION_FORMAT: FormatAngleOptions = { ...DEFAULT_SIGNED_DMS_FORMAT, fractionDigits: 0 }
 export const DEFAULT_RA_FORMAT = { ...DEFAULT_HMS_FORMAT, separators: ' ' }
 export const DEFAULT_DEC_FORMAT: FormatAngleOptions = { ...DEFAULT_SIGNED_DMS_FORMAT, separators: ' ' }
 export const DEFAULT_AZ_FORMAT: FormatAngleOptions = { ...DEFAULT_DMS_FORMAT, separators: ' ', padLength: 3 }
 export const DEFAULT_ALT_FORMAT = DEFAULT_DEC_FORMAT
 
 // Formats the angle as 00:00:00.00.
-export function formatHMS(angle: Angle) {
-	return formatAngle(angle, DEFAULT_HMS_FORMAT)
+export function formatHMS(angle: Angle, noFractionDigits: boolean = false) {
+	return formatAngle(angle, noFractionDigits ? DEFAULT_HMS_NO_FRACTION_FORMAT : DEFAULT_HMS_FORMAT)
 }
 
 // Formats the angle as 00d00m00.00s, signed only if negative
-export function formatDMS(angle: Angle) {
-	return formatAngle(angle, DEFAULT_DMS_FORMAT)
+export function formatDMS(angle: Angle, noFractionDigits: boolean = false) {
+	return formatAngle(angle, noFractionDigits ? DEFAULT_DMS_NO_FRACTION_FORMAT : DEFAULT_DMS_FORMAT)
 }
 
 // Formats the angle as +00d00m00.00s, always signed
-export function formatSignedDMS(angle: Angle) {
-	return formatAngle(angle, DEFAULT_SIGNED_DMS_FORMAT)
+export function formatSignedDMS(angle: Angle, noFractionDigits: boolean = false) {
+	return formatAngle(angle, noFractionDigits ? DEFAULT_SIGNED_DMS_NO_FRACTION_FORMAT : DEFAULT_SIGNED_DMS_FORMAT)
 }
 
 // Formats the angle as 00 00 00.00

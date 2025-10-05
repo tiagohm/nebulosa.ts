@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { arcmin, arcsec, deg, dms, type FormatAngleOptions, formatALT, formatAngle, formatAZ, formatDEC, formatDMS, formatHMS, formatRA, formatSignedDMS, hms, hour, mas, normalizeAngle, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas, PARSE_HOUR_ANGLE } from '../src/angle'
+import { arcmin, arcsec, deg, dms, type FormatAngleOptions, formatALT, formatAngle, formatAZ, formatDEC, formatDMS, formatHMS, formatRA, formatSignedDMS, hms, hour, mas, normalizeAngle, PARSE_HOUR_ANGLE, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from '../src/angle'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 
 test('normalize', () => {
@@ -322,6 +322,7 @@ test('formatHms', () => {
 	expect(formatHMS(hour(23.5634453))).toBe('23:33:48.40')
 	expect(formatHMS(hour(-23.5634453))).toBe('00:26:11.60')
 	expect(formatHMS(hour(10))).toBe('10:00:00.00')
+	expect(formatHMS(hour(10), true)).toBe('10:00:00')
 	expect(formatHMS(hour(24))).toBe('00:00:00.00')
 	expect(formatHMS(hour(25))).toBe('01:00:00.00')
 })
@@ -330,6 +331,7 @@ test('formatDms', () => {
 	expect(formatDMS(deg(23.5634453))).toBe('23d33m48.40s')
 	expect(formatDMS(deg(-23.5634453))).toBe('-23d33m48.40s')
 	expect(formatDMS(deg(10))).toBe('10d00m00.00s')
+	expect(formatDMS(deg(10), true)).toBe('10d00m00s')
 	expect(formatDMS(deg(-10))).toBe('-10d00m00.00s')
 })
 
@@ -337,6 +339,7 @@ test('formatSignedDms', () => {
 	expect(formatSignedDMS(deg(23.5634453))).toBe('+23d33m48.40s')
 	expect(formatSignedDMS(deg(-23.5634453))).toBe('-23d33m48.40s')
 	expect(formatSignedDMS(deg(10))).toBe('+10d00m00.00s')
+	expect(formatSignedDMS(deg(10), true)).toBe('+10d00m00s')
 	expect(formatSignedDMS(deg(-10))).toBe('-10d00m00.00s')
 })
 

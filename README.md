@@ -12,7 +12,7 @@ Elegant astronomy for TypeScript. Supercharged by Bun.
 ```ts
 const [ra, dec] = polarAlignmentError(ra, dec, latitude, lst, dAz, dAlt) // Compute the apparent RA/DEC of a star given polar alignment error
 const result = threePointPolarAlignmentError(p1, p2, p3, refraction) // Compute the polar alignment error given three stars
-const result = threePointPolarAlignmentErrorAfterAdjustment(result, from, to, refraction) // Compute the polar alignment error after azimuth/altitude adjustments and given a new star
+const result = threePointPolarAlignmentErrorAfterAdjustment(result, p3, p4, refraction) // Compute the polar alignment error after azimuth/altitude adjustments and given a new star
 
 const polarAlignment = new ThreePointPolarAlignment(refraction)
 const result = polarAlignment.add(ra, dec, time)
@@ -343,6 +343,7 @@ server.stop() // Stop server
 
 ```ts
 pmod(-PI, TAU) // Modulo where the result is always non-negative
+amod(-PI, TAU) // Modulo where the result is always positive
 divmod(10, 4) // The quotient and the remainder of division
 floorDiv(10, 4) // The integer floor of the fractional value (x / y)
 roundToNearestWholeNumber(5.6)
@@ -403,8 +404,8 @@ TODO
 moonParallax(distance) // Compute the moon parallax at a given distance
 moonSemidiameter(distance) // Compute the moon semidiameter at a given distance
 lunation(time, system) // Compute the lunation at a given time and system
-nearestLunarPhase(time, phase, true) // Compute the nearest lunar phase at a given time
-nearestLunarEclipse(time, true) // Compute the nearest lunar eclipse at a given time
+nearestLunarPhase(time, phase, next) // Compute the nearest lunar phase at a given time
+nearestLunarEclipse(time, next) // Compute the nearest lunar eclipse at a given time
 lunarSaros(time) // Compute the saros series number for the lunar eclipse at time
 ```
 
@@ -581,7 +582,7 @@ sunParallax(distance) // Compute the parallax of the Sun at a given distance
 sunSemidiameter(distance) // Compute the semidiameter of the Sun at a given distance
 carringtonRotationNumber(time) // Compute the Carrington rotation number of the Sun at time
 season(year, name) // Compute the date of the solstice or equinox for a given year and season name
-nearestSolarEclipse(time, true) // Nearest solar eclipse to time
+nearestSolarEclipse(time, next) // Nearest solar eclipse to time
 solarSaros(time) // Compute the saros series number for the solar eclipse at time
 ```
 
