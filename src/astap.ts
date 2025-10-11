@@ -114,6 +114,22 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 					}
 				}
 
+				// Why latest ASTAP doesn't more write DIMENSIONS to ini file?
+				if (!header.NAXIS1 || !header.NAXIS2) {
+					const handle = await fs.open(input)
+					await using source = fileHandleSource(handle)
+					const fits = await readFits(source)
+
+					if (fits?.hdus.length) {
+						const hdu = fits.hdus.find((e) => e.header.NAXIS1 && e.header.NAXIS2)
+
+						if (hdu) {
+							header.NAXIS1 = hdu.header.NAXIS1
+							header.NAXIS2 = hdu.header.NAXIS2
+						}
+					}
+				}
+
 				return plateSolutionFrom(header)
 			}
 		} finally {
