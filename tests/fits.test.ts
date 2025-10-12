@@ -1,6 +1,6 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { dms, hms } from '../src/angle'
-import { bitpixInBytes, computeRemainingBytes, declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, heightKeyword, readFits, rightAscensionKeyword, widthKeyword, writeFits } from '../src/fits'
+import { bitpixInBytes, computeRemainingBytes, declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, heightKeyword, observationDateKeyword, readFits, rightAscensionKeyword, widthKeyword, writeFits } from '../src/fits'
 import { bufferSink, bufferSource } from '../src/io'
 import { BITPIXES, CHANNELS, openFits } from './image.util'
 
@@ -113,26 +113,35 @@ test('escape', async () => {
 	expect(sink).toEqual(source)
 })
 
-test('width', () => {
-	expect(widthKeyword({ NAXIS1: 1200 }, undefined)).toBe(1200)
-	expect(widthKeyword({ IMAGEW: 1400 }, undefined)).toBe(1400)
-	expect(widthKeyword({ NAXIS1: 1100, IMAGEW: 1400 }, undefined)).toBe(1100)
-})
+describe('keywords', () => {
+	test('width', () => {
+		expect(widthKeyword({ NAXIS1: 1200 }, undefined)).toBe(1200)
+		expect(widthKeyword({ IMAGEW: 1400 }, undefined)).toBe(1400)
+		expect(widthKeyword({ NAXIS1: 1100, IMAGEW: 1400 }, undefined)).toBe(1100)
+	})
 
-test('height', () => {
-	expect(heightKeyword({ NAXIS2: 1200 }, undefined)).toBe(1200)
-	expect(heightKeyword({ IMAGEH: 1400 }, undefined)).toBe(1400)
-	expect(heightKeyword({ NAXIS2: 1100, IMAGEH: 1400 }, undefined)).toBe(1100)
-})
+	test('height', () => {
+		expect(heightKeyword({ NAXIS2: 1200 }, undefined)).toBe(1200)
+		expect(heightKeyword({ IMAGEH: 1400 }, undefined)).toBe(1400)
+		expect(heightKeyword({ NAXIS2: 1100, IMAGEH: 1400 }, undefined)).toBe(1100)
+	})
 
-test('rightAscension', () => {
-	expect(rightAscensionKeyword({ OBJCTRA: '12 44 04.261' }, undefined)).toBeCloseTo(hms(12, 44, 4.261), 12)
-	expect(rightAscensionKeyword({ RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
-	expect(rightAscensionKeyword({ OBJCTRA: '11 44 04.261', RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
-})
+	test('right ascension', () => {
+		expect(rightAscensionKeyword({ OBJCTRA: '12 44 04.261' }, undefined)).toBeCloseTo(hms(12, 44, 4.261), 12)
+		expect(rightAscensionKeyword({ RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
+		expect(rightAscensionKeyword({ OBJCTRA: '11 44 04.261', RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
+	})
 
-test('declination', () => {
-	expect(declinationKeyword({ OBJCTDEC: '59 36 08.17' }, undefined)).toBeCloseTo(dms(59, 36, 8.17), 12)
-	expect(declinationKeyword({ DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
-	expect(declinationKeyword({ OBJCTDEC: '59 36 08.17', DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
+	test('declination', () => {
+		expect(declinationKeyword({ OBJCTDEC: '59 36 08.17' }, undefined)).toBeCloseTo(dms(59, 36, 8.17), 12)
+		expect(declinationKeyword({ DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
+		expect(declinationKeyword({ OBJCTDEC: '59 36 08.17', DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
+	})
+
+	test('observation date', () => {
+		expect(observationDateKeyword({ 'DATE-OBS': '2023-01-15T01:27:05.460' })).toBe(1673746025460)
+		expect(observationDateKeyword({ 'DATE-END': '2023-01-15T01:27:05.460' })).toBe(1673746025460)
+		expect(observationDateKeyword({ DATE: '2023-01-15T01:27:05.460', DEC: -59.6022705034 })).toBe(1673746025460)
+		expect(observationDateKeyword({ 'DATE-OBS': '2023-01-15', DATE: '2023-01-15T01:27:05.460' })).toBe(1673740800000)
+	})
 })

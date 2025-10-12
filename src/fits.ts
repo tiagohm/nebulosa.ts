@@ -2,6 +2,7 @@ import type { Mutable } from 'utility-types'
 import { type Angle, deg, PARSE_HOUR_ANGLE, parseAngle } from './angle'
 import type { CfaPattern } from './image'
 import { readUntil, type Seekable, type Sink, type Source, sourceTransferToSink } from './io'
+import { parseTemporal } from './temporal'
 
 export type FitsHeaderKey = string
 export type FitsHeaderValue = string | number | boolean | undefined
@@ -138,6 +139,12 @@ export function declinationKeyword<T extends Angle | undefined = Angle>(header: 
 	}
 
 	return defaultValue
+}
+
+export function observationDateKeyword(header: FitsHeader) {
+	const date = textKeyword(header, 'DATE-OBS') || textKeyword(header, 'DATE-END') || textKeyword(header, 'DATE')
+	if (!date) return undefined
+	return parseTemporal(date, 'YYYY-MM-DDTHH:mm:ss.SSS')
 }
 
 export function bitpixInBytes(bitpix: BitpixOrZero) {
