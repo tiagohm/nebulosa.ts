@@ -123,6 +123,12 @@ export const TURNAS = 1296000
 // 1 parsec in AU.
 export const ONE_PARSEC = 206264.806245480309552772371736702884
 
+// 1000 parsecs in AU.
+export const ONE_KILOPARSEC = 1000 * ONE_PARSEC
+
+// 1000000 parsecs in AU.
+export const ONE_MEGAPARSEC = 1000000 * ONE_PARSEC
+
 // 1000000000 parsecs in AU.
 export const ONE_GIGAPARSEC = 1000000000 * ONE_PARSEC
 

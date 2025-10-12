@@ -1,5 +1,5 @@
 import type { Angle } from './angle'
-import { FK5_MATRIX, ONE_PARSEC } from './constants'
+import { FK5_MATRIX, ONE_KILOPARSEC } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { eraS2p } from './erfa'
@@ -10,7 +10,7 @@ import { type Time, Timescale, timeJulianYear } from './time'
 const J2000 = timeJulianYear(2000, Timescale.TT)
 
 // Convert the FK5 spherical coordinate to FK5 cartesian coordinate.
-export function fk5(ra: Angle, dec: Angle, distance: Distance = ONE_PARSEC * 1000): CartesianCoordinate {
+export function fk5(ra: Angle, dec: Angle, distance: Distance = ONE_KILOPARSEC): CartesianCoordinate {
 	return eraS2p(ra, dec, distance)
 }
 
