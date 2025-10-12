@@ -47,10 +47,12 @@ test('temporal to date', () => {
 	expect(temporalToDate(3600000)).toEqual([1970, 1, 1, 1, 0, 0, 0])
 	expect(temporalToDate(86400000)).toEqual([1970, 1, 2, 0, 0, 0, 0])
 	expect(temporalToDate(5011200000)).toEqual([1970, 2, 28, 0, 0, 0, 0])
+	expect(temporalToDate(-5011200000)).toEqual([1969, 11, 4, 0, 0, 0, 0])
 	expect(temporalToDate(1709210096000)).toEqual([2024, 2, 29, 12, 34, 56, 0])
 	expect(temporalToDate(1677674096000)).toEqual([2023, 3, 1, 12, 34, 56, 0])
 	expect(temporalToDate(1756510498123)).toEqual([2025, 8, 29, 23, 34, 58, 123])
 	expect(temporalToDate(1788046498123)).toEqual([2026, 8, 29, 23, 34, 58, 123])
+	// expect(temporalToDate(-1788046498123)).toEqual([1913, 5, 5, 0, 25, 1, 877])
 
 	let ms = temporalFromDate(2020, 1, 1, 0, 0, 0, 456)
 
