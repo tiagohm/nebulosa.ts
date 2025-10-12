@@ -6,3 +6,5 @@ exact = true
 [test]
 root = "./tests"
 preload = ["./tests/setup.ts"]
+concurrent = true
+randomize = true

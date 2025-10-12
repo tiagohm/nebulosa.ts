@@ -50,4 +50,4 @@ jobs:
               run: bun typecheck
 
             - name: Run Tests
-              run: bun test --timeout 1000 --concurrent --randomize
+              run: bun test --timeout 1000
