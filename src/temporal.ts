@@ -167,49 +167,53 @@ export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat |
 }
 
 const SHORT_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const LOWERCASE_SHORT_MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const PATTERN_SYMBOLS = 'YMDHmsS'
 
-export function parseTemporal(text: string, pattern: string): Temporal {
+export function parseTemporal(input: string, pattern: string): Temporal {
 	const date: TemporalDate = [0, 0, 0, 0, 0, 0, 0]
+	const tokens = tokenizePattern(pattern)
 
-	function numeric(text: string, start: number, end: number) {
-		let res = 0
-		for (let i = start; i < end; i++) res = res * 10 + (text.charCodeAt(i) - 48)
-		return res
-	}
+	for (const { start, end, found } of tokens) {
+		if (end > input.length) break
 
-	function year(text: string, start: number, end: number) {
-		return 2000 + numeric(text, start, end)
-	}
+		const p = pattern.substring(start, end)
+		const i = input.substring(start, end)
 
-	function month(text: string, start: number, end: number) {
-		return SHORT_MONTH_NAMES.indexOf(text.substring(start, end)) + 1
-	}
-
-	function replace(format: string, index: number, value: (text: string, start: number, end: number) => number) {
-		const i = pattern.indexOf(format)
-
-		if (i >= 0) {
-			date[index] = value(text, i, i + format.length)
-			pattern = pattern.replace(format, '#'.padStart(format.length, '#'))
-			return true
+		if (found) {
+			switch (p) {
+				case 'YYYY':
+					date[0] = +i
+					break
+				case 'YY':
+					date[0] = +i + 2000
+					break
+				case 'MMM':
+					date[1] = LOWERCASE_SHORT_MONTH_NAMES.indexOf(i.toLowerCase()) + 1
+					break
+				case 'MM':
+					date[1] = +i
+					break
+				case 'DD':
+					date[2] = +i
+					break
+				case 'HH':
+					date[3] = +i
+					break
+				case 'mm':
+					date[4] = +i
+					break
+				case 'ss':
+					date[5] = +i
+					break
+				case 'SSS':
+					date[6] = +i
+					break
+				default:
+					throw new Error(`invalid pattern found: ${p}`)
+			}
 		}
-
-		return false
-	}
-
-	while (true) {
-		let found = replace('YYYY', 0, numeric)
-		found = replace('YY', 0, year) || found
-		found = replace('DD', 2, numeric) || found
-		found = replace('HH', 3, numeric) || found
-		found = replace('mm', 4, numeric) || found
-		found = replace('ss', 5, numeric) || found
-		found = replace('SSS', 6, numeric) || found
-		found = replace('MMM', 1, month) || found
-		found = replace('MM', 1, numeric) || found
-
-		if (!found) break
 	}
 
 	if (date[0] === 0 || date[1] === 0 || date[2] === 0) {
@@ -220,32 +224,110 @@ export function parseTemporal(text: string, pattern: string): Temporal {
 }
 
 export function formatTemporalFromPattern(temporal: Temporal, pattern: string) {
-	const date = temporalToDate(temporal)
+	const tokens = tokenizePattern(pattern)
+	const output: string[] = []
+	const date = pattern.includes('Y') || pattern.includes('M') || pattern.includes('D') ? temporalToDate(temporal) : undefined
 
-	if (pattern.includes('Y')) pattern = pattern.replaceAll('YYYY', date[0].toFixed(0).padStart(4, '0'))
-	if (pattern.includes('Y')) pattern = pattern.replaceAll('YY', (date[0] % 100).toFixed(0).padStart(2, '0'))
+	for (const { start, end, found } of tokens) {
+		const text = pattern.substring(start, end)
 
-	if (pattern.includes('D')) pattern = pattern.replaceAll('DD', date[2].toFixed(0).padStart(2, '0'))
-	if (pattern.includes('D')) pattern = pattern.replaceAll('D', date[2].toFixed(0))
+		if (found) {
+			switch (text) {
+				case 'YYYY':
+					output.push(date![0].toFixed(0).padStart(4, '0'))
+					break
+				case 'YYY':
+					output.push(date![0].toFixed(0))
+					break
+				case 'YY':
+					output.push((date![0] % 100).toFixed(0).padStart(2, '0'))
+					break
+				case 'Y':
+					output.push((date![0] % 100).toFixed(0))
+					break
+				case 'MMMM':
+					output.push(MONTH_NAMES[date![1] - 1])
+					break
+				case 'MMM':
+					output.push(SHORT_MONTH_NAMES[date![1] - 1])
+					break
+				case 'MM':
+					output.push(date![1].toFixed(0).padStart(2, '0'))
+					break
+				case 'M':
+					output.push(date![1].toFixed(0))
+					break
+				case 'DD':
+					output.push(date![2].toFixed(0).padStart(2, '0'))
+					break
+				case 'D':
+					output.push(date![2].toFixed(0))
+					break
+				case 'HH':
+					output.push(temporalGet(temporal, 'h').toFixed(0).padStart(2, '0'))
+					break
+				case 'H':
+					output.push(temporalGet(temporal, 'h').toFixed(0))
+					break
+				case 'mm':
+					output.push(temporalGet(temporal, 'm').toFixed(0).padStart(2, '0'))
+					break
+				case 'm':
+					output.push(temporalGet(temporal, 'm').toFixed(0))
+					break
+				case 'ss':
+					output.push(temporalGet(temporal, 's').toFixed(0).padStart(2, '0'))
+					break
+				case 's':
+					output.push(temporalGet(temporal, 's').toFixed(0))
+					break
+				case 'SSS':
+					output.push(temporalGet(temporal, 'ms').toFixed(0).padStart(3, '0'))
+					break
+				case 'S':
+					output.push(temporalGet(temporal, 'ms').toFixed(0))
+					break
+			}
+		} else {
+			output.push(text)
+		}
+	}
 
-	if (pattern.includes('H')) pattern = pattern.replaceAll('HH', date[3].toFixed(0).padStart(2, '0'))
-	if (pattern.includes('H')) pattern = pattern.replaceAll('H', date[3].toFixed(0))
+	return output.join('')
+}
 
-	if (pattern.includes('m')) pattern = pattern.replaceAll('mm', date[4].toFixed(0).padStart(2, '0'))
-	if (pattern.includes('m')) pattern = pattern.replaceAll('m', date[4].toFixed(0))
+interface PatternToken {
+	readonly start: number
+	end: number
+	readonly found: boolean
+}
 
-	if (pattern.includes('s')) pattern = pattern.replaceAll('ss', date[5].toFixed(0).padStart(2, '0'))
-	if (pattern.includes('s')) pattern = pattern.replaceAll('s', date[5].toFixed(0))
+function tokenizePattern(pattern: string): Readonly<PatternToken>[] {
+	const tokens: PatternToken[] = []
+	let state = 0 // 0 = not initialized, 1 = pattern found, 2 = pattern not found
+	let position = 0
+	let prev = ''
 
-	if (pattern.includes('S')) pattern = pattern.replaceAll('SSS', date[6].toFixed(0).padStart(3, '0'))
-	if (pattern.includes('S')) pattern = pattern.replaceAll('S', date[6].toFixed(0))
+	for (let i = 0; i < pattern.length; i++) {
+		const c = pattern[i]
 
-	if (pattern.includes('M')) pattern = pattern.replaceAll('MMMM', MONTH_NAMES[date[1] - 1])
-	if (pattern.includes('M')) pattern = pattern.replaceAll('MMM', SHORT_MONTH_NAMES[date[1] - 1])
-	if (pattern.includes('M')) pattern = pattern.replaceAll('MM', date[1].toFixed(0).padStart(2, '0'))
-	if (pattern.includes('M')) pattern = pattern.replaceAll('M', date[1].toFixed(0))
+		const found = PATTERN_SYMBOLS.includes(c)
+		const token = tokens[position] ?? { start: i, end: i + 1, found }
+		tokens[position] = token
 
-	return pattern
+		if (state === 0) {
+			state = found ? 1 : 2
+		} else if (c === prev) {
+			token.end++
+		} else {
+			tokens[++position] = { start: i, end: i + 1, found }
+			state = found ? 1 : 2
+		}
+
+		prev = c
+	}
+
+	return tokens
 }
 
 export function isLeapYear(year: number) {

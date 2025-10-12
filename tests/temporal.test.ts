@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+// biome-ignore format: too long!
 import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalFromTime, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
 import { timeYMDHMS } from '../src/time'
 
@@ -204,7 +205,9 @@ describe('format using pattern', () => {
 
 	test('year', () => {
 		expect(formatTemporalFromPattern(date, 'YYYY')).toEqual('2028')
+		expect(formatTemporalFromPattern(date, 'YYY')).toEqual('2028')
 		expect(formatTemporalFromPattern(date, 'YY')).toEqual('28')
+		expect(formatTemporalFromPattern(date, 'Y')).toEqual('28')
 	})
 
 	test('month', () => {
@@ -277,7 +280,7 @@ describe('format using pattern', () => {
 		expect(formatTemporalFromPattern(date, 'YYYYMMDDHHmmssSSS')).toEqual('20280808080907008')
 	})
 
-	test('ISO 8601', () => {
+	test('iso 8601', () => {
 		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss.SSSZ')).toEqual('2028-08-08T08:09:07.008Z')
 	})
 })
@@ -292,6 +295,7 @@ describe('parse', () => {
 		expect(temporalToDate(parseTemporal('02-01-28', 'MM-DD-YY'))).toEqual([2028, 2, 1, 0, 0, 0, 0])
 		expect(temporalToDate(parseTemporal('2028-Jan-01', 'YYYY-MMM-DD'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
 		expect(temporalToDate(parseTemporal('20280101', 'YYYYMMDD'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
+		expect(temporalToDate(parseTemporal('2028-01-01T08:09:07.008Z', 'YYYY-MM-DD'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
 	})
 
 	test('date and time', () => {
@@ -299,5 +303,6 @@ describe('parse', () => {
 		expect(temporalToDate(parseTemporal('01-01-2028 08:09:07.008', 'DD-MM-YYYY HH:mm:ss.SSS'))).toEqual([2028, 1, 1, 8, 9, 7, 8])
 		expect(temporalToDate(parseTemporal('02-01-2028 08:09:07', 'MM-DD-YYYY HH:mm:ss'))).toEqual([2028, 2, 1, 8, 9, 7, 0])
 		expect(temporalToDate(parseTemporal('20280101080907008Z', 'YYYYMMDDHHmmssSSSZ'))).toEqual([2028, 1, 1, 8, 9, 7, 8])
+		expect(temporalToDate(parseTemporal('2028-01-01', 'YYYY-MM-DDTHH:mm:ss.SSS'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
 	})
 })
