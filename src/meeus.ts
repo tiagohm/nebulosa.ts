@@ -26,7 +26,7 @@ export function limb(bra: Angle, bdec: Angle, sra: Angle, sdec: Angle): Angle {
 	return x >= 0 ? x : x + TAU
 }
 
-// Evaluates a polynomal with coefficients c at x. The constant term is c[0].
+// Evaluates a polynomial with coefficients c at x. The constant term is c[0].
 export function horner(x: number, ...c: number[]) {
 	let i = c.length - 1
 	let y = c[i]

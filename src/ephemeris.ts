@@ -6,6 +6,7 @@ import { type NumberArray, pmod } from './math'
 import { vecZero } from './vec3'
 
 // https://github.com/Stellarium/stellarium/blob/master/src/core/planetsephems/elliptic_to_rectangular.c
+// https://ftp.imcce.fr/pub/ephem/satel/
 
 // Given the orbital elements at some time t0 calculate the
 // rectangular coordinates at time (t0+dt).
@@ -32,13 +33,13 @@ export function ellipticToRectangular(a: Distance, n: Angle, elem: Readonly<Numb
 	// solve Keplers equation
 	//    x = L - elem[2]*sin(x) + elem[3]*cos(x)
 	//  not by trivially iterating
-	//    x_0 = L
-	//    x_{j+1} = L - elem[2]*sin(x_j) + elem[3]*cos(x_j)
+	//    x[0] = L
+	//    x[j + 1] = L - elem[2]*sin(x[j]) + elem[3]*cos(x[j])
 	//  but instead by Newton approximation:
 	//    0 = f(x) = x - L - elem[2]*sin(x) + elem[3]*cos(x)
 	//    f'(x) = 1 - elem[2]*cos(x) - elem[3]*sin(x)
-	//    x_0 = L or whatever, perhaps first step of trivial iteration
-	//    x_{j+1} = x_j - f(x_j)/f'(x_j)
+	//    x[0] = L or whatever, perhaps first step of trivial iteration
+	//    x[j + 1] = x[j] - f(x[j])/f'(x[j])
 	let LE = L - elem[2] * Math.sin(L) + elem[3] * Math.cos(L)
 
 	while (true) {

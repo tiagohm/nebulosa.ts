@@ -472,6 +472,12 @@ await client.setProfile(profile)
 await client.shutdown()
 ```
 
+### Pluto
+
+```ts
+pluto(time) // Heliocentric ICRF cartesian position of Pluto at time
+```
+
 ### Pressure
 
 ```ts
