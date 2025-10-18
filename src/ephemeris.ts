@@ -3,7 +3,6 @@ import type { PositionAndVelocity } from './astrometry'
 import { TAU } from './constants'
 import type { Distance } from './distance'
 import { type NumberArray, pmod } from './math'
-import { vecZero } from './vec3'
 
 // https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/elliptic_to_rectangular.c
 // https://ftp.imcce.fr/pub/ephem/satel/
@@ -71,8 +70,8 @@ export function ellipticToRectangular(a: Distance, n: Angle, elem: Readonly<Numb
 	const rtq = 1 - elem_4q - elem_4q
 	const rdg = 2 * elem[5] * elem[4]
 
-	o ??= [vecZero(), vecZero()]
-	const [p, v] = o
+	const p = o?.[0] ?? [0, 0, 0]
+	const v = o?.[1] ?? [0, 0, 0]
 
 	p[0] = x1 * rtp + y1 * rdg
 	p[1] = x1 * rdg + y1 * rtq
@@ -87,7 +86,7 @@ export function ellipticToRectangular(a: Distance, n: Angle, elem: Readonly<Numb
 	v[1] = vx1 * rdg + vy1 * rtq
 	v[2] = (-vx1 * elem[5] + vy1 * elem[4]) * dwho
 
-	return o
+	return o ?? [p, v]
 }
 
 export function ellipticToRectangularN(mu: number, elem: Readonly<NumberArray>, dt: number, o?: PositionAndVelocity) {

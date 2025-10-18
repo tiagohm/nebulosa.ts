@@ -6,7 +6,7 @@ import { type Mat3, type MutMat3, matClone, matCopy, matIdentity, matMul, matMul
 import { pmod, roundToNearestWholeNumber } from './math'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
-import { type MutVec3, type Vec3, vecClone, vecCross, vecDivScalar, vecDot, vecFill, vecLength, vecMinus, vecMulScalar, vecNormalize, vecNormalizeMut, vecPlus, vecZero } from './vec3'
+import { type MutVec3, type Vec3, vecClone, vecCross, vecDivScalar, vecDot, vecFill, vecLength, vecMinus, vecMulScalar, vecNormalize, vecNormalizeMut, vecPlus } from './vec3'
 import type { Velocity } from './velocity'
 
 const DBL_EPSILON = 2.220446049250313e-16
@@ -1256,7 +1256,7 @@ export function eraAb(pnat: Vec3, v: Vec3, s: number, bm1: number, o?: MutVec3) 
 	const w2 = SCHWARZSCHILD_RADIUS_OF_THE_SUN / s
 	let r2 = 0
 
-	const p = o ?? vecZero()
+	const p = o ?? [0, 0, 0]
 
 	for (let i = 0; i < 3; i++) {
 		const w = pnat[i] * bm1 + w1 * v[i] + w2 * (v[i] - pdv * pnat[i])
@@ -1427,7 +1427,10 @@ export function eraApci(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3],
 	return astrom
 }
 
-const ZERO_PV = [vecZero(), vecZero()] as const
+const ZERO_PV = [
+	[0, 0, 0],
+	[0, 0, 0],
+] as const
 
 // For a geocentric observer, prepare star-independent astrometry
 // parameters for transformations between ICRS and GCRS coordinates.
@@ -1989,11 +1992,11 @@ export function eraAticq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	const ppr = matMulTransposeVec(astrom.bpn, pi)
 
 	// Aberration, giving GCRS natural direction.
-	const d = vecZero()
-	const before = vecZero()
-	const after = vecZero()
-	const pnat = vecZero()
-	const pco = vecZero()
+	const d: MutVec3 = [0, 0, 0]
+	const before: MutVec3 = [0, 0, 0]
+	const after: MutVec3 = [0, 0, 0]
+	const pnat: MutVec3 = [0, 0, 0]
+	const pco: MutVec3 = [0, 0, 0]
 
 	for (let j = 0; j < 2; j++) {
 		let r2 = 0

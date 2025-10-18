@@ -1,4 +1,3 @@
-import type { Socket } from 'bun'
 import type { Mutable, Optional } from 'utility-types'
 
 export const DEFAULT_PHD2_PORT = 4400
@@ -322,7 +321,7 @@ const CLRF = Buffer.from([13, 10])
 export class PHD2Client {
 	// biome-ignore lint/suspicious/noExplicitAny: any
 	private readonly commands = new Map<string, { promise: PromiseWithResolvers<PHD2CommandResult<any>>; timer: any; command: PHD2Command }>()
-	private socket?: Socket
+	private socket?: Bun.Socket
 
 	constructor(private readonly options?: PHD2ClientOptions) {}
 

@@ -7,7 +7,7 @@ Elegant astronomy for TypeScript. Supercharged by Bun.
 
 ## API
 
-### Alignment
+### Alignment ![](bun.webp) ![](browser.webp)
 
 ```ts
 const [ra, dec] = polarAlignmentError(ra, dec, latitude, lst, dAz, dAlt) // Compute the apparent RA/DEC of a star given polar alignment error
@@ -18,7 +18,7 @@ const polarAlignment = new ThreePointPolarAlignment(refraction)
 const result = polarAlignment.add(ra, dec, time)
 ```
 
-### Angle
+### Angle ![](bun.webp) ![](browser.webp)
 
 ```ts
 normalizeAngle(TAU + PI) // Normalize the angle in radians
@@ -45,14 +45,14 @@ formatRA(PI) // Format the angle as 00 00 00.00
 formatDEC(PI) // Format the angle as +00 00 00.00
 ```
 
-### Astap
+### Astap ![](bun.webp)
 
 ```ts
 const stars = astapDetectStars(path, options) // Detect stars on image using astap
 const solution = astapPlateSolve(path, options) // Plate solve the image using astap
 ```
 
-### Asteroid
+### Asteroid ![](bun.webp) ![](browser.webp)
 
 ```ts
 const ceres = asteroid(semiMajorAxis, eccentricity, inclination, longitudeOfAscendingNode, argumentOfPerihelion, meanAnomaly, epoch) // Kepler Orbit from asteroid's orbital elements
@@ -86,7 +86,7 @@ vesta.trueAnomaly // Angle between the direction of periapsis and the current po
 vesta.trueLongitude // Angle from the reference direction to the body's current position, combining several angular parameters
 ```
 
-### Astrobin
+### Astrobin ![](bun.webp) ![](browser.webp)
 
 ```ts
 sensors(page) // List sensors
@@ -97,7 +97,7 @@ telescopes(page) // List telescopes
 telescope(id) // Get telescope by id
 ```
 
-### Astrometry
+### Astrometry ![](bun.webp) ![](browser.webp)
 
 ```ts
 distance(p) // Distance in AU
@@ -112,26 +112,33 @@ equatorialToHorizontal(ra, dec, latitude, lst) // Convert equatorial to horizont
 refractedAltitude(altitude, refraction) // Compute the refracted altitude given the true altitude and refraction parameters
 ```
 
-### Constellation
+### Astrometry.net ![](bun.webp)
+
+```ts
+novaAstrometryNetPlateSolve(input, options)
+localAstrometryNetPlateSolve(input, options)
+```
+
+### Constellation ![](bun.webp) ![](browser.webp)
 
 ```ts
 constellation(ra, dec, equinox) // Constellation at RA/DEC coordinate
 ```
 
-### Csv
+### Csv ![](bun.webp) ![](browser.webp)
 
 ```ts
 const [header, ...data] = readCsv(lines, options) // Read CSV file from lines
 const rows = await readCsvStream(source, options) // Read CSV file from source
 ```
 
-### Daf
+### Daf ![](bun.webp)
 
 ```ts
 readDaf(source) // Read NASA DAF file
 ```
 
-### Distance
+### Distance ![](bun.webp) ![](browser.webp)
 
 ```ts
 meter(800) // Convert m to AU
@@ -144,19 +151,19 @@ toLightYear(1) // Convert AU to light year
 toParsec(1) // Convert AU to parsec
 ```
 
-### ELPMPP02
+### ELPMPP02 ![](bun.webp) ![](browser.webp)
 
 ```ts
 const [p, v] = moon(time) // Geocentric cartesian position & velocity of Moon at time
 ```
 
-### Erfa
+### Erfa ![](bun.webp) ![](browser.webp)
 
 ```ts
 TODO
 ```
 
-### Firmata
+### Firmata ![](bun.webp)
 
 ```ts
 const client = new FirmataClient(transport)
@@ -178,7 +185,7 @@ client.pinMode(pin, mode)
 client.digitalWrite(pin, value)
 ```
 
-### Fits
+### Fits ![](bun.webp)
 
 ```ts
 readFits(source) // Read FITS file from source
@@ -199,7 +206,7 @@ exposureTimeKeyword(header) // Get the exposure time from the FITS header
 cfaPatternKeyword(header) // Get the CFA pattern from the FITS header
 ```
 
-### FK5
+### FK5 ![](bun.webp) ![](browser.webp)
 
 ```ts
 fk5(ra, dec, distance) // FK5 coordinate from given spherical coordinate
@@ -209,7 +216,7 @@ precessFk5FromJ2000(frame, equinox) // Precess the FK5 coordinate from J2000 to 
 precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to J2000
 ```
 
-### Frame
+### Frame ![](bun.webp) ![](browser.webp)
 
 ```ts
 precessionMatrixCapitaine(from, to) // Precession matrix using Capitaine et al. 2003
@@ -220,7 +227,7 @@ eclipticJ2000(pv)
 ecliptic(pv, time)
 ```
 
-### GUST86
+### GUST86 ![](bun.webp) ![](browser.webp)
 
 ```ts
 ariel(time) // Position and velocity of Ariel at given time
@@ -230,14 +237,14 @@ titania(time) // Position and velocity of Titania at given time
 miranda(time) // Position and velocity of Miranda at given time
 ```
 
-### Hips2Fits
+### Hips2Fits ![](bun.webp) ![](browser.webp)
 
 ```ts
 hips2Fits(survey, ra, dec, options) // Extract a FITS image from a HiPS 
 hipsSurveys() // List available HiPS
 ```
 
-### Horizons
+### Horizons ![](bun.webp) ![](browser.webp)
 
 ```ts
 observer(input, center, coord, startTime, endTime, quantities, options)
@@ -246,20 +253,20 @@ elements(input, center, startTime, endTime, options)
 spkFile(id, startTime, endTime)
 ```
 
-### HYG
+### HYG ![](bun.webp) ![](browser.webp)
 
 ```ts
 const rows = await readHygDatabase(source) // Read HYG star database from source
 ```
 
-### ICRS
+### ICRS ![](bun.webp) ![](browser.webp)
 
 ```ts
 icrs(ra, dec, distance) // ICRS coordinate from given spherical coordinate
 icrsToFk5(frame) // Convert ICRS coordinate to FK5 coordinate
 ```
 
-### IERS
+### IERS ![](bun.webp) ![](browser.webp)
 
 ```ts
 iersa.load(source)
@@ -268,7 +275,7 @@ delta(time) // UT1-UTC at time
 xy(time) // Polar motion angles at time
 ```
 
-### Image
+### Image ![](bun.webp)
 
 ```ts
 readImageFromFits(fits) // Read image from FITS file
@@ -285,7 +292,7 @@ median(image, channel) // Calculate the median from image
 medianAbsoluteDiviation(image, channel) // Calculate the MAD from image
 ```
 
-### INDI
+### INDI ![](bun.webp)
 
 ```ts
 const client = new IndiClient({ handler })
@@ -298,7 +305,7 @@ client.sendNumber(vector)
 client.sendSwitch(vector)
 ```
 
-### IO
+### IO ![](bun.webp)
 
 ```ts
 bufferSink(buffer) // Create a seekable sink from Buffer
@@ -313,14 +320,14 @@ readLines(source, chunkSize) // Read lines from source
 sourceTransferToSink(source, sink) // Transfer from source to sink
 ```
 
-### ITRS
+### ITRS ![](bun.webp) ![](browser.webp)
 
 ```ts
 itrs(location) // ITRS xyz position for location
 itrsRotationAt(time) // ITRS rotation matrix at time
 ```
 
-### Location
+### Location ![](bun.webp) ![](browser.webp)
 
 ```ts
 geodeticLocation(longitude, latitude, elevation, ellipsoid) // Location from longitude, latitude, elevation and ellipsoid form
@@ -331,7 +338,7 @@ gcrsRotationAt(location, time) // GCRS rotation of the location at time
 subpoint(geocentric, time, ellipsoid)
 ```
 
-### Lx200
+### Lx200 ![](bun.webp)
 
 ```ts
 const server = new Lx200ProtocolServer(host, port, options)
@@ -339,14 +346,14 @@ server.start() // Start server
 server.stop() // Stop server
 ```
 
-### MARSSAT
+### MARSSAT ![](bun.webp) ![](browser.webp)
 
 ```ts
 phobos(time) // Compute position and velocity of Phobos at given time
 deimos(time) // Compute position and velocity of Deimos at given time
 ```
 
-### Math
+### Math ![](bun.webp) ![](browser.webp)
 
 ```ts
 pmod(-PI, TAU) // Modulo where the result is always non-negative
@@ -359,7 +366,7 @@ split(0.5) // Split in two aligned parts
 twoProduct(0.5, 0.4) // Multiply both exactly in two 64-bit floats
 ```
 
-### Matrix
+### Matrix ![](bun.webp) ![](browser.webp)
 
 ```ts
 const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -399,13 +406,13 @@ const x = QR.solve(B) // Solve A*x=B
 const x = gaussianElimination(A, B) // Solve A*x=B using Gaussian elimination
 ```
 
-### Meeus
+### Meeus ![](bun.webp) ![](browser.webp)
 
 ```ts
 TODO
 ```
 
-### Moon
+### Moon ![](bun.webp) ![](browser.webp)
 
 ```ts
 moonParallax(distance) // Compute the moon parallax at a given distance
@@ -416,7 +423,7 @@ nearestLunarEclipse(time, next) // Compute the nearest lunar eclipse at a given 
 lunarSaros(time) // Compute the saros series number for the lunar eclipse at time
 ```
 
-### MPCORB
+### MPCORB ![](bun.webp) ![](browser.webp)
 
 ```ts
 mpcorb(line) // Asteroid orbital elements from MPCORB database
@@ -425,7 +432,7 @@ unpackDate('K01AM') // Packed date to year-month-day
 packDate(year, month, day) // year-month-day to packed date format
 ```
 
-### PHD2
+### PHD2 ![](bun.webp)
 
 ```ts
 const client = new PHD2Client({ handler })
@@ -479,13 +486,13 @@ await client.setProfile(profile)
 await client.shutdown()
 ```
 
-### Pluto
+### Pluto ![](bun.webp) ![](browser.webp)
 
 ```ts
 pluto(time) // Heliocentric ICRF cartesian position of Pluto at time
 ```
 
-### Pressure
+### Pressure ![](bun.webp) ![](browser.webp)
 
 ```ts
 pascal(1) // Convert pascal to millibar
@@ -494,7 +501,7 @@ toPascal(1) // Convert millibar to pascal
 toAtm(1) // Convert millibar to atm
 ```
 
-### Random
+### Random ![](bun.webp) ![](browser.webp)
 
 ```ts
 const random = mulberry32(seed)
@@ -511,7 +518,7 @@ pareto(random, alpha)
 normal(random, mu, sigma)
 ```
 
-### Regression
+### Regression ![](bun.webp) ![](browser.webp)
 
 ```ts
 const regression = simpleLinearRegression(x, y) // Compute linear regression using OLS
@@ -529,13 +536,13 @@ const { r, r2, chi2, rmsd } = regressionScore(regression, x, y)
 const [a, b, c] = levenbergMarquardt(x, y, model, [a0, b0, c0]) // Compute Levenberg-Marquardt regression coefficents
 ```
 
-### SAO
+### SAO ![](bun.webp) ![](browser.webp)
 
 ```ts
 readSaoCatalog(source, bigEndian) // Read SAO star catalog from source
 ```
 
-### Small Body Database
+### Small Body Database ![](bun.webp) ![](browser.webp)
 
 ```ts
 search('C/2017 K2')
@@ -543,20 +550,20 @@ identify(date, longitude, latitude, elevation, fovRa, fovDec, fovRaWidth, fovDec
 closeApproaches(dateMin, dateMax, distance)
 ```
 
-### Simbad
+### Simbad ![](bun.webp) ![](browser.webp)
 
 ```ts
 const [header, ...data] = simbadQuery(query, options) // Search on Simbad TAP service
 ```
 
-### Spk
+### Spk ![](bun.webp) ![](browser.webp)
 
 ```ts
 const s = await readSpk(daf) // Read a SPK file
 await s.segment(Naif.SSB, Naif.EMB)!.at(time) // Compute the position and velocity at time
 ```
 
-### Star
+### Star ![](bun.webp) ![](browser.webp)
 
 ```ts
 const sirius = star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // BCRS cartesian coordinate from star parameters
@@ -564,7 +571,7 @@ spaceMotion(sirius, time) // BCRS cartesian coordinate at time applying space mo
 sirius.observedAt(time, [ebp, ebv], ehp, refraction) // Observed spherical coordinate at time
 ```
 
-### Statistics
+### Statistics ![](bun.webp) ![](browser.webp)
 
 ```ts
 const h = new Histogram(frequencies) // Create histogram from frequency array
@@ -576,7 +583,7 @@ h.standardDeviation() // (Population) standard deviation of data
 h.median() // Median (middle value with interpolation) of data
 ```
 
-### Stellarium
+### Stellarium ![](bun.webp)
 
 ```ts
 const server = new StellariumProtocolServer(host, port, options)
@@ -588,7 +595,7 @@ readNamesDat(source) // Read Stellarium's names.dat file
 searchAround(catalog, ra, dec, fov) // Search around coordinate
 ```
 
-### Sun
+### Sun ![](bun.webp) ![](browser.webp)
 
 ```ts
 sunParallax(distance) // Compute the parallax of the Sun at a given distance
@@ -599,7 +606,7 @@ nearestSolarEclipse(time, next) // Nearest solar eclipse to time
 solarSaros(time) // Compute the saros series number for the solar eclipse at time
 ```
 
-### TASS17
+### TASS17 ![](bun.webp) ![](browser.webp)
 
 ```ts
 mimas(time) // Compute position and velocity of Mimas at given time
@@ -612,7 +619,7 @@ iapetus(time) // Compute position and velocity of Iapetus at given time
 hyperion(time) // Compute position and velocity of Hyperion at given time
 ```
 
-### Temperature
+### Temperature ![](bun.webp) ![](browser.webp)
 
 ```ts
 fahrenheit(1) // Convert fahrenheit to celsius
@@ -621,7 +628,7 @@ toFahrenheit(1) // Convert celsius to fahrenheit
 toKelvin(1) // Convert celsius to Kelvin
 ```
 
-### Temporal
+### Temporal ![](bun.webp) ![](browser.webp)
 
 ```ts
 temporalNow() // Get the current temporal
@@ -639,7 +646,7 @@ formatTemporal(temporal, format) // Format a temporal to a string
 parseTemportal(text, format) // Parse a temporal from a string
 ```
 
-### Time
+### Time ![](bun.webp) ![](browser.webp)
 
 ```ts
 time(2460650, 0.37456, Timescale.UTC, true) // Time from day and fraction
@@ -679,13 +686,13 @@ pmAngles(time) // Polar Motion angles at time
 pmMatrix(time) // Polar Motion matrix at time
 ```
 
-### TIRS
+### TIRS ![](bun.webp) ![](browser.webp)
 
 ```ts
 tirsRotationAt(time) // TIRS rotation matrix at time
 ```
 
-### Util
+### Util ![](bun.webp) ![](browser.webp)
 
 ```ts
 angularSizeOfPixel(focalLength, pixelSize) // CCD Resolution in arcsec/pixel
@@ -695,7 +702,7 @@ meanOf(array) // Mean value of the array
 binarySearch(array, value, options) // Binary search on a sorted array
 ```
 
-### Vector
+### Vector ![](bun.webp) ![](browser.webp)
 
 ```ts
 vecZero() // Vector filled with zeroes
@@ -727,7 +734,7 @@ vecRotY(v, angle) // Rotate the vector around y-axis
 vecRotZ(v, angle) // Rotate the vector around z-axis
 ```
 
-### Velocity
+### Velocity ![](bun.webp) ![](browser.webp)
 
 ```ts
 kilometerPerSecond(10) // Convert km/s to AU/d
@@ -736,13 +743,13 @@ toKilometerPerSecond(1) // Convert AU/d to km/s
 toMeterPerSecond(1) // Convert AU/d to m/s
 ```
 
-### Vizier
+### Vizier ![](bun.webp) ![](browser.webp)
 
 ```ts
 const [header, ...data] = vizierQuery(query, options) // Search on Vizier TAP service
 ```
 
-### VSOP87E
+### VSOP87E ![](bun.webp) ![](browser.webp)
 
 ```ts
 sun(time) // Compute the position and velocity of the Sun
@@ -756,7 +763,7 @@ uranus(time) // Compute the position and velocity of Uranus
 neptune(time) // Compute the position and velocity of Neptune
 ```
 
-### WCS
+### WCS ![](bun.webp)
 
 ```ts
 using wcs = new Wcs(headers)
@@ -764,14 +771,14 @@ const [ra, dec] = wcs.pixToSky(x, y)
 const [x, y] = wcs.skyToPix(ra, dec)
 ```
 
-### Xisf
+### Xisf ![](bun.webp)
 
 ```ts
 byteShuffle(input, output, itemSize)
 byteUnshuffle(input, output, itemSize)
 ```
 
-### XML
+### XML ![](bun.webp) ![](browser.webp)
 
 ```ts
 const parser = new SimpleXmlParser()

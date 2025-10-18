@@ -1,6 +1,5 @@
 // http://www.clearskyinstitute.com/INDI/INDI.pdf
 
-import type { Socket } from 'bun'
 import { SimpleXmlParser, type XmlNode } from './xml'
 
 // A simple XML-like communications protocol is described for
@@ -348,7 +347,7 @@ export const DEFAULT_INDI_PORT = 7624
 
 export class IndiClient {
 	private readonly parser = new SimpleXmlParser()
-	private socket?: Socket
+	private socket?: Bun.Socket
 	private readonly metadata: [string?, number?] = []
 
 	constructor(private readonly options?: IndiClientOptions) {}
