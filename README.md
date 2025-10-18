@@ -592,6 +592,19 @@ nearestSolarEclipse(time, next) // Nearest solar eclipse to time
 solarSaros(time) // Compute the saros series number for the solar eclipse at time
 ```
 
+### TASS17
+
+```ts
+mimas(time) // Compute position and velocity of Mimas at given time
+enceladus(time) // Compute position and velocity of Enceladus at given time
+tethys(time) // Compute position and velocity of Tethys at given time
+dione(time) // Compute position and velocity of Dione at given time
+rhea(time) // Compute position and velocity of Rhea at given time
+titan(time) // Compute position and velocity of Titan at given time
+iapetus(time) // Compute position and velocity of Iapetus at given time
+hyperion(time) // Compute position and velocity of Hyperion at given time
+```
+
 ### Temperature
 
 ```ts

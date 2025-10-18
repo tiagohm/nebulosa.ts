@@ -5,10 +5,14 @@ import { matMulVec } from './mat3'
 import type { NumberArray } from './math'
 import { type Time, tt } from './time'
 
-// https://github.com/Stellarium/stellarium/blob/master/src/core/planetsephems/gust86.c
+// COMPUTATION OF THE COORDINATES OF THE URANIAN SATELLITES (GUST86),
+// version 0.1 (1988,1995) by LASKAR J. and JACOBSON, R. can be found at
+// https://ftp.imcce.fr/pub/ephem/satel/gust86
 
-export interface UranusMoon {
-	readonly RMU: number
+// Based on https://github.com/Stellarium/stellarium/blob/master/src/core/planetsephems/gust86.c
+
+export interface Gust87Body {
+	readonly rmu: number
 	readonly compute: (t: number, elem: NumberArray, an: Readonly<NumberArray>, ae: Readonly<NumberArray>, ai: Readonly<NumberArray>) => void
 }
 
@@ -21,10 +25,11 @@ const PHN = [-0.238051, 3.098046, 2.285402, 0.856359, -0.915592] as const
 const PHE = [0.611392, 2.408974, 2.067774, 0.735131, 0.426767] as const
 const PHI = [5.702313, 0.395757, 0.589326, 1.746237, 4.206896] as const
 
-const REFERENCE_FRAME = [0.975320689787805506, 0.061943212277559903, 0.211925908266559604, -0.220742291478488117, 0.252990568240833158, 0.941949368633859696, 0.004732113777988428, -0.965483718541726765, 0.260420422133248453] as const
+// const VSOP87 = [9.753206632086812015e-1, 6.194425668001473004e-2, 2.119257251551559653e-1, -2.006444610981783542e-1, -1.519328516640849367e-1, 9.678110398294910731e-1, 9.214881523275189928e-2, -9.864478281437795399e-1, -1.357544776485127136e-1] as const
+const J2000 = [9.753205572598290957e-1, 6.194437810676107434e-2, 2.11926177258362903e-1, -2.207428547845518695e-1, 2.52990533699299528e-1, 9.41949245936377315e-1, 4.733143558215848563e-3, -9.654836528287313313e-1, 2.604206471702025216e-1] as const
 
-const ARIEL: UranusMoon = {
-	RMU: 1.291910570526396e-8,
+const ARIEL: Gust87Body = {
+	rmu: 1.291910570526396e-8,
 	compute: (t: number, elem: NumberArray, an: Readonly<NumberArray>, ae: Readonly<NumberArray>, ai: Readonly<NumberArray>) => {
 		elem[0] = 2.49254257 + Math.cos(an[0] - an[1] * 3 + an[2] * 2) * 2.55e-6 - Math.cos(an[1] - an[2]) * 4.216e-5 - Math.cos(an[1] * 2 - an[2] * 2) * 1.0256e-4
 		elem[1] =
@@ -45,8 +50,8 @@ const ARIEL: UranusMoon = {
 	},
 }
 
-const UMBRIEL: UranusMoon = {
-	RMU: 1.291910102284198e-8,
+const UMBRIEL: Gust87Body = {
+	rmu: 1.291910102284198e-8,
 	compute: (t: number, elem: NumberArray, an: Readonly<NumberArray>, ae: Readonly<NumberArray>, ai: Readonly<NumberArray>) => {
 		elem[0] = 1.5159549 + Math.cos(an[2] - an[3] * 2 + ae[2]) * 9.74e-6 - Math.cos(an[1] - an[2]) * 1.06e-4 + Math.cos(an[1] * 2 - an[2] * 2) * 5.416e-5 - Math.cos(an[2] - an[3]) * 2.359e-5 - Math.cos(an[2] * 2 - an[3] * 2) * 7.07e-5 - Math.cos(an[2] * 3 - an[3] * 3) * 3.628e-5
 		elem[1] =
@@ -110,8 +115,8 @@ const UMBRIEL: UranusMoon = {
 	},
 }
 
-const TITANIA: UranusMoon = {
-	RMU: 1.291942656265575e-8,
+const TITANIA: Gust87Body = {
+	rmu: 1.291942656265575e-8,
 	compute: (t: number, elem: NumberArray, an: Readonly<NumberArray>, ae: Readonly<NumberArray>, ai: Readonly<NumberArray>) => {
 		elem[0] =
 			0.72166316 -
@@ -192,8 +197,8 @@ const TITANIA: UranusMoon = {
 	},
 }
 
-const OBERON: UranusMoon = {
-	RMU: 1.29193596709132e-8,
+const OBERON: Gust87Body = {
+	rmu: 1.29193596709132e-8,
 	compute: (t: number, elem: NumberArray, an: Readonly<NumberArray>, ae: Readonly<NumberArray>, ai: Readonly<NumberArray>) => {
 		elem[0] =
 			0.46658054 +
@@ -263,8 +268,8 @@ const OBERON: UranusMoon = {
 	},
 }
 
-const MIRANDA: UranusMoon = {
-	RMU: 1.291892353675174e-8,
+const MIRANDA: Gust87Body = {
+	rmu: 1.291892353675174e-8,
 	compute: (t: number, elem: NumberArray, an: Readonly<NumberArray>, ae: Readonly<NumberArray>, ai: Readonly<NumberArray>) => {
 		elem[0] = 4.44352267 - Math.cos(an[0] - an[1] * 3 + an[2] * 2) * 3.492e-5 + Math.cos(an[0] * 2 - an[1] * 6 + an[2] * 4) * 8.47e-6 + Math.cos(an[0] * 3 - an[1] * 9 + an[2] * 6) * 1.31e-6 - Math.cos(an[0] - an[1]) * 5.228e-5 - Math.cos(an[0] * 2 - an[1] * 2) * 1.3665e-4
 		elem[1] =
@@ -310,9 +315,9 @@ export function miranda(time: Time) {
 }
 
 // Computes the position and velocity of a given Uranus' moon at given time using the GUST86 model
-export function gust86(time: Time, moon: UranusMoon): PositionAndVelocity {
-	const t = tt(time)
-	const td = t.day - 2444239.5 + t.fraction
+export function gust86(time: Time, body: Gust87Body): PositionAndVelocity {
+	time = tt(time)
+	const td = time.day - 2444239.5 + time.fraction
 
 	const an = new Float64Array(5)
 	const ae = new Float64Array(5)
@@ -326,10 +331,10 @@ export function gust86(time: Time, moon: UranusMoon): PositionAndVelocity {
 
 	const elem = new Float64Array(6)
 
-	moon.compute(td, elem, an, ae, ai)
+	body.compute(td, elem, an, ae, ai)
 
-	const pv = ellipticToRectangularN(moon.RMU, elem, 0)
-	matMulVec(REFERENCE_FRAME, pv[0], pv[0])
-	matMulVec(REFERENCE_FRAME, pv[1], pv[1])
+	const pv = ellipticToRectangularN(body.rmu, elem, 0)
+	matMulVec(J2000, pv[0], pv[0])
+	matMulVec(J2000, pv[1], pv[1])
 	return pv
 }
