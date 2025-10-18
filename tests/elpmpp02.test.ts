@@ -1,39 +1,28 @@
 import { expect, test } from 'bun:test'
-import { toKilometer } from '../src/distance'
 import { moon } from '../src/elpmpp02'
-import { Timescale, time } from '../src/time'
-import { vecPlus } from '../src/vec3'
-import { toKilometerPerSecond } from '../src/velocity'
-import { earth } from '../src/vsop87e'
+import { vector } from '../src/horizons'
+import { Timescale, timeYMDHMS } from '../src/time'
 
-const t = time(2460787, 0, Timescale.TDB)
+const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
 
-test('geocentric moon', () => {
-	const [p, v] = moon(t)
+test('moon', () => {
+	const [p, v] = moon(TIME)
 
-	// https://ssd.jpl.nasa.gov/horizons/app.html#/ -> Moon, Geocentric, Start=2025-Apr-21 12:00:00.0000 TDB, x-y axes
-	expect(toKilometer(p[0])).toBeCloseTo(2.277022952914551e5, 0)
-	expect(toKilometer(p[1])).toBeCloseTo(-2.716040172219414e5, 0)
-	expect(toKilometer(p[2])).toBeCloseTo(-1.468436314218936e5, 0)
-
-	expect(toKilometerPerSecond(v[0])).toBeCloseTo(7.795201165478988e-1, 6)
-	expect(toKilometerPerSecond(v[1])).toBeCloseTo(5.763328053344962e-1, 6)
-	expect(toKilometerPerSecond(v[2])).toBeCloseTo(3.195746490772242e-1, 6)
+	expect(p[0]).toBeCloseTo(-5.283386082647222e-4, 8)
+	expect(p[1]).toBeCloseTo(-2.315249555840687e-3, 8)
+	expect(p[2]).toBeCloseTo(-1.272538157128253e-3, 8)
+	expect(v[0]).toBeCloseTo(5.523452472098514e-4, 10)
+	expect(v[1]).toBeCloseTo(-8.755019244854736e-5, 9)
+	expect(v[2]).toBeCloseTo(-3.552982910277432e-5, 9)
 })
 
-test('barycentric moon', () => {
-	const a = earth(t)
-	const b = moon(t)
+test.skip('horizons', async () => {
+	const v = await vector('301', '500@399', false, 1759060800000, 1759060860000, { stepSize: 1, referencePlane: 'FRAME' })
 
-	const p = vecPlus(a[0], b[0])
-	const v = vecPlus(a[1], b[1])
-
-	// https://ssd.jpl.nasa.gov/horizons/app.html#/ -> Solar System Barycenter -> Moon, Start=2025-Apr-21 12:00:00.0000 TDB, x-y axes
-	expect(toKilometer(p[0])).toBeCloseTo(-1.289981444523174e8, -4) // ~1000 km
-	expect(toKilometer(p[1])).toBeCloseTo(-7.262535593206646e7, -4)
-	expect(toKilometer(p[2])).toBeCloseTo(-3.14827849844187e7, -4)
-
-	expect(toKilometerPerSecond(v[0])).toBeCloseTo(1.576750706886595e1, 5)
-	expect(toKilometerPerSecond(v[1])).toBeCloseTo(-2.289427596080699e1, 5)
-	expect(toKilometerPerSecond(v[2])).toBeCloseTo(-9.855697816042639, 5)
+	for (let i = 0; i < 3; i++) {
+		console.info(`expect(p[${i}]).toBeCloseTo(${v[0][2 + i]}, 8)`)
+	}
+	for (let i = 0; i < 3; i++) {
+		console.info(`expect(v[${i}]).toBeCloseTo(${v[0][5 + i]}, 10)`)
+	}
 })

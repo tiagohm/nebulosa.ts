@@ -1,4 +1,4 @@
-// https://github.com/Stellarium/stellarium/blob/master/src/core/planetsephems/pluto.c
+// https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/pluto.c
 
 import { DEG2RAD, ECLIPTIC_J2000_MATRIX } from './constants'
 import { eraS2p } from './erfa'

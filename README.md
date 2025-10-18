@@ -339,6 +339,13 @@ server.start() // Start server
 server.stop() // Stop server
 ```
 
+### MARSSAT
+
+```ts
+phobos(time) // Compute position and velocity of Phobos at given time
+deimos(time) // Compute position and velocity of Deimos at given time
+```
+
 ### Math
 
 ```ts

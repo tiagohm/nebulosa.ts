@@ -1,4 +1,3 @@
-import type { PositionAndVelocity } from './astrometry'
 import { ellipticToRectangularN } from './ephemeris'
 import { matMulVec } from './mat3'
 import { type Time, tt } from './time'
@@ -7,7 +6,7 @@ import { type Time, tt } from './time'
 // by Alain VIENNE and Luc DURIEZ can be found at
 // https://ftp.imcce.fr/pub/ephem/satel/tass17
 
-// Based on https://github.com/Stellarium/stellarium/blob/master/src/core/planetsephems/tass17.c
+// Based on https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/tass17.c
 
 export type Tass17Term = readonly [number, number, number]
 
@@ -2385,47 +2384,47 @@ function compute(t: number, longitude: Float64Array, index: number) {
 }
 
 // Computes the position and velocity of Mimas at given time using the TASS87 model
-export function mimas(time: Time): PositionAndVelocity {
+export function mimas(time: Time) {
 	return tass17(time, 0)
 }
 
 // Computes the position and velocity of Enceladus at given time using the TASS87 model
-export function enceladus(time: Time): PositionAndVelocity {
+export function enceladus(time: Time) {
 	return tass17(time, 1)
 }
 
 // Computes the position and velocity of Tethys at given time using the TASS87 model
-export function tethys(time: Time): PositionAndVelocity {
+export function tethys(time: Time) {
 	return tass17(time, 2)
 }
 
 // Computes the position and velocity of Dione at given time using the TASS87 model
-export function dione(time: Time): PositionAndVelocity {
+export function dione(time: Time) {
 	return tass17(time, 3)
 }
 
 // Computes the position and velocity of Rhea at given time using the TASS87 model
-export function rhea(time: Time): PositionAndVelocity {
+export function rhea(time: Time) {
 	return tass17(time, 4)
 }
 
 // Computes the position and velocity of Titan at given time using the TASS87 model
-export function titan(time: Time): PositionAndVelocity {
+export function titan(time: Time) {
 	return tass17(time, 5)
 }
 
 // Computes the position and velocity of Iapetus at given time using the TASS87 model
-export function iapetus(time: Time): PositionAndVelocity {
+export function iapetus(time: Time) {
 	return tass17(time, 6)
 }
 
 // Computes the position and velocity of Hyperion at given time using the TASS87 model
-export function hyperion(time: Time): PositionAndVelocity {
+export function hyperion(time: Time) {
 	return tass17(time, 7)
 }
 
 // Computes the position and velocity of a given Saturn's moon at given time using the TASS87 model
-export function tass17(time: Time, index: number): PositionAndVelocity {
+export function tass17(time: Time, index: number) {
 	time = tt(time)
 	const t0 = time.day - 2444240 + time.fraction
 	const longitude = computeLongitude(t0)

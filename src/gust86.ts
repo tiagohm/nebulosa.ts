@@ -9,7 +9,7 @@ import { type Time, tt } from './time'
 // version 0.1 (1988,1995) by LASKAR J. and JACOBSON, R. can be found at
 // https://ftp.imcce.fr/pub/ephem/satel/gust86
 
-// Based on https://github.com/Stellarium/stellarium/blob/master/src/core/planetsephems/gust86.c
+// Based on https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/gust86.c
 
 export interface Gust87Body {
 	readonly rmu: number
@@ -289,33 +289,35 @@ const MIRANDA: Gust87Body = {
 	},
 }
 
+const BODIES = [ARIEL, UMBRIEL, TITANIA, OBERON, MIRANDA] as const
+
 // Computes the position and velocity of Ariel at given time
 export function ariel(time: Time) {
-	return gust86(time, ARIEL)
+	return gust86(time, 0)
 }
 
 // Computes the position and velocity of Umbriel at given time
 export function umbriel(time: Time) {
-	return gust86(time, UMBRIEL)
+	return gust86(time, 1)
 }
 
 // Computes the position and velocity of Titania at given time
 export function titania(time: Time) {
-	return gust86(time, TITANIA)
+	return gust86(time, 2)
 }
 
 // Computes the position and velocity of Oberon at given time
 export function oberon(time: Time) {
-	return gust86(time, OBERON)
+	return gust86(time, 3)
 }
 
 // Computes the position and velocity of Miranda at given time
 export function miranda(time: Time) {
-	return gust86(time, MIRANDA)
+	return gust86(time, 4)
 }
 
 // Computes the position and velocity of a given Uranus' moon at given time using the GUST86 model
-export function gust86(time: Time, body: Gust87Body): PositionAndVelocity {
+export function gust86(time: Time, index: number): PositionAndVelocity {
 	time = tt(time)
 	const td = time.day - 2444239.5 + time.fraction
 
@@ -330,6 +332,7 @@ export function gust86(time: Time, body: Gust87Body): PositionAndVelocity {
 	}
 
 	const elem = new Float64Array(6)
+	const body = BODIES[index]
 
 	body.compute(td, elem, an, ae, ai)
 

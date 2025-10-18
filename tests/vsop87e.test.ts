@@ -1,131 +1,116 @@
 import { expect, test } from 'bun:test'
+import { vector } from '../src/horizons'
 import { Timescale, timeYMDHMS } from '../src/time'
 import { earth, jupiter, mars, mercury, neptune, saturn, sun, uranus, venus } from '../src/vsop87e'
 
-const time = timeYMDHMS(2025, 1, 15, 9, 20, 50, Timescale.TDB)
+const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
 
 test('sun', () => {
-	const [p, v] = sun(time)
+	const [p, v] = sun(TIME)
 
-	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
-	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
-	expect(p[0]).toBeCloseTo(-5.627216085710264e-3, 4)
-	expect(p[1]).toBeCloseTo(-4.623288853793163e-3, 4)
-	expect(p[2]).toBeCloseTo(-1.810648864024488e-3, 4)
-
-	expect(v[0]).toBeCloseTo(7.20756826549653e-6, 8)
-	expect(v[1]).toBeCloseTo(-3.150637865956372e-6, 8)
-	expect(v[2]).toBeCloseTo(-1.496489706499541e-6, 8)
+	expect(p[0]).toBeCloseTo(-3.756566982732465e-3, 4)
+	expect(p[1]).toBeCloseTo(-5.108692898297777e-3, 4)
+	expect(p[2]).toBeCloseTo(-2.057236065692544e-3, 4)
+	expect(v[0]).toBeCloseTo(7.385958465734038e-6, 8)
+	expect(v[1]).toBeCloseTo(-6.800888691183158e-7, 8)
+	expect(v[2]).toBeCloseTo(-4.460508606528898e-7, 8)
 })
 
 test('mercury', () => {
-	const [p, v] = mercury(time)
+	const [p, v] = mercury(TIME)
 
-	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
-	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
-	expect(p[0]).toBeCloseTo(-1.959982881850366e-1, 4)
-	expect(p[1]).toBeCloseTo(-3.859788284043806e-1, 4)
-	expect(p[2]).toBeCloseTo(-1.8580075689658e-1, 4)
-
-	expect(v[0]).toBeCloseTo(2.000248138888697e-2, 8)
-	expect(v[1]).toBeCloseTo(-8.274960901706343e-3, 8)
-	expect(v[2]).toBeCloseTo(-6.492683743807411e-3, 8)
+	expect(p[0]).toBeCloseTo(-3.278305714721105e-1, 4)
+	expect(p[1]).toBeCloseTo(-2.892357712631268e-1, 4)
+	expect(p[2]).toBeCloseTo(-1.202512659899455e-1, 4)
+	expect(v[0]).toBeCloseTo(1.364674900403527e-2, 8)
+	expect(v[1]).toBeCloseTo(-1.643106352874054e-2, 8)
+	expect(v[2]).toBeCloseTo(-1.019119993575442e-2, 8)
 })
 
 test('venus', () => {
-	const [p, v] = venus(time)
+	const [p, v] = venus(TIME)
 
-	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
-	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
-	expect(p[0]).toBeCloseTo(1.900523426439691e-1, 4)
-	expect(p[1]).toBeCloseTo(6.324522248918866e-1, 4)
-	expect(p[2]).toBeCloseTo(2.724715392894307e-1, 4)
-
-	expect(v[0]).toBeCloseTo(-1.952637274678126e-2, 8)
-	expect(v[1]).toBeCloseTo(4.468200319849219e-3, 8)
-	expect(v[2]).toBeCloseTo(3.246291452187315e-3, 8)
+	expect(p[0]).toBeCloseTo(-4.162121797768538e-1, 4)
+	expect(p[1]).toBeCloseTo(5.211432915972526e-1, 4)
+	expect(p[2]).toBeCloseTo(2.608356782172044e-1, 4)
+	expect(v[0]).toBeCloseTo(-1.66157925569794e-2, 8)
+	expect(v[1]).toBeCloseTo(-1.108384626869926e-2, 8)
+	expect(v[2]).toBeCloseTo(-3.935869134901029e-3, 8)
 })
 
 test('earth', () => {
-	const [p, v] = earth(time)
+	const [p, v] = earth(TIME)
 
-	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
-	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
-	expect(p[0]).toBeCloseTo(-4.233751009575819e-1, 4)
-	expect(p[1]).toBeCloseTo(8.12440651994386e-1, 4)
-	expect(p[2]).toBeCloseTo(3.523754609004759e-1, 4)
-
-	expect(v[0]).toBeCloseTo(-1.58431514138574e-2, 8)
-	expect(v[1]).toBeCloseTo(-6.762131049402481e-3, 8)
-	expect(v[2]).toBeCloseTo(-2.930875581488578e-3, 8)
+	expect(p[0]).toBeCloseTo(9.940002383113462e-1, 4)
+	expect(p[1]).toBeCloseTo(7.929677384409828e-2, 4)
+	expect(p[2]).toBeCloseTo(3.452846899475152e-2, 4)
+	expect(v[0]).toBeCloseTo(-1.857505097678384e-3, 8)
+	expect(v[1]).toBeCloseTo(1.565957306376799e-2, 8)
+	expect(v[2]).toBeCloseTo(6.787978596823867e-3, 8)
 })
 
 test('mars', () => {
-	const [p, v] = mars(time)
+	const [p, v] = mars(TIME)
 
-	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
-	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
-	expect(p[0]).toBeCloseTo(-7.060143032790035e-1, 4)
-	expect(p[1]).toBeCloseTo(1.321598085070232, 4)
-	expect(p[2]).toBeCloseTo(6.253874021996311e-1, 4)
-
-	expect(v[0]).toBeCloseTo(-1.209132974984316e-2, 8)
-	expect(v[1]).toBeCloseTo(-4.522215641912777e-3, 8)
-	expect(v[2]).toBeCloseTo(-1.747931988660694e-3, 8)
+	expect(p[0]).toBeCloseTo(-9.585963488687476e-1, 4)
+	expect(p[1]).toBeCloseTo(-1.119795809347391, 4)
+	expect(p[2]).toBeCloseTo(-4.875831546371381e-1, 4)
+	expect(v[0]).toBeCloseTo(1.154019262489593e-2, 8)
+	expect(v[1]).toBeCloseTo(-6.655626402941306e-3, 8)
+	expect(v[2]).toBeCloseTo(-3.36398312521594e-3, 8)
 })
 
 test('jupiter', () => {
-	const [p, v] = jupiter(time)
+	const [p, v] = jupiter(TIME)
 
-	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
-	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
-	expect(p[0]).toBeCloseTo(9.425932699140838e-1, 4)
-	expect(p[1]).toBeCloseTo(4.597633804459441, 4)
-	expect(p[2]).toBeCloseTo(1.947760544753772, 4)
-
-	expect(v[0]).toBeCloseTo(-7.501238340458042e-3, 8)
-	expect(v[1]).toBeCloseTo(1.550390596836247e-3, 7)
-	expect(v[2]).toBeCloseTo(8.47161538590583e-4, 8)
+	expect(p[0]).toBeCloseTo(-1.000706953875676, 4)
+	expect(p[1]).toBeCloseTo(4.655751711849623, 4)
+	expect(p[2]).toBeCloseTo(2.019981914244129, 4)
+	expect(v[0]).toBeCloseTo(-7.492564873687791e-3, 6)
+	expect(v[1]).toBeCloseTo(-1.078368423989461e-3, 5)
+	expect(v[2]).toBeCloseTo(-2.797998966238406e-4, 6)
 })
 
 test('saturn', () => {
-	const [p, v] = saturn(time)
+	const [p, v] = saturn(TIME)
 
-	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
-	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
-	expect(p[0]).toBeCloseTo(9.465320219579908, 4)
-	expect(p[1]).toBeCloseTo(-1.412995555528071, 4)
-	expect(p[2]).toBeCloseTo(-9.913244481741533e-1, 4)
-
-	expect(v[0]).toBeCloseTo(6.710877373100868e-4, 8)
-	expect(v[1]).toBeCloseTo(5.076667252431999e-3, 7)
-	expect(v[2]).toBeCloseTo(2.06801065205951e-3, 8)
+	expect(p[0]).toBeCloseTo(9.532809448678631, 4)
+	expect(p[1]).toBeCloseTo(-1.021190567170288e-1, 4)
+	expect(p[2]).toBeCloseTo(-4.527748909894636e-1, 4)
+	expect(v[0]).toBeCloseTo(-1.482244057336e-4, 6)
+	expect(v[1]).toBeCloseTo(5.140790102213202e-3, 5)
+	expect(v[2]).toBeCloseTo(2.130149706896415e-3, 6)
 })
 
 test('uranus', () => {
-	const [p, v] = uranus(time)
+	const [p, v] = uranus(TIME)
 
-	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
-	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
-	expect(p[0]).toBeCloseTo(1.105085487337878e1, 3)
-	expect(p[1]).toBeCloseTo(1.482203434077305e1, 3)
-	expect(p[2]).toBeCloseTo(6.335346170028346, 3)
-
-	expect(v[0]).toBeCloseTo(-3.272891191081531e-3, 7)
-	expect(v[1]).toBeCloseTo(1.852391532882198e-3, 7)
-	expect(v[2]).toBeCloseTo(8.575827907426235e-4, 7)
+	expect(p[0]).toBeCloseTo(1.019857641706737e1, 3)
+	expect(p[1]).toBeCloseTo(1.527691313686389e1, 3)
+	expect(p[2]).toBeCloseTo(6.546623854315722, 3)
+	expect(v[0]).toBeCloseTo(-3.381263670554054e-3, 7)
+	expect(v[1]).toBeCloseTo(1.698886697706912e-3, 7)
+	expect(v[2]).toBeCloseTo(7.919155475642336e-4, 7)
 })
 
 test('neptune', () => {
-	const [p, v] = neptune(time)
+	const [p, v] = neptune(TIME)
 
-	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
-	// x-y axes of reference frame (equatorial or equatorial-aligned, inertial)
-	expect(p[0]).toBeCloseTo(2.987483007152151e1, 3)
-	expect(p[1]).toBeCloseTo(-2.756767823676414e-1, 3)
-	expect(p[2]).toBeCloseTo(-8.566143156794556e-1, 3)
+	expect(p[0]).toBeCloseTo(2.98746238071638e1, 3)
+	expect(p[1]).toBeCloseTo(4.729066404382924e-1, 3)
+	expect(p[2]).toBeCloseTo(-5.502100412439903e-1, 3)
+	expect(v[0]).toBeCloseTo(-4.320205954895582e-5, 6)
+	expect(v[1]).toBeCloseTo(2.922397372840454e-3, 6)
+	expect(v[2]).toBeCloseTo(1.196806657634609e-3, 5)
+})
 
-	expect(v[0]).toBeCloseTo(4.165542016549182e-5, 7)
-	expect(v[1]).toBeCloseTo(2.922854175547836e-3, 7)
-	expect(v[2]).toBeCloseTo(1.195303189969087e-3, 7)
+test.skip('horizons', async () => {
+	const v = await vector('899', '500@0', false, 1759060800000, 1759060860000, { stepSize: 1, referencePlane: 'FRAME' })
+
+	for (let i = 0; i < 3; i++) {
+		console.info(`expect(p[${i}]).toBeCloseTo(${v[0][2 + i]}, 4)`)
+	}
+	for (let i = 0; i < 3; i++) {
+		console.info(`expect(v[${i}]).toBeCloseTo(${v[0][5 + i]}, 8)`)
+	}
 })

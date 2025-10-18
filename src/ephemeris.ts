@@ -5,7 +5,7 @@ import type { Distance } from './distance'
 import { type NumberArray, pmod } from './math'
 import { vecZero } from './vec3'
 
-// https://github.com/Stellarium/stellarium/blob/master/src/core/planetsephems/elliptic_to_rectangular.c
+// https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/elliptic_to_rectangular.c
 // https://ftp.imcce.fr/pub/ephem/satel/
 
 // Given the orbital elements at some time t0 calculate the
