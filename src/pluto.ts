@@ -1,9 +1,9 @@
 // https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/pluto.c
 
-import { DEG2RAD, ECLIPTIC_J2000_MATRIX } from './constants'
+import { DAYSPERJC, DEG2RAD, ECLIPTIC_J2000_MATRIX } from './constants'
 import { eraS2p } from './erfa'
 import { matMulTransposeVec } from './mat3'
-import type { Time } from './time'
+import { type Time, tt } from './time'
 
 const COEFFS = 43
 
@@ -197,13 +197,14 @@ const RADIUS = [
 // and 0.000006 AU in radius.
 // Note: This function is not valid outside the period of 1885-2099.
 export function pluto(time: Time) {
+	time = tt(time)
 	// Julian centuries since J2000
-	const t = (time.day - 2451545 + time.fraction) / 36525
+	const t = (time.day - 2451545 + time.fraction) / DAYSPERJC
 
 	// Calculate mean longitudes for jupiter, saturn and pluto
-	const J = 34.35 + 3034.9057 * t
-	const S = 50.08 + 1222.1138 * t
-	const P = 238.96 + 144.96 * t
+	const J = (34.35 + 3034.9057 * t) * DEG2RAD
+	const S = (50.08 + 1222.1138 * t) * DEG2RAD
+	const P = (238.96 + 144.96 * t) * DEG2RAD
 
 	let sLon = 0
 	let sLat = 0
@@ -211,7 +212,7 @@ export function pluto(time: Time) {
 
 	// Calculate periodic terms in table 37.A
 	for (let i = 0; i < COEFFS; i++) {
-		const a = DEG2RAD * (ARGUMENT[i][0] * J + ARGUMENT[i][1] * S + ARGUMENT[i][2] * P)
+		const a = ARGUMENT[i][0] * J + ARGUMENT[i][1] * S + ARGUMENT[i][2] * P
 		const sina = Math.sin(a)
 		const cosa = Math.cos(a)
 

@@ -3,7 +3,7 @@ import { vector } from '../src/horizons'
 import { pluto } from '../src/pluto'
 import { Timescale, timeYMDHMS } from '../src/time'
 
-const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TDB)
+const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
 
 test('pluto', () => {
 	const p = pluto(TIME)
