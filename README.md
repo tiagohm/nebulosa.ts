@@ -327,6 +327,15 @@ itrs(location) // ITRS xyz position for location
 itrsRotationAt(time) // ITRS rotation matrix at time
 ```
 
+### L12 ![](bun.webp) ![](browser.webp)
+
+```ts
+io(time) // Compute position and velocity of Io at given time
+europa(time) // Compute position and velocity of Europa at given time
+ganymede(time) // Compute position and velocity of Ganymede at given time
+callisto(time) // Compute position and velocity of Calisto at given time
+```
+
 ### Location ![](bun.webp) ![](browser.webp)
 
 ```ts
