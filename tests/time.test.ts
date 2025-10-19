@@ -439,3 +439,9 @@ test('equation of origins', () => {
 	expect(equationOfOrigins(t)).toBe(t.extra!.equationOfOrigins!)
 	expect(t.extra?.equationOfOrigins).toEqual([0.9999980342134646, 0.000000011522914443798382, -0.001982818500615607, -0.00000001742012200722093, 0.9999999999955772, -0.0000029741367242157103, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
 })
+
+test('delta T', () => {
+	const a = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TT)
+	const b = ut1(a)
+	expect((a.day - b.day + (a.fraction - b.fraction)) * DAYSEC).toBeCloseTo(69, 0)
+})

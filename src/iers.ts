@@ -6,7 +6,7 @@ import type { PolarMotion, Time, TimeDelta } from './time'
 import { binarySearch } from './util'
 
 export interface Iers {
-	readonly delta: TimeDelta
+	readonly dut1: TimeDelta
 	readonly xy: PolarMotion
 
 	readonly load: (source: Source) => Promise<void>
@@ -53,10 +53,10 @@ export abstract class IersBase implements Iers {
 	protected mjd: number[] = []
 	protected pmX: number[] = []
 	protected pmY: number[] = []
-	protected dut1: number[] = []
+	protected ut1MinusUtc: number[] = []
 
-	delta(time: Time): number {
-		return interpolate(time, this.mjd, this.dut1)[0] || 0
+	dut1(time: Time): number {
+		return interpolate(time, this.mjd, this.ut1MinusUtc)[0] || 0
 	}
 
 	xy(time: Time): [Angle, Angle] {
@@ -75,7 +75,7 @@ export abstract class IersBase implements Iers {
 		this.mjd = []
 		this.pmX = []
 		this.pmY = []
-		this.dut1 = []
+		this.ut1MinusUtc = []
 	}
 }
 
@@ -98,7 +98,7 @@ export class IersA extends IersBase {
 				this.mjd.push(mjd)
 				this.pmX.push(pmXb || pmXa)
 				this.pmY.push(pmYb || pmYa)
-				this.dut1.push(dut1b || dut1a)
+				this.ut1MinusUtc.push(dut1b || dut1a)
 			}
 		}
 	}
@@ -122,7 +122,7 @@ export class IersB extends IersBase {
 				this.mjd.push(mjd)
 				this.pmX.push(pmX)
 				this.pmY.push(pmY)
-				this.dut1.push(dut1)
+				this.ut1MinusUtc.push(dut1)
 			}
 		}
 	}
@@ -134,8 +134,8 @@ export class IersAB implements Iers {
 		readonly b: IersB,
 	) {}
 
-	delta(time: Time): number {
-		return this.b.delta(time) || this.a.delta(time)
+	dut1(time: Time): number {
+		return this.b.dut1(time) || this.a.dut1(time)
 	}
 
 	xy(time: Time): [Angle, Angle] {
@@ -158,8 +158,9 @@ export const iersa = new IersA()
 export const iersb = new IersB()
 export const iersab = new IersAB(iersa, iersb)
 
-export const delta: TimeDelta = (time) => {
-	return iersab.delta(time)
+// Computes UT1 - UTC in seconds
+export const dut1: TimeDelta = (time) => {
+	return iersab.dut1(time)
 }
 
 export const xy: PolarMotion = (time) => {

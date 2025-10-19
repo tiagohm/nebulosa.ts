@@ -1,7 +1,7 @@
 import type { Angle } from './angle'
 import { DAYSEC, DAYSPERJC, DAYSPERJY, DAYSPERTY, J2000, MJD0 } from './constants'
 import { eraC2teqx, eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
-import { delta, xy } from './iers'
+import * as iers from './iers'
 import { itrs } from './itrs'
 import type { GeographicPosition } from './location'
 import { type Mat3, matClone, matIdentity, matMul, matRotX, matRotZ } from './mat3'
@@ -51,12 +51,11 @@ export interface Time {
 	readonly scale: Timescale
 
 	polarMotion?: PolarMotion
-	delta?: TimeDelta
+	dut1?: TimeDelta // UT1 - UTC
 
 	tdbMinusTt?: TimeDelta
 	// taiMinusUtc?: TimeDelta
 	ut1MinusTai?: TimeDelta
-	ut1MinusUtc?: TimeDelta
 
 	location?: GeographicPosition
 	gcrsToItrsRotationMatrix?: Mat3
@@ -82,7 +81,7 @@ export function pmAngles(time: Time, pm?: PolarMotion): readonly [Angle, Angle, 
 	if (time.extra?.pmAngles) return time.extra.pmAngles
 	const t = tt(time)
 	const sprime = eraSp00(t.day, t.fraction)
-	const [x, y] = (pm ?? time.polarMotion ?? xy)(time)
+	const [x, y] = (pm ?? time.polarMotion ?? iers.xy)(time)
 	const a: [Angle, Angle, Angle] = [sprime, x, y]
 	extra(time).pmAngles = a
 	return a
@@ -285,7 +284,7 @@ export function ut1(time: Time, normalize: boolean = false): Time {
 	let ret: Time
 
 	if (scale === Timescale.TAI) ret = newTime(eraTaiUt1(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.UT1, normalize)
-	else if (scale === Timescale.UTC) ret = newTime(eraUtcUt1(day, fraction, (time.ut1MinusUtc ?? ut1MinusUtc)(time)), time, Timescale.UT1, normalize)
+	else if (scale === Timescale.UTC) ret = newTime(eraUtcUt1(day, fraction, (time.dut1 ?? dut1)(time)), time, Timescale.UT1, normalize)
 	else ret = ut1(utc(time, normalize), normalize)
 
 	timescale(ret, time)
@@ -302,7 +301,7 @@ export function utc(time: Time, normalize: boolean = false): Time {
 
 	let ret: Time
 
-	if (scale === Timescale.UT1) ret = newTime(eraUt1Utc(day, fraction, (time.ut1MinusUtc ?? ut1MinusUtc)(time)), time, Timescale.UTC, normalize)
+	if (scale === Timescale.UT1) ret = newTime(eraUt1Utc(day, fraction, (time.dut1 ?? dut1)(time)), time, Timescale.UTC, normalize)
 	else if (scale === Timescale.TAI) ret = newTime(eraTaiUtc(day, fraction), time, Timescale.UTC, normalize)
 	else ret = utc(tai(time, normalize), normalize)
 
@@ -495,21 +494,21 @@ export function gcrsToItrsRotationMatrix(time: Time) {
 }
 
 // Computes UT1 - UTC in seconds at time.
-export const ut1MinusUtc: TimeDelta = (time) => {
+export const dut1: TimeDelta = (time) => {
 	if (time.extra?.ut1MinusUtc) return time.extra.ut1MinusUtc
 
-	const d = time.delta ?? delta
+	const ut1MinusUtc = time.dut1 ?? iers.dut1
 
 	// https://github.com/astropy/astropy/blob/71a2eafd6c09f1992f8b4132e6e40ba68a675bde/astropy/time/core.py#L2554
 	// Interpolate UT1-UTC in IERS table
-	let dt = d(time)
+	let dt = ut1MinusUtc(time)
 
 	// If we interpolated using UT1, we may be off by one
 	// second near leap seconds (and very slightly off elsewhere)
 	if (time.scale === Timescale.UT1) {
 		const a = eraUt1Utc(time.day, time.fraction, dt)
 		// Calculate a better estimate using the nearly correct UTC
-		dt = d({ day: a[0], fraction: a[1], scale: Timescale.UTC })
+		dt = ut1MinusUtc({ day: a[0], fraction: a[1], scale: Timescale.UTC })
 	}
 
 	extra(time).ut1MinusUtc = dt
@@ -588,8 +587,8 @@ export const ut1MinusTai: TimeDelta = (time) => {
 	if (time.extra?.ut1MinusTai) return time.extra.ut1MinusTai
 	const cal = eraJdToCal(time.day, time.fraction)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
-	const dut1 = (time.ut1MinusUtc ?? ut1MinusUtc)(time)
-	const dt = dut1 - dat
+	const ut1MinusUtc = (time.dut1 ?? dut1)(time)
+	const dt = ut1MinusUtc - dat
 	extra(time).ut1MinusTai = dt
 	return dt
 }
