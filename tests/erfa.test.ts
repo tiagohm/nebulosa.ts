@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { arcsec, toArcsec } from '../src/angle'
 import { kilometer, meter } from '../src/distance'
 import * as erfa from '../src/erfa'
+import { eraEpv00 } from '../src/erfa.earth'
 import type { Mat3, MutMat3 } from '../src/mat3'
 import { kilometerPerSecond, meterPerSecond, toKilometerPerSecond } from '../src/velocity'
 
@@ -919,4 +920,24 @@ test('eraAticq', () => {
 
 	expect(rc).toBeCloseTo(2.710126504531716819, 13)
 	expect(dc).toBeCloseTo(0.1740632537627034482, 13)
+})
+
+test('eraEpv0', () => {
+	const [pvb, pvh] = eraEpv00(2400000.5, 53411.52501161)
+
+	expect(pvh[0][0]).toBeCloseTo(-0.7757238809297706813, 13)
+	expect(pvh[0][1]).toBeCloseTo(0.5598052241363340596, 13)
+	expect(pvh[0][2]).toBeCloseTo(0.2426998466481686993, 13)
+
+	expect(pvh[1][0]).toBeCloseTo(-0.1091891824147313846e-1, 14)
+	expect(pvh[1][1]).toBeCloseTo(-0.1247187268440845008e-1, 14)
+	expect(pvh[1][2]).toBeCloseTo(-0.5407569418065039061e-2, 14)
+
+	expect(pvb[0][0]).toBeCloseTo(-0.7714104440491111971, 13)
+	expect(pvb[0][1]).toBeCloseTo(0.5598412061824171323, 13)
+	expect(pvb[0][2]).toBeCloseTo(0.24259962777224524, 13)
+
+	expect(pvb[1][0]).toBeCloseTo(-0.1091874268116823295e-1, 14)
+	expect(pvb[1][1]).toBeCloseTo(-0.1246525461732861538e-1, 14)
+	expect(pvb[1][2]).toBeCloseTo(-0.5404773180966231279e-2, 14)
 })

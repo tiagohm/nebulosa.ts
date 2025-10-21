@@ -263,7 +263,7 @@ export function eraUtcTai(utc1: number, utc2: number): [number, number] {
 	return [u1, a2]
 }
 
-export function eraUtcUt1(utc1: number, utc2: number, dut1: number): [number, number] {
+export function eraUtcUt1(utc1: number, utc2: number, dut1: number) {
 	const cal = eraJdToCal(utc1, utc2)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
 
@@ -289,17 +289,13 @@ export function eraUt1Utc(ut11: number, ut12: number, dut1: number): [number, nu
 		const cal = eraJdToCal(d1, d2)
 		const dats2 = eraDat(cal[0], cal[1], cal[2], 0)
 
-		if (i === -1) {
-			dats1 = dats2
-		}
+		if (i === -1) dats1 = dats2
 
 		const ddats = dats2 - dats1
 
 		if (Math.abs(ddats) >= 0.5) {
 			// Yes, leap second nearby: ensure UT1-UTC is "before" value.
-			if (ddats * duts >= 0) {
-				duts -= ddats
-			}
+			if (ddats * duts >= 0) duts -= ddats
 
 			// UT1 for the start of the UTC day that ends in a leap.
 			d1 = MJD0
