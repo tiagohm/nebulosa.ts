@@ -138,10 +138,9 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 			let s = 0
 
 			for (let k = 0; k < n; k++) {
-				const s0 = powers[i] === 0 ? 1 : x[k] ** powers[i]
-				const s1 = powers[j] === 0 ? 1 : x[k] ** powers[j]
-
-				s += s0 * s1
+				const si = powers[i] === 0 ? 1 : x[k] ** powers[i]
+				const sj = powers[j] === 0 ? 1 : x[k] ** powers[j]
+				s += si * sj
 			}
 
 			A.data[p] = s
@@ -156,9 +155,8 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 		let s = 0
 
 		for (let k = 0; k < n; k++) {
-			const s1 = powers[j] === 0 ? 1 : x[k] ** powers[j]
-
-			s += y[k] * s1
+			const sk = powers[j] === 0 ? 1 : x[k] ** powers[j]
+			s += y[k] * sk
 		}
 
 		B[j] = s
@@ -197,8 +195,8 @@ export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberA
 
 	let n = 0
 
-	for (let i = 0; i < x.length; ++i) {
-		for (let j = i + 1; j < x.length; ++j) {
+	for (let i = 0; i < x.length; i++) {
+		for (let j = i + 1; j < x.length; j++) {
 			if (x[i] !== x[j]) {
 				data[n++] = (y[j] - y[i]) / (x[j] - x[i])
 			}
@@ -237,28 +235,31 @@ export function trendLineRegression(x: Readonly<NumberArray>, y: Readonly<Number
 	const minY = minimum[0]
 	const minX = x[minimum[1]]
 
-	const a: number[] = []
-	const b: number[] = []
-	const c: number[] = []
-	const d: number[] = []
+	const a = new Float64Array(x.length)
+	const b = new Float64Array(x.length)
+	const c = new Float64Array(x.length)
+	const d = new Float64Array(x.length)
+
+	let abn = 0
+	let cdn = 0
 
 	for (let i = 0; i < x.length; i++) {
 		const xi = x[i]
 		const yi = y[i]
 
 		if (xi < minX && yi > minY) {
-			a.push(xi)
-			b.push(yi)
+			a[abn] = xi
+			b[abn++] = yi
 		}
 		if (xi > minX && yi > minY) {
-			c.push(xi)
-			d.push(yi)
+			c[cdn] = xi
+			d[cdn++] = yi
 		}
 	}
 
 	const regression = method === 'theil-sen' ? theilSenRegression : simpleLinearRegression
-	const left = regression(a, b)
-	const right = regression(c, d)
+	const left = regression(a.subarray(0, abn), b.subarray(0, abn))
+	const right = regression(c.subarray(0, cdn), d.subarray(0, cdn))
 
 	return {
 		left,
