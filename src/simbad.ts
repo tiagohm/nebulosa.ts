@@ -213,10 +213,12 @@ export interface SimbadObjectTypeInfo {
 	readonly codes: readonly SimbadObjectCode[]
 }
 
+const SIMBAD_OBJECT_TYPE_VALUES = Object.values(SIMBAD_OBJECT_TYPES)
+
 export function findSimbadObjectTypeInfoById(id: number): SimbadObjectTypeInfo | undefined {
-	return Object.values(SIMBAD_OBJECT_TYPES).find((info) => info.id === id)
+	return SIMBAD_OBJECT_TYPE_VALUES.find((info) => info.id === id)
 }
 
 export function findSimbadObjectTypeInfoByCode(code: SimbadObjectCode): SimbadObjectTypeInfo | undefined {
-	return Object.values(SIMBAD_OBJECT_TYPES).find((info) => info.codes.includes(code as never))
+	return SIMBAD_OBJECT_TYPE_VALUES.find((info) => info.codes.includes(code as never))
 }
