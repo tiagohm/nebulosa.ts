@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { NumberArray } from '../src/math'
-import { exponentialRegression, hyperbolicRegression, levenbergMarquardt, polynomialRegression, powerRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
+import { exponentialRegression, hyperbolicRegression, levenbergMarquardt, polynomialRegression, powerRegression, quadraticRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
 
 test('simple linear', () => {
 	const x = [80, 60, 10, 20, 30]
@@ -147,6 +147,18 @@ describe('trend line regression', () => {
 			expect(regression.intersection[1]).toBeCloseTo(0, 8)
 		})
 	})
+})
+
+test('quadractic regression', () => {
+	const x = [1000, 1200, 1400, 1600, 1800]
+	const y = [3.2, 2.5, 2.0, 2.3, 2.8]
+	const regression = quadraticRegression(x, y)
+
+	expect(regression.coefficients[0]).toBeCloseTo(14.00285714285714, 10)
+	expect(regression.coefficients[1]).toBeCloseTo(-0.016499999999999983, 10)
+	expect(regression.coefficients[2]).toBeCloseTo(5.714285714285707e-6, 10)
+	expect(regression.minimum[0]).toBeCloseTo(1443.75, 10)
+	expect(regression.minimum[1]).toBeCloseTo(2.09, 2)
 })
 
 test('exponential regression', () => {

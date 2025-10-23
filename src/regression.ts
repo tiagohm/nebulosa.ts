@@ -1,3 +1,4 @@
+import type { Mutable } from 'utility-types'
 import type { NumberArray } from './math'
 import { gaussianElimination, Matrix } from './matrix'
 import { isNumberArray, meanOf, minOf } from './util'
@@ -11,7 +12,11 @@ export interface Regression {
 }
 
 export interface InverseRegression {
-	readonly x: (x: number) => number
+	readonly x: (y: number) => number
+}
+
+export interface MinimumPointRegression {
+	readonly minimum: Readonly<Point>
 }
 
 export interface RegressionScore {
@@ -30,26 +35,22 @@ export interface PolynomialRegression extends Regression {
 	readonly coefficients: number[]
 }
 
-export interface QuadraticRegression extends PolynomialRegression {
-	readonly minimum: Readonly<Point>
-}
+export interface QuadraticRegression extends PolynomialRegression, MinimumPointRegression {}
 
 export interface ExponentialRegression extends Regression, InverseRegression {
 	readonly a: number
 	readonly b: number
 }
 
-export interface HyperbolicRegression extends Regression, InverseRegression {
+export interface HyperbolicRegression extends Regression, InverseRegression, MinimumPointRegression {
 	readonly a: number
 	readonly b: number
 	readonly c: number
-	readonly minimum: Readonly<Point>
 }
 
-export interface TrendLineRegression extends Regression {
+export interface TrendLineRegression extends Regression, MinimumPointRegression {
 	readonly left: LinearRegression
 	readonly right: LinearRegression
-	readonly minimum: Readonly<Point>
 	readonly intersection: Readonly<Point>
 }
 
@@ -179,10 +180,12 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 
 // Computes the coefficients of a quadratic regression
 export function quadraticRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, interceptAtZero?: boolean): QuadraticRegression {
-	const regression: QuadraticRegression = polynomialRegression(x, y, 2, interceptAtZero) as never
-	const [_, b, a] = regression.coefficients
-	const minX = -b / (2 * a)
-	;(regression as { minimum: Readonly<Point> }).minimum = [minX, regression.predict(minX)]
+	const regression = polynomialRegression(x, y, 2, interceptAtZero) as Mutable<QuadraticRegression>
+	const [c, b, a] = regression.coefficients
+	const d = 2 * a
+	const e = 2 * d // 4a
+	const b2 = b * b
+	regression.minimum = [-b / d, c - b2 / e]
 	return regression
 }
 
