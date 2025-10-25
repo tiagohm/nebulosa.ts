@@ -1,4 +1,4 @@
-import { type Time, toUnixMillis } from './time'
+import { type Time, timeToUnixMillis } from './time'
 
 // gv-IM, mg-MG, sn-ZW, zu-ZA
 export const DATE_FORMAT = 'YYYY-MM-DD'
@@ -87,7 +87,7 @@ export function temporalToDate(temporal: Temporal): TemporalDate {
 }
 
 export function temporalFromTime(time: Time): Temporal {
-	return toUnixMillis(time)
+	return timeToUnixMillis(time)
 }
 
 export function temporalAdd(temporal: Temporal, duration: number, unit: TemporalUnit | TemporalUnitShort): Temporal {

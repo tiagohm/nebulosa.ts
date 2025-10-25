@@ -74,7 +74,7 @@ export type TimeDelta = (time: Time) => number
 // The displaced angles (longitude and latitude) of rotation of the Earth's spin axis about its geographic axis.
 export type PolarMotion = (time: Time) => [Angle, Angle]
 
-export const noPolarMotion = (time: Time) => [0, 0]
+export const NO_POLAR_MOTION: PolarMotion = () => [0, 0]
 
 // Computes the motion angles (sprime, x, y) from the given time.
 export function pmAngles(time: Time, pm?: PolarMotion): readonly [Angle, Angle, Angle] {
@@ -204,7 +204,7 @@ export function timeSubtract(a: Time, b: Time, scale: Timescale = a.scale) {
 }
 
 // Converts the time to year, month, day, hour, minute, second and nanosecond.
-export function toDate(time: Time): [number, number, number, number, number, number, number] {
+export function timeToDate(time: Time): [number, number, number, number, number, number, number] {
 	const [year, month, day, fraction] = eraJdToCal(time.day, time.fraction)
 	const hour = fraction * 24
 	const minute = ((hour - Math.trunc(hour)) * 60) % 60
@@ -214,14 +214,14 @@ export function toDate(time: Time): [number, number, number, number, number, num
 }
 
 // Converts the time to Unix timestamp.
-export function toUnix(time: Time) {
-	return Math.trunc(toUnixMillis(time) / 1000)
+export function timeToUnix(time: Time) {
+	return Math.trunc(timeToUnixMillis(time) / 1000)
 }
 
 const DAYSEC_MS = DAYSEC * 1000
 
 // Converts the time to Unix timestamp in milliseconds.
-export function toUnixMillis(time: Time) {
+export function timeToUnixMillis(time: Time) {
 	const { day, fraction } = utc(time)
 	return Math.trunc(day * DAYSEC_MS + fraction * DAYSEC_MS - 2440587.5 * DAYSEC_MS)
 }
@@ -229,6 +229,15 @@ export function toUnixMillis(time: Time) {
 // Converts the time to Julian day.
 export function toJulianDay(time: Time) {
 	return time.day + time.fraction
+}
+
+// Converts the time to fraction of year.
+export function timeToFractionOfYear(time: Time) {
+	time = utc(time)
+	const [year] = eraJdToCal(time.day, time.fraction)
+	// const jd = MJD0 + eraCalToJd(year, 1, 1)
+	const jd = Math.trunc(DAYSPERJY * (year + 4799)) - Math.trunc((3 * Math.trunc((year + 4899) / 100)) / 4) + (MJD0 + 336 + 1 - 2432076)
+	return year + (time.day - jd + time.fraction) / DAYSPERJY
 }
 
 // Caches the timescale for target based on source.

@@ -1,7 +1,7 @@
 import { deg } from './angle'
 import { ASEC2RAD, DAYSPERJC, DEG2RAD, J2000 } from './constants'
 import type { Distance } from './distance'
-import { LunationSystem, lunation } from './moon'
+import { lunation } from './moon'
 import { type Time, Timescale, time, timeNormalize, toJulianDay, tt } from './time'
 
 export type Season = 'SPRING' | 'SUMMER' | 'AUTUMN' | 'WINTER'
@@ -94,10 +94,10 @@ export function season(year: number, name: Season) {
 
 // Computes the saros series number for the solar eclipse.
 export function solarSaros(time: Time) {
-	const nd = lunation(time, LunationSystem.MEEUS) + 105
+	const nd = lunation(time, 'MEEUS') + 105
 	const ns = 136 + 38 * nd
 	const nx = -61 * nd
-	const nc = Math.floor(nx / 358.0 + 0.5 - nd / (12.0 * 358 * 358))
+	const nc = Math.floor(nx / 358 + 0.5 - nd / (12 * 358 * 358))
 	const s = ns + nc * 223 - 1
 	let saros = (s % 223) + 1
 	if (s < 0) saros -= 223
@@ -109,7 +109,7 @@ export function solarSaros(time: Time) {
 export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEclipse> {
 	const t = tt(time)
 	const jd = toJulianDay(t)
-	let k = lunation(t, LunationSystem.MEEUS) + (next ? 0 : 1)
+	let k = lunation(t, 'MEEUS') + (next ? 0 : 1)
 
 	const eclipse: SolarEclipse = {
 		lunation: k,

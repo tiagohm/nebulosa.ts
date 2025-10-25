@@ -74,7 +74,8 @@
 				"noApproximativeNumericConstant": "off",
 				"noEmptyInterface": "off",
 				"noConsole": "off",
-				"useIterableCallbackReturn": "off"
+				"useIterableCallbackReturn": "off",
+				"noNonNullAssertedOptionalChain": "error"
 			},
 			"complexity": {
 				"noForEach": "off",
@@ -84,7 +85,6 @@
 			},
 			"nursery": {
 				"noFloatingPromises": "error",
-				"noNonNullAssertedOptionalChain": "error",
 				"noImportCycles": "error"
 			}
 		}
@@ -92,8 +92,7 @@
 	"assist": {
 		"actions": {
 			"source": {
-				"organizeImports": "on",
-				"useSortedAttributes": "on"
+				"organizeImports": "on"
 			}
 		}
 	}

@@ -35,8 +35,8 @@ export function pressureFrom(altitude: Distance, temperature: Temperature = 15):
 	if (m < 11000) {
 		return ONE_ATM * (k / (k - 0.0065 * m)) ** e
 	} else {
-		const a = ONE_ATM * (k / (k + -0.0065 * 11000.0)) ** e
+		const a = ONE_ATM * (k / (k + -0.0065 * 11000)) ** e
 		const c = k + 11000 * -0.0065
-		return a * Math.exp((-9.80665 * 0.0289644 * (m - 11000.0)) / (8.31432 * c))
+		return a * Math.exp((-9.80665 * 0.0289644 * (m - 11000)) / (8.31432 * c))
 	}
 }

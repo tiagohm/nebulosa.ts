@@ -3,7 +3,7 @@ import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameter
 import { PI, SIDEREAL_RATE, TAU } from './constants'
 import { eraC2s, eraS2c } from './erfa'
 import { precessFk5FromJ2000 } from './fk5'
-import { type Time, toUnix } from './time'
+import { type Time, timeToUnix } from './time'
 import { type Vec3, vecNegateMut, vecPlane, vecRotateByRodrigues, vecRotY, vecRotZ } from './vec3'
 
 export interface ThreePointPolarAlignmentResult {
@@ -59,7 +59,7 @@ export function threePointPolarAlignmentAfterAdjustment(result: ThreePointPolarA
 	// Mount is tracking over an unaligned polar axis.
 	// Figure out what the ra/dec would be if the user hadn't modified the knobs.
 	// That is, just rotate the 3rd measurement point around the mount's original RA axis.
-	const p3Seconds = toUnix(to[2]) - toUnix(from[2]) // Time since third point in seconds
+	const p3Seconds = timeToUnix(to[2]) - timeToUnix(from[2]) // Time since third point in seconds
 
 	// Angle corresponding to that interval assuming the sidereal rate.
 	const p3Angle = arcsec(-SIDEREAL_RATE * p3Seconds) // Negative because the sky appears to rotate westward

@@ -7,7 +7,7 @@ import { iersb } from '../src/iers'
 import { fileHandleSource } from '../src/io'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // biome-ignore format: too long
-import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeUnix, timeYMD, timeYMDHMS, toDate, toJulianDay, toUnix, toUnixMillis, tt, ut1, utc } from '../src/time'
+import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToFractionOfYear, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/time'
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = timeNormalize(expected.day, expected.fraction)
@@ -144,29 +144,34 @@ test('subtract', () => {
 })
 
 test('to date', () => {
-	expect(toDate(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toEqual([2020, 1, 1, 12, 0, 0, 0])
-	expect(toDate(timeYMDHMS(2020, 1, 1, 23, 59, 59))).toEqual([2020, 1, 1, 23, 59, 59, 0])
-	expect(toDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))).toEqual([2020, 1, 1, 23, 59, 59, 500000000])
-	expect(toDate(time(2460677, 0.503116, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
-	expect(toDate(time(2460678, -0.496884, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
-	expect(toDate(timeJulianYear(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
+	expect(timeToDate(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toEqual([2020, 1, 1, 12, 0, 0, 0])
+	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59))).toEqual([2020, 1, 1, 23, 59, 59, 0])
+	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))).toEqual([2020, 1, 1, 23, 59, 59, 500000000])
+	expect(timeToDate(time(2460677, 0.503116, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
+	expect(timeToDate(time(2460678, -0.496884, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
+	expect(timeToDate(timeJulianYear(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
 })
 
 test('to unix', () => {
-	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toBe(1577880000)
+	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toBe(1577880000)
 })
 
 test('to unix milliseconds', () => {
-	expect(toUnixMillis(timeYMDHMS(2020, 1, 1, 12, 0, 0.005))).toBe(1577880000005)
+	expect(timeToUnixMillis(timeYMDHMS(2020, 1, 1, 12, 0, 0.005))).toBe(1577880000005)
 })
 
 test('to unix with scale', () => {
-	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TAI))).toBe(1577879963)
-	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TT))).toBe(1577879930)
-	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TCG))).toBe(1577879929)
-	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TDB))).toBe(1577879930)
-	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.UT1))).toBe(1577880000)
-	expect(toUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.UTC))).toBe(1577880000)
+	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TAI))).toBe(1577879963)
+	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TT))).toBe(1577879930)
+	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TCG))).toBe(1577879929)
+	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TDB))).toBe(1577879930)
+	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.UT1))).toBe(1577880000)
+	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.UTC))).toBe(1577880000)
+})
+
+test('time to fraction of year', () => {
+	expect(timeToFractionOfYear(timeYMDHMS(2022, 1, 1, 0, 0, 0, Timescale.UTC))).toBeCloseTo(2022, 3)
+	expect(timeToFractionOfYear(timeYMDHMS(2022, 12, 31, 23, 59, 59, Timescale.UTC))).toBeCloseTo(2022.999, 3)
 })
 
 test('ut1', () => {

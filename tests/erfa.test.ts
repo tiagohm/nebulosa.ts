@@ -427,7 +427,7 @@ test('eraPvstar', () => {
 })
 
 test('eraStarpm', () => {
-	const [ra, dec, pmr, pmd, px, rv] = erfa.eraStarpm(0.01686756, -1.093989828, -1.78323516e-5, 2.336024047e-6, arcsec(0.74723), kilometerPerSecond(-21.6), 2400000.5, 50083.0, 2400000.5, 53736.0) as Exclude<ReturnType<typeof erfa.eraStarpm>, false>
+	const [ra, dec, pmr, pmd, px, rv] = erfa.eraStarpm(0.01686756, -1.093989828, -1.78323516e-5, 2.336024047e-6, arcsec(0.74723), kilometerPerSecond(-21.6), 2400000.5, 50083, 2400000.5, 53736) as Exclude<ReturnType<typeof erfa.eraStarpm>, false>
 
 	expect(ra).toBeCloseTo(0.01668919069414256149, 13)
 	expect(dec).toBeCloseTo(-1.093966454217127897, 13)
@@ -502,7 +502,7 @@ test('eraLdn', () => {
 			v: [-0.00755816922, 0.00126913722, 0.000727999001],
 		},
 		{
-			bm: 1.0,
+			bm: 1,
 			dl: 6e-6,
 			p: [-0.000712174377, -0.00230478303, -0.00105865966],
 			v: [6.29235213e-6, -3.30888387e-7, -2.96486623e-7],
@@ -551,7 +551,7 @@ test('eraC2ixys', () => {
 })
 
 test('eraC2i06a', () => {
-	const r = erfa.eraC2i06a(2400000.5, 53736.0)
+	const r = erfa.eraC2i06a(2400000.5, 53736)
 
 	expect(r[0]).toBeCloseTo(0.9999998323037159379, 13)
 	expect(r[1]).toBeCloseTo(0.5581121329587613787e-9, 13)
@@ -565,7 +565,7 @@ test('eraC2i06a', () => {
 })
 
 test('eraC2t06a', () => {
-	const r = erfa.eraC2t06a(2400000.5, 53736.0, 2400000.5, 53736.0, 2.55060238e-7, 1.860359247e-6, undefined)
+	const r = erfa.eraC2t06a(2400000.5, 53736, 2400000.5, 53736, 2.55060238e-7, 1.860359247e-6, undefined)
 
 	expect(r[0]).toBeCloseTo(-0.1810332128305897282, 12)
 	expect(r[1]).toBeCloseTo(0.9834769806938592296, 12)
@@ -799,7 +799,7 @@ test('eraApco13', () => {
 
 	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
 	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
-	const astrom = erfa.eraApco13(tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731.0, 12.8, 0.59, 0.55, [ebp, ebv], ehp)
+	const astrom = erfa.eraApco13(tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731, 12.8, 0.59, 0.55, [ebp, ebv], ehp)
 
 	expect(astrom.pmt).toBeCloseTo(13.25248468622475727, 11)
 	expect(astrom.eb[0]).toBeCloseTo(-0.9741827107320875162, 13)

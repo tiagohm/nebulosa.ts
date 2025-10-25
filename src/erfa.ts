@@ -400,7 +400,7 @@ export function eraJdToCal(dj1: number, dj2: number): [number, number, number, n
 export function eraCalToJd(iy: number, im: number, id: number): number {
 	const my = Math.trunc((im - 14) / 12)
 	const iypmy = iy + my
-	return Math.trunc((1461 * (iypmy + 4800)) / 4) + Math.trunc((367 * (im - 2 - 12 * my)) / 12) - Math.trunc((3 * Math.trunc((iypmy + 4900) / 100)) / 4) + Math.trunc(id) - 2432076
+	return Math.trunc(DAYSPERJY * (iypmy + 4800)) + Math.trunc((367 * (im - 2 - 12 * my)) / 12) - Math.trunc((3 * Math.trunc((iypmy + 4900) / 100)) / 4) + Math.trunc(id) - 2432076
 }
 
 // For a given UTC date, calculate Delta(AT) = TAI-UTC.
@@ -1469,7 +1469,7 @@ export function eraApcs(tdb1: number, tdb2: number, pv: readonly [Vec3, Vec3], e
 		v2 += w * w
 	}
 
-	astrom.bm1 = Math.sqrt(1.0 - v2)
+	astrom.bm1 = Math.sqrt(1 - v2)
 
 	// Reset the NPB matrix.
 	astrom.bpn = matIdentity(astrom.bpn)
@@ -1852,10 +1852,10 @@ export function eraAtioq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	// A*tan(z)+B*tan^3(z) model, with Newton-Raphson correction.
 	const tz = r / z
 	const w = astrom.refb * tz * tz
-	const del = ((astrom.refa + w) * tz) / (1.0 + (astrom.refa + 3.0 * w) / (z * z))
+	const del = ((astrom.refa + w) * tz) / (1 + (astrom.refa + 3 * w) / (z * z))
 
 	// Apply the change, giving observed vector.
-	const cosdel = 1.0 - (del * del) / 2.0
+	const cosdel = 1 - (del * del) / 2
 	f = cosdel - (del * z) / r
 	const xaeo = xaet * f
 	const yaeo = yaet * f

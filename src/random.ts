@@ -2,7 +2,7 @@ export type Random = () => number
 
 // https://stackoverflow.com/questions/521295/seeding-the-random-number-generator-in-javascript
 
-const MAX_INT = 4294967296.0
+const MAX_INT = 4294967296
 
 // A simple 32-bit generator, but is extremely fast and has acceptable quality randomness
 // https://gist.github.com/tommyettinger/46a874533244883189143505d203312c

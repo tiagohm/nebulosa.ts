@@ -430,6 +430,7 @@ lunation(time, system) // Compute the lunation at a given time and system
 nearestLunarPhase(time, phase, next) // Compute the nearest lunar phase at a given time
 nearestLunarEclipse(time, next) // Compute the nearest lunar eclipse at a given time
 lunarSaros(time) // Compute the saros series number for the lunar eclipse at time
+nearestLunarApsis(time, apsis) // Compute the nearest lunar apsis at time
 ```
 
 ### MPCORB ![](bun.webp) ![](browser.webp)
@@ -670,10 +671,11 @@ timeYMDF(2024, 12, 25, 0.5, Timescale.UTC) // Time from year, month, day and fra
 timeGPS(630720013) // Time from GPS seconds
 timeNormalize(2460650, 8.37456, 0, Timescale.UTC) // Normalize day and fraction
 timeSubtract(a, b) // Subtract two Times
-toDate(time) // Convert the time to year, month, day, hour, minute, second and nanosecond
+timeToDate(time) // Convert the time to year, month, day, hour, minute, second and nanosecond
 toJulianDay(time) // Convert the time to Julian Day
-toUnix(time) // Convert the time to Unix timestamp
-toUnixMillis(time) // Convert the time to Unix milliseconds
+timeToUnix(time) // Convert the time to Unix timestamp
+timeToUnixMillis(time) // Convert the time to Unix milliseconds
+timeToFractionOfYear(time) // Convert the time to fraction of year
 ut1(time) // Convert the time to UT1 scale
 utc(time) // Convert the time to UTC scale
 tai(time) // Convert the time to TAI scale

@@ -1,26 +1,15 @@
-import { deg } from './angle'
-import { ASEC2RAD, AU_KM, DAYSPERJY, DEG2RAD, MOON_SYNODIC_DAYS } from './constants'
-import type { Distance } from './distance'
-import { temporalFromTime, temporalGet } from './temporal'
-import { type Time, Timescale, time, timeNormalize, timeSubtract, timeYMD, toJulianDay, tt } from './time'
+import { type Angle, arcsec, deg } from './angle'
+import { ASEC2RAD, AU_KM, DEG2RAD, MOON_SYNODIC_DAYS } from './constants'
+import { type Distance, kilometer } from './distance'
+import { type Time, Timescale, time, timeNormalize, timeToFractionOfYear, toJulianDay, tt } from './time'
 
 export type LunarEclipseType = 'TOTAL' | 'PARTIAL' | 'PENUMBRAL'
 
-export enum LunationSystem {
-	BROWN,
-	MEEUS,
-	GOLDSTINE,
-	HEBREW,
-	ISLAMIC,
-	THAI,
-}
+export type LunationSystem = 'BROWN' | 'MEEUS' | 'GOLDSTINE' | 'HEBREW' | 'ISLAMIC' | 'THAI'
 
-export enum LunarPhase {
-	NEW = 0, // 0
-	FIRST_QUARTER = 1, // 25
-	FULL = 2, // 50
-	LAST_QUARTER = 3, // 75
-}
+export type LunarPhase = 'NEW' | 'FIRST_QUARTER' | 'FULL' | 'LAST_QUARTER'
+
+export type LunarApsis = 'PERIGEE' | 'APOGEE'
 
 export interface LunarEclipse {
 	lunation: number
@@ -52,15 +41,15 @@ export function moonSemidiameter(distance: Distance) {
 }
 
 // Computes the lunation number for a given time and system
-export function lunation(time: Time, system: LunationSystem = LunationSystem.BROWN) {
+export function lunation(time: Time, system: LunationSystem = 'BROWN') {
 	// The first New Moon of 2000 (6th January, ~ 18:14 UTC)
 	const LN = Math.round((time.day - 2451550 + (time.fraction - 0.25972)) / MOON_SYNODIC_DAYS - 0.25) || 0
 
-	if (system === LunationSystem.MEEUS) return LN
-	else if (system === LunationSystem.GOLDSTINE) return LN + 37105
-	else if (system === LunationSystem.HEBREW) return LN + 71234
-	else if (system === LunationSystem.ISLAMIC) return LN + 17038
-	else if (system === LunationSystem.THAI) return LN + 16843
+	if (system === 'MEEUS') return LN
+	else if (system === 'GOLDSTINE') return LN + 37105
+	else if (system === 'HEBREW') return LN + 71234
+	else if (system === 'ISLAMIC') return LN + 17038
+	else if (system === 'THAI') return LN + 16843
 	else return LN + 953
 }
 
@@ -74,12 +63,12 @@ export function lunarSaros(time: Time) {
 
 // Computes the nearest (previous or next) lunar phase for a given time
 export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean): Time {
-	const t = tt(time)
-	const jd = toJulianDay(t)
+	time = tt(time)
+	const jd = toJulianDay(time)
 
-	let year = temporalGet(temporalFromTime(t), 'year')
-	year += timeSubtract(t, timeYMD(year)) / DAYSPERJY
-	let k = Math.floor((year - 2000) * 12.3685) + phase / 4 + (next ? 0 : 1)
+	const year = timeToFractionOfYear(time)
+	const phaseFraction = phase === 'NEW' ? 0 : phase === 'FIRST_QUARTER' ? 0.25 : phase === 'FULL' ? 0.5 : 0.75
+	let k = Math.floor((year - 2000) * 12.3685) + phaseFraction + (next ? 0 : 1)
 
 	while (true) {
 		const T = k / 1236.85
@@ -122,7 +111,7 @@ export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean):
 
 		let addition = 0
 
-		if (phase === LunarPhase.NEW) {
+		if (phase === 'NEW') {
 			addition =
 				-0.4072 * Math.sin(MM) +
 				0.17241 * E * Math.sin(SM) +
@@ -151,7 +140,7 @@ export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean):
 				0.00002 * Math.sin(4 * MM)
 		}
 
-		if (phase === LunarPhase.FULL) {
+		if (phase === 'FULL') {
 			addition =
 				-0.40614 * Math.sin(MM) +
 				0.17302 * E * Math.sin(SM) +
@@ -180,7 +169,7 @@ export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean):
 				0.00002 * Math.sin(4 * MM)
 		}
 
-		if (phase === LunarPhase.FIRST_QUARTER || phase === LunarPhase.LAST_QUARTER) {
+		if (phase === 'FIRST_QUARTER' || phase === 'LAST_QUARTER') {
 			addition =
 				-0.62801 * Math.sin(MM) +
 				0.17172 * E * Math.sin(SM) -
@@ -210,7 +199,7 @@ export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean):
 
 			const W = 0.00306 - 0.00038 * E * Math.cos(SM) + 0.00026 * Math.cos(MM) - 0.00002 * Math.cos(MM - SM) + 0.00002 * Math.cos(MM + SM) + 0.00002 * Math.cos(2 * F)
 
-			if (phase === LunarPhase.FIRST_QUARTER) addition += W
+			if (phase === 'FIRST_QUARTER') addition += W
 			else addition -= W
 		}
 
@@ -242,11 +231,11 @@ export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean):
 	}
 }
 
-// Computes the nearest (previous or next) solar eclipse for a given time
+// Computes the nearest (previous or next) lunar eclipse for a given time
 export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEclipse> {
-	const t = tt(time)
-	const jd = toJulianDay(t)
-	let k = lunation(t, LunationSystem.MEEUS) + (next ? 0.5 : 1.5)
+	time = tt(time)
+	const jd = toJulianDay(time)
+	let k = lunation(time, 'MEEUS') + (next ? 0.5 : 1.5)
 
 	let found = false
 
@@ -360,7 +349,7 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 
 				const p = 1.0128 - u
 				const t = 0.4678 - u
-				const n = 1.0 / (24 * (0.5458 + 0.04 * Math.cos(MM)))
+				const n = 1 / (24 * (0.5458 + 0.04 * Math.cos(MM)))
 				const h = 1.5573 + u
 				const g2 = gamma * gamma
 
@@ -387,4 +376,201 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 	}
 
 	return eclipse
+}
+
+// Computes the nearest lunar apsis for a given time
+export function nearestLunarApsis(time: Time, apsis: LunarApsis): readonly [Time, Distance, Angle] {
+	time = tt(time)
+	const year = timeToFractionOfYear(time)
+	let k = Math.floor((year - 1999.97) * 13.2555)
+	if (apsis === 'APOGEE') k += 0.5
+
+	const T = k / 1325.55
+	const T2 = T * T
+	const T3 = T2 * T
+	const T4 = T3 * T
+
+	const jdDay = 2451534 + 27 * k
+	let jdFraction = 0.6698 + 0.55454989 * k - 0.0006691 * T2 - 0.000001098 * T3 + 0.0000000052 * T4
+	const D = deg(171.9179 + 335.9106046 * k - 0.0100383 * T2 - 0.00001156 * T3 + 0.000000055 * T4)
+	const M = deg(347.3477 + 27.1577721 * k - 0.000813 * T2 - 0.000001 * T3)
+	const F = deg(316.6109 + 364.5287911 * k - 0.0125053 * T2 - 0.0000148 * T3)
+
+	let parallax = 0
+
+	if (apsis === 'PERIGEE') {
+		jdFraction +=
+			Math.sin(2 * D) * -1.6769 +
+			Math.sin(4 * D) * 0.4589 +
+			Math.sin(6 * D) * -0.1856 +
+			Math.sin(8 * D) * 0.0883 +
+			Math.sin(2 * D - M) * (-0.0773 + 0.00019 * T) +
+			Math.sin(M) * (0.0502 - 0.00013 * T) +
+			Math.sin(10 * D) * -0.046 +
+			Math.sin(4 * D - M) * (0.0422 - 0.00011 * T) +
+			Math.sin(6 * D - M) * -0.0256 +
+			Math.sin(12 * D) * 0.0253 +
+			Math.sin(D) * 0.0237 +
+			Math.sin(8 * D - M) * 0.0162 +
+			Math.sin(14 * D) * -0.0145 +
+			Math.sin(2 * F) * 0.0129 +
+			Math.sin(3 * D) * -0.0112 +
+			Math.sin(10 * D - M) * -0.0104 +
+			Math.sin(16 * D) * 0.0086 +
+			Math.sin(12 * D - M) * 0.0069 +
+			Math.sin(5 * D) * 0.0066 +
+			Math.sin(2 * D + 2 * F) * -0.0053 +
+			Math.sin(18 * D) * -0.0052 +
+			Math.sin(14 * D - M) * -0.0046 +
+			Math.sin(7 * D) * -0.0041 +
+			Math.sin(2 * D + M) * 0.004 +
+			Math.sin(20 * D) * 0.0032 +
+			Math.sin(D + M) * -0.0032 +
+			Math.sin(16 * D - M) * 0.0031 +
+			Math.sin(4 * D + M) * -0.0029 +
+			Math.sin(9 * D) * 0.0027 +
+			Math.sin(4 * D + 2 * F) * 0.0027 +
+			Math.sin(2 * D - 2 * M) * -0.0027 +
+			Math.sin(4 * D - 2 * M) * 0.0024 +
+			Math.sin(6 * D - 2 * M) * -0.0021 +
+			Math.sin(22 * D) * -0.0021 +
+			Math.sin(18 * D - M) * -0.0021 +
+			Math.sin(6 * D + M) * 0.0019 +
+			Math.sin(11 * D) * -0.0018 +
+			Math.sin(8 * D + M) * -0.0014 +
+			Math.sin(4 * D - 2 * F) * -0.0014 +
+			Math.sin(6 * D + 2 * F) * -0.0014 +
+			Math.sin(3 * D + M) * 0.0014 +
+			Math.sin(5 * D + M) * -0.0014 +
+			Math.sin(13 * D) * 0.0013 +
+			Math.sin(20 * D - M) * 0.0013 +
+			Math.sin(3 * D + 2 * M) * 0.0011 +
+			Math.sin(4 * D + 2 * F - 2 * M) * -0.0011 +
+			Math.sin(D + 2 * M) * -0.001 +
+			Math.sin(22 * D - M) * -0.0009 +
+			Math.sin(4 * F) * -0.0008 +
+			Math.sin(6 * D - 2 * F) * 0.0008 +
+			Math.sin(2 * D - 2 * F + M) * 0.0008 +
+			Math.sin(2 * M) * 0.0007 +
+			Math.sin(2 * F - M) * 0.0007 +
+			Math.sin(2 * D + 4 * F) * 0.0007 +
+			Math.sin(2 * F - 2 * M) * -0.0006 +
+			Math.sin(2 * D - 2 * F + 2 * M) * -0.0006 +
+			Math.sin(24 * D) * 0.0006 +
+			Math.sin(4 * D - 4 * F) * 0.0005 +
+			Math.sin(2 * D + 2 * M) * 0.0005 +
+			Math.sin(D - M) * -0.0004
+
+		parallax =
+			3629.215 +
+			63.224 * Math.cos(2 * D) -
+			6.99 * Math.cos(4 * D) +
+			2.834 * Math.cos(2 * D - M) -
+			0.0071 * T * Math.cos(2 * D - M) +
+			1.927 * Math.cos(6 * D) -
+			1.263 * Math.cos(D) -
+			0.702 * Math.cos(8 * D) +
+			0.696 * Math.cos(M) -
+			0.0017 * T * Math.cos(M) -
+			0.69 * Math.cos(2 * F) -
+			0.629 * Math.cos(4 * D - M) +
+			0.0016 * T * Math.cos(4 * D - M) -
+			0.392 * Math.cos(2 * D - 2 * F) +
+			0.297 * Math.cos(10 * D) +
+			0.26 * Math.cos(6 * D - M) +
+			0.201 * Math.cos(3 * D) -
+			0.161 * Math.cos(2 * D + M) +
+			0.157 * Math.cos(D + M) -
+			0.138 * Math.cos(12 * D) -
+			0.127 * Math.cos(8 * D - M) +
+			0.104 * Math.cos(2 * D + 2 * F) +
+			0.104 * Math.cos(2 * D - 2 * M) -
+			0.079 * Math.cos(5 * D) +
+			0.068 * Math.cos(14 * D) +
+			0.067 * Math.cos(10 * D - M) +
+			0.054 * Math.cos(4 * D + M) -
+			0.038 * Math.cos(12 * D - M) -
+			0.038 * Math.cos(4 * D - 2 * M) +
+			0.037 * Math.cos(7 * D) -
+			0.037 * Math.cos(4 * D + 2 * F) -
+			0.035 * Math.cos(16 * D) -
+			0.03 * Math.cos(3 * D + M) +
+			0.029 * Math.cos(D - M) -
+			0.025 * Math.cos(6 * D + M) +
+			0.023 * Math.cos(2 * M) +
+			0.023 * Math.cos(14 * D - M) -
+			0.023 * Math.cos(2 * D + 2 * M) +
+			0.022 * Math.cos(6 * D - 2 * M) -
+			0.021 * Math.cos(2 * D - 2 * F - M) -
+			0.02 * Math.cos(9 * D) +
+			0.019 * Math.cos(18 * D) +
+			0.017 * Math.cos(6 * D + 2 * F) +
+			0.014 * Math.cos(2 * F - M) -
+			0.014 * Math.cos(16 * D - M) +
+			0.013 * Math.cos(4 * D - 2 * F) +
+			0.012 * Math.cos(8 * D + M) +
+			0.011 * Math.cos(11 * D) +
+			0.01 * Math.cos(5 * D + M) -
+			0.01 * Math.cos(20 * D)
+	} else if (apsis === 'APOGEE') {
+		jdFraction +=
+			Math.sin(2 * D) * 0.4392 +
+			Math.sin(4 * D) * 0.0684 +
+			Math.sin(M) * (0.0456 - 0.00011 * T) +
+			Math.sin(2 * D - M) * (0.0426 - 0.00011 * T) +
+			Math.sin(2 * F) * 0.0212 +
+			Math.sin(D) * -0.0189 +
+			Math.sin(6 * D) * 0.0144 +
+			Math.sin(4 * D - M) * 0.0113 +
+			Math.sin(2 * D + 2 * F) * 0.0047 +
+			Math.sin(D + M) * 0.0036 +
+			Math.sin(8 * D) * 0.0035 +
+			Math.sin(6 * D - M) * 0.0034 +
+			Math.sin(2 * D - 2 * F) * -0.0034 +
+			Math.sin(2 * D - 2 * M) * 0.0022 +
+			Math.sin(3 * D) * -0.0017 +
+			Math.sin(4 * D + 2 * F) * 0.0013 +
+			Math.sin(8 * D - M) * 0.0011 +
+			Math.sin(4 * D - 2 * M) * 0.001 +
+			Math.sin(10 * D) * 0.0009 +
+			Math.sin(3 * D + M) * 0.0007 +
+			Math.sin(2 * M) * 0.0006 +
+			Math.sin(2 * D + M) * 0.0005 +
+			Math.sin(2 * D + 2 * M) * 0.0005 +
+			Math.sin(6 * D + 2 * F) * 0.0004 +
+			Math.sin(6 * D - 2 * M) * 0.0004 +
+			Math.sin(10 * D - M) * 0.0004 +
+			Math.sin(5 * D) * -0.0004 +
+			Math.sin(4 * D - 2 * F) * -0.0004 +
+			Math.sin(2 * F + M) * 0.0003 +
+			Math.sin(12 * D) * 0.0003 +
+			Math.sin(2 * D + 2 * F - M) * 0.0003 +
+			Math.sin(D - M) * -0.0003
+
+		parallax =
+			3245.251 -
+			9.147 * Math.cos(2 * D) -
+			0.841 * Math.cos(D) +
+			0.697 * Math.cos(2 * F) -
+			0.656 * Math.cos(M) +
+			0.0016 * T * Math.cos(M) +
+			0.355 * Math.cos(4 * D) +
+			0.159 * Math.cos(2 * D - M) +
+			0.127 * Math.cos(D + M) +
+			0.065 * Math.cos(4 * D - M) +
+			0.052 * Math.cos(6 * D) +
+			0.043 * Math.cos(2 * D + M) +
+			0.031 * Math.cos(2 * D + 2 * F) -
+			0.023 * Math.cos(2 * D - 2 * F) +
+			0.022 * Math.cos(2 * D - 2 * M) +
+			0.019 * Math.cos(2 * D + 2 * M) -
+			0.016 * Math.cos(2 * M) +
+			0.014 * Math.cos(6 * D - M) +
+			0.01 * Math.cos(8 * D)
+	}
+
+	const distance = kilometer(6378.14 / Math.sin(arcsec(parallax)))
+	const diameter = 2 * moonSemidiameter(distance)
+
+	return [timeNormalize(jdDay, jdFraction, 0, Timescale.TT), distance, diameter]
 }

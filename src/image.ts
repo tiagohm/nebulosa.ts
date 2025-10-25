@@ -101,9 +101,9 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 			for (let k = 0; k < n; k += pixelSizeInBytes, index += nc) {
 				let pixel = 0
 
-				if (bp === Bitpix.BYTE) pixel = buffer.readUInt8(k) / 255.0
-				else if (bp === Bitpix.SHORT) pixel = (buffer.readInt16BE(k) + 32768) / 65535.0
-				else if (bp === Bitpix.INTEGER) pixel = (buffer.readInt32BE(k) + 2147483648) / 4294967295.0
+				if (bp === Bitpix.BYTE) pixel = buffer.readUInt8(k) / 255
+				else if (bp === Bitpix.SHORT) pixel = (buffer.readInt16BE(k) + 32768) / 65535
+				else if (bp === Bitpix.INTEGER) pixel = (buffer.readInt32BE(k) + 2147483648) / 4294967295
 				else if (bp === Bitpix.FLOAT) pixel = buffer.readFloatBE(k)
 				else if (bp === Bitpix.DOUBLE) pixel = buffer.readDoubleBE(k)
 
