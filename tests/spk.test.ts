@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readDaf } from '../src/daf'
-import { fileHandleSource } from '../src/io'
+import { fileHandleSource, rangeHttpSource } from '../src/io'
 import { Naif } from '../src/naif'
 import { readSpk } from '../src/spk'
 import { Timescale, timeYMDHMS } from '../src/time'
@@ -89,4 +89,18 @@ test('65803 Didymos', async () => {
 	expect(v[0]).toBeCloseTo(-1.739801961691489e-2, 16)
 	expect(v[1]).toBeCloseTo(5.41929776178759e-3, 16)
 	expect(v[2]).toBeCloseTo(3.552869344161516e-3, 16)
+})
+
+test.skip('MAR099', async () => {
+	const source = rangeHttpSource('https://ssd.jpl.nasa.gov/ftp/eph/satellites/bsp/mar099.bsp')
+	const daf = await readDaf(source)
+	const spk = readSpk(daf)
+	const [p, v] = await spk.segment(4, 401)!.at({ day: 2460947, fraction: 0, scale: 5 })
+
+	expect(p[0]).toBeCloseTo(-3.82910942172268e-5, 11)
+	expect(p[1]).toBeCloseTo(3.065636702485076e-5, 11)
+	expect(p[2]).toBeCloseTo(3.833086497253128e-5, 11)
+	expect(v[0]).toBeCloseTo(-7.83678289321317e-4, 10)
+	expect(v[1]).toBeCloseTo(-9.639456997298313e-4, 10)
+	expect(v[2]).toBeCloseTo(-3.925176295238564e-5, 10)
 })

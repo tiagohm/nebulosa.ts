@@ -11,14 +11,14 @@ export interface Spk {
 }
 
 export interface SpkSegment {
-	readonly daf: Daf
-	readonly source: string
+	// readonly daf: Daf
+	// readonly source: string
 	readonly start: number
 	readonly end: number
 	readonly center: number
 	readonly target: number
-	readonly frame: number
-	readonly type: number
+	// readonly frame: number
+	// readonly type: number
 	readonly startIndex: number
 	readonly endIndex: number
 
@@ -31,7 +31,10 @@ export function readSpk(daf: Daf): Spk {
 	return {
 		segments,
 		segment: (center, target) => {
-			return segments.find((e) => e[0] === center && e[1] === target)?.[2]
+			const s = segments.filter((e) => e[0] === center && e[1] === target)
+			if (s.length === 0) return undefined
+			else if (s.length === 1) return s[0][2]
+			else return new MultipleSpkSegment(s.map((e) => e[2]))
 		},
 	}
 }
@@ -43,11 +46,11 @@ function makeSegment(summary: Summary, daf: Daf): SpkSegment {
 	switch (type) {
 		case 2:
 		case 3:
-			return new Type2And3Segment(daf, summary.name, start, end, center, target, frame, type, startIndex, endIndex)
+			return new Type2And3Segment(daf, start, end, center, target, type, startIndex, endIndex)
 		case 9:
-			return new Type9Segment(daf, summary.name, start, end, center, target, frame, type, startIndex, endIndex)
+			return new Type9Segment(start, end, center, target, startIndex, endIndex)
 		case 21:
-			return new Type21Segment(daf, summary.name, start, end, center, target, frame, type, startIndex, endIndex)
+			return new Type21Segment(daf, start, end, center, target, startIndex, endIndex)
 	}
 
 	throw Error('only binary SPK data types 2, 3, 9 and 21 are supported')
@@ -71,14 +74,14 @@ export class Type2And3Segment implements SpkSegment {
 	private readonly coefficients = new Map<number, Type2And3Coefficient>()
 
 	constructor(
-		readonly daf: Daf,
-		readonly source: string,
+		private readonly daf: Daf,
+		// private readonly source: string,
 		readonly start: number,
 		readonly end: number,
 		readonly center: number,
 		readonly target: number,
-		readonly frame: number,
-		readonly type: number,
+		// private readonly frame: number,
+		private readonly type: number,
 		readonly startIndex: number,
 		readonly endIndex: number,
 	) {}
@@ -194,14 +197,14 @@ export class Type2And3Segment implements SpkSegment {
 
 export class Type9Segment implements SpkSegment {
 	constructor(
-		readonly daf: Daf,
-		readonly source: string,
+		// private readonly daf: Daf,
+		// private readonly source: string,
 		readonly start: number,
 		readonly end: number,
 		readonly center: number,
 		readonly target: number,
-		readonly frame: number,
-		readonly type: number,
+		// private readonly frame: number,
+		// private readonly type: number,
 		readonly startIndex: number,
 		readonly endIndex: number,
 	) {}
@@ -235,14 +238,14 @@ export class Type21Segment implements SpkSegment {
 	private readonly coefficients = new Map<number, Type21Coefficent>()
 
 	constructor(
-		readonly daf: Daf,
-		readonly source: string,
+		private readonly daf: Daf,
+		// private readonly source: string,
 		readonly start: number,
 		readonly end: number,
 		readonly center: number,
 		readonly target: number,
-		readonly frame: number,
-		readonly type: number,
+		// private readonly frame: number,
+		// private readonly type: number,
 		readonly startIndex: number,
 		readonly endIndex: number,
 	) {}
@@ -439,5 +442,46 @@ export class Type21Segment implements SpkSegment {
 		this.coefficients.set(index, { tl, g, p, v, dt, kqmax1, kq })
 
 		return true
+	}
+}
+
+export class MultipleSpkSegment implements SpkSegment {
+	readonly start: number
+	readonly end: number
+	readonly center: number
+	readonly target: number
+	readonly startIndex: number
+	readonly endIndex: number
+
+	private readonly segments: SpkSegment[]
+
+	constructor(segments: SpkSegment[]) {
+		if (segments.length === 0) {
+			throw new Error('at least one segment needs to be provided')
+		}
+
+		this.center = segments[0].center
+		this.target = segments[0].target
+
+		if (segments.length > 1 && segments.find((e) => e.center !== this.center || e.target !== this.target)) {
+			throw new Error('one of the segments does not match the center or target')
+		}
+
+		this.start = segments.length > 1 ? Math.min(...segments.map((e) => e.start)) : segments[0].start
+		this.end = segments.length > 1 ? Math.max(...segments.map((e) => e.end)) : segments[0].end
+		this.startIndex = segments.length > 1 ? Math.min(...segments.map((e) => e.startIndex)) : segments[0].startIndex
+		this.endIndex = segments.length > 1 ? Math.max(...segments.map((e) => e.endIndex)) : segments[0].endIndex
+		this.segments = segments.toSorted((a, b) => a.end - b.end)
+	}
+
+	at(time: Time): Promise<PositionAndVelocity> {
+		const jd = time.day + time.fraction
+		let segment = this.segments[0]
+
+		for (const s of this.segments) {
+			if (s.end > jd) segment = s
+		}
+
+		return segment.at(time)
 	}
 }
