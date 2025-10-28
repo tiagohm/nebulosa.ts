@@ -5,6 +5,8 @@ import { type Time, tdb } from './time'
 import type { MutVec3 } from './vec3'
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/FORTRAN/req/spk.html
+// https://naif.jpl.nasa.gov/pub/naif/misc/toolkit_docs_N0067/C/req/spk.html
+
 export interface Spk {
 	readonly segments: readonly [number, number, SpkSegment][]
 	readonly segment: (center: number, target: number) => SpkSegment | undefined
@@ -56,6 +58,8 @@ function makeSegment(summary: Summary, daf: Daf): SpkSegment {
 	throw Error('only binary SPK data types 2, 3, 9 and 21 are supported')
 }
 
+// More info about spk types: https://spiceypy.readthedocs.io/en/latest/spk.html
+
 interface Type2And3Coefficient {
 	readonly mid: number
 	readonly radius: number
@@ -65,6 +69,14 @@ interface Type2And3Coefficient {
 	readonly count: number
 }
 
+// Type 2: Chebyshev (position only)
+// The SPK Type 2 data type contains Chebyshev polynomial coefficients for the position of the body
+// as a function of time. Normally, this data type is used for planet barycenters, and for satellites
+// whose ephemerides are integrated. (The velocity of the body is obtained by differentiating the position.)
+// Type 3: Chebyshev (position and velocity)
+// The SPK Type 3 data type contains Chebyshev polynomial coefficients for the position and velocity of the body
+// as a function of time. Normally, this data type is used for satellites for which the ephemerides are computed
+// from analytical theories.
 export class Type2And3Segment implements SpkSegment {
 	private initialized = false
 	private initialEpoch = 0
@@ -195,6 +207,12 @@ export class Type2And3Segment implements SpkSegment {
 	}
 }
 
+// Type 9: Lagrange Interpolation — Unequal Time Steps
+// The SPK Type 9 data type represents a continuous ephemeris using a discrete set of states and
+// a Lagrange interpolation method. The epochs (also called time tags ) associated with the states
+// need not be evenly spaced. For a request epoch not corresponding to the time tag of some state,
+// the data type defines a state by interpolating each component of a set of states whose epochs are
+// centered near the request epoch.
 export class Type9Segment implements SpkSegment {
 	constructor(
 		// private readonly daf: Daf,
@@ -227,6 +245,10 @@ interface Type21Coefficent {
 	readonly kq: Float64Array
 }
 
+// Type 21: Extended Modified Difference Arrays
+// The SPK Type 21 contains extended Modified Difference Arrays (MDA), also called difference lines.
+// These data structures use the same mathematical trajectory representation as SPK data type 1,
+// but type 21 allows use of larger, higher-degree MDAs.
 export class Type21Segment implements SpkSegment {
 	private initialized = false
 	private n = 0
@@ -478,8 +500,9 @@ export class MultipleSpkSegment implements SpkSegment {
 		const jd = time.day + time.fraction
 		let segment = this.segments[0]
 
-		for (const s of this.segments) {
-			if (s.end > jd) segment = s
+		for (let i = 1; i < this.segments.length; i++) {
+			const s = this.segments[i]
+			if (s.end >= jd) segment = s
 		}
 
 		return segment.at(time)
