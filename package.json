@@ -19,7 +19,7 @@
 		"utility-types": "latest"
 	},
 	"optionalDependencies": {
-		"sharp": "0.34.4"
+		"sharp": "0.34.5"
 	},
 	"trustedDependencies": [
 		"@biomejs/biome",
