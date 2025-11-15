@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes, readFits } from '../src/fits'
-import { adf, debayer, FitsDataSource, horizontalFlip, invert, readImageFromFits, scnr, stf, verticalFlip, writeImageToFits } from '../src/image'
+import { FitsDataSource, readImageFromFits, writeImageToFits } from '../src/image'
+import { adf, debayer, grayscale, horizontalFlip, invert, scnr, stf, verticalFlip } from '../src/image.transformation'
 import { fileHandleSink, fileHandleSource } from '../src/io'
 import { BITPIXES, CHANNELS, readImage, readImageAndSaveWithOptions, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
@@ -110,6 +111,14 @@ test('horizontal & vertical flip', () => {
 
 test('invert', () => {
 	return readImageTransformAndSave((i) => invert(i), 'invert', 'a9b92211de5965f5afb1aab2f0427b79')
+}, 5000)
+
+test('grayscale', () => {
+	return readImageTransformAndSave((i) => grayscale(i), 'gs', '462d4b777ec6d7bc374c96c3fa8ae24f')
+}, 5000)
+
+test('red grayscale', () => {
+	return readImageTransformAndSave((i) => grayscale(i, 'RED'), 'gsr', 'd2ec26a745f4354337d69ed260210c7f')
 }, 5000)
 
 test('horizontal flip', () => {
