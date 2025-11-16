@@ -1,6 +1,8 @@
+import { PI } from './constants'
 import { exposureTimeKeyword } from './fits'
 import { type CfaPattern, channelIndex, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type SCNRAlgorithm, type SCNRProtectionMethod, truncatePixel } from './image'
-import { median, medianAbsoluteDiviation } from './image.computation'
+import { median as computeMedian, medianAbsoluteDiviation } from './image.computation'
+import type { NumberArray } from './math'
 
 // Apply Screen Transfer Function to image.
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Display_Function__
@@ -20,7 +22,7 @@ export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, hig
 
 	for (let i = s; i < raw.length; i += p) {
 		let value = raw[i]
-		const p = truncatePixel(value)
+		const p = truncatePixel(value, 65535)
 
 		if (!Number.isNaN(lut[p])) raw[i] = lut[p]
 		else if (value < shadow) raw[i] = 0
@@ -42,7 +44,7 @@ export const DEFAULT_CLIPPING_POINT = -2.8
 // Adaptive Display Function Algorithm
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Adaptive_Display_Function_Algorithm__
 export function adf(image: Image, channel?: ImageChannelOrGray, meanBackground: number = DEFAULT_MEAN_BACKGROUND, clippingPoint: number = DEFAULT_CLIPPING_POINT) {
-	const med = median(image, channel)
+	const med = computeMedian(image, channel)
 	const mad = medianAbsoluteDiviation(image, channel, true, med)
 	const upperHalf = med > 0.5
 	const shadow = upperHalf || mad === 0 ? 0 : Math.min(1, Math.max(0, med + clippingPoint * mad))
@@ -412,7 +414,7 @@ export function grayscale(image: Image, channel?: ImageChannelOrGray): Image {
 	const metadata: ImageMetadata = { ...image.metadata, bayer: undefined, channels: 1 }
 
 	const color = image.raw
-	const n = metadata.width * metadata.height
+	const n = metadata.pixelCount
 	const raw = new Float64Array(n)
 	const { red, green, blue } = grayscaleFromChannel(channel)
 
@@ -431,4 +433,198 @@ export function grayscale(image: Image, channel?: ImageChannelOrGray): Image {
 	header.NAXIS = 2
 
 	return { header, metadata, raw }
+}
+
+export interface ConvolutionKernel {
+	readonly kernel: Readonly<NumberArray>
+	readonly width: number
+	readonly height: number
+	readonly divisor: number
+}
+
+export interface ConvolutionOptions {
+	dynamicDivisorForEdges: boolean
+	normalize: boolean
+}
+
+export interface GaussianBlurConvolutionOptions extends ConvolutionOptions {
+	sigma: number
+	size: number
+}
+
+const DEFAULT_CONVOLUTION_OPTIONS: Readonly<ConvolutionOptions> = {
+	dynamicDivisorForEdges: true,
+	normalize: true,
+}
+
+const DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS: Readonly<GaussianBlurConvolutionOptions> = {
+	...DEFAULT_CONVOLUTION_OPTIONS,
+	sigma: 1.4,
+	size: 5,
+}
+
+export function convolutionKernel(kernel: Readonly<NumberArray>, width: number, height: number = width, divisor?: number): ConvolutionKernel {
+	if (kernel.length < width * height) {
+		throw new Error('invalid kernel size')
+	}
+
+	divisor ??= (kernel as number[]).reduce((a, b) => a + b)
+	return { kernel, width, height, divisor }
+}
+
+export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDivisorForEdges = true, normalize = true }: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	if (kernel.width % 2 === 0 || kernel.height % 2 === 0) {
+		throw new Error('kernel size must be odd')
+	}
+	if (kernel.width < 3 || kernel.width > 99 || kernel.height < 3 || kernel.height > 99) {
+		throw new Error('kernel size bust be in range [3..99]')
+	}
+
+	const xr = Math.trunc(kernel.width / 2)
+	const yr = Math.trunc(kernel.height / 2)
+
+	const { raw, metadata } = image
+	const { width: iw, height: ih, channels, strideInPixels } = metadata
+	const mask = new Float64Array(channels)
+	const { width: kw, height: kh, kernel: kd } = kernel
+	const buffer = new Array<Float64Array>(kh)
+
+	function read(y: number, output: Float64Array) {
+		if (y < 0 || y >= ih) {
+			// output.fill(0)
+		} else {
+			const start = y * strideInPixels
+			output.set(raw.subarray(start, start + strideInPixels))
+		}
+	}
+
+	function shift() {
+		const n = buffer.length - 1
+		const first = buffer[0]
+		for (let i = 0; i < n; i++) buffer[i] = buffer[i + 1]
+		buffer[n] = first
+	}
+
+	for (let i = 0; i < buffer.length; i++) {
+		buffer[i] = new Float64Array(strideInPixels)
+		read(i - yr, buffer[i])
+	}
+
+	for (let y = 0, p = 0; y < ih; y++) {
+		for (let x = 0; x < iw; x++) {
+			let divisor = 0
+			let offset = 0
+
+			mask.fill(0)
+
+			for (let i = 0; i < kh; i++) {
+				const a = y + i - yr
+
+				if (a < 0) continue
+				if (a >= ih) break
+
+				const row = buffer[i]
+
+				for (let j = 0, ki = i * kw; j < kw; j++, ki++) {
+					const b = x + j - xr
+
+					if (b >= 0 && b < iw) {
+						const k = kd[ki]
+						divisor += k
+
+						for (let c = 0, m = b * channels; c < channels; c++, m++) {
+							mask[c] += k * row[m]
+						}
+					}
+				}
+			}
+
+			if (!dynamicDivisorForEdges) {
+				divisor = kernel.divisor
+			}
+
+			if (normalize) {
+				if (divisor < 0) {
+					divisor = -divisor
+					offset = 1
+				}
+			}
+
+			if (divisor === 0) {
+				divisor = 1
+				offset = 0.5
+			}
+
+			for (let c = 0; c < channels; c++, p++) {
+				raw[p] = mask[c] / divisor + offset
+			}
+		}
+
+		shift()
+		read(y + yr + 1, buffer[buffer.length - 1])
+	}
+
+	return image
+}
+
+const EDGES = convolutionKernel(new Float64Array([0, -1, 0, -1, 4, -1, 0, -1, 0]), 3)
+const EMBOSS = convolutionKernel(new Float64Array([-1, 0, 0, 0, 0, 0, 0, 0, 1]), 3)
+const MEAN = convolutionKernel(new Float64Array([1, 1, 1, 1, 1, 1, 1, 1, 1]), 3)
+const SHARPEN = convolutionKernel(new Float64Array([0, -1, 0, -1, 5, -1, 0, -1, 0]), 3)
+const BLUR_5x5 = convolutionKernel(new Float64Array([1, 2, 3, 2, 1, 2, 4, 5, 4, 2, 3, 5, 6, 5, 3, 2, 4, 5, 4, 2, 1, 2, 3, 2, 1]), 5)
+
+export function gaussianBlurKernel(sigma: number = 1.4, size: number = 5) {
+	if (size < 2 || size % 2 === 0) {
+		throw new Error('size must be odd and greater or equal to 3')
+	}
+	if (sigma < 0.5 || sigma > 5) {
+		throw new Error('kernel size bust be in range [0.5..5]')
+	}
+
+	const sigmaSquared = sigma * sigma
+	const r = Math.trunc(Math.trunc(size) / 2)
+
+	function gaussian2D(x: number, y: number) {
+		return Math.exp((x * x + y * y) / (-2 * sigmaSquared)) / (2 * PI * sigmaSquared)
+	}
+
+	const kernel = new Float64Array(size * size)
+
+	for (let y = -r, i = 0; y <= r; y++) {
+		for (let x = -r; x <= r; x++, i++) {
+			kernel[i] = gaussian2D(x, y)
+		}
+	}
+
+	const min = kernel[0]
+
+	for (let i = 0; i < kernel.length; i++) {
+		kernel[i] /= min
+	}
+
+	return convolutionKernel(kernel, size)
+}
+
+export function edges(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	return convolution(image, EDGES, options)
+}
+
+export function emboss(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	return convolution(image, EMBOSS, options)
+}
+
+export function mean(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	return convolution(image, MEAN, options)
+}
+
+export function sharpen(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	return convolution(image, SHARPEN, options)
+}
+
+export function blur5x5(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	return convolution(image, BLUR_5x5, options)
+}
+
+export function gaussianBlur(image: Image, options: Partial<GaussianBlurConvolutionOptions> = DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS) {
+	return convolution(image, gaussianBlurKernel(options.sigma, options.size), options)
 }

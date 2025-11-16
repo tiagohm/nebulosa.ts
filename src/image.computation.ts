@@ -21,7 +21,7 @@ export function histogram(image: Image, channel?: ImageChannelOrGray, transform?
 		if (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') {
 			for (let i = channelIndex(channel); i < raw.length; i += 3) {
 				const v = raw[i]
-				const p = truncatePixel(transform?.(v) ?? v)
+				const p = truncatePixel(transform?.(v) ?? v, 65535)
 				histogram[p]++
 			}
 		} else {
@@ -29,14 +29,14 @@ export function histogram(image: Image, channel?: ImageChannelOrGray, transform?
 
 			for (let i = 0; i < raw.length; i += 3) {
 				const v = raw[i] * red + raw[i + 1] * green + raw[i + 2] * blue
-				const p = truncatePixel(transform?.(v) ?? v)
+				const p = truncatePixel(transform?.(v) ?? v, 65535)
 				histogram[p]++
 			}
 		}
 	} else {
 		for (let i = 0; i < raw.length; i++) {
 			const v = raw[i]
-			const p = truncatePixel(transform?.(v) ?? v)
+			const p = truncatePixel(transform?.(v) ?? v, 65535)
 			histogram[p]++
 		}
 	}

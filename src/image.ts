@@ -211,6 +211,10 @@ export function writeImageToFits(image: Image, output: Buffer | Sink) {
 	return writeFits(output, [hdu])
 }
 
-export function truncatePixel(p: number) {
-	return Math.max(0, Math.min(Math.trunc(p * 65535), 65535))
+export function clampPixel(p: number, max: number) {
+	return Math.max(0, Math.min(p, max))
+}
+
+export function truncatePixel(p: number, max: number) {
+	return clampPixel(Math.trunc(p * max), max)
 }
