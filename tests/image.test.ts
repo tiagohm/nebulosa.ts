@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes, readFits } from '../src/fits'
 import { FitsDataSource, readImageFromFits, writeImageToFits } from '../src/image'
-import { adf, blur5x5, convolution, convolutionKernel, debayer, edges, emboss, gaussianBlur, grayscale, horizontalFlip, invert, mean, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import { adf, blur5x5, convolution, convolutionKernel, debayer, edges, emboss, gaussianBlur, grayscale, horizontalFlip, invert, mean, psf, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import { fileHandleSink, fileHandleSource } from '../src/io'
 import { BITPIXES, CHANNELS, readImage, readImageAndSaveWithOptions, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
@@ -118,6 +118,7 @@ test('grayscale', async () => {
 
 	expect(image.header.NAXIS).toBe(2)
 	expect(image.header.NAXIS3).toBeUndefined()
+	expect(image.metadata.stride).toBe(image.metadata.width)
 	expect(image.metadata.channels).toBe(1)
 }, 5000)
 
@@ -161,6 +162,14 @@ test('convolution gaussian blur', () => {
 
 test('convolution gaussian blur 11x11', () => {
 	return readImageTransformAndSave((i) => gaussianBlur(i, { sigma: 3, size: 11 }), 'conv-gaussian-blur-11', '666479278a517554e6cdd15f117e5a90')
+}, 5000)
+
+test('psf', () => {
+	return readImageTransformAndSave((i) => psf(i), 'psf', '988a9ee41852e889d37b712d51653fe4')
+}, 5000)
+
+test('mean + psf', () => {
+	return readImageTransformAndSave((i) => psf(mean(grayscale(i))), 'mean-psf', 'e26eeaa2e1991f2709a85e898ce9fdf8')
 }, 5000)
 
 test('horizontal flip', () => {

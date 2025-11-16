@@ -45,7 +45,7 @@ export interface ImageMetadata {
 	readonly width: number
 	readonly height: number
 	readonly channels: number
-	readonly strideInPixels: number
+	readonly stride: number
 	readonly pixelCount: number
 	readonly pixelSizeInBytes: number
 	readonly bitpix: Bitpix
@@ -81,7 +81,7 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 	const pixelSizeInBytes = bitpixInBytes(bp)
 	const pixelCount = sw * sh
 	const strideInBytes = sw * pixelSizeInBytes
-	const strideInPixels = sw * nc
+	const stride = sw * nc
 	const buffer = Buffer.allocUnsafe(strideInBytes)
 	const raw = new Float64Array(pixelCount * nc)
 	const minMax = [1, 0]
@@ -122,7 +122,7 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 		}
 	}
 
-	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, strideInPixels, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPatternKeyword(header) }
+	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, stride, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPatternKeyword(header) }
 	return { header, metadata, raw }
 }
 

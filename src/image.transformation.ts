@@ -184,7 +184,7 @@ export function debayer(image: Image, pattern?: CfaPattern) {
 
 			return {
 				header: { ...image.header, NAXIS: 3, NAXIS3: 3 },
-				metadata: { ...metadata, channels: 3, strideInPixels: width * 3 },
+				metadata: { ...metadata, channels: 3, stride: width * 3 },
 				raw: output,
 			}
 		}
@@ -250,12 +250,12 @@ export function scnr(image: Image, channel: ImageChannel = 'GREEN', amount: numb
 
 export function horizontalFlip(image: Image) {
 	const { raw, metadata } = image
-	const { height, channels, strideInPixels } = metadata
-	const maxW = Math.trunc(strideInPixels / 2)
-	const sc = strideInPixels - channels
+	const { height, channels, stride } = metadata
+	const maxW = Math.trunc(stride / 2)
+	const sc = stride - channels
 
 	for (let y = 0; y < height; y++) {
-		const k = y * strideInPixels
+		const k = y * stride
 
 		for (let x = 0; x < maxW; x += channels) {
 			let si = k + sc - x
@@ -274,15 +274,15 @@ export function horizontalFlip(image: Image) {
 
 export function verticalFlip(image: Image) {
 	const { raw, metadata } = image
-	const { height, channels, strideInPixels } = metadata
-	const sh = (height - 1) * strideInPixels
+	const { height, channels, stride } = metadata
+	const sh = (height - 1) * stride
 	const maxH = Math.trunc(height / 2)
 
 	for (let y = 0; y < maxH; y++) {
-		const k = y * strideInPixels
+		const k = y * stride
 		const ek = sh - k
 
-		for (let x = 0; x < strideInPixels; x += channels) {
+		for (let x = 0; x < stride; x += channels) {
 			let si = k + x
 			let ei = ek + x
 
@@ -411,7 +411,7 @@ export function grayscale(image: Image, channel?: ImageChannelOrGray): Image {
 	if (image.metadata.channels === 1) return image
 
 	const header = structuredClone(image.header)
-	const metadata: ImageMetadata = { ...image.metadata, bayer: undefined, channels: 1 }
+	const metadata: ImageMetadata = { ...image.metadata, bayer: undefined, channels: 1, stride: image.metadata.width }
 
 	const color = image.raw
 	const n = metadata.pixelCount
@@ -472,6 +472,13 @@ export function convolutionKernel(kernel: Readonly<NumberArray>, width: number, 
 	return { kernel, width, height, divisor }
 }
 
+function shift(buffer: NumberArray[]) {
+	const n = buffer.length - 1
+	const first = buffer[0]
+	for (let i = 0; i < n; i++) buffer[i] = buffer[i + 1]
+	buffer[n] = first
+}
+
 export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDivisorForEdges = true, normalize = true }: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	if (kernel.width % 2 === 0 || kernel.height % 2 === 0) {
 		throw new Error('kernel size must be odd')
@@ -484,7 +491,7 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 	const yr = Math.trunc(kernel.height / 2)
 
 	const { raw, metadata } = image
-	const { width: iw, height: ih, channels, strideInPixels } = metadata
+	const { width: iw, height: ih, channels, stride } = metadata
 	const mask = new Float64Array(channels)
 	const { width: kw, height: kh, kernel: kd } = kernel
 	const buffer = new Array<Float64Array>(kh)
@@ -493,20 +500,13 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 		if (y < 0 || y >= ih) {
 			// output.fill(0)
 		} else {
-			const start = y * strideInPixels
-			output.set(raw.subarray(start, start + strideInPixels))
+			const start = y * stride
+			output.set(raw.subarray(start, start + stride))
 		}
 	}
 
-	function shift() {
-		const n = buffer.length - 1
-		const first = buffer[0]
-		for (let i = 0; i < n; i++) buffer[i] = buffer[i + 1]
-		buffer[n] = first
-	}
-
 	for (let i = 0; i < buffer.length; i++) {
-		buffer[i] = new Float64Array(strideInPixels)
+		buffer[i] = new Float64Array(stride)
 		read(i - yr, buffer[i])
 	}
 
@@ -560,7 +560,7 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 			}
 		}
 
-		shift()
+		shift(buffer)
 		read(y + yr + 1, buffer[buffer.length - 1])
 	}
 
@@ -627,4 +627,102 @@ export function blur5x5(image: Image, options: Partial<ConvolutionOptions> = DEF
 
 export function gaussianBlur(image: Image, options: Partial<GaussianBlurConvolutionOptions> = DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS) {
 	return convolution(image, gaussianBlurKernel(options.sigma, options.size), options)
+}
+
+// https://github.com/KDE/kstars/blob/master/kstars/ekos/guide/internalguide/guidealgorithms.cpp
+
+//                              A      B1     B2     C1    C2      C3     D1       D2     D3
+const PSF = new Float64Array([0.906, 0.584, 0.365, 0.117, 0.049, -0.05, -0.064, -0.074, -0.094])
+
+// PSF Grid
+// D3 D3 D3 D3 D3 D3 D3 D3 D3
+// D3 D3 D3 D2 D1 D2 D3 D3 D3
+// D3 D3 C3 C2 C1 C2 C3 D3 D3
+// D3 D2 C2 B2 B1 B2 C2 D2 D3
+// D3 D1 C1 B1 A  B1 C1 D1 D3
+// D3 D2 C2 B2 B1 B2 C2 D2 D3
+// D3 D3 C3 C2 C1 C2 C3 D3 D3
+// D3 D3 D3 D2 D1 D2 D3 D3 D3
+// D3 D3 D3 D3 D3 D3 D3 D3 D3
+
+// 1@A
+// 4@B1, B2, C1, C3, D1
+// 8@C2, D2
+// 44 * D3
+
+export function psf(image: Image) {
+	const { raw, metadata } = image
+	const { width: iw, height: ih, channels, stride } = metadata
+	const buffer = new Array<Float64Array>(9)
+
+	function read(y: number, output: Float64Array) {
+		if (y < 0 || y >= ih) {
+			// output.fill(0)
+		} else {
+			const start = y * stride
+			output.set(raw.subarray(start, start + stride))
+		}
+	}
+
+	for (let i = 0; i < buffer.length; i++) {
+		buffer[i] = new Float64Array(stride)
+		read(i, buffer[i])
+	}
+
+	const c0 = 0
+	const c1 = channels
+	const c2 = 2 * channels
+	const c3 = 3 * channels
+	const c4 = 4 * channels
+
+	for (let y = 4; y < ih - 4; y++) {
+		const py = y * stride
+
+		const b0 = buffer[0]
+		const b1 = buffer[1]
+		const b2 = buffer[2]
+		const b3 = buffer[3]
+		const b4 = buffer[4]
+		const b5 = buffer[5]
+		const b6 = buffer[6]
+		const b7 = buffer[7]
+		const b8 = buffer[8]
+
+		for (let x = 4; x < iw - 4; x++) {
+			for (let c = 0, xi = x * channels; c < channels; c++, xi++) {
+				const A = b4[xi + c0]
+				const B1 = b3[xi + c0] + b5[xi + c0] + b4[xi + c1] + b4[xi - c1]
+				const B2 = b3[xi - c1] + b3[xi + c1] + b5[xi - c1] + b5[xi + c1]
+				const C1 = b2[xi + c0] + b4[xi - c2] + b4[xi + c2] + b6[xi + c0]
+				const C2 = b2[xi - c1] + b2[xi + c1] + b3[xi - c2] + b3[xi + c2] + b5[xi - c2] + b5[xi + c2] + b6[xi - c1] + b6[xi + c1]
+				const C3 = b2[xi - c2] + b2[xi + c2] + b6[xi - c2] + b6[xi + c2]
+				const D1 = b1[xi + c0] + b4[xi - c3] + b4[xi + c3] + b7[xi + c0]
+				const D2 = b1[xi - c1] + b1[xi + c1] + b3[xi - c3] + b3[xi + c3] + b5[xi - c3] + b5[xi + c3] + b7[xi - c1] + b7[xi + c1]
+				let D3 = b2[xi - c4] + b2[xi - c3] + b2[xi + c3] + b2[xi + c4] + b3[xi - c4] + b3[xi + c4] + b4[xi - c4] + b4[xi + c4] + b5[xi - c4] + b5[xi + c4] + b6[xi - c4] + b6[xi - c3] + b6[xi + c3] + b6[xi + c4]
+
+				D3 += b0[xi - c4] + b0[xi - c3] + b0[xi - c2] + b0[xi - c1] + b0[xi - c0]
+				D3 += b0[xi + c4] + b0[xi + c3] + b0[xi + c2] + b0[xi + c1]
+
+				D3 += b1[xi - c4] + b1[xi - c3] + b1[xi - c2]
+				D3 += b1[xi + c4] + b1[xi + c3] + b1[xi + c2]
+
+				D3 += b7[xi - c4] + b7[xi - c3] + b7[xi - c2]
+				D3 += b7[xi + c4] + b7[xi + c3] + b7[xi + c2]
+
+				D3 += b8[xi - c4] + b8[xi - c3] + b8[xi - c2] + b8[xi - c1] + b8[xi - c0]
+				D3 += b8[xi + c4] + b8[xi + c3] + b8[xi + c2] + b8[xi + c1]
+
+				const mean = (A + B1 + B2 + C1 + C2 + C3 + D1 + D2 + D3) / 81
+				const mean4 = mean * 4
+				const mean8 = mean * 8
+
+				raw[py + xi] = PSF[0] * (A - mean) + PSF[1] * (B1 - mean4) + PSF[2] * (B2 - mean4) + PSF[3] * (C1 - mean4) + PSF[4] * (C2 - mean8) + PSF[5] * (C3 - mean4) + PSF[6] * (D1 - mean4) + PSF[7] * (D2 - mean8) + PSF[8] * (D3 - 44 * mean)
+			}
+		}
+
+		shift(buffer)
+		read(y + 5, buffer[buffer.length - 1])
+	}
+
+	return image
 }

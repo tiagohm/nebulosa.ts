@@ -287,6 +287,17 @@ debayer(image) // Debayer the image
 scnr(image, channel, amount, method) // Apply SCNR to image
 horizontalFlip(image) // Horizontal flip the image
 verticalFlip(image) // Vertical flip the image
+grayscale(image)
+convolution(image)
+edge(image)
+emboss(image)
+mean(image)
+sharpen(image)
+blur5x5(image)
+gaussianBlur(image)
+psf(image)
+darkBiasSubtraction(image, dark, bias)
+flatCorrection(image, flat)
 histogram(image, channel) // Generate the histogram from image
 median(image, channel) // Calculate the median from image
 medianAbsoluteDiviation(image, channel) // Calculate the MAD from image
