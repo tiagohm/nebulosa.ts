@@ -18,8 +18,6 @@ export type GrayscaleAlgorithm = 'BT709' | 'RMY' | 'Y' | Grayscale
 
 export type ImageChannelOrGray = ImageChannel | GrayscaleAlgorithm | 'GRAY'
 
-export type HistogramPixelTransform = (p: number) => number
-
 export interface WriteImageToFormatOptions {
 	format?: OutputOptions | JpegOptions | PngOptions | WebpOptions | AvifOptions | HeifOptions | JxlOptions | GifOptions | Jp2Options | TiffOptions
 	horizontalFlip?: boolean

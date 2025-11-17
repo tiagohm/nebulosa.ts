@@ -1,17 +1,20 @@
 import type { NumberArray } from './math'
 
 interface HistogramCache {
-	mode?: readonly [number, number]
+	mode?: readonly [number, number] // [pixel, count]
 	count?: number
 	mean?: number
 	variance?: number
 	standardDeviation?: number
+	median?: number
+	minimum?: readonly [number, number] // [pixel, count]
+	maximum?: readonly [number, number] // [pixel, count]
 }
 
 export class Histogram {
 	private readonly cache: HistogramCache = {}
 
-	constructor(private readonly histogram: NumberArray) {}
+	constructor(private readonly histogram: Readonly<NumberArray>) {}
 
 	reset(key?: keyof HistogramCache) {
 		if (key) {
@@ -30,10 +33,13 @@ export class Histogram {
 
 		let max = 0
 		let ret = 0
+		const n = this.histogram.length
 
-		for (let i = 0; i < this.histogram.length; i++) {
-			if (this.histogram[i] > max) {
-				max = this.histogram[i]
+		for (let i = 0; i < n; i++) {
+			const value = this.histogram[i]
+
+			if (value !== 0 && value > max) {
+				max = value
 				ret = i
 			}
 		}
@@ -49,8 +55,9 @@ export class Histogram {
 		}
 
 		let ret = 0
+		const n = this.histogram.length
 
-		for (let i = 0; i < this.histogram.length; i++) {
+		for (let i = 0; i < n; i++) {
 			ret += this.histogram[i]
 		}
 
@@ -64,14 +71,14 @@ export class Histogram {
 			return this.cache.mean
 		}
 
-		const count = this.count()
 		let ret = 0
+		const n = this.histogram.length
 
-		for (let i = 0; i < this.histogram.length; i++) {
+		for (let i = 0; i < n; i++) {
 			ret += i * this.histogram[i]
 		}
 
-		ret /= count
+		ret /= this.count()
 		this.cache.mean = ret
 		return ret
 	}
@@ -81,13 +88,16 @@ export class Histogram {
 			return this.cache.variance
 		}
 
-		const mean = this.mean()
 		let ret = 0
+		const mean = this.mean()
+		const n = this.histogram.length
 
-		for (let i = 0; i < this.histogram.length; i++) {
-			if (this.histogram[i]) {
+		for (let i = 0; i < n; i++) {
+			const value = this.histogram[i]
+
+			if (value !== 0) {
 				const d = i - mean
-				ret += this.histogram[i] * (d * d)
+				ret += value * (d * d)
 			}
 		}
 
@@ -107,6 +117,10 @@ export class Histogram {
 	}
 
 	median() {
+		if (this.cache.median) {
+			return this.cache.median
+		}
+
 		let prev = 0
 		let cumulative = 0
 		let i = 0
@@ -121,6 +135,55 @@ export class Histogram {
 		}
 
 		const p = (n - prev) / this.histogram[i]
-		return i + p
+		this.cache.median = i + p
+		return this.cache.median
+	}
+
+	minimum() {
+		if (this.cache.minimum) {
+			return this.cache.minimum
+		}
+
+		let count = 0
+		let ret = 0
+		const n = this.histogram.length
+
+		for (let i = 0; i < n; i++) {
+			const value = this.histogram[i]
+
+			if (value !== 0) {
+				count = value
+				ret = i
+				break
+			}
+		}
+
+		this.cache.minimum = [ret, count]
+
+		return this.cache.minimum
+	}
+
+	maximum() {
+		if (this.cache.maximum) {
+			return this.cache.maximum
+		}
+
+		let count = 0
+		let ret = 0
+		const n = this.histogram.length
+
+		for (let i = n; i >= 0; i--) {
+			const value = this.histogram[i]
+
+			if (value !== 0) {
+				count = value
+				ret = i
+				break
+			}
+		}
+
+		this.cache.maximum = [ret, count]
+
+		return this.cache.maximum
 	}
 }

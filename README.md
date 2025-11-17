@@ -227,6 +227,12 @@ eclipticJ2000(pv)
 ecliptic(pv, time)
 ```
 
+### Geometry ![](bun.webp) ![](browser.webp)
+
+```ts
+const c = rectIntersection(a, b)
+```
+
 ### GUST86 ![](bun.webp) ![](browser.webp)
 
 ```ts
