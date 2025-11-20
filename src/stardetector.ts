@@ -33,7 +33,7 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 	const { raw, metadata } = image
 	const { width, height, stride } = metadata
 	const convRect: Rect = { left: 4, top: 4, right: width - 5, bottom: height - 5 }
-	let localRect: Rect = { left: 0, top: 0, bottom: 0, right: 0 }
+	let rect: Rect = { left: 0, top: 0, bottom: 0, right: 0 }
 	const hist = new Int32Array(1 << 18)
 	const maxX = convRect.right - 4
 	const maxY = convRect.bottom - 4
@@ -68,15 +68,13 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 
 			if (!isMax) continue
 
-			hist.fill(0)
-
 			// Compare local maximum to mean value of surrounding pixels
-			localRect.left = x - 7
-			localRect.top = y - 7
-			localRect.right = x + 7
-			localRect.bottom = y + 7
-			localRect = rectIntersection(localRect, convRect, localRect)!
-			const { mean, standardDeviation } = histogram(image, 'GRAY', undefined, localRect, hist)
+			rect.left = x - 7
+			rect.top = y - 7
+			rect.right = x + 7
+			rect.bottom = y + 7
+			rect = rectIntersection(rect, convRect, rect)!
+			const { mean, standardDeviation } = histogram(image, 'GRAY', undefined, rect, hist)
 
 			// This is our measure of star intensity
 			const h = (value - mean) / standardDeviation
@@ -106,6 +104,8 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 }
 
 export function mergeVeryCloseStars(stars: StarList, minLimitSq: number = 25) {
+	if (stars.size <= 0) return
+
 	let current = stars.iterator().next().value
 
 	while (current !== undefined) {
@@ -132,7 +132,7 @@ export function excludeStarsFitWithinRegion(stars: StarList, searchRegion: numbe
 	if (stars.size <= 0) return
 
 	let current = stars.iterator().next()?.value
-	const toDelete = new Set<Star>()
+	const deleted = new Set<Star>()
 
 	searchRegion += 5 // extra safety margin
 
@@ -149,8 +149,8 @@ export function excludeStarsFitWithinRegion(stars: StarList, searchRegion: numbe
 				// stars closer than search region, exclude them both
 				// but do not let a very dim star eliminate a very bright star
 				if (b.h / a.h < 5) {
-					toDelete.add(a)
-					toDelete.add(b)
+					deleted.add(a)
+					deleted.add(b)
 				}
 			}
 
@@ -158,7 +158,7 @@ export function excludeStarsFitWithinRegion(stars: StarList, searchRegion: numbe
 		}
 	}
 
-	for (const s of toDelete) {
+	for (const s of deleted) {
 		stars.delete(s)
 	}
 }
@@ -168,16 +168,6 @@ interface Star {
 	readonly y: number
 	readonly h: number
 	next?: this
-}
-
-interface StarListIterator extends Iterator<Star, Star | undefined, Star> {
-	readonly next: () => IteratorResult<Star, Star | undefined>
-	readonly hasNext: () => boolean
-	readonly value: () => Star | undefined
-	readonly skip: (n: number) => void
-	readonly reset: () => void
-	readonly resetTo: (s: Star) => void
-	readonly delete: () => void
 }
 
 export class StarList implements Iterable<Star, Star | undefined, Star> {
@@ -268,48 +258,24 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		this.size = 0
 	}
 
-	toArray() {
-		let i = 0
-		const data = new Array<Star>(this.size)
-		for (const star of this) data[i++] = star
+	array() {
+		const n = this.size
+		const data = new Array<Star>(n)
+		for (let i = 0, s = this.head; i < n; i++, s = s!.next) data[i] = s!
 		return data
 	}
 
-	iterator(): StarListIterator {
+	iterator(): Iterator<Star, Star | undefined> {
 		let current = this.head
 
 		return {
-			value: () => {
-				return current
-			},
-			hasNext: () => {
-				return !!current
-			},
-			next: (): IteratorResult<Star, Star | undefined> => {
+			next: () => {
 				if (current) {
 					const value = current
 					current = current.next
 					return { value, done: false }
 				} else {
 					return { value: undefined, done: true }
-				}
-			},
-			skip: (n) => {
-				while (n-- > 0 && current) {
-					current = current?.next
-				}
-			},
-			reset: () => {
-				current = this.head
-			},
-			resetTo: (s) => {
-				current = s
-			},
-			delete: () => {
-				if (current) {
-					const next = current.next
-					this.delete(current)
-					current = next
 				}
 			},
 		} as const

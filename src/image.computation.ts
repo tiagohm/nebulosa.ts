@@ -11,8 +11,7 @@ export function median(image: Image, channel?: ImageChannelOrGray, transform?: H
 
 const STANDARD_DEVIATION_SCALE = 1.482602218505602
 
-export function medianAbsoluteDiviation(image: Image, channel?: ImageChannelOrGray, area?: Partial<Rect>, bits?: NumberArray | number, normalized: boolean = false, m?: number) {
-	m ||= median(image, channel, undefined, area, bits)
+export function medianAbsoluteDeviation(image: Image, m: number, channel?: ImageChannelOrGray, area?: Partial<Rect>, bits?: NumberArray | number, normalized: boolean = false) {
 	const mad = median(image, channel, (p) => Math.abs(p - m), area, bits)
 	return normalized ? STANDARD_DEVIATION_SCALE * mad : mad
 }
@@ -22,9 +21,10 @@ export const DEFAULT_CLIPPING_POINT = -2.8
 
 // Adaptive Display Function Algorithm
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Adaptive_Display_Function_Algorithm__
-export function adf(image: Image, channel?: ImageChannelOrGray, meanBackground: number = DEFAULT_MEAN_BACKGROUND, clippingPoint: number = DEFAULT_CLIPPING_POINT) {
-	const med = median(image, channel)
-	const mad = medianAbsoluteDiviation(image, channel, undefined, undefined, true, med)
+export function adf(image: Image, channel?: ImageChannelOrGray, meanBackground: number = DEFAULT_MEAN_BACKGROUND, clippingPoint: number = DEFAULT_CLIPPING_POINT, area?: Partial<Rect>) {
+	const hist = new Int32Array(65536)
+	const med = median(image, channel, undefined, area, hist)
+	const mad = medianAbsoluteDeviation(image, med, channel, area, hist, true)
 	const upperHalf = med > 0.5
 	const shadow = upperHalf || mad === 0 ? 0 : Math.min(1, Math.max(0, med + clippingPoint * mad))
 	const highlight = !upperHalf || mad === 0 ? 1 : Math.min(1, Math.max(0, med - clippingPoint * mad))
@@ -35,7 +35,7 @@ export function adf(image: Image, channel?: ImageChannelOrGray, meanBackground: 
 }
 
 export function histogram(image: Image, channel?: ImageChannelOrGray, transform?: HistogramPixelTransform, area?: Partial<Rect>, bits: NumberArray | number = 16) {
-	const histogram = typeof bits === 'number' ? new Int32Array(1 << bits) : bits
+	const histogram = typeof bits === 'number' ? new Int32Array(1 << bits) : bits.fill(0)
 	const max = histogram.length - 1
 	const { raw, metadata } = image
 	const { stride, width, height, channels } = metadata

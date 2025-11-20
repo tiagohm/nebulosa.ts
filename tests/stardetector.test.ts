@@ -6,43 +6,43 @@ import { readImage } from './image.util'
 test('star list', () => {
 	const list = new StarList(5)
 
-	expect(list.toArray().map((e) => e.h)).toEqual([])
+	expect(list.array().map((e) => e.h)).toEqual([])
 
 	list.add(0, 0, 1)
 	expect(list.size).toBe(1)
-	expect(list.toArray().map((e) => e.h)).toEqual([1])
+	expect(list.array().map((e) => e.h)).toEqual([1])
 
 	list.add(0, 0, 2)
 	expect(list.size).toBe(2)
-	expect(list.toArray().map((e) => e.h)).toEqual([1, 2])
+	expect(list.array().map((e) => e.h)).toEqual([1, 2])
 
 	list.add(0, 0, 1.5)
 	expect(list.size).toBe(3)
-	expect(list.toArray().map((e) => e.h)).toEqual([1, 1.5, 2])
+	expect(list.array().map((e) => e.h)).toEqual([1, 1.5, 2])
 
 	list.add(0, 0, 0.5)
 	expect(list.size).toBe(4)
-	expect(list.toArray().map((e) => e.h)).toEqual([0.5, 1, 1.5, 2])
+	expect(list.array().map((e) => e.h)).toEqual([0.5, 1, 1.5, 2])
 
 	list.add(0, 0, 0.2)
 	expect(list.size).toBe(5)
-	expect(list.toArray().map((e) => e.h)).toEqual([0.2, 0.5, 1, 1.5, 2])
+	expect(list.array().map((e) => e.h)).toEqual([0.2, 0.5, 1, 1.5, 2])
 
 	list.add(0, 0, 1.7)
 	expect(list.size).toBe(5)
-	expect(list.toArray().map((e) => e.h)).toEqual([0.5, 1, 1.5, 1.7, 2])
+	expect(list.array().map((e) => e.h)).toEqual([0.5, 1, 1.5, 1.7, 2])
 
-	list.delete(list.toArray()[1])
+	list.delete(list.array()[1])
 	expect(list.size).toBe(4)
-	expect(list.toArray().map((e) => e.h)).toEqual([0.5, 1.5, 1.7, 2])
+	expect(list.array().map((e) => e.h)).toEqual([0.5, 1.5, 1.7, 2])
 
-	list.delete(list.toArray()[3])
+	list.delete(list.array()[3])
 	expect(list.size).toBe(3)
-	expect(list.toArray().map((e) => e.h)).toEqual([0.5, 1.5, 1.7])
+	expect(list.array().map((e) => e.h)).toEqual([0.5, 1.5, 1.7])
 
-	list.delete(list.toArray()[0])
+	list.delete(list.array()[0])
 	expect(list.size).toBe(2)
-	expect(list.toArray().map((e) => e.h)).toEqual([1.5, 1.7])
+	expect(list.array().map((e) => e.h)).toEqual([1.5, 1.7])
 })
 
 test('merge stars & exclusion', () => {
@@ -67,7 +67,7 @@ test('merge stars & exclusion', () => {
 	mergeVeryCloseStars(list)
 
 	expect(list.size).toBe(4)
-	let array = list.toArray()
+	let array = list.array()
 	expect(array.map((e) => e.h)).toEqual([50, 50, 50, 900])
 	expect(array.map((e) => e.x)).toEqual([100, 800, 102, 799])
 	expect(array.map((e) => e.y)).toEqual([100, 100, 803, 803])
@@ -75,7 +75,7 @@ test('merge stars & exclusion', () => {
 	excludeStarsFitWithinRegion(list, 1000)
 
 	expect(list.size).toBe(1)
-	array = list.toArray()
+	array = list.array()
 	expect(array.map((e) => e.h)).toEqual([900])
 	expect(array.map((e) => e.x)).toEqual([799])
 	expect(array.map((e) => e.y)).toEqual([803])
