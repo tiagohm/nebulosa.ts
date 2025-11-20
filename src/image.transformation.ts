@@ -1,7 +1,6 @@
 import { PI } from './constants'
 import { exposureTimeKeyword } from './fits'
 import { type CfaPattern, channelIndex, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type SCNRAlgorithm, type SCNRProtectionMethod, truncatePixel } from './image'
-import { median as computeMedian, medianAbsoluteDiviation } from './image.computation'
 import type { NumberArray } from './math'
 
 // Apply Screen Transfer Function to image.
@@ -36,23 +35,6 @@ export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, hig
 	}
 
 	return image
-}
-
-export const DEFAULT_MEAN_BACKGROUND = 0.25
-export const DEFAULT_CLIPPING_POINT = -2.8
-
-// Adaptive Display Function Algorithm
-// https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Adaptive_Display_Function_Algorithm__
-export function adf(image: Image, channel?: ImageChannelOrGray, meanBackground: number = DEFAULT_MEAN_BACKGROUND, clippingPoint: number = DEFAULT_CLIPPING_POINT) {
-	const med = computeMedian(image, channel)
-	const mad = medianAbsoluteDiviation(image, channel, true, med)
-	const upperHalf = med > 0.5
-	const shadow = upperHalf || mad === 0 ? 0 : Math.min(1, Math.max(0, med + clippingPoint * mad))
-	const highlight = !upperHalf || mad === 0 ? 1 : Math.min(1, Math.max(0, med - clippingPoint * mad))
-	const x = upperHalf ? meanBackground : med - shadow
-	const m = upperHalf ? highlight - med : meanBackground
-	const midtone = x === 0 ? 0 : x === m ? 0.5 : x === 1 ? 1 : ((m - 1) * x) / ((2 * m - 1) * x - m)
-	return [midtone, shadow, highlight] as const
 }
 
 const CFA_PATTERNS: Record<CfaPattern, number[][]> = {

@@ -14,7 +14,11 @@ interface HistogramCache {
 export class Histogram {
 	private readonly cache: HistogramCache = {}
 
-	constructor(private readonly histogram: Readonly<NumberArray>) {}
+	constructor(
+		readonly histogram: Readonly<NumberArray>,
+		private readonly max: number,
+		private readonly maxSq: number = max * max,
+	) {}
 
 	reset(key?: keyof HistogramCache) {
 		if (key) {
@@ -26,7 +30,7 @@ export class Histogram {
 		}
 	}
 
-	mode() {
+	get mode() {
 		if (this.cache.mode) {
 			return this.cache.mode
 		}
@@ -44,12 +48,14 @@ export class Histogram {
 			}
 		}
 
+		if (this.max) ret /= this.max
+
 		this.cache.mode = [ret, max]
 
 		return this.cache.mode
 	}
 
-	count() {
+	get count() {
 		if (this.cache.count) {
 			return this.cache.count
 		}
@@ -66,7 +72,7 @@ export class Histogram {
 		return ret
 	}
 
-	mean() {
+	get mean() {
 		if (this.cache.mean) {
 			return this.cache.mean
 		}
@@ -78,18 +84,19 @@ export class Histogram {
 			ret += i * this.histogram[i]
 		}
 
-		ret /= this.count()
+		ret /= this.count
+		if (this.max) ret /= this.max
 		this.cache.mean = ret
 		return ret
 	}
 
-	variance() {
+	get variance() {
 		if (this.cache.variance) {
 			return this.cache.variance
 		}
 
 		let ret = 0
-		const mean = this.mean()
+		const mean = this.max ? this.mean * this.max : this.mean
 		const n = this.histogram.length
 
 		for (let i = 0; i < n; i++) {
@@ -101,22 +108,23 @@ export class Histogram {
 			}
 		}
 
-		ret /= this.count()
+		ret /= this.count
+		if (this.maxSq) ret /= this.maxSq
 		this.cache.variance = ret
 		return ret
 	}
 
-	standardDeviation() {
+	get standardDeviation() {
 		if (this.cache.standardDeviation) {
 			return this.cache.standardDeviation
 		}
 
-		const ret = Math.sqrt(this.variance())
+		const ret = Math.sqrt(this.variance)
 		this.cache.standardDeviation = ret
 		return ret
 	}
 
-	median() {
+	get median() {
 		if (this.cache.median) {
 			return this.cache.median
 		}
@@ -125,7 +133,7 @@ export class Histogram {
 		let cumulative = 0
 		let i = 0
 
-		const n = this.count() / 2
+		const n = this.count / 2
 
 		while (true) {
 			prev = cumulative
@@ -135,11 +143,13 @@ export class Histogram {
 		}
 
 		const p = (n - prev) / this.histogram[i]
-		this.cache.median = i + p
+		let ret = i + p
+		if (this.max) ret /= this.max
+		this.cache.median = ret
 		return this.cache.median
 	}
 
-	minimum() {
+	get minimum() {
 		if (this.cache.minimum) {
 			return this.cache.minimum
 		}
@@ -158,12 +168,12 @@ export class Histogram {
 			}
 		}
 
+		if (this.max) ret /= this.max
 		this.cache.minimum = [ret, count]
-
 		return this.cache.minimum
 	}
 
-	maximum() {
+	get maximum() {
 		if (this.cache.maximum) {
 			return this.cache.maximum
 		}
@@ -182,8 +192,8 @@ export class Histogram {
 			}
 		}
 
+		if (this.max) ret /= this.max
 		this.cache.maximum = [ret, count]
-
 		return this.cache.maximum
 	}
 }

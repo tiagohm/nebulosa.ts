@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes, readFits } from '../src/fits'
 import { FitsDataSource, readImageFromFits, writeImageToFits } from '../src/image'
-import { histogram } from '../src/image.computation'
-import { adf, blur5x5, convolution, convolutionKernel, debayer, edges, emboss, gaussianBlur, grayscale, horizontalFlip, invert, mean, psf, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import { adf, histogram } from '../src/image.computation'
+import { blur5x5, convolution, convolutionKernel, debayer, edges, emboss, gaussianBlur, grayscale, horizontalFlip, invert, mean, psf, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import { fileHandleSink, fileHandleSource } from '../src/io'
 import { BITPIXES, CHANNELS, readImage, readImageAndSaveWithOptions, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
@@ -82,46 +82,46 @@ test('histogram - red', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, 'RED')
 
-	expect(h.count()).toBe(732122)
-	expect(h.mean() / 65535).toBeCloseTo(0.0015438, 4)
-	expect(h.median() / 65535).toBeCloseTo(0.0008765, 7)
-	expect(h.variance() / (65535 * 65535)).toBeCloseTo(0.0001608, 7)
-	expect(h.standardDeviation() / 65535).toBeCloseTo(0.0126788, 7)
+	expect(h.count).toBe(732122)
+	expect(h.mean).toBeCloseTo(0.0015438, 4)
+	expect(h.median).toBeCloseTo(0.0008765, 7)
+	expect(h.variance).toBeCloseTo(0.0001608, 7)
+	expect(h.standardDeviation).toBeCloseTo(0.0126788, 7)
 })
 
 test('histogram - green', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, 'GREEN')
 
-	expect(h.count()).toBe(732122)
-	expect(h.mean() / 65535).toBeCloseTo(0.0016607, 4)
-	expect(h.median() / 65535).toBeCloseTo(0.0006596, 7)
-	expect(h.variance() / (65535 * 65535)).toBeCloseTo(0.0002826, 7)
-	expect(h.standardDeviation() / 65535).toBeCloseTo(0.0168121, 7)
+	expect(h.count).toBe(732122)
+	expect(h.mean).toBeCloseTo(0.0016607, 4)
+	expect(h.median).toBeCloseTo(0.0006596, 7)
+	expect(h.variance).toBeCloseTo(0.0002826, 7)
+	expect(h.standardDeviation).toBeCloseTo(0.0168121, 7)
 })
 
 test('histogram - blue', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, 'BLUE')
 
-	expect(h.count()).toBe(732122)
-	expect(h.mean() / 65535).toBeCloseTo(0.0014478, 4)
-	expect(h.median() / 65535).toBeCloseTo(0.000672, 7)
-	expect(h.variance() / (65535 * 65535)).toBeCloseTo(0.0002182, 7)
-	expect(h.standardDeviation() / 65535).toBeCloseTo(0.0147732, 7)
+	expect(h.count).toBe(732122)
+	expect(h.mean).toBeCloseTo(0.0014478, 4)
+	expect(h.median).toBeCloseTo(0.000672, 7)
+	expect(h.variance).toBeCloseTo(0.0002182, 7)
+	expect(h.standardDeviation).toBeCloseTo(0.0147732, 7)
 })
 
 test('histogram - roi', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, 'RED', undefined, { left: 450, top: 400, right: 705, bottom: 655 }, 20)
 
-	expect(h.count()).toBe(65536)
-	expect(h.mean() / 1048575).toBeCloseTo(0.0043881, 4)
-	expect(h.median() / 1048575).toBeCloseTo(0.0024723, 6)
-	expect(h.variance() / (1048575 * 1048575)).toBeCloseTo(0.0007618, 7)
-	expect(h.standardDeviation() / 1048575).toBeCloseTo(0.0276011, 6)
-	expect(h.minimum()[0] / 1048575).toBeCloseTo(0.0003971, 6)
-	expect(h.maximum()[0] / 1048575).toBeCloseTo(1, 5)
+	expect(h.count).toBe(65536)
+	expect(h.mean).toBeCloseTo(0.0043881, 4)
+	expect(h.median).toBeCloseTo(0.0024723, 6)
+	expect(h.variance).toBeCloseTo(0.0007618, 7)
+	expect(h.standardDeviation).toBeCloseTo(0.0276011, 6)
+	expect(h.minimum[0]).toBeCloseTo(0.0003971, 6)
+	expect(h.maximum[0]).toBeCloseTo(1, 5)
 })
 
 test('debayer', async () => {

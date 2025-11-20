@@ -714,11 +714,14 @@ export function mulMxNT(a: Readonly<Readonly<NumberArray>[]>, b: Readonly<Readon
 	for (let i = 0; i < m; i++) o[i] = new Float64Array(n)
 
 	for (let i = 0; i < m; i++) {
+		const ai = a[i]
+
 		for (let j = 0; j < n; j++) {
+			const bj = b[j]
 			let s = 0
 
 			for (let k = 0; k < b[i].length; k++) {
-				s += a[i][k] * b[j][k]
+				s += ai[k] * bj[k]
 			}
 
 			o[i][j] = s

@@ -7,7 +7,7 @@ export interface Rect {
 
 // https://dreamswork.github.io/qt4/qrect_8cpp_source.html
 
-export function rectIntersection(a: Rect, b: Rect) {
+export function rectIntersection(a: Rect, b: Rect, out?: Rect) {
 	let la = a.left
 	let ra = a.left
 	if (a.right - a.left < 0) la = a.right
@@ -32,10 +32,12 @@ export function rectIntersection(a: Rect, b: Rect) {
 
 	if (ta >= bb || tb >= ba) return undefined
 
-	const left = Math.max(la, lb)
-	const right = Math.min(ra, rb)
-	const top = Math.max(ta, tb)
-	const bottom = Math.min(ba, bb)
+	out ??= { left: 0, right: 0, top: 0, bottom: 0 }
 
-	return { left, right, top, bottom }
+	out.left = Math.max(la, lb)
+	out.right = Math.min(ra, rb)
+	out.top = Math.max(ta, tb)
+	out.bottom = Math.min(ba, bb)
+
+	return out
 }

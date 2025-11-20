@@ -2,14 +2,14 @@ import { expect, test } from 'bun:test'
 import { Histogram } from '../src/statistics'
 
 function histogram(data: number[], mode: readonly [number, number], count: number, mean: number, variance: number, stdev: number, median: number) {
-	const hist = new Histogram(data)
+	const hist = new Histogram(data, 0)
 
-	expect(hist.mode()).toEqual(mode)
-	expect(hist.count()).toBeCloseTo(count, 4)
-	expect(hist.mean()).toBeCloseTo(mean, 4)
-	expect(hist.variance()).toBeCloseTo(variance, 4)
-	expect(hist.standardDeviation()).toBeCloseTo(stdev, 4)
-	expect(hist.median()).toBeCloseTo(median, 4)
+	expect(hist.mode).toEqual(mode)
+	expect(hist.count).toBeCloseTo(count, 4)
+	expect(hist.mean).toBeCloseTo(mean, 4)
+	expect(hist.variance).toBeCloseTo(variance, 4)
+	expect(hist.standardDeviation).toBeCloseTo(stdev, 4)
+	expect(hist.median).toBeCloseTo(median, 4)
 }
 
 test('histogram', () => {
