@@ -198,6 +198,27 @@ describe('format', () => {
 		expect(formatTemporal(1709210096000, TIME_FORMAT)).toEqual('12:34:56.000')
 		expect(formatTemporal(1756510498123, TIME_FORMAT)).toEqual('23:34:58.123')
 	})
+
+	test('intl', () => {
+		const format = new Intl.DateTimeFormat('pt-BR', {
+			weekday: 'long',
+			year: 'numeric',
+			month: 'long',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit',
+			timeZoneName: 'short',
+			timeZone: 'America/Sao_Paulo',
+		})
+
+		expect(formatTemporal(1756510498123, format, 0)).toEqual('sexta-feira, 29 de agosto de 2025 às 20:34 BRT')
+	})
+
+	test('timezone', () => {
+		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss', 180)).toEqual('2025-08-30 02:34:58')
+		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss', -180)).toEqual('2025-08-29 20:34:58')
+		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss')).toEqual('2025-08-29 23:34:58')
+	})
 })
 
 describe('format using pattern', () => {
@@ -282,6 +303,11 @@ describe('format using pattern', () => {
 
 	test('iso 8601', () => {
 		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss.SSSZ')).toEqual('2028-08-08T08:09:07.008Z')
+	})
+
+	test('timezone', () => {
+		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss', 60)).toEqual('2028-08-08T09:09:07')
+		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss', -180)).toEqual('2028-08-08T05:09:07')
 	})
 })
 

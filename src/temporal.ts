@@ -162,8 +162,8 @@ export function temporalSet(temporal: Temporal, value: number, unit: TemporalUni
 	return temporal
 }
 
-export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat | string = DATE_TIME_FORMAT) {
-	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format) : format.format(temporal)
+export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat | string = DATE_TIME_FORMAT, timezone: number = TIMEZONE) {
+	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format, timezone) : format.format(temporal)
 }
 
 const SHORT_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -223,9 +223,14 @@ export function parseTemporal(input: string, pattern: string): Temporal {
 	return temporalFromDate(...date)
 }
 
-export function formatTemporalFromPattern(temporal: Temporal, pattern: string) {
+const TIMEZONE = -new Date().getTimezoneOffset()
+
+export function formatTemporalFromPattern(temporal: Temporal, pattern: string, timezone: number = TIMEZONE) {
 	const tokens = tokenizePattern(pattern)
 	const output: string[] = []
+
+	if (timezone) temporal += timezone * MINUTES
+
 	const date = pattern.includes('Y') || pattern.includes('M') || pattern.includes('D') ? temporalToDate(temporal) : undefined
 
 	for (const { start, end, found } of tokens) {
