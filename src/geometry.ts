@@ -10,24 +10,24 @@ export interface Rect {
 export function rectIntersection(a: Rect, b: Rect, out?: Rect) {
 	let la = a.left
 	let ra = a.left
-	if (a.right - a.left < 0) la = a.right
+	if (a.right < a.left) la = a.right
 	else ra = a.right
 
 	let lb = b.left
 	let rb = b.left
-	if (b.right - b.left < 0) lb = b.right
+	if (b.right < b.left) lb = b.right
 	else rb = b.right
 
 	if (la >= rb || lb >= ra) return undefined
 
 	let ta = a.top
 	let ba = a.top
-	if (a.bottom - a.top < 0) ta = a.bottom
+	if (a.bottom < a.top) ta = a.bottom
 	else ba = a.bottom
 
 	let tb = b.top
 	let bb = b.top
-	if (b.bottom - b.top < 0) tb = b.bottom
+	if (b.bottom < b.top) tb = b.bottom
 	else bb = b.bottom
 
 	if (ta >= bb || tb >= ba) return undefined

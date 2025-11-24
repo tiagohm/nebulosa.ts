@@ -394,8 +394,8 @@ function makeParametersFromInput(parameters: HorizonsQueryParameters, input: str
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html#time
 function makeParametersFromStartAndStopTime(parameters: HorizonsQueryParameters, startTime: Temporal, endTime: Temporal) {
-	parameters.START_TIME = formatTemporal(startTime)
-	parameters.STOP_TIME = formatTemporal(endTime)
+	parameters.START_TIME = formatTemporal(startTime, undefined, 0)
+	parameters.STOP_TIME = formatTemporal(endTime, undefined, 0)
 }
 
 function makeParametersFromCenterAndCoordinates(parameters: HorizonsQueryParameters, center: ObserverSiteCenter, coord?: ObserverSiteCoord, options?: ObserverVectorElementsOptions) {

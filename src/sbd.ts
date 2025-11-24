@@ -146,7 +146,7 @@ export async function search(text: string) {
 
 // Identifies small bodies in a given field of view around a specific coordinate, location and time
 export async function identify(dateTime: Temporal | Time, longitude: Angle, latitude: Angle, elevation: Distance, fovRa: Angle, fovDec: Angle, fovRaWidth: number = DEG2RAD, fovDecWidth: number = fovRaWidth, magLimit: number = 18, magRequired: boolean = true) {
-	const obsTime = typeof dateTime === 'number' ? formatTemporal(dateTime, DATE_TIME_FORMAT) : dateTime.day + dateTime.fraction
+	const obsTime = typeof dateTime === 'number' ? formatTemporal(dateTime, DATE_TIME_FORMAT, 0) : dateTime.day + dateTime.fraction
 	const uri = `${SBD_BASE_URL}${IDENTIFY_PATH}&obs-time=${obsTime}&lat=${toDeg(latitude)}&lon=${toDeg(longitude)}&alt=${toKilometer(elevation)}&fov-ra-center=${formatAngle(fovRa, FOV_RA_FORMAT)}&fov-dec-center=${formatAngle(fovDec, FOV_DEC_FORMAT)}&fov-ra-hwidth=${toDeg(fovRaWidth)}&fov-dec-hwidth=${toDeg(fovDecWidth)}&vmag-lim=${magLimit}&mag-required=${magRequired && magLimit < 30}`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodyIdentify
@@ -155,7 +155,7 @@ export async function identify(dateTime: Temporal | Time, longitude: Angle, lati
 // Retrieves close approaches of small bodies to Earth
 export async function closeApproaches(dateMin?: Temporal | 'now', dateMax: Temporal | `${number}d` = '7d', distance: number = 10) {
 	dateMin = !dateMin || dateMin === 'now' ? temporalNow() : dateMin
-	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatTemporal(dateMin, DATE_FORMAT)}&date-max=${typeof dateMax === 'string' ? `%2B${dateMax.substring(0, dateMax.length - 1)}` : formatTemporal(dateMax, DATE_FORMAT)}&dist-max=${distance}LD`
+	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatTemporal(dateMin, DATE_FORMAT, 0)}&date-max=${typeof dateMax === 'string' ? `%2B${dateMax.substring(0, dateMax.length - 1)}` : formatTemporal(dateMax, DATE_FORMAT, 0)}&dist-max=${distance}LD`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodyCloseApproach
 }

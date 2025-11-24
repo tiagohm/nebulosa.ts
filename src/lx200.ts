@@ -287,12 +287,12 @@ export class Lx200ProtocolServer {
 	}
 
 	private date(socket: Socket<unknown>) {
-		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], DATE_FORMAT)}#`
+		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], DATE_FORMAT, 0)}#`
 		this.text(socket, command)
 	}
 
 	private time(socket: Socket<unknown>) {
-		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], TIME_FORMAT)}#`
+		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], TIME_FORMAT, 0)}#`
 		this.text(socket, command)
 	}
 
