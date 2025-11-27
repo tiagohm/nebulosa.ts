@@ -25,8 +25,8 @@ export interface Observed {
 	readonly altitude: Angle
 	readonly hourAngle: Angle
 	readonly declination: Angle
-	readonly rightAscension: Angle // equinoctial
-	readonly rightAscensionCIO: Angle // CIO-based
+	readonly rightAscension: Angle // CIO-based
+	readonly equationOfOrigins: Angle
 }
 
 // https://en.wikipedia.org/wiki/Standard_temperature_and_pressure
@@ -102,8 +102,8 @@ export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time,
 	const [ri, di] = cirs.length === 2 ? cirs : eraC2s(...cirs)
 
 	// Now perform observed conversion
-	const [azimuth, zenith, hourAngle, rightAscensionCIO, declination] = eraAtioq(normalizeAngle(ri), di, astrom)
-	return { azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscensionCIO, rightAscension: normalizeAngle(rightAscensionCIO + astrom.eo) } as const
+	const [azimuth, zenith, hourAngle, rightAscension, declination] = eraAtioq(normalizeAngle(ri), di, astrom)
+	return { azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscension, equationOfOrigins: astrom.eo } as const
 }
 
 // Computes CIRS coordinates from observed coordinates.
@@ -145,8 +145,8 @@ export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time,
 	const [ri, di] = eraAtciqz(...(icrs.length === 2 ? icrs : eraC2s(...icrs)), astrom)
 
 	// Now perform observed conversion
-	const [azimuth, zenith, hourAngle, rightAscensionCIO, declination] = eraAtioq(normalizeAngle(ri), di, astrom)
-	return { azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscensionCIO, rightAscension: normalizeAngle(rightAscensionCIO + astrom.eo) } as const
+	const [azimuth, zenith, hourAngle, rightAscension, declination] = eraAtioq(normalizeAngle(ri), di, astrom)
+	return { azimuth, altitude: PIOVERTWO - zenith, hourAngle, rightAscension, declination, equationOfOrigins: astrom.eo } as const
 }
 
 // Converts equatorial coordinates (right ascension and declination) to horizontal coordinates (azimuth and altitude) using just trigonometry (no refraction).

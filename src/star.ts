@@ -1,8 +1,8 @@
 import type { Mutable } from 'utility-types'
-import { type Angle, normalizeAngle } from './angle'
+import type { Angle } from './angle'
 import { DEFAULT_REFRACTION_PARAMETERS, type Observed, type PositionAndVelocity, type RefractionParameters } from './astrometry'
 import { ELLIPSOID_PARAMETERS, PIOVERTWO } from './constants'
-import { eraApco13, eraAtciq, eraAtioq, eraStarpmpv, eraStarpv } from './erfa'
+import { eraAtco13, eraStarpmpv, eraStarpv } from './erfa'
 import { pmAngles, type Time, Timescale, timeJulianYear, tt, ut1 } from './time'
 import type { Vec3 } from './vec3'
 import type { Velocity } from './velocity'
@@ -60,12 +60,33 @@ export function observeStar<T extends Star | StarPositionAndVelocity>(star: T, t
 	const temperature = refraction === false ? 0 : (refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
 	const relativeHumidity = refraction === false ? 0 : (refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity)
 	const wl = refraction === false ? 0 : (refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl)
-	const astrom = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
 
-	// Convert to topocentric CIRS
-	const [ri, di] = eraAtciq(star.rightAscension, star.declination, star.pmRa, star.pmDec, star.parallax, star.rv, astrom)
+	const [azimuth, zenith, hourAngle, rightAscension, declination, astrom] = eraAtco13(
+		a.day,
+		a.fraction,
+		b.day,
+		b.fraction,
+		star.rightAscension,
+		star.declination,
+		star.pmRa,
+		star.pmDec,
+		star.parallax,
+		star.rv,
+		longitude,
+		latitude,
+		elevation,
+		xp,
+		yp,
+		sp,
+		pressure,
+		temperature,
+		relativeHumidity,
+		wl,
+		ebpv,
+		ehp,
+		radius,
+		flattening,
+	)
 
-	// Now perform observed conversion
-	const [azimuth, zenith, hourAngle, rightAscensionCIO, declination] = eraAtioq(normalizeAngle(ri), di, astrom)
-	return { star, azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscensionCIO, rightAscension: normalizeAngle(rightAscensionCIO + astrom.eo) } as const
+	return { star, azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscension, equationOfOrigins: astrom.eo } as const
 }

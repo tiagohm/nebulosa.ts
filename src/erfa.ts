@@ -1330,7 +1330,7 @@ export function eraLdSun(p: Vec3, e: Vec3, em: number, o?: MutVec3) {
 
 // Form the celestial to terrestrial matrix given the date, the UT1 and
 // the polar motion, using the IAU 2006/2000A precession-nutation model.
-export function eraC2t06a(tt1: number, tt2: number, ut11: number, ut12: number, xp: Angle, yp: Angle, sp: Angle | undefined) {
+export function eraC2t06a(tt1: number, tt2: number, ut11: number, ut12: number, xp: Angle, yp: Angle, sp: Angle) {
 	// Form the celestial-to-intermediate matrix for this TT.
 	const rc2i = eraC2i06a(tt1, tt2)
 
@@ -1338,7 +1338,7 @@ export function eraC2t06a(tt1: number, tt2: number, ut11: number, ut12: number, 
 	const era = eraEra00(ut11, ut12)
 
 	// Estimate s'.
-	sp ??= eraSp00(tt1, tt2)
+	if (sp === 0) sp = eraSp00(tt1, tt2)
 
 	// Form the polar motion matrix.
 	const rpom = eraPom00(xp, yp, sp)
@@ -1750,9 +1750,9 @@ export function eraRefco(phpa: Pressure, tc: Temperature, rh: number, wl: number
 // parameters for transformations between CIRS and observed
 // coordinates. The caller supplies UTC, site coordinates, ambient air
 // conditions and observing wavelength.
-export function eraApio13(tt1: number, tt2: number, ut11: number, ut12: number, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle | undefined, phpa: Pressure, tc: Temperature, rh: number, wl: number, astrom?: EraAstrom) {
+export function eraApio13(tt1: number, tt2: number, ut11: number, ut12: number, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle, phpa: Pressure, tc: Temperature, rh: number, wl: number, astrom?: EraAstrom) {
 	// TIO locator s'.
-	sp ??= eraSp00(tt1, tt2)
+	if (sp === 0) sp = eraSp00(tt1, tt2)
 
 	// Earth rotation angle.
 	const theta = eraEra00(ut11, ut12)
@@ -2049,4 +2049,46 @@ export function eraAticq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	const [w, dc] = eraC2s(...pco)
 	const rc = pmod(w, TAU)
 	return [rc, dc] as const
+}
+
+// Transform ICRS star data, epoch J2000.0, to CIRS.
+export function eraAtci13(tdb1: number, tdb2: number, rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+	astrom = eraApci13(tdb1, tdb2, ebpv, ehp, astrom)
+	return [...eraAtciq(rc, dc, pr, pd, px, rv, astrom), astrom] as const
+}
+
+// ICRS RA,Dec to observed place.
+export function eraAtco13(
+	tt1: number,
+	tt2: number,
+	ut11: number,
+	ut12: number,
+	rc: Angle,
+	dc: Angle,
+	pr: Angle,
+	pd: Angle,
+	px: Distance,
+	rv: Velocity,
+	elong: Angle,
+	phi: Angle,
+	hm: Distance,
+	xp: Angle,
+	yp: Angle,
+	sp: Angle,
+	phpa: Pressure,
+	tc: Temperature,
+	rh: number,
+	wl: number,
+	ebpv: readonly [Vec3, Vec3],
+	ehp: Vec3,
+	radius: Distance = WGS84_RADIUS,
+	flattening: number = WGS84_FLATTENING,
+	astrom?: EraAstrom,
+) {
+	// Star-independent astrometry parameters.
+	astrom = eraApco13(tt1, tt2, ut11, ut12, elong, phi, hm, xp, yp, sp, phpa, tc, rh, wl, ebpv, ehp, radius, flattening, astrom)
+	// Transform ICRS to CIRS.
+	const [ri, di] = eraAtciq(rc, dc, pr, pd, px, rv, astrom)
+	// Transform CIRS to observed.
+	return [...eraAtioq(ri, di, astrom), astrom] as const
 }
