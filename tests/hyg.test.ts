@@ -7,7 +7,7 @@ import { toKilometerPerSecond } from '../src/velocity'
 
 test('read', async () => {
 	const data: HygDatabaseEntry[] = []
-	await using source = fileHandleSource(await fs.open('data/hygdata_v41.csv', 'r'))
+	await using source = fileHandleSource(await fs.open('data/hyg_v42.csv', 'r'))
 
 	for await (const row of readHygCatalog(source)) {
 		data.push(row)

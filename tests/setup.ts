@@ -6,7 +6,7 @@ const FILES: Readonly<Record<string, string>> = {
 	'de405.bsp': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/de405.bsp',
 	'de421.bsp': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/de421.bsp',
 	'moon_pa_de421_1900-2050.bpc': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/moon_pa_de421_1900-2050.bpc',
-	'hygdata_v41.csv': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/hygdata_v41.csv',
+	'hyg_v42.csv': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/hyg_v42.csv',
 	'indi.log': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/indi.log',
 	'de440s.bsp': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/de440s.bsp',
 	'65803_Didymos.bsp': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/65803_Didymos.bsp',
