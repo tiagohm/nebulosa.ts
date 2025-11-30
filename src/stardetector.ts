@@ -37,7 +37,7 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 	const hist = new Int32Array(1 << 18)
 	const maxX = convRect.right - 4
 	const maxY = convRect.bottom - 4
-	const stars = new StarList(maxStars)
+	const stars = new StarList(Math.min(maxStars, 2000))
 
 	// Find each local maximum
 	for (let y = convRect.top + 4; y <= maxY; y++) {
@@ -51,12 +51,12 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 				isMax = true
 
 				for (let j = -4; j <= 4; j++) {
-					const sj = sy + stride * j
+					const sj = sy + stride * j + x
 
 					for (let i = -4; i <= 4; i++) {
 						if (i === 0 && j === 0) continue
 
-						if (raw[sj + x + i] > value) {
+						if (raw[sj + i] > value) {
 							isMax = false
 							break
 						}
