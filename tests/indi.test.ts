@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test'
-import { type DefSwitchVector, IndiClient } from '../src/indi'
+import { describe, expect, onTestFinished, test } from 'bun:test'
+import { type DefSwitchVector, IndiClient, type IndiClientHandler, type PropertyState } from '../src/indi'
+import { type Camera, CameraManager, type DeviceHandler, type DeviceProperty, type DevicePropertyHandler, DevicePropertyManager, type GuideOutput, GuideOutputManager, type Thermometer, ThermometerManager } from '../src/indi.manager'
 import { SimpleXmlParser } from '../src/xml'
 
 const text = await Bun.file('data/indi.log').text()
@@ -146,4 +147,144 @@ describe('parse', () => {
 		expect(vector.elements.DISCONNECT.label).toBe('Disconnect')
 		expect(vector.elements.DISCONNECT.value).toBe(true)
 	})
+})
+
+describe.serial.skip('manager', () => {
+	test('camera', async () => {
+		let frame = ''
+		let cameraAdded = false
+		let cameraRemoved = false
+		let guideOutputAdded = false
+		let guideOutputRemoved = false
+		let thermometerAdded = false
+		let thermometerRemoved = false
+
+		const process = Bun.spawn(['indiserver', 'indi_simulator_ccd'])
+
+		const cameraDeviceHandler: DeviceHandler<Camera> = {
+			added: (client: IndiClient, device: Camera) => {
+				cameraAdded = true
+			},
+			updated: (client: IndiClient, device: Camera, property: keyof Camera, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: Camera) => {
+				cameraRemoved = true
+			},
+			blobReceived: (client, device, data) => {
+				frame = data
+			},
+		}
+
+		const guideOutputDeviceHandler: DeviceHandler<GuideOutput> = {
+			added: (client: IndiClient, device: GuideOutput) => {
+				guideOutputAdded = true
+			},
+			updated: (client: IndiClient, device: GuideOutput, property: keyof GuideOutput, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: GuideOutput) => {
+				guideOutputRemoved = true
+			},
+		}
+
+		const thermometerDeviceHandler: DeviceHandler<Thermometer> = {
+			added: (client: IndiClient, device: Thermometer) => {
+				thermometerAdded = true
+			},
+			updated: (client: IndiClient, device: Thermometer, property: keyof Thermometer, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: Thermometer) => {
+				thermometerRemoved = true
+			},
+		}
+
+		const devicePropertyHandler: DevicePropertyHandler = {
+			added: (device: string, property: DeviceProperty) => {},
+			updated: (device: string, property: DeviceProperty) => {},
+			removed: (device: string, property: DeviceProperty) => {},
+		}
+
+		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
+		const camera = new CameraManager(deviceProperty, cameraDeviceHandler)
+		const guideOutput = new GuideOutputManager(camera, guideOutputDeviceHandler)
+		const thermometer = new ThermometerManager(camera, thermometerDeviceHandler)
+
+		const handler: IndiClientHandler = {
+			textVector: (client, message, tag) => {
+				camera.textVector(client, message, tag)
+			},
+			numberVector: (client, message, tag) => {
+				camera.numberVector(client, message, tag)
+				guideOutput.numberVector(client, message, tag)
+				thermometer.numberVector(client, message, tag)
+			},
+			switchVector: (client, message, tag) => {
+				camera.switchVector(client, message, tag)
+			},
+			blobVector: (client, message, tag) => {
+				camera.blobVector(client, message, tag)
+			},
+			vector: (client, message, tag) => {
+				deviceProperty.vector(client, message, tag)
+			},
+			delProperty: (client, message) => {
+				deviceProperty.delProperty(client, message)
+				camera.delProperty(client, message)
+				guideOutput.delProperty(client, message)
+				thermometer.delProperty(client, message)
+			},
+			close: (client, server) => {
+				camera.close(client, server)
+				guideOutput.close(client, server)
+				thermometer.close(client, server)
+			},
+		}
+
+		await Bun.sleep(1000)
+
+		const client = new IndiClient({ handler })
+
+		onTestFinished(() => {
+			process.kill()
+		})
+
+		await client.connect('localhost')
+		await Bun.sleep(1000)
+
+		expect(cameraAdded).toBeTrue()
+
+		expect(camera).toHaveLength(1)
+
+		const ccdSimulator = camera.get('CCD Simulator')!
+		camera.connect(client, ccdSimulator)
+
+		await Bun.sleep(1000)
+
+		expect(ccdSimulator.connected).toBeTrue()
+		expect(guideOutput).toHaveLength(1)
+		expect(thermometer).toHaveLength(1)
+		expect(thermometerAdded).toBeTrue()
+		expect(guideOutputAdded).toBeTrue()
+		expect(deviceProperty).not.toBeEmpty()
+
+		camera.enableBlob(client, ccdSimulator)
+		camera.startExposure(client, ccdSimulator, 1)
+
+		await Bun.sleep(2000)
+
+		expect(frame).not.toBeEmpty()
+
+		client.close()
+
+		await Bun.sleep(1000)
+
+		expect(camera).toBeEmpty()
+		expect(guideOutput).toBeEmpty()
+		expect(thermometer).toBeEmpty()
+		expect(cameraRemoved).toBeTrue()
+		expect(thermometerRemoved).toBeTrue()
+		expect(guideOutputRemoved).toBeTrue()
+	}, 10000)
 })
