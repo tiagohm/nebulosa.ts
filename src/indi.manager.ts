@@ -1,5 +1,9 @@
+import { type Angle, deg, hour, normalizeAngle, toDeg, toHour } from './angle'
+import { PI, TAU } from './constants'
+import { type Distance, meter, toMeter } from './distance'
 import type { CfaPattern } from './image'
-import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector, DefVector, DelProperty, IndiClient, IndiClientHandler, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, VectorType } from './indi'
+import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, IndiClient, IndiClientHandler, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, VectorType } from './indi'
+import { formatTemporal, parseTemporal } from './temporal'
 
 export type DeviceType = 'CAMERA' | 'MOUNT' | 'WHEEL' | 'FOCUSER' | 'ROTATOR' | 'GPS' | 'DOME' | 'GUIDE_OUTPUT' | 'FLAT_PANEL' | 'COVER' | 'THERMOMETER' | 'DEW_HEATER'
 
@@ -8,6 +12,14 @@ export type DeviceProperty = (DefTextVector & { type: 'TEXT' }) | (DefNumberVect
 export type DeviceProperties = Record<string, DeviceProperty>
 
 export type FrameType = 'LIGHT' | 'DARK' | 'FLAT' | 'BIAS'
+
+export type PierSide = 'EAST' | 'WEST' | 'NEITHER'
+
+export type MountType = 'ALTAZ' | 'EQ_FORK' | 'EQ_GEM'
+
+export type TrackMode = 'SIDEREAL' | 'SOLAR' | 'LUNAR' | 'KING' | 'CUSTOM'
+
+export type MinMaxValueProperty = Pick<DefNumber, 'min' | 'max' | 'value'>
 
 export enum DeviceInterfaceType {
 	TELESCOPE = 0x0001, // Telescope interface, must subclass INDI::Telescope.
@@ -56,11 +68,35 @@ export interface DriverInfo {
 
 export interface Device {
 	type: DeviceType
-	id: string
 	name: string
 	connected: boolean
 	driver: DriverInfo
-	// properties: DeviceProperties
+}
+
+export interface EquatorialCoordinate<T = Angle> {
+	rightAscension: T
+	declination: T
+}
+
+export interface EquatorialCoordinateJ2000<T = Angle> {
+	rightAscensionJ2000: T
+	declinationJ2000: T
+}
+
+export interface HorizontalCoordinate<T = Angle> {
+	azimuth: T
+	altitude: T
+}
+
+export interface GeographicCoordinate {
+	latitude: Angle
+	longitude: Angle
+	elevation: Distance
+}
+
+export interface UTCTime {
+	utc: number // milliseconds since epoch
+	offset: number // minutes
 }
 
 export interface GuideOutput extends Device {
@@ -119,12 +155,50 @@ export interface Camera extends GuideOutput, Thermometer {
 		x: number
 		y: number
 	}
-	readonly gain: Pick<DefNumber, 'min' | 'max' | 'value'>
-	readonly offset: Pick<DefNumber, 'min' | 'max' | 'value'>
+	readonly gain: MinMaxValueProperty
+	readonly offset: MinMaxValueProperty
 	readonly pixelSize: {
 		x: number
 		y: number
 	}
+}
+
+export interface GPS extends Device {
+	readonly type: 'GPS' | 'MOUNT'
+	hasGPS: boolean
+	readonly geographicCoordinate: GeographicCoordinate
+	readonly time: UTCTime
+}
+
+export interface Parkable {
+	canPark: boolean
+	parking: boolean
+	parked: boolean
+}
+
+export interface SlewRate {
+	name: string
+	label: string
+}
+
+export interface Mount extends GuideOutput, GPS, Parkable {
+	readonly type: 'MOUNT'
+	slewing: boolean
+	tracking: boolean
+	canAbort: boolean
+	canSync: boolean
+	canGoTo: boolean
+	canFlip: boolean
+	canHome: boolean
+	slewRates: SlewRate[]
+	slewRate?: SlewRate['name']
+	mountType: MountType
+	trackModes: TrackMode[]
+	trackMode: TrackMode
+	pierSide: PierSide
+	guideRateWE: number
+	guideRateNS: number
+	readonly equatorialCoordinate: EquatorialCoordinate
 }
 
 export const DEFAULT_CAMERA: Camera = {
@@ -187,7 +261,6 @@ export const DEFAULT_CAMERA: Camera = {
 	canPulseGuide: false,
 	pulseGuiding: false,
 	type: 'CAMERA',
-	id: '',
 	name: '',
 	connected: false,
 	driver: {
@@ -196,7 +269,49 @@ export const DEFAULT_CAMERA: Camera = {
 	},
 	hasThermometer: false,
 	temperature: 0,
-	// properties: {},
+}
+
+export const DEFAULT_MOUNT: Mount = {
+	slewing: false,
+	tracking: false,
+	canAbort: false,
+	canSync: false,
+	canGoTo: false,
+	canFlip: false,
+	canHome: false,
+	canPark: false,
+	slewRates: [],
+	mountType: 'EQ_GEM',
+	trackModes: [],
+	trackMode: 'SIDEREAL',
+	pierSide: 'NEITHER',
+	guideRateWE: 0,
+	guideRateNS: 0,
+	equatorialCoordinate: {
+		rightAscension: 0,
+		declination: 0,
+	},
+	canPulseGuide: false,
+	pulseGuiding: false,
+	type: 'MOUNT',
+	name: '',
+	connected: false,
+	driver: {
+		executable: '',
+		version: '',
+	},
+	hasGPS: false,
+	geographicCoordinate: {
+		latitude: 0,
+		longitude: 0,
+		elevation: 0,
+	},
+	time: {
+		utc: 0,
+		offset: 0,
+	},
+	parking: false,
+	parked: false,
 }
 
 export function isCamera(device: Device): device is Camera {
@@ -219,9 +334,9 @@ export function isGuideOutput(device: Device): device is GuideOutput {
 // 	return 'hasDewHeater' in device && device.hasDewHeater !== undefined
 // }
 
-// export function isGPS(device: Device): device is GPS {
-// 	return 'hasGPS' in device && device.hasGPS !== undefined
-// }
+export function isGPS(device: Device): device is GPS {
+	return 'hasGPS' in device && device.hasGPS !== undefined
+}
 
 export class DevicePropertyManager implements IndiClientHandler {
 	private readonly properties = new Map<string, DeviceProperties>()
@@ -322,7 +437,11 @@ export class DevicePropertyManager implements IndiClientHandler {
 	}
 }
 
-export abstract class DeviceManager<D extends Device> implements IndiClientHandler {
+export interface DeviceProvider<D extends Device> {
+	readonly get: (name: string) => D | undefined
+}
+
+export abstract class DeviceManager<D extends Device> implements IndiClientHandler, DeviceProvider<D> {
 	protected readonly devices = new Map<string, D>()
 
 	constructor(readonly handler: DeviceHandler<D>) {}
@@ -378,7 +497,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 
 		switch (message.name) {
 			case 'CONNECTION':
-				if (this.connectionFor(client, device, message)) {
+				if (this.handleConnection(client, device, message)) {
 					this.update(client, device, 'connected', message.state)
 				}
 
@@ -396,16 +515,37 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
-	protected connectionFor(client: IndiClient, device: D, message: DefSwitchVector | SetSwitchVector) {
+	protected handleConnection(client: IndiClient, device: D, message: DefSwitchVector | SetSwitchVector) {
 		const connected = message.elements.CONNECT?.value === true
 
 		if (connected !== device.connected) {
 			device.connected = connected
-			if (connected) this.ask(client, device)
+			// if (connected) this.ask(client, device)
 			return true
 		}
 
 		return false
+	}
+
+	protected handleDriverInfo(client: IndiClient, message: DefTextVector | SetTextVector, interfaceType: DeviceInterfaceType, device: D) {
+		const type = +message.elements.DRIVER_INTERFACE!.value
+
+		if (isInterfaceType(type, interfaceType)) {
+			if (!this.has(message.device)) {
+				const executable = message.elements.DRIVER_EXEC!.value
+				const version = message.elements.DRIVER_VERSION!.value
+
+				device = structuredClone(device)
+				device.name = message.device
+				device.driver = { executable, version }
+
+				this.add(client, device)
+				this.ask(client, device)
+			}
+		} else {
+			const device = this.get(message.device)
+			device && this.remove(client, device)
+		}
 	}
 
 	add(client: IndiClient, device: D) {
@@ -435,7 +575,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 
 export class GuideOutputManager extends DeviceManager<GuideOutput> {
 	constructor(
-		readonly cameraManager: CameraManager,
+		readonly provider: DeviceProvider<GuideOutput>,
 		handler: DeviceHandler<GuideOutput>,
 	) {
 		super(handler)
@@ -445,7 +585,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		switch (message.name) {
 			case 'TELESCOPE_TIMED_GUIDE_NS':
 			case 'TELESCOPE_TIMED_GUIDE_WE': {
-				const device = this.cameraManager.get(message.device)
+				const device = this.provider.get(message.device)
 
 				if (device && tag[0] === 'd') {
 					this.add(client, device)
@@ -466,7 +606,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 
 export class ThermometerManager extends DeviceManager<Thermometer> {
 	constructor(
-		readonly cameraManager: CameraManager,
+		readonly provider: DeviceProvider<Thermometer>,
 		handler: DeviceHandler<Thermometer>,
 	) {
 		super(handler)
@@ -475,7 +615,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
 		switch (message.name) {
 			case 'CCD_TEMPERATURE': {
-				const device = this.cameraManager.get(message.device)
+				const device = this.provider.get(message.device)
 
 				if (device && tag[0] === 'd') {
 					this.add(client, device)
@@ -541,7 +681,7 @@ export class CameraManager extends DeviceManager<Camera> {
 
 		if (properties?.CCD_CONTROLS?.elements.Gain) {
 			client.sendNumber({ device: camera.name, name: 'CCD_CONTROLS', elements: { Gain: value } })
-		} else if (properties?.CCD_GAIN?.elements?.GAIN) {
+		} else if (properties?.CCD_GAIN?.elements.GAIN) {
 			client.sendNumber({ device: camera.name, name: 'CCD_GAIN', elements: { GAIN: value } })
 		}
 	}
@@ -551,7 +691,7 @@ export class CameraManager extends DeviceManager<Camera> {
 
 		if (properties?.CCD_CONTROLS?.elements.Offset) {
 			client.sendNumber({ device: camera.name, name: 'CCD_CONTROLS', elements: { Offset: value } })
-		} else if (properties?.CCD_OFFSET?.elements?.OFFSET) {
+		} else if (properties?.CCD_OFFSET?.elements.OFFSET) {
 			client.sendNumber({ device: camera.name, name: 'CCD_OFFSET', elements: { OFFSET: value } })
 		}
 	}
@@ -763,13 +903,13 @@ export class CameraManager extends DeviceManager<Camera> {
 			case 'CCD_CONTROLS': {
 				const gain = message.elements.Gain
 
-				if (gain && gainFor(device.gain, gain, tag)) {
+				if (gain && handleMinMaxValue(device.gain, gain, tag)) {
 					this.update(client, device, 'gain', message.state)
 				}
 
 				const offset = message.elements.Offset
 
-				if (offset && offsetFor(device.offset, offset, tag)) {
+				if (offset && handleMinMaxValue(device.offset, offset, tag)) {
 					this.update(client, device, 'offset', message.state)
 				}
 
@@ -779,7 +919,7 @@ export class CameraManager extends DeviceManager<Camera> {
 			case 'CCD_GAIN': {
 				const gain = message.elements.GAIN
 
-				if (gain && gainFor(device.gain, gain, tag)) {
+				if (gain && handleMinMaxValue(device.gain, gain, tag)) {
 					this.update(client, device, 'gain', message.state)
 				}
 
@@ -788,7 +928,7 @@ export class CameraManager extends DeviceManager<Camera> {
 			case 'CCD_OFFSET': {
 				const offset = message.elements.OFFSET
 
-				if (offset && offsetFor(device.offset, offset, tag)) {
+				if (offset && handleMinMaxValue(device.offset, offset, tag)) {
 					this.update(client, device, 'offset', message.state)
 				}
 
@@ -807,22 +947,7 @@ export class CameraManager extends DeviceManager<Camera> {
 
 	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
-			const type = +message.elements.DRIVER_INTERFACE!.value
-
-			if (isInterfaceType(type, DeviceInterfaceType.CCD)) {
-				if (!this.has(message.device)) {
-					const executable = message.elements.DRIVER_EXEC!.value
-					const version = message.elements.DRIVER_VERSION!.value
-
-					const camera: Camera = { ...structuredClone(DEFAULT_CAMERA), id: message.device, name: message.device, driver: { executable, version } }
-					this.add(client, camera)
-					this.ask(client, camera)
-				}
-			} else if (this.has(message.device)) {
-				this.remove(client, this.get(message.device)!)
-			}
-
-			return
+			return this.handleDriverInfo(client, message, DeviceInterfaceType.CCD, DEFAULT_CAMERA)
 		}
 
 		const device = this.get(message.device)
@@ -862,36 +987,375 @@ export class CameraManager extends DeviceManager<Camera> {
 	}
 }
 
-function gainFor(gain: Camera['gain'], element: DefNumber | OneNumber, tag: string) {
+export class MountManager extends DeviceManager<Mount> {
+	tracking(client: IndiClient, mount: Mount, enable: boolean) {
+		client.sendSwitch({ device: mount.name, name: 'TELESCOPE_TRACK_STATE', elements: { [enable ? 'TRACK_ON' : 'TRACK_OFF']: true } })
+	}
+
+	park(client: IndiClient, mount: Mount) {
+		if (mount.canPark) {
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_PARK', elements: { PARK: true } })
+		}
+	}
+
+	unpark(client: IndiClient, mount: Mount) {
+		if (mount.canPark) {
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_PARK', elements: { UNPARK: true } })
+		}
+	}
+
+	stop(client: IndiClient, mount: Mount) {
+		if (mount.canAbort) {
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_ABORT_MOTION', elements: { ABORT: true } })
+		}
+	}
+
+	home(client: IndiClient, mount: Mount) {
+		if (mount.canHome) {
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_HOME', elements: { GO: true } })
+		}
+	}
+
+	private equatorialCoordinate(client: IndiClient, mount: Mount, rightAscension: Angle, declination: Angle) {
+		client.sendNumber({ device: mount.name, name: 'EQUATORIAL_EOD_COORD', elements: { RA: toHour(normalizeAngle(rightAscension)), DEC: toDeg(declination) } })
+	}
+
+	geographicCoordinate(client: IndiClient, mount: Mount, { latitude, longitude, elevation }: GeographicCoordinate) {
+		longitude = longitude < 0 ? longitude + TAU : longitude
+		client.sendNumber({ device: mount.name, name: 'GEOGRAPHIC_COORD', elements: { LAT: toDeg(latitude), LONG: toDeg(longitude), ELEV: toMeter(elevation) } })
+	}
+
+	time(client: IndiClient, mount: Mount, time: GPS['time']) {
+		const UTC = formatTemporal(time.utc, 'YYYY-MM-DDTHH:mm:ss')
+		const OFFSET = (time.offset / 60).toString()
+		client.sendText({ device: mount.name, name: 'TIME_UTC', elements: { UTC, OFFSET } })
+	}
+
+	syncTo(client: IndiClient, mount: Mount, rightAscension: Angle, declination: Angle) {
+		if (mount.canSync) {
+			client.sendSwitch({ device: mount.name, name: 'ON_COORD_SET', elements: { SYNC: true } })
+			this.equatorialCoordinate(client, mount, rightAscension, declination)
+		}
+	}
+
+	goTo(client: IndiClient, mount: Mount, rightAscension: Angle, declination: Angle) {
+		if (mount.canGoTo) {
+			client.sendSwitch({ device: mount.name, name: 'ON_COORD_SET', elements: { TRACK: true } })
+			this.equatorialCoordinate(client, mount, rightAscension, declination)
+		}
+	}
+
+	flipTo(client: IndiClient, mount: Mount, rightAscension: Angle, declination: Angle) {
+		if (mount.canFlip) {
+			client.sendSwitch({ device: mount.name, name: 'ON_COORD_SET', elements: { FLIP: true } })
+			this.equatorialCoordinate(client, mount, rightAscension, declination)
+		}
+	}
+
+	trackMode(client: IndiClient, mount: Mount, mode: TrackMode) {
+		client.sendSwitch({ device: mount.name, name: 'TELESCOPE_TRACK_MODE', elements: { [`TRACK_${mode}`]: true } })
+	}
+
+	slewRate(client: IndiClient, mount: Mount, rate: SlewRate | string) {
+		client.sendSwitch({ device: mount.name, name: 'TELESCOPE_SLEW_RATE', elements: { [typeof rate === 'string' ? rate : rate.name]: true } })
+	}
+
+	moveNorth(client: IndiClient, mount: Mount, enable: boolean) {
+		if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: true, MOTION_SOUTH: false } })
+		else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false } })
+	}
+
+	moveSouth(client: IndiClient, mount: Mount, enable: boolean) {
+		if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false, MOTION_SOUTH: true } })
+		else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_SOUTH: false } })
+	}
+
+	moveWest(client: IndiClient, mount: Mount, enable: boolean) {
+		if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: true, MOTION_EAST: false } })
+		else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false } })
+	}
+
+	moveEast(client: IndiClient, mount: Mount, enable: boolean) {
+		if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false, MOTION_EAST: true } })
+		else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_EAST: false } })
+	}
+
+	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		super.switchVector(client, message, tag)
+
+		switch (message.name) {
+			case 'TELESCOPE_SLEW_RATE':
+				if (tag[0] === 'd') {
+					const rates: SlewRate[] = []
+
+					for (const key in message.elements) {
+						const element = message.elements[key] as DefSwitch
+						rates.push({ name: element.name, label: element.label! })
+					}
+
+					if (rates.length) {
+						device.slewRates = rates
+						this.update(client, device, 'slewRates', message.state)
+					}
+				}
+
+				for (const key in message.elements) {
+					const element = message.elements[key]!
+
+					if (element.value) {
+						if (device.slewRate !== element.name) {
+							device.slewRate = element.name
+							this.update(client, device, 'slewRate', message.state)
+						}
+
+						break
+					}
+				}
+
+				return
+			case 'TELESCOPE_TRACK_MODE':
+				if (tag[0] === 'd') {
+					const modes: TrackMode[] = []
+
+					for (const key in message.elements) {
+						const element = message.elements[key] as DefSwitch
+						modes.push(element.name.replace('TRACK_', '') as TrackMode)
+					}
+
+					if (modes.length) {
+						device.trackModes = modes
+						this.update(client, device, 'trackModes', message.state)
+					}
+				}
+
+				for (const key in message.elements) {
+					const element = message.elements[key]!
+
+					if (element.value) {
+						const trackMode = element.name.replace('TRACK_', '') as TrackMode
+
+						if (device.trackMode !== trackMode) {
+							device.trackMode = trackMode
+							this.update(client, device, 'trackMode', message.state)
+						}
+
+						break
+					}
+				}
+
+				return
+			case 'TELESCOPE_TRACK_STATE': {
+				const tracking = message.elements.TRACK_ON?.value === true
+
+				if (device.tracking !== tracking) {
+					device.tracking = tracking
+					this.update(client, device, 'tracking', message.state)
+				}
+
+				return
+			}
+			case 'TELESCOPE_PIER_SIDE': {
+				const pierSide = message.elements.PIER_WEST?.value === true ? 'WEST' : message.elements.PIER_EAST?.value === true ? 'EAST' : 'NEITHER'
+
+				if (device.pierSide !== pierSide) {
+					device.pierSide = pierSide
+					this.update(client, device, 'pierSide', message.state)
+				}
+
+				return
+			}
+			case 'TELESCOPE_PARK': {
+				if (tag[0] === 'd') {
+					const canPark = (message as DefSwitchVector).permission !== 'ro'
+
+					if (device.canPark !== canPark) {
+						device.canPark = canPark
+						this.update(client, device, 'canPark', message.state)
+					}
+				}
+
+				if (message.state) {
+					const parking = message.state === 'Busy'
+
+					if (device.parking !== parking) {
+						device.parking = parking
+						this.update(client, device, 'parking', message.state)
+					}
+				}
+
+				const parked = message.elements.PARK?.value === true
+
+				if (device.parked !== parked) {
+					device.parked = parked
+					this.update(client, device, 'parked', message.state)
+				}
+
+				return
+			}
+			case 'TELESCOPE_ABORT_MOTION':
+				if (!device.canAbort) {
+					device.canAbort = true
+					this.update(client, device, 'canAbort', message.state)
+				}
+
+				return
+			case 'TELESCOPE_HOME':
+				if (!device.canHome) {
+					device.canHome = true
+					this.update(client, device, 'canHome', message.state)
+				}
+
+				return
+			case 'ON_COORD_SET':
+				if (tag[0] === 'd') {
+					const canSync = 'SYNC' in message.elements
+
+					if (device.canSync !== canSync) {
+						device.canSync = canSync
+						this.update(client, device, 'canSync', message.state)
+					}
+
+					const canGoTo = 'SLEW' in message.elements
+
+					if (device.canGoTo !== canGoTo) {
+						device.canGoTo = canGoTo
+						this.update(client, device, 'canGoTo', message.state)
+					}
+
+					const canFlip = 'FLIP' in message.elements
+
+					if (device.canFlip !== canFlip) {
+						device.canFlip = canFlip
+						this.update(client, device, 'canFlip', message.state)
+					}
+				}
+
+				return
+		}
+	}
+
+	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		switch (message.name) {
+			case 'EQUATORIAL_EOD_COORD': {
+				const slewing = message.state === 'Busy'
+
+				if (device.slewing !== slewing) {
+					device.slewing = slewing
+					this.update(client, device, 'slewing', message.state)
+				}
+
+				const rightAscension = hour(message.elements.RA!.value)
+				const declination = deg(message.elements.DEC!.value)
+				let updated = false
+
+				if (device.equatorialCoordinate.rightAscension !== rightAscension) {
+					device.equatorialCoordinate.rightAscension = rightAscension
+					updated = true
+				}
+
+				if (device.equatorialCoordinate.declination !== declination) {
+					device.equatorialCoordinate.declination = declination
+					updated = true
+				}
+
+				if (updated) {
+					this.update(client, device, 'equatorialCoordinate', message.state)
+				}
+
+				return
+			}
+			case 'GEOGRAPHIC_COORD': {
+				const longitude = deg(message.elements.LONG!.value)
+				const latitude = deg(message.elements.LAT!.value)
+				const elevation = meter(message.elements.ELEV!.value)
+				let updated = false
+
+				if (device.geographicCoordinate.longitude !== longitude) {
+					device.geographicCoordinate.longitude = longitude >= PI ? longitude - TAU : longitude
+					updated = true
+				}
+
+				if (device.geographicCoordinate.latitude !== latitude) {
+					device.geographicCoordinate.latitude = latitude
+					updated = true
+				}
+
+				if (device.geographicCoordinate.elevation !== elevation) {
+					device.geographicCoordinate.elevation = elevation
+					updated = true
+				}
+
+				if (updated) {
+					this.update(client, device, 'geographicCoordinate', message.state)
+				}
+
+				return
+			}
+			case 'TELESCOPE_TIMED_GUIDE_NS':
+			case 'TELESCOPE_TIMED_GUIDE_WE':
+				if (tag[0] === 'd' && !device.canPulseGuide) {
+					device.canPulseGuide = true
+					this.update(client, device, 'canPulseGuide', message.state)
+				}
+
+				return
+		}
+	}
+
+	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
+		if (message.name === 'DRIVER_INFO') {
+			return this.handleDriverInfo(client, message, DeviceInterfaceType.TELESCOPE, DEFAULT_MOUNT)
+		}
+
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		switch (message.name) {
+			case 'TIME_UTC': {
+				const utc = parseTemporal(message.elements.UTC!.value, 'YYYY-MM-DDTHH:mm:ss')
+				const offset = parseUTCOffset(message.elements.OFFSET!.value)
+
+				if (device.time.utc !== utc || device.time.offset !== offset) {
+					device.time.utc = utc
+					device.time.offset = offset
+					this.update(client, device, 'time', message.state)
+				}
+
+				return
+			}
+		}
+	}
+}
+
+function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | OneNumber, tag: string) {
 	let update = false
 
 	if (tag[0] === 'd') {
-		gain.min = (element as DefNumber).min
-		gain.max = (element as DefNumber).max
+		property.min = (element as DefNumber).min
+		property.max = (element as DefNumber).max
 		update = true
 	}
 
-	if (update || gain.value !== element.value) {
-		gain.value = element.value
+	if (update || property.value !== element.value) {
+		property.value = element.value
 		update = true
 	}
 
 	return update
 }
 
-function offsetFor(offset: Camera['offset'], element: DefNumber | OneNumber, tag: string) {
-	let update = false
+function parseUTCOffset(text: string) {
+	const parts = text.split(':')
 
-	if (tag[0] === 'd') {
-		offset.min = (element as DefNumber).min
-		offset.max = (element as DefNumber).max
-		update = true
-	}
-
-	if (update || offset.value !== element.value) {
-		offset.value = element.value
-		update = true
-	}
-
-	return update
+	if (parts.length === 1) return +parts[0] * 60
+	else return +parts[0] * 60 + +parts[1]
 }

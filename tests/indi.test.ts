@@ -1,6 +1,6 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { type DefSwitchVector, IndiClient, type IndiClientHandler, type PropertyState } from '../src/indi'
-import { type Camera, CameraManager, type DeviceHandler, type DeviceProperty, type DevicePropertyHandler, DevicePropertyManager, type GuideOutput, GuideOutputManager, type Thermometer, ThermometerManager } from '../src/indi.manager'
+import { type Camera, CameraManager, type DeviceHandler, type DeviceProperty, type DevicePropertyHandler, DevicePropertyManager, type GuideOutput, GuideOutputManager, type Mount, MountManager, type Thermometer, ThermometerManager } from '../src/indi.manager'
 import { SimpleXmlParser } from '../src/xml'
 
 const text = await Bun.file('data/indi.log').text()
@@ -257,20 +257,20 @@ describe.serial.skip('manager', () => {
 
 		expect(camera).toHaveLength(1)
 
-		const ccdSimulator = camera.get('CCD Simulator')!
-		camera.connect(client, ccdSimulator)
+		const simulator = camera.get('CCD Simulator')!
+		camera.connect(client, simulator)
 
 		await Bun.sleep(1000)
 
-		expect(ccdSimulator.connected).toBeTrue()
+		expect(simulator.connected).toBeTrue()
 		expect(guideOutput).toHaveLength(1)
 		expect(thermometer).toHaveLength(1)
 		expect(thermometerAdded).toBeTrue()
 		expect(guideOutputAdded).toBeTrue()
 		expect(deviceProperty).not.toBeEmpty()
 
-		camera.enableBlob(client, ccdSimulator)
-		camera.startExposure(client, ccdSimulator, 1)
+		camera.enableBlob(client, simulator)
+		camera.startExposure(client, simulator, 1)
 
 		await Bun.sleep(2000)
 
@@ -285,6 +285,107 @@ describe.serial.skip('manager', () => {
 		expect(thermometer).toBeEmpty()
 		expect(cameraRemoved).toBeTrue()
 		expect(thermometerRemoved).toBeTrue()
+		expect(guideOutputRemoved).toBeTrue()
+	}, 10000)
+
+	test('mount', async () => {
+		let mountAdded = false
+		let mountRemoved = false
+		let guideOutputAdded = false
+		let guideOutputRemoved = false
+
+		const process = Bun.spawn(['indiserver', 'indi_simulator_telescope'])
+
+		const mountDeviceHandler: DeviceHandler<Mount> = {
+			added: (client: IndiClient, device: Mount) => {
+				mountAdded = true
+			},
+			updated: (client: IndiClient, device: Mount, property: keyof Mount, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: Mount) => {
+				mountRemoved = true
+			},
+		}
+
+		const guideOutputDeviceHandler: DeviceHandler<GuideOutput> = {
+			added: (client: IndiClient, device: GuideOutput) => {
+				guideOutputAdded = true
+			},
+			updated: (client: IndiClient, device: GuideOutput, property: keyof GuideOutput, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: GuideOutput) => {
+				guideOutputRemoved = true
+			},
+		}
+
+		const devicePropertyHandler: DevicePropertyHandler = {
+			added: (device: string, property: DeviceProperty) => {},
+			updated: (device: string, property: DeviceProperty) => {},
+			removed: (device: string, property: DeviceProperty) => {},
+		}
+
+		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
+		const mount = new MountManager(mountDeviceHandler)
+		const guideOutput = new GuideOutputManager(mount, guideOutputDeviceHandler)
+
+		const handler: IndiClientHandler = {
+			textVector: (client, message, tag) => {
+				mount.textVector(client, message, tag)
+			},
+			numberVector: (client, message, tag) => {
+				mount.numberVector(client, message, tag)
+				guideOutput.numberVector(client, message, tag)
+			},
+			switchVector: (client, message, tag) => {
+				mount.switchVector(client, message, tag)
+			},
+			vector: (client, message, tag) => {
+				deviceProperty.vector(client, message, tag)
+			},
+			delProperty: (client, message) => {
+				deviceProperty.delProperty(client, message)
+				mount.delProperty(client, message)
+				guideOutput.delProperty(client, message)
+			},
+			close: (client, server) => {
+				mount.close(client, server)
+				guideOutput.close(client, server)
+			},
+		}
+
+		await Bun.sleep(1000)
+
+		const client = new IndiClient({ handler })
+
+		onTestFinished(() => {
+			process.kill()
+		})
+
+		await client.connect('localhost')
+		await Bun.sleep(1000)
+
+		expect(mountAdded).toBeTrue()
+		expect(mount).toHaveLength(1)
+
+		const simulator = mount.get('Telescope Simulator')!
+		mount.connect(client, simulator)
+
+		await Bun.sleep(1000)
+
+		expect(simulator.connected).toBeTrue()
+		expect(guideOutput).toHaveLength(1)
+		expect(guideOutputAdded).toBeTrue()
+		expect(deviceProperty).not.toBeEmpty()
+
+		client.close()
+
+		await Bun.sleep(1000)
+
+		expect(mount).toBeEmpty()
+		expect(guideOutput).toBeEmpty()
+		expect(mountRemoved).toBeTrue()
 		expect(guideOutputRemoved).toBeTrue()
 	}, 10000)
 })
