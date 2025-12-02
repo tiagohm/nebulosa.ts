@@ -149,7 +149,9 @@ describe('parse', () => {
 	})
 })
 
-describe.serial.skip('manager', () => {
+const noIndiServer = process.platform !== 'linux' || Bun.spawnSync(['which', 'indiserver']).stdout.byteLength === 0
+
+describe.serial.skipIf(noIndiServer)('manager', () => {
 	test('camera', async () => {
 		let frame = ''
 		let cameraAdded = false
@@ -254,7 +256,6 @@ describe.serial.skip('manager', () => {
 		await Bun.sleep(1000)
 
 		expect(cameraAdded).toBeTrue()
-
 		expect(camera).toHaveLength(1)
 
 		const simulator = camera.get('CCD Simulator')!
@@ -263,6 +264,32 @@ describe.serial.skip('manager', () => {
 		await Bun.sleep(1000)
 
 		expect(simulator.connected).toBeTrue()
+		expect(simulator.canAbort).toBeTrue()
+		expect(simulator.canSubFrame).toBeTrue()
+		expect(simulator.canBin).toBeTrue()
+		expect(simulator.hasCooler).toBeTrue()
+		expect(simulator.canSetTemperature).toBeTrue()
+		expect(simulator.hasThermometer).toBeTrue()
+		expect(simulator.canPulseGuide).toBeTrue()
+		expect(simulator.hasCoolerControl).toBeTrue()
+		expect(simulator.exposure.min).toBe(0.01)
+		expect(simulator.exposure.max).toBe(3600)
+		expect(simulator.frame.width).toBe(1280)
+		expect(simulator.frame.height).toBe(1024)
+		expect(simulator.frame.maxX).toBe(1279)
+		expect(simulator.frame.maxY).toBe(1023)
+		expect(simulator.frame.maxWidth).toBe(1280)
+		expect(simulator.frame.maxHeight).toBe(1024)
+		expect(simulator.gain.value).toBe(90)
+		expect(simulator.gain.max).toBe(300)
+		expect(simulator.offset.max).toBe(6000)
+		expect(simulator.bin.x).toBe(1)
+		expect(simulator.bin.y).toBe(1)
+		expect(simulator.bin.maxX).toBe(4)
+		expect(simulator.bin.maxY).toBe(4)
+		expect(simulator.pixelSize.x).toBeCloseTo(5.2, 1)
+		expect(simulator.pixelSize.y).toBeCloseTo(5.2, 1)
+		expect(simulator.frameFormats).toEqual(['INDI_MONO'])
 		expect(guideOutput).toHaveLength(1)
 		expect(thermometer).toHaveLength(1)
 		expect(thermometerAdded).toBeTrue()
@@ -375,6 +402,22 @@ describe.serial.skip('manager', () => {
 		await Bun.sleep(1000)
 
 		expect(simulator.connected).toBeTrue()
+		expect(simulator.canSync).toBeTrue()
+		expect(simulator.canGoTo).toBeTrue()
+		expect(simulator.canAbort).toBeTrue()
+		expect(simulator.canHome).toBeTrue()
+		expect(simulator.canPark).toBeTrue()
+		expect(simulator.canPulseGuide).toBeTrue()
+		expect(simulator.trackModes).toEqual(['SIDEREAL', 'SOLAR', 'LUNAR', 'CUSTOM'])
+		expect(simulator.slewRates).toHaveLength(4)
+		expect(simulator.slewRate).toBe('3x')
+		expect(simulator.pierSide).toBe('EAST')
+		expect(simulator.geographicCoordinate.latitude).not.toBe(0)
+		expect(simulator.geographicCoordinate.longitude).not.toBe(0)
+		expect(simulator.geographicCoordinate.elevation).not.toBe(0)
+		expect(simulator.time.utc).not.toBe(0)
+		expect(simulator.equatorialCoordinate.rightAscension).not.toBe(0)
+		expect(simulator.equatorialCoordinate.declination).not.toBe(0)
 		expect(guideOutput).toHaveLength(1)
 		expect(guideOutputAdded).toBeTrue()
 		expect(deviceProperty).not.toBeEmpty()

@@ -338,6 +338,11 @@ export function isGPS(device: Device): device is GPS {
 	return 'hasGPS' in device && device.hasGPS !== undefined
 }
 
+const DEVICES = {
+	[DeviceInterfaceType.TELESCOPE]: DEFAULT_MOUNT,
+	[DeviceInterfaceType.CCD]: DEFAULT_CAMERA,
+} as const
+
 export class DevicePropertyManager implements IndiClientHandler {
 	private readonly properties = new Map<string, DeviceProperties>()
 
@@ -520,31 +525,31 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 
 		if (connected !== device.connected) {
 			device.connected = connected
-			// if (connected) this.ask(client, device)
+			if (connected) this.ask(client, device)
 			return true
 		}
 
 		return false
 	}
 
-	protected handleDriverInfo(client: IndiClient, message: DefTextVector | SetTextVector, interfaceType: DeviceInterfaceType, device: D) {
+	protected handleDriverInfo(client: IndiClient, message: DefTextVector | SetTextVector, interfaceType: DeviceInterfaceType) {
 		const type = +message.elements.DRIVER_INTERFACE!.value
+		let device = this.get(message.device)
 
 		if (isInterfaceType(type, interfaceType)) {
-			if (!this.has(message.device)) {
+			if (!device) {
 				const executable = message.elements.DRIVER_EXEC!.value
 				const version = message.elements.DRIVER_VERSION!.value
 
-				device = structuredClone(device)
+				device = structuredClone(DEVICES[interfaceType as never]) as D
 				device.name = message.device
 				device.driver = { executable, version }
 
 				this.add(client, device)
 				this.ask(client, device)
 			}
-		} else {
-			const device = this.get(message.device)
-			device && this.remove(client, device)
+		} else if (device) {
+			this.remove(client, device)
 		}
 	}
 
@@ -598,8 +603,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 
 	delProperty(client: IndiClient, message: DelProperty) {
 		if (message.name === 'TELESCOPE_TIMED_GUIDE_NS' || message.name === 'TELESCOPE_TIMED_GUIDE_WE') {
-			const device = this.get(message.device)
-			device && this.remove(client, device)
+			super.delProperty(client, message)
 		}
 	}
 }
@@ -628,8 +632,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 
 	delProperty(client: IndiClient, message: DelProperty) {
 		if (message.name === 'CCD_TEMPERATURE') {
-			const device = this.get(message.device)
-			device && this.remove(client, device)
+			super.delProperty(client, message)
 		}
 	}
 }
@@ -778,22 +781,24 @@ export class CameraManager extends DeviceManager<Camera> {
 			}
 			case 'CCD_EXPOSURE': {
 				const value = message.elements.CCD_EXPOSURE_VALUE!
+
+				const { exposure } = device
 				let update = false
 
 				if (tag[0] === 'd') {
 					const { min, max } = value as DefNumber
-					device.exposure.min = min
-					device.exposure.max = max
+					exposure.min = min
+					exposure.max = max
+					update = max !== 0
+				}
+
+				if (message.state && message.state !== exposure.state) {
+					exposure.state = message.state
 					update = true
 				}
 
-				if (message.state && message.state !== device.exposure.state) {
-					device.exposure.state = message.state
-					update = true
-				}
-
-				if (device.exposure.state === 'Busy' || device.exposure.state === 'Ok') {
-					device.exposure.time = value.value
+				if (exposure.state === 'Busy' || exposure.state === 'Ok') {
+					exposure.time = value.value
 					update = true
 				}
 
@@ -840,6 +845,7 @@ export class CameraManager extends DeviceManager<Camera> {
 				const width = message.elements.WIDTH!
 				const height = message.elements.HEIGHT!
 
+				const { frame } = device
 				let update = false
 
 				if (tag[0] === 'd') {
@@ -850,23 +856,23 @@ export class CameraManager extends DeviceManager<Camera> {
 						this.update(client, device, 'canSubFrame', message.state)
 					}
 
-					device.frame.minX = (x as DefNumber).min
-					device.frame.maxX = (x as DefNumber).max
-					device.frame.minY = (y as DefNumber).min
-					device.frame.maxY = (y as DefNumber).max
-					device.frame.minWidth = (width as DefNumber).min
-					device.frame.maxWidth = (width as DefNumber).max
-					device.frame.minHeight = (height as DefNumber).min
-					device.frame.maxHeight = (height as DefNumber).max
+					frame.minX = (x as DefNumber).min
+					frame.maxX = (x as DefNumber).max
+					frame.minY = (y as DefNumber).min
+					frame.maxY = (y as DefNumber).max
+					frame.minWidth = (width as DefNumber).min
+					frame.maxWidth = (width as DefNumber).max
+					frame.minHeight = (height as DefNumber).min
+					frame.maxHeight = (height as DefNumber).max
 
-					update = true
+					update = frame.maxX !== 0 && frame.maxY !== 0 && frame.maxWidth !== 0 && frame.maxHeight !== 0
 				}
 
-				if (update || device.frame.x !== x.value || device.frame.y !== y.value || device.frame.width !== width.value || device.frame.height !== height.value) {
-					device.frame.x = x.value
-					device.frame.y = y.value
-					device.frame.width = width.value
-					device.frame.height = height.value
+				if (update || frame.x !== x.value || frame.y !== y.value || frame.width !== width.value || frame.height !== height.value) {
+					frame.x = x.value
+					frame.y = y.value
+					frame.width = width.value
+					frame.height = height.value
 					update = true
 				}
 
@@ -880,6 +886,9 @@ export class CameraManager extends DeviceManager<Camera> {
 				const binX = message.elements.HOR_BIN!
 				const binY = message.elements.VER_BIN!
 
+				const { bin } = device
+				let update = false
+
 				if (tag[0] === 'd') {
 					const canBin = (message as DefNumberVector).permission !== 'ro'
 
@@ -888,14 +897,21 @@ export class CameraManager extends DeviceManager<Camera> {
 						this.update(client, device, 'canBin', message.state)
 					}
 
-					device.bin.maxX = (binX as DefNumber).max
-					device.bin.maxY = (binY as DefNumber).max
+					bin.maxX = (binX as DefNumber).max
+					bin.maxY = (binY as DefNumber).max
+
+					update = bin.maxX !== 0 && bin.maxY !== 0
 				}
 
-				device.bin.x = binX.value
-				device.bin.y = binY.value
+				if (update || bin.x !== binX.value || bin.y !== binY.value) {
+					bin.x = binX.value
+					bin.y = binY.value
+					update = true
+				}
 
-				this.update(client, device, 'bin', message.state)
+				if (update) {
+					this.update(client, device, 'bin', message.state)
+				}
 
 				return
 			}
@@ -947,7 +963,7 @@ export class CameraManager extends DeviceManager<Camera> {
 
 	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
-			return this.handleDriverInfo(client, message, DeviceInterfaceType.CCD, DEFAULT_CAMERA)
+			return this.handleDriverInfo(client, message, DeviceInterfaceType.CCD)
 		}
 
 		const device = this.get(message.device)
@@ -1254,15 +1270,17 @@ export class MountManager extends DeviceManager<Mount> {
 
 				const rightAscension = hour(message.elements.RA!.value)
 				const declination = deg(message.elements.DEC!.value)
+
+				const { equatorialCoordinate } = device
 				let updated = false
 
-				if (device.equatorialCoordinate.rightAscension !== rightAscension) {
-					device.equatorialCoordinate.rightAscension = rightAscension
+				if (equatorialCoordinate.rightAscension !== rightAscension) {
+					equatorialCoordinate.rightAscension = rightAscension
 					updated = true
 				}
 
-				if (device.equatorialCoordinate.declination !== declination) {
-					device.equatorialCoordinate.declination = declination
+				if (equatorialCoordinate.declination !== declination) {
+					equatorialCoordinate.declination = declination
 					updated = true
 				}
 
@@ -1276,20 +1294,22 @@ export class MountManager extends DeviceManager<Mount> {
 				const longitude = deg(message.elements.LONG!.value)
 				const latitude = deg(message.elements.LAT!.value)
 				const elevation = meter(message.elements.ELEV!.value)
+
+				const { geographicCoordinate } = device
 				let updated = false
 
-				if (device.geographicCoordinate.longitude !== longitude) {
-					device.geographicCoordinate.longitude = longitude >= PI ? longitude - TAU : longitude
+				if (geographicCoordinate.longitude !== longitude) {
+					geographicCoordinate.longitude = longitude >= PI ? longitude - TAU : longitude
 					updated = true
 				}
 
-				if (device.geographicCoordinate.latitude !== latitude) {
-					device.geographicCoordinate.latitude = latitude
+				if (geographicCoordinate.latitude !== latitude) {
+					geographicCoordinate.latitude = latitude
 					updated = true
 				}
 
-				if (device.geographicCoordinate.elevation !== elevation) {
-					device.geographicCoordinate.elevation = elevation
+				if (geographicCoordinate.elevation !== elevation) {
+					geographicCoordinate.elevation = elevation
 					updated = true
 				}
 
@@ -1312,7 +1332,7 @@ export class MountManager extends DeviceManager<Mount> {
 
 	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
-			return this.handleDriverInfo(client, message, DeviceInterfaceType.TELESCOPE, DEFAULT_MOUNT)
+			return this.handleDriverInfo(client, message, DeviceInterfaceType.TELESCOPE)
 		}
 
 		const device = this.get(message.device)
@@ -1321,13 +1341,15 @@ export class MountManager extends DeviceManager<Mount> {
 
 		switch (message.name) {
 			case 'TIME_UTC': {
-				const utc = parseTemporal(message.elements.UTC!.value, 'YYYY-MM-DDTHH:mm:ss')
-				const offset = parseUTCOffset(message.elements.OFFSET!.value)
+				if (message.elements.UTC?.value) {
+					const utc = parseTemporal(message.elements.UTC.value, 'YYYY-MM-DDTHH:mm:ss')
+					const offset = parseUTCOffset(message.elements.OFFSET!.value)
 
-				if (device.time.utc !== utc || device.time.offset !== offset) {
-					device.time.utc = utc
-					device.time.offset = offset
-					this.update(client, device, 'time', message.state)
+					if (device.time.utc !== utc || device.time.offset !== offset) {
+						device.time.utc = utc
+						device.time.offset = offset
+						this.update(client, device, 'time', message.state)
+					}
 				}
 
 				return
@@ -1355,7 +1377,7 @@ function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | O
 
 function parseUTCOffset(text: string) {
 	const parts = text.split(':')
-
-	if (parts.length === 1) return +parts[0] * 60
-	else return +parts[0] * 60 + +parts[1]
+	const hour = +parts[0] * 60
+	const minute = parts.length >= 2 ? +parts[1] : 0
+	return hour + minute
 }
