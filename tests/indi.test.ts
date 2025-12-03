@@ -1,6 +1,6 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { type DefSwitchVector, IndiClient, type IndiClientHandler, type PropertyState } from '../src/indi'
-import { type Camera, CameraManager, type DeviceHandler, type DeviceProperty, type DevicePropertyHandler, DevicePropertyManager, type GuideOutput, GuideOutputManager, type Mount, MountManager, type Thermometer, ThermometerManager, type Wheel, WheelManager } from '../src/indi.manager'
+import { type Camera, CameraManager, type DeviceHandler, type DeviceProperty, type DevicePropertyHandler, DevicePropertyManager, type Focuser, FocuserManager, type GuideOutput, GuideOutputManager, type Mount, MountManager, type Thermometer, ThermometerManager, type Wheel, WheelManager } from '../src/indi.manager'
 import { SimpleXmlParser } from '../src/xml'
 
 const text = await Bun.file('data/indi.log').text()
@@ -432,6 +432,9 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		expect(guideOutputRemoved).toBeTrue()
 	}, 10000)
 
+	const FILTER_SLOTS_1 = ['Red', 'Green', 'Blue', 'H_Alpha', 'SII', 'OIII', 'LPR', 'Luminance']
+	const FILTER_SLOTS_2 = ['Luminance', 'Red', 'Green', 'Blue', 'Ha', 'SII', 'OIII', 'Dark']
+
 	test('wheel', async () => {
 		let wheelAdded = false
 		let wheelRemoved = false
@@ -500,19 +503,27 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 
 		await Bun.sleep(1000)
 
+		let actual: string[] = FILTER_SLOTS_1
+		let expected: string[] = FILTER_SLOTS_2
+
+		if (simulator.slots[0] !== actual[0]) {
+			actual = FILTER_SLOTS_2
+			expected = FILTER_SLOTS_1
+		}
+
 		expect(simulator.connected).toBeTrue()
 		expect(simulator.slots).toHaveLength(8)
-		expect(simulator.slots).toEqual(['Red', 'Green', 'Blue', 'H_Alpha', 'SII', 'OIII', 'LPR', 'Luminance'])
+		expect(simulator.slots).toEqual(actual)
 		expect(simulator.position).toBe(0)
 		expect(deviceProperty).not.toBeEmpty()
 
 		wheel.moveTo(client, simulator, 7)
-		wheel.slots(client, simulator, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'])
+		wheel.slots(client, simulator, expected)
 
 		await Bun.sleep(2000)
 
 		expect(simulator.position).toBe(7)
-		expect(simulator.slots).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'])
+		expect(simulator.slots).toEqual(expected)
 
 		client.close()
 
@@ -520,5 +531,119 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 
 		expect(wheel).toBeEmpty()
 		expect(wheelRemoved).toBeTrue()
+	}, 10000)
+
+	test('focuser', async () => {
+		let focuserAdded = false
+		let focuserRemoved = false
+		let thermometerAdded = false
+		let thermometerRemoved = false
+
+		const process = Bun.spawn(['indiserver', 'indi_simulator_focus'])
+
+		const focuserDeviceHandler: DeviceHandler<Focuser> = {
+			added: (client: IndiClient, device: Focuser) => {
+				focuserAdded = true
+			},
+			updated: (client: IndiClient, device: Focuser, property: keyof Focuser, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: Focuser) => {
+				focuserRemoved = true
+			},
+		}
+
+		const thermometerDeviceHandler: DeviceHandler<Thermometer> = {
+			added: (client: IndiClient, device: Thermometer) => {
+				thermometerAdded = true
+			},
+			updated: (client: IndiClient, device: Thermometer, property: keyof Thermometer, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: Thermometer) => {
+				thermometerRemoved = true
+			},
+		}
+
+		const devicePropertyHandler: DevicePropertyHandler = {
+			added: (device: string, property: DeviceProperty) => {},
+			updated: (device: string, property: DeviceProperty) => {},
+			removed: (device: string, property: DeviceProperty) => {},
+		}
+
+		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
+		const focuser = new FocuserManager(focuserDeviceHandler)
+		const thermometer = new ThermometerManager(focuser, thermometerDeviceHandler)
+
+		const handler: IndiClientHandler = {
+			textVector: (client, message, tag) => {
+				focuser.textVector(client, message, tag)
+			},
+			numberVector: (client, message, tag) => {
+				focuser.numberVector(client, message, tag)
+				thermometer.numberVector(client, message, tag)
+			},
+			switchVector: (client, message, tag) => {
+				focuser.switchVector(client, message, tag)
+			},
+			vector: (client, message, tag) => {
+				deviceProperty.vector(client, message, tag)
+			},
+			delProperty: (client, message) => {
+				deviceProperty.delProperty(client, message)
+				focuser.delProperty(client, message)
+				thermometer.delProperty(client, message)
+			},
+			close: (client, server) => {
+				focuser.close(client, server)
+				thermometer.close(client, server)
+			},
+		}
+
+		await Bun.sleep(1000)
+
+		const client = new IndiClient({ handler })
+
+		onTestFinished(() => {
+			process.kill()
+		})
+
+		await client.connect('localhost')
+		await Bun.sleep(1000)
+
+		expect(focuserAdded).toBeTrue()
+		expect(focuser).toHaveLength(1)
+
+		const simulator = focuser.get('Focuser Simulator')!
+		focuser.connect(client, simulator)
+
+		await Bun.sleep(1000)
+
+		expect(simulator.connected).toBeTrue()
+		// expect(simulator.canAbort).toBeTrue()
+		expect(simulator.hasThermometer).toBeTrue()
+		expect(simulator.canAbsoluteMove).toBeTrue()
+		// expect(simulator.canReverse).toBeTrue()
+		// expect(simulator.canSync).toBeTrue()
+		expect(simulator.position.max).toEqual(100000)
+		expect(simulator.position.value).toEqual(50000)
+		expect(thermometer).toHaveLength(1)
+		expect(thermometerAdded).toBeTrue()
+		expect(deviceProperty).not.toBeEmpty()
+
+		focuser.moveTo(client, simulator, 60000)
+
+		await Bun.sleep(2000)
+
+		expect(simulator.position.value).toBe(60000)
+
+		client.close()
+
+		await Bun.sleep(1000)
+
+		expect(focuser).toBeEmpty()
+		expect(thermometer).toBeEmpty()
+		expect(focuserRemoved).toBeTrue()
+		expect(thermometerRemoved).toBeTrue()
 	}, 10000)
 })

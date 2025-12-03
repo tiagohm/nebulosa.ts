@@ -208,6 +208,19 @@ export interface Wheel extends Device {
 	position: number
 }
 
+export interface Focuser extends Device, Thermometer {
+	readonly type: 'FOCUSER'
+	moving: boolean
+	readonly position: Pick<DefNumber, 'min' | 'max' | 'value'>
+	canAbsoluteMove: boolean
+	canRelativeMove: boolean
+	canAbort: boolean
+	canReverse: boolean
+	reversed: boolean
+	canSync: boolean
+	hasBacklash: boolean
+}
+
 export const DEFAULT_CAMERA: Camera = {
 	hasCoolerControl: false,
 	coolerPower: 0,
@@ -334,6 +347,31 @@ export const DEFAULT_WHEEL: Wheel = {
 	position: 0,
 }
 
+export const DEFAULT_FOCUSER: Focuser = {
+	type: 'FOCUSER',
+	name: '',
+	connected: false,
+	driver: {
+		executable: '',
+		version: '',
+	},
+	moving: false,
+	position: {
+		value: 0,
+		min: 0,
+		max: 100,
+	},
+	canAbsoluteMove: false,
+	canRelativeMove: false,
+	canAbort: false,
+	canReverse: false,
+	reversed: false,
+	canSync: false,
+	hasBacklash: false,
+	hasThermometer: false,
+	temperature: 0,
+}
+
 export function isCamera(device: Device): device is Camera {
 	return device.type === 'CAMERA'
 }
@@ -361,6 +399,7 @@ export function isGPS(device: Device): device is GPS {
 const DEVICES = {
 	[DeviceInterfaceType.TELESCOPE]: DEFAULT_MOUNT,
 	[DeviceInterfaceType.CCD]: DEFAULT_CAMERA,
+	[DeviceInterfaceType.FOCUSER]: DEFAULT_FOCUSER,
 	[DeviceInterfaceType.FILTER]: DEFAULT_WHEEL,
 } as const
 
@@ -639,7 +678,8 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
 		switch (message.name) {
-			case 'CCD_TEMPERATURE': {
+			case 'CCD_TEMPERATURE':
+			case 'FOCUS_TEMPERATURE': {
 				const device = this.provider.get(message.device)
 
 				if (device && tag[0] === 'd') {
@@ -652,7 +692,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 	}
 
 	delProperty(client: IndiClient, message: DelProperty) {
-		if (message.name === 'CCD_TEMPERATURE') {
+		if (message.name === 'CCD_TEMPERATURE' || message.name === 'FOCUS_TEMPERATURE') {
 			super.delProperty(client, message)
 		}
 	}
@@ -1436,6 +1476,156 @@ export class WheelManager extends DeviceManager<Wheel> {
 
 				return
 			}
+		}
+	}
+}
+
+export class FocuserManager extends DeviceManager<Focuser> {
+	stop(client: IndiClient, focuser: Focuser) {
+		if (focuser.canAbort) {
+			client.sendSwitch({ device: focuser.name, name: 'FOCUS_ABORT_MOTION', elements: { ABORT: true } })
+		}
+	}
+
+	moveIn(client: IndiClient, focuser: Focuser, value: number) {
+		if (focuser.canRelativeMove) {
+			client.sendSwitch({ device: focuser.name, name: 'FOCUS_MOTION', elements: { FOCUS_INWARD: true } })
+			client.sendNumber({ device: focuser.name, name: 'REL_FOCUS_POSITION', elements: { FOCUS_RELATIVE_POSITION: value } })
+		}
+	}
+
+	moveOut(client: IndiClient, focuser: Focuser, value: number) {
+		if (focuser.canRelativeMove) {
+			client.sendSwitch({ device: focuser.name, name: 'FOCUS_MOTION', elements: { FOCUS_OUTWARD: true } })
+			client.sendNumber({ device: focuser.name, name: 'REL_FOCUS_POSITION', elements: { FOCUS_RELATIVE_POSITION: value } })
+		}
+	}
+
+	moveTo(client: IndiClient, focuser: Focuser, value: number) {
+		if (focuser.canAbsoluteMove) {
+			client.sendNumber({ device: focuser.name, name: 'ABS_FOCUS_POSITION', elements: { FOCUS_ABSOLUTE_POSITION: value } })
+		}
+	}
+
+	sync(client: IndiClient, focuser: Focuser, value: number) {
+		if (focuser.canSync) {
+			client.sendNumber({ device: focuser.name, name: 'FOCUS_SYNC', elements: { FOCUS_SYNC_VALUE: value } })
+		}
+	}
+
+	reverse(client: IndiClient, focuser: Focuser, enabled: boolean) {
+		if (focuser.canSync) {
+			client.sendSwitch({ device: focuser.name, name: 'FOCUS_REVERSE_MOTION', elements: { [enabled ? 'INDI_ENABLED' : 'INDI_DISABLED']: true } })
+		}
+	}
+
+	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		super.switchVector(client, message, tag)
+
+		switch (message.name) {
+			case 'FOCUS_ABORT_MOTION':
+				if (tag[0] === 'd' && !device.canAbort) {
+					device.canAbort = true
+					this.update(client, device, 'canAbort', message.state)
+				}
+
+				return
+			case 'FOCUS_REVERSE_MOTION': {
+				if (tag[0] === 'd' && !device.canReverse) {
+					device.canReverse = true
+					this.update(client, device, 'canReverse', message.state)
+				}
+
+				const reversed = message.elements.INDI_ENABLED?.value === true
+
+				if (device.reversed !== reversed) {
+					device.reversed = reversed
+					this.update(client, device, 'reversed', message.state)
+				}
+
+				return
+			}
+		}
+	}
+
+	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		switch (message.name) {
+			case 'FOCUS_TEMPERATURE':
+				if (tag[0] === 'd' && !device.hasThermometer) {
+					device.hasThermometer = true
+					this.update(client, device, 'hasThermometer', message.state)
+				}
+
+				return
+			case 'FOCUS_SYNC':
+				if (tag[0] === 'd' && !device.canSync) {
+					device.canSync = true
+					this.update(client, device, 'canSync', message.state)
+				}
+				return
+			case 'REL_FOCUS_POSITION': {
+				if (tag[0] === 'd' && !device.canRelativeMove) {
+					device.canRelativeMove = true
+					this.update(client, device, 'canRelativeMove', message.state)
+				}
+
+				const moving = message.state === 'Busy'
+
+				if (moving !== device.moving) {
+					device.moving = moving
+					this.update(client, device, 'moving', message.state)
+				}
+
+				return
+			}
+			case 'ABS_FOCUS_POSITION': {
+				if (tag[0] === 'd') {
+					if (!device.canAbsoluteMove) {
+						device.canAbsoluteMove = true
+						this.update(client, device, 'canAbsoluteMove', message.state)
+					}
+
+					const { position } = device
+					const { min, max, value } = (message as DefNumberVector).elements.FOCUS_ABSOLUTE_POSITION
+
+					if (position.min !== min || position.max !== max || position.value !== value) {
+						position.min = min
+						position.max = max
+						position.value = value
+						this.update(client, device, 'position', message.state)
+					}
+				} else {
+					const position = message.elements.FOCUS_ABSOLUTE_POSITION.value
+
+					if (device.position.value !== position) {
+						device.position.value = position
+						this.update(client, device, 'position', message.state)
+					}
+				}
+
+				const moving = message.state === 'Busy'
+
+				if (moving !== device.moving) {
+					device.moving = moving
+					this.update(client, device, 'moving', message.state)
+				}
+
+				return
+			}
+		}
+	}
+
+	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
+		if (message.name === 'DRIVER_INFO') {
+			return this.handleDriverInfo(client, message, DeviceInterfaceType.FOCUSER)
 		}
 	}
 }
