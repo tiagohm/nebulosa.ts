@@ -221,6 +221,20 @@ export interface Focuser extends Device, Thermometer {
 	hasBacklash: boolean
 }
 
+export interface DewHeater extends Device {
+	readonly type: 'DEW_HEATER' | 'CAMERA' | 'COVER'
+	hasDewHeater: boolean
+	readonly pwm: Pick<DefNumber, 'min' | 'max' | 'value'>
+}
+
+export interface Cover extends Device, Parkable, DewHeater {
+	readonly type: 'COVER'
+}
+
+export interface DeviceProvider<D extends Device> {
+	readonly get: (name: string) => D | undefined
+}
+
 export const DEFAULT_CAMERA: Camera = {
 	hasCoolerControl: false,
 	coolerPower: 0,
@@ -372,13 +386,44 @@ export const DEFAULT_FOCUSER: Focuser = {
 	temperature: 0,
 }
 
+export const DEFAULT_COVER: Cover = {
+	canPark: false,
+	parking: false,
+	parked: false,
+	hasDewHeater: false,
+	pwm: {
+		value: 0,
+		min: 0,
+		max: 100,
+	},
+	type: 'COVER',
+	name: '',
+	connected: false,
+	driver: {
+		executable: '',
+		version: '',
+	},
+}
+
 export function isCamera(device: Device): device is Camera {
 	return device.type === 'CAMERA'
 }
 
-// export function isMount(device: Device): device is Mount {
-// 	return device.type === 'MOUNT'
-// }
+export function isMount(device: Device): device is Mount {
+	return device.type === 'MOUNT'
+}
+
+export function isFocuser(device: Device): device is Focuser {
+	return device.type === 'FOCUSER'
+}
+
+export function isWheel(device: Device): device is Wheel {
+	return device.type === 'WHEEL'
+}
+
+export function isCover(device: Device): device is Cover {
+	return device.type === 'COVER'
+}
 
 export function isThermometer(device: Device): device is Thermometer {
 	return 'hasThermometer' in device && device.hasThermometer !== undefined
@@ -388,9 +433,9 @@ export function isGuideOutput(device: Device): device is GuideOutput {
 	return 'canPulseGuide' in device && device.canPulseGuide !== undefined
 }
 
-// export function isDewHeater(device: Device): device is DewHeater {
-// 	return 'hasDewHeater' in device && device.hasDewHeater !== undefined
-// }
+export function isDewHeater(device: Device): device is DewHeater {
+	return 'hasDewHeater' in device && device.hasDewHeater !== undefined
+}
 
 export function isGPS(device: Device): device is GPS {
 	return 'hasGPS' in device && device.hasGPS !== undefined
@@ -401,6 +446,7 @@ const DEVICES = {
 	[DeviceInterfaceType.CCD]: DEFAULT_CAMERA,
 	[DeviceInterfaceType.FOCUSER]: DEFAULT_FOCUSER,
 	[DeviceInterfaceType.FILTER]: DEFAULT_WHEEL,
+	[DeviceInterfaceType.DUSTCAP]: DEFAULT_COVER,
 } as const
 
 export class DevicePropertyManager implements IndiClientHandler {
@@ -500,10 +546,6 @@ export class DevicePropertyManager implements IndiClientHandler {
 
 		return false
 	}
-}
-
-export interface DeviceProvider<D extends Device> {
-	readonly get: (name: string) => D | undefined
 }
 
 export abstract class DeviceManager<D extends Device> implements IndiClientHandler, DeviceProvider<D> {
@@ -617,6 +659,9 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		if (!this.has(device.name)) {
 			this.devices.set(device.name, device)
 			this.handler.added(client, device)
+			return true
+		} else {
+			return false
 		}
 	}
 
@@ -628,6 +673,9 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		if (this.has(device.name)) {
 			this.devices.delete(device.name)
 			this.handler.removed(client, device)
+			return true
+		} else {
+			return false
 		}
 	}
 
@@ -652,8 +700,12 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 			case 'TELESCOPE_TIMED_GUIDE_WE': {
 				const device = this.provider.get(message.device)
 
-				if (device && tag[0] === 'd') {
-					this.add(client, device)
+				if (device && tag[0] === 'd' && !device.canPulseGuide) {
+					device.canPulseGuide = true
+
+					if (this.add(client, device)) {
+						this.update(client, device, 'canPulseGuide', message.state)
+					}
 				}
 
 				return
@@ -663,7 +715,16 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 
 	delProperty(client: IndiClient, message: DelProperty) {
 		if (message.name === 'TELESCOPE_TIMED_GUIDE_NS' || message.name === 'TELESCOPE_TIMED_GUIDE_WE') {
-			super.delProperty(client, message)
+			const device = this.get(message.device)
+
+			if (device) {
+				if (device.canPulseGuide) {
+					device.canPulseGuide = false
+					this.update(client, device, 'canPulseGuide')
+				}
+
+				this.remove(client, device)
+			}
 		}
 	}
 }
@@ -682,8 +743,12 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 			case 'FOCUS_TEMPERATURE': {
 				const device = this.provider.get(message.device)
 
-				if (device && tag[0] === 'd') {
-					this.add(client, device)
+				if (device && tag[0] === 'd' && !device.hasThermometer) {
+					device.hasThermometer = true
+
+					if (this.add(client, device)) {
+						this.update(client, device, 'hasThermometer', message.state)
+					}
 				}
 
 				return
@@ -693,7 +758,16 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 
 	delProperty(client: IndiClient, message: DelProperty) {
 		if (message.name === 'CCD_TEMPERATURE' || message.name === 'FOCUS_TEMPERATURE') {
-			super.delProperty(client, message)
+			const device = this.get(message.device)
+
+			if (device) {
+				if (device.hasThermometer) {
+					device.hasThermometer = false
+					this.update(client, device, 'hasThermometer')
+				}
+
+				this.remove(client, device)
+			}
 		}
 	}
 }
@@ -892,11 +966,6 @@ export class CameraManager extends DeviceManager<Camera> {
 						device.canSetTemperature = canSetTemperature
 						this.update(client, device, 'canSetTemperature', message.state)
 					}
-
-					if (!device.hasThermometer) {
-						device.hasThermometer = true
-						this.update(client, device, 'hasThermometer', message.state)
-					}
 				}
 
 				return
@@ -1011,14 +1080,6 @@ export class CameraManager extends DeviceManager<Camera> {
 
 				return
 			}
-			case 'TELESCOPE_TIMED_GUIDE_NS':
-			case 'TELESCOPE_TIMED_GUIDE_WE':
-				if (tag[0] === 'd' && !device.canPulseGuide) {
-					device.canPulseGuide = true
-					this.update(client, device, 'canPulseGuide', message.state)
-				}
-
-				return
 		}
 	}
 
@@ -1380,14 +1441,6 @@ export class MountManager extends DeviceManager<Mount> {
 
 				return
 			}
-			case 'TELESCOPE_TIMED_GUIDE_NS':
-			case 'TELESCOPE_TIMED_GUIDE_WE':
-				if (tag[0] === 'd' && !device.canPulseGuide) {
-					device.canPulseGuide = true
-					this.update(client, device, 'canPulseGuide', message.state)
-				}
-
-				return
 		}
 	}
 
@@ -1558,13 +1611,6 @@ export class FocuserManager extends DeviceManager<Focuser> {
 		if (!device) return
 
 		switch (message.name) {
-			case 'FOCUS_TEMPERATURE':
-				if (tag[0] === 'd' && !device.hasThermometer) {
-					device.hasThermometer = true
-					this.update(client, device, 'hasThermometer', message.state)
-				}
-
-				return
 			case 'FOCUS_SYNC':
 				if (tag[0] === 'd' && !device.canSync) {
 					device.canSync = true
@@ -1626,6 +1672,113 @@ export class FocuserManager extends DeviceManager<Focuser> {
 	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.FOCUSER)
+		}
+	}
+}
+
+export class CoverManager extends DeviceManager<Cover> {
+	unpark(client: IndiClient, device: Cover) {
+		if (device.canPark) {
+			client.sendSwitch({ device: device.name, name: 'CAP_PARK', elements: { UNPARK: true } })
+		}
+	}
+
+	park(client: IndiClient, device: Cover) {
+		if (device.canPark) {
+			client.sendSwitch({ device: device.name, name: 'CAP_PARK', elements: { PARK: true } })
+		}
+	}
+
+	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		super.switchVector(client, message, tag)
+
+		switch (message.name) {
+			case 'CAP_PARK': {
+				if (tag[0] === 'd') {
+					const canPark = (message as DefSwitchVector).permission !== 'ro'
+
+					if (device.canPark !== canPark) {
+						device.canPark = canPark
+						this.update(client, device, 'canPark', message.state)
+					}
+				}
+
+				const parking = message.state === 'Busy'
+
+				if (parking !== device.parking) {
+					device.parking = parking
+					this.update(client, device, 'parking', message.state)
+				}
+
+				const parked = message.elements.PARK?.value === true
+
+				if (parked !== device.parked) {
+					device.parked = parked
+					this.update(client, device, 'parked', message.state)
+				}
+
+				return
+			}
+		}
+	}
+
+	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
+		if (message.name === 'DRIVER_INFO') {
+			return this.handleDriverInfo(client, message, DeviceInterfaceType.DUSTCAP)
+		}
+	}
+}
+
+export class DewHeaterManager extends DeviceManager<DewHeater> {
+	constructor(
+		readonly provider: DeviceProvider<DewHeater>,
+		handler: DeviceHandler<DewHeater>,
+	) {
+		super(handler)
+	}
+
+	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
+		const device = this.provider.get(message.device)
+
+		if (!device) return
+
+		switch (message.name) {
+			// WandererCover V4 EC
+			case 'Heater':
+				if (tag[0] === 'd' && !device.hasDewHeater) {
+					device.hasDewHeater = true
+
+					const { min, max, value } = (message as DefNumberVector).elements.Heater
+					device.pwm.min = min
+					device.pwm.max = max
+					device.pwm.value = value
+
+					if (this.add(client, device)) {
+						this.update(client, device, 'pwm', message.state)
+						this.update(client, device, 'hasDewHeater', message.state)
+					}
+				}
+
+				return
+		}
+	}
+
+	delProperty(client: IndiClient, message: DelProperty) {
+		if (message.name === 'Heater') {
+			const device = this.get(message.device)
+
+			if (device) {
+				if (device.hasDewHeater) {
+					device.hasDewHeater = false
+					this.update(client, device, 'hasDewHeater')
+				}
+
+				this.remove(client, device)
+			}
 		}
 	}
 }
