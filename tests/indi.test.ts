@@ -1,6 +1,6 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { type DefSwitchVector, IndiClient, type IndiClientHandler, type PropertyState } from '../src/indi'
-import { type Camera, CameraManager, type DeviceHandler, type DeviceProperty, type DevicePropertyHandler, DevicePropertyManager, type GuideOutput, GuideOutputManager, type Mount, MountManager, type Thermometer, ThermometerManager } from '../src/indi.manager'
+import { type Camera, CameraManager, type DeviceHandler, type DeviceProperty, type DevicePropertyHandler, DevicePropertyManager, type GuideOutput, GuideOutputManager, type Mount, MountManager, type Thermometer, ThermometerManager, type Wheel, WheelManager } from '../src/indi.manager'
 import { SimpleXmlParser } from '../src/xml'
 
 const text = await Bun.file('data/indi.log').text()
@@ -430,5 +430,95 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		expect(guideOutput).toBeEmpty()
 		expect(mountRemoved).toBeTrue()
 		expect(guideOutputRemoved).toBeTrue()
+	}, 10000)
+
+	test('wheel', async () => {
+		let wheelAdded = false
+		let wheelRemoved = false
+
+		const process = Bun.spawn(['indiserver', 'indi_simulator_wheel'])
+
+		const wheelDeviceHandler: DeviceHandler<Wheel> = {
+			added: (client: IndiClient, device: Wheel) => {
+				wheelAdded = true
+			},
+			updated: (client: IndiClient, device: Wheel, property: keyof Wheel, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: Wheel) => {
+				wheelRemoved = true
+			},
+		}
+
+		const devicePropertyHandler: DevicePropertyHandler = {
+			added: (device: string, property: DeviceProperty) => {},
+			updated: (device: string, property: DeviceProperty) => {},
+			removed: (device: string, property: DeviceProperty) => {},
+		}
+
+		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
+		const wheel = new WheelManager(wheelDeviceHandler)
+
+		const handler: IndiClientHandler = {
+			textVector: (client, message, tag) => {
+				wheel.textVector(client, message, tag)
+			},
+			numberVector: (client, message, tag) => {
+				wheel.numberVector(client, message, tag)
+			},
+			switchVector: (client, message, tag) => {
+				wheel.switchVector(client, message, tag)
+			},
+			vector: (client, message, tag) => {
+				deviceProperty.vector(client, message, tag)
+			},
+			delProperty: (client, message) => {
+				deviceProperty.delProperty(client, message)
+				wheel.delProperty(client, message)
+			},
+			close: (client, server) => {
+				wheel.close(client, server)
+			},
+		}
+
+		await Bun.sleep(1000)
+
+		const client = new IndiClient({ handler })
+
+		onTestFinished(() => {
+			process.kill()
+		})
+
+		await client.connect('localhost')
+		await Bun.sleep(1000)
+
+		expect(wheelAdded).toBeTrue()
+		expect(wheel).toHaveLength(1)
+
+		const simulator = wheel.get('Filter Simulator')!
+		wheel.connect(client, simulator)
+
+		await Bun.sleep(1000)
+
+		expect(simulator.connected).toBeTrue()
+		expect(simulator.slots).toHaveLength(8)
+		expect(simulator.slots).toEqual(['Red', 'Green', 'Blue', 'H_Alpha', 'SII', 'OIII', 'LPR', 'Luminance'])
+		expect(simulator.position).toBe(0)
+		expect(deviceProperty).not.toBeEmpty()
+
+		wheel.moveTo(client, simulator, 7)
+		wheel.slots(client, simulator, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'])
+
+		await Bun.sleep(2000)
+
+		expect(simulator.position).toBe(7)
+		expect(simulator.slots).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'])
+
+		client.close()
+
+		await Bun.sleep(1000)
+
+		expect(wheel).toBeEmpty()
+		expect(wheelRemoved).toBeTrue()
 	}, 10000)
 })

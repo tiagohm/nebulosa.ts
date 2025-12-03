@@ -201,6 +201,13 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 	readonly equatorialCoordinate: EquatorialCoordinate
 }
 
+export interface Wheel extends Device {
+	readonly type: 'WHEEL'
+	moving: boolean
+	slots: string[]
+	position: number
+}
+
 export const DEFAULT_CAMERA: Camera = {
 	hasCoolerControl: false,
 	coolerPower: 0,
@@ -314,6 +321,19 @@ export const DEFAULT_MOUNT: Mount = {
 	parked: false,
 }
 
+export const DEFAULT_WHEEL: Wheel = {
+	type: 'WHEEL',
+	name: '',
+	connected: false,
+	driver: {
+		executable: '',
+		version: '',
+	},
+	moving: false,
+	slots: [],
+	position: 0,
+}
+
 export function isCamera(device: Device): device is Camera {
 	return device.type === 'CAMERA'
 }
@@ -341,6 +361,7 @@ export function isGPS(device: Device): device is GPS {
 const DEVICES = {
 	[DeviceInterfaceType.TELESCOPE]: DEFAULT_MOUNT,
 	[DeviceInterfaceType.CCD]: DEFAULT_CAMERA,
+	[DeviceInterfaceType.FILTER]: DEFAULT_WHEEL,
 } as const
 
 export class DevicePropertyManager implements IndiClientHandler {
@@ -1032,7 +1053,7 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 	}
 
-	private equatorialCoordinate(client: IndiClient, mount: Mount, rightAscension: Angle, declination: Angle) {
+	equatorialCoordinate(client: IndiClient, mount: Mount, rightAscension: Angle, declination: Angle) {
 		client.sendNumber({ device: mount.name, name: 'EQUATORIAL_EOD_COORD', elements: { RA: toHour(normalizeAngle(rightAscension)), DEC: toDeg(declination) } })
 	}
 
@@ -1350,6 +1371,67 @@ export class MountManager extends DeviceManager<Mount> {
 						device.time.offset = offset
 						this.update(client, device, 'time', message.state)
 					}
+				}
+
+				return
+			}
+		}
+	}
+}
+
+export class WheelManager extends DeviceManager<Wheel> {
+	moveTo(client: IndiClient, wheel: Wheel, value: number) {
+		client.sendNumber({ device: wheel.name, name: 'FILTER_SLOT', elements: { FILTER_SLOT_VALUE: value + 1 } })
+	}
+
+	slots(client: IndiClient, wheel: Wheel, names: string[]) {
+		const elements: Record<string, string> = {}
+		names.forEach((name, index) => (elements[`FILTER_SLOT_NAME_${index + 1}`] = name))
+		client.sendText({ device: wheel.name, name: 'FILTER_NAME', elements })
+	}
+
+	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		switch (message.name) {
+			case 'FILTER_SLOT': {
+				const value = message.elements.FILTER_SLOT_VALUE.value - 1
+
+				if (device.position !== value) {
+					device.position = value
+					this.update(client, device, 'position', message.state)
+				}
+
+				const moving = message.state === 'Busy'
+
+				if (device.moving !== moving) {
+					device.moving = moving
+					this.update(client, device, 'moving', message.state)
+				}
+
+				return
+			}
+		}
+	}
+
+	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
+		if (message.name === 'DRIVER_INFO') {
+			return this.handleDriverInfo(client, message, DeviceInterfaceType.FILTER)
+		}
+
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		switch (message.name) {
+			case 'FILTER_NAME': {
+				const slots = Object.values(message.elements)
+
+				if (slots.length !== device.slots.length || slots.some((e, index) => e.value !== device.slots[index])) {
+					device.slots = slots.map((e) => e.value)
+					this.update(client, device, 'slots', message.state)
 				}
 
 				return
