@@ -125,10 +125,7 @@ export interface Camera extends GuideOutput, Thermometer {
 		offsetY: number
 		type: CfaPattern
 	}
-	readonly exposure: {
-		time: number
-		min: number
-		max: number
+	readonly exposure: MinMaxValueProperty & {
 		state: PropertyState
 	}
 	hasCooler: boolean
@@ -211,7 +208,7 @@ export interface Wheel extends Device {
 export interface Focuser extends Device, Thermometer {
 	readonly type: 'FOCUSER'
 	moving: boolean
-	readonly position: Pick<DefNumber, 'min' | 'max' | 'value'>
+	readonly position: MinMaxValueProperty
 	canAbsoluteMove: boolean
 	canRelativeMove: boolean
 	canAbort: boolean
@@ -224,11 +221,17 @@ export interface Focuser extends Device, Thermometer {
 export interface DewHeater extends Device {
 	readonly type: 'DEW_HEATER' | 'CAMERA' | 'COVER'
 	hasDewHeater: boolean
-	readonly pwm: Pick<DefNumber, 'min' | 'max' | 'value'>
+	readonly pwm: MinMaxValueProperty
 }
 
 export interface Cover extends Device, Parkable, DewHeater {
 	readonly type: 'COVER'
+}
+
+export interface FlatPanel extends Device {
+	readonly type: 'FLAT_PANEL'
+	enabled: boolean
+	readonly intensity: MinMaxValueProperty
 }
 
 export interface DeviceProvider<D extends Device> {
@@ -249,7 +252,7 @@ export const DEFAULT_CAMERA: Camera = {
 		type: 'RGGB',
 	},
 	exposure: {
-		time: 0,
+		value: 0,
 		min: 0,
 		max: 0,
 		state: 'Idle',
@@ -405,6 +408,22 @@ export const DEFAULT_COVER: Cover = {
 	},
 }
 
+export const DEFAULT_FLAT_PANEL: FlatPanel = {
+	enabled: false,
+	intensity: {
+		value: 0,
+		min: 0,
+		max: 100,
+	},
+	type: 'FLAT_PANEL',
+	name: '',
+	connected: false,
+	driver: {
+		executable: '',
+		version: '',
+	},
+}
+
 export function isCamera(device: Device): device is Camera {
 	return device.type === 'CAMERA'
 }
@@ -447,6 +466,7 @@ const DEVICES = {
 	[DeviceInterfaceType.FOCUSER]: DEFAULT_FOCUSER,
 	[DeviceInterfaceType.FILTER]: DEFAULT_WHEEL,
 	[DeviceInterfaceType.DUSTCAP]: DEFAULT_COVER,
+	[DeviceInterfaceType.LIGHTBOX]: DEFAULT_FLAT_PANEL,
 } as const
 
 export class DevicePropertyManager implements IndiClientHandler {
@@ -773,12 +793,8 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 }
 
 export class CameraManager extends DeviceManager<Camera> {
-	constructor(
-		readonly propertyManager: DevicePropertyManager,
-		handler: DeviceHandler<Camera>,
-	) {
-		super(handler)
-	}
+	private readonly gainProperty = new Map<string, readonly [string, string]>()
+	private readonly offsetProperty = new Map<string, readonly [string, string]>()
 
 	cooler(client: IndiClient, camera: Camera, value: boolean) {
 		if (camera.hasCoolerControl && camera.cooler !== value) {
@@ -815,22 +831,20 @@ export class CameraManager extends DeviceManager<Camera> {
 	}
 
 	gain(client: IndiClient, camera: Camera, value: number) {
-		const properties = this.propertyManager.list(camera.name)
+		const property = this.gainProperty.get(camera.name)
 
-		if (properties?.CCD_CONTROLS?.elements.Gain) {
-			client.sendNumber({ device: camera.name, name: 'CCD_CONTROLS', elements: { Gain: value } })
-		} else if (properties?.CCD_GAIN?.elements.GAIN) {
-			client.sendNumber({ device: camera.name, name: 'CCD_GAIN', elements: { GAIN: value } })
+		if (property) {
+			const [name, element] = property
+			client.sendNumber({ device: camera.name, name, elements: { [element]: value } })
 		}
 	}
 
 	offset(client: IndiClient, camera: Camera, value: number) {
-		const properties = this.propertyManager.list(camera.name)
+		const property = this.offsetProperty.get(camera.name)
 
-		if (properties?.CCD_CONTROLS?.elements.Offset) {
-			client.sendNumber({ device: camera.name, name: 'CCD_CONTROLS', elements: { Offset: value } })
-		} else if (properties?.CCD_OFFSET?.elements.OFFSET) {
-			client.sendNumber({ device: camera.name, name: 'CCD_OFFSET', elements: { OFFSET: value } })
+		if (property) {
+			const [name, element] = property
+			client.sendNumber({ device: camera.name, name, elements: { [element]: value } })
 		}
 	}
 
@@ -918,22 +932,11 @@ export class CameraManager extends DeviceManager<Camera> {
 				const value = message.elements.CCD_EXPOSURE_VALUE!
 
 				const { exposure } = device
-				let update = false
 
-				if (tag[0] === 'd') {
-					const { min, max } = value as DefNumber
-					exposure.min = min
-					exposure.max = max
-					update = max !== 0
-				}
+				let update = handleMinMaxValue(exposure, value, tag)
 
 				if (message.state && message.state !== exposure.state) {
 					exposure.state = message.state
-					update = true
-				}
-
-				if (exposure.state === 'Busy' || exposure.state === 'Ok') {
-					exposure.time = value.value
 					update = true
 				}
 
@@ -1047,39 +1050,33 @@ export class CameraManager extends DeviceManager<Camera> {
 			}
 			// ZWO ASI, SVBony, etc
 			case 'CCD_CONTROLS': {
-				const gain = message.elements.Gain
-
-				if (gain && handleMinMaxValue(device.gain, gain, tag)) {
+				if (handleMinMaxValue(device.gain, message.elements.Gain, tag)) {
 					this.update(client, device, 'gain', message.state)
+					this.gainProperty.set(device.name, [message.name, 'Gain'])
 				}
 
-				const offset = message.elements.Offset
-
-				if (offset && handleMinMaxValue(device.offset, offset, tag)) {
+				if (handleMinMaxValue(device.offset, message.elements.Offset, tag)) {
 					this.update(client, device, 'offset', message.state)
+					this.offsetProperty.set(device.name, [message.name, 'Offset'])
 				}
 
 				return
 			}
 			// CCD Simulator
-			case 'CCD_GAIN': {
-				const gain = message.elements.GAIN
-
-				if (gain && handleMinMaxValue(device.gain, gain, tag)) {
+			case 'CCD_GAIN':
+				if (handleMinMaxValue(device.gain, message.elements.GAIN, tag)) {
 					this.update(client, device, 'gain', message.state)
+					this.gainProperty.set(device.name, [message.name, 'GAIN'])
 				}
 
 				return
-			}
-			case 'CCD_OFFSET': {
-				const offset = message.elements.OFFSET
-
-				if (offset && handleMinMaxValue(device.offset, offset, tag)) {
+			case 'CCD_OFFSET':
+				if (handleMinMaxValue(device.offset, message.elements.OFFSET, tag)) {
 					this.update(client, device, 'offset', message.state)
+					this.offsetProperty.set(device.name, [message.name, 'OFFSET'])
 				}
 
 				return
-			}
 		}
 	}
 
@@ -1316,13 +1313,11 @@ export class MountManager extends DeviceManager<Mount> {
 					}
 				}
 
-				if (message.state) {
-					const parking = message.state === 'Busy'
+				const parking = message.state === 'Busy'
 
-					if (device.parking !== parking) {
-						device.parking = parking
-						this.update(client, device, 'parking', message.state)
-					}
+				if (device.parking !== parking) {
+					device.parking = parking
+					this.update(client, device, 'parking', message.state)
 				}
 
 				const parked = message.elements.PARK?.value === true
@@ -1639,13 +1634,7 @@ export class FocuserManager extends DeviceManager<Focuser> {
 						this.update(client, device, 'canAbsoluteMove', message.state)
 					}
 
-					const { position } = device
-					const { min, max, value } = (message as DefNumberVector).elements.FOCUS_ABSOLUTE_POSITION
-
-					if (position.min !== min || position.max !== max || position.value !== value) {
-						position.min = min
-						position.max = max
-						position.value = value
+					if (handleMinMaxValue(device.position, message.elements.FOCUS_ABSOLUTE_POSITION, tag)) {
 						this.update(client, device, 'position', message.state)
 					}
 				} else {
@@ -1734,11 +1723,22 @@ export class CoverManager extends DeviceManager<Cover> {
 }
 
 export class DewHeaterManager extends DeviceManager<DewHeater> {
+	private readonly pwmProperty = new Map<string, readonly [string, string]>()
+
 	constructor(
 		readonly provider: DeviceProvider<DewHeater>,
 		handler: DeviceHandler<DewHeater>,
 	) {
 		super(handler)
+	}
+
+	pwm(client: IndiClient, device: DewHeater, value: number) {
+		const property = this.pwmProperty.get(device.name)
+
+		if (property) {
+			const [name, element] = property
+			client.sendNumber({ device: device.name, name, elements: { [element]: value } })
+		}
 	}
 
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
@@ -1752,14 +1752,12 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 				if (tag[0] === 'd' && !device.hasDewHeater) {
 					device.hasDewHeater = true
 
-					const { min, max, value } = (message as DefNumberVector).elements.Heater
-					device.pwm.min = min
-					device.pwm.max = max
-					device.pwm.value = value
+					handleMinMaxValue(device.pwm, message.elements.Heater, tag)
 
 					if (this.add(client, device)) {
 						this.update(client, device, 'pwm', message.state)
 						this.update(client, device, 'hasDewHeater', message.state)
+						this.pwmProperty.set(device.name, [message.name, 'Heater'])
 					}
 				}
 
@@ -1783,13 +1781,82 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 	}
 }
 
-function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | OneNumber, tag: string) {
+export class FlatPanelManager extends DeviceManager<FlatPanel> {
+	intensity(client: IndiClient, device: FlatPanel, value: number) {
+		if (device.enabled) {
+			client.sendNumber({ device: device.name, name: 'FLAT_LIGHT_INTENSITY', elements: { FLAT_LIGHT_INTENSITY_VALUE: value } })
+		}
+	}
+
+	enable(client: IndiClient, device: FlatPanel) {
+		client.sendSwitch({ device: device.name, name: 'FLAT_LIGHT_CONTROL', elements: { FLAT_LIGHT_ON: true } })
+	}
+
+	disable(client: IndiClient, device: FlatPanel) {
+		client.sendSwitch({ device: device.name, name: 'FLAT_LIGHT_CONTROL', elements: { FLAT_LIGHT_OFF: true } })
+	}
+
+	toggle(client: IndiClient, device: FlatPanel) {
+		device.enabled ? this.disable(client, device) : this.enable(client, device)
+	}
+
+	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		super.switchVector(client, message, tag)
+
+		switch (message.name) {
+			case 'FLAT_LIGHT_CONTROL': {
+				const enabled = message.elements.FLAT_LIGHT_ON?.value === true
+
+				if (enabled !== device.enabled) {
+					device.enabled = enabled
+					this.update(client, device, 'enabled', message.state)
+				}
+
+				return
+			}
+		}
+	}
+
+	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		switch (message.name) {
+			case 'FLAT_LIGHT_INTENSITY': {
+				if (handleMinMaxValue(device.intensity, message.elements.FLAT_LIGHT_INTENSITY_VALUE, tag)) {
+					this.update(client, device, 'intensity', message.state)
+				}
+
+				return
+			}
+		}
+	}
+
+	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
+		if (message.name === 'DRIVER_INFO') {
+			return this.handleDriverInfo(client, message, DeviceInterfaceType.LIGHTBOX)
+		}
+	}
+}
+
+function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | OneNumber | undefined, tag: string) {
+	if (element === undefined) return false
+
 	let update = false
 
 	if (tag[0] === 'd') {
-		property.min = (element as DefNumber).min
-		property.max = (element as DefNumber).max
-		update = true
+		const { min, max } = element as DefNumber
+
+		if (max !== 0) {
+			update = min !== property.min || max !== property.max
+			property.min = min
+			property.max = max
+		}
 	}
 
 	if (update || property.value !== element.value) {

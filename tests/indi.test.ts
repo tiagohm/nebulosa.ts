@@ -1,6 +1,7 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { type DefSwitchVector, IndiClient, type IndiClientHandler, type PropertyState } from '../src/indi'
-import { type Camera, CameraManager, type DeviceHandler, type DeviceProperty, type DevicePropertyHandler, DevicePropertyManager, type Focuser, FocuserManager, type GuideOutput, GuideOutputManager, type Mount, MountManager, type Thermometer, ThermometerManager, type Wheel, WheelManager } from '../src/indi.manager'
+// biome-ignore format: too long!
+import { type Camera, CameraManager, type Cover, CoverManager, type DeviceHandler, type DeviceProperty, type DevicePropertyHandler, DevicePropertyManager, type FlatPanel, FlatPanelManager, type Focuser, FocuserManager, type GuideOutput, GuideOutputManager, type Mount, MountManager, type Thermometer, ThermometerManager, type Wheel, WheelManager } from '../src/indi.manager'
 import { SimpleXmlParser } from '../src/xml'
 
 const text = await Bun.file('data/indi.log').text()
@@ -209,7 +210,7 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		}
 
 		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
-		const camera = new CameraManager(deviceProperty, cameraDeviceHandler)
+		const camera = new CameraManager(cameraDeviceHandler)
 		const guideOutput = new GuideOutputManager(camera, guideOutputDeviceHandler)
 		const thermometer = new ThermometerManager(camera, thermometerDeviceHandler)
 
@@ -297,11 +298,15 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		expect(deviceProperty).not.toBeEmpty()
 
 		camera.enableBlob(client, simulator)
+		camera.gain(client, simulator, 60)
+		camera.offset(client, simulator, 10)
 		camera.startExposure(client, simulator, 1)
 
 		await Bun.sleep(2000)
 
 		expect(frame).not.toBeEmpty()
+		expect(simulator.gain.value).toBe(60)
+		expect(simulator.offset.value).toBe(10)
 
 		client.close()
 
@@ -645,5 +650,192 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		expect(thermometer).toBeEmpty()
 		expect(focuserRemoved).toBeTrue()
 		expect(thermometerRemoved).toBeTrue()
+	}, 10000)
+
+	test('cover', async () => {
+		let coverAdded = false
+		let coverRemoved = false
+
+		const process = Bun.spawn(['indiserver', 'indi_simulator_dustcover'])
+
+		const coverDeviceHandler: DeviceHandler<Cover> = {
+			added: (client: IndiClient, device: Cover) => {
+				coverAdded = true
+			},
+			updated: (client: IndiClient, device: Cover, property: keyof Cover, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: Cover) => {
+				coverRemoved = true
+			},
+		}
+
+		const devicePropertyHandler: DevicePropertyHandler = {
+			added: (device: string, property: DeviceProperty) => {},
+			updated: (device: string, property: DeviceProperty) => {},
+			removed: (device: string, property: DeviceProperty) => {},
+		}
+
+		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
+		const cover = new CoverManager(coverDeviceHandler)
+
+		const handler: IndiClientHandler = {
+			textVector: (client, message, tag) => {
+				cover.textVector(client, message, tag)
+			},
+			switchVector: (client, message, tag) => {
+				cover.switchVector(client, message, tag)
+			},
+			vector: (client, message, tag) => {
+				deviceProperty.vector(client, message, tag)
+			},
+			delProperty: (client, message) => {
+				deviceProperty.delProperty(client, message)
+				cover.delProperty(client, message)
+			},
+			close: (client, server) => {
+				cover.close(client, server)
+			},
+		}
+
+		await Bun.sleep(1000)
+
+		const client = new IndiClient({ handler })
+
+		onTestFinished(() => {
+			process.kill()
+		})
+
+		await client.connect('localhost')
+		await Bun.sleep(1000)
+
+		expect(coverAdded).toBeTrue()
+		expect(cover).toHaveLength(1)
+
+		const simulator = cover.get('Dust Cover Simulator')!
+		cover.connect(client, simulator)
+
+		await Bun.sleep(1000)
+
+		const isParked = simulator.parked
+
+		expect(simulator.connected).toBeTrue()
+		expect(simulator.pwm.max).toBe(100)
+		expect(simulator.pwm.value).toBe(0)
+		expect(deviceProperty).not.toBeEmpty()
+
+		isParked ? cover.unpark(client, simulator) : cover.park(client, simulator)
+
+		await Bun.sleep(1000)
+
+		expect(simulator.parked).toBe(!isParked)
+
+		isParked ? cover.park(client, simulator) : cover.unpark(client, simulator)
+
+		await Bun.sleep(1000)
+
+		expect(simulator.parked).toBe(isParked)
+
+		client.close()
+
+		await Bun.sleep(1000)
+
+		expect(cover).toBeEmpty()
+		expect(coverRemoved).toBeTrue()
+	}, 10000)
+
+	test('flat panel', async () => {
+		let flatPanelAdded = false
+		let flatPanelRemoved = false
+
+		const process = Bun.spawn(['indiserver', 'indi_simulator_lightpanel'])
+
+		const platPanelDeviceHandler: DeviceHandler<FlatPanel> = {
+			added: (client: IndiClient, device: FlatPanel) => {
+				flatPanelAdded = true
+			},
+			updated: (client: IndiClient, device: FlatPanel, property: keyof FlatPanel, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: FlatPanel) => {
+				flatPanelRemoved = true
+			},
+		}
+
+		const devicePropertyHandler: DevicePropertyHandler = {
+			added: (device: string, property: DeviceProperty) => {},
+			updated: (device: string, property: DeviceProperty) => {},
+			removed: (device: string, property: DeviceProperty) => {},
+		}
+
+		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
+		const flatPanel = new FlatPanelManager(platPanelDeviceHandler)
+
+		const handler: IndiClientHandler = {
+			textVector: (client, message, tag) => {
+				flatPanel.textVector(client, message, tag)
+			},
+			switchVector: (client, message, tag) => {
+				flatPanel.switchVector(client, message, tag)
+			},
+			numberVector: (client, message, tag) => {
+				flatPanel.numberVector(client, message, tag)
+			},
+			vector: (client, message, tag) => {
+				deviceProperty.vector(client, message, tag)
+			},
+			delProperty: (client, message) => {
+				deviceProperty.delProperty(client, message)
+				flatPanel.delProperty(client, message)
+			},
+			close: (client, server) => {
+				flatPanel.close(client, server)
+			},
+		}
+
+		await Bun.sleep(1000)
+
+		const client = new IndiClient({ handler })
+
+		onTestFinished(() => {
+			process.kill()
+		})
+
+		await client.connect('localhost')
+		await Bun.sleep(1000)
+
+		expect(flatPanelAdded).toBeTrue()
+		expect(flatPanel).toHaveLength(1)
+
+		const simulator = flatPanel.get('Light Panel Simulator')!
+		flatPanel.connect(client, simulator)
+
+		await Bun.sleep(1000)
+
+		expect(simulator.connected).toBeTrue()
+		expect(simulator.intensity.max).toBe(255)
+		expect(simulator.intensity.value).toBe(0)
+		expect(deviceProperty).not.toBeEmpty()
+
+		flatPanel.enable(client, simulator)
+
+		await Bun.sleep(1000)
+
+		expect(simulator.enabled).toBeTrue()
+
+		flatPanel.intensity(client, simulator, 99)
+		flatPanel.disable(client, simulator)
+
+		await Bun.sleep(1000)
+
+		expect(simulator.intensity.value).toBe(99)
+		expect(simulator.enabled).toBeFalse()
+
+		client.close()
+
+		await Bun.sleep(1000)
+
+		expect(flatPanel).toBeEmpty()
+		expect(flatPanelRemoved).toBeTrue()
 	}, 10000)
 })
