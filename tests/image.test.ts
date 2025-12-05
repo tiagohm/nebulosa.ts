@@ -82,7 +82,7 @@ test('histogram - red', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, 'RED')
 
-	expect(h.count).toBe(732122)
+	expect(h.count[0]).toBe(732122)
 	expect(h.mean).toBeCloseTo(0.0015438, 4)
 	expect(h.median).toBeCloseTo(0.0008765, 7)
 	expect(h.variance).toBeCloseTo(0.0001608, 7)
@@ -93,7 +93,7 @@ test('histogram - green', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, 'GREEN')
 
-	expect(h.count).toBe(732122)
+	expect(h.count[0]).toBe(732122)
 	expect(h.mean).toBeCloseTo(0.0016607, 4)
 	expect(h.median).toBeCloseTo(0.0006596, 7)
 	expect(h.variance).toBeCloseTo(0.0002826, 7)
@@ -104,7 +104,7 @@ test('histogram - blue', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, 'BLUE')
 
-	expect(h.count).toBe(732122)
+	expect(h.count[0]).toBe(732122)
 	expect(h.mean).toBeCloseTo(0.0014478, 4)
 	expect(h.median).toBeCloseTo(0.000672, 7)
 	expect(h.variance).toBeCloseTo(0.0002182, 7)
@@ -115,7 +115,7 @@ test('histogram - roi', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, 'RED', undefined, { left: 450, top: 400, right: 705, bottom: 655 }, 20)
 
-	expect(h.count).toBe(65536)
+	expect(h.count[0]).toBe(65536)
 	expect(h.mean).toBeCloseTo(0.0043881, 4)
 	expect(h.median).toBeCloseTo(0.0024723, 6)
 	expect(h.variance).toBeCloseTo(0.0007618, 7)

@@ -58,6 +58,10 @@ export const GREEN_GRAYSCALE: Grayscale = { red: 0, green: 1, blue: 0 }
 export const BLUE_GRAYSCALE: Grayscale = { red: 0, green: 0, blue: 1 }
 export const DEFAULT_GRAYSCALE = BT709_GRAYSCALE
 
+export function isImage(image?: object): image is Image {
+	return !!image && 'header' in image && 'metadata' in image && 'raw' in image
+}
+
 export function channelIndex(channel?: ImageChannelOrGray) {
 	return channel === 'GREEN' ? 1 : channel === 'BLUE' ? 2 : 0
 }
