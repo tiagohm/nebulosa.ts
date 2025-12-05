@@ -2,7 +2,7 @@ import type { NumberArray } from './math'
 
 interface HistogramCache {
 	mode?: readonly [number, number] // [pixel, count]
-	count?: number
+	count?: readonly [number, number] // [total, max]
 	mean?: number
 	variance?: number
 	standardDeviation?: number
@@ -61,15 +61,21 @@ export class Histogram {
 		}
 
 		let ret = 0
+		let max = 0
 		const n = this.histogram.length
 
 		for (let i = 0; i < n; i++) {
-			ret += this.histogram[i]
+			const value = this.histogram[i]
+
+			if (value !== 0) {
+				ret += this.histogram[i]
+				max = Math.max(max, value)
+			}
 		}
 
-		this.cache.count = ret
+		this.cache.count = [ret, max]
 
-		return ret
+		return this.cache.count
 	}
 
 	get mean() {
@@ -84,7 +90,7 @@ export class Histogram {
 			ret += i * this.histogram[i]
 		}
 
-		ret /= this.count
+		ret /= this.count[0]
 		if (this.max) ret /= this.max
 		this.cache.mean = ret
 		return ret
@@ -108,7 +114,7 @@ export class Histogram {
 			}
 		}
 
-		ret /= this.count
+		ret /= this.count[0]
 		if (this.maxSq) ret /= this.maxSq
 		this.cache.variance = ret
 		return ret
@@ -133,7 +139,7 @@ export class Histogram {
 		let cumulative = 0
 		let i = 0
 
-		const n = this.count / 2
+		const n = this.count[0] / 2
 
 		while (true) {
 			prev = cumulative
