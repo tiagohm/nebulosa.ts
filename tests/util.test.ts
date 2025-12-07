@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { angularSizeOfPixel, binarySearch, isNumberArray, maxOf, meanOf, minOf } from '../src/util'
+import { angularSizeOfPixel, binarySearch, binarySearchWithComparator, isNumberArray, maxOf, meanOf, minOf } from '../src/util'
 
 test('is number array', () => {
 	expect(isNumberArray([1, 2, 3])).toBe(true)
@@ -67,6 +67,23 @@ test('binary search', () => {
 	expect(binarySearch([0, 1, 2, 3, 4], 0.5)).toBe(-2)
 	expect(binarySearch([0, 1, 2, 3, 4], 0.5, { positive: true })).toBe(1)
 	expect(binarySearch([NaN, NaN, NaN], 3)).toBe(-1)
+})
+
+test('binary search with comparator', () => {
+	function comparator(key: number) {
+		return (a: number) => a - key
+	}
+
+	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(3))).toBe(3)
+	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(3), { from: 2, to: 5 })).toBe(3)
+	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(3), { from: 0, to: 3 })).toBe(-4)
+	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(3), { from: 0, to: 3, positive: true })).toBe(3)
+	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(-1), { positive: true })).toBe(0)
+	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(5), { positive: true })).toBe(5)
+	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(-1))).toBe(-1)
+	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(5))).toBe(-6)
+	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(0.5))).toBe(-2)
+	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(0.5), { positive: true })).toBe(1)
 })
 
 test('angular size of pixel', () => {

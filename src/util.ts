@@ -80,6 +80,28 @@ export function binarySearch(a: Readonly<NumberArray>, key: number, { from = 0, 
 	return positive ? from : -(from + 1)
 }
 
+export type BinarySearchComparator<T> = (value: T) => number
+
+// Searches in the specified input using the range [from, to) by the specified comparator.
+export function binarySearchWithComparator<T>(a: readonly T[], comparator: BinarySearchComparator<T>, { from = 0, to = a.length, positive }: BinarySearchOptions = {}) {
+	to--
+
+	while (from <= to) {
+		const index = (from + to) >>> 1
+		const cmp = comparator(a[index])
+
+		if (cmp < 0) {
+			from = index + 1
+		} else if (cmp > 0) {
+			to = index - 1
+		} else {
+			return index
+		}
+	}
+
+	return positive ? from : -(from + 1)
+}
+
 // Computes the angular size of pixel in arcsec given the `focalLength` in mm and `pixelSize` in µm.
 export function angularSizeOfPixel(focalLength: number, pixelSize: number) {
 	return focalLength <= 0 ? 0 : (pixelSize / focalLength) * 206.265
