@@ -175,6 +175,8 @@ export function parseTemporal(input: string, pattern: string): Temporal {
 	const date: TemporalDate = [0, 0, 0, 0, 0, 0, 0]
 	const tokens = tokenizePattern(pattern)
 
+	input = input.trim()
+
 	for (const { start, end, found } of tokens) {
 		if (end > input.length) break
 
@@ -216,8 +218,12 @@ export function parseTemporal(input: string, pattern: string): Temporal {
 		}
 	}
 
-	if (date[0] === 0 || date[1] === 0 || date[2] === 0) {
-		throw new Error('invalid date')
+	if (date[1] < 1 || date[1] > 12) {
+		throw new Error(`invalid month. expected [1-12], but got ${date[1]}`)
+	}
+
+	if (date[2] < 1 || date[2] > 31) {
+		throw new Error(`invalid day of month. expected [1-31], but got ${date[2]}`)
 	}
 
 	return temporalFromDate(...date)
@@ -350,11 +356,11 @@ const DAYS_UNTIL_YEAR = [
 	761896, 762261, 762627, 762992, 763357, 763722, 764088, 764453, 764818, 765183, 765549, 765914, 766279, 766644,
 ]
 
-function daysUntilYear(year: number): number {
+function daysUntilYear(year: number) {
 	if (year >= 1970 && year <= 2100) return DAYS_UNTIL_YEAR[year - 1970]
 	return --year * 365 + Math.floor(year / 4) - Math.floor(year / 100) + Math.floor(year / 400)
 }
 
-function daysFromEpochToYear(year: number): number {
+function daysFromEpochToYear(year: number) {
 	return daysUntilYear(year) - 719162 // daysUntilYear(1970)
 }

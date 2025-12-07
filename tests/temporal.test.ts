@@ -322,6 +322,7 @@ describe('parse', () => {
 		expect(temporalToDate(parseTemporal('2028-Jan-01', 'YYYY-MMM-DD'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
 		expect(temporalToDate(parseTemporal('20280101', 'YYYYMMDD'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
 		expect(temporalToDate(parseTemporal('2028-01-01T08:09:07.008Z', 'YYYY-MM-DD'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
+		expect(temporalToDate(parseTemporal('0000-01-01', 'YYYY-MM-DD'))).toEqual([0, 1, 1, 0, 0, 0, 0])
 	})
 
 	test('date and time', () => {
