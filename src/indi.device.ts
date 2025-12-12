@@ -390,6 +390,46 @@ export const DEFAULT_FLAT_PANEL: FlatPanel = {
 	},
 }
 
+export const DEFAULT_THERMOMETER: Thermometer = {
+	hasThermometer: true,
+	temperature: 0,
+	type: 'THERMOMETER',
+	name: '',
+	connected: false,
+	driver: {
+		executable: '',
+		version: '',
+	},
+}
+
+export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
+	canPulseGuide: false,
+	pulseGuiding: false,
+	type: 'GUIDE_OUTPUT',
+	name: '',
+	connected: false,
+	driver: {
+		executable: '',
+		version: '',
+	},
+}
+
+export const DEFAULT_DEW_HEATER: DewHeater = {
+	hasDewHeater: false,
+	pwm: {
+		value: 0,
+		min: 0,
+		max: 100,
+	},
+	type: 'DEW_HEATER',
+	name: '',
+	connected: false,
+	driver: {
+		executable: '',
+		version: '',
+	},
+}
+
 export function isCamera(device: Device): device is Camera {
 	return device.type === 'CAMERA'
 }
