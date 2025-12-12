@@ -229,7 +229,7 @@ export function parseTemporal(input: string, pattern: string): Temporal {
 	return temporalFromDate(...date)
 }
 
-const TIMEZONE = -new Date().getTimezoneOffset()
+export const TIMEZONE = -new Date().getTimezoneOffset()
 
 export function formatTemporalFromPattern(temporal: Temporal, pattern: string, timezone: number = TIMEZONE) {
 	const tokens = tokenizePattern(pattern)
