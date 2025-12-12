@@ -1,7 +1,8 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { type DefSwitchVector, IndiClient, type IndiClientHandler, type PropertyState } from '../src/indi'
+import type { Camera, Cover, FlatPanel, Focuser, GuideOutput, Mount, Thermometer, Wheel } from '../src/indi.device'
+import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 // biome-ignore format: too long!
-import { type Camera, CameraManager, type Cover, CoverManager, type DeviceHandler, DevicePropertyManager, type FlatPanel, FlatPanelManager, type Focuser, FocuserManager, type GuideOutput, GuideOutputManager, type Mount, MountManager, type Thermometer, ThermometerManager, type Wheel, WheelManager } from '../src/indi.manager'
 import { SimpleXmlParser } from '../src/xml'
 
 const text = await Bun.file('data/indi.log').text()
