@@ -435,6 +435,10 @@ export function isCover(device: Device): device is Cover {
 	return device.type === 'COVER'
 }
 
+export function isFlatPanel(device: Device): device is FlatPanel {
+	return device.type === 'FLAT_PANEL'
+}
+
 export function isThermometer(device: Device): device is Thermometer {
 	return 'hasThermometer' in device && device.hasThermometer !== undefined
 }
@@ -448,7 +452,7 @@ export function isDewHeater(device: Device): device is DewHeater {
 }
 
 export function isGPS(device: Device): device is GPS {
-	return 'hasGPS' in device && device.hasGPS !== undefined
+	return device.type === 'GPS' || ('hasGPS' in device && device.hasGPS !== undefined)
 }
 
 const DEVICES = {
@@ -462,11 +466,18 @@ const DEVICES = {
 
 export class DevicePropertyManager implements IndiClientHandler {
 	private readonly properties = new Map<string, DeviceProperties>()
-
-	constructor(readonly handler: DevicePropertyHandler) {}
+	private readonly handlers = new Set<DevicePropertyHandler>()
 
 	get length() {
 		return this.properties.size
+	}
+
+	addHandler(handler: DevicePropertyHandler) {
+		this.handlers.add(handler)
+	}
+
+	removeHandler(handler: DevicePropertyHandler) {
+		this.handlers.delete(handler)
 	}
 
 	names() {
@@ -498,7 +509,7 @@ export class DevicePropertyManager implements IndiClientHandler {
 			const property = message as DeviceProperty
 			property.type = tag.includes('Switch') ? 'SWITCH' : tag.includes('Number') ? 'NUMBER' : tag.includes('Text') ? 'TEXT' : tag.includes('BLOB') ? 'BLOB' : 'LIGHT'
 			properties[message.name] = property
-			this.handler.added(device, property)
+			this.handlers.forEach((e) => e.added(device, property))
 			return true
 		} else {
 			let updated = false
@@ -524,7 +535,7 @@ export class DevicePropertyManager implements IndiClientHandler {
 				}
 
 				if (updated) {
-					this.handler.updated(device, property)
+					this.handlers.forEach((e) => e.updated(device, property))
 				}
 			}
 
@@ -545,12 +556,12 @@ export class DevicePropertyManager implements IndiClientHandler {
 			if (property) {
 				delete properties[name]
 				if (Object.keys(properties).length === 0) this.properties.delete(device)
-				this.handler.removed(device, property)
+				this.handlers.forEach((e) => e.removed(device, property))
 				return true
 			}
 		} else {
 			// TODO: should notify once for all properties being removed?
-			for (const [_, property] of Object.entries(properties)) this.handler.removed(device, property)
+			for (const [_, property] of Object.entries(properties)) this.handlers.forEach((e) => e.removed(device, property))
 			this.properties.delete(device)
 			return true
 		}
@@ -559,13 +570,36 @@ export class DevicePropertyManager implements IndiClientHandler {
 	}
 }
 
-export abstract class DeviceManager<D extends Device> implements IndiClientHandler, DeviceProvider<D> {
+export abstract class DeviceManager<D extends Device> implements IndiClientHandler, DeviceProvider<D>, DeviceHandler<D> {
 	protected readonly devices = new Map<string, D>()
-
-	constructor(readonly handler: DeviceHandler<D>) {}
+	protected readonly handlers = new Set<DeviceHandler<D>>()
 
 	get length() {
 		return this.devices.size
+	}
+
+	addHandler(handler: DeviceHandler<D>) {
+		this.handlers.add(handler)
+	}
+
+	removeHandler(handler: DeviceHandler<D>) {
+		this.handlers.delete(handler)
+	}
+
+	added(client: IndiClient, device: D) {
+		this.handlers.forEach((e) => e.added(client, device))
+	}
+
+	updated(client: IndiClient, device: D, property: keyof D, state?: PropertyState) {
+		this.handlers.forEach((e) => e.updated(client, device, property, state))
+	}
+
+	removed(client: IndiClient, device: D) {
+		this.handlers.forEach((e) => e.removed(client, device))
+	}
+
+	blobReceived(client: IndiClient, device: D, data: string) {
+		this.handlers.forEach((e) => e.blobReceived?.(client, device, data))
 	}
 
 	list() {
@@ -616,7 +650,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		switch (message.name) {
 			case 'CONNECTION':
 				if (this.handleConnection(client, device, message)) {
-					this.update(client, device, 'connected', message.state)
+					this.updated(client, device, 'connected', message.state)
 				}
 
 				return
@@ -669,21 +703,17 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	add(client: IndiClient, device: D) {
 		if (!this.has(device.name)) {
 			this.devices.set(device.name, device)
-			this.handler.added(client, device)
+			this.added(client, device)
 			return true
 		} else {
 			return false
 		}
 	}
 
-	update(client: IndiClient, device: D, property: keyof D, state?: PropertyState) {
-		this.handler.updated(client, device, property, state)
-	}
-
 	remove(client: IndiClient, device: D) {
 		if (this.has(device.name)) {
 			this.devices.delete(device.name)
-			this.handler.removed(client, device)
+			this.removed(client, device)
 			return true
 		} else {
 			return false
@@ -698,11 +728,8 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 }
 
 export class GuideOutputManager extends DeviceManager<GuideOutput> {
-	constructor(
-		readonly provider: DeviceProvider<GuideOutput>,
-		handler: DeviceHandler<GuideOutput>,
-	) {
-		super(handler)
+	constructor(readonly provider: DeviceProvider<GuideOutput>) {
+		super()
 	}
 
 	pulseNorth(client: IndiClient, device: GuideOutput, duration: number) {
@@ -746,7 +773,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 					device.canPulseGuide = true
 
 					if (this.add(client, device)) {
-						this.update(client, device, 'canPulseGuide', message.state)
+						this.updated(client, device, 'canPulseGuide', message.state)
 					}
 				}
 
@@ -762,7 +789,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 			if (device) {
 				if (device.canPulseGuide) {
 					device.canPulseGuide = false
-					this.update(client, device, 'canPulseGuide')
+					this.updated(client, device, 'canPulseGuide')
 				}
 
 				this.remove(client, device)
@@ -772,11 +799,8 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 }
 
 export class ThermometerManager extends DeviceManager<Thermometer> {
-	constructor(
-		readonly provider: DeviceProvider<Thermometer>,
-		handler: DeviceHandler<Thermometer>,
-	) {
-		super(handler)
+	constructor(readonly provider: DeviceProvider<Thermometer>) {
+		super()
 	}
 
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
@@ -789,7 +813,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 					device.hasThermometer = true
 
 					if (this.add(client, device)) {
-						this.update(client, device, 'hasThermometer', message.state)
+						this.updated(client, device, 'hasThermometer', message.state)
 					}
 				}
 
@@ -805,7 +829,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 			if (device) {
 				if (device.hasThermometer) {
 					device.hasThermometer = false
-					this.update(client, device, 'hasThermometer')
+					this.updated(client, device, 'hasThermometer')
 				}
 
 				this.remove(client, device)
@@ -899,14 +923,14 @@ export class CameraManager extends DeviceManager<Camera> {
 			case 'CCD_COOLER': {
 				if (tag[0] === 'd' && !device.hasCoolerControl) {
 					device.hasCoolerControl = true
-					this.update(client, device, 'hasCoolerControl', message.state)
+					this.updated(client, device, 'hasCoolerControl', message.state)
 				}
 
 				const cooler = message.elements.COOLER_ON?.value === true
 
 				if (cooler !== device.cooler) {
 					device.cooler = cooler
-					this.update(client, device, 'cooler', message.state)
+					this.updated(client, device, 'cooler', message.state)
 				}
 
 				return
@@ -914,7 +938,7 @@ export class CameraManager extends DeviceManager<Camera> {
 			case 'CCD_CAPTURE_FORMAT':
 				if (tag[0] === 'd') {
 					device.frameFormats = Object.keys(message.elements)
-					this.update(client, device, 'frameFormats', message.state)
+					this.updated(client, device, 'frameFormats', message.state)
 				}
 
 				return
@@ -924,7 +948,7 @@ export class CameraManager extends DeviceManager<Camera> {
 
 					if (device.canAbort !== canAbort) {
 						device.canAbort = canAbort
-						this.update(client, device, 'canAbort', message.state)
+						this.updated(client, device, 'canAbort', message.state)
 					}
 				}
 
@@ -945,7 +969,7 @@ export class CameraManager extends DeviceManager<Camera> {
 				if (device.pixelSize.x !== x || device.pixelSize.y !== y) {
 					device.pixelSize.x = x
 					device.pixelSize.y = y
-					this.update(client, device, 'pixelSize', message.state)
+					this.updated(client, device, 'pixelSize', message.state)
 				}
 
 				return
@@ -963,7 +987,7 @@ export class CameraManager extends DeviceManager<Camera> {
 				}
 
 				if (update) {
-					this.update(client, device, 'exposure', message.state)
+					this.updated(client, device, 'exposure', message.state)
 				}
 
 				return
@@ -973,7 +997,7 @@ export class CameraManager extends DeviceManager<Camera> {
 
 				if (device.coolerPower !== coolerPower) {
 					device.coolerPower = coolerPower
-					this.update(client, device, 'coolerPower', message.state)
+					this.updated(client, device, 'coolerPower', message.state)
 				}
 
 				return
@@ -982,14 +1006,14 @@ export class CameraManager extends DeviceManager<Camera> {
 				if (tag[0] === 'd') {
 					if (!device.hasCooler) {
 						device.hasCooler = true
-						this.update(client, device, 'hasCooler', message.state)
+						this.updated(client, device, 'hasCooler', message.state)
 					}
 
 					const canSetTemperature = (message as DefNumberVector).permission !== 'ro'
 
 					if (device.canSetTemperature !== canSetTemperature) {
 						device.canSetTemperature = canSetTemperature
-						this.update(client, device, 'canSetTemperature', message.state)
+						this.updated(client, device, 'canSetTemperature', message.state)
 					}
 				}
 
@@ -1008,7 +1032,7 @@ export class CameraManager extends DeviceManager<Camera> {
 
 					if (device.canSubFrame !== canSubFrame) {
 						device.canSubFrame = canSubFrame
-						this.update(client, device, 'canSubFrame', message.state)
+						this.updated(client, device, 'canSubFrame', message.state)
 					}
 
 					frame.minX = (x as DefNumber).min
@@ -1032,7 +1056,7 @@ export class CameraManager extends DeviceManager<Camera> {
 				}
 
 				if (update) {
-					this.update(client, device, 'frame', message.state)
+					this.updated(client, device, 'frame', message.state)
 				}
 
 				return
@@ -1049,7 +1073,7 @@ export class CameraManager extends DeviceManager<Camera> {
 
 					if (device.canBin !== canBin) {
 						device.canBin = canBin
-						this.update(client, device, 'canBin', message.state)
+						this.updated(client, device, 'canBin', message.state)
 					}
 
 					bin.maxX = (binX as DefNumber).max
@@ -1065,7 +1089,7 @@ export class CameraManager extends DeviceManager<Camera> {
 				}
 
 				if (update) {
-					this.update(client, device, 'bin', message.state)
+					this.updated(client, device, 'bin', message.state)
 				}
 
 				return
@@ -1073,12 +1097,12 @@ export class CameraManager extends DeviceManager<Camera> {
 			// ZWO ASI, SVBony, etc
 			case 'CCD_CONTROLS': {
 				if (handleMinMaxValue(device.gain, message.elements.Gain, tag)) {
-					this.update(client, device, 'gain', message.state)
+					this.updated(client, device, 'gain', message.state)
 					this.gainProperty.set(device.name, [message.name, 'Gain'])
 				}
 
 				if (handleMinMaxValue(device.offset, message.elements.Offset, tag)) {
-					this.update(client, device, 'offset', message.state)
+					this.updated(client, device, 'offset', message.state)
 					this.offsetProperty.set(device.name, [message.name, 'Offset'])
 				}
 
@@ -1087,14 +1111,14 @@ export class CameraManager extends DeviceManager<Camera> {
 			// CCD Simulator
 			case 'CCD_GAIN':
 				if (handleMinMaxValue(device.gain, message.elements.GAIN, tag)) {
-					this.update(client, device, 'gain', message.state)
+					this.updated(client, device, 'gain', message.state)
 					this.gainProperty.set(device.name, [message.name, 'GAIN'])
 				}
 
 				return
 			case 'CCD_OFFSET':
 				if (handleMinMaxValue(device.offset, message.elements.OFFSET, tag)) {
-					this.update(client, device, 'offset', message.state)
+					this.updated(client, device, 'offset', message.state)
 					this.offsetProperty.set(device.name, [message.name, 'OFFSET'])
 				}
 
@@ -1116,7 +1140,7 @@ export class CameraManager extends DeviceManager<Camera> {
 				device.cfa.offsetX = +message.elements.CFA_OFFSET_X!.value
 				device.cfa.offsetY = +message.elements.CFA_OFFSET_Y!.value
 				device.cfa.type = message.elements.CFA_TYPE!.value as CfaPattern
-				this.update(client, device, 'cfa', message.state)
+				this.updated(client, device, 'cfa', message.state)
 
 				return
 		}
@@ -1129,11 +1153,11 @@ export class CameraManager extends DeviceManager<Camera> {
 
 		switch (message.name) {
 			case 'CCD1':
-				if (tag[0] === 's' && this.handler.blobReceived) {
+				if (tag[0] === 's') {
 					const data = message.elements.CCD1?.value
 
 					if (data) {
-						this.handler.blobReceived(client, device, data)
+						this.blobReceived(client, device, data)
 					} else {
 						console.warn(`received empty BLOB for device ${device.name}`)
 					}
@@ -1285,7 +1309,7 @@ export class MountManager extends DeviceManager<Mount> {
 
 					if (rates.length) {
 						device.slewRates = rates
-						this.update(client, device, 'slewRates', message.state)
+						this.updated(client, device, 'slewRates', message.state)
 					}
 				}
 
@@ -1295,7 +1319,7 @@ export class MountManager extends DeviceManager<Mount> {
 					if (element.value) {
 						if (device.slewRate !== element.name) {
 							device.slewRate = element.name
-							this.update(client, device, 'slewRate', message.state)
+							this.updated(client, device, 'slewRate', message.state)
 						}
 
 						break
@@ -1314,7 +1338,7 @@ export class MountManager extends DeviceManager<Mount> {
 
 					if (modes.length) {
 						device.trackModes = modes
-						this.update(client, device, 'trackModes', message.state)
+						this.updated(client, device, 'trackModes', message.state)
 					}
 				}
 
@@ -1326,7 +1350,7 @@ export class MountManager extends DeviceManager<Mount> {
 
 						if (device.trackMode !== trackMode) {
 							device.trackMode = trackMode
-							this.update(client, device, 'trackMode', message.state)
+							this.updated(client, device, 'trackMode', message.state)
 						}
 
 						break
@@ -1339,7 +1363,7 @@ export class MountManager extends DeviceManager<Mount> {
 
 				if (device.tracking !== tracking) {
 					device.tracking = tracking
-					this.update(client, device, 'tracking', message.state)
+					this.updated(client, device, 'tracking', message.state)
 				}
 
 				return
@@ -1349,7 +1373,7 @@ export class MountManager extends DeviceManager<Mount> {
 
 				if (device.pierSide !== pierSide) {
 					device.pierSide = pierSide
-					this.update(client, device, 'pierSide', message.state)
+					this.updated(client, device, 'pierSide', message.state)
 				}
 
 				return
@@ -1360,7 +1384,7 @@ export class MountManager extends DeviceManager<Mount> {
 
 					if (device.canPark !== canPark) {
 						device.canPark = canPark
-						this.update(client, device, 'canPark', message.state)
+						this.updated(client, device, 'canPark', message.state)
 					}
 				}
 
@@ -1368,14 +1392,14 @@ export class MountManager extends DeviceManager<Mount> {
 
 				if (device.parking !== parking) {
 					device.parking = parking
-					this.update(client, device, 'parking', message.state)
+					this.updated(client, device, 'parking', message.state)
 				}
 
 				const parked = message.elements.PARK?.value === true
 
 				if (device.parked !== parked) {
 					device.parked = parked
-					this.update(client, device, 'parked', message.state)
+					this.updated(client, device, 'parked', message.state)
 				}
 
 				return
@@ -1383,14 +1407,14 @@ export class MountManager extends DeviceManager<Mount> {
 			case 'TELESCOPE_ABORT_MOTION':
 				if (!device.canAbort) {
 					device.canAbort = true
-					this.update(client, device, 'canAbort', message.state)
+					this.updated(client, device, 'canAbort', message.state)
 				}
 
 				return
 			case 'TELESCOPE_HOME':
 				if (!device.canHome) {
 					device.canHome = true
-					this.update(client, device, 'canHome', message.state)
+					this.updated(client, device, 'canHome', message.state)
 				}
 
 				return
@@ -1400,21 +1424,21 @@ export class MountManager extends DeviceManager<Mount> {
 
 					if (device.canSync !== canSync) {
 						device.canSync = canSync
-						this.update(client, device, 'canSync', message.state)
+						this.updated(client, device, 'canSync', message.state)
 					}
 
 					const canGoTo = 'SLEW' in message.elements
 
 					if (device.canGoTo !== canGoTo) {
 						device.canGoTo = canGoTo
-						this.update(client, device, 'canGoTo', message.state)
+						this.updated(client, device, 'canGoTo', message.state)
 					}
 
 					const canFlip = 'FLIP' in message.elements
 
 					if (device.canFlip !== canFlip) {
 						device.canFlip = canFlip
-						this.update(client, device, 'canFlip', message.state)
+						this.updated(client, device, 'canFlip', message.state)
 					}
 				}
 
@@ -1433,7 +1457,7 @@ export class MountManager extends DeviceManager<Mount> {
 
 				if (device.slewing !== slewing) {
 					device.slewing = slewing
-					this.update(client, device, 'slewing', message.state)
+					this.updated(client, device, 'slewing', message.state)
 				}
 
 				const rightAscension = hour(message.elements.RA!.value)
@@ -1453,7 +1477,7 @@ export class MountManager extends DeviceManager<Mount> {
 				}
 
 				if (updated) {
-					this.update(client, device, 'equatorialCoordinate', message.state)
+					this.updated(client, device, 'equatorialCoordinate', message.state)
 				}
 
 				return
@@ -1482,7 +1506,7 @@ export class MountManager extends DeviceManager<Mount> {
 				}
 
 				if (updated) {
-					this.update(client, device, 'geographicCoordinate', message.state)
+					this.updated(client, device, 'geographicCoordinate', message.state)
 				}
 
 				return
@@ -1508,7 +1532,7 @@ export class MountManager extends DeviceManager<Mount> {
 					if (device.time.utc !== utc || device.time.offset !== offset) {
 						device.time.utc = utc
 						device.time.offset = offset
-						this.update(client, device, 'time', message.state)
+						this.updated(client, device, 'time', message.state)
 					}
 				}
 
@@ -1540,14 +1564,14 @@ export class WheelManager extends DeviceManager<Wheel> {
 
 				if (device.position !== value) {
 					device.position = value
-					this.update(client, device, 'position', message.state)
+					this.updated(client, device, 'position', message.state)
 				}
 
 				const moving = message.state === 'Busy'
 
 				if (device.moving !== moving) {
 					device.moving = moving
-					this.update(client, device, 'moving', message.state)
+					this.updated(client, device, 'moving', message.state)
 				}
 
 				return
@@ -1570,7 +1594,7 @@ export class WheelManager extends DeviceManager<Wheel> {
 
 				if (slots.length !== device.slots.length || slots.some((e, index) => e.value !== device.slots[index])) {
 					device.slots = slots.map((e) => e.value)
-					this.update(client, device, 'slots', message.state)
+					this.updated(client, device, 'slots', message.state)
 				}
 
 				return
@@ -1629,21 +1653,21 @@ export class FocuserManager extends DeviceManager<Focuser> {
 			case 'FOCUS_ABORT_MOTION':
 				if (tag[0] === 'd' && !device.canAbort) {
 					device.canAbort = true
-					this.update(client, device, 'canAbort', message.state)
+					this.updated(client, device, 'canAbort', message.state)
 				}
 
 				return
 			case 'FOCUS_REVERSE_MOTION': {
 				if (tag[0] === 'd' && !device.canReverse) {
 					device.canReverse = true
-					this.update(client, device, 'canReverse', message.state)
+					this.updated(client, device, 'canReverse', message.state)
 				}
 
 				const reversed = message.elements.INDI_ENABLED?.value === true
 
 				if (device.reversed !== reversed) {
 					device.reversed = reversed
-					this.update(client, device, 'reversed', message.state)
+					this.updated(client, device, 'reversed', message.state)
 				}
 
 				return
@@ -1660,20 +1684,20 @@ export class FocuserManager extends DeviceManager<Focuser> {
 			case 'FOCUS_SYNC':
 				if (tag[0] === 'd' && !device.canSync) {
 					device.canSync = true
-					this.update(client, device, 'canSync', message.state)
+					this.updated(client, device, 'canSync', message.state)
 				}
 				return
 			case 'REL_FOCUS_POSITION': {
 				if (tag[0] === 'd' && !device.canRelativeMove) {
 					device.canRelativeMove = true
-					this.update(client, device, 'canRelativeMove', message.state)
+					this.updated(client, device, 'canRelativeMove', message.state)
 				}
 
 				const moving = message.state === 'Busy'
 
 				if (moving !== device.moving) {
 					device.moving = moving
-					this.update(client, device, 'moving', message.state)
+					this.updated(client, device, 'moving', message.state)
 				}
 
 				return
@@ -1682,18 +1706,18 @@ export class FocuserManager extends DeviceManager<Focuser> {
 				if (tag[0] === 'd') {
 					if (!device.canAbsoluteMove) {
 						device.canAbsoluteMove = true
-						this.update(client, device, 'canAbsoluteMove', message.state)
+						this.updated(client, device, 'canAbsoluteMove', message.state)
 					}
 
 					if (handleMinMaxValue(device.position, message.elements.FOCUS_ABSOLUTE_POSITION, tag)) {
-						this.update(client, device, 'position', message.state)
+						this.updated(client, device, 'position', message.state)
 					}
 				} else {
 					const position = message.elements.FOCUS_ABSOLUTE_POSITION.value
 
 					if (device.position.value !== position) {
 						device.position.value = position
-						this.update(client, device, 'position', message.state)
+						this.updated(client, device, 'position', message.state)
 					}
 				}
 
@@ -1701,7 +1725,7 @@ export class FocuserManager extends DeviceManager<Focuser> {
 
 				if (moving !== device.moving) {
 					device.moving = moving
-					this.update(client, device, 'moving', message.state)
+					this.updated(client, device, 'moving', message.state)
 				}
 
 				return
@@ -1743,7 +1767,7 @@ export class CoverManager extends DeviceManager<Cover> {
 
 					if (device.canPark !== canPark) {
 						device.canPark = canPark
-						this.update(client, device, 'canPark', message.state)
+						this.updated(client, device, 'canPark', message.state)
 					}
 				}
 
@@ -1751,14 +1775,14 @@ export class CoverManager extends DeviceManager<Cover> {
 
 				if (parking !== device.parking) {
 					device.parking = parking
-					this.update(client, device, 'parking', message.state)
+					this.updated(client, device, 'parking', message.state)
 				}
 
 				const parked = message.elements.PARK?.value === true
 
 				if (parked !== device.parked) {
 					device.parked = parked
-					this.update(client, device, 'parked', message.state)
+					this.updated(client, device, 'parked', message.state)
 				}
 
 				return
@@ -1776,11 +1800,8 @@ export class CoverManager extends DeviceManager<Cover> {
 export class DewHeaterManager extends DeviceManager<DewHeater> {
 	private readonly pwmProperty = new Map<string, readonly [string, string]>()
 
-	constructor(
-		readonly provider: DeviceProvider<DewHeater>,
-		handler: DeviceHandler<DewHeater>,
-	) {
-		super(handler)
+	constructor(readonly provider: DeviceProvider<DewHeater>) {
+		super()
 	}
 
 	pwm(client: IndiClient, device: DewHeater, value: number) {
@@ -1806,8 +1827,8 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 					handleMinMaxValue(device.pwm, message.elements.Heater, tag)
 
 					if (this.add(client, device)) {
-						this.update(client, device, 'pwm', message.state)
-						this.update(client, device, 'hasDewHeater', message.state)
+						this.updated(client, device, 'pwm', message.state)
+						this.updated(client, device, 'hasDewHeater', message.state)
 						this.pwmProperty.set(device.name, [message.name, 'Heater'])
 					}
 				}
@@ -1823,7 +1844,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 			if (device) {
 				if (device.hasDewHeater) {
 					device.hasDewHeater = false
-					this.update(client, device, 'hasDewHeater')
+					this.updated(client, device, 'hasDewHeater')
 				}
 
 				this.remove(client, device)
@@ -1864,7 +1885,7 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 
 				if (enabled !== device.enabled) {
 					device.enabled = enabled
-					this.update(client, device, 'enabled', message.state)
+					this.updated(client, device, 'enabled', message.state)
 				}
 
 				return
@@ -1880,7 +1901,7 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 		switch (message.name) {
 			case 'FLAT_LIGHT_INTENSITY': {
 				if (handleMinMaxValue(device.intensity, message.elements.FLAT_LIGHT_INTENSITY_VALUE, tag)) {
-					this.update(client, device, 'intensity', message.state)
+					this.updated(client, device, 'intensity', message.state)
 				}
 
 				return

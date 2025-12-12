@@ -1,7 +1,7 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { type DefSwitchVector, IndiClient, type IndiClientHandler, type PropertyState } from '../src/indi'
 // biome-ignore format: too long!
-import { type Camera, CameraManager, type Cover, CoverManager, type DeviceHandler, type DeviceProperty, type DevicePropertyHandler, DevicePropertyManager, type FlatPanel, FlatPanelManager, type Focuser, FocuserManager, type GuideOutput, GuideOutputManager, type Mount, MountManager, type Thermometer, ThermometerManager, type Wheel, WheelManager } from '../src/indi.manager'
+import { type Camera, CameraManager, type Cover, CoverManager, type DeviceHandler, DevicePropertyManager, type FlatPanel, FlatPanelManager, type Focuser, FocuserManager, type GuideOutput, GuideOutputManager, type Mount, MountManager, type Thermometer, ThermometerManager, type Wheel, WheelManager } from '../src/indi.manager'
 import { SimpleXmlParser } from '../src/xml'
 
 const text = await Bun.file('data/indi.log').text()
@@ -203,16 +203,13 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 			},
 		}
 
-		const devicePropertyHandler: DevicePropertyHandler = {
-			added: (device: string, property: DeviceProperty) => {},
-			updated: (device: string, property: DeviceProperty) => {},
-			removed: (device: string, property: DeviceProperty) => {},
-		}
-
-		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
-		const camera = new CameraManager(cameraDeviceHandler)
-		const guideOutput = new GuideOutputManager(camera, guideOutputDeviceHandler)
-		const thermometer = new ThermometerManager(camera, thermometerDeviceHandler)
+		const deviceProperty = new DevicePropertyManager()
+		const camera = new CameraManager()
+		camera.addHandler(cameraDeviceHandler)
+		const guideOutput = new GuideOutputManager(camera)
+		guideOutput.addHandler(guideOutputDeviceHandler)
+		const thermometer = new ThermometerManager(camera)
+		thermometer.addHandler(thermometerDeviceHandler)
 
 		const handler: IndiClientHandler = {
 			textVector: (client, message, tag) => {
@@ -352,15 +349,11 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 			},
 		}
 
-		const devicePropertyHandler: DevicePropertyHandler = {
-			added: (device: string, property: DeviceProperty) => {},
-			updated: (device: string, property: DeviceProperty) => {},
-			removed: (device: string, property: DeviceProperty) => {},
-		}
-
-		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
-		const mount = new MountManager(mountDeviceHandler)
-		const guideOutput = new GuideOutputManager(mount, guideOutputDeviceHandler)
+		const deviceProperty = new DevicePropertyManager()
+		const mount = new MountManager()
+		mount.addHandler(mountDeviceHandler)
+		const guideOutput = new GuideOutputManager(mount)
+		guideOutput.addHandler(guideOutputDeviceHandler)
 
 		const handler: IndiClientHandler = {
 			textVector: (client, message, tag) => {
@@ -458,14 +451,9 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 			},
 		}
 
-		const devicePropertyHandler: DevicePropertyHandler = {
-			added: (device: string, property: DeviceProperty) => {},
-			updated: (device: string, property: DeviceProperty) => {},
-			removed: (device: string, property: DeviceProperty) => {},
-		}
-
-		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
-		const wheel = new WheelManager(wheelDeviceHandler)
+		const deviceProperty = new DevicePropertyManager()
+		const wheel = new WheelManager()
+		wheel.addHandler(wheelDeviceHandler)
 
 		const handler: IndiClientHandler = {
 			textVector: (client, message, tag) => {
@@ -570,15 +558,11 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 			},
 		}
 
-		const devicePropertyHandler: DevicePropertyHandler = {
-			added: (device: string, property: DeviceProperty) => {},
-			updated: (device: string, property: DeviceProperty) => {},
-			removed: (device: string, property: DeviceProperty) => {},
-		}
-
-		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
-		const focuser = new FocuserManager(focuserDeviceHandler)
-		const thermometer = new ThermometerManager(focuser, thermometerDeviceHandler)
+		const deviceProperty = new DevicePropertyManager()
+		const focuser = new FocuserManager()
+		focuser.addHandler(focuserDeviceHandler)
+		const thermometer = new ThermometerManager(focuser)
+		thermometer.addHandler(thermometerDeviceHandler)
 
 		const handler: IndiClientHandler = {
 			textVector: (client, message, tag) => {
@@ -670,14 +654,9 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 			},
 		}
 
-		const devicePropertyHandler: DevicePropertyHandler = {
-			added: (device: string, property: DeviceProperty) => {},
-			updated: (device: string, property: DeviceProperty) => {},
-			removed: (device: string, property: DeviceProperty) => {},
-		}
-
-		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
-		const cover = new CoverManager(coverDeviceHandler)
+		const deviceProperty = new DevicePropertyManager()
+		const cover = new CoverManager()
+		cover.addHandler(coverDeviceHandler)
 
 		const handler: IndiClientHandler = {
 			textVector: (client, message, tag) => {
@@ -762,14 +741,9 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 			},
 		}
 
-		const devicePropertyHandler: DevicePropertyHandler = {
-			added: (device: string, property: DeviceProperty) => {},
-			updated: (device: string, property: DeviceProperty) => {},
-			removed: (device: string, property: DeviceProperty) => {},
-		}
-
-		const deviceProperty = new DevicePropertyManager(devicePropertyHandler)
-		const flatPanel = new FlatPanelManager(platPanelDeviceHandler)
+		const deviceProperty = new DevicePropertyManager()
+		const flatPanel = new FlatPanelManager()
+		flatPanel.addHandler(platPanelDeviceHandler)
 
 		const handler: IndiClientHandler = {
 			textVector: (client, message, tag) => {
