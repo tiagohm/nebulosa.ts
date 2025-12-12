@@ -1,6 +1,6 @@
 import { type Angle, arcsec, normalizeAngle } from './angle'
 import { AU_M, DAYSEC, ELLIPSOID_PARAMETERS, PI, PIOVERTWO, SPEED_OF_LIGHT, TAU } from './constants'
-import type { CartesianCoordinate, SphericalCoordinate } from './coordinate'
+import type { CartesianCoordinate, EquatorialCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa'
 import type { Pressure } from './pressure'
@@ -20,12 +20,10 @@ export interface RefractionParameters {
 	wl?: number
 }
 
-export interface Observed {
+export interface Observed extends Readonly<EquatorialCoordinate> {
 	readonly azimuth: Angle
 	readonly altitude: Angle
 	readonly hourAngle: Angle
-	readonly declination: Angle
-	readonly rightAscension: Angle // CIO-based
 	readonly equationOfOrigins: Angle
 }
 

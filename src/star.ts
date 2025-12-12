@@ -2,6 +2,7 @@ import type { Mutable } from 'utility-types'
 import type { Angle } from './angle'
 import { DEFAULT_REFRACTION_PARAMETERS, type Observed, type PositionAndVelocity, type RefractionParameters } from './astrometry'
 import { ELLIPSOID_PARAMETERS, PIOVERTWO } from './constants'
+import type { EquatorialCoordinate } from './coordinate'
 import { eraAtco13, eraStarpmpv, eraStarpv } from './erfa'
 import { pmAngles, type Time, Timescale, timeJulianYear, tt, ut1 } from './time'
 import type { Vec3 } from './vec3'
@@ -9,9 +10,7 @@ import type { Velocity } from './velocity'
 
 const DEFAULT_EPOCH = timeJulianYear(2000, Timescale.TDB)
 
-export interface Star {
-	readonly rightAscension: Angle
-	readonly declination: Angle
+export interface Star extends Readonly<EquatorialCoordinate> {
 	readonly pmRa: Angle
 	readonly pmDec: Angle
 	readonly parallax: Angle

@@ -22,10 +22,13 @@ export interface EllipsoidParameters {
 	readonly flattening: number
 }
 
-export interface GeographicPosition {
-	readonly longitude: Angle
-	readonly latitude: Angle
-	readonly elevation: Distance
+export interface GeographicCoordinate<T = Angle, D = Distance> {
+	latitude: T
+	longitude: T
+	elevation: D
+}
+
+export interface GeographicPosition extends Readonly<GeographicCoordinate> {
 	readonly ellipsoid: Ellipsoid
 
 	itrs?: Vec3

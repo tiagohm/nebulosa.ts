@@ -1,12 +1,13 @@
 import { type Angle, deg, hour, normalizeAngle, PARSE_HOUR_ANGLE, parseAngle, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import { PI, TAU } from './constants'
-import { type Distance, meter, toMeter } from './distance'
+import type { EquatorialCoordinate, HorizontalCoordinate } from './coordinate'
+import { meter, toMeter } from './distance'
 import { eraC2s, eraS2c } from './erfa'
 import { precessFk5FromJ2000 } from './fk5'
 import type { CfaPattern } from './image'
 import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, IndiClient, IndiClientHandler, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, VectorType } from './indi'
-import type { GeographicPosition } from './location'
+import type { GeographicCoordinate, GeographicPosition } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
 import { timeNow } from './time'
 
@@ -82,27 +83,6 @@ export interface Device {
 	name: string
 	connected: boolean
 	driver: DriverInfo
-}
-
-export interface EquatorialCoordinate<T = Angle> {
-	rightAscension: T
-	declination: T
-}
-
-export interface EquatorialCoordinateJ2000<T = Angle> {
-	rightAscensionJ2000: T
-	declinationJ2000: T
-}
-
-export interface HorizontalCoordinate<T = Angle> {
-	azimuth: T
-	altitude: T
-}
-
-export interface GeographicCoordinate {
-	latitude: Angle
-	longitude: Angle
-	elevation: Distance
 }
 
 export interface UTCTime {
@@ -1234,8 +1214,8 @@ export class MountManager extends DeviceManager<Mount> {
 		let declination = 0
 
 		const location: GeographicPosition = { ...mount.geographicCoordinate, ellipsoid: 3 }
-        const time = timeNow(true)
-        time.location = location
+		const time = timeNow(true)
+		time.location = location
 
 		if (!('type' in req) || req.type === 'JNOW') {
 			rightAscension = typeof req.rightAscension === 'number' ? req.rightAscension : parseAngle(req.rightAscension, PARSE_HOUR_ANGLE)!

@@ -1,6 +1,7 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import { type Angle, deg, mas, normalizeAngle } from './angle'
 import { PI } from './constants'
+import type { EquatorialCoordinate } from './coordinate'
 import { type Distance, parsec } from './distance'
 import { eraAnpm } from './erfa'
 import type { Seekable, Source } from './io'
@@ -96,10 +97,8 @@ export class StellariumProtocolServer {
 	}
 }
 
-export interface StellariumCatalogEntry {
+export interface StellariumCatalogEntry extends Readonly<EquatorialCoordinate> {
 	readonly id: number
-	readonly rightAscension: Angle
-	readonly declination: Angle
 	readonly mB: number
 	readonly mV: number
 	readonly type: StellariumObjectType

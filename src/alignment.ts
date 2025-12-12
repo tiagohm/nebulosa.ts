@@ -1,18 +1,17 @@
 import { type Angle, arcsec, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from './astrometry'
 import { PI, SIDEREAL_RATE, TAU } from './constants'
+import type { HorizontalCoordinate } from './coordinate'
 import { eraC2s, eraS2c } from './erfa'
 import { precessFk5FromJ2000 } from './fk5'
 import { type Time, timeToUnix } from './time'
 import { type Vec3, vecNegateMut, vecPlane, vecRotateByRodrigues, vecRotY, vecRotZ } from './vec3'
 
-export interface ThreePointPolarAlignmentResult {
+export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoordinate> {
 	readonly azimuthError: Angle
 	readonly altitudeError: Angle
 	readonly azimuthAdjustment: Angle
 	readonly altitudeAdjustment: Angle
-	readonly azimuth: Angle // Azimuth of the mount pole
-	readonly altitude: Angle // Altitude of the mount pole
 	readonly pole: Vec3 // Normal vector of the plane defined by the three points
 }
 

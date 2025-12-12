@@ -1,4 +1,5 @@
 import { type Angle, deg } from './angle'
+import type { EquatorialCoordinate } from './coordinate'
 import { type FitsHeader, heightKeyword, numericKeyword, widthKeyword } from './fits'
 import { cdMatrix } from './wcs'
 
@@ -14,11 +15,9 @@ export interface PlateSolveOptions {
 	timeout?: number
 }
 
-export interface PlateSolution extends Readonly<FitsHeader> {
+export interface PlateSolution extends Readonly<FitsHeader>, Readonly<EquatorialCoordinate> {
 	readonly orientation: Angle
 	readonly scale: Angle
-	readonly rightAscension: Angle
-	readonly declination: Angle
 	readonly width: Angle
 	readonly height: Angle
 	readonly parity: Parity

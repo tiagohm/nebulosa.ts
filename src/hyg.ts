@@ -1,5 +1,6 @@
 import type { Angle } from './angle'
 import type { Constellation } from './constellation'
+import type { EquatorialCoordinate } from './coordinate'
 import { type CsvRow, readCsvStream } from './csv'
 import { type Distance, parsec } from './distance'
 import type { Source } from './io'
@@ -7,7 +8,7 @@ import { kilometerPerSecond, type Velocity } from './velocity'
 
 // https://codeberg.org/astronexus/hyg/src/branch/main/data/hyg/CURRENT
 
-export interface HygDatabaseEntry {
+export interface HygDatabaseEntry extends Readonly<EquatorialCoordinate> {
 	readonly id: number
 	readonly hip: number
 	readonly hd: number
@@ -15,8 +16,6 @@ export interface HygDatabaseEntry {
 	readonly bayer?: string
 	readonly flamsteed: number
 	readonly name?: string
-	readonly rightAscension: Angle
-	readonly declination: Angle
 	readonly pmRa: Angle
 	readonly pmDec: Angle
 	readonly rv: Velocity

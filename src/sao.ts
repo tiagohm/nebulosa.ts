@@ -1,4 +1,5 @@
 import type { Angle } from './angle'
+import type { EquatorialCoordinate } from './coordinate'
 import { eraC2s, eraS2c } from './erfa'
 import { precessFk5ToJ2000 } from './fk5'
 import type { Seekable, Source } from './io'
@@ -8,10 +9,8 @@ import { Timescale, timeBesselianYear } from './time'
 
 const B1950 = timeBesselianYear(1950, Timescale.TT)
 
-export interface SaoCatalogEntry {
+export interface SaoCatalogEntry extends Readonly<EquatorialCoordinate> {
 	readonly id: number
-	readonly rightAscension: Angle
-	readonly declination: Angle
 	readonly spType: string
 	readonly magnitude: number
 	readonly pmRA: Angle
