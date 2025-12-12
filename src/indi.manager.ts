@@ -1,9 +1,14 @@
-import { type Angle, deg, hour, normalizeAngle, toDeg, toHour } from './angle'
+import { type Angle, deg, hour, normalizeAngle, PARSE_HOUR_ANGLE, parseAngle, toDeg, toHour } from './angle'
+import { observedToCirs } from './astrometry'
 import { PI, TAU } from './constants'
 import { type Distance, meter, toMeter } from './distance'
+import { eraC2s, eraS2c } from './erfa'
+import { precessFk5FromJ2000 } from './fk5'
 import type { CfaPattern } from './image'
 import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, IndiClient, IndiClientHandler, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, VectorType } from './indi'
+import type { GeographicPosition } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
+import { timeNow } from './time'
 
 export type DeviceType = 'CAMERA' | 'MOUNT' | 'WHEEL' | 'FOCUSER' | 'ROTATOR' | 'GPS' | 'DOME' | 'GUIDE_OUTPUT' | 'FLAT_PANEL' | 'COVER' | 'THERMOMETER' | 'DEW_HEATER'
 
@@ -18,6 +23,12 @@ export type PierSide = 'EAST' | 'WEST' | 'NEITHER'
 export type MountType = 'ALTAZ' | 'EQ_FORK' | 'EQ_GEM'
 
 export type TrackMode = 'SIDEREAL' | 'SOLAR' | 'LUNAR' | 'KING' | 'CUSTOM'
+
+export type MountTargetCoordinateType = 'J2000' | 'JNOW' | 'ALTAZ'
+
+export type MountTargetCoordinate<T = string> = (EquatorialCoordinate<T> & { type: 'J2000' | 'JNOW' }) | (HorizontalCoordinate<T> & { type: 'ALTAZ' })
+
+export type GuideDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
 
 export type MinMaxValueProperty = Pick<DefNumber, 'min' | 'max' | 'value'>
 
@@ -714,6 +725,37 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		super(handler)
 	}
 
+	pulseNorth(client: IndiClient, device: GuideOutput, duration: number) {
+		if (device.canPulseGuide) {
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: duration, TIMED_GUIDE_S: 0 } })
+		}
+	}
+
+	pulseSouth(client: IndiClient, device: GuideOutput, duration: number) {
+		if (device.canPulseGuide) {
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_S: duration, TIMED_GUIDE_N: 0 } })
+		}
+	}
+
+	pulseWest(client: IndiClient, device: GuideOutput, duration: number) {
+		if (device.canPulseGuide) {
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: duration, TIMED_GUIDE_E: 0 } })
+		}
+	}
+
+	pulseEast(client: IndiClient, device: GuideOutput, duration: number) {
+		if (device.canPulseGuide) {
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_E: duration, TIMED_GUIDE_W: 0 } })
+		}
+	}
+
+	pulse(client: IndiClient, device: GuideOutput, direction: GuideDirection, duration: number) {
+		if (direction === 'NORTH') this.pulseNorth(client, device, duration)
+		else if (direction === 'SOUTH') this.pulseSouth(client, device, duration)
+		else if (direction === 'WEST') this.pulseWest(client, device, duration)
+		else if (direction === 'EAST') this.pulseEast(client, device, duration)
+	}
+
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
 		switch (message.name) {
 			case 'TELESCOPE_TIMED_GUIDE_NS':
@@ -1185,6 +1227,35 @@ export class MountManager extends DeviceManager<Mount> {
 			client.sendSwitch({ device: mount.name, name: 'ON_COORD_SET', elements: { FLIP: true } })
 			this.equatorialCoordinate(client, mount, rightAscension, declination)
 		}
+	}
+
+	moveTo(client: IndiClient, mount: Mount, mode: 'goto' | 'flip' | 'sync', req: MountTargetCoordinate<string | Angle>) {
+		let rightAscension = 0
+		let declination = 0
+
+		const location: GeographicPosition = { ...mount.geographicCoordinate, ellipsoid: 3 }
+        const time = timeNow(true)
+        time.location = location
+
+		if (!('type' in req) || req.type === 'JNOW') {
+			rightAscension = typeof req.rightAscension === 'number' ? req.rightAscension : parseAngle(req.rightAscension, PARSE_HOUR_ANGLE)!
+			declination = typeof req.declination === 'number' ? req.declination : parseAngle(req.declination)!
+		} else if (req.type === 'J2000') {
+			const rightAscensionJ2000 = typeof req.rightAscension === 'number' ? req.rightAscension : parseAngle(req.rightAscension, PARSE_HOUR_ANGLE)!
+			const declinationJ2000 = typeof req.declination === 'number' ? req.declination : parseAngle(req.declination)!
+
+			const fk5 = eraS2c(rightAscensionJ2000, declinationJ2000)
+			;[rightAscension, declination] = eraC2s(...precessFk5FromJ2000(fk5, timeNow(true)))
+		} else if (req.type === 'ALTAZ') {
+			const azimuth = typeof req.azimuth === 'number' ? req.azimuth : parseAngle(req.azimuth)!
+			const altitude = typeof req.altitude === 'number' ? req.altitude : parseAngle(req.altitude)!
+
+			;[rightAscension, declination] = observedToCirs(azimuth, altitude, timeNow(true))
+		}
+
+		if (mode === 'goto') this.goTo(client, mount, rightAscension, declination)
+		else if (mode === 'flip') this.flipTo(client, mount, rightAscension, declination)
+		else if (mode === 'sync') this.syncTo(client, mount, rightAscension, declination)
 	}
 
 	trackMode(client: IndiClient, mount: Mount, mode: TrackMode) {
