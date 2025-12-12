@@ -6,7 +6,7 @@ import { meter, toMeter } from './distance'
 import { eraC2s, eraS2c } from './erfa'
 import { precessFk5FromJ2000 } from './fk5'
 import type { CfaPattern } from './image'
-import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, IndiClient, IndiClientHandler, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, VectorType } from './indi'
+import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, IndiClient, IndiClientHandler, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi'
 import type { GeographicCoordinate, GeographicPosition } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
 import { timeNow } from './time'
@@ -464,7 +464,7 @@ const DEVICES = {
 	[DeviceInterfaceType.LIGHTBOX]: DEFAULT_FLAT_PANEL,
 } as const
 
-export class DevicePropertyManager implements IndiClientHandler {
+export class DevicePropertyManager implements IndiClientHandler, DevicePropertyHandler {
 	private readonly properties = new Map<string, DeviceProperties>()
 	private readonly handlers = new Set<DevicePropertyHandler>()
 
@@ -478,6 +478,18 @@ export class DevicePropertyManager implements IndiClientHandler {
 
 	removeHandler(handler: DevicePropertyHandler) {
 		this.handlers.delete(handler)
+	}
+
+	added(device: string, property: DeviceProperty) {
+		this.handlers.forEach((e) => e.added(device, property))
+	}
+
+	updated(device: string, property: DeviceProperty) {
+		this.handlers.forEach((e) => e.updated(device, property))
+	}
+
+	removed(device: string, property: DeviceProperty) {
+		this.handlers.forEach((e) => e.removed(device, property))
 	}
 
 	names() {
@@ -496,7 +508,7 @@ export class DevicePropertyManager implements IndiClientHandler {
 		return this.properties.has(name)
 	}
 
-	vector(client: IndiClient, message: DefVector | SetVector, tag: `def${VectorType}Vector` | `set${VectorType}Vector`) {
+	vector(client: IndiClient, message: DefVector | SetVector, tag: string) {
 		const { device } = message
 		let properties = this.get(device)
 
@@ -509,7 +521,7 @@ export class DevicePropertyManager implements IndiClientHandler {
 			const property = message as DeviceProperty
 			property.type = tag.includes('Switch') ? 'SWITCH' : tag.includes('Number') ? 'NUMBER' : tag.includes('Text') ? 'TEXT' : tag.includes('BLOB') ? 'BLOB' : 'LIGHT'
 			properties[message.name] = property
-			this.handlers.forEach((e) => e.added(device, property))
+			this.added(device, property)
 			return true
 		} else {
 			let updated = false
@@ -535,7 +547,7 @@ export class DevicePropertyManager implements IndiClientHandler {
 				}
 
 				if (updated) {
-					this.handlers.forEach((e) => e.updated(device, property))
+					this.updated(device, property)
 				}
 			}
 
@@ -556,12 +568,12 @@ export class DevicePropertyManager implements IndiClientHandler {
 			if (property) {
 				delete properties[name]
 				if (Object.keys(properties).length === 0) this.properties.delete(device)
-				this.handlers.forEach((e) => e.removed(device, property))
+				this.removed(device, property)
 				return true
 			}
 		} else {
 			// TODO: should notify once for all properties being removed?
-			for (const [_, property] of Object.entries(properties)) this.handlers.forEach((e) => e.removed(device, property))
+			for (const [_, property] of Object.entries(properties)) this.removed(device, property)
 			this.properties.delete(device)
 			return true
 		}
