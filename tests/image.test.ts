@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { Bitpix, bitpixInBytes, readFits } from '../src/fits'
-import { FitsDataSource, readImageFromFits, writeImageToFits } from '../src/image'
+import { Bitpix, bitpixInBytes } from '../src/fits'
+import { FitsDataSource, readImageFromPath, writeImageToFits } from '../src/image'
 import { adf, histogram } from '../src/image.computation'
 import { blur5x5, convolution, convolutionKernel, debayer, edges, emboss, gaussianBlur, grayscale, horizontalFlip, invert, mean, psf, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
-import { fileHandleSink, fileHandleSource } from '../src/io'
+import { fileHandleSink } from '../src/io'
 import { BITPIXES, CHANNELS, readImage, readImageAndSaveWithOptions, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
 test('readImageFromFits', async () => {
@@ -24,22 +24,20 @@ test('readImageFromFits', async () => {
 test('writeImageToFits', async () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			const [image0] = await readImage(bitpix, channel)
+			const [a] = await readImage(bitpix, channel)
 			const key = `${bitpix}.${channel}`
 
-			let handle = await fs.open(`out/witf-${key}.fit`, 'w+')
+			const handle = await fs.open(`out/witf-${key}.fit`, 'w+')
 			await using sink = fileHandleSink(handle)
-			await writeImageToFits(image0, sink)
+			await writeImageToFits(a, sink)
 
-			handle = await fs.open(`out/witf-${key}.fit`, 'r')
-			await using source = fileHandleSource(handle)
-			const image1 = await readImageFromFits(await readFits(source))
+			const b = await readImageFromPath(`out/witf-${key}.fit`)
 
-			expect(image0.header).toEqual(image1!.header)
+			expect(a.header).toEqual(b!.header)
 
 			const hash = channel === 1 ? 'e298f4abb217bac172a36f027ac6d8db' : '0a1b903f8612fa73756c266fddee0706'
 
-			await saveImageAndCompareHash(image1!, `write-${key}`, hash)
+			await saveImageAndCompareHash(b!, `write-${key}`, hash)
 		}
 	}
 }, 15000)

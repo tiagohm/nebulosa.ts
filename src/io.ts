@@ -356,14 +356,14 @@ const BASE64_URL_SAFE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
 
 const TRAILING = 61 // =
 
+const BASE64_ENCODED_BUFFER_SIZE = 128
+
 export class Base64Sink implements Sink {
 	private readonly map: Buffer
 	private readonly buffer = Buffer.allocUnsafe(3)
 	private readonly encoded = Buffer.allocUnsafe(128)
 	private state = 0
 	private position = 0
-
-	private static readonly ENCODED_BUFFER_SIZE = 128
 
 	constructor(
 		private readonly sink: Sink,
@@ -388,7 +388,7 @@ export class Base64Sink implements Sink {
 		for (let i = 0; i < data.byteLength; i++) {
 			this.encode(data.readUInt8(i))
 
-			if (this.position >= Base64Sink.ENCODED_BUFFER_SIZE - 1) {
+			if (this.position >= BASE64_ENCODED_BUFFER_SIZE - 1) {
 				n += this.position
 				await this.sink.write(this.encoded, 0, this.position)
 				this.position = 0
