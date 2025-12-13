@@ -1,5 +1,5 @@
 import sharp, { type AvifOptions, type FormatEnum, type GifOptions, type HeifOptions, type Jp2Options, type JpegOptions, type JxlOptions, type OutputOptions, type PngOptions, type TiffOptions, type WebpOptions } from 'sharp'
-import { Bitpix, bitpixInBytes, bitpixKeyword, cfaPatternKeyword, type Fits, type FitsData, type FitsHdu, type FitsHeader, heightKeyword, numberOfChannelsKeyword, widthKeyword, writeFits } from './fits'
+import { Bitpix, bitpixInBytes, bitpixKeyword, cfaPatternKeyword, type Fits, type FitsData, type FitsHdu, type FitsHeader, heightKeyword, numberOfChannelsKeyword, readFits, widthKeyword, writeFits } from './fits'
 import { bufferSink, bufferSource, readUntil, type Sink, type Source } from './io'
 
 export type ImageChannel = 'RED' | 'GREEN' | 'BLUE'
@@ -126,6 +126,12 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 
 	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, stride, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPatternKeyword(header) }
 	return { header, metadata, raw }
+}
+
+export async function readImageFromBuffer(buffer: Buffer) {
+	const source = bufferSource(buffer)
+	const fits = await readFits(source) // TODO: support XISF
+	return await readImageFromFits(fits)
 }
 
 export async function writeImageToFormat(image: Image, output: string | NodeJS.WritableStream, format: Exclude<ImageFormat, 'fits' | 'xisf'>, options?: WriteImageToFormatOptions) {
