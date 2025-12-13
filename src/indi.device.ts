@@ -7,6 +7,8 @@ export type DeviceType = 'CAMERA' | 'MOUNT' | 'WHEEL' | 'FOCUSER' | 'ROTATOR' | 
 
 export type DeviceProperty = (DefTextVector & { type: 'TEXT' }) | (DefNumberVector & { type: 'NUMBER' }) | (DefSwitchVector & { type: 'SWITCH' }) | (DefLightVector & { type: 'LIGHT' }) | (DefBlobVector & { type: 'BLOB' })
 
+export type DevicePropertyType = DeviceProperty['type']
+
 export type DeviceProperties = Record<string, DeviceProperty>
 
 export type FrameType = 'LIGHT' | 'DARK' | 'FLAT' | 'BIAS'
