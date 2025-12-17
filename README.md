@@ -231,6 +231,7 @@ ecliptic(pv, time)
 
 ```ts
 const c = rectIntersection(a, b)
+const [a, b] = intersectLineAndSphere(endpoint, center, radius)
 ```
 
 ### GUST86 ![](bun.webp) ![](browser.webp)

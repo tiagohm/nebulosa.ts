@@ -3,6 +3,9 @@ telemetry = false
 [install]
 exact = true
 
+[install.cache]
+disable = true
+
 [test]
 root = "./tests"
 preload = ["./tests/setup.ts"]
