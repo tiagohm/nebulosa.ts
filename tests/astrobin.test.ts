@@ -2,12 +2,12 @@ import { expect, test } from 'bun:test'
 import { camera, cameras, sensor, sensors, telescope, telescopes } from '../src/astrobin'
 
 test.skip('sensor', async () => {
-	const data = await sensors(1)
+	const data = (await sensors(1))!
 
 	expect(data.count).toBeGreaterThanOrEqual(474)
 	expect(data.results).toHaveLength(50)
 
-	const s = await sensor(184)
+	const s = (await sensor(184))!
 
 	expect(s.id).toBe(184)
 	expect(s.brandName).toBe('Sony')
@@ -25,12 +25,12 @@ test.skip('sensor', async () => {
 })
 
 test.skip('camera', async () => {
-	const data = await cameras(1)
+	const data = (await cameras(1))!
 
 	expect(data.count).toBeGreaterThanOrEqual(3512)
 	expect(data.results).toHaveLength(50)
 
-	const c = await camera(529)
+	const c = (await camera(529))!
 
 	expect(c.id).toBe(529)
 	expect(c.brandName).toBe('ZWO')
@@ -41,12 +41,12 @@ test.skip('camera', async () => {
 })
 
 test.skip('telescope', async () => {
-	const data = await telescopes(1)
+	const data = (await telescopes(1))!
 
 	expect(data.count).toBeGreaterThanOrEqual(3952)
 	expect(data.results).toHaveLength(50)
 
-	const t = await telescope(1097)
+	const t = (await telescope(1097))!
 
 	expect(t.id).toBe(1097)
 	expect(t.brandName).toBe('GSO')
@@ -55,4 +55,10 @@ test.skip('telescope', async () => {
 	expect(t.aperture).toBe('152.00')
 	expect(t.minFocalLength).toBe('1368.00')
 	expect(t.maxFocalLength).toBe('1368.00')
+})
+
+test.skip('invalid page', async () => {
+	const data = await sensors(100)
+
+	expect(data).toBeUndefined()
 })
