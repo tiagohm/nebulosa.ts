@@ -62,31 +62,31 @@ async function parseResponse<T>(response: Response) {
 export async function sensors(page: number) {
 	const uri = `${BASE_URL}${SENSOR_PATH}?page=${page}`
 	const response = await fetch(uri, { headers: DEFAULT_HEADERS })
-	return await parseResponse<AstrobinPage<AstrobinSensor>>(response)
+	return parseResponse<AstrobinPage<AstrobinSensor>>(response)
 }
 
 export async function sensor(id: number) {
 	const uri = `${BASE_URL}${SENSOR_PATH}${id}`
 	const response = await fetch(uri, { headers: DEFAULT_HEADERS })
-	return await parseResponse<AstrobinSensor>(response)
+	return parseResponse<AstrobinSensor>(response)
 }
 
 export async function cameras(page: number) {
 	const uri = `${BASE_URL}${CAMERA_PATH}?page=${page}`
 	const response = await fetch(uri, { headers: DEFAULT_HEADERS })
-	return await parseResponse<AstrobinPage<AstrobinCamera>>(response)
+	return parseResponse<AstrobinPage<AstrobinCamera>>(response)
 }
 
 export async function camera(id: number) {
 	const uri = `${BASE_URL}${CAMERA_PATH}${id}`
 	const response = await fetch(uri, { headers: DEFAULT_HEADERS })
-	return await parseResponse<AstrobinCamera>(response)
+	return parseResponse<AstrobinCamera>(response)
 }
 
 export async function telescopes(page: number) {
 	const uri = `${BASE_URL}${TELESCOPE_PATH}?page=${page}`
 	const response = await fetch(uri, { headers: DEFAULT_HEADERS })
-	return await parseResponse<AstrobinPage<AstrobinTelescope>>(response)
+	return parseResponse<AstrobinPage<AstrobinTelescope>>(response)
 }
 
 export async function telescope(id: number) {
