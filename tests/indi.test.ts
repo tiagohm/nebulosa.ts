@@ -165,6 +165,10 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 
 		const process = Bun.spawn(['indiserver', 'indi_simulator_ccd'])
 
+		await Bun.sleep(500)
+
+		expect(process.killed).toBeFalse()
+
 		const cameraDeviceHandler: DeviceHandler<Camera> = {
 			added: (client: IndiClient, device: Camera) => {
 				cameraAdded = true
@@ -326,6 +330,10 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 
 		const process = Bun.spawn(['indiserver', 'indi_simulator_telescope'])
 
+		await Bun.sleep(500)
+
+		expect(process.killed).toBeFalse()
+
 		const mountDeviceHandler: DeviceHandler<Mount> = {
 			added: (client: IndiClient, device: Mount) => {
 				mountAdded = true
@@ -440,6 +448,10 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 
 		const process = Bun.spawn(['indiserver', 'indi_simulator_wheel'])
 
+		await Bun.sleep(500)
+
+		expect(process.killed).toBeFalse()
+
 		const wheelDeviceHandler: DeviceHandler<Wheel> = {
 			added: (client: IndiClient, device: Wheel) => {
 				wheelAdded = true
@@ -534,6 +546,10 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		let thermometerRemoved = false
 
 		const process = Bun.spawn(['indiserver', 'indi_simulator_focus'])
+
+		await Bun.sleep(500)
+
+		expect(process.killed).toBeFalse()
 
 		const focuserDeviceHandler: DeviceHandler<Focuser> = {
 			added: (client: IndiClient, device: Focuser) => {
@@ -643,6 +659,10 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 
 		const process = Bun.spawn(['indiserver', 'indi_simulator_dustcover'])
 
+		await Bun.sleep(500)
+
+		expect(process.killed).toBeFalse()
+
 		const coverDeviceHandler: DeviceHandler<Cover> = {
 			added: (client: IndiClient, device: Cover) => {
 				coverAdded = true
@@ -729,6 +749,10 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		let flatPanelRemoved = false
 
 		const process = Bun.spawn(['indiserver', 'indi_simulator_lightpanel'])
+
+		await Bun.sleep(500)
+
+		expect(process.killed).toBeFalse()
 
 		const platPanelDeviceHandler: DeviceHandler<FlatPanel> = {
 			added: (client: IndiClient, device: FlatPanel) => {

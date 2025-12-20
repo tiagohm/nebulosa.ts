@@ -165,6 +165,7 @@ test('get', () => {
 	expect(temporalGet(1709210096000, 'y')).toBe(2024)
 	expect(temporalGet(1709210096000, 'mo')).toBe(2)
 	expect(temporalGet(1709210096000, 'd')).toBe(29)
+	expect(temporalGet(1709210096000, 'w')).toBe(4)
 	expect(temporalGet(1709210096000, 'h')).toBe(12)
 	expect(temporalGet(1709210096000, 'm')).toBe(34)
 	expect(temporalGet(1709210096000, 's')).toBe(56)
@@ -243,6 +244,11 @@ describe('format using pattern', () => {
 		expect(formatTemporalFromPattern(date, 'YY-MM')).toEqual('28-08')
 		expect(formatTemporalFromPattern(date, 'YYYY/MM')).toEqual('2028/08')
 		expect(formatTemporalFromPattern(date, 'YY/MM')).toEqual('28/08')
+	})
+
+	test('week', () => {
+		expect(formatTemporalFromPattern(date, 'WW')).toEqual('Tuesday')
+		expect(formatTemporalFromPattern(date, 'W')).toEqual('Tue')
 	})
 
 	test('day', () => {

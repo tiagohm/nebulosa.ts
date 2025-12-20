@@ -18,7 +18,7 @@ export type Temporal = number
 
 export type TemporalUnit = 'millisecond' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year'
 
-export type TemporalUnitShort = 'ms' | 's' | 'm' | 'h' | 'd' | 'mo' | 'y'
+export type TemporalUnitShort = 'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'mo' | 'y'
 
 export type TemporalDate = [number, number, number, number, number, number, number]
 
@@ -91,11 +91,13 @@ export function temporalFromTime(time: Time): Temporal {
 }
 
 export function temporalAdd(temporal: Temporal, duration: number, unit: TemporalUnit | TemporalUnitShort): Temporal {
+	if (duration === 0) return temporal
 	if (unit === 'ms' || unit === 'millisecond') return temporal + duration
 	else if (unit === 's' || unit === 'second') return temporal + duration * SECONDS
 	else if (unit === 'm' || unit === 'minute') return temporal + duration * MINUTES
 	else if (unit === 'h' || unit === 'hour') return temporal + duration * HOURS
 	else if (unit === 'd' || unit === 'day') return temporal + duration * DAYS
+	else if (unit === 'w' || unit === 'week') return temporal + duration * (DAYS * 7)
 	else {
 		const date = temporalToDate(temporal)
 
@@ -134,6 +136,7 @@ export function temporalGet(temporal: Temporal, unit: TemporalUnit | TemporalUni
 	else if (unit === 'm' || unit === 'minute') return Math.floor(temporal / 60000) % 60
 	else if (unit === 'h' || unit === 'hour') return Math.floor(temporal / 3600000) % 24
 	else if (unit === 'd' || unit === 'day') return temporalToDate(temporal)[2]
+	else if (unit === 'w' || unit === 'week') return temporalDayOfWeek(temporal)
 	else if (unit === 'mo' || unit === 'month') return temporalToDate(temporal)[1]
 	else if (unit === 'y' || unit === 'year') return temporalToDate(temporal)[0]
 	return 0
@@ -169,7 +172,9 @@ export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat |
 const SHORT_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const LOWERCASE_SHORT_MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-const PATTERN_SYMBOLS = 'YMDHmsS'
+const SHORT_WEEK_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const WEEK_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const PATTERN_SYMBOLS = 'YMDWHmsS'
 
 export function parseTemporal(input: string, pattern: string): Temporal {
 	const date: TemporalDate = [0, 0, 0, 0, 0, 0, 0]
@@ -267,6 +272,12 @@ export function formatTemporalFromPattern(temporal: Temporal, pattern: string, t
 					break
 				case 'M':
 					output.push(date![1].toFixed(0))
+					break
+				case 'WW':
+					output.push(WEEK_NAMES[temporalDayOfWeek(temporal)])
+					break
+				case 'W':
+					output.push(SHORT_WEEK_NAMES[temporalDayOfWeek(temporal)])
 					break
 				case 'DD':
 					output.push(date![2].toFixed(0).padStart(2, '0'))
