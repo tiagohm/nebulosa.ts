@@ -3,29 +3,52 @@ import path from '../native/libturbojpeg.shared' with { type: 'file' }
 
 export type LibJPEG = ReturnType<typeof open>
 
-export enum PixelFormat {
-	RGB, // The red, green, and blue components in the image are stored in 3-sample pixels in the order R, G, B from lowest to highest memory address within each pixel.
-	BGR, // The red, green, and blue components in the image are stored in 3-sample pixels in the order B, G, R from lowest to highest memory address within each pixel.
-	RGBX, // The red, green, and blue components in the image are stored in 4-sample pixels in the order R, G, B from lowest to highest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
-	BGRX, // The red, green, and blue components in the image are stored in 4-sample pixels in the order B, G, R from lowest to highest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
-	XBGR, // The red, green, and blue components in the image are stored in 4-sample pixels in the order R, G, B from highest to lowest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
-	XRGB, // The red, green, and blue components in the image are stored in 4-sample pixels in the order B, G, R from highest to lowest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
-	GRAY, // Each 1-sample pixel represents a luminance (brightness) level from 0 to the maximum sample value (which is, for instance, 255 for 8-bit samples or 4095 for 12-bit samples or 65535 for 16-bit samples.)
-	RGBA, // This is the same as @ref RGBX, except that when decompressing/decoding, the X component is guaranteed to be equal to the maximum sample value, which can be interpreted as an opaque alpha channel.
-	BGRA, // This is the same as @ref BGRX, except that when decompressing/decoding, the X component is guaranteed to be equal to the maximum sample value, which can be interpreted as an opaque alpha channel.
-	ABGR, // This is the same as @ref XBGR, except that when decompressing/decoding, the X component is guaranteed to be equal to the maximum sample value, which can be interpreted as an opaque alpha channel.
-	ARGB, // This is the same as @ref XRGB, except that when decompressing/decoding, the X component is guaranteed to be equal to the maximum sample value, which can be interpreted as an opaque alpha channel.
-	CMYK, // CMYK pixel format
+export type PixelFormat =
+	| 'RGB' // The red, green, and blue components in the image are stored in 3-sample pixels in the order R, G, B from lowest to highest memory address within each pixel.
+	| 'BGR' // The red, green, and blue components in the image are stored in 3-sample pixels in the order B, G, R from lowest to highest memory address within each pixel.
+	| 'RGBX' // The red, green, and blue components in the image are stored in 4-sample pixels in the order R, G, B from lowest to highest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
+	| 'BGRX' // The red, green, and blue components in the image are stored in 4-sample pixels in the order B, G, R from lowest to highest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
+	| 'XBGR' // The red, green, and blue components in the image are stored in 4-sample pixels in the order R, G, B from highest to lowest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
+	| 'XRGB' // The red, green, and blue components in the image are stored in 4-sample pixels in the order B, G, R from highest to lowest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
+	| 'GRAY' // Each 1-sample pixel represents a luminance (brightness) level from 0 to the maximum sample value (which is, for instance, 255 for 8-bit samples or 4095 for 12-bit samples or 65535 for 16-bit samples.)
+	| 'RGBA' // This is the same as @ref RGBX, except that when decompressing/decoding, the X component is guaranteed to be equal to the maximum sample value, which can be interpreted as an opaque alpha channel.
+	| 'BGRA' // This is the same as @ref BGRX, except that when decompressing/decoding, the X component is guaranteed to be equal to the maximum sample value, which can be interpreted as an opaque alpha channel.
+	| 'ABGR' // This is the same as @ref XBGR, except that when decompressing/decoding, the X component is guaranteed to be equal to the maximum sample value, which can be interpreted as an opaque alpha channel.
+	| 'ARGB' // This is the same as @ref XRGB, except that when decompressing/decoding, the X component is guaranteed to be equal to the maximum sample value, which can be interpreted as an opaque alpha channel.
+	| 'CMYK' // CMYK pixel format
+
+export type ChrominanceSubsampling =
+	| '4:4:4' // The JPEG or YUV image will contain one chrominance component for every pixel in the source image.
+	| '4:2:2' // The JPEG or YUV image will contain one chrominance component for every 2x1 block of pixels in the source image.
+	| '4:2:0' // The JPEG or YUV image will contain one chrominance component for every 2x2 block of pixels in the source image.
+	| 'GRAY' // The JPEG or YUV image will contain no chrominance components.
+	| '4:4:0' // The JPEG or YUV image will contain one chrominance component for every 1x2 block of pixels in the source image.
+	| '4:1:1' // The JPEG or YUV image will contain one chrominance component for every 4x1 block of pixels in the source image.
+	| '4:4:1' // The JPEG or YUV image will contain one chrominance component for every 1x4 block of pixels in the source image.
+
+const PIXEL_FORMAT_MAP: Record<PixelFormat, number> = {
+	RGB: 0,
+	BGR: 1,
+	RGBX: 2,
+	BGRX: 3,
+	XBGR: 4,
+	XRGB: 5,
+	GRAY: 6,
+	RGBA: 7,
+	BGRA: 8,
+	ABGR: 9,
+	ARGB: 10,
+	CMYK: 11,
 }
 
-export enum ChrominanceSubsampling {
-	C444, // The JPEG or YUV image will contain one chrominance component for every pixel in the source image.
-	C422, // The JPEG or YUV image will contain one chrominance component for every 2x1 block of pixels in the source image.
-	C420, // The JPEG or YUV image will contain one chrominance component for every 2x2 block of pixels in the source image.
-	GRAY, // The JPEG or YUV image will contain no chrominance components.
-	C440, // The JPEG or YUV image will contain one chrominance component for every 1x2 block of pixels in the source image.
-	C411, // The JPEG or YUV image will contain one chrominance component for every 4x1 block of pixels in the source image.
-	C441, // The JPEG or YUV image will contain one chrominance component for every 1x4 block of pixels in the source image.
+const CHROMINANCE_SUBSAMPLING_MAP: Record<ChrominanceSubsampling, number> = {
+	'4:4:4': 0,
+	'4:2:2': 1,
+	'4:2:0': 2,
+	GRAY: 3,
+	'4:4:0': 4,
+	'4:1:1': 5,
+	'4:4:1': 6,
 }
 
 export function open() {
@@ -68,17 +91,18 @@ export class Jpeg {
 	private readonly lib = load()
 
 	estimateBufferSize(width: number, height: number, chrominanceSubsampling: ChrominanceSubsampling) {
-		return this.lib.tjBufSize(width, height, chrominanceSubsampling)
+		return this.lib.tjBufSize(width, height, CHROMINANCE_SUBSAMPLING_MAP[chrominanceSubsampling])
 	}
 
-	compress(data: Buffer, width: number, height: number, format: PixelFormat, quality: number, chrominanceSubsampling: ChrominanceSubsampling = ChrominanceSubsampling.C420, jpeg?: Buffer) {
+	compress(data: Buffer, width: number, height: number, format: PixelFormat, quality: number, chrominanceSubsampling: ChrominanceSubsampling = '4:2:0', jpeg?: Buffer) {
 		const pointer = this.lib.tjInitCompress()
 
 		if (!pointer) {
 			throw new Error('failed to initialize JPEG compressor')
 		}
 
-		const pitch = format === PixelFormat.GRAY ? width : width * (format === PixelFormat.RGB || format === PixelFormat.BGR ? 3 : 4)
+		const isGray = format === 'GRAY'
+		const pitch = isGray ? width : width * (format === 'RGB' || format === 'BGR' ? 3 : 4)
 		let flag = FASTDCT
 
 		if (jpeg === undefined) {
@@ -91,7 +115,7 @@ export class Jpeg {
 		p[1] = BigInt(jpeg.byteLength) // ulong* jpegSize
 
 		try {
-			const result = this.lib.tjCompress2(pointer, data, width, pitch, height, format, ptr(p, 0), ptr(p, 8), format === PixelFormat.GRAY ? ChrominanceSubsampling.GRAY : chrominanceSubsampling, quality, flag)
+			const result = this.lib.tjCompress2(pointer, data, width, pitch, height, PIXEL_FORMAT_MAP[format], ptr(p, 0), ptr(p, 8), isGray ? 3 : CHROMINANCE_SUBSAMPLING_MAP[chrominanceSubsampling], quality, flag)
 
 			if (result === 0) {
 				// without NOREALLOC flag

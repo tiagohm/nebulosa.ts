@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { ChrominanceSubsampling, Jpeg, PixelFormat } from '../src/jpeg'
+import { Jpeg } from '../src/jpeg'
 import { saveAndCompareHash } from './image.util'
 
 describe('compress', () => {
@@ -13,27 +13,27 @@ describe('compress', () => {
 	const grayscale = Buffer.alloc(100 * 100)
 	for (let i = 0; i < grayscale.length; i++) grayscale[i] = i % 256
 
-	test('rgb', async () => {
-		const bytes = jpeg.compress(rgb, 100, 100, PixelFormat.RGB, 100, ChrominanceSubsampling.C444)
+	test('rgb', () => {
+		const bytes = jpeg.compress(rgb, 100, 100, 'RGB', 100, '4:4:4')
 		expect(bytes).toBeDefined()
-		await saveAndCompareHash(bytes!, 'compress-rgb.jpg', 'd9b243a3bdab8deb8b51c837ba4bfed1')
+		saveAndCompareHash(bytes!, 'compress-rgb.jpg', 'd9b243a3bdab8deb8b51c837ba4bfed1')
 	})
 
-    test('rgb with chrominance subsampling 4:2:0', async () => {
-		const bytes = jpeg.compress(rgb, 100, 100, PixelFormat.RGB, 75)
+	test('rgb with chrominance subsampling 4:2:0', () => {
+		const bytes = jpeg.compress(rgb, 100, 100, 'RGB', 75)
 		expect(bytes).toBeDefined()
-		await saveAndCompareHash(bytes!, 'compress-rgb-420.jpg', 'ef3bacf9d7b6b27091626fed7ddafb7e')
+		saveAndCompareHash(bytes!, 'compress-rgb-420.jpg', 'ef3bacf9d7b6b27091626fed7ddafb7e')
 	})
 
-	test('rgb grayscale', async () => {
-		const bytes = jpeg.compress(rgb, 100, 100, PixelFormat.RGB, 100, ChrominanceSubsampling.GRAY)
+	test('rgb grayscale', () => {
+		const bytes = jpeg.compress(rgb, 100, 100, 'RGB', 100, 'GRAY')
 		expect(bytes).toBeDefined()
-		await saveAndCompareHash(bytes!, 'compress-rgb-grayscale.jpg', 'a50f0ae28aa5eb7c9182c559f6c6add2')
+		saveAndCompareHash(bytes!, 'compress-rgb-grayscale.jpg', 'a50f0ae28aa5eb7c9182c559f6c6add2')
 	})
 
-	test('grayscale', async () => {
-		const bytes = jpeg.compress(grayscale, 100, 100, PixelFormat.GRAY, 100)
+	test('grayscale', () => {
+		const bytes = jpeg.compress(grayscale, 100, 100, 'GRAY', 100)
 		expect(bytes).toBeDefined()
-		await saveAndCompareHash(bytes!, 'compress-grayscale.jpg', '81b2c116b552e4f0b6f5291a12d24797')
+		saveAndCompareHash(bytes!, 'compress-grayscale.jpg', '81b2c116b552e4f0b6f5291a12d24797')
 	})
 })

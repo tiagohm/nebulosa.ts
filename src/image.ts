@@ -2,7 +2,7 @@ import type { PathLike } from 'fs'
 import fs, { type FileHandle } from 'fs/promises'
 import { Bitpix, bitpixInBytes, bitpixKeyword, cfaPatternKeyword, type Fits, type FitsData, type FitsHdu, type FitsHeader, heightKeyword, numberOfChannelsKeyword, readFits, widthKeyword, writeFits } from './fits'
 import { bufferSink, bufferSource, fileHandleSource, readUntil, type Seekable, type Sink, type Source } from './io'
-import { ChrominanceSubsampling, Jpeg, PixelFormat } from './jpeg'
+import { type ChrominanceSubsampling, Jpeg } from './jpeg'
 
 export type ImageChannel = 'RED' | 'GREEN' | 'BLUE'
 
@@ -55,7 +55,7 @@ export const DEFAULT_GRAYSCALE = BT709_GRAYSCALE
 const DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS: WriteImageToFormatOptions = {
 	jpeg: {
 		quality: 100,
-		chrominanceSubsampling: ChrominanceSubsampling.C444,
+		chrominanceSubsampling: '4:4:4',
 	},
 }
 
@@ -157,8 +157,8 @@ export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'f
 	for (let i = 0; i < input.length; i++) input[i] = raw[i] * 255
 
 	if (format === 'jpeg') {
-		const { quality = 75, chrominanceSubsampling = ChrominanceSubsampling.C420 } = options.jpeg ?? DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS.jpeg
-		return new Jpeg().compress(Buffer.from(input.buffer), width, height, channels === 1 ? PixelFormat.GRAY : PixelFormat.RGB, quality, chrominanceSubsampling)
+		const { quality = 100, chrominanceSubsampling = '4:4:4' } = options.jpeg ?? DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS.jpeg
+		return new Jpeg().compress(Buffer.from(input.buffer), width, height, channels === 1 ? 'GRAY' : 'RGB', quality, chrominanceSubsampling)
 	}
 
 	return undefined
