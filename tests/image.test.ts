@@ -5,23 +5,23 @@ import { FitsDataSource, readImageFromPath, writeImageToFits } from '../src/imag
 import { adf, histogram } from '../src/image.computation'
 import { blur5x5, convolution, convolutionKernel, debayer, edges, emboss, gaussianBlur, grayscale, horizontalFlip, invert, mean, psf, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import { fileHandleSink } from '../src/io'
-import { BITPIXES, CHANNELS, readImage, readImageAndSaveWithOptions, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
+import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
-test('readImageFromFits', async () => {
+test('read image from fits', async () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
 			const [image, fits] = await readImage(bitpix, channel)
 
 			expect(image!.header).toBe(fits!.hdus[0].header)
 
-			const hash = channel === 1 ? 'e298f4abb217bac172a36f027ac6d8db' : '0a1b903f8612fa73756c266fddee0706'
+			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 
 			await readImageTransformAndSave((i) => i, `read-${bitpix}.${channel}`, hash, bitpix, channel)
 		}
 	}
 }, 15000)
 
-test('writeImageToFits', async () => {
+test('write image to fits', async () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
 			const [a] = await readImage(bitpix, channel)
@@ -35,14 +35,14 @@ test('writeImageToFits', async () => {
 
 			expect(a.header).toEqual(b!.header)
 
-			const hash = channel === 1 ? 'e298f4abb217bac172a36f027ac6d8db' : '0a1b903f8612fa73756c266fddee0706'
+			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 
-			await saveImageAndCompareHash(b!, `write-${key}`, hash)
+			saveImageAndCompareHash(b!, `write-${key}`, hash)
 		}
 	}
 }, 15000)
 
-test('fitsDataSource', () => {
+test('fits data source', () => {
 	const buffer = Buffer.allocUnsafe(64)
 	const data = new Float64Array([0.5, 1, 0])
 
@@ -123,7 +123,7 @@ test('histogram - roi', async () => {
 })
 
 test('debayer', async () => {
-	const image = await readImageTransformAndSave((i) => stf(debayer(i) ?? i, 0.05), 'debayer-grbg', '3f049c06d25eec196b3d37471776de01', Bitpix.SHORT, 1, 'fit', 'GRBG')
+	const image = await readImageTransformAndSave((i) => stf(debayer(i) ?? i, 0.05), 'debayer-grbg', '30bbb35920a25c9aad10700cc082b426', Bitpix.SHORT, 1, 'fit', 'GRBG')
 
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
@@ -131,35 +131,35 @@ test('debayer', async () => {
 }, 5000)
 
 test('stf', () => {
-	return readImageTransformAndSave((i) => stf(i, 0.005), 'stf', 'b690674f467c3416d09d551157f4e3c2')
+	return readImageTransformAndSave((i) => stf(i, 0.005), 'stf', '82161af2eac053ad688a161d4e1fc6da')
 }, 5000)
 
 test('auto stf', () => {
-	return readImageTransformAndSave((i) => stf(i, ...adf(i)), 'stf-auto', '3e1d22fb79df143993138e5b28611f6d')
+	return readImageTransformAndSave((i) => stf(i, ...adf(i)), 'stf-auto', 'c89314c7f303599568199398d7312372')
 }, 5000)
 
 test('scnr', () => {
-	return readImageTransformAndSave((i) => scnr(i, 'GREEN', 0.9), 'scnr', '73f4a8308f0e234610b913400cce2adb')
+	return readImageTransformAndSave((i) => scnr(i, 'GREEN', 0.9), 'scnr', '6cb9e0f3b826d8ea0e28833f297d90f4')
 }, 5000)
 
 test('horizontal flip', () => {
-	return readImageTransformAndSave((i) => horizontalFlip(i), 'flip-h', '56b0ed9d8c265f1eb1d5ca2cdea1d619')
+	return readImageTransformAndSave((i) => horizontalFlip(i), 'flip-h', 'afd2dcd1180ef2243d86129f7a71bf77')
 }, 5000)
 
 test('vertical flip', () => {
-	return readImageTransformAndSave((i) => verticalFlip(i), 'flip-v', '0c07e73e73bd7383c799874da41ee284')
+	return readImageTransformAndSave((i) => verticalFlip(i), 'flip-v', '47b503f4fe6e29de54d7bd774a796ed7')
 }, 5000)
 
 test('horizontal & vertical flip', () => {
-	return readImageTransformAndSave((i) => verticalFlip(horizontalFlip(i)), 'flip-hv', 'fd71d2b9372436699bf54f58f9dbadf5')
+	return readImageTransformAndSave((i) => verticalFlip(horizontalFlip(i)), 'flip-hv', '6021cd21acad2f5e911fd5ee811222b7')
 }, 5000)
 
 test('invert', () => {
-	return readImageTransformAndSave((i) => invert(i), 'invert', 'a9b92211de5965f5afb1aab2f0427b79')
+	return readImageTransformAndSave((i) => invert(i), 'invert', 'c1e30dcea46c080ecef239399ea25a29')
 }, 5000)
 
 test('grayscale', async () => {
-	const image = await readImageTransformAndSave((i) => grayscale(i), 'grayscale', '462d4b777ec6d7bc374c96c3fa8ae24f')
+	const image = await readImageTransformAndSave((i) => grayscale(i), 'grayscale', '53b6d9929cf3a3eb1e2bccf2bbcea544')
 
 	expect(image.header.NAXIS).toBe(2)
 	expect(image.header.NAXIS3).toBeUndefined()
@@ -168,99 +168,79 @@ test('grayscale', async () => {
 }, 5000)
 
 test('red grayscale', () => {
-	return readImageTransformAndSave((i) => grayscale(i, 'RED'), 'grayscale-red', 'd2ec26a745f4354337d69ed260210c7f')
+	return readImageTransformAndSave((i) => grayscale(i, 'RED'), 'grayscale-red', 'abbe5ae6e4e475b1ddee069d0f37da61')
 }, 5000)
 
 test('convolution identity 3x3', () => {
 	const kernel = convolutionKernel(new Float64Array([0, 0, 0, 0, 1, 0, 0, 0, 0]), 3)
-	return readImageTransformAndSave((i) => convolution(i, kernel), 'conv-identity-3', '0a1b903f8612fa73756c266fddee0706')
+	return readImageTransformAndSave((i) => convolution(i, kernel), 'conv-identity-3', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
 }, 5000)
 
 test('convolution identity 5x5', () => {
 	const kernel = convolutionKernel(new Float64Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 5)
-	return readImageTransformAndSave((i) => convolution(i, kernel), 'conv-identity-5', '0a1b903f8612fa73756c266fddee0706')
+	return readImageTransformAndSave((i) => convolution(i, kernel), 'conv-identity-5', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
 }, 5000)
 
 test('convolution edges', () => {
-	return readImageTransformAndSave((i) => edges(i), 'conv-edges', 'd9127c5a23401b825e3723a745c3816f')
+	return readImageTransformAndSave((i) => edges(i), 'conv-edges', '94c01060591a83869c7cd376d97fb612')
 }, 5000)
 
 test('convolution emboss', () => {
-	return readImageTransformAndSave((i) => emboss(i), 'conv-emboss', '697d469d1054d1ab5968c770c7a1d933')
+	return readImageTransformAndSave((i) => emboss(i), 'conv-emboss', 'de8e5d5183b4afe5066bdab7446a155e')
 }, 5000)
 
 test('convolution sharpen', () => {
-	return readImageTransformAndSave((i) => sharpen(i), 'conv-sharpen', '08cdbeae49b286e57f5023caca63baed')
+	return readImageTransformAndSave((i) => sharpen(i), 'conv-sharpen', '3b41a1fa654d360a1b02c259028be827')
 }, 5000)
 
 test('convolution mean', () => {
-	return readImageTransformAndSave((i) => mean(i), 'conv-mean', '8d3677043d6d3ccd08d4bf6f3143e099')
+	return readImageTransformAndSave((i) => mean(i), 'conv-mean', 'e978e99e47dea77f138953d84221f5ca')
 }, 5000)
 
 test('convolution blur 5x5', () => {
-	return readImageTransformAndSave((i) => blur5x5(i), 'conv-blur-5', '4fb12cb57692f4ff35d0ec88293950a0')
+	return readImageTransformAndSave((i) => blur5x5(i), 'conv-blur-5', 'a088d494ce80235053d9f1a676f0eb19')
 }, 5000)
 
 test('convolution gaussian blur', () => {
-	return readImageTransformAndSave((i) => gaussianBlur(i), 'conv-gaussian-blur', 'd20c32b6329a9fabbe641d1f2ea6307e')
+	return readImageTransformAndSave((i) => gaussianBlur(i), 'conv-gaussian-blur', 'fde35723b23615cbef1ece1fbaecb0e2')
 }, 5000)
 
 test('convolution gaussian blur 11x11', () => {
-	return readImageTransformAndSave((i) => gaussianBlur(i, { sigma: 3, size: 11 }), 'conv-gaussian-blur-11', '666479278a517554e6cdd15f117e5a90')
+	return readImageTransformAndSave((i) => gaussianBlur(i, { sigma: 3, size: 11 }), 'conv-gaussian-blur-11', 'b4884871f1780a44e134a52392f85bed')
 }, 5000)
 
 test('psf', () => {
-	return readImageTransformAndSave((i) => psf(i), 'psf', '988a9ee41852e889d37b712d51653fe4')
+	return readImageTransformAndSave((i) => psf(i), 'psf', '8958ad9f3e3888329faad7fd61e17e73')
 }, 5000)
 
 test('mean + psf', () => {
-	return readImageTransformAndSave((i) => psf(mean(grayscale(i))), 'mean-psf', 'e26eeaa2e1991f2709a85e898ce9fdf8')
+	return readImageTransformAndSave((i) => psf(mean(grayscale(i))), 'mean-psf', 'd321dcf2a1d4f9d381f7735c9ae243a3')
 }, 5000)
 
-test('horizontal flip', () => {
-	return readImageAndSaveWithOptions({ horizontalFlip: true }, 'flip-h-2', '56b0ed9d8c265f1eb1d5ca2cdea1d619')
+test.skip('normalize', () => {
+	// return readImageAndSaveWithOptions({ normalize: true }, 'normalize', '0a1b903f8612fa73756c266fddee0706')
 }, 5000)
 
-test('vertical flip', () => {
-	return readImageAndSaveWithOptions({ verticalFlip: true }, 'flip-v-2', '0c07e73e73bd7383c799874da41ee284')
+test.skip('brightness', () => {
+	// return readImageAndSaveWithOptions({ brightness: 30 }, 'brightness', '06b7df04c9110fd6b5fa04d15d0c0b48')
 }, 5000)
 
-test('sharpen', () => {
-	return readImageAndSaveWithOptions({ sharpen: true }, 'sharpen', 'e45a3f735e0a2ac6a55509f0c618e55b')
+test.skip('contrast', () => {
+	// return readImageAndSaveWithOptions({ contrast: 5 }, 'contrast', 'd407e71e6fc4108082249dc0bb3c0bf6')
 }, 5000)
 
-test('normalize', () => {
-	return readImageAndSaveWithOptions({ normalize: true }, 'normalize', '0a1b903f8612fa73756c266fddee0706')
+test.skip('saturation', () => {
+	// return readImageAndSaveWithOptions({ saturation: 30 }, 'saturation', '2103ecbf94a8006ea7dfd1a2551ccfe2')
 }, 5000)
 
-test('brightness', () => {
-	return readImageAndSaveWithOptions({ brightness: 30 }, 'brightness', '06b7df04c9110fd6b5fa04d15d0c0b48')
+test.skip('brightness & saturation', () => {
+	// return readImageAndSaveWithOptions({ brightness: 30, saturation: 30 }, 'brightness-saturation', 'ce8ad38b1ccf90f227e568523df94326')
 }, 5000)
 
-test('contrast', () => {
-	return readImageAndSaveWithOptions({ contrast: 5 }, 'contrast', 'd407e71e6fc4108082249dc0bb3c0bf6')
+test.skip('gamma', () => {
+	// return readImageAndSaveWithOptions({ gamma: 2.2 }, 'gamma', '22c9e73c1ec3f917896503370b06548e')
 }, 5000)
 
-test('saturation', () => {
-	return readImageAndSaveWithOptions({ saturation: 30 }, 'saturation', '2103ecbf94a8006ea7dfd1a2551ccfe2')
-}, 5000)
-
-test('brightness & saturation', () => {
-	return readImageAndSaveWithOptions({ brightness: 30, saturation: 30 }, 'brightness-saturation', 'ce8ad38b1ccf90f227e568523df94326')
-}, 5000)
-
-test('gamma', () => {
-	return readImageAndSaveWithOptions({ gamma: 2.2 }, 'gamma', '22c9e73c1ec3f917896503370b06548e')
-}, 5000)
-
-test('median', () => {
-	return readImageAndSaveWithOptions({ median: true }, 'median', '18ab1f9f14e5776e00b3c3b7eddff13d')
-}, 5000)
-
-test('blur', () => {
-	return readImageAndSaveWithOptions({ blur: true }, 'blur', 'e71d4f269e5d5a483fce3f5e8b0d3584')
-}, 5000)
-
-test('negate', () => {
-	return readImageAndSaveWithOptions({ negate: true }, 'negate', 'a9b92211de5965f5afb1aab2f0427b79')
+test.skip('median', () => {
+	// return readImageAndSaveWithOptions({ median: true }, 'median', '18ab1f9f14e5776e00b3c3b7eddff13d')
 }, 5000)

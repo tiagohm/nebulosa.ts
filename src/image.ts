@@ -1,12 +1,12 @@
 import type { PathLike } from 'fs'
 import fs, { type FileHandle } from 'fs/promises'
-import sharp, { type AvifOptions, type FormatEnum, type GifOptions, type HeifOptions, type Jp2Options, type JpegOptions, type JxlOptions, type OutputOptions, type PngOptions, type TiffOptions, type WebpOptions } from 'sharp'
 import { Bitpix, bitpixInBytes, bitpixKeyword, cfaPatternKeyword, type Fits, type FitsData, type FitsHdu, type FitsHeader, heightKeyword, numberOfChannelsKeyword, readFits, widthKeyword, writeFits } from './fits'
 import { bufferSink, bufferSource, fileHandleSource, readUntil, type Seekable, type Sink, type Source } from './io'
+import { ChrominanceSubsampling, Jpeg, PixelFormat } from './jpeg'
 
 export type ImageChannel = 'RED' | 'GREEN' | 'BLUE'
 
-export type ImageFormat = keyof FormatEnum | 'fits' | 'xisf'
+export type ImageFormat = 'jpeg' | 'fits' | 'xisf'
 
 export type CfaPattern = 'RGGB' | 'BGGR' | 'GBRG' | 'GRBG' | 'GRGB' | 'GBGR' | 'RGBG' | 'BGRG'
 
@@ -21,18 +21,10 @@ export type GrayscaleAlgorithm = 'BT709' | 'RMY' | 'Y' | Grayscale
 export type ImageChannelOrGray = ImageChannel | GrayscaleAlgorithm | 'GRAY'
 
 export interface WriteImageToFormatOptions {
-	format?: OutputOptions | JpegOptions | PngOptions | WebpOptions | AvifOptions | HeifOptions | JxlOptions | GifOptions | Jp2Options | TiffOptions
-	horizontalFlip?: boolean
-	verticalFlip?: boolean
-	sharpen?: boolean
-	median?: boolean
-	blur?: boolean
-	gamma?: number // 1 - 3
-	normalize?: boolean // Enhance output image contrast
-	brightness?: number
-	contrast?: number
-	saturation?: number
-	negate?: boolean
+	jpeg: {
+		quality?: number
+		chrominanceSubsampling?: ChrominanceSubsampling
+	}
 }
 
 export interface Image {
@@ -59,6 +51,13 @@ export const RED_GRAYSCALE: Grayscale = { red: 1, green: 0, blue: 0 }
 export const GREEN_GRAYSCALE: Grayscale = { red: 0, green: 1, blue: 0 }
 export const BLUE_GRAYSCALE: Grayscale = { red: 0, green: 0, blue: 1 }
 export const DEFAULT_GRAYSCALE = BT709_GRAYSCALE
+
+const DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS: WriteImageToFormatOptions = {
+	jpeg: {
+		quality: 100,
+		chrominanceSubsampling: ChrominanceSubsampling.C444,
+	},
+}
 
 export function isImage(image?: object): image is Image {
 	return !!image && 'header' in image && 'metadata' in image && 'raw' in image
@@ -127,6 +126,7 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu): Promise<Ima
 	}
 
 	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, stride, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPatternKeyword(header) }
+
 	return { header, metadata, raw }
 }
 
@@ -149,34 +149,19 @@ export async function readImageFromPath(path: PathLike) {
 	return await readImageFromFileHandle(handle)
 }
 
-export async function writeImageToFormat(image: Image, output: string | NodeJS.WritableStream, format: Exclude<ImageFormat, 'fits' | 'xisf'>, options?: WriteImageToFormatOptions) {
+export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'fits' | 'xisf'> = 'jpeg', options: Partial<WriteImageToFormatOptions> = DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS) {
 	const { raw, metadata } = image
 	const { width, height, channels } = metadata
-	const input = new Uint8ClampedArray(raw.length)
 
+	const input = new Uint8ClampedArray(raw.length)
 	for (let i = 0; i < input.length; i++) input[i] = raw[i] * 255
 
-	const s = sharp(input, { raw: { width, height, channels: channels as never, premultiplied: false } }).toFormat(format, options?.format)
-
-	if (options?.horizontalFlip) s.flop()
-	if (options?.verticalFlip) s.flip()
-	if (options?.normalize) s.normalise()
-	if (options?.brightness !== undefined || options?.saturation !== undefined) s.modulate({ brightness: options.brightness ?? 1, saturation: options.saturation ?? 1 })
-	if (options?.gamma !== undefined) s.gamma(options.gamma)
-	if (options?.contrast !== undefined && options.contrast !== 1) s.linear(options.contrast, -(128 * options.contrast) + 128)
-	if (options?.sharpen) s.sharpen()
-	if (options?.median) s.median()
-	if (options?.blur) s.blur()
-	if (options?.negate) s.negate()
-
-	if (channels === 1) s.toColourspace('b-w')
-
-	if (typeof output === 'string') {
-		return await s.toFile(output)
-	} else {
-		s.pipe(output)
-		return undefined
+	if (format === 'jpeg') {
+		const { quality = 75, chrominanceSubsampling = ChrominanceSubsampling.C420 } = options.jpeg ?? DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS.jpeg
+		return new Jpeg().compress(Buffer.from(input.buffer), width, height, channels === 1 ? PixelFormat.GRAY : PixelFormat.RGB, quality, chrominanceSubsampling)
 	}
+
+	return undefined
 }
 
 export class FitsDataSource implements Source {

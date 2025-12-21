@@ -1,7 +1,7 @@
 import { expect } from 'bun:test'
 import fs from 'fs/promises'
 import { Bitpix, type Fits, readFits } from '../src/fits'
-import { type Image, readImageFromFits, type WriteImageToFormatOptions, writeImageToFormat } from '../src/image'
+import { type Image, readImageFromFits, writeImageToFormat } from '../src/image'
 import { fileHandleSource } from '../src/io'
 
 export const BITPIXES: readonly Bitpix[] = [8, 16, 32, -32, -64]
@@ -24,12 +24,10 @@ export function readImage(bitpix: Bitpix, channel: number, action?: (image: Imag
 	return openFits(bitpix, channel, readImageFromFitsAndAction, format, name)
 }
 
-export async function saveImageAndCompareHash(image: Image, name: string, hash?: string, options?: WriteImageToFormatOptions) {
-	const output = `out/${name}.png`
-	await writeImageToFormat(image, output, 'png', options)
-	const hex = Bun.MD5.hash(await Bun.file(output).arrayBuffer(), 'hex')
-	if (hash) expect(hex).toBe(hash)
-	else console.info(name, hex)
+export function saveImageAndCompareHash(image: Image, name: string, hash?: string) {
+	const jpeg = writeImageToFormat(image, 'jpeg')
+	expect(jpeg).toBeDefined()
+	saveAndCompareHash(jpeg!, `${name}.jpg`, hash)
 	return image
 }
 
@@ -38,13 +36,8 @@ export async function readImageTransformAndSave(action: (image: Image) => Promis
 	return saveImageAndCompareHash(image, outputName, hash)
 }
 
-export async function readImageAndSaveWithOptions(options: WriteImageToFormatOptions, outputName: string, hash?: string, bitpix: Bitpix = Bitpix.FLOAT, channel: number = 3, format?: string, inputName?: string) {
-	const [image] = await readImage(bitpix, channel, undefined, format, inputName)
-	return saveImageAndCompareHash(image, outputName, hash, options)
-}
-
-export async function saveAndCompareHash(input: NodeJS.TypedArray | ArrayBufferLike | Blob, name: string, hash?: string) {
-	await Bun.write(`out/${name}`, input)
+export function saveAndCompareHash(input: NodeJS.TypedArray | ArrayBufferLike | Blob, name: string, hash?: string) {
+	// await Bun.write(`out/${name}`, input)
 	const hex = Bun.MD5.hash(input, 'hex')
 	if (hash) expect(hex).toBe(hash)
 	else console.info(name, hex)
