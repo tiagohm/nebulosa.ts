@@ -345,6 +345,13 @@ itrs(location) // ITRS xyz position for location
 itrsRotationAt(time) // ITRS rotation matrix at time
 ```
 
+### JPEG ![](bun.webp)
+
+```ts
+const jpeg = new Jpeg()
+const compressed = jpeg.compress(data, width, height, format, chrominanceSubsampling, quality) // Compress raw image data to JPEG
+```
+
 ### L12 ![](bun.webp) ![](browser.webp)
 
 ```ts

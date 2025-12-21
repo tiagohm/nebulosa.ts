@@ -1,5 +1,5 @@
 import { dlopen, type Pointer, ptr, read } from 'bun:ffi'
-import wcsPath from '../native/libwcs.shared' with { type: 'file' }
+import path from '../native/libwcs.shared' with { type: 'file' }
 import { type Angle, deg, toDeg } from './angle'
 import { type FitsHeader, FitsKeywordWriter, numericKeyword } from './fits'
 
@@ -31,7 +31,7 @@ export type WcsFitsHeaderKey =
 export type LibWcs = ReturnType<typeof open>
 
 export function open() {
-	return dlopen(wcsPath, {
+	return dlopen(path, {
 		wcspih: { args: ['buffer', 'int', 'int', 'int', 'ptr', 'ptr', 'ptr'], returns: 'int' },
 		wcsp2s: { args: ['usize', 'int', 'int', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'], returns: 'int' },
 		wcss2p: { args: ['usize', 'int', 'int', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'], returns: 'int' },

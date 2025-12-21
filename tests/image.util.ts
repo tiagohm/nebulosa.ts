@@ -42,3 +42,10 @@ export async function readImageAndSaveWithOptions(options: WriteImageToFormatOpt
 	const [image] = await readImage(bitpix, channel, undefined, format, inputName)
 	return saveImageAndCompareHash(image, outputName, hash, options)
 }
+
+export async function saveAndCompareHash(input: NodeJS.TypedArray | ArrayBufferLike | Blob, name: string, hash?: string) {
+	await Bun.write(`out/${name}`, input)
+	const hex = Bun.MD5.hash(input, 'hex')
+	if (hash) expect(hex).toBe(hash)
+	else console.info(name, hex)
+}
