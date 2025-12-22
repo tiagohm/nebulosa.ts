@@ -49,6 +49,16 @@ export const GREEN_GRAYSCALE: Grayscale = { red: 0, green: 1, blue: 0 }
 export const BLUE_GRAYSCALE: Grayscale = { red: 0, green: 0, blue: 1 }
 export const DEFAULT_GRAYSCALE = BT709_GRAYSCALE
 
+export const GRAYSCALES: Readonly<Record<Exclude<ImageChannelOrGray, Grayscale>, Grayscale>> = {
+	GRAY: DEFAULT_GRAYSCALE,
+	RED: RED_GRAYSCALE,
+	GREEN: GREEN_GRAYSCALE,
+	BLUE: BLUE_GRAYSCALE,
+	BT709: BT709_GRAYSCALE,
+	RMY: RMY_GRAYSCALE,
+	Y: Y_GRAYSCALE,
+}
+
 export const DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS = {
 	jpeg: {
 		quality: 100,
@@ -65,5 +75,5 @@ export function channelIndex(channel?: ImageChannelOrGray) {
 }
 
 export function grayscaleFromChannel(channel?: ImageChannelOrGray): Grayscale {
-	return channel === 'BT709' ? BT709_GRAYSCALE : channel === 'RMY' ? RMY_GRAYSCALE : channel === 'Y' ? Y_GRAYSCALE : channel === 'GRAY' ? DEFAULT_GRAYSCALE : channel === 'RED' ? RED_GRAYSCALE : channel === 'GREEN' ? GREEN_GRAYSCALE : channel === 'BLUE' ? BLUE_GRAYSCALE : (channel ?? DEFAULT_GRAYSCALE)
+	return typeof channel === 'object' ? channel : channel ? GRAYSCALES[channel] : DEFAULT_GRAYSCALE
 }
