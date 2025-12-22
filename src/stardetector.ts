@@ -1,7 +1,7 @@
 import { type Rect, rectIntersection } from './geometry'
-import type { Image } from './image'
 import { histogram } from './image.computation'
 import { grayscale, mean, psf } from './image.transformation'
+import type { Image } from './image.types'
 
 export interface DetectedStar {
 	readonly x: number

@@ -1,5 +1,6 @@
 import type { Rect } from './geometry'
-import { channelIndex, grayscaleFromChannel, type Image, type ImageChannelOrGray, truncatePixel } from './image'
+import { truncatePixel } from './image'
+import { channelIndex, grayscaleFromChannel, type Image, type ImageChannelOrGray } from './image.types'
 import type { NumberArray } from './math'
 import { Histogram } from './statistics'
 

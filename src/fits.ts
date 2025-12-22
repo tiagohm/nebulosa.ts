@@ -1,6 +1,6 @@
 import type { Mutable } from 'utility-types'
 import { type Angle, deg, PARSE_HOUR_ANGLE, parseAngle } from './angle'
-import type { CfaPattern } from './image'
+import type { CfaPattern } from './image.types'
 import { readUntil, type Seekable, type Sink, type Source, sourceTransferToSink } from './io'
 import { parseTemporal } from './temporal'
 

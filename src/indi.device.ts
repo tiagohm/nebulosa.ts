@@ -1,5 +1,5 @@
 import type { EquatorialCoordinate, HorizontalCoordinate } from './coordinate'
-import type { CfaPattern } from './image'
+import type { CfaPattern } from './image.types'
 import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector, PropertyState } from './indi'
 import type { GeographicCoordinate } from './location'
 

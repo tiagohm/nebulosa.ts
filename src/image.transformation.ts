@@ -1,6 +1,7 @@
 import { PI } from './constants'
 import { exposureTimeKeyword } from './fits'
-import { type CfaPattern, channelIndex, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type SCNRAlgorithm, type SCNRProtectionMethod, truncatePixel } from './image'
+import { truncatePixel } from './image'
+import { type CfaPattern, channelIndex, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
 import type { NumberArray } from './math'
 
 // Apply Screen Transfer Function to image.

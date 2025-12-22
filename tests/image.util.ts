@@ -1,7 +1,8 @@
 import { expect } from 'bun:test'
 import fs from 'fs/promises'
 import { Bitpix, type Fits, readFits } from '../src/fits'
-import { type Image, readImageFromFits, writeImageToFormat } from '../src/image'
+import { readImageFromFits, writeImageToFormat } from '../src/image'
+import type { Image } from '../src/image.types'
 import { fileHandleSource } from '../src/io'
 
 export const BITPIXES: readonly Bitpix[] = [8, 16, 32, -32, -64]
