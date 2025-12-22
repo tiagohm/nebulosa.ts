@@ -1,7 +1,8 @@
 import { PI } from './constants'
 import { exposureTimeKeyword } from './fits'
 import { truncatePixel } from './image'
-import { type CfaPattern, channelIndex, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
+// biome-ignore format: too long!
+import { type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, type DarkBiasSubtractionOptions, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type GaussianBlurConvolutionOptions, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
 import type { NumberArray } from './math'
 
 // Apply Screen Transfer Function to image.
@@ -290,16 +291,6 @@ export function invert(image: Image) {
 	return image
 }
 
-export interface DarkBiasSubtractionOptions {
-	darkCorrected?: boolean
-	exposureNormalization?: boolean
-}
-
-const DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS: Readonly<Required<DarkBiasSubtractionOptions>> = {
-	darkCorrected: false,
-	exposureNormalization: true,
-}
-
 // Subtract dark and bias frames from image.
 // If darkCorrected is true, the dark frame will be already corrected for bias.
 export function darkBiasSubtraction(image: Image, dark?: Image, bias?: Image, options?: DarkBiasSubtractionOptions) {
@@ -418,40 +409,13 @@ export function grayscale(image: Image, channel?: ImageChannelOrGray): Image {
 	return { header, metadata, raw }
 }
 
-export interface ConvolutionKernel {
-	readonly kernel: Readonly<NumberArray>
-	readonly width: number
-	readonly height: number
-	readonly divisor: number
-}
-
-export interface ConvolutionOptions {
-	dynamicDivisorForEdges: boolean
-	normalize: boolean
-}
-
-export interface GaussianBlurConvolutionOptions extends ConvolutionOptions {
-	sigma: number
-	size: number
-}
-
-const DEFAULT_CONVOLUTION_OPTIONS: Readonly<ConvolutionOptions> = {
-	dynamicDivisorForEdges: true,
-	normalize: true,
-}
-
-const DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS: Readonly<GaussianBlurConvolutionOptions> = {
-	...DEFAULT_CONVOLUTION_OPTIONS,
-	sigma: 1.4,
-	size: 5,
-}
-
 export function convolutionKernel(kernel: Readonly<NumberArray>, width: number, height: number = width, divisor?: number): ConvolutionKernel {
 	if (kernel.length < width * height) {
 		throw new Error('invalid kernel size')
 	}
 
 	divisor ??= (kernel as number[]).reduce((a, b) => a + b)
+
 	return { kernel, width, height, divisor }
 }
 
@@ -550,11 +514,15 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 	return image
 }
 
-const EDGES = convolutionKernel(new Float64Array([0, -1, 0, -1, 4, -1, 0, -1, 0]), 3)
-const EMBOSS = convolutionKernel(new Float64Array([-1, 0, 0, 0, 0, 0, 0, 0, 1]), 3)
-const MEAN = convolutionKernel(new Float64Array([1, 1, 1, 1, 1, 1, 1, 1, 1]), 3)
-const SHARPEN = convolutionKernel(new Float64Array([0, -1, 0, -1, 5, -1, 0, -1, 0]), 3)
-const BLUR_5x5 = convolutionKernel(new Float64Array([1, 2, 3, 2, 1, 2, 4, 5, 4, 2, 3, 5, 6, 5, 3, 2, 4, 5, 4, 2, 1, 2, 3, 2, 1]), 5)
+const EDGES = convolutionKernel(new Int8Array([0, -1, 0, -1, 4, -1, 0, -1, 0]), 3, 3, 0)
+const EMBOSS = convolutionKernel(new Int8Array([-1, 0, 0, 0, 0, 0, 0, 0, 1]), 3, 3, 0)
+const MEAN_3x3 = convolutionKernel(new Int8Array([1, 1, 1, 1, 1, 1, 1, 1, 1]), 3, 3, 9)
+const MEAN_5x5 = convolutionKernel(new Int8Array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), 5, 5, 25)
+const MEAN_7x7 = convolutionKernel(new Int8Array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), 7, 7, 49)
+const SHARPEN = convolutionKernel(new Int8Array([0, -1, 0, -1, 5, -1, 0, -1, 0]), 3, 3, 1)
+const BLUR_3x3 = convolutionKernel(new Int8Array([1, 2, 1, 2, 4, 2, 1, 2, 1]), 3, 3, 16)
+const BLUR_5x5 = convolutionKernel(new Int8Array([1, 2, 3, 2, 1, 2, 4, 6, 4, 2, 3, 6, 9, 6, 3, 2, 4, 6, 4, 2, 1, 2, 3, 2, 1]), 5, 5, 81)
+const BLUR_7x7 = convolutionKernel(new Int8Array([1, 2, 3, 4, 3, 2, 1, 2, 4, 6, 8, 6, 4, 2, 3, 6, 9, 12, 9, 6, 3, 4, 8, 12, 16, 12, 8, 4, 3, 6, 9, 12, 9, 6, 3, 2, 4, 6, 8, 6, 4, 2, 1, 2, 3, 4, 3, 2, 1]), 7, 7, 256)
 
 export function gaussianBlurKernel(sigma: number = 1.4, size: number = 5) {
 	if (size < 2 || size % 2 === 0) {
@@ -596,16 +564,61 @@ export function emboss(image: Image, options: Partial<ConvolutionOptions> = DEFA
 	return convolution(image, EMBOSS, options)
 }
 
-export function mean(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
-	return convolution(image, MEAN, options)
+export function mean(image: Image, size: number, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	if (size < 3) throw new Error('size must be greater or equal to 3')
+	if (size > 99) throw new Error('size must be less or equal to 99')
+	if (size % 2 === 0) throw new Error('size must be odd')
+	const kernel = new Int8Array(size * size).fill(1)
+	return convolution(image, convolutionKernel(kernel, size, size, kernel.length), options)
+}
+
+export function mean3x3(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	return convolution(image, MEAN_3x3, options)
+}
+
+export function mean5x5(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	return convolution(image, MEAN_5x5, options)
+}
+
+export function mean7x7(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	return convolution(image, MEAN_7x7, options)
 }
 
 export function sharpen(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, SHARPEN, options)
 }
 
+export function blur(image: Image, size: number, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	if (size < 3) throw new Error('size must be greater or equal to 3')
+	if (size > 99) throw new Error('size must be less or equal to 99')
+	if (size % 2 === 0) throw new Error('size must be odd')
+
+	const kernel = new Int16Array(size * size)
+	const n = Math.ceil(size / 2)
+
+	for (let y = 1, c = 0; y <= size; y++) {
+		const m = y <= n ? y : size - y + 1
+
+		for (let x = 1, k = m; x <= size; x++, c++) {
+			kernel[c] = k
+			if (x < n) k += m
+			else k -= m
+		}
+	}
+
+	return convolution(image, convolutionKernel(kernel, size, size, Math.ceil(size / 2) << 2), options)
+}
+
+export function blur3x3(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	return convolution(image, BLUR_3x3, options)
+}
+
 export function blur5x5(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, BLUR_5x5, options)
+}
+
+export function blur7x7(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	return convolution(image, BLUR_7x7, options)
 }
 
 export function gaussianBlur(image: Image, options: Partial<GaussianBlurConvolutionOptions> = DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS) {

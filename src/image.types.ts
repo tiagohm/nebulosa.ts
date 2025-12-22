@@ -1,5 +1,6 @@
 import type { Bitpix, FitsHeader } from './fits'
 import type { ChrominanceSubsampling } from './jpeg'
+import type { NumberArray } from './math'
 
 export type ImageChannel = 'RED' | 'GREEN' | 'BLUE'
 
@@ -16,6 +17,8 @@ export type Grayscale = Readonly<Record<Lowercase<ImageChannel>, number>>
 export type GrayscaleAlgorithm = 'BT709' | 'RMY' | 'Y' | Grayscale
 
 export type ImageChannelOrGray = ImageChannel | GrayscaleAlgorithm | 'GRAY'
+
+export type HistogramPixelTransform = (p: number) => number
 
 export interface WriteImageToFormatOptions {
 	jpeg: {
@@ -41,6 +44,33 @@ export interface ImageMetadata {
 	readonly bayer?: CfaPattern
 }
 
+export interface ConvolutionKernel {
+	readonly kernel: Readonly<NumberArray>
+	readonly width: number
+	readonly height: number
+	readonly divisor: number
+}
+
+export interface ConvolutionOptions {
+	dynamicDivisorForEdges: boolean
+	normalize: boolean
+}
+
+export interface GaussianBlurConvolutionOptions extends ConvolutionOptions {
+	sigma: number
+	size: number
+}
+
+export interface DarkBiasSubtractionOptions {
+	darkCorrected?: boolean
+	exposureNormalization?: boolean
+}
+
+export const STANDARD_DEVIATION_SCALE = 1.482602218505602
+
+export const DEFAULT_MEAN_BACKGROUND = 0.25
+export const DEFAULT_CLIPPING_POINT = -2.8
+
 export const BT709_GRAYSCALE: Grayscale = { red: 0.2125, green: 0.7154, blue: 0.0721 } // standard sRGB
 export const RMY_GRAYSCALE: Grayscale = { red: 0.5, green: 0.419, blue: 0.081 }
 export const Y_GRAYSCALE: Grayscale = { red: 0.299, green: 0.587, blue: 0.114 } // NTSC
@@ -65,6 +95,22 @@ export const DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS = {
 		chrominanceSubsampling: '4:4:4',
 	},
 } as const
+
+export const DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS: Readonly<Required<DarkBiasSubtractionOptions>> = {
+	darkCorrected: false,
+	exposureNormalization: true,
+}
+
+export const DEFAULT_CONVOLUTION_OPTIONS: Readonly<ConvolutionOptions> = {
+	dynamicDivisorForEdges: true,
+	normalize: true,
+}
+
+export const DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS: Readonly<GaussianBlurConvolutionOptions> = {
+	...DEFAULT_CONVOLUTION_OPTIONS,
+	sigma: 1.4,
+	size: 5,
+}
 
 export function isImage(image?: object): image is Image {
 	return !!image && 'header' in image && 'metadata' in image && 'raw' in image

@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes } from '../src/fits'
 import { FitsDataSource, readImageFromPath, writeImageToFits } from '../src/image'
 import { adf, histogram } from '../src/image.computation'
-import { blur5x5, brightness, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import { blur, blur3x3, blur5x5, blur7x7, brightness, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean, mean3x3, mean5x5, mean7x7, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import { fileHandleSink } from '../src/io'
 import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
@@ -171,14 +171,9 @@ test('red grayscale', () => {
 	return readImageTransformAndSave((i) => grayscale(i, 'RED'), 'grayscale-red', 'abbe5ae6e4e475b1ddee069d0f37da61')
 }, 5000)
 
-test('convolution identity 3x3', () => {
-	const kernel = convolutionKernel(new Float64Array([0, 0, 0, 0, 1, 0, 0, 0, 0]), 3)
-	return readImageTransformAndSave((i) => convolution(i, kernel), 'conv-identity-3', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-}, 5000)
-
-test('convolution identity 5x5', () => {
-	const kernel = convolutionKernel(new Float64Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 5)
-	return readImageTransformAndSave((i) => convolution(i, kernel), 'conv-identity-5', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+test('convolution identity', () => {
+	const kernel = convolutionKernel(new Int8Array([0, 0, 0, 0, 1, 0, 0, 0, 0]), 3)
+	return readImageTransformAndSave((i) => convolution(i, kernel), 'conv-identity', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
 }, 5000)
 
 test('convolution edges', () => {
@@ -193,12 +188,42 @@ test('convolution sharpen', () => {
 	return readImageTransformAndSave((i) => sharpen(i), 'conv-sharpen', '3b41a1fa654d360a1b02c259028be827')
 }, 5000)
 
+test('convolution mean 3x3', () => {
+	return readImageTransformAndSave((i) => mean3x3(i), 'conv-mean-3', 'e978e99e47dea77f138953d84221f5ca')
+}, 5000)
+
+test('convolution mean 5x5', () => {
+	return readImageTransformAndSave((i) => mean5x5(i), 'conv-mean-5', 'b6889d5c03fcc8290e0ef441bc057e8d')
+}, 5000)
+
+test('convolution mean 7x7', () => {
+	return readImageTransformAndSave((i) => mean7x7(i), 'conv-mean-7', '5b8d80765c1fd2be99d26384f16089bc')
+}, 5000)
+
 test('convolution mean', () => {
-	return readImageTransformAndSave((i) => mean(i), 'conv-mean', 'e978e99e47dea77f138953d84221f5ca')
+	const a = readImageTransformAndSave((i) => mean(i, 3), 'conv-mean-3', 'e978e99e47dea77f138953d84221f5ca')
+	const b = readImageTransformAndSave((i) => mean(i, 5), 'conv-mean-5', 'b6889d5c03fcc8290e0ef441bc057e8d')
+	const c = readImageTransformAndSave((i) => mean(i, 7), 'conv-mean-7', '5b8d80765c1fd2be99d26384f16089bc')
+	return Promise.all([a, b, c])
+}, 5000)
+
+test('convolution blur 3x3', () => {
+	return readImageTransformAndSave((i) => blur3x3(i), 'conv-blur-3', 'd483c31324fcc7249450e310f19d20b4')
 }, 5000)
 
 test('convolution blur 5x5', () => {
-	return readImageTransformAndSave((i) => blur5x5(i), 'conv-blur-5', 'a088d494ce80235053d9f1a676f0eb19')
+	return readImageTransformAndSave((i) => blur5x5(i), 'conv-blur-5', '1d26004a32af3a8fcec9a7b3972d8002')
+}, 5000)
+
+test('convolution blur 7x7', () => {
+	return readImageTransformAndSave((i) => blur7x7(i), 'conv-blur-7', 'db572370d0633b942e8e72398153e131')
+}, 5000)
+
+test('convolution blur', () => {
+	const a = readImageTransformAndSave((i) => blur(i, 3), 'conv-blur-3', 'd483c31324fcc7249450e310f19d20b4')
+	const b = readImageTransformAndSave((i) => blur(i, 5), 'conv-blur-5', '1d26004a32af3a8fcec9a7b3972d8002')
+	const c = readImageTransformAndSave((i) => blur(i, 7), 'conv-blur-7', 'db572370d0633b942e8e72398153e131')
+	return Promise.all([a, b, c])
 }, 5000)
 
 test('convolution gaussian blur', () => {
@@ -211,10 +236,6 @@ test('convolution gaussian blur 11x11', () => {
 
 test('psf', () => {
 	return readImageTransformAndSave((i) => psf(i), 'psf', '8958ad9f3e3888329faad7fd61e17e73')
-}, 5000)
-
-test('mean + psf', () => {
-	return readImageTransformAndSave((i) => psf(mean(grayscale(i))), 'mean-psf', 'd321dcf2a1d4f9d381f7735c9ae243a3')
 }, 5000)
 
 test('brightness', () => {

@@ -1,24 +1,17 @@
 import type { Rect } from './geometry'
 import { truncatePixel } from './image'
-import { channelIndex, grayscaleFromChannel, type Image, type ImageChannelOrGray } from './image.types'
+import { channelIndex, DEFAULT_CLIPPING_POINT, DEFAULT_MEAN_BACKGROUND, grayscaleFromChannel, type HistogramPixelTransform, type Image, type ImageChannelOrGray, STANDARD_DEVIATION_SCALE } from './image.types'
 import type { NumberArray } from './math'
 import { Histogram } from './statistics'
-
-export type HistogramPixelTransform = (p: number) => number
 
 export function median(image: Image, channel?: ImageChannelOrGray, transform?: HistogramPixelTransform, area?: Partial<Rect>, bits?: NumberArray | number) {
 	return histogram(image, channel, transform, area, bits).median
 }
 
-const STANDARD_DEVIATION_SCALE = 1.482602218505602
-
 export function medianAbsoluteDeviation(image: Image, m: number, channel?: ImageChannelOrGray, area?: Partial<Rect>, bits?: NumberArray | number, normalized: boolean = false) {
 	const mad = median(image, channel, (p) => Math.abs(p - m), area, bits)
 	return normalized ? STANDARD_DEVIATION_SCALE * mad : mad
 }
-
-export const DEFAULT_MEAN_BACKGROUND = 0.25
-export const DEFAULT_CLIPPING_POINT = -2.8
 
 // Adaptive Display Function Algorithm
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Adaptive_Display_Function_Algorithm__

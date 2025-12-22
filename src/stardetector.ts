@@ -1,6 +1,6 @@
 import { type Rect, rectIntersection } from './geometry'
 import { histogram } from './image.computation'
-import { grayscale, mean, psf } from './image.transformation'
+import { grayscale, mean3x3, psf } from './image.transformation'
 import type { Image } from './image.types'
 
 export interface DetectedStar {
@@ -25,7 +25,7 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 	image = grayscale(image)
 
 	// Run a 3x3 median first to eliminate hot pixels
-	image = mean(image)
+	image = mean3x3(image)
 
 	// Run the PSF convolution
 	image = psf(image)
