@@ -256,7 +256,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	protected handleConnection(client: IndiClient, device: D, message: DefSwitchVector | SetSwitchVector) {
 		const connected = message.elements.CONNECT?.value === true
 
-		if (connected !== device.connected) {
+		if (connected !== device.connected || message.state === 'Alert') {
 			device.connected = connected
 			if (connected) this.ask(client, device)
 			return true
