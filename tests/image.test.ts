@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes } from '../src/fits'
 import { FitsDataSource, readImageFromPath, writeImageToFits } from '../src/image'
 import { adf, histogram } from '../src/image.computation'
-import { blur5x5, convolution, convolutionKernel, debayer, edges, emboss, gaussianBlur, grayscale, horizontalFlip, invert, mean, psf, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import { blur5x5, brightness, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import { fileHandleSink } from '../src/io'
 import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
@@ -217,28 +217,20 @@ test('mean + psf', () => {
 	return readImageTransformAndSave((i) => psf(mean(grayscale(i))), 'mean-psf', 'd321dcf2a1d4f9d381f7735c9ae243a3')
 }, 5000)
 
-test.skip('normalize', () => {
-	// return readImageAndSaveWithOptions({ normalize: true }, 'normalize', '0a1b903f8612fa73756c266fddee0706')
+test('brightness', () => {
+	return readImageTransformAndSave((i) => brightness(i, 80), 'brightness', 'b509a49b5677b98b64fd560d0e7a6d8f')
 }, 5000)
 
-test.skip('brightness', () => {
-	// return readImageAndSaveWithOptions({ brightness: 30 }, 'brightness', '06b7df04c9110fd6b5fa04d15d0c0b48')
+test('contrast', () => {
+	return readImageTransformAndSave((i) => contrast(i, 0.8125), 'contrast', '9e918ec0d7a1e96cb854aa1cd0929e79')
 }, 5000)
 
-test.skip('contrast', () => {
-	// return readImageAndSaveWithOptions({ contrast: 5 }, 'contrast', 'd407e71e6fc4108082249dc0bb3c0bf6')
+test('saturation', () => {
+	return readImageTransformAndSave((i) => saturation(i, 30), 'saturation', 'c2e2a7577b9141a36420b15019cf1449')
 }, 5000)
 
-test.skip('saturation', () => {
-	// return readImageAndSaveWithOptions({ saturation: 30 }, 'saturation', '2103ecbf94a8006ea7dfd1a2551ccfe2')
-}, 5000)
-
-test.skip('brightness & saturation', () => {
-	// return readImageAndSaveWithOptions({ brightness: 30, saturation: 30 }, 'brightness-saturation', 'ce8ad38b1ccf90f227e568523df94326')
-}, 5000)
-
-test.skip('gamma', () => {
-	// return readImageAndSaveWithOptions({ gamma: 2.2 }, 'gamma', '22c9e73c1ec3f917896503370b06548e')
+test('gamma', () => {
+	return readImageTransformAndSave((i) => gamma(i, 2.2), 'gamma', '086f10359a135f12f8cf0e7e27d52731')
 }, 5000)
 
 test.skip('median', () => {
