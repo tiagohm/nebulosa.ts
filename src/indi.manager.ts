@@ -355,11 +355,22 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 			case 'TELESCOPE_TIMED_GUIDE_WE': {
 				const device = this.provider.get(message.device)
 
-				if (device && tag[0] === 'd' && !device.canPulseGuide) {
-					device.canPulseGuide = true
+				if (device) {
+					if (tag[0] === 'd') {
+						if (!device.canPulseGuide) {
+							device.canPulseGuide = true
 
-					if (this.add(client, device)) {
-						this.updated(client, device, 'canPulseGuide', message.state)
+							if (this.add(client, device)) {
+								this.updated(client, device, 'canPulseGuide', message.state)
+							}
+						}
+					}
+
+					const pulsing = message.state === 'Busy'
+
+					if (pulsing !== device.pulsing) {
+						device.pulsing = pulsing
+						this.updated(client, device, 'pulsing', message.state)
 					}
 				}
 
@@ -395,11 +406,26 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 			case 'FOCUS_TEMPERATURE': {
 				const device = this.provider.get(message.device)
 
-				if (device && tag[0] === 'd' && !device.hasThermometer) {
-					device.hasThermometer = true
+				if (device) {
+					if (tag[0] === 'd') {
+						if (!device.hasThermometer) {
+							device.hasThermometer = true
 
-					if (this.add(client, device)) {
-						this.updated(client, device, 'hasThermometer', message.state)
+							if (this.add(client, device)) {
+								this.updated(client, device, 'hasThermometer', message.state)
+							}
+						}
+					}
+
+					let value = message.elements.TEMPERATURE?.value ?? message.elements.CCD_TEMPERATURE_VALUE?.value
+
+					if (value !== undefined) {
+						value = Math.trunc(value)
+
+						if (value !== device.temperature) {
+							device.temperature = value
+							this.updated(client, device, 'temperature', message.state)
+						}
 					}
 				}
 
@@ -1400,26 +1426,36 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 	}
 
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
-		const device = this.provider.get(message.device)
-
-		if (!device) return
-
 		switch (message.name) {
 			// WandererCover V4 EC
-			case 'Heater':
-				if (tag[0] === 'd' && !device.hasDewHeater) {
-					device.hasDewHeater = true
+			case 'Heater': {
+				const device = this.provider.get(message.device)
 
-					handleMinMaxValue(device.pwm, message.elements.Heater, tag)
+				if (device) {
+					if (tag[0] === 'd') {
+						if (!device.hasDewHeater) {
+							device.hasDewHeater = true
 
-					if (this.add(client, device)) {
+							handleMinMaxValue(device.pwm, message.elements.Heater, tag)
+
+							if (this.add(client, device)) {
+								this.updated(client, device, 'pwm', message.state)
+								this.updated(client, device, 'hasDewHeater', message.state)
+								this.pwmProperty.set(device.name, [message.name, 'Heater'])
+							}
+						}
+					}
+
+					const value = message.elements.Heater.value
+
+					if (value !== device.pwm.value) {
+						device.pwm.value = value
 						this.updated(client, device, 'pwm', message.state)
-						this.updated(client, device, 'hasDewHeater', message.state)
-						this.pwmProperty.set(device.name, [message.name, 'Heater'])
 					}
 				}
 
 				return
+			}
 		}
 	}
 

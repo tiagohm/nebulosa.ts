@@ -70,7 +70,7 @@ export interface UTCTime {
 export interface GuideOutput extends Device {
 	readonly type: 'GUIDE_OUTPUT' | 'MOUNT' | 'CAMERA'
 	canPulseGuide: boolean
-	pulseGuiding: boolean
+	pulsing: boolean
 }
 
 export interface Thermometer extends Device {
@@ -264,7 +264,7 @@ export const DEFAULT_CAMERA: Camera = {
 		y: 0,
 	},
 	canPulseGuide: false,
-	pulseGuiding: false,
+	pulsing: false,
 	type: 'CAMERA',
 	name: '',
 	connected: false,
@@ -297,7 +297,7 @@ export const DEFAULT_MOUNT: Mount = {
 		declination: 0,
 	},
 	canPulseGuide: false,
-	pulseGuiding: false,
+	pulsing: false,
 	type: 'MOUNT',
 	name: '',
 	connected: false,
@@ -406,7 +406,7 @@ export const DEFAULT_THERMOMETER: Thermometer = {
 
 export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	canPulseGuide: false,
-	pulseGuiding: false,
+	pulsing: false,
 	type: 'GUIDE_OUTPUT',
 	name: '',
 	connected: false,
