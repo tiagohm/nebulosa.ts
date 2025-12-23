@@ -147,7 +147,7 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 			}
 		} else {
 			// TODO: should notify once for all properties being removed?
-			for (const [_, property] of Object.entries(properties)) this.removed(device, property)
+			// for (const [_, property] of Object.entries(properties)) this.removed(device, property)
 			this.properties.delete(device)
 			return true
 		}
