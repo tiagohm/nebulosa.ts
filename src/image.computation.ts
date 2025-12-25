@@ -72,7 +72,7 @@ export function sigmaClip(image: Image, options: Partial<SigmaClipOptions> = DEF
 	if (raw.length > mask.length) throw new Error(`mask must have length >= ${raw.length}`)
 
 	const bits = options.bits === undefined || typeof options.bits === 'number' ? new Int32Array(1 << (options.bits ?? 16)) : options.bits
-	options = { ...options, bits, transform: (p, i) => (mask[i] === 1 ? 0 : p) }
+	options = { ...options, bits, transform: (p, i) => (mask[i] === 1 ? 0 : p), sigmaClip: undefined } as HistogramOptions
 
 	const isMono = channels === 1
 
