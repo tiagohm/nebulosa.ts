@@ -72,7 +72,7 @@ export interface HistogramOptions {
 	area?: Partial<Rect>
 	transform: HistogramPixelTransform
 	bits: NumberArray | number
-	sigmaClip?: Int8Array
+	sigmaClip?: Int8Array | Uint8Array
 }
 
 export interface AdaptiveDisplayFunctionOptions extends HistogramOptions {
