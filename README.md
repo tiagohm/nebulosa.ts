@@ -289,7 +289,8 @@ readImageFromFits(fits) // Read image from FITS file
 writeImageToFormat(image, path, format) // Write image to path as png, jpeg, webp, etc
 writeImageToFits(image, sink) // Write image to sink as FITS format
 stf(image, midtone, shadow, highlight, channel) // Apply STF to image
-adf(image, channel, meanBackground, clippingPoint) // Calculate the STF parameters
+adf(image, options) // Calculate the STF parameters
+sigmaClip(image, options) // Generate rejection map using sigma-clip
 debayer(image) // Debayer the image
 scnr(image, channel, amount, method) // Apply SCNR to image
 horizontalFlip(image) // Horizontal flip the image
@@ -305,9 +306,9 @@ gaussianBlur(image)
 psf(image)
 darkBiasSubtraction(image, dark, bias)
 flatCorrection(image, flat)
-histogram(image, channel) // Generate the histogram from image
-median(image, channel) // Calculate the median from image
-medianAbsoluteDiviation(image, channel) // Calculate the MAD from image
+histogram(image, options) // Generate the histogram from image
+median(image, options) // Calculate the median from image
+medianAbsoluteDiviation(image, normalize, options) // Calculate the MAD from image
 brightness(image, value)
 saturation(image, value, channel)
 linear(image, slope, intercept)

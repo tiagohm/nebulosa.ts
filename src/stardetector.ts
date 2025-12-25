@@ -1,7 +1,7 @@
 import { type Rect, rectIntersection } from './geometry'
 import { histogram } from './image.computation'
 import { grayscale, mean3x3, psf } from './image.transformation'
-import type { Image } from './image.types'
+import type { HistogramOptions, Image } from './image.types'
 
 export interface DetectedStar {
 	readonly x: number
@@ -33,11 +33,12 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 	const { raw, metadata } = image
 	const { width, height, stride } = metadata
 	const convRect: Rect = { left: 4, top: 4, right: width - 5, bottom: height - 5 }
-	let rect: Rect = { left: 0, top: 0, bottom: 0, right: 0 }
-	const hist = new Int32Array(1 << 18)
+	const area: Rect = { left: 0, top: 0, bottom: 0, right: 0 }
+	const bits = new Int32Array(1 << 18)
 	const maxX = convRect.right - 4
 	const maxY = convRect.bottom - 4
 	const stars = new StarList(Math.min(maxStars, 2000))
+	const histogramOptions: Partial<HistogramOptions> = { channel: 'GRAY', area, bits }
 
 	// Find each local maximum
 	for (let y = convRect.top + 4; y <= maxY; y++) {
@@ -69,12 +70,12 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 			if (!isMax) continue
 
 			// Compare local maximum to mean value of surrounding pixels
-			rect.left = x - 7
-			rect.top = y - 7
-			rect.right = x + 7
-			rect.bottom = y + 7
-			rect = rectIntersection(rect, convRect, rect)!
-			const { mean, standardDeviation } = histogram(image, 'GRAY', undefined, rect, hist)
+			area.left = x - 7
+			area.top = y - 7
+			area.right = x + 7
+			area.bottom = y + 7
+			rectIntersection(area, convRect, area)!
+			const { mean, standardDeviation } = histogram(image, histogramOptions)
 
 			// This is our measure of star intensity
 			const h = (value - mean) / standardDeviation

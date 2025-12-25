@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes } from '../src/fits'
 import { FitsDataSource, readImageFromPath, writeImageToFits } from '../src/image'
-import { adf, histogram } from '../src/image.computation'
+import { adf, histogram, sigmaClip } from '../src/image.computation'
 // biome-ignore format: too long!
 import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import { fileHandleSink } from '../src/io'
@@ -79,7 +79,7 @@ test('fits data source', () => {
 
 test('histogram - red', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
-	const h = histogram(image, 'RED')
+	const h = histogram(image, { channel: 'RED' })
 
 	expect(h.count[0]).toBe(732122)
 	expect(h.mean).toBeCloseTo(0.0015438, 4)
@@ -90,7 +90,7 @@ test('histogram - red', async () => {
 
 test('histogram - green', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
-	const h = histogram(image, 'GREEN')
+	const h = histogram(image, { channel: 'GREEN' })
 
 	expect(h.count[0]).toBe(732122)
 	expect(h.mean).toBeCloseTo(0.0016607, 4)
@@ -101,7 +101,7 @@ test('histogram - green', async () => {
 
 test('histogram - blue', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
-	const h = histogram(image, 'BLUE')
+	const h = histogram(image, { channel: 'BLUE' })
 
 	expect(h.count[0]).toBe(732122)
 	expect(h.mean).toBeCloseTo(0.0014478, 4)
@@ -112,7 +112,7 @@ test('histogram - blue', async () => {
 
 test('histogram - roi', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
-	const h = histogram(image, 'RED', undefined, { left: 450, top: 400, right: 705, bottom: 655 }, 20)
+	const h = histogram(image, { channel: 'RED', area: { left: 450, top: 400, right: 705, bottom: 655 }, bits: 20 })
 
 	expect(h.count[0]).toBe(65536)
 	expect(h.mean).toBeCloseTo(0.0043881, 4)
@@ -137,6 +137,10 @@ test('stf', () => {
 
 test('auto stf', () => {
 	return readImageTransformAndSave((i) => stf(i, ...adf(i)), 'stf-auto', 'c89314c7f303599568199398d7312372')
+}, 5000)
+
+test('auto stf with sigma clip', () => {
+	return readImageTransformAndSave((i) => stf(i, ...adf(i, { sigmaClip: sigmaClip(i) })), 'stf-auto-sigma-clip', 'eb8b02dbcd56dd364a4e0411f8e3029b')
 }, 5000)
 
 test('scnr', () => {

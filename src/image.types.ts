@@ -1,4 +1,5 @@
 import type { Bitpix, FitsHeader } from './fits'
+import type { Rect } from './geometry'
 import type { ChrominanceSubsampling } from './jpeg'
 import type { NumberArray } from './math'
 
@@ -18,7 +19,7 @@ export type GrayscaleAlgorithm = 'BT709' | 'RMY' | 'Y' | Grayscale
 
 export type ImageChannelOrGray = ImageChannel | GrayscaleAlgorithm | 'GRAY'
 
-export type HistogramPixelTransform = (p: number) => number
+export type HistogramPixelTransform = (p: number, i: number) => number
 
 export interface WriteImageToFormatOptions {
 	jpeg: {
@@ -66,6 +67,29 @@ export interface DarkBiasSubtractionOptions {
 	exposureNormalization?: boolean
 }
 
+export interface HistogramOptions {
+	channel?: ImageChannelOrGray
+	area?: Partial<Rect>
+	transform: HistogramPixelTransform
+	bits: NumberArray | number
+	sigmaClip?: Int8Array
+}
+
+export interface AdaptiveDisplayFunctionOptions extends HistogramOptions {
+	meanBackground: number
+	clippingPoint: number
+}
+
+export interface SigmaClipOptions extends Omit<HistogramOptions, 'sigmaClip'> {
+	centerMethod: 'median' | 'mean'
+	dispersionMethod: 'std' | 'mad'
+	sigmaLower: number
+	sigmaUpper: number
+	tolerance: number
+	maxIterations: number
+	mask?: Int8Array | Uint8Array
+}
+
 export const STANDARD_DEVIATION_SCALE = 1.482602218505602
 
 export const DEFAULT_MEAN_BACKGROUND = 0.25
@@ -110,6 +134,29 @@ export const DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS: Readonly<GaussianBlurCon
 	...DEFAULT_CONVOLUTION_OPTIONS,
 	sigma: 1.4,
 	size: 5,
+}
+
+export const DEFAULT_HISTOGRAM_PIXEL_TRANSFORM: HistogramPixelTransform = (p) => p
+
+export const DEFAULT_HISTOGRAM_OPTIONS: Readonly<HistogramOptions> = {
+	transform: DEFAULT_HISTOGRAM_PIXEL_TRANSFORM,
+	bits: 16,
+}
+
+export const DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS: Readonly<AdaptiveDisplayFunctionOptions> = {
+	...DEFAULT_HISTOGRAM_OPTIONS,
+	meanBackground: DEFAULT_MEAN_BACKGROUND,
+	clippingPoint: DEFAULT_CLIPPING_POINT,
+}
+
+export const DEFAULT_SIGMA_CLIP_OPTIONS: Readonly<SigmaClipOptions> = {
+	...DEFAULT_HISTOGRAM_OPTIONS,
+	centerMethod: 'mean',
+	dispersionMethod: 'std',
+	sigmaLower: 3,
+	sigmaUpper: 3,
+	tolerance: 1e-3,
+	maxIterations: 5,
 }
 
 export function isImage(image?: object): image is Image {
