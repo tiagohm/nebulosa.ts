@@ -21,6 +21,10 @@ export type ImageChannelOrGray = ImageChannel | GrayscaleAlgorithm | 'GRAY'
 
 export type HistogramPixelTransform = (p: number, i: number) => number
 
+export type SigmaClipCenterMethod = 'median' | 'mean'
+
+export type SigmaClipDispersionMethod = 'std' | 'mad'
+
 export interface WriteImageToFormatOptions {
 	jpeg: {
 		quality?: number
@@ -81,8 +85,8 @@ export interface AdaptiveDisplayFunctionOptions extends HistogramOptions {
 }
 
 export interface SigmaClipOptions extends Omit<HistogramOptions, 'sigmaClip'> {
-	centerMethod: 'median' | 'mean'
-	dispersionMethod: 'std' | 'mad'
+	centerMethod: SigmaClipCenterMethod
+	dispersionMethod: SigmaClipDispersionMethod
 	sigmaLower: number
 	sigmaUpper: number
 	tolerance: number
