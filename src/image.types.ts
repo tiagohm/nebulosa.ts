@@ -79,9 +79,14 @@ export interface HistogramOptions {
 	sigmaClip?: Int8Array | Uint8Array
 }
 
+export interface ApplyScreenTransferFunctionOptions {
+	channel?: ImageChannelOrGray
+	bits: number
+}
+
 export interface AdaptiveDisplayFunctionOptions extends HistogramOptions {
-	meanBackground: number
-	clippingPoint: number
+	meanBackground: number // Controls the global illumination of the displayed image
+	clippingPoint: number // Controls the overall contrast of the displayed image
 }
 
 export interface SigmaClipOptions extends Omit<HistogramOptions, 'sigmaClip'> {
@@ -144,6 +149,11 @@ export const DEFAULT_HISTOGRAM_PIXEL_TRANSFORM: HistogramPixelTransform = (p) =>
 
 export const DEFAULT_HISTOGRAM_OPTIONS: Readonly<HistogramOptions> = {
 	transform: DEFAULT_HISTOGRAM_PIXEL_TRANSFORM,
+	bits: 16,
+}
+
+export const DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS: Readonly<ApplyScreenTransferFunctionOptions> = {
+	channel: 'GRAY',
 	bits: 16,
 }
 

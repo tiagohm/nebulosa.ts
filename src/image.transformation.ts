@@ -2,28 +2,30 @@ import { PI } from './constants'
 import { exposureTimeKeyword } from './fits'
 import { truncatePixel } from './image'
 // biome-ignore format: too long!
-import { type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, type DarkBiasSubtractionOptions, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type GaussianBlurConvolutionOptions, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
+import { type ApplyScreenTransferFunctionOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, type DarkBiasSubtractionOptions, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type GaussianBlurConvolutionOptions, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
 import type { NumberArray } from './math'
 
 // Apply Screen Transfer Function to image.
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Display_Function__
 // https://pixinsight.com/tutorials/24-bit-stf/
-export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, highlight: number = 1, channel?: ImageChannelOrGray) {
+export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, highlight: number = 1, options: Partial<ApplyScreenTransferFunctionOptions> = DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS) {
 	if (midtone === 0.5 && shadow === 0 && highlight === 1) return image
 
 	const factor = shadow === highlight ? 1 : 1 / (highlight - shadow)
 	const k1 = (midtone - 1) * factor
 	const k2 = (2 * midtone - 1) * factor
-	const lut = new Float64Array(65536).fill(NaN)
 
 	const { raw, metadata } = image
+	const isColor = metadata.channels === 3
+	const { channel = DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS.channel, bits = DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS.bits } = options
+	const lut = new Float32Array(1 << bits).fill(NaN)
+	const max = lut.length - 1
 
-	const s = metadata.channels === 3 ? channelIndex(channel) : 0
-	const p = metadata.channels === 3 && channel ? 3 : 1
+	const step = isColor && (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') ? 3 : 1
 
-	for (let i = s; i < raw.length; i += p) {
+	for (let i = isColor ? channelIndex(channel) : 0; i < raw.length; i += step) {
 		let value = raw[i]
-		const p = truncatePixel(value, 65535)
+		const p = truncatePixel(value, max)
 
 		if (!Number.isNaN(lut[p])) raw[i] = lut[p]
 		else if (value < shadow) raw[i] = 0
