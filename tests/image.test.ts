@@ -3,7 +3,8 @@ import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes } from '../src/fits'
 import { FitsDataSource, readImageFromPath, writeImageToFits } from '../src/image'
 import { adf, histogram } from '../src/image.computation'
-import { blur, blur3x3, blur5x5, blur7x7, brightness, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean, mean3x3, mean5x5, mean7x7, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+// biome-ignore format: too long!
+import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import { fileHandleSink } from '../src/io'
 import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
@@ -201,9 +202,9 @@ test('convolution mean 7x7', () => {
 }, 5000)
 
 test('convolution mean', () => {
-	const a = readImageTransformAndSave((i) => mean(i, 3), 'conv-mean-3', 'e978e99e47dea77f138953d84221f5ca')
-	const b = readImageTransformAndSave((i) => mean(i, 5), 'conv-mean-5', 'b6889d5c03fcc8290e0ef441bc057e8d')
-	const c = readImageTransformAndSave((i) => mean(i, 7), 'conv-mean-7', '5b8d80765c1fd2be99d26384f16089bc')
+	const a = readImageTransformAndSave((i) => convolution(i, meanConvolutionKernel(3)), 'conv-mean-3', 'e978e99e47dea77f138953d84221f5ca')
+	const b = readImageTransformAndSave((i) => convolution(i, meanConvolutionKernel(5)), 'conv-mean-5', 'b6889d5c03fcc8290e0ef441bc057e8d')
+	const c = readImageTransformAndSave((i) => convolution(i, meanConvolutionKernel(7)), 'conv-mean-7', '5b8d80765c1fd2be99d26384f16089bc')
 	return Promise.all([a, b, c])
 }, 5000)
 
@@ -220,9 +221,9 @@ test('convolution blur 7x7', () => {
 }, 5000)
 
 test('convolution blur', () => {
-	const a = readImageTransformAndSave((i) => blur(i, 3), 'conv-blur-3', 'd483c31324fcc7249450e310f19d20b4')
-	const b = readImageTransformAndSave((i) => blur(i, 5), 'conv-blur-5', '1d26004a32af3a8fcec9a7b3972d8002')
-	const c = readImageTransformAndSave((i) => blur(i, 7), 'conv-blur-7', 'db572370d0633b942e8e72398153e131')
+	const a = readImageTransformAndSave((i) => convolution(i, blurConvolutionKernel(3)), 'conv-blur-3', 'd483c31324fcc7249450e310f19d20b4')
+	const b = readImageTransformAndSave((i) => convolution(i, blurConvolutionKernel(5)), 'conv-blur-5', '1d26004a32af3a8fcec9a7b3972d8002')
+	const c = readImageTransformAndSave((i) => convolution(i, blurConvolutionKernel(7)), 'conv-blur-7', 'db572370d0633b942e8e72398153e131')
 	return Promise.all([a, b, c])
 }, 5000)
 

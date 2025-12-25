@@ -564,12 +564,21 @@ export function emboss(image: Image, options: Partial<ConvolutionOptions> = DEFA
 	return convolution(image, EMBOSS, options)
 }
 
-export function mean(image: Image, size: number, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+export function meanConvolutionKernel(size: number) {
 	if (size < 3) throw new Error('size must be greater or equal to 3')
 	if (size > 99) throw new Error('size must be less or equal to 99')
 	if (size % 2 === 0) throw new Error('size must be odd')
+
 	const kernel = new Int8Array(size * size).fill(1)
-	return convolution(image, convolutionKernel(kernel, size, size, kernel.length), options)
+	return convolutionKernel(kernel, size, size, kernel.length)
+}
+
+export function mean(image: Image, size: number, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	if (size === 3) return mean3x3(image, options)
+	if (size === 5) return mean5x5(image, options)
+	if (size === 7) return mean7x7(image, options)
+
+	return convolution(image, meanConvolutionKernel(size), options)
 }
 
 export function mean3x3(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
@@ -588,7 +597,7 @@ export function sharpen(image: Image, options: Partial<ConvolutionOptions> = DEF
 	return convolution(image, SHARPEN, options)
 }
 
-export function blur(image: Image, size: number, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+export function blurConvolutionKernel(size: number) {
 	if (size < 3) throw new Error('size must be greater or equal to 3')
 	if (size > 99) throw new Error('size must be less or equal to 99')
 	if (size % 2 === 0) throw new Error('size must be odd')
@@ -606,7 +615,15 @@ export function blur(image: Image, size: number, options: Partial<ConvolutionOpt
 		}
 	}
 
-	return convolution(image, convolutionKernel(kernel, size, size, Math.ceil(size / 2) << 2), options)
+	return convolutionKernel(kernel, size, size, Math.ceil(size / 2) << 2)
+}
+
+export function blur(image: Image, size: number, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
+	if (size === 3) return blur3x3(image, options)
+	if (size === 5) return blur5x5(image, options)
+	if (size === 7) return blur7x7(image, options)
+
+	return convolution(image, blurConvolutionKernel(size), options)
 }
 
 export function blur3x3(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {

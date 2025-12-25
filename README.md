@@ -300,7 +300,7 @@ edge(image)
 emboss(image)
 mean(image)
 sharpen(image)
-blur5x5(image)
+blur(image)
 gaussianBlur(image)
 psf(image)
 darkBiasSubtraction(image, dark, bias)
@@ -308,6 +308,11 @@ flatCorrection(image, flat)
 histogram(image, channel) // Generate the histogram from image
 median(image, channel) // Calculate the median from image
 medianAbsoluteDiviation(image, channel) // Calculate the MAD from image
+brightness(image, value)
+saturation(image, value, channel)
+linear(image, slope, intercept)
+contrast(image, value)
+gamma(image, value)
 ```
 
 ### INDI ![](bun.webp)
