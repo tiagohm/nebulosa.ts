@@ -1,7 +1,7 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { type DefSwitchVector, IndiClient, type IndiClientHandler, type PropertyState } from '../src/indi'
-import type { Camera, Cover, FlatPanel, Focuser, GuideOutput, Mount, Thermometer, Wheel } from '../src/indi.device'
-import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import type { Camera, Cover, FlatPanel, Focuser, GuideOutput, Mount, Power, Thermometer, Wheel } from '../src/indi.device'
+import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 // biome-ignore format: too long!
 import { SimpleXmlParser } from '../src/xml'
 
@@ -261,54 +261,54 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		expect(cameraAdded).toBeTrue()
 		expect(camera).toHaveLength(1)
 
-		const simulator = camera.get('CCD Simulator')!
-		camera.connect(client, simulator)
+		const device = camera.get('CCD Simulator')!
+		camera.connect(client, device)
 
 		await Bun.sleep(1000)
 
-		expect(simulator.connected).toBeTrue()
-		expect(simulator.canAbort).toBeTrue()
-		expect(simulator.canSubFrame).toBeTrue()
-		expect(simulator.canBin).toBeTrue()
-		expect(simulator.hasCooler).toBeTrue()
-		expect(simulator.canSetTemperature).toBeTrue()
-		expect(simulator.hasThermometer).toBeTrue()
-		expect(simulator.canPulseGuide).toBeTrue()
-		expect(simulator.hasCoolerControl).toBeTrue()
-		expect(simulator.exposure.min).toBe(0.01)
-		expect(simulator.exposure.max).toBe(3600)
-		expect(simulator.frame.width).toBe(1280)
-		expect(simulator.frame.height).toBe(1024)
-		expect(simulator.frame.maxX).toBe(1279)
-		expect(simulator.frame.maxY).toBe(1023)
-		expect(simulator.frame.maxWidth).toBe(1280)
-		expect(simulator.frame.maxHeight).toBe(1024)
-		expect(simulator.gain.value).toBe(90)
-		expect(simulator.gain.max).toBe(300)
-		expect(simulator.offset.max).toBe(6000)
-		expect(simulator.bin.x).toBe(1)
-		expect(simulator.bin.y).toBe(1)
-		expect(simulator.bin.maxX).toBe(4)
-		expect(simulator.bin.maxY).toBe(4)
-		expect(simulator.pixelSize.x).toBeCloseTo(5.2, 1)
-		expect(simulator.pixelSize.y).toBeCloseTo(5.2, 1)
-		expect(simulator.frameFormats).toEqual(['INDI_MONO'])
+		expect(device.connected).toBeTrue()
+		expect(device.canAbort).toBeTrue()
+		expect(device.canSubFrame).toBeTrue()
+		expect(device.canBin).toBeTrue()
+		expect(device.hasCooler).toBeTrue()
+		expect(device.canSetTemperature).toBeTrue()
+		expect(device.hasThermometer).toBeTrue()
+		expect(device.canPulseGuide).toBeTrue()
+		expect(device.hasCoolerControl).toBeTrue()
+		expect(device.exposure.min).toBe(0.01)
+		expect(device.exposure.max).toBe(3600)
+		expect(device.frame.width).toBe(1280)
+		expect(device.frame.height).toBe(1024)
+		expect(device.frame.maxX).toBe(1279)
+		expect(device.frame.maxY).toBe(1023)
+		expect(device.frame.maxWidth).toBe(1280)
+		expect(device.frame.maxHeight).toBe(1024)
+		expect(device.gain.value).toBe(90)
+		expect(device.gain.max).toBe(300)
+		expect(device.offset.max).toBe(6000)
+		expect(device.bin.x).toBe(1)
+		expect(device.bin.y).toBe(1)
+		expect(device.bin.maxX).toBe(4)
+		expect(device.bin.maxY).toBe(4)
+		expect(device.pixelSize.x).toBeCloseTo(5.2, 1)
+		expect(device.pixelSize.y).toBeCloseTo(5.2, 1)
+		expect(device.frameFormats).toEqual(['INDI_MONO'])
 		expect(guideOutput).toHaveLength(1)
 		expect(thermometer).toHaveLength(1)
 		expect(thermometerAdded).toBeTrue()
 		expect(guideOutputAdded).toBeTrue()
 		expect(deviceProperty).not.toBeEmpty()
 
-		camera.enableBlob(client, simulator)
-		camera.gain(client, simulator, 60)
-		camera.offset(client, simulator, 10)
-		camera.startExposure(client, simulator, 1)
+		camera.enableBlob(client, device)
+		camera.gain(client, device, 60)
+		camera.offset(client, device, 10)
+		camera.startExposure(client, device, 1)
 
 		await Bun.sleep(2000)
 
 		expect(frame).not.toBeEmpty()
-		expect(simulator.gain.value).toBe(60)
-		expect(simulator.offset.value).toBe(10)
+		expect(device.gain.value).toBe(60)
+		expect(device.offset.value).toBe(10)
 
 		client.close()
 
@@ -403,28 +403,28 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		expect(mountAdded).toBeTrue()
 		expect(mount).toHaveLength(1)
 
-		const simulator = mount.get('Telescope Simulator')!
-		mount.connect(client, simulator)
+		const device = mount.get('Telescope Simulator')!
+		mount.connect(client, device)
 
 		await Bun.sleep(1000)
 
-		expect(simulator.connected).toBeTrue()
-		expect(simulator.canSync).toBeTrue()
-		expect(simulator.canGoTo).toBeTrue()
-		expect(simulator.canAbort).toBeTrue()
-		expect(simulator.canHome).toBeTrue()
-		expect(simulator.canPark).toBeTrue()
-		expect(simulator.canPulseGuide).toBeTrue()
-		expect(simulator.trackModes).toEqual(['SIDEREAL', 'SOLAR', 'LUNAR', 'CUSTOM'])
-		expect(simulator.slewRates).toHaveLength(4)
-		expect(simulator.slewRate).toBe('3x')
-		expect(simulator.pierSide).toBe('EAST')
-		expect(simulator.geographicCoordinate.latitude).not.toBe(0)
-		expect(simulator.geographicCoordinate.longitude).not.toBe(0)
-		expect(simulator.geographicCoordinate.elevation).not.toBe(0)
-		expect(simulator.time.utc).not.toBe(0)
-		expect(simulator.equatorialCoordinate.rightAscension).not.toBe(0)
-		expect(simulator.equatorialCoordinate.declination).not.toBe(0)
+		expect(device.connected).toBeTrue()
+		expect(device.canSync).toBeTrue()
+		expect(device.canGoTo).toBeTrue()
+		expect(device.canAbort).toBeTrue()
+		expect(device.canHome).toBeTrue()
+		expect(device.canPark).toBeTrue()
+		expect(device.canPulseGuide).toBeTrue()
+		expect(device.trackModes).toEqual(['SIDEREAL', 'SOLAR', 'LUNAR', 'CUSTOM'])
+		expect(device.slewRates).toHaveLength(4)
+		expect(device.slewRate).toBe('3x')
+		expect(device.pierSide).toBe('EAST')
+		expect(device.geographicCoordinate.latitude).not.toBe(0)
+		expect(device.geographicCoordinate.longitude).not.toBe(0)
+		expect(device.geographicCoordinate.elevation).not.toBe(0)
+		expect(device.time.utc).not.toBe(0)
+		expect(device.equatorialCoordinate.rightAscension).not.toBe(0)
+		expect(device.equatorialCoordinate.declination).not.toBe(0)
 		expect(guideOutput).toHaveLength(1)
 		expect(guideOutputAdded).toBeTrue()
 		expect(deviceProperty).not.toBeEmpty()
@@ -504,32 +504,32 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		expect(wheelAdded).toBeTrue()
 		expect(wheel).toHaveLength(1)
 
-		const simulator = wheel.get('Filter Simulator')!
-		wheel.connect(client, simulator)
+		const device = wheel.get('Filter Simulator')!
+		wheel.connect(client, device)
 
 		await Bun.sleep(1000)
 
 		let actual: string[] = FILTER_SLOTS_1
 		let expected: string[] = FILTER_SLOTS_2
 
-		if (simulator.slots[0] !== actual[0]) {
+		if (device.slots[0] !== actual[0]) {
 			actual = FILTER_SLOTS_2
 			expected = FILTER_SLOTS_1
 		}
 
-		expect(simulator.connected).toBeTrue()
-		expect(simulator.slots).toHaveLength(8)
-		expect(simulator.slots).toEqual(actual)
-		expect(simulator.position).toBe(0)
+		expect(device.connected).toBeTrue()
+		expect(device.slots).toHaveLength(8)
+		expect(device.slots).toEqual(actual)
+		expect(device.position).toBe(0)
 		expect(deviceProperty).not.toBeEmpty()
 
-		wheel.moveTo(client, simulator, 7)
-		wheel.slots(client, simulator, expected)
+		wheel.moveTo(client, device, 7)
+		wheel.slots(client, device, expected)
 
 		await Bun.sleep(2000)
 
-		expect(simulator.position).toBe(7)
-		expect(simulator.slots).toEqual(expected)
+		expect(device.position).toBe(7)
+		expect(device.slots).toEqual(expected)
 
 		client.close()
 
@@ -620,28 +620,28 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		expect(focuserAdded).toBeTrue()
 		expect(focuser).toHaveLength(1)
 
-		const simulator = focuser.get('Focuser Simulator')!
-		focuser.connect(client, simulator)
+		const device = focuser.get('Focuser Simulator')!
+		focuser.connect(client, device)
 
 		await Bun.sleep(1000)
 
-		expect(simulator.connected).toBeTrue()
+		expect(device.connected).toBeTrue()
 		// expect(simulator.canAbort).toBeTrue()
-		expect(simulator.hasThermometer).toBeTrue()
-		expect(simulator.canAbsoluteMove).toBeTrue()
+		expect(device.hasThermometer).toBeTrue()
+		expect(device.canAbsoluteMove).toBeTrue()
 		// expect(simulator.canReverse).toBeTrue()
 		// expect(simulator.canSync).toBeTrue()
-		expect(simulator.position.max).toEqual(100000)
-		expect(simulator.position.value).toEqual(50000)
+		expect(device.position.max).toEqual(100000)
+		expect(device.position.value).toEqual(50000)
 		expect(thermometer).toHaveLength(1)
 		expect(thermometerAdded).toBeTrue()
 		expect(deviceProperty).not.toBeEmpty()
 
-		focuser.moveTo(client, simulator, 60000)
+		focuser.moveTo(client, device, 60000)
 
 		await Bun.sleep(2000)
 
-		expect(simulator.position.value).toBe(60000)
+		expect(device.position.value).toBe(60000)
 
 		client.close()
 
@@ -712,29 +712,29 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		expect(coverAdded).toBeTrue()
 		expect(cover).toHaveLength(1)
 
-		const simulator = cover.get('Dust Cover Simulator')!
-		cover.connect(client, simulator)
+		const device = cover.get('Dust Cover Simulator')!
+		cover.connect(client, device)
 
 		await Bun.sleep(1000)
 
-		const isParked = simulator.parked
+		const isParked = device.parked
 
-		expect(simulator.connected).toBeTrue()
-		expect(simulator.pwm.max).toBe(100)
-		expect(simulator.pwm.value).toBe(0)
+		expect(device.connected).toBeTrue()
+		expect(device.pwm.max).toBe(100)
+		expect(device.pwm.value).toBe(0)
 		expect(deviceProperty).not.toBeEmpty()
 
-		isParked ? cover.unpark(client, simulator) : cover.park(client, simulator)
+		isParked ? cover.unpark(client, device) : cover.park(client, device)
 
 		await Bun.sleep(1000)
 
-		expect(simulator.parked).toBe(!isParked)
+		expect(device.parked).toBe(!isParked)
 
-		isParked ? cover.park(client, simulator) : cover.unpark(client, simulator)
+		isParked ? cover.park(client, device) : cover.unpark(client, device)
 
 		await Bun.sleep(1000)
 
-		expect(simulator.parked).toBe(isParked)
+		expect(device.parked).toBe(isParked)
 
 		client.close()
 
@@ -754,7 +754,7 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 
 		expect(process.killed).toBeFalse()
 
-		const platPanelDeviceHandler: DeviceHandler<FlatPanel> = {
+		const flatPanelDeviceHandler: DeviceHandler<FlatPanel> = {
 			added: (client: IndiClient, device: FlatPanel) => {
 				flatPanelAdded = true
 			},
@@ -768,7 +768,7 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 
 		const deviceProperty = new DevicePropertyManager()
 		const flatPanel = new FlatPanelManager()
-		flatPanel.addHandler(platPanelDeviceHandler)
+		flatPanel.addHandler(flatPanelDeviceHandler)
 
 		const handler: IndiClientHandler = {
 			textVector: (client, message, tag) => {
@@ -806,29 +806,29 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		expect(flatPanelAdded).toBeTrue()
 		expect(flatPanel).toHaveLength(1)
 
-		const simulator = flatPanel.get('Light Panel Simulator')!
-		flatPanel.connect(client, simulator)
+		const device = flatPanel.get('Light Panel Simulator')!
+		flatPanel.connect(client, device)
 
 		await Bun.sleep(1000)
 
-		expect(simulator.connected).toBeTrue()
-		expect(simulator.intensity.max).toBe(255)
-		expect(simulator.intensity.value).toBe(0)
+		expect(device.connected).toBeTrue()
+		expect(device.intensity.max).toBe(255)
+		expect(device.intensity.value).toBe(0)
 		expect(deviceProperty).not.toBeEmpty()
 
-		flatPanel.enable(client, simulator)
+		flatPanel.enable(client, device)
 
 		await Bun.sleep(1000)
 
-		expect(simulator.enabled).toBeTrue()
+		expect(device.enabled).toBeTrue()
 
-		flatPanel.intensity(client, simulator, 99)
-		flatPanel.disable(client, simulator)
+		flatPanel.intensity(client, device, 99)
+		flatPanel.disable(client, device)
 
 		await Bun.sleep(1000)
 
-		expect(simulator.intensity.value).toBe(99)
-		expect(simulator.enabled).toBeFalse()
+		expect(device.intensity.value).toBe(99)
+		expect(device.enabled).toBeFalse()
 
 		client.close()
 
@@ -836,5 +836,112 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 
 		expect(flatPanel).toBeEmpty()
 		expect(flatPanelRemoved).toBeTrue()
+	}, 10000)
+
+	test.skip('power', async () => {
+		let powerAdded = false
+		let powerRemoved = false
+
+		// const process = Bun.spawn(['indiserver', 'indi_svbony_powerbox'])
+
+		// await Bun.sleep(500)
+
+		// expect(process.killed).toBeFalse()
+
+		const powerDeviceHandler: DeviceHandler<Power> = {
+			added: (client: IndiClient, device: Power) => {
+				powerAdded = true
+			},
+			updated: (client: IndiClient, device: Power, property: keyof Power, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: Power) => {
+				powerRemoved = true
+			},
+		}
+
+		const deviceProperty = new DevicePropertyManager()
+		const power = new PowerManager()
+		power.addHandler(powerDeviceHandler)
+
+		const handler: IndiClientHandler = {
+			textVector: (client, message, tag) => {
+				power.textVector(client, message, tag)
+			},
+			switchVector: (client, message, tag) => {
+				power.switchVector(client, message, tag)
+			},
+			numberVector: (client, message, tag) => {
+				power.numberVector(client, message, tag)
+			},
+			vector: (client, message, tag) => {
+				deviceProperty.vector(client, message, tag)
+			},
+			delProperty: (client, message) => {
+				deviceProperty.delProperty(client, message)
+				power.delProperty(client, message)
+			},
+			close: (client, server) => {
+				power.close(client, server)
+			},
+		}
+
+		await Bun.sleep(1000)
+
+		const client = new IndiClient({ handler })
+
+		onTestFinished(() => {
+			// process.kill()
+		})
+
+		await client.connect('localhost')
+		await Bun.sleep(1000)
+
+		expect(powerAdded).toBeTrue()
+		expect(power).toHaveLength(1)
+
+		const device = power.get('SVBONY PowerBox')!
+		// power.simulation(client, device, true)
+		power.connect(client, device)
+
+		await Bun.sleep(1000)
+
+		expect(device.connected).toBeTrue()
+		expect(deviceProperty).not.toBeEmpty()
+
+		// device.dc.forEach((e) => power.toggle(client, device, e, true))
+		// device.dew.forEach((e) => power.toggle(client, device, e, true))
+		// device.autoDew.forEach((e) => power.toggle(client, device, e, true))
+		// device.variableVoltage.forEach((e) => power.toggle(client, device, e, true))
+		// device.usb.forEach((e) => power.toggle(client, device, e, true))
+
+		// await Bun.sleep(1000)
+
+		// device.dc.forEach((e) => expect(e.enabled).toBeTrue())
+		// device.dew.forEach((e) => expect(e.enabled).toBeTrue())
+		// device.autoDew.forEach((e) => expect(e.enabled).toBeTrue())
+		// device.variableVoltage.forEach((e) => expect(e.enabled).toBeTrue())
+		// device.usb.forEach((e) => expect(e.enabled).toBeTrue())
+
+		// device.dc.forEach((e) => power.toggle(client, device, e, false))
+		// device.dew.forEach((e) => power.toggle(client, device, e, false))
+		// device.autoDew.forEach((e) => power.toggle(client, device, e, false))
+		// device.variableVoltage.forEach((e) => power.toggle(client, device, e, false))
+		// device.usb.forEach((e) => power.toggle(client, device, e, false))
+
+		// await Bun.sleep(1000)
+
+		// device.dc.forEach((e) => expect(e.enabled).toBeFalse())
+		// device.dew.forEach((e) => expect(e.enabled).toBeFalse())
+		// device.autoDew.forEach((e) => expect(e.enabled).toBeFalse())
+		// device.variableVoltage.forEach((e) => expect(e.enabled).toBeFalse())
+		// device.usb.forEach((e) => expect(e.enabled).toBeFalse())
+
+		client.close()
+
+		await Bun.sleep(1000)
+
+		expect(power).toBeEmpty()
+		expect(powerRemoved).toBeTrue()
 	}, 10000)
 })

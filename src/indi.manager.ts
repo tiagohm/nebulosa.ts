@@ -5,9 +5,9 @@ import { meter, toMeter } from './distance'
 import { eraC2s, eraS2c } from './erfa'
 import { precessFk5FromJ2000 } from './fk5'
 import type { CfaPattern } from './image.types'
-import type { DefBlobVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, IndiClient, IndiClientHandler, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi'
+import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, IndiClient, IndiClientHandler, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi'
 // biome-ignore format: too long!
-import { type Camera, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Power, type PowerChannel, type PowerChannelType, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
 import type { GeographicCoordinate, GeographicPosition } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
 import { timeNow } from './time'
@@ -36,6 +36,7 @@ const DEVICES = {
 	[DeviceInterfaceType.FILTER]: DEFAULT_WHEEL,
 	[DeviceInterfaceType.DUSTCAP]: DEFAULT_COVER,
 	[DeviceInterfaceType.LIGHTBOX]: DEFAULT_FLAT_PANEL,
+	[DeviceInterfaceType.POWER]: DEFAULT_POWER,
 } as const
 
 export class DevicePropertyManager implements IndiClientHandler, DevicePropertyHandler {
@@ -228,6 +229,10 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
+	simulation(client: IndiClient, device: D, enable: boolean) {
+		client.sendSwitch({ device: device.name, name: 'SIMULATION', elements: { [enable ? 'ENABLE' : 'DISABLE']: true } })
+	}
+
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(message.device)
 
@@ -395,6 +400,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 	}
 }
 
+// TODO: SVBony SV241 Pro has two thermometers!
 export class ThermometerManager extends DeviceManager<Thermometer> {
 	constructor(readonly provider: DeviceProvider<Thermometer>) {
 		super()
@@ -410,6 +416,8 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 					if (tag[0] === 'd') {
 						if (!device.hasThermometer) {
 							device.hasThermometer = true
+
+							// TODO: Make sub-device a clone of device
 
 							if (this.add(client, device)) {
 								this.updated(client, device, 'hasThermometer', message.state)
@@ -449,6 +457,8 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 		}
 	}
 }
+
+// https://github.com/indilib/indi/blob/master/libs/indibase/indiccd.cpp
 
 export class CameraManager extends DeviceManager<Camera> {
 	private readonly gainProperty = new Map<string, readonly [string, string]>()
@@ -779,6 +789,8 @@ export class CameraManager extends DeviceManager<Camera> {
 		}
 	}
 }
+
+// https://github.com/indilib/indi/blob/master/libs/indibase/inditelescope.cpp
 
 export class MountManager extends DeviceManager<Mount> {
 	tracking(client: IndiClient, mount: Mount, enable: boolean) {
@@ -1154,6 +1166,8 @@ export class MountManager extends DeviceManager<Mount> {
 	}
 }
 
+// https://github.com/indilib/indi/blob/master/libs/indibase/indifilterwheel.cpp
+
 export class WheelManager extends DeviceManager<Wheel> {
 	moveTo(client: IndiClient, wheel: Wheel, value: number) {
 		client.sendNumber({ device: wheel.name, name: 'FILTER_SLOT', elements: { FILTER_SLOT_VALUE: value + 1 } })
@@ -1214,6 +1228,8 @@ export class WheelManager extends DeviceManager<Wheel> {
 		}
 	}
 }
+
+// https://github.com/indilib/indi/blob/master/libs/indibase/indifocuserinterface.cpp
 
 export class FocuserManager extends DeviceManager<Focuser> {
 	stop(client: IndiClient, focuser: Focuser) {
@@ -1352,6 +1368,8 @@ export class FocuserManager extends DeviceManager<Focuser> {
 	}
 }
 
+// https://github.com/indilib/indi/blob/master/libs/indibase/indidustcapinterface.cpp
+
 export class CoverManager extends DeviceManager<Cover> {
 	unpark(client: IndiClient, device: Cover) {
 		if (device.canPark) {
@@ -1475,6 +1493,8 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 	}
 }
 
+// https://github.com/indilib/indi/blob/master/libs/indibase/indilightboxinterface.cpp
+
 export class FlatPanelManager extends DeviceManager<FlatPanel> {
 	intensity(client: IndiClient, device: FlatPanel, value: number) {
 		if (device.enabled) {
@@ -1538,6 +1558,161 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 	}
 }
 
+// https://github.com/indilib/indi/blob/master/libs/indibase/indipowerinterface.cpp
+
+export class PowerManager extends DeviceManager<Power> {
+	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		super.switchVector(client, message, tag)
+
+		switch (message.name) {
+			case 'POWER_CHANNELS':
+				handlePowerChannel(this, client, device, message, tag, 'dc', 'enabled')
+				return
+			case 'DEW_CHANNELS':
+				handlePowerChannel(this, client, device, message, tag, 'dew', 'enabled')
+				return
+			case 'AUTO_DEW_CONTROL':
+				handlePowerChannel(this, client, device, message, tag, 'autoDew', 'enabled')
+				return
+			case 'VARIABLE_CHANNELS':
+				handlePowerChannel(this, client, device, message, tag, 'variableVoltage', 'enabled')
+				return
+			case 'USB_PORTS':
+				handlePowerChannel(this, client, device, message, tag, 'usb', 'enabled')
+				return
+			case 'POWER_CYCLE_Toggle':
+				if (tag[0] === 'd' && !device.hasPowerCycle) {
+					device.hasPowerCycle = true
+					this.updated(client, device, 'hasPowerCycle', message.state)
+				}
+
+				return
+		}
+	}
+
+	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		switch (message.name) {
+			case 'POWER_SENSORS': {
+				const voltage = message.elements.SENSOR_VOLTAGE?.value
+				const current = message.elements.SENSOR_CURRENT?.value
+				const power = message.elements.SENSOR_POWER?.value
+
+				if (voltage !== undefined && device.voltage !== voltage) {
+					device.voltage = voltage
+					this.updated(client, device, 'voltage', message.state)
+				}
+
+				if (current !== undefined && device.current !== current) {
+					device.current = current
+					this.updated(client, device, 'current', message.state)
+				}
+
+				if (power !== undefined && device.power !== power) {
+					device.power = power
+					this.updated(client, device, 'power', message.state)
+				}
+
+				return
+			}
+			// Power Channel Current (only if per-channel current monitoring is available)
+			case 'POWER_CURRENTS':
+				handlePowerChannel(this, client, device, message, tag, 'dc', 'value')
+				return
+			case 'DEW_DUTY_CYCLES':
+				handlePowerChannel(this, client, device, message, tag, 'dew', 'value')
+				return
+			case 'DEW_CURRENTS':
+				handlePowerChannel(this, client, device, message, tag, 'autoDew', 'value')
+				return
+			case 'VARIABLE_VOLTAGES':
+				handlePowerChannel(this, client, device, message, tag, 'variableVoltage', 'value')
+				return
+		}
+	}
+
+	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
+		if (message.name === 'DRIVER_INFO') {
+			return this.handleDriverInfo(client, message, DeviceInterfaceType.POWER)
+		}
+
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		switch (message.name) {
+			case 'POWER_LABELS':
+				handlePowerChannel(this, client, device, message, tag, 'dc', 'label')
+				return
+			case 'DEW_LABELS':
+				handlePowerChannel(this, client, device, message, tag, 'dew', 'label')
+				return
+			case 'USB_LABELS':
+				handlePowerChannel(this, client, device, message, tag, 'usb', 'label')
+				return
+			case 'VARIABLE_LABELS':
+				handlePowerChannel(this, client, device, message, tag, 'variableVoltage', 'label')
+				return
+		}
+	}
+
+	toggle(client: IndiClient, device: Power, channel: PowerChannel, value: boolean) {
+		const name = channel.type === 'dc' ? 'POWER_CHANNELS' : channel.type === 'dew' ? 'DEW_CHANNELS' : channel.type === 'autoDew' ? 'AUTO_DEW_CONTROL' : channel.type === 'usb' ? 'USB_PORTS' : 'VARIABLE_CHANNELS'
+		client.sendSwitch({ device: device.name, name, elements: { [channel.name]: value } })
+	}
+
+	voltage(client: IndiClient, device: Power, channel: PowerChannel, value: number) {
+		if (channel.type !== 'variableVoltage') return
+		client.sendNumber({ device: device.name, name: 'VARIABLE_VOLTAGES', elements: { [channel.name]: value } })
+	}
+
+	dutyCycle(client: IndiClient, device: Power, channel: PowerChannel, value: number) {
+		if (channel.type !== 'dew') return
+		client.sendNumber({ device: device.name, name: 'DEW_DUTY_CYCLES', elements: { [channel.name]: value } })
+	}
+}
+
+function handlePowerChannel(manager: DeviceManager<Power>, client: IndiClient, device: Power, message: DefVector | SetVector, tag: string, type: PowerChannelType, property: keyof Omit<PowerChannel, 'type'>) {
+	const entries = Object.entries(message.elements) as readonly [string, DefElement][]
+	const channels = device[type]
+	let updated = false
+
+	entries.forEach(([name, entry], i) => {
+		const value = entry.value as never
+		const p = channels[i] ?? ({ type, name, label: entry.label ?? '', enabled: false, value: 0, min: 0, max: 0 } satisfies PowerChannel)
+
+		if (tag[0] === 'd' && 'max' in entry) {
+			updated ||= handleMinMaxValue(p, entry, tag)
+		} else if (p[property] !== value) {
+			p[property] = value
+			updated = true
+		}
+
+		if (channels[i] === undefined) {
+			channels[i] = p
+			updated = true
+		}
+	})
+
+	if (entries.length < channels.length) {
+		channels.splice(entries.length, channels.length - entries.length)
+		updated = true
+	}
+
+	if (updated) {
+		manager.updated(client, device, type, message.state)
+	}
+
+	return updated
+}
+
 function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | OneNumber | undefined, tag: string) {
 	if (element === undefined) return false
 
@@ -1553,7 +1728,7 @@ function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | O
 		}
 	}
 
-	if (update || property.value !== element.value) {
+	if (property.value !== element.value) {
 		property.value = element.value
 		update = true
 	}

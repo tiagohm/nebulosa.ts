@@ -3,7 +3,7 @@ import type { CfaPattern } from './image.types'
 import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector, PropertyState } from './indi'
 import type { GeographicCoordinate } from './location'
 
-export type DeviceType = 'CAMERA' | 'MOUNT' | 'WHEEL' | 'FOCUSER' | 'ROTATOR' | 'GPS' | 'DOME' | 'GUIDE_OUTPUT' | 'FLAT_PANEL' | 'COVER' | 'THERMOMETER' | 'DEW_HEATER'
+export type DeviceType = 'CAMERA' | 'MOUNT' | 'WHEEL' | 'FOCUSER' | 'ROTATOR' | 'GPS' | 'DOME' | 'GUIDE_OUTPUT' | 'FLAT_PANEL' | 'COVER' | 'POWER' | 'THERMOMETER' | 'DEW_HEATER'
 
 export type DeviceProperty = (DefTextVector & { type: 'TEXT' }) | (DefNumberVector & { type: 'NUMBER' }) | (DefSwitchVector & { type: 'SWITCH' }) | (DefLightVector & { type: 'LIGHT' }) | (DefBlobVector & { type: 'BLOB' })
 
@@ -202,8 +202,30 @@ export interface FlatPanel extends Device {
 	readonly intensity: MinMaxValueProperty
 }
 
+export type PowerChannelType = 'dc' | 'dew' | 'variableVoltage' | 'autoDew' | 'usb'
+
+export interface PowerChannel extends MinMaxValueProperty {
+	readonly type: PowerChannelType
+    name: string
+	label: string
+	enabled: boolean
+}
+
+export interface Power extends Device, Record<PowerChannelType, PowerChannel[]> {
+	readonly type: 'POWER'
+	voltage: number
+	current: number
+	power: number
+	hasPowerCycle: boolean
+}
+
 export function isInterfaceType(value: number, type: DeviceInterfaceType): value is DeviceInterfaceType {
 	return (value & type) !== 0
+}
+
+export const DEFAULT_DRIVER_INFO: DriverInfo = {
+	executable: '',
+	version: '',
 }
 
 export const DEFAULT_CAMERA: Camera = {
@@ -268,10 +290,7 @@ export const DEFAULT_CAMERA: Camera = {
 	type: 'CAMERA',
 	name: '',
 	connected: false,
-	driver: {
-		executable: '',
-		version: '',
-	},
+	driver: DEFAULT_DRIVER_INFO,
 	hasThermometer: false,
 	temperature: 0,
 }
@@ -301,10 +320,7 @@ export const DEFAULT_MOUNT: Mount = {
 	type: 'MOUNT',
 	name: '',
 	connected: false,
-	driver: {
-		executable: '',
-		version: '',
-	},
+	driver: DEFAULT_DRIVER_INFO,
 	hasGPS: false,
 	geographicCoordinate: {
 		latitude: 0,
@@ -323,10 +339,7 @@ export const DEFAULT_WHEEL: Wheel = {
 	type: 'WHEEL',
 	name: '',
 	connected: false,
-	driver: {
-		executable: '',
-		version: '',
-	},
+	driver: DEFAULT_DRIVER_INFO,
 	moving: false,
 	slots: [],
 	position: 0,
@@ -336,10 +349,7 @@ export const DEFAULT_FOCUSER: Focuser = {
 	type: 'FOCUSER',
 	name: '',
 	connected: false,
-	driver: {
-		executable: '',
-		version: '',
-	},
+	driver: DEFAULT_DRIVER_INFO,
 	moving: false,
 	position: {
 		value: 0,
@@ -370,10 +380,7 @@ export const DEFAULT_COVER: Cover = {
 	type: 'COVER',
 	name: '',
 	connected: false,
-	driver: {
-		executable: '',
-		version: '',
-	},
+	driver: DEFAULT_DRIVER_INFO,
 }
 
 export const DEFAULT_FLAT_PANEL: FlatPanel = {
@@ -386,10 +393,23 @@ export const DEFAULT_FLAT_PANEL: FlatPanel = {
 	type: 'FLAT_PANEL',
 	name: '',
 	connected: false,
-	driver: {
-		executable: '',
-		version: '',
-	},
+	driver: DEFAULT_DRIVER_INFO,
+}
+
+export const DEFAULT_POWER: Power = {
+	voltage: 0,
+	current: 0,
+	power: 0,
+	dc: [],
+	dew: [],
+	autoDew: [],
+	variableVoltage: [],
+	usb: [],
+	hasPowerCycle: false,
+	type: 'POWER',
+	name: '',
+	connected: false,
+	driver: DEFAULT_DRIVER_INFO,
 }
 
 export const DEFAULT_THERMOMETER: Thermometer = {
@@ -398,10 +418,7 @@ export const DEFAULT_THERMOMETER: Thermometer = {
 	type: 'THERMOMETER',
 	name: '',
 	connected: false,
-	driver: {
-		executable: '',
-		version: '',
-	},
+	driver: DEFAULT_DRIVER_INFO,
 }
 
 export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
@@ -410,10 +427,7 @@ export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	type: 'GUIDE_OUTPUT',
 	name: '',
 	connected: false,
-	driver: {
-		executable: '',
-		version: '',
-	},
+	driver: DEFAULT_DRIVER_INFO,
 }
 
 export const DEFAULT_DEW_HEATER: DewHeater = {
@@ -426,10 +440,7 @@ export const DEFAULT_DEW_HEATER: DewHeater = {
 	type: 'DEW_HEATER',
 	name: '',
 	connected: false,
-	driver: {
-		executable: '',
-		version: '',
-	},
+	driver: DEFAULT_DRIVER_INFO,
 }
 
 export function isCamera(device: Device): device is Camera {
@@ -454,6 +465,10 @@ export function isCover(device: Device): device is Cover {
 
 export function isFlatPanel(device: Device): device is FlatPanel {
 	return device.type === 'FLAT_PANEL'
+}
+
+export function isPower(device: Device): device is Power {
+	return device.type === 'POWER'
 }
 
 export function isThermometer(device: Device): device is Thermometer {
