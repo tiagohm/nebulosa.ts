@@ -1029,8 +1029,8 @@ export class MountManager extends DeviceManager<Mount> {
 // https://github.com/indilib/indi/blob/master/libs/indibase/indifilterwheel.cpp
 
 export class WheelManager extends DeviceManager<Wheel> {
-	moveTo(client: IndiClient, wheel: Wheel, value: number) {
-		client.sendNumber({ device: wheel.name, name: 'FILTER_SLOT', elements: { FILTER_SLOT_VALUE: value + 1 } })
+	moveTo(client: IndiClient, wheel: Wheel, slot: number) {
+		client.sendNumber({ device: wheel.name, name: 'FILTER_SLOT', elements: { FILTER_SLOT_VALUE: slot + 1 } })
 	}
 
 	slots(client: IndiClient, wheel: Wheel, names: string[]) {
@@ -1091,29 +1091,29 @@ export class FocuserManager extends DeviceManager<Focuser> {
 		}
 	}
 
-	moveIn(client: IndiClient, focuser: Focuser, value: number) {
+	moveIn(client: IndiClient, focuser: Focuser, steps: number) {
 		if (focuser.canRelativeMove) {
 			client.sendSwitch({ device: focuser.name, name: 'FOCUS_MOTION', elements: { FOCUS_INWARD: true } })
-			client.sendNumber({ device: focuser.name, name: 'REL_FOCUS_POSITION', elements: { FOCUS_RELATIVE_POSITION: value } })
+			client.sendNumber({ device: focuser.name, name: 'REL_FOCUS_POSITION', elements: { FOCUS_RELATIVE_POSITION: steps } })
 		}
 	}
 
-	moveOut(client: IndiClient, focuser: Focuser, value: number) {
+	moveOut(client: IndiClient, focuser: Focuser, steps: number) {
 		if (focuser.canRelativeMove) {
 			client.sendSwitch({ device: focuser.name, name: 'FOCUS_MOTION', elements: { FOCUS_OUTWARD: true } })
-			client.sendNumber({ device: focuser.name, name: 'REL_FOCUS_POSITION', elements: { FOCUS_RELATIVE_POSITION: value } })
+			client.sendNumber({ device: focuser.name, name: 'REL_FOCUS_POSITION', elements: { FOCUS_RELATIVE_POSITION: steps } })
 		}
 	}
 
-	moveTo(client: IndiClient, focuser: Focuser, value: number) {
+	moveTo(client: IndiClient, focuser: Focuser, position: number) {
 		if (focuser.canAbsoluteMove) {
-			client.sendNumber({ device: focuser.name, name: 'ABS_FOCUS_POSITION', elements: { FOCUS_ABSOLUTE_POSITION: value } })
+			client.sendNumber({ device: focuser.name, name: 'ABS_FOCUS_POSITION', elements: { FOCUS_ABSOLUTE_POSITION: position } })
 		}
 	}
 
-	sync(client: IndiClient, focuser: Focuser, value: number) {
+	syncTo(client: IndiClient, focuser: Focuser, position: number) {
 		if (focuser.canSync) {
-			client.sendNumber({ device: focuser.name, name: 'FOCUS_SYNC', elements: { FOCUS_SYNC_VALUE: value } })
+			client.sendNumber({ device: focuser.name, name: 'FOCUS_SYNC', elements: { FOCUS_SYNC_VALUE: position } })
 		}
 	}
 
@@ -1245,13 +1245,13 @@ export class CoverManager extends DeviceManager<Cover> {
 // https://github.com/indilib/indi/blob/master/libs/indibase/indirotatorinterface.cpp
 
 export class RotatorManager extends DeviceManager<Rotator> {
-	moveTo(client: IndiClient, rotator: Rotator, value: number) {
-		client.sendNumber({ device: rotator.name, name: 'ABS_ROTATOR_ANGLE', elements: { ANGLE: value } })
+	moveTo(client: IndiClient, rotator: Rotator, angle: number) {
+		client.sendNumber({ device: rotator.name, name: 'ABS_ROTATOR_ANGLE', elements: { ANGLE: angle } })
 	}
 
-	syncTo(client: IndiClient, rotator: Rotator, value: number) {
+	syncTo(client: IndiClient, rotator: Rotator, angle: number) {
 		if (rotator.canSync) {
-			client.sendNumber({ device: rotator.name, name: 'SYNC_ROTATOR_ANGLE', elements: { ANGLE: value } })
+			client.sendNumber({ device: rotator.name, name: 'SYNC_ROTATOR_ANGLE', elements: { ANGLE: angle } })
 		}
 	}
 
@@ -1267,7 +1267,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 		}
 	}
 
-	abort(client: IndiClient, rotator: Rotator) {
+	stop(client: IndiClient, rotator: Rotator) {
 		if (rotator.canAbort) {
 			client.sendSwitch({ device: rotator.name, name: 'ROTATOR_ABORT_MOTION', elements: { ABORT: true } })
 		}
