@@ -417,8 +417,6 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 						if (!device.hasThermometer) {
 							device.hasThermometer = true
 
-							// TODO: Make sub-device a clone of device
-
 							if (this.add(client, device)) {
 								this.updated(client, device, 'hasThermometer', message.state)
 							}
@@ -596,24 +594,12 @@ export class CameraManager extends DeviceManager<Camera> {
 
 				return
 			}
-			case 'CCD_EXPOSURE': {
-				const value = message.elements.CCD_EXPOSURE_VALUE!
-
-				const { exposure } = device
-
-				let update = handleMinMaxValue(exposure, value, tag)
-
-				if (message.state && message.state !== exposure.state) {
-					exposure.state = message.state
-					update = true
-				}
-
-				if (update) {
+			case 'CCD_EXPOSURE':
+				if (handleMinMaxValue(device.exposure, message.elements.CCD_EXPOSURE_VALUE, tag)) {
 					this.updated(client, device, 'exposure', message.state)
 				}
 
 				return
-			}
 			case 'CCD_COOLER_POWER': {
 				const coolerPower = message.elements.CCD_COOLER_POWER?.value ?? 0
 

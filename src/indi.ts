@@ -199,6 +199,7 @@ export type SetVector = SetTextVector | SetNumberVector | SetSwitchVector | SetL
 
 // Send a message associated with a device or entire system.
 export interface Message {
+	id: string
 	device?: string
 	timestamp?: string
 	message: string
@@ -524,7 +525,7 @@ export class IndiClient {
 		switch (node.name) {
 			case 'message':
 				if (handler?.message) {
-					handler.message(this, { device: a.device, timestamp: a.timestamp, message: a.message })
+					handler.message(this, { id: Bun.randomUUIDv7(), device: a.device, timestamp: a.timestamp, message: a.message })
 				}
 				break
 			case 'delProperty':

@@ -1,6 +1,6 @@
 import type { EquatorialCoordinate, HorizontalCoordinate } from './coordinate'
 import type { CfaPattern } from './image.types'
-import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector, PropertyState } from './indi'
+import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector } from './indi'
 import type { GeographicCoordinate } from './location'
 
 export type DeviceType = 'CAMERA' | 'MOUNT' | 'WHEEL' | 'FOCUSER' | 'ROTATOR' | 'GPS' | 'DOME' | 'GUIDE_OUTPUT' | 'FLAT_PANEL' | 'COVER' | 'POWER' | 'THERMOMETER' | 'DEW_HEATER'
@@ -93,9 +93,7 @@ export interface Camera extends GuideOutput, Thermometer {
 		offsetY: number
 		type: CfaPattern
 	}
-	readonly exposure: MinMaxValueProperty & {
-		state: PropertyState
-	}
+	readonly exposure: MinMaxValueProperty
 	hasCooler: boolean
 	canSetTemperature: boolean
 	canSubFrame: boolean
@@ -206,7 +204,7 @@ export type PowerChannelType = 'dc' | 'dew' | 'variableVoltage' | 'autoDew' | 'u
 
 export interface PowerChannel extends MinMaxValueProperty {
 	readonly type: PowerChannelType
-    name: string
+	name: string
 	label: string
 	enabled: boolean
 }
@@ -245,7 +243,6 @@ export const DEFAULT_CAMERA: Camera = {
 		value: 0,
 		min: 0,
 		max: 0,
-		state: 'Idle',
 	},
 	hasCooler: false,
 	canSetTemperature: false,
