@@ -1,7 +1,7 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { type DefSwitchVector, IndiClient, type IndiClientHandler, type PropertyState } from '../src/indi'
-import type { Camera, Cover, FlatPanel, Focuser, GuideOutput, Mount, Power, Thermometer, Wheel } from '../src/indi.device'
-import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import type { Camera, Cover, FlatPanel, Focuser, GuideOutput, Mount, Power, Rotator, Thermometer, Wheel } from '../src/indi.device'
+import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 // biome-ignore format: too long!
 import { SimpleXmlParser } from '../src/xml'
 
@@ -947,5 +947,96 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 
 		expect(power).toBeEmpty()
 		expect(powerRemoved).toBeTrue()
+	}, 10000)
+
+	test('rotator', async () => {
+		let rotatorAdded = false
+		let rotatorRemoved = false
+
+		const process = Bun.spawn(['indiserver', 'indi_simulator_rotator'])
+
+		await Bun.sleep(500)
+
+		expect(process.killed).toBeFalse()
+
+		const rotatorDeviceHandler: DeviceHandler<Rotator> = {
+			added: (client: IndiClient, device: Rotator) => {
+				rotatorAdded = true
+			},
+			updated: (client: IndiClient, device: Rotator, property: keyof Rotator, state?: PropertyState) => {
+				console.info(property, JSON.stringify(device[property]))
+			},
+			removed: (client: IndiClient, device: Rotator) => {
+				rotatorRemoved = true
+			},
+		}
+
+		const deviceProperty = new DevicePropertyManager()
+		const rotator = new RotatorManager()
+		rotator.addHandler(rotatorDeviceHandler)
+
+		const handler: IndiClientHandler = {
+			textVector: (client, message, tag) => {
+				rotator.textVector(client, message, tag)
+			},
+			numberVector: (client, message, tag) => {
+				rotator.numberVector(client, message, tag)
+			},
+			switchVector: (client, message, tag) => {
+				rotator.switchVector(client, message, tag)
+			},
+			vector: (client, message, tag) => {
+				deviceProperty.vector(client, message, tag)
+			},
+			delProperty: (client, message) => {
+				deviceProperty.delProperty(client, message)
+				rotator.delProperty(client, message)
+			},
+			close: (client, server) => {
+				rotator.close(client, server)
+			},
+		}
+
+		await Bun.sleep(1000)
+
+		const client = new IndiClient({ handler })
+
+		onTestFinished(() => {
+			process.kill()
+		})
+
+		await client.connect('localhost')
+		await Bun.sleep(1000)
+
+		expect(rotatorAdded).toBeTrue()
+		expect(rotator).toHaveLength(1)
+
+		const device = rotator.get('Rotator Simulator')!
+		rotator.connect(client, device)
+
+		await Bun.sleep(1000)
+
+		expect(device.connected).toBeTrue()
+		expect(device.canAbort).toBeTrue()
+		expect(device.canHome).toBeFalse()
+		expect(device.canReverse).toBeTrue()
+		expect(device.canSync).toBeFalse()
+		expect(device.angle.value).toBe(0)
+		expect(device.angle.min).toBe(0)
+		expect(device.angle.max).toBe(360)
+		expect(deviceProperty).not.toBeEmpty()
+
+		rotator.moveTo(client, device, 5)
+
+		await Bun.sleep(2000)
+
+		expect(device.angle.value).toBe(5)
+
+		client.close()
+
+		await Bun.sleep(1000)
+
+		expect(rotator).toBeEmpty()
+		expect(rotatorRemoved).toBeTrue()
 	}, 10000)
 })

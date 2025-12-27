@@ -8,7 +8,7 @@ import { precessFk5FromJ2000 } from './fk5'
 import type { CfaPattern } from './image.types'
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, IndiClient, IndiClientHandler, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi'
 // biome-ignore format: too long!
-import { type Camera, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
 import type { GeographicCoordinate, GeographicPosition } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
 import { timeNow } from './time'
@@ -37,6 +37,7 @@ const DEVICES = {
 	[DeviceInterfaceType.FILTER]: DEFAULT_WHEEL,
 	[DeviceInterfaceType.DUSTCAP]: DEFAULT_COVER,
 	[DeviceInterfaceType.LIGHTBOX]: DEFAULT_FLAT_PANEL,
+	[DeviceInterfaceType.ROTATOR]: DEFAULT_ROTATOR,
 	[DeviceInterfaceType.POWER]: DEFAULT_POWER,
 } as const
 
@@ -1237,6 +1238,116 @@ export class CoverManager extends DeviceManager<Cover> {
 	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.DUSTCAP)
+		}
+	}
+}
+
+// https://github.com/indilib/indi/blob/master/libs/indibase/indirotatorinterface.cpp
+
+export class RotatorManager extends DeviceManager<Rotator> {
+	moveTo(client: IndiClient, rotator: Rotator, value: number) {
+		client.sendNumber({ device: rotator.name, name: 'ABS_ROTATOR_ANGLE', elements: { ANGLE: value } })
+	}
+
+	syncTo(client: IndiClient, rotator: Rotator, value: number) {
+		if (rotator.canSync) {
+			client.sendNumber({ device: rotator.name, name: 'SYNC_ROTATOR_ANGLE', elements: { ANGLE: value } })
+		}
+	}
+
+	home(client: IndiClient, rotator: Rotator) {
+		if (rotator.canHome) {
+			client.sendSwitch({ device: rotator.name, name: 'ROTATOR_HOME', elements: { HOME: true } })
+		}
+	}
+
+	reverse(client: IndiClient, rotator: Rotator, enabled: boolean) {
+		if (rotator.canReverse) {
+			client.sendSwitch({ device: rotator.name, name: 'ROTATOR_REVERSE', elements: { [enabled ? 'INDI_ENABLED' : 'INDI_DISABLED']: true } })
+		}
+	}
+
+	abort(client: IndiClient, rotator: Rotator) {
+		if (rotator.canAbort) {
+			client.sendSwitch({ device: rotator.name, name: 'ROTATOR_ABORT_MOTION', elements: { ABORT: true } })
+		}
+	}
+
+	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		super.switchVector(client, message, tag)
+
+		switch (message.name) {
+			case 'ROTATOR_ABORT_MOTION':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canAbort', true)) {
+						this.updated(client, device, 'canAbort', message.state)
+					}
+				}
+
+				return
+			case 'SYNC_ROTATOR_ANGLE':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canSync', true)) {
+						this.updated(client, device, 'canSync', message.state)
+					}
+				}
+
+				return
+			case 'ROTATOR_HOME':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canHome', true)) {
+						this.updated(client, device, 'canHome', message.state)
+					}
+				}
+
+				return
+			case 'ROTATOR_REVERSE':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canReverse', true)) {
+						this.updated(client, device, 'canReverse', message.state)
+					}
+				}
+
+				if (handleSwitchValue(device, 'reversed', message.elements.INDI_ENABLED?.value)) {
+					this.updated(client, device, 'reversed', message.state)
+				}
+
+				return
+			case 'ROTATOR_BACKLASH_TOGGLE':
+				if (handleSwitchValue(device, 'hasBacklashCompensation', message.elements.INDI_ENABLED?.value)) {
+					this.updated(client, device, 'hasBacklashCompensation', message.state)
+				}
+
+				return
+		}
+	}
+
+	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
+		const device = this.get(message.device)
+
+		if (!device) return
+
+		switch (message.name) {
+			case 'ABS_ROTATOR_ANGLE':
+				if (handleMinMaxValue(device.angle, message.elements.ANGLE, tag)) {
+					this.updated(client, device, 'angle', message.state)
+				}
+
+				if (handleSwitchValue(device, 'moving', message.state === 'Busy')) {
+					this.updated(client, device, 'moving', message.state)
+				}
+
+				return
+		}
+	}
+
+	textVector(client: IndiClient, message: DefTextVector | SetTextVector, tag: string) {
+		if (message.name === 'DRIVER_INFO') {
+			return this.handleDriverInfo(client, message, DeviceInterfaceType.ROTATOR)
 		}
 	}
 }

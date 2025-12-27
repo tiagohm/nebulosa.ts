@@ -191,6 +191,17 @@ export interface FlatPanel extends Device {
 	readonly intensity: MinMaxValueProperty
 }
 
+export interface Rotator extends Device {
+	moving: boolean
+	angle: MinMaxValueProperty
+	canAbort: boolean
+	canReverse: boolean
+	reversed: boolean
+	canSync: boolean
+	canHome: boolean
+	hasBacklashCompensation: boolean
+}
+
 export type PowerChannelType = 'dc' | 'dew' | 'variableVoltage' | 'autoDew' | 'usb'
 
 export interface PowerChannel extends MinMaxValueProperty {
@@ -263,7 +274,7 @@ export const DEFAULT_CAMERA: Camera = {
 	type: 'CAMERA',
 	name: '',
 	connected: false,
-	driver: DEFAULT_DRIVER_INFO,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	hasThermometer: false,
 	temperature: 0,
 }
@@ -293,7 +304,7 @@ export const DEFAULT_MOUNT: Mount = {
 	type: 'MOUNT',
 	name: '',
 	connected: false,
-	driver: DEFAULT_DRIVER_INFO,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	hasGPS: false,
 	geographicCoordinate: {
 		latitude: 0,
@@ -312,7 +323,7 @@ export const DEFAULT_WHEEL: Wheel = {
 	type: 'WHEEL',
 	name: '',
 	connected: false,
-	driver: DEFAULT_DRIVER_INFO,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	moving: false,
 	slots: [],
 	position: 0,
@@ -322,7 +333,7 @@ export const DEFAULT_FOCUSER: Focuser = {
 	type: 'FOCUSER',
 	name: '',
 	connected: false,
-	driver: DEFAULT_DRIVER_INFO,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	moving: false,
 	position: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	canAbsoluteMove: false,
@@ -345,7 +356,7 @@ export const DEFAULT_COVER: Cover = {
 	type: 'COVER',
 	name: '',
 	connected: false,
-	driver: DEFAULT_DRIVER_INFO,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
 export const DEFAULT_FLAT_PANEL: FlatPanel = {
@@ -354,7 +365,22 @@ export const DEFAULT_FLAT_PANEL: FlatPanel = {
 	type: 'FLAT_PANEL',
 	name: '',
 	connected: false,
-	driver: DEFAULT_DRIVER_INFO,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
+}
+
+export const DEFAULT_ROTATOR: Rotator = {
+	moving: false,
+	angle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	canAbort: false,
+	canReverse: false,
+	reversed: false,
+	canSync: false,
+	canHome: false,
+	hasBacklashCompensation: false,
+	type: 'ROTATOR',
+	name: '',
+	connected: false,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
 export const DEFAULT_POWER: Power = {
@@ -370,7 +396,7 @@ export const DEFAULT_POWER: Power = {
 	type: 'POWER',
 	name: '',
 	connected: false,
-	driver: DEFAULT_DRIVER_INFO,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
 export const DEFAULT_THERMOMETER: Thermometer = {
@@ -379,7 +405,7 @@ export const DEFAULT_THERMOMETER: Thermometer = {
 	type: 'THERMOMETER',
 	name: '',
 	connected: false,
-	driver: DEFAULT_DRIVER_INFO,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
 export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
@@ -388,7 +414,7 @@ export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	type: 'GUIDE_OUTPUT',
 	name: '',
 	connected: false,
-	driver: DEFAULT_DRIVER_INFO,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
 export const DEFAULT_DEW_HEATER: DewHeater = {
@@ -397,7 +423,7 @@ export const DEFAULT_DEW_HEATER: DewHeater = {
 	type: 'DEW_HEATER',
 	name: '',
 	connected: false,
-	driver: DEFAULT_DRIVER_INFO,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
 export function isCamera(device: Device): device is Camera {
@@ -422,6 +448,10 @@ export function isCover(device: Device): device is Cover {
 
 export function isFlatPanel(device: Device): device is FlatPanel {
 	return device.type === 'FLAT_PANEL'
+}
+
+export function isRotator(device: Device): device is Rotator {
+	return device.type === 'ROTATOR'
 }
 
 export function isPower(device: Device): device is Power {
