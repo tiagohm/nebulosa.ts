@@ -40,7 +40,8 @@ export function normalizeAngle(angle: Angle): Angle {
 
 // Normalizes the angle to the range [-PI, PI].
 export function normalizePI(angle: Angle): Angle {
-	return pmod(angle + PI, TAU) - PI
+	const rem = pmod(angle + PI, TAU)
+	return rem === 0 ? PI : rem - PI
 }
 
 // Creates a new Angle from degrees.

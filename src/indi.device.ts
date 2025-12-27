@@ -99,25 +99,15 @@ export interface Camera extends GuideOutput, Thermometer {
 	canSetTemperature: boolean
 	canSubFrame: boolean
 	readonly frame: {
-		x: number
-		minX: number
-		maxX: number
-		y: number
-		minY: number
-		maxY: number
-		width: number
-		minWidth: number
-		maxWidth: number
-		height: number
-		minHeight: number
-		maxHeight: number
+		readonly x: MinMaxValueProperty
+		readonly y: MinMaxValueProperty
+		readonly width: MinMaxValueProperty
+		readonly height: MinMaxValueProperty
 	}
 	canBin: boolean
 	readonly bin: {
-		maxX: number
-		maxY: number
-		x: number
-		y: number
+		readonly x: MinMaxValueProperty
+		readonly y: MinMaxValueProperty
 	}
 	readonly gain: MinMaxValueProperty
 	readonly offset: MinMaxValueProperty
@@ -188,7 +178,7 @@ export interface Focuser extends Device, Thermometer {
 export interface DewHeater extends Device {
 	readonly type: 'DEW_HEATER' | 'CAMERA' | 'COVER'
 	hasDewHeater: boolean
-	readonly pwm: MinMaxValueProperty
+	readonly dutyCycle: MinMaxValueProperty
 }
 
 export interface Cover extends Device, Parkable, DewHeater {
@@ -212,9 +202,9 @@ export interface PowerChannel extends MinMaxValueProperty {
 
 export interface Power extends Device, Record<PowerChannelType, PowerChannel[]> {
 	readonly type: 'POWER'
-	voltage: number
-	current: number
-	power: number
+	readonly voltage: MinMaxValueProperty
+	readonly current: MinMaxValueProperty
+	readonly power: MinMaxValueProperty
 	hasPowerCycle: boolean
 }
 
@@ -225,6 +215,12 @@ export function isInterfaceType(value: number, type: DeviceInterfaceType): value
 export const DEFAULT_DRIVER_INFO: DriverInfo = {
 	executable: '',
 	version: '',
+}
+
+export const DEFAULT_MIN_MAX_VALUE_PROPERTY: MinMaxValueProperty = {
+	value: 0,
+	min: 0,
+	max: 0,
 }
 
 export const DEFAULT_CAMERA: Camera = {
@@ -240,46 +236,24 @@ export const DEFAULT_CAMERA: Camera = {
 		offsetY: 0,
 		type: 'RGGB',
 	},
-	exposure: {
-		value: 0,
-		min: 0,
-		max: 0,
-	},
+	exposure: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	exposuring: false,
 	hasCooler: false,
 	canSetTemperature: false,
 	canSubFrame: false,
 	frame: {
-		x: 0,
-		minX: 0,
-		maxX: 0,
-		y: 0,
-		minY: 0,
-		maxY: 0,
-		width: 0,
-		minWidth: 0,
-		maxWidth: 0,
-		height: 0,
-		minHeight: 0,
-		maxHeight: 0,
+		x: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+		y: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+		width: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+		height: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	},
 	canBin: false,
 	bin: {
-		maxX: 0,
-		maxY: 0,
-		x: 0,
-		y: 0,
+		x: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+		y: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	},
-	gain: {
-		value: 0,
-		min: 0,
-		max: 0,
-	},
-	offset: {
-		value: 0,
-		min: 0,
-		max: 0,
-	},
+	gain: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	offset: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	pixelSize: {
 		x: 0,
 		y: 0,
@@ -350,11 +324,7 @@ export const DEFAULT_FOCUSER: Focuser = {
 	connected: false,
 	driver: DEFAULT_DRIVER_INFO,
 	moving: false,
-	position: {
-		value: 0,
-		min: 0,
-		max: 100,
-	},
+	position: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	canAbsoluteMove: false,
 	canRelativeMove: false,
 	canAbort: false,
@@ -371,11 +341,7 @@ export const DEFAULT_COVER: Cover = {
 	parking: false,
 	parked: false,
 	hasDewHeater: false,
-	pwm: {
-		value: 0,
-		min: 0,
-		max: 100,
-	},
+	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'COVER',
 	name: '',
 	connected: false,
@@ -384,11 +350,7 @@ export const DEFAULT_COVER: Cover = {
 
 export const DEFAULT_FLAT_PANEL: FlatPanel = {
 	enabled: false,
-	intensity: {
-		value: 0,
-		min: 0,
-		max: 100,
-	},
+	intensity: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'FLAT_PANEL',
 	name: '',
 	connected: false,
@@ -396,9 +358,9 @@ export const DEFAULT_FLAT_PANEL: FlatPanel = {
 }
 
 export const DEFAULT_POWER: Power = {
-	voltage: 0,
-	current: 0,
-	power: 0,
+	voltage: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	current: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	power: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	dc: [],
 	dew: [],
 	autoDew: [],
@@ -431,11 +393,7 @@ export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 
 export const DEFAULT_DEW_HEATER: DewHeater = {
 	hasDewHeater: false,
-	pwm: {
-		value: 0,
-		min: 0,
-		max: 100,
-	},
+	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'DEW_HEATER',
 	name: '',
 	connected: false,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { arcmin, arcsec, deg, dms, type FormatAngleOptions, formatALT, formatAngle, formatAZ, formatDEC, formatDMS, formatHMS, formatRA, formatSignedDMS, hms, hour, mas, normalizeAngle, PARSE_HOUR_ANGLE, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from '../src/angle'
+import { arcmin, arcsec, deg, dms, type FormatAngleOptions, formatALT, formatAngle, formatAZ, formatDEC, formatDMS, formatHMS, formatRA, formatSignedDMS, hms, hour, mas, normalizeAngle, normalizePI, PARSE_HOUR_ANGLE, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from '../src/angle'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 
 test('normalize', () => {
@@ -12,6 +12,14 @@ test('normalize', () => {
 	expect(normalizeAngle(-PI)).toBeCloseTo(PI, 16)
 	expect(normalizeAngle(-TAU)).toBeCloseTo(0, 16)
 	expect(normalizeAngle(-TAU - PI)).toBeCloseTo(PI, 16)
+})
+
+test('normalize pi', () => {
+	expect(normalizePI(-PI - PIOVERTWO)).toBe(PIOVERTWO)
+	expect(normalizePI(-PI)).toBe(PI)
+	expect(normalizePI(0)).toBe(0)
+	expect(normalizePI(PI)).toBe(PI)
+	expect(normalizePI(PI + PIOVERTWO)).toBe(-PIOVERTWO)
 })
 
 test('mas', () => {

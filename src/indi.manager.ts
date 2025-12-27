@@ -1,14 +1,14 @@
 import type { PickByValue } from 'utility-types'
-import { type Angle, deg, hour, normalizeAngle, PARSE_HOUR_ANGLE, parseAngle, toDeg, toHour } from './angle'
+import { type Angle, deg, hour, normalizeAngle, normalizePI, PARSE_HOUR_ANGLE, parseAngle, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
-import { PI, TAU } from './constants'
+import { TAU } from './constants'
 import { meter, toMeter } from './distance'
 import { eraC2s, eraS2c } from './erfa'
 import { precessFk5FromJ2000 } from './fk5'
 import type { CfaPattern } from './image.types'
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, IndiClient, IndiClientHandler, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi'
 // biome-ignore format: too long!
-import { type Camera, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Power, type PowerChannel, type PowerChannelType, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
 import type { GeographicCoordinate, GeographicPosition } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
 import { timeNow } from './time'
@@ -109,11 +109,13 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 					updated = true
 				}
 
-				for (const key in message.elements) {
+				const { elements } = message
+
+				for (const key in elements) {
 					const element = property.elements[key]
 
 					if (element) {
-						const value = message.elements[key]!.value
+						const value = elements[key]!.value
 
 						if (value !== element.value) {
 							element.value = value
@@ -262,8 +264,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	protected handleConnection(client: IndiClient, device: D, message: DefSwitchVector | SetSwitchVector) {
 		const connected = message.elements.CONNECT?.value === true
 
-		if (connected !== device.connected || message.state === 'Alert') {
-			device.connected = connected
+		if (handleSwitchValue<Device>(device, 'connected', connected, message.state)) {
 			if (connected) this.ask(client, device)
 			return true
 		}
@@ -272,17 +273,16 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	}
 
 	protected handleDriverInfo(client: IndiClient, message: DefTextVector | SetTextVector, interfaceType: DeviceInterfaceType) {
-		const type = +message.elements.DRIVER_INTERFACE!.value
+		const { elements } = message
+		const type = +elements.DRIVER_INTERFACE!.value
 		let device = this.get(message.device)
 
 		if (isInterfaceType(type, interfaceType)) {
 			if (!device) {
-				const executable = message.elements.DRIVER_EXEC!.value
-				const version = message.elements.DRIVER_VERSION!.value
-
 				device = structuredClone(DEVICES[interfaceType as never]) as D
 				device.name = message.device
-				device.driver = { executable, version }
+				device.driver.executable = elements.DRIVER_EXEC!.value
+				device.driver.version = elements.DRIVER_VERSION!.value
 
 				this.add(client, device)
 				this.ask(client, device)
@@ -363,19 +363,14 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 
 				if (device) {
 					if (tag[0] === 'd') {
-						if (!device.canPulseGuide) {
-							device.canPulseGuide = true
-
+						if (handleSwitchValue(device, 'canPulseGuide', true)) {
 							if (this.add(client, device)) {
 								this.updated(client, device, 'canPulseGuide', message.state)
 							}
 						}
 					}
 
-					const pulsing = message.state === 'Busy'
-
-					if (pulsing !== device.pulsing) {
-						device.pulsing = pulsing
+					if (handleSwitchValue(device, 'pulsing', message.state === 'Busy')) {
 						this.updated(client, device, 'pulsing', message.state)
 					}
 				}
@@ -390,8 +385,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 			const device = this.get(message.device)
 
 			if (device) {
-				if (device.canPulseGuide) {
-					device.canPulseGuide = false
+				if (handleSwitchValue(device, 'canPulseGuide', false)) {
 					this.updated(client, device, 'canPulseGuide')
 				}
 
@@ -415,24 +409,17 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 
 				if (device) {
 					if (tag[0] === 'd') {
-						if (!device.hasThermometer) {
-							device.hasThermometer = true
-
+						if (handleSwitchValue(device, 'hasThermometer', true)) {
 							if (this.add(client, device)) {
 								this.updated(client, device, 'hasThermometer', message.state)
 							}
 						}
 					}
 
-					let value = message.elements.TEMPERATURE?.value ?? message.elements.CCD_TEMPERATURE_VALUE?.value
+					const { elements } = message
 
-					if (value !== undefined) {
-						value = Math.trunc(value)
-
-						if (value !== device.temperature) {
-							device.temperature = value
-							this.updated(client, device, 'temperature', message.state)
-						}
+					if (handleNumberValue(device, 'temperature', elements.TEMPERATURE?.value ?? elements.CCD_TEMPERATURE_VALUE?.value, undefined, Math.trunc)) {
+						this.updated(client, device, 'temperature', message.state)
 					}
 				}
 
@@ -446,8 +433,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 			const device = this.get(message.device)
 
 			if (device) {
-				if (device.hasThermometer) {
-					device.hasThermometer = false
+				if (handleSwitchValue(device, 'hasThermometer', false)) {
 					this.updated(client, device, 'hasThermometer')
 				}
 
@@ -541,21 +527,18 @@ export class CameraManager extends DeviceManager<Camera> {
 		super.switchVector(client, message, tag)
 
 		switch (message.name) {
-			case 'CCD_COOLER': {
-				if (tag[0] === 'd' && !device.hasCoolerControl) {
-					device.hasCoolerControl = true
-					this.updated(client, device, 'hasCoolerControl', message.state)
+			case 'CCD_COOLER':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'hasCoolerControl', true)) {
+						this.updated(client, device, 'hasCoolerControl', message.state)
+					}
 				}
 
-				const cooler = message.elements.COOLER_ON?.value === true
-
-				if (cooler !== device.cooler) {
-					device.cooler = cooler
+				if (handleSwitchValue(device, 'cooler', message.elements.COOLER_ON?.value)) {
 					this.updated(client, device, 'cooler', message.state)
 				}
 
 				return
-			}
 			case 'CCD_CAPTURE_FORMAT':
 				if (tag[0] === 'd') {
 					device.frameFormats = Object.keys(message.elements)
@@ -565,10 +548,7 @@ export class CameraManager extends DeviceManager<Camera> {
 				return
 			case 'CCD_ABORT_EXPOSURE':
 				if (tag[0] === 'd') {
-					const canAbort = (message as DefSwitchVector).permission !== 'ro'
-
-					if (device.canAbort !== canAbort) {
-						device.canAbort = canAbort
+					if (handleSwitchValue(device, 'canAbort', (message as DefSwitchVector).permission !== 'ro')) {
 						this.updated(client, device, 'canAbort', message.state)
 					}
 				}
@@ -584,12 +564,12 @@ export class CameraManager extends DeviceManager<Camera> {
 
 		switch (message.name) {
 			case 'CCD_INFO': {
-				const x = message.elements.CCD_PIXEL_SIZE_X?.value ?? 0
-				const y = message.elements.CCD_PIXEL_SIZE_Y?.value ?? 0
+				const { elements } = message
 
-				if (device.pixelSize.x !== x || device.pixelSize.y !== y) {
-					device.pixelSize.x = x
-					device.pixelSize.y = y
+				let changed = handleNumberValue(device.pixelSize, 'x', elements.CCD_PIXEL_SIZE_X?.value)
+				changed = handleNumberValue(device.pixelSize, 'y', elements.CCD_PIXEL_SIZE_Y?.value) || changed
+
+				if (changed) {
 					this.updated(client, device, 'pixelSize', message.state)
 				}
 
@@ -609,110 +589,64 @@ export class CameraManager extends DeviceManager<Camera> {
 
 				return
 			}
-			case 'CCD_COOLER_POWER': {
-				const coolerPower = message.elements.CCD_COOLER_POWER?.value ?? 0
-
-				if (device.coolerPower !== coolerPower) {
-					device.coolerPower = coolerPower
+			case 'CCD_COOLER_POWER':
+				if (handleNumberValue(device, 'coolerPower', message.elements.CCD_COOLER_POWER?.value)) {
 					this.updated(client, device, 'coolerPower', message.state)
 				}
 
 				return
-			}
 			case 'CCD_TEMPERATURE':
 				if (tag[0] === 'd') {
-					if (!device.hasCooler) {
-						device.hasCooler = true
+					if (handleSwitchValue(device, 'hasCooler', true)) {
 						this.updated(client, device, 'hasCooler', message.state)
 					}
 
-					const canSetTemperature = (message as DefNumberVector).permission !== 'ro'
-
-					if (device.canSetTemperature !== canSetTemperature) {
-						device.canSetTemperature = canSetTemperature
+					if (handleSwitchValue(device, 'canSetTemperature', (message as DefNumberVector).permission !== 'ro')) {
 						this.updated(client, device, 'canSetTemperature', message.state)
 					}
 				}
 
 				return
 			case 'CCD_FRAME': {
-				const x = message.elements.X!
-				const y = message.elements.Y!
-				const width = message.elements.WIDTH!
-				const height = message.elements.HEIGHT!
-
-				const { frame } = device
-				let update = false
-
 				if (tag[0] === 'd') {
-					const canSubFrame = (message as DefNumberVector).permission !== 'ro'
-
-					if (device.canSubFrame !== canSubFrame) {
-						device.canSubFrame = canSubFrame
+					if (handleSwitchValue(device, 'canSubFrame', (message as DefNumberVector).permission !== 'ro')) {
 						this.updated(client, device, 'canSubFrame', message.state)
 					}
-
-					frame.minX = (x as DefNumber).min
-					frame.maxX = (x as DefNumber).max
-					frame.minY = (y as DefNumber).min
-					frame.maxY = (y as DefNumber).max
-					frame.minWidth = (width as DefNumber).min
-					frame.maxWidth = (width as DefNumber).max
-					frame.minHeight = (height as DefNumber).min
-					frame.maxHeight = (height as DefNumber).max
-
-					update = frame.maxX !== 0 && frame.maxY !== 0 && frame.maxWidth !== 0 && frame.maxHeight !== 0
 				}
 
-				if (update || frame.x !== x.value || frame.y !== y.value || frame.width !== width.value || frame.height !== height.value) {
-					frame.x = x.value
-					frame.y = y.value
-					frame.width = width.value
-					frame.height = height.value
-					update = true
-				}
+				const { elements } = message
 
-				if (update) {
+				let updated = handleMinMaxValue(device.frame.x, elements.X, tag)
+				updated = handleMinMaxValue(device.frame.y, elements.Y, tag) || updated
+				updated = handleMinMaxValue(device.frame.width, elements.WIDTH, tag) || updated
+				updated = handleMinMaxValue(device.frame.height, elements.HEIGHT, tag) || updated
+
+				if (updated) {
 					this.updated(client, device, 'frame', message.state)
 				}
 
 				return
 			}
 			case 'CCD_BINNING': {
-				const binX = message.elements.HOR_BIN!
-				const binY = message.elements.VER_BIN!
-
-				const { bin } = device
-				let update = false
-
 				if (tag[0] === 'd') {
-					const canBin = (message as DefNumberVector).permission !== 'ro'
-
-					if (device.canBin !== canBin) {
-						device.canBin = canBin
+					if (handleSwitchValue(device, 'canBin', (message as DefNumberVector).permission !== 'ro')) {
 						this.updated(client, device, 'canBin', message.state)
 					}
-
-					bin.maxX = (binX as DefNumber).max
-					bin.maxY = (binY as DefNumber).max
-
-					update = bin.maxX !== 0 && bin.maxY !== 0
 				}
 
-				if (update || bin.x !== binX.value || bin.y !== binY.value) {
-					bin.x = binX.value
-					bin.y = binY.value
-					update = true
-				}
+				const { elements } = message
 
-				if (update) {
+				let updated = handleMinMaxValue(device.bin.x, elements.HOR_BIN, tag)
+				updated = handleMinMaxValue(device.bin.y, elements.VER_BIN, tag) || updated
+
+				if (updated) {
 					this.updated(client, device, 'bin', message.state)
 				}
 
 				return
 			}
 			// ZWO ASI, SVBony, etc
-			case 'CCD_CONTROLS': {
+			case 'CCD_CONTROLS':
 				if (handleMinMaxValue(device.gain, message.elements.Gain, tag)) {
 					this.updated(client, device, 'gain', message.state)
 					this.gainProperty.set(device.name, [message.name, 'Gain'])
@@ -724,7 +658,6 @@ export class CameraManager extends DeviceManager<Camera> {
 				}
 
 				return
-			}
 			// CCD Simulator
 			case 'CCD_GAIN':
 				if (handleMinMaxValue(device.gain, message.elements.GAIN, tag)) {
@@ -916,13 +849,15 @@ export class MountManager extends DeviceManager<Mount> {
 
 		super.switchVector(client, message, tag)
 
+		const { elements } = message
+
 		switch (message.name) {
 			case 'TELESCOPE_SLEW_RATE':
 				if (tag[0] === 'd') {
 					const rates: SlewRate[] = []
 
-					for (const key in message.elements) {
-						const element = message.elements[key] as DefSwitch
+					for (const key in elements) {
+						const element = elements[key] as DefSwitch
 						rates.push({ name: element.name, label: element.label! })
 					}
 
@@ -932,8 +867,8 @@ export class MountManager extends DeviceManager<Mount> {
 					}
 				}
 
-				for (const key in message.elements) {
-					const element = message.elements[key]!
+				for (const key in elements) {
+					const element = elements[key]!
 
 					if (element.value) {
 						if (device.slewRate !== element.name) {
@@ -950,8 +885,8 @@ export class MountManager extends DeviceManager<Mount> {
 				if (tag[0] === 'd') {
 					const modes: TrackMode[] = []
 
-					for (const key in message.elements) {
-						const element = message.elements[key] as DefSwitch
+					for (const key in elements) {
+						const element = elements[key] as DefSwitch
 						modes.push(element.name.replace('TRACK_', '') as TrackMode)
 					}
 
@@ -961,8 +896,8 @@ export class MountManager extends DeviceManager<Mount> {
 					}
 				}
 
-				for (const key in message.elements) {
-					const element = message.elements[key]!
+				for (const key in elements) {
+					const element = elements[key]!
 
 					if (element.value) {
 						const trackMode = element.name.replace('TRACK_', '') as TrackMode
@@ -977,86 +912,44 @@ export class MountManager extends DeviceManager<Mount> {
 				}
 
 				return
-			case 'TELESCOPE_TRACK_STATE': {
-				const tracking = message.elements.TRACK_ON?.value === true
-
-				if (device.tracking !== tracking) {
-					device.tracking = tracking
+			case 'TELESCOPE_TRACK_STATE':
+				if (handleSwitchValue(device, 'tracking', elements.TRACK_ON?.value)) {
 					this.updated(client, device, 'tracking', message.state)
 				}
 
 				return
-			}
-			case 'TELESCOPE_PIER_SIDE': {
-				const pierSide = message.elements.PIER_WEST?.value === true ? 'WEST' : message.elements.PIER_EAST?.value === true ? 'EAST' : 'NEITHER'
-
-				if (device.pierSide !== pierSide) {
-					device.pierSide = pierSide
+			case 'TELESCOPE_PIER_SIDE':
+				if (handleTextValue(device, 'pierSide', elements.PIER_WEST?.value === true ? 'WEST' : message.elements.PIER_EAST?.value === true ? 'EAST' : 'NEITHER')) {
 					this.updated(client, device, 'pierSide', message.state)
 				}
 
 				return
-			}
-			case 'TELESCOPE_PARK': {
-				if (tag[0] === 'd') {
-					const canPark = (message as DefSwitchVector).permission !== 'ro'
-
-					if (device.canPark !== canPark) {
-						device.canPark = canPark
-						this.updated(client, device, 'canPark', message.state)
-					}
-				}
-
-				const parking = message.state === 'Busy'
-
-				if (device.parking !== parking) {
-					device.parking = parking
-					this.updated(client, device, 'parking', message.state)
-				}
-
-				const parked = message.elements.PARK?.value === true
-
-				if (device.parked !== parked) {
-					device.parked = parked
-					this.updated(client, device, 'parked', message.state)
-				}
-
+			case 'TELESCOPE_PARK':
+				handleParkable(this, client, device, message, tag)
 				return
-			}
 			case 'TELESCOPE_ABORT_MOTION':
-				if (!device.canAbort) {
-					device.canAbort = true
+				if (handleSwitchValue(device, 'canAbort', true)) {
 					this.updated(client, device, 'canAbort', message.state)
 				}
 
 				return
 			case 'TELESCOPE_HOME':
-				if (!device.canHome) {
-					device.canHome = true
+				if (handleSwitchValue(device, 'canHome', true)) {
 					this.updated(client, device, 'canHome', message.state)
 				}
 
 				return
 			case 'ON_COORD_SET':
 				if (tag[0] === 'd') {
-					const canSync = 'SYNC' in message.elements
-
-					if (device.canSync !== canSync) {
-						device.canSync = canSync
+					if (handleSwitchValue(device, 'canSync', 'SYNC' in elements)) {
 						this.updated(client, device, 'canSync', message.state)
 					}
 
-					const canGoTo = 'SLEW' in message.elements
-
-					if (device.canGoTo !== canGoTo) {
-						device.canGoTo = canGoTo
+					if (handleSwitchValue(device, 'canGoTo', 'SLEW' in elements)) {
 						this.updated(client, device, 'canGoTo', message.state)
 					}
 
-					const canFlip = 'FLIP' in message.elements
-
-					if (device.canFlip !== canFlip) {
-						device.canFlip = canFlip
+					if (handleSwitchValue(device, 'canFlip', 'FLIP' in elements)) {
 						this.updated(client, device, 'canFlip', message.state)
 					}
 				}
@@ -1072,28 +965,14 @@ export class MountManager extends DeviceManager<Mount> {
 
 		switch (message.name) {
 			case 'EQUATORIAL_EOD_COORD': {
-				const slewing = message.state === 'Busy'
-
-				if (device.slewing !== slewing) {
-					device.slewing = slewing
+				if (handleSwitchValue(device, 'slewing', message.state === 'Busy')) {
 					this.updated(client, device, 'slewing', message.state)
 				}
 
-				const rightAscension = hour(message.elements.RA!.value)
-				const declination = deg(message.elements.DEC!.value)
-
 				const { equatorialCoordinate } = device
-				let updated = false
 
-				if (equatorialCoordinate.rightAscension !== rightAscension) {
-					equatorialCoordinate.rightAscension = rightAscension
-					updated = true
-				}
-
-				if (equatorialCoordinate.declination !== declination) {
-					equatorialCoordinate.declination = declination
-					updated = true
-				}
+				let updated = handleNumberValue(equatorialCoordinate, 'rightAscension', message.elements.RA?.value, undefined, hour)
+				updated = handleNumberValue(equatorialCoordinate, 'declination', message.elements.DEC?.value, undefined, deg) || updated
 
 				if (updated) {
 					this.updated(client, device, 'equatorialCoordinate', message.state)
@@ -1102,27 +981,11 @@ export class MountManager extends DeviceManager<Mount> {
 				return
 			}
 			case 'GEOGRAPHIC_COORD': {
-				const longitude = deg(message.elements.LONG!.value)
-				const latitude = deg(message.elements.LAT!.value)
-				const elevation = meter(message.elements.ELEV!.value)
-
 				const { geographicCoordinate } = device
-				let updated = false
 
-				if (geographicCoordinate.longitude !== longitude) {
-					geographicCoordinate.longitude = longitude >= PI ? longitude - TAU : longitude
-					updated = true
-				}
-
-				if (geographicCoordinate.latitude !== latitude) {
-					geographicCoordinate.latitude = latitude
-					updated = true
-				}
-
-				if (geographicCoordinate.elevation !== elevation) {
-					geographicCoordinate.elevation = elevation
-					updated = true
-				}
+				let updated = handleNumberValue(geographicCoordinate, 'longitude', message.elements.LONG?.value, undefined, (value) => normalizePI(deg(value)))
+				updated = handleNumberValue(geographicCoordinate, 'latitude', message.elements.LAT?.value, undefined, deg) || updated
+				updated = handleNumberValue(geographicCoordinate, 'elevation', message.elements.ELEV?.value, undefined, meter) || updated
 
 				if (updated) {
 					this.updated(client, device, 'geographicCoordinate', message.state)
@@ -1148,9 +1011,10 @@ export class MountManager extends DeviceManager<Mount> {
 					const utc = parseTemporal(message.elements.UTC.value, 'YYYY-MM-DDTHH:mm:ss')
 					const offset = parseUTCOffset(message.elements.OFFSET!.value)
 
-					if (device.time.utc !== utc || device.time.offset !== offset) {
-						device.time.utc = utc
-						device.time.offset = offset
+					let updated = handleNumberValue(device.time, 'utc', utc)
+					updated = handleNumberValue(device.time, 'offset', offset) || updated
+
+					if (updated) {
 						this.updated(client, device, 'time', message.state)
 					}
 				}
@@ -1180,23 +1044,16 @@ export class WheelManager extends DeviceManager<Wheel> {
 		if (!device) return
 
 		switch (message.name) {
-			case 'FILTER_SLOT': {
-				const value = message.elements.FILTER_SLOT_VALUE.value - 1
-
-				if (device.position !== value) {
-					device.position = value
+			case 'FILTER_SLOT':
+				if (handleNumberValue(device, 'position', message.elements.FILTER_SLOT_VALUE.value - 1)) {
 					this.updated(client, device, 'position', message.state)
 				}
 
-				const moving = message.state === 'Busy'
-
-				if (device.moving !== moving) {
-					device.moving = moving
+				if (handleSwitchValue(device, 'moving', message.state === 'Busy')) {
 					this.updated(client, device, 'moving', message.state)
 				}
 
 				return
-			}
 		}
 	}
 
@@ -1274,27 +1131,25 @@ export class FocuserManager extends DeviceManager<Focuser> {
 
 		switch (message.name) {
 			case 'FOCUS_ABORT_MOTION':
-				if (tag[0] === 'd' && !device.canAbort) {
-					device.canAbort = true
-					this.updated(client, device, 'canAbort', message.state)
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canAbort', true)) {
+						this.updated(client, device, 'canAbort', message.state)
+					}
 				}
 
 				return
-			case 'FOCUS_REVERSE_MOTION': {
-				if (tag[0] === 'd' && !device.canReverse) {
-					device.canReverse = true
-					this.updated(client, device, 'canReverse', message.state)
+			case 'FOCUS_REVERSE_MOTION':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canReverse', true)) {
+						this.updated(client, device, 'canReverse', message.state)
+					}
 				}
 
-				const reversed = message.elements.INDI_ENABLED?.value === true
-
-				if (device.reversed !== reversed) {
-					device.reversed = reversed
+				if (handleSwitchValue(device, 'reversed', message.elements.INDI_ENABLED?.value)) {
 					this.updated(client, device, 'reversed', message.state)
 				}
 
 				return
-			}
 		}
 	}
 
@@ -1305,54 +1160,41 @@ export class FocuserManager extends DeviceManager<Focuser> {
 
 		switch (message.name) {
 			case 'FOCUS_SYNC':
-				if (tag[0] === 'd' && !device.canSync) {
-					device.canSync = true
-					this.updated(client, device, 'canSync', message.state)
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canSync', true)) {
+						this.updated(client, device, 'canSync', message.state)
+					}
 				}
+
 				return
-			case 'REL_FOCUS_POSITION': {
-				if (tag[0] === 'd' && !device.canRelativeMove) {
-					device.canRelativeMove = true
-					this.updated(client, device, 'canRelativeMove', message.state)
+			case 'REL_FOCUS_POSITION':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canRelativeMove', true)) {
+						this.updated(client, device, 'canRelativeMove', message.state)
+					}
 				}
 
-				const moving = message.state === 'Busy'
-
-				if (moving !== device.moving) {
-					device.moving = moving
+				if (handleSwitchValue(device, 'moving', message.state === 'Busy')) {
 					this.updated(client, device, 'moving', message.state)
 				}
 
 				return
-			}
-			case 'ABS_FOCUS_POSITION': {
+			case 'ABS_FOCUS_POSITION':
 				if (tag[0] === 'd') {
-					if (!device.canAbsoluteMove) {
-						device.canAbsoluteMove = true
+					if (handleSwitchValue(device, 'canAbsoluteMove', true)) {
 						this.updated(client, device, 'canAbsoluteMove', message.state)
 					}
-
-					if (handleMinMaxValue(device.position, message.elements.FOCUS_ABSOLUTE_POSITION, tag)) {
-						this.updated(client, device, 'position', message.state)
-					}
-				} else {
-					const position = message.elements.FOCUS_ABSOLUTE_POSITION.value
-
-					if (device.position.value !== position) {
-						device.position.value = position
-						this.updated(client, device, 'position', message.state)
-					}
 				}
 
-				const moving = message.state === 'Busy'
+				if (handleMinMaxValue(device.position, message.elements.FOCUS_ABSOLUTE_POSITION, tag)) {
+					this.updated(client, device, 'position', message.state)
+				}
 
-				if (moving !== device.moving) {
-					device.moving = moving
+				if (handleSwitchValue(device, 'moving', message.state === 'Busy')) {
 					this.updated(client, device, 'moving', message.state)
 				}
 
 				return
-			}
 		}
 	}
 
@@ -1386,32 +1228,9 @@ export class CoverManager extends DeviceManager<Cover> {
 		super.switchVector(client, message, tag)
 
 		switch (message.name) {
-			case 'CAP_PARK': {
-				if (tag[0] === 'd') {
-					const canPark = (message as DefSwitchVector).permission !== 'ro'
-
-					if (device.canPark !== canPark) {
-						device.canPark = canPark
-						this.updated(client, device, 'canPark', message.state)
-					}
-				}
-
-				const parking = message.state === 'Busy'
-
-				if (parking !== device.parking) {
-					device.parking = parking
-					this.updated(client, device, 'parking', message.state)
-				}
-
-				const parked = message.elements.PARK?.value === true
-
-				if (parked !== device.parked) {
-					device.parked = parked
-					this.updated(client, device, 'parked', message.state)
-				}
-
+			case 'CAP_PARK':
+				handleParkable(this, client, device, message, tag)
 				return
-			}
 		}
 	}
 
@@ -1429,7 +1248,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 		super()
 	}
 
-	pwm(client: IndiClient, device: DewHeater, value: number) {
+	dutyCycle(client: IndiClient, device: DewHeater, value: number) {
 		const property = this.pwmProperty.get(device.name)
 
 		if (property) {
@@ -1446,24 +1265,16 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 
 				if (device) {
 					if (tag[0] === 'd') {
-						if (!device.hasDewHeater) {
-							device.hasDewHeater = true
-
-							handleMinMaxValue(device.pwm, message.elements.Heater, tag)
-
+						if (handleSwitchValue(device, 'hasDewHeater', true)) {
 							if (this.add(client, device)) {
-								this.updated(client, device, 'pwm', message.state)
 								this.updated(client, device, 'hasDewHeater', message.state)
 								this.pwmProperty.set(device.name, [message.name, 'Heater'])
 							}
 						}
 					}
 
-					const value = message.elements.Heater.value
-
-					if (value !== device.pwm.value) {
-						device.pwm.value = value
-						this.updated(client, device, 'pwm', message.state)
+					if (handleMinMaxValue(device.dutyCycle, message.elements.Heater, tag)) {
+						this.updated(client, device, 'dutyCycle', message.state)
 					}
 				}
 
@@ -1477,8 +1288,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 			const device = this.get(message.device)
 
 			if (device) {
-				if (device.hasDewHeater) {
-					device.hasDewHeater = false
+				if (handleSwitchValue(device, 'hasDewHeater', false)) {
 					this.updated(client, device, 'hasDewHeater')
 				}
 
@@ -1517,16 +1327,12 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 		super.switchVector(client, message, tag)
 
 		switch (message.name) {
-			case 'FLAT_LIGHT_CONTROL': {
-				const enabled = message.elements.FLAT_LIGHT_ON?.value === true
-
-				if (enabled !== device.enabled) {
-					device.enabled = enabled
+			case 'FLAT_LIGHT_CONTROL':
+				if (handleSwitchValue(device, 'enabled', message.elements.FLAT_LIGHT_ON?.value)) {
 					this.updated(client, device, 'enabled', message.state)
 				}
 
 				return
-			}
 		}
 	}
 
@@ -1536,13 +1342,12 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 		if (!device) return
 
 		switch (message.name) {
-			case 'FLAT_LIGHT_INTENSITY': {
+			case 'FLAT_LIGHT_INTENSITY':
 				if (handleMinMaxValue(device.intensity, message.elements.FLAT_LIGHT_INTENSITY_VALUE, tag)) {
 					this.updated(client, device, 'intensity', message.state)
 				}
 
 				return
-			}
 		}
 	}
 
@@ -1580,9 +1385,10 @@ export class PowerManager extends DeviceManager<Power> {
 				handlePowerChannel(this, client, device, message, tag, 'usb', 'enabled')
 				return
 			case 'POWER_CYCLE_Toggle':
-				if (tag[0] === 'd' && !device.hasPowerCycle) {
-					device.hasPowerCycle = true
-					this.updated(client, device, 'hasPowerCycle', message.state)
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'hasPowerCycle', true)) {
+						this.updated(client, device, 'hasPowerCycle', message.state)
+					}
 				}
 
 				return
@@ -1595,28 +1401,20 @@ export class PowerManager extends DeviceManager<Power> {
 		if (!device) return
 
 		switch (message.name) {
-			case 'POWER_SENSORS': {
-				const voltage = message.elements.SENSOR_VOLTAGE?.value
-				const current = message.elements.SENSOR_CURRENT?.value
-				const power = message.elements.SENSOR_POWER?.value
-
-				if (voltage !== undefined && device.voltage !== voltage) {
-					device.voltage = voltage
+			case 'POWER_SENSORS':
+				if (handleMinMaxValue(device.voltage, message.elements.SENSOR_VOLTAGE, tag)) {
 					this.updated(client, device, 'voltage', message.state)
 				}
 
-				if (current !== undefined && device.current !== current) {
-					device.current = current
+				if (handleMinMaxValue(device.current, message.elements.SENSOR_CURRENT, tag)) {
 					this.updated(client, device, 'current', message.state)
 				}
 
-				if (power !== undefined && device.power !== power) {
-					device.power = power
+				if (handleMinMaxValue(device.power, message.elements.SENSOR_POWER, tag)) {
 					this.updated(client, device, 'power', message.state)
 				}
 
 				return
-			}
 			// Power Channel Current (only if per-channel current monitoring is available)
 			case 'POWER_CURRENTS':
 				handlePowerChannel(this, client, device, message, tag, 'dc', 'value')
@@ -1708,13 +1506,41 @@ function handlePowerChannel(manager: DeviceManager<Power>, client: IndiClient, d
 	return updated
 }
 
-function handleSwitchValue<D extends Device>(device: D, property: keyof PickByValue<D, boolean>, value: boolean, state?: PropertyState) {
+function handleParkable<D extends Device & Parkable>(manager: DeviceManager<D>, client: IndiClient, device: D, message: DefSwitchVector | SetSwitchVector, tag: string) {
+	if (tag[0] === 'd') {
+		if (handleSwitchValue<Device & Parkable>(device, 'canPark', (message as DefSwitchVector).permission !== 'ro')) {
+			manager.updated(client, device, 'canPark', message.state)
+		}
+	}
+
+	if (handleSwitchValue<Device & Parkable>(device, 'parking', message.state === 'Busy')) {
+		manager.updated(client, device, 'parking', message.state)
+	}
+
+	if (handleSwitchValue<Device & Parkable>(device, 'parked', !!message.elements.PARK?.value)) {
+		manager.updated(client, device, 'parked', message.state)
+	}
+}
+
+function handlePropertyValue<D, T extends string | number | boolean>(device: D, property: keyof PickByValue<D, T>, value: T, state?: PropertyState) {
 	if (device[property] !== value) {
 		device[property] = value as never
 		return true
 	}
 
 	return state === 'Alert'
+}
+
+function handleSwitchValue<D>(device: D, property: keyof PickByValue<D, boolean>, value?: boolean, state?: PropertyState) {
+	return handlePropertyValue<D, boolean>(device, property, value === true, state)
+}
+
+function handleNumberValue<D>(device: D, property: keyof PickByValue<D, number>, value?: number, state?: PropertyState, transform?: (value: number) => number) {
+	return value !== undefined && handlePropertyValue<D, number>(device, property, transform?.(value) ?? value, state)
+}
+
+function handleTextValue<D>(device: D, property: keyof PickByValue<D, string>, value?: string, state?: PropertyState) {
+	return value && handlePropertyValue<D, string>(device, property, value, state)
 }
 
 function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | OneNumber | undefined, tag: string) {
