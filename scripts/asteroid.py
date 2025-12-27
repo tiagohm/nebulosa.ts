@@ -12,6 +12,7 @@ GM_SUM_AU_D = GM_SUN * DAY_S * DAY_S / AU_KM / AU_KM / AU_KM
 ts = load.timescale()
 t = ts.tt(2025, 4, 21, 12, 0, 0)
 
+
 def mpcorb():
     print('############## FROM MPCORB ##############')
 
@@ -31,6 +32,7 @@ def mpcorb():
 
     print(pos.position.au[0], pos.position.au[1], pos.position.au[2])
     print(pos.velocity.au_per_d[0], pos.velocity.au_per_d[1], pos.velocity.au_per_d[2])
+
 
 def meanAnomaly():
     print('\n############## FROM ELEMENTS USING MEAN ANOMALY ##############')
@@ -54,12 +56,13 @@ def meanAnomaly():
     print(pos.position.au[0], pos.position.au[1], pos.position.au[2])
     print(pos.velocity.au_per_d[0], pos.velocity.au_per_d[1], pos.velocity.au_per_d[2])
 
+
 def osculatingElements():
     print('\n############## PRINTING OSCULATING ELEMENTS ##############')
 
     # JPL Horizons, Sun (body center) [500@10] -> 4 Vesta (A807 FA), 2025-Apr-21 12:00:00.0000 TDB, x-y axes
-    position = Distance(array([-1.703174722970520E+00, -1.333843040283118E+00, -3.086709149679688E-01]))
-    velocity = Velocity(array([7.882762615954012E-03, -8.079478592200335E-03, -4.254433056153772E-03]))
+    position = Distance(array([-1.703174722970520e00, -1.333843040283118e00, -3.086709149679688e-01]))
+    velocity = Velocity(array([7.882762615954012e-03, -8.079478592200335e-03, -4.254433056153772e-03]))
     epoch = ts.tdb_jd(2460787.0)
     vesta = _KeplerOrbit(position, velocity, epoch, GM_SUM_AU_D)
     oe = vesta.elements_at_epoch
@@ -85,6 +88,7 @@ def osculatingElements():
     print('semi_minor_axis', oe.semi_minor_axis.au)
     print('true_anomaly', oe.true_anomaly.radians)
     print('true_longitude', oe.true_longitude.radians)
+
 
 mpcorb()
 meanAnomaly()

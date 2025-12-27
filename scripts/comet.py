@@ -12,14 +12,13 @@ GM_SUM_AU_D = GM_SUN * DAY_S * DAY_S / AU_KM / AU_KM / AU_KM
 ts = load.timescale()
 t = ts.tt(2025, 4, 21, 12, 0, 0)
 
+
 def mpcorb():
     print('############## FROM MPCORB ##############')
 
     with load.open('../data/CometEls.txt') as f:
         comets = mpc.load_comets_dataframe(f)
-        comets = (comets.sort_values('reference')
-          .groupby('designation', as_index=False).last()
-          .set_index('designation', drop=False))
+        comets = comets.sort_values('reference').groupby('designation', as_index=False).last().set_index('designation', drop=False)
 
     print(comets.shape[0], 'comets loaded')
 
@@ -33,6 +32,7 @@ def mpcorb():
 
     print(pos.position.au[0], pos.position.au[1], pos.position.au[2])
     print(pos.velocity.au_per_d[0], pos.velocity.au_per_d[1], pos.velocity.au_per_d[2])
+
 
 def periapsis():
     print('\n############## FROM ELEMENTS USING PERIAPSIS ##############')
@@ -54,6 +54,7 @@ def periapsis():
 
     print(pos.position.au[0], pos.position.au[1], pos.position.au[2])
     print(pos.velocity.au_per_d[0], pos.velocity.au_per_d[1], pos.velocity.au_per_d[2])
+
 
 mpcorb()
 periapsis()

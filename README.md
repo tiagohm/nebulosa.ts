@@ -18,6 +18,13 @@ const polarAlignment = new ThreePointPolarAlignment(refraction)
 const result = polarAlignment.add(ra, dec, time)
 ```
 
+### Alpaca ![](bun.webp)
+
+```ts
+const server = new AlpacaDiscoveryServer(ports)
+server.start(hostname, port)
+```
+
 ### Angle ![](bun.webp) ![](browser.webp)
 
 ```ts
