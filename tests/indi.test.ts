@@ -304,11 +304,16 @@ describe.serial.skipIf(noIndiServer)('manager', () => {
 		camera.offset(client, device, 10)
 		camera.startExposure(client, device, 1)
 
-		await Bun.sleep(2000)
+		await Bun.sleep(500)
+
+		expect(device.exposuring).toBeTrue()
+
+		await Bun.sleep(1000)
 
 		expect(frame).not.toBeEmpty()
 		expect(device.gain.value).toBe(60)
 		expect(device.offset.value).toBe(10)
+		expect(device.exposuring).toBeFalse()
 
 		client.close()
 

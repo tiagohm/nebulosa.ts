@@ -94,6 +94,7 @@ export interface Camera extends GuideOutput, Thermometer {
 		type: CfaPattern
 	}
 	readonly exposure: MinMaxValueProperty
+	exposuring: boolean
 	hasCooler: boolean
 	canSetTemperature: boolean
 	canSubFrame: boolean
@@ -244,6 +245,7 @@ export const DEFAULT_CAMERA: Camera = {
 		min: 0,
 		max: 0,
 	},
+	exposuring: false,
 	hasCooler: false,
 	canSetTemperature: false,
 	canSubFrame: false,

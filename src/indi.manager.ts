@@ -1,3 +1,4 @@
+import type { PickByValue } from 'utility-types'
 import { type Angle, deg, hour, normalizeAngle, PARSE_HOUR_ANGLE, parseAngle, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import { PI, TAU } from './constants'
@@ -594,12 +595,20 @@ export class CameraManager extends DeviceManager<Camera> {
 
 				return
 			}
-			case 'CCD_EXPOSURE':
-				if (handleMinMaxValue(device.exposure, message.elements.CCD_EXPOSURE_VALUE, tag)) {
+			case 'CCD_EXPOSURE': {
+				let exposuringHasChanged = false
+
+				if (handleSwitchValue(device, 'exposuring', message.state === 'Busy')) {
+					this.updated(client, device, 'exposuring', message.state)
+					exposuringHasChanged = true
+				}
+
+				if (handleMinMaxValue(device.exposure, message.elements.CCD_EXPOSURE_VALUE, tag) || exposuringHasChanged) {
 					this.updated(client, device, 'exposure', message.state)
 				}
 
 				return
+			}
 			case 'CCD_COOLER_POWER': {
 				const coolerPower = message.elements.CCD_COOLER_POWER?.value ?? 0
 
@@ -1697,6 +1706,15 @@ function handlePowerChannel(manager: DeviceManager<Power>, client: IndiClient, d
 	}
 
 	return updated
+}
+
+function handleSwitchValue<D extends Device>(device: D, property: keyof PickByValue<D, boolean>, value: boolean, state?: PropertyState) {
+	if (device[property] !== value) {
+		device[property] = value as never
+		return true
+	}
+
+	return state === 'Alert'
 }
 
 function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | OneNumber | undefined, tag: string) {
