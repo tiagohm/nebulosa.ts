@@ -299,7 +299,7 @@ describe('base64', () => {
 			const alphabet = i % 2 === 0 ? 'base64' : 'base64url'
 			const sink = base64Sink(bufferSink(output), alphabet)
 			const [encoded, raw] = randomBase64(i, alphabet)
-			const n = (await sink.write(raw)) + sink.end()
+			const n = (await sink.write(raw)) + (await sink.end())
 
 			expect(n).toBe(encoded.byteLength)
 			expect(output.subarray(0, n)).toEqual(encoded.subarray(0, n))

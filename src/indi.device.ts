@@ -87,11 +87,13 @@ export interface Camera extends GuideOutput, Thermometer {
 	hasDewHeater: boolean
 	dewHeater: boolean
 	frameFormats: string[]
+	frameFormat: string
+	frameType: FrameType
 	canAbort: boolean
 	readonly cfa: {
 		offsetX: number
 		offsetY: number
-		type: CfaPattern
+		type?: CfaPattern
 	}
 	readonly exposure: MinMaxValueProperty
 	exposuring: boolean
@@ -241,11 +243,12 @@ export const DEFAULT_CAMERA: Camera = {
 	hasDewHeater: false,
 	dewHeater: false,
 	frameFormats: [],
+	frameFormat: '',
+	frameType: 'LIGHT',
 	canAbort: false,
 	cfa: {
 		offsetX: 0,
 		offsetY: 0,
-		type: 'RGGB',
 	},
 	exposure: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	exposuring: false,

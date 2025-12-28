@@ -15,7 +15,7 @@ import { timeNow } from './time'
 
 export interface DeviceHandler<D extends Device> {
 	readonly added: (client: IndiClient, device: D) => void
-	readonly updated: (client: IndiClient, device: D, property: keyof D, state?: PropertyState) => void
+	readonly updated?: (client: IndiClient, device: D, property: keyof D, state?: PropertyState) => void
 	readonly removed: (client: IndiClient, device: D) => void
 	readonly blobReceived?: (client: IndiClient, device: D, data: string) => void
 }
@@ -182,7 +182,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	}
 
 	updated(client: IndiClient, device: D, property: keyof D, state?: PropertyState) {
-		this.handlers.forEach((e) => e.updated(client, device, property, state))
+		this.handlers.forEach((e) => e.updated?.(client, device, property, state))
 	}
 
 	removed(client: IndiClient, device: D) {
@@ -547,6 +547,16 @@ export class CameraManager extends DeviceManager<Camera> {
 					this.updated(client, device, 'frameFormats', message.state)
 				}
 
+				for (const [name, value] of Object.entries(message.elements)) {
+					if (value.value) {
+						if (handleTextValue(device, 'frameFormat', name, message.state)) {
+							this.updated(client, device, 'frameFormat', message.state)
+						}
+
+						break
+					}
+				}
+
 				return
 			case 'CCD_ABORT_EXPOSURE':
 				if (tag[0] === 'd') {
@@ -672,6 +682,12 @@ export class CameraManager extends DeviceManager<Camera> {
 				if (handleMinMaxValue(device.offset, message.elements.OFFSET, tag)) {
 					this.updated(client, device, 'offset', message.state)
 					this.offsetProperty.set(device.name, [message.name, 'OFFSET'])
+				}
+
+				return
+			case 'CCD_FRAME_TYPE':
+				if (handleTextValue(device, 'frameType', message.elements.FRAME_BIAS?.value ? 'BIAS' : message.elements.FRAME_FLAT?.value ? 'FLAT' : message.elements.FRAME_DARK?.value ? 'DARK' : 'LIGHT')) {
+					this.updated(client, device, 'frameType', message.state)
 				}
 
 				return

@@ -33,7 +33,7 @@ export interface Sink {
 export class BufferSink implements Sink, Seekable, Exhaustible {
 	position = 0
 
-	constructor(private readonly buffer: Buffer) {}
+	constructor(readonly buffer: Buffer) {}
 
 	get exhausted() {
 		return this.position >= this.buffer.byteLength
@@ -71,7 +71,7 @@ export function bufferSink(buffer: Buffer) {
 export class FileHandleSink implements Sink, Seekable, AsyncDisposable {
 	position = 0
 
-	constructor(private readonly handle: FileHandle) {}
+	constructor(readonly handle: FileHandle) {}
 
 	seek(position: number) {
 		if (position < 0) return false
@@ -109,7 +109,7 @@ export interface Source {
 export class BufferSource implements Source, Seekable {
 	position = 0
 
-	constructor(private readonly buffer: Buffer) {}
+	constructor(readonly buffer: Buffer) {}
 
 	get exhausted() {
 		return this.position >= this.buffer.byteLength
@@ -140,7 +140,7 @@ export function bufferSource(buffer: Buffer) {
 export class FileHandleSource implements Source, Seekable, AsyncDisposable {
 	position = 0
 
-	constructor(private readonly handle: FileHandle) {}
+	constructor(readonly handle: FileHandle) {}
 
 	seek(position: number) {
 		if (position < 0) return false
@@ -169,7 +169,7 @@ export class ReadableStreamSource implements Source, AsyncDisposable {
 	private buffer?: Buffer
 	private position = 0
 
-	constructor(private readonly stream: ReadableStream<Uint8Array>) {
+	constructor(readonly stream: ReadableStream<Uint8Array>) {
 		this.reader = stream.getReader()
 	}
 
@@ -207,7 +207,7 @@ export function readableStreamSource(stream: ReadableStream<Uint8Array>) {
 export class RangeHttpSource implements Source, Seekable {
 	position = 0
 
-	constructor(private readonly uri: string | URL) {}
+	constructor(readonly uri: string | URL) {}
 
 	seek(position: number) {
 		if (position < 0) return false
@@ -245,7 +245,7 @@ export class Base64Source implements Source {
 	private n = 0
 	private state = -1
 
-	constructor(private readonly source: Source) {}
+	constructor(readonly source: Source) {}
 
 	async read(buffer: Buffer, offset?: number, size?: number) {
 		size ??= buffer.byteLength
@@ -431,7 +431,7 @@ export class Base64Sink implements Sink {
 		this.state++
 	}
 
-	end() {
+	async end() {
 		let n = 0
 
 		if (this.state > 0) {
@@ -451,7 +451,7 @@ export class Base64Sink implements Sink {
 				this.encoded.writeUInt8(TRAILING, n++)
 			}
 
-			this.sink.write(this.encoded, 0, n)
+			await this.sink.write(this.encoded, 0, n)
 			this.state = 0
 		}
 
