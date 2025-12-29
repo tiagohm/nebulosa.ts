@@ -1,7 +1,8 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
-import { type DefSwitchVector, IndiClient, type IndiClientHandler, type PropertyState } from '../src/indi'
+import { IndiClient, type IndiClientHandler } from '../src/indi'
 import type { Camera, Cover, FlatPanel, Focuser, GuideOutput, Mount, Power, Rotator, Thermometer, Wheel } from '../src/indi.device'
 import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import type { DefSwitchVector, PropertyState } from '../src/indi.types'
 // biome-ignore format: too long!
 import { SimpleXmlParser } from '../src/xml'
 

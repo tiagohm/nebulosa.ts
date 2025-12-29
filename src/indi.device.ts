@@ -1,6 +1,6 @@
 import type { EquatorialCoordinate, HorizontalCoordinate } from './coordinate'
 import type { CfaPattern } from './image.types'
-import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector } from './indi'
+import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector } from './indi.types'
 import type { GeographicCoordinate } from './location'
 
 export type DeviceType = 'CAMERA' | 'MOUNT' | 'WHEEL' | 'FOCUSER' | 'ROTATOR' | 'GPS' | 'DOME' | 'GUIDE_OUTPUT' | 'FLAT_PANEL' | 'COVER' | 'POWER' | 'THERMOMETER' | 'DEW_HEATER'
@@ -12,6 +12,8 @@ export type DevicePropertyType = DeviceProperty['type']
 export type DeviceProperties = Record<string, DeviceProperty>
 
 export type FrameType = 'LIGHT' | 'DARK' | 'FLAT' | 'BIAS'
+
+export type CameraTransferFormat = 'FITS' | 'XISF' | 'NATIVE'
 
 export type PierSide = 'EAST' | 'WEST' | 'NEITHER'
 

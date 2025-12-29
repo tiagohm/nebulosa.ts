@@ -6,9 +6,10 @@ import { meter, toMeter } from './distance'
 import { eraC2s, eraS2c } from './erfa'
 import { precessFk5FromJ2000 } from './fk5'
 import type { CfaPattern } from './image.types'
-import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, IndiClient, IndiClientHandler, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi'
+import type { IndiClient, IndiClientHandler } from './indi'
 // biome-ignore format: too long!
-import { type Camera, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isFocuser, isInterfaceType, isMount, isRotator, isWheel, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type CameraTransferFormat, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isFocuser, isInterfaceType, isMount, isRotator, isWheel, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
+import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi.types'
 import type { GeographicCoordinate, GeographicPosition } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
 import { timeNow } from './time'
@@ -506,7 +507,7 @@ export class CameraManager extends DeviceManager<Camera> {
 		client.sendSwitch({ device: camera.name, name: 'CCD_COMPRESSION', elements: { [enabled ? 'INDI_ENABLED' : 'INDI_DISABLED']: true } })
 	}
 
-	transferFormat(client: IndiClient, camera: Camera, format: 'FITS' | 'XISF' | 'NATIVE') {
+	transferFormat(client: IndiClient, camera: Camera, format: CameraTransferFormat) {
 		client.sendSwitch({ device: camera.name, name: 'CCD_TRANSFER_FORMAT', elements: { [`FORMAT_${format}`]: true } })
 	}
 
