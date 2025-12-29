@@ -668,14 +668,15 @@ export class AlpacaServer {
 		const device = this.device<Camera>(id)!
 		const state = this.states.get(device)!
 
-		const buffer = Buffer.from(state.data!, 'base64')
-		const fits = await readFits(bufferSource(buffer))
-
 		try {
+			const buffer = Buffer.from(state.data!, 'base64')
+			const fits = await readFits(bufferSource(buffer))
+
 			if (!fits) return Response.json(this.makeAlpacaErrorResponse(AlpacaException.Driver, 'Unable to read FITS image'))
 
 			if (accept?.includes('imagebytes')) {
-				return new Response(this.makeImageBytesFromFits(fits, buffer), { headers: { 'Content-Type': 'application/imagebytes' } })
+				const image = makeImageBytesFromFits(fits, buffer)
+				return new Response(image, { headers: { 'Content-Type': 'application/imagebytes' } })
 			}
 		} finally {
 			state.data = undefined
@@ -694,112 +695,6 @@ export class AlpacaServer {
 		const frame: AlpacaDeviceState['frame'] = isCamera(device) ? [device.frame.x.value, device.frame.y.value, device.frame.width.value, device.frame.height.value] : [0, 0, 0, 0]
 		this.states.set(device, { lastExposureDuration: 0, ccdTemperature: 0, frame })
 		return configuredDevice
-	}
-
-	private makeImageBytesFromFits(fits: Fits, data: Buffer<ArrayBuffer>) {
-		const hdu = fits.hdus[0]
-		const { header } = hdu
-		const bitpix = bitpixKeyword(header, 0)
-		const elementType = bitpix === Bitpix.BYTE ? 6 : bitpix === Bitpix.SHORT ? 1 : bitpix === Bitpix.INTEGER ? 2 : bitpix === Bitpix.FLOAT ? 4 : 3
-		const numX = header.NAXIS1 as number
-		const numY = header.NAXIS2 as number
-		const numZ = header.NAXIS3 as number | undefined
-		const channels = numZ || 1
-		const bytesPerPixel = bitpixInBytes(bitpix)
-		const strideInBytes = numX * bytesPerPixel
-		const planeInBytes = strideInBytes * numY
-		const offset = hdu.data.offset!
-
-		const output = Buffer.allocUnsafe(44 + planeInBytes * channels)
-
-		output.writeInt32LE(1, 0) // Bytes 0..3 - Metadata version = 1
-		output.writeInt32LE(0, 4) // Bytes 4..7 - Alpaca error number or zero for success
-		output.writeInt32LE(0, 8) // Bytes 8..11 - Client's transaction ID
-		output.writeInt32LE(0, 12) // Bytes 12..15 - Device's transaction ID
-		output.writeInt32LE(44, 16) // Bytes 16..19 - Offset of the start of the data bytes
-		output.writeInt32LE(elementType, 20) // Bytes 20..23 - Element type of the source image array
-		output.writeInt32LE(elementType, 24) // Bytes 24..27 - Element type as sent over the network
-		output.writeInt32LE(numZ || 2, 28) // Bytes 28..31 - Image array rank (2 or 3)
-		output.writeInt32LE(numX, 32) // Bytes 32..35 - Length of image array first dimension
-		output.writeInt32LE(numY, 36) // Bytes 36..39 - Length of image array second dimension
-		output.writeInt32LE(numZ || 0, 40) // Bytes 40..43 - Length of image array third dimension (0 for 2D array)
-
-		let b = 44
-
-		const input = new DataView(data.buffer, data.byteOffset, data.byteLength)
-		const out = new DataView(output.buffer, output.byteOffset, output.byteLength)
-
-		if (channels === 1) {
-			if (bytesPerPixel === 2) {
-				for (let x = 0; x < numX; x++) {
-					const ax = (x << 1) + offset
-
-					for (let y = 0; y < numY; y++, b += 2) {
-						const ay = y * strideInBytes + ax
-						out.setUint16(b, input.getUint16(ay, false), true)
-					}
-				}
-			} else if (bytesPerPixel === 1) {
-				for (let x = 0; x < numX; x++) {
-					const ax = x + offset
-
-					for (let y = 0; y < numY; y++, b++) {
-						const ay = y + ax
-						out.setUint16(b, input.getUint16(ay, false), true)
-					}
-				}
-			} else {
-				for (let x = 0; x < numX; x++) {
-					const ax = (x << 2) + offset
-
-					for (let y = 0; y < numY; y++, b += 4) {
-						const ay = y * strideInBytes + ax
-						out.setUint16(b, input.getUint16(ay, false), true)
-					}
-				}
-			}
-		} else if (bytesPerPixel === 2) {
-			for (let x = 0; x < numX; x++) {
-				const ax = (x << 1) + offset
-
-				for (let y = 0; y < numY; y++) {
-					const ay = y * strideInBytes + ax
-					out.setUint16(b, input.getUint16(ay, false), true)
-					b += 2
-					out.setUint16(b, input.getUint16(ay + planeInBytes, false), true)
-					b += 2
-					out.setUint16(b, input.getUint16(ay + planeInBytes * 2, false), true)
-					b += 2
-				}
-			}
-		} else if (bytesPerPixel === 1) {
-			for (let x = 0; x < numX; x++) {
-				const ax = x + offset
-
-				for (let y = 0; y < numY; y++) {
-					const ay = y + ax
-					out.setUint16(b++, input.getUint16(ay, false), true)
-					out.setUint16(b++, input.getUint16(ay + planeInBytes, false), true)
-					out.setUint16(b++, input.getUint16(ay + planeInBytes * 2, false), true)
-				}
-			}
-		} else {
-			for (let x = 0; x < numX; x++) {
-				const ax = (x << 2) + offset
-
-				for (let y = 0; y < numY; y++) {
-					const ay = y * strideInBytes + ax
-					out.setUint32(b, input.getUint32(ay, false), true)
-					b += 4
-					out.setUint32(b, input.getUint32(ay + planeInBytes, false), true)
-					b += 4
-					out.setUint32(b, input.getUint32(ay + planeInBytes * 2, false), true)
-					b += 4
-				}
-			}
-		}
-
-		return output.buffer
 	}
 }
 
@@ -820,4 +715,110 @@ function promiseWithTimeout<T>(callback: () => T | PromiseLike<T> | Error, delay
 	}, delay)
 
 	return { ...resolver, clear: () => clearTimeout(timer) } as const
+}
+
+export function makeImageBytesFromFits(fits: Fits, data: Buffer<ArrayBuffer>) {
+	const hdu = fits.hdus[0]
+	const { header } = hdu
+	const bitpix = bitpixKeyword(header, 0)
+	const elementType = bitpix === Bitpix.BYTE ? 6 : bitpix === Bitpix.SHORT ? 1 : bitpix === Bitpix.INTEGER ? 2 : bitpix === Bitpix.FLOAT ? 4 : 3
+	const numX = header.NAXIS1 as number
+	const numY = header.NAXIS2 as number
+	const numZ = header.NAXIS3 as number | undefined
+	const channels = numZ || 1
+	const bytesPerPixel = bitpixInBytes(bitpix)
+	const strideInBytes = numX * bytesPerPixel
+	const planeInBytes = strideInBytes * numY
+	const { offset = 0 } = hdu.data
+
+	const output = Buffer.allocUnsafe(44 + planeInBytes * channels)
+
+	output.writeInt32LE(1, 0) // Bytes 0..3 - Metadata version = 1
+	output.writeInt32LE(0, 4) // Bytes 4..7 - Alpaca error number or zero for success
+	output.writeInt32LE(0, 8) // Bytes 8..11 - Client's transaction ID
+	output.writeInt32LE(0, 12) // Bytes 12..15 - Device's transaction ID
+	output.writeInt32LE(44, 16) // Bytes 16..19 - Offset of the start of the data bytes
+	output.writeInt32LE(elementType, 20) // Bytes 20..23 - Element type of the source image array
+	output.writeInt32LE(elementType, 24) // Bytes 24..27 - Element type as sent over the network
+	output.writeInt32LE(numZ || 2, 28) // Bytes 28..31 - Image array rank (2 or 3)
+	output.writeInt32LE(numX, 32) // Bytes 32..35 - Length of image array first dimension
+	output.writeInt32LE(numY, 36) // Bytes 36..39 - Length of image array second dimension
+	output.writeInt32LE(numZ || 0, 40) // Bytes 40..43 - Length of image array third dimension (0 for 2D array)
+
+	let b = 44
+
+	const input = new DataView(data.buffer, data.byteOffset, data.byteLength)
+	const out = new DataView(output.buffer, output.byteOffset, output.byteLength)
+
+	if (channels === 1) {
+		if (bytesPerPixel === 2) {
+			for (let x = 0; x < numX; x++) {
+				const ax = (x << 1) + offset
+
+				for (let y = 0; y < numY; y++, b += 2) {
+					const ay = y * strideInBytes + ax
+					out.setUint16(b, input.getUint16(ay, false), true)
+				}
+			}
+		} else if (bytesPerPixel === 1) {
+			for (let x = 0; x < numX; x++) {
+				const ax = x + offset
+
+				for (let y = 0; y < numY; y++, b++) {
+					const ay = y + ax
+					out.setUint16(b, input.getUint16(ay, false), true)
+				}
+			}
+		} else {
+			for (let x = 0; x < numX; x++) {
+				const ax = (x << 2) + offset
+
+				for (let y = 0; y < numY; y++, b += 4) {
+					const ay = y * strideInBytes + ax
+					out.setUint16(b, input.getUint16(ay, false), true)
+				}
+			}
+		}
+	} else if (bytesPerPixel === 2) {
+		for (let x = 0; x < numX; x++) {
+			const ax = (x << 1) + offset
+
+			for (let y = 0; y < numY; y++) {
+				const ay = y * strideInBytes + ax
+				out.setUint16(b, input.getUint16(ay, false), true)
+				b += 2
+				out.setUint16(b, input.getUint16(ay + planeInBytes, false), true)
+				b += 2
+				out.setUint16(b, input.getUint16(ay + planeInBytes * 2, false), true)
+				b += 2
+			}
+		}
+	} else if (bytesPerPixel === 1) {
+		for (let x = 0; x < numX; x++) {
+			const ax = x + offset
+
+			for (let y = 0; y < numY; y++) {
+				const ay = y + ax
+				out.setUint16(b++, input.getUint16(ay, false), true)
+				out.setUint16(b++, input.getUint16(ay + planeInBytes, false), true)
+				out.setUint16(b++, input.getUint16(ay + planeInBytes * 2, false), true)
+			}
+		}
+	} else {
+		for (let x = 0; x < numX; x++) {
+			const ax = (x << 2) + offset
+
+			for (let y = 0; y < numY; y++) {
+				const ay = y * strideInBytes + ax
+				out.setUint32(b, input.getUint32(ay, false), true)
+				b += 4
+				out.setUint32(b, input.getUint32(ay + planeInBytes, false), true)
+				b += 4
+				out.setUint32(b, input.getUint32(ay + planeInBytes * 2, false), true)
+				b += 4
+			}
+		}
+	}
+
+	return output.buffer
 }

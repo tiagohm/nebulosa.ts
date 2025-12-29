@@ -238,22 +238,52 @@ export function rangeHttpSource(uri: string | URL) {
 
 export type Base64Alphabet = 'base64' | 'base64url'
 
-export class Base64Source implements Source {
+export class Base64Source implements Source, Seekable {
 	private readonly buffer = Buffer.allocUnsafe(1024)
-	private readonly decoded = [-1, -1, -1]
-	private position = 0
-	private n = 0
-	private state = -1
+	private readonly decoded = [-1, -1, -1] // current decoded base64 bytes
+	private bpos = 0 // current position in buffer
+	private n = 0 // remaining bytes in buffer
+	private state = -1 // current base64 decoding state
+	private spos = 0 // current position for string source
 
-	constructor(readonly source: Source) {}
+	constructor(readonly source: Source | string) {}
+
+	get position() {
+		return typeof this.source === 'string' ? this.spos : isSeekable(this.source) ? this.source.position : -1
+	}
+
+	seek(position: number) {
+		if (typeof this.source === 'string') {
+			if (position < 0 || position >= this.source.length) return false
+			this.spos = position
+			return true
+		} else if (isSeekable(this.source)) {
+			return this.source.seek(position)
+		} else {
+			return false
+		}
+	}
 
 	async read(buffer: Buffer, offset?: number, size?: number) {
 		size ??= buffer.byteLength
 
-		if (size > 0 && this.position >= this.n) {
-			this.n = await this.source.read(this.buffer)
+		if (size > 0 && this.bpos >= this.n) {
+			const source = this.source
+
+			if (typeof source === 'string') {
+				let n = 0
+				let i = this.spos
+				const max = source.length
+				for (; i < max && n < 1024; i++) this.buffer.writeUInt8(source.charCodeAt(i), n++)
+				this.n = n
+				this.spos = i
+			} else {
+				this.n = await source.read(this.buffer)
+			}
+
 			if (!this.n) return 0
-			this.position = 0
+
+			this.bpos = 0
 		}
 
 		offset ??= 0
@@ -270,7 +300,7 @@ export class Base64Source implements Source {
 	private decode(limit: number) {
 		if (this.state >= 0 && this.state <= 2) {
 			return this.decoded[this.state++]
-		} else if (this.position >= limit) {
+		} else if (this.bpos >= limit) {
 			return -1
 		}
 
@@ -280,8 +310,8 @@ export class Base64Source implements Source {
 		let inCount = 0
 		let word = 0
 
-		while (this.position < limit) {
-			const c = this.buffer.readUInt8(this.position++)
+		while (this.bpos < limit) {
+			const c = this.buffer.readUInt8(this.bpos++)
 
 			let bits = 0
 
@@ -347,7 +377,7 @@ export class Base64Source implements Source {
 	}
 }
 
-export function base64Source(source: Source) {
+export function base64Source(source: Source | string) {
 	return new Base64Source(source)
 }
 

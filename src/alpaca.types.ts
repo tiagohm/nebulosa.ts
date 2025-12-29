@@ -1,3 +1,4 @@
+import type { Cover, FlatPanel } from './indi.device'
 import type { CameraManager, CoverManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from './indi.manager'
 
 export const ALPACA_DISCOVERY_PORT = 32227
@@ -6,6 +7,8 @@ export const ALPACA_DISCOVERY_DATA = 'alpacadiscovery1'
 export type AlpacaDeviceType = 'Camera' | 'Telescope' | 'Focuser' | 'FilterWheel' | 'Rotator' | 'Dome' | 'Switch' | 'CoverCalibrator' | 'ObservingConditions' | 'SafetyMonitor' | 'Video'
 
 export type AlpacaServerStartOptions = Omit<Bun.Serve.HostnamePortServeOptions<undefined>, 'hostname' | 'port' | 'routes' | 'error' | 'fetch' | 'development'>
+
+export type CoverCalibrator = Cover & FlatPanel
 
 export enum AlpacaCameraState {
 	Idle,

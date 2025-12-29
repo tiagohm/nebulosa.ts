@@ -294,6 +294,17 @@ describe('base64', () => {
 		}
 	})
 
+	test('string', async () => {
+		for (let i = 0; i <= 1000; i++) {
+			const [encoded, raw] = randomBase64(i, i % 2 === 0 ? 'base64' : 'base64url')
+			const source = base64Source(encoded.toString('ascii'))
+			const n = await readUntil(source, output, i)
+
+			expect(n).toBe(i)
+			expect(raw.subarray(0, n)).toEqual(output.subarray(0, n))
+		}
+	})
+
 	test('sink', async () => {
 		for (let i = 0; i <= 1000; i++) {
 			const alphabet = i % 2 === 0 ? 'base64' : 'base64url'
