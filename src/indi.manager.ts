@@ -502,9 +502,15 @@ export class CameraManager extends DeviceManager<Camera> {
 		}
 	}
 
+	compression(client: IndiClient, camera: Camera, enabled: boolean) {
+		client.sendSwitch({ device: camera.name, name: 'CCD_COMPRESSION', elements: { [enabled ? 'INDI_ENABLED' : 'INDI_DISABLED']: true } })
+	}
+
+	transferFormat(client: IndiClient, camera: Camera, format: 'FITS' | 'XISF' | 'NATIVE') {
+		client.sendSwitch({ device: camera.name, name: 'CCD_TRANSFER_FORMAT', elements: { [`FORMAT_${format}`]: true } })
+	}
+
 	startExposure(client: IndiClient, camera: Camera, exposureTimeInSeconds: number) {
-		client.sendSwitch({ device: camera.name, name: 'CCD_COMPRESSION', elements: { INDI_DISABLED: true } })
-		client.sendSwitch({ device: camera.name, name: 'CCD_TRANSFER_FORMAT', elements: { FORMAT_FITS: true } })
 		client.sendNumber({ device: camera.name, name: 'CCD_EXPOSURE', elements: { CCD_EXPOSURE_VALUE: exposureTimeInSeconds } })
 	}
 
