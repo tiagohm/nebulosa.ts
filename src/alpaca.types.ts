@@ -1,0 +1,87 @@
+import type { CameraManager, CoverManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from './indi.manager'
+
+export const ALPACA_DISCOVERY_PORT = 32227
+export const ALPACA_DISCOVERY_DATA = 'alpacadiscovery1'
+
+export type AlpacaDeviceType = 'Camera' | 'Telescope' | 'Focuser' | 'FilterWheel' | 'Rotator' | 'Dome' | 'Switch' | 'CoverCalibrator' | 'ObservingConditions' | 'SafetyMonitor' | 'Video'
+
+export type AlpacaServerStartOptions = Omit<Bun.Serve.HostnamePortServeOptions<undefined>, 'hostname' | 'port' | 'routes' | 'error' | 'fetch' | 'development'>
+
+export enum AlpacaCameraState {
+	Idle,
+	Waiting,
+	Exposing,
+	Reading,
+	Download,
+	Error,
+}
+
+export enum AlpacaException {
+	MethodNotImplemented = 1024,
+	PropertyNotImplemented = 1024,
+	InvalidValue = 1025,
+	ValueNotSet = 1026,
+	NotConnected = 1031,
+	Parked = 1032,
+	Slaved = 1033,
+	InvalidOperation = 1035,
+	ActionNotImplemented = 1036,
+	OperationCancelled = 1038,
+	Driver = 1280,
+}
+
+export interface AlpacaResponse<T> {
+	readonly Value: T
+	readonly ClientTransactionID: number
+	readonly ServerTransactionID: number
+	readonly ErrorNumber: number
+	readonly ErrorMessage: string
+}
+
+export interface AlpacaServerDescription {
+	ServerName: string
+	Manufacturer: string
+	ManufacturerVersion: string
+	Location: string
+}
+
+export interface AlpacaConfiguredDevice {
+	readonly DeviceName: string
+	readonly DeviceType: AlpacaDeviceType
+	readonly DeviceNumber: number
+	readonly UniqueID: string
+}
+
+export interface AlpacaStateValue {
+	readonly Name: string
+	readonly Value: boolean | number | string
+}
+
+export interface AlpacaImageBytes {
+	Type: 2
+	Rank: 2 | 3
+	Value: Readonly<Readonly<number[]>[]> | Readonly<Readonly<Readonly<number[]>[]>[]>
+}
+
+export interface AlpacaServerOptions {
+	name?: string
+	version?: string
+	manufacturer?: string
+	camera?: CameraManager
+	mount?: MountManager
+	focuser?: FocuserManager
+	wheel?: WheelManager
+	rotator?: RotatorManager
+	flatPanel?: FlatPanelManager
+	cover?: CoverManager
+	guideOutput?: GuideOutputManager
+}
+
+export class AlpacaError extends Error {
+	constructor(
+		readonly code: AlpacaException,
+		message: string,
+	) {
+		super(message)
+	}
+}

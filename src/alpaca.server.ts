@@ -1,11 +1,9 @@
+import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaException, type AlpacaResponse, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateValue } from './alpaca.types'
 import { Bitpix, bitpixInBytes, bitpixKeyword, type Fits, readFits } from './fits'
 import type { IndiClient } from './indi'
 import { type Camera, type Device, isCamera } from './indi.device'
-import type { CameraManager, CoverManager, DeviceHandler, DeviceManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from './indi.manager'
+import type { DeviceHandler, DeviceManager } from './indi.manager'
 import { bufferSource } from './io'
-
-export const ALPACA_DISCOVERY_PORT = 32227
-export const ALPACA_DISCOVERY_DATA = 'alpacadiscovery1'
 
 export class AlpacaDiscoveryServer {
 	private socket?: Bun.udp.Socket<'buffer'>
@@ -55,55 +53,8 @@ export class AlpacaDiscoveryServer {
 	}
 }
 
-export type AlpacaDeviceType = 'Camera' | 'Telescope' | 'Focuser' | 'FilterWheel' | 'Rotator' | 'Dome' | 'Switch' | 'CoverCalibrator' | 'ObservingConditions' | 'SafetyMonitor' | 'Video'
-
-export type AlpacaCameraState = 'Idle' | 'Waiting' | 'Exposing' | 'Reading' | 'Download' | 'Error'
-
-export interface AlpacaResponse<T> {
-	Value: T
-	ClientTransactionID: number
-	ServerTransactionID: number
-	ErrorNumber?: number
-	ErrorMessage?: string
-}
-
-export interface AlpacaServerDescription {
-	ServerName: string
-	Manufacturer: string
-	ManufacturerVersion: string
-	Location: string
-}
-
-export interface AlpacaConfiguredDevice {
-	DeviceName: string
-	DeviceType: AlpacaDeviceType
-	DeviceNumber: number
-	UniqueID: string
-}
-
-export interface AlpacaImage {
-	Type: 2
-	Rank: 2 | 3
-	Value: Readonly<Readonly<number[]>[]> | Readonly<Readonly<Readonly<number[]>[]>[]>
-}
-
-export interface AlpacaServerOptions {
-	name?: string
-	version?: string
-	manufacturer?: string
-	camera?: CameraManager
-	mount?: MountManager
-	focuser?: FocuserManager
-	wheel?: WheelManager
-	rotator?: RotatorManager
-	flatPanel?: FlatPanelManager
-	cover?: CoverManager
-	guideOutput?: GuideOutputManager
-}
-
-export type AlpacaServerStartOptions = Omit<Bun.Serve.HostnamePortServeOptions<undefined>, 'hostname' | 'port' | 'routes' | 'error' | 'fetch' | 'development'>
-
-interface AlpacaCameraImageState {
+interface AlpacaDeviceState {
+	// Camera
 	data?: string
 	lastExposureDuration: number
 	ccdTemperature: number
@@ -113,13 +64,13 @@ interface AlpacaCameraImageState {
 export class AlpacaServer {
 	private server?: Bun.Server<undefined>
 	private readonly devices = new Map<Device, AlpacaConfiguredDevice>()
-	private readonly states = new Map<Device, AlpacaCameraImageState>()
-	private readonly connecting = new Map<Device, [NodeJS.Timeout, (value: boolean) => void]>()
+	private readonly states = new Map<Device, AlpacaDeviceState>()
+	private readonly connecting = new Map<Device, ReturnType<typeof promiseWithTimeout<boolean>>>()
 	private readonly deviceManager: DeviceManager<Device>
 
 	private readonly cameraHandler: DeviceHandler<Camera> = {
 		added: (client: IndiClient, device: Camera) => {
-			console.info('camera added', JSON.stringify(device))
+			console.info('camera added:', device.name)
 			this.devices.set(device, this.makeConfiguredDeviceFromDevice(device, 'Camera'))
 		},
 		updated: (client, device, property) => {
@@ -130,26 +81,29 @@ export class AlpacaServer {
 				frame[2] = device.frame.width.value
 				frame[3] = device.frame.height.value
 			} else if (property === 'connected') {
-				const status = this.connecting.get(device)
+				const resolver = this.connecting.get(device)
 
-				if (status) {
-					clearTimeout(status[0])
+				if (resolver) {
+					resolver.clear()
 
 					// wait for all properties to be received
 					if (device.connected) {
-						status[0] = setTimeout(() => {
-							status[1](true)
+						console.info('device connected:', device.name)
+
+						Bun.sleep(500).then(() => {
+							resolver.resolve(device.connected)
 							this.connecting.delete(device)
-						}, 500)
+						})
 					} else {
-						status[1](false)
+						console.info('device disconnected:', device.name)
+						resolver.resolve(false)
 						this.connecting.delete(device)
 					}
 				}
 			}
 		},
 		removed: (client: IndiClient, device: Camera) => {
-			console.info('camera removed', JSON.stringify(device))
+			console.info('camera removed:', device.name)
 			this.devices.delete(device)
 			this.states.delete(device)
 		},
@@ -188,8 +142,10 @@ export class AlpacaServer {
 		'/api/v1/:type/:id/name': { GET: (req) => this.deviceGetName(+req.params.id) },
 		'/api/v1/:type/:id/driverinfo': { GET: (req) => this.deviceGetDriverInfo(+req.params.id) },
 		'/api/v1/:type/:id/driverversion': { GET: (req) => this.deviceGetDriverVersion(+req.params.id) },
+		'/api/v1/:type/:id/connect': { PUT: (req) => this.deviceConnect(+req.params.id, { Connected: 'True' }) },
 		'/api/v1/:type/:id/connected': { GET: (req) => this.deviceIsConnected(+req.params.id), PUT: async (req) => this.deviceConnect(+req.params.id, await params(req)) },
 		'/api/v1/:type/:id/connecting': { GET: (req) => this.deviceIsConnecting(+req.params.id) },
+		'/api/v1/:type/:id/disconnect': { PUT: (req) => this.deviceConnect(+req.params.id, { Connected: 'False' }) },
 		'/api/v1/:type/:id/supportedactions': { GET: () => this.deviceGetSupportedActions() },
 		// Camera
 		'/api/v1/camera/:id/bayeroffsetx': { GET: (req) => this.cameraGetBayerOffsetX(+req.params.id) },
@@ -209,6 +165,7 @@ export class AlpacaServer {
 		'/api/v1/camera/:id/ccdtemperature': { GET: (req) => this.cameraGetCcdTemperature(+req.params.id) },
 		'/api/v1/camera/:id/cooleron': { GET: (req) => this.cameraIsCoolerOn(+req.params.id), PUT: async (req) => this.cameraSetCoolerOn(+req.params.id, await params(req)) },
 		'/api/v1/camera/:id/coolerpower': { GET: (req) => this.cameraGetCoolerPower(+req.params.id) },
+		'/api/v1/camera/:id/devicestate': { GET: (req) => this.cameraGetDeviceState(+req.params.id) },
 		'/api/v1/camera/:id/electronsperadu': { GET: () => this.cameraGetEletronsPerADU() },
 		'/api/v1/camera/:id/exposuremax': { GET: (req) => this.cameraGetExposureMax(+req.params.id) },
 		'/api/v1/camera/:id/exposuremin': { GET: (req) => this.cameraGetExposureMin(+req.params.id) },
@@ -284,9 +241,15 @@ export class AlpacaServer {
 		return undefined
 	}
 
+	// Management API
+
 	// https://ascom-standards.org/newdocs/exceptions.html
-	private makeAlpacaResponse<T>(data: T, code: number = 0, message: string = ''): AlpacaResponse<T> {
+	private makeAlpacaResponse<T>(data: T, code: AlpacaException | 0 = 0, message: string = ''): AlpacaResponse<T> {
 		return { Value: data, ClientTransactionID: 0, ServerTransactionID: 0, ErrorNumber: code, ErrorMessage: message }
+	}
+
+	private makeAlpacaErrorResponse(code: AlpacaException, message: string) {
+		return this.makeAlpacaResponse(undefined, code, message)
 	}
 
 	private apiVersions() {
@@ -295,18 +258,6 @@ export class AlpacaServer {
 
 	private apiDescription() {
 		return Response.json(this.makeAlpacaResponse<AlpacaServerDescription>({ ServerName: this.options.name || 'Nebulosa', Manufacturer: this.options.manufacturer || 'Tiago Melo', ManufacturerVersion: this.options.version || '1.0.0', Location: 'None' }))
-	}
-
-	private makeConfiguredDeviceFromDevice(device: Device, type: AlpacaDeviceType): AlpacaConfiguredDevice {
-		let configuredDevice = this.devices.get(device)
-		if (configuredDevice) return configuredDevice
-		const uid = `${device.type}:${device.name}`
-		configuredDevice = { DeviceName: device.name, DeviceNumber: Bun.hash.cityHash32(uid), DeviceType: type, UniqueID: Bun.MD5.hash(uid, 'hex') }
-		console.info('device found:', JSON.stringify(configuredDevice))
-		this.devices.set(device, configuredDevice)
-		const frame: AlpacaCameraImageState['frame'] = isCamera(device) ? [device.frame.x.value, device.frame.y.value, device.frame.width.value, device.frame.height.value] : [0, 0, 0, 0]
-		this.states.set(device, { lastExposureDuration: 0, ccdTemperature: 0, frame })
-		return configuredDevice
 	}
 
 	private configuredDevices() {
@@ -322,6 +273,8 @@ export class AlpacaServer {
 
 		return Response.json(this.makeAlpacaResponse(Array.from(configuredDevices)))
 	}
+
+	// Device API
 
 	private deviceGetInterfaceVersion(type: Lowercase<AlpacaDeviceType>) {
 		const version = type === 'camera' || type === 'focuser' || type === 'rotator' || type === 'telescope' ? 4 : type === 'dome' || type === 'filterwheel' || type === 'safetymonitor' || type === 'switch' ? 3 : 2
@@ -355,31 +308,42 @@ export class AlpacaServer {
 
 	private deviceConnect(id: number, data: { Connected: string }) {
 		const device = this.device(id)!
+
+		const makeResponse = (connected: boolean) => {
+			return connected ? Response.json(this.makeAlpacaResponse(undefined)) : Response.json(this.makeAlpacaErrorResponse(AlpacaException.NotConnected, 'Unable to connect'))
+		}
+
+		if (this.connecting.has(device)) {
+			return this.connecting.get(device)!.promise.then(makeResponse)
+		}
+
 		const connect = data.Connected.toLowerCase() === 'true'
 
 		if (connect !== device.connected) {
-			const { promise, resolve } = Promise.withResolvers<boolean>()
-
-			const timer = setTimeout(() => {
-				console.warn('timed out on device connecting', device.name)
+			const resolver = promiseWithTimeout<boolean>(() => {
+				console.warn('timed out on connecting device:', device.name)
 				this.connecting.delete(device)
-				resolve(false)
+				return false
 			}, 10000)
 
-			this.connecting.set(device, [timer, resolve])
+			this.connecting.set(device, resolver)
+
+			console.info(connect ? 'device connecting:' : 'device disconnecting:', device.name)
 
 			if (connect) this.deviceManager.connect(this.client, device as never)
 			else this.deviceManager.disconnect(this.client, device as never)
 
-			return promise.then(() => Response.json(this.makeAlpacaResponse(undefined)))
+			return resolver.promise.then(makeResponse)
 		}
 
-		return Response.json(this.makeAlpacaResponse(undefined))
+		return makeResponse(true)
 	}
 
 	private deviceGetSupportedActions() {
 		return Response.json(this.makeAlpacaResponse([]))
 	}
+
+	// Camera API
 
 	private cameraGetXSize(id: number) {
 		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.frame.width.value))
@@ -405,9 +369,25 @@ export class AlpacaServer {
 		return Response.json(this.makeAlpacaResponse(''))
 	}
 
+	// https://ascom-standards.org/newdocs/camera.html#Camera.SensrType
 	private cameraGetSensorType(id: number) {
 		const device = this.device<Camera>(id)!
-		return Response.json(this.makeAlpacaResponse(device.cfa.type ? 2 : 0)) // https://ascom-standards.org/newdocs/camera.html#Camera.SensrType
+		return Response.json(this.makeAlpacaResponse(device.cfa.type ? 2 : 0))
+	}
+
+	private cameraGetDeviceState(id: number) {
+		const device = this.device<Camera>(id)!
+		const state = this.states.get(device)!
+		const res = new Array<AlpacaStateValue>(8)
+		res.push({ Name: 'CameraState', Value: device.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle })
+		res.push({ Name: 'CCDTemperature', Value: device.temperature })
+		res.push({ Name: 'CoolerPower', Value: device.coolerPower })
+		res.push({ Name: 'HeatSinkTemperature', Value: device.temperature })
+		res.push({ Name: 'ImageReady', Value: !!state.data })
+		res.push({ Name: 'IsPulseGuiding', Value: device.pulsing })
+		res.push({ Name: 'PercentCompleted', Value: (1 - device.exposure.value / state.lastExposureDuration) * 100 })
+		res.push({ Name: 'TimeStamp', Value: '' })
+		return Response.json(this.makeAlpacaResponse(res))
 	}
 
 	private cameraGetEletronsPerADU() {
@@ -455,11 +435,11 @@ export class AlpacaServer {
 	}
 
 	private cameraGetGains() {
-		return Response.json(this.makeAlpacaResponse([], 1024, 'Gain modes is not supported'))
+		return Response.json(this.makeAlpacaResponse([], AlpacaException.MethodNotImplemented, 'Gain modes is not supported'))
 	}
 
 	private cameraGetOffsets() {
-		return Response.json(this.makeAlpacaResponse([], 1024, 'Offset modes is not supported'))
+		return Response.json(this.makeAlpacaResponse([], AlpacaException.MethodNotImplemented, 'Offset modes is not supported'))
 	}
 
 	private cameraSetGain(id: number, data: { Gain: string }) {
@@ -657,14 +637,15 @@ export class AlpacaServer {
 		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.coolerPower))
 	}
 
+	// https://ascom-standards.org/newdocs/camera.html#Camera.CameraStates
 	private cameraGetState(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.exposuring ? 2 : 0)) // https://ascom-standards.org/newdocs/camera.html#Camera.CameraStates
+		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle))
 	}
 
 	private cameraStart(id: number, data: { Duration: string; Light: string }) {
 		const device = this.device<Camera>(id)!
 		const camera = this.options.camera
-		if (!camera) return Response.json(this.makeAlpacaResponse(undefined, 1035, 'Camera manager is not present'))
+		if (!camera) return Response.json(this.makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Camera manager is not present'))
 		camera.enableBlob(this.client, device)
 		camera.frameType(this.client, device, data.Light.toLowerCase() !== 'true' ? 'DARK' : 'LIGHT')
 		camera.startExposure(this.client, device, +data.Duration)
@@ -690,9 +671,9 @@ export class AlpacaServer {
 		const buffer = Buffer.from(state.data!, 'base64')
 		const fits = await readFits(bufferSource(buffer))
 
-		if (!fits) return Response.json(this.makeAlpacaResponse(undefined, 1280, 'Unable to read FITS image'))
-
 		try {
+			if (!fits) return Response.json(this.makeAlpacaErrorResponse(AlpacaException.Driver, 'Unable to read FITS image'))
+
 			if (accept?.includes('imagebytes')) {
 				return new Response(this.makeImageBytesFromFits(fits, buffer), { headers: { 'Content-Type': 'application/imagebytes' } })
 			}
@@ -700,7 +681,19 @@ export class AlpacaServer {
 			state.data = undefined
 		}
 
-		return Response.json(this.makeAlpacaResponse(undefined, 1280, 'Image as JSON is not supported'))
+		return Response.json(this.makeAlpacaErrorResponse(AlpacaException.Driver, 'Image bytes as JSON array is not supported'))
+	}
+
+	private makeConfiguredDeviceFromDevice(device: Device, type: AlpacaDeviceType): AlpacaConfiguredDevice {
+		let configuredDevice = this.devices.get(device)
+		if (configuredDevice) return configuredDevice
+		const uid = `${device.type}:${device.name}`
+		configuredDevice = { DeviceName: device.name, DeviceNumber: Bun.hash.cityHash32(uid), DeviceType: type, UniqueID: Bun.MD5.hash(uid, 'hex') }
+		console.info('device found:', JSON.stringify(configuredDevice))
+		this.devices.set(device, configuredDevice)
+		const frame: AlpacaDeviceState['frame'] = isCamera(device) ? [device.frame.x.value, device.frame.y.value, device.frame.width.value, device.frame.height.value] : [0, 0, 0, 0]
+		this.states.set(device, { lastExposureDuration: 0, ccdTemperature: 0, frame })
+		return configuredDevice
 	}
 
 	private makeImageBytesFromFits(fits: Fits, data: Buffer<ArrayBuffer>) {
@@ -735,8 +728,6 @@ export class AlpacaServer {
 
 		const input = new DataView(data.buffer, data.byteOffset, data.byteLength)
 		const out = new DataView(output.buffer, output.byteOffset, output.byteLength)
-
-		console.time('image bytes')
 
 		if (channels === 1) {
 			if (bytesPerPixel === 2) {
@@ -808,15 +799,25 @@ export class AlpacaServer {
 			}
 		}
 
-		console.timeEnd('image bytes')
-
 		return output.buffer
 	}
 }
 
 async function params<T extends Record<string, string | undefined>>(req: Bun.BunRequest) {
 	const data = await req.formData()
-	const res: Record<string, string> = {}
+	const res: Record<string, string> = req.params
 	data.forEach((value, key) => typeof value === 'string' && (res[key] = value))
 	return res as T
+}
+
+function promiseWithTimeout<T>(callback: () => T | PromiseLike<T> | Error, delay: number) {
+	const resolver = Promise.withResolvers<T>()
+
+	const timer = setTimeout(() => {
+		const value = callback()
+		if (Error.isError(value)) resolver.reject(value)
+		else resolver.resolve(value)
+	}, delay)
+
+	return { ...resolver, clear: () => clearTimeout(timer) } as const
 }

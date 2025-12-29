@@ -4,7 +4,7 @@ import { CameraManager } from '../src/indi.manager'
 
 const camera = new CameraManager()
 
-const indi = new IndiClient({
+const client = new IndiClient({
 	handler: {
 		switchVector: (client, message, tag) => {
 			camera.switchVector(client, message, tag)
@@ -27,9 +27,9 @@ const indi = new IndiClient({
 	},
 })
 
-await indi.connect('pi.local')
+await client.connect('pi.local')
 
-const alpacaServer = new AlpacaServer(indi, { camera })
+const alpacaServer = new AlpacaServer(client, { camera })
 
 alpacaServer.start(undefined, 60364)
 console.info('alpaca server was started at port', alpacaServer.port)
