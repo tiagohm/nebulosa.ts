@@ -676,7 +676,7 @@ export class AlpacaServer {
 
 			if (accept?.includes('imagebytes')) {
 				const image = makeImageBytesFromFits(fits, buffer)
-				return new Response(image, { headers: { 'Content-Type': 'application/imagebytes' } })
+				return new Response(image.buffer, { headers: { 'Content-Type': 'application/imagebytes' } })
 			}
 		} finally {
 			state.data = undefined
@@ -717,7 +717,7 @@ function promiseWithTimeout<T>(callback: () => T | PromiseLike<T> | Error, delay
 	return { ...resolver, clear: () => clearTimeout(timer) } as const
 }
 
-export function makeImageBytesFromFits(fits: Fits, data: Buffer<ArrayBuffer>) {
+export function makeImageBytesFromFits(fits: Fits, data: Buffer) {
 	const hdu = fits.hdus[0]
 	const { header } = hdu
 	const bitpix = bitpixKeyword(header, 0)
@@ -750,75 +750,75 @@ export function makeImageBytesFromFits(fits: Fits, data: Buffer<ArrayBuffer>) {
 	const input = new DataView(data.buffer, data.byteOffset, data.byteLength)
 	const out = new DataView(output.buffer, output.byteOffset, output.byteLength)
 
-	if (channels === 1) {
-		if (bytesPerPixel === 2) {
-			for (let x = 0; x < numX; x++) {
-				const ax = (x << 1) + offset
-
-				for (let y = 0; y < numY; y++, b += 2) {
-					const ay = y * strideInBytes + ax
-					out.setUint16(b, input.getUint16(ay, false), true)
-				}
-			}
-		} else if (bytesPerPixel === 1) {
-			for (let x = 0; x < numX; x++) {
-				const ax = x + offset
-
-				for (let y = 0; y < numY; y++, b++) {
-					const ay = y + ax
-					out.setUint16(b, input.getUint16(ay, false), true)
-				}
-			}
-		} else {
-			for (let x = 0; x < numX; x++) {
-				const ax = (x << 2) + offset
-
-				for (let y = 0; y < numY; y++, b += 4) {
-					const ay = y * strideInBytes + ax
-					out.setUint16(b, input.getUint16(ay, false), true)
-				}
-			}
-		}
-	} else if (bytesPerPixel === 2) {
+	if (bytesPerPixel === 2) {
 		for (let x = 0; x < numX; x++) {
 			const ax = (x << 1) + offset
 
-			for (let y = 0; y < numY; y++) {
+			for (let y = 0; y < numY; y++, b += 2) {
 				const ay = y * strideInBytes + ax
-				out.setUint16(b, input.getUint16(ay, false), true)
-				b += 2
-				out.setUint16(b, input.getUint16(ay + planeInBytes, false), true)
-				b += 2
-				out.setUint16(b, input.getUint16(ay + planeInBytes * 2, false), true)
-				b += 2
+				out.setInt16(b, input.getInt16(ay, false), true)
+
+				if (channels === 3) {
+					b += 2
+					out.setInt16(b, input.getInt16(ay + planeInBytes, false), true)
+					b += 2
+					out.setInt16(b, input.getInt16(ay + planeInBytes * 2, false), true)
+				}
 			}
 		}
 	} else if (bytesPerPixel === 1) {
 		for (let x = 0; x < numX; x++) {
 			const ax = x + offset
 
-			for (let y = 0; y < numY; y++) {
-				const ay = y + ax
-				out.setUint16(b++, input.getUint16(ay, false), true)
-				out.setUint16(b++, input.getUint16(ay + planeInBytes, false), true)
-				out.setUint16(b++, input.getUint16(ay + planeInBytes * 2, false), true)
+			for (let y = 0; y < numY; y++, b++) {
+				const ay = y * strideInBytes + ax
+				out.setInt8(b, input.getInt8(ay))
+
+				if (channels === 3) {
+					out.setInt8(++b, input.getInt8(ay + planeInBytes))
+					out.setInt8(++b, input.getInt8(ay + planeInBytes * 2))
+				}
+			}
+		}
+	} else if (bytesPerPixel === 4) {
+		for (let x = 0; x < numX; x++) {
+			const ax = (x << 2) + offset
+
+			for (let y = 0; y < numY; y++, b += 4) {
+				const ay = y * strideInBytes + ax
+				out.setInt32(b, input.getInt32(ay, false), true)
+
+				if (channels === 3) {
+					b += 4
+					out.setInt32(b, input.getInt32(ay + planeInBytes, false), true)
+					b += 4
+					out.setInt32(b, input.getInt32(ay + planeInBytes * 2, false), true)
+				}
 			}
 		}
 	} else {
 		for (let x = 0; x < numX; x++) {
-			const ax = (x << 2) + offset
+			const ax = (x << 3) + offset
 
-			for (let y = 0; y < numY; y++) {
+			for (let y = 0; y < numY; y++, b += 4) {
 				const ay = y * strideInBytes + ax
-				out.setUint32(b, input.getUint32(ay, false), true)
+				out.setInt32(b, input.getInt32(ay + 4, false), true)
 				b += 4
-				out.setUint32(b, input.getUint32(ay + planeInBytes, false), true)
-				b += 4
-				out.setUint32(b, input.getUint32(ay + planeInBytes * 2, false), true)
-				b += 4
+				out.setInt32(b, input.getInt32(ay, false), true)
+
+				if (channels === 3) {
+					b += 4
+					out.setInt32(b, input.getInt32(ay + 4 + planeInBytes, false), true)
+					b += 4
+					out.setInt32(b, input.getInt32(ay + planeInBytes, false), true)
+					b += 4
+					out.setInt32(b, input.getInt32(ay + 4 + planeInBytes * 2, false), true)
+					b += 4
+					out.setInt32(b, input.getInt32(ay + planeInBytes * 2, false), true)
+				}
 			}
 		}
 	}
 
-	return output.buffer
+	return output
 }

@@ -38,7 +38,7 @@ test('write image to fits', async () => {
 
 			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 
-			saveImageAndCompareHash(b!, `write-${key}`, hash)
+			await saveImageAndCompareHash(b!, `write-${key}`, hash)
 		}
 	}
 }, 15000)

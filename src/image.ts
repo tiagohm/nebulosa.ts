@@ -103,13 +103,11 @@ export class FitsDataSource implements Source {
 	private channel = 0
 	private readonly raw: Float64Array
 	private readonly bitpix: Bitpix
-	private readonly pixelSizeInBytes: number
 	private readonly channels: number
 
 	constructor(image: Image | Float64Array, bitpix?: Bitpix, channels?: number) {
 		this.raw = image instanceof Float64Array ? image : image.raw
 		this.bitpix = image instanceof Float64Array ? bitpix! : (image.header.BITPIX as Bitpix)
-		this.pixelSizeInBytes = bitpixInBytes(this.bitpix)
 		this.channels = image instanceof Float64Array ? channels! : numberOfChannelsKeyword(image.header, 1)
 	}
 
@@ -117,7 +115,9 @@ export class FitsDataSource implements Source {
 		offset ??= 0
 		size ??= buffer.byteLength - offset
 
-		if (this.position >= this.raw.length) {
+        const length = this.raw.length
+
+		if (this.position >= length) {
 			if (++this.channel < this.channels) {
 				this.position = this.channel
 			} else {
@@ -125,10 +125,13 @@ export class FitsDataSource implements Source {
 			}
 		}
 
+        const channels = this.channels
+		const pixelSizeInBytes = bitpixInBytes(this.bitpix)
+        let position = this.position
 		let n = 0
 
-		for (; this.position < this.raw.length && n < size; this.position += this.channels, n += this.pixelSizeInBytes, offset += this.pixelSizeInBytes) {
-			const pixel = this.raw[this.position]
+		for (; position < length && n < size; position += channels, n += pixelSizeInBytes, offset += pixelSizeInBytes) {
+			const pixel = this.raw[position]
 
 			if (this.bitpix === Bitpix.BYTE) buffer.writeUInt8(pixel * 255, offset)
 			else if (this.bitpix === Bitpix.SHORT) buffer.writeInt16BE(Math.trunc(pixel * 65535) - 32768, offset)
@@ -136,6 +139,8 @@ export class FitsDataSource implements Source {
 			else if (this.bitpix === Bitpix.FLOAT) buffer.writeFloatBE(pixel, offset)
 			else if (this.bitpix === Bitpix.DOUBLE) buffer.writeDoubleBE(pixel, offset)
 		}
+
+        this.position = position
 
 		return n
 	}

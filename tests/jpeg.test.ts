@@ -14,26 +14,26 @@ describe('compress', () => {
 	for (let i = 0; i < grayscale.length; i++) grayscale[i] = i % 256
 
 	test('rgb', () => {
-		const bytes = jpeg.compress(rgb, 100, 100, 'RGB', 100, '4:4:4')
+		const bytes = jpeg.compress(rgb, 100, 100, 'RGB', 100)
 		expect(bytes).toBeDefined()
-		saveAndCompareHash(bytes!, 'compress-rgb.jpg', 'd9b243a3bdab8deb8b51c837ba4bfed1')
+		return saveAndCompareHash(bytes!, 'compress-rgb.jpg', 'd9b243a3bdab8deb8b51c837ba4bfed1')
 	})
 
 	test('rgb with chrominance subsampling 4:2:0', () => {
-		const bytes = jpeg.compress(rgb, 100, 100, 'RGB', 75)
+		const bytes = jpeg.compress(rgb, 100, 100, 'RGB', 75, '4:2:0')
 		expect(bytes).toBeDefined()
-		saveAndCompareHash(bytes!, 'compress-rgb-420.jpg', 'ef3bacf9d7b6b27091626fed7ddafb7e')
+		return saveAndCompareHash(bytes!, 'compress-rgb-420.jpg', 'ef3bacf9d7b6b27091626fed7ddafb7e')
 	})
 
 	test('rgb grayscale', () => {
 		const bytes = jpeg.compress(rgb, 100, 100, 'RGB', 100, 'GRAY')
 		expect(bytes).toBeDefined()
-		saveAndCompareHash(bytes!, 'compress-rgb-grayscale.jpg', 'a50f0ae28aa5eb7c9182c559f6c6add2')
+		return saveAndCompareHash(bytes!, 'compress-rgb-grayscale.jpg', 'a50f0ae28aa5eb7c9182c559f6c6add2')
 	})
 
 	test('grayscale', () => {
 		const bytes = jpeg.compress(grayscale, 100, 100, 'GRAY', 100)
 		expect(bytes).toBeDefined()
-		saveAndCompareHash(bytes!, 'compress-grayscale.jpg', '81b2c116b552e4f0b6f5291a12d24797')
+		return saveAndCompareHash(bytes!, 'compress-grayscale.jpg', '81b2c116b552e4f0b6f5291a12d24797')
 	})
 })

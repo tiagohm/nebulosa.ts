@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { dms, hms } from '../src/angle'
 import { bitpixInBytes, computeRemainingBytes, declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, heightKeyword, observationDateKeyword, readFits, rightAscensionKeyword, widthKeyword, writeFits } from '../src/fits'
 import { bufferSink, bufferSource } from '../src/io'
-import { BITPIXES, CHANNELS, openFits } from './image.util'
+import { BITPIXES, CHANNELS, openFitsFromFileHandle } from './image.util'
 
 test('read and write', async () => {
 	const buffer = Buffer.alloc(1024 * 1024 * 18)
@@ -11,7 +11,7 @@ test('read and write', async () => {
 		for (const channel of CHANNELS) {
 			const sink = bufferSink(buffer)
 
-			await openFits(bitpix, channel, async (a) => {
+			await openFitsFromFileHandle(bitpix, channel, async (a) => {
 				await writeFits(sink, a)
 
 				const size = widthKeyword(a.hdus[0].header, 0) * heightKeyword(a.hdus[0].header, 0) * bitpixInBytes(bitpix) * channel

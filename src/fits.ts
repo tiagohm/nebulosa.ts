@@ -27,12 +27,12 @@ export interface Fits {
 }
 
 export enum Bitpix {
-	BYTE = 8,
-	SHORT = 16,
-	INTEGER = 32,
-	LONG = 64,
-	FLOAT = -32,
-	DOUBLE = -64,
+	BYTE = 8, // unsigned 8-bit integer
+	SHORT = 16, // signed 16-bit integer
+	INTEGER = 32, // signed 32-bit integer
+	LONG = 64, // signed 64-bit integer
+	FLOAT = -32, // IEEE 32-bit floating point
+	DOUBLE = -64, // IEEE 64-bit floating point
 }
 
 export type BitpixOrZero = Bitpix | 0
@@ -148,7 +148,7 @@ export function observationDateKeyword(header: FitsHeader) {
 }
 
 export function bitpixInBytes(bitpix: BitpixOrZero) {
-	return Math.trunc(Math.abs(bitpix) / 8)
+	return Math.abs(bitpix) >>> 3
 }
 
 const NO_VALUE_KEYWORDS = ['COMMENT', 'HISTORY', 'END']
