@@ -12,10 +12,10 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "latest",
-		"@types/bun": "1.3.4",
 		"typescript": "latest"
 	},
 	"peerDependencies": {
+		"@types/bun": "latest",
 		"utility-types": "latest"
 	},
 	"trustedDependencies": [
