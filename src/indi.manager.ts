@@ -759,6 +759,12 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 	}
 
+	setPark(mount: Mount, client = mount[CLIENT]!) {
+		if (mount.canSetPark) {
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_PARK_OPTION', elements: { PARK_CURRENT: true } })
+		}
+	}
+
 	stop(mount: Mount, client = mount[CLIENT]!) {
 		if (mount.canAbort) {
 			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_ABORT_MOTION', elements: { ABORT: true } })
@@ -768,6 +774,18 @@ export class MountManager extends DeviceManager<Mount> {
 	home(mount: Mount, client = mount[CLIENT]!) {
 		if (mount.canHome) {
 			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_HOME', elements: { GO: true } })
+		}
+	}
+
+	findHome(mount: Mount, client = mount[CLIENT]!) {
+		if (mount.canFindHome) {
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_HOME', elements: { FIND: true } })
+		}
+	}
+
+	setHome(mount: Mount, client = mount[CLIENT]!) {
+		if (mount.canSetHome) {
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_HOME', elements: { SET: true } })
 		}
 	}
 
@@ -845,23 +863,31 @@ export class MountManager extends DeviceManager<Mount> {
 	}
 
 	moveNorth(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
-		if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: true, MOTION_SOUTH: false } })
-		else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false } })
+		if (mount.canMove) {
+			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: true, MOTION_SOUTH: false } })
+			else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false } })
+		}
 	}
 
 	moveSouth(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
-		if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false, MOTION_SOUTH: true } })
-		else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_SOUTH: false } })
+		if (mount.canMove) {
+			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false, MOTION_SOUTH: true } })
+			else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_SOUTH: false } })
+		}
 	}
 
 	moveWest(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
-		if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: true, MOTION_EAST: false } })
-		else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false } })
+		if (mount.canMove) {
+			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: true, MOTION_EAST: false } })
+			else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false } })
+		}
 	}
 
 	moveEast(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
-		if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false, MOTION_EAST: true } })
-		else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_EAST: false } })
+		if (mount.canMove) {
+			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false, MOTION_EAST: true } })
+			else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_EAST: false } })
+		}
 	}
 
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
@@ -935,12 +961,24 @@ export class MountManager extends DeviceManager<Mount> {
 
 				return
 			case 'TELESCOPE_TRACK_STATE':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canTracking', (message as DefSwitchVector).permission !== 'ro')) {
+						this.updated(device, 'canTracking', message.state)
+					}
+				}
+
 				if (handleSwitchValue(device, 'tracking', elements.TRACK_ON?.value)) {
 					this.updated(device, 'tracking', message.state)
 				}
 
 				return
 			case 'TELESCOPE_PIER_SIDE':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'hasPierSide', true)) {
+						this.updated(device, 'hasPierSide', message.state)
+					}
+				}
+
 				if (handleTextValue(device, 'pierSide', elements.PIER_WEST?.value === true ? 'WEST' : message.elements.PIER_EAST?.value === true ? 'EAST' : 'NEITHER')) {
 					this.updated(device, 'pierSide', message.state)
 				}
@@ -949,15 +987,41 @@ export class MountManager extends DeviceManager<Mount> {
 			case 'TELESCOPE_PARK':
 				handleParkable(this, device, message, tag)
 				return
+			case 'TELESCOPE_PARK_OPTION':
+				if (tag[0] === 'd' && 'PARK_CURRENT' in elements) {
+					if (handleSwitchValue(device, 'canSetPark', true)) {
+						this.updated(device, 'canSetPark', message.state)
+					}
+				}
+
+				return
 			case 'TELESCOPE_ABORT_MOTION':
-				if (handleSwitchValue(device, 'canAbort', true)) {
-					this.updated(device, 'canAbort', message.state)
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canAbort', true)) {
+						this.updated(device, 'canAbort', message.state)
+					}
 				}
 
 				return
 			case 'TELESCOPE_HOME':
-				if (handleSwitchValue(device, 'canHome', true)) {
-					this.updated(device, 'canHome', message.state)
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canHome', 'GO' in elements)) {
+						this.updated(device, 'canHome', message.state)
+					}
+
+					if (handleSwitchValue(device, 'canHome', 'FIND' in elements)) {
+						this.updated(device, 'canFindHome', message.state)
+					}
+
+					if (handleSwitchValue(device, 'canHome', 'SET' in elements)) {
+						this.updated(device, 'canSetHome', message.state)
+					}
+				}
+
+				if (elements.GO?.value) {
+					if (handleSwitchValue(device, 'homing', message.state === 'Busy')) {
+						this.updated(device, 'homing', message.state)
+					}
 				}
 
 				return
@@ -973,6 +1037,15 @@ export class MountManager extends DeviceManager<Mount> {
 
 					if (handleSwitchValue(device, 'canFlip', 'FLIP' in elements)) {
 						this.updated(device, 'canFlip', message.state)
+					}
+				}
+
+				return
+			case 'TELESCOPE_MOTION_NS':
+			case 'TELESCOPE_MOTION_WE':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canMove', true)) {
+						this.updated(device, 'canMove', message.state)
 					}
 				}
 

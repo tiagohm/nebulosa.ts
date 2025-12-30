@@ -55,9 +55,14 @@ export interface AlpacaConfiguredDevice {
 	readonly UniqueID: string
 }
 
-export interface AlpacaStateValue {
+export interface AlpacaStateItem {
 	readonly Name: string
 	readonly Value: boolean | number | string
+}
+
+export interface AlpacaAxisRate {
+	readonly Maximum: number
+	readonly Minimum: number
 }
 
 export interface AlpacaImageBytes {

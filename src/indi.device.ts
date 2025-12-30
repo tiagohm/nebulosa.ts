@@ -1,4 +1,6 @@
 import type { DeepReadonly } from 'utility-types'
+import { type Angle, normalizeAngle, toHour } from './angle'
+import { DAYSEC, SIDEREAL_DAYSEC } from './constants'
 import type { EquatorialCoordinate, HorizontalCoordinate } from './coordinate'
 import type { CfaPattern } from './image.types'
 import type { IndiClient } from './indi'
@@ -135,6 +137,7 @@ export interface GPS extends Device {
 
 export interface Parkable {
 	canPark: boolean
+	canSetPark: boolean
 	parking: boolean
 	parked: boolean
 }
@@ -148,16 +151,22 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 	readonly type: 'MOUNT'
 	slewing: boolean
 	tracking: boolean
+	homing: boolean
 	canAbort: boolean
 	canSync: boolean
 	canGoTo: boolean
 	canFlip: boolean
 	canHome: boolean
+	canFindHome: boolean
+	canSetHome: boolean
+	canTracking: boolean
+	canMove: boolean
 	slewRates: SlewRate[]
 	slewRate?: SlewRate['name']
 	mountType: MountType
 	trackModes: TrackMode[]
 	trackMode: TrackMode
+	hasPierSide: boolean
 	pierSide: PierSide
 	guideRateWE: number
 	guideRateNS: number
@@ -292,16 +301,23 @@ export const DEFAULT_CAMERA: DeepReadonly<Camera> = {
 export const DEFAULT_MOUNT: DeepReadonly<Mount> = {
 	slewing: false,
 	tracking: false,
+	homing: false,
 	canAbort: false,
 	canSync: false,
 	canGoTo: false,
 	canFlip: false,
 	canHome: false,
+	canFindHome: false,
+	canSetHome: false,
 	canPark: false,
+	canSetPark: false,
+	canTracking: false,
+	canMove: false,
 	slewRates: [],
 	mountType: 'EQ_GEM',
 	trackModes: [],
 	trackMode: 'SIDEREAL',
+	hasPierSide: false,
 	pierSide: 'NEITHER',
 	guideRateWE: 0,
 	guideRateNS: 0,
@@ -359,6 +375,7 @@ export const DEFAULT_FOCUSER: DeepReadonly<Focuser> = {
 
 export const DEFAULT_COVER: DeepReadonly<Cover> = {
 	canPark: false,
+	canSetPark: false,
 	parking: false,
 	parked: false,
 	hasDewHeater: false,
@@ -482,4 +499,14 @@ export function isDewHeater(device: Device): device is DewHeater {
 
 export function isGPS(device: Device): device is GPS {
 	return device.type === 'GPS' || ('hasGPS' in device && device.hasGPS !== undefined)
+}
+
+export function expectedPierSide(rightAscension: Angle, declination: Angle, lst: Angle): PierSide {
+	if (Math.abs(declination) === Math.PI / 2) return 'NEITHER'
+	return (toHour(rightAscension - lst) + 24) % 24 < 12 ? 'WEST' : 'EAST'
+}
+
+// Remaining time to meridian
+export function meridianTimeIn(rightAscension: Angle, lst: Angle) {
+	return normalizeAngle(rightAscension - lst) * (SIDEREAL_DAYSEC / DAYSEC)
 }
