@@ -538,7 +538,16 @@ export class AlpacaServer {
 
 	private cameraSetReadoutMode(id: number, data: { ReadoutMode: string }) {
 		const device = this.device<Camera>(id)!
-		this.options.camera?.frameFormat(this.client, device, data.ReadoutMode)
+		const value = +data.ReadoutMode
+
+		if (Number.isFinite(value) && value >= 0 && value < device.frameFormats.length) {
+			this.options.camera?.frameFormat(this.client, device, device.frameFormats[value])
+		} else if (device.frameFormats.includes(data.ReadoutMode)) {
+			this.options.camera?.frameFormat(this.client, device, data.ReadoutMode)
+		} else {
+			console.warn('invalid readout mode:', data.ReadoutMode)
+		}
+
 		return Response.json(this.makeAlpacaResponse(undefined))
 	}
 

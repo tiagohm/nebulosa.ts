@@ -1,5 +1,7 @@
+import type { DeepReadonly } from 'utility-types'
 import type { EquatorialCoordinate, HorizontalCoordinate } from './coordinate'
 import type { CfaPattern } from './image.types'
+import type { IndiClient } from './indi'
 import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector } from './indi.types'
 import type { GeographicCoordinate } from './location'
 
@@ -57,11 +59,14 @@ export interface DriverInfo {
 	version: string
 }
 
+export const CLIENT = Symbol('INDI_CLIENT')
+
 export interface Device {
 	type: DeviceType
 	name: string
 	connected: boolean
-	driver: DriverInfo
+	readonly driver: Readonly<DriverInfo>
+	readonly [CLIENT]?: IndiClient
 }
 
 export interface UTCTime {
@@ -238,7 +243,7 @@ export const DEFAULT_MIN_MAX_VALUE_PROPERTY: MinMaxValueProperty = {
 	max: 0,
 }
 
-export const DEFAULT_CAMERA: Camera = {
+export const DEFAULT_CAMERA: DeepReadonly<Camera> = {
 	hasCoolerControl: false,
 	coolerPower: 0,
 	cooler: false,
@@ -284,7 +289,7 @@ export const DEFAULT_CAMERA: Camera = {
 	temperature: 0,
 }
 
-export const DEFAULT_MOUNT: Mount = {
+export const DEFAULT_MOUNT: DeepReadonly<Mount> = {
 	slewing: false,
 	tracking: false,
 	canAbort: false,
@@ -324,7 +329,7 @@ export const DEFAULT_MOUNT: Mount = {
 	parked: false,
 }
 
-export const DEFAULT_WHEEL: Wheel = {
+export const DEFAULT_WHEEL: DeepReadonly<Wheel> = {
 	type: 'WHEEL',
 	name: '',
 	connected: false,
@@ -334,7 +339,7 @@ export const DEFAULT_WHEEL: Wheel = {
 	position: 0,
 }
 
-export const DEFAULT_FOCUSER: Focuser = {
+export const DEFAULT_FOCUSER: DeepReadonly<Focuser> = {
 	type: 'FOCUSER',
 	name: '',
 	connected: false,
@@ -352,7 +357,7 @@ export const DEFAULT_FOCUSER: Focuser = {
 	temperature: 0,
 }
 
-export const DEFAULT_COVER: Cover = {
+export const DEFAULT_COVER: DeepReadonly<Cover> = {
 	canPark: false,
 	parking: false,
 	parked: false,
@@ -364,7 +369,7 @@ export const DEFAULT_COVER: Cover = {
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
-export const DEFAULT_FLAT_PANEL: FlatPanel = {
+export const DEFAULT_FLAT_PANEL: DeepReadonly<FlatPanel> = {
 	enabled: false,
 	intensity: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'FLAT_PANEL',
@@ -373,7 +378,7 @@ export const DEFAULT_FLAT_PANEL: FlatPanel = {
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
-export const DEFAULT_ROTATOR: Rotator = {
+export const DEFAULT_ROTATOR: DeepReadonly<Rotator> = {
 	moving: false,
 	angle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	canAbort: false,
@@ -388,7 +393,7 @@ export const DEFAULT_ROTATOR: Rotator = {
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
-export const DEFAULT_POWER: Power = {
+export const DEFAULT_POWER: DeepReadonly<Power> = {
 	voltage: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	current: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	power: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
@@ -404,7 +409,7 @@ export const DEFAULT_POWER: Power = {
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
-export const DEFAULT_THERMOMETER: Thermometer = {
+export const DEFAULT_THERMOMETER: DeepReadonly<Thermometer> = {
 	hasThermometer: true,
 	temperature: 0,
 	type: 'THERMOMETER',
@@ -413,7 +418,7 @@ export const DEFAULT_THERMOMETER: Thermometer = {
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
-export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
+export const DEFAULT_GUIDE_OUTPUT: DeepReadonly<GuideOutput> = {
 	canPulseGuide: false,
 	pulsing: false,
 	type: 'GUIDE_OUTPUT',
@@ -422,7 +427,7 @@ export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
 
-export const DEFAULT_DEW_HEATER: DewHeater = {
+export const DEFAULT_DEW_HEATER: DeepReadonly<DewHeater> = {
 	hasDewHeater: false,
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'DEW_HEATER',
