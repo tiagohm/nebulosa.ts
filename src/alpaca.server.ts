@@ -1,6 +1,6 @@
 import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaException, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateValue } from './alpaca.types'
 import { Bitpix, bitpixInBytes, bitpixKeyword, type Fits, readFits } from './fits'
-import { type Camera, type Device, isCamera } from './indi.device'
+import { type Camera, type Device, isCamera, type Wheel } from './indi.device'
 import type { DeviceHandler, DeviceManager } from './indi.manager'
 import { bufferSource } from './io'
 
@@ -92,25 +92,7 @@ export class AlpacaServer {
 				frame[2] = device.frame.width.value
 				frame[3] = device.frame.height.value
 			} else if (property === 'connected') {
-				const resolver = this.connecting.get(device)
-
-				if (resolver) {
-					resolver.clear()
-
-					// wait for all properties to be received
-					if (device.connected) {
-						console.info('device connected:', device.name)
-
-						Bun.sleep(500).then(() => {
-							resolver.resolve(device.connected)
-							this.connecting.delete(device)
-						})
-					} else {
-						console.info('device disconnected:', device.name)
-						resolver.resolve(false)
-						this.connecting.delete(device)
-					}
-				}
+				this.handleConnectedEvent(device)
 			}
 		},
 		removed: (device: Camera) => {
@@ -124,12 +106,29 @@ export class AlpacaServer {
 		},
 	}
 
+	private readonly wheelHandler: DeviceHandler<Wheel> = {
+		added: (device: Wheel) => {
+			console.info('wheel added:', device.name)
+			this.devices.set(device, this.makeConfiguredDeviceFromDevice(device, 'FilterWheel'))
+		},
+		updated: (device, property) => {
+			if (property === 'connected') {
+				this.handleConnectedEvent(device)
+			}
+		},
+		removed: (device: Wheel) => {
+			console.info('wheel removed:', device.name)
+			this.devices.delete(device)
+		},
+	}
+
 	constructor(private readonly options: AlpacaServerOptions) {
 		this.deviceManager = (options.camera ?? options.mount ?? options.focuser ?? options.wheel ?? options.flatPanel ?? options.cover ?? options.rotator) as unknown as DeviceManager<Device>
 
 		if (!this.deviceManager) throw new Error('at least one device manager must be provided.')
 
 		options.camera?.addHandler(this.cameraHandler)
+		options.wheel?.addHandler(this.wheelHandler)
 
 		this.configuredDevices()
 	}
@@ -217,6 +216,10 @@ export class AlpacaServer {
 		'/api/v1/camera/:id/startexposure': { PUT: async (req) => this.cameraStart(+req.params.id, await params(req)) },
 		'/api/v1/camera/:id/stopexposure': { PUT: (req) => this.cameraStop(+req.params.id) },
 		'/api/v1/camera/:id/imagearray': { GET: (req) => this.cameraGetImageArray(+req.params.id, req.headers.get('accept')) },
+		// Filter Wheel
+		'/api/v1/filterwheel/:id/focusoffsets': { GET: (req) => this.wheelGetFocusOffsets(+req.params.id) },
+		'/api/v1/filterwheel/:id/names': { GET: (req) => this.wheelGetNames(+req.params.id) },
+		'/api/v1/filterwheel/:id/position': { GET: (req) => this.wheelGetPosition(+req.params.id), PUT: async (req) => this.wheelSetPosition(+req.params.id, await params(req)) },
 	}
 
 	start(hostname: string = '0.0.0.0', port: number = 0, options?: AlpacaServerStartOptions) {
@@ -246,11 +249,34 @@ export class AlpacaServer {
 		}
 
 		this.options?.camera?.removeHandler(this.cameraHandler)
+		this.options?.wheel?.removeHandler(this.wheelHandler)
 	}
 
 	private device<T extends Device = Device>(id: number) {
 		for (const device of this.devices) if (device[1].DeviceNumber === id) return device[0] as T
 		return undefined
+	}
+
+	private handleConnectedEvent(device: Device) {
+		const resolver = this.connecting.get(device)
+
+		if (resolver) {
+			resolver.clear()
+
+			// wait for all properties to be received
+			if (device.connected) {
+				console.info('device connected:', device.name)
+
+				Bun.sleep(500).then(() => {
+					resolver.resolve(device.connected)
+					this.connecting.delete(device)
+				})
+			} else {
+				console.info('device disconnected:', device.name)
+				resolver.resolve(false)
+				this.connecting.delete(device)
+			}
+		}
 	}
 
 	// API Response
@@ -709,15 +735,40 @@ export class AlpacaServer {
 		return this.makeAlpacaErrorResponse(AlpacaException.Driver, 'Image bytes as JSON array is not supported')
 	}
 
+	// Filter Wheel API
+
+	private wheelGetFocusOffsets(id: number) {
+		return this.makeAlpacaResponse(this.device<Wheel>(id)!.slots.map(() => 0))
+	}
+
+	private wheelGetNames(id: number) {
+		return this.makeAlpacaResponse(this.device<Wheel>(id)!.slots)
+	}
+
+	private wheelGetPosition(id: number) {
+		return this.makeAlpacaResponse(this.device<Wheel>(id)!.position)
+	}
+
+	private wheelSetPosition(id: number, data: { Position: string }) {
+		const device = this.device<Wheel>(id)!
+		this.options.wheel?.moveTo(device, +data.Position)
+		return this.makeAlpacaResponse(undefined)
+	}
+
 	private makeConfiguredDeviceFromDevice(device: Device, type: AlpacaDeviceType): AlpacaConfiguredDevice {
 		let configuredDevice = this.devices.get(device)
 		if (configuredDevice) return configuredDevice
-		const uid = `${device.type}:${device.name}`
-		configuredDevice = { DeviceName: device.name, DeviceNumber: Bun.hash.cityHash32(uid), DeviceType: type, UniqueID: Bun.MD5.hash(uid, 'hex') }
-		console.info('device found:', JSON.stringify(configuredDevice))
+
+		const id = `${device.type}:${device.name}`
+		configuredDevice = { DeviceName: device.name, DeviceNumber: Bun.hash.cityHash32(id), DeviceType: type, UniqueID: Bun.MD5.hash(id, 'hex') }
 		this.devices.set(device, configuredDevice)
-		const frame: AlpacaDeviceState['frame'] = isCamera(device) ? [device.frame.x.value, device.frame.y.value, device.frame.width.value, device.frame.height.value] : [0, 0, 0, 0]
-		this.states.set(device, { lastExposureDuration: 0, ccdTemperature: 0, frame })
+		console.info('device configured:', JSON.stringify(configuredDevice))
+
+		if (isCamera(device)) {
+			const frame: AlpacaDeviceState['frame'] = [device.frame.x.value, device.frame.y.value, device.frame.width.value, device.frame.height.value]
+			this.states.set(device, { lastExposureDuration: 0, ccdTemperature: 0, frame })
+		}
+
 		return configuredDevice
 	}
 }

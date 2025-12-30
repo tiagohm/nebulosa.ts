@@ -115,7 +115,7 @@ export class FitsDataSource implements Source {
 		offset ??= 0
 		size ??= buffer.byteLength - offset
 
-        const length = this.raw.length
+		const length = this.raw.length
 
 		if (this.position >= length) {
 			if (++this.channel < this.channels) {
@@ -125,9 +125,9 @@ export class FitsDataSource implements Source {
 			}
 		}
 
-        const channels = this.channels
+		const channels = this.channels
 		const pixelSizeInBytes = bitpixInBytes(this.bitpix)
-        let position = this.position
+		let position = this.position
 		let n = 0
 
 		for (; position < length && n < size; position += channels, n += pixelSizeInBytes, offset += pixelSizeInBytes) {
@@ -140,7 +140,7 @@ export class FitsDataSource implements Source {
 			else if (this.bitpix === Bitpix.DOUBLE) buffer.writeDoubleBE(pixel, offset)
 		}
 
-        this.position = position
+		this.position = position
 
 		return n
 	}
