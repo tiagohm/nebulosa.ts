@@ -5,7 +5,8 @@ import { observedToCirs } from './astrometry'
 import type { EquatorialCoordinate } from './coordinate'
 import { meter, toMeter } from './distance'
 import { Bitpix, bitpixInBytes, bitpixKeyword, type Fits, readFits } from './fits'
-import { type Camera, type Device, expectedPierSide, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, type Mount, type PierSide, type SlewRate, type TrackMode, type Wheel } from './indi.device'
+// biome-ignore format: too long!
+import { type Camera, type Cover, type Device, expectedPierSide, type FlatPanel, type Focuser, type GuideDirection, isCamera, isFocuser, isMount, type Mount, type PierSide, type Rotator, type SlewRate, type TrackMode, type Wheel } from './indi.device'
 import type { DeviceHandler, DeviceManager } from './indi.manager'
 import { bufferSource } from './io'
 import { type GeographicCoordinate, localSiderealTime } from './location'
@@ -87,6 +88,12 @@ interface AlpacaDeviceState extends GeographicCoordinate, EquatorialCoordinate {
 	readonly ellipsoid: 3 // IERS2010
 }
 
+interface AlpacaRegisteredDevice<D extends Device = Device> {
+	readonly device: D
+	readonly configuredDevice: AlpacaConfiguredDevice
+	readonly state: AlpacaDeviceState
+}
+
 const DEFAULT_ALPACA_DEVICE_STATE: AlpacaDeviceState = {
 	tasks: {},
 	lastExposureDuration: 0,
@@ -103,23 +110,47 @@ const DEFAULT_ALPACA_DEVICE_STATE: AlpacaDeviceState = {
 	declination: 0,
 }
 
+interface MappedAlpacaDeviceType {
+	readonly Camera: Camera
+	readonly Telescope: Mount
+	readonly Focuser: Focuser
+	readonly FilterWheel: Wheel
+	readonly Rotator: Rotator
+	readonly Dome: Device
+	readonly Switch: Device
+	readonly CoverCalibrator: Cover | FlatPanel
+	readonly ObservingConditions: Device
+	readonly SafetyMonitor: Device
+	readonly Video: Device
+}
+
 export class AlpacaServer {
 	private server?: Bun.Server<undefined>
-	private readonly devices = new Map<Device, AlpacaConfiguredDevice>()
-	private readonly states = new Map<Device, AlpacaDeviceState>()
+	private readonly Camera = new Map<Device, AlpacaRegisteredDevice<Camera>>()
+	private readonly Telescope = new Map<Device, AlpacaRegisteredDevice<Mount>>()
+	private readonly Focuser = new Map<Device, AlpacaRegisteredDevice<Focuser>>()
+	private readonly FilterWheel = new Map<Device, AlpacaRegisteredDevice<Wheel>>()
+	private readonly Rotator = new Map<Device, AlpacaRegisteredDevice<Rotator>>()
+	private readonly Dome = new Map<Device, AlpacaRegisteredDevice<Device>>()
+	private readonly Switch = new Map<Device, AlpacaRegisteredDevice<Device>>()
+	private readonly CoverCalibrator = new Map<Device, AlpacaRegisteredDevice<Cover | FlatPanel>>()
+	private readonly ObservingConditions = new Map<Device, AlpacaRegisteredDevice<Device>>()
+	private readonly SafetyMonitor = new Map<Device, AlpacaRegisteredDevice<Device>>()
+	private readonly Video = new Map<Device, AlpacaRegisteredDevice<Device>>()
+
 	private readonly deviceManager: DeviceManager<Device>
 	private readonly deviceNumberAndUniqueIdProvider: AlpacaDeviceNumberAndUniqueIdProvider
 
 	private readonly cameraHandler: DeviceHandler<Camera> = {
 		added: (device: Camera) => {
 			console.info('camera added:', device.name)
-			this.devices.set(device, this.makeConfiguredDeviceFromDevice(device, 'Camera'))
+			this.makeConfiguredDeviceFromDevice(device, 'Camera')
 		},
 		updated: (device, property) => {
 			if (property === 'connected') {
-				this.handleConnectedEvent(device)
+				this.handleConnectedEvent(device, 'Camera')
 			} else if (property === 'frame') {
-				const { frame } = this.states.get(device)!
+				const { frame } = this.camera(device).state
 				frame[0] = device.frame.x.value
 				frame[1] = device.frame.y.value
 				frame[2] = device.frame.width.value
@@ -128,25 +159,24 @@ export class AlpacaServer {
 		},
 		removed: (device: Camera) => {
 			console.info('camera removed:', device.name)
-			this.devices.delete(device)
-			this.states.delete(device)
+			this.Camera.delete(device)
 		},
 		blobReceived: (device, data) => {
 			console.info('camera image received', device.name, data.length)
-			this.states.get(device)!.data = data
+			this.camera(device).state.data = data
 		},
 	}
 
 	private readonly wheelHandler: DeviceHandler<Wheel> = {
 		added: (device: Wheel) => {
 			console.info('wheel added:', device.name)
-			this.devices.set(device, this.makeConfiguredDeviceFromDevice(device, 'FilterWheel'))
+			this.makeConfiguredDeviceFromDevice(device, 'FilterWheel')
 		},
 		updated: (device, property) => {
 			if (property === 'connected') {
-				this.handleConnectedEvent(device)
+				this.handleConnectedEvent(device, 'FilterWheel')
 			} else if (property === 'position') {
-				const state = this.states.get(device)!
+				const { state } = this.FilterWheel.get(device)!
 				const task = state.tasks.position
 
 				task?.clear()
@@ -155,44 +185,41 @@ export class AlpacaServer {
 		},
 		removed: (device: Wheel) => {
 			console.info('wheel removed:', device.name)
-			this.devices.delete(device)
-			this.states.delete(device)
+			this.FilterWheel.delete(device)
 		},
 	}
 
 	private readonly mountHandler: DeviceHandler<Mount> = {
 		added: (device: Mount) => {
 			console.info('mount added:', device.name)
-			this.devices.set(device, this.makeConfiguredDeviceFromDevice(device, 'Telescope'))
+			this.makeConfiguredDeviceFromDevice(device, 'Telescope')
 		},
 		updated: (device, property) => {
 			if (property === 'connected') {
-				this.handleConnectedEvent(device)
+				this.handleConnectedEvent(device, 'Telescope')
 			} else if (property === 'geographicCoordinate') {
-				Object.assign(this.states.get(device)!, device.geographicCoordinate)
+				Object.assign(this.Telescope.get(device)!.state, device.geographicCoordinate)
 			}
 		},
 		removed: (device: Mount) => {
 			console.info('mount removed:', device.name)
-			this.devices.delete(device)
-			this.states.delete(device)
+			this.Telescope.delete(device)
 		},
 	}
 
 	private readonly focuserHandler: DeviceHandler<Focuser> = {
 		added: (device: Focuser) => {
 			console.info('focuser added:', device.name)
-			this.devices.set(device, this.makeConfiguredDeviceFromDevice(device, 'Focuser'))
+			this.makeConfiguredDeviceFromDevice(device, 'Focuser')
 		},
 		updated: (device, property) => {
 			if (property === 'connected') {
-				this.handleConnectedEvent(device)
+				this.handleConnectedEvent(device, 'Focuser')
 			}
 		},
 		removed: (device: Focuser) => {
 			console.info('focuser removed:', device.name)
-			this.devices.delete(device)
-			this.states.delete(device)
+			this.Focuser.delete(device)
 		},
 	}
 
@@ -227,16 +254,16 @@ export class AlpacaServer {
 		// https://ascom-standards.org/api/?urls.primaryName=ASCOM+Alpaca+Device+API
 		// Device
 		'/api/v1/:type/:id/interfaceversion': { GET: (req) => this.deviceGetInterfaceVersion(req.params.type as never) },
-		'/api/v1/:type/:id/description': { GET: (req) => this.deviceGetDescription(+req.params.id) },
-		'/api/v1/:type/:id/name': { GET: (req) => this.deviceGetName(+req.params.id) },
-		'/api/v1/:type/:id/driverinfo': { GET: (req) => this.deviceGetDriverInfo(+req.params.id) },
-		'/api/v1/:type/:id/driverversion': { GET: (req) => this.deviceGetDriverVersion(+req.params.id) },
-		'/api/v1/:type/:id/connect': { PUT: (req) => this.deviceConnect(+req.params.id, { Connected: 'True' }) },
-		'/api/v1/:type/:id/connected': { GET: (req) => this.deviceIsConnected(+req.params.id), PUT: async (req) => this.deviceConnect(+req.params.id, await params(req)) },
-		'/api/v1/:type/:id/connecting': { GET: (req) => this.deviceIsConnecting(+req.params.id) },
-		'/api/v1/:type/:id/disconnect': { PUT: (req) => this.deviceConnect(+req.params.id, { Connected: 'False' }) },
-		'/api/v1/:type/:id/supportedactions': { GET: (req) => this.deviceGetSupportedActions(+req.params.id) },
-		'/api/v1/:type/:id/action': { PUT: async (req) => this.deviceAction(+req.params.id, await params(req)) },
+		'/api/v1/:type/:id/description': { GET: (req) => this.deviceGetDescription(+req.params.id, mapToAlpacaDeviceType(req.params.type)) },
+		'/api/v1/:type/:id/name': { GET: (req) => this.deviceGetName(+req.params.id, mapToAlpacaDeviceType(req.params.type)) },
+		'/api/v1/:type/:id/driverinfo': { GET: (req) => this.deviceGetDriverInfo(+req.params.id, mapToAlpacaDeviceType(req.params.type)) },
+		'/api/v1/:type/:id/driverversion': { GET: (req) => this.deviceGetDriverVersion(+req.params.id, mapToAlpacaDeviceType(req.params.type)) },
+		'/api/v1/:type/:id/connect': { PUT: (req) => this.deviceConnect(+req.params.id, mapToAlpacaDeviceType(req.params.type), { Connected: 'True' }) },
+		'/api/v1/:type/:id/connected': { GET: (req) => this.deviceIsConnected(+req.params.id, mapToAlpacaDeviceType(req.params.type)), PUT: async (req) => this.deviceConnect(+req.params.id, mapToAlpacaDeviceType(req.params.type), await params(req)) },
+		'/api/v1/:type/:id/connecting': { GET: (req) => this.deviceIsConnecting(+req.params.id, mapToAlpacaDeviceType(req.params.type)) },
+		'/api/v1/:type/:id/disconnect': { PUT: (req) => this.deviceConnect(+req.params.id, mapToAlpacaDeviceType(req.params.type), { Connected: 'False' }) },
+		'/api/v1/:type/:id/supportedactions': { GET: (req) => this.deviceGetSupportedActions(+req.params.id, mapToAlpacaDeviceType(req.params.type)) },
+		'/api/v1/:type/:id/action': { PUT: async (req) => this.deviceAction(+req.params.id, mapToAlpacaDeviceType(req.params.type), await params(req)) },
 		// Camera
 		'/api/v1/camera/:id/bayeroffsetx': { GET: (req) => this.cameraGetBayerOffsetX(+req.params.id) },
 		'/api/v1/camera/:id/bayeroffsety': { GET: (req) => this.cameraGetBayerOffsetY(+req.params.id) },
@@ -269,7 +296,7 @@ export class AlpacaServer {
 		'/api/v1/camera/:id/hasshutter': { GET: () => this.cameraHasShutter() },
 		'/api/v1/camera/:id/heatsinktemperature': { GET: (req) => this.cameraGetCcdTemperature(+req.params.id) },
 		'/api/v1/camera/:id/imageready': { GET: (req) => this.cameraIsImageReady(+req.params.id) },
-		'/api/v1/camera/:id/ispulseguiding': { GET: (req) => this.deviceIsPulseGuiding(+req.params.id) },
+		'/api/v1/camera/:id/ispulseguiding': { GET: (req) => this.deviceIsPulseGuiding(+req.params.id, 'Camera') },
 		'/api/v1/camera/:id/lastexposureduration': { GET: (req) => this.cameraGetLastExposureDuration(+req.params.id) },
 		'/api/v1/camera/:id/maxadu': { GET: () => this.cameraGetMaxADU() },
 		'/api/v1/camera/:id/maxbinx': { GET: (req) => this.cameraGetMaxBinX(+req.params.id) },
@@ -291,7 +318,7 @@ export class AlpacaServer {
 		'/api/v1/camera/:id/startx': { GET: (req) => this.cameraGetStartX(+req.params.id), PUT: async (req) => this.cameraSetStartX(+req.params.id, await params(req)) },
 		'/api/v1/camera/:id/starty': { GET: (req) => this.cameraGetStartY(+req.params.id), PUT: async (req) => this.cameraSetStartY(+req.params.id, await params(req)) },
 		'/api/v1/camera/:id/abortexposure': { PUT: (req) => this.cameraStop(+req.params.id) },
-		'/api/v1/camera/:id/pulseguide': { PUT: async (req) => this.devicePulseGuide(+req.params.id, await params(req)) },
+		'/api/v1/camera/:id/pulseguide': { PUT: async (req) => this.devicePulseGuide(+req.params.id, 'Camera', await params(req)) },
 		'/api/v1/camera/:id/startexposure': { PUT: async (req) => this.cameraStart(+req.params.id, await params(req)) },
 		'/api/v1/camera/:id/stopexposure': { PUT: (req) => this.cameraStop(+req.params.id) },
 		'/api/v1/camera/:id/imagearray': { GET: (req) => this.cameraGetImageArray(+req.params.id, req.headers.get('accept')) },
@@ -332,7 +359,7 @@ export class AlpacaServer {
 		'/api/v1/telescope/:id/focallength': { GET: () => this.mountGetFocalLength() },
 		'/api/v1/telescope/:id/guideratedeclination': { GET: () => this.mountGetGuideRateDeclination(), PUT: async (req) => this.mountSetGuideRateDeclination(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/guideraterightascension': { GET: () => this.mountGetGuideRateRightAscension(), PUT: async (req) => this.mountSetGuideRateRightAscension(+req.params.id, await params(req)) },
-		'/api/v1/telescope/:id/ispulseguiding': { GET: (req) => this.deviceIsPulseGuiding(+req.params.id) },
+		'/api/v1/telescope/:id/ispulseguiding': { GET: (req) => this.deviceIsPulseGuiding(+req.params.id, 'Telescope') },
 		'/api/v1/telescope/:id/rightascension': { GET: (req) => this.mountGetRightAscension(+req.params.id) },
 		'/api/v1/telescope/:id/rightascensionrate': { GET: (req) => this.mountGetRightAscensionRate(+req.params.id), PUT: async (req) => this.mountSetRightAscensionRate(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/sideofpier': { GET: (req) => this.mountGetSideOfPier(+req.params.id), PUT: async (req) => this.mountSetSideOfPier(+req.params.id, await params(req)) },
@@ -355,7 +382,7 @@ export class AlpacaServer {
 		'/api/v1/telescope/:id/findhome': { PUT: (req) => this.mountFindHome(+req.params.id) },
 		'/api/v1/telescope/:id/moveaxis': { PUT: async (req) => this.mountMoveAxis(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/park': { PUT: (req) => this.mountPark(+req.params.id) },
-		'/api/v1/telescope/:id/pulseguide': { PUT: async (req) => this.devicePulseGuide(+req.params.id, await params(req)) },
+		'/api/v1/telescope/:id/pulseguide': { PUT: async (req) => this.devicePulseGuide(+req.params.id, 'Telescope', await params(req)) },
 		'/api/v1/telescope/:id/setpark': { PUT: (req) => this.mountSetPark(+req.params.id) },
 		'/api/v1/telescope/:id/slewtoaltaz': { PUT: async (req) => this.mountSlewToAltAz(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/slewtoaltazasync': { PUT: async (req) => this.mountSlewToAltAzAsync(+req.params.id, await params(req)) },
@@ -408,24 +435,36 @@ export class AlpacaServer {
 			this.server = undefined
 		}
 
-		this.options?.camera?.removeHandler(this.cameraHandler)
-		this.options?.wheel?.removeHandler(this.wheelHandler)
-		this.options?.mount?.removeHandler(this.mountHandler)
-		this.options?.focuser?.removeHandler(this.focuserHandler)
+		this.options.camera?.removeHandler(this.cameraHandler)
+		this.options.wheel?.removeHandler(this.wheelHandler)
+		this.options.mount?.removeHandler(this.mountHandler)
+		this.options.focuser?.removeHandler(this.focuserHandler)
 	}
 
-	private device<T extends Device = Device>(id: number) {
-		for (const device of this.devices) if (device[1].DeviceNumber === id) return device[0] as T
-		return undefined
+	private device<T extends AlpacaDeviceType>(key: Device | number, type: T): AlpacaRegisteredDevice<MappedAlpacaDeviceType[T]> {
+		if (typeof key === 'object') return this[type].get(key)! as never
+		else for (const item of this[type].values()) if (item.configuredDevice.DeviceNumber === key) return item as never
+		return undefined as never
 	}
 
-	private state<T extends Device = Device>(id: number) {
-		const device = this.device<T>(id)!
-		return [this.states.get(device)!, device] as const
+	private camera(key: Device | number) {
+		return this.device(key, 'Camera')
 	}
 
-	private handleConnectedEvent(device: Device) {
-		const task = this.states.get(device)?.tasks.connect
+	private telescope(key: Device | number) {
+		return this.device(key, 'Telescope')
+	}
+
+	private wheel(key: Device | number) {
+		return this.device(key, 'FilterWheel')
+	}
+
+	private focuser(key: Device | number) {
+		return this.device(key, 'Focuser')
+	}
+
+	private handleConnectedEvent(device: Device, type: AlpacaDeviceType) {
+		const task = this.device(device, type).state.tasks.connect
 
 		if (task) {
 			task.clear()
@@ -457,42 +496,42 @@ export class AlpacaServer {
 	private configuredDevices() {
 		const configuredDevices = new Set<AlpacaConfiguredDevice>()
 
-		this.options.camera?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Camera')))
-		this.options.mount?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Telescope')))
-		this.options.focuser?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Focuser')))
-		this.options.wheel?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'FilterWheel')))
-		this.options.rotator?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Rotator')))
-		this.options.flatPanel?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'CoverCalibrator')))
-		this.options.cover?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'CoverCalibrator')))
+		this.options.camera?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Camera').configuredDevice))
+		this.options.mount?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Telescope').configuredDevice))
+		this.options.focuser?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Focuser').configuredDevice))
+		this.options.wheel?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'FilterWheel').configuredDevice))
+		this.options.rotator?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Rotator').configuredDevice))
+		this.options.flatPanel?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'CoverCalibrator').configuredDevice))
+		this.options.cover?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'CoverCalibrator').configuredDevice))
 
 		return makeAlpacaResponse(Array.from(configuredDevices))
 	}
 
 	// Device API
 
-	private deviceGetInterfaceVersion(type: Lowercase<AlpacaDeviceType>) {
-		const version = type === 'camera' || type === 'focuser' || type === 'rotator' || type === 'telescope' ? 4 : type === 'dome' || type === 'filterwheel' || type === 'safetymonitor' || type === 'switch' ? 3 : 2
+	private deviceGetInterfaceVersion(type: AlpacaDeviceType) {
+		const version = type === 'Camera' || type === 'Focuser' || type === 'Rotator' || type === 'Telescope' ? 4 : type === 'Dome' || type === 'FilterWheel' || type === 'SafetyMonitor' || type === 'Switch' ? 3 : 2
 		return makeAlpacaResponse(version)
 	}
 
-	private deviceGetDescription(id: number) {
-		return makeAlpacaResponse(this.device(id)!.name)
+	private deviceGetDescription(id: number, type: AlpacaDeviceType) {
+		return makeAlpacaResponse(this.device(id, type).device.name)
 	}
 
-	private deviceGetName(id: number) {
-		return makeAlpacaResponse(this.device(id)!.name)
+	private deviceGetName(id: number, type: AlpacaDeviceType) {
+		return makeAlpacaResponse(this.device(id, type).device.name)
 	}
 
-	private deviceGetDriverInfo(id: number) {
-		return makeAlpacaResponse(this.device(id)!.driver.executable)
+	private deviceGetDriverInfo(id: number, type: AlpacaDeviceType) {
+		return makeAlpacaResponse(this.device(id, type).device.driver.executable)
 	}
 
-	private deviceGetDriverVersion(id: number) {
-		return makeAlpacaResponse(this.device(id)!.driver.version)
+	private deviceGetDriverVersion(id: number, type: AlpacaDeviceType) {
+		return makeAlpacaResponse(this.device(id, type).device.driver.version)
 	}
 
-	private deviceConnect(id: number, data: { Connected: string }) {
-		const [state, device] = this.state(id)
+	private deviceConnect(id: number, type: AlpacaDeviceType, data: { Connected: string }) {
+		const { state, device } = this.device(id, type)
 
 		if (!device) return makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Device is not present')
 
@@ -518,17 +557,17 @@ export class AlpacaServer {
 		return makeResponseForTask(true)
 	}
 
-	private deviceIsConnected(id: number) {
-		return makeAlpacaResponse(!!this.device(id)?.connected)
+	private deviceIsConnected(id: number, type: AlpacaDeviceType) {
+		return makeAlpacaResponse(!!this.device(id, type)?.device.connected)
 	}
 
-	private deviceIsConnecting(id: number) {
-		const [state] = this.state<Camera>(id)
+	private deviceIsConnecting(id: number, type: AlpacaDeviceType) {
+		const { state } = this.device(id, type)
 		return makeAlpacaResponse(!!state.tasks.connect?.running)
 	}
 
-	private deviceGetSupportedActions(id: number) {
-		const device = this.device(id)!
+	private deviceGetSupportedActions(id: number, type: AlpacaDeviceType) {
+		const { device } = this.device(id, type)
 
 		if (isFocuser(device)) {
 			return makeAlpacaResponse(['ToggleReverse'])
@@ -537,12 +576,12 @@ export class AlpacaServer {
 		return makeAlpacaResponse([])
 	}
 
-	private deviceAction(id: number, data: { Action: string; Parameters: string }) {
-		const device = this.device(id)!
-		const action = data.Action
+	private deviceAction(id: number, type: AlpacaDeviceType, data: { Action: string; Parameters: string }) {
+		const { device } = this.device(id, type)
+		const action = data.Action.toLowerCase()
 
 		if (isFocuser(device)) {
-			if (action === 'ToggleReverse') return this.focuserToggleReverse(device)
+			if (action === 'togglereverse') return this.focuserToggleReverse(device)
 		}
 
 		return makeAlpacaResponse('OK')
@@ -550,28 +589,28 @@ export class AlpacaServer {
 
 	// Guide Output API
 
-	private devicePulseGuide(id: number, data: { Duration: string; Direction: string }) {
-		const device = this.device<GuideOutput>(id)!
+	private devicePulseGuide(id: number, type: 'Camera' | 'Telescope', data: { Duration: string; Direction: string }) {
+		const device = this.device(id, type).device
 		this.options.guideOutput?.pulse(device, mapAlpacaEnumToGuideDirection(+data.Direction), +data.Duration)
 		return makeAlpacaResponse(undefined)
 	}
 
-	private deviceIsPulseGuiding(id: number) {
-		return makeAlpacaResponse(this.device<GuideOutput>(id)!.pulsing)
+	private deviceIsPulseGuiding(id: number, type: 'Camera' | 'Telescope') {
+		return makeAlpacaResponse(this.device(id, type).device.pulsing)
 	}
 
 	// Camera API
 
 	private cameraGetBayerOffsetX(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.cfa.offsetX)
+		return makeAlpacaResponse(this.camera(id).device.cfa.offsetX)
 	}
 
 	private cameraGetBayerOffsetY(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.cfa.offsetY)
+		return makeAlpacaResponse(this.camera(id).device.cfa.offsetY)
 	}
 
 	private cameraGetBinX(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.bin.x.value)
+		return makeAlpacaResponse(this.camera(id).device.bin.x.value)
 	}
 
 	private cameraSetBinX(id: number, data: { BinX: string }) {
@@ -579,7 +618,7 @@ export class AlpacaServer {
 	}
 
 	private cameraGetBinY(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.bin.y.value)
+		return makeAlpacaResponse(this.camera(id).device.bin.y.value)
 	}
 
 	private cameraSetBinY(id: number, data: { BinY: string }) {
@@ -587,7 +626,7 @@ export class AlpacaServer {
 	}
 
 	private cameraSetBin(id: number, data: { BinX?: string; BinY?: string }) {
-		const device = this.device<Camera>(id)!
+		const device = this.camera(id).device
 		const bin = +(data.BinX || data.BinY || 1)
 		this.options.camera?.bin(device, bin, bin)
 		return makeAlpacaResponse(undefined)
@@ -595,19 +634,19 @@ export class AlpacaServer {
 
 	// https://ascom-standards.org/newdocs/camera.html#Camera.CameraStates
 	private cameraGetState(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle)
+		return makeAlpacaResponse(this.camera(id).device.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle)
 	}
 
 	private cameraGetXSize(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.frame.width.value)
+		return makeAlpacaResponse(this.camera(id).device.frame.width.value)
 	}
 
 	private cameraGetYSize(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.frame.height.value)
+		return makeAlpacaResponse(this.camera(id).device.frame.height.value)
 	}
 
 	private cameraCanStopExposure(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.canAbort)
+		return makeAlpacaResponse(this.camera(id).device.canAbort)
 	}
 
 	private cameraCanAsymmetricBin() {
@@ -619,37 +658,37 @@ export class AlpacaServer {
 	}
 
 	private cameraCanGetCoolerPower(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.hasCoolerControl)
+		return makeAlpacaResponse(this.camera(id).device.hasCoolerControl)
 	}
 
 	private cameraCanPulseGuide(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.canPulseGuide)
+		return makeAlpacaResponse(this.camera(id).device.canPulseGuide)
 	}
 
 	private cameraCanSetCCDTemperature(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.canSetTemperature)
+		return makeAlpacaResponse(this.camera(id).device.canSetTemperature)
 	}
 
 	private cameraGetCcdTemperature(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.temperature)
+		return makeAlpacaResponse(this.camera(id).device.temperature)
 	}
 
 	private cameraIsCoolerOn(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.cooler)
+		return makeAlpacaResponse(this.camera(id).device.cooler)
 	}
 
 	private cameraSetCoolerOn(id: number, data: { CoolerOn: string }) {
-		const device = this.device<Camera>(id)!
+		const device = this.camera(id).device
 		this.options.camera?.cooler(device, isTrue(data.CoolerOn))
 		return makeAlpacaResponse(undefined)
 	}
 
 	private cameraGetCoolerPower(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.coolerPower)
+		return makeAlpacaResponse(this.camera(id).device.coolerPower)
 	}
 
 	private cameraGetDeviceState(id: number) {
-		const [state, device] = this.state<Camera>(id)
+		const { state, device } = this.camera(id)
 		const res: AlpacaStateItem[] = []
 		res.push({ Name: 'CameraState', Value: device.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle })
 		res.push({ Name: 'CCDTemperature', Value: device.temperature })
@@ -667,11 +706,11 @@ export class AlpacaServer {
 	}
 
 	private cameraGetExposureMax(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.exposure.max)
+		return makeAlpacaResponse(this.camera(id).device.exposure.max)
 	}
 
 	private cameraGetExposureMin(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.exposure.min)
+		return makeAlpacaResponse(this.camera(id).device.exposure.min)
 	}
 
 	private cameraGetExposureResolution() {
@@ -691,21 +730,21 @@ export class AlpacaServer {
 	}
 
 	private cameraGetGain(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.gain.value)
+		return makeAlpacaResponse(this.camera(id).device.gain.value)
 	}
 
 	private cameraSetGain(id: number, data: { Gain: string }) {
-		const device = this.device<Camera>(id)!
+		const device = this.camera(id).device
 		this.options.camera?.gain(device, +data.Gain)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private cameraGetGainMax(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.gain.max)
+		return makeAlpacaResponse(this.camera(id).device.gain.max)
 	}
 
 	private cameraGetGainMin(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.gain.min)
+		return makeAlpacaResponse(this.camera(id).device.gain.min)
 	}
 
 	private cameraGetGains() {
@@ -717,11 +756,11 @@ export class AlpacaServer {
 	}
 
 	private cameraIsImageReady(id: number) {
-		return makeAlpacaResponse(this.states.get(this.device<Camera>(id)!)?.data !== undefined)
+		return makeAlpacaResponse(this.camera(id).state.data !== undefined)
 	}
 
 	private cameraGetLastExposureDuration(id: number) {
-		return makeAlpacaResponse(this.states.get(this.device<Camera>(id)!)?.lastExposureDuration)
+		return makeAlpacaResponse(this.camera(id).state.lastExposureDuration)
 	}
 
 	private cameraGetMaxADU() {
@@ -729,15 +768,16 @@ export class AlpacaServer {
 	}
 
 	private cameraGetMaxBinX(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.bin.x.max)
+		return makeAlpacaResponse(this.camera(id).device.bin.x.max)
 	}
 
 	private cameraGetMaxBinY(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.bin.y.max)
+		return makeAlpacaResponse(this.camera(id).device.bin.y.max)
 	}
 
 	private cameraSetFrame(id: number, data: { NumX?: string; NumY?: string; StartX?: string; StartY?: string }) {
-		const [{ frame }, device] = this.state<Camera>(id)!
+		const { state, device } = this.camera(id)
+		const { frame } = state
 		if (data.StartX) frame[0] = +data.StartX
 		if (data.StartY) frame[1] = +data.StartY
 		if (data.NumX) frame[2] = +data.NumX
@@ -747,7 +787,7 @@ export class AlpacaServer {
 	}
 
 	private cameraGetNumX(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.frame.width.value)
+		return makeAlpacaResponse(this.camera(id).device.frame.width.value)
 	}
 
 	private cameraSetNumX(id: number, data: { NumX: string }) {
@@ -755,7 +795,7 @@ export class AlpacaServer {
 	}
 
 	private cameraGetNumY(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.frame.height.value)
+		return makeAlpacaResponse(this.camera(id).device.frame.height.value)
 	}
 
 	private cameraSetNumY(id: number, data: { NumY: string }) {
@@ -763,21 +803,21 @@ export class AlpacaServer {
 	}
 
 	private cameraGetOffset(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.offset.value)
+		return makeAlpacaResponse(this.camera(id).device.offset.value)
 	}
 
 	private cameraSetOffset(id: number, data: { Offset: string }) {
-		const device = this.device<Camera>(id)!
+		const device = this.camera(id).device
 		this.options.camera?.offset(device, +data.Offset)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private cameraGetOffsetMax(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.offset.max)
+		return makeAlpacaResponse(this.camera(id).device.offset.max)
 	}
 
 	private cameraGetOffsetMin(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.offset.min)
+		return makeAlpacaResponse(this.camera(id).device.offset.min)
 	}
 
 	private cameraGetOffsets() {
@@ -785,25 +825,25 @@ export class AlpacaServer {
 	}
 
 	private cameraGetPercentCompleted(id: number) {
-		const [state, device] = this.state<Camera>(id)
+		const { state, device } = this.camera(id)
 		return makeAlpacaResponse((1 - device.exposure.value / state.lastExposureDuration) * 100)
 	}
 
 	private cameraGetPixelSizeX(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.pixelSize.x)
+		return makeAlpacaResponse(this.camera(id).device.pixelSize.x)
 	}
 
 	private cameraGetPixelSizeY(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.pixelSize.y)
+		return makeAlpacaResponse(this.camera(id).device.pixelSize.y)
 	}
 
 	private cameraGetReadoutMode(id: number) {
-		const device = this.device<Camera>(id)!
+		const device = this.camera(id).device
 		return makeAlpacaResponse(device.frameFormat)
 	}
 
 	private cameraSetReadoutMode(id: number, data: { ReadoutMode: string }) {
-		const device = this.device<Camera>(id)!
+		const device = this.camera(id).device
 		const value = +data.ReadoutMode
 
 		if (Number.isFinite(value) && value >= 0 && value < device.frameFormats.length) {
@@ -818,7 +858,7 @@ export class AlpacaServer {
 	}
 
 	private cameraGetReadoutModes(id: number) {
-		const device = this.device<Camera>(id)!
+		const device = this.camera(id).device
 		return makeAlpacaResponse(device.frameFormats)
 	}
 
@@ -828,23 +868,23 @@ export class AlpacaServer {
 
 	// https://ascom-standards.org/newdocs/camera.html#Camera.SensrType
 	private cameraGetSensorType(id: number) {
-		const device = this.device<Camera>(id)!
+		const device = this.camera(id).device
 		return makeAlpacaResponse(device.cfa.type ? 2 : 0)
 	}
 
 	private cameraGetSetCcdTemperature(id: number) {
-		return makeAlpacaResponse(this.state(id)[0].ccdTemperature)
+		return makeAlpacaResponse(this.camera(id).state.ccdTemperature)
 	}
 
 	private cameraSetCcdTemperature(id: number, data: { SetCCDTemperature: string }) {
-		const [state, device] = this.state<Camera>(id)
+		const { state, device } = this.camera(id)
 		state.ccdTemperature = +data.SetCCDTemperature
 		this.options.camera?.temperature(device, state.ccdTemperature)
-		return makeAlpacaResponse(this.device<Camera>(id)!.temperature)
+		return makeAlpacaResponse(this.camera(id).device.temperature)
 	}
 
 	private cameraGetStartX(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.frame.x.value)
+		return makeAlpacaResponse(this.camera(id).device.frame.x.value)
 	}
 
 	private cameraSetStartX(id: number, data: { StartX: string }) {
@@ -852,7 +892,7 @@ export class AlpacaServer {
 	}
 
 	private cameraGetStartY(id: number) {
-		return makeAlpacaResponse(this.device<Camera>(id)!.frame.y.value)
+		return makeAlpacaResponse(this.camera(id).device.frame.y.value)
 	}
 
 	private cameraSetStartY(id: number, data: { StartY: string }) {
@@ -860,13 +900,13 @@ export class AlpacaServer {
 	}
 
 	private cameraStop(id: number) {
-		const device = this.device<Camera>(id)!
+		const device = this.camera(id).device
 		this.options.camera?.stopExposure(device)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private cameraStart(id: number, data: { Duration: string; Light: string }) {
-		const device = this.device<Camera>(id)!
+		const device = this.camera(id).device
 		const camera = this.options.camera
 		camera?.enableBlob(device)
 		camera?.frameType(device, isTrue(data.Light) ? 'LIGHT' : 'DARK')
@@ -875,7 +915,7 @@ export class AlpacaServer {
 	}
 
 	private async cameraGetImageArray(id: number, accept?: string | null) {
-		const [state] = this.state(id)
+		const { state } = this.camera(id)
 
 		try {
 			const buffer = Buffer.from(state.data!, 'base64')
@@ -897,7 +937,7 @@ export class AlpacaServer {
 	// Filter Wheel API
 
 	private wheelGetDeviceState(id: number) {
-		const device = this.device<Wheel>(id)!
+		const device = this.wheel(id).device
 		const res: AlpacaStateItem[] = []
 		res.push({ Name: 'Position', Value: device.position })
 		res.push({ Name: 'TimeStamp', Value: '' })
@@ -905,19 +945,19 @@ export class AlpacaServer {
 	}
 
 	private wheelGetFocusOffsets(id: number) {
-		return makeAlpacaResponse(this.device<Wheel>(id)!.slots.map(() => 0))
+		return makeAlpacaResponse(this.wheel(id).device.slots.map(() => 0))
 	}
 
 	private wheelGetNames(id: number) {
-		return makeAlpacaResponse(this.device<Wheel>(id)!.slots)
+		return makeAlpacaResponse(this.wheel(id).device.slots)
 	}
 
 	private wheelGetPosition(id: number) {
-		return makeAlpacaResponse(this.device<Wheel>(id)!.position)
+		return makeAlpacaResponse(this.wheel(id).device.position)
 	}
 
 	private wheelSetPosition(id: number, data: { Position: string }) {
-		const [state, device] = this.state<Wheel>(id)
+		const { state, device } = this.wheel(id)
 		state.position = +data.Position
 		const task = promiseWithTimeout(AlpacaException.ValueNotSet, 'Unable to set wheel position')
 		state.tasks.position = task
@@ -949,7 +989,7 @@ export class AlpacaServer {
 	}
 
 	private mountIsAtPark(id: number) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.parked)
+		return makeAlpacaResponse(this.telescope(id).device.parked)
 	}
 
 	private mountGetAzimuth(id: number) {
@@ -957,15 +997,15 @@ export class AlpacaServer {
 	}
 
 	private mountCanFindHome(id: number) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.canFindHome)
+		return makeAlpacaResponse(this.telescope(id).device.canFindHome)
 	}
 
 	private mountCanPark(id: number) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.canPark)
+		return makeAlpacaResponse(this.telescope(id).device.canPark)
 	}
 
 	private mountCanPulseGuide(id: number) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.canPulseGuide)
+		return makeAlpacaResponse(this.telescope(id).device.canPulseGuide)
 	}
 
 	private mountCanSetDeclinationRate(id: number) {
@@ -977,7 +1017,7 @@ export class AlpacaServer {
 	}
 
 	private mountCanSetPark(id: number) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.canSetPark)
+		return makeAlpacaResponse(this.telescope(id).device.canSetPark)
 	}
 
 	private mountCanSetPierSide(id: number) {
@@ -989,11 +1029,11 @@ export class AlpacaServer {
 	}
 
 	private mountCanSetTracking(id: number) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.canTracking)
+		return makeAlpacaResponse(this.telescope(id).device.canTracking)
 	}
 
 	private mountCanSlew(id: number) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.canGoTo)
+		return makeAlpacaResponse(this.telescope(id).device.canGoTo)
 	}
 
 	private mountCanSlewAltAz(id: number) {
@@ -1009,7 +1049,7 @@ export class AlpacaServer {
 	}
 
 	private mountCanSync(id: number) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.canSync)
+		return makeAlpacaResponse(this.telescope(id).device.canSync)
 	}
 
 	private mountCanSyncAltAz(id: number) {
@@ -1021,7 +1061,7 @@ export class AlpacaServer {
 	}
 
 	private mountGetDeclination(id: number) {
-		return makeAlpacaResponse(toDeg(this.device<Mount>(id)!.equatorialCoordinate.declination))
+		return makeAlpacaResponse(toDeg(this.telescope(id).device.equatorialCoordinate.declination))
 	}
 
 	private mountGetDeclinationRate(id: number) {
@@ -1033,7 +1073,7 @@ export class AlpacaServer {
 	}
 
 	private mountGetDeviceState(id: number) {
-		const device = this.device<Mount>(id)!
+		const device = this.telescope(id).device
 		const res: AlpacaStateItem[] = []
 		res.push({ Name: 'Altitude', Value: 0 })
 		res.push({ Name: 'AtHome', Value: false })
@@ -1052,12 +1092,11 @@ export class AlpacaServer {
 	}
 
 	private mountGetDoesRefraction(id: number) {
-		return makeAlpacaResponse(this.state(id)[0].doesRefraction)
+		return makeAlpacaResponse(this.telescope(id).state.doesRefraction)
 	}
 
 	private mountSetDoesRefraction(id: number, data: { DoesRefraction: string }) {
-		const [state] = this.state(id)
-		state.doesRefraction = isTrue(data.DoesRefraction)
+		this.telescope(id).state.doesRefraction = isTrue(data.DoesRefraction)
 		return makeAlpacaResponse(undefined)
 	}
 
@@ -1087,7 +1126,7 @@ export class AlpacaServer {
 	}
 
 	private mountGetRightAscension(id: number) {
-		return makeAlpacaResponse(toHour(this.device<Mount>(id)!.equatorialCoordinate.rightAscension))
+		return makeAlpacaResponse(toHour(this.telescope(id).device.equatorialCoordinate.rightAscension))
 	}
 
 	private mountGetRightAscensionRate(id: number) {
@@ -1100,7 +1139,7 @@ export class AlpacaServer {
 
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.PierSide
 	private mountGetSideOfPier(id: number) {
-		return makeAlpacaResponse(mapPierSideToAlpacaEnum(this.device<Mount>(id)!.pierSide))
+		return makeAlpacaResponse(mapPierSideToAlpacaEnum(this.telescope(id).device.pierSide))
 	}
 
 	private mountSetSideOfPier(id: number, data: { SideOfPier: string }) {
@@ -1108,98 +1147,98 @@ export class AlpacaServer {
 	}
 
 	private mountGetSiderealTime(id: number) {
-		const [state] = this.state<Mount>(id)
+		const { state } = this.telescope(id)
 		const lst = localSiderealTime(timeNow(true), state, false) // apparent LST
 		return makeAlpacaResponse(toHour(lst))
 	}
 
 	private mountGetSiteElevation(id: number) {
-		return makeAlpacaResponse(toMeter(this.device<Mount>(id)!.geographicCoordinate.elevation))
+		return makeAlpacaResponse(toMeter(this.telescope(id).device.geographicCoordinate.elevation))
 	}
 
 	private mountSetSiteElevation(id: number, data: { SiteElevation: string }) {
-		const [state, device] = this.state<Mount>(id)
+		const { state, device } = this.telescope(id)
 		state.elevation = meter(+data.SiteElevation)
 		this.options.mount?.geographicCoordinate(device, state)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountGetSiteLatitude(id: number) {
-		return makeAlpacaResponse(toMeter(this.device<Mount>(id)!.geographicCoordinate.elevation))
+		return makeAlpacaResponse(toMeter(this.telescope(id).device.geographicCoordinate.elevation))
 	}
 
 	private mountSetSiteLatitude(id: number, data: { SiteLatitude: string }) {
-		const [state, device] = this.state<Mount>(id)
+		const { state, device } = this.telescope(id)
 		state.latitude = deg(+data.SiteLatitude)
 		this.options.mount?.geographicCoordinate(device, state)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountGetSiteLongitude(id: number) {
-		return makeAlpacaResponse(toMeter(this.device<Mount>(id)!.geographicCoordinate.elevation))
+		return makeAlpacaResponse(toMeter(this.telescope(id).device.geographicCoordinate.elevation))
 	}
 
 	private mountSetSiteLongitude(id: number, data: { SiteLongitude: string }) {
-		const [state, device] = this.state<Mount>(id)
+		const { state, device } = this.telescope(id)
 		state.longitude = deg(+data.SiteLongitude)
 		this.options.mount?.geographicCoordinate(device, state)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountIsSlewing(id: number) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.slewing)
+		return makeAlpacaResponse(this.telescope(id).device.slewing)
 	}
 
 	private mountGetSlewSettleTime(id: number) {
-		return makeAlpacaResponse(this.state(id)[0].slewSettleTime)
+		return makeAlpacaResponse(this.telescope(id).state.slewSettleTime)
 	}
 
 	private mountSetSlewSettleTime(id: number, data: { SlewSettleTime: string }) {
-		const [state, device] = this.state(id)
+		const { state } = this.telescope(id)
 		state.slewSettleTime = +data.SlewSettleTime
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountGetTargetDeclination(id: number) {
-		return makeAlpacaResponse(toDeg(this.state(id)[0].declination))
+		return makeAlpacaResponse(toDeg(this.telescope(id).state.declination))
 	}
 
 	private mountSetTargetDeclination(id: number, data: { TargetDeclination: string }) {
-		this.state<Mount>(id)[0].declination = deg(+data.TargetDeclination)
+		this.telescope(id).state.declination = deg(+data.TargetDeclination)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountGetTargetRightAscension(id: number) {
-		return makeAlpacaResponse(toHour(this.state(id)[0].rightAscension))
+		return makeAlpacaResponse(toHour(this.telescope(id).state.rightAscension))
 	}
 
 	private mountSetTargetRightAscension(id: number, data: { TargetRightAscension: string }) {
-		this.state<Mount>(id)[0].rightAscension = hour(+data.TargetRightAscension)
+		this.telescope(id).state.rightAscension = hour(+data.TargetRightAscension)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountIsTracking(id: number) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.tracking)
+		return makeAlpacaResponse(this.telescope(id).device.tracking)
 	}
 
 	private mountSetTracking(id: number, data: { Tracking: string }) {
-		this.options.mount?.tracking(this.device<Mount>(id)!, isTrue(data.Tracking))
+		this.options.mount?.tracking(this.telescope(id).device, isTrue(data.Tracking))
 		return makeAlpacaResponse(undefined)
 	}
 
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DriveRates
 	private mountGetTrackingRate(id: number) {
-		return makeAlpacaResponse(mapTrackModeToAlpacaEnum(this.device<Mount>(id)!.trackMode))
+		return makeAlpacaResponse(mapTrackModeToAlpacaEnum(this.telescope(id).device.trackMode))
 	}
 
 	private mountSetTrackingRate(id: number, data: { TrackingRate: string }) {
-		const device = this.device<Mount>(id)!
+		const device = this.telescope(id).device
 		this.options.mount?.trackMode(device, mapAlpacaEnumToTrackMode(+data.TrackingRate & 0xff))
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountGetTrackingRates(id: number) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.trackModes.map(mapTrackModeToAlpacaEnum))
+		return makeAlpacaResponse(this.telescope(id).device.trackModes.map(mapTrackModeToAlpacaEnum))
 	}
 
 	private mountGetUTCDate(id: number) {
@@ -1207,41 +1246,41 @@ export class AlpacaServer {
 	}
 
 	private mountSetUTCDate(id: number, data: { UTCDate: string }) {
-		const device = this.device<Mount>(id)!
+		const device = this.telescope(id).device
 		const utc = new Date(data.UTCDate).getTime()
 		this.options.mount?.time(device, { utc, offset: device.time.offset })
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountStop(id: number) {
-		this.options.mount?.stop(this.device<Mount>(id)!)
+		this.options.mount?.stop(this.telescope(id).device)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountGetAxisRates(id: number, data: { Axis: string }) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.slewRates.map(mapSlewRateToAlpacaAxisRate))
+		return makeAlpacaResponse(this.telescope(id).device.slewRates.map(mapSlewRateToAlpacaAxisRate))
 	}
 
 	private mountCanMoveAxis(id: number, data: { Axis: string }) {
-		return makeAlpacaResponse(this.device<Mount>(id)!.canMove)
+		return makeAlpacaResponse(this.telescope(id).device.canMove)
 	}
 
 	private mountGetDestinationSideOfPier(id: number) {
-		const [state, device] = this.state<Mount>(id)
+		const { state, device } = this.telescope(id)
 		const lst = localSiderealTime(timeNow(true), state, false) // apparent LST
 		const value = expectedPierSide(device.equatorialCoordinate.rightAscension, device.equatorialCoordinate.declination, lst)
 		return makeAlpacaResponse(mapPierSideToAlpacaEnum(value))
 	}
 
 	private mountFindHome(id: number) {
-		this.options.mount?.findHome(this.device<Mount>(id)!)
+		this.options.mount?.findHome(this.telescope(id).device)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountMoveAxis(id: number, data: { Axis: string; Rate: string }) {
 		const rate = +data.Rate
 		const isPrimaryAxis = +data.Axis === 0
-		const device = this.device<Mount>(id)!
+		const device = this.telescope(id).device
 
 		if (rate === 0) {
 			if (isPrimaryAxis) {
@@ -1267,12 +1306,12 @@ export class AlpacaServer {
 	}
 
 	private mountPark(id: number) {
-		this.options.mount?.park(this.device<Mount>(id)!)
+		this.options.mount?.park(this.telescope(id).device)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountSetPark(id: number) {
-		this.options.mount?.setPark(this.device<Mount>(id)!)
+		this.options.mount?.setPark(this.telescope(id).device)
 		return makeAlpacaResponse(undefined)
 	}
 
@@ -1281,7 +1320,7 @@ export class AlpacaServer {
 	}
 
 	private mountSlewToAltAzAsync(id: number, data: { Azimuth: string; Altitude: string }) {
-		const [state, device] = this.state<Mount>(id)
+		const { state, device } = this.telescope(id)
 		const [rightAscension, declination] = observedToCirs(deg(+data.Azimuth), deg(+data.Altitude), timeNow(true), state.doesRefraction ? undefined : false)
 		this.options.mount?.goTo(device, rightAscension, declination)
 		return makeAlpacaResponse(undefined)
@@ -1292,7 +1331,7 @@ export class AlpacaServer {
 	}
 
 	private mountSlewToCoordinatesAsync(id: number, data: { RightAscension: string | number; Declination: string | number }) {
-		const device = this.device<Mount>(id)!
+		const device = this.telescope(id).device
 		this.options.mount?.goTo(device, hour(+data.RightAscension), deg(+data.Declination))
 		return makeAlpacaResponse(undefined)
 	}
@@ -1302,7 +1341,7 @@ export class AlpacaServer {
 	}
 
 	private mountSlewToTargetAsync(id: number) {
-		const [state] = this.state(id)
+		const { state } = this.telescope(id)
 		return this.mountSlewToCoordinatesAsync(id, { RightAscension: state.rightAscension, Declination: state.declination })
 	}
 
@@ -1311,29 +1350,29 @@ export class AlpacaServer {
 	}
 
 	private mountSyncToCoordinates(id: number, data: { RightAscension: string | number; Declination: string | number }) {
-		const device = this.device<Mount>(id)!
+		const device = this.telescope(id).device
 		this.options.mount?.syncTo(device, hour(+data.RightAscension), deg(+data.Declination))
 		return makeAlpacaResponse(undefined)
 	}
 
 	private mountSyncToTarget(id: number) {
-		const [state] = this.state(id)!
+		const { state } = this.telescope(id)
 		return this.mountSyncToCoordinates(id, { RightAscension: state.rightAscension, Declination: state.declination })
 	}
 
 	private mountUnpark(id: number) {
-		this.options.mount?.unpark(this.device<Mount>(id)!)
+		this.options.mount?.unpark(this.telescope(id).device)
 		return makeAlpacaResponse(undefined)
 	}
 
 	// Focuser
 
 	private focuserCanAbsolute(id: number) {
-		return makeAlpacaResponse(this.device<Focuser>(id)!.canAbsoluteMove)
+		return makeAlpacaResponse(this.focuser(id).device.canAbsoluteMove)
 	}
 
 	private focuserGetDeviceState(id: number) {
-		const device = this.device<Focuser>(id)!
+		const { device } = this.focuser(id)
 		const res: AlpacaStateItem[] = []
 		res.push({ Name: 'IsMoving', Value: device.moving })
 		res.push({ Name: 'Position', Value: device.position.value })
@@ -1343,7 +1382,7 @@ export class AlpacaServer {
 	}
 
 	private focuserIsMoving(id: number) {
-		return makeAlpacaResponse(this.device<Focuser>(id)!.moving)
+		return makeAlpacaResponse(this.focuser(id).device.moving)
 	}
 
 	private focuserGetMaxIncrement(id: number) {
@@ -1351,11 +1390,11 @@ export class AlpacaServer {
 	}
 
 	private focuserGetMaxStep(id: number) {
-		return makeAlpacaResponse(this.device<Focuser>(id)!.position.max)
+		return makeAlpacaResponse(this.focuser(id).device.position.max)
 	}
 
 	private focuserGetPosition(id: number) {
-		return makeAlpacaResponse(this.device<Focuser>(id)!.position.value)
+		return makeAlpacaResponse(this.focuser(id).device.position.value)
 	}
 
 	private focuserGetStepSize() {
@@ -1375,16 +1414,16 @@ export class AlpacaServer {
 	}
 
 	private focuserGetTemperature(id: number) {
-		return makeAlpacaResponse(this.device<Focuser>(id)!.temperature)
+		return makeAlpacaResponse(this.focuser(id).device.temperature)
 	}
 
 	private focuserHalt(id: number) {
-		this.options.focuser?.stop(this.device<Focuser>(id)!)
+		this.options.focuser?.stop(this.focuser(id).device)
 		return makeAlpacaResponse(undefined)
 	}
 
 	private focuserMove(id: number, data: { Position: string }) {
-		const device = this.device<Focuser>(id)!
+		const { device } = this.focuser(id)
 		const value = +data.Position
 
 		if (device.canAbsoluteMove) {
@@ -1403,13 +1442,12 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
-	private makeConfiguredDeviceFromDevice(device: Device, DeviceType: AlpacaDeviceType): AlpacaConfiguredDevice {
-		let configuredDevice = this.devices.get(device)
-		if (configuredDevice) return configuredDevice
+	private makeConfiguredDeviceFromDevice(device: Device, DeviceType: AlpacaDeviceType): AlpacaRegisteredDevice {
+		let registeredDevice = this[DeviceType].get(device)
+		if (registeredDevice) return registeredDevice
 
 		const [DeviceNumber, UniqueID] = this.deviceNumberAndUniqueIdProvider(device, DeviceType)
-		configuredDevice = { DeviceName: device.name, DeviceNumber, UniqueID, DeviceType }
-		this.devices.set(device, configuredDevice)
+		const configuredDevice: AlpacaConfiguredDevice = { DeviceName: device.name, DeviceNumber, UniqueID, DeviceType }
 		console.info('device configured:', JSON.stringify(configuredDevice))
 
 		const state = structuredClone(DEFAULT_ALPACA_DEVICE_STATE)
@@ -1422,9 +1460,10 @@ export class AlpacaServer {
 			Object.assign(state, device.equatorialCoordinate)
 		}
 
-		this.states.set(device, state)
+		registeredDevice = { device, configuredDevice, state }
+		this[DeviceType].set(device, registeredDevice as never)
 
-		return configuredDevice
+		return registeredDevice
 	}
 }
 
@@ -1575,6 +1614,35 @@ export function makeImageBytesFromFits(fits: Fits, data: Buffer) {
 	}
 
 	return output
+}
+
+function mapToAlpacaDeviceType(type: string): AlpacaDeviceType {
+	switch (type.toLowerCase()) {
+		case 'camera':
+			return 'Camera'
+		case 'telescope':
+			return 'Telescope'
+		case 'focuser':
+			return 'Focuser'
+		case 'filterwheel':
+			return 'FilterWheel'
+		case 'rotator':
+			return 'Rotator'
+		case 'dome':
+			return 'Dome'
+		case 'switch':
+			return 'Switch'
+		case 'covercalibrator':
+			return 'CoverCalibrator'
+		case 'observingconditions':
+			return 'ObservingConditions'
+		case 'safetymonitor':
+			return 'SafetyMonitor'
+		case 'video':
+			return 'Video'
+	}
+
+	throw new Error(`unknown type: ${type}`)
 }
 
 function isTrue(value: string) {
