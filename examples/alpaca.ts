@@ -29,7 +29,7 @@ const client = new IndiClient({
 
 await client.connect('pi.local')
 
-const alpacaServer = new AlpacaServer(client, { camera })
+const alpacaServer = new AlpacaServer({ camera })
 
 alpacaServer.start(undefined, 60364)
 console.info('alpaca server was started at port', alpacaServer.port)

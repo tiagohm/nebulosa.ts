@@ -1,6 +1,5 @@
 import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaException, type AlpacaResponse, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateValue } from './alpaca.types'
 import { Bitpix, bitpixInBytes, bitpixKeyword, type Fits, readFits } from './fits'
-import type { IndiClient } from './indi'
 import { type Camera, type Device, isCamera } from './indi.device'
 import type { DeviceHandler, DeviceManager } from './indi.manager'
 import { bufferSource } from './io'
@@ -69,11 +68,11 @@ export class AlpacaServer {
 	private readonly deviceManager: DeviceManager<Device>
 
 	private readonly cameraHandler: DeviceHandler<Camera> = {
-		added: (client: IndiClient, device: Camera) => {
+		added: (device: Camera) => {
 			console.info('camera added:', device.name)
 			this.devices.set(device, this.makeConfiguredDeviceFromDevice(device, 'Camera'))
 		},
-		updated: (client, device, property) => {
+		updated: (device, property) => {
 			if (property === 'frame') {
 				const { frame } = this.states.get(device)!
 				frame[0] = device.frame.x.value
@@ -102,21 +101,18 @@ export class AlpacaServer {
 				}
 			}
 		},
-		removed: (client: IndiClient, device: Camera) => {
+		removed: (device: Camera) => {
 			console.info('camera removed:', device.name)
 			this.devices.delete(device)
 			this.states.delete(device)
 		},
-		blobReceived: (client, device, data) => {
+		blobReceived: (device, data) => {
 			console.info('camera image received', device.name, data.length)
 			this.states.get(device)!.data = data
 		},
 	}
 
-	constructor(
-		private readonly client: IndiClient,
-		private readonly options: AlpacaServerOptions,
-	) {
+	constructor(private readonly options: AlpacaServerOptions) {
 		this.deviceManager = (options.camera ?? options.mount ?? options.focuser ?? options.wheel ?? options.flatPanel ?? options.cover ?? options.rotator) as unknown as DeviceManager<Device>
 
 		if (!this.deviceManager) throw new Error('at least one device manager must be provided.')
@@ -307,7 +303,9 @@ export class AlpacaServer {
 	}
 
 	private deviceConnect(id: number, data: { Connected: string }) {
-		const device = this.device(id)!
+		const device = this.device(id)
+
+		if (!device) return Response.json(this.makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Device is not present'))
 
 		const makeResponse = (connected: boolean) => {
 			return connected ? Response.json(this.makeAlpacaResponse(undefined)) : Response.json(this.makeAlpacaErrorResponse(AlpacaException.NotConnected, 'Unable to connect'))
@@ -330,8 +328,8 @@ export class AlpacaServer {
 
 			console.info(connect ? 'device connecting:' : 'device disconnecting:', device.name)
 
-			if (connect) this.deviceManager.connect(this.client, device as never)
-			else this.deviceManager.disconnect(this.client, device as never)
+			if (connect) this.deviceManager.connect(device as never)
+			else this.deviceManager.disconnect(device as never)
 
 			return resolver.promise.then(makeResponse)
 		}
@@ -444,7 +442,7 @@ export class AlpacaServer {
 
 	private cameraSetGain(id: number, data: { Gain: string }) {
 		const device = this.device<Camera>(id)!
-		this.options.camera?.gain(this.client, device, +data.Gain)
+		this.options.camera?.gain(device, +data.Gain)
 		return Response.json(this.makeAlpacaResponse(undefined))
 	}
 
@@ -462,7 +460,7 @@ export class AlpacaServer {
 
 	private cameraSetOffset(id: number, data: { Offset: string }) {
 		const device = this.device<Camera>(id)!
-		this.options.camera?.offset(this.client, device, +data.Offset)
+		this.options.camera?.offset(device, +data.Offset)
 		return Response.json(this.makeAlpacaResponse(undefined))
 	}
 
@@ -485,7 +483,7 @@ export class AlpacaServer {
 		if (data.StartY) frame[1] = +data.StartY
 		if (data.NumX) frame[2] = +data.NumX
 		if (data.NumY) frame[3] = +data.NumY
-		this.options.camera?.frame(this.client, device, ...frame)
+		this.options.camera?.frame(device, ...frame)
 		return Response.json(this.makeAlpacaResponse(undefined))
 	}
 
@@ -541,9 +539,9 @@ export class AlpacaServer {
 		const value = +data.ReadoutMode
 
 		if (Number.isFinite(value) && value >= 0 && value < device.frameFormats.length) {
-			this.options.camera?.frameFormat(this.client, device, device.frameFormats[value])
+			this.options.camera?.frameFormat(device, device.frameFormats[value])
 		} else if (device.frameFormats.includes(data.ReadoutMode)) {
-			this.options.camera?.frameFormat(this.client, device, data.ReadoutMode)
+			this.options.camera?.frameFormat(device, data.ReadoutMode)
 		} else {
 			console.warn('invalid readout mode:', data.ReadoutMode)
 		}
@@ -597,7 +595,7 @@ export class AlpacaServer {
 		const device = this.device<Camera>(id)!
 		const state = this.states.get(device)!
 		state.ccdTemperature = +data.SetCCDTemperature
-		this.options.camera?.temperature(this.client, device, state.ccdTemperature)
+		this.options.camera?.temperature(device, state.ccdTemperature)
 		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.temperature))
 	}
 
@@ -620,7 +618,7 @@ export class AlpacaServer {
 	private cameraSetBin(id: number, data: { BinX?: string; BinY?: string }) {
 		const device = this.device<Camera>(id)!
 		const bin = +(data.BinX || data.BinY || 1)
-		this.options.camera?.bin(this.client, device, bin, bin)
+		this.options.camera?.bin(device, bin, bin)
 		return Response.json(this.makeAlpacaResponse(undefined))
 	}
 
@@ -638,7 +636,7 @@ export class AlpacaServer {
 
 	private cameraSetCoolerOn(id: number, data: { CoolerOn: string }) {
 		const device = this.device<Camera>(id)!
-		this.options.camera?.cooler(this.client, device, data.CoolerOn.toLowerCase() === 'true')
+		this.options.camera?.cooler(device, data.CoolerOn.toLowerCase() === 'true')
 		return Response.json(this.makeAlpacaResponse(undefined))
 	}
 
@@ -654,22 +652,21 @@ export class AlpacaServer {
 	private cameraStart(id: number, data: { Duration: string; Light: string }) {
 		const device = this.device<Camera>(id)!
 		const camera = this.options.camera
-		if (!camera) return Response.json(this.makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Camera manager is not present'))
-		camera.enableBlob(this.client, device)
-		camera.frameType(this.client, device, data.Light.toLowerCase() !== 'true' ? 'DARK' : 'LIGHT')
-		camera.startExposure(this.client, device, +data.Duration)
+		camera?.enableBlob(device)
+		camera?.frameType(device, data.Light.toLowerCase() !== 'true' ? 'DARK' : 'LIGHT')
+		camera?.startExposure(device, +data.Duration)
 		return Response.json(this.makeAlpacaResponse(undefined))
 	}
 
 	private cameraPulseGuide(id: number, data: { Duration: string; Direction: string }) {
 		const device = this.device<Camera>(id)!
-		this.options.guideOutput?.pulse(this.client, device, data.Direction === '0' ? 'NORTH' : data.Direction === '1' ? 'SOUTH' : data.Direction === '2' ? 'EAST' : 'WEST', +data.Duration)
+		this.options.guideOutput?.pulse(device, data.Direction === '0' ? 'NORTH' : data.Direction === '1' ? 'SOUTH' : data.Direction === '2' ? 'EAST' : 'WEST', +data.Duration)
 		return Response.json(this.makeAlpacaResponse(undefined))
 	}
 
 	private cameraStop(id: number) {
 		const device = this.device<Camera>(id)!
-		this.options.camera?.stopExposure(this.client, device)
+		this.options.camera?.stopExposure(device)
 		return Response.json(this.makeAlpacaResponse(undefined))
 	}
 
