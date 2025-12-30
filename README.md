@@ -21,8 +21,13 @@ const result = polarAlignment.add(ra, dec, time)
 ### Alpaca ![](bun.webp)
 
 ```ts
-const server = new AlpacaDiscoveryServer(ports)
-server.start(hostname, port)
+const server = new AlpacaServer({ camera, wheel, mount })
+server.start(host, port)
+
+const discoveryServer = new AlpacaDiscoveryServer(ports)
+discoveryServer.addPort(server.port)
+discoveryServer.start(host, port)
+
 ```
 
 ### Angle ![](bun.webp) ![](browser.webp)

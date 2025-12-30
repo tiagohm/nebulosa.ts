@@ -1,10 +1,11 @@
-import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem } from './alpaca.types'
+// biome-ignore format: too long!
+import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberAndUniqueIdProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, defaultDeviceNumberAndUniqueIdProvider, } from './alpaca.types'
 import { deg, hour, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import type { EquatorialCoordinate } from './coordinate'
 import { meter, toMeter } from './distance'
 import { Bitpix, bitpixInBytes, bitpixKeyword, type Fits, readFits } from './fits'
-import { type Camera, type Device, expectedPierSide, type GuideDirection, type GuideOutput, isCamera, isMount, type Mount, type PierSide, type SlewRate, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type Device, expectedPierSide, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, type Mount, type PierSide, type SlewRate, type TrackMode, type Wheel } from './indi.device'
 import type { DeviceHandler, DeviceManager } from './indi.manager'
 import { bufferSource } from './io'
 import { type GeographicCoordinate, localSiderealTime } from './location'
@@ -107,6 +108,7 @@ export class AlpacaServer {
 	private readonly devices = new Map<Device, AlpacaConfiguredDevice>()
 	private readonly states = new Map<Device, AlpacaDeviceState>()
 	private readonly deviceManager: DeviceManager<Device>
+	private readonly deviceNumberAndUniqueIdProvider: AlpacaDeviceNumberAndUniqueIdProvider
 
 	private readonly cameraHandler: DeviceHandler<Camera> = {
 		added: (device: Camera) => {
@@ -177,6 +179,23 @@ export class AlpacaServer {
 		},
 	}
 
+	private readonly focuserHandler: DeviceHandler<Focuser> = {
+		added: (device: Focuser) => {
+			console.info('focuser added:', device.name)
+			this.devices.set(device, this.makeConfiguredDeviceFromDevice(device, 'Focuser'))
+		},
+		updated: (device, property) => {
+			if (property === 'connected') {
+				this.handleConnectedEvent(device)
+			}
+		},
+		removed: (device: Focuser) => {
+			console.info('focuser removed:', device.name)
+			this.devices.delete(device)
+			this.states.delete(device)
+		},
+	}
+
 	constructor(private readonly options: AlpacaServerOptions) {
 		this.deviceManager = (options.camera ?? options.mount ?? options.focuser ?? options.wheel ?? options.flatPanel ?? options.cover ?? options.rotator) as unknown as DeviceManager<Device>
 
@@ -185,6 +204,9 @@ export class AlpacaServer {
 		options.camera?.addHandler(this.cameraHandler)
 		options.wheel?.addHandler(this.wheelHandler)
 		options.mount?.addHandler(this.mountHandler)
+		options.focuser?.addHandler(this.focuserHandler)
+
+		this.deviceNumberAndUniqueIdProvider = options.deviceNumberAndUniqueIdProvider ?? defaultDeviceNumberAndUniqueIdProvider
 
 		this.configuredDevices()
 	}
@@ -213,7 +235,8 @@ export class AlpacaServer {
 		'/api/v1/:type/:id/connected': { GET: (req) => this.deviceIsConnected(+req.params.id), PUT: async (req) => this.deviceConnect(+req.params.id, await params(req)) },
 		'/api/v1/:type/:id/connecting': { GET: (req) => this.deviceIsConnecting(+req.params.id) },
 		'/api/v1/:type/:id/disconnect': { PUT: (req) => this.deviceConnect(+req.params.id, { Connected: 'False' }) },
-		'/api/v1/:type/:id/supportedactions': { GET: () => this.deviceGetSupportedActions() },
+		'/api/v1/:type/:id/supportedactions': { GET: (req) => this.deviceGetSupportedActions(+req.params.id) },
+		'/api/v1/:type/:id/action': { PUT: async (req) => this.deviceAction(+req.params.id, await params(req)) },
 		// Camera
 		'/api/v1/camera/:id/bayeroffsetx': { GET: (req) => this.cameraGetBayerOffsetX(+req.params.id) },
 		'/api/v1/camera/:id/bayeroffsety': { GET: (req) => this.cameraGetBayerOffsetY(+req.params.id) },
@@ -344,6 +367,19 @@ export class AlpacaServer {
 		'/api/v1/telescope/:id/synctocoordinates': { PUT: async (req) => this.mountSyncToCoordinates(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/synctotarget': { PUT: (req) => this.mountSyncToTarget(+req.params.id) },
 		'/api/v1/telescope/:id/unpark': { PUT: (req) => this.mountUnpark(+req.params.id) },
+		// Focuser
+		'/api/v1/focuser/:id/absolute': { GET: (req) => this.focuserCanAbsolute(+req.params.id) },
+		'/api/v1/focuser/:id/devicestate': { GET: (req) => this.focuserGetDeviceState(+req.params.id) },
+		'/api/v1/focuser/:id/ismoving': { GET: (req) => this.focuserIsMoving(+req.params.id) },
+		'/api/v1/focuser/:id/maxincrement': { GET: (req) => this.focuserGetMaxIncrement(+req.params.id) },
+		'/api/v1/focuser/:id/maxstep': { GET: (req) => this.focuserGetMaxStep(+req.params.id) },
+		'/api/v1/focuser/:id/position': { GET: (req) => this.focuserGetPosition(+req.params.id) },
+		'/api/v1/focuser/:id/stepsize': { GET: () => this.focuserGetStepSize() },
+		'/api/v1/focuser/:id/tempcomp': { GET: () => this.focuserGetTempComp(), PUT: () => this.focuserSetTempComp() },
+		'/api/v1/focuser/:id/tempcompavailable': { GET: () => this.focuserGetTempCompAvailable() },
+		'/api/v1/focuser/:id/temperature': { GET: (req) => this.focuserGetTemperature(+req.params.id) },
+		'/api/v1/focuser/:id/halt': { PUT: (req) => this.focuserHalt(+req.params.id) },
+		'/api/v1/focuser/:id/move': { PUT: async (req) => this.focuserMove(+req.params.id, await params(req)) },
 	}
 
 	start(hostname: string = '0.0.0.0', port: number = 0, options?: AlpacaServerStartOptions) {
@@ -375,6 +411,7 @@ export class AlpacaServer {
 		this.options?.camera?.removeHandler(this.cameraHandler)
 		this.options?.wheel?.removeHandler(this.wheelHandler)
 		this.options?.mount?.removeHandler(this.mountHandler)
+		this.options?.focuser?.removeHandler(this.focuserHandler)
 	}
 
 	private device<T extends Device = Device>(id: number) {
@@ -490,8 +527,25 @@ export class AlpacaServer {
 		return makeAlpacaResponse(!!state.tasks.connect?.running)
 	}
 
-	private deviceGetSupportedActions() {
+	private deviceGetSupportedActions(id: number) {
+		const device = this.device(id)!
+
+		if (isFocuser(device)) {
+			return makeAlpacaResponse(['ToggleReverse'])
+		}
+
 		return makeAlpacaResponse([])
+	}
+
+	private deviceAction(id: number, data: { Action: string; Parameters: string }) {
+		const device = this.device(id)!
+		const action = data.Action
+
+		if (isFocuser(device)) {
+			if (action === 'ToggleReverse') return this.focuserToggleReverse(device)
+		}
+
+		return makeAlpacaResponse('OK')
 	}
 
 	// Guide Output API
@@ -596,7 +650,7 @@ export class AlpacaServer {
 
 	private cameraGetDeviceState(id: number) {
 		const [state, device] = this.state<Camera>(id)
-		const res = new Array<AlpacaStateItem>(8)
+		const res: AlpacaStateItem[] = []
 		res.push({ Name: 'CameraState', Value: device.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle })
 		res.push({ Name: 'CCDTemperature', Value: device.temperature })
 		res.push({ Name: 'CoolerPower', Value: device.coolerPower })
@@ -844,7 +898,7 @@ export class AlpacaServer {
 
 	private wheelGetDeviceState(id: number) {
 		const device = this.device<Wheel>(id)!
-		const res = new Array<AlpacaStateItem>(2)
+		const res: AlpacaStateItem[] = []
 		res.push({ Name: 'Position', Value: device.position })
 		res.push({ Name: 'TimeStamp', Value: '' })
 		return makeAlpacaResponse(res)
@@ -980,7 +1034,7 @@ export class AlpacaServer {
 
 	private mountGetDeviceState(id: number) {
 		const device = this.device<Mount>(id)!
-		const res = new Array<AlpacaStateItem>(13)
+		const res: AlpacaStateItem[] = []
 		res.push({ Name: 'Altitude', Value: 0 })
 		res.push({ Name: 'AtHome', Value: false })
 		res.push({ Name: 'AtPark', Value: device.parked })
@@ -1272,12 +1326,89 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
-	private makeConfiguredDeviceFromDevice(device: Device, type: AlpacaDeviceType): AlpacaConfiguredDevice {
+	// Focuser
+
+	private focuserCanAbsolute(id: number) {
+		return makeAlpacaResponse(this.device<Focuser>(id)!.canAbsoluteMove)
+	}
+
+	private focuserGetDeviceState(id: number) {
+		const device = this.device<Focuser>(id)!
+		const res: AlpacaStateItem[] = []
+		res.push({ Name: 'IsMoving', Value: device.moving })
+		res.push({ Name: 'Position', Value: device.position.value })
+		res.push({ Name: 'Temperature', Value: device.temperature })
+		res.push({ Name: 'TimeStamp', Value: '' })
+		return makeAlpacaResponse(res)
+	}
+
+	private focuserIsMoving(id: number) {
+		return makeAlpacaResponse(this.device<Focuser>(id)!.moving)
+	}
+
+	private focuserGetMaxIncrement(id: number) {
+		return this.focuserGetMaxStep(id)
+	}
+
+	private focuserGetMaxStep(id: number) {
+		return makeAlpacaResponse(this.device<Focuser>(id)!.position.max)
+	}
+
+	private focuserGetPosition(id: number) {
+		return makeAlpacaResponse(this.device<Focuser>(id)!.position.value)
+	}
+
+	private focuserGetStepSize() {
+		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Focuser does not support step size')
+	}
+
+	private focuserGetTempComp() {
+		return makeAlpacaResponse(false)
+	}
+
+	private focuserSetTempComp() {
+		return makeAlpacaResponse(undefined)
+	}
+
+	private focuserGetTempCompAvailable() {
+		return makeAlpacaResponse(false)
+	}
+
+	private focuserGetTemperature(id: number) {
+		return makeAlpacaResponse(this.device<Focuser>(id)!.temperature)
+	}
+
+	private focuserHalt(id: number) {
+		this.options.focuser?.stop(this.device<Focuser>(id)!)
+		return makeAlpacaResponse(undefined)
+	}
+
+	private focuserMove(id: number, data: { Position: string }) {
+		const device = this.device<Focuser>(id)!
+		const value = +data.Position
+
+		if (device.canAbsoluteMove) {
+			this.options.focuser?.moveTo(device, value)
+		} else if (value > 0) {
+			this.options.focuser?.moveIn(device, value)
+		} else {
+			this.options.focuser?.moveOut(device, value)
+		}
+
+		return makeAlpacaResponse(undefined)
+	}
+
+	private focuserToggleReverse(focuser: Focuser) {
+		this.options.focuser?.reverse(focuser, !focuser.reversed)
+		return makeAlpacaResponse(undefined)
+	}
+
+	private makeConfiguredDeviceFromDevice(device: Device, DeviceType: AlpacaDeviceType): AlpacaConfiguredDevice {
 		let configuredDevice = this.devices.get(device)
 		if (configuredDevice) return configuredDevice
 
-		const id = `${device.type}:${device.name}`
-		configuredDevice = { DeviceName: device.name, DeviceNumber: Bun.hash.cityHash32(id), DeviceType: type, UniqueID: Bun.MD5.hash(id, 'hex') }
+		const [DeviceNumber, UniqueID] = this.deviceNumberAndUniqueIdProvider(device, DeviceType)
+		configuredDevice = { DeviceName: device.name, DeviceNumber, UniqueID, DeviceType }
 		this.devices.set(device, configuredDevice)
 		console.info('device configured:', JSON.stringify(configuredDevice))
 
