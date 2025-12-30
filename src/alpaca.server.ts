@@ -1,4 +1,4 @@
-import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaException, type AlpacaResponse, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateValue } from './alpaca.types'
+import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaException, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateValue } from './alpaca.types'
 import { Bitpix, bitpixInBytes, bitpixKeyword, type Fits, readFits } from './fits'
 import { type Camera, type Device, isCamera } from './indi.device'
 import type { DeviceHandler, DeviceManager } from './indi.manager'
@@ -253,23 +253,25 @@ export class AlpacaServer {
 		return undefined
 	}
 
-	// Management API
-
+	// API Response
 	// https://ascom-standards.org/newdocs/exceptions.html
-	private makeAlpacaResponse<T>(data: T, code: AlpacaException | 0 = 0, message: string = ''): AlpacaResponse<T> {
-		return { Value: data, ClientTransactionID: 0, ServerTransactionID: 0, ErrorNumber: code, ErrorMessage: message }
+
+	private makeAlpacaResponse<T>(data: T, code: AlpacaException | 0 = 0, message: string = '') {
+		return Response.json({ Value: data, ClientTransactionID: 0, ServerTransactionID: 0, ErrorNumber: code, ErrorMessage: message })
 	}
 
 	private makeAlpacaErrorResponse(code: AlpacaException, message: string) {
 		return this.makeAlpacaResponse(undefined, code, message)
 	}
 
+	// Management API
+
 	private apiVersions() {
-		return Response.json(this.makeAlpacaResponse([1]))
+		return this.makeAlpacaResponse([1])
 	}
 
 	private apiDescription() {
-		return Response.json(this.makeAlpacaResponse<AlpacaServerDescription>({ ServerName: this.options.name || 'Nebulosa', Manufacturer: this.options.manufacturer || 'Tiago Melo', ManufacturerVersion: this.options.version || '1.0.0', Location: 'None' }))
+		return this.makeAlpacaResponse<AlpacaServerDescription>({ ServerName: this.options.name || 'Nebulosa', Manufacturer: this.options.manufacturer || 'Tiago Melo', ManufacturerVersion: this.options.version || '1.0.0', Location: 'None' })
 	}
 
 	private configuredDevices() {
@@ -283,48 +285,39 @@ export class AlpacaServer {
 		this.options.flatPanel?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'CoverCalibrator')))
 		this.options.cover?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'CoverCalibrator')))
 
-		return Response.json(this.makeAlpacaResponse(Array.from(configuredDevices)))
+		return this.makeAlpacaResponse(Array.from(configuredDevices))
 	}
 
 	// Device API
 
 	private deviceGetInterfaceVersion(type: Lowercase<AlpacaDeviceType>) {
 		const version = type === 'camera' || type === 'focuser' || type === 'rotator' || type === 'telescope' ? 4 : type === 'dome' || type === 'filterwheel' || type === 'safetymonitor' || type === 'switch' ? 3 : 2
-		return Response.json(this.makeAlpacaResponse(version))
+		return this.makeAlpacaResponse(version)
 	}
 
 	private deviceGetDescription(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device(id)!.name))
+		return this.makeAlpacaResponse(this.device(id)!.name)
 	}
 
 	private deviceGetName(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device(id)!.name))
+		return this.makeAlpacaResponse(this.device(id)!.name)
 	}
 
 	private deviceGetDriverInfo(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device(id)!.driver.executable))
+		return this.makeAlpacaResponse(this.device(id)!.driver.executable)
 	}
 
 	private deviceGetDriverVersion(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device(id)!.driver.version))
-	}
-
-	private deviceIsConnected(id: number) {
-		return Response.json(this.makeAlpacaResponse(!!this.device(id)?.connected))
-	}
-
-	private deviceIsConnecting(id: number) {
-		const device = this.device<Camera>(id)!
-		return Response.json(this.makeAlpacaResponse(this.connecting.has(device)))
+		return this.makeAlpacaResponse(this.device(id)!.driver.version)
 	}
 
 	private deviceConnect(id: number, data: { Connected: string }) {
 		const device = this.device(id)
 
-		if (!device) return Response.json(this.makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Device is not present'))
+		if (!device) return this.makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Device is not present')
 
 		const makeResponse = (connected: boolean) => {
-			return connected ? Response.json(this.makeAlpacaResponse(undefined)) : Response.json(this.makeAlpacaErrorResponse(AlpacaException.NotConnected, 'Unable to connect'))
+			return connected ? this.makeAlpacaResponse(undefined) : this.makeAlpacaErrorResponse(AlpacaException.NotConnected, 'Unable to connect')
 		}
 
 		if (this.connecting.has(device)) {
@@ -353,40 +346,105 @@ export class AlpacaServer {
 		return makeResponse(true)
 	}
 
+	private deviceIsConnected(id: number) {
+		return this.makeAlpacaResponse(!!this.device(id)?.connected)
+	}
+
+	private deviceIsConnecting(id: number) {
+		const device = this.device<Camera>(id)!
+		return this.makeAlpacaResponse(this.connecting.has(device))
+	}
+
 	private deviceGetSupportedActions() {
-		return Response.json(this.makeAlpacaResponse([]))
+		return this.makeAlpacaResponse([])
 	}
 
 	// Camera API
 
+	private cameraGetBayerOffsetX(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.cfa.offsetX)
+	}
+
+	private cameraGetBayerOffsetY(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.cfa.offsetY)
+	}
+
+	private cameraGetBinX(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.bin.x.value)
+	}
+
+	private cameraSetBinX(id: number, data: { BinX: string }) {
+		return this.cameraSetBin(id, data)
+	}
+
+	private cameraGetBinY(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.bin.y.value)
+	}
+
+	private cameraSetBinY(id: number, data: { BinY: string }) {
+		return this.cameraSetBin(id, data)
+	}
+
+	private cameraSetBin(id: number, data: { BinX?: string; BinY?: string }) {
+		const device = this.device<Camera>(id)!
+		const bin = +(data.BinX || data.BinY || 1)
+		this.options.camera?.bin(device, bin, bin)
+		return this.makeAlpacaResponse(undefined)
+	}
+
+	// https://ascom-standards.org/newdocs/camera.html#Camera.CameraStates
+	private cameraGetState(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle)
+	}
+
 	private cameraGetXSize(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.frame.width.value))
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.frame.width.value)
 	}
 
 	private cameraGetYSize(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.frame.height.value))
-	}
-
-	private cameraCanAsymmetricBin() {
-		return Response.json(this.makeAlpacaResponse(false))
-	}
-
-	private cameraCanFastReadout() {
-		return Response.json(this.makeAlpacaResponse(false))
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.frame.height.value)
 	}
 
 	private cameraCanStopExposure(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.canAbort))
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.canAbort)
 	}
 
-	private cameraGetSensorName() {
-		return Response.json(this.makeAlpacaResponse(''))
+	private cameraCanAsymmetricBin() {
+		return this.makeAlpacaResponse(false)
 	}
 
-	// https://ascom-standards.org/newdocs/camera.html#Camera.SensrType
-	private cameraGetSensorType(id: number) {
+	private cameraCanFastReadout() {
+		return this.makeAlpacaResponse(false)
+	}
+
+	private cameraCanGetCoolerPower(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.hasCoolerControl)
+	}
+
+	private cameraCanPulseGuide(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.canPulseGuide)
+	}
+
+	private cameraCanSetCCDTemperature(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.canSetTemperature)
+	}
+
+	private cameraGetCcdTemperature(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.temperature)
+	}
+
+	private cameraIsCoolerOn(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.cooler)
+	}
+
+	private cameraSetCoolerOn(id: number, data: { CoolerOn: string }) {
 		const device = this.device<Camera>(id)!
-		return Response.json(this.makeAlpacaResponse(device.cfa.type ? 2 : 0))
+		this.options.camera?.cooler(device, data.CoolerOn.toLowerCase() === 'true')
+		return this.makeAlpacaResponse(undefined)
+	}
+
+	private cameraGetCoolerPower(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.coolerPower)
 	}
 
 	private cameraGetDeviceState(id: number) {
@@ -401,98 +459,88 @@ export class AlpacaServer {
 		res.push({ Name: 'IsPulseGuiding', Value: device.pulsing })
 		res.push({ Name: 'PercentCompleted', Value: (1 - device.exposure.value / state.lastExposureDuration) * 100 })
 		res.push({ Name: 'TimeStamp', Value: '' })
-		return Response.json(this.makeAlpacaResponse(res))
+		return this.makeAlpacaResponse(res)
 	}
 
 	private cameraGetEletronsPerADU() {
-		return Response.json(this.makeAlpacaResponse(1))
+		return this.makeAlpacaResponse(1)
+	}
+
+	private cameraGetExposureMax(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.exposure.max)
+	}
+
+	private cameraGetExposureMin(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.exposure.min)
+	}
+
+	private cameraGetExposureResolution() {
+		return this.makeAlpacaResponse(1e-6)
 	}
 
 	private cameraIsFastReadout() {
-		return Response.json(this.makeAlpacaResponse(false))
+		return this.makeAlpacaResponse(false)
 	}
 
 	private cameraSetFastReadout() {
-		return Response.json(this.makeAlpacaResponse(undefined))
+		return this.makeAlpacaResponse(undefined)
 	}
 
 	private cameraGetFullwellCapacity() {
-		return Response.json(this.makeAlpacaResponse(65535))
-	}
-
-	private cameraGetMaxADU() {
-		return Response.json(this.makeAlpacaResponse(65535))
-	}
-
-	private cameraIsImageReady(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.states.get(this.device<Camera>(id)!)?.data !== undefined))
-	}
-
-	private cameraIsPulseGuiding(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.pulsing))
-	}
-
-	private cameraGetLastExposureDuration(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.states.get(this.device<Camera>(id)!)?.lastExposureDuration))
+		return this.makeAlpacaResponse(65535)
 	}
 
 	private cameraGetGain(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.gain.value))
-	}
-
-	private cameraGetGainMax(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.gain.max))
-	}
-
-	private cameraGetGainMin(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.gain.min))
-	}
-
-	private cameraGetGains() {
-		return Response.json(this.makeAlpacaResponse([], AlpacaException.MethodNotImplemented, 'Gain modes is not supported'))
-	}
-
-	private cameraGetOffsets() {
-		return Response.json(this.makeAlpacaResponse([], AlpacaException.MethodNotImplemented, 'Offset modes is not supported'))
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.gain.value)
 	}
 
 	private cameraSetGain(id: number, data: { Gain: string }) {
 		const device = this.device<Camera>(id)!
 		this.options.camera?.gain(device, +data.Gain)
-		return Response.json(this.makeAlpacaResponse(undefined))
+		return this.makeAlpacaResponse(undefined)
 	}
 
-	private cameraGetOffset(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.offset.value))
+	private cameraGetGainMax(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.gain.max)
 	}
 
-	private cameraGetOffsetMax(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.offset.max))
+	private cameraGetGainMin(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.gain.min)
 	}
 
-	private cameraGetOffsetMin(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.offset.min))
+	private cameraGetGains() {
+		return this.makeAlpacaResponse([], AlpacaException.MethodNotImplemented, 'Gain modes is not supported')
 	}
 
-	private cameraSetOffset(id: number, data: { Offset: string }) {
-		const device = this.device<Camera>(id)!
-		this.options.camera?.offset(device, +data.Offset)
-		return Response.json(this.makeAlpacaResponse(undefined))
+	private cameraHasShutter() {
+		return this.makeAlpacaResponse(false)
+	}
+
+	private cameraIsImageReady(id: number) {
+		return this.makeAlpacaResponse(this.states.get(this.device<Camera>(id)!)?.data !== undefined)
+	}
+
+	private cameraIsPulseGuiding(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.pulsing)
+	}
+
+	private cameraGetLastExposureDuration(id: number) {
+		return this.makeAlpacaResponse(this.states.get(this.device<Camera>(id)!)?.lastExposureDuration)
+	}
+
+	private cameraGetMaxADU() {
+		return this.makeAlpacaResponse(65535)
 	}
 
 	private cameraGetMaxBinX(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.bin.x.max))
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.bin.x.max)
 	}
 
 	private cameraGetMaxBinY(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.bin.y.max))
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.bin.y.max)
 	}
 
-	private cameraGetNumX(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.frame.width.value))
-	}
-
-	cameraSetFrame(id: number, data: { NumX?: string; NumY?: string; StartX?: string; StartY?: string }) {
+	private cameraSetFrame(id: number, data: { NumX?: string; NumY?: string; StartX?: string; StartY?: string }) {
 		const device = this.device<Camera>(id)!
 		const { frame } = this.states.get(device)!
 		if (data.StartX) frame[0] = +data.StartX
@@ -500,7 +548,11 @@ export class AlpacaServer {
 		if (data.NumX) frame[2] = +data.NumX
 		if (data.NumY) frame[3] = +data.NumY
 		this.options.camera?.frame(device, ...frame)
-		return Response.json(this.makeAlpacaResponse(undefined))
+		return this.makeAlpacaResponse(undefined)
+	}
+
+	private cameraGetNumX(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.frame.width.value)
 	}
 
 	private cameraSetNumX(id: number, data: { NumX: string }) {
@@ -508,46 +560,52 @@ export class AlpacaServer {
 	}
 
 	private cameraGetNumY(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.frame.height.value))
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.frame.height.value)
 	}
 
 	private cameraSetNumY(id: number, data: { NumY: string }) {
 		return this.cameraSetFrame(id, data)
 	}
 
-	private cameraGetStartX(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.frame.x.value))
+	private cameraGetOffset(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.offset.value)
 	}
 
-	private cameraSetStartX(id: number, data: { StartX: string }) {
-		return this.cameraSetFrame(id, data)
+	private cameraSetOffset(id: number, data: { Offset: string }) {
+		const device = this.device<Camera>(id)!
+		this.options.camera?.offset(device, +data.Offset)
+		return this.makeAlpacaResponse(undefined)
 	}
 
-	private cameraGetStartY(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.frame.y.value))
+	private cameraGetOffsetMax(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.offset.max)
 	}
 
-	private cameraSetStartY(id: number, data: { StartY: string }) {
-		return this.cameraSetFrame(id, data)
+	private cameraGetOffsetMin(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.offset.min)
+	}
+
+	private cameraGetOffsets() {
+		return this.makeAlpacaResponse([], AlpacaException.MethodNotImplemented, 'Offset modes is not supported')
 	}
 
 	private cameraGetPercentCompleted(id: number) {
 		const device = this.device<Camera>(id)!
 		const state = this.states.get(device)!
-		return Response.json(this.makeAlpacaResponse((1 - device.exposure.value / state.lastExposureDuration) * 100))
+		return this.makeAlpacaResponse((1 - device.exposure.value / state.lastExposureDuration) * 100)
 	}
 
 	private cameraGetPixelSizeX(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.pixelSize.x))
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.pixelSize.x)
 	}
 
 	private cameraGetPixelSizeY(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.pixelSize.y))
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.pixelSize.y)
 	}
 
 	private cameraGetReadoutMode(id: number) {
 		const device = this.device<Camera>(id)!
-		return Response.json(this.makeAlpacaResponse(device.frameFormat))
+		return this.makeAlpacaResponse(device.frameFormat)
 	}
 
 	private cameraSetReadoutMode(id: number, data: { ReadoutMode: string }) {
@@ -562,49 +620,27 @@ export class AlpacaServer {
 			console.warn('invalid readout mode:', data.ReadoutMode)
 		}
 
-		return Response.json(this.makeAlpacaResponse(undefined))
+		return this.makeAlpacaResponse(undefined)
 	}
 
 	private cameraGetReadoutModes(id: number) {
 		const device = this.device<Camera>(id)!
-		return Response.json(this.makeAlpacaResponse(device.frameFormats))
+		return this.makeAlpacaResponse(device.frameFormats)
 	}
 
-	private cameraGetExposureMax(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.exposure.max))
+	private cameraGetSensorName() {
+		return this.makeAlpacaResponse('')
 	}
 
-	private cameraGetExposureMin(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.exposure.min))
-	}
-
-	private cameraGetExposureResolution() {
-		return Response.json(this.makeAlpacaResponse(1e-6))
-	}
-
-	private cameraCanGetCoolerPower(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.hasCoolerControl))
-	}
-
-	private cameraCanPulseGuide(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.canPulseGuide))
-	}
-
-	private cameraCanSetCCDTemperature(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.canSetTemperature))
-	}
-
-	private cameraHasShutter() {
-		return Response.json(this.makeAlpacaResponse(false))
-	}
-
-	private cameraGetCcdTemperature(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.temperature))
+	// https://ascom-standards.org/newdocs/camera.html#Camera.SensrType
+	private cameraGetSensorType(id: number) {
+		const device = this.device<Camera>(id)!
+		return this.makeAlpacaResponse(device.cfa.type ? 2 : 0)
 	}
 
 	private cameraGetSetCcdTemperature(id: number) {
 		const device = this.device<Camera>(id)!
-		return Response.json(this.makeAlpacaResponse(this.states.get(device)!.ccdTemperature))
+		return this.makeAlpacaResponse(this.states.get(device)!.ccdTemperature)
 	}
 
 	private cameraSetCcdTemperature(id: number, data: { SetCCDTemperature: string }) {
@@ -612,57 +648,35 @@ export class AlpacaServer {
 		const state = this.states.get(device)!
 		state.ccdTemperature = +data.SetCCDTemperature
 		this.options.camera?.temperature(device, state.ccdTemperature)
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.temperature))
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.temperature)
 	}
 
-	private cameraGetBayerOffsetX(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.cfa.offsetX))
+	private cameraGetStartX(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.frame.x.value)
 	}
 
-	private cameraGetBayerOffsetY(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.cfa.offsetY))
+	private cameraSetStartX(id: number, data: { StartX: string }) {
+		return this.cameraSetFrame(id, data)
 	}
 
-	private cameraGetBinX(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.bin.x.value))
+	private cameraGetStartY(id: number) {
+		return this.makeAlpacaResponse(this.device<Camera>(id)!.frame.y.value)
 	}
 
-	private cameraGetBinY(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.bin.y.value))
+	private cameraSetStartY(id: number, data: { StartY: string }) {
+		return this.cameraSetFrame(id, data)
 	}
 
-	private cameraSetBin(id: number, data: { BinX?: string; BinY?: string }) {
+	private cameraStop(id: number) {
 		const device = this.device<Camera>(id)!
-		const bin = +(data.BinX || data.BinY || 1)
-		this.options.camera?.bin(device, bin, bin)
-		return Response.json(this.makeAlpacaResponse(undefined))
+		this.options.camera?.stopExposure(device)
+		return this.makeAlpacaResponse(undefined)
 	}
 
-	private cameraSetBinX(id: number, data: { BinX: string }) {
-		return this.cameraSetBin(id, data)
-	}
-
-	private cameraSetBinY(id: number, data: { BinY: string }) {
-		return this.cameraSetBin(id, data)
-	}
-
-	private cameraIsCoolerOn(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.cooler))
-	}
-
-	private cameraSetCoolerOn(id: number, data: { CoolerOn: string }) {
+	private cameraPulseGuide(id: number, data: { Duration: string; Direction: string }) {
 		const device = this.device<Camera>(id)!
-		this.options.camera?.cooler(device, data.CoolerOn.toLowerCase() === 'true')
-		return Response.json(this.makeAlpacaResponse(undefined))
-	}
-
-	private cameraGetCoolerPower(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.coolerPower))
-	}
-
-	// https://ascom-standards.org/newdocs/camera.html#Camera.CameraStates
-	private cameraGetState(id: number) {
-		return Response.json(this.makeAlpacaResponse(this.device<Camera>(id)!.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle))
+		this.options.guideOutput?.pulse(device, data.Direction === '0' ? 'NORTH' : data.Direction === '1' ? 'SOUTH' : data.Direction === '2' ? 'EAST' : 'WEST', +data.Duration)
+		return this.makeAlpacaResponse(undefined)
 	}
 
 	private cameraStart(id: number, data: { Duration: string; Light: string }) {
@@ -671,19 +685,7 @@ export class AlpacaServer {
 		camera?.enableBlob(device)
 		camera?.frameType(device, data.Light.toLowerCase() !== 'true' ? 'DARK' : 'LIGHT')
 		camera?.startExposure(device, +data.Duration)
-		return Response.json(this.makeAlpacaResponse(undefined))
-	}
-
-	private cameraPulseGuide(id: number, data: { Duration: string; Direction: string }) {
-		const device = this.device<Camera>(id)!
-		this.options.guideOutput?.pulse(device, data.Direction === '0' ? 'NORTH' : data.Direction === '1' ? 'SOUTH' : data.Direction === '2' ? 'EAST' : 'WEST', +data.Duration)
-		return Response.json(this.makeAlpacaResponse(undefined))
-	}
-
-	private cameraStop(id: number) {
-		const device = this.device<Camera>(id)!
-		this.options.camera?.stopExposure(device)
-		return Response.json(this.makeAlpacaResponse(undefined))
+		return this.makeAlpacaResponse(undefined)
 	}
 
 	private async cameraGetImageArray(id: number, accept?: string | null) {
@@ -694,7 +696,7 @@ export class AlpacaServer {
 			const buffer = Buffer.from(state.data!, 'base64')
 			const fits = await readFits(bufferSource(buffer))
 
-			if (!fits) return Response.json(this.makeAlpacaErrorResponse(AlpacaException.Driver, 'Unable to read FITS image'))
+			if (!fits) return this.makeAlpacaErrorResponse(AlpacaException.Driver, 'Unable to read FITS image')
 
 			if (accept?.includes('imagebytes')) {
 				const image = makeImageBytesFromFits(fits, buffer)
@@ -704,7 +706,7 @@ export class AlpacaServer {
 			state.data = undefined
 		}
 
-		return Response.json(this.makeAlpacaErrorResponse(AlpacaException.Driver, 'Image bytes as JSON array is not supported'))
+		return this.makeAlpacaErrorResponse(AlpacaException.Driver, 'Image bytes as JSON array is not supported')
 	}
 
 	private makeConfiguredDeviceFromDevice(device: Device, type: AlpacaDeviceType): AlpacaConfiguredDevice {
