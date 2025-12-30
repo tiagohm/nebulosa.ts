@@ -1683,14 +1683,17 @@ function handlePowerChannel(manager: DeviceManager<Power>, device: Power, messag
 	let updated = false
 
 	entries.forEach(([name, entry], i) => {
-		const value = entry.value as never
-		const p = channels[i] ?? ({ type, name, label: entry.label ?? '', enabled: false, value: 0, min: 0, max: 0 } satisfies PowerChannel)
+		const p = channels[i] ?? ({ type, name, label: entry.label ?? '', enabled: false, value: 0, min: 0, max: 0, step: 0 } satisfies PowerChannel)
 
 		if (tag[0] === 'd' && 'max' in entry) {
 			updated ||= handleMinMaxValue(p, entry, tag)
-		} else if (p[property] !== value) {
-			p[property] = value
-			updated = true
+		} else {
+			const value = entry.value as never
+
+			if (p[property] !== value) {
+				p[property] = value
+				updated = true
+			}
 		}
 
 		if (channels[i] === undefined) {
@@ -1754,12 +1757,13 @@ function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | O
 	let update = false
 
 	if (tag[0] === 'd') {
-		const { min, max } = element as DefNumber
+		const { min, max, step } = element as DefNumber
 
 		if (max !== 0) {
-			update = min !== property.min || max !== property.max
+			update = min !== property.min || max !== property.max || step !== property.step
 			property.min = min
 			property.max = max
+			property.step = step
 		}
 	}
 

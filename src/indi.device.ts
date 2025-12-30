@@ -31,7 +31,7 @@ export type MountTargetCoordinate<T = string> = (EquatorialCoordinate<T> & { typ
 
 export type GuideDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
 
-export type MinMaxValueProperty = Pick<DefNumber, 'min' | 'max' | 'value'>
+export type MinMaxValueProperty = Pick<DefNumber, 'min' | 'max' | 'value' | 'step'>
 
 export enum DeviceInterfaceType {
 	TELESCOPE = 0x0001, // Telescope interface, must subclass INDI::Telescope.
@@ -250,6 +250,7 @@ export const DEFAULT_MIN_MAX_VALUE_PROPERTY: MinMaxValueProperty = {
 	value: 0,
 	min: 0,
 	max: 0,
+    step: 0,
 }
 
 export const DEFAULT_CAMERA: DeepReadonly<Camera> = {
