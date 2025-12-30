@@ -16,7 +16,7 @@ import { timeNow } from './time'
 
 export interface DeviceHandler<D extends Device> {
 	readonly added: (device: D) => void
-	readonly updated?: (device: D, property: keyof D, state?: PropertyState) => void
+	readonly updated?: (device: D, property: keyof D & string, state?: PropertyState) => void
 	readonly removed: (device: D) => void
 	readonly blobReceived?: (device: D, data: string) => void
 }
@@ -182,7 +182,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		this.handlers.forEach((e) => e.added(device))
 	}
 
-	updated(device: D, property: keyof D, state?: PropertyState) {
+	updated(device: D, property: keyof D & string, state?: PropertyState) {
 		this.handlers.forEach((e) => e.updated?.(device, property, state))
 	}
 

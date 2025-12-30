@@ -16,6 +16,18 @@ export class AlpacaDiscoveryServer {
 		this.ports.delete(port)
 	}
 
+	get port() {
+		return this.socket?.port ?? -1
+	}
+
+	get host() {
+		return this.socket?.hostname
+	}
+
+	get ip() {
+		return this.socket?.address.address
+	}
+
 	async start(hostname: string = '0.0.0.0', port: number = ALPACA_DISCOVERY_PORT) {
 		if (this.socket) return false
 
@@ -124,6 +136,10 @@ export class AlpacaServer {
 
 	get port() {
 		return this.server?.port ?? -1
+	}
+
+	get host() {
+		return this.server?.hostname
 	}
 
 	readonly routes: Bun.Serve.Routes<undefined, string> = {
