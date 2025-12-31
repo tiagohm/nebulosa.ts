@@ -1661,7 +1661,7 @@ export function makeImageBytesFromFits(fits: Fits, data: Buffer) {
 	output.writeInt32LE(0, 8) // Bytes 8..11 - Client's transaction ID
 	output.writeInt32LE(0, 12) // Bytes 12..15 - Device's transaction ID
 	output.writeInt32LE(44, 16) // Bytes 16..19 - Offset of the start of the data bytes
-	output.writeInt32LE(elementType, 20) // Bytes 20..23 - Element type of the source image array
+	output.writeInt32LE(2, 20) // Bytes 20..23 - Element type of the source image array. It's always 2 (Int32)? Because MaxIm DL crashes if it's not!
 	output.writeInt32LE(elementType, 24) // Bytes 24..27 - Element type as sent over the network
 	output.writeInt32LE(numZ || 2, 28) // Bytes 28..31 - Image array rank (2 or 3)
 	output.writeInt32LE(numX, 32) // Bytes 32..35 - Length of image array first dimension
