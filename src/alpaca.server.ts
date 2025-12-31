@@ -251,8 +251,6 @@ export class AlpacaServer {
 		if (!this.deviceManager) throw new Error('at least one device manager must be provided.')
 
 		this.deviceNumberAndUniqueIdProvider = options.deviceNumberAndUniqueIdProvider ?? defaultDeviceNumberAndUniqueIdProvider
-
-		this.listen()
 	}
 
 	get port() {
