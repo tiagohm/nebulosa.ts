@@ -6,7 +6,7 @@ import type { EquatorialCoordinate } from './coordinate'
 import { meter, toMeter } from './distance'
 import { Bitpix, bitpixInBytes, bitpixKeyword, type Fits, readFits } from './fits'
 // biome-ignore format: too long!
-import { type Camera, type Cover, type Device, expectedPierSide, type FlatPanel, type Focuser, type GuideDirection, isCamera, isFocuser, isMount, type Mount, type PierSide, type Rotator, type SlewRate, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, type Mount, type PierSide, type Rotator, type SlewRate, type TrackMode, type Wheel } from './indi.device'
 import type { DeviceHandler, DeviceManager } from './indi.manager'
 import { bufferSource } from './io'
 import { type GeographicCoordinate, localSiderealTime } from './location'
@@ -110,20 +110,6 @@ const DEFAULT_ALPACA_DEVICE_STATE: AlpacaDeviceState = {
 	declination: 0,
 }
 
-interface MappedAlpacaDeviceType {
-	readonly Camera: Camera
-	readonly Telescope: Mount
-	readonly Focuser: Focuser
-	readonly FilterWheel: Wheel
-	readonly Rotator: Rotator
-	readonly Dome: Device
-	readonly Switch: Device
-	readonly CoverCalibrator: Cover | FlatPanel
-	readonly ObservingConditions: Device
-	readonly SafetyMonitor: Device
-	readonly Video: Device
-}
-
 export class AlpacaServer {
 	private server?: Bun.Server<undefined>
 	private readonly Camera = new Map<Device, AlpacaRegisteredDevice<Camera>>()
@@ -223,6 +209,38 @@ export class AlpacaServer {
 		},
 	}
 
+	private readonly coverHandler: DeviceHandler<Cover> = {
+		added: (device: Cover) => {
+			console.info('cover added:', device.name)
+			this.makeConfiguredDeviceFromDevice(device, 'CoverCalibrator')
+		},
+		updated: (device, property) => {
+			if (property === 'connected') {
+				this.handleConnectedEvent(device, 'CoverCalibrator')
+			}
+		},
+		removed: (device: Cover) => {
+			console.info('cover removed:', device.name)
+			this.CoverCalibrator.delete(device)
+		},
+	}
+
+	private readonly flatPanelHandler: DeviceHandler<FlatPanel> = {
+		added: (device: FlatPanel) => {
+			console.info('flat panel added:', device.name)
+			this.makeConfiguredDeviceFromDevice(device, 'CoverCalibrator')
+		},
+		updated: (device, property) => {
+			if (property === 'connected') {
+				this.handleConnectedEvent(device, 'CoverCalibrator')
+			}
+		},
+		removed: (device: FlatPanel) => {
+			console.info('flat panel removed:', device.name)
+			this.CoverCalibrator.delete(device)
+		},
+	}
+
 	constructor(private readonly options: AlpacaServerOptions) {
 		this.deviceManager = (options.camera ?? options.mount ?? options.focuser ?? options.wheel ?? options.flatPanel ?? options.cover ?? options.rotator) as unknown as DeviceManager<Device>
 
@@ -232,6 +250,8 @@ export class AlpacaServer {
 		options.wheel?.addHandler(this.wheelHandler)
 		options.mount?.addHandler(this.mountHandler)
 		options.focuser?.addHandler(this.focuserHandler)
+		options.cover?.addHandler(this.coverHandler)
+		options.flatPanel?.addHandler(this.flatPanelHandler)
 
 		this.deviceNumberAndUniqueIdProvider = options.deviceNumberAndUniqueIdProvider ?? defaultDeviceNumberAndUniqueIdProvider
 
@@ -296,7 +316,7 @@ export class AlpacaServer {
 		'/api/v1/camera/:id/hasshutter': { GET: () => this.cameraHasShutter() },
 		'/api/v1/camera/:id/heatsinktemperature': { GET: (req) => this.cameraGetCcdTemperature(+req.params.id) },
 		'/api/v1/camera/:id/imageready': { GET: (req) => this.cameraIsImageReady(+req.params.id) },
-		'/api/v1/camera/:id/ispulseguiding': { GET: (req) => this.deviceIsPulseGuiding(+req.params.id, 'Camera') },
+		'/api/v1/camera/:id/ispulseguiding': { GET: (req) => this.guideOutputIsPulseGuiding(+req.params.id, 'Camera') },
 		'/api/v1/camera/:id/lastexposureduration': { GET: (req) => this.cameraGetLastExposureDuration(+req.params.id) },
 		'/api/v1/camera/:id/maxadu': { GET: () => this.cameraGetMaxADU() },
 		'/api/v1/camera/:id/maxbinx': { GET: (req) => this.cameraGetMaxBinX(+req.params.id) },
@@ -318,7 +338,7 @@ export class AlpacaServer {
 		'/api/v1/camera/:id/startx': { GET: (req) => this.cameraGetStartX(+req.params.id), PUT: async (req) => this.cameraSetStartX(+req.params.id, await params(req)) },
 		'/api/v1/camera/:id/starty': { GET: (req) => this.cameraGetStartY(+req.params.id), PUT: async (req) => this.cameraSetStartY(+req.params.id, await params(req)) },
 		'/api/v1/camera/:id/abortexposure': { PUT: (req) => this.cameraStop(+req.params.id) },
-		'/api/v1/camera/:id/pulseguide': { PUT: async (req) => this.devicePulseGuide(+req.params.id, 'Camera', await params(req)) },
+		'/api/v1/camera/:id/pulseguide': { PUT: async (req) => this.guideOutputPulseGuide(+req.params.id, 'Camera', await params(req)) },
 		'/api/v1/camera/:id/startexposure': { PUT: async (req) => this.cameraStart(+req.params.id, await params(req)) },
 		'/api/v1/camera/:id/stopexposure': { PUT: (req) => this.cameraStop(+req.params.id) },
 		'/api/v1/camera/:id/imagearray': { GET: (req) => this.cameraGetImageArray(+req.params.id, req.headers.get('accept')) },
@@ -359,7 +379,7 @@ export class AlpacaServer {
 		'/api/v1/telescope/:id/focallength': { GET: () => this.mountGetFocalLength() },
 		'/api/v1/telescope/:id/guideratedeclination': { GET: () => this.mountGetGuideRateDeclination(), PUT: async (req) => this.mountSetGuideRateDeclination(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/guideraterightascension': { GET: () => this.mountGetGuideRateRightAscension(), PUT: async (req) => this.mountSetGuideRateRightAscension(+req.params.id, await params(req)) },
-		'/api/v1/telescope/:id/ispulseguiding': { GET: (req) => this.deviceIsPulseGuiding(+req.params.id, 'Telescope') },
+		'/api/v1/telescope/:id/ispulseguiding': { GET: (req) => this.guideOutputIsPulseGuiding(+req.params.id, 'Telescope') },
 		'/api/v1/telescope/:id/rightascension': { GET: (req) => this.mountGetRightAscension(+req.params.id) },
 		'/api/v1/telescope/:id/rightascensionrate': { GET: (req) => this.mountGetRightAscensionRate(+req.params.id), PUT: async (req) => this.mountSetRightAscensionRate(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/sideofpier': { GET: (req) => this.mountGetSideOfPier(+req.params.id), PUT: async (req) => this.mountSetSideOfPier(+req.params.id, await params(req)) },
@@ -382,7 +402,7 @@ export class AlpacaServer {
 		'/api/v1/telescope/:id/findhome': { PUT: (req) => this.mountFindHome(+req.params.id) },
 		'/api/v1/telescope/:id/moveaxis': { PUT: async (req) => this.mountMoveAxis(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/park': { PUT: (req) => this.mountPark(+req.params.id) },
-		'/api/v1/telescope/:id/pulseguide': { PUT: async (req) => this.devicePulseGuide(+req.params.id, 'Telescope', await params(req)) },
+		'/api/v1/telescope/:id/pulseguide': { PUT: async (req) => this.guideOutputPulseGuide(+req.params.id, 'Telescope', await params(req)) },
 		'/api/v1/telescope/:id/setpark': { PUT: (req) => this.mountSetPark(+req.params.id) },
 		'/api/v1/telescope/:id/slewtoaltaz': { PUT: async (req) => this.mountSlewToAltAz(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/slewtoaltazasync': { PUT: async (req) => this.mountSlewToAltAzAsync(+req.params.id, await params(req)) },
@@ -407,6 +427,19 @@ export class AlpacaServer {
 		'/api/v1/focuser/:id/temperature': { GET: (req) => this.focuserGetTemperature(+req.params.id) },
 		'/api/v1/focuser/:id/halt': { PUT: (req) => this.focuserHalt(+req.params.id) },
 		'/api/v1/focuser/:id/move': { PUT: async (req) => this.focuserMove(+req.params.id, await params(req)) },
+		// Cover Calibrator
+		'/api/v1/covercalibrator/:id/brightness': { GET: (req) => this.coverCalibratorGetBrightness(+req.params.id) },
+		'/api/v1/covercalibrator/:id/calibratorchanging': { GET: (req) => this.coverCalibratorIsChanging() },
+		'/api/v1/covercalibrator/:id/calibratorstate': { GET: (req) => this.coverCalibratorGetCalibratorState(+req.params.id) },
+		'/api/v1/covercalibrator/:id/covermoving': { GET: (req) => this.coverCalibratorIsMoving(+req.params.id) },
+		'/api/v1/covercalibrator/:id/coverstate': { GET: (req) => this.coverCalibratorGetCoverState(+req.params.id) },
+		'/api/v1/covercalibrator/:id/devicestate': { GET: (req) => this.coverCalibratorGetDeviceState(+req.params.id) },
+		'/api/v1/covercalibrator/:id/maxbrightness': { GET: (req) => this.coverCalibratorGetMaxBrightness(+req.params.id) },
+		'/api/v1/covercalibrator/:id/calibratoroff': { PUT: (req) => this.coverCalibratorOff(+req.params.id) },
+		'/api/v1/covercalibrator/:id/calibratoron': { PUT: async (req) => this.coverCalibratorOn(+req.params.id, await params(req)) },
+		'/api/v1/covercalibrator/:id/closecover': { PUT: (req) => this.coverCalibratorClose(+req.params.id) },
+		'/api/v1/covercalibrator/:id/haltcover': { PUT: (req) => this.coverCalibratorHalt(+req.params.id) },
+		'/api/v1/covercalibrator/:id/opencover': { PUT: (req) => this.coverCalibratorOpen(+req.params.id) },
 	}
 
 	start(hostname: string = '0.0.0.0', port: number = 0, options?: AlpacaServerStartOptions) {
@@ -439,34 +472,48 @@ export class AlpacaServer {
 		this.options.wheel?.removeHandler(this.wheelHandler)
 		this.options.mount?.removeHandler(this.mountHandler)
 		this.options.focuser?.removeHandler(this.focuserHandler)
+		this.options.cover?.removeHandler(this.coverHandler)
+		this.options.flatPanel?.removeHandler(this.flatPanelHandler)
 	}
 
-	private device<T extends AlpacaDeviceType>(key: Device | number, type: T): AlpacaRegisteredDevice<MappedAlpacaDeviceType[T]> {
+	private device<D extends Device>(key: Device | number, type: AlpacaDeviceType, deviceType?: DeviceType): AlpacaRegisteredDevice<D> {
 		if (typeof key === 'object') return this[type].get(key)! as never
-		else for (const item of this[type].values()) if (item.configuredDevice.DeviceNumber === key) return item as never
+		else for (const item of this[type].values()) if (item.configuredDevice.DeviceNumber === key && (!deviceType || item.device.type === deviceType)) return item as never
 		return undefined as never
 	}
 
 	private camera(key: Device | number) {
-		return this.device(key, 'Camera')
+		return this.device<Camera>(key, 'Camera')
 	}
 
 	private telescope(key: Device | number) {
-		return this.device(key, 'Telescope')
+		return this.device<Mount>(key, 'Telescope')
 	}
 
 	private wheel(key: Device | number) {
-		return this.device(key, 'FilterWheel')
+		return this.device<Wheel>(key, 'FilterWheel')
 	}
 
 	private focuser(key: Device | number) {
-		return this.device(key, 'Focuser')
+		return this.device<Focuser>(key, 'Focuser')
+	}
+
+	private cover(key: Device | number) {
+		return this.device<Cover>(key, 'CoverCalibrator', 'COVER')
+	}
+
+	private flatPanel(key: Device | number) {
+		return this.device<FlatPanel>(key, 'CoverCalibrator', 'FLAT_PANEL')
+	}
+
+	private guideOutput(key: Device | number, type: 'Camera' | 'Telescope') {
+		return this.device<GuideOutput>(key, type)
 	}
 
 	private handleConnectedEvent(device: Device, type: AlpacaDeviceType) {
 		const task = this.device(device, type).state.tasks.connect
 
-		if (task) {
+		if (task?.running) {
 			task.clear()
 
 			// wait for all properties to be received
@@ -589,14 +636,14 @@ export class AlpacaServer {
 
 	// Guide Output API
 
-	private devicePulseGuide(id: number, type: 'Camera' | 'Telescope', data: { Duration: string; Direction: string }) {
-		const device = this.device(id, type).device
+	private guideOutputPulseGuide(id: number, type: 'Camera' | 'Telescope', data: { Duration: string; Direction: string }) {
+		const device = this.guideOutput(id, type).device
 		this.options.guideOutput?.pulse(device, mapAlpacaEnumToGuideDirection(+data.Direction), +data.Duration)
 		return makeAlpacaResponse(undefined)
 	}
 
-	private deviceIsPulseGuiding(id: number, type: 'Camera' | 'Telescope') {
-		return makeAlpacaResponse(this.device(id, type).device.pulsing)
+	private guideOutputIsPulseGuiding(id: number, type: 'Camera' | 'Telescope') {
+		return makeAlpacaResponse(this.guideOutput(id, type).device.pulsing)
 	}
 
 	// Camera API
@@ -1442,6 +1489,74 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
+	// Cover Calibrator API
+
+	private coverCalibratorGetBrightness(id: number) {
+		return makeAlpacaResponse(this.flatPanel(id)?.device.intensity.value ?? 0)
+	}
+
+	private coverCalibratorIsChanging() {
+		return makeAlpacaResponse(false) // INDI does not support it!
+	}
+
+	// https://ascom-standards.org/newdocs/covercalibrator.html#CalibratorStatus
+	private coverCalibratorGetCalibratorState(id: number) {
+		return makeAlpacaResponse(mapToFlatPanelState(this.flatPanel(id)?.device))
+	}
+
+	private coverCalibratorIsMoving(id: number) {
+		return makeAlpacaResponse(this.cover(id)?.device.parking)
+	}
+
+	// https://ascom-standards.org/newdocs/covercalibrator.html#CoverStatus
+	private coverCalibratorGetCoverState(id: number) {
+		return makeAlpacaResponse(mapToCoverState(this.cover(id)?.device))
+	}
+
+	private coverCalibratorGetDeviceState(id: number) {
+		const cover = this.cover(id)?.device
+		const flatPanel = this.flatPanel(id)?.device
+		const res: AlpacaStateItem[] = []
+		res.push({ Name: 'Brightness', Value: flatPanel?.intensity.value ?? 0 })
+		res.push({ Name: 'CalibratorChanging', Value: false })
+		res.push({ Name: 'CalibratorState', Value: mapToFlatPanelState(flatPanel) })
+		res.push({ Name: 'CoverMoving', Value: cover?.parking ?? false })
+		res.push({ Name: 'CoverState', Value: mapToCoverState(cover) })
+		res.push({ Name: 'TimeStamp', Value: '' })
+		return makeAlpacaResponse(res)
+	}
+
+	private coverCalibratorGetMaxBrightness(id: number) {
+		return makeAlpacaResponse(this.flatPanel(id).device.intensity.max)
+	}
+
+	private coverCalibratorOn(id: number, data: { Brightness: string }) {
+		const { device } = this.flatPanel(id)
+		this.options.flatPanel?.enable(device)
+		this.options.flatPanel?.intensity(device, +data.Brightness)
+		return makeAlpacaResponse(undefined)
+	}
+
+	private coverCalibratorOff(id: number) {
+		this.options.flatPanel?.disable(this.flatPanel(id).device)
+		return makeAlpacaResponse(undefined)
+	}
+
+	private coverCalibratorClose(id: number) {
+		this.options.cover?.park(this.cover(id).device)
+		return makeAlpacaResponse(undefined)
+	}
+
+	private coverCalibratorHalt(id: number) {
+		this.options.cover?.stop(this.cover(id).device)
+		return makeAlpacaResponse(undefined)
+	}
+
+	private coverCalibratorOpen(id: number) {
+		this.options.cover?.unpark(this.cover(id).device)
+		return makeAlpacaResponse(undefined)
+	}
+
 	private makeConfiguredDeviceFromDevice(device: Device, DeviceType: AlpacaDeviceType): AlpacaRegisteredDevice {
 		let registeredDevice = this[DeviceType].get(device)
 		if (registeredDevice) return registeredDevice
@@ -1684,4 +1799,12 @@ function mapAlpacaEnumToTrackMode(value: number): TrackMode {
 
 function mapSlewRateToAlpacaAxisRate(rate: SlewRate, index: number): AlpacaAxisRate {
 	return { Minimum: index + 1, Maximum: index + 1 }
+}
+
+function mapToFlatPanelState(device?: FlatPanel) {
+	return device === undefined ? 0 : device.intensity.max !== 0 ? 3 : 0 // 0 = Not present, 3 = Ready
+}
+
+function mapToCoverState(device?: Cover) {
+	return device === undefined ? 0 : !device.canPark ? 0 : device.parking ? 2 : device.parked ? 1 : 3 // 0 = Not Present, 1 = Closed, 2 = Moving, 3 = Open
 }

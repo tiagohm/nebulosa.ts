@@ -201,6 +201,7 @@ export interface DewHeater extends Device {
 
 export interface Cover extends Device, Parkable, DewHeater {
 	readonly type: 'COVER'
+    canAbort: boolean
 }
 
 export interface FlatPanel extends Device {
@@ -377,6 +378,7 @@ export const DEFAULT_FOCUSER: DeepReadonly<Focuser> = {
 export const DEFAULT_COVER: DeepReadonly<Cover> = {
 	canPark: false,
 	canSetPark: false,
+    canAbort: false,
 	parking: false,
 	parked: false,
 	hasDewHeater: false,

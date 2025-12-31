@@ -36,4 +36,4 @@ test('make image bytes from fits', async () => {
 			}
 		}
 	}
-})
+}, 5000)

@@ -449,7 +449,7 @@ export class CameraManager extends DeviceManager<Camera> {
 	private readonly offsetProperty = new Map<string, readonly [string, string]>()
 
 	cooler(camera: Camera, value: boolean, client = camera[CLIENT]!) {
-		if (camera.hasCoolerControl && camera.cooler !== value) {
+		if (camera.hasCoolerControl) {
 			client.sendSwitch({ device: camera.name, name: 'CCD_COOLER', elements: { [value ? 'COOLER_ON' : 'COOLER_OFF']: true } })
 		}
 	}
@@ -855,7 +855,9 @@ export class MountManager extends DeviceManager<Mount> {
 	}
 
 	trackMode(mount: Mount, mode: TrackMode, client = mount[CLIENT]!) {
-		client.sendSwitch({ device: mount.name, name: 'TELESCOPE_TRACK_MODE', elements: { [`TRACK_${mode}`]: true } })
+		if (mount.canTracking) {
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_TRACK_MODE', elements: { [`TRACK_${mode}`]: true } })
+		}
 	}
 
 	slewRate(mount: Mount, rate: SlewRate | string, client = mount[CLIENT]!) {
@@ -1212,7 +1214,7 @@ export class FocuserManager extends DeviceManager<Focuser> {
 	}
 
 	reverse(focuser: Focuser, enabled: boolean, client = focuser[CLIENT]!) {
-		if (focuser.canSync) {
+		if (focuser.canReverse) {
 			client.sendSwitch({ device: focuser.name, name: 'FOCUS_REVERSE_MOTION', elements: { [enabled ? 'INDI_ENABLED' : 'INDI_DISABLED']: true } })
 		}
 	}
@@ -1315,6 +1317,12 @@ export class CoverManager extends DeviceManager<Cover> {
 		}
 	}
 
+	stop(cover: Cover, client = cover[CLIENT]!) {
+		if (cover.canAbort) {
+			client.sendSwitch({ device: cover.name, name: 'CAP_ABORT', elements: { ABORT: true } })
+		}
+	}
+
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(message.device)
 
@@ -1325,6 +1333,12 @@ export class CoverManager extends DeviceManager<Cover> {
 		switch (message.name) {
 			case 'CAP_PARK':
 				handleParkable(this, device, message, tag)
+				return
+			case 'CAP_ABORT':
+				if (handleSwitchValue(device, 'canAbort', true)) {
+					this.updated(device, 'canAbort', message.state)
+				}
+
 				return
 		}
 	}
@@ -1507,9 +1521,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 
 export class FlatPanelManager extends DeviceManager<FlatPanel> {
 	intensity(panel: FlatPanel, value: number, client = panel[CLIENT]!) {
-		if (panel.enabled) {
-			client.sendNumber({ device: panel.name, name: 'FLAT_LIGHT_INTENSITY', elements: { FLAT_LIGHT_INTENSITY_VALUE: value } })
-		}
+		client.sendNumber({ device: panel.name, name: 'FLAT_LIGHT_INTENSITY', elements: { FLAT_LIGHT_INTENSITY_VALUE: value } })
 	}
 
 	enable(panel: FlatPanel, client = panel[CLIENT]!) {
@@ -1566,6 +1578,21 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 // https://github.com/indilib/indi/blob/master/libs/indibase/indipowerinterface.cpp
 
 export class PowerManager extends DeviceManager<Power> {
+	toggle(power: Power, channel: PowerChannel, value: boolean, client = power[CLIENT]!) {
+		const name = channel.type === 'dc' ? 'POWER_CHANNELS' : channel.type === 'dew' ? 'DEW_CHANNELS' : channel.type === 'autoDew' ? 'AUTO_DEW_CONTROL' : channel.type === 'usb' ? 'USB_PORTS' : 'VARIABLE_CHANNELS'
+		client.sendSwitch({ device: power.name, name, elements: { [channel.name]: value } })
+	}
+
+	voltage(power: Power, channel: PowerChannel, value: number, client = power[CLIENT]!) {
+		if (channel.type !== 'variableVoltage') return
+		client.sendNumber({ device: power.name, name: 'VARIABLE_VOLTAGES', elements: { [channel.name]: value } })
+	}
+
+	dutyCycle(power: Power, channel: PowerChannel, value: number, client = power[CLIENT]!) {
+		if (channel.type !== 'dew') return
+		client.sendNumber({ device: power.name, name: 'DEW_DUTY_CYCLES', elements: { [channel.name]: value } })
+	}
+
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(message.device)
 
@@ -1659,21 +1686,6 @@ export class PowerManager extends DeviceManager<Power> {
 				handlePowerChannel(this, device, message, tag, 'variableVoltage', 'label')
 				return
 		}
-	}
-
-	toggle(power: Power, channel: PowerChannel, value: boolean, client = power[CLIENT]!) {
-		const name = channel.type === 'dc' ? 'POWER_CHANNELS' : channel.type === 'dew' ? 'DEW_CHANNELS' : channel.type === 'autoDew' ? 'AUTO_DEW_CONTROL' : channel.type === 'usb' ? 'USB_PORTS' : 'VARIABLE_CHANNELS'
-		client.sendSwitch({ device: power.name, name, elements: { [channel.name]: value } })
-	}
-
-	voltage(power: Power, channel: PowerChannel, value: number, client = power[CLIENT]!) {
-		if (channel.type !== 'variableVoltage') return
-		client.sendNumber({ device: power.name, name: 'VARIABLE_VOLTAGES', elements: { [channel.name]: value } })
-	}
-
-	dutyCycle(power: Power, channel: PowerChannel, value: number, client = power[CLIENT]!) {
-		if (channel.type !== 'dew') return
-		client.sendNumber({ device: power.name, name: 'DEW_DUTY_CYCLES', elements: { [channel.name]: value } })
 	}
 }
 
