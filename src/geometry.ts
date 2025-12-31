@@ -1,5 +1,10 @@
 import { type Vec3, vecDot } from './vec3'
 
+export interface Point {
+	x: number
+	y: number
+}
+
 export interface Rect {
 	left: number
 	top: number

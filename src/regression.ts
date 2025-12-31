@@ -1,11 +1,10 @@
 import type { Mutable } from 'utility-types'
+import type { Point } from './geometry'
 import type { NumberArray } from './math'
 import { gaussianElimination, Matrix } from './matrix'
 import { isNumberArray, meanOf, minOf } from './util'
 
 export type TrendLineRegressionMethod = 'simple' | 'theil-sen'
-
-export type Point = [number, number]
 
 export interface Regression {
 	readonly predict: (x: number) => number
@@ -185,7 +184,7 @@ export function quadraticRegression(x: Readonly<NumberArray>, y: Readonly<Number
 	const d = 2 * a
 	const e = 2 * d // 4a
 	const b2 = b * b
-	regression.minimum = [-b / d, c - b2 / e]
+	regression.minimum = { x: -b / d, y: c - b2 / e }
 	return regression
 }
 
@@ -267,7 +266,7 @@ export function trendLineRegression(x: Readonly<NumberArray>, y: Readonly<Number
 	return {
 		left,
 		right,
-		minimum: [minX, minY],
+		minimum: { x: minX, y: minY },
 		intersection: intersect(left, right),
 		predict: (x: number) => (x < minX ? left.predict(x) : x > minX ? right.predict(x) : minY),
 	}
@@ -340,7 +339,7 @@ export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 		a,
 		b,
 		c,
-		minimum: [c, b],
+		minimum: { x: c, y: b },
 		predict: (x: number) => b * Math.sqrt(1 + ((x - c) / a) ** 2),
 		// wolfram: solve y = b sqrt(1 + ((x - c)/a)^2) for x
 		// x = c - sqrt(a^2 y^2 - a^2 b^2)/b
@@ -385,12 +384,12 @@ export function regressionScore(regression: Regression, x: Readonly<NumberArray>
 
 export function intersect(a: LinearRegression, b: LinearRegression): Readonly<Point> {
 	// Parallel lines do not intersect
-	if (a.slope === b.slope) return [0, 0]
+	if (a.slope === b.slope) return { x: 0, y: 0 }
 
 	const x = (b.intercept - a.intercept) / (a.slope - b.slope)
 	const y = a.slope * x + a.intercept
 
-	return [x, y]
+	return { x, y }
 }
 
 const LEVENBERG_MARQUARDT_DELTA = 1e-8

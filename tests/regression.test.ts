@@ -117,15 +117,15 @@ describe('trend line regression', () => {
 		test('simple', () => {
 			const regression = trendLineRegression(x, y)
 
-			expect(regression.intersection[0]).toBeCloseTo(5, 8)
-			expect(regression.intersection[1]).toBeCloseTo(2, 8)
+			expect(regression.intersection.x).toBeCloseTo(5, 8)
+			expect(regression.intersection.y).toBeCloseTo(2, 8)
 		})
 
 		test('theil-sen', () => {
 			const regression = trendLineRegression(x, y, 'theil-sen')
 
-			expect(regression.intersection[0]).toBeCloseTo(5, 8)
-			expect(regression.intersection[1]).toBeCloseTo(2, 8)
+			expect(regression.intersection.x).toBeCloseTo(5, 8)
+			expect(regression.intersection.y).toBeCloseTo(2, 8)
 		})
 	})
 
@@ -136,15 +136,15 @@ describe('trend line regression', () => {
 		test('simple', () => {
 			const regression = trendLineRegression(x, y)
 
-			expect(regression.intersection[0]).toBeCloseTo(6, 8)
-			expect(regression.intersection[1]).toBeCloseTo(0, 0)
+			expect(regression.intersection.x).toBeCloseTo(6, 8)
+			expect(regression.intersection.y).toBeCloseTo(0, 0)
 		})
 
 		test('theil-sen', () => {
 			const regression = trendLineRegression(x, y, 'theil-sen')
 
-			expect(regression.intersection[0]).toBeCloseTo(6, 8)
-			expect(regression.intersection[1]).toBeCloseTo(0, 8)
+			expect(regression.intersection.x).toBeCloseTo(6, 8)
+			expect(regression.intersection.y).toBeCloseTo(0, 8)
 		})
 	})
 })
@@ -157,8 +157,8 @@ test('quadractic regression', () => {
 	expect(regression.coefficients[0]).toBeCloseTo(14.00285714285714, 10)
 	expect(regression.coefficients[1]).toBeCloseTo(-0.016499999999999983, 10)
 	expect(regression.coefficients[2]).toBeCloseTo(5.714285714285707e-6, 10)
-	expect(regression.minimum[0]).toBeCloseTo(1443.75, 10)
-	expect(regression.minimum[1]).toBeCloseTo(2.09, 2)
+	expect(regression.minimum.x).toBeCloseTo(1443.75, 10)
+	expect(regression.minimum.y).toBeCloseTo(2.09, 2)
 })
 
 test('exponential regression', () => {
@@ -189,8 +189,8 @@ test('hyperbolic regression', () => {
 
 	const regression = hyperbolicRegression(x, y)
 
-	expect(Math.round(regression.minimum[0])).toBe(30009)
-	expect(regression.minimum[1]).toBeCloseTo(2.23, 2)
+	expect(Math.round(regression.minimum.x)).toBe(30009)
+	expect(regression.minimum.y).toBeCloseTo(2.23, 2)
 	expect(regression.predict(30000)).toBeCloseTo(2.26, 2)
 	expect(regression.x(23.1)).toBeCloseTo(29431, 0)
 })
@@ -201,8 +201,8 @@ test('hyperbolic regression using ASCOM Sky Simulator (few points)', () => {
 
 	const regression = hyperbolicRegression(x, y)
 
-	expect(Math.round(regression.minimum[0])).toBe(8033)
-	expect(regression.minimum[1]).toBeCloseTo(4.5849, 3)
+	expect(Math.round(regression.minimum.x)).toBe(8033)
+	expect(regression.minimum.y).toBeCloseTo(4.5849, 3)
 })
 
 test('regression score', () => {
