@@ -476,6 +476,21 @@ export class AlpacaServer {
 		this.options.flatPanel?.removeHandler(this.flatPanelHandler)
 	}
 
+	list() {
+		const configuredDevices = new Set<AlpacaConfiguredDevice>()
+
+		this.Camera.forEach((e) => configuredDevices.add(e.configuredDevice))
+		this.Telescope.forEach((e) => configuredDevices.add(e.configuredDevice))
+		this.FilterWheel.forEach((e) => configuredDevices.add(e.configuredDevice))
+		this.Focuser.forEach((e) => configuredDevices.add(e.configuredDevice))
+		this.Rotator.forEach((e) => configuredDevices.add(e.configuredDevice))
+		this.Dome.forEach((e) => configuredDevices.add(e.configuredDevice))
+		this.Switch.forEach((e) => configuredDevices.add(e.configuredDevice))
+		this.CoverCalibrator.forEach((e) => configuredDevices.add(e.configuredDevice))
+
+		return configuredDevices
+	}
+
 	private device<D extends Device>(key: Device | number, type: AlpacaDeviceType, deviceType?: DeviceType): AlpacaRegisteredDevice<D> {
 		if (typeof key === 'object') return this[type].get(key)! as never
 		else for (const item of this[type].values()) if (item.configuredDevice.DeviceNumber === key && (!deviceType || item.device.type === deviceType)) return item as never
