@@ -1,5 +1,5 @@
 // biome-ignore format: too long!
-import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberAndUniqueIdProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, defaultDeviceNumberAndUniqueIdProvider, } from './alpaca.types'
+import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberAndUniqueIdProvider, type AlpacaDeviceType, type AlpacaDiscoveryServerOptions, AlpacaError, AlpacaException, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, defaultDeviceNumberAndUniqueIdProvider, } from './alpaca.types'
 import { deg, hour, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import type { EquatorialCoordinate } from './coordinate'
@@ -15,6 +15,8 @@ import { timeNow } from './time'
 export class AlpacaDiscoveryServer {
 	private socket?: Bun.udp.Socket<'buffer'>
 	private readonly ports = new Set<number>()
+
+	constructor(private readonly options?: AlpacaDiscoveryServerOptions) {}
 
 	addPort(port: number) {
 		this.ports.add(port)
@@ -49,7 +51,7 @@ export class AlpacaDiscoveryServer {
 			socket: {
 				data: (socket, data, port, address) => {
 					// ignore localhost
-					if (address === '127.0.0.1' || address === 'localhost') return
+					if (this.options?.ignoreLocalhost && (address === '127.0.0.1' || address === 'localhost')) return
 
 					if (data.toString('utf-8') === ALPACA_DISCOVERY_DATA) {
 						this.send(socket, port, address)

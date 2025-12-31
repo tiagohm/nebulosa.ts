@@ -73,6 +73,10 @@ export interface AlpacaImageBytes {
 	Value: Readonly<Readonly<number[]>[]> | Readonly<Readonly<Readonly<number[]>[]>[]>
 }
 
+export interface AlpacaDiscoveryServerOptions {
+	ignoreLocalhost?: boolean
+}
+
 export interface AlpacaServerOptions {
 	name?: string
 	version?: string
