@@ -42,7 +42,7 @@ export class AlpacaDiscoveryServer {
 		return !!this.socket
 	}
 
-	async start(hostname: string = '0.0.0.0', port: number = ALPACA_DISCOVERY_PORT) {
+	async start(hostname: string = '0.0.0.0', port: number = ALPACA_DISCOVERY_PORT, ignoreLocalhost = this.options?.ignoreLocalhost) {
 		if (this.socket) return false
 
 		this.socket = await Bun.udpSocket({
@@ -50,8 +50,7 @@ export class AlpacaDiscoveryServer {
 			port,
 			socket: {
 				data: (socket, data, port, address) => {
-					// ignore localhost
-					if (this.options?.ignoreLocalhost && (address === '127.0.0.1' || address === 'localhost')) return
+					if (ignoreLocalhost && (address === '127.0.0.1' || address === 'localhost')) return
 
 					if (data.toString('utf-8') === ALPACA_DISCOVERY_DATA) {
 						this.send(socket, port, address)
