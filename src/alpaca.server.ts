@@ -246,16 +246,9 @@ export class AlpacaServer {
 
 		if (!this.deviceManager) throw new Error('at least one device manager must be provided.')
 
-		options.camera?.addHandler(this.cameraHandler)
-		options.wheel?.addHandler(this.wheelHandler)
-		options.mount?.addHandler(this.mountHandler)
-		options.focuser?.addHandler(this.focuserHandler)
-		options.cover?.addHandler(this.coverHandler)
-		options.flatPanel?.addHandler(this.flatPanelHandler)
-
 		this.deviceNumberAndUniqueIdProvider = options.deviceNumberAndUniqueIdProvider ?? defaultDeviceNumberAndUniqueIdProvider
 
-		this.configuredDevices()
+		this.listen()
 	}
 
 	get port() {
@@ -460,6 +453,40 @@ export class AlpacaServer {
 			},
 			routes: this.routes,
 		})
+
+        return true
+	}
+
+	listen() {
+		this.options.camera?.addHandler(this.cameraHandler)
+		this.options.wheel?.addHandler(this.wheelHandler)
+		this.options.mount?.addHandler(this.mountHandler)
+		this.options.focuser?.addHandler(this.focuserHandler)
+		this.options.cover?.addHandler(this.coverHandler)
+		this.options.flatPanel?.addHandler(this.flatPanelHandler)
+
+		this.configuredDevices()
+	}
+
+	unlisten() {
+		this.options.camera?.removeHandler(this.cameraHandler)
+		this.options.wheel?.removeHandler(this.wheelHandler)
+		this.options.mount?.removeHandler(this.mountHandler)
+		this.options.focuser?.removeHandler(this.focuserHandler)
+		this.options.cover?.removeHandler(this.coverHandler)
+		this.options.flatPanel?.removeHandler(this.flatPanelHandler)
+
+		this.Camera.clear()
+		this.Telescope.clear()
+		this.FilterWheel.clear()
+		this.Focuser.clear()
+		this.Rotator.clear()
+		this.CoverCalibrator.clear()
+		// this.Dome.clear()
+		// this.Switch.clear()
+		// this.ObservingConditions.clear()
+		// this.SafetyMonitor.clear()
+		// this.Video.clear()
 	}
 
 	stop() {
@@ -468,12 +495,7 @@ export class AlpacaServer {
 			this.server = undefined
 		}
 
-		this.options.camera?.removeHandler(this.cameraHandler)
-		this.options.wheel?.removeHandler(this.wheelHandler)
-		this.options.mount?.removeHandler(this.mountHandler)
-		this.options.focuser?.removeHandler(this.focuserHandler)
-		this.options.cover?.removeHandler(this.coverHandler)
-		this.options.flatPanel?.removeHandler(this.flatPanelHandler)
+		this.unlisten()
 	}
 
 	list() {
