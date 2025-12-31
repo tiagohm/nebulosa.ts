@@ -36,6 +36,10 @@ export class AlpacaDiscoveryServer {
 		return this.socket?.address.address
 	}
 
+	get running() {
+		return !!this.socket
+	}
+
 	async start(hostname: string = '0.0.0.0', port: number = ALPACA_DISCOVERY_PORT) {
 		if (this.socket) return false
 
@@ -259,6 +263,10 @@ export class AlpacaServer {
 		return this.server?.hostname
 	}
 
+	get running() {
+		return !!this.server
+	}
+
 	readonly routes: Bun.Serve.Routes<undefined, string> = {
 		// https://ascom-standards.org/api/?urls.primaryName=ASCOM+Alpaca+Management+API
 		'/management/apiversions': { GET: () => this.apiVersions() },
@@ -454,7 +462,7 @@ export class AlpacaServer {
 			routes: this.routes,
 		})
 
-        return true
+		return true
 	}
 
 	listen() {
