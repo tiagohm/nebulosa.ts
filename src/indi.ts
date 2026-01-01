@@ -39,16 +39,20 @@ export const DEFAULT_INDI_PORT = 7624
 export class IndiClient {
 	private readonly parser = new SimpleXmlParser()
 	private socket?: Bun.Socket
-	private readonly metadata: [string?, number?] = []
+	private readonly metadata: [string?, string?, number?] = []
 
 	constructor(private readonly options?: IndiClientOptions) {}
 
-	get remoteHost() {
+	get id() {
 		return this.metadata[0]
 	}
 
-	get remotePort() {
+	get remoteHost() {
 		return this.metadata[1]
+	}
+
+	get remotePort() {
+		return this.metadata[2]
 	}
 
 	get remoteIp() {
@@ -57,6 +61,10 @@ export class IndiClient {
 
 	get localPort() {
 		return this.socket?.localPort
+	}
+
+	get connected() {
+		return !!this.socket
 	}
 
 	async connect(hostname: string, port: number = DEFAULT_INDI_PORT, options?: Omit<Bun.TCPSocketConnectOptions, 'hostname' | 'port' | 'socket' | 'data'>) {
@@ -97,8 +105,9 @@ export class IndiClient {
 			},
 		})
 
-		this.metadata[0] = hostname
-		this.metadata[1] = port
+		this.metadata[0] = Bun.MD5.hash(`${this.socket.remoteAddress}:${this.socket.remotePort}:INDI`, 'hex')
+		this.metadata[1] = hostname
+		this.metadata[2] = this.socket.remotePort
 
 		return true
 	}
