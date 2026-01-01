@@ -199,12 +199,22 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		this.handlers.forEach((e) => e.blobReceived?.(device, data))
 	}
 
-	list() {
+	list(client?: IndiClient | string) {
 		const devices = new Set<D>()
 
-		for (const client of this.devices.values()) {
-			for (const device of client.values()) {
-				devices.add(device)
+		if (client) {
+			client = typeof client === 'string' ? this.devices.keys().find((e) => e.id === client) : client
+
+			if (client) {
+				for (const device of this.devices.get(client)!.values()) {
+					devices.add(device)
+				}
+			}
+		} else {
+			for (const client of this.devices.values()) {
+				for (const device of client.values()) {
+					devices.add(device)
+				}
 			}
 		}
 
