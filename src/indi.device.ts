@@ -64,6 +64,7 @@ export interface DriverInfo {
 export const CLIENT = Symbol('INDI_CLIENT')
 
 export interface Device {
+    id: string // MD5(client ip address + client port + type + name)
 	type: DeviceType
 	name: string
 	connected: boolean
@@ -293,7 +294,8 @@ export const DEFAULT_CAMERA: DeepReadonly<Camera> = {
 	canPulseGuide: false,
 	pulsing: false,
 	type: 'CAMERA',
-	name: '',
+	id: '',
+    name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	hasThermometer: false,
@@ -330,7 +332,8 @@ export const DEFAULT_MOUNT: DeepReadonly<Mount> = {
 	canPulseGuide: false,
 	pulsing: false,
 	type: 'MOUNT',
-	name: '',
+	id: '',
+    name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	hasGPS: false,
@@ -349,7 +352,8 @@ export const DEFAULT_MOUNT: DeepReadonly<Mount> = {
 
 export const DEFAULT_WHEEL: DeepReadonly<Wheel> = {
 	type: 'WHEEL',
-	name: '',
+	id: '',
+    name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	moving: false,
@@ -359,7 +363,8 @@ export const DEFAULT_WHEEL: DeepReadonly<Wheel> = {
 
 export const DEFAULT_FOCUSER: DeepReadonly<Focuser> = {
 	type: 'FOCUSER',
-	name: '',
+	id: '',
+    name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	moving: false,
@@ -384,7 +389,8 @@ export const DEFAULT_COVER: DeepReadonly<Cover> = {
 	hasDewHeater: false,
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'COVER',
-	name: '',
+	id: '',
+    name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
@@ -393,7 +399,8 @@ export const DEFAULT_FLAT_PANEL: DeepReadonly<FlatPanel> = {
 	enabled: false,
 	intensity: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'FLAT_PANEL',
-	name: '',
+	id: '',
+    name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
@@ -408,7 +415,8 @@ export const DEFAULT_ROTATOR: DeepReadonly<Rotator> = {
 	canHome: false,
 	hasBacklashCompensation: false,
 	type: 'ROTATOR',
-	name: '',
+	id: '',
+    name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
@@ -424,7 +432,8 @@ export const DEFAULT_POWER: DeepReadonly<Power> = {
 	usb: [],
 	hasPowerCycle: false,
 	type: 'POWER',
-	name: '',
+	id: '',
+    name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
@@ -433,7 +442,8 @@ export const DEFAULT_THERMOMETER: DeepReadonly<Thermometer> = {
 	hasThermometer: true,
 	temperature: 0,
 	type: 'THERMOMETER',
-	name: '',
+	id: '',
+    name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
@@ -442,7 +452,8 @@ export const DEFAULT_GUIDE_OUTPUT: DeepReadonly<GuideOutput> = {
 	canPulseGuide: false,
 	pulsing: false,
 	type: 'GUIDE_OUTPUT',
-	name: '',
+	id: '',
+    name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }
@@ -451,7 +462,8 @@ export const DEFAULT_DEW_HEATER: DeepReadonly<DewHeater> = {
 	hasDewHeater: false,
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'DEW_HEATER',
-	name: '',
+	id: '',
+    name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 }

@@ -28,7 +28,7 @@ export interface DevicePropertyHandler {
 }
 
 export interface DeviceProvider<D extends Device> {
-	readonly get: (name: string) => D | undefined
+	readonly get: (client: IndiClient, name: string) => D | undefined
 }
 
 const DEVICES = {
@@ -43,7 +43,7 @@ const DEVICES = {
 } as const
 
 export class DevicePropertyManager implements IndiClientHandler, DevicePropertyHandler {
-	private readonly properties = new Map<string, DeviceProperties>()
+	private readonly properties = new Map<IndiClient, Map<string, DeviceProperties>>()
 	private readonly handlers = new Set<DevicePropertyHandler>()
 
 	get length() {
@@ -74,25 +74,28 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 		return Array.from(this.properties.keys())
 	}
 
-	list(name: string) {
-		return this.properties.get(name)
+	get(client: IndiClient, name: string) {
+		return this.properties.get(client)?.get(name)
 	}
 
-	get(name: string) {
-		return this.properties.get(name)
-	}
-
-	has(name: string) {
-		return this.properties.has(name)
+	has(client: IndiClient, name: string) {
+		return this.properties.get(client)?.has(name) === true
 	}
 
 	vector(client: IndiClient, message: DefVector | SetVector, tag: string) {
 		const { device } = message
-		let properties = this.get(device)
+		let map = this.properties.get(client)
+
+		if (!map) {
+			map = new Map()
+			this.properties.set(client, map)
+		}
+
+		let properties = map.get(device)
 
 		if (!properties) {
 			properties = {}
-			this.properties.set(device, properties)
+			map.set(device, properties)
 		}
 
 		if (tag[0] === 'd') {
@@ -136,7 +139,7 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 	}
 
 	delProperty(client: IndiClient, message: DelProperty) {
-		const properties = this.get(message.device)
+		const properties = this.get(client, message.device)
 
 		if (!properties) return false
 
@@ -147,14 +150,14 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 
 			if (property) {
 				delete properties[name]
-				if (Object.keys(properties).length === 0) this.properties.delete(device)
+				if (Object.keys(properties).length === 0) this.properties.get(client)?.delete(device)
 				this.removed(device, property)
 				return true
 			}
 		} else {
 			// TODO: should notify once for all properties being removed?
 			// for (const [_, property] of Object.entries(properties)) this.removed(device, property)
-			this.properties.delete(device)
+			this.properties.get(client)?.delete(device)
 			return true
 		}
 
@@ -163,11 +166,13 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 }
 
 export abstract class DeviceManager<D extends Device> implements IndiClientHandler, DeviceProvider<D>, DeviceHandler<D> {
-	protected readonly devices = new Map<string, D>()
+	protected readonly devices = new Map<IndiClient, Map<string, D>>()
 	protected readonly handlers = new Set<DeviceHandler<D>>()
 
 	get length() {
-		return this.devices.size
+		let n = 0
+		this.devices.forEach((e) => void (n += e.size))
+		return n
 	}
 
 	addHandler(handler: DeviceHandler<D>) {
@@ -195,19 +200,27 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	}
 
 	list() {
-		return Array.from(this.devices.values())
+		const devices = new Set<D>()
+
+		for (const client of this.devices.values()) {
+			for (const device of client.values()) {
+				devices.add(device)
+			}
+		}
+
+		return devices
 	}
 
-	names() {
-		return Array.from(this.devices.keys())
+	names(client: IndiClient) {
+		return Array.from(this.devices.get(client)?.keys() ?? [])
 	}
 
-	get(name: string) {
-		return this.devices.get(name)
+	get(client: IndiClient, name: string) {
+		return this.devices.get(client)?.get(name)
 	}
 
-	has(name: string) {
-		return this.devices.has(name)
+	has(client: IndiClient, name: string) {
+		return this.devices.get(client)?.has(name) === true
 	}
 
 	ask(device: D, client = device[CLIENT]!) {
@@ -239,7 +252,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	}
 
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -255,7 +268,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 
 	delProperty(client: IndiClient, message: DelProperty) {
 		if (!message.name) {
-			const device = this.get(message.device)
+			const device = this.get(client, message.device)
 
 			if (device) {
 				this.remove(device)
@@ -277,11 +290,14 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	protected handleDriverInfo(client: IndiClient, message: DefTextVector | SetTextVector, interfaceType: DeviceInterfaceType) {
 		const { elements } = message
 		const type = +elements.DRIVER_INTERFACE!.value
-		let device = this.get(message.device)
+		const name = message.device
+		let device = this.get(client, name)
 
 		if (isInterfaceType(type, interfaceType)) {
 			if (!device) {
-				device = { ...structuredClone<D>(DEVICES[interfaceType as never]), name: message.device, [CLIENT]: client, driver: { executable: elements.DRIVER_EXEC!.value, version: elements.DRIVER_VERSION!.value } }
+				device = structuredClone<D>(DEVICES[interfaceType as never])
+				const id = Bun.MD5.hash(`${client.remoteIp}:${client.remotePort}:${device.type}:${name}`)
+				device = { ...device, id, name, [CLIENT]: client, driver: { executable: elements.DRIVER_EXEC!.value, version: elements.DRIVER_VERSION!.value } }
 
 				this.add(device)
 				this.ask(device)
@@ -292,8 +308,10 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	}
 
 	add(device: D, client = device[CLIENT]!) {
-		if (!this.has(device.name)) {
-			this.devices.set(device.name, device)
+		if (!this.has(client, device.name)) {
+			const devices = this.devices.get(client) ?? new Map()
+			devices.set(device.name, device)
+			this.devices.set(client, devices)
 			this.added(device)
 			return true
 		} else {
@@ -302,8 +320,8 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	}
 
 	remove(device: D, client = device[CLIENT]!) {
-		if (this.has(device.name)) {
-			this.devices.delete(device.name)
+		if (this.has(client, device.name)) {
+			this.devices.get(client)?.delete(device.name)
 			this.removed(device)
 			return true
 		} else {
@@ -312,9 +330,15 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	}
 
 	close(client: IndiClient, server: boolean) {
-		for (const [_, device] of this.devices) {
-			this.remove(device)
+		const devices = this.devices.get(client)
+
+		if (devices) {
+			for (const [_, device] of devices) {
+				this.remove(device)
+			}
 		}
+
+		this.devices.delete(client)
 	}
 }
 
@@ -358,7 +382,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		switch (message.name) {
 			case 'TELESCOPE_TIMED_GUIDE_NS':
 			case 'TELESCOPE_TIMED_GUIDE_WE': {
-				const device = this.provider.get(message.device)
+				const device = this.provider.get(client, message.device)
 
 				if (device) {
 					if (tag[0] === 'd') {
@@ -381,7 +405,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 
 	delProperty(client: IndiClient, message: DelProperty) {
 		if (message.name === 'TELESCOPE_TIMED_GUIDE_NS' || message.name === 'TELESCOPE_TIMED_GUIDE_WE') {
-			const device = this.get(message.device)
+			const device = this.get(client, message.device)
 
 			if (device) {
 				if (handleSwitchValue(device, 'canPulseGuide', false)) {
@@ -404,7 +428,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 		switch (message.name) {
 			case 'CCD_TEMPERATURE':
 			case 'FOCUS_TEMPERATURE': {
-				const device = this.provider.get(message.device)
+				const device = this.provider.get(client, message.device)
 
 				if (device) {
 					if (tag[0] === 'd') {
@@ -429,7 +453,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 
 	delProperty(client: IndiClient, message: DelProperty) {
 		if (message.name === 'CCD_TEMPERATURE' || message.name === 'FOCUS_TEMPERATURE') {
-			const device = this.get(message.device)
+			const device = this.get(client, message.device)
 
 			if (device) {
 				if (handleSwitchValue(device, 'hasThermometer', false)) {
@@ -526,7 +550,7 @@ export class CameraManager extends DeviceManager<Camera> {
 	}
 
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -574,7 +598,7 @@ export class CameraManager extends DeviceManager<Camera> {
 	}
 
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -703,7 +727,7 @@ export class CameraManager extends DeviceManager<Camera> {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.CCD)
 		}
 
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -719,7 +743,7 @@ export class CameraManager extends DeviceManager<Camera> {
 	}
 
 	blobVector(client: IndiClient, message: DefBlobVector | SetBlobVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -893,7 +917,7 @@ export class MountManager extends DeviceManager<Mount> {
 	}
 
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1056,7 +1080,7 @@ export class MountManager extends DeviceManager<Mount> {
 	}
 
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1098,7 +1122,7 @@ export class MountManager extends DeviceManager<Mount> {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.TELESCOPE)
 		}
 
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1136,7 +1160,7 @@ export class WheelManager extends DeviceManager<Wheel> {
 	}
 
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1159,7 +1183,7 @@ export class WheelManager extends DeviceManager<Wheel> {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.FILTER)
 		}
 
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1220,7 +1244,7 @@ export class FocuserManager extends DeviceManager<Focuser> {
 	}
 
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1251,7 +1275,7 @@ export class FocuserManager extends DeviceManager<Focuser> {
 	}
 
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1324,7 +1348,7 @@ export class CoverManager extends DeviceManager<Cover> {
 	}
 
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1382,7 +1406,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 	}
 
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1435,7 +1459,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 	}
 
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1480,7 +1504,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 		switch (message.name) {
 			// WandererCover V4 EC
 			case 'Heater': {
-				const device = this.provider.get(message.device)
+				const device = this.provider.get(client, message.device)
 
 				if (device) {
 					if (tag[0] === 'd') {
@@ -1504,7 +1528,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 
 	delProperty(client: IndiClient, message: DelProperty) {
 		if (message.name === 'Heater') {
-			const device = this.get(message.device)
+			const device = this.get(client, message.device)
 
 			if (device) {
 				if (handleSwitchValue(device, 'hasDewHeater', false)) {
@@ -1537,7 +1561,7 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 	}
 
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1554,7 +1578,7 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 	}
 
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1594,7 +1618,7 @@ export class PowerManager extends DeviceManager<Power> {
 	}
 
 	switchVector(client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1628,7 +1652,7 @@ export class PowerManager extends DeviceManager<Power> {
 	}
 
 	numberVector(client: IndiClient, message: DefNumberVector | SetNumberVector, tag: string) {
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 
@@ -1668,7 +1692,7 @@ export class PowerManager extends DeviceManager<Power> {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.POWER)
 		}
 
-		const device = this.get(message.device)
+		const device = this.get(client, message.device)
 
 		if (!device) return
 

@@ -59,10 +59,11 @@ export class IndiClient {
 		return this.socket?.localPort
 	}
 
-	async connect(hostname: string, port: number = DEFAULT_INDI_PORT) {
+	async connect(hostname: string, port: number = DEFAULT_INDI_PORT, options?: Omit<Bun.TCPSocketConnectOptions, 'hostname' | 'port' | 'socket' | 'data'>) {
 		if (this.socket) return false
 
 		this.socket = await Bun.connect({
+			...options,
 			hostname,
 			port,
 			socket: {

@@ -267,7 +267,7 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		expect(cameraAdded).toBeTrue()
 		expect(camera).toHaveLength(1)
 
-		const device = camera.get('CCD Simulator')!
+		const device = camera.get(client, 'CCD Simulator')!
 		camera.connect(device)
 
 		onTestFinished(() => {
@@ -411,7 +411,7 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		expect(mountAdded).toBeTrue()
 		expect(mount).toHaveLength(1)
 
-		const device = mount.get('Telescope Simulator')!
+		const device = mount.get(client, 'Telescope Simulator')!
 		mount.connect(device)
 
 		onTestFinished(() => {
@@ -509,7 +509,7 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		expect(wheelAdded).toBeTrue()
 		expect(wheel.length).toBeGreaterThanOrEqual(1)
 
-		const device = wheel.get('Filter Simulator')!
+		const device = wheel.get(client, 'Filter Simulator')!
 		wheel.connect(device)
 
 		onTestFinished(() => {
@@ -627,7 +627,7 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		expect(focuserAdded).toBeTrue()
 		expect(focuser).toHaveLength(1)
 
-		const device = focuser.get('Focuser Simulator')!
+		const device = focuser.get(client, 'Focuser Simulator')!
 		focuser.connect(device)
 
 		await Bun.sleep(1000)
@@ -716,7 +716,7 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		expect(coverAdded).toBeTrue()
 		expect(cover).toHaveLength(1)
 
-		const device = cover.get('Dust Cover Simulator')!
+		const device = cover.get(client, 'Dust Cover Simulator')!
 		cover.connect(device)
 
 		await Bun.sleep(1000)
@@ -806,7 +806,7 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		expect(flatPanelAdded).toBeTrue()
 		expect(flatPanel).toHaveLength(1)
 
-		const device = flatPanel.get('Light Panel Simulator')!
+		const device = flatPanel.get(client, 'Light Panel Simulator')!
 		flatPanel.connect(device)
 
 		await Bun.sleep(1000)
@@ -897,7 +897,7 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		expect(powerAdded).toBeTrue()
 		expect(power).toHaveLength(1)
 
-		const device = power.get('SVBONY PowerBox')!
+		const device = power.get(client, 'SVBONY PowerBox')!
 		// power.simulation(client, device, true)
 		power.connect(device)
 
@@ -1000,7 +1000,7 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		expect(rotatorAdded).toBeTrue()
 		expect(rotator).toHaveLength(1)
 
-		const device = rotator.get('Rotator Simulator')!
+		const device = rotator.get(client, 'Rotator Simulator')!
 		rotator.connect(device)
 
 		await Bun.sleep(1000)

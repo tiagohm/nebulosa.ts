@@ -6,7 +6,7 @@ export const ALPACA_DISCOVERY_DATA = 'alpacadiscovery1'
 
 export type AlpacaDeviceType = 'Camera' | 'Telescope' | 'Focuser' | 'FilterWheel' | 'Rotator' | 'Dome' | 'Switch' | 'CoverCalibrator' | 'ObservingConditions' | 'SafetyMonitor' | 'Video'
 
-export type AlpacaDeviceNumberAndUniqueIdProvider = (device: Device, type: AlpacaDeviceType) => readonly [number, string]
+export type AlpacaDeviceNumberProvider = (device: Device, type: AlpacaDeviceType) => number
 
 export type AlpacaServerStartOptions = Omit<Bun.Serve.HostnamePortServeOptions<undefined>, 'hostname' | 'port' | 'routes' | 'error' | 'fetch' | 'development'>
 
@@ -89,15 +89,14 @@ export interface AlpacaServerOptions {
 	flatPanel?: FlatPanelManager
 	cover?: CoverManager
 	guideOutput?: GuideOutputManager
-	deviceNumberAndUniqueIdProvider?: AlpacaDeviceNumberAndUniqueIdProvider
+	deviceNumberProvider?: AlpacaDeviceNumberProvider
 }
 
-export function defaultDeviceNumberAndUniqueIdProvider(device: Device, type: AlpacaDeviceType) {
+export function defaultDeviceNumberProvider(device: Device, type: AlpacaDeviceType) {
 	const id = `${type}:${device.name}`
 	let deviceNumber = Bun.hash.cityHash32(id)
 	deviceNumber = (deviceNumber & 0xffff) ^ ((deviceNumber >>> 16) & 0xffff)
-	const uniqueId = Bun.MD5.hash(id, 'hex')
-	return [deviceNumber, uniqueId] as const
+	return deviceNumber
 }
 
 export class AlpacaError extends Error {
