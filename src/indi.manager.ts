@@ -319,7 +319,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		if (isInterfaceType(type, interfaceType)) {
 			if (!device) {
 				device = structuredClone<D>(DEVICES[interfaceType as never])
-				const id = Bun.MD5.hash(`${client.remoteIp}:${client.remotePort}:${device.type}:${name}`)
+				const id = Bun.MD5.hash(`${client.id}:${device.type}:${name}`, 'hex')
 				device = { ...device, id, name, [CLIENT]: client, driver: { executable: elements.DRIVER_EXEC!.value, version: elements.DRIVER_VERSION!.value }, client: { id: client.id, ip: client.remoteIp, port: client.remotePort } }
 
 				this.add(device)
