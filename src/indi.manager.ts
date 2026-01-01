@@ -22,9 +22,9 @@ export interface DeviceHandler<D extends Device> {
 }
 
 export interface DevicePropertyHandler {
-	readonly added: (device: string, property: DeviceProperty) => void
-	readonly updated: (device: string, property: DeviceProperty) => void
-	readonly removed: (device: string, property: DeviceProperty) => void
+	readonly added: (client: IndiClient, device: string, property: DeviceProperty) => void
+	readonly updated: (client: IndiClient, device: string, property: DeviceProperty) => void
+	readonly removed: (client: IndiClient, device: string, property: DeviceProperty) => void
 }
 
 export interface DeviceProvider<D extends Device> {
@@ -59,16 +59,16 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 		this.handlers.delete(handler)
 	}
 
-	added(device: string, property: DeviceProperty) {
-		this.handlers.forEach((e) => e.added(device, property))
+	added(client: IndiClient, device: string, property: DeviceProperty) {
+		this.handlers.forEach((e) => e.added(client, device, property))
 	}
 
-	updated(device: string, property: DeviceProperty) {
-		this.handlers.forEach((e) => e.updated(device, property))
+	updated(client: IndiClient, device: string, property: DeviceProperty) {
+		this.handlers.forEach((e) => e.updated(client, device, property))
 	}
 
-	removed(device: string, property: DeviceProperty) {
-		this.handlers.forEach((e) => e.removed(device, property))
+	removed(client: IndiClient, device: string, property: DeviceProperty) {
+		this.handlers.forEach((e) => e.removed(client, device, property))
 	}
 
 	names(client: IndiClient | string) {
@@ -107,7 +107,7 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 			const property = message as DeviceProperty
 			property.type = tag.includes('Switch') ? 'SWITCH' : tag.includes('Number') ? 'NUMBER' : tag.includes('Text') ? 'TEXT' : tag.includes('BLOB') ? 'BLOB' : 'LIGHT'
 			properties[message.name] = property
-			this.added(device, property)
+			this.added(client, device, property)
 			return true
 		} else {
 			let updated = false
@@ -135,7 +135,7 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 				}
 
 				if (updated) {
-					this.updated(device, property)
+					this.updated(client, device, property)
 				}
 			}
 
@@ -156,7 +156,7 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 			if (property) {
 				delete properties[name]
 				if (Object.keys(properties).length === 0) this.properties.get(client)?.delete(device)
-				this.removed(device, property)
+				this.removed(client, device, property)
 				return true
 			}
 		} else {
