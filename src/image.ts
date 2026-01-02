@@ -30,13 +30,15 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu, raw: ImageRa
 	const stride = sw * nc
 	const buffer = Buffer.allocUnsafe(strideInBytes)
 	const bufferView = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+	const range = new Float64Array([1, 0])
+
 	if (raw === 'auto') raw = bp === Bitpix.BYTE ? 32 : 64
 	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * nc) : new Float64Array(pixelCount * nc)
-	const range = new Float64Array([1, 0])
-	const source = Buffer.isBuffer(data.source) ? bufferSource(data.source) : data.source
-	const readPixel = READ_PIXEL[bp]
 
+	const source = Buffer.isBuffer(data.source) ? bufferSource(data.source) : data.source
 	source.seek?.(data.offset ?? 0)
+
+	const readPixel = READ_PIXEL[bp]
 
 	for (let channel = 0; channel < nc; channel++) {
 		for (let y = 0, i = channel; y < sh; y++) {

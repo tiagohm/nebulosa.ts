@@ -35,6 +35,19 @@ export enum AlpacaException {
 	Driver = 1280,
 }
 
+export enum AlpacaImageElementType {
+	Unknown = 0, // 0 to 3 are values already used in the Alpaca standard
+	Int16 = 1,
+	Int32 = 2,
+	Double = 3,
+	Single = 4, // 4 to 9 are an extension to include other numeric types
+	UInt64 = 5,
+	Byte = 6,
+	Int64 = 7,
+	UInt16 = 8,
+	UInt32 = 9,
+}
+
 export interface AlpacaResponse<T> {
 	readonly Value: T
 	readonly ClientTransactionID: number

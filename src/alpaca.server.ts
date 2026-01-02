@@ -1,5 +1,5 @@
 // biome-ignore format: too long!
-import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, type AlpacaDiscoveryServerOptions, AlpacaError, AlpacaException, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, defaultDeviceNumberProvider, } from './alpaca.types'
+import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, type AlpacaDiscoveryServerOptions, AlpacaError, AlpacaException, AlpacaImageElementType, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, defaultDeviceNumberProvider, } from './alpaca.types'
 import { deg, hour, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import type { EquatorialCoordinate } from './coordinate'
@@ -1008,6 +1008,7 @@ export class AlpacaServer {
 			if (!fits) return makeAlpacaErrorResponse(AlpacaException.Driver, 'Unable to read FITS image')
 
 			if (accept?.includes('imagebytes')) {
+				// const data = Buffer.from(await Bun.file('c:\\Users\\tiago\\Documents\\Nebulosa\\Captures\\SVBONY CCD SV305.fit').arrayBuffer())
 				const image = makeImageBytesFromFits(fits, buffer)
 				return new Response(image.buffer, { headers: { 'Content-Type': 'application/imagebytes' } })
 			}
@@ -1664,104 +1665,48 @@ export function makeImageBytesFromFits(fits: Fits, data: Buffer) {
 	const hdu = fits.hdus[0]
 	const { header } = hdu
 	const bitpix = bitpixKeyword(header, 0)
-	const elementType = bitpix === Bitpix.BYTE ? 6 : bitpix === Bitpix.SHORT ? 1 : bitpix === Bitpix.INTEGER ? 2 : bitpix === Bitpix.FLOAT ? 4 : 3
 	const numX = header.NAXIS1 as number
 	const numY = header.NAXIS2 as number
 	const numZ = header.NAXIS3 as number | undefined
 	const channels = numZ || 1
-	const bytesPerPixel = bitpixInBytes(bitpix)
-	const strideInBytes = numX * bytesPerPixel
-	const planeInBytes = strideInBytes * numY
-	const { offset = 0 } = hdu.data
+	const inputBytesPerPixel = bitpixInBytes(bitpix)
 
-	const output = Buffer.allocUnsafe(44 + planeInBytes * channels)
+	const output = Buffer.allocUnsafe(44 + numX * numY * channels)
 
 	output.writeInt32LE(1, 0) // Bytes 0..3 - Metadata version = 1
 	output.writeInt32LE(0, 4) // Bytes 4..7 - Alpaca error number or zero for success
 	output.writeInt32LE(0, 8) // Bytes 8..11 - Client's transaction ID
 	output.writeInt32LE(0, 12) // Bytes 12..15 - Device's transaction ID
 	output.writeInt32LE(44, 16) // Bytes 16..19 - Offset of the start of the data bytes
-	output.writeInt32LE(2, 20) // Bytes 20..23 - Element type of the source image array. It's always 2 (Int32)? Because MaxIm DL crashes if it's not!
-	output.writeInt32LE(elementType, 24) // Bytes 24..27 - Element type as sent over the network
+	output.writeInt32LE(AlpacaImageElementType.Int32, 20) // Bytes 20..23 - Element type of the source image array. It's always 2 (Int32)? Because MaxIm DL crashes if it's not!
+	output.writeInt32LE(AlpacaImageElementType.Byte, 24) // Bytes 24..27 - Element type as sent over the network.
 	output.writeInt32LE(numZ || 2, 28) // Bytes 28..31 - Image array rank (2 or 3)
 	output.writeInt32LE(numX, 32) // Bytes 32..35 - Length of image array first dimension
 	output.writeInt32LE(numY, 36) // Bytes 36..39 - Length of image array second dimension
 	output.writeInt32LE(numZ || 0, 40) // Bytes 40..43 - Length of image array third dimension (0 for 2D array)
 
-	let b = 44
+	let a = hdu.data.offset ?? 0
+	let b = 0
 
-	const input = new DataView(data.buffer, data.byteOffset, data.byteLength)
-	const out = new DataView(output.buffer, output.byteOffset, output.byteLength)
+	const dataView = new DataView(data.buffer, data.byteOffset, data.byteLength)
+	const outputView = new DataView(output.buffer, 44, output.byteLength - 44)
 
-	if (bytesPerPixel === 2) {
-		for (let x = 0; x < numX; x++) {
-			const ax = (x << 1) + offset
+	console.time('read')
 
-			for (let y = 0; y < numY; y++, b += 2) {
-				const ay = y * strideInBytes + ax
-				out.setInt16(b, input.getInt16(ay, false), true)
+	for (let c = 0; c < channels; c++) {
+		for (let y = 0; y < numY; y++) {
+			b = y * channels + c
 
-				if (channels === 3) {
-					b += 2
-					out.setInt16(b, input.getInt16(ay + planeInBytes, false), true)
-					b += 2
-					out.setInt16(b, input.getInt16(ay + planeInBytes * 2, false), true)
-				}
-			}
-		}
-	} else if (bytesPerPixel === 1) {
-		for (let x = 0; x < numX; x++) {
-			const ax = x + offset
-
-			for (let y = 0; y < numY; y++, b++) {
-				const ay = y * strideInBytes + ax
-				out.setInt8(b, input.getInt8(ay))
-
-				if (channels === 3) {
-					out.setInt8(++b, input.getInt8(ay + planeInBytes))
-					out.setInt8(++b, input.getInt8(ay + planeInBytes * 2))
-				}
-			}
-		}
-	} else if (bytesPerPixel === 4) {
-		for (let x = 0; x < numX; x++) {
-			const ax = (x << 2) + offset
-
-			for (let y = 0; y < numY; y++, b += 4) {
-				const ay = y * strideInBytes + ax
-				out.setInt32(b, input.getInt32(ay, false), true)
-
-				if (channels === 3) {
-					b += 4
-					out.setInt32(b, input.getInt32(ay + planeInBytes, false), true)
-					b += 4
-					out.setInt32(b, input.getInt32(ay + planeInBytes * 2, false), true)
-				}
-			}
-		}
-	} else {
-		for (let x = 0; x < numX; x++) {
-			const ax = (x << 3) + offset
-
-			for (let y = 0; y < numY; y++, b += 4) {
-				const ay = y * strideInBytes + ax
-				out.setInt32(b, input.getInt32(ay + 4, false), true)
-				b += 4
-				out.setInt32(b, input.getInt32(ay, false), true)
-
-				if (channels === 3) {
-					b += 4
-					out.setInt32(b, input.getInt32(ay + 4 + planeInBytes, false), true)
-					b += 4
-					out.setInt32(b, input.getInt32(ay + planeInBytes, false), true)
-					b += 4
-					out.setInt32(b, input.getInt32(ay + 4 + planeInBytes * 2, false), true)
-					b += 4
-					out.setInt32(b, input.getInt32(ay + planeInBytes * 2, false), true)
-				}
+			for (let x = 0; x < numX; x++) {
+				const pixel = bitpix === Bitpix.BYTE ? dataView.getUint8(a) : (dataView.getInt16(a, false) >> 8) + 128
+				outputView.setUint8(b, pixel)
+				a += inputBytesPerPixel
+				b += numY * channels
 			}
 		}
 	}
+
+	console.timeEnd('read')
 
 	return output
 }

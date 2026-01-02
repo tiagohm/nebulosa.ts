@@ -249,13 +249,14 @@ export class Base64Source implements Source, Seekable {
 	constructor(readonly source: Source | string) {}
 
 	get position() {
-		return typeof this.source === 'string' ? this.spos : isSeekable(this.source) ? this.source.position : -1
+		return typeof this.source === 'string' ? (this.spos * 3) >>> 2 : isSeekable(this.source) ? this.source.position : -1
 	}
 
 	seek(position: number) {
 		if (typeof this.source === 'string') {
-			if (position < 0 || position >= this.source.length) return false
-			this.spos = position
+			const pos = Math.ceil(position / 3) * 4 // Base64 encodes every 3 bytes (24 bits) of binary data into 4 characters (24 bits).
+			if (pos < 0 || pos >= this.source.length) return false
+			this.spos = pos
 			return true
 		} else if (isSeekable(this.source)) {
 			return this.source.seek(position)
