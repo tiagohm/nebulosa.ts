@@ -2,7 +2,7 @@ import { PI } from './constants'
 import { exposureTimeKeyword } from './fits'
 import { truncatePixel } from './image'
 // biome-ignore format: too long!
-import { type ApplyScreenTransferFunctionOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, type DarkBiasSubtractionOptions, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type GaussianBlurConvolutionOptions, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
+import { type ApplyScreenTransferFunctionOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, type DarkBiasSubtractionOptions, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type GaussianBlurConvolutionOptions, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
 import type { NumberArray } from './math'
 
 // Apply Screen Transfer Function to image.
@@ -41,42 +41,18 @@ export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, hig
 	return image
 }
 
-const CFA_PATTERNS: Record<CfaPattern, number[][]> = {
-	RGGB: [
-		[0, 1],
-		[1, 2],
-	],
-	BGGR: [
-		[2, 1],
-		[1, 0],
-	],
-	GBRG: [
-		[1, 2],
-		[0, 1],
-	],
-	GRBG: [
-		[1, 0],
-		[2, 1],
-	],
-	GRGB: [
-		[1, 0],
-		[1, 2],
-	],
-	GBGR: [
-		[1, 2],
-		[1, 0],
-	],
-	RGBG: [
-		[0, 1],
-		[2, 1],
-	],
-	BGRG: [
-		[2, 1],
-		[0, 1],
-	],
+const CFA_PATTERNS: Record<CfaPattern, Uint8Array[]> = {
+	RGGB: [new Uint8Array([0, 1]), new Uint8Array([1, 2])],
+	BGGR: [new Uint8Array([2, 1]), new Uint8Array([1, 0])],
+	GBRG: [new Uint8Array([1, 2]), new Uint8Array([0, 1])],
+	GRBG: [new Uint8Array([1, 0]), new Uint8Array([2, 1])],
+	GRGB: [new Uint8Array([1, 0]), new Uint8Array([1, 2])],
+	GBGR: [new Uint8Array([1, 2]), new Uint8Array([1, 0])],
+	RGBG: [new Uint8Array([0, 1]), new Uint8Array([2, 1])],
+	BGRG: [new Uint8Array([2, 1]), new Uint8Array([0, 1])],
 }
 
-export function debayer(image: Image, pattern?: CfaPattern) {
+export function debayer(image: Image, pattern?: CfaPattern): Image | undefined {
 	const { metadata, raw } = image
 
 	if (metadata.channels === 1) {
@@ -84,9 +60,9 @@ export function debayer(image: Image, pattern?: CfaPattern) {
 
 		if (pattern) {
 			const cfa = CFA_PATTERNS[pattern]
-			const values = new Float64Array(3)
+			const values = raw instanceof Float64Array ? new Float64Array(3) : new Float32Array(3)
 			const counters = new Uint8Array(3)
-			const output = new Float64Array(raw.length * 3)
+			const output = raw instanceof Float64Array ? new Float64Array(raw.length * 3) : new Float32Array(raw.length * 3)
 
 			const { width, height } = metadata
 
@@ -357,7 +333,7 @@ export function flatCorrection(image: Image, flat: Image) {
 
 	const { raw, metadata } = image
 	const { channels } = metadata
-	const mean = new Float64Array(channels)
+	const mean = new Float32Array(channels)
 
 	// Calculate mean for each channel.
 	for (let i = 0; i < mean.length; i++) {
@@ -391,7 +367,7 @@ export function grayscale(image: Image, channel?: ImageChannelOrGray): Image {
 
 	const color = image.raw
 	const n = metadata.pixelCount
-	const raw = new Float64Array(n)
+	const raw = image.raw instanceof Float64Array ? new Float64Array(n) : new Float32Array(n)
 	const { red, green, blue } = grayscaleFromChannel(channel)
 
 	if (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') {
@@ -443,9 +419,9 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 	const { width: iw, height: ih, channels, stride } = metadata
 	const mask = new Float64Array(channels)
 	const { width: kw, height: kh, kernel: kd } = kernel
-	const buffer = new Array<Float64Array>(kh)
+	const buffer = new Array<ImageRawType>(kh)
 
-	function read(y: number, output: Float64Array) {
+	function read(y: number, output: ImageRawType) {
 		if (y < 0 || y >= ih) {
 			// output.fill(0)
 		} else {
@@ -455,7 +431,7 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 	}
 
 	for (let i = 0; i < buffer.length; i++) {
-		buffer[i] = new Float64Array(stride)
+		buffer[i] = raw instanceof Float64Array ? new Float64Array(stride) : new Float32Array(stride)
 		read(i - yr, buffer[i])
 	}
 
@@ -541,7 +517,7 @@ export function gaussianBlurKernel(sigma: number = 1.4, size: number = 5) {
 		return Math.exp((x * x + y * y) / (-2 * sigmaSquared)) / (2 * PI * sigmaSquared)
 	}
 
-	const kernel = new Float64Array(size * size)
+	const kernel = new Float32Array(size * size)
 
 	for (let y = -r, i = 0; y <= r; y++) {
 		for (let x = -r; x <= r; x++, i++) {
@@ -647,7 +623,7 @@ export function gaussianBlur(image: Image, options: Partial<GaussianBlurConvolut
 // https://github.com/KDE/kstars/blob/master/kstars/ekos/guide/internalguide/guidealgorithms.cpp
 
 //                              A      B1     B2     C1    C2      C3     D1       D2     D3
-const PSF = new Float64Array([0.906, 0.584, 0.365, 0.117, 0.049, -0.05, -0.064, -0.074, -0.094])
+const PSF = new Float32Array([0.906, 0.584, 0.365, 0.117, 0.049, -0.05, -0.064, -0.074, -0.094])
 
 // PSF Grid
 // D3 D3 D3 D3 D3 D3 D3 D3 D3
@@ -668,9 +644,9 @@ const PSF = new Float64Array([0.906, 0.584, 0.365, 0.117, 0.049, -0.05, -0.064, 
 export function psf(image: Image) {
 	const { raw, metadata } = image
 	const { width: iw, height: ih, channels, stride } = metadata
-	const buffer = new Array<Float64Array>(9)
+	const buffer = new Array<ImageRawType>(9)
 
-	function read(y: number, output: Float64Array) {
+	function read(y: number, output: ImageRawType) {
 		if (y < 0 || y >= ih) {
 			// output.fill(0)
 		} else {
@@ -680,7 +656,7 @@ export function psf(image: Image) {
 	}
 
 	for (let i = 0; i < buffer.length; i++) {
-		buffer[i] = new Float64Array(stride)
+		buffer[i] = raw instanceof Float64Array ? new Float64Array(stride) : new Float32Array(stride)
 		read(i, buffer[i])
 	}
 

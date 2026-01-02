@@ -87,7 +87,7 @@ test('detect stars', async () => {
 
 	expect(stars).toHaveLength(500)
 	const flux = stars.map((e) => e.flux).reduceRight((a, b) => a + b)
-	expect(flux).toBe(3074.7428488413807)
+	expect(flux).toBeCloseTo(3074.7428488413807, 4)
 	const carina = stars.find((e) => e.x === 564 && e.y === 544)
 	expect(carina).toBeDefined()
 	expect(carina!.x).toBe(564)

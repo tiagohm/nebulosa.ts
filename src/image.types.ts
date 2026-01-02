@@ -25,6 +25,8 @@ export type SigmaClipCenterMethod = 'median' | 'mean'
 
 export type SigmaClipDispersionMethod = 'std' | 'mad'
 
+export type ImageRawType = Float64Array | Float32Array
+
 export interface WriteImageToFormatOptions {
 	jpeg: {
 		quality?: number
@@ -35,7 +37,7 @@ export interface WriteImageToFormatOptions {
 export interface Image {
 	readonly header: FitsHeader
 	readonly metadata: ImageMetadata
-	readonly raw: Float64Array
+	readonly raw: ImageRawType
 }
 
 export interface ImageMetadata {
