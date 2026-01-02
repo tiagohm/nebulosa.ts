@@ -4,11 +4,10 @@ import { deg, hour, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import type { EquatorialCoordinate } from './coordinate'
 import { meter, toMeter } from './distance'
-import { Bitpix, bitpixInBytes, bitpixKeyword, type Fits, readFits } from './fits'
+import { Bitpix, bitpixInBytes, computeRemainingBytes, FitsKeywordReader } from './fits'
 // biome-ignore format: too long!
 import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, type Mount, type PierSide, type Rotator, type SlewRate, type TrackMode, type Wheel } from './indi.device'
 import type { DeviceHandler, DeviceManager } from './indi.manager'
-import { bufferSource } from './io'
 import { type GeographicCoordinate, localSiderealTime } from './location'
 import { timeNow } from './time'
 
@@ -624,13 +623,13 @@ export class AlpacaServer {
 		return makeAlpacaResponse(this.device(id, type).device.driver.version)
 	}
 
-	private deviceConnect(id: number, type: AlpacaDeviceType, data: { Connected: string }) {
+	private async deviceConnect(id: number, type: AlpacaDeviceType, data: { Connected: string }) {
 		const { state, device } = this.device(id, type)
 
 		if (!device) return makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Device is not present')
 
 		if (state.tasks.connect?.running) {
-			return state.tasks.connect.promise.then(makeResponseForTask)
+			return await state.tasks.connect.promise.then(makeResponseForTask)
 		}
 
 		const connect = isTrue(data.Connected)
@@ -645,7 +644,7 @@ export class AlpacaServer {
 			if (connect) this.deviceManager.connect(device as never)
 			else this.deviceManager.disconnect(device as never)
 
-			return task.promise.then(makeResponseForTask)
+			return await task.promise.then(makeResponseForTask)
 		}
 
 		return makeResponseForTask(true)
@@ -998,18 +997,13 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
-	private async cameraGetImageArray(id: number, accept?: string | null) {
+	private cameraGetImageArray(id: number, accept?: string | null) {
 		const { state } = this.camera(id)
 
 		try {
-			const buffer = Buffer.from(state.data!, 'base64')
-			const fits = await readFits(bufferSource(buffer))
-
-			if (!fits) return makeAlpacaErrorResponse(AlpacaException.Driver, 'Unable to read FITS image')
-
 			if (accept?.includes('imagebytes')) {
 				// const data = Buffer.from(await Bun.file('c:\\Users\\tiago\\Documents\\Nebulosa\\Captures\\SVBONY CCD SV305.fit').arrayBuffer())
-				const image = makeImageBytesFromFits(fits, buffer)
+				const image = makeImageBytesFromFits(Buffer.from(state.data!, 'base64'))
 				return new Response(image.buffer, { headers: { 'Content-Type': 'application/imagebytes' } })
 			}
 		} finally {
@@ -1041,13 +1035,13 @@ export class AlpacaServer {
 		return makeAlpacaResponse(this.wheel(id).device.position)
 	}
 
-	private wheelSetPosition(id: number, data: { Position: string }) {
+	private async wheelSetPosition(id: number, data: { Position: string }) {
 		const { state, device } = this.wheel(id)
 		state.position = +data.Position
 		const task = promiseWithTimeout(AlpacaException.ValueNotSet, 'Unable to set wheel position')
 		state.tasks.position = task
 		this.options.wheel?.moveTo(device, state.position)
-		return task.promise.then(makeResponseForTask)
+		return await task.promise.then(makeResponseForTask)
 	}
 
 	// Telescope API
@@ -1661,15 +1655,33 @@ function promiseWithTimeout(code: AlpacaException, message: string, delay: numbe
 	} as const
 }
 
-export function makeImageBytesFromFits(fits: Fits, data: Buffer) {
-	const hdu = fits.hdus[0]
-	const { header } = hdu
-	const bitpix = bitpixKeyword(header, 0)
-	const numX = header.NAXIS1 as number
-	const numY = header.NAXIS2 as number
-	const numZ = header.NAXIS3 as number | undefined
+export function makeImageBytesFromFits(source: Buffer) {
+	const reader = new FitsKeywordReader()
+	let position = 0
+
+	let bitpix = Bitpix.BYTE
+	let numX = 0
+	let numY = 0
+	let numZ = 0
+
+	while (true) {
+		const [key, value] = reader.read(source.subarray(position, position + 80))
+
+		position += 80
+
+		if (key === 'BITPIX') bitpix = value as number
+		else if (key === 'NAXIS1') numX = value as number
+		else if (key === 'NAXIS2') numY = value as number
+		else if (key === 'NAXIS3') numZ = value as number
+		else if (key === 'END') {
+			position += computeRemainingBytes(position)
+			break
+		}
+	}
+
 	const channels = numZ || 1
 	const inputBytesPerPixel = bitpixInBytes(bitpix)
+	const strideInBytes = numX * inputBytesPerPixel
 
 	const output = Buffer.allocUnsafe(44 + numX * numY * channels)
 
@@ -1685,28 +1697,25 @@ export function makeImageBytesFromFits(fits: Fits, data: Buffer) {
 	output.writeInt32LE(numY, 36) // Bytes 36..39 - Length of image array second dimension
 	output.writeInt32LE(numZ || 0, 40) // Bytes 40..43 - Length of image array third dimension (0 for 2D array)
 
-	let a = hdu.data.offset ?? 0
 	let b = 0
 
-	const dataView = new DataView(data.buffer, data.byteOffset, data.byteLength)
+	const sourceView = new DataView(source.buffer, source.byteOffset, source.byteLength)
 	const outputView = new DataView(output.buffer, 44, output.byteLength - 44)
-
-	console.time('read')
 
 	for (let c = 0; c < channels; c++) {
 		for (let y = 0; y < numY; y++) {
 			b = y * channels + c
 
-			for (let x = 0; x < numX; x++) {
-				const pixel = bitpix === Bitpix.BYTE ? dataView.getUint8(a) : (dataView.getInt16(a, false) >> 8) + 128
+			for (let x = 0, a = position; x < numX; x++) {
+				const pixel = bitpix === Bitpix.BYTE ? sourceView.getUint8(a) : (sourceView.getInt16(a, false) >> 8) + 128
 				outputView.setUint8(b, pixel)
 				a += inputBytesPerPixel
 				b += numY * channels
 			}
+
+			position += strideInBytes
 		}
 	}
-
-	console.timeEnd('read')
 
 	return output
 }

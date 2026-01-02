@@ -9,8 +9,8 @@ test.skip('make image bytes from fits', async () => {
 
 	for (const bitpix of [8, 16]) {
 		for (const channel of CHANNELS) {
-			const [fits, buffer] = await openFitsFromBuffer(bitpix, channel, (fits) => fits)
-			const bytes = makeImageBytesFromFits(fits, buffer).subarray(44)
+			const [, buffer] = await openFitsFromBuffer(bitpix, channel, (fits) => fits)
+			const bytes = makeImageBytesFromFits(buffer).subarray(44)
 			expect(bytes.byteLength).toBe(channel * 1037 * 706)
 
 			if (channel === 1) {
