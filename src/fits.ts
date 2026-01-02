@@ -7,7 +7,7 @@ import { parseTemporal } from './temporal'
 export type FitsHeaderKey = string
 export type FitsHeaderValue = string | number | boolean | undefined
 export type FitsHeaderComment = string | undefined
-export type FitsHeaderCard = [FitsHeaderKey, FitsHeaderValue, FitsHeaderComment?]
+export type FitsHeaderCard = [FitsHeaderKey, FitsHeaderValue?, FitsHeaderComment?]
 export type FitsHeader = Record<FitsHeaderKey, FitsHeaderValue>
 
 export interface FitsData {
@@ -293,7 +293,7 @@ function unescapeQuotedText(text: string) {
 	return text.replaceAll("''", "'")
 }
 
-export function isCommentStyleCard(card: FitsHeaderCard) {
+export function isCommentStyleCard(card: Readonly<FitsHeaderCard>) {
 	return NO_VALUE_KEYWORDS.includes(card[0])
 }
 
@@ -462,7 +462,7 @@ class Position {
 }
 
 export class FitsKeywordWriter {
-	write(card: FitsHeaderCard, output: Buffer, offset: number = 0) {
+	write(card: Readonly<FitsHeaderCard>, output: Buffer, offset: number = 0) {
 		if (output.byteLength - offset < FITS_HEADER_CARD_SIZE) return 0
 
 		const position = new Position(offset)
@@ -481,12 +481,12 @@ export class FitsKeywordWriter {
 		return position.size
 	}
 
-	private appendKey(output: Buffer, card: FitsHeaderCard, position: Position) {
+	private appendKey(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
 		this.appendText(output, card[0], position)
 		this.padTo(output, FITS_MAX_KEYWORD_LENGTH, position)
 	}
 
-	private appendValue(output: Buffer, card: FitsHeaderCard, position: Position) {
+	private appendValue(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
 		const [, value, comment] = card
 
 		if (isCommentStyleCard(card)) {
@@ -523,7 +523,7 @@ export class FitsKeywordWriter {
 		return start
 	}
 
-	private appendComment(output: Buffer, card: FitsHeaderCard, position: Position) {
+	private appendComment(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
 		const commentStyleCard = isCommentStyleCard(card)
 		const comment = commentStyleCard ? card[2] || (typeof card[1] === 'string' ? card[1] : undefined) : card[2]
 

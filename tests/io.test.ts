@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { FitsKeywordReader, FitsKeywordWriter } from '../src/fits'
 import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, readableStreamSource, readLines, readUntil } from '../src/io'
 
 test('bufferSink', () => {
@@ -315,6 +316,33 @@ describe('base64', () => {
 			expect(n).toBe(encoded.byteLength)
 			expect(output.subarray(0, n)).toEqual(encoded.subarray(0, n))
 		}
+	})
+
+	test('fits header', async () => {
+		const writer = new FitsKeywordWriter()
+		const output = Buffer.alloc(2880, 32)
+		const card = ['BITPIX', -32, 'number of bits used to represent a data value in the image array'] as const
+		let position = 0
+
+		for (let i = 0; i < 35; i++) position += writer.write(card, output, position)
+		writer.write(['END'], output, position)
+
+		const source = base64Source(output.toString('base64'))
+		const line = Buffer.alloc(80)
+		const reader = new FitsKeywordReader()
+
+		for (let i = 0; i < 35; i++) {
+			await readUntil(source, line)
+			const [key, value, comment] = reader.read(line)
+
+			expect(key).toBe('BITPIX')
+			expect(value).toBe(-32)
+			expect(comment).toBe('number of bits used to represent a data value in the image array')
+		}
+
+		await readUntil(source, line)
+		const [key] = reader.read(line)
+		expect(key).toBe('END')
 	})
 })
 
