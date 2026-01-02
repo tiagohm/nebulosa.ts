@@ -152,7 +152,7 @@ export class AlpacaServer {
 			this.Camera.delete(device)
 		},
 		blobReceived: (device, data) => {
-			console.info('camera image received', device.name, data.length)
+			// console.info('camera image received', device.name, data.length)
 			this.camera(device).state.data = data
 		},
 	}
@@ -1681,9 +1681,11 @@ export function makeImageBytesFromFits(source: Buffer) {
 
 	const channels = numZ || 1
 	const inputBytesPerPixel = bitpixInBytes(bitpix)
-	const strideInBytes = numX * inputBytesPerPixel
+	const readStrideInBytes = numX * inputBytesPerPixel
+	const channelsInBytes = channels * inputBytesPerPixel
+	const writeStrideInBytes = numY * channelsInBytes
 
-	const output = Buffer.allocUnsafe(44 + numX * numY * channels)
+	const output = Buffer.allocUnsafe(44 + numX * numY * channelsInBytes) // 16-bit
 
 	output.writeInt32LE(1, 0) // Bytes 0..3 - Metadata version = 1
 	output.writeInt32LE(0, 4) // Bytes 4..7 - Alpaca error number or zero for success
@@ -1691,7 +1693,7 @@ export function makeImageBytesFromFits(source: Buffer) {
 	output.writeInt32LE(0, 12) // Bytes 12..15 - Device's transaction ID
 	output.writeInt32LE(44, 16) // Bytes 16..19 - Offset of the start of the data bytes
 	output.writeInt32LE(AlpacaImageElementType.Int32, 20) // Bytes 20..23 - Element type of the source image array. It's always 2 (Int32)? Because MaxIm DL crashes if it's not!
-	output.writeInt32LE(AlpacaImageElementType.Byte, 24) // Bytes 24..27 - Element type as sent over the network.
+	output.writeInt32LE(bitpix === Bitpix.BYTE ? AlpacaImageElementType.Byte : AlpacaImageElementType.UInt16, 24) // Bytes 24..27 - Element type as sent over the network.
 	output.writeInt32LE(numZ || 2, 28) // Bytes 28..31 - Image array rank (2 or 3)
 	output.writeInt32LE(numX, 32) // Bytes 32..35 - Length of image array first dimension
 	output.writeInt32LE(numY, 36) // Bytes 36..39 - Length of image array second dimension
@@ -1702,20 +1704,32 @@ export function makeImageBytesFromFits(source: Buffer) {
 	const sourceView = new DataView(source.buffer, source.byteOffset, source.byteLength)
 	const outputView = new DataView(output.buffer, 44, output.byteLength - 44)
 
-	for (let c = 0; c < channels; c++) {
-		for (let y = 0; y < numY; y++) {
-			b = y * channels + c
+	// const message = `converted FITS image to ASCOM format. bitpix=${bitpix}, channels=${channels}`
+	// console.time(message)
 
-			for (let x = 0, a = position; x < numX; x++) {
-				const pixel = bitpix === Bitpix.BYTE ? sourceView.getUint8(a) : (sourceView.getInt16(a, false) >> 8) + 128
-				outputView.setUint8(b, pixel)
-				a += inputBytesPerPixel
-				b += numY * channels
+	if (bitpix === Bitpix.BYTE) {
+		for (let c = 0; c < channels; c++) {
+			for (let y = 0; y < numY; y++, position += readStrideInBytes) {
+				b = y * channels + c
+
+				for (let x = 0, a = position; x < numX; x++, a++, b += writeStrideInBytes) {
+					outputView.setUint8(b, sourceView.getUint8(a))
+				}
 			}
+		}
+	} else {
+		for (let c = 0; c < channelsInBytes; c += 2) {
+			for (let y = 0; y < numY; y++, position += readStrideInBytes) {
+				b = y * channelsInBytes + c
 
-			position += strideInBytes
+				for (let x = 0, a = position; x < numX; x++, a += 2, b += writeStrideInBytes) {
+					outputView.setUint16(b, sourceView.getInt16(a, false) + 32768, true)
+				}
+			}
 		}
 	}
+
+	// console.timeEnd(message)
 
 	return output
 }
