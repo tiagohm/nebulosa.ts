@@ -15,7 +15,7 @@ const READ_PIXEL: Readonly<Record<Bitpix, (view: DataView, offset: number) => nu
 }
 
 // Reads an image from a FITS file
-export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu, raw: ImageRawType | 32 | 64 = 64): Promise<Image | undefined> {
+export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu, raw: ImageRawType | 32 | 64 | 'auto' = 'auto'): Promise<Image | undefined> {
 	const hdu = !fitsOrHdu || 'header' in fitsOrHdu ? fitsOrHdu : fitsOrHdu.hdus[0]
 	if (!hdu) return undefined
 	const { header, data } = hdu
@@ -30,6 +30,7 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu, raw: ImageRa
 	const stride = sw * nc
 	const buffer = Buffer.allocUnsafe(strideInBytes)
 	const bufferView = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+	if (raw === 'auto') raw = bp === Bitpix.BYTE ? 32 : 64
 	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * nc) : new Float64Array(pixelCount * nc)
 	const range = new Float64Array([1, 0])
 	const source = Buffer.isBuffer(data.source) ? bufferSource(data.source) : data.source
@@ -69,21 +70,21 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu, raw: ImageRa
 	return { header, metadata, raw }
 }
 
-export async function readImageFromSource(source: Source & Seekable, raw: ImageRawType | 32 | 64 = 64) {
+export async function readImageFromSource(source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
 	const fits = await readFits(source) // TODO: support XISF
 	return await readImageFromFits(fits, raw)
 }
 
-export async function readImageFromBuffer(buffer: Buffer, raw: ImageRawType | 32 | 64 = 64) {
+export async function readImageFromBuffer(buffer: Buffer, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
 	return await readImageFromSource(bufferSource(buffer), raw)
 }
 
-export async function readImageFromFileHandle(handle: FileHandle, raw: ImageRawType | 32 | 64 = 64) {
+export async function readImageFromFileHandle(handle: FileHandle, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
 	await using source = fileHandleSource(handle)
 	return await readImageFromSource(source, raw)
 }
 
-export async function readImageFromPath(path: PathLike, raw: ImageRawType | 32 | 64 = 64) {
+export async function readImageFromPath(path: PathLike, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
 	await using handle = await fs.open(path, 'r')
 	return await readImageFromFileHandle(handle, raw)
 }
