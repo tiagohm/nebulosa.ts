@@ -5,15 +5,6 @@ import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, ty
 import { bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from './io'
 import { Jpeg } from './jpeg'
 
-const READ_PIXEL: Readonly<Record<Bitpix, (view: DataView, offset: number) => number>> = {
-	[Bitpix.BYTE]: (view, offset) => view.getUint8(offset) / 255,
-	[Bitpix.SHORT]: (view, offset) => (view.getInt16(offset, false) + 32768) / 65535,
-	[Bitpix.INTEGER]: (view, offset) => (view.getInt32(offset, false) + 2147483648) / 4294967295,
-	[Bitpix.FLOAT]: (view, offset) => view.getFloat32(offset, false),
-	[Bitpix.DOUBLE]: (view, offset) => view.getFloat64(offset, false),
-	[Bitpix.LONG]: () => 0,
-}
-
 // Reads an image from a FITS file
 export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu, raw: ImageRawType | 32 | 64 | 'auto' = 'auto'): Promise<Image | undefined> {
 	const hdu = !fitsOrHdu || 'header' in fitsOrHdu ? fitsOrHdu : fitsOrHdu.hdus[0]
@@ -38,8 +29,6 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu, raw: ImageRa
 	const source = Buffer.isBuffer(data.source) ? bufferSource(data.source) : data.source
 	source.seek?.(data.offset ?? 0)
 
-	const readPixel = READ_PIXEL[bp]
-
 	for (let channel = 0; channel < nc; channel++) {
 		for (let y = 0, i = channel; y < sh; y++) {
 			const n = await source.read(buffer)
@@ -47,7 +36,13 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu, raw: ImageRa
 			if (n !== strideInBytes) return undefined
 
 			for (let k = 0; k < n; k += pixelSizeInBytes, i += nc) {
-				const pixel = readPixel(bufferView, k)
+				let pixel = 0
+
+				if (bp === Bitpix.SHORT) pixel = (bufferView.getInt16(k, false) + 32768) / 65535
+				else if (bp === Bitpix.BYTE) pixel = bufferView.getUint8(k) / 255
+				else if (bp === Bitpix.INTEGER) pixel = (bufferView.getInt32(k, false) + 2147483648) / 4294967295
+				else if (bp === Bitpix.FLOAT) pixel = bufferView.getFloat32(k, false)
+				else if (bp === Bitpix.DOUBLE) pixel = bufferView.getFloat64(k, false)
 
 				raw[i] = pixel
 
@@ -106,15 +101,6 @@ export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'f
 	return undefined
 }
 
-const WRITE_PIXEL: Readonly<Record<Bitpix, (view: DataView, offset: number, pixel: number) => void>> = {
-	[Bitpix.BYTE]: (view, offset, pixel) => view.setUint8(offset, pixel * 255),
-	[Bitpix.SHORT]: (view, offset, pixel) => view.setInt16(offset, ((pixel * 65535) & 0xffff) - 32768, false),
-	[Bitpix.INTEGER]: (view, offset, pixel) => view.setInt32(offset, ((pixel * 4294967295) & 0xffffffff) - 2147483648, false),
-	[Bitpix.FLOAT]: (view, offset, pixel) => view.setFloat32(offset, pixel, false),
-	[Bitpix.DOUBLE]: (view, offset, pixel) => view.setFloat64(offset, pixel, false),
-	[Bitpix.LONG]: () => {},
-}
-
 export class FitsDataSource implements Source {
 	private position = 0
 	private channel = 0
@@ -142,16 +128,20 @@ export class FitsDataSource implements Source {
 			}
 		}
 
-		const channels = this.channels
+		const { bitpix, channels, raw } = this
 		const pixelSizeInBytes = bitpixInBytes(this.bitpix)
 		const bufferView = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
-		const raw = this.raw
 		let position = this.position
 		let n = 0
-		const writePixel = WRITE_PIXEL[this.bitpix]
 
 		for (; position < length && n < size; position += channels, n += pixelSizeInBytes, offset += pixelSizeInBytes) {
-			writePixel(bufferView, offset, raw[position])
+			const pixel = raw[position]
+
+			if (bitpix === Bitpix.SHORT) bufferView.setInt16(offset, ((pixel * 65535) & 0xffff) - 32768, false)
+			else if (bitpix === Bitpix.BYTE) bufferView.setUint8(offset, pixel * 255)
+			else if (bitpix === Bitpix.INTEGER) bufferView.setInt32(offset, ((pixel * 4294967295) & 0xffffffff) - 2147483648, false)
+			else if (bitpix === Bitpix.FLOAT) bufferView.setFloat32(offset, pixel, false)
+			else if (bitpix === Bitpix.DOUBLE) bufferView.setFloat64(offset, pixel, false)
 		}
 
 		this.position = position
