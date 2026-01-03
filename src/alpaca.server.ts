@@ -152,8 +152,13 @@ export class AlpacaServer {
 			this.Camera.delete(device)
 		},
 		blobReceived: (device, data) => {
-			// console.info('camera image received', device.name, data.length)
-			this.camera(device).state.data = data
+			const { state } = this.camera(device)
+
+            // Has the capture started?
+			if (state.lastExposureDuration) {
+				// console.info('camera image received', device.name, data.length)
+				state.data = data
+			}
 		},
 	}
 
@@ -785,7 +790,7 @@ export class AlpacaServer {
 		res.push({ Name: 'HeatSinkTemperature', Value: device.temperature })
 		res.push({ Name: 'ImageReady', Value: !!state.data })
 		res.push({ Name: 'IsPulseGuiding', Value: device.pulsing })
-		res.push({ Name: 'PercentCompleted', Value: (1 - device.exposure.value / state.lastExposureDuration) * 100 })
+		res.push({ Name: 'PercentCompleted', Value: state.lastExposureDuration === 0 ? 0 : (1 - device.exposure.value / state.lastExposureDuration) * 100 })
 		res.push({ Name: 'TimeStamp', Value: '' })
 		return makeAlpacaResponse(res)
 	}
@@ -913,7 +918,7 @@ export class AlpacaServer {
 
 	private cameraGetPercentCompleted(id: number) {
 		const { state, device } = this.camera(id)
-		return makeAlpacaResponse((1 - device.exposure.value / state.lastExposureDuration) * 100)
+		return makeAlpacaResponse(state.lastExposureDuration === 0 ? 0 : (1 - device.exposure.value / state.lastExposureDuration) * 100)
 	}
 
 	private cameraGetPixelSizeX(id: number) {
@@ -930,10 +935,10 @@ export class AlpacaServer {
 
 	private cameraSetReadoutMode(id: number, data: { ReadoutMode: string }) {
 		const { device } = this.camera(id)
-		const value = +data.ReadoutMode
+		const mode = +data.ReadoutMode
 
-		if (Number.isFinite(value) && value >= 0 && value < device.frameFormats.length) {
-			this.options.camera?.frameFormat(device, device.frameFormats[value])
+		if (Number.isFinite(mode) && mode >= 0 && mode < device.frameFormats.length) {
+			this.options.camera?.frameFormat(device, device.frameFormats[mode])
 		} else if (device.frameFormats.includes(data.ReadoutMode)) {
 			this.options.camera?.frameFormat(device, data.ReadoutMode)
 		} else {
@@ -989,11 +994,17 @@ export class AlpacaServer {
 	}
 
 	private cameraStart(id: number, data: { Duration: string; Light: string }) {
-		const { device } = this.camera(id)
+		const { device, state } = this.camera(id)
 		const { camera } = this.options
-		camera?.enableBlob(device)
-		camera?.frameType(device, isTrue(data.Light) ? 'LIGHT' : 'DARK')
-		camera?.startExposure(device, +data.Duration)
+		const duration = +data.Duration
+
+		if (camera && duration > 0) {
+			camera.enableBlob(device)
+			camera.frameType(device, isTrue(data.Light) ? 'LIGHT' : 'DARK')
+			state.lastExposureDuration = duration
+			camera.startExposure(device, duration)
+		}
+
 		return makeAlpacaResponse(undefined)
 	}
 
@@ -1008,6 +1019,7 @@ export class AlpacaServer {
 			}
 		} finally {
 			state.data = undefined
+			state.lastExposureDuration = 0
 		}
 
 		return makeAlpacaErrorResponse(AlpacaException.Driver, 'Image bytes as JSON array is not supported')
@@ -1346,8 +1358,8 @@ export class AlpacaServer {
 	private mountGetDestinationSideOfPier(id: number) {
 		const { state, device } = this.telescope(id)
 		const lst = localSiderealTime(timeNow(true), state, false) // apparent LST
-		const value = expectedPierSide(device.equatorialCoordinate.rightAscension, device.equatorialCoordinate.declination, lst)
-		return makeAlpacaResponse(mapPierSideToAlpacaEnum(value))
+		const pierSide = expectedPierSide(device.equatorialCoordinate.rightAscension, device.equatorialCoordinate.declination, lst)
+		return makeAlpacaResponse(mapPierSideToAlpacaEnum(pierSide))
 	}
 
 	private mountFindHome(id: number) {
@@ -1500,14 +1512,14 @@ export class AlpacaServer {
 
 	private focuserMove(id: number, data: { Position: string }) {
 		const { device } = this.focuser(id)
-		const value = +data.Position
+		const position = +data.Position
 
 		if (device.canAbsoluteMove) {
-			this.options.focuser?.moveTo(device, value)
-		} else if (value > 0) {
-			this.options.focuser?.moveIn(device, value)
+			this.options.focuser?.moveTo(device, position)
+		} else if (position > 0) {
+			this.options.focuser?.moveIn(device, position)
 		} else {
-			this.options.focuser?.moveOut(device, value)
+			this.options.focuser?.moveOut(device, position)
 		}
 
 		return makeAlpacaResponse(undefined)
