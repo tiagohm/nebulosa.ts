@@ -1178,7 +1178,7 @@ export class WheelManager extends DeviceManager<Wheel> {
 		client.sendNumber({ device: wheel.name, name: 'FILTER_SLOT', elements: { FILTER_SLOT_VALUE: slot + 1 } })
 	}
 
-	slots(wheel: Wheel, names: string[], client = wheel[CLIENT]!) {
+	slots(wheel: Wheel, names: readonly string[], client = wheel[CLIENT]!) {
 		const elements: Record<string, string> = {}
 		names.forEach((name, index) => (elements[`FILTER_SLOT_NAME_${index + 1}`] = name))
 		client.sendText({ device: wheel.name, name: 'FILTER_NAME', elements })

@@ -10,6 +10,10 @@ export type AlpacaDeviceNumberProvider = (device: Device, type: AlpacaDeviceType
 
 export type AlpacaServerStartOptions = Omit<Bun.Serve.HostnamePortServeOptions<undefined>, 'hostname' | 'port' | 'routes' | 'error' | 'fetch' | 'development'>
 
+export type AlpacaFocuserAction = (typeof SUPPORTED_FOCUSER_ACTIONS)[number]
+
+export type AlpacaWheelAction = (typeof SUPPORTED_WHEEL_ACTIONS)[number]
+
 export type CoverCalibrator = Cover & FlatPanel
 
 export enum AlpacaCameraState {
@@ -104,6 +108,10 @@ export interface AlpacaServerOptions {
 	guideOutput?: GuideOutputManager
 	deviceNumberProvider?: AlpacaDeviceNumberProvider
 }
+
+export const SUPPORTED_FOCUSER_ACTIONS = ['ToggleReverse'] as const
+
+export const SUPPORTED_WHEEL_ACTIONS = ['SetNames'] as const
 
 export function defaultDeviceNumberProvider(device: Device, type: AlpacaDeviceType) {
 	const id = `${type}:${device.name}`

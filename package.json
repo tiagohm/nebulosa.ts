@@ -6,8 +6,8 @@
 	"sideEffects": false,
 	"scripts": {
 		"postinstall": "bun run native/copy.ts",
-		"lint": "biome lint --write src/ tests/",
-		"format": "biome format --write src/ tests/",
+		"lint": "biome lint --write",
+		"format": "biome format --write",
 		"tsc": "tsc --noEmit"
 	},
 	"devDependencies": {

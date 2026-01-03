@@ -25,9 +25,8 @@ const server = new AlpacaServer({ camera, wheel, mount })
 server.start(host, port)
 
 const discoveryServer = new AlpacaDiscoveryServer(ports)
-discoveryServer.addPort(server.port)
+discoveryServer.addPort(indi.port)
 discoveryServer.start(host, port)
-
 ```
 
 ### Angle ![](bun.webp) ![](browser.webp)
