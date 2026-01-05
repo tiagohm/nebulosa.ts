@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { formatAZ, normalizeAngle, PARSE_HOUR_ANGLE, parseAngle } from '../src/angle'
+import { formatAZ, normalizeAngle, parseAngle } from '../src/angle'
 import { eraC2s, eraS2c } from '../src/erfa'
 import { ecliptic, eclipticJ2000, galactic, precessionMatrixCapitaine, supergalactic } from '../src/frame'
 import { Timescale, timeYMDHMS } from '../src/time'
@@ -19,7 +19,7 @@ test('precession matrix capitaine', () => {
 	expect(m[8]).toBeCloseTo(0.999999830006320645, 15)
 })
 
-const RA = parseAngle('14 39 20.75', PARSE_HOUR_ANGLE)!
+const RA = parseAngle('14h 39 20.75')!
 const DEC = parseAngle('-60 49 57.9')!
 const XYZ = eraS2c(RA, DEC)
 const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.UTC)

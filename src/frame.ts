@@ -2,7 +2,7 @@ import type { PositionAndVelocity } from './astrometry'
 import { EARTH_ANGULAR_VELOCITY_MATRIX, ECLIPTIC_B9150_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa'
-import { type Mat3, matIdentity, matMul, matMulVec, matRotX, matTranspose } from './mat3'
+import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, matRotX } from './mat3'
 import { gcrsToItrsRotationMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from './time'
 import { type Vec3, vecPlus } from './vec3'
 
@@ -87,9 +87,8 @@ export function precessionMatrixCapitaine(from: Time, to: Time) {
 	if (t0.day === t1.day && t0.fraction === t1.fraction) return matIdentity()
 	// Hilton, J. et al., 2006, Celest.Mech.Dyn.Astron. 94, 351
 	const rp = eraBp06(t0.day, t0.fraction)[1]
-	const a = matTranspose(rp, rp)
 	const b = eraBp06(t1.day, t1.fraction)[1]
-	return matMul(b, a, b)
+	return matMulTranspose(b, rp, b)
 }
 
 // The International Terrestrial Reference System (ITRS).

@@ -1,5 +1,5 @@
 import { type Angle, arcsec, normalizeAngle } from './angle'
-import { AU_M, DAYSEC, ELLIPSOID_PARAMETERS, PI, PIOVERTWO, SPEED_OF_LIGHT, TAU } from './constants'
+import { AU_M, DAYSEC, ELLIPSOID_PARAMETERS, PIOVERTWO, SPEED_OF_LIGHT } from './constants'
 import type { CartesianCoordinate, EquatorialCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa'
@@ -146,25 +146,6 @@ export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time,
 	// Now perform observed conversion
 	const [azimuth, zenith, hourAngle, rightAscension, declination] = eraAtioq(normalizeAngle(ri), di, astrom)
 	return { azimuth, altitude: PIOVERTWO - zenith, hourAngle, rightAscension, declination, equationOfOrigins: astrom.eo } as const
-}
-
-// Converts equatorial coordinates (right ascension and declination) to horizontal coordinates (azimuth and altitude) using just trigonometry (no refraction).
-export function equatorialToHorizontal(rightAscension: Angle, declination: Angle, latitude: Angle, lst: Angle): readonly [Angle, Angle] {
-	const ha = lst - rightAscension
-	const sinDec = Math.sin(declination)
-	const cosDec = Math.cos(declination)
-	const sinLat = Math.sin(latitude)
-	const cosLat = Math.cos(latitude)
-	const cosHA = Math.cos(ha)
-	const sinHA = Math.sin(ha)
-	const sinAlt = sinDec * sinLat + cosDec * cosLat * cosHA
-	const altitude = Math.asin(sinAlt)
-	// Avoid trigonometric function. Return value of asin is always in [-pi/2, pi/2] and in this domain cosine is always non-negative, so we can use this.
-	const cosAlt = Math.sqrt(1 - sinAlt * sinAlt)
-	const a = (sinDec - sinLat * sinAlt) / (cosLat * (cosAlt === 0 ? Math.cos(altitude) : cosAlt))
-	let azimuth = a <= -1 ? PI : a >= 1 ? 0 : Math.acos(a)
-	if (sinHA > 0 && azimuth !== 0) azimuth = TAU - azimuth
-	return [azimuth, altitude]
 }
 
 // https://bitbucket.org/Isbeorn/nina/src/master/NINA.Astrometry/AstroUtil.cs

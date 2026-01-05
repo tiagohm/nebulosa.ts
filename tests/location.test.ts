@@ -1,19 +1,9 @@
-import { beforeAll, expect, test } from 'bun:test'
-import fs from 'fs/promises'
+import { expect, test } from 'bun:test'
 import { deg, formatDEC, hour, toHour } from '../src/angle'
 import { meter } from '../src/distance'
 import { eraS2c } from '../src/erfa'
-import { iersb } from '../src/iers'
-import { fileHandleSource } from '../src/io'
 import { Ellipsoid, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi, subpoint } from '../src/location'
 import { Timescale, timeYMDHMS } from '../src/time'
-
-beforeAll(async () => {
-	const handle = await fs.open('data/eopc04.1962-now.txt')
-	await using source = fileHandleSource(handle)
-	source.seek(4640029)
-	await iersb.load(source)
-})
 
 test('lst', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)

@@ -1,3 +1,7 @@
+import fs from 'fs/promises'
+import { iersb } from '../src/iers'
+import { fileHandleSource } from '../src/io'
+
 const FILES: Readonly<Record<string, string>> = {
 	'finals2000A.txt': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/finals2000A.txt',
 	'eopc04.1962-now.txt': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/eopc04.1962-now.txt',
@@ -37,3 +41,10 @@ async function download(type: keyof typeof FILES) {
 }
 
 await Promise.all(Object.keys(FILES).map((key) => download(key as never)))
+
+// IERS
+
+const handle = await fs.open('data/eopc04.1962-now.txt')
+await using source = fileHandleSource(handle)
+source.seek(4640029)
+await iersb.load(source)

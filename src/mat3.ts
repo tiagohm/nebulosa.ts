@@ -197,6 +197,54 @@ export function matMul(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
 	return [c, d, e, f, g, h, i, j, k]
 }
 
+// Multiplies the transpose of the matrix to other matrix.
+export function matTransposeMul(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
+	const c = a[0] * b[0] + a[3] * b[3] + a[6] * b[6]
+	const d = a[0] * b[1] + a[3] * b[4] + a[6] * b[7]
+	const e = a[0] * b[2] + a[3] * b[5] + a[6] * b[8]
+	const f = a[1] * b[0] + a[4] * b[3] + a[7] * b[6]
+	const g = a[1] * b[1] + a[4] * b[4] + a[7] * b[7]
+	const h = a[1] * b[2] + a[4] * b[5] + a[7] * b[8]
+	const i = a[2] * b[0] + a[5] * b[3] + a[8] * b[6]
+	const j = a[2] * b[1] + a[5] * b[4] + a[8] * b[7]
+	const k = a[2] * b[2] + a[5] * b[5] + a[8] * b[8]
+
+	if (o) return matFill(o, c, d, e, f, g, h, i, j, k)
+	return [c, d, e, f, g, h, i, j, k]
+}
+
+// Multiplies a matrix to the transpose of other matrix.
+export function matMulTranspose(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
+	const c = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+	const d = a[0] * b[3] + a[1] * b[4] + a[2] * b[5]
+	const e = a[0] * b[6] + a[1] * b[7] + a[2] * b[8]
+	const f = a[3] * b[0] + a[4] * b[1] + a[5] * b[2]
+	const g = a[3] * b[3] + a[4] * b[4] + a[5] * b[5]
+	const h = a[3] * b[6] + a[4] * b[7] + a[5] * b[8]
+	const i = a[6] * b[0] + a[7] * b[1] + a[8] * b[2]
+	const j = a[6] * b[3] + a[7] * b[4] + a[8] * b[5]
+	const k = a[6] * b[6] + a[7] * b[7] + a[8] * b[8]
+
+	if (o) return matFill(o, c, d, e, f, g, h, i, j, k)
+	return [c, d, e, f, g, h, i, j, k]
+}
+
+// Multiplies the transpose of two matrices.
+export function matTransposeMulTranspose(a: Mat3, b: Mat3, o?: MutMat3): MutMat3 {
+	const c = a[0] * b[0] + a[3] * b[1] + a[6] * b[2]
+	const d = a[0] * b[3] + a[3] * b[4] + a[6] * b[5]
+	const e = a[0] * b[6] + a[3] * b[7] + a[6] * b[8]
+	const f = a[1] * b[0] + a[4] * b[1] + a[7] * b[2]
+	const g = a[1] * b[3] + a[4] * b[4] + a[7] * b[5]
+	const h = a[1] * b[6] + a[4] * b[7] + a[7] * b[8]
+	const i = a[2] * b[0] + a[5] * b[1] + a[8] * b[2]
+	const j = a[2] * b[3] + a[5] * b[4] + a[8] * b[5]
+	const k = a[2] * b[6] + a[5] * b[7] + a[8] * b[8]
+
+	if (o) return matFill(o, c, d, e, f, g, h, i, j, k)
+	return [c, d, e, f, g, h, i, j, k]
+}
+
 // Multiplies the matrix by a vector.
 export function matMulVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
 	const c = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -207,8 +255,8 @@ export function matMulVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
 	return [c, d, e]
 }
 
-// Multiplies the transposed matrix by a vector.
-export function matMulTransposeVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
+// Multiplies the transpose of the matrix by a vector.
+export function matTransposeMulVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
 	const c = a[0] * b[0] + a[3] * b[1] + a[6] * b[2]
 	const d = a[1] * b[0] + a[4] * b[1] + a[7] * b[2]
 	const e = a[2] * b[0] + a[5] * b[1] + a[8] * b[2]

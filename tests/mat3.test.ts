@@ -1,6 +1,6 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 // biome-ignore format: too long!
-import { type MutMat3, matClone, matDeterminant, matDivScalar, matFlipX, matFlipY, matIdentity, matMinus, matMinusScalar, matMul, matMulScalar, matMulVec, matPlus, matPlusScalar, matRodriguesRotation, matRotX, matRotY, matRotZ, matTranspose, matZero } from '../src/mat3'
+import { type MutMat3, matClone, matDeterminant, matDivScalar, matFlipX, matFlipY, matIdentity, matMinus, matMinusScalar, matMul, matMulScalar, matMulTranspose, matMulVec, matPlus, matPlusScalar, matRodriguesRotation, matRotX, matRotY, matRotZ, matTranspose, matTransposeMul, matTransposeMulTranspose, matZero } from '../src/mat3'
 import type { MutVec3 } from '../src/vec3'
 
 test('determinant', () => {
@@ -161,6 +161,22 @@ test('mul', () => {
 
 	matMul(m, n, m)
 	expect(m).toEqual(u)
+})
+
+describe('mul transpose', () => {
+	const m = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+
+	test('AT * B', () => {
+		expect(matTransposeMul(m, m)).toEqual([66, 78, 90, 78, 93, 108, 90, 108, 126])
+	})
+
+	test('A * BT', () => {
+		expect(matMulTranspose(m, m)).toEqual([14, 32, 50, 32, 77, 122, 50, 122, 194])
+	})
+
+	test('AT * BT', () => {
+		expect(matTransposeMulTranspose(m, m)).toEqual([30, 66, 102, 36, 81, 126, 42, 96, 150])
+	})
 })
 
 test('rodrigues rotation matrix', () => {

@@ -1,8 +1,8 @@
 // biome-ignore format: too long!
 import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, type AlpacaDiscoveryServerOptions, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './alpaca.types'
 import { type Angle, deg, hour, toDeg, toHour } from './angle'
-import { equatorialToHorizontal, observedToCirs } from './astrometry'
-import type { EquatorialCoordinate } from './coordinate'
+import { observedToCirs } from './astrometry'
+import { type EquatorialCoordinate, equatorialToHorizontal } from './coordinate'
 import { meter, toMeter } from './distance'
 import { Bitpix, bitpixInBytes, computeRemainingBytes, FitsKeywordReader } from './fits'
 // biome-ignore format: too long!

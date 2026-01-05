@@ -65,21 +65,22 @@ function rLatLon(location: GeographicPosition) {
 }
 
 // Local Sidereal Time at location and time.
-export function localSiderealTime(time: Time, location: GeographicPosition = time.location!, mean: boolean = false, tio: boolean | 'sp' = false) {
+export function localSiderealTime(time: Time, location: GeographicPosition | Angle = time.location!, mean: boolean = false, tio: boolean | 'sp' = false) {
 	const theta = mean ? greenwichMeanSiderealTime(time) : greenwichApparentSiderealTime(time)
+	const longitude = typeof location === 'number' ? location : location.longitude
 
 	if (tio === true) {
 		const [sprime, xp, yp] = pmAngles(time)
 		// The order of operation must be reversed in relation to astropy?
-		const r = matRotZ(location.longitude, matRotX(-yp, matRotY(-xp, matRotZ(theta + sprime))))
+		const r = matRotZ(longitude, matRotX(-yp, matRotY(-xp, matRotZ(theta + sprime))))
 		return Math.atan2(r[1], r[0])
 	} else if (tio === 'sp') {
 		const t = tt(time)
 		const sprime = eraSp00(t.day, t.fraction)
-		return normalizeAngle(theta + location.longitude + sprime)
+		return normalizeAngle(theta + longitude + sprime)
 	} else {
 		// NOTE: astropy don't apply sprime (edit code to apply it)
-		return normalizeAngle(theta + location.longitude)
+		return normalizeAngle(theta + longitude)
 	}
 }
 

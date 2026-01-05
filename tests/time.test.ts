@@ -1,10 +1,7 @@
-import { beforeAll, type CustomMatcher, expect, test } from 'bun:test'
-import fs from 'fs/promises'
+import { type CustomMatcher, expect, test } from 'bun:test'
 import { deg, hour } from '../src/angle'
 import { DAYSEC, J2000 } from '../src/constants'
 import { meter } from '../src/distance'
-import { iersb } from '../src/iers'
-import { fileHandleSource } from '../src/io'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // biome-ignore format: too long
 import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToFractionOfYear, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/time'
@@ -34,13 +31,6 @@ declare module 'bun:test' {
 		toMatchTime(expected: Time, precision?: number): void
 	}
 }
-
-beforeAll(async () => {
-	const handle = await fs.open('data/eopc04.1962-now.txt')
-	await using source = fileHandleSource(handle)
-	source.seek(4640029)
-	await iersb.load(source)
-})
 
 test('time', () => {
 	const t = time(2449353.623, 0, Timescale.TT)

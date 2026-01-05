@@ -2,7 +2,7 @@
 
 import { DAYSPERJC, DEG2RAD, ECLIPTIC_J2000_MATRIX } from './constants'
 import { eraS2p } from './erfa'
-import { matMulTransposeVec } from './mat3'
+import { matTransposeMulVec } from './mat3'
 import { type Time, tt } from './time'
 
 const COEFFS = 43
@@ -228,5 +228,5 @@ export function pluto(time: Time) {
 	const p = eraS2p(L, B, R)
 
 	// Transform from J2000 ecliptic to ICRF
-	return matMulTransposeVec(ECLIPTIC_J2000_MATRIX, p, p)
+	return matTransposeMulVec(ECLIPTIC_J2000_MATRIX, p, p)
 }

@@ -1,8 +1,8 @@
 import { type Angle, arcsec, deg, normalizeAngle } from './angle'
-import { ASEC2RAD, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MILLIASEC2RAD, MJD0, MJD1977, MJD2000, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI, TURNAS, WGS84_FLATTENING, WGS84_RADIUS } from './constants'
+import { ASEC2RAD, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MILLIASEC2RAD, MJD0, MJD1977, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI, TURNAS, WGS84_FLATTENING, WGS84_RADIUS } from './constants'
 import { type Distance, toKilometer } from './distance'
 import { FAIRHEAD, IAU2000A_LS, IAU2000A_PL, IAU2000B_LS, IAU2006_S, IAU2006_SP } from './erfa.data'
-import { type Mat3, type MutMat3, matClone, matCopy, matIdentity, matMul, matMulTransposeVec, matMulVec, matRotX, matRotY, matRotZ, matTranspose } from './mat3'
+import { type Mat3, type MutMat3, matClone, matCopy, matIdentity, matMul, matMulTranspose, matMulVec, matRotX, matRotY, matRotZ, matTransposeMulVec } from './mat3'
 import { pmod, roundToNearestWholeNumber } from './math'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
@@ -949,15 +949,18 @@ export function eraGd2Gce(radius: Distance, flattening: number, elong: Angle, ph
 // Frame bias and precession, IAU 2006.
 export function eraBp06(tt1: number, tt2: number) {
 	// B matrix.
-	const [gamb, phib, psib, epsa] = eraPfw06(MJD0, MJD2000)
-	const rb = eraFw2m(gamb, phib, psib, epsa)
+	// const [gamb, phib, psib, epsa] = eraPfw06(MJD0, MJD2000)
+	// const rb = eraFw2m(gamb, phib, psib, epsa)
+	// const rb = eraFw2m(-2.5660218513765524e-7, 0.4090926336600278, -2.0253091528350866e-7, 0.4090926006005829)
+	const rb = [0.9999999999999941, -7.078368960971556e-8, 8.056213977613186e-8, 7.078368694637676e-8, 0.9999999999999969, 3.3059437354321375e-8, -8.056214211620057e-8, -3.305943169218395e-8, 0.9999999999999962] as const
 
 	// PxB matrix (temporary).
 	const rbpw = eraPmat06(tt1, tt2)
 
 	// P matrix.
-	const rp = matTranspose(rb)
-	matMul(rbpw, rp, rp)
+	// const rp = matTranspose(rb)
+	// matMul(rbpw, rp, rp)
+	const rp = matMulTranspose(rbpw, rb)
 
 	return [rb, rp, rbpw] as const
 }
@@ -1603,8 +1606,8 @@ export function eraApco(
 	const pvc = eraPvtob(elong, phi, hm, xp, yp, sp, theta, radius, flattening)
 
 	// Rotate into GCRS.
-	matMulTransposeVec(r, pvc[0], pvc[0])
-	matMulTransposeVec(r, pvc[1], pvc[1])
+	matTransposeMulVec(r, pvc[0], pvc[0])
+	matTransposeMulVec(r, pvc[1], pvc[1])
 
 	// ICRS <-> GCRS parameters.
 	astrom = eraApcs(tdb1, tdb2, pvc, ebpv, ehp, astrom)
@@ -1626,7 +1629,7 @@ export function eraPvtob(elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: 
 
 	// Polar motion and TIO position.
 	const rpm = eraPom00(xp, yp, sp)
-	const p = matMulTransposeVec(rpm, xyzm, xyzm)
+	const p = matTransposeMulVec(rpm, xyzm, xyzm)
 	const [x, y, z] = p
 
 	// Functions of ERA.
@@ -1985,7 +1988,7 @@ export function eraAticq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	const pi = eraS2c(ri, di)
 
 	// Bias-precession-nutation, giving GCRS proper direction.
-	const ppr = matMulTransposeVec(astrom.bpn, pi)
+	const ppr = matTransposeMulVec(astrom.bpn, pi)
 
 	// Aberration, giving GCRS natural direction.
 	const d: MutVec3 = [0, 0, 0]
