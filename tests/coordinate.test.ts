@@ -1,19 +1,35 @@
 import { expect, test } from 'bun:test'
 import { deg, formatDEC, formatRA, parseAngle } from '../src/angle'
-import { eclipticToEquatorial, equatorEcliptic, equatorialToEcliptic, equatorialToEclipticJ2000, meridianEcliptic, meridianEquator, zenith } from '../src/coordinate'
+import { eclipticToEquatorial, equatorEcliptic, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToJ2000, meridianEcliptic, meridianEquator, zenith } from '../src/coordinate'
 import { timeNormalize, timeYMDHMS } from '../src/time'
 
 const TIME = timeYMDHMS(2026, 1, 4, 23, 30, 0)
+const SIRIUS_J2000 = [parseAngle('06h 45 09.22')!, parseAngle('-16 43 30.49')!] as const
+const SIRIUS = [parseAngle('06h 46 19.27')!, parseAngle('-16 45 06.3')!] as const
+
+test('equatorial to J2000', () => {
+	const [rightAscension, declination] = equatorialToJ2000(...SIRIUS)
+
+	expect(formatRA(rightAscension)).toBe('06 45 09.22')
+	expect(formatDEC(declination)).toBe('-16 43 30.49')
+})
+
+test('equatorial from J2000', () => {
+	const [rightAscension, declination] = equatorialFromJ2000(...SIRIUS_J2000)
+
+	expect(formatRA(rightAscension)).toBe('06 46 19.27')
+	expect(formatDEC(declination)).toBe('-16 45 06.30')
+})
 
 test('equatorial J2000 to ecliptic J2000', () => {
-	const [longitude, latitude] = equatorialToEclipticJ2000(parseAngle('06h 45 09.24')!, parseAngle('-16 43 30.4')!) // Sirius
+	const [longitude, latitude] = equatorialToEclipticJ2000(...SIRIUS_J2000)
 
-	expect(formatDEC(longitude)).toBe('+104 05 04.22')
-	expect(formatDEC(latitude)).toBe('-39 36 50.61')
+	expect(formatDEC(longitude)).toBe('+104 05 03.86')
+	expect(formatDEC(latitude)).toBe('-39 36 50.73')
 })
 
 test('equatorial to ecliptic', () => {
-	const [longitude, latitude] = equatorialToEcliptic(parseAngle('06h 46 19.27')!, parseAngle('-16 45 06.3')!, TIME) // Sirius
+	const [longitude, latitude] = equatorialToEcliptic(...SIRIUS, TIME)
 
 	expect(formatDEC(longitude)).toBe('+104 26 55.06')
 	expect(formatDEC(latitude)).toBe('-39 36 39.12')

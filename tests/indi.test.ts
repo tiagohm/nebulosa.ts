@@ -154,7 +154,7 @@ describe('parse', () => {
 
 const INDI_HOST: string = 'localhost'
 const HAS_INDI_SERVER = process.platform === 'linux' && !!Bun.spawnSync(['which', 'indiserver']).stdout.byteLength
-const SKIP_TEST = INDI_HOST === 'localhost' && !HAS_INDI_SERVER
+const SKIP_TEST = Bun.env.INDI_MANAGER_TEST !== 'true' || (INDI_HOST === 'localhost' && !HAS_INDI_SERVER)
 
 async function startIndi(driver: string) {
 	if (HAS_INDI_SERVER && INDI_HOST === 'localhost') {

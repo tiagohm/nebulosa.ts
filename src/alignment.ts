@@ -1,9 +1,8 @@
 import { type Angle, arcsec, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from './astrometry'
 import { PI, SIDEREAL_RATE, TAU } from './constants'
-import type { HorizontalCoordinate } from './coordinate'
+import { equatorialFromJ2000, type HorizontalCoordinate } from './coordinate'
 import { eraC2s, eraS2c } from './erfa'
-import { precessFk5FromJ2000 } from './fk5'
 import { type Time, timeToUnix } from './time'
 import { type Vec3, vecNegateMut, vecPlane, vecRotateByRodrigues, vecRotY, vecRotZ } from './vec3'
 
@@ -99,7 +98,7 @@ export class ThreePointPolarAlignment {
 	constructor(private refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS) {}
 
 	add(rightAscension: Angle, declination: Angle, time: Time, isJ2000: boolean = false) {
-		const point = isJ2000 ? ([...eraC2s(...precessFk5FromJ2000(eraS2c(rightAscension, declination), time)), time] as const) : ([rightAscension, declination, time] as const)
+		const point = isJ2000 ? ([...equatorialFromJ2000(rightAscension, declination, time), time] as const) : ([rightAscension, declination, time] as const)
 
 		if (this.position < 3) {
 			this.points[this.position] = point

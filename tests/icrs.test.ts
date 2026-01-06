@@ -11,14 +11,14 @@ test('icrs', () => {
 	expect(p[2]).toBeCloseTo(0.6586894601186805, 15)
 })
 
-test('icrsToFk5', () => {
+test('icrs to fk5', () => {
 	const p = icrsToFk5(icrs(deg(10.625), deg(41.2), 1))
 	expect(p[0]).toBeCloseTo(0.739514704549283364, 15)
 	expect(p[1]).toBeCloseTo(0.138730571741011777, 15)
 	expect(p[2]).toBeCloseTo(0.658689479360190067, 15)
 })
 
-test('icrsToFk5J1975', () => {
+test('icrs to fk5 J1975', () => {
 	const e = timeYMDHMS(1975, 1, 1, 12, 0, 0, Timescale.TT)
 	const p = precessFk5FromJ2000(icrsToFk5(icrs(deg(10.625), deg(41.2), 1)), e)
 	expect(p[0]).toBeCloseTo(0.741876490027394198, 15)

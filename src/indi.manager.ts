@@ -2,9 +2,8 @@ import type { PickByValue } from 'utility-types'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, PARSE_HOUR_ANGLE, parseAngle, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import { TAU } from './constants'
+import { eclipticToEquatorial, equatorialFromJ2000 } from './coordinate'
 import { meter, toMeter } from './distance'
-import { eraC2s, eraS2c } from './erfa'
-import { precessFk5FromJ2000 } from './fk5'
 import type { CfaPattern } from './image.types'
 import type { IndiClient, IndiClientHandler } from './indi'
 // biome-ignore format: too long!
@@ -883,19 +882,14 @@ export class MountManager extends DeviceManager<Mount> {
 		time.location = location
 
 		if (!('type' in req) || req.type === 'JNOW') {
-			rightAscension = typeof req.rightAscension === 'number' ? req.rightAscension : parseAngle(req.rightAscension, PARSE_HOUR_ANGLE)!
-			declination = typeof req.declination === 'number' ? req.declination : parseAngle(req.declination)!
+			rightAscension = parseAngle(req.rightAscension, PARSE_HOUR_ANGLE)!
+			declination = parseAngle(req.declination)!
 		} else if (req.type === 'J2000') {
-			const rightAscensionJ2000 = typeof req.rightAscension === 'number' ? req.rightAscension : parseAngle(req.rightAscension, PARSE_HOUR_ANGLE)!
-			const declinationJ2000 = typeof req.declination === 'number' ? req.declination : parseAngle(req.declination)!
-
-			const fk5 = eraS2c(rightAscensionJ2000, declinationJ2000)
-			;[rightAscension, declination] = eraC2s(...precessFk5FromJ2000(fk5, timeNow(true)))
+			;[rightAscension, declination] = equatorialFromJ2000(parseAngle(req.rightAscension, PARSE_HOUR_ANGLE)!, parseAngle(req.declination)!, time)
 		} else if (req.type === 'ALTAZ') {
-			const azimuth = typeof req.azimuth === 'number' ? req.azimuth : parseAngle(req.azimuth)!
-			const altitude = typeof req.altitude === 'number' ? req.altitude : parseAngle(req.altitude)!
-
-			;[rightAscension, declination] = observedToCirs(azimuth, altitude, timeNow(true))
+			;[rightAscension, declination] = observedToCirs(parseAngle(req.azimuth)!, parseAngle(req.altitude)!, time)
+		} else if (req.type === 'ECLIPTIC') {
+			;[rightAscension, declination] = eclipticToEquatorial(parseAngle(req.longitude)!, parseAngle(req.latitude)!, time)
 		}
 
 		if (mode === 'goto') this.goTo(mount, rightAscension, declination, client)

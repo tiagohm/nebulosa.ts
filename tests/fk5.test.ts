@@ -10,7 +10,7 @@ test('fk5', () => {
 	expect(p[2]).toBeCloseTo(0.6586894601186805, 15)
 })
 
-test('fk5FromJ2000ToJ1975', () => {
+test('fk5 from J2000 to J1975', () => {
 	const e = timeYMDHMS(1975, 1, 1, 12, 0, 0, Timescale.TT)
 	const p = precessFk5FromJ2000(fk5(deg(10.625), deg(41.2), 1), e)
 	expect(p[0]).toBeCloseTo(0.741876533627981227, 15)
@@ -18,7 +18,7 @@ test('fk5FromJ2000ToJ1975', () => {
 	expect(p[2]).toBeCloseTo(0.65689015147374108, 15)
 })
 
-test('fk5FromJ1975ToJ2000', () => {
+test('fk5 from J1975 to J2000', () => {
 	const e = timeYMDHMS(1975, 1, 1, 12, 0, 0, Timescale.TT)
 	const p = precessFk5ToJ2000(fk5(deg(10.625), deg(41.2), 1), e)
 	expect(p[0]).toBeCloseTo(0.737125495970369249, 15)
@@ -26,14 +26,14 @@ test('fk5FromJ1975ToJ2000', () => {
 	expect(p[2]).toBeCloseTo(0.660482997977331121, 15)
 })
 
-test('fk5ToIcrs', () => {
+test('fk5 to icrs', () => {
 	const p = fk5ToIcrs(fk5(deg(10.625), deg(41.2), 1))
 	expect(p[0]).toBeCloseTo(0.739514793473810439, 15)
 	expect(p[1]).toBeCloseTo(0.138730280437718595, 15)
 	expect(p[2]).toBeCloseTo(0.658689440877155308, 15)
 })
 
-test('fk5J1975ToIcrs', () => {
+test('fk5 J1975 to icrs', () => {
 	const e = timeYMDHMS(1975, 1, 1, 12, 0, 0, Timescale.TT)
 	const p = fk5ToIcrs(precessFk5ToJ2000(fk5(deg(10.625), deg(41.2), 1), e))
 	expect(p[0]).toBeCloseTo(0.73712554096992855, 15)

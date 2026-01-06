@@ -1,7 +1,5 @@
 import type { Angle } from './angle'
-import type { EquatorialCoordinate } from './coordinate'
-import { eraC2s, eraS2c } from './erfa'
-import { precessFk5ToJ2000 } from './fk5'
+import { type EquatorialCoordinate, equatorialToJ2000 } from './coordinate'
 import type { Seekable, Source } from './io'
 import { Timescale, timeBesselianYear } from './time'
 
@@ -98,7 +96,7 @@ export async function* readSaoCatalog(source: Source & Seekable, bigEndian: bool
 		const pmRA = mprop ? readFloat() : 0
 		const pmDec = mprop ? readFloat() : 0
 
-		const [rightAscension, declination] = eraC2s(...precessFk5ToJ2000(eraS2c(rightAscensionB1950, declinationB1950), B1950))
+		const [rightAscension, declination] = equatorialToJ2000(rightAscensionB1950, declinationB1950, B1950)
 
 		yield { id, rightAscension, declination, spType, magnitude, pmRA, pmDec } as SaoCatalogEntry
 	}

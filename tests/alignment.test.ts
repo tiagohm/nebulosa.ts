@@ -1,9 +1,8 @@
 import { expect, test } from 'bun:test'
 import { polarAlignmentError, ThreePointPolarAlignment, type ThreePointPolarAlignmentResult, threePointPolarAlignmentError } from '../src/alignment'
 import { arcmin, deg, dms, hour, toArcmin, toDeg } from '../src/angle'
+import { equatorialFromJ2000 } from '../src/coordinate'
 import { meter } from '../src/distance'
-import { eraC2s, eraS2c } from '../src/erfa'
-import { precessFk5FromJ2000 } from '../src/fk5'
 import { geodeticLocation, localSiderealTime } from '../src/location'
 import { timeYMDHMS } from '../src/time'
 
@@ -197,7 +196,7 @@ test('auto polar alignment', () => {
 		const [rightAscensionJ2000, declinationJ2000, minute, second] = input
 		const time = timeYMDHMS(2025, 5, 20, 5, minute, second)
 		time.location = location
-		const point = eraC2s(...precessFk5FromJ2000(eraS2c(deg(rightAscensionJ2000), deg(declinationJ2000)), time))
+		const point = equatorialFromJ2000(deg(rightAscensionJ2000), deg(declinationJ2000), time)
 		return [...point, time] as const
 	}
 

@@ -17,14 +17,14 @@ test('read', async () => {
 	expect(i).toBe(258997)
 
 	expect(entries[0].id).toBe(1)
-	expect(formatRA(entries[0].rightAscension)).toBe('00 02 42.05')
-	expect(formatDEC(entries[0].declination)).toBe('+82 58 24.00')
+	expect(formatRA(entries[0].rightAscension)).toBe('00 02 46.76')
+	expect(formatDEC(entries[0].declination)).toBe('+82 58 25.33')
 	expect(entries[0].magnitude).toBe(7.2)
 	expect(entries[0].spType).toBe('A0')
 
 	expect(entries[258995].id).toBe(258996)
-	expect(formatRA(entries[258995].rightAscension)).toBe('23 57 33.55')
-	expect(formatDEC(entries[258995].declination)).toBe('-82 10 10.55')
+	expect(formatRA(entries[258995].rightAscension)).toBe('23 57 29.73')
+	expect(formatDEC(entries[258995].declination)).toBe('-82 10 09.04')
 	expect(entries[258995].magnitude).toBe(5.7)
 	expect(entries[258995].spType).toBe('K0')
 })

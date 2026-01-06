@@ -65,7 +65,7 @@ function rLatLon(location: GeographicPosition) {
 }
 
 // Local Sidereal Time at location and time.
-export function localSiderealTime(time: Time, location: GeographicPosition | Angle = time.location!, mean: boolean = false, tio: boolean | 'sp' = false) {
+export function localSiderealTime(time: Time, location: GeographicCoordinate | Angle = time.location!, mean: boolean = false, tio: boolean | 'sp' = false) {
 	const theta = mean ? greenwichMeanSiderealTime(time) : greenwichApparentSiderealTime(time)
 	const longitude = typeof location === 'number' ? location : location.longitude
 
