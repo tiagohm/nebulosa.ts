@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
-import { deg, formatDEC, formatRA, parseAngle } from '../src/angle'
-import { eclipticToEquatorial, equatorEcliptic, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToJ2000, meridianEcliptic, meridianEquator, zenith } from '../src/coordinate'
+import { deg, formatDEC, formatRA, normalizeAngle, parseAngle } from '../src/angle'
+import { eclipticToEquatorial, equatorEcliptic, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalatic, equatorialToJ2000, galacticToEquatorial, meridianEcliptic, meridianEquator, zenith } from '../src/coordinate'
 import { timeNormalize, timeYMDHMS } from '../src/time'
 
 const TIME = timeYMDHMS(2026, 1, 4, 23, 30, 0)
@@ -40,6 +40,20 @@ test('ecliptic to equatorial', () => {
 
 	expect(formatRA(rightAscension)).toBe('19 03 23.79')
 	expect(formatDEC(declination)).toBe('-22 38 16.52')
+})
+
+test('equatorial to galatic', () => {
+	const [longitude, latitude] = equatorialToGalatic(...SIRIUS_J2000)
+
+	expect(formatDEC(normalizeAngle(longitude))).toBe('+227 14 20.56')
+	expect(formatDEC(latitude)).toBe('-08 53 35.22')
+})
+
+test('galatic to equatorial', () => {
+	const [rightAscension, declination] = galacticToEquatorial(parseAngle('+227 14 20.56')!, parseAngle('-08 53 35.22')!)
+
+	expect(formatRA(rightAscension)).toBe('06 45 09.22')
+	expect(formatDEC(declination)).toBe('-16 43 30.49')
 })
 
 test('zenith', () => {

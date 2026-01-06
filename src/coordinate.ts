@@ -1,5 +1,5 @@
 import type { Angle } from './angle'
-import { ECLIPTIC_J2000_MATRIX, MILLIASEC2RAD, PI, PIOVERTWO, TAU } from './constants'
+import { ECLIPTIC_J2000_MATRIX, GALACTIC_MATRIX, MILLIASEC2RAD, PI, PIOVERTWO, TAU } from './constants'
 import { eraC2s, eraS2c } from './erfa'
 import { localSiderealTime } from './location'
 import { matMulVec, matRotX, matTransposeMulVec } from './mat3'
@@ -79,12 +79,20 @@ export function equatorialToEcliptic(rightAscension: Angle, declination: Angle, 
 	return eraC2s(...matMulVec(matRotX(trueObliquity(time)), eraS2c(rightAscension, declination)))
 }
 
-export function eclipticJ2000ToEquatorial(rightAscension: Angle, declination: Angle): [Angle, Angle] {
-	return eraC2s(...matTransposeMulVec(ECLIPTIC_J2000_MATRIX, eraS2c(rightAscension, declination)))
+export function eclipticJ2000ToEquatorial(longitude: Angle, latitude: Angle): [Angle, Angle] {
+	return eraC2s(...matTransposeMulVec(ECLIPTIC_J2000_MATRIX, eraS2c(longitude, latitude)))
 }
 
-export function eclipticToEquatorial(rightAscension: Angle, declination: Angle, time: Time = timeNow(true)): [Angle, Angle] {
-	return eraC2s(...matTransposeMulVec(matRotX(trueObliquity(time)), eraS2c(rightAscension, declination)))
+export function eclipticToEquatorial(longitude: Angle, latitude: Angle, time: Time = timeNow(true)): [Angle, Angle] {
+	return eraC2s(...matTransposeMulVec(matRotX(trueObliquity(time)), eraS2c(longitude, latitude)))
+}
+
+export function galacticToEquatorial(longitude: Angle, latitude: Angle): [Angle, Angle] {
+	return eraC2s(...matTransposeMulVec(GALACTIC_MATRIX, eraS2c(longitude, latitude)))
+}
+
+export function equatorialToGalatic(rightAscension: Angle, declination: Angle): [Angle, Angle] {
+	return eraC2s(...matMulVec(GALACTIC_MATRIX, eraS2c(rightAscension, declination)))
 }
 
 export function zenith(longitude: Angle, latitude: Angle, time: Time = timeNow(true)): [Angle, Angle] {
