@@ -1,20 +1,20 @@
 import { type Vec3, vecDot } from './vec3'
 
-export interface Point {
-	x: number
-	y: number
+export interface Point<T = number> {
+	x: T
+	y: T
 }
 
-export interface Size {
-	width: number
-	height: number
+export interface Size<T = number> {
+	width: T
+	height: T
 }
 
-export interface Rect {
-	left: number
-	top: number
-	right: number
-	bottom: number
+export interface Rect<T = number> {
+	left: T
+	top: T
+	right: T
+	bottom: T
 }
 
 // https://dreamswork.github.io/qt4/qrect_8cpp_source.html

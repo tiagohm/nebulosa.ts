@@ -1,7 +1,8 @@
 import type { DeepReadonly } from 'utility-types'
 import { type Angle, normalizeAngle, toHour } from './angle'
 import { DAYSEC, SIDEREAL_DAYSEC } from './constants'
-import type { EclipticCoordinate, EquatorialCoordinate, GalacticCoordinate, HorizontalCoordinate } from './coordinate'
+import type { EquatorialCoordinate } from './coordinate'
+import type { Point } from './geometry'
 import type { CfaPattern } from './image.types'
 import type { IndiClient } from './indi'
 import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector } from './indi.types'
@@ -27,7 +28,7 @@ export type TrackMode = 'SIDEREAL' | 'SOLAR' | 'LUNAR' | 'KING' | 'CUSTOM'
 
 export type MountTargetCoordinateType = 'J2000' | 'JNOW' | 'ALTAZ' | 'ECLIPTIC' | 'GALACTIC'
 
-export type MountTargetCoordinate<T = string> = (EquatorialCoordinate<T> & { type: 'J2000' | 'JNOW' }) | (HorizontalCoordinate<T> & { type: 'ALTAZ' }) | (EclipticCoordinate<T> & { type: 'ECLIPTIC' }) | (GalacticCoordinate<T> & { type: 'GALACTIC' })
+export type MountTargetCoordinate<T = string> = Partial<Record<MountTargetCoordinateType, Point<T>>> & { type: MountTargetCoordinateType }
 
 export type GuideDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
 

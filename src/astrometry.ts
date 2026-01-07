@@ -3,7 +3,7 @@ import { AU_M, DAYSEC, ELLIPSOID_PARAMETERS, PIOVERTWO, SPEED_OF_LIGHT } from '.
 import type { CartesianCoordinate, EquatorialCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
 import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa'
-import type { GeographicPosition } from './location'
+import type { GeographicCoordinate } from './location'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { pmAngles, type Time, tt, ut1 } from './time'
@@ -106,7 +106,7 @@ export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time,
 }
 
 // Computes CIRS coordinates from observed coordinates.
-export function observedToCirs(azimuth: Angle, altitude: Angle, time: Time, location: GeographicPosition = time.location!, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, astrom?: EraAstrom): readonly [Angle, Angle] {
+export function observedToCirs(azimuth: Angle, altitude: Angle, time: Time, location: GeographicCoordinate = time.location!, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, astrom?: EraAstrom): readonly [Angle, Angle] {
 	if (!astrom) {
 		const a = tt(time)
 		const b = ut1(time)

@@ -9,7 +9,7 @@ import type { IndiClient, IndiClientHandler } from './indi'
 // biome-ignore format: too long!
 import { type Camera, type CameraTransferFormat, CLIENT, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isFocuser, isInterfaceType, isMount, isRotator, isWheel, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi.types'
-import type { GeographicCoordinate, GeographicPosition } from './location'
+import type { GeographicCoordinate } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
 import { timeNow } from './time'
 
@@ -873,28 +873,25 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 	}
 
-	moveTo(mount: Mount, mode: 'goto' | 'flip' | 'sync', req: MountTargetCoordinate<string | Angle>, client = mount[CLIENT]!) {
-		let rightAscension = 0
-		let declination = 0
-
-		const location: GeographicPosition = { ...mount.geographicCoordinate, ellipsoid: 3 }
+	moveTo(mount: Mount, mode: 'goto' | 'flip' | 'sync', req: MountTargetCoordinate<string | number>, client = mount[CLIENT]!) {
 		const time = timeNow(true)
-		time.location = location
+		const equatorial: [number, number] = [0, 0]
+		const { x, y } = req[req.type]!
 
 		if (!('type' in req) || req.type === 'JNOW') {
-			rightAscension = parseAngle(req.rightAscension, PARSE_HOUR_ANGLE)!
-			declination = parseAngle(req.declination)!
+			equatorial[0] = parseAngle(x, PARSE_HOUR_ANGLE)!
+			equatorial[1] = parseAngle(y)!
 		} else if (req.type === 'J2000') {
-			;[rightAscension, declination] = equatorialFromJ2000(parseAngle(req.rightAscension, PARSE_HOUR_ANGLE)!, parseAngle(req.declination)!, time)
+			Object.assign(equatorial, equatorialFromJ2000(parseAngle(x, PARSE_HOUR_ANGLE)!, parseAngle(y)!, time))
 		} else if (req.type === 'ALTAZ') {
-			;[rightAscension, declination] = observedToCirs(parseAngle(req.azimuth)!, parseAngle(req.altitude)!, time)
+			Object.assign(equatorial, observedToCirs(parseAngle(x)!, parseAngle(y)!, time, mount.geographicCoordinate))
 		} else if (req.type === 'ECLIPTIC') {
-			;[rightAscension, declination] = eclipticToEquatorial(parseAngle(req.longitude)!, parseAngle(req.latitude)!, time)
+			Object.assign(equatorial, eclipticToEquatorial(parseAngle(x)!, parseAngle(y)!, time))
 		}
 
-		if (mode === 'goto') this.goTo(mount, rightAscension, declination, client)
-		else if (mode === 'flip') this.flipTo(mount, rightAscension, declination, client)
-		else if (mode === 'sync') this.syncTo(mount, rightAscension, declination, client)
+		if (mode === 'goto') this.goTo(mount, ...equatorial, client)
+		else if (mode === 'flip') this.flipTo(mount, ...equatorial, client)
+		else if (mode === 'sync') this.syncTo(mount, ...equatorial, client)
 	}
 
 	trackMode(mount: Mount, mode: TrackMode, client = mount[CLIENT]!) {
