@@ -747,7 +747,12 @@ export class FirmataClientOverTcp extends FirmataClient {
 				data: (_, buffer) => {
 					this.process(buffer)
 				},
-				error: () => {
+				error: (_, error) => {
+					console.error('socket error:', error)
+					this.reset()
+				},
+				connectError: (_, error) => {
+					console.error('connection failed:', error)
 					this.reset()
 				},
 			},

@@ -1,4 +1,5 @@
-import { AlpacaDiscoveryServer, AlpacaServer } from '../src/alpaca.server'
+import { AlpacaDiscoveryServer } from '../src/alpaca.discovery'
+import { AlpacaServer } from '../src/alpaca.server'
 import { IndiClient } from '../src/indi'
 import { CameraManager, CoverManager, FlatPanelManager, FocuserManager, MountManager, WheelManager } from '../src/indi.manager'
 
@@ -57,7 +58,7 @@ const client = new IndiClient({
 	},
 })
 
-await client.connect('pi.local')
+await client.connect('localhost')
 
 const alpacaServer = new AlpacaServer({ camera, wheel, mount, focuser, cover, flatPanel })
 

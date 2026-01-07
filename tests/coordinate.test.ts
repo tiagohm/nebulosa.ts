@@ -8,17 +8,17 @@ const SIRIUS_J2000 = [parseAngle('06h 45 09.22')!, parseAngle('-16 43 30.49')!] 
 const SIRIUS = [parseAngle('06h 46 19.27')!, parseAngle('-16 45 06.3')!] as const
 
 test('equatorial to J2000', () => {
-	const [rightAscension, declination] = equatorialToJ2000(...SIRIUS)
+	const [rightAscension, declination] = equatorialToJ2000(...SIRIUS, TIME)
 
-	expect(formatRA(rightAscension)).toBe('06 45 09.22')
-	expect(formatDEC(declination)).toBe('-16 43 30.49')
+	expect(formatRA(rightAscension)).toBe('06 45 09.23')
+	expect(formatDEC(declination)).toBe('-16 43 30.44')
 })
 
 test('equatorial from J2000', () => {
-	const [rightAscension, declination] = equatorialFromJ2000(...SIRIUS_J2000)
+	const [rightAscension, declination] = equatorialFromJ2000(...SIRIUS_J2000, TIME)
 
-	expect(formatRA(rightAscension)).toBe('06 46 19.27')
-	expect(formatDEC(declination)).toBe('-16 45 06.30')
+	expect(formatRA(rightAscension)).toBe('06 46 19.26')
+	expect(formatDEC(declination)).toBe('-16 45 06.35')
 })
 
 test('equatorial J2000 to ecliptic J2000', () => {

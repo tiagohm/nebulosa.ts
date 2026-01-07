@@ -89,10 +89,10 @@ export class IndiClient {
 					this.options?.handler?.close?.(this, false)
 				},
 				error: (_, error) => {
-					console.error('error', error)
+					console.error('socket error:', error)
 				},
 				connectError: (_, error) => {
-					console.error('connection error', error)
+					console.error('connection failed:', error)
 				},
 				end: () => {
 					console.warn('connection closed by server')

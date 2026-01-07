@@ -52,7 +52,10 @@ export class StellariumProtocolServer {
 					this.options.handler.disconnect?.(this)
 				},
 				error: (_, error) => {
-					console.error('connection failed', error)
+					console.error('socket error:', error)
+				},
+				connectError: (_, error) => {
+					console.error('connection failed:', error)
 				},
 				timeout: () => {
 					console.warn('connection timed out')

@@ -1,5 +1,5 @@
 // biome-ignore format: too long!
-import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, type AlpacaDiscoveryServerOptions, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './alpaca.types'
+import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './alpaca.types'
 import { type Angle, deg, hour, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import { type EquatorialCoordinate, equatorialToHorizontal } from './coordinate'
@@ -10,71 +10,6 @@ import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide
 import type { DeviceHandler, DeviceManager } from './indi.manager'
 import { type GeographicCoordinate, localSiderealTime } from './location'
 import { type Time, timeNow } from './time'
-
-export class AlpacaDiscoveryServer {
-	private socket?: Bun.udp.Socket<'buffer'>
-	private readonly ports = new Set<number>()
-
-	constructor(private readonly options?: AlpacaDiscoveryServerOptions) {}
-
-	addPort(port: number) {
-		this.ports.add(port)
-	}
-
-	removePort(port: number) {
-		this.ports.delete(port)
-	}
-
-	get port() {
-		return this.socket?.port ?? -1
-	}
-
-	get host() {
-		return this.socket?.hostname
-	}
-
-	get ip() {
-		return this.socket?.address.address
-	}
-
-	get running() {
-		return !!this.socket
-	}
-
-	async start(hostname: string = '0.0.0.0', port: number = ALPACA_DISCOVERY_PORT, ignoreLocalhost = this.options?.ignoreLocalhost ?? true) {
-		if (this.socket) return false
-
-		this.socket = await Bun.udpSocket({
-			hostname,
-			port,
-			socket: {
-				data: (socket, data, port, address) => {
-					if (ignoreLocalhost && (address === '127.0.0.1' || address === 'localhost')) return
-
-					if (data.toString('utf-8') === ALPACA_DISCOVERY_DATA) {
-						this.send(socket, port, address)
-					}
-				},
-				error: (socket, error) => {
-					console.error(error)
-				},
-			},
-		})
-
-		return true
-	}
-
-	stop() {
-		if (this.socket) {
-			this.socket.close()
-			this.socket = undefined
-		}
-	}
-
-	private send(socket: Bun.udp.Socket<'buffer'>, port: number, address: string) {
-		this.ports.forEach((p) => socket.send(`{"AlpacaPort": ${p.toFixed(0)}}`, port, address))
-	}
-}
 
 interface AlpacaDeviceState extends GeographicCoordinate, EquatorialCoordinate {
 	// Device
@@ -460,7 +395,7 @@ export class AlpacaServer {
 			reusePort: options?.reusePort ?? false,
 			development: false,
 			error: (error) => {
-				console.error(error)
+				console.error('server error:', error)
 			},
 			websocket: undefined,
 			fetch: (req) => {

@@ -338,7 +338,10 @@ export class PHD2Client {
 					}
 				},
 				error: (_, error) => {
-					console.error(error)
+					console.error('socket error:', error)
+				},
+				connectError: (_, error) => {
+					console.error('connection failed:', error)
 				},
 			},
 		})
