@@ -90,6 +90,7 @@ const DEFAULT_ALPACA_DISCOVERY_OPTIONS: Required<AlpacaDiscoveryOptions> = {
 
 export class AlpacaDiscoveryClient implements Disposable {
 	private socket?: Bun.udp.Socket<'buffer'>
+	private timeout?: NodeJS.Timeout
 
 	async discovery(onDiscovery: (address: string, port: number, devices: readonly AlpacaConfiguredDevice[]) => void, options: AlpacaDiscoveryOptions = DEFAULT_ALPACA_DISCOVERY_OPTIONS) {
 		if (this.socket) return false
@@ -129,8 +130,7 @@ export class AlpacaDiscoveryClient implements Disposable {
 		this.socket.setBroadcast(true)
 
 		if (options.timeout !== 0) {
-			const timeout = AbortSignal.timeout(options.timeout ?? DEFAULT_ALPACA_DISCOVERY_OPTIONS.timeout)
-			timeout.addEventListener('abort', () => this.close())
+			this.timeout = setTimeout(() => this.close(), options.timeout ?? DEFAULT_ALPACA_DISCOVERY_OPTIONS.timeout)
 		}
 
 		const interfaces = networkInterfaces()
@@ -156,6 +156,9 @@ export class AlpacaDiscoveryClient implements Disposable {
 	}
 
 	close() {
+		clearTimeout(this.timeout)
+		this.timeout = undefined
+
 		this.socket?.close()
 		this.socket = undefined
 	}
