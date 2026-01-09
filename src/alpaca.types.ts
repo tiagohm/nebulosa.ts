@@ -25,6 +25,7 @@ export enum AlpacaCameraState {
 	Error,
 }
 
+// https://ascom-standards.org/newdocs/exceptions.html
 export enum AlpacaException {
 	MethodNotImplemented = 1024,
 	PropertyNotImplemented = 1024,

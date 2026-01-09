@@ -318,7 +318,7 @@ const DEFAULT_SETTLE: Settle = {
 
 const CLRF = Buffer.from([13, 10])
 
-export class PHD2Client {
+export class PHD2Client implements Disposable {
 	// biome-ignore lint/suspicious/noExplicitAny: any
 	private readonly commands = new Map<string, { promise: PromiseWithResolvers<PHD2CommandResult<any>>; timer: any; command: PHD2Command }>()
 	private socket?: Bun.Socket
@@ -350,6 +350,10 @@ export class PHD2Client {
 	close() {
 		this.socket?.terminate()
 		this.socket = undefined
+	}
+
+	[Symbol.dispose]() {
+		this.close()
 	}
 
 	send<T>(method: string, params?: Record<string, unknown> | unknown[], timeout: number = 15000) {

@@ -36,7 +36,7 @@ export interface IndiClientOptions {
 
 export const DEFAULT_INDI_PORT = 7624
 
-export class IndiClient {
+export class IndiClient implements Disposable {
 	private readonly parser = new SimpleXmlParser()
 	private socket?: Bun.Socket
 	private readonly metadata: [string?, string?, number?] = []
@@ -115,6 +115,10 @@ export class IndiClient {
 	close() {
 		this.socket?.terminate()
 		this.socket = undefined
+	}
+
+	[Symbol.dispose]() {
+		this.close()
 	}
 
 	parse(data: Buffer) {

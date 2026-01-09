@@ -1748,7 +1748,6 @@ function isTrue(value: string) {
 	return value.toLowerCase() === 'true'
 }
 
-// https://ascom-standards.org/newdocs/exceptions.html
 function makeAlpacaResponse<T>(data: T, code: AlpacaException | 0 = 0, message: string = '') {
 	return Response.json({ Value: data, ClientTransactionID: 0, ServerTransactionID: 0, ErrorNumber: code, ErrorMessage: message })
 }

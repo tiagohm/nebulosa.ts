@@ -5,7 +5,7 @@ import { TAU } from './constants'
 import { eclipticToEquatorial, equatorialFromJ2000 } from './coordinate'
 import { meter, toMeter } from './distance'
 import type { CfaPattern } from './image.types'
-import type { IndiClient, IndiClientHandler } from './indi'
+import type { IndiClient, IndiClientHandler } from './indi.client'
 // biome-ignore format: too long!
 import { type Camera, type CameraTransferFormat, CLIENT, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isFocuser, isInterfaceType, isMount, isRotator, isWheel, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi.types'

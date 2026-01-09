@@ -1,10 +1,9 @@
-import type { DeepReadonly } from 'utility-types'
 import { type Angle, normalizeAngle, toHour } from './angle'
 import { DAYSEC, SIDEREAL_DAYSEC } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import type { Point } from './geometry'
 import type { CfaPattern } from './image.types'
-import type { IndiClient } from './indi'
+import type { IndiClient } from './indi.client'
 import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector } from './indi.types'
 import type { GeographicCoordinate } from './location'
 
@@ -58,14 +57,14 @@ export enum DeviceInterfaceType {
 }
 
 export interface DriverInfo {
-	executable: string
-	version: string
+	readonly executable: string
+	readonly version: string
 }
 
 export interface ClientInfo {
-	id: string
-	ip: string
-	port: number
+	readonly id: string
+	readonly ip: string
+	readonly port: number
 }
 
 export const CLIENT = Symbol('INDI_CLIENT')
@@ -269,7 +268,7 @@ export const DEFAULT_MIN_MAX_VALUE_PROPERTY: MinMaxValueProperty = {
 	step: 0,
 }
 
-export const DEFAULT_CAMERA: DeepReadonly<Camera> = {
+export const DEFAULT_CAMERA: Camera = {
 	hasCoolerControl: false,
 	coolerPower: 0,
 	cooler: false,
@@ -317,7 +316,7 @@ export const DEFAULT_CAMERA: DeepReadonly<Camera> = {
 	temperature: 0,
 }
 
-export const DEFAULT_MOUNT: DeepReadonly<Mount> = {
+export const DEFAULT_MOUNT: Mount = {
 	slewing: false,
 	tracking: false,
 	homing: false,
@@ -366,7 +365,7 @@ export const DEFAULT_MOUNT: DeepReadonly<Mount> = {
 	parked: false,
 }
 
-export const DEFAULT_WHEEL: DeepReadonly<Wheel> = {
+export const DEFAULT_WHEEL: Wheel = {
 	type: 'WHEEL',
 	id: '',
 	name: '',
@@ -378,7 +377,7 @@ export const DEFAULT_WHEEL: DeepReadonly<Wheel> = {
 	position: 0,
 }
 
-export const DEFAULT_FOCUSER: DeepReadonly<Focuser> = {
+export const DEFAULT_FOCUSER: Focuser = {
 	type: 'FOCUSER',
 	id: '',
 	name: '',
@@ -398,7 +397,7 @@ export const DEFAULT_FOCUSER: DeepReadonly<Focuser> = {
 	temperature: 0,
 }
 
-export const DEFAULT_COVER: DeepReadonly<Cover> = {
+export const DEFAULT_COVER: Cover = {
 	canPark: false,
 	canSetPark: false,
 	canAbort: false,
@@ -414,7 +413,7 @@ export const DEFAULT_COVER: DeepReadonly<Cover> = {
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
-export const DEFAULT_FLAT_PANEL: DeepReadonly<FlatPanel> = {
+export const DEFAULT_FLAT_PANEL: FlatPanel = {
 	enabled: false,
 	intensity: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'FLAT_PANEL',
@@ -425,7 +424,7 @@ export const DEFAULT_FLAT_PANEL: DeepReadonly<FlatPanel> = {
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
-export const DEFAULT_ROTATOR: DeepReadonly<Rotator> = {
+export const DEFAULT_ROTATOR: Rotator = {
 	moving: false,
 	angle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	canAbort: false,
@@ -442,7 +441,7 @@ export const DEFAULT_ROTATOR: DeepReadonly<Rotator> = {
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
-export const DEFAULT_POWER: DeepReadonly<Power> = {
+export const DEFAULT_POWER: Power = {
 	voltage: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	current: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	power: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
@@ -460,7 +459,7 @@ export const DEFAULT_POWER: DeepReadonly<Power> = {
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
-export const DEFAULT_THERMOMETER: DeepReadonly<Thermometer> = {
+export const DEFAULT_THERMOMETER: Thermometer = {
 	hasThermometer: true,
 	temperature: 0,
 	type: 'THERMOMETER',
@@ -471,7 +470,7 @@ export const DEFAULT_THERMOMETER: DeepReadonly<Thermometer> = {
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
-export const DEFAULT_GUIDE_OUTPUT: DeepReadonly<GuideOutput> = {
+export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	canPulseGuide: false,
 	pulsing: false,
 	type: 'GUIDE_OUTPUT',
@@ -482,7 +481,7 @@ export const DEFAULT_GUIDE_OUTPUT: DeepReadonly<GuideOutput> = {
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
-export const DEFAULT_DEW_HEATER: DeepReadonly<DewHeater> = {
+export const DEFAULT_DEW_HEATER: DewHeater = {
 	hasDewHeater: false,
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'DEW_HEATER',
