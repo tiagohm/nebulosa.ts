@@ -25,8 +25,12 @@ const server = new AlpacaServer({ camera, wheel, mount })
 server.start(host, port)
 
 const discoveryServer = new AlpacaDiscoveryServer(ports)
-discoveryServer.addPort(indi.port)
+discoveryServer.addPort(server.port)
 discoveryServer.start(host, port)
+
+const discoveryClient = new AlpacaDiscoveryClient()
+await discoveryClient.discovery(callback, options)
+discoveryClient.close()
 ```
 
 ### Angle ![](bun.webp) ![](browser.webp)
@@ -52,8 +56,10 @@ formatAngle(PI, { isHour: true }) // Format the angle with custom representation
 formatHMS(PI) // Format the angle as 00:00:00.00
 formatDMS(PI) // Format the angle as 00d00m00.00s
 formatSignedDMS(PI) // Format the angle as +00d00m00.00s
-formatRA(PI) // Format the angle as 00 00 00.00
-formatDEC(PI) // Format the angle as +00 00 00.00
+formatRA(PI) // Format the angle in hours as 00 00 00.00
+formatDEC(PI) // Format the angle in degress as +00 00 00.00
+formatAZ(PI) // Format the angle in degress as 000 00 00.00
+formatALT(PI) // Format the angle in degress as +00 00 00.00
 ```
 
 ### Astap ![](bun.webp)

@@ -1,5 +1,5 @@
 import type { PickByValue } from 'utility-types'
-import { type Angle, deg, hour, normalizeAngle, normalizePI, PARSE_HOUR_ANGLE, parseAngle, toDeg, toHour } from './angle'
+import { type Angle, deg, hour, normalizeAngle, normalizePI, parseAngle, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import { TAU } from './constants'
 import { eclipticToEquatorial, equatorialFromJ2000 } from './coordinate'
@@ -879,10 +879,10 @@ export class MountManager extends DeviceManager<Mount> {
 		const { x, y } = req[req.type]!
 
 		if (!('type' in req) || req.type === 'JNOW') {
-			equatorial[0] = parseAngle(x, PARSE_HOUR_ANGLE)!
+			equatorial[0] = parseAngle(x, true)!
 			equatorial[1] = parseAngle(y)!
 		} else if (req.type === 'J2000') {
-			Object.assign(equatorial, equatorialFromJ2000(parseAngle(x, PARSE_HOUR_ANGLE)!, parseAngle(y)!, time))
+			Object.assign(equatorial, equatorialFromJ2000(parseAngle(x, true)!, parseAngle(y)!, time))
 		} else if (req.type === 'ALTAZ') {
 			Object.assign(equatorial, observedToCirs(parseAngle(x)!, parseAngle(y)!, time, mount.geographicCoordinate))
 		} else if (req.type === 'ECLIPTIC') {

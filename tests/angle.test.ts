@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { arcmin, arcsec, deg, dms, type FormatAngleOptions, formatALT, formatAngle, formatAZ, formatDEC, formatDMS, formatHMS, formatRA, formatSignedDMS, hms, hour, mas, normalizeAngle, normalizePI, PARSE_HOUR_ANGLE, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from '../src/angle'
+import { arcmin, arcsec, deg, dms, type FormatAngleOptions, formatALT, formatAngle, formatAZ, formatDEC, formatDMS, formatHMS, formatRA, formatSignedDMS, hms, hour, mas, normalizeAngle, normalizePI, parseAngle, toArcmin, toArcsec, toDeg, toDms, toHms, toHour, toMas } from '../src/angle'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 
 test('normalize', () => {
@@ -96,7 +96,7 @@ describe('parseAngle', () => {
 		expect(parseAngle(undefined, { defaultValue: PI })).toBeCloseTo(PI, 18)
 		expect(parseAngle('', { defaultValue: PI })).toBeCloseTo(PI, 18)
 		expect(parseAngle('  ', { defaultValue: PI })).toBeCloseTo(PI, 18)
-		expect(parseAngle('abc', { defaultValue: PI })).toBeCloseTo(PI, 18)
+		expect(parseAngle('abc', PI)).toBeCloseTo(PI, 18)
 	})
 
 	test('numeric hour', () => {
@@ -104,9 +104,9 @@ describe('parseAngle', () => {
 		expect(parseAngle('-90d')).toBeCloseTo(-PIOVERTWO, 18)
 		expect(parseAngle('23.5634453')).toBeCloseTo(deg(23.5634453), 18)
 		expect(parseAngle('12h')).toBeCloseTo(PI, 18)
-		expect(parseAngle('12°', PARSE_HOUR_ANGLE)).toBeCloseTo(deg(12), 18)
-		expect(parseAngle('-12', PARSE_HOUR_ANGLE)).toBeCloseTo(-PI, 18)
-		expect(parseAngle('23.5634453', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.5634453), 18)
+		expect(parseAngle('12°', true)).toBeCloseTo(deg(12), 18)
+		expect(parseAngle('-12', true)).toBeCloseTo(-PI, 18)
+		expect(parseAngle('23.5634453', { isHour: true })).toBeCloseTo(hour(23.5634453), 18)
 	})
 
 	test('numeric min', () => {
@@ -114,10 +114,10 @@ describe('parseAngle', () => {
 		expect(parseAngle("-12'")).toBeCloseTo(-arcmin(12), 18)
 		expect(parseAngle('23.5634453m')).toBeCloseTo(arcmin(23.5634453), 18)
 		expect(parseAngle("-23.5634453'")).toBeCloseTo(arcmin(-23.5634453), 18)
-		expect(parseAngle('12m', PARSE_HOUR_ANGLE)).toBeCloseTo(arcmin(12) * 15, 18)
-		expect(parseAngle("-12'", PARSE_HOUR_ANGLE)).toBeCloseTo(-arcmin(12) * 15, 18)
-		expect(parseAngle('23.5634453m', PARSE_HOUR_ANGLE)).toBeCloseTo(arcmin(23.5634453) * 15, 16)
-		expect(parseAngle("-23.5634453'", PARSE_HOUR_ANGLE)).toBeCloseTo(arcmin(-23.5634453) * 15, 16)
+		expect(parseAngle('12m', true)).toBeCloseTo(arcmin(12) * 15, 18)
+		expect(parseAngle("-12'", true)).toBeCloseTo(-arcmin(12) * 15, 18)
+		expect(parseAngle('23.5634453m', true)).toBeCloseTo(arcmin(23.5634453) * 15, 16)
+		expect(parseAngle("-23.5634453'", true)).toBeCloseTo(arcmin(-23.5634453) * 15, 16)
 	})
 
 	test('numeric sec', () => {
@@ -125,17 +125,17 @@ describe('parseAngle', () => {
 		expect(parseAngle('-12"')).toBeCloseTo(-arcsec(12), 18)
 		expect(parseAngle('23.5634453s')).toBeCloseTo(arcsec(23.5634453), 18)
 		expect(parseAngle('-23.5634453"')).toBeCloseTo(arcsec(-23.5634453), 18)
-		expect(parseAngle('12s', PARSE_HOUR_ANGLE)).toBeCloseTo(arcsec(12) * 15, 18)
-		expect(parseAngle('-12"', PARSE_HOUR_ANGLE)).toBeCloseTo(-arcsec(12) * 15, 18)
-		expect(parseAngle('23.5634453s', PARSE_HOUR_ANGLE)).toBeCloseTo(arcsec(23.5634453) * 15, 16)
-		expect(parseAngle('-23.5634453"', PARSE_HOUR_ANGLE)).toBeCloseTo(arcsec(-23.5634453) * 15, 16)
+		expect(parseAngle('12s', true)).toBeCloseTo(arcsec(12) * 15, 18)
+		expect(parseAngle('-12"', true)).toBeCloseTo(-arcsec(12) * 15, 18)
+		expect(parseAngle('23.5634453s', true)).toBeCloseTo(arcsec(23.5634453) * 15, 16)
+		expect(parseAngle('-23.5634453"', true)).toBeCloseTo(arcsec(-23.5634453) * 15, 16)
 	})
 
 	test('number', () => {
 		expect(parseAngle(90)).toBeCloseTo(PIOVERTWO, 18)
 		expect(parseAngle(-90)).toBeCloseTo(-PIOVERTWO, 18)
-		expect(parseAngle(12, PARSE_HOUR_ANGLE)).toBeCloseTo(PI, 18)
-		expect(parseAngle(-12, PARSE_HOUR_ANGLE)).toBeCloseTo(-PI, 18)
+		expect(parseAngle(12, true)).toBeCloseTo(PI, 18)
+		expect(parseAngle(-12, true)).toBeCloseTo(-PI, 18)
 	})
 
 	test('deg, minute and second', () => {
@@ -185,46 +185,46 @@ describe('parseAngle', () => {
 
 	test('hour, minute and second', () => {
 		expect(parseAngle('23h 33m 48.40308s')).toBeCloseTo(hour(23.5634453), 18)
-		expect(parseAngle('23 33m 48.40308s', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.5634453), 18)
+		expect(parseAngle('23 33m 48.40308s', true)).toBeCloseTo(hour(23.5634453), 18)
 		expect(parseAngle('23h 33 48.40308s')).toBeCloseTo(hour(23.5634453), 18)
 		expect(parseAngle('23h 33m 48.40308')).toBeCloseTo(hour(23.5634453), 18)
-		expect(parseAngle('23 33 48.40308s', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.5634453), 18)
-		expect(parseAngle('23 33 48.40308', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.5634453), 18)
+		expect(parseAngle('23 33 48.40308s', true)).toBeCloseTo(hour(23.5634453), 18)
+		expect(parseAngle('23 33 48.40308', true)).toBeCloseTo(hour(23.5634453), 18)
 	})
 
 	test('negative hour, minute and second', () => {
 		expect(parseAngle('-23h 33m 48.40308s')).toBeCloseTo(hour(-23.5634453), 18)
-		expect(parseAngle('-23 33m 48.40308s', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(-23.5634453), 18)
+		expect(parseAngle('-23 33m 48.40308s', true)).toBeCloseTo(hour(-23.5634453), 18)
 		expect(parseAngle('-23h 33 48.40308s')).toBeCloseTo(hour(-23.5634453), 18)
 		expect(parseAngle('-23h 33m 48.40308')).toBeCloseTo(hour(-23.5634453), 18)
-		expect(parseAngle('-23 33 48.40308s', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(-23.5634453), 18)
-		expect(parseAngle('-23 33 48.40308', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(-23.5634453), 18)
+		expect(parseAngle('-23 33 48.40308s', true)).toBeCloseTo(hour(-23.5634453), 18)
+		expect(parseAngle('-23 33 48.40308', true)).toBeCloseTo(hour(-23.5634453), 18)
 	})
 
 	test('hour and minute', () => {
 		expect(parseAngle('23h 33m')).toBeCloseTo(hour(23.55), 18)
-		expect(parseAngle('23 33m', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.55), 18)
-		expect(parseAngle("23 33'", PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.55), 18)
-		expect(parseAngle('23 33', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.55), 18)
+		expect(parseAngle('23 33m', true)).toBeCloseTo(hour(23.55), 18)
+		expect(parseAngle("23 33'", true)).toBeCloseTo(hour(23.55), 18)
+		expect(parseAngle('23 33', true)).toBeCloseTo(hour(23.55), 18)
 	})
 
 	test('negative hour and minute', () => {
 		expect(parseAngle('-23h 33m')).toBeCloseTo(hour(-23.55), 18)
-		expect(parseAngle('-23 33m', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(-23.55), 18)
-		expect(parseAngle("-23 33'", PARSE_HOUR_ANGLE)).toBeCloseTo(hour(-23.55), 18)
-		expect(parseAngle('-23 33', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(-23.55), 18)
+		expect(parseAngle('-23 33m', true)).toBeCloseTo(hour(-23.55), 18)
+		expect(parseAngle("-23 33'", true)).toBeCloseTo(hour(-23.55), 18)
+		expect(parseAngle('-23 33', true)).toBeCloseTo(hour(-23.55), 18)
 	})
 
 	test('hour and second', () => {
 		expect(parseAngle('23h 48.40308s')).toBeCloseTo(hour(23.0134453), 18)
-		expect(parseAngle('23 48.40308s', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.0134453), 18)
-		expect(parseAngle('23 48.40308"', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.0134453), 18)
+		expect(parseAngle('23 48.40308s', true)).toBeCloseTo(hour(23.0134453), 18)
+		expect(parseAngle('23 48.40308"', true)).toBeCloseTo(hour(23.0134453), 18)
 	})
 
 	test('negative hour and second', () => {
 		expect(parseAngle('-23h 48.40308s')).toBeCloseTo(hour(-23.0134453), 18)
-		expect(parseAngle('-23 48.40308s', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(-23.0134453), 18)
-		expect(parseAngle('-23 48.40308"', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(-23.0134453), 18)
+		expect(parseAngle('-23 48.40308s', true)).toBeCloseTo(hour(-23.0134453), 18)
+		expect(parseAngle('-23 48.40308"', true)).toBeCloseTo(hour(-23.0134453), 18)
 	})
 
 	test('unicode signs and separators', () => {
@@ -238,13 +238,13 @@ describe('parseAngle', () => {
 	test('separators', () => {
 		expect(parseAngle('23 33 48.40308')).toBeCloseTo(deg(23.5634453), 18)
 		expect(parseAngle('23:33:48.40308')).toBeCloseTo(deg(23.5634453), 18)
-		expect(parseAngle('23 33 48.40308', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.5634453), 18)
-		expect(parseAngle('23:33:48.40308', PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.5634453), 18)
+		expect(parseAngle('23 33 48.40308', true)).toBeCloseTo(hour(23.5634453), 18)
+		expect(parseAngle('23:33:48.40308', true)).toBeCloseTo(hour(23.5634453), 18)
 	})
 
 	test('formatAngle', () => {
 		expect(parseAngle(formatAngle(deg(23.5634453), { fractionDigits: 5 }))).toBeCloseTo(deg(23.5634453), 18)
-		expect(parseAngle(formatAngle(hour(23.5634453), { isHour: true, fractionDigits: 5 }), PARSE_HOUR_ANGLE)).toBeCloseTo(hour(23.5634453), 18)
+		expect(parseAngle(formatAngle(hour(23.5634453), { isHour: true, fractionDigits: 5 }), true)).toBeCloseTo(hour(23.5634453), 18)
 	})
 })
 
@@ -255,7 +255,7 @@ describe('formatAngle', () => {
 	})
 
 	test('isHour', () => {
-		const options: FormatAngleOptions = PARSE_HOUR_ANGLE
+		const options: FormatAngleOptions = { isHour: true }
 		expect(formatAngle(hour(23.5634453), options)).toBe('+23 33 48.40')
 		expect(formatAngle(hour(-23.5634453), options)).toBe('+00 26 11.60')
 	})
@@ -357,6 +357,7 @@ test('formatRA', () => {
 	expect(formatRA(hour(10))).toBe('10 00 00.00')
 	expect(formatRA(hour(24))).toBe('00 00 00.00')
 	expect(formatRA(hour(25))).toBe('01 00 00.00')
+	expect(formatRA(hour(25), true)).toBe('01 00 00')
 })
 
 test('formatDEC', () => {
@@ -364,6 +365,7 @@ test('formatDEC', () => {
 	expect(formatDEC(deg(-23.5634453))).toBe('-23 33 48.40')
 	expect(formatDEC(deg(10))).toBe('+10 00 00.00')
 	expect(formatDEC(deg(-10))).toBe('-10 00 00.00')
+	expect(formatDEC(deg(-10), true)).toBe('-10 00 00')
 })
 
 test('formatAZ', () => {
@@ -371,6 +373,7 @@ test('formatAZ', () => {
 	expect(formatAZ(deg(10))).toBe('010 00 00.00')
 	expect(formatAZ(0)).toBe('000 00 00.00')
 	expect(formatAZ(-0)).toBe('000 00 00.00')
+	expect(formatAZ(deg(10), true)).toBe('010 00 00')
 })
 
 test('formatALT', () => {
@@ -378,4 +381,5 @@ test('formatALT', () => {
 	expect(formatALT(deg(-83.5634453))).toBe('-83 33 48.40')
 	expect(formatALT(deg(10))).toBe('+10 00 00.00')
 	expect(formatALT(deg(-10))).toBe('-10 00 00.00')
+	expect(formatALT(deg(-10), true)).toBe('-10 00 00')
 })

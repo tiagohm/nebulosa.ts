@@ -1,5 +1,5 @@
 import type { Mutable } from 'utility-types'
-import { type Angle, deg, PARSE_HOUR_ANGLE, parseAngle } from './angle'
+import { type Angle, deg, parseAngle } from './angle'
 import type { CfaPattern } from './image.types'
 import { readUntil, type Seekable, type Sink, type Source, sourceTransferToSink } from './io'
 import { parseTemporal } from './temporal'
@@ -110,7 +110,7 @@ export function rightAscensionKeyword<T extends Angle | undefined = Angle>(heade
 	}
 
 	if (hasKeyword(header, 'OBJCTRA')) {
-		const value = parseAngle(textKeyword(header, 'OBJCTRA', ''), PARSE_HOUR_ANGLE)
+		const value = parseAngle(textKeyword(header, 'OBJCTRA', ''), true)
 		if (value && value !== defaultValue) return value
 	}
 
