@@ -32,6 +32,8 @@ export type GuideDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
 
 export type MinMaxValueProperty = Pick<DefNumber, 'min' | 'max' | 'value' | 'step'>
 
+export type ClientType = 'INDI' | 'ALPACA'
+
 export enum DeviceInterfaceType {
 	TELESCOPE = 0x0001, // Telescope interface, must subclass INDI::Telescope.
 	CCD = 0x0002, // CCD interface, must subclass INDI::CCD.
@@ -56,7 +58,7 @@ export enum DeviceInterfaceType {
 }
 
 export interface Client {
-    readonly id: string
+	readonly id: string
 	readonly getProperties: (command?: GetProperties) => void
 	readonly enableBlob: (command: EnableBlob) => void
 	readonly sendText: (vector: NewTextVector) => void
@@ -70,6 +72,7 @@ export interface DriverInfo {
 }
 
 export interface ClientInfo {
+	readonly type: ClientType
 	readonly id: string
 	readonly ip: string
 	readonly port: number
@@ -264,6 +267,7 @@ export const DEFAULT_DRIVER_INFO: DriverInfo = {
 }
 
 export const DEFAULT_CLIENT_INFO: ClientInfo = {
+	type: 'INDI',
 	id: '',
 	ip: '',
 	port: 0,
