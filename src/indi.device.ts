@@ -3,8 +3,7 @@ import { DAYSEC, SIDEREAL_DAYSEC } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import type { Point } from './geometry'
 import type { CfaPattern } from './image.types'
-import type { IndiClient } from './indi.client'
-import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector } from './indi.types'
+import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector } from './indi.types'
 import type { GeographicCoordinate } from './location'
 
 export type DeviceType = 'CAMERA' | 'MOUNT' | 'WHEEL' | 'FOCUSER' | 'ROTATOR' | 'GPS' | 'DOME' | 'GUIDE_OUTPUT' | 'FLAT_PANEL' | 'COVER' | 'POWER' | 'THERMOMETER' | 'DEW_HEATER'
@@ -56,6 +55,15 @@ export enum DeviceInterfaceType {
 	SENSOR_INTERFACE = SPECTROGRAPH | DETECTOR | CORRELATOR,
 }
 
+export interface Client {
+    readonly id: string
+	readonly getProperties: (command?: GetProperties) => void
+	readonly enableBlob: (command: EnableBlob) => void
+	readonly sendText: (vector: NewTextVector) => void
+	readonly sendNumber: (vector: NewNumberVector) => void
+	readonly sendSwitch: (vector: NewSwitchVector) => void
+}
+
 export interface DriverInfo {
 	readonly executable: string
 	readonly version: string
@@ -67,7 +75,7 @@ export interface ClientInfo {
 	readonly port: number
 }
 
-export const CLIENT = Symbol('INDI_CLIENT')
+export const CLIENT = Symbol('CLIENT')
 
 export interface Device {
 	id: string // MD5(client ip address + client port + type + name)
@@ -76,7 +84,7 @@ export interface Device {
 	connected: boolean
 	readonly driver: Readonly<DriverInfo>
 	readonly client: Readonly<ClientInfo>
-	readonly [CLIENT]?: IndiClient
+	readonly [CLIENT]?: Client
 }
 
 export interface UTCTime {

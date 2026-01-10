@@ -1,3 +1,4 @@
+import type { Client } from './indi.device'
 // biome-ignore format: too long!
 import type { DefBlob, DefBlobVector, DefLight, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, EnableBlob, GetProperties, Message, NewNumberVector, NewSwitchVector, NewTextVector, OneBlob, OneLight, OneNumber, OneSwitch, OneText, SetBlobVector, SetLightVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, SwitchRule, VectorType } from './indi.types'
 import { SimpleXmlParser, type XmlNode } from './xml'
@@ -36,7 +37,7 @@ export interface IndiClientOptions {
 
 export const DEFAULT_INDI_PORT = 7624
 
-export class IndiClient implements Disposable {
+export class IndiClient implements Client, Disposable {
 	private readonly parser = new SimpleXmlParser()
 	private socket?: Bun.Socket
 	private readonly metadata: [string?, string?, number?] = []
@@ -44,7 +45,7 @@ export class IndiClient implements Disposable {
 	constructor(private readonly options?: IndiClientOptions) {}
 
 	get id() {
-		return this.metadata[0]
+		return this.metadata[0]!
 	}
 
 	get remoteHost() {

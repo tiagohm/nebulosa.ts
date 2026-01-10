@@ -92,7 +92,7 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 		if (!map) {
 			map = new Map()
 			this.properties.set(client, map)
-			this.clients.set(client.id!, client)
+			this.clients.set(client.id, client)
 		}
 
 		let properties = map.get(device)
@@ -169,7 +169,7 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 	}
 
 	close(client: IndiClient, server: boolean) {
-		this.clients.delete(client.id!)
+		this.clients.delete(client.id)
 	}
 }
 
@@ -329,12 +329,12 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
-	add(device: D, client = device[CLIENT]!) {
+	add(device: D, client = device[CLIENT] as IndiClient) {
 		if (!this.has(client, device.name)) {
 			const devices = this.devices.get(client) ?? new Map()
 			devices.set(device.name, device)
 			this.devices.set(client, devices)
-			this.clients.set(client.id!, client)
+			this.clients.set(client.id, client)
 			this.added(device)
 			return true
 		} else {
@@ -342,7 +342,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
-	remove(device: D, client = device[CLIENT]!) {
+	remove(device: D, client = device[CLIENT] as IndiClient) {
 		if (this.has(client, device.name)) {
 			this.devices.get(client)?.delete(device.name)
 			this.removed(device)
@@ -362,7 +362,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 
 		this.devices.delete(client)
-		this.clients.delete(client.id!)
+		this.clients.delete(client.id)
 	}
 }
 
