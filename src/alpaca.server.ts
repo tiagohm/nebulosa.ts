@@ -548,15 +548,24 @@ export class AlpacaServer {
 	}
 
 	private configuredDevices() {
+		const deviceNumbers = new Set<number>()
 		const configuredDevices = new Set<AlpacaConfiguredDevice>()
 
-		this.options.camera?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Camera').configuredDevice))
-		this.options.mount?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Telescope').configuredDevice))
-		this.options.focuser?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Focuser').configuredDevice))
-		this.options.wheel?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'FilterWheel').configuredDevice))
-		this.options.rotator?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'Rotator').configuredDevice))
-		this.options.flatPanel?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'CoverCalibrator').configuredDevice))
-		this.options.cover?.list().forEach((e) => configuredDevices.add(this.makeConfiguredDeviceFromDevice(e, 'CoverCalibrator').configuredDevice))
+		const add = (device: Device, type: AlpacaDeviceType) => {
+			const { configuredDevice } = this.makeConfiguredDeviceFromDevice(device, type)
+
+			if (deviceNumbers.add(configuredDevice.DeviceNumber)) {
+				configuredDevices.add(configuredDevice)
+			}
+		}
+
+		this.options.camera?.list().forEach((e) => add(e, 'Camera'))
+		this.options.mount?.list().forEach((e) => add(e, 'Telescope'))
+		this.options.focuser?.list().forEach((e) => add(e, 'Focuser'))
+		this.options.wheel?.list().forEach((e) => add(e, 'FilterWheel'))
+		this.options.rotator?.list().forEach((e) => add(e, 'Rotator'))
+		this.options.flatPanel?.list().forEach((e) => add(e, 'CoverCalibrator'))
+		this.options.cover?.list().forEach((e) => add(e, 'CoverCalibrator'))
 
 		return makeAlpacaResponse(Array.from(configuredDevices))
 	}
