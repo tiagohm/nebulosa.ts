@@ -873,20 +873,17 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 	}
 
-	moveTo(mount: Mount, mode: 'goto' | 'flip' | 'sync', req: MountTargetCoordinate<string | number>, client = mount[CLIENT]!) {
-		const time = timeNow(true)
-		const equatorial: [number, number] = [0, 0]
-		const { x, y } = req[req.type]!
+	moveTo(mount: Mount, mode: 'goto' | 'flip' | 'sync', req: MountTargetCoordinate<string | Angle>, client = mount[CLIENT]!) {
+		const { type } = req
+		const { x, y } = req[type]!
+		const equatorial: [number, number] = [typeof x === 'string' ? parseAngle(x, type === 'JNOW' || type === 'J2000' ? true : undefined)! : x, typeof y === 'string' ? parseAngle(y)! : y]
 
-		if (!('type' in req) || req.type === 'JNOW') {
-			equatorial[0] = parseAngle(x, true)!
-			equatorial[1] = parseAngle(y)!
-		} else if (req.type === 'J2000') {
-			Object.assign(equatorial, equatorialFromJ2000(parseAngle(x, true)!, parseAngle(y)!, time))
-		} else if (req.type === 'ALTAZ') {
-			Object.assign(equatorial, observedToCirs(parseAngle(x)!, parseAngle(y)!, time, mount.geographicCoordinate))
-		} else if (req.type === 'ECLIPTIC') {
-			Object.assign(equatorial, eclipticToEquatorial(parseAngle(x)!, parseAngle(y)!, time))
+		if (type === 'J2000') {
+			Object.assign(equatorial, equatorialFromJ2000(...equatorial))
+		} else if (type === 'ALTAZ') {
+			Object.assign(equatorial, observedToCirs(...equatorial, timeNow(true), mount.geographicCoordinate))
+		} else if (type === 'ECLIPTIC') {
+			Object.assign(equatorial, eclipticToEquatorial(...equatorial))
 		}
 
 		if (mode === 'goto') this.goTo(mount, ...equatorial, client)
