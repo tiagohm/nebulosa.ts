@@ -77,6 +77,7 @@ function broadcastAddress(i: NetworkInterfaceInfo) {
 export interface AlpacaDiscoveryOptions {
 	family?: NetworkInterfaceInfo['family']
 	port?: number
+	host?: string
 	timeout?: number // ms
 	fetch?: boolean
 }
@@ -84,6 +85,7 @@ export interface AlpacaDiscoveryOptions {
 const DEFAULT_ALPACA_DISCOVERY_OPTIONS: Required<AlpacaDiscoveryOptions> = {
 	family: 'IPv4',
 	port: ALPACA_DISCOVERY_PORT,
+	host: '0.0.0.0',
 	timeout: 15000,
 	fetch: true,
 }
@@ -96,6 +98,7 @@ export class AlpacaDiscoveryClient implements Disposable {
 		if (this.socket) return false
 
 		this.socket = await Bun.udpSocket({
+			hostname: options.host || DEFAULT_ALPACA_DISCOVERY_OPTIONS.host,
 			socket: {
 				data: async (socket, data, _, address) => {
 					const port = +JSON.parse(data.toString('utf-8'))?.AlpacaPort
@@ -133,23 +136,28 @@ export class AlpacaDiscoveryClient implements Disposable {
 			this.timeout = setTimeout(() => this.close(), options.timeout ?? DEFAULT_ALPACA_DISCOVERY_OPTIONS.timeout)
 		}
 
-		const interfaces = networkInterfaces()
-		const names = Object.keys(interfaces)
-		const family = options.family || DEFAULT_ALPACA_DISCOVERY_OPTIONS.family
-		const port = options.port || DEFAULT_ALPACA_DISCOVERY_OPTIONS.port
+		try {
+			const interfaces = networkInterfaces()
+			const names = Object.keys(interfaces)
+			// const family = options.family || DEFAULT_ALPACA_DISCOVERY_OPTIONS.family // TODO: Handle ipv6 for broadcastAddress method
+			const port = options.port || DEFAULT_ALPACA_DISCOVERY_OPTIONS.port
 
-		if (names.length) {
-			for (const name of names) {
-				for (const i of interfaces[name]!) {
-					if (i.family === family) {
-						if (!i.internal) {
-							this.socket.send(ALPACA_DISCOVERY_DATA, port, broadcastAddress(i))
-						} else {
-							this.socket.send(ALPACA_DISCOVERY_DATA, port, i.address)
+			if (names.length) {
+				for (const name of names) {
+					for (const i of interfaces[name]!) {
+						if (i.family === 'IPv4') {
+							if (!i.internal) {
+								this.socket.send(ALPACA_DISCOVERY_DATA, port, broadcastAddress(i))
+							} else {
+								this.socket.send(ALPACA_DISCOVERY_DATA, port, i.address)
+							}
 						}
 					}
 				}
 			}
+		} catch (e) {
+			this.close()
+			console.error(e)
 		}
 
 		return true
