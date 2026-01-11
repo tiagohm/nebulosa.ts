@@ -209,11 +209,11 @@ export class AlpacaServer {
 		return !!this.server
 	}
 
-	readonly routes: Bun.Serve.Routes<undefined, string> = {
+	readonly routes: Readonly<Bun.Serve.Routes<undefined, string>> = {
 		// https://ascom-standards.org/api/?urls.primaryName=ASCOM+Alpaca+Management+API
 		'/management/apiversions': { GET: () => this.apiVersions() },
 		'/management/v1/description': { GET: () => this.apiDescription() },
-		'/management/v1/configureddevices': { GET: () => this.configuredDevices() },
+		'/management/v1/configureddevices': { GET: () => makeAlpacaResponse(Array.from(this.configuredDevices())) },
 		// https://ascom-standards.org/api/?urls.primaryName=ASCOM+Alpaca+Device+API
 		// Device
 		'/api/v1/:type/:id/interfaceversion': { GET: (req) => this.deviceGetInterfaceVersion(req.params.type as never) },
@@ -458,21 +458,6 @@ export class AlpacaServer {
 		this.unlisten()
 	}
 
-	list() {
-		const configuredDevices = new Set<AlpacaConfiguredDevice>()
-
-		this.Camera.forEach((e) => configuredDevices.add(e.configuredDevice))
-		this.Telescope.forEach((e) => configuredDevices.add(e.configuredDevice))
-		this.FilterWheel.forEach((e) => configuredDevices.add(e.configuredDevice))
-		this.Focuser.forEach((e) => configuredDevices.add(e.configuredDevice))
-		this.Rotator.forEach((e) => configuredDevices.add(e.configuredDevice))
-		this.Dome.forEach((e) => configuredDevices.add(e.configuredDevice))
-		this.Switch.forEach((e) => configuredDevices.add(e.configuredDevice))
-		this.CoverCalibrator.forEach((e) => configuredDevices.add(e.configuredDevice))
-
-		return configuredDevices
-	}
-
 	private tick() {
 		// Mount
 		const time = timeNow(true)
@@ -547,15 +532,17 @@ export class AlpacaServer {
 		return makeAlpacaResponse<AlpacaServerDescription>({ ServerName: this.options.name || 'Nebulosa', Manufacturer: this.options.manufacturer || 'Tiago Melo', ManufacturerVersion: this.options.version || '1.0.0', Location: 'None' })
 	}
 
-	private configuredDevices() {
-		const deviceNumbers = new Set<number>()
+	configuredDevices() {
+		const deviceNumbers = new Set<string>()
 		const configuredDevices = new Set<AlpacaConfiguredDevice>()
 
 		const add = (device: Device, type: AlpacaDeviceType) => {
 			const { configuredDevice } = this.makeConfiguredDeviceFromDevice(device, type)
+			const key = `${type}.${configuredDevice.DeviceNumber}`
 
-			if (deviceNumbers.add(configuredDevice.DeviceNumber)) {
+			if (!deviceNumbers.has(key)) {
 				configuredDevices.add(configuredDevice)
+				deviceNumbers.add(key)
 			}
 		}
 
@@ -567,7 +554,7 @@ export class AlpacaServer {
 		this.options.flatPanel?.list().forEach((e) => add(e, 'CoverCalibrator'))
 		this.options.cover?.list().forEach((e) => add(e, 'CoverCalibrator'))
 
-		return makeAlpacaResponse(Array.from(configuredDevices))
+		return configuredDevices
 	}
 
 	// Device API
