@@ -119,6 +119,11 @@ export function rightAscensionKeyword<T extends Angle | undefined = Angle>(heade
 		if (value && value !== defaultValue) return value
 	}
 
+	if (hasKeyword(header, 'CRVAL1')) {
+		const value = deg(numericKeyword(header, 'CRVAL1', 0))
+		if (value && value !== defaultValue) return value
+	}
+
 	return defaultValue
 }
 
@@ -135,6 +140,11 @@ export function declinationKeyword<T extends Angle | undefined = Angle>(header: 
 
 	if (hasKeyword(header, 'DEC_OBJ')) {
 		const value = deg(numericKeyword(header, 'DEC_OBJ', 0))
+		if (value && value !== defaultValue) return value
+	}
+
+	if (hasKeyword(header, 'CRVAL2')) {
+		const value = deg(numericKeyword(header, 'CRVAL2', 0))
 		if (value && value !== defaultValue) return value
 	}
 
