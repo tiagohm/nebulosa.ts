@@ -2,7 +2,7 @@ import type { PickByValue } from 'utility-types'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, parseAngle, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import { TAU } from './constants'
-import { eclipticToEquatorial, equatorialFromJ2000 } from './coordinate'
+import { eclipticToEquatorial, equatorialFromJ2000, galacticToEquatorial } from './coordinate'
 import { meter, toMeter } from './distance'
 import type { CfaPattern } from './image.types'
 import type { IndiClient, IndiClientHandler } from './indi.client'
@@ -884,6 +884,10 @@ export class MountManager extends DeviceManager<Mount> {
 			Object.assign(equatorial, observedToCirs(...equatorial, timeNow(true), mount.geographicCoordinate))
 		} else if (type === 'ECLIPTIC') {
 			Object.assign(equatorial, eclipticToEquatorial(...equatorial))
+		} else if (type === 'GALACTIC') {
+			Object.assign(equatorial, equatorialFromJ2000(...galacticToEquatorial(...equatorial)))
+		} else {
+			return
 		}
 
 		if (mode === 'goto') this.goTo(mount, ...equatorial, client)
