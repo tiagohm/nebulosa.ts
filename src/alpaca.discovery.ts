@@ -129,7 +129,6 @@ export class AlpacaDiscoveryClient implements Disposable {
 		})
 
 		// https://github.com/oven-sh/bun/issues/15746
-		// @ts-expect-error
 		this.socket.setBroadcast(true)
 
 		if (options.timeout !== 0) {

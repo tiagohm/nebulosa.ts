@@ -197,7 +197,7 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 	const exitCode = await process.exited
 
 	try {
-		if (exitCode === 0 && (await fs.exists(wcs))) {
+		if (exitCode === 0 && (await Bun.file(wcs).exists())) {
 			const handle = await fs.open(wcs)
 			await using source = fileHandleSource(handle)
 			const fits = await readFits(source)

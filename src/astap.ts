@@ -25,7 +25,7 @@ export interface AstapPlateSolveOptions extends PlateSolveOptions {
 const DEFAULT_TIMEOUT = 300000 // 5 minutes
 
 export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, outputDirectory, executable, timeout }: AstapStarDetectionOptions = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
-	if (!input || !(await fs.exists(input))) return []
+	if (!input || !(await Bun.file(input).exists())) return []
 
 	const cwd = outputDirectory || dirname(input)
 	executable ||= executableForCurrentPlatform()
@@ -34,11 +34,11 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 	const process = Bun.spawn([executable, '-f', input, '-z', '0', '-extract', minSNR.toFixed(0)], { cwd, signal, timeout })
 	const exitCode = await process.exited
 
-	const file = `${join(cwd, basename(input, extname(input)))}.csv`
+	const file = Bun.file(`${join(cwd, basename(input, extname(input)))}.csv`)
 
-	if (await fs.exists(file)) {
+	if (await file.exists()) {
 		try {
-			const csv = readCsv(await fs.readFile(file, 'utf-8'))
+			const csv = readCsv(await file.text())
 
 			if (csv.length > 1) {
 				const stars = new Array<DetectedStar>(csv.length - 1)
@@ -64,7 +64,7 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 		} catch (e) {
 			console.error('error reading CSV', e)
 		} finally {
-			await fs.unlink(file)
+			await file.delete()
 		}
 	} else {
 		console.error('astap star detection failed with exit code', exitCode)
@@ -95,7 +95,7 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	const process = Bun.spawn(commands, { signal, timeout })
 	const exitCode = await process.exited
 
-	if (exitCode === 0 && (await fs.exists(wcs))) {
+	if (exitCode === 0 && (await Bun.file(wcs).exists())) {
 		try {
 			const handle = await fs.open(wcs)
 			await using source = fileHandleSource(handle)
