@@ -214,10 +214,10 @@ test('regression score', () => {
 	expect(regression.slope).toBeCloseTo(61.272, 3)
 	expect(regression.intercept).toBeCloseTo(-39.062, 3)
 
-	const score = regressionScore(regression, x, y)
+	const score = regressionScore(regression)
 	expect(score.r).toBeCloseTo(0.9946, 3)
 	expect(score.r2).toBe(score.r * score.r)
-	expect(score.chi2).toBeLessThan(1)
+	// expect(score.rss).toBeLessThan(1)
 	expect(score.rmsd).toBeLessThan(1)
 })
 

@@ -136,6 +136,13 @@ novaAstrometryNetPlateSolve(input, options)
 localAstrometryNetPlateSolve(input, options)
 ```
 
+### AutoFocus ![](bun.webp) ![](browser.webp)
+
+```ts
+const autoFocus = new AutoFocus({ fittingMode: 'TREND_PARABOLIC', initialOffsetSteps: 5, stepSize: 100, maxPosition: 100000, reversed: false, rmsdThreshold: 0.15 })
+const step = autoFocus.add(focusPosition, hfd)
+```
+
 ### Constellation ![](bun.webp) ![](browser.webp)
 
 ```ts

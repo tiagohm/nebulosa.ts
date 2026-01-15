@@ -17,6 +17,10 @@ export interface Rect<T = number> {
 	bottom: T
 }
 
+export function midPoint(a: Point, b: Point): Point {
+	return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+}
+
 // https://dreamswork.github.io/qt4/qrect_8cpp_source.html
 
 export function rectIntersection(a: Rect, b: Rect, out?: Rect) {

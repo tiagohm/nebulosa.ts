@@ -7,6 +7,8 @@ import { isNumberArray, meanOf, minOf } from './util'
 export type TrendLineRegressionMethod = 'simple' | 'theil-sen'
 
 export interface Regression {
+	readonly xPoints: Readonly<NumberArray>
+	readonly yPoints: Readonly<NumberArray>
 	readonly predict: (x: number) => number
 }
 
@@ -21,7 +23,7 @@ export interface MinimumPointRegression {
 export interface RegressionScore {
 	readonly r: number
 	readonly r2: number
-	readonly chi2: number
+	readonly rss: number
 	readonly rmsd: number
 }
 
@@ -81,6 +83,8 @@ export function simpleLinearRegression(x: Readonly<NumberArray>, y: Readonly<Num
 	const intercept = (1 / n) * ySum - slope * (1 / n) * xSum
 
 	return {
+		xPoints: x,
+		yPoints: y,
 		slope,
 		intercept,
 		predict: (x: number) => slope * x + intercept,
@@ -168,6 +172,8 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	const coefficients = gaussianElimination(A, B, B)
 
 	return {
+		xPoints: x,
+		yPoints: y,
 		coefficients: Array.isArray(coefficients) ? coefficients : Array.from(coefficients),
 		predict: (x) => {
 			let y = 0
@@ -224,6 +230,8 @@ export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberA
 	const intercept = n % 2 === 0 ? (data[n / 2 - 1] + data[n / 2]) / 2 : data[Math.floor(n / 2)]
 
 	return {
+		xPoints: x,
+		yPoints: y,
 		slope,
 		intercept,
 		predict: (x: number) => slope * x + intercept,
@@ -264,6 +272,8 @@ export function trendLineRegression(x: Readonly<NumberArray>, y: Readonly<Number
 	const right = regression(c.subarray(0, cdn), d.subarray(0, cdn))
 
 	return {
+		xPoints: x,
+		yPoints: y,
 		left,
 		right,
 		minimum: { x: minX, y: minY },
@@ -286,6 +296,8 @@ export function exponentialRegression(x: Readonly<NumberArray>, y: Readonly<Numb
 	const b = Math.exp(regression.intercept)
 
 	return {
+		xPoints: x,
+		yPoints: y,
 		a,
 		b,
 		predict: (x: number) => b * Math.exp(a * x),
@@ -309,6 +321,8 @@ export function powerRegression(x: Readonly<NumberArray>, y: Readonly<NumberArra
 	const b = regression.slope
 
 	return {
+		xPoints: x,
+		yPoints: y,
 		a,
 		b,
 		predict: (x: number) => a * x ** b,
@@ -336,6 +350,8 @@ export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	const [a, b, c] = levenbergMarquardt(x, y, hyperbolic, [Math.round(A), B, C], { maxIterations: 1000, tolerance: 1e-8 })
 
 	return {
+		xPoints: x,
+		yPoints: y,
 		a,
 		b,
 		c,
@@ -348,16 +364,16 @@ export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 }
 
 // Computes the score of a regression against a set of x and y values
-// Returns the correlation coefficient (r), coefficient of determination (r²), chi-squared statistic, and root mean square deviation (RMSD)
-export function regressionScore(regression: Regression, x: Readonly<NumberArray>, y: Readonly<NumberArray>): RegressionScore {
+// Returns the correlation coefficient (r), coefficient of determination (r²), residual sum of squares (RSS), and root mean square deviation (RMSD)
+export function regressionScore(regression: Regression, x: Readonly<NumberArray> = regression.xPoints, y: Readonly<NumberArray> = regression.yPoints): RegressionScore {
 	const n = Math.min(x.length, y.length)
 
 	let sx = 0
 	let sx2 = 0
 	let sy = 0
-	let sxy = 0
 	let sy2 = 0
-	let chi2 = 0
+	let sxy = 0
+	let rss = 0
 
 	for (let i = 0; i < n; i++) {
 		const xi = x[i]
@@ -369,17 +385,17 @@ export function regressionScore(regression: Regression, x: Readonly<NumberArray>
 		sy += yi
 		sy2 += yi * yi
 		sxy += xi * yi
-		chi2 += (yi - p) ** 2 / yi
+
+		const d = yi - p
+		rss += d * d
 	}
 
-	// const B = (n * sxy - sx * sy) / (n * sx2 - sx * sx)
-	// const A = (sy - B * sx) / n
-
-	const r = (n * sxy - sx * sy) / Math.sqrt((n * sx2 - sx * sx) * (n * sy2 - sy * sy))
+	const denom = Math.sqrt((n * sx2 - sx * sx) * (n * sy2 - sy * sy))
+	const r = denom === 0 ? NaN : (n * sxy - sx * sy) / denom
 	const r2 = r * r
-	const rmsd = Math.sqrt(chi2)
+	const rmsd = Math.sqrt(rss / n)
 
-	return { r, r2, chi2, rmsd }
+	return { r, r2, rss, rmsd }
 }
 
 export function intersect(a: LinearRegression, b: LinearRegression): Readonly<Point> {
