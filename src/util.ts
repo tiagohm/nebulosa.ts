@@ -58,6 +58,19 @@ export function meanOf(a: Readonly<NumberArray>) {
 	return s / a.length
 }
 
+// Computes the median value of an sorted array of numeric values.
+// If the array is empty, it returns NaN.
+export function medianOf(a: Readonly<NumberArray>) {
+	if (a.length === 0) return NaN
+	else if (a.length === 1) return a[0]
+	else if (a.length === 2) return (a[0] + a[1]) / 2
+	else if (a.length === 3) return a[1]
+
+	const i = Math.trunc(a.length / 2)
+
+	return a.length % 2 === 1 ? a[i] : (a[i - 1] + a[i]) / 2
+}
+
 // Searches in the specified input using the range [from, to) for the specified key.
 export function binarySearch(a: Readonly<NumberArray>, key: number, { from = 0, to = a.length, positive }: BinarySearchOptions = {}) {
 	to--

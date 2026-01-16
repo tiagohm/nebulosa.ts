@@ -765,6 +765,7 @@ angularSizeOfPixel(focalLength, pixelSize) // CCD Resolution in arcsec/pixel
 minOf(array) // Minimum value of the array
 maxOf(array) // Maximum value of the array
 meanOf(array) // Mean value of the array
+medianOf(array) // Median value of the sorted array
 binarySearch(array, value, options) // Binary search on a sorted array
 ```
 

@@ -7,7 +7,7 @@ import { meter, toMeter } from './distance'
 import type { CfaPattern } from './image.types'
 import type { IndiClient, IndiClientHandler } from './indi.client'
 // biome-ignore format: too long!
-import { type Camera, type CameraTransferFormat, CLIENT, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isFocuser, isInterfaceType, isMount, isRotator, isWheel, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type CameraTransferFormat, CLIENT, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi.types'
 import type { GeographicCoordinate } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
@@ -564,12 +564,7 @@ export class CameraManager extends DeviceManager<Camera> {
 		client.sendSwitch({ device: camera.name, name: 'CCD_ABORT_EXPOSURE', elements: { ABORT: true } })
 	}
 
-	snoop(camera: Camera, ...devices: Device[]) {
-		const mount = devices.find(isMount)
-		const focuser = devices.find(isFocuser)
-		const wheel = devices.find(isWheel)
-		const rotator = devices.find(isRotator)
-
+	snoop(camera: Camera, mount?: Mount, focuser?: Focuser, wheel?: Wheel, rotator?: Rotator) {
 		camera[CLIENT]!.sendText({ device: camera.name, name: 'ACTIVE_DEVICES', elements: { ACTIVE_TELESCOPE: mount?.name ?? '', ACTIVE_ROTATOR: rotator?.name ?? '', ACTIVE_FOCUSER: focuser?.name ?? '', ACTIVE_FILTER: wheel?.name ?? '' } })
 	}
 

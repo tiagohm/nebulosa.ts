@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { angularSizeOfPixel, binarySearch, binarySearchWithComparator, isNumberArray, maxOf, meanOf, minOf } from '../src/util'
+import { angularSizeOfPixel, binarySearch, binarySearchWithComparator, isNumberArray, maxOf, meanOf, medianOf, minOf } from '../src/util'
 
 test('is number array', () => {
 	expect(isNumberArray([1, 2, 3])).toBe(true)
@@ -53,6 +53,14 @@ test('mean of', () => {
 	expect(meanOf([1, 2, 3, 4])).toBe(2.5)
 	expect(meanOf([1])).toBe(1)
 	expect(meanOf([])).toBeNaN()
+})
+
+test('median of', () => {
+	expect(medianOf([1])).toBe(1)
+	expect(medianOf([1, 2])).toBe(1.5)
+	expect(medianOf([1, 2, 3])).toBe(2)
+	expect(medianOf([1, 2, 3, 4])).toBe(2.5)
+	expect(medianOf([])).toBeNaN()
 })
 
 test('binary search', () => {
