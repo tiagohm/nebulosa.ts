@@ -89,12 +89,12 @@ describe('auto focus', () => {
 			step = trendParabolicAutoFocus.add(point.x, point.y)
 
 			if (i >= 2) {
-				expect(step.parabolic).toBeDefined()
+				expect(trendParabolicAutoFocus.parabolic).toBeDefined()
 			}
 		}
 
 		expect(step.type).toBe('COMPLETED')
-		expect(step.finalFocusPoint!.x).toBeCloseTo(25000, -2)
+		expect(trendParabolicAutoFocus.focusPoint!.x).toBeCloseTo(25000, -2)
 	})
 
 	test('trend-hyperbolic', () => {
@@ -109,12 +109,12 @@ describe('auto focus', () => {
 			step = trendHyperbolicAutoFocus.add(point.x, point.y)
 
 			if (i >= 2) {
-				expect(step.hyperbolic).toBeDefined()
+				expect(trendHyperbolicAutoFocus.hyperbolic).toBeDefined()
 			}
 		}
 
 		expect(step.type).toBe('COMPLETED')
-		expect(step.finalFocusPoint!.x).toBeCloseTo(25000, -2)
+		expect(trendHyperbolicAutoFocus.focusPoint!.x).toBeCloseTo(25000, -2)
 	})
 
 	test('trendlines', () => {
@@ -130,7 +130,7 @@ describe('auto focus', () => {
 		}
 
 		expect(step.type).toBe('COMPLETED')
-		expect(step.finalFocusPoint!.x).toBeCloseTo(25000, -2)
+		expect(trendlinesAutoFocus.focusPoint!.x).toBeCloseTo(25000, -2)
 	})
 
 	test('parabolic', () => {
@@ -145,12 +145,12 @@ describe('auto focus', () => {
 			step = parabolicAutoFocus.add(point.x, point.y)
 
 			if (i >= 2) {
-				expect(step.parabolic).toBeDefined()
+				expect(parabolicAutoFocus.parabolic).toBeDefined()
 			}
 		}
 
 		expect(step.type).toBe('COMPLETED')
-		expect(step.finalFocusPoint!.x).toBeCloseTo(25000, -2)
+		expect(parabolicAutoFocus.focusPoint!.x).toBeCloseTo(25000, -2)
 	})
 
 	test('hyperbolic', () => {
@@ -165,11 +165,11 @@ describe('auto focus', () => {
 			step = hyperbolicAutoFocus.add(point.x, point.y)
 
 			if (i >= 2) {
-				expect(step.hyperbolic).toBeDefined()
+				expect(hyperbolicAutoFocus.hyperbolic).toBeDefined()
 			}
 		}
 
 		expect(step.type).toBe('COMPLETED')
-		expect(step.finalFocusPoint!.x).toBeCloseTo(24950, -2)
+		expect(hyperbolicAutoFocus.focusPoint!.x).toBeCloseTo(24950, -2)
 	})
 })

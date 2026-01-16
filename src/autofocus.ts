@@ -19,10 +19,6 @@ export interface AutoFocusStep {
 	type: AutoFocusStepType
 	relative?: number
 	absolute?: number
-	trendLine?: TrendLineRegression
-	parabolic?: QuadraticRegression
-	hyperbolic?: HyperbolicRegression
-	finalFocusPoint?: Point
 }
 
 export interface AutoFocusOptions {
@@ -46,9 +42,7 @@ export class AutoFocus {
 	private readonly maximumFocusPoints: number
 	private readonly direction: number
 	private readonly focusPoints: Point[] = []
-	private trendLine?: TrendLineRegression
-	private parabolic?: QuadraticRegression
-	private hyperbolic?: HyperbolicRegression
+	private readonly curves: { trendLine?: TrendLineRegression; parabolic?: QuadraticRegression; hyperbolic?: HyperbolicRegression } = {}
 
 	constructor(readonly options: AutoFocusOptions) {
 		this.initialOffsetSteps = options.initialOffsetSteps
@@ -67,11 +61,11 @@ export class AutoFocus {
 	}
 
 	private makeRelativeStep(type: AutoFocusStepType, relative: number): AutoFocusStep {
-		return { type, relative, trendLine: this.trendLine, parabolic: this.parabolic, hyperbolic: this.hyperbolic, finalFocusPoint: this.finalFocusPoint }
+		return { type, relative }
 	}
 
 	private makeAbsoluteStep(type: AutoFocusStepType, absolute: number): AutoFocusStep {
-		return { type, absolute, trendLine: this.trendLine, parabolic: this.parabolic, hyperbolic: this.hyperbolic, finalFocusPoint: this.finalFocusPoint }
+		return { type, absolute }
 	}
 
 	// Call it after each camera capture!
@@ -94,7 +88,7 @@ export class AutoFocus {
 				}
 
 				if (this.checkIsFocusPointsEnough()) {
-					return this.determinateFinalFocusPoint()
+					return this.determinateFocusPoint()
 				} else {
 					if (this.focusPoints.length >= this.maximumFocusPoints) {
 						// Break out when the maximum limit of focus points is reached
@@ -116,13 +110,13 @@ export class AutoFocus {
 	}
 
 	private checkIsFocusPointsEnough() {
-		if (!this.trendLine) return false
-		const { left, right, minimum } = this.trendLine!
+		if (!this.curves.trendLine) return false
+		const { left, right, minimum } = this.curves.trendLine
 		return right.xPoints.length + this.focusPoints.filter((e) => e.x > minimum.x && e.y === 0).length >= this.initialOffsetSteps && left.xPoints.length + this.focusPoints.filter((e) => e.x < minimum.x && e.y === 0).length >= this.initialOffsetSteps
 	}
 
 	private evaluateTrendline(focusPosition: number): AutoFocusStep {
-		const { left, right, minimum } = this.trendLine!
+		const { left, right, minimum } = this.curves.trendLine!
 
 		if (!left.xPoints.length && !right.xPoints.length) {
 			console.warn('not enought spreaded points')
@@ -158,7 +152,7 @@ export class AutoFocus {
 			}
 		}
 
-		return this.determinateFinalFocusPoint()
+		return this.determinateFocusPoint()
 	}
 
 	private computeRegression(focusPosition: number, hfd: number) {
@@ -168,51 +162,57 @@ export class AutoFocus {
 		const x = this.focusPoints.map((e) => e.x)
 		const y = this.focusPoints.map((e) => e.y)
 
-		this.trendLine = trendLineRegression(x, y)
+		this.curves.trendLine = trendLineRegression(x, y, 'theil-sen')
 
 		if (x.length >= 3) {
 			if (this.fittingMode === 'PARABOLIC' || this.fittingMode === 'TREND_PARABOLIC') {
-				this.parabolic = quadraticRegression(x, y)
+				this.curves.parabolic = quadraticRegression(x, y)
 			} else if (this.fittingMode === 'HYPERBOLIC' || this.fittingMode === 'TREND_HYPERBOLIC') {
-				this.hyperbolic = hyperbolicRegression(x, y)
+				this.curves.hyperbolic = hyperbolicRegression(x, y)
 			}
 		}
 	}
 
-	private determinateFinalFocusPoint(): AutoFocusStep {
-		const focusPoint = this.finalFocusPoint
+	private determinateFocusPoint(): AutoFocusStep {
+		const determinedFocusPoint = this.focusPoint
 
-		if (!focusPoint || !this.validateCalculatedFocusPosition(focusPoint)) {
+		if (!determinedFocusPoint || !this.validateCalculatedFocusPosition(determinedFocusPoint)) {
 			console.warn('potentially bad auto-focus. Restoring original focus position')
 			return this.makeAbsoluteStep('FAILED', this.initialFocusPosition)
 		} else {
-			return this.makeAbsoluteStep('COMPLETED', focusPoint.x)
+			return this.makeAbsoluteStep('COMPLETED', determinedFocusPoint.x)
 		}
 	}
 
 	private validateCalculatedFocusPosition(focusPoint: Readonly<Point>) {
+		if (focusPoint.x < this.minimum.x || focusPoint.x > this.maximum.x) {
+			console.warn('determined focus point position is outside of the overall measurement points of the curve')
+			return false
+		}
+
 		const { rmsdThreshold = 0 } = this.options
 
 		if (rmsdThreshold > 0) {
 			const isRegressionBad = (regression: Regression) => regressionScore(regression).rmsd / focusPoint.y > rmsdThreshold
 
+			const { trendLine, parabolic, hyperbolic } = this.curves
 			let isBad = false
 
 			switch (this.fittingMode) {
 				case 'TRENDLINES':
-					isBad = !this.trendLine || isRegressionBad(this.trendLine.left) || isRegressionBad(this.trendLine.right)
+					isBad = !trendLine || isRegressionBad(trendLine.left) || isRegressionBad(trendLine.right)
 					break
 				case 'PARABOLIC':
-					isBad = !this.parabolic || isRegressionBad(this.parabolic)
+					isBad = !parabolic || isRegressionBad(parabolic)
 					break
 				case 'TREND_PARABOLIC':
-					isBad = !this.parabolic || !this.trendLine || isRegressionBad(this.parabolic) || isRegressionBad(this.trendLine.left) || isRegressionBad(this.trendLine.right)
+					isBad = !parabolic || !trendLine || isRegressionBad(parabolic) || isRegressionBad(trendLine.left) || isRegressionBad(trendLine.right)
 					break
 				case 'HYPERBOLIC':
-					isBad = !this.hyperbolic || isRegressionBad(this.hyperbolic)
+					isBad = !hyperbolic || isRegressionBad(hyperbolic)
 					break
 				case 'TREND_HYPERBOLIC':
-					isBad = !this.hyperbolic || !this.trendLine || isRegressionBad(this.hyperbolic) || isRegressionBad(this.trendLine.left) || isRegressionBad(this.trendLine.right)
+					isBad = !hyperbolic || !trendLine || isRegressionBad(hyperbolic) || isRegressionBad(trendLine.left) || isRegressionBad(trendLine.right)
 					break
 			}
 
@@ -222,26 +222,35 @@ export class AutoFocus {
 			}
 		}
 
-		if (focusPoint.x < this.minimum.x || focusPoint.x > this.maximum.x) {
-			console.warn('determined focus point position is outside of the overall measurement points of the curve')
-			return false
-		}
-
 		return true
 	}
 
-	get finalFocusPoint() {
+	get trendLine() {
+		return this.curves.trendLine
+	}
+
+	get parabolic() {
+		return this.curves.parabolic
+	}
+
+	get hyperbolic() {
+		return this.curves.hyperbolic
+	}
+
+	get focusPoint() {
+		const { trendLine, parabolic, hyperbolic } = this.curves
+
 		switch (this.fittingMode) {
 			case 'TRENDLINES':
-				return this.trendLine?.intersection
+				return trendLine?.intersection
 			case 'PARABOLIC':
-				return this.parabolic?.minimum
+				return parabolic?.minimum
 			case 'TREND_PARABOLIC':
-				return this.parabolic?.minimum && this.trendLine?.intersection && midPoint(this.parabolic.minimum, this.trendLine.intersection)
+				return parabolic?.minimum && trendLine?.intersection && midPoint(parabolic.minimum, trendLine.intersection)
 			case 'HYPERBOLIC':
-				return this.hyperbolic?.minimum
+				return hyperbolic?.minimum
 			case 'TREND_HYPERBOLIC':
-				return this.hyperbolic?.minimum && this.trendLine?.intersection && midPoint(this.hyperbolic.minimum, this.trendLine.intersection)
+				return hyperbolic?.minimum && trendLine?.intersection && midPoint(hyperbolic.minimum, trendLine.intersection)
 			default:
 				return undefined
 		}

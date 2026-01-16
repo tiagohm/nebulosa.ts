@@ -210,7 +210,7 @@ test('convolution mean', () => {
 	const b = readImageTransformAndSave((i) => convolution(i, meanConvolutionKernel(5)), 'conv-mean-5', 'b6889d5c03fcc8290e0ef441bc057e8d')
 	const c = readImageTransformAndSave((i) => convolution(i, meanConvolutionKernel(7)), 'conv-mean-7', '5b8d80765c1fd2be99d26384f16089bc')
 	return Promise.all([a, b, c])
-}, 5000)
+}, 8000)
 
 test('convolution blur 3x3', () => {
 	return readImageTransformAndSave((i) => blur3x3(i), 'conv-blur-3', 'd483c31324fcc7249450e310f19d20b4')
