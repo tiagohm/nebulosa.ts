@@ -17,6 +17,9 @@ export class AlpacaClient implements Client, Disposable {
 	readonly description: string
 	readonly api: AlpacaApi
 
+	readonly remoteHost: string
+	readonly remotePort: number
+
 	private readonly devices = new Map<string, AlpacaDevice>()
 	private timer?: NodeJS.Timeout
 	private tickCount = 0
@@ -28,6 +31,9 @@ export class AlpacaClient implements Client, Disposable {
 		this.id = Bun.MD5.hash(url, 'hex')
 		this.description = `Alpaca Client at ${url}`
 		this.api = new AlpacaApi(url)
+		const { protocol, hostname, port } = URL.parse(url)!
+		this.remoteHost = hostname
+		this.remotePort = +port || (protocol === 'http:' ? 80 : 443)
 	}
 
 	getProperties(command?: GetProperties) {
