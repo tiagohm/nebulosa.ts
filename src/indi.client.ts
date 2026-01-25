@@ -8,27 +8,27 @@ import { SimpleXmlParser, type XmlNode } from './xml'
 // http://www.clearskyinstitute.com/INDI/INDI.pdf
 
 export interface IndiClientHandler {
-	message?: (client: IndiClient, message: Message) => void
-	delProperty?: (client: IndiClient, message: DelProperty) => void
-	vector?: (client: IndiClient, message: DefVector | SetVector, tag: `def${VectorType}Vector` | `set${VectorType}Vector`) => void
-	defTextVector?: (client: IndiClient, message: DefTextVector) => void
-	defNumberVector?: (client: IndiClient, message: DefNumberVector) => void
-	defSwitchVector?: (client: IndiClient, message: DefSwitchVector) => void
-	defLightVector?: (client: IndiClient, message: DefLightVector) => void
-	defBlobVector?: (client: IndiClient, message: DefBlobVector) => void
-	defVector?: (client: IndiClient, message: DefVector, tag: `def${VectorType}Vector`) => void
-	setTextVector?: (client: IndiClient, message: SetTextVector) => void
-	setNumberVector?: (client: IndiClient, message: SetNumberVector) => void
-	setSwitchVector?: (client: IndiClient, message: SetSwitchVector) => void
-	setLightVector?: (client: IndiClient, message: SetLightVector) => void
-	setBlobVector?: (client: IndiClient, message: SetBlobVector) => void
-	setVector?: (client: IndiClient, message: SetVector, tag: `set${VectorType}Vector`) => void
-	textVector?: (client: IndiClient, message: DefTextVector | SetTextVector, tag: 'defTextVector' | 'setTextVector') => void
-	numberVector?: (client: IndiClient, message: DefNumberVector | SetNumberVector, tag: 'defNumberVector' | 'setNumberVector') => void
-	switchVector?: (client: IndiClient, message: DefSwitchVector | SetSwitchVector, tag: 'defSwitchVector' | 'setSwitchVector') => void
-	lightVector?: (client: IndiClient, message: DefLightVector | SetLightVector, tag: 'defLightVector' | 'setLightVector') => void
-	blobVector?: (client: IndiClient, message: DefBlobVector | SetBlobVector, tag: 'defBLOBVector' | 'setBLOBVector') => void
-	close?: (client: IndiClient, server: boolean) => void
+	message?: (client: Client, message: Message) => void
+	delProperty?: (client: Client, message: DelProperty) => void
+	vector?: (client: Client, message: DefVector | SetVector, tag: `def${VectorType}Vector` | `set${VectorType}Vector`) => void
+	defTextVector?: (client: Client, message: DefTextVector) => void
+	defNumberVector?: (client: Client, message: DefNumberVector) => void
+	defSwitchVector?: (client: Client, message: DefSwitchVector) => void
+	defLightVector?: (client: Client, message: DefLightVector) => void
+	defBlobVector?: (client: Client, message: DefBlobVector) => void
+	defVector?: (client: Client, message: DefVector, tag: `def${VectorType}Vector`) => void
+	setTextVector?: (client: Client, message: SetTextVector) => void
+	setNumberVector?: (client: Client, message: SetNumberVector) => void
+	setSwitchVector?: (client: Client, message: SetSwitchVector) => void
+	setLightVector?: (client: Client, message: SetLightVector) => void
+	setBlobVector?: (client: Client, message: SetBlobVector) => void
+	setVector?: (client: Client, message: SetVector, tag: `set${VectorType}Vector`) => void
+	textVector?: (client: Client, message: DefTextVector | SetTextVector, tag: 'defTextVector' | 'setTextVector') => void
+	numberVector?: (client: Client, message: DefNumberVector | SetNumberVector, tag: 'defNumberVector' | 'setNumberVector') => void
+	switchVector?: (client: Client, message: DefSwitchVector | SetSwitchVector, tag: 'defSwitchVector' | 'setSwitchVector') => void
+	lightVector?: (client: Client, message: DefLightVector | SetLightVector, tag: 'defLightVector' | 'setLightVector') => void
+	blobVector?: (client: Client, message: DefBlobVector | SetBlobVector, tag: 'defBLOBVector' | 'setBLOBVector') => void
+	close?: (client: Client, server: boolean) => void
 }
 
 export interface IndiClientOptions {
@@ -38,6 +38,8 @@ export interface IndiClientOptions {
 export const DEFAULT_INDI_PORT = 7624
 
 export class IndiClient implements Client, Disposable {
+	readonly type = 'INDI'
+
 	private readonly parser = new SimpleXmlParser()
 	private socket?: Bun.Socket
 	private readonly metadata: [string?, string?, number?] = []

@@ -452,9 +452,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		expect(guideOutputRemoved).toBeTrue()
 	}, 10000)
 
-	const FILTER_SLOTS_1 = ['Red', 'Green', 'Blue', 'H_Alpha', 'SII', 'OIII', 'LPR', 'Luminance']
-	const FILTER_SLOTS_2 = ['Luminance', 'Red', 'Green', 'Blue', 'Ha', 'SII', 'OIII', 'Dark']
-
 	test('wheel', async () => {
 		let wheelAdded = false
 		let wheelRemoved = false
@@ -519,27 +516,16 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 
 		await Bun.sleep(1000)
 
-		let actual: string[] = FILTER_SLOTS_1
-		let expected: string[] = FILTER_SLOTS_2
-
-		if (device.slots[0] !== actual[0]) {
-			actual = FILTER_SLOTS_2
-			expected = FILTER_SLOTS_1
-		}
-
 		expect(device.connected).toBeTrue()
-		expect(device.slots).toHaveLength(8)
-		expect(device.slots).toEqual(actual)
+		expect(device.count).toHaveLength(8)
 		expect(device.position).toBe(0)
 		expect(deviceProperty).not.toBeEmpty()
 
 		wheel.moveTo(device, 7)
-		wheel.slots(device, expected)
 
 		await Bun.sleep(2000)
 
 		expect(device.position).toBe(7)
-		expect(device.slots).toEqual(expected)
 
 		client.close()
 

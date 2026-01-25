@@ -32,6 +32,8 @@ export type GuideDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
 
 export type MinMaxValueProperty = Pick<DefNumber, 'min' | 'max' | 'value' | 'step'>
 
+export type ClientType = 'INDI' | 'ALPACA'
+
 export enum DeviceInterfaceType {
 	TELESCOPE = 0x0001, // Telescope interface, must subclass INDI::Telescope.
 	CCD = 0x0002, // CCD interface, must subclass INDI::CCD.
@@ -52,11 +54,12 @@ export enum DeviceInterfaceType {
 	OUTPUT = 0x10000, // Digital Output (e.g. Relay) interface.
 	INPUT = 0x20000, // Digital/Analog Input (e.g. GPIO) interface.
 	POWER = 0x40000, // Auxiliary interface.
-	SENSOR_INTERFACE = SPECTROGRAPH | DETECTOR | CORRELATOR,
+	SENSOR = SPECTROGRAPH | DETECTOR | CORRELATOR,
 }
 
 export interface Client {
-    readonly id: string
+	readonly type: ClientType
+	readonly id: string
 	readonly getProperties: (command?: GetProperties) => void
 	readonly enableBlob: (command: EnableBlob) => void
 	readonly sendText: (vector: NewTextVector) => void
@@ -70,9 +73,8 @@ export interface DriverInfo {
 }
 
 export interface ClientInfo {
+	readonly type: ClientType
 	readonly id: string
-	readonly ip: string
-	readonly port: number
 }
 
 export const CLIENT = Symbol('CLIENT')
@@ -191,8 +193,8 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 
 export interface Wheel extends Device {
 	readonly type: 'WHEEL'
+	count: number
 	moving: boolean
-	slots: string[]
 	position: number
 }
 
@@ -264,9 +266,8 @@ export const DEFAULT_DRIVER_INFO: DriverInfo = {
 }
 
 export const DEFAULT_CLIENT_INFO: ClientInfo = {
+	type: 'INDI',
 	id: '',
-	ip: '',
-	port: 0,
 }
 
 export const DEFAULT_MIN_MAX_VALUE_PROPERTY: MinMaxValueProperty = {
@@ -380,8 +381,8 @@ export const DEFAULT_WHEEL: Wheel = {
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	client: structuredClone(DEFAULT_CLIENT_INFO),
+	count: 0,
 	moving: false,
-	slots: [],
 	position: 0,
 }
 

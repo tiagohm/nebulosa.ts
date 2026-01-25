@@ -633,8 +633,6 @@ export class AlpacaServer {
 
 		if (isFocuser(device)) {
 			if (action === 'togglereverse') return this.focuserToggleReverse(device)
-		} else if (isWheel(device)) {
-			if (action === 'setnames') return this.wheelSetNames(device, data.Parameters.split(','))
 		}
 
 		return makeAlpacaErrorResponse(AlpacaException.ActionNotImplemented, 'Unknown action')
@@ -995,11 +993,15 @@ export class AlpacaServer {
 	}
 
 	private wheelGetFocusOffsets(id: number) {
-		return makeAlpacaResponse(this.wheel(id).device.slots.map(() => 0))
+		const offsets = new Array<number>(this.wheel(id).device.count)
+		for (let i = 0; i < offsets.length; i++) offsets[i] = 0
+		return makeAlpacaResponse(offsets)
 	}
 
 	private wheelGetNames(id: number) {
-		return makeAlpacaResponse(this.wheel(id).device.slots)
+		const names = new Array<string>(this.wheel(id).device.count)
+		for (let i = 0; i < names.length; i++) names[i] = `Filter ${i + 1}`
+		return makeAlpacaResponse(names)
 	}
 
 	private wheelGetPosition(id: number) {
@@ -1013,11 +1015,6 @@ export class AlpacaServer {
 		state.tasks.position = task
 		this.options.wheel?.moveTo(device, state.position)
 		return await task.promise.then(makeResponseForTask)
-	}
-
-	private wheelSetNames(device: Wheel, names: readonly string[]) {
-		this.options.wheel?.slots(device, names)
-		return makeAlpacaResponse('OK')
 	}
 
 	// Telescope API

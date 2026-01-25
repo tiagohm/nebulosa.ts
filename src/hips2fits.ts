@@ -2,6 +2,8 @@ import { type Angle, toDeg } from './angle'
 import { DEG2RAD } from './constants'
 import type { BitpixOrZero } from './fits'
 
+// https://www.ivoa.net/documents/HiPS/20170406/PR-HIPS-1.0-20170406.pdf
+
 export const HIPS2FITS_BASE_URL = 'https://alasky.cds.unistra.fr/'
 
 export type CoordinateFrameType = 'icrs' | 'galactic'

@@ -1,5 +1,6 @@
 import { type NetworkInterfaceInfo, networkInterfaces } from 'os'
-import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, type AlpacaConfiguredDevice, type AlpacaDiscoveryServerOptions, type AlpacaResponse } from './alpaca.types'
+import { AlpacaManagementApi } from './alpaca.api'
+import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, type AlpacaConfiguredDevice, type AlpacaDiscoveryServerOptions } from './alpaca.types'
 
 export class AlpacaDiscoveryServer {
 	private socket?: Bun.udp.Socket<'buffer'>
@@ -80,6 +81,7 @@ export interface AlpacaDiscoveryOptions {
 	host?: string
 	timeout?: number // ms
 	fetch?: boolean
+	wait?: boolean
 }
 
 const DEFAULT_ALPACA_DISCOVERY_OPTIONS: Required<AlpacaDiscoveryOptions> = {
@@ -88,14 +90,18 @@ const DEFAULT_ALPACA_DISCOVERY_OPTIONS: Required<AlpacaDiscoveryOptions> = {
 	host: '0.0.0.0',
 	timeout: 15000,
 	fetch: true,
+	wait: false,
 }
 
 export class AlpacaDiscoveryClient implements Disposable {
 	private socket?: Bun.udp.Socket<'buffer'>
 	private timeout?: NodeJS.Timeout
+	private wait?: ReturnType<typeof Promise.withResolvers<boolean>>
 
 	async discovery(onDiscovery: (address: string, port: number, devices: readonly AlpacaConfiguredDevice[]) => void, options: AlpacaDiscoveryOptions = DEFAULT_ALPACA_DISCOVERY_OPTIONS) {
 		if (this.socket) return false
+
+		this.wait = options.wait ? Promise.withResolvers<boolean>() : undefined
 
 		this.socket = await Bun.udpSocket({
 			hostname: options.host || DEFAULT_ALPACA_DISCOVERY_OPTIONS.host,
@@ -105,15 +111,12 @@ export class AlpacaDiscoveryClient implements Disposable {
 
 					if (port) {
 						if (options.fetch ?? DEFAULT_ALPACA_DISCOVERY_OPTIONS.fetch) {
-							const url = `${address}:${port}`
+							const url = `http://${address}:${port}`
 
 							try {
-								const response = await fetch(`http://${url}/management/v1/configureddevices`)
-
-								if (response.ok) {
-									const json = (await response.json()) as AlpacaResponse<readonly AlpacaConfiguredDevice[]>
-									onDiscovery(address, port, json.Value)
-								}
+								const api = new AlpacaManagementApi(url)
+								const response = await api.configuredDevices()
+								response && onDiscovery(address, port, response)
 							} catch (e) {
 								console.error('failed to fetch configured devices at', url, e)
 							}
@@ -159,7 +162,7 @@ export class AlpacaDiscoveryClient implements Disposable {
 			console.error(e)
 		}
 
-		return true
+		return this.wait?.promise ?? true
 	}
 
 	close() {
@@ -168,6 +171,9 @@ export class AlpacaDiscoveryClient implements Disposable {
 
 		this.socket?.close()
 		this.socket = undefined
+
+		this.wait?.resolve(true)
+		this.wait = undefined
 	}
 
 	[Symbol.dispose]() {
