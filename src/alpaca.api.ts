@@ -5,10 +5,12 @@ import type { AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaResponse } from '.
 export class AlpacaApi {
 	readonly management: AlpacaManagementApi
 	readonly wheel: AlpacaFilterWheelApi
+	readonly focuser: AlpacaFocuserApi
 
 	constructor(readonly url: string) {
 		this.management = new AlpacaManagementApi(url)
 		this.wheel = new AlpacaFilterWheelApi(url)
+		this.focuser = new AlpacaFocuserApi(url)
 	}
 }
 
@@ -54,6 +56,40 @@ export class AlpacaFilterWheelApi extends AlpacaDeviceApi {
 
 	setPosition(id: number, Position: number) {
 		return request(this.url, `api/v1/filterwheel/${id}/position`, 'put', { Position })
+	}
+}
+
+export class AlpacaFocuserApi extends AlpacaDeviceApi {
+	constructor(url: string) {
+		super(url, 'focuser')
+	}
+
+	isAbsolute(id: number) {
+		return request<boolean>(this.url, `api/v1/focuser/${id}/absolute`, 'get')
+	}
+
+	isMoving(id: number) {
+		return request<boolean>(this.url, `api/v1/focuser/${id}/ismoving`, 'get')
+	}
+
+	getMaxStep(id: number) {
+		return request<number>(this.url, `api/v1/focuser/${id}/maxstep`, 'get')
+	}
+
+	getPosition(id: number) {
+		return request<number>(this.url, `api/v1/focuser/${id}/position`, 'get')
+	}
+
+	getTemperature(id: number) {
+		return request<number>(this.url, `api/v1/focuser/${id}/temperature`, 'get')
+	}
+
+	halt(id: number) {
+		return request<void>(this.url, `api/v1/focuser/${id}/halt`, 'put')
+	}
+
+	move(id: number, Position: number) {
+		return request<void>(this.url, `api/v1/focuser/${id}/move`, 'put', { Position })
 	}
 }
 
