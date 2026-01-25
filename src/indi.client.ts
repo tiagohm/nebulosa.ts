@@ -247,92 +247,52 @@ export class IndiClient implements Client, Disposable {
 				break
 			case 'defTextVector':
 				if (handler?.defVector || handler?.defTextVector || handler?.textVector || handler?.vector) {
-					const message = this.parseDefVector(node)
-					handler.defVector?.(this, message, node.name)
-					handler.defTextVector?.(this, message as never)
-					handler.textVector?.(this, message as never, node.name)
-					handler.vector?.(this, message, node.name)
+					handleDefTextVector(this, handler, this.parseDefVector(node) as never)
 				}
 				break
 			case 'defNumberVector':
 				if (handler?.defVector || handler?.defNumberVector || handler?.numberVector || handler?.vector) {
-					const message = this.parseDefVector(node)
-					handler.defVector?.(this, message, node.name)
-					handler.defNumberVector?.(this, message as never)
-					handler.numberVector?.(this, message as never, node.name)
-					handler.vector?.(this, message, node.name)
+					handleDefNumberVector(this, handler, this.parseDefVector(node) as never)
 				}
 				break
 			case 'defSwitchVector':
 				if (handler?.defVector || handler?.defSwitchVector || handler?.switchVector || handler?.vector) {
-					const message = this.parseDefVector(node)
-					handler.defVector?.(this, message, node.name)
-					handler.defSwitchVector?.(this, message as never)
-					handler.switchVector?.(this, message as never, node.name)
-					handler.vector?.(this, message, node.name)
+					handleDefSwitchVector(this, handler, this.parseDefVector(node) as never)
 				}
 				break
 			case 'defLightVector':
 				if (handler?.defVector || handler?.defLightVector || handler?.lightVector || handler?.vector) {
-					const message = this.parseDefVector(node)
-					handler.defVector?.(this, message, node.name)
-					handler.defLightVector?.(this, message as never)
-					handler.lightVector?.(this, message as never, node.name)
-					handler.vector?.(this, message, node.name)
+					handleDefLightVector(this, handler, this.parseDefVector(node) as never)
 				}
 				break
 			case 'defBLOBVector':
 				if (handler?.defVector || handler?.defBlobVector || handler?.blobVector || handler?.vector) {
-					const message = this.parseDefVector(node)
-					handler.defVector?.(this, message, node.name)
-					handler.defBlobVector?.(this, message as never)
-					handler.blobVector?.(this, message as never, node.name)
-					handler.vector?.(this, message, node.name)
+					handleDefBlobVector(this, handler, this.parseDefVector(node) as never)
 				}
 				break
 			case 'setTextVector':
 				if (handler?.setVector || handler?.setTextVector || handler?.textVector || handler?.vector) {
-					const message = this.parseSetVector(node)
-					handler.setVector?.(this, message, node.name)
-					handler.setTextVector?.(this, message as never)
-					handler.textVector?.(this, message as never, node.name)
-					handler.vector?.(this, message, node.name)
+					handleSetTextVector(this, handler, this.parseSetVector(node) as never)
 				}
 				break
 			case 'setNumberVector':
 				if (handler?.setVector || handler?.setNumberVector || handler?.numberVector || handler?.vector) {
-					const message = this.parseSetVector(node)
-					handler.setVector?.(this, message, node.name)
-					handler.setNumberVector?.(this, message as never)
-					handler.numberVector?.(this, message as never, node.name)
-					handler.vector?.(this, message, node.name)
+					handleSetNumberVector(this, handler, this.parseSetVector(node) as never)
 				}
 				break
 			case 'setSwitchVector':
 				if (handler?.setVector || handler?.setSwitchVector || handler?.switchVector || handler?.vector) {
-					const message = this.parseSetVector(node)
-					handler.setVector?.(this, message, node.name)
-					handler.setSwitchVector?.(this, message as never)
-					handler.switchVector?.(this, message as never, node.name)
-					handler.vector?.(this, message, node.name)
+					handleSetSwitchVector(this, handler, this.parseSetVector(node) as never)
 				}
 				break
 			case 'setLightVector':
 				if (handler?.setVector || handler?.setLightVector || handler?.lightVector || handler?.vector) {
-					const message = this.parseSetVector(node)
-					handler.setVector?.(this, message, node.name)
-					handler.setLightVector?.(this, message as never)
-					handler.lightVector?.(this, message as never, node.name)
-					handler.vector?.(this, message, node.name)
+					handleSetLightVector(this, handler, this.parseSetVector(node) as never)
 				}
 				break
 			case 'setBLOBVector':
 				if (handler?.setVector || handler?.setBlobVector || handler?.blobVector || handler?.vector) {
-					const message = this.parseSetVector(node)
-					handler.setVector?.(this, message, node.name)
-					handler.setBlobVector?.(this, message as never)
-					handler.blobVector?.(this, message as never, node.name)
-					handler.vector?.(this, message, node.name)
+					handleSetBlobVector(this, handler, this.parseSetVector(node) as never)
 				}
 				break
 			case 'newSwitchVector':
@@ -400,4 +360,74 @@ export class IndiClient implements Client, Disposable {
 			this.socket.flush()
 		}
 	}
+}
+
+export function handleDefVector(client: Client, handler: IndiClientHandler, message: DefVector, tag: `def${VectorType}Vector`) {
+	handler.defVector?.(client, message, tag)
+	handler.vector?.(client, message, tag)
+}
+
+export function handleDefTextVector(client: Client, handler: IndiClientHandler, message: DefTextVector) {
+	handler.defTextVector?.(client, message)
+	handler.textVector?.(client, message, 'defTextVector')
+	handleDefVector(client, handler, message, 'defTextVector')
+}
+
+export function handleDefNumberVector(client: Client, handler: IndiClientHandler, message: DefNumberVector) {
+	handler.defNumberVector?.(client, message)
+	handler.numberVector?.(client, message, 'defNumberVector')
+	handleDefVector(client, handler, message, 'defNumberVector')
+}
+
+export function handleDefSwitchVector(client: Client, handler: IndiClientHandler, message: DefSwitchVector) {
+	handler.defSwitchVector?.(client, message)
+	handler.switchVector?.(client, message, 'defSwitchVector')
+	handleDefVector(client, handler, message, 'defSwitchVector')
+}
+
+export function handleDefLightVector(client: Client, handler: IndiClientHandler, message: DefLightVector) {
+	handler.defLightVector?.(client, message)
+	handler.lightVector?.(client, message, 'defLightVector')
+	handleDefVector(client, handler, message, 'defLightVector')
+}
+
+export function handleDefBlobVector(client: Client, handler: IndiClientHandler, message: DefBlobVector) {
+	handler.defBlobVector?.(client, message)
+	handler.blobVector?.(client, message, 'defBLOBVector')
+	handleDefVector(client, handler, message, 'defBLOBVector')
+}
+
+export function handleSetVector(client: Client, handler: IndiClientHandler, message: SetVector, tag: `set${VectorType}Vector`) {
+	handler.setVector?.(client, message, tag)
+	handler.vector?.(client, message, tag)
+}
+
+export function handleSetTextVector(client: Client, handler: IndiClientHandler, message: SetTextVector) {
+	handler.setTextVector?.(client, message)
+	handler.textVector?.(client, message, 'setTextVector')
+	handleSetVector(client, handler, message, 'setTextVector')
+}
+
+export function handleSetNumberVector(client: Client, handler: IndiClientHandler, message: SetNumberVector) {
+	handler.setNumberVector?.(client, message)
+	handler.numberVector?.(client, message, 'setNumberVector')
+	handleSetVector(client, handler, message, 'setNumberVector')
+}
+
+export function handleSetSwitchVector(client: Client, handler: IndiClientHandler, message: SetSwitchVector) {
+	handler.setSwitchVector?.(client, message)
+	handler.switchVector?.(client, message, 'setSwitchVector')
+	handleSetVector(client, handler, message, 'setSwitchVector')
+}
+
+export function handleSetLightVector(client: Client, handler: IndiClientHandler, message: SetLightVector) {
+	handler.setLightVector?.(client, message)
+	handler.lightVector?.(client, message, 'setLightVector')
+	handleSetVector(client, handler, message, 'setLightVector')
+}
+
+export function handleSetBlobVector(client: Client, handler: IndiClientHandler, message: SetBlobVector) {
+	handler.setBlobVector?.(client, message)
+	handler.blobVector?.(client, message, 'setBLOBVector')
+	handleSetVector(client, handler, message, 'setBLOBVector')
 }

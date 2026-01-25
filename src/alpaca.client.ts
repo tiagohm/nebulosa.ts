@@ -1,13 +1,13 @@
 import { AlpacaApi, type AlpacaDeviceApi, type AlpacaFilterWheelApi } from './alpaca.api'
 import type { AlpacaConfiguredDevice, AlpacaDeviceType } from './alpaca.types'
-import type { IndiClientHandler } from './indi.client'
+import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleSetNumberVector, handleSetSwitchVector, type IndiClientHandler } from './indi.client'
 import type { Client } from './indi.device'
 import type { DefNumberVector, DefSwitchVector, DefTextVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyState } from './indi.types'
 
 export interface AlpacaClientHandler extends IndiClientHandler {}
 
 export interface AlpacaClientOptions {
-	handler?: AlpacaClientHandler
+	handler: AlpacaClientHandler
 	poolingInterval?: number
 }
 
@@ -26,7 +26,7 @@ export class AlpacaClient implements Client, Disposable {
 
 	constructor(
 		readonly url: string,
-		readonly options?: AlpacaClientOptions,
+		readonly options: AlpacaClientOptions,
 	) {
 		this.id = Bun.MD5.hash(url, 'hex')
 		this.description = `Alpaca Client at ${url}`
@@ -94,6 +94,11 @@ export class AlpacaClient implements Client, Disposable {
 		if (this.timer) {
 			clearInterval(this.timer)
 			this.timer = undefined
+
+			this.devices.forEach((e) => e.close())
+			this.devices.clear()
+
+			this.options?.handler?.close?.(this, false)
 		}
 	}
 
@@ -118,8 +123,6 @@ const DRIVER_INTERFACES: Readonly<Record<AlpacaDeviceType, string>> = {
 
 class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 	readonly id: number
-
-	private connecting = false
 
 	private readonly driverInfo: DefTextVector = {
 		device: '',
@@ -146,7 +149,7 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 		readonly client: AlpacaClient,
 		readonly device: AlpacaConfiguredDevice,
 		readonly api: A,
-		readonly handler?: AlpacaClientHandler,
+		readonly handler: AlpacaClientHandler,
 	) {
 		this.id = device.DeviceNumber
 
@@ -158,60 +161,6 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 
 	get isConnected() {
 		return this.connection.elements.CONNECT.value === true
-	}
-
-	protected handleDefSwitchVector(message: DefSwitchVector) {
-		if (this.handler) {
-			this.handler.defSwitchVector?.(this.client, message)
-			this.handler.switchVector?.(this.client, message, 'defSwitchVector')
-			this.handler.defVector?.(this.client, message, 'defSwitchVector')
-			this.handler.vector?.(this.client, message, 'defSwitchVector')
-		}
-	}
-
-	protected handleDefNumberVector(message: DefNumberVector) {
-		if (this.handler) {
-			this.handler.defNumberVector?.(this.client, message)
-			this.handler.numberVector?.(this.client, message, 'defNumberVector')
-			this.handler.defVector?.(this.client, message, 'defNumberVector')
-			this.handler.vector?.(this.client, message, 'defNumberVector')
-		}
-	}
-
-	protected handleDefTextVector(message: DefTextVector) {
-		if (this.handler) {
-			this.handler.defTextVector?.(this.client, message)
-			this.handler.textVector?.(this.client, message, 'defTextVector')
-			this.handler.defVector?.(this.client, message, 'defTextVector')
-			this.handler.vector?.(this.client, message, 'defTextVector')
-		}
-	}
-
-	protected handleSetSwitchVector(message: DefSwitchVector) {
-		if (this.handler) {
-			this.handler.setSwitchVector?.(this.client, message)
-			this.handler.switchVector?.(this.client, message, 'setSwitchVector')
-			this.handler.setVector?.(this.client, message, 'setSwitchVector')
-			this.handler.vector?.(this.client, message, 'setSwitchVector')
-		}
-	}
-
-	protected handleSetNumberVector(message: DefNumberVector) {
-		if (this.handler) {
-			this.handler.setNumberVector?.(this.client, message)
-			this.handler.numberVector?.(this.client, message, 'setNumberVector')
-			this.handler.setVector?.(this.client, message, 'setNumberVector')
-			this.handler.vector?.(this.client, message, 'setNumberVector')
-		}
-	}
-
-	protected handleSetTextVector(message: DefTextVector) {
-		if (this.handler) {
-			this.handler.setTextVector?.(this.client, message)
-			this.handler.textVector?.(this.client, message, 'setTextVector')
-			this.handler.setVector?.(this.client, message, 'setTextVector')
-			this.handler.vector?.(this.client, message, 'setTextVector')
-		}
 	}
 
 	protected updateSwitchVector(property: DefSwitchVector, name: string, value: boolean, state?: PropertyState) {
@@ -237,7 +186,7 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 			}
 		}
 
-		updated && this.handleSetSwitchVector(property)
+		updated && handleSetSwitchVector(this.client, this.handler, property)
 
 		return updated
 	}
@@ -257,31 +206,31 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 			updated = true
 		}
 
-		updated && this.handleSetNumberVector(property)
+		updated && handleSetNumberVector(this.client, this.handler, property)
 
 		return updated
 	}
 
 	sendProperties() {
-		this.handleDefTextVector(this.driverInfo)
-		this.handleDefSwitchVector(this.connection)
+		handleDefTextVector(this.client, this.handler, this.driverInfo)
+		handleDefSwitchVector(this.client, this.handler, this.connection)
 
-		this.handleSetSwitchVector(this.connection)
+		handleSetSwitchVector(this.client, this.handler, this.connection)
 	}
 
 	async update(tickCount: number) {
 		if (tickCount % 2 === 0) {
 			const isConnected = await this.api.isConnected(this.id)
-			const state = this.connecting ? (isConnected !== this.isConnected ? 'Idle' : 'Busy') : undefined
+
+			// Failed to fetch
+			if (isConnected === undefined) return
+
+			const state = this.connection.state === 'Busy' && isConnected !== this.isConnected ? 'Idle' : undefined
 
 			if (isConnected) {
 				this.updateSwitchVector(this.connection, 'CONNECT', true, state)
 			} else {
 				this.updateSwitchVector(this.connection, 'CONNECT', false, state)
-			}
-
-			if (this.connecting && state === 'Idle') {
-				this.connecting = false
 			}
 		}
 	}
@@ -294,14 +243,18 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 		switch (vector.name) {
 			case 'CONNECTION':
 				if (vector.elements.CONNECT === true && !this.isConnected) {
-					this.connecting = this.updateSwitchVector(this.connection, 'CONNECT', false, 'Busy')
+					this.connection.state = 'Busy'
+					handleSetSwitchVector(this.client, this.handler, this.connection)
 					void this.api.connect(this.id)
 				} else if (vector.elements.DISCONNECT === true && this.isConnected) {
-					this.connecting = this.updateSwitchVector(this.connection, 'CONNECT', true, 'Busy')
+					this.connection.state = 'Busy'
+					handleSetSwitchVector(this.client, this.handler, this.connection)
 					void this.api.disconnect(this.id)
 				}
 		}
 	}
+
+	close() {}
 }
 
 class AlpacaFilterWheel extends AlpacaDevice<AlpacaFilterWheelApi> {
@@ -326,7 +279,7 @@ class AlpacaFilterWheel extends AlpacaDevice<AlpacaFilterWheelApi> {
 	}
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.api.wheel, client.options?.handler)
+		super(client, device, client.api.wheel, client.options.handler)
 
 		this.position.device = device.DeviceName
 		this.names.device = device.DeviceName
@@ -340,14 +293,14 @@ class AlpacaFilterWheel extends AlpacaDevice<AlpacaFilterWheelApi> {
 				this.api.getNames(this.id).then((names) => {
 					if (names?.length) {
 						this.position.elements.FILTER_SLOT_VALUE.max = names.length
-						this.handleDefNumberVector(this.position)
 
 						for (let i = 0; i < names.length; i++) {
 							const name = `FILTER_SLOT_NAME_${i + 1}`
 							this.names.elements[name] = { name, label: `Filter ${i + 1}`, value: names[i] }
 						}
 
-						this.handleDefTextVector(this.names)
+						handleDefNumberVector(this.client, this.handler, this.position)
+						handleDefTextVector(this.client, this.handler, this.names)
 					}
 				})
 			}

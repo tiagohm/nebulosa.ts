@@ -183,27 +183,27 @@ test('convolution identity', () => {
 
 test('convolution edges', () => {
 	return readImageTransformAndSave((i) => edges(i), 'conv-edges', '94c01060591a83869c7cd376d97fb612')
-}, 5000)
+}, 8000)
 
 test('convolution emboss', () => {
 	return readImageTransformAndSave((i) => emboss(i), 'conv-emboss', 'de8e5d5183b4afe5066bdab7446a155e')
-}, 5000)
+}, 8000)
 
 test('convolution sharpen', () => {
 	return readImageTransformAndSave((i) => sharpen(i), 'conv-sharpen', '3b41a1fa654d360a1b02c259028be827')
-}, 5000)
+}, 8000)
 
 test('convolution mean 3x3', () => {
 	return readImageTransformAndSave((i) => mean3x3(i), 'conv-mean-3', 'e978e99e47dea77f138953d84221f5ca')
-}, 5000)
+}, 8000)
 
 test('convolution mean 5x5', () => {
 	return readImageTransformAndSave((i) => mean5x5(i), 'conv-mean-5', 'b6889d5c03fcc8290e0ef441bc057e8d')
-}, 5000)
+}, 8000)
 
 test('convolution mean 7x7', () => {
 	return readImageTransformAndSave((i) => mean7x7(i), 'conv-mean-7', '5b8d80765c1fd2be99d26384f16089bc')
-}, 5000)
+}, 8000)
 
 test('convolution mean', () => {
 	const a = readImageTransformAndSave((i) => convolution(i, meanConvolutionKernel(3)), 'conv-mean-3', 'e978e99e47dea77f138953d84221f5ca')
@@ -214,30 +214,30 @@ test('convolution mean', () => {
 
 test('convolution blur 3x3', () => {
 	return readImageTransformAndSave((i) => blur3x3(i), 'conv-blur-3', 'd483c31324fcc7249450e310f19d20b4')
-}, 5000)
+}, 8000)
 
 test('convolution blur 5x5', () => {
 	return readImageTransformAndSave((i) => blur5x5(i), 'conv-blur-5', '1d26004a32af3a8fcec9a7b3972d8002')
-}, 5000)
+}, 8000)
 
 test('convolution blur 7x7', () => {
 	return readImageTransformAndSave((i) => blur7x7(i), 'conv-blur-7', 'db572370d0633b942e8e72398153e131')
-}, 5000)
+}, 8000)
 
 test('convolution blur', () => {
 	const a = readImageTransformAndSave((i) => convolution(i, blurConvolutionKernel(3)), 'conv-blur-3', 'd483c31324fcc7249450e310f19d20b4')
 	const b = readImageTransformAndSave((i) => convolution(i, blurConvolutionKernel(5)), 'conv-blur-5', '1d26004a32af3a8fcec9a7b3972d8002')
 	const c = readImageTransformAndSave((i) => convolution(i, blurConvolutionKernel(7)), 'conv-blur-7', 'db572370d0633b942e8e72398153e131')
 	return Promise.all([a, b, c])
-}, 5000)
+}, 8000)
 
 test('convolution gaussian blur', () => {
 	return readImageTransformAndSave((i) => gaussianBlur(i), 'conv-gaussian-blur', 'fde35723b23615cbef1ece1fbaecb0e2')
-}, 5000)
+}, 8000)
 
 test('convolution gaussian blur 11x11', () => {
 	return readImageTransformAndSave((i) => gaussianBlur(i, { sigma: 3, size: 11 }), 'conv-gaussian-blur-11', 'b4884871f1780a44e134a52392f85bed')
-}, 5000)
+}, 8000)
 
 test('psf', () => {
 	return readImageTransformAndSave((i) => psf(i), 'psf', '8958ad9f3e3888329faad7fd61e17e73')

@@ -372,7 +372,7 @@ export class AlpacaServer {
 		'/api/v1/focuser/:id/move': { PUT: async (req) => this.focuserMove(+req.params.id, await params(req)) },
 		// Cover Calibrator
 		'/api/v1/covercalibrator/:id/brightness': { GET: (req) => this.coverCalibratorGetBrightness(+req.params.id) },
-		'/api/v1/covercalibrator/:id/calibratorchanging': { GET: (req) => this.coverCalibratorIsChanging() },
+		'/api/v1/covercalibrator/:id/calibratorchanging': { GET: () => this.coverCalibratorIsChanging() },
 		'/api/v1/covercalibrator/:id/calibratorstate': { GET: (req) => this.coverCalibratorGetCalibratorState(+req.params.id) },
 		'/api/v1/covercalibrator/:id/covermoving': { GET: (req) => this.coverCalibratorIsMoving(+req.params.id) },
 		'/api/v1/covercalibrator/:id/coverstate': { GET: (req) => this.coverCalibratorGetCoverState(+req.params.id) },
@@ -737,15 +737,15 @@ export class AlpacaServer {
 
 	private cameraGetDeviceState(id: number) {
 		const { state, device } = this.camera(id)
-		const res: AlpacaStateItem[] = []
-		res.push({ Name: 'CameraState', Value: device.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle })
-		res.push({ Name: 'CCDTemperature', Value: device.temperature })
-		res.push({ Name: 'CoolerPower', Value: device.coolerPower })
-		res.push({ Name: 'HeatSinkTemperature', Value: device.temperature })
-		res.push({ Name: 'ImageReady', Value: !!state.data })
-		res.push({ Name: 'IsPulseGuiding', Value: device.pulsing })
-		res.push({ Name: 'PercentCompleted', Value: state.lastExposureDuration === 0 ? 0 : (1 - device.exposure.value / state.lastExposureDuration) * 100 })
-		res.push({ Name: 'TimeStamp', Value: '' })
+		const res = new Array<AlpacaStateItem>(8)
+		res[0] = { Name: 'CameraState', Value: device.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle }
+		res[1] = { Name: 'CCDTemperature', Value: device.temperature }
+		res[2] = { Name: 'CoolerPower', Value: device.coolerPower }
+		res[3] = { Name: 'HeatSinkTemperature', Value: device.temperature }
+		res[4] = { Name: 'ImageReady', Value: !!state.data }
+		res[5] = { Name: 'IsPulseGuiding', Value: device.pulsing }
+		res[6] = { Name: 'PercentCompleted', Value: state.lastExposureDuration === 0 ? 0 : (1 - device.exposure.value / state.lastExposureDuration) * 100 }
+		res[7] = { Name: 'TimeStamp', Value: '' }
 		return makeAlpacaResponse(res)
 	}
 
@@ -986,9 +986,9 @@ export class AlpacaServer {
 
 	private wheelGetDeviceState(id: number) {
 		const { device } = this.wheel(id)
-		const res: AlpacaStateItem[] = []
-		res.push({ Name: 'Position', Value: device.position })
-		res.push({ Name: 'TimeStamp', Value: '' })
+		const res = new Array<AlpacaStateItem>(2)
+		res[0] = { Name: 'Position', Value: device.position }
+		res[1] = { Name: 'TimeStamp', Value: '' }
 		return makeAlpacaResponse(res)
 	}
 
@@ -1005,7 +1005,8 @@ export class AlpacaServer {
 	}
 
 	private wheelGetPosition(id: number) {
-		return makeAlpacaResponse(this.wheel(id).device.position)
+		const { device } = this.wheel(id)
+		return makeAlpacaResponse(device.moving ? -1 : device.position)
 	}
 
 	private async wheelSetPosition(id: number, data: { Position: string }) {
@@ -1130,20 +1131,20 @@ export class AlpacaServer {
 
 	private mountGetDeviceState(id: number) {
 		const { device } = this.telescope(id)
-		const res: AlpacaStateItem[] = []
-		res.push({ Name: 'Altitude', Value: 0 })
-		res.push({ Name: 'AtHome', Value: false })
-		res.push({ Name: 'AtPark', Value: device.parked })
-		res.push({ Name: 'Azimuth', Value: 0 })
-		res.push({ Name: 'Declination', Value: toDeg(device.equatorialCoordinate.declination) })
-		res.push({ Name: 'IsPulseGuiding', Value: device.pulsing })
-		res.push({ Name: 'RightAscension', Value: toHour(device.equatorialCoordinate.rightAscension) })
-		res.push({ Name: 'SideOfPier', Value: mapPierSideToAlpacaEnum(device.pierSide) })
-		res.push({ Name: 'SiderealTime', Value: 0 })
-		res.push({ Name: 'Slewing', Value: device.slewing })
-		res.push({ Name: 'Tracking', Value: device.tracking })
-		res.push({ Name: 'UTCDate', Value: new Date(device.time.utc).toISOString() })
-		res.push({ Name: 'TimeStamp', Value: '' })
+		const res = new Array<AlpacaStateItem>(13)
+		res[0] = { Name: 'Altitude', Value: 0 }
+		res[1] = { Name: 'AtHome', Value: false }
+		res[2] = { Name: 'AtPark', Value: device.parked }
+		res[3] = { Name: 'Azimuth', Value: 0 }
+		res[4] = { Name: 'Declination', Value: toDeg(device.equatorialCoordinate.declination) }
+		res[5] = { Name: 'IsPulseGuiding', Value: device.pulsing }
+		res[6] = { Name: 'RightAscension', Value: toHour(device.equatorialCoordinate.rightAscension) }
+		res[7] = { Name: 'SideOfPier', Value: mapPierSideToAlpacaEnum(device.pierSide) }
+		res[8] = { Name: 'SiderealTime', Value: 0 }
+		res[9] = { Name: 'Slewing', Value: device.slewing }
+		res[10] = { Name: 'Tracking', Value: device.tracking }
+		res[11] = { Name: 'UTCDate', Value: new Date(device.time.utc).toISOString() }
+		res[12] = { Name: 'TimeStamp', Value: '' }
 		return makeAlpacaResponse(res)
 	}
 
@@ -1423,11 +1424,11 @@ export class AlpacaServer {
 
 	private focuserGetDeviceState(id: number) {
 		const { device } = this.focuser(id)
-		const res: AlpacaStateItem[] = []
-		res.push({ Name: 'IsMoving', Value: device.moving })
-		res.push({ Name: 'Position', Value: device.position.value })
-		res.push({ Name: 'Temperature', Value: device.temperature })
-		res.push({ Name: 'TimeStamp', Value: '' })
+		const res = new Array<AlpacaStateItem>(4)
+		res[0] = { Name: 'IsMoving', Value: device.moving }
+		res[1] = { Name: 'Position', Value: device.position.value }
+		res[2] = { Name: 'Temperature', Value: device.temperature }
+		res[3] = { Name: 'TimeStamp', Value: '' }
 		return makeAlpacaResponse(res)
 	}
 
@@ -1519,13 +1520,13 @@ export class AlpacaServer {
 	private coverCalibratorGetDeviceState(id: number) {
 		const cover = this.cover(id)?.device
 		const flatPanel = this.flatPanel(id)?.device
-		const res: AlpacaStateItem[] = []
-		res.push({ Name: 'Brightness', Value: flatPanel?.intensity.value ?? 0 })
-		res.push({ Name: 'CalibratorChanging', Value: false })
-		res.push({ Name: 'CalibratorState', Value: mapToFlatPanelState(flatPanel) })
-		res.push({ Name: 'CoverMoving', Value: cover?.parking ?? false })
-		res.push({ Name: 'CoverState', Value: mapToCoverState(cover) })
-		res.push({ Name: 'TimeStamp', Value: '' })
+		const res = new Array<AlpacaStateItem>(6)
+		res[0] = { Name: 'Brightness', Value: flatPanel?.intensity.value ?? 0 }
+		res[1] = { Name: 'CalibratorChanging', Value: false }
+		res[2] = { Name: 'CalibratorState', Value: mapToFlatPanelState(flatPanel) }
+		res[3] = { Name: 'CoverMoving', Value: cover?.parking ?? false }
+		res[4] = { Name: 'CoverState', Value: mapToCoverState(cover) }
+		res[5] = { Name: 'TimeStamp', Value: '' }
 		return makeAlpacaResponse(res)
 	}
 
