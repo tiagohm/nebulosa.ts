@@ -40,6 +40,8 @@ export const DEFAULT_INDI_PORT = 7624
 export class IndiClient implements Client, Disposable {
 	readonly type = 'INDI'
 
+	description: string = 'INDI Client'
+
 	private readonly parser = new SimpleXmlParser()
 	private socket?: Bun.Socket
 	private readonly metadata: [string?, string?, number?] = []
@@ -108,9 +110,12 @@ export class IndiClient implements Client, Disposable {
 			},
 		})
 
-		this.metadata[0] = Bun.MD5.hash(`${this.socket.remoteAddress}:${this.socket.remotePort}:INDI`, 'hex')
+		const { remoteAddress, remotePort } = this.socket
+		this.metadata[0] = Bun.MD5.hash(`${remoteAddress}:${remotePort}:INDI`, 'hex')
 		this.metadata[1] = hostname
-		this.metadata[2] = this.socket.remotePort
+		this.metadata[2] = remotePort
+
+		this.description = `INDI Client at ${remoteAddress}:${remotePort}`
 
 		return true
 	}

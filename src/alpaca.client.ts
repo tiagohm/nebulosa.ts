@@ -14,6 +14,7 @@ export interface AlpacaClientOptions {
 export class AlpacaClient implements Client, Disposable {
 	readonly type = 'ALPACA'
 	readonly id: string
+	readonly description: string
 	readonly api: AlpacaApi
 
 	private readonly devices = new Map<string, AlpacaDevice>()
@@ -25,6 +26,7 @@ export class AlpacaClient implements Client, Disposable {
 		readonly options?: AlpacaClientOptions,
 	) {
 		this.id = Bun.MD5.hash(url, 'hex')
+		this.description = `Alpaca Client at ${url}`
 		this.api = new AlpacaApi(url)
 	}
 

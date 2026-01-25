@@ -73,28 +73,29 @@ function makeFormDataFromParams(params: Record<string, string | number | boolean
 }
 
 async function request<T>(url: string, path: string, method: 'get' | 'put', body?: Record<string, string | number | boolean>, headers?: HeadersInit) {
-	const response = await fetch(`${url}/${path}`, { method, headers, body: body && method === 'put' ? makeFormDataFromParams(body) : undefined })
+	try {
+		const response = await fetch(`${url}/${path}`, { method, headers, body: body && method === 'put' ? makeFormDataFromParams(body) : undefined })
 
-	const text = await response.text()
+		const text = await response.text()
 
-	if (response.ok) {
-		if (text) {
-			const json = JSON.parse(text) as AlpacaResponse<T>
+		if (response.ok) {
+			if (text) {
+				const json = JSON.parse(text) as AlpacaResponse<T>
 
-			if (json.ErrorNumber === 0) {
-				return json.Value
+				if (json.ErrorNumber === 0) {
+					return json.Value
+				}
+
+				console.error(path, json.ErrorNumber, json.ErrorMessage)
+			} else {
+				console.error(path, text)
 			}
-
-			console.error(path, json.ErrorNumber, json.ErrorMessage)
 		} else {
-			console.error(path, text)
+			console.error('request failed', path, text)
 		}
-
-		// throw new AlpacaError(json.ErrorNumber, json.ErrorMessage)
-	} else {
-		console.error('request failed', path, text)
+	} catch (e) {
+		console.error('failed to fetch', e)
 	}
 
-	// throw new AlpacaError(response.status, await response.text())
 	return undefined
 }

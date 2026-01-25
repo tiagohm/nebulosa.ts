@@ -57,9 +57,13 @@ export enum DeviceInterfaceType {
 	SENSOR = SPECTROGRAPH | DETECTOR | CORRELATOR,
 }
 
-export interface Client {
+export interface ClientInfo {
 	readonly type: ClientType
 	readonly id: string
+}
+
+export interface Client extends ClientInfo {
+	readonly description: string
 	readonly getProperties: (command?: GetProperties) => void
 	readonly enableBlob: (command: EnableBlob) => void
 	readonly sendText: (vector: NewTextVector) => void
@@ -70,11 +74,6 @@ export interface Client {
 export interface DriverInfo {
 	readonly executable: string
 	readonly version: string
-}
-
-export interface ClientInfo {
-	readonly type: ClientType
-	readonly id: string
 }
 
 export const CLIENT = Symbol('CLIENT')
