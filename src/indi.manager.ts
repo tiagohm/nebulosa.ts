@@ -1165,6 +1165,12 @@ export class WheelManager extends DeviceManager<Wheel> {
 		client.sendNumber({ device: wheel.name, name: 'FILTER_SLOT', elements: { FILTER_SLOT_VALUE: slot + 1 } })
 	}
 
+	slots(wheel: Wheel, names: readonly string[], client = wheel[CLIENT]!) {
+		const elements: Record<string, string> = {}
+		names.forEach((name, index) => (elements[`FILTER_SLOT_NAME_${index + 1}`] = name))
+		client.sendText({ device: wheel.name, name: 'FILTER_NAME', elements })
+	}
+
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1193,6 +1199,29 @@ export class WheelManager extends DeviceManager<Wheel> {
 	textVector(client: Client, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.FILTER)
+		}
+
+		const device = this.get(client, message.device)
+
+		if (!device) return
+
+		switch (message.name) {
+			case 'FILTER_NAME': {
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canSetNames', (message as DefTextVector).permission !== 'ro')) {
+						this.updated(device, 'canSetNames', message.state)
+					}
+				}
+
+				const names = Object.values(message.elements)
+
+				if (names.length !== device.names.length || names.some((e, index) => e.value !== device.names[index])) {
+					device.names = names.map((e) => e.value)
+					this.updated(device, 'names', message.state)
+				}
+
+				return
+			}
 		}
 	}
 }

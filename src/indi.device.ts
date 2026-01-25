@@ -194,6 +194,8 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 export interface Wheel extends Device {
 	readonly type: 'WHEEL'
 	count: number
+	names: string[]
+	canSetNames: boolean
 	moving: boolean
 	position: number
 }
@@ -382,6 +384,8 @@ export const DEFAULT_WHEEL: Wheel = {
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 	count: 0,
+	names: [],
+	canSetNames: true,
 	moving: false,
 	position: 0,
 }

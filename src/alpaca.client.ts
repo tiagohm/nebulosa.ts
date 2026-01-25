@@ -111,6 +111,8 @@ const DRIVER_INTERFACES: Readonly<Record<AlpacaDeviceType, string>> = {
 class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 	readonly id: number
 
+	private connecting = false
+
 	private readonly driverInfo: DefTextVector = {
 		device: '',
 		name: 'DRIVER_INFO',
@@ -260,13 +262,18 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 	}
 
 	async update(tickCount: number) {
-		if (tickCount % 10 === 0) {
+		if (tickCount % 2 === 0) {
 			const isConnected = await this.api.isConnected(this.id)
+			const state = this.connecting ? (isConnected !== this.isConnected ? 'Idle' : 'Busy') : undefined
 
 			if (isConnected) {
-				this.updateSwitchVector(this.connection, 'CONNECT', true)
+				this.updateSwitchVector(this.connection, 'CONNECT', true, state)
 			} else {
-				this.updateSwitchVector(this.connection, 'DISCONNECT', true)
+				this.updateSwitchVector(this.connection, 'CONNECT', false, state)
+			}
+
+			if (this.connecting && state === 'Idle') {
+				this.connecting = false
 			}
 		}
 	}
@@ -278,8 +285,13 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 	sendSwitch(vector: NewSwitchVector) {
 		switch (vector.name) {
 			case 'CONNECTION':
-				if (vector.elements.CONNECT === true) void this.api.connect(this.id)
-				else if (vector.elements.DISCONNECT === true) void this.api.disconnect(this.id)
+				if (vector.elements.CONNECT === true && !this.isConnected) {
+					this.connecting = this.updateSwitchVector(this.connection, 'CONNECT', false, 'Busy')
+					void this.api.connect(this.id)
+				} else if (vector.elements.DISCONNECT === true && this.isConnected) {
+					this.connecting = this.updateSwitchVector(this.connection, 'CONNECT', true, 'Busy')
+					void this.api.disconnect(this.id)
+				}
 		}
 	}
 }
@@ -295,10 +307,21 @@ class AlpacaFilterWheel extends AlpacaDevice<AlpacaFilterWheelApi> {
 		elements: { FILTER_SLOT_VALUE: { name: 'FILTER_SLOT_VALUE', label: 'Slot', value: 1, min: 0, max: 0, step: 1, format: '%0f' } },
 	}
 
+	private readonly names: DefTextVector = {
+		device: '',
+		name: 'FILTER_NAME',
+		label: 'Names',
+		group: 'Main Control',
+		state: 'Idle',
+		permission: 'ro',
+		elements: {},
+	}
+
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.api.wheel, client.options?.handler)
 
 		this.position.device = device.DeviceName
+		this.names.device = device.DeviceName
 	}
 
 	async update(tickCount: number) {
@@ -310,6 +333,13 @@ class AlpacaFilterWheel extends AlpacaDevice<AlpacaFilterWheelApi> {
 					if (names?.length) {
 						this.position.elements.FILTER_SLOT_VALUE.max = names.length
 						this.handleDefNumberVector(this.position)
+
+						for (let i = 0; i < names.length; i++) {
+							const name = `FILTER_SLOT_NAME_${i + 1}`
+							this.names.elements[name] = { name, label: `Filter ${i + 1}`, value: names[i] }
+						}
+
+						this.handleDefTextVector(this.names)
 					}
 				})
 			}
