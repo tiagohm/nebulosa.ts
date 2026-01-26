@@ -1,7 +1,7 @@
 import { AlpacaClient, type AlpacaClientHandler } from '../src/alpaca.client'
 import { AlpacaDiscoveryClient } from '../src/alpaca.discovery'
 import type { Client, Device, Thermometer } from '../src/indi.device'
-import { type DeviceProvider, FocuserManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import { CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import type { PropertyState } from '../src/indi.types'
 
 const alpacaDiscoveryClient = new AlpacaDiscoveryClient()
@@ -21,6 +21,8 @@ const deviceHandler = {
 
 const wheelManager = new WheelManager()
 const focuserManager = new FocuserManager()
+const flatPanelManager = new FlatPanelManager()
+const coverManager = new CoverManager()
 
 const thermometerProvider: DeviceProvider<Thermometer> = {
 	get: (client: Client, name: string) => {
@@ -32,21 +34,28 @@ const thermometerManager = new ThermometerManager(thermometerProvider)
 
 wheelManager.addHandler(deviceHandler)
 focuserManager.addHandler(deviceHandler)
+flatPanelManager.addHandler(deviceHandler)
+coverManager.addHandler(deviceHandler)
 thermometerManager.addHandler(deviceHandler)
 
 const handler: AlpacaClientHandler = {
 	textVector: (client, message, tag) => {
 		wheelManager.textVector(client, message, tag)
 		focuserManager.textVector(client, message, tag)
+		flatPanelManager.textVector(client, message, tag)
+		coverManager.textVector(client, message, tag)
 	},
 	numberVector: (client, message, tag) => {
 		wheelManager.numberVector(client, message, tag)
 		focuserManager.numberVector(client, message, tag)
+		flatPanelManager.numberVector(client, message, tag)
 		thermometerManager.numberVector(client, message, tag)
 	},
 	switchVector: (client, message, tag) => {
 		wheelManager.switchVector(client, message, tag)
 		focuserManager.switchVector(client, message, tag)
+		flatPanelManager.switchVector(client, message, tag)
+		coverManager.switchVector(client, message, tag)
 		thermometerManager.switchVector(client, message, tag)
 	},
 }

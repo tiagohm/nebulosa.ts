@@ -97,6 +97,56 @@ export class AlpacaFocuserApi extends AlpacaDeviceApi {
 	}
 }
 
+export class AlpacaCoverCalibratorApi extends AlpacaDeviceApi {
+	constructor(url: string) {
+		super(url, 'covercalibrator')
+	}
+
+	getBrightness(id: number) {
+		return request<number>(this.url, `api/v1/covercalibrator/${id}/brightness`, 'get')
+	}
+
+	getCalibratorState(id: number) {
+		return request<number>(this.url, `api/v1/covercalibrator/${id}/calibratorstate`, 'get')
+	}
+
+	getCoverState(id: number) {
+		return request<number>(this.url, `api/v1/covercalibrator/${id}/coverstate`, 'get')
+	}
+
+	isChanging(id: number) {
+		return request<boolean>(this.url, `api/v1/covercalibrator/${id}/calibratorchanging`, 'get')
+	}
+
+	isMoving(id: number) {
+		return request<boolean>(this.url, `api/v1/covercalibrator/${id}/covermoving`, 'get')
+	}
+
+	getMaxBrightness(id: number) {
+		return request<number>(this.url, `api/v1/covercalibrator/${id}/maxbrightness`, 'get')
+	}
+
+	off(id: number) {
+		return request<void>(this.url, `api/v1/covercalibrator/${id}/calibratoroff`, 'put')
+	}
+
+	on(id: number, Brightness: number) {
+		return request<void>(this.url, `api/v1/covercalibrator/${id}/calibratoron`, 'put', { Brightness })
+	}
+
+	close(id: number) {
+		return request<void>(this.url, `api/v1/covercalibrator/${id}/closecover`, 'put')
+	}
+
+	halt(id: number) {
+		return request<void>(this.url, `api/v1/covercalibrator/${id}/haltcover`, 'put')
+	}
+
+	open(id: number) {
+		return request<void>(this.url, `api/v1/covercalibrator/${id}/opencover`, 'put')
+	}
+}
+
 const CLIENT_ID = (Date.now() & 0x7fffffff).toFixed(0)
 
 function makeFormDataFromParams(params: Record<string, string | number | boolean>) {

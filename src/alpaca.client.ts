@@ -1,8 +1,8 @@
-import { AlpacaApi, type AlpacaDeviceApi, type AlpacaFilterWheelApi, type AlpacaFocuserApi } from './alpaca.api'
+import { AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi } from './alpaca.api'
 import type { AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem } from './alpaca.types'
-import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleSetNumberVector, handleSetSwitchVector, type IndiClientHandler } from './indi.client'
+import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetNumberVector, handleSetSwitchVector, type IndiClientHandler } from './indi.client'
 import type { Client } from './indi.device'
-import type { DefNumberVector, DefSwitchVector, DefTextVector, DefVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyState } from './indi.types'
+import type { DefNumberVector, DefSwitchVector, DefTextVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyState } from './indi.types'
 
 export interface AlpacaClientHandler extends IndiClientHandler {}
 
@@ -15,12 +15,12 @@ export class AlpacaClient implements Client, Disposable {
 	readonly type = 'ALPACA'
 	readonly id: string
 	readonly description: string
-	readonly api: AlpacaApi
 
 	readonly remoteHost: string
 	readonly remotePort: number
 
 	private readonly devices = new Map<string, AlpacaDevice>()
+	private readonly management: AlpacaManagementApi
 	private timer?: NodeJS.Timeout
 	private tickCount = 0
 
@@ -30,7 +30,7 @@ export class AlpacaClient implements Client, Disposable {
 	) {
 		this.id = Bun.MD5.hash(url, 'hex')
 		this.description = `Alpaca Client at ${url}`
-		this.api = new AlpacaApi(url)
+		this.management = new AlpacaManagementApi(url)
 		const { protocol, hostname, port } = URL.parse(url)!
 		this.remoteHost = hostname
 		this.remotePort = +port || (protocol === 'http:' ? 80 : 443)
@@ -60,7 +60,7 @@ export class AlpacaClient implements Client, Disposable {
 
 	async start() {
 		if (this.timer) return false
-		const configuredDevices = await this.api.management.configuredDevices()
+		const configuredDevices = await this.management.configuredDevices()
 		if (!configuredDevices?.length) return false
 		this.initialize(configuredDevices)
 		return true
@@ -75,6 +75,8 @@ export class AlpacaClient implements Client, Disposable {
 					device = new AlpacaFilterWheel(this, configuredDevice)
 				} else if (configuredDevice.DeviceType === 'Focuser') {
 					device = new AlpacaFocuser(this, configuredDevice)
+				} else if (configuredDevice.DeviceType === 'CoverCalibrator') {
+					device = new AlpacaCoverCalibrator(this, configuredDevice)
 				}
 
 				if (device) {
@@ -132,12 +134,14 @@ const DEFAULT_DEF_VECTOR = {
 	permission: 'rw',
 } as const
 
-class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
+abstract class AlpacaDevice {
 	readonly id: number
 
 	protected hasDeviceState = false
 
-	private readonly driverInfo: DefTextVector = {
+	protected abstract api: AlpacaDeviceApi
+
+	protected readonly driverInfo: DefTextVector = {
 		...DEFAULT_DEF_VECTOR,
 		name: 'DRIVER_INFO',
 		label: 'Driver Info',
@@ -157,7 +161,6 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 	constructor(
 		readonly client: AlpacaClient,
 		readonly device: AlpacaConfiguredDevice,
-		readonly api: A,
 		readonly handler: AlpacaClientHandler,
 	) {
 		this.id = device.DeviceNumber
@@ -172,7 +175,7 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 		return this.connection.elements.CONNECT.value === true
 	}
 
-	protected updateSwitchVector(property: DefSwitchVector, name: string, value: boolean, state?: PropertyState) {
+	protected updateSwitchVector(property: DefSwitchVector, name: string, value?: boolean, state?: PropertyState) {
 		const { rule, elements } = property
 
 		let updated = false
@@ -182,7 +185,7 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 			updated = true
 		}
 
-		if (rule !== 'AtMostOne' && elements[name].value !== value) {
+		if (value !== undefined && rule !== 'AtMostOne' && elements[name].value !== value) {
 			elements[name].value = value
 			updated = true
 
@@ -227,8 +230,9 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 		handleDefSwitchVector(this.client, this.handler, this.connection)
 	}
 
-	protected onConnect() {
-		this.api.deviceState(this.id).then((state) => (this.hasDeviceState = state !== undefined))
+	protected async onConnect() {
+		const state = await this.api.deviceState(this.id)
+		this.hasDeviceState = state !== undefined
 	}
 
 	protected onDisconnect() {
@@ -245,7 +249,7 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 			if (isConnected !== this.isConnected) {
 				if (isConnected) {
 					this.updateSwitchVector(this.connection, 'CONNECT', true, 'Idle')
-					this.onConnect()
+					await this.onConnect()
 				} else {
 					this.updateSwitchVector(this.connection, 'CONNECT', false, 'Idle')
 					this.onDisconnect()
@@ -276,12 +280,12 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 	close() {}
 }
 
-class AlpacaFilterWheel extends AlpacaDevice<AlpacaFilterWheelApi> {
+class AlpacaFilterWheel extends AlpacaDevice {
 	private readonly position: DefNumberVector = {
 		...DEFAULT_DEF_VECTOR,
 		name: 'FILTER_SLOT',
 		label: 'Position',
-		elements: { FILTER_SLOT_VALUE: { name: 'FILTER_SLOT_VALUE', label: 'Slot', value: 1, min: 0, max: 0, step: 1, format: '%0f' } },
+		elements: { FILTER_SLOT_VALUE: { name: 'FILTER_SLOT_VALUE', label: 'Slot', value: 1, min: 0, max: 0, step: 1, format: '%.0f' } },
 	}
 
 	private readonly names: DefTextVector = {
@@ -292,29 +296,33 @@ class AlpacaFilterWheel extends AlpacaDevice<AlpacaFilterWheelApi> {
 		elements: {},
 	}
 
+	protected readonly api: AlpacaFilterWheelApi
+
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.api.wheel, client.options.handler)
+		super(client, device, client.options.handler)
+
+		this.api = new AlpacaFilterWheelApi(client.url)
 
 		this.position.device = device.DeviceName
 		this.names.device = device.DeviceName
 	}
 
-	protected onConnect() {
-		super.onConnect()
+	protected async onConnect() {
+		await super.onConnect()
 
-		this.api.getNames(this.id).then((names) => {
-			if (names?.length) {
-				this.position.elements.FILTER_SLOT_VALUE.max = names.length
+		const names = await this.api.getNames(this.id)
 
-				for (let i = 0; i < names.length; i++) {
-					const name = `FILTER_SLOT_NAME_${i + 1}`
-					this.names.elements[name] = { name, label: `Filter ${i + 1}`, value: names[i] }
-				}
+		if (names?.length) {
+			this.position.elements.FILTER_SLOT_VALUE.max = names.length
 
-				handleDefNumberVector(this.client, this.handler, this.position)
-				handleDefTextVector(this.client, this.handler, this.names)
+			for (let i = 0; i < names.length; i++) {
+				const name = `FILTER_SLOT_NAME_${i + 1}`
+				this.names.elements[name] = { name, label: `Filter ${i + 1}`, value: names[i] }
 			}
-		})
+
+			handleDefNumberVector(this.client, this.handler, this.position)
+			handleDefTextVector(this.client, this.handler, this.names)
+		}
 	}
 
 	protected onDisconnect() {
@@ -357,21 +365,19 @@ class AlpacaFilterWheel extends AlpacaDevice<AlpacaFilterWheelApi> {
 	}
 }
 
-class AlpacaFocuser extends AlpacaDevice<AlpacaFocuserApi> {
-	private hasTemperature = false
-
+class AlpacaFocuser extends AlpacaDevice {
 	private readonly absolutePosition: DefNumberVector = {
 		...DEFAULT_DEF_VECTOR,
 		name: 'ABS_FOCUS_POSITION',
 		label: 'Absolute Position',
-		elements: { FOCUS_ABSOLUTE_POSITION: { name: 'FOCUS_ABSOLUTE_POSITION', label: 'Position', value: 0, min: 0, max: 0, step: 1, format: '%0f' } },
+		elements: { FOCUS_ABSOLUTE_POSITION: { name: 'FOCUS_ABSOLUTE_POSITION', label: 'Position', value: 0, min: 0, max: 0, step: 1, format: '%.0f' } },
 	}
 
 	private readonly relativePosition: DefNumberVector = {
 		...DEFAULT_DEF_VECTOR,
 		name: 'REL_FOCUS_POSITION',
 		label: 'Relative Position',
-		elements: { FOCUS_RELATIVE_POSITION: { name: 'FOCUS_RELATIVE_POSITION', label: 'Steps', value: 0, min: 0, max: 0, step: 1, format: '%0f' } },
+		elements: { FOCUS_RELATIVE_POSITION: { name: 'FOCUS_RELATIVE_POSITION', label: 'Steps', value: 0, min: 0, max: 0, step: 1, format: '%.0f' } },
 	}
 
 	private readonly temperature: DefNumberVector = {
@@ -392,9 +398,14 @@ class AlpacaFocuser extends AlpacaDevice<AlpacaFocuserApi> {
 
 	private position = this.absolutePosition
 	private direction = 0
+	private hasTemperature = false
+
+	protected readonly api: AlpacaFocuserApi
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.api.focuser, client.options.handler)
+		super(client, device, client.options.handler)
+
+		this.api = new AlpacaFocuserApi(client.url)
 
 		this.absolutePosition.device = device.DeviceName
 		this.relativePosition.device = device.DeviceName
@@ -412,34 +423,36 @@ class AlpacaFocuser extends AlpacaDevice<AlpacaFocuserApi> {
 		handleDefSwitchVector(this.client, this.handler, this.abort)
 	}
 
-	protected onConnect() {
-		super.onConnect()
+	protected async onConnect() {
+		await super.onConnect()
 
-		this.api.isAbsolute(this.id).then((absolute) => {
-			if (absolute !== undefined) {
-				this.api.getMaxStep(this.id).then((maxStep) => {
-					if (maxStep) {
-						if (absolute) {
-							this.absolutePosition.elements.FOCUS_ABSOLUTE_POSITION.max = maxStep
-							this.position = this.absolutePosition
-						} else {
-							this.relativePosition.elements.FOCUS_RELATIVE_POSITION.max = maxStep
-							this.position = this.relativePosition
-						}
+		const temperature = await this.api.getTemperature(this.id)
 
-						handleDefNumberVector(this.client, this.handler, this.position)
-					}
-				})
+		if (temperature !== undefined) {
+			this.temperature.elements.TEMPERATURE.value = Math.trunc(temperature)
+			handleDefNumberVector(this.client, this.handler, this.temperature)
+			this.hasTemperature = true
+		}
+
+		const absolute = await this.api.isAbsolute(this.id)
+
+		if (absolute !== undefined) {
+			const maxStep = await this.api.getMaxStep(this.id)
+
+			if (maxStep) {
+				if (absolute) {
+					this.absolutePosition.elements.FOCUS_ABSOLUTE_POSITION.max = maxStep
+					this.position = this.absolutePosition
+				} else {
+					this.relativePosition.elements.FOCUS_RELATIVE_POSITION.max = maxStep
+					this.position = this.relativePosition
+				}
+
+				handleDefNumberVector(this.client, this.handler, this.position)
 			}
-		})
-
-		this.api.getTemperature(this.id).then((temperature) => {
-			if (temperature !== undefined) {
-				this.temperature.elements.TEMPERATURE.value = Math.trunc(temperature)
-				handleDefNumberVector(this.client, this.handler, this.temperature)
-				this.hasTemperature = true
-			}
-		})
+		} else {
+			// TODO: Failed?
+		}
 	}
 
 	onDisconnect() {
@@ -471,24 +484,23 @@ class AlpacaFocuser extends AlpacaDevice<AlpacaFocuserApi> {
 				}
 			}
 
-			if (this.isAbsolute) {
-				this.api.getPosition(this.id).then((position) => {
-					if (position !== undefined) {
-						this.api.isMoving(this.id).then((moving) => {
-							this.updateNumberVector(this.position, 'FOCUS_ABSOLUTE_POSITION', position, moving ? 'Busy' : 'Idle')
-						})
-					}
-				})
-			} else {
-				this.api.isMoving(this.id).then((moving) => {
-					this.updateNumberVector(this.position, 'FOCUS_RELATIVE_POSITION', undefined, moving ? 'Busy' : 'Idle')
+			if (this.hasTemperature) {
+				void this.api.getTemperature(this.id).then((temperature) => {
+					temperature !== undefined && this.updateNumberVector(this.temperature, 'TEMPERATURE', Math.trunc(temperature))
 				})
 			}
 
-			if (this.hasTemperature) {
-				this.api.getTemperature(this.id).then((temperature) => {
-					temperature !== undefined && this.updateNumberVector(this.temperature, 'TEMPERATURE', Math.trunc(temperature))
-				})
+			if (this.isAbsolute) {
+				const position = await this.api.getPosition(this.id)
+
+				if (position !== undefined) {
+					const moving = await this.api.isMoving(this.id)
+					this.updateNumberVector(this.position, 'FOCUS_ABSOLUTE_POSITION', position, moving ? 'Busy' : 'Idle')
+				}
+			} else {
+				const moving = await this.api.isMoving(this.id)
+				this.position.state = moving ? 'Busy' : 'Idle'
+				handleSetNumberVector(this.client, this.handler, this.position)
 			}
 		}
 	}
@@ -508,19 +520,186 @@ class AlpacaFocuser extends AlpacaDevice<AlpacaFocuserApi> {
 	sendNumber(vector: NewNumberVector) {
 		switch (vector.name) {
 			case 'REL_FOCUS_POSITION':
-				if (!this.isAbsolute) this.api.move(this.id, vector.elements.FOCUS_RELATIVE_POSITION * this.direction)
+				if (!this.isAbsolute) void this.api.move(this.id, vector.elements.FOCUS_RELATIVE_POSITION * this.direction)
 				break
 			case 'ABS_FOCUS_POSITION':
-				if (this.isAbsolute) this.api.move(this.id, vector.elements.FOCUS_ABSOLUTE_POSITION)
+				if (this.isAbsolute) void this.api.move(this.id, vector.elements.FOCUS_ABSOLUTE_POSITION)
 				break
 		}
 	}
 }
 
-function handleDelProperty(client: Client, handler: IndiClientHandler, ...messages: DefVector[]) {
-	if (handler.delProperty) {
-		for (const message of messages) {
-			handler.delProperty(client, message)
+class AlpacaCoverCalibrator extends AlpacaDevice {
+	private readonly light: DefSwitchVector = {
+		...DEFAULT_DEF_VECTOR,
+		name: 'FLAT_LIGHT_CONTROL',
+		label: 'Light',
+		rule: 'OneOfMany',
+		elements: { FLAT_LIGHT_ON: { name: 'FLAT_LIGHT_ON', label: 'On', value: false }, FLAT_LIGHT_OFF: { name: 'FLAT_LIGHT_OFF', label: 'Off', value: true } },
+	}
+
+	private readonly brightness: DefNumberVector = {
+		...DEFAULT_DEF_VECTOR,
+		name: 'FLAT_LIGHT_INTENSITY',
+		label: 'Brightness',
+		elements: { FLAT_LIGHT_INTENSITY_VALUE: { name: 'FLAT_LIGHT_INTENSITY_VALUE', label: 'Brightness', value: 0, min: 0, max: 0, step: 1, format: '%.0f' } },
+	}
+
+	private readonly park: DefSwitchVector = {
+		...DEFAULT_DEF_VECTOR,
+		name: 'CAP_PARK',
+		label: 'Park',
+		rule: 'OneOfMany',
+		elements: { PARK: { name: 'PARK', label: 'Park', value: false }, UNPARK: { name: 'UNPARK', label: 'Unpark', value: true } },
+	}
+
+	private readonly abort: DefSwitchVector = {
+		...DEFAULT_DEF_VECTOR,
+		name: 'CAP_ABORT',
+		label: 'Abort',
+		rule: 'AtMostOne',
+		elements: { ABORT: { name: 'ABORT', label: 'Abort', value: false } },
+	}
+
+	private hasCalibrator = true
+	private hasCover = true
+
+	protected readonly api: AlpacaCoverCalibratorApi
+
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
+		super(client, device, client.options.handler)
+
+		this.api = new AlpacaCoverCalibratorApi(client.url)
+
+		this.light.device = device.DeviceName
+		this.brightness.device = device.DeviceName
+		this.park.device = device.DeviceName
+		this.abort.device = device.DeviceName
+	}
+
+	protected async onConnect() {
+		await super.onConnect()
+
+		let state = await this.api.getCoverState(this.id)
+
+		// Cover is not present
+		if (state === 0) {
+			this.hasCover = false
+		}
+
+		state = await this.api.getCalibratorState(this.id)
+
+		// Calibrator is not present
+		if (state === 0) {
+			this.hasCalibrator = false
+		}
+
+		if (this.hasCover !== this.hasCalibrator) {
+			if (this.hasCover) {
+				this.driverInfo.elements.DRIVER_INTERFACE.value = '512'
+			} else {
+				this.driverInfo.elements.DRIVER_INTERFACE.value = '1024'
+			}
+
+			handleDefTextVector(this.client, this.handler, this.driverInfo)
+		}
+
+		if (this.hasCover) {
+			handleDefSwitchVector(this.client, this.handler, this.park)
+			handleDefSwitchVector(this.client, this.handler, this.abort)
+		}
+
+		if (this.hasCalibrator) {
+			handleDefSwitchVector(this.client, this.handler, this.light)
+
+			const maxBrightness = await this.api.getMaxBrightness(this.id)
+
+			if (maxBrightness !== undefined) {
+				this.brightness.elements.FLAT_LIGHT_INTENSITY_VALUE.max = maxBrightness
+				handleDefNumberVector(this.client, this.handler, this.brightness)
+			}
+		}
+	}
+
+	protected onDisconnect() {
+		super.onDisconnect()
+
+		handleDelProperty(this.client, this.handler, this.park, this.light, this.brightness, this.abort)
+	}
+
+	async update(tickCount: number) {
+		await super.update(tickCount)
+
+		if (this.isConnected) {
+			let state: readonly AlpacaStateItem[] | undefined
+
+			if (this.hasDeviceState) {
+				state = await this.api.deviceState(this.id)
+
+				if (state === undefined) {
+					this.hasDeviceState = false
+				}
+			}
+
+			if (this.hasCover) void this.updateCover(state)
+			if (this.hasCalibrator) void this.updateCalibrator(state)
+		}
+	}
+
+	private async updateCover(items?: readonly AlpacaStateItem[]) {
+		if (items !== undefined) {
+			const state = findAlpacaStateItem(items, 'CoverState') // 1 = Closed, 3 = Open
+			const moving = state === 2 || findAlpacaStateItem(items, 'CoverMoving')
+			this.updateSwitchVector(this.park, 'PARK', state === 1 ? true : state === 3 ? false : undefined, moving ? 'Busy' : 'Idle')
+		} else {
+			const state = await this.api.getCoverState(this.id)
+			const moving = await this.api.isMoving(this.id)
+			this.updateSwitchVector(this.park, 'PARK', state === 1 ? true : state === 3 ? false : undefined, moving ? 'Busy' : 'Idle')
+		}
+	}
+
+	private async updateCalibrator(items?: readonly AlpacaStateItem[]) {
+		if (items !== undefined) {
+			const state = findAlpacaStateItem(items, 'CalibratorState') // 1 = Off, 3 = On
+			this.updateSwitchVector(this.light, 'FLAT_LIGHT_ON', state === 1 ? false : state === 3 ? true : undefined)
+
+			if (state === 3) {
+				const brightness = findAlpacaStateItem(items, 'Brightness')
+				this.updateNumberVector(this.brightness, 'FLAT_LIGHT_INTENSITY_VALUE', brightness as number)
+			}
+		} else {
+			const state = await this.api.getCalibratorState(this.id)
+			this.updateSwitchVector(this.light, 'FLAT_LIGHT_ON', state === 1 ? false : state === 3 ? true : undefined)
+
+			if (state === 3) {
+				const brightness = await this.api.getBrightness(this.id)
+				this.updateNumberVector(this.brightness, 'FLAT_LIGHT_INTENSITY_VALUE', brightness)
+			}
+		}
+	}
+
+	sendSwitch(vector: NewSwitchVector) {
+		switch (vector.name) {
+			case 'CAP_ABORT':
+				if (vector.elements.ABORT === true) void this.api.halt(this.id)
+				break
+			case 'CAP_PARK':
+				if (vector.elements.PARK) void this.api.close(this.id)
+				else if (vector.elements.UNPARK) void this.api.open(this.id)
+				break
+			case 'FLAT_LIGHT_CONTROL':
+				if (vector.elements.FLAT_LIGHT_ON) void this.api.on(this.id, Math.max(1, this.brightness.elements.FLAT_LIGHT_INTENSITY_VALUE.value))
+				else if (vector.elements.FLAT_LIGHT_OFF) void this.api.off(this.id)
+				break
+		}
+	}
+
+	sendNumber(vector: NewNumberVector) {
+		switch (vector.name) {
+			case 'FLAT_LIGHT_INTENSITY':
+				if (vector.elements.FLAT_LIGHT_INTENSITY_VALUE > 0) void this.api.on(this.id, vector.elements.FLAT_LIGHT_INTENSITY_VALUE)
+				else void this.api.off(this.id)
+				break
 		}
 	}
 }

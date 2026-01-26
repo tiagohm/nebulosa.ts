@@ -1505,7 +1505,7 @@ export class AlpacaServer {
 
 	// https://ascom-standards.org/newdocs/covercalibrator.html#CalibratorStatus
 	private coverCalibratorGetCalibratorState(id: number) {
-		return makeAlpacaResponse(mapToFlatPanelState(this.flatPanel(id)?.device))
+		return makeAlpacaResponse(mapToCalibratorState(this.flatPanel(id)?.device))
 	}
 
 	private coverCalibratorIsMoving(id: number) {
@@ -1523,7 +1523,7 @@ export class AlpacaServer {
 		const res = new Array<AlpacaStateItem>(6)
 		res[0] = { Name: 'Brightness', Value: flatPanel?.intensity.value ?? 0 }
 		res[1] = { Name: 'CalibratorChanging', Value: false }
-		res[2] = { Name: 'CalibratorState', Value: mapToFlatPanelState(flatPanel) }
+		res[2] = { Name: 'CalibratorState', Value: mapToCalibratorState(flatPanel) }
 		res[3] = { Name: 'CoverMoving', Value: cover?.parking ?? false }
 		res[4] = { Name: 'CoverState', Value: mapToCoverState(cover) }
 		res[5] = { Name: 'TimeStamp', Value: '' }
@@ -1778,7 +1778,7 @@ function mapSlewRateToAlpacaAxisRate(rate: SlewRate, index: number): AlpacaAxisR
 	return { Minimum: index + 1, Maximum: index + 1 }
 }
 
-function mapToFlatPanelState(device?: FlatPanel) {
+function mapToCalibratorState(device?: FlatPanel) {
 	return device === undefined ? 0 : device.intensity.max !== 0 ? 3 : 0 // 0 = Not present, 3 = Ready
 }
 

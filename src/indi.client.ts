@@ -431,3 +431,11 @@ export function handleSetBlobVector(client: Client, handler: IndiClientHandler, 
 	handler.blobVector?.(client, message, 'setBLOBVector')
 	handleSetVector(client, handler, message, 'setBLOBVector')
 }
+
+export function handleDelProperty(client: Client, handler: IndiClientHandler, ...messages: DefVector[]) {
+	if (handler.delProperty) {
+		for (const message of messages) {
+			handler.delProperty(client, message)
+		}
+	}
+}
