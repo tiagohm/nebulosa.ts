@@ -1,8 +1,8 @@
 import { AlpacaApi, type AlpacaDeviceApi, type AlpacaFilterWheelApi, type AlpacaFocuserApi } from './alpaca.api'
-import type { AlpacaConfiguredDevice, AlpacaDeviceType } from './alpaca.types'
+import type { AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem } from './alpaca.types'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleSetNumberVector, handleSetSwitchVector, type IndiClientHandler } from './indi.client'
 import type { Client } from './indi.device'
-import type { DefNumberVector, DefSwitchVector, DefTextVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyState } from './indi.types'
+import type { DefNumberVector, DefSwitchVector, DefTextVector, DefVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyState } from './indi.types'
 
 export interface AlpacaClientHandler extends IndiClientHandler {}
 
@@ -79,7 +79,7 @@ export class AlpacaClient implements Client, Disposable {
 
 				if (device) {
 					this.devices.set(configuredDevice.DeviceName, device)
-					device.sendProperties()
+					device.onInit()
 				}
 			}
 		}
@@ -134,6 +134,8 @@ const DEFAULT_DEF_VECTOR = {
 
 class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 	readonly id: number
+
+	protected hasDeviceState = false
 
 	private readonly driverInfo: DefTextVector = {
 		...DEFAULT_DEF_VECTOR,
@@ -218,26 +220,36 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 		return updated
 	}
 
-	sendProperties() {
+	sendProperties() {}
+
+	onInit() {
 		handleDefTextVector(this.client, this.handler, this.driverInfo)
 		handleDefSwitchVector(this.client, this.handler, this.connection)
+	}
 
-		handleSetSwitchVector(this.client, this.handler, this.connection)
+	protected onConnect() {
+		this.api.deviceState(this.id).then((state) => (this.hasDeviceState = state !== undefined))
+	}
+
+	protected onDisconnect() {
+		this.hasDeviceState = false
 	}
 
 	async update(tickCount: number) {
 		if (tickCount % 2 === 0) {
 			const isConnected = await this.api.isConnected(this.id)
 
-			// Failed to fetch
+			// Failed
 			if (isConnected === undefined) return
 
-			const state = this.connection.state === 'Busy' && isConnected !== this.isConnected ? 'Idle' : undefined
-
-			if (isConnected) {
-				this.updateSwitchVector(this.connection, 'CONNECT', true, state)
-			} else {
-				this.updateSwitchVector(this.connection, 'CONNECT', false, state)
+			if (isConnected !== this.isConnected) {
+				if (isConnected) {
+					this.updateSwitchVector(this.connection, 'CONNECT', true, 'Idle')
+					this.onConnect()
+				} else {
+					this.updateSwitchVector(this.connection, 'CONNECT', false, 'Idle')
+					this.onDisconnect()
+				}
 			}
 		}
 	}
@@ -265,8 +277,6 @@ class AlpacaDevice<A extends AlpacaDeviceApi = AlpacaDeviceApi> {
 }
 
 class AlpacaFilterWheel extends AlpacaDevice<AlpacaFilterWheelApi> {
-	private initialized = false
-
 	private readonly position: DefNumberVector = {
 		...DEFAULT_DEF_VECTOR,
 		name: 'FILTER_SLOT',
@@ -289,35 +299,51 @@ class AlpacaFilterWheel extends AlpacaDevice<AlpacaFilterWheelApi> {
 		this.names.device = device.DeviceName
 	}
 
+	protected onConnect() {
+		super.onConnect()
+
+		this.api.getNames(this.id).then((names) => {
+			if (names?.length) {
+				this.position.elements.FILTER_SLOT_VALUE.max = names.length
+
+				for (let i = 0; i < names.length; i++) {
+					const name = `FILTER_SLOT_NAME_${i + 1}`
+					this.names.elements[name] = { name, label: `Filter ${i + 1}`, value: names[i] }
+				}
+
+				handleDefNumberVector(this.client, this.handler, this.position)
+				handleDefTextVector(this.client, this.handler, this.names)
+			}
+		})
+	}
+
+	protected onDisconnect() {
+		super.onDisconnect()
+
+		handleDelProperty(this.client, this.handler, this.position, this.names)
+	}
+
 	async update(tickCount: number) {
 		await super.update(tickCount)
 
 		if (this.isConnected) {
-			if (!this.initialized) {
-				this.api.getNames(this.id).then((names) => {
-					if (names?.length) {
-						this.position.elements.FILTER_SLOT_VALUE.max = names.length
+			if (this.hasDeviceState) {
+				const state = await this.api.deviceState(this.id)
 
-						for (let i = 0; i < names.length; i++) {
-							const name = `FILTER_SLOT_NAME_${i + 1}`
-							this.names.elements[name] = { name, label: `Filter ${i + 1}`, value: names[i] }
-						}
-
-						handleDefNumberVector(this.client, this.handler, this.position)
-						handleDefTextVector(this.client, this.handler, this.names)
-
-						this.initialized = true
-					}
-				})
-
-				return
+				if (state !== undefined) {
+					const position = findAlpacaStateItem(state, 'Position') as number
+					this.updateNumberVector(this.position, 'FILTER_SLOT_VALUE', position === -1 ? undefined : position + 1, position === -1 ? 'Busy' : 'Idle')
+					return
+				} else {
+					this.hasDeviceState = false
+				}
 			}
 
-			this.api.getPosition(this.id).then((position) => {
-				if (position !== undefined) {
-					this.updateNumberVector(this.position, 'FILTER_SLOT_VALUE', position === -1 ? undefined : position + 1, position === -1 ? 'Busy' : 'Idle')
-				}
-			})
+			const position = await this.api.getPosition(this.id)
+
+			if (position !== undefined) {
+				this.updateNumberVector(this.position, 'FILTER_SLOT_VALUE', position === -1 ? undefined : position + 1, position === -1 ? 'Busy' : 'Idle')
+			}
 		}
 	}
 
@@ -332,7 +358,6 @@ class AlpacaFilterWheel extends AlpacaDevice<AlpacaFilterWheelApi> {
 }
 
 class AlpacaFocuser extends AlpacaDevice<AlpacaFocuserApi> {
-	private initialized = false
 	private hasTemperature = false
 
 	private readonly absolutePosition: DefNumberVector = {
@@ -381,22 +406,20 @@ class AlpacaFocuser extends AlpacaDevice<AlpacaFocuserApi> {
 		return this.position === this.absolutePosition
 	}
 
-	sendProperties() {
-		super.sendProperties()
+	onInit() {
+		super.onInit()
 
 		handleDefSwitchVector(this.client, this.handler, this.abort)
 	}
 
-	async update(tickCount: number) {
-		await super.update(tickCount)
+	protected onConnect() {
+		super.onConnect()
 
-		if (this.isConnected) {
-			if (!this.initialized) {
-				const isAbsolute = await this.api.isAbsolute(this.id)
-
+		this.api.isAbsolute(this.id).then((absolute) => {
+			if (absolute !== undefined) {
 				this.api.getMaxStep(this.id).then((maxStep) => {
 					if (maxStep) {
-						if (isAbsolute) {
+						if (absolute) {
 							this.absolutePosition.elements.FOCUS_ABSOLUTE_POSITION.max = maxStep
 							this.position = this.absolutePosition
 						} else {
@@ -406,21 +429,46 @@ class AlpacaFocuser extends AlpacaDevice<AlpacaFocuserApi> {
 
 						handleDefNumberVector(this.client, this.handler, this.position)
 					}
-
-					this.initialized = true
 				})
+			}
+		})
 
-				this.api.getTemperature(this.id).then((temperature) => {
-					if (temperature !== undefined) {
-						this.temperature.elements.TEMPERATURE.value = Math.trunc(temperature)
-						handleDefNumberVector(this.client, this.handler, this.temperature)
-						this.hasTemperature = true
+		this.api.getTemperature(this.id).then((temperature) => {
+			if (temperature !== undefined) {
+				this.temperature.elements.TEMPERATURE.value = Math.trunc(temperature)
+				handleDefNumberVector(this.client, this.handler, this.temperature)
+				this.hasTemperature = true
+			}
+		})
+	}
+
+	onDisconnect() {
+		super.onDisconnect()
+
+		handleDelProperty(this.client, this.handler, this.position, this.temperature)
+	}
+
+	async update(tickCount: number) {
+		await super.update(tickCount)
+
+		if (this.isConnected) {
+			if (this.hasDeviceState) {
+				const state = await this.api.deviceState(this.id)
+
+				if (state !== undefined) {
+					const position = this.isAbsolute ? findAlpacaStateItem(state, 'Position') : undefined
+					const moving = findAlpacaStateItem(state, 'IsMoving')
+					this.updateNumberVector(this.position, 'FOCUS_ABSOLUTE_POSITION', position as never, moving ? 'Busy' : 'Idle')
+
+					if (this.hasTemperature) {
+						const temperature = findAlpacaStateItem(state, 'Temperature')
+						this.updateNumberVector(this.temperature, 'TEMPERATURE', Math.trunc(temperature as number))
 					}
 
-					this.initialized = true
-				})
-
-				return
+					return
+				} else {
+					this.hasDeviceState = false
+				}
 			}
 
 			if (this.isAbsolute) {
@@ -467,4 +515,17 @@ class AlpacaFocuser extends AlpacaDevice<AlpacaFocuserApi> {
 				break
 		}
 	}
+}
+
+function handleDelProperty(client: Client, handler: IndiClientHandler, ...messages: DefVector[]) {
+	if (handler.delProperty) {
+		for (const message of messages) {
+			handler.delProperty(client, message)
+		}
+	}
+}
+
+function findAlpacaStateItem(state: readonly AlpacaStateItem[], name: string) {
+	for (const item of state) if (item.Name === name) return item.Value
+	return undefined
 }

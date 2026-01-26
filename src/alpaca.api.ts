@@ -1,4 +1,4 @@
-import type { AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaResponse } from './alpaca.types'
+import type { AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaResponse, AlpacaStateItem } from './alpaca.types'
 
 // https://ascom-standards.org/api/
 
@@ -38,6 +38,10 @@ export class AlpacaDeviceApi {
 
 	disconnect(id: number) {
 		return request(this.url, `api/v1/${this.type}/${id}/connected`, 'put', { Connected: false })
+	}
+
+	deviceState(id: number) {
+		return request<readonly AlpacaStateItem[]>(this.url, `api/v1/${this.type}/${id}/devicestate`, 'get')
 	}
 }
 

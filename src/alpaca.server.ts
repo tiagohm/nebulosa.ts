@@ -1426,7 +1426,7 @@ export class AlpacaServer {
 		const { device } = this.focuser(id)
 		const res = new Array<AlpacaStateItem>(4)
 		res[0] = { Name: 'IsMoving', Value: device.moving }
-		res[1] = { Name: 'Position', Value: device.position.value }
+		res[1] = { Name: 'Position', Value: device.canAbsoluteMove ? device.position.value : 0 }
 		res[2] = { Name: 'Temperature', Value: device.temperature }
 		res[3] = { Name: 'TimeStamp', Value: '' }
 		return makeAlpacaResponse(res)
