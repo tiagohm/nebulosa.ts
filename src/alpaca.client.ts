@@ -115,18 +115,18 @@ export class AlpacaClient implements Client, Disposable {
 	}
 }
 
-const DRIVER_INTERFACES: Readonly<Record<AlpacaDeviceType, string>> = {
-	Switch: '65536',
-	Camera: '2',
-	Telescope: '1',
-	Focuser: '8',
-	FilterWheel: '16',
-	Rotator: '4096',
-	Dome: '32',
-	CoverCalibrator: '1536',
-	ObservingConditions: '128',
-	SafetyMonitor: '',
-	Video: '',
+const DRIVER_INTERFACES: Readonly<Record<Uppercase<AlpacaDeviceType>, string>> = {
+	SWITCH: '65536',
+	CAMERA: '2',
+	TELESCOPE: '1',
+	FOCUSER: '8',
+	FILTERWHEEL: '16',
+	ROTATOR: '4096',
+	DOME: '32',
+	COVERCALIBRATOR: '1536',
+	OBSERVINGCONDITIONS: '128',
+	SAFETYMONITOR: '',
+	VIDEO: '',
 }
 
 const DEFAULT_DEF_VECTOR = {
@@ -168,7 +168,7 @@ abstract class AlpacaDevice {
 		this.id = device.DeviceNumber
 
 		this.driverInfo.device = device.DeviceName
-		this.driverInfo.elements.DRIVER_INTERFACE.value = DRIVER_INTERFACES[device.DeviceType]
+		this.driverInfo.elements.DRIVER_INTERFACE.value = DRIVER_INTERFACES[device.DeviceType.toUpperCase() as never]
 
 		this.connection.device = device.DeviceName
 	}
