@@ -1,6 +1,13 @@
 import { type NetworkInterfaceInfo, networkInterfaces } from 'os'
 import { AlpacaManagementApi } from './alpaca.api'
-import { ALPACA_DISCOVERY_DATA, ALPACA_DISCOVERY_PORT, type AlpacaConfiguredDevice, type AlpacaDiscoveryServerOptions } from './alpaca.types'
+import type { AlpacaConfiguredDevice } from './alpaca.types'
+
+export const ALPACA_DISCOVERY_PORT = 32227
+export const ALPACA_DISCOVERY_DATA = 'alpacadiscovery1'
+
+export interface AlpacaDiscoveryServerOptions {
+	ignoreLocalhost?: boolean
+}
 
 export class AlpacaDiscoveryServer {
 	private socket?: Bun.udp.Socket<'buffer'>
@@ -84,6 +91,12 @@ export interface AlpacaDiscoveryOptions {
 	wait?: boolean
 }
 
+export interface AlpacaDeviceServer {
+	readonly address: string
+	readonly port: number
+	readonly devices: readonly AlpacaConfiguredDevice[]
+}
+
 const DEFAULT_ALPACA_DISCOVERY_OPTIONS: Required<AlpacaDiscoveryOptions> = {
 	family: 'IPv4',
 	port: ALPACA_DISCOVERY_PORT,
@@ -98,7 +111,7 @@ export class AlpacaDiscoveryClient implements Disposable {
 	private timeout?: NodeJS.Timeout
 	private wait?: ReturnType<typeof Promise.withResolvers<boolean>>
 
-	async discovery(onDiscovery: (address: string, port: number, devices: readonly AlpacaConfiguredDevice[]) => void, options: AlpacaDiscoveryOptions = DEFAULT_ALPACA_DISCOVERY_OPTIONS) {
+	async discovery(onDiscovery: (server: AlpacaDeviceServer) => void, options: AlpacaDiscoveryOptions = DEFAULT_ALPACA_DISCOVERY_OPTIONS) {
 		if (this.socket) return false
 
 		this.wait = options.wait ? Promise.withResolvers<boolean>() : undefined
@@ -115,13 +128,13 @@ export class AlpacaDiscoveryClient implements Disposable {
 
 							try {
 								const api = new AlpacaManagementApi(url)
-								const response = await api.configuredDevices()
-								response && onDiscovery(address, port, response)
+								const devices = await api.configuredDevices()
+								devices && onDiscovery({ address, port, devices })
 							} catch (e) {
 								console.error('failed to fetch configured devices at', url, e)
 							}
 						} else {
-							onDiscovery(address, port, [])
+							onDiscovery({ address, port, devices: [] })
 						}
 					}
 				},

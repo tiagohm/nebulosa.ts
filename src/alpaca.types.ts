@@ -1,9 +1,6 @@
 import type { Cover, Device, FlatPanel } from './indi.device'
 import type { CameraManager, CoverManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from './indi.manager'
 
-export const ALPACA_DISCOVERY_PORT = 32227
-export const ALPACA_DISCOVERY_DATA = 'alpacadiscovery1'
-
 export type AlpacaDeviceType = 'Camera' | 'Telescope' | 'Focuser' | 'FilterWheel' | 'Rotator' | 'Dome' | 'Switch' | 'CoverCalibrator' | 'ObservingConditions' | 'SafetyMonitor' | 'Video'
 
 export type AlpacaDeviceNumberProvider = (device: Device, type: AlpacaDeviceType) => number
@@ -89,10 +86,6 @@ export interface AlpacaImageBytes {
 	Type: 2
 	Rank: 2 | 3
 	Value: Readonly<Readonly<number[]>[]> | Readonly<Readonly<Readonly<number[]>[]>[]>
-}
-
-export interface AlpacaDiscoveryServerOptions {
-	ignoreLocalhost?: boolean
 }
 
 export interface AlpacaServerOptions {
