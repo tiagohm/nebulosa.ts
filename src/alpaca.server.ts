@@ -216,7 +216,7 @@ export class AlpacaServer {
 		'/management/v1/configureddevices': { GET: () => makeAlpacaResponse(Array.from(this.configuredDevices())) },
 		// https://ascom-standards.org/api/?urls.primaryName=ASCOM+Alpaca+Device+API
 		// Device
-		'/api/v1/:type/:id/interfaceversion': { GET: (req) => this.deviceGetInterfaceVersion(req.params.type as never) },
+		'/api/v1/:type/:id/interfaceversion': { GET: (req) => this.deviceGetInterfaceVersion(req.params.type.toLowerCase() as never) },
 		'/api/v1/:type/:id/description': { GET: (req) => this.deviceGetDescription(+req.params.id, mapToAlpacaDeviceType(req.params.type)) },
 		'/api/v1/:type/:id/name': { GET: (req) => this.deviceGetName(+req.params.id, mapToAlpacaDeviceType(req.params.type)) },
 		'/api/v1/:type/:id/driverinfo': { GET: (req) => this.deviceGetDriverInfo(+req.params.id, mapToAlpacaDeviceType(req.params.type)) },
@@ -559,8 +559,8 @@ export class AlpacaServer {
 
 	// Device API
 
-	private deviceGetInterfaceVersion(type: AlpacaDeviceType) {
-		const version = type === 'Camera' || type === 'Focuser' || type === 'Rotator' || type === 'Telescope' ? 4 : type === 'Dome' || type === 'FilterWheel' || type === 'SafetyMonitor' || type === 'Switch' ? 3 : 2
+	private deviceGetInterfaceVersion(type: Lowercase<AlpacaDeviceType>) {
+		const version = type === 'camera' || type === 'focuser' || type === 'rotator' || type === 'telescope' ? 4 : type === 'dome' || type === 'filterwheel' || type === 'safetymonitor' || type === 'switch' ? 3 : 2
 		return makeAlpacaResponse(version)
 	}
 

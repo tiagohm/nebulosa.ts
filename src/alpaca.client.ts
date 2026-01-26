@@ -71,11 +71,13 @@ export class AlpacaClient implements Client, Disposable {
 			let device = this.devices.get(configuredDevice.DeviceName)
 
 			if (!device) {
-				if (configuredDevice.DeviceType === 'FilterWheel') {
+				const type = configuredDevice.DeviceType.toLowerCase() as Lowercase<AlpacaDeviceType>
+
+				if (type === 'filterwheel') {
 					device = new AlpacaFilterWheel(this, configuredDevice)
-				} else if (configuredDevice.DeviceType === 'Focuser') {
+				} else if (type === 'focuser') {
 					device = new AlpacaFocuser(this, configuredDevice)
-				} else if (configuredDevice.DeviceType === 'CoverCalibrator') {
+				} else if (type === 'covercalibrator') {
 					device = new AlpacaCoverCalibrator(this, configuredDevice)
 				}
 
