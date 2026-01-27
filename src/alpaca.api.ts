@@ -17,15 +17,17 @@ export class AlpacaApi {
 export class AlpacaManagementApi {
 	constructor(readonly url: string) {}
 
-	configuredDevices() {
-		return request<AlpacaConfiguredDevice[]>(this.url, 'management/v1/configureddevices', 'get')
+	async configuredDevices() {
+		const devices = await request<AlpacaConfiguredDevice[]>(this.url, 'management/v1/configureddevices', 'get')
+		if (devices) for (const device of devices) (device as unknown as Record<string, string>).DeviceType = device.DeviceType.toLowerCase()
+		return devices
 	}
 }
 
 export class AlpacaDeviceApi {
 	constructor(
 		readonly url: string,
-		protected readonly type: Lowercase<AlpacaDeviceType>,
+		protected readonly type: AlpacaDeviceType,
 	) {}
 
 	isConnected(id: number) {

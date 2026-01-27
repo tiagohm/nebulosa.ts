@@ -1,7 +1,7 @@
 import type { Cover, Device, FlatPanel } from './indi.device'
 import type { CameraManager, CoverManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from './indi.manager'
 
-export type AlpacaDeviceType = 'Camera' | 'Telescope' | 'Focuser' | 'FilterWheel' | 'Rotator' | 'Dome' | 'Switch' | 'CoverCalibrator' | 'ObservingConditions' | 'SafetyMonitor' | 'Video'
+export type AlpacaDeviceType = 'camera' | 'telescope' | 'focuser' | 'filterwheel' | 'rotator' | 'dome' | 'switch' | 'covercalibrator' | 'observingconditions' | 'safetymonitor' | 'video'
 
 export type AlpacaDeviceNumberProvider = (device: Device, type: AlpacaDeviceType) => number
 

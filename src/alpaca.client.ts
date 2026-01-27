@@ -71,7 +71,7 @@ export class AlpacaClient implements Client, Disposable {
 			let device = this.devices.get(configuredDevice.DeviceName)
 
 			if (!device) {
-				const type = configuredDevice.DeviceType.toLowerCase() as Lowercase<AlpacaDeviceType>
+				const type = configuredDevice.DeviceType
 
 				if (type === 'filterwheel') {
 					device = new AlpacaFilterWheel(this, configuredDevice)
