@@ -508,6 +508,8 @@ class AlpacaFocuser extends AlpacaDevice {
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
 		switch (vector.name) {
 			case 'FOCUS_ABORT_MOTION':
 				if (vector.elements.ABORT === true) void this.api.halt(this.id)
@@ -520,6 +522,8 @@ class AlpacaFocuser extends AlpacaDevice {
 	}
 
 	sendNumber(vector: NewNumberVector) {
+		super.sendNumber(vector)
+
 		switch (vector.name) {
 			case 'REL_FOCUS_POSITION':
 				if (!this.isAbsolute) void this.api.move(this.id, vector.elements.FOCUS_RELATIVE_POSITION * this.direction)
@@ -681,6 +685,8 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
 		switch (vector.name) {
 			case 'CAP_ABORT':
 				if (vector.elements.ABORT === true) void this.api.halt(this.id)
@@ -697,6 +703,8 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 	}
 
 	sendNumber(vector: NewNumberVector) {
+		super.sendNumber(vector)
+
 		switch (vector.name) {
 			case 'FLAT_LIGHT_INTENSITY':
 				if (vector.elements.FLAT_LIGHT_INTENSITY_VALUE > 0) void this.api.on(this.id, vector.elements.FLAT_LIGHT_INTENSITY_VALUE)
