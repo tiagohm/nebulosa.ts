@@ -1,5 +1,5 @@
 import type { Bitpix, FitsHeader } from './fits'
-import type { Rect } from './geometry'
+import type { Rect, Size } from './geometry'
 import type { ChrominanceSubsampling } from './jpeg'
 import type { NumberArray } from './math'
 
@@ -40,9 +40,7 @@ export interface Image {
 	readonly raw: ImageRawType
 }
 
-export interface ImageMetadata {
-	readonly width: number
-	readonly height: number
+export interface ImageMetadata extends Readonly<Size> {
 	readonly channels: number
 	readonly stride: number
 	readonly pixelCount: number
@@ -51,10 +49,8 @@ export interface ImageMetadata {
 	readonly bayer?: CfaPattern
 }
 
-export interface ConvolutionKernel {
+export interface ConvolutionKernel extends Readonly<Size> {
 	readonly kernel: Readonly<NumberArray>
-	readonly width: number
-	readonly height: number
 	readonly divisor: number
 }
 

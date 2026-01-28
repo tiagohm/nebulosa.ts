@@ -1,4 +1,5 @@
 import type { Mutable, Optional } from 'utility-types'
+import type { Point, Size } from './geometry'
 
 export const DEFAULT_PHD2_PORT = 4400
 
@@ -245,17 +246,9 @@ export interface Equipment {
 	readonly rotator?: Device
 }
 
-export interface StarPos {
-	readonly x: number
-	readonly y: number
-}
+export type StarPos = Readonly<Point>
 
-export interface Roi {
-	x: number
-	y: number
-	width: number
-	height: number
-}
+export type Roi = Point & Size
 
 export interface Settle {
 	pixels: number
@@ -286,10 +279,8 @@ export interface Profile {
 	readonly selected: boolean
 }
 
-export interface StarImage {
+export interface StarImage extends Readonly<Size> {
 	readonly frame: number
-	readonly width: number
-	readonly height: number
 	readonly star_pos: StarPos
 	readonly pixels: string
 }
@@ -303,20 +294,18 @@ export interface PHD2ClientHandler {
 	command?: (client: PHD2Client, command: PHD2Command, success: boolean, result: PHD2Error | unknown) => void
 }
 
-const DEFAULT_ROI: Roi = {
+export const DEFAULT_ROI: Readonly<Roi> = {
 	x: 0,
 	y: 0,
 	width: 0,
 	height: 0,
 }
 
-const DEFAULT_SETTLE: Settle = {
+export const DEFAULT_SETTLE: Readonly<Settle> = {
 	pixels: 1.5, // px
 	time: 10, // s
 	timeout: 30, // s
 }
-
-const CLRF = Buffer.from([13, 10])
 
 export class PHD2Client implements Disposable {
 	// biome-ignore lint/suspicious/noExplicitAny: any
@@ -373,7 +362,7 @@ export class PHD2Client implements Disposable {
 		}
 
 		this.socket.write(Buffer.from(JSON.stringify(command)))
-		this.socket.write(CLRF)
+		this.socket.write('\r\n')
 
 		return promise?.promise
 	}

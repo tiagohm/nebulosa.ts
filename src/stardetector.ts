@@ -1,11 +1,9 @@
-import { type Rect, rectIntersection } from './geometry'
+import { type Point, type Rect, rectIntersection } from './geometry'
 import { histogram } from './image.computation'
 import { grayscale, mean3x3, psf } from './image.transformation'
 import type { HistogramOptions, Image } from './image.types'
 
-export interface DetectedStar {
-	readonly x: number
-	readonly y: number
+export interface DetectedStar extends Readonly<Point> {
 	readonly hfd: number
 	readonly snr: number
 	readonly flux: number

@@ -109,7 +109,7 @@ const DEFAULT_ALPACA_DISCOVERY_OPTIONS: Required<AlpacaDiscoveryOptions> = {
 export class AlpacaDiscoveryClient implements Disposable {
 	private socket?: Bun.udp.Socket<'buffer'>
 	private timeout?: NodeJS.Timeout
-	private wait?: ReturnType<typeof Promise.withResolvers<boolean>>
+	private wait?: PromiseWithResolvers<boolean>
 
 	async discovery(onDiscovery: (server: AlpacaDeviceServer) => void, options: AlpacaDiscoveryOptions = DEFAULT_ALPACA_DISCOVERY_OPTIONS) {
 		if (this.socket) return false
