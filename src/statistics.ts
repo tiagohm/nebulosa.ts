@@ -48,7 +48,7 @@ export class Histogram {
 			}
 		}
 
-		if (this.max) ret /= this.max
+		if (this.max !== 0) ret /= this.max
 
 		this.cache.mode = [ret, max]
 
@@ -91,7 +91,7 @@ export class Histogram {
 		}
 
 		ret /= this.count[0]
-		if (this.max) ret /= this.max
+		if (this.max !== 0) ret /= this.max
 		this.cache.mean = ret
 		return ret
 	}
@@ -150,7 +150,7 @@ export class Histogram {
 
 		const p = (n - prev) / this.histogram[i]
 		let ret = i + p
-		if (this.max) ret /= this.max
+		if (this.max !== 0) ret /= this.max
 		this.cache.median = ret
 		return this.cache.median
 	}
@@ -174,7 +174,7 @@ export class Histogram {
 			}
 		}
 
-		if (this.max) ret /= this.max
+		if (this.max !== 0) ret /= this.max
 		this.cache.minimum = [ret, count]
 		return this.cache.minimum
 	}
@@ -198,7 +198,7 @@ export class Histogram {
 			}
 		}
 
-		if (this.max) ret /= this.max
+		if (this.max !== 0) ret /= this.max
 		this.cache.maximum = [ret, count]
 		return this.cache.maximum
 	}

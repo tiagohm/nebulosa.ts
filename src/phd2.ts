@@ -322,11 +322,12 @@ export class PHD2Client implements Disposable {
 	// biome-ignore lint/suspicious/noExplicitAny: any
 	private readonly commands = new Map<string, { promise: PromiseWithResolvers<PHD2CommandResult<any>>; timer: any; command: PHD2Command }>()
 	private socket?: Bun.Socket
+	private buffer?: Buffer<ArrayBufferLike>
 
 	constructor(private readonly options?: PHD2ClientOptions) {}
 
 	async connect(hostname: string, port: number = DEFAULT_PHD2_PORT) {
-		if (this.socket) return
+		if (this.socket) return false
 
 		this.socket = await Bun.connect({
 			hostname,
@@ -345,6 +346,8 @@ export class PHD2Client implements Disposable {
 				},
 			},
 		})
+
+		return true
 	}
 
 	close() {
@@ -375,14 +378,14 @@ export class PHD2Client implements Disposable {
 		return promise?.promise
 	}
 
-	findStar(roi?: Partial<Roi>) {
-		const { x, y, width, height } = mergeInto(roi, DEFAULT_ROI)
+	findStar(roi: Partial<Roi> = DEFAULT_ROI) {
+		const { x, y, width, height } = Object.assign({}, DEFAULT_ROI, roi)
 		const subframe = width && height ? [x, y, width, height] : undefined
 		return this.send<[number, number]>('find_star', subframe)
 	}
 
-	startCapture(exposure: number, roi?: Partial<Roi>) {
-		const { x, y, width, height } = mergeInto(roi, DEFAULT_ROI)
+	startCapture(exposure: number, roi: Partial<Roi> = DEFAULT_ROI) {
+		const { x, y, width, height } = Object.assign({}, DEFAULT_ROI, roi)
 		const subframe = width && height ? [x, y, width, height] : undefined
 		return this.send<number>('capture_single_frame', { exposure, subframe })
 	}
@@ -399,8 +402,8 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('deselect_star')
 	}
 
-	dither(amount: number, raOnly: boolean = false, settle?: Partial<Settle>) {
-		settle = mergeInto(settle, DEFAULT_SETTLE)
+	dither(amount: number, raOnly: boolean = false, settle: Partial<Settle> = DEFAULT_SETTLE) {
+		settle = Object.assign({}, DEFAULT_SETTLE, settle)
 		return this.send<number>('shutdown', { amount, raOnly, settle })
 	}
 
@@ -504,9 +507,9 @@ export class PHD2Client implements Disposable {
 		return this.send<boolean>('get_use_subframes')
 	}
 
-	guide(recalibrate: boolean = false, roi?: Roi, settle?: Settle) {
-		settle = mergeInto(settle, DEFAULT_SETTLE)
-		const { x, y, width, height } = mergeInto(roi, DEFAULT_ROI)
+	guide(recalibrate: boolean = false, roi: Roi = DEFAULT_ROI, settle: Settle = DEFAULT_SETTLE) {
+		settle = Object.assign({}, DEFAULT_SETTLE, settle)
+		const { x, y, width, height } = Object.assign({}, DEFAULT_ROI, roi)
 		const subframe = width && height ? [x, y, width, height] : undefined
 		return this.send<number>('guide', { recalibrate, roi: subframe, settle })
 	}
@@ -570,24 +573,23 @@ export class PHD2Client implements Disposable {
 	}
 
 	private process(data: Buffer) {
-		let offset = 0
+		const buffer = this.buffer === undefined ? data : Buffer.concat([this.buffer, data])
 
-		while (offset < data.byteLength) {
-			const index = data.indexOf(10, offset)
+		const result = Bun.JSONL.parseChunk(buffer)
 
-			if (index >= 0) {
-				this.processEvent(data.toString('utf-8', offset, index))
-				offset = index + 1
-			} else {
-				console.warn('incomplete buffer data')
-				break
-			}
+		for (const event of result.values) {
+			this.processEvent(event as never)
+		}
+
+		if (result.done) {
+			this.buffer = undefined
+		} else {
+			// Keep only the unconsumed portion
+			this.buffer = buffer.subarray(result.read)
 		}
 	}
 
-	private processEvent(data: string) {
-		const event = JSON.parse(data) as PHD2Events
-
+	private processEvent(event: PHD2Events) {
 		if ('jsonrpc' in event) {
 			const { id, error, result } = event
 			const command = this.commands.get(id)
@@ -598,25 +600,14 @@ export class PHD2Client implements Disposable {
 
 				if (error) {
 					command.promise.resolve({ success: false, error })
-					this.options?.handler?.command?.(this, command.command, false, error)
+					this.options!.handler!.command?.(this, command.command, false, error)
 				} else {
 					command.promise.resolve({ success: true, result })
-					this.options?.handler?.command?.(this, command.command, true, result)
+					this.options!.handler!.command?.(this, command.command, true, result)
 				}
 			}
 		} else {
 			this.options!.handler!.event?.(this, event)
 		}
 	}
-}
-
-function mergeInto<T extends {}>(target: Partial<T> | undefined | null, source: T) {
-	if (!target || target === source) return source
-
-	for (const key in source) {
-		if (target[key] !== undefined) continue
-		target[key] = source[key]
-	}
-
-	return target as T
 }

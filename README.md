@@ -640,12 +640,12 @@ sirius.observedAt(time, [ebp, ebv], ehp, refraction) // Observed spherical coord
 
 ```ts
 const h = new Histogram(frequencies) // Create histogram from frequency array
-h.mode() // Most common value of data
-h.count() // Sum of data
-h.mean() // Arithmetic mean of data
-h.variance() // (Population) variance of data
-h.standardDeviation() // (Population) standard deviation of data
-h.median() // Median (middle value with interpolation) of data
+h.mode // Most common value of data
+h.count // Sum of data
+h.mean // Arithmetic mean of data
+h.variance // (Population) variance of data
+h.standardDeviation // (Population) standard deviation of data
+h.median // Median (middle value with interpolation) of data
 ```
 
 ### Stellarium ![](bun.webp)
