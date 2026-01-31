@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
-import { polarAlignmentError, ThreePointPolarAlignment, type ThreePointPolarAlignmentResult, threePointPolarAlignmentError } from '../src/alignment'
 import { arcmin, deg, dms, hour, toArcmin, toDeg } from '../src/angle'
 import { equatorialFromJ2000 } from '../src/coordinate'
 import { meter } from '../src/distance'
 import { geodeticLocation, localSiderealTime } from '../src/location'
+import { polarAlignmentError, ThreePointPolarAlignment, type ThreePointPolarAlignmentResult, threePointPolarAlignmentError } from '../src/polaralignment'
 import { timeYMDHMS } from '../src/time'
 
 const TIME = timeYMDHMS(2025, 9, 7, 12, 0, 0)

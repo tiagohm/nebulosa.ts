@@ -7,17 +7,6 @@ Elegant astronomy for TypeScript. Supercharged by Bun.
 
 ## API
 
-### Alignment ![](bun.webp) ![](browser.webp)
-
-```ts
-const [ra, dec] = polarAlignmentError(ra, dec, latitude, lst, dAz, dAlt) // Compute the apparent RA/DEC of a star given polar alignment error
-const result = threePointPolarAlignmentError(p1, p2, p3, refraction) // Compute the polar alignment error given three stars
-const result = threePointPolarAlignmentErrorAfterAdjustment(result, p3, p4, refraction) // Compute the polar alignment error after azimuth/altitude adjustments and given a new star
-
-const polarAlignment = new ThreePointPolarAlignment(refraction)
-const result = polarAlignment.add(ra, dec, time)
-```
-
 ### Alpaca ![](bun.webp)
 
 ```ts
@@ -555,6 +544,17 @@ await client.shutdown()
 
 ```ts
 pluto(time) // Heliocentric ICRF cartesian position of Pluto at time
+```
+
+### Polar Alignment ![](bun.webp) ![](browser.webp)
+
+```ts
+const [ra, dec] = polarAlignmentError(ra, dec, latitude, lst, dAz, dAlt) // Compute the apparent RA/DEC of a star given polar alignment error
+const result = threePointPolarAlignmentError(p1, p2, p3, refraction) // Compute the polar alignment error given three stars
+const result = threePointPolarAlignmentErrorAfterAdjustment(result, p3, p4, refraction) // Compute the polar alignment error after azimuth/altitude adjustments and given a new star
+
+const polarAlignment = new ThreePointPolarAlignment(refraction)
+const result = polarAlignment.add(ra, dec, time)
 ```
 
 ### Pressure ![](bun.webp) ![](browser.webp)
