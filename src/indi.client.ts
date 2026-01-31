@@ -8,27 +8,27 @@ import { SimpleXmlParser, type XmlNode } from './xml'
 // http://www.clearskyinstitute.com/INDI/INDI.pdf
 
 export interface IndiClientHandler {
-	message?: (client: Client, message: Message) => void
-	delProperty?: (client: Client, message: DelProperty) => void
-	vector?: (client: Client, message: DefVector | SetVector, tag: `def${VectorType}Vector` | `set${VectorType}Vector`) => void
-	defTextVector?: (client: Client, message: DefTextVector) => void
-	defNumberVector?: (client: Client, message: DefNumberVector) => void
-	defSwitchVector?: (client: Client, message: DefSwitchVector) => void
-	defLightVector?: (client: Client, message: DefLightVector) => void
-	defBlobVector?: (client: Client, message: DefBlobVector) => void
-	defVector?: (client: Client, message: DefVector, tag: `def${VectorType}Vector`) => void
-	setTextVector?: (client: Client, message: SetTextVector) => void
-	setNumberVector?: (client: Client, message: SetNumberVector) => void
-	setSwitchVector?: (client: Client, message: SetSwitchVector) => void
-	setLightVector?: (client: Client, message: SetLightVector) => void
-	setBlobVector?: (client: Client, message: SetBlobVector) => void
-	setVector?: (client: Client, message: SetVector, tag: `set${VectorType}Vector`) => void
-	textVector?: (client: Client, message: DefTextVector | SetTextVector, tag: 'defTextVector' | 'setTextVector') => void
-	numberVector?: (client: Client, message: DefNumberVector | SetNumberVector, tag: 'defNumberVector' | 'setNumberVector') => void
-	switchVector?: (client: Client, message: DefSwitchVector | SetSwitchVector, tag: 'defSwitchVector' | 'setSwitchVector') => void
-	lightVector?: (client: Client, message: DefLightVector | SetLightVector, tag: 'defLightVector' | 'setLightVector') => void
-	blobVector?: (client: Client, message: DefBlobVector | SetBlobVector, tag: 'defBLOBVector' | 'setBLOBVector') => void
-	close?: (client: Client, server: boolean) => void
+	readonly message?: (client: Client, message: Message) => void
+	readonly delProperty?: (client: Client, message: DelProperty) => void
+	readonly vector?: (client: Client, message: DefVector | SetVector, tag: `def${VectorType}Vector` | `set${VectorType}Vector`) => void
+	readonly defTextVector?: (client: Client, message: DefTextVector) => void
+	readonly defNumberVector?: (client: Client, message: DefNumberVector) => void
+	readonly defSwitchVector?: (client: Client, message: DefSwitchVector) => void
+	readonly defLightVector?: (client: Client, message: DefLightVector) => void
+	readonly defBlobVector?: (client: Client, message: DefBlobVector) => void
+	readonly defVector?: (client: Client, message: DefVector, tag: `def${VectorType}Vector`) => void
+	readonly setTextVector?: (client: Client, message: SetTextVector) => void
+	readonly setNumberVector?: (client: Client, message: SetNumberVector) => void
+	readonly setSwitchVector?: (client: Client, message: SetSwitchVector) => void
+	readonly setLightVector?: (client: Client, message: SetLightVector) => void
+	readonly setBlobVector?: (client: Client, message: SetBlobVector) => void
+	readonly setVector?: (client: Client, message: SetVector, tag: `set${VectorType}Vector`) => void
+	readonly textVector?: (client: Client, message: DefTextVector | SetTextVector, tag: 'defTextVector' | 'setTextVector') => void
+	readonly numberVector?: (client: Client, message: DefNumberVector | SetNumberVector, tag: 'defNumberVector' | 'setNumberVector') => void
+	readonly switchVector?: (client: Client, message: DefSwitchVector | SetSwitchVector, tag: 'defSwitchVector' | 'setSwitchVector') => void
+	readonly lightVector?: (client: Client, message: DefLightVector | SetLightVector, tag: 'defLightVector' | 'setLightVector') => void
+	readonly blobVector?: (client: Client, message: DefBlobVector | SetBlobVector, tag: 'defBLOBVector' | 'setBLOBVector') => void
+	readonly close?: (client: Client, server: boolean) => void
 }
 
 export interface IndiClientOptions {

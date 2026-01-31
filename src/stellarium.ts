@@ -7,9 +7,9 @@ import { eraAnpm } from './erfa'
 import type { Seekable, Source } from './io'
 
 export interface StellariumProtocolHandler {
-	connect?: (server: StellariumProtocolServer) => void
-	goto?: (server: StellariumProtocolServer, ra: Angle, dec: Angle) => void
-	disconnect?: (server: StellariumProtocolServer) => void
+	readonly connect?: (server: StellariumProtocolServer) => void
+	readonly goto?: (server: StellariumProtocolServer, ra: Angle, dec: Angle) => void
+	readonly disconnect?: (server: StellariumProtocolServer) => void
 }
 
 export interface StellariumProtocolServerOptions {

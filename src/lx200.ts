@@ -11,21 +11,21 @@ export type MoveDirection = 'NORTH' | 'SOUTH' | 'EAST' | 'WEST'
 export type SlewRate = 'CENTER' | 'GUIDE' | 'FIND' | 'MAX'
 
 export interface Lx200ProtocolHandler {
-	connect?: (server: Lx200ProtocolServer) => void
-	rightAscension: (server: Lx200ProtocolServer) => Angle // J2000
-	declination: (server: Lx200ProtocolServer) => Angle // J2000
-	longitude: (server: Lx200ProtocolServer, longitude?: Angle) => Angle
-	latitude: (server: Lx200ProtocolServer, latitude?: Angle) => Angle
-	dateTime: (server: Lx200ProtocolServer, date?: readonly [Temporal, number]) => readonly [Temporal, number]
-	tracking: (server: Lx200ProtocolServer) => boolean
-	parked: (server: Lx200ProtocolServer) => boolean
-	slewing: (server: Lx200ProtocolServer) => boolean
-	slewRate: (server: Lx200ProtocolServer, rate: SlewRate) => void
-	sync?: (server: Lx200ProtocolServer, rightAscension: Angle, declination: Angle) => void
-	goto?: (server: Lx200ProtocolServer, rightAscension: Angle, declination: Angle) => void
-	move?: (server: Lx200ProtocolServer, direction: MoveDirection, enabled: boolean) => void
-	abort?: (server: Lx200ProtocolServer) => void
-	disconnect?: (server: Lx200ProtocolServer) => void
+	readonly connect?: (server: Lx200ProtocolServer) => void
+	readonly rightAscension: (server: Lx200ProtocolServer) => Angle // J2000
+	readonly declination: (server: Lx200ProtocolServer) => Angle // J2000
+	readonly longitude: (server: Lx200ProtocolServer, longitude?: Angle) => Angle
+	readonly latitude: (server: Lx200ProtocolServer, latitude?: Angle) => Angle
+	readonly dateTime: (server: Lx200ProtocolServer, date?: readonly [Temporal, number]) => readonly [Temporal, number]
+	readonly tracking: (server: Lx200ProtocolServer) => boolean
+	readonly parked: (server: Lx200ProtocolServer) => boolean
+	readonly slewing: (server: Lx200ProtocolServer) => boolean
+	readonly slewRate: (server: Lx200ProtocolServer, rate: SlewRate) => void
+	readonly sync?: (server: Lx200ProtocolServer, rightAscension: Angle, declination: Angle) => void
+	readonly goto?: (server: Lx200ProtocolServer, rightAscension: Angle, declination: Angle) => void
+	readonly move?: (server: Lx200ProtocolServer, direction: MoveDirection, enabled: boolean) => void
+	readonly abort?: (server: Lx200ProtocolServer) => void
+	readonly disconnect?: (server: Lx200ProtocolServer) => void
 }
 
 export interface Lx200ProtocolServerOptions {
