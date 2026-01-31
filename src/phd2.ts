@@ -287,7 +287,7 @@ export interface PHD2ClientOptions {
 export interface PHD2ClientHandler {
 	readonly event?: (client: PHD2Client, event: PHD2Events) => void
 	readonly command?: (client: PHD2Client, command: PHD2Command, success: boolean, result: PHD2Error | unknown) => void
-    readonly close?: (client: PHD2Client, error?: Error) => void
+	readonly close?: (client: PHD2Client, error?: Error) => void
 }
 
 export const DEFAULT_ROI: Readonly<Point & Size> = {
@@ -327,10 +327,11 @@ export class PHD2Client implements Disposable {
 				connectError: (_, error) => {
 					console.error('connection failed:', error)
 				},
-                close: (_, error) => {
-                    console.info('connection closed:', error?.message)
-                    this.options?.handler?.close?.(this, error)
-                },
+				close: (_, error) => {
+					console.info('connection closed:', error?.message)
+					this.options?.handler?.close?.(this, error)
+					this.socket = undefined
+				},
 			},
 		})
 
