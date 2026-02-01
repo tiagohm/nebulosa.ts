@@ -64,11 +64,6 @@ export interface GaussianBlurConvolutionOptions extends ConvolutionOptions {
 	size: number
 }
 
-export interface DarkBiasSubtractionOptions {
-	darkCorrected?: boolean
-	exposureNormalization?: boolean
-}
-
 export interface HistogramOptions {
 	channel?: ImageChannelOrGray
 	area?: Partial<Rect>
@@ -126,11 +121,6 @@ export const DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS = {
 		chrominanceSubsampling: '4:4:4',
 	},
 } as const
-
-export const DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS: Readonly<Required<DarkBiasSubtractionOptions>> = {
-	darkCorrected: false,
-	exposureNormalization: true,
-}
 
 export const DEFAULT_CONVOLUTION_OPTIONS: Readonly<ConvolutionOptions> = {
 	dynamicDivisorForEdges: true,

@@ -28,6 +28,13 @@ const FILES: Readonly<Record<string, string>> = {
 	'NGC3372--32.3.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/NGC3372--32.3.fit',
 	'NGC3372--64.3.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/NGC3372--64.3.fit',
 	'SAO.pc.dat': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/SAO.pc.dat',
+	'LIGHT.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/LIGHT.fit',
+	'BIAS.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/BIAS.fit',
+	'DARK.15.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/DARK.15.fit',
+	'DARK.30.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/DARK.30.fit',
+	'DARK.60.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/DARK.60.fit',
+	'DARKFLAT.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/DARKFLAT.fit',
+	'FLAT.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/FLAT.fit',
 }
 
 async function download(type: keyof typeof FILES) {

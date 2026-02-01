@@ -32,10 +32,10 @@ export function readImage(bitpix: Bitpix, channel: number, action?: (image: Imag
 	return openFitsFromFileHandle(bitpix, channel, readImageFromFitsAndAction, name)
 }
 
-export async function saveImageAndCompareHash(image: Image, name: string, hash?: string) {
+export async function saveImageAndCompareHash(image: Image, name: string, hash?: string, force?: boolean) {
 	const jpeg = writeImageToFormat(image, 'jpeg')
 	expect(jpeg).toBeDefined()
-	await saveAndCompareHash(jpeg!, `${name}.jpg`, hash)
+	await saveAndCompareHash(jpeg!, `${name}.jpg`, hash, force)
 	return image
 }
 

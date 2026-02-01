@@ -18,8 +18,9 @@ export function minOf(a: Readonly<NumberArray>): readonly [number, number] {
 	if (a.length === 1) return [a[0], 0]
 
 	const ret: [number, number] = [Number.MAX_VALUE, -1]
+	const n = a.length
 
-	for (let i = 0; i < a.length; i++) {
+	for (let i = 0; i < n; i++) {
 		if (a[i] < ret[0]) {
 			ret[0] = a[i]
 			ret[1] = i
@@ -36,8 +37,9 @@ export function maxOf(a: Readonly<NumberArray>): readonly [number, number] {
 	if (a.length === 1) return [a[0], 0]
 
 	const ret: [number, number] = [Number.MIN_VALUE, -1]
+	const n = a.length
 
-	for (let i = 0; i < a.length; i++) {
+	for (let i = 0; i < n; i++) {
 		if (a[i] > ret[0]) {
 			ret[0] = a[i]
 			ret[1] = i
@@ -54,7 +56,8 @@ export function meanOf(a: Readonly<NumberArray>) {
 	if (a.length === 1) return a[0]
 
 	let s = 0
-	for (let i = 0; i < a.length; i++) s += a[i]
+	const n = a.length
+	for (let i = 0; i < n; i++) s += a[i]
 	return s / a.length
 }
 

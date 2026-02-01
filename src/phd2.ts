@@ -126,6 +126,8 @@ export interface PHD2GuideStepEvent extends PHD2Event<'GuideStep'> {
 	readonly dy: number
 	readonly RADistanceRaw: number
 	readonly DECDistanceRaw: number
+	readonly RADistanceGuide: number
+	readonly DECDistanceGuide: number
 	readonly RADuration: number
 	readonly RADirection: PHD2GuideDirection
 	readonly DECDuration: number
@@ -300,7 +302,7 @@ export const DEFAULT_ROI: Readonly<Point & Size> = {
 	height: 0,
 }
 
-export const DEFAULT_SETTLE: Readonly<PHD2Settle> = {
+export const DEFAULT_PHD2_SETTLE: Readonly<PHD2Settle> = {
 	pixels: 1.5, // px
 	time: 10, // s
 	timeout: 30, // s
@@ -396,8 +398,8 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('deselect_star')
 	}
 
-	dither(amount: number, raOnly: boolean = false, settle: Partial<PHD2Settle> = DEFAULT_SETTLE) {
-		settle = Object.assign({}, DEFAULT_SETTLE, settle)
+	dither(amount: number, raOnly: boolean = false, settle: Partial<PHD2Settle> = DEFAULT_PHD2_SETTLE) {
+		settle = Object.assign({}, DEFAULT_PHD2_SETTLE, settle)
 		return this.send<number>('shutdown', { amount, raOnly, settle })
 	}
 
@@ -501,8 +503,8 @@ export class PHD2Client implements Disposable {
 		return this.send<boolean>('get_use_subframes')
 	}
 
-	guide(recalibrate: boolean = false, roi: Point & Size = DEFAULT_ROI, settle: PHD2Settle = DEFAULT_SETTLE) {
-		settle = Object.assign({}, DEFAULT_SETTLE, settle)
+	guide(recalibrate: boolean = false, roi: Point & Size = DEFAULT_ROI, settle: PHD2Settle = DEFAULT_PHD2_SETTLE) {
+		settle = Object.assign({}, DEFAULT_PHD2_SETTLE, settle)
 		const { x, y, width, height } = Object.assign({}, DEFAULT_ROI, roi)
 		const subframe = width && height ? [x, y, width, height] : undefined
 		return this.send<number>('guide', { recalibrate, roi: subframe, settle })

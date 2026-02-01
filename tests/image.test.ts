@@ -1,10 +1,10 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { Bitpix, bitpixInBytes } from '../src/fits'
 import { FitsDataSource, readImageFromPath, writeImageToFits } from '../src/image'
-import { adf, histogram, sigmaClip } from '../src/image.computation'
+import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../src/image.computation'
 // biome-ignore format: too long!
-import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import { fileHandleSink } from '../src/io'
 import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
@@ -77,7 +77,7 @@ test('fits data source', () => {
 	}
 })
 
-test('histogram - red', async () => {
+test('histogram on red channel', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, { channel: 'RED' })
 
@@ -88,7 +88,7 @@ test('histogram - red', async () => {
 	expect(h.standardDeviation).toBeCloseTo(0.0126788, 7)
 })
 
-test('histogram - green', async () => {
+test('histogram on green channel', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, { channel: 'GREEN' })
 
@@ -99,7 +99,7 @@ test('histogram - green', async () => {
 	expect(h.standardDeviation).toBeCloseTo(0.0168121, 7)
 })
 
-test('histogram - blue', async () => {
+test('histogram on blue channel', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, { channel: 'BLUE' })
 
@@ -110,7 +110,7 @@ test('histogram - blue', async () => {
 	expect(h.standardDeviation).toBeCloseTo(0.0147732, 7)
 })
 
-test('histogram - roi', async () => {
+test('histogram with roi', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const h = histogram(image, { channel: 'RED', area: { left: 450, top: 400, right: 705, bottom: 655 }, bits: 20 })
 
@@ -121,6 +121,17 @@ test('histogram - roi', async () => {
 	expect(h.standardDeviation).toBeCloseTo(0.0276011, 6)
 	expect(h.minimum[0]).toBeCloseTo(0.0003971, 6)
 	expect(h.maximum[0]).toBeCloseTo(1, 5)
+})
+
+test('histogram with transform', async () => {
+	const [image] = await readImage(Bitpix.FLOAT, 3)
+	const h = histogram(image, { transform: (p, i) => (i % 2 === 0 ? p : p - 0.001), bits: 20 })
+
+	expect(h.count[0]).toBe(732122)
+	expect(h.mean).toBeCloseTo(0.00121, 4)
+	expect(h.median).toBeCloseTo(0.0002311, 6)
+	expect(h.variance).toBeCloseTo(0.0002447, 7)
+	expect(h.standardDeviation).toBeCloseTo(0.0156441, 6)
 })
 
 test('debayer', async () => {
@@ -262,3 +273,38 @@ test('gamma', () => {
 test.skip('median', () => {
 	// return readImageAndSaveWithOptions({ median: true }, 'median', '18ab1f9f14e5776e00b3c3b7eddff13d')
 }, 5000)
+
+test('estimate background', async () => {
+	const light = await readImageFromPath('data/LIGHT.fit')
+	expect(estimateBackground(light!)).toBeCloseTo(0.109, 3)
+})
+
+test('estimate background using mode', async () => {
+	const light = await readImageFromPath('data/LIGHT.fit')
+	expect(estimateBackgroundUsingMode(light!)).toBeCloseTo(0.109, 3)
+})
+
+describe('calibrate', async () => {
+	const light = await readImageFromPath('data/LIGHT.fit')
+	const dark = await readImageFromPath('data/DARK.30.fit')
+	const dark15 = await readImageFromPath('data/DARK.15.fit')
+	const dark60 = await readImageFromPath('data/DARK.60.fit')
+	const flat = await readImageFromPath('data/FLAT.fit')
+	const bias = await readImageFromPath('data/BIAS.fit')
+	const darkFlat = await readImageFromPath('data/DARKFLAT.fit')
+
+	test('full', async () => {
+		const calibrated = calibrate(clone(light!), dark, flat, bias, darkFlat)
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-full', '1e63852e5eee85471ae22f974b3393d1', true)
+	})
+
+	test('dark 60s', async () => {
+		const calibrated = calibrate(clone(light!), dark60, flat, bias, darkFlat)
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-60', '982da908b950318bc119f7d62eb74406', true)
+	}, 5000)
+
+	test('dark 15s', async () => {
+		const calibrated = calibrate(clone(light!), dark15, flat, bias, darkFlat)
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-15', 'd762e520ef4ae827e3143bdb631169ca', true)
+	}, 5000)
+})

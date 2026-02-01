@@ -1,9 +1,11 @@
 import { PI } from './constants'
 import { exposureTimeKeyword } from './fits'
 import { truncatePixel } from './image'
+import { estimateBackgroundUsingMode } from './image.computation'
 // biome-ignore format: too long!
-import { type ApplyScreenTransferFunctionOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, type DarkBiasSubtractionOptions, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type GaussianBlurConvolutionOptions, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
+import { type ApplyScreenTransferFunctionOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type GaussianBlurConvolutionOptions, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
 import type { NumberArray } from './math'
+import { meanOf } from './util'
 
 // Apply Screen Transfer Function to image.
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Display_Function__
@@ -22,8 +24,9 @@ export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, hig
 	const max = lut.length - 1
 
 	const step = isColor && (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') ? 3 : 1
+	const n = raw.length
 
-	for (let i = isColor ? channelIndex(channel) : 0; i < raw.length; i += step) {
+	for (let i = isColor ? channelIndex(channel) : 0; i < n; i += step) {
 		let value = raw[i]
 		const p = truncatePixel(value, max)
 
@@ -197,8 +200,9 @@ export function scnr(image: Image, channel: ImageChannel = 'GREEN', amount: numb
 
 		const { raw } = image
 		const algorithm = SCNR_ALGORITHMS[method]
+		const n = raw.length
 
-		for (let i = 0; i < raw.length; i += 3) {
+		for (let i = 0; i < n; i += 3) {
 			const k = i + p0
 			const a = raw[k]
 			const b = raw[i + p1]
@@ -261,99 +265,10 @@ export function verticalFlip(image: Image) {
 
 export function invert(image: Image) {
 	const { raw } = image
+	const n = raw.length
 
-	for (let i = 0; i < raw.length; i++) {
+	for (let i = 0; i < n; i++) {
 		raw[i] = 1 - raw[i]
-	}
-
-	return image
-}
-
-// Subtract dark and bias frames from image.
-// If darkCorrected is true, the dark frame will be already corrected for bias.
-export function darkBiasSubtraction(image: Image, dark?: Image, bias?: Image, options?: DarkBiasSubtractionOptions) {
-	if (dark && (image.metadata.width !== dark.metadata.width || image.metadata.height !== dark.metadata.height || image.metadata.channels !== dark.metadata.channels)) {
-		// throw new Error('image and dark frame must have the same dimensions and channels')
-		return image
-	}
-	if (bias && (image.metadata.width !== bias.metadata.width || image.metadata.height !== bias.metadata.height || image.metadata.channels !== bias.metadata.channels)) {
-		// throw new Error('image and bias frame must have the same dimensions and channels')
-		return image
-	}
-
-	const { raw } = image
-	const { darkCorrected = false, exposureNormalization = true } = options ?? DEFAULT_DARK_BIAS_SUBTRACTION_OPTIONS
-	const normalizationFactor = exposureNormalization && dark ? exposureTimeKeyword(image.header, 1) / exposureTimeKeyword(dark.header, 1) : 1
-
-	let pedestal = 0
-
-	// corrected = image - bias - (dark - bias) # subtrai bias do dark primeiro
-	// or
-	// corrected = image - bias - dark_corrected
-
-	if (dark && bias) {
-		for (let i = 0; i < raw.length; i++) {
-			const d = raw[i] - bias.raw[i] - (darkCorrected ? dark.raw[i] : dark.raw[i] - bias.raw[i]) * normalizationFactor
-			if (d < 0) pedestal = Math.max(pedestal, -d)
-			raw[i] = Math.max(0, d)
-		}
-	} else if (dark) {
-		for (let i = 0; i < raw.length; i++) {
-			const d = raw[i] - dark.raw[i] * normalizationFactor
-			if (d < 0) pedestal = Math.max(pedestal, -d)
-			raw[i] = Math.max(0, d)
-		}
-	} else if (bias) {
-		for (let i = 0; i < raw.length; i++) {
-			const d = raw[i] - bias.raw[i]
-			if (d < 0) pedestal = Math.max(pedestal, -d)
-			raw[i] = Math.max(0, d)
-		}
-	}
-
-	// If pedestal is greater than 0, it means that the image has a negative offset
-	//  that should be added to all pixels.
-	if (pedestal) {
-		for (let i = 0; i < raw.length; i++) {
-			raw[i] = Math.min(1, raw[i] + pedestal)
-		}
-
-		image.header.PEDESTAL = pedestal
-	}
-
-	return image
-}
-
-// Apply flat correction to image.
-export function flatCorrection(image: Image, flat: Image) {
-	if (image.metadata.width !== flat.metadata.width || image.metadata.height !== flat.metadata.height || image.metadata.channels !== flat.metadata.channels) {
-		// throw new Error('image and flat frame must have the same dimensions and channels')
-		return image
-	}
-
-	const { raw, metadata } = image
-	const { channels } = metadata
-	const mean = new Float32Array(channels)
-
-	// Calculate mean for each channel.
-	for (let i = 0; i < mean.length; i++) {
-		let sum = 0
-		let n = 0
-
-		for (let j = i; j < raw.length; j += channels, n++) {
-			sum += raw[j]
-		}
-
-		mean[i] = sum / n
-	}
-
-	// Apply flat correction.
-	for (let i = 0; i < mean.length; i++) {
-		const m = mean[i]
-
-		for (let j = i; j < raw.length; j += channels) {
-			raw[j] = flat.raw[j] !== 0 ? (raw[j] * m) / flat.raw[j] : 0 // Avoid division by zero
-		}
 	}
 
 	return image
@@ -722,8 +637,9 @@ export function psf(image: Image) {
 export function brightness(image: Image, value: number) {
 	if (value >= 0 && value !== 1) {
 		const { raw } = image
+		const n = raw.length
 
-		for (let i = 0; i < raw.length; i++) {
+		for (let i = 0; i < n; i++) {
 			raw[i] = Math.min(1, raw[i] * value)
 		}
 	}
@@ -736,8 +652,9 @@ export function saturation(image: Image, value: number, channel: ImageChannelOrG
 	if (value >= 0 && value !== 1 && image.metadata.channels === 3) {
 		const { raw } = image
 		const { red, green, blue } = grayscaleFromChannel(channel)
+		const n = raw.length
 
-		for (let i = 0; i < raw.length; i += 3) {
+		for (let i = 0; i < n; i += 3) {
 			const r = raw[i]
 			const g = raw[i + 1]
 			const b = raw[i + 2]
@@ -756,8 +673,9 @@ export function saturation(image: Image, value: number, channel: ImageChannelOrG
 export function linear(image: Image, slope: number, intercept: number) {
 	if (slope !== 1 || intercept !== 0) {
 		const { raw } = image
+		const n = raw.length
 
-		for (let i = 0; i < raw.length; i++) {
+		for (let i = 0; i < n; i++) {
 			raw[i] = Math.max(0, Math.min(1, raw[i] * slope + intercept))
 		}
 	}
@@ -775,11 +693,155 @@ export function gamma(image: Image, value: number) {
 	if (value > 1 && value <= 3) {
 		const inv = 1 / value
 		const { raw } = image
+		const n = raw.length
 
-		for (let i = 0; i < raw.length; i++) {
+		for (let i = 0; i < n; i++) {
 			raw[i] = raw[i] ** inv
 		}
 	}
 
 	return image
+}
+
+function checkDimensions(a: Image, b: Image) {
+	if (a.metadata.channels !== b.metadata.channels) throw new Error(`channels does not match: ${a.metadata.channels} != ${b.metadata.channels}`)
+	if (a.metadata.width !== b.metadata.width) throw new Error(`width does not match: ${a.metadata.width} != ${b.metadata.width}`)
+	if (a.metadata.height !== b.metadata.height) throw new Error(`height does not match: ${a.metadata.height} != ${b.metadata.height}`)
+}
+
+export function clone(image: Image): Image {
+	const header = structuredClone(image.header)
+	const metadata = structuredClone(image.metadata)
+	const { buffer } = Buffer.copyBytesFrom(image.raw)
+	const raw = image.raw instanceof Float32Array ? new Float32Array(buffer) : new Float64Array(buffer)
+	return { header, metadata, raw }
+}
+
+export function copyInto(from: Image, to: Image) {
+	checkDimensions(from, to)
+
+	const a = from.raw
+	const b = to.raw
+	const n = a.length
+	for (let i = 0; i < n; i++) b[i] = a[i]
+	return to
+}
+
+export function plus(a: Image, b: Image, out: Image = a) {
+	checkDimensions(a, b)
+	checkDimensions(b, out)
+
+	const n = a.raw.length
+	for (let i = 0; i < n; i++) out.raw[i] = Math.min(1, a.raw[i] + b.raw[i])
+	return out
+}
+
+export function plusScalar(a: Image, scalar: number, out: Image = a) {
+	checkDimensions(a, out)
+
+	const n = a.raw.length
+	for (let i = 0; i < n; i++) out.raw[i] = Math.min(1, a.raw[i] + scalar)
+	return out
+}
+
+export function subtract(a: Image, b: Image, out: Image = a) {
+	checkDimensions(a, b)
+	checkDimensions(b, out)
+
+	const n = a.raw.length
+	for (let i = 0; i < n; i++) out.raw[i] = Math.max(0, a.raw[i] - b.raw[i])
+	return out
+}
+
+export function subtractScalar(a: Image, scalar: number, out: Image = a) {
+	checkDimensions(a, out)
+
+	const n = a.raw.length
+	for (let i = 0; i < n; i++) out.raw[i] = Math.max(0, a.raw[i] - scalar)
+	return out
+}
+
+export function multiply(a: Image, b: Image, out: Image = a) {
+	checkDimensions(a, b)
+	checkDimensions(b, out)
+
+	const n = a.raw.length
+	for (let i = 0; i < n; i++) out.raw[i] = a.raw[i] * b.raw[i]
+	return out
+}
+
+export function multiplyScalar(a: Image, scalar: number, out: Image = a) {
+	checkDimensions(a, out)
+
+	const n = a.raw.length
+	for (let i = 0; i < n; i++) out.raw[i] = a.raw[i] * scalar
+	return out
+}
+
+export function divide(a: Image, b: Image, out: Image = a) {
+	checkDimensions(a, b)
+	checkDimensions(b, out)
+
+	const n = a.raw.length
+	for (let i = 0; i < n; i++) out.raw[i] = a.raw[i] / b.raw[i]
+	return out
+}
+
+export function divideScalar(a: Image, scalar: number, out: Image = a) {
+	checkDimensions(a, out)
+
+	const n = a.raw.length
+	for (let i = 0; i < n; i++) out.raw[i] = a.raw[i] / scalar
+	return out
+}
+
+// Calibrated = (Light - Dark) / (Flat - Bias) * mean(Flat)
+export function calibrate(light: Image, dark?: Image, flat?: Image, bias?: Image, darkFlat?: Image) {
+	let tmp: Image | undefined
+
+	// DARK
+
+	if (dark) {
+		const TL = Math.trunc(exposureTimeKeyword(light.header, 0) * 1000000)
+		const TD = Math.trunc(exposureTimeKeyword(dark.header, 0) * 1000000)
+
+		if (TL !== TD) {
+			// dark = linear(DARK - BIAS, TL / TD, 0)
+
+			tmp = clone(light)
+
+			if (bias) subtract(tmp, bias)
+			const bgL = estimateBackgroundUsingMode(tmp)
+
+			copyInto(dark, tmp)
+			if (bias) subtract(tmp, bias)
+			const bgD = estimateBackgroundUsingMode(tmp)
+
+			plusScalar(tmp, bgL - bgD)
+			subtract(light, tmp)
+		} else {
+			subtract(light, dark)
+		}
+	} else if (bias) {
+		subtract(light, bias)
+	}
+
+	// FLAT
+
+	if (flat) {
+		if (bias || darkFlat) {
+			if (tmp) copyInto(flat, tmp)
+			else tmp = clone(flat)
+
+			if (darkFlat) subtract(tmp, darkFlat)
+			else if (bias) subtract(tmp, bias)
+
+			flat = tmp
+		}
+
+		divide(light, flat)
+		multiplyScalar(light, meanOf(flat.raw))
+	}
+
+	return light
 }

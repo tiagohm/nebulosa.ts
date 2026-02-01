@@ -37,10 +37,10 @@ export function histogram(image: Image, options: Partial<HistogramOptions> = DEF
 	const { raw, metadata } = image
 	const { stride, width, height, channels } = metadata
 
-	const left = Math.max(0, Math.min(area?.left ?? 0, width))
-	const top = Math.max(0, Math.min(area?.top ?? 0, height))
-	const right = Math.max(0, Math.min(area?.right ?? width - 1, width))
-	const bottom = Math.max(0, Math.min(area?.bottom ?? height - 1, height))
+	const left = Math.max(0, Math.min(area?.left ?? 0, width - 1))
+	const top = Math.max(0, Math.min(area?.top ?? 0, height - 1))
+	const right = Math.max(0, Math.min(area?.right ?? width - 1, width - 1))
+	const bottom = Math.max(0, Math.min(area?.bottom ?? height - 1, height - 1))
 
 	const offset = channelIndex(channel)
 	const { red, green, blue } = grayscaleFromChannel(channel)
@@ -50,10 +50,10 @@ export function histogram(image: Image, options: Partial<HistogramOptions> = DEF
 		const m = y * stride
 
 		for (let x = left; x <= right; x++) {
-			const i = m + x * channels + offset
+			let i = m + x * channels + offset
 			if (sigmaClip !== undefined && sigmaClip[i] !== 0) continue
-			const v = isGrayscale ? raw[i] * red + raw[i + 1] * green + raw[i + 2] * blue : raw[i]
-			const p = truncatePixel(transform(v, i), max)
+			const v = isGrayscale ? transform(raw[i], i) * red + transform(raw[++i], i) * green + transform(raw[++i], i) * blue : transform(raw[i], i)
+			const p = truncatePixel(v, max)
 			h[p]++
 		}
 	}
@@ -71,18 +71,19 @@ export function sigmaClip(image: Image, options: Partial<SigmaClipOptions> = DEF
 
 	if (raw.length > mask.length) throw new Error(`mask must have length >= ${raw.length}`)
 
+	const transform = options.transform ?? DEFAULT_SIGMA_CLIP_OPTIONS.transform
 	const bits = options.bits === undefined || typeof options.bits === 'number' ? new Int32Array(1 << (options.bits ?? 16)) : options.bits
-	options = { ...options, bits, transform: (p, i) => (mask[i] === 1 ? 0 : p), sigmaClip: undefined } as HistogramOptions
+	options = { ...options, bits, transform: (p, i) => (mask[i] === 1 ? 0 : transform(p, i)), sigmaClip: undefined } as HistogramOptions
 
 	const isMono = channels === 1
 
 	let lastCenter = 1
 
 	for (let i = 0; i < maxIterations; i++) {
-		const { mean, median, standardDeviation } = histogram(image, options)
+		const h = histogram(image, options)
 
-		const center = centerMethod === 'mean' ? mean : median
-		const dispersion = dispersionMethod === 'std' ? standardDeviation : medianAbsoluteDeviation(image, median, true, options)
+		const center = centerMethod === 'mean' ? h.mean : h.median
+		const dispersion = dispersionMethod === 'std' ? h.standardDeviation : medianAbsoluteDeviation(image, h.median, true, options)
 
 		if (!Number.isFinite(dispersion) || dispersion === 0) break
 
@@ -138,4 +139,13 @@ export function sigmaClip(image: Image, options: Partial<SigmaClipOptions> = DEF
 	}
 
 	return mask
+}
+
+export function estimateBackground(image: Image, options?: Partial<Omit<SigmaClipOptions, 'centerMethod' | 'dispersionMethod'>>) {
+	return median(image, { ...options, sigmaClip: sigmaClip(image, { ...options, centerMethod: 'median', dispersionMethod: 'mad' }) })
+}
+
+export function estimateBackgroundUsingMode(image: Image, options?: Partial<HistogramOptions>) {
+	const { mean, median } = histogram(image, options)
+	return 2.5 * median - 1.5 * mean
 }
