@@ -15,11 +15,17 @@ server.start(host, port)
 
 const discoveryServer = new AlpacaDiscoveryServer(ports)
 discoveryServer.addPort(server.port)
-discoveryServer.start(host, port)
+await discoveryServer.start(host, port)
 
 const discoveryClient = new AlpacaDiscoveryClient()
 await discoveryClient.discovery(callback, options)
 discoveryClient.close()
+
+const alpacaClient = new AlpacaClient(url, { handler })
+await alpacaClient.start()
+
+const alpacaTelescopeApi = new AlpacaTelescopeApi(url)
+await alpacaTelescopeApi.connect(id)
 ```
 
 ### Angle ![](bun.webp) ![](browser.webp)
@@ -301,6 +307,7 @@ xy(time) // Polar motion angles at time
 readImageFromFits(fits) // Read image from FITS file
 writeImageToFormat(image, path, format) // Write image to path as png, jpeg, webp, etc
 writeImageToFits(image, sink) // Write image to sink as FITS format
+clone(image) // Clone the image
 stf(image, midtone, shadow, highlight, channel) // Apply STF to image
 adf(image, options) // Calculate the STF parameters
 sigmaClip(image, options) // Generate rejection map using sigma-clip
@@ -317,8 +324,6 @@ sharpen(image)
 blur(image)
 gaussianBlur(image)
 psf(image)
-darkBiasSubtraction(image, dark, bias)
-flatCorrection(image, flat)
 histogram(image, options) // Generate the histogram from image
 median(image, options) // Calculate the median from image
 medianAbsoluteDiviation(image, normalize, options) // Calculate the MAD from image
@@ -327,6 +332,9 @@ saturation(image, value, channel)
 linear(image, slope, intercept)
 contrast(image, value)
 gamma(image, value)
+estimateBackground(image)
+estimateBackgroundUsingMode(image)
+calibrate(image, dark, flat, bias, darkFlat)
 ```
 
 ### INDI ![](bun.webp)

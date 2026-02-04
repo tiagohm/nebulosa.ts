@@ -1,151 +1,502 @@
-import type { AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaResponse, AlpacaStateItem } from './alpaca.types'
+import type { AlpacaAxisRate, AlpacaConfiguredDevice, AlpacaResponse, AlpacaStateItem } from './alpaca.types'
 
 // https://ascom-standards.org/api/
 
 export class AlpacaApi {
 	readonly management: AlpacaManagementApi
-	readonly wheel: AlpacaFilterWheelApi
+	readonly telescope: AlpacaTelescopeApi
+	readonly filterWheel: AlpacaFilterWheelApi
 	readonly focuser: AlpacaFocuserApi
+	readonly coverCalibrator: AlpacaCoverCalibratorApi
 
-	constructor(readonly url: string) {
+	constructor(readonly url: string | URL) {
 		this.management = new AlpacaManagementApi(url)
-		this.wheel = new AlpacaFilterWheelApi(url)
+		this.telescope = new AlpacaTelescopeApi(url)
+		this.filterWheel = new AlpacaFilterWheelApi(url)
 		this.focuser = new AlpacaFocuserApi(url)
+		this.coverCalibrator = new AlpacaCoverCalibratorApi(url)
 	}
 }
 
 export class AlpacaManagementApi {
-	constructor(readonly url: string) {}
+	constructor(readonly url: string | URL) {}
 
 	async configuredDevices() {
-		const devices = await request<AlpacaConfiguredDevice[]>(this.url, 'management/v1/configureddevices', 'get')
+		const devices = await request<readonly AlpacaConfiguredDevice[]>(this.url, 'management/v1/configureddevices', 'GET')
 		if (devices) for (const device of devices) (device as unknown as Record<string, string>).DeviceType = device.DeviceType.toLowerCase()
 		return devices
 	}
 }
 
 export class AlpacaDeviceApi {
-	constructor(
-		readonly url: string,
-		protected readonly type: AlpacaDeviceType,
-	) {}
+	constructor(readonly url: string | URL) {}
 
 	isConnected(id: number) {
-		return request<boolean>(this.url, `api/v1/${this.type}/${id}/connected`, 'get')
+		return request<boolean>(this.url, `${id}/connected`, 'GET')
 	}
 
 	connect(id: number) {
-		return request(this.url, `api/v1/${this.type}/${id}/connected`, 'put', { Connected: true })
+		return request(this.url, `${id}/connected`, 'PUT', { Connected: true })
 	}
 
 	disconnect(id: number) {
-		return request(this.url, `api/v1/${this.type}/${id}/connected`, 'put', { Connected: false })
+		return request(this.url, `${id}/connected`, 'PUT', { Connected: false })
 	}
 
 	deviceState(id: number) {
-		return request<readonly AlpacaStateItem[]>(this.url, `api/v1/${this.type}/${id}/devicestate`, 'get')
+		return request<readonly AlpacaStateItem[]>(this.url, `${id}/devicestate`, 'GET')
+	}
+}
+
+export class AlpacaTelescopeApi extends AlpacaDeviceApi {
+	constructor(url: string | URL) {
+		super(new URL('/api/v1/telescope/', url))
+	}
+
+	getAlignmentMode(id: number) {
+		return request<number>(this.url, `${id}/alignmentmode`, 'GET')
+	}
+
+	getAltitude(id: number) {
+		return request<number>(this.url, `${id}/altitude`, 'GET')
+	}
+
+	getApertureArea(id: number) {
+		return request<number>(this.url, `${id}/aperturearea`, 'GET')
+	}
+
+	getApertureDiameter(id: number) {
+		return request<number>(this.url, `${id}/aperturediameter`, 'GET')
+	}
+
+	isAtHome(id: number) {
+		return request<boolean>(this.url, `${id}/athome`, 'GET')
+	}
+
+	isAtPark(id: number) {
+		return request<boolean>(this.url, `${id}/atpark`, 'GET')
+	}
+
+	getAzimuth(id: number) {
+		return request<number>(this.url, `${id}/azimuth`, 'GET')
+	}
+
+	canFindHome(id: number) {
+		return request<boolean>(this.url, `${id}/canfindhome`, 'GET')
+	}
+
+	canPark(id: number) {
+		return request<boolean>(this.url, `${id}/canpark`, 'GET')
+	}
+
+	canPulseGuide(id: number) {
+		return request<boolean>(this.url, `${id}/canpulseguide`, 'GET')
+	}
+
+	canSetDeclinationRate(id: number) {
+		return request<boolean>(this.url, `${id}/cansetdeclinationrate`, 'GET')
+	}
+
+	canSetGuideRates(id: number) {
+		return request<boolean>(this.url, `${id}/cansetguiderates`, 'GET')
+	}
+
+	canSetPark(id: number) {
+		return request<boolean>(this.url, `${id}/cansetpark`, 'GET')
+	}
+
+	canSetPierSide(id: number) {
+		return request<boolean>(this.url, `${id}/cansetpierside`, 'GET')
+	}
+
+	canSetRightAscensionRate(id: number) {
+		return request<boolean>(this.url, `${id}/cansetrightascensionrate`, 'GET')
+	}
+
+	canSetTracking(id: number) {
+		return request<boolean>(this.url, `${id}/cansettracking`, 'GET')
+	}
+
+	canSlew(id: number) {
+		return request<boolean>(this.url, `${id}/canslew`, 'GET')
+	}
+
+	canSlewAltaz(id: number) {
+		return request<boolean>(this.url, `${id}/canslewaltaz`, 'GET')
+	}
+
+	canSlewAltazAsync(id: number) {
+		return request<boolean>(this.url, `${id}/canslewaltazasync`, 'GET')
+	}
+
+	canSlewAsync(id: number) {
+		return request<boolean>(this.url, `${id}/canslewasync`, 'GET')
+	}
+
+	canSync(id: number) {
+		return request<boolean>(this.url, `${id}/cansync`, 'GET')
+	}
+
+	canSyncAltaz(id: number) {
+		return request<boolean>(this.url, `${id}/cansyncaltaz`, 'GET')
+	}
+
+	canUnpark(id: number) {
+		return request<boolean>(this.url, `${id}/canunpark`, 'GET')
+	}
+
+	getDeclination(id: number) {
+		return request<number>(this.url, `${id}/declination`, 'GET')
+	}
+
+	getDeclinationRate(id: number) {
+		return request<number>(this.url, `${id}/declinationrate`, 'GET')
+	}
+
+	setDeclinationRate(id: number) {
+		return request<void>(this.url, `${id}/declinationrate`, 'PUT')
+	}
+
+	getDoesRefraction(id: number) {
+		return request<boolean>(this.url, `${id}/doesrefraction`, 'GET')
+	}
+
+	setDoesRefraction(id: number) {
+		return request<void>(this.url, `${id}/doesrefraction`, 'PUT')
+	}
+
+	getEquatorialSystem(id: number) {
+		return request<number>(this.url, `${id}/equatorialsystem`, 'GET')
+	}
+
+	getFocalLength(id: number) {
+		return request<number>(this.url, `${id}/focallength`, 'GET')
+	}
+
+	getGuideRateDeclination(id: number) {
+		return request<number>(this.url, `${id}/guideratedeclination`, 'GET')
+	}
+
+	setGuideRateDeclination(id: number) {
+		return request<void>(this.url, `${id}/guideratedeclination`, 'PUT')
+	}
+
+	getGuideRateRightAscension(id: number) {
+		return request<number>(this.url, `${id}/guideraterightascension`, 'GET')
+	}
+
+	setGuideRateRightAscension(id: number) {
+		return request<void>(this.url, `${id}/guideraterightascension`, 'PUT')
+	}
+
+	isPulseGuiding(id: number) {
+		return request<boolean>(this.url, `${id}/ispulseguiding`, 'GET')
+	}
+
+	getRightAscension(id: number) {
+		return request<number>(this.url, `${id}/rightascension`, 'GET')
+	}
+
+	getRightAscensionRate(id: number) {
+		return request<number>(this.url, `${id}/rightascensionrate`, 'GET')
+	}
+
+	setRightAscensionRate(id: number) {
+		return request<void>(this.url, `${id}/rightascensionrate`, 'PUT')
+	}
+
+	getSideOfPier(id: number) {
+		return request<number>(this.url, `${id}/sideofpier`, 'GET')
+	}
+
+	setSideOfPier(id: number) {
+		return request<void>(this.url, `${id}/sideofpier`, 'PUT')
+	}
+
+	getSiderealTime(id: number) {
+		return request<number>(this.url, `${id}/siderealtime`, 'GET')
+	}
+
+	getSiteElevation(id: number) {
+		return request<number>(this.url, `${id}/siteelevation`, 'GET')
+	}
+
+	setSiteElevation(id: number) {
+		return request<void>(this.url, `${id}/siteelevation`, 'PUT')
+	}
+
+	getSiteLatitude(id: number) {
+		return request<number>(this.url, `${id}/sitelatitude`, 'GET')
+	}
+
+	setSiteLatitude(id: number) {
+		return request<void>(this.url, `${id}/sitelatitude`, 'PUT')
+	}
+
+	getSiteLongitude(id: number) {
+		return request<number>(this.url, `${id}/sitelongitude`, 'GET')
+	}
+
+	setSiteLongitude(id: number) {
+		return request<void>(this.url, `${id}/sitelongitude`, 'PUT')
+	}
+
+	isSlewing(id: number) {
+		return request<boolean>(this.url, `${id}/slewing`, 'GET')
+	}
+
+	getSlewSettleTime(id: number) {
+		return request<number>(this.url, `${id}/slewsettletime`, 'GET')
+	}
+
+	setSlewSettleTime(id: number) {
+		return request<void>(this.url, `${id}/slewsettletime`, 'PUT')
+	}
+
+	getTargetDeclination(id: number) {
+		return request<number>(this.url, `${id}/targetdeclination`, 'GET')
+	}
+
+	setTargetDeclination(id: number) {
+		return request<void>(this.url, `${id}/targetdeclination`, 'PUT')
+	}
+
+	getTargetRightAscension(id: number) {
+		return request<number>(this.url, `${id}/targetrightascension`, 'GET')
+	}
+
+	setTargetRightAscension(id: number) {
+		return request<void>(this.url, `${id}/targetrightascension`, 'PUT')
+	}
+
+	isTracking(id: number) {
+		return request<boolean>(this.url, `${id}/tracking`, 'GET')
+	}
+
+	setTracking(id: number) {
+		return request<void>(this.url, `${id}/tracking`, 'PUT')
+	}
+
+	getTrackingRate(id: number) {
+		return request<number>(this.url, `${id}/trackingrate`, 'GET')
+	}
+
+	setTrackingRate(id: number) {
+		return request<void>(this.url, `${id}/trackingrate`, 'PUT')
+	}
+
+	getTrackingRates(id: number) {
+		return request<readonly number[]>(this.url, `${id}/trackingrates`, 'GET')
+	}
+
+	getUtcDate(id: number) {
+		return request<string>(this.url, `${id}/utcdate`, 'GET')
+	}
+
+	setUtcDate(id: number) {
+		return request<void>(this.url, `${id}/utcdate`, 'PUT')
+	}
+
+	abortSlew(id: number) {
+		return request<void>(this.url, `${id}/abortslew`, 'PUT')
+	}
+
+	getAxisRates(id: number) {
+		return request<readonly AlpacaAxisRate[]>(this.url, `${id}/axisrates`, 'GET')
+	}
+
+	canMoveAxis(id: number) {
+		return request<boolean>(this.url, `${id}/canmoveaxis`, 'GET')
+	}
+
+	getDestinationSideOfPier(id: number) {
+		return request<number>(this.url, `${id}/destinationsideofpier`, 'GET')
+	}
+
+	findHome(id: number) {
+		return request<void>(this.url, `${id}/findhome`, 'PUT')
+	}
+
+	moveAxis(id: number) {
+		return request<void>(this.url, `${id}/moveaxis`, 'PUT')
+	}
+
+	park(id: number) {
+		return request<void>(this.url, `${id}/park`, 'PUT')
+	}
+
+	pulseGuide(id: number) {
+		return request<void>(this.url, `${id}/pulseguide`, 'PUT')
+	}
+
+	setPark(id: number) {
+		return request<void>(this.url, `${id}/setpark`, 'PUT')
+	}
+
+	slewToAltaz(id: number) {
+		return request<void>(this.url, `${id}/slewtoaltaz`, 'PUT')
+	}
+
+	slewToAltazAsync(id: number) {
+		return request<void>(this.url, `${id}/slewtoaltazasync`, 'PUT')
+	}
+
+	slewToCoordinates(id: number) {
+		return request<void>(this.url, `${id}/slewtocoordinates`, 'PUT')
+	}
+
+	slewToCoordinatesAsync(id: number) {
+		return request<void>(this.url, `${id}/slewtocoordinatesasync`, 'PUT')
+	}
+
+	slewToTarget(id: number) {
+		return request<void>(this.url, `${id}/slewtotarget`, 'PUT')
+	}
+
+	slewToTargetAsync(id: number) {
+		return request<void>(this.url, `${id}/slewtotargetasync`, 'PUT')
+	}
+
+	syncToAltaz(id: number) {
+		return request<void>(this.url, `${id}/synctoaltaz`, 'PUT')
+	}
+
+	syncToCoordinates(id: number) {
+		return request<void>(this.url, `${id}/synctocoordinates`, 'PUT')
+	}
+
+	syncToTarget(id: number) {
+		return request<void>(this.url, `${id}/synctotarget`, 'PUT')
+	}
+
+	unpark(id: number) {
+		return request<void>(this.url, `${id}/unpark`, 'PUT')
 	}
 }
 
 export class AlpacaFilterWheelApi extends AlpacaDeviceApi {
-	constructor(url: string) {
-		super(url, 'filterwheel')
+	constructor(url: string | URL) {
+		super(new URL('/api/v1/filterwheel/', url))
+	}
+
+	getFocusOffsets(id: number) {
+		return request<readonly number[]>(this.url, `${id}/focusoffsets`, 'GET')
 	}
 
 	getNames(id: number) {
-		return request<string[]>(this.url, `api/v1/filterwheel/${id}/names`, 'get')
+		return request<readonly string[]>(this.url, `${id}/names`, 'GET')
 	}
 
 	getPosition(id: number) {
-		return request<number>(this.url, `api/v1/filterwheel/${id}/position`, 'get')
+		return request<number>(this.url, `${id}/position`, 'GET')
 	}
 
 	setPosition(id: number, Position: number) {
-		return request(this.url, `api/v1/filterwheel/${id}/position`, 'put', { Position })
+		return request(this.url, `${id}/position`, 'PUT', { Position })
 	}
 }
 
 export class AlpacaFocuserApi extends AlpacaDeviceApi {
-	constructor(url: string) {
-		super(url, 'focuser')
+	constructor(url: string | URL) {
+		super(new URL('/api/v1/focuser/', url))
 	}
 
 	isAbsolute(id: number) {
-		return request<boolean>(this.url, `api/v1/focuser/${id}/absolute`, 'get')
+		return request<boolean>(this.url, `${id}/absolute`, 'GET')
 	}
 
 	isMoving(id: number) {
-		return request<boolean>(this.url, `api/v1/focuser/${id}/ismoving`, 'get')
+		return request<boolean>(this.url, `${id}/ismoving`, 'GET')
+	}
+
+	getMaxIncrement(id: number) {
+		return request<number>(this.url, `${id}/maxincrement`, 'GET')
 	}
 
 	getMaxStep(id: number) {
-		return request<number>(this.url, `api/v1/focuser/${id}/maxstep`, 'get')
+		return request<number>(this.url, `${id}/maxstep`, 'GET')
 	}
 
 	getPosition(id: number) {
-		return request<number>(this.url, `api/v1/focuser/${id}/position`, 'get')
+		return request<number>(this.url, `${id}/position`, 'GET')
+	}
+
+	getStepSize(id: number) {
+		return request<number>(this.url, `${id}/stepsize`, 'GET')
+	}
+
+	isTemperatureCompensation(id: number) {
+		return request<boolean>(this.url, `${id}/tempcomp`, 'GET')
+	}
+
+	setTemperatureCompensation(id: number, TempComp: boolean) {
+		return request<void>(this.url, `${id}/tempcomp`, 'PUT', { TempComp })
+	}
+
+	isTemperatureCompensationAvailable(id: number) {
+		return request<boolean>(this.url, `${id}/tempcompavailable`, 'GET')
 	}
 
 	getTemperature(id: number) {
-		return request<number>(this.url, `api/v1/focuser/${id}/temperature`, 'get')
+		return request<number>(this.url, `${id}/temperature`, 'GET')
 	}
 
 	halt(id: number) {
-		return request<void>(this.url, `api/v1/focuser/${id}/halt`, 'put')
+		return request<void>(this.url, `${id}/halt`, 'PUT')
 	}
 
 	move(id: number, Position: number) {
-		return request<void>(this.url, `api/v1/focuser/${id}/move`, 'put', { Position })
+		return request<void>(this.url, `${id}/move`, 'PUT', { Position })
 	}
 }
 
 export class AlpacaCoverCalibratorApi extends AlpacaDeviceApi {
-	constructor(url: string) {
-		super(url, 'covercalibrator')
+	constructor(url: string | URL) {
+		super(new URL('/api/v1/covercalibrator/', url))
 	}
 
 	getBrightness(id: number) {
-		return request<number>(this.url, `api/v1/covercalibrator/${id}/brightness`, 'get')
+		return request<number>(this.url, `${id}/brightness`, 'GET')
 	}
 
 	getCalibratorState(id: number) {
-		return request<number>(this.url, `api/v1/covercalibrator/${id}/calibratorstate`, 'get')
+		return request<number>(this.url, `${id}/calibratorstate`, 'GET')
 	}
 
 	getCoverState(id: number) {
-		return request<number>(this.url, `api/v1/covercalibrator/${id}/coverstate`, 'get')
+		return request<number>(this.url, `${id}/coverstate`, 'GET')
 	}
 
 	isChanging(id: number) {
-		return request<boolean>(this.url, `api/v1/covercalibrator/${id}/calibratorchanging`, 'get')
+		return request<boolean>(this.url, `${id}/calibratorchanging`, 'GET')
 	}
 
 	isMoving(id: number) {
-		return request<boolean>(this.url, `api/v1/covercalibrator/${id}/covermoving`, 'get')
+		return request<boolean>(this.url, `${id}/covermoving`, 'GET')
 	}
 
 	getMaxBrightness(id: number) {
-		return request<number>(this.url, `api/v1/covercalibrator/${id}/maxbrightness`, 'get')
+		return request<number>(this.url, `${id}/maxbrightness`, 'GET')
 	}
 
 	off(id: number) {
-		return request<void>(this.url, `api/v1/covercalibrator/${id}/calibratoroff`, 'put')
+		return request<void>(this.url, `${id}/calibratoroff`, 'PUT')
 	}
 
 	on(id: number, Brightness: number) {
-		return request<void>(this.url, `api/v1/covercalibrator/${id}/calibratoron`, 'put', { Brightness })
+		return request<void>(this.url, `${id}/calibratoron`, 'PUT', { Brightness })
 	}
 
 	close(id: number) {
-		return request<void>(this.url, `api/v1/covercalibrator/${id}/closecover`, 'put')
+		return request<void>(this.url, `${id}/closecover`, 'PUT')
 	}
 
 	halt(id: number) {
-		return request<void>(this.url, `api/v1/covercalibrator/${id}/haltcover`, 'put')
+		return request<void>(this.url, `${id}/haltcover`, 'PUT')
 	}
 
 	open(id: number) {
-		return request<void>(this.url, `api/v1/covercalibrator/${id}/opencover`, 'put')
+		return request<void>(this.url, `${id}/opencover`, 'PUT')
 	}
 }
 
@@ -164,9 +515,9 @@ function makeFormDataFromParams(params: Record<string, string | number | boolean
 	return body
 }
 
-async function request<T>(url: string, path: string, method: 'get' | 'put', body?: Record<string, string | number | boolean>, headers?: HeadersInit) {
+async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT', body?: Record<string, string | number | boolean>, headers?: HeadersInit) {
 	try {
-		const response = await fetch(`${url}/${path}`, { method, headers, body: body && method === 'put' ? makeFormDataFromParams(body) : undefined })
+		const response = await fetch(new URL(path, url), { method, headers, body: body && method === 'PUT' ? makeFormDataFromParams(body) : undefined })
 
 		const text = await response.text()
 
@@ -178,15 +529,15 @@ async function request<T>(url: string, path: string, method: 'get' | 'put', body
 					return json.Value
 				}
 
-				console.error(path, json.ErrorNumber, json.ErrorMessage)
+				console.error('response error:', url, path, json.ErrorNumber, json.ErrorMessage)
 			} else {
-				console.error(path, text)
+				console.error('request without response:', url, path)
 			}
 		} else {
-			console.error('request failed', path, text)
+			console.error('request failed:', url, path, text)
 		}
 	} catch (e) {
-		console.error('failed to fetch', e)
+		console.error('failed to fetch:', url, path, e)
 	}
 
 	return undefined

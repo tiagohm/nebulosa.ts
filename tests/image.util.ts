@@ -17,10 +17,10 @@ export async function openFitsFromFileHandle<T = void>(bitpix: Bitpix, channel: 
 	return await action(fits!)
 }
 
-export async function openFitsFromBuffer<T = void>(bitpix: Bitpix, channel: number, action: (fits: Fits) => PromiseLike<T> | T, name?: string | Buffer) {
+export async function openFitsFromBuffer<T = void>(bitpix: Bitpix, channel: number, action?: (fits: Fits) => PromiseLike<T> | T, name?: string | Buffer) {
 	const buffer = !name || typeof name === 'string' ? Buffer.from(await Bun.file(`data/${name || 'NGC3372'}-${bitpix}.${channel}.fit`).arrayBuffer()) : name
 	const fits = await readFits(bufferSource(buffer))
-	return [await action(fits!), buffer] as const
+	return [(await action?.(fits!)) ?? fits!, buffer] as const
 }
 
 export function readImage(bitpix: Bitpix, channel: number, action?: (image: Image, fits: Fits) => PromiseLike<Image> | Image, format: ImageFormat = 'fit', name?: string) {
