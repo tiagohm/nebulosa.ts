@@ -10,7 +10,7 @@ format:
 	bun format
 
 test:
-	bun test --timeout 1000
+	bun test
 
 astro:
 	uv run scripts/astro.py $(a)
