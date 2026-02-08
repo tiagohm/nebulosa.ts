@@ -36,11 +36,11 @@ export class AlpacaDeviceApi {
 	}
 
 	connect(id: number) {
-		return request(this.url, `${id}/connected`, 'PUT', { Connected: true })
+		return request<true>(this.url, `${id}/connected`, 'PUT', { Connected: true }, undefined, true)
 	}
 
 	disconnect(id: number) {
-		return request(this.url, `${id}/connected`, 'PUT', { Connected: false })
+		return request<true>(this.url, `${id}/connected`, 'PUT', { Connected: false }, undefined, true)
 	}
 
 	deviceState(id: number) {
@@ -305,8 +305,8 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<readonly AlpacaAxisRate[]>(this.url, `${id}/axisrates`, 'GET')
 	}
 
-	canMoveAxis(id: number) {
-		return request<boolean>(this.url, `${id}/canmoveaxis`, 'GET')
+	canMoveAxis(id: number, Axis: number) {
+		return request<boolean>(this.url, `${id}/canmoveaxis?Axis=${Axis}`, 'GET')
 	}
 
 	getDestinationSideOfPier(id: number) {
@@ -515,7 +515,7 @@ function makeFormDataFromParams(params: Record<string, string | number | boolean
 	return body
 }
 
-async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT', body?: Record<string, string | number | boolean>, headers?: HeadersInit) {
+async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT', body?: Record<string, string | number | boolean>, headers?: HeadersInit, defaultValue?: T) {
 	try {
 		const response = await fetch(new URL(path, url), { method, headers, body: body && method === 'PUT' ? makeFormDataFromParams(body) : undefined })
 
@@ -526,7 +526,7 @@ async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT'
 				const json = JSON.parse(text) as AlpacaResponse<T>
 
 				if (json.ErrorNumber === 0) {
-					return json.Value
+					return json.Value ?? defaultValue
 				}
 
 				console.error('response error:', url, path, json.ErrorNumber, json.ErrorMessage)

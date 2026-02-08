@@ -1,8 +1,8 @@
 import { AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaTelescopeApi } from './alpaca.api'
-import type { AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem } from './alpaca.types'
-import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetNumberVector, handleSetSwitchVector, type IndiClientHandler } from './indi.client'
+import type { AlpacaAxisRate, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem } from './alpaca.types'
+import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import type { Client } from './indi.device'
-import type { DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyPermission, PropertyState, SwitchRule } from './indi.types'
+import type { DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyPermission, PropertyState, SwitchRule, VectorType } from './indi.types'
 import { formatTemporal, TIMEZONE } from './temporal'
 
 export interface AlpacaClientHandler extends IndiClientHandler {}
@@ -136,6 +136,7 @@ const GENERAL_INFO = 'General Info'
 abstract class AlpacaDevice {
 	readonly id: number
 
+	protected readonly properties = new Set<DefVector & { type: Uppercase<VectorType> }>()
 	protected hasDeviceState = false
 
 	protected abstract api: AlpacaDeviceApi
@@ -162,59 +163,79 @@ abstract class AlpacaDevice {
 		return this.connection.elements.CONNECT.value === true
 	}
 
-	protected updateSwitchVector(property: DefSwitchVector, name: string, value?: boolean, state?: PropertyState) {
-		const { rule, elements } = property
+	protected sendDefProperty(message: DefVector & { type: Uppercase<VectorType> }) {
+		if (message.type[0] === 'S') handleDefSwitchVector(this.client, this.handler, message as never)
+		else if (message.type[0] === 'N') handleDefNumberVector(this.client, this.handler, message as never)
+		else handleDefTextVector(this.client, this.handler, message as never)
 
-		let updated = false
+		this.properties.add(message)
+	}
 
+	protected sendSetProperty(message: DefVector & { type: Uppercase<VectorType> }) {
+		if (message.type[0] === 'S') handleSetSwitchVector(this.client, this.handler, message as never)
+		else if (message.type[0] === 'N') handleSetNumberVector(this.client, this.handler, message as never)
+		else handleSetTextVector(this.client, this.handler, message as never)
+	}
+
+	protected sendDelProperty(...messages: DefVector[]) {
+		handleDelProperty(this.client, this.handler, ...messages)
+		for (const message of messages) this.properties.delete(message as never)
+	}
+
+	protected updatePropertyState(property: DefVector, state: PropertyState | undefined) {
 		if (state !== undefined && property.state !== state) {
 			property.state = state
-			updated = true
+			return true
 		}
 
-		if (value !== undefined && rule !== 'AtMostOne' && elements[name].value !== value) {
-			elements[name].value = value
-			updated = true
+		return false
+	}
 
-			if (rule === 'OneOfMany') {
-				for (const p in elements) {
-					if (p !== name) {
-						elements[p].value = !value
+	protected updatePropertyValue<T extends Uppercase<VectorType>>(property: DefVector & { type: T }, name: string, value?: T extends 'SWITCH' ? boolean : T extends 'NUMBER' ? number : string) {
+		if (value === undefined || value === null) return false
+
+		const { elements, type } = property
+		const element = elements[name]
+
+		if (element.value !== value) {
+			if (type[0] === 'S') {
+				const { rule } = property as DefSwitchVector
+
+				if (rule === 'OneOfMany') {
+					if (value === true) {
+						element.value = value
+
+						for (const p in elements) {
+							if (p !== name) {
+								elements[p].value = false
+							}
+						}
+
+						return true
 					}
+				} else if (rule !== 'AtMostOne') {
+					element.value = value
+					return true
 				}
+			} else {
+				element.value = value
+				return true
 			}
 		}
 
-		updated && handleSetSwitchVector(this.client, this.handler, property)
-
-		return updated
+		return false
 	}
 
-	protected updateNumberVector(property: DefNumberVector, name: string, value: number | undefined, state?: PropertyState) {
-		const { elements } = property
-
-		let updated = false
-
-		if (state !== undefined && property.state !== state) {
-			property.state = state
-			updated = true
+	sendProperties() {
+		for (const property of this.properties) {
+			this.sendDefProperty(property)
+			this.sendSetProperty(property)
 		}
-
-		if (value !== undefined && elements[name].value !== value) {
-			elements[name].value = value
-			updated = true
-		}
-
-		updated && handleSetNumberVector(this.client, this.handler, property)
-
-		return updated
 	}
-
-	sendProperties() {}
 
 	onInit() {
-		handleDefTextVector(this.client, this.handler, this.driverInfo)
-		handleDefSwitchVector(this.client, this.handler, this.connection)
+		this.sendDefProperty(this.driverInfo)
+		this.sendDefProperty(this.connection)
 	}
 
 	protected async onConnect() {
@@ -234,10 +255,10 @@ abstract class AlpacaDevice {
 
 		if (isConnected !== this.isConnected) {
 			if (isConnected) {
-				this.updateSwitchVector(this.connection, 'CONNECT', true, 'Idle')
+				this.updatePropertyValue(this.connection, 'CONNECT', true)
 				await this.onConnect()
 			} else {
-				this.updateSwitchVector(this.connection, 'CONNECT', false, 'Idle')
+				this.updatePropertyValue(this.connection, 'CONNECT', false)
 				this.onDisconnect()
 			}
 		}
@@ -249,17 +270,21 @@ abstract class AlpacaDevice {
 
 	sendNumber(vector: NewNumberVector) {}
 
+	private async handleConnection(mode: 'connect' | 'disconnect') {
+		this.connection.state = 'Busy'
+		handleSetSwitchVector(this.client, this.handler, this.connection)
+
+		this.connection.state = (await this.api[mode](this.id)) === true ? 'Ok' : 'Alert'
+		handleSetSwitchVector(this.client, this.handler, this.connection)
+	}
+
 	sendSwitch(vector: NewSwitchVector) {
 		switch (vector.name) {
 			case 'CONNECTION':
 				if (vector.elements.CONNECT === true && !this.isConnected) {
-					this.connection.state = 'Busy'
-					handleSetSwitchVector(this.client, this.handler, this.connection)
-					void this.api.connect(this.id)
+					void this.handleConnection('connect')
 				} else if (vector.elements.DISCONNECT === true && this.isConnected) {
-					this.connection.state = 'Busy'
-					handleSetSwitchVector(this.client, this.handler, this.connection)
-					void this.api.disconnect(this.id)
+					void this.handleConnection('disconnect')
 				}
 		}
 	}
@@ -275,7 +300,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	private readonly abort = makeSwitchVector('', 'TELESCOPE_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 	private readonly trackMode = makeSwitchVector('', 'TELESCOPE_TRACK_MODE', 'Track Mode', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_SIDEREAL', 'Sidereal', true], ['TRACK_SOLAR', 'Solar', false], ['TRACK_LUNAR', 'Lunar', false], ['TRACK_KING', 'King', false])
 	private readonly tracking = makeSwitchVector('', 'TELESCOPE_TRACK_STATE', 'Tracking', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_ON', 'On', false], ['TRACK_OFF', 'Off', true])
-	private readonly home = makeSwitchVector('', 'TELESCOPE_HOME', 'Home', MAIN_CONTROL, 'AtMostOne', 'rw', ['FIND', 'Find', false], ['SET', 'Set', false], ['GO', 'Go', false])
+	private readonly home = makeSwitchVector('', 'TELESCOPE_HOME', 'Home', MAIN_CONTROL, 'AtMostOne', 'rw', ['GO', 'Go', false])
 	private readonly motionNS = makeSwitchVector('', 'TELESCOPE_MOTION_NS', 'Motion N/S', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_NORTH', 'North', false], ['MOTION_SOUTH', 'South', false])
 	private readonly motionWE = makeSwitchVector('', 'TELESCOPE_MOTION_WE', 'Motion W/E', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_WEST', 'West', false], ['MOTION_EAST', 'East', false])
 	private readonly slewRate = makeSwitchVector('', 'TELESCOPE_SLEW_RATE', 'Slew Rate', MAIN_CONTROL, 'OneOfMany', 'rw')
@@ -286,6 +311,11 @@ class AlpacaTelescope extends AlpacaDevice {
 	private readonly guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'rw', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	private readonly guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	private readonly guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
+
+	private canTrack = false
+	private canPark = false
+	private canPulseGuide = false
+	private rates: readonly AlpacaAxisRate[] = []
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -313,17 +343,154 @@ class AlpacaTelescope extends AlpacaDevice {
 	protected async onConnect() {
 		await super.onConnect()
 
+		this.sendDefProperty(this.onCoordSet)
+		this.sendDefProperty(this.equatorialCoordinate)
+		this.sendDefProperty(this.abort)
+
 		void this.readHome()
+		void this.readPark(false)
+		void this.readSlewRates()
+		void this.readMoveAxis()
+		void this.readPulseGuide(false)
+		void this.readTracking(false)
+		void this.readGeographicCoordinate(false)
 	}
 
 	protected onDisconnect() {
-		handleDelProperty(this.client, this.handler, this.home)
+		this.sendDelProperty(this.home)
 	}
 
 	private async readHome() {
 		if (await this.api.canFindHome(this.id)) {
-			handleDefSwitchVector(this.client, this.handler, this.home)
+			this.sendDefProperty(this.home)
 		}
+	}
+
+	private async readPark(update: boolean) {
+		if (update) {
+			const parked = await this.api.isAtPark(this.id)
+			this.updatePropertyValue(this.park, parked ? 'PARK' : 'UNPARK', true) && this.sendSetProperty(this.park)
+		} else if (await this.api.canPark(this.id)) {
+			this.canPark = true
+			this.sendDefProperty(this.park)
+		}
+	}
+
+	private async readMoveAxis() {
+		if ((await this.api.canMoveAxis(this.id, 0)) && (await this.api.canMoveAxis(this.id, 1))) {
+			this.sendDefProperty(this.motionNS)
+			this.sendDefProperty(this.motionWE)
+		}
+	}
+
+	private async readPulseGuide(update: boolean) {
+		if (update) {
+			const pulseGuiding = await this.api.isPulseGuiding(this.id)
+
+			if (this.updatePropertyState(this.guideNS, pulseGuiding ? 'Busy' : 'Idle')) {
+				this.guideWE.state = this.guideNS.state
+				this.sendSetProperty(this.guideNS)
+				this.sendSetProperty(this.guideWE)
+			}
+		} else if (await this.api.canPulseGuide(this.id)) {
+			this.canPulseGuide = true
+			this.sendDefProperty(this.guideNS)
+			this.sendDefProperty(this.guideWE)
+		}
+	}
+
+	private async readTracking(update: boolean) {
+		if (update) {
+			const tracking = await this.api.isTracking(this.id)
+			this.updatePropertyValue(this.tracking, tracking ? 'TRACK_ON' : 'TRACK_OFF', true) && this.sendSetProperty(this.tracking)
+		} else if (await this.api.canSetTracking(this.id)) {
+			this.canTrack = true
+			this.sendDefProperty(this.tracking)
+		}
+	}
+
+	private async readSlewRates() {
+		const rates = await this.api.getAxisRates(this.id)
+
+		if (rates?.length) {
+			this.rates = rates
+
+			for (let i = 0; i < rates.length; i++) {
+				const name = `RATE_${i}`
+				this.slewRate.elements[name] = { name, label: rates[i].Maximum.toString(), value: i === 0 }
+			}
+
+			this.sendDefProperty(this.slewRate)
+		}
+	}
+
+	private async readEquatorialCoordinate() {
+		const rightAscension = await this.api.getRightAscension(this.id)
+		const declination = rightAscension !== undefined ? await this.api.getDeclination(this.id) : undefined
+
+		if (rightAscension !== undefined && declination !== undefined) {
+			const slewing = await this.api.isSlewing(this.id)
+
+			let updated = this.updatePropertyState(this.equatorialCoordinate, slewing ? 'Busy' : 'Idle')
+			updated = this.updatePropertyValue(this.equatorialCoordinate, 'RA', rightAscension) || updated
+			updated = this.updatePropertyValue(this.equatorialCoordinate, 'DEC', declination) || updated
+			updated && this.sendSetProperty(this.equatorialCoordinate)
+		}
+	}
+
+	private async readGeographicCoordinate(update: boolean) {
+		const longitude = await this.api.getSiteLongitude(this.id)
+		const latitude = longitude !== undefined ? await this.api.getSiteLatitude(this.id) : undefined
+		const elevation = longitude !== undefined ? await this.api.getSiteElevation(this.id) : undefined
+
+		if (longitude !== undefined && latitude !== undefined && elevation !== undefined) {
+			let updated = this.updatePropertyValue(this.geographicCoordinate, 'LONG', longitude)
+			updated = this.updatePropertyValue(this.geographicCoordinate, 'LAT', latitude) || updated
+			updated = this.updatePropertyValue(this.geographicCoordinate, 'ELEV', elevation) || updated
+			if (update) updated && this.sendSetProperty(this.geographicCoordinate)
+			else this.sendDefProperty(this.geographicCoordinate)
+		}
+	}
+
+	async update() {
+		if ((await super.update()) && this.isConnected) {
+			if (this.hasDeviceState) {
+				const state = await this.api.deviceState(this.id)
+
+				if (state !== undefined) {
+					const rightAscension = findStateItem(state, 'RightAscension')
+					const declination = findStateItem(state, 'Declination')
+					const slewing = findStateItem(state, 'Slewing')
+
+					let updated = this.updatePropertyState(this.equatorialCoordinate, slewing ? 'Busy' : 'Idle')
+					updated = this.updatePropertyValue(this.equatorialCoordinate, 'RA', rightAscension as number) || updated
+					updated = this.updatePropertyValue(this.equatorialCoordinate, 'DEC', declination as number) || updated
+					updated && this.sendSetProperty(this.equatorialCoordinate)
+
+					const pulseGuiding = findStateItem(state, 'IsPulseGuiding')
+					if (this.updatePropertyState(this.guideNS, pulseGuiding ? 'Busy' : 'Idle')) {
+						this.guideWE.state = this.guideNS.state
+						this.sendSetProperty(this.guideNS)
+						this.sendSetProperty(this.guideWE)
+					}
+
+					const tracking = findStateItem(state, 'Tracking')
+					this.updatePropertyValue(this.tracking, tracking ? 'TRACK_ON' : 'TRACK_OFF', true) && this.sendSetProperty(this.tracking)
+
+					const parked = findStateItem(state, 'IsAtPark')
+					this.updatePropertyValue(this.park, parked ? 'PARK' : 'UNPARK', true) && this.sendSetProperty(this.park)
+				} else {
+					this.hasDeviceState = false
+				}
+			} else {
+				void this.readEquatorialCoordinate()
+				this.canTrack && void this.readTracking(true)
+				this.canPulseGuide && void this.readPulseGuide(true)
+				this.canPark && this.readPark(true)
+			}
+		}
+
+		return true
 	}
 }
 
@@ -351,7 +518,7 @@ class AlpacaFilterWheel extends AlpacaDevice {
 	protected onDisconnect() {
 		super.onDisconnect()
 
-		handleDelProperty(this.client, this.handler, this.position, this.names)
+		this.sendDelProperty(this.position, this.names)
 	}
 
 	private async readNames() {
@@ -365,8 +532,8 @@ class AlpacaFilterWheel extends AlpacaDevice {
 				this.names.elements[name] = { name, label: `Filter ${p}`, value: names[i] }
 			}
 
-			handleDefTextVector(this.client, this.handler, this.names)
-			handleDefNumberVector(this.client, this.handler, this.position)
+			this.sendDefProperty(this.names)
+			this.sendDefProperty(this.position)
 		}
 	}
 
@@ -375,7 +542,9 @@ class AlpacaFilterWheel extends AlpacaDevice {
 
 		if (state !== undefined) {
 			const position = findStateItem(state, 'Position') as number
-			this.updateNumberVector(this.position, 'FILTER_SLOT_VALUE', position === -1 ? undefined : position + 1, position === -1 ? 'Busy' : 'Idle')
+			let updated = this.updatePropertyState(this.position, position === -1 ? 'Busy' : 'Idle')
+			if (position >= 0) updated = this.updatePropertyValue(this.position, 'FILTER_SLOT_VALUE', position) || updated
+			updated && this.sendSetProperty(this.position)
 		} else {
 			this.hasDeviceState = false
 		}
@@ -385,7 +554,9 @@ class AlpacaFilterWheel extends AlpacaDevice {
 		const position = await this.api.getPosition(this.id)
 
 		if (position !== undefined) {
-			this.updateNumberVector(this.position, 'FILTER_SLOT_VALUE', position === -1 ? undefined : position + 1, position === -1 ? 'Busy' : 'Idle')
+			let updated = this.updatePropertyState(this.position, position === -1 ? 'Busy' : 'Idle')
+			if (position >= 0) updated = this.updatePropertyValue(this.position, 'FILTER_SLOT_VALUE', position) || updated
+			updated && this.sendSetProperty(this.position)
 		}
 	}
 
@@ -452,8 +623,8 @@ class AlpacaFocuser extends AlpacaDevice {
 	onInit() {
 		super.onInit()
 
-		handleDefSwitchVector(this.client, this.handler, this.direction)
-		handleDefSwitchVector(this.client, this.handler, this.abort)
+		this.sendDefProperty(this.direction)
+		this.sendDefProperty(this.abort)
 	}
 
 	protected async onConnect() {
@@ -466,7 +637,7 @@ class AlpacaFocuser extends AlpacaDevice {
 	onDisconnect() {
 		super.onDisconnect()
 
-		handleDelProperty(this.client, this.handler, this.position, this.temperature)
+		this.sendDelProperty(this.position, this.temperature)
 	}
 
 	private async readMode() {
@@ -484,7 +655,7 @@ class AlpacaFocuser extends AlpacaDevice {
 					this.position = this.relativePosition
 				}
 
-				handleDefNumberVector(this.client, this.handler, this.position)
+				this.sendDefProperty(this.position)
 			}
 		}
 	}
@@ -495,16 +666,19 @@ class AlpacaFocuser extends AlpacaDevice {
 		if (state !== undefined) {
 			const position = this.isAbsolute ? findStateItem(state, 'Position') : undefined
 			const moving = findStateItem(state, 'IsMoving')
-			this.updateNumberVector(this.position, 'FOCUS_ABSOLUTE_POSITION', position as never, moving ? 'Busy' : 'Idle')
+			let updated = this.updatePropertyState(this.position, moving ? 'Busy' : 'Idle')
+			updated = this.updatePropertyValue(this.position, 'FOCUS_ABSOLUTE_POSITION', position as number) || updated
+			updated && this.sendSetProperty(this.position)
 
 			if (this.hasTemperature) {
 				const temperature = findStateItem(state, 'Temperature')
-				this.updateNumberVector(this.temperature, 'TEMPERATURE', Math.trunc(temperature as number))
+				this.updatePropertyValue(this.temperature, 'TEMPERATURE', Math.trunc(temperature as number)) && this.sendSetProperty(this.temperature)
 			}
 
 			return true
 		} else {
 			this.hasDeviceState = false
+			return false
 		}
 	}
 
@@ -513,10 +687,10 @@ class AlpacaFocuser extends AlpacaDevice {
 
 		if (temperature !== undefined) {
 			if (update) {
-				this.updateNumberVector(this.temperature, 'TEMPERATURE', Math.trunc(temperature))
+				this.updatePropertyValue(this.temperature, 'TEMPERATURE', Math.trunc(temperature)) && this.sendSetProperty(this.temperature)
 			} else {
 				this.temperature.elements.TEMPERATURE.value = Math.trunc(temperature)
-				handleDefNumberVector(this.client, this.handler, this.temperature)
+				this.sendDefProperty(this.temperature)
 				this.hasTemperature = true
 			}
 		} else {
@@ -529,30 +703,31 @@ class AlpacaFocuser extends AlpacaDevice {
 
 		if (position !== undefined) {
 			const moving = await this.api.isMoving(this.id)
-			this.updateNumberVector(this.position, 'FOCUS_ABSOLUTE_POSITION', position, moving ? 'Busy' : 'Idle')
+			let updated = this.updatePropertyState(this.position, moving ? 'Busy' : 'Idle')
+			updated = this.updatePropertyValue(this.position, 'FOCUS_ABSOLUTE_POSITION', position) || updated
+			updated && this.sendSetProperty(this.position)
 		}
 	}
 
 	private async readRelativePosition() {
 		const moving = await this.api.isMoving(this.id)
-		this.position.state = moving ? 'Busy' : 'Idle'
-		handleSetNumberVector(this.client, this.handler, this.position)
+		this.updatePropertyState(this.position, moving ? 'Busy' : 'Idle') && this.sendSetProperty(this.position)
 	}
 
 	async update() {
 		if ((await super.update()) && this.isConnected) {
 			if (this.hasDeviceState) {
 				void this.readState()
-			}
-
-			if (this.hasTemperature) {
-				void this.readTemperature(true)
-			}
-
-			if (this.isAbsolute) {
-				void this.readAbsolutePosition()
 			} else {
-				void this.readRelativePosition()
+				if (this.hasTemperature) {
+					void this.readTemperature(true)
+				}
+
+				if (this.isAbsolute) {
+					void this.readAbsolutePosition()
+				} else {
+					void this.readRelativePosition()
+				}
 			}
 
 			return true
@@ -569,8 +744,8 @@ class AlpacaFocuser extends AlpacaDevice {
 				if (vector.elements.ABORT === true) void this.api.halt(this.id)
 				break
 			case 'FOCUS_MOTION':
-				if (vector.elements.FOCUS_INWARD) this.updateSwitchVector(this.direction, 'FOCUS_INWARD', true)
-				else if (vector.elements.FOCUS_OUTWARD) this.updateSwitchVector(this.direction, 'FOCUS_OUTWARD', true)
+				if (vector.elements.FOCUS_INWARD) this.updatePropertyValue(this.direction, 'FOCUS_INWARD', true)
+				else if (vector.elements.FOCUS_OUTWARD) this.updatePropertyValue(this.direction, 'FOCUS_OUTWARD', true)
 				break
 		}
 	}
@@ -624,21 +799,21 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 				this.driverInfo.elements.DRIVER_INTERFACE.value = '1024'
 			}
 
-			handleDefTextVector(this.client, this.handler, this.driverInfo)
+			this.sendDefProperty(this.driverInfo)
 		}
 
 		if (this.hasCover) {
-			handleDefSwitchVector(this.client, this.handler, this.park)
-			handleDefSwitchVector(this.client, this.handler, this.abort)
+			this.sendDefProperty(this.park)
+			this.sendDefProperty(this.abort)
 		}
 
 		if (this.hasCalibrator) {
 			const maxBrightness = await this.api.getMaxBrightness(this.id)
 
 			if (maxBrightness !== undefined) {
-				handleDefSwitchVector(this.client, this.handler, this.light)
+				this.sendDefProperty(this.light)
 				this.brightness.elements.FLAT_LIGHT_INTENSITY_VALUE.max = maxBrightness
-				handleDefNumberVector(this.client, this.handler, this.brightness)
+				this.sendDefProperty(this.brightness)
 			}
 		}
 	}
@@ -646,7 +821,7 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 	protected onDisconnect() {
 		super.onDisconnect()
 
-		handleDelProperty(this.client, this.handler, this.park, this.light, this.brightness, this.abort)
+		this.sendDelProperty(this.park, this.light, this.brightness, this.abort)
 	}
 
 	private async readCoverState(update: boolean) {
@@ -657,7 +832,9 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 			this.hasCover = false
 		} else if (update) {
 			const moving = await this.api.isMoving(this.id)
-			this.updateSwitchVector(this.park, 'PARK', state === 1 ? true : state === 3 ? false : undefined, moving ? 'Busy' : 'Idle')
+			let updated = this.updatePropertyState(this.park, moving ? 'Busy' : 'Idle')
+			updated = this.updatePropertyValue(this.park, state === 1 ? 'PARK' : 'UNPARK', true) || updated
+			updated && this.sendSetProperty(this.park)
 		}
 	}
 
@@ -668,11 +845,11 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 		if (state === 0) {
 			this.hasCalibrator = false
 		} else if (update) {
-			this.updateSwitchVector(this.light, 'FLAT_LIGHT_ON', state === 1 ? false : state === 3 ? true : undefined)
+			this.updatePropertyValue(this.light, state === 1 ? 'FLAT_LIGHT_OFF' : 'FLAT_LIGHT_ON', true) && this.sendSetProperty(this.light)
 
 			if (state === 3) {
 				const brightness = await this.api.getBrightness(this.id)
-				this.updateNumberVector(this.brightness, 'FLAT_LIGHT_INTENSITY_VALUE', brightness)
+				this.updatePropertyValue(this.brightness, 'FLAT_LIGHT_INTENSITY_VALUE', brightness as number) && this.sendSetProperty(this.brightness)
 			}
 		}
 	}
@@ -682,24 +859,31 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 
 		if (items === undefined) {
 			this.hasDeviceState = false
-			return
+			return false
 		}
 
 		if (this.hasCover) {
 			const state = findStateItem(items, 'CoverState') // 1 = Closed, 3 = Open
 			const moving = state === 2 || findStateItem(items, 'CoverMoving')
-			this.updateSwitchVector(this.park, 'PARK', state === 1 ? true : state === 3 ? false : undefined, moving ? 'Busy' : 'Idle')
+			let updated = this.updatePropertyState(this.park, moving ? 'Busy' : 'Idle')
+			updated = this.updatePropertyValue(this.park, state === 1 ? 'PARK' : 'UNPARK', true) || updated
+			updated && this.sendSetProperty(this.park)
 		}
 
 		if (this.hasCalibrator) {
 			const state = findStateItem(items, 'CalibratorState') // 1 = Off, 3 = On
-			this.updateSwitchVector(this.light, 'FLAT_LIGHT_ON', state === 1 ? false : state === 3 ? true : undefined)
 
 			if (state === 3) {
+				this.updatePropertyValue(this.light, 'FLAT_LIGHT_ON', true) && this.sendSetProperty(this.light)
+
 				const brightness = findStateItem(items, 'Brightness')
-				this.updateNumberVector(this.brightness, 'FLAT_LIGHT_INTENSITY_VALUE', brightness as number)
+				this.updatePropertyValue(this.brightness, 'FLAT_LIGHT_INTENSITY_VALUE', brightness as number) && this.sendSetProperty(this.brightness)
+			} else if (state === 1) {
+				this.updatePropertyValue(this.light, 'FLAT_LIGHT_OFF', true) && this.sendSetProperty(this.light)
 			}
 		}
+
+		return true
 	}
 
 	async update() {
@@ -747,22 +931,22 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 	}
 }
 
-function makeSwitchVector(device: string, name: string, label: string, group: string, rule: SwitchRule, permission: PropertyPermission, ...properties: readonly [string, string, boolean][]): DefSwitchVector {
+function makeSwitchVector(device: string, name: string, label: string, group: string, rule: SwitchRule, permission: PropertyPermission, ...properties: readonly [string, string, boolean][]): DefSwitchVector & { type: 'SWITCH' } {
 	const elements: Record<string, DefSwitch> = {}
 	for (const [name, label, value] of properties) elements[name] = { name, label, value }
-	return { device, name, label, group, permission, rule, state: 'Idle', timeout: 60, elements }
+	return { type: 'SWITCH', device, name, label, group, permission, rule, state: 'Idle', timeout: 60, elements }
 }
 
-function makeNumberVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string, number, number, number, number, string][]): DefNumberVector {
+function makeNumberVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string, number, number, number, number, string][]): DefNumberVector & { type: 'NUMBER' } {
 	const elements: Record<string, DefNumber> = {}
 	for (const [name, label, value, min, max, step, format] of properties) elements[name] = { name, label, value, min, max, step, format }
-	return { device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
+	return { type: 'NUMBER', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
-function makeTextVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string, string][]): DefTextVector {
+function makeTextVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string, string][]): DefTextVector & { type: 'TEXT' } {
 	const elements: Record<string, DefText> = {}
 	for (const [name, label, value] of properties) elements[name] = { name, label, value }
-	return { device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
+	return { type: 'TEXT', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
 function findStateItem(state: readonly AlpacaStateItem[], name: string) {
