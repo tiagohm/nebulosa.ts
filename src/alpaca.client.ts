@@ -265,11 +265,11 @@ abstract class AlpacaDevice {
 	}
 
 	update() {
-		this.runner.run(this.state as never)
+		void this.runner.run(this.state as never)
 	}
 
 	protected handleEndpointsAfterRun() {
-		const { Connected, DeviceState } = this.state
+		const { Connected, DeviceState, Step } = this.state
 
 		if (Connected !== this.isConnected) {
 			let updated = this.updatePropertyState(this.connection, 'Idle')
@@ -286,8 +286,8 @@ abstract class AlpacaDevice {
 		}
 
 		if (DeviceState?.length) {
-			this.state.Step = 1 // Initial
-			mapDeviceStateInto(DeviceState, this.state as never)
+			for (const item of DeviceState) this.state[item.Name as never] = item.Value as never
+			if (Step === 0) this.state.Step = 1
 		}
 	}
 
@@ -346,7 +346,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
 	protected readonly state: AlpacaTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0 }
 
-	private readonly onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK', 'Track', true], ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
+	private readonly onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
 	private readonly equatorialCoordinate = makeNumberVector('', 'EQUATORIAL_EOD_COORD', 'Eq. Coordinates', MAIN_CONTROL, 'rw', ['RA', 'RA (hours)', 0, 0, 24, 0.1, '%10.6f'], ['DEC', 'DEC (deg)', 0, -90, 90, 0.1, '%10.6f'])
 	private readonly abort = makeSwitchVector('', 'TELESCOPE_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 	private readonly trackMode = makeSwitchVector('', 'TELESCOPE_TRACK_MODE', 'Track Mode', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_SIDEREAL', 'Sidereal', true], ['TRACK_SOLAR', 'Solar', false], ['TRACK_LUNAR', 'Lunar', false], ['TRACK_KING', 'King', false])
@@ -390,7 +390,7 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.runner.registerEndpoint('CanMoveAxis', async () => (await this.api.canMoveAxis(this.id, 0)) || (await this.api.canMoveAxis(this.id, 1)), false)
 		this.runner.registerEndpoint('CanPulseGuide', () => this.api.canPulseGuide(this.id), false)
 		this.runner.registerEndpoint('CanTrack', () => this.api.canSetTracking(this.id), false)
-		this.runner.registerEndpoint('SlewRates', () => this.api.getAxisRates(this.id), false)
+		this.runner.registerEndpoint('SlewRates', () => this.api.getAxisRates(this.id, 0), false)
 		// this.runner.registerEndpoint('RightAscension', () => this.api.getRightAscension(this.id), false)
 		// this.runner.registerEndpoint('Declination', () => this.api.getDeclination(this.id), false)
 		// this.runner.registerEndpoint('Slewing', () => this.api.isSlewing(this.id), false)
@@ -402,7 +402,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	protected onConnect() {
 		super.onConnect()
 
-		this.sendDefProperty(this.onCoordSet)
+		// TODO: this.sendDefProperty(this.onCoordSet) remove elements if necessary
 		this.sendDefProperty(this.equatorialCoordinate)
 		this.sendDefProperty(this.abort)
 
@@ -439,7 +439,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			if (SlewRates?.length) {
 				for (let i = 0; i < SlewRates.length; i++) {
 					const name = `RATE_${i}`
-					this.slewRate.elements[name] = { name, label: SlewRates[i].Maximum.toString(), value: i === 0 }
+					this.slewRate.elements[name] = { name, label: `${SlewRates[i].Maximum.toFixed(1)} deg/s`, value: i === 0 }
 				}
 
 				this.sendDefProperty(this.slewRate)
@@ -454,7 +454,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			CanTrack && this.updatePropertyValue(this.tracking, Tracking ? 'TRACK_ON' : 'TRACK_OFF', true) && this.sendSetProperty(this.tracking)
 			CanPark && this.updatePropertyValue(this.park, AtPark ? 'PARK' : 'UNPARK', true) && this.sendSetProperty(this.park)
 
-			if (this.updatePropertyState(this.guideNS, IsPulseGuiding ? 'Busy' : 'Idle')) {
+			if (CanPulseGuide && this.updatePropertyState(this.guideNS, IsPulseGuiding ? 'Busy' : 'Idle')) {
 				this.guideWE.state = this.guideNS.state
 				this.sendSetProperty(this.guideNS)
 				this.sendSetProperty(this.guideWE)
@@ -535,7 +535,7 @@ class AlpacaFilterWheel extends AlpacaDevice {
 		// State
 		else if (Step === 2) {
 			let updated = this.updatePropertyState(this.position, Position === -1 ? 'Busy' : 'Idle')
-			if (Position >= 0) updated = this.updatePropertyValue(this.position, 'FILTER_SLOT_VALUE', Position) || updated
+			if (Position >= 0) updated = this.updatePropertyValue(this.position, 'FILTER_SLOT_VALUE', Position + 1) || updated
 			updated && this.sendSetProperty(this.position)
 		}
 	}
@@ -851,12 +851,6 @@ function makeTextVector(device: string, name: string, label: string, group: stri
 	return { type: 'TEXT', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
-function mapDeviceStateInto(items: readonly AlpacaStateItem[], state: Record<string, ValueType>) {
-	for (const item of items) {
-		state[item.Name] = item.Value
-	}
-}
-
 type AlpacaApiRunnerEndpoint = () => PromiseLike<unknown>
 
 type AlpacaApiRunnerHandlerAfterRun = () => void
@@ -865,13 +859,22 @@ class AlpacaApiRunner {
 	private readonly keys: string[] = []
 	private readonly endpoints: AlpacaApiRunnerEndpoint[] = []
 	private readonly enabled: boolean[] = []
-	private readonly result: PromiseLike<unknown>[] = []
+	private readonly result: (PromiseLike<unknown> | undefined)[] = []
 	private readonly handlers = new Set<AlpacaApiRunnerHandlerAfterRun>()
 
 	registerEndpoint(key: string, endpoint: AlpacaApiRunnerEndpoint, enabled: boolean) {
-		this.keys.push(key)
-		this.endpoints.push(endpoint)
-		this.enabled.push(enabled)
+		const index = this.keys.indexOf(key)
+
+		if (index >= 0) {
+			this.keys[index] = key
+			this.endpoints[index] = endpoint
+			this.enabled[index] = enabled
+			console.info('overwriting endpoint:', key)
+		} else {
+			this.keys.push(key)
+			this.endpoints.push(endpoint)
+			this.enabled.push(enabled)
+		}
 	}
 
 	unregisterEndpoint(key: string) {
@@ -887,10 +890,8 @@ class AlpacaApiRunner {
 
 	toggleEndpoint(key: string, force?: boolean) {
 		const index = this.keys.indexOf(key)
-
-		if (index >= 0) {
-			this.enabled[index] = force ?? !this.enabled[index]
-		}
+		if (index >= 0) this.enabled[index] = force ?? !this.enabled[index]
+		else console.warn('endpoint not found:', key)
 	}
 
 	registerHandler(handler: AlpacaApiRunnerHandlerAfterRun) {
@@ -907,10 +908,12 @@ class AlpacaApiRunner {
 		for (let i = 0; i < n; i++) {
 			if (this.enabled[i]) {
 				this.result[i] = this.endpoints[i]()
+			} else {
+				this.result[i] = undefined
 			}
 		}
 
-		void this.handleEndpointsAfterRun(state)
+		return this.handleEndpointsAfterRun(state)
 	}
 
 	private async handleEndpointsAfterRun(state: Record<string, ValueType>) {
@@ -921,7 +924,7 @@ class AlpacaApiRunner {
 		for (let i = 0; i < n; i++) {
 			const value = result[i] as never
 
-			if (this.enabled[i] && value !== undefined) {
+			if (this.enabled[i]) {
 				state[this.keys[i]] = value
 			}
 		}

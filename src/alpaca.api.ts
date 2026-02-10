@@ -153,16 +153,16 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/declinationrate`, 'GET')
 	}
 
-	setDeclinationRate(id: number) {
-		return request<void>(this.url, `${id}/declinationrate`, 'PUT')
+	setDeclinationRate(id: number, DeclinationRate: number) {
+		return request<void>(this.url, `${id}/declinationrate`, 'PUT', { DeclinationRate })
 	}
 
 	getDoesRefraction(id: number) {
 		return request<boolean>(this.url, `${id}/doesrefraction`, 'GET')
 	}
 
-	setDoesRefraction(id: number) {
-		return request<void>(this.url, `${id}/doesrefraction`, 'PUT')
+	setDoesRefraction(id: number, DoesRefraction: boolean) {
+		return request<void>(this.url, `${id}/doesrefraction`, 'PUT', { DoesRefraction })
 	}
 
 	getEquatorialSystem(id: number) {
@@ -177,16 +177,16 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/guideratedeclination`, 'GET')
 	}
 
-	setGuideRateDeclination(id: number) {
-		return request<void>(this.url, `${id}/guideratedeclination`, 'PUT')
+	setGuideRateDeclination(id: number, GuideRateDeclination: number) {
+		return request<void>(this.url, `${id}/guideratedeclination`, 'PUT', { GuideRateDeclination })
 	}
 
 	getGuideRateRightAscension(id: number) {
 		return request<number>(this.url, `${id}/guideraterightascension`, 'GET')
 	}
 
-	setGuideRateRightAscension(id: number) {
-		return request<void>(this.url, `${id}/guideraterightascension`, 'PUT')
+	setGuideRateRightAscension(id: number, GuideRateRightAscension: number) {
+		return request<void>(this.url, `${id}/guideraterightascension`, 'PUT', { GuideRateRightAscension })
 	}
 
 	isPulseGuiding(id: number) {
@@ -201,16 +201,16 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/rightascensionrate`, 'GET')
 	}
 
-	setRightAscensionRate(id: number) {
-		return request<void>(this.url, `${id}/rightascensionrate`, 'PUT')
+	setRightAscensionRate(id: number, RightAscensionRate: number) {
+		return request<void>(this.url, `${id}/rightascensionrate`, 'PUT', { RightAscensionRate })
 	}
 
 	getSideOfPier(id: number) {
 		return request<number>(this.url, `${id}/sideofpier`, 'GET')
 	}
 
-	setSideOfPier(id: number) {
-		return request<void>(this.url, `${id}/sideofpier`, 'PUT')
+	setSideOfPier(id: number, SideOfPier: number) {
+		return request<void>(this.url, `${id}/sideofpier`, 'PUT', { SideOfPier })
 	}
 
 	getSiderealTime(id: number) {
@@ -221,24 +221,24 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/siteelevation`, 'GET')
 	}
 
-	setSiteElevation(id: number) {
-		return request<void>(this.url, `${id}/siteelevation`, 'PUT')
+	setSiteElevation(id: number, SiteElevation: number) {
+		return request<void>(this.url, `${id}/siteelevation`, 'PUT', { SiteElevation })
 	}
 
 	getSiteLatitude(id: number) {
 		return request<number>(this.url, `${id}/sitelatitude`, 'GET')
 	}
 
-	setSiteLatitude(id: number) {
-		return request<void>(this.url, `${id}/sitelatitude`, 'PUT')
+	setSiteLatitude(id: number, SiteLatitude: number) {
+		return request<void>(this.url, `${id}/sitelatitude`, 'PUT', { SiteLatitude })
 	}
 
 	getSiteLongitude(id: number) {
 		return request<number>(this.url, `${id}/sitelongitude`, 'GET')
 	}
 
-	setSiteLongitude(id: number) {
-		return request<void>(this.url, `${id}/sitelongitude`, 'PUT')
+	setSiteLongitude(id: number, SiteLongitude: number) {
+		return request<void>(this.url, `${id}/sitelongitude`, 'PUT', { SiteLongitude })
 	}
 
 	isSlewing(id: number) {
@@ -249,40 +249,40 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/slewsettletime`, 'GET')
 	}
 
-	setSlewSettleTime(id: number) {
-		return request<void>(this.url, `${id}/slewsettletime`, 'PUT')
+	setSlewSettleTime(id: number, SlewSettleTime: number) {
+		return request<void>(this.url, `${id}/slewsettletime`, 'PUT', { SlewSettleTime })
 	}
 
 	getTargetDeclination(id: number) {
 		return request<number>(this.url, `${id}/targetdeclination`, 'GET')
 	}
 
-	setTargetDeclination(id: number) {
-		return request<void>(this.url, `${id}/targetdeclination`, 'PUT')
+	setTargetDeclination(id: number, TargetDeclination: number) {
+		return request<void>(this.url, `${id}/targetdeclination`, 'PUT', { TargetDeclination })
 	}
 
 	getTargetRightAscension(id: number) {
 		return request<number>(this.url, `${id}/targetrightascension`, 'GET')
 	}
 
-	setTargetRightAscension(id: number) {
-		return request<void>(this.url, `${id}/targetrightascension`, 'PUT')
+	setTargetRightAscension(id: number, TargetRightAscension: number) {
+		return request<void>(this.url, `${id}/targetrightascension`, 'PUT', { TargetRightAscension })
 	}
 
 	isTracking(id: number) {
 		return request<boolean>(this.url, `${id}/tracking`, 'GET')
 	}
 
-	setTracking(id: number) {
-		return request<void>(this.url, `${id}/tracking`, 'PUT')
+	setTracking(id: number, Tracking: boolean) {
+		return request<void>(this.url, `${id}/tracking`, 'PUT', { Tracking })
 	}
 
 	getTrackingRate(id: number) {
 		return request<number>(this.url, `${id}/trackingrate`, 'GET')
 	}
 
-	setTrackingRate(id: number) {
-		return request<void>(this.url, `${id}/trackingrate`, 'PUT')
+	setTrackingRate(id: number, TrackingRate: number) {
+		return request<void>(this.url, `${id}/trackingrate`, 'PUT', { TrackingRate })
 	}
 
 	getTrackingRates(id: number) {
@@ -293,16 +293,16 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<string>(this.url, `${id}/utcdate`, 'GET')
 	}
 
-	setUtcDate(id: number) {
-		return request<void>(this.url, `${id}/utcdate`, 'PUT')
+	setUtcDate(id: number, UTCDate: string) {
+		return request<void>(this.url, `${id}/utcdate`, 'PUT', { UTCDate })
 	}
 
 	abortSlew(id: number) {
 		return request<void>(this.url, `${id}/abortslew`, 'PUT')
 	}
 
-	getAxisRates(id: number) {
-		return request<readonly AlpacaAxisRate[]>(this.url, `${id}/axisrates`, 'GET')
+	getAxisRates(id: number, Axis: number) {
+		return request<readonly AlpacaAxisRate[]>(this.url, `${id}/axisrates?Axis=${Axis}`, 'GET')
 	}
 
 	canMoveAxis(id: number, Axis: number) {
@@ -317,36 +317,36 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<void>(this.url, `${id}/findhome`, 'PUT')
 	}
 
-	moveAxis(id: number) {
-		return request<void>(this.url, `${id}/moveaxis`, 'PUT')
+	moveAxis(id: number, Axis: number, Rate: number) {
+		return request<void>(this.url, `${id}/moveaxis`, 'PUT', { Axis, Rate })
 	}
 
 	park(id: number) {
 		return request<void>(this.url, `${id}/park`, 'PUT')
 	}
 
-	pulseGuide(id: number) {
-		return request<void>(this.url, `${id}/pulseguide`, 'PUT')
+	pulseGuide(id: number, Direction: number, Duration: number) {
+		return request<void>(this.url, `${id}/pulseguide`, 'PUT', { Direction, Duration })
 	}
 
 	setPark(id: number) {
 		return request<void>(this.url, `${id}/setpark`, 'PUT')
 	}
 
-	slewToAltaz(id: number) {
-		return request<void>(this.url, `${id}/slewtoaltaz`, 'PUT')
+	slewToAltaz(id: number, Azimuth: number, Altitude: number) {
+		return request<void>(this.url, `${id}/slewtoaltaz`, 'PUT', { Azimuth, Altitude })
 	}
 
-	slewToAltazAsync(id: number) {
-		return request<void>(this.url, `${id}/slewtoaltazasync`, 'PUT')
+	slewToAltazAsync(id: number, Azimuth: number, Altitude: number) {
+		return request<void>(this.url, `${id}/slewtoaltazasync`, 'PUT', { Azimuth, Altitude })
 	}
 
-	slewToCoordinates(id: number) {
-		return request<void>(this.url, `${id}/slewtocoordinates`, 'PUT')
+	slewToCoordinates(id: number, RightAscension: number, Declination: number) {
+		return request<void>(this.url, `${id}/slewtocoordinates`, 'PUT', { RightAscension, Declination })
 	}
 
-	slewToCoordinatesAsync(id: number) {
-		return request<void>(this.url, `${id}/slewtocoordinatesasync`, 'PUT')
+	slewToCoordinatesAsync(id: number, RightAscension: number, Declination: number) {
+		return request<void>(this.url, `${id}/slewtocoordinatesasync`, 'PUT', { RightAscension, Declination })
 	}
 
 	slewToTarget(id: number) {
@@ -357,12 +357,12 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<void>(this.url, `${id}/slewtotargetasync`, 'PUT')
 	}
 
-	syncToAltaz(id: number) {
-		return request<void>(this.url, `${id}/synctoaltaz`, 'PUT')
+	syncToAltaz(id: number, Azimuth: number, Altitude: number) {
+		return request<void>(this.url, `${id}/synctoaltaz`, 'PUT', { Azimuth, Altitude })
 	}
 
-	syncToCoordinates(id: number) {
-		return request<void>(this.url, `${id}/synctocoordinates`, 'PUT')
+	syncToCoordinates(id: number, RightAscension: number, Declination: number) {
+		return request<void>(this.url, `${id}/synctocoordinates`, 'PUT', { RightAscension, Declination })
 	}
 
 	syncToTarget(id: number) {
