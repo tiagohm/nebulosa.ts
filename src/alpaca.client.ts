@@ -2,7 +2,7 @@ import { AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, A
 import type { AlpacaAxisRate, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem } from './alpaca.types'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import type { Client } from './indi.device'
-import type { DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyPermission, PropertyState, SwitchRule, VectorType } from './indi.types'
+import type { DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyPermission, PropertyState, SwitchRule, ValueType, VectorType } from './indi.types'
 import { formatTemporal, TIMEZONE } from './temporal'
 
 export interface AlpacaClientHandler extends IndiClientHandler {}
@@ -133,13 +133,20 @@ const DRIVER_INTERFACES: Readonly<Record<Uppercase<AlpacaDeviceType>, string>> =
 const MAIN_CONTROL = 'Main Control'
 const GENERAL_INFO = 'General Info'
 
+interface AlpacaDeviceState {
+	Connected: boolean
+	DeviceState?: readonly AlpacaStateItem[]
+	Step: number
+}
+
 abstract class AlpacaDevice {
 	readonly id: number
 
+	protected readonly runner = new AlpacaApiRunner()
 	protected readonly properties = new Set<DefVector & { type: Uppercase<VectorType> }>()
-	protected hasDeviceState = false
 
 	protected abstract api: AlpacaDeviceApi
+	protected abstract state: { Connected: boolean; DeviceState?: readonly AlpacaStateItem[]; Step: number }
 
 	protected readonly driverInfo = makeTextVector('', 'DRIVER_INFO', 'Driver Info', GENERAL_INFO, 'ro', ['DRIVER_INTERFACE', 'Interface', ''], ['DRIVER_EXEC', 'Exec', ''], ['DRIVER_VERSION', 'Version', '1.0'], ['DRIVER_NAME', 'Name', ''])
 	protected readonly connection = makeSwitchVector('', 'CONNECTION', 'Connection', MAIN_CONTROL, 'OneOfMany', 'rw', ['CONNECT', 'Connect', false], ['DISCONNECT', 'Disconnect', true])
@@ -157,6 +164,11 @@ abstract class AlpacaDevice {
 		this.driverInfo.elements.DRIVER_INTERFACE.value = DRIVER_INTERFACES[device.DeviceType.toUpperCase() as never]
 
 		this.connection.device = device.DeviceName
+
+		this.runner.registerHandler(this.handleEndpointsAfterRun.bind(this))
+
+		this.runner.registerEndpoint('Connected', () => this.api.isConnected(this.id), true)
+		this.runner.registerEndpoint('DeviceState', () => this.api.deviceState(this.id), false)
 	}
 
 	get isConnected() {
@@ -178,8 +190,11 @@ abstract class AlpacaDevice {
 	}
 
 	protected sendDelProperty(...messages: DefVector[]) {
-		handleDelProperty(this.client, this.handler, ...messages)
-		for (const message of messages) this.properties.delete(message as never)
+		for (const message of messages) {
+			if (this.properties.delete(message as never)) {
+				handleDelProperty(this.client, this.handler, message)
+			}
+		}
 	}
 
 	protected updatePropertyState(property: DefVector, state: PropertyState | undefined) {
@@ -238,32 +253,50 @@ abstract class AlpacaDevice {
 		this.sendDefProperty(this.connection)
 	}
 
-	protected async onConnect() {
-		const state = await this.api.deviceState(this.id)
-		this.hasDeviceState = state !== undefined
+	protected onConnect() {
+		this.state.Step = 0
+		this.runner.toggleEndpoint('DeviceState', true)
 	}
 
 	protected onDisconnect() {
-		this.hasDeviceState = false
+		this.state.Step = 0
+		this.state.DeviceState = undefined
+		this.runner.toggleEndpoint('DeviceState', false)
 	}
 
-	async update() {
-		const isConnected = await this.api.isConnected(this.id)
+	update() {
+		this.runner.run(this.state as never)
+	}
 
-		// Failed
-		if (isConnected === undefined) return false
+	protected handleEndpointsAfterRun() {
+		const { Connected, DeviceState } = this.state
 
-		if (isConnected !== this.isConnected) {
-			if (isConnected) {
-				this.updatePropertyValue(this.connection, 'CONNECT', true)
-				await this.onConnect()
+		if (Connected !== this.isConnected) {
+			let updated = this.updatePropertyState(this.connection, 'Idle')
+
+			if (Connected) {
+				updated = this.updatePropertyValue(this.connection, 'CONNECT', true) || updated
+				this.onConnect()
 			} else {
-				this.updatePropertyValue(this.connection, 'CONNECT', false)
+				updated = this.updatePropertyValue(this.connection, 'DISCONNECT', true) || updated
 				this.onDisconnect()
 			}
+
+			updated && this.sendSetProperty(this.connection)
 		}
 
-		return true
+		if (DeviceState?.length) {
+			this.state.Step = 1 // Initial
+			mapDeviceStateInto(DeviceState, this.state as never)
+		}
+	}
+
+	protected enableEndpoints(...keys: string[]) {
+		for (const key of keys) this.runner.toggleEndpoint(key, true)
+	}
+
+	protected disableEndpoints(...keys: string[]) {
+		for (const key of keys) this.runner.toggleEndpoint(key, false)
 	}
 
 	sendText(vector: NewTextVector) {}
@@ -272,10 +305,11 @@ abstract class AlpacaDevice {
 
 	private async handleConnection(mode: 'connect' | 'disconnect') {
 		this.connection.state = 'Busy'
-		handleSetSwitchVector(this.client, this.handler, this.connection)
+		this.sendSetProperty(this.connection)
 
-		this.connection.state = (await this.api[mode](this.id)) === true ? 'Ok' : 'Alert'
-		handleSetSwitchVector(this.client, this.handler, this.connection)
+		const ok = (await this.api[mode](this.id)) === true
+		this.connection.state = ok ? 'Idle' : 'Alert'
+		this.sendSetProperty(this.connection)
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
@@ -292,8 +326,25 @@ abstract class AlpacaDevice {
 	close() {}
 }
 
+interface AlpacaTelescopeState extends AlpacaDeviceState {
+	CanHome: boolean
+	CanPark: boolean
+	CanMoveAxis: boolean
+	CanPulseGuide: boolean
+	CanTrack: boolean
+	Tracking: boolean
+	AtPark: boolean
+	IsPulseGuiding: boolean
+	Slewing: boolean
+	RightAscension: number
+	Declination: number
+	SlewRates?: readonly AlpacaAxisRate[]
+}
+
 class AlpacaTelescope extends AlpacaDevice {
 	protected readonly api: AlpacaTelescopeApi
+	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
+	protected readonly state: AlpacaTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0 }
 
 	private readonly onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK', 'Track', true], ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
 	private readonly equatorialCoordinate = makeNumberVector('', 'EQUATORIAL_EOD_COORD', 'Eq. Coordinates', MAIN_CONTROL, 'rw', ['RA', 'RA (hours)', 0, 0, 24, 0.1, '%10.6f'], ['DEC', 'DEC (deg)', 0, -90, 90, 0.1, '%10.6f'])
@@ -311,11 +362,6 @@ class AlpacaTelescope extends AlpacaDevice {
 	private readonly guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'rw', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	private readonly guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	private readonly guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
-
-	private canTrack = false
-	private canPark = false
-	private canPulseGuide = false
-	private rates: readonly AlpacaAxisRate[] = []
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -338,160 +384,93 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.guideRate.device = device.DeviceName
 		this.guideNS.device = device.DeviceName
 		this.guideWE.device = device.DeviceName
+
+		this.runner.registerEndpoint('CanHome', () => this.api.canFindHome(this.id), false)
+		this.runner.registerEndpoint('CanPark', () => this.api.canPark(this.id), false)
+		this.runner.registerEndpoint('CanMoveAxis', async () => (await this.api.canMoveAxis(this.id, 0)) || (await this.api.canMoveAxis(this.id, 1)), false)
+		this.runner.registerEndpoint('CanPulseGuide', () => this.api.canPulseGuide(this.id), false)
+		this.runner.registerEndpoint('CanTrack', () => this.api.canSetTracking(this.id), false)
+		this.runner.registerEndpoint('SlewRates', () => this.api.getAxisRates(this.id), false)
+		// this.runner.registerEndpoint('RightAscension', () => this.api.getRightAscension(this.id), false)
+		// this.runner.registerEndpoint('Declination', () => this.api.getDeclination(this.id), false)
+		// this.runner.registerEndpoint('Slewing', () => this.api.isSlewing(this.id), false)
+		// this.runner.registerEndpoint('Tracking', () => this.api.isTracking(this.id), false)
+		// this.runner.registerEndpoint('AtPark', () => this.api.isAtPark(this.id), false)
+		// this.runner.registerEndpoint('IsPulseGuiding', () => this.api.isPulseGuiding(this.id), false)
 	}
 
-	protected async onConnect() {
-		await super.onConnect()
+	protected onConnect() {
+		super.onConnect()
 
 		this.sendDefProperty(this.onCoordSet)
 		this.sendDefProperty(this.equatorialCoordinate)
 		this.sendDefProperty(this.abort)
 
-		void this.readHome()
-		void this.readPark(false)
-		void this.readSlewRates()
-		void this.readMoveAxis()
-		void this.readPulseGuide(false)
-		void this.readTracking(false)
-		void this.readGeographicCoordinate(false)
+		this.enableEndpoints('CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'SlewRates')
 	}
 
 	protected onDisconnect() {
 		this.sendDelProperty(this.home)
+
+		this.disableEndpoints('CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'SlewRates')
 	}
 
-	private async readHome() {
-		if (await this.api.canFindHome(this.id)) {
-			this.sendDefProperty(this.home)
+	protected handleEndpointsAfterRun() {
+		super.handleEndpointsAfterRun()
+
+		const { Connected, Step, CanTrack, CanHome, CanPark, CanMoveAxis, CanPulseGuide, Tracking, AtPark, IsPulseGuiding, Slewing, RightAscension, Declination, SlewRates } = this.state
+
+		if (!Connected) return
+
+		// Initial
+		if (Step === 1) {
+			if (CanHome) this.sendDefProperty(this.home)
+			if (CanPark) this.sendDefProperty(this.park)
+			if (CanTrack) this.sendDefProperty(this.tracking)
+			if (CanMoveAxis) {
+				this.sendDefProperty(this.motionNS)
+				this.sendDefProperty(this.motionWE)
+			}
+			if (CanPulseGuide) {
+				this.sendDefProperty(this.guideNS)
+				this.sendDefProperty(this.guideWE)
+			}
+
+			if (SlewRates?.length) {
+				for (let i = 0; i < SlewRates.length; i++) {
+					const name = `RATE_${i}`
+					this.slewRate.elements[name] = { name, label: SlewRates[i].Maximum.toString(), value: i === 0 }
+				}
+
+				this.sendDefProperty(this.slewRate)
+			}
+
+			this.disableEndpoints('CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'SlewRates')
+
+			this.state.Step = 2
 		}
-	}
+		// State
+		else if (Step === 2) {
+			CanTrack && this.updatePropertyValue(this.tracking, Tracking ? 'TRACK_ON' : 'TRACK_OFF', true) && this.sendSetProperty(this.tracking)
+			CanPark && this.updatePropertyValue(this.park, AtPark ? 'PARK' : 'UNPARK', true) && this.sendSetProperty(this.park)
 
-	private async readPark(update: boolean) {
-		if (update) {
-			const parked = await this.api.isAtPark(this.id)
-			this.updatePropertyValue(this.park, parked ? 'PARK' : 'UNPARK', true) && this.sendSetProperty(this.park)
-		} else if (await this.api.canPark(this.id)) {
-			this.canPark = true
-			this.sendDefProperty(this.park)
-		}
-	}
-
-	private async readMoveAxis() {
-		if ((await this.api.canMoveAxis(this.id, 0)) && (await this.api.canMoveAxis(this.id, 1))) {
-			this.sendDefProperty(this.motionNS)
-			this.sendDefProperty(this.motionWE)
-		}
-	}
-
-	private async readPulseGuide(update: boolean) {
-		if (update) {
-			const pulseGuiding = await this.api.isPulseGuiding(this.id)
-
-			if (this.updatePropertyState(this.guideNS, pulseGuiding ? 'Busy' : 'Idle')) {
+			if (this.updatePropertyState(this.guideNS, IsPulseGuiding ? 'Busy' : 'Idle')) {
 				this.guideWE.state = this.guideNS.state
 				this.sendSetProperty(this.guideNS)
 				this.sendSetProperty(this.guideWE)
 			}
-		} else if (await this.api.canPulseGuide(this.id)) {
-			this.canPulseGuide = true
-			this.sendDefProperty(this.guideNS)
-			this.sendDefProperty(this.guideWE)
-		}
-	}
 
-	private async readTracking(update: boolean) {
-		if (update) {
-			const tracking = await this.api.isTracking(this.id)
-			this.updatePropertyValue(this.tracking, tracking ? 'TRACK_ON' : 'TRACK_OFF', true) && this.sendSetProperty(this.tracking)
-		} else if (await this.api.canSetTracking(this.id)) {
-			this.canTrack = true
-			this.sendDefProperty(this.tracking)
-		}
-	}
-
-	private async readSlewRates() {
-		const rates = await this.api.getAxisRates(this.id)
-
-		if (rates?.length) {
-			this.rates = rates
-
-			for (let i = 0; i < rates.length; i++) {
-				const name = `RATE_${i}`
-				this.slewRate.elements[name] = { name, label: rates[i].Maximum.toString(), value: i === 0 }
-			}
-
-			this.sendDefProperty(this.slewRate)
-		}
-	}
-
-	private async readEquatorialCoordinate() {
-		const rightAscension = await this.api.getRightAscension(this.id)
-		const declination = rightAscension !== undefined ? await this.api.getDeclination(this.id) : undefined
-
-		if (rightAscension !== undefined && declination !== undefined) {
-			const slewing = await this.api.isSlewing(this.id)
-
-			let updated = this.updatePropertyState(this.equatorialCoordinate, slewing ? 'Busy' : 'Idle')
-			updated = this.updatePropertyValue(this.equatorialCoordinate, 'RA', rightAscension) || updated
-			updated = this.updatePropertyValue(this.equatorialCoordinate, 'DEC', declination) || updated
+			let updated = this.updatePropertyState(this.equatorialCoordinate, Slewing ? 'Busy' : 'Idle')
+			updated = this.updatePropertyValue(this.equatorialCoordinate, 'RA', RightAscension) || updated
+			updated = this.updatePropertyValue(this.equatorialCoordinate, 'DEC', Declination) || updated
 			updated && this.sendSetProperty(this.equatorialCoordinate)
 		}
 	}
+}
 
-	private async readGeographicCoordinate(update: boolean) {
-		const longitude = await this.api.getSiteLongitude(this.id)
-		const latitude = longitude !== undefined ? await this.api.getSiteLatitude(this.id) : undefined
-		const elevation = longitude !== undefined ? await this.api.getSiteElevation(this.id) : undefined
-
-		if (longitude !== undefined && latitude !== undefined && elevation !== undefined) {
-			let updated = this.updatePropertyValue(this.geographicCoordinate, 'LONG', longitude)
-			updated = this.updatePropertyValue(this.geographicCoordinate, 'LAT', latitude) || updated
-			updated = this.updatePropertyValue(this.geographicCoordinate, 'ELEV', elevation) || updated
-			if (update) updated && this.sendSetProperty(this.geographicCoordinate)
-			else this.sendDefProperty(this.geographicCoordinate)
-		}
-	}
-
-	async update() {
-		if ((await super.update()) && this.isConnected) {
-			if (this.hasDeviceState) {
-				const state = await this.api.deviceState(this.id)
-
-				if (state !== undefined) {
-					const rightAscension = findStateItem(state, 'RightAscension')
-					const declination = findStateItem(state, 'Declination')
-					const slewing = findStateItem(state, 'Slewing')
-
-					let updated = this.updatePropertyState(this.equatorialCoordinate, slewing ? 'Busy' : 'Idle')
-					updated = this.updatePropertyValue(this.equatorialCoordinate, 'RA', rightAscension as number) || updated
-					updated = this.updatePropertyValue(this.equatorialCoordinate, 'DEC', declination as number) || updated
-					updated && this.sendSetProperty(this.equatorialCoordinate)
-
-					const pulseGuiding = findStateItem(state, 'IsPulseGuiding')
-					if (this.updatePropertyState(this.guideNS, pulseGuiding ? 'Busy' : 'Idle')) {
-						this.guideWE.state = this.guideNS.state
-						this.sendSetProperty(this.guideNS)
-						this.sendSetProperty(this.guideWE)
-					}
-
-					const tracking = findStateItem(state, 'Tracking')
-					this.updatePropertyValue(this.tracking, tracking ? 'TRACK_ON' : 'TRACK_OFF', true) && this.sendSetProperty(this.tracking)
-
-					const parked = findStateItem(state, 'IsAtPark')
-					this.updatePropertyValue(this.park, parked ? 'PARK' : 'UNPARK', true) && this.sendSetProperty(this.park)
-				} else {
-					this.hasDeviceState = false
-				}
-			} else {
-				void this.readEquatorialCoordinate()
-				this.canTrack && void this.readTracking(true)
-				this.canPulseGuide && void this.readPulseGuide(true)
-				this.canPark && this.readPark(true)
-			}
-		}
-
-		return true
-	}
+interface AlpacaFilterWheelState extends AlpacaDeviceState {
+	Position: number
+	Names?: string[]
 }
 
 class AlpacaFilterWheel extends AlpacaDevice {
@@ -499,6 +478,8 @@ class AlpacaFilterWheel extends AlpacaDevice {
 	private readonly names = makeTextVector('', 'FILTER_NAME', 'Filter', MAIN_CONTROL, 'ro')
 
 	protected readonly api: AlpacaFilterWheelApi
+	// https://ascom-standards.org/newdocs/filterwheel.html#FilterWheel.DeviceState
+	protected readonly state: AlpacaFilterWheelState = { Connected: false, DeviceState: undefined, Step: 0, Position: 0, Names: undefined }
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -507,71 +488,56 @@ class AlpacaFilterWheel extends AlpacaDevice {
 
 		this.position.device = device.DeviceName
 		this.names.device = device.DeviceName
+
+		this.runner.registerEndpoint('Names', () => this.api.getNames(this.id), false)
+		// this.runner.registerEndpoint('Position', () => this.api.getPosition(this.id), false)
 	}
 
-	protected async onConnect() {
-		await super.onConnect()
+	protected onConnect() {
+		super.onConnect()
 
-		void this.readNames()
+		this.enableEndpoints('Names')
 	}
 
 	protected onDisconnect() {
 		super.onDisconnect()
 
 		this.sendDelProperty(this.position, this.names)
+
+		this.disableEndpoints('Names')
 	}
 
-	private async readNames() {
-		const names = await this.api.getNames(this.id)
+	protected handleEndpointsAfterRun() {
+		super.handleEndpointsAfterRun()
 
-		if (names?.length) {
-			this.position.elements.FILTER_SLOT_VALUE.max = names.length
+		const { Connected, Step, Position, Names } = this.state
 
-			for (let i = 0, p = 1; i < names.length; i++, p++) {
-				const name = `FILTER_SLOT_NAME_${p}`
-				this.names.elements[name] = { name, label: `Filter ${p}`, value: names[i] }
+		if (!Connected) return
+
+		// Initial
+		if (Step === 1) {
+			if (Names?.length) {
+				this.position.elements.FILTER_SLOT_VALUE.max = Names.length
+
+				for (let i = 0, p = 1; i < Names.length; i++, p++) {
+					const name = `FILTER_SLOT_NAME_${p}`
+					this.names.elements[name] = { name, label: `Filter ${p}`, value: Names[i] }
+				}
+
+				this.sendDefProperty(this.names)
+				this.sendDefProperty(this.position)
 			}
 
-			this.sendDefProperty(this.names)
-			this.sendDefProperty(this.position)
+			this.disableEndpoints('Names')
+
+			this.state.Step = 2
 		}
-	}
-
-	private async readState() {
-		const state = await this.api.deviceState(this.id)
-
-		if (state !== undefined) {
-			const position = findStateItem(state, 'Position') as number
-			let updated = this.updatePropertyState(this.position, position === -1 ? 'Busy' : 'Idle')
-			if (position >= 0) updated = this.updatePropertyValue(this.position, 'FILTER_SLOT_VALUE', position) || updated
-			updated && this.sendSetProperty(this.position)
-		} else {
-			this.hasDeviceState = false
-		}
-	}
-
-	private async readPosition() {
-		const position = await this.api.getPosition(this.id)
-
-		if (position !== undefined) {
-			let updated = this.updatePropertyState(this.position, position === -1 ? 'Busy' : 'Idle')
-			if (position >= 0) updated = this.updatePropertyValue(this.position, 'FILTER_SLOT_VALUE', position) || updated
+		// State
+		else if (Step === 2) {
+			let updated = this.updatePropertyState(this.position, Position === -1 ? 'Busy' : 'Idle')
+			if (Position >= 0) updated = this.updatePropertyValue(this.position, 'FILTER_SLOT_VALUE', Position) || updated
 			updated && this.sendSetProperty(this.position)
 		}
-	}
-
-	async update() {
-		if ((await super.update()) && this.isConnected) {
-			if (this.hasDeviceState) {
-				void this.readState()
-			} else {
-				void this.readPosition()
-			}
-
-			return true
-		}
-
-		return false
 	}
 
 	sendNumber(vector: NewNumberVector) {
@@ -584,6 +550,14 @@ class AlpacaFilterWheel extends AlpacaDevice {
 	}
 }
 
+interface AlpacaFocuserState extends AlpacaDeviceState {
+	IsMoving: boolean
+	Position: number
+	Temperature?: number
+	IsAbsolute: boolean
+	MaxStep: number
+}
+
 class AlpacaFocuser extends AlpacaDevice {
 	private readonly absolutePosition = makeNumberVector('', 'ABS_FOCUS_POSITION', 'Absolute Position', MAIN_CONTROL, 'rw', ['FOCUS_ABSOLUTE_POSITION', 'Position', 0, 0, 0, 1, '%.0f'])
 	private readonly relativePosition = makeNumberVector('', 'REL_FOCUS_POSITION', 'Relative Position', MAIN_CONTROL, 'rw', ['FOCUS_RELATIVE_POSITION', 'Steps', 0, 0, 0, 1, '%.0f'])
@@ -592,9 +566,10 @@ class AlpacaFocuser extends AlpacaDevice {
 	private readonly direction = makeSwitchVector('', 'FOCUS_MOTION', 'Direction', MAIN_CONTROL, 'OneOfMany', 'rw', ['FOCUS_INWARD', 'In', true], ['FOCUS_OUTWARD', 'Out', false])
 
 	private position = this.absolutePosition
-	private hasTemperature = false
 
 	protected readonly api: AlpacaFocuserApi
+	// https://ascom-standards.org/newdocs/focuser.html#Focuser.DeviceState
+	protected readonly state: AlpacaFocuserState = { Connected: false, DeviceState: undefined, Step: 0, IsMoving: false, Position: 0, Temperature: undefined, IsAbsolute: false, MaxStep: 0 }
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -606,6 +581,12 @@ class AlpacaFocuser extends AlpacaDevice {
 		this.temperature.device = device.DeviceName
 		this.abort.device = device.DeviceName
 		this.direction.device = device.DeviceName
+
+		// this.runner.registerEndpoint('IsMoving', () => this.api.isMoving(this.id), false)
+		// this.runner.registerEndpoint('Position', () => this.api.getPosition(this.id), false)
+		this.runner.registerEndpoint('Temperature', () => this.api.getTemperature(this.id), false)
+		this.runner.registerEndpoint('IsAbsolute', () => this.api.isAbsolute(this.id), false)
+		this.runner.registerEndpoint('MaxStep', () => this.api.getMaxStep(this.id), false)
 	}
 
 	get isAbsolute() {
@@ -627,113 +608,62 @@ class AlpacaFocuser extends AlpacaDevice {
 		this.sendDefProperty(this.abort)
 	}
 
-	protected async onConnect() {
-		await super.onConnect()
+	protected onConnect() {
+		super.onConnect()
 
-		void this.readMode()
-		void this.readTemperature(false)
+		this.enableEndpoints('MaxStep', 'IsAbsolute', 'Temperature')
 	}
 
 	onDisconnect() {
 		super.onDisconnect()
 
 		this.sendDelProperty(this.position, this.temperature)
+
+		this.disableEndpoints('MaxStep', 'IsAbsolute', 'Temperature')
 	}
 
-	private async readMode() {
-		const absolute = await this.api.isAbsolute(this.id)
+	protected handleEndpointsAfterRun() {
+		super.handleEndpointsAfterRun()
 
-		if (absolute !== undefined) {
-			const maxStep = await this.api.getMaxStep(this.id)
+		const { Connected, Step, IsAbsolute, IsMoving, Position, Temperature, MaxStep } = this.state
 
-			if (maxStep) {
-				if (absolute) {
-					this.absolutePosition.elements.FOCUS_ABSOLUTE_POSITION.max = maxStep
+		if (!Connected) return
+
+		// Initial
+		if (Step === 1) {
+			if (MaxStep) {
+				if (IsAbsolute) {
+					this.absolutePosition.elements.FOCUS_ABSOLUTE_POSITION.max = MaxStep
 					this.position = this.absolutePosition
 				} else {
-					this.relativePosition.elements.FOCUS_RELATIVE_POSITION.max = maxStep
+					this.relativePosition.elements.FOCUS_RELATIVE_POSITION.max = MaxStep
 					this.position = this.relativePosition
 				}
 
 				this.sendDefProperty(this.position)
 			}
-		}
-	}
 
-	private async readState() {
-		const state = await this.api.deviceState(this.id)
-
-		if (state !== undefined) {
-			const position = this.isAbsolute ? findStateItem(state, 'Position') : undefined
-			const moving = findStateItem(state, 'IsMoving')
-			let updated = this.updatePropertyState(this.position, moving ? 'Busy' : 'Idle')
-			updated = this.updatePropertyValue(this.position, 'FOCUS_ABSOLUTE_POSITION', position as number) || updated
-			updated && this.sendSetProperty(this.position)
-
-			if (this.hasTemperature) {
-				const temperature = findStateItem(state, 'Temperature')
-				this.updatePropertyValue(this.temperature, 'TEMPERATURE', Math.trunc(temperature as number)) && this.sendSetProperty(this.temperature)
-			}
-
-			return true
-		} else {
-			this.hasDeviceState = false
-			return false
-		}
-	}
-
-	private async readTemperature(update: boolean) {
-		const temperature = await this.api.getTemperature(this.id)
-
-		if (temperature !== undefined) {
-			if (update) {
-				this.updatePropertyValue(this.temperature, 'TEMPERATURE', Math.trunc(temperature)) && this.sendSetProperty(this.temperature)
-			} else {
-				this.temperature.elements.TEMPERATURE.value = Math.trunc(temperature)
+			if (Temperature !== undefined) {
+				this.temperature.elements.TEMPERATURE.value = Math.trunc(Temperature)
 				this.sendDefProperty(this.temperature)
-				this.hasTemperature = true
 			}
-		} else {
-			this.hasTemperature = false
+
+			this.disableEndpoints('MaxStep', 'IsAbsolute', 'Temperature')
+
+			this.state.Step = 2
 		}
-	}
-
-	private async readAbsolutePosition() {
-		const position = await this.api.getPosition(this.id)
-
-		if (position !== undefined) {
-			const moving = await this.api.isMoving(this.id)
-			let updated = this.updatePropertyState(this.position, moving ? 'Busy' : 'Idle')
-			updated = this.updatePropertyValue(this.position, 'FOCUS_ABSOLUTE_POSITION', position) || updated
+		// State
+		else if (Step === 2) {
+			let updated = this.updatePropertyState(this.position, IsMoving ? 'Busy' : 'Idle')
+			if (IsAbsolute) updated = this.updatePropertyValue(this.position, 'FOCUS_ABSOLUTE_POSITION', Position) || updated
 			updated && this.sendSetProperty(this.position)
-		}
-	}
 
-	private async readRelativePosition() {
-		const moving = await this.api.isMoving(this.id)
-		this.updatePropertyState(this.position, moving ? 'Busy' : 'Idle') && this.sendSetProperty(this.position)
-	}
-
-	async update() {
-		if ((await super.update()) && this.isConnected) {
-			if (this.hasDeviceState) {
-				void this.readState()
-			} else {
-				if (this.hasTemperature) {
-					void this.readTemperature(true)
-				}
-
-				if (this.isAbsolute) {
-					void this.readAbsolutePosition()
-				} else {
-					void this.readRelativePosition()
-				}
+			if (Temperature !== undefined) {
+				this.updatePropertyValue(this.temperature, 'TEMPERATURE', Math.trunc(Temperature)) && this.sendSetProperty(this.temperature)
 			}
 
 			return true
 		}
-
-		return false
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
@@ -764,16 +694,24 @@ class AlpacaFocuser extends AlpacaDevice {
 	}
 }
 
+interface AlpacaCoverCalibratorState extends AlpacaDeviceState {
+	CoverState: number
+	CoverMoving: boolean
+	CalibratorState: number
+	Brightness: number
+	MaxBrightness?: number
+}
+
 class AlpacaCoverCalibrator extends AlpacaDevice {
+	protected readonly api: AlpacaCoverCalibratorApi
+
 	private readonly light = makeSwitchVector('', 'FLAT_LIGHT_CONTROL', 'Light', MAIN_CONTROL, 'OneOfMany', 'rw', ['FLAT_LIGHT_ON', 'On', false], ['FLAT_LIGHT_OFF', 'Off', true])
 	private readonly brightness = makeNumberVector('', 'FLAT_LIGHT_INTENSITY', 'Brightness', MAIN_CONTROL, 'rw', ['FLAT_LIGHT_INTENSITY_VALUE', 'Brightness', 0, 0, 0, 1, '%.0f'])
 	private readonly park = makeSwitchVector('', 'CAP_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
 	private readonly abort = makeSwitchVector('', 'CAP_ABORT', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 
-	private hasCalibrator = true
-	private hasCover = true
-
-	protected readonly api: AlpacaCoverCalibratorApi
+	// https://ascom-standards.org/newdocs/covercalibrator.html#CoverCalibrator.DeviceState
+	protected readonly state: AlpacaCoverCalibratorState = { Connected: false, DeviceState: undefined, Step: 0, CoverState: 0, CoverMoving: false, CalibratorState: 0, Brightness: 0, MaxBrightness: undefined }
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -784,121 +722,85 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 		this.brightness.device = device.DeviceName
 		this.park.device = device.DeviceName
 		this.abort.device = device.DeviceName
+
+		this.runner.registerEndpoint('MaxBrightness', () => this.api.getMaxBrightness(this.id), false)
+		// this.runner.registerEndpoint('Brightness', () => this.api.getBrightness(this.id), false)
+		// this.runner.registerEndpoint('CoverState', () => this.api.getCoverState(this.id), false)
+		// this.runner.registerEndpoint('CalibratorState', () => this.api.getCalibratorState(this.id), false)
+		// this.runner.registerEndpoint('Moving', () => this.api.isMoving(this.id), false)
 	}
 
-	protected async onConnect() {
-		await super.onConnect()
+	protected onConnect() {
+		super.onConnect()
 
-		await this.readCoverState(false)
-		await this.readCalibratorState(false)
-
-		if (this.hasCover !== this.hasCalibrator) {
-			if (this.hasCover) {
-				this.driverInfo.elements.DRIVER_INTERFACE.value = '512'
-			} else {
-				this.driverInfo.elements.DRIVER_INTERFACE.value = '1024'
-			}
-
-			this.sendDefProperty(this.driverInfo)
-		}
-
-		if (this.hasCover) {
-			this.sendDefProperty(this.park)
-			this.sendDefProperty(this.abort)
-		}
-
-		if (this.hasCalibrator) {
-			const maxBrightness = await this.api.getMaxBrightness(this.id)
-
-			if (maxBrightness !== undefined) {
-				this.sendDefProperty(this.light)
-				this.brightness.elements.FLAT_LIGHT_INTENSITY_VALUE.max = maxBrightness
-				this.sendDefProperty(this.brightness)
-			}
-		}
+		this.enableEndpoints('MaxBrightness')
 	}
 
 	protected onDisconnect() {
 		super.onDisconnect()
 
 		this.sendDelProperty(this.park, this.light, this.brightness, this.abort)
+
+		this.disableEndpoints('MaxBrightness')
 	}
 
-	private async readCoverState(update: boolean) {
-		const state = await this.api.getCoverState(this.id)
+	protected handleEndpointsAfterRun() {
+		super.handleEndpointsAfterRun()
 
-		// Cover is not present
-		if (state === 0) {
-			this.hasCover = false
-		} else if (update) {
-			const moving = await this.api.isMoving(this.id)
-			let updated = this.updatePropertyState(this.park, moving ? 'Busy' : 'Idle')
-			updated = this.updatePropertyValue(this.park, state === 1 ? 'PARK' : 'UNPARK', true) || updated
-			updated && this.sendSetProperty(this.park)
-		}
-	}
+		const { Connected, Step, CoverState, CoverMoving, CalibratorState, Brightness, MaxBrightness } = this.state
 
-	private async readCalibratorState(update: boolean) {
-		const state = await this.api.getCalibratorState(this.id)
+		if (!Connected) return
 
-		// Calibrator is not present
-		if (state === 0) {
-			this.hasCalibrator = false
-		} else if (update) {
-			this.updatePropertyValue(this.light, state === 1 ? 'FLAT_LIGHT_OFF' : 'FLAT_LIGHT_ON', true) && this.sendSetProperty(this.light)
+		// Initial
+		if (Step === 1) {
+			// 0 = Not present, 1 = Closed/Off, 3 = Open/On
+			const hasCover = CoverState !== 0
+			const hasCalibrator = CalibratorState !== 0
 
-			if (state === 3) {
-				const brightness = await this.api.getBrightness(this.id)
-				this.updatePropertyValue(this.brightness, 'FLAT_LIGHT_INTENSITY_VALUE', brightness as number) && this.sendSetProperty(this.brightness)
-			}
-		}
-	}
+			if (hasCover !== hasCalibrator) {
+				if (hasCover) {
+					this.driverInfo.elements.DRIVER_INTERFACE.value = '512'
+				} else {
+					this.driverInfo.elements.DRIVER_INTERFACE.value = '1024'
+				}
 
-	private async readState() {
-		const items = await this.api.deviceState(this.id)
-
-		if (items === undefined) {
-			this.hasDeviceState = false
-			return false
-		}
-
-		if (this.hasCover) {
-			const state = findStateItem(items, 'CoverState') // 1 = Closed, 3 = Open
-			const moving = state === 2 || findStateItem(items, 'CoverMoving')
-			let updated = this.updatePropertyState(this.park, moving ? 'Busy' : 'Idle')
-			updated = this.updatePropertyValue(this.park, state === 1 ? 'PARK' : 'UNPARK', true) || updated
-			updated && this.sendSetProperty(this.park)
-		}
-
-		if (this.hasCalibrator) {
-			const state = findStateItem(items, 'CalibratorState') // 1 = Off, 3 = On
-
-			if (state === 3) {
-				this.updatePropertyValue(this.light, 'FLAT_LIGHT_ON', true) && this.sendSetProperty(this.light)
-
-				const brightness = findStateItem(items, 'Brightness')
-				this.updatePropertyValue(this.brightness, 'FLAT_LIGHT_INTENSITY_VALUE', brightness as number) && this.sendSetProperty(this.brightness)
-			} else if (state === 1) {
-				this.updatePropertyValue(this.light, 'FLAT_LIGHT_OFF', true) && this.sendSetProperty(this.light)
-			}
-		}
-
-		return true
-	}
-
-	async update() {
-		if ((await super.update()) && this.isConnected) {
-			if (this.hasDeviceState) {
-				void this.readState()
-			} else {
-				if (this.hasCover) void this.readCoverState(true)
-				if (this.hasCalibrator) void this.readCalibratorState(true)
+				this.sendDefProperty(this.driverInfo)
 			}
 
-			return true
-		}
+			if (hasCover) {
+				this.sendDefProperty(this.park)
+				this.sendDefProperty(this.abort)
+			}
 
-		return false
+			if (hasCalibrator) {
+				if (MaxBrightness) {
+					this.sendDefProperty(this.light)
+					this.brightness.elements.FLAT_LIGHT_INTENSITY_VALUE.max = MaxBrightness
+					this.sendDefProperty(this.brightness)
+				}
+			}
+
+			this.disableEndpoints('MaxBrightness')
+
+			this.state.Step = 2
+		}
+		// State
+		else if (Step === 2) {
+			if (CoverState !== 0) {
+				let updated = this.updatePropertyState(this.park, CoverState === 2 || CoverMoving ? 'Busy' : 'Idle')
+				if (CoverState === 1 || CoverState === 2) updated = this.updatePropertyValue(this.park, CoverState === 1 ? 'PARK' : 'UNPARK', true) || updated
+				updated && this.sendSetProperty(this.park)
+			}
+
+			if (CalibratorState !== 0) {
+				if (CalibratorState === 3) {
+					this.updatePropertyValue(this.light, 'FLAT_LIGHT_ON', true) && this.sendSetProperty(this.light)
+					this.updatePropertyValue(this.brightness, 'FLAT_LIGHT_INTENSITY_VALUE', Brightness as number) && this.sendSetProperty(this.brightness)
+				} else if (CalibratorState === 1) {
+					this.updatePropertyValue(this.light, 'FLAT_LIGHT_OFF', true) && this.sendSetProperty(this.light)
+				}
+			}
+		}
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
@@ -949,7 +851,83 @@ function makeTextVector(device: string, name: string, label: string, group: stri
 	return { type: 'TEXT', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
-function findStateItem(state: readonly AlpacaStateItem[], name: string) {
-	for (const item of state) if (item.Name === name) return item.Value
-	return undefined
+function mapDeviceStateInto(items: readonly AlpacaStateItem[], state: Record<string, ValueType>) {
+	for (const item of items) {
+		state[item.Name] = item.Value
+	}
+}
+
+type AlpacaApiRunnerEndpoint = () => PromiseLike<unknown>
+
+type AlpacaApiRunnerHandlerAfterRun = () => void
+
+class AlpacaApiRunner {
+	private readonly keys: string[] = []
+	private readonly endpoints: AlpacaApiRunnerEndpoint[] = []
+	private readonly enabled: boolean[] = []
+	private readonly result: PromiseLike<unknown>[] = []
+	private readonly handlers = new Set<AlpacaApiRunnerHandlerAfterRun>()
+
+	registerEndpoint(key: string, endpoint: AlpacaApiRunnerEndpoint, enabled: boolean) {
+		this.keys.push(key)
+		this.endpoints.push(endpoint)
+		this.enabled.push(enabled)
+	}
+
+	unregisterEndpoint(key: string) {
+		const index = this.keys.indexOf(key)
+
+		if (index >= 0) {
+			this.keys.splice(index, 1)
+			this.endpoints.splice(index, 1)
+			this.enabled.splice(index, 1)
+			this.result.splice(index, 1)
+		}
+	}
+
+	toggleEndpoint(key: string, force?: boolean) {
+		const index = this.keys.indexOf(key)
+
+		if (index >= 0) {
+			this.enabled[index] = force ?? !this.enabled[index]
+		}
+	}
+
+	registerHandler(handler: AlpacaApiRunnerHandlerAfterRun) {
+		this.handlers.add(handler)
+	}
+
+	unregisterHandler(handler: AlpacaApiRunnerHandlerAfterRun) {
+		this.handlers.delete(handler)
+	}
+
+	run(state: Record<string, ValueType>) {
+		const n = this.keys.length
+
+		for (let i = 0; i < n; i++) {
+			if (this.enabled[i]) {
+				this.result[i] = this.endpoints[i]()
+			}
+		}
+
+		void this.handleEndpointsAfterRun(state)
+	}
+
+	private async handleEndpointsAfterRun(state: Record<string, ValueType>) {
+		const result = await Promise.all(this.result)
+
+		const n = this.keys.length
+
+		for (let i = 0; i < n; i++) {
+			const value = result[i] as never
+
+			if (this.enabled[i] && value !== undefined) {
+				state[this.keys[i]] = value
+			}
+		}
+
+		for (const handler of this.handlers) {
+			handler()
+		}
+	}
 }
