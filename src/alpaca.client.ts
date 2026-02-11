@@ -2,7 +2,8 @@ import { AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, A
 import type { AlpacaAxisRate, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem } from './alpaca.types'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import type { Client } from './indi.device'
-import type { DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyPermission, PropertyState, SwitchRule, ValueType, VectorType } from './indi.types'
+// biome-ignore format: too long!
+import { type DefNumber, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefText, type DefTextVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyPermission, type PropertyState, type SwitchRule, type ValueType, type VectorType } from './indi.types'
 import { formatTemporal, TIMEZONE } from './temporal'
 
 export interface AlpacaClientHandler extends IndiClientHandler {}
@@ -307,15 +308,6 @@ abstract class AlpacaDevice {
 
 	sendNumber(vector: NewNumberVector) {}
 
-	private async handleConnection(mode: 'connect' | 'disconnect') {
-		this.connection.state = 'Busy'
-		this.sendSetProperty(this.connection)
-
-		const ok = (await this.api[mode](this.id)) === true
-		this.connection.state = ok ? 'Idle' : 'Alert'
-		this.sendSetProperty(this.connection)
-	}
-
 	sendSwitch(vector: NewSwitchVector) {
 		switch (vector.name) {
 			case 'CONNECTION':
@@ -325,6 +317,15 @@ abstract class AlpacaDevice {
 					void this.handleConnection('disconnect')
 				}
 		}
+	}
+
+	private async handleConnection(mode: 'connect' | 'disconnect') {
+		this.connection.state = 'Busy'
+		this.sendSetProperty(this.connection)
+
+		const ok = (await this.api[mode](this.id)) === true
+		this.connection.state = ok ? 'Idle' : 'Alert'
+		this.sendSetProperty(this.connection)
 	}
 
 	close() {}
@@ -452,6 +453,7 @@ class AlpacaTelescope extends AlpacaDevice {
 				}
 
 				this.sendDefProperty(this.slewRate)
+				this.sendSetProperty(this.slewRate)
 			}
 
 			if (TrackingRates?.length) {
@@ -482,6 +484,121 @@ class AlpacaTelescope extends AlpacaDevice {
 			updated = this.updatePropertyValue(this.equatorialCoordinate, 'DEC', Declination) || updated
 			updated && this.sendSetProperty(this.equatorialCoordinate)
 		}
+	}
+
+	sendSwitch(vector: NewSwitchVector) {
+		switch (vector.name) {
+			case 'TELESCOPE_SLEW_RATE': {
+				if (this.state.SlewRates?.length) {
+					const selected = findOnSwitch(this.slewRate)[0]
+					selected && this.updatePropertyValue(this.slewRate, selected, true) && this.sendSetProperty(this.slewRate)
+				}
+
+				break
+			}
+			case 'TELESCOPE_MOTION_NS':
+			case 'TELESCOPE_MOTION_WE': {
+				if (this.state.CanMoveAxis && this.state.SlewRates?.length) {
+					const { MOTION_NORTH, MOTION_SOUTH, MOTION_WEST, MOTION_EAST } = vector.elements
+					const { Maximum } = this.state.SlewRates[+findOnSwitch(this.slewRate)[0].substring(5)]
+
+					if (vector.name.endsWith('S')) {
+						if (MOTION_NORTH === true || MOTION_SOUTH === true) {
+							void this.api.moveAxis(this.id, 1, MOTION_NORTH === true ? +Maximum : -Maximum)
+						} else if (MOTION_NORTH === false || MOTION_SOUTH === false) {
+							void this.api.moveAxis(this.id, 1, 0)
+						}
+					} else if (MOTION_WEST === true || MOTION_EAST === true) {
+						void this.api.moveAxis(this.id, 0, MOTION_WEST === true ? +Maximum : -Maximum)
+					} else if (MOTION_WEST === false || MOTION_EAST === false) {
+						void this.api.moveAxis(this.id, 0, 0)
+					}
+				}
+
+				break
+			}
+			case 'TELESCOPE_TRACK_STATE':
+				if (this.state.CanTrack) {
+					if (vector.elements.TRACK_ON) void this.api.setTracking(this.id, true)
+					else if (vector.elements.TRACK_OFF) void this.api.setTracking(this.id, false)
+				}
+
+				break
+			case 'TELESCOPE_TRACK_MODE':
+				if (this.state.TrackingRates?.length) {
+					if (vector.elements.TRACK_SIDEREAL && this.trackMode.elements.TRACK_SIDEREAL) void this.api.setTrackingRate(this.id, 0)
+					if (vector.elements.TRACK_LUNAR && this.trackMode.elements.TRACK_LUNAR) void this.api.setTrackingRate(this.id, 1)
+					if (vector.elements.TRACK_SOLAR && this.trackMode.elements.TRACK_SOLAR) void this.api.setTrackingRate(this.id, 2)
+					if (vector.elements.TRACK_KING && this.trackMode.elements.TRACK_KING) void this.api.setTrackingRate(this.id, 3)
+				}
+
+				break
+			case 'TELESCOPE_PARK':
+				if (this.state.CanPark) {
+					if (vector.elements.PARK) void this.api.park(this.id)
+					else if (vector.elements.UNPARK) void this.api.unpark(this.id)
+				}
+
+				break
+			case 'TELESCOPE_HOME':
+				if (this.state.CanHome && vector.elements.GO) void this.api.findHome(this.id)
+				break
+			case 'TELESCOPE_ABORT_MOTION':
+				if (vector.elements.ABORT === true) void this.api.abortSlew(this.id)
+				break
+			case 'ON_COORD_SET':
+				if (vector.elements.SLEW === true) this.updatePropertyValue(this.onCoordSet, 'SLEW', true)
+				else if (vector.elements.SYNC === true) this.updatePropertyValue(this.onCoordSet, 'SYNC', true)
+				this.sendSetProperty(this.onCoordSet)
+				break
+		}
+	}
+
+	sendNumber(vector: NewNumberVector) {
+		switch (vector.name) {
+			case 'EQUATORIAL_EOD_COORD':
+				if (vector.elements.RA !== undefined && vector.elements.DEC !== undefined) {
+					void this.moveToTarget(vector.elements.RA, vector.elements.DEC)
+				}
+
+				break
+			case 'TELESCOPE_SLEW_RATE': {
+				if (this.state.SlewRates?.length) {
+					const selected = findOnSwitch(this.slewRate)[0]
+					selected && this.updatePropertyValue(this.slewRate, selected, true) && this.sendSetProperty(this.slewRate)
+				}
+
+				break
+			}
+			case 'TELESCOPE_TIMED_GUIDE_NS':
+			case 'TELESCOPE_TIMED_GUIDE_WE': {
+				if (this.state.CanPulseGuide) {
+					const { TIMED_GUIDE_N, TIMED_GUIDE_S, TIMED_GUIDE_W, TIMED_GUIDE_E } = vector.elements
+
+					if (vector.name.endsWith('S')) {
+						if (TIMED_GUIDE_N || TIMED_GUIDE_S) {
+							void this.api.pulseGuide(this.id, TIMED_GUIDE_N ? 0 : 1, TIMED_GUIDE_N || TIMED_GUIDE_S)
+						} else if (TIMED_GUIDE_N === 0 || TIMED_GUIDE_S === 0) {
+							void this.api.pulseGuide(this.id, TIMED_GUIDE_N ? 0 : 1, 0)
+						}
+					} else if (TIMED_GUIDE_W || TIMED_GUIDE_E) {
+						void this.api.pulseGuide(this.id, TIMED_GUIDE_W ? 3 : 2, TIMED_GUIDE_W || TIMED_GUIDE_E)
+					} else if (TIMED_GUIDE_W === 0 || TIMED_GUIDE_E === 0) {
+						void this.api.pulseGuide(this.id, TIMED_GUIDE_W ? 3 : 2, 0)
+					}
+				}
+
+				break
+			}
+		}
+	}
+
+	private async moveToTarget(rightAscension: number, declination: number) {
+		await this.api.setTargetRightAscension(this.id, rightAscension)
+		await this.api.setTargetDeclination(this.id, declination)
+
+		if (this.onCoordSet.elements.SLEW?.value === true) await this.api.slewToTarget(this.id)
+		else if (this.onCoordSet.elements.SYNC?.value === true) await this.api.syncToTarget(this.id)
 	}
 }
 

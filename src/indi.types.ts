@@ -308,3 +308,13 @@ export type NumberElement = OneNumber | DefNumber
 export type SwitchElement = OneSwitch | DefSwitch
 export type LightElement = OneLight | DefLight
 export type BlobElement = OneBlob | DefBlob
+
+export function findOnSwitch(vector: SwitchVector) {
+	const { elements } = vector
+
+	return Object.keys(vector.elements).filter((e) => {
+		const value = elements[e]
+		if (typeof value === 'boolean') return value
+		return value.value
+	})
+}

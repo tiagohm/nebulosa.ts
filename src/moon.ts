@@ -386,12 +386,11 @@ export function nearestLunarApsis(time: Time, apsis: LunarApsis, next: boolean):
 	let k = Math.floor((year - 1999.97) * 13.2555)
 	if (apsis === 'APOGEE') k += 0.5
 
-	let found = false
 	let jdDay = 0
 	let jdFraction = 0
 	let parallax = 0
 
-	while (!found) {
+	while (true) {
 		const T = k / 1325.55
 		const T2 = T * T
 		const T3 = T2 * T
@@ -575,7 +574,6 @@ export function nearestLunarApsis(time: Time, apsis: LunarApsis, next: boolean):
 		}
 
 		if (jdDay + jdFraction > jd !== next) {
-			found = false
 			if (next) k++
 			else k--
 		} else {
