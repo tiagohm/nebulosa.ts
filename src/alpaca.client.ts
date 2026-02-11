@@ -145,8 +145,9 @@ abstract class AlpacaDevice {
 	protected readonly runner = new AlpacaApiRunner()
 	protected readonly properties = new Set<DefVector & { type: Uppercase<VectorType> }>()
 
-	protected abstract api: AlpacaDeviceApi
-	protected abstract state: { Connected: boolean; DeviceState?: readonly AlpacaStateItem[]; Step: number }
+	protected abstract readonly api: AlpacaDeviceApi
+	protected abstract readonly state: { Connected: boolean; DeviceState?: readonly AlpacaStateItem[]; Step: number }
+	protected abstract readonly endpoints: readonly string[]
 
 	protected readonly driverInfo = makeTextVector('', 'DRIVER_INFO', 'Driver Info', GENERAL_INFO, 'ro', ['DRIVER_INTERFACE', 'Interface', ''], ['DRIVER_EXEC', 'Exec', ''], ['DRIVER_VERSION', 'Version', '1.0'], ['DRIVER_NAME', 'Name', ''])
 	protected readonly connection = makeSwitchVector('', 'CONNECTION', 'Connection', MAIN_CONTROL, 'OneOfMany', 'rw', ['CONNECT', 'Connect', false], ['DISCONNECT', 'Disconnect', true])
@@ -255,13 +256,16 @@ abstract class AlpacaDevice {
 
 	protected onConnect() {
 		this.state.Step = 0
-		this.runner.toggleEndpoint('DeviceState', true)
+		this.enableEndpoints('DeviceState')
+		this.enableEndpoints(...this.endpoints)
 	}
 
 	protected onDisconnect() {
 		this.state.Step = 0
 		this.state.DeviceState = undefined
-		this.runner.toggleEndpoint('DeviceState', false)
+		this.disableEndpoints('DeviceState')
+		this.disableEndpoints(...this.endpoints)
+		this.sendDelProperty(...this.properties)
 	}
 
 	update() {
@@ -332,6 +336,9 @@ interface AlpacaTelescopeState extends AlpacaDeviceState {
 	CanMoveAxis: boolean
 	CanPulseGuide: boolean
 	CanTrack: boolean
+	CanSlew: boolean
+	CanSync: boolean
+	CanSetGuideRate: boolean
 	Tracking: boolean
 	AtPark: boolean
 	IsPulseGuiding: boolean
@@ -339,12 +346,15 @@ interface AlpacaTelescopeState extends AlpacaDeviceState {
 	RightAscension: number
 	Declination: number
 	SlewRates?: readonly AlpacaAxisRate[]
+	TrackingRates?: readonly number[]
 }
 
 class AlpacaTelescope extends AlpacaDevice {
 	protected readonly api: AlpacaTelescopeApi
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
-	protected readonly state: AlpacaTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0 }
+	// biome-ignore format: do not break!
+	protected readonly state: AlpacaTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0 }
+	protected readonly endpoints = ['CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates'] as const
 
 	private readonly onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
 	private readonly equatorialCoordinate = makeNumberVector('', 'EQUATORIAL_EOD_COORD', 'Eq. Coordinates', MAIN_CONTROL, 'rw', ['RA', 'RA (hours)', 0, 0, 24, 0.1, '%10.6f'], ['DEC', 'DEC (deg)', 0, -90, 90, 0.1, '%10.6f'])
@@ -359,7 +369,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	private readonly geographicCoordinate = makeNumberVector('', 'GEOGRAPHIC_COORD', 'Location', MAIN_CONTROL, 'rw', ['LAT', 'Latitude (deg)', 0, -90, 90, 0.1, '%12.8f'], ['LONG', 'Longitude (deg)', 0, 0, 360, 0.1, '%12.8f'], ['ELEV', 'Elevation (m)', 0, -200, 10000, 1, '%.1f'])
 	private readonly park = makeSwitchVector('', 'TELESCOPE_PARK', 'Parking', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
 	private readonly pierSide = makeSwitchVector('', 'TELESCOPE_PIER_SIDE', 'Pier Side', MAIN_CONTROL, 'AtMostOne', 'ro', ['PIER_EAST', 'East', false], ['PIER_WEST', 'West', false])
-	private readonly guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'rw', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
+	private readonly guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'ro', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	private readonly guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	private readonly guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
 
@@ -390,7 +400,11 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.runner.registerEndpoint('CanMoveAxis', async () => (await this.api.canMoveAxis(this.id, 0)) || (await this.api.canMoveAxis(this.id, 1)), false)
 		this.runner.registerEndpoint('CanPulseGuide', () => this.api.canPulseGuide(this.id), false)
 		this.runner.registerEndpoint('CanTrack', () => this.api.canSetTracking(this.id), false)
+		this.runner.registerEndpoint('CanSlew', () => this.api.canSlew(this.id), false)
+		this.runner.registerEndpoint('CanSync', () => this.api.canSync(this.id), false)
+		this.runner.registerEndpoint('CanSetGuideRate', () => this.api.canSetGuideRates(this.id), false)
 		this.runner.registerEndpoint('SlewRates', () => this.api.getAxisRates(this.id, 0), false)
+		this.runner.registerEndpoint('TrackingRates', () => this.api.getTrackingRates(this.id), false)
 		// this.runner.registerEndpoint('RightAscension', () => this.api.getRightAscension(this.id), false)
 		// this.runner.registerEndpoint('Declination', () => this.api.getDeclination(this.id), false)
 		// this.runner.registerEndpoint('Slewing', () => this.api.isSlewing(this.id), false)
@@ -399,31 +413,21 @@ class AlpacaTelescope extends AlpacaDevice {
 		// this.runner.registerEndpoint('IsPulseGuiding', () => this.api.isPulseGuiding(this.id), false)
 	}
 
-	protected onConnect() {
-		super.onConnect()
-
-		// TODO: this.sendDefProperty(this.onCoordSet) remove elements if necessary
-		this.sendDefProperty(this.equatorialCoordinate)
-		this.sendDefProperty(this.abort)
-
-		this.enableEndpoints('CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'SlewRates')
-	}
-
-	protected onDisconnect() {
-		this.sendDelProperty(this.home)
-
-		this.disableEndpoints('CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'SlewRates')
-	}
-
 	protected handleEndpointsAfterRun() {
 		super.handleEndpointsAfterRun()
 
-		const { Connected, Step, CanTrack, CanHome, CanPark, CanMoveAxis, CanPulseGuide, Tracking, AtPark, IsPulseGuiding, Slewing, RightAscension, Declination, SlewRates } = this.state
+		if (!this.state.Connected) return
 
-		if (!Connected) return
+		const { Step, CanTrack, CanHome, CanPark, CanSlew, CanSync, CanMoveAxis, CanPulseGuide, CanSetGuideRate, Tracking, AtPark, IsPulseGuiding, Slewing, RightAscension, Declination, SlewRates, TrackingRates } = this.state
 
 		// Initial
 		if (Step === 1) {
+			this.sendDefProperty(this.equatorialCoordinate)
+			this.sendDefProperty(this.abort)
+
+			if (!CanSync) delete this.onCoordSet.elements.SYNC
+			if (!CanSlew) delete this.onCoordSet.elements.SLEW
+			if (CanSlew || CanSync) this.sendDefProperty(this.onCoordSet)
 			if (CanHome) this.sendDefProperty(this.home)
 			if (CanPark) this.sendDefProperty(this.park)
 			if (CanTrack) this.sendDefProperty(this.tracking)
@@ -432,6 +436,11 @@ class AlpacaTelescope extends AlpacaDevice {
 				this.sendDefProperty(this.motionWE)
 			}
 			if (CanPulseGuide) {
+				if (CanSetGuideRate) {
+					this.guideRate.permission = 'rw'
+				}
+
+				this.sendDefProperty(this.guideRate)
 				this.sendDefProperty(this.guideNS)
 				this.sendDefProperty(this.guideWE)
 			}
@@ -439,13 +448,21 @@ class AlpacaTelescope extends AlpacaDevice {
 			if (SlewRates?.length) {
 				for (let i = 0; i < SlewRates.length; i++) {
 					const name = `RATE_${i}`
-					this.slewRate.elements[name] = { name, label: `${SlewRates[i].Maximum.toFixed(1)} deg/s`, value: i === 0 }
+					this.slewRate.elements[name] = { name, label: `${SlewRates[i].Maximum.toPrecision(3)} deg/s`, value: i === 0 }
 				}
 
 				this.sendDefProperty(this.slewRate)
 			}
 
-			this.disableEndpoints('CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'SlewRates')
+			if (TrackingRates?.length) {
+				if (!TrackingRates.includes(0)) delete this.trackMode.elements.TRACK_SIDEREAL
+				if (!TrackingRates.includes(1)) delete this.trackMode.elements.TRACK_LUNAR
+				if (!TrackingRates.includes(2)) delete this.trackMode.elements.TRACK_SOLAR
+				if (!TrackingRates.includes(3)) delete this.trackMode.elements.TRACK_KING
+				this.sendDefProperty(this.trackMode)
+			}
+
+			this.disableEndpoints(...this.endpoints)
 
 			this.state.Step = 2
 		}
@@ -480,6 +497,7 @@ class AlpacaFilterWheel extends AlpacaDevice {
 	protected readonly api: AlpacaFilterWheelApi
 	// https://ascom-standards.org/newdocs/filterwheel.html#FilterWheel.DeviceState
 	protected readonly state: AlpacaFilterWheelState = { Connected: false, DeviceState: undefined, Step: 0, Position: 0, Names: undefined }
+	protected readonly endpoints = ['Names'] as const
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -493,26 +511,12 @@ class AlpacaFilterWheel extends AlpacaDevice {
 		// this.runner.registerEndpoint('Position', () => this.api.getPosition(this.id), false)
 	}
 
-	protected onConnect() {
-		super.onConnect()
-
-		this.enableEndpoints('Names')
-	}
-
-	protected onDisconnect() {
-		super.onDisconnect()
-
-		this.sendDelProperty(this.position, this.names)
-
-		this.disableEndpoints('Names')
-	}
-
 	protected handleEndpointsAfterRun() {
 		super.handleEndpointsAfterRun()
 
-		const { Connected, Step, Position, Names } = this.state
+		if (!this.state.Connected) return
 
-		if (!Connected) return
+		const { Step, Position, Names } = this.state
 
 		// Initial
 		if (Step === 1) {
@@ -528,7 +532,7 @@ class AlpacaFilterWheel extends AlpacaDevice {
 				this.sendDefProperty(this.position)
 			}
 
-			this.disableEndpoints('Names')
+			this.disableEndpoints(...this.endpoints)
 
 			this.state.Step = 2
 		}
@@ -570,6 +574,7 @@ class AlpacaFocuser extends AlpacaDevice {
 	protected readonly api: AlpacaFocuserApi
 	// https://ascom-standards.org/newdocs/focuser.html#Focuser.DeviceState
 	protected readonly state: AlpacaFocuserState = { Connected: false, DeviceState: undefined, Step: 0, IsMoving: false, Position: 0, Temperature: undefined, IsAbsolute: false, MaxStep: 0 }
+	protected readonly endpoints = ['MaxStep', 'IsAbsolute', 'Temperature'] as const
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -601,33 +606,12 @@ class AlpacaFocuser extends AlpacaDevice {
 		return this.direction.elements.FOCUS_OUTWARD.value === true
 	}
 
-	onInit() {
-		super.onInit()
-
-		this.sendDefProperty(this.direction)
-		this.sendDefProperty(this.abort)
-	}
-
-	protected onConnect() {
-		super.onConnect()
-
-		this.enableEndpoints('MaxStep', 'IsAbsolute', 'Temperature')
-	}
-
-	onDisconnect() {
-		super.onDisconnect()
-
-		this.sendDelProperty(this.position, this.temperature)
-
-		this.disableEndpoints('MaxStep', 'IsAbsolute', 'Temperature')
-	}
-
 	protected handleEndpointsAfterRun() {
 		super.handleEndpointsAfterRun()
 
-		const { Connected, Step, IsAbsolute, IsMoving, Position, Temperature, MaxStep } = this.state
+		if (!this.state.Connected) return
 
-		if (!Connected) return
+		const { Step, IsAbsolute, IsMoving, Position, Temperature, MaxStep } = this.state
 
 		// Initial
 		if (Step === 1) {
@@ -648,7 +632,10 @@ class AlpacaFocuser extends AlpacaDevice {
 				this.sendDefProperty(this.temperature)
 			}
 
-			this.disableEndpoints('MaxStep', 'IsAbsolute', 'Temperature')
+			this.sendDefProperty(this.direction)
+			this.sendDefProperty(this.abort)
+
+			this.disableEndpoints(...this.endpoints)
 
 			this.state.Step = 2
 		}
@@ -712,6 +699,7 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 
 	// https://ascom-standards.org/newdocs/covercalibrator.html#CoverCalibrator.DeviceState
 	protected readonly state: AlpacaCoverCalibratorState = { Connected: false, DeviceState: undefined, Step: 0, CoverState: 0, CoverMoving: false, CalibratorState: 0, Brightness: 0, MaxBrightness: undefined }
+	protected readonly endpoints = ['MaxBrightness'] as const
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -730,26 +718,12 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 		// this.runner.registerEndpoint('Moving', () => this.api.isMoving(this.id), false)
 	}
 
-	protected onConnect() {
-		super.onConnect()
-
-		this.enableEndpoints('MaxBrightness')
-	}
-
-	protected onDisconnect() {
-		super.onDisconnect()
-
-		this.sendDelProperty(this.park, this.light, this.brightness, this.abort)
-
-		this.disableEndpoints('MaxBrightness')
-	}
-
 	protected handleEndpointsAfterRun() {
 		super.handleEndpointsAfterRun()
 
-		const { Connected, Step, CoverState, CoverMoving, CalibratorState, Brightness, MaxBrightness } = this.state
+		if (!this.state.Connected) return
 
-		if (!Connected) return
+		const { Step, CoverState, CoverMoving, CalibratorState, Brightness, MaxBrightness } = this.state
 
 		// Initial
 		if (Step === 1) {
@@ -780,7 +754,7 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 				}
 			}
 
-			this.disableEndpoints('MaxBrightness')
+			this.disableEndpoints(...this.endpoints)
 
 			this.state.Step = 2
 		}
@@ -918,8 +892,7 @@ class AlpacaApiRunner {
 
 	private async handleEndpointsAfterRun(state: Record<string, ValueType>) {
 		const result = await Promise.all(this.result)
-
-		const n = this.keys.length
+		const n = result.length
 
 		for (let i = 0; i < n; i++) {
 			const value = result[i] as never
