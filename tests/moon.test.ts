@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, toArcsec } from '../src/angle'
-import { kilometer } from '../src/distance'
+import { kilometer, toKilometer } from '../src/distance'
 import { lunarSaros, lunation, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../src/moon'
-import { time, timeToDate, timeYMD, timeYMDHMS, toJulianDay, utc } from '../src/time'
+import { time, timeToDate, timeYMD, timeYMDHMS, utc } from '../src/time'
 
 test('parallax', () => {
 	expect(moonParallax(kilometer(368409.7))).toBeCloseTo(deg(0.99199), 7)
@@ -117,7 +117,32 @@ describe('nearest lunar eclipse', () => {
 	})
 })
 
-test('nearest lunar apsis', () => {
-	const [jd, distance, diameter] = nearestLunarApsis(timeYMDHMS(1988, 10, 1), 'APOGEE')
-	expect(toJulianDay(jd)).toBeCloseTo(2447442.3537, 2)
+describe('nearest lunar apsis', () => {
+	test('apogee', () => {
+		const a = nearestLunarApsis(timeYMDHMS(2026, 1, 1), 'APOGEE', true)
+		expect(timeToDate(a[0]).slice(0, 5)).toEqual([2026, 1, 13, 20, 48])
+		expect(toKilometer(a[1])).toBeCloseTo(405436, 0)
+
+		const b = nearestLunarApsis(timeYMDHMS(2026, 1, 13, 20, 50), 'APOGEE', false)
+		expect(timeToDate(b[0]).slice(0, 5)).toEqual([2026, 1, 13, 20, 48])
+		expect(toKilometer(b[1])).toBeCloseTo(405436, 0)
+
+		const c = nearestLunarApsis(timeYMDHMS(2026, 1, 13, 20, 50), 'APOGEE', true)
+		expect(timeToDate(c[0]).slice(0, 5)).toEqual([2026, 2, 10, 16, 53])
+		expect(toKilometer(c[1])).toBeCloseTo(404576, 0)
+	})
+
+	test('perigee', () => {
+		const a = nearestLunarApsis(timeYMDHMS(2026, 1, 1), 'PERIGEE', true)
+		expect(timeToDate(a[0]).slice(0, 5)).toEqual([2026, 1, 1, 21, 44])
+		expect(toKilometer(a[1])).toBeCloseTo(360347, 0)
+
+		const b = nearestLunarApsis(timeYMDHMS(2026, 1, 1, 21, 46), 'PERIGEE', false)
+		expect(timeToDate(b[0]).slice(0, 5)).toEqual([2026, 1, 1, 21, 44])
+		expect(toKilometer(b[1])).toBeCloseTo(360347, 0)
+
+		const c = nearestLunarApsis(timeYMDHMS(2026, 1, 1, 21, 46), 'PERIGEE', true)
+		expect(timeToDate(c[0]).slice(0, 5)).toEqual([2026, 1, 29, 21, 53])
+		expect(toKilometer(c[1])).toBeCloseTo(365876.6, 0)
+	})
 })

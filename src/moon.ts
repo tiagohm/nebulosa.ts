@@ -379,194 +379,208 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 }
 
 // Computes the nearest lunar apsis for a given time
-export function nearestLunarApsis(time: Time, apsis: LunarApsis): readonly [Time, Distance, Angle] {
+export function nearestLunarApsis(time: Time, apsis: LunarApsis, next: boolean): readonly [Time, Distance, Angle] {
 	time = tt(time)
+	const jd = toJulianDay(time)
 	const year = timeToFractionOfYear(time)
 	let k = Math.floor((year - 1999.97) * 13.2555)
 	if (apsis === 'APOGEE') k += 0.5
 
-	const T = k / 1325.55
-	const T2 = T * T
-	const T3 = T2 * T
-	const T4 = T3 * T
-
-	const jdDay = 2451534 + 27 * k
-	let jdFraction = 0.6698 + 0.55454989 * k - 0.0006691 * T2 - 0.000001098 * T3 + 0.0000000052 * T4
-	const D = deg(171.9179 + 335.9106046 * k - 0.0100383 * T2 - 0.00001156 * T3 + 0.000000055 * T4)
-	const M = deg(347.3477 + 27.1577721 * k - 0.000813 * T2 - 0.000001 * T3)
-	const F = deg(316.6109 + 364.5287911 * k - 0.0125053 * T2 - 0.0000148 * T3)
-
+	let found = false
+	let jdDay = 0
+	let jdFraction = 0
 	let parallax = 0
 
-	if (apsis === 'PERIGEE') {
-		jdFraction +=
-			Math.sin(2 * D) * -1.6769 +
-			Math.sin(4 * D) * 0.4589 +
-			Math.sin(6 * D) * -0.1856 +
-			Math.sin(8 * D) * 0.0883 +
-			Math.sin(2 * D - M) * (-0.0773 + 0.00019 * T) +
-			Math.sin(M) * (0.0502 - 0.00013 * T) +
-			Math.sin(10 * D) * -0.046 +
-			Math.sin(4 * D - M) * (0.0422 - 0.00011 * T) +
-			Math.sin(6 * D - M) * -0.0256 +
-			Math.sin(12 * D) * 0.0253 +
-			Math.sin(D) * 0.0237 +
-			Math.sin(8 * D - M) * 0.0162 +
-			Math.sin(14 * D) * -0.0145 +
-			Math.sin(2 * F) * 0.0129 +
-			Math.sin(3 * D) * -0.0112 +
-			Math.sin(10 * D - M) * -0.0104 +
-			Math.sin(16 * D) * 0.0086 +
-			Math.sin(12 * D - M) * 0.0069 +
-			Math.sin(5 * D) * 0.0066 +
-			Math.sin(2 * D + 2 * F) * -0.0053 +
-			Math.sin(18 * D) * -0.0052 +
-			Math.sin(14 * D - M) * -0.0046 +
-			Math.sin(7 * D) * -0.0041 +
-			Math.sin(2 * D + M) * 0.004 +
-			Math.sin(20 * D) * 0.0032 +
-			Math.sin(D + M) * -0.0032 +
-			Math.sin(16 * D - M) * 0.0031 +
-			Math.sin(4 * D + M) * -0.0029 +
-			Math.sin(9 * D) * 0.0027 +
-			Math.sin(4 * D + 2 * F) * 0.0027 +
-			Math.sin(2 * D - 2 * M) * -0.0027 +
-			Math.sin(4 * D - 2 * M) * 0.0024 +
-			Math.sin(6 * D - 2 * M) * -0.0021 +
-			Math.sin(22 * D) * -0.0021 +
-			Math.sin(18 * D - M) * -0.0021 +
-			Math.sin(6 * D + M) * 0.0019 +
-			Math.sin(11 * D) * -0.0018 +
-			Math.sin(8 * D + M) * -0.0014 +
-			Math.sin(4 * D - 2 * F) * -0.0014 +
-			Math.sin(6 * D + 2 * F) * -0.0014 +
-			Math.sin(3 * D + M) * 0.0014 +
-			Math.sin(5 * D + M) * -0.0014 +
-			Math.sin(13 * D) * 0.0013 +
-			Math.sin(20 * D - M) * 0.0013 +
-			Math.sin(3 * D + 2 * M) * 0.0011 +
-			Math.sin(4 * D + 2 * F - 2 * M) * -0.0011 +
-			Math.sin(D + 2 * M) * -0.001 +
-			Math.sin(22 * D - M) * -0.0009 +
-			Math.sin(4 * F) * -0.0008 +
-			Math.sin(6 * D - 2 * F) * 0.0008 +
-			Math.sin(2 * D - 2 * F + M) * 0.0008 +
-			Math.sin(2 * M) * 0.0007 +
-			Math.sin(2 * F - M) * 0.0007 +
-			Math.sin(2 * D + 4 * F) * 0.0007 +
-			Math.sin(2 * F - 2 * M) * -0.0006 +
-			Math.sin(2 * D - 2 * F + 2 * M) * -0.0006 +
-			Math.sin(24 * D) * 0.0006 +
-			Math.sin(4 * D - 4 * F) * 0.0005 +
-			Math.sin(2 * D + 2 * M) * 0.0005 +
-			Math.sin(D - M) * -0.0004
+	while (!found) {
+		const T = k / 1325.55
+		const T2 = T * T
+		const T3 = T2 * T
+		const T4 = T3 * T
 
-		parallax =
-			3629.215 +
-			63.224 * Math.cos(2 * D) -
-			6.99 * Math.cos(4 * D) +
-			2.834 * Math.cos(2 * D - M) -
-			0.0071 * T * Math.cos(2 * D - M) +
-			1.927 * Math.cos(6 * D) -
-			1.263 * Math.cos(D) -
-			0.702 * Math.cos(8 * D) +
-			0.696 * Math.cos(M) -
-			0.0017 * T * Math.cos(M) -
-			0.69 * Math.cos(2 * F) -
-			0.629 * Math.cos(4 * D - M) +
-			0.0016 * T * Math.cos(4 * D - M) -
-			0.392 * Math.cos(2 * D - 2 * F) +
-			0.297 * Math.cos(10 * D) +
-			0.26 * Math.cos(6 * D - M) +
-			0.201 * Math.cos(3 * D) -
-			0.161 * Math.cos(2 * D + M) +
-			0.157 * Math.cos(D + M) -
-			0.138 * Math.cos(12 * D) -
-			0.127 * Math.cos(8 * D - M) +
-			0.104 * Math.cos(2 * D + 2 * F) +
-			0.104 * Math.cos(2 * D - 2 * M) -
-			0.079 * Math.cos(5 * D) +
-			0.068 * Math.cos(14 * D) +
-			0.067 * Math.cos(10 * D - M) +
-			0.054 * Math.cos(4 * D + M) -
-			0.038 * Math.cos(12 * D - M) -
-			0.038 * Math.cos(4 * D - 2 * M) +
-			0.037 * Math.cos(7 * D) -
-			0.037 * Math.cos(4 * D + 2 * F) -
-			0.035 * Math.cos(16 * D) -
-			0.03 * Math.cos(3 * D + M) +
-			0.029 * Math.cos(D - M) -
-			0.025 * Math.cos(6 * D + M) +
-			0.023 * Math.cos(2 * M) +
-			0.023 * Math.cos(14 * D - M) -
-			0.023 * Math.cos(2 * D + 2 * M) +
-			0.022 * Math.cos(6 * D - 2 * M) -
-			0.021 * Math.cos(2 * D - 2 * F - M) -
-			0.02 * Math.cos(9 * D) +
-			0.019 * Math.cos(18 * D) +
-			0.017 * Math.cos(6 * D + 2 * F) +
-			0.014 * Math.cos(2 * F - M) -
-			0.014 * Math.cos(16 * D - M) +
-			0.013 * Math.cos(4 * D - 2 * F) +
-			0.012 * Math.cos(8 * D + M) +
-			0.011 * Math.cos(11 * D) +
-			0.01 * Math.cos(5 * D + M) -
-			0.01 * Math.cos(20 * D)
-	} else if (apsis === 'APOGEE') {
-		jdFraction +=
-			Math.sin(2 * D) * 0.4392 +
-			Math.sin(4 * D) * 0.0684 +
-			Math.sin(M) * (0.0456 - 0.00011 * T) +
-			Math.sin(2 * D - M) * (0.0426 - 0.00011 * T) +
-			Math.sin(2 * F) * 0.0212 +
-			Math.sin(D) * -0.0189 +
-			Math.sin(6 * D) * 0.0144 +
-			Math.sin(4 * D - M) * 0.0113 +
-			Math.sin(2 * D + 2 * F) * 0.0047 +
-			Math.sin(D + M) * 0.0036 +
-			Math.sin(8 * D) * 0.0035 +
-			Math.sin(6 * D - M) * 0.0034 +
-			Math.sin(2 * D - 2 * F) * -0.0034 +
-			Math.sin(2 * D - 2 * M) * 0.0022 +
-			Math.sin(3 * D) * -0.0017 +
-			Math.sin(4 * D + 2 * F) * 0.0013 +
-			Math.sin(8 * D - M) * 0.0011 +
-			Math.sin(4 * D - 2 * M) * 0.001 +
-			Math.sin(10 * D) * 0.0009 +
-			Math.sin(3 * D + M) * 0.0007 +
-			Math.sin(2 * M) * 0.0006 +
-			Math.sin(2 * D + M) * 0.0005 +
-			Math.sin(2 * D + 2 * M) * 0.0005 +
-			Math.sin(6 * D + 2 * F) * 0.0004 +
-			Math.sin(6 * D - 2 * M) * 0.0004 +
-			Math.sin(10 * D - M) * 0.0004 +
-			Math.sin(5 * D) * -0.0004 +
-			Math.sin(4 * D - 2 * F) * -0.0004 +
-			Math.sin(2 * F + M) * 0.0003 +
-			Math.sin(12 * D) * 0.0003 +
-			Math.sin(2 * D + 2 * F - M) * 0.0003 +
-			Math.sin(D - M) * -0.0003
+		jdDay = 2451534 + 27 * k
+		jdFraction = 0.6698 + 0.55454989 * k - 0.0006691 * T2 - 0.000001098 * T3 + 0.0000000052 * T4
+		const D = deg(171.9179 + 335.9106046 * k - 0.0100383 * T2 - 0.00001156 * T3 + 0.000000055 * T4)
+		const M = deg(347.3477 + 27.1577721 * k - 0.000813 * T2 - 0.000001 * T3)
+		const F = deg(316.6109 + 364.5287911 * k - 0.0125053 * T2 - 0.0000148 * T3)
 
-		parallax =
-			3245.251 -
-			9.147 * Math.cos(2 * D) -
-			0.841 * Math.cos(D) +
-			0.697 * Math.cos(2 * F) -
-			0.656 * Math.cos(M) +
-			0.0016 * T * Math.cos(M) +
-			0.355 * Math.cos(4 * D) +
-			0.159 * Math.cos(2 * D - M) +
-			0.127 * Math.cos(D + M) +
-			0.065 * Math.cos(4 * D - M) +
-			0.052 * Math.cos(6 * D) +
-			0.043 * Math.cos(2 * D + M) +
-			0.031 * Math.cos(2 * D + 2 * F) -
-			0.023 * Math.cos(2 * D - 2 * F) +
-			0.022 * Math.cos(2 * D - 2 * M) +
-			0.019 * Math.cos(2 * D + 2 * M) -
-			0.016 * Math.cos(2 * M) +
-			0.014 * Math.cos(6 * D - M) +
-			0.01 * Math.cos(8 * D)
+		if (apsis === 'PERIGEE') {
+			jdFraction +=
+				Math.sin(2 * D) * -1.6769 +
+				Math.sin(4 * D) * 0.4589 +
+				Math.sin(6 * D) * -0.1856 +
+				Math.sin(8 * D) * 0.0883 +
+				Math.sin(2 * D - M) * (-0.0773 + 0.00019 * T) +
+				Math.sin(M) * (0.0502 - 0.00013 * T) +
+				Math.sin(10 * D) * -0.046 +
+				Math.sin(4 * D - M) * (0.0422 - 0.00011 * T) +
+				Math.sin(6 * D - M) * -0.0256 +
+				Math.sin(12 * D) * 0.0253 +
+				Math.sin(D) * 0.0237 +
+				Math.sin(8 * D - M) * 0.0162 +
+				Math.sin(14 * D) * -0.0145 +
+				Math.sin(2 * F) * 0.0129 +
+				Math.sin(3 * D) * -0.0112 +
+				Math.sin(10 * D - M) * -0.0104 +
+				Math.sin(16 * D) * 0.0086 +
+				Math.sin(12 * D - M) * 0.0069 +
+				Math.sin(5 * D) * 0.0066 +
+				Math.sin(2 * D + 2 * F) * -0.0053 +
+				Math.sin(18 * D) * -0.0052 +
+				Math.sin(14 * D - M) * -0.0046 +
+				Math.sin(7 * D) * -0.0041 +
+				Math.sin(2 * D + M) * 0.004 +
+				Math.sin(20 * D) * 0.0032 +
+				Math.sin(D + M) * -0.0032 +
+				Math.sin(16 * D - M) * 0.0031 +
+				Math.sin(4 * D + M) * -0.0029 +
+				Math.sin(9 * D) * 0.0027 +
+				Math.sin(4 * D + 2 * F) * 0.0027 +
+				Math.sin(2 * D - 2 * M) * -0.0027 +
+				Math.sin(4 * D - 2 * M) * 0.0024 +
+				Math.sin(6 * D - 2 * M) * -0.0021 +
+				Math.sin(22 * D) * -0.0021 +
+				Math.sin(18 * D - M) * -0.0021 +
+				Math.sin(6 * D + M) * 0.0019 +
+				Math.sin(11 * D) * -0.0018 +
+				Math.sin(8 * D + M) * -0.0014 +
+				Math.sin(4 * D - 2 * F) * -0.0014 +
+				Math.sin(6 * D + 2 * F) * -0.0014 +
+				Math.sin(3 * D + M) * 0.0014 +
+				Math.sin(5 * D + M) * -0.0014 +
+				Math.sin(13 * D) * 0.0013 +
+				Math.sin(20 * D - M) * 0.0013 +
+				Math.sin(3 * D + 2 * M) * 0.0011 +
+				Math.sin(4 * D + 2 * F - 2 * M) * -0.0011 +
+				Math.sin(D + 2 * M) * -0.001 +
+				Math.sin(22 * D - M) * -0.0009 +
+				Math.sin(4 * F) * -0.0008 +
+				Math.sin(6 * D - 2 * F) * 0.0008 +
+				Math.sin(2 * D - 2 * F + M) * 0.0008 +
+				Math.sin(2 * M) * 0.0007 +
+				Math.sin(2 * F - M) * 0.0007 +
+				Math.sin(2 * D + 4 * F) * 0.0007 +
+				Math.sin(2 * F - 2 * M) * -0.0006 +
+				Math.sin(2 * D - 2 * F + 2 * M) * -0.0006 +
+				Math.sin(24 * D) * 0.0006 +
+				Math.sin(4 * D - 4 * F) * 0.0005 +
+				Math.sin(2 * D + 2 * M) * 0.0005 +
+				Math.sin(D - M) * -0.0004
+
+			parallax =
+				3629.215 +
+				63.224 * Math.cos(2 * D) -
+				6.99 * Math.cos(4 * D) +
+				2.834 * Math.cos(2 * D - M) -
+				0.0071 * T * Math.cos(2 * D - M) +
+				1.927 * Math.cos(6 * D) -
+				1.263 * Math.cos(D) -
+				0.702 * Math.cos(8 * D) +
+				0.696 * Math.cos(M) -
+				0.0017 * T * Math.cos(M) -
+				0.69 * Math.cos(2 * F) -
+				0.629 * Math.cos(4 * D - M) +
+				0.0016 * T * Math.cos(4 * D - M) -
+				0.392 * Math.cos(2 * D - 2 * F) +
+				0.297 * Math.cos(10 * D) +
+				0.26 * Math.cos(6 * D - M) +
+				0.201 * Math.cos(3 * D) -
+				0.161 * Math.cos(2 * D + M) +
+				0.157 * Math.cos(D + M) -
+				0.138 * Math.cos(12 * D) -
+				0.127 * Math.cos(8 * D - M) +
+				0.104 * Math.cos(2 * D + 2 * F) +
+				0.104 * Math.cos(2 * D - 2 * M) -
+				0.079 * Math.cos(5 * D) +
+				0.068 * Math.cos(14 * D) +
+				0.067 * Math.cos(10 * D - M) +
+				0.054 * Math.cos(4 * D + M) -
+				0.038 * Math.cos(12 * D - M) -
+				0.038 * Math.cos(4 * D - 2 * M) +
+				0.037 * Math.cos(7 * D) -
+				0.037 * Math.cos(4 * D + 2 * F) -
+				0.035 * Math.cos(16 * D) -
+				0.03 * Math.cos(3 * D + M) +
+				0.029 * Math.cos(D - M) -
+				0.025 * Math.cos(6 * D + M) +
+				0.023 * Math.cos(2 * M) +
+				0.023 * Math.cos(14 * D - M) -
+				0.023 * Math.cos(2 * D + 2 * M) +
+				0.022 * Math.cos(6 * D - 2 * M) -
+				0.021 * Math.cos(2 * D - 2 * F - M) -
+				0.02 * Math.cos(9 * D) +
+				0.019 * Math.cos(18 * D) +
+				0.017 * Math.cos(6 * D + 2 * F) +
+				0.014 * Math.cos(2 * F - M) -
+				0.014 * Math.cos(16 * D - M) +
+				0.013 * Math.cos(4 * D - 2 * F) +
+				0.012 * Math.cos(8 * D + M) +
+				0.011 * Math.cos(11 * D) +
+				0.01 * Math.cos(5 * D + M) -
+				0.01 * Math.cos(20 * D)
+		} else if (apsis === 'APOGEE') {
+			jdFraction +=
+				Math.sin(2 * D) * 0.4392 +
+				Math.sin(4 * D) * 0.0684 +
+				Math.sin(M) * (0.0456 - 0.00011 * T) +
+				Math.sin(2 * D - M) * (0.0426 - 0.00011 * T) +
+				Math.sin(2 * F) * 0.0212 +
+				Math.sin(D) * -0.0189 +
+				Math.sin(6 * D) * 0.0144 +
+				Math.sin(4 * D - M) * 0.0113 +
+				Math.sin(2 * D + 2 * F) * 0.0047 +
+				Math.sin(D + M) * 0.0036 +
+				Math.sin(8 * D) * 0.0035 +
+				Math.sin(6 * D - M) * 0.0034 +
+				Math.sin(2 * D - 2 * F) * -0.0034 +
+				Math.sin(2 * D - 2 * M) * 0.0022 +
+				Math.sin(3 * D) * -0.0017 +
+				Math.sin(4 * D + 2 * F) * 0.0013 +
+				Math.sin(8 * D - M) * 0.0011 +
+				Math.sin(4 * D - 2 * M) * 0.001 +
+				Math.sin(10 * D) * 0.0009 +
+				Math.sin(3 * D + M) * 0.0007 +
+				Math.sin(2 * M) * 0.0006 +
+				Math.sin(2 * D + M) * 0.0005 +
+				Math.sin(2 * D + 2 * M) * 0.0005 +
+				Math.sin(6 * D + 2 * F) * 0.0004 +
+				Math.sin(6 * D - 2 * M) * 0.0004 +
+				Math.sin(10 * D - M) * 0.0004 +
+				Math.sin(5 * D) * -0.0004 +
+				Math.sin(4 * D - 2 * F) * -0.0004 +
+				Math.sin(2 * F + M) * 0.0003 +
+				Math.sin(12 * D) * 0.0003 +
+				Math.sin(2 * D + 2 * F - M) * 0.0003 +
+				Math.sin(D - M) * -0.0003
+
+			parallax =
+				3245.251 -
+				9.147 * Math.cos(2 * D) -
+				0.841 * Math.cos(D) +
+				0.697 * Math.cos(2 * F) -
+				0.656 * Math.cos(M) +
+				0.0016 * T * Math.cos(M) +
+				0.355 * Math.cos(4 * D) +
+				0.159 * Math.cos(2 * D - M) +
+				0.127 * Math.cos(D + M) +
+				0.065 * Math.cos(4 * D - M) +
+				0.052 * Math.cos(6 * D) +
+				0.043 * Math.cos(2 * D + M) +
+				0.031 * Math.cos(2 * D + 2 * F) -
+				0.023 * Math.cos(2 * D - 2 * F) +
+				0.022 * Math.cos(2 * D - 2 * M) +
+				0.019 * Math.cos(2 * D + 2 * M) -
+				0.016 * Math.cos(2 * M) +
+				0.014 * Math.cos(6 * D - M) +
+				0.01 * Math.cos(8 * D)
+		}
+
+		if (jdDay + jdFraction > jd !== next) {
+			found = false
+			if (next) k++
+			else k--
+		} else {
+			break
+		}
 	}
 
 	const distance = kilometer(6378.14 / Math.sin(arcsec(parallax)))

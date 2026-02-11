@@ -482,7 +482,7 @@ lunation(time, system) // Compute the lunation at a given time and system
 nearestLunarPhase(time, phase, next) // Compute the nearest lunar phase at a given time
 nearestLunarEclipse(time, next) // Compute the nearest lunar eclipse at a given time
 lunarSaros(time) // Compute the saros series number for the lunar eclipse at time
-nearestLunarApsis(time, apsis) // Compute the nearest lunar apsis at time
+nearestLunarApsis(time, apsis, next) // Compute the nearest lunar apsis at time
 ```
 
 ### MPCORB ![](bun.webp) ![](browser.webp)
