@@ -579,8 +579,9 @@ class AlpacaTelescope extends AlpacaDevice {
 
 				break
 			case 'ON_COORD_SET':
-				if (vector.elements.SLEW === true) this.updatePropertyValue(this.onCoordSet, 'SLEW', true)
+				if (vector.elements.SLEW === true || vector.elements.TRACK === true) this.updatePropertyValue(this.onCoordSet, 'SLEW', true)
 				else if (vector.elements.SYNC === true) this.updatePropertyValue(this.onCoordSet, 'SYNC', true)
+				else break
 				this.sendSetProperty(this.onCoordSet)
 				break
 		}
