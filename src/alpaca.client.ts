@@ -343,6 +343,10 @@ interface AlpacaTelescopeState extends AlpacaDeviceState {
 	TrackingRate?: number
 	CanSetSideOfPier: boolean
 	SideOfPier?: number
+	UTCDate?: string
+	Latitude?: number
+	Longitude?: number
+	Elevation?: number
 }
 
 class AlpacaTelescope extends AlpacaDevice {
@@ -350,7 +354,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
 	// biome-ignore format: do not break!
 	protected readonly state: AlpacaTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0 }
-	protected readonly endpoints = ['CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier', 'SideOfPier'] as const
+	protected readonly endpoints = ['CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier', 'SideOfPier', 'Latitude', 'Longitude', 'Elevation'] as const
 
 	private readonly onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
 	private readonly equatorialCoordinate = makeNumberVector('', 'EQUATORIAL_EOD_COORD', 'Eq. Coordinates', MAIN_CONTROL, 'rw', ['RA', 'RA (hours)', 0, 0, 24, 0.1, '%10.6f'], ['DEC', 'DEC (deg)', 0, -90, 90, 0.1, '%10.6f'])
@@ -361,7 +365,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	private readonly motionNS = makeSwitchVector('', 'TELESCOPE_MOTION_NS', 'Motion N/S', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_NORTH', 'North', false], ['MOTION_SOUTH', 'South', false])
 	private readonly motionWE = makeSwitchVector('', 'TELESCOPE_MOTION_WE', 'Motion W/E', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_WEST', 'West', false], ['MOTION_EAST', 'East', false])
 	private readonly slewRate = makeSwitchVector('', 'TELESCOPE_SLEW_RATE', 'Slew Rate', MAIN_CONTROL, 'OneOfMany', 'rw')
-	private readonly time = makeTextVector('', 'TIME_UTC', 'UTC', MAIN_CONTROL, 'rw', ['UTC', 'UTC Time', formatTemporal(Date.now(), 'YYYY-MM-DDTHH:mm:ss', 0)], ['OFFSET', 'UTC Offset', (TIMEZONE / 60).toFixed(2)])
+	private readonly time = makeTextVector('', 'TIME_UTC', 'UTC', MAIN_CONTROL, 'rw', ['UTC', 'UTC Time', formatTemporal(Date.now(), 'YYYY-MM-DDTHH:mm:ss.SSSZ', 0)], ['OFFSET', 'UTC Offset', (TIMEZONE / 60).toFixed(2)])
 	private readonly geographicCoordinate = makeNumberVector('', 'GEOGRAPHIC_COORD', 'Location', MAIN_CONTROL, 'rw', ['LAT', 'Latitude (deg)', 0, -90, 90, 0.1, '%12.8f'], ['LONG', 'Longitude (deg)', 0, 0, 360, 0.1, '%12.8f'], ['ELEV', 'Elevation (m)', 0, -200, 10000, 1, '%.1f'])
 	private readonly park = makeSwitchVector('', 'TELESCOPE_PARK', 'Parking', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
 	private readonly pierSide = makeSwitchVector('', 'TELESCOPE_PIER_SIDE', 'Pier Side', MAIN_CONTROL, 'AtMostOne', 'ro', ['PIER_EAST', 'East', false], ['PIER_WEST', 'West', false])
@@ -404,6 +408,9 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.runner.registerEndpoint('TrackingRate', () => this.api.getTrackingRate(this.id), false)
 		this.runner.registerEndpoint('CanSetSideOfPier', () => this.api.canSetSideOfPier(this.id), false)
 		this.runner.registerEndpoint('SideOfPier', () => this.api.getSideOfPier(this.id), false)
+		this.runner.registerEndpoint('Latitude', () => this.api.getSiteLatitude(this.id), false)
+		this.runner.registerEndpoint('Longitude', () => this.api.getSiteLongitude(this.id), false)
+		this.runner.registerEndpoint('Elevation', () => this.api.getSiteElevation(this.id), false)
 		// this.runner.registerEndpoint('RightAscension', () => this.api.getRightAscension(this.id), false)
 		// this.runner.registerEndpoint('Declination', () => this.api.getDeclination(this.id), false)
 		// this.runner.registerEndpoint('Slewing', () => this.api.isSlewing(this.id), false)
@@ -423,7 +430,8 @@ class AlpacaTelescope extends AlpacaDevice {
 
 		if (!this.state.Connected) return
 
-		const { Step, CanTrack, CanHome, CanPark, CanSlew, CanSync, CanMoveAxis, CanPulseGuide, CanSetGuideRate, CanSetSideOfPier, Tracking, AtPark, IsPulseGuiding, Slewing, RightAscension, Declination, SlewRates, TrackingRates, TrackingRate, SideOfPier } = this.state
+		const { Step, CanTrack, CanHome, CanPark, CanSlew, CanSync, CanMoveAxis, CanPulseGuide, CanSetGuideRate, CanSetSideOfPier, Tracking, AtPark, IsPulseGuiding, Slewing } = this.state
+		const { RightAscension, Declination, SlewRates, TrackingRates, TrackingRate, SideOfPier, UTCDate, Latitude, Longitude, Elevation } = this.state
 
 		// Initial
 		if (Step === 1) {
@@ -471,6 +479,18 @@ class AlpacaTelescope extends AlpacaDevice {
 
 			if (CanSetSideOfPier) {
 				this.pierSide.permission = 'rw'
+			}
+
+			if (UTCDate) {
+				this.time.elements.UTC.value = UTCDate
+				this.sendDefProperty(this.time)
+			}
+
+			if (Latitude !== undefined && Longitude !== undefined) {
+				this.geographicCoordinate.elements.LAT.value = Latitude
+				this.geographicCoordinate.elements.LONG.value = Longitude
+				this.geographicCoordinate.elements.ELEV.value = Elevation ?? 0
+				this.sendDefProperty(this.geographicCoordinate)
 			}
 
 			this.sendDefProperty(this.pierSide)
@@ -544,29 +564,29 @@ class AlpacaTelescope extends AlpacaDevice {
 			}
 			case 'TELESCOPE_TRACK_STATE':
 				if (this.state.CanTrack) {
-					if (vector.elements.TRACK_ON) void this.api.setTracking(this.id, true)
-					else if (vector.elements.TRACK_OFF) void this.api.setTracking(this.id, false)
+					if (vector.elements.TRACK_ON === true) void this.api.setTracking(this.id, true)
+					else if (vector.elements.TRACK_OFF === true) void this.api.setTracking(this.id, false)
 				}
 
 				break
 			case 'TELESCOPE_TRACK_MODE':
 				if (this.state.TrackingRates?.length) {
-					if (vector.elements.TRACK_SIDEREAL && this.state.TrackingRates.includes(0)) void this.api.setTrackingRate(this.id, 0)
-					else if (vector.elements.TRACK_LUNAR && this.state.TrackingRates.includes(1)) void this.api.setTrackingRate(this.id, 1)
-					else if (vector.elements.TRACK_SOLAR && this.state.TrackingRates.includes(2)) void this.api.setTrackingRate(this.id, 2)
-					else if (vector.elements.TRACK_KING && this.state.TrackingRates.includes(3)) void this.api.setTrackingRate(this.id, 3)
+					if (vector.elements.TRACK_SIDEREAL === true && this.state.TrackingRates.includes(0)) void this.api.setTrackingRate(this.id, 0)
+					else if (vector.elements.TRACK_LUNAR === true && this.state.TrackingRates.includes(1)) void this.api.setTrackingRate(this.id, 1)
+					else if (vector.elements.TRACK_SOLAR === true && this.state.TrackingRates.includes(2)) void this.api.setTrackingRate(this.id, 2)
+					else if (vector.elements.TRACK_KING === true && this.state.TrackingRates.includes(3)) void this.api.setTrackingRate(this.id, 3)
 				}
 
 				break
 			case 'TELESCOPE_PARK':
 				if (this.state.CanPark) {
-					if (vector.elements.PARK) void this.api.park(this.id)
-					else if (vector.elements.UNPARK) void this.api.unpark(this.id)
+					if (vector.elements.PARK === true) void this.api.park(this.id)
+					else if (vector.elements.UNPARK === true) void this.api.unpark(this.id)
 				}
 
 				break
 			case 'TELESCOPE_HOME':
-				if (this.state.CanHome && vector.elements.GO) void this.api.findHome(this.id)
+				if (this.state.CanHome && vector.elements.GO === true) void this.api.findHome(this.id)
 				break
 			case 'TELESCOPE_ABORT_MOTION':
 				if (vector.elements.ABORT === true) void this.api.abortSlew(this.id)
@@ -590,7 +610,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	sendNumber(vector: NewNumberVector) {
 		switch (vector.name) {
 			case 'EQUATORIAL_EOD_COORD':
-				if (vector.elements.RA !== undefined && vector.elements.DEC !== undefined) {
+				if (vector.elements.RA !== undefined || vector.elements.DEC !== undefined) {
 					void this.moveToTarget(vector.elements.RA, vector.elements.DEC)
 				}
 
@@ -615,15 +635,68 @@ class AlpacaTelescope extends AlpacaDevice {
 
 				break
 			}
+			case 'GEOGRAPHIC_COORD':
+				if (vector.elements.LAT !== undefined && vector.elements.LONG !== undefined) {
+					let updated = this.updatePropertyValue(this.geographicCoordinate, 'LAT', vector.elements.LAT)
+					updated = this.updatePropertyValue(this.geographicCoordinate, 'LONG', vector.elements.LONG) || updated
+					updated = this.updatePropertyValue(this.geographicCoordinate, 'ELEV', vector.elements.ELEV) || updated
+
+					if (updated) {
+						this.sendSetProperty(this.geographicCoordinate)
+
+						void this.api.setSiteLatitude(this.id, vector.elements.LAT)
+						void this.api.setSiteLongitude(this.id, vector.elements.LONG)
+						vector.elements.ELEV !== undefined && void this.api.setSiteElevation(this.id, vector.elements.ELEV)
+					}
+				}
+
+				break
+			case 'GUIDE_RATE':
+				if (this.state.CanSetGuideRate) {
+					let updated = this.updatePropertyValue(this.guideRate, 'GUIDE_RATE_WE', vector.elements.GUIDE_RATE_WE)
+					updated = this.updatePropertyValue(this.guideRate, 'GUIDE_RATE_NS', vector.elements.GUIDE_RATE_NS) || updated
+
+					if (updated) {
+						this.sendSetProperty(this.guideRate)
+
+						vector.elements.GUIDE_RATE_WE && void this.api.setGuideRateRightAscension(this.id, vector.elements.GUIDE_RATE_WE)
+						vector.elements.GUIDE_RATE_NS && void this.api.setGuideRateDeclination(this.id, vector.elements.GUIDE_RATE_NS)
+					}
+				}
+
+				break
 		}
 	}
 
-	private async moveToTarget(rightAscension: number, declination: number) {
-		await this.api.setTargetRightAscension(this.id, rightAscension)
-		await this.api.setTargetDeclination(this.id, declination)
+	sendText(vector: NewTextVector) {
+		switch (vector.name) {
+			case 'TIME_UTC':
+				if (vector.elements.UTC && vector.elements.UTC.length >= 19) {
+					const utc = vector.elements.UTC.substring(0, 19)
+					let updated = this.updatePropertyValue(this.time, 'UTC', utc)
+					updated = this.updatePropertyValue(this.time, 'OFFSET', vector.elements.OFFSET) || updated
 
-		if (this.onCoordSet.elements.SLEW?.value === true) await this.api.slewToTarget(this.id)
-		else if (this.onCoordSet.elements.SYNC?.value === true) await this.api.syncToTarget(this.id)
+					if (updated) {
+						this.sendSetProperty(this.time)
+						void this.api.setUtcDate(this.id, `${utc}Z`)
+					}
+				}
+
+				break
+		}
+	}
+
+	private async moveToTarget(rightAscension?: number, declination?: number) {
+		if (rightAscension !== undefined && declination !== undefined) {
+			if (this.onCoordSet.elements.SLEW?.value === true) await this.api.slewToCoordinatesAsync(this.id, rightAscension, declination)
+			else if (this.onCoordSet.elements.SYNC?.value === true) await this.api.syncToCoordinates(this.id, rightAscension, declination)
+		} else if (rightAscension !== undefined) {
+			if (this.onCoordSet.elements.SLEW?.value === true) await this.api.slewToCoordinatesAsync(this.id, rightAscension, this.state.Declination)
+			else if (this.onCoordSet.elements.SYNC?.value === true) await this.api.syncToCoordinates(this.id, rightAscension, this.state.Declination)
+		} else if (declination !== undefined) {
+			if (this.onCoordSet.elements.SLEW?.value === true) await this.api.slewToCoordinatesAsync(this.id, this.state.RightAscension, declination)
+			else if (this.onCoordSet.elements.SYNC?.value === true) await this.api.syncToCoordinates(this.id, this.state.RightAscension, declination)
+		}
 	}
 }
 
@@ -803,8 +876,8 @@ class AlpacaFocuser extends AlpacaDevice {
 				if (vector.elements.ABORT === true) void this.api.halt(this.id)
 				break
 			case 'FOCUS_MOTION':
-				if (vector.elements.FOCUS_INWARD) this.updatePropertyValue(this.direction, 'FOCUS_INWARD', true)
-				else if (vector.elements.FOCUS_OUTWARD) this.updatePropertyValue(this.direction, 'FOCUS_OUTWARD', true)
+				if (vector.elements.FOCUS_INWARD === true) this.updatePropertyValue(this.direction, 'FOCUS_INWARD', true)
+				else if (vector.elements.FOCUS_OUTWARD === true) this.updatePropertyValue(this.direction, 'FOCUS_OUTWARD', true)
 				break
 		}
 	}
@@ -927,12 +1000,12 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 				if (vector.elements.ABORT === true) void this.api.halt(this.id)
 				break
 			case 'CAP_PARK':
-				if (vector.elements.PARK) void this.api.close(this.id)
-				else if (vector.elements.UNPARK) void this.api.open(this.id)
+				if (vector.elements.PARK === true) void this.api.close(this.id)
+				else if (vector.elements.UNPARK === true) void this.api.open(this.id)
 				break
 			case 'FLAT_LIGHT_CONTROL':
-				if (vector.elements.FLAT_LIGHT_ON) void this.api.on(this.id, Math.max(1, this.brightness.elements.FLAT_LIGHT_INTENSITY_VALUE.value))
-				else if (vector.elements.FLAT_LIGHT_OFF) void this.api.off(this.id)
+				if (vector.elements.FLAT_LIGHT_ON === true) void this.api.on(this.id, Math.max(1, this.brightness.elements.FLAT_LIGHT_INTENSITY_VALUE.value))
+				else if (vector.elements.FLAT_LIGHT_OFF === true) void this.api.off(this.id)
 				break
 		}
 	}
