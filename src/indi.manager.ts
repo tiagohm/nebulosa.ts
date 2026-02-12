@@ -108,6 +108,9 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 			properties[message.name] = property
 			this.added(client, device, property)
 			return true
+		} else if (message === properties[message.name]) {
+			// Alpaca always send the same message (object)
+			this.updated(client, device, message as never)
 		} else {
 			let updated = false
 			const property = properties[message.name]
@@ -1014,6 +1017,10 @@ export class MountManager extends DeviceManager<Mount> {
 				if (tag[0] === 'd') {
 					if (handleSwitchValue(device, 'hasPierSide', true)) {
 						this.updated(device, 'hasPierSide', message.state)
+
+						if (handleSwitchValue(device, 'canSetPierSide', (message as DefSwitchVector).permission !== 'ro')) {
+							this.updated(device, 'canSetPierSide', message.state)
+						}
 					}
 				}
 

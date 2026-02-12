@@ -105,7 +105,7 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<boolean>(this.url, `${id}/cansetpark`, 'GET')
 	}
 
-	canSetPierSide(id: number) {
+	canSetSideOfPier(id: number) {
 		return request<boolean>(this.url, `${id}/cansetpierside`, 'GET')
 	}
 

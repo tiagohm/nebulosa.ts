@@ -184,6 +184,7 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 	trackModes: TrackMode[]
 	trackMode: TrackMode
 	hasPierSide: boolean
+	canSetPierSide: boolean
 	pierSide: PierSide
 	guideRateWE: number
 	guideRateNS: number
@@ -346,6 +347,7 @@ export const DEFAULT_MOUNT: Mount = {
 	trackModes: [],
 	trackMode: 'SIDEREAL',
 	hasPierSide: false,
+	canSetPierSide: false,
 	pierSide: 'NEITHER',
 	guideRateWE: 0,
 	guideRateNS: 0,
