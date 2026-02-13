@@ -1,9 +1,11 @@
 import { AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaTelescopeApi } from './alpaca.api'
 import type { AlpacaAxisRate, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem } from './alpaca.types'
+import { SIDEREAL_RATE } from './constants'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import type { Client } from './indi.device'
 // biome-ignore format: too long!
 import { type DefNumber, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefText, type DefTextVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyPermission, type PropertyState, type SwitchRule, type ValueType, type VectorType } from './indi.types'
+import { roundToNthDecimal } from './math'
 import { formatTemporal, TIMEZONE } from './temporal'
 
 export interface AlpacaClientHandler extends IndiClientHandler {}
@@ -39,9 +41,9 @@ export class AlpacaClient implements Client, Disposable {
 
 	getProperties(command?: GetProperties) {
 		if (command?.device) {
-			this.devices.get(command.device)?.sendProperties()
+			this.devices.get(command.device)?.sendProperties(command.name)
 		} else {
-			this.devices.forEach((e) => e.sendProperties())
+			this.devices.forEach((e) => e.sendProperties(command?.name))
 		}
 	}
 
@@ -168,9 +170,6 @@ abstract class AlpacaDevice {
 		this.connection.device = device.DeviceName
 
 		this.runner.registerHandler(this.handleEndpointsAfterRun.bind(this))
-
-		this.runner.registerEndpoint('Connected', () => this.api.isConnected(this.id), true)
-		this.runner.registerEndpoint('DeviceState', () => this.api.deviceState(this.id), false)
 	}
 
 	get isConnected() {
@@ -235,16 +234,21 @@ abstract class AlpacaDevice {
 		return false
 	}
 
-	sendProperties() {
+	sendProperties(name?: string) {
 		for (const property of this.properties) {
-			this.sendDefProperty(property)
-			this.sendSetProperty(property)
+			if (!name || property.name === name) {
+				this.sendDefProperty(property)
+				this.sendSetProperty(property)
+			}
 		}
 	}
 
 	onInit() {
 		this.sendDefProperty(this.driverInfo)
 		this.sendDefProperty(this.connection)
+
+		this.runner.registerEndpoint('Connected', this.api.isConnected.bind(this.api, this.id), true)
+		this.runner.registerEndpoint('DeviceState', this.api.deviceState.bind(this.api, this.id), false)
 	}
 
 	protected onConnect() {
@@ -289,7 +293,10 @@ abstract class AlpacaDevice {
 	}
 
 	protected enableEndpoints(...keys: string[]) {
-		for (const key of keys) this.runner.toggleEndpoint(key, true)
+		for (const key of keys) {
+			;(this.state as unknown as Record<string, undefined>)[key] = undefined
+			this.runner.toggleEndpoint(key, true)
+		}
 	}
 
 	protected disableEndpoints(...keys: string[]) {
@@ -347,6 +354,8 @@ interface AlpacaTelescopeState extends AlpacaDeviceState {
 	Latitude?: number
 	Longitude?: number
 	Elevation?: number
+	GuideRateRA?: number
+	GuideRateDEC?: number
 }
 
 class AlpacaTelescope extends AlpacaDevice {
@@ -354,7 +363,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
 	// biome-ignore format: do not break!
 	protected readonly state: AlpacaTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0 }
-	protected readonly endpoints = ['CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier', 'SideOfPier', 'Latitude', 'Longitude', 'Elevation'] as const
+	protected readonly endpoints = ['CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier'] as const
 
 	private readonly onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
 	private readonly equatorialCoordinate = makeNumberVector('', 'EQUATORIAL_EOD_COORD', 'Eq. Coordinates', MAIN_CONTROL, 'rw', ['RA', 'RA (hours)', 0, 0, 24, 0.1, '%10.6f'], ['DEC', 'DEC (deg)', 0, -90, 90, 0.1, '%10.6f'])
@@ -376,7 +385,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
 
-		this.api = new AlpacaTelescopeApi(client.url)
+		const api = new AlpacaTelescopeApi(client.url)
 
 		this.onCoordSet.device = device.DeviceName
 		this.equatorialCoordinate.device = device.DeviceName
@@ -395,34 +404,48 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.guideNS.device = device.DeviceName
 		this.guideWE.device = device.DeviceName
 
-		this.runner.registerEndpoint('CanHome', () => this.api.canFindHome(this.id), false)
-		this.runner.registerEndpoint('CanPark', () => this.api.canPark(this.id), false)
-		this.runner.registerEndpoint('CanMoveAxis', async () => (await this.api.canMoveAxis(this.id, 0)) || (await this.api.canMoveAxis(this.id, 1)), false)
-		this.runner.registerEndpoint('CanPulseGuide', () => this.api.canPulseGuide(this.id), false)
-		this.runner.registerEndpoint('CanTrack', () => this.api.canSetTracking(this.id), false)
-		this.runner.registerEndpoint('CanSlew', () => this.api.canSlew(this.id), false)
-		this.runner.registerEndpoint('CanSync', () => this.api.canSync(this.id), false)
-		this.runner.registerEndpoint('CanSetGuideRate', () => this.api.canSetGuideRates(this.id), false)
-		this.runner.registerEndpoint('SlewRates', () => this.api.getAxisRates(this.id, 0), false)
-		this.runner.registerEndpoint('TrackingRates', () => this.api.getTrackingRates(this.id), false)
-		this.runner.registerEndpoint('TrackingRate', () => this.api.getTrackingRate(this.id), false)
-		this.runner.registerEndpoint('CanSetSideOfPier', () => this.api.canSetSideOfPier(this.id), false)
-		this.runner.registerEndpoint('SideOfPier', () => this.api.getSideOfPier(this.id), false)
-		this.runner.registerEndpoint('Latitude', () => this.api.getSiteLatitude(this.id), false)
-		this.runner.registerEndpoint('Longitude', () => this.api.getSiteLongitude(this.id), false)
-		this.runner.registerEndpoint('Elevation', () => this.api.getSiteElevation(this.id), false)
-		// this.runner.registerEndpoint('RightAscension', () => this.api.getRightAscension(this.id), false)
-		// this.runner.registerEndpoint('Declination', () => this.api.getDeclination(this.id), false)
-		// this.runner.registerEndpoint('Slewing', () => this.api.isSlewing(this.id), false)
-		// this.runner.registerEndpoint('Tracking', () => this.api.isTracking(this.id), false)
-		// this.runner.registerEndpoint('AtPark', () => this.api.isAtPark(this.id), false)
-		// this.runner.registerEndpoint('IsPulseGuiding', () => this.api.isPulseGuiding(this.id), false)
+		async function canMoveAxis(id: number) {
+			return (await api.canMoveAxis(id, 0)) || (await api.canMoveAxis(id, 1))
+		}
+
+		this.runner.registerEndpoint('CanHome', api.canFindHome.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanPark', api.canPark.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanMoveAxis', canMoveAxis.bind(undefined, this.id), false)
+		this.runner.registerEndpoint('CanPulseGuide', api.canPulseGuide.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanTrack', api.canSetTracking.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanSlew', api.canSlew.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanSync', api.canSync.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanSetGuideRate', api.canSetGuideRates.bind(api, this.id), false)
+		this.runner.registerEndpoint('SlewRates', api.getAxisRates.bind(api, this.id, 0), false)
+		this.runner.registerEndpoint('TrackingRates', api.getTrackingRates.bind(api, this.id), false)
+		this.runner.registerEndpoint('TrackingRate', api.getTrackingRate.bind(api, this.id), false, 10)
+		this.runner.registerEndpoint('CanSetSideOfPier', api.canSetSideOfPier.bind(api, this.id), false)
+		this.runner.registerEndpoint('Latitude', api.getSiteLatitude.bind(api, this.id), false, 60)
+		this.runner.registerEndpoint('Longitude', api.getSiteLongitude.bind(api, this.id), false, 60)
+		this.runner.registerEndpoint('Elevation', api.getSiteElevation.bind(api, this.id), false, 60)
+		this.runner.registerEndpoint('GuideRateRA', api.getGuideRateRightAscension.bind(api, this.id), false, 60)
+		this.runner.registerEndpoint('GuideRateDEC', api.getGuideRateDeclination.bind(api, this.id), false, 60)
+		// this.runner.registerEndpoint('RightAscension', api.getRightAscension.bind(api, this.id), false)
+		// this.runner.registerEndpoint('Declination', api.getDeclination.bind(api, this.id), false)
+		// this.runner.registerEndpoint('SideOfPier', api.getSideOfPier.bind(api, this.id), false)
+		// this.runner.registerEndpoint('Slewing', api.isSlewing.bind(api, this.id), false)
+		// this.runner.registerEndpoint('Tracking', api.isTracking.bind(api, this.id), false)
+		// this.runner.registerEndpoint('AtPark', api.isAtPark.bind(api, this.id), false)
+		// this.runner.registerEndpoint('IsPulseGuiding', api.isPulseGuiding.bind(api, this.id), false)
+
+		this.api = api
+	}
+
+	protected onConnect() {
+		super.onConnect()
+
+		this.enableEndpoints('Latitude', 'Longitude', 'Elevation')
 	}
 
 	protected onDisconnect() {
 		super.onDisconnect()
 
-		this.disableEndpoints('TrackingRate')
+		this.disableEndpoints('TrackingRate', 'GuideRateRA', 'GuideRateDEC', 'Latitude', 'Longitude', 'Elevation')
 	}
 
 	protected handleEndpointsAfterRun() {
@@ -431,10 +454,12 @@ class AlpacaTelescope extends AlpacaDevice {
 		if (!this.state.Connected) return
 
 		const { Step, CanTrack, CanHome, CanPark, CanSlew, CanSync, CanMoveAxis, CanPulseGuide, CanSetGuideRate, CanSetSideOfPier, Tracking, AtPark, IsPulseGuiding, Slewing } = this.state
-		const { RightAscension, Declination, SlewRates, TrackingRates, TrackingRate, SideOfPier, UTCDate, Latitude, Longitude, Elevation } = this.state
+		const { RightAscension, Declination, SlewRates, TrackingRates, TrackingRate, SideOfPier, UTCDate, Latitude, Longitude, Elevation, GuideRateRA, GuideRateDEC } = this.state
 
 		// Initial
 		if (Step === 1) {
+			// console.info(this.device.DeviceName, 'initial step:', this.state)
+
 			this.sendDefProperty(this.equatorialCoordinate)
 			this.sendDefProperty(this.abort)
 
@@ -449,13 +474,21 @@ class AlpacaTelescope extends AlpacaDevice {
 				this.sendDefProperty(this.motionWE)
 			}
 			if (CanPulseGuide) {
-				if (CanSetGuideRate) {
-					this.guideRate.permission = 'rw'
+				if (GuideRateRA !== undefined && GuideRateDEC !== undefined) {
+					if (CanSetGuideRate) {
+						this.guideRate.permission = 'rw'
+					}
+
+					this.guideRate.elements.GUIDE_RATE_WE.value = roundToNthDecimal(GuideRateRA / (SIDEREAL_RATE / 3600), 6)
+					this.guideRate.elements.GUIDE_RATE_NS.value = roundToNthDecimal(GuideRateDEC / (SIDEREAL_RATE / 3600), 6)
+
+					this.sendDefProperty(this.guideRate)
 				}
 
-				this.sendDefProperty(this.guideRate)
 				this.sendDefProperty(this.guideNS)
 				this.sendDefProperty(this.guideWE)
+
+				this.enableEndpoints('GuideRateRA', 'GuideRateDEC')
 			}
 
 			if (SlewRates?.length) {
@@ -482,7 +515,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			}
 
 			if (UTCDate) {
-				this.time.elements.UTC.value = UTCDate
+				this.time.elements.UTC.value = UTCDate.substring(0, 19)
 				this.sendDefProperty(this.time)
 			}
 
@@ -491,6 +524,8 @@ class AlpacaTelescope extends AlpacaDevice {
 				this.geographicCoordinate.elements.LONG.value = Longitude
 				this.geographicCoordinate.elements.ELEV.value = Elevation ?? 0
 				this.sendDefProperty(this.geographicCoordinate)
+
+				this.enableEndpoints('Latitude', 'Longitude', 'Elevation')
 			}
 
 			this.sendDefProperty(this.pierSide)
@@ -522,6 +557,25 @@ class AlpacaTelescope extends AlpacaDevice {
 
 			if (TrackingRate !== undefined) {
 				this.updatePropertyValue(this.trackMode, TrackingRate === 0 ? 'TRACK_SIDEREAL' : TrackingRate === 1 ? 'TRACK_LUNAR' : TrackingRate === 2 ? 'TRACK_SOLAR' : 'TRACK_KING', true) && this.sendSetProperty(this.trackMode)
+				this.state.TrackingRate = undefined
+			}
+
+			if (GuideRateRA !== undefined && GuideRateDEC !== undefined) {
+				let updated = this.updatePropertyValue(this.guideRate, 'GUIDE_RATE_WE', roundToNthDecimal(GuideRateRA / (SIDEREAL_RATE / 3600), 6))
+				updated = this.updatePropertyValue(this.guideRate, 'GUIDE_RATE_NS', roundToNthDecimal(GuideRateDEC / (SIDEREAL_RATE / 3600), 6)) || updated
+				updated && this.sendSetProperty(this.guideRate)
+				this.state.GuideRateRA = undefined
+				this.state.GuideRateDEC = undefined
+			}
+
+			if (Latitude !== undefined && Longitude !== undefined) {
+				let updated = this.updatePropertyValue(this.geographicCoordinate, 'LAT', Latitude)
+				updated = this.updatePropertyValue(this.geographicCoordinate, 'LONG', Longitude) || updated
+				if (Elevation !== undefined) updated = this.updatePropertyValue(this.geographicCoordinate, 'ELEV', Elevation) || updated
+				updated && this.sendSetProperty(this.geographicCoordinate)
+				this.state.Latitude = undefined
+				this.state.Longitude = undefined
+				this.state.Elevation = undefined
 			}
 
 			let updated = this.updatePropertyState(this.equatorialCoordinate, Slewing ? 'Busy' : 'Idle')
@@ -659,8 +713,9 @@ class AlpacaTelescope extends AlpacaDevice {
 					if (updated) {
 						this.sendSetProperty(this.guideRate)
 
-						vector.elements.GUIDE_RATE_WE && void this.api.setGuideRateRightAscension(this.id, vector.elements.GUIDE_RATE_WE)
-						vector.elements.GUIDE_RATE_NS && void this.api.setGuideRateDeclination(this.id, vector.elements.GUIDE_RATE_NS)
+						// Guide rate in deg/second
+						vector.elements.GUIDE_RATE_WE && void this.api.setGuideRateRightAscension(this.id, vector.elements.GUIDE_RATE_WE * (SIDEREAL_RATE / 3600))
+						vector.elements.GUIDE_RATE_NS && void this.api.setGuideRateDeclination(this.id, vector.elements.GUIDE_RATE_NS * (SIDEREAL_RATE / 3600))
 					}
 				}
 
@@ -717,13 +772,15 @@ class AlpacaFilterWheel extends AlpacaDevice {
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
 
-		this.api = new AlpacaFilterWheelApi(client.url)
+		const api = new AlpacaFilterWheelApi(client.url)
 
 		this.position.device = device.DeviceName
 		this.names.device = device.DeviceName
 
-		this.runner.registerEndpoint('Names', () => this.api.getNames(this.id), false)
-		// this.runner.registerEndpoint('Position', () => this.api.getPosition(this.id), false)
+		this.runner.registerEndpoint('Names', api.getNames.bind(api, this.id), false)
+		// this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
+
+		this.api = api
 	}
 
 	protected handleEndpointsAfterRun() {
@@ -794,7 +851,7 @@ class AlpacaFocuser extends AlpacaDevice {
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
 
-		this.api = new AlpacaFocuserApi(client.url)
+		const api = new AlpacaFocuserApi(client.url)
 
 		this.absolutePosition.device = device.DeviceName
 		this.relativePosition.device = device.DeviceName
@@ -802,11 +859,13 @@ class AlpacaFocuser extends AlpacaDevice {
 		this.abort.device = device.DeviceName
 		this.direction.device = device.DeviceName
 
-		// this.runner.registerEndpoint('IsMoving', () => this.api.isMoving(this.id), false)
-		// this.runner.registerEndpoint('Position', () => this.api.getPosition(this.id), false)
-		this.runner.registerEndpoint('Temperature', () => this.api.getTemperature(this.id), false)
-		this.runner.registerEndpoint('IsAbsolute', () => this.api.isAbsolute(this.id), false)
-		this.runner.registerEndpoint('MaxStep', () => this.api.getMaxStep(this.id), false)
+		// this.runner.registerEndpoint('IsMoving', api.isMoving.bind(api, this.id), false)
+		// this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
+		this.runner.registerEndpoint('Temperature', api.getTemperature.bind(api, this.id), false)
+		this.runner.registerEndpoint('IsAbsolute', api.isAbsolute.bind(api, this.id), false)
+		this.runner.registerEndpoint('MaxStep', api.getMaxStep.bind(api, this.id), false)
+
+		this.api = api
 	}
 
 	get isAbsolute() {
@@ -919,18 +978,20 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
 
-		this.api = new AlpacaCoverCalibratorApi(client.url)
+		const api = new AlpacaCoverCalibratorApi(client.url)
 
 		this.light.device = device.DeviceName
 		this.brightness.device = device.DeviceName
 		this.park.device = device.DeviceName
 		this.abort.device = device.DeviceName
 
-		this.runner.registerEndpoint('MaxBrightness', () => this.api.getMaxBrightness(this.id), false)
-		// this.runner.registerEndpoint('Brightness', () => this.api.getBrightness(this.id), false)
-		// this.runner.registerEndpoint('CoverState', () => this.api.getCoverState(this.id), false)
-		// this.runner.registerEndpoint('CalibratorState', () => this.api.getCalibratorState(this.id), false)
-		// this.runner.registerEndpoint('Moving', () => this.api.isMoving(this.id), false)
+		this.runner.registerEndpoint('MaxBrightness', api.getMaxBrightness.bind(api, this.id), false)
+		// this.runner.registerEndpoint('Brightness', api.getBrightness.bind(api, this.id), false)
+		// this.runner.registerEndpoint('CoverState', api.getCoverState.bind(api, this.id), false)
+		// this.runner.registerEndpoint('CalibratorState', api.getCalibratorState.bind(api, this.id), false)
+		// this.runner.registerEndpoint('Moving', api.isMoving.bind(api, this.id), false)
+
+		this.api = api
 	}
 
 	protected handleEndpointsAfterRun() {
@@ -1048,21 +1109,26 @@ class AlpacaApiRunner {
 	private readonly keys: string[] = []
 	private readonly endpoints: AlpacaApiRunnerEndpoint[] = []
 	private readonly enabled: boolean[] = []
+	private readonly interval: number[] = []
+	private readonly count: number[] = []
 	private readonly result: (PromiseLike<unknown> | undefined)[] = []
 	private readonly handlers = new Set<AlpacaApiRunnerHandlerAfterRun>()
 
-	registerEndpoint(key: string, endpoint: AlpacaApiRunnerEndpoint, enabled: boolean) {
+	registerEndpoint(key: string, endpoint: AlpacaApiRunnerEndpoint, enabled: boolean, interval: number = 1) {
 		const index = this.keys.indexOf(key)
 
 		if (index >= 0) {
 			this.keys[index] = key
 			this.endpoints[index] = endpoint
 			this.enabled[index] = enabled
-			console.info('overwriting endpoint:', key)
+			this.interval[index] = interval
+			this.count[index] = 0
 		} else {
 			this.keys.push(key)
 			this.endpoints.push(endpoint)
 			this.enabled.push(enabled)
+			this.interval.push(interval)
+			this.count.push(0)
 		}
 	}
 
@@ -1081,6 +1147,12 @@ class AlpacaApiRunner {
 		const index = this.keys.indexOf(key)
 		if (index >= 0) this.enabled[index] = force ?? !this.enabled[index]
 		else console.warn('endpoint not found:', key)
+		if (index >= 0 && this.enabled[index]) this.count[index] = 0
+	}
+
+	isEndpointEnabled(key: string) {
+		const index = this.keys.indexOf(key)
+		return index >= 0 && this.enabled[index]
 	}
 
 	registerHandler(handler: AlpacaApiRunnerHandlerAfterRun) {
@@ -1095,11 +1167,13 @@ class AlpacaApiRunner {
 		const n = this.keys.length
 
 		for (let i = 0; i < n; i++) {
-			if (this.enabled[i]) {
+			if (this.enabled[i] && (this.interval[i] <= 1 || this.count[i] % this.interval[i] === 0)) {
 				this.result[i] = this.endpoints[i]()
 			} else {
 				this.result[i] = undefined
 			}
+
+			this.count[i]++
 		}
 
 		return this.handleEndpointsAfterRun(state)

@@ -56,3 +56,8 @@ export function floorDiv(x: number, y: number) {
 export function roundToNearestWholeNumber(a: number): number {
 	return Math.abs(a) < 0.5 ? 0 : a < 0 ? Math.ceil(a - 0.5) : Math.floor(a + 0.5)
 }
+
+export function roundToNthDecimal(a: number, n: number) {
+	const factor = 10 ** n
+	return Math.round((a + Number.EPSILON) * factor) / factor
+}

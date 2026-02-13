@@ -248,8 +248,8 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		return this.devices.get(client)?.has(name) === true
 	}
 
-	ask(device: D, client = device[CLIENT]!) {
-		client.getProperties({ device: device.name })
+	ask(device: D, name?: string, client = device[CLIENT]!) {
+		client.getProperties({ device: device.name, name })
 	}
 
 	enableBlob(device: D, client = device[CLIENT]!) {
@@ -405,6 +405,12 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		else if (direction === 'EAST') this.pulseEast(device, duration, client)
 	}
 
+	guideRate(device: GuideOutput, rightAscension: number, declination: number, client = device[CLIENT]!) {
+		if (device.canSetGuideRate) {
+			client.sendNumber({ device: device.name, name: 'GUIDE_RATE', elements: { GUIDE_RATE_WE: rightAscension, GUIDE_RATE_NS: declination } })
+		}
+	}
+
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		switch (message.name) {
 			case 'TELESCOPE_TIMED_GUIDE_NS':
@@ -422,6 +428,30 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 
 					if (handleSwitchValue(device, 'pulsing', message.state === 'Busy')) {
 						this.updated(device, 'pulsing', message.state)
+					}
+				}
+
+				return
+			}
+			case 'GUIDE_RATE': {
+				const device = this.provider.get(client, message.device)
+
+				if (device) {
+					if (tag[0] === 'd') {
+						if (handleSwitchValue(device, 'hasGuideRate', true)) {
+							this.updated(device, 'hasGuideRate', message.state)
+
+							if (handleSwitchValue(device, 'canSetGuideRate', (message as DefNumberVector).permission !== 'ro')) {
+								this.updated(device, 'canSetGuideRate', message.state)
+							}
+						}
+					}
+
+					let updated = handleNumberValue(device.guideRate, 'rightAscension', message.elements.GUIDE_RATE_WE?.value)
+					updated = handleNumberValue(device.guideRate, 'declination', message.elements.GUIDE_RATE_NS?.value) || updated
+
+					if (updated) {
+						this.updated(device, 'guideRate', message.state)
 					}
 				}
 

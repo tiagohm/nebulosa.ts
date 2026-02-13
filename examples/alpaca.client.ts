@@ -1,7 +1,7 @@
 import { AlpacaClient, type AlpacaClientHandler } from '../src/alpaca.client'
 import { AlpacaDiscoveryClient } from '../src/alpaca.discovery'
 import type { Client, Device } from '../src/indi.device'
-import { CoverManager, FlatPanelManager, FocuserManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import { CoverManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import type { PropertyState } from '../src/indi.types'
 
 const alpacaDiscoveryClient = new AlpacaDiscoveryClient()
@@ -25,6 +25,12 @@ const focuserManager = new FocuserManager()
 const flatPanelManager = new FlatPanelManager()
 const coverManager = new CoverManager()
 
+const guideOutput = new GuideOutputManager({
+	get: (client: Client, name: string) => {
+		return mountManager.get(client, name)
+	},
+})
+
 const thermometerManager = new ThermometerManager({
 	get: (client: Client, name: string) => {
 		return focuserManager.get(client, name)
@@ -36,6 +42,7 @@ wheelManager.addHandler(deviceHandler)
 focuserManager.addHandler(deviceHandler)
 flatPanelManager.addHandler(deviceHandler)
 coverManager.addHandler(deviceHandler)
+guideOutput.addHandler(deviceHandler)
 thermometerManager.addHandler(deviceHandler)
 
 const handler: AlpacaClientHandler = {
@@ -51,6 +58,7 @@ const handler: AlpacaClientHandler = {
 		wheelManager.numberVector(client, message, tag)
 		focuserManager.numberVector(client, message, tag)
 		flatPanelManager.numberVector(client, message, tag)
+		guideOutput.numberVector(client, message, tag)
 		thermometerManager.numberVector(client, message, tag)
 	},
 	switchVector: (client, message, tag) => {
@@ -59,6 +67,7 @@ const handler: AlpacaClientHandler = {
 		focuserManager.switchVector(client, message, tag)
 		flatPanelManager.switchVector(client, message, tag)
 		coverManager.switchVector(client, message, tag)
+		guideOutput.switchVector(client, message, tag)
 		thermometerManager.switchVector(client, message, tag)
 	},
 }

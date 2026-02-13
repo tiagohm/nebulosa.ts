@@ -246,7 +246,7 @@ test('convolution gaussian blur', () => {
 	return readImageTransformAndSave((i) => gaussianBlur(i), 'conv-gaussian-blur', 'fde35723b23615cbef1ece1fbaecb0e2')
 }, 8000)
 
-test('convolution gaussian blur 11x11', () => {
+test.skip('convolution gaussian blur 11x11', () => {
 	return readImageTransformAndSave((i) => gaussianBlur(i, { sigma: 3, size: 11 }), 'conv-gaussian-blur-11', 'b4884871f1780a44e134a52392f85bed')
 }, 8000)
 

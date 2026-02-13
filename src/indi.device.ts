@@ -97,6 +97,9 @@ export interface GuideOutput extends Device {
 	readonly type: 'GUIDE_OUTPUT' | 'MOUNT' | 'CAMERA'
 	canPulseGuide: boolean
 	pulsing: boolean
+	hasGuideRate: boolean
+	canSetGuideRate: boolean
+	guideRate: EquatorialCoordinate<number>
 }
 
 export interface Thermometer extends Device {
@@ -186,8 +189,6 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 	hasPierSide: boolean
 	canSetPierSide: boolean
 	pierSide: PierSide
-	guideRateWE: number
-	guideRateNS: number
 	readonly equatorialCoordinate: EquatorialCoordinate
 }
 
@@ -317,6 +318,12 @@ export const DEFAULT_CAMERA: Camera = {
 	},
 	canPulseGuide: false,
 	pulsing: false,
+	hasGuideRate: false,
+	canSetGuideRate: false,
+	guideRate: {
+		rightAscension: 0,
+		declination: 0,
+	},
 	type: 'CAMERA',
 	id: '',
 	name: '',
@@ -349,8 +356,12 @@ export const DEFAULT_MOUNT: Mount = {
 	hasPierSide: false,
 	canSetPierSide: false,
 	pierSide: 'NEITHER',
-	guideRateWE: 0,
-	guideRateNS: 0,
+	hasGuideRate: false,
+	canSetGuideRate: false,
+	guideRate: {
+		rightAscension: 0,
+		declination: 0,
+	},
 	equatorialCoordinate: {
 		rightAscension: 0,
 		declination: 0,
@@ -491,6 +502,12 @@ export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	id: '',
 	name: '',
 	connected: false,
+	hasGuideRate: false,
+	canSetGuideRate: false,
+	guideRate: {
+		rightAscension: 0,
+		declination: 0,
+	},
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
