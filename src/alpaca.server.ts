@@ -686,7 +686,7 @@ export class AlpacaServer {
 
 	// https://ascom-standards.org/newdocs/camera.html#Camera.CameraStates
 	private cameraGetState(id: number) {
-		return makeAlpacaResponse(this.camera(id).device.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle)
+		return makeAlpacaResponse(this.camera(id).device.exposuring ? AlpacaCameraState.EXPOSING : AlpacaCameraState.IDLE)
 	}
 
 	private cameraGetXSize(id: number) {
@@ -741,7 +741,7 @@ export class AlpacaServer {
 	private cameraGetDeviceState(id: number) {
 		const { state, device } = this.camera(id)
 		const res = new Array<AlpacaStateItem>(8)
-		res[0] = { Name: 'CameraState', Value: device.exposuring ? AlpacaCameraState.Exposing : AlpacaCameraState.Idle }
+		res[0] = { Name: 'CameraState', Value: device.exposuring ? AlpacaCameraState.EXPOSING : AlpacaCameraState.IDLE }
 		res[1] = { Name: 'CCDTemperature', Value: device.temperature }
 		res[2] = { Name: 'CoolerPower', Value: device.coolerPower }
 		res[3] = { Name: 'HeatSinkTemperature', Value: device.temperature }

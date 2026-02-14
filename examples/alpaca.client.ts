@@ -1,7 +1,7 @@
 import { AlpacaClient, type AlpacaClientHandler } from '../src/alpaca.client'
 import { AlpacaDiscoveryClient } from '../src/alpaca.discovery'
 import type { Client, Device } from '../src/indi.device'
-import { CoverManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import { CameraManager, CoverManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import type { PropertyState } from '../src/indi.types'
 
 const alpacaDiscoveryClient = new AlpacaDiscoveryClient()
@@ -19,6 +19,7 @@ const deviceHandler = {
 	},
 }
 
+const cameraManager = new CameraManager()
 const mountManager = new MountManager()
 const wheelManager = new WheelManager()
 const focuserManager = new FocuserManager()
@@ -27,16 +28,17 @@ const coverManager = new CoverManager()
 
 const guideOutput = new GuideOutputManager({
 	get: (client: Client, name: string) => {
-		return mountManager.get(client, name)
+		return mountManager.get(client, name) ?? cameraManager.get(client, name)
 	},
 })
 
 const thermometerManager = new ThermometerManager({
 	get: (client: Client, name: string) => {
-		return focuserManager.get(client, name)
+		return focuserManager.get(client, name) ?? cameraManager.get(client, name)
 	},
 })
 
+cameraManager.addHandler(deviceHandler)
 mountManager.addHandler(deviceHandler)
 wheelManager.addHandler(deviceHandler)
 focuserManager.addHandler(deviceHandler)
@@ -47,6 +49,7 @@ thermometerManager.addHandler(deviceHandler)
 
 const handler: AlpacaClientHandler = {
 	textVector: (client, message, tag) => {
+		cameraManager.textVector(client, message, tag)
 		mountManager.textVector(client, message, tag)
 		wheelManager.textVector(client, message, tag)
 		focuserManager.textVector(client, message, tag)
@@ -54,6 +57,7 @@ const handler: AlpacaClientHandler = {
 		coverManager.textVector(client, message, tag)
 	},
 	numberVector: (client, message, tag) => {
+		cameraManager.numberVector(client, message, tag)
 		mountManager.numberVector(client, message, tag)
 		wheelManager.numberVector(client, message, tag)
 		focuserManager.numberVector(client, message, tag)
@@ -62,6 +66,7 @@ const handler: AlpacaClientHandler = {
 		thermometerManager.numberVector(client, message, tag)
 	},
 	switchVector: (client, message, tag) => {
+		cameraManager.switchVector(client, message, tag)
 		mountManager.switchVector(client, message, tag)
 		wheelManager.switchVector(client, message, tag)
 		focuserManager.switchVector(client, message, tag)

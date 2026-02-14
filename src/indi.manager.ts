@@ -7,7 +7,7 @@ import { meter, toMeter } from './distance'
 import type { CfaPattern } from './image.types'
 import type { IndiClientHandler } from './indi.client'
 // biome-ignore format: too long!
-import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi.types'
 import type { GeographicCoordinate } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
@@ -27,7 +27,7 @@ export interface DevicePropertyHandler {
 }
 
 export interface DeviceProvider<D extends Device> {
-	readonly get: (client: Client, name: string) => D | undefined
+	readonly get: (client: Client, name: string, type?: DeviceType) => D | undefined
 }
 
 const DEVICES = {
@@ -183,7 +183,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 
 	get length() {
 		let n = 0
-		this.devices.forEach((e) => void (n += e.size))
+		for (const d of this.devices) n += d[1].size
 		return n
 	}
 
@@ -475,7 +475,6 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 	}
 }
 
-// TODO: SVBony SV241 Pro has two thermometers!
 export class ThermometerManager extends DeviceManager<Thermometer> {
 	constructor(readonly provider: DeviceProvider<Thermometer>) {
 		super()
@@ -485,7 +484,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 		switch (message.name) {
 			case 'CCD_TEMPERATURE':
 			case 'FOCUS_TEMPERATURE': {
-				const device = this.provider.get(client, message.device)
+				const device = this.provider.get(client, message.device, message.name[0] === 'C' ? 'CAMERA' : 'FOCUSER')
 
 				if (device) {
 					if (tag[0] === 'd') {
@@ -646,6 +645,12 @@ export class CameraManager extends DeviceManager<Camera> {
 				}
 
 				return
+			case 'CCD_FRAME_TYPE':
+				if (handleTextValue(device, 'frameType', message.elements.FRAME_BIAS?.value ? 'BIAS' : message.elements.FRAME_FLAT?.value ? 'FLAT' : message.elements.FRAME_DARK?.value ? 'DARK' : 'LIGHT')) {
+					this.updated(device, 'frameType', message.state)
+				}
+
+				return
 		}
 	}
 
@@ -750,7 +755,7 @@ export class CameraManager extends DeviceManager<Camera> {
 				}
 
 				return
-			// CCD Simulator
+			// CCD Simulator & Alpaca
 			case 'CCD_GAIN':
 				if (handleMinMaxValue(device.gain, message.elements.GAIN, tag)) {
 					this.updated(device, 'gain', message.state)
@@ -762,12 +767,6 @@ export class CameraManager extends DeviceManager<Camera> {
 				if (handleMinMaxValue(device.offset, message.elements.OFFSET, tag)) {
 					this.updated(device, 'offset', message.state)
 					this.offsetProperty.set(device.name, [message.name, 'OFFSET'])
-				}
-
-				return
-			case 'CCD_FRAME_TYPE':
-				if (handleTextValue(device, 'frameType', message.elements.FRAME_BIAS?.value ? 'BIAS' : message.elements.FRAME_FLAT?.value ? 'FLAT' : message.elements.FRAME_DARK?.value ? 'DARK' : 'LIGHT')) {
-					this.updated(device, 'frameType', message.state)
 				}
 
 				return

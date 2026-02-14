@@ -13,15 +13,6 @@ export type AlpacaWheelAction = (typeof SUPPORTED_WHEEL_ACTIONS)[number]
 
 export type CoverCalibrator = Cover & FlatPanel
 
-export enum AlpacaCameraState {
-	Idle,
-	Waiting,
-	Exposing,
-	Reading,
-	Download,
-	Error,
-}
-
 // https://ascom-standards.org/newdocs/exceptions.html
 export enum AlpacaException {
 	MethodNotImplemented = 1024,
@@ -48,6 +39,68 @@ export enum AlpacaImageElementType {
 	Int64 = 7,
 	UInt16 = 8,
 	UInt32 = 9,
+}
+
+// https://ascom-standards.org/newdocs/camera.html#enumerated-constants
+
+export enum AlpacaCameraState {
+	IDLE,
+	WAITING,
+	EXPOSING,
+	READING,
+	DOWNLOAD,
+	ERROR,
+}
+
+export enum AlpacaCameraSensorType {
+	MONOCHROME,
+	COLOR,
+	RGGB,
+	CMYG,
+	CMYG2,
+	LRGB,
+}
+
+// https://ascom-standards.org/newdocs/telescope.html#enumerated-constants
+
+export enum AlpacaTelescopeAlignmentMode {
+	ALTAZ,
+	POLAR,
+	GERMAN_POLAR,
+}
+
+export enum AlpacaTelescopeTrackingRate {
+	SIDEREAL,
+	LUNAR,
+	SOLAR,
+	KING,
+}
+
+export enum AlpacaTelescopeEquatorialCoordinateType {
+	OTHER,
+	TOPOCENTRIC,
+	J2000,
+	J2050,
+	B1950,
+}
+
+export enum AlpacaGuideDirection {
+	NORTH,
+	SOUTH,
+	EAST,
+	WEST,
+}
+
+export enum AlpacaTelescopePierSide {
+	UNKNOWN = -1,
+	EAST,
+	WEST,
+}
+
+export enum AlpacaTelescopeAxis {
+	PRIMARY,
+	SECONDARY,
+	TERTIARY,
 }
 
 export interface AlpacaResponse<T> {

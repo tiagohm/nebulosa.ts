@@ -1,16 +1,19 @@
-import type { AlpacaAxisRate, AlpacaConfiguredDevice, AlpacaResponse, AlpacaStateItem } from './alpaca.types'
+// biome-ignore format: too long!
+import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaGuideDirection, AlpacaResponse, AlpacaStateItem, AlpacaTelescopeAlignmentMode, AlpacaTelescopeAxis, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate } from './alpaca.types'
 
 // https://ascom-standards.org/api/
 
 export class AlpacaApi {
 	readonly management: AlpacaManagementApi
 	readonly telescope: AlpacaTelescopeApi
+	readonly camera: AlpacaCameraApi
 	readonly filterWheel: AlpacaFilterWheelApi
 	readonly focuser: AlpacaFocuserApi
 	readonly coverCalibrator: AlpacaCoverCalibratorApi
 
 	constructor(readonly url: string | URL) {
 		this.management = new AlpacaManagementApi(url)
+		this.camera = new AlpacaCameraApi(url)
 		this.telescope = new AlpacaTelescopeApi(url)
 		this.filterWheel = new AlpacaFilterWheelApi(url)
 		this.focuser = new AlpacaFocuserApi(url)
@@ -48,13 +51,303 @@ export class AlpacaDeviceApi {
 	}
 }
 
+export class AlpacaCameraApi extends AlpacaDeviceApi {
+	constructor(url: string | URL) {
+		super(new URL('/api/v1/camera/', url))
+	}
+
+	getBayerOffsetX(id: number) {
+		return request<number>(this.url, `${id}/bayeroffsetx`, 'GET')
+	}
+
+	getBayerOffsetY(id: number) {
+		return request<number>(this.url, `${id}/bayeroffsety`, 'GET')
+	}
+
+	getBinX(id: number) {
+		return request<number>(this.url, `${id}/binx`, 'GET')
+	}
+
+	setBinX(id: number, BinX: number) {
+		return request<void>(this.url, `${id}/binx`, 'PUT', { BinX })
+	}
+
+	getBinY(id: number) {
+		return request<number>(this.url, `${id}/biny`, 'GET')
+	}
+
+	setBinY(id: number, BinY: number) {
+		return request<void>(this.url, `${id}/biny`, 'PUT', { BinY })
+	}
+
+	getCameraState(id: number) {
+		return request<AlpacaCameraState>(this.url, `${id}/camerastate`, 'GET')
+	}
+
+	getCameraXSize(id: number) {
+		return request<number>(this.url, `${id}/cameraxsize`, 'GET')
+	}
+
+	getCameraYSize(id: number) {
+		return request<number>(this.url, `${id}/cameraysize`, 'GET')
+	}
+
+	canAbortExposure(id: number) {
+		return request<boolean>(this.url, `${id}/canabortexposure`, 'GET')
+	}
+
+	canAsymmetricBin(id: number) {
+		return request<boolean>(this.url, `${id}/canasymmetricbin`, 'GET')
+	}
+
+	canFastReadout(id: number) {
+		return request<boolean>(this.url, `${id}/canfastreadout`, 'GET')
+	}
+
+	canGetCoolerPower(id: number) {
+		return request<boolean>(this.url, `${id}/cangetcoolerpower`, 'GET')
+	}
+
+	canPulseGuide(id: number) {
+		return request<boolean>(this.url, `${id}/canpulseguide`, 'GET')
+	}
+
+	canSetCcdTemperature(id: number) {
+		return request<boolean>(this.url, `${id}/cansetccdtemperature`, 'GET')
+	}
+
+	canStopExposure(id: number) {
+		return request<boolean>(this.url, `${id}/canstopexposure`, 'GET')
+	}
+
+	getCcdTemperature(id: number) {
+		return request<number>(this.url, `${id}/ccdtemperature`, 'GET')
+	}
+
+	isCoolerOn(id: number) {
+		return request<boolean>(this.url, `${id}/cooleron`, 'GET')
+	}
+
+	setCoolerOn(id: number, CoolerOn: boolean) {
+		return request<void>(this.url, `${id}/cooleron`, 'PUT', { CoolerOn })
+	}
+
+	getCoolerPower(id: number) {
+		return request<number>(this.url, `${id}/coolerpower`, 'GET')
+	}
+
+	getElectronsPerAdu(id: number) {
+		return request<number>(this.url, `${id}/electronsperadu`, 'GET')
+	}
+
+	getExposureMax(id: number) {
+		return request<number>(this.url, `${id}/exposuremax`, 'GET')
+	}
+
+	getExposureMin(id: number) {
+		return request<number>(this.url, `${id}/exposuremin`, 'GET')
+	}
+
+	getExposureResolution(id: number) {
+		return request<number>(this.url, `${id}/exposureresolution`, 'GET')
+	}
+
+	isFastReadout(id: number) {
+		return request<boolean>(this.url, `${id}/fastreadout`, 'GET')
+	}
+
+	setFastReadout(id: number, FastReadout: boolean) {
+		return request<void>(this.url, `${id}/fastreadout`, 'PUT', { FastReadout })
+	}
+
+	getFullwellCapacity(id: number) {
+		return request<number>(this.url, `${id}/fullwellcapacity`, 'GET')
+	}
+
+	getGain(id: number) {
+		return request<number>(this.url, `${id}/gain`, 'GET')
+	}
+
+	setGain(id: number, Gain: number) {
+		return request<void>(this.url, `${id}/gain`, 'PUT', { Gain })
+	}
+
+	getGainMax(id: number) {
+		return request<number>(this.url, `${id}/gainmax`, 'GET')
+	}
+
+	getGainMin(id: number) {
+		return request<number>(this.url, `${id}/gainmin`, 'GET')
+	}
+
+	getGains(id: number) {
+		return request<readonly number[]>(this.url, `${id}/gains`, 'GET')
+	}
+
+	hasShutter(id: number) {
+		return request<number>(this.url, `${id}/hasshutter`, 'GET')
+	}
+
+	getHeatSinkTemperature(id: number) {
+		return request<number>(this.url, `${id}/heatsinktemperature`, 'GET')
+	}
+
+	getImageArray(id: number) {
+		return request<number>(this.url, `${id}/imagearray`, 'GET')
+	}
+
+	isImageReady(id: number) {
+		return request<boolean>(this.url, `${id}/imageready`, 'GET')
+	}
+
+	isPulseGuiding(id: number) {
+		return request<boolean>(this.url, `${id}/ispulseguiding`, 'GET')
+	}
+
+	getLastExposureDuration(id: number) {
+		return request<number>(this.url, `${id}/lastexposureduration`, 'GET')
+	}
+
+	getLastExposureStartTime(id: number) {
+		return request<number>(this.url, `${id}/lastexposurestarttime`, 'GET')
+	}
+
+	getMaxAdu(id: number) {
+		return request<number>(this.url, `${id}/maxadu`, 'GET')
+	}
+
+	getMaxBinX(id: number) {
+		return request<number>(this.url, `${id}/maxbinx`, 'GET')
+	}
+
+	getMaxBinY(id: number) {
+		return request<number>(this.url, `${id}/maxbiny`, 'GET')
+	}
+
+	getNumX(id: number) {
+		return request<number>(this.url, `${id}/numx`, 'GET')
+	}
+
+	setNumX(id: number, NumX: number) {
+		return request<void>(this.url, `${id}/numx`, 'PUT', { NumX })
+	}
+
+	getNumY(id: number) {
+		return request<number>(this.url, `${id}/numy`, 'GET')
+	}
+
+	setNumY(id: number, NumY: number) {
+		return request<void>(this.url, `${id}/numy`, 'PUT', { NumY })
+	}
+
+	getOffset(id: number) {
+		return request<number>(this.url, `${id}/offset`, 'GET')
+	}
+
+	setOffset(id: number, Offset: number) {
+		return request<void>(this.url, `${id}/offset`, 'PUT', { Offset })
+	}
+
+	getOffsetMax(id: number) {
+		return request<number>(this.url, `${id}/offsetmax`, 'GET')
+	}
+
+	getOffsetMin(id: number) {
+		return request<number>(this.url, `${id}/offsetmin`, 'GET')
+	}
+
+	getOffsets(id: number) {
+		return request<readonly string[]>(this.url, `${id}/offsets`, 'GET')
+	}
+
+	getPercentCompleted(id: number) {
+		return request<number>(this.url, `${id}/percentcompleted`, 'GET')
+	}
+
+	getPixelSizeX(id: number) {
+		return request<number>(this.url, `${id}/pixelsizex`, 'GET')
+	}
+
+	getPixelSizeY(id: number) {
+		return request<number>(this.url, `${id}/pixelsizey`, 'GET')
+	}
+
+	getReadoutMode(id: number) {
+		return request<number>(this.url, `${id}/readoutmode`, 'GET')
+	}
+
+	setReadoutMode(id: number, ReadoutMode: number) {
+		return request<void>(this.url, `${id}/readoutmode`, 'PUT', { ReadoutMode })
+	}
+
+	getReadoutModes(id: number) {
+		return request<readonly string[]>(this.url, `${id}/readoutmodes`, 'GET')
+	}
+
+	getSensorName(id: number) {
+		return request<string>(this.url, `${id}/sensorname`, 'GET')
+	}
+
+	getSensorType(id: number) {
+		return request<AlpacaCameraSensorType>(this.url, `${id}/sensortype`, 'GET')
+	}
+
+	getSetCcdTemperature(id: number) {
+		return request<number>(this.url, `${id}/setccdtemperature`, 'GET')
+	}
+
+	setSetCcdTemperature(id: number, SetCCDTemperature: number) {
+		return request<void>(this.url, `${id}/setccdtemperature`, 'PUT', { SetCCDTemperature })
+	}
+
+	getStartX(id: number) {
+		return request<number>(this.url, `${id}/startx`, 'GET')
+	}
+
+	setStartX(id: number, StartX: number) {
+		return request<void>(this.url, `${id}/startx`, 'PUT', { StartX })
+	}
+
+	getStartY(id: number) {
+		return request<number>(this.url, `${id}/starty`, 'GET')
+	}
+
+	setStartY(id: number, StartY: number) {
+		return request<void>(this.url, `${id}/starty`, 'PUT', { StartY })
+	}
+
+	getSubExposureDuration(id: number) {
+		return request<number>(this.url, `${id}/subexposureduration`, 'GET')
+	}
+
+	setSubExposureDuration(id: number, SubExposureDuration: number) {
+		return request<void>(this.url, `${id}/subexposureduration`, 'PUT', { SubExposureDuration })
+	}
+
+	abortExposure(id: number) {
+		return request<void>(this.url, `${id}/abortexposure`, 'PUT')
+	}
+
+	pulseGuide(id: number, Direction: AlpacaGuideDirection, Duration: number) {
+		return request<void>(this.url, `${id}/pulseguide`, 'PUT', { Direction, Duration })
+	}
+
+	startExposure(id: number, Duration: number, Light: boolean) {
+		return request<void>(this.url, `${id}/startexposure`, 'PUT', { Duration, Light })
+	}
+
+	stopExposure(id: number) {
+		return request<void>(this.url, `${id}/stopexposure`, 'PUT')
+	}
+}
+
 export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 	constructor(url: string | URL) {
 		super(new URL('/api/v1/telescope/', url))
 	}
 
 	getAlignmentMode(id: number) {
-		return request<number>(this.url, `${id}/alignmentmode`, 'GET')
+		return request<AlpacaTelescopeAlignmentMode>(this.url, `${id}/alignmentmode`, 'GET')
 	}
 
 	getAltitude(id: number) {
@@ -166,7 +459,7 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 	}
 
 	getEquatorialSystem(id: number) {
-		return request<number>(this.url, `${id}/equatorialsystem`, 'GET')
+		return request<AlpacaTelescopeEquatorialCoordinateType>(this.url, `${id}/equatorialsystem`, 'GET')
 	}
 
 	getFocalLength(id: number) {
@@ -206,10 +499,10 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 	}
 
 	getSideOfPier(id: number) {
-		return request<number>(this.url, `${id}/sideofpier`, 'GET')
+		return request<AlpacaTelescopePierSide>(this.url, `${id}/sideofpier`, 'GET')
 	}
 
-	setSideOfPier(id: number, SideOfPier: number) {
+	setSideOfPier(id: number, SideOfPier: AlpacaTelescopePierSide) {
 		return request<void>(this.url, `${id}/sideofpier`, 'PUT', { SideOfPier })
 	}
 
@@ -278,15 +571,15 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 	}
 
 	getTrackingRate(id: number) {
-		return request<number>(this.url, `${id}/trackingrate`, 'GET')
+		return request<AlpacaTelescopeTrackingRate>(this.url, `${id}/trackingrate`, 'GET')
 	}
 
-	setTrackingRate(id: number, TrackingRate: number) {
+	setTrackingRate(id: number, TrackingRate: AlpacaTelescopeTrackingRate) {
 		return request<void>(this.url, `${id}/trackingrate`, 'PUT', { TrackingRate })
 	}
 
 	getTrackingRates(id: number) {
-		return request<readonly number[]>(this.url, `${id}/trackingrates`, 'GET')
+		return request<readonly AlpacaTelescopeTrackingRate[]>(this.url, `${id}/trackingrates`, 'GET')
 	}
 
 	getUtcDate(id: number) {
@@ -301,11 +594,11 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<void>(this.url, `${id}/abortslew`, 'PUT')
 	}
 
-	getAxisRates(id: number, Axis: number) {
+	getAxisRates(id: number, Axis: AlpacaTelescopeAxis) {
 		return request<readonly AlpacaAxisRate[]>(this.url, `${id}/axisrates?Axis=${Axis}`, 'GET')
 	}
 
-	canMoveAxis(id: number, Axis: number) {
+	canMoveAxis(id: number, Axis: AlpacaTelescopeAxis) {
 		return request<boolean>(this.url, `${id}/canmoveaxis?Axis=${Axis}`, 'GET')
 	}
 
@@ -317,7 +610,7 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<void>(this.url, `${id}/findhome`, 'PUT')
 	}
 
-	moveAxis(id: number, Axis: number, Rate: number) {
+	moveAxis(id: number, Axis: AlpacaTelescopeAxis, Rate: number) {
 		return request<void>(this.url, `${id}/moveaxis`, 'PUT', { Axis, Rate })
 	}
 
@@ -325,7 +618,7 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<void>(this.url, `${id}/park`, 'PUT')
 	}
 
-	pulseGuide(id: number, Direction: number, Duration: number) {
+	pulseGuide(id: number, Direction: AlpacaGuideDirection, Duration: number) {
 		return request<void>(this.url, `${id}/pulseguide`, 'PUT', { Direction, Duration })
 	}
 
@@ -517,7 +810,8 @@ function makeFormDataFromParams(params: Record<string, string | number | boolean
 
 async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT', body?: Record<string, string | number | boolean>, headers?: HeadersInit, defaultValue?: T) {
 	try {
-		const response = await fetch(new URL(path, url), { method, headers, body: body && method === 'PUT' ? makeFormDataFromParams(body) : undefined })
+		url = new URL(path, url)
+		const response = await fetch(url, { method, headers, body: body && method === 'PUT' ? makeFormDataFromParams(body) : undefined })
 
 		const text = await response.text()
 
@@ -529,15 +823,15 @@ async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT'
 					return json.Value ?? defaultValue
 				}
 
-				console.error('response error:', url, path, json.ErrorNumber, json.ErrorMessage)
+				console.error('response error:', url.href, json.ErrorNumber, json.ErrorMessage)
 			} else {
-				console.error('request without response:', url, path)
+				console.error('request without response:', url.href)
 			}
 		} else {
-			console.error('request failed:', url, path, text)
+			console.error('request failed:', url.href, text)
 		}
 	} catch (e) {
-		console.error('failed to fetch:', url, path, e)
+		console.error('failed to fetch:', url, e)
 	}
 
 	return undefined
