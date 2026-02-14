@@ -540,7 +540,7 @@ export class FirmataClient {
 	private readonly parser: FirmataParser
 
 	private initializing = true
-	private pinStateRequestQueue: number[] = []
+	private readonly pinStateRequestQueue: number[] = []
 	private readonly pinMap = new Map<number, Pin>()
 	private readonly analogPins: AnalogMapping = {}
 
@@ -737,10 +737,11 @@ export class FirmataClientOverTcp extends FirmataClient {
 		})
 	}
 
-	async connect(hostname: string, port: number) {
+	async connect(hostname: string, port: number, options?: Omit<Bun.TCPSocketConnectOptions<undefined>, 'hostname' | 'port' | 'socket'>) {
 		if (this.socket) return false
 
 		this.socket = await Bun.connect({
+			...options,
 			hostname,
 			port,
 			socket: {
