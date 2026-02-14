@@ -303,7 +303,7 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		expect(device.bin.y.max).toBe(4)
 		expect(device.pixelSize.x).toBeCloseTo(5.2, 1)
 		expect(device.pixelSize.y).toBeCloseTo(5.2, 1)
-		expect(device.frameFormats).toEqual(['INDI_MONO'])
+		expect(device.frameFormats[0].name).toEqual('INDI_MONO')
 		expect(guideOutput).toHaveLength(1)
 		expect(thermometer).toHaveLength(1)
 		expect(thermometerAdded).toBeTrue()

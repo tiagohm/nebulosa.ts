@@ -6,7 +6,7 @@ import { type EquatorialCoordinate, equatorialToHorizontal } from './coordinate'
 import { meter, toMeter } from './distance'
 import { Bitpix, bitpixInBytes, computeRemainingBytes, FitsKeywordReader } from './fits'
 // biome-ignore format: too long!
-import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type PierSide, type Rotator, type SlewRate, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type TrackMode, type Wheel } from './indi.device'
 import type { DeviceHandler, DeviceManager } from './indi.manager'
 import { type GeographicCoordinate, localSiderealTime } from './location'
 import { type Time, timeNow } from './time'
@@ -895,11 +895,9 @@ export class AlpacaServer {
 		const mode = +data.ReadoutMode
 
 		if (Number.isFinite(mode) && mode >= 0 && mode < device.frameFormats.length) {
-			this.options.camera?.frameFormat(device, device.frameFormats[mode])
-		} else if (device.frameFormats.includes(data.ReadoutMode)) {
-			this.options.camera?.frameFormat(device, data.ReadoutMode)
+			this.options.camera?.frameFormat(device, device.frameFormats[mode].name)
 		} else {
-			console.warn('invalid readout mode:', data.ReadoutMode)
+			this.options.camera?.frameFormat(device, data.ReadoutMode)
 		}
 
 		return makeAlpacaResponse(undefined)
@@ -1750,7 +1748,7 @@ function mapAlpacaEnumToTrackMode(value: number): TrackMode {
 	return value === 0 ? 'SIDEREAL' : value === 1 ? 'LUNAR' : value === 2 ? 'SOLAR' : 'KING'
 }
 
-function mapSlewRateToAlpacaAxisRate(rate: SlewRate, index: number): AlpacaAxisRate {
+function mapSlewRateToAlpacaAxisRate(rate: NameAndLabel, index: number): AlpacaAxisRate {
 	return { Minimum: index + 1, Maximum: index + 1 }
 }
 

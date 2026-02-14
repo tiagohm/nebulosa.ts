@@ -93,6 +93,11 @@ export interface UTCTime {
 	offset: number // minutes
 }
 
+export interface NameAndLabel {
+	name: string
+	label: string
+}
+
 export interface GuideOutput extends Device {
 	readonly type: 'GUIDE_OUTPUT' | 'MOUNT' | 'CAMERA'
 	canPulseGuide: boolean
@@ -115,8 +120,8 @@ export interface Camera extends GuideOutput, Thermometer {
 	cooler: boolean
 	hasDewHeater: boolean
 	dewHeater: boolean
-	frameFormats: string[]
-	frameFormat: string
+	frameFormats: readonly NameAndLabel[]
+	frameFormat: NameAndLabel['name']
 	frameType: FrameType
 	canAbort: boolean
 	readonly cfa: {
@@ -162,11 +167,6 @@ export interface Parkable {
 	parked: boolean
 }
 
-export interface SlewRate {
-	name: string
-	label: string
-}
-
 export interface Mount extends GuideOutput, GPS, Parkable {
 	readonly type: 'MOUNT'
 	slewing: boolean
@@ -181,10 +181,10 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 	canSetHome: boolean
 	canTracking: boolean
 	canMove: boolean
-	slewRates: SlewRate[]
-	slewRate?: SlewRate['name']
+	slewRates: readonly NameAndLabel[]
+	slewRate?: NameAndLabel['name']
 	mountType: MountType
-	trackModes: TrackMode[]
+	trackModes: readonly TrackMode[]
 	trackMode: TrackMode
 	hasPierSide: boolean
 	canSetPierSide: boolean
@@ -195,7 +195,7 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 export interface Wheel extends Device {
 	readonly type: 'WHEEL'
 	count: number
-	names: string[]
+	names: readonly string[]
 	canSetNames: boolean
 	moving: boolean
 	position: number

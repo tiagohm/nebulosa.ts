@@ -7,7 +7,7 @@ import { meter, toMeter } from './distance'
 import type { CfaPattern } from './image.types'
 import type { IndiClientHandler } from './indi.client'
 // biome-ignore format: too long!
-import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SlewRate, type Thermometer, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type NameAndLabel, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type Thermometer, type TrackMode, type Wheel } from './indi.device'
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi.types'
 import type { GeographicCoordinate } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
@@ -541,8 +541,9 @@ export class CameraManager extends DeviceManager<Camera> {
 	}
 
 	frameFormat(camera: Camera, value: string, client = camera[CLIENT]!) {
-		if (value && camera.frameFormats.includes(value)) {
-			client.sendSwitch({ device: camera.name, name: 'CCD_CAPTURE_FORMAT', elements: { [value]: true } })
+		if (value) {
+			const index = camera.frameFormats.findIndex((e) => e.name === value)
+			index >= 0 && client.sendSwitch({ device: camera.name, name: 'CCD_CAPTURE_FORMAT', elements: { [camera.frameFormats[index].name]: true } })
 		}
 	}
 
@@ -620,14 +621,16 @@ export class CameraManager extends DeviceManager<Camera> {
 				}
 
 				return
-			case 'CCD_CAPTURE_FORMAT':
+			case 'CCD_CAPTURE_FORMAT': {
+				const entries = Object.values((message as DefSwitchVector).elements)
+
 				if (tag[0] === 'd') {
-					device.frameFormats = Object.keys(message.elements)
+					device.frameFormats = entries.map((e) => ({ name: e.name, label: e.label! }))
 					this.updated(device, 'frameFormats', message.state)
 				}
 
-				for (const [name, value] of Object.entries(message.elements)) {
-					if (value.value) {
+				for (const { name, value } of entries) {
+					if (value) {
 						if (handleTextValue(device, 'frameFormat', name, message.state)) {
 							this.updated(device, 'frameFormat', message.state)
 						}
@@ -637,6 +640,7 @@ export class CameraManager extends DeviceManager<Camera> {
 				}
 
 				return
+			}
 			case 'CCD_ABORT_EXPOSURE':
 				if (tag[0] === 'd') {
 					if (handleSwitchValue(device, 'canAbort', (message as DefSwitchVector).permission !== 'ro')) {
@@ -928,7 +932,7 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 	}
 
-	slewRate(mount: Mount, rate: SlewRate | string, client = mount[CLIENT]!) {
+	slewRate(mount: Mount, rate: NameAndLabel | string, client = mount[CLIENT]!) {
 		client.sendSwitch({ device: mount.name, name: 'TELESCOPE_SLEW_RATE', elements: { [typeof rate === 'string' ? rate : rate.name]: true } })
 	}
 
@@ -972,7 +976,7 @@ export class MountManager extends DeviceManager<Mount> {
 		switch (message.name) {
 			case 'TELESCOPE_SLEW_RATE':
 				if (tag[0] === 'd') {
-					const rates: SlewRate[] = []
+					const rates: NameAndLabel[] = []
 
 					for (const key in elements) {
 						const element = elements[key] as DefSwitch

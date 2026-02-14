@@ -412,7 +412,7 @@ class AlpacaCamera extends AlpacaDevice {
 	// biome-ignore format: too long!
 	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0, PrevCameraState: 0, ExposureDuration: 0 }
 	// biome-ignore format: too long!
-	protected readonly endpoints = ['BayerOffsetX', 'BayerOffsetY', 'SensorType', 'CameraXSize', 'CameraYSize', 'CanAsymmetricBin', 'CanGetCoolerPower', 'CanPulseGuide', 'CanSetCcdTemperature', 'CanStopExposure', 'ExposureMax', 'ExposureMin', 'GainMax', 'GainMin', 'Gains', 'MaxBinX', 'MaxBinY', 'OffsetMax', 'OffsetMin', 'Offsets', 'PixelSizeX', 'PixelSizeY', 'ReadoutModes'] as const
+	protected readonly endpoints = ['BayerOffsetX', 'BayerOffsetY', 'SensorType', 'CameraXSize', 'CameraYSize', 'CanGetCoolerPower', 'CanPulseGuide', 'CanSetCcdTemperature', 'CanStopExposure', 'ExposureMax', 'ExposureMin', 'GainMax', 'GainMin', 'Gains', 'MaxBinX', 'MaxBinY', 'OffsetMax', 'OffsetMin', 'Offsets', 'PixelSizeX', 'PixelSizeY', 'ReadoutModes'] as const
 
 	// biome-ignore format: too long!
 	private readonly info = makeNumberVector('', 'CCD_INFO', 'CCD Info', GENERAL_INFO, 'ro', ['CCD_MAX_X', 'Max X', 0, 0, 16000, 1, '%.0f'],  ['CCD_MAX_Y', 'Max Y', 0, 0, 16000, 1, '%.0f'],  ['CCD_PIXEL_SIZE_X', 'Pixel size X', 0, 0, 40, 0.01, '%.2f'], ['CCD_PIXEL_SIZE_Y', 'Pixel size Y', 0, 0, 40, 0.01, '%.2f'], ['CCD_BITSPERPIXEL', 'Bits per pixel', 16, 8, 64, 1, '%.0f'])
@@ -422,8 +422,8 @@ class AlpacaCamera extends AlpacaDevice {
 	private readonly abort = makeSwitchVector('', 'CCD_ABORT_EXPOSURE', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 	private readonly exposure = makeNumberVector('', 'CCD_EXPOSURE', 'Exposure', MAIN_CONTROL, 'rw', ['CCD_EXPOSURE_VALUE', 'Exposure (s)', 0, 0, 0, 1e-6, '%.6f'])
 	private readonly coolerPower = makeNumberVector('', 'CCD_COOLER_POWER', 'Cooler Power', MAIN_CONTROL, 'ro', ['CCD_COOLER_POWER', 'Power (%)', 0, 0, 100, 1, '%.0f'])
-	private readonly temperature = makeNumberVector('', 'CCD_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['TEMPERATURE', 'Temperature', 0, -50, 70, 0.1, '%6.2f'])
-	private readonly frame = makeNumberVector('', 'CCD_FRAME', 'Frame', MAIN_CONTROL, 'ro', ['X', 'X', 0, 0, 15999, 1, '%.0f'], ['Y', 'Y', 0, 0, 15999, 1, '%.0f'], ['WIDTH', 'Width', 1, 1, 16000, 1, '%.0f'], ['HEIGHT', 'Height', 1, 1, 16000, 1, '%.0f'])
+	private readonly temperature = makeNumberVector('', 'CCD_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['CCD_TEMPERATURE_VALUE', 'Temperature', 0, -50, 70, 0.1, '%6.2f'])
+	private readonly frame = makeNumberVector('', 'CCD_FRAME', 'Frame', MAIN_CONTROL, 'rw', ['X', 'X', 0, 0, 15999, 1, '%.0f'], ['Y', 'Y', 0, 0, 15999, 1, '%.0f'], ['WIDTH', 'Width', 1, 1, 16000, 1, '%.0f'], ['HEIGHT', 'Height', 1, 1, 16000, 1, '%.0f'])
 	private readonly bin = makeNumberVector('', 'CCD_BINNING', 'Bin', MAIN_CONTROL, 'rw', ['HOR_BIN', 'X', 1, 1, 1, 1, '%.0f'], ['VER_BIN', 'Y', 1, 1, 1, 1, '%.0f'])
 	private readonly gain = makeNumberVector('', 'CCD_GAIN', 'Gain', MAIN_CONTROL, 'rw', ['GAIN', 'Gain', 0, 0, 0, 1, '%.0f'])
 	private readonly offset = makeNumberVector('', 'CCD_OFFSET', 'Offset', MAIN_CONTROL, 'rw', ['OFFSET', 'Offset', 0, 0, 0, 1, '%.0f'])
@@ -459,7 +459,7 @@ class AlpacaCamera extends AlpacaDevice {
 		this.runner.registerEndpoint('BinY', api.getBinY.bind(api, this.id), false, 60)
 		this.runner.registerEndpoint('CameraXSize', api.getCameraXSize.bind(api, this.id), false)
 		this.runner.registerEndpoint('CameraYSize', api.getCameraYSize.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanAsymmetricBin', api.canAsymmetricBin.bind(api, this.id), false)
+		// this.runner.registerEndpoint('CanAsymmetricBin', api.canAsymmetricBin.bind(api, this.id), false)
 		this.runner.registerEndpoint('CanGetCoolerPower', api.canGetCoolerPower.bind(api, this.id), false)
 		this.runner.registerEndpoint('CanPulseGuide', api.canPulseGuide.bind(api, this.id), false)
 		this.runner.registerEndpoint('CanSetCcdTemperature', api.canSetCcdTemperature.bind(api, this.id), false)
@@ -543,7 +543,7 @@ class AlpacaCamera extends AlpacaDevice {
 			}
 
 			if (IsCoolerOn !== undefined && CCDTemperature !== undefined) {
-				this.temperature.elements.TEMPERATURE.value = CCDTemperature
+				this.temperature.elements.CCD_TEMPERATURE_VALUE.value = CCDTemperature
 
 				if (CanSetCcdTemperature) {
 					this.temperature.permission = 'rw'
@@ -649,7 +649,7 @@ class AlpacaCamera extends AlpacaDevice {
 			}
 
 			if (CCDTemperature !== undefined) {
-				this.updatePropertyValue(this.temperature, 'TEMPERATURE', Math.trunc(CCDTemperature)) && this.sendSetProperty(this.temperature)
+				this.updatePropertyValue(this.temperature, 'CCD_TEMPERATURE_VALUE', Math.trunc(CCDTemperature)) && this.sendSetProperty(this.temperature)
 			}
 
 			if (StartX !== undefined || StartY !== undefined || NumX !== undefined || NumY !== undefined) {
@@ -680,6 +680,8 @@ class AlpacaCamera extends AlpacaDevice {
 
 			if (CameraState === 2) {
 				updated = this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', ExposureDuration * (1 - PercentCompleted / 100)) || updated
+			} else {
+				updated = this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', 0) || updated
 			}
 
 			updated && this.sendSetProperty(this.exposure)
@@ -738,8 +740,8 @@ class AlpacaCamera extends AlpacaDevice {
 				this.enableEndpoints('Offset')
 				break
 			case 'CCD_TEMPERATURE':
-				if (this.state.CanSetCcdTemperature && vector.elements.TEMPERATURE !== undefined) {
-					void this.api.setSetCcdTemperature(this.id, vector.elements.TEMPERATURE)
+				if (this.state.CanSetCcdTemperature && vector.elements.CCD_TEMPERATURE_VALUE !== undefined) {
+					void this.api.setSetCcdTemperature(this.id, vector.elements.CCD_TEMPERATURE_VALUE)
 				}
 
 				break
