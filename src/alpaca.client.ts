@@ -111,7 +111,7 @@ export class AlpacaClient implements Client, Disposable {
 			clearInterval(this.timer)
 			this.timer = undefined
 
-			this.devices.forEach((e) => e.close())
+			for (const [, device] of this.devices) device.close()
 			this.devices.clear()
 
 			this.options?.handler?.close?.(this, false)
@@ -376,39 +376,41 @@ interface AlpacaClientCameraState extends AlpacaClientDeviceState {
 	readonly BinY?: number
 	readonly CameraXSize?: number
 	readonly CameraYSize?: number
-	readonly IsCoolerOn?: boolean
+	IsCoolerOn?: boolean
 	readonly ExposureMax?: number
 	readonly ExposureMin?: number
-	readonly Gain?: number
+	Gain?: number
 	readonly GainMax?: number
 	readonly GainMin?: number
 	readonly Gains?: readonly string[]
 	readonly MaxBinX?: number
 	readonly MaxBinY?: number
-	readonly NumX?: number
-	readonly NumY?: number
-	readonly Offset?: number
+	NumX?: number
+	NumY?: number
+	Offset?: number
 	readonly OffsetMax?: number
 	readonly OffsetMin?: number
 	readonly Offsets?: readonly string[]
 	readonly PixelSizeX?: number
 	readonly PixelSizeY?: number
-	readonly ReadoutMode?: number
+	ReadoutMode?: number
 	readonly ReadoutModes?: readonly string[] // Frame format
-	readonly StartX?: number
-	readonly StartY?: number
+	StartX?: number
+	StartY?: number
 	readonly CanAsymmetricBin?: boolean
 	readonly CanGetCoolerPower?: boolean
 	readonly CanPulseGuide?: boolean
 	readonly CanSetCcdTemperature?: boolean
 	readonly CanStopExposure?: boolean
+	PrevCameraState: AlpacaCameraState
+	ExposureDuration: number
 }
 
 class AlpacaCamera extends AlpacaDevice {
 	protected readonly api: AlpacaCameraApi
 	// https://ascom-standards.org/newdocs/camera.html#Camera.DeviceState
 	// biome-ignore format: too long!
-	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0 }
+	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0, PrevCameraState: 0, ExposureDuration: 0 }
 	// biome-ignore format: too long!
 	protected readonly endpoints = ['BayerOffsetX', 'BayerOffsetY', 'SensorType', 'CameraXSize', 'CameraYSize', 'CanAsymmetricBin', 'CanGetCoolerPower', 'CanPulseGuide', 'CanSetCcdTemperature', 'CanStopExposure', 'ExposureMax', 'ExposureMin', 'GainMax', 'GainMin', 'Gains', 'MaxBinX', 'MaxBinY', 'OffsetMax', 'OffsetMin', 'Offsets', 'PixelSizeX', 'PixelSizeY', 'ReadoutModes'] as const
 
@@ -462,7 +464,7 @@ class AlpacaCamera extends AlpacaDevice {
 		this.runner.registerEndpoint('CanPulseGuide', api.canPulseGuide.bind(api, this.id), false)
 		this.runner.registerEndpoint('CanSetCcdTemperature', api.canSetCcdTemperature.bind(api, this.id), false)
 		this.runner.registerEndpoint('CanStopExposure', api.canStopExposure.bind(api, this.id), false)
-		this.runner.registerEndpoint('IsCoolerOn', api.isCoolerOn.bind(api, this.id), false, 15)
+		this.runner.registerEndpoint('IsCoolerOn', api.isCoolerOn.bind(api, this.id), false, 60)
 		this.runner.registerEndpoint('ExposureMax', api.getExposureMax.bind(api, this.id), false)
 		this.runner.registerEndpoint('ExposureMin', api.getExposureMin.bind(api, this.id), false)
 		this.runner.registerEndpoint('Gain', api.getGain.bind(api, this.id), false, 60)
@@ -508,8 +510,9 @@ class AlpacaCamera extends AlpacaDevice {
 
 		if (!this.state.Connected) return
 
-		const { Step, CameraState, CCDTemperature, CoolerPower, ImageReady, IsPulseGuiding, PercentCompleted, BayerOffsetX, BayerOffsetY, BinX, BinY, CameraXSize, CameraYSize, IsCoolerOn, ExposureMax, ExposureMin, CanAsymmetricBin, CanGetCoolerPower } = this.state
+		const { Step, CameraState, CCDTemperature, CoolerPower, ImageReady, IsPulseGuiding, PercentCompleted, BayerOffsetX, BayerOffsetY, BinX, BinY, CameraXSize, CameraYSize, IsCoolerOn, ExposureMax, ExposureMin, CanGetCoolerPower } = this.state
 		const { Gain, GainMax, GainMin, Gains, MaxBinX, MaxBinY, NumX, NumY, Offset, OffsetMax, OffsetMin, Offsets, PixelSizeX, PixelSizeY, ReadoutMode, ReadoutModes, StartX, StartY, CanPulseGuide, CanSetCcdTemperature, CanStopExposure, SensorType } = this.state
+		const { PrevCameraState, ExposureDuration } = this.state
 
 		// Initial
 		if (Step === 1) {
@@ -531,6 +534,12 @@ class AlpacaCamera extends AlpacaDevice {
 
 			if (CanStopExposure) {
 				this.sendDefProperty(this.abort)
+			}
+
+			if (ExposureMax) {
+				this.exposure.elements.CCD_EXPOSURE_VALUE.min = ExposureMin ?? 0
+				this.exposure.elements.CCD_EXPOSURE_VALUE.max = ExposureMax
+				this.sendDefProperty(this.exposure)
 			}
 
 			if (IsCoolerOn !== undefined && CCDTemperature !== undefined) {
@@ -620,8 +629,151 @@ class AlpacaCamera extends AlpacaDevice {
 		}
 		// State
 		else if (Step === 2) {
-			if (this.updatePropertyState(this.exposure, CameraState === 2 ? 'Busy' : 'Idle')) {
-				this.sendSetProperty(this.exposure)
+			if (IsCoolerOn !== undefined) {
+				this.updatePropertyValue(this.cooler, IsCoolerOn ? 'COOLER_ON' : 'COOLER_OFF', true) && this.sendSetProperty(this.cooler)
+				this.state.IsCoolerOn = undefined
+			}
+
+			if (CoolerPower !== undefined) {
+				this.updatePropertyValue(this.coolerPower, 'CCD_COOLER_POWER', CoolerPower) && this.sendSetProperty(this.coolerPower)
+			}
+
+			if (Gain !== undefined) {
+				this.updatePropertyValue(this.gain, 'GAIN', Gain) && this.sendSetProperty(this.gain)
+				this.state.Gain = undefined
+			}
+
+			if (Offset !== undefined) {
+				this.updatePropertyValue(this.offset, 'OFFSET', Offset) && this.sendSetProperty(this.offset)
+				this.state.Offset = undefined
+			}
+
+			if (CCDTemperature !== undefined) {
+				this.updatePropertyValue(this.temperature, 'TEMPERATURE', Math.trunc(CCDTemperature)) && this.sendSetProperty(this.temperature)
+			}
+
+			if (StartX !== undefined || StartY !== undefined || NumX !== undefined || NumY !== undefined) {
+				let updated = false
+				if (StartX !== undefined) updated = this.updatePropertyValue(this.frame, 'X', StartX)
+				if (StartY !== undefined) updated = this.updatePropertyValue(this.frame, 'Y', StartY) || updated
+				if (NumX !== undefined) updated = this.updatePropertyValue(this.frame, 'WIDTH', NumX) || updated
+				if (NumX !== undefined) updated = this.updatePropertyValue(this.frame, 'HEIGHT', NumY) || updated
+				updated && this.sendSetProperty(this.frame)
+				this.state.StartX = undefined
+				this.state.StartY = undefined
+				this.state.NumX = undefined
+				this.state.NumY = undefined
+			}
+
+			if (ReadoutMode !== undefined) {
+				const name = `MODE_${ReadoutMode}`
+				name in this.frameFormat.elements && this.updatePropertyValue(this.frameFormat, name, true) && this.sendSetProperty(this.frameFormat)
+				this.state.ReadoutMode = undefined
+			}
+
+			let updated = false
+
+			if (CameraState !== PrevCameraState) {
+				this.state.PrevCameraState = CameraState === 2 ? 2 : 0
+				updated = this.updatePropertyState(this.exposure, CameraState === 2 ? 'Busy' : 'Idle')
+			}
+
+			if (CameraState === 2) {
+				updated = this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', ExposureDuration * (1 - PercentCompleted / 100)) || updated
+			}
+
+			updated && this.sendSetProperty(this.exposure)
+
+			if (CanPulseGuide && this.updatePropertyState(this.guideNS, IsPulseGuiding ? 'Busy' : 'Idle')) {
+				this.guideWE.state = this.guideNS.state
+				this.sendSetProperty(this.guideNS)
+				this.sendSetProperty(this.guideWE)
+			}
+		}
+	}
+
+	sendSwitch(vector: NewSwitchVector) {
+		switch (vector.name) {
+			case 'CCD_COOLER':
+				if (vector.elements.COOLER_ON === true) void this.api.setCoolerOn(this.id, true)
+				else if (vector.elements.COOLER_OFF === true) void this.api.setCoolerOn(this.id, false)
+				else break
+				this.enableEndpoints('IsCoolerOn')
+				break
+			case 'CCD_CAPTURE_FORMAT':
+				if (this.state.ReadoutModes?.length) {
+					for (let i = 0; i < this.state.ReadoutModes.length; i++) {
+						const key = `MODE_${i}`
+
+						if (vector.elements[key] === true) {
+							void this.api.setReadoutMode(this.id, i)
+							this.enableEndpoints('ReadoutMode')
+							break
+						}
+					}
+				}
+
+				break
+			case 'CCD_ABORT_EXPOSURE':
+				if (vector.elements.ABORT === true) void this.api.stopExposure(this.id)
+				break
+		}
+	}
+
+	sendNumber(vector: NewNumberVector) {
+		switch (vector.name) {
+			case 'CCD_EXPOSURE':
+				if (vector.elements.CCD_EXPOSURE_VALUE) {
+					this.state.ExposureDuration = vector.elements.CCD_EXPOSURE_VALUE
+					void this.api.startExposure(this.id, vector.elements.CCD_EXPOSURE_VALUE, this.isLight)
+				}
+
+				break
+			case 'CDD_GAIN':
+				if (vector.elements.GAIN !== undefined) void this.api.setGain(this.id, vector.elements.GAIN)
+				this.enableEndpoints('Gain')
+				break
+			case 'CDD_OFFSET':
+				if (vector.elements.OFFSET !== undefined) void this.api.setOffset(this.id, vector.elements.OFFSET)
+				this.enableEndpoints('Offset')
+				break
+			case 'CCD_TEMPERATURE':
+				if (this.state.CanSetCcdTemperature && vector.elements.TEMPERATURE !== undefined) {
+					void this.api.setSetCcdTemperature(this.id, vector.elements.TEMPERATURE)
+				}
+
+				break
+			case 'CCD_FRAME':
+				if (vector.elements.X !== undefined) void this.api.setStartX(this.id, vector.elements.X)
+				if (vector.elements.Y !== undefined) void this.api.setStartY(this.id, vector.elements.Y)
+				if (vector.elements.WIDTH !== undefined) void this.api.setNumX(this.id, vector.elements.WIDTH)
+				if (vector.elements.HEIGHT !== undefined) void this.api.setNumY(this.id, vector.elements.HEIGHT)
+				this.enableEndpoints('StartX', 'StartY', 'NumX', 'NumY')
+				break
+			case 'CCD_BIN':
+				if (vector.elements.HOR_BIN !== undefined) void this.api.setBinX(this.id, vector.elements.HOR_BIN)
+				if (vector.elements.VER_BIN !== undefined) void this.api.setBinY(this.id, vector.elements.VER_BIN)
+				this.enableEndpoints('BinX', 'BinY')
+				break
+			case 'TELESCOPE_TIMED_GUIDE_NS':
+			case 'TELESCOPE_TIMED_GUIDE_WE': {
+				if (this.state.CanPulseGuide) {
+					const { TIMED_GUIDE_N, TIMED_GUIDE_S, TIMED_GUIDE_W, TIMED_GUIDE_E } = vector.elements
+
+					if (vector.name.endsWith('S')) {
+						if (TIMED_GUIDE_N || TIMED_GUIDE_S) {
+							void this.api.pulseGuide(this.id, TIMED_GUIDE_N ? 0 : 1, TIMED_GUIDE_N || TIMED_GUIDE_S)
+						} else if (TIMED_GUIDE_N === 0 || TIMED_GUIDE_S === 0) {
+							void this.api.pulseGuide(this.id, TIMED_GUIDE_N ? 0 : 1, 0)
+						}
+					} else if (TIMED_GUIDE_W || TIMED_GUIDE_E) {
+						void this.api.pulseGuide(this.id, TIMED_GUIDE_W ? 3 : 2, TIMED_GUIDE_W || TIMED_GUIDE_E)
+					} else if (TIMED_GUIDE_W === 0 || TIMED_GUIDE_E === 0) {
+						void this.api.pulseGuide(this.id, TIMED_GUIDE_W ? 3 : 2, 0)
+					}
+				}
+
+				break
 			}
 		}
 	}
@@ -715,7 +867,7 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.runner.registerEndpoint('CanSetGuideRate', api.canSetGuideRates.bind(api, this.id), false)
 		this.runner.registerEndpoint('SlewRates', api.getAxisRates.bind(api, this.id, 0), false)
 		this.runner.registerEndpoint('TrackingRates', api.getTrackingRates.bind(api, this.id), false)
-		this.runner.registerEndpoint('TrackingRate', api.getTrackingRate.bind(api, this.id), false, 10)
+		this.runner.registerEndpoint('TrackingRate', api.getTrackingRate.bind(api, this.id), false, 60)
 		this.runner.registerEndpoint('CanSetSideOfPier', api.canSetSideOfPier.bind(api, this.id), false)
 		this.runner.registerEndpoint('Latitude', api.getSiteLatitude.bind(api, this.id), false, 60)
 		this.runner.registerEndpoint('Longitude', api.getSiteLongitude.bind(api, this.id), false, 60)
@@ -919,6 +1071,8 @@ class AlpacaTelescope extends AlpacaDevice {
 					else if (vector.elements.TRACK_LUNAR === true && this.state.TrackingRates.includes(1)) void this.api.setTrackingRate(this.id, 1)
 					else if (vector.elements.TRACK_SOLAR === true && this.state.TrackingRates.includes(2)) void this.api.setTrackingRate(this.id, 2)
 					else if (vector.elements.TRACK_KING === true && this.state.TrackingRates.includes(3)) void this.api.setTrackingRate(this.id, 3)
+					else break
+					this.enableEndpoints('TrackingRate')
 				}
 
 				break
@@ -988,11 +1142,11 @@ class AlpacaTelescope extends AlpacaDevice {
 					updated = this.updatePropertyValue(this.geographicCoordinate, 'ELEV', vector.elements.ELEV) || updated
 
 					if (updated) {
-						this.sendSetProperty(this.geographicCoordinate)
-
 						void this.api.setSiteLatitude(this.id, vector.elements.LAT)
 						void this.api.setSiteLongitude(this.id, vector.elements.LONG)
 						vector.elements.ELEV !== undefined && void this.api.setSiteElevation(this.id, vector.elements.ELEV)
+
+						this.enableEndpoints('Latitude', 'Longitude', 'Elevation')
 					}
 				}
 
@@ -1003,11 +1157,11 @@ class AlpacaTelescope extends AlpacaDevice {
 					updated = this.updatePropertyValue(this.guideRate, 'GUIDE_RATE_NS', vector.elements.GUIDE_RATE_NS) || updated
 
 					if (updated) {
-						this.sendSetProperty(this.guideRate)
-
 						// Guide rate in deg/second
 						vector.elements.GUIDE_RATE_WE && void this.api.setGuideRateRightAscension(this.id, vector.elements.GUIDE_RATE_WE * (SIDEREAL_RATE / 3600))
 						vector.elements.GUIDE_RATE_NS && void this.api.setGuideRateDeclination(this.id, vector.elements.GUIDE_RATE_NS * (SIDEREAL_RATE / 3600))
+
+						this.enableEndpoints('GuideRateRA', 'GuideRateDEC')
 					}
 				}
 
