@@ -1,7 +1,7 @@
 import { AlpacaClient, type AlpacaClientHandler } from '../src/alpaca.client'
 import { AlpacaDiscoveryClient } from '../src/alpaca.discovery'
-import type { Client, Device } from '../src/indi.device'
-import { CameraManager, CoverManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import type { Client, Device, DeviceType } from '../src/indi.device'
+import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import type { PropertyState } from '../src/indi.types'
 
 const alpacaDiscoveryClient = new AlpacaDiscoveryClient()
@@ -77,5 +77,15 @@ const handler: AlpacaClientHandler = {
 	},
 }
 
-const alpacaClient = new AlpacaClient('http://localhost:32323', { handler })
+const deviceProvider: DeviceProvider<Device> = {
+	get: (client: Client, name: string, type?: DeviceType) => {
+		if (type === 'CAMERA') return cameraManager.get(client, name)
+		else if (type === 'MOUNT') return mountManager.get(client, name)
+		else if (type === 'FOCUSER') return focuserManager.get(client, name)
+		else if (type === 'WHEEL') return wheelManager.get(client, name)
+		return undefined
+	},
+}
+
+const alpacaClient = new AlpacaClient('http://localhost:32323', { handler }, deviceProvider)
 await alpacaClient.start()

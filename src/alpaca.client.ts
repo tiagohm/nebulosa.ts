@@ -2,7 +2,8 @@ import { AlpacaCameraApi, AlpacaCoverCalibratorApi, type AlpacaDeviceApi, Alpaca
 import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate } from './alpaca.types'
 import { SIDEREAL_RATE } from './constants'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
-import type { Client } from './indi.device'
+import type { Client, Device, Focuser, Mount, Rotator, Wheel } from './indi.device'
+import type { DeviceProvider } from './indi.manager'
 // biome-ignore format: too long!
 import { type DefNumber, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefText, type DefTextVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyPermission, type PropertyState, type SwitchRule, type ValueType, type VectorType } from './indi.types'
 import { roundToNthDecimal } from './math'
@@ -30,6 +31,7 @@ export class AlpacaClient implements Client, Disposable {
 	constructor(
 		readonly url: string,
 		readonly options: AlpacaClientOptions,
+		readonly provider?: DeviceProvider<Device>,
 	) {
 		this.id = Bun.MD5.hash(url, 'hex')
 		this.description = `Alpaca Client at ${url}`
@@ -43,7 +45,7 @@ export class AlpacaClient implements Client, Disposable {
 		if (command?.device) {
 			this.devices.get(command.device)?.sendProperties(command.name)
 		} else {
-			this.devices.forEach((e) => e.sendProperties(command?.name))
+			for (const [, device] of this.devices) device.sendProperties(command?.name)
 		}
 	}
 
@@ -139,8 +141,8 @@ const MAIN_CONTROL = 'Main Control'
 const GENERAL_INFO = 'General Info'
 
 interface AlpacaClientDeviceState {
-	Connected: boolean
-	DeviceState?: readonly AlpacaStateItem[]
+	readonly Connected: boolean
+	readonly DeviceState?: readonly AlpacaStateItem[]
 	Step: number
 }
 
@@ -156,6 +158,7 @@ abstract class AlpacaDevice {
 
 	protected readonly driverInfo = makeTextVector('', 'DRIVER_INFO', 'Driver Info', GENERAL_INFO, 'ro', ['DRIVER_INTERFACE', 'Interface', ''], ['DRIVER_EXEC', 'Exec', ''], ['DRIVER_VERSION', 'Version', '1.0'], ['DRIVER_NAME', 'Name', ''])
 	protected readonly connection = makeSwitchVector('', 'CONNECTION', 'Connection', MAIN_CONTROL, 'OneOfMany', 'rw', ['CONNECT', 'Connect', false], ['DISCONNECT', 'Disconnect', true])
+	protected readonly snoopDevices = makeTextVector('', 'ACTIVE_DEVICES', 'Snoop devices', MAIN_CONTROL, 'rw', ['ACTIVE_TELESCOPE', 'Mount', ''], ['ACTIVE_FOCUSER', 'Focuser', ''], ['ACTIVE_FILTER', 'Filter Wheel', ''], ['ACTIVE_ROTATOR', 'Rotator', ''])
 
 	constructor(
 		readonly client: AlpacaClient,
@@ -170,12 +173,29 @@ abstract class AlpacaDevice {
 		this.driverInfo.elements.DRIVER_INTERFACE.value = DRIVER_INTERFACES[device.DeviceType.toUpperCase() as never]
 
 		this.connection.device = device.DeviceName
+		this.snoopDevices.device = device.DeviceName
 
 		this.runner.registerHandler(this.handleEndpointsAfterRun.bind(this))
 	}
 
 	get isConnected() {
 		return this.connection.elements.CONNECT.value === true
+	}
+
+	get activeMount() {
+		return this.client.provider?.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value, 'MOUNT') as Mount | undefined
+	}
+
+	get activeWheel() {
+		return this.client.provider?.get(this.client, this.snoopDevices.elements.ACTIVE_FILTER.value, 'WHEEL') as Wheel | undefined
+	}
+
+	get activeFocuser() {
+		return this.client.provider?.get(this.client, this.snoopDevices.elements.ACTIVE_FOCUSER.value, 'FOCUSER') as Focuser | undefined
+	}
+
+	get activeRotator() {
+		return this.client.provider?.get(this.client, this.snoopDevices.elements.ACTIVE_ROTATOR.value, 'ROTATOR') as Rotator | undefined
 	}
 
 	protected sendDefProperty(message: DefVector & { type: Uppercase<VectorType> }) {
@@ -305,7 +325,17 @@ abstract class AlpacaDevice {
 		for (const key of keys) this.runner.toggleEndpoint(key, false)
 	}
 
-	sendText(vector: NewTextVector) {}
+	sendText(vector: NewTextVector) {
+		switch (vector.name) {
+			case 'ACTIVE_DEVICES':
+				for (const type in vector.elements) {
+					if (type in this.snoopDevices.elements) this.snoopDevices.elements[type].value = vector.elements[type]
+				}
+
+				this.sendSetProperty(this.snoopDevices)
+				break
+		}
+	}
 
 	sendNumber(vector: NewNumberVector) {}
 
@@ -453,9 +483,12 @@ class AlpacaCamera extends AlpacaDevice {
 		this.runner.registerEndpoint('ReadoutModes', api.getReadoutModes.bind(api, this.id), false)
 		this.runner.registerEndpoint('StartX', api.getStartX.bind(api, this.id), false, 60)
 		this.runner.registerEndpoint('StartY', api.getStartY.bind(api, this.id), false, 60)
-		// this.runner.registerEndpoint('CameraState', api.getCameraState.bind(api, this.id), false)
 
 		this.api = api
+	}
+
+	get isLight() {
+		return this.frameType.elements.FRAME_LIGHT?.value === true
 	}
 
 	protected onConnect() {
@@ -498,6 +531,22 @@ class AlpacaCamera extends AlpacaDevice {
 
 			if (CanStopExposure) {
 				this.sendDefProperty(this.abort)
+			}
+
+			if (IsCoolerOn !== undefined && CCDTemperature !== undefined) {
+				this.temperature.elements.TEMPERATURE.value = CCDTemperature
+
+				if (CanSetCcdTemperature) {
+					this.temperature.permission = 'rw'
+				}
+
+				this.sendDefProperty(this.cooler)
+				this.sendDefProperty(this.temperature)
+			}
+
+			if (CanGetCoolerPower && CoolerPower !== undefined) {
+				this.coolerPower.elements.CCD_COOLER_POWER.value = CoolerPower
+				this.sendDefProperty(this.temperature)
 			}
 
 			if (MaxBinX) {
@@ -673,13 +722,6 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.runner.registerEndpoint('Elevation', api.getSiteElevation.bind(api, this.id), false, 60)
 		this.runner.registerEndpoint('GuideRateRA', api.getGuideRateRightAscension.bind(api, this.id), false, 60)
 		this.runner.registerEndpoint('GuideRateDEC', api.getGuideRateDeclination.bind(api, this.id), false, 60)
-		// this.runner.registerEndpoint('RightAscension', api.getRightAscension.bind(api, this.id), false)
-		// this.runner.registerEndpoint('Declination', api.getDeclination.bind(api, this.id), false)
-		// this.runner.registerEndpoint('SideOfPier', api.getSideOfPier.bind(api, this.id), false)
-		// this.runner.registerEndpoint('Slewing', api.isSlewing.bind(api, this.id), false)
-		// this.runner.registerEndpoint('Tracking', api.isTracking.bind(api, this.id), false)
-		// this.runner.registerEndpoint('AtPark', api.isAtPark.bind(api, this.id), false)
-		// this.runner.registerEndpoint('IsPulseGuiding', api.isPulseGuiding.bind(api, this.id), false)
 
 		this.api = api
 	}
@@ -706,8 +748,6 @@ class AlpacaTelescope extends AlpacaDevice {
 
 		// Initial
 		if (Step === 1) {
-			// console.info(this.device.DeviceName, 'initial step:', this.state)
-
 			this.sendDefProperty(this.equatorialCoordinate)
 			this.sendDefProperty(this.abort)
 
@@ -834,6 +874,8 @@ class AlpacaTelescope extends AlpacaDevice {
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
 		switch (vector.name) {
 			case 'TELESCOPE_SLEW_RATE': {
 				if (this.state.SlewRates?.length) {
@@ -910,6 +952,8 @@ class AlpacaTelescope extends AlpacaDevice {
 	}
 
 	sendNumber(vector: NewNumberVector) {
+		super.sendNumber(vector)
+
 		switch (vector.name) {
 			case 'EQUATORIAL_EOD_COORD':
 				if (vector.elements.RA !== undefined || vector.elements.DEC !== undefined) {
@@ -972,6 +1016,8 @@ class AlpacaTelescope extends AlpacaDevice {
 	}
 
 	sendText(vector: NewTextVector) {
+		super.sendText(vector)
+
 		switch (vector.name) {
 			case 'TIME_UTC':
 				if (vector.elements.UTC && vector.elements.UTC.length >= 19) {
@@ -1026,7 +1072,6 @@ class AlpacaFilterWheel extends AlpacaDevice {
 		this.names.device = device.DeviceName
 
 		this.runner.registerEndpoint('Names', api.getNames.bind(api, this.id), false)
-		// this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
 
 		this.api = api
 	}
@@ -1107,8 +1152,6 @@ class AlpacaFocuser extends AlpacaDevice {
 		this.abort.device = device.DeviceName
 		this.direction.device = device.DeviceName
 
-		// this.runner.registerEndpoint('IsMoving', api.isMoving.bind(api, this.id), false)
-		// this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
 		this.runner.registerEndpoint('Temperature', api.getTemperature.bind(api, this.id), false)
 		this.runner.registerEndpoint('IsAbsolute', api.isAbsolute.bind(api, this.id), false)
 		this.runner.registerEndpoint('MaxStep', api.getMaxStep.bind(api, this.id), false)
@@ -1234,10 +1277,6 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 		this.abort.device = device.DeviceName
 
 		this.runner.registerEndpoint('MaxBrightness', api.getMaxBrightness.bind(api, this.id), false)
-		// this.runner.registerEndpoint('Brightness', api.getBrightness.bind(api, this.id), false)
-		// this.runner.registerEndpoint('CoverState', api.getCoverState.bind(api, this.id), false)
-		// this.runner.registerEndpoint('CalibratorState', api.getCalibratorState.bind(api, this.id), false)
-		// this.runner.registerEndpoint('Moving', api.isMoving.bind(api, this.id), false)
 
 		this.api = api
 	}
