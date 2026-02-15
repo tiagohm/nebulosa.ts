@@ -1870,7 +1870,7 @@ function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | O
 	}
 
 	if (property.value !== element.value) {
-		property.value = element.value
+		property.value = Math.max(property.min, Math.min(element.value, property.max))
 		update = true
 	}
 
