@@ -808,16 +808,18 @@ export class AlpacaCoverCalibratorApi extends AlpacaDeviceApi {
 const CLIENT_ID = (Date.now() & 0x7fffffff).toFixed(0)
 
 function makeFormDataFromParams(params: Record<string, string | number | boolean>) {
-	const body = new FormData()
+	for (const key in params) {
+		const value = params[key]
 
-	body.set('ClientID', CLIENT_ID)
-	body.set('ClientTransactionID', '0')
-
-	for (const [name, value] of Object.entries(params)) {
-		body.set(name, typeof value === 'string' ? value : typeof value === 'number' ? `${value}` : value ? 'True' : 'False')
+		if (value === true) params[key] = 'True'
+		else if (value === false) params[key] = 'False'
+		else if (typeof value === 'number') params[key] = value.toString()
 	}
 
-	return body
+	params.ClientID = CLIENT_ID
+	params.ClientTransactionID = '0'
+
+	return new URLSearchParams(params as never)
 }
 
 async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT', body?: Record<string, string | number | boolean>, headers?: HeadersInit, defaultValue?: T) {
