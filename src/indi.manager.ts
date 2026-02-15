@@ -688,7 +688,11 @@ export class CameraManager extends DeviceManager<Camera> {
 					exposuringHasChanged = true
 				}
 
-				if (handleMinMaxValue(device.exposure, message.elements.CCD_EXPOSURE_VALUE, tag) || exposuringHasChanged) {
+				if (tag[0] === 'd') {
+					if (handleMinMaxValue(device.exposure, message.elements.CCD_EXPOSURE_VALUE, tag)) {
+						this.updated(device, 'exposure', message.state)
+					}
+				} else if (handleNumberValue(device.exposure, 'value', message.elements.CCD_EXPOSURE_VALUE?.value, message.state) || exposuringHasChanged) {
 					this.updated(device, 'exposure', message.state)
 				}
 
