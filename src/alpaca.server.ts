@@ -837,7 +837,8 @@ export class AlpacaServer {
 	}
 
 	private cameraGetNumX(id: number) {
-		return makeAlpacaResponse(this.camera(id).device.frame.width.value)
+		const { frame, bin } = this.camera(id).device
+		return makeAlpacaResponse(Math.trunc(frame.width.value / bin.x.value))
 	}
 
 	private cameraSetNumX(id: number, data: { NumX: string }) {
@@ -845,7 +846,8 @@ export class AlpacaServer {
 	}
 
 	private cameraGetNumY(id: number) {
-		return makeAlpacaResponse(this.camera(id).device.frame.height.value)
+		const { frame, bin } = this.camera(id).device
+		return makeAlpacaResponse(Math.trunc(frame.height.value / bin.y.value))
 	}
 
 	private cameraSetNumY(id: number, data: { NumY: string }) {
@@ -928,7 +930,8 @@ export class AlpacaServer {
 	}
 
 	private cameraGetStartX(id: number) {
-		return makeAlpacaResponse(this.camera(id).device.frame.x.value)
+		const { frame, bin } = this.camera(id).device
+		return makeAlpacaResponse(Math.trunc(frame.x.value / bin.x.value))
 	}
 
 	private cameraSetStartX(id: number, data: { StartX: string }) {
@@ -936,7 +939,8 @@ export class AlpacaServer {
 	}
 
 	private cameraGetStartY(id: number) {
-		return makeAlpacaResponse(this.camera(id).device.frame.y.value)
+		const { frame, bin } = this.camera(id).device
+		return makeAlpacaResponse(Math.trunc(frame.y.value / bin.y.value))
 	}
 
 	private cameraSetStartY(id: number, data: { StartY: string }) {

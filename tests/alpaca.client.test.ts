@@ -33,7 +33,6 @@ describe('make fits from image bytes', () => {
 		expectNaxis(image!.header, 2, 1280, 1024, undefined)
 		expectHeader(image!.header)
 		await saveImageAndCompareHash(image!, 'alpaca.8.1', '7a8ffdcd833765af2e783fcce9e5e9af')
-		await Bun.write('Sky simulator.fits', fits)
 	})
 
 	test('unsigned 16-bit color (bayered)', async () => {
