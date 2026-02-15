@@ -709,6 +709,8 @@ class AlpacaCamera extends AlpacaDevice {
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
 		switch (vector.name) {
 			case 'CCD_COOLER':
 				if (vector.elements.COOLER_ON === true) void this.api.setCoolerOn(this.id, true)
@@ -737,7 +739,9 @@ class AlpacaCamera extends AlpacaDevice {
 	}
 
 	sendNumber(vector: NewNumberVector) {
-		switch (vector.name) {
+		super.sendNumber(vector)
+
+        switch (vector.name) {
 			case 'CCD_EXPOSURE':
 				if (vector.elements.CCD_EXPOSURE_VALUE) {
 					this.state.ExposureDuration = vector.elements.CCD_EXPOSURE_VALUE
