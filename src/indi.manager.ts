@@ -892,7 +892,7 @@ export class MountManager extends DeviceManager<Mount> {
 
 	goTo(mount: Mount, rightAscension: Angle, declination: Angle, client = mount[CLIENT]!) {
 		if (mount.canGoTo) {
-			client.sendSwitch({ device: mount.name, name: 'ON_COORD_SET', elements: { SLEW: true, TRACK: true } })
+			client.sendSwitch({ device: mount.name, name: 'ON_COORD_SET', elements: { SLEW: true } })
 			this.equatorialCoordinate(mount, rightAscension, declination, client)
 		}
 	}
@@ -917,8 +917,6 @@ export class MountManager extends DeviceManager<Mount> {
 			Object.assign(equatorial, eclipticToEquatorial(...equatorial))
 		} else if (type === 'GALACTIC') {
 			Object.assign(equatorial, equatorialFromJ2000(...galacticToEquatorial(...equatorial)))
-		} else {
-			return
 		}
 
 		if (mode === 'goto') this.goTo(mount, ...equatorial, client)
