@@ -112,8 +112,11 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 			// Alpaca always send the same message (object)
 			this.updated(client, device, message as DeviceProperty)
 		} else {
-			let updated = false
 			const property = properties[message.name]
+
+			if (property === undefined) return false
+
+			let updated = false
 
 			// Skip BLOB type
 			if (property.type[0] !== 'B') {

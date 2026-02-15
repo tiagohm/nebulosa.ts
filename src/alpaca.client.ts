@@ -406,20 +406,20 @@ interface AlpacaClientCameraState extends AlpacaClientDeviceState {
 	readonly CanStopExposure?: boolean
 	PrevCameraState: AlpacaCameraState
 	ExposureDuration: number
-	Downloading: boolean
+	ExposureStarted: boolean
 }
 
 class AlpacaCamera extends AlpacaDevice {
 	protected readonly api: AlpacaCameraApi
 	// https://ascom-standards.org/newdocs/camera.html#Camera.DeviceState
 	// biome-ignore format: too long!
-	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0, PrevCameraState: 0, ExposureDuration: 0, Downloading: false }
+	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0, PrevCameraState: 0, ExposureDuration: 0, ExposureStarted: false }
 	// biome-ignore format: too long!
 	protected readonly endpoints = ['BayerOffsetX', 'BayerOffsetY', 'SensorType', 'CameraXSize', 'CameraYSize', 'CanGetCoolerPower', 'CanPulseGuide', 'CanSetCcdTemperature', 'CanStopExposure', 'ExposureMax', 'ExposureMin', 'GainMax', 'GainMin', 'Gains', 'MaxBinX', 'MaxBinY', 'OffsetMax', 'OffsetMin', 'Offsets', 'PixelSizeX', 'PixelSizeY', 'ReadoutModes'] as const
 
 	// biome-ignore format: too long!
 	private readonly info = makeNumberVector('', 'CCD_INFO', 'CCD Info', GENERAL_INFO, 'ro', ['CCD_MAX_X', 'Max X', 0, 0, 16000, 1, '%.0f'],  ['CCD_MAX_Y', 'Max Y', 0, 0, 16000, 1, '%.0f'],  ['CCD_PIXEL_SIZE_X', 'Pixel size X', 0, 0, 40, 0.01, '%.2f'], ['CCD_PIXEL_SIZE_Y', 'Pixel size Y', 0, 0, 40, 0.01, '%.2f'], ['CCD_BITSPERPIXEL', 'Bits per pixel', 16, 8, 64, 1, '%.0f'])
-	private readonly cooler = makeSwitchVector('', 'CCD_COOLER', 'Cooler', MAIN_CONTROL, 'OneOfMany', 'ro', ['COOLER_ON', 'On', false], ['COOLER_OFF', 'Off', true])
+	private readonly cooler = makeSwitchVector('', 'CCD_COOLER', 'Cooler', MAIN_CONTROL, 'OneOfMany', 'rw', ['COOLER_ON', 'On', false], ['COOLER_OFF', 'Off', true])
 	private readonly frameType = makeSwitchVector('', 'CCD_FRAME_TYPE', 'Frame Type', MAIN_CONTROL, 'OneOfMany', 'rw', ['FRAME_LIGHT', 'Light', true], ['FRAME_DARK', 'Dark', false], ['FRAME_FLAT', 'Flat', false], ['FRAME_BIAS', 'Bias', false])
 	private readonly frameFormat = makeSwitchVector('', 'CCD_CAPTURE_FORMAT', 'Readout Mode', MAIN_CONTROL, 'OneOfMany', 'rw')
 	private readonly abort = makeSwitchVector('', 'CCD_ABORT_EXPOSURE', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
@@ -510,14 +510,14 @@ class AlpacaCamera extends AlpacaDevice {
 		this.disableEndpoints('BinX', 'BinY', 'IsCoolerOn', 'Gain', 'NumX', 'NumY', 'Offset', 'ReadoutMode', 'StartX', 'StartY')
 	}
 
-	protected handleEndpointsAfterRun() {
+	protected async handleEndpointsAfterRun() {
 		super.handleEndpointsAfterRun()
 
 		if (!this.state.Connected) return
 
 		const { Step, CameraState, CCDTemperature, CoolerPower, ImageReady, IsPulseGuiding, PercentCompleted, BayerOffsetX, BayerOffsetY, BinX, BinY, CameraXSize, CameraYSize, IsCoolerOn, ExposureMax, ExposureMin, CanGetCoolerPower } = this.state
 		const { Gain, GainMax, GainMin, Gains, MaxBinX, MaxBinY, NumX, NumY, Offset, OffsetMax, OffsetMin, Offsets, PixelSizeX, PixelSizeY, ReadoutMode, ReadoutModes, StartX, StartY, CanPulseGuide, CanSetCcdTemperature, CanStopExposure, SensorType } = this.state
-		const { PrevCameraState, ExposureDuration, Downloading } = this.state
+		const { PrevCameraState, ExposureDuration, ExposureStarted } = this.state
 
 		// Initial
 		if (Step === 1) {
@@ -547,14 +547,17 @@ class AlpacaCamera extends AlpacaDevice {
 				this.sendDefProperty(this.exposure)
 			}
 
-			if (IsCoolerOn !== undefined && CCDTemperature !== undefined) {
+			if (IsCoolerOn !== undefined) {
+				this.sendDefProperty(this.cooler)
+			}
+
+			if (CCDTemperature !== undefined) {
 				this.temperature.elements.CCD_TEMPERATURE_VALUE.value = CCDTemperature
 
 				if (CanSetCcdTemperature) {
 					this.temperature.permission = 'rw'
 				}
 
-				this.sendDefProperty(this.cooler)
 				this.sendDefProperty(this.temperature)
 			}
 
@@ -634,15 +637,6 @@ class AlpacaCamera extends AlpacaDevice {
 		}
 		// State
 		else if (Step === 2) {
-			if (ImageReady) {
-				if (!Downloading) {
-					this.state.Downloading = true
-					void this.readImageDataAsFits()
-				}
-			} else {
-				// this.image.elements.CCD1.value = ''
-			}
-
 			if (IsCoolerOn !== undefined) {
 				this.updatePropertyValue(this.cooler, IsCoolerOn ? 'COOLER_ON' : 'COOLER_OFF', true) && this.sendSetProperty(this.cooler)
 				this.state.IsCoolerOn = undefined
@@ -685,11 +679,32 @@ class AlpacaCamera extends AlpacaDevice {
 				this.state.ReadoutMode = undefined
 			}
 
+			if (CanPulseGuide && this.updatePropertyState(this.guideNS, IsPulseGuiding ? 'Busy' : 'Idle')) {
+				this.guideWE.state = this.guideNS.state
+				this.sendSetProperty(this.guideNS)
+				this.sendSetProperty(this.guideWE)
+			}
+
+			if (ImageReady) {
+				if (ExposureStarted) {
+					this.state.ExposureStarted = false
+					await this.readImageDataAsFits()
+
+					this.exposure.state = 'Busy'
+					this.exposure.elements.CCD_EXPOSURE_VALUE.value = 0
+					this.sendSetProperty(this.exposure)
+
+					return
+				}
+			} else {
+				this.image.elements.CCD1.value = ''
+			}
+
 			let updated = false
 
 			if (CameraState !== PrevCameraState) {
-				this.state.PrevCameraState = CameraState === 2 ? 2 : 0
-				updated = this.updatePropertyState(this.exposure, CameraState === 2 ? 'Busy' : 'Idle')
+				this.state.PrevCameraState = CameraState
+				updated = this.updatePropertyState(this.exposure, CameraState === 2 ? 'Busy' : CameraState === 5 ? 'Alert' : 'Ok')
 			}
 
 			if (CameraState === 2) {
@@ -699,12 +714,6 @@ class AlpacaCamera extends AlpacaDevice {
 			}
 
 			updated && this.sendSetProperty(this.exposure)
-
-			if (CanPulseGuide && this.updatePropertyState(this.guideNS, IsPulseGuiding ? 'Busy' : 'Idle')) {
-				this.guideWE.state = this.guideNS.state
-				this.sendSetProperty(this.guideNS)
-				this.sendSetProperty(this.guideWE)
-			}
 		}
 	}
 
@@ -741,19 +750,20 @@ class AlpacaCamera extends AlpacaDevice {
 	sendNumber(vector: NewNumberVector) {
 		super.sendNumber(vector)
 
-        switch (vector.name) {
+		switch (vector.name) {
 			case 'CCD_EXPOSURE':
 				if (vector.elements.CCD_EXPOSURE_VALUE) {
 					this.state.ExposureDuration = vector.elements.CCD_EXPOSURE_VALUE
+					this.state.ExposureStarted = true
 					void this.api.startExposure(this.id, vector.elements.CCD_EXPOSURE_VALUE, this.isLight)
 				}
 
 				break
-			case 'CDD_GAIN':
+			case 'CCD_GAIN':
 				if (vector.elements.GAIN !== undefined) void this.api.setGain(this.id, vector.elements.GAIN)
 				this.enableEndpoints('Gain')
 				break
-			case 'CDD_OFFSET':
+			case 'CCD_OFFSET':
 				if (vector.elements.OFFSET !== undefined) void this.api.setOffset(this.id, vector.elements.OFFSET)
 				this.enableEndpoints('Offset')
 				break
@@ -770,7 +780,7 @@ class AlpacaCamera extends AlpacaDevice {
 				if (vector.elements.HEIGHT !== undefined) void this.api.setNumY(this.id, vector.elements.HEIGHT)
 				this.enableEndpoints('StartX', 'StartY', 'NumX', 'NumY')
 				break
-			case 'CCD_BIN':
+			case 'CCD_BINNING':
 				if (vector.elements.HOR_BIN !== undefined) void this.api.setBinX(this.id, vector.elements.HOR_BIN)
 				if (vector.elements.VER_BIN !== undefined) void this.api.setBinY(this.id, vector.elements.VER_BIN)
 				this.enableEndpoints('BinX', 'BinY')
@@ -799,23 +809,19 @@ class AlpacaCamera extends AlpacaDevice {
 	}
 
 	private async readImageDataAsFits() {
-		try {
-			const buffer = await this.api.getImageArray(this.id)
+		const buffer = await this.api.getImageArray(this.id)
 
-			if (buffer) {
-				this.image.state = 'Ok'
-				const camera = this.client.provider.get(this.client, this.device.DeviceName, 'CAMERA') as Camera
-				const fits = makeFitsFromImageBytes(buffer, camera, this.activeMount)
-				this.image.elements.CCD1.value = fits
-			} else {
-				this.image.state = 'Alert'
-				this.image.elements.CCD1.value = ''
-			}
-
-			handleSetBlobVector(this.client, this.handler, this.image)
-		} finally {
-			this.state.Downloading = false
+		if (buffer) {
+			this.image.state = 'Ok'
+			const camera = this.client.provider.get(this.client, this.device.DeviceName, 'CAMERA') as Camera
+			const fits = makeFitsFromImageBytes(buffer, camera, this.activeMount)
+			this.image.elements.CCD1.value = fits
+		} else {
+			this.image.state = 'Alert'
+			this.image.elements.CCD1.value = ''
 		}
+
+		handleSetBlobVector(this.client, this.handler, this.image)
 	}
 }
 
