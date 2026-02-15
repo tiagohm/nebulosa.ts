@@ -295,16 +295,16 @@ describe('calibrate', async () => {
 
 	test('full', async () => {
 		const calibrated = calibrate(clone(light!), dark, flat, bias, darkFlat)
-		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-full', '1e63852e5eee85471ae22f974b3393d1', true)
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-full', '1e63852e5eee85471ae22f974b3393d1')
 	})
 
 	test('dark 60s', async () => {
 		const calibrated = calibrate(clone(light!), dark60, flat, bias, darkFlat)
-		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-60', '982da908b950318bc119f7d62eb74406', true)
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-60', '982da908b950318bc119f7d62eb74406')
 	}, 5000)
 
 	test('dark 15s', async () => {
 		const calibrated = calibrate(clone(light!), dark15, flat, bias, darkFlat)
-		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-15', 'd762e520ef4ae827e3143bdb631169ca', true)
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-15', 'd762e520ef4ae827e3143bdb631169ca')
 	}, 5000)
 })

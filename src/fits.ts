@@ -491,6 +491,28 @@ export class FitsKeywordWriter {
 		return position.size
 	}
 
+	writeAll(header: FitsHeader, output: Buffer, offset: number = 0) {
+		const card: FitsHeaderCard = ['', 0]
+		let size = 0
+
+		for (const key in header) {
+			const value = header[key]
+
+			if (value !== undefined) {
+				card[0] = key
+				card[1] = value
+
+				const n = this.write(card, output, offset)
+				if (n === 0) break
+
+				size += n
+				offset += n
+			}
+		}
+
+		return size
+	}
+
 	private appendKey(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
 		this.appendText(output, card[0], position)
 		this.padTo(output, FITS_MAX_KEYWORD_LENGTH, position)

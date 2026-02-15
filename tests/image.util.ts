@@ -32,10 +32,10 @@ export function readImage(bitpix: Bitpix, channel: number, action?: (image: Imag
 	return openFitsFromFileHandle(bitpix, channel, readImageFromFitsAndAction, name)
 }
 
-export async function saveImageAndCompareHash(image: Image, name: string, hash?: string, force?: boolean) {
+export async function saveImageAndCompareHash(image: Image, name: string, hash?: string) {
 	const jpeg = writeImageToFormat(image, 'jpeg')
 	expect(jpeg).toBeDefined()
-	await saveAndCompareHash(jpeg!, `${name}.jpg`, hash, force)
+	await saveAndCompareHash(jpeg!, `${name}.jpg`, hash)
 	return image
 }
 
@@ -44,8 +44,8 @@ export async function readImageTransformAndSave(action: (image: Image) => Promis
 	return saveImageAndCompareHash(image, outputName, hash)
 }
 
-export async function saveAndCompareHash(input: NodeJS.TypedArray | ArrayBufferLike | Blob, name: string, hash?: string, force?: boolean) {
-	if (process.env.SAVE_IMAGE || force) await Bun.write(`out/${name}`, input)
+export async function saveAndCompareHash(input: NodeJS.TypedArray | ArrayBufferLike | Blob, name: string, hash?: string) {
+	if (process.env.SAVE_IMAGE || !hash) await Bun.write(`out/${name}`, input)
 	const hex = Bun.MD5.hash(input, 'hex')
 	if (hash) expect(hex).toBe(hash)
 	else console.info(name, hex)

@@ -1,11 +1,13 @@
 import { AlpacaCameraApi, AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaTelescopeApi } from './alpaca.api'
-import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate } from './alpaca.types'
+import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate, ImageBytesMetadata } from './alpaca.types'
+import { formatDEC, formatRA, toDeg } from './angle'
 import { SIDEREAL_RATE } from './constants'
-import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
-import type { Client, Device, Focuser, Mount, Rotator, Wheel } from './indi.device'
+import { computeRemainingBytes, type FitsHeader, FitsKeywordWriter } from './fits'
+import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
+import type { Camera, Client, Device, Focuser, Mount, Rotator, Wheel } from './indi.device'
 import type { DeviceProvider } from './indi.manager'
 // biome-ignore format: too long!
-import { type DefNumber, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefText, type DefTextVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyPermission, type PropertyState, type SwitchRule, type ValueType, type VectorType } from './indi.types'
+import { type DefBlob, type DefBlobVector, type DefNumber, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefText, type DefTextVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, type NewNumberVector, type NewSwitchVector, type NewTextVector, type OneBlob, type PropertyPermission, type PropertyState, type SetBlobVector, type SwitchRule, type ValueType, type VectorType } from './indi.types'
 import { roundToNthDecimal } from './math'
 import { formatTemporal, TIMEZONE } from './temporal'
 
@@ -31,7 +33,7 @@ export class AlpacaClient implements Client, Disposable {
 	constructor(
 		readonly url: string,
 		readonly options: AlpacaClientOptions,
-		readonly provider?: DeviceProvider<Device>,
+		readonly provider: DeviceProvider<Device>,
 	) {
 		this.id = Bun.MD5.hash(url, 'hex')
 		this.description = `Alpaca Client at ${url}`
@@ -183,19 +185,19 @@ abstract class AlpacaDevice {
 	}
 
 	get activeMount() {
-		return this.client.provider?.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value, 'MOUNT') as Mount | undefined
+		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value, 'MOUNT') as Mount | undefined
 	}
 
 	get activeWheel() {
-		return this.client.provider?.get(this.client, this.snoopDevices.elements.ACTIVE_FILTER.value, 'WHEEL') as Wheel | undefined
+		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_FILTER.value, 'WHEEL') as Wheel | undefined
 	}
 
 	get activeFocuser() {
-		return this.client.provider?.get(this.client, this.snoopDevices.elements.ACTIVE_FOCUSER.value, 'FOCUSER') as Focuser | undefined
+		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_FOCUSER.value, 'FOCUSER') as Focuser | undefined
 	}
 
 	get activeRotator() {
-		return this.client.provider?.get(this.client, this.snoopDevices.elements.ACTIVE_ROTATOR.value, 'ROTATOR') as Rotator | undefined
+		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_ROTATOR.value, 'ROTATOR') as Rotator | undefined
 	}
 
 	protected sendDefProperty(message: DefVector & { type: Uppercase<VectorType> }) {
@@ -404,13 +406,14 @@ interface AlpacaClientCameraState extends AlpacaClientDeviceState {
 	readonly CanStopExposure?: boolean
 	PrevCameraState: AlpacaCameraState
 	ExposureDuration: number
+	Downloading: boolean
 }
 
 class AlpacaCamera extends AlpacaDevice {
 	protected readonly api: AlpacaCameraApi
 	// https://ascom-standards.org/newdocs/camera.html#Camera.DeviceState
 	// biome-ignore format: too long!
-	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0, PrevCameraState: 0, ExposureDuration: 0 }
+	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0, PrevCameraState: 0, ExposureDuration: 0, Downloading: false }
 	// biome-ignore format: too long!
 	protected readonly endpoints = ['BayerOffsetX', 'BayerOffsetY', 'SensorType', 'CameraXSize', 'CameraYSize', 'CanGetCoolerPower', 'CanPulseGuide', 'CanSetCcdTemperature', 'CanStopExposure', 'ExposureMax', 'ExposureMin', 'GainMax', 'GainMin', 'Gains', 'MaxBinX', 'MaxBinY', 'OffsetMax', 'OffsetMin', 'Offsets', 'PixelSizeX', 'PixelSizeY', 'ReadoutModes'] as const
 
@@ -430,6 +433,7 @@ class AlpacaCamera extends AlpacaDevice {
 	private readonly cfa = makeTextVector('', 'CCD_CFA', 'CFA', GENERAL_INFO, 'ro', ['CFA_OFFSET_X', 'Offset X', '0'], ['CFA_OFFSET_Y', 'Offset Y', '0'], ['CFA_TYPE', 'Type', 'RGGB']) // Only RGGB pattern is supported?
 	private readonly guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	private readonly guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
+	private readonly image = makeBlobVector('', 'CCD1', 'CCD Image', MAIN_CONTROL, 'ro', ['CCD1', 'Image'])
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -451,6 +455,7 @@ class AlpacaCamera extends AlpacaDevice {
 		this.cfa.device = device.DeviceName
 		this.guideNS.device = device.DeviceName
 		this.guideWE.device = device.DeviceName
+		this.image.device = device.DeviceName
 
 		this.runner.registerEndpoint('BayerOffsetX', api.getBayerOffsetX.bind(api, this.id), false)
 		this.runner.registerEndpoint('BayerOffsetY', api.getBayerOffsetY.bind(api, this.id), false)
@@ -512,7 +517,7 @@ class AlpacaCamera extends AlpacaDevice {
 
 		const { Step, CameraState, CCDTemperature, CoolerPower, ImageReady, IsPulseGuiding, PercentCompleted, BayerOffsetX, BayerOffsetY, BinX, BinY, CameraXSize, CameraYSize, IsCoolerOn, ExposureMax, ExposureMin, CanGetCoolerPower } = this.state
 		const { Gain, GainMax, GainMin, Gains, MaxBinX, MaxBinY, NumX, NumY, Offset, OffsetMax, OffsetMin, Offsets, PixelSizeX, PixelSizeY, ReadoutMode, ReadoutModes, StartX, StartY, CanPulseGuide, CanSetCcdTemperature, CanStopExposure, SensorType } = this.state
-		const { PrevCameraState, ExposureDuration } = this.state
+		const { PrevCameraState, ExposureDuration, Downloading } = this.state
 
 		// Initial
 		if (Step === 1) {
@@ -629,6 +634,15 @@ class AlpacaCamera extends AlpacaDevice {
 		}
 		// State
 		else if (Step === 2) {
+			if (ImageReady) {
+				if (!Downloading) {
+					this.state.Downloading = true
+					void this.readImageDataAsFits()
+				}
+			} else {
+				// this.image.elements.CCD1.value = ''
+			}
+
 			if (IsCoolerOn !== undefined) {
 				this.updatePropertyValue(this.cooler, IsCoolerOn ? 'COOLER_ON' : 'COOLER_OFF', true) && this.sendSetProperty(this.cooler)
 				this.state.IsCoolerOn = undefined
@@ -777,6 +791,26 @@ class AlpacaCamera extends AlpacaDevice {
 
 				break
 			}
+		}
+	}
+
+	private async readImageDataAsFits() {
+		try {
+			const buffer = await this.api.getImageArray(this.id)
+
+			if (buffer) {
+				this.image.state = 'Ok'
+				const camera = this.client.provider.get(this.client, this.device.DeviceName, 'CAMERA') as Camera
+				const fits = makeFitsFromImageBytes(buffer, camera, this.activeMount)
+				this.image.elements.CCD1.value = fits
+			} else {
+				this.image.state = 'Alert'
+				this.image.elements.CCD1.value = ''
+			}
+
+			handleSetBlobVector(this.client, this.handler, this.image)
+		} finally {
+			this.state.Downloading = false
 		}
 	}
 }
@@ -1542,6 +1576,93 @@ function makeTextVector(device: string, name: string, label: string, group: stri
 	const elements: Record<string, DefText> = {}
 	for (const [name, label, value] of properties) elements[name] = { name, label, value }
 	return { type: 'TEXT', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
+}
+
+function makeBlobVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string][]): Omit<DefBlobVector, 'elements'> & SetBlobVector & { type: 'BLOB' } {
+	const elements: Record<string, Omit<DefBlob, 'value'> & OneBlob> = {}
+	for (const [name, label] of properties) elements[name] = { name, label, size: '0', format: 'fits', value: '' }
+	return { type: 'BLOB', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
+}
+
+export function makeFitsFromImageBytes(data: ArrayBuffer, camera?: Camera, mount?: Mount) {
+	const metadataArray = new Int32Array(data, 0, 44)
+	const metadata: ImageBytesMetadata = {
+		MetadataVersion: metadataArray[0],
+		ErrorNumber: metadataArray[1],
+		ClientTransactionID: metadataArray[2],
+		ServerTransactionID: metadataArray[3],
+		DataStart: metadataArray[4],
+		ImageElementType: metadataArray[5],
+		TransmissionElementType: metadataArray[6],
+		Rank: metadataArray[7] as never,
+		Dimension1: metadataArray[8],
+		Dimension2: metadataArray[9],
+		Dimension3: metadataArray[10],
+	}
+
+	const NumX = metadata.Dimension1
+	const NumY = metadata.Dimension2
+	const NumZ = metadata.Dimension3 === 3 ? 3 : 1
+
+	const header: FitsHeader = {
+		SIMPLE: true, // File does conform to FITS standard
+		BITPIX: 16, // Number of bits per data pixel
+		NAXIS: metadata.Rank, // Number of data axes
+		NAXIS1: NumX, // Length of data axis 1
+		NAXIS2: NumY, // Length of data axis 2
+		NAXIS3: NumZ === 3 ? 3 : undefined, // Length of data axis 3
+		EXTEND: true, // FITS dataset may contain extensions
+		BZERO: 32768, // Offset data range to that of unsigned short
+		BSCALE: 1, // Default scaling factor
+		ROWORDER: 'TOP-DOWN', // Row Order
+		INSTRUME: camera?.name, // Camera Name
+		TELESCOP: mount?.name, // Telescope name
+		EXPTIME: 6.0e1, // TODO: Total Exposure Time (s)
+		'CCD-TEMP': camera?.temperature, // CCD Temperature (Celsius)
+		PIXSIZE1: camera?.pixelSize.x, // Pixel Size 1 (microns)
+		PIXSIZE2: camera?.pixelSize.y, // Pixel Size 2 (microns)
+		XBINNING: camera?.bin.x.value, // Binning factor in width
+		YBINNING: camera?.bin.y.value, // Binning factor in height
+		XPIXSZ: camera ? camera.pixelSize.x * camera.bin.x.value : undefined, // X binned pixel size in microns
+		YPIXSZ: camera ? camera.pixelSize.y * camera.bin.y.value : undefined, // Y binned pixel size in microns
+		FRAME: 'Light', //  TODO: Frame Type
+		SITELAT: mount ? toDeg(mount.geographicCoordinate.latitude) : undefined, // Latitude of the imaging site in degrees
+		SITELONG: mount ? toDeg(mount.geographicCoordinate.longitude) : undefined, // Longitude of the imaging site in degrees
+		OBJCTRA: mount ? formatRA(mount.equatorialCoordinate.rightAscension) : undefined, // Object J2000 RA in Hours
+		OBJCTDEC: mount ? formatDEC(mount.equatorialCoordinate.declination) : undefined, // Object J2000 DEC in Degrees
+		RA: mount ? toDeg(mount.equatorialCoordinate.rightAscension) : undefined, // Object J2000 RA in Degrees
+		DEC: mount ? toDeg(mount.equatorialCoordinate.declination) : undefined, // Object J2000 DEC in Degrees
+		EQUINOX: 2000, // Equinox
+		'DATE-OBS': formatTemporal(Date.now(), 'YYYY-MM-DDTHH:mm:ss.SSS'), // UTC start date of observation
+		GAIN: camera?.gain.value, // Gain
+		OFFSET: camera?.offset.value, // Offset
+		END: '',
+	}
+
+	const estimatedHeaderSize = Object.keys(header).filter((e) => header[e] !== undefined).length * 80
+	const estimatedDataSize = NumX * NumY * NumZ * 2 // 16-bit
+	const fits = Buffer.allocUnsafe(estimatedHeaderSize + computeRemainingBytes(estimatedHeaderSize) + estimatedDataSize + computeRemainingBytes(estimatedDataSize))
+	const writer = new FitsKeywordWriter()
+	const offset = writer.writeAll(header, fits)
+	const dataView = new DataView(data, 44)
+	const fitsView = new DataView(fits.buffer, offset + computeRemainingBytes(offset))
+
+	const strideInBytes = NumX * 2
+	const planeInBytes = strideInBytes * NumY
+
+	// unsigned 16-bit
+	if (metadata.TransmissionElementType === 8) {
+		for (let i = 0, a = 0; i < NumX; i++) {
+			for (let j = 0; j < NumY; j++) {
+				for (let k = 0; k < NumZ; k++, a += 2) {
+					const b = planeInBytes * k + strideInBytes * j + i * 2
+					fitsView.setInt16(b, dataView.getUint16(a, true) - 32768, false)
+				}
+			}
+		}
+	}
+
+	return fits
 }
 
 type AlpacaApiRunnerEndpoint = () => PromiseLike<unknown>

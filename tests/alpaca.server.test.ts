@@ -14,9 +14,9 @@ test.skip('make image bytes from fits', async () => {
 			expect(bytes.byteLength).toBe(channel * 1037 * 706)
 
 			if (channel === 1) {
-				await saveAndCompareHash(jpeg.compress(bytes, 706, 1037, 'GRAY', 100, 'GRAY', output)!, `imagebytes-${bitpix}-1.jpg`, undefined, true)
+				await saveAndCompareHash(jpeg.compress(bytes, 706, 1037, 'GRAY', 100, 'GRAY', output)!, `imagebytes-${bitpix}-1.jpg`, undefined)
 			} else {
-				await saveAndCompareHash(jpeg.compress(bytes, 706, 1037, 'RGB', 100, '4:4:4', output)!, `imagebytes-${bitpix}-3.jpg`, undefined, true)
+				await saveAndCompareHash(jpeg.compress(bytes, 706, 1037, 'RGB', 100, '4:4:4', output)!, `imagebytes-${bitpix}-3.jpg`, undefined)
 			}
 		}
 	}

@@ -169,7 +169,7 @@ async function startIndi(driver: string) {
 
 describe.serial.skipIf(SKIP_TEST)('manager', () => {
 	test('camera', async () => {
-		let frame = ''
+		let frame: string | Buffer = ''
 		let cameraAdded = false
 		let cameraRemoved = false
 		let guideOutputAdded = false

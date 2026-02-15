@@ -103,6 +103,20 @@ export enum AlpacaTelescopeAxis {
 	TERTIARY,
 }
 
+export interface ImageBytesMetadata {
+	readonly MetadataVersion: number // Bytes 0..3 - Metadata version = 1
+	readonly ErrorNumber: number // Bytes 4..7 - Alpaca error number or zero for success
+	readonly ClientTransactionID: number // Bytes 8..11 - Client's transaction ID
+	readonly ServerTransactionID: number // Bytes 12..15 - Device's transaction ID
+	readonly DataStart: number // Bytes 16..19 - Offset of the start of the data bytes
+	readonly ImageElementType: AlpacaImageElementType // Bytes 20..23 - Element type of the source image array
+	readonly TransmissionElementType: AlpacaImageElementType // Bytes 24..27 - Element type as sent over the network
+	readonly Rank: 2 | 3 // Bytes 28..31 - Image array rank (2 or 3)
+	readonly Dimension1: number // Bytes 32..35 - Length of image array first dimension
+	readonly Dimension2: number // Bytes 36..39 - Length of image array second dimension
+	readonly Dimension3: number // Bytes 40..43 - Length of image array third dimension (0 for 2D array)
+}
+
 export interface AlpacaResponse<T> {
 	readonly Value: T
 	readonly ClientTransactionID: number

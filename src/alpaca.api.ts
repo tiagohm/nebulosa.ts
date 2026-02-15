@@ -3,6 +3,10 @@ import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaC
 
 // https://ascom-standards.org/api/
 
+const IMAGE_ARRAY_HEADERS: HeadersInit = {
+	Accept: 'application/imagebytes',
+}
+
 export class AlpacaApi {
 	readonly management: AlpacaManagementApi
 	readonly telescope: AlpacaTelescopeApi
@@ -192,8 +196,16 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/heatsinktemperature`, 'GET')
 	}
 
-	getImageArray(id: number) {
-		return request<number>(this.url, `${id}/imagearray`, 'GET')
+	async getImageArray(id: number) {
+		const response = await fetch(new URL(`${id}/imagearray`, this.url), { headers: IMAGE_ARRAY_HEADERS })
+
+		if (response.ok) {
+			return await response.arrayBuffer()
+		}
+
+		console.error('failed to fetch image array:', await response.text())
+
+		return undefined
 	}
 
 	isImageReady(id: number) {

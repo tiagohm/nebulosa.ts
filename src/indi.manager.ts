@@ -8,7 +8,7 @@ import type { CfaPattern } from './image.types'
 import type { IndiClientHandler } from './indi.client'
 // biome-ignore format: too long!
 import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type NameAndLabel, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type Thermometer, type TrackMode, type Wheel } from './indi.device'
-import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector } from './indi.types'
+import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, ValueType } from './indi.types'
 import type { GeographicCoordinate } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
 import { timeNow } from './time'
@@ -17,7 +17,7 @@ export interface DeviceHandler<D extends Device> {
 	readonly added: (device: D) => void
 	readonly updated?: (device: D, property: keyof D & string, state?: PropertyState) => void
 	readonly removed: (device: D) => void
-	readonly blobReceived?: (device: D, data: string) => void
+	readonly blobReceived?: (device: D, data: string | Buffer) => void
 }
 
 export interface DevicePropertyHandler {
@@ -110,12 +110,13 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 			return true
 		} else if (message === properties[message.name]) {
 			// Alpaca always send the same message (object)
-			this.updated(client, device, message as never)
+			this.updated(client, device, message as DeviceProperty)
 		} else {
 			let updated = false
 			const property = properties[message.name]
 
-			if (property) {
+			// Skip BLOB type
+			if (property.type[0] !== 'B') {
 				if (message.state && message.state !== property.state) {
 					property.state = message.state
 					updated = true
@@ -130,7 +131,7 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 						const value = elements[key]!.value
 
 						if (value !== element.value) {
-							element.value = value
+							element.value = value as ValueType
 							updated = true
 						}
 					}
@@ -207,7 +208,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		this.handlers.forEach((e) => e.removed(device))
 	}
 
-	blobReceived(device: D, data: string) {
+	blobReceived(device: D, data: string | Buffer) {
 		this.handlers.forEach((e) => e.blobReceived?.(device, data))
 	}
 

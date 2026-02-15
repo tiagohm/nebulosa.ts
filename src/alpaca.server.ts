@@ -15,7 +15,7 @@ interface AlpacaDeviceState extends GeographicCoordinate, EquatorialCoordinate {
 	// Device
 	tasks: Partial<Record<'connect' | 'position', ReturnType<typeof promiseWithTimeout>>>
 	// Camera
-	data?: string
+	data?: string | Buffer
 	lastExposureDuration: number
 	ccdTemperature: number
 	frame: [number, number, number, number]
@@ -971,7 +971,8 @@ export class AlpacaServer {
 		try {
 			if (accept?.includes('imagebytes')) {
 				// const data = Buffer.from(await Bun.file('c:\\Users\\tiago\\Documents\\Nebulosa\\Captures\\SVBONY CCD SV305.fit').arrayBuffer())
-				const image = makeImageBytesFromFits(Buffer.from(state.data!, 'base64'))
+				const { data } = state
+				const image = makeImageBytesFromFits(Buffer.isBuffer(data) ? data : Buffer.from(data!, 'base64'))
 				return new Response(image.buffer, { headers: { 'Content-Type': 'application/imagebytes' } })
 			}
 		} finally {

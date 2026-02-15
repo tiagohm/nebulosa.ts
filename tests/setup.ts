@@ -35,6 +35,8 @@ const FILES: Readonly<Record<string, string>> = {
 	'DARK.60.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/DARK.60.fit',
 	'DARKFLAT.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/DARKFLAT.fit',
 	'FLAT.fit': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/FLAT.fit',
+	'Sky Simulator.8.1.dat': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/Sky Simulator.8.1.dat',
+	'Sky Simulator.8.3.dat': 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/Sky Simulator.8.3.dat',
 }
 
 async function download(type: keyof typeof FILES) {
