@@ -1,6 +1,6 @@
 import { AlpacaCameraApi, AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaTelescopeApi } from './alpaca.api'
 import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate, ImageBytesMetadata } from './alpaca.types'
-import { type Angle, formatDEC, formatRA, toDeg } from './angle'
+import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from './angle'
 import { SIDEREAL_RATE } from './constants'
 import { equatorialToJ2000 } from './coordinate'
 import { computeRemainingBytes, type FitsHeader, FitsKeywordWriter } from './fits'
@@ -1715,6 +1715,10 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, camera?: Camera, mount
 	let rightAscension: Angle | undefined
 	let declination: Angle | undefined
 
+	// Don't use it if disconnected
+	if (!camera?.connected) camera = undefined
+	if (!mount?.connected) mount = undefined
+
 	if (mount) {
 		;[rightAscension, declination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination)
 	}
@@ -1755,7 +1759,7 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, camera?: Camera, mount
 		SITELONG: mount ? toDeg(mount.geographicCoordinate.longitude) : undefined,
 		OBJCTRA: rightAscension !== undefined ? formatRA(rightAscension) : undefined,
 		OBJCTDEC: declination !== undefined ? formatDEC(declination) : undefined,
-		RA: rightAscension !== undefined ? toDeg(rightAscension) : undefined,
+		RA: rightAscension !== undefined ? toDeg(normalizeAngle(rightAscension)) : undefined,
 		DEC: declination !== undefined ? toDeg(declination) : undefined,
 		EQUINOX: 2000,
 		PIERSIDE: mount && mount.pierSide !== 'NEITHER' ? mount.pierSide : undefined,

@@ -15,6 +15,8 @@ describe('make fits from image bytes', () => {
 	const mount = structuredClone(DEFAULT_MOUNT)
 
 	camera.name = 'Camera'
+	camera.connected = true
+	camera.hasCooler = true
 	camera.exposure.value = 5.04
 	camera.pixelSize.x = 2.5
 	camera.pixelSize.y = 2.5
@@ -24,6 +26,7 @@ describe('make fits from image bytes', () => {
 	camera.gain.value = 8
 	camera.offset.value = 3
 	mount.name = 'Mount'
+	mount.connected = true
 	mount.geographicCoordinate.longitude = deg(-45)
 	mount.geographicCoordinate.latitude = deg(-22)
 	mount.equatorialCoordinate.rightAscension = hour(22)
@@ -296,10 +299,10 @@ function expectHeader(header: FitsHeader) {
 	expect(header.YPIXSZ).toBe(5)
 	expect(header.SITELAT).toBe(-22)
 	expect(header.SITELONG).toBe(-45)
-	expect(header.OBJCTRA).toBe('22 00 00.00')
-	expect(header.OBJCTDEC).toBe('-60 00 00.00')
-	expect(header.RA).toBe(330)
-	expect(header.DEC).toBeCloseTo(-60, 10)
+	expect(header.OBJCTRA).toBe('21 58 07.63')
+	expect(header.OBJCTDEC).toBe('-60 07 30.48')
+	expect(header.RA).toBeCloseTo(329.53, 2)
+	expect(header.DEC).toBeCloseTo(-60.125, 2)
 	expect(header.GAIN).toBe(8)
 	expect(header.OFFSET).toBe(3)
 	expect(header['CCD-TEMP']).toBe(25)
