@@ -6,6 +6,7 @@ import { readImageFromBuffer } from '../src/image'
 import { debayer } from '../src/image.transformation'
 import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_MOUNT, type Device, type DeviceType } from '../src/indi.device'
 import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import type { PropertyState } from '../src/indi.types'
 import { roundToNthDecimal } from '../src/math'
 import { saveImageAndCompareHash } from './image.util'
 
@@ -119,10 +120,18 @@ describe.skipIf(process.platform !== 'win32')('client', async () => {
 		const camera = cameraManager.get(client, 'Alpaca Camera Sim')!
 
 		let image: string | Buffer | undefined
+		const state: PropertyState[] = []
+		const exposure: number[] = []
 
 		cameraManager.addHandler({
 			added: (device) => {},
 			removed: (device) => {},
+			updated: (device, property, s) => {
+				if (property === 'exposure') {
+					s && s !== 'Idle' && state.push(s)
+					s === 'Busy' && exposure.push(device.exposure.value)
+				}
+			},
 			blobReceived: (device, data) => {
 				image = data
 			},
@@ -169,13 +178,13 @@ describe.skipIf(process.platform !== 'win32')('client', async () => {
 		}
 
 		const gainStep = Math.max(1, Math.trunc((camera.gain.max - camera.gain.min) / 10))
-		for (let i = camera.gain.min; i < camera.gain.max; i += gainStep) {
+		for (let i = camera.gain.min; i <= camera.gain.max; i += gainStep) {
 			cameraManager.gain(camera, i)
 			await expectUntil(camera.gain, 'value', i)
 		}
 
 		const offsetStep = Math.max(1, Math.trunc((camera.offset.max - camera.offset.min) / 10))
-		for (let i = camera.offset.min; i < camera.offset.max; i += offsetStep) {
+		for (let i = camera.offset.min; i <= camera.offset.max; i += offsetStep) {
 			cameraManager.offset(camera, i)
 			await expectUntil(camera.offset, 'value', i)
 		}
@@ -189,13 +198,18 @@ describe.skipIf(process.platform !== 'win32')('client', async () => {
 		cameraManager.cooler(camera, false)
 		await expectUntil(camera, 'cooler', false)
 
-		cameraManager.startExposure(camera, 1)
+		cameraManager.startExposure(camera, 2)
 		await expectUntil(camera, 'exposuring', true)
 		await expectUntil(camera, 'exposuring', false)
 		expect(image).toBeDefined()
 
 		cameraManager.disconnect(camera)
 		await expectUntil(camera, 'connected', false)
+
+		expect(state[0]).toBe('Busy')
+		expect(state[state.length - 1]).toBe('Ok')
+		expect(exposure[0]).toBe(2)
+		expect(exposure[exposure.length - 1]).toBe(0)
 	}, 60000)
 
 	test('mount', async () => {

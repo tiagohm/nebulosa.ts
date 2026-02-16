@@ -447,7 +447,6 @@ interface AlpacaClientCameraState extends AlpacaClientDeviceState {
 	readonly CanPulseGuide?: boolean
 	readonly CanSetCcdTemperature?: boolean
 	readonly CanStopExposure?: boolean
-	PrevCameraState: AlpacaCameraState
 	ExposureDuration: number
 	ExposureStarted: boolean
 }
@@ -456,7 +455,7 @@ class AlpacaCamera extends AlpacaDevice {
 	protected readonly api: AlpacaCameraApi
 	// https://ascom-standards.org/newdocs/camera.html#Camera.DeviceState
 	// biome-ignore format: too long!
-	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0, PrevCameraState: 0, ExposureDuration: 0, ExposureStarted: false }
+	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0, ExposureDuration: 0, ExposureStarted: false }
 	// biome-ignore format: too long!
 	protected readonly initialEndpoints = ['BayerOffsetX', 'BayerOffsetY', 'SensorType', 'CameraXSize', 'CameraYSize', 'CanGetCoolerPower', 'CanPulseGuide', 'CanSetCcdTemperature', 'CanStopExposure', 'ExposureMax', 'ExposureMin', 'GainMax', 'GainMin', 'Gains', 'MaxBinX', 'MaxBinY', 'OffsetMax', 'OffsetMin', 'Offsets', 'PixelSizeX', 'PixelSizeY', 'ReadoutModes'] as const
 	protected readonly stateEndpoints = ['CameraState', 'CCDTemperature', 'CoolerPower', 'ImageReady', 'IsPulseGuiding', 'PercentCompleted'] as const
@@ -556,7 +555,7 @@ class AlpacaCamera extends AlpacaDevice {
 
 		const { Step, CameraState, CCDTemperature, CoolerPower, ImageReady, IsPulseGuiding, PercentCompleted, BayerOffsetX, BayerOffsetY, BinX, BinY, CameraXSize, CameraYSize, IsCoolerOn, ExposureMax, ExposureMin, CanGetCoolerPower } = this.state
 		const { Gain, GainMax, GainMin, Gains, MaxBinX, MaxBinY, NumX, NumY, Offset, OffsetMax, OffsetMin, Offsets, PixelSizeX, PixelSizeY, ReadoutMode, ReadoutModes, StartX, StartY, CanPulseGuide, CanSetCcdTemperature, CanStopExposure, SensorType } = this.state
-		const { PrevCameraState, ExposureDuration, ExposureStarted } = this.state
+		const { ExposureDuration, ExposureStarted } = this.state
 
 		// Initial
 		if (Step === 1) {
@@ -741,11 +740,14 @@ class AlpacaCamera extends AlpacaDevice {
 
 			if (ImageReady) {
 				if (ExposureStarted) {
+					this.exposure.state = 'Busy'
+					this.exposure.elements.CCD_EXPOSURE_VALUE.value = 0
+					this.sendSetProperty(this.exposure)
+
 					this.state.ExposureStarted = false
 					await this.readImageDataAsFits()
 
-					this.exposure.state = 'Busy'
-					this.exposure.elements.CCD_EXPOSURE_VALUE.value = 0
+					this.exposure.state = 'Ok'
 					this.sendSetProperty(this.exposure)
 
 					return
@@ -754,20 +756,11 @@ class AlpacaCamera extends AlpacaDevice {
 				this.image.elements.CCD1.value = ''
 			}
 
-			let updated = false
-
-			if (CameraState !== PrevCameraState) {
-				this.state.PrevCameraState = CameraState
-				updated = this.updatePropertyState(this.exposure, CameraState === 2 ? 'Busy' : CameraState === 5 ? 'Alert' : 'Ok')
-			}
-
-			if (CameraState === 2) {
+			if (ExposureStarted || CameraState === 2) {
+				let updated = this.updatePropertyState(this.exposure, 'Busy')
 				updated = this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', ExposureDuration * (1 - PercentCompleted / 100)) || updated
-			} else {
-				updated = this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', 0) || updated
+				updated && this.sendSetProperty(this.exposure)
 			}
-
-			updated && this.sendSetProperty(this.exposure)
 		}
 	}
 
@@ -816,10 +809,11 @@ class AlpacaCamera extends AlpacaDevice {
 		switch (vector.name) {
 			case 'CCD_EXPOSURE':
 				if (vector.elements.CCD_EXPOSURE_VALUE) {
+					this.state.ExposureStarted = true
 					this.state.ExposureDuration = Math.max(this.exposure.elements.CCD_EXPOSURE_VALUE.min, Math.min(vector.elements.CCD_EXPOSURE_VALUE, this.exposure.elements.CCD_EXPOSURE_VALUE.max))
+
 					void this.api.startExposure(this.id, this.state.ExposureDuration, this.isLight).then((ok) => {
 						if (ok === true) {
-							this.state.ExposureStarted = true
 							this.updatePropertyState(this.exposure, 'Busy')
 							this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', this.state.ExposureDuration)
 						} else {
