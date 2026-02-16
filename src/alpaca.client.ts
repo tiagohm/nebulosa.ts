@@ -818,8 +818,17 @@ class AlpacaCamera extends AlpacaDevice {
 				if (vector.elements.CCD_EXPOSURE_VALUE) {
 					this.state.ExposureDuration = Math.max(this.exposure.elements.CCD_EXPOSURE_VALUE.min, Math.min(vector.elements.CCD_EXPOSURE_VALUE, this.exposure.elements.CCD_EXPOSURE_VALUE.max))
 					void this.api.startExposure(this.id, this.state.ExposureDuration, this.isLight).then((ok) => {
-						if (ok === true) this.state.ExposureStarted = true
-						else this.updatePropertyState(this.exposure, 'Alert') && this.sendSetProperty(this.exposure)
+						if (ok === true) {
+							this.state.ExposureStarted = true
+							this.updatePropertyState(this.exposure, 'Busy')
+							this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', this.state.ExposureDuration)
+						} else {
+							this.state.ExposureStarted = false
+							this.updatePropertyState(this.exposure, 'Alert')
+							this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', 0)
+						}
+
+						this.sendSetProperty(this.exposure)
 					}, console.error)
 				}
 
