@@ -345,7 +345,7 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 	}
 
 	startExposure(id: number, Duration: number, Light: boolean) {
-		return request<void>(this.url, `${id}/startexposure`, 'PUT', { Duration, Light })
+		return request<true>(this.url, `${id}/startexposure`, 'PUT', { Duration, Light }, undefined, true)
 	}
 
 	stopExposure(id: number) {

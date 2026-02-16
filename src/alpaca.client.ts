@@ -1,7 +1,8 @@
 import { AlpacaCameraApi, AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaTelescopeApi } from './alpaca.api'
 import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate, ImageBytesMetadata } from './alpaca.types'
-import { formatDEC, formatRA, toDeg } from './angle'
+import { type Angle, formatDEC, formatRA, toDeg } from './angle'
 import { SIDEREAL_RATE } from './constants'
+import { equatorialToJ2000 } from './coordinate'
 import { computeRemainingBytes, type FitsHeader, FitsKeywordWriter } from './fits'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import type { Camera, Client, Device, Focuser, Mount, Rotator, Wheel } from './indi.device'
@@ -190,18 +191,22 @@ abstract class AlpacaDevice {
 	}
 
 	get activeMount() {
+		if (!this.snoopDevices.elements.ACTIVE_TELESCOPE.value) return undefined
 		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value, 'MOUNT') as Mount | undefined
 	}
 
 	get activeWheel() {
+		if (!this.snoopDevices.elements.ACTIVE_FILTER.value) return undefined
 		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_FILTER.value, 'WHEEL') as Wheel | undefined
 	}
 
 	get activeFocuser() {
+		if (!this.snoopDevices.elements.ACTIVE_FOCUSER.value) return undefined
 		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_FOCUSER.value, 'FOCUSER') as Focuser | undefined
 	}
 
 	get activeRotator() {
+		if (!this.snoopDevices.elements.ACTIVE_ROTATOR.value) return undefined
 		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_ROTATOR.value, 'ROTATOR') as Rotator | undefined
 	}
 
@@ -781,6 +786,15 @@ class AlpacaCamera extends AlpacaDevice {
 			case 'CCD_ABORT_EXPOSURE':
 				if (vector.elements.ABORT === true) void this.api.stopExposure(this.id)
 				break
+			case 'CCD_FRAME_TYPE':
+				for (const key in vector.elements) {
+					if (key in this.frameType.elements && vector.elements[key] === true) {
+						this.updatePropertyValue(this.frameType, key, true) && this.sendSetProperty(this.frameType)
+						break
+					}
+				}
+
+				break
 		}
 	}
 
@@ -790,9 +804,11 @@ class AlpacaCamera extends AlpacaDevice {
 		switch (vector.name) {
 			case 'CCD_EXPOSURE':
 				if (vector.elements.CCD_EXPOSURE_VALUE) {
-					this.state.ExposureDuration = vector.elements.CCD_EXPOSURE_VALUE
-					this.state.ExposureStarted = true
-					void this.api.startExposure(this.id, vector.elements.CCD_EXPOSURE_VALUE, this.isLight)
+					this.state.ExposureDuration = Math.max(this.exposure.elements.CCD_EXPOSURE_VALUE.min, Math.min(vector.elements.CCD_EXPOSURE_VALUE, this.exposure.elements.CCD_EXPOSURE_VALUE.max))
+					void this.api.startExposure(this.id, this.state.ExposureDuration, this.isLight).then((ok) => {
+						if (ok === true) this.state.ExposureStarted = true
+						else this.updatePropertyState(this.exposure, 'Alert') && this.sendSetProperty(this.exposure)
+					}, console.error)
 				}
 
 				break
@@ -851,7 +867,8 @@ class AlpacaCamera extends AlpacaDevice {
 		if (buffer) {
 			this.image.state = 'Ok'
 			const camera = this.client.provider.get(this.client, this.device.DeviceName, 'CAMERA') as Camera
-			const fits = makeFitsFromImageBytes(buffer, camera, this.activeMount)
+			const lastExposureDuration = this.state.ExposureDuration // await this.api.getLastExposureDuration(this.id)
+			const fits = makeFitsFromImageBytes(buffer, camera, this.activeMount, this.activeWheel, this.activeFocuser, this.activeRotator, lastExposureDuration)
 			this.image.elements.CCD1.value = fits
 		} else {
 			this.image.state = 'Alert'
@@ -1641,7 +1658,7 @@ function makeBlobVector(device: string, name: string, label: string, group: stri
 	return { type: 'BLOB', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
-export function makeFitsFromImageBytes(data: ArrayBuffer, camera?: Camera, mount?: Mount) {
+export function makeFitsFromImageBytes(data: ArrayBuffer, camera?: Camera, mount?: Mount, wheel?: Wheel, focuser?: Focuser, rotator?: Rotator, lastExposureDuration: number = 0) {
 	const metadataArray = new Int32Array(data, 0, 44)
 	const metadata: ImageBytesMetadata = {
 		MetadataVersion: metadataArray[0],
@@ -1661,38 +1678,58 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, camera?: Camera, mount
 	const NumY = metadata.Dimension2
 	const NumZ = metadata.Dimension3 === 3 ? 3 : 1
 
+	let rightAscension: Angle | undefined
+	let declination: Angle | undefined
+
+	if (mount) {
+		;[rightAscension, declination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination)
+	}
+
+	// https://github.com/indilib/indi/blob/3b0cdcb6caf41c859b77c6460981772fe8d5d22d/libs/indibase/indiccd.cpp#L2028
 	const header: FitsHeader = {
-		SIMPLE: true, // File does conform to FITS standard
-		BITPIX: 16, // Number of bits per data pixel
-		NAXIS: metadata.Rank, // Number of data axes
-		NAXIS1: NumX, // Length of data axis 1
-		NAXIS2: NumY, // Length of data axis 2
-		NAXIS3: NumZ === 3 ? 3 : undefined, // Length of data axis 3
-		EXTEND: true, // FITS dataset may contain extensions
-		BZERO: 32768, // Offset data range to that of unsigned short
-		BSCALE: 1, // Default scaling factor
-		ROWORDER: 'TOP-DOWN', // Row Order
-		INSTRUME: camera?.name, // Camera Name
-		TELESCOP: mount?.name, // Telescope name
-		EXPTIME: 6.0e1, // TODO: Total Exposure Time (s)
-		'CCD-TEMP': camera?.temperature, // CCD Temperature (Celsius)
-		PIXSIZE1: camera?.pixelSize.x, // Pixel Size 1 (microns)
-		PIXSIZE2: camera?.pixelSize.y, // Pixel Size 2 (microns)
-		XBINNING: camera?.bin.x.value, // Binning factor in width
-		YBINNING: camera?.bin.y.value, // Binning factor in height
-		XPIXSZ: camera ? camera.pixelSize.x * camera.bin.x.value : undefined, // X binned pixel size in microns
-		YPIXSZ: camera ? camera.pixelSize.y * camera.bin.y.value : undefined, // Y binned pixel size in microns
-		FRAME: 'Light', //  TODO: Frame Type
-		SITELAT: mount ? toDeg(mount.geographicCoordinate.latitude) : undefined, // Latitude of the imaging site in degrees
-		SITELONG: mount ? toDeg(mount.geographicCoordinate.longitude) : undefined, // Longitude of the imaging site in degrees
-		OBJCTRA: mount ? formatRA(mount.equatorialCoordinate.rightAscension) : undefined, // Object J2000 RA in Hours
-		OBJCTDEC: mount ? formatDEC(mount.equatorialCoordinate.declination) : undefined, // Object J2000 DEC in Degrees
-		RA: mount ? toDeg(mount.equatorialCoordinate.rightAscension) : undefined, // Object J2000 RA in Degrees
-		DEC: mount ? toDeg(mount.equatorialCoordinate.declination) : undefined, // Object J2000 DEC in Degrees
-		EQUINOX: 2000, // Equinox
-		'DATE-OBS': formatTemporal(Date.now(), 'YYYY-MM-DDTHH:mm:ss.SSS'), // UTC start date of observation
-		GAIN: camera?.gain.value, // Gain
-		OFFSET: camera?.offset.value, // Offset
+		SIMPLE: true,
+		BITPIX: 16,
+		NAXIS: metadata.Rank,
+		NAXIS1: NumX,
+		NAXIS2: NumY,
+		NAXIS3: NumZ === 3 ? 3 : undefined,
+		EXTEND: true,
+		BZERO: 32768,
+		BSCALE: 1,
+		ROWORDER: 'TOP-DOWN',
+		INSTRUME: camera?.name,
+		TELESCOP: mount?.name,
+		EXPTIME: lastExposureDuration,
+		DARKTIME: camera?.frameType === 'DARK' ? lastExposureDuration : undefined,
+		'CCD-TEMP': camera?.hasCooler ? camera.temperature : undefined,
+		PIXSIZE1: camera?.pixelSize.x,
+		PIXSIZE2: camera?.pixelSize.y,
+		XBINNING: camera?.bin.x.value,
+		YBINNING: camera?.bin.y.value,
+		XPIXSZ: camera ? camera.pixelSize.x * camera.bin.x.value : undefined,
+		YPIXSZ: camera ? camera.pixelSize.y * camera.bin.y.value : undefined,
+		FRAME: camera?.frameType === 'BIAS' ? 'Bias' : camera?.frameType === 'FLAT' ? 'Flat' : camera?.frameType === 'DARK' ? 'Dark' : 'Light',
+		IMAGETYP: camera?.frameType === 'BIAS' ? 'Bias Frame' : camera?.frameType === 'FLAT' ? 'Flat Frame' : camera?.frameType === 'DARK' ? 'Dark Frame' : 'Light Frame',
+		FILTER: wheel ? wheel.names[wheel.position] : undefined,
+		XBAYROFF: camera?.cfa.offsetX,
+		YBAYROFF: camera?.cfa.offsetY,
+		BAYERPAT: camera?.cfa.type,
+		ROTATANG: rotator ? toDeg(rotator.angle.value) : undefined,
+		FOCUSPOS: focuser?.position.value,
+		FOCUSTEM: focuser?.hasThermometer ? focuser.temperature : undefined,
+		SITELAT: mount ? toDeg(mount.geographicCoordinate.latitude) : undefined,
+		SITELONG: mount ? toDeg(mount.geographicCoordinate.longitude) : undefined,
+		OBJCTRA: rightAscension !== undefined ? formatRA(rightAscension) : undefined,
+		OBJCTDEC: declination !== undefined ? formatDEC(declination) : undefined,
+		RA: rightAscension !== undefined ? toDeg(rightAscension) : undefined,
+		DEC: declination !== undefined ? toDeg(declination) : undefined,
+		EQUINOX: 2000,
+		PIERSIDE: mount && mount.pierSide !== 'NEITHER' ? mount.pierSide : undefined,
+		'DATE-OBS': formatTemporal(Date.now() - Math.trunc(lastExposureDuration * 1000), 'YYYY-MM-DDTHH:mm:ss.SSS'),
+		'DATE-END': formatTemporal(Date.now(), 'YYYY-MM-DDTHH:mm:ss.SSS'),
+		GAIN: camera?.gain.value,
+		OFFSET: camera?.offset.value,
+		COMMENT: 'Generated by Nebulosa',
 		END: '',
 	}
 
