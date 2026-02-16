@@ -1263,33 +1263,19 @@ class AlpacaTelescope extends AlpacaDevice {
 			}
 			case 'GEOGRAPHIC_COORD':
 				if (vector.elements.LAT !== undefined && vector.elements.LONG !== undefined) {
-					const longitude = normalizeLongitude(vector.elements.LONG)
-					let updated = this.updatePropertyValue(this.geographicCoordinate, 'LAT', vector.elements.LAT)
-					updated = this.updatePropertyValue(this.geographicCoordinate, 'LONG', longitude) || updated
-					updated = this.updatePropertyValue(this.geographicCoordinate, 'ELEV', vector.elements.ELEV) || updated
-
-					if (updated) {
-						void this.api.setSiteLatitude(this.id, vector.elements.LAT)
-						void this.api.setSiteLongitude(this.id, longitude)
-						vector.elements.ELEV !== undefined && void this.api.setSiteElevation(this.id, vector.elements.ELEV)
-
-						this.enableEndpoints('Latitude', 'Longitude', 'Elevation')
-					}
+					void this.api.setSiteLatitude(this.id, vector.elements.LAT)
+					void this.api.setSiteLongitude(this.id, normalizeLongitude(vector.elements.LONG))
+					vector.elements.ELEV !== undefined && void this.api.setSiteElevation(this.id, vector.elements.ELEV)
+					this.enableEndpoints('Latitude', 'Longitude', 'Elevation')
 				}
 
 				break
 			case 'GUIDE_RATE':
 				if (this.state.CanSetGuideRate) {
-					let updated = this.updatePropertyValue(this.guideRate, 'GUIDE_RATE_WE', vector.elements.GUIDE_RATE_WE)
-					updated = this.updatePropertyValue(this.guideRate, 'GUIDE_RATE_NS', vector.elements.GUIDE_RATE_NS) || updated
-
-					if (updated) {
-						// Guide rate in deg/second
-						vector.elements.GUIDE_RATE_WE && void this.api.setGuideRateRightAscension(this.id, vector.elements.GUIDE_RATE_WE * (SIDEREAL_RATE / 3600))
-						vector.elements.GUIDE_RATE_NS && void this.api.setGuideRateDeclination(this.id, vector.elements.GUIDE_RATE_NS * (SIDEREAL_RATE / 3600))
-
-						this.enableEndpoints('GuideRateRA', 'GuideRateDEC')
-					}
+					// Guide rate in deg/second
+					vector.elements.GUIDE_RATE_WE && void this.api.setGuideRateRightAscension(this.id, vector.elements.GUIDE_RATE_WE * (SIDEREAL_RATE / 3600))
+					vector.elements.GUIDE_RATE_NS && void this.api.setGuideRateDeclination(this.id, vector.elements.GUIDE_RATE_NS * (SIDEREAL_RATE / 3600))
+					this.enableEndpoints('GuideRateRA', 'GuideRateDEC')
 				}
 
 				break
@@ -1302,14 +1288,11 @@ class AlpacaTelescope extends AlpacaDevice {
 		switch (vector.name) {
 			case 'TIME_UTC':
 				if (vector.elements.UTC && vector.elements.UTC.length >= 19) {
+					this.updatePropertyValue(this.time, 'OFFSET', vector.elements.OFFSET)
 					const utc = vector.elements.UTC.substring(0, 19)
-					let updated = this.updatePropertyValue(this.time, 'UTC', utc)
-					updated = this.updatePropertyValue(this.time, 'OFFSET', vector.elements.OFFSET) || updated
-
-					if (updated) {
-						void this.api.setUtcDate(this.id, `${utc}Z`)
-						this.state.LastUTCDateUpdate = 0
-					}
+					void this.api.setUtcDate(this.id, `${utc}Z`)
+					this.state.LastUTCDateUpdate = 0
+					this.enableEndpoints('UTCDate')
 				}
 
 				break

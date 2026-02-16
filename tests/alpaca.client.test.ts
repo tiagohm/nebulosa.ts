@@ -239,6 +239,20 @@ describe.skipIf(process.platform !== 'win32')('client', async () => {
 
 		await Bun.sleep(2000)
 
+		expect(mount.canAbort).toBeTrue()
+		expect(mount.canFindHome).toBeFalse()
+		expect(mount.canGoTo).toBeTrue()
+		expect(mount.canHome).toBeFalse()
+		expect(mount.canMove).toBeTrue()
+		expect(mount.canPark).toBeTrue()
+		expect(mount.canPulseGuide).toBeTrue()
+		expect(mount.canSetGuideRate).toBeTrue()
+		expect(mount.canSetPierSide).toBeTrue()
+		expect(mount.canSync).toBeTrue()
+		expect(mount.canTracking).toBeTrue()
+		expect(mount.hasGuideRate).toBeTrue()
+		expect(mount.hasPierSide).toBeTrue()
+
 		mountManager.geographicCoordinate(mount, { latitude: deg(11), longitude: deg(-44), elevation: 0 })
 		await expectUntil(mount.geographicCoordinate, 'latitude', 0.19198621771937624)
 		await expectUntil(mount.geographicCoordinate, 'longitude', -0.7679448708775052)
