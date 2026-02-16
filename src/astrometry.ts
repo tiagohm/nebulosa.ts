@@ -151,7 +151,7 @@ export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time,
 // https://bitbucket.org/Isbeorn/nina/src/master/NINA.Astrometry/AstroUtil.cs
 // Computes the refracted altitude given the true altitude and refraction parameters
 export function refractedAltitude(altitude: Angle, refraction: RefractionParameters, iterationIncrementInArcsec = 1, maxIterations = 1000) {
-	if (altitude < 0) return altitude
+	if (altitude < Number.EPSILON) return altitude
 
 	const pressure = refraction.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure
 	const temperature = refraction.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature

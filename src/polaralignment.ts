@@ -1,9 +1,9 @@
-import { type Angle, arcsec, normalizePI } from './angle'
+import { type Angle, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from './astrometry'
-import { PI, SIDEREAL_RATE, TAU } from './constants'
+import { ASEC2RAD, DAYSEC, PI, SIDEREAL_RATE, TAU } from './constants'
 import { equatorialFromJ2000, type HorizontalCoordinate } from './coordinate'
 import { eraC2s, eraS2c } from './erfa'
-import { type Time, timeToUnix } from './time'
+import { type Time, timeSubtract } from './time'
 import { type Vec3, vecNegateMut, vecPlane, vecRotateByRodrigues, vecRotY, vecRotZ } from './vec3'
 
 export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoordinate> {
@@ -57,10 +57,10 @@ export function threePointPolarAlignmentAfterAdjustment(result: ThreePointPolarA
 	// Mount is tracking over an unaligned polar axis.
 	// Figure out what the ra/dec would be if the user hadn't modified the knobs.
 	// That is, just rotate the 3rd measurement point around the mount's original RA axis.
-	const p3Seconds = timeToUnix(to[2]) - timeToUnix(from[2]) // Time since third point in seconds
+	const p3Seconds = timeSubtract(to[2], from[2]) * DAYSEC // Time since third point in seconds
 
 	// Angle corresponding to that interval assuming the sidereal rate.
-	const p3Angle = arcsec(-SIDEREAL_RATE * p3Seconds) // Negative because the sky appears to rotate westward
+	const p3Angle = -SIDEREAL_RATE * ASEC2RAD * p3Seconds // Negative because the sky appears to rotate westward
 
 	// Rotate the original 3rd point around that axis, simulating the mount's tracking movements (mount is actually unaligned).
 	const p3Point = vecRotateByRodrigues(eraS2c(from[0], from[1]), result.pole, p3Angle)
@@ -86,7 +86,7 @@ export function threePointPolarAlignmentAfterAdjustment(result: ThreePointPolarA
 	const azimuthError = normalizePI(azimuth)
 	const altitudeError = altitude - latitude
 
-	return { azimuth, altitude, pole: result.pole, azimuthError, altitudeError, azimuthAdjustment, altitudeAdjustment }
+	return { azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment, altitudeAdjustment }
 }
 
 export class ThreePointPolarAlignment {
@@ -121,7 +121,6 @@ export class ThreePointPolarAlignment {
 		this.position = 0
 		this.initialError = false
 		this.currentError = false
-		this.points.length = 0
 	}
 }
 
@@ -145,7 +144,7 @@ function findSmallestThetaY(from: Vec3, goal: Vec3): Angle | false {
 
 	if (Math.abs(C) > D + 1e-6 || D === 0) {
 		console.debug('no solution: |C| > D')
-		return 0
+		return false
 	}
 
 	const phi = Math.atan2(B, A) // range is -pi to pi
