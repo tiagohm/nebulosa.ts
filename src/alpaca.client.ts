@@ -145,7 +145,7 @@ const GENERAL_INFO = 'General Info'
 
 interface AlpacaClientDeviceState {
 	readonly Connected: boolean
-	readonly DeviceState?: readonly AlpacaStateItem[]
+	DeviceState?: readonly AlpacaStateItem[]
 	Step: number
 }
 
@@ -156,7 +156,7 @@ abstract class AlpacaDevice {
 	protected readonly properties = new Set<DefVector & { type: Uppercase<VectorType> }>()
 
 	protected abstract readonly api: AlpacaDeviceApi
-	protected abstract readonly state: { Connected: boolean; DeviceState?: readonly AlpacaStateItem[]; Step: number }
+	protected abstract readonly state: AlpacaClientDeviceState
 	protected abstract readonly initialEndpoints: readonly string[] // Endpoints used by step 1
 	protected abstract readonly stateEndpoints: readonly string[] // Used when DeviceState is not supported
 	protected readonly onConnectEndpoints: readonly string[] = [] // Endpoints should run after device is connected
@@ -166,7 +166,7 @@ abstract class AlpacaDevice {
 	protected readonly connection = makeSwitchVector('', 'CONNECTION', 'Connection', MAIN_CONTROL, 'OneOfMany', 'rw', ['CONNECT', 'Connect', false], ['DISCONNECT', 'Disconnect', true])
 	protected readonly snoopDevices = makeTextVector('', 'ACTIVE_DEVICES', 'Snoop devices', MAIN_CONTROL, 'rw', ['ACTIVE_TELESCOPE', 'Mount', ''], ['ACTIVE_FOCUSER', 'Focuser', ''], ['ACTIVE_FILTER', 'Filter Wheel', ''], ['ACTIVE_ROTATOR', 'Rotator', ''])
 
-	protected hasDeviceState = true
+	protected hasDeviceState: 0 | boolean = 0 // 0 = not checked yet
 
 	constructor(
 		readonly client: AlpacaClient,
@@ -285,16 +285,21 @@ abstract class AlpacaDevice {
 		this.runner.registerEndpoint('DeviceState', this.api.deviceState.bind(this.api, this.id), false)
 	}
 
-	protected onConnect() {
+	protected reset() {
 		this.state.Step = 0
+		this.hasDeviceState = 0
+		this.state.DeviceState = undefined
+	}
+
+	protected onConnect() {
+		this.reset()
 		this.enableEndpoints('DeviceState')
 		this.enableEndpoints(...this.initialEndpoints)
 		this.enableEndpoints(...this.onConnectEndpoints)
 	}
 
 	protected onDisconnect() {
-		this.state.Step = 0
-		this.state.DeviceState = undefined
+		this.reset()
 		this.disableEndpoints('DeviceState')
 		this.disableEndpoints(...this.initialEndpoints)
 		this.disableEndpoints(...this.stateEndpoints)
@@ -327,19 +332,26 @@ abstract class AlpacaDevice {
 
 		if (Connected) {
 			if (Step === 0) {
-				if (this.hasDeviceState && DeviceState === undefined) {
+				if (this.hasDeviceState === 0) {
+					// Step 0 will run again to read the device state
+					this.hasDeviceState = true
+					return
+				}
+
+				if (this.hasDeviceState === true && DeviceState === undefined) {
 					this.hasDeviceState = false
 					this.enableEndpoints(...this.stateEndpoints)
 					this.disableEndpoints('DeviceState')
 					this.deviceStateHasBeenDisabled()
-					// Step 0 will be ran again to move to step 1
+					console.info(this.device.DeviceName, 'does not support DeviceState')
+					// Step 0 will run again to move to step 1
 					return
 				}
 
 				this.state.Step = 1
 			}
 
-			if (this.hasDeviceState) {
+			if (this.hasDeviceState === true) {
 				for (const item of DeviceState!) {
 					this.state[item.Name as never] = item.Value as never
 				}

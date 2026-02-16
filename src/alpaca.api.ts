@@ -823,8 +823,9 @@ function makeFormDataFromParams(params: Record<string, string | number | boolean
 }
 
 async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT', body?: Record<string, string | number | boolean>, headers?: HeadersInit, defaultValue?: T) {
+	url = new URL(path, url)
+
 	try {
-		url = new URL(path, url)
 		const response = await fetch(url, { method, headers, body: body && method === 'PUT' ? makeFormDataFromParams(body) : undefined })
 
 		const text = await response.text()
@@ -845,7 +846,7 @@ async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT'
 			console.error('request failed:', url.href, text)
 		}
 	} catch (e) {
-		console.error('failed to fetch:', url, e)
+		console.error('failed to fetch:', url.href, e)
 	}
 
 	return undefined

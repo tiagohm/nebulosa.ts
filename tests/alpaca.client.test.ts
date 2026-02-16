@@ -1,31 +1,32 @@
 import { describe, expect, test } from 'bun:test'
-import { makeFitsFromImageBytes } from '../src/alpaca.client'
+import { AlpacaClient, type AlpacaClientHandler, makeFitsFromImageBytes } from '../src/alpaca.client'
 import { deg, hour } from '../src/angle'
 import type { FitsHeader } from '../src/fits'
 import { readImageFromBuffer } from '../src/image'
 import { debayer } from '../src/image.transformation'
-import { DEFAULT_CAMERA, DEFAULT_MOUNT } from '../src/indi.device'
+import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_MOUNT, type Device, type DeviceType } from '../src/indi.device'
+import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import { saveImageAndCompareHash } from './image.util'
 
-const camera = structuredClone(DEFAULT_CAMERA)
-const mount = structuredClone(DEFAULT_MOUNT)
-
-camera.name = 'Camera'
-camera.exposure.value = 5.04
-camera.pixelSize.x = 2.5
-camera.pixelSize.y = 2.5
-camera.bin.x.value = 2
-camera.bin.y.value = 2
-camera.temperature = 25
-camera.gain.value = 8
-camera.offset.value = 3
-mount.name = 'Mount'
-mount.geographicCoordinate.longitude = deg(-45)
-mount.geographicCoordinate.latitude = deg(-22)
-mount.equatorialCoordinate.rightAscension = hour(22)
-mount.equatorialCoordinate.declination = deg(-60)
-
 describe('make fits from image bytes', () => {
+	const camera = structuredClone(DEFAULT_CAMERA)
+	const mount = structuredClone(DEFAULT_MOUNT)
+
+	camera.name = 'Camera'
+	camera.exposure.value = 5.04
+	camera.pixelSize.x = 2.5
+	camera.pixelSize.y = 2.5
+	camera.bin.x.value = 2
+	camera.bin.y.value = 2
+	camera.temperature = 25
+	camera.gain.value = 8
+	camera.offset.value = 3
+	mount.name = 'Mount'
+	mount.geographicCoordinate.longitude = deg(-45)
+	mount.geographicCoordinate.latitude = deg(-22)
+	mount.equatorialCoordinate.rightAscension = hour(22)
+	mount.equatorialCoordinate.declination = deg(-60)
+
 	test('unsigned 16-bit mono', async () => {
 		const bytes = Bun.file('data/Sky Simulator.8.1.dat')
 		const fits = makeFitsFromImageBytes(await bytes.arrayBuffer(), camera, mount)
@@ -43,6 +44,158 @@ describe('make fits from image bytes', () => {
 		expectHeader(image!.header)
 		await saveImageAndCompareHash(debayer(image!, 'RGGB')!, 'alpaca.8.3', '242f9a2336cb217b83570bb51f8616f2')
 	})
+})
+
+const cameraManager = new CameraManager()
+const mountManager = new MountManager()
+const wheelManager = new WheelManager()
+const focuserManager = new FocuserManager()
+const flatPanelManager = new FlatPanelManager()
+const coverManager = new CoverManager()
+
+const guideOutput = new GuideOutputManager({
+	get: (client: Client, name: string) => {
+		return mountManager.get(client, name) ?? cameraManager.get(client, name)
+	},
+})
+
+const thermometerManager = new ThermometerManager({
+	get: (client: Client, name: string) => {
+		return focuserManager.get(client, name) ?? cameraManager.get(client, name)
+	},
+})
+
+const handler: AlpacaClientHandler = {
+	textVector: (client, message, tag) => {
+		cameraManager.textVector(client, message, tag)
+		mountManager.textVector(client, message, tag)
+		wheelManager.textVector(client, message, tag)
+		focuserManager.textVector(client, message, tag)
+		flatPanelManager.textVector(client, message, tag)
+		coverManager.textVector(client, message, tag)
+	},
+	numberVector: (client, message, tag) => {
+		cameraManager.numberVector(client, message, tag)
+		mountManager.numberVector(client, message, tag)
+		wheelManager.numberVector(client, message, tag)
+		focuserManager.numberVector(client, message, tag)
+		flatPanelManager.numberVector(client, message, tag)
+		guideOutput.numberVector(client, message, tag)
+		thermometerManager.numberVector(client, message, tag)
+	},
+	switchVector: (client, message, tag) => {
+		cameraManager.switchVector(client, message, tag)
+		mountManager.switchVector(client, message, tag)
+		wheelManager.switchVector(client, message, tag)
+		focuserManager.switchVector(client, message, tag)
+		flatPanelManager.switchVector(client, message, tag)
+		coverManager.switchVector(client, message, tag)
+		guideOutput.switchVector(client, message, tag)
+		thermometerManager.switchVector(client, message, tag)
+	},
+	blobVector: (client, message, tag) => {
+		cameraManager.blobVector(client, message, tag)
+	},
+}
+
+const deviceProvider: DeviceProvider<Device> = {
+	get: (client: Client, name: string, type?: DeviceType) => {
+		if (type === 'CAMERA') return cameraManager.get(client, name)
+		else if (type === 'MOUNT') return mountManager.get(client, name)
+		else if (type === 'FOCUSER') return focuserManager.get(client, name)
+		else if (type === 'WHEEL') return wheelManager.get(client, name)
+		return undefined
+	},
+}
+
+// ASCOM Omni-Simulators
+describe.skipIf(process.platform !== 'win32')('client', async () => {
+	const client = new AlpacaClient('http://localhost:32323', { handler }, deviceProvider)
+
+	if (!(await client.start())) return
+
+	test('camera', async () => {
+		const camera = cameraManager.get(client, 'Alpaca Camera Sim')!
+
+		let image: string | Buffer | undefined
+
+		cameraManager.addHandler({
+			added: (device) => {},
+			removed: (device) => {},
+			blobReceived: (device, data) => {
+				image = data
+			},
+		})
+
+		expect(camera).toBeDefined()
+		expect(camera[CLIENT]).toBe(client)
+
+		cameraManager.connect(camera)
+		await expectUntil(camera, 'connected', true)
+
+		await Bun.sleep(2000)
+
+		expect(camera.canAbort).toBeTrue()
+		expect(camera.canBin).toBeTrue()
+		expect(camera.canPulseGuide).toBeTrue()
+		expect(camera.canSetGuideRate).toBeFalse()
+		expect(camera.canSetTemperature).toBeTrue()
+		expect(camera.canSubFrame).toBeTrue()
+		expect(camera.hasCooler).toBeTrue()
+		expect(camera.hasCoolerControl).toBeTrue()
+		expect(camera.hasGuideRate).toBeFalse()
+		expect(camera.hasThermometer).toBeTrue()
+
+		cameraManager.bin(camera, 2, 2)
+		await expectUntil(camera.bin.x, 'value', 2)
+		await expectUntil(camera.bin.y, 'value', 2)
+
+		cameraManager.cooler(camera, true)
+		await expectUntil(camera, 'cooler', true)
+
+		// const temp = Math.trunc(5 + Math.random() * 5)
+		// cameraManager.temperature(camera, temp)
+		// await expectUntil(camera, 'temperature', temp, 10000)
+
+		for (const format of camera.frameFormats) {
+			cameraManager.frameFormat(camera, format.name)
+			await expectUntil(camera, 'frameFormat', format.name)
+		}
+
+		for (const type of ['BIAS', 'FLAT', 'DARK', 'LIGHT'] as const) {
+			cameraManager.frameType(camera, type)
+			await expectUntil(camera, 'frameType', type)
+		}
+
+		const gainStep = Math.max(1, Math.trunc((camera.gain.max - camera.gain.min) / 10))
+		for (let i = camera.gain.min; i < camera.gain.max; i += gainStep) {
+			cameraManager.gain(camera, i)
+			await expectUntil(camera.gain, 'value', i)
+		}
+
+		const offsetStep = Math.max(1, Math.trunc((camera.offset.max - camera.offset.min) / 10))
+		for (let i = camera.offset.min; i < camera.offset.max; i += offsetStep) {
+			cameraManager.offset(camera, i)
+			await expectUntil(camera.offset, 'value', i)
+		}
+
+		cameraManager.frame(camera, 50, 50, 100, 100)
+		await expectUntil(camera.frame.x, 'value', 50)
+		await expectUntil(camera.frame.y, 'value', 50)
+		await expectUntil(camera.frame.width, 'value', 100)
+		await expectUntil(camera.frame.height, 'value', 100)
+
+		cameraManager.cooler(camera, false)
+		await expectUntil(camera, 'cooler', false)
+
+		cameraManager.startExposure(camera, 1)
+		await expectUntil(camera, 'exposuring', true)
+		await expectUntil(camera, 'exposuring', false)
+		expect(image).toBeDefined()
+
+		cameraManager.disconnect(camera)
+		await expectUntil(camera, 'connected', false)
+	}, 60000)
 })
 
 function expectNaxis(header: FitsHeader, naxis: number, naxis1: number, naxis2: number, naxis3: number | undefined) {
@@ -70,6 +223,18 @@ function expectHeader(header: FitsHeader) {
 	expect(header.GAIN).toBe(8)
 	expect(header.OFFSET).toBe(3)
 	expect(header['CCD-TEMP']).toBe(25)
+}
+
+async function expectUntil<D, K extends keyof D>(device: D, key: K, value: D[K], timeout: number = 5000) {
+	while (timeout > 0 && device[key] !== value) {
+		await Bun.sleep(100)
+		timeout -= 100
+	}
+
+	if (timeout <= 0) {
+		console.error('%s is expected %s but got %s after timed out', key, value, device[key])
+		expect(timeout).toBeGreaterThan(0)
+	}
 }
 
 test.skip('download from Sky Simulator', async () => {
