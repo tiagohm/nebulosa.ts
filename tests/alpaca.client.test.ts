@@ -6,6 +6,7 @@ import { readImageFromBuffer } from '../src/image'
 import { debayer } from '../src/image.transformation'
 import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_MOUNT, type Device, type DeviceType } from '../src/indi.device'
 import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import { roundToNthDecimal } from '../src/math'
 import { saveImageAndCompareHash } from './image.util'
 
 describe('make fits from image bytes', () => {
@@ -196,6 +197,71 @@ describe.skipIf(process.platform !== 'win32')('client', async () => {
 		cameraManager.disconnect(camera)
 		await expectUntil(camera, 'connected', false)
 	}, 60000)
+
+	test('mount', async () => {
+		const mount = mountManager.get(client, 'Alpaca Telescope Simulator')!
+
+		expect(mount).toBeDefined()
+		expect(mount[CLIENT]).toBe(client)
+
+		mountManager.connect(mount)
+		await expectUntil(mount, 'connected', true)
+
+		await Bun.sleep(2000)
+
+		mountManager.geographicCoordinate(mount, { latitude: deg(11), longitude: deg(-44), elevation: 0 })
+		await expectUntil(mount.geographicCoordinate, 'latitude', 0.19198621771937624)
+		await expectUntil(mount.geographicCoordinate, 'longitude', -0.7679448708775052)
+		await expectUntil(mount.geographicCoordinate, 'elevation', 0)
+
+		mountManager.unpark(mount)
+		await expectUntil(mount, 'parked', false)
+
+		mountManager.tracking(mount, true)
+		await expectUntil(mount, 'tracking', true)
+
+		mountManager.syncTo(mount, hour(8), deg(-12))
+		await expectUntil(mount.equatorialCoordinate, 'rightAscension', 2.09, undefined, (a, b) => roundToNthDecimal(a, 2) === b)
+		await expectUntil(mount.equatorialCoordinate, 'declination', -0.21, undefined, (a, b) => roundToNthDecimal(a, 2) === b)
+
+		mountManager.goTo(mount, hour(5), deg(56))
+		await expectUntil(mount, 'slewing', true)
+		await expectUntil(mount, 'slewing', false, 15000)
+		await expectUntil(mount.equatorialCoordinate, 'rightAscension', 1.31, undefined, (a, b) => roundToNthDecimal(a, 2) === b)
+		await expectUntil(mount.equatorialCoordinate, 'declination', 0.98, undefined, (a, b) => roundToNthDecimal(a, 2) === b)
+
+		for (const mode of ['KING', 'SOLAR', 'LUNAR', 'SIDEREAL'] as const) {
+			mountManager.trackMode(mount, mode)
+			await expectUntil(mount, 'trackMode', mode)
+		}
+
+		for (const rate of mount.slewRates) {
+			mountManager.slewRate(mount, rate)
+			await expectUntil(mount, 'slewRate', rate.name)
+		}
+
+		for (const move of ['moveNorth', 'moveSouth', 'moveEast', 'moveWest'] as const) {
+			mountManager[move](mount, true)
+			await expectUntil(mount, 'slewing', true)
+			mountManager[move](mount, false)
+			await expectUntil(mount, 'slewing', false)
+		}
+
+		mountManager.park(mount)
+		await expectUntil(mount, 'slewing', true)
+		await expectUntil(mount, 'slewing', false, 15000)
+		await expectUntil(mount, 'parked', true)
+
+		const utc = Math.trunc(Date.now() / 1000) * 1000 - 1440000
+		mountManager.time(mount, { utc: utc, offset: -180 })
+		await expectUntil(mount.time, 'utc', utc)
+		await expectUntil(mount.time, 'offset', -180)
+
+		// TODO: moveTo passing fixed time
+
+		mountManager.tracking(mount, false)
+		await expectUntil(mount, 'tracking', false)
+	}, 60000)
 })
 
 function expectNaxis(header: FitsHeader, naxis: number, naxis1: number, naxis2: number, naxis3: number | undefined) {
@@ -225,8 +291,8 @@ function expectHeader(header: FitsHeader) {
 	expect(header['CCD-TEMP']).toBe(25)
 }
 
-async function expectUntil<D, K extends keyof D>(device: D, key: K, value: D[K], timeout: number = 5000) {
-	while (timeout > 0 && device[key] !== value) {
+async function expectUntil<D, K extends keyof D>(device: D, key: K, value: D[K], timeout: number = 5000, comparator: (a: D[K], b: D[K]) => boolean = (a, b) => a === b) {
+	while (timeout > 0 && !comparator(device[key], value)) {
 		await Bun.sleep(100)
 		timeout -= 100
 	}

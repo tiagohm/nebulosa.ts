@@ -838,15 +838,15 @@ async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT'
 					return json.Value ?? defaultValue
 				}
 
-				console.error('response error:', url.href, json.ErrorNumber, json.ErrorMessage)
+				console.error('response error:', method, url.href, json.ErrorNumber, json.ErrorMessage)
 			} else {
-				console.error('request without response:', url.href)
+				console.error('request without response:',method,  url.href)
 			}
 		} else {
-			console.error('request failed:', url.href, text)
+			console.error('request failed:', method, url.href, text)
 		}
 	} catch (e) {
-		console.error('failed to fetch:', url.href, e)
+		console.error('failed to fetch:', method, url.href, e)
 	}
 
 	return undefined

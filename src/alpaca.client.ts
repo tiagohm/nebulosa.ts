@@ -911,7 +911,8 @@ interface AlpacaClientTelescopeState extends AlpacaClientDeviceState {
 	TrackingRate?: AlpacaTelescopeTrackingRate
 	readonly CanSetSideOfPier: boolean
 	readonly SideOfPier?: AlpacaTelescopePierSide
-	readonly UTCDate?: string
+	UTCDate?: string
+	LastUTCDateUpdate: number
 	Latitude?: number
 	Longitude?: number
 	Elevation?: number
@@ -923,7 +924,7 @@ class AlpacaTelescope extends AlpacaDevice {
 	protected readonly api: AlpacaTelescopeApi
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
 	// biome-ignore format: too long!
-	protected readonly state: AlpacaClientTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0 }
+	protected readonly state: AlpacaClientTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0, LastUTCDateUpdate: 0 }
 	protected readonly initialEndpoints = ['CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier'] as const
 	protected readonly stateEndpoints = ['AtPark', 'Declination', 'IsPulseGuiding', 'RightAscension', 'SideOfPier', 'Slewing', 'Tracking'] as const
 	protected readonly onConnectEndpoints = ['TrackingRate', 'GuideRateRA', 'GuideRateDEC', 'Latitude', 'Longitude', 'Elevation'] as const
@@ -1066,8 +1067,13 @@ class AlpacaTelescope extends AlpacaDevice {
 			}
 
 			if (UTCDate) {
-				this.time.elements.UTC.value = UTCDate.substring(0, 19)
-				this.sendDefProperty(this.time)
+				const now = Date.now()
+
+				if (now - this.state.LastUTCDateUpdate >= 60000) {
+					this.state.LastUTCDateUpdate = now
+					this.time.elements.UTC.value = UTCDate.substring(0, 19)
+					this.sendDefProperty(this.time)
+				}
 			}
 
 			if (Latitude !== undefined && Longitude !== undefined) {
@@ -1127,6 +1133,12 @@ class AlpacaTelescope extends AlpacaDevice {
 				this.state.Latitude = undefined
 				this.state.Longitude = undefined
 				this.state.Elevation = undefined
+			}
+
+			if (UTCDate !== undefined) {
+				this.time.elements.UTC.value = UTCDate.substring(0, 19)
+				this.sendSetProperty(this.time)
+				this.state.UTCDate = undefined
 			}
 
 			let updated = this.updatePropertyState(this.equatorialCoordinate, Slewing ? 'Busy' : 'Idle')
@@ -1248,13 +1260,14 @@ class AlpacaTelescope extends AlpacaDevice {
 			}
 			case 'GEOGRAPHIC_COORD':
 				if (vector.elements.LAT !== undefined && vector.elements.LONG !== undefined) {
+					const longitude = normalizeLongitude(vector.elements.LONG)
 					let updated = this.updatePropertyValue(this.geographicCoordinate, 'LAT', vector.elements.LAT)
-					updated = this.updatePropertyValue(this.geographicCoordinate, 'LONG', vector.elements.LONG) || updated
+					updated = this.updatePropertyValue(this.geographicCoordinate, 'LONG', longitude) || updated
 					updated = this.updatePropertyValue(this.geographicCoordinate, 'ELEV', vector.elements.ELEV) || updated
 
 					if (updated) {
 						void this.api.setSiteLatitude(this.id, vector.elements.LAT)
-						void this.api.setSiteLongitude(this.id, vector.elements.LONG)
+						void this.api.setSiteLongitude(this.id, longitude)
 						vector.elements.ELEV !== undefined && void this.api.setSiteElevation(this.id, vector.elements.ELEV)
 
 						this.enableEndpoints('Latitude', 'Longitude', 'Elevation')
@@ -1291,8 +1304,8 @@ class AlpacaTelescope extends AlpacaDevice {
 					updated = this.updatePropertyValue(this.time, 'OFFSET', vector.elements.OFFSET) || updated
 
 					if (updated) {
-						this.sendSetProperty(this.time)
 						void this.api.setUtcDate(this.id, `${utc}Z`)
+						this.state.LastUTCDateUpdate = 0
 					}
 				}
 
@@ -1644,6 +1657,12 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 				break
 		}
 	}
+}
+
+function normalizeLongitude(angle: number) {
+	angle = angle % 360
+	if (angle > 180) angle -= 360
+	return angle
 }
 
 function makeSwitchVector(device: string, name: string, label: string, group: string, rule: SwitchRule, permission: PropertyPermission, ...properties: readonly [string, string, boolean][]): DefSwitchVector & { type: 'SWITCH' } {

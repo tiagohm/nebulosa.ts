@@ -11,7 +11,7 @@ import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, ValueType } from './indi.types'
 import type { GeographicCoordinate } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
-import { timeNow } from './time'
+import { type Time, timeNow } from './time'
 
 export interface DeviceHandler<D extends Device> {
 	readonly added: (device: D) => void
@@ -912,7 +912,7 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 	}
 
-	moveTo(mount: Mount, mode: 'goto' | 'flip' | 'sync', req: MountTargetCoordinate<string | Angle>, client = mount[CLIENT]!) {
+	moveTo(mount: Mount, mode: 'goto' | 'flip' | 'sync', req: MountTargetCoordinate<string | Angle>, client = mount[CLIENT]!, time?: Time) {
 		const { type } = req
 		const { x, y } = req[type]!
 		const equatorial: [number, number] = [typeof x === 'string' ? parseAngle(x, type === 'JNOW' || type === 'J2000' ? true : undefined)! : x, typeof y === 'string' ? parseAngle(y)! : y]
@@ -920,9 +920,9 @@ export class MountManager extends DeviceManager<Mount> {
 		if (type === 'J2000') {
 			Object.assign(equatorial, equatorialFromJ2000(...equatorial))
 		} else if (type === 'ALTAZ') {
-			Object.assign(equatorial, observedToCirs(...equatorial, timeNow(true), mount.geographicCoordinate))
+			Object.assign(equatorial, observedToCirs(...equatorial, time ?? timeNow(true), mount.geographicCoordinate))
 		} else if (type === 'ECLIPTIC') {
-			Object.assign(equatorial, eclipticToEquatorial(...equatorial))
+			Object.assign(equatorial, eclipticToEquatorial(...equatorial, time ?? timeNow(true)))
 		} else if (type === 'GALACTIC') {
 			Object.assign(equatorial, equatorialFromJ2000(...galacticToEquatorial(...equatorial)))
 		}
