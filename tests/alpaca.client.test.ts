@@ -36,7 +36,7 @@ describe('make fits from image bytes', () => {
 
 	test('unsigned 16-bit mono', async () => {
 		const bytes = Bun.file('data/Sky Simulator.8.1.dat')
-		const fits = makeFitsFromImageBytes(await bytes.arrayBuffer(), camera, mount)
+		const fits = makeFitsFromImageBytes(await bytes.arrayBuffer(), camera, mount, undefined, undefined, undefined, 5)
 		const image = await readImageFromBuffer(fits)
 		expectNaxis(image!.header, 2, 1280, 1024, undefined)
 		expectHeader(image!.header)
@@ -45,7 +45,7 @@ describe('make fits from image bytes', () => {
 
 	test('unsigned 16-bit color (bayered)', async () => {
 		const bytes = Bun.file('data/Sky Simulator.8.3.dat')
-		const fits = makeFitsFromImageBytes(await bytes.arrayBuffer(), camera, mount)
+		const fits = makeFitsFromImageBytes(await bytes.arrayBuffer(), camera, mount, undefined, undefined, undefined, 5)
 		const image = await readImageFromBuffer(fits)
 		expectNaxis(image!.header, 2, 1280, 1024, undefined)
 		expectHeader(image!.header)

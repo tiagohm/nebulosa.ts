@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { dms, hms } from '../src/angle'
-import { bitpixInBytes, computeRemainingBytes, declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, heightKeyword, observationDateKeyword, readFits, rightAscensionKeyword, widthKeyword, writeFits } from '../src/fits'
+import { bitpixInBytes, computeRemainingBytes, declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, heightKeyword, observationDateKeyword, readFits, rightAscensionKeyword, widthKeyword, writeFits } from '../src/fits'
+import { KEYWORDS } from '../src/fits.headers'
 import { bufferSink, bufferSource } from '../src/io'
 import { BITPIXES, CHANNELS, openFitsFromFileHandle } from './image.util'
 
-test('read and write', async () => {
+test('write fits', async () => {
 	const buffer = Buffer.alloc(1024 * 1024 * 18)
 
 	for (const bitpix of BITPIXES) {
@@ -31,7 +32,7 @@ test('read and write', async () => {
 	}
 }, 10000)
 
-test('reader', () => {
+test('read', () => {
 	const reader = new FitsKeywordReader()
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE * 2)
 	const offset = Math.trunc(Math.random() * FITS_HEADER_CARD_SIZE)
@@ -51,7 +52,7 @@ test('reader', () => {
 	expect(read('END')).toEqual(['END', undefined, undefined])
 })
 
-test('writer', () => {
+test('write', () => {
 	const writer = new FitsKeywordWriter()
 	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE)
 	const offset = Math.trunc(Math.random() * (FITS_BLOCK_SIZE / 2)) + 1
@@ -71,7 +72,32 @@ test('writer', () => {
 	expect(write(['END', undefined, undefined])).toBe('END                                                                             ')
 })
 
+test('write all', () => {
+	FitsKeywordWriter.keywords = KEYWORDS
+
+	const writer = new FitsKeywordWriter()
+	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE)
+
+	function write(card: FitsHeader, expectedLength: number = FITS_HEADER_CARD_SIZE) {
+		const n = writer.writeAll(card, buffer)
+		expect(n).toBe(expectedLength)
+		return buffer.toString('ascii', 0, n)
+	}
+
+	expect(write({ SIMPLE: true })).toBe('SIMPLE  =                    T / Primary HDU                                    ')
+	expect(write({ BITPIX: 16 })).toBe('BITPIX  =                   16 / Bits per data element                          ')
+	expect(write({ DATE: '2007-08-08T19:29:51.619' })).toBe("DATE    = '2007-08-08T19:29:51.619' / Date of file creation                     ")
+	expect(write({ CDELT1: -2.23453599999999991165e-4 })).toBe('CDELT1  = -2.23453599999999991165E-4 / Coordinate spacing along axis            ')
+	expect(write({ COMMENT: "FITS (Flexible Image Transport System) format is defined in 'Astronomy" })).toBe("COMMENT  FITS (Flexible Image Transport System) format is defined in 'Astronomy ")
+	expect(write({ COMMENT: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB' }, 160)).toBe(
+		'COMMENT  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA COMMENT  BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB ',
+	)
+	expect(write({ COMMENT: '/' })).toBe('COMMENT  /                                                                      ')
+})
+
 test('continue', async () => {
+	FitsKeywordWriter.keywords = {}
+
 	const source = Buffer.allocUnsafe(400)
 
 	source.write('SIMPLE  =                    T                                                  ', 0)
@@ -92,6 +118,8 @@ test('continue', async () => {
 })
 
 test('escape', async () => {
+	FitsKeywordWriter.keywords = {}
+
 	const source = Buffer.allocUnsafe(400)
 
 	source.write('SIMPLE  =                    T                                                  ', 0)

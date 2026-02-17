@@ -75,7 +75,8 @@
 				"noConsole": "off",
 				"useIterableCallbackReturn": "off",
 				"noNonNullAssertedOptionalChain": "error",
-				"noImportCycles": "error"
+				"noImportCycles": "error",
+				"useIsArray": "off"
 			},
 			"complexity": {
 				"noForEach": "off",
