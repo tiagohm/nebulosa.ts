@@ -44,16 +44,17 @@ export interface HipsSurvey {
 export async function hips2Fits(id: string, ra: Angle, dec: Angle, { width = 1200, height = 900, rotation = 0, fov = DEG2RAD, projection = 'TAN', coordSystem = 'icrs', format = 'fits', baseUrl = '', timeout = 60000 }: Hips2FitsOptions) {
 	const uri = `${baseUrl || HIPS2FITS_BASE_URL}hips-image-services/hips2fits?hips=${id}&ra=${toDeg(ra)}&dec=${toDeg(dec)}&width=${width}&height=${height}&projection=${projection}&fov=${toDeg(fov)}&coordsys=${coordSystem}&rotation_angle=${toDeg(rotation)}&format=${format}`
 	const signal = AbortSignal.timeout(timeout)
-	return await fetch(uri, { signal }).then((res) => res.blob())
+	const response = await fetch(uri, { signal })
+	return response.ok ? await response.blob() : undefined
 }
 
 // Fetches HiPS surveys with a minimum sky fraction.
 export async function hipsSurveys(minSkyFraction: number = 0.99, baseUrl?: string) {
 	const expr = encodeURIComponent(`ID=CDS* && hips_service_url*=*alasky* && dataproduct_type=image && moc_sky_fraction >= ${minSkyFraction} && obs_regime=Optical,Infrared,UV,Radio,X-ray,Gamma-ray && client_category=Image/*`)
 	const uri = `${baseUrl || HIPS2FITS_BASE_URL}MocServer/query?get=record&fmt=json&expr=${expr}`
-	return await fetch(uri)
-		.then((res) => res.json())
-		.then(mapHipsSurveys)
+	const response = await fetch(uri)
+	if (!response.ok) return []
+	return mapHipsSurveys(await response.json())
 }
 
 function mapHipsSurveys(survey: Record<string, unknown>[]) {

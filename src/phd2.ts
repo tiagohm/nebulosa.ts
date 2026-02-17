@@ -153,7 +153,7 @@ export interface PHD2LockPositionSetEvent extends PHD2Event<'LockPositionSet'> {
 
 export interface PHD2LoopingExposuresEvent extends PHD2Event<'LoopingExposures'> {
 	readonly Frame: number
-    readonly StarMass: number
+	readonly StarMass: number
 	readonly SNR: number
 	readonly HFD: number
 }

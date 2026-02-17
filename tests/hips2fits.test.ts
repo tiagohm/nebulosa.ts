@@ -7,7 +7,7 @@ import { bufferSource } from '../src/io'
 test.skip('fits', async () => {
 	const options: Hips2FitsOptions = { width: 400, height: 400, baseUrl: HIPS2FITS_ALTERNATIVE_URL }
 	const blob = await hips2Fits('CDS/P/DSS2/red', deg(201.36506337683), deg(-43.01911250808), options)
-	const buffer = Buffer.from(await blob.arrayBuffer())
+	const buffer = Buffer.from(await blob!.arrayBuffer())
 	const source = bufferSource(buffer)
 	const fits = await readFits(source)
 	const header = fits!.hdus[0].header

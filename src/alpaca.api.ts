@@ -840,7 +840,7 @@ async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT'
 
 				console.error('response error:', method, url.href, json.ErrorNumber, json.ErrorMessage)
 			} else {
-				console.error('request without response:',method,  url.href)
+				console.error('request without response:', method, url.href)
 			}
 		} else {
 			console.error('request failed:', method, url.href, text)
