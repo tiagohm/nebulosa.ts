@@ -1705,8 +1705,8 @@ export function eraApco13(
 
 // Determine the constants A and B in the atmospheric refraction model dZ = A tan Z + B tan^3 Z.
 // Z is the "observed" zenith distance (i.e. affected by refraction)
-// and dZ is what to add to Z to give the "topocentric" (i.e. in vacuo)
-// zenith distance.
+// and dZ is what to add to Z to give the "topocentric" (i.e. in vacuo) zenith distance.
+// Pressure in hPa (millibar), temperature in deg C, relative humidity in range (0-1) and wavelengths in microns.
 export function eraRefco(phpa: Pressure, tc: Temperature, rh: number, wl: number) {
 	if (phpa === 0) return [0, 0] as const
 
