@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { AlpacaClient, type AlpacaClientHandler, makeFitsFromImageBytes } from '../src/alpaca.client'
-import { deg, hour } from '../src/angle'
+import { deg, hour, parseAngle } from '../src/angle'
+import { equatorialFromJ2000 } from '../src/coordinate'
 import type { FitsHeader } from '../src/fits'
 import { readImageFromBuffer } from '../src/image'
 import { debayer } from '../src/image.transformation'
@@ -29,8 +30,9 @@ describe('make fits from image bytes', () => {
 	mount.connected = true
 	mount.geographicCoordinate.longitude = deg(-45)
 	mount.geographicCoordinate.latitude = deg(-22)
-	mount.equatorialCoordinate.rightAscension = hour(22)
-	mount.equatorialCoordinate.declination = deg(-60)
+	const JNOW = equatorialFromJ2000(parseAngle('21 58 07.63', true)!, parseAngle('-60 07 30.48')!)
+	mount.equatorialCoordinate.rightAscension = JNOW[0]
+	mount.equatorialCoordinate.declination = JNOW[1]
 
 	test('unsigned 16-bit mono', async () => {
 		const bytes = Bun.file('data/Sky Simulator.8.1.dat')
