@@ -109,7 +109,7 @@ export class AlpacaClient implements Client, Disposable {
 		for (const [, device] of this.devices) device.update()
 	}
 
-	stop() {
+	stop(server: boolean = false) {
 		if (this.timer) {
 			clearInterval(this.timer)
 			this.timer = undefined
@@ -117,7 +117,7 @@ export class AlpacaClient implements Client, Disposable {
 			for (const [, device] of this.devices) device.close()
 			this.devices.clear()
 
-			this.options?.handler?.close?.(this, false)
+			this.options?.handler?.close?.(this, server)
 		}
 	}
 
@@ -311,6 +311,10 @@ abstract class AlpacaDevice {
 
 	protected handleEndpointsAfterRun() {
 		const { Connected, Step } = this.state
+
+		if (Connected === undefined) {
+			return this.client.stop(true)
+		}
 
 		if (Connected !== this.isConnected) {
 			let updated = this.updatePropertyState(this.connection, 'Idle')
