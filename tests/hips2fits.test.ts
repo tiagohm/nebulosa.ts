@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { readFits } from '../src/fits'
-import { type Hips2FitsOptions, hips2Fits, hipsSurveys } from '../src/hips2fits'
+import { HIPS2FITS_ALTERNATIVE_URL, type Hips2FitsOptions, hips2Fits, hipsSurveys } from '../src/hips2fits'
 import { bufferSource } from '../src/io'
 
 test.skip('fits', async () => {
-	const options: Hips2FitsOptions = { width: 400, height: 400 }
+	const options: Hips2FitsOptions = { width: 400, height: 400, baseUrl: HIPS2FITS_ALTERNATIVE_URL }
 	const blob = await hips2Fits('CDS/P/DSS2/red', deg(201.36506337683), deg(-43.01911250808), options)
 	const buffer = Buffer.from(await blob.arrayBuffer())
 	const source = bufferSource(buffer)
