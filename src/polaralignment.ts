@@ -1,6 +1,6 @@
 import { type Angle, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters } from './astrometry'
-import { ASEC2RAD, DAYSEC, SIDEREAL_RATE } from './constants'
+import { ASEC2RAD, DAYSEC, PI, SIDEREAL_RATE } from './constants'
 import { equatorialFromJ2000, type HorizontalCoordinate } from './coordinate'
 import { eraC2s, eraS2c } from './erfa'
 import { type Time, timeSubtract } from './time'
@@ -33,21 +33,22 @@ export function polarAlignmentError(rightAscension: Angle, declination: Angle, l
 
 export function threePointPolarAlignmentError(p1: readonly [Angle, Angle, Time], p2: readonly [Angle, Angle, Time], p3: readonly [Angle, Angle, Time], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): ThreePointPolarAlignmentResult {
 	const location = p3[2].location!
+	const isNorthern = location.latitude > 0
 
 	// The normal vector is the direction of the mount pole
 	let pole = vecPlane(eraS2c(p1[0], p1[1]), eraS2c(p2[0], p2[1]), eraS2c(p3[0], p3[1]))
 
 	// Compute pole ⋅ Z to ensure the mount pole is pointing "up" (above the horizon)
-	// const isFlipped = (isNorthern && pole[0] < 0) || (!isNorthern && pole[0] > 0)
-	if (pole[2] < 0) pole = vecNegateMut(pole)
+	if ((pole[2] < 0 && isNorthern) || (pole[2] > 0 && !isNorthern)) pole = vecNegateMut(pole)
 
 	// Find the azimuth and altitude of the mount pole (normal to the plane defined by the three reference stars)
 	const { azimuth, altitude } = cirsToObserved(pole, p3[2], refraction)
 
 	// Compute the azimuth and altitude error
-	const latitude = location.latitude
-	const azimuthError = normalizePI(azimuth)
-	const altitudeError = altitude - latitude
+	// TODO: How to test it? const latitude = refraction === false ? refractedAltitude(Math.abs(location.latitude), DEFAULT_REFRACTION_PARAMETERS) : Math.abs(location.latitude)
+	const latitude = Math.abs(location.latitude)
+	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
+	const altitudeError = isNorthern ? altitude - latitude : latitude - altitude
 
 	return { azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment: 0, altitudeAdjustment: 0 }
 }

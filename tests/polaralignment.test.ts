@@ -19,7 +19,7 @@ describe('computed polar alignment error', () => {
 
 	const precision = -Math.log10(2 * 2) // -log(2 * precision)
 
-	test('northern hemisphere', () => {
+	test('northern hemisphere without refraction', () => {
 		time.location = northLocation
 
 		for (let orie = 0; orie <= 1; orie++) {
@@ -37,7 +37,26 @@ describe('computed polar alignment error', () => {
 		}
 	})
 
-	test('southern hemisphere', () => {
+	// TODO: How to test it? should use topocentric RA/DEC coordinates?
+	test.skip('northern hemisphere with refraction', () => {
+		time.location = northLocation
+
+		for (let orie = 0; orie <= 1; orie++) {
+			for (let az = -60; az <= 60; az += 10) {
+				for (let al = -60; al <= 60; al += 10) {
+					for (let dec = -40; dec <= 40; dec += 10) {
+						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => [...polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)), time] as const)
+						const result = threePointPolarAlignmentError(p1, p2, p3, DEFAULT_REFRACTION_PARAMETERS)
+
+						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
+						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
+					}
+				}
+			}
+		}
+	})
+
+	test('southern hemisphere without refraction', () => {
 		time.location = southLocation
 
 		for (let orie = 0; orie <= 1; orie++) {
@@ -46,6 +65,25 @@ describe('computed polar alignment error', () => {
 					for (let dec = -40; dec <= 40; dec += 10) {
 						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => [...polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)), time] as const)
 						const result = threePointPolarAlignmentError(p1, p2, p3, false)
+
+						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
+						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
+					}
+				}
+			}
+		}
+	})
+
+	// TODO: How to test it? should use topocentric RA/DEC coordinates?
+	test.skip('southern hemisphere with refraction', () => {
+		time.location = southLocation
+
+		for (let orie = 0; orie <= 1; orie++) {
+			for (let az = -60; az <= 60; az += 10) {
+				for (let al = -60; al <= 60; al += 10) {
+					for (let dec = -40; dec <= 40; dec += 10) {
+						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => [...polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)), time] as const)
+						const result = threePointPolarAlignmentError(p1, p2, p3, DEFAULT_REFRACTION_PARAMETERS)
 
 						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
 						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
