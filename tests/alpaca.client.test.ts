@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { AlpacaClient, type AlpacaClientHandler, makeFitsFromImageBytes } from '../src/alpaca.client'
-import { deg, hour, parseAngle } from '../src/angle'
-import { equatorialFromJ2000 } from '../src/coordinate'
+import { deg, hour } from '../src/angle'
 import type { FitsHeader } from '../src/fits'
 import { readImageFromBuffer } from '../src/image'
 import { debayer } from '../src/image.transformation'
@@ -9,7 +8,10 @@ import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_MOUNT, type Device, type D
 import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import type { PropertyState } from '../src/indi.types'
 import { roundToNthDecimal } from '../src/math'
+import { timeYMDHMS } from '../src/time'
 import { saveImageAndCompareHash } from './image.util'
+
+const NOW = timeYMDHMS(2026, 2, 18, 12, 0, 0)
 
 describe('make fits from image bytes', () => {
 	const camera = structuredClone(DEFAULT_CAMERA)
@@ -30,13 +32,12 @@ describe('make fits from image bytes', () => {
 	mount.connected = true
 	mount.geographicCoordinate.longitude = deg(-45)
 	mount.geographicCoordinate.latitude = deg(-22)
-	const JNOW = equatorialFromJ2000(parseAngle('21 58 07.63', true)!, parseAngle('-60 07 30.48')!)
-	mount.equatorialCoordinate.rightAscension = JNOW[0]
-	mount.equatorialCoordinate.declination = JNOW[1]
+	mount.equatorialCoordinate.rightAscension = hour(22)
+	mount.equatorialCoordinate.declination = deg(-60)
 
 	test('unsigned 16-bit mono', async () => {
 		const bytes = Bun.file('data/Sky Simulator.8.1.dat')
-		const fits = makeFitsFromImageBytes(await bytes.arrayBuffer(), camera, mount, undefined, undefined, undefined, 5)
+		const fits = makeFitsFromImageBytes(await bytes.arrayBuffer(), NOW, camera, mount, undefined, undefined, undefined, 5)
 		const image = await readImageFromBuffer(fits)
 		expectNaxis(image!.header, 2, 1280, 1024, undefined)
 		expectHeader(image!.header)
@@ -45,7 +46,7 @@ describe('make fits from image bytes', () => {
 
 	test('unsigned 16-bit color (bayered)', async () => {
 		const bytes = Bun.file('data/Sky Simulator.8.3.dat')
-		const fits = makeFitsFromImageBytes(await bytes.arrayBuffer(), camera, mount, undefined, undefined, undefined, 5)
+		const fits = makeFitsFromImageBytes(await bytes.arrayBuffer(), NOW, camera, mount, undefined, undefined, undefined, 5)
 		const image = await readImageFromBuffer(fits)
 		expectNaxis(image!.header, 2, 1280, 1024, undefined)
 		expectHeader(image!.header)
@@ -133,7 +134,7 @@ describe.skipIf(process.platform !== 'win32')('client', async () => {
 			removed: (device) => {},
 			updated: (device, property, s) => {
 				if (property === 'exposure') {
-					s && s !== 'Idle' && state.push(s)
+					s && state.push(s)
 					s === 'Busy' && exposure.push(device.exposure.value)
 				}
 			},
@@ -148,7 +149,7 @@ describe.skipIf(process.platform !== 'win32')('client', async () => {
 		cameraManager.connect(camera)
 		await expectUntil(camera, 'connected', true)
 
-		await Bun.sleep(2000)
+		await Bun.sleep(3000)
 
 		expect(camera.canAbort).toBeTrue()
 		expect(camera.canBin).toBeTrue()
@@ -221,13 +222,22 @@ describe.skipIf(process.platform !== 'win32')('client', async () => {
 		await expectUntil(camera, 'exposuring', false)
 		expect(image).toBeDefined()
 
-		cameraManager.disconnect(camera)
-		await expectUntil(camera, 'connected', false)
-
-		expect(state[0]).toBe('Busy')
+		expect(state[1]).toBe('Busy')
 		expect(state[state.length - 1]).toBe('Ok')
 		expect(exposure[0]).toBe(2)
 		expect(exposure[exposure.length - 1]).toBe(0)
+
+		image = undefined
+
+		cameraManager.startExposure(camera, 60)
+		await expectUntil(camera, 'exposuring', true)
+		cameraManager.stopExposure(camera)
+		await expectUntil(camera, 'exposuring', false)
+		await Bun.sleep(5000)
+        expect(state[state.length - 1]).toBe('Idle')
+
+		cameraManager.disconnect(camera)
+		await expectUntil(camera, 'connected', false)
 	}, 60000)
 
 	test('mount', async () => {
@@ -328,8 +338,8 @@ function expectHeader(header: FitsHeader) {
 	expect(header.YPIXSZ).toBe(5)
 	expect(header.SITELAT).toBe(-22)
 	expect(header.SITELONG).toBe(-45)
-	expect(header.OBJCTRA).toBe('21 58 07.63')
-	expect(header.OBJCTDEC).toBe('-60 07 30.48')
+	expect(header.OBJCTRA).toBe('21 58 07.61')
+	expect(header.OBJCTDEC).toBe('-60 07 30.47')
 	expect(header.RA).toBeCloseTo(329.53, 2)
 	expect(header.DEC).toBeCloseTo(-60.125, 2)
 	expect(header.GAIN).toBe(8)

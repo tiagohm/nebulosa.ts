@@ -692,7 +692,8 @@ export class CameraManager extends DeviceManager<Camera> {
 					if (handleMinMaxValue(device.exposure, message.elements.CCD_EXPOSURE_VALUE, tag)) {
 						this.updated(device, 'exposure', message.state)
 					}
-				} else if (handleNumberValue(device.exposure, 'value', message.elements.CCD_EXPOSURE_VALUE?.value, message.state) || exposuringHasChanged) {
+				} else if (handleNumberValue(device.exposure, 'value', message.elements.CCD_EXPOSURE_VALUE?.value, message.state) || exposuringHasChanged || (message.state !== undefined && device.exposure.state !== message.state)) {
+					device.exposure.state = message.state ?? device.exposure.state
 					this.updated(device, 'exposure', message.state)
 				}
 

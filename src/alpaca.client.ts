@@ -1,8 +1,8 @@
 import { AlpacaCameraApi, AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaTelescopeApi } from './alpaca.api'
-import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate, ImageBytesMetadata } from './alpaca.types'
+import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate, ImageBytesMetadata } from './alpaca.types'
 import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from './angle'
 import { SIDEREAL_RATE } from './constants'
-import { equatorialToJ2000 } from './coordinate'
+import { equatorialFromJ2000, equatorialToJ2000 } from './coordinate'
 import { computeRemainingBytes, FITS_BLOCK_SIZE, type FitsHeader, FitsKeywordWriter } from './fits'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import type { Camera, Client, Device, Focuser, Mount, Rotator, Wheel } from './indi.device'
@@ -11,6 +11,7 @@ import type { DeviceProvider } from './indi.manager'
 import { type DefBlob, type DefBlobVector, type DefNumber, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefText, type DefTextVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, type NewNumberVector, type NewSwitchVector, type NewTextVector, type OneBlob, type PropertyPermission, type PropertyState, type SetBlobVector, type SwitchRule, type ValueType, type VectorType } from './indi.types'
 import { roundToNthDecimal } from './math'
 import { formatTemporal, TIMEZONE } from './temporal'
+import { type Time, timeNow } from './time'
 
 export interface AlpacaClientHandler extends IndiClientHandler {}
 
@@ -158,7 +159,7 @@ abstract class AlpacaDevice {
 	protected abstract readonly api: AlpacaDeviceApi
 	protected abstract readonly state: AlpacaClientDeviceState
 	protected abstract readonly initialEndpoints: readonly string[] // Endpoints used by step 1
-	protected abstract readonly stateEndpoints: readonly string[] // Used when DeviceState is not supported
+	protected abstract readonly deviceStateEndpoints: readonly string[] // Used when DeviceState is not supported
 	protected readonly runningEndpoints: readonly string[] = [] // Endpoints should run on each update
 
 	protected readonly driverInfo = makeTextVector('', 'DRIVER_INFO', 'Driver Info', GENERAL_INFO, 'ro', ['DRIVER_INTERFACE', 'Interface', ''], ['DRIVER_EXEC', 'Exec', ''], ['DRIVER_VERSION', 'Version', '1.0'], ['DRIVER_NAME', 'Name', ''])
@@ -298,7 +299,7 @@ abstract class AlpacaDevice {
 		this.reset()
 		this.disableEndpoints('DeviceState')
 		this.disableEndpoints(...this.initialEndpoints)
-		this.disableEndpoints(...this.stateEndpoints)
+		this.disableEndpoints(...this.deviceStateEndpoints)
 		this.disableEndpoints(...this.runningEndpoints)
 		this.sendDelProperty(...this.properties)
 	}
@@ -341,7 +342,7 @@ abstract class AlpacaDevice {
 
 				if (this.hasDeviceState === true && this.state.DeviceState === undefined) {
 					this.hasDeviceState = false
-					this.enableEndpoints(...this.stateEndpoints)
+					this.enableEndpoints(...this.deviceStateEndpoints)
 					this.disableEndpoints('DeviceState')
 					this.deviceStateHasBeenDisabled()
 					console.info(this.device.DeviceName, 'does not support DeviceState')
@@ -455,16 +456,17 @@ interface AlpacaClientCameraState extends AlpacaClientDeviceState {
 	readonly CanStopExposure?: boolean
 	ExposureDuration: number
 	ExposureStarted: boolean
+	LastCameraState: number
 }
 
 class AlpacaCamera extends AlpacaDevice {
 	protected readonly api: AlpacaCameraApi
 	// https://ascom-standards.org/newdocs/camera.html#Camera.DeviceState
 	// biome-ignore format: too long!
-	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0, ExposureDuration: 0, ExposureStarted: false }
+	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0, ExposureDuration: 0, ExposureStarted: false, LastCameraState: 0 }
 	// biome-ignore format: too long!
 	protected readonly initialEndpoints = ['BayerOffsetX', 'BayerOffsetY', 'SensorType', 'CameraXSize', 'CameraYSize', 'CanGetCoolerPower', 'CanPulseGuide', 'CanSetCcdTemperature', 'CanStopExposure', 'ExposureMax', 'ExposureMin', 'GainMax', 'GainMin', 'Gains', 'MaxBinX', 'MaxBinY', 'OffsetMax', 'OffsetMin', 'Offsets', 'PixelSizeX', 'PixelSizeY', 'ReadoutModes'] as const
-	protected readonly stateEndpoints = ['CameraState', 'CCDTemperature', 'CoolerPower', 'ImageReady', 'IsPulseGuiding', 'PercentCompleted'] as const
+	protected readonly deviceStateEndpoints = ['CameraState', 'CCDTemperature', 'CoolerPower', 'ImageReady', 'IsPulseGuiding', 'PercentCompleted'] as const
 	protected readonly runningEndpoints = ['BinX', 'BinY', 'IsCoolerOn', 'Gain', 'NumX', 'NumY', 'Offset', 'ReadoutMode', 'StartX', 'StartY'] as const
 
 	// biome-ignore format: too long!
@@ -484,6 +486,8 @@ class AlpacaCamera extends AlpacaDevice {
 	private readonly guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	private readonly guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
 	private readonly image = makeBlobVector('', 'CCD1', 'CCD Image', MAIN_CONTROL, 'ro', ['CCD1', 'Image'])
+
+	private readonly now = timeNow() // Used in the conversion from JNOW to J2000. Changes in precession/nutation angles are negligible.
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -558,7 +562,7 @@ class AlpacaCamera extends AlpacaDevice {
 
 		const { Step, CameraState, CCDTemperature, CoolerPower, ImageReady, IsPulseGuiding, PercentCompleted, BayerOffsetX, BayerOffsetY, BinX, BinY, CameraXSize, CameraYSize, IsCoolerOn, ExposureMax, ExposureMin, CanGetCoolerPower } = this.state
 		const { Gain, GainMax, GainMin, Gains, MaxBinX, MaxBinY, NumX, NumY, Offset, OffsetMax, OffsetMin, Offsets, PixelSizeX, PixelSizeY, ReadoutMode, ReadoutModes, StartX, StartY, CanPulseGuide, CanSetCcdTemperature, CanStopExposure, SensorType } = this.state
-		const { ExposureDuration, ExposureStarted } = this.state
+		const { ExposureDuration, ExposureStarted, LastCameraState } = this.state
 
 		// Initial
 		if (Step === 1) {
@@ -754,7 +758,13 @@ class AlpacaCamera extends AlpacaDevice {
 				let updated = this.updatePropertyState(this.exposure, 'Busy')
 				updated = this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', ExposureDuration * (1 - PercentCompleted / 100)) || updated
 				updated && this.sendSetProperty(this.exposure)
+			} else if ((CameraState === 5 || CameraState === 0) && LastCameraState !== CameraState) {
+				let updated = this.updatePropertyState(this.exposure, CameraState === 5 ? 'Alert' : 'Idle')
+				updated = this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', 0) || updated
+				updated && this.sendSetProperty(this.exposure)
 			}
+
+			this.state.LastCameraState = CameraState
 		}
 
 		return true
@@ -891,7 +901,7 @@ class AlpacaCamera extends AlpacaDevice {
 			this.image.state = 'Ok'
 			const camera = this.client.provider.get(this.client, this.device.DeviceName, 'CAMERA') as Camera
 			const lastExposureDuration = this.state.ExposureDuration // await this.api.getLastExposureDuration(this.id)
-			const fits = makeFitsFromImageBytes(buffer, camera, this.activeMount, this.activeWheel, this.activeFocuser, this.activeRotator, lastExposureDuration)
+			const fits = makeFitsFromImageBytes(buffer, this.now, camera, this.activeMount, this.activeWheel, this.activeFocuser, this.activeRotator, lastExposureDuration)
 			this.image.elements.CCD1.value = fits
 		} else {
 			this.image.state = 'Alert'
@@ -929,15 +939,18 @@ interface AlpacaClientTelescopeState extends AlpacaClientDeviceState {
 	Elevation?: number
 	GuideRateRA?: number
 	GuideRateDEC?: number
+	EquatorialSystem: AlpacaTelescopeEquatorialCoordinateType
+	LastRightAscension?: number
+	LastDeclination?: number
 }
 
 class AlpacaTelescope extends AlpacaDevice {
 	protected readonly api: AlpacaTelescopeApi
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
 	// biome-ignore format: too long!
-	protected readonly state: AlpacaClientTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0, LastUTCDateUpdate: 0 }
-	protected readonly initialEndpoints = ['CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier'] as const
-	protected readonly stateEndpoints = ['AtPark', 'Declination', 'IsPulseGuiding', 'RightAscension', 'SideOfPier', 'Slewing', 'Tracking'] as const
+	protected readonly state: AlpacaClientTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0, LastUTCDateUpdate: 0, EquatorialSystem: 1 }
+	protected readonly initialEndpoints = ['CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier', 'EquatorialSystem'] as const
+	protected readonly deviceStateEndpoints = ['AtPark', 'Declination', 'IsPulseGuiding', 'RightAscension', 'SideOfPier', 'Slewing', 'Tracking'] as const
 	protected readonly runningEndpoints = ['TrackingRate', 'GuideRateRA', 'GuideRateDEC', 'Latitude', 'Longitude', 'Elevation', 'UTCDate'] as const
 
 	private readonly onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
@@ -956,6 +969,8 @@ class AlpacaTelescope extends AlpacaDevice {
 	private readonly guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'ro', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	private readonly guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	private readonly guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
+
+	private readonly now = timeNow() // Used in the conversion from J2000 to JNOW. Changes in precession/nutation angles are negligible.
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -1008,6 +1023,7 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.runner.registerEndpoint('Slewing', api.isSlewing.bind(api, this.id), false)
 		this.runner.registerEndpoint('Tracking', api.isTracking.bind(api, this.id), false)
 		this.runner.registerEndpoint('UTCDate', api.getUtcDate.bind(api, this.id), false, 60)
+		this.runner.registerEndpoint('EquatorialSystem', api.getEquatorialSystem.bind(api, this.id), false)
 
 		this.api = api
 	}
@@ -1016,7 +1032,8 @@ class AlpacaTelescope extends AlpacaDevice {
 		if (!super.handleEndpointsAfterRun()) return false
 
 		const { Step, CanTrack, CanHome, CanPark, CanSlew, CanSync, CanMoveAxis, CanPulseGuide, CanSetGuideRate, CanSetSideOfPier, Tracking, AtPark, IsPulseGuiding, Slewing } = this.state
-		const { RightAscension, Declination, SlewRates, TrackingRates, TrackingRate, SideOfPier, UTCDate, Latitude, Longitude, Elevation, GuideRateRA, GuideRateDEC } = this.state
+		const { RightAscension, Declination, SlewRates, TrackingRates, TrackingRate, SideOfPier, UTCDate, Latitude, Longitude, Elevation, GuideRateRA, GuideRateDEC, EquatorialSystem } = this.state
+		const { LastRightAscension, LastDeclination } = this.state
 
 		// Initial
 		if (Step === 1) {
@@ -1146,10 +1163,22 @@ class AlpacaTelescope extends AlpacaDevice {
 				this.state.UTCDate = undefined
 			}
 
-			let updated = this.updatePropertyState(this.equatorialCoordinate, Slewing ? 'Busy' : 'Idle')
-			updated = this.updatePropertyValue(this.equatorialCoordinate, 'RA', RightAscension) || updated
-			updated = this.updatePropertyValue(this.equatorialCoordinate, 'DEC', Declination) || updated
-			updated && this.sendSetProperty(this.equatorialCoordinate)
+			if (RightAscension !== LastRightAscension || Declination !== LastDeclination) {
+				this.state.LastRightAscension = RightAscension
+				this.state.LastDeclination = Declination
+
+				let rightAscension = RightAscension
+				let declination = Declination
+
+				if (EquatorialSystem === 2) {
+					;[rightAscension, declination] = equatorialFromJ2000(RightAscension, Declination, this.now)
+				}
+
+				let updated = this.updatePropertyState(this.equatorialCoordinate, Slewing ? 'Busy' : 'Idle')
+				updated = this.updatePropertyValue(this.equatorialCoordinate, 'RA', rightAscension) || updated
+				updated = this.updatePropertyValue(this.equatorialCoordinate, 'DEC', declination) || updated
+				updated && this.sendSetProperty(this.equatorialCoordinate)
+			}
 		}
 
 		return true
@@ -1303,16 +1332,13 @@ class AlpacaTelescope extends AlpacaDevice {
 		}
 	}
 
+	close() {}
+
 	private async moveToTarget(rightAscension?: number, declination?: number) {
 		if (rightAscension !== undefined && declination !== undefined) {
+			if (this.state.EquatorialSystem === 2) [rightAscension, declination] = equatorialToJ2000(rightAscension, declination, this.now)
 			if (this.onCoordSet.elements.SLEW?.value === true) await this.api.slewToCoordinatesAsync(this.id, rightAscension, declination)
 			else if (this.onCoordSet.elements.SYNC?.value === true) await this.api.syncToCoordinates(this.id, rightAscension, declination)
-		} else if (rightAscension !== undefined) {
-			if (this.onCoordSet.elements.SLEW?.value === true) await this.api.slewToCoordinatesAsync(this.id, rightAscension, this.state.Declination)
-			else if (this.onCoordSet.elements.SYNC?.value === true) await this.api.syncToCoordinates(this.id, rightAscension, this.state.Declination)
-		} else if (declination !== undefined) {
-			if (this.onCoordSet.elements.SLEW?.value === true) await this.api.slewToCoordinatesAsync(this.id, this.state.RightAscension, declination)
-			else if (this.onCoordSet.elements.SYNC?.value === true) await this.api.syncToCoordinates(this.id, this.state.RightAscension, declination)
 		}
 	}
 }
@@ -1330,7 +1356,7 @@ class AlpacaFilterWheel extends AlpacaDevice {
 	// https://ascom-standards.org/newdocs/filterwheel.html#FilterWheel.DeviceState
 	protected readonly state: AlpacaClientFilterWheelState = { Connected: false, DeviceState: undefined, Step: 0, Position: 0, Names: undefined }
 	protected readonly initialEndpoints = ['Names'] as const
-	protected readonly stateEndpoints = ['Position'] as const
+	protected readonly deviceStateEndpoints = ['Position'] as const
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -1410,7 +1436,7 @@ class AlpacaFocuser extends AlpacaDevice {
 	// https://ascom-standards.org/newdocs/focuser.html#Focuser.DeviceState
 	protected readonly state: AlpacaClientFocuserState = { Connected: false, DeviceState: undefined, Step: 0, IsMoving: false, Position: 0, Temperature: undefined, IsAbsolute: false, MaxStep: 0 }
 	protected readonly initialEndpoints = ['MaxStep', 'IsAbsolute'] as const
-	protected readonly stateEndpoints = ['IsMoving', 'Position', 'Temperature'] as const
+	protected readonly deviceStateEndpoints = ['IsMoving', 'Position', 'Temperature'] as const
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -1536,7 +1562,7 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 	// https://ascom-standards.org/newdocs/covercalibrator.html#CoverCalibrator.DeviceState
 	protected readonly state: AlpacaClientCoverCalibratorState = { Connected: false, DeviceState: undefined, Step: 0, CoverState: 0, CoverMoving: false, CalibratorState: 0, Brightness: 0, MaxBrightness: undefined }
 	protected readonly initialEndpoints = ['MaxBrightness'] as const
-	protected readonly stateEndpoints = ['Brightness', 'CalibratorState', 'CoverMoving', 'CoverState'] as const
+	protected readonly deviceStateEndpoints = ['Brightness', 'CalibratorState', 'CoverMoving', 'CoverState'] as const
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -1677,7 +1703,7 @@ function makeBlobVector(device: string, name: string, label: string, group: stri
 	return { type: 'BLOB', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
-export function makeFitsFromImageBytes(data: ArrayBuffer, camera?: Camera, mount?: Mount, wheel?: Wheel, focuser?: Focuser, rotator?: Rotator, lastExposureDuration: number = 0) {
+export function makeFitsFromImageBytes(data: ArrayBuffer, time: Time, camera?: Camera, mount?: Mount, wheel?: Wheel, focuser?: Focuser, rotator?: Rotator, lastExposureDuration: number = 0) {
 	const metadataArray = new Int32Array(data, 0, 44)
 	const metadata: ImageBytesMetadata = {
 		MetadataVersion: metadataArray[0],
@@ -1705,7 +1731,7 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, camera?: Camera, mount
 	if (!mount?.connected) mount = undefined
 
 	if (mount) {
-		;[rightAscension, declination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination)
+		;[rightAscension, declination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination, time)
 	}
 
 	// https://github.com/indilib/indi/blob/3b0cdcb6caf41c859b77c6460981772fe8d5d22d/libs/indibase/indiccd.cpp#L2028

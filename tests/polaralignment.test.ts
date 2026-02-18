@@ -117,7 +117,7 @@ test('very different altitude points and true pole', () => {
 
 	if (!error) return
 
-	const precision = -Math.log10(2 * 0.04)
+	const precision = -Math.log10(2 * 0.045)
 
 	expect(toDeg(error.altitudeError)).toBeCloseTo(1, precision)
 	expect(toDeg(error.azimuthError)).toBeCloseTo(1, precision)
@@ -137,7 +137,7 @@ test('very different altitude points and refracted pole', () => {
 
 	if (!error) return
 
-	const precision = -Math.log10(2 * 0.04)
+	const precision = -Math.log10(2 * 0.045)
 
 	expect(toDeg(error.altitudeError)).toBeCloseTo(1 - 69.3 / 3600, precision)
 	expect(toDeg(error.azimuthError)).toBeCloseTo(1, precision)

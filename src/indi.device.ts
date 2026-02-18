@@ -3,7 +3,7 @@ import { DAYSEC, SIDEREAL_DAYSEC } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import type { Point } from './geometry'
 import type { CfaPattern } from './image.types'
-import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector } from './indi.types'
+import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyState } from './indi.types'
 import type { GeographicCoordinate } from './location'
 
 export type DeviceType = 'CAMERA' | 'MOUNT' | 'WHEEL' | 'FOCUSER' | 'ROTATOR' | 'GPS' | 'DOME' | 'GUIDE_OUTPUT' | 'FLAT_PANEL' | 'COVER' | 'POWER' | 'THERMOMETER' | 'DEW_HEATER'
@@ -129,7 +129,7 @@ export interface Camera extends GuideOutput, Thermometer {
 		offsetY: number
 		type?: CfaPattern
 	}
-	readonly exposure: MinMaxValueProperty
+	readonly exposure: MinMaxValueProperty & { state: PropertyState }
 	exposuring: boolean
 	hasCooler: boolean
 	canSetTemperature: boolean
@@ -294,7 +294,10 @@ export const DEFAULT_CAMERA: Camera = {
 		offsetX: 0,
 		offsetY: 0,
 	},
-	exposure: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	exposure: {
+		...DEFAULT_MIN_MAX_VALUE_PROPERTY,
+		state: 'Idle',
+	},
 	exposuring: false,
 	hasCooler: false,
 	canSetTemperature: false,
