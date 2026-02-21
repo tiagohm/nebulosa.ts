@@ -24,7 +24,7 @@ export interface FitsHdu {
 }
 
 export interface Fits {
-	readonly hdus: FitsHdu[]
+	readonly hdus: readonly FitsHdu[]
 }
 
 export enum Bitpix {

@@ -1,4 +1,4 @@
-import type { Angle } from './angle'
+import { normalizeAngle, type Angle } from './angle'
 import { PI } from './constants'
 
 // Mutable vector of numbers with three axis.
@@ -92,7 +92,7 @@ export function vecLatitude(v: Vec3) {
 }
 
 export function vecLongitude(v: Vec3) {
-	return Math.atan2(v[1], v[0])
+	return normalizeAngle(Math.atan2(v[1], v[0]))
 }
 
 // Negates the vector.

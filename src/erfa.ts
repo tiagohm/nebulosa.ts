@@ -1906,7 +1906,7 @@ export function eraBi00() {
 // calling eraApio[13] or eraApco[13].
 // ob1: observed Az, HA or RA (radians; Az is N=0,E=90)
 // ob2: observed ZD or Dec (radians)
-export function eraAtoiq(type: 'R' | 'H' | 'A', ob1: number, ob2: number, astrom: EraAstrom) {
+export function eraAtoiq(type: 'R' | 'H' | 'A', ob1: Angle, ob2: Angle, astrom: EraAstrom) {
 	const { sphi, cphi, eral, diurab, refa, refb, xpl, ypl } = astrom
 
 	let xaeo = 0
@@ -2094,4 +2094,43 @@ export function eraAtco13(
 	const [ri, di] = eraAtciq(rc, dc, pr, pd, px, rv, astrom)
 	// Transform CIRS to observed.
 	return [...eraAtioq(ri, di, astrom), astrom] as const
+}
+
+// Observed place at a groundbased site to ICRS astrometric RA,Dec.
+// The caller supplies UTC, site coordinates, ambient air conditions
+// and observing wavelength.
+// ob1: observed Az, HA or RA (radians; Az is N=0,E=90)
+// ob2: observed ZD or Dec (radians)
+export function eraAtoc13(
+	type: 'R' | 'H' | 'A',
+	ob1: Angle,
+	ob2: Angle,
+	tt1: number,
+	tt2: number,
+	ut11: number,
+	ut12: number,
+	elong: Angle,
+	phi: Angle,
+	hm: Distance,
+	xp: Angle,
+	yp: Angle,
+	sp: Angle,
+	phpa: Pressure,
+	tc: Temperature,
+	rh: number,
+	wl: number,
+	ebpv: readonly [Vec3, Vec3],
+	ehp: Vec3,
+	radius: Distance = WGS84_RADIUS,
+	flattening: number = WGS84_FLATTENING,
+	astrom?: EraAstrom,
+) {
+	// Star-independent astrometry parameters.
+	astrom = eraApco13(tt1, tt2, ut11, ut12, elong, phi, hm, xp, yp, sp, phpa, tc, rh, wl, ebpv, ehp, radius, flattening, astrom)
+
+	// Transform observed to CIRS.
+	const [ri, di] = eraAtoiq(type, ob1, ob2, astrom)
+
+	// Transform CIRS to ICRS.
+	return eraAticq(ri, di, astrom)
 }
