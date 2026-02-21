@@ -83,11 +83,11 @@ export function cirsToIcrs(cirs: Vec3 | readonly [Angle, Angle], time: Time, ebp
 }
 
 // Computes observed coordinates from CIRS cartesian/spherical coordinates.
-export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, astrom?: EraAstrom): Observed {
+export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicCoordinate = time.location!, astrom?: EraAstrom): Observed {
 	if (!astrom) {
 		const a = tt(time)
 		const b = ut1(time)
-		const { longitude, latitude, elevation } = time.location!
+		const { longitude, latitude, elevation } = location
 		const [sp, xp, yp] = pmAngles(time)
 		const pressure = refraction === false ? 0 : (refraction.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure)
 		const temperature = refraction === false ? 0 : (refraction.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
@@ -106,7 +106,7 @@ export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time,
 }
 
 // Computes CIRS coordinates from observed coordinates.
-export function observedToCirs(azimuth: Angle, altitude: Angle, time: Time, location: GeographicCoordinate = time.location!, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, astrom?: EraAstrom): readonly [Angle, Angle] {
+export function observedToCirs(azimuth: Angle, altitude: Angle, time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicCoordinate = time.location!, astrom?: EraAstrom): readonly [Angle, Angle] {
 	if (!astrom) {
 		const a = tt(time)
 		const b = ut1(time)

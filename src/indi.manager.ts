@@ -921,7 +921,7 @@ export class MountManager extends DeviceManager<Mount> {
 		if (type === 'J2000') {
 			Object.assign(equatorial, equatorialFromJ2000(...equatorial))
 		} else if (type === 'ALTAZ') {
-			Object.assign(equatorial, observedToCirs(...equatorial, time ?? timeNow(true), mount.geographicCoordinate))
+			Object.assign(equatorial, observedToCirs(...equatorial, time ?? timeNow(true), undefined, mount.geographicCoordinate))
 		} else if (type === 'ECLIPTIC') {
 			Object.assign(equatorial, eclipticToEquatorial(...equatorial, time ?? timeNow(true)))
 		} else if (type === 'GALACTIC') {

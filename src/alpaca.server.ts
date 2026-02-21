@@ -1380,7 +1380,7 @@ export class AlpacaServer {
 
 	private mountSlewToAltAzAsync(id: number, data: { Azimuth: string; Altitude: string }) {
 		const { state, device } = this.telescope(id)
-		const [rightAscension, declination] = observedToCirs(deg(+data.Azimuth), deg(+data.Altitude), state.time!, state, state.doesRefraction ? undefined : false)
+		const [rightAscension, declination] = observedToCirs(deg(+data.Azimuth), deg(+data.Altitude), state.time!, state.doesRefraction ? undefined : false, state)
 		this.options.mount?.goTo(device, rightAscension, declination)
 		return makeAlpacaResponse(undefined)
 	}
