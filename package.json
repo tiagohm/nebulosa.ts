@@ -8,11 +8,12 @@
 		"postinstall": "bun run native/copy.ts",
 		"lint": "biome lint --write",
 		"format": "biome format --write",
-		"tsc": "tsc --noEmit"
+		"tsc": "tsgo --noEmit"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "latest",
-		"typescript": "latest"
+		"typescript": "latest",
+		"@typescript/native-preview": "latest"
 	},
 	"peerDependencies": {
 		"@types/bun": "latest",
