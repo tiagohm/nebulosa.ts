@@ -1,4 +1,4 @@
-import { normalizeAngle, type Angle } from './angle'
+import { type Angle, normalizeAngle } from './angle'
 import { PI } from './constants'
 
 // Mutable vector of numbers with three axis.
@@ -222,4 +222,9 @@ export function vecRotZ(v: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
 // Rotates the vector around the z axis in place.
 export function vecRotZMut(v: MutVec3, angle: Angle): MutVec3 {
 	return vecRotZ(v, angle, v)
+}
+
+// Computes the division of the vector by scalar.
+export function vecDivScalarMut(v: MutVec3, scalar: number): MutVec3 {
+	return vecDivScalar(v, scalar, v)
 }

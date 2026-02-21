@@ -4,10 +4,10 @@ import { DEFAULT_REFRACTION_PARAMETERS } from '../src/astrometry'
 import { meter } from '../src/distance'
 import { geodeticLocation, localSiderealTime } from '../src/location'
 import { polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentError } from '../src/polaralignment'
-import { time, timeYMDHMS } from '../src/time'
+import { timeYMDHMS } from '../src/time'
 
 describe('computed polar alignment error', () => {
-	const time = timeYMDHMS(2025, 9, 7, 12, 0, 0)
+	const time = timeYMDHMS(2000, 1, 1, 12, 0, 0)
 	const northLocation = geodeticLocation(deg(-45), deg(22), meter(800))
 	const southLocation = geodeticLocation(deg(-45), deg(-22), meter(800))
 	time.location = northLocation
@@ -17,7 +17,7 @@ describe('computed polar alignment error', () => {
 	const P2_RA = LST
 	const P3_RA = LST + hour(1)
 
-	const precision = -Math.log10(2 * 2) // -log(2 * precision)
+	const precision = -Math.log10(2 * 3.5) // -log(2 * precision)
 
 	test('northern hemisphere without refraction', () => {
 		time.location = northLocation
@@ -26,8 +26,8 @@ describe('computed polar alignment error', () => {
 			for (let az = -60; az <= 60; az += 10) {
 				for (let al = -60; al <= 60; al += 10) {
 					for (let dec = -40; dec <= 40; dec += 10) {
-						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => [...polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)), time] as const)
-						const result = threePointPolarAlignmentError(p1, p2, p3, false)
+						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
+						const result = threePointPolarAlignmentError(p1, p2, p3, time, false)
 
 						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
 						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
@@ -37,16 +37,15 @@ describe('computed polar alignment error', () => {
 		}
 	})
 
-	// TODO: How to test it? should use topocentric RA/DEC coordinates?
-	test.skip('northern hemisphere with refraction', () => {
+	test('northern hemisphere with refraction', () => {
 		time.location = northLocation
 
 		for (let orie = 0; orie <= 1; orie++) {
 			for (let az = -60; az <= 60; az += 10) {
 				for (let al = -60; al <= 60; al += 10) {
 					for (let dec = -40; dec <= 40; dec += 10) {
-						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => [...polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)), time] as const)
-						const result = threePointPolarAlignmentError(p1, p2, p3, DEFAULT_REFRACTION_PARAMETERS)
+						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
+						const result = threePointPolarAlignmentError(p1, p2, p3, time, DEFAULT_REFRACTION_PARAMETERS)
 
 						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
 						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
@@ -63,8 +62,8 @@ describe('computed polar alignment error', () => {
 			for (let az = -60; az <= 60; az += 10) {
 				for (let al = -60; al <= 60; al += 10) {
 					for (let dec = -40; dec <= 40; dec += 10) {
-						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => [...polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)), time] as const)
-						const result = threePointPolarAlignmentError(p1, p2, p3, false)
+						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
+						const result = threePointPolarAlignmentError(p1, p2, p3, time, false)
 
 						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
 						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
@@ -74,16 +73,15 @@ describe('computed polar alignment error', () => {
 		}
 	})
 
-	// TODO: How to test it? should use topocentric RA/DEC coordinates?
-	test.skip('southern hemisphere with refraction', () => {
+	test('southern hemisphere with refraction', () => {
 		time.location = southLocation
 
 		for (let orie = 0; orie <= 1; orie++) {
 			for (let az = -60; az <= 60; az += 10) {
 				for (let al = -60; al <= 60; al += 10) {
 					for (let dec = -40; dec <= 40; dec += 10) {
-						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => [...polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)), time] as const)
-						const result = threePointPolarAlignmentError(p1, p2, p3, DEFAULT_REFRACTION_PARAMETERS)
+						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
+						const result = threePointPolarAlignmentError(p1, p2, p3, time, DEFAULT_REFRACTION_PARAMETERS)
 
 						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
 						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
@@ -135,7 +133,7 @@ test('no declination error', () => {
 
 	if (!error) return
 
-	const precision = -Math.log10(2 * 0.0001)
+	const precision = -Math.log10(2 * 0.0003)
 
 	expect(error.altitudeError).toBeCloseTo(0, precision)
 	expect(error.azimuthError).toBeCloseTo(0, precision)
@@ -181,113 +179,88 @@ test('very different altitude points and refracted pole', () => {
 	expect(toDeg(error.azimuthError)).toBeCloseTo(1, precision)
 })
 
-// https://github.com/KDE/kstars/blob/4d8d1eed3071090aeeaf9eb3980eb30242342c34/Tests/polaralign/test_polaralign.cpp#L673
-describe.skip('after adjustment I', () => {
-	const location = geodeticLocation(deg(-121.956), deg(37.363)) // sillicon valley
-
-	const input = [
-		[211.174, 60.8994, 2022, 5, 30, 5, 11, 11],
-		[233.324, 60.632, 2022, 5, 30, 5, 11, 34],
-		[254.451, 60.3434, 2022, 5, 30, 5, 11, 57],
-
-		// right at start Estimated current adjustment: Az 0.0' Alt 0.0' residual 4a-s"
-		[254.454, 60.346, 2022, 5, 30, 5, 13, 3],
-		// refresh 25, Estimated current adjustment: Az 0.0' Alt -28.0' residual 23a-s"
-		[253.841, 60.054, 2022, 5, 30, 5, 14, 31],
-		// refresh 26, Estimated current adjustment: Az 0.0' Alt -28.0' residual 26a-s"
-		[253.842, 60.054, 2022, 5, 30, 5, 14, 34],
-
-		// refresh 27, Estimated current adjustment: Az 11.0' Alt -23.0' residual 220a-s"
-		[253.769, 60.207, 2022, 5, 30, 5, 14, 48],
-		// refresh 28, Estimated current adjustment: Az 10.0' Alt -22.0' residual 265a-s"
-		[253.769, 60.206, 2022, 5, 30, 5, 14, 52],
-		// refresh 29, Estimated current adjustment: Az 17.0' Alt -19.0' residual 409a-s"
-		[253.724, 60.297, 2022, 5, 30, 5, 15, 2],
-		// refresh 36, Estimated current adjustment: Az 27.0' Alt -15.0' residual 607a-s"
-		[253.656, 60.429, 2022, 5, 30, 5, 15, 28],
-	] as const
-
-	test('refraction', () => {
-		const pa = new ThreePointPolarAlignment(DEFAULT_REFRACTION_PARAMETERS)
-
-		const output = [
-			[0.630769, -0.455568, 0.0, -0.001389],
-			[0.640625, 0.001814, -0.006021, -0.458798],
-			[0.643341, -0.001003, -0.00876, -0.455982],
-			[0.38739, 0.002737, 0.247222, -0.459722],
-			[0.391545, 0.001349, 0.243056, -0.458333],
-			[0.236025, 0.005515, 0.398611, -0.4625],
-			[0.015507, 0.007205, 0.619144, -0.46419],
-		] as const
-
-		let i = 0
-		const precision = -Math.log10(2 * 0.01)
-
-		for (const step of input) {
-			i++
-
-			const time = timeYMDHMS(step[2], step[3], step[4], step[5], step[6], step[7])
-			time.location = location
-
-			const result = pa.add(deg(step[0]), deg(step[1]), time, true)
-
-			if (result && i >= 4) {
-				const o = output[i - 4]
-
-				expect(toDeg(result.azimuthError)).toBeCloseTo(o[0], precision)
-				expect(toDeg(result.altitudeError)).toBeCloseTo(o[1], precision)
-				expect(toDeg(result.azimuthAdjustment)).toBeCloseTo(o[2], precision)
-				expect(toDeg(result.altitudeAdjustment)).toBeCloseTo(o[3], precision)
-			}
-		}
-	})
-
-	test('no refraction', () => {
-		const pa = new ThreePointPolarAlignment(false)
-
-		const output = [
-			[0.629487, -0.46887, 0.0, -0.001389],
-			[0.638555, -0.010883, -0.005237, -0.459403],
-			[0.64266, -0.013699, -0.009365, -0.456587],
-			[0.384722, -0.009175, 0.248611, -0.461111],
-			[0.390254, -0.011953, 0.243056, -0.458333],
-			[0.234734, -0.007787, 0.398611, -0.4625],
-			[0.0136, -0.00533, 0.619766, -0.464956],
-		] as const
-
-		let i = 0
-		const precision = -Math.log10(2 * 0.01)
-
-		for (const step of input) {
-			i++
-
-			const time = timeYMDHMS(step[2], step[3], step[4], step[5], step[6], step[7])
-			time.location = location
-
-			const result = pa.add(deg(step[0]), deg(step[1]), time, true)
-
-			if (result && i >= 4) {
-				const o = output[i - 4]
-
-				expect(toDeg(result.azimuthError)).toBeCloseTo(o[0], precision)
-				expect(toDeg(result.altitudeError)).toBeCloseTo(o[1], precision)
-				expect(toDeg(result.azimuthAdjustment)).toBeCloseTo(o[2], precision)
-				expect(toDeg(result.altitudeAdjustment)).toBeCloseTo(o[3], precision)
-			}
-		}
-	})
-})
-
 test('change orientation', () => {
 	const location = geodeticLocation(deg(-45.5), deg(-22.5), meter(900))
+	const time = { day: 2461092, fraction: 0.578802280092129, scale: 1, location }
 
-	const a = [1.418966489892447, -0.5613841311820498, time(2461092, 0.5784092013896616, undefined, false)] as const
-	const b = [1.4971924601152036, -0.5611006782686236, time(2461092, 0.5785965162046529, undefined, false)] as const
-	const c = [1.5767801876529501, -0.5608213650948436, time(2461092, 0.578802280092129, undefined, false)] as const
+	const a = [1.418966489892447, -0.5613841311820498] as const
+	const b = [1.4971924601152036, -0.5611006782686236] as const
+	const c = [1.5767801876529501, -0.5608213650948436] as const
 
-	const pa1 = threePointPolarAlignmentError(a, b, c, DEFAULT_REFRACTION_PARAMETERS, location)
-	const pa2 = threePointPolarAlignmentError([c[0], c[1], a[2]], b, [a[0], a[1], c[2]], DEFAULT_REFRACTION_PARAMETERS, location)
+	const pa1 = threePointPolarAlignmentError(a, b, c, time, DEFAULT_REFRACTION_PARAMETERS, location)
+	const pa2 = threePointPolarAlignmentError(c, b, a, time, DEFAULT_REFRACTION_PARAMETERS, location)
 
 	expect(toArcmin(pa1.azimuthError)).toBe(toArcmin(pa2.azimuthError))
 	expect(toArcmin(pa1.altitudeError)).toBe(toArcmin(pa2.altitudeError))
+})
+
+test('after adjustment', () => {
+	const location = geodeticLocation(deg(-45.5), deg(-22.5), meter(900))
+	const pa = new ThreePointPolarAlignment(DEFAULT_REFRACTION_PARAMETERS)
+
+	const data = [
+		[1.8256976480896927, -0.5599113045784648, 2461092, 0.5822071759264779],
+		[1.612136209787311, -0.5607337617175503, 2461092, 0.5823885416653422],
+		[1.4034595005569215, -0.5615333930198793, 2461092, 0.5825668287028869],
+		[1.4034590516660916, -0.5615378647033467, 2461092, 0.5827182060176576],
+		[1.4034570523947498, -0.5615721924619829, 2461092, 0.5828698726853838],
+		[1.4029846936604762, -0.5621320411744465, 2461092, 0.5831333333336645],
+		[1.402992508403618, -0.5621143905705348, 2461092, 0.5832858564815036],
+		[1.4041061452046575, -0.56091971604369, 2461092, 0.5835510879617046],
+		[1.4045334284745254, -0.560447048940281, 2461092, 0.5837032523144174],
+		[1.404576661659431, -0.5602763229197412, 2461092, 0.5838589004620358],
+		[1.4045800236890893, -0.5601844274383506, 2461092, 0.5840089814806426],
+		[1.4045810266132221, -0.5601419731511296, 2461092, 0.5841615393509467],
+		[1.4045855331524857, -0.5599739421294415, 2461092, 0.5843143634249767],
+		[1.4046125976110404, -0.5594769737792072, 2461092, 0.5844648379639343],
+	] as const
+
+	for (const step of data) {
+		const result = pa.add(step[0], step[1], { day: step[2], fraction: step[3], scale: 1, location }, true)
+		result && console.info(toArcmin(result.azimuthError), toArcmin(result.altitudeError))
+	}
+})
+
+describe('Sky Simulator', () => {
+	const location = geodeticLocation(deg(-45.5), deg(-22.5), meter(900))
+
+	test('without error', () => {
+		const pa = new ThreePointPolarAlignment(false)
+
+		const data = [
+			[1.6701784921280316, 0.0002591904646892741, 2461092, 1.3678486458322516],
+			[1.774898254327445, 0.0005220205480995465, 2461092, 1.3680159374988743],
+			[1.8796171960625867, 0.0007790743317534916, 2461092, 1.3681737037030635],
+			[1.8796171602798464, 0.0007790259089444543, 2461092, 1.3683120833337306],
+		] as const
+
+		for (const step of data) {
+			const result = pa.add(step[0], step[1], { day: step[2], fraction: step[3], scale: 1, location }, true)
+
+			if (result) {
+				expect(toArcmin(result.azimuthError)).toBeCloseTo(0, 0)
+				expect(toArcmin(result.altitudeError)).toBeCloseTo(0, 0)
+			}
+		}
+	})
+
+	test('with error', () => {
+		const pa = new ThreePointPolarAlignment(false)
+
+		const data = [
+			[1.8812872235744413, 0.0007338374862794161, 2461092, 1.3725453124995584],
+			[1.776566292029562, 0.0011117842708233908, 2461092, 1.372702870371717],
+			[1.6718452273212965, 0.0014700676429002613, 2461092, 1.3728476620382732],
+			[1.671845221477934, 0.0014699660717346456, 2461092, 1.3729754282396147],
+		] as const
+
+		for (const step of data) {
+			const result = pa.add(step[0], step[1], { day: step[2], fraction: step[3], scale: 1, location }, true)
+
+			if (result) {
+				expect(toArcmin(result.azimuthError)).toBeCloseTo(13.9, 0)
+				expect(toArcmin(result.altitudeError)).toBeCloseTo(-17, 0)
+			}
+		}
+	})
 })

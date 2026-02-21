@@ -1,17 +1,15 @@
 import { type Angle, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters } from './astrometry'
-import { ASEC2RAD, DAYSEC, PI, SIDEREAL_RATE } from './constants'
+import { PI } from './constants'
 import { equatorialFromJ2000, type HorizontalCoordinate } from './coordinate'
-import { eraC2s, eraS2c } from './erfa'
+import { eraS2c } from './erfa'
 import type { GeographicPosition } from './location'
-import { type Time, timeSubtract } from './time'
-import { type Vec3, vecNegateMut, vecPlane, vecRotateByRodrigues, vecRotY, vecRotZ } from './vec3'
+import { earthRotationAngle, type Time } from './time'
+import { type Vec3, vecCross, vecDivScalarMut, vecDot, vecLength, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues, vecRotY } from './vec3'
 
 export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoordinate> {
 	readonly azimuthError: Angle
 	readonly altitudeError: Angle
-	readonly azimuthAdjustment: Angle
-	readonly altitudeAdjustment: Angle
 	readonly pole: Vec3 // Normal vector of the plane defined by the three points
 }
 
@@ -32,89 +30,112 @@ export function polarAlignmentError(rightAscension: Angle, declination: Angle, l
 	return [rightAscension - dRA, declination + dDEC]
 }
 
-export function threePointPolarAlignmentError(p1: readonly [Angle, Angle, Time], p2: readonly [Angle, Angle, Time], p3: readonly [Angle, Angle, Time], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicPosition = p3[2].location!): ThreePointPolarAlignmentResult {
+export function threePointPolarAlignmentError(p1: readonly [Angle, Angle], p2: readonly [Angle, Angle], p3: readonly [Angle, Angle], time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicPosition = time.location!): ThreePointPolarAlignmentResult {
 	const isNorthern = location.latitude > 0
 
 	// The normal vector is the direction of the mount pole
-	let pole = vecPlane(eraS2c(p1[0], p1[1]), eraS2c(p2[0], p2[1]), eraS2c(p3[0], p3[1]))
+	const pole = vecNormalizeMut(vecPlane(eraS2c(...p1), eraS2c(...p2), eraS2c(...p3)))
 
 	// Compute pole ⋅ Z to ensure the mount pole is pointing "up" (above the horizon)
-	if ((pole[2] < 0 && isNorthern) || (pole[2] > 0 && !isNorthern)) pole = vecNegateMut(pole)
+	if ((pole[2] < 0 && isNorthern) || (pole[2] > 0 && !isNorthern)) vecNegateMut(pole)
 
 	// Find the azimuth and altitude of the mount pole (normal to the plane defined by the three reference stars)
-	const { azimuth, altitude } = cirsToObserved(pole, p3[2], refraction, location)
+	// const { azimuth, altitude } = icrsToObserved(pole, time, earth(time), undefined, refraction, location)
+	const { azimuth, altitude } = cirsToObserved(pole, time, refraction, location) // ICRS -> CIRS -> Observed
 
 	// Compute the azimuth and altitude error
-	// TODO: How to test it? const latitude = refraction === false ? refractedAltitude(Math.abs(location.latitude), DEFAULT_REFRACTION_PARAMETERS) : Math.abs(location.latitude)
-	const latitude = Math.abs(location.latitude)
+	const latitude = Math.abs(location.latitude) // ChatGPT doesn't recommend to refract the latitude!
 	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
 	const altitudeError = isNorthern ? altitude - latitude : latitude - altitude
 
-	return { azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment: 0, altitudeAdjustment: 0 }
+	return { azimuth, altitude, pole, azimuthError, altitudeError }
 }
 
-// Based on https://github.com/KDE/kstars/blob/master/kstars/ekos/align/polaralign.cpp
+// Based on https://github.com/KDE/kstars/blob/57c2cf84c4cb38eb7cbdd0bfd77359a66c74b93b/kstars/ekos/align/polaralign.cpp#L238
 
 // Compute the polar-alignment azimuth and altitude error by comparing the new image's coordinates
 // with the coordinates from the 3rd measurement image. Use the difference to infer a rotation angle,
 // and rotate the originally computed polar-alignment axis by that angle to find the new axis
 // around which RA now rotates.
 export function threePointPolarAlignmentAfterAdjustment(
-	result: ThreePointPolarAlignmentResult,
-	from: readonly [Angle, Angle, Time],
-	to: readonly [Angle, Angle, Time],
+	result: ThreePointPolarAlignmentResult, // 3rd measurement image alignment result
+	from: readonly [Angle, Angle], // 3rd measurement image solution CIRS coordinates
+	timeFrom: Time,
+	to: readonly [Angle, Angle], // actual measurement image solution CIRS coordinates
+	timeTo: Time,
 	refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS,
-	location: GeographicPosition = to[2].location!,
+	location: GeographicPosition = timeTo.location!,
 ): ThreePointPolarAlignmentResult | false {
 	const isNorthern = location.latitude > 0
 
-	// Mount is tracking over an unaligned polar axis.
-	// Figure out what the ra/dec would be if the user hadn't modified the knobs.
-	// That is, just rotate the 3rd measurement point around the mount's original RA axis.
-	const p3Time = timeSubtract(to[2], from[2]) // Time since third point in days
-
 	// Angle corresponding to that interval assuming the sidereal rate.
-	const p3Angle = -SIDEREAL_RATE * ASEC2RAD * DAYSEC * p3Time // Negative because the sky appears to rotate westward
+	const siderealAngle = normalizePI(earthRotationAngle(timeTo) - earthRotationAngle(timeFrom))
 
 	// Rotate the original 3rd point around that axis, simulating the mount's tracking movements (mount is actually unaligned).
-	const p3Point = vecRotateByRodrigues(eraS2c(from[0], from[1]), result.pole, -p3Angle)
-
-	const p3AzAltPoint = cirsToObserved(p3Point, from[2], refraction)
-	const newAzAltPoint = cirsToObserved(eraS2c(to[0], to[1]), to[2], refraction)
+	const p3Expected = vecRotateByRodrigues(eraS2c(from[0], from[1]), result.pole, siderealAngle)
+	const pNew = eraS2c(to[0], to[1])
 
 	// Find the adjustment the user must have made by examining the change from point3 to newPoint
 	// (i.e. the rotation caused by the user adjusting the azimuth and altitude knobs).
-	// We assume that this was a rotation around a level mount's y axis and z axis.
-	const zyAdjustment = rotationAngles(eraS2c(p3AzAltPoint.azimuth, p3AzAltPoint.altitude), eraS2c(newAzAltPoint.azimuth, newAzAltPoint.altitude))
+	const p3Cross = vecCross(p3Expected, pNew)
+	const sinRot = vecLength(p3Cross)
+	const cosRot = vecDot(p3Expected, pNew)
 
-	if (zyAdjustment === false) return false
+	if (sinRot === 0 && cosRot > 0) {
+		console.info('no rotation applied')
+		return result
+	}
 
 	// Rotate the original RA axis position by the above adjustments.
-	const [azimuthAdjustment, altitudeAdjustment] = zyAdjustment
-	const pole = vecRotZ(vecRotY(eraS2c(result.azimuth, result.altitude), altitudeAdjustment), azimuthAdjustment)
+	const rotAxis = vecDivScalarMut(p3Cross, sinRot)
+	const rotAngle = Math.atan2(sinRot, cosRot)
+	const newPole = vecRotateByRodrigues(result.pole, rotAxis, rotAngle)
+	// const observedPole = icrsToObserved(newPole, timeTo, earth(timeTo), undefined, refraction, location)
+	const observedPole = cirsToObserved(newPole, timeTo, refraction, location) // ICRS -> CIRS -> Observed
 
 	// Recompute the azimuth and altitude error
-	const [azimuth, altitude] = eraC2s(...pole)
-	const latitude = Math.abs(location.latitude)
+	const { azimuth, altitude } = observedPole
+	const latitude = Math.abs(location.latitude) // ChatGPT doesn't recommend to refract the latitude!
 	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
 	const altitudeError = isNorthern ? altitude - latitude : latitude - altitude
 
-	return { azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment, altitudeAdjustment }
+	return { azimuth, altitude, pole: newPole, azimuthError, altitudeError }
+}
+
+function decomposeAzAltAdjustment(poleLocal: Vec3, newPoleLocal: Vec3): Readonly<{ azimuthAdjustment: number; altitudeAdjustment: number }> {
+	// --- 1) Resolver altitude ---
+	const numAlt = poleLocal[0] * newPoleLocal[2] - poleLocal[2] * newPoleLocal[0]
+	const denAlt = poleLocal[0] * newPoleLocal[0] + poleLocal[2] * newPoleLocal[2]
+	const altitudeAdjustment = Math.atan2(numAlt, denAlt)
+
+	// --- 2) Aplicar rotação de altitude ---
+	const poleAfterAlt = vecRotY(poleLocal, altitudeAdjustment)
+
+	// --- 3) Resolver azimute ---
+	const numAz = poleAfterAlt[0] * newPoleLocal[1] - poleAfterAlt[1] * newPoleLocal[0]
+	const denAz = poleAfterAlt[0] * newPoleLocal[0] + poleAfterAlt[1] * newPoleLocal[1]
+
+	const azimuthAdjustment = Math.atan2(numAz, denAz)
+
+	return { azimuthAdjustment, altitudeAdjustment }
 }
 
 export class ThreePointPolarAlignment {
-	private readonly points = new Array<readonly [Angle, Angle, Time]>(3)
+	private readonly points = new Array<readonly [Angle, Angle]>(3)
+	private readonly times = new Array<Time>(3)
+
 	private position = 0
 	private initialError: ThreePointPolarAlignmentResult | false = false
 	private currentError: ThreePointPolarAlignmentResult | false = false
 
 	constructor(private refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS) {}
 
-	add(rightAscension: Angle, declination: Angle, time: Time, isJ2000: boolean = false) {
-		const point = isJ2000 ? ([...equatorialFromJ2000(rightAscension, declination, time), time] as const) : ([rightAscension, declination, time] as const)
+	add(rightAscension: Angle, declination: Angle, time: Time, isJ2000: boolean) {
+		const point = isJ2000 ? equatorialFromJ2000(rightAscension, declination, time) : ([rightAscension, declination] as const)
 
 		if (this.position < 3) {
 			this.points[this.position] = point
+			this.times[this.position] = time
 		}
 
 		this.position++
@@ -122,9 +143,9 @@ export class ThreePointPolarAlignment {
 		// When we have three points, compute the initial polar alignment error.
 		// After that, each new point is used to compute the adjusted error
 		if (this.position === 3) {
-			this.currentError = this.initialError = threePointPolarAlignmentError(this.points[0], this.points[1], this.points[2], this.refraction)
+			this.currentError = this.initialError = threePointPolarAlignmentError(this.points[0], this.points[1], this.points[2], time, this.refraction)
 		} else if (this.position > 3 && this.initialError !== false) {
-			this.currentError = threePointPolarAlignmentAfterAdjustment(this.initialError, this.points[2], point, this.refraction)
+			this.currentError = threePointPolarAlignmentAfterAdjustment(this.initialError, this.points[2], this.times[2], point, time, this.refraction)
 		}
 
 		return this.currentError
@@ -135,91 +156,4 @@ export class ThreePointPolarAlignment {
 		this.initialError = false
 		this.currentError = false
 	}
-}
-
-// https://github.com/KDE/kstars/blob/168eee57d98935b7e7dc7e2932cf3aafc089fafe/kstars/ekos/align/polaralign.cpp#L147
-// Calculates the smallest rotation angle around the Y axis (modeling a turn of the mount's altitude knob)
-// that corresponds to a rotation from "from" to "goal". Note: the rotation won't reach "goal", it would still need
-// another rotation around the Z axis (modeling a turn of the mount's azimuth knob).
-// Returns the angle in radians.
-// Gemini generated something close to this with this prompt.
-//   I have a geometry problem I need a solution for (with c++ code):
-//   I have two points on a unit sphere (x1, y1, z1) and (x2, y2, z2).
-//   I want to rotate the sphere so that x1,y1,z1 moves to x2,y2,z2,
-//   but I can only make rotations first around the Y axis and then around the Z axis.
-//   I want to make the smallest rotations possible. First solve for the rotation around
-//   the Y axis, then the rotation around the Z axis.
-// This function is just y-axis rotation part.
-// Here's a quick explanation. The function finds an intermediate point (after rotating around Y-axis,
-// before rotating around Z-axis). That point, since it has a Y-axis rotation from the "from" point,
-// shares the from point's y value. Similarly, that point, since it will be rotated around the Z-axis
-// to become the goal point, shares the goal point's z value.
-// So the intermediate point is (x_int, from[1], goal[2]).
-// Since the point is on the unit circle, x_int^2 + from[1]^2 +goal[2]^2 = 1.0
-// So below just solves for x_int by solving that equation,
-// which has 2 solutions, +sqrt(radicand)  and -sqrt(radicand).
-// Now that we know the values for the intermediate point, we can find the Y rotation by projecting on the X-Z plane,
-// and can find the Z rotation by projecting on the X-Y plane. See the comment in the "Steps 2 & 3" loop.
-function findSmallestThetaY(from: Vec3, goal: Vec3): Angle | false {
-	let radicand = 1 - from[1] * from[1] - goal[2] * goal[2]
-
-	// Use a small tolerance for floating point errors
-	if (radicand < -1e-9) {
-		console.warn('PAA refresh: No solution: |C| > D')
-		return false
-	}
-
-	// Ensure radicand is not negative due to precision errors
-	radicand = Math.max(0, radicand)
-
-	const xia = Math.sqrt(radicand)
-	const xib = -xia
-	const solutions: number[] = []
-
-	// Steps 2 & 3: Calculate angles for both possible solutions
-	for (const xi of [xia, xib]) {
-		const pi: Vec3 = [xi, from[1], goal[2]]
-
-		// Calculate Z-axis rotation angle. See below comment.
-		let thetaZ = Math.atan2(goal[1], goal[0]) - Math.atan2(pi[1], pi[0])
-
-		// Calculate Y-axis rotation angle. This expression is simply the angle of the projection of
-		// intermediate point onto the X-Z plane, minus the angle of the projection onto the X-Z plane
-		// of the "from" point.
-		let thetaY = Math.atan2(pi[0], pi[2]) - Math.atan2(from[0], from[2])
-
-		// Normalize angles to the range [-pi, pi] to ensure we find the smallest rotation
-		// Could do this with a simple loop
-		// (e.g. "while (theta_z < -PI) theta_z += 2*PI; and the "> PI" loop")
-		// but AI recommends the below.
-		thetaZ = Math.atan2(Math.sin(thetaZ), Math.cos(thetaZ))
-		thetaY = Math.atan2(Math.sin(thetaY), Math.cos(thetaY))
-
-		solutions.push(thetaY)
-		solutions.push(thetaZ)
-	}
-
-	// Step 4: Choose the solution with the smallest total rotation
-	const cost1 = Math.abs(solutions[0]) + Math.abs(solutions[1])
-	const cost2 = Math.abs(solutions[2]) + Math.abs(solutions[3])
-
-	if (cost1 <= cost2) {
-		return solutions[0]
-	} else {
-		return solutions[2]
-	}
-}
-
-// https://github.com/KDE/kstars/blob/168eee57d98935b7e7dc7e2932cf3aafc089fafe/kstars/ekos/align/polaralign.cpp#L218
-// This computes the exact rotation angles directly (Thanks AI!)
-// yAngle corresponds to a change in the mount's altitude control.
-// zAngle corresponds to a change in the mount's azimuth control.
-function rotationAngles(from: Vec3, goal: Vec3): readonly [Angle, Angle] | false {
-	const yAngle = findSmallestThetaY(from, goal)
-
-	if (yAngle === false) return false
-
-	const fromAfterY = vecRotY(from, yAngle)
-	const zAngle = Math.atan2(goal[1], goal[0]) - Math.atan2(fromAfterY[1], fromAfterY[0])
-	return [zAngle, yAngle]
 }

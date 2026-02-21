@@ -124,11 +124,11 @@ export function observedToCirs(azimuth: Angle, altitude: Angle, time: Time, refr
 	return eraAtoiq('A', azimuth, PIOVERTWO - altitude, astrom)
 }
 
-export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, astrom?: EraAstrom): Observed {
+export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicCoordinate = time.location!, astrom?: EraAstrom): Observed {
 	if (!astrom) {
 		const a = tt(time)
 		const b = ut1(time)
-		const { longitude, latitude, elevation } = time.location!
+		const { longitude, latitude, elevation } = location
 		const [sp, xp, yp] = pmAngles(time)
 		const pressure = refraction === false ? 0 : (refraction.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure)
 		const temperature = refraction === false ? 0 : (refraction.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
