@@ -3,6 +3,7 @@ import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameter
 import { ASEC2RAD, DAYSEC, PI, SIDEREAL_RATE } from './constants'
 import { equatorialFromJ2000, type HorizontalCoordinate } from './coordinate'
 import { eraC2s, eraS2c } from './erfa'
+import type { GeographicPosition } from './location'
 import { type Time, timeSubtract } from './time'
 import { type Vec3, vecNegateMut, vecPlane, vecRotateByRodrigues, vecRotY, vecRotZ } from './vec3'
 
@@ -31,8 +32,7 @@ export function polarAlignmentError(rightAscension: Angle, declination: Angle, l
 	return [rightAscension - dRA, declination + dDEC]
 }
 
-export function threePointPolarAlignmentError(p1: readonly [Angle, Angle, Time], p2: readonly [Angle, Angle, Time], p3: readonly [Angle, Angle, Time], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): ThreePointPolarAlignmentResult {
-	const location = p3[2].location!
+export function threePointPolarAlignmentError(p1: readonly [Angle, Angle, Time], p2: readonly [Angle, Angle, Time], p3: readonly [Angle, Angle, Time], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicPosition = p3[2].location!): ThreePointPolarAlignmentResult {
 	const isNorthern = location.latitude > 0
 
 	// The normal vector is the direction of the mount pole
@@ -42,7 +42,7 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle, Time],
 	if ((pole[2] < 0 && isNorthern) || (pole[2] > 0 && !isNorthern)) pole = vecNegateMut(pole)
 
 	// Find the azimuth and altitude of the mount pole (normal to the plane defined by the three reference stars)
-	const { azimuth, altitude } = cirsToObserved(pole, p3[2], refraction)
+	const { azimuth, altitude } = cirsToObserved(pole, p3[2], refraction, location)
 
 	// Compute the azimuth and altitude error
 	// TODO: How to test it? const latitude = refraction === false ? refractedAltitude(Math.abs(location.latitude), DEFAULT_REFRACTION_PARAMETERS) : Math.abs(location.latitude)
@@ -59,8 +59,14 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle, Time],
 // with the coordinates from the 3rd measurement image. Use the difference to infer a rotation angle,
 // and rotate the originally computed polar-alignment axis by that angle to find the new axis
 // around which RA now rotates.
-export function threePointPolarAlignmentAfterAdjustment(result: ThreePointPolarAlignmentResult, from: readonly [Angle, Angle, Time], to: readonly [Angle, Angle, Time], refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): ThreePointPolarAlignmentResult | false {
-	const location = to[2].location!
+export function threePointPolarAlignmentAfterAdjustment(
+	result: ThreePointPolarAlignmentResult,
+	from: readonly [Angle, Angle, Time],
+	to: readonly [Angle, Angle, Time],
+	refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS,
+	location: GeographicPosition = to[2].location!,
+): ThreePointPolarAlignmentResult | false {
+	const isNorthern = location.latitude > 0
 
 	// Mount is tracking over an unaligned polar axis.
 	// Figure out what the ra/dec would be if the user hadn't modified the knobs.
@@ -71,7 +77,7 @@ export function threePointPolarAlignmentAfterAdjustment(result: ThreePointPolarA
 	const p3Angle = -SIDEREAL_RATE * ASEC2RAD * DAYSEC * p3Time // Negative because the sky appears to rotate westward
 
 	// Rotate the original 3rd point around that axis, simulating the mount's tracking movements (mount is actually unaligned).
-	const p3Point = vecRotateByRodrigues(eraS2c(from[0], from[1]), result.pole, p3Angle)
+	const p3Point = vecRotateByRodrigues(eraS2c(from[0], from[1]), result.pole, -p3Angle)
 
 	const p3AzAltPoint = cirsToObserved(p3Point, from[2], refraction)
 	const newAzAltPoint = cirsToObserved(eraS2c(to[0], to[1]), to[2], refraction)
@@ -84,19 +90,16 @@ export function threePointPolarAlignmentAfterAdjustment(result: ThreePointPolarA
 	if (zyAdjustment === false) return false
 
 	// Rotate the original RA axis position by the above adjustments.
-	const azimuthAdjustment = zyAdjustment[0]
-	const altitudeAdjustment = zyAdjustment[1]
+	const [azimuthAdjustment, altitudeAdjustment] = zyAdjustment
 	const pole = vecRotZ(vecRotY(eraS2c(result.azimuth, result.altitude), altitudeAdjustment), azimuthAdjustment)
 
 	// Recompute the azimuth and altitude error
 	const [azimuth, altitude] = eraC2s(...pole)
+	const latitude = Math.abs(location.latitude)
+	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
+	const altitudeError = isNorthern ? altitude - latitude : latitude - altitude
 
-	// Compute the azimuth and altitude error
-	const latitude = location.latitude
-	const azimuthError = normalizePI(azimuth)
-	const altitudeError = altitude - latitude
-
-	return { azimuth, altitude, pole: result.pole, azimuthError, altitudeError, azimuthAdjustment, altitudeAdjustment }
+	return { azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment, altitudeAdjustment }
 }
 
 export class ThreePointPolarAlignment {

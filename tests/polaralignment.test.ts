@@ -4,7 +4,7 @@ import { DEFAULT_REFRACTION_PARAMETERS } from '../src/astrometry'
 import { meter } from '../src/distance'
 import { geodeticLocation, localSiderealTime } from '../src/location'
 import { polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentError } from '../src/polaralignment'
-import { timeYMDHMS } from '../src/time'
+import { time, timeYMDHMS } from '../src/time'
 
 describe('computed polar alignment error', () => {
 	const time = timeYMDHMS(2025, 9, 7, 12, 0, 0)
@@ -276,4 +276,18 @@ describe.skip('after adjustment I', () => {
 			}
 		}
 	})
+})
+
+test('change orientation', () => {
+	const location = geodeticLocation(deg(-45.5), deg(-22.5), meter(900))
+
+	const a = [1.418966489892447, -0.5613841311820498, time(2461092, 0.5784092013896616, undefined, false)] as const
+	const b = [1.4971924601152036, -0.5611006782686236, time(2461092, 0.5785965162046529, undefined, false)] as const
+	const c = [1.5767801876529501, -0.5608213650948436, time(2461092, 0.578802280092129, undefined, false)] as const
+
+	const pa1 = threePointPolarAlignmentError(a, b, c, DEFAULT_REFRACTION_PARAMETERS, location)
+	const pa2 = threePointPolarAlignmentError([c[0], c[1], a[2]], b, [a[0], a[1], c[2]], DEFAULT_REFRACTION_PARAMETERS, location)
+
+	expect(toArcmin(pa1.azimuthError)).toBe(toArcmin(pa2.azimuthError))
+	expect(toArcmin(pa1.altitudeError)).toBe(toArcmin(pa2.altitudeError))
 })
