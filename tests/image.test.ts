@@ -135,7 +135,15 @@ test('histogram with transform', async () => {
 })
 
 test('debayer', async () => {
-	const image = await readImageTransformAndSave((i) => stf(debayer(i) ?? i, 0.05), 'debayer-grbg', '30bbb35920a25c9aad10700cc082b426', Bitpix.SHORT, 1, 'fit', 'GRBG')
+	const image = await readImageTransformAndSave((i) => stf(debayer(i) ?? i, 0.05), 'debayer-grbg', 'a83991af17528a13a4248add8b406a74', Bitpix.SHORT, 1, 'fit', 'GRBG')
+
+	expect(image.header.NAXIS).toBe(3)
+	expect(image.header.NAXIS3).toBe(3)
+	expect(image.metadata.channels).toBe(3)
+}, 5000)
+
+test('debayer RGBG', async () => {
+	const image = await readImageTransformAndSave((i) => stf(debayer(i, 'RGBG') ?? i, 0.05), 'debayer-rgbg', '7c4bda2a5155e235912660fda310c594', Bitpix.SHORT, 1, 'fit', 'GRBG')
 
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
@@ -300,11 +308,11 @@ describe('calibrate', async () => {
 
 	test('dark 60s', async () => {
 		const calibrated = calibrate(clone(light!), dark60, flat, bias, darkFlat)
-		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-60', '982da908b950318bc119f7d62eb74406')
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-60', 'b9f99a73a3920198ac8661a27f8c40f0')
 	}, 5000)
 
 	test('dark 15s', async () => {
 		const calibrated = calibrate(clone(light!), dark15, flat, bias, darkFlat)
-		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-15', 'd762e520ef4ae827e3143bdb631169ca')
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-15', '1d3b04aad4b720ec72b5eb46775c75c1')
 	}, 5000)
 })

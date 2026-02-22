@@ -47,7 +47,7 @@ export interface ImageMetadata extends Readonly<Size> {
 	readonly strideInBytes: number
 	readonly pixelSizeInBytes: number
 	readonly bitpix: Bitpix
-	readonly bayer?: CfaPattern
+	readonly bayer: CfaPattern | undefined
 }
 
 export interface ConvolutionKernel extends Readonly<Size> {

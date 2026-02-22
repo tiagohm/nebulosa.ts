@@ -1,43 +1,122 @@
 import { describe, expect, test } from 'bun:test'
+import fs from 'fs/promises'
 import { dms, hms } from '../src/angle'
-import { bitpixInBytes, computeRemainingBytes, declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, heightKeyword, isFits, observationDateKeyword, readFits, rightAscensionKeyword, widthKeyword, writeFits } from '../src/fits'
+import { declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, heightKeyword, isFits, observationDateKeyword, readFits, rightAscensionKeyword, widthKeyword, writeFits } from '../src/fits'
 import { KEYWORDS } from '../src/fits.headers'
-import { bufferSink, bufferSource } from '../src/io'
-import { BITPIXES, CHANNELS, openFitsFromFileHandle } from './image.util'
+import { readImageFromBuffer, readImageFromFits, readImageFromPath } from '../src/image'
+import { bufferSink, fileHandleSource } from '../src/io'
+import { BITPIXES, CHANNELS, saveImageAndCompareHash } from './image.util'
 
 test('is fits', async () => {
 	const buffer = await Bun.file('data/NGC3372-8.1.fit').arrayBuffer()
 	expect(isFits(buffer)).toBeTrue()
 })
 
+describe('read', () => {
+	test('mono 8-bit', async () => {
+		const handle = await fs.open('data/NGC3372-8.1.fit')
+		await using source = fileHandleSource(handle)
+		const fits = await readFits(source)
+		const image = await readImageFromFits(fits!, source)
+		await saveImageAndCompareHash(image!, 'fits-mono-8', 'c754bf834dc1bb3948ec3cf8b9aca303')
+	})
+
+	test('color 8-bit', async () => {
+		const handle = await fs.open('data/NGC3372-8.3.fit')
+		await using source = fileHandleSource(handle)
+		const fits = await readFits(source)
+		const image = await readImageFromFits(fits!, source)
+		await saveImageAndCompareHash(image!, 'fits-color-8', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+	})
+
+	test('mono 16-bit', async () => {
+		const handle = await fs.open('data/NGC3372-16.1.fit')
+		await using source = fileHandleSource(handle)
+		const fits = await readFits(source)
+		const image = await readImageFromFits(fits!, source)
+		await saveImageAndCompareHash(image!, 'fits-mono-16', 'c754bf834dc1bb3948ec3cf8b9aca303')
+	})
+
+	test('color 16-bit', async () => {
+		const handle = await fs.open('data/NGC3372-16.3.fit')
+		await using source = fileHandleSource(handle)
+		const fits = await readFits(source)
+		const image = await readImageFromFits(fits!, source)
+		await saveImageAndCompareHash(image!, 'fits-color-16', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+	})
+
+	test('mono 32-bit', async () => {
+		const handle = await fs.open('data/NGC3372-32.1.fit')
+		await using source = fileHandleSource(handle)
+		const fits = await readFits(source)
+		const image = await readImageFromFits(fits!, source)
+		await saveImageAndCompareHash(image!, 'fits-mono-32', 'c754bf834dc1bb3948ec3cf8b9aca303')
+	})
+
+	test('color 32-bit', async () => {
+		const handle = await fs.open('data/NGC3372-32.3.fit')
+		await using source = fileHandleSource(handle)
+		const fits = await readFits(source)
+		const image = await readImageFromFits(fits!, source)
+		await saveImageAndCompareHash(image!, 'fits-color-32', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+	})
+
+	test('mono float 32-bit', async () => {
+		const handle = await fs.open('data/NGC3372--32.1.fit')
+		await using source = fileHandleSource(handle)
+		const fits = await readFits(source)
+		const image = await readImageFromFits(fits!, source)
+		await saveImageAndCompareHash(image!, 'fits-mono-F32', 'c754bf834dc1bb3948ec3cf8b9aca303')
+	})
+
+	test('color float 32-bit', async () => {
+		const handle = await fs.open('data/NGC3372--32.3.fit')
+		await using source = fileHandleSource(handle)
+		const fits = await readFits(source)
+		const image = await readImageFromFits(fits!, source)
+		await saveImageAndCompareHash(image!, 'fits-color-F32', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+	})
+
+	test('mono float 64-bit', async () => {
+		const handle = await fs.open('data/NGC3372--64.1.fit')
+		await using source = fileHandleSource(handle)
+		const fits = await readFits(source)
+		const image = await readImageFromFits(fits!, source)
+		await saveImageAndCompareHash(image!, 'fits-mono-F64', 'c754bf834dc1bb3948ec3cf8b9aca303')
+	})
+
+	test('color float 64-bit', async () => {
+		const handle = await fs.open('data/NGC3372--64.3.fit')
+		await using source = fileHandleSource(handle)
+		const fits = await readFits(source)
+		const image = await readImageFromFits(fits!, source)
+		await saveImageAndCompareHash(image!, 'fits-color-F64', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+	})
+})
+
 test('write fits', async () => {
-	const buffer = Buffer.alloc(1024 * 1024 * 18)
+	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
-	for (const bitpix of BITPIXES) {
-		for (const channel of CHANNELS) {
+	for (const channel of CHANNELS) {
+		for (const bitpix of BITPIXES) {
+			const image = (await readImageFromPath(`data/NGC3372-${bitpix}.${channel}.fit`))!
+
 			const sink = bufferSink(buffer)
+			await writeFits(sink, [image])
 
-			await openFitsFromFileHandle(bitpix, channel, async (a) => {
-				await writeFits(sink, a)
+			const output = (await readImageFromBuffer(buffer))!
 
-				const size = widthKeyword(a.hdus[0].header, 0) * heightKeyword(a.hdus[0].header, 0) * bitpixInBytes(bitpix) * channel
-				expect(sink.position).toBe(5760 + size + computeRemainingBytes(size))
+			expect(Object.keys(output.header).length).toBeGreaterThanOrEqual(60)
+			expect(output.header).toEqual(image.header)
 
-				const source = bufferSource(buffer)
-				const b = await readFits(source)
+			await saveImageAndCompareHash(output, `write-fits-${bitpix}-${channel}`, channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4')
 
-				expect(Object.keys(b!.hdus[0].header).length).toBeGreaterThanOrEqual(60)
-				expect(b!.hdus[0].header).toEqual(a.hdus[0].header)
-				expect(b!.hdus[0].data.size).toEqual(a.hdus[0].data.size!)
-				expect(b!.hdus[0].data.offset).toEqual(5760)
-			})
-
-			buffer.fill(0)
+			buffer.fill(20)
 		}
 	}
 }, 10000)
 
-test('read', () => {
+test('read keyword', () => {
 	const reader = new FitsKeywordReader()
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE * 2)
 	const offset = Math.trunc(Math.random() * FITS_HEADER_CARD_SIZE)
@@ -57,7 +136,7 @@ test('read', () => {
 	expect(read('END')).toEqual(['END', undefined, undefined])
 })
 
-test('write', () => {
+test('write keyword', () => {
 	const writer = new FitsKeywordWriter()
 	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE)
 	const offset = Math.trunc(Math.random() * (FITS_BLOCK_SIZE / 2)) + 1
@@ -77,7 +156,7 @@ test('write', () => {
 	expect(write(['END', undefined, undefined])).toBe('END                                                                             ')
 })
 
-test('write all', () => {
+test('write all keywords', () => {
 	FitsKeywordWriter.keywords = KEYWORDS
 
 	const writer = new FitsKeywordWriter()
@@ -100,7 +179,7 @@ test('write all', () => {
 	expect(write({ COMMENT: '/' })).toBe('COMMENT  /                                                                      ')
 })
 
-test('continue', async () => {
+test('continue keyword', () => {
 	FitsKeywordWriter.keywords = {}
 
 	const source = Buffer.allocUnsafe(400)
@@ -111,18 +190,21 @@ test('continue', async () => {
 	source.write("CONTINUE  'nt mauris faucibus accumsan et ac nibh.'                             ", 240)
 	source.write('END                                                                             ', 320)
 
-	const fits = await readFits(bufferSource(source))
-	const { header } = fits!.hdus[0]
+	const reader = new FitsKeywordReader()
+	const header = reader.readAll(source)
 
+	expect(header.SIMPLE).toBeTrue()
 	expect(header.TEXT).toBe('Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed pharetra nulla leo, ut porta lorem sodales vel. Maecenas ut felis tincidunt mauris faucibus accumsan et ac nibh.')
 
 	const sink = Buffer.allocUnsafe(400)
-	await writeFits(bufferSink(sink), fits!)
+	const writer = new FitsKeywordWriter()
+	writer.writeAll(header, sink)
+	writer.write(['END'], sink, 320)
 
 	expect(sink).toEqual(source)
 })
 
-test('escape', async () => {
+test('escape keyword', () => {
 	FitsKeywordWriter.keywords = {}
 
 	const source = Buffer.allocUnsafe(400)
@@ -133,50 +215,51 @@ test('escape', async () => {
 	source.write("TEXT2   = 'The word ''paradox'' perfectly describes the situation.'             ", 240)
 	source.write('END                                                                             ', 320)
 
-	const fits = await readFits(bufferSource(source))
-	const { header } = fits!.hdus[0]
+	const reader = new FitsKeywordReader()
+	const header = reader.readAll(source)
 
+	expect(header.SIMPLE).toBeTrue()
 	expect(header.TEXT0).toBe("It's a beautiful day outside.")
 	expect(header.TEXT1).toBe("The teacher said, 'Homework is due tomorrow.'")
 	expect(header.TEXT2).toBe("The word 'paradox' perfectly describes the situation.")
 
 	const sink = Buffer.allocUnsafe(400)
-	await writeFits(bufferSink(sink), fits!)
+	const writer = new FitsKeywordWriter()
+	writer.writeAll(header, sink)
+	writer.write(['END'], sink, 320)
 
 	expect(sink).toEqual(source)
 })
 
-describe('keywords', () => {
-	test('width', () => {
-		expect(widthKeyword({ NAXIS1: 1200 }, undefined)).toBe(1200)
-		expect(widthKeyword({ IMAGEW: 1400 }, undefined)).toBe(1400)
-		expect(widthKeyword({ NAXIS1: 1100, IMAGEW: 1400 }, undefined)).toBe(1100)
-	})
+test('width keywords', () => {
+	expect(widthKeyword({ NAXIS1: 1200 }, undefined)).toBe(1200)
+	expect(widthKeyword({ IMAGEW: 1400 }, undefined)).toBe(1400)
+	expect(widthKeyword({ NAXIS1: 1100, IMAGEW: 1400 }, undefined)).toBe(1100)
+})
 
-	test('height', () => {
-		expect(heightKeyword({ NAXIS2: 1200 }, undefined)).toBe(1200)
-		expect(heightKeyword({ IMAGEH: 1400 }, undefined)).toBe(1400)
-		expect(heightKeyword({ NAXIS2: 1100, IMAGEH: 1400 }, undefined)).toBe(1100)
-	})
+test('height keywords', () => {
+	expect(heightKeyword({ NAXIS2: 1200 }, undefined)).toBe(1200)
+	expect(heightKeyword({ IMAGEH: 1400 }, undefined)).toBe(1400)
+	expect(heightKeyword({ NAXIS2: 1100, IMAGEH: 1400 }, undefined)).toBe(1100)
+})
 
-	test('right ascension', () => {
-		expect(rightAscensionKeyword({ OBJCTRA: '12 44 04.261' }, undefined)).toBeCloseTo(hms(12, 44, 4.261), 12)
-		expect(rightAscensionKeyword({ RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
-		expect(rightAscensionKeyword({ OBJCTRA: '11 44 04.261', RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
-		expect(rightAscensionKeyword({ CRVAL1: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
-	})
+test('right ascension keywords', () => {
+	expect(rightAscensionKeyword({ OBJCTRA: '12 44 04.261' }, undefined)).toBeCloseTo(hms(12, 44, 4.261), 12)
+	expect(rightAscensionKeyword({ RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
+	expect(rightAscensionKeyword({ OBJCTRA: '11 44 04.261', RA: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
+	expect(rightAscensionKeyword({ CRVAL1: 161.0177548315 }, undefined)).toBeCloseTo(hms(10, 44, 4.26115956), 12)
+})
 
-	test('declination', () => {
-		expect(declinationKeyword({ OBJCTDEC: '59 36 08.17' }, undefined)).toBeCloseTo(dms(59, 36, 8.17), 12)
-		expect(declinationKeyword({ DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
-		expect(declinationKeyword({ OBJCTDEC: '59 36 08.17', DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
-		expect(declinationKeyword({ CRVAL2: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
-	})
+test('declination keywords', () => {
+	expect(declinationKeyword({ OBJCTDEC: '59 36 08.17' }, undefined)).toBeCloseTo(dms(59, 36, 8.17), 12)
+	expect(declinationKeyword({ DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
+	expect(declinationKeyword({ OBJCTDEC: '59 36 08.17', DEC: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
+	expect(declinationKeyword({ CRVAL2: -59.6022705034 }, undefined)).toBeCloseTo(dms(-59, 36, 8.17381224), 12)
+})
 
-	test('observation date', () => {
-		expect(observationDateKeyword({ 'DATE-OBS': '2023-01-15T01:27:05.460' })).toBe(1673746025460)
-		expect(observationDateKeyword({ 'DATE-END': '2023-01-15T01:27:05.460' })).toBe(1673746025460)
-		expect(observationDateKeyword({ DATE: '2023-01-15T01:27:05.460', DEC: -59.6022705034 })).toBe(1673746025460)
-		expect(observationDateKeyword({ 'DATE-OBS': '2023-01-15', DATE: '2023-01-15T01:27:05.460' })).toBe(1673740800000)
-	})
+test('observation date keywords', () => {
+	expect(observationDateKeyword({ 'DATE-OBS': '2023-01-15T01:27:05.460' })).toBe(1673746025460)
+	expect(observationDateKeyword({ 'DATE-END': '2023-01-15T01:27:05.460' })).toBe(1673746025460)
+	expect(observationDateKeyword({ DATE: '2023-01-15T01:27:05.460', DEC: -59.6022705034 })).toBe(1673746025460)
+	expect(observationDateKeyword({ 'DATE-OBS': '2023-01-15', DATE: '2023-01-15T01:27:05.460' })).toBe(1673740800000)
 })

@@ -24,7 +24,6 @@ describe('header', () => {
 		expect(hdus[0].pixelStorage).toBe('Planar')
 		expect(hdus[0].sampleFormat).toBe('Float64')
 		expect(hdus[0].bitpix).toBe(-64)
-		expect(hdus[0].bounds).toEqual([0, 1])
 		expect(hdus[0].compression).toBeUndefined()
 		expect(hdus[0].header).toEqual({ SIMPLE: true, BITPIX: -64, NAXIS: 2, NAXIS1: 1037, NAXIS2: 706 })
 	})
@@ -42,7 +41,6 @@ describe('header', () => {
 		expect(hdus[0].pixelStorage).toBe('Planar')
 		expect(hdus[0].sampleFormat).toBe('Float64')
 		expect(hdus[0].bitpix).toBe(-64)
-		expect(hdus[0].bounds).toEqual([0, 1])
 		expect(hdus[0].compression).toEqual({ format: 'zstd', shuffled: false, uncompressedSize: 1464244, itemSize: 0 })
 		expect(hdus[0].header).toEqual({ SIMPLE: true, NAXIS: 2, NAXIS1: 1037, NAXIS2: 706, BITPIX: -64, EXPTIME: 30 })
 
@@ -54,7 +52,6 @@ describe('header', () => {
 		expect(hdus[1].pixelStorage).toBe('Planar')
 		expect(hdus[1].sampleFormat).toBe('Float32')
 		expect(hdus[1].bitpix).toBe(-32)
-		expect(hdus[1].bounds).toEqual([0, 1])
 		expect(hdus[1].compression).toEqual({ format: 'zstd', shuffled: true, uncompressedSize: 1464244, itemSize: 2 })
 		expect(hdus[1].header).toEqual({ SIMPLE: true, NAXIS: 3, NAXIS1: 4096, NAXIS2: 4096, NAXIS3: 4, BITPIX: -32, EXPTIME: 30 })
 	})
@@ -66,7 +63,7 @@ describe('read', () => {
 		await using source = fileHandleSource(handle)
 		const xisf = await readXisf(source)
 		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image, 'xisf-mono-8', 'c754bf834dc1bb3948ec3cf8b9aca303')
+		await saveImageAndCompareHash(image!, 'xisf-mono-8', 'c754bf834dc1bb3948ec3cf8b9aca303')
 	})
 
 	test('color 8-bit', async () => {
@@ -74,7 +71,7 @@ describe('read', () => {
 		await using source = fileHandleSource(handle)
 		const xisf = await readXisf(source)
 		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image, 'xisf-color-8', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+		await saveImageAndCompareHash(image!, 'xisf-color-8', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
 	})
 
 	test('mono 16-bit', async () => {
@@ -82,7 +79,7 @@ describe('read', () => {
 		await using source = fileHandleSource(handle)
 		const xisf = await readXisf(source)
 		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image, 'xisf-mono-16', 'c754bf834dc1bb3948ec3cf8b9aca303')
+		await saveImageAndCompareHash(image!, 'xisf-mono-16', 'c754bf834dc1bb3948ec3cf8b9aca303')
 	})
 
 	test('color 16-bit', async () => {
@@ -90,7 +87,7 @@ describe('read', () => {
 		await using source = fileHandleSource(handle)
 		const xisf = await readXisf(source)
 		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image, 'xisf-color-16', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+		await saveImageAndCompareHash(image!, 'xisf-color-16', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
 	})
 
 	test('mono 32-bit', async () => {
@@ -98,7 +95,7 @@ describe('read', () => {
 		await using source = fileHandleSource(handle)
 		const xisf = await readXisf(source)
 		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image, 'xisf-mono-32', 'c754bf834dc1bb3948ec3cf8b9aca303')
+		await saveImageAndCompareHash(image!, 'xisf-mono-32', 'c754bf834dc1bb3948ec3cf8b9aca303')
 	})
 
 	test('color 32-bit', async () => {
@@ -106,7 +103,7 @@ describe('read', () => {
 		await using source = fileHandleSource(handle)
 		const xisf = await readXisf(source)
 		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image, 'xisf-color-32', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+		await saveImageAndCompareHash(image!, 'xisf-color-32', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
 	})
 
 	test('mono float 32-bit', async () => {
@@ -114,7 +111,7 @@ describe('read', () => {
 		await using source = fileHandleSource(handle)
 		const xisf = await readXisf(source)
 		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image, 'xisf-mono-F32', 'c754bf834dc1bb3948ec3cf8b9aca303')
+		await saveImageAndCompareHash(image!, 'xisf-mono-F32', 'c754bf834dc1bb3948ec3cf8b9aca303')
 	})
 
 	test('color float 32-bit', async () => {
@@ -122,7 +119,7 @@ describe('read', () => {
 		await using source = fileHandleSource(handle)
 		const xisf = await readXisf(source)
 		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image, 'xisf-color-F32', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+		await saveImageAndCompareHash(image!, 'xisf-color-F32', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
 	})
 
 	test('mono float 64-bit', async () => {
@@ -130,7 +127,7 @@ describe('read', () => {
 		await using source = fileHandleSource(handle)
 		const xisf = await readXisf(source)
 		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image, 'xisf-mono-F64', 'c754bf834dc1bb3948ec3cf8b9aca303')
+		await saveImageAndCompareHash(image!, 'xisf-mono-F64', 'c754bf834dc1bb3948ec3cf8b9aca303')
 	})
 
 	test('color float 64-bit', async () => {
@@ -138,7 +135,7 @@ describe('read', () => {
 		await using source = fileHandleSource(handle)
 		const xisf = await readXisf(source)
 		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image, 'xisf-color-F64', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+		await saveImageAndCompareHash(image!, 'xisf-color-F64', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
 	})
 })
 

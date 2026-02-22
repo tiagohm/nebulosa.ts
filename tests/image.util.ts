@@ -3,18 +3,18 @@ import fs from 'fs/promises'
 import { Bitpix, type Fits, readFits } from '../src/fits'
 import { readImageFromFits, writeImageToFormat } from '../src/image'
 import type { Image } from '../src/image.types'
-import { bufferSource, fileHandleSource } from '../src/io'
+import { bufferSource, type FileHandleSource, fileHandleSource } from '../src/io'
 
 export type ImageFormat = 'fit' | 'xisf'
 
 export const BITPIXES: readonly Bitpix[] = [8, 16, 32, -32, -64]
 export const CHANNELS = [1, 3] as const
 
-export async function openFitsFromFileHandle<T = void>(bitpix: Bitpix, channel: number, action: (fits: Fits) => PromiseLike<T> | T, name?: string) {
+export async function openFitsFromFileHandle<T = void>(bitpix: Bitpix, channel: number, action: (fits: Fits, source: FileHandleSource) => PromiseLike<T> | T, name?: string) {
 	const handle = await fs.open(`data/${name || 'NGC3372'}-${bitpix}.${channel}.fit`)
 	await using source = fileHandleSource(handle)
 	const fits = await readFits(source)
-	return await action(fits!)
+	return await action(fits!, source)
 }
 
 export async function openFitsFromBuffer<T = void>(bitpix: Bitpix, channel: number, action?: (fits: Fits) => PromiseLike<T> | T, name?: string | Buffer) {
@@ -24,8 +24,8 @@ export async function openFitsFromBuffer<T = void>(bitpix: Bitpix, channel: numb
 }
 
 export function readImage(bitpix: Bitpix, channel: number, action?: (image: Image, fits: Fits) => PromiseLike<Image> | Image, format: ImageFormat = 'fit', name?: string) {
-	const readImageFromFitsAndAction = async (fits: Fits) => {
-		const image = await readImageFromFits(fits)
+	const readImageFromFitsAndAction = async (fits: Fits, source: FileHandleSource) => {
+		const image = await readImageFromFits(fits, source)
 		return [(await action?.(image!, fits)) ?? image!, fits] as const
 	}
 

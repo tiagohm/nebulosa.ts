@@ -1,71 +1,33 @@
 import type { PathLike } from 'fs'
 import fs, { type FileHandle } from 'fs/promises'
-import { Bitpix, bitpixInBytes, bitpixKeyword, cfaPatternKeyword, type Fits, type FitsData, type FitsHdu, heightKeyword, numberOfChannelsKeyword, readFits, widthKeyword, writeFits } from './fits'
-import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageMetadata, type ImageRawType, type WriteImageToFormatOptions } from './image.types'
+import { type Bitpix, bitpixInBytes, bitpixKeyword, cfaPatternKeyword, type Fits, type FitsHdu, FitsImageReader, heightKeyword, numberOfChannelsKeyword, readFits, widthKeyword, writeFits } from './fits'
+import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageRawType, type WriteImageToFormatOptions } from './image.types'
 import { bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from './io'
 import { Jpeg } from './jpeg'
 import { readXisf, type Xisf, type XisfImage, XisfImageReader } from './xisf'
 
 // Reads an image from a FITS file
-export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu, raw: ImageRawType | 32 | 64 | 'auto' = 'auto'): Promise<Image | undefined> {
-	const hdu = !fitsOrHdu || 'header' in fitsOrHdu ? fitsOrHdu : fitsOrHdu.hdus[0]
-	if (!hdu) return undefined
-	const { header, data } = hdu
-	const bp = bitpixKeyword(header, 0)
-	if (bp === 0 || bp === Bitpix.LONG) return undefined
-	const sw = widthKeyword(header, 0)
-	const sh = heightKeyword(header, 0)
-	const nc = Math.max(1, Math.min(3, numberOfChannelsKeyword(header, 1)))
-	const pixelSizeInBytes = bitpixInBytes(bp)
-	const pixelCount = sw * sh
-	const strideInBytes = sw * pixelSizeInBytes
-	const stride = sw * nc
-	const buffer = Buffer.allocUnsafe(strideInBytes)
-	const bufferView = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
-	const range = new Float64Array([1, 0])
+export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
+	const hdu = 'hdus' in fits ? fits.hdus[0] : fits
+	const { header } = hdu
 
-	if (raw === 'auto') raw = bp === Bitpix.BYTE ? 32 : 64
-	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * nc) : new Float64Array(pixelCount * nc)
+	const bitpix = bitpixKeyword(header, 8) as Bitpix
+	const width = widthKeyword(header, 0)
+	const height = heightKeyword(header, 0)
+	const channels = numberOfChannelsKeyword(header, 1)
 
-	const source = Buffer.isBuffer(data.source) ? bufferSource(data.source) : data.source
-	source.seek?.(data.offset ?? 0)
+	const pixelSizeInBytes = bitpixInBytes(bitpix)
+	const pixelCount = width * height
+	const strideInBytes = width * pixelSizeInBytes
+	const stride = width * channels
+	const bayer = cfaPatternKeyword(header)
 
-	for (let channel = 0; channel < nc; channel++) {
-		for (let y = 0, i = channel; y < sh; y++) {
-			const n = await source.read(buffer)
+	const reader = new FitsImageReader(hdu)
+	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
+	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * channels) : new Float64Array(pixelCount * channels)
+	if (!(await reader.read(source, raw))) return undefined
 
-			if (n !== strideInBytes) return undefined
-
-			for (let k = 0; k < n; k += pixelSizeInBytes, i += nc) {
-				let pixel = 0
-
-				if (bp === Bitpix.SHORT) pixel = (bufferView.getInt16(k, false) + 32768) / 65535
-				else if (bp === Bitpix.BYTE) pixel = bufferView.getUint8(k) / 255
-				else if (bp === Bitpix.INTEGER) pixel = (bufferView.getInt32(k, false) + 2147483648) / 4294967295
-				else if (bp === Bitpix.FLOAT) pixel = bufferView.getFloat32(k, false)
-				else if (bp === Bitpix.DOUBLE) pixel = bufferView.getFloat64(k, false)
-
-				raw[i] = pixel
-
-				if (pixel < range[0]) range[0] = pixel
-				if (pixel > range[1]) range[1] = pixel
-			}
-		}
-	}
-
-	if (range[0] < 0 || range[1] > 1) {
-		const [min, max] = range
-		const delta = max - min
-		const n = raw.length
-
-		for (let i = 0; i < n; i++) {
-			raw[i] = (raw[i] - min) / delta
-		}
-	}
-
-	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, stride, pixelCount, strideInBytes, pixelSizeInBytes, bitpix: bp, bayer: cfaPatternKeyword(header) }
-
-	return { header, metadata, raw }
+	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer } } satisfies Image as Image
 }
 
 export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
@@ -77,18 +39,19 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	const pixelCount = width * height
 	const strideInBytes = width * pixelSizeInBytes
 	const stride = width * channels
+	const bayer = cfaPatternKeyword(header)
 
 	const reader = new XisfImageReader(image)
-	if (raw === 'auto') raw = bitpix === Bitpix.BYTE ? 32 : 64
+	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
 	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * channels) : new Float64Array(pixelCount * channels)
-	await reader.read(source, raw)
+	if (!(await reader.read(source, raw))) return undefined
 
-	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix } } satisfies Image as Image
+	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer } } satisfies Image as Image
 }
 
 export async function readImageFromSource(source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
 	const fits = await readFits(source)
-	if (fits) return await readImageFromFits(fits, raw)
+	if (fits) return await readImageFromFits(fits, source, raw)
 
 	const xisf = await readXisf(source)
 	if (xisf) return await readImageFromXisf(xisf, source, raw)
@@ -161,11 +124,11 @@ export class FitsDataSource implements Source {
 		for (; position < length && n < size; position += channels, n += pixelSizeInBytes, offset += pixelSizeInBytes) {
 			const pixel = raw[position]
 
-			if (bitpix === Bitpix.SHORT) bufferView.setInt16(offset, ((pixel * 65535) & 0xffff) - 32768, false)
-			else if (bitpix === Bitpix.BYTE) bufferView.setUint8(offset, pixel * 255)
-			else if (bitpix === Bitpix.INTEGER) bufferView.setInt32(offset, ((pixel * 4294967295) & 0xffffffff) - 2147483648, false)
-			else if (bitpix === Bitpix.FLOAT) bufferView.setFloat32(offset, pixel, false)
-			else if (bitpix === Bitpix.DOUBLE) bufferView.setFloat64(offset, pixel, false)
+			if (bitpix === 16) bufferView.setInt16(offset, ((pixel * 65535) & 0xffff) - 32768, false)
+			else if (bitpix === 8) bufferView.setUint8(offset, pixel * 255)
+			else if (bitpix === 32) bufferView.setInt32(offset, ((pixel * 4294967295) & 0xffffffff) - 2147483648, false)
+			else if (bitpix === -32) bufferView.setFloat32(offset, pixel, false)
+			else if (bitpix === -64) bufferView.setFloat64(offset, pixel, false)
 		}
 
 		this.position = position
@@ -175,15 +138,8 @@ export class FitsDataSource implements Source {
 }
 
 export function writeImageToFits(image: Image, output: Buffer | Sink) {
-	if (Buffer.isBuffer(output)) {
-		output = bufferSink(output)
-	}
-
-	const source: Source = new FitsDataSource(image)
-	const data: FitsData = { source }
-	const hdu: FitsHdu = { header: image.header, data }
-
-	return writeFits(output, [hdu])
+	if (Buffer.isBuffer(output)) output = bufferSink(output)
+	return writeFits(output, [image])
 }
 
 export function clampPixel(p: number, max: number) {

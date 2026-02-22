@@ -1,8 +1,8 @@
-import type { Mutable } from 'utility-types'
 import { type Angle, deg, parseAngle } from './angle'
 import { type FitsKeyword, KEYWORDS } from './fits.headers'
-import type { CfaPattern } from './image.types'
-import { readUntil, type Seekable, type Sink, type Source, sourceTransferToSink } from './io'
+import type { CfaPattern, Image, ImageRawType } from './image.types'
+import { readUntil, type Seekable, type Sink, type Source } from './io'
+import type { NumberArray } from './math'
 import { parseTemporal } from './temporal'
 
 export type FitsHeaderKey = string
@@ -12,9 +12,8 @@ export type FitsHeaderCard = [FitsHeaderKey, FitsHeaderValue?, FitsHeaderComment
 export type FitsHeader = Record<FitsHeaderKey, FitsHeaderValue>
 
 export interface FitsData {
-	readonly source: (Source & Partial<Seekable>) | Buffer
-	readonly size?: number
-	readonly offset?: number
+	readonly size: number
+	readonly offset: number
 }
 
 export interface FitsHdu {
@@ -178,13 +177,8 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE)
 	const reader = new FitsKeywordReader()
 
-	if ((await readUntil(source, buffer)) !== FITS_HEADER_CARD_SIZE) {
-		return undefined
-	}
-
-	if (buffer.subarray(0, 6).toString('ascii') !== MAGIC_BYTES) {
-		return undefined
-	}
+	if ((await readUntil(source, buffer)) !== FITS_HEADER_CARD_SIZE) return undefined
+	if (!isFits(buffer)) return undefined
 
 	const hdus: FitsHdu[] = []
 	let prev: FitsHeaderCard | undefined
@@ -196,7 +190,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 		if (key) {
 			if (key === 'SIMPLE' || key === 'XTENSION') {
 				const offset = source.position - FITS_HEADER_CARD_SIZE
-				hdus.push({ header: { [key]: value }, offset } as never)
+				hdus.push({ header: { [key]: value }, offset, data: { offset: 0, size: 0 } })
 			} else if (key !== 'END') {
 				const { header } = hdus[hdus.length - 1]
 
@@ -213,14 +207,12 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 				}
 			} else {
 				const hdu = hdus[hdus.length - 1]
+				const { header, data } = hdu
 
-				source.seek(source.position + computeRemainingBytes(source.position))
-				const offset = source.position
-
-				const { header } = hdu
+				const offset = source.position + computeRemainingBytes(source.position)
 				const size = widthKeyword(header, 0) * heightKeyword(header, 0) * numberOfChannelsKeyword(header, 1) * bitpixInBytes(bitpixKeyword(header, 0))
-				source.seek(source.position + size + computeRemainingBytes(size))
-				;(hdu as Mutable<FitsHdu>).data = { source, size, offset }
+				source.seek(offset + size + computeRemainingBytes(size))
+				Object.assign(data, { size, offset })
 			}
 		}
 
@@ -238,40 +230,28 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 	return { hdus }
 }
 
-export async function writeFits(sink: Sink & Partial<Seekable>, fits: FitsHdu[] | Fits) {
-	let offset = 'position' in sink ? (sink.position ?? 0) : 0
+export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly Readonly<Pick<Image, 'header' | 'raw'>>[]) {
 	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE)
 	const writer = new FitsKeywordWriter()
 
-	const hdus = 'hdus' in fits ? fits.hdus : fits
+	let offset = 'position' in sink ? sink.position! : 0
 
 	async function writeHeader(key: FitsHeaderKey, value: FitsHeaderValue) {
 		const length = writer.write([key, value], buffer)
 		offset += await sink.write(buffer, 0, length)
 	}
 
-	async function writeData(sink: Sink, data: FitsData) {
-		const { source } = data
-
-		if (Buffer.isBuffer(source)) {
-			offset += await sink.write(source)
-		} else {
-			source.seek?.(data.offset ?? 0)
-			offset += await sourceTransferToSink(source, sink, buffer)
-		}
-	}
-
 	async function fillWithRemainingBytes() {
 		const remaining = computeRemainingBytes(offset)
 
 		if (remaining > 0) {
-			buffer.fill(0, 0, remaining)
+			buffer.fill(20, 0, remaining)
 			offset += await sink.write(buffer, 0, remaining)
 		}
 	}
 
 	for (const hdu of hdus) {
-		const { header, data } = hdu
+		const { header, raw } = hdu
 		let end = false
 
 		for (const key in header) {
@@ -283,13 +263,11 @@ export async function writeFits(sink: Sink & Partial<Seekable>, fits: FitsHdu[] 
 			}
 		}
 
-		if (!end) {
-			await writeHeader('END', undefined)
-		}
-
+		if (!end) await writeHeader('END', undefined)
 		await fillWithRemainingBytes()
 
-		await writeData(sink, data)
+		const writer = new FitsImageWriter(header)
+		await writer.write(raw, sink)
 		await fillWithRemainingBytes()
 	}
 }
@@ -330,6 +308,36 @@ export class FitsKeywordReader {
 		const [value, quoted] = this.parseValue(line, key, position)
 		const comment = this.parseComment(line, position, value)
 		return [key, this.parseValueType(value, quoted), comment?.trim()]
+	}
+
+	readAll(buffer: Buffer, offset: number = 0): FitsHeader {
+		const header: FitsHeader = {}
+		let prev: FitsHeaderCard | undefined
+
+		while (offset < buffer.byteLength) {
+			const card = this.read(buffer, offset)
+			const [key, value, comment] = card
+
+			if (key !== '' && key !== 'END') {
+				if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
+					prev[1] = prev[1].substring(0, prev[1].length - 1) + value
+					header[prev[0]] = prev[1]
+				} else if (NO_VALUE_KEYWORDS.includes(key)) {
+					if (header[key] === undefined) header[key] = comment
+					else header[key] += `\n${comment}`
+					prev = undefined
+				} else {
+					header[key] = value
+					prev = card
+				}
+			} else {
+				break
+			}
+
+			offset += FITS_HEADER_CARD_SIZE
+		}
+
+		return header
 	}
 
 	private parseKey(line: Buffer, position: Position) {
@@ -729,5 +737,94 @@ export class FitsKeywordWriter {
 		// return Math.floor((output.byteLength) / FITS_HEADER_CARD_SIZE) > 1
 		const start = position.offset - position.size
 		return Math.floor((output.byteLength - start) / FITS_HEADER_CARD_SIZE) > 1
+	}
+}
+
+export class FitsImageReader {
+	private readonly buffer: Buffer
+	private readonly data: NumberArray
+
+	constructor(
+		private readonly hdu: FitsHdu,
+		buffer?: Buffer,
+	) {
+		const bitpix = bitpixKeyword(hdu.header, 0)
+		this.buffer = buffer?.subarray(0, hdu.data.size) ?? Buffer.allocUnsafe(hdu.data.size)
+		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Int16Array(this.buffer.buffer) : bitpix === 32 ? new Int32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
+	}
+
+	// Read FITS HDU Image bytes from source into RGB-interleaved array
+	async read(source: Source & Seekable, output: ImageRawType) {
+		source.seek(this.hdu.data.offset)
+
+		if ((await readUntil(source, this.buffer, this.hdu.data.size, 0)) !== this.hdu.data.size) return false
+
+		const { header } = this.hdu
+		const bitpix = bitpixKeyword(header, 0)
+		const pixelInBytes = bitpixInBytes(bitpix)
+
+		// big-endian to little-endian
+		if (pixelInBytes === 2) this.buffer.swap16()
+		else if (pixelInBytes === 4) this.buffer.swap32()
+		else if (pixelInBytes === 8) this.buffer.swap64()
+
+		const width = widthKeyword(header, 0)
+		const height = heightKeyword(header, 0)
+		const channels = numberOfChannelsKeyword(header, 1)
+		const numberOfPixels = width * height
+		const scale = (header.BSCALE as number) || 1
+		const zero = (header.BZERO as number) || 0
+		const factor = bitpix > 0 ? scale / (2 ** bitpix - 1) : 1 // Transform n-bit integer to float [0..1]
+		const data = this.data
+
+		for (let i = 0, p = 0; i < numberOfPixels; i++) {
+			for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
+				output[p++] = (data[m] + zero) * factor
+			}
+		}
+
+		return true
+	}
+}
+
+export class FitsImageWriter {
+	private readonly buffer: Buffer
+	private readonly data: NumberArray
+
+	constructor(
+		private readonly header: FitsHeader,
+		buffer?: Buffer,
+	) {
+		const bitpix = bitpixKeyword(header, 0)
+		const width = widthKeyword(this.header, 0)
+		const height = heightKeyword(this.header, 0)
+		const channels = numberOfChannelsKeyword(this.header, 1)
+		this.buffer = buffer ?? Buffer.allocUnsafe(width * height * channels * bitpixInBytes(bitpix))
+		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Int16Array(this.buffer.buffer) : bitpix === 32 ? new Int32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
+	}
+
+	async write(input: ImageRawType, sink: Sink) {
+		const bitpix = bitpixKeyword(this.header, 0)
+		const pixelInBytes = bitpixInBytes(bitpix)
+		const width = widthKeyword(this.header, 0)
+		const height = heightKeyword(this.header, 0)
+		const channels = numberOfChannelsKeyword(this.header, 1)
+		const numberOfPixels = width * height
+		const zero = bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0
+		const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
+		const data = this.data
+
+		for (let c = 0, p = 0; c < channels; c++) {
+			for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
+				data[p++] = input[m] * factor - zero
+			}
+		}
+
+		// little-endian to big-endian
+		if (pixelInBytes === 2) this.buffer.swap16()
+		else if (pixelInBytes === 4) this.buffer.swap32()
+		else if (pixelInBytes === 8) this.buffer.swap64()
+
+		await sink.write(this.buffer)
 	}
 }

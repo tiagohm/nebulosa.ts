@@ -1,6 +1,7 @@
 import { type X2jOptions, XMLParser } from 'fast-xml-parser'
 import { type Bitpix, bitpixInBytes, type FitsHeader, type FitsHeaderValue } from './fits'
 import type { Size } from './geometry'
+import type { ImageRawType } from './image.types'
 import { readUntil, type Seekable, type Source } from './io'
 import type { NumberArray } from './math'
 
@@ -46,7 +47,6 @@ export interface XisfImage extends Required<Pick<XisfParsedImage, 'byteOrder' | 
 	readonly geometry: XisfGeometry
 	readonly compression?: XisfCompression
 	readonly bitpix: Bitpix
-	readonly bounds: readonly [number, number]
 }
 
 export interface XisfCompression {
@@ -127,10 +127,9 @@ export function parseXisfHeader(data: Buffer) {
 		const header = makeFitsHeaderFromParsedImage(image, geometry)
 		const location = parseLocation(image.location)
 		const compression = parseCompression(image.compression)
-		const bounds = parseBounds(image.bounds)
 		const { colorSpace, sampleFormat, byteOrder = 'little', imageType = 'Light', pixelStorage = 'Planar' } = image
 
-		images.push({ header, location, geometry, compression, bounds, colorSpace, sampleFormat, bitpix: header.BITPIX as Bitpix, byteOrder, imageType, pixelStorage })
+		images.push({ header, location, geometry, compression, colorSpace, sampleFormat, bitpix: header.BITPIX as Bitpix, byteOrder, imageType, pixelStorage })
 	}
 
 	return images
@@ -183,10 +182,6 @@ function parseCompression(compression: XisfParsedImage['compression']): XisfComp
 	return { format, shuffled, uncompressedSize, itemSize }
 }
 
-function parseBounds(bounds: XisfParsedImage['bounds']) {
-	return bounds.split(':').map(Number) as unknown as readonly [number, number]
-}
-
 export function bitpixFromSampleFormat(sampleFormat: XisfSampleFormat): Bitpix {
 	return sampleFormat === 'UInt8' ? 8 : sampleFormat === 'UInt16' ? 16 : sampleFormat === 'UInt32' ? 32 : sampleFormat === 'UInt64' ? 64 : sampleFormat === 'Float32' ? -32 : -64
 }
@@ -196,29 +191,34 @@ export class XisfImageReader {
 	private readonly buffer: Buffer
 	private readonly data: NumberArray
 
-	constructor(private readonly image: XisfImage) {
+	constructor(
+		private readonly image: XisfImage,
+		buffer?: Buffer,
+	) {
 		const { bitpix, pixelStorage, location, compression } = image
 		this.planar = pixelStorage === 'Planar'
-		this.buffer = Buffer.allocUnsafe(compression?.uncompressedSize ?? location.size)
+		const size = compression?.uncompressedSize ?? location.size
+		this.buffer = buffer?.subarray(0, size) ?? Buffer.allocUnsafe(size)
 		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Uint16Array(this.buffer.buffer) : bitpix === 32 ? new Uint32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
 	}
 
-	// Read XISF bytes from source into RGB-interleaved array
-	async read(source: Source & Seekable, output: Float64Array | Float32Array) {
+	// Read XISF Image bytes from source into RGB-interleaved array
+	async read(source: Source & Seekable, output: ImageRawType) {
 		source.seek(this.image.location.offset)
 
 		if ((await readUntil(source, this.buffer, this.image.location.size, 0)) !== this.image.location.size) return false
 
-		if (this.image.bitpix !== 8 && this.image.byteOrder === 'big') {
-			if (this.image.bitpix === 16) this.buffer.swap16()
-			else if (this.image.bitpix === 32 || this.image.bitpix === -32) this.buffer.swap32()
-			else if (this.image.bitpix === 64 || this.image.bitpix === -64) this.buffer.swap64()
+		const pixelInBytes = bitpixInBytes(this.image.bitpix)
+
+		if (pixelInBytes > 1 && this.image.byteOrder === 'big') {
+			if (pixelInBytes === 2) this.buffer.swap16()
+			else if (pixelInBytes === 4) this.buffer.swap32()
+			else if (pixelInBytes === 8) this.buffer.swap64()
 		}
 
 		const data = this.data
 		const { width, height, channels } = this.image.geometry
 		const numberOfPixels = width * height
-		const pixelInBytes = bitpixInBytes(this.image.bitpix)
 		const invDiv = this.image.bitpix > 0 ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
 
 		let p = 0
