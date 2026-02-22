@@ -35,7 +35,7 @@ jobs:
               uses: oven-sh/setup-bun@v2
 
             - name: Install Dependencies
-              run: bun i --production
+              run: bun i --omit=dev
 
             - name: Cache Data Files
               uses: actions/cache@v5

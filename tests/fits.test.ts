@@ -1,9 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import { dms, hms } from '../src/angle'
-import { bitpixInBytes, computeRemainingBytes, declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, heightKeyword, observationDateKeyword, readFits, rightAscensionKeyword, widthKeyword, writeFits } from '../src/fits'
+import { bitpixInBytes, computeRemainingBytes, declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, heightKeyword, isFits, observationDateKeyword, readFits, rightAscensionKeyword, widthKeyword, writeFits } from '../src/fits'
 import { KEYWORDS } from '../src/fits.headers'
 import { bufferSink, bufferSource } from '../src/io'
 import { BITPIXES, CHANNELS, openFitsFromFileHandle } from './image.util'
+
+test('is fits', async () => {
+	const buffer = await Bun.file('data/NGC3372-8.1.fit').arrayBuffer()
+	expect(isFits(buffer)).toBeTrue()
+})
 
 test('write fits', async () => {
 	const buffer = Buffer.alloc(1024 * 1024 * 18)

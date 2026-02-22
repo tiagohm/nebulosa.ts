@@ -40,8 +40,7 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle], p2: r
 	if ((pole[2] < 0 && isNorthern) || (pole[2] > 0 && !isNorthern)) vecNegateMut(pole)
 
 	// Find the azimuth and altitude of the mount pole (normal to the plane defined by the three reference stars)
-	// const { azimuth, altitude } = icrsToObserved(pole, time, earth(time), undefined, refraction, location)
-	const { azimuth, altitude } = cirsToObserved(pole, time, refraction, location) // ICRS -> CIRS -> Observed
+	const { azimuth, altitude } = cirsToObserved(pole, time, refraction, location)
 
 	// Compute the azimuth and altitude error
 	const latitude = Math.abs(location.latitude) // ChatGPT doesn't recommend to refract the latitude!
@@ -78,9 +77,11 @@ export function threePointPolarAlignmentAfterAdjustment(
 	// Find the adjustment the user must have made by examining the change from point3 to newPoint
 	// (i.e. the rotation caused by the user adjusting the azimuth and altitude knobs).
 	const p3Cross = vecCross(p3Expected, pNew)
-	const sinRot = vecLength(p3Cross)
-	const cosRot = vecDot(p3Expected, pNew)
+	const sinRot = vecLength(p3Cross) // ∥a × b∥ = ∥a∥ * ∥b∥ * sinθ, a and b are unitary, so ∥a × b∥ = sinθ
+	const cosRot = vecDot(p3Expected, pNew) // a ⋅ b = cosθ
 
+	// sinθ = 0 and cosθ > 0 will only occur if the mount rotates 0°
+	// sinθ = 0 and cosθ < 0 will only occur if the mount rotates 180°
 	if (sinRot === 0 && cosRot > 0) {
 		console.info('no rotation applied')
 		return result
@@ -88,10 +89,9 @@ export function threePointPolarAlignmentAfterAdjustment(
 
 	// Rotate the original RA axis position by the above adjustments.
 	const rotAxis = vecDivScalarMut(p3Cross, sinRot)
-	const rotAngle = Math.atan2(sinRot, cosRot)
+	const rotAngle = Math.atan2(sinRot, cosRot) // θ = atan2(sinθ, cosθ)
 	const newPole = vecRotateByRodrigues(result.pole, rotAxis, rotAngle)
-	// const observedPole = icrsToObserved(newPole, timeTo, earth(timeTo), undefined, refraction, location)
-	const observedPole = cirsToObserved(newPole, timeTo, refraction, location) // ICRS -> CIRS -> Observed
+	const observedPole = cirsToObserved(newPole, timeTo, refraction, location)
 
 	// Recompute the azimuth and altitude error
 	const { azimuth, altitude } = observedPole

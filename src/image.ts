@@ -4,6 +4,7 @@ import { Bitpix, bitpixInBytes, bitpixKeyword, cfaPatternKeyword, type Fits, typ
 import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageMetadata, type ImageRawType, type WriteImageToFormatOptions } from './image.types'
 import { bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from './io'
 import { Jpeg } from './jpeg'
+import { readXisf, type Xisf, type XisfImage, XisfImageReader } from './xisf'
 
 // Reads an image from a FITS file
 export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu, raw: ImageRawType | 32 | 64 | 'auto' = 'auto'): Promise<Image | undefined> {
@@ -62,14 +63,37 @@ export async function readImageFromFits(fitsOrHdu?: Fits | FitsHdu, raw: ImageRa
 		}
 	}
 
-	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, stride, pixelCount, pixelSizeInBytes, bitpix: bp, bayer: cfaPatternKeyword(header) }
+	const metadata: ImageMetadata = { width: sw, height: sh, channels: nc, stride, pixelCount, strideInBytes, pixelSizeInBytes, bitpix: bp, bayer: cfaPatternKeyword(header) }
 
 	return { header, metadata, raw }
 }
 
+export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
+	const image = 'images' in xisf ? xisf.images[0] : xisf
+	const { bitpix, geometry, header } = image
+	const { width, height, channels } = geometry
+
+	const pixelSizeInBytes = bitpixInBytes(bitpix)
+	const pixelCount = width * height
+	const strideInBytes = width * pixelSizeInBytes
+	const stride = width * channels
+
+	const reader = new XisfImageReader(image)
+	if (raw === 'auto') raw = bitpix === Bitpix.BYTE ? 32 : 64
+	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * channels) : new Float64Array(pixelCount * channels)
+	await reader.read(source, raw)
+
+	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix } } satisfies Image as Image
+}
+
 export async function readImageFromSource(source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
-	const fits = await readFits(source) // TODO: support XISF
-	return await readImageFromFits(fits, raw)
+	const fits = await readFits(source)
+	if (fits) return await readImageFromFits(fits, raw)
+
+	const xisf = await readXisf(source)
+	if (xisf) return await readImageFromXisf(xisf, source, raw)
+
+	return undefined
 }
 
 export async function readImageFromBuffer(buffer: Buffer, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {

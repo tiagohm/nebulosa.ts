@@ -234,7 +234,7 @@ describe.skipIf(process.platform !== 'win32')('client', async () => {
 		cameraManager.stopExposure(camera)
 		await expectUntil(camera, 'exposuring', false)
 		await Bun.sleep(5000)
-        expect(state[state.length - 1]).toBe('Idle')
+		expect(state[state.length - 1]).toBe('Idle')
 
 		cameraManager.disconnect(camera)
 		await expectUntil(camera, 'connected', false)

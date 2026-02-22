@@ -11,14 +11,17 @@
 		"tsc": "tsgo --noEmit"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "latest",
-		"typescript": "latest",
-		"@typescript/native-preview": "latest"
+		"@biomejs/biome": "latest"
 	},
 	"peerDependencies": {
 		"@types/bun": "latest",
+		"fast-xml-parser": "5.3.7",
+		"typescript": "beta",
 		"utility-types": "latest"
 	},
+    "optionalDependencies": {
+		"@typescript/native-preview": "latest"
+    },
 	"trustedDependencies": [
 		"@biomejs/biome"
 	]

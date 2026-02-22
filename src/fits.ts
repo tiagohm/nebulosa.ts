@@ -49,6 +49,16 @@ export const FITS_APPLICATION_MIME_TYPE = 'application/fits'
 
 export const MAGIC_BYTES = 'SIMPLE'
 
+export function isFits(input: ArrayBufferLike | Buffer) {
+	if (input.byteLength < 6) return false
+
+	if (Buffer.isBuffer(input)) {
+		return input.toString('ascii', 0, 6) === MAGIC_BYTES
+	} else {
+		return isFits(Buffer.from(input, 0, 6))
+	}
+}
+
 export function hasKeyword(header: FitsHeader, key: FitsHeaderKey) {
 	return key in header && header[key] !== undefined
 }

@@ -44,6 +44,7 @@ export interface ImageMetadata extends Readonly<Size> {
 	readonly channels: number
 	readonly stride: number
 	readonly pixelCount: number
+	readonly strideInBytes: number
 	readonly pixelSizeInBytes: number
 	readonly bitpix: Bitpix
 	readonly bayer?: CfaPattern
