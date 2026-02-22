@@ -99,6 +99,8 @@ test('write fits', async () => {
 
 	for (const channel of CHANNELS) {
 		for (const bitpix of BITPIXES) {
+			buffer.fill(20)
+
 			const image = (await readImageFromPath(`data/NGC3372-${bitpix}.${channel}.fit`))!
 
 			const sink = bufferSink(buffer)
@@ -110,8 +112,6 @@ test('write fits', async () => {
 			expect(output.header).toEqual(image.header)
 
 			await saveImageAndCompareHash(output, `write-fits-${bitpix}-${channel}`, channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-
-			buffer.fill(20)
 		}
 	}
 }, 10000)

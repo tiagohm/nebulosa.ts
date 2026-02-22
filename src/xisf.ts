@@ -1,8 +1,8 @@
 import { type X2jOptions, XMLParser } from 'fast-xml-parser'
 import { type Bitpix, bitpixInBytes, type FitsHeader, type FitsHeaderValue } from './fits'
 import type { Size } from './geometry'
-import type { ImageRawType } from './image.types'
-import { readUntil, type Seekable, type Source } from './io'
+import type { Image, ImageRawType } from './image.types'
+import { readUntil, type Seekable, type Sink, type Source } from './io'
 import type { NumberArray } from './math'
 
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html
@@ -109,6 +109,10 @@ export async function readXisf(source: Source & Seekable): Promise<Xisf | undefi
 	return { images }
 }
 
+export async function writeXisf(sink: Sink & Partial<Seekable>, images: readonly Readonly<Pick<Image, 'header' | 'raw'>>[], format: Pick<XisfImage, 'byteOrder' | 'pixelStorage'>) {
+	// TODO
+}
+
 const XML_PARSER = new XMLParser(XML_PARSE_OPTIONS)
 
 export function parseXisfHeader(data: Buffer) {
@@ -187,22 +191,20 @@ export function bitpixFromSampleFormat(sampleFormat: XisfSampleFormat): Bitpix {
 }
 
 export class XisfImageReader {
-	private readonly planar: boolean
 	private readonly buffer: Buffer
 	private readonly data: NumberArray
 
 	constructor(
-		private readonly image: XisfImage,
+		private readonly image: Pick<XisfImage, 'bitpix' | 'location' | 'compression' | 'byteOrder' | 'pixelStorage' | 'geometry'>,
 		buffer?: Buffer,
 	) {
-		const { bitpix, pixelStorage, location, compression } = image
-		this.planar = pixelStorage === 'Planar'
+		const { bitpix, location, compression } = image
 		const size = compression?.uncompressedSize ?? location.size
 		this.buffer = buffer?.subarray(0, size) ?? Buffer.allocUnsafe(size)
 		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Uint16Array(this.buffer.buffer) : bitpix === 32 ? new Uint32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
 	}
 
-	// Read XISF Image bytes from source into RGB-interleaved array
+	// Reads XISF-format image from source into RGB-interleaved array
 	async read(source: Source & Seekable, output: ImageRawType) {
 		source.seek(this.image.location.offset)
 
@@ -217,27 +219,74 @@ export class XisfImageReader {
 		}
 
 		const data = this.data
-		const { width, height, channels } = this.image.geometry
+		const { bitpix, pixelStorage, geometry } = this.image
+		const { width, height, channels } = geometry
 		const numberOfPixels = width * height
-		const invDiv = this.image.bitpix > 0 ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
+		const factor = bitpix > 0 ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
 
-		let p = 0
-
-		if (this.planar) {
-			for (let i = 0; i < numberOfPixels; i++) {
+		if (pixelStorage === 'Planar') {
+			for (let i = 0, p = 0; i < numberOfPixels; i++) {
 				for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
-					output[p++] = data[m] * invDiv
+					output[p++] = data[m] * factor
 				}
 			}
 		} else {
 			const total = numberOfPixels * channels
 
 			for (let i = 0; i < total; i++) {
-				output[i] = data[i] * invDiv
+				output[i] = data[i] * factor
 			}
 		}
 
 		return true
+	}
+}
+
+export class XisfImageWriter {
+	private readonly buffer: Buffer
+	private readonly data: NumberArray
+
+	constructor(
+		private readonly xisf: Pick<XisfImage, 'byteOrder' | 'bitpix' | 'geometry' | 'pixelStorage'>,
+		buffer?: Buffer,
+	) {
+		const { bitpix, geometry } = xisf
+		const { width, height, channels } = geometry
+		this.buffer = buffer ?? Buffer.allocUnsafe(width * height * channels * bitpixInBytes(bitpix))
+		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Int16Array(this.buffer.buffer) : bitpix === 32 ? new Int32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
+	}
+
+	// Writes FITS-format image from RGB-interleaved array into sink
+	async write(input: ImageRawType, sink: Sink) {
+		const { bitpix, geometry, byteOrder, pixelStorage } = this.xisf
+		const { width, height, channels } = geometry
+		const pixelInBytes = bitpixInBytes(bitpix)
+		const numberOfPixels = width * height
+		const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
+		const data = this.data
+
+		if (pixelStorage === 'Planar') {
+			for (let c = 0, p = 0; c < channels; c++) {
+				for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
+					data[p++] = input[m] * factor
+				}
+			}
+		} else {
+			const total = numberOfPixels * channels
+
+			for (let i = 0; i < total; i++) {
+				data[i] = input[i] * factor
+			}
+		}
+
+		// little-endian to big-endian
+		if (byteOrder === 'big') {
+			if (pixelInBytes === 2) this.buffer.swap16()
+			else if (pixelInBytes === 4) this.buffer.swap32()
+			else if (pixelInBytes === 8) this.buffer.swap64()
+		}
+
+		await sink.write(this.buffer)
 	}
 }
 

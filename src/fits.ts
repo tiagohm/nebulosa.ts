@@ -173,6 +173,7 @@ export function bitpixInBytes(bitpix: BitpixOrZero) {
 
 const NO_VALUE_KEYWORDS = ['COMMENT', 'HISTORY', 'END']
 
+// TODO: Compression
 export async function readFits(source: Source & Seekable): Promise<Fits | undefined> {
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE)
 	const reader = new FitsKeywordReader()
@@ -230,6 +231,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 	return { hdus }
 }
 
+// TODO: Compression
 export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly Readonly<Pick<Image, 'header' | 'raw'>>[]) {
 	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE)
 	const writer = new FitsKeywordWriter()
@@ -753,7 +755,7 @@ export class FitsImageReader {
 		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Int16Array(this.buffer.buffer) : bitpix === 32 ? new Int32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
 	}
 
-	// Read FITS HDU Image bytes from source into RGB-interleaved array
+	// Reads FITS-format image from source into RGB-interleaved array
 	async read(source: Source & Seekable, output: ImageRawType) {
 		source.seek(this.hdu.data.offset)
 
@@ -796,13 +798,14 @@ export class FitsImageWriter {
 		buffer?: Buffer,
 	) {
 		const bitpix = bitpixKeyword(header, 0)
-		const width = widthKeyword(this.header, 0)
-		const height = heightKeyword(this.header, 0)
-		const channels = numberOfChannelsKeyword(this.header, 1)
+		const width = widthKeyword(header, 0)
+		const height = heightKeyword(header, 0)
+		const channels = numberOfChannelsKeyword(header, 1)
 		this.buffer = buffer ?? Buffer.allocUnsafe(width * height * channels * bitpixInBytes(bitpix))
 		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Int16Array(this.buffer.buffer) : bitpix === 32 ? new Int32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
 	}
 
+	// Writes FITS-format image from RGB-interleaved array into sink
 	async write(input: ImageRawType, sink: Sink) {
 		const bitpix = bitpixKeyword(this.header, 0)
 		const pixelInBytes = bitpixInBytes(bitpix)
