@@ -94,7 +94,7 @@ export class Jpeg {
 		return this.lib.tjBufSize(width, height, CHROMINANCE_SUBSAMPLING_MAP[chrominanceSubsampling])
 	}
 
-	compress(data: Buffer, width: number, height: number, format: PixelFormat, quality: number, chrominanceSubsampling: ChrominanceSubsampling = '4:4:4', jpeg?: Buffer) {
+	compress(data: NodeJS.TypedArray<ArrayBufferLike> | DataView<ArrayBufferLike>, width: number, height: number, format: PixelFormat, quality: number, chrominanceSubsampling: ChrominanceSubsampling = '4:4:4', jpeg?: Buffer) {
 		const pointer = this.lib.tjInitCompress()
 
 		if (!pointer) {

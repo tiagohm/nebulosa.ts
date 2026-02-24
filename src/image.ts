@@ -88,55 +88,6 @@ export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'f
 	return undefined
 }
 
-export class FitsDataSource implements Source {
-	private position = 0
-	private channel = 0
-	private readonly raw: ImageRawType
-	private readonly bitpix: Bitpix
-	private readonly channels: number
-
-	constructor(image: Image | ImageRawType, bitpix?: Bitpix, channels?: number) {
-		this.raw = 'raw' in image ? image.raw : image
-		this.bitpix = 'raw' in image ? (image.header.BITPIX as Bitpix) : bitpix!
-		this.channels = 'raw' in image ? numberOfChannelsKeyword(image.header, 1) : channels!
-	}
-
-	read(buffer: Buffer, offset?: number, size?: number): number {
-		offset ??= 0
-		size ??= buffer.byteLength - offset
-
-		const length = this.raw.length
-
-		if (this.position >= length) {
-			if (++this.channel < this.channels) {
-				this.position = this.channel
-			} else {
-				return 0
-			}
-		}
-
-		const { bitpix, channels, raw } = this
-		const pixelSizeInBytes = bitpixInBytes(this.bitpix)
-		const bufferView = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
-		let position = this.position
-		let n = 0
-
-		for (; position < length && n < size; position += channels, n += pixelSizeInBytes, offset += pixelSizeInBytes) {
-			const pixel = raw[position]
-
-			if (bitpix === 16) bufferView.setInt16(offset, ((pixel * 65535) & 0xffff) - 32768, false)
-			else if (bitpix === 8) bufferView.setUint8(offset, pixel * 255)
-			else if (bitpix === 32) bufferView.setInt32(offset, ((pixel * 4294967295) & 0xffffffff) - 2147483648, false)
-			else if (bitpix === -32) bufferView.setFloat32(offset, pixel, false)
-			else if (bitpix === -64) bufferView.setFloat64(offset, pixel, false)
-		}
-
-		this.position = position
-
-		return n
-	}
-}
-
 export function writeImageToFits(image: Image, output: Buffer | Sink) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	return writeFits(output, [image])

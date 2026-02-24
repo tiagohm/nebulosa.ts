@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { Bitpix, bitpixInBytes } from '../src/fits'
-import { FitsDataSource, readImageFromPath, writeImageToFits } from '../src/image'
+import { Bitpix } from '../src/fits'
+import { readImageFromPath, writeImageToFits } from '../src/image'
 import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../src/image.computation'
 // biome-ignore format: too long!
 import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
@@ -42,40 +42,6 @@ test('write image to fits', async () => {
 		}
 	}
 }, 15000)
-
-test('fits data source', () => {
-	const buffer = Buffer.allocUnsafe(64)
-	const data = new Float64Array([0.5, 1, 0])
-
-	const expected: Record<Bitpix, number[]> = {
-		[Bitpix.BYTE]: [127, 255, 0],
-		[Bitpix.SHORT]: [-1, 32767, -32768],
-		[Bitpix.INTEGER]: [-1, 2147483647, -2147483648],
-		[Bitpix.LONG]: [0, 0, 0],
-		[Bitpix.FLOAT]: [0.5, 1, 0],
-		[Bitpix.DOUBLE]: [0.5, 1, 0],
-	}
-
-	for (const bitpix of BITPIXES) {
-		const pixelSizeInBytes = bitpixInBytes(bitpix)
-
-		for (const channel of CHANNELS) {
-			const source = new FitsDataSource(data.subarray(0, channel), bitpix, channel)
-
-			for (let i = 0; i < channel; i++) {
-				expect(source.read(buffer)).toBe(pixelSizeInBytes)
-
-				if (bitpix === Bitpix.BYTE) expect(buffer.readUInt8(0)).toBe(expected[bitpix][i])
-				else if (bitpix === Bitpix.SHORT) expect(buffer.readInt16BE(0)).toBe(expected[bitpix][i])
-				else if (bitpix === Bitpix.INTEGER) expect(buffer.readInt32BE(0)).toBe(expected[bitpix][i])
-				else if (bitpix === Bitpix.FLOAT) expect(buffer.readFloatBE(0)).toBe(expected[bitpix][i])
-				else if (bitpix === Bitpix.DOUBLE) expect(buffer.readDoubleBE(0)).toBe(expected[bitpix][i])
-			}
-
-			expect(source.read(buffer)).toBe(0)
-		}
-	}
-})
 
 test('histogram on red channel', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)

@@ -3,7 +3,7 @@ import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaC
 import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from './angle'
 import { SIDEREAL_RATE } from './constants'
 import { equatorialFromJ2000, equatorialToJ2000 } from './coordinate'
-import { computeRemainingBytes, FITS_BLOCK_SIZE, type FitsHeader, FitsKeywordWriter } from './fits'
+import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, FitsKeywordWriter } from './fits'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import type { Camera, Client, Device, Focuser, Mount, Rotator, Wheel } from './indi.device'
 import type { DeviceProvider } from './indi.manager'
@@ -1703,6 +1703,8 @@ function makeBlobVector(device: string, name: string, label: string, group: stri
 	return { type: 'BLOB', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
+// https://github.com/ASCOMInitiative/ASCOMRemote/blob/main/Documentation/AlpacaImageBytes.pdf
+
 export function makeFitsFromImageBytes(data: ArrayBuffer, time: Time, camera?: Camera, mount?: Mount, wheel?: Wheel, focuser?: Focuser, rotator?: Rotator, lastExposureDuration: number = 0) {
 	const metadataArray = new Int32Array(data, 0, 44)
 	const metadata: ImageBytesMetadata = {
@@ -1783,35 +1785,34 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time: Time, camera?: C
 		END: '',
 	}
 
-	const estimatedHeaderSize = Object.keys(header).filter((e) => header[e] !== undefined).length * 80 + FITS_BLOCK_SIZE
-	const estimatedDataSize = NumX * NumY * NumZ * 2 // 16-bit
-	const fits = Buffer.allocUnsafe(estimatedHeaderSize + computeRemainingBytes(estimatedHeaderSize) + estimatedDataSize + computeRemainingBytes(estimatedDataSize))
-	const writer = new FitsKeywordWriter()
-	const offset = writer.writeAll(header, fits)
-	const dataView = new DataView(data, 44)
-	const fitsView = new DataView(fits.buffer, offset + computeRemainingBytes(offset))
+	const numberOfPixels = NumX * NumY
+	const estimatedHeaderSize = Object.keys(header).filter((e) => header[e] !== undefined).length * FITS_HEADER_CARD_SIZE + FITS_BLOCK_SIZE
+	const expectedDataSize = numberOfPixels * NumZ * 2 // 16-bit
+	const output = Buffer.allocUnsafe(estimatedHeaderSize + computeRemainingBytes(estimatedHeaderSize) + expectedDataSize + computeRemainingBytes(expectedDataSize))
 
-	const strideInBytes = NumX * 2
-	const planeInBytes = strideInBytes * NumY
+	const writer = new FitsKeywordWriter()
+	const headerOffset = writer.writeAll(header, output)
+
+	// TODO: Implement other transmission element types
+	const sourceArray = new Uint16Array(data, 44, numberOfPixels * NumZ)
+	const outputArray = new Int16Array(output.buffer, headerOffset + computeRemainingBytes(headerOffset), sourceArray.length)
+
+	let p = 0
 
 	// unsigned 16-bit
 	if (metadata.TransmissionElementType === 8) {
-		for (let i = 0, a = 0; i < NumX; i++) {
-			const p = i * 2
-
-			for (let j = 0; j < NumY; j++) {
-				const m = strideInBytes * j + p
-
-				for (let k = 0, b = m; k < NumZ; k++, a += 2, b += planeInBytes) {
-					fitsView.setInt16(b, dataView.getUint16(a, true) - 32768, false)
+		for (let x = 0; x < NumX; x++) {
+			for (let y = 0, n = 0; y < NumY; y++, n += NumX) {
+				for (let c = 0, m = n + x; c < NumZ; c++, m += numberOfPixels) {
+					outputArray[m] = sourceArray[p++] - 32768
 				}
 			}
 		}
 	}
 
-	const fileSize = fitsView.byteOffset + estimatedDataSize
-
-	return fits.subarray(0, fileSize)
+	const size = outputArray.byteOffset + (p << 1)
+	output.subarray(outputArray.byteOffset, size).swap16() // FITS is big-endian
+	return output.subarray(0, size)
 }
 
 type AlpacaApiRunnerEndpoint = () => PromiseLike<unknown>

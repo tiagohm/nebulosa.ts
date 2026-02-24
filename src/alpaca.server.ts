@@ -1638,6 +1638,8 @@ function promiseWithTimeout(code: AlpacaException, message: string, delay: numbe
 	} as const
 }
 
+// https://github.com/ASCOMInitiative/ASCOMRemote/blob/main/Documentation/AlpacaImageBytes.pdf
+
 export function makeImageBytesFromFits(source: Buffer) {
 	const reader = new FitsKeywordReader()
 	let position = 0
@@ -1648,7 +1650,7 @@ export function makeImageBytesFromFits(source: Buffer) {
 	let numZ = 0
 
 	while (true) {
-		const [key, value] = reader.read(source.subarray(position, position + 80))
+		const [key, value] = reader.read(source, position)
 
 		position += 80
 
@@ -1663,12 +1665,9 @@ export function makeImageBytesFromFits(source: Buffer) {
 	}
 
 	const channels = numZ || 1
-	const inputBytesPerPixel = bitpixInBytes(bitpix)
-	const readStrideInBytes = numX * inputBytesPerPixel
-	const channelsInBytes = channels * inputBytesPerPixel
-	const writeStrideInBytes = numY * channelsInBytes
-
-	const output = Buffer.allocUnsafe(44 + numX * numY * channelsInBytes) // 16-bit
+	const bytesPerPixel = bitpixInBytes(bitpix)
+	const numberOfPixels = numX * numY
+	const output = Buffer.allocUnsafe(44 + numberOfPixels * channels * bytesPerPixel) // 16-bit
 
 	output.writeInt32LE(1, 0) // Bytes 0..3 - Metadata version = 1
 	output.writeInt32LE(0, 4) // Bytes 4..7 - Alpaca error number or zero for success
@@ -1682,37 +1681,25 @@ export function makeImageBytesFromFits(source: Buffer) {
 	output.writeInt32LE(numY, 36) // Bytes 36..39 - Length of image array second dimension
 	output.writeInt32LE(numZ || 0, 40) // Bytes 40..43 - Length of image array third dimension (0 for 2D array)
 
-	let b = 0
+	const zero = bitpix === 8 ? 0 : 32768
 
-	const sourceView = new DataView(source.buffer, source.byteOffset, source.byteLength)
-	const outputView = new DataView(output.buffer, 44, output.byteLength - 44)
+	if (bitpix === 16) source.swap16()
 
-	// const message = `converted FITS image to ASCOM format. bitpix=${bitpix}, channels=${channels}`
-	// console.time(message)
+	const sourceLength = (source.byteLength - position) / bytesPerPixel
+	const sourceArray = bitpix === 8 ? new Uint8Array(source.buffer, position, sourceLength) : new Int16Array(source.buffer, position, sourceLength)
 
-	if (bitpix === Bitpix.BYTE) {
-		for (let c = 0; c < channels; c++) {
-			for (let y = 0; y < numY; y++, position += readStrideInBytes) {
-				b = y * channels + c
+	const outputLength = (output.byteLength - 44) / bytesPerPixel
+	const outputArray = bitpix === 8 ? new Uint8Array(output.buffer, 44, outputLength) : new Uint16Array(output.buffer, 44, outputLength)
 
-				for (let x = 0, a = position; x < numX; x++, a++, b += writeStrideInBytes) {
-					outputView.setUint8(b, sourceView.getUint8(a))
-				}
-			}
-		}
-	} else {
-		for (let c = 0; c < channelsInBytes; c += 2) {
-			for (let y = 0; y < numY; y++, position += readStrideInBytes) {
-				b = y * channelsInBytes + c
-
-				for (let x = 0, a = position; x < numX; x++, a += 2, b += writeStrideInBytes) {
-					outputView.setUint16(b, sourceView.getInt16(a, false) + 32768, true)
-				}
+	for (let x = 0, p = 0; x < numX; x++) {
+		for (let y = 0, n = 0; y < numY; y++, n += numX) {
+			for (let c = 0, m = n + x; c < channels; c++, m += numberOfPixels) {
+				outputArray[p++] = sourceArray[m] + zero
 			}
 		}
 	}
 
-	// console.timeEnd(message)
+	if (bitpix === 16) source.swap16()
 
 	return output
 }
