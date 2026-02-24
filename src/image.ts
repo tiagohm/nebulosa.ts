@@ -50,8 +50,12 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 }
 
 export async function readImageFromSource(source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
+	const { position } = source
+
 	const fits = await readFits(source)
 	if (fits) return await readImageFromFits(fits, source, raw)
+
+	source.seek(position)
 
 	const xisf = await readXisf(source)
 	if (xisf) return await readImageFromXisf(xisf, source, raw)
