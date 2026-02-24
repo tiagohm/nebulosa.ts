@@ -3,7 +3,7 @@
 export type AnalogMapping = Record<number, number>
 
 export interface Transport {
-	readonly write: (data: string | ArrayBufferLike | NodeJS.TypedArray<ArrayBufferLike> | DataView<ArrayBufferLike>, byteOffset?: number, byteLength?: number) => void
+	readonly write: (data: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) => void
 	readonly close: () => void
 }
 
@@ -663,7 +663,7 @@ export class FirmataClient {
 		this.fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 	}
 
-	send(data: string | ArrayBufferLike | NodeJS.TypedArray<ArrayBufferLike> | DataView<ArrayBufferLike>, byteOffset?: number, byteLength?: number) {
+	send(data: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) {
 		this.transport.write(data)
 	}
 

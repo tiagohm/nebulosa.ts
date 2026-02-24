@@ -1,11 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import fs from 'fs/promises'
 import { Bitpix } from '../src/fits'
-import { readImageFromPath, writeImageToFits } from '../src/image'
+import { readImageFromPath, readImageFromSource, writeImageToFits } from '../src/image'
 import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../src/image.computation'
 // biome-ignore format: too long!
 import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
-import { fileHandleSink } from '../src/io'
+import { bufferSink, bufferSource } from '../src/io'
 import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
 test('read image from fits', async () => {
@@ -23,25 +22,24 @@ test('read image from fits', async () => {
 }, 15000)
 
 test('write image to fits', async () => {
+	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
+
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
+			buffer.fill(20)
+
 			const [a] = await readImage(bitpix, channel)
-			const key = `${bitpix}.${channel}`
-
-			const handle = await fs.open(`out/witf-${key}.fit`, 'w+')
-			await using sink = fileHandleSink(handle)
-			await writeImageToFits(a, sink)
-
-			const b = await readImageFromPath(`out/witf-${key}.fit`)
+			await writeImageToFits(a, bufferSink(buffer))
+			const b = await readImageFromSource(bufferSource(buffer))
 
 			expect(a.header).toEqual(b!.header)
 
 			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 
-			await saveImageAndCompareHash(b!, `write-${key}`, hash)
+			await saveImageAndCompareHash(b!, `witf-${bitpix}.${channel}`, hash)
 		}
 	}
-}, 15000)
+}, 10000)
 
 test('histogram on red channel', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
