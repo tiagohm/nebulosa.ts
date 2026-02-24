@@ -154,7 +154,7 @@ abstract class AlpacaDevice {
 	readonly id: number
 
 	protected readonly runner = new AlpacaApiRunner()
-	protected readonly properties = new Set<DefVector & { type: Uppercase<VectorType> }>()
+	protected readonly properties = new Set<DefVector & { readonly type: Uppercase<VectorType> }>()
 
 	protected abstract readonly api: AlpacaDeviceApi
 	protected abstract readonly state: AlpacaClientDeviceState

@@ -50,7 +50,7 @@ function makeSegment(summary: Summary, daf: Daf): SpkSegment {
 		case 3:
 			return new Type2And3Segment(daf, start, end, center, target, type, startIndex, endIndex)
 		case 9:
-			return new Type9Segment(start, end, center, target, startIndex, endIndex)
+			return new Type9Segment(daf, start, end, center, target, startIndex, endIndex)
 		case 21:
 			return new Type21Segment(daf, start, end, center, target, startIndex, endIndex)
 	}
@@ -214,8 +214,14 @@ export class Type2And3Segment implements SpkSegment {
 // the data type defines a state by interpolating each component of a set of states whose epochs are
 // centered near the request epoch.
 export class Type9Segment implements SpkSegment {
+	private initialized = false
+	private degree = 0
+	private n = 0
+	private stateTable: Float64Array = new Float64Array(0)
+	private epochTable: Float64Array = new Float64Array(0)
+
 	constructor(
-		// private readonly daf: Daf,
+		private readonly daf: Daf,
 		// private readonly source: string,
 		readonly start: number,
 		readonly end: number,
@@ -227,11 +233,91 @@ export class Type9Segment implements SpkSegment {
 		readonly endIndex: number,
 	) {}
 
-	// biome-ignore lint/suspicious/useAwait: not implemented yet
 	async at(time: Time): Promise<PositionAndVelocity> {
+		if (!this.initialized) {
+			const [a, b] = await this.daf.read(this.endIndex - 1, this.endIndex)
+			this.degree = Math.trunc(a)
+			this.n = Math.trunc(b)
+
+			const stateLength = this.n * 6
+			this.stateTable = await this.daf.read(this.startIndex, this.startIndex + stateLength - 1)
+			this.epochTable = await this.daf.read(this.startIndex + stateLength, this.startIndex + stateLength + this.n - 1)
+			this.initialized = true
+		}
+
+		const t = tdb(time)
+		const seconds = (t.day - J2000 + t.fraction) * DAYSEC
+		const index = this.searchEpochIndex(seconds)
+
+		if (index < 0) {
+			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
+		}
+
+		if (this.epochTable[index] === seconds) {
+			const offset = index * 6
+			const p: MutVec3 = [this.stateTable[offset] / AU_KM, this.stateTable[offset + 1] / AU_KM, this.stateTable[offset + 2] / AU_KM]
+			const v: MutVec3 = [(this.stateTable[offset + 3] * DAYSEC) / AU_KM, (this.stateTable[offset + 4] * DAYSEC) / AU_KM, (this.stateTable[offset + 5] * DAYSEC) / AU_KM]
+			return [p, v]
+		}
+
+		const window = Math.min(this.degree + 1, this.n)
+		let begin = index - Math.trunc(window / 2)
+		if (begin < 0) begin = 0
+		if (begin + window > this.n) begin = this.n - window
+		const end = begin + window
+
 		const p: MutVec3 = [0, 0, 0]
 		const v: MutVec3 = [0, 0, 0]
+
+		for (let component = 0; component < 6; component++) {
+			let sum = 0
+
+			for (let i = begin; i < end; i++) {
+				const ti = this.epochTable[i]
+				let basis = 1
+
+				for (let j = begin; j < end; j++) {
+					if (j !== i) {
+						const tj = this.epochTable[j]
+						basis *= (seconds - tj) / (ti - tj)
+					}
+				}
+
+				sum += this.stateTable[i * 6 + component] * basis
+			}
+
+			if (component < 3) {
+				p[component] = sum / AU_KM
+			} else {
+				v[component - 3] = (sum * DAYSEC) / AU_KM
+			}
+		}
+
 		return [p, v]
+	}
+
+	private searchEpochIndex(seconds: number) {
+		let lo = 0
+		let hi = this.n - 1
+
+		if (seconds < this.epochTable[0] || seconds > this.epochTable[hi]) {
+			return -1
+		}
+
+		while (lo <= hi) {
+			const mid = (lo + hi) >>> 1
+			const value = this.epochTable[mid]
+
+			if (value < seconds) {
+				lo = mid + 1
+			} else if (value > seconds) {
+				hi = mid - 1
+			} else {
+				return mid
+			}
+		}
+
+		return lo
 	}
 }
 
