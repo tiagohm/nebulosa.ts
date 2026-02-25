@@ -233,44 +233,30 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 
 // TODO: Compression
 export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly Readonly<Pick<Image, 'header' | 'raw'>>[]) {
-	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE)
-	const writer = new FitsKeywordWriter()
+	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE * 4)
+	const headerWriter = new FitsKeywordWriter()
 
-	let offset = 'position' in sink ? sink.position! : 0
-
-	async function writeHeader(key: FitsHeaderKey, value: FitsHeaderValue) {
-		const length = writer.write([key, value], buffer)
-		offset += await sink.write(buffer, 0, length)
+	function writeHeader(key: FitsHeaderKey, value: FitsHeaderValue, offset: number) {
+		return headerWriter.write([key, value], buffer, offset)
 	}
 
-	async function fillWithRemainingBytes() {
-		const remaining = computeRemainingBytes(offset)
-
-		if (remaining > 0) {
-			buffer.fill(20, 0, remaining)
-			offset += await sink.write(buffer, 0, remaining)
-		}
+	function fillWithRemainingBytes(size: number, offset: number) {
+		const remaining = computeRemainingBytes(size)
+		remaining > 0 && buffer.fill(20, offset, offset + remaining)
+		return remaining
 	}
 
 	for (const hdu of hdus) {
 		const { header, raw } = hdu
-		let end = false
 
-		for (const key in header) {
-			await writeHeader(key, header[key])
+		let offset = headerWriter.writeAll(header, buffer)
+		offset += writeHeader('END', undefined, offset)
+		offset += fillWithRemainingBytes(offset, offset)
+		await sink.write(buffer, 0, offset)
 
-			if (key === 'END') {
-				end = true
-				break
-			}
-		}
-
-		if (!end) await writeHeader('END', undefined)
-		await fillWithRemainingBytes()
-
-		const writer = new FitsImageWriter(header)
-		await writer.write(raw, sink)
-		await fillWithRemainingBytes()
+		const imageWriter = new FitsImageWriter(header)
+		offset = fillWithRemainingBytes(await imageWriter.write(raw, sink), 0)
+		if (offset > 0) await sink.write(buffer, 0, offset)
 	}
 }
 
@@ -485,6 +471,8 @@ class Position {
 	}
 }
 
+const END_CARD: FitsHeaderCard = ['END']
+
 export class FitsKeywordWriter {
 	static keywords: Readonly<Record<string, FitsKeyword>> = KEYWORDS
 
@@ -536,6 +524,8 @@ export class FitsKeywordWriter {
 			const card: FitsHeaderCard = ['', 0]
 
 			for (const key in header) {
+				if (key === 'END') break
+
 				const value = header[key]
 
 				if (value !== undefined) {
@@ -551,6 +541,10 @@ export class FitsKeywordWriter {
 		}
 
 		return size
+	}
+
+	writeEnd(output: Buffer, offset: number = 0) {
+		return this.write(END_CARD, output, offset)
 	}
 
 	private appendKey(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
@@ -828,6 +822,6 @@ export class FitsImageWriter {
 		else if (pixelInBytes === 4) this.buffer.swap32()
 		else if (pixelInBytes === 8) this.buffer.swap64()
 
-		await sink.write(this.buffer)
+		return await sink.write(this.buffer)
 	}
 }
