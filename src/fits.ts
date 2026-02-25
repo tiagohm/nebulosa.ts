@@ -236,10 +236,6 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE * 4)
 	const headerWriter = new FitsKeywordWriter()
 
-	function writeHeader(key: FitsHeaderKey, value: FitsHeaderValue, offset: number) {
-		return headerWriter.write([key, value], buffer, offset)
-	}
-
 	function fillWithRemainingBytes(size: number, offset: number) {
 		const remaining = computeRemainingBytes(size)
 		remaining > 0 && buffer.fill(20, offset, offset + remaining)
@@ -250,7 +246,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 		const { header, raw } = hdu
 
 		let offset = headerWriter.writeAll(header, buffer)
-		offset += writeHeader('END', undefined, offset)
+		offset += headerWriter.writeEnd(buffer, offset)
 		offset += fillWithRemainingBytes(offset, offset)
 		await sink.write(buffer, 0, offset)
 
@@ -734,6 +730,12 @@ export class FitsKeywordWriter {
 		const start = position.offset - position.size
 		return Math.floor((output.byteLength - start) / FITS_HEADER_CARD_SIZE) > 1
 	}
+}
+
+export function fitsHeaderValueToText(value: FitsHeaderValue) {
+	if (typeof value === 'boolean') return value ? 'T' : 'F'
+	if (typeof value === 'number') return `${value}`
+	return `'${escapeQuotedText(value ?? '')}'`
 }
 
 export class FitsImageReader {

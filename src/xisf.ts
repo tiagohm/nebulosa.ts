@@ -1,5 +1,5 @@
 import { type X2jOptions, XMLParser } from 'fast-xml-parser'
-import { type Bitpix, bitpixInBytes, type FitsHeader, type FitsHeaderValue } from './fits'
+import { type Bitpix, bitpixInBytes, type FitsHeader, type FitsHeaderValue, fitsHeaderValueToText } from './fits'
 import type { Size } from './geometry'
 import type { Image, ImageRawType } from './image.types'
 import { readUntil, type Seekable, type Sink, type Source } from './io'
@@ -109,8 +109,72 @@ export async function readXisf(source: Source & Seekable): Promise<Xisf | undefi
 	return { images }
 }
 
-export async function writeXisf(sink: Sink & Partial<Seekable>, images: readonly Readonly<Pick<Image, 'header' | 'raw'>>[], format: Pick<XisfImage, 'byteOrder' | 'pixelStorage'>) {
-	// TODO
+const RESERVED_FITS_KEYS = new Set(['SIMPLE', 'BITPIX', 'NAXIS', 'NAXIS1', 'NAXIS2', 'NAXIS3'])
+const DEFAULT_WRITE_XISF_FORMAT: Pick<XisfImage, 'byteOrder' | 'pixelStorage'> = { byteOrder: 'little', pixelStorage: 'Planar' }
+
+export async function writeXisf(sink: Sink & Seekable, images: readonly Readonly<Pick<Image, 'header' | 'raw'>>[], format: Pick<XisfImage, 'byteOrder' | 'pixelStorage'> = DEFAULT_WRITE_XISF_FORMAT) {
+	const escapeXml = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;')
+
+	const entries = images.map((image) => {
+		const { header } = image
+		const bitpix = (header.BITPIX as Bitpix) || -64
+		const width = +header.NAXIS1! || 0
+		const height = +header.NAXIS2! || 0
+		const channels = (+header.NAXIS3! || 1) as number
+		const sampleFormat: XisfSampleFormat = bitpix === 8 ? 'UInt8' : bitpix === 16 ? 'UInt16' : bitpix === 32 ? 'UInt32' : bitpix === 64 ? 'UInt64' : bitpix === -32 ? 'Float32' : 'Float64'
+		const colorSpace: XisfColorSpace = channels >= 3 ? 'RGB' : 'Gray'
+		const size = width * height * channels * bitpixInBytes(bitpix)
+		const fitsKeywords: string[] = []
+
+		for (const key in header) {
+			const value = header[key]
+			if (value === undefined || RESERVED_FITS_KEYS.has(key)) continue
+			fitsKeywords.push(`<FITSKeyword name="${escapeXml(key)}" value="${escapeXml(fitsHeaderValueToText(value))}" comment=""/>`)
+		}
+
+		return { raw: image.raw, bitpix, width, height, channels, sampleFormat, colorSpace, size, fitsKeywords }
+	})
+
+	const buildHeader = (offset: number) => {
+		let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<xisf version="1.0">'
+
+		for (const entry of entries) {
+			const bounds = entry.bitpix === -64 || entry.bitpix === -32 ? ' bounds="0:1"' : ''
+			const byteOrder = entry.bitpix !== 8 ? ` byteOrder="${format.byteOrder}"` : ''
+			xml += `<Image geometry="${entry.width}:${entry.height}:${entry.channels}" sampleFormat="${entry.sampleFormat}" colorSpace="${entry.colorSpace}" location="attachment:${offset}:${entry.size}" pixelStorage="${format.pixelStorage}"${byteOrder}${bounds}>`
+			if (entry.fitsKeywords.length) xml += entry.fitsKeywords.join('')
+			xml += '</Image>'
+			offset += entry.size
+		}
+
+		xml += '</xisf>'
+
+		return Buffer.from(xml)
+	}
+
+	let firstDataOffset = 16
+	let headerData = buildHeader(firstDataOffset)
+
+	for (let i = 0; i < 8; i++) {
+		const nextOffset = 16 + headerData.byteLength
+		if (nextOffset === firstDataOffset) break
+		firstDataOffset = nextOffset
+		headerData = buildHeader(firstDataOffset)
+	}
+
+	const signatureData = Buffer.allocUnsafe(16)
+	signatureData.write(XISF_SIGNATURE, 0, 8, 'ascii')
+	signatureData.writeUInt32LE(headerData.byteLength, 8)
+
+	sink.seek(0)
+
+	await sink.write(signatureData)
+	await sink.write(headerData)
+
+	for (const entry of entries) {
+		const writer = new XisfImageWriter({ byteOrder: format.byteOrder, pixelStorage: format.pixelStorage, bitpix: entry.bitpix, geometry: entry })
+		await writer.write(entry.raw, sink)
+	}
 }
 
 const XML_PARSER = new XMLParser(XML_PARSE_OPTIONS)
@@ -286,7 +350,7 @@ export class XisfImageWriter {
 			else if (pixelInBytes === 8) this.buffer.swap64()
 		}
 
-		await sink.write(this.buffer)
+		return await sink.write(this.buffer)
 	}
 }
 

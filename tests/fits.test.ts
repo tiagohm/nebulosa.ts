@@ -94,7 +94,7 @@ describe('read', () => {
 	})
 })
 
-test('write fits', async () => {
+test('write', async () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
 	for (const channel of CHANNELS) {
