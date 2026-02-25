@@ -1,5 +1,5 @@
 import { type X2jOptions, XMLParser } from 'fast-xml-parser'
-import { type Bitpix, bitpixInBytes, type FitsHeader, type FitsHeaderValue, fitsHeaderValueToText } from './fits'
+import { type Bitpix, bitpixInBytes, type FitsHeader, type FitsHeaderValue, fitsHeaderValueToText, unescapeQuotedText } from './fits'
 import type { Size } from './geometry'
 import type { Image, ImageRawType } from './image.types'
 import { readUntil, type Seekable, type Sink, type Source } from './io'
@@ -112,7 +112,7 @@ export async function readXisf(source: Source & Seekable): Promise<Xisf | undefi
 const RESERVED_FITS_KEYS = new Set(['SIMPLE', 'BITPIX', 'NAXIS', 'NAXIS1', 'NAXIS2', 'NAXIS3'])
 const DEFAULT_WRITE_XISF_FORMAT: Pick<XisfImage, 'byteOrder' | 'pixelStorage'> = { byteOrder: 'little', pixelStorage: 'Planar' }
 
-export async function writeXisf(sink: Sink & Seekable, images: readonly Readonly<Pick<Image, 'header' | 'raw'>>[], format: Pick<XisfImage, 'byteOrder' | 'pixelStorage'> = DEFAULT_WRITE_XISF_FORMAT) {
+export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image, 'header' | 'raw'>>[], format: Pick<XisfImage, 'byteOrder' | 'pixelStorage'> = DEFAULT_WRITE_XISF_FORMAT) {
 	const escapeXml = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;')
 
 	const entries = images.map((image) => {
@@ -165,8 +165,6 @@ export async function writeXisf(sink: Sink & Seekable, images: readonly Readonly
 	const signatureData = Buffer.allocUnsafe(16)
 	signatureData.write(XISF_SIGNATURE, 0, 8, 'ascii')
 	signatureData.writeUInt32LE(headerData.byteLength, 8)
-
-	sink.seek(0)
 
 	await sink.write(signatureData)
 	await sink.write(headerData)
@@ -222,7 +220,7 @@ function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeo
 			if (value === '' || value === undefined || value === null) continue
 			else if (value === 'T') header[keyword.name] = true
 			else if (value === 'F') header[keyword.name] = false
-			else if (value.startsWith("'") && value.endsWith("'")) header[keyword.name] = value.substring(1, value.length - 1).trim()
+			else if (value.startsWith("'") && value.endsWith("'")) header[keyword.name] = unescapeQuotedText(value.substring(1, value.length - 1).trim())
 			else header[keyword.name] = +value
 		}
 	}

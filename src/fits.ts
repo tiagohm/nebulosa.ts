@@ -261,11 +261,11 @@ export function computeRemainingBytes(size: number) {
 	return remaining === 0 ? 0 : FITS_BLOCK_SIZE - remaining
 }
 
-function escapeQuotedText(text: string) {
+export function escapeQuotedText(text: string) {
 	return text.replaceAll("'", "''")
 }
 
-function unescapeQuotedText(text: string) {
+export function unescapeQuotedText(text: string) {
 	return text.replaceAll("''", "'")
 }
 

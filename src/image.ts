@@ -4,7 +4,7 @@ import { type Bitpix, bitpixInBytes, bitpixKeyword, cfaPatternKeyword, type Fits
 import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageRawType, type WriteImageToFormatOptions } from './image.types'
 import { bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from './io'
 import { Jpeg } from './jpeg'
-import { readXisf, type Xisf, type XisfImage, XisfImageReader } from './xisf'
+import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader } from './xisf'
 
 // Reads an image from a FITS file
 export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
@@ -95,6 +95,11 @@ export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'f
 export function writeImageToFits(image: Image, output: Buffer | Sink) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	return writeFits(output, [image])
+}
+
+export function writeImageToXisf(image: Image, output: Buffer | Sink, format?: Pick<XisfImage, 'byteOrder' | 'pixelStorage'>) {
+	if (Buffer.isBuffer(output)) output = bufferSink(output)
+	return writeXisf(output, [image], format)
 }
 
 export function clampPixel(p: number, max: number) {

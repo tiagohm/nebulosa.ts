@@ -305,8 +305,14 @@ xy(time) // Polar motion angles at time
 
 ```ts
 readImageFromFits(fits) // Read image from FITS file
+readImageFromXisf(fits) // Read image from XISF file
+readImageFromSource(source) // Read FITS/XISF image from source
+readImageFromBuffer(source) // Read FITS/XISF image from buffer
+readImageFromFileHandle(source) // Read FITS/XISF image from file handle
+readImageFromPath(source) // Read FITS/XISF image from file path
 writeImageToFormat(image, path, format) // Write image to path as png, jpeg, webp, etc
 writeImageToFits(image, sink) // Write image to sink as FITS format
+writeImageToXisf(image, sink, format) // Write image to sink as XISF format
 clone(image) // Clone the image
 stf(image, midtone, shadow, highlight, channel) // Apply STF to image
 adf(image, options) // Calculate the STF parameters
@@ -849,6 +855,8 @@ const [x, y] = wcs.skyToPix(ra, dec)
 ### Xisf ![](bun.webp)
 
 ```ts
+readXisf(source)
+writeXisf(sink, images, format)
 byteShuffle(input, output, itemSize)
 byteUnshuffle(input, output, itemSize)
 ```

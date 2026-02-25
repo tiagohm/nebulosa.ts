@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Bitpix } from '../src/fits'
-import { readImageFromPath, readImageFromSource, writeImageToFits } from '../src/image'
+import { readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../src/image'
 import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../src/image.computation'
 // biome-ignore format: too long!
 import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
@@ -30,6 +30,26 @@ test('write image to fits', async () => {
 
 			const [a] = await readImage(bitpix, channel)
 			await writeImageToFits(a, bufferSink(buffer))
+			const b = await readImageFromSource(bufferSource(buffer))
+
+			expect(a.header).toEqual(b!.header)
+
+			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
+
+			await saveImageAndCompareHash(b!, `witf-${bitpix}.${channel}`, hash)
+		}
+	}
+}, 10000)
+
+test('write image to xisf', async () => {
+	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
+
+	for (const bitpix of BITPIXES) {
+		for (const channel of CHANNELS) {
+			buffer.fill(20)
+
+			const [a] = await readImage(bitpix, channel)
+			await writeImageToXisf(a, bufferSink(buffer))
 			const b = await readImageFromSource(bufferSource(buffer))
 
 			expect(a.header).toEqual(b!.header)
