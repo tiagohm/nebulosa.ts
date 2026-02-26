@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test'
 import { deg, formatDEC, hour, toHour } from '../src/angle'
 import { meter } from '../src/distance'
 import { eraS2c } from '../src/erfa'
-import { Ellipsoid, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi, subpoint } from '../src/location'
+import { Ellipsoid, gcrs, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi, subpoint } from '../src/location'
+import { matTransposeMul } from '../src/mat3'
 import { Timescale, timeYMDHMS } from '../src/time'
 
 test('lst', () => {
@@ -44,4 +45,42 @@ test('subpoint', () => {
 
 	expect(formatDEC(p.latitude)).toBe('+24 10 33.80')
 	expect(formatDEC(p.longitude)).toBe('+123 16 53.90')
+})
+
+test('gcrs dRdtTimesRtAt is skew-symmetric', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
+	const m = gcrs(p).dRdtTimesRtAt!(t)
+
+	expect(m[0]).toBeCloseTo(0, 15)
+	expect(m[4]).toBeCloseTo(0, 15)
+	expect(m[8]).toBeCloseTo(0, 15)
+	expect(m[1]).toBeCloseTo(-m[3], 15)
+	expect(m[2]).toBeCloseTo(-m[6], 15)
+	expect(m[5]).toBeCloseTo(-m[7], 15)
+})
+
+test('gcrs dRdtTimesRtAt varies with time', () => {
+	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
+	const a = gcrs(p).dRdtTimesRtAt!(timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC))
+	const b = gcrs(p).dRdtTimesRtAt!(timeYMDHMS(2020, 7, 1, 0, 0, 0, Timescale.UTC))
+
+	expect(a).not.toEqual(b)
+})
+
+test('gcrs rotationAt is orthonormal', () => {
+	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	const m = gcrs(p).rotationAt(t)
+	const mtm = matTransposeMul(m, m)
+
+	expect(mtm[0]).toBeCloseTo(1, 14)
+	expect(mtm[4]).toBeCloseTo(1, 14)
+	expect(mtm[8]).toBeCloseTo(1, 14)
+	expect(mtm[1]).toBeCloseTo(0, 14)
+	expect(mtm[2]).toBeCloseTo(0, 14)
+	expect(mtm[3]).toBeCloseTo(0, 14)
+	expect(mtm[5]).toBeCloseTo(0, 14)
+	expect(mtm[6]).toBeCloseTo(0, 14)
+	expect(mtm[7]).toBeCloseTo(0, 14)
 })

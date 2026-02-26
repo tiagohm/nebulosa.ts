@@ -1,9 +1,9 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
-import { EARTH_ANGULAR_VELOCITY_VECTOR, ELLIPSOID_PARAMETERS } from './constants'
+import { ELLIPSOID_PARAMETERS, ONE_SECOND } from './constants'
 import type { Distance } from './distance'
 import { eraGc2Gde, eraSp00 } from './erfa'
 import type { Frame } from './frame'
-import { type Mat3, type MutMat3, matFlipX, matMul, matMulVec, matRotX, matRotY, matRotZ } from './mat3'
+import { type Mat3, type MutMat3, matFlipX, matMinus, matMul, matMulScalar, matMulVec, matRotX, matRotY, matRotZ } from './mat3'
 import { gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmAngles, type Time, tt } from './time'
 import type { Vec3 } from './vec3'
 
@@ -90,13 +90,33 @@ export function gcrsRotationAt(location: GeographicPosition, time: Time) {
 	return matMul(rLatLon(location), m, m)
 }
 
+const ANGULAR_VELOCITY_SCALE = 0.5
+
+function instantaneousEarthAngularVelocity(time: Time): Vec3 {
+	const r = gcrsToItrsRotationMatrix(time)
+	const rp = gcrsToItrsRotationMatrix({ day: time.day, fraction: time.fraction + ONE_SECOND, scale: time.scale })
+	const rm = gcrsToItrsRotationMatrix({ day: time.day, fraction: time.fraction - ONE_SECOND, scale: time.scale })
+
+	const d = matMinus(rp, rm, rp as MutMat3)
+	matMulScalar(d, ANGULAR_VELOCITY_SCALE, d)
+
+	// w = dR/dt * R^T
+	const w12 = d[3] * r[6] + d[4] * r[7] + d[5] * r[8]
+	const w21 = d[6] * r[3] + d[7] * r[4] + d[8] * r[5]
+	const w20 = d[6] * r[0] + d[7] * r[1] + d[8] * r[2]
+	const w02 = d[0] * r[6] + d[1] * r[7] + d[2] * r[8]
+	const w01 = d[0] * r[3] + d[1] * r[4] + d[2] * r[5]
+	const w10 = d[3] * r[0] + d[4] * r[1] + d[5] * r[2]
+
+	return [(w21 - w12) * ANGULAR_VELOCITY_SCALE, (w02 - w20) * ANGULAR_VELOCITY_SCALE, (w10 - w01) * ANGULAR_VELOCITY_SCALE]
+}
+
 // The Geocentric Celestial Reference System (GCRS) at location.
 export function gcrs(location: GeographicPosition): Frame {
 	return {
 		rotationAt: (time) => gcrsRotationAt(location, time),
-		dRdtTimesRtAt: () => {
-			// TODO: taking the derivative of the instantaneous angular velocity would provide a more accurate transform.
-			const [x, y, z] = matMulVec(rLat(location), EARTH_ANGULAR_VELOCITY_VECTOR)
+		dRdtTimesRtAt: (time) => {
+			const [x, y, z] = matMulVec(rLat(location), instantaneousEarthAngularVelocity(time))
 			return [0, -z, y, z, 0, -x, -y, x, 0]
 		},
 	}

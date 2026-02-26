@@ -24,6 +24,9 @@ export const DAYSEC = 86400
 // Sidereal seconds per day.
 export const SIDEREAL_DAYSEC = 86164.0905
 
+// 1 sidereal second
+export const ONE_SECOND = 1 / DAYSEC
+
 // Minutes per day.
 export const DAYMIN = 1440
 
