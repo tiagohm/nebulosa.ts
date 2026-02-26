@@ -74,7 +74,9 @@ export class AlpacaDiscoveryServer {
 	}
 }
 
-function broadcastAddress(i: NetworkInterfaceInfo) {
+function broadcastAddress(i: NetworkInterfaceInfo, family: NetworkInterfaceInfo['family']) {
+	if (family === 'IPv6') return i.internal ? '::1' : 'ff02::1'
+
 	const address = i.address.split('.')
 	const netmask = i.netmask.split('.')
 	// bitwise OR over the splitted NAND netmask, then glue them back together with a dot character to form an ip
@@ -124,7 +126,8 @@ export class AlpacaDiscoveryClient implements Disposable {
 
 					if (port) {
 						if (options.fetch ?? DEFAULT_ALPACA_DISCOVERY_OPTIONS.fetch) {
-							const url = `http://${address}:${port}`
+							const host = address.includes(':') ? `[${address}]` : address
+							const url = `http://${host}:${port}`
 
 							try {
 								const api = new AlpacaManagementApi(url)
@@ -154,18 +157,14 @@ export class AlpacaDiscoveryClient implements Disposable {
 		try {
 			const interfaces = networkInterfaces()
 			const names = Object.keys(interfaces)
-			// const family = options.family || DEFAULT_ALPACA_DISCOVERY_OPTIONS.family // TODO: Handle ipv6 for broadcastAddress method
+            const family = options.family || DEFAULT_ALPACA_DISCOVERY_OPTIONS.family
 			const port = options.port || DEFAULT_ALPACA_DISCOVERY_OPTIONS.port
 
 			if (names.length) {
 				for (const name of names) {
 					for (const i of interfaces[name]!) {
-						if (i.family === 'IPv4') {
-							if (!i.internal) {
-								this.socket.send(ALPACA_DISCOVERY_DATA, port, broadcastAddress(i))
-							} else {
-								this.socket.send(ALPACA_DISCOVERY_DATA, port, i.address)
-							}
+						if (i.family === family) {
+							this.socket.send(ALPACA_DISCOVERY_DATA, port, broadcastAddress(i, family))
 						}
 					}
 				}
