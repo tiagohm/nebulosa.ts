@@ -1854,7 +1854,7 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 	}
 
 	const bitpix = alpacaImageElementTypeToBitpix(metadata.TransmissionElementType)
-	const pixelInBytes = bitpixInBytes(bitpix)
+	const bytesPerPixel = bitpixInBytes(bitpix)
 
 	// https://github.com/indilib/indi/blob/3b0cdcb6caf41c859b77c6460981772fe8d5d22d/libs/indibase/indiccd.cpp#L2028
 	const header: FitsHeader = {
@@ -1907,22 +1907,22 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 	const numberOfPixels = NumX * NumY
 	const elementCount = numberOfPixels * NumZ
 	const estimatedHeaderSize = Object.keys(header).filter((e) => header[e] !== undefined).length * FITS_HEADER_CARD_SIZE + FITS_BLOCK_SIZE
-	const expectedDataSize = elementCount * pixelInBytes
+	const expectedDataSize = elementCount * bytesPerPixel
 	const output = Buffer.allocUnsafe(estimatedHeaderSize + computeRemainingBytes(estimatedHeaderSize) + expectedDataSize + computeRemainingBytes(expectedDataSize))
 
 	const writer = new FitsKeywordWriter()
 	let headerOffset = writer.writeAll(header, output)
 	headerOffset += writer.writeEnd(output, headerOffset)
 
-	const sourceArray = bitpix === 8 ? new Uint8Array(data, metadata.DataStart, elementCount) : new Uint16Array(data, metadata.DataStart, elementCount)
+	const sourceArray = bitpix === 8 ? new Uint8Array(data, metadata.DataStart, elementCount) : bitpix === 16 ? new Uint16Array(data, metadata.DataStart, elementCount) : new Uint32Array(data, metadata.DataStart, elementCount)
 	const byteOffset = headerOffset + computeRemainingBytes(headerOffset)
-	const outputArray = bitpix === 8 ? new Uint8Array(output.buffer, byteOffset, sourceArray.length) : new Int16Array(output.buffer, byteOffset, sourceArray.length)
-	const zero = bitpix === 8 ? 0 : 32768
+	const outputArray = bitpix === 8 ? new Uint8Array(output.buffer, byteOffset, sourceArray.length) : bitpix === 16 ? new Int16Array(output.buffer, byteOffset, sourceArray.length) : new Int32Array(output.buffer, byteOffset, sourceArray.length)
+	const zero = bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0
 
 	let p = 0
 
 	// TODO: Implement other transmission element types
-	if (bitpix === 8 || bitpix === 16) {
+	if (bitpix === 8 || bitpix === 16 || bitpix === 32) {
 		for (let x = 0; x < NumX; x++) {
 			for (let y = 0, n = 0; y < NumY; y++, n += NumX) {
 				for (let c = 0, m = n + x; c < NumZ; c++, m += numberOfPixels, p++) {
@@ -1932,10 +1932,12 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 		}
 	}
 
-	p *= pixelInBytes
+	p *= bytesPerPixel
 
 	const size = byteOffset + p + computeRemainingBytes(p)
-	if (bitpix === 16) output.subarray(byteOffset, size).swap16() // FITS is big-endian
+	// FITS is big-endian
+	if (bytesPerPixel === 2) output.subarray(byteOffset, size).swap16()
+	else if (bytesPerPixel === 4) output.subarray(byteOffset, size).swap32()
 	return output.subarray(0, size)
 }
 

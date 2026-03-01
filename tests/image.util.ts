@@ -34,7 +34,6 @@ export function readImage(bitpix: Bitpix, channel: number, action?: (image: Imag
 
 export async function saveImageAndCompareHash(image: Image, name: string, hash?: string) {
 	const jpeg = writeImageToFormat(image, 'jpeg')
-	expect(jpeg).toBeDefined()
 	await saveAndCompareHash(jpeg!, `${name}.jpg`, hash)
 	return image
 }

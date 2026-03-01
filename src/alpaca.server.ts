@@ -1667,7 +1667,7 @@ export function makeImageBytesFromFits(source: Buffer) {
 	const channels = numZ || 1
 	const bytesPerPixel = bitpixInBytes(bitpix)
 	const numberOfPixels = numX * numY
-	const output = Buffer.allocUnsafe(44 + numberOfPixels * channels * bytesPerPixel) // 16-bit
+	const output = Buffer.allocUnsafe(44 + numberOfPixels * channels * bytesPerPixel)
 
 	output.writeInt32LE(1, 0) // Bytes 0..3 - Metadata version = 1
 	output.writeInt32LE(0, 4) // Bytes 4..7 - Alpaca error number or zero for success
@@ -1675,21 +1675,22 @@ export function makeImageBytesFromFits(source: Buffer) {
 	output.writeInt32LE(0, 12) // Bytes 12..15 - Device's transaction ID
 	output.writeInt32LE(44, 16) // Bytes 16..19 - Offset of the start of the data bytes
 	output.writeInt32LE(AlpacaImageElementType.Int32, 20) // Bytes 20..23 - Element type of the source image array. It's always 2 (Int32)? Because MaxIm DL crashes if it's not!
-	output.writeInt32LE(bitpix === Bitpix.BYTE ? AlpacaImageElementType.Byte : AlpacaImageElementType.UInt16, 24) // Bytes 24..27 - Element type as sent over the network.
+	output.writeInt32LE(bitpix === 8 ? AlpacaImageElementType.Byte : bitpix === 16 ? AlpacaImageElementType.UInt16 : AlpacaImageElementType.UInt32, 24) // Bytes 24..27 - Element type as sent over the network.
 	output.writeInt32LE(numZ || 2, 28) // Bytes 28..31 - Image array rank (2 or 3)
 	output.writeInt32LE(numX, 32) // Bytes 32..35 - Length of image array first dimension
 	output.writeInt32LE(numY, 36) // Bytes 36..39 - Length of image array second dimension
-	output.writeInt32LE(numZ || 0, 40) // Bytes 40..43 - Length of image array third dimension (0 for 2D array)
+	output.writeInt32LE(numZ, 40) // Bytes 40..43 - Length of image array third dimension (0 for 2D array)
 
-	const zero = bitpix === 8 ? 0 : 32768
+	const zero = bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0
 
-	if (bitpix === 16) source.swap16()
+	if (bytesPerPixel === 2) source.swap16()
+	else if (bytesPerPixel === 4) source.swap32()
 
 	const sourceLength = (source.byteLength - position) / bytesPerPixel
-	const sourceArray = bitpix === 8 ? new Uint8Array(source.buffer, position, sourceLength) : new Int16Array(source.buffer, position, sourceLength)
+	const sourceArray = bitpix === 8 ? new Uint8Array(source.buffer, position, sourceLength) : bitpix === 16 ? new Int16Array(source.buffer, position, sourceLength) : new Int32Array(source.buffer, position, sourceLength)
 
 	const outputLength = (output.byteLength - 44) / bytesPerPixel
-	const outputArray = bitpix === 8 ? new Uint8Array(output.buffer, 44, outputLength) : new Uint16Array(output.buffer, 44, outputLength)
+	const outputArray = bitpix === 8 ? new Uint8Array(output.buffer, 44, outputLength) : bitpix === 16 ? new Uint16Array(output.buffer, 44, outputLength) : new Uint32Array(output.buffer, 44, outputLength)
 
 	for (let x = 0, p = 0; x < numX; x++) {
 		for (let y = 0, n = 0; y < numY; y++, n += numX) {
@@ -1699,7 +1700,8 @@ export function makeImageBytesFromFits(source: Buffer) {
 		}
 	}
 
-	if (bitpix === 16) source.swap16()
+	if (bytesPerPixel === 2) source.swap16()
+	else if (bytesPerPixel === 4) source.swap32()
 
 	return output
 }
