@@ -14,6 +14,7 @@ export class AlpacaApi {
 	readonly filterWheel: AlpacaFilterWheelApi
 	readonly focuser: AlpacaFocuserApi
 	readonly coverCalibrator: AlpacaCoverCalibratorApi
+	readonly rotator: AlpacaRotatorApi
 
 	constructor(readonly url: string | URL) {
 		this.management = new AlpacaManagementApi(url)
@@ -22,6 +23,7 @@ export class AlpacaApi {
 		this.filterWheel = new AlpacaFilterWheelApi(url)
 		this.focuser = new AlpacaFocuserApi(url)
 		this.coverCalibrator = new AlpacaCoverCalibratorApi(url)
+		this.rotator = new AlpacaRotatorApi(url)
 	}
 }
 
@@ -802,6 +804,64 @@ export class AlpacaCoverCalibratorApi extends AlpacaDeviceApi {
 
 	open(id: number) {
 		return request<void>(this.url, `${id}/opencover`, 'PUT')
+	}
+}
+
+export class AlpacaRotatorApi extends AlpacaDeviceApi {
+	constructor(url: string | URL) {
+		super(new URL('/api/v1/rotator/', url))
+	}
+
+	canReverse(id: number) {
+		return request<boolean>(this.url, `${id}/canreverse`, 'GET')
+	}
+
+	getMechanicalPosition(id: number) {
+		return request<number>(this.url, `${id}/mechanicalposition`, 'GET')
+	}
+
+	getPosition(id: number) {
+		return request<number>(this.url, `${id}/position`, 'GET')
+	}
+
+	isMoving(id: number) {
+		return request<boolean>(this.url, `${id}/ismoving`, 'GET')
+	}
+
+	isReverse(id: number) {
+		return request<boolean>(this.url, `${id}/reverse`, 'GET')
+	}
+
+	setReverse(id: number, Reverse: boolean) {
+		return request<boolean>(this.url, `${id}/reverse`, 'PUT', { Reverse })
+	}
+
+	getStepSize(id: number) {
+		return request<boolean>(this.url, `${id}/stepsize`, 'GET')
+	}
+
+	getTargetPosition(id: number) {
+		return request<number>(this.url, `${id}/targetposition`, 'GET')
+	}
+
+	halt(id: number) {
+		return request<void>(this.url, `${id}/halt`, 'PUT')
+	}
+
+	move(id: number, Position: number) {
+		return request<void>(this.url, `${id}/move`, 'PUT', { Position })
+	}
+
+	moveAbsolute(id: number, Position: number) {
+		return request<void>(this.url, `${id}/moveabsolute`, 'PUT', { Position })
+	}
+
+	moveMechanical(id: number, Position: number) {
+		return request<void>(this.url, `${id}/movemechanical`, 'PUT', { Position })
+	}
+
+	sync(id: number, Position: number) {
+		return request<void>(this.url, `${id}/sync`, 'PUT', { Position })
 	}
 }
 

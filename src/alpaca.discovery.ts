@@ -157,7 +157,7 @@ export class AlpacaDiscoveryClient implements Disposable {
 		try {
 			const interfaces = networkInterfaces()
 			const names = Object.keys(interfaces)
-            const family = options.family || DEFAULT_ALPACA_DISCOVERY_OPTIONS.family
+			const family = options.family || DEFAULT_ALPACA_DISCOVERY_OPTIONS.family
 			const port = options.port || DEFAULT_ALPACA_DISCOVERY_OPTIONS.port
 
 			if (names.length) {

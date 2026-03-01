@@ -1,4 +1,4 @@
-import { AlpacaCameraApi, AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaTelescopeApi } from './alpaca.api'
+import { AlpacaCameraApi, AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaRotatorApi, AlpacaTelescopeApi } from './alpaca.api'
 import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate, ImageBytesMetadata } from './alpaca.types'
 import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from './angle'
 import { SIDEREAL_RATE } from './constants'
@@ -92,6 +92,8 @@ export class AlpacaClient implements Client, Disposable {
 					device = new AlpacaFocuser(this, configuredDevice)
 				} else if (type === 'covercalibrator') {
 					device = new AlpacaCoverCalibrator(this, configuredDevice)
+				} else if (type === 'rotator') {
+					device = new AlpacaRotator(this, configuredDevice)
 				}
 
 				if (device) {
@@ -1673,6 +1675,91 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 	}
 }
 
+interface AlpacaClientRotatorState extends AlpacaClientDeviceState {
+	readonly IsMoving: boolean
+	readonly Position: number
+	readonly CanReverse: boolean
+}
+
+class AlpacaRotator extends AlpacaDevice {
+	protected readonly api: AlpacaRotatorApi
+
+	private readonly angle = makeNumberVector('', 'ABS_ROTATOR_ANGLE', 'Goto', MAIN_CONTROL, 'rw', ['ANGLE', 'Angle', 0, 0, 360, 0.01, '%.2f'])
+	private readonly reverse = makeSwitchVector('', 'ROTATOR_REVERSE', 'Reverse', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+	private readonly abort = makeSwitchVector('', 'ROTATOR_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+
+	// https://ascom-standards.org/newdocs/rotator.html#Rotator.DeviceState
+	protected readonly state: AlpacaClientRotatorState = { Connected: false, DeviceState: undefined, Step: 0, IsMoving: false, Position: 0, CanReverse: false }
+	protected readonly initialEndpoints = ['CanReverse'] as const
+	protected readonly deviceStateEndpoints = ['IsMoving', 'Position'] as const
+
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
+		super(client, device, client.options.handler)
+
+		const api = new AlpacaRotatorApi(client.url)
+
+		this.angle.device = device.DeviceName
+		this.reverse.device = device.DeviceName
+		this.abort.device = device.DeviceName
+
+		this.runner.registerEndpoint('IsMoving', api.isMoving.bind(api, this.id), false)
+		this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanReverse', api.canReverse.bind(api, this.id), false)
+
+		this.api = api
+	}
+
+	protected handleEndpointsAfterRun() {
+		if (!super.handleEndpointsAfterRun()) return false
+
+		const { Step, IsMoving, Position, CanReverse } = this.state
+
+		// Initial
+		if (Step === 1) {
+			this.sendDefProperty(this.angle)
+			if (CanReverse) this.sendDefProperty(this.reverse)
+			this.sendDefProperty(this.abort)
+
+			this.disableEndpoints(...this.initialEndpoints)
+
+			this.state.Step = 2
+		}
+		// State
+		else if (Step === 2) {
+			let updated = this.updatePropertyState(this.angle, IsMoving ? 'Busy' : 'Idle')
+			updated = this.updatePropertyValue(this.angle, 'ANGLE', Position) || updated
+			updated && this.sendSetProperty(this.angle)
+		}
+
+		return true
+	}
+
+	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
+		switch (vector.name) {
+			case 'ROTATOR_REVERSE':
+				if (!this.state.CanReverse) break
+				if (vector.elements.INDI_ENABLED === true) void this.api.setReverse(this.id, true)
+				if (vector.elements.INDI_DISABLED === true) void this.api.setReverse(this.id, false)
+				break
+			case 'ROTATOR_ABORT_MOTION':
+				if (vector.elements.ABORT === true) void this.api.halt(this.id)
+				break
+		}
+	}
+
+	sendNumber(vector: NewNumberVector) {
+		super.sendNumber(vector)
+
+		switch (vector.name) {
+			case 'ABS_ROTATOR_ANGLE':
+				if (vector.elements.ANGLE !== undefined) void this.api.moveAbsolute(this.id, vector.elements.ANGLE)
+				break
+		}
+	}
+}
+
 function normalizeLongitude(angle: number) {
 	angle = angle % 360
 	if (angle > 180) angle -= 360
@@ -1794,7 +1881,8 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time: Time, camera?: C
 	headerOffset += writer.writeEnd(output, headerOffset)
 
 	// TODO: Implement other transmission element types
-	const sourceArray = new Uint16Array(data, 44, numberOfPixels * NumZ)
+	const elementCount = numberOfPixels * NumZ
+	const sourceArray = new Uint16Array(data, metadata.DataStart, elementCount)
 	const outputArray = new Int16Array(output.buffer, headerOffset + computeRemainingBytes(headerOffset), sourceArray.length)
 
 	let p = 0

@@ -15,13 +15,13 @@
 	},
 	"peerDependencies": {
 		"@types/bun": "latest",
-		"fast-xml-parser": "5.3.7",
+		"fast-xml-parser": "latest",
 		"typescript": "beta",
 		"utility-types": "latest"
 	},
-    "optionalDependencies": {
+	"optionalDependencies": {
 		"@typescript/native-preview": "latest"
-    },
+	},
 	"trustedDependencies": [
 		"@biomejs/biome"
 	]
