@@ -1693,8 +1693,8 @@ export function makeImageBytesFromFits(source: Buffer) {
 
 	for (let x = 0, p = 0; x < numX; x++) {
 		for (let y = 0, n = 0; y < numY; y++, n += numX) {
-			for (let c = 0, m = n + x; c < channels; c++, m += numberOfPixels) {
-				outputArray[p++] = sourceArray[m] + zero
+			for (let c = 0, m = n + x; c < channels; c++, m += numberOfPixels, p++) {
+				outputArray[p] = sourceArray[m] + zero
 			}
 		}
 	}

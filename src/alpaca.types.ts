@@ -1,3 +1,4 @@
+import type { BitpixOrZero } from './fits'
 import type { Cover, Device, FlatPanel } from './indi.device'
 import type { CameraManager, CoverManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from './indi.manager'
 
@@ -188,4 +189,8 @@ export class AlpacaError extends Error {
 	) {
 		super(message)
 	}
+}
+
+export function alpacaImageElementTypeToBitpix(type: AlpacaImageElementType): BitpixOrZero {
+	return type === 6 ? 8 : type === 1 || type === 8 ? 16 : type === 2 || type === 9 ? 32 : type === 5 ? 64 : type === 4 ? -32 : type === 3 ? -64 : 0
 }

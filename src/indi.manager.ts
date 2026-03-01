@@ -1492,14 +1492,6 @@ export class RotatorManager extends DeviceManager<Rotator> {
 				}
 
 				return
-			case 'SYNC_ROTATOR_ANGLE':
-				if (tag[0] === 'd') {
-					if (handleSwitchValue(device, 'canSync', true)) {
-						this.updated(device, 'canSync', message.state)
-					}
-				}
-
-				return
 			case 'ROTATOR_HOME':
 				if (tag[0] === 'd') {
 					if (handleSwitchValue(device, 'canHome', true)) {
@@ -1542,6 +1534,14 @@ export class RotatorManager extends DeviceManager<Rotator> {
 
 				if (handleSwitchValue(device, 'moving', message.state === 'Busy')) {
 					this.updated(device, 'moving', message.state)
+				}
+
+				return
+			case 'SYNC_ROTATOR_ANGLE':
+				if (tag[0] === 'd') {
+					if (handleSwitchValue(device, 'canSync', true)) {
+						this.updated(device, 'canSync', message.state)
+					}
 				}
 
 				return

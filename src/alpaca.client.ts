@@ -1,9 +1,10 @@
 import { AlpacaCameraApi, AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaRotatorApi, AlpacaTelescopeApi } from './alpaca.api'
-import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDeviceType, AlpacaStateItem, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate, ImageBytesMetadata } from './alpaca.types'
+// biome-ignore format: too long!
+import { type AlpacaAxisRate, type AlpacaCameraSensorType, type AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, type AlpacaStateItem, type AlpacaTelescopeEquatorialCoordinateType, type AlpacaTelescopePierSide, type AlpacaTelescopeTrackingRate, alpacaImageElementTypeToBitpix, type ImageBytesMetadata } from './alpaca.types'
 import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from './angle'
 import { SIDEREAL_RATE } from './constants'
 import { equatorialFromJ2000, equatorialToJ2000 } from './coordinate'
-import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, FitsKeywordWriter } from './fits'
+import { bitpixInBytes, computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, FitsKeywordWriter } from './fits'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import type { Camera, Client, Device, Focuser, Mount, Rotator, Wheel } from './indi.device'
 import type { DeviceProvider } from './indi.manager'
@@ -415,6 +416,8 @@ abstract class AlpacaDevice {
 
 	close() {}
 }
+
+// https://github.com/indilib/indi/blob/master/libs/indibase/indiccd.cpp
 
 interface AlpacaClientCameraState extends AlpacaClientDeviceState {
 	readonly CameraState: AlpacaCameraState
@@ -914,6 +917,8 @@ class AlpacaCamera extends AlpacaDevice {
 	}
 }
 
+// https://github.com/indilib/indi/blob/master/libs/indibase/inditelescope.cpp
+
 interface AlpacaClientTelescopeState extends AlpacaClientDeviceState {
 	readonly CanHome: boolean
 	readonly CanPark: boolean
@@ -1345,6 +1350,8 @@ class AlpacaTelescope extends AlpacaDevice {
 	}
 }
 
+// https://github.com/indilib/indi/blob/master/libs/indibase/indifilterinterface.cpp
+
 interface AlpacaClientFilterWheelState extends AlpacaClientDeviceState {
 	readonly Position: number
 	readonly Names?: string[]
@@ -1416,6 +1423,8 @@ class AlpacaFilterWheel extends AlpacaDevice {
 		}
 	}
 }
+
+// https://github.com/indilib/indi/blob/master/libs/indibase/indifocuserinterface.cpp
 
 interface AlpacaClientFocuserState extends AlpacaClientDeviceState {
 	readonly IsMoving: boolean
@@ -1544,6 +1553,9 @@ class AlpacaFocuser extends AlpacaDevice {
 		}
 	}
 }
+
+// https://github.com/indilib/indi/blob/master/libs/indibase/indidustcapinterface.cpp
+// https://github.com/indilib/indi/blob/master/libs/indibase/indilightboxinterface.cpp
 
 interface AlpacaClientCoverCalibratorState extends AlpacaClientDeviceState {
 	readonly CoverState: number
@@ -1675,6 +1687,8 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 	}
 }
 
+// https://github.com/indilib/indi/blob/master/libs/indibase/indirotatorinterface.cpp
+
 interface AlpacaClientRotatorState extends AlpacaClientDeviceState {
 	readonly IsMoving: boolean
 	readonly Position: number
@@ -1688,6 +1702,7 @@ class AlpacaRotator extends AlpacaDevice {
 	private readonly angle = makeNumberVector('', 'ABS_ROTATOR_ANGLE', 'Goto', MAIN_CONTROL, 'rw', ['ANGLE', 'Angle', 0, 0, 360, 0.01, '%.2f'])
 	private readonly reverse = makeSwitchVector('', 'ROTATOR_REVERSE', 'Reverse', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
 	private readonly abort = makeSwitchVector('', 'ROTATOR_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+	private readonly sync = makeNumberVector('', 'SYNC_ROTATOR_ANGLE', 'Sync', MAIN_CONTROL, 'rw', ['ANGLE', 'Angle', 0, 0, 360, 0.01, '%.2f'])
 
 	// https://ascom-standards.org/newdocs/rotator.html#Rotator.DeviceState
 	protected readonly state: AlpacaClientRotatorState = { Connected: false, DeviceState: undefined, Step: 0, IsMoving: false, Position: 0, CanReverse: false, IsReverse: false }
@@ -1703,6 +1718,7 @@ class AlpacaRotator extends AlpacaDevice {
 		this.angle.device = device.DeviceName
 		this.reverse.device = device.DeviceName
 		this.abort.device = device.DeviceName
+		this.sync.device = device.DeviceName
 
 		this.runner.registerEndpoint('IsMoving', api.isMoving.bind(api, this.id), false)
 		this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
@@ -1721,6 +1737,7 @@ class AlpacaRotator extends AlpacaDevice {
 		if (Step === 1) {
 			this.sendDefProperty(this.angle)
 			this.sendDefProperty(this.abort)
+			this.sendDefProperty(this.sync)
 
 			if (CanReverse) {
 				this.updatePropertyValue(this.reverse, IsReverse ? 'INDI_ENABLED' : 'INDI_DISABLED', true)
@@ -1766,6 +1783,9 @@ class AlpacaRotator extends AlpacaDevice {
 			case 'ABS_ROTATOR_ANGLE':
 				if (vector.elements.ANGLE !== undefined) void this.api.moveAbsolute(this.id, vector.elements.ANGLE)
 				break
+			case 'SYNC_ROTATOR_ANGLE':
+				if (vector.elements.ANGLE !== undefined) void this.api.sync(this.id, vector.elements.ANGLE)
+				break
 		}
 	}
 }
@@ -1802,7 +1822,7 @@ function makeBlobVector(device: string, name: string, label: string, group: stri
 
 // https://github.com/ASCOMInitiative/ASCOMRemote/blob/main/Documentation/AlpacaImageBytes.pdf
 
-export function makeFitsFromImageBytes(data: ArrayBuffer, time: Time, camera?: Camera, mount?: Mount, wheel?: Wheel, focuser?: Focuser, rotator?: Rotator, lastExposureDuration: number = 0) {
+export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: Camera, mount?: Mount, wheel?: Wheel, focuser?: Focuser, rotator?: Rotator, lastExposureDuration: number = 0) {
 	const metadataArray = new Int32Array(data, 0, 44)
 	const metadata: ImageBytesMetadata = {
 		MetadataVersion: metadataArray[0],
@@ -1833,17 +1853,20 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time: Time, camera?: C
 		;[rightAscension, declination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination, time)
 	}
 
+	const bitpix = alpacaImageElementTypeToBitpix(metadata.TransmissionElementType)
+	const pixelInBytes = bitpixInBytes(bitpix)
+
 	// https://github.com/indilib/indi/blob/3b0cdcb6caf41c859b77c6460981772fe8d5d22d/libs/indibase/indiccd.cpp#L2028
 	const header: FitsHeader = {
 		SIMPLE: true,
-		BITPIX: 16,
+		BITPIX: bitpix,
 		NAXIS: metadata.Rank,
 		NAXIS1: NumX,
 		NAXIS2: NumY,
 		NAXIS3: NumZ === 3 ? 3 : undefined,
 		EXTEND: true,
-		BZERO: 32768,
-		BSCALE: 1,
+		BZERO: bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : undefined,
+		BSCALE: bitpix === 16 || bitpix === 32 ? 1 : undefined,
 		ROWORDER: 'TOP-DOWN',
 		INSTRUME: camera?.name,
 		TELESCOP: mount?.name,
@@ -1882,34 +1905,37 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time: Time, camera?: C
 	}
 
 	const numberOfPixels = NumX * NumY
+	const elementCount = numberOfPixels * NumZ
 	const estimatedHeaderSize = Object.keys(header).filter((e) => header[e] !== undefined).length * FITS_HEADER_CARD_SIZE + FITS_BLOCK_SIZE
-	const expectedDataSize = numberOfPixels * NumZ * 2 // 16-bit
+	const expectedDataSize = elementCount * pixelInBytes
 	const output = Buffer.allocUnsafe(estimatedHeaderSize + computeRemainingBytes(estimatedHeaderSize) + expectedDataSize + computeRemainingBytes(expectedDataSize))
 
 	const writer = new FitsKeywordWriter()
 	let headerOffset = writer.writeAll(header, output)
 	headerOffset += writer.writeEnd(output, headerOffset)
 
-	// TODO: Implement other transmission element types
-	const elementCount = numberOfPixels * NumZ
-	const sourceArray = new Uint16Array(data, metadata.DataStart, elementCount)
-	const outputArray = new Int16Array(output.buffer, headerOffset + computeRemainingBytes(headerOffset), sourceArray.length)
+	const sourceArray = bitpix === 8 ? new Uint8Array(data, metadata.DataStart, elementCount) : new Uint16Array(data, metadata.DataStart, elementCount)
+	const byteOffset = headerOffset + computeRemainingBytes(headerOffset)
+	const outputArray = bitpix === 8 ? new Uint8Array(output.buffer, byteOffset, sourceArray.length) : new Int16Array(output.buffer, byteOffset, sourceArray.length)
+	const zero = bitpix === 8 ? 0 : 32768
 
 	let p = 0
 
-	// unsigned 16-bit
-	if (metadata.TransmissionElementType === 8) {
+	// TODO: Implement other transmission element types
+	if (bitpix === 8 || bitpix === 16) {
 		for (let x = 0; x < NumX; x++) {
 			for (let y = 0, n = 0; y < NumY; y++, n += NumX) {
-				for (let c = 0, m = n + x; c < NumZ; c++, m += numberOfPixels) {
-					outputArray[m] = sourceArray[p++] - 32768
+				for (let c = 0, m = n + x; c < NumZ; c++, m += numberOfPixels, p++) {
+					outputArray[m] = sourceArray[p] - zero
 				}
 			}
 		}
 	}
 
-	const size = outputArray.byteOffset + (p << 1)
-	output.subarray(outputArray.byteOffset, size).swap16() // FITS is big-endian
+	p *= pixelInBytes
+
+	const size = byteOffset + p + computeRemainingBytes(p)
+	if (bitpix === 16) output.subarray(byteOffset, size).swap16() // FITS is big-endian
 	return output.subarray(0, size)
 }
 
