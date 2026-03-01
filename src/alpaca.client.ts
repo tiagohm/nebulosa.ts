@@ -1737,7 +1737,7 @@ class AlpacaRotator extends AlpacaDevice {
 			updated = this.updatePropertyValue(this.angle, 'ANGLE', Position) || updated
 			updated && this.sendSetProperty(this.angle)
 
-			this.state.CanReverse && this.updatePropertyValue(this.reverse, IsReverse ? 'INDI_ENABLED' : 'INDI_DISABLED', true) && this.sendSetProperty(this.reverse)
+			this.state.CanReverse && IsReverse !== undefined && this.updatePropertyValue(this.reverse, IsReverse ? 'INDI_ENABLED' : 'INDI_DISABLED', true) && this.sendSetProperty(this.reverse)
 		}
 
 		return true
