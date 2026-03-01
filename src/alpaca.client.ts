@@ -1679,6 +1679,7 @@ interface AlpacaClientRotatorState extends AlpacaClientDeviceState {
 	readonly IsMoving: boolean
 	readonly Position: number
 	readonly CanReverse: boolean
+	readonly IsReverse: boolean
 }
 
 class AlpacaRotator extends AlpacaDevice {
@@ -1689,9 +1690,10 @@ class AlpacaRotator extends AlpacaDevice {
 	private readonly abort = makeSwitchVector('', 'ROTATOR_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 
 	// https://ascom-standards.org/newdocs/rotator.html#Rotator.DeviceState
-	protected readonly state: AlpacaClientRotatorState = { Connected: false, DeviceState: undefined, Step: 0, IsMoving: false, Position: 0, CanReverse: false }
+	protected readonly state: AlpacaClientRotatorState = { Connected: false, DeviceState: undefined, Step: 0, IsMoving: false, Position: 0, CanReverse: false, IsReverse: false }
 	protected readonly initialEndpoints = ['CanReverse'] as const
 	protected readonly deviceStateEndpoints = ['IsMoving', 'Position'] as const
+	protected readonly runningEndpoints = ['IsReverse'] as const
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -1705,6 +1707,7 @@ class AlpacaRotator extends AlpacaDevice {
 		this.runner.registerEndpoint('IsMoving', api.isMoving.bind(api, this.id), false)
 		this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
 		this.runner.registerEndpoint('CanReverse', api.canReverse.bind(api, this.id), false)
+		this.runner.registerEndpoint('IsReverse', api.isReverse.bind(api, this.id), false, 60)
 
 		this.api = api
 	}
@@ -1712,13 +1715,17 @@ class AlpacaRotator extends AlpacaDevice {
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
 
-		const { Step, IsMoving, Position, CanReverse } = this.state
+		const { Step, IsMoving, Position, CanReverse, IsReverse } = this.state
 
 		// Initial
 		if (Step === 1) {
 			this.sendDefProperty(this.angle)
-			if (CanReverse) this.sendDefProperty(this.reverse)
 			this.sendDefProperty(this.abort)
+
+			if (CanReverse) {
+				this.updatePropertyValue(this.reverse, IsReverse ? 'INDI_ENABLED' : 'INDI_DISABLED', true)
+				this.sendDefProperty(this.reverse)
+			}
 
 			this.disableEndpoints(...this.initialEndpoints)
 
@@ -1729,6 +1736,8 @@ class AlpacaRotator extends AlpacaDevice {
 			let updated = this.updatePropertyState(this.angle, IsMoving ? 'Busy' : 'Idle')
 			updated = this.updatePropertyValue(this.angle, 'ANGLE', Position) || updated
 			updated && this.sendSetProperty(this.angle)
+
+			this.state.CanReverse && this.updatePropertyValue(this.reverse, IsReverse ? 'INDI_ENABLED' : 'INDI_DISABLED', true) && this.sendSetProperty(this.reverse)
 		}
 
 		return true
@@ -1742,6 +1751,7 @@ class AlpacaRotator extends AlpacaDevice {
 				if (!this.state.CanReverse) break
 				if (vector.elements.INDI_ENABLED === true) void this.api.setReverse(this.id, true)
 				if (vector.elements.INDI_DISABLED === true) void this.api.setReverse(this.id, false)
+				this.enableEndpoints('IsReverse')
 				break
 			case 'ROTATOR_ABORT_MOTION':
 				if (vector.elements.ABORT === true) void this.api.halt(this.id)
