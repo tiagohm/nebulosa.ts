@@ -17,7 +17,7 @@ export interface DeviceHandler<D extends Device> {
 	readonly added: (device: D) => void
 	readonly updated?: (device: D, property: keyof D & string, state?: PropertyState) => void
 	readonly removed: (device: D) => void
-	readonly blobReceived?: (device: D, data: string | Buffer) => void
+	readonly blobReceived?: (device: D, data: string | Buffer<ArrayBuffer>) => void
 }
 
 export interface DevicePropertyHandler {
@@ -211,7 +211,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		this.handlers.forEach((e) => e.removed(device))
 	}
 
-	blobReceived(device: D, data: string | Buffer) {
+	blobReceived(device: D, data: string | Buffer<ArrayBuffer>) {
 		this.handlers.forEach((e) => e.blobReceived?.(device, data))
 	}
 

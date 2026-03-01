@@ -15,7 +15,7 @@ interface AlpacaDeviceState extends GeographicCoordinate, EquatorialCoordinate {
 	// Device
 	tasks: Partial<Record<'connect' | 'position', ReturnType<typeof promiseWithTimeout>>>
 	// Camera
-	data?: string | Buffer
+	data?: string | Buffer<ArrayBuffer>
 	lastExposureDuration: number
 	ccdTemperature: number
 	frame: [number, number, number, number]
@@ -1640,7 +1640,7 @@ function promiseWithTimeout(code: AlpacaException, message: string, delay: numbe
 
 // https://github.com/ASCOMInitiative/ASCOMRemote/blob/main/Documentation/AlpacaImageBytes.pdf
 
-export function makeImageBytesFromFits(source: Buffer) {
+export function makeImageBytesFromFits(source: Buffer<ArrayBuffer>) {
 	const reader = new FitsKeywordReader()
 	let position = 0
 
@@ -1667,15 +1667,16 @@ export function makeImageBytesFromFits(source: Buffer) {
 	const channels = numZ || 1
 	const bytesPerPixel = bitpixInBytes(bitpix)
 	const numberOfPixels = numX * numY
-	const output = Buffer.allocUnsafe(44 + numberOfPixels * channels * bytesPerPixel)
+	const dataStart = bitpix === -64 ? 48 : 44 // 64-bit must be aligned (48 % 8 === 0)
+	const output = Buffer.allocUnsafe(dataStart + numberOfPixels * channels * bytesPerPixel)
 
 	output.writeInt32LE(1, 0) // Bytes 0..3 - Metadata version = 1
 	output.writeInt32LE(0, 4) // Bytes 4..7 - Alpaca error number or zero for success
 	output.writeInt32LE(0, 8) // Bytes 8..11 - Client's transaction ID
 	output.writeInt32LE(0, 12) // Bytes 12..15 - Device's transaction ID
-	output.writeInt32LE(44, 16) // Bytes 16..19 - Offset of the start of the data bytes
+	output.writeInt32LE(dataStart, 16) // Bytes 16..19 - Offset of the start of the data bytes
 	output.writeInt32LE(AlpacaImageElementType.Int32, 20) // Bytes 20..23 - Element type of the source image array. It's always 2 (Int32)? Because MaxIm DL crashes if it's not!
-	output.writeInt32LE(bitpix === 8 ? AlpacaImageElementType.Byte : bitpix === 16 ? AlpacaImageElementType.UInt16 : AlpacaImageElementType.UInt32, 24) // Bytes 24..27 - Element type as sent over the network.
+	output.writeInt32LE(bitpix === 8 ? AlpacaImageElementType.Byte : bitpix === 16 ? AlpacaImageElementType.UInt16 : bitpix === 32 ? AlpacaImageElementType.UInt32 : bitpix === -32 ? AlpacaImageElementType.Single : AlpacaImageElementType.Double, 24) // Bytes 24..27 - Element type as sent over the network.
 	output.writeInt32LE(numZ || 2, 28) // Bytes 28..31 - Image array rank (2 or 3)
 	output.writeInt32LE(numX, 32) // Bytes 32..35 - Length of image array first dimension
 	output.writeInt32LE(numY, 36) // Bytes 36..39 - Length of image array second dimension
@@ -1685,12 +1686,14 @@ export function makeImageBytesFromFits(source: Buffer) {
 
 	if (bytesPerPixel === 2) source.swap16()
 	else if (bytesPerPixel === 4) source.swap32()
+	else if (bytesPerPixel === 8) source.swap64()
 
 	const sourceLength = (source.byteLength - position) / bytesPerPixel
-	const sourceArray = bitpix === 8 ? new Uint8Array(source.buffer, position, sourceLength) : bitpix === 16 ? new Int16Array(source.buffer, position, sourceLength) : new Int32Array(source.buffer, position, sourceLength)
-
-	const outputLength = (output.byteLength - 44) / bytesPerPixel
-	const outputArray = bitpix === 8 ? new Uint8Array(output.buffer, 44, outputLength) : bitpix === 16 ? new Uint16Array(output.buffer, 44, outputLength) : new Uint32Array(output.buffer, 44, outputLength)
+	const SourceType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : bitpix === 32 ? Int32Array : bitpix === -32 ? Float32Array : Float64Array
+	const sourceArray = new SourceType(source.buffer, position, sourceLength)
+	const outputLength = (output.byteLength - dataStart) / bytesPerPixel
+	const OutputType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Uint16Array : bitpix === 32 ? Uint32Array : bitpix === -32 ? Float32Array : Float64Array
+	const outputArray = new OutputType(output.buffer, dataStart, outputLength)
 
 	for (let x = 0, p = 0; x < numX; x++) {
 		for (let y = 0, n = 0; y < numY; y++, n += numX) {
@@ -1702,6 +1705,7 @@ export function makeImageBytesFromFits(source: Buffer) {
 
 	if (bytesPerPixel === 2) source.swap16()
 	else if (bytesPerPixel === 4) source.swap32()
+	else if (bytesPerPixel === 8) source.swap64()
 
 	return output
 }

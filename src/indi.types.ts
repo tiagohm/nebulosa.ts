@@ -292,7 +292,7 @@ export interface OneBlob {
 	name: string
 	size: string
 	format: string
-	value: string | Buffer // Buffer is used by Alpaca to avoid base64 encoding
+	value: string | Buffer<ArrayBuffer> // Buffer is used by Alpaca to avoid base64 encoding
 }
 
 export type OneElement = OneText | OneNumber | OneSwitch | OneLight | OneBlob

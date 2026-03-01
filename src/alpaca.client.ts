@@ -1914,20 +1914,19 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 	let headerOffset = writer.writeAll(header, output)
 	headerOffset += writer.writeEnd(output, headerOffset)
 
-	const sourceArray = bitpix === 8 ? new Uint8Array(data, metadata.DataStart, elementCount) : bitpix === 16 ? new Uint16Array(data, metadata.DataStart, elementCount) : new Uint32Array(data, metadata.DataStart, elementCount)
+	const SourceType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Uint16Array : bitpix === 32 ? Uint32Array : bitpix === -32 ? Float32Array : Float64Array
+	const sourceArray = new SourceType(data, metadata.DataStart, elementCount)
 	const byteOffset = headerOffset + computeRemainingBytes(headerOffset)
-	const outputArray = bitpix === 8 ? new Uint8Array(output.buffer, byteOffset, sourceArray.length) : bitpix === 16 ? new Int16Array(output.buffer, byteOffset, sourceArray.length) : new Int32Array(output.buffer, byteOffset, sourceArray.length)
+	const OutputType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : bitpix === 32 ? Int32Array : bitpix === -32 ? Float32Array : Float64Array
+	const outputArray = new OutputType(output.buffer, byteOffset, sourceArray.length)
 	const zero = bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0
 
 	let p = 0
 
-	// TODO: Implement other transmission element types
-	if (bitpix === 8 || bitpix === 16 || bitpix === 32) {
-		for (let x = 0; x < NumX; x++) {
-			for (let y = 0, n = 0; y < NumY; y++, n += NumX) {
-				for (let c = 0, m = n + x; c < NumZ; c++, m += numberOfPixels, p++) {
-					outputArray[m] = sourceArray[p] - zero
-				}
+	for (let x = 0; x < NumX; x++) {
+		for (let y = 0, n = 0; y < NumY; y++, n += NumX) {
+			for (let c = 0, m = n + x; c < NumZ; c++, m += numberOfPixels, p++) {
+				outputArray[m] = sourceArray[p] - zero
 			}
 		}
 	}
@@ -1938,6 +1937,7 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 	// FITS is big-endian
 	if (bytesPerPixel === 2) output.subarray(byteOffset, size).swap16()
 	else if (bytesPerPixel === 4) output.subarray(byteOffset, size).swap32()
+	else if (bytesPerPixel === 8) output.subarray(byteOffset, size).swap64()
 	return output.subarray(0, size)
 }
 

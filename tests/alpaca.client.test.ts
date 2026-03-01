@@ -56,7 +56,7 @@ describe('make fits from image bytes', () => {
 	})
 
 	test('convert to and from', async () => {
-		for (const bitpix of [8, 16, 32]) {
+		for (const bitpix of [8, 16, 32, -32, -64]) {
 			for (const channel of [1, 3]) {
 				const buffer = await Bun.file(`data/NGC3372-${bitpix}.${channel}.fit`).arrayBuffer()
 				const bytes = makeImageBytesFromFits(Buffer.from(buffer))
@@ -67,7 +67,7 @@ describe('make fits from image bytes', () => {
 				await saveImageAndCompareHash(image!, `fitsfromimagebytes-${bitpix}-${channel}`, hash)
 			}
 		}
-	})
+	}, 8000)
 })
 
 const cameraManager = new CameraManager()
