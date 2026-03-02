@@ -1,11 +1,63 @@
 import { type Angle, normalizePI } from './angle'
-import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters } from './astrometry'
+import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from './astrometry'
 import { PI } from './constants'
-import { equatorialFromJ2000, type HorizontalCoordinate } from './coordinate'
+import type { HorizontalCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
 import type { GeographicPosition } from './location'
-import { earthRotationAngle, type Time } from './time'
+import { matMulVec } from './mat3'
+import { precessionNutationMatrix, type Time } from './time'
 import { type Vec3, vecCross, vecDivScalarMut, vecDot, vecLength, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues, vecRotY } from './vec3'
+
+/*
+    Three-Point Polar Alignment Algorithm (ICRF-based)
+
+    This implementation performs polar alignment using a three-point plate solving method entirely in the inertial ICRF (J2000) reference frame.
+    All geometric computations are done in ICRF to avoid time-dependent distortions caused by precession, nutation, or Earth rotation.
+    Conversion to observed (horizontal) coordinates is performed only at the final stage for user feedback.
+
+    Initial Polar Axis Determination:
+    * The plate solver provides three star field solutions in ICRF (J2000) coordinates.
+    * Each solution is converted to a unit Cartesian vector using eraS2c.
+    * The plane defined by these three vectors represents the apparent rotation plane of the mount.
+    * The normal vector of this plane is computed using a cross-product (vecPlane) and normalized.
+    * This normal vector represents the mount’s RA axis direction in ICRF.
+    * The vector orientation is adjusted to ensure it points toward the correct celestial hemisphere.
+    * The mount axis (still in ICRF) is transformed to CIRS using the precession-nutation matrix.
+    * The CIRS vector is converted to observed azimuth and altitude.
+    * Polar alignment errors are computed by comparing:
+        Azimuth against true North (or South),
+        Altitude against the observer’s latitude.
+
+    The internal pole vector remains in ICRF for all further geometric operations.
+
+    Adjustment After Mechanical Correction
+    * The previous third measurement (from) and the new plate solution (to) are both interpreted in ICRF.
+    * Both are converted to unit vectors.
+    * The rotation caused by the mechanical adjustment is derived from:
+        The cross product → rotation axis,
+        The dot product → rotation angle.
+    * If the rotation magnitude is negligible, no update is applied.
+    * Otherwise:
+        The rotation axis is normalized.
+        The rotation angle is computed using atan2(sinθ, cosθ).
+        The original mount pole (ICRF) is rotated using Rodrigues’ rotation formula.
+    * The updated pole remains in ICRF.
+    * For display purposes only:
+        The new pole is converted to CIRS.
+        Then transformed to observed azimuth and altitude.
+        Alignment errors are recomputed.
+
+    Key Design Principle
+
+    All geometric operations are performed in a fixed inertial frame (ICRF).
+    Time-dependent transformations (precession, nutation, Earth rotation) are applied only when converting the mount axis to observed horizontal coordinates.
+
+    This separation:
+    * Prevents artificial drift,
+    * Avoids mixing time-dependent and inertial frames,
+    * Ensures numerical stability,
+    * Accurately reflects real mechanical adjustments.
+*/
 
 export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoordinate> {
 	readonly azimuthError: Angle
@@ -40,17 +92,18 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle], p2: r
 	if ((pole[2] < 0 && isNorthern) || (pole[2] > 0 && !isNorthern)) vecNegateMut(pole)
 
 	// Find the azimuth and altitude of the mount pole (normal to the plane defined by the three reference stars)
-	const { azimuth, altitude } = cirsToObserved(pole, time, refraction, location)
+	const { azimuth, altitude } = cirsToObserved(matMulVec(precessionNutationMatrix(time), pole), time, refraction, location)
 
 	// Compute the azimuth and altitude error
-	const latitude = Math.abs(location.latitude) // ChatGPT doesn't recommend to refract the latitude!
+	const latitude = refraction === false ? refractedAltitude(Math.abs(location.latitude), DEFAULT_REFRACTION_PARAMETERS) : Math.abs(location.latitude)
 	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
 	const altitudeError = isNorthern ? altitude - latitude : latitude - altitude
 
 	return { azimuth, altitude, pole, azimuthError, altitudeError }
 }
 
-// Based on https://github.com/KDE/kstars/blob/57c2cf84c4cb38eb7cbdd0bfd77359a66c74b93b/kstars/ekos/align/polaralign.cpp#L238
+// Inspired by https://github.com/KDE/kstars/blob/57c2cf84c4cb38eb7cbdd0bfd77359a66c74b93b/kstars/ekos/align/polaralign.cpp#L238
+// Thanks to ChatGPT!
 
 // Compute the polar-alignment azimuth and altitude error by comparing the new image's coordinates
 // with the coordinates from the 3rd measurement image. Use the difference to infer a rotation angle,
@@ -58,20 +111,16 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle], p2: r
 // around which RA now rotates.
 export function threePointPolarAlignmentAfterAdjustment(
 	result: ThreePointPolarAlignmentResult, // 3rd measurement image alignment result
-	from: readonly [Angle, Angle], // 3rd measurement image solution CIRS coordinates
-	timeFrom: Time,
-	to: readonly [Angle, Angle], // actual measurement image solution CIRS coordinates
-	timeTo: Time,
+	from: readonly [Angle, Angle], // 3rd measurement image solution ICRF coordinates
+	to: readonly [Angle, Angle], // actual measurement image solution ICRF coordinates
+	time: Time,
 	refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS,
-	location: GeographicPosition = timeTo.location!,
+	location: GeographicPosition = time.location!,
 ): ThreePointPolarAlignmentResult | false {
 	const isNorthern = location.latitude > 0
 
-	// Angle corresponding to that interval assuming the sidereal rate.
-	const siderealAngle = normalizePI(earthRotationAngle(timeTo) - earthRotationAngle(timeFrom))
-
-	// Rotate the original 3rd point around that axis, simulating the mount's tracking movements (mount is actually unaligned).
-	const p3Expected = vecRotateByRodrigues(eraS2c(from[0], from[1]), result.pole, siderealAngle)
+	// If perfect aligned, p3Expected and pNew should be the same, otherwise...
+	const p3Expected = eraS2c(from[0], from[1])
 	const pNew = eraS2c(to[0], to[1])
 
 	// Find the adjustment the user must have made by examining the change from point3 to newPoint
@@ -80,22 +129,22 @@ export function threePointPolarAlignmentAfterAdjustment(
 	const sinRot = vecLength(p3Cross) // ∥a × b∥ = ∥a∥ * ∥b∥ * sinθ, a and b are unitary, so ∥a × b∥ = sinθ
 	const cosRot = vecDot(p3Expected, pNew) // a ⋅ b = cosθ
 
-	// sinθ = 0 and cosθ > 0 will only occur if the mount rotates 0°
-	// sinθ = 0 and cosθ < 0 will only occur if the mount rotates 180°
-	if (sinRot === 0 && cosRot > 0) {
+	// sinθ ~= 0 and cosθ > 0 occurs when no meaningful rotation was applied.
+	// sinθ ~= 0 and cosθ < 0 is a degenerate 180° case (undefined rotation axis).
+	if (sinRot <= 1e-12) {
+		if (cosRot < 0) return false
 		console.info('no rotation applied')
 		return result
 	}
 
-	// Rotate the original RA axis position by the above adjustments.
+	// Rotate the original Mount axis by the above adjustments.
 	const rotAxis = vecDivScalarMut(p3Cross, sinRot)
-	const rotAngle = Math.atan2(sinRot, cosRot) // θ = atan2(sinθ, cosθ)
+    const rotAngle = Math.atan2(sinRot, cosRot) // θ = atan2(sinθ, cosθ)
 	const newPole = vecRotateByRodrigues(result.pole, rotAxis, rotAngle)
-	const observedPole = cirsToObserved(newPole, timeTo, refraction, location)
+	const { azimuth, altitude } = cirsToObserved(matMulVec(precessionNutationMatrix(time), newPole), time, refraction, location)
 
 	// Recompute the azimuth and altitude error
-	const { azimuth, altitude } = observedPole
-	const latitude = Math.abs(location.latitude) // ChatGPT doesn't recommend to refract the latitude!
+	const latitude = refraction === false ? refractedAltitude(Math.abs(location.latitude), DEFAULT_REFRACTION_PARAMETERS) : Math.abs(location.latitude)
 	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
 	const altitudeError = isNorthern ? altitude - latitude : latitude - altitude
 
@@ -122,7 +171,6 @@ function decomposeAzAltAdjustment(poleLocal: Vec3, newPoleLocal: Vec3): Readonly
 
 export class ThreePointPolarAlignment {
 	private readonly points = new Array<readonly [Angle, Angle]>(3)
-	private readonly times = new Array<Time>(3)
 
 	private position = 0
 	private initialError: ThreePointPolarAlignmentResult | false = false
@@ -130,12 +178,11 @@ export class ThreePointPolarAlignment {
 
 	constructor(private refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS) {}
 
-	add(rightAscension: Angle, declination: Angle, time: Time, isJ2000: boolean) {
-		const point = isJ2000 ? equatorialFromJ2000(rightAscension, declination, time) : ([rightAscension, declination] as const)
+	add(rightAscension: Angle, declination: Angle, time: Time) {
+		const point = [rightAscension, declination] as const
 
 		if (this.position < 3) {
 			this.points[this.position] = point
-			this.times[this.position] = time
 		}
 
 		this.position++
@@ -145,7 +192,7 @@ export class ThreePointPolarAlignment {
 		if (this.position === 3) {
 			this.currentError = this.initialError = threePointPolarAlignmentError(this.points[0], this.points[1], this.points[2], time, this.refraction)
 		} else if (this.position > 3 && this.initialError !== false) {
-			this.currentError = threePointPolarAlignmentAfterAdjustment(this.initialError, this.points[2], this.times[2], point, time, this.refraction)
+			this.currentError = threePointPolarAlignmentAfterAdjustment(this.initialError, this.points[2], point, time, this.refraction)
 		}
 
 		return this.currentError
