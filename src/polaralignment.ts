@@ -4,65 +4,28 @@ import { PI } from './constants'
 import type { HorizontalCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
 import type { GeographicPosition } from './location'
-import { matMulVec } from './mat3'
-import { precessionNutationMatrix, type Time } from './time'
-import { type Vec3, vecCross, vecDivScalarMut, vecDot, vecLength, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues, vecRotY } from './vec3'
+import { matMulVec, matTransposeMulVec } from './mat3'
+import { gcrsToItrsRotationMatrix, precessionNutationMatrix, type Time } from './time'
+import { type Vec3, vecCross, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues } from './vec3'
 
-/*
-    Three-Point Polar Alignment Algorithm (ICRF-based)
+// Three-Point Polar Alignment Algorithm (ICRF-based)
 
-    This implementation performs polar alignment using a three-point plate solving method entirely in the inertial ICRF (J2000) reference frame.
-    All geometric computations are done in ICRF to avoid time-dependent distortions caused by precession, nutation, or Earth rotation.
-    Conversion to observed (horizontal) coordinates is performed only at the final stage for user feedback.
+// This implementation performs polar alignment using a three-point plate solving method entirely in the inertial ICRF (J2000) reference frame.
+// All geometric computations are done in ICRF to avoid time-dependent distortions caused by precession, nutation, or Earth rotation.
+// Conversion to observed (horizontal) coordinates is performed only at the final stage for user feedback.
 
-    Initial Polar Axis Determination:
-    * The plate solver provides three star field solutions in ICRF (J2000) coordinates.
-    * Each solution is converted to a unit Cartesian vector using eraS2c.
-    * The plane defined by these three vectors represents the apparent rotation plane of the mount.
-    * The normal vector of this plane is computed using a cross-product (vecPlane) and normalized.
-    * This normal vector represents the mount’s RA axis direction in ICRF.
-    * The vector orientation is adjusted to ensure it points toward the correct celestial hemisphere.
-    * The mount axis (still in ICRF) is transformed to CIRS using the precession-nutation matrix.
-    * The CIRS vector is converted to observed azimuth and altitude.
-    * Polar alignment errors are computed by comparing:
-        Azimuth against true North (or South),
-        Altitude against the observer’s latitude.
-
-    The internal pole vector remains in ICRF for all further geometric operations.
-
-    Adjustment After Mechanical Correction
-    * The previous third measurement (from) and the new plate solution (to) are both interpreted in ICRF.
-    * Both are converted to unit vectors.
-    * The rotation caused by the mechanical adjustment is derived from:
-        The cross product → rotation axis,
-        The dot product → rotation angle.
-    * If the rotation magnitude is negligible, no update is applied.
-    * Otherwise:
-        The rotation axis is normalized.
-        The rotation angle is computed using atan2(sinθ, cosθ).
-        The original mount pole (ICRF) is rotated using Rodrigues’ rotation formula.
-    * The updated pole remains in ICRF.
-    * For display purposes only:
-        The new pole is converted to CIRS.
-        Then transformed to observed azimuth and altitude.
-        Alignment errors are recomputed.
-
-    Key Design Principle
-
-    All geometric operations are performed in a fixed inertial frame (ICRF).
-    Time-dependent transformations (precession, nutation, Earth rotation) are applied only when converting the mount axis to observed horizontal coordinates.
-
-    This separation:
-    * Prevents artificial drift,
-    * Avoids mixing time-dependent and inertial frames,
-    * Ensures numerical stability,
-    * Accurately reflects real mechanical adjustments.
-*/
+// Thanks to Codex!
 
 export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoordinate> {
 	readonly azimuthError: Angle
 	readonly altitudeError: Angle
 	readonly pole: Vec3 // Normal vector of the plane defined by the three points
+	readonly azimuthAdjustment: Angle
+	readonly altitudeAdjustment: Angle
+}
+
+function referencePoleAltitude(location: GeographicPosition, refraction: RefractionParameters | false) {
+	return refraction === false ? Math.abs(location.latitude) : refractedAltitude(Math.abs(location.latitude), refraction)
 }
 
 // https://sourceforge.net/p/sky-simulator/code/ci/default/tree/sky_annotation.pas
@@ -95,20 +58,18 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle], p2: r
 	const { azimuth, altitude } = cirsToObserved(matMulVec(precessionNutationMatrix(time), pole), time, refraction, location)
 
 	// Compute the azimuth and altitude error
-	const latitude = refraction === false ? refractedAltitude(Math.abs(location.latitude), DEFAULT_REFRACTION_PARAMETERS) : Math.abs(location.latitude)
+	const latitude = referencePoleAltitude(location, refraction)
 	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
 	const altitudeError = isNorthern ? altitude - latitude : latitude - altitude
 
-	return { azimuth, altitude, pole, azimuthError, altitudeError }
+	return { azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment: 0, altitudeAdjustment: 0 }
 }
 
-// Inspired by https://github.com/KDE/kstars/blob/57c2cf84c4cb38eb7cbdd0bfd77359a66c74b93b/kstars/ekos/align/polaralign.cpp#L238
-// Thanks to ChatGPT!
-
-// Compute the polar-alignment azimuth and altitude error by comparing the new image's coordinates
-// with the coordinates from the 3rd measurement image. Use the difference to infer a rotation angle,
-// and rotate the originally computed polar-alignment axis by that angle to find the new axis
-// around which RA now rotates.
+// Recomputes polar alignment after a mechanical correction step.
+// We infer how much the user moved azimuth/altitude knobs from the star displacement (from -> to),
+// apply that constrained correction to the current pole, then recompute displayed errors.
+// This was needed because mapping one vector displacement to a generic 3D rotation is underconstrained
+// and caused systematic drift in the reported azimuth/altitude error.
 export function threePointPolarAlignmentAfterAdjustment(
 	result: ThreePointPolarAlignmentResult, // 3rd measurement image alignment result
 	from: readonly [Angle, Angle], // 3rd measurement image solution ICRF coordinates
@@ -119,61 +80,80 @@ export function threePointPolarAlignmentAfterAdjustment(
 ): ThreePointPolarAlignmentResult | false {
 	const isNorthern = location.latitude > 0
 
-	// If perfect aligned, p3Expected and pNew should be the same, otherwise...
-	const p3Expected = eraS2c(from[0], from[1])
-	const pNew = eraS2c(to[0], to[1])
+	// Convert both solved positions to ICRF vectors so we can compare the actual sky displacement.
+	const fromVec = eraS2c(from[0], from[1])
+	const toVec = eraS2c(to[0], to[1])
 
-	// Find the adjustment the user must have made by examining the change from point3 to newPoint
-	// (i.e. the rotation caused by the user adjusting the azimuth and altitude knobs).
-	const p3Cross = vecCross(p3Expected, pNew)
-	const sinRot = vecLength(p3Cross) // ∥a × b∥ = ∥a∥ * ∥b∥ * sinθ, a and b are unitary, so ∥a × b∥ = sinθ
-	const cosRot = vecDot(p3Expected, pNew) // a ⋅ b = cosθ
+	// No meaningful movement in plate-solve center: keep the previous estimate.
+	if (vecLength(vecMinus(toVec, fromVec)) <= 1e-12) return result
 
-	// sinθ ~= 0 and cosθ > 0 occurs when no meaningful rotation was applied.
-	// sinθ ~= 0 and cosθ < 0 is a degenerate 180° case (undefined rotation axis).
-	if (sinRot <= 1e-12) {
-		if (cosRot < 0) return false
-		console.info('no rotation applied')
-		return result
-	}
+	// Build local mechanical axes and solve the knob deltas that best explain from -> to.
+	const { upAxis, eastAxis } = mountAdjustmentAxes(time, location)
+	const { azimuthAdjustment, altitudeAdjustment } = solveAzAltAdjustment(fromVec, toVec, upAxis, eastAxis)
 
-	// Rotate the original Mount axis by the above adjustments.
-	const rotAxis = vecDivScalarMut(p3Cross, sinRot)
-    const rotAngle = Math.atan2(sinRot, cosRot) // θ = atan2(sinθ, cosθ)
-	const newPole = vecRotateByRodrigues(result.pole, rotAxis, rotAngle)
+	// Apply constrained correction on the current pole: azimuth around local up, altitude around local east-west.
+	const newPole = vecRotateByRodrigues(vecRotateByRodrigues(result.pole, upAxis, azimuthAdjustment), eastAxis, altitudeAdjustment)
 	const { azimuth, altitude } = cirsToObserved(matMulVec(precessionNutationMatrix(time), newPole), time, refraction, location)
 
 	// Recompute the azimuth and altitude error
-	const latitude = refraction === false ? refractedAltitude(Math.abs(location.latitude), DEFAULT_REFRACTION_PARAMETERS) : Math.abs(location.latitude)
+	const latitude = referencePoleAltitude(location, refraction)
 	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
 	const altitudeError = isNorthern ? altitude - latitude : latitude - altitude
 
-	return { azimuth, altitude, pole: newPole, azimuthError, altitudeError }
+	return { azimuth, altitude, pole: newPole, azimuthError, altitudeError, azimuthAdjustment, altitudeAdjustment }
 }
 
-function decomposeAzAltAdjustment(poleLocal: Vec3, newPoleLocal: Vec3): Readonly<{ azimuthAdjustment: number; altitudeAdjustment: number }> {
-	// --- 1) Resolver altitude ---
-	const numAlt = poleLocal[0] * newPoleLocal[2] - poleLocal[2] * newPoleLocal[0]
-	const denAlt = poleLocal[0] * newPoleLocal[0] + poleLocal[2] * newPoleLocal[2]
-	const altitudeAdjustment = Math.atan2(numAlt, denAlt)
+// Builds the two mechanical correction axes in ICRF for the given instant/location:
+// azimuth knob rotates around local "up", altitude knob around local east-west.
+// This was needed because the previous approach inferred a generic 3D rotation from one star vector,
+// which is underconstrained and produced systematic azimuth drift after adjustments.
+function mountAdjustmentAxes(time: Time, { longitude, latitude }: GeographicPosition) {
+	const cosLat = Math.cos(latitude)
+	const sinLat = Math.sin(latitude)
+	const cosLon = Math.cos(longitude)
+	const sinLon = Math.sin(longitude)
 
-	// --- 2) Aplicar rotação de altitude ---
-	const poleAfterAlt = vecRotY(poleLocal, altitudeAdjustment)
+	const upItrs: Vec3 = [cosLat * cosLon, cosLat * sinLon, sinLat]
+	const eastItrs: Vec3 = [-sinLon, cosLon, 0]
+	const gcrsToItrs = gcrsToItrsRotationMatrix(time)
+	const upAxis = vecNormalizeMut(matTransposeMulVec(gcrsToItrs, upItrs))
+	const eastAxis = vecNormalizeMut(matTransposeMulVec(gcrsToItrs, eastItrs))
 
-	// --- 3) Resolver azimute ---
-	const numAz = poleAfterAlt[0] * newPoleLocal[1] - poleAfterAlt[1] * newPoleLocal[0]
-	const denAz = poleAfterAlt[0] * newPoleLocal[0] + poleAfterAlt[1] * newPoleLocal[1]
+	return { upAxis, eastAxis } as const
+}
 
-	const azimuthAdjustment = Math.atan2(numAz, denAz)
+// Estimates knob deltas (azimuth/altitude) that best explain the observed star displacement.
+// We solve a 2x2 least-squares system in the tangent space, constrained to mount mechanics,
+// instead of applying an unconstrained Rodrigues rotation from "from -> to".
+function solveAzAltAdjustment(from: Vec3, to: Vec3, upAxis: Vec3, eastAxis: Vec3) {
+	// Small-angle least squares in the tangent space around fromVec:
+	// d ≈ az * (up × from) + alt * (east × from).
+	const azBasis = vecCross(upAxis, from)
+	const altBasis = vecCross(eastAxis, from)
+	const dx = to[0] - from[0]
+	const dy = to[1] - from[1]
+	const dz = to[2] - from[2]
+	const a11 = vecDot(azBasis, azBasis)
+	const a12 = vecDot(azBasis, altBasis)
+	const a22 = vecDot(altBasis, altBasis)
+	const y1 = azBasis[0] * dx + azBasis[1] * dy + azBasis[2] * dz
+	const y2 = altBasis[0] * dx + altBasis[1] * dy + altBasis[2] * dz
+	const det = a11 * a22 - a12 * a12
 
-	return { azimuthAdjustment, altitudeAdjustment }
+	// Degenerate geometry (nearly collinear basis): keep previous pole to avoid unstable jumps.
+	if (Math.abs(det) <= 1e-18) return { azimuthAdjustment: 0, altitudeAdjustment: 0 }
+
+	const azimuthAdjustment = (y1 * a22 - y2 * a12) / det
+	const altitudeAdjustment = (-y1 * a12 + y2 * a11) / det
+
+	return { azimuthAdjustment, altitudeAdjustment } as const
 }
 
 export class ThreePointPolarAlignment {
 	private readonly points = new Array<readonly [Angle, Angle]>(3)
 
 	private position = 0
-	private initialError: ThreePointPolarAlignmentResult | false = false
+	private referencePoint: readonly [Angle, Angle] | false = false
 	private currentError: ThreePointPolarAlignmentResult | false = false
 
 	constructor(private refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS) {}
@@ -190,9 +170,11 @@ export class ThreePointPolarAlignment {
 		// When we have three points, compute the initial polar alignment error.
 		// After that, each new point is used to compute the adjusted error
 		if (this.position === 3) {
-			this.currentError = this.initialError = threePointPolarAlignmentError(this.points[0], this.points[1], this.points[2], time, this.refraction)
-		} else if (this.position > 3 && this.initialError !== false) {
-			this.currentError = threePointPolarAlignmentAfterAdjustment(this.initialError, this.points[2], point, time, this.refraction)
+			this.currentError = threePointPolarAlignmentError(this.points[0], this.points[1], this.points[2], time, this.refraction)
+			this.referencePoint = this.points[2]
+		} else if (this.position > 3 && this.currentError !== false && this.referencePoint !== false) {
+			this.currentError = threePointPolarAlignmentAfterAdjustment(this.currentError, this.referencePoint, point, time, this.refraction)
+			if (this.currentError !== false) this.referencePoint = point
 		}
 
 		return this.currentError
@@ -200,7 +182,7 @@ export class ThreePointPolarAlignment {
 
 	reset() {
 		this.position = 0
-		this.initialError = false
+		this.referencePoint = false
 		this.currentError = false
 	}
 }
