@@ -28,7 +28,7 @@ function referencePoleAltitude(location: GeographicPosition, refraction: Refract
 	return refraction === false ? Math.abs(location.latitude) : refractedAltitude(Math.abs(location.latitude), refraction)
 }
 
-// https://sourceforge.net/p/sky-simulator/code/ci/default/tree/sky_annotation.pas
+// https://sourceforge.net/p/sky-simulator/code/ci/default/tree/sky_annotation.pas#l1189
 // Polar error calculation based on two celestial reference points and the error of the telescope mount at these point(s).
 // Based on formulas from Ralph Pass documented at https://rppass.com/align.pdf.
 // They are based on the book "Telescope Control" by Trueblood and Genet, p.111
