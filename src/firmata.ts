@@ -50,8 +50,13 @@ export enum PinMode {
 	ENCODER,
 	SERIAL,
 	PULL_UP,
-	UNSUPPORTED,
-	IGNORED,
+	// Extended modes
+	SPI,
+	SONAR,
+	TONE,
+	DHT,
+	UNSUPPORTED = 126,
+	IGNORED = 127,
 }
 
 function resolvePinMode(mode: number) {
@@ -65,7 +70,7 @@ export class FirmataParser {
 
 	process(data: Buffer) {
 		for (let i = 0; i < data.byteLength; i++) {
-			this.processByte(data.readUInt8(i))
+			this.processByte(data[i])
 		}
 	}
 
@@ -126,7 +131,7 @@ const PIN_MODE_ENCODER = 0x09
 const PIN_MODE_SERIAL = 0x0a
 const PIN_MODE_PULLUP = 0x0b
 const PIN_MODE_IGNORE = 0x7f
-const TOTAL_PIN_MODES = 13
+const TOTAL_PIN_MODES = 16
 
 const TWO_WIRE_WRITE = 0x00
 const TWO_WIRE_READ = 0x08
@@ -539,7 +544,7 @@ export function writeValueAsTwo7bitBytes(data: Uint8Array, offset: number, value
 	data[offset + 1] = (value >> 7) & 0x7f
 }
 
-export class FirmataClient {
+export class FirmataClient implements Disposable {
 	private readonly fsm: FirmataFsm
 	private readonly parser: FirmataParser
 
@@ -617,6 +622,10 @@ export class FirmataClient {
 		this.fsm = new FirmataFsm(WAITING_FOR_MESSAGE_STATE, this)
 		this.parser = new FirmataParser(this.fsm)
 		this.addHandler(this.handler)
+	}
+
+	[Symbol.dispose]() {
+		this.disconnect()
 	}
 
 	get pinCount() {

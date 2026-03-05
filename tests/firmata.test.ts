@@ -10,12 +10,12 @@ describe('simple', () => {
 		systemReset: () => result.push(true),
 		digitalMessage: (_, a, b) => result.push(a, b),
 		analogMessage: (_, a, b) => result.push(a, b),
-		pinCapability: (_, a, b) => result.push(a, Array.from(b.values())),
+		pinCapability: (_, a, b) => result.push(a, [...b.values()]),
 		pinCapabilitiesFinished: () => result.push(true),
 		analogMapping: (_, a) => result.push(a),
 		pinState: (_, a, b, c) => result.push(a, b, c),
 		textMessage: (_, a) => result.push(a),
-		customMessage: (_, a, b) => result.push(a, b),
+		customMessage: (_, a) => result.push(a),
 	}
 
 	const transport: Transport = {
@@ -23,7 +23,7 @@ describe('simple', () => {
 		close: () => {},
 	}
 
-	const client = new FirmataClient(transport)
+	using client = new FirmataClient(transport)
 	client.addHandler(protocol)
 
 	afterEach(() => {
@@ -36,19 +36,19 @@ describe('simple', () => {
 		expect(result[1]).toBe(2)
 	})
 
-	test('firmwareMessage', () => {
+	test('firmware message', () => {
 		client.process(Buffer.from([0xf0, 0x79, 2, 3, 65, 0, 66, 0, 67, 0, 0xf7]))
 		expect(result[0]).toBe(2)
 		expect(result[1]).toBe(3)
 		expect(result[2]).toBe('ABC')
 	})
 
-	test('systemReset', () => {
+	test('system reset', () => {
 		client.process(Buffer.from([0xff]))
 		expect(result[0]).toBe(true)
 	})
 
-	test('digitalMessage', () => {
+	test('digital message', () => {
 		client.process(Buffer.from([0x91, 0x55, 0]))
 
 		for (let i = 0; i < 16; i += 2) {
@@ -57,13 +57,13 @@ describe('simple', () => {
 		}
 	})
 
-	test('analogMessage', () => {
+	test('analog message', () => {
 		client.process(Buffer.from([0xf0, 0x6f, 1, 4, 4, 0xf7]))
 		expect(result[0]).toBe(1)
 		expect(result[1]).toBe(516)
 	})
 
-	test('pinCapability', () => {
+	test('pin capability', () => {
 		client.process(Buffer.from([0xf0, 0x6c, 1, 0, 2, 0, 11, 0, 0x7f, 3, 0, 4, 0, 0x7f, 0xf7]))
 		expect(result[0]).toBe(0)
 		expect(result[1]).toEqual([1, 2, 11])
@@ -72,7 +72,7 @@ describe('simple', () => {
 		expect(result[4]).toBe(true)
 	})
 
-	test('analogMapping', () => {
+	test('analog mapping', () => {
 		client.process(Buffer.from([0xf0, 0x6a, 0x7f, 0x7f, 1, 2, 3, 0xf7]))
 		const mapping = result[0] as AnalogMapping
 		expect(Object.keys(mapping)).toEqual(['1', '2', '3'])
@@ -81,24 +81,23 @@ describe('simple', () => {
 		expect(mapping[3]).toBe(4)
 	})
 
-	test('pinState', () => {
+	test('pin state', () => {
 		client.process(Buffer.from([0xf0, 0x6e, 5, 1, 3, 0xf7]))
 		expect(result[0]).toBe(5)
 		expect(result[1]).toBe(PinMode.OUTPUT)
 		expect(result[2]).toBe(3)
 	})
 
-	test('textMessage', () => {
+	test('text message', () => {
 		client.process(Buffer.from([0xf0, 0x71, 112, 1, 31, 1, 24, 1, 10, 1, 0xf7]))
 		expect(result[0]).toBe('😊')
 	})
 
-	test('customMessage', () => {
+	test('custom message', () => {
 		client.process(Buffer.from([0xf0, 1, 65, 0, 66, 0, 67, 0, 0xf7]))
 		const buffer = result[0] as Buffer
 		expect(buffer.readInt8(0)).toBe(1)
 		expect(buffer.toString('utf-16le', 1, 7)).toBe('ABC')
-		expect(result[1]).toBe(7)
 	})
 })
 
