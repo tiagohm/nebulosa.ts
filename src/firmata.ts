@@ -18,7 +18,7 @@ export interface FirmataClientHandler {
 	readonly ready?: (client: FirmataClient) => void
 	readonly pinChange?: (client: FirmataClient, pin: Pin) => void
 
-	readonly customMessage?: (client: FirmataClient, data: Buffer, length: number) => void
+	readonly customMessage?: (client: FirmataClient, data: Buffer) => void
 	readonly version?: (client: FirmataClient, major: number, minor: number) => void
 	readonly firmwareMessage?: (client: FirmataClient, major: number, minor: number, name: string) => void
 	readonly systemReset?: (client: FirmataClient) => void
@@ -30,7 +30,7 @@ export interface FirmataClientHandler {
 	readonly analogMapping?: (client: FirmataClient, mapping: AnalogMapping) => void
 	readonly pinState?: (client: FirmataClient, id: number, mode: PinMode, value: number) => void
 	readonly textMessage?: (client: FirmataClient, message: string) => void
-	readonly twoWireMessage?: (client: FirmataClient, address: number, register: number, data: Int8Array) => void
+	readonly twoWireMessage?: (client: FirmataClient, address: number, register: number, data: Buffer) => void
 }
 
 export interface FirmataFsmState {
@@ -183,7 +183,7 @@ const PARSING_VERSION_MESSAGE_STATE = new ParsingVersionMessageState()
 class ParsingCustomSysexMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
-			fsm.customMessage(fsm.buffer, fsm.offset)
+			fsm.customMessage(fsm.buffer)
 			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 		} else {
 			fsm.write(b)
@@ -311,8 +311,9 @@ class ParsingTwoWireMessageState implements FirmataFsmState {
 		if (b === END_SYSEX) {
 			const address = fsm.read7Bit(0)
 			const register = fsm.read7Bit(2)
-			const data = new Int8Array((fsm.offset - 4) / 2)
-			for (let i = 0; i < data.length; i++) data[i] = fsm.read7Bit(i * 2 + 4)
+			const size = (fsm.offset - 4) >>> 1
+			const data = Buffer.allocUnsafe(size)
+			for (let i = 0; i < size; i++) data[i] = fsm.read7Bit(i * 2 + 4)
 			fsm.twoWireMessage(address, register, data)
 			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 		} else {
@@ -348,13 +349,14 @@ class ParsingSysexMessageState implements FirmataFsmState {
 const PARSING_SYSEX_MESSAGE_STATE = new ParsingSysexMessageState()
 
 class ParsingDigitalMessageState implements FirmataFsmState {
+	constructor(readonly portId: number) {}
+
 	process(b: number, fsm: FirmataFsm) {
 		if (fsm.offset === 0) {
 			fsm.write(b)
 		} else if (fsm.offset === 1) {
 			const value = fsm.read(0) | (b << 7)
-			const portId = fsm.data as number
-			const pin = portId * 8
+			const pin = this.portId * 8
 
 			for (let i = 0; i < 8; i++) {
 				fsm.digitalMessage(pin + i, (value >>> i) & 0x01)
@@ -365,23 +367,20 @@ class ParsingDigitalMessageState implements FirmataFsmState {
 	}
 }
 
-const PARSING_DIGITAL_MESSAGE_STATE = new ParsingDigitalMessageState()
-
 class ParsingAnalogMessageState implements FirmataFsmState {
+	constructor(readonly portId: number) {}
+
 	process(b: number, fsm: FirmataFsm) {
 		if (fsm.offset === 0) {
 			fsm.write(b)
 		} else if (fsm.offset === 1) {
 			const value = fsm.read(0) | (b << 7)
-			const portId = fsm.data as number
-			fsm.analogMessage(portId, value)
+			fsm.analogMessage(this.portId, value)
 
 			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 		}
 	}
 }
-
-const PARSING_ANALOG_MESSAGE_STATE = new ParsingAnalogMessageState()
 
 class WaitingForMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
@@ -390,12 +389,10 @@ class WaitingForMessageState implements FirmataFsmState {
 
 		switch (command) {
 			case DIGITAL_MESSAGE:
-				fsm.data = b & 0x0f
-				fsm.transitTo(PARSING_DIGITAL_MESSAGE_STATE)
+				fsm.transitTo(new ParsingDigitalMessageState(b & 0x0f))
 				break
 			case ANALOG_MESSAGE:
-				fsm.data = b & 0x0f
-				fsm.transitTo(PARSING_ANALOG_MESSAGE_STATE)
+				fsm.transitTo(new ParsingAnalogMessageState(b & 0x0f))
 				break
 			case REPORT_VERSION:
 				fsm.transitTo(PARSING_VERSION_MESSAGE_STATE)
@@ -417,16 +414,23 @@ class WaitingForMessageState implements FirmataFsmState {
 const WAITING_FOR_MESSAGE_STATE = new WaitingForMessageState()
 
 export class FirmataFsm {
-	readonly buffer = Buffer.alloc(256)
-	readonly handlers = new Set<FirmataClientHandler>()
+	private readonly handlers = new Set<FirmataClientHandler>()
 
-	offset = 0
-	data?: unknown
+	#buffer = Buffer.alloc(256)
+	#offset = 0
 
 	constructor(
 		private state: FirmataFsmState,
 		readonly client: FirmataClient,
 	) {}
+
+	get offset() {
+		return this.#offset
+	}
+
+	get buffer() {
+		return this.#buffer.subarray(0, this.#offset)
+	}
 
 	addHandler(handler: FirmataClientHandler) {
 		this.handlers.add(handler)
@@ -441,31 +445,31 @@ export class FirmataFsm {
 	}
 
 	transitTo(state: FirmataFsmState) {
-		this.offset = 0
+		this.#offset = 0
 		this.state = state
 	}
 
 	write(b: number) {
-		this.buffer.writeUInt8(b, this.offset++)
+		this.#buffer.writeUInt8(b, this.#offset++)
 	}
 
 	read(offset: number) {
-		return this.buffer.readUInt8(offset)
+		return this.#buffer.readUInt8(offset)
 	}
 
 	read7Bit(offset: number) {
-		return decodeByteAs7Bit(this.buffer, offset)
+		return decodeByteAs7Bit(this.#buffer, offset)
 	}
 
 	readText(offset: number = 0, encoding?: BufferEncoding) {
-		const length = this.offset - offset
+		const length = this.#offset - offset
 		let n = 0
 
 		for (let i = 0; i < length; i += 2, n++) {
-			this.buffer.writeUInt8(this.read7Bit(offset + i), offset + n)
+			this.#buffer.writeUInt8(this.read7Bit(offset + i), offset + n)
 		}
 
-		return this.buffer.toString(encoding, offset, offset + n)
+		return this.#buffer.toString(encoding, offset, offset + n)
 	}
 
 	ready() {
@@ -476,8 +480,8 @@ export class FirmataFsm {
 		this.handlers.forEach((handler) => handler.pinChange?.(this.client, pin))
 	}
 
-	customMessage(data: Buffer, length: number) {
-		this.handlers.forEach((handler) => handler.customMessage?.(this.client, data, length))
+	customMessage(data: Buffer) {
+		this.handlers.forEach((handler) => handler.customMessage?.(this.client, data))
 	}
 
 	version(major: number, minor: number) {
@@ -524,7 +528,7 @@ export class FirmataFsm {
 		this.handlers.forEach((handler) => handler.textMessage?.(this.client, message))
 	}
 
-	twoWireMessage(address: number, register: number, data: Int8Array) {
+	twoWireMessage(address: number, register: number, data: Buffer) {
 		this.handlers.forEach((handler) => handler.twoWireMessage?.(this.client, address, register, data))
 	}
 }
@@ -545,24 +549,19 @@ export class FirmataClient {
 	private readonly analogPins: AnalogMapping = {}
 
 	private readonly handler: FirmataClientHandler = {
-		customMessage: (client: FirmataClient, data: Buffer, length: number) => {
+		customMessage: (client: FirmataClient, data: Buffer) => {
 			//
 		},
-
 		firmwareMessage: (client: FirmataClient, major: number, minor: number, name: string) => {
 			this.initializing && this.requestPinCapability()
 		},
-
 		systemReset: (client: FirmataClient) => {
 			//
 		},
-
 		error: (client: FirmataClient, command: number) => {
 			//
 		},
-
 		digitalMessage: (client: FirmataClient, id: number, value: number) => {},
-
 		analogMessage: (client: FirmataClient, port: number, value: number) => {
 			const pin = this.pinMap.get(this.analogPins[port])
 
@@ -571,14 +570,12 @@ export class FirmataClient {
 				this.fsm.pinChange(pin)
 			}
 		},
-
 		pinCapability: (client: FirmataClient, id: number, modes: Set<PinMode>) => {
 			this.pinMap.set(id, { id, modes, mode: PinMode.UNSUPPORTED, value: 0 })
 
 			// if the pin supports some modes, we will ask for its current mode and value.
 			if (modes.size > 0) this.pinStateRequestQueue.push(id)
 		},
-
 		pinCapabilitiesFinished: (client: FirmataClient) => {
 			if (this.pinStateRequestQueue.length) {
 				this.requestPinState(this.pinStateRequestQueue.shift()!)
@@ -586,7 +583,6 @@ export class FirmataClient {
 				this.requestAnalogMapping()
 			}
 		},
-
 		analogMapping: (client: FirmataClient, mapping: AnalogMapping) => {
 			Object.assign(this.analogPins, mapping)
 
@@ -595,7 +591,6 @@ export class FirmataClient {
 				this.fsm.ready()
 			}
 		},
-
 		pinState: (client: FirmataClient, id: number, mode: PinMode, value: number) => {
 			const pin = this.pinMap.get(id)
 
@@ -610,12 +605,10 @@ export class FirmataClient {
 				}
 			}
 		},
-
 		textMessage: (client: FirmataClient, message: string) => {
 			//
 		},
-
-		twoWireMessage: (client: FirmataClient, address: number, register: number, data: Int8Array) => {
+		twoWireMessage: (client: FirmataClient, address: number, register: number, data: Buffer) => {
 			//
 		},
 	}
@@ -630,7 +623,7 @@ export class FirmataClient {
 		return this.pinMap.size
 	}
 
-	get pins(): Readonly<Pin>[] {
+	get pins(): readonly Readonly<Pin>[] {
 		return [...this.pinMap.values()]
 	}
 
@@ -664,7 +657,7 @@ export class FirmataClient {
 	}
 
 	send(data: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) {
-		this.transport.write(data)
+		this.transport.write(data, byteOffset, byteLength)
 	}
 
 	requestFirmware() {
@@ -727,8 +720,8 @@ export class FirmataClientOverTcp extends FirmataClient {
 
 	constructor() {
 		super({
-			write: (data) => {
-				this.socket?.write(data)
+			write: (data, byteOffset, byteLength) => {
+				this.socket?.write(data, byteOffset, byteLength)
 			},
 			close: () => {
 				this.socket?.close()
