@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { type AnalogMapping, decodeBufferAs7Bit, encodeBufferAs7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
+import { type AnalogMapping, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
 
-describe('simple', () => {
+describe('process', () => {
 	const result: unknown[] = []
 
 	const protocol: FirmataClientHandler = {
@@ -10,16 +10,18 @@ describe('simple', () => {
 		systemReset: () => result.push(true),
 		digitalMessage: (_, a, b) => result.push(a, b),
 		analogMessage: (_, a, b) => result.push(a, b),
-		pinCapability: (_, a, b) => result.push(a, [...b.values()]),
+		pinCapability: (_, a, b) => result.push(a, [...b]),
 		pinCapabilitiesFinished: () => result.push(true),
 		analogMapping: (_, a) => result.push(a),
 		pinState: (_, a, b, c) => result.push(a, b, c),
 		textMessage: (_, a) => result.push(a),
 		customMessage: (_, a) => result.push(a),
+		twoWireMessage: (_, a, b, c) => result.push(a, b, c),
 	}
 
 	const transport: Transport = {
 		write: () => {},
+		flush: () => {},
 		close: () => {},
 	}
 
@@ -96,12 +98,14 @@ describe('simple', () => {
 	test('custom message', () => {
 		client.process(Buffer.from([0xf0, 1, 65, 0, 66, 0, 67, 0, 0xf7]))
 		const buffer = result[0] as Buffer
-		expect(buffer.readInt8(0)).toBe(1)
+		expect(buffer[0]).toBe(1)
 		expect(buffer.toString('utf-16le', 1, 7)).toBe('ABC')
 	})
-})
 
-test('encode & decode', () => {
-	const data = encodeBufferAs7Bit(Buffer.from('😊'))
-	expect(decodeBufferAs7Bit(data).toString()).toBe('😊')
+	test('two-wire message', () => {
+		client.process(Buffer.from([0xf0, 0x77, 0x22, 0x00, 0x44, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0xf7]))
+		expect(result[0]).toBe(0x22)
+		expect(result[1]).toBe(0x44)
+		expect(result[2]).toEqual(Buffer.from([1, 2, 3]))
+	})
 })

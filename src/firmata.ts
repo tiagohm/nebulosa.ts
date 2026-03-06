@@ -1,9 +1,18 @@
+import type { NumberArray } from './math'
+
 // https://github.com/firmata/protocol/blob/master/protocol.md
 
 export type AnalogMapping = Record<number, number>
 
+export type TwoWireAutoRestartMode = 'stop' | 'restart'
+
+export type TwoWireAddressMode = 7 | 10
+
+export type TwoWireOperationMode = 'write' | 'read' | 'readContinuously' | 'stop'
+
 export interface Transport {
 	readonly write: (data: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) => void
+	readonly flush: () => void
 	readonly close: () => void
 }
 
@@ -136,40 +145,18 @@ const TOTAL_PIN_MODES = 16
 const TWO_WIRE_WRITE = 0x00
 const TWO_WIRE_READ = 0x08
 const TWO_WIRE_READ_CONTINUOUS = 0x10
-const TWO_WIRE_STOP_READ_CONTINUOUS = 0x18
+const TWO_WIRE_STOP_READ = 0x18
 
 const MIN_SAMPLING_INTERVAL = 10
 const MAX_SAMPLING_INTERVAL = 100
 
-export function decodeByteAs7Bit(data: Buffer, offset: number) {
-	return ((data.readUInt8(offset + 1) & 0x01) << 7) | (data.readUInt8(offset) & 0x7f)
+export function decodeByteAs7Bit(input: Readonly<NumberArray> | Buffer, offset: number) {
+	return ((input[offset + 1] & 0x01) << 7) | (input[offset] & 0x7f)
 }
 
-export function encodeByteAs7Bit(data: Buffer | number, offset: number) {
-	const byte = typeof data === 'number' ? data : data.readUInt8(offset)
-	return [byte & 0x7f, (byte >>> 7) & 1] as const
-}
-
-export function decodeBufferAs7Bit(data: Buffer, offset: number = 0, length: number = data.byteLength - offset) {
-	const output = Buffer.allocUnsafe(length / 2)
-
-	for (let i = 0, k = 0; i < length; i += 2) {
-		output.writeUInt8(decodeByteAs7Bit(data, offset + i), k++)
-	}
-
-	return output
-}
-
-export function encodeBufferAs7Bit(data: Buffer, offset: number = 0, length: number = data.byteLength - offset) {
-	const output = Buffer.allocUnsafe(length * 2)
-
-	for (let i = 0, k = 0; i < length; i++) {
-		const [a, b] = encodeByteAs7Bit(data, offset + i)
-		output.writeUInt8(a, k++)
-		output.writeUInt8(b, k++)
-	}
-
-	return output
+export function encodeByteAs7Bit(data: number, output: NumberArray | Buffer, offset: number = 0) {
+	output[offset++] = data & 0x7f
+	output[offset] = (data >>> 7) & 1
 }
 
 class ParsingVersionMessageState implements FirmataFsmState {
@@ -544,6 +531,10 @@ export function writeValueAsTwo7bitBytes(data: Uint8Array, offset: number, value
 	data[offset + 1] = (value >> 7) & 0x7f
 }
 
+const REQUEST_FIRMWARE_DATA = new Uint8Array([START_SYSEX, REPORT_FIRMWARE, END_SYSEX])
+const REQUEST_PIN_CAPABILITY_DATA = new Uint8Array([START_SYSEX, CAPABILITY_QUERY, END_SYSEX])
+const REQUEST_ANALOG_MAPPING_DATA = new Uint8Array([START_SYSEX, ANALOG_MAPPING_QUERY, END_SYSEX])
+
 export class FirmataClient implements Disposable {
 	private readonly fsm: FirmataFsm
 	private readonly parser: FirmataParser
@@ -632,8 +623,8 @@ export class FirmataClient implements Disposable {
 		return this.pinMap.size
 	}
 
-	get pins(): readonly Readonly<Pin>[] {
-		return [...this.pinMap.values()]
+	get pins(): MapIterator<Readonly<Pin>> {
+		return this.pinMap.values()
 	}
 
 	pinAt(id: number): Readonly<Pin> | undefined {
@@ -665,16 +656,17 @@ export class FirmataClient implements Disposable {
 		this.fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 	}
 
-	send(data: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) {
-		this.transport.write(data, byteOffset, byteLength)
+	send(message: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) {
+		this.transport.write(message, byteOffset, byteLength)
+		this.transport.flush()
 	}
 
 	requestFirmware() {
-		this.send(new Uint8Array([START_SYSEX, REPORT_FIRMWARE, END_SYSEX]))
+		this.send(REQUEST_FIRMWARE_DATA)
 	}
 
 	requestPinCapability() {
-		this.send(new Uint8Array([START_SYSEX, CAPABILITY_QUERY, END_SYSEX]))
+		this.send(REQUEST_PIN_CAPABILITY_DATA)
 	}
 
 	requestPinState(pinId: number) {
@@ -682,18 +674,18 @@ export class FirmataClient implements Disposable {
 	}
 
 	requestAnalogMapping() {
-		this.send(new Uint8Array([START_SYSEX, ANALOG_MAPPING_QUERY, END_SYSEX]))
+		this.send(REQUEST_ANALOG_MAPPING_DATA)
 	}
 
 	requestDigitalReport(enable: boolean) {
-		const data = new Uint8Array(32)
+		const message = new Uint8Array(32)
 
 		for (let i = 0; i < 16; i += 2) {
-			data[i] = REPORT_DIGITAL | i
-			data[i + 1] = enable ? 1 : 0
+			message[i] = REPORT_DIGITAL | i
+			message[i + 1] = enable ? 1 : 0
 		}
 
-		this.send(data)
+		this.send(message)
 	}
 
 	requestDigitalPinReport(pin: Pin | number, enable: boolean, pinToDigital: (pin: Pin | number) => number) {
@@ -701,14 +693,14 @@ export class FirmataClient implements Disposable {
 	}
 
 	requestAnalogReport(enable: boolean) {
-		const data = new Uint8Array(32)
+		const message = new Uint8Array(32)
 
 		for (let i = 0; i < 16; i += 2) {
-			data[i] = REPORT_ANALOG | i
-			data[i + 1] = enable ? 1 : 0
+			message[i] = REPORT_ANALOG | i
+			message[i + 1] = enable ? 1 : 0
 		}
 
-		this.send(data)
+		this.send(message)
 	}
 
 	requestAnalogPinReport(pin: Pin | number, enable: boolean, pinToAnalog: (pin: Pin | number) => number) {
@@ -720,7 +712,35 @@ export class FirmataClient implements Disposable {
 	}
 
 	digitalWrite(pinId: number, value: boolean | number) {
-		this.send(new Uint8Array([DIGITAL_MESSAGE | (pinId & 0x0f), value ? 1 : 0, 0]))
+		this.send(new Uint8Array([SET_DIGITAL_PIN_VALUE, pinId, value ? 1 : 0]))
+	}
+
+	samplingInterval(milliseconds: number) {
+		const message = new Uint8Array([START_SYSEX, SAMPLING_INTERVAL, 0, 0, END_SYSEX])
+		encodeByteAs7Bit(milliseconds, message, 2)
+		this.send(message)
+	}
+
+	i2Config(delayInMicroseconds: number) {
+		const message = new Uint8Array([START_SYSEX, TWO_WIRE_CONFIG, 0, 0, END_SYSEX])
+		encodeByteAs7Bit(delayInMicroseconds, message, 2)
+		this.send(message)
+	}
+
+	i2cReadWrite(address: number, operationMode: TwoWireOperationMode, data?: Readonly<NumberArray>, addressMode: TwoWireAddressMode = 7, autoRestart: TwoWireAutoRestartMode = 'stop') {
+		const message = Buffer.alloc(5 + (data?.length ?? 0) * 2)
+		message[0] = START_SYSEX
+		message[1] = TWO_WIRE_REQUEST
+		message[2] = address & 0x7f
+		message[3] = ((address >>> 7) & 0x7) | (operationMode === 'write' ? TWO_WIRE_WRITE : operationMode === 'read' ? TWO_WIRE_READ : operationMode === 'readContinuously' ? TWO_WIRE_READ_CONTINUOUS : TWO_WIRE_STOP_READ) | (addressMode === 7 ? 0 : 0x20) | (autoRestart === 'stop' ? 0x40 : 0)
+
+		if (data) {
+			for (let i = 0, offset = 4; i < data.length; i++, offset += 2) {
+				encodeByteAs7Bit(data[i], message, offset)
+			}
+		}
+
+		message[message.byteLength - 1] = END_SYSEX
 	}
 }
 
@@ -731,6 +751,9 @@ export class FirmataClientOverTcp extends FirmataClient {
 		super({
 			write: (data, byteOffset, byteLength) => {
 				this.socket?.write(data, byteOffset, byteLength)
+			},
+			flush: () => {
+				this.socket?.flush()
 			},
 			close: () => {
 				this.socket?.close()
