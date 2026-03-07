@@ -10,10 +10,28 @@ export type TwoWireAddressMode = 7 | 10
 
 export type TwoWireOperationMode = 'write' | 'read' | 'readContinuously' | 'stop'
 
+export type DeviceListener<D extends Device<D>> = (device: D) => void
+
 export interface Transport {
 	readonly write: (data: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) => void
 	readonly flush: () => void
 	readonly close: () => void
+}
+
+export interface Board {
+	readonly name: string
+	readonly isPinLED: (pin: number) => boolean
+	readonly isPinDigital: (pin: number) => boolean
+	readonly isPinAnalog: (pin: number) => boolean
+	readonly isPinPWM: (pin: number) => boolean
+	readonly isPinServo: (pin: number) => boolean
+	readonly isPinTwoWire: (pin: number) => boolean
+	readonly isPinSPI: (pin: number) => boolean
+	readonly isPinSerial: (pin: number) => boolean
+	readonly pinToDigital: (pin: number) => number
+	readonly pinToAnalog: (pin: number) => number
+	readonly pinToPWM: (pin: number) => number
+	readonly pinToServo: (pin: number) => number
 }
 
 export interface Pin {
@@ -21,6 +39,18 @@ export interface Pin {
 	readonly modes: Set<PinMode>
 	mode: PinMode
 	value: number
+}
+
+export interface Device<D extends Device<D>> extends Disposable {
+	readonly client: FirmataClient
+	readonly addListener: (listener: DeviceListener<D>) => void
+	readonly removeListener: (listener: DeviceListener<D>) => void
+	readonly start: () => void
+	readonly stop: () => void
+}
+
+export interface Thermometer {
+	readonly temperature: number
 }
 
 export interface FirmataClientHandler {
@@ -147,11 +177,11 @@ const TWO_WIRE_READ = 0x08
 const TWO_WIRE_READ_CONTINUOUS = 0x10
 const TWO_WIRE_STOP_READ = 0x18
 
-const MIN_SAMPLING_INTERVAL = 10
-const MAX_SAMPLING_INTERVAL = 100
+const MIN_SAMPLING_INTERVAL = 1
+const MAX_SAMPLING_INTERVAL = 4294967295
 
 export function decodeByteAs7Bit(input: Readonly<NumberArray> | Buffer, offset: number) {
-	return ((input[offset + 1] & 0x01) << 7) | (input[offset] & 0x7f)
+	return (input[offset] & 0x7f) | ((input[offset + 1] & 0x01) << 7)
 }
 
 export function encodeByteAs7Bit(data: number, output: NumberArray | Buffer, offset: number = 0) {
@@ -540,9 +570,11 @@ export class FirmataClient implements Disposable {
 	private readonly parser: FirmataParser
 
 	private initializing = true
+
 	private readonly pinStateRequestQueue: number[] = []
 	private readonly pinMap = new Map<number, Pin>()
 	private readonly analogPins: AnalogMapping = {}
+	private readonly initialization = Promise.withResolvers<boolean>()
 
 	private readonly handler: FirmataClientHandler = {
 		customMessage: (client: FirmataClient, data: Buffer) => {
@@ -584,6 +616,7 @@ export class FirmataClient implements Disposable {
 
 			if (this.initializing) {
 				this.initializing = false
+				this.initialization.resolve(true)
 				this.fsm.ready()
 			}
 		},
@@ -609,7 +642,10 @@ export class FirmataClient implements Disposable {
 		},
 	}
 
-	constructor(private readonly transport: Transport) {
+	constructor(
+		private readonly transport: Transport,
+		private readonly board: Board,
+	) {
 		this.fsm = new FirmataFsm(WAITING_FOR_MESSAGE_STATE, this)
 		this.parser = new FirmataParser(this.fsm)
 		this.addHandler(this.handler)
@@ -652,6 +688,12 @@ export class FirmataClient implements Disposable {
 		this.parser.processByte(b)
 	}
 
+	ensureInitializationIsDone(timeout: number) {
+		const timer = timeout > 0 ? setTimeout(this.initialization.resolve, timeout, false) : undefined
+		this.initialization.promise.then(clearTimeout.bind(undefined, timer))
+		return this.initialization.promise
+	}
+
 	reset() {
 		this.fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 	}
@@ -680,44 +722,44 @@ export class FirmataClient implements Disposable {
 	requestDigitalReport(enable: boolean) {
 		const message = new Uint8Array(32)
 
-		for (let i = 0; i < 16; i += 2) {
-			message[i] = REPORT_DIGITAL | i
-			message[i + 1] = enable ? 1 : 0
+		for (let i = 0, p = 0; i < 16; i++) {
+			message[p++] = REPORT_DIGITAL | i
+			message[p++] = enable ? 1 : 0
 		}
 
 		this.send(message)
 	}
 
-	requestDigitalPinReport(pin: Pin | number, enable: boolean, pinToDigital: (pin: Pin | number) => number) {
-		this.send(new Uint8Array([REPORT_DIGITAL | pinToDigital(pin), enable ? 1 : 0]))
+	requestDigitalPinReport(pin: number, enable: boolean) {
+		this.send(new Uint8Array([REPORT_DIGITAL | this.board.pinToDigital(pin), enable ? 1 : 0]))
 	}
 
 	requestAnalogReport(enable: boolean) {
 		const message = new Uint8Array(32)
 
-		for (let i = 0; i < 16; i += 2) {
-			message[i] = REPORT_ANALOG | i
-			message[i + 1] = enable ? 1 : 0
+		for (let i = 0, p = 0; i < 16; i++) {
+			message[p++] = REPORT_ANALOG | i
+			message[p++] = enable ? 1 : 0
 		}
 
 		this.send(message)
 	}
 
-	requestAnalogPinReport(pin: Pin | number, enable: boolean, pinToAnalog: (pin: Pin | number) => number) {
-		this.send(new Uint8Array([REPORT_ANALOG | pinToAnalog(pin), enable ? 1 : 0]))
+	requestAnalogPinReport(pin: number, enable: boolean) {
+		this.send(new Uint8Array([REPORT_ANALOG | this.board.pinToAnalog(pin), enable ? 1 : 0]))
 	}
 
-	pinMode(pinId: number, mode: PinMode) {
-		this.send(new Uint8Array([SET_PIN_MODE, pinId, mode]))
+	pinMode(pin: number, mode: PinMode) {
+		this.send(new Uint8Array([SET_PIN_MODE, pin, mode]))
 	}
 
-	digitalWrite(pinId: number, value: boolean | number) {
-		this.send(new Uint8Array([SET_DIGITAL_PIN_VALUE, pinId, value ? 1 : 0]))
+	digitalWrite(pin: number, value: boolean | number) {
+		this.send(new Uint8Array([SET_DIGITAL_PIN_VALUE, pin, value ? 1 : 0]))
 	}
 
 	samplingInterval(milliseconds: number) {
 		const message = new Uint8Array([START_SYSEX, SAMPLING_INTERVAL, 0, 0, END_SYSEX])
-		encodeByteAs7Bit(milliseconds, message, 2)
+		encodeByteAs7Bit(Math.max(MIN_SAMPLING_INTERVAL, Math.min(milliseconds, MAX_SAMPLING_INTERVAL)), message, 2)
 		this.send(message)
 	}
 
@@ -747,19 +789,22 @@ export class FirmataClient implements Disposable {
 export class FirmataClientOverTcp extends FirmataClient {
 	private socket?: Bun.Socket
 
-	constructor() {
-		super({
-			write: (data, byteOffset, byteLength) => {
-				this.socket?.write(data, byteOffset, byteLength)
+	constructor(board: Board) {
+		super(
+			{
+				write: (data, byteOffset, byteLength) => {
+					this.socket?.write(data, byteOffset, byteLength)
+				},
+				flush: () => {
+					this.socket?.flush()
+				},
+				close: () => {
+					this.socket?.close()
+					this.socket = undefined
+				},
 			},
-			flush: () => {
-				this.socket?.flush()
-			},
-			close: () => {
-				this.socket?.close()
-				this.socket = undefined
-			},
-		})
+			board,
+		)
 	}
 
 	async connect(hostname: string, port: number, options?: Omit<Bun.TCPSocketConnectOptions<undefined>, 'hostname' | 'port' | 'socket'>) {
@@ -790,96 +835,150 @@ export class FirmataClientOverTcp extends FirmataClient {
 	}
 }
 
-function pinId(pin: Pin | number) {
-	return typeof pin === 'number' ? pin : pin.id
-}
-
 // https://github.com/firmata/arduino/blob/main/Boards.h#L998
 
-export namespace ESP8266 {
-	export const D0 = 16
-	export const D1 = 5
-	export const D2 = 4
-	export const D3 = 0
-	export const D4 = 2
-	export const D5 = 14
-	export const D6 = 12
-	export const D7 = 13
-	export const D8 = 15
-	export const D9 = 3
-	export const D10 = 1
+export class ESP8266 implements Board {
+	static readonly D0 = 16
+	static readonly D1 = 5
+	static readonly D2 = 4
+	static readonly D3 = 0
+	static readonly D4 = 2
+	static readonly D5 = 14
+	static readonly D6 = 12
+	static readonly D7 = 13
+	static readonly D8 = 15
+	static readonly D9 = 3
+	static readonly D10 = 1
 
-	export const A0 = 17
+	static readonly A0 = 17
 
-	export const SDA = D2
-	export const SCL = D1
+	static readonly SDA = this.D2
+	static readonly SCL = this.D1
 
-	export const RX = D9
-	export const TX = D10
+	static readonly RX = this.D9
+	static readonly TX = this.D10
 
-	export const SS = D8
-	export const MOSI = D7
-	export const MISO = D6
-	export const SCK = D5
+	static readonly SS = this.D8
+	static readonly MOSI = this.D7
+	static readonly MISO = this.D6
+	static readonly SCK = this.D5
 
-	export const MAX_SERVOS = 9
+	static readonly MAX_SERVOS = 9
 
-	export const LED_BUILTIN = D4
-	export const LED_BUILTIN_AUX = D0
+	static readonly LED_BUILTIN = this.D4
+	static readonly LED_BUILTIN_AUX = this.D0
 
-	export const NUMBER_OF_DIGITAL_PINS = 17
-	export const NUMBER_OF_ANALOG_PINS = 1
+	static readonly NUMBER_OF_DIGITAL_PINS = 17
+	static readonly NUMBER_OF_ANALOG_PINS = 1
 
-	export function isPinLED(pin: Pin | number) {
-		const id = pinId(pin)
-		return id === LED_BUILTIN || id === LED_BUILTIN_AUX
+	static readonly TOTAL_PINS = 18
+	static readonly DEFAULT_PWM_RESOLUTION = 10
+
+	readonly name = 'ESP8266'
+
+	isPinLED(pin: number) {
+		return pin === ESP8266.LED_BUILTIN || pin === ESP8266.LED_BUILTIN_AUX
 	}
 
-	export function isPinDigital(pin: Pin | number) {
-		const id = pinId(pin)
-		return (id >= D3 && id <= D1) || (id >= D6 && id < A0)
+	isPinDigital(pin: number) {
+		return (pin >= ESP8266.D3 && pin <= ESP8266.D1) || (pin >= ESP8266.D6 && pin < ESP8266.A0)
 	}
 
-	export function isPinAnalog(pin: Pin | number) {
-		return pinId(pin) === A0
+	isPinAnalog(pin: number) {
+		return pin === ESP8266.A0
 	}
 
-	export function isPinPWM(pin: Pin | number) {
-		return pinId(pin) < A0
+	isPinPWM(pin: number) {
+		return pin < ESP8266.A0
 	}
 
-	export function isPinServo(pin: Pin | number) {
-		return isPinDigital(pin) && pinId(pin) < MAX_SERVOS
+	isPinServo(pin: number) {
+		return this.isPinDigital(pin) && pin < ESP8266.MAX_SERVOS
 	}
 
-	export function isPinTwoWire(pin: Pin | number) {
-		const id = pinId(pin)
-		return id === SDA || id === SCL
+	isPinTwoWire(pin: number) {
+		return pin === ESP8266.SDA || pin === ESP8266.SCL
 	}
 
-	export function isPinSPI(pin: Pin | number) {
-		const id = pinId(pin)
-		return id === SS || id === MOSI || id === MISO || id === SCK
+	isPinSPI(pin: number) {
+		return pin === ESP8266.SS || pin === ESP8266.MOSI || pin === ESP8266.MISO || pin === ESP8266.SCK
 	}
 
-	export function isPinSerial(pin: Pin | number) {
-		const id = pinId(pin)
-		return id === RX || id === TX
+	isPinSerial(pin: number) {
+		return pin === ESP8266.RX || pin === ESP8266.TX
 	}
 
-	export function pinToDigital(pin: Pin | number) {
-		return pinId(pin)
+	pinToDigital(pin: number) {
+		return pin
 	}
 
-	export function pinToAnalog(pin: Pin | number) {
-		return pinId(pin) - A0
+	pinToAnalog(pin: number) {
+		return pin - ESP8266.A0
 	}
 
-	export function pinToPWM(pin: Pin | number) {
-		return pinToDigital(pin)
+	pinToPWM(pin: number) {
+		return this.pinToDigital(pin)
 	}
 
-	export function pinToServo(pin: Pin | number) {
-		return pinId(pin)
+	pinToServo(pin: number) {
+		return pin
+	}
+}
+
+abstract class DeviceBase<D extends Device<D>> {
+	protected readonly listeners = new Set<DeviceListener<D>>()
+
+	abstract client: FirmataClient
+	abstract start(): void
+	abstract stop(): void
+
+	[Symbol.dispose]() {
+		this.stop()
+	}
+
+	addListener(listener: DeviceListener<D>) {
+		this.listeners.add(listener)
+	}
+
+	removeListener(listener: DeviceListener<D>) {
+		this.listeners.delete(listener)
+	}
+
+	protected fire() {
+		for (const listener of this.listeners) listener(this as never)
+	}
+}
+
+export class LM35 extends DeviceBase<LM35> implements Thermometer, FirmataClientHandler, Disposable {
+	temperature = 0
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly pin: number,
+		readonly aref: number = 5,
+	) {
+		super()
+
+		client.addHandler(this)
+	}
+
+	pinChange(client: FirmataClient, pin: Pin) {
+		if (this.client === client && pin.id === this.pin) {
+			const temperature = (this.aref * 100 * pin.value) / 1023
+
+			if (temperature !== this.temperature) {
+				this.temperature = temperature
+				this.fire()
+			}
+		}
+	}
+
+	start() {
+		this.client.pinMode(this.pin, PinMode.ANALOG)
+		this.client.requestAnalogPinReport(this.pin, true)
+	}
+
+	stop() {
+		this.client.requestAnalogPinReport(this.pin, false)
 	}
 }
