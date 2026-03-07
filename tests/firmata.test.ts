@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { type AnalogMapping, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
+import { type AnalogMapping, BMP180, ESP8266, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
+
+const esp8266 = new ESP8266()
 
 describe('process', () => {
 	const result: unknown[] = []
@@ -25,7 +27,7 @@ describe('process', () => {
 		close: () => {},
 	}
 
-	using client = new FirmataClient(transport)
+	using client = new FirmataClient(transport, esp8266)
 	client.addHandler(protocol)
 
 	afterEach(() => {
@@ -107,5 +109,14 @@ describe('process', () => {
 		expect(result[0]).toBe(0x22)
 		expect(result[1]).toBe(0x44)
 		expect(result[2]).toEqual(Buffer.from([1, 2, 3]))
+	})
+})
+
+describe('bmp180', () => {
+	const bmp180 = new BMP180(undefined as never, 0)
+
+	test('compute true temperature & pressure', () => {
+		expect(bmp180.computeTrueTemperature(27898)).toBe(15)
+		expect(bmp180.computeTruePressure(23843)).toBe(69964)
 	})
 })

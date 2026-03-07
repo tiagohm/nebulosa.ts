@@ -1,4 +1,7 @@
+import { type Distance, fromPressure } from './distance'
 import type { NumberArray } from './math'
+import { type Pressure, pascal } from './pressure'
+import type { Temperature } from './temperature'
 
 // https://github.com/firmata/protocol/blob/master/protocol.md
 
@@ -10,7 +13,7 @@ export type TwoWireAddressMode = 7 | 10
 
 export type TwoWireOperationMode = 'write' | 'read' | 'readContinuously' | 'stop'
 
-export type DeviceListener<D extends Device<D>> = (device: D) => void
+export type HardwareListener<D extends Hardware<D>> = (device: D) => void
 
 export interface Transport {
 	readonly write: (data: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) => void
@@ -41,16 +44,28 @@ export interface Pin {
 	value: number
 }
 
-export interface Device<D extends Device<D>> extends Disposable {
+export interface Hardware<D extends Hardware<D>> extends Disposable {
 	readonly client: FirmataClient
-	readonly addListener: (listener: DeviceListener<D>) => void
-	readonly removeListener: (listener: DeviceListener<D>) => void
+	readonly addListener: (listener: HardwareListener<D>) => void
+	readonly removeListener: (listener: HardwareListener<D>) => void
 	readonly start: () => void
 	readonly stop: () => void
 }
 
 export interface Thermometer {
-	readonly temperature: number
+	readonly temperature: Temperature
+}
+
+export interface Hygrometer {
+	readonly humidity: number
+}
+
+export interface Barometer {
+	readonly pressure: Pressure
+}
+
+export interface Altimeter {
+	readonly altitude: Distance
 }
 
 export interface FirmataClientHandler {
@@ -97,6 +112,15 @@ export enum PinMode {
 	UNSUPPORTED = 126,
 	IGNORED = 127,
 }
+
+export enum BMP180Mode {
+	ULTRA_LOW_POWER, // 5 ms
+	STANDARD, // 8 ms
+	HIGH_RESOLUTION, // 14 ms
+	ULTRA_HIGH_RESOLUTION, // 26 ms
+}
+
+// PROTOCOL
 
 function resolvePinMode(mode: number) {
 	if (mode === PIN_MODE_IGNORE) return PinMode.IGNORED
@@ -570,6 +594,7 @@ export class FirmataClient implements Disposable {
 	private readonly parser: FirmataParser
 
 	private initializing = true
+	private maxTwoWireDelay = 0
 
 	private readonly pinStateRequestQueue: number[] = []
 	private readonly pinMap = new Map<number, Pin>()
@@ -763,26 +788,43 @@ export class FirmataClient implements Disposable {
 		this.send(message)
 	}
 
-	i2Config(delayInMicroseconds: number) {
+	twoWireConfig(delayInMicroseconds: number) {
+		this.maxTwoWireDelay = Math.max(this.maxTwoWireDelay, delayInMicroseconds)
 		const message = new Uint8Array([START_SYSEX, TWO_WIRE_CONFIG, 0, 0, END_SYSEX])
-		encodeByteAs7Bit(delayInMicroseconds, message, 2)
+		encodeByteAs7Bit(this.maxTwoWireDelay, message, 2)
 		this.send(message)
 	}
 
-	i2cReadWrite(address: number, operationMode: TwoWireOperationMode, data?: Readonly<NumberArray>, addressMode: TwoWireAddressMode = 7, autoRestart: TwoWireAutoRestartMode = 'stop') {
-		const message = Buffer.alloc(5 + (data?.length ?? 0) * 2)
+	twoWireReadWrite(address: number, operationMode: TwoWireOperationMode, data?: Readonly<NumberArray> | Buffer, addressMode: TwoWireAddressMode = 7, autoRestart: TwoWireAutoRestartMode = 'stop') {
+		const message = Buffer.alloc(5 + (data !== undefined ? data.length * 2 : 0))
+
 		message[0] = START_SYSEX
 		message[1] = TWO_WIRE_REQUEST
 		message[2] = address & 0x7f
 		message[3] = ((address >>> 7) & 0x7) | (operationMode === 'write' ? TWO_WIRE_WRITE : operationMode === 'read' ? TWO_WIRE_READ : operationMode === 'readContinuously' ? TWO_WIRE_READ_CONTINUOUS : TWO_WIRE_STOP_READ) | (addressMode === 7 ? 0 : 0x20) | (autoRestart === 'stop' ? 0x40 : 0)
 
-		if (data) {
+		if (data !== undefined) {
 			for (let i = 0, offset = 4; i < data.length; i++, offset += 2) {
 				encodeByteAs7Bit(data[i], message, offset)
 			}
 		}
 
 		message[message.byteLength - 1] = END_SYSEX
+
+		this.send(message)
+	}
+
+	twoWireRead(address: number, register: number, bytesToRead: number, continuous: boolean = false, addressMode: TwoWireAddressMode = 7, autoRestart: TwoWireAutoRestartMode = 'stop') {
+		const data = new Uint8Array(register >= 0 ? [register, bytesToRead] : [bytesToRead])
+		this.twoWireReadWrite(address, continuous ? 'readContinuously' : 'read', data, addressMode, autoRestart)
+	}
+
+	twoWireWrite(address: number, data: Readonly<NumberArray> | Buffer, addressMode: TwoWireAddressMode = 7) {
+		this.twoWireReadWrite(address, 'write', data, addressMode)
+	}
+
+	twoWireStop(address: number, addressMode: TwoWireAddressMode = 7) {
+		this.twoWireReadWrite(address, 'stop', undefined, addressMode)
 	}
 }
 
@@ -834,6 +876,8 @@ export class FirmataClientOverTcp extends FirmataClient {
 		return true
 	}
 }
+
+// BOARD
 
 // https://github.com/firmata/arduino/blob/main/Boards.h#L998
 
@@ -925,8 +969,10 @@ export class ESP8266 implements Board {
 	}
 }
 
-abstract class DeviceBase<D extends Device<D>> {
-	protected readonly listeners = new Set<DeviceListener<D>>()
+// HARDWARE (SENSORS, BUTTONS, LEDs)
+
+abstract class HardwareBase<D extends Hardware<D>> {
+	protected readonly listeners = new Set<HardwareListener<D>>()
 
 	abstract client: FirmataClient
 	abstract start(): void
@@ -936,11 +982,11 @@ abstract class DeviceBase<D extends Device<D>> {
 		this.stop()
 	}
 
-	addListener(listener: DeviceListener<D>) {
+	addListener(listener: HardwareListener<D>) {
 		this.listeners.add(listener)
 	}
 
-	removeListener(listener: DeviceListener<D>) {
+	removeListener(listener: HardwareListener<D>) {
 		this.listeners.delete(listener)
 	}
 
@@ -949,7 +995,9 @@ abstract class DeviceBase<D extends Device<D>> {
 	}
 }
 
-export class LM35 extends DeviceBase<LM35> implements Thermometer, FirmataClientHandler, Disposable {
+// THERMOMETER
+
+export class LM35 extends HardwareBase<LM35> implements Thermometer, FirmataClientHandler {
 	temperature = 0
 
 	constructor(
@@ -958,8 +1006,6 @@ export class LM35 extends DeviceBase<LM35> implements Thermometer, FirmataClient
 		readonly aref: number = 5,
 	) {
 		super()
-
-		client.addHandler(this)
 	}
 
 	pinChange(client: FirmataClient, pin: Pin) {
@@ -974,11 +1020,155 @@ export class LM35 extends DeviceBase<LM35> implements Thermometer, FirmataClient
 	}
 
 	start() {
+		this.client.addHandler(this)
 		this.client.pinMode(this.pin, PinMode.ANALOG)
 		this.client.requestAnalogPinReport(this.pin, true)
 	}
 
 	stop() {
+		this.client.removeHandler(this)
 		this.client.requestAnalogPinReport(this.pin, false)
+	}
+}
+
+// BAROMETER
+
+// https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf
+
+export class BMP180 extends HardwareBase<BMP180> implements Barometer, Altimeter, Thermometer, FirmataClientHandler {
+	pressure = 0
+	altitude = 0
+	temperature = 0
+
+	// Initial values from datasheet (for test only)
+	private AC1 = 408
+	private AC2 = -72
+	private AC3 = -14383
+	private AC4 = 32741
+	private AC5 = 32757
+	private AC6 = 23153
+
+	private B1 = 6190
+	private B2 = 4
+
+	private MB = -32768
+	private MC = -8711
+	private MD = 2868
+
+	private B5 = 0
+
+	private state = 0 // 0 = unitialized, 1 = calibrating, 2 = temperature, 3 = pressure
+
+	static readonly ADDRESS = 0x77
+
+	private static readonly COEFFICIENTS_REG = 0xaa
+	private static readonly CONTROL_REG = 0xf4
+	private static readonly TEMP_DATA_REG = 0xf6
+	private static readonly PRES_DATA_REG = 0xf6
+
+	private static readonly READ_TEMP_CMD = 0x2e
+	private static readonly READ_PRES_CMD = 0x34
+
+	private timer?: NodeJS.Timeout
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly mode: BMP180Mode = 0,
+		readonly pollingInterval: number = 5000,
+	) {
+		super()
+	}
+
+	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
+		if (address === BMP180.ADDRESS) {
+			if (this.state === 1 && register === BMP180.COEFFICIENTS_REG && data.byteLength === 22) {
+				this.AC1 = data.readInt16BE(0)
+				this.AC2 = data.readInt16BE(2)
+				this.AC3 = data.readInt16BE(4)
+				this.AC4 = data.readUInt16BE(6)
+				this.AC5 = data.readUInt16BE(8)
+				this.AC6 = data.readUInt16BE(10)
+				this.B1 = data.readInt16BE(12)
+				this.B2 = data.readInt16BE(14)
+				this.MB = data.readInt16BE(16)
+				this.MC = data.readInt16BE(18)
+				this.MD = data.readInt16BE(20)
+
+				console.info(this.AC1, this.AC2, this.AC3, this.AC4, this.AC5, this.AC6, this.B1, this.B2, this.MB, this.MC, this.MD)
+
+				this.timer = setInterval(this.readUncompensatedTemperature.bind(this), Math.max(1000, this.pollingInterval))
+
+				this.state = 2
+			} else if (this.state === 2 && register === BMP180.TEMP_DATA_REG && data.byteLength === 2) {
+				const UT = data.readInt16BE(0)
+				this.temperature = this.computeTrueTemperature(UT)
+				this.state = 3
+				void this.readUncompensatedPressure()
+			} else if (this.state === 3 && register === BMP180.PRES_DATA_REG && data.byteLength === 3) {
+				const UP = ((data.readUint8(0) << 16) | data.readUint16BE(1)) >> (8 - this.mode)
+				this.pressure = pascal(this.computeTruePressure(UP))
+				this.altitude = fromPressure(this.pressure, this.temperature)
+				this.state = 2
+				this.fire()
+			} else {
+				console.warn('invalid state: ', this.state)
+			}
+		}
+	}
+
+	start() {
+		if (this.state === 0) {
+			this.state = 1
+			this.client.addHandler(this)
+			this.client.twoWireConfig(0)
+			this.readCalibrationData()
+		}
+	}
+
+	stop() {
+		this.state = 0
+		this.client.removeHandler(this)
+		clearInterval(this.timer)
+		this.timer = undefined
+	}
+
+	private readCalibrationData() {
+		this.client.twoWireRead(BMP180.ADDRESS, BMP180.COEFFICIENTS_REG, 22)
+	}
+
+	private async readUncompensatedTemperature() {
+		this.client.twoWireWrite(BMP180.ADDRESS, [BMP180.CONTROL_REG, BMP180.READ_TEMP_CMD])
+		await Bun.sleep(5)
+		this.client.twoWireRead(BMP180.ADDRESS, BMP180.TEMP_DATA_REG, 2)
+	}
+
+	private async readUncompensatedPressure() {
+		this.client.twoWireWrite(BMP180.ADDRESS, [BMP180.CONTROL_REG, BMP180.READ_PRES_CMD | (this.mode << 6)])
+		await Bun.sleep(30)
+		this.client.twoWireRead(BMP180.ADDRESS, BMP180.PRES_DATA_REG, 3)
+	}
+
+	computeTrueTemperature(UT: number) {
+		const X1 = ((UT - this.AC6) * this.AC5) >> 15
+		const X2 = Math.round((this.MC << 11) / (X1 + this.MD))
+		this.B5 = X1 + X2
+		return ((this.B5 + 8) >> 4) / 10
+	}
+
+	computeTruePressure(UP: number) {
+		const B6 = this.B5 - 4000
+		const K = (B6 * B6) >> 12
+		let X3 = (this.B2 * K + this.AC2 * B6) >> 11
+		const B3 = (((this.AC1 * 4 + X3) << this.mode) + 2) >> 2
+		let X1 = (this.AC3 * B6) >> 13
+		let X2 = (this.B1 * K) >> 16
+		X3 = (X1 + X2 + 2) >> 2
+		const B4 = (this.AC4 * (X3 + 32768)) >>> 15
+		const B7 = (UP - B3) * (50000 >>> this.mode)
+		const P = Math.round(B7 < 0x80000000 ? (B7 * 2) / B4 : (B7 / B4) * 2)
+		X1 = (P >> 8) * (P >> 8)
+		X1 = (X1 * 3038) >> 16
+		X2 = (-7357 * P) >> 16
+		return P + ((X1 + X2 + 3791) >> 4)
 	}
 }
