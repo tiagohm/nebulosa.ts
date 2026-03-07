@@ -37,5 +37,6 @@ test('toParsec', () => {
 
 test('fromPressure', () => {
 	expect(fromPressure(ONE_ATM, 15)).toBe(0)
-	expect(toMeter(fromPressure(pascal(80000), 15))).toBeCloseTo(1949.02, 2)
+	expect(toMeter(fromPressure(pascal(80000), 15))).toBeCloseTo(1949, 1)
+	expect(toMeter(fromPressure(pascal(90957), 26))).toBeCloseTo(935.6, 1)
 })

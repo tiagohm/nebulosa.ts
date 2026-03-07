@@ -1,4 +1,7 @@
-import { ESP8266, type FirmataClientHandler, FirmataClientOverTcp, LM35 } from '../src/firmata'
+// biome-ignore-all lint/correctness/noConstantCondition: example!
+
+import { toMeter } from '../src/distance'
+import { BMP180, ESP8266, type FirmataClientHandler, FirmataClientOverTcp, LM35 } from '../src/firmata'
 
 const handler: FirmataClientHandler = {
 	ready: (client) => {
@@ -7,6 +10,9 @@ const handler: FirmataClientHandler = {
 	},
 	pinChange: (client, pin) => {
 		console.info(`pin ${pin.id} changed to ${pin.value}`)
+	},
+	textMessage: (client, message) => {
+		console.info(message)
 	},
 }
 
@@ -21,18 +27,14 @@ client.samplingInterval(100)
 client.requestDigitalReport(false)
 client.requestAnalogReport(false)
 
-client.requestAnalogPinReport(ESP8266.A0, true)
-client.requestDigitalPinReport(ESP8266.LED_BUILTIN, true)
-client.digitalWrite(ESP8266.LED_BUILTIN, true)
+if (false) {
+	const lm35 = new LM35(client, ESP8266.A0, 3.3)
+	lm35.addListener((device) => console.info('LM35: %s°C', device.temperature.toFixed(1)))
+	lm35.start()
+}
 
-await Bun.sleep(5000)
-
-client.digitalWrite(ESP8266.LED_BUILTIN, false)
-client.requestDigitalPinReport(ESP8266.LED_BUILTIN, false)
-client.requestAnalogPinReport(ESP8266.A0, false)
-
-using lm35 = new LM35(client, ESP8266.A0)
-lm35.addListener((device) => console.info('LM35: ', device.temperature))
-lm35.start()
-
-await Bun.sleep(5000)
+if (true) {
+	const bmp180 = new BMP180(client, undefined, 5000)
+	bmp180.addListener((device) => console.info('BMP180: %s°C | %s hPa | %s m', device.temperature.toFixed(1), device.pressure.toFixed(2), toMeter(device.altitude).toFixed(0)))
+	bmp180.start()
+}
