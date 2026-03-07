@@ -3,13 +3,13 @@
 
 #ifdef ESP8266
 #define ENABLE_WIFI
+#define ENABLE_MDNS
 #endif
-
-// #define HIGH_OUTPUT_ON_POWERING_UP
 
 #define ENABLE_DIGITAL
 #define ENABLE_ANALOG
 #define ENABLE_I2C
+// #define HIGH_OUTPUT_ON_POWERING_UP
 
 #ifdef ENABLE_DIGITAL
 #include <DigitalInputFirmata.h>
@@ -80,6 +80,11 @@ const int NETWORK_PORT = 27016;
 #include "utility/WiFiClientStream.h"
 #include "utility/WiFiServerStream.h"
 WiFiServerStream serverStream(NETWORK_PORT);
+
+#ifdef ENABLE_MDNS
+#include <ESP8266mDNS.h>
+#endif
+
 #endif
 
 void systemResetCallback()
@@ -129,7 +134,11 @@ void initTransport()
     }
 
     Firmata.begin(serverStream);
-    Firmata.blinkVersion(); // Because the above doesn't do it.
+    Firmata.blinkVersion();
+
+#ifdef ENABLE_MDNS
+    MDNS.begin("nebulosa"); // Start the mDNS responder for nebulosa.local
+#endif
 #else
     Firmata.begin(115200);
 #endif
@@ -206,5 +215,10 @@ void loop()
 
 #ifdef ENABLE_WIFI
     serverStream.maintain();
+
+#ifdef ENABLE_MDNS
+    MDNS.update();
+#endif
+
 #endif
 }
