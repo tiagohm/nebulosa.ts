@@ -13,7 +13,7 @@ export type TwoWireAddressMode = 7 | 10
 
 export type TwoWireOperationMode = 'write' | 'read' | 'readContinuously' | 'stop'
 
-export type HardwareListener<D extends Hardware<D>> = (device: D) => void
+export type PeripheralListener<D extends Peripheral<D>> = (device: D) => void
 
 export interface Transport {
 	readonly write: (data: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) => void
@@ -44,10 +44,10 @@ export interface Pin {
 	value: number
 }
 
-export interface Hardware<D extends Hardware<D>> extends Disposable {
+export interface Peripheral<D extends Peripheral<D>> extends Disposable {
 	readonly client: FirmataClient
-	readonly addListener: (listener: HardwareListener<D>) => void
-	readonly removeListener: (listener: HardwareListener<D>) => void
+	readonly addListener: (listener: PeripheralListener<D>) => void
+	readonly removeListener: (listener: PeripheralListener<D>) => void
 	readonly start: () => void
 	readonly stop: () => void
 }
@@ -969,12 +969,15 @@ export class ESP8266 implements Board {
 	}
 }
 
-// HARDWARE (SENSORS, BUTTONS, LEDs)
+// PERIPHERAL (SENSORS, BUTTONS, LEDs)
 
-abstract class HardwareBase<D extends Hardware<D>> {
-	protected readonly listeners = new Set<HardwareListener<D>>()
+export const DEFAULT_POLLING_INTERVAL = 5000
+
+abstract class PeripheralBase<D extends Peripheral<D>> {
+	private readonly listeners = new Set<PeripheralListener<D>>()
 
 	abstract client: FirmataClient
+
 	abstract start(): void
 	abstract stop(): void
 
@@ -982,11 +985,11 @@ abstract class HardwareBase<D extends Hardware<D>> {
 		this.stop()
 	}
 
-	addListener(listener: HardwareListener<D>) {
+	addListener(listener: PeripheralListener<D>) {
 		this.listeners.add(listener)
 	}
 
-	removeListener(listener: HardwareListener<D>) {
+	removeListener(listener: PeripheralListener<D>) {
 		this.listeners.delete(listener)
 	}
 
@@ -995,15 +998,13 @@ abstract class HardwareBase<D extends Hardware<D>> {
 	}
 }
 
-// THERMOMETER
-
-export class LM35 extends HardwareBase<LM35> implements Thermometer, FirmataClientHandler {
+export class LM35 extends PeripheralBase<LM35> implements Thermometer, FirmataClientHandler {
 	temperature = 0
 
 	constructor(
 		readonly client: FirmataClient,
 		readonly pin: number,
-		readonly aref: number = 5,
+		readonly aref: number = 5, // volts
 	) {
 		super()
 	}
@@ -1031,11 +1032,9 @@ export class LM35 extends HardwareBase<LM35> implements Thermometer, FirmataClie
 	}
 }
 
-// BAROMETER
-
 // https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf
 
-export class BMP180 extends HardwareBase<BMP180> implements Barometer, Altimeter, Thermometer, FirmataClientHandler {
+export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimeter, Thermometer, FirmataClientHandler {
 	pressure = 0
 	altitude = 0
 	temperature = 0
@@ -1074,45 +1073,45 @@ export class BMP180 extends HardwareBase<BMP180> implements Barometer, Altimeter
 	constructor(
 		readonly client: FirmataClient,
 		readonly mode: BMP180Mode = 0,
-		readonly pollingInterval: number = 5000,
+		readonly pollingInterval: number = DEFAULT_POLLING_INTERVAL,
 	) {
 		super()
 	}
 
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
-		if (address === BMP180.ADDRESS) {
-			if (this.state === 1 && register === BMP180.COEFFICIENTS_REG && data.byteLength === 22) {
-				this.AC1 = data.readInt16BE(0)
-				this.AC2 = data.readInt16BE(2)
-				this.AC3 = data.readInt16BE(4)
-				this.AC4 = data.readUInt16BE(6)
-				this.AC5 = data.readUInt16BE(8)
-				this.AC6 = data.readUInt16BE(10)
-				this.B1 = data.readInt16BE(12)
-				this.B2 = data.readInt16BE(14)
-				this.MB = data.readInt16BE(16)
-				this.MC = data.readInt16BE(18)
-				this.MD = data.readInt16BE(20)
+		if (address !== BMP180.ADDRESS) return
 
-				console.info(this.AC1, this.AC2, this.AC3, this.AC4, this.AC5, this.AC6, this.B1, this.B2, this.MB, this.MC, this.MD)
+		if (this.state === 1 && register === BMP180.COEFFICIENTS_REG && data.byteLength === 22) {
+			this.AC1 = data.readInt16BE(0)
+			this.AC2 = data.readInt16BE(2)
+			this.AC3 = data.readInt16BE(4)
+			this.AC4 = data.readUInt16BE(6)
+			this.AC5 = data.readUInt16BE(8)
+			this.AC6 = data.readUInt16BE(10)
+			this.B1 = data.readInt16BE(12)
+			this.B2 = data.readInt16BE(14)
+			this.MB = data.readInt16BE(16)
+			this.MC = data.readInt16BE(18)
+			this.MD = data.readInt16BE(20)
 
-				this.timer = setInterval(this.readUncompensatedTemperature.bind(this), Math.max(1000, this.pollingInterval))
+			console.info(this.AC1, this.AC2, this.AC3, this.AC4, this.AC5, this.AC6, this.B1, this.B2, this.MB, this.MC, this.MD)
 
-				this.state = 2
-			} else if (this.state === 2 && register === BMP180.TEMP_DATA_REG && data.byteLength === 2) {
-				const UT = data.readInt16BE(0)
-				this.temperature = this.computeTrueTemperature(UT)
-				this.state = 3
-				void this.readUncompensatedPressure()
-			} else if (this.state === 3 && register === BMP180.PRES_DATA_REG && data.byteLength === 3) {
-				const UP = ((data.readUint8(0) << 16) | data.readUint16BE(1)) >> (8 - this.mode)
-				this.pressure = pascal(this.computeTruePressure(UP))
-				this.altitude = fromPressure(this.pressure, this.temperature)
-				this.state = 2
-				this.fire()
-			} else {
-				console.warn('invalid state: ', this.state)
-			}
+			this.timer = setInterval(this.readUncompensatedTemperature.bind(this), Math.max(1000, this.pollingInterval))
+
+			this.state = 2
+		} else if (this.state === 2 && register === BMP180.TEMP_DATA_REG && data.byteLength === 2) {
+			const UT = data.readInt16BE(0)
+			this.temperature = this.computeTrueTemperature(UT)
+			this.state = 3
+			void this.readUncompensatedPressure()
+		} else if (this.state === 3 && register === BMP180.PRES_DATA_REG && data.byteLength === 3) {
+			const UP = ((data.readUint8(0) << 16) | data.readUint16BE(1)) >> (8 - this.mode)
+			this.pressure = pascal(this.computeTruePressure(UP))
+			this.altitude = fromPressure(this.pressure, this.temperature)
+			this.state = 2
+			this.fire()
+		} else {
+			console.warn('invalid state: ', this.state)
 		}
 	}
 
@@ -1164,11 +1163,79 @@ export class BMP180 extends HardwareBase<BMP180> implements Barometer, Altimeter
 		let X2 = (this.B1 * K) >> 16
 		X3 = (X1 + X2 + 2) >> 2
 		const B4 = (this.AC4 * (X3 + 32768)) >>> 15
-		const B7 = (UP - B3) * (50000 >>> this.mode)
+		const B7 = (UP - B3) * (50000 >> this.mode)
 		const P = Math.round(B7 < 0x80000000 ? (B7 * 2) / B4 : (B7 / B4) * 2)
 		X1 = (P >> 8) * (P >> 8)
 		X1 = (X1 * 3038) >> 16
 		X2 = (-7357 * P) >> 16
 		return P + ((X1 + X2 + 3791) >> 4)
+	}
+}
+
+// https://sensirion.com/media/documents/120BBE4C/63500094/Sensirion_Datasheet_Humidity_Sensor_SHT21.pdf
+
+export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermometer, FirmataClientHandler {
+	humidity = 0
+	temperature = 0
+
+	static readonly ADDRESS = 0x40
+
+	private static readonly READ_TEMP_HOLD_CMD = 0xe3
+	private static readonly READ_HUM_HOLD_CMD = 0xe5
+	private static readonly SOFT_RESET_CMD = 0xfe
+
+	private timer?: NodeJS.Timeout
+	private temperatureChanged = false
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly poolingInterval: number = DEFAULT_POLLING_INTERVAL,
+	) {
+		super()
+	}
+
+	private readMeasurement() {
+		this.client.twoWireRead(SHT21.ADDRESS, SHT21.READ_TEMP_HOLD_CMD, 2)
+		this.client.twoWireRead(SHT21.ADDRESS, SHT21.READ_HUM_HOLD_CMD, 2)
+	}
+
+	start() {
+		this.client.addHandler(this)
+		this.client.twoWireConfig(0)
+		this.readMeasurement()
+		this.timer = setInterval(this.readMeasurement.bind(this), Math.max(1000, this.poolingInterval))
+	}
+
+	stop() {
+		this.client.removeHandler(this)
+		clearInterval(this.timer)
+		this.timer = undefined
+	}
+
+	reset() {
+		this.client.twoWireWrite(SHT21.ADDRESS, [SHT21.SOFT_RESET_CMD])
+	}
+
+	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
+		if (address !== SHT21.ADDRESS || data.byteLength < 1) return
+
+		if (register === SHT21.READ_TEMP_HOLD_CMD) {
+			const raw = data.readUInt16BE(0) & 0xfffc
+			const temperature = -46.85 + (175.72 * raw) / 65536
+
+			if (temperature !== this.temperature) {
+				this.temperature = temperature
+				this.temperatureChanged = true
+			}
+		} else if (register === SHT21.READ_HUM_HOLD_CMD) {
+			const raw = data.readUInt16BE(0) & 0xfffc
+			const humidity = -6 + (125 * raw) / 65536
+
+			if (humidity !== this.humidity || this.temperatureChanged) {
+				this.humidity = humidity
+				this.temperatureChanged = false
+				this.fire()
+			}
+		}
 	}
 }
