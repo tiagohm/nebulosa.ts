@@ -1,7 +1,7 @@
 // biome-ignore-all lint/correctness/noConstantCondition: example!
 
 import { toMeter } from '../src/distance'
-import { BMP180, ESP8266, type FirmataClientHandler, FirmataClientOverTcp, LM35, SHT21 } from '../src/firmata'
+import { BMP180, BMP180Mode, BMP280, ESP8266, type FirmataClientHandler, FirmataClientOverTcp, LM35, SHT21 } from '../src/firmata'
 
 const handler: FirmataClientHandler = {
 	ready: (client) => {
@@ -34,13 +34,19 @@ if (false) {
 }
 
 if (false) {
-	const bmp180 = new BMP180(client, undefined, 5000)
+	const bmp180 = new BMP180(client, BMP180Mode.ULTRA_LOW_POWER, 5000)
 	bmp180.addListener((device) => console.info('BMP180: %s°C | %s hPa | %s m', device.temperature.toFixed(1), device.pressure.toFixed(2), toMeter(device.altitude).toFixed(0)))
 	bmp180.start()
 }
 
-if (true) {
+if (false) {
 	const sht21 = new SHT21(client, 5000)
 	sht21.addListener((device) => console.info('SHT21: %s°C | %s %', device.temperature.toFixed(1), device.humidity.toFixed(0)))
 	sht21.start()
+}
+
+if (true) {
+	const bmp280 = new BMP280(client, BMP280.ADDRESS, 5000, { standbyDuration: 4000 })
+	bmp280.addListener((device) => console.info('BMP280: %s°C | %s hPa | %s m', device.temperature.toFixed(1), device.pressure.toFixed(2), toMeter(device.altitude).toFixed(0)))
+	bmp280.start()
 }

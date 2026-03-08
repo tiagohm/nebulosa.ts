@@ -120,6 +120,30 @@ export enum BMP180Mode {
 	ULTRA_HIGH_RESOLUTION, // 26 ms
 }
 
+export type BMP280OperatingMode = 'sleep' | 'forced' | 'normal'
+
+export type BMP280Sampling = 'skip' | 'x1' | 'x2' | 'x4' | 'x8' | 'x16'
+
+export type BMP280Filter = 'off' | 'x2' | 'x4' | 'x8' | 'x16'
+
+export type BMP280StandbyDuration = 0.5 | 62.5 | 125 | 250 | 500 | 1000 | 2000 | 4000 // ms
+
+export interface BMP280Options {
+	readonly mode?: BMP280OperatingMode
+	readonly temperatureSampling?: BMP280Sampling // Reduces noise and increases the output resolution by one bit
+	readonly pressureSampling?: BMP280Sampling // Reduces noise and increases the output resolution by one bit
+	readonly filter?: BMP280Filter // Supress environment disturbances in the output data
+	readonly standbyDuration?: BMP280StandbyDuration // Standby period between two measurement cycles in normal mode
+}
+
+export const DEFAULT_BMP280_OPTIONS: Required<BMP280Options> = {
+	mode: 'normal',
+	temperatureSampling: 'x1',
+	pressureSampling: 'x1',
+	filter: 'off',
+	standbyDuration: 1000,
+}
+
 // PROTOCOL
 
 function resolvePinMode(mode: number) {
@@ -1050,13 +1074,11 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 	private B1 = 6190
 	private B2 = 4
 
-	private MB = -32768
+	// private MB = -32768
 	private MC = -8711
 	private MD = 2868
 
 	private B5 = 0
-
-	private state = 0 // 0 = unitialized, 1 = calibrating, 2 = temperature, 3 = pressure
 
 	static readonly ADDRESS = 0x77
 
@@ -1069,6 +1091,8 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 	private static readonly READ_PRES_CMD = 0x34
 
 	private timer?: NodeJS.Timeout
+	private initialized = false
+	private command = BMP180.READ_TEMP_CMD
 
 	constructor(
 		readonly client: FirmataClient,
@@ -1081,7 +1105,9 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
 		if (address !== BMP180.ADDRESS) return
 
-		if (this.state === 1 && register === BMP180.COEFFICIENTS_REG && data.byteLength === 22) {
+		if (!this.initialized) {
+			if (register !== BMP180.COEFFICIENTS_REG || data.byteLength !== 22) return
+
 			this.AC1 = data.readInt16BE(0)
 			this.AC2 = data.readInt16BE(2)
 			this.AC3 = data.readInt16BE(4)
@@ -1090,34 +1116,39 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 			this.AC6 = data.readUInt16BE(10)
 			this.B1 = data.readInt16BE(12)
 			this.B2 = data.readInt16BE(14)
-			this.MB = data.readInt16BE(16)
+			// this.MB = data.readInt16BE(16)
 			this.MC = data.readInt16BE(18)
 			this.MD = data.readInt16BE(20)
 
-			console.info(this.AC1, this.AC2, this.AC3, this.AC4, this.AC5, this.AC6, this.B1, this.B2, this.MB, this.MC, this.MD)
-
+			void this.readUncompensatedTemperature()
 			this.timer = setInterval(this.readUncompensatedTemperature.bind(this), Math.max(1000, this.pollingInterval))
 
-			this.state = 2
-		} else if (this.state === 2 && register === BMP180.TEMP_DATA_REG && data.byteLength === 2) {
+			this.initialized = true
+
+			return
+		}
+
+		if (this.command === BMP180.READ_TEMP_CMD) {
+			if (register !== BMP180.TEMP_DATA_REG || data.byteLength !== 2) return
+
 			const UT = data.readInt16BE(0)
-			this.temperature = this.computeTrueTemperature(UT)
-			this.state = 3
+			this.temperature = this.calculateTrueTemperature(UT)
+			this.command = BMP180.READ_PRES_CMD
 			void this.readUncompensatedPressure()
-		} else if (this.state === 3 && register === BMP180.PRES_DATA_REG && data.byteLength === 3) {
+		} else if (this.command === BMP180.READ_PRES_CMD) {
+			if (register !== BMP180.PRES_DATA_REG || data.byteLength !== 3) return
+
 			const UP = ((data.readUint8(0) << 16) | data.readUint16BE(1)) >> (8 - this.mode)
-			this.pressure = pascal(this.computeTruePressure(UP))
+			this.pressure = pascal(this.calculateTruePressure(UP))
 			this.altitude = fromPressure(this.pressure, this.temperature)
-			this.state = 2
+			this.command = BMP180.READ_TEMP_CMD
 			this.fire()
-		} else {
-			console.warn('invalid state: ', this.state)
 		}
 	}
 
 	start() {
-		if (this.state === 0) {
-			this.state = 1
+		if (this.timer === undefined) {
+			this.command = BMP180.READ_TEMP_CMD
 			this.client.addHandler(this)
 			this.client.twoWireConfig(0)
 			this.readCalibrationData()
@@ -1125,7 +1156,6 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 	}
 
 	stop() {
-		this.state = 0
 		this.client.removeHandler(this)
 		clearInterval(this.timer)
 		this.timer = undefined
@@ -1147,14 +1177,14 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 		this.client.twoWireRead(BMP180.ADDRESS, BMP180.PRES_DATA_REG, 3)
 	}
 
-	computeTrueTemperature(UT: number) {
+	calculateTrueTemperature(UT: number) {
 		const X1 = ((UT - this.AC6) * this.AC5) >> 15
 		const X2 = Math.round((this.MC << 11) / (X1 + this.MD))
 		this.B5 = X1 + X2
 		return ((this.B5 + 8) >> 4) / 10
 	}
 
-	computeTruePressure(UP: number) {
+	calculateTruePressure(UP: number) {
 		const B6 = this.B5 - 4000
 		const K = (B6 * B6) >> 12
 		let X3 = (this.B2 * K + this.AC2 * B6) >> 11
@@ -1200,10 +1230,12 @@ export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermome
 	}
 
 	start() {
-		this.client.addHandler(this)
-		this.client.twoWireConfig(0)
-		this.readMeasurement()
-		this.timer = setInterval(this.readMeasurement.bind(this), Math.max(1000, this.poolingInterval))
+		if (this.timer === undefined) {
+			this.client.addHandler(this)
+			this.client.twoWireConfig(0)
+			this.readMeasurement()
+			this.timer = setInterval(this.readMeasurement.bind(this), Math.max(1000, this.poolingInterval))
+		}
 	}
 
 	stop() {
@@ -1237,5 +1269,156 @@ export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermome
 				this.fire()
 			}
 		}
+	}
+}
+
+// https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp280-ds001.pdf
+
+export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimeter, Thermometer, FirmataClientHandler {
+	pressure = 0
+	altitude = 0
+	temperature = 0
+
+	static readonly ADDRESS = 0x76
+	static readonly ALTERNATIVE_ADDRESS = 0x77
+
+	private static readonly CALIBRATION_REG = 0x88
+	private static readonly DATA_REG = 0xf7
+	private static readonly CTRL_MEAS_REG = 0xf4
+	private static readonly CONFIG_REG = 0xf5
+
+	// Initial values from datasheet (for test only)
+	private T1 = 27504
+	private T2 = 26435
+	private T3 = -1000
+	private P1 = 36477
+	private P2 = -10685
+	private P3 = 3024
+	private P4 = 2855
+	private P5 = 140
+	private P6 = -7
+	private P7 = 15500
+	private P8 = -14600
+	private P9 = 6000
+	private tFine = 0
+
+	private initialized = false
+	private timer?: NodeJS.Timeout
+	private readonly ctrlMeasValue: number
+	private readonly configValue: number
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly address: number = BMP280.ADDRESS,
+		readonly pollingInterval: number = DEFAULT_POLLING_INTERVAL,
+		options: BMP280Options = DEFAULT_BMP280_OPTIONS,
+	) {
+		super()
+
+		const mode = options.mode ?? 'normal'
+		const temperatureSampling = options.temperatureSampling ?? 'x1'
+		const pressureSampling = options.pressureSampling ?? 'x1'
+		const filter = options.filter ?? 'off'
+		const standbyDuration = options.standbyDuration ?? 0.5
+
+		const modeBits = mode === 'sleep' ? 0 : mode === 'forced' ? 1 : 3
+		const temperatureSamplingBits = temperatureSampling === 'skip' ? 0 : temperatureSampling === 'x1' ? 1 : temperatureSampling === 'x2' ? 2 : temperatureSampling === 'x4' ? 3 : temperatureSampling === 'x8' ? 4 : 5
+		const pressureSamplingBits = pressureSampling === 'skip' ? 0 : pressureSampling === 'x1' ? 1 : pressureSampling === 'x2' ? 2 : pressureSampling === 'x4' ? 3 : pressureSampling === 'x8' ? 4 : 5
+		const filterBits = filter === 'off' ? 0 : filter === 'x2' ? 1 : filter === 'x4' ? 2 : filter === 'x8' ? 3 : 4
+		const standbyBits = standbyDuration === 0.5 ? 0 : standbyDuration === 62.5 ? 1 : standbyDuration === 125 ? 2 : standbyDuration === 250 ? 3 : standbyDuration === 500 ? 4 : standbyDuration === 1000 ? 5 : standbyDuration === 2000 ? 6 : 7
+
+		this.ctrlMeasValue = (temperatureSamplingBits << 5) | (pressureSamplingBits << 2) | modeBits
+		this.configValue = (standbyBits << 5) | (filterBits << 2)
+	}
+
+	start() {
+		if (this.timer === undefined) {
+			this.client.addHandler(this)
+			this.client.twoWireConfig(0)
+			this.client.twoWireWrite(this.address, [BMP280.CONFIG_REG, this.configValue])
+			this.client.twoWireWrite(this.address, [BMP280.CTRL_MEAS_REG, this.ctrlMeasValue])
+			this.readCalibrationData()
+		}
+	}
+
+	stop() {
+		this.client.removeHandler(this)
+		clearInterval(this.timer)
+		this.timer = undefined
+	}
+
+	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
+		if (address !== this.address) return
+
+		if (!this.initialized) {
+			if (register !== BMP280.CALIBRATION_REG || data.byteLength !== 24) return
+
+			this.T1 = data.readUInt16LE(0)
+			this.T2 = data.readInt16LE(2)
+			this.T3 = data.readInt16LE(4)
+			this.P1 = data.readUInt16LE(6)
+			this.P2 = data.readInt16LE(8)
+			this.P3 = data.readInt16LE(10)
+			this.P4 = data.readInt16LE(12)
+			this.P5 = data.readInt16LE(14)
+			this.P6 = data.readInt16LE(16)
+			this.P7 = data.readInt16LE(18)
+			this.P8 = data.readInt16LE(20)
+			this.P9 = data.readInt16LE(22)
+			this.initialized = this.P1 !== 0
+
+			if (!this.initialized) return
+
+			this.readMeasurement()
+			this.timer = setInterval(this.readMeasurement.bind(this), Math.max(100, this.pollingInterval))
+
+			return
+		}
+
+		if (register !== BMP280.DATA_REG || data.byteLength !== 6) return
+
+		const adcP = ((data[0] << 12) | (data[1] << 4) | (data[2] >> 4)) >>> 0
+		const adcT = ((data[3] << 12) | (data[4] << 4) | (data[5] >> 4)) >>> 0
+
+		const temperature = this.compensateTemperature(adcT)
+		const pressure = pascal(this.compensatePressure(adcP))
+		const altitude = fromPressure(pressure, temperature)
+
+		if (temperature !== this.temperature || pressure !== this.pressure || altitude !== this.altitude) {
+			this.temperature = temperature
+			this.pressure = pressure
+			this.altitude = altitude
+			this.fire()
+		}
+	}
+
+	private readCalibrationData() {
+		this.client.twoWireRead(this.address, BMP280.CALIBRATION_REG, 24)
+	}
+
+	private readMeasurement() {
+		this.client.twoWireRead(this.address, BMP280.DATA_REG, 6)
+	}
+
+	compensateTemperature(adcT: number) {
+		const var1 = (adcT / 16384 - this.T1 / 1024) * this.T2
+		const var2 = (adcT / 131072 - this.T1 / 8192) * (adcT / 131072 - this.T1 / 8192) * this.T3
+		this.tFine = var1 + var2
+		return this.tFine / 5120
+	}
+
+	compensatePressure(adcP: number) {
+		let var1 = this.tFine / 2 - 64000
+		let var2 = (var1 * var1 * this.P6) / 32768
+		var2 += var1 * this.P5 * 2
+		var2 = var2 / 4 + this.P4 * 65536
+		var1 = ((this.P3 * var1 * var1) / 524288 + this.P2 * var1) / 524288
+		var1 = (1 + var1 / 32768) * this.P1
+		if (var1 === 0) return this.pressure
+		let p = 1048576 - adcP
+		p = ((p - var2 / 4096) * 6250) / var1
+		var1 = (this.P9 * p * p) / 2147483648
+		var2 = (p * this.P8) / 32768
+		return p + (var1 + var2 + this.P7) / 16
 	}
 }

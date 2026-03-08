@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { type AnalogMapping, BMP180, ESP8266, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
+import { type AnalogMapping, BMP180, BMP280, ESP8266, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
 
 const esp8266 = new ESP8266()
 
@@ -115,8 +115,17 @@ describe('process', () => {
 describe('bmp180', () => {
 	const bmp180 = new BMP180(undefined as never, 0)
 
-	test('compute true temperature & pressure', () => {
-		expect(bmp180.computeTrueTemperature(27898)).toBe(15)
-		expect(bmp180.computeTruePressure(23843)).toBe(69964)
+	test('calculate true temperature & pressure', () => {
+		expect(bmp180.calculateTrueTemperature(27898)).toBe(15)
+		expect(bmp180.calculateTruePressure(23843)).toBe(69964)
+	})
+})
+
+describe('bmp280', () => {
+	const bmp280 = new BMP280(undefined as never, 0)
+
+	test('compensate temperature & pressure', () => {
+		expect(bmp280.compensateTemperature(519888)).toBeCloseTo(25.08, 2)
+		expect(bmp280.compensatePressure(415148)).toBeCloseTo(100653.27, 2)
 	})
 })
