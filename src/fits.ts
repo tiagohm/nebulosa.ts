@@ -1,4 +1,5 @@
 import { type Angle, deg, parseAngle } from './angle'
+import { compressRice, decompressRice } from './compression'
 import { type FitsKeyword, KEYWORDS } from './fits.headers'
 import type { CfaPattern, Image, ImageRawType } from './image.types'
 import { readUntil, type Seekable, type Sink, type Source } from './io'
@@ -47,6 +48,8 @@ export const FITS_IMAGE_MIME_TYPE = 'image/fits'
 export const FITS_APPLICATION_MIME_TYPE = 'application/fits'
 
 export const MAGIC_BYTES = 'SIMPLE'
+
+const RICE_1_COMPRESSION_TYPE = 'RICE_1'
 
 export function isFits(input: ArrayBufferLike | Buffer) {
 	if (input.byteLength < 6) return false
@@ -171,9 +174,63 @@ export function bitpixInBytes(bitpix: BitpixOrZero) {
 	return Math.abs(bitpix) >>> 3
 }
 
+// https://fits.gsfc.nasa.gov/registry/tilecompression/tilecompression2.2.pdf
+
+export type FitsCompressionType = 'GZIP_1' | 'RICE_1' | 'PLIO_1' | 'HCOMPRESS_1'
+
+export function compressionTypeKeyword(header: FitsHeader): FitsCompressionType | undefined {
+	return (textKeyword(header, 'ZCMPTYPE', '').trim().toUpperCase() as FitsCompressionType) || undefined
+}
+
+// The value of the NAXIS1 keywords in the uncompressed FITS image
+export function uncompressedWidthKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
+	return numericKeyword<T | undefined>(header, 'ZNAXIS1', undefined) ?? widthKeyword<T>(header, defaultValue)
+}
+
+// The value of the NAXIS2 keywords in the uncompressed FITS image
+export function uncompressedHeightKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
+	return numericKeyword<T | undefined>(header, 'ZNAXIS2', undefined) ?? heightKeyword<T>(header, defaultValue)
+}
+
+// The value of the NAXIS3 keywords in the uncompressed FITS image
+export function uncompressedNumberOfChannelsKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
+	return numericKeyword<T | undefined>(header, 'ZNAXIS3', undefined) ?? numberOfChannelsKeyword<T>(header, defaultValue)
+}
+
+// The value of the BITPIX keyword in the uncompressed FITS image
+export function uncompressedBitpixKeyword<T extends BitpixOrZero | undefined = BitpixOrZero>(header: FitsHeader, defaultValue: NoInfer<T>) {
+	return (numericKeyword<T | undefined>(header, 'ZBITPIX', undefined) ?? bitpixKeyword(header, defaultValue)) as T
+}
+
+export function isCompressedImageHeader(header: FitsHeader) {
+	return booleanKeyword(header, 'ZIMAGE', false)
+}
+
+export function isRiceCompressedImageHeader(header: FitsHeader) {
+	return isCompressedImageHeader(header) && compressionTypeKeyword(header) === RICE_1_COMPRESSION_TYPE
+}
+
+export interface FitsCompressionOptions {
+	readonly type?: FitsCompressionType | false
+	readonly tileHeight?: number
+	readonly blockSize?: number
+}
+
 const NO_VALUE_KEYWORDS = ['COMMENT', 'HISTORY', 'END']
 
-// TODO: Compression
+function computeHduDataSize(header: FitsHeader) {
+	const extension = textKeyword(header, 'XTENSION', '').trim().toUpperCase()
+
+	if (extension === 'BINTABLE' || extension === 'TABLE') {
+		const rowSize = widthKeyword(header, 0)
+		const rows = heightKeyword(header, 0)
+		const pcount = numericKeyword(header, 'PCOUNT', 0)
+		return rowSize * rows + pcount
+	}
+
+	return widthKeyword(header, 0) * heightKeyword(header, 0) * numberOfChannelsKeyword(header, 1) * bitpixInBytes(bitpixKeyword(header, 0))
+}
+
 export async function readFits(source: Source & Seekable): Promise<Fits | undefined> {
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE)
 	const reader = new FitsKeywordReader()
@@ -211,7 +268,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 				const { header, data } = hdu
 
 				const offset = source.position + computeRemainingBytes(source.position)
-				const size = widthKeyword(header, 0) * heightKeyword(header, 0) * numberOfChannelsKeyword(header, 1) * bitpixInBytes(bitpixKeyword(header, 0))
+				const size = computeHduDataSize(header)
 				source.seek(offset + size + computeRemainingBytes(size))
 				Object.assign(data, { size, offset })
 			}
@@ -231,8 +288,157 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 	return { hdus }
 }
 
-// TODO: Compression
-export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly Readonly<Pick<Image, 'header' | 'raw'>>[]) {
+const RICE_DEFAULT_BLOCK_SIZE = 32
+
+const COMPRESSION_PRIMARY_HEADER: readonly FitsHeaderCard[] = [
+	['SIMPLE', true],
+	['BITPIX', 8],
+	['NAXIS', 0],
+	['EXTEND', true],
+]
+
+const COMPRESSION_EXTENSION_EXCLUDED_KEYS = new Set([
+	'SIMPLE',
+	'XTENSION',
+	'BITPIX',
+	'NAXIS',
+	'NAXIS1',
+	'NAXIS2',
+	'NAXIS3',
+	'PCOUNT',
+	'GCOUNT',
+	'TFIELDS',
+	'TTYPE1',
+	'TFORM1',
+	'THEAP',
+	'ZIMAGE',
+	'ZCMPTYPE',
+	'ZBITPIX',
+	'ZNAXIS',
+	'ZNAXIS1',
+	'ZNAXIS2',
+	'ZNAXIS3',
+	'ZTILE1',
+	'ZTILE2',
+	'ZTILE3',
+	'ZNAME1',
+	'ZNAME2',
+	'ZVAL1',
+	'ZVAL2',
+	'END',
+])
+
+function shouldUseRiceCompression(header: FitsHeader, compression: FitsCompressionOptions['type']) {
+	if (compression === false) return false
+	if (compression === RICE_1_COMPRESSION_TYPE) return true
+	return isRiceCompressedImageHeader(header) || compressionTypeKeyword(header) === RICE_1_COMPRESSION_TYPE
+}
+
+function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, bitpix: BitpixOrZero, width: number, height: number, channels: number) {
+	const numberOfPixels = width * height
+	const zero = bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0
+	const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
+
+	for (let c = 0, p = 0; c < channels; c++) {
+		for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
+			output[p++] = input[m] * factor - zero
+		}
+	}
+}
+
+function buildRiceCompressedImage(header: FitsHeader, raw: ImageRawType, options: FitsCompressionOptions) {
+	const bitpix = bitpixKeyword(header, 0)
+	const width = widthKeyword(header, 0)
+	const height = heightKeyword(header, 0)
+	const channels = numberOfChannelsKeyword(header, 1)
+	const numberOfPixels = width * height
+
+	if (width < 1 || height < 1 || channels < 1) throw new Error('invalid image dimensions')
+
+	const tileHeight = Math.min(height, options.tileHeight || 1)
+	const blockSize = options.blockSize || RICE_DEFAULT_BLOCK_SIZE
+
+	const ImageType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
+	const imageData = new ImageType(numberOfPixels * channels)
+	writeInterleavedToPlanar(raw, imageData, bitpix, width, height, channels)
+
+	const rowSize = 8
+	const tilesPerChannel = Math.ceil(height / tileHeight)
+	const rowCount = tilesPerChannel * channels
+	const rows = Buffer.allocUnsafe(rowCount * rowSize)
+	const chunks: Uint8Array[] = []
+	let heapSize = 0
+	let row = 0
+
+	for (let c = 0; c < channels; c++) {
+		const channelOffset = c * numberOfPixels
+
+		for (let y = 0; y < height; y += tileHeight) {
+			const thisTileHeight = Math.min(tileHeight, height - y)
+			const start = channelOffset + y * width
+			const tilePixels = thisTileHeight * width
+			const tile = imageData.subarray(start, start + tilePixels)
+			const compressed = compressRice(tile, blockSize)
+
+			rows.writeUInt32BE(compressed.length, row * rowSize)
+			rows.writeUInt32BE(heapSize, row * rowSize + 4)
+
+			chunks.push(compressed)
+			heapSize += compressed.length
+			row++
+		}
+	}
+
+	const payload = Buffer.allocUnsafe(rows.length + heapSize)
+	rows.copy(payload, 0)
+
+	let offset = rows.length
+
+	for (const chunk of chunks) {
+		payload.set(chunk, offset)
+		offset += chunk.length
+	}
+
+	const cards: FitsHeaderCard[] = [
+		['XTENSION', 'BINTABLE'],
+		['BITPIX', 8],
+		['NAXIS', 2],
+		['NAXIS1', rowSize],
+		['NAXIS2', rowCount],
+		['PCOUNT', heapSize],
+		['GCOUNT', 1],
+		['TFIELDS', 1],
+		['TTYPE1', 'COMPRESSED_DATA'],
+		['TFORM1', '1PB'],
+		['THEAP', rows.length],
+		['ZIMAGE', true],
+		['ZCMPTYPE', RICE_1_COMPRESSION_TYPE],
+		['ZBITPIX', bitpix],
+		['ZNAXIS', channels > 1 ? 3 : 2],
+		['ZNAXIS1', width],
+		['ZNAXIS2', height],
+		['ZTILE1', width],
+		['ZTILE2', tileHeight],
+		['ZNAME1', 'BLOCKSIZE'],
+		['ZVAL1', blockSize],
+		['ZNAME2', 'BYTEPIX'],
+		['ZVAL2', bitpixInBytes(bitpix)],
+	]
+
+	if (channels > 1) {
+		cards.push(['ZNAXIS3', channels], ['ZTILE3', 1])
+	}
+
+	for (const key in header) {
+		if (COMPRESSION_EXTENSION_EXCLUDED_KEYS.has(key)) continue
+		const value = header[key]
+		if (value !== undefined) cards.push([key, value])
+	}
+
+	return { cards, payload }
+}
+
+export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly Readonly<Pick<Image, 'header' | 'raw'>>[], options: FitsCompressionOptions = {}) {
 	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE * 4)
 	const headerWriter = new FitsKeywordWriter()
 
@@ -242,17 +448,38 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 		return remaining
 	}
 
-	for (const hdu of hdus) {
-		const { header, raw } = hdu
-
+	async function writeHeader(header: Readonly<FitsHeader> | readonly Readonly<FitsHeaderCard>[]) {
 		let offset = headerWriter.writeAll(header, buffer)
 		offset += headerWriter.writeEnd(buffer, offset)
 		offset += fillWithRemainingBytes(offset, offset)
 		await sink.write(buffer, 0, offset)
+	}
 
+	let hasPrimaryHdu = false
+
+	for (const hdu of hdus) {
+		const { header, raw } = hdu
+
+		if (shouldUseRiceCompression(header, options.type)) {
+			if (!hasPrimaryHdu) {
+				await writeHeader(COMPRESSION_PRIMARY_HEADER)
+				hasPrimaryHdu = true
+			}
+
+			const { cards, payload } = buildRiceCompressedImage(header, raw, options)
+			await writeHeader(cards)
+			await sink.write(payload)
+
+			const pad = fillWithRemainingBytes(payload.length, 0)
+			if (pad > 0) await sink.write(buffer, 0, pad)
+			continue
+		}
+
+		await writeHeader(header)
 		const imageWriter = new FitsImageWriter(header)
-		offset = fillWithRemainingBytes(await imageWriter.write(raw, sink), 0)
+		const offset = fillWithRemainingBytes(await imageWriter.write(raw, sink), 0)
 		if (offset > 0) await sink.write(buffer, 0, offset)
+		hasPrimaryHdu = true
 	}
 }
 
@@ -738,7 +965,35 @@ export function fitsHeaderValueToText(value: FitsHeaderValue) {
 	return `'${escapeQuotedText(value ?? '')}'`
 }
 
+function riceBlockSizeFromHeader(header: FitsHeader) {
+	for (let i = 1; i <= 16; i++) {
+		const name = textKeyword(header, `ZNAME${i}`, '').trim().toUpperCase()
+
+		if (name === 'BLOCKSIZE') {
+			const value = numericKeyword(header, `ZVAL${i}`, RICE_DEFAULT_BLOCK_SIZE)
+			if (Number.isFinite(value) && value > 0) return Math.trunc(value)
+		}
+	}
+
+	const fallback = numericKeyword(header, 'BLOCKSIZE', RICE_DEFAULT_BLOCK_SIZE)
+	return Number.isFinite(fallback) && fallback > 0 ? Math.trunc(fallback) : RICE_DEFAULT_BLOCK_SIZE
+}
+
+function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, header: FitsHeader, bitpix: BitpixOrZero, width: number, height: number, channels: number) {
+	const numberOfPixels = width * height
+	const scale = (header.BSCALE as number) || 1
+	const zero = (header.BZERO as number) || 0
+	const factor = bitpix > 0 ? scale / (2 ** bitpix - 1) : 1 // Transform n-bit integer to float [0..1]
+
+	for (let i = 0, p = 0; i < numberOfPixels; i++) {
+		for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
+			output[p++] = (data[m] + zero) * factor
+		}
+	}
+}
+
 export class FitsImageReader {
+	private readonly compressed: boolean
 	private readonly buffer: Buffer
 	private readonly data: NumberArray
 
@@ -746,13 +1001,22 @@ export class FitsImageReader {
 		private readonly hdu: FitsHdu,
 		buffer?: Buffer,
 	) {
-		const bitpix = bitpixKeyword(hdu.header, 0)
-		this.buffer = buffer?.subarray(0, hdu.data.size) ?? Buffer.allocUnsafe(hdu.data.size)
-		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Int16Array(this.buffer.buffer) : bitpix === 32 ? new Int32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
+		this.compressed = isRiceCompressedImageHeader(hdu.header)
+
+		if (this.compressed) {
+			this.buffer = Buffer.alloc(0)
+			this.data = new Uint8Array(0)
+		} else {
+			const bitpix = bitpixKeyword(hdu.header, 0)
+			this.buffer = buffer?.subarray(0, hdu.data.size) ?? Buffer.allocUnsafe(hdu.data.size)
+			this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Int16Array(this.buffer.buffer) : bitpix === 32 ? new Int32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
+		}
 	}
 
 	// Reads FITS-format image from source into RGB-interleaved array
 	async read(source: Source & Seekable, output: ImageRawType) {
+		if (this.compressed) return await this.readRiceCompressed(source, output)
+
 		source.seek(this.hdu.data.offset)
 
 		if ((await readUntil(source, this.buffer, this.hdu.data.size, 0)) !== this.hdu.data.size) return false
@@ -769,17 +1033,89 @@ export class FitsImageReader {
 		const width = widthKeyword(header, 0)
 		const height = heightKeyword(header, 0)
 		const channels = numberOfChannelsKeyword(header, 1)
-		const numberOfPixels = width * height
-		const scale = (header.BSCALE as number) || 1
-		const zero = (header.BZERO as number) || 0
-		const factor = bitpix > 0 ? scale / (2 ** bitpix - 1) : 1 // Transform n-bit integer to float [0..1]
-		const data = this.data
+		writePlanarToInterleaved(this.data, output, header, bitpix, width, height, channels)
 
-		for (let i = 0, p = 0; i < numberOfPixels; i++) {
-			for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
-				output[p++] = (data[m] + zero) * factor
+		return true
+	}
+
+	private async readRiceCompressed(source: Source & Seekable, output: ImageRawType) {
+		const { header } = this.hdu
+		const bitpix = uncompressedBitpixKeyword(header, 0)
+		const width = uncompressedWidthKeyword(header, 0)
+		const height = uncompressedHeightKeyword(header, 0)
+		const channels = uncompressedNumberOfChannelsKeyword(header, 1)
+
+		if (bitpix !== 8 && bitpix !== 16 && bitpix !== 32) {
+			throw new Error('RICE 1 supports only BITPIX = 8, 16 or 32')
+		}
+
+		const compressed = Buffer.allocUnsafe(this.hdu.data.size)
+		source.seek(this.hdu.data.offset)
+
+		if ((await readUntil(source, compressed, compressed.length, 0)) !== compressed.length) return false
+
+		const rowSize = widthKeyword(header, 0)
+		const rowCount = heightKeyword(header, 0)
+		const heapOffset = numericKeyword(header, 'THEAP', rowSize * rowCount)
+		const tileWidth = numericKeyword(header, 'ZTILE1', width)
+		const tileHeight = numericKeyword(header, 'ZTILE2', height)
+		const tileDepth = numericKeyword(header, 'ZTILE3', 1)
+		const blockSize = riceBlockSizeFromHeader(header)
+
+		const tilesX = Math.ceil(width / tileWidth)
+		const tilesY = Math.ceil(height / tileHeight)
+		const tilesZ = Math.ceil(channels / tileDepth)
+		const totalTiles = tilesX * tilesY * tilesZ
+
+		if (rowCount < totalTiles) throw new Error('compressed FITS image has incomplete tile table')
+
+		const numberOfPixels = width * height
+		const ImageType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
+		const data = new ImageType(numberOfPixels * channels)
+		const tileBuffer = new ImageType(tileWidth * tileHeight * tileDepth)
+
+		for (let tileIndex = 0; tileIndex < totalTiles; tileIndex++) {
+			const descriptorOffset = tileIndex * rowSize
+			if (descriptorOffset + 8 > compressed.length) throw new Error('compressed FITS image has truncated tile descriptors')
+
+			const byteCount = compressed.readUInt32BE(descriptorOffset)
+			const heapRelativeOffset = compressed.readUInt32BE(descriptorOffset + 4)
+			const start = heapOffset + heapRelativeOffset
+			const end = start + byteCount
+
+			if (start < 0 || end > compressed.length) throw new Error('compressed FITS image has invalid heap offsets')
+
+			const tilePlaneIndex = tilesX * tilesY
+			const tz = Math.trunc(tileIndex / tilePlaneIndex)
+			const rem = tileIndex - tz * tilePlaneIndex
+			const ty = Math.trunc(rem / tilesX)
+			const tx = rem - ty * tilesX
+
+			const x0 = tx * tileWidth
+			const y0 = ty * tileHeight
+			const z0 = tz * tileDepth
+			const thisTileWidth = Math.min(tileWidth, width - x0)
+			const thisTileHeight = Math.min(tileHeight, height - y0)
+			const thisTileDepth = Math.min(tileDepth, channels - z0)
+			const thisTilePixels = thisTileWidth * thisTileHeight * thisTileDepth
+			const tile = tileBuffer.subarray(0, thisTilePixels)
+
+			decompressRice(compressed.subarray(start, end), tile, blockSize)
+
+			for (let z = 0; z < thisTileDepth; z++) {
+				const channel = z0 + z
+				const channelOffset = channel * numberOfPixels
+				const tileOffset = z * thisTileWidth * thisTileHeight
+
+				for (let y = 0; y < thisTileHeight; y++) {
+					const sourceOffset = tileOffset + y * thisTileWidth
+					const targetOffset = channelOffset + (y0 + y) * width + x0
+					data.set(tile.subarray(sourceOffset, sourceOffset + thisTileWidth), targetOffset)
+				}
 			}
 		}
+
+		writePlanarToInterleaved(data, output, header, bitpix, width, height, channels)
 
 		return true
 	}
@@ -808,16 +1144,8 @@ export class FitsImageWriter {
 		const width = widthKeyword(this.header, 0)
 		const height = heightKeyword(this.header, 0)
 		const channels = numberOfChannelsKeyword(this.header, 1)
-		const numberOfPixels = width * height
-		const zero = bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0
-		const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
-		const data = this.data
 
-		for (let c = 0, p = 0; c < channels; c++) {
-			for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
-				data[p++] = input[m] * factor - zero
-			}
-		}
+		writeInterleavedToPlanar(input, this.data, bitpix, width, height, channels)
 
 		// little-endian to big-endian
 		if (pixelInBytes === 2) this.buffer.swap16()

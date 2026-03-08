@@ -4,7 +4,7 @@ import { dms, hms } from '../src/angle'
 import { declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, heightKeyword, isFits, observationDateKeyword, readFits, rightAscensionKeyword, widthKeyword, writeFits } from '../src/fits'
 import { KEYWORDS } from '../src/fits.headers'
 import { readImageFromBuffer, readImageFromFits, readImageFromPath } from '../src/image'
-import { bufferSink, fileHandleSource } from '../src/io'
+import { bufferSink, bufferSource, fileHandleSource } from '../src/io'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from './image.util'
 
 test('is fits', async () => {
@@ -114,6 +114,27 @@ test('write', async () => {
 			await saveImageAndCompareHash(output, `write-fits-${bitpix}-${channel}`, channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4')
 		}
 	}
+}, 10000)
+
+test('write/read RICE compressed', async () => {
+	const buffer = Buffer.alloc(1024 * 1024 * 18, 20)
+	const image = (await readImageFromPath('data/NGC3372-16.1.fit'))!
+
+	const sink = bufferSink(buffer)
+	await writeFits(sink, [image], { type: 'RICE_1', tileHeight: 16, blockSize: 32 })
+
+	const fits = await readFits(bufferSource(buffer))
+	expect(fits).toBeDefined()
+	expect(fits!.hdus.length).toBe(2)
+
+	const output = (await readImageFromBuffer(buffer))!
+
+	expect(output.metadata.width).toBe(image.metadata.width)
+	expect(output.metadata.height).toBe(image.metadata.height)
+	expect(output.metadata.channels).toBe(image.metadata.channels)
+	expect(output.metadata.bitpix).toBe(image.metadata.bitpix)
+
+	await saveImageAndCompareHash(output, 'write-fits-rice-16-1', 'c754bf834dc1bb3948ec3cf8b9aca303')
 }, 10000)
 
 test('read keyword', () => {

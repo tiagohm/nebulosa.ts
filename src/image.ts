@@ -1,20 +1,28 @@
 import type { PathLike } from 'fs'
 import fs, { type FileHandle } from 'fs/promises'
-import { type Bitpix, bitpixInBytes, bitpixKeyword, cfaPatternKeyword, type Fits, type FitsHdu, FitsImageReader, heightKeyword, numberOfChannelsKeyword, readFits, widthKeyword, writeFits } from './fits'
+import { type Bitpix, bitpixInBytes, cfaPatternKeyword, type Fits, type FitsHdu, FitsImageReader, heightKeyword, isRiceCompressedImageHeader, readFits, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedWidthKeyword, widthKeyword, writeFits } from './fits'
 import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageRawType, type WriteImageToFormatOptions } from './image.types'
 import { bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from './io'
 import { Jpeg } from './jpeg'
 import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader } from './xisf'
 
+function findCompressedImageHdu(hdu: FitsHdu) {
+	return isRiceCompressedImageHeader(hdu.header)
+}
+
+function findUncompressedImageHdu(hdu: FitsHdu) {
+	return widthKeyword(hdu.header, 0) > 0 && heightKeyword(hdu.header, 0) > 0
+}
+
 // Reads an image from a FITS file
 export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
-	const hdu = 'hdus' in fits ? fits.hdus[0] : fits
+	const hdu = 'hdus' in fits ? (fits.hdus.find(findCompressedImageHdu) ?? fits.hdus.find(findUncompressedImageHdu) ?? fits.hdus[0]) : fits
 	const { header } = hdu
 
-	const bitpix = bitpixKeyword(header, 8) as Bitpix
-	const width = widthKeyword(header, 0)
-	const height = heightKeyword(header, 0)
-	const channels = numberOfChannelsKeyword(header, 1)
+	const bitpix = uncompressedBitpixKeyword(header, 8) as Bitpix
+	const width = uncompressedWidthKeyword(header, 0)
+	const height = uncompressedHeightKeyword(header, 0)
+	const channels = uncompressedNumberOfChannelsKeyword(header, 1)
 
 	const pixelSizeInBytes = bitpixInBytes(bitpix)
 	const pixelCount = width * height
