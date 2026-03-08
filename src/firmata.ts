@@ -27,6 +27,8 @@ export type BMP280Filter = 'off' | 'x2' | 'x4' | 'x8' | 'x16'
 
 export type BMP280StandbyDuration = 0.5 | 62.5 | 125 | 250 | 500 | 1000 | 2000 | 4000 // ms
 
+export type DS18B20Resolution = 9 | 10 | 11 | 12
+
 export interface OneWireCommandOptions {
 	readonly reset?: boolean
 	readonly skip?: boolean
@@ -123,6 +125,13 @@ export interface BMP280Options {
 	readonly standbyDuration?: BMP280StandbyDuration // Standby period between two measurement cycles in normal mode
 }
 
+export interface DS18B20Options {
+	readonly address?: Readonly<NumberArray> | Buffer
+	readonly skip?: boolean
+	readonly resolution?: DS18B20Resolution
+	readonly powerMode?: OneWirePowerMode
+}
+
 export enum PinMode {
 	INPUT,
 	OUTPUT,
@@ -163,6 +172,12 @@ export const DEFAULT_BMP280_OPTIONS: Required<BMP280Options> = {
 export const DEFAULT_ONE_WIRE_COMMAND_OPTIONS: OneWireCommandOptions = {
 	reset: false,
 	skip: false,
+}
+
+export const DEFAULT_DS18B20_OPTIONS: DS18B20Options = {
+	resolution: 12,
+	powerMode: 'normal',
+	skip: false, // true for skip search ROM address when address is not provided
 }
 
 // PROTOCOL
@@ -1211,7 +1226,7 @@ export const DEFAULT_POLLING_INTERVAL = 5000
 abstract class PeripheralBase<D extends Peripheral<D>> {
 	private readonly listeners = new Set<PeripheralListener<D>>()
 
-	abstract client: FirmataClient
+	abstract readonly client: FirmataClient
 
 	abstract start(): void
 	abstract stop(): void
@@ -1672,14 +1687,14 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 		this.client.removeHandler(this)
 		clearInterval(this.timer)
 		this.timer = undefined
+		this.reading = false
 	}
 
 	private async readMeasurement() {
 		if (this.reading) return
 
-		this.reading = true
-
 		try {
+			this.reading = true
 			this.client.twoWireWrite(AM2320.ADDRESS)
 			await Bun.sleep(AM2320.WAKE_UP_DELAY_MS)
 			this.client.twoWireWrite(AM2320.ADDRESS, [AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.START_REGISTER, AM2320.REGISTER_COUNT])
@@ -1703,5 +1718,155 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 			this.temperature = temperature
 			this.fire()
 		}
+	}
+}
+
+// https://www.analog.com/media/en/technical-documentation/data-sheets/ds18b20.pdf
+
+export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer, FirmataClientHandler {
+	temperature = 0
+
+	private static readonly CONVERT_T_CMD = [0x44]
+	private static readonly READ_SCRATCHPAD_CMD = [0xbe]
+	private static readonly WRITE_SCRATCHPAD_CMD = 0x4e
+	private static readonly FAMILY_CODE = 0x28
+	private static readonly DEFAULT_TH = 0x4b
+	private static readonly DEFAULT_TL = 0x46
+	private static readonly SCRATCHPAD_SIZE = 9
+
+	private timer?: NodeJS.Timeout
+	private reading = false
+	private pendingReadCorrelationId?: number
+	private address?: Buffer
+	private skip = false
+	private readonly powerMode: OneWirePowerMode
+	private readonly conversionDelayMs: number
+	private readonly resolutionCommand?: readonly number[]
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly pin: number,
+		readonly pollingInterval: number = DEFAULT_POLLING_INTERVAL,
+		options: DS18B20Options = DEFAULT_DS18B20_OPTIONS,
+	) {
+		super()
+
+		const { resolution = 12, address, powerMode = 'normal', skip = false } = options
+
+		if (address !== undefined) {
+			if (address.length !== 8) throw new RangeError(`One-Wire address must contain 8 bytes. Received ${address.length}`)
+			this.address = Buffer.from(address)
+		} else {
+			this.skip = skip
+		}
+
+		this.powerMode = powerMode
+		this.conversionDelayMs = resolution === 9 ? 94 : resolution === 10 ? 188 : resolution === 11 ? 375 : 750
+
+		if (resolution !== 12) {
+			const resolutionBits = resolution === 9 ? 0x1f : resolution === 10 ? 0x3f : resolution === 11 ? 0x5f : 0x7f
+			this.resolutionCommand = [DS18B20.WRITE_SCRATCHPAD_CMD, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, resolutionBits]
+		}
+	}
+
+	start() {
+		if (this.timer === undefined) {
+			this.client.addHandler(this)
+			this.client.oneWireConfig(this.pin, this.powerMode)
+
+			if (this.address === undefined) {
+				// Search ROM address
+				if (this.skip === false) {
+					this.client.oneWireSearch(this.pin)
+					return
+				}
+			}
+
+			this.startMeasurement()
+		}
+	}
+
+	stop() {
+		this.client.removeHandler(this)
+		clearInterval(this.timer)
+		this.timer = undefined
+		this.reading = false
+		this.pendingReadCorrelationId = undefined
+	}
+
+	oneWireReadReply(client: FirmataClient, pin: number, correlationId: number, data: Buffer) {
+		if (client !== this.client || pin !== this.pin || correlationId !== this.pendingReadCorrelationId) return
+
+		this.pendingReadCorrelationId = undefined
+
+		if (!DS18B20.isScratchpadValid(data)) return
+
+		const temperature = data.readInt16LE(0) * 0.0625
+
+		if (temperature !== this.temperature) {
+			this.temperature = temperature
+			this.fire()
+		}
+	}
+
+	oneWireSearchReply(client: FirmataClient, pin: number, addresses: readonly Buffer[], alarms: boolean) {
+		if (client !== this.client || pin !== this.pin || alarms || this.address !== undefined) return
+
+		const address = addresses.find((value) => value.byteLength === 8 && value[0] === DS18B20.FAMILY_CODE)
+
+		if (address === undefined) return
+
+		this.address = Buffer.from(address)
+		console.info('DS18B20 found:', this.address.toHex().toUpperCase())
+
+		this.startMeasurement()
+	}
+
+	private startMeasurement() {
+		this.configureResolution()
+		void this.readMeasurement()
+		this.timer ??= setInterval(this.readMeasurement.bind(this), Math.max(1000, this.pollingInterval))
+	}
+
+	private configureResolution() {
+		if (this.resolutionCommand !== undefined) {
+			this.client.oneWireWrite(this.pin, this.resolutionCommand, this.address)
+		}
+	}
+
+	private async readMeasurement() {
+		if (this.reading || this.pendingReadCorrelationId !== undefined) return
+		if (this.address === undefined && !this.skip) return
+
+		try {
+			this.reading = true
+			this.client.oneWireWrite(this.pin, DS18B20.CONVERT_T_CMD, this.address)
+			await Bun.sleep(this.conversionDelayMs)
+			this.pendingReadCorrelationId = this.client.oneWireWriteAndRead(this.pin, DS18B20.READ_SCRATCHPAD_CMD, DS18B20.SCRATCHPAD_SIZE, this.address)
+		} finally {
+			this.reading = false
+		}
+	}
+
+	private static isScratchpadValid(data: Buffer) {
+		if (data.byteLength < DS18B20.SCRATCHPAD_SIZE) return false
+		return DS18B20.crc8(data, 8) === data[8]
+	}
+
+	private static crc8(data: Readonly<NumberArray> | Buffer, length: number) {
+		let crc = 0
+
+		for (let i = 0; i < length; i++) {
+			let value = data[i]
+
+			for (let j = 0; j < 8; j++) {
+				const mix = (crc ^ value) & 0x01
+				crc >>= 1
+				if (mix !== 0) crc ^= 0x8c
+				value >>= 1
+			}
+		}
+
+		return crc & 0xff
 	}
 }

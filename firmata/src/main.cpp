@@ -9,6 +9,7 @@
 #define ENABLE_DIGITAL
 #define ENABLE_ANALOG
 #define ENABLE_I2C
+#define ENABLE_ONE_WIRE
 // #define HIGH_OUTPUT_ON_POWERING_UP
 
 #ifdef ENABLE_DIGITAL

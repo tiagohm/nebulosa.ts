@@ -1,7 +1,7 @@
 // biome-ignore-all lint/correctness/noConstantCondition: example!
 
 import { toMeter } from '../src/distance'
-import { AM2320, BMP180, BMP180Mode, BMP280, ESP8266, type FirmataClientHandler, FirmataClientOverTcp, LM35, SHT21 } from '../src/firmata'
+import { AM2320, BMP180, BMP180Mode, BMP280, DS18B20, ESP8266, type FirmataClientHandler, FirmataClientOverTcp, LM35, SHT21 } from '../src/firmata'
 
 const handler: FirmataClientHandler = {
 	ready: (client) => {
@@ -51,8 +51,15 @@ if (false) {
 	bmp280.start()
 }
 
-if (true) {
+if (false) {
 	const am2320 = new AM2320(client, 5000)
 	am2320.addListener((device) => console.info('AM2320: %s°C | %s %', device.temperature.toFixed(1), device.humidity.toFixed(1)))
 	am2320.start()
+}
+
+if (true) {
+	const address = undefined // Buffer.from([0x28, 0xff, 0xce, 0x82, 0xc4, 0x16, 0x04, 0xfc])
+	const ds18b20 = new DS18B20(client, ESP8266.D5, 5000, { address })
+	ds18b20.addListener((device) => console.info('DS18B20: %s°C', device.temperature.toFixed(1)))
+	ds18b20.start()
 }
