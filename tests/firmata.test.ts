@@ -154,6 +154,77 @@ describe('command encoding', () => {
 		messages.length = 0
 	})
 
+	test('request command messages', () => {
+		client.requestFirmware()
+		client.requestPinCapability()
+		client.requestPinState(12)
+		client.requestAnalogMapping()
+
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x79, 0xf7]))
+		expect(messages[1]).toEqual(Buffer.from([0xf0, 0x6b, 0xf7]))
+		expect(messages[2]).toEqual(Buffer.from([0xf0, 0x6d, 12, 0xf7]))
+		expect(messages[3]).toEqual(Buffer.from([0xf0, 0x69, 0xf7]))
+	})
+
+	test('digital and analog report commands', () => {
+		client.requestDigitalReport(true)
+		client.requestDigitalPinReport(6, false)
+		client.requestAnalogReport(false)
+		client.requestAnalogPinReport(ESP8266.A0, true)
+
+		const digitalReport = Buffer.alloc(32)
+		for (let i = 0, p = 0; i < 16; i++) {
+			digitalReport[p++] = 0xd0 | i
+			digitalReport[p++] = 1
+		}
+
+		const analogReport = Buffer.alloc(32)
+		for (let i = 0, p = 0; i < 16; i++) {
+			analogReport[p++] = 0xc0 | i
+			analogReport[p++] = 0
+		}
+
+		expect(messages[0]).toEqual(digitalReport)
+		expect(messages[1]).toEqual(Buffer.from([0xd6, 0]))
+		expect(messages[2]).toEqual(analogReport)
+		expect(messages[3]).toEqual(Buffer.from([0xc0, 1]))
+	})
+
+	test('pin mode and digital write', () => {
+		client.pinMode(2, PinMode.PULL_UP)
+		client.digitalWrite(2, false)
+		client.digitalWrite(2, 123)
+
+		expect(messages[0]).toEqual(Buffer.from([0xf4, 2, PinMode.PULL_UP]))
+		expect(messages[1]).toEqual(Buffer.from([0xf5, 2, 0]))
+		expect(messages[2]).toEqual(Buffer.from([0xf5, 2, 1]))
+	})
+
+	test('sampling interval is clamped to minimum', () => {
+		client.samplingInterval(0)
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x7a, 1, 0, 0xf7]))
+	})
+
+	test('two-wire config keeps max delay', () => {
+		client.twoWireConfig(10)
+		client.twoWireConfig(4)
+		client.twoWireConfig(130)
+
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x78, 10, 0, 0xf7]))
+		expect(messages[1]).toEqual(Buffer.from([0xf0, 0x78, 10, 0, 0xf7]))
+		expect(messages[2]).toEqual(Buffer.from([0xf0, 0x78, 2, 1, 0xf7]))
+	})
+
+	test('two-wire write/read/stop command encodings', () => {
+		client.twoWireWrite(0x123, Buffer.from([0xaa, 0xbb]))
+		client.twoWireRead(0x1aa, 0x10, 3, false, 10, 'restart')
+		client.twoWireStop(0x55)
+
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x76, 0x23, 0x42, 0x2a, 0x01, 0x3b, 0x01, 0xf7]))
+		expect(messages[1]).toEqual(Buffer.from([0xf0, 0x76, 0x2a, 0x2b, 0x10, 0, 0x03, 0, 0xf7]))
+		expect(messages[2]).toEqual(Buffer.from([0xf0, 0x76, 0x55, 0x58, 0xf7]))
+	})
+
 	test('one-wire config', () => {
 		client.oneWireConfig(5)
 		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x73, 0x41, 5, 1, 0xf7]))
@@ -180,14 +251,48 @@ describe('command encoding', () => {
 		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x73, 0x3d, 7, ...encodePacked7Bit(payload), 0xf7]))
 	})
 
+	test('one-wire write wrapper uses skip when address is omitted', () => {
+		client.oneWireWrite(9, Buffer.from([0x44, 0xbe]))
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x73, 0x23, 9, ...encodePacked7Bit(Buffer.from([0x44, 0xbe])), 0xf7]))
+	})
+
+	test('one-wire write wrapper uses select when address is provided', () => {
+		const address = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])
+		const payload = Buffer.concat([address, Buffer.from([0x44])])
+		client.oneWireWrite(9, Buffer.from([0x44]), address)
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x73, 0x25, 9, ...encodePacked7Bit(payload), 0xf7]))
+	})
+
+	test('one-wire command validates skip/address combination and address length', () => {
+		expect(() => client.oneWireCommand(1, { skip: true, address: Buffer.alloc(8) })).toThrow(RangeError)
+		expect(() => client.oneWireCommand(1, { address: Buffer.alloc(7) })).toThrow(RangeError)
+		expect(messages.length).toBe(0)
+	})
+
+	test('one-wire command clamps read length, correlation id and delay', () => {
+		const correlationId = client.oneWireCommand(2, { bytesToRead: 0x10000, correlationId: 0x1ffff, delay: 0x1_0000_0000 })
+
+		expect(correlationId).toBe(0xffff)
+		expect(messages[0].subarray(0, 4)).toEqual(Buffer.from([0xf0, 0x73, 0x18, 2]))
+		expect(decodePacked7Bit(messages[0], 4, messages[0].length - 5)).toEqual(Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]))
+	})
+
 	test('one-wire read generates auto correlation id', () => {
-		expect(client.oneWireRead(4, 2)).toBe(0)
-		expect(client.oneWireRead(4, 2)).toBe(1)
+		const first = client.oneWireRead(4, 2)
+		const second = client.oneWireRead(4, 2)
 
 		expect(messages[0].subarray(0, 4)).toEqual(Buffer.from([0xf0, 0x73, 0x0b, 4]))
 		expect(messages[1].subarray(0, 4)).toEqual(Buffer.from([0xf0, 0x73, 0x0b, 4]))
-		expect(decodePacked7Bit(messages[0], 4, messages[0].length - 5)).toEqual(Buffer.from([2, 0, 0, 0]))
-		expect(decodePacked7Bit(messages[1], 4, messages[1].length - 5)).toEqual(Buffer.from([2, 0, 1, 0]))
+		const payload0 = decodePacked7Bit(messages[0], 4, messages[0].length - 5)
+		const payload1 = decodePacked7Bit(messages[1], 4, messages[1].length - 5)
+		const firstCorrelationId = payload0[2] | (payload0[3] << 8)
+		const secondCorrelationId = payload1[2] | (payload1[3] << 8)
+
+		expect(payload0.subarray(0, 2)).toEqual(Buffer.from([2, 0]))
+		expect(payload1.subarray(0, 2)).toEqual(Buffer.from([2, 0]))
+		expect(first).toBe(firstCorrelationId)
+		expect(second).toBe(secondCorrelationId)
+		expect(secondCorrelationId).toBe((firstCorrelationId + 1) & 0xffff)
 	})
 })
 
