@@ -276,7 +276,7 @@ const ONE_WIRE_DELAY_REQUEST_BIT = 0x10
 const ONE_WIRE_WRITE_REQUEST_BIT = 0x20
 
 const MIN_SAMPLING_INTERVAL = 1
-const MAX_SAMPLING_INTERVAL = 4294967295
+const MAX_SAMPLING_INTERVAL = 16383
 
 export function decodeByteAs7Bit(input: Readonly<NumberArray> | Buffer, offset: number) {
 	return (input[offset] & 0x7f) | ((input[offset + 1] & 0x01) << 7)
@@ -936,6 +936,20 @@ export class FirmataClient implements Disposable {
 		this.send(new Uint8Array([SET_DIGITAL_PIN_VALUE, pin, value ? 1 : 0]))
 	}
 
+	analogWrite(pin: number, value: number) {
+		const data = Math.max(0, Math.min(0x0fffffff, Math.trunc(value)))
+
+		if (data < 0x80) {
+			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.board.pinToPWM(pin), data, END_SYSEX]))
+		} else if (data < 0x4000) {
+			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, END_SYSEX]))
+		} else if (data < 0x200000) {
+			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, (data >>> 14) & 0x7f, END_SYSEX]))
+		} else {
+			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, (data >>> 14) & 0x7f, (data >>> 21) & 0x7f, END_SYSEX]))
+		}
+	}
+
 	samplingInterval(milliseconds: number) {
 		const message = new Uint8Array([START_SYSEX, SAMPLING_INTERVAL, 0, 0, END_SYSEX])
 		encodeByteAs7Bit(Math.max(MIN_SAMPLING_INTERVAL, Math.min(milliseconds, MAX_SAMPLING_INTERVAL)), message, 2)
@@ -1211,7 +1225,7 @@ export class ESP8266 implements Board {
 	}
 
 	pinToPWM(pin: number) {
-		return this.pinToDigital(pin)
+		return pin
 	}
 
 	pinToServo(pin: number) {

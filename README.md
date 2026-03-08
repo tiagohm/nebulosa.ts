@@ -185,7 +185,10 @@ TODO
 ### Firmata ![](bun.webp)
 
 ```ts
-const client = new FirmataClient(transport)
+const board = new ESP8266()
+const client = new FirmataClient(transport, board)
+const client = new FirmataClientOverTcp(board)
+
 client.addHandler(handler) // Add a handler for incoming messages
 client.removeHandler(handler) // Remove a handler
 client.disconnect() // Disconnect from current connection
@@ -202,6 +205,31 @@ client.requestAnalogReport(enable)
 client.requestAnalogPinReport(pin, enable, mapper)
 client.pinMode(pin, mode)
 client.digitalWrite(pin, value)
+client.analogWrite(pin, value)
+client.samplingInterval(ms)
+client.twoWireConfig(us)
+client.twoWireReadWrite(address, operationMode, data, addressMode, autoRestart)
+client.twoWireRead(address, register, bytesToRead, continuous, addressMode, autoRestart)
+client.twoWireWrite(address, data, addressMode)
+client.twoWireStop(address, addressMode)
+client.oneWireConfig(pin, powerMode)
+client.oneWireSearch(pin, mode)
+client.oneWireCommand(pin, options)
+client.oneWireReset(pin)
+client.oneWireWrite(pin, data, address)
+client.oneWireRead(pin, bytesToRead, address, correlationId)
+client.oneWireWriteAndRead(pin, data, bytesToRead, address, correlationId)
+
+const sensor = new LM35(client, pin, aref)
+const sensor = new BMP180(client, mode, pollingInterval)
+const sensor = new SHT21(client, pollingInterval)
+const sensor = new BMP280(client, address, pollingInterval, options)
+const sensor = new AM2320(client, pollingInterval)
+const sensor = new DS18B20(client, pin, pollingInterval, options)
+
+sensor.addListener(listener)
+sensor.start()
+sensor.stop()
 ```
 
 ### Fits ![](bun.webp)

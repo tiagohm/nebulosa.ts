@@ -17,7 +17,7 @@ describe('command decoding', () => {
 		textMessage: (_, message) => result.push(message),
 		customMessage: (_, data) => result.push(data),
 		twoWireMessage: (_, address, register, data) => result.push(address, register, data),
-		oneWireSearchReply: (_, pin, addresses, alarms) => result.push(pin, alarms, addresses.map(Buffer.from)),
+		oneWireSearchReply: (_, pin, addresses, alarms) => result.push(pin, alarms, addresses),
 		oneWireReadReply: (_, pin, correlationId, data) => result.push(pin, correlationId, data),
 	}
 
@@ -198,6 +198,16 @@ describe('command encoding', () => {
 		expect(messages[0]).toEqual(Buffer.from([0xf4, 2, PinMode.PULL_UP]))
 		expect(messages[1]).toEqual(Buffer.from([0xf5, 2, 0]))
 		expect(messages[2]).toEqual(Buffer.from([0xf5, 2, 1]))
+	})
+
+	test('analog write uses extended analog encoding', () => {
+		client.analogWrite(2, 127)
+		client.analogWrite(2, 128)
+		client.analogWrite(17, 0x12345)
+
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x6f, 2, 0x7f, 0xf7]))
+		expect(messages[1]).toEqual(Buffer.from([0xf0, 0x6f, 2, 0x00, 0x01, 0xf7]))
+		expect(messages[2]).toEqual(Buffer.from([0xf0, 0x6f, 17, 0x45, 0x46, 0x04, 0xf7]))
 	})
 
 	test('sampling interval is clamped to minimum', () => {
