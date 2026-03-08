@@ -1,22 +1,24 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { type AnalogMapping, BMP180, BMP280, ESP8266, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
+import { type AnalogMapping, BMP180, BMP280, decodePacked7Bit, ESP8266, encodePacked7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
 
-describe('process', () => {
+describe('command decoding', () => {
 	const result: unknown[] = []
 
 	const protocol: FirmataClientHandler = {
-		version: (_, a, b) => result.push(a, b),
-		firmwareMessage: (_, a, b, c) => result.push(a, b, c),
+		version: (_, major, minor) => result.push(major, minor),
+		firmwareMessage: (_, major, minor, name) => result.push(major, minor, name),
 		systemReset: () => result.push(true),
-		digitalMessage: (_, a, b) => result.push(a, b),
-		analogMessage: (_, a, b) => result.push(a, b),
-		pinCapability: (_, a, b) => result.push(a, [...b]),
+		digitalMessage: (_, id, value) => result.push(id, value),
+		analogMessage: (_, port, value) => result.push(port, value),
+		pinCapability: (_, id, modes) => result.push(id, [...modes]),
 		pinCapabilitiesFinished: () => result.push(true),
-		analogMapping: (_, a) => result.push(a),
-		pinState: (_, a, b, c) => result.push(a, b, c),
-		textMessage: (_, a) => result.push(a),
-		customMessage: (_, a) => result.push(a),
-		twoWireMessage: (_, a, b, c) => result.push(a, b, c),
+		analogMapping: (_, mapping) => result.push(mapping),
+		pinState: (_, id, mode, value) => result.push(id, mode, value),
+		textMessage: (_, message) => result.push(message),
+		customMessage: (_, data) => result.push(data),
+		twoWireMessage: (_, address, register, data) => result.push(address, register, data),
+		oneWireSearchReply: (_, pin, addresses, alarms) => result.push(pin, alarms, addresses.map(Buffer.from)),
+		oneWireReadReply: (_, pin, correlationId, data) => result.push(pin, correlationId, data),
 	}
 
 	const transport: Transport = {
@@ -108,6 +110,84 @@ describe('process', () => {
 		expect(result[0]).toBe(0x22)
 		expect(result[1]).toBe(0x44)
 		expect(result[2]).toEqual(Buffer.from([1, 2, 3]))
+	})
+
+	test('one-wire search reply', () => {
+		const addresses = Buffer.from([0x28, 0x1a, 0xbc, 0x4d, 0x2f, 0x00, 0x00, 0xc1, 0x28, 0xff, 0x2a, 0x01, 0x2f, 0x00, 0x00, 0x7e])
+
+		client.process(Buffer.from([0xf0, 0x73, 0x42, 4, ...encodePacked7Bit(addresses), 0xf7]))
+		expect(result[0]).toBe(4)
+		expect(result[1]).toBe(false)
+		expect(result[2]).toEqual([addresses.subarray(0, 8), addresses.subarray(8, 16)])
+	})
+
+	test('one-wire read reply', () => {
+		client.process(Buffer.from([0xf0, 0x73, 0x43, 2, ...encodePacked7Bit(Buffer.from([0x34, 0x12, 0xaa, 0xbb, 0xcc])), 0xf7]))
+		expect(result[0]).toBe(2)
+		expect(result[1]).toBe(0x1234)
+		expect(result[2]).toEqual(Buffer.from([0xaa, 0xbb, 0xcc]))
+	})
+})
+
+describe('command encoding', () => {
+	const transport: Transport = {
+		write: () => {},
+		flush: () => {},
+		close: () => {},
+	}
+
+	const esp8266 = new ESP8266()
+	using client = new FirmataClient(transport, esp8266)
+	const messages: Buffer[] = []
+
+	client.send = (message) => {
+		if (typeof message === 'string') {
+			messages.push(Buffer.from(message))
+		} else if (ArrayBuffer.isView(message)) {
+			messages.push(Buffer.from(message.buffer, message.byteOffset, message.byteLength))
+		} else {
+			messages.push(Buffer.from(message))
+		}
+	}
+
+	afterEach(() => {
+		messages.length = 0
+	})
+
+	test('one-wire config', () => {
+		client.oneWireConfig(5)
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x73, 0x41, 5, 1, 0xf7]))
+	})
+
+	test('one-wire search alarms', () => {
+		client.oneWireSearch(6, 'alarms')
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x73, 0x44, 6, 0xf7]))
+	})
+
+	test('one-wire command with select, read, delay and write', () => {
+		const correlationId = client.oneWireCommand(7, {
+			reset: true,
+			address: Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]),
+			bytesToRead: 3,
+			correlationId: 0x2211,
+			delay: 5,
+			data: Buffer.from([0xaa, 0xbb]),
+		})
+
+		expect(correlationId).toBe(0x2211)
+
+		const payload = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8, 3, 0, 0x11, 0x22, 5, 0, 0, 0, 0xaa, 0xbb])
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x73, 0x3d, 7, ...encodePacked7Bit(payload), 0xf7]))
+	})
+
+	test('one-wire read generates auto correlation id', () => {
+		expect(client.oneWireRead(4, 2)).toBe(0)
+		expect(client.oneWireRead(4, 2)).toBe(1)
+
+		expect(messages[0].subarray(0, 4)).toEqual(Buffer.from([0xf0, 0x73, 0x0b, 4]))
+		expect(messages[1].subarray(0, 4)).toEqual(Buffer.from([0xf0, 0x73, 0x0b, 4]))
+		expect(decodePacked7Bit(messages[0], 4, messages[0].length - 5)).toEqual(Buffer.from([2, 0, 0, 0]))
+		expect(decodePacked7Bit(messages[1], 4, messages[1].length - 5)).toEqual(Buffer.from([2, 0, 1, 0]))
 	})
 })
 

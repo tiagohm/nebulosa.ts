@@ -13,7 +13,29 @@ export type TwoWireAddressMode = 7 | 10
 
 export type TwoWireOperationMode = 'write' | 'read' | 'readContinuously' | 'stop'
 
+export type OneWirePowerMode = 'normal' | 'parasitic'
+
+export type OneWireSearchMode = 'all' | 'alarms'
+
 export type PeripheralListener<D extends Peripheral<D>> = (device: D) => void
+
+export type BMP280OperatingMode = 'sleep' | 'forced' | 'normal'
+
+export type BMP280Sampling = 'skip' | 'x1' | 'x2' | 'x4' | 'x8' | 'x16'
+
+export type BMP280Filter = 'off' | 'x2' | 'x4' | 'x8' | 'x16'
+
+export type BMP280StandbyDuration = 0.5 | 62.5 | 125 | 250 | 500 | 1000 | 2000 | 4000 // ms
+
+export interface OneWireCommandOptions {
+	readonly reset?: boolean
+	readonly skip?: boolean
+	readonly address?: Readonly<NumberArray> | Buffer
+	readonly bytesToRead?: number
+	readonly correlationId?: number
+	readonly delay?: number
+	readonly data?: Readonly<NumberArray> | Buffer
+}
 
 export interface Transport {
 	readonly write: (data: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) => void
@@ -85,10 +107,20 @@ export interface FirmataClientHandler {
 	readonly pinState?: (client: FirmataClient, id: number, mode: PinMode, value: number) => void
 	readonly textMessage?: (client: FirmataClient, message: string) => void
 	readonly twoWireMessage?: (client: FirmataClient, address: number, register: number, data: Buffer) => void
+	readonly oneWireSearchReply?: (client: FirmataClient, pin: number, addresses: readonly Buffer[], alarms: boolean) => void
+	readonly oneWireReadReply?: (client: FirmataClient, pin: number, correlationId: number, data: Buffer) => void
 }
 
 export interface FirmataFsmState {
 	readonly process: (byte: number, fsm: FirmataFsm) => void
+}
+
+export interface BMP280Options {
+	readonly mode?: BMP280OperatingMode
+	readonly temperatureSampling?: BMP280Sampling // Reduces noise and increases the output resolution by one bit
+	readonly pressureSampling?: BMP280Sampling // Reduces noise and increases the output resolution by one bit
+	readonly filter?: BMP280Filter // Supress environment disturbances in the output data
+	readonly standbyDuration?: BMP280StandbyDuration // Standby period between two measurement cycles in normal mode
 }
 
 export enum PinMode {
@@ -120,28 +152,17 @@ export enum BMP180Mode {
 	ULTRA_HIGH_RESOLUTION, // 26 ms
 }
 
-export type BMP280OperatingMode = 'sleep' | 'forced' | 'normal'
-
-export type BMP280Sampling = 'skip' | 'x1' | 'x2' | 'x4' | 'x8' | 'x16'
-
-export type BMP280Filter = 'off' | 'x2' | 'x4' | 'x8' | 'x16'
-
-export type BMP280StandbyDuration = 0.5 | 62.5 | 125 | 250 | 500 | 1000 | 2000 | 4000 // ms
-
-export interface BMP280Options {
-	readonly mode?: BMP280OperatingMode
-	readonly temperatureSampling?: BMP280Sampling // Reduces noise and increases the output resolution by one bit
-	readonly pressureSampling?: BMP280Sampling // Reduces noise and increases the output resolution by one bit
-	readonly filter?: BMP280Filter // Supress environment disturbances in the output data
-	readonly standbyDuration?: BMP280StandbyDuration // Standby period between two measurement cycles in normal mode
-}
-
 export const DEFAULT_BMP280_OPTIONS: Required<BMP280Options> = {
 	mode: 'normal',
 	temperatureSampling: 'x1',
 	pressureSampling: 'x1',
 	filter: 'off',
 	standbyDuration: 1000,
+}
+
+export const DEFAULT_ONE_WIRE_COMMAND_OPTIONS: OneWireCommandOptions = {
+	reset: false,
+	skip: false,
 }
 
 // PROTOCOL
@@ -225,6 +246,20 @@ const TWO_WIRE_READ = 0x08
 const TWO_WIRE_READ_CONTINUOUS = 0x10
 const TWO_WIRE_STOP_READ = 0x18
 
+const ONE_WIRE_SEARCH_REQUEST = 0x40
+const ONE_WIRE_CONFIG_REQUEST = 0x41
+const ONE_WIRE_SEARCH_REPLY = 0x42
+const ONE_WIRE_READ_REPLY = 0x43
+const ONE_WIRE_SEARCH_ALARMS_REQUEST = 0x44
+const ONE_WIRE_SEARCH_ALARMS_REPLY = 0x45
+
+const ONE_WIRE_RESET_REQUEST_BIT = 0x01
+const ONE_WIRE_SKIP_REQUEST_BIT = 0x02
+const ONE_WIRE_SELECT_REQUEST_BIT = 0x04
+const ONE_WIRE_READ_REQUEST_BIT = 0x08
+const ONE_WIRE_DELAY_REQUEST_BIT = 0x10
+const ONE_WIRE_WRITE_REQUEST_BIT = 0x20
+
 const MIN_SAMPLING_INTERVAL = 1
 const MAX_SAMPLING_INTERVAL = 4294967295
 
@@ -235,6 +270,36 @@ export function decodeByteAs7Bit(input: Readonly<NumberArray> | Buffer, offset: 
 export function encodeByteAs7Bit(data: number, output: NumberArray | Buffer, offset: number = 0) {
 	output[offset++] = data & 0x7f
 	output[offset] = (data >>> 7) & 1
+}
+
+export function decodePacked7Bit(input: Readonly<NumberArray> | Buffer, offset: number = 0, length: number = input.length - offset) {
+	const output = Buffer.alloc(Math.floor(Math.max(0, length) * 0.875))
+
+	for (let i = 0; i < output.length; i++) {
+		const bitOffset = i << 3
+		const p = Math.floor(bitOffset / 7)
+		const s = bitOffset % 7
+		const lo = input[offset + p] ?? 0
+		const hi = input[offset + p + 1] ?? 0
+		output[i] = ((lo >>> s) | (hi << (7 - s))) & 0xff
+	}
+
+	return output
+}
+
+export function encodePacked7Bit(input: Readonly<NumberArray> | Buffer, offset: number = 0, length: number = input.length - offset) {
+	const output = Buffer.alloc(Math.ceil((Math.max(0, length) << 3) / 7))
+
+	for (let i = 0; i < length; i++) {
+		const value = input[offset + i] & 0xff
+		const bitOffset = i << 3
+		const p = Math.floor(bitOffset / 7)
+		const s = bitOffset % 7
+		output[p] |= (value << s) & 0x7f
+		if (p + 1 < output.length) output[p + 1] |= (value >>> (7 - s)) & 0x7f
+	}
+
+	return output
 }
 
 class ParsingVersionMessageState implements FirmataFsmState {
@@ -394,6 +459,40 @@ class ParsingTwoWireMessageState implements FirmataFsmState {
 
 const PARSING_TWO_WIRE_MESSAGE_STATE = new ParsingTwoWireMessageState()
 
+class ParsingOneWireMessageState implements FirmataFsmState {
+	process(b: number, fsm: FirmataFsm) {
+		if (b === END_SYSEX) {
+			if (fsm.offset >= 2) {
+				const command = fsm.read(0)
+				const pin = fsm.read(1)
+
+				if (command === ONE_WIRE_SEARCH_REPLY || command === ONE_WIRE_SEARCH_ALARMS_REPLY) {
+					const data = decodePacked7Bit(fsm.buffer, 2, fsm.offset - 2)
+					const addresses: Buffer[] = []
+
+					for (let i = 0; i + 7 < data.length; i += 8) {
+						addresses.push(Buffer.from(data.subarray(i, i + 8)))
+					}
+
+					fsm.oneWireSearchReply(pin, addresses, command === ONE_WIRE_SEARCH_ALARMS_REPLY)
+				} else if (command === ONE_WIRE_READ_REPLY) {
+					const data = decodePacked7Bit(fsm.buffer, 2, fsm.offset - 2)
+
+					if (data.length >= 2) {
+						fsm.oneWireReadReply(pin, data.readUInt16LE(0), data.subarray(2))
+					}
+				}
+			}
+
+			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
+		} else {
+			fsm.write(b)
+		}
+	}
+}
+
+const PARSING_ONE_WIRE_MESSAGE_STATE = new ParsingOneWireMessageState()
+
 class ParsingSysexMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		let next: FirmataFsmState | undefined
@@ -405,6 +504,7 @@ class ParsingSysexMessageState implements FirmataFsmState {
 		else if (b === PIN_STATE_RESPONSE) next = PIN_STATE_PARSING_STATE
 		else if (b === STRING_DATA) next = PARSING_STRING_MESSAGE_STATE
 		else if (b === TWO_WIRE_REPLY) next = PARSING_TWO_WIRE_MESSAGE_STATE
+		else if (b === ONE_WIRE_DATA) next = PARSING_ONE_WIRE_MESSAGE_STATE
 
 		if (!next) {
 			const state = PARSING_CUSTOM_SYSEX_MESSAGE_STATE
@@ -601,6 +701,14 @@ export class FirmataFsm {
 	twoWireMessage(address: number, register: number, data: Buffer) {
 		this.handlers.forEach((handler) => handler.twoWireMessage?.(this.client, address, register, data))
 	}
+
+	oneWireSearchReply(pin: number, addresses: readonly Buffer[], alarms: boolean) {
+		this.handlers.forEach((handler) => handler.oneWireSearchReply?.(this.client, pin, addresses, alarms))
+	}
+
+	oneWireReadReply(pin: number, correlationId: number, data: Buffer) {
+		this.handlers.forEach((handler) => handler.oneWireReadReply?.(this.client, pin, correlationId, data))
+	}
 }
 
 // Writes a 14-bit value as two 7-bit bytes.
@@ -619,6 +727,7 @@ export class FirmataClient implements Disposable {
 
 	private initializing = true
 	private maxTwoWireDelay = 0
+	private oneWireCorrelationId = 0
 
 	private readonly pinStateRequestQueue: number[] = []
 	private readonly pinMap = new Map<number, Pin>()
@@ -687,6 +796,12 @@ export class FirmataClient implements Disposable {
 			//
 		},
 		twoWireMessage: (client: FirmataClient, address: number, register: number, data: Buffer) => {
+			//
+		},
+		oneWireSearchReply: (client: FirmataClient, pin: number, addresses: readonly Buffer[], alarms: boolean) => {
+			//
+		},
+		oneWireReadReply: (client: FirmataClient, pin: number, correlationId: number, data: Buffer) => {
 			//
 		},
 	}
@@ -849,6 +964,102 @@ export class FirmataClient implements Disposable {
 
 	twoWireStop(address: number, addressMode: TwoWireAddressMode = 7) {
 		this.twoWireReadWrite(address, 'stop', undefined, addressMode)
+	}
+
+	private nextOneWireCorrelationId() {
+		const correlationId = this.oneWireCorrelationId
+		this.oneWireCorrelationId = (this.oneWireCorrelationId + 1) & 0xffff
+		return correlationId
+	}
+
+	oneWireConfig(pin: number, powerMode: OneWirePowerMode = 'normal') {
+		this.send(new Uint8Array([START_SYSEX, ONE_WIRE_DATA, ONE_WIRE_CONFIG_REQUEST, pin, powerMode === 'parasitic' ? 0 : 1, END_SYSEX]))
+	}
+
+	oneWireSearch(pin: number, mode: OneWireSearchMode = 'all') {
+		this.send(new Uint8Array([START_SYSEX, ONE_WIRE_DATA, mode === 'alarms' ? ONE_WIRE_SEARCH_ALARMS_REQUEST : ONE_WIRE_SEARCH_REQUEST, pin, END_SYSEX]))
+	}
+
+	oneWireCommand(pin: number, options: OneWireCommandOptions = DEFAULT_ONE_WIRE_COMMAND_OPTIONS) {
+		const { reset = false, skip = false, address, bytesToRead, correlationId, delay, data } = options
+
+		if (skip && address !== undefined) {
+			throw new RangeError('One-Wire command cannot skip ROM and select ROM at the same time')
+		}
+
+		let command = 0
+
+		if (reset) command |= ONE_WIRE_RESET_REQUEST_BIT
+		if (skip) command |= ONE_WIRE_SKIP_REQUEST_BIT
+
+		const payload: number[] = []
+
+		if (address !== undefined) {
+			if (address.length !== 8) {
+				throw new RangeError(`One-Wire address must contain 8 bytes. Received ${address.length}`)
+			}
+
+			command |= ONE_WIRE_SELECT_REQUEST_BIT
+
+			for (let i = 0; i < address.length; i++) {
+				payload.push(address[i] & 0xff)
+			}
+		}
+
+		let readCorrelationId: number | undefined
+
+		if (bytesToRead !== undefined) {
+			command |= ONE_WIRE_READ_REQUEST_BIT
+			const n = Math.max(0, Math.min(0xffff, bytesToRead))
+			readCorrelationId = (correlationId ?? this.nextOneWireCorrelationId()) & 0xffff
+			payload.push(n & 0xff, (n >>> 8) & 0xff, readCorrelationId & 0xff, (readCorrelationId >>> 8) & 0xff)
+		}
+
+		if (delay !== undefined) {
+			command |= ONE_WIRE_DELAY_REQUEST_BIT
+			const ms = Math.max(0, Math.min(0xffffffff, delay))
+			payload.push(ms & 0xff, (ms >>> 8) & 0xff, (ms >>> 16) & 0xff, (ms >>> 24) & 0xff)
+		}
+
+		if (data !== undefined) {
+			command |= ONE_WIRE_WRITE_REQUEST_BIT
+
+			for (let i = 0; i < data.length; i++) {
+				payload.push(data[i] & 0xff)
+			}
+		}
+
+		const encodedData = payload.length ? encodePacked7Bit(payload) : undefined
+		const message = Buffer.alloc(5 + (encodedData?.length ?? 0))
+
+		message[0] = START_SYSEX
+		message[1] = ONE_WIRE_DATA
+		message[2] = command
+		message[3] = pin
+
+		if (encodedData) encodedData.copy(message, 4)
+
+		message[message.length - 1] = END_SYSEX
+
+		this.send(message)
+
+		return readCorrelationId
+	}
+
+	oneWireReset(pin: number) {
+		this.oneWireCommand(pin, { reset: true })
+	}
+
+	oneWireWrite(pin: number, data: Readonly<NumberArray> | Buffer, address?: Readonly<NumberArray> | Buffer) {
+		this.oneWireCommand(pin, { reset: true, skip: address === undefined, address, data })
+	}
+
+	oneWireRead(pin: number, bytesToRead: number, address?: Readonly<NumberArray> | Buffer, correlationId?: number) {
+		return this.oneWireCommand(pin, { reset: true, skip: address === undefined, address, bytesToRead, correlationId })
+	}
+
+	oneWireWriteAndRead(pin: number, data: Readonly<NumberArray> | Buffer, bytesToRead: number, address?: Readonly<NumberArray> | Buffer, correlationId?: number) {
+		return this.oneWireCommand(pin, { reset: true, skip: address === undefined, address, bytesToRead, correlationId, data })
 	}
 }
 
