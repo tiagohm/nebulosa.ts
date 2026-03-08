@@ -42,6 +42,7 @@ Agents must respect all constraints below when generating or modifying code.
 * Avoid JSON operations.
 * Avoid dynamic object reshaping.
 * Always single-line comment methods and relevant lines.
+* Always type the method parameter.
 
 ## Environment
 

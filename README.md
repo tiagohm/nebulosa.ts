@@ -138,6 +138,13 @@ const autoFocus = new AutoFocus({ fittingMode: 'TREND_PARABOLIC', initialOffsetS
 const step = autoFocus.add(focusPosition, hfd)
 ```
 
+### Compression ![](bun.webp)
+
+```ts
+compressRice(input, blockSize, initialCapacity)
+decompressRice(input, output, blockSize)
+```
+
 ### Constellation ![](bun.webp) ![](browser.webp)
 
 ```ts
