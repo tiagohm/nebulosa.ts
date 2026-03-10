@@ -1,10 +1,7 @@
-import type { GMSTime } from '../common-types';
-import {
-  deg2rad,
-  twoPi,
-} from '../constants';
+import type { GMSTime } from '../common-types'
+import { deg2rad, twoPi } from '../constants'
 
-import { jday } from '../ext';
+import { jday } from '../ext'
 
 /* -----------------------------------------------------------------------------
  *
@@ -32,51 +29,30 @@ import { jday } from '../ext';
  *    vallado       2004, 191, eq 3-45
  * --------------------------------------------------------------------------- */
 function gstimeInternal(jdut1: number) {
-  const tut1 = (jdut1 - 2451545.0) / 36525.0;
+	const tut1 = (jdut1 - 2451545.0) / 36525.0
 
-  let temp = (-6.2e-6 * tut1 * tut1 * tut1)
-    + (0.093104 * tut1 * tut1)
-    + (((876600.0 * 3600) + 8640184.812866) * tut1) + 67310.54841; // # sec
-  temp = ((temp * deg2rad) / 240.0) % twoPi; // 360/86400 = 1/240, to deg, to rad
+	let temp = -6.2e-6 * tut1 * tut1 * tut1 + 0.093104 * tut1 * tut1 + (876600.0 * 3600 + 8640184.812866) * tut1 + 67310.54841 // # sec
+	temp = ((temp * deg2rad) / 240.0) % twoPi // 360/86400 = 1/240, to deg, to rad
 
-  //  ------------------------ check quadrants ---------------------
-  if (temp < 0.0) {
-    temp += twoPi;
-  }
+	//  ------------------------ check quadrants ---------------------
+	if (temp < 0.0) {
+		temp += twoPi
+	}
 
-  return temp;
+	return temp
 }
 
-function gstime(jd: number): GMSTime;
-function gstime(date: Date): GMSTime;
-function gstime(
-  year: number, 
-  month: number, 
-  day: number, 
-  hour: number, 
-  minute: number, 
-  second: number, 
-  millisecond?: number
-): GMSTime;
-function gstime(
-  first: Date | number,
-  month?: number,
-  day?: number,
-  hour?: number,
-  minute?: number,
-  second?: number,
-  millisecond?: number
-): GMSTime {
-  if (first instanceof Date) {
-    return gstimeInternal(jday(first));
-  } else if (month !== undefined) {
-    return gstimeInternal(jday(first, month, day!, hour!, minute!, second!, millisecond));
-  } else {
-    return gstimeInternal(first);
-  }
+function gstime(jd: number): GMSTime
+function gstime(date: Date): GMSTime
+function gstime(year: number, month: number, day: number, hour: number, minute: number, second: number, millisecond?: number): GMSTime
+function gstime(first: Date | number, month?: number, day?: number, hour?: number, minute?: number, second?: number, millisecond?: number): GMSTime {
+	if (first instanceof Date) {
+		return gstimeInternal(jday(first))
+	} else if (month !== undefined) {
+		return gstimeInternal(jday(first, month, day!, hour!, minute!, second!, millisecond))
+	} else {
+		return gstimeInternal(first)
+	}
 }
 
-export default gstime;
-
-
-
+export default gstime
