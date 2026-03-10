@@ -43,6 +43,14 @@ test('star list', () => {
 	list.delete(list.array()[0])
 	expect(list.size).toBe(2)
 	expect(list.array().map((e) => e.h)).toEqual([1.5, 1.7])
+
+	list.delete(list.array()[1])
+	expect(list.size).toBe(1)
+	expect(list.array().map((e) => e.h)).toEqual([1.5])
+
+	list.add(0, 0, 1.6)
+	expect(list.size).toBe(2)
+	expect(list.array().map((e) => e.h)).toEqual([1.5, 1.6])
 })
 
 test('merge stars & exclusion', () => {
@@ -93,4 +101,4 @@ test('detect stars', async () => {
 	expect(carina!.x).toBe(564)
 	expect(carina!.y).toBe(544)
 	expect(carina!.flux).toBeCloseTo(7.953, 2)
-}, 10000)
+}, 5000)

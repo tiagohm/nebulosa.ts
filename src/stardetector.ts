@@ -1,7 +1,7 @@
-import { type Point, type Rect, rectIntersection } from './geometry'
-import { histogram } from './image.computation'
+import type { Point, Rect } from './geometry'
+import { truncatePixel } from './image'
 import { grayscale, mean3x3, psf } from './image.transformation'
-import type { HistogramOptions, Image } from './image.types'
+import type { Image } from './image.types'
 
 export interface DetectedStar extends Readonly<Point> {
 	readonly hfd: number
@@ -13,6 +13,10 @@ export interface DetectStarOptions {
 	maxStars: number
 	searchRegion?: number
 }
+
+type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumSq, width
+
+const DETECT_STAR_HISTOGRAM_MAX = (1 << 18) - 1
 
 const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
 	maxStars: 500,
@@ -31,12 +35,10 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 	const { raw, metadata } = image
 	const { width, height, stride } = metadata
 	const convRect: Rect = { left: 4, top: 4, right: width - 5, bottom: height - 5 }
-	const area: Rect = { left: 0, top: 0, bottom: 0, right: 0 }
-	const bits = new Int32Array(1 << 18)
 	const maxX = convRect.right - 4
 	const maxY = convRect.bottom - 4
 	const stars = new StarList(Math.min(maxStars, 2000))
-	const histogramOptions: Partial<HistogramOptions> = { channel: 'GRAY', area, bits }
+	const integrals = buildIntegralImages(raw, width, height, stride)
 
 	// Find each local maximum
 	for (let y = convRect.top + 4; y <= maxY; y++) {
@@ -68,12 +70,11 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 			if (!isMax) continue
 
 			// Compare local maximum to mean value of surrounding pixels
-			area.left = x - 7
-			area.top = y - 7
-			area.right = x + 7
-			area.bottom = y + 7
-			rectIntersection(area, convRect, area)!
-			const { mean, standardDeviation } = histogram(image, histogramOptions)
+			const left = Math.max(convRect.left, x - 7)
+			const top = Math.max(convRect.top, y - 7)
+			const right = Math.min(convRect.right, x + 7)
+			const bottom = Math.min(convRect.bottom, y + 7)
+			const [mean, standardDeviation] = localStatistics(integrals, left, top, right, bottom)
 
 			// This is our measure of star intensity
 			const h = (value - mean) / standardDeviation
@@ -102,35 +103,85 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 	return res
 }
 
+// Builds summed-area tables for fast local mean and variance queries.
+function buildIntegralImages(raw: Image['raw'], width: number, height: number, stride: number) {
+	const integralWidth = width + 1
+	const size = integralWidth * (height + 1)
+	const sum = new Float64Array(size)
+	const sumSq = new Float64Array(size)
+
+	for (let y = 0; y < height; y++) {
+		const rowOffset = y * stride
+		const integralRow = (y + 1) * integralWidth
+		const prevIntegralRow = y * integralWidth
+		let rowSum = 0
+		let rowSumSq = 0
+
+		for (let x = 0; x < width; x++) {
+			const value = truncatePixel(raw[rowOffset + x], DETECT_STAR_HISTOGRAM_MAX) / DETECT_STAR_HISTOGRAM_MAX
+			rowSum += value
+			rowSumSq += value * value
+			const index = integralRow + x + 1
+			sum[index] = sum[prevIntegralRow + x + 1] + rowSum
+			sumSq[index] = sumSq[prevIntegralRow + x + 1] + rowSumSq
+		}
+	}
+
+	return [sum, sumSq, integralWidth] as const
+}
+
+// Computes local mean and standard deviation from the summed-area tables.
+function localStatistics([s, sq, width]: IntegralImages, left: number, top: number, right: number, bottom: number) {
+	const x0 = left
+	const y0 = top
+	const x1 = right + 1
+	const y1 = bottom + 1
+	const a = y0 * width + x0
+	const b = y0 * width + x1
+	const c = y1 * width + x0
+	const d = y1 * width + x1
+	const count = (right - left + 1) * (bottom - top + 1)
+	const sum = s[d] - s[b] - s[c] + s[a]
+	const sumSq = sq[d] - sq[b] - sq[c] + sq[a]
+	const mean = sum / count
+	const variance = Math.max(0, sumSq / count - mean * mean)
+	return [mean, Math.sqrt(variance)] as const
+}
+
 export function mergeVeryCloseStars(stars: StarList, minLimitSq: number = 25) {
 	if (stars.size <= 0) return
 
-	let current = stars.iterator().next().value
+	let previous: Star | undefined
+	let current = stars.first()
 
 	while (current !== undefined) {
 		const a = current
 		let b = a.next
-		current = b
+		let deleted = false
 
 		while (b !== undefined) {
 			const dx = a.x - b.x
 			const dy = a.y - b.y
 			const d2 = dx * dx + dy * dy
 
-			b = b.next
-
 			if (d2 < minLimitSq) {
-				stars.delete(a)
+				stars.deleteAfter(previous)
+				deleted = true
 				break
 			}
+
+			b = b.next
 		}
+
+		current = a.next
+		if (!deleted) previous = a
 	}
 }
 
 export function excludeStarsFitWithinRegion(stars: StarList, searchRegion: number) {
 	if (stars.size <= 0) return
 
-	let current = stars.iterator().next()?.value
+	let current = stars.first()
 	const deleted = new Set<Star>()
 
 	searchRegion += 5 // extra safety margin
@@ -157,8 +208,17 @@ export function excludeStarsFitWithinRegion(stars: StarList, searchRegion: numbe
 		}
 	}
 
-	for (const s of deleted) {
-		stars.delete(s)
+	let previous: Star | undefined
+	current = stars.first()
+
+	while (current !== undefined) {
+		if (deleted.has(current)) {
+			stars.deleteAfter(previous)
+			current = previous?.next ?? stars.first()
+		} else {
+			previous = current
+			current = current.next
+		}
 	}
 }
 
@@ -167,6 +227,7 @@ interface Star {
 	readonly y: number
 	readonly h: number
 	next?: this
+	prev?: this
 }
 
 export class StarList implements Iterable<Star, Star | undefined, Star> {
@@ -176,6 +237,11 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 
 	constructor(private readonly capacity: number = 100) {}
 
+	// Returns the first star without allocating an iterator.
+	first() {
+		return this.head
+	}
+
 	addLast(x: number, y: number, h: number) {
 		const star: Star = { x, y, h }
 
@@ -183,6 +249,7 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 			this.head = star
 			this.tail = star
 		} else if (this.tail) {
+			star.prev = this.tail
 			this.tail.next = star
 			this.tail = star
 		}
@@ -198,6 +265,7 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 			this.tail = star
 		} else {
 			star.next = this.head
+			this.head.prev = star
 			this.head = star
 		}
 
@@ -209,15 +277,35 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		else if (!this.tail || h >= this.tail.h) this.addLast(x, y, h)
 		else {
 			const star: Star = { x, y, h }
+			const headDistance = h - this.head.h
+			const tailDistance = this.tail.h - h
 
-			for (let a: Star | undefined = this.head; a; a = a.next) {
-				if (a.next && h >= a.next.h) continue
+			if (tailDistance < headDistance) {
+				for (let a: Star | undefined = this.tail; a; a = a.prev) {
+					if (h < a.h) continue
 
-				star.next = a.next
-				a.next = star
-				this.size++
+					const next = a.next
+					star.prev = a
+					star.next = next
+					a.next = star
+					if (next) next.prev = star
+					this.size++
 
-				break
+					break
+				}
+			} else {
+				for (let a: Star | undefined = this.head; a; a = a.next) {
+					if (a.next && h >= a.next.h) continue
+
+					const next = a.next
+					star.prev = a
+					star.next = next
+					a.next = star
+					if (next) next.prev = star
+					this.size++
+
+					break
+				}
 			}
 		}
 
@@ -230,25 +318,35 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		if (!this.head) return false
 
 		this.head = this.head.next
-		if (!this.head) this.tail = undefined
+		if (this.head) this.head.prev = undefined
+		else this.tail = undefined
 
 		this.size--
 
 		return true
 	}
 
+	// Deletes the first node or the node after `previous` in O(1).
+	deleteAfter(previous?: Star) {
+		if (!previous) return this.deleteFirst()
+
+		const current = previous.next
+		if (!current) return false
+
+		const next = current.next
+		previous.next = next
+		if (next) next.prev = previous
+		if (current === this.tail) this.tail = previous
+		current.prev = undefined
+		current.next = undefined
+		this.size--
+
+		return true
+	}
+
 	delete(s: Star) {
-		if (this.head && s === this.head) this.deleteFirst()
-		else {
-			for (let a: Star | undefined = this.head; a; a = a.next) {
-				if (!a.next || s !== a.next) continue
-
-				a.next = s.next
-				this.size--
-
-				break
-			}
-		}
+		if (this.head && s === this.head) return this.deleteFirst()
+		return s.prev ? this.deleteAfter(s.prev) : false
 	}
 
 	clear() {
