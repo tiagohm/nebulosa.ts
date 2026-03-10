@@ -1,0 +1,2 @@
+approval_policy = "on-failure"
+sandbox_mode = "workspace-write"
