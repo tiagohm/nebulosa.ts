@@ -418,17 +418,24 @@ export class Base64Sink implements Sink {
 		if (size === 0) return 0
 
 		let data: Buffer
+		let start = 0
+		let end = 0
 		let n = 0
 
-		if (typeof chunk === 'string')
+		if (typeof chunk === 'string') {
 			if (size === undefined && !offset) data = Buffer.from(chunk, encoding)
 			else if (size === undefined) data = Buffer.from(chunk.substring(offset!), encoding)
 			else if (!offset) data = Buffer.from(chunk.substring(0, size), encoding)
 			else data = Buffer.from(chunk.substring(offset, offset + size), encoding)
-		else data = chunk
+			end = data.byteLength
+		} else {
+			data = chunk
+			start = offset ?? 0
+			end = size === undefined ? data.byteLength : Math.min(start + size, data.byteLength)
+		}
 
-		for (let i = 0; i < data.byteLength; i++) {
-			this.encode(data.readUInt8(i))
+		for (let i = start; i < end; i++) {
+			this.encode(data[i]!)
 
 			if (this.position >= BASE64_ENCODED_BUFFER_SIZE - 1) {
 				n += this.position
@@ -531,7 +538,8 @@ export async function* readLines(source: Source, chunkSize: number, options?: Re
 	const emptyLines = options?.emptyLines ?? true
 	const encoding = options?.encoding
 
-	let line = Buffer.allocUnsafe(0)
+	let lineParts: Buffer[] | undefined
+	let lineLength = 0
 
 	while (true) {
 		const n = await readUntil(source, buffer)
@@ -541,23 +549,46 @@ export async function* readLines(source: Source, chunkSize: number, options?: Re
 		let start = 0
 
 		while (start < n) {
-			const slice = buffer.subarray(start, n)
-			const index = slice.indexOf(10)
+			const index = buffer.indexOf(10, start)
 
-			if (index >= 0) {
-				start += index + 1
-				const found = slice.subarray(0, index)
-				line = !line.byteLength ? found : Buffer.concat([line, found])
-				if (line.byteLength || emptyLines) yield line.toString(encoding)
-				line = Buffer.allocUnsafe(0)
+			if (index >= 0 && index < n) {
+				if (!lineParts) {
+					if (index > start || emptyLines) yield buffer.toString(encoding, start, index)
+				} else {
+					const slice = buffer.subarray(start, index)
+
+					if (slice.byteLength) {
+						const copy = Buffer.from(slice)
+						lineParts.push(copy)
+						lineLength += copy.byteLength
+					}
+
+					if (lineLength || emptyLines) {
+						if (lineParts.length === 1) yield lineParts[0].toString(encoding)
+						else yield Buffer.concat(lineParts, lineLength).toString(encoding)
+					}
+
+					lineParts = undefined
+					lineLength = 0
+				}
+
+				start = index + 1
 			} else {
-				line = Buffer.concat([line, slice])
+				const copy = Buffer.from(buffer.subarray(start, n))
+				if (lineParts) lineParts.push(copy)
+				else lineParts = [copy]
+				lineLength += copy.byteLength
 				break
 			}
 		}
 	}
 
-	if (line.byteLength || emptyLines) yield line.toString(encoding)
+	if (lineParts) {
+		if (lineParts.length === 1) yield lineParts[0].toString(encoding)
+		else yield Buffer.concat(lineParts, lineLength).toString(encoding)
+	} else if (emptyLines) {
+		yield ''
+	}
 }
 
 export async function sourceTransferToSink(source: Source, sink: Sink, size: number | Buffer = 1024) {

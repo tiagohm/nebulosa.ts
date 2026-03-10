@@ -342,6 +342,15 @@ describe('base64', () => {
 		}
 	})
 
+	test('sink honors buffer offset and size', async () => {
+		const sink = base64Sink(bufferSink(output))
+		const input = Buffer.from('abcdef', 'ascii')
+		const n = (await sink.write(input, 1, 4)) + (await sink.end())
+
+		expect(n).toBe(8)
+		expect(output.subarray(0, n).toString('ascii')).toBe('YmNkZQ==')
+	})
+
 	test('fits header', async () => {
 		const writer = new FitsKeywordWriter()
 		const output = Buffer.alloc(2880, 32)
