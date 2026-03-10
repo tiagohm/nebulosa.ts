@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { gaussianElimination, LuDecomposition, Matrix, QrDecomposition } from '../src/matrix'
+import { gaussianElimination, LuDecomposition, Matrix, mulMTxN, mulMxNT, QrDecomposition } from '../src/matrix'
 
 test('is square', () => {
 	const m = Matrix.square(3)
@@ -9,6 +9,10 @@ test('is square', () => {
 test('is not square', () => {
 	const m = new Matrix(3, 4)
 	expect(m.isSquare).toBe(false)
+})
+
+test('rejects invalid data length', () => {
+	expect(() => new Matrix(2, 3, [1, 2, 3])).toThrow('data length must be 6 for a 2x3 matrix')
 })
 
 test('row', () => {
@@ -38,6 +42,17 @@ test('identity', () => {
 	const b = new Matrix(4, 4)
 	b.fill('identity')
 	expect(b.isIdentity).toBeTrue()
+})
+
+test('identity fill supports rectangular matrices', () => {
+	const m = new Matrix(2, 3)
+	m.fill('identity')
+	expect(m.toArray()).toEqual([1, 0, 0, 0, 1, 0])
+})
+
+test('rectangular zero matrix is zero', () => {
+	const m = new Matrix(2, 3)
+	expect(m.isZero).toBe(true)
 })
 
 test('transposed', () => {
@@ -132,6 +147,12 @@ test('multiply', () => {
 	expect(c.toArray()).toEqual([58, 64, 139, 154])
 })
 
+test('multiply rejects incompatible dimensions', () => {
+	const a = new Matrix(2, 3, [1, 2, 3, 4, 5, 6])
+	const b = new Matrix(4, 2, [1, 2, 3, 4, 5, 6, 7, 8])
+	expect(() => a.mul(b)).toThrow('matrix columns must match matrix rows to multiply')
+})
+
 test('multiply transposed by', () => {
 	const a = new Matrix(3, 2, [1, 2, 3, 4, 5, 6])
 	const b = new Matrix(3, 2, [1, 2, 3, 4, 5, 6])
@@ -152,6 +173,13 @@ test('multiply by transposed', () => {
 	expect(m.at(1)).toBe(32)
 	expect(m.at(2)).toBe(32)
 	expect(m.at(3)).toBe(77)
+})
+
+test('matrix vector products validate vector length', () => {
+	const m = new Matrix(2, 3, [1, 2, 3, 4, 5, 6])
+
+	expect(() => m.mulVec([1, 2])).toThrow('vector length must match matrix columns')
+	expect(() => m.mulTransposedVec([1])).toThrow('vector length must match matrix rows')
 })
 
 test('symmetric', () => {
@@ -334,4 +362,24 @@ test('gaussian elimination', () => {
 	expect(x[0]).toBeCloseTo(2, 12)
 	expect(x[1]).toBeCloseTo(3, 12)
 	expect(x[2]).toBeCloseTo(-1, 12)
+})
+
+test('mulMTxN handles rectangular matrices', () => {
+	const a = [new Float64Array([1, 2]), new Float64Array([3, 4]), new Float64Array([5, 6])]
+	const b = [new Float64Array([7, 8, 9]), new Float64Array([10, 11, 12]), new Float64Array([13, 14, 15])]
+
+	const c = mulMTxN(a, b)
+
+	expect(Array.from(c[0])).toEqual([102, 111, 120])
+	expect(Array.from(c[1])).toEqual([132, 144, 156])
+})
+
+test('mulMxNT handles rectangular matrices', () => {
+	const a = [new Float64Array([1, 2, 3]), new Float64Array([4, 5, 6])]
+	const b = [new Float64Array([7, 8, 9]), new Float64Array([10, 11, 12]), new Float64Array([13, 14, 15])]
+
+	const c = mulMxNT(a, b)
+
+	expect(Array.from(c[0])).toEqual([50, 68, 86])
+	expect(Array.from(c[1])).toEqual([122, 167, 212])
 })

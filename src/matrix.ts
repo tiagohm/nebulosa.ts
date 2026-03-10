@@ -9,7 +9,13 @@ export class Matrix {
 		data?: Readonly<NumberArray>,
 		copy: boolean = true,
 	) {
-		this.data = copy || data === undefined ? (data ? new Float64Array(data) : new Float64Array(rows * cols)) : (data as never)
+		const size = rows * cols
+
+		if (data !== undefined && data.length !== size) {
+			throw new Error(`data length must be ${size} for a ${rows}x${cols} matrix`)
+		}
+
+		this.data = copy || data === undefined ? (data ? new Float64Array(data) : new Float64Array(size)) : (data as NumberArray)
 	}
 
 	// Gets the number of cells in the matrix.
@@ -38,12 +44,8 @@ export class Matrix {
 
 	// Checks if the matrix is filled with zeroes.
 	get isZero() {
-		if (!this.isSquare) return false
-
-		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols; j++) {
-				if (this.get(i, j) !== 0) return false
-			}
+		for (let i = 0; i < this.data.length; i++) {
+			if (this.data[i] !== 0) return false
 		}
 
 		return true
@@ -53,9 +55,13 @@ export class Matrix {
 	get isDiagonal() {
 		if (!this.isSquare) return false
 
+		const data = this.data
+
 		for (let i = 0; i < this.rows; i++) {
+			const rowOffset = i * this.cols
+
 			for (let j = 0; j < this.cols; j++) {
-				if (i !== j && this.get(i, j) !== 0) return false
+				if (i !== j && data[rowOffset + j] !== 0) return false
 			}
 		}
 
@@ -66,7 +72,7 @@ export class Matrix {
 		if (!this.isSquare) return false
 
 		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols; j++) {
+			for (let j = i + 1; j < this.cols; j++) {
 				if (this.get(i, j) !== this.get(j, i)) return false
 			}
 		}
@@ -77,10 +83,14 @@ export class Matrix {
 	// Gets the transpose of the matrix.
 	get transposed() {
 		const m = new Matrix(this.cols, this.rows)
+		const source = this.data
+		const output = m.data
 
 		for (let i = 0; i < this.rows; i++) {
+			const rowOffset = i * this.cols
+
 			for (let j = 0; j < this.cols; j++) {
-				m.set(j, i, this.get(i, j))
+				output[j * this.rows + i] = source[rowOffset + j]
 			}
 		}
 
@@ -106,7 +116,7 @@ export class Matrix {
 	fill(value: number | 'identity'): this {
 		if (value === 'identity') {
 			this.data.fill(0)
-			for (let i = 0; i < this.rows; i++) this.set(i, i, 1)
+			for (let i = 0, n = Math.min(this.rows, this.cols); i < n; i++) this.data[i * this.cols + i] = 1
 		} else {
 			this.data.fill(value)
 		}
@@ -150,7 +160,7 @@ export class Matrix {
 	// Checks if the matrix is singular (determinant is zero).
 	// A singular matrix cannot be inverted.
 	get isSingular() {
-		return this.determinant === 0
+		return this.isSquare && new LuDecomposition(this).isSingular
 	}
 
 	// Computes the trace of the matrix.
@@ -167,6 +177,7 @@ export class Matrix {
 	// Computes the inverse of the matrix.
 	invert(o?: Matrix) {
 		o ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(o, this.rows, this.cols)
 
 		if (!this.isSquare) {
 			throw new Error('matrix must be square to compute inverse')
@@ -174,7 +185,7 @@ export class Matrix {
 
 		const lu = new LuDecomposition(this)
 
-		if (lu.determinant === 0) {
+		if (lu.isSingular) {
 			throw new Error('matrix is singular and cannot be inverted')
 		}
 
@@ -184,11 +195,13 @@ export class Matrix {
 	// Computes the negation of the matrix.
 	negate(o?: Matrix) {
 		o ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(o, this.rows, this.cols)
 
-		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols; j++) {
-				o.set(i, j, -this.get(i, j))
-			}
+		const data = this.data
+		const output = o.data
+
+		for (let i = 0; i < data.length; i++) {
+			output[i] = -data[i]
 		}
 
 		return o
@@ -196,16 +209,19 @@ export class Matrix {
 
 	// Computes the sum of two matrices.
 	plus(b: Matrix, o?: Matrix) {
-		o ??= new Matrix(this.rows, this.cols)
-
 		if (this.rows !== b.rows || this.cols !== b.cols) {
 			throw new Error('matrices must have the same dimensions to add')
 		}
 
-		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols; j++) {
-				o.set(i, j, this.get(i, j) + b.get(i, j))
-			}
+		o ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(o, this.rows, this.cols)
+
+		const aData = this.data
+		const bData = b.data
+		const output = o.data
+
+		for (let i = 0; i < aData.length; i++) {
+			output[i] = aData[i] + bData[i]
 		}
 
 		return o
@@ -213,20 +229,23 @@ export class Matrix {
 
 	// Computes the subtraction of two matrices.
 	minus(b: Matrix, o?: Matrix) {
-		o ??= new Matrix(this.rows, this.cols)
-
 		if (this.rows !== b.rows || this.cols !== b.cols) {
 			throw new Error('matrices must have the same dimensions to subtract')
 		}
+
+		o ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(o, this.rows, this.cols)
 
 		if (this === b) {
 			return o.fill(0)
 		}
 
-		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols; j++) {
-				o.set(i, j, this.get(i, j) - b.get(i, j))
-			}
+		const aData = this.data
+		const bData = b.data
+		const output = o.data
+
+		for (let i = 0; i < aData.length; i++) {
+			output[i] = aData[i] - bData[i]
 		}
 
 		return o
@@ -235,11 +254,13 @@ export class Matrix {
 	// Computes the sum of a matrix and a scalar.
 	plusScalar(scalar: number, o?: Matrix) {
 		o ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(o, this.rows, this.cols)
 
-		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols; j++) {
-				o.set(i, j, this.get(i, j) + scalar)
-			}
+		const data = this.data
+		const output = o.data
+
+		for (let i = 0; i < data.length; i++) {
+			output[i] = data[i] + scalar
 		}
 
 		return o
@@ -248,11 +269,13 @@ export class Matrix {
 	// Computes the subtraction of a matrix and a scalar.
 	minusScalar(scalar: number, o?: Matrix) {
 		o ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(o, this.rows, this.cols)
 
-		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols; j++) {
-				o.set(i, j, this.get(i, j) - scalar)
-			}
+		const data = this.data
+		const output = o.data
+
+		for (let i = 0; i < data.length; i++) {
+			output[i] = data[i] - scalar
 		}
 
 		return o
@@ -261,11 +284,13 @@ export class Matrix {
 	// Computes the multiplication of a matrix and a scalar.
 	mulScalar(scalar: number, o?: Matrix) {
 		o ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(o, this.rows, this.cols)
 
-		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols; j++) {
-				o.set(i, j, this.get(i, j) * scalar)
-			}
+		const data = this.data
+		const output = o.data
+
+		for (let i = 0; i < data.length; i++) {
+			output[i] = data[i] * scalar
 		}
 
 		return o
@@ -274,11 +299,13 @@ export class Matrix {
 	// Computes the division of a matrix by a scalar.
 	divScalar(scalar: number, o?: Matrix) {
 		o ??= new Matrix(this.rows, this.cols)
+		checkMatrixShape(o, this.rows, this.cols)
 
-		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols; j++) {
-				o.set(i, j, this.get(i, j) / scalar)
-			}
+		const data = this.data
+		const output = o.data
+
+		for (let i = 0; i < data.length; i++) {
+			output[i] = data[i] / scalar
 		}
 
 		return o
@@ -289,22 +316,36 @@ export class Matrix {
 	mul(b: Matrix, o?: Matrix) {
 		const m = this.rows
 		const n = b.cols
+		const shared = this.cols
 
 		if (o === this || o === b) {
 			throw new Error('invalid output matrix')
 		}
 
+		if (shared !== b.rows) {
+			throw new Error('matrix columns must match matrix rows to multiply')
+		}
+
 		o ??= new Matrix(m, n)
+		checkMatrixShape(o, m, n)
+
+		const aData = this.data
+		const bData = b.data
+		const output = o.data
+		const bCols = b.cols
 
 		for (let i = 0; i < m; i++) {
+			const aRowOffset = i * shared
+			const oRowOffset = i * n
+
 			for (let j = 0; j < n; j++) {
 				let s = 0
 
-				for (let k = 0; k < this.cols; k++) {
-					s += this.get(i, k) * b.get(k, j)
+				for (let k = 0; k < shared; k++) {
+					s += aData[aRowOffset + k] * bData[k * bCols + j]
 				}
 
-				o.set(i, j, s)
+				output[oRowOffset + j] = s
 			}
 		}
 
@@ -312,23 +353,40 @@ export class Matrix {
 	}
 
 	mulVec(v: NumberArray) {
+		if (v.length !== this.cols) {
+			throw new Error('vector length must match matrix columns')
+		}
+
 		const result = new Float64Array(this.rows)
+		const data = this.data
+		const cols = this.cols
 
 		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols; j++) {
-				result[i] += this.get(i, j) * v[j]
-			}
+			const rowOffset = i * cols
+			let s = 0
+
+			for (let j = 0; j < cols; j++) s += data[rowOffset + j] * v[j]
+			result[i] = s
 		}
 
 		return result
 	}
 
 	mulTransposedVec(v: NumberArray) {
-		const result = new Float64Array(this.cols)
+		if (v.length !== this.rows) {
+			throw new Error('vector length must match matrix rows')
+		}
 
-		for (let i = 0; i < this.cols; i++) {
-			for (let j = 0; j < this.rows; j++) {
-				result[i] += this.get(j, i) * v[j]
+		const result = new Float64Array(this.cols)
+		const data = this.data
+		const cols = this.cols
+
+		for (let i = 0; i < this.rows; i++) {
+			const rowOffset = i * cols
+			const value = v[i]
+
+			for (let j = 0; j < cols; j++) {
+				result[j] += data[rowOffset + j] * value
 			}
 		}
 
@@ -337,11 +395,16 @@ export class Matrix {
 
 	// Flips the matrix horizontally (along the X axis).
 	flipX(): this {
-		for (let i = 0; i < this.rows / 2; i++) {
+		const data = this.data
+		const cols = this.cols
+
+		for (let i = 0, top = 0, bottom = (this.rows - 1) * cols; i < this.rows / 2; i++, top += cols, bottom -= cols) {
 			for (let j = 0; j < this.cols; j++) {
-				const temp = this.get(i, j)
-				this.set(i, j, this.get(this.rows - 1 - i, j))
-				this.set(this.rows - 1 - i, j, temp)
+				const topIndex = top + j
+				const bottomIndex = bottom + j
+				const temp = data[topIndex]
+				data[topIndex] = data[bottomIndex]
+				data[bottomIndex] = temp
 			}
 		}
 
@@ -350,11 +413,18 @@ export class Matrix {
 
 	// Flips the matrix vertically (along the Y axis).
 	flipY(): this {
+		const data = this.data
+		const cols = this.cols
+
 		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols / 2; j++) {
-				const temp = this.get(i, j)
-				this.set(i, j, this.get(i, this.cols - 1 - j))
-				this.set(i, this.cols - 1 - j, temp)
+			const rowOffset = i * cols
+
+			for (let j = 0; j < cols / 2; j++) {
+				const leftIndex = rowOffset + j
+				const rightIndex = rowOffset + cols - 1 - j
+				const temp = data[leftIndex]
+				data[leftIndex] = data[rightIndex]
+				data[rightIndex] = temp
 			}
 		}
 
@@ -632,7 +702,15 @@ function hypotenuse(a: number, b: number) {
 // A is a matrix of coefficients, b is a vector of constants
 // https://en.wikipedia.org/wiki/Gaussian_elimination
 export function gaussianElimination(A: Matrix, B: NumberArray, o?: NumberArray) {
+	if (!A.isSquare) {
+		throw new Error('matrix must be square')
+	}
+
 	const n = A.rows
+
+	if (B.length !== n) {
+		throw new Error('right-hand side length must match matrix rows')
+	}
 
 	for (let i = 0; i < n; i++) {
 		// Pivot
@@ -667,6 +745,10 @@ export function gaussianElimination(A: Matrix, B: NumberArray, o?: NumberArray) 
 
 	const x = o ?? new Float64Array(n)
 
+	if (x.length !== n) {
+		throw new Error('output vector length must match matrix rows')
+	}
+
 	for (let i = n - 1; i >= 0; i--) {
 		let sum = 0
 
@@ -683,8 +765,22 @@ export function gaussianElimination(A: Matrix, B: NumberArray, o?: NumberArray) 
 // Computes the product of two matrices, transpose of MxN (NxM) and MxP.
 // The result is a new matrix NxP.
 export function mulMTxN(a: Readonly<Readonly<NumberArray>[]>, b: Readonly<Readonly<NumberArray>[]>): NumberArray[] {
+	if (a.length === 0 || b.length === 0) {
+		throw new Error('matrices must not be empty')
+	}
+
+	if (a.length !== b.length) {
+		throw new Error('matrix row dimensions must agree')
+	}
+
 	const m = a[0].length
 	const n = b[0].length
+
+	for (let i = 0; i < a.length; i++) {
+		if (a[i].length !== m || b[i].length !== n) {
+			throw new Error('matrices must be rectangular')
+		}
+	}
 
 	const o = new Array<Float64Array>(m)
 	for (let i = 0; i < m; i++) o[i] = new Float64Array(n)
@@ -707,8 +803,29 @@ export function mulMTxN(a: Readonly<Readonly<NumberArray>[]>, b: Readonly<Readon
 // Computes the product of two matrices, MxN and transpose of PxN (NxP).
 // The result is a new matrix MxP.
 export function mulMxNT(a: Readonly<Readonly<NumberArray>[]>, b: Readonly<Readonly<NumberArray>[]>): NumberArray[] {
+	if (a.length === 0 || b.length === 0) {
+		throw new Error('matrices must not be empty')
+	}
+
 	const m = a.length
 	const n = b.length
+	const shared = a[0].length
+
+	if (shared !== b[0].length) {
+		throw new Error('matrix column dimensions must agree')
+	}
+
+	for (let i = 0; i < m; i++) {
+		if (a[i].length !== shared) {
+			throw new Error('left matrix must be rectangular')
+		}
+	}
+
+	for (let i = 0; i < n; i++) {
+		if (b[i].length !== shared) {
+			throw new Error('right matrix must be rectangular')
+		}
+	}
 
 	const o = new Array<Float64Array>(m)
 	for (let i = 0; i < m; i++) o[i] = new Float64Array(n)
@@ -720,7 +837,7 @@ export function mulMxNT(a: Readonly<Readonly<NumberArray>[]>, b: Readonly<Readon
 			const bj = b[j]
 			let s = 0
 
-			for (let k = 0; k < b[i].length; k++) {
+			for (let k = 0; k < shared; k++) {
 				s += ai[k] * bj[k]
 			}
 
@@ -729,4 +846,11 @@ export function mulMxNT(a: Readonly<Readonly<NumberArray>[]>, b: Readonly<Readon
 	}
 
 	return o
+}
+
+// Validates that an output matrix matches the expected shape.
+function checkMatrixShape(matrix: Matrix, rows: number, cols: number) {
+	if (matrix.rows !== rows || matrix.cols !== cols) {
+		throw new Error(`output matrix must be ${rows}x${cols}`)
+	}
 }
