@@ -169,13 +169,27 @@ export function vecNormalizeMut(v: MutVec3): MutVec3 {
 // Efficient algorithm for rotating a vector in space, given an axis and angle of rotation.
 export function vecRotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
 	const cosa = Math.cos(angle)
-	const b: MutVec3 = [0, 0, 0]
-	const c: MutVec3 = [0, 0, 0]
-	const k = vecNormalize(axis)
-	vecMulScalar(vecCross(k, v, b), Math.sin(angle), b)
-	vecMulScalar(k, vecDot(k, v), c)
-	vecPlus(vecMulScalar(v, cosa, k), b, b)
-	return vecPlus(b, vecMulScalar(c, 1 - cosa, c), o ?? c)
+	const ax = axis[0]
+	const ay = axis[1]
+	const az = axis[2]
+	const len = Math.sqrt(ax * ax + ay * ay + az * az)
+
+	if (len === 0) {
+		return o ? vecFill(o, v[0], v[1], v[2]) : vecClone(v)
+	}
+
+	const invLen = 1 / len
+	const kx = ax * invLen
+	const ky = ay * invLen
+	const kz = az * invLen
+	const sina = Math.sin(angle)
+	const omc = 1 - cosa
+	const kv = kx * v[0] + ky * v[1] + kz * v[2]
+	const cx = ky * v[2] - kz * v[1]
+	const cy = kz * v[0] - kx * v[2]
+	const cz = kx * v[1] - ky * v[0]
+
+	return vecFill(o ?? [0, 0, 0], v[0] * cosa + cx * sina + kx * kv * omc, v[1] * cosa + cy * sina + ky * kv * omc, v[2] * cosa + cz * sina + kz * kv * omc)
 }
 
 // Obtains the normal vector of the plane defined by three points.

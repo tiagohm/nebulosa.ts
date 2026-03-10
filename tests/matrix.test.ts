@@ -50,6 +50,13 @@ test('identity fill supports rectangular matrices', () => {
 	expect(m.toArray()).toEqual([1, 0, 0, 0, 1, 0])
 })
 
+test('copyInto requires identical shape', () => {
+	const source = new Matrix(2, 3, [1, 2, 3, 4, 5, 6])
+	const target = new Matrix(3, 2)
+
+	expect(() => source.copyInto(target)).toThrow('output matrix must be 2x3')
+})
+
 test('rectangular zero matrix is zero', () => {
 	const m = new Matrix(2, 3)
 	expect(m.isZero).toBe(true)
@@ -306,6 +313,14 @@ describe('LU decomposition', () => {
 		expect(x[2]).toBeCloseTo(1.1982089552238815, 12)
 		expect(x[3]).toBeCloseTo(1.8095522388059702, 12)
 		expect(x[4]).toBeCloseTo(0.3808955223880599, 12)
+	})
+
+	test('singular matrix rejects solve and invert', () => {
+		const decomposition = new LuDecomposition(Matrix.square(2, [1, 2, 2, 4]))
+
+		expect(decomposition.isSingular).toBe(true)
+		expect(() => decomposition.solve([1, 2])).toThrow('matrix is singular and cannot be solved')
+		expect(() => decomposition.invert()).toThrow('matrix is singular and cannot be inverted')
 	})
 })
 

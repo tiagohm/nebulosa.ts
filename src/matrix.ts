@@ -32,10 +32,15 @@ export class Matrix {
 	get isIdentity() {
 		if (!this.isSquare) return false
 
+		const data = this.data
+		const cols = this.cols
+
 		for (let i = 0; i < this.rows; i++) {
-			for (let j = 0; j < this.cols; j++) {
-				if (i === j && this.get(i, j) !== 1) return false
-				if (i !== j && this.get(i, j) !== 0) return false
+			const rowOffset = i * cols
+
+			for (let j = 0; j < cols; j++) {
+				const value = data[rowOffset + j]
+				if (i === j ? value !== 1 : value !== 0) return false
 			}
 		}
 
@@ -71,9 +76,14 @@ export class Matrix {
 	get isSymmetric() {
 		if (!this.isSquare) return false
 
+		const data = this.data
+		const cols = this.cols
+
 		for (let i = 0; i < this.rows; i++) {
-			for (let j = i + 1; j < this.cols; j++) {
-				if (this.get(i, j) !== this.get(j, i)) return false
+			const rowOffset = i * cols
+
+			for (let j = i + 1; j < cols; j++) {
+				if (data[rowOffset + j] !== data[j * cols + i]) return false
 			}
 		}
 
@@ -130,8 +140,8 @@ export class Matrix {
 	}
 
 	copyInto(m: Matrix) {
-		const n = Math.min(m.size, this.size)
-		for (let i = 0; i < n; i++) m.data[i] = this.data[i]
+		checkMatrixShape(m, this.rows, this.cols)
+		for (let i = 0; i < this.size; i++) m.data[i] = this.data[i]
 		return m
 	}
 
@@ -146,11 +156,13 @@ export class Matrix {
 		} else if (this.rows === 1) {
 			return this.data[0]
 		} else if (this.rows === 2) {
-			return this.get(0, 0) * this.get(1, 1) - this.get(0, 1) * this.get(1, 0)
+			const data = this.data
+			return data[0] * data[3] - data[1] * data[2]
 		} else if (this.rows === 3) {
-			const a = this.get(0, 0) * (this.get(1, 1) * this.get(2, 2) - this.get(1, 2) * this.get(2, 1))
-			const b = this.get(0, 1) * (this.get(1, 0) * this.get(2, 2) - this.get(1, 2) * this.get(2, 0))
-			const c = this.get(0, 2) * (this.get(1, 0) * this.get(2, 1) - this.get(2, 0) * this.get(1, 1))
+			const data = this.data
+			const a = data[0] * (data[4] * data[8] - data[5] * data[7])
+			const b = data[1] * (data[3] * data[8] - data[5] * data[6])
+			const c = data[2] * (data[3] * data[7] - data[6] * data[4])
 			return a - b + c
 		} else {
 			return new LuDecomposition(this).determinant
@@ -170,7 +182,7 @@ export class Matrix {
 		}
 
 		let sum = 0
-		for (let i = 0; i < this.rows; i++) sum += this.get(i, i)
+		for (let i = 0; i < this.rows; i++) sum += this.data[i * this.cols + i]
 		return sum
 	}
 
@@ -338,14 +350,16 @@ export class Matrix {
 			const aRowOffset = i * shared
 			const oRowOffset = i * n
 
-			for (let j = 0; j < n; j++) {
-				let s = 0
+			for (let j = 0; j < n; j++) output[oRowOffset + j] = 0
 
-				for (let k = 0; k < shared; k++) {
-					s += aData[aRowOffset + k] * bData[k * bCols + j]
+			for (let k = 0; k < shared; k++) {
+				const aValue = aData[aRowOffset + k]
+				if (aValue === 0) continue
+				const bRowOffset = k * bCols
+
+				for (let j = 0; j < n; j++) {
+					output[oRowOffset + j] += aValue * bData[bRowOffset + j]
 				}
-
-				output[oRowOffset + j] = s
 			}
 		}
 
@@ -472,6 +486,7 @@ export class LuDecomposition {
 
 		const n = matrix.rows
 		const A = matrix.clone()
+		const data = A.data
 
 		// Unit permutation matrix
 		const P = new Int32Array(n + 1)
@@ -482,7 +497,7 @@ export class LuDecomposition {
 			let maxI = i
 
 			for (let k = i; k < n; k++) {
-				const a = Math.abs(A.get(k, i))
+				const a = Math.abs(data[k * n + i])
 
 				if (a > maxA) {
 					maxA = a
@@ -499,21 +514,30 @@ export class LuDecomposition {
 				P[maxI] = j
 
 				// Pivoting rows of A
+				const iOffset = i * n
+				const maxOffset = maxI * n
+
 				for (let j = 0; j < n; j++) {
-					const p = A.get(i, j)
-					A.set(i, j, A.get(maxI, j))
-					A.set(maxI, j, p)
+					const p = data[iOffset + j]
+					data[iOffset + j] = data[maxOffset + j]
+					data[maxOffset + j] = p
 				}
 
 				// Counting pivots starting from N (for determinant)
 				P[n]++
 			}
 
+			const iOffset = i * n
+			const pivot = data[iOffset + i]
+			if (pivot === 0) continue
+
 			for (let j = i + 1; j < n; j++) {
-				A.set(j, i, A.get(j, i) / A.get(i, i))
+				const jOffset = j * n
+				const scale = data[jOffset + i] / pivot
+				data[jOffset + i] = scale
 
 				for (let k = i + 1; k < n; k++) {
-					A.set(j, k, A.get(j, k) - A.get(j, i) * A.get(i, k))
+					data[jOffset + k] -= scale * data[iOffset + k]
 				}
 			}
 		}
@@ -524,9 +548,10 @@ export class LuDecomposition {
 
 	get isSingular() {
 		const n = this.A.rows
+		const data = this.A.data
 
 		for (let j = 0; j < n; j++) {
-			if (this.A.get(j, j) === 0) {
+			if (data[j * n + j] === 0) {
 				return true
 			}
 		}
@@ -536,31 +561,45 @@ export class LuDecomposition {
 
 	get determinant() {
 		const n = this.A.rows
-		let det = this.A.get(0, 0)
-		for (let i = 1; i < n; i++) det *= this.A.get(i, i)
+		const data = this.A.data
+		let det = data[0]
+		for (let i = 1; i < n; i++) det *= data[i * n + i]
 		return (this.P[n] - n) % 2 === 0 ? det : -det
 	}
 
 	invert(o?: Matrix) {
 		const n = this.A.rows
+		const aData = this.A.data
 
 		o ??= new Matrix(n, n)
+		checkMatrixShape(o, n, n)
+
+		if (this.isSingular) {
+			throw new Error('matrix is singular and cannot be inverted')
+		}
+
+		const output = o.data
 
 		for (let j = 0; j < n; j++) {
 			for (let i = 0; i < n; i++) {
-				o.set(i, j, this.P[i] === j ? 1 : 0)
+				const ij = i * n + j
+				let value = this.P[i] === j ? 1 : 0
 
 				for (let k = 0; k < i; k++) {
-					o.set(i, j, o.get(i, j) - this.A.get(i, k) * o.get(k, j))
+					value -= aData[i * n + k] * output[k * n + j]
 				}
+
+				output[ij] = value
 			}
 
 			for (let i = n - 1; i >= 0; i--) {
+				let value = output[i * n + j]
+
 				for (let k = i + 1; k < n; k++) {
-					o.set(i, j, o.get(i, j) - this.A.get(i, k) * o.get(k, j))
+					value -= aData[i * n + k] * output[k * n + j]
 				}
 
-				o.set(i, j, o.get(i, j) / this.A.get(i, i))
+				output[i * n + j] = value / aData[i * n + i]
 			}
 		}
 
@@ -570,22 +609,26 @@ export class LuDecomposition {
 	// Solves the system of linear equations A*x = B, where A is the matrix and B is the right-hand side vector.
 	solve(B: Readonly<NumberArray>) {
 		const n = this.A.rows
+		if (B.length !== n) throw new Error('right-hand side length must match matrix rows')
+		if (this.isSingular) throw new Error('matrix is singular and cannot be solved')
+
+		const aData = this.A.data
 		const x = new Float64Array(n)
 
 		for (let i = 0; i < n; i++) {
 			x[i] = B[this.P[i]]
 
 			for (let k = 0; k < i; k++) {
-				x[i] -= this.A.get(i, k) * x[k]
+				x[i] -= aData[i * n + k] * x[k]
 			}
 		}
 
 		for (let i = n - 1; i >= 0; i--) {
 			for (let k = i + 1; k < n; k++) {
-				x[i] -= this.A.get(i, k) * x[k]
+				x[i] -= aData[i * n + k] * x[k]
 			}
 
-			x[i] /= this.A.get(i, i)
+			x[i] /= aData[i * n + i]
 		}
 
 		return x
@@ -707,53 +750,73 @@ export function gaussianElimination(A: Matrix, B: NumberArray, o?: NumberArray) 
 	}
 
 	const n = A.rows
+	const x = o ?? new Float64Array(n)
 
 	if (B.length !== n) {
 		throw new Error('right-hand side length must match matrix rows')
 	}
 
-	for (let i = 0; i < n; i++) {
-		// Pivot
-		let maxRow = i
-
-		for (let k = i + 1; k < n; k++) {
-			if (Math.abs(A.get(k, i)) > Math.abs(A.get(maxRow, i))) maxRow = k
-		}
-
-		// Swap rows in matrix A
-		for (let j = 0; j < n; j++) {
-			const temp = A.get(maxRow, j)
-			A.set(maxRow, j, A.get(i, j))
-			A.set(i, j, temp)
-		}
-
-		// Swap entries in vector B
-		const tempB = B[maxRow]
-		B[maxRow] = B[i]
-		B[i] = tempB
-
-		const divisor = A.get(i, i)
-		for (let j = i; j < n; j++) A.set(i, j, A.get(i, j) / divisor)
-		B[i] /= divisor
-
-		for (let k = i + 1; k < n; k++) {
-			const factor = A.get(k, i)
-			for (let j = i; j < n; j++) A.set(k, j, A.get(k, j) - factor * A.get(i, j))
-			B[k] -= factor * B[i]
-		}
-	}
-
-	const x = o ?? new Float64Array(n)
-
 	if (x.length !== n) {
 		throw new Error('output vector length must match matrix rows')
 	}
 
+	const data = A.data
+
+	for (let i = 0; i < n; i++) {
+		// Pivot
+		let maxRow = i
+		let maxValue = Math.abs(data[i * n + i])
+
+		for (let k = i + 1; k < n; k++) {
+			const value = Math.abs(data[k * n + i])
+
+			if (value > maxValue) {
+				maxValue = value
+				maxRow = k
+			}
+		}
+
+		if (maxValue === 0) {
+			for (let k = 0; k < n; k++) x[k] = Number.NaN
+			return x
+		}
+
+		// Swap rows in matrix A
+		if (maxRow !== i) {
+			const iOffset = i * n
+			const maxOffset = maxRow * n
+
+			for (let j = 0; j < n; j++) {
+				const temp = data[maxOffset + j]
+				data[maxOffset + j] = data[iOffset + j]
+				data[iOffset + j] = temp
+			}
+
+			// Swap entries in vector B
+			const tempB = B[maxRow]
+			B[maxRow] = B[i]
+			B[i] = tempB
+		}
+
+		const iOffset = i * n
+		const divisor = data[iOffset + i]
+		for (let j = i; j < n; j++) data[iOffset + j] /= divisor
+		B[i] /= divisor
+
+		for (let k = i + 1; k < n; k++) {
+			const kOffset = k * n
+			const factor = data[kOffset + i]
+			for (let j = i; j < n; j++) data[kOffset + j] -= factor * data[iOffset + j]
+			B[k] -= factor * B[i]
+		}
+	}
+
 	for (let i = n - 1; i >= 0; i--) {
 		let sum = 0
+		const iOffset = i * n
 
 		for (let k = i + 1; k < A.cols; k++) {
-			sum += A.get(i, k) * x[k]
+			sum += data[iOffset + k] * x[k]
 		}
 
 		x[i] = B[i] - sum

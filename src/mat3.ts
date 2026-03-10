@@ -1,5 +1,5 @@
 import type { Angle } from './angle'
-import { type MutVec3, type Vec3, vecFill, vecNormalize } from './vec3'
+import { type MutVec3, type Vec3, vecFill } from './vec3'
 
 // Mutable rectangular array of numbers with three rows and three columns.
 export type MutMat3 = [number, number, number, number, number, number, number, number, number]
@@ -267,7 +267,19 @@ export function matTransposeMulVec(a: Mat3, b: Vec3, o?: MutVec3): MutVec3 {
 
 // Creates a new rotation matrix around an arbitrary axis using Rodrigues' rotation formula.
 export function matRodriguesRotation(axis: Vec3, angle: Angle, o?: MutMat3): MutMat3 {
-	const [ux, uy, uz] = vecNormalize(axis)
+	const ax = axis[0]
+	const ay = axis[1]
+	const az = axis[2]
+	const len = Math.sqrt(ax * ax + ay * ay + az * az)
+
+	if (len === 0) {
+		return matIdentity(o)
+	}
+
+	const invLen = 1 / len
+	const ux = ax * invLen
+	const uy = ay * invLen
+	const uz = az * invLen
 	const ca = Math.cos(angle)
 	const sa = Math.sin(angle)
 	const omca = 1 - ca

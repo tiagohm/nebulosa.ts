@@ -83,6 +83,8 @@ test('rotate by rodrigues', () => {
 	expect(u[0]).toBeCloseTo(1.2132585570946925, 15)
 	expect(u[1]).toBeCloseTo(1.7306199385433279, 15)
 	expect(u[2]).toBeCloseTo(3.087548914908522, 15)
+
+	expect(vecRotateByRodrigues(v, [0, 0, 0], PI / 3)).toEqual([1, 2, 3])
 })
 
 test('plane', () => {

@@ -194,3 +194,7 @@ test('rodrigues rotation matrix', () => {
 	expect(v[1]).toBeCloseTo(0, 12)
 	expect(v[2]).toBeCloseTo(1, 12)
 })
+
+test('rodrigues rotation matrix with zero axis is identity', () => {
+	expect(matRodriguesRotation([0, 0, 0], Math.PI / 3)).toEqual(matIdentity())
+})
