@@ -216,19 +216,30 @@ export class RangeHttpSource implements Source, Seekable {
 	}
 
 	async read(buffer: Buffer, offset?: number, size?: number) {
-		size ??= buffer.byteLength - (offset ?? 0)
+		offset ??= 0
+		size ??= buffer.byteLength - offset
 
 		if (size === 0) return 0
 
 		const response = await fetch(this.uri, { headers: { 'Accept-Encoding': 'identity', Range: `bytes=${this.position}-${this.position + size - 1}` } })
+		if (!response.ok) throw new Error(`HTTP range request failed with status ${response.status}`)
 
+		let read = 0
 		if (size > 0x10000) {
-			await using source = readableStreamSource(response.body!)
-			return await source.read(buffer, offset, size)
+			if (response.body) {
+				await using source = readableStreamSource(response.body)
+				read = await readUntil(source, buffer, size, offset)
+			} else {
+				const data = Buffer.from(await response.arrayBuffer())
+				read = data.copy(buffer, offset, 0, size)
+			}
 		} else {
 			const data = Buffer.from(await response.arrayBuffer())
-			return data.copy(buffer, offset)
+			read = data.copy(buffer, offset, 0, size)
 		}
+
+		this.position += read
+		return read
 	}
 }
 
@@ -266,7 +277,7 @@ export class Base64Source implements Source, Seekable {
 	}
 
 	async read(buffer: Buffer, offset?: number, size?: number) {
-		size ??= buffer.byteLength
+		size ??= buffer.byteLength - (offset ?? 0)
 
 		if (size > 0 && this.bpos >= this.n) {
 			const source = this.source
@@ -630,11 +641,13 @@ export class GrowableBuffer {
 	}
 
 	private ensureCapacity(min: number) {
-		if (min - this.buffer.length > 0) this.resize()
+		if (min - this.buffer.length > 0) this.resize(min)
 	}
 
-	private resize() {
-		const buffer = Buffer.allocUnsafe(this.buffer.byteLength * 2)
+	private resize(min: number) {
+		let size = this.buffer.byteLength
+		while (min > size) size *= 2
+		const buffer = Buffer.allocUnsafe(size)
 		this.buffer.copy(buffer, 0, 0, this.position)
 		this.buffer = buffer
 	}
@@ -654,7 +667,7 @@ export class GrowableBuffer {
 }
 
 function trimStartEnd(buffer: Buffer, start: number, end: number) {
-	while (start <= end && buffer.readInt8(start) <= 32) start++
-	while (end > start && buffer.readInt8(end) <= 32) end--
+	while (start <= end && buffer.readUInt8(start) <= 32) start++
+	while (end > start && buffer.readUInt8(end) <= 32) end--
 	return [start, end] as const
 }

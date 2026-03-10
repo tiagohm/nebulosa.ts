@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { FitsKeywordReader, FitsKeywordWriter } from '../src/fits'
-import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, readableStreamSource, readLines, readUntil } from '../src/io'
+import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readUntil } from '../src/io'
 
 test('bufferSink', () => {
 	const buffer = Buffer.allocUnsafe(16)
@@ -279,6 +279,22 @@ describe('growableBuffer', () => {
 		expect(buffer.length).toBe(3)
 		expect(buffer.toString(true, 'ascii')).toBe('!')
 	})
+
+	test('grows for multi-byte writes', () => {
+		const buffer = new GrowableBuffer(1)
+		buffer.writeUInt32BE(0x01020304)
+
+		expect(buffer.length).toBe(4)
+		expect(Array.from(buffer.toBuffer())).toEqual([1, 2, 3, 4])
+	})
+
+	test('trim preserves non-ascii bytes', () => {
+		const buffer = new GrowableBuffer(4)
+
+		for (const byte of Buffer.from(' é ', 'utf8')) buffer.writeUInt8(byte)
+
+		expect(buffer.toString(true, 'utf8')).toBe('é')
+	})
 })
 
 describe('base64', () => {
@@ -304,6 +320,14 @@ describe('base64', () => {
 			expect(n).toBe(i)
 			expect(raw.subarray(0, n)).toEqual(output.subarray(0, n))
 		}
+	})
+
+	test('source honors offset when size is omitted', async () => {
+		const source = base64Source('YWJjZGVm')
+		const buffer = Buffer.alloc(8, 32)
+
+		expect(await source.read(buffer, 2)).toBe(6)
+		expect(buffer.toString('ascii')).toBe('  abcdef')
 	})
 
 	test('sink', async () => {
@@ -346,9 +370,93 @@ describe('base64', () => {
 	})
 })
 
+describe('rangeHttpSource', () => {
+	test('advances position across sequential reads', async () => {
+		const restore = mockRangeFetch(Buffer.from('abcdefghijklmnopqrstuvwxyz'))
+
+		try {
+			const source = rangeHttpSource('https://example.test/data')
+			const first = Buffer.allocUnsafe(5)
+			const second = Buffer.allocUnsafe(5)
+
+			expect(await source.read(first)).toBe(5)
+			expect(first.toString('ascii')).toBe('abcde')
+			expect(source.position).toBe(5)
+
+			expect(await source.read(second)).toBe(5)
+			expect(second.toString('ascii')).toBe('fghij')
+			expect(source.position).toBe(10)
+		} finally {
+			globalThis.fetch = restore
+		}
+	})
+
+	test('reads large ranges across multiple stream chunks', async () => {
+		const data = Buffer.allocUnsafe(0x10000 + 257)
+		for (let i = 0; i < data.byteLength; i++) data[i] = i & 0xff
+
+		const restore = mockRangeFetch(data, 4096)
+
+		try {
+			const source = rangeHttpSource('https://example.test/data')
+			const output = Buffer.allocUnsafe(data.byteLength)
+
+			expect(await source.read(output)).toBe(data.byteLength)
+			expect(output).toEqual(data)
+			expect(source.position).toBe(data.byteLength)
+		} finally {
+			globalThis.fetch = restore
+		}
+	})
+})
+
 function randomBase64(n: number, alphabet: Base64Alphabet) {
 	const bytes = Buffer.allocUnsafe(n)
 	for (let i = 0; i < n; i++) bytes.writeUInt8(Math.trunc(Math.random() * 256), i)
 	const base64 = bytes.toBase64({ alphabet })
 	return [Buffer.from(base64, 'ascii'), bytes] as const
+}
+
+function mockRangeFetch(data: Buffer, chunkSize?: number) {
+	const restore = globalThis.fetch
+
+	// biome-ignore lint/suspicious/useAwait: mock
+	globalThis.fetch = (async (_input, init) => {
+		const headers = new Headers(init?.headers)
+		const range = headers.get('Range')
+		const match = range?.match(/^bytes=(\d+)-(\d+)$/)
+
+		if (!match) return new Response(null, { status: 400 })
+
+		const start = Number.parseInt(match[1], 10)
+		const end = Number.parseInt(match[2], 10)
+		const slice = data.subarray(start, Math.min(end + 1, data.byteLength))
+		const body = new Uint8Array(slice.buffer, slice.byteOffset, slice.byteLength)
+
+		if (!chunkSize || slice.byteLength <= chunkSize) {
+			const copy = new Uint8Array(body.byteLength)
+			copy.set(body)
+			return new Response(new Blob([copy.buffer]), { status: 206 })
+		}
+
+		let position = 0
+
+		return new Response(
+			new ReadableStream<Uint8Array>({
+				pull(controller) {
+					if (position >= slice.byteLength) {
+						controller.close()
+						return
+					}
+
+					const next = Math.min(position + chunkSize, slice.byteLength)
+					controller.enqueue(slice.subarray(position, next))
+					position = next
+				},
+			}),
+			{ status: 206 },
+		)
+	}) as typeof fetch
+
+	return restore
 }
