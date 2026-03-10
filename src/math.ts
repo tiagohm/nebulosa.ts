@@ -61,3 +61,11 @@ export function roundToNthDecimal(a: number, n: number) {
 	const factor = 10 ** n
 	return Math.round((a + Number.EPSILON) * factor) / factor
 }
+
+export function signed8(num: number) {
+	return (num << 24) >> 24
+}
+
+export function signed16(num: number) {
+	return (num << 16) >> 16
+}

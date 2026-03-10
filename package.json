@@ -24,5 +24,8 @@
 	},
 	"trustedDependencies": [
 		"@biomejs/biome"
-	]
+	],
+	"overrides": {
+		"@typescript/native-preview": "7.0.0-dev.20260301.1"
+	}
 }

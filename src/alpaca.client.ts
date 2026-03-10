@@ -1914,11 +1914,11 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 	let headerOffset = writer.writeAll(header, output)
 	headerOffset += writer.writeEnd(output, headerOffset)
 
-	const SourceType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Uint16Array : bitpix === 32 ? Uint32Array : bitpix === -32 ? Float32Array : Float64Array
-	const sourceArray = new SourceType(data, metadata.DataStart, elementCount)
+	const SourceTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Uint16Array : bitpix === 32 ? Uint32Array : bitpix === -32 ? Float32Array : Float64Array
+	const sourceArray = new SourceTypedArray(data, metadata.DataStart, elementCount)
 	const byteOffset = headerOffset + computeRemainingBytes(headerOffset)
-	const OutputType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : bitpix === 32 ? Int32Array : bitpix === -32 ? Float32Array : Float64Array
-	const outputArray = new OutputType(output.buffer, byteOffset, sourceArray.length)
+	const OutputTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : bitpix === 32 ? Int32Array : bitpix === -32 ? Float32Array : Float64Array
+	const outputArray = new OutputTypedArray(output.buffer, byteOffset, sourceArray.length)
 	const zero = bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0
 
 	let p = 0

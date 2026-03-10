@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { compressRice, decompressRice, type RiceTypedArray } from '../src/compression'
+import { compressRice, decompressRice, type RiceCompressionTypedArray } from '../src/compression'
 
 function makeSequence(length: number, seed = 1) {
 	const sequence = new Int32Array(length)
@@ -12,9 +12,9 @@ function makeSequence(length: number, seed = 1) {
 	return sequence
 }
 
-function roundTrip(input: RiceTypedArray, blockSize: number = 32) {
+function roundTrip(input: RiceCompressionTypedArray, blockSize: number = 32) {
 	const compressed = compressRice(input, blockSize)
-	const decompressed = new (input.constructor as { new (length: number): RiceTypedArray })(input.length)
+	const decompressed = new (input.constructor as { new (length: number): RiceCompressionTypedArray })(input.length)
 	decompressRice(compressed, decompressed, blockSize)
 	expect(Array.from(decompressed)).toEqual(Array.from(input))
 }

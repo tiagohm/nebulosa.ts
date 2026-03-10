@@ -1689,11 +1689,11 @@ export function makeImageBytesFromFits(source: Buffer<ArrayBuffer>) {
 	else if (bytesPerPixel === 8) source.swap64()
 
 	const sourceLength = (source.byteLength - position) / bytesPerPixel
-	const SourceType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : bitpix === 32 ? Int32Array : bitpix === -32 ? Float32Array : Float64Array
-	const sourceArray = new SourceType(source.buffer, position, sourceLength)
+	const SourceTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : bitpix === 32 ? Int32Array : bitpix === -32 ? Float32Array : Float64Array
+	const sourceArray = new SourceTypedArray(source.buffer, position, sourceLength)
 	const outputLength = (output.byteLength - dataStart) / bytesPerPixel
-	const OutputType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Uint16Array : bitpix === 32 ? Uint32Array : bitpix === -32 ? Float32Array : Float64Array
-	const outputArray = new OutputType(output.buffer, dataStart, outputLength)
+	const OutputTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Uint16Array : bitpix === 32 ? Uint32Array : bitpix === -32 ? Float32Array : Float64Array
+	const outputArray = new OutputTypedArray(output.buffer, dataStart, outputLength)
 
 	for (let x = 0, p = 0; x < numX; x++) {
 		for (let y = 0, n = 0; y < numY; y++, n += numX) {

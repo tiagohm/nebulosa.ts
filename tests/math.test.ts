@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { PI, TAU } from '../src/constants'
-import { floorDiv, pmod, roundToNearestWholeNumber } from '../src/math'
+import { floorDiv, pmod, roundToNearestWholeNumber, signed8, signed16 } from '../src/math'
 
 test('pmod', () => {
 	expect(pmod(3.16, PI)).toBe(0.018407346410207026)
@@ -33,4 +33,27 @@ test('roundToNearestWholeNumber', () => {
 	expect(roundToNearestWholeNumber(-0.4)).toBe(0)
 	expect(roundToNearestWholeNumber(-0.5)).toBe(-1)
 	expect(roundToNearestWholeNumber(-0.6)).toBe(-1)
+})
+
+test('signed 8-bit', () => {
+	expect(signed8(1)).toBe(1)
+	expect(signed8(-1)).toBe(-1)
+	expect(signed8(255)).toBe(-1)
+	expect(signed8(256)).toBe(0)
+	expect(signed8(257)).toBe(1)
+	expect(signed8(127)).toBe(127)
+	expect(signed8(128)).toBe(-128)
+	expect(signed8(129)).toBe(-127)
+})
+
+test('signed 16-bit', () => {
+	expect(signed16(1)).toBe(1)
+	expect(signed16(-1)).toBe(-1)
+	expect(signed16(255)).toBe(255)
+	expect(signed16(65535)).toBe(-1)
+	expect(signed16(65536)).toBe(0)
+	expect(signed16(65537)).toBe(1)
+	expect(signed16(32767)).toBe(32767)
+	expect(signed16(32768)).toBe(-32768)
+	expect(signed16(32769)).toBe(-32767)
 })

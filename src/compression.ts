@@ -1,7 +1,9 @@
+import { signed8, signed16 } from './math'
+
 // The Rice algorithm is simple and very fast. It requires only enough memory to hold a single block of 16 or 32 pixels at a time.
 // It codes the pixels in small blocks and so is able to adapt very quickly to changes in the input image statistics.
 
-export type RiceTypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array
+export type RiceCompressionTypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array
 
 const NONZERO_COUNT = new Uint8Array(256)
 
@@ -168,14 +170,6 @@ class BitWriter {
 	}
 }
 
-function toSigned8(value: number) {
-	return (value << 24) >> 24
-}
-
-function toSigned16(value: number) {
-	return (value << 16) >> 16
-}
-
 function mapDiff(delta: number) {
 	return (delta < 0 ? ~(delta << 1) : delta << 1) >>> 0
 }
@@ -185,7 +179,7 @@ function estimateCapacity(inputLengthBytes: number, bytesPerPixel: number, block
 	return inputLengthBytes + bytesPerPixel + Math.ceil(inputLengthBytes / 100) + blocks * 2 + 16
 }
 
-export function compressRice(input: Readonly<RiceTypedArray>, blockSize: number = 32, initialCapacity?: number | BitWriter) {
+export function compressRice(input: Readonly<RiceCompressionTypedArray>, blockSize: number = 32, initialCapacity?: number | BitWriter) {
 	if (blockSize < 1) throw new Error('block size must be a positive integer')
 
 	const nx = input.length
@@ -205,10 +199,10 @@ export function compressRice(input: Readonly<RiceTypedArray>, blockSize: number 
 
 	if (bytesPerPixel === 1) {
 		firstRaw = input[0] & 0xff
-		lastpix = toSigned8(input[0])
+		lastpix = signed8(input[0])
 	} else if (bytesPerPixel === 2) {
 		firstRaw = input[0] & 0xffff
-		lastpix = toSigned16(input[0])
+		lastpix = signed16(input[0])
 	} else {
 		firstRaw = input[0] >>> 0
 		lastpix = input[0] | 0
@@ -222,8 +216,8 @@ export function compressRice(input: Readonly<RiceTypedArray>, blockSize: number 
 
 		if (bytesPerPixel === 1) {
 			for (let j = 0; j < thisBlock; j++) {
-				const nextpix = toSigned8(input[i + j])
-				const pdiff = toSigned8(nextpix - lastpix)
+				const nextpix = signed8(input[i + j])
+				const pdiff = signed8(nextpix - lastpix)
 				const mapped = mapDiff(pdiff)
 				diff[j] = mapped
 				pixelSum += mapped
@@ -231,8 +225,8 @@ export function compressRice(input: Readonly<RiceTypedArray>, blockSize: number 
 			}
 		} else if (bytesPerPixel === 2) {
 			for (let j = 0; j < thisBlock; j++) {
-				const nextpix = toSigned16(input[i + j])
-				const pdiff = toSigned16(nextpix - lastpix)
+				const nextpix = signed16(input[i + j])
+				const pdiff = signed16(nextpix - lastpix)
 				const mapped = mapDiff(pdiff)
 				diff[j] = mapped
 				pixelSum += mapped
@@ -274,7 +268,7 @@ function checkBufferBounds(offset: number, limit: number) {
 	if (offset >= limit) throw new Error('hit end of compressed byte stream')
 }
 
-export function decompressRice<T extends RiceTypedArray>(compressed: Uint8Array, output: T, blockSize: number = 32) {
+export function decompressRice<T extends RiceCompressionTypedArray>(compressed: Uint8Array, output: T, blockSize: number = 32) {
 	if (blockSize < 1) throw new Error('block size must be a positive integer')
 
 	const nx = output.length

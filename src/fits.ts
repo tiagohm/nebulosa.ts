@@ -358,8 +358,8 @@ function buildRiceCompressedImage(header: FitsHeader, raw: ImageRawType, options
 	const tileHeight = Math.min(height, options.tileHeight || 1)
 	const blockSize = options.blockSize || RICE_DEFAULT_BLOCK_SIZE
 
-	const ImageType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
-	const imageData = new ImageType(numberOfPixels * channels)
+	const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
+	const imageData = new ImageTypedArray(numberOfPixels * channels)
 	writeInterleavedToPlanar(raw, imageData, bitpix, width, height, channels)
 
 	const rowSize = 8
@@ -1070,9 +1070,9 @@ export class FitsImageReader {
 		if (rowCount < totalTiles) throw new Error('compressed FITS image has incomplete tile table')
 
 		const numberOfPixels = width * height
-		const ImageType = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
-		const data = new ImageType(numberOfPixels * channels)
-		const tileBuffer = new ImageType(tileWidth * tileHeight * tileDepth)
+		const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
+		const data = new ImageTypedArray(numberOfPixels * channels)
+		const tileBuffer = new ImageTypedArray(tileWidth * tileHeight * tileDepth)
 
 		for (let tileIndex = 0; tileIndex < totalTiles; tileIndex++) {
 			const descriptorOffset = tileIndex * rowSize
