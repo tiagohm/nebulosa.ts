@@ -17,8 +17,8 @@ export function medianAbsoluteDeviation(image: Image, m: number, normalized: boo
 export function adf(image: Image, options: Partial<AdaptiveDisplayFunctionOptions> = DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS) {
 	const bits = options.bits === undefined || typeof options.bits === 'number' ? new Int32Array(1 << (options.bits ?? 16)) : options.bits
 	options = { ...options, bits }
-	const meanBackground = options.meanBackground || DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS.meanBackground
-	const clippingPoint = options.clippingPoint || DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS.clippingPoint
+	const meanBackground = options.meanBackground ?? DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS.meanBackground
+	const clippingPoint = options.clippingPoint ?? DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS.clippingPoint
 	const med = median(image, options)
 	const mad = medianAbsoluteDeviation(image, med, true, options)
 	const upperHalf = med > 0.5
@@ -31,7 +31,11 @@ export function adf(image: Image, options: Partial<AdaptiveDisplayFunctionOption
 }
 
 export function histogram(image: Image, options: Partial<HistogramOptions> = DEFAULT_HISTOGRAM_OPTIONS) {
-	const { channel, bits, area, transform, sigmaClip } = Object.assign({}, DEFAULT_HISTOGRAM_OPTIONS, options)
+	const channel = options.channel
+	const area = options.area
+	const sigmaClip = options.sigmaClip
+	const transform = options.transform ?? DEFAULT_HISTOGRAM_OPTIONS.transform
+	const bits = options.bits ?? DEFAULT_HISTOGRAM_OPTIONS.bits
 	const h = typeof bits === 'number' ? new Int32Array(1 << bits) : bits.fill(0)
 	const max = h.length - 1
 	const { raw, metadata } = image
@@ -44,17 +48,35 @@ export function histogram(image: Image, options: Partial<HistogramOptions> = DEF
 
 	const offset = channelIndex(channel)
 	const { red, green, blue } = grayscaleFromChannel(channel)
-	const isGrayscale = channels === 3 && !(channel === 'RED' || channel === 'GREEN' || channel === 'BLUE')
+	const useGrayscale = channels === 3 && !(channel === 'RED' || channel === 'GREEN' || channel === 'BLUE')
+	const hasSigmaClip = sigmaClip !== undefined
 
-	for (let y = top; y <= bottom; y++) {
-		const m = y * stride
+	if (useGrayscale) {
+		for (let y = top; y <= bottom; y++) {
+			let i = y * stride + left * channels
+			const end = y * stride + (right + 1) * channels
 
-		for (let x = left; x <= right; x++) {
-			let i = m + x * channels + offset
-			if (sigmaClip !== undefined && sigmaClip[i] !== 0) continue
-			const v = isGrayscale ? transform(raw[i], i) * red + transform(raw[++i], i) * green + transform(raw[++i], i) * blue : transform(raw[i], i)
-			const p = truncatePixel(v, max)
-			h[p]++
+			for (; i < end; i += channels) {
+				if (hasSigmaClip && sigmaClip[i] !== 0) continue
+
+				const r = transform(raw[i], i)
+				const gi = i + 1
+				const g = transform(raw[gi], gi)
+				const bi = i + 2
+				const b = transform(raw[bi], bi)
+
+				h[truncatePixel(r * red + g * green + b * blue, max)]++
+			}
+		}
+	} else {
+		for (let y = top; y <= bottom; y++) {
+			let i = y * stride + left * channels + offset
+			const end = y * stride + (right + 1) * channels + offset
+
+			for (; i < end; i += channels) {
+				if (hasSigmaClip && sigmaClip[i] !== 0) continue
+				h[truncatePixel(transform(raw[i], i), max)]++
+			}
 		}
 	}
 

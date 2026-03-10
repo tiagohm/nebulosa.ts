@@ -508,7 +508,8 @@ export function blurConvolutionKernel(size: number) {
 		}
 	}
 
-	return convolutionKernel(kernel, size, size, Math.ceil(size / 2) << 2)
+	const divisor = n * n
+	return convolutionKernel(kernel, size, size, divisor * divisor)
 }
 
 export function blur(image: Image, size: number, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {

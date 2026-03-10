@@ -19,3 +19,8 @@ test('histogram', () => {
 	histogram([2, 0, 2], [0, 2], [4, 2], 1, 1, 1, 1)
 	histogram([5, 0, 0, 0, 0, 0, 0, 10], [7, 10], [15, 10], 4.66666, 10.88888, 3.29983, 7.25)
 })
+
+test('histogram maximum returns the last populated bin', () => {
+	const hist = new Histogram([2, 0, 5], 2)
+	expect(hist.maximum).toEqual([1, 5])
+})

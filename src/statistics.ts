@@ -31,7 +31,7 @@ export class Histogram {
 	}
 
 	get mode() {
-		if (this.cache.mode) {
+		if (this.cache.mode !== undefined) {
 			return this.cache.mode
 		}
 
@@ -56,7 +56,7 @@ export class Histogram {
 	}
 
 	get count() {
-		if (this.cache.count) {
+		if (this.cache.count !== undefined) {
 			return this.cache.count
 		}
 
@@ -79,7 +79,7 @@ export class Histogram {
 	}
 
 	get mean() {
-		if (this.cache.mean) {
+		if (this.cache.mean !== undefined) {
 			return this.cache.mean
 		}
 
@@ -97,7 +97,7 @@ export class Histogram {
 	}
 
 	get variance() {
-		if (this.cache.variance) {
+		if (this.cache.variance !== undefined) {
 			return this.cache.variance
 		}
 
@@ -121,7 +121,7 @@ export class Histogram {
 	}
 
 	get standardDeviation() {
-		if (this.cache.standardDeviation) {
+		if (this.cache.standardDeviation !== undefined) {
 			return this.cache.standardDeviation
 		}
 
@@ -131,7 +131,7 @@ export class Histogram {
 	}
 
 	get median() {
-		if (this.cache.median) {
+		if (this.cache.median !== undefined) {
 			return this.cache.median
 		}
 
@@ -156,7 +156,7 @@ export class Histogram {
 	}
 
 	get minimum() {
-		if (this.cache.minimum) {
+		if (this.cache.minimum !== undefined) {
 			return this.cache.minimum
 		}
 
@@ -180,7 +180,7 @@ export class Histogram {
 	}
 
 	get maximum() {
-		if (this.cache.maximum) {
+		if (this.cache.maximum !== undefined) {
 			return this.cache.maximum
 		}
 
@@ -188,7 +188,7 @@ export class Histogram {
 		let ret = 0
 		const n = this.histogram.length
 
-		for (let i = n; i >= 0; i--) {
+		for (let i = n - 1; i >= 0; i--) {
 			const value = this.histogram[i]
 
 			if (value !== 0) {

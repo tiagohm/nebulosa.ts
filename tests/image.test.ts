@@ -146,6 +146,21 @@ test('auto stf with sigma clip', () => {
 	return readImageTransformAndSave((i) => stf(i, ...adf(i, { sigmaClip: sigmaClip(i) })), 'stf-auto-sigma-clip', 'eb8b02dbcd56dd364a4e0411f8e3029b')
 }, 5000)
 
+test('adf honors explicit zero options', () => {
+	const image = {
+		header: {},
+		metadata: { width: 1, height: 1, channels: 1, stride: 1, pixelCount: 1, strideInBytes: 4, pixelSizeInBytes: 4, bitpix: Bitpix.FLOAT, bayer: undefined },
+		raw: new Float32Array([0.25]),
+	}
+	const median = histogram(image).median
+
+	const [midtone, shadow, highlight] = adf(image, { meanBackground: 0, clippingPoint: 0 })
+
+	expect(midtone).toBeCloseTo(0, 8)
+	expect(shadow).toBeCloseTo(median, 8)
+	expect(highlight).toBeCloseTo(1, 8)
+})
+
 test('scnr', () => {
 	return readImageTransformAndSave((i) => scnr(i, 'GREEN', 0.9), 'scnr', '6cb9e0f3b826d8ea0e28833f297d90f4')
 }, 5000)
@@ -233,6 +248,11 @@ test('convolution blur', () => {
 	const c = readImageTransformAndSave((i) => convolution(i, blurConvolutionKernel(7)), 'conv-blur-7', 'db572370d0633b942e8e72398153e131')
 	return Promise.all([a, b, c])
 }, 8000)
+
+test('blur convolution kernel divisor', () => {
+	expect(blurConvolutionKernel(9).divisor).toBe(625)
+	expect(blurConvolutionKernel(11).divisor).toBe(1296)
+})
 
 test('convolution gaussian blur', () => {
 	return readImageTransformAndSave((i) => gaussianBlur(i), 'conv-gaussian-blur', 'fde35723b23615cbef1ece1fbaecb0e2')
