@@ -253,24 +253,38 @@ export class Base64Source implements Source, Seekable {
 	private readonly buffer = Buffer.allocUnsafe(1024)
 	private readonly decoded = [-1, -1, -1] // current decoded base64 bytes
 	private bpos = 0 // current position in buffer
+	private decodedPosition = 0 // current decoded byte position
 	private n = 0 // remaining bytes in buffer
+	private skip = 0 // decoded bytes to discard after seek
 	private state = -1 // current base64 decoding state
 	private spos = 0 // current position for string source
 
 	constructor(readonly source: Source | string) {}
 
 	get position() {
-		return typeof this.source === 'string' ? (this.spos * 3) >>> 2 : isSeekable(this.source) ? this.source.position : -1
+		return this.decodedPosition
 	}
 
 	seek(position: number) {
+		if (position < 0) return false
+
+		const encodedPosition = Math.floor(position / 3) * 4 // Base64 encodes every 3 bytes (24 bits) of binary data into 4 characters (24 bits).
+		const decodedPosition = ((encodedPosition / 4) * 3) | 0
+		let ok = false
+
 		if (typeof this.source === 'string') {
-			const pos = Math.ceil(position / 3) * 4 // Base64 encodes every 3 bytes (24 bits) of binary data into 4 characters (24 bits).
-			if (pos < 0 || pos >= this.source.length) return false
-			this.spos = pos
-			return true
+			if (encodedPosition > this.source.length) return false
+			this.spos = encodedPosition
+			ok = true
 		} else if (isSeekable(this.source)) {
-			return this.source.seek(position)
+			ok = this.source.seek(encodedPosition)
+		}
+
+		if (ok) {
+			this.resetState()
+			this.decodedPosition = position
+			this.skip = position - decodedPosition
+			return true
 		} else {
 			return false
 		}
@@ -278,35 +292,57 @@ export class Base64Source implements Source, Seekable {
 
 	async read(buffer: Buffer, offset?: number, size?: number) {
 		size ??= buffer.byteLength - (offset ?? 0)
+		offset ??= 0
+		let written = 0
 
-		if (size > 0 && this.bpos >= this.n) {
-			const source = this.source
+		while (written < size) {
+			if (!(await this.fill())) break
 
-			if (typeof source === 'string') {
-				let n = 0
-				let i = this.spos
-				const max = source.length
-				for (; i < max && n < 1024; i++) this.buffer.writeUInt8(source.charCodeAt(i), n++)
-				this.n = n
-				this.spos = i
-			} else {
-				this.n = await source.read(this.buffer)
+			while (this.skip > 0) {
+				const d = this.decode(this.n)
+				if (d === -1) break
+				this.skip--
 			}
 
-			if (!this.n) return 0
-
-			this.bpos = 0
+			while (written < size) {
+				const d = this.decode(this.n)
+				if (d === -1) break
+				buffer[offset++] = d
+				written++
+				this.decodedPosition++
+			}
 		}
 
-		offset ??= 0
+		return written
+	}
 
-		for (let i = 0; i < size; i++, offset++) {
-			const d = this.decode(this.n)
-			if (d === -1) return i
-			buffer[offset] = d
+	private async fill() {
+		if (this.bpos < this.n) return true
+
+		const source = this.source
+
+		if (typeof source === 'string') {
+			let n = 0
+			let i = this.spos
+			const max = source.length
+			for (; i < max && n < 1024; i++) this.buffer.writeUInt8(source.charCodeAt(i), n++)
+			this.n = n
+			this.spos = i
+		} else {
+			this.n = await source.read(this.buffer)
 		}
 
-		return size
+		if (!this.n) return false
+
+		this.bpos = 0
+		return true
+	}
+
+	private resetState() {
+		this.bpos = 0
+		this.n = 0
+		this.skip = 0
+		this.state = -1
 	}
 
 	private decode(limit: number) {

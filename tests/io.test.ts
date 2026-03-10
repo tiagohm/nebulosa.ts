@@ -330,6 +330,33 @@ describe('base64', () => {
 		expect(buffer.toString('ascii')).toBe('  abcdef')
 	})
 
+	test('string source seek is in decoded bytes', async () => {
+		const source = base64Source('YWJjZGVm')
+		const buffer = Buffer.alloc(4)
+
+		expect(source.seek(1)).toBeTrue()
+		expect(source.position).toBe(1)
+		expect(await source.read(buffer, 0, 3)).toBe(3)
+		expect(buffer.toString('ascii', 0, 3)).toBe('bcd')
+		expect(source.position).toBe(4)
+	})
+
+	test('seek resets decoder state for source-backed input', async () => {
+		const source = base64Source(bufferSource(Buffer.from('YWJjZGVm', 'ascii')))
+		const first = Buffer.alloc(2)
+		const second = Buffer.alloc(3)
+
+		expect(await source.read(first)).toBe(2)
+		expect(first.toString('ascii')).toBe('ab')
+		expect(source.position).toBe(2)
+
+		expect(source.seek(1)).toBeTrue()
+		expect(source.position).toBe(1)
+		expect(await source.read(second)).toBe(3)
+		expect(second.toString('ascii')).toBe('bcd')
+		expect(source.position).toBe(4)
+	})
+
 	test('sink', async () => {
 		for (let i = 0; i <= 1000; i++) {
 			const alphabet = i % 2 === 0 ? 'base64' : 'base64url'
