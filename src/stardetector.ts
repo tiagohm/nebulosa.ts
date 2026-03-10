@@ -39,41 +39,86 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 	const maxY = convRect.bottom - 4
 	const stars = new StarList(Math.min(maxStars, 2000))
 	const integrals = buildIntegralImages(raw, width, height, stride)
+	const leftBounds = new Int32Array(width)
+	const rightBounds = new Int32Array(width)
+	const topBounds = new Int32Array(height)
+	const bottomBounds = new Int32Array(height)
+	const stride2 = stride * 2
+	const stride3 = stride * 3
+	const stride4 = stride * 4
+
+	for (let x = convRect.left + 4; x <= maxX; x++) {
+		leftBounds[x] = Math.max(convRect.left, x - 7)
+		rightBounds[x] = Math.min(convRect.right, x + 7)
+	}
+
+	for (let y = convRect.top + 4; y <= maxY; y++) {
+		topBounds[y] = Math.max(convRect.top, y - 7)
+		bottomBounds[y] = Math.min(convRect.bottom, y + 7)
+	}
 
 	// Find each local maximum
 	for (let y = convRect.top + 4; y <= maxY; y++) {
 		const sy = stride * y
+		const rowM1 = sy - stride
+		const rowP1 = sy + stride
+		const rowM2 = sy - stride2
+		const rowP2 = sy + stride2
+		const rowM3 = sy - stride3
+		const rowP3 = sy + stride3
+		const rowM4 = sy - stride4
+		const rowP4 = sy + stride4
 
 		for (let x = convRect.left + 4; x <= maxX; x++) {
-			const value = raw[sy + x]
-			let isMax = false
+			const center = sy + x
+			const value = raw[center]
 
-			if (value > 0) {
-				isMax = true
+			if (value <= 0) continue
+			if (raw[center - 1] > value || raw[center + 1] > value || raw[rowM1 + x] > value || raw[rowP1 + x] > value || raw[rowM1 + x - 1] > value || raw[rowM1 + x + 1] > value || raw[rowP1 + x - 1] > value || raw[rowP1 + x + 1] > value) continue
 
-				for (let j = -4; j <= 4; j++) {
-					const sj = sy + stride * j + x
+			const baseM4 = rowM4 + x
+			const baseM3 = rowM3 + x
+			const baseM2 = rowM2 + x
+			const baseM1 = rowM1 + x
+			const base0 = center
+			const baseP1 = rowP1 + x
+			const baseP2 = rowP2 + x
+			const baseP3 = rowP3 + x
+			const baseP4 = rowP4 + x
+			let isMax = true
 
-					for (let i = -4; i <= 4; i++) {
-						if (i === 0 && j === 0) continue
+			for (let i = -4; i <= 4; i++) {
+				if (raw[baseM4 + i] > value || raw[baseM3 + i] > value || raw[baseM2 + i] > value || raw[baseP2 + i] > value || raw[baseP3 + i] > value || raw[baseP4 + i] > value) {
+					isMax = false
+					break
+				}
+			}
 
-						if (raw[sj + i] > value) {
-							isMax = false
-							break
-						}
-					}
+			if (!isMax) continue
 
-					if (!isMax) break
+			for (let i = -4; i <= -2; i++) {
+				if (raw[baseM1 + i] > value || raw[base0 + i] > value || raw[baseP1 + i] > value) {
+					isMax = false
+					break
+				}
+			}
+
+			if (!isMax) continue
+
+			for (let i = 2; i <= 4; i++) {
+				if (raw[baseM1 + i] > value || raw[base0 + i] > value || raw[baseP1 + i] > value) {
+					isMax = false
+					break
 				}
 			}
 
 			if (!isMax) continue
 
 			// Compare local maximum to mean value of surrounding pixels
-			const left = Math.max(convRect.left, x - 7)
-			const top = Math.max(convRect.top, y - 7)
-			const right = Math.min(convRect.right, x + 7)
-			const bottom = Math.min(convRect.bottom, y + 7)
+			const left = leftBounds[x]
+			const top = topBounds[y]
+			const right = rightBounds[x]
+			const bottom = bottomBounds[y]
 			const [mean, standardDeviation] = localStatistics(integrals, left, top, right, bottom)
 
 			// This is our measure of star intensity
