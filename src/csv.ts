@@ -35,6 +35,7 @@ export const DEFAULT_READ_CSV_STREAM_OPTIONS: Readonly<Required<ReadCsvStreamOpt
 
 interface ParseColumnOptions {
 	offset: number
+	quoted: boolean
 }
 
 const WHITESPACE = ' \t\r\n'
@@ -47,8 +48,8 @@ export class CsvLineParser {
 	constructor(options: string | string[] | CsvLineParserOptions = DEFAULT_READ_CSV_STREAM_OPTIONS) {
 		const delimiter = typeof options === 'string' || Array.isArray(options) ? options : (options.delimiter ?? DEFAULT_READ_CSV_STREAM_OPTIONS.delimiter)
 		options = typeof options === 'string' || Array.isArray(options) ? DEFAULT_READ_CSV_STREAM_OPTIONS : options
-		const quote = options.quote || DEFAULT_READ_CSV_STREAM_OPTIONS.quote
-		this.comment = options.comment || DEFAULT_READ_CSV_STREAM_OPTIONS.comment
+		const quote = options.quote ?? DEFAULT_READ_CSV_STREAM_OPTIONS.quote
+		this.comment = options.comment ?? DEFAULT_READ_CSV_STREAM_OPTIONS.comment
 
 		if (typeof delimiter === 'string') this.isDelimiter = (c: string) => c === delimiter
 		else this.isDelimiter = (c: string) => delimiter.includes(c)
@@ -59,7 +60,7 @@ export class CsvLineParser {
 	}
 
 	parse(line: string, offset: number = 0, row?: CsvRow) {
-		const options: ParseColumnOptions = { offset }
+		const options: ParseColumnOptions = { offset, quoted: false }
 
 		this.skipIfBlank(line, options)
 
@@ -70,8 +71,22 @@ export class CsvLineParser {
 
 		// Parse the line until the end
 		while (options.offset < line.length) {
+			const start = options.offset
+			this.skipIfBlank(line, options)
+
+			if (options.offset >= line.length) {
+				row.push('')
+				break
+			}
+
+			if (start < options.offset && this.isDelimiter(line[options.offset])) {
+				row.push('')
+				this.skipUntilDelimiter(line, options)
+				continue
+			}
+
 			const text = this.parseColumn(line, options)
-			row.push(text.trim())
+			row.push(options.quoted ? text : text.trim())
 			this.skipUntilDelimiter(line, options)
 		}
 
@@ -82,7 +97,10 @@ export class CsvLineParser {
 	}
 
 	private parseColumn(line: string, options: ParseColumnOptions) {
+		options.quoted = false
+
 		if (this.isQuoteChar(line[options.offset])) {
+			options.quoted = true
 			options.offset++
 			// If the column starts with a quote, parse it as a quoted column
 			return this.parseQuotedColumn(line, options)
@@ -94,25 +112,60 @@ export class CsvLineParser {
 
 	private parseQuotedColumn(line: string, options: ParseColumnOptions) {
 		const start = options.offset
+		let segmentStart = start
 		let i = start
+		let text = ''
 
 		for (; i < line.length; i++) {
 			const c = line[i]
 
 			if (this.isQuoteChar(c)) {
-				i++
+				const next = i + 1
 
-				if (i >= line.length || !this.isQuoteChar(line[i])) {
-					options.offset = i - 1
+				if (next < line.length && this.isQuoteChar(line[next])) {
+					if (segmentStart < i) text += line.substring(segmentStart, i)
+					text += c
+					i = next
+					segmentStart = i + 1
+				} else {
+					options.offset = next
 					// If the quote is not followed by another quote, return the quoted text
-					return line.substring(start, options.offset)
+					if (!text.length && segmentStart === start) return line.substring(start, i)
+					if (segmentStart < i) text += line.substring(segmentStart, i)
+					return text
 				}
 			}
 		}
 
 		options.offset = i
 
-		return line.substring(start, options.offset)
+		if (!text.length && segmentStart === start) return line.substring(start, options.offset)
+		if (segmentStart < i) text += line.substring(segmentStart, i)
+		return text
+	}
+
+	scanLineBreak(line: string, offset: number = 0, quoted: boolean = false) {
+		let i = offset
+
+		for (; i < line.length; i++) {
+			const c = line[i]
+
+			if (this.isQuoteChar(c)) {
+				if (quoted && i + 1 < line.length && this.isQuoteChar(line[i + 1])) {
+					i++
+				} else {
+					quoted = !quoted
+				}
+			} else if (!quoted && (c === '\n' || c === '\r')) {
+				if (c === '\r' && i + 1 < line.length && line[i + 1] === '\n') {
+					return [i, i + 2, false] as const
+				}
+
+				return [i, i + 1, false] as const
+			}
+		}
+
+		return [-1, i, quoted] as const
 	}
 
 	private parseRawColumn(line: string, options: ParseColumnOptions) {
@@ -138,18 +191,32 @@ export class CsvLineParser {
 }
 
 export function readCsv(input: string | string[], options: string | string[] | ReadCsvOptions = DEFAULT_READ_CSV_STREAM_OPTIONS): CsvRow[] {
-	input = typeof input === 'string' ? input.split('\n') : input
+	input = Array.isArray(input) ? input.join('\n') : input
 
 	let skipFirstLine = typeof options === 'object' && 'skipFirstLine' in options ? options.skipFirstLine : DEFAULT_READ_CSV_STREAM_OPTIONS.skipFirstLine
 	const parser = new CsvLineParser(options)
 	const rows: CsvRow[] = []
 
-	for (const line of input) {
-		const row = parser.parse(line)
+	let offset = 0
+	let quoted = false
 
-		if (row === false || row.length === 0) continue
+	while (offset < input.length) {
+		const [index, next, nextQuoted] = parser.scanLineBreak(input, offset, quoted)
+		const row = parser.parse(index >= 0 ? input.substring(offset, index) : input.substring(offset))
+
+		if (index >= 0) {
+			offset = next
+			quoted = nextQuoted
+		}
+
+		if (row === false || row.length === 0) {
+			if (index < 0) break
+			continue
+		}
 		else if (!skipFirstLine) rows.push(row)
 		else skipFirstLine = false
+
+		if (index < 0) break
 	}
 
 	return rows
@@ -170,58 +237,53 @@ export async function* readCsvStream(source: Source, options: string | string[] 
 	const buffer = Buffer.allocUnsafe(bufferSize)
 	const decoder = new TextDecoder(encoding, textDecoderOptions)
 	let line = ''
+	let quoted = false
 
 	while (true) {
 		// Read a chunk of data from the source
 		const n = await source.read(buffer)
 
-		// End of stream
-		if (n <= 0) {
-			if (line.length === 0) break
-
-			// Parse the line into a CSV row
-			const row = parser.parse(line)
-
-			// If the row is valid and not skipped, yield it
-			if (row && row.length > 0 && !skipFirstLine) yield row
-
-			break
-		}
-
 		// Decode the buffer to a string
-		const decoded = decoder.decode(n < buffer.byteLength ? buffer.subarray(0, n) : buffer, STREAM_TEXT_DECODE_OPTIONS)
+		const decoded = n > 0 ? decoder.decode(n < buffer.byteLength ? buffer.subarray(0, n) : buffer, STREAM_TEXT_DECODE_OPTIONS) : decoder.decode()
 
-		if (decoded.length === 0) continue
+		if (decoded.length > 0) {
+			let offset = 0
 
-		let prevIndex = 0
+			while (offset < decoded.length) {
+				const [index, next, nextQuoted] = parser.scanLineBreak(decoded, offset, quoted)
 
-		while (true) {
-			// Find the next newline character
-			const index = decoded.indexOf('\n', prevIndex)
+				if (index < 0) {
+					line += offset > 0 ? decoded.substring(offset) : decoded
+					quoted = nextQuoted
+					break
+				}
 
-			if (index >= 0) {
-				// If a newline character is found, split the string at that point
-				line += decoded.substring(prevIndex, index)
-
-				// Store the current index as the previous index
-				prevIndex = index + 1
+				line += decoded.substring(offset, index)
 
 				// Parse the line into a CSV row
 				const row = parser.parse(line)
 
 				// Reset the line for the next iteration
 				line = ''
+				offset = next
+				quoted = nextQuoted
 
 				// If the row is valid and not skipped, yield it
 				if (row === false || row.length === 0) continue
 				else if (!skipFirstLine) yield row
 				else skipFirstLine = false
-			} else {
-				// If no newline character is found, continue reading
-				line += prevIndex > 0 ? decoded.substring(prevIndex) : decoded
-
-				break
 			}
 		}
+
+		// End of stream
+		if (n <= 0) break
+	}
+
+	if (line.length > 0) {
+		// Parse the line into a CSV row
+		const row = parser.parse(line)
+
+		// If the row is valid and not skipped, yield it
+		if (row && row.length > 0 && !skipFirstLine) yield row
 	}
 }

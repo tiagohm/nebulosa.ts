@@ -7,20 +7,29 @@ const TSV = 'HIP\tRA\tDEC\tMAG\n1\t00 00 00.22\t+01 05 20.4\t9.10\n2\t00 00 00.9
 const TSV_WITH_EMPTY_COLUMN = 'HIP\tRA\tDEC\tMAG\t\n1\t00 00 00.22\t+01 05 20.4\t9.10\t\n2\t00 00 00.91\t-19 29 55.8\t9.27\t'
 const TSV_WITH_SPACED_COLUMNS = ' HIP\tRA\tDEC\tMAG\n 1 \t 00 00 00.22 \t +01 05 20.4 \t 9.10 \n 2 \t 00 00 00.91 \t -19 29 55.8 \t 9.27 '
 const CSV_QUOTED = `"HIP","RA","DEC","MAG"\n"1","00 00 00.22","+01 05 20.4","9.10"\n"2","00 00 00.91","-19 29 55.8","9.27"`
+const CSV_QUOTED_ESCAPED = `"HIP","NOTE"\n"1","said ""hello"""`
+const CSV_QUOTED_WHITESPACE = `"HIP","NOTE"\n"1", "  padded  "`
+const CSV_QUOTED_MULTILINE = `"HIP","NOTE"\n"1","line 1\nline 2"`
 const CSV = TSV.replace(/\t/g, ', ')
 const CSV_WITH_COMMENTS = `# This is a comment\n# Another comment\n${CSV}\n# Yet another comment`
 const CSV_WITH_EMPTY_LINES_AT_END = `${CSV}\n \n\n`
 
-async function readCsvAndTest(input: string | Buffer, options?: string | ReadCsvStreamOptions) {
-	let data: CsvRow[] = []
+async function readCsvRows(input: string | Buffer, options?: string | ReadCsvStreamOptions) {
+	const data: CsvRow[] = []
 
 	if (typeof input === 'string') {
-		data = readCsv(input, options)
+		return readCsv(input, options)
 	} else {
 		for await (const row of readCsvStream(bufferSource(input), options)) {
 			data.push(row)
 		}
 	}
+
+	return data
+}
+
+async function readCsvAndTest(input: string | Buffer, options?: string | ReadCsvStreamOptions) {
+	const data = await readCsvRows(input, options)
 
 	const empty = data[0].length === 5 ? [''] : []
 
@@ -141,6 +150,54 @@ describe('stream', () => {
 		for (let i = 1; i <= 128; i++) {
 			await readCsvAndTest(Buffer.from(TSV), { delimiter: TSV_DELIMITER, bufferSize: i })
 		}
+	})
+})
+
+describe('quoted edge cases', () => {
+	test('escaped quotes are unescaped', async () => {
+		expect(await readCsvRows(CSV_QUOTED_ESCAPED, { skipFirstLine: false })).toEqual([
+			['HIP', 'NOTE'],
+			['1', 'said "hello"'],
+		])
+	})
+
+	test('quoted whitespace is preserved', async () => {
+		expect(await readCsvRows(CSV_QUOTED_WHITESPACE, { skipFirstLine: false })).toEqual([
+			['HIP', 'NOTE'],
+			['1', '  padded  '],
+		])
+	})
+
+	test('multiline quoted columns are parsed from strings', async () => {
+		expect(await readCsvRows(CSV_QUOTED_MULTILINE, { skipFirstLine: false })).toEqual([
+			['HIP', 'NOTE'],
+			['1', 'line 1\nline 2'],
+		])
+	})
+
+	test('multiline quoted columns are parsed from arrays', () => {
+		expect(readCsv(CSV_QUOTED_MULTILINE.split('\n'), { skipFirstLine: false })).toEqual([
+			['HIP', 'NOTE'],
+			['1', 'line 1\nline 2'],
+		])
+	})
+
+	test('multiline quoted columns are parsed from streams', async () => {
+		expect(await readCsvRows(Buffer.from(CSV_QUOTED_MULTILINE), { skipFirstLine: false, bufferSize: 2 })).toEqual([
+			['HIP', 'NOTE'],
+			['1', 'line 1\nline 2'],
+		])
+	})
+
+	test('stream decoding flushes utf-8 split across chunks', async () => {
+		expect(await readCsvRows(Buffer.from(`"HIP","NOTE"\n"1","café"`, 'utf-8'), { skipFirstLine: false, bufferSize: 1 })).toEqual([
+			['HIP', 'NOTE'],
+			['1', 'café'],
+		])
+	})
+
+	test('quote can be disabled', () => {
+		expect(readCsv(`name\n"a""b"`, { skipFirstLine: false, quote: false })).toEqual([['name'], ['"a""b"']])
 	})
 })
 
