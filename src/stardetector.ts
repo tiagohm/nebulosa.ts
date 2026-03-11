@@ -21,6 +21,8 @@ const DETECT_STAR_HISTOGRAM_MAX = (1 << 18) - 1
 const STAR_SIGNAL_RADIUS_SQ = 16
 const STAR_BACKGROUND_INNER_RADIUS_SQ = 25
 const STAR_BACKGROUND_OUTER_RADIUS_SQ = 49
+const STAR_PHOTOMETRY_RADIUS = 7
+const STAR_CONVOLVED_MARGIN = 4
 
 const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
 	maxStars: 500,
@@ -158,10 +160,16 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 
 // Computes aperture flux, SNR and HFD for a detected star.
 function measureStarPhotometry(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number): StarPhotometry {
-	const x0 = Math.max(0, x - 7)
-	const y0 = Math.max(0, y - 7)
-	const x1 = Math.min(width - 1, x + 7)
-	const y1 = Math.min(height - 1, y + 7)
+	// Keep photometry inside the PSF-convolved support used during detection.
+	const xMin = STAR_CONVOLVED_MARGIN
+	const yMin = STAR_CONVOLVED_MARGIN
+	const xMax = width - STAR_CONVOLVED_MARGIN - 1
+	const yMax = height - STAR_CONVOLVED_MARGIN - 1
+	if (x < xMin || x > xMax || y < yMin || y > yMax) return [0, 0, 0]
+	const x0 = Math.max(xMin, x - STAR_PHOTOMETRY_RADIUS)
+	const y0 = Math.max(yMin, y - STAR_PHOTOMETRY_RADIUS)
+	const x1 = Math.min(xMax, x + STAR_PHOTOMETRY_RADIUS)
+	const y1 = Math.min(yMax, y + STAR_PHOTOMETRY_RADIUS)
 	let backgroundSum = 0
 	let backgroundSumSq = 0
 	let backgroundCount = 0
