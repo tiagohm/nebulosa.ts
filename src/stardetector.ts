@@ -42,9 +42,14 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 
 	const { raw, metadata } = image
 	const { width, height, stride } = metadata
-	const convRect: Rect = { left: 4, top: 4, right: width - 5, bottom: height - 5 }
-	const maxX = convRect.right - 4
-	const maxY = convRect.bottom - 4
+	const convRect: Rect = {
+		left: STAR_CONVOLVED_MARGIN,
+		top: STAR_CONVOLVED_MARGIN,
+		right: width - STAR_CONVOLVED_MARGIN - 1,
+		bottom: height - STAR_CONVOLVED_MARGIN - 1,
+	}
+	const maxX = convRect.right - STAR_CONVOLVED_MARGIN
+	const maxY = convRect.bottom - STAR_CONVOLVED_MARGIN
 	const stars = new StarList(Math.min(maxStars, 2000))
 	const integrals = buildIntegralImages(raw, width, height, stride)
 	const leftBounds = new Int32Array(width)
