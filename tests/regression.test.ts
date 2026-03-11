@@ -107,6 +107,15 @@ describe('theil-sen', () => {
 		expect(regression.intercept).toBeCloseTo(2, 8)
 		expect(regression.predict(1)).toBeCloseTo(2, 8)
 	})
+
+	test('mismatched lengths', () => {
+		const x = [1, 2, 3, 10]
+		const y = [2, 3, 4]
+		const regression = theilSenRegression(x, y)
+
+		expect(regression.slope).toBeCloseTo(1, 8)
+		expect(regression.intercept).toBeCloseTo(1, 8)
+	})
 })
 
 describe('trend line regression', () => {
@@ -159,6 +168,16 @@ test('quadractic regression', () => {
 	expect(regression.coefficients[2]).toBeCloseTo(5.714285714285707e-6, 10)
 	expect(regression.minimum.x).toBeCloseTo(1443.75, 10)
 	expect(regression.minimum.y).toBeCloseTo(2.09, 2)
+})
+
+test('quadractic regression with origin on 0', () => {
+	const x = new Float64Array([-4, 4, 2, 3, 1, 8, 5, 7])
+	const y = new Float64Array([16.5, 16.5, 4.5, 9.5, 1.5, 64.5, 25.5, 49.5])
+	const regression = quadraticRegression(x, y, true)
+
+	expect(regression.predict(0)).toBe(0)
+	expect(regression.minimum.x).toBeCloseTo(-0.008935639042805251, 10)
+	expect(regression.minimum.y).toBeCloseTo(-0.0000806064070280051, 10)
 })
 
 test('exponential regression', () => {

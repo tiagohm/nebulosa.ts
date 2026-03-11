@@ -130,40 +130,46 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	// }
 
 	const n = Math.min(x.length, y.length)
+	const p = powers.length
 
 	// https://github.com/mljs/regression-polynomial/blob/ce1c94bcb03f0f244ef26bae6ba7529bcdd8894e/src/index.ts#L183C18-L183C37
 
 	// DxN * NxD = DxD
 	// const A = mulMTxN(F, F) // Fᵀ*F
-	const A = Matrix.square(powers.length)
-
-	for (let i = 0, p = 0; i < powers.length; i++) {
-		for (let j = 0; j < powers.length; j++, p++) {
-			let s = 0
-
-			for (let k = 0; k < n; k++) {
-				const si = powers[i] === 0 ? 1 : x[k] ** powers[i]
-				const sj = powers[j] === 0 ? 1 : x[k] ** powers[j]
-				s += si * sj
-			}
-
-			A.data[p] = s
-		}
-	}
+	const A = Matrix.square(p)
+	const AData = A.data
 
 	// 1xN * NxD = 1xD
 	// const B = mulMxN([y], F) // Fᵀ*Yᵀ = (Y*F)ᵀ
-	const B = new Float64Array(powers.length)
+	const B = new Float64Array(p)
+	const basis = new Float64Array(p)
 
-	for (let j = 0; j < powers.length; j++) {
-		let s = 0
+	for (let k = 0; k < n; k++) {
+		const xk = x[k]
+		const yk = y[k]
 
-		for (let k = 0; k < n; k++) {
-			const sk = powers[j] === 0 ? 1 : x[k] ** powers[j]
-			s += y[k] * sk
+		for (let i = 0; i < p; i++) {
+			basis[i] = powers[i] === 0 ? 1 : xk ** powers[i]
 		}
 
-		B[j] = s
+		for (let i = 0; i < p; i++) {
+			const bi = basis[i]
+			B[i] += yk * bi
+
+			const iOffset = i * p
+
+			for (let j = i; j < p; j++) {
+				AData[iOffset + j] += bi * basis[j]
+			}
+		}
+	}
+
+	for (let i = 1; i < p; i++) {
+		const iOffset = i * p
+
+		for (let j = 0; j < i; j++) {
+			AData[iOffset + j] = AData[j * p + i]
+		}
 	}
 
 	// Solve A*x=B
@@ -177,7 +183,7 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 		coefficients: Array.isArray(coefficients) ? coefficients : Array.from(coefficients),
 		predict: (x) => {
 			let y = 0
-			for (let k = 0; k < powers.length; k++) y += coefficients[k] * x ** powers[k]
+			for (let k = 0; k < p; k++) y += coefficients[k] * x ** powers[k]
 			return y
 		},
 	}
@@ -186,7 +192,10 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 // Computes the coefficients of a quadratic regression
 export function quadraticRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, interceptAtZero?: boolean): QuadraticRegression {
 	const regression = polynomialRegression(x, y, 2, interceptAtZero) as Mutable<QuadraticRegression>
-	const [c, b, a] = regression.coefficients
+	const coefficients = regression.coefficients
+	const a = coefficients.length === 2 ? coefficients[1] : coefficients[2]
+	const b = coefficients.length === 2 ? coefficients[0] : coefficients[1]
+	const c = coefficients.length === 2 ? 0 : coefficients[0]
 	const d = 2 * a
 	const e = 2 * d // 4a
 	const b2 = b * b
@@ -197,28 +206,34 @@ export function quadraticRegression(x: Readonly<NumberArray>, y: Readonly<Number
 // https://en.wikipedia.org/wiki/Theil%E2%80%93Sen_estimator
 // Computes the coefficients of a linear regression using the Theil-Sen method
 export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): LinearRegression {
-	const data = new Float64Array(x.length * x.length)
+	const n = Math.min(x.length, y.length)
+	const pairCount = (n * (n - 1)) / 2
+	const data = new Float64Array(Math.max(pairCount, n))
+
+	function median(values: Readonly<NumberArray>, length: number) {
+		return length % 2 === 0 ? (values[length / 2 - 1] + values[length / 2]) / 2 : values[Math.floor(length / 2)]
+	}
 
 	// slopes
 
-	let n = 0
+	let slopesLength = 0
 
-	for (let i = 0; i < x.length; i++) {
-		for (let j = i + 1; j < x.length; j++) {
+	for (let i = 0; i < n; i++) {
+		for (let j = i + 1; j < n; j++) {
 			if (x[i] !== x[j]) {
-				data[n++] = (y[j] - y[i]) / (x[j] - x[i])
+				data[slopesLength++] = (y[j] - y[i]) / (x[j] - x[i])
 			}
 		}
 	}
 
-	data.subarray(0, n).sort()
+	let slope = 0
 
-	// median
-	const slope = n % 2 === 0 ? (data[n / 2 - 1] + data[n / 2]) / 2 : data[Math.floor(n / 2)]
+	if (slopesLength > 0) {
+		data.subarray(0, slopesLength).sort()
+		slope = median(data, slopesLength)
+	}
 
 	// cuts
-
-	n = x.length
 
 	for (let i = 0; i < n; i++) {
 		data[i] = y[i] - slope * x[i]
@@ -227,7 +242,7 @@ export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberA
 	data.subarray(0, n).sort()
 
 	// median
-	const intercept = n % 2 === 0 ? (data[n / 2 - 1] + data[n / 2]) / 2 : data[Math.floor(n / 2)]
+	const intercept = n === 0 ? Number.NaN : median(data, n)
 
 	return {
 		xPoints: x,
@@ -241,19 +256,20 @@ export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberA
 
 // Computes the coefficients of a trend line regression, which is a piecewise linear regression with a minimum point
 export function trendLineRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, method: TrendLineRegressionMethod = 'simple'): TrendLineRegression {
+	const n = Math.min(x.length, y.length)
 	const minimum = minOf(y)
 	const minY = minimum[0]
 	const minX = x[minimum[1]]
 
-	const a = new Float64Array(x.length)
-	const b = new Float64Array(x.length)
-	const c = new Float64Array(x.length)
-	const d = new Float64Array(x.length)
+	const a = new Float64Array(n)
+	const b = new Float64Array(n)
+	const c = new Float64Array(n)
+	const d = new Float64Array(n)
 
 	let abn = 0
 	let cdn = 0
 
-	for (let i = 0; i < x.length; i++) {
+	for (let i = 0; i < n; i++) {
 		const xi = x[i]
 		const yi = y[i]
 
@@ -417,9 +433,10 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 	const n = Math.min(x.length, y.length)
 	const m = params.length
 
-	const J = new Array<NumberArray>(m)
+	const J = new Array<Float64Array>(m)
 	const PJ = new Float64Array(m)
 	const JTJ = Matrix.square(m)
+	const JTJData = JTJ.data
 	const JTR = new Float64Array(m)
 
 	const R = new Float64Array(n)
@@ -455,18 +472,28 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		}
 
 		// Jᵀ * J and Jᵀ * r
-		for (let i = 0, p = 0; i < m; i++) {
-			// Jᵀ * J
-			for (let j = 0; j < m; j++, p++) {
-				JTJ.data[p] = (J[i] as number[]).reduce((sum, v, k) => sum + v * J[j][k], 0)
-			}
+		for (let i = 0; i < m; i++) {
+			const Ji = J[i]
 
-			// Jᵀ * residuals
-			JTR[i] = (J[i] as number[]).reduce((sum, v, k) => sum + v * R[k], 0)
+			let sum = 0
+			for (let k = 0; k < n; k++) sum += Ji[k] * R[k]
+			JTR[i] = sum
+
+			const iOffset = i * m
+
+			for (let j = i; j < m; j++) {
+				const Jj = J[j]
+
+				let dot = 0
+				for (let k = 0; k < n; k++) dot += Ji[k] * Jj[k]
+
+				JTJData[iOffset + j] = dot
+				JTJData[j * m + i] = dot
+			}
 		}
 
 		for (let i = 0, p = 0; i < m; i++, p += m) {
-			JTJ.data[p + i] *= 1 + lambda
+			JTJData[p + i] *= 1 + lambda
 		}
 
 		// Solve JTJ * dp = JTr
@@ -476,8 +503,17 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 
 		// Update parameters
 		for (let i = 0; i < m; i++) UP[i] = params[i] + DP[i]
-		const error = R.reduce((sum, r) => sum + r * r, 0)
-		const newError = (y as number[]).reduce((sum, r, i) => sum + (r - model(x[i], UP)) ** 2, 0)
+		predict(UP, YPJ)
+
+		let error = 0
+		let newError = 0
+
+		for (let i = 0; i < n; i++) {
+			const ri = R[i]
+			const di = y[i] - YPJ[i]
+			error += ri * ri
+			newError += di * di
+		}
 
 		if (newError < error) {
 			for (let i = 0; i < m; i++) params[i] = UP[i]
