@@ -1,6 +1,6 @@
 import type { Point, Rect } from './geometry'
 import { truncatePixel } from './image'
-import { grayscale, mean3x3, psf } from './image.transformation'
+import { clone, grayscale, mean3x3, psf } from './image.transformation'
 import type { Image } from './image.types'
 
 export interface DetectedStar extends Readonly<Point> {
@@ -30,8 +30,10 @@ const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
 export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
 	image = grayscale(image)
 
+	const original = image.raw
+
 	// Run a 3x3 median first to eliminate hot pixels
-	image = mean3x3(image)
+	image = mean3x3(clone(image))
 
 	// Run the PSF convolution
 	image = psf(image)
@@ -142,13 +144,13 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 		excludeStarsFitWithinRegion(stars, searchRegion)
 	}
 
-	let c = 0
+	let i = 0
 	const res = new Array<DetectedStar>(stars.size)
 
-	for (const s of stars) {
+	for (const { x, y } of stars) {
 		// Measures the star on the filtered image using local aperture photometry.
-		const [flux, snr, hfd] = measureStarPhotometry(raw, width, height, stride, s.x, s.y)
-		res[c++] = { x: s.x, y: s.y, flux, hfd, snr }
+		const [flux, snr, hfd] = measureStarPhotometry(original, width, height, stride, x, y)
+		res[i++] = { x, y, flux, hfd, snr }
 	}
 
 	return res
