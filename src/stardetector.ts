@@ -15,8 +15,12 @@ export interface DetectStarOptions {
 }
 
 type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumSq, width
+type StarPhotometry = readonly [number, number, number] // flux, snr, hfd
 
 const DETECT_STAR_HISTOGRAM_MAX = (1 << 18) - 1
+const STAR_SIGNAL_RADIUS_SQ = 16
+const STAR_BACKGROUND_INNER_RADIUS_SQ = 25
+const STAR_BACKGROUND_OUTER_RADIUS_SQ = 49
 
 const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
 	maxStars: 500,
@@ -142,10 +146,70 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 	const res = new Array<DetectedStar>(stars.size)
 
 	for (const s of stars) {
-		res[c++] = { x: s.x, y: s.y, flux: s.h, hfd: 0, snr: 0 }
+		// Measures the star on the filtered image using local aperture photometry.
+		const [flux, snr, hfd] = measureStarPhotometry(raw, width, height, stride, s.x, s.y)
+		res[c++] = { x: s.x, y: s.y, flux, hfd, snr }
 	}
 
 	return res
+}
+
+// Computes aperture flux, SNR and HFD for a detected star.
+function measureStarPhotometry(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number): StarPhotometry {
+	const x0 = Math.max(0, x - 7)
+	const y0 = Math.max(0, y - 7)
+	const x1 = Math.min(width - 1, x + 7)
+	const y1 = Math.min(height - 1, y + 7)
+	let backgroundSum = 0
+	let backgroundSumSq = 0
+	let backgroundCount = 0
+
+	for (let py = y0; py <= y1; py++) {
+		const row = py * stride
+		const dy = py - y
+		const dy2 = dy * dy
+
+		for (let px = x0; px <= x1; px++) {
+			const dx = px - x
+			const d2 = dx * dx + dy2
+			if (d2 < STAR_BACKGROUND_INNER_RADIUS_SQ || d2 > STAR_BACKGROUND_OUTER_RADIUS_SQ) continue
+			const v = raw[row + px]
+			backgroundSum += v
+			backgroundSumSq += v * v
+			backgroundCount++
+		}
+	}
+
+	if (backgroundCount <= 0) return [0, 0, 0]
+
+	const backgroundMean = backgroundSum / backgroundCount
+	const backgroundVariance = Math.max(0, backgroundSumSq / backgroundCount - backgroundMean * backgroundMean)
+	let flux = 0
+	let radialMoment = 0
+	let signalPixels = 0
+
+	for (let py = y0; py <= y1; py++) {
+		const row = py * stride
+		const dy = py - y
+		const dy2 = dy * dy
+
+		for (let px = x0; px <= x1; px++) {
+			const dx = px - x
+			const d2 = dx * dx + dy2
+			if (d2 > STAR_SIGNAL_RADIUS_SQ) continue
+			const signal = raw[row + px] - backgroundMean
+			if (signal <= 0) continue
+			flux += signal
+			radialMoment += signal * Math.sqrt(d2)
+			signalPixels++
+		}
+	}
+
+	if (flux <= 0 || signalPixels <= 0) return [0, 0, 0]
+
+	const snr = flux / Math.sqrt(Math.max(flux + signalPixels * backgroundVariance, Number.EPSILON))
+	const hfd = (2 * radialMoment) / flux
+	return [flux, snr, hfd]
 }
 
 // Builds summed-area tables for fast local mean and variance queries.
