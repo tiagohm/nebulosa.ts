@@ -188,7 +188,7 @@ function measureStarPhotometry(raw: Image['raw'], width: number, height: number,
 	const backgroundVariance = Math.max(0, backgroundSumSq / backgroundCount - backgroundMean * backgroundMean)
 	let flux = 0
 	let radialMoment = 0
-	let signalPixels = 0
+	let aperturePixels = 0
 
 	for (let py = y0; py <= y1; py++) {
 		const row = py * stride
@@ -199,17 +199,17 @@ function measureStarPhotometry(raw: Image['raw'], width: number, height: number,
 			const dx = px - x
 			const d2 = dx * dx + dy2
 			if (d2 > STAR_SIGNAL_RADIUS_SQ) continue
+			aperturePixels++
 			const signal = raw[row + px] - backgroundMean
 			if (signal <= 0) continue
 			flux += signal
 			radialMoment += signal * Math.sqrt(d2)
-			signalPixels++
 		}
 	}
 
-	if (flux <= 0 || signalPixels <= 0) return [0, 0, 0]
+	if (flux <= 0 || aperturePixels <= 0) return [0, 0, 0]
 
-	const snr = flux / Math.sqrt(Math.max(flux + signalPixels * backgroundVariance, Number.EPSILON))
+	const snr = flux / Math.sqrt(Math.max(flux + aperturePixels * backgroundVariance, Number.EPSILON))
 	const hfd = (2 * radialMoment) / flux
 	return [flux, snr, hfd]
 }
