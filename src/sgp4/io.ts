@@ -1,5 +1,6 @@
+import { DEG2RAD } from '../constants'
 import type { OMMJsonObject } from './common-types'
-import { deg2rad, xpdotp } from './constants'
+import { XPDOTP } from './constants'
 
 import { days2mdhms, jday } from './ext'
 import type { SatRecInit } from './propagation/SatRec'
@@ -75,14 +76,14 @@ export function twoline2satrec(longstr1: string, longstr2: string) {
 
 	// satrec.satnum = longstr2.substring(2, 7);
 	// ---- find standard orbital elements ----
-	const inclo = parseFloat(longstr2.substring(8, 16)) * deg2rad
-	const nodeo = parseFloat(longstr2.substring(17, 25)) * deg2rad
+	const inclo = parseFloat(longstr2.substring(8, 16)) * DEG2RAD
+	const nodeo = parseFloat(longstr2.substring(17, 25)) * DEG2RAD
 	const ecco = parseFloat(`.${longstr2.substring(26, 33).replace(/\s/g, '0')}`)
-	const argpo = parseFloat(longstr2.substring(34, 42)) * deg2rad
-	const mo = parseFloat(longstr2.substring(43, 51)) * deg2rad
+	const argpo = parseFloat(longstr2.substring(34, 42)) * DEG2RAD
+	const mo = parseFloat(longstr2.substring(43, 51)) * DEG2RAD
 
 	// ---- find no, ndot, nddot ----
-	const no = parseFloat(longstr2.substring(52, 63)) / xpdotp
+	const no = parseFloat(longstr2.substring(52, 63)) / XPDOTP
 	// satrec.nddot= satrec.nddot * Math.pow(10.0, nexp);
 	// satrec.bstar= satrec.bstar * Math.pow(10.0, ibexp);
 
@@ -193,12 +194,12 @@ export function json2satrec(jsonobj: OMMJsonObject, opsmode: 'a' | 'i' = 'i') {
 	const nddot = Number(jsonobj.MEAN_MOTION_DDOT)
 	const bstar = Number(jsonobj.BSTAR)
 
-	const inclo = Number(jsonobj.INCLINATION) * deg2rad
-	const nodeo = Number(jsonobj.RA_OF_ASC_NODE) * deg2rad
+	const inclo = Number(jsonobj.INCLINATION) * DEG2RAD
+	const nodeo = Number(jsonobj.RA_OF_ASC_NODE) * DEG2RAD
 	const ecco = Number(jsonobj.ECCENTRICITY)
-	const argpo = Number(jsonobj.ARG_OF_PERICENTER) * deg2rad
-	const mo = Number(jsonobj.MEAN_ANOMALY) * deg2rad
-	const no = Number(jsonobj.MEAN_MOTION) / xpdotp
+	const argpo = Number(jsonobj.ARG_OF_PERICENTER) * DEG2RAD
+	const mo = Number(jsonobj.MEAN_ANOMALY) * DEG2RAD
+	const no = Number(jsonobj.MEAN_MOTION) / XPDOTP
 
 	// ----------------------------------------------------------------
 	// find sgp4epoch time of element set

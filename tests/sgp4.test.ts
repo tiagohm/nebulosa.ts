@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test'
+import type { PositionAndVelocity } from '../src/astrometry'
+import { DAYMIN } from '../src/constants'
 import { toKilometer } from '../src/distance'
 import { itrfToTemeByGmst, temeToItrfByGmst } from '../src/frame'
 import { parseTLE, recordFromOMM, recordFromTLE, sgp4 } from '../src/sgp4'
@@ -50,18 +52,6 @@ const VALLADO_CASES = [
 	},
 ] as const
 
-function expectKilometerVector(actual: readonly number[], expected: readonly number[], digits: number) {
-	for (let i = 0; i < 3; i++) {
-		expect(actual[i]).toBeCloseTo(expected[i], digits)
-	}
-}
-
-function expectVelocityVector(actual: readonly number[], expected: readonly number[], digits: number) {
-	for (let i = 0; i < 3; i++) {
-		expect(actual[i]).toBeCloseTo(expected[i], digits)
-	}
-}
-
 test('parse TLE', () => {
 	expect(ISS_TLE.name).toBe('ISS (ZARYA)')
 	expect(ISS_TLE.satelliteNumber).toBe('25544')
@@ -74,54 +64,60 @@ test('parse TLE', () => {
 test('OMM and TLE produce matching state near epoch', () => {
 	const tleRecord = recordFromTLE(ISS_TLE)
 	const ommRecord = recordFromOMM(ISS_OMM)
-	const tleState = sgp4(ISS_TLE.epochJulianDay, tleRecord)
-	const ommState = sgp4(ISS_TLE.epochJulianDay, ommRecord)
+	const tleState = sgp4(ISS_TLE.epoch, tleRecord)
+	const ommState = sgp4(ISS_TLE.epoch, ommRecord)
 	const tlePositionKm = tleState.position.map(toKilometer)
 	const ommPositionKm = ommState.position.map(toKilometer)
-	const tleVelocityKmS = tleState.velocity.map(toKilometerPerSecond)
-	const ommVelocityKmS = ommState.velocity.map(toKilometerPerSecond)
+	const tleVelocityKms = tleState.velocity.map(toKilometerPerSecond)
+	const ommVelocityKms = ommState.velocity.map(toKilometerPerSecond)
 
-	expectKilometerVector(tlePositionKm, ommPositionKm, 5)
-	expectVelocityVector(tleVelocityKmS, ommVelocityKmS, 7)
+	expectVector(tlePositionKm, ommPositionKm, 5)
+	expectVector(tleVelocityKms, ommVelocityKms, 7)
 })
 
 test('invalid OMM propagation throws', () => {
-	expect(() => sgp4(ISS_TLE.epochJulianDay, { ...ISS_OMM, ECCENTRICITY: 1.2 })).toThrow()
+	expect(() => sgp4(ISS_TLE.epoch, { ...ISS_OMM, ECCENTRICITY: 1.2 })).toThrow()
 })
 
-for (const testCase of VALLADO_CASES) {
-	for (const sample of testCase.results) {
-		test(`${testCase.title} at ${sample.time} min`, () => {
-			const jd = testCase.tle.epochJulianDay + sample.time / 1440
-			const state = sgp4(jd, testCase.tle)
+for (const { title, tle, results } of VALLADO_CASES) {
+	for (const sample of results) {
+		test(`${title} at ${sample.time} min`, () => {
+			const time = { day: tle.epoch.day, fraction: tle.epoch.fraction + sample.time / DAYMIN, scale: 1 }
+			const state = sgp4(time, tle)
 			const positionKm = state.position.map(toKilometer)
-			const velocityKmS = state.velocity.map(toKilometerPerSecond)
-			expectKilometerVector(positionKm, sample.position, 1)
-			expectVelocityVector(velocityKmS, sample.velocity, 4)
+			const velocityKms = state.velocity.map(toKilometerPerSecond)
+			expectVector(positionKm, sample.position, 1)
+			expectVector(velocityKms, sample.velocity, 4)
 		})
 	}
 }
 
 test('TEME to ITRF by GMST matches reference rotation', () => {
 	const itrf = temeToItrfByGmst([6400, 0, 0], 10)
-	expectKilometerVector(itrf as unknown as number[], [-5370.057786089295, 3481.7351096919665, 0], 9)
+	expectVector(itrf as unknown as number[], [-5370.057786089295, 3481.7351096919665, 0], 9)
 })
 
 test('ITRF to TEME by GMST matches reference rotation', () => {
 	const teme = itrfToTemeByGmst([5555, 3000, 0], 100)
-	expectKilometerVector(teme as unknown as number[], [6309.278258887361, -225.90451950165834, 0], 9)
+	expectVector(teme as unknown as number[], [6309.278258887361, -225.90451950165834, 0], 9)
 })
 
 test('TEME and ITRF state conversion round-trips', () => {
-	const state = [
+	const state: PositionAndVelocity = [
 		[7000, -1200, 3400],
 		[1.5, 6.9, -2.1],
-	] as const
+	]
 
 	const gmst = 1.2345
 	const itrf = temeToItrfByGmst(state, gmst)
 	const teme = itrfToTemeByGmst(itrf, gmst)
 
-	expectKilometerVector(teme[0], state[0], 9)
-	expectKilometerVector(teme[1], state[1], 9)
+	expectVector(teme[0], state[0], 9)
+	expectVector(teme[1], state[1], 9)
 })
+
+function expectVector(actual: readonly number[], expected: readonly number[], digits: number) {
+	for (let i = 0; i < 3; i++) {
+		expect(actual[i]).toBeCloseTo(expected[i], digits)
+	}
+}

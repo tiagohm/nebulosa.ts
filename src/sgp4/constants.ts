@@ -1,16 +1,13 @@
-export const pi = Math.PI
-export const twoPi = pi * 2
-export const deg2rad = pi / 180.0
-export const rad2deg = 180 / pi
-export const minutesPerDay = 1440.0
-export const mu = 398600.8 // in km3 / s2
+import { DAYMIN, TAU } from '../constants'
+
+export const MU = 398600.8 // in km3 / s2
 export const earthRadius = 6378.135 // in km
-export const xke = 60.0 / Math.sqrt((earthRadius * earthRadius * earthRadius) / mu)
-export const vkmpersec = (earthRadius * xke) / 60.0
-export const tumin = 1.0 / xke
-export const j2 = 0.001082616
-export const j3 = -0.00000253881
-export const j4 = -0.00000165597
-export const j3oj2 = j3 / j2
-export const x2o3 = 2.0 / 3.0
-export const xpdotp = 1440.0 / (2.0 * pi) // 229.1831180523293;
+export const XKE = 60 / Math.sqrt((earthRadius * earthRadius * earthRadius) / MU)
+export const vkmpersec = (earthRadius * XKE) / 60
+export const tumin = 1 / XKE
+export const J2 = 0.001082616
+export const J3 = -0.00000253881
+export const J4 = -0.00000165597
+export const J3OJ2 = J3 / J2
+export const X2O3 = 2 / 3
+export const XPDOTP = DAYMIN / TAU // 229.1831180523293

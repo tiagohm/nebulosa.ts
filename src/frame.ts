@@ -3,8 +3,7 @@ import { EARTH_ANGULAR_VELOCITY_MATRIX, ECLIPTIC_B9150_MATRIX, ECLIPTIC_J2000_MA
 import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa'
 import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, matRotX, matRotZ, matTransposeMulVec } from './mat3'
-import { temeSiderealTime } from './sgp4'
-import { gcrsToItrsRotationMatrix, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, toJulianDay, trueObliquity, tt, ut1 } from './time'
+import { gcrsToItrsRotationMatrix, greenwichMeanSiderealTime, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from './time'
 import { type MutVec3, type Vec3, vecMinus, vecPlus } from './vec3'
 
 export type CoordinateFrame = CartesianCoordinate
@@ -20,10 +19,6 @@ function equinoxFrameByCapitaine(m: Mat3, from: Time, to: Time): Frame {
 	const a = precessionMatrixCapitaine(from, to)
 	matMul(a, m, a)
 	return { rotationAt: () => a }
-}
-
-function temeGreenwichSiderealAngle(time: Time) {
-	return temeSiderealTime(toJulianDay(ut1(time)))
 }
 
 // Reference frame of the Earth's mean equator and equinox at B1950.
@@ -145,12 +140,12 @@ export function itrfToTemeByGmst<T extends Readonly<PositionAndVelocity> | Vec3>
 
 // Converts a TEME vector or state into ITRF at the requested time.
 export function temeToItrf<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, time: Time, polarMotion: boolean = true): T extends Vec3 ? Vec3 : PositionAndVelocity {
-	return temeToItrfByGmst(pv, temeGreenwichSiderealAngle(time), polarMotion ? pmMatrix(time) : undefined)
+	return temeToItrfByGmst(pv, greenwichMeanSiderealTime(time), polarMotion ? pmMatrix(time) : undefined)
 }
 
 // Converts an ITRF vector or state into TEME at the requested time.
 export function itrfToTeme<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, time: Time, polarMotion: boolean = true): T extends Vec3 ? Vec3 : PositionAndVelocity {
-	return itrfToTemeByGmst(pv, temeGreenwichSiderealAngle(time), polarMotion ? pmMatrix(time) : undefined)
+	return itrfToTemeByGmst(pv, greenwichMeanSiderealTime(time), polarMotion ? pmMatrix(time) : undefined)
 }
 
 // Applies a frame rotation to a position and velocity at time.

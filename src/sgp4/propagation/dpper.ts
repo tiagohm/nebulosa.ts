@@ -1,131 +1,44 @@
-import { pi, twoPi } from '../constants'
+import { PI, TAU } from '../../constants'
 import type { SatRec } from './SatRec'
 
-interface DpperOptions {
-	init: 'y' | 'n'
-	opsmode: 'a' | 'i'
-	ep: number
-	inclp: number
-	nodep: number
-	argpp: number
-	mp: number
+export interface DpperOptions {
+	readonly init: 'y' | 'n'
+	readonly opsmode: 'a' | 'i'
+	readonly ep: number
+	readonly inclp: number
+	readonly nodep: number
+	readonly argpp: number
+	readonly mp: number
 }
 
-/* -----------------------------------------------------------------------------
- *
- *                           procedure dpper
- *
- *  this procedure provides deep space long period periodic contributions
- *    to the mean elements.  by design, these periodics are zero at epoch.
- *    this used to be dscom which included initialization, but it's really a
- *    recurring function.
- *
- *  author        : david vallado                  719-573-2600   28 jun 2005
- *
- *  inputs        :
- *    e3          -
- *    ee2         -
- *    peo         -
- *    pgho        -
- *    pho         -
- *    pinco       -
- *    plo         -
- *    se2 , se3 , sgh2, sgh3, sgh4, sh2, sh3, si2, si3, sl2, sl3, sl4 -
- *    t           -
- *    xh2, xh3, xi2, xi3, xl2, xl3, xl4 -
- *    zmol        -
- *    zmos        -
- *    ep          - eccentricity                           0.0 - 1.0
- *    inclo       - inclination - needed for lyddane modification
- *    nodep       - right ascension of ascending node
- *    argpp       - argument of perigee
- *    mp          - mean anomaly
- *
- *  outputs       :
- *    ep          - eccentricity                           0.0 - 1.0
- *    inclp       - inclination
- *    nodep        - right ascension of ascending node
- *    argpp       - argument of perigee
- *    mp          - mean anomaly
- *
- *  locals        :
- *    alfdp       -
- *    betdp       -
- *    cosip  , sinip  , cosop  , sinop  ,
- *    dalf        -
- *    dbet        -
- *    dls         -
- *    f2, f3      -
- *    pe          -
- *    pgh         -
- *    ph          -
- *    pinc        -
- *    pl          -
- *    sel   , ses   , sghl  , sghs  , shl   , shs   , sil   , sinzf , sis   ,
- *    sll   , sls
- *    xls         -
- *    xnoh        -
- *    zf          -
- *    zm          -
- *
- *  coupling      :
- *    none.
- *
- *  references    :
- *    hoots, roehrich, norad spacetrack report #3 1980
- *    hoots, norad spacetrack report #6 1986
- *    hoots, schumacher and glover 2004
- *    vallado, crawford, hujsak, kelso  2006
- ----------------------------------------------------------------------------*/
+// Provides deep space long period periodic contributions
+// to the mean elements. By design, these periodics are zero at epoch.
+// this used to be dscom which included initialization, but it's really a
+// recurring function.
+// author: david vallado 719-573-2600 28 jun 2005
 export default function dpper(satrec: SatRec, options: DpperOptions) {
 	const { e3, ee2, peo, pgho, pho, pinco, plo, se2, se3, sgh2, sgh3, sgh4, sh2, sh3, si2, si3, sl2, sl3, sl4, t, xgh2, xgh3, xgh4, xh2, xh3, xi2, xi3, xl2, xl3, xl4, zmol, zmos } = satrec
-
 	const { init, opsmode } = options
-
 	let { ep, inclp, nodep, argpp, mp } = options
 
-	// Copy satellite attributes into local variables for convenience
-	// and symmetry in writing formulae.
-
-	let alfdp
-	let betdp
-	let cosip
-	let sinip
-	let cosop
-	let sinop
-	let dalf
-	let dbet
-	let dls
-	let f2
-	let f3
-	let pe
-	let pgh
-	let ph
-	let pinc
-	let pl
-	let sinzf
-	let xls
-	let xnoh
-	let zf
-	let zm
-
-	//  ---------------------- constants -----------------------------
+	// constants
 	const zns = 1.19459e-5
 	const zes = 0.01675
 	const znl = 1.5835218e-4
 	const zel = 0.0549
 
-	//  --------------- calculate time varying periodics -----------
-	zm = zmos + zns * t
+	// calculate time varying periodics
+	let zm = zmos + zns * t
 
 	// be sure that the initial call has time set to zero
 	if (init === 'y') {
 		zm = zmos
 	}
-	zf = zm + 2.0 * zes * Math.sin(zm)
-	sinzf = Math.sin(zf)
-	f2 = 0.5 * sinzf * sinzf - 0.25
-	f3 = -0.5 * sinzf * Math.cos(zf)
+
+	let zf = zm + 2.0 * zes * Math.sin(zm)
+	let sinzf = Math.sin(zf)
+	let f2 = 0.5 * sinzf * sinzf - 0.25
+	let f3 = -0.5 * sinzf * Math.cos(zf)
 
 	const ses = se2 * f2 + se3 * f3
 	const sis = si2 * f2 + si3 * f3
@@ -134,6 +47,7 @@ export default function dpper(satrec: SatRec, options: DpperOptions) {
 	const shs = sh2 * f2 + sh3 * f3
 
 	zm = zmol + znl * t
+
 	if (init === 'y') {
 		zm = zmol
 	}
@@ -149,11 +63,11 @@ export default function dpper(satrec: SatRec, options: DpperOptions) {
 	const sghl = xgh2 * f2 + xgh3 * f3 + xgh4 * sinzf
 	const shll = xh2 * f2 + xh3 * f3
 
-	pe = ses + sel
-	pinc = sis + sil
-	pl = sls + sll
-	pgh = sghs + sghl
-	ph = shs + shll
+	let pe = ses + sel
+	let pinc = sis + sil
+	let pl = sls + sll
+	let pgh = sghs + sghl
+	let ph = shs + shll
 
 	if (init === 'n') {
 		pe -= peo
@@ -163,10 +77,11 @@ export default function dpper(satrec: SatRec, options: DpperOptions) {
 		ph -= pho
 		inclp += pinc
 		ep += pe
-		sinip = Math.sin(inclp)
-		cosip = Math.cos(inclp)
 
-		/* ----------------- apply periodics directly ------------ */
+		const sinip = Math.sin(inclp)
+		const cosip = Math.cos(inclp)
+
+		// apply periodics directly
 		// sgp4fix for lyddane choice
 		// strn3 used original inclination - this is technically feasible
 		// gsfc used perturbed inclination - also technically feasible
@@ -182,50 +97,47 @@ export default function dpper(satrec: SatRec, options: DpperOptions) {
 			nodep += ph
 			mp += pl
 		} else {
-			//  ---- apply periodics with lyddane modification ----
-			sinop = Math.sin(nodep)
-			cosop = Math.cos(nodep)
-			alfdp = sinip * sinop
-			betdp = sinip * cosop
-			dalf = ph * cosop + pinc * cosip * sinop
-			dbet = -ph * sinop + pinc * cosip * cosop
+			// apply periodics with lyddane modification
+			const sinop = Math.sin(nodep)
+			const cosop = Math.cos(nodep)
+			let alfdp = sinip * sinop
+			let betdp = sinip * cosop
+			const dalf = ph * cosop + pinc * cosip * sinop
+			const dbet = -ph * sinop + pinc * cosip * cosop
 			alfdp += dalf
 			betdp += dbet
-			nodep %= twoPi
+			nodep %= TAU
 
-			//  sgp4fix for afspc written intrinsic functions
-			//  nodep used without a trigonometric function ahead
-			if (nodep < 0.0 && opsmode === 'a') {
-				nodep += twoPi
+			// sgp4fix for afspc written intrinsic functions
+			// nodep used without a trigonometric function ahead
+			if (nodep < 0 && opsmode === 'a') {
+				nodep += TAU
 			}
-			xls = mp + argpp + cosip * nodep
-			dls = pl + pgh - pinc * nodep * sinip
+
+			let xls = mp + argpp + cosip * nodep
+			const dls = pl + pgh - pinc * nodep * sinip
 			xls += dls
-			xnoh = nodep
+			const xnoh = nodep
 			nodep = Math.atan2(alfdp, betdp)
 
-			//  sgp4fix for afspc written intrinsic functions
-			//  nodep used without a trigonometric function ahead
-			if (nodep < 0.0 && opsmode === 'a') {
-				nodep += twoPi
+			// sgp4fix for afspc written intrinsic functions
+			// nodep used without a trigonometric function ahead
+			if (nodep < 0 && opsmode === 'a') {
+				nodep += TAU
 			}
-			if (Math.abs(xnoh - nodep) > pi) {
+
+			if (Math.abs(xnoh - nodep) > PI) {
 				if (nodep < xnoh) {
-					nodep += twoPi
+					nodep += TAU
 				} else {
-					nodep -= twoPi
+					nodep -= TAU
 				}
 			}
+
 			mp += pl
 			argpp = xls - mp - cosip * nodep
 		}
 	}
 
-	return {
-		ep,
-		inclp,
-		nodep,
-		argpp,
-		mp,
-	}
+	return { ep, inclp, nodep, argpp, mp } as const
 }

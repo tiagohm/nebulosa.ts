@@ -2,13 +2,12 @@ import type { Angle } from './angle'
 import { DAYMIN, DEG2RAD } from './constants'
 import { kilometer } from './distance'
 import type { OMMJsonObject } from './sgp4/common-types'
-import { xpdotp } from './sgp4/constants'
+import { XPDOTP } from './sgp4/constants'
 import { twoline2satrec } from './sgp4/io'
-import gstime from './sgp4/propagation/gstime'
 import { type SatRec, SatRecError, type SatRecInit } from './sgp4/propagation/SatRec'
 import propagateSatrec from './sgp4/propagation/sgp4'
 import sgp4init from './sgp4/propagation/sgp4init'
-import { Timescale, timeYMDHMS, toJulianDay } from './time'
+import { type Time, Timescale, timeYMDHMS, toJulianDay } from './time'
 import type { Vec3 } from './vec3'
 import { kilometerPerSecond } from './velocity'
 
@@ -20,7 +19,7 @@ export interface TLE {
 	readonly satelliteNumber: string
 	readonly epochYear: number
 	readonly epochDays: number
-	readonly epochJulianDay: number
+	readonly epoch: Time
 	readonly meanMotionDot: number
 	readonly meanMotionDdot: number
 	readonly bstar: number
@@ -44,7 +43,7 @@ export type SatelliteRecord = SatRec
 export { SatRecError as SatelliteRecordError }
 
 // Parses two TLE lines into a validated structured object.
-export function parseTLE(line1: string, line2: string, name?: string) {
+export function parseTLE(line1: string, line2: string, name?: string): TLE {
 	const a = line1.trimEnd().padEnd(69, ' ')
 	const b = line2.trimEnd().padEnd(69, ' ')
 
@@ -66,7 +65,7 @@ export function parseTLE(line1: string, line2: string, name?: string) {
 	const revolutionNumberAtEpoch = parseOptionalInteger(b.substring(63, 68), 'TLE revolution number at epoch')
 	const year = epochYear < 57 ? epochYear + 2000 : epochYear + 1900
 	const [month, day, hour, minute, second] = daysToMonthDayHourMinuteSecond(year, epochDays)
-	const epochJulianDay = toJulianDay(timeYMDHMS(year, month, day, hour, minute, second, Timescale.UTC))
+	const epoch = timeYMDHMS(year, month, day, hour, minute, second, Timescale.UTC)
 
 	return {
 		name,
@@ -75,7 +74,7 @@ export function parseTLE(line1: string, line2: string, name?: string) {
 		satelliteNumber,
 		epochYear,
 		epochDays,
-		epochJulianDay,
+		epoch,
 		meanMotionDot,
 		meanMotionDdot,
 		bstar,
@@ -86,7 +85,7 @@ export function parseTLE(line1: string, line2: string, name?: string) {
 		meanAnomaly,
 		meanMotion,
 		revolutionNumberAtEpoch,
-	} as const
+	}
 }
 
 // Builds a reusable SGP4 record from parsed TLE elements.
@@ -110,7 +109,7 @@ export function recordFromOMM(omm: OMM, opsmode: 'a' | 'i' = 'i') {
 		ecco: numericField(omm.ECCENTRICITY, 'OMM eccentricity'),
 		argpo: numericField(omm.ARG_OF_PERICENTER, 'OMM argument of pericenter') * DEG2RAD,
 		mo: numericField(omm.MEAN_ANOMALY, 'OMM mean anomaly') * DEG2RAD,
-		no: numericField(omm.MEAN_MOTION, 'OMM mean motion') / xpdotp,
+		no: numericField(omm.MEAN_MOTION, 'OMM mean motion') / XPDOTP,
 		jdsatepoch: epoch.julianDay,
 	}
 
@@ -130,11 +129,6 @@ export function recordFromOMM(omm: OMM, opsmode: 'a' | 'i' = 'i') {
 	return satrec
 }
 
-// Computes the Vallado GMST used by TEME conversions.
-export function temeSiderealTime(julianDayUt1: number) {
-	return gstime(julianDayUt1)
-}
-
 // Returns a human-readable explanation for an SGP4 propagation error.
 export function satelliteRecordErrorMessage(error: SatRecError) {
 	if (error === SatRecError.MeanEccentricityOutOfRange) return 'mean eccentricity is outside the valid interval'
@@ -146,9 +140,9 @@ export function satelliteRecordErrorMessage(error: SatRecError) {
 }
 
 // Propagates a TLE, OMM, or precomputed SGP4 record to a Julian day in TEME.
-export function sgp4(julianDay: number, source: TLE | OMM | SatRec) {
+export function sgp4(time: Time, source: TLE | OMM | SatRec) {
 	const satrec = isSatRec(source) ? source : isTLE(source) ? recordFromTLE(source) : recordFromOMM(source)
-	const result = propagateSatrec(satrec, (julianDay - satrec.jdsatepoch) * DAYMIN)
+	const result = propagateSatrec(satrec, (time.day - satrec.jdsatepoch) * DAYMIN + time.fraction * DAYMIN)
 
 	if (!result) {
 		throw new RangeError(`Satellite propagation failed: ${satelliteRecordErrorMessage(satrec.error)}.`)
@@ -158,11 +152,6 @@ export function sgp4(julianDay: number, source: TLE | OMM | SatRec) {
 		position: [kilometer(result.position.x), kilometer(result.position.y), kilometer(result.position.z)],
 		velocity: [kilometerPerSecond(result.velocity.x), kilometerPerSecond(result.velocity.y), kilometerPerSecond(result.velocity.z)],
 	} as const satisfies SatelliteState
-}
-
-// Propagates a satellite to the requested Julian day.
-export function propagateSatellite(julianDay: number, source: TLE | OMM | SatRec) {
-	return sgp4(julianDay, source)
 }
 
 function isTLE(source: TLE | OMM | SatRec): source is TLE {
