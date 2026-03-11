@@ -212,8 +212,7 @@ export function readCsv(input: string | string[], options: string | string[] | R
 		if (row === false || row.length === 0) {
 			if (index < 0) break
 			continue
-		}
-		else if (!skipFirstLine) rows.push(row)
+		} else if (!skipFirstLine) rows.push(row)
 		else skipFirstLine = false
 
 		if (index < 0) break
