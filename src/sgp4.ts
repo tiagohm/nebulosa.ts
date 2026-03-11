@@ -1,4 +1,5 @@
 import type { Angle } from './angle'
+import type { PositionAndVelocity } from './astrometry'
 import { DAYMIN, DEG2RAD } from './constants'
 import { kilometer } from './distance'
 import type { OMMJsonObject } from './sgp4/common-types'
@@ -7,8 +8,8 @@ import { twoline2satrec } from './sgp4/io'
 import { type SatRec, SatRecError, type SatRecInit } from './sgp4/propagation/SatRec'
 import propagateSatrec from './sgp4/propagation/sgp4'
 import sgp4init from './sgp4/propagation/sgp4init'
+import { isLeapYear } from './temporal'
 import { type Time, Timescale, timeYMDHMS, toJulianDay } from './time'
-import type { Vec3 } from './vec3'
 import { kilometerPerSecond } from './velocity'
 
 // Represents a parsed Two-Line Element set.
@@ -30,12 +31,6 @@ export interface TLE {
 	readonly meanAnomaly: Angle
 	readonly meanMotion: number
 	readonly revolutionNumberAtEpoch: number
-}
-
-// Represents the propagated TEME state in AU and AU/day.
-export interface SatelliteState {
-	readonly position: Vec3
-	readonly velocity: Vec3
 }
 
 export type OMM = OMMJsonObject
@@ -98,7 +93,7 @@ export function recordFromOMM(omm: OMM, opsmode: 'a' | 'i' = 'i') {
 	const epoch = parseOmmEpoch(omm.EPOCH)
 	const satrec: SatRecInit = {
 		error: SatRecError.None,
-		satnum: String(omm.NORAD_CAT_ID),
+		satnum: omm.NORAD_CAT_ID.toString(),
 		epochyr: epoch.year % 100,
 		epochdays: epoch.epochDays,
 		ndot: numericField(omm.MEAN_MOTION_DOT ?? 0, 'OMM mean motion dot'),
@@ -140,7 +135,7 @@ export function satelliteRecordErrorMessage(error: SatRecError) {
 }
 
 // Propagates a TLE, OMM, or precomputed SGP4 record to a Julian day in TEME.
-export function sgp4(time: Time, source: TLE | OMM | SatRec) {
+export function sgp4(time: Time, source: TLE | OMM | SatRec): PositionAndVelocity {
 	const satrec = isSatRec(source) ? source : isTLE(source) ? recordFromTLE(source) : recordFromOMM(source)
 	const result = propagateSatrec(satrec, (time.day - satrec.jdsatepoch) * DAYMIN + time.fraction * DAYMIN)
 
@@ -148,10 +143,10 @@ export function sgp4(time: Time, source: TLE | OMM | SatRec) {
 		throw new RangeError(`Satellite propagation failed: ${satelliteRecordErrorMessage(satrec.error)}.`)
 	}
 
-	return {
-		position: [kilometer(result.position.x), kilometer(result.position.y), kilometer(result.position.z)],
-		velocity: [kilometerPerSecond(result.velocity.x), kilometerPerSecond(result.velocity.y), kilometerPerSecond(result.velocity.z)],
-	} as const satisfies SatelliteState
+	return [
+		[kilometer(result.position.x), kilometer(result.position.y), kilometer(result.position.z)],
+		[kilometerPerSecond(result.velocity.x), kilometerPerSecond(result.velocity.y), kilometerPerSecond(result.velocity.z)],
+	]
 }
 
 function isTLE(source: TLE | OMM | SatRec): source is TLE {
@@ -203,10 +198,6 @@ function parseTleExponent(input: string, name: string) {
 	return value
 }
 
-function isLeapYear(year: number) {
-	return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
-}
-
 function daysToMonthDayHourMinuteSecond(year: number, days: number) {
 	const monthLength = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 	const dayOfYear = Math.floor(days)
@@ -229,6 +220,7 @@ function daysToMonthDayHourMinuteSecond(year: number, days: number) {
 
 function parseOmmEpoch(input: string) {
 	const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)(?:Z)?$/.exec(input.trim())
+
 	if (!match) throw new RangeError('Invalid OMM epoch.')
 
 	const year = Number.parseInt(match[1]!, 10)

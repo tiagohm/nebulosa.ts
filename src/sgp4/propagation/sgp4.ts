@@ -1,5 +1,5 @@
 import { PI, TAU } from '../../constants'
-import { earthRadius, J2, J3OJ2, vkmpersec, X2O3, XKE } from '../constants'
+import { EARTH_RADIUS, J2, J3OJ2, VKMPERSEC, X2O3, XKE } from '../constants'
 
 import dpper from './dpper'
 import dspace from './dspace'
@@ -293,14 +293,14 @@ export default function sgp4(satrec: SatRec, tsince: number) {
 
 	// position and velocity (in km and km/sec)
 	const position = {
-		x: mrt * ux * earthRadius,
-		y: mrt * uy * earthRadius,
-		z: mrt * uz * earthRadius,
+		x: mrt * ux * EARTH_RADIUS,
+		y: mrt * uy * EARTH_RADIUS,
+		z: mrt * uz * EARTH_RADIUS,
 	}
 	const velocity = {
-		x: (mvt * ux + rvdot * vx) * vkmpersec,
-		y: (mvt * uy + rvdot * vy) * vkmpersec,
-		z: (mvt * uz + rvdot * vz) * vkmpersec,
+		x: (mvt * ux + rvdot * vx) * VKMPERSEC,
+		y: (mvt * uy + rvdot * vy) * VKMPERSEC,
+		z: (mvt * uz + rvdot * vz) * VKMPERSEC,
 	}
 
 	return { position, velocity, meanElements } as const

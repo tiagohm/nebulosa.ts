@@ -2,8 +2,9 @@ import { expect, test } from 'bun:test'
 import type { PositionAndVelocity } from '../src/astrometry'
 import { DAYMIN } from '../src/constants'
 import { toKilometer } from '../src/distance'
-import { itrfToTemeByGmst, temeToItrfByGmst } from '../src/frame'
+import { itrfToTemeByGmst, temeToItrf, temeToItrfByGmst } from '../src/frame'
 import { parseTLE, recordFromOMM, recordFromTLE, sgp4 } from '../src/sgp4'
+import { Timescale, timeYMDHMS } from '../src/time'
 import { toKilometerPerSecond } from '../src/velocity'
 
 const ISS_TLE = parseTLE('1 25544U 98067A   23231.51768399  .00014050  00000+0  25837-3 0  9996', '2 25544  51.6415  14.7889 0003559 325.3396 149.4637 15.49477580411611', 'ISS (ZARYA)')
@@ -66,10 +67,10 @@ test('OMM and TLE produce matching state near epoch', () => {
 	const ommRecord = recordFromOMM(ISS_OMM)
 	const tleState = sgp4(ISS_TLE.epoch, tleRecord)
 	const ommState = sgp4(ISS_TLE.epoch, ommRecord)
-	const tlePositionKm = tleState.position.map(toKilometer)
-	const ommPositionKm = ommState.position.map(toKilometer)
-	const tleVelocityKms = tleState.velocity.map(toKilometerPerSecond)
-	const ommVelocityKms = ommState.velocity.map(toKilometerPerSecond)
+	const tlePositionKm = tleState[0].map(toKilometer)
+	const ommPositionKm = ommState[0].map(toKilometer)
+	const tleVelocityKms = tleState[1].map(toKilometerPerSecond)
+	const ommVelocityKms = ommState[1].map(toKilometerPerSecond)
 
 	expectVector(tlePositionKm, ommPositionKm, 5)
 	expectVector(tleVelocityKms, ommVelocityKms, 7)
@@ -84,8 +85,8 @@ for (const { title, tle, results } of VALLADO_CASES) {
 		test(`${title} at ${sample.time} min`, () => {
 			const time = { day: tle.epoch.day, fraction: tle.epoch.fraction + sample.time / DAYMIN, scale: 1 }
 			const state = sgp4(time, tle)
-			const positionKm = state.position.map(toKilometer)
-			const velocityKms = state.velocity.map(toKilometerPerSecond)
+			const positionKm = state[0].map(toKilometer)
+			const velocityKms = state[1].map(toKilometerPerSecond)
 			expectVector(positionKm, sample.position, 1)
 			expectVector(velocityKms, sample.velocity, 4)
 		})
@@ -114,6 +115,14 @@ test('TEME and ITRF state conversion round-trips', () => {
 
 	expectVector(teme[0], state[0], 9)
 	expectVector(teme[1], state[1], 9)
+})
+
+test('vector elements by JPL Horizons', () => {
+	const tle = parseTLE('1 25544U 98067A   26070.19118651  .00009215  00000+0  17770-3 0  9998', '2 25544  51.6325  64.9326 0007932 179.9008 180.1983 15.48575655556567', 'ISS (ZARYA)')
+	const time = timeYMDHMS(2026, 3, 11, 0, 0, 0, Timescale.TDB)
+	console.info(sgp4(time, tle))
+	const pv = temeToItrf(sgp4(time, tle), time)
+	console.info(pv)
 })
 
 function expectVector(actual: readonly number[], expected: readonly number[], digits: number) {

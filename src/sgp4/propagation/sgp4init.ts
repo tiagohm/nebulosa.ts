@@ -1,5 +1,5 @@
 import { TAU } from '../../constants'
-import { earthRadius, J2, J3OJ2, J4, tumin, X2O3 } from '../constants'
+import { EARTH_RADIUS, J2, J3OJ2, J4, tumin, X2O3 } from '../constants'
 import dpper from './dpper'
 import dscom from './dscom'
 import dsInit from './dsinit'
@@ -138,9 +138,9 @@ export default function sgp4init(satrecInit: SatRecInit, options: Sgp4InitOption
 	// earth constants
 	// sgp4fix identify constants and allow alternate values
 
-	const ss = 78 / earthRadius + 1
+	const ss = 78 / EARTH_RADIUS + 1
 	// sgp4fix use multiply for speed instead of pow
-	const qzms2ttemp = (120 - 78) / earthRadius
+	const qzms2ttemp = (120 - 78) / EARTH_RADIUS
 	const qzms2t = qzms2ttemp * qzms2ttemp * qzms2ttemp * qzms2ttemp
 
 	satrec.init = 'y'
@@ -173,13 +173,13 @@ export default function sgp4init(satrecInit: SatRecInit, options: Sgp4InitOption
 	if (omeosq >= 0 || satrec.no >= 0) {
 		satrec.isimp = 0
 
-		if (rp < 220 / earthRadius + 1) {
+		if (rp < 220 / EARTH_RADIUS + 1) {
 			satrec.isimp = 1
 		}
 
 		let sfour = ss
 		let qzms24 = qzms2t
-		const perige = (rp - 1) * earthRadius
+		const perige = (rp - 1) * EARTH_RADIUS
 
 		// for perigees below 156 km, s and qoms2t are altered
 		if (perige < 156) {
@@ -190,9 +190,9 @@ export default function sgp4init(satrecInit: SatRecInit, options: Sgp4InitOption
 			}
 
 			// sgp4fix use multiply for speed instead of pow
-			const qzms24temp = (120 - sfour) / earthRadius
+			const qzms24temp = (120 - sfour) / EARTH_RADIUS
 			qzms24 = qzms24temp * qzms24temp * qzms24temp * qzms24temp
-			sfour = sfour / earthRadius + 1
+			sfour = sfour / EARTH_RADIUS + 1
 		}
 
 		const pinvsq = 1 / posq

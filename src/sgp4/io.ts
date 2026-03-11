@@ -1,4 +1,4 @@
-import { DEG2RAD } from '../constants'
+import { DAYSEC, DEG2RAD } from '../constants'
 import type { OMMJsonObject } from './common-types'
 import { XPDOTP } from './constants'
 
@@ -123,7 +123,7 @@ export function twoline2satrec(longstr1: string, longstr2: string) {
 		jdsatepoch,
 	}
 
-	//  ---------------- initialize the orbit at sgp4epoch -------------------
+	// initialize the orbit at sgp4epoch
 	sgp4init(satrec, {
 		opsmode,
 		satn: satrec.satnum,
@@ -181,31 +181,28 @@ export function twoline2satrec(longstr1: string, longstr2: string) {
  --------------------------------------------------------------------------- */
 export function json2satrec(jsonobj: OMMJsonObject, opsmode: 'a' | 'i' = 'i') {
 	const error = 0
-
 	const satnum = jsonobj.NORAD_CAT_ID.toString()
 
-	const epoch = new Date(jsonobj.EPOCH.endsWith('Z') ? jsonobj.EPOCH : jsonobj.EPOCH + 'Z')
+	const epoch = new Date(jsonobj.EPOCH.endsWith('Z') ? jsonobj.EPOCH : `${jsonobj.EPOCH}Z`)
 	const year = epoch.getUTCFullYear()
 
-	const epochyr = Number(year.toString().slice(-2))
-	const epochdays = (epoch.valueOf() - new Date(Date.UTC(year, 0, 1, 0, 0, 0)).valueOf()) / (86400 * 1000) + 1
+	const epochyr = +year.toString().slice(-2)
+	const epochdays = (epoch.valueOf() - new Date(Date.UTC(year, 0, 1, 0, 0, 0)).valueOf()) / (DAYSEC * 1000) + 1
 
-	const ndot = Number(jsonobj.MEAN_MOTION_DOT)
-	const nddot = Number(jsonobj.MEAN_MOTION_DDOT)
-	const bstar = Number(jsonobj.BSTAR)
+	const ndot = +jsonobj.MEAN_MOTION_DOT
+	const nddot = +jsonobj.MEAN_MOTION_DDOT
+	const bstar = +jsonobj.BSTAR
 
-	const inclo = Number(jsonobj.INCLINATION) * DEG2RAD
-	const nodeo = Number(jsonobj.RA_OF_ASC_NODE) * DEG2RAD
-	const ecco = Number(jsonobj.ECCENTRICITY)
-	const argpo = Number(jsonobj.ARG_OF_PERICENTER) * DEG2RAD
-	const mo = Number(jsonobj.MEAN_ANOMALY) * DEG2RAD
-	const no = Number(jsonobj.MEAN_MOTION) / XPDOTP
+	const inclo = +jsonobj.INCLINATION * DEG2RAD
+	const nodeo = +jsonobj.RA_OF_ASC_NODE * DEG2RAD
+	const ecco = +jsonobj.ECCENTRICITY
+	const argpo = +jsonobj.ARG_OF_PERICENTER * DEG2RAD
+	const mo = +jsonobj.MEAN_ANOMALY * DEG2RAD
+	const no = +jsonobj.MEAN_MOTION / XPDOTP
 
-	// ----------------------------------------------------------------
-	// find sgp4epoch time of element set
-	// remember that sgp4 uses units of days from 0 jan 1950 (sgp4epoch)
+	// Find sgp4epoch time of element set
+	// Remember that sgp4 uses units of days from 0 jan 1950 (sgp4epoch)
 	// and minutes from the epoch (time)
-	// ----------------------------------------------------------------
 	const mdhmsResult = days2mdhms(year, epochdays)
 
 	const { mon, day, hr, minute, sec } = mdhmsResult
@@ -228,7 +225,7 @@ export function json2satrec(jsonobj: OMMJsonObject, opsmode: 'a' | 'i' = 'i') {
 		jdsatepoch,
 	}
 
-	//  ---------------- initialize the orbit at sgp4epoch -------------------
+	// Initialize the orbit at sgp4epoch
 	sgp4init(satrec, {
 		opsmode,
 		satn: satrec.satnum,
