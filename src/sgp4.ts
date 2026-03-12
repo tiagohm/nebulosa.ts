@@ -403,7 +403,7 @@ export function satelliteRecordErrorMessage(error: SatRecError) {
 // Propagates a TLE, OMM, or precomputed SGP4 record to a Julian day in TEME.
 export function sgp4(time: Time, source: TLE | OMM | SatRec): PositionAndVelocity {
 	const satrec = isSatRec(source) ? source : isTLE(source) ? recordFromTLE(source) : recordFromOMM(source)
-	const result = sgp4Propagate(satrec, (time.day - satrec.jdsatepoch.day) * DAYMIN + (time.fraction - satrec.jdsatepoch.fraction) * DAYMIN)
+	const result = sgp4Propagate(satrec, timeSubtract(time, satrec.jdsatepoch) * DAYMIN)
 
 	if (!result) {
 		throw new Error(`Satellite propagation failed: ${satelliteRecordErrorMessage(satrec.error)}.`)
@@ -633,7 +633,7 @@ export interface DscomOptions {
 // and periodics subroutines. Input is provided as shown. this routine
 // used to be called dpper, but the functions inside weren't well organized.
 // author: david vallado 719-573-2600 28 jun 2005
-export function dscom(options: DscomOptions) {
+function dscom(options: DscomOptions) {
 	const { epochday, epochfrac, ep, argpp, tc, inclp, nodep, np } = options
 
 	// constants
@@ -1023,7 +1023,7 @@ export interface DsInitOptions {
 
 // Provides deep space contributions to mean motion dot dueto geopotential resonance with half day and one day orbits.
 // author: david vallado 719-573-2600 28 jun 2005
-export function dsInit(options: DsInitOptions) {
+function dsInit(options: DsInitOptions) {
 	const { cosim, argpo, s1, s2, s3, s4, s5, sinim, ss1, ss2, ss3, ss4, ss5, sz1, sz3, sz11, sz13, sz21, sz23, sz31, sz33, t, tc, gsto, mo, mdot, no, nodeo, nodedot, xpidot, z1, z3, z11, z13, z21, z23, z31, z33, ecco, eccsq } = options
 	let { emsq, em, argpm, inclm, mm, nm, nodem, atime, d2201, d2211, d3210, d3222, d4410, d4422, d5220, d5232, d5421, d5433, dedt, didt, dmdt, dnodt, domdt, del1, del2, del3, xfact, xlamo, xli, xni } = options
 
@@ -1306,7 +1306,7 @@ export interface DspaceOptions {
 // revolution of the sun and moon. For earth resonance effects, the
 // effects have been averaged over no revolutions of the satellite.
 // author: david vallado 719-573-2600 28 jun 2005
-export function dspace(options: DspaceOptions) {
+function dspace(options: DspaceOptions) {
 	const { irez, d2201, d2211, d3210, d3222, d4410, d4422, d5220, d5232, d5421, d5433, dedt, del1, del2, del3, didt, dmdt, dnodt, domdt, argpo, argpdot, t, tc, gsto, xfact, xlamo, no } = options
 	let { atime, em, argpm, inclm, xli, mm, xni, nodem, nm } = options
 
@@ -1433,6 +1433,7 @@ export function dspace(options: DspaceOptions) {
 }
 
 export interface InitlOptions {
+	readonly opsmode: 'a' | 'i'
 	readonly ecco: number
 	readonly epochday: number
 	readonly epochfrac: number
@@ -1443,8 +1444,8 @@ export interface InitlOptions {
 // Initializes the sgp4 propagator. all the initialization is
 // consolidated here instead of having multiple loops inside other routines.
 // author: david vallado 719-573-2600 28 jun 2005
-export function initl(options: InitlOptions) {
-	const { ecco, epochday, epochfrac, inclo } = options
+function initl(options: InitlOptions) {
+	const { opsmode, ecco, epochday, epochfrac, inclo } = options
 	let { no } = options
 
 	// earth constants
@@ -1470,14 +1471,34 @@ export function initl(options: InitlOptions) {
 	const ainv = 1 / ao
 	const posq = po * po
 	const rp = ao * (1 - ecco)
-	const method = 'n'
 
-	const gsto = greenwichMeanSiderealTime({ day: epochday + 2433281, fraction: epochfrac + 0.5, scale: 1 })
+	let gsto = 0
+
+	if (opsmode === 'a') {
+		// sgp4fix use old way of finding gst
+		// count integer number of days from 0 jan 1970
+		const ts70 = epochday - 7305 + epochfrac
+		const ds70 = Math.floor(ts70 + 1e-8)
+		const tfrac = ts70 - ds70
+
+		// find greenwich location at epoch
+		const c1 = 1.72027916940703639e-2
+		const thgr70 = 1.7321343856509374
+		const fk5r = 5.07551419432269442e-15
+		const c1p2p = c1 + TAU
+		gsto = (thgr70 + c1 * ds70 + c1p2p * tfrac + ts70 * ts70 * fk5r) % TAU
+
+		if (gsto < 0) {
+			gsto += TAU
+		}
+	} else {
+		gsto = greenwichMeanSiderealTime({ day: epochday + 2433281, fraction: epochfrac + 0.5, scale: 1 })
+	}
 
 	return {
 		no,
 
-		method,
+		method: 'n',
 
 		ainv,
 		ao,
@@ -1503,7 +1524,7 @@ export function initl(options: InitlOptions) {
 // methodology from the aiaa paper (2006) describing the history and
 // development of the code.
 // author: david vallado 719-573-2600 28 jun 2005
-export function sgp4Propagate(satrec: SatRec, tsince: number) {
+function sgp4Propagate(satrec: SatRec, tsince: number) {
 	// set mathematical constants
 	// sgp4fix divisor for divide by zero check on inclination
 	// the old check used 1.0 + cos(pi-1.0e-9), but then compared it to
@@ -1813,7 +1834,7 @@ export interface Sgp4InitOptions {
 }
 
 // Initializes variables for sgp4.
-export function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts satrecInit is SatRec {
+function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts satrecInit is SatRec {
 	const { opsmode, satn, epochday, epochfrac, xbstar, xecco, xargpo, xinclo, xmo, xno, xnodeo } = options
 
 	// initialization

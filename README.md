@@ -664,6 +664,16 @@ identify(date, longitude, latitude, elevation, fovRa, fovDec, fovRaWidth, fovDec
 closeApproaches(dateMin, dateMax, distance)
 ```
 
+### SGP4 ![](bun.webp) ![](browser.webp)
+
+```ts
+const source = parseTLE(line1, line2, name)
+const source = recordFromTLE(tle)
+const source = recordFromOMM(omm, opsmode)
+const message = satelliteRecordErrorMessage(error)
+const pv = sgp4(time, source)
+```
+
 ### Simbad ![](bun.webp) ![](browser.webp)
 
 ```ts
