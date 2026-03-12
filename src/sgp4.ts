@@ -403,7 +403,7 @@ export function satelliteRecordErrorMessage(error: SatRecError) {
 // Propagates a TLE, OMM, or precomputed SGP4 record to a Julian day in TEME.
 export function sgp4(time: Time, source: TLE | OMM | SatRec): PositionAndVelocity {
 	const satrec = isSatRec(source) ? source : isTLE(source) ? recordFromTLE(source) : recordFromOMM(source)
-	const result = sgp4Propagate(satrec, timeSubtract(time, satrec.jdsatepoch) * DAYMIN)
+	const result = sgp4Propagate(satrec, timeSubtract(time, satrec.jdsatepoch, Timescale.UTC) * DAYMIN)
 
 	if (!result) {
 		throw new Error(`Satellite propagation failed: ${satelliteRecordErrorMessage(satrec.error)}.`)

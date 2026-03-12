@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test'
 import type { PositionAndVelocity } from '../src/astrometry'
 import { DAYMIN } from '../src/constants'
 import { toKilometer } from '../src/distance'
-import { itrfToTemeByGmst, temeToItrf, temeToItrfByGmst } from '../src/frame'
+import { itrfToTemeByGmst, temeToItrfByGmst } from '../src/frame'
+import { vector } from '../src/horizons'
 import { parseTLE, recordFromOMM, recordFromTLE, sgp4 } from '../src/sgp4'
 import { Timescale, timeYMDHMS } from '../src/time'
 import { toKilometerPerSecond } from '../src/velocity'
@@ -120,9 +121,32 @@ test('TEME and ITRF state conversion round-trips', () => {
 test('vector elements by JPL Horizons', () => {
 	const tle = parseTLE('1 25544U 98067A   26070.19118651  .00009215  00000+0  17770-3 0  9998', '2 25544  51.6325  64.9326 0007932 179.9008 180.1983 15.48575655556567', 'ISS (ZARYA)')
 	const time = timeYMDHMS(2026, 3, 11, 0, 0, 0, Timescale.TDB)
-	console.info(sgp4(time, tle))
-	const pv = temeToItrf(sgp4(time, tle), time)
-	console.info(pv)
+	const [p, v] = sgp4(time, tle)
+
+    // JPL Horizons:
+    // Output units: AU and AU/day
+    // Output type: GEOMETRIC cartesian states
+    // Reference frame: ICRF
+	expect(p[0]).toBeCloseTo(1.459950950729029e-5, 6)
+	expect(p[1]).toBeCloseTo(4.27203155142363e-5, 6)
+	expect(p[2]).toBeCloseTo(5.523957827183497e-6, 6)
+	expect(v[0]).toBeCloseTo(-2.744523449434552e-3, 4)
+	expect(v[1]).toBeCloseTo(4.892062429322461e-4, 4)
+	expect(v[2]).toBeCloseTo(3.431067191069624e-3, 4)
+})
+
+test.skip('horizons', async () => {
+	const tle = parseTLE('1 25544U 98067A   26070.19118651  .00009215  00000+0  17770-3 0  9998', '2 25544  51.6325  64.9326 0007932 179.9008 180.1983 15.48575655556567', 'ISS (ZARYA)')
+	const startTime = timeYMDHMS(2026, 3, 11, 0, 0, 0, Timescale.TDB)
+	const endTime = timeYMDHMS(2026, 3, 11, 1, 0, 0, Timescale.TDB)
+	const v = await vector(tle, '500@399', false, startTime, endTime, { stepSize: 1, stepSizeUnit: 'h', referencePlane: 'FRAME' })
+
+	for (let i = 0; i < 3; i++) {
+		console.info(`expect(p[${i}]).toBeCloseTo(${v[0][2 + i]}, 6)`)
+	}
+	for (let i = 0; i < 3; i++) {
+		console.info(`expect(v[${i}]).toBeCloseTo(${v[0][5 + i]}, 4)`)
+	}
 })
 
 function expectVector(actual: readonly number[], expected: readonly number[], digits: number) {

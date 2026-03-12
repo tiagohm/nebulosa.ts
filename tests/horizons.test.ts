@@ -80,7 +80,7 @@ describe.skip('observer', () => {
 	})
 
 	test('tle', async () => {
-		const input: ObserverWithTLE = { line1: 'ISS (ZARYA)', line2: '1 25544U 98067A   25029.70562785  .00020566  00000+0  35850-3 0  9990', line3: '2 25544  51.6387 272.9482 0002126 142.5311 315.5480 15.50695229493684' }
+		const input: ObserverWithTLE = { name: 'ISS (ZARYA)', line1: '1 25544U 98067A   25029.70562785  .00020566  00000+0  35850-3 0  9990', line2: '2 25544  51.6387 272.9482 0002126 142.5311 315.5480 15.50695229493684' }
 		const data = await observer(input, 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
