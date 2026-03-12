@@ -90,6 +90,37 @@ export function temporalFromTime(time: Time): Temporal {
 	return timeToUnixMillis(time)
 }
 
+export function temporalFromFractionOfYear(year: number, days: number) {
+	const dayOfYear = Math.floor(days)
+
+	let month = 1
+	let temp = 0
+
+	while (true) {
+		const days = daysInMonth(year, month)
+
+		if (dayOfYear > temp + days && month < 12) {
+			temp += days
+			month++
+		} else {
+			break
+		}
+	}
+
+	const day = dayOfYear - temp
+
+	// Find hours minutes and seconds
+	temp = (days - dayOfYear) * 24
+	const hour = Math.floor(temp)
+	temp = (temp - hour) * 60
+	const minute = Math.floor(temp)
+	temp = (temp - minute) * 60
+	const second = Math.floor(temp)
+	const millisecond = (temp - second) * 1000
+
+	return temporalFromDate(year, month, day, hour, minute, second, millisecond)
+}
+
 export function temporalAdd(temporal: Temporal, duration: number, unit: TemporalUnit | TemporalUnitShort): Temporal {
 	if (duration === 0) return temporal
 	if (unit === 'ms' || unit === 'millisecond') return temporal + duration

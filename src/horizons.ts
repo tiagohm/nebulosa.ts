@@ -2,6 +2,7 @@ import { type Angle, toDeg } from './angle'
 import { type ReadCsvOptions, readCsv } from './csv'
 import { type Distance, toKilometer } from './distance'
 import { formatTemporal, type Temporal } from './temporal'
+import type { Time } from './time'
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html
 // https://ssd-api.jpl.nasa.gov/doc/horizons.html
@@ -126,7 +127,7 @@ export interface ObserverWithOsculatingElements {
 export interface ObserverWithTLE {
 	line1: string
 	line2: string
-	line3: string
+	name?: string
 }
 
 export interface HorizonsCommonParameters {
@@ -295,7 +296,7 @@ const DEFAULT_OVE_OPTIONS: Required<ObserverVectorElementsOptions> = {
 	timeOfPeriapsisType: 'ABSOLUTE',
 }
 
-export async function observer(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal, endTime: Temporal, quantities: Quantity[] = DEFAULT_QUANTITIES, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
+export async function observer(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal | Time, endTime: Temporal | Time, quantities: Quantity[] = DEFAULT_QUANTITIES, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
 	const parameters = structuredClone(DEFAULT_OBSERVER_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, coord, options)
@@ -307,7 +308,7 @@ export async function observer(input: string | ObserverWithOsculatingElements | 
 	return parseCsvTable(await response.text(), options)
 }
 
-export async function vector(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal, endTime: Temporal, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
+export async function vector(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
 	const parameters = structuredClone(DEFAULT_VECTOR_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, coord, options)
@@ -318,7 +319,7 @@ export async function vector(input: string | ObserverWithOsculatingElements | Ob
 	return parseCsvTable(await response.text(), options)
 }
 
-export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: Temporal, endTime: Temporal, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
+export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
 	const parameters = structuredClone(DEFAULT_ELEMENTS_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, undefined, options)
@@ -329,7 +330,7 @@ export async function elements(input: string | ObserverWithOsculatingElements | 
 	return parseCsvTable(await response.text(), options)
 }
 
-export async function spkFile(id: number, startTime: Temporal, endTime: Temporal) {
+export async function spkFile(id: number, startTime: Temporal | Time, endTime: Temporal | Time) {
 	const parameters = structuredClone(DEFAULT_SPK_PARAMETERS) as HorizonsQueryParameters
 	parameters.COMMAND = `DES=${id};`
 	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
@@ -341,6 +342,11 @@ function makeParametersFromInput(parameters: HorizonsQueryParameters, input: str
 	// Ephemeris
 	if (typeof input === 'string') {
 		parameters.COMMAND = input
+	}
+	// TLE
+	else if ('line1' in input) {
+		parameters.COMMAND = 'TLE'
+		parameters.TLE = `${input.name ? `${input.name}\n` : ''}${input.line1}\n${input.line2}`
 	}
 	// Osculating elements
 	else if ('epoch' in input) {
@@ -385,17 +391,21 @@ function makeParametersFromInput(parameters: HorizonsQueryParameters, input: str
 		parameters.DT = input.dt
 		parameters.AMRAT = input.amrat
 	}
-	// TLE
-	else {
-		parameters.COMMAND = 'TLE'
-		parameters.TLE = `${input.line1}\n${input.line2}\n${input.line3}`
-	}
 }
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html#time
-function makeParametersFromStartAndStopTime(parameters: HorizonsQueryParameters, startTime: Temporal, endTime: Temporal) {
-	parameters.START_TIME = formatTemporal(startTime, undefined, 0)
-	parameters.STOP_TIME = formatTemporal(endTime, undefined, 0)
+function makeParametersFromStartAndStopTime(parameters: HorizonsQueryParameters, startTime: Temporal | Time, endTime: Temporal | Time) {
+	if (typeof startTime === 'number') {
+		parameters.START_TIME = formatTemporal(startTime, undefined, 0)
+	} else {
+		parameters.START_TIME = `JD ${startTime.day + startTime.fraction}`
+	}
+
+	if (typeof endTime === 'number') {
+		parameters.STOP_TIME = formatTemporal(endTime, undefined, 0)
+	} else {
+		parameters.STOP_TIME = `JD ${endTime.day + endTime.fraction}`
+	}
 }
 
 function makeParametersFromCenterAndCoordinates(parameters: HorizonsQueryParameters, center: ObserverSiteCenter, coord?: ObserverSiteCoord, options?: ObserverVectorElementsOptions) {

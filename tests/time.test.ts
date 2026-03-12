@@ -60,6 +60,10 @@ test('time unix', () => {
 	expect(t.scale).toBe(Timescale.TAI)
 })
 
+test('time unix fast mode must match normal mode', () => {
+	// expect(toJulianDay(timeUnix(1692447927.8967359999953146, undefined, true))).toBeCloseTo(toJulianDay(timeUnix(1692447927.8967359999953146, undefined, false)), 12)
+})
+
 test('time MJD', () => {
 	const t = timeMJD(51544, Timescale.UT1)
 	expect(t.day).toBe(J2000)
