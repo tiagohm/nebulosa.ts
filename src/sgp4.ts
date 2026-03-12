@@ -1609,6 +1609,11 @@ function sgp4Propagate(satrec: SatRec, tsince: number) {
 		const dspaceResult = dspace(dspaceOptions)
 
 		;({ em, argpm, inclm, mm, nodem, nm } = dspaceResult)
+
+		// Persist deep-space integrator state so subsequent calls continue from the previous step.
+		satrec.atime = dspaceResult.atime
+		satrec.xli = dspaceResult.xli
+		satrec.xni = dspaceResult.xni
 	}
 
 	if (nm <= 0) {
