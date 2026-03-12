@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 // biome-ignore format: too long!
-import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalFromTime, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
+import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalFromFractionOfYear, temporalFromTime, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
 import { timeYMDHMS } from '../src/time'
 
 test('is leap year', () => {
@@ -74,6 +74,16 @@ test('temporal from time', () => {
 	const time = timeYMDHMS(2024, 2, 29, 12, 34, 56.789)
 	expect(temporalFromTime(time)).toBe(1709210096789)
 	expect(temporalToDate(temporalFromTime(time))).toEqual([2024, 2, 29, 12, 34, 56, 789])
+})
+
+test('temporal from fraction of year', () => {
+	expect(temporalFromFractionOfYear(2025, 1)).toBe(temporalFromDate(2025, 1, 1, 0, 0, 0, 0))
+	expect(temporalFromFractionOfYear(2025, 32)).toBe(temporalFromDate(2025, 2, 1, 0, 0, 0, 0))
+	expect(temporalFromFractionOfYear(2024, 60)).toBe(temporalFromDate(2024, 2, 29, 0, 0, 0, 0))
+	expect(temporalFromFractionOfYear(2024, 60.5)).toBe(temporalFromDate(2024, 2, 29, 12, 0, 0, 0))
+	expect(temporalFromFractionOfYear(2025, 200.65625)).toBe(temporalFromDate(2025, 7, 19, 15, 45, 0, 0))
+	expect(temporalFromFractionOfYear(2025, 200.6566449421296296)).toBe(temporalFromDate(2025, 7, 19, 15, 45, 34, 123))
+	expect(temporalToDate(temporalFromFractionOfYear(2025, 365.75))).toEqual([2025, 12, 31, 18, 0, 0, 0])
 })
 
 describe('add', () => {
