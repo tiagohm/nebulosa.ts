@@ -2,8 +2,8 @@ import type { Angle } from './angle'
 import type { PositionAndVelocity } from './astrometry'
 import { DAYMIN, DEG2RAD, PI, TAU } from './constants'
 import { kilometer } from './distance'
-import { isLeapYear, temporalFromFractionOfYear } from './temporal'
-import { greenwichMeanSiderealTime, type Time, Timescale, timeSubtract, timeUnix, timeYMDHMS } from './time'
+import { isLeapYear } from './temporal'
+import { greenwichMeanSiderealTime, type Time, Timescale, timeSubtract, timeYMDHMS } from './time'
 import { kilometerPerSecond } from './velocity'
 
 const MU = 398600.8 // in km3 / s2
@@ -48,13 +48,13 @@ export interface TLE {
 // and longer-term periodic pertubations from the Sun and Moon that
 // SGP4 applies right before computing each position.
 export interface MeanElements {
-	readonly am: number // Average semi-major axis (earth radii).
-	readonly em: number // Average eccentricity.
-	readonly im: Angle // Average inclination.
-	readonly Om: Angle // Average right ascension of ascending node.
-	readonly om: Angle // Average argument of perigee.
-	readonly mm: Angle // Average mean anomaly.
-	readonly nm: Angle // Average mean motion (radians/minute).
+	am: number // Average semi-major axis (earth radii).
+	em: number // Average eccentricity.
+	im: Angle // Average inclination.
+	Om: Angle // Average right ascension of ascending node.
+	om: Angle // Average argument of perigee.
+	mm: Angle // Average mean anomaly.
+	nm: Angle // Average mean motion (radians/minute).
 }
 
 export type SupportedOMMVersion = `3.${string}`
@@ -69,34 +69,34 @@ export type SupportedOMMVersion = `3.${string}`
 // the source. This is because the spec doesn't specify the type, and different sources use
 // different types: at the time of writing, Celestrak uses numbers, while SpaceTrack uses strings.
 export interface OMM {
-	CCSDS_OMM_VERS?: SupportedOMMVersion
-	COMMENT?: string
-	CLASSIFICATION?: string
-	OBJECT_NAME: string
-	OBJECT_ID: string
-	CENTER_NAME?: 'EARTH'
-	REF_FRAME?: 'TEME'
-	REF_FRAME_EPOCH?: string
-	TIME_SYSTEM?: 'UTC'
-	MEAN_ELEMENT_THEORY?: 'SGP4'
-	CREATION_DATE?: string
-	ORIGINATOR?: string
-	EPOCH: string
-	MEAN_MOTION: string | number
-	ECCENTRICITY: string | number
-	INCLINATION: number | string
-	RA_OF_ASC_NODE: number | string
-	ARG_OF_PERICENTER: number | string
-	MEAN_ANOMALY: number | string
-	EPHEMERIS_TYPE?: 0 | '0'
-	CLASSIFICATION_TYPE?: 'U' | 'C'
-	NORAD_CAT_ID: string | number
-	ELEMENT_SET_NO: string | number
-	REV_AT_EPOCH?: string | number
-	BSTAR: string | number
-	MEAN_MOTION_DOT: string | number
-	MEAN_MOTION_DDOT: string | number
-	[key: string]: unknown // This handles additional metadata, such as OBJECT_TYPE, COUNTRY_CODE etc
+	readonly CCSDS_OMM_VERS?: SupportedOMMVersion
+	readonly COMMENT?: string
+	readonly CLASSIFICATION?: string
+	readonly OBJECT_NAME: string
+	readonly OBJECT_ID: string
+	readonly CENTER_NAME?: 'EARTH'
+	readonly REF_FRAME?: 'TEME'
+	readonly REF_FRAME_EPOCH?: string
+	readonly TIME_SYSTEM?: 'UTC'
+	readonly MEAN_ELEMENT_THEORY?: 'SGP4'
+	readonly CREATION_DATE?: string
+	readonly ORIGINATOR?: string
+	readonly EPOCH: string
+	readonly MEAN_MOTION: string | number
+	readonly ECCENTRICITY: string | number
+	readonly INCLINATION: number | string
+	readonly RA_OF_ASC_NODE: number | string
+	readonly ARG_OF_PERICENTER: number | string
+	readonly MEAN_ANOMALY: number | string
+	readonly EPHEMERIS_TYPE?: 0 | '0'
+	readonly CLASSIFICATION_TYPE?: 'U' | 'C'
+	readonly NORAD_CAT_ID: string | number
+	readonly ELEMENT_SET_NO: string | number
+	readonly REV_AT_EPOCH?: string | number
+	readonly BSTAR: string | number
+	readonly MEAN_MOTION_DOT: string | number
+	readonly MEAN_MOTION_DDOT: string | number
+	readonly [key: string]: unknown // This handles additional metadata, such as OBJECT_TYPE, COUNTRY_CODE etc
 }
 
 export enum SatRecError {
@@ -220,8 +220,7 @@ export interface SatRec {
 	altp: number
 	alta: number
 
-	epochdays: number // Fractional days into the year of the epoch moment in UTC.
-	jdsatepoch: Time // Julian date of the epoch (computed from epochyr and epochdays).
+	epoch: Time // Julian date of the epoch (computed from epochyr and epochdays).
 	nddot: number // Second time derivative of the mean motion (ignored by SGP4).
 	ndot: number // First time derivative of the mean motion (ignored by SGP4).
 	bstar: number // Ballistic drag coefficient B* in inverse earth radii.
@@ -233,37 +232,37 @@ export interface SatRec {
 	no: Angle // Mean motion in radians per minute.
 }
 
-export type SatRecInit = Pick<SatRec, 'error' | 'satnum' | 'epochyr' | 'epochdays' | 'ndot' | 'nddot' | 'bstar' | 'inclo' | 'nodeo' | 'ecco' | 'argpo' | 'mo' | 'no' | 'jdsatepoch'>
+export type SatRecInit = Pick<SatRec, 'error' | 'satnum' | 'epochyr' | 'ndot' | 'nddot' | 'bstar' | 'inclo' | 'nodeo' | 'ecco' | 'argpo' | 'mo' | 'no' | 'epoch'>
 
 // Parses two TLE lines into a validated structured object.
 export function parseTLE(line1: string, line2: string, name?: string): TLE {
-	const a = line1.trimEnd().padEnd(69, ' ')
-	const b = line2.trimEnd().padEnd(69, ' ')
+	line1 = line1.trimEnd().padEnd(69, ' ')
+	line2 = line2.trimEnd().padEnd(69, ' ')
 
-	if (a[0] !== '1') throw new Error('TLE line 1 must start with "1"')
-	if (b[0] !== '2') throw new Error('TLE line 2 must start with "2"')
+	if (line1[0] !== '1') throw new Error('TLE line 1 must start with "1"')
+	if (line2[0] !== '2') throw new Error('TLE line 2 must start with "2"')
 
-	const satelliteNumber = a.substring(2, 7).trim()
-	const epochYear = +a.substring(18, 20)
-	const epochDays = +a.substring(20, 32)
-	const meanMotionDot = +a.substring(33, 43)
-	const meanMotionDdot = parseTleExponent(a.substring(44, 52))
-	const bstar = parseTleExponent(a.substring(53, 61))
-	const inclination = +b.substring(8, 16) * DEG2RAD
-	const rightAscensionOfAscendingNode = +b.substring(17, 25) * DEG2RAD
-	const eccentricity = +`0.${b.substring(26, 33).replaceAll(' ', '0')}`
-	const argumentOfPerigee = +b.substring(34, 42) * DEG2RAD
-	const meanAnomaly = +b.substring(43, 51) * DEG2RAD
-	const meanMotion = +b.substring(52, 63)
-	const revolutionNumberAtEpoch = +b.substring(63, 68) || 0
+	const satelliteNumber = line1.substring(2, 7).trim()
+	const epochYear = +line1.substring(18, 20)
+	const epochDays = +line1.substring(20, 32)
+	const meanMotionDot = +line1.substring(33, 43)
+	const meanMotionDdot = parseTleExponent(line1.substring(44, 52))
+	const bstar = parseTleExponent(line1.substring(53, 61))
+	const inclination = +line2.substring(8, 16) * DEG2RAD
+	const rightAscensionOfAscendingNode = +line2.substring(17, 25) * DEG2RAD
+	const eccentricity = +`0.${line2.substring(26, 33).replaceAll(' ', '0')}`
+	const argumentOfPerigee = +line2.substring(34, 42) * DEG2RAD
+	const meanAnomaly = +line2.substring(43, 51) * DEG2RAD
+	const meanMotion = +line2.substring(52, 63)
+	const revolutionNumberAtEpoch = +line2.substring(63, 68) || 0
 	const year = epochYear < 57 ? epochYear + 2000 : epochYear + 1900
 	const [month, day, hour, minute, second] = daysToMonthDayHourMinuteSecond(year, epochDays)
 	const epoch = timeYMDHMS(year, month, day, hour, minute, second, Timescale.UTC)
 
 	return {
 		name,
-		line1: a,
-		line2: b,
+		line1,
+		line2,
 		satelliteNumber,
 		epochYear,
 		epochDays,
@@ -282,65 +281,29 @@ export function parseTLE(line1: string, line2: string, name?: string): TLE {
 }
 
 // Builds a reusable SGP4 record from parsed TLE elements.
-export function recordFromTLE({ line1, line2 }: TLE) {
-	const opsmode = 'i'
-	const error = 0
-
-	const satnum = line1.substring(2, 7)
-
-	const epochyr = +line1.substring(18, 20)
-	const epochdays = +line1.substring(20, 32)
-	const ndot = +line1.substring(33, 43)
-	const nddot = +`${line1.substring(44, 45)}.${line1.substring(45, 50)}E${line1.substring(50, 52)}`
-	const bstar = +`${line1.substring(53, 54)}.${line1.substring(54, 59)}E${line1.substring(59, 61)}`
-
-	// satrec.satnum = line2.substring(2, 7)
-	// Find standard orbital elements
-	const inclo = +line2.substring(8, 16) * DEG2RAD
-	const nodeo = +line2.substring(17, 25) * DEG2RAD
-	const ecco = +`.${line2.substring(26, 33).replace(/\s/g, '0')}`
-	const argpo = +line2.substring(34, 42) * DEG2RAD
-	const mo = +line2.substring(43, 51) * DEG2RAD
-
-	// Find no, ndot, nddot
-	const no = +line2.substring(52, 63) / XPDOTP
-	// satrec.nddot = satrec.nddot * Math.pow(10, nexp)
-	// satrec.bstar = satrec.bstar * Math.pow(10, ibexp)
-
-	// Convert to sgp4 units
-	// satrec.ndot /= (xpdotp * 1440) // ? * minperday
-	// satrec.nddot /= (xpdotp * 1440 * 1440)
-
-	// find sgp4epoch time of element set
-	// remember that sgp4 uses units of days from 0 jan 1950 (sgp4epoch)
-	// and minutes from the epoch (time)
-	// correct fix will occur when year is 4-digit in tle
-	const year = epochyr < 57 ? epochyr + 2000 : epochyr + 1900
-	const jdsatepoch = timeUnix(temporalFromFractionOfYear(year, epochdays) / 1000, undefined, true)
-
+export function recordFromTLE(tle: TLE) {
 	const satrec: SatRecInit = {
-		error,
-		satnum,
-		epochyr,
-		epochdays,
-		ndot,
-		nddot,
-		bstar,
-		inclo,
-		nodeo,
-		ecco,
-		argpo,
-		mo,
-		no,
-		jdsatepoch,
+		error: 0,
+		satnum: tle.satelliteNumber,
+		epochyr: tle.epochYear,
+		ndot: tle.meanMotionDot,
+		nddot: tle.meanMotionDdot,
+		bstar: tle.bstar,
+		inclo: tle.inclination,
+		nodeo: tle.rightAscensionOfAscendingNode,
+		ecco: tle.eccentricity,
+		argpo: tle.argumentOfPerigee,
+		mo: tle.meanAnomaly,
+		no: tle.meanMotion / XPDOTP,
+		epoch: tle.epoch,
 	}
 
 	// Initialize the orbit at sgp4epoch
 	sgp4Init(satrec, {
-		opsmode,
+		opsmode: 'i',
 		satn: satrec.satnum,
-		epochday: satrec.jdsatepoch.day - 2433281,
-		epochfrac: satrec.jdsatepoch.fraction - 0.5,
+		epochday: satrec.epoch.day - 2433281,
+		epochfrac: satrec.epoch.fraction - 0.5,
 		xbstar: satrec.bstar,
 		xecco: satrec.ecco,
 		xargpo: satrec.argpo,
@@ -360,7 +323,6 @@ export function recordFromOMM(omm: OMM, opsmode: 'a' | 'i' = 'i') {
 		error: SatRecError.None,
 		satnum: omm.NORAD_CAT_ID.toString(),
 		epochyr: epoch.year % 100,
-		epochdays: epoch.days,
 		ndot: +omm.MEAN_MOTION_DOT || 0,
 		nddot: +omm.MEAN_MOTION_DDOT || 0,
 		bstar: +omm.BSTAR,
@@ -370,14 +332,14 @@ export function recordFromOMM(omm: OMM, opsmode: 'a' | 'i' = 'i') {
 		argpo: +omm.ARG_OF_PERICENTER * DEG2RAD,
 		mo: +omm.MEAN_ANOMALY * DEG2RAD,
 		no: +omm.MEAN_MOTION / XPDOTP,
-		jdsatepoch: epoch.jd,
+		epoch: epoch.jd,
 	}
 
 	sgp4Init(satrec, {
 		opsmode,
 		satn: satrec.satnum,
-		epochday: satrec.jdsatepoch.day - 2433281,
-		epochfrac: satrec.jdsatepoch.fraction - 0.5,
+		epochday: satrec.epoch.day - 2433281,
+		epochfrac: satrec.epoch.fraction - 0.5,
 		xbstar: satrec.bstar,
 		xecco: satrec.ecco,
 		xargpo: satrec.argpo,
@@ -401,12 +363,12 @@ export function satelliteRecordErrorMessage(error: SatRecError) {
 }
 
 // Propagates a TLE, OMM, or precomputed SGP4 record to a Julian day in TEME.
-export function sgp4(time: Time, source: TLE | OMM | SatRec): PositionAndVelocity {
+export function sgp4(time: Time, source: TLE | OMM | SatRec, meanElements?: MeanElements): PositionAndVelocity {
 	const satrec = isSatRec(source) ? source : isTLE(source) ? recordFromTLE(source) : recordFromOMM(source)
-	const result = sgp4Propagate(satrec, timeSubtract(time, satrec.jdsatepoch, Timescale.UTC) * DAYMIN)
+	const result = sgp4Propagate(satrec, timeSubtract(time, satrec.epoch, Timescale.UTC) * DAYMIN, meanElements)
 
 	if (!result) {
-		throw new Error(`Satellite propagation failed: ${satelliteRecordErrorMessage(satrec.error)}.`)
+		throw new Error(`satellite propagation failed: ${satelliteRecordErrorMessage(satrec.error)}.`)
 	}
 
 	return [
@@ -420,7 +382,7 @@ function isTLE(source: TLE | OMM | SatRec): source is TLE {
 }
 
 function isSatRec(source: TLE | OMM | SatRec): source is SatRec {
-	return 'jdsatepoch' in source && 'method' in source
+	return 'epoch' in source && 'method' in source
 }
 
 function parseTleExponent(input: string) {
@@ -511,7 +473,7 @@ export default function dpper(satrec: SatRec, options: DpperOptions) {
 		zm = zmos
 	}
 
-	let zf = zm + 2.0 * zes * Math.sin(zm)
+	let zf = zm + 2 * zes * Math.sin(zm)
 	let sinzf = Math.sin(zf)
 	let f2 = 0.5 * sinzf * sinzf - 0.25
 	let f3 = -0.5 * sinzf * Math.cos(zf)
@@ -528,7 +490,7 @@ export default function dpper(satrec: SatRec, options: DpperOptions) {
 		zm = zmol
 	}
 
-	zf = zm + 2.0 * zel * Math.sin(zm)
+	zf = zm + 2 * zel * Math.sin(zm)
 	sinzf = Math.sin(zf)
 	f2 = 0.5 * sinzf * sinzf - 0.25
 	f3 = -0.5 * sinzf * Math.cos(zf)
@@ -1053,7 +1015,7 @@ function dsInit(options: DsInitOptions) {
 	const ses = ss1 * ZNS * ss5
 	const sis = ss2 * ZNS * (sz11 + sz13)
 	const sls = -ZNS * ss3 * (sz1 + sz3 - 14 - 6 * emsq)
-	const sghs = ss4 * ZNS * (sz31 + sz33 - 6.0)
+	const sghs = ss4 * ZNS * (sz31 + sz33 - 6)
 	let shs = -ZNS * ss2 * (sz21 + sz23)
 
 	// sgp4fix for 180 deg incl
@@ -1071,7 +1033,7 @@ function dsInit(options: DsInitOptions) {
 	dedt = ses + s1 * ZNL * s5
 	didt = sis + s2 * ZNL * (z11 + z13)
 	dmdt = sls - ZNL * s3 * (z1 + z3 - 14 - 6 * emsq)
-	const sghl = s4 * ZNL * (z31 + z33 - 6.0)
+	const sghl = s4 * ZNL * (z31 + z33 - 6)
 	let shll = -ZNL * s2 * (z21 + z23)
 
 	// sgp4fix for 180 deg incl
@@ -1097,11 +1059,11 @@ function dsInit(options: DsInitOptions) {
 	mm += dmdt * t
 
 	// sgp4fix for negative inclinations
-	if (inclm < 0) {
-		inclm = -inclm
-		argpm = argpm - PI
-		nodem = nodem + PI
-	}
+	// if (inclm < 0) {
+	// 	inclm = -inclm
+	// 	argpm = argpm - PI
+	// 	nodem = nodem + PI
+	// }
 
 	let g211 = 0
 	let g310 = 0
@@ -1337,11 +1299,11 @@ function dspace(options: DspaceOptions) {
 	mm += dmdt * t
 
 	// sgp4fix for negative inclinations
-	if (inclm < 0) {
-		inclm = -inclm
-		argpm = argpm - PI
-		nodem = nodem + PI
-	}
+	// if (inclm < 0) {
+	// 	inclm = -inclm
+	// 	argpm = argpm - PI
+	// 	nodem = nodem + PI
+	// }
 
 	if (irez !== 0) {
 		// sgp4fix streamline check
@@ -1415,8 +1377,8 @@ function dspace(options: DspaceOptions) {
 			}
 		}
 
-		nm = xni + xndt! * ft + xnddt! * ft * ft * 0.5
-		const xl = xli + xldot! * ft + xndt! * ft * ft * 0.5
+		nm = xni + xndt * ft + xnddt * ft * ft * 0.5
+		const xl = xli + xldot * ft + xndt * ft * ft * 0.5
 
 		if (irez !== 1) {
 			mm = xl - 2 * nodem + 2 * theta
@@ -1492,7 +1454,17 @@ function initl(options: InitlOptions) {
 			gsto += TAU
 		}
 	} else {
-		gsto = greenwichMeanSiderealTime({ day: epochday + 2433281, fraction: epochfrac + 0.5, scale: 1 })
+		const time: Time = { day: epochday + 2433281, fraction: epochfrac + 0.5, scale: 1 }
+		gsto = greenwichMeanSiderealTime(time)
+
+        // NOTE: Original code! Uncomment so that the test cases better match the satellite-js library.
+		// const tut1 = (epochday + (2433281 - 2451545)) / 36525 + (epochfrac + 0.5) / 36525
+		// gsto = -6.2e-6 * tut1 * tut1 * tut1 + 0.093104 * tut1 * tut1 + (876600 * 3600 + 8640184.812866) * tut1 + 67310.54841
+		// gsto = ((gsto * DEG2RAD) / 240) % TAU // 360/86400 = 1/240, to deg, to rad
+
+		// if (gsto < 0) {
+		// 	gsto += TAU
+		// }
 	}
 
 	return {
@@ -1524,10 +1496,10 @@ function initl(options: InitlOptions) {
 // methodology from the aiaa paper (2006) describing the history and
 // development of the code.
 // author: david vallado 719-573-2600 28 jun 2005
-function sgp4Propagate(satrec: SatRec, tsince: number) {
+function sgp4Propagate(satrec: SatRec, tsince: number, meanElements?: MeanElements) {
 	// set mathematical constants
 	// sgp4fix divisor for divide by zero check on inclination
-	// the old check used 1.0 + cos(pi-1.0e-9), but then compared it to
+	// the old check used 1 + cos(pi-1e-9), but then compared it to
 	// 1.5 e-12, so the threshold was changed to 1.5e-12 for consistency
 	const temp4 = 1.5e-12
 
@@ -1543,14 +1515,14 @@ function sgp4Propagate(satrec: SatRec, tsince: number) {
 	let mm = xmdf
 	const t2 = satrec.t * satrec.t
 	let nodem = nodedf + satrec.nodecf * t2
-	let tempa = 1.0 - satrec.cc1 * satrec.t
+	let tempa = 1 - satrec.cc1 * satrec.t
 	let tempe = satrec.bstar * satrec.cc4 * satrec.t
 	let templ = satrec.t2cof * t2
 
 	if (satrec.isimp !== 1) {
 		const delomg = satrec.omgcof * satrec.t
 		// sgp4fix use mutliply for speed instead of pow
-		const delmtemp = 1.0 + satrec.eta * Math.cos(xmdf)
+		const delmtemp = 1 + satrec.eta * Math.cos(xmdf)
 		const delm = satrec.xmcof * (delmtemp * delmtemp * delmtemp - satrec.delmo)
 		const temp = delomg + delm
 		mm = xmdf + temp
@@ -1647,15 +1619,15 @@ function sgp4Propagate(satrec: SatRec, tsince: number) {
 	xlm %= TAU
 	mm = (xlm - argpm - nodem) % TAU
 
-	const meanElements = {
-		am: am,
-		em: em,
-		im: inclm,
-		Om: nodem,
-		om: argpm,
-		mm: mm,
-		nm: nm,
-	} as const
+	if (meanElements) {
+		meanElements.am = am
+		meanElements.em = em
+		meanElements.im = inclm
+		meanElements.Om = nodem
+		meanElements.om = argpm
+		meanElements.mm = mm
+		meanElements.nm = nm
+	}
 
 	// compute extra mean quantities
 	const sinim = Math.sin(inclm)
@@ -2065,7 +2037,7 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 		const delmotemp = 1 + satrec.eta * Math.cos(satrec.mo)
 		satrec.delmo = delmotemp * delmotemp * delmotemp
 		satrec.sinmao = Math.sin(satrec.mo)
-		satrec.x7thm1 = 7 * cosio2 - 1.0
+		satrec.x7thm1 = 7 * cosio2 - 1
 
 		// deep space initialization
 		if (TAU / satrec.no >= 225) {
@@ -2192,25 +2164,25 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 				cosim,
 				emsq,
 				argpo: satrec.argpo,
-				s1: s1!,
-				s2: s2!,
-				s3: s3!,
-				s4: s4!,
-				s5: s5!,
-				sinim: sinim!,
-				ss1: ss1!,
-				ss2: ss2!,
-				ss3: ss3!,
-				ss4: ss4!,
-				ss5: ss5!,
-				sz1: sz1!,
-				sz3: sz3!,
-				sz11: sz11!,
-				sz13: sz13!,
-				sz21: sz21!,
-				sz23: sz23!,
-				sz31: sz31!,
-				sz33: sz33!,
+				s1,
+				s2,
+				s3,
+				s4,
+				s5,
+				sinim,
+				ss1,
+				ss2,
+				ss3,
+				ss4,
+				ss5,
+				sz1,
+				sz3,
+				sz11,
+				sz13,
+				sz21,
+				sz23,
+				sz31,
+				sz33,
 				t: satrec.t,
 				tc: 0,
 				gsto: satrec.gsto,
@@ -2220,14 +2192,14 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 				nodeo: satrec.nodeo,
 				nodedot: satrec.nodedot,
 				xpidot: xpidot!,
-				z1: z1!,
-				z3: z3!,
-				z11: z11!,
-				z13: z13!,
-				z21: z21!,
-				z23: z23!,
-				z31: z31!,
-				z33: z33!,
+				z1,
+				z3,
+				z11,
+				z13,
+				z21,
+				z23,
+				z31,
+				z33,
 				ecco: satrec.ecco,
 				eccsq,
 				em,
@@ -2299,7 +2271,7 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 		if (satrec.isimp !== 1) {
 			const cc1sq = satrec.cc1 * satrec.cc1
 			satrec.d2 = 4 * ao * tsi * cc1sq
-			const temp = (satrec.d2 * tsi * satrec.cc1) / 3.0
+			const temp = (satrec.d2 * tsi * satrec.cc1) / 3
 			satrec.d3 = (17 * ao + sfour) * temp
 			satrec.d4 = 0.5 * temp * ao * tsi * (221 * ao + 31 * sfour) * satrec.cc1
 			satrec.t3cof = satrec.d2 + 2 * cc1sq
@@ -2312,3 +2284,5 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 
 	satrec.init = 'n'
 }
+
+export const internal = { initl, dsInit }

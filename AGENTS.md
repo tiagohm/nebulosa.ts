@@ -43,7 +43,7 @@ Agents must respect all constraints below when generating or modifying code.
 * Avoid dynamic object reshaping.
 * Always single-line comment methods and relevant lines.
 * Always type the method parameter.
-* The commit message must be in English and entirely in lowercase letters, except for acronyms.
+* The commit message must be in English and entirely in lowercase letters, except for acronyms and file names.
 * The commit message should begin with verbs in the present tense like `implement`, `fix`, `improve`, `update`, `use`.
 
 ## Environment
