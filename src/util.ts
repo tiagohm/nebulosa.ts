@@ -6,6 +6,8 @@ export interface BinarySearchOptions {
 	positive?: boolean
 }
 
+export const STANDARD_DEVIATION_SCALE = 1.482602218505602
+
 // Checks if the input is a number array.
 export function isNumberArray(a: unknown): a is NumberArray {
 	return (Array.isArray(a) && (!a.length || typeof a[0] === 'number')) || ArrayBuffer.isView(a)
@@ -61,17 +63,23 @@ export function meanOf(a: Readonly<NumberArray>) {
 	return s / a.length
 }
 
-// Computes the median value of an sorted array of numeric values.
-// If the array is empty, it returns NaN.
-export function medianOf(a: Readonly<NumberArray>) {
-	if (a.length === 0) return NaN
-	else if (a.length === 1) return a[0]
-	else if (a.length === 2) return (a[0] + a[1]) / 2
-	else if (a.length === 3) return a[1]
+// Computes the median value of a sorted array of numeric values.
+export function medianOf(a: Readonly<NumberArray>, count: number = a.length) {
+	if (count === 0) return NaN
+	else if (count === 1) return a[0]
+	else if (count === 2) return (a[0] + a[1]) * 0.5
+	else if (count === 3) return a[1]
 
-	const i = Math.trunc(a.length / 2)
+	const mid = count >> 1
+	return count % 2 === 1 ? a[mid] : (a[mid - 1] + a[mid]) * 0.5
+}
 
-	return a.length % 2 === 1 ? a[i] : (a[i - 1] + a[i]) / 2
+// Computes median absolute deviation of a sorted array of numeric values.
+export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: number, normalized: boolean, count: number = a.length) {
+	const abs = new Float64Array(count)
+	for (let i = 0; i < count; i++) abs[i] = Math.abs(a[i] - median)
+	const mad = medianOf(abs.sort())
+	return normalized ? STANDARD_DEVIATION_SCALE * mad : mad
 }
 
 // Searches in the specified input using the range [from, to) for the specified key.

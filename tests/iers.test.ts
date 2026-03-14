@@ -3,6 +3,9 @@ import { arcsec } from '../src/angle'
 import { iersa, iersb } from '../src/iers'
 import { readableStreamSource } from '../src/io'
 import { Timescale, timeYMDHMS } from '../src/time'
+import { downloadPerTag } from './download'
+
+await downloadPerTag('iers')
 
 test('iersA', async () => {
 	await using source = readableStreamSource(Bun.file('data/finals2000A.txt').stream())

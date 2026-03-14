@@ -2,6 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { type CsvRow, type ReadCsvStreamOptions, readCsv, readCsvStream, TSV_DELIMITER } from '../src/csv'
 import { bufferSource, fileHandleSource } from '../src/io'
+import { downloadPerTag } from './download'
+
+await downloadPerTag('csv')
 
 const TSV = 'HIP\tRA\tDEC\tMAG\n1\t00 00 00.22\t+01 05 20.4\t9.10\n2\t00 00 00.91\t-19 29 55.8\t9.27'
 const TSV_WITH_EMPTY_COLUMN = 'HIP\tRA\tDEC\tMAG\t\n1\t00 00 00.22\t+01 05 20.4\t9.10\t\n2\t00 00 00.91\t-19 29 55.8\t9.27\t'

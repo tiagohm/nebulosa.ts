@@ -5,6 +5,9 @@ import { fileHandleSource, rangeHttpSource } from '../src/io'
 import { Naif } from '../src/naif'
 import { readSpk } from '../src/spk'
 import { Timescale, timeYMDHMS } from '../src/time'
+import { downloadPerTag } from './download'
+
+await downloadPerTag('spk')
 
 const time = timeYMDHMS(2025, 1, 15, 9, 20, 50, Timescale.TDB)
 

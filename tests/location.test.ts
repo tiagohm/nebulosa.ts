@@ -5,6 +5,9 @@ import { eraS2c } from '../src/erfa'
 import { Ellipsoid, gcrs, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi, subpoint } from '../src/location'
 import { matTransposeMul } from '../src/mat3'
 import { Timescale, timeYMDHMS } from '../src/time'
+import { downloadPerTag } from './download'
+
+await downloadPerTag('location')
 
 test('lst', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)

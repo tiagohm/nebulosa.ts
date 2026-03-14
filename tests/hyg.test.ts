@@ -4,6 +4,9 @@ import { formatDEC, formatRA, toMas } from '../src/angle'
 import { type HygDatabaseEntry, readHygCatalog } from '../src/hyg'
 import { fileHandleSource } from '../src/io'
 import { toKilometerPerSecond } from '../src/velocity'
+import { downloadPerTag } from './download'
+
+await downloadPerTag('hyg')
 
 test('read', async () => {
 	const data: HygDatabaseEntry[] = []

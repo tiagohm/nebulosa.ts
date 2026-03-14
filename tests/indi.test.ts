@@ -5,6 +5,9 @@ import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager,
 import type { DefSwitchVector, PropertyState } from '../src/indi.types'
 // biome-ignore format: too long!
 import { SimpleXmlParser } from '../src/xml'
+import { downloadPerTag } from './download'
+
+await downloadPerTag('indi')
 
 const text = await Bun.file('data/indi.log').text()
 const parser = new SimpleXmlParser()

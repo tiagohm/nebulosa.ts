@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test'
 import { Bitpix } from '../src/fits'
 import { detectStars, excludeStarsFitWithinRegion, mergeVeryCloseStars, StarList } from '../src/stardetector'
+import { downloadPerTag } from './download'
 import { readImage } from './image.util'
+
+await downloadPerTag('stardetector')
 
 test('star list', () => {
 	const list = new StarList(5)

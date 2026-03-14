@@ -5,7 +5,10 @@ import { declinationKeyword, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHe
 import { KEYWORDS } from '../src/fits.headers'
 import { readImageFromBuffer, readImageFromFits, readImageFromPath } from '../src/image'
 import { bufferSink, bufferSource, fileHandleSource } from '../src/io'
+import { downloadPerTag } from './download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from './image.util'
+
+await downloadPerTag('fits')
 
 test('is fits', async () => {
 	const buffer = await Bun.file('data/NGC3372-8.1.fit').arrayBuffer()

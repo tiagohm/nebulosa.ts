@@ -1,6 +1,7 @@
 import { truncatePixel } from './image'
-import { type AdaptiveDisplayFunctionOptions, channelIndex, DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS, DEFAULT_HISTOGRAM_OPTIONS, DEFAULT_SIGMA_CLIP_OPTIONS, grayscaleFromChannel, type HistogramOptions, type Image, type SigmaClipOptions, STANDARD_DEVIATION_SCALE } from './image.types'
+import { type AdaptiveDisplayFunctionOptions, channelIndex, DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS, DEFAULT_HISTOGRAM_OPTIONS, DEFAULT_SIGMA_CLIP_OPTIONS, grayscaleFromChannel, type HistogramOptions, type Image, type SigmaClipOptions } from './image.types'
 import { Histogram } from './statistics'
+import { STANDARD_DEVIATION_SCALE } from './util'
 
 export function median(image: Image, options: Partial<HistogramOptions> = DEFAULT_HISTOGRAM_OPTIONS) {
 	return histogram(image, options).median

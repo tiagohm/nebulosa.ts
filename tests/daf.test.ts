@@ -2,6 +2,9 @@ import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readDaf } from '../src/daf'
 import { fileHandleSource } from '../src/io'
+import { downloadPerTag } from './download'
+
+await downloadPerTag('daf')
 
 test('NAIF/DAF', async () => {
 	await using source = fileHandleSource(await fs.open('data/de405.bsp'))
