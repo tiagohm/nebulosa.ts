@@ -69,3 +69,10 @@ export function signed8(num: number) {
 export function signed16(num: number) {
 	return (num << 16) >> 16
 }
+
+// Clamps a number into the inclusive [min, max] range.
+export function clamp(value: number, min: number, max: number) {
+	if (value < min) return min
+	if (value > max) return max
+	return value
+}

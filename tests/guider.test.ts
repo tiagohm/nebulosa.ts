@@ -6,9 +6,7 @@ const HEIGHT = 600
 
 // Builds one synthetic star with configurable quality and optional id.
 function star(index: number, patch: Partial<GuideStar> = {}): GuideStar {
-	const baseX = 120 + index * 90
-	const baseY = 140 + index * 50
-	return { x: baseX, y: baseY, snr: 20 + (index % 3), flux: 2400 + index * 150, hfd: 2.5 + index * 0.05, ellipticity: 0.18, fwhm: 4, ...patch }
+	return { x: 120 + index * 90, y: 140 + index * 50, snr: 20 + (index % 3), flux: 2400 + index * 150, hfd: 2.5 + index * 0.05, ellipticity: 0.18, fwhm: 4, ...patch }
 }
 
 // Builds a deterministic list of stars.
@@ -24,8 +22,8 @@ function starList(count: number, patch?: (value: GuideStar, index: number) => Gu
 }
 
 // Builds a guide frame fixture with explicit timestamp.
-function guideFrame(stars: readonly GuideStar[], timestamp = 0, frameId?: number) {
-	return { stars, width: WIDTH, height: HEIGHT, timestamp, frameId } as GuideFrame
+function guideFrame(stars: readonly GuideStar[], timestamp = 0, frameId?: number): GuideFrame {
+	return { stars, width: WIDTH, height: HEIGHT, timestamp, frameId }
 }
 
 // Shifts stars by dx/dy with deterministic optional mutation.
@@ -245,13 +243,7 @@ describe('star filtering and star matching', () => {
 	})
 
 	test('classifies detector artifacts like clipped peaks and NaN centroids', () => {
-		const stars = [
-			star(0, { peak: 70000 }),
-			star(1, { x: Number.NaN }),
-			star(2, { flux: 80 }),
-			star(3, { hfd: 12 }),
-			star(4, { peak: 64000 }),
-		]
+		const stars = [star(0, { peak: 70000 }), star(1, { x: Number.NaN }), star(2, { flux: 80 }), star(3, { hfd: 12 }), star(4, { peak: 64000 })]
 		const filtered = filterGuideStars(guideFrame(stars), {
 			minStarSnr: 8,
 			minFlux: 100,

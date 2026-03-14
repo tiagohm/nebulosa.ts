@@ -1,3 +1,4 @@
+import { clamp } from './math'
 import { Matrix } from './matrix'
 import type { DetectedStar } from './stardetector'
 import { medianAbsoluteDeviationOf, medianOf } from './util'
@@ -410,19 +411,12 @@ function weightedMean(dx: Float64Array, dy: Float64Array, weights: Float64Array,
 	return { dx: sumX / sumW, dy: sumY / sumW }
 }
 
-// Clamps numeric value inside [min, max].
-function clamp(value: number, min: number, max: number) {
-	if (value < min) return min
-	if (value > max) return max
-	return value
-}
-
 // Applies deadband threshold and emits zero when magnitude is below threshold.
 export function applyDeadband(error: number, minMove: number) {
 	return Math.abs(error) < minMove ? 0 : error
 }
 
-const NO_PULSE_COMMAND: AxisPulse = { direction: null, duration: 0 }
+const NO_PULSE: AxisPulse = { direction: null, duration: 0 }
 
 const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	state: 'idle',
@@ -516,7 +510,7 @@ export class Guider {
 
 		if (this.state.state === 'initializing') {
 			this.processInitializationFrame(frame)
-			return { state: this.state.state, ra: NO_PULSE_COMMAND, dec: NO_PULSE_COMMAND, diagnostics: this.state.lastDiagnostics }
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics }
 		}
 
 		const filtered = filterGuideStars(frame, this.config.filter)
@@ -546,7 +540,7 @@ export class Guider {
 			this.state.consecutiveBadFrames++
 			if (this.state.consecutiveBadFrames >= this.config.lostStarFrameCount) this.state.state = 'lost'
 			this.updateDiagnostics(frame, filtered, null, droppedFrame, true, notes)
-			return { state: this.state.state, ra: NO_PULSE_COMMAND, dec: NO_PULSE_COMMAND, diagnostics: this.state.lastDiagnostics }
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics }
 		}
 
 		this.state.consecutiveBadFrames = 0
@@ -744,7 +738,7 @@ export class Guider {
 		const deadbanded = applyDeadband(axisErrorRA, this.config.minMoveRA)
 		this.state.filteredRA = this.config.hysteresisRA * this.state.filteredRA + (1 - this.config.hysteresisRA) * deadbanded
 		const magnitude = Math.abs(this.state.filteredRA)
-		if (magnitude < this.config.minMoveRA) return NO_PULSE_COMMAND
+		if (magnitude < this.config.minMoveRA) return NO_PULSE
 		const duration = clamp(magnitude * this.config.msPerRAUnit * this.config.aggressivenessRA * cadenceScale, this.config.minPulseMsRA, this.config.maxPulseMsRA)
 		const direction = this.state.filteredRA >= 0 ? this.config.raPositiveDirection : oppositeRA(this.config.raPositiveDirection)
 		return { direction, duration }
@@ -752,24 +746,24 @@ export class Guider {
 
 	// Computes DEC pulse with backlash-aware reversal suppression and mode constraints.
 	private computeDEC(axisErrorDEC: number, cadenceScale: number): AxisPulse {
-		if (this.config.decMode === 'off') return NO_PULSE_COMMAND
+		if (this.config.decMode === 'off') return NO_PULSE
 
 		const deadbanded = applyDeadband(axisErrorDEC, this.config.minMoveDEC)
 		this.state.filteredDEC = this.config.hysteresisDEC * this.state.filteredDEC + (1 - this.config.hysteresisDEC) * deadbanded
 
 		const magnitude = Math.abs(this.state.filteredDEC)
-		if (magnitude < this.config.minMoveDEC) return NO_PULSE_COMMAND
+		if (magnitude < this.config.minMoveDEC) return NO_PULSE
 
 		const direction = this.state.filteredDEC >= 0 ? this.config.decPositiveDirection : oppositeDEC(this.config.decPositiveDirection)
-		if (this.config.decMode === 'north-only' && direction !== 'north') return NO_PULSE_COMMAND
-		if (this.config.decMode === 'south-only' && direction !== 'south') return NO_PULSE_COMMAND
+		if (this.config.decMode === 'north-only' && direction !== 'north') return NO_PULSE
+		if (this.config.decMode === 'south-only' && direction !== 'south') return NO_PULSE
 
 		const last = this.state.lastDecDirection
 
 		if (last !== null && last !== direction) {
-			if (magnitude < this.config.decReversalThreshold) return NO_PULSE_COMMAND
+			if (magnitude < this.config.decReversalThreshold) return NO_PULSE
 			this.state.oppositeDecErrorAccum += magnitude
-			if (this.state.oppositeDecErrorAccum < this.config.decBacklashAccumThreshold) return NO_PULSE_COMMAND
+			if (this.state.oppositeDecErrorAccum < this.config.decBacklashAccumThreshold) return NO_PULSE
 		} else {
 			this.state.oppositeDecErrorAccum = 0
 		}
@@ -812,11 +806,11 @@ export class Guider {
 }
 
 // Gets opposite RA guide direction.
-function oppositeRA(direction: GuideDirectionRA) {
+export function oppositeRA(direction: GuideDirectionRA) {
 	return direction === 'west' ? 'east' : 'west'
 }
 
 // Gets opposite DEC guide direction.
-function oppositeDEC(direction: GuideDirectionDEC) {
+export function oppositeDEC(direction: GuideDirectionDEC) {
 	return direction === 'north' ? 'south' : 'north'
 }
