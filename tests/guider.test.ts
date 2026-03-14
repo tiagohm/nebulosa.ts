@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { applyCalibration, estimateTranslation, filterGuideStars, Guider, invertCalibration, validateCalibration, type GuideFrame, type GuideStar } from '../src/guider'
+import { applyCalibration, estimateTranslation, filterGuideStars, type GuideFrame, Guider, type GuideStar, invertCalibration, validateCalibration } from '../src/guider'
 
 // Builds synthetic stars translated by dx/dy and optional per-star overrides.
 function shiftStars(stars: readonly GuideStar[], dx: number, dy: number, mutate?: (star: GuideStar, index: number) => GuideStar) {
@@ -10,8 +10,8 @@ function shiftStars(stars: readonly GuideStar[], dx: number, dy: number, mutate?
 }
 
 // Builds deterministic guide frame fixture.
-function guideFrame(stars: readonly GuideStar[], timestampMs = 0) {
-	return { stars, width: 800, height: 600, timestampMs } as GuideFrame
+function guideFrame(stars: readonly GuideStar[], timestamp = 0) {
+	return { stars, width: 800, height: 600, timestamp } as GuideFrame
 }
 
 const BASE_STARS: readonly GuideStar[] = [
@@ -30,15 +30,9 @@ test('star filtering rejects low quality detections', () => {
 		{ x: 100, y: 100, snr: 20, flux: 1000, hfd: 2, fwhm: 40 },
 		{ x: 120, y: 120, snr: 20, flux: 1000, hfd: 2, ellipticity: 0.2, fwhm: 4 },
 	]
-	const filtered = filterGuideStars(guideFrame(stars), {
-		minStarSnr: 8,
-		minFlux: 100,
-		maxHfd: 8,
-		borderMarginPx: 10,
-		maxEllipticity: 0.5,
-		maxFwhm: 10,
-		saturationPeak: 65000,
-	})
+
+	const filtered = filterGuideStars(guideFrame(stars), { minStarSnr: 8, minFlux: 100, maxHfd: 8, borderMarginPx: 10, maxEllipticity: 0.5, maxFwhm: 10, saturationPeak: 65000 })
+
 	expect(filtered.accepted).toHaveLength(1)
 	expect(filtered.rejectedReasons.border).toBe(1)
 	expect(filtered.rejectedReasons.low_snr).toBe(1)
@@ -49,12 +43,12 @@ test('star filtering rejects low quality detections', () => {
 
 test('single-star tracking fallback computes correction pulses', () => {
 	const guider = new Guider({ mode: 'single-star', lockAveragingFrames: 2, minMoveRA: 0.01, minMoveDEC: 0.01, msPerRAUnit: 1000, msPerDECUnit: 1000 })
-	guider.initialize(guideFrame(BASE_STARS, 0))
+	guider.processFrame(guideFrame(BASE_STARS, 0))
 	guider.processFrame(guideFrame(BASE_STARS, 1000))
 	const moved = shiftStars(BASE_STARS, 0.4, -0.3)
 	const cmd = guider.processFrame(guideFrame(moved, 2000))
-	expect(cmd.ra.durationMs).toBeGreaterThan(0)
-	expect(cmd.dec.durationMs).toBeGreaterThan(0)
+	expect(cmd.ra.duration).toBeGreaterThan(0)
+	expect(cmd.dec.duration).toBeGreaterThan(0)
 	expect(cmd.diagnostics.modeUsed).toBe('single-star')
 })
 
@@ -68,7 +62,7 @@ test('multi-star translation rejects outlier and keeps weighted estimate', () =>
 })
 
 test('calibration transform and inverse are coherent', () => {
-	const calibration = { m00: 0.2, m01: -0.1, m10: 0.05, m11: 0.3 }
+	const calibration = [0.2, -0.1, 0.05, 0.3] as const
 	const validation = validateCalibration(calibration)
 	expect(validation.valid).toBeTrue()
 	const axis = applyCalibration(calibration, 2, -3)
@@ -82,35 +76,29 @@ test('calibration transform and inverse are coherent', () => {
 
 test('ra deadband suppresses tiny errors', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, minMoveRA: 0.2, minMoveDEC: 0.2 })
-	guider.initialize(guideFrame(BASE_STARS, 0))
+	guider.processFrame(guideFrame(BASE_STARS, 0))
 	const tiny = shiftStars(BASE_STARS, 0.03, 0.02)
 	const cmd = guider.processFrame(guideFrame(tiny, 1000))
-	expect(cmd.ra.durationMs).toBe(0)
-	expect(cmd.dec.durationMs).toBe(0)
+	expect(cmd.ra.duration).toBe(0)
+	expect(cmd.dec.duration).toBe(0)
 })
 
 test('dec reversal suppression requires accumulated opposite error', () => {
-	const guider = new Guider({
-		lockAveragingFrames: 1,
-		minMoveDEC: 0.01,
-		hysteresisDEC: 0,
-		decReversalThreshold: 0.05,
-		decBacklashAccumThreshold: 0.2,
-	})
-	guider.initialize(guideFrame(BASE_STARS, 0))
+	const guider = new Guider({ lockAveragingFrames: 1, minMoveDEC: 0.01, hysteresisDEC: 0, decReversalThreshold: 0.05, decBacklashAccumThreshold: 0.2 })
+	guider.processFrame(guideFrame(BASE_STARS, 0))
 	let cmd = guider.processFrame(guideFrame(shiftStars(BASE_STARS, 0, 0.4), 1000))
-	expect(cmd.dec.durationMs).toBeGreaterThan(0)
+	expect(cmd.dec.duration).toBeGreaterThan(0)
 	expect(cmd.dec.direction).toBe('north')
 	cmd = guider.processFrame(guideFrame(shiftStars(BASE_STARS, 0, -0.08), 2000))
-	expect(cmd.dec.durationMs).toBe(0)
+	expect(cmd.dec.duration).toBe(0)
 	cmd = guider.processFrame(guideFrame(shiftStars(BASE_STARS, 0, -0.18), 3000))
-	expect(cmd.dec.durationMs).toBeGreaterThan(0)
+	expect(cmd.dec.duration).toBeGreaterThan(0)
 	expect(cmd.dec.direction).toBe('south')
 })
 
 test('lost-star state and reacquisition flow', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, lostStarFrameCount: 2 })
-	guider.initialize(guideFrame(BASE_STARS, 0))
+	guider.processFrame(guideFrame(BASE_STARS, 0))
 	guider.processFrame(guideFrame([], 1000))
 	let cmd = guider.processFrame(guideFrame([], 2000))
 	expect(cmd.state).toBe('lost')
@@ -121,31 +109,31 @@ test('lost-star state and reacquisition flow', () => {
 
 test('dither offset shifts target and settles after stop', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, minMoveRA: 0.01, minMoveDEC: 0.01, hysteresisRA: 0, hysteresisDEC: 0 })
-	guider.initialize(guideFrame(BASE_STARS, 0))
-	guider.startDither({ dxPixels: 2, dyPixels: -1 })
+	guider.processFrame(guideFrame(BASE_STARS, 0))
+	guider.startDither(2, -1)
 	let cmd = guider.processFrame(guideFrame(BASE_STARS, 1000))
-	expect(cmd.ra.durationMs).toBeGreaterThan(0)
-	expect(cmd.dec.durationMs).toBeGreaterThan(0)
+	expect(cmd.ra.duration).toBeGreaterThan(0)
+	expect(cmd.dec.duration).toBeGreaterThan(0)
 	guider.stopDither()
 	cmd = guider.processFrame(guideFrame(BASE_STARS, 2000))
-	expect(cmd.ra.durationMs).toBe(0)
-	expect(cmd.dec.durationMs).toBe(0)
+	expect(cmd.ra.duration).toBe(0)
+	expect(cmd.dec.duration).toBe(0)
 })
 
 test('large jump rejection and dropped frame diagnostics', () => {
-	const guider = new Guider({ lockAveragingFrames: 1, maxFrameJumpPx: 2, nominalCadenceMs: 1000, droppedFrameFactor: 2 })
-	guider.initialize(guideFrame(BASE_STARS, 0))
+	const guider = new Guider({ lockAveragingFrames: 1, maxFrameJumpPx: 2, nominalCadence: 1000, droppedFrameFactor: 2 })
+	guider.processFrame(guideFrame(BASE_STARS, 0))
 	guider.processFrame(guideFrame(shiftStars(BASE_STARS, 0.3, 0.1), 1000))
 	const cmd = guider.processFrame(guideFrame(shiftStars(BASE_STARS, 10, 10), 4000))
-	expect(cmd.ra.durationMs).toBe(0)
-	expect(cmd.dec.durationMs).toBe(0)
+	expect(cmd.ra.duration).toBe(0)
+	expect(cmd.dec.duration).toBe(0)
 	expect(cmd.diagnostics.badFrame).toBeTrue()
 	expect(cmd.diagnostics.droppedFrame).toBeTrue()
 })
 
 test('steady drift with seeing noise and oscillation remain bounded', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, hysteresisRA: 0.6, hysteresisDEC: 0.6 })
-	guider.initialize(guideFrame(BASE_STARS, 0))
+	guider.processFrame(guideFrame(BASE_STARS, 0))
 	let timestamp = 1000
 	let maxPulse = 0
 	for (let i = 0; i < 20; i++) {
@@ -153,15 +141,15 @@ test('steady drift with seeing noise and oscillation remain bounded', () => {
 		const driftY = -0.05 * i + (i % 3 === 0 ? 0.02 : -0.02)
 		const frame = guideFrame(shiftStars(BASE_STARS, driftX, driftY), timestamp)
 		const cmd = guider.processFrame(frame)
-		maxPulse = Math.max(maxPulse, cmd.ra.durationMs, cmd.dec.durationMs)
+		maxPulse = Math.max(maxPulse, cmd.ra.duration, cmd.dec.duration)
 		timestamp += i % 5 === 0 ? 1200 : 900
 	}
 	expect(maxPulse).toBeLessThanOrEqual(2500)
 })
 
 test('bad calibration sign flips correction direction', () => {
-	const guider = new Guider({ lockAveragingFrames: 1, calibration: { m00: -1, m01: 0, m10: 0, m11: -1 }, hysteresisRA: 0, hysteresisDEC: 0, minMoveRA: 0.01, minMoveDEC: 0.01 })
-	guider.initialize(guideFrame(BASE_STARS, 0))
+	const guider = new Guider({ lockAveragingFrames: 1, calibration: [-1, 0, 0, -1], hysteresisRA: 0, hysteresisDEC: 0, minMoveRA: 0.01, minMoveDEC: 0.01 })
+	guider.processFrame(guideFrame(BASE_STARS, 0))
 	const cmd = guider.processFrame(guideFrame(shiftStars(BASE_STARS, 0.5, 0.5), 1000))
 	expect(cmd.ra.direction).toBe('east')
 	expect(cmd.dec.direction).toBe('south')
