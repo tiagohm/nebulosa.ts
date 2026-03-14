@@ -6,6 +6,8 @@ export interface BinarySearchOptions {
 	positive?: boolean
 }
 
+export const STANDARD_DEVIATION_SCALE = 1.482602218505602
+
 // Checks if the input is a number array.
 export function isNumberArray(a: unknown): a is NumberArray {
 	return (Array.isArray(a) && (!a.length || typeof a[0] === 'number')) || ArrayBuffer.isView(a)
@@ -62,9 +64,7 @@ export function meanOf(a: Readonly<NumberArray>) {
 }
 
 // Computes the median value of a sorted array of numeric values.
-export function medianOf(a: Readonly<NumberArray>) {
-	const count = a.length
-
+export function medianOf(a: Readonly<NumberArray>, count: number = a.length) {
 	if (count === 0) return NaN
 	else if (count === 1) return a[0]
 	else if (count === 2) return (a[0] + a[1]) * 0.5
@@ -75,11 +75,11 @@ export function medianOf(a: Readonly<NumberArray>) {
 }
 
 // Computes median absolute deviation of a sorted array of numeric values.
-export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: number) {
-	const count = a.length
+export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: number, normalized: boolean, count: number = a.length) {
 	const abs = new Float64Array(count)
 	for (let i = 0; i < count; i++) abs[i] = Math.abs(a[i] - median)
-	return medianOf(abs)
+	const mad = medianOf(abs.sort())
+	return normalized ? STANDARD_DEVIATION_SCALE * mad : mad
 }
 
 // Searches in the specified input using the range [from, to) for the specified key.

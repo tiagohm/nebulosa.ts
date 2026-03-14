@@ -93,8 +93,6 @@ export interface SigmaClipOptions extends Omit<HistogramOptions, 'sigmaClip'> {
 	mask?: Int8Array | Uint8Array
 }
 
-export const STANDARD_DEVIATION_SCALE = 1.482602218505602
-
 export const DEFAULT_MEAN_BACKGROUND = 0.25
 export const DEFAULT_CLIPPING_POINT = -2.8
 
