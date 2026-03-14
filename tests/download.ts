@@ -23,7 +23,7 @@ const FILES = {
 	'NGC3372-8.3.fit': [undefined, 'alpaca.client', 'alpaca.server', 'fits', 'image'],
 	'NGC3372-16.3.fit': [undefined, 'alpaca.client', 'alpaca.server', 'fits', 'image'],
 	'NGC3372-32.3.fit': [undefined, 'alpaca.client', 'fits', 'image'],
-	'NGC3372--32.3.fit': [undefined, 'alpaca.client', 'fits', 'image'],
+	'NGC3372--32.3.fit': [undefined, 'alpaca.client', 'fits', 'image', 'stardetector'],
 	'NGC3372--64.3.fit': [undefined, 'alpaca.client', 'fits', 'image'],
 	'SAO.pc.dat': [undefined, 'sao'],
 	'LIGHT.fit': [undefined, 'image'],
@@ -58,7 +58,7 @@ const FILES = {
 const downloading = new Map<string, Promise<Bun.BunFile>>()
 
 type FileName = keyof typeof FILES
-type FileTag = 'alpaca.client' | 'alpaca.server' | 'csv' | 'daf' | 'fits' | 'hyg' | 'iers' | 'image' | 'indi' | 'location' | 'sao' | 'spk' | 'stellarium' | 'time' | 'xisf'
+type FileTag = 'alpaca.client' | 'alpaca.server' | 'csv' | 'daf' | 'fits' | 'hyg' | 'iers' | 'image' | 'indi' | 'location' | 'sao' | 'spk' | 'stardetector' | 'stellarium' | 'time' | 'xisf'
 
 export async function download(name: FileName) {
 	const task = downloading.get(name)
