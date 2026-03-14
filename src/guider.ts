@@ -479,7 +479,9 @@ export class Guider {
 		}
 
 		const filtered = filterGuideStars(frame, this.config.filter)
-		const droppedFrame = this.isDroppedFrame(frame)
+		const previousTimestamp = this.state.lastTimestamp
+		if (frame.timestamp !== undefined) this.state.lastTimestamp = frame.timestamp
+		const droppedFrame = this.isDroppedFrame(frame, previousTimestamp)
 		const notes: string[] = []
 
 		if (droppedFrame) notes.push('dropped_frame')
@@ -523,7 +525,7 @@ export class Guider {
 		const dx = measurement!.x - targetX
 		const dy = measurement!.y - targetY
 		const axisError = applyCalibration(this.config.calibration, dx, dy)
-		const cadenceScale = this.cadenceScale(frame)
+		const cadenceScale = this.cadenceScale(frame, previousTimestamp)
 		const ra = this.computeRA(axisError.ra, cadenceScale)
 		const dec = this.computeDEC(axisError.dec, cadenceScale)
 		this.updateDiagnostics(
@@ -674,19 +676,17 @@ export class Guider {
 	}
 
 	// Detects dropped frames from timestamp deltas.
-	private isDroppedFrame({ timestamp }: GuideFrame) {
+	private isDroppedFrame({ timestamp }: GuideFrame, previousTimestamp: number | undefined) {
 		if (timestamp === undefined) return false
-		const lastTimestamp = this.state.lastTimestamp
-		this.state.lastTimestamp = timestamp
-		if (lastTimestamp === undefined) return false
-		const dt = timestamp - lastTimestamp
+		if (previousTimestamp === undefined) return false
+		const dt = timestamp - previousTimestamp
 		return dt > this.config.nominalCadence * this.config.droppedFrameFactor
 	}
 
 	// Computes frame cadence scale to keep pulse gain stable across variable cadence.
-	private cadenceScale({ timestamp }: GuideFrame) {
-		if (timestamp === undefined || this.state.lastTimestamp === undefined) return 1
-		const dt = Math.max(1, timestamp - this.state.lastTimestamp)
+	private cadenceScale({ timestamp }: GuideFrame, previousTimestamp: number | undefined) {
+		if (timestamp === undefined || previousTimestamp === undefined) return 1
+		const dt = Math.max(1, timestamp - previousTimestamp)
 		return clamp(dt / this.config.nominalCadence, 0.5, 2)
 	}
 

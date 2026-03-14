@@ -131,6 +131,14 @@ test('large jump rejection and dropped frame diagnostics', () => {
 	expect(cmd.diagnostics.droppedFrame).toBeTrue()
 })
 
+test('cadence scaling uses previous frame timestamp', () => {
+	const guider = new Guider({ lockAveragingFrames: 1, calibration: [1, 0, 0, 1], hysteresisRA: 0, hysteresisDEC: 0, minMoveRA: 0.01, minMoveDEC: 1, msPerRAUnit: 1000, nominalCadence: 1000 })
+	guider.processFrame(guideFrame(BASE_STARS, 0))
+	const cmd = guider.processFrame(guideFrame(shiftStars(BASE_STARS, 0.2, 0), 1000))
+	expect(cmd.ra.duration).toBeCloseTo(140, 8)
+	expect(cmd.ra.duration).toBeGreaterThan(100)
+})
+
 test('steady drift with seeing noise and oscillation remain bounded', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, hysteresisRA: 0.6, hysteresisDEC: 0.6 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))
