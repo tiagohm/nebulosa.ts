@@ -11,7 +11,10 @@ import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, Foc
 import type { PropertyState } from '../src/indi.types'
 import { roundToNthDecimal } from '../src/math'
 import { timeYMDHMS } from '../src/time'
+import { downloadPerTag } from './download'
 import { saveImageAndCompareHash } from './image.util'
+
+await downloadPerTag('alpaca.client')
 
 const NOW = timeYMDHMS(2026, 2, 18, 12, 0, 0)
 

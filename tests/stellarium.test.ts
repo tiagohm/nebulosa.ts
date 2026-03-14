@@ -4,18 +4,21 @@ import { deg, parseAngle } from '../src/angle'
 import { toLightYear } from '../src/distance'
 import { fileHandleSource } from '../src/io'
 import { readCatalogDat, readNamesDat, type StellariumCatalogEntry, type StellariumNameEntry, StellariumObjectType, searchAround } from '../src/stellarium'
+import { downloadPerTag } from './download'
+
+await downloadPerTag('stellarium')
 
 test('catalog', async () => {
 	const handle = await fs.open('data/catalog.dat')
 	await using source = fileHandleSource(handle)
-	const entries = new Array<StellariumCatalogEntry>(94660)
+	const entries = new Array<StellariumCatalogEntry>(94659)
 	let i = 0
 
 	for await (const entry of readCatalogDat(source)) {
 		entries[i++] = entry
 	}
 
-	expect(i).toBe(94660)
+	expect(i).toBe(94659)
 
 	expect(entries[0].id).toBe(1)
 	expect(entries[0].m).toBe(40)
@@ -47,18 +50,18 @@ test('catalog', async () => {
 	expect(entries[311].px).toBe(2.908882202245805e-9)
 	expect(toLightYear(entries[311].distance)).toBeCloseTo(5544.6, 0)
 
-	expect(entries[94659].id).toBe(94660)
-	expect(entries[94659].vdbha).toBe(197)
-	expect(entries[94659].rightAscension).toBe(4.391684532165527)
-	expect(entries[94659].declination).toBe(-0.8004080057144165)
-	expect(entries[94659].mB).toBe(99)
-	expect(entries[94659].mV).toBe(99)
-	expect(entries[94659].type).toBe(StellariumObjectType.OPEN_STAR_CLUSTER)
-	expect(entries[94659].majorAxis).toBe(0.0011635528953468956)
-	expect(entries[94659].minorAxis).toBe(0.0011635528953468956)
-	expect(entries[94659].orientation).toBe(1.5707963267948966)
-	expect(entries[94659].redshift).toBe(99)
-	expect(entries[94659].aco).toBeUndefined()
+	expect(entries[94658].id).toBe(94659)
+	expect(entries[94658].vdbha).toBe(197)
+	expect(entries[94658].rightAscension).toBe(4.391684532165527)
+	expect(entries[94658].declination).toBe(-0.8004080057144165)
+	expect(entries[94658].mB).toBe(99)
+	expect(entries[94658].mV).toBe(99)
+	expect(entries[94658].type).toBe(StellariumObjectType.OPEN_STAR_CLUSTER)
+	expect(entries[94658].majorAxis).toBe(0.0011635528953468956)
+	expect(entries[94658].minorAxis).toBe(0.0011635528953468956)
+	expect(entries[94658].orientation).toBe(1.5707963267948966)
+	expect(entries[94658].redshift).toBe(99)
+	expect(entries[94658].aco).toBeUndefined()
 
 	expect(entries[254].mType).toBe('SA(s)b')
 

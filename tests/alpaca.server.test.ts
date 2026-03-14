@@ -2,7 +2,10 @@ import { expect, test } from 'bun:test'
 import { makeImageBytesFromFits } from '../src/alpaca.server'
 import { bitpixInBytes } from '../src/fits'
 import { Jpeg } from '../src/jpeg'
+import { downloadPerTag } from './download'
 import { saveAndCompareHash } from './image.util'
+
+await downloadPerTag('alpaca.server')
 
 test('make image bytes from fits', async () => {
 	const jpeg = new Jpeg()

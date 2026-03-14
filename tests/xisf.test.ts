@@ -3,7 +3,10 @@ import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromPath, readImageFromXisf } from '../src/image'
 import { bufferSink, fileHandleSource } from '../src/io'
 import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf } from '../src/xisf'
+import { downloadPerTag } from './download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from './image.util'
+
+await downloadPerTag('xisf')
 
 test('is xisf', async () => {
 	const buffer = await Bun.file('data/NGC3372-8.1.xisf').arrayBuffer()

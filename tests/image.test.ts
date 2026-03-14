@@ -5,7 +5,10 @@ import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaC
 // biome-ignore format: too long!
 import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import { bufferSink, bufferSource } from '../src/io'
+import { downloadPerTag } from './download'
 import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
+
+await downloadPerTag('image')
 
 test('read image from fits', async () => {
 	for (const bitpix of BITPIXES) {

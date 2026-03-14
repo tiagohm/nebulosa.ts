@@ -3,6 +3,9 @@ import fs from 'fs/promises'
 import { formatDEC, formatRA } from '../src/angle'
 import { fileHandleSource } from '../src/io'
 import { readSaoCatalog, type SaoCatalogEntry } from '../src/sao'
+import { downloadPerTag } from './download'
+
+await downloadPerTag('sao')
 
 test('read', async () => {
 	const handle = await fs.open('data/SAO.pc.dat')

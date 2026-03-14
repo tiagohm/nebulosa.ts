@@ -5,6 +5,9 @@ import { meter } from '../src/distance'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // biome-ignore format: too long
 import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToFractionOfYear, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/time'
+import { downloadPerTag } from './download'
+
+await downloadPerTag('time')
 
 const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
 	const b = timeNormalize(expected.day, expected.fraction)
