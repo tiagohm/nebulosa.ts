@@ -13,6 +13,7 @@ Agents must respect all constraints below when generating or modifying code.
 * The project uses **Bun** as runtime, package manager, and test runner, ESM modules only.
 * All changes must compile with zero TypeScript errors, pass all related tests and avoid introducing performance regressions.
 * Must respect the existing structure: `/src` for source code files and `/tests` for test files. Do not create new top-level directory.
+* Use modern TypeScript syntax.
 * Avoid unnecessary trig recomputation.
 * Avoid subtracting nearly equal floating values when possible.
 * Normalize vectors explicitly when required. Use `vecNormalize` or `vecNormalizeMut` (for mutable vectors).
@@ -43,6 +44,7 @@ Agents must respect all constraints below when generating or modifying code.
 * Avoid dynamic object reshaping.
 * Always single-line comment methods and relevant lines.
 * Always type the method parameter.
+* Use `readonly` where appropriate.
 * The commit message must be in English and entirely in lowercase letters, except for acronyms and file names.
 * The commit message should begin with verbs in the present tense like `implement`, `fix`, `improve`, `update`, `use`.
 
