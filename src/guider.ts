@@ -134,11 +134,14 @@ interface GuiderInternalState {
 	lockSamples: LockSample[]
 	referenceX: number
 	referenceY: number
+	measurementOriginX: number
+	measurementOriginY: number
 	referenceStars: GuideStar[]
 	ditherOffsetX: number
 	ditherOffsetY: number
 	ditherActive: boolean
 	lastTimestamp?: number
+	lastCadence: number
 	consecutiveBadFrames: number
 	lastGoodMeasurementX?: number
 	lastGoodMeasurementY?: number
@@ -160,6 +163,11 @@ export interface DiagnosticMeasurement {
 	targetX: number
 	targetY: number
 	notes: readonly string[]
+}
+
+export interface ConfigIssue {
+	readonly key: string
+	readonly reason: string
 }
 
 export const DEFAULT_GUIDER_CONFIG: Readonly<GuiderConfig> = {
@@ -208,6 +216,22 @@ export function validateCalibration(calibration: CalibrationMatrix, minDetermina
 	return { valid: Number.isFinite(determinant) && Math.abs(determinant) > minDeterminant, determinant } as const
 }
 
+// Validates guider configuration limits and controller constraints.
+function validateGuiderConfig(config: GuiderConfig) {
+	const issues: ConfigIssue[] = []
+	if (config.minMoveRA < 0) issues.push({ key: 'minMoveRA', reason: 'must be >= 0' })
+	if (config.minMoveDEC < 0) issues.push({ key: 'minMoveDEC', reason: 'must be >= 0' })
+	if (config.minPulseMsRA < 0) issues.push({ key: 'minPulseMsRA', reason: 'must be >= 0' })
+	if (config.minPulseMsDEC < 0) issues.push({ key: 'minPulseMsDEC', reason: 'must be >= 0' })
+	if (config.maxPulseMsRA < config.minPulseMsRA) issues.push({ key: 'maxPulseMsRA', reason: 'must be >= minPulseMsRA' })
+	if (config.maxPulseMsDEC < config.minPulseMsDEC) issues.push({ key: 'maxPulseMsDEC', reason: 'must be >= minPulseMsDEC' })
+	if (config.hysteresisRA < 0 || config.hysteresisRA > 1) issues.push({ key: 'hysteresisRA', reason: 'must be within [0, 1]' })
+	if (config.hysteresisDEC < 0 || config.hysteresisDEC > 1) issues.push({ key: 'hysteresisDEC', reason: 'must be within [0, 1]' })
+	if (config.maxMatchDistancePx <= 0) issues.push({ key: 'maxMatchDistancePx', reason: 'must be > 0' })
+	if (config.lostStarFrameCount <= 0) issues.push({ key: 'lostStarFrameCount', reason: 'must be > 0' })
+	return issues
+}
+
 // Inverts a 2x2 calibration matrix for optional inverse-transform workflows.
 export function invertCalibration(calibration: CalibrationMatrix): CalibrationMatrix {
 	const matrix = new Matrix(2, 2, calibration)
@@ -252,23 +276,30 @@ function rejectStarReason(star: GuideStar, config: StarFilterConfig, borderRight
 	if (star.hfd > config.maxHfd) return 'high_hfd'
 	if (star.saturated === true) return 'saturated'
 	if (config.saturationPeak !== undefined && star.peak !== undefined && star.peak >= config.saturationPeak) return 'saturated_peak'
-	if (star.x < borderLeft || star.y < borderLeft || star.x >= borderRight || star.y >= borderBottom) return 'border'
 	if (star.ellipticity !== undefined && star.ellipticity > config.maxEllipticity) return 'elongated'
 	if (config.maxFwhm !== undefined && star.fwhm !== undefined && star.fwhm > config.maxFwhm) return 'high_fwhm'
+	if (star.x < borderLeft || star.y < borderLeft || star.x >= borderRight || star.y >= borderBottom) return 'border'
 	return null
 }
 
-// Picks highest quality star for single-star fallback and initialization.
-function pickGuideStar(stars: readonly GuideStar[]) {
+// Picks a stable anchor star during initialization from the first accepted star.
+function pickInitialGuideStar(stars: readonly GuideStar[]) {
+	return stars[0]
+}
+
+// Picks the nearest star to the previous tracked position to preserve identity.
+function pickNearestGuideStar(stars: readonly GuideStar[], targetX: number, targetY: number) {
 	let best: GuideStar | undefined
-	let bestScore = -1
+	let bestDistSq = Infinity
 
 	for (const star of stars) {
-		const score = (star.snr * Math.sqrt(Math.max(star.flux, 1))) / Math.max(star.hfd, 0.5)
+		const dx = star.x - targetX
+		const dy = star.y - targetY
+		const distSq = dx * dx + dy * dy
 
-		if (score > bestScore) {
+		if (distSq < bestDistSq) {
 			best = star
-			bestScore = score
+			bestDistSq = distSq
 		}
 	}
 
@@ -313,9 +344,8 @@ export function estimateTranslation(referenceStars: readonly GuideStar[], stars:
 	}
 
 	if (count === 0) return null
-	const trimmed = robustWeightedTranslation(dx, dy, weights, count, outlierSigma)
-	if (trimmed === null) return null
-	return { dx: trimmed.dx, dy: trimmed.dy, matches: trimmed.matches }
+
+	return robustWeightedTranslation(dx, dy, weights, count, outlierSigma)
 }
 
 // Computes robust weighted translation after outlier rejection.
@@ -349,9 +379,7 @@ function robustWeightedTranslation(dx: Float64Array, dy: Float64Array, weights: 
 	const fdy = new Float64Array(kept)
 	const fw = new Float64Array(kept)
 
-	let j = 0
-
-	for (let i = 0; i < count; i++) {
+	for (let i = 0, j = 0; i < count; i++) {
 		if (Math.abs(residual[i] - median) > threshold) continue
 		fdx[j] = dx[i]
 		fdy[j] = dy[i]
@@ -389,6 +417,11 @@ function clamp(value: number, min: number, max: number) {
 	return value
 }
 
+// Applies deadband threshold and emits zero when magnitude is below threshold.
+export function applyDeadband(error: number, minMove: number) {
+	return Math.abs(error) < minMove ? 0 : error
+}
+
 const NO_PULSE_COMMAND: AxisPulse = { direction: null, duration: 0 }
 
 const EMPTY_STATE: Readonly<GuiderInternalState> = {
@@ -396,6 +429,8 @@ const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	lockSamples: [],
 	referenceX: 0,
 	referenceY: 0,
+	measurementOriginX: 0,
+	measurementOriginY: 0,
 	referenceStars: [],
 	ditherOffsetX: 0,
 	ditherOffsetY: 0,
@@ -405,6 +440,7 @@ const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	filteredDEC: 0,
 	lastDecDirection: null,
 	oppositeDecErrorAccum: 0,
+	lastCadence: 0,
 	lastDiagnostics: {
 		totalStars: 0,
 		acceptedStars: 0,
@@ -437,12 +473,23 @@ export class Guider {
 
 		const validation = validateCalibration(this.config.calibration)
 		if (!validation.valid) throw new Error(`invalid calibration matrix: determinant=${validation.determinant}`)
+
+		const configIssues = validateGuiderConfig(this.config)
+
+		if (configIssues.length > 0) {
+			const message = configIssues.map((issue) => `${issue.key}:${issue.reason}`).join(', ')
+			throw new Error(`invalid guider config: ${message}`)
+		}
+
 		this.state = structuredClone(EMPTY_STATE)
+		this.state.lastCadence = this.config.nominalCadence
 	}
 
 	// Clears runtime state while preserving immutable config.
 	reset() {
-		Object.assign(this.state, structuredClone(EMPTY_STATE))
+		const empty = structuredClone(EMPTY_STATE)
+		Object.assign(this.state, empty)
+		this.state.lastCadence = this.config.nominalCadence
 	}
 
 	// Starts dithering by shifting lock target without touching calibration.
@@ -469,19 +516,11 @@ export class Guider {
 
 		if (this.state.state === 'initializing') {
 			this.processInitializationFrame(frame)
-
-			return {
-				state: this.state.state,
-				ra: NO_PULSE_COMMAND,
-				dec: NO_PULSE_COMMAND,
-				diagnostics: this.state.lastDiagnostics,
-			}
+			return { state: this.state.state, ra: NO_PULSE_COMMAND, dec: NO_PULSE_COMMAND, diagnostics: this.state.lastDiagnostics }
 		}
 
 		const filtered = filterGuideStars(frame, this.config.filter)
-		const previousTimestamp = this.state.lastTimestamp
-		if (frame.timestamp !== undefined) this.state.lastTimestamp = frame.timestamp
-		const droppedFrame = this.isDroppedFrame(frame, previousTimestamp)
+		const droppedFrame = this.isDroppedFrame(frame)
 		const notes: string[] = []
 
 		if (droppedFrame) notes.push('dropped_frame')
@@ -507,25 +546,22 @@ export class Guider {
 			this.state.consecutiveBadFrames++
 			if (this.state.consecutiveBadFrames >= this.config.lostStarFrameCount) this.state.state = 'lost'
 			this.updateDiagnostics(frame, filtered, null, droppedFrame, true, notes)
-
-			return {
-				state: this.state.state,
-				ra: NO_PULSE_COMMAND,
-				dec: NO_PULSE_COMMAND,
-				diagnostics: this.state.lastDiagnostics,
-			}
+			return { state: this.state.state, ra: NO_PULSE_COMMAND, dec: NO_PULSE_COMMAND, diagnostics: this.state.lastDiagnostics }
 		}
 
 		this.state.consecutiveBadFrames = 0
 		this.state.state = 'guiding'
 		this.state.lastGoodMeasurementX = measurement!.x
 		this.state.lastGoodMeasurementY = measurement!.y
+		this.state.measurementOriginX = measurement!.x
+		this.state.measurementOriginY = measurement!.y
+		this.state.referenceStars = filtered.accepted.slice()
 		const targetX = this.state.referenceX + this.state.ditherOffsetX
 		const targetY = this.state.referenceY + this.state.ditherOffsetY
 		const dx = measurement!.x - targetX
 		const dy = measurement!.y - targetY
 		const axisError = applyCalibration(this.config.calibration, dx, dy)
-		const cadenceScale = this.cadenceScale(frame, previousTimestamp)
+		const cadenceScale = this.cadenceScale(frame)
 		const ra = this.computeRA(axisError.ra, cadenceScale)
 		const dec = this.computeDEC(axisError.dec, cadenceScale)
 		this.updateDiagnostics(
@@ -582,7 +618,8 @@ export class Guider {
 			return
 		}
 
-		const preferred = pickGuideStar(filtered.accepted)
+		const previous = this.state.lockSamples[this.state.lockSamples.length - 1]
+		const preferred = previous === undefined ? pickInitialGuideStar(filtered.accepted) : pickNearestGuideStar(filtered.accepted, previous.x, previous.y)
 
 		if (preferred === undefined) {
 			this.updateDiagnostics(frame, filtered, null, false, true, ['init_no_star'])
@@ -617,6 +654,7 @@ export class Guider {
 
 		let sumX = 0
 		let sumY = 0
+
 		for (const sample of this.state.lockSamples) {
 			sumX += sample.x
 			sumY += sample.y
@@ -624,6 +662,8 @@ export class Guider {
 
 		this.state.referenceX = sumX / this.state.lockSamples.length
 		this.state.referenceY = sumY / this.state.lockSamples.length
+		this.state.measurementOriginX = preferred.x
+		this.state.measurementOriginY = preferred.y
 		this.state.referenceStars = this.state.lockSamples[this.state.lockSamples.length - 1].stars.slice()
 		this.state.state = 'guiding'
 		this.updateDiagnostics(
@@ -654,15 +694,15 @@ export class Guider {
 
 			if (translation !== null) {
 				return {
-					x: this.state.referenceX + translation.dx,
-					y: this.state.referenceY + translation.dy,
+					x: this.state.measurementOriginX + translation.dx,
+					y: this.state.measurementOriginY + translation.dy,
 					usedMode: 'multi-star',
 					matches: translation.matches,
 				}
 			}
 		}
 
-		const single = pickGuideStar(stars)
+		const single = pickNearestGuideStar(stars, this.state.measurementOriginX, this.state.measurementOriginY)
 		if (single === undefined) return null
 		return { x: single.x, y: single.y, usedMode: 'single-star', matches: 1 }
 	}
@@ -676,23 +716,33 @@ export class Guider {
 	}
 
 	// Detects dropped frames from timestamp deltas.
-	private isDroppedFrame({ timestamp }: GuideFrame, previousTimestamp: number | undefined) {
+	private isDroppedFrame({ timestamp }: GuideFrame) {
 		if (timestamp === undefined) return false
-		if (previousTimestamp === undefined) return false
-		const dt = timestamp - previousTimestamp
+
+		const lastTimestamp = this.state.lastTimestamp
+
+		if (lastTimestamp === undefined) {
+			this.state.lastTimestamp = timestamp
+			this.state.lastCadence = this.config.nominalCadence
+			return false
+		}
+
+		const dt = Math.max(1, timestamp - lastTimestamp)
+		this.state.lastTimestamp = timestamp
+		this.state.lastCadence = dt
 		return dt > this.config.nominalCadence * this.config.droppedFrameFactor
 	}
 
 	// Computes frame cadence scale to keep pulse gain stable across variable cadence.
-	private cadenceScale({ timestamp }: GuideFrame, previousTimestamp: number | undefined) {
-		if (timestamp === undefined || previousTimestamp === undefined) return 1
-		const dt = Math.max(1, timestamp - previousTimestamp)
-		return clamp(dt / this.config.nominalCadence, 0.5, 2)
+	private cadenceScale(frame: GuideFrame) {
+		if (frame.timestamp === undefined) return 1
+		return clamp(this.state.lastCadence / this.config.nominalCadence, 0.5, 2)
 	}
 
 	// Computes RA pulse with hysteresis smoothing, deadband and proportional gain.
 	private computeRA(axisErrorRA: number, cadenceScale: number): AxisPulse {
-		this.state.filteredRA = this.config.hysteresisRA * this.state.filteredRA + (1 - this.config.hysteresisRA) * axisErrorRA
+		const deadbanded = applyDeadband(axisErrorRA, this.config.minMoveRA)
+		this.state.filteredRA = this.config.hysteresisRA * this.state.filteredRA + (1 - this.config.hysteresisRA) * deadbanded
 		const magnitude = Math.abs(this.state.filteredRA)
 		if (magnitude < this.config.minMoveRA) return NO_PULSE_COMMAND
 		const duration = clamp(magnitude * this.config.msPerRAUnit * this.config.aggressivenessRA * cadenceScale, this.config.minPulseMsRA, this.config.maxPulseMsRA)
@@ -703,7 +753,9 @@ export class Guider {
 	// Computes DEC pulse with backlash-aware reversal suppression and mode constraints.
 	private computeDEC(axisErrorDEC: number, cadenceScale: number): AxisPulse {
 		if (this.config.decMode === 'off') return NO_PULSE_COMMAND
-		this.state.filteredDEC = this.config.hysteresisDEC * this.state.filteredDEC + (1 - this.config.hysteresisDEC) * axisErrorDEC
+
+		const deadbanded = applyDeadband(axisErrorDEC, this.config.minMoveDEC)
+		this.state.filteredDEC = this.config.hysteresisDEC * this.state.filteredDEC + (1 - this.config.hysteresisDEC) * deadbanded
 
 		const magnitude = Math.abs(this.state.filteredDEC)
 		if (magnitude < this.config.minMoveDEC) return NO_PULSE_COMMAND
@@ -713,6 +765,7 @@ export class Guider {
 		if (this.config.decMode === 'south-only' && direction !== 'south') return NO_PULSE_COMMAND
 
 		const last = this.state.lastDecDirection
+
 		if (last !== null && last !== direction) {
 			if (magnitude < this.config.decReversalThreshold) return NO_PULSE_COMMAND
 			this.state.oppositeDecErrorAccum += magnitude
