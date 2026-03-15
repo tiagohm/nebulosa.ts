@@ -1,3 +1,6 @@
+import { TAU } from './constants'
+import type { NumberArray } from './math'
+
 export type Random = () => number
 
 // https://stackoverflow.com/questions/521295/seeding-the-random-number-generator-in-javascript
@@ -165,5 +168,25 @@ export function normal(random: Random, mu: number = 0, sigma: number = 1): Rando
 		} while (r === 0 || r > 1)
 
 		return mu + sigma * y * Math.sqrt((-2 * Math.log(r)) / r)
+	}
+}
+
+export function gaussian(random: Random, sigma: number) {
+	return () => {
+		if (sigma <= 0) return 0
+
+		let u = 0
+		let v = 0
+		while (u <= 1e-12) u = random()
+		while (v <= 1e-12) v = random()
+
+		return sigma * Math.sqrt(-2 * Math.log(u)) * Math.cos(TAU * v)
+	}
+}
+
+export function shuffle<T>(items: T[] | NumberArray, random: Random) {
+	for (let i = items.length - 1; i > 0; i--) {
+		const k = Math.floor(random() * (i + 1))
+		;[items[i], items[k]] = [items[k], items[i]]
 	}
 }

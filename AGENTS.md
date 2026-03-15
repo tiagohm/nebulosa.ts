@@ -25,7 +25,8 @@ Agents must respect all constraints below when generating or modifying code.
 * Prefer TypedArrays for large datasets.
 * Do not replace optimized loops with functional abstractions if performance degrades.
 * Avoid use `any`, use `unknown` if necessary.
-* Functions MUST NOT declare explicit return types unless necessary. Prefer returning as const.
+* Functions MUST NOT declare explicit return types for primitive types or tuples. Prefer returning as const for tuples. 
+* Functions MUST declare explicit return types for structured types.
 * Prefer `interface` over `type`. Use readonly tuples instead if appropriate.
 * Angle units are always in radians, otherwise must be documented.
 * Distance units are always in AU (astronomical unit), otherwise must be documented.
@@ -42,7 +43,7 @@ Agents must respect all constraints below when generating or modifying code.
 * Avoid closures in tight loops.
 * Avoid JSON operations.
 * Avoid dynamic object reshaping.
-* Always single-line comment methods and relevant lines.
+* Always single-line comment methods and important lines.
 * Always type the method parameter.
 * Use `readonly` where appropriate.
 * The commit message must be in English and entirely in lowercase letters, except for acronyms and file names.
