@@ -179,7 +179,7 @@ export function matchStars(referenceStars: readonly DetectedStar[], currentStars
 	const referencePatterns = buildTrianglePatternsFromRanked(preparedReference, resolved)
 	const currentPatterns = buildTrianglePatternsFromRanked(preparedCurrent, resolved)
 
-	if (referencePatterns.length < 2 || currentPatterns.length < 2) {
+	if (referencePatterns.length === 0 || currentPatterns.length === 0) {
 		return failureResult('too few stable local patterns')
 	}
 

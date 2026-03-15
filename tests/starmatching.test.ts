@@ -376,6 +376,39 @@ describe('star matching synthetic registration', () => {
 		expect(result.failureReason).toBeDefined()
 	})
 
+	test('supports exact minimal three-star similarity registration', () => {
+		const reference: readonly DetectedStar[] = [
+			{ x: 20, y: 30, snr: 18, flux: 2400, hfd: 2.1 },
+			{ x: 95, y: 42, snr: 21, flux: 3100, hfd: 2.4 },
+			{ x: 36, y: 128, snr: 17, flux: 2600, hfd: 2.3 },
+		]
+		const expected = similarity(1.02, 0.28, 14, -9)
+		const inverse = invertTransform(expected)!
+		const current = applyTransformToStars(reference, inverse)
+		const result = matchStars(reference, current, { maxStars: 3, minStars: 3, minInliers: 3, allowAffineFallback: false, initialMatchRadius: 4, finalMatchRadius: 0.5, maxResidual: 0.5 })
+		expect(result.success).toBeTrue()
+		expect(result.model).toBe('similarity')
+		expect(result.inlierCount).toBe(3)
+		expectTransformAgreement(expected, resultTransform(result)!, current)
+	})
+
+	test('supports exact minimal three-star mirrored registration', () => {
+		const reference: readonly DetectedStar[] = [
+			{ x: 20, y: 30, snr: 18, flux: 2400, hfd: 2.1 },
+			{ x: 95, y: 42, snr: 21, flux: 3100, hfd: 2.4 },
+			{ x: 36, y: 128, snr: 17, flux: 2600, hfd: 2.3 },
+		]
+		const expected = similarity(0.98, -0.41, 11, 7, true)
+		const inverse = invertTransform(expected)!
+		const current = applyTransformToStars(reference, inverse)
+		const result = matchStars(reference, current, { maxStars: 3, minStars: 3, minInliers: 3, allowMirror: true, allowAffineFallback: false, initialMatchRadius: 4, finalMatchRadius: 0.5, maxResidual: 0.5 })
+		expect(result.success).toBeTrue()
+		expect(result.model).toBe('similarity')
+		expect(result.similarity?.mirrored).toBeTrue()
+		expect(result.inlierCount).toBe(3)
+		expectTransformAgreement(expected, resultTransform(result)!, current)
+	})
+
 	test('uses affine fallback only when enabled', () => {
 		const scenario = generateScenario({ seed: 6, transform: affine(1.01, 0.045, 22, -0.02, 0.97, 31), noiseStd: 0.08, currentDropFraction: 0.1, currentOutliers: 6 })
 		const similarityOnly = matchStars(scenario.reference, scenario.current, { allowAffineFallback: false, minInliers: 12 })
