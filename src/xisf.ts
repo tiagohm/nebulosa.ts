@@ -1,5 +1,5 @@
 import { type X2jOptions, XMLParser } from 'fast-xml-parser'
-import { type Bitpix, bitpixInBytes, type FitsHeader, type FitsHeaderValue, fitsHeaderValueToText, unescapeQuotedText } from './fits'
+import { type Bitpix, bitpixInBytes, type FitsHeader, type FitsHeaderValue, formatFitsHeaderValue, unescapeQuotedText } from './fits'
 import type { Size } from './geometry'
 import type { Image, ImageRawType } from './image.types'
 import { readUntil, type Seekable, type Sink, type Source } from './io'
@@ -56,6 +56,18 @@ export interface XisfCompression {
 	readonly itemSize: number
 }
 
+export interface XisfWriteCompression {
+	readonly format: XisfCompressionFormat
+	readonly shuffled?: boolean
+	readonly level?: number
+}
+
+export interface XisfWriteFormat {
+	readonly byteOrder?: XisfByteOrder
+	readonly pixelStorage?: XisfPixelStorageModel
+	readonly compression?: false | XisfWriteCompression
+}
+
 export interface XisfLocation {
 	readonly offset: number
 	readonly size: number
@@ -110,12 +122,33 @@ export async function readXisf(source: Source & Seekable): Promise<Xisf | undefi
 }
 
 const RESERVED_FITS_KEYS = new Set(['SIMPLE', 'BITPIX', 'NAXIS', 'NAXIS1', 'NAXIS2', 'NAXIS3'])
-const DEFAULT_WRITE_XISF_FORMAT: Pick<XisfImage, 'byteOrder' | 'pixelStorage'> = { byteOrder: 'little', pixelStorage: 'Planar' }
+const DEFAULT_WRITE_XISF_FORMAT: Required<XisfWriteFormat> = { byteOrder: 'little', pixelStorage: 'Planar', compression: false }
 
-export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image, 'header' | 'raw'>>[], format: Pick<XisfImage, 'byteOrder' | 'pixelStorage'> = DEFAULT_WRITE_XISF_FORMAT) {
-	const escapeXml = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;')
+interface XisfWriteEntry {
+	readonly bitpix: Bitpix
+	readonly width: number
+	readonly height: number
+	readonly channels: number
+	readonly sampleFormat: XisfSampleFormat
+	readonly colorSpace: XisfColorSpace
+	readonly fitsKeywords: readonly string[]
+	readonly encoded: XisfEncodedBlock
+}
 
-	const entries = images.map((image) => {
+interface XisfEncodedBlock {
+	readonly data: Buffer
+	readonly compression?: XisfCompression
+}
+
+function escapeXml(text: string) {
+	return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;')
+}
+
+export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image, 'header' | 'raw'>>[], format: XisfWriteFormat = DEFAULT_WRITE_XISF_FORMAT) {
+	const options = { ...DEFAULT_WRITE_XISF_FORMAT, ...format }
+	const entries: XisfWriteEntry[] = []
+
+	for (const image of images) {
 		const { header } = image
 		const bitpix = (header.BITPIX as Bitpix) || -64
 		const width = +header.NAXIS1! || 0
@@ -123,28 +156,30 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 		const channels = (+header.NAXIS3! || 1) as number
 		const sampleFormat: XisfSampleFormat = bitpix === 8 ? 'UInt8' : bitpix === 16 ? 'UInt16' : bitpix === 32 ? 'UInt32' : bitpix === 64 ? 'UInt64' : bitpix === -32 ? 'Float32' : 'Float64'
 		const colorSpace: XisfColorSpace = channels >= 3 ? 'RGB' : 'Gray'
-		const size = width * height * channels * bitpixInBytes(bitpix)
 		const fitsKeywords: string[] = []
 
 		for (const key in header) {
 			const value = header[key]
 			if (value === undefined || RESERVED_FITS_KEYS.has(key)) continue
-			fitsKeywords.push(`<FITSKeyword name="${escapeXml(key)}" value="${escapeXml(fitsHeaderValueToText(value))}" comment=""/>`)
+			fitsKeywords.push(`<FITSKeyword name="${escapeXml(key)}" value="${escapeXml(formatFitsHeaderValue(value))}" comment=""/>`)
 		}
 
-		return { raw: image.raw, bitpix, width, height, channels, sampleFormat, colorSpace, size, fitsKeywords }
-	})
+		const writer = new XisfImageWriter({ byteOrder: options.byteOrder, pixelStorage: options.pixelStorage, bitpix, geometry: { width, height, channels } }, options.compression)
+		const encoded = await writer.encode(image.raw)
+		entries.push({ bitpix, width, height, channels, sampleFormat, colorSpace, fitsKeywords, encoded })
+	}
 
 	const buildHeader = (offset: number) => {
 		let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<xisf version="1.0">'
 
 		for (const entry of entries) {
 			const bounds = entry.bitpix === -64 || entry.bitpix === -32 ? ' bounds="0:1"' : ''
-			const byteOrder = entry.bitpix !== 8 ? ` byteOrder="${format.byteOrder}"` : ''
-			xml += `<Image geometry="${entry.width}:${entry.height}:${entry.channels}" sampleFormat="${entry.sampleFormat}" colorSpace="${entry.colorSpace}" location="attachment:${offset}:${entry.size}" pixelStorage="${format.pixelStorage}"${byteOrder}${bounds}>`
+			const byteOrder = entry.bitpix !== 8 ? ` byteOrder="${options.byteOrder}"` : ''
+			const compression = entry.encoded.compression ? ` compression="${formatCompression(entry.encoded.compression)}"` : ''
+			xml += `<Image geometry="${entry.width}:${entry.height}:${entry.channels}" sampleFormat="${entry.sampleFormat}" colorSpace="${entry.colorSpace}" location="attachment:${offset}:${entry.encoded.data.byteLength}" pixelStorage="${options.pixelStorage}"${byteOrder}${bounds}${compression}>`
 			if (entry.fitsKeywords.length) xml += entry.fitsKeywords.join('')
 			xml += '</Image>'
-			offset += entry.size
+			offset += entry.encoded.data.byteLength
 		}
 
 		xml += '</xisf>'
@@ -166,13 +201,14 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 	signatureData.write(XISF_SIGNATURE, 0, 8, 'ascii')
 	signatureData.writeUInt32LE(headerData.byteLength, 8)
 
-	await sink.write(signatureData)
-	await sink.write(headerData)
+	let size = await sink.write(signatureData)
+	size += await sink.write(headerData)
 
 	for (const entry of entries) {
-		const writer = new XisfImageWriter({ byteOrder: format.byteOrder, pixelStorage: format.pixelStorage, bitpix: entry.bitpix, geometry: entry })
-		await writer.write(entry.raw, sink)
+		size += await sink.write(entry.encoded.data)
 	}
+
+	return size
 }
 
 const XML_PARSER = new XMLParser(XML_PARSE_OPTIONS)
@@ -248,12 +284,18 @@ function parseCompression(compression: XisfParsedImage['compression']): XisfComp
 	return { format, shuffled, uncompressedSize, itemSize }
 }
 
+function formatCompression(compression: XisfCompression) {
+	if (compression.shuffled) return `${compression.format}+sh:${compression.uncompressedSize}:${compression.itemSize}`
+	return `${compression.format}:${compression.uncompressedSize}`
+}
+
 export function bitpixFromSampleFormat(sampleFormat: XisfSampleFormat): Bitpix {
 	return sampleFormat === 'UInt8' ? 8 : sampleFormat === 'UInt16' ? 16 : sampleFormat === 'UInt32' ? 32 : sampleFormat === 'UInt64' ? 64 : sampleFormat === 'Float32' ? -32 : -64
 }
 
 export class XisfImageReader {
 	private readonly buffer: Buffer
+	private readonly compressed?: Buffer
 	private readonly data: NumberArray
 
 	constructor(
@@ -263,14 +305,32 @@ export class XisfImageReader {
 		const { bitpix, location, compression } = image
 		const size = compression?.uncompressedSize ?? location.size
 		this.buffer = buffer?.subarray(0, size) ?? Buffer.allocUnsafe(size)
+		this.compressed = compression ? Buffer.allocUnsafe(location.size) : undefined
 		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Uint16Array(this.buffer.buffer) : bitpix === 32 ? new Uint32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
 	}
 
 	// Reads XISF-format image from source into RGB-interleaved array
 	async read(source: Source & Seekable, output: ImageRawType) {
-		source.seek(this.image.location.offset)
+		const { bitpix, pixelStorage, geometry, location, compression } = this.image
 
-		if ((await readUntil(source, this.buffer, this.image.location.size, 0)) !== this.image.location.size) return false
+		source.seek(location.offset)
+
+		const input = this.compressed ?? this.buffer
+		if ((await readUntil(source, input, location.size, 0)) !== location.size) return false
+
+		if (compression) {
+			if (compression.format !== 'zstd') throw new Error(`unsupported XISF compression format: ${compression.format}`)
+
+			const decompressed = Buffer.from(await Bun.zstdDecompress(input.subarray(0, location.size)))
+			if (decompressed.byteLength !== this.buffer.byteLength) return false
+
+			if (compression.shuffled) {
+				if (compression.itemSize <= 0) return false
+				byteUnshuffle(decompressed, this.buffer, compression.itemSize)
+			} else {
+				decompressed.copy(this.buffer)
+			}
+		}
 
 		const pixelInBytes = bitpixInBytes(this.image.bitpix)
 
@@ -281,7 +341,6 @@ export class XisfImageReader {
 		}
 
 		const data = this.data
-		const { bitpix, pixelStorage, geometry } = this.image
 		const { width, height, channels } = geometry
 		const numberOfPixels = width * height
 		const factor = bitpix > 0 ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
@@ -306,20 +365,23 @@ export class XisfImageReader {
 
 export class XisfImageWriter {
 	private readonly buffer: Buffer
+	private readonly shuffled?: Buffer
 	private readonly data: NumberArray
 
 	constructor(
-		private readonly xisf: Pick<XisfImage, 'byteOrder' | 'bitpix' | 'geometry' | 'pixelStorage'>,
+		readonly xisf: Pick<XisfImage, 'byteOrder' | 'bitpix' | 'geometry' | 'pixelStorage' | 'compression'>,
+		readonly compression: XisfWriteFormat['compression'] = xisf.compression,
 		buffer?: Buffer,
 	) {
 		const { bitpix, geometry } = xisf
 		const { width, height, channels } = geometry
 		this.buffer = buffer ?? Buffer.allocUnsafe(width * height * channels * bitpixInBytes(bitpix))
 		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Int16Array(this.buffer.buffer) : bitpix === 32 ? new Int32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
+		this.shuffled = !compression || !compression.shuffled ? undefined : Buffer.allocUnsafe(this.buffer.byteLength)
 	}
 
-	// Writes FITS-format image from RGB-interleaved array into sink
-	async write(input: ImageRawType, sink: Sink) {
+	// Encodes XISF-format image from RGB-interleaved array into a block buffer
+	async encode(input: ImageRawType): Promise<XisfEncodedBlock> {
 		const { bitpix, geometry, byteOrder, pixelStorage } = this.xisf
 		const { width, height, channels } = geometry
 		const pixelInBytes = bitpixInBytes(bitpix)
@@ -348,7 +410,36 @@ export class XisfImageWriter {
 			else if (pixelInBytes === 8) this.buffer.swap64()
 		}
 
-		return await sink.write(this.buffer)
+		if (!this.compression) return { data: this.buffer }
+		if (this.compression.format !== 'zstd') throw new Error(`unsupported XISF compression format: ${this.compression.format}`)
+
+		const shuffled = this.shuffled !== undefined && pixelInBytes > 1
+		const options = this.compression.level === undefined ? undefined : { level: this.compression.level }
+
+		let compressed: Buffer
+
+		if (shuffled) {
+			byteShuffle(this.buffer, this.shuffled, pixelInBytes)
+			compressed = Buffer.from(await Bun.zstdCompress(this.shuffled, options))
+		} else {
+			compressed = Buffer.from(await Bun.zstdCompress(this.buffer, options))
+		}
+
+		return {
+			data: compressed,
+			compression: {
+				format: 'zstd',
+				shuffled,
+				uncompressedSize: this.buffer.byteLength,
+				itemSize: shuffled ? pixelInBytes : 0,
+			},
+		}
+	}
+
+	// Writes XISF-format image from RGB-interleaved array into sink
+	async write(input: ImageRawType, sink: Sink) {
+		const encoded = await this.encode(input)
+		return await sink.write(encoded.data)
 	}
 }
 
@@ -357,7 +448,7 @@ export class XisfImageWriter {
 // compression ratios by increasing data locality, i.e. by redistributing the
 // sequence such that similar byte values tend to be placed close together.
 
-export function byteShuffle(input: Int8Array | Uint8Array, output: Int8Array | Uint8Array, itemSize: number) {
+export function byteShuffle(input: Int8Array | Uint8Array | Buffer, output: Int8Array | Uint8Array | Buffer, itemSize: number) {
 	const inputSize = input.byteLength
 	const numberOfItems = Math.trunc(inputSize / itemSize)
 	const copyLength = inputSize % itemSize
@@ -379,7 +470,7 @@ export function byteShuffle(input: Int8Array | Uint8Array, output: Int8Array | U
 	}
 }
 
-export function byteUnshuffle(input: Int8Array | Uint8Array, output: Int8Array | Uint8Array, itemSize: number) {
+export function byteUnshuffle(input: Int8Array | Uint8Array | Buffer, output: Int8Array | Uint8Array | Buffer, itemSize: number) {
 	const inputSize = input.byteLength
 	const numberOfItems = Math.trunc(inputSize / itemSize)
 	const copyLength = inputSize % itemSize

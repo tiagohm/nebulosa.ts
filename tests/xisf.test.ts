@@ -8,6 +8,8 @@ import { BITPIXES, CHANNELS, saveImageAndCompareHash } from './image.util'
 
 await downloadPerTag('xisf')
 
+const COMPRESSION_FORMATS = ['zstd', 'zstd+sh'] as const
+
 test('is xisf', async () => {
 	const buffer = await Bun.file('data/NGC3372-8.1.xisf').arrayBuffer()
 	expect(isXisf(buffer)).toBeTrue()
@@ -61,121 +63,114 @@ describe('header', () => {
 })
 
 describe('read', () => {
-	test('mono 8-bit', async () => {
-		const handle = await fs.open('data/NGC3372-8.1.xisf')
-		await using source = fileHandleSource(handle)
-		const xisf = await readXisf(source)
-		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image!, 'xisf-mono-8', 'c754bf834dc1bb3948ec3cf8b9aca303')
-	})
-
-	test('color 8-bit', async () => {
-		const handle = await fs.open('data/NGC3372-8.3.xisf')
-		await using source = fileHandleSource(handle)
-		const xisf = await readXisf(source)
-		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image!, 'xisf-color-8', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-	})
-
-	test('mono 16-bit', async () => {
-		const handle = await fs.open('data/NGC3372-16.1.xisf')
-		await using source = fileHandleSource(handle)
-		const xisf = await readXisf(source)
-		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image!, 'xisf-mono-16', 'c754bf834dc1bb3948ec3cf8b9aca303')
-	})
-
-	test('color 16-bit', async () => {
-		const handle = await fs.open('data/NGC3372-16.3.xisf')
-		await using source = fileHandleSource(handle)
-		const xisf = await readXisf(source)
-		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image!, 'xisf-color-16', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-	})
-
-	test('mono 32-bit', async () => {
-		const handle = await fs.open('data/NGC3372-32.1.xisf')
-		await using source = fileHandleSource(handle)
-		const xisf = await readXisf(source)
-		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image!, 'xisf-mono-32', 'c754bf834dc1bb3948ec3cf8b9aca303')
-	})
-
-	test('color 32-bit', async () => {
-		const handle = await fs.open('data/NGC3372-32.3.xisf')
-		await using source = fileHandleSource(handle)
-		const xisf = await readXisf(source)
-		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image!, 'xisf-color-32', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-	})
-
-	test('mono float 32-bit', async () => {
-		const handle = await fs.open('data/NGC3372--32.1.xisf')
-		await using source = fileHandleSource(handle)
-		const xisf = await readXisf(source)
-		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image!, 'xisf-mono-F32', 'c754bf834dc1bb3948ec3cf8b9aca303')
-	})
-
-	test('color float 32-bit', async () => {
-		const handle = await fs.open('data/NGC3372--32.3.xisf')
-		await using source = fileHandleSource(handle)
-		const xisf = await readXisf(source)
-		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image!, 'xisf-color-F32', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-	})
-
-	test('mono float 64-bit', async () => {
-		const handle = await fs.open('data/NGC3372--64.1.xisf')
-		await using source = fileHandleSource(handle)
-		const xisf = await readXisf(source)
-		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image!, 'xisf-mono-F64', 'c754bf834dc1bb3948ec3cf8b9aca303')
-	})
-
-	test('color float 64-bit', async () => {
-		const handle = await fs.open('data/NGC3372--64.3.xisf')
-		await using source = fileHandleSource(handle)
-		const xisf = await readXisf(source)
-		const image = await readImageFromXisf(xisf!, source)
-		await saveImageAndCompareHash(image!, 'xisf-color-F64', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-	})
+	for (const bitpix of BITPIXES) {
+		for (const channel of CHANNELS) {
+			test(`channel=${channel}, bitpix=${bitpix}`, async () => {
+				const handle = await fs.open(`data/NGC3372-${bitpix}.${channel}.xisf`)
+				await using source = fileHandleSource(handle)
+				const xisf = await readXisf(source)
+				const image = await readImageFromXisf(xisf!, source)
+				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
+				await saveImageAndCompareHash(image!, `xisf-${bitpix}-${channel}`, hash)
+			})
+		}
+	}
 })
 
-test('write', async () => {
+describe('read compressed', () => {
+	for (const format of COMPRESSION_FORMATS) {
+		test(format, async () => {
+			const handle = await fs.open(`data/NGC3372-${format}-16.1.xisf`)
+			await using source = fileHandleSource(handle)
+			const xisf = await readXisf(source)
+			const shuffled = format.endsWith('+sh')
+			expect(xisf!.images[0].compression!).toEqual({ format: format.replace('+sh', '') as never, shuffled, uncompressedSize: 1464244, itemSize: shuffled ? 2 : 0 })
+			const image = await readImageFromXisf(xisf!, source)
+            await saveImageAndCompareHash(image!, `xisf-${format}-16-1`, 'c754bf834dc1bb3948ec3cf8b9aca303')
+		})
+	}
+})
+
+describe('write', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
 	for (const channel of CHANNELS) {
 		for (const bitpix of BITPIXES) {
-			buffer.fill(20)
+			test(`channel=${channel}, bitpix=${bitpix}`, async () => {
+				buffer.fill(20)
 
-			const image = (await readImageFromPath(`data/NGC3372-${bitpix}.${channel}.xisf`))!
+				const image = await readImageFromPath(`data/NGC3372-${bitpix}.${channel}.xisf`)
 
-			const sink = bufferSink(buffer)
-			await writeXisf(sink, [image])
-			await Bun.write(`out/write-xisf-${bitpix}-${channel}.xisf`, buffer.subarray(0, sink.position))
+				const sink = bufferSink(buffer)
+				expect(await writeXisf(sink, [image!])).toBeGreaterThan(0)
 
-			const output = (await readImageFromBuffer(buffer))!
+				const output = await readImageFromBuffer(buffer)
 
-			expect(Object.keys(output.header).length).toBeGreaterThanOrEqual(57)
-			expect(output.header).toEqual(image.header)
+				expect(Object.keys(output!.header).length).toBeGreaterThanOrEqual(57)
+				expect(output!.header).toEqual(image!.header)
 
-			await saveImageAndCompareHash(output, `write-xisf-${bitpix}-${channel}`, channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
+				await saveImageAndCompareHash(output!, `write-xisf-${bitpix}-${channel}`, hash)
+			})
 		}
 	}
-}, 10000)
+})
 
-test('byte shuffle & unshuffle', () => {
-	const original = new Uint8Array(512)
-	for (let i = 0; i < 256; i += 2) original[i] = i
-	const shuffled = new Uint8Array(512)
-	const unshuffled = new Uint8Array(512)
+describe('write compressed', () => {
+	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
+	const sizes: Record<string, number> = {}
 
-	byteShuffle(original, shuffled, 2)
-	expect(original).not.toEqual(shuffled)
+	for (const channel of CHANNELS) {
+		for (const bitpix of BITPIXES) {
+			for (const format of COMPRESSION_FORMATS) {
+				test(`channel=${channel}, bitpix=${bitpix}, format=${format}`, async () => {
+					buffer.fill(20)
 
-	byteUnshuffle(shuffled, unshuffled, 2)
-	expect(unshuffled).toEqual(original)
+					const image = await readImageFromPath(`data/NGC3372-${bitpix}.${channel}.xisf`)
+					const sink = bufferSink(buffer)
+					const shuffled = format.endsWith('+sh')
+					const compressedSize = await writeXisf(sink, [image!], { compression: { format: format.replace('+sh', '') as never, shuffled } })
+					expect(compressedSize).toBeLessThan(image!.metadata.pixelSizeInBytes * image!.metadata.pixelCount * image!.metadata.channels)
 
-	expect(Bun.gzipSync(shuffled).byteLength).toBeLessThan(Bun.gzipSync(original).byteLength)
+					sizes[`${bitpix}_${channel}_${format}`] = compressedSize
+				})
+			}
+		}
+	}
+
+	test('shuffled compression must have size less than unshuffled compression', () => {
+		for (const channel of CHANNELS) {
+			for (const bitpix of BITPIXES) {
+				if (bitpix === 8) continue
+
+				for (const format of COMPRESSION_FORMATS.filter((e) => !e.endsWith('+sh'))) {
+					const key = `${bitpix}_${channel}_${format}`
+					expect(sizes[`${key}+sh`]).toBeLessThan(sizes[key])
+				}
+			}
+		}
+	})
+})
+
+describe('byte shuffle and unshuffle', () => {
+	for (let itemSize = 1; itemSize <= 4; itemSize *= 2) {
+		test(`itemSize=${itemSize}`, () => {
+			const TypedArray = itemSize === 1 ? Uint8Array : itemSize === 2 ? Uint16Array : Uint32Array
+			const original = new TypedArray(512)
+			const shuffled = new TypedArray(512)
+			const unshuffled = new TypedArray(512)
+
+			for (let i = 0; i < original.length; i++) original[i] = i
+
+			byteShuffle(Buffer.from(original.buffer), Buffer.from(shuffled.buffer), itemSize)
+
+			if (itemSize === 1) expect(original).toEqual(shuffled)
+			else expect(original).not.toEqual(shuffled)
+
+			byteUnshuffle(Buffer.from(shuffled.buffer), Buffer.from(unshuffled.buffer), itemSize)
+			expect(unshuffled).toEqual(original)
+
+			if (itemSize > 1) expect(Bun.gzipSync(shuffled.buffer).byteLength).toBeLessThan(Bun.gzipSync(original.buffer).byteLength)
+		})
+	}
 })

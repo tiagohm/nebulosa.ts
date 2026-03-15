@@ -959,7 +959,7 @@ export class FitsKeywordWriter {
 	}
 }
 
-export function fitsHeaderValueToText(value: FitsHeaderValue) {
+export function formatFitsHeaderValue(value: FitsHeaderValue) {
 	if (typeof value === 'boolean') return value ? 'T' : 'F'
 	if (typeof value === 'number') return `${value}`
 	return `'${escapeQuotedText(value ?? '')}'`

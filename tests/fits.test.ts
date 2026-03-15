@@ -16,108 +16,44 @@ test('is fits', async () => {
 })
 
 describe('read', () => {
-	test('mono 8-bit', async () => {
-		const handle = await fs.open('data/NGC3372-8.1.fit')
-		await using source = fileHandleSource(handle)
-		const fits = await readFits(source)
-		const image = await readImageFromFits(fits!, source)
-		await saveImageAndCompareHash(image!, 'fits-mono-8', 'c754bf834dc1bb3948ec3cf8b9aca303')
-	})
-
-	test('color 8-bit', async () => {
-		const handle = await fs.open('data/NGC3372-8.3.fit')
-		await using source = fileHandleSource(handle)
-		const fits = await readFits(source)
-		const image = await readImageFromFits(fits!, source)
-		await saveImageAndCompareHash(image!, 'fits-color-8', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-	})
-
-	test('mono 16-bit', async () => {
-		const handle = await fs.open('data/NGC3372-16.1.fit')
-		await using source = fileHandleSource(handle)
-		const fits = await readFits(source)
-		const image = await readImageFromFits(fits!, source)
-		await saveImageAndCompareHash(image!, 'fits-mono-16', 'c754bf834dc1bb3948ec3cf8b9aca303')
-	})
-
-	test('color 16-bit', async () => {
-		const handle = await fs.open('data/NGC3372-16.3.fit')
-		await using source = fileHandleSource(handle)
-		const fits = await readFits(source)
-		const image = await readImageFromFits(fits!, source)
-		await saveImageAndCompareHash(image!, 'fits-color-16', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-	})
-
-	test('mono 32-bit', async () => {
-		const handle = await fs.open('data/NGC3372-32.1.fit')
-		await using source = fileHandleSource(handle)
-		const fits = await readFits(source)
-		const image = await readImageFromFits(fits!, source)
-		await saveImageAndCompareHash(image!, 'fits-mono-32', 'c754bf834dc1bb3948ec3cf8b9aca303')
-	})
-
-	test('color 32-bit', async () => {
-		const handle = await fs.open('data/NGC3372-32.3.fit')
-		await using source = fileHandleSource(handle)
-		const fits = await readFits(source)
-		const image = await readImageFromFits(fits!, source)
-		await saveImageAndCompareHash(image!, 'fits-color-32', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-	})
-
-	test('mono float 32-bit', async () => {
-		const handle = await fs.open('data/NGC3372--32.1.fit')
-		await using source = fileHandleSource(handle)
-		const fits = await readFits(source)
-		const image = await readImageFromFits(fits!, source)
-		await saveImageAndCompareHash(image!, 'fits-mono-F32', 'c754bf834dc1bb3948ec3cf8b9aca303')
-	})
-
-	test('color float 32-bit', async () => {
-		const handle = await fs.open('data/NGC3372--32.3.fit')
-		await using source = fileHandleSource(handle)
-		const fits = await readFits(source)
-		const image = await readImageFromFits(fits!, source)
-		await saveImageAndCompareHash(image!, 'fits-color-F32', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-	})
-
-	test('mono float 64-bit', async () => {
-		const handle = await fs.open('data/NGC3372--64.1.fit')
-		await using source = fileHandleSource(handle)
-		const fits = await readFits(source)
-		const image = await readImageFromFits(fits!, source)
-		await saveImageAndCompareHash(image!, 'fits-mono-F64', 'c754bf834dc1bb3948ec3cf8b9aca303')
-	})
-
-	test('color float 64-bit', async () => {
-		const handle = await fs.open('data/NGC3372--64.3.fit')
-		await using source = fileHandleSource(handle)
-		const fits = await readFits(source)
-		const image = await readImageFromFits(fits!, source)
-		await saveImageAndCompareHash(image!, 'fits-color-F64', '1ca5a4dd509ee4c67e3a2fbca43f81d4')
-	})
+	for (const bitpix of BITPIXES) {
+		for (const channel of CHANNELS) {
+			test(`bitpix=${bitpix}, channel=${channel}`, async () => {
+				const handle = await fs.open(`data/NGC3372-${bitpix}.${channel}.fit`)
+				await using source = fileHandleSource(handle)
+				const fits = await readFits(source)
+				const image = await readImageFromFits(fits!, source)
+				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
+				await saveImageAndCompareHash(image!, `fits-${bitpix}-${channel}`, hash)
+			})
+		}
+	}
 })
 
-test('write', async () => {
+describe('write', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
 	for (const channel of CHANNELS) {
 		for (const bitpix of BITPIXES) {
-			buffer.fill(20)
+			test(`bitpix=${bitpix}, channel=${channel}`, async () => {
+				buffer.fill(20)
 
-			const image = (await readImageFromPath(`data/NGC3372-${bitpix}.${channel}.fit`))!
+				const image = await readImageFromPath(`data/NGC3372-${bitpix}.${channel}.fit`)
 
-			const sink = bufferSink(buffer)
-			await writeFits(sink, [image])
+				const sink = bufferSink(buffer)
+				await writeFits(sink, [image!])
 
-			const output = (await readImageFromBuffer(buffer))!
+				const output = await readImageFromBuffer(buffer)
 
-			expect(Object.keys(output.header).length).toBeGreaterThanOrEqual(60)
-			expect(output.header).toEqual(image.header)
+				expect(Object.keys(output!.header).length).toBeGreaterThanOrEqual(60)
+				expect(output!.header).toEqual(image!.header)
 
-			await saveImageAndCompareHash(output, `write-fits-${bitpix}-${channel}`, channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4')
+				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
+				await saveImageAndCompareHash(output!, `write-fits-${bitpix}-${channel}`, hash)
+			})
 		}
 	}
-}, 10000)
+})
 
 test('write/read RICE compressed', async () => {
 	const buffer = Buffer.alloc(1024 * 1024 * 18, 20)
@@ -138,7 +74,7 @@ test('write/read RICE compressed', async () => {
 	expect(output.metadata.bitpix).toBe(image.metadata.bitpix)
 
 	await saveImageAndCompareHash(output, 'write-fits-rice-16-1', 'c754bf834dc1bb3948ec3cf8b9aca303')
-}, 10000)
+}, 5000)
 
 test('read keyword', () => {
 	const reader = new FitsKeywordReader()

@@ -4,7 +4,7 @@ import { type Bitpix, bitpixInBytes, cfaPatternKeyword, type Fits, type FitsHdu,
 import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageRawType, type WriteImageToFormatOptions } from './image.types'
 import { bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from './io'
 import { Jpeg } from './jpeg'
-import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader } from './xisf'
+import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type XisfWriteFormat } from './xisf'
 
 function findCompressedImageHdu(hdu: FitsHdu) {
 	return isRiceCompressedImageHeader(hdu.header)
@@ -105,7 +105,7 @@ export function writeImageToFits(image: Image, output: Buffer | Sink) {
 	return writeFits(output, [image])
 }
 
-export function writeImageToXisf(image: Image, output: Buffer | Sink, format?: Pick<XisfImage, 'byteOrder' | 'pixelStorage'>) {
+export function writeImageToXisf(image: Image, output: Buffer | Sink, format?: XisfWriteFormat) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	return writeXisf(output, [image], format)
 }
