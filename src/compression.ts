@@ -1,3 +1,4 @@
+import zlib from 'zlib'
 import { signed8, signed16 } from './math'
 
 // The Rice algorithm is simple and very fast. It requires only enough memory to hold a single block of 16 or 32 pixels at a time.
@@ -375,4 +376,26 @@ export function decompressRice<T extends RiceCompressionTypedArray>(compressed: 
 	}
 
 	return output
+}
+
+export function inflate(input: zlib.InputType) {
+	const { promise, resolve, reject } = Promise.withResolvers<Buffer>()
+
+	zlib.inflate(input, (error, buffer) => {
+		if (error) reject(error)
+		else resolve(buffer)
+	})
+
+	return promise
+}
+
+export function deflate(input: zlib.InputType, options: Pick<zlib.ZlibOptions, 'level'>) {
+	const { promise, resolve, reject } = Promise.withResolvers<Buffer>()
+
+	zlib.deflate(input, options, (error, buffer) => {
+		if (error) reject(error)
+		else resolve(buffer)
+	})
+
+	return promise
 }

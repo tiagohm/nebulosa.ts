@@ -51,8 +51,8 @@ const FILES = {
 	'NGC3372-lz4hc+sh-16.1.xisf': [undefined],
 	'NGC3372-lz4-16.1.xisf': [undefined],
 	'NGC3372-lz4+sh-16.1.xisf': [undefined],
-	'NGC3372-zlib-16.1.xisf': [undefined],
-	'NGC3372-zlib+sh-16.1.xisf': [undefined],
+	'NGC3372-zlib-16.1.xisf': [undefined, 'xisf'],
+	'NGC3372-zlib+sh-16.1.xisf': [undefined, 'xisf'],
 } as const
 
 const downloading = new Map<string, Promise<Bun.BunFile>>()

@@ -1,4 +1,5 @@
 import { type X2jOptions, XMLParser } from 'fast-xml-parser'
+import { deflate, inflate } from './compression'
 import { type Bitpix, bitpixInBytes, type FitsHeader, type FitsHeaderValue, formatFitsHeaderValue, unescapeQuotedText } from './fits'
 import type { Size } from './geometry'
 import type { Image, ImageRawType } from './image.types'
@@ -138,6 +139,11 @@ interface XisfWriteEntry {
 interface XisfEncodedBlock {
 	readonly data: Buffer
 	readonly compression?: XisfCompression
+}
+
+function compress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, compression: XisfWriteCompression) {
+	if (compression.format === 'zstd') return Bun.zstdCompress(input, compression)
+	else if (compression.format === 'zlib') return deflate(input, compression)
 }
 
 function escapeXml(text: string) {
@@ -293,6 +299,11 @@ export function bitpixFromSampleFormat(sampleFormat: XisfSampleFormat): Bitpix {
 	return sampleFormat === 'UInt8' ? 8 : sampleFormat === 'UInt16' ? 16 : sampleFormat === 'UInt32' ? 32 : sampleFormat === 'UInt64' ? 64 : sampleFormat === 'Float32' ? -32 : -64
 }
 
+function decompress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, format: XisfCompressionFormat) {
+	if (format === 'zstd') return Bun.zstdDecompress(input)
+	else if (format === 'zlib') return inflate(input)
+}
+
 export class XisfImageReader {
 	private readonly buffer: Buffer
 	private readonly compressed?: Buffer
@@ -319,10 +330,10 @@ export class XisfImageReader {
 		if ((await readUntil(source, input, location.size, 0)) !== location.size) return false
 
 		if (compression) {
-			if (compression.format !== 'zstd') throw new Error(`unsupported XISF compression format: ${compression.format}`)
+			if (compression.format !== 'zstd' && compression.format !== 'zlib') throw new Error(`unsupported XISF compression format: ${compression.format}`)
 
-			const decompressed = Buffer.from(await Bun.zstdDecompress(input.subarray(0, location.size)))
-			if (decompressed.byteLength !== this.buffer.byteLength) return false
+			const decompressed = await decompress(input.subarray(0, location.size), compression.format)
+			if (decompressed === undefined || decompressed.byteLength !== this.buffer.byteLength) return false
 
 			if (compression.shuffled) {
 				if (compression.itemSize <= 0) return false
@@ -411,24 +422,23 @@ export class XisfImageWriter {
 		}
 
 		if (!this.compression) return { data: this.buffer }
-		if (this.compression.format !== 'zstd') throw new Error(`unsupported XISF compression format: ${this.compression.format}`)
+		if (this.compression.format !== 'zstd' && this.compression.format !== 'zlib') throw new Error(`unsupported XISF compression format: ${this.compression.format}`)
 
 		const shuffled = this.shuffled !== undefined && pixelInBytes > 1
-		const options = this.compression.level === undefined ? undefined : { level: this.compression.level }
 
-		let compressed: Buffer
+		let compressed: Buffer | undefined
 
 		if (shuffled) {
 			byteShuffle(this.buffer, this.shuffled, pixelInBytes)
-			compressed = Buffer.from(await Bun.zstdCompress(this.shuffled, options))
+			compressed = await compress(this.shuffled, this.compression)
 		} else {
-			compressed = Buffer.from(await Bun.zstdCompress(this.buffer, options))
+			compressed = await compress(this.buffer, this.compression)
 		}
 
 		return {
-			data: compressed,
+			data: compressed!,
 			compression: {
-				format: 'zstd',
+				format: this.compression.format,
 				shuffled,
 				uncompressedSize: this.buffer.byteLength,
 				itemSize: shuffled ? pixelInBytes : 0,

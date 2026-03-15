@@ -8,7 +8,7 @@ import { BITPIXES, CHANNELS, saveImageAndCompareHash } from './image.util'
 
 await downloadPerTag('xisf')
 
-const COMPRESSION_FORMATS = ['zstd', 'zstd+sh'] as const
+const COMPRESSION_FORMATS = ['zstd', 'zstd+sh', 'zlib', 'zlib+sh'] as const
 
 test('is xisf', async () => {
 	const buffer = await Bun.file('data/NGC3372-8.1.xisf').arrayBuffer()
@@ -86,7 +86,7 @@ describe('read compressed', () => {
 			const shuffled = format.endsWith('+sh')
 			expect(xisf!.images[0].compression!).toEqual({ format: format.replace('+sh', '') as never, shuffled, uncompressedSize: 1464244, itemSize: shuffled ? 2 : 0 })
 			const image = await readImageFromXisf(xisf!, source)
-            await saveImageAndCompareHash(image!, `xisf-${format}-16-1`, 'c754bf834dc1bb3948ec3cf8b9aca303')
+			await saveImageAndCompareHash(image!, `xisf-${format}-16-1`, 'c754bf834dc1bb3948ec3cf8b9aca303')
 		})
 	}
 })
@@ -111,7 +111,7 @@ describe('write', () => {
 
 				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 				await saveImageAndCompareHash(output!, `write-xisf-${bitpix}-${channel}`, hash)
-			})
+			}, 5000)
 		}
 	}
 })
