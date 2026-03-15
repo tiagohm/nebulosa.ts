@@ -134,4 +134,37 @@ describe('parse', () => {
 		expect(parser.parse('<person name="John" disabled student/>')).toEqual([{ name: 'person', attributes: { name: 'John', disabled: '', student: '' }, children: [], text: '' }])
 		expect(parser.parse('<person gender=""/>')).toEqual([{ name: 'person', attributes: { gender: '' }, children: [], text: '' }])
 	})
+
+	test('mixed content after child tags', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<person>John<phone/>Doe</person>')).toEqual([{ name: 'person', attributes: {}, children: [{ name: 'phone', attributes: {}, children: [], text: '' }], text: 'JohnDoe' }])
+		expect(parser.parse('<person><phone></phone>Doe</person>')).toEqual([{ name: 'person', attributes: {}, children: [{ name: 'phone', attributes: {}, children: [], text: '' }], text: 'Doe' }])
+	})
+
+	test('preserve valid name characters', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<person-data attr_name="1" attr-name="2" xmlns:x="3"></person-data>')).toEqual([
+			{
+				name: 'person-data',
+				attributes: { attr_name: '1', 'attr-name': '2', 'xmlns:x': '3' },
+				children: [],
+				text: '',
+			},
+		])
+	})
+
+	test('treat tabs and newlines as tag whitespace', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<person\tname="John"></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: '' }])
+		expect(parser.parse('<person\nname="John"></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: '' }])
+	})
+
+	test('reject mismatched closing tags', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(() => parser.parse('<person><name></person></name>')).toThrow('mismatched closing tag')
+	})
 })
