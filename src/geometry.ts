@@ -21,6 +21,18 @@ export function midPoint(a: Point, b: Point): Point {
 	return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
 }
 
+// Computes Euclidean squared distance between points.
+export function euclideanSquaredDistance(a: Point, b: Point) {
+	const dx = a.x - b.x
+	const dy = a.y - b.y
+	return dx * dx + dy * dy
+}
+
+// Computes Euclidean distance between points.
+export function euclideanDistance(a: Point, b: Point) {
+	return Math.sqrt(euclideanSquaredDistance(a, b))
+}
+
 // https://dreamswork.github.io/qt4/qrect_8cpp_source.html
 
 export function rectIntersection(a: Rect, b: Rect, out?: Rect) {

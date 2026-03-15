@@ -16,7 +16,7 @@ const FILES = {
 	'names.dat': [undefined, 'stellarium'],
 	'GRBG-16.1.fit': [undefined, 'image'],
 	'NGC3372-8.1.fit': [undefined, 'alpaca.client', 'alpaca.server', 'fits', 'image'],
-	'NGC3372-16.1.fit': [undefined, 'alpaca.client', 'alpaca.server', 'fits', 'image'],
+	'NGC3372-16.1.fit': [undefined, 'alpaca.client', 'alpaca.server', 'fits', 'image', 'starmatching'],
 	'NGC3372-32.1.fit': [undefined, 'alpaca.client', 'fits', 'image'],
 	'NGC3372--32.1.fit': [undefined, 'alpaca.client', 'fits', 'image'],
 	'NGC3372--64.1.fit': [undefined, 'alpaca.client', 'fits', 'image'],
@@ -58,7 +58,7 @@ const FILES = {
 const downloading = new Map<string, Promise<Bun.BunFile>>()
 
 type FileName = keyof typeof FILES
-type FileTag = 'alpaca.client' | 'alpaca.server' | 'csv' | 'daf' | 'fits' | 'hyg' | 'iers' | 'image' | 'indi' | 'location' | 'sao' | 'spk' | 'stardetector' | 'stellarium' | 'time' | 'xisf'
+type FileTag = 'alpaca.client' | 'alpaca.server' | 'csv' | 'daf' | 'fits' | 'hyg' | 'iers' | 'image' | 'indi' | 'location' | 'sao' | 'spk' | 'stardetector' | 'starmatching' | 'stellarium' | 'time' | 'xisf'
 
 export async function download(name: FileName) {
 	const task = downloading.get(name)
