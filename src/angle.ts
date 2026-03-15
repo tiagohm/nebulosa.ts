@@ -70,14 +70,14 @@ export function mas(value: number): Angle {
 // Creates a new Angle from degress, minutes and seconds.
 export function dms(d: number, min: number = 0, sec: number = 0): Angle {
 	const neg = d < 0
-	const angle = deg(Math.abs(d) + Math.abs(min) / 60 + sec / 3600)
+	const angle = deg(Math.abs(d) + Math.abs(min) / 60 + Math.abs(sec) / 3600)
 	return neg ? -angle : angle
 }
 
 // Creates a new Angle from hours, minutes and seconds.
 export function hms(h: number, min: number = 0, sec: number = 0): Angle {
 	const neg = h < 0
-	const angle = hour(Math.abs(h) + Math.abs(min) / 60 + sec / 3600)
+	const angle = hour(Math.abs(h) + Math.abs(min) / 60 + Math.abs(sec) / 3600)
 	return neg ? -angle : angle
 }
 
@@ -233,6 +233,22 @@ export function formatAngle(angle: Angle, options?: FormatAngleOptions) {
 	const sa = separators[0] ?? ' '
 	const sb = separators[1] ?? (noSecond ? '' : sa)
 	const sc = separators[2] ?? ''
+
+	if (noSecond) {
+		if (hdms[2] >= 30) {
+			hdms[1]++
+
+			if (hdms[1] >= 60) {
+				hdms[1] = 0
+				hdms[0]++
+
+				if (isHour && hdms[0] === 24) {
+					hdms[0] = 0
+				}
+			}
+		}
+	}
+
 	let s = hdms[2].toFixed(fractionDigits)
 
 	if (s.startsWith('60')) {

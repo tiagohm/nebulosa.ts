@@ -45,11 +45,15 @@ test('hour', () => {
 test('dms', () => {
 	expect(dms(45, 12, 56.22)).toBeCloseTo(deg(45.21561666666666666666666666666667), 16)
 	expect(dms(-45, 12, 56.22)).toBeCloseTo(deg(-45.21561666666666666666666666666667), 16)
+	expect(dms(45, 12, -56.22)).toBeCloseTo(deg(45.21561666666666666666666666666667), 16)
+	expect(dms(-45, 12, -56.22)).toBeCloseTo(deg(-45.21561666666666666666666666666667), 16)
 })
 
 test('hms', () => {
 	expect(hms(23, 44, 2.22)).toBeCloseTo(hour(23.73395), 16)
 	expect(hms(-23, 44, 2.22)).toBeCloseTo(hour(-23.73395), 16)
+	expect(hms(23, 44, -2.22)).toBeCloseTo(hour(23.73395), 16)
+	expect(hms(-23, 44, -2.22)).toBeCloseTo(hour(-23.73395), 16)
 })
 
 test('toMas', () => {
@@ -274,19 +278,22 @@ describe('formatAngle', () => {
 
 	test('noSecond', () => {
 		const options: FormatAngleOptions = { noSecond: true }
-		expect(formatAngle(deg(23.5634453), options)).toBe('+23 33')
-		expect(formatAngle(deg(-23.5634453), options)).toBe('-23 33')
+		expect(formatAngle(deg(23.5634453), options)).toBe('+23 34')
+		expect(formatAngle(deg(-23.5634453), options)).toBe('-23 34')
+		expect(formatAngle(deg(12 + 59 / 60 + 59.6 / 3600), options)).toBe('+13 00')
+		expect(formatAngle(deg(-(12 + 59 / 60 + 59.6 / 3600)), options)).toBe('-13 00')
 	})
 
 	test('isHourAndNoSecond', () => {
 		const options: FormatAngleOptions = { isHour: true, noSecond: true }
-		expect(formatAngle(hour(23.5634453), options)).toBe('+23 33')
+		expect(formatAngle(hour(23.5634453), options)).toBe('+23 34')
 		expect(formatAngle(hour(-23.5634453), options)).toBe('+00 26')
+		expect(formatAngle(hour(23 + 59 / 60 + 59.6 / 3600), options)).toBe('+00 00')
 	})
 
 	test('hourAndNoSignAndNoSecond', () => {
 		const options: FormatAngleOptions = { isHour: true, noSign: true, noSecond: true }
-		expect(formatAngle(hour(23.5634453), options)).toBe('23 33')
+		expect(formatAngle(hour(23.5634453), options)).toBe('23 34')
 		expect(formatAngle(hour(-23.5634453), options)).toBe('00 26')
 	})
 

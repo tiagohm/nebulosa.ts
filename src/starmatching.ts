@@ -307,6 +307,7 @@ export function invertAffineTransform(transform: AffineTransform): AffineTransfo
 	return { m00, m01, tx, m10, m11, ty }
 }
 
+// Inverts either similarity or affine parameters when the transform is well-conditioned.
 export function invertTransform<T extends SimilarityTransform | AffineTransform>(transform: T): T | undefined {
 	return 'mirrored' in transform ? (invertSimilarityTransform(transform) as T) : (invertAffineTransform(transform) as T)
 }
