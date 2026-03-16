@@ -46,6 +46,7 @@ Agents must respect all constraints below when generating or modifying code.
 * Always single-line comment methods and important lines.
 * Always type the method parameter.
 * Use `readonly` where appropriate.
+* Prefer global pure functions over local arrow functions.
 * The commit message must be in English and entirely in lowercase letters, except for acronyms and file names.
 * The commit message should begin with verbs in the present tense like `implement`, `fix`, `improve`, `update`, `use`.
 
