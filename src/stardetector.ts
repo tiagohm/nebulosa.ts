@@ -1,7 +1,7 @@
 import type { Point, Rect } from './geometry'
-import { truncatePixel } from './image'
 import { clone, grayscale, mean3x3, psf } from './image.transformation'
 import type { Image } from './image.types'
+import { clamp } from './math'
 
 export interface DetectedStar extends Readonly<Point> {
 	readonly hfd: number
@@ -17,7 +17,6 @@ export interface DetectStarOptions {
 type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumSq, width
 type StarPhotometry = readonly [number, number, number] // flux, snr, hfd
 
-const DETECT_STAR_HISTOGRAM_MAX = (1 << 18) - 1
 const STAR_SIGNAL_RADIUS_SQ = 16
 const STAR_BACKGROUND_INNER_RADIUS_SQ = 25
 const STAR_BACKGROUND_OUTER_RADIUS_SQ = 49
@@ -242,12 +241,13 @@ function buildIntegralImages(raw: Image['raw'], width: number, height: number, s
 		let rowSumSq = 0
 
 		for (let x = 0; x < width; x++) {
-			const value = truncatePixel(raw[rowOffset + x], DETECT_STAR_HISTOGRAM_MAX) / DETECT_STAR_HISTOGRAM_MAX
+			const value = clamp(raw[rowOffset + x], 0, 1)
 			rowSum += value
 			rowSumSq += value * value
 			const index = integralRow + x + 1
-			sum[index] = sum[prevIntegralRow + x + 1] + rowSum
-			sumSq[index] = sumSq[prevIntegralRow + x + 1] + rowSumSq
+			const prevIndex = prevIntegralRow + x + 1
+			sum[index] = sum[prevIndex] + rowSum
+			sumSq[index] = sumSq[prevIndex] + rowSumSq
 		}
 	}
 
@@ -397,9 +397,11 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 	}
 
 	add(x: number, y: number, h: number) {
-		if (!this.head || h <= this.head.h) this.size < this.capacity && this.addFirst(x, y, h)
-		else if (!this.tail || h >= this.tail.h) this.addLast(x, y, h)
-		else {
+		if (!this.head || h <= this.head.h) {
+			if (this.size < this.capacity) this.addFirst(x, y, h)
+		} else if (!this.tail || h >= this.tail.h) {
+			this.addLast(x, y, h)
+		} else {
 			const star: Star = { x, y, h }
 			const headDistance = h - this.head.h
 			const tailDistance = this.tail.h - h

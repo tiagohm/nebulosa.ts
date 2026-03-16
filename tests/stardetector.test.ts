@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { Bitpix } from '../src/fits'
 import { detectStars, excludeStarsFitWithinRegion, mergeVeryCloseStars, StarList } from '../src/stardetector'
+import { medianOf } from '../src/util'
 import { downloadPerTag } from './download'
 import { readImage } from './image.util'
 
@@ -94,15 +95,12 @@ test('merge stars & exclusion', () => {
 
 test('detect stars', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
-	const stars = detectStars(image)
+	const stars = detectStars(image, { maxStars: 500 })
 
 	expect(stars).toHaveLength(500)
-	const flux = stars.map((e) => e.flux).reduceRight((a, b) => a + b)
-	const snr = stars.map((e) => e.snr).reduceRight((a, b) => a + b)
-	const hfd = stars.map((e) => e.hfd).reduceRight((a, b) => a + b)
-	expect(flux).toBeGreaterThan(0)
-	expect(snr).toBeGreaterThan(0)
-	expect(hfd).toBeGreaterThan(0)
+	const flux = stars.map((e) => e.flux).sort()
+	const snr = stars.map((e) => e.snr).sort()
+	const hfd = stars.map((e) => e.hfd).sort()
 	const carina = stars.find((e) => e.x === 564 && e.y === 544)
 	expect(carina).toBeDefined()
 	expect(carina!.x).toBe(564)
@@ -110,4 +108,7 @@ test('detect stars', async () => {
 	expect(carina!.flux).toBeGreaterThan(0)
 	expect(carina!.snr).toBeGreaterThan(0)
 	expect(carina!.hfd).toBeGreaterThan(0)
+	expect(medianOf(flux)).toBeGreaterThan(0)
+	expect(medianOf(snr)).toBeGreaterThan(0)
+	expect(medianOf(hfd)).toBeGreaterThanOrEqual(1.5)
 }, 5000)
