@@ -4,12 +4,12 @@ import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, is
 import { timeYMDHMS } from '../src/time'
 
 test('is leap year', () => {
-	expect(isLeapYear(2020)).toBe(true)
-	expect(isLeapYear(2021)).toBe(false)
-	expect(isLeapYear(1900)).toBe(false)
-	expect(isLeapYear(1970)).toBe(false)
-	expect(isLeapYear(2000)).toBe(true)
-	expect(isLeapYear(2400)).toBe(true)
+	expect(isLeapYear(2020)).toBeTrue()
+	expect(isLeapYear(2021)).toBeFalse()
+	expect(isLeapYear(1900)).toBeFalse()
+	expect(isLeapYear(1970)).toBeFalse()
+	expect(isLeapYear(2000)).toBeTrue()
+	expect(isLeapYear(2400)).toBeTrue()
 })
 
 test('temporal from date', () => {

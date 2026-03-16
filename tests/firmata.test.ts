@@ -50,7 +50,7 @@ describe('command decoding', () => {
 
 	test('system reset', () => {
 		client.process(Buffer.from([0xff]))
-		expect(result[0]).toBe(true)
+		expect(result[0]).toBeTrue()
 	})
 
 	test('digital message', () => {
@@ -74,7 +74,7 @@ describe('command decoding', () => {
 		expect(result[1]).toEqual([1, 2, 11])
 		expect(result[2]).toBe(1)
 		expect(result[3]).toEqual([3, 4])
-		expect(result[4]).toBe(true)
+		expect(result[4]).toBeTrue()
 	})
 
 	test('analog mapping', () => {
@@ -117,7 +117,7 @@ describe('command decoding', () => {
 
 		client.process(Buffer.from([0xf0, 0x73, 0x42, 4, ...encodePacked7Bit(addresses), 0xf7]))
 		expect(result[0]).toBe(4)
-		expect(result[1]).toBe(false)
+		expect(result[1]).toBeFalse()
 		expect(result[2]).toEqual([addresses.subarray(0, 8), addresses.subarray(8, 16)])
 	})
 

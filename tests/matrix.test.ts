@@ -3,12 +3,12 @@ import { gaussianElimination, LuDecomposition, Matrix, mulMTxN, mulMxNT, QrDecom
 
 test('is square', () => {
 	const m = Matrix.square(3)
-	expect(m.isSquare).toBe(true)
+	expect(m.isSquare).toBeTrue()
 })
 
 test('is not square', () => {
 	const m = new Matrix(3, 4)
-	expect(m.isSquare).toBe(false)
+	expect(m.isSquare).toBeFalse()
 })
 
 test('rejects invalid data length', () => {
@@ -59,7 +59,7 @@ test('copyInto requires identical shape', () => {
 
 test('rectangular zero matrix is zero', () => {
 	const m = new Matrix(2, 3)
-	expect(m.isZero).toBe(true)
+	expect(m.isZero).toBeTrue()
 })
 
 test('transposed', () => {
@@ -197,7 +197,7 @@ test('symmetric', () => {
 	expect(c.rows).toBe(3)
 	expect(c.cols).toBe(3)
 	expect(c.toArray()).toEqual([14, 25, 31, 25, 45, 56, 31, 56, 70])
-	expect(c.isSymmetric).toBe(true)
+	expect(c.isSymmetric).toBeTrue()
 })
 
 test('flipY', () => {
@@ -318,7 +318,7 @@ describe('LU decomposition', () => {
 	test('singular matrix rejects solve and invert', () => {
 		const decomposition = new LuDecomposition(Matrix.square(2, [1, 2, 2, 4]))
 
-		expect(decomposition.isSingular).toBe(true)
+		expect(decomposition.isSingular).toBeTrue()
 		expect(() => decomposition.solve([1, 2])).toThrow('matrix is singular and cannot be solved')
 		expect(() => decomposition.invert()).toThrow('matrix is singular and cannot be inverted')
 	})

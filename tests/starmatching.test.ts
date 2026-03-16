@@ -372,7 +372,7 @@ describe('star matching synthetic registration', () => {
 		]
 
 		const result = matchStars(reference, current, { minStars: 3, minInliers: 3 })
-		expect(result.success).toBe(false)
+		expect(result.success).toBeFalse()
 		expect(result.failureReason).toBeDefined()
 	})
 

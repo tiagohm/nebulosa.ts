@@ -64,7 +64,7 @@ test('clone', () => {
 	const m: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 	const n = matClone(m)
 	expect(n).toEqual(m)
-	expect(m === n).toBe(false)
+	expect(m === n).toBeFalse()
 })
 
 test('transpose', () => {

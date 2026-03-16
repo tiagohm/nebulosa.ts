@@ -148,10 +148,10 @@ describe('parse', () => {
 		expect(vector.timestamp).toBe('2025-03-11T12:43:02')
 		expect(vector.elements.CONNECT.name).toBe('CONNECT')
 		expect(vector.elements.CONNECT.label).toBe('Connect')
-		expect(vector.elements.CONNECT.value).toBe(false)
+		expect(vector.elements.CONNECT.value).toBeFalse()
 		expect(vector.elements.DISCONNECT.name).toBe('DISCONNECT')
 		expect(vector.elements.DISCONNECT.label).toBe('Disconnect')
-		expect(vector.elements.DISCONNECT.value).toBe(true)
+		expect(vector.elements.DISCONNECT.value).toBeTrue()
 	})
 })
 

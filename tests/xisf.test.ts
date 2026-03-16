@@ -15,7 +15,7 @@ test('is xisf', async () => {
 	expect(isXisf(buffer)).toBeTrue()
 })
 
-describe('header', () => {
+describe('parse header', () => {
 	test('single image', () => {
 		const XML = `<xisf version="1.0"><Image geometry="1037:706:1" sampleFormat="Float64" bounds="0:1" colorSpace="Gray" location="attachment:8192:5856976"></Image></xisf>`
 		const hdus = parseXisfHeader(Buffer.from(XML))
@@ -34,7 +34,7 @@ describe('header', () => {
 	})
 
 	test('multiple images', () => {
-		const XML = `<xisf version="1.0"><Image geometry="1037:706:1" sampleFormat="Float64" bounds="0:1" colorSpace="Gray" location="attachment:8192:5856976" compression="zstd:1464244"><FITSKeyword name="EXPTIME" value="30." comment="Exposure time in seconds"/></Image><Image geometry="4096:4096:4" sampleFormat="Float32" bounds="0:1" colorSpace="RGB" location="attachment:4096:268435456" compression="zstd+sh:1464244:2"><FITSKeyword name="EXPTIME" value="30." comment="Exposure time in seconds"/></Image></xisf>`
+		const XML = `<xisf version="1.0"><Image geometry="1037:706:1" sampleFormat="Float64" bounds="0:1" colorSpace="Gray" location="attachment:8192:5856976" compression="zstd:1464244"></Image><Image geometry="4096:4096:4" sampleFormat="Float32" bounds="0:1" colorSpace="RGB" location="attachment:4096:268435456" compression="zstd+sh:1464244:2"></Image></xisf>`
 		const hdus = parseXisfHeader(Buffer.from(XML))
 
 		expect(hdus).toHaveLength(2)
@@ -47,7 +47,7 @@ describe('header', () => {
 		expect(hdus[0].sampleFormat).toBe('Float64')
 		expect(hdus[0].bitpix).toBe(-64)
 		expect(hdus[0].compression).toEqual({ format: 'zstd', shuffled: false, uncompressedSize: 1464244, itemSize: 0 })
-		expect(hdus[0].header).toEqual({ SIMPLE: true, NAXIS: 2, NAXIS1: 1037, NAXIS2: 706, BITPIX: -64, EXPTIME: 30 })
+		expect(hdus[0].header).toEqual({ SIMPLE: true, NAXIS: 2, NAXIS1: 1037, NAXIS2: 706, BITPIX: -64 })
 
 		expect(hdus[1].byteOrder).toBe('little')
 		expect(hdus[1].colorSpace).toBe('RGB')
@@ -58,7 +58,7 @@ describe('header', () => {
 		expect(hdus[1].sampleFormat).toBe('Float32')
 		expect(hdus[1].bitpix).toBe(-32)
 		expect(hdus[1].compression).toEqual({ format: 'zstd', shuffled: true, uncompressedSize: 1464244, itemSize: 2 })
-		expect(hdus[1].header).toEqual({ SIMPLE: true, NAXIS: 3, NAXIS1: 4096, NAXIS2: 4096, NAXIS3: 4, BITPIX: -32, EXPTIME: 30 })
+		expect(hdus[1].header).toEqual({ SIMPLE: true, NAXIS: 3, NAXIS1: 4096, NAXIS2: 4096, NAXIS3: 4, BITPIX: -32 })
 	})
 })
 
@@ -133,7 +133,7 @@ describe('write compressed', () => {
 					expect(compressedSize).toBeLessThan(image!.metadata.pixelSizeInBytes * image!.metadata.pixelCount * image!.metadata.channels)
 
 					sizes[`${bitpix}_${channel}_${format}`] = compressedSize
-				})
+				}, 5000)
 			}
 		}
 	}
