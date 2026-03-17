@@ -380,25 +380,25 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 
 	pulseNorth(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: duration, TIMED_GUIDE_S: 0 } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: duration } })
 		}
 	}
 
 	pulseSouth(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_S: duration, TIMED_GUIDE_N: 0 } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_S: duration } })
 		}
 	}
 
 	pulseWest(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: duration, TIMED_GUIDE_E: 0 } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: duration } })
 		}
 	}
 
 	pulseEast(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_E: duration, TIMED_GUIDE_W: 0 } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_E: duration } })
 		}
 	}
 
@@ -945,28 +945,28 @@ export class MountManager extends DeviceManager<Mount> {
 
 	moveNorth(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
 		if (mount.canMove) {
-			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: true, MOTION_SOUTH: false } })
+			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: true } })
 			else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false } })
 		}
 	}
 
 	moveSouth(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
 		if (mount.canMove) {
-			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false, MOTION_SOUTH: true } })
+			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_SOUTH: true } })
 			else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_SOUTH: false } })
 		}
 	}
 
 	moveWest(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
 		if (mount.canMove) {
-			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: true, MOTION_EAST: false } })
+			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: true } })
 			else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false } })
 		}
 	}
 
 	moveEast(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
 		if (mount.canMove) {
-			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false, MOTION_EAST: true } })
+			if (enable) client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_EAST: true } })
 			else client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_EAST: false } })
 		}
 	}

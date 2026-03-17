@@ -2,7 +2,7 @@ import type { Angle } from './angle'
 import { deg, hour, normalizeAngle, normalizePI } from './angle'
 import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
-import { CLIENT, type Client, type ClientInfo, type Device, type DeviceType, type DriverInfo, expectedPierSide, type GuideDirection, type Mount, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
+import { CLIENT, type Client, type ClientInfo, type Device, type DeviceType, type DriverInfo, expectedPierSide, type GuideDirection, type GuideOutput, type Mount, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
 import type { DeviceManager } from './indi.manager'
 import type { EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector } from './indi.types'
 import { type GeographicCoordinate, localSiderealTime } from './location'
@@ -76,7 +76,6 @@ abstract class DeviceSimulator<D extends Device> implements Device, Disposable {
 	abstract readonly type: DeviceType
 	abstract readonly name: string
 	abstract readonly driver: DriverInfo
-	abstract readonly manager: DeviceManager<D>
 
 	readonly client: ClientInfo
 	readonly [CLIENT]: ClientSimulator
@@ -93,6 +92,7 @@ abstract class DeviceSimulator<D extends Device> implements Device, Disposable {
 	abstract sendText(vector: NewTextVector): void
 	abstract sendNumber(vector: NewNumberVector): void
 	abstract sendSwitch(vector: NewSwitchVector): void
+	protected abstract emit(property: keyof D & string): void
 	abstract dispose(): void
 
 	// Connects the simulated mount.
@@ -111,11 +111,6 @@ abstract class DeviceSimulator<D extends Device> implements Device, Disposable {
 
 	[Symbol.dispose]() {
 		this.dispose()
-	}
-
-	// Emits a MountManager update for the requested property.
-	protected emit(property: keyof D & string) {
-		this.manager.updated(this as never, property)
 	}
 }
 
@@ -170,20 +165,23 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 	#pulseWestEastUntil = 0
 	#homeCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
 	#parkCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
-	#manager: DeviceManager<Mount>
+	#mountManager: DeviceManager<Mount>
+	#guideOutputManager: DeviceManager<GuideOutput>
 
 	constructor(
 		client: ClientSimulator,
-		manager: DeviceManager<Mount>,
+		mountManager: DeviceManager<Mount>,
+		guideOutputManager: DeviceManager<GuideOutput>,
 		readonly name: string,
 		readonly id: string,
 	) {
 		super(client)
-		this.#manager = manager
+		this.#mountManager = mountManager
+		this.#guideOutputManager = guideOutputManager
 	}
 
 	get manager() {
-		return this.#manager
+		return this.#mountManager
 	}
 
 	sendText(vector: NewTextVector) {
@@ -228,11 +226,11 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 				return
 			case 'TELESCOPE_TIMED_GUIDE_NS':
 				if ((vector.elements.TIMED_GUIDE_N ?? 0) > 0) this.pulse('NORTH', vector.elements.TIMED_GUIDE_N)
-				if ((vector.elements.TIMED_GUIDE_S ?? 0) > 0) this.pulse('SOUTH', vector.elements.TIMED_GUIDE_S)
+				else if ((vector.elements.TIMED_GUIDE_S ?? 0) > 0) this.pulse('SOUTH', vector.elements.TIMED_GUIDE_S)
 				return
 			case 'TELESCOPE_TIMED_GUIDE_WE':
 				if ((vector.elements.TIMED_GUIDE_W ?? 0) > 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
-				if ((vector.elements.TIMED_GUIDE_E ?? 0) > 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
+				else if ((vector.elements.TIMED_GUIDE_E ?? 0) > 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
 				return
 		}
 	}
@@ -243,14 +241,14 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		switch (vector.name) {
 			case 'CONNECTION':
 				if (vector.elements.CONNECT === true) this.connect()
-				if (vector.elements.DISCONNECT === true) this.disconnect()
+				else if (vector.elements.DISCONNECT === true) this.disconnect()
 				return
 			case 'TELESCOPE_ABORT_MOTION':
 				if (vector.elements.ABORT === true) this.stop()
 				return
 			case 'TELESCOPE_HOME':
 				if (vector.elements.GO === true || vector.elements.FIND === true) this.home()
-				if (vector.elements.SET === true) this.setHome()
+				else if (vector.elements.SET === true) this.setHome()
 				return
 			case 'TELESCOPE_MOTION_NS':
 				if (vector.elements.MOTION_NORTH !== undefined) this.moveNorth(vector.elements.MOTION_NORTH)
@@ -262,7 +260,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 				return
 			case 'TELESCOPE_PARK':
 				if (vector.elements.PARK === true) this.park()
-				if (vector.elements.UNPARK === true) this.unpark()
+				else if (vector.elements.UNPARK === true) this.unpark()
 				return
 			case 'TELESCOPE_PARK_OPTION':
 				if (vector.elements.PARK_CURRENT === true) this.setPark()
@@ -289,7 +287,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 			}
 			case 'TELESCOPE_TRACK_STATE':
 				if (vector.elements.TRACK_ON === true) this.setTrackingEnabled(true)
-				if (vector.elements.TRACK_OFF === true) this.setTrackingEnabled(false)
+				else if (vector.elements.TRACK_OFF === true) this.setTrackingEnabled(false)
 				return
 			case 'ON_COORD_SET':
 				if (vector.elements.SYNC === true) this.#coordSetMode = 'SYNC'
@@ -611,18 +609,17 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 			moved = true
 		}
 
-		const trackingDrift = this.trackingDriftRate()
+		if (!moved) {
+			const trackingDrift = this.trackingDriftRate()
 
-		if (trackingDrift !== 0) {
-			rightAscension += trackingDrift * dtSeconds
-			moved = true
+			if (trackingDrift !== 0) {
+				rightAscension += trackingDrift * dtSeconds
+				moved = true
+			}
 		}
 
-		rightAscension = normalizeAngle(rightAscension)
-		declination = clampDeclination(declination)
-
 		if (moved) {
-			this.setCoordinate(rightAscension, declination, true)
+			this.setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination), true)
 		}
 	}
 
@@ -779,6 +776,12 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		this.#homeCoordinate.rightAscension = this.siderealTime()
 		this.#parkCoordinate.rightAscension = this.#homeCoordinate.rightAscension
 		this.setCoordinate(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
+	}
+
+	// Emits a Mount update for the requested property.
+	protected emit(property: keyof Mount & string) {
+		this.#mountManager.updated(this, property)
+		if (property === 'pulsing' || property === 'guideRate' || property === 'connected') this.#guideOutputManager.updated(this, property)
 	}
 }
 
