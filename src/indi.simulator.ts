@@ -2,8 +2,8 @@ import type { Angle } from './angle'
 import { deg, hour, normalizeAngle, normalizePI } from './angle'
 import { DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
-import { CLIENT, type Client, type Device, type DeviceType, type DriverInfo, expectedPierSide, type GuideDirection, type Mount, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
-import { DeviceManager } from './indi.manager'
+import { CLIENT, type Client, type ClientInfo, type Device, type DeviceType, type DriverInfo, expectedPierSide, type GuideDirection, type Mount, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
+import type { DeviceManager } from './indi.manager'
 import type { EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector } from './indi.types'
 import { type GeographicCoordinate, localSiderealTime } from './location'
 import { clamp } from './math'
@@ -30,57 +30,70 @@ type SlewMode = 'GOTO' | 'HOME' | 'PARK'
 type AxisDirection = -1 | 0 | 1
 
 // Routes MountManager commands back into the simulator.
-class FakeClient implements Client {
-    static readonly INSTANCE = new FakeClient()
-
-	readonly id = '0'
+export class ClientSimulator implements Client {
 	readonly type = 'SIMULATOR'
-	readonly description = 'Client Simulator'
 
-	readonly managers = new Set<Pick<DeviceSimulator<Device>, 'sendNumber' | 'sendSwitch' | 'sendText' | 'dispose'>>()
+	#managers = new Set<Pick<DeviceSimulator<Device>, 'sendNumber' | 'sendSwitch' | 'sendText' | 'dispose'>>()
+
+	constructor(
+		readonly id: string,
+		readonly description: string = 'Client Simulator',
+	) {}
 
 	getProperties(command?: GetProperties) {}
 
 	enableBlob(command: EnableBlob) {}
 
 	sendText(vector: NewTextVector) {
-		for (const manager of this.managers) manager.sendText(vector)
+		for (const manager of this.#managers) manager.sendText(vector)
 	}
 
 	sendNumber(vector: NewNumberVector) {
-		for (const manager of this.managers) manager.sendNumber(vector)
+		for (const manager of this.#managers) manager.sendNumber(vector)
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
-		for (const manager of this.managers) manager.sendSwitch(vector)
+		for (const manager of this.#managers) manager.sendSwitch(vector)
 	}
 
-    [Symbol.dispose]() {
-        for (const manager of this.managers) manager.dispose()
-    }
+	register(manager: Pick<DeviceSimulator<Device>, 'sendNumber' | 'sendSwitch' | 'sendText' | 'dispose'>) {
+		this.#managers.add(manager)
+	}
+
+	unregister(manager: Pick<DeviceSimulator<Device>, 'sendNumber' | 'sendSwitch' | 'sendText' | 'dispose'>) {
+		this.#managers.delete(manager)
+	}
+
+	[Symbol.dispose]() {
+		for (const manager of this.#managers) manager.dispose()
+	}
 }
 
 abstract class DeviceSimulator<D extends Device> implements Device, Disposable {
-    #connected = false
+	#connected = false
 
-    abstract readonly id: string
-    abstract readonly type: DeviceType
-    abstract readonly name: string
-    abstract readonly driver: DriverInfo
-    abstract readonly manager: DeviceManager<D>
+	abstract readonly id: string
+	abstract readonly type: DeviceType
+	abstract readonly name: string
+	abstract readonly driver: DriverInfo
+	abstract readonly manager: DeviceManager<D>
 
-	readonly client = { type: FakeClient.INSTANCE.type, id: FakeClient.INSTANCE.id } as const
-	readonly [CLIENT] = FakeClient.INSTANCE
+	readonly client: ClientInfo
+	readonly [CLIENT]: ClientSimulator
 
-    get connected() {
-        return this.#connected
-    }
+	constructor(client: ClientSimulator) {
+		this[CLIENT] = client
+		this.client = { id: client.id, type: client.type }
+	}
 
-    abstract sendText(vector: NewTextVector): void
-    abstract sendNumber(vector: NewNumberVector): void
-    abstract sendSwitch(vector: NewSwitchVector): void
-    abstract dispose(): void
+	get connected() {
+		return this.#connected
+	}
 
+	abstract sendText(vector: NewTextVector): void
+	abstract sendNumber(vector: NewNumberVector): void
+	abstract sendSwitch(vector: NewSwitchVector): void
+	abstract dispose(): void
 
 	// Connects the simulated mount.
 	connect() {
@@ -158,12 +171,13 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 	#parkCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
 
 	constructor(
+		client: ClientSimulator,
 		readonly manager: DeviceManager<Mount>,
 		readonly name: string,
 		readonly id: string,
 	) {
-        super()
-    }
+		super(client)
+	}
 
 	get slewing() {
 		return this.#slewing
@@ -339,7 +353,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 		this.#lastTick = Date.now()
 		this.refreshDynamicCoordinates(false)
-		FakeClient.INSTANCE.managers.add(this)
+		this[CLIENT].register(this)
 		this.manager.add(this)
 		this.#timer = setInterval(this.tick.bind(this), TICK_INTERVAL_MS)
 		return true
@@ -562,7 +576,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 		this.stop()
 		this.disconnect()
-		FakeClient.INSTANCE.managers.delete(this)
+		this[CLIENT].unregister(this)
 		this.manager.remove(this)
 	}
 

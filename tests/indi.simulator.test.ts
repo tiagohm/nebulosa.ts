@@ -1,12 +1,14 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { deg, hour, normalizePI } from '../src/angle'
 import { GuideOutputManager, MountManager } from '../src/indi.manager'
-import { MountSimulator } from '../src/indi.simulator'
+import { ClientSimulator, MountSimulator } from '../src/indi.simulator'
+
+const client = new ClientSimulator('0')
 
 describe.skip('mount simulator', () => {
 	test('integrates with MountManager for sync, goto, home and park', async () => {
 		const manager = new MountManager()
-		const mount = new MountSimulator(manager, 'Mount Simulator', 'sim-mount')
+		const mount = new MountSimulator(client, manager, 'Mount Simulator', 'sim-mount')
 
 		onTestFinished(() => mount.dispose())
 
@@ -47,7 +49,7 @@ describe.skip('mount simulator', () => {
 
 	test('applies tracking drift for disabled, sidereal, solar and lunar modes', async () => {
 		const manager = new MountManager()
-		const mount = new MountSimulator(manager, 'Mount Simulator', 'sim-tracking')
+		const mount = new MountSimulator(client, manager, 'Mount Simulator', 'sim-tracking')
 
 		onTestFinished(() => mount.dispose())
 
@@ -97,7 +99,7 @@ describe.skip('mount simulator', () => {
 	test('supports manual move and pulse guiding over time', async () => {
 		const manager = new MountManager()
 		const guide = new GuideOutputManager(manager)
-		const mount = new MountSimulator(manager, 'Mount Simulator', 'sim-guide')
+		const mount = new MountSimulator(client, manager, 'Mount Simulator', 'sim-guide')
 
 		onTestFinished(() => mount.dispose())
 
