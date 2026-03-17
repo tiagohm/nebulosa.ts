@@ -1,6 +1,7 @@
 import type { PathLike } from 'fs'
 import fs, { type FileHandle } from 'fs/promises'
-import { type Bitpix, bitpixInBytes, cfaPatternKeyword, type Fits, type FitsHdu, FitsImageReader, heightKeyword, isRiceCompressedImageHeader, readFits, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedWidthKeyword, widthKeyword, writeFits } from './fits'
+import { type Bitpix, type Fits, type FitsHdu, FitsImageReader, readFits, writeFits } from './fits'
+import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isRiceCompressedImageHeader, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedWidthKeyword, widthKeyword } from './fits.util'
 import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageRawType, type WriteImageToFormatOptions } from './image.types'
 import { bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from './io'
 import { Jpeg } from './jpeg'

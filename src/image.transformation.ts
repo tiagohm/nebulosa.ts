@@ -1,5 +1,5 @@
 import { PI } from './constants'
-import { exposureTimeKeyword } from './fits'
+import { exposureTimeKeyword } from './fits.util'
 import { truncatePixel } from './image'
 import { estimateBackgroundUsingMode } from './image.computation'
 // biome-ignore format: too long!

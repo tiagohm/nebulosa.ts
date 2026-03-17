@@ -1,6 +1,7 @@
 import { type Angle, deg } from './angle'
 import type { EquatorialCoordinate } from './coordinate'
-import { type FitsHeader, heightKeyword, numericKeyword, widthKeyword } from './fits'
+import type { FitsHeader } from './fits'
+import { heightKeyword, numericKeyword, widthKeyword } from './fits.util'
 import { cdMatrix } from './wcs'
 
 export type Parity = 'NORMAL' | 'FLIPPED'

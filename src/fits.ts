@@ -1,10 +1,9 @@
-import { type Angle, deg, parseAngle } from './angle'
-import { compressRice, decompressRice } from './compression'
 import { type FitsKeyword, KEYWORDS } from './fits.headers'
-import type { CfaPattern, Image, ImageRawType } from './image.types'
+// biome-ignore format: too long!
+import { bitpixInBytes, bitpixKeyword, compressionTypeKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedWidthKeyword, unescapeQuotedText, widthKeyword } from './fits.util'
+import type { Image, ImageRawType } from './image.types'
 import { readUntil, type Seekable, type Sink, type Source } from './io'
 import type { NumberArray } from './math'
-import { parseTemporal } from './temporal'
 
 export type FitsHeaderKey = string
 export type FitsHeaderValue = string | number | boolean | undefined
@@ -49,8 +48,6 @@ export const FITS_APPLICATION_MIME_TYPE = 'application/fits'
 
 export const MAGIC_BYTES = 'SIMPLE'
 
-const RICE_1_COMPRESSION_TYPE = 'RICE_1'
-
 export function isFits(input: ArrayBufferLike | Buffer) {
 	if (input.byteLength < 6) return false
 
@@ -61,174 +58,17 @@ export function isFits(input: ArrayBufferLike | Buffer) {
 	}
 }
 
-export function hasKeyword(header: FitsHeader, key: FitsHeaderKey) {
-	return key in header && header[key] !== undefined
+export function computeRemainingBytes(size: number) {
+	const remaining = size % FITS_BLOCK_SIZE
+	return remaining === 0 ? 0 : FITS_BLOCK_SIZE - remaining
 }
-
-export function numericKeyword<T extends number | undefined = number>(header: FitsHeader, key: FitsHeaderKey, defaultValue: NoInfer<T>) {
-	const value = header[key]
-	if (value === undefined) return defaultValue
-	else if (typeof value === 'number') return value
-	else if (typeof value === 'boolean') return value ? 1 : 0
-	else return parseFloat(value)
-}
-
-export function booleanKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue: boolean = false) {
-	const value = header[key]
-	if (value === undefined) return defaultValue
-	else if (typeof value === 'number') return value !== 0
-	else if (typeof value === 'string') return value === 'T' || value.toLowerCase() === 'true'
-	else return value
-}
-
-export function textKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue: string = '') {
-	const value = header[key]
-	if (value === undefined) return defaultValue
-	else if (typeof value === 'string') return value
-	else return `${value}`
-}
-
-export function numberOfAxesKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T>(header, 'NAXIS', defaultValue)
-}
-
-export function widthKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'NAXIS1', undefined) ?? numericKeyword<T>(header, 'IMAGEW', defaultValue)
-}
-
-export function heightKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'NAXIS2', undefined) ?? numericKeyword<T>(header, 'IMAGEH', defaultValue)
-}
-
-export function numberOfChannelsKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T>(header, 'NAXIS3', defaultValue)
-}
-
-export function bitpixKeyword<T extends BitpixOrZero | undefined = BitpixOrZero>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T>(header, 'BITPIX', defaultValue) as T
-}
-
-export function exposureTimeKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'EXPTIME', undefined) ?? numericKeyword<T>(header, 'EXPOSURE', defaultValue)
-}
-
-export function cfaPatternKeyword(header: FitsHeader) {
-	return textKeyword(header, 'BAYERPAT') as CfaPattern | undefined
-}
-
-export function rightAscensionKeyword<T extends Angle | undefined = Angle>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	if (hasKeyword(header, 'RA')) {
-		const value = deg(numericKeyword(header, 'RA', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
-	}
-
-	if (hasKeyword(header, 'OBJCTRA')) {
-		const value = parseAngle(textKeyword(header, 'OBJCTRA', ''), true)
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
-	}
-
-	if (hasKeyword(header, 'RA_OBJ')) {
-		const value = deg(numericKeyword(header, 'RA_OBJ', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
-	}
-
-	if (hasKeyword(header, 'CRVAL1')) {
-		const value = deg(numericKeyword(header, 'CRVAL1', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
-	}
-
-	return defaultValue
-}
-
-export function declinationKeyword<T extends Angle | undefined = Angle>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	if (hasKeyword(header, 'DEC')) {
-		const value = deg(numericKeyword(header, 'DEC', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
-	}
-
-	if (hasKeyword(header, 'OBJCTDEC')) {
-		const value = parseAngle(textKeyword(header, 'OBJCTDEC', ''))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
-	}
-
-	if (hasKeyword(header, 'DEC_OBJ')) {
-		const value = deg(numericKeyword(header, 'DEC_OBJ', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
-	}
-
-	if (hasKeyword(header, 'CRVAL2')) {
-		const value = deg(numericKeyword(header, 'CRVAL2', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
-	}
-
-	return defaultValue
-}
-
-export function observationDateKeyword(header: FitsHeader) {
-	const date = textKeyword(header, 'DATE-OBS') || textKeyword(header, 'DATE-END') || textKeyword(header, 'DATE')
-	if (!date) return undefined
-	return parseTemporal(date, 'YYYY-MM-DDTHH:mm:ss.SSS')
-}
-
-export function bitpixInBytes(bitpix: BitpixOrZero) {
-	return Math.abs(bitpix) >>> 3
-}
-
-// https://fits.gsfc.nasa.gov/registry/tilecompression/tilecompression2.2.pdf
 
 export type FitsCompressionType = 'GZIP_1' | 'RICE_1' | 'PLIO_1' | 'HCOMPRESS_1'
-
-export function compressionTypeKeyword(header: FitsHeader): FitsCompressionType | undefined {
-	return (textKeyword(header, 'ZCMPTYPE', '').trim().toUpperCase() as FitsCompressionType) || undefined
-}
-
-// The value of the NAXIS1 keywords in the uncompressed FITS image
-export function uncompressedWidthKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'ZNAXIS1', undefined) ?? widthKeyword<T>(header, defaultValue)
-}
-
-// The value of the NAXIS2 keywords in the uncompressed FITS image
-export function uncompressedHeightKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'ZNAXIS2', undefined) ?? heightKeyword<T>(header, defaultValue)
-}
-
-// The value of the NAXIS3 keywords in the uncompressed FITS image
-export function uncompressedNumberOfChannelsKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'ZNAXIS3', undefined) ?? numberOfChannelsKeyword<T>(header, defaultValue)
-}
-
-// The value of the BITPIX keyword in the uncompressed FITS image
-export function uncompressedBitpixKeyword<T extends BitpixOrZero | undefined = BitpixOrZero>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return (numericKeyword<T | undefined>(header, 'ZBITPIX', undefined) ?? bitpixKeyword(header, defaultValue)) as T
-}
-
-export function isCompressedImageHeader(header: FitsHeader) {
-	return booleanKeyword(header, 'ZIMAGE', false)
-}
-
-export function isRiceCompressedImageHeader(header: FitsHeader) {
-	return isCompressedImageHeader(header) && compressionTypeKeyword(header) === RICE_1_COMPRESSION_TYPE
-}
 
 export interface FitsCompressionOptions {
 	readonly type?: FitsCompressionType | false
 	readonly tileHeight?: number
 	readonly blockSize?: number
-}
-
-const NO_VALUE_KEYWORDS = ['COMMENT', 'HISTORY', 'END']
-
-function computeHduDataSize(header: FitsHeader) {
-	const extension = textKeyword(header, 'XTENSION', '').trim().toUpperCase()
-
-	if (extension === 'BINTABLE' || extension === 'TABLE') {
-		const rowSize = widthKeyword(header, 0)
-		const rows = heightKeyword(header, 0)
-		const pcount = numericKeyword(header, 'PCOUNT', 0)
-		return rowSize * rows + pcount
-	}
-
-	return widthKeyword(header, 0) * heightKeyword(header, 0) * numberOfChannelsKeyword(header, 1) * bitpixInBytes(bitpixKeyword(header, 0))
 }
 
 export async function readFits(source: Source & Seekable): Promise<Fits | undefined> {
@@ -255,7 +95,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 				if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
 					prev[1] = prev[1].substring(0, prev[1].length - 1) + value
 					header[prev[0]] = prev[1]
-				} else if (NO_VALUE_KEYWORDS.includes(key)) {
+				} else if (isCommentKeyword(key)) {
 					if (header[key] === undefined) header[key] = comment
 					else header[key] += `\n${comment}`
 					prev = undefined
@@ -346,7 +186,7 @@ function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, bitp
 	}
 }
 
-function buildRiceCompressedImage(header: FitsHeader, raw: ImageRawType, options: FitsCompressionOptions) {
+async function buildRiceCompressedImage(header: FitsHeader, raw: ImageRawType, options: FitsCompressionOptions) {
 	const bitpix = bitpixKeyword(header, 0)
 	const width = widthKeyword(header, 0)
 	const height = heightKeyword(header, 0)
@@ -369,6 +209,8 @@ function buildRiceCompressedImage(header: FitsHeader, raw: ImageRawType, options
 	const chunks: Uint8Array[] = []
 	let heapSize = 0
 	let row = 0
+
+	const { compressRice } = await import('./compression')
 
 	for (let c = 0; c < channels; c++) {
 		const channelOffset = c * numberOfPixels
@@ -466,7 +308,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 				hasPrimaryHdu = true
 			}
 
-			const { cards, payload } = buildRiceCompressedImage(header, raw, options)
+			const { cards, payload } = await buildRiceCompressedImage(header, raw, options)
 			await writeHeader(cards)
 			await sink.write(payload)
 
@@ -481,23 +323,6 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 		if (offset > 0) await sink.write(buffer, 0, offset)
 		hasPrimaryHdu = true
 	}
-}
-
-export function computeRemainingBytes(size: number) {
-	const remaining = size % FITS_BLOCK_SIZE
-	return remaining === 0 ? 0 : FITS_BLOCK_SIZE - remaining
-}
-
-export function escapeQuotedText(text: string) {
-	return text.replaceAll("'", "''")
-}
-
-export function unescapeQuotedText(text: string) {
-	return text.replaceAll("''", "'")
-}
-
-export function isCommentStyleCard(card: Readonly<FitsHeaderCard>) {
-	return NO_VALUE_KEYWORDS.includes(card[0])
 }
 
 const WHITESPACE = 32
@@ -533,7 +358,7 @@ export class FitsKeywordReader {
 				if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
 					prev[1] = prev[1].substring(0, prev[1].length - 1) + value
 					header[prev[0]] = prev[1]
-				} else if (NO_VALUE_KEYWORDS.includes(key)) {
+				} else if (isCommentKeyword(key)) {
 					if (header[key] === undefined) header[key] = comment
 					else header[key] += `\n${comment}`
 					prev = undefined
@@ -959,12 +784,6 @@ export class FitsKeywordWriter {
 	}
 }
 
-export function formatFitsHeaderValue(value: FitsHeaderValue) {
-	if (typeof value === 'boolean') return value ? 'T' : 'F'
-	if (typeof value === 'number') return `${value}`
-	return `'${escapeQuotedText(value ?? '')}'`
-}
-
 function riceBlockSizeFromHeader(header: FitsHeader) {
 	for (let i = 1; i <= 16; i++) {
 		const name = textKeyword(header, `ZNAME${i}`, '').trim().toUpperCase()
@@ -1073,6 +892,8 @@ export class FitsImageReader {
 		const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
 		const data = new ImageTypedArray(numberOfPixels * channels)
 		const tileBuffer = new ImageTypedArray(tileWidth * tileHeight * tileDepth)
+
+		const { decompressRice } = await import('./compression')
 
 		for (let tileIndex = 0; tileIndex < totalTiles; tileIndex++) {
 			const descriptorOffset = tileIndex * rowSize

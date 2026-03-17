@@ -1457,7 +1457,7 @@ function initl(options: InitlOptions) {
 		const time: Time = { day: epochday + 2433281, fraction: epochfrac + 0.5, scale: 1 }
 		gsto = greenwichMeanSiderealTime(time)
 
-        // NOTE: Original code! Uncomment so that the test cases better match the satellite-js library.
+		// NOTE: Original code! Uncomment so that the test cases better match the satellite-js library.
 		// const tut1 = (epochday + (2433281 - 2451545)) / 36525 + (epochfrac + 0.5) / 36525
 		// gsto = -6.2e-6 * tut1 * tut1 * tut1 + 0.093104 * tut1 * tut1 + (876600 * 3600 + 8640184.812866) * tut1 + 67310.54841
 		// gsto = ((gsto * DEG2RAD) / 240) % TAU // 360/86400 = 1/240, to deg, to rad
