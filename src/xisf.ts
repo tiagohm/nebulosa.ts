@@ -1,4 +1,5 @@
 import { type X2jOptions, XMLParser } from 'fast-xml-parser'
+import { deflate, inflate } from './compression'
 import type { Bitpix, FitsHeader, FitsHeaderValue } from './fits'
 import { bitpixInBytes, formatFitsHeaderValue, unescapeQuotedText } from './fits.util'
 import type { Size } from './geometry'
@@ -141,12 +142,9 @@ interface XisfEncodedBlock {
 	readonly compression?: XisfCompression
 }
 
-async function compress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, compression: XisfWriteCompression) {
+function compress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, compression: XisfWriteCompression) {
 	if (compression.format === 'zstd') return Bun.zstdCompress(input, compression)
-	else if (compression.format === 'zlib') {
-		const { deflate } = await import('./compression')
-		return deflate(input, compression)
-	}
+	else if (compression.format === 'zlib') return deflate(input, compression)
 }
 
 function escapeXml(text: string) {
@@ -302,12 +300,9 @@ export function bitpixFromSampleFormat(sampleFormat: XisfSampleFormat): Bitpix {
 	return sampleFormat === 'UInt8' ? 8 : sampleFormat === 'UInt16' ? 16 : sampleFormat === 'UInt32' ? 32 : sampleFormat === 'UInt64' ? 64 : sampleFormat === 'Float32' ? -32 : -64
 }
 
-async function decompress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, format: XisfCompressionFormat) {
+function decompress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, format: XisfCompressionFormat) {
 	if (format === 'zstd') return Bun.zstdDecompress(input)
-	else if (format === 'zlib') {
-		const { inflate } = await import('./compression')
-		return inflate(input)
-	}
+	else if (format === 'zlib') return inflate(input)
 }
 
 export class XisfImageReader {
