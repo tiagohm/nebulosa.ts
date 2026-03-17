@@ -141,20 +141,21 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 	readonly hasGPS = true
 	readonly canPark = true
 	readonly canSetPark = true
+	readonly hasPierSide = true
 
-	#slewing = false
-	#tracking = false
-	#homing = false
-	#trackMode: TrackMode = 'SIDEREAL'
-	#pierSide: PierSide = 'NEITHER'
-	#slewRate = '3x'
-	#equatorialCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
-	#pulsing = false
-	#guideRate: EquatorialCoordinate<number> = { rightAscension: 0.5, declination: 0.5 }
-	#geographicCoordinate: GeographicCoordinate = { latitude: 0, longitude: 0, elevation: 0 }
-	#time: UTCTime = { utc: Date.now(), offset: 0 }
-	#parking = false
-	#parked = false
+	slewing = false
+	tracking = false
+	homing = false
+	trackMode: TrackMode = 'SIDEREAL'
+	pierSide: PierSide = 'NEITHER'
+	slewRate = '3x'
+	equatorialCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
+	pulsing = false
+	guideRate: EquatorialCoordinate<number> = { rightAscension: 0.5, declination: 0.5 }
+	geographicCoordinate: GeographicCoordinate = { latitude: 0, longitude: 0, elevation: 0 }
+	time: UTCTime = { utc: Date.now(), offset: 0 }
+	parking = false
+	parked = false
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -169,70 +170,20 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 	#pulseWestEastUntil = 0
 	#homeCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
 	#parkCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
+	#manager: DeviceManager<Mount>
 
 	constructor(
 		client: ClientSimulator,
-		readonly manager: DeviceManager<Mount>,
+		manager: DeviceManager<Mount>,
 		readonly name: string,
 		readonly id: string,
 	) {
 		super(client)
+		this.#manager = manager
 	}
 
-	get slewing() {
-		return this.#slewing
-	}
-
-	get tracking() {
-		return this.#tracking
-	}
-
-	get homing() {
-		return this.#homing
-	}
-
-	get trackMode() {
-		return this.#trackMode
-	}
-
-	get hasPierSide() {
-		return true
-	}
-
-	get pierSide() {
-		return this.#pierSide
-	}
-
-	get slewRate() {
-		return this.#slewRate
-	}
-
-	get equatorialCoordinate() {
-		return this.#equatorialCoordinate
-	}
-
-	get pulsing() {
-		return this.#pulsing
-	}
-
-	get guideRate() {
-		return this.#guideRate
-	}
-
-	get geographicCoordinate() {
-		return this.#geographicCoordinate
-	}
-
-	get time() {
-		return this.#time
-	}
-
-	get parking() {
-		return this.#parking
-	}
-
-	get parked() {
-		return this.#parked
+	get manager() {
+		return this.#manager
 	}
 
 	sendText(vector: NewTextVector) {
@@ -368,7 +319,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Starts a time-based slew to the requested equatorial coordinate.
 	goTo(rightAscension: Angle, declination: Angle) {
-		if (!this.connected || this.#parked) return
+		if (!this.connected || this.parked) return
 
 		this.clearManualMotion()
 		this.clearPulseGuide()
@@ -387,7 +338,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Slews to the configured home position.
 	home() {
-		if (!this.connected || this.#parked) return
+		if (!this.connected || this.parked) return
 		this.#slewMode = 'HOME'
 		this.#slewTarget = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
 		this.setSlewing(true)
@@ -397,13 +348,13 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Stores the current coordinate as the new home position.
 	setHome() {
-		this.#homeCoordinate.rightAscension = this.#equatorialCoordinate.rightAscension
-		this.#homeCoordinate.declination = this.#equatorialCoordinate.declination
+		this.#homeCoordinate.rightAscension = this.equatorialCoordinate.rightAscension
+		this.#homeCoordinate.declination = this.equatorialCoordinate.declination
 	}
 
 	// Parks the mount at the configured park position.
 	park() {
-		if (!this.connected || this.#parked) return
+		if (!this.connected || this.parked) return
 		this.clearManualMotion()
 		this.clearPulseGuide()
 		this.#slewMode = 'PARK'
@@ -415,8 +366,8 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Unparks the mount without changing the current coordinate.
 	unpark() {
-		if (this.#parked) {
-			this.#parked = false
+		if (this.parked) {
+			this.parked = false
 			this.emit('parked')
 		}
 
@@ -425,30 +376,30 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Stores the current coordinate as the park position.
 	setPark() {
-		this.#parkCoordinate.rightAscension = this.#equatorialCoordinate.rightAscension
-		this.#parkCoordinate.declination = this.#equatorialCoordinate.declination
+		this.#parkCoordinate.rightAscension = this.equatorialCoordinate.rightAscension
+		this.#parkCoordinate.declination = this.equatorialCoordinate.declination
 	}
 
 	// Enables or disables sidereal-style tracking.
 	setTrackingEnabled(enable: boolean) {
-		if (this.#parked) enable = false
-		if (this.#tracking === enable) return
-		this.#tracking = enable
+		if (this.parked) enable = false
+		if (this.tracking === enable) return
+		this.tracking = enable
 		this.emit('tracking')
 	}
 
 	// Changes the simulated tracking mode.
 	setTrackMode(mode: TrackMode) {
-		if (!this.trackModes.includes(mode as never) || this.#trackMode === mode) return
-		this.#trackMode = mode
+		if (!this.trackModes.includes(mode as never) || this.trackMode === mode) return
+		this.trackMode = mode
 		this.emit('trackMode')
 	}
 
 	// Changes the manual slew rate selection.
 	setSlewRate(rate: NameAndLabel | string) {
 		const name = typeof rate === 'string' ? rate : rate.name
-		if (!SLEW_RATES.some((entry) => entry.name === name) || this.#slewRate === name) return
-		this.#slewRate = name
+		if (!SLEW_RATES.some((entry) => entry.name === name) || this.slewRate === name) return
+		this.slewRate = name
 		this.emit('slewRate')
 	}
 
@@ -458,13 +409,13 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		declination = clamp(declination, 0, MAX_GUIDE_RATE)
 		let updated = false
 
-		if (this.#guideRate.rightAscension !== rightAscension) {
-			this.#guideRate.rightAscension = rightAscension
+		if (this.guideRate.rightAscension !== rightAscension) {
+			this.guideRate.rightAscension = rightAscension
 			updated = true
 		}
 
-		if (this.#guideRate.declination !== declination) {
-			this.#guideRate.declination = declination
+		if (this.guideRate.declination !== declination) {
+			this.guideRate.declination = declination
 			updated = true
 		}
 
@@ -475,18 +426,18 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 	setGeographicCoordinate(coordinate: GeographicCoordinate) {
 		let updated = false
 
-		if (this.#geographicCoordinate.latitude !== coordinate.latitude) {
-			this.#geographicCoordinate.latitude = coordinate.latitude
+		if (this.geographicCoordinate.latitude !== coordinate.latitude) {
+			this.geographicCoordinate.latitude = coordinate.latitude
 			updated = true
 		}
 
-		if (this.#geographicCoordinate.longitude !== coordinate.longitude) {
-			this.#geographicCoordinate.longitude = normalizePI(coordinate.longitude)
+		if (this.geographicCoordinate.longitude !== coordinate.longitude) {
+			this.geographicCoordinate.longitude = normalizePI(coordinate.longitude)
 			updated = true
 		}
 
-		if (this.#geographicCoordinate.elevation !== coordinate.elevation) {
-			this.#geographicCoordinate.elevation = coordinate.elevation
+		if (this.geographicCoordinate.elevation !== coordinate.elevation) {
+			this.geographicCoordinate.elevation = coordinate.elevation
 			updated = true
 		}
 
@@ -498,9 +449,9 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Updates the simulated UTC clock.
 	setTime(value: UTCTime) {
-		if (this.#time.utc === value.utc && this.#time.offset === value.offset) return
-		this.#time.utc = value.utc
-		this.#time.offset = value.offset
+		if (this.time.utc === value.utc && this.time.offset === value.offset) return
+		this.time.utc = value.utc
+		this.time.offset = value.offset
 		this.#lastTick = Date.now()
 		this.updatePierSide(true)
 		this.emit('time')
@@ -528,7 +479,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Starts a pulse guiding correction for the requested direction.
 	pulse(direction: GuideDirection, duration: number) {
-		if (!this.connected || this.#parked || duration <= 0) return
+		if (!this.connected || this.parked || duration <= 0) return
 		const until = Date.now() + duration
 
 		if (direction === 'NORTH') {
@@ -550,17 +501,17 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Aborts any active slew or manual motion.
 	stop() {
-		const wasSlewing = this.#slewing
-		const wasHoming = this.#homing
-		const wasParking = this.#parking
+		const wasSlewing = this.slewing
+		const wasHoming = this.homing
+		const wasParking = this.parking
 
 		this.#slewMode = undefined
 		this.#slewTarget = undefined
 		this.clearManualMotion()
 		this.clearPulseGuide()
-		this.#slewing = false
-		this.#homing = false
-		this.#parking = false
+		this.slewing = false
+		this.homing = false
+		this.parking = false
 
 		if (wasSlewing) this.emit('slewing')
 		if (wasHoming) this.emit('homing')
@@ -588,7 +539,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 		if (dtSeconds <= 0) return
 
-		this.#time.utc += Math.trunc(dtSeconds * 1000)
+		this.time.utc += Math.trunc(dtSeconds * 1000)
 
 		if (!this.connected) return
 
@@ -609,8 +560,8 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 		const speed = this.manualSlewSpeed() * 3
 		const maxStep = speed * dtSeconds
-		const deltaRightAscension = normalizePI(target.rightAscension - this.#equatorialCoordinate.rightAscension)
-		const deltaDeclination = target.declination - this.#equatorialCoordinate.declination
+		const deltaRightAscension = normalizePI(target.rightAscension - this.equatorialCoordinate.rightAscension)
+		const deltaDeclination = target.declination - this.equatorialCoordinate.declination
 		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination))
 
 		if (span <= maxStep || span === 0) {
@@ -632,13 +583,13 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		}
 
 		const scale = maxStep / span
-		this.setCoordinate(this.#equatorialCoordinate.rightAscension + deltaRightAscension * scale, this.#equatorialCoordinate.declination + deltaDeclination * scale, true)
+		this.setCoordinate(this.equatorialCoordinate.rightAscension + deltaRightAscension * scale, this.equatorialCoordinate.declination + deltaDeclination * scale, true)
 	}
 
 	// Advances tracking, manual motion and pulse guiding when not slewing.
 	private advanceFreeMotion(dtSeconds: number) {
-		let rightAscension = this.#equatorialCoordinate.rightAscension
-		let declination = this.#equatorialCoordinate.declination
+		let rightAscension = this.equatorialCoordinate.rightAscension
+		let declination = this.equatorialCoordinate.declination
 		const trackingDrift = this.trackingDriftRate()
 		let moved = trackingDrift !== 0
 
@@ -655,12 +606,12 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		}
 
 		if (this.#pulseWestEast !== 0) {
-			rightAscension += this.#pulseWestEast * this.#guideRate.rightAscension * SIDEREAL_DRIFT_RATE * dtSeconds
+			rightAscension += this.#pulseWestEast * this.guideRate.rightAscension * SIDEREAL_DRIFT_RATE * dtSeconds
 			moved = true
 		}
 
 		if (this.#pulseNorthSouth !== 0) {
-			declination += this.#pulseNorthSouth * this.#guideRate.declination * SIDEREAL_DRIFT_RATE * dtSeconds
+			declination += this.#pulseNorthSouth * this.guideRate.declination * SIDEREAL_DRIFT_RATE * dtSeconds
 			moved = true
 		}
 
@@ -677,7 +628,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		rightAscension = normalizeAngle(rightAscension)
 		declination = clampDeclination(declination)
 
-		const coordinate = this.#equatorialCoordinate
+		const coordinate = this.equatorialCoordinate
 		const changed = coordinate.rightAscension !== rightAscension || coordinate.declination !== declination
 
 		coordinate.rightAscension = rightAscension
@@ -691,28 +642,28 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Keeps the simulated pier side consistent with the current sky position.
 	private updatePierSide(notify: boolean) {
-		const pierSide = expectedPierSide(this.#equatorialCoordinate.rightAscension, this.#equatorialCoordinate.declination, this.siderealTime())
-		if (pierSide === this.#pierSide) return false
-		this.#pierSide = pierSide
+		const pierSide = expectedPierSide(this.equatorialCoordinate.rightAscension, this.equatorialCoordinate.declination, this.siderealTime())
+		if (pierSide === this.pierSide) return false
+		this.pierSide = pierSide
 		return notify
 	}
 
 	// Computes the current local sidereal time from the simulated clock.
 	private siderealTime() {
-		return localSiderealTime(timeUnix(this.#time.utc / 1000, undefined, true), this.#geographicCoordinate)
+		return localSiderealTime(timeUnix(this.time.utc / 1000, undefined, true), this.geographicCoordinate)
 	}
 
 	// Returns the active free-slew speed in radians per second.
 	private manualSlewSpeed() {
-		return SLEW_RATES.find((entry) => entry.name === this.#slewRate)?.speed ?? SLEW_RATES[2].speed
+		return SLEW_RATES.find((entry) => entry.name === this.slewRate)?.speed ?? SLEW_RATES[2].speed
 	}
 
 	// Returns the RA drift implied by the current tracking state.
 	private trackingDriftRate() {
-		if (!this.#tracking) return SIDEREAL_DRIFT_RATE
-		if (this.#trackMode === 'SOLAR') return SOLAR_DRIFT_RATE
-		if (this.#trackMode === 'LUNAR') return LUNAR_DRIFT_RATE
-		if (this.#trackMode === 'KING') return KING_DRIFT_RATE
+		if (!this.tracking) return SIDEREAL_DRIFT_RATE
+		if (this.trackMode === 'SOLAR') return SOLAR_DRIFT_RATE
+		if (this.trackMode === 'LUNAR') return LUNAR_DRIFT_RATE
+		if (this.trackMode === 'KING') return KING_DRIFT_RATE
 		return 0
 	}
 
@@ -739,15 +690,15 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 	private updatePulsing(notify: boolean) {
 		const pulsing = this.#pulseNorthSouth !== 0 || this.#pulseWestEast !== 0
 
-		if (this.#pulsing !== pulsing) {
-			this.#pulsing = pulsing
+		if (this.pulsing !== pulsing) {
+			this.pulsing = pulsing
 			if (notify) this.emit('pulsing')
 		}
 	}
 
 	// Sets the active north/south manual motion state.
 	private setManualNorthSouth(direction: AxisDirection) {
-		if (!this.connected || this.#parked) direction = 0
+		if (!this.connected || this.parked) direction = 0
 		if (this.#manualNorthSouth === direction) return
 		if (direction !== 0) this.abortSlew()
 		this.#manualNorthSouth = direction
@@ -756,7 +707,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Sets the active west/east manual motion state.
 	private setManualWestEast(direction: AxisDirection) {
-		if (!this.connected || this.#parked) direction = 0
+		if (!this.connected || this.parked) direction = 0
 		if (this.#manualWestEast === direction) return
 		if (direction !== 0) this.abortSlew()
 		this.#manualWestEast = direction
@@ -771,12 +722,12 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Clears active pulse-guiding commands.
 	private clearPulseGuide() {
-		const pulsing = this.#pulsing
+		const pulsing = this.pulsing
 		this.#pulseNorthSouth = 0
 		this.#pulseWestEast = 0
 		this.#pulseNorthSouthUntil = 0
 		this.#pulseWestEastUntil = 0
-		this.#pulsing = false
+		this.pulsing = false
 		if (pulsing) this.emit('pulsing')
 	}
 
@@ -795,27 +746,27 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Updates the slewing flag and notifies listeners.
 	private setSlewing(value: boolean) {
-		if (this.#slewing === value) return
-		this.#slewing = value
+		if (this.slewing === value) return
+		this.slewing = value
 		this.emit('slewing')
 	}
 
 	// Updates the homing flag and notifies listeners.
 	private setHoming(value: boolean) {
-		if (this.#homing === value) return
-		this.#homing = value
+		if (this.homing === value) return
+		this.homing = value
 		this.emit('homing')
 	}
 
 	// Updates the parking state and notifies listeners.
 	private setParking(parking: boolean, parked?: boolean) {
-		if (this.#parking !== parking) {
-			this.#parking = parking
+		if (this.parking !== parking) {
+			this.parking = parking
 			this.emit('parking')
 		}
 
-		if (parked !== undefined && this.#parked !== parked) {
-			this.#parked = parked
+		if (parked !== undefined && this.parked !== parked) {
+			this.parked = parked
 			this.emit('parked')
 		}
 	}
