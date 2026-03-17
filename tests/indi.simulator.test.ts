@@ -5,7 +5,7 @@ import { ClientSimulator, MountSimulator } from '../src/indi.simulator'
 
 const client = new ClientSimulator('0')
 
-describe.skip('mount simulator', () => {
+describe('mount simulator', () => {
 	test('integrates with MountManager for sync, goto, home and park', async () => {
 		const manager = new MountManager()
 		const mount = new MountSimulator(client, manager, 'Mount Simulator', 'sim-mount')
@@ -47,7 +47,7 @@ describe.skip('mount simulator', () => {
 		await waitUntil(() => !mount.parked)
 	})
 
-	test('applies tracking drift for disabled, sidereal, solar and lunar modes', async () => {
+	test('applies tracking drift for disabled, sidereal, king, solar and lunar modes', async () => {
 		const manager = new MountManager()
 		const mount = new MountSimulator(client, manager, 'Mount Simulator', 'sim-tracking')
 
@@ -75,18 +75,20 @@ describe.skip('mount simulator', () => {
 		const siderealDrift = Math.abs(normalizePI(mount.equatorialCoordinate.rightAscension - siderealRightAscension))
 		expect(siderealDrift).toBeLessThan(1e-6)
 
-		manager.trackMode(mount, 'KING')
-		const kingRightAscension = mount.equatorialCoordinate.rightAscension
-		await Bun.sleep(700)
-		const kingDrift = Math.abs(normalizePI(mount.equatorialCoordinate.rightAscension - kingRightAscension))
-		expect(kingDrift).toBeGreaterThan(siderealDrift)
-
 		manager.trackMode(mount, 'SOLAR')
 		await waitUntil(() => mount.trackMode === 'SOLAR')
 		const solarRightAscension = mount.equatorialCoordinate.rightAscension
 		await Bun.sleep(2500)
 		const solarDrift = normalizePI(mount.equatorialCoordinate.rightAscension - solarRightAscension)
 		expect(solarDrift).toBeGreaterThan(0)
+
+		manager.trackMode(mount, 'KING')
+		await waitUntil(() => mount.trackMode === 'KING')
+		const kingRightAscension = mount.equatorialCoordinate.rightAscension
+		await Bun.sleep(2500)
+		const kingDrift = normalizePI(mount.equatorialCoordinate.rightAscension - kingRightAscension)
+		expect(kingDrift).toBeGreaterThan(0)
+		expect(kingDrift).toBeLessThan(solarDrift)
 
 		manager.trackMode(mount, 'LUNAR')
 		await waitUntil(() => mount.trackMode === 'LUNAR')

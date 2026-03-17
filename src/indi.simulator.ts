@@ -1,6 +1,6 @@
 import type { Angle } from './angle'
 import { deg, hour, normalizeAngle, normalizePI } from './angle'
-import { DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, TAU } from './constants'
+import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { CLIENT, type Client, type ClientInfo, type Device, type DeviceType, type DriverInfo, expectedPierSide, type GuideDirection, type Mount, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
 import type { DeviceManager } from './indi.manager'
@@ -11,9 +11,9 @@ import { timeUnix } from './time'
 
 const TICK_INTERVAL_MS = 100
 const SIDEREAL_DRIFT_RATE = TAU / SIDEREAL_DAYSEC
-const KING_DRIFT_RATE = TAU / 86188
 const SOLAR_DRIFT_RATE = TAU / (365.2422 * DAYSEC)
 const LUNAR_DRIFT_RATE = TAU / (MOON_SIDEREAL_DAYS * DAYSEC)
+const KING_DRIFT_RATE = (SIDEREAL_RATE - 15.0369) * ASEC2RAD
 const MAX_GUIDE_RATE = 1
 
 const SLEW_RATES = [
@@ -588,12 +588,8 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Advances tracking, manual motion and pulse guiding when not slewing.
 	private advanceFreeMotion(dtSeconds: number) {
-		let rightAscension = this.equatorialCoordinate.rightAscension
-		let declination = this.equatorialCoordinate.declination
-		const trackingDrift = this.trackingDriftRate()
-		let moved = trackingDrift !== 0
-
-		rightAscension += trackingDrift * dtSeconds
+		let { rightAscension, declination } = this.equatorialCoordinate
+		let moved = false
 
 		if (this.#manualWestEast !== 0) {
 			rightAscension += this.#manualWestEast * this.manualSlewSpeed() * dtSeconds
@@ -612,6 +608,13 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 		if (this.#pulseNorthSouth !== 0) {
 			declination += this.#pulseNorthSouth * this.guideRate.declination * SIDEREAL_DRIFT_RATE * dtSeconds
+			moved = true
+		}
+
+		const trackingDrift = this.trackingDriftRate()
+
+		if (trackingDrift !== 0) {
+			rightAscension += trackingDrift * dtSeconds
 			moved = true
 		}
 
