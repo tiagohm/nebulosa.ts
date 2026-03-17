@@ -32,7 +32,7 @@ export type GuideDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
 
 export type MinMaxValueProperty = Pick<DefNumber, 'min' | 'max' | 'value' | 'step'>
 
-export type ClientType = 'INDI' | 'ALPACA'
+export type ClientType = 'INDI' | 'ALPACA' | 'SIMULATOR'
 
 export enum DeviceInterfaceType {
 	TELESCOPE = 0x0001, // Telescope interface, must subclass INDI::Telescope.
@@ -62,7 +62,7 @@ export interface ClientInfo {
 	readonly id: string
 }
 
-export interface Client extends ClientInfo {
+export interface Client extends ClientInfo, Disposable {
 	readonly description: string
 	readonly getProperties: (command?: GetProperties) => void
 	readonly enableBlob: (command: EnableBlob) => void

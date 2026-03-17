@@ -37,7 +37,7 @@ export interface IndiClientOptions {
 
 export const DEFAULT_INDI_PORT = 7624
 
-export class IndiClient implements Client, Disposable {
+export class IndiClient implements Client {
 	readonly type = 'INDI'
 
 	description: string = 'INDI Client'

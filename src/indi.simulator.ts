@@ -2,8 +2,8 @@ import type { Angle } from './angle'
 import { deg, hour, normalizeAngle, normalizePI } from './angle'
 import { DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
-import { CLIENT, type Client, expectedPierSide, type GuideDirection, type Mount, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
-import type { DeviceManager } from './indi.manager'
+import { CLIENT, type Client, type Device, type DeviceType, type DriverInfo, expectedPierSide, type GuideDirection, type Mount, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
+import { DeviceManager } from './indi.manager'
 import type { EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector } from './indi.types'
 import { type GeographicCoordinate, localSiderealTime } from './location'
 import { clamp } from './math'
@@ -29,17 +29,15 @@ type SlewMode = 'GOTO' | 'HOME' | 'PARK'
 
 type AxisDirection = -1 | 0 | 1
 
-type NewVectorHandler = Pick<Client, 'sendNumber' | 'sendSwitch' | 'sendText'>
-
 // Routes MountManager commands back into the simulator.
 class FakeClient implements Client {
-	static readonly INSTANCE = new FakeClient()
+    static readonly INSTANCE = new FakeClient()
 
 	readonly id = '0'
-	readonly type = 'INDI'
+	readonly type = 'SIMULATOR'
 	readonly description = 'Client Simulator'
 
-	readonly managers = new Set<NewVectorHandler>()
+	readonly managers = new Set<Pick<DeviceSimulator<Device>, 'sendNumber' | 'sendSwitch' | 'sendText' | 'dispose'>>()
 
 	getProperties(command?: GetProperties) {}
 
@@ -56,9 +54,59 @@ class FakeClient implements Client {
 	sendSwitch(vector: NewSwitchVector) {
 		for (const manager of this.managers) manager.sendSwitch(vector)
 	}
+
+    [Symbol.dispose]() {
+        for (const manager of this.managers) manager.dispose()
+    }
 }
 
-export class MountSimulator implements Mount, NewVectorHandler, Disposable {
+abstract class DeviceSimulator<D extends Device> implements Device, Disposable {
+    #connected = false
+
+    abstract readonly id: string
+    abstract readonly type: DeviceType
+    abstract readonly name: string
+    abstract readonly driver: DriverInfo
+    abstract readonly manager: DeviceManager<D>
+
+	readonly client = { type: FakeClient.INSTANCE.type, id: FakeClient.INSTANCE.id } as const
+	readonly [CLIENT] = FakeClient.INSTANCE
+
+    get connected() {
+        return this.#connected
+    }
+
+    abstract sendText(vector: NewTextVector): void
+    abstract sendNumber(vector: NewNumberVector): void
+    abstract sendSwitch(vector: NewSwitchVector): void
+    abstract dispose(): void
+
+
+	// Connects the simulated mount.
+	connect() {
+		if (this.#connected) return
+		this.#connected = true
+		this.emit('connected')
+	}
+
+	// Disconnects the simulated mount and cancels active motion.
+	disconnect() {
+		if (!this.#connected) return
+		this.#connected = false
+		this.emit('connected')
+	}
+
+	[Symbol.dispose]() {
+		this.dispose()
+	}
+
+	// Emits a MountManager update for the requested property.
+	protected emit(property: keyof D & string) {
+		this.manager.updated(this as never, property)
+	}
+}
+
+export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 	readonly type = 'MOUNT'
 	readonly canAbort = true
 	readonly canSync = true
@@ -76,7 +124,7 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 	readonly canPulseGuide = true
 	readonly hasGuideRate = true
 	readonly canSetGuideRate = true
-	readonly driver = { executable: 'mount-simulator', version: '0.1.0' } as const
+	readonly driver = { executable: 'mount_simulator', version: '0.1.0' } as const
 	readonly hasGPS = true
 	readonly canPark = true
 	readonly canSetPark = true
@@ -90,14 +138,10 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 	#equatorialCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
 	#pulsing = false
 	#guideRate: EquatorialCoordinate<number> = { rightAscension: 0.5, declination: 0.5 }
-	#connected = false
 	#geographicCoordinate: GeographicCoordinate = { latitude: 0, longitude: 0, elevation: 0 }
 	#time: UTCTime = { utc: Date.now(), offset: 0 }
 	#parking = false
 	#parked = false
-
-	readonly client = { type: FakeClient.INSTANCE.type, id: FakeClient.INSTANCE.id } as const
-	readonly [CLIENT] = FakeClient.INSTANCE
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -117,7 +161,9 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 		readonly manager: DeviceManager<Mount>,
 		readonly name: string,
 		readonly id: string,
-	) {}
+	) {
+        super()
+    }
 
 	get slewing() {
 		return this.#slewing
@@ -157,10 +203,6 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 
 	get guideRate() {
 		return this.#guideRate
-	}
-
-	get connected() {
-		return this.#connected
 	}
 
 	get geographicCoordinate() {
@@ -303,25 +345,16 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 		return true
 	}
 
-	// Connects the simulated mount.
-	connect() {
-		if (this.#connected) return
-		this.#connected = true
-		this.emit('connected')
-	}
-
 	// Disconnects the simulated mount and cancels active motion.
 	disconnect() {
-		if (!this.#connected) return
+		super.disconnect()
 		this.stop()
-		this.#connected = false
 		this.setTrackingEnabled(false)
-		this.emit('connected')
 	}
 
 	// Starts a time-based slew to the requested equatorial coordinate.
 	goTo(rightAscension: Angle, declination: Angle) {
-		if (!this.#connected || this.#parked) return
+		if (!this.connected || this.#parked) return
 
 		this.clearManualMotion()
 		this.clearPulseGuide()
@@ -334,13 +367,13 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 
 	// Applies a sync immediately without any slew time.
 	syncTo(rightAscension: Angle, declination: Angle) {
-		if (!this.#connected) return
+		if (!this.connected) return
 		this.setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination), true)
 	}
 
 	// Slews to the configured home position.
 	home() {
-		if (!this.#connected || this.#parked) return
+		if (!this.connected || this.#parked) return
 		this.#slewMode = 'HOME'
 		this.#slewTarget = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
 		this.setSlewing(true)
@@ -356,7 +389,7 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 
 	// Parks the mount at the configured park position.
 	park() {
-		if (!this.#connected || this.#parked) return
+		if (!this.connected || this.#parked) return
 		this.clearManualMotion()
 		this.clearPulseGuide()
 		this.#slewMode = 'PARK'
@@ -481,7 +514,7 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 
 	// Starts a pulse guiding correction for the requested direction.
 	pulse(direction: GuideDirection, duration: number) {
-		if (!this.#connected || this.#parked || duration <= 0) return
+		if (!this.connected || this.#parked || duration <= 0) return
 		const until = Date.now() + duration
 
 		if (direction === 'NORTH') {
@@ -533,10 +566,6 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 		this.manager.remove(this)
 	}
 
-	[Symbol.dispose]() {
-		this.dispose()
-	}
-
 	// Advances the simulated state using wall-clock time.
 	private tick() {
 		const now = Date.now()
@@ -547,7 +576,7 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 
 		this.#time.utc += Math.trunc(dtSeconds * 1000)
 
-		if (!this.#connected) return
+		if (!this.connected) return
 
 		this.expirePulseGuide(now)
 
@@ -704,7 +733,7 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 
 	// Sets the active north/south manual motion state.
 	private setManualNorthSouth(direction: AxisDirection) {
-		if (!this.#connected || this.#parked) direction = 0
+		if (!this.connected || this.#parked) direction = 0
 		if (this.#manualNorthSouth === direction) return
 		if (direction !== 0) this.abortSlew()
 		this.#manualNorthSouth = direction
@@ -713,7 +742,7 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 
 	// Sets the active west/east manual motion state.
 	private setManualWestEast(direction: AxisDirection) {
-		if (!this.#connected || this.#parked) direction = 0
+		if (!this.connected || this.#parked) direction = 0
 		if (this.#manualWestEast === direction) return
 		if (direction !== 0) this.abortSlew()
 		this.#manualWestEast = direction
@@ -782,11 +811,6 @@ export class MountSimulator implements Mount, NewVectorHandler, Disposable {
 		this.#homeCoordinate.rightAscension = this.siderealTime()
 		this.#parkCoordinate.rightAscension = this.#homeCoordinate.rightAscension
 		this.setCoordinate(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
-	}
-
-	// Emits a MountManager update for the requested property.
-	private emit(property: keyof Mount & string) {
-		this.manager.updated(this, property)
 	}
 }
 

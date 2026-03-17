@@ -22,7 +22,7 @@ export interface AlpacaClientOptions {
 	poolingInterval?: number
 }
 
-export class AlpacaClient implements Client, Disposable {
+export class AlpacaClient implements Client {
 	readonly type = 'ALPACA'
 	readonly id: string
 	readonly description: string
