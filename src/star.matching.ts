@@ -1,7 +1,7 @@
 import { type Angle, normalizePI } from './angle'
 import { euclideanSquaredDistance, type Point } from './geometry'
 import { clamp } from './math'
-import type { DetectedStar } from './stardetector'
+import type { DetectedStar } from './star.detector'
 import { medianAbsoluteDeviationOf, medianOf } from './util'
 import { type Vec3, vecDistance } from './vec3'
 

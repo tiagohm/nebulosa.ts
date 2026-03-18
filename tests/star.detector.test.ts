@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { Bitpix } from '../src/fits'
-import { detectStars, excludeStarsFitWithinRegion, mergeVeryCloseStars, StarList } from '../src/stardetector'
+import { detectStars, excludeStarsFitWithinRegion, mergeVeryCloseStars, StarList } from '../src/star.detector'
 import { medianOf } from '../src/util'
 import { downloadPerTag } from './download'
 import { readImage } from './image.util'

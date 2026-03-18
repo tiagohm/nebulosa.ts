@@ -1,6 +1,6 @@
 import { clamp } from './math'
 import { Matrix } from './matrix'
-import type { DetectedStar } from './stardetector'
+import type { DetectedStar } from './star.detector'
 import { medianAbsoluteDeviationOf, medianOf } from './util'
 
 export type GuideDirectionRA = 'west' | 'east'

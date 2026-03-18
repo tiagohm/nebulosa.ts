@@ -6,7 +6,7 @@ import { readCsv } from './csv'
 import { readFits } from './fits'
 import { fileHandleSource } from './io'
 import { type PlateSolveOptions, plateSolutionFrom } from './platesolver'
-import type { DetectedStar } from './stardetector'
+import type { DetectedStar } from './star.detector'
 
 export interface AstapStarDetectionOptions {
 	executable?: string
