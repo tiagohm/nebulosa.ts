@@ -174,14 +174,14 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 		const minorSigma = sigma * axisRatioSqrt
 		const haloMajorSigma = haloStrength > 0 ? haloSigma / axisRatioSqrt : 0
 		const haloMinorSigma = haloStrength > 0 ? haloSigma * axisRatioSqrt : 0
-		const coreAmplitude = coreFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, majorSigma, minorSigma, options.theta ?? 0))
-		const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloMajorSigma, haloMinorSigma, options.theta ?? 0)) : 0
+		const coreAmplitude = coreFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, majorSigma, minorSigma, options.theta || 0))
+		const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloMajorSigma, haloMinorSigma, options.theta || 0)) : 0
 
 		if (channels === 1) {
-			plotEllipticalGaussianMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorSigma, minorSigma, options.theta ?? 0, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
+			plotEllipticalGaussianMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorSigma, minorSigma, options.theta || 0, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
 		} else {
 			const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(options.colorIndex, options.gammaCompensation)
-			plotEllipticalGaussianRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorSigma, minorSigma, options.theta ?? 0, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
+			plotEllipticalGaussianRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorSigma, minorSigma, options.theta || 0, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
 		}
 
 		return true
@@ -193,14 +193,14 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 	const minorAlpha = baseAlpha * axisRatioSqrt
 	const haloMajorSigma = haloSigma / axisRatioSqrt
 	const haloMinorSigma = haloSigma * axisRatioSqrt
-	const coreAmplitude = coreFlux / Math.max(Number.EPSILON, moffatDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, majorAlpha, minorAlpha, options.theta ?? 0, beta))
-	const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloMajorSigma, haloMinorSigma, options.theta ?? 0)) : 0
+	const coreAmplitude = coreFlux / Math.max(Number.EPSILON, moffatDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, majorAlpha, minorAlpha, options.theta || 0, beta))
+	const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloMajorSigma, haloMinorSigma, options.theta || 0)) : 0
 
 	if (channels === 1) {
-		plotMoffatMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta ?? 0, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
+		plotMoffatMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta || 0, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
 	} else {
 		const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(options.colorIndex, options.gammaCompensation)
-		plotMoffatRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta ?? 0, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
+		plotMoffatRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta || 0, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
 	}
 
 	return true
