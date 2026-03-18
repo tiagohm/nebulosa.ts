@@ -9,6 +9,9 @@ export const PIOVERTWO = PI / 2
 // The number τ. This is the ratio of the circumference of a circle to its radius.
 export const TAU = PI * 2
 
+// The reciprocal of the number τ.
+export const ONE_OVER_TAU = 1 / TAU
+
 // Reference epoch (J2000.0), Julian Date.
 export const J2000 = 2451545
 
