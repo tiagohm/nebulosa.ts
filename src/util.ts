@@ -82,6 +82,18 @@ export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: numb
 	return normalized ? STANDARD_DEVIATION_SCALE * mad : mad
 }
 
+export function standardDeviationOf(a: Float64Array) {
+	const mean = meanOf(a)
+	let sum = 0
+
+	for (let i = 0; i < a.length; i++) {
+		const delta = a[i] - mean
+		sum += delta * delta
+	}
+
+	return Math.sqrt(sum / a.length)
+}
+
 // Searches in the specified input using the range [from, to) for the specified key.
 export function binarySearch(a: Readonly<NumberArray>, key: number, { from = 0, to = a.length, positive }: BinarySearchOptions = {}) {
 	to--
