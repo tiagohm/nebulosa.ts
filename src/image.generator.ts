@@ -1,5 +1,6 @@
 import type { DeepRequired } from 'utility-types'
 import { PIOVERTWO, TAU } from './constants'
+import type { ImageRawType } from './image.types'
 import { clamp } from './math'
 import { mulberry32, type Random } from './random'
 
@@ -10,9 +11,8 @@ export type AstronomicalImageClampMode = 'clamp' | 'normalize' | 'none'
 export type AmpGlowPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'left' | 'right' | 'top' | 'bottom'
 
 export interface AstronomicalImageNoiseConfig {
-	readonly channels?: 1 | 3
-	readonly seed?: number
-	readonly quality?: AstronomicalImageNoiseQuality
+	seed?: number
+	quality?: AstronomicalImageNoiseQuality
 	readonly exposure?: AstronomicalExposureConfig
 	readonly sky?: AstronomicalSkyConfig
 	readonly moon?: AstronomicalMoonConfig
@@ -25,111 +25,111 @@ export interface AstronomicalImageNoiseConfig {
 
 // Exposure controls are in seconds, unitless gain factors, and electrons per ADU.
 export interface AstronomicalExposureConfig {
-	readonly exposureTime?: number
-	readonly analogGain?: number
-	readonly digitalGain?: number
-	readonly electronsPerAdu?: number
+	exposureTime?: number
+	analogGain?: number
+	digitalGain?: number
+	electronsPerAdu?: number
 }
 
 // Sky background rates are in electrons / pixel / second and angular values are in radians.
 export interface AstronomicalSkyConfig {
-	readonly enabled?: boolean
-	readonly baseRate?: number
-	readonly globalOffset?: number
-	readonly gradientStrength?: number
-	readonly gradientDirection?: number
-	readonly radialGradientStrength?: number
-	readonly lowFrequencyVariationStrength?: number
-	readonly perChannelMultipliers?: readonly [number, number, number]
-	readonly colorBias?: readonly [number, number, number]
-	readonly filterTransmission?: readonly [number, number, number]
+	enabled?: boolean
+	baseRate?: number
+	globalOffset?: number
+	gradientStrength?: number
+	gradientDirection?: number
+	radialGradientStrength?: number
+	lowFrequencyVariationStrength?: number
+	perChannelMultipliers?: readonly [number, number, number]
+	colorBias?: readonly [number, number, number]
+	filterTransmission?: readonly [number, number, number]
 }
 
 // Moon controls use radians for altitude, angular distance, and position angle.
 export interface AstronomicalMoonConfig {
-	readonly enabled?: boolean
-	readonly illuminationFraction?: number
-	readonly altitude?: number
-	readonly angularDistance?: number
-	readonly positionAngle?: number
-	readonly tint?: readonly [number, number, number]
-	readonly strength?: number
+	enabled?: boolean
+	illuminationFraction?: number
+	altitude?: number
+	angularDistance?: number
+	positionAngle?: number
+	tint?: readonly [number, number, number]
+	strength?: number
 }
 
 // Light-pollution direction is expressed in radians in image coordinates.
 export interface AstronomicalLightPollutionConfig {
-	readonly enabled?: boolean
-	readonly strength?: number
-	readonly direction?: number
-	readonly gradientStrength?: number
-	readonly domeSharpness?: number
-	readonly tint?: readonly [number, number, number]
+	enabled?: boolean
+	strength?: number
+	direction?: number
+	gradientStrength?: number
+	domeSharpness?: number
+	tint?: readonly [number, number, number]
 }
 
 // Atmospheric factors are unitless multipliers.
 export interface AstronomicalAtmosphereConfig {
-	readonly airglowStrength?: number
-	readonly transparency?: number
-	readonly airmass?: number
-	readonly haze?: number
-	readonly humidity?: number
-	readonly thinCloudVeil?: number
-	readonly twilightContribution?: number
-	readonly horizonGlow?: number
-	readonly zodiacalLightFactor?: number
-	readonly milkyWayBackgroundFactor?: number
+	airglowStrength?: number
+	transparency?: number
+	airmass?: number
+	haze?: number
+	humidity?: number
+	thinCloudVeil?: number
+	twilightContribution?: number
+	horizonGlow?: number
+	zodiacalLightFactor?: number
+	milkyWayBackgroundFactor?: number
 }
 
 // Sensor-domain signal terms are modeled in electrons.
 export interface AstronomicalSensorConfig {
-	readonly readNoise?: number
-	readonly channelReadNoise?: readonly [number, number, number]
-	readonly channelGain?: readonly [number, number, number]
-	readonly biasElectrons?: number
-	readonly blackLevelElectrons?: number
-	readonly channelBiasElectrons?: readonly [number, number, number]
-	readonly darkCurrentAtReferenceTemp?: number
-	readonly referenceTemperature?: number
-	readonly temperature?: number
-	readonly temperatureDoublingInterval?: number
-	readonly darkSignalNonUniformity?: number
-	readonly fullWellCapacity?: number
-	readonly channelCorrelation?: number
+	readNoise?: number
+	channelReadNoise?: readonly [number, number, number]
+	channelGain?: readonly [number, number, number]
+	biasElectrons?: number
+	blackLevelElectrons?: number
+	channelBiasElectrons?: readonly [number, number, number]
+	darkCurrentAtReferenceTemp?: number
+	referenceTemperature?: number
+	temperature?: number
+	temperatureDoublingInterval?: number
+	darkSignalNonUniformity?: number
+	fullWellCapacity?: number
+	channelCorrelation?: number
 	readonly ampGlow?: AstronomicalAmpGlowConfig
 }
 
 // Amp-glow shape is a single smooth region near an edge or a corner.
 export interface AstronomicalAmpGlowConfig {
-	readonly enabled?: boolean
-	readonly strength?: number
-	readonly position?: AmpGlowPosition
-	readonly radiusX?: number
-	readonly radiusY?: number
-	readonly falloff?: number
-	readonly tint?: readonly [number, number, number]
+	enabled?: boolean
+	strength?: number
+	position?: AmpGlowPosition
+	radiusX?: number
+	radiusY?: number
+	falloff?: number
+	tint?: readonly [number, number, number]
 }
 
 // Structured artifacts are low-amplitude unless configured otherwise.
 export interface AstronomicalStructuredArtifactsConfig {
-	readonly fixedPatternNoiseStrength?: number
-	readonly rowNoiseStrength?: number
-	readonly columnNoiseStrength?: number
-	readonly bandingStrength?: number
-	readonly bandingFrequency?: number
-	readonly hotPixelRate?: number
-	readonly warmPixelRate?: number
-	readonly deadPixelRate?: number
-	readonly hotPixelStrength?: number
-	readonly warmPixelStrength?: number
-	readonly deadPixelResidual?: number
+	fixedPatternNoiseStrength?: number
+	rowNoiseStrength?: number
+	columnNoiseStrength?: number
+	bandingStrength?: number
+	bandingFrequency?: number
+	hotPixelRate?: number
+	warmPixelRate?: number
+	deadPixelRate?: number
+	hotPixelStrength?: number
+	warmPixelStrength?: number
+	deadPixelResidual?: number
 }
 
 // Output controls stay in normalized image space while quantization uses ADU-like steps.
 export interface AstronomicalOutputConfig {
-	readonly bitDepth?: number
-	readonly maxValue?: number
-	readonly clampMode?: AstronomicalImageClampMode
-	readonly quantize?: boolean
+	bitDepth?: number
+	maxValue?: number
+	clampMode?: AstronomicalImageClampMode
+	quantize?: boolean
 }
 
 export interface AstronomicalImageNoiseStats {
@@ -259,7 +259,6 @@ interface SkySpatialFields {
 const DEFAULT_RGB: readonly [number, number, number] = [1, 1, 1]
 
 export const DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG: Readonly<DeepRequired<AstronomicalImageNoiseConfig>> = {
-	channels: 1,
 	seed: 0x5f3759df,
 	quality: 'balanced',
 	exposure: {
@@ -355,23 +354,13 @@ export const DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG: Readonly<DeepRequired<Astr
 }
 
 // Adds realistic sky background and camera noise into a normalized image buffer in place.
-export function generateAstronomicalImageNoise(raw: Float64Array, width: number, height: number, config: AstronomicalImageNoiseConfig = DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG): AstronomicalImageNoiseResult {
-	const resolved = resolveAstronomicalImageNoiseConfig(raw, width, height, config)
-	const { channels, expectedLength, height: imageHeight, width: imageWidth, seed } = resolved
+export function generateNoiseImage(raw: ImageRawType, width: number, height: number, channels: 1 | 3, config: AstronomicalImageNoiseConfig = DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG): AstronomicalImageNoiseResult {
+	const resolved = resolveAstronomicalImageNoiseConfig(raw, width, height, channels, config)
+	const { expectedLength, height: imageHeight, width: imageWidth, seed } = resolved
 
 	if (expectedLength === 0) {
 		return {
-			stats: {
-				seed,
-				expectedLength,
-				saturationElectrons: resolved.saturationElectrons,
-				normalizationScale: 1,
-				maxValueBeforeOutput: 0,
-				saturatedPixels: 0,
-				hotPixelCount: 0,
-				warmPixelCount: 0,
-				deadPixelCount: 0,
-			},
+			stats: { seed, expectedLength, saturationElectrons: resolved.saturationElectrons, normalizationScale: 1, maxValueBeforeOutput: 0, saturatedPixels: 0, hotPixelCount: 0, warmPixelCount: 0, deadPixelCount: 0 },
 		}
 	}
 
@@ -468,11 +457,10 @@ export function generateAstronomicalImageNoise(raw: Float64Array, width: number,
 }
 
 // Validates user parameters and derives a fast execution context.
-function resolveAstronomicalImageNoiseConfig(raw: Float64Array, width: number, height: number, config: AstronomicalImageNoiseConfig): ResolvedAstronomicalImageNoiseConfig {
+function resolveAstronomicalImageNoiseConfig(raw: ImageRawType, width: number, height: number, channels: 1 | 3, config: AstronomicalImageNoiseConfig): ResolvedAstronomicalImageNoiseConfig {
 	if (!Number.isInteger(width) || width < 0) throw new RangeError('width must be a non-negative integer')
 	if (!Number.isInteger(height) || height < 0) throw new RangeError('height must be a non-negative integer')
 
-	const channels = config.channels ?? 1
 	const expectedLength = width * height * channels
 	if (raw.length < expectedLength) throw new RangeError(`buffer length mismatch: expected ${expectedLength}, received ${raw.length}`)
 
@@ -658,7 +646,7 @@ function evaluateMoonElectrons(xc: number, yc: number, baseSkyElectrons: number,
 
 // Models one localized amp-glow region that strengthens with exposure and temperature.
 function evaluateAmpGlowElectrons(xc: number, yc: number, config: ResolvedAstronomicalImageNoiseConfig) {
-	const [sourceX, sourceY] = ampGlowSource(config.ampGlowPosition)
+	const [sourceX, sourceY] = AMP_GLOW_SOURCE[config.ampGlowPosition]
 	const dx = (xc - sourceX) / config.ampGlowRadiusX
 	const dy = (yc - sourceY) / config.ampGlowRadiusY
 	const distance = Math.sqrt(dx * dx + dy * dy)
@@ -783,7 +771,7 @@ function createBandingAxis(length: number, strength: number, frequency: number, 
 }
 
 // Applies the requested clamp and quantization policy after all noise has been accumulated.
-function finalizeOutput(raw: Float64Array, length: number, config: ResolvedAstronomicalImageNoiseConfig, maxValueBeforeOutput: number) {
+function finalizeOutput(raw: ImageRawType, length: number, config: ResolvedAstronomicalImageNoiseConfig, maxValueBeforeOutput: number) {
 	let normalizationScale = 1
 
 	if (config.clampMode === 'normalize' && Number.isFinite(maxValueBeforeOutput) && maxValueBeforeOutput > 1) {
@@ -807,25 +795,15 @@ function finalizeOutput(raw: Float64Array, length: number, config: ResolvedAstro
 }
 
 // Maps an amp-glow anchor label to a point just outside the normalized frame center.
-function ampGlowSource(position: AmpGlowPosition): readonly [number, number] {
-	switch (position) {
-		case 'top-left':
-			return [-0.58, -0.58]
-		case 'top-right':
-			return [0.58, -0.58]
-		case 'bottom-left':
-			return [-0.58, 0.58]
-		case 'bottom-right':
-			return [0.58, 0.58]
-		case 'left':
-			return [-0.62, 0]
-		case 'right':
-			return [0.62, 0]
-		case 'top':
-			return [0, -0.62]
-		case 'bottom':
-			return [0, 0.62]
-	}
+const AMP_GLOW_SOURCE: Required<Record<AmpGlowPosition, readonly [number, number]>> = {
+	'top-left': [-0.58, -0.58],
+	'top-right': [0.58, -0.58],
+	'bottom-left': [-0.58, 0.58],
+	'bottom-right': [0.58, 0.58],
+	left: [-0.62, 0],
+	right: [0.62, 0],
+	top: [0, -0.62],
+	bottom: [0, 0.62],
 }
 
 // Normalizes user triplets and rejects invalid channel scalars early.
