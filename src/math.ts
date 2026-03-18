@@ -76,3 +76,10 @@ export function clamp(value: number, min: number, max: number) {
 	if (value > max) return max
 	return value
 }
+
+// Finds a value at a specific percentage (t) between a start (a) and end (b) point.
+// Used widely in game development and graphics to create smooth movements, animations,
+// color gradients, and transitions between points.
+export function lerp(a: number, b: number, t: number) {
+	return a + (b - a) * t
+}
