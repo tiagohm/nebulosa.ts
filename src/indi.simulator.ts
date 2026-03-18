@@ -93,6 +93,7 @@ export abstract class DeviceSimulator implements Disposable {
 	) {
 		this.driverInfo.device = name
 		this.driverInfo.elements.DRIVER_INTERFACE.value = interfaceType.toFixed(0)
+		this.driverInfo.elements.DRIVER_NAME.value = name
 		this.connection.device = name
 		client.register(this)
 
@@ -152,7 +153,7 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #park = makeSwitchVector('', 'TELESCOPE_PARK', 'Parking', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
 	readonly #parkOptions = makeSwitchVector('', 'TELESCOPE_PARK_OPTION', 'Park Options', MAIN_CONTROL, 'AtMostOne', 'rw', ['PARK_CURRENT', 'Current', false])
 	readonly #pierSide = makeSwitchVector('', 'TELESCOPE_PIER_SIDE', 'Pier Side', MAIN_CONTROL, 'AtMostOne', 'ro', ['PIER_EAST', 'East', false], ['PIER_WEST', 'West', false])
-	readonly #guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'ro', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
+	readonly #guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'rw', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
 
@@ -290,16 +291,13 @@ export class MountSimulator extends DeviceSimulator {
 				return
 			}
 			case 'GEOGRAPHIC_COORD':
-				this.setGeographicCoordinate({
+				return this.setGeographicCoordinate({
 					latitude: vector.elements.LAT !== undefined ? deg(vector.elements.LAT) : this.latitude,
 					longitude: vector.elements.LONG !== undefined ? normalizePI(deg(vector.elements.LONG)) : this.longitude,
 					elevation: vector.elements.ELEV ?? this.elevation,
 				})
-
-				return
 			case 'GUIDE_RATE':
 				this.setGuideRate(vector.elements.GUIDE_RATE_WE ?? this.guideRateRightAscension, vector.elements.GUIDE_RATE_NS ?? this.guideRateDeclination)
-
 				return
 			case 'TELESCOPE_TIMED_GUIDE_NS':
 				if ((vector.elements.TIMED_GUIDE_N ?? 0) > 0) this.pulse('NORTH', vector.elements.TIMED_GUIDE_N)
