@@ -10,7 +10,7 @@ import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, hand
 import type { Camera, Client, Device, Focuser, Mount, Rotator, Wheel } from './indi.device'
 import type { DeviceProvider } from './indi.manager'
 // biome-ignore format: too long!
-import { type DefBlob, type DefBlobVector, type DefNumber, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefText, type DefTextVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, type NewNumberVector, type NewSwitchVector, type NewTextVector, type OneBlob, type PropertyPermission, type PropertyState, type SetBlobVector, type SwitchRule, type ValueType, type VectorType } from './indi.types'
+import { type DefSwitchVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, type ValueType, type VectorType } from './indi.types'
 import { roundToNthDecimal } from './math'
 import { formatTemporal, TIMEZONE } from './temporal'
 import { type Time, timeNow } from './time'
@@ -51,7 +51,7 @@ export class AlpacaClient implements Client {
 		if (command?.device) {
 			this.devices.get(command.device)?.sendProperties(command.name)
 		} else {
-			for (const [, device] of this.devices) device.sendProperties(command?.name)
+			for (const device of this.devices) device[1].sendProperties(command?.name)
 		}
 	}
 
@@ -111,7 +111,7 @@ export class AlpacaClient implements Client {
 	}
 
 	private update() {
-		for (const [, device] of this.devices) device.update()
+		for (const device of this.devices) device[1].update()
 	}
 
 	stop(server: boolean = false) {
@@ -119,7 +119,7 @@ export class AlpacaClient implements Client {
 			clearInterval(this.timer)
 			this.timer = undefined
 
-			for (const [, device] of this.devices) device.close()
+			for (const device of this.devices) device[1].close()
 			this.devices.clear()
 
 			this.options?.handler?.close?.(this, server)
@@ -1795,30 +1795,6 @@ function normalizeLongitude(angle: number) {
 	angle = angle % 360
 	if (angle > 180) angle -= 360
 	return angle
-}
-
-function makeSwitchVector(device: string, name: string, label: string, group: string, rule: SwitchRule, permission: PropertyPermission, ...properties: readonly [string, string, boolean][]): DefSwitchVector & { type: 'SWITCH' } {
-	const elements: Record<string, DefSwitch> = {}
-	for (const [name, label, value] of properties) elements[name] = { name, label, value }
-	return { type: 'SWITCH', device, name, label, group, permission, rule, state: 'Idle', timeout: 60, elements }
-}
-
-function makeNumberVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string, number, number, number, number, string][]): DefNumberVector & { type: 'NUMBER' } {
-	const elements: Record<string, DefNumber> = {}
-	for (const [name, label, value, min, max, step, format] of properties) elements[name] = { name, label, value, min, max, step, format }
-	return { type: 'NUMBER', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
-}
-
-function makeTextVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string, string][]): DefTextVector & { type: 'TEXT' } {
-	const elements: Record<string, DefText> = {}
-	for (const [name, label, value] of properties) elements[name] = { name, label, value }
-	return { type: 'TEXT', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
-}
-
-function makeBlobVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string][]): Omit<DefBlobVector, 'elements'> & SetBlobVector & { type: 'BLOB' } {
-	const elements: Record<string, Omit<DefBlob, 'value'> & OneBlob> = {}
-	for (const [name, label] of properties) elements[name] = { name, label, size: '0', format: 'fits', value: '' }
-	return { type: 'BLOB', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
 // https://github.com/ASCOMInitiative/ASCOMRemote/blob/main/Documentation/AlpacaImageBytes.pdf

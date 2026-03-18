@@ -1,23 +1,35 @@
-import { describe, expect, onTestFinished, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { deg, hour, normalizePI } from '../src/angle'
+import { IndiClientHandlerSet } from '../src/indi.client'
 import { GuideOutputManager, MountManager } from '../src/indi.manager'
 import { ClientSimulator, MountSimulator } from '../src/indi.simulator'
 
-const client = new ClientSimulator('0')
+const handler = new IndiClientHandlerSet()
+const mountManager = new MountManager()
+const guideOutputManager = new GuideOutputManager({ get: mountManager.get.bind(mountManager) })
+
+handler.add(mountManager)
+handler.add(guideOutputManager)
+
+const client = new ClientSimulator('0', handler)
 
 describe.skip('mount simulator', () => {
 	test('integrates with MountManager for sync, goto, home and park', async () => {
-		const mountManager = new MountManager()
-		const guideOutputManager = new GuideOutputManager({ get: (client, name) => mountManager.get(client, name) })
-		const mount = new MountSimulator(client, mountManager, guideOutputManager, 'Mount Simulator', 'sim-mount')
+		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
-		onTestFinished(() => mount.dispose())
-
-		expect(mount.start()).toBeTrue()
-		expect(Array.from(mountManager.list())).toHaveLength(1)
-
+		const mount = mountManager.get(client, mountSimulator.name)!
 		mountManager.connect(mount)
 		await waitUntil(() => mount.connected)
+
+		expect(mount.canAbort).toBeTrue()
+		expect(mount.canSync).toBeTrue()
+		expect(mount.canGoTo).toBeTrue()
+		expect(mount.canHome).toBeTrue()
+		expect(mount.canSetHome).toBeTrue()
+		expect(mount.canPark).toBeTrue()
+		expect(mount.canSetPark).toBeTrue()
+		expect(mount.canTracking).toBeTrue()
+		expect(mount.canMove).toBeTrue()
 
 		mountManager.syncTo(mount, hour(5), deg(20))
 		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(5), 1e-9))
@@ -25,6 +37,7 @@ describe.skip('mount simulator', () => {
 
 		mountManager.setHome(mount)
 		mountManager.setPark(mount)
+
 		mountManager.goTo(mount, hour(5.25), deg(24))
 		await waitUntil(() => mount.slewing)
 		await waitUntil(() => !mount.slewing, 3000)
@@ -46,16 +59,16 @@ describe.skip('mount simulator', () => {
 
 		mountManager.unpark(mount)
 		await waitUntil(() => !mount.parked)
+
+		mountSimulator.dispose()
+
+		expect(mountManager.has(client, mountSimulator.name)).toBeFalse()
 	})
 
 	test('applies tracking drift for disabled, sidereal, king, solar and lunar modes', async () => {
-		const mountManager = new MountManager()
-		const guideOutputManager = new GuideOutputManager({ get: (client, name) => mountManager.get(client, name) })
-		const mount = new MountSimulator(client, mountManager, guideOutputManager, 'Mount Simulator', 'sim-mount')
+		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
-		onTestFinished(() => mount.dispose())
-
-		mount.start()
+		const mount = mountManager.get(client, mountSimulator.name)!
 		mountManager.connect(mount)
 		await waitUntil(() => mount.connected)
 
@@ -101,13 +114,9 @@ describe.skip('mount simulator', () => {
 	}, 15000)
 
 	test('supports manual move over time', async () => {
-		const mountManager = new MountManager()
-		const guideOutputManager = new GuideOutputManager({ get: (client, name) => mountManager.get(client, name) })
-		const mount = new MountSimulator(client, mountManager, guideOutputManager, 'Mount Simulator', 'sim-mount')
+		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
-		onTestFinished(() => mount.dispose())
-
-		mount.start()
+		const mount = mountManager.get(client, mountSimulator.name)!
 		mountManager.connect(mount)
 		await waitUntil(() => mount.connected)
 
@@ -152,13 +161,9 @@ describe.skip('mount simulator', () => {
 	}, 5000)
 
 	test('supports manual pulse guiding over time', async () => {
-		const mountManager = new MountManager()
-		const guideOutputManager = new GuideOutputManager({ get: (client, name) => mountManager.get(client, name) })
-		const mount = new MountSimulator(client, mountManager, guideOutputManager, 'Mount Simulator', 'sim-mount')
+		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
-		onTestFinished(() => mount.dispose())
-
-		mount.start()
+		const mount = mountManager.get(client, mountSimulator.name)!
 		mountManager.connect(mount)
 		await waitUntil(() => mount.connected)
 

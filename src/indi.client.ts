@@ -362,6 +362,92 @@ export class IndiClient implements Client {
 	}
 }
 
+export class IndiClientHandlerSet extends Set<IndiClientHandler> implements IndiClientHandler {
+	message(client: Client, message: Message) {
+		for (const handler of this) handler.message?.(client, message)
+	}
+
+	delProperty(client: Client, message: DelProperty) {
+		for (const handler of this) handler.delProperty?.(client, message)
+	}
+
+	vector(client: Client, message: DefVector | SetVector, tag: `def${VectorType}Vector` | `set${VectorType}Vector`) {
+		for (const handler of this) handler.vector?.(client, message, tag)
+	}
+
+	defTextVector(client: Client, message: DefTextVector) {
+		for (const handler of this) handler.defTextVector?.(client, message)
+	}
+
+	defNumberVector(client: Client, message: DefNumberVector) {
+		for (const handler of this) handler.defNumberVector?.(client, message)
+	}
+
+	defSwitchVector(client: Client, message: DefSwitchVector) {
+		for (const handler of this) handler.defSwitchVector?.(client, message)
+	}
+
+	defLightVector(client: Client, message: DefLightVector) {
+		for (const handler of this) handler.defLightVector?.(client, message)
+	}
+
+	defBlobVector(client: Client, message: DefBlobVector) {
+		for (const handler of this) handler.defBlobVector?.(client, message)
+	}
+
+	defVector(client: Client, message: DefVector, tag: `def${VectorType}Vector`) {
+		for (const handler of this) handler.defVector?.(client, message, tag)
+	}
+
+	setTextVector(client: Client, message: SetTextVector) {
+		for (const handler of this) handler.setTextVector?.(client, message)
+	}
+
+	setNumberVector(client: Client, message: SetNumberVector) {
+		for (const handler of this) handler.setNumberVector?.(client, message)
+	}
+
+	setSwitchVector(client: Client, message: SetSwitchVector) {
+		for (const handler of this) handler.setSwitchVector?.(client, message)
+	}
+
+	setLightVector(client: Client, message: SetLightVector) {
+		for (const handler of this) handler.setLightVector?.(client, message)
+	}
+
+	setBlobVector(client: Client, message: SetBlobVector) {
+		for (const handler of this) handler.setBlobVector?.(client, message)
+	}
+
+	setVector(client: Client, message: SetVector, tag: `set${VectorType}Vector`) {
+		for (const handler of this) handler.setVector?.(client, message, tag)
+	}
+
+	textVector(client: Client, message: DefTextVector | SetTextVector, tag: 'defTextVector' | 'setTextVector') {
+		for (const handler of this) handler.textVector?.(client, message, tag)
+	}
+
+	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: 'defNumberVector' | 'setNumberVector') {
+		for (const handler of this) handler.numberVector?.(client, message, tag)
+	}
+
+	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: 'defSwitchVector' | 'setSwitchVector') {
+		for (const handler of this) handler.switchVector?.(client, message, tag)
+	}
+
+	lightVector(client: Client, message: DefLightVector | SetLightVector, tag: 'defLightVector' | 'setLightVector') {
+		for (const handler of this) handler.lightVector?.(client, message, tag)
+	}
+
+	blobVector(client: Client, message: DefBlobVector | SetBlobVector, tag: 'defBLOBVector' | 'setBLOBVector') {
+		for (const handler of this) handler.blobVector?.(client, message, tag)
+	}
+
+	close(client: Client, server: boolean) {
+		for (const handler of this) handler.close?.(client, server)
+	}
+}
+
 export function handleDefVector(client: Client, handler: IndiClientHandler, message: DefVector, tag: `def${VectorType}Vector`) {
 	handler.defVector?.(client, message, tag)
 	handler.vector?.(client, message, tag)

@@ -309,6 +309,30 @@ export type SwitchElement = OneSwitch | DefSwitch
 export type LightElement = OneLight | DefLight
 export type BlobElement = OneBlob | DefBlob
 
+export function makeSwitchVector(device: string, name: string, label: string, group: string, rule: SwitchRule, permission: PropertyPermission, ...properties: readonly [string, string, boolean][]): DefSwitchVector & SetSwitchVector & { type: 'SWITCH' } {
+	const elements: Record<string, DefSwitch> = {}
+	for (const [name, label, value] of properties) elements[name] = { name, label, value }
+	return { type: 'SWITCH', device, name, label, group, permission, rule, state: 'Idle', timeout: 60, elements }
+}
+
+export function makeNumberVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string, number, number, number, number, string][]): DefNumberVector & SetNumberVector & { type: 'NUMBER' } {
+	const elements: Record<string, DefNumber> = {}
+	for (const [name, label, value, min, max, step, format] of properties) elements[name] = { name, label, value, min, max, step, format }
+	return { type: 'NUMBER', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
+}
+
+export function makeTextVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string, string][]): DefTextVector & SetTextVector & { type: 'TEXT' } {
+	const elements: Record<string, DefText> = {}
+	for (const [name, label, value] of properties) elements[name] = { name, label, value }
+	return { type: 'TEXT', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
+}
+
+export function makeBlobVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string][]): Omit<DefBlobVector, 'elements'> & SetBlobVector & { type: 'BLOB' } {
+	const elements: Record<string, Omit<DefBlob, 'value'> & OneBlob> = {}
+	for (const [name, label] of properties) elements[name] = { name, label, size: '0', format: 'fits', value: '' }
+	return { type: 'BLOB', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
+}
+
 export function findOnSwitch(vector: SwitchVector) {
 	const { elements } = vector
 
@@ -317,4 +341,30 @@ export function findOnSwitch(vector: SwitchVector) {
 		if (typeof value === 'boolean') return value
 		return value.value
 	})
+}
+
+export function selectOnSwitch(vector: SetSwitchVector & DefSwitchVector, name: string) {
+	if (vector.rule === 'AtMostOne') return false
+
+	const element = vector.elements[name]
+
+	if (element !== undefined) {
+		if (element.value === false) {
+			element.value = true
+
+			if (vector.rule === 'OneOfMany') {
+				for (const name in vector.elements) {
+					const item = vector.elements[name]
+
+					if (item !== element) {
+						item.value = false
+					}
+				}
+			}
+
+			return true
+		}
+	}
+
+	return false
 }

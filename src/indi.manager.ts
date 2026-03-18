@@ -200,19 +200,19 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	}
 
 	added(device: D) {
-		this.handlers.forEach((e) => e.added(device))
+		for (const handler of this.handlers) handler.added(device)
 	}
 
 	updated(device: D, property: keyof D & string, state?: PropertyState) {
-		this.handlers.forEach((e) => e.updated?.(device, property, state))
+		for (const handler of this.handlers) handler.updated?.(device, property, state)
 	}
 
 	removed(device: D) {
-		this.handlers.forEach((e) => e.removed(device))
+		for (const handler of this.handlers) handler.removed(device)
 	}
 
 	blobReceived(device: D, data: string | Buffer<ArrayBuffer>) {
-		this.handlers.forEach((e) => e.blobReceived?.(device, data))
+		for (const handler of this.handlers) handler.blobReceived?.(device, data)
 	}
 
 	list(client?: Client | string) {
@@ -363,8 +363,8 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		const devices = this.devices.get(client)
 
 		if (devices) {
-			for (const [_, device] of devices) {
-				this.remove(device)
+			for (const device of devices) {
+				this.remove(device[1])
 			}
 		}
 
@@ -1094,11 +1094,11 @@ export class MountManager extends DeviceManager<Mount> {
 						this.updated(device, 'canHome', message.state)
 					}
 
-					if (handleSwitchValue(device, 'canHome', 'FIND' in elements)) {
+					if (handleSwitchValue(device, 'canFindHome', 'FIND' in elements)) {
 						this.updated(device, 'canFindHome', message.state)
 					}
 
-					if (handleSwitchValue(device, 'canHome', 'SET' in elements)) {
+					if (handleSwitchValue(device, 'canSetHome', 'SET' in elements)) {
 						this.updated(device, 'canSetHome', message.state)
 					}
 				}

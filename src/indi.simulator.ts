@@ -1,12 +1,14 @@
 import type { Angle } from './angle'
-import { deg, hour, normalizeAngle, normalizePI } from './angle'
+import { deg, hour, normalizeAngle, normalizePI, toDeg, toHour } from './angle'
 import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
-import { CLIENT, type Client, type ClientInfo, type Device, type DeviceType, type DriverInfo, expectedPierSide, type GuideDirection, type GuideOutput, type Mount, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
-import type { DeviceManager } from './indi.manager'
-import type { EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector } from './indi.types'
+import { meter, toMeter } from './distance'
+import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
+import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
+import { type EnableBlob, findOnSwitch, type GetProperties, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetVector, selectOnSwitch } from './indi.types'
 import { type GeographicCoordinate, localSiderealTime } from './location'
 import { clamp } from './math'
+import { formatTemporal, TIMEZONE } from './temporal'
 import { timeUnix } from './time'
 
 const TICK_INTERVAL_MS = 100
@@ -17,10 +19,13 @@ const KING_DRIFT_RATE = (SIDEREAL_RATE - 15.0369) * ASEC2RAD
 const MAX_GUIDE_RATE = 1
 
 const SLEW_RATES = [
-	{ name: '1x', label: '1x', speed: 0.5 * DEG2RAD },
-	{ name: '2x', label: '2x', speed: 1.0 * DEG2RAD },
-	{ name: '3x', label: '3x', speed: 2.0 * DEG2RAD },
-	{ name: '4x', label: '4x', speed: 4.0 * DEG2RAD },
+	{ name: '1x', label: '0.5°', speed: 0.5 * DEG2RAD },
+	{ name: '2x', label: '1.0°', speed: 1.0 * DEG2RAD },
+	{ name: '4x', label: '2.0°', speed: 2.0 * DEG2RAD },
+	{ name: '8x', label: '4.0°', speed: 4.0 * DEG2RAD },
+	{ name: '16x', label: '8.0°', speed: 8.0 * DEG2RAD },
+	{ name: '32x', label: '16.0°', speed: 16.0 * DEG2RAD },
+	{ name: '64x', label: '32.0°', speed: 32.0 * DEG2RAD },
 ] as const
 
 type CoordSetMode = 'SLEW' | 'SYNC'
@@ -33,10 +38,11 @@ type AxisDirection = -1 | 0 | 1
 export class ClientSimulator implements Client {
 	readonly type = 'SIMULATOR'
 
-	#managers = new Set<Pick<DeviceSimulator<Device>, 'sendNumber' | 'sendSwitch' | 'sendText' | 'dispose'>>()
+	#devices = new Map<DeviceType, DeviceSimulator>()
 
 	constructor(
 		readonly id: string,
+		readonly handler: IndiClientHandler,
 		readonly description: string = 'Client Simulator',
 	) {}
 
@@ -45,68 +51,82 @@ export class ClientSimulator implements Client {
 	enableBlob(command: EnableBlob) {}
 
 	sendText(vector: NewTextVector) {
-		for (const manager of this.#managers) manager.sendText(vector)
+		for (const device of this.#devices) device[1].name === vector.device && device[1].sendText(vector)
 	}
 
 	sendNumber(vector: NewNumberVector) {
-		for (const manager of this.#managers) manager.sendNumber(vector)
+		for (const device of this.#devices) device[1].name === vector.device && device[1].sendNumber(vector)
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
-		for (const manager of this.#managers) manager.sendSwitch(vector)
+		for (const device of this.#devices) device[1].name === vector.device && device[1].sendSwitch(vector)
 	}
 
-	register(manager: Pick<DeviceSimulator<Device>, 'sendNumber' | 'sendSwitch' | 'sendText' | 'dispose'>) {
-		this.#managers.add(manager)
+	register(device: DeviceSimulator) {
+		this.#devices.set(device.type, device)
 	}
 
-	unregister(manager: Pick<DeviceSimulator<Device>, 'sendNumber' | 'sendSwitch' | 'sendText' | 'dispose'>) {
-		this.#managers.delete(manager)
+	unregister(device: DeviceSimulator) {
+		this.#devices.delete(device.type)
 	}
 
 	[Symbol.dispose]() {
-		for (const manager of this.#managers) manager.dispose()
+		for (const device of this.#devices) device[1].dispose()
 	}
 }
 
-abstract class DeviceSimulator<D extends Device> implements Device, Disposable {
-	#connected = false
+const MAIN_CONTROL = 'Main Control'
+const GENERAL_INFO = 'General Info'
+const SIMULATION = 'Simulation'
 
-	abstract readonly id: string
+export abstract class DeviceSimulator implements Disposable {
 	abstract readonly type: DeviceType
-	abstract readonly name: string
-	abstract readonly driver: DriverInfo
 
-	readonly client: ClientInfo
-	readonly [CLIENT]: ClientSimulator
+	protected readonly driverInfo = makeTextVector('', 'DRIVER_INFO', 'Driver Info', GENERAL_INFO, 'ro', ['DRIVER_INTERFACE', 'Interface', ''], ['DRIVER_EXEC', 'Exec', ''], ['DRIVER_VERSION', 'Version', '1.0'], ['DRIVER_NAME', 'Name', ''])
+	protected readonly connection = makeSwitchVector('', 'CONNECTION', 'Connection', MAIN_CONTROL, 'OneOfMany', 'rw', ['CONNECT', 'Connect', false], ['DISCONNECT', 'Disconnect', true])
 
-	constructor(client: ClientSimulator) {
-		this[CLIENT] = client
-		this.client = { id: client.id, type: client.type }
+	constructor(
+		readonly name: string,
+		readonly client: ClientSimulator,
+		readonly handler: IndiClientHandler,
+		interfaceType: DeviceInterfaceType,
+	) {
+		this.driverInfo.device = name
+		this.driverInfo.elements.DRIVER_INTERFACE.value = interfaceType.toFixed(0)
+		this.connection.device = name
+		client.register(this)
+
+		handleDefTextVector(client, handler, this.driverInfo)
+		handleDefSwitchVector(client, handler, this.connection)
 	}
 
-	get connected() {
-		return this.#connected
+	get isConnected() {
+		return this.connection.elements.CONNECT.value
 	}
 
 	abstract sendText(vector: NewTextVector): void
 	abstract sendNumber(vector: NewNumberVector): void
 	abstract sendSwitch(vector: NewSwitchVector): void
-	protected abstract emit(property: keyof D & string): void
 	abstract dispose(): void
 
-	// Connects the simulated mount.
+	// Connects the simulated device.
 	connect() {
-		if (this.#connected) return
-		this.#connected = true
-		this.emit('connected')
+		if (this.isConnected) return
+		selectOnSwitch(this.connection, 'CONNECT') && handleSetSwitchVector(this.client, this.handler, this.connection)
 	}
 
-	// Disconnects the simulated mount and cancels active motion.
+	// Disconnects the simulated device.
 	disconnect() {
-		if (!this.#connected) return
-		this.#connected = false
-		this.emit('connected')
+		if (!this.isConnected) return
+		selectOnSwitch(this.connection, 'DISCONNECT') && handleSetSwitchVector(this.client, this.handler, this.connection)
+	}
+
+	notify(message: SetVector & { type: 'SWITCH' | 'TEXT' | 'NUMBER' }) {
+		const type = message.type[0]
+
+		if (type === 'S') handleSetSwitchVector(this.client, this.handler, message as never)
+		else if (type === 'N') handleSetNumberVector(this.client, this.handler, message as never)
+		else if (type === 'T') handleSetTextVector(this.client, this.handler, message as never)
 	}
 
 	[Symbol.dispose]() {
@@ -114,43 +134,27 @@ abstract class DeviceSimulator<D extends Device> implements Device, Disposable {
 	}
 }
 
-export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
+export class MountSimulator extends DeviceSimulator {
 	readonly type = 'MOUNT'
-	readonly canAbort = true
-	readonly canSync = true
-	readonly canGoTo = true
-	readonly canFlip = false
-	readonly canHome = true
-	readonly canFindHome = false
-	readonly canSetHome = true
-	readonly canTracking = true
-	readonly canMove = true
-	readonly slewRates: readonly NameAndLabel[] = SLEW_RATES
-	readonly mountType = 'EQ_GEM'
 	readonly trackModes = ['SIDEREAL', 'SOLAR', 'LUNAR', 'KING'] as const
-	readonly canSetPierSide = true
-	readonly canPulseGuide = true
-	readonly hasGuideRate = true
-	readonly canSetGuideRate = true
-	readonly driver = { executable: 'mount_simulator', version: '0.1.0' } as const
-	readonly hasGPS = true
-	readonly canPark = true
-	readonly canSetPark = true
-	readonly hasPierSide = true
 
-	slewing = false
-	tracking = false
-	homing = false
-	trackMode: TrackMode = 'SIDEREAL'
-	pierSide: PierSide = 'NEITHER'
-	slewRate = '3x'
-	equatorialCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
-	pulsing = false
-	guideRate: EquatorialCoordinate<number> = { rightAscension: 0.5, declination: 0.5 }
-	geographicCoordinate: GeographicCoordinate = { latitude: 0, longitude: 0, elevation: 0 }
-	time: UTCTime = { utc: Date.now(), offset: 0 }
-	parking = false
-	parked = false
+	readonly #onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
+	readonly #equatorialCoordinate = makeNumberVector('', 'EQUATORIAL_EOD_COORD', 'Eq. Coordinates', MAIN_CONTROL, 'rw', ['RA', 'RA (hours)', 0, 0, 24, 0.1, '%10.6f'], ['DEC', 'DEC (deg)', 0, -90, 90, 0.1, '%10.6f'])
+	readonly #abort = makeSwitchVector('', 'TELESCOPE_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+	readonly #trackMode = makeSwitchVector('', 'TELESCOPE_TRACK_MODE', 'Track Mode', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_SIDEREAL', 'Sidereal', true], ['TRACK_SOLAR', 'Solar', false], ['TRACK_LUNAR', 'Lunar', false], ['TRACK_KING', 'King', false])
+	readonly #tracking = makeSwitchVector('', 'TELESCOPE_TRACK_STATE', 'Tracking', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_ON', 'On', false], ['TRACK_OFF', 'Off', true])
+	readonly #home = makeSwitchVector('', 'TELESCOPE_HOME', 'Home', MAIN_CONTROL, 'AtMostOne', 'rw', ['GO', 'Go', false], ['SET', 'Set', false])
+	readonly #motionNS = makeSwitchVector('', 'TELESCOPE_MOTION_NS', 'Motion N/S', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_NORTH', 'North', false], ['MOTION_SOUTH', 'South', false])
+	readonly #motionWE = makeSwitchVector('', 'TELESCOPE_MOTION_WE', 'Motion W/E', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_WEST', 'West', false], ['MOTION_EAST', 'East', false])
+	readonly #slewRate = makeSwitchVector('', 'TELESCOPE_SLEW_RATE', 'Slew Rate', MAIN_CONTROL, 'OneOfMany', 'rw')
+	readonly #time = makeTextVector('', 'TIME_UTC', 'UTC', MAIN_CONTROL, 'rw', ['UTC', 'UTC Time', formatTemporal(Date.now(), 'YYYY-MM-DDTHH:mm:ss.SSSZ', 0)], ['OFFSET', 'UTC Offset', (TIMEZONE / 60).toFixed(2)])
+	readonly #geographicCoordinate = makeNumberVector('', 'GEOGRAPHIC_COORD', 'Location', MAIN_CONTROL, 'rw', ['LAT', 'Latitude (deg)', 0, -90, 90, 0.1, '%12.8f'], ['LONG', 'Longitude (deg)', 0, 0, 360, 0.1, '%12.8f'], ['ELEV', 'Elevation (m)', 0, -200, 10000, 1, '%.1f'])
+	readonly #park = makeSwitchVector('', 'TELESCOPE_PARK', 'Parking', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
+	readonly #parkOptions = makeSwitchVector('', 'TELESCOPE_PARK_OPTION', 'Park Options', MAIN_CONTROL, 'AtMostOne', 'rw', ['PARK_CURRENT', 'Current', false])
+	readonly #pierSide = makeSwitchVector('', 'TELESCOPE_PIER_SIDE', 'Pier Side', MAIN_CONTROL, 'AtMostOne', 'ro', ['PIER_EAST', 'East', false], ['PIER_WEST', 'West', false])
+	readonly #guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'ro', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
+	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
+	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -165,28 +169,103 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 	#pulseWestEastUntil = 0
 	#homeCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
 	#parkCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
-	#mountManager: DeviceManager<Mount>
-	#guideOutputManager: DeviceManager<GuideOutput>
+	#utcTime = Date.now()
+	#utcOffset = TIMEZONE / 60
 
-	constructor(
-		client: ClientSimulator,
-		mountManager: DeviceManager<Mount>,
-		guideOutputManager: DeviceManager<GuideOutput>,
-		readonly name: string,
-		readonly id: string,
-	) {
-		super(client)
-		this.#mountManager = mountManager
-		this.#guideOutputManager = guideOutputManager
+	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+		super(name, client, handler, DeviceInterfaceType.TELESCOPE)
+
+		this.#onCoordSet.device = name
+		this.#equatorialCoordinate.device = name
+		this.#abort.device = name
+		this.#trackMode.device = name
+		this.#tracking.device = name
+		this.#home.device = name
+		this.#motionNS.device = name
+		this.#motionWE.device = name
+		this.#slewRate.device = name
+		this.#time.device = name
+		this.#geographicCoordinate.device = name
+		this.#park.device = name
+		this.#parkOptions.device = name
+		this.#pierSide.device = name
+		this.#guideRate.device = name
+		this.#guideNS.device = name
+		this.#guideWE.device = name
+
+		const { elements } = this.#slewRate
+
+		for (const rate of SLEW_RATES) {
+			elements[rate.name] = { name: rate.name, label: rate.label, value: rate.name === '8x' }
+		}
 	}
 
-	get manager() {
-		return this.#mountManager
+	get rightAscension() {
+		return hour(this.#equatorialCoordinate.elements.RA.value)
+	}
+
+	get declination() {
+		return deg(this.#equatorialCoordinate.elements.DEC.value)
+	}
+
+	get isParked() {
+		return this.#park.elements.PARK.value
+	}
+
+	get isTracking() {
+		return this.#tracking.elements.TRACK_ON.value
+	}
+
+	get isHoming() {
+		return this.#home.state === 'Busy'
+	}
+
+	get isSlewing() {
+		return this.#equatorialCoordinate.state === 'Busy'
+	}
+
+	get isPulsing() {
+		return this.#guideNS.state === 'Busy'
+	}
+
+	get isParking() {
+		return this.#park.state === 'Busy'
+	}
+
+	get trackMode(): TrackMode {
+		const { TRACK_SIDEREAL, TRACK_SOLAR, TRACK_LUNAR } = this.#trackMode.elements
+		return TRACK_SIDEREAL.value ? 'SIDEREAL' : TRACK_SOLAR.value ? 'SOLAR' : TRACK_LUNAR.value ? 'LUNAR' : 'KING'
+	}
+
+	get longitude() {
+		return deg(this.#geographicCoordinate.elements.LONG.value)
+	}
+
+	get latitude() {
+		return deg(this.#geographicCoordinate.elements.LAT.value)
+	}
+
+	get elevation() {
+		return meter(this.#geographicCoordinate.elements.ELEV.value)
+	}
+
+	get guideRateRightAscension() {
+		return this.#guideRate.elements.GUIDE_RATE_WE.value
+	}
+
+	get guideRateDeclination() {
+		return this.#guideRate.elements.GUIDE_RATE_NS.value
+	}
+
+	get slewRate() {
+		return findOnSwitch(this.#slewRate)[0]
+	}
+
+	get pierSide(): PierSide {
+		return this.#pierSide.elements.PIER_EAST.value ? 'EAST' : this.#pierSide.elements.PIER_WEST.value ? 'WEST' : 'NEITHER'
 	}
 
 	sendText(vector: NewTextVector) {
-		if (vector.device !== this.name) return
-
 		switch (vector.name) {
 			case 'TIME_UTC':
 				if (vector.elements.UTC) {
@@ -200,12 +279,10 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 	}
 
 	sendNumber(vector: NewNumberVector) {
-		if (vector.device !== this.name) return
-
 		switch (vector.name) {
 			case 'EQUATORIAL_EOD_COORD': {
-				const rightAscension = vector.elements.RA !== undefined ? hour(vector.elements.RA) : this.equatorialCoordinate.rightAscension
-				const declination = vector.elements.DEC !== undefined ? deg(vector.elements.DEC) : this.equatorialCoordinate.declination
+				const rightAscension = vector.elements.RA !== undefined ? hour(vector.elements.RA) : this.rightAscension
+				const declination = vector.elements.DEC !== undefined ? deg(vector.elements.DEC) : this.declination
 
 				if (this.#coordSetMode === 'SYNC') this.syncTo(rightAscension, declination)
 				else this.goTo(rightAscension, declination)
@@ -214,14 +291,14 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 			}
 			case 'GEOGRAPHIC_COORD':
 				this.setGeographicCoordinate({
-					latitude: vector.elements.LAT !== undefined ? deg(vector.elements.LAT) : this.geographicCoordinate.latitude,
-					longitude: vector.elements.LONG !== undefined ? normalizePI(deg(vector.elements.LONG)) : this.geographicCoordinate.longitude,
-					elevation: vector.elements.ELEV ?? this.geographicCoordinate.elevation,
+					latitude: vector.elements.LAT !== undefined ? deg(vector.elements.LAT) : this.latitude,
+					longitude: vector.elements.LONG !== undefined ? normalizePI(deg(vector.elements.LONG)) : this.longitude,
+					elevation: vector.elements.ELEV ?? this.elevation,
 				})
 
 				return
 			case 'GUIDE_RATE':
-				this.setGuideRate(vector.elements.GUIDE_RATE_WE ?? this.guideRate.rightAscension, vector.elements.GUIDE_RATE_NS ?? this.guideRate.declination)
+				this.setGuideRate(vector.elements.GUIDE_RATE_WE ?? this.guideRateRightAscension, vector.elements.GUIDE_RATE_NS ?? this.guideRateDeclination)
 
 				return
 			case 'TELESCOPE_TIMED_GUIDE_NS':
@@ -236,8 +313,6 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
-		if (vector.device !== this.name) return
-
 		switch (vector.name) {
 			case 'CONNECTION':
 				if (vector.elements.CONNECT === true) this.connect()
@@ -296,28 +371,67 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		}
 	}
 
-	// Starts the simulation clock and publishes the device in the manager.
-	start() {
-		if (this.#timer) return false
+	// Connects the simulated mount and adds its properties.
+	connect() {
+		if (this.#timer) return
+
+		super.connect()
+
+		if (!this.isConnected) return
 
 		this.#lastTick = Date.now()
 		this.refreshDynamicCoordinates(false)
-		this[CLIENT].register(this)
-		this.manager.add(this)
 		this.#timer = setInterval(this.tick.bind(this), TICK_INTERVAL_MS)
-		return true
+
+		handleDefSwitchVector(this.client, this.handler, this.#onCoordSet)
+		handleDefNumberVector(this.client, this.handler, this.#equatorialCoordinate)
+		handleDefSwitchVector(this.client, this.handler, this.#abort)
+		handleDefSwitchVector(this.client, this.handler, this.#trackMode)
+		handleDefSwitchVector(this.client, this.handler, this.#tracking)
+		handleDefSwitchVector(this.client, this.handler, this.#home)
+		handleDefSwitchVector(this.client, this.handler, this.#motionNS)
+		handleDefSwitchVector(this.client, this.handler, this.#motionWE)
+		handleDefSwitchVector(this.client, this.handler, this.#slewRate)
+		handleDefTextVector(this.client, this.handler, this.#time)
+		handleDefNumberVector(this.client, this.handler, this.#geographicCoordinate)
+		handleDefSwitchVector(this.client, this.handler, this.#park)
+		handleDefSwitchVector(this.client, this.handler, this.#parkOptions)
+		handleDefSwitchVector(this.client, this.handler, this.#pierSide)
+		handleDefNumberVector(this.client, this.handler, this.#guideRate)
+		handleDefNumberVector(this.client, this.handler, this.#guideNS)
+		handleDefNumberVector(this.client, this.handler, this.#guideWE)
 	}
 
-	// Disconnects the simulated mount and cancels active motion.
+	// Disconnects the simulated mount, cancels active motion and deletes its properties.
 	disconnect() {
+		if (!this.#timer) return
+
 		super.disconnect()
 		this.stop()
 		this.setTrackingEnabled(false)
+
+		handleDelProperty(this.client, this.handler, this.#onCoordSet)
+		handleDelProperty(this.client, this.handler, this.#equatorialCoordinate)
+		handleDelProperty(this.client, this.handler, this.#abort)
+		handleDelProperty(this.client, this.handler, this.#trackMode)
+		handleDelProperty(this.client, this.handler, this.#tracking)
+		handleDelProperty(this.client, this.handler, this.#home)
+		handleDelProperty(this.client, this.handler, this.#motionNS)
+		handleDelProperty(this.client, this.handler, this.#motionWE)
+		handleDelProperty(this.client, this.handler, this.#slewRate)
+		handleDelProperty(this.client, this.handler, this.#time)
+		handleDelProperty(this.client, this.handler, this.#geographicCoordinate)
+		handleDelProperty(this.client, this.handler, this.#park)
+		handleDelProperty(this.client, this.handler, this.#parkOptions)
+		handleDelProperty(this.client, this.handler, this.#pierSide)
+		handleDelProperty(this.client, this.handler, this.#guideRate)
+		handleDelProperty(this.client, this.handler, this.#guideNS)
+		handleDelProperty(this.client, this.handler, this.#guideWE)
 	}
 
 	// Starts a time-based slew to the requested equatorial coordinate.
 	goTo(rightAscension: Angle, declination: Angle) {
-		if (!this.connected || this.parked) return
+		if (!this.isConnected || this.isParked) return
 
 		this.clearManualMotion()
 		this.clearPulseGuide()
@@ -330,13 +444,13 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Applies a sync immediately without any slew time.
 	syncTo(rightAscension: Angle, declination: Angle) {
-		if (!this.connected) return
-		this.setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination), true)
+		if (!this.isConnected) return
+		this.setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination))
 	}
 
 	// Slews to the configured home position.
 	home() {
-		if (!this.connected || this.parked) return
+		if (!this.isConnected || this.isParked) return
 		this.#slewMode = 'HOME'
 		this.#slewTarget = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
 		this.setSlewing(true)
@@ -346,13 +460,13 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Stores the current coordinate as the new home position.
 	setHome() {
-		this.#homeCoordinate.rightAscension = this.equatorialCoordinate.rightAscension
-		this.#homeCoordinate.declination = this.equatorialCoordinate.declination
+		this.#homeCoordinate.rightAscension = this.rightAscension
+		this.#homeCoordinate.declination = this.declination
 	}
 
 	// Parks the mount at the configured park position.
 	park() {
-		if (!this.connected || this.parked) return
+		if (!this.isConnected || this.isParked) return
 		this.clearManualMotion()
 		this.clearPulseGuide()
 		this.#slewMode = 'PARK'
@@ -364,41 +478,34 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Unparks the mount without changing the current coordinate.
 	unpark() {
-		if (this.parked) {
-			this.parked = false
-			this.emit('parked')
-		}
-
+		this.isParked && selectOnSwitch(this.#park, 'UNPARK') && this.notify(this.#park)
 		this.setParking(false)
 	}
 
 	// Stores the current coordinate as the park position.
 	setPark() {
-		this.#parkCoordinate.rightAscension = this.equatorialCoordinate.rightAscension
-		this.#parkCoordinate.declination = this.equatorialCoordinate.declination
+		this.#parkCoordinate.rightAscension = this.rightAscension
+		this.#parkCoordinate.declination = this.declination
 	}
 
 	// Enables or disables sidereal-style tracking.
 	setTrackingEnabled(enable: boolean) {
-		if (this.parked) enable = false
-		if (this.tracking === enable) return
-		this.tracking = enable
-		this.emit('tracking')
+		if (this.isParked) enable = false
+		if (this.isTracking === enable) return
+		selectOnSwitch(this.#tracking, enable ? 'TRACK_ON' : 'TRACK_OFF') && this.notify(this.#tracking)
 	}
 
 	// Changes the simulated tracking mode.
 	setTrackMode(mode: TrackMode) {
 		if (!this.trackModes.includes(mode as never) || this.trackMode === mode) return
-		this.trackMode = mode
-		this.emit('trackMode')
+		selectOnSwitch(this.#trackMode, `TRACK_${mode}`) && this.notify(this.#trackMode)
 	}
 
 	// Changes the manual slew rate selection.
 	setSlewRate(rate: NameAndLabel | string) {
 		const name = typeof rate === 'string' ? rate : rate.name
 		if (!SLEW_RATES.some((entry) => entry.name === name) || this.slewRate === name) return
-		this.slewRate = name
-		this.emit('slewRate')
+		selectOnSwitch(this.#slewRate, name) && this.notify(this.#slewRate)
 	}
 
 	// Changes the simulated guide rate multipliers.
@@ -407,52 +514,56 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		declination = clamp(declination, 0, MAX_GUIDE_RATE)
 		let updated = false
 
-		if (this.guideRate.rightAscension !== rightAscension) {
-			this.guideRate.rightAscension = rightAscension
+		if (this.guideRateRightAscension !== rightAscension) {
+			this.#guideRate.elements.GUIDE_RATE_WE.value = rightAscension
 			updated = true
 		}
 
-		if (this.guideRate.declination !== declination) {
-			this.guideRate.declination = declination
+		if (this.guideRateDeclination !== declination) {
+			this.#guideRate.elements.GUIDE_RATE_NS.value = declination
 			updated = true
 		}
 
-		if (updated) this.emit('guideRate')
+		if (updated) {
+			handleDefNumberVector(this.client, this.handler, this.#guideRate)
+		}
 	}
 
 	// Updates the simulated site coordinate.
 	setGeographicCoordinate(coordinate: GeographicCoordinate) {
 		let updated = false
 
-		if (this.geographicCoordinate.latitude !== coordinate.latitude) {
-			this.geographicCoordinate.latitude = coordinate.latitude
+		if (this.latitude !== coordinate.latitude) {
+			this.#geographicCoordinate.elements.LAT.value = toDeg(coordinate.latitude)
 			updated = true
 		}
 
-		if (this.geographicCoordinate.longitude !== coordinate.longitude) {
-			this.geographicCoordinate.longitude = normalizePI(coordinate.longitude)
+		if (this.longitude !== coordinate.longitude) {
+			this.#geographicCoordinate.elements.LONG.value = toDeg(normalizeAngle(coordinate.longitude))
 			updated = true
 		}
 
-		if (this.geographicCoordinate.elevation !== coordinate.elevation) {
-			this.geographicCoordinate.elevation = coordinate.elevation
+		if (this.elevation !== coordinate.elevation) {
+			this.#geographicCoordinate.elements.ELEV.value = toMeter(coordinate.elevation)
 			updated = true
 		}
 
 		if (updated) {
-			this.updatePierSide(true)
-			this.emit('geographicCoordinate')
+			this.updatePierSide()
+			handleDefNumberVector(this.client, this.handler, this.#geographicCoordinate)
 		}
 	}
 
 	// Updates the simulated UTC clock.
 	setTime(value: UTCTime) {
-		if (this.time.utc === value.utc && this.time.offset === value.offset) return
-		this.time.utc = value.utc
-		this.time.offset = value.offset
+		if (this.#utcTime === value.utc && this.#utcOffset === value.offset) return
+		this.#utcTime = value.utc
+		this.#utcOffset = value.offset
+		this.#time.elements.UTC.value = formatTemporal(value.utc, 'YYYY-MM-DDTHH:mm:ss.SSSZ', 0)
+		this.#time.elements.OFFSET.value = (value.offset / 60).toFixed(2)
 		this.#lastTick = Date.now()
-		this.updatePierSide(true)
-		this.emit('time')
+		this.updatePierSide()
+		this.notify(this.#time)
 	}
 
 	// Sets manual northward motion.
@@ -477,7 +588,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Starts a pulse guiding correction for the requested direction.
 	pulse(direction: GuideDirection, duration: number) {
-		if (!this.connected || this.parked || duration <= 0) return
+		if (!this.isConnected || this.isParked || duration <= 0) return
 		const until = Date.now() + duration
 
 		if (direction === 'NORTH') {
@@ -494,39 +605,28 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 			this.#pulseWestEastUntil = until
 		}
 
-		this.updatePulsing(true)
+		this.updatePulsing()
 	}
 
 	// Aborts any active slew or manual motion.
 	stop() {
-		const wasSlewing = this.slewing
-		const wasHoming = this.homing
-		const wasParking = this.parking
-
 		this.#slewMode = undefined
 		this.#slewTarget = undefined
 		this.clearManualMotion()
 		this.clearPulseGuide()
-		this.slewing = false
-		this.homing = false
-		this.parking = false
-
-		if (wasSlewing) this.emit('slewing')
-		if (wasHoming) this.emit('homing')
-		if (wasParking) this.emit('parking')
+		this.setSlewing(false)
+		this.setHoming(false)
+		this.setParking(false)
 	}
 
 	// Stops the simulation clock and removes the device from the manager.
 	dispose() {
 		if (this.#timer) {
 			clearInterval(this.#timer)
+			this.disconnect()
 			this.#timer = undefined
+			this.handler.delProperty?.(this.client, { device: this.name })
 		}
-
-		this.stop()
-		this.disconnect()
-		this[CLIENT].unregister(this)
-		this.manager.remove(this)
 	}
 
 	// Advances the simulated state using wall-clock time.
@@ -537,9 +637,9 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 		if (dtSeconds <= 0) return
 
-		this.time.utc += Math.trunc(dtSeconds * 1000)
+		this.#utcTime += Math.trunc(dtSeconds * 1000)
 
-		if (!this.connected) return
+		if (!this.isConnected) return
 
 		this.expirePulseGuide(now)
 
@@ -558,12 +658,12 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 		const speed = this.manualSlewSpeed() * 3
 		const maxStep = speed * dtSeconds
-		const deltaRightAscension = normalizePI(target.rightAscension - this.equatorialCoordinate.rightAscension)
-		const deltaDeclination = target.declination - this.equatorialCoordinate.declination
+		const deltaRightAscension = normalizePI(target.rightAscension - this.rightAscension)
+		const deltaDeclination = target.declination - this.declination
 		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination))
 
 		if (span <= maxStep || span === 0) {
-			this.setCoordinate(target.rightAscension, target.declination, true)
+			this.setCoordinate(target.rightAscension, target.declination)
 			const mode = this.#slewMode
 			this.#slewMode = undefined
 			this.#slewTarget = undefined
@@ -581,12 +681,12 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		}
 
 		const scale = maxStep / span
-		this.setCoordinate(this.equatorialCoordinate.rightAscension + deltaRightAscension * scale, this.equatorialCoordinate.declination + deltaDeclination * scale, true)
+		this.setCoordinate(this.rightAscension + deltaRightAscension * scale, this.declination + deltaDeclination * scale)
 	}
 
 	// Advances tracking, manual motion and pulse guiding when not slewing.
 	private advanceFreeMotion(dtSeconds: number) {
-		let { rightAscension, declination } = this.equatorialCoordinate
+		let { rightAscension, declination } = this
 		let moved = false
 
 		if (this.#manualWestEast !== 0) {
@@ -600,12 +700,12 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		}
 
 		if (this.#pulseWestEast !== 0) {
-			rightAscension += this.#pulseWestEast * this.guideRate.rightAscension * SIDEREAL_DRIFT_RATE * dtSeconds
+			rightAscension += this.#pulseWestEast * this.guideRateRightAscension * SIDEREAL_DRIFT_RATE * dtSeconds
 			moved = true
 		}
 
 		if (this.#pulseNorthSouth !== 0) {
-			declination += this.#pulseNorthSouth * this.guideRate.declination * SIDEREAL_DRIFT_RATE * dtSeconds
+			declination += this.#pulseNorthSouth * this.guideRateDeclination * SIDEREAL_DRIFT_RATE * dtSeconds
 			moved = true
 		}
 
@@ -619,48 +719,48 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		}
 
 		if (moved) {
-			this.setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination), true)
+			this.setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination))
 		}
 	}
 
 	// Applies a coordinate update and notifies listeners when required.
-	private setCoordinate(rightAscension: Angle, declination: Angle, notify: boolean) {
-		rightAscension = normalizeAngle(rightAscension)
-		declination = clampDeclination(declination)
+	private setCoordinate(rightAscension: Angle, declination: Angle, notify: boolean = true) {
+		this.#equatorialCoordinate.elements.RA.value = toHour(normalizeAngle(rightAscension))
+		this.#equatorialCoordinate.elements.DEC.value = toDeg(clampDeclination(declination))
+		const pierSideChanged = this.updatePierSide()
 
-		const coordinate = this.equatorialCoordinate
-		const changed = coordinate.rightAscension !== rightAscension || coordinate.declination !== declination
-
-		coordinate.rightAscension = rightAscension
-		coordinate.declination = declination
-
-		const pierSideChanged = this.updatePierSide(notify)
-
-		if (notify && changed) this.emit('equatorialCoordinate')
-		if (notify && pierSideChanged) this.emit('pierSide')
+		if (notify) this.notify(this.#equatorialCoordinate)
+		if (notify && pierSideChanged) this.notify(this.#pierSide)
 	}
 
 	// Keeps the simulated pier side consistent with the current sky position.
-	private updatePierSide(notify: boolean) {
-		const pierSide = expectedPierSide(this.equatorialCoordinate.rightAscension, this.equatorialCoordinate.declination, this.siderealTime())
+	private updatePierSide() {
+		const pierSide = expectedPierSide(this.rightAscension, this.declination, this.siderealTime())
 		if (pierSide === this.pierSide) return false
-		this.pierSide = pierSide
-		return notify
+
+		if (pierSide === 'EAST') selectOnSwitch(this.#pierSide, 'PIER_EAST')
+		else if (pierSide === 'WEST') selectOnSwitch(this.#pierSide, 'PIER_WEST')
+		else {
+			this.#pierSide.elements.PIER_EAST.value = false
+			this.#pierSide.elements.PIER_WEST.value = false
+		}
+
+		return true
 	}
 
 	// Computes the current local sidereal time from the simulated clock.
 	private siderealTime() {
-		return localSiderealTime(timeUnix(this.time.utc / 1000, undefined, true), this.geographicCoordinate)
+		return localSiderealTime(timeUnix(this.#utcTime / 1000, undefined, true), this.longitude)
 	}
 
 	// Returns the active free-slew speed in radians per second.
 	private manualSlewSpeed() {
-		return SLEW_RATES.find((entry) => entry.name === this.slewRate)?.speed ?? SLEW_RATES[2].speed
+		return SLEW_RATES.find((entry) => entry.name === this.slewRate)?.speed ?? SLEW_RATES[3].speed
 	}
 
 	// Returns the RA drift implied by the current tracking state.
 	private trackingDriftRate() {
-		if (!this.tracking) return SIDEREAL_DRIFT_RATE
+		if (!this.isTracking) return SIDEREAL_DRIFT_RATE
 		if (this.trackMode === 'SOLAR') return SOLAR_DRIFT_RATE
 		if (this.trackMode === 'LUNAR') return LUNAR_DRIFT_RATE
 		if (this.trackMode === 'KING') return KING_DRIFT_RATE
@@ -683,22 +783,19 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 			changed = true
 		}
 
-		if (changed) this.updatePulsing(true)
+		if (changed) {
+			this.updatePulsing()
+		}
 	}
 
 	// Updates the combined pulse-guiding state.
-	private updatePulsing(notify: boolean) {
-		const pulsing = this.#pulseNorthSouth !== 0 || this.#pulseWestEast !== 0
-
-		if (this.pulsing !== pulsing) {
-			this.pulsing = pulsing
-			if (notify) this.emit('pulsing')
-		}
+	private updatePulsing() {
+		this.setPulsing(this.#pulseNorthSouth !== 0 || this.#pulseWestEast !== 0)
 	}
 
 	// Sets the active north/south manual motion state.
 	private setManualNorthSouth(direction: AxisDirection) {
-		if (!this.connected || this.parked) direction = 0
+		if (!this.isConnected || this.isParked) direction = 0
 		if (this.#manualNorthSouth === direction) return
 		if (direction !== 0) this.abortSlew()
 		this.#manualNorthSouth = direction
@@ -707,7 +804,7 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Sets the active west/east manual motion state.
 	private setManualWestEast(direction: AxisDirection) {
-		if (!this.connected || this.parked) direction = 0
+		if (!this.isConnected || this.isParked) direction = 0
 		if (this.#manualWestEast === direction) return
 		if (direction !== 0) this.abortSlew()
 		this.#manualWestEast = direction
@@ -722,13 +819,11 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Clears active pulse-guiding commands.
 	private clearPulseGuide() {
-		const pulsing = this.pulsing
 		this.#pulseNorthSouth = 0
 		this.#pulseWestEast = 0
 		this.#pulseNorthSouthUntil = 0
 		this.#pulseWestEastUntil = 0
-		this.pulsing = false
-		if (pulsing) this.emit('pulsing')
+		this.setPulsing(false)
 	}
 
 	// Cancels any goto, home or park slew.
@@ -746,29 +841,42 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 
 	// Updates the slewing flag and notifies listeners.
 	private setSlewing(value: boolean) {
-		if (this.slewing === value) return
-		this.slewing = value
-		this.emit('slewing')
+		if (this.isSlewing === value) return
+		this.#equatorialCoordinate.state = value ? 'Busy' : 'Idle'
+		this.notify(this.#equatorialCoordinate)
 	}
 
 	// Updates the homing flag and notifies listeners.
 	private setHoming(value: boolean) {
-		if (this.homing === value) return
-		this.homing = value
-		this.emit('homing')
+		if (this.isHoming === value) return
+		this.#home.state = value ? 'Busy' : 'Idle'
+		this.notify(this.#home)
 	}
 
 	// Updates the parking state and notifies listeners.
 	private setParking(parking: boolean, parked?: boolean) {
-		if (this.parking !== parking) {
-			this.parking = parking
-			this.emit('parking')
+		let updated = false
+
+		if (this.isParking !== parking) {
+			this.#park.state = parking ? 'Busy' : 'Idle'
+			updated = true
 		}
 
-		if (parked !== undefined && this.parked !== parked) {
-			this.parked = parked
-			this.emit('parked')
+		if (parked !== undefined && this.isParked !== parked) {
+			updated = selectOnSwitch(this.#park, parked ? 'PARK' : 'UNPARK')
 		}
+
+		if (updated) {
+			this.notify(this.#park)
+		}
+	}
+
+	private setPulsing(pulsing: boolean) {
+		if (this.isPulsing === pulsing) return
+		this.#guideNS.state = pulsing ? 'Busy' : 'Idle'
+		this.#guideWE.state = this.#guideNS.state
+		this.notify(this.#guideNS)
+		this.notify(this.#guideWE)
 	}
 
 	// Initializes the mount with a realistic pole-pointing home position.
@@ -776,12 +884,6 @@ export class MountSimulator extends DeviceSimulator<Mount> implements Mount {
 		this.#homeCoordinate.rightAscension = this.siderealTime()
 		this.#parkCoordinate.rightAscension = this.#homeCoordinate.rightAscension
 		this.setCoordinate(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
-	}
-
-	// Emits a Mount update for the requested property.
-	protected emit(property: keyof Mount & string) {
-		this.#mountManager.updated(this, property)
-		if (property === 'pulsing' || property === 'guideRate' || property === 'connected') this.#guideOutputManager.updated(this, property)
 	}
 }
 
