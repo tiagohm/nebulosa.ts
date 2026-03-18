@@ -113,6 +113,18 @@ test('plots a centered mono star with stable flux and sigma mapping', () => {
 	expect(buffer[24 * WIDTH + 24]).toBeGreaterThan(buffer[24 * WIDTH + 22])
 })
 
+test('preserves flux for undersampled gaussian stars', () => {
+	const size = 128
+	const scenarios = [1, 0.35] as const
+	const buffer = new Float64Array(size * size)
+
+	for (const hfd of scenarios) {
+		buffer.fill(0)
+		expect(plotStar(buffer, size, size, 1, size / 2, size / 2, 1, hfd, 40, 0, { maxPlotRadius: 32 })).toBe(true)
+		expect(monoSum(buffer)).toBeCloseTo(1, 6)
+	}
+})
+
 test('plots centered RGB stars with normalized color energy', () => {
 	const redBuffer = new Float64Array(WIDTH * HEIGHT * 3)
 	const blueBuffer = new Float64Array(WIDTH * HEIGHT * 3)
@@ -148,6 +160,8 @@ test('responds smoothly to subpixel shifts', () => {
 })
 
 test('clips safely near each border and preserves sentinel values', () => {
+	const guard = new Float64Array(WIDTH * HEIGHT + 4)
+
 	const layouts = [
 		{ x: -1.2, y: 24 },
 		{ x: WIDTH - 0.2, y: 24 },
@@ -157,7 +171,7 @@ test('clips safely near each border and preserves sentinel values', () => {
 	] as const
 
 	for (const layout of layouts) {
-		const guard = new Float64Array(WIDTH * HEIGHT + 4)
+		guard.fill(0)
 		guard[0] = 123
 		guard[1] = 456
 		guard[guard.length - 2] = 789
@@ -276,16 +290,16 @@ describe('plot star', () => {
 		{ name: 'mono nominal gaussian', slug: 'mono-nominal-gaussian', channels: 1, flux: 0.34, hfd: 3.2, snr: 24, seeing: 0.6, hash: '93b863745447162d4dd3848e05c078d8' },
 		{ name: 'mono subpixel gaussian', slug: 'mono-subpixel-gaussian', channels: 1, x: WIDTH / 2 + 0.33, y: HEIGHT / 2 - 0.27, flux: 0.28, hfd: 2.7, snr: 22, seeing: 0.4, hash: '6e651ee6a7ee6726297b52223d0cda35' },
 		{ name: 'mono faint low snr', slug: 'mono-faint-low-snr', channels: 1, flux: 0.015, hfd: 2.8, snr: 4, seeing: 0.3, hash: '61faa0f25bd5dff6e4903582a97a6044' },
-		{ name: 'mono bright saturated core', slug: 'mono-bright-saturated-core', channels: 1, flux: 5.5, hfd: 1.15, snr: 64, seeing: 0, saturationLevel: 1, peakScale: 1.5, hash: '5049ceaeee502976cbb0d3a099ac76b2' },
+		{ name: 'mono bright saturated core', slug: 'mono-bright-saturated-core', channels: 1, flux: 5.5, hfd: 1.15, snr: 64, seeing: 0, saturationLevel: 1, peakScale: 1.5, hash: '4ff8371f564b9ab6a25184fd17b86f8d' },
 		{ name: 'mono diffuse seeing dominated', slug: 'mono-diffuse-seeing-dominated', channels: 1, flux: 0.42, hfd: 8.4, snr: 10, seeing: 4.8, softCore: 1.4, maxPlotRadius: 24, hash: '5f9c4bb225b6b94383efff2fae977bcb' },
 		{ name: 'mono elliptical horizontal', slug: 'mono-elliptical-horizontal', channels: 1, flux: 0.3, hfd: 3.1, snr: 20, seeing: 0.5, ellipticity: 0.45, theta: 0, hash: 'e84227d2250195e4099623356c50d1bc' },
 		{ name: 'mono elliptical rotated halo', slug: 'mono-elliptical-rotated-halo', channels: 1, flux: 0.32, hfd: 3.4, snr: 18, seeing: 0.8, ellipticity: 0.38, theta: Math.PI / 4, haloStrength: 0.22, haloScale: 3.5, hash: '02f7f008dbb74c5baf1484843a186215' },
 		{ name: 'mono left edge clip', slug: 'mono-left-edge-clip', channels: 1, x: 1.35, y: HEIGHT / 2, flux: 0.3, hfd: 3.2, snr: 16, seeing: 0.9, hash: 'd3fefbf67943e75e3f5c54b70573c24e' },
 		{ name: 'mono corner clip', slug: 'mono-corner-clip', channels: 1, x: 1.25, y: 1.75, flux: 0.26, hfd: 2.7, snr: 14, seeing: 0.7, hash: 'fb024542be6bc7b31f3569fd106a615a' },
-		{ name: 'mono moffat compact', slug: 'mono-moffat-compact', channels: 1, flux: 0.29, hfd: 3.0, snr: 30, seeing: 0.4, psfModel: 'moffat', beta: 2.2, hash: 'b83dd1d6bc47f6bf17ccafc94bda193b' },
+		{ name: 'mono moffat compact', slug: 'mono-moffat-compact', channels: 1, flux: 0.29, hfd: 3.0, snr: 30, seeing: 0.4, psfModel: 'moffat', beta: 2.2, hash: '83b5f299f3ae240e78279efb713bfaa3' },
 		{ name: 'mono moffat with halo', slug: 'mono-moffat-with-halo', channels: 1, flux: 0.33, hfd: 3.4, snr: 24, seeing: 0.5, psfModel: 'moffat', beta: 2.8, haloStrength: 0.16, haloScale: 3.2, hash: '73f46bee2e212e1592c3166e9ab1dca3' },
 		{ name: 'mono jittered soft core', slug: 'mono-jittered-soft-core', channels: 1, flux: 0.31, hfd: 2.4, snr: 12, seeing: 0.2, jitterX: 0.18, jitterY: -0.22, softCore: 1.8, additiveNoiseHint: 1.5, hash: '0a6af80bdc872a86ca81ead515e38092' },
-		{ name: 'mono defocused', slug: 'mono-defocused', channels: 1, flux: 0.34, hfd: 2.8, snr: 22, seeing: 0.5, focusStep: 90000, bestFocus: 48000, hash: 'c220cf3f25820ecb4153d8e41215ba82' },
+		{ name: 'mono defocused', slug: 'mono-defocused', channels: 1, flux: 0.34, hfd: 2.8, snr: 22, seeing: 0.5, focusStep: 90000, bestFocus: 48000, hash: '91a71a55376e971b01ecf267df8e12e9' },
 		{ name: 'rgb neutral gaussian', slug: 'rgb-neutral-gaussian', channels: 3, flux: 0.36, hfd: 3.3, snr: 26, seeing: 0.6, colorIndex: 0.45, hash: 'ecd5a1d1c1289eb334f93e2aac8eeac9' },
 		{ name: 'rgb blue hot star', slug: 'rgb-blue-hot-star', channels: 3, flux: 0.36, hfd: 2.7, snr: 30, seeing: 0.4, colorIndex: -0.3, peakScale: 1.2, hash: '84fe142d37e945145f667b5b1113c8e3' },
 		{ name: 'rgb red cool star', slug: 'rgb-red-cool-star', channels: 3, flux: 0.36, hfd: 3.7, snr: 28, seeing: 0.7, colorIndex: 1.85, hash: 'ac3936cbcd6c4633cdff17bc7a97b3a5' },
@@ -293,7 +307,7 @@ describe('plot star', () => {
 		{ name: 'rgb elliptical rotated', slug: 'rgb-elliptical-rotated', channels: 3, flux: 0.32, hfd: 3.0, snr: 18, seeing: 0.6, colorIndex: 0.05, ellipticity: 0.34, theta: Math.PI / 6, hash: '0de84b935c5c8b25b6afdbf9ebd5ec54' },
 		{ name: 'rgb halo and gamma', slug: 'rgb-halo-and-gamma', channels: 3, flux: 0.34, hfd: 3.5, snr: 20, seeing: 0.7, colorIndex: 1.15, haloStrength: 0.24, haloScale: 3.6, gammaCompensation: 2.2, hash: '8195341783cf3e9597c17ed33949d4cc' },
 		{ name: 'rgb moffat halo', slug: 'rgb-moffat-halo', channels: 3, flux: 0.31, hfd: 2.9, snr: 32, seeing: 0.4, colorIndex: -0.15, psfModel: 'moffat', beta: 2.5, haloStrength: 0.12, haloScale: 3.1, hash: '69bd723fd403c7861913b29a9fc3d920' },
-		{ name: 'rgb defocused', slug: 'rgb-defocused', channels: 3, flux: 0.34, hfd: 2.8, snr: 22, seeing: 0.5, colorIndex: 0.8, focusStep: 12000, bestFocus: 64000, hash: 'bbaff5cffe7d283077bce195b3cf5066' },
+		{ name: 'rgb defocused', slug: 'rgb-defocused', channels: 3, flux: 0.34, hfd: 2.8, snr: 22, seeing: 0.5, colorIndex: 0.8, focusStep: 12000, bestFocus: 64000, hash: '933cc32600298b1d103b97d667c8cb2c' },
 		{ name: 'rgb corner clip', slug: 'rgb-corner-clip', channels: 3, x: 1.4, y: 2.1, flux: 0.28, hfd: 3.0, snr: 15, seeing: 0.8, colorIndex: 0.7, hash: '4609762a435f795f4f4130929f303f50' },
 	]
 

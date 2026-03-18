@@ -695,6 +695,12 @@ spaceMotion(sirius, time) // BCRS cartesian coordinate at time applying space mo
 sirius.observedAt(time, [ebp, ebv], ehp, refraction) // Observed spherical coordinate at time
 ```
 
+### Star Generator ![](bun.webp) ![](browser.webp)
+
+```ts
+plotStar(raw, width, height, channels, x, y, flux, hfd, snr, seeing, options)
+```
+
 ### Statistics ![](bun.webp) ![](browser.webp)
 
 ```ts

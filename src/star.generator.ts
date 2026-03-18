@@ -1,4 +1,3 @@
-import { ONE_OVER_TAU, PI } from './constants'
 import type { ImageRawType } from './image.types'
 import { clamp, lerp } from './math'
 
@@ -140,10 +139,14 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 	const wingsScale = psfModel === 'moffat' ? 1.35 : 1
 	const sigmaExtent = Math.max(sigma / Math.sqrt(axisRatio), haloStrength > 0 ? haloSigma / Math.sqrt(axisRatio) : 0)
 	const radius = Math.ceil(clamp(cutoffSigma * wingsScale * sigmaExtent * (1 - lowSnr * 0.08), minPlotRadius, maxPlotRadius))
-	const minX = Math.max(0, Math.ceil(centerX - radius))
-	const maxX = Math.min(width - 1, Math.floor(centerX + radius))
-	const minY = Math.max(0, Math.ceil(centerY - radius))
-	const maxY = Math.min(height - 1, Math.floor(centerY + radius))
+	const plotMinX = Math.ceil(centerX - radius)
+	const plotMaxX = Math.floor(centerX + radius)
+	const plotMinY = Math.ceil(centerY - radius)
+	const plotMaxY = Math.floor(centerY + radius)
+	const minX = Math.max(0, plotMinX)
+	const maxX = Math.min(width - 1, plotMaxX)
+	const minY = Math.max(0, plotMinY)
+	const maxY = Math.min(height - 1, plotMaxY)
 
 	if (maxX < minX || maxY < minY) return false
 
@@ -151,8 +154,8 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 	const haloFlux = totalFlux - coreFlux
 
 	if (psfModel === 'gaussian' && ellipticity <= FAST_PATH_ELLIPTICITY_EPSILON) {
-		const coreAmplitude = (coreFlux * ONE_OVER_TAU) / (sigma * sigma)
-		const haloAmplitude = haloFlux > 0 ? (haloFlux * ONE_OVER_TAU) / (haloSigma * haloSigma) : 0
+		const coreAmplitude = coreFlux / Math.max(Number.EPSILON, circularGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, sigma))
+		const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, circularGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloSigma)) : 0
 
 		if (channels === 1) {
 			plotCircularGaussianMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, sigma, coreAmplitude, haloSigma, haloAmplitude, saturationEnabled, saturationLevel)
@@ -171,8 +174,8 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 		const minorSigma = sigma * axisRatioSqrt
 		const haloMajorSigma = haloStrength > 0 ? haloSigma / axisRatioSqrt : 0
 		const haloMinorSigma = haloStrength > 0 ? haloSigma * axisRatioSqrt : 0
-		const coreAmplitude = (coreFlux * ONE_OVER_TAU) / (majorSigma * minorSigma)
-		const haloAmplitude = haloFlux > 0 ? (haloFlux * ONE_OVER_TAU) / (haloMajorSigma * haloMinorSigma) : 0
+		const coreAmplitude = coreFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, majorSigma, minorSigma, options.theta ?? 0))
+		const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloMajorSigma, haloMinorSigma, options.theta ?? 0)) : 0
 
 		if (channels === 1) {
 			plotEllipticalGaussianMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorSigma, minorSigma, options.theta ?? 0, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
@@ -188,14 +191,16 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 	const baseAlpha = moffatAlphaFromHfd(effectiveHfd, beta)
 	const majorAlpha = baseAlpha / axisRatioSqrt
 	const minorAlpha = baseAlpha * axisRatioSqrt
-	const coreAmplitude = (coreFlux * (beta - 1)) / (PI * majorAlpha * minorAlpha)
-	const haloAmplitude = haloFlux > 0 ? (haloFlux * ONE_OVER_TAU) / ((haloSigma / axisRatioSqrt) * (haloSigma * axisRatioSqrt)) : 0
+	const haloMajorSigma = haloSigma / axisRatioSqrt
+	const haloMinorSigma = haloSigma * axisRatioSqrt
+	const coreAmplitude = coreFlux / Math.max(Number.EPSILON, moffatDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, majorAlpha, minorAlpha, options.theta ?? 0, beta))
+	const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloMajorSigma, haloMinorSigma, options.theta ?? 0)) : 0
 
 	if (channels === 1) {
-		plotMoffatMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta ?? 0, beta, coreAmplitude, haloSigma / axisRatioSqrt, haloSigma * axisRatioSqrt, haloAmplitude, saturationEnabled, saturationLevel)
+		plotMoffatMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta ?? 0, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
 	} else {
 		const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(options.colorIndex, options.gammaCompensation)
-		plotMoffatRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta ?? 0, beta, coreAmplitude, haloSigma / axisRatioSqrt, haloSigma * axisRatioSqrt, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
+		plotMoffatRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta ?? 0, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
 	}
 
 	return true
@@ -708,6 +713,75 @@ function moffatAlphaFromHfd(hfd: number, beta: number) {
 	const radius = 0.5 * Math.max(MIN_HFD, sanitizePositive(hfd, MIN_HFD))
 	const denominator = Math.sqrt(Math.max(1e-9, 2 ** (1 / (beta - 1)) - 1))
 	return Math.max(MIN_SIGMA, radius / denominator)
+}
+
+// Computes the sampled Gaussian mass along one axis for the exact plotted lattice.
+function gaussian1DDiscreteSum(minIndex: number, maxIndex: number, center: number, sigma: number) {
+	const invTwoSigma2 = 0.5 / (sigma * sigma)
+	const start = minIndex - center
+	let weight = Math.exp(-(start * start) * invTwoSigma2)
+	let step = Math.exp(-(2 * start + 1) * invTwoSigma2)
+	const stepMul = Math.exp(-1 / (sigma * sigma))
+	let sum = 0
+
+	for (let index = minIndex; index <= maxIndex; index++) {
+		sum += weight
+		weight *= step
+		step *= stepMul
+	}
+
+	return sum
+}
+
+// Computes the sampled circular Gaussian mass over the plotted support.
+function circularGaussianDiscreteSum(minX: number, maxX: number, minY: number, maxY: number, centerX: number, centerY: number, sigma: number) {
+	return gaussian1DDiscreteSum(minX, maxX, centerX, sigma) * gaussian1DDiscreteSum(minY, maxY, centerY, sigma)
+}
+
+// Computes the sampled elliptical Gaussian mass over the plotted support.
+function ellipticalGaussianDiscreteSum(minX: number, maxX: number, minY: number, maxY: number, centerX: number, centerY: number, sigmaX: number, sigmaY: number, theta: number) {
+	const [a, b, c] = gaussianQuadraticTerms(sigmaX, sigmaY, theta)
+	const xStart = minX - centerX
+	const delta2a = 2 * a
+	const stepMul = Math.exp(-a)
+	let sum = 0
+
+	for (let py = minY; py <= maxY; py++) {
+		const dy = py - centerY
+		let dq = a * (2 * xStart + 1) + b * dy
+		let weight = Math.exp(-0.5 * (a * xStart * xStart + b * xStart * dy + c * dy * dy))
+		let step = Math.exp(-0.5 * dq)
+
+		for (let px = minX; px <= maxX; px++) {
+			sum += weight
+			weight *= step
+			step *= stepMul
+			dq += delta2a
+		}
+	}
+
+	return sum
+}
+
+// Computes the sampled Moffat mass over the plotted support.
+function moffatDiscreteSum(minX: number, maxX: number, minY: number, maxY: number, centerX: number, centerY: number, alphaX: number, alphaY: number, theta: number, beta: number) {
+	const [a, b, c] = moffatQuadraticTerms(alphaX, alphaY, theta)
+	const xStart = minX - centerX
+	let sum = 0
+
+	for (let py = minY; py <= maxY; py++) {
+		const dy = py - centerY
+		let q = a * xStart * xStart + b * xStart * dy + c * dy * dy
+		let dq = a * (2 * xStart + 1) + b * dy
+
+		for (let px = minX; px <= maxX; px++) {
+			sum += 1 / (1 + q) ** beta
+			q += dq
+			dq += 2 * a
+		}
+	}
+
+	return sum
 }
 
 function sanitizePositive(value: number | undefined, fallback: number) {
