@@ -1,3 +1,4 @@
+import type { DeepRequired } from 'utility-types'
 import { PIOVERTWO, TAU } from './constants'
 import { clamp } from './math'
 import { mulberry32, type Random } from './random'
@@ -7,8 +8,6 @@ export type AstronomicalImageNoiseQuality = 'fast' | 'balanced' | 'high-realism'
 export type AstronomicalImageClampMode = 'clamp' | 'normalize' | 'none'
 
 export type AmpGlowPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'left' | 'right' | 'top' | 'bottom'
-
-export type AstronomicalImageDebugMapName = 'skyBackgroundField' | 'moonGradientMap' | 'darkCurrentMap' | 'ampGlowMap' | 'hotPixelMap' | 'readNoiseSampleMap'
 
 export interface AstronomicalImageNoiseConfig {
 	readonly channels?: 1 | 3
@@ -22,7 +21,6 @@ export interface AstronomicalImageNoiseConfig {
 	readonly sensor?: AstronomicalSensorConfig
 	readonly artifacts?: AstronomicalStructuredArtifactsConfig
 	readonly output?: AstronomicalOutputConfig
-	readonly debug?: AstronomicalDebugConfig
 }
 
 // Exposure controls are in seconds, unitless gain factors, and electrons per ADU.
@@ -134,20 +132,6 @@ export interface AstronomicalOutputConfig {
 	readonly quantize?: boolean
 }
 
-export interface AstronomicalDebugConfig {
-	readonly enabled?: boolean
-	readonly maps?: readonly AstronomicalImageDebugMapName[]
-}
-
-export interface AstronomicalImageNoiseDebugMaps {
-	readonly skyBackgroundField?: Float64Array
-	readonly moonGradientMap?: Float64Array
-	readonly darkCurrentMap?: Float64Array
-	readonly ampGlowMap?: Float64Array
-	readonly hotPixelMap?: Float64Array
-	readonly readNoiseSampleMap?: Float64Array
-}
-
 export interface AstronomicalImageNoiseStats {
 	readonly seed: number
 	readonly expectedLength: number
@@ -162,7 +146,6 @@ export interface AstronomicalImageNoiseStats {
 
 export interface AstronomicalImageNoiseResult {
 	readonly stats: AstronomicalImageNoiseStats
-	readonly debug: AstronomicalImageNoiseDebugMaps | undefined
 }
 
 interface ResolvedAstronomicalImageNoiseConfig {
@@ -249,7 +232,6 @@ interface ResolvedAstronomicalImageNoiseConfig {
 	readonly hotPixelStrength: number
 	readonly warmPixelStrength: number
 	readonly deadPixelResidual: number
-	readonly debugMaps: Readonly<Record<AstronomicalImageDebugMapName, boolean>>
 	readonly lowFrequencyPhase0: number
 	readonly lowFrequencyPhase1: number
 	readonly lowFrequencyPhase2: number
@@ -262,22 +244,21 @@ interface GaussianSamplerState {
 }
 
 interface SensorDefect {
-	readonly signalScale: number
-	readonly extraSignalElectrons: number
-	readonly kind: 0 | 1 | 2 | 3
+	signalScale: number
+	extraSignalElectrons: number
+	kind: 0 | 1 | 2 | 3
+}
+
+interface SkySpatialFields {
+	sharedSkyElectrons: number
+	lightPollutionElectrons: number
+	moonElectrons: number
+	ampGlowElectrons: number
 }
 
 const DEFAULT_RGB: readonly [number, number, number] = [1, 1, 1]
-const DEFAULT_DEBUG_MAPS: Readonly<Record<AstronomicalImageDebugMapName, boolean>> = {
-	skyBackgroundField: false,
-	moonGradientMap: false,
-	darkCurrentMap: false,
-	ampGlowMap: false,
-	hotPixelMap: false,
-	readNoiseSampleMap: false,
-}
 
-export const DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG: Readonly<AstronomicalImageNoiseConfig> = {
+export const DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG: Readonly<DeepRequired<AstronomicalImageNoiseConfig>> = {
 	channels: 1,
 	seed: 0x5f3759df,
 	quality: 'balanced',
@@ -344,7 +325,7 @@ export const DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG: Readonly<AstronomicalImage
 		channelCorrelation: 0.3,
 		ampGlow: {
 			enabled: false,
-			strength: 0.04,
+			strength: 0.01,
 			position: 'right',
 			radiusX: 0.2,
 			radiusY: 0.35,
@@ -369,22 +350,19 @@ export const DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG: Readonly<AstronomicalImage
 		bitDepth: 16,
 		clampMode: 'clamp',
 		quantize: false,
-	},
-	debug: {
-		enabled: false,
-		maps: [],
+		maxValue: 65535,
 	},
 }
 
 // Adds realistic sky background and camera noise into a normalized image buffer in place.
 export function generateAstronomicalImageNoise(raw: Float64Array, width: number, height: number, config: AstronomicalImageNoiseConfig = DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG): AstronomicalImageNoiseResult {
 	const resolved = resolveAstronomicalImageNoiseConfig(raw, width, height, config)
-	const { channels, expectedLength, height: imageHeight, width: imageWidth } = resolved
+	const { channels, expectedLength, height: imageHeight, width: imageWidth, seed } = resolved
 
 	if (expectedLength === 0) {
 		return {
 			stats: {
-				seed: resolved.seed,
+				seed,
 				expectedLength,
 				saturationElectrons: resolved.saturationElectrons,
 				normalizationScale: 1,
@@ -394,25 +372,17 @@ export function generateAstronomicalImageNoise(raw: Float64Array, width: number,
 				warmPixelCount: 0,
 				deadPixelCount: 0,
 			},
-			debug: createDebugMaps(resolved, imageWidth * imageHeight),
 		}
 	}
 
-	const random = mulberry32(resolved.seed)
+	const random = mulberry32(seed)
 	const gaussianState: GaussianSamplerState = { spare: 0, hasSpare: false }
-	const debug = createDebugMaps(resolved, imageWidth * imageHeight)
 	const xCentered = createCenteredAxis(imageWidth)
 	const yCentered = createCenteredAxis(imageHeight)
 	const rowNoise = createNoiseAxis(imageHeight, resolved.rowNoiseStrength, random, gaussianState)
 	const columnNoise = createNoiseAxis(imageWidth, resolved.columnNoiseStrength, random, gaussianState)
 	const rowBanding = createBandingAxis(imageHeight, resolved.bandingStrength, resolved.bandingFrequency, random)
 	const columnBanding = createBandingAxis(imageWidth, resolved.bandingStrength * 0.75, resolved.bandingFrequency * 1.13, random)
-	const skyBackgroundFieldMap = debug?.skyBackgroundField
-	const moonGradientMap = debug?.moonGradientMap
-	const darkCurrentMap = debug?.darkCurrentMap
-	const ampGlowMap = debug?.ampGlowMap
-	const hotPixelMap = debug?.hotPixelMap
-	const readNoiseSampleMap = debug?.readNoiseSampleMap
 
 	let maxValueBeforeOutput = -Infinity
 	let saturatedPixels = 0
@@ -423,6 +393,9 @@ export function generateAstronomicalImageNoise(raw: Float64Array, width: number,
 	const sharedReadNoiseSigma = Math.sqrt(clamp(resolved.channelCorrelation, 0, 1))
 	const independentReadNoiseSigma = Math.sqrt(Math.max(0, 1 - sharedReadNoiseSigma * sharedReadNoiseSigma))
 
+	const spatial: SkySpatialFields = { sharedSkyElectrons: 0, lightPollutionElectrons: 0, moonElectrons: 0, ampGlowElectrons: 0 }
+	const defect: SensorDefect = { signalScale: 0, extraSignalElectrons: 0, kind: 0 }
+
 	for (let y = 0; y < imageHeight; y++) {
 		const yc = yCentered[y]
 		const rowBase = y * imageWidth
@@ -432,8 +405,8 @@ export function generateAstronomicalImageNoise(raw: Float64Array, width: number,
 			const pixelIndex = rowBase + x
 			const xc = xCentered[x]
 			const columnStructuredElectrons = columnNoise[x] + columnBanding[x]
-			const spatial = evaluateSkySpatialFields(xc, yc, resolved)
-			const defect = sampleSensorDefect(resolved, random)
+			evaluateSkySpatialFields(xc, yc, resolved, spatial)
+			sampleSensorDefect(resolved, random, defect)
 
 			if (defect.kind === 1) hotPixelCount++
 			else if (defect.kind === 2) warmPixelCount++
@@ -446,12 +419,6 @@ export function generateAstronomicalImageNoise(raw: Float64Array, width: number,
 			const ampGlowElectrons = spatial.ampGlowElectrons
 			const sharedReadNoise = sampleGaussian(random, gaussianState) * sharedReadNoiseSigma
 
-			writeDebugValue(skyBackgroundFieldMap, pixelIndex, skyElectrons * resolved.normalizedPerElectron)
-			writeDebugValue(moonGradientMap, pixelIndex, spatial.moonElectrons * resolved.normalizedPerElectron)
-			writeDebugValue(darkCurrentMap, pixelIndex, darkElectrons * resolved.normalizedPerElectron)
-			writeDebugValue(ampGlowMap, pixelIndex, ampGlowElectrons * resolved.normalizedPerElectron)
-			writeDebugValue(hotPixelMap, pixelIndex, defect.extraSignalElectrons * resolved.normalizedPerElectron)
-
 			if (channels === 1) {
 				const readNoiseElectrons = resolved.readNoise * resolved.channelReadNoise[0] * (sharedReadNoise + sampleGaussian(random, gaussianState) * independentReadNoiseSigma)
 				const signalElectrons = sampleSignalElectrons(skyElectrons * resolved.channelGain[0], random, gaussianState, resolved.poissonThreshold) * fixedPatternGain
@@ -461,7 +428,6 @@ export function generateAstronomicalImageNoise(raw: Float64Array, width: number,
 				raw[pixelIndex] = next
 				if (next > maxValueBeforeOutput) maxValueBeforeOutput = next
 				if (next >= 1) saturatedPixels++
-				writeDebugValue(readNoiseSampleMap, pixelIndex, readNoiseElectrons * resolved.normalizedPerElectron)
 			} else {
 				const baseIndex = pixelIndex * 3
 				let readNoiseAverage = 0
@@ -480,8 +446,6 @@ export function generateAstronomicalImageNoise(raw: Float64Array, width: number,
 					if (next >= 1) saturatedPixels++
 					readNoiseAverage += readNoiseElectrons
 				}
-
-				writeDebugValue(readNoiseSampleMap, pixelIndex, (readNoiseAverage / 3) * resolved.normalizedPerElectron)
 			}
 		}
 	}
@@ -490,7 +454,7 @@ export function generateAstronomicalImageNoise(raw: Float64Array, width: number,
 
 	return {
 		stats: {
-			seed: resolved.seed,
+			seed,
 			expectedLength,
 			saturationElectrons: resolved.saturationElectrons,
 			normalizationScale,
@@ -500,7 +464,6 @@ export function generateAstronomicalImageNoise(raw: Float64Array, width: number,
 			warmPixelCount,
 			deadPixelCount,
 		},
-		debug,
 	}
 }
 
@@ -511,7 +474,7 @@ function resolveAstronomicalImageNoiseConfig(raw: Float64Array, width: number, h
 
 	const channels = config.channels ?? 1
 	const expectedLength = width * height * channels
-	if (raw.length !== expectedLength) throw new RangeError(`buffer length mismatch: expected ${expectedLength}, received ${raw.length}`)
+	if (raw.length < expectedLength) throw new RangeError(`buffer length mismatch: expected ${expectedLength}, received ${raw.length}`)
 
 	const exposure = config.exposure ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure!
 	const sky = config.sky ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!
@@ -537,7 +500,6 @@ function resolveAstronomicalImageNoiseConfig(raw: Float64Array, width: number, h
 	const saturationElectrons = Math.max(1, Math.min(fullWellCapacity, adcSaturationElectrons))
 	const normalizedPerElectron = 1 / saturationElectrons
 	const seed = normalizeSeed(config.seed ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.seed!)
-	const debugMaps = resolveDebugMaps(config.debug)
 
 	return {
 		width,
@@ -555,75 +517,74 @@ function resolveAstronomicalImageNoiseConfig(raw: Float64Array, width: number, h
 		normalizedPerElectron,
 		saturationElectrons,
 		outputLevels,
-		quantize: output.quantize ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output!.quantize!,
-		clampMode: output.clampMode ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output!.clampMode!,
-		skyEnabled: sky.enabled ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!.enabled!,
-		skyBaseRate: requireNonNegativeFinite('sky.baseRate', sky.baseRate ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!.baseRate!),
-		skyGlobalOffset: requireFinite('sky.globalOffset', sky.globalOffset ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!.globalOffset!),
-		skyGradientStrength: requireNonNegativeFinite('sky.gradientStrength', sky.gradientStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!.gradientStrength!),
-		skyGradientCos: Math.cos(sky.gradientDirection ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!.gradientDirection!),
-		skyGradientSin: Math.sin(sky.gradientDirection ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!.gradientDirection!),
-		skyRadialGradientStrength: requireNonNegativeFinite('sky.radialGradientStrength', sky.radialGradientStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!.radialGradientStrength!),
-		skyLowFrequencyVariationStrength: requireNonNegativeFinite('sky.lowFrequencyVariationStrength', sky.lowFrequencyVariationStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!.lowFrequencyVariationStrength!),
-		skyPerChannelMultipliers: resolveTriplet('sky.perChannelMultipliers', sky.perChannelMultipliers ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!.perChannelMultipliers!),
-		skyColorBias: resolveTriplet('sky.colorBias', sky.colorBias ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!.colorBias!),
-		skyFilterTransmission: resolveTriplet('sky.filterTransmission', sky.filterTransmission ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!.filterTransmission!),
-		moonEnabled: moon.enabled ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon!.enabled!,
-		moonIlluminationFraction: requireFraction('moon.illuminationFraction', moon.illuminationFraction ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon!.illuminationFraction!),
-		moonAltitude: requireFinite('moon.altitude', moon.altitude ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon!.altitude!),
-		moonAngularDistance: requireNonNegativeFinite('moon.angularDistance', moon.angularDistance ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon!.angularDistance!),
-		moonPositionCos: Math.cos(moon.positionAngle ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon!.positionAngle!),
-		moonPositionSin: Math.sin(moon.positionAngle ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon!.positionAngle!),
-		moonTint: resolveTriplet('moon.tint', moon.tint ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon!.tint!),
-		moonStrength: requireNonNegativeFinite('moon.strength', moon.strength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon!.strength!),
-		lightPollutionEnabled: lightPollution.enabled ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution!.enabled!,
-		lightPollutionStrength: requireNonNegativeFinite('lightPollution.strength', lightPollution.strength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution!.strength!),
-		lightPollutionGradientStrength: requireNonNegativeFinite('lightPollution.gradientStrength', lightPollution.gradientStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution!.gradientStrength!),
-		lightPollutionDirectionCos: Math.cos(lightPollution.direction ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution!.direction!),
-		lightPollutionDirectionSin: Math.sin(lightPollution.direction ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution!.direction!),
-		lightPollutionDomeSharpness: requirePositiveFinite('lightPollution.domeSharpness', lightPollution.domeSharpness ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution!.domeSharpness!),
-		lightPollutionTint: resolveTriplet('lightPollution.tint', lightPollution.tint ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution!.tint!),
-		airglowStrength: requireNonNegativeFinite('atmosphere.airglowStrength', atmosphere.airglowStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere!.airglowStrength!),
-		transparency: requirePositiveFinite('atmosphere.transparency', atmosphere.transparency ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere!.transparency!),
-		airmass: requirePositiveFinite('atmosphere.airmass', atmosphere.airmass ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere!.airmass!),
-		haze: requireNonNegativeFinite('atmosphere.haze', atmosphere.haze ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere!.haze!),
-		humidity: requireNonNegativeFinite('atmosphere.humidity', atmosphere.humidity ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere!.humidity!),
-		thinCloudVeil: requireNonNegativeFinite('atmosphere.thinCloudVeil', atmosphere.thinCloudVeil ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere!.thinCloudVeil!),
-		twilightContribution: requireNonNegativeFinite('atmosphere.twilightContribution', atmosphere.twilightContribution ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere!.twilightContribution!),
-		horizonGlow: requireNonNegativeFinite('atmosphere.horizonGlow', atmosphere.horizonGlow ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere!.horizonGlow!),
-		zodiacalLightFactor: requireNonNegativeFinite('atmosphere.zodiacalLightFactor', atmosphere.zodiacalLightFactor ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere!.zodiacalLightFactor!),
-		milkyWayBackgroundFactor: requireNonNegativeFinite('atmosphere.milkyWayBackgroundFactor', atmosphere.milkyWayBackgroundFactor ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere!.milkyWayBackgroundFactor!),
-		readNoise: requireNonNegativeFinite('sensor.readNoise', sensor.readNoise ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.readNoise!),
-		channelReadNoise: resolveTriplet('sensor.channelReadNoise', sensor.channelReadNoise ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.channelReadNoise!),
-		channelGain: resolveTriplet('sensor.channelGain', sensor.channelGain ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.channelGain!),
-		biasElectrons: requireNonNegativeFinite('sensor.biasElectrons', sensor.biasElectrons ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.biasElectrons!),
-		blackLevelElectrons: requireNonNegativeFinite('sensor.blackLevelElectrons', sensor.blackLevelElectrons ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.blackLevelElectrons!),
-		channelBiasElectrons: resolveTriplet('sensor.channelBiasElectrons', sensor.channelBiasElectrons ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.channelBiasElectrons!),
-		darkCurrentAtReferenceTemp: requireNonNegativeFinite('sensor.darkCurrentAtReferenceTemp', sensor.darkCurrentAtReferenceTemp ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.darkCurrentAtReferenceTemp!),
-		referenceTemperature: requireFinite('sensor.referenceTemperature', sensor.referenceTemperature ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.referenceTemperature!),
-		temperature: requireFinite('sensor.temperature', sensor.temperature ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.temperature!),
-		temperatureDoublingInterval: requirePositiveFinite('sensor.temperatureDoublingInterval', sensor.temperatureDoublingInterval ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.temperatureDoublingInterval!),
-		darkSignalNonUniformity: requireNonNegativeFinite('sensor.darkSignalNonUniformity', sensor.darkSignalNonUniformity ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.darkSignalNonUniformity!),
-		channelCorrelation: requireFraction('sensor.channelCorrelation', sensor.channelCorrelation ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.channelCorrelation!),
-		ampGlowEnabled: ampGlow.enabled ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.ampGlow!.enabled!,
-		ampGlowStrength: requireNonNegativeFinite('sensor.ampGlow.strength', ampGlow.strength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.ampGlow!.strength!),
-		ampGlowPosition: ampGlow.position ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.ampGlow!.position!,
-		ampGlowRadiusX: requirePositiveFinite('sensor.ampGlow.radiusX', ampGlow.radiusX ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.ampGlow!.radiusX!),
-		ampGlowRadiusY: requirePositiveFinite('sensor.ampGlow.radiusY', ampGlow.radiusY ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.ampGlow!.radiusY!),
-		ampGlowFalloff: requirePositiveFinite('sensor.ampGlow.falloff', ampGlow.falloff ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.ampGlow!.falloff!),
-		ampGlowTint: resolveTriplet('sensor.ampGlow.tint', ampGlow.tint ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.ampGlow!.tint!),
-		fixedPatternNoiseStrength: requireNonNegativeFinite('artifacts.fixedPatternNoiseStrength', artifacts.fixedPatternNoiseStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!.fixedPatternNoiseStrength!),
-		rowNoiseStrength: requireNonNegativeFinite('artifacts.rowNoiseStrength', artifacts.rowNoiseStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!.rowNoiseStrength!),
-		columnNoiseStrength: requireNonNegativeFinite('artifacts.columnNoiseStrength', artifacts.columnNoiseStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!.columnNoiseStrength!),
-		bandingStrength: requireNonNegativeFinite('artifacts.bandingStrength', artifacts.bandingStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!.bandingStrength!),
-		bandingFrequency: requirePositiveFinite('artifacts.bandingFrequency', artifacts.bandingFrequency ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!.bandingFrequency!),
-		hotPixelRate: requireFraction('artifacts.hotPixelRate', artifacts.hotPixelRate ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!.hotPixelRate!),
-		warmPixelRate: requireFraction('artifacts.warmPixelRate', artifacts.warmPixelRate ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!.warmPixelRate!),
-		deadPixelRate: requireFraction('artifacts.deadPixelRate', artifacts.deadPixelRate ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!.deadPixelRate!),
-		hotPixelStrength: requireNonNegativeFinite('artifacts.hotPixelStrength', artifacts.hotPixelStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!.hotPixelStrength!),
-		warmPixelStrength: requireNonNegativeFinite('artifacts.warmPixelStrength', artifacts.warmPixelStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!.warmPixelStrength!),
-		deadPixelResidual: requireFraction('artifacts.deadPixelResidual', artifacts.deadPixelResidual ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!.deadPixelResidual!),
-		debugMaps,
+		quantize: output.quantize ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output.quantize,
+		clampMode: output.clampMode ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output.clampMode,
+		skyEnabled: sky.enabled ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.enabled,
+		skyBaseRate: requireNonNegativeFinite('sky.baseRate', sky.baseRate ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.baseRate),
+		skyGlobalOffset: requireFinite('sky.globalOffset', sky.globalOffset ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.globalOffset),
+		skyGradientStrength: requireNonNegativeFinite('sky.gradientStrength', sky.gradientStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.gradientStrength),
+		skyGradientCos: Math.cos(sky.gradientDirection ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.gradientDirection),
+		skyGradientSin: Math.sin(sky.gradientDirection ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.gradientDirection),
+		skyRadialGradientStrength: requireNonNegativeFinite('sky.radialGradientStrength', sky.radialGradientStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.radialGradientStrength),
+		skyLowFrequencyVariationStrength: requireNonNegativeFinite('sky.lowFrequencyVariationStrength', sky.lowFrequencyVariationStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.lowFrequencyVariationStrength),
+		skyPerChannelMultipliers: resolveTriplet('sky.perChannelMultipliers', sky.perChannelMultipliers ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.perChannelMultipliers),
+		skyColorBias: resolveTriplet('sky.colorBias', sky.colorBias ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.colorBias),
+		skyFilterTransmission: resolveTriplet('sky.filterTransmission', sky.filterTransmission ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.filterTransmission),
+		moonEnabled: moon.enabled ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.enabled,
+		moonIlluminationFraction: requireFraction('moon.illuminationFraction', moon.illuminationFraction ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.illuminationFraction),
+		moonAltitude: requireFinite('moon.altitude', moon.altitude ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.altitude),
+		moonAngularDistance: requireNonNegativeFinite('moon.angularDistance', moon.angularDistance ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.angularDistance),
+		moonPositionCos: Math.cos(moon.positionAngle ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.positionAngle),
+		moonPositionSin: Math.sin(moon.positionAngle ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.positionAngle),
+		moonTint: resolveTriplet('moon.tint', moon.tint ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.tint),
+		moonStrength: requireNonNegativeFinite('moon.strength', moon.strength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.strength),
+		lightPollutionEnabled: lightPollution.enabled ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution.enabled,
+		lightPollutionStrength: requireNonNegativeFinite('lightPollution.strength', lightPollution.strength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution.strength),
+		lightPollutionGradientStrength: requireNonNegativeFinite('lightPollution.gradientStrength', lightPollution.gradientStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution.gradientStrength),
+		lightPollutionDirectionCos: Math.cos(lightPollution.direction ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution.direction),
+		lightPollutionDirectionSin: Math.sin(lightPollution.direction ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution.direction),
+		lightPollutionDomeSharpness: requirePositiveFinite('lightPollution.domeSharpness', lightPollution.domeSharpness ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution.domeSharpness),
+		lightPollutionTint: resolveTriplet('lightPollution.tint', lightPollution.tint ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution.tint),
+		airglowStrength: requireNonNegativeFinite('atmosphere.airglowStrength', atmosphere.airglowStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.airglowStrength),
+		transparency: requirePositiveFinite('atmosphere.transparency', atmosphere.transparency ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.transparency),
+		airmass: requirePositiveFinite('atmosphere.airmass', atmosphere.airmass ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.airmass),
+		haze: requireNonNegativeFinite('atmosphere.haze', atmosphere.haze ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.haze),
+		humidity: requireNonNegativeFinite('atmosphere.humidity', atmosphere.humidity ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.humidity),
+		thinCloudVeil: requireNonNegativeFinite('atmosphere.thinCloudVeil', atmosphere.thinCloudVeil ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.thinCloudVeil),
+		twilightContribution: requireNonNegativeFinite('atmosphere.twilightContribution', atmosphere.twilightContribution ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.twilightContribution),
+		horizonGlow: requireNonNegativeFinite('atmosphere.horizonGlow', atmosphere.horizonGlow ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.horizonGlow),
+		zodiacalLightFactor: requireNonNegativeFinite('atmosphere.zodiacalLightFactor', atmosphere.zodiacalLightFactor ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.zodiacalLightFactor),
+		milkyWayBackgroundFactor: requireNonNegativeFinite('atmosphere.milkyWayBackgroundFactor', atmosphere.milkyWayBackgroundFactor ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.milkyWayBackgroundFactor),
+		readNoise: requireNonNegativeFinite('sensor.readNoise', sensor.readNoise ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.readNoise),
+		channelReadNoise: resolveTriplet('sensor.channelReadNoise', sensor.channelReadNoise ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.channelReadNoise),
+		channelGain: resolveTriplet('sensor.channelGain', sensor.channelGain ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.channelGain),
+		biasElectrons: requireNonNegativeFinite('sensor.biasElectrons', sensor.biasElectrons ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.biasElectrons),
+		blackLevelElectrons: requireNonNegativeFinite('sensor.blackLevelElectrons', sensor.blackLevelElectrons ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.blackLevelElectrons),
+		channelBiasElectrons: resolveTriplet('sensor.channelBiasElectrons', sensor.channelBiasElectrons ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.channelBiasElectrons),
+		darkCurrentAtReferenceTemp: requireNonNegativeFinite('sensor.darkCurrentAtReferenceTemp', sensor.darkCurrentAtReferenceTemp ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.darkCurrentAtReferenceTemp),
+		referenceTemperature: requireFinite('sensor.referenceTemperature', sensor.referenceTemperature ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.referenceTemperature),
+		temperature: requireFinite('sensor.temperature', sensor.temperature ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.temperature),
+		temperatureDoublingInterval: requirePositiveFinite('sensor.temperatureDoublingInterval', sensor.temperatureDoublingInterval ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.temperatureDoublingInterval),
+		darkSignalNonUniformity: requireNonNegativeFinite('sensor.darkSignalNonUniformity', sensor.darkSignalNonUniformity ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.darkSignalNonUniformity),
+		channelCorrelation: requireFraction('sensor.channelCorrelation', sensor.channelCorrelation ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.channelCorrelation),
+		ampGlowEnabled: ampGlow.enabled ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow.enabled,
+		ampGlowStrength: requireNonNegativeFinite('sensor.ampGlow.strength', ampGlow.strength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow.strength),
+		ampGlowPosition: ampGlow.position ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow.position,
+		ampGlowRadiusX: requirePositiveFinite('sensor.ampGlow.radiusX', ampGlow.radiusX ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow.radiusX),
+		ampGlowRadiusY: requirePositiveFinite('sensor.ampGlow.radiusY', ampGlow.radiusY ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow.radiusY),
+		ampGlowFalloff: requirePositiveFinite('sensor.ampGlow.falloff', ampGlow.falloff ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow.falloff),
+		ampGlowTint: resolveTriplet('sensor.ampGlow.tint', ampGlow.tint ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow.tint),
+		fixedPatternNoiseStrength: requireNonNegativeFinite('artifacts.fixedPatternNoiseStrength', artifacts.fixedPatternNoiseStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.fixedPatternNoiseStrength),
+		rowNoiseStrength: requireNonNegativeFinite('artifacts.rowNoiseStrength', artifacts.rowNoiseStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.rowNoiseStrength),
+		columnNoiseStrength: requireNonNegativeFinite('artifacts.columnNoiseStrength', artifacts.columnNoiseStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.columnNoiseStrength),
+		bandingStrength: requireNonNegativeFinite('artifacts.bandingStrength', artifacts.bandingStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.bandingStrength),
+		bandingFrequency: requirePositiveFinite('artifacts.bandingFrequency', artifacts.bandingFrequency ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.bandingFrequency),
+		hotPixelRate: requireFraction('artifacts.hotPixelRate', artifacts.hotPixelRate ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.hotPixelRate),
+		warmPixelRate: requireFraction('artifacts.warmPixelRate', artifacts.warmPixelRate ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.warmPixelRate),
+		deadPixelRate: requireFraction('artifacts.deadPixelRate', artifacts.deadPixelRate ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.deadPixelRate),
+		hotPixelStrength: requireNonNegativeFinite('artifacts.hotPixelStrength', artifacts.hotPixelStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.hotPixelStrength),
+		warmPixelStrength: requireNonNegativeFinite('artifacts.warmPixelStrength', artifacts.warmPixelStrength ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.warmPixelStrength),
+		deadPixelResidual: requireFraction('artifacts.deadPixelResidual', artifacts.deadPixelResidual ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.deadPixelResidual),
 		lowFrequencyPhase0: TAU * mulberry32(seed ^ 0x13579bdf)(),
 		lowFrequencyPhase1: TAU * mulberry32(seed ^ 0x2468ace0)(),
 		lowFrequencyPhase2: TAU * mulberry32(seed ^ 0x89abcdef)(),
@@ -632,7 +593,7 @@ function resolveAstronomicalImageNoiseConfig(raw: Float64Array, width: number, h
 }
 
 // Evaluates the smooth sky, moon, light-pollution, and amp-glow fields for a pixel.
-function evaluateSkySpatialFields(xc: number, yc: number, config: ResolvedAstronomicalImageNoiseConfig) {
+function evaluateSkySpatialFields(xc: number, yc: number, config: ResolvedAstronomicalImageNoiseConfig, out: SkySpatialFields): SkySpatialFields {
 	const radius2 = xc * xc + yc * yc
 	const linearGradient = (xc * config.skyGradientCos + yc * config.skyGradientSin) * 2
 	const lowFrequency = evaluateLowFrequencyVariation(xc, yc, config)
@@ -645,18 +606,14 @@ function evaluateSkySpatialFields(xc: number, yc: number, config: ResolvedAstron
 	const skyField = Math.max(0, 1 + config.skyGlobalOffset + config.skyGradientStrength * linearGradient + config.skyRadialGradientStrength * radius2 + config.skyLowFrequencyVariationStrength * lowFrequency)
 	const sharedNaturalSkyElectrons = Math.max(0, baseSkyElectrons * skyField)
 
-	const lightPollutionElectrons = config.lightPollutionEnabled ? evaluateLightPollutionElectrons(xc, yc, horizonFactor, baseSkyElectrons, diffuseBoost, config) : 0
-	const moonElectrons = config.moonEnabled ? evaluateMoonElectrons(xc, yc, baseSkyElectrons, diffuseBoost, config) : 0
+	out.lightPollutionElectrons = config.lightPollutionEnabled ? evaluateLightPollutionElectrons(xc, yc, horizonFactor, baseSkyElectrons, diffuseBoost, config) : 0
+	out.moonElectrons = config.moonEnabled ? evaluateMoonElectrons(xc, yc, baseSkyElectrons, diffuseBoost, config) : 0
 	const twilightElectrons = baseSkyElectrons * config.twilightContribution * 18 * horizonFactor
 	const horizonGlowElectrons = baseSkyElectrons * config.horizonGlow * (0.45 + 0.55 * horizonFactor) * diffuseBoost
-	const ampGlowElectrons = config.ampGlowEnabled ? evaluateAmpGlowElectrons(xc, yc, config) : 0
+	out.ampGlowElectrons = config.ampGlowEnabled ? evaluateAmpGlowElectrons(xc, yc, config) : 0
+	out.sharedSkyElectrons = sharedNaturalSkyElectrons + twilightElectrons + horizonGlowElectrons + out.lightPollutionElectrons * (0.3 + 0.7 * config.lightPollutionGradientStrength)
 
-	return {
-		sharedSkyElectrons: sharedNaturalSkyElectrons + twilightElectrons + horizonGlowElectrons + lightPollutionElectrons * (0.3 + 0.7 * config.lightPollutionGradientStrength),
-		lightPollutionElectrons,
-		moonElectrons,
-		ampGlowElectrons,
-	}
+	return out
 }
 
 // Uses low-frequency sinusoids instead of a large 2D map for smooth background variation.
@@ -760,16 +717,31 @@ function sampleGaussian(random: Random, state: GaussianSamplerState) {
 }
 
 // Samples sparse hot, warm, and dead pixels deterministically from the configured rates.
-function sampleSensorDefect(config: ResolvedAstronomicalImageNoiseConfig, random: Random): SensorDefect {
+function sampleSensorDefect(config: ResolvedAstronomicalImageNoiseConfig, random: Random, out: SensorDefect): SensorDefect {
 	const deadRate = config.deadPixelRate
 	const hotRate = config.hotPixelRate
 	const warmRate = config.warmPixelRate
 	const r = random()
 
-	if (r < deadRate) return { signalScale: config.deadPixelResidual, extraSignalElectrons: 0, kind: 3 }
-	if (r < deadRate + hotRate) return { signalScale: 1, extraSignalElectrons: config.hotPixelStrength * config.exposureTime * (0.85 + 0.3 * random()), kind: 1 }
-	if (r < deadRate + hotRate + warmRate) return { signalScale: 1, extraSignalElectrons: config.warmPixelStrength * config.exposureTime * (0.85 + 0.3 * random()), kind: 2 }
-	return { signalScale: 1, extraSignalElectrons: 0, kind: 0 }
+	if (r < deadRate) {
+		out.signalScale = config.deadPixelResidual
+		out.extraSignalElectrons = 0
+		out.kind = 3
+	} else if (r < deadRate + hotRate) {
+		out.signalScale = 1
+		out.extraSignalElectrons = config.hotPixelStrength * config.exposureTime * (0.85 + 0.3 * random())
+		out.kind = 1
+	} else if (r < deadRate + hotRate + warmRate) {
+		out.signalScale = 1
+		out.extraSignalElectrons = config.warmPixelStrength * config.exposureTime * (0.85 + 0.3 * random())
+		out.kind = 2
+	} else {
+		out.signalScale = 1
+		out.extraSignalElectrons = 0
+		out.kind = 0
+	}
+
+	return out
 }
 
 // Precomputes centered coordinates once to avoid repeated normalization work.
@@ -834,62 +806,25 @@ function finalizeOutput(raw: Float64Array, length: number, config: ResolvedAstro
 	return normalizationScale
 }
 
-// Creates only the requested debug maps so normal generation stays allocation-light.
-function createDebugMaps(config: ResolvedAstronomicalImageNoiseConfig, pixelCount: number): AstronomicalImageNoiseDebugMaps | undefined {
-	if (!hasAnyDebugMap(config.debugMaps)) return undefined
-
-	return {
-		skyBackgroundField: config.debugMaps.skyBackgroundField ? new Float64Array(pixelCount) : undefined,
-		moonGradientMap: config.debugMaps.moonGradientMap ? new Float64Array(pixelCount) : undefined,
-		darkCurrentMap: config.debugMaps.darkCurrentMap ? new Float64Array(pixelCount) : undefined,
-		ampGlowMap: config.debugMaps.ampGlowMap ? new Float64Array(pixelCount) : undefined,
-		hotPixelMap: config.debugMaps.hotPixelMap ? new Float64Array(pixelCount) : undefined,
-		readNoiseSampleMap: config.debugMaps.readNoiseSampleMap ? new Float64Array(pixelCount) : undefined,
-	}
-}
-
-// Writes into a debug map only when it was requested.
-function writeDebugValue(map: Float64Array | undefined, index: number, value: number) {
-	if (map !== undefined) map[index] = value
-}
-
-// Resolves the optional debug map list into quick boolean lookups.
-function resolveDebugMaps(debug?: AstronomicalDebugConfig) {
-	if (!debug?.enabled || !debug.maps?.length) return DEFAULT_DEBUG_MAPS
-
-	const resolved = { ...DEFAULT_DEBUG_MAPS }
-	for (const map of debug.maps) resolved[map] = true
-	return resolved
-}
-
-// Checks whether any debug output was requested.
-function hasAnyDebugMap(debugMaps: Readonly<Record<AstronomicalImageDebugMapName, boolean>>) {
-	for (const key in debugMaps) {
-		if (debugMaps[key as AstronomicalImageDebugMapName]) return true
-	}
-
-	return false
-}
-
 // Maps an amp-glow anchor label to a point just outside the normalized frame center.
-function ampGlowSource(position: AmpGlowPosition) {
+function ampGlowSource(position: AmpGlowPosition): readonly [number, number] {
 	switch (position) {
 		case 'top-left':
-			return [-0.58, -0.58] as const
+			return [-0.58, -0.58]
 		case 'top-right':
-			return [0.58, -0.58] as const
+			return [0.58, -0.58]
 		case 'bottom-left':
-			return [-0.58, 0.58] as const
+			return [-0.58, 0.58]
 		case 'bottom-right':
-			return [0.58, 0.58] as const
+			return [0.58, 0.58]
 		case 'left':
-			return [-0.62, 0] as const
+			return [-0.62, 0]
 		case 'right':
-			return [0.62, 0] as const
+			return [0.62, 0]
 		case 'top':
-			return [0, -0.62] as const
+			return [0, -0.62]
 		case 'bottom':
-			return [0, 0.62] as const
+			return [0, 0.62]
 	}
 }
 

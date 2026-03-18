@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { type AstronomicalImageNoiseConfig, generateAstronomicalImageNoise } from '../src/image.generator'
+import { adf } from '../src/image.computation'
+import { type AstronomicalImageNoiseConfig, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateAstronomicalImageNoise } from '../src/image.generator'
+import { stf } from '../src/image.transformation'
+import type { Image, ImageMetadata } from '../src/image.types'
 import { meanOf, standardDeviationOf } from '../src/util'
+import { saveImageAndCompareHash } from './image.util'
 
 function baseConfig(overrides: AstronomicalImageNoiseConfig = {}): AstronomicalImageNoiseConfig {
 	return {
@@ -103,7 +107,6 @@ function baseConfig(overrides: AstronomicalImageNoiseConfig = {}): AstronomicalI
 			quantize: false,
 			...overrides.output,
 		},
-		debug: overrides.debug,
 	}
 }
 
@@ -163,18 +166,12 @@ describe('generate astronomical image noise', () => {
 			sky: { enabled: true, baseRate: 0.4, gradientStrength: 0.2, radialGradientStrength: 0.1, lowFrequencyVariationStrength: 0.08 },
 			moon: { enabled: true, illuminationFraction: 0.75, altitude: 0.8, angularDistance: 0.35, positionAngle: 0.7 },
 			sensor: { readNoise: 2.2, darkCurrentAtReferenceTemp: 0.05, ampGlow: { enabled: true, strength: 0.08, position: 'bottom-right', radiusX: 0.25, radiusY: 0.3, falloff: 4, tint: [1.1, 0.9, 0.7] } },
-			debug: { enabled: true, maps: ['skyBackgroundField', 'moonGradientMap', 'darkCurrentMap', 'ampGlowMap', 'readNoiseSampleMap'] },
 		})
 
 		const ra = generateAstronomicalImageNoise(a, width, height, config)
 		const rb = generateAstronomicalImageNoise(b, width, height, config)
 
 		expect(a).toEqual(b)
-		expect(ra.debug?.skyBackgroundField?.length).toBe(width * height)
-		expect(ra.debug?.moonGradientMap?.length).toBe(width * height)
-		expect(ra.debug?.darkCurrentMap?.length).toBe(width * height)
-		expect(ra.debug?.ampGlowMap?.length).toBe(width * height)
-		expect(ra.debug?.readNoiseSampleMap?.length).toBe(width * height)
 		expect(ra.stats).toEqual(rb.stats)
 	})
 
@@ -240,13 +237,12 @@ describe('generate astronomical image noise', () => {
 		const height = 200
 		const pixelCount = width * height
 		const raw = new Float64Array(pixelCount)
-		const config = baseConfig({ artifacts: { hotPixelRate: 0.001, hotPixelStrength: 150, warmPixelRate: 0, deadPixelRate: 0 }, debug: { enabled: true, maps: ['hotPixelMap'] } })
+		const config = baseConfig({ artifacts: { hotPixelRate: 0.001, hotPixelStrength: 150, warmPixelRate: 0, deadPixelRate: 0 } })
 		const result = generateAstronomicalImageNoise(raw, width, height, config)
 		const expected = pixelCount * 0.001
 
 		expect(result.stats.hotPixelCount).toBeGreaterThan(expected * 0.7)
 		expect(result.stats.hotPixelCount).toBeLessThan(expected * 1.35)
-		expect(result.debug?.hotPixelMap?.length).toBe(pixelCount)
 	})
 
 	test('row and column structured noise affect the intended axes', () => {
@@ -271,4 +267,24 @@ describe('generate astronomical image noise', () => {
 		expect(raw[0]).toBeLessThanOrEqual(1)
 		expect(raw[0] * 255).toBeCloseTo(Math.round(raw[0] * 255), 12)
 	})
+})
+
+test('generate image', async () => {
+	const width = 800
+	const height = 600
+	const raw = new Float64Array(width * height * 3) // For both mono and RGB
+
+	// Builds image metadata that matches each scenario layout.
+	function metadata(channels: 1 | 3): ImageMetadata {
+		return { width: width, height: height, channels, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width * channels, strideInBytes: width * channels * 8, bayer: undefined }
+	}
+
+	const config = structuredClone(DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG)
+	config.quality = 'high-realism'
+	config.moon.enabled = true
+
+	generateAstronomicalImageNoise(raw, width, height, config)
+
+	const image: Image = { raw, header: {}, metadata: metadata(1) }
+	await saveImageAndCompareHash(stf(image, ...adf(image)), 'generate-image-1', '')
 })
