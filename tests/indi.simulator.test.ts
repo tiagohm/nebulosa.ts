@@ -1,20 +1,24 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, hour, normalizePI } from '../src/angle'
+import { readImageFromBuffer } from '../src/image'
+import type { ImageRawType } from '../src/image.types'
 import { IndiClientHandlerSet } from '../src/indi.client'
-import { GuideOutputManager, MountManager } from '../src/indi.manager'
-import { ClientSimulator, MountSimulator } from '../src/indi.simulator'
+import { CameraManager, DevicePropertyManager, GuideOutputManager, MountManager, ThermometerManager } from '../src/indi.manager'
+import { CameraSimulator, ClientSimulator, MountSimulator } from '../src/indi.simulator'
 
-const handler = new IndiClientHandlerSet()
-const mountManager = new MountManager()
-const guideOutputManager = new GuideOutputManager({ get: mountManager.get.bind(mountManager) })
-
-handler.add(mountManager)
-handler.add(guideOutputManager)
-
-const client = new ClientSimulator('0', handler)
-
-describe.skip('mount simulator', () => {
+describe('mount simulator', () => {
 	test('integrates with MountManager for sync, goto, home and park', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const guideOutputManager = new GuideOutputManager(mountManager)
+		const propertyManager = new DevicePropertyManager()
+
+		handler.add(mountManager)
+		handler.add(guideOutputManager)
+		handler.add(propertyManager)
+
+		const client = new ClientSimulator('mount', handler)
+
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		const mount = mountManager.get(client, mountSimulator.name)!
@@ -66,6 +70,17 @@ describe.skip('mount simulator', () => {
 	})
 
 	test('applies tracking drift for disabled, sidereal, king, solar and lunar modes', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const guideOutputManager = new GuideOutputManager(mountManager)
+		const propertyManager = new DevicePropertyManager()
+
+		handler.add(mountManager)
+		handler.add(guideOutputManager)
+		handler.add(propertyManager)
+
+		const client = new ClientSimulator('mount', handler)
+
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		const mount = mountManager.get(client, mountSimulator.name)!
@@ -76,7 +91,7 @@ describe.skip('mount simulator', () => {
 		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(2), 1e-9))
 
 		const stoppedRightAscension = mount.equatorialCoordinate.rightAscension
-		await Bun.sleep(700)
+		await Bun.sleep(500)
 		const noTrackingDrift = normalizePI(mount.equatorialCoordinate.rightAscension - stoppedRightAscension)
 		expect(noTrackingDrift).toBeGreaterThan(2e-5)
 
@@ -86,21 +101,21 @@ describe.skip('mount simulator', () => {
 		await waitUntil(() => mount.trackMode === 'SIDEREAL')
 
 		const siderealRightAscension = mount.equatorialCoordinate.rightAscension
-		await Bun.sleep(700)
+		await Bun.sleep(500)
 		const siderealDrift = Math.abs(normalizePI(mount.equatorialCoordinate.rightAscension - siderealRightAscension))
 		expect(siderealDrift).toBeLessThan(1e-6)
 
 		mountManager.trackMode(mount, 'SOLAR')
 		await waitUntil(() => mount.trackMode === 'SOLAR')
 		const solarRightAscension = mount.equatorialCoordinate.rightAscension
-		await Bun.sleep(2500)
+		await Bun.sleep(500)
 		const solarDrift = normalizePI(mount.equatorialCoordinate.rightAscension - solarRightAscension)
 		expect(solarDrift).toBeGreaterThan(0)
 
 		mountManager.trackMode(mount, 'KING')
 		await waitUntil(() => mount.trackMode === 'KING')
 		const kingRightAscension = mount.equatorialCoordinate.rightAscension
-		await Bun.sleep(2500)
+		await Bun.sleep(500)
 		const kingDrift = normalizePI(mount.equatorialCoordinate.rightAscension - kingRightAscension)
 		expect(kingDrift).toBeGreaterThan(0)
 		expect(kingDrift).toBeLessThan(solarDrift)
@@ -108,12 +123,23 @@ describe.skip('mount simulator', () => {
 		mountManager.trackMode(mount, 'LUNAR')
 		await waitUntil(() => mount.trackMode === 'LUNAR')
 		const lunarRightAscension = mount.equatorialCoordinate.rightAscension
-		await Bun.sleep(2500)
+		await Bun.sleep(500)
 		const lunarDrift = normalizePI(mount.equatorialCoordinate.rightAscension - lunarRightAscension)
 		expect(lunarDrift).toBeGreaterThan(solarDrift * 5)
 	}, 15000)
 
 	test('supports manual move over time', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const guideOutputManager = new GuideOutputManager(mountManager)
+		const propertyManager = new DevicePropertyManager()
+
+		handler.add(mountManager)
+		handler.add(guideOutputManager)
+		handler.add(propertyManager)
+
+		const client = new ClientSimulator('mount', handler)
+
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		const mount = mountManager.get(client, mountSimulator.name)!
@@ -161,6 +187,17 @@ describe.skip('mount simulator', () => {
 	}, 5000)
 
 	test('supports manual pulse guiding over time', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const guideOutputManager = new GuideOutputManager(mountManager)
+		const propertyManager = new DevicePropertyManager()
+
+		handler.add(mountManager)
+		handler.add(guideOutputManager)
+		handler.add(propertyManager)
+
+		const client = new ClientSimulator('mount', handler)
+
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		const mount = mountManager.get(client, mountSimulator.name)!
@@ -204,6 +241,81 @@ describe.skip('mount simulator', () => {
 	}, 5000)
 })
 
+describe('camera simulator', () => {
+	test('integrates with camera manager and exposes synthetic image controls', async () => {
+		const handler = new IndiClientHandlerSet()
+		const cameraManager = new CameraManager()
+		const guideOutputManager = new GuideOutputManager(cameraManager)
+		const thermometerManager = new ThermometerManager(cameraManager)
+		const propertyManager = new DevicePropertyManager()
+		const client = new ClientSimulator('camera', handler)
+		const frames: Buffer<ArrayBuffer>[] = []
+
+		handler.add(cameraManager)
+		handler.add(guideOutputManager)
+		handler.add(thermometerManager)
+		handler.add(propertyManager)
+
+		cameraManager.addHandler({
+			added: () => {},
+			removed: () => {},
+			blobReceived: (_, data) => {
+				Buffer.isBuffer(data) && frames.push(data)
+			},
+		})
+
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client)
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		expect(camera).toBeDefined()
+
+		cameraManager.connect(camera)
+		await waitUntil(() => camera.connected)
+
+		expect(camera.canAbort).toBeTrue()
+		expect(camera.canBin).toBeTrue()
+		expect(camera.canSubFrame).toBeTrue()
+		expect(camera.hasCooler).toBeTrue()
+		expect(camera.hasCoolerControl).toBeTrue()
+		expect(camera.canSetTemperature).toBeTrue()
+		expect(camera.canPulseGuide).toBeTrue()
+		expect(camera.hasThermometer).toBeTrue()
+		expect(camera.frameFormats.map((e) => e.name)).toContain('XISF_RGB')
+		expect(camera.pixelSize.x).toBeCloseTo(5.2, 6)
+		expect(camera.pixelSize.y).toBeCloseTo(5.2, 6)
+		expect(propertyManager.get(client, camera.name)?.SIMULATOR_NOISE_EXPOSURE).toBeDefined()
+		expect(propertyManager.get(client, camera.name)?.SIMULATOR_PLOT_OPTIONS).toBeDefined()
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_PLOT_FLAGS', elements: { GAMMA_ENABLED: true } })
+		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_PLOT_FLAGS?.elements.GAMMA_ENABLED.value === true)
+
+		cameraManager.frame(camera, 32, 16, 160, 120)
+		await waitUntil(() => camera.frame.x.value === 32 && camera.frame.y.value === 16 && camera.frame.width.value === 160 && camera.frame.height.value === 120)
+
+		cameraManager.bin(camera, 2, 2)
+		await waitUntil(() => camera.bin.x.value === 2 && camera.bin.y.value === 2)
+
+		cameraManager.frameFormat(camera, 'XISF_RGB')
+		await waitUntil(() => camera.frameFormat === 'XISF_RGB')
+
+		cameraManager.startExposure(camera, 0.05)
+		await waitUntil(() => camera.exposuring)
+		await waitUntil(() => frames.length > 0, 10000, 50)
+		await waitUntil(() => !camera.exposuring, 10000, 50)
+
+		const image = await readImageFromBuffer(frames[frames.length - 1]!)
+
+		expect(image).toBeDefined()
+		expect(image!.metadata.width).toBe(80)
+		expect(image!.metadata.height).toBe(60)
+		expect(image!.metadata.channels).toBe(3)
+		expect(sumPixels(image!.raw)).toBeGreaterThan(0)
+
+		cameraSimulator.dispose()
+		expect(cameraManager.has(client, camera.name)).toBeFalse()
+	})
+})
+
 async function waitUntil(predicate: () => boolean, timeout: number = 5000, step: number = 100): Promise<void> {
 	while (!predicate()) {
 		if (timeout <= 0) throw new Error('timeout waiting for condition')
@@ -214,4 +326,10 @@ async function waitUntil(predicate: () => boolean, timeout: number = 5000, step:
 
 function closeTo(a: number, b: number, tolerance: number) {
 	return Math.abs(a - b) <= tolerance
+}
+
+function sumPixels(raw: ImageRawType) {
+	let total = 0
+	for (let i = 0; i < raw.length; i++) total += raw[i]!
+	return total
 }
