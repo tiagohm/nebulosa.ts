@@ -7,7 +7,7 @@ import { CameraManager, DevicePropertyManager, GuideOutputManager, MountManager,
 import { CameraSimulator, ClientSimulator, MountSimulator } from '../src/indi.simulator'
 
 describe('mount simulator', () => {
-	test('integrates with MountManager for sync, goto, home and park', async () => {
+	test('integrates with mount manager for sync, goto, home and park', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
 		const guideOutputManager = new GuideOutputManager(mountManager)
@@ -64,10 +64,15 @@ describe('mount simulator', () => {
 		mountManager.unpark(mount)
 		await waitUntil(() => !mount.parked)
 
-		mountSimulator.dispose()
+		mountSimulator.disconnect()
+		await waitUntil(() => !mount.connected)
 
+		mountSimulator.connect()
+		await waitUntil(() => mount.connected)
+
+		mountSimulator.dispose()
 		expect(mountManager.has(client, mountSimulator.name)).toBeFalse()
-	})
+	}, 5000)
 
 	test('applies tracking drift for disabled, sidereal, king, solar and lunar modes', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -126,7 +131,7 @@ describe('mount simulator', () => {
 		await Bun.sleep(500)
 		const lunarDrift = normalizePI(mount.equatorialCoordinate.rightAscension - lunarRightAscension)
 		expect(lunarDrift).toBeGreaterThan(solarDrift * 5)
-	}, 15000)
+	}, 5000)
 
 	test('supports manual move over time', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -280,7 +285,7 @@ describe('camera simulator', () => {
 		expect(camera.canSetTemperature).toBeTrue()
 		expect(camera.canPulseGuide).toBeTrue()
 		expect(camera.hasThermometer).toBeTrue()
-		expect(camera.frameFormats.map((e) => e.name)).toContain('XISF_RGB')
+		expect(camera.frameFormats.map((e) => e.name)).toEqual(['MONO', 'RGB'])
 		expect(camera.pixelSize.x).toBeCloseTo(5.2, 6)
 		expect(camera.pixelSize.y).toBeCloseTo(5.2, 6)
 		expect(propertyManager.get(client, camera.name)?.SIMULATOR_NOISE_EXPOSURE).toBeDefined()
@@ -295,15 +300,15 @@ describe('camera simulator', () => {
 		cameraManager.bin(camera, 2, 2)
 		await waitUntil(() => camera.bin.x.value === 2 && camera.bin.y.value === 2)
 
-		cameraManager.frameFormat(camera, 'XISF_RGB')
-		await waitUntil(() => camera.frameFormat === 'XISF_RGB')
+		cameraManager.frameFormat(camera, 'RGB')
+		await waitUntil(() => camera.frameFormat === 'RGB')
 
 		cameraManager.startExposure(camera, 0.05)
 		await waitUntil(() => camera.exposuring)
 		await waitUntil(() => frames.length > 0, 10000, 50)
 		await waitUntil(() => !camera.exposuring, 10000, 50)
 
-		const image = await readImageFromBuffer(frames[frames.length - 1]!)
+		const image = await readImageFromBuffer(frames[frames.length - 1])
 
 		expect(image).toBeDefined()
 		expect(image!.metadata.width).toBe(80)
@@ -311,9 +316,15 @@ describe('camera simulator', () => {
 		expect(image!.metadata.channels).toBe(3)
 		expect(sumPixels(image!.raw)).toBeGreaterThan(0)
 
+		cameraSimulator.disconnect()
+		await waitUntil(() => !camera.connected)
+
+		cameraSimulator.connect()
+		await waitUntil(() => camera.connected)
+
 		cameraSimulator.dispose()
 		expect(cameraManager.has(client, camera.name)).toBeFalse()
-	})
+	}, 5000)
 })
 
 async function waitUntil(predicate: () => boolean, timeout: number = 5000, step: number = 100): Promise<void> {
@@ -330,6 +341,9 @@ function closeTo(a: number, b: number, tolerance: number) {
 
 function sumPixels(raw: ImageRawType) {
 	let total = 0
-	for (let i = 0; i < raw.length; i++) total += raw[i]!
+	for (let i = 0; i < raw.length; i++) {
+		total += raw[i]
+		if (raw[i] < 0) console.info(raw[i])
+	}
 	return total
 }

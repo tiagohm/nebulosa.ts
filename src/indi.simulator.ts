@@ -6,7 +6,7 @@ import { meter, toMeter } from './distance'
 import type { FitsHeader } from './fits'
 import { writeImageToFits, writeImageToXisf } from './image'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from './image.generator'
-import type { CfaPattern, Image } from './image.types'
+import type { CfaPattern, Image, ImageRawType } from './image.types'
 import { handleDefBlobVector, handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, type FrameType, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
 import { type DefNumberVector, type DefSwitchVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetVector, selectOnSwitch } from './indi.types'
@@ -35,13 +35,6 @@ const CAMERA_DEFAULT_TARGET_TEMPERATURE = 0
 const CAMERA_SCENE_SEED = 0x1d0f3a57
 const CAMERA_BLOB_PADDING = 16384
 
-const CAMERA_FRAME_FORMATS = [
-	{ name: 'FITS_MONO', label: 'FITS Mono', transferFormat: 'FITS', channels: 1 },
-	{ name: 'FITS_RGB', label: 'FITS RGB', transferFormat: 'FITS', channels: 3 },
-	{ name: 'XISF_MONO', label: 'XISF Mono', transferFormat: 'XISF', channels: 1 },
-	{ name: 'XISF_RGB', label: 'XISF RGB', transferFormat: 'XISF', channels: 3 },
-] as const
-
 const SLEW_RATES = [
 	{ name: '1x', label: '0.5°', speed: 0.5 * DEG2RAD },
 	{ name: '2x', label: '1.0°', speed: 1.0 * DEG2RAD },
@@ -57,6 +50,10 @@ type CoordSetMode = 'SLEW' | 'SYNC'
 type SlewMode = 'GOTO' | 'HOME' | 'PARK'
 
 type AxisDirection = -1 | 0 | 1
+
+export type TransferFormat = 'FITS' | 'XISF'
+
+export type ReadoutMode = 'MONO' | 'RGB'
 
 type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
 
@@ -423,6 +420,8 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.#timer) return
 
 		super.disconnect()
+		clearInterval(this.#timer)
+		this.#timer = undefined
 		this.stop()
 		this.setTrackingEnabled(false)
 
@@ -623,12 +622,8 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Disposes the mount simulator and removes it from the manager view.
 	dispose() {
-		if (this.#timer) {
-			clearInterval(this.#timer)
-			this.disconnect()
-			this.#timer = undefined
-			this.handler.delProperty?.(this.client, { device: this.name })
-		}
+		this.disconnect()
+		this.handler.delProperty?.(this.client, { device: this.name })
 	}
 
 	// Advances the simulated state using wall-clock time.
@@ -896,7 +891,8 @@ export class CameraSimulator extends DeviceSimulator {
 	readonly #info = makeNumberVector('', 'CCD_INFO', 'CCD Info', GENERAL_INFO, 'ro', ['CCD_MAX_X', 'Max X', CAMERA_SENSOR_WIDTH, 0, 16000, 1, '%.0f'],  ['CCD_MAX_Y', 'Max Y', CAMERA_SENSOR_HEIGHT, 0, 16000, 1, '%.0f'],  ['CCD_PIXEL_SIZE_X', 'Pixel size X', CAMERA_PIXEL_SIZE, 0, 40, 0.01, '%.2f'], ['CCD_PIXEL_SIZE_Y', 'Pixel size Y', CAMERA_PIXEL_SIZE, 0, 40, 0.01, '%.2f'], ['CCD_BITSPERPIXEL', 'Bits per pixel', 16, 8, 64, 1, '%.0f'])
 	readonly #cooler = makeSwitchVector('', 'CCD_COOLER', 'Cooler', MAIN_CONTROL, 'OneOfMany', 'rw', ['COOLER_ON', 'On', false], ['COOLER_OFF', 'Off', true])
 	readonly #frameType = makeSwitchVector('', 'CCD_FRAME_TYPE', 'Frame Type', MAIN_CONTROL, 'OneOfMany', 'rw', ['FRAME_LIGHT', 'Light', true], ['FRAME_DARK', 'Dark', false], ['FRAME_FLAT', 'Flat', false], ['FRAME_BIAS', 'Bias', false])
-	readonly #frameFormat = makeSwitchVector('', 'CCD_CAPTURE_FORMAT', 'Readout Mode', MAIN_CONTROL, 'OneOfMany', 'rw')
+	readonly #frameFormat = makeSwitchVector('', 'CCD_CAPTURE_FORMAT', 'Readout Mode', MAIN_CONTROL, 'OneOfMany', 'rw', ['MONO', 'Mono', true], ['RGB', 'RGB', false])
+	readonly #transferFormat = makeSwitchVector('', 'CCD_TRANSFER_FORMAT', 'Transfer Format', MAIN_CONTROL, 'OneOfMany', 'rw', ['FORMAT_FITS', 'FITS', true], ['FORMAT_XISF', 'XISF', false])
 	readonly #abort = makeSwitchVector('', 'CCD_ABORT_EXPOSURE', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 	readonly #exposure = makeNumberVector('', 'CCD_EXPOSURE', 'Exposure', MAIN_CONTROL, 'rw', ['CCD_EXPOSURE_VALUE', 'Exposure (s)', 0, CAMERA_MIN_EXPOSURE, CAMERA_MAX_EXPOSURE, 1e-3, '%.6f'])
 	readonly #coolerPower = makeNumberVector('', 'CCD_COOLER_POWER', 'Cooler Power', MAIN_CONTROL, 'ro', ['CCD_COOLER_POWER', 'Power (%)', 0, 0, 100, 1, '%.0f'])
@@ -947,6 +943,7 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#cooler,
 		this.#frameType,
 		this.#frameFormat,
+		this.#transferFormat,
 		this.#abort,
 		this.#exposure,
 		this.#coolerPower,
@@ -992,10 +989,6 @@ export class CameraSimulator extends DeviceSimulator {
 
 		for (const property of this.#properties) {
 			property.device = name
-		}
-
-		for (const format of CAMERA_FRAME_FORMATS) {
-			this.#frameFormat.elements[format.name] = { name: format.name, label: format.label, value: format.name === 'FITS_MONO' }
 		}
 
 		this.driverInfo.elements.DRIVER_EXEC.value = 'camera.simulator'
@@ -1093,6 +1086,9 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'CCD_CAPTURE_FORMAT':
 				if (applyExclusiveSwitchValues(this.#frameFormat, vector.elements)) this.notify(this.#frameFormat)
+				return
+			case 'CCD_TRANSFER_FORMAT':
+				if (applyExclusiveSwitchValues(this.#transferFormat, vector.elements)) this.notify(this.#transferFormat)
 				return
 			case 'CCD_ABORT_EXPOSURE':
 				if (vector.elements.ABORT === true) this.abortExposure()
@@ -1360,7 +1356,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds an image model suitable for the FITS/XISF writers.
-	private imageModel(raw: Float32Array, width: number, height: number, channels: 1 | 3, exposureTime: number): Image {
+	private imageModel(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number): Image {
 		const pixelSizeInBytes = 2
 
 		return {
@@ -1391,6 +1387,8 @@ export class CameraSimulator extends DeviceSimulator {
 			NAXIS3: channels === 3 ? 3 : undefined,
 			INSTRUME: this.name,
 			EXPTIME: exposureTime,
+			BZERO: 32768,
+			BSCALE: 1,
 			XBINNING: this.#bin.elements.HOR_BIN.value,
 			YBINNING: this.#bin.elements.VER_BIN.value,
 			XPIXSZ: this.#info.elements.CCD_PIXEL_SIZE_X.value * this.#bin.elements.HOR_BIN.value,
@@ -1404,7 +1402,7 @@ export class CameraSimulator extends DeviceSimulator {
 			DATEEND: formatTemporal(Date.now(), 'YYYY-MM-DDTHH:mm:ss.SSS'),
 			XORGSUBF: this.#frame.elements.X.value,
 			YORGSUBF: this.#frame.elements.Y.value,
-			BAYERPAT: channels === 1 ? this.#cfa.elements.CFA_TYPE.value : undefined,
+			// BAYERPAT: channels === 1 ? this.#cfa.elements.CFA_TYPE.value : undefined,
 		}
 	}
 
@@ -1633,13 +1631,13 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Returns the transfer format selected by the capture-format vector.
-	get transferFormat() {
-		return this.selectedFrameFormat.transferFormat
+	get transferFormat(): TransferFormat {
+		return this.#transferFormat.elements.FORMAT_FITS.value ? 'FITS' : 'XISF'
 	}
 
 	// Returns the channel count implied by the current capture format.
 	get channels() {
-		return this.selectedFrameFormat.channels
+		return this.frameFormat === 'MONO' ? 1 : 3
 	}
 
 	// Returns the binned output width for the current frame selection.
@@ -1658,9 +1656,8 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Returns the selected readout-mode descriptor.
-	get selectedFrameFormat(): (typeof CAMERA_FRAME_FORMATS)[number] {
-		const name = findOnSwitch(this.#frameFormat)[0] ?? 'FITS_MONO'
-		return CAMERA_FRAME_FORMATS.find((entry) => entry.name === name) ?? CAMERA_FRAME_FORMATS[0]
+	get frameFormat() {
+		return findOnSwitch(this.#frameFormat)[0] as ReadoutMode
 	}
 
 	// Returns the selected noise quality enum.
@@ -1728,14 +1725,14 @@ function applyMultiSwitchValues(vector: DefSwitchVector, elements: Record<string
 	for (const key in elements) {
 		const element = vector.elements[key]
 		if (!element || element.value === elements[key]) continue
-		element.value = elements[key]!
+		element.value = elements[key]
 		updated = true
 	}
 
 	return updated
 }
 
-function fillFlatField(raw: Float32Array, width: number, height: number, channels: 1 | 3) {
+function fillFlatField(raw: ImageRawType, width: number, height: number, channels: 1 | 3) {
 	const invWidth = width > 1 ? 2 / (width - 1) : 0
 	const invHeight = height > 1 ? 2 / (height - 1) : 0
 
