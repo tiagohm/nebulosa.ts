@@ -294,6 +294,16 @@ describe('generate astronomical image noise', () => {
 		expect(raw[0]).toBeLessThanOrEqual(1)
 		expect(raw[0] * 255).toBeCloseTo(Math.round(raw[0] * 255), 12)
 	})
+
+	test('counts saturated RGB samples per pixel instead of per channel', () => {
+		const raw = new Float64Array(3)
+		const result = generateNoiseImage(raw, 1, 1, 3, baseConfig({ sensor: { biasElectrons: 100000, fullWellCapacity: 1000, channelGain: [1.2, 1, 1.1], channelBiasElectrons: [5000, 7000, 9000] }, output: { clampMode: 'none', quantize: false } }))
+
+		expect(raw[0]).toBeGreaterThanOrEqual(1)
+		expect(raw[1]).toBeGreaterThanOrEqual(1)
+		expect(raw[2]).toBeGreaterThanOrEqual(1)
+		expect(result.stats.saturatedPixels).toBe(1)
+	})
 })
 
 describe('generate image', () => {

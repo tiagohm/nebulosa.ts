@@ -422,6 +422,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 			} else {
 				const baseIndex = pixelIndex * 3
 				let readNoiseAverage = 0
+				let pixelSaturated = false
 
 				for (let channel = 0; channel < 3; channel++) {
 					const readNoiseElectrons = resolved.readNoise * resolved.channelReadNoise[channel] * (sharedReadNoise + sampleGaussian(random, gaussianState) * independentReadNoiseSigma)
@@ -434,9 +435,11 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 					const next = raw[baseIndex + channel] + totalElectrons * resolved.normalizedPerElectron
 					raw[baseIndex + channel] = next
 					if (next > maxValueBeforeOutput) maxValueBeforeOutput = next
-					if (next >= 1) saturatedPixels++
+					pixelSaturated ||= next >= 1
 					readNoiseAverage += readNoiseElectrons
 				}
+
+				if (pixelSaturated) saturatedPixels++
 			}
 		}
 	}
