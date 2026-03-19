@@ -377,6 +377,7 @@ gamma(image, value)
 estimateBackground(image)
 estimateBackgroundUsingMode(image)
 calibrate(image, dark, flat, bias, darkFlat)
+generateNoiseImage(raw, width, height, channels, config)
 ```
 
 ### INDI ![](bun.webp)
