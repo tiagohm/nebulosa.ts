@@ -3,7 +3,8 @@ import { Bitpix } from '../src/fits'
 import { readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../src/image'
 import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../src/image.computation'
 // biome-ignore format: too long!
-import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import { bayer, blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import type { Image } from '../src/image.types'
 import { bufferSink, bufferSource } from '../src/io'
 import { downloadPerTag } from './download'
 import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
@@ -136,6 +137,25 @@ test('debayer RGBG', async () => {
 	expect(image.header.NAXIS3).toBe(3)
 	expect(image.metadata.channels).toBe(3)
 }, 5000)
+
+test('bayer', () => {
+	const color: Image = {
+		header: { NAXIS: 3, NAXIS3: 3 },
+		metadata: { width: 4, height: 2, channels: 3, stride: 12, pixelCount: 8, strideInBytes: 16, pixelSizeInBytes: 4, bitpix: Bitpix.FLOAT, bayer: undefined },
+		raw: new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.21, 0.22, 0.23, 0.24]),
+	}
+
+	const image = bayer(color, 'RGGB')
+
+	expect(image).toBeDefined()
+	expect(image!.header.NAXIS).toBe(2)
+	expect(image!.header.NAXIS3).toBeUndefined()
+	expect(image!.header.BAYERPAT).toBe('RGGB')
+	expect(image!.metadata.channels).toBe(1)
+	expect(image!.metadata.stride).toBe(image!.metadata.width)
+	expect(image!.metadata.bayer).toBe('RGGB')
+	expect(image!.raw).toEqual(new Float32Array([0.1, 0.5, 0.7, 0.11, 0.14, 0.18, 0.2, 0.24]))
+})
 
 test('stf', () => {
 	return readImageTransformAndSave((i) => stf(i, 0.005), 'stf', '82161af2eac053ad688a161d4e1fc6da')

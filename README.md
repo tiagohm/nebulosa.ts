@@ -352,7 +352,8 @@ clone(image) // Clone the image
 stf(image, midtone, shadow, highlight, channel) // Apply STF to image
 adf(image, options) // Calculate the STF parameters
 sigmaClip(image, options) // Generate rejection map using sigma-clip
-debayer(image) // Debayer the image
+debayer(image, pattern) // Debayer the image
+bayer(image, pattern) // Bayer the image using the CFA pattern
 scnr(image, channel, amount, method) // Apply SCNR to image
 horizontalFlip(image) // Horizontal flip the image
 verticalFlip(image) // Vertical flip the image
