@@ -409,10 +409,12 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 			const sharedReadNoise = sampleGaussian(random, gaussianState) * sharedReadNoiseSigma
 
 			if (channels === 1) {
+				const channelSkyElectrons = Math.max(0, skyElectrons * resolved.skyPerChannelMultipliers[0] * resolved.skyColorBias[0] * resolved.skyFilterTransmission[0] + spatial.lightPollutionElectrons * resolved.lightPollutionTint[0] + spatial.moonElectrons * resolved.moonTint[0])
+				const ampGlowTintedElectrons = ampGlowElectrons * resolved.ampGlowTint[0]
 				const readNoiseElectrons = resolved.readNoise * resolved.channelReadNoise[0] * (sharedReadNoise + sampleGaussian(random, gaussianState) * independentReadNoiseSigma)
-				const signalElectrons = sampleSignalElectrons(skyElectrons * resolved.channelGain[0], random, gaussianState, resolved.poissonThreshold) * fixedPatternGain
+				const signalElectrons = sampleSignalElectrons(channelSkyElectrons * resolved.channelGain[0], random, gaussianState, resolved.poissonThreshold) * fixedPatternGain
 				const darkSignalElectrons = sampleSignalElectrons(darkElectrons, random, gaussianState, resolved.poissonThreshold)
-				const totalElectrons = (signalElectrons + darkSignalElectrons + ampGlowElectrons + defect.extraSignalElectrons) * defect.signalScale + resolved.biasElectrons + resolved.blackLevelElectrons + resolved.channelBiasElectrons[0] + rowStructuredElectrons + columnStructuredElectrons + readNoiseElectrons
+				const totalElectrons = (signalElectrons + darkSignalElectrons + ampGlowTintedElectrons + defect.extraSignalElectrons) * defect.signalScale + resolved.biasElectrons + resolved.blackLevelElectrons + resolved.channelBiasElectrons[0] + rowStructuredElectrons + columnStructuredElectrons + readNoiseElectrons
 				const next = raw[pixelIndex] + totalElectrons * resolved.normalizedPerElectron
 				raw[pixelIndex] = next
 				if (next > maxValueBeforeOutput) maxValueBeforeOutput = next

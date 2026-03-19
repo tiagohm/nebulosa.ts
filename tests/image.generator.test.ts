@@ -201,6 +201,27 @@ describe('generate astronomical image noise', () => {
 		expect(Math.abs(green - blue)).toBeLessThan(4e-4)
 	})
 
+	test('applies moonlight and first-channel sky scaling in monochrome mode', () => {
+		const width = 192
+		const height = 128
+		const base = new Float64Array(width * height)
+		const moonlit = new Float64Array(width * height)
+		const filtered = new Float64Array(width * height)
+
+		generateNoiseImage(base, width, height, 1, baseConfig({ sky: { enabled: true, baseRate: 0.2, perChannelMultipliers: [1, 1, 1], colorBias: [1, 1, 1], filterTransmission: [1, 1, 1] } }))
+		generateNoiseImage(
+			moonlit,
+			width,
+			height,
+			1,
+			baseConfig({ sky: { enabled: true, baseRate: 0.2, perChannelMultipliers: [1, 1, 1], colorBias: [1, 1, 1], filterTransmission: [1, 1, 1] }, moon: { enabled: true, illuminationFraction: 0.9, altitude: 0.85, angularDistance: 0.35, positionAngle: 0.65, tint: [1.08, 1, 0.92], strength: 1.2 } }),
+		)
+		generateNoiseImage(filtered, width, height, 1, baseConfig({ sky: { enabled: true, baseRate: 0.2, perChannelMultipliers: [0.55, 1, 1], colorBias: [0.9, 1, 1], filterTransmission: [0.35, 1, 1] } }))
+
+		expect(meanOf(moonlit)).toBeGreaterThan(meanOf(base) * 1.2)
+		expect(meanOf(filtered)).toBeLessThan(meanOf(base) * 0.35)
+	})
+
 	test('matches the configured read-noise scale approximately', () => {
 		const width = 128
 		const height = 128
@@ -302,7 +323,7 @@ describe('generate image', () => {
 		{
 			name: 'mono moonlit gradient',
 			channels: 1,
-			hash: '79f9b8dbe984c26f47641d31fdf193fe',
+			hash: 'cbacdbe66b26c15b0ec04bd097be4af9',
 			config: baseConfig({
 				sky: { enabled: true, baseRate: 0.18, gradientStrength: 0.08, radialGradientStrength: 0.04, lowFrequencyVariationStrength: 0.02 },
 				moon: { enabled: true, illuminationFraction: 0.85, altitude: 0.9, angularDistance: 0.35, positionAngle: -0.5, strength: 1.2 },
@@ -311,7 +332,7 @@ describe('generate image', () => {
 		{
 			name: 'mono urban light dome',
 			channels: 1,
-			hash: '4137bf299770bdedafff1f0cf7f58bb5',
+			hash: '82e2607417e8007d01023e5efe121e99',
 			config: baseConfig({
 				sky: { enabled: true, baseRate: 0.16, gradientStrength: 0.06 },
 				lightPollution: { enabled: true, strength: 0.55, direction: -1.2, gradientStrength: 0.55, domeSharpness: 1.4 },
@@ -349,7 +370,7 @@ describe('generate image', () => {
 		{
 			name: 'mono realistic cooled camera',
 			channels: 1,
-			hash: '9ec099908dae218e66adbf870637a9e7',
+			hash: '9748001c4ceafe6ca24b05dfddfe5c8b',
 			config: baseConfig({
 				quality: 'high-realism',
 				exposure: { exposureTime: 180, electronsPerAdu: 0.75 },
