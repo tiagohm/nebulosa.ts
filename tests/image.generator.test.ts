@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { adf } from '../src/image.computation'
-import { type AstronomicalImageNoiseConfig, generateNoiseImage } from '../src/image.generator'
+import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, generateNoiseImage, generateStarImage } from '../src/image.generator'
 import { stf } from '../src/image.transformation'
 import type { Image } from '../src/image.types'
+import { mulberry32 } from '../src/random'
 import { meanOf, standardDeviationOf } from '../src/util'
 import { saveImageAndCompareHash } from './image.util'
 
@@ -304,6 +305,29 @@ describe('generate astronomical image noise', () => {
 		expect(raw[2]).toBeGreaterThanOrEqual(1)
 		expect(result.stats.saturatedPixels).toBe(1)
 	})
+
+	test('generates star images through the same normalization path as the noise model', () => {
+		const width = 64
+		const height = 64
+		const raw = new Float64Array(width * height)
+		const result = generateStarImage(
+			raw,
+			width,
+			height,
+			1,
+			[
+				{ x: 32, y: 32, hfd: 2.1, snr: 40, flux: 8 },
+				{ x: 18.4, y: 21.7, hfd: 3.6, snr: 12, flux: 0.35 },
+			],
+			0.8,
+			baseConfig({ output: { clampMode: 'normalize', quantize: false } }),
+		)
+
+		expect(result.stats.normalizationScale).toBeLessThan(1)
+		expect(result.stats.maxValueBeforeOutput).toBeGreaterThan(1)
+		expect(Math.max(...raw)).toBeLessThanOrEqual(1)
+		expect(raw[32 * width + 32]).toBeGreaterThan(raw[0])
+	})
 })
 
 describe('generate image', () => {
@@ -485,4 +509,49 @@ describe('generate image', () => {
 			await saveImageAndCompareHash(stf(image, ...adf(image)), `generate-image-${slug}`, hash)
 		}, 5000)
 	}
+})
+
+describe('generate image with stars', () => {
+	const width = 500
+	const height = 350
+	const stars = new Array<AstronomicalImageStar>(200)
+	const raw = new Float64Array(width * height * 3)
+	const random = mulberry32(1)
+
+	for (let i = 0; i < stars.length; i++) {
+		const x = random() * width
+		const y = random() * height
+		const hfd = 0.5 + random() * 1.5
+		const snr = 1 + random() * 99
+		const flux = 0.01 + random() * 0.1
+		const colorIndex = -0.4 + random() * 2.4
+		stars[i] = { x, y, hfd, snr, flux, colorIndex }
+	}
+
+	test('mono', async () => {
+		const config = baseConfig({
+			quality: 'high-realism',
+			exposure: { exposureTime: 180, electronsPerAdu: 0.75 },
+			sky: { enabled: true, baseRate: 0.12, gradientStrength: 0.04, radialGradientStrength: 0.03, lowFrequencyVariationStrength: 0.015 },
+			moon: { enabled: true, illuminationFraction: 0.22, altitude: 0.45, angularDistance: 1.4, positionAngle: 0.6, strength: 0.45 },
+			lightPollution: { enabled: true, strength: 0.12, direction: -0.9, gradientStrength: 0.16, domeSharpness: 1.15 },
+			atmosphere: { airglowStrength: 0.08, transparency: 0.92, airmass: 1.12, zodiacalLightFactor: 0.05, milkyWayBackgroundFactor: 0.03 },
+			sensor: { readNoise: 1.3, biasElectrons: 220, darkCurrentAtReferenceTemp: 0.008, temperature: -12, referenceTemperature: -10, fullWellCapacity: 65000 },
+			artifacts: { fixedPatternNoiseStrength: 0.004, rowNoiseStrength: 0.08, columnNoiseStrength: 0.05, bandingStrength: 0.04, hotPixelRate: 0.00004, warmPixelRate: 0.00012, deadPixelRate: 0.00002, hotPixelStrength: 120, warmPixelStrength: 24, deadPixelResidual: 0.02 },
+		})
+
+		generateStarImage(raw, width, height, 1, stars, 0.2, config, { psfModel: 'gaussian', jitterX: 0.18, jitterY: -0.22, softCore: 1.8, additiveNoiseHint: 1.5, haloStrength: 0.2 })
+		const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width * 1, strideInBytes: width * 1 * 8, bayer: undefined } }
+		await saveImageAndCompareHash(stf(image, ...adf(image)), 'generate-image-with-stars-mono', '50b5b6a448fa12089d697a731de274bb')
+	})
+
+	test('color', async () => {
+		const config = baseConfig({
+			sky: { enabled: true, baseRate: 0.16, gradientStrength: 0.05, radialGradientStrength: 0.03, lowFrequencyVariationStrength: 0.02, perChannelMultipliers: [1, 1, 1], colorBias: [1, 1, 1], filterTransmission: [1, 1, 1] },
+		})
+
+		generateStarImage(raw, width, height, 3, stars, 0.2, config, { psfModel: 'gaussian', jitterX: 0.18, jitterY: -0.22, softCore: 1.8, additiveNoiseHint: 1.5, haloStrength: 0.2 })
+		const image: Image = { raw, header: {}, metadata: { width, height, channels: 3, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width * 3, strideInBytes: width * 3 * 8, bayer: undefined } }
+		await saveImageAndCompareHash(stf(image, ...adf(image)), 'generate-image-with-stars-color', '196f77132bc3c82529bb8869e82a9991')
+	})
 })

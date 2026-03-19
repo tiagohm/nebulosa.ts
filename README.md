@@ -378,6 +378,7 @@ estimateBackground(image)
 estimateBackgroundUsingMode(image)
 calibrate(image, dark, flat, bias, darkFlat)
 generateNoiseImage(raw, width, height, channels, config)
+generateStarImage(raw, width, height, channels, stars, noiseConfig, plotOptions)
 ```
 
 ### INDI ![](bun.webp)
@@ -700,7 +701,7 @@ sirius.observedAt(time, [ebp, ebv], ehp, refraction) // Observed spherical coord
 ### Star Generator ![](bun.webp) ![](browser.webp)
 
 ```ts
-plotStar(raw, width, height, channels, x, y, flux, hfd, snr, seeing, options)
+plotStar(raw, width, height, channels, x, y, flux, hfd, snr, seeing, colorIndex, options)
 ```
 
 ### Statistics ![](bun.webp) ![](browser.webp)

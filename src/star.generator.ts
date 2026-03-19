@@ -6,7 +6,6 @@ export type StarPsfModel = 'gaussian' | 'moffat'
 export interface PlotStarOptions {
 	readonly background?: number
 	readonly saturationLevel?: number
-	readonly colorIndex?: number
 	readonly focusStep?: number
 	readonly bestFocus?: number
 	readonly peakScale?: number
@@ -102,7 +101,7 @@ export function focusDefocusAmount(focusStep?: number, bestFocus?: number) {
 }
 
 // Plots one synthetic star into an existing ImageRawType image buffer.
-export function plotStar(raw: ImageRawType, width: number, height: number, channels: 1 | 3, x: number, y: number, flux: number, hfd: number, snr: number, seeing: number, options: PlotStarOptions = {}) {
+export function plotStar(raw: ImageRawType, width: number, height: number, channels: 1 | 3, x: number, y: number, flux: number, hfd: number, snr: number, seeing: number, colorIndex?: number, options: PlotStarOptions = {}) {
 	if (!Number.isInteger(width) || width <= 0) throw new RangeError('width must be a positive integer')
 	if (!Number.isInteger(height) || height <= 0) throw new RangeError('height must be a positive integer')
 	const expectedLength = width * height * channels
@@ -160,7 +159,7 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 		if (channels === 1) {
 			plotCircularGaussianMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, sigma, coreAmplitude, haloSigma, haloAmplitude, saturationEnabled, saturationLevel)
 		} else {
-			const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(options.colorIndex, options.gammaCompensation)
+			const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(colorIndex, options.gammaCompensation)
 			plotCircularGaussianRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, sigma, coreAmplitude, haloSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
 		}
 
@@ -180,7 +179,7 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 		if (channels === 1) {
 			plotEllipticalGaussianMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorSigma, minorSigma, options.theta || 0, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
 		} else {
-			const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(options.colorIndex, options.gammaCompensation)
+			const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(colorIndex, options.gammaCompensation)
 			plotEllipticalGaussianRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorSigma, minorSigma, options.theta || 0, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
 		}
 
@@ -199,7 +198,7 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 	if (channels === 1) {
 		plotMoffatMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta || 0, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
 	} else {
-		const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(options.colorIndex, options.gammaCompensation)
+		const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(colorIndex, options.gammaCompensation)
 		plotMoffatRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta || 0, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
 	}
 

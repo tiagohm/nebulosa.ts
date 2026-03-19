@@ -17,6 +17,7 @@ interface PlotStarScenario extends PlotStarOptions {
 	readonly seeing: number
 	readonly x?: number
 	readonly y?: number
+	readonly colorIndex?: number
 	readonly hash?: string
 }
 
@@ -120,7 +121,7 @@ test('preserves flux for undersampled gaussian stars', () => {
 
 	for (const hfd of scenarios) {
 		buffer.fill(0)
-		expect(plotStar(buffer, size, size, 1, size / 2, size / 2, 1, hfd, 40, 0, { maxPlotRadius: 32 })).toBe(true)
+		expect(plotStar(buffer, size, size, 1, size / 2, size / 2, 1, hfd, 40, 0, undefined, { maxPlotRadius: 32 })).toBe(true)
 		expect(monoSum(buffer)).toBeCloseTo(1, 6)
 	}
 })
@@ -129,8 +130,8 @@ test('plots centered RGB stars with normalized color energy', () => {
 	const redBuffer = new Float64Array(WIDTH * HEIGHT * 3)
 	const blueBuffer = new Float64Array(WIDTH * HEIGHT * 3)
 
-	expect(plotStar(redBuffer, WIDTH, HEIGHT, 3, 24, 24, 0.42, 3.6, 30, 0.8, { colorIndex: 1.7 })).toBe(true)
-	expect(plotStar(blueBuffer, WIDTH, HEIGHT, 3, 24, 24, 0.42, 3.6, 30, 0.8, { colorIndex: -0.25 })).toBe(true)
+	expect(plotStar(redBuffer, WIDTH, HEIGHT, 3, 24, 24, 0.42, 3.6, 30, 0.8, 1.7)).toBe(true)
+	expect(plotStar(blueBuffer, WIDTH, HEIGHT, 3, 24, 24, 0.42, 3.6, 30, 0.8, -0.25)).toBe(true)
 
 	const [redR, redG, redB] = rgbSum(redBuffer)
 	const [blueR, blueG, blueB] = rgbSum(blueBuffer)
@@ -195,10 +196,10 @@ test('handles faint, saturated, and diffuse stars plausibly', () => {
 	expect(plotStar(faint, WIDTH, HEIGHT, 1, 24, 24, 1e-5, 2.4, 5, 0)).toBe(true)
 	expect(monoSum(faint)).toBeGreaterThan(0)
 
-	expect(plotStar(saturated, WIDTH, HEIGHT, 1, 24, 24, 8, 1.2, 60, 0, { saturationLevel: 1 })).toBe(true)
+	expect(plotStar(saturated, WIDTH, HEIGHT, 1, 24, 24, 8, 1.2, 60, 0, undefined, { saturationLevel: 1 })).toBe(true)
 	expect(Math.max(...saturated)).toBe(1)
 
-	expect(plotStar(diffuse, WIDTH, HEIGHT, 1, 24, 24, 0.5, 10, 12, 5, { maxPlotRadius: 24 })).toBe(true)
+	expect(plotStar(diffuse, WIDTH, HEIGHT, 1, 24, 24, 0.5, 10, 12, 5, undefined, { maxPlotRadius: 24 })).toBe(true)
 	expect(monoSum(diffuse)).toBeGreaterThan(0.4)
 	expect(diffuse[24 * WIDTH + 24]).toBeLessThan(saturated[24 * WIDTH + 24])
 })
@@ -210,9 +211,9 @@ test('supports ellipticity and halo shaping', () => {
 	const withHalo = new Float64Array(WIDTH * HEIGHT)
 
 	expect(plotStar(circular, WIDTH, HEIGHT, 1, 24, 24, 0.3, 3.2, 22, 0.6)).toBe(true)
-	expect(plotStar(elliptical, WIDTH, HEIGHT, 1, 24, 24, 0.3, 3.2, 22, 0.6, { ellipticity: 0.45, theta: 0 })).toBe(true)
+	expect(plotStar(elliptical, WIDTH, HEIGHT, 1, 24, 24, 0.3, 3.2, 22, 0.6, undefined, { ellipticity: 0.45, theta: 0 })).toBe(true)
 	expect(plotStar(noHalo, WIDTH, HEIGHT, 1, 24, 24, 0.3, 3.2, 22, 0.6)).toBe(true)
-	expect(plotStar(withHalo, WIDTH, HEIGHT, 1, 24, 24, 0.3, 3.2, 22, 0.6, { haloStrength: 0.22, haloScale: 3.4 })).toBe(true)
+	expect(plotStar(withHalo, WIDTH, HEIGHT, 1, 24, 24, 0.3, 3.2, 22, 0.6, undefined, { haloStrength: 0.22, haloScale: 3.4 })).toBe(true)
 
 	const [circularX, circularY] = monoSecondMoments(circular, WIDTH, HEIGHT, 24, 24)
 	const [ellipticalX, ellipticalY] = monoSecondMoments(elliptical, WIDTH, HEIGHT, 24, 24)
@@ -226,7 +227,7 @@ test('supports the optional moffat profile with broader wings', () => {
 	const moffat = new Float64Array(WIDTH * HEIGHT)
 
 	expect(plotStar(gaussian, WIDTH, HEIGHT, 1, 24, 24, 0.28, 3.4, 25, 0.5)).toBe(true)
-	expect(plotStar(moffat, WIDTH, HEIGHT, 1, 24, 24, 0.28, 3.4, 25, 0.5, { psfModel: 'moffat', beta: 2.2 })).toBe(true)
+	expect(plotStar(moffat, WIDTH, HEIGHT, 1, 24, 24, 0.28, 3.4, 25, 0.5, undefined, { psfModel: 'moffat', beta: 2.2 })).toBe(true)
 	expect(ringEnergy(moffat, WIDTH, HEIGHT, 24, 24, 5)).toBeGreaterThan(ringEnergy(gaussian, WIDTH, HEIGHT, 24, 24, 5))
 	expect(monoSum(moffat)).toBeCloseTo(0.28, 1)
 })
@@ -239,8 +240,8 @@ test('broadens stars away from best focus', () => {
 
 	expect(focusDefocusAmount(50000, 50000)).toBe(0)
 	expect(focusDefocusAmount(100000, 50000)).toBe(1)
-	expect(plotStar(focused, size, size, 1, 48, 48, 0.3, 2.8, 24, 0.4, { focusStep: 50000, bestFocus: 50000, maxPlotRadius: 40 })).toBe(true)
-	expect(plotStar(defocused, size, size, 1, 48, 48, 0.3, 2.8, 24, 0.4, { focusStep: 100000, bestFocus: 50000, maxPlotRadius: 40 })).toBe(true)
+	expect(plotStar(focused, size, size, 1, 48, 48, 0.3, 2.8, 24, 0.4, undefined, { focusStep: 50000, bestFocus: 50000, maxPlotRadius: 40 })).toBe(true)
+	expect(plotStar(defocused, size, size, 1, 48, 48, 0.3, 2.8, 24, 0.4, undefined, { focusStep: 100000, bestFocus: 50000, maxPlotRadius: 40 })).toBe(true)
 
 	const [focusedX, focusedY] = monoSecondMoments(focused, size, size, 48, 48)
 	const [defocusedX, defocusedY] = monoSecondMoments(defocused, size, size, 48, 48)
@@ -260,7 +261,7 @@ test('plots many stars without producing NaN or Infinity', () => {
 		const hfd = 1.8 + (i % 5) * 0.35
 		const snr = 6 + (i % 25)
 		const seeing = (i % 4) * 0.25
-		plotStar(buffer, 256, 256, 1, x, y, flux, hfd, snr, seeing, { haloStrength: i % 9 === 0 ? 0.18 : 0, ellipticity: i % 11 === 0 ? 0.2 : 0, theta: i * 0.1 })
+		plotStar(buffer, 256, 256, 1, x, y, flux, hfd, snr, seeing, undefined, { haloStrength: i % 9 === 0 ? 0.18 : 0, ellipticity: i % 11 === 0 ? 0.2 : 0, theta: i * 0.1 })
 	}
 
 	for (let i = 0; i < buffer.length; i++) expect(Number.isFinite(buffer[i])).toBe(true)
@@ -312,11 +313,11 @@ describe('plot star', () => {
 	]
 
 	for (const scenario of scenarios) {
-		const { name, slug, channels, flux, hfd, snr, seeing, x = WIDTH / 2, y = HEIGHT / 2, hash, ...options } = scenario
+		const { name, slug, channels, flux, hfd, snr, seeing, x = WIDTH / 2, y = HEIGHT / 2, hash, colorIndex, ...options } = scenario
 
 		test(name, async () => {
 			raw.fill(0)
-			expect(plotStar(raw, WIDTH, HEIGHT, channels, x, y, flux, hfd, snr, seeing, options)).toBeTrue()
+			expect(plotStar(raw, WIDTH, HEIGHT, channels, x, y, flux, hfd, snr, seeing, colorIndex, options)).toBeTrue()
 			const image: Image = { raw, header: {}, metadata: metadata(channels) }
 			await saveImageAndCompareHash(brightness(gamma(image, 3), 4), `plot-star-${slug}`, hash)
 		})

@@ -3,6 +3,8 @@ import { PIOVERTWO, TAU } from './constants'
 import type { ImageRawType } from './image.types'
 import { clamp } from './math'
 import { mulberry32, type Random } from './random'
+import type { DetectedStar } from './star.detector'
+import { type PlotStarOptions, plotStar } from './star.generator'
 
 export type AstronomicalImageNoiseQuality = 'fast' | 'balanced' | 'high-realism'
 
@@ -146,6 +148,10 @@ export interface AstronomicalImageNoiseStats {
 
 export interface AstronomicalImageNoiseResult {
 	readonly stats: AstronomicalImageNoiseStats
+}
+
+export interface AstronomicalImageStar extends DetectedStar {
+	readonly colorIndex?: number
 }
 
 interface ResolvedAstronomicalImageNoiseConfig {
@@ -459,6 +465,16 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 			deadPixelCount,
 		},
 	}
+}
+
+// Plots stars first so the existing noise and output pipeline operates on the combined scene.
+export function generateStarImage(raw: ImageRawType, width: number, height: number, channels: 1 | 3, stars: readonly AstronomicalImageStar[], seeing: number, noiseConfig: AstronomicalImageNoiseConfig = DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, plotOptions: PlotStarOptions = {}) {
+	for (let i = 0; i < stars.length; i++) {
+		const star = stars[i]
+		plotStar(raw, width, height, channels, star.x, star.y, star.flux, star.hfd, star.snr, seeing, star.colorIndex, plotOptions)
+	}
+
+	return generateNoiseImage(raw, width, height, channels, noiseConfig)
 }
 
 // Validates user parameters and derives a fast execution context.
