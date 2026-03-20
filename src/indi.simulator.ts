@@ -246,14 +246,20 @@ export abstract class DeviceSimulator implements Disposable {
 			for (const property of properties) {
 				const actual = this.properties.find((e) => e.name === property.name)
 				if (actual === undefined || this.propertiesToNotSave.includes(actual)) continue
+				let updated = false
 
 				for (const key in actual.elements) {
 					const value = property.elements[key]
 					if (value === undefined) continue
-					actual.elements[key].value = value.value
+					const actualElement = actual.elements[key]
+
+					if (actualElement.value !== value.value) {
+						actualElement.value = value.value
+						updated = true
+					}
 				}
 
-				this.notify(actual)
+				updated && this.notify(actual)
 			}
 		}
 	}
@@ -1860,7 +1866,7 @@ export class CameraSimulator extends DeviceSimulator {
 			property.device = name
 		}
 
-		if (options?.catalogProviders?.size) {
+		if (options?.catalogProviders) {
 			for (const name of Object.keys(options.catalogProviders)) {
 				this.#catalogSource.elements[name] = { name, label: name, value: name === 'RANDOM' }
 			}
