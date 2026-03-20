@@ -305,6 +305,12 @@ hips2Fits(survey, ra, dec, options) // Extract a FITS image from a HiPS
 hipsSurveys() // List available HiPS
 ```
 
+### HNSKY ![](bun.webp)
+
+```ts
+const stars = await findHnsky290Stars(directory, database, query)
+```
+
 ### Horizons ![](bun.webp) ![](browser.webp)
 
 ```ts
