@@ -400,6 +400,80 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(mountManager.has(client, mount.name)).toBeFalse()
 	}, 5000)
 
+	test('rotates rendered stars around the image center using the snooped rotator angle', async () => {
+		const handler = new IndiClientHandlerSet()
+		const cameraManager = new CameraManager()
+		const rotatorManager = new RotatorManager()
+		const propertyManager = new DevicePropertyManager()
+		const client = new ClientSimulator('camera.rotator.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(cameraManager)
+		handler.add(rotatorManager)
+		handler.add(propertyManager)
+
+		cameraManager.addHandler(frameReceiver)
+
+		const rotatorSimulator = new RotatorSimulator('Rotator Simulator', client)
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { rotatorManager })
+		const rotator = rotatorManager.get(client, rotatorSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		rotatorSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => rotator.connected && camera.connected)
+
+		cameraManager.snoop(camera, undefined, undefined, undefined, rotator)
+		await waitUntil(() => propertyManager.get(client, camera.name)?.ACTIVE_DEVICES?.elements.ACTIVE_ROTATOR.value === rotator.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, MOON_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, AMP_GLOW_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 1 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { SCENE_SEED: 7, STAR_DENSITY: 0.0001, HFD_MIN: 1.2, HFD_MAX: 1.2, FLUX_MIN: 0.01, FLUX_MAX: 24 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0, DARK_SIGNAL_NON_UNIFORMITY: 0 } })
+		client.sendNumber({
+			device: camera.name,
+			name: 'SIMULATOR_NOISE_ARTIFACTS',
+			elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0, HOT_PIXEL_STRENGTH: 0, WARM_PIXEL_STRENGTH: 0, DEAD_PIXEL_RESIDUAL: 0 },
+		})
+
+		cameraManager.startExposure(camera, 0.1)
+		await waitUntil(() => frameReceiver.length > 0, 5000, 50)
+		const fullFrameImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		const [fullFrameX, fullFrameY] = brightestPixel(fullFrameImage!.raw, fullFrameImage!.metadata.width, fullFrameImage!.metadata.channels)
+		const frameX = Math.max(0, Math.min(fullFrameImage!.metadata.width - 64, fullFrameX - 48))
+		const frameY = Math.max(0, Math.min(fullFrameImage!.metadata.height - 64, fullFrameY - 20))
+
+		cameraManager.frame(camera, frameX, frameY, 64, 64)
+		await waitUntil(() => camera.frame.x.value === frameX && camera.frame.y.value === frameY && camera.frame.width.value === 64 && camera.frame.height.value === 64)
+
+		cameraManager.startExposure(camera, 0.1)
+		await waitUntil(() => frameReceiver.length > 1, 5000, 50)
+		const unrotatedImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		const [unrotatedX, unrotatedY] = brightestPixel(unrotatedImage!.raw, unrotatedImage!.metadata.width, unrotatedImage!.metadata.channels)
+		const centerX = (unrotatedImage!.metadata.width - 1) * 0.5
+		const centerY = (unrotatedImage!.metadata.height - 1) * 0.5
+
+		expect(Math.hypot(unrotatedX - centerX, unrotatedY - centerY)).toBeGreaterThan(12)
+
+		rotatorManager.syncTo(rotator, 90)
+		await waitUntil(() => Math.abs(rotator.angle.value - 90) < 1e-9)
+
+		cameraManager.startExposure(camera, 0.1)
+		await waitUntil(() => frameReceiver.length > 2, 5000, 50)
+		const rotatedImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		const [rotatedX, rotatedY] = brightestPixel(rotatedImage!.raw, rotatedImage!.metadata.width, rotatedImage!.metadata.channels)
+		const expectedX = centerX - (unrotatedY - centerY)
+		const expectedY = centerY + (unrotatedX - centerX)
+
+		expect(Math.abs(rotatedX - expectedX)).toBeLessThanOrEqual(2)
+		expect(Math.abs(rotatedY - expectedY)).toBeLessThanOrEqual(2)
+
+		cameraSimulator.dispose()
+		rotatorSimulator.dispose()
+		expect(cameraManager.has(client, camera.name)).toBeFalse()
+		expect(rotatorManager.has(client, rotator.name)).toBeFalse()
+	}, 5000)
+
 	test('scales flat frames with exposure time', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
@@ -427,32 +501,11 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, MOON_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, AMP_GLOW_ENABLED: false } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 1 } })
-		client.sendNumber({
-			device: camera.name,
-			name: 'SIMULATOR_NOISE_SENSOR',
-			elements: {
-				READ_NOISE: 0,
-				BIAS_ELECTRONS: 0,
-				BLACK_LEVEL_ELECTRONS: 0,
-				DARK_CURRENT_AT_REFERENCE_TEMP: 0,
-				DARK_SIGNAL_NON_UNIFORMITY: 0,
-			},
-		})
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0, DARK_SIGNAL_NON_UNIFORMITY: 0 } })
 		client.sendNumber({
 			device: camera.name,
 			name: 'SIMULATOR_NOISE_ARTIFACTS',
-			elements: {
-				FIXED_PATTERN_NOISE_STRENGTH: 0,
-				ROW_NOISE_STRENGTH: 0,
-				COLUMN_NOISE_STRENGTH: 0,
-				BANDING_STRENGTH: 0,
-				HOT_PIXEL_RATE: 0,
-				WARM_PIXEL_RATE: 0,
-				DEAD_PIXEL_RATE: 0,
-				HOT_PIXEL_STRENGTH: 0,
-				WARM_PIXEL_STRENGTH: 0,
-				DEAD_PIXEL_RESIDUAL: 0,
-			},
+			elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0, HOT_PIXEL_STRENGTH: 0, WARM_PIXEL_STRENGTH: 0, DEAD_PIXEL_RESIDUAL: 0 },
 		})
 
 		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === 1)
@@ -773,4 +826,32 @@ function sumPixels(raw: ImageRawType) {
 		if (raw[i] < 0) console.info(raw[i])
 	}
 	return total
+}
+
+function brightestPixel(raw: ImageRawType, width: number, channels: number) {
+	let brightestX = 0
+	let brightestY = 0
+	let brightestValue = -Infinity
+
+	if (channels === 1) {
+		for (let i = 0; i < raw.length; i++) {
+			if (raw[i] <= brightestValue) continue
+			brightestValue = raw[i]
+			brightestX = i % width
+			brightestY = Math.trunc(i / width)
+		}
+	} else {
+		const pixelCount = Math.trunc(raw.length / channels)
+
+		for (let i = 0; i < pixelCount; i++) {
+			const index = i * channels
+			const value = raw[index] + raw[index + 1] + raw[index + 2]
+			if (value <= brightestValue) continue
+			brightestValue = value
+			brightestX = i % width
+			brightestY = Math.trunc(i / width)
+		}
+	}
+
+	return [brightestX, brightestY, brightestValue] as const
 }

@@ -11,7 +11,7 @@ import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_
 import type { CfaPattern, Image, ImageRawType } from './image.types'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, type FrameType, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
-import type { FocuserManager, GuideOutputManager, MountManager } from './indi.manager'
+import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager } from './indi.manager'
 import { type DefNumberVector, type DefSwitchVector, type DefTextVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetVector, selectOnSwitch } from './indi.types'
 import { bufferSink } from './io'
 import { type GeographicCoordinate, localSiderealTime } from './location'
@@ -83,6 +83,7 @@ export interface DeviceManagers {
 	readonly mountManager?: MountManager
 	readonly guideOutputManager?: GuideOutputManager
 	readonly focuserManager?: FocuserManager
+	readonly rotatorManager?: RotatorManager
 }
 
 // Routes MountManager commands back into the simulator.
@@ -1798,6 +1799,7 @@ export class CameraSimulator extends DeviceSimulator {
 
 	readonly #mountManager?: MountManager
 	readonly #focuserManager?: FocuserManager
+	readonly #rotatorManager?: RotatorManager
 	readonly #guideOutputManager?: GuideOutputManager
 
 	constructor(
@@ -1816,6 +1818,7 @@ export class CameraSimulator extends DeviceSimulator {
 
 		this.#mountManager = managers?.mountManager
 		this.#focuserManager = managers?.focuserManager
+		this.#rotatorManager = managers?.rotatorManager
 		this.#guideOutputManager = managers?.guideOutputManager
 	}
 
@@ -1827,6 +1830,11 @@ export class CameraSimulator extends DeviceSimulator {
 	get activeFocuser() {
 		const focuser = this.#focuserManager?.get(this.client, this.snoopDevices.elements.ACTIVE_FOCUSER.value)
 		return focuser?.connected ? focuser : undefined
+	}
+
+	get activeRotator() {
+		const rotator = this.#rotatorManager?.get(this.client, this.snoopDevices.elements.ACTIVE_ROTATOR.value)
+		return rotator?.connected ? rotator : undefined
 	}
 
 	// Returns the selected catalog backend for light-frame stars.
@@ -2196,9 +2204,10 @@ export class CameraSimulator extends DeviceSimulator {
 		const raw = new Float32Array(width * height * channels)
 		const frameType = this.frameType
 		const noiseConfig = this.noiseConfig(frameType, exposureTime)
+		const rotatorAngle = (this.activeRotator?.angle.value ?? 0) * DEG2RAD
 
 		if (frameType === 'LIGHT') {
-			const stars = await this.collectFrameStars(exposureTime)
+			const stars = await this.collectFrameStars(exposureTime, width, height, rotatorAngle)
 			generateStarImage(raw, width, height, channels, stars, this.seeing, noiseConfig, this.plotOptions())
 		} else {
 			if (frameType === 'FLAT') fillFlatField(raw, width, height, channels, exposureTime, this.#noiseExposure.elements.EXPOSURE_TIME.value)
@@ -2240,6 +2249,8 @@ export class CameraSimulator extends DeviceSimulator {
 	private imageHeader(width: number, height: number, channels: 1 | 3, exposureTime: number): FitsHeader {
 		const now = Date.now()
 		const mount = this.activeMount
+		const focuser = this.activeFocuser
+		const rotator = this.activeRotator
 		const start = now - Math.trunc(exposureTime * 1000)
 		let rightAscension: Angle | undefined
 		let declination: Angle | undefined
@@ -2281,6 +2292,9 @@ export class CameraSimulator extends DeviceSimulator {
 			DATEEND: formatTemporal(now, 'YYYY-MM-DDTHH:mm:ss.SSS'),
 			XORGSUBF: this.#frame.elements.X.value,
 			YORGSUBF: this.#frame.elements.Y.value,
+			FOCUSPOS: focuser?.position.value,
+			FOCUSTEM: focuser?.hasThermometer ? focuser.temperature : undefined,
+			ROTATANG: rotator ? rotator.angle.value : undefined,
 			// BAYERPAT: channels === 1 ? this.#cfa.elements.CFA_TYPE.value : undefined,
 		}
 	}
@@ -2407,7 +2421,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Projects the master catalog into the current subframe and binning.
-	private async collectFrameStars(exposureTime: number) {
+	private async collectFrameStars(exposureTime: number, imageWidth: number, imageHeight: number, rotatorAngle: number) {
 		const stars = await this.ensureCatalog()
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
@@ -2419,19 +2433,30 @@ export class CameraSimulator extends DeviceSimulator {
 		const gainFactor = 1 + this.#gain.elements.GAIN.value / 100
 		const exposureScale = exposureTime / this.#noiseExposure.elements.EXPOSURE_TIME.value
 		const projected: AstronomicalImageStar[] = []
+		const centerX = (imageWidth - 1) * 0.5
+		const centerY = (imageHeight - 1) * 0.5
+		const rotate = Math.abs(rotatorAngle) >= 1e-12
+		const sinAngle = rotate ? Math.sin(rotatorAngle) : 0
+		const cosAngle = rotate ? Math.cos(rotatorAngle) : 1
 
 		for (let i = 0; i < stars.length; i++) {
 			const star = stars[i]
 			if (star.x < frameX || star.x >= frameX + frameWidth || star.y < frameY || star.y >= frameY + frameHeight) continue
 
-			projected.push({
+			const projectedStar = {
 				x: (star.x - frameX) / binX,
 				y: (star.y - frameY) / binY,
 				flux: star.flux * gainFactor * exposureScale,
 				hfd: Math.max(0.35, star.hfd / hfdScale),
 				snr: star.snr * Math.sqrt(Math.max(exposureScale, 0.01)),
 				colorIndex: star.colorIndex,
-			})
+			}
+
+			if (rotate) {
+				rotateImageCoordinate(projectedStar, centerX, centerY, sinAngle, cosAngle)
+			}
+
+			projected.push(projectedStar)
 		}
 
 		return projected
@@ -2755,6 +2780,13 @@ function makeVizierCatalogQuery(rightAscension: Angle, declination: Angle, radiu
 // Converts visual magnitude into a relative brightness scale.
 function magnitudeToBrightness(magnitude: number) {
 	return 10 ** (-0.4 * magnitude)
+}
+
+function rotateImageCoordinate(point: { x: number; y: number }, centerX: number, centerY: number, sinAngle: number, cosAngle: number) {
+	const dx = point.x - centerX
+	const dy = point.y - centerY
+	point.x = centerX + dx * cosAngle - dy * sinAngle
+	point.y = centerY + dx * sinAngle + dy * cosAngle
 }
 
 function fillFlatField(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number, referenceExposureTime: number) {

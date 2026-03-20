@@ -1863,7 +1863,7 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 		XBAYROFF: camera?.cfa.offsetX,
 		YBAYROFF: camera?.cfa.offsetY,
 		BAYERPAT: camera?.cfa.type,
-		ROTATANG: rotator ? toDeg(rotator.angle.value) : undefined,
+		ROTATANG: rotator ? rotator.angle.value : undefined,
 		FOCUSPOS: focuser?.position.value,
 		FOCUSTEM: focuser?.hasThermometer ? focuser.temperature : undefined,
 		SITELAT: mount ? toDeg(mount.geographicCoordinate.latitude) : undefined,
