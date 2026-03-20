@@ -80,7 +80,7 @@ type CatalogSource = 'RANDOM' | 'VIZIER' | string
 
 type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
 
-export type CatalogProvider = (rightAscension: Angle, declination: Angle, radius: Angle) => readonly AstronomicalImageStar[]
+export type CatalogProvider = (rightAscension: Angle, declination: Angle, radius: Angle) => PromiseLike<readonly AstronomicalImageStar[]> | readonly AstronomicalImageStar[]
 
 export interface DeviceSimulatorOptions {
 	readonly save?: (name: string, properties: readonly SimulatorProperty[]) => void
@@ -88,7 +88,7 @@ export interface DeviceSimulatorOptions {
 }
 
 export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
-	readonly catalogProviders?: Map<string, CatalogProvider>
+	readonly catalogProviders?: Record<string, CatalogProvider>
 	readonly mountManager?: MountManager
 	readonly guideOutputManager?: GuideOutputManager
 	readonly focuserManager?: FocuserManager
@@ -1861,7 +1861,7 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 
 		if (options?.catalogProviders?.size) {
-			for (const name of options.catalogProviders.keys()) {
+			for (const name of Object.keys(options.catalogProviders)) {
 				this.#catalogSource.elements[name] = { name, label: name, value: name === 'RANDOM' }
 			}
 		}
@@ -2554,10 +2554,10 @@ export class CameraSimulator extends DeviceSimulator {
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
 		const catalogSource = this.catalogSource
-		const catalogProvider = this.options?.catalogProviders?.get(catalogSource)
+		const catalogProvider = this.options?.catalogProviders?.[catalogSource]
 		const stars =
 			catalogProvider !== undefined && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0
-				? catalogProvider(centerRightAscension, centerDeclination, radius)
+				? await catalogProvider(centerRightAscension, centerDeclination, radius)
 				: catalogSource === 'VIZIER' && radius > 0 && pixelScale > 0
 					? await this.vizierSource(radius, pixelScale)
 					: this.randomSource()
