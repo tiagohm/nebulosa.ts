@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { deg, hour, normalizePI } from '../src/angle'
+import { deg, formatDEC, formatRA, hour, normalizePI } from '../src/angle'
 import { readImageFromBuffer } from '../src/image'
 import type { ImageRawType } from '../src/image.types'
 import { IndiClientHandlerSet } from '../src/indi.client'
@@ -331,6 +331,67 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		cameraSimulator.dispose()
 		expect(cameraManager.has(client, camera.name)).toBeFalse()
+	}, 5000)
+
+	test('adds mount FITS headers when snooping a connected mount', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		const propertyManager = new DevicePropertyManager()
+		const client = new ClientSimulator('camera.header.simulator', handler)
+		const frames: Buffer<ArrayBuffer>[] = []
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		handler.add(propertyManager)
+
+		cameraManager.addHandler({
+			added: () => {},
+			removed: () => {},
+			blobReceived: (_, data) => {
+				Buffer.isBuffer(data) && frames.push(data)
+			},
+		})
+
+		const mountSimulator = new MountSimulator('Mount Simulator', client)
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, mountManager)
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountManager.geographicCoordinate(mount, { latitude: deg(-22), longitude: deg(-45), elevation: 900 })
+		await waitUntil(() => closeTo(mount.geographicCoordinate.latitude, deg(-22), 1e-9))
+		await waitUntil(() => closeTo(mount.geographicCoordinate.longitude, deg(-45), 1e-9))
+
+		mountManager.syncTo(mount, hour(22), deg(-60))
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(22), 1e-9))
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(-60), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => propertyManager.get(client, camera.name)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		cameraManager.startExposure(camera, 0.05)
+		await waitUntil(() => frames.length > 0, 5000, 50)
+		const image = await readImageFromBuffer(frames[frames.length - 1])
+		const header = image!.header
+
+		expect(image).toBeDefined()
+		expect(header.TELESCOP).toBe('Mount Simulator')
+		expect(header.SITELAT).toBeCloseTo(-22, 6)
+		expect(header.SITELONG).toBeCloseTo(-45, 6)
+		expect(header.RA).toBeCloseTo(329.53, 2)
+		expect(header.DEC).toBeCloseTo(-60.125, 2)
+		expect(header.OBJCTRA).toBe(formatRA(deg(header.RA as number)))
+		expect(header.OBJCTDEC).toBe(formatDEC(deg(header.DEC as number)))
+		expect(header.EQUINOX).toBe(2000)
+
+		cameraSimulator.dispose()
+		mountSimulator.dispose()
+		expect(cameraManager.has(client, camera.name)).toBeFalse()
+		expect(mountManager.has(client, mount.name)).toBeFalse()
 	}, 5000)
 
 	test('scales flat frames with exposure time', async () => {

@@ -1,5 +1,5 @@
 import type { Angle } from './angle'
-import { deg, hour, normalizeAngle, normalizePI, toDeg, toHour } from './angle'
+import { deg, formatDEC, formatRA, hour, normalizeAngle, normalizePI, toDeg, toHour } from './angle'
 import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { equatorialToJ2000 } from './coordinate'
@@ -2211,6 +2211,16 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Builds a compact astronomical image header for synthetic output.
 	private imageHeader(width: number, height: number, channels: 1 | 3, exposureTime: number): FitsHeader {
+		const now = Date.now()
+		const mount = this.activeMount?.connected ? this.activeMount : undefined
+		const start = now - Math.trunc(exposureTime * 1000)
+		let rightAscension: Angle | undefined
+		let declination: Angle | undefined
+
+		if (mount) {
+			;[rightAscension, declination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination)
+		}
+
 		return {
 			SIMPLE: true,
 			BITPIX: 16,
@@ -2219,6 +2229,7 @@ export class CameraSimulator extends DeviceSimulator {
 			NAXIS2: height,
 			NAXIS3: channels === 3 ? 3 : undefined,
 			INSTRUME: this.name,
+			TELESCOP: mount?.name,
 			EXPTIME: exposureTime,
 			BZERO: 32768,
 			BSCALE: 1,
@@ -2231,8 +2242,16 @@ export class CameraSimulator extends DeviceSimulator {
 			FRAME: this.frameType,
 			IMAGETYP: `${this.frameType} Frame`,
 			'CCD-TEMP': this.#temperature.elements.CCD_TEMPERATURE_VALUE.value,
-			DATEOBS: formatTemporal(Date.now() - Math.trunc(exposureTime * 1000), 'YYYY-MM-DDTHH:mm:ss.SSS'),
-			DATEEND: formatTemporal(Date.now(), 'YYYY-MM-DDTHH:mm:ss.SSS'),
+			SITELAT: mount ? toDeg(mount.geographicCoordinate.latitude) : undefined,
+			SITELONG: mount ? toDeg(mount.geographicCoordinate.longitude) : undefined,
+			OBJCTRA: rightAscension !== undefined ? formatRA(rightAscension) : undefined,
+			OBJCTDEC: declination !== undefined ? formatDEC(declination) : undefined,
+			RA: rightAscension !== undefined ? toDeg(normalizeAngle(rightAscension)) : undefined,
+			DEC: declination !== undefined ? toDeg(declination) : undefined,
+			EQUINOX: mount ? 2000 : undefined,
+			PIERSIDE: mount && mount.pierSide !== 'NEITHER' ? mount.pierSide : undefined,
+			DATEOBS: formatTemporal(start, 'YYYY-MM-DDTHH:mm:ss.SSS'),
+			DATEEND: formatTemporal(now, 'YYYY-MM-DDTHH:mm:ss.SSS'),
 			XORGSUBF: this.#frame.elements.X.value,
 			YORGSUBF: this.#frame.elements.Y.value,
 			// BAYERPAT: channels === 1 ? this.#cfa.elements.CFA_TYPE.value : undefined,
