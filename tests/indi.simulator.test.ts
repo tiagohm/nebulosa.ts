@@ -296,10 +296,10 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(camera.pixelSize.y).toBeCloseTo(5.2, 6)
 		expect(propertyManager.get(client, camera.name)?.SIMULATOR_NOISE_EXPOSURE).toBeDefined()
 		expect(propertyManager.get(client, camera.name)?.SIMULATOR_CATALOG_SOURCE).toBeDefined()
-		expect(propertyManager.get(client, camera.name)?.SIMULATOR_PLOT_OPTIONS).toBeDefined()
+		expect(propertyManager.get(client, camera.name)?.SIMULATOR_STAR_PLOT_OPTIONS).toBeDefined()
 
-		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_PLOT_FLAGS', elements: { GAMMA_ENABLED: true } })
-		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_PLOT_FLAGS?.elements.GAMMA_ENABLED.value === true)
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_FLAGS', elements: { GAMMA_ENABLED: true } })
+		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_STAR_PLOT_FLAGS?.elements.GAMMA_ENABLED.value === true)
 
 		cameraManager.frame(camera, 32, 16, 160, 120)
 		await waitUntil(() => camera.frame.x.value === 32 && camera.frame.y.value === 16 && camera.frame.width.value === 160 && camera.frame.height.value === 120)
@@ -328,6 +328,85 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		cameraSimulator.connect()
 		await waitUntil(() => camera.connected)
+
+		cameraSimulator.dispose()
+		expect(cameraManager.has(client, camera.name)).toBeFalse()
+	}, 5000)
+
+	test('scales flat frames with exposure time', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		const propertyManager = new DevicePropertyManager()
+		const client = new ClientSimulator('camera.flat.simulator', handler)
+		const frames: Buffer<ArrayBuffer>[] = []
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		handler.add(propertyManager)
+
+		cameraManager.addHandler({
+			added: () => {},
+			removed: () => {},
+			blobReceived: (_, data) => {
+				Buffer.isBuffer(data) && frames.push(data)
+			},
+		})
+
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, mountManager)
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		cameraManager.connect(camera)
+		await waitUntil(() => camera.connected)
+
+		cameraManager.frameType(camera, 'FLAT')
+		await waitUntil(() => camera.frameType === 'FLAT')
+		cameraManager.frame(camera, 0, 0, 64, 64)
+		await waitUntil(() => camera.frame.width.value === 64 && camera.frame.height.value === 64)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, MOON_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, AMP_GLOW_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 1 } })
+		client.sendNumber({
+			device: camera.name,
+			name: 'SIMULATOR_NOISE_SENSOR',
+			elements: {
+				READ_NOISE: 0,
+				BIAS_ELECTRONS: 0,
+				BLACK_LEVEL_ELECTRONS: 0,
+				DARK_CURRENT_AT_REFERENCE_TEMP: 0,
+				DARK_SIGNAL_NON_UNIFORMITY: 0,
+			},
+		})
+		client.sendNumber({
+			device: camera.name,
+			name: 'SIMULATOR_NOISE_ARTIFACTS',
+			elements: {
+				FIXED_PATTERN_NOISE_STRENGTH: 0,
+				ROW_NOISE_STRENGTH: 0,
+				COLUMN_NOISE_STRENGTH: 0,
+				BANDING_STRENGTH: 0,
+				HOT_PIXEL_RATE: 0,
+				WARM_PIXEL_RATE: 0,
+				DEAD_PIXEL_RATE: 0,
+				HOT_PIXEL_STRENGTH: 0,
+				WARM_PIXEL_STRENGTH: 0,
+				DEAD_PIXEL_RESIDUAL: 0,
+			},
+		})
+
+		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === 1)
+
+		cameraManager.startExposure(camera, 0.1)
+		await waitUntil(() => frames.length > 0, 5000, 50)
+		const shortFlat = await readImageFromBuffer(frames[frames.length - 1])
+
+		cameraManager.startExposure(camera, 0.2)
+		await waitUntil(() => frames.length > 1, 5000, 50)
+		const longFlat = await readImageFromBuffer(frames[frames.length - 1])
+
+		expect(shortFlat).toBeDefined()
+		expect(longFlat).toBeDefined()
+		expect(sumPixels(longFlat!.raw)).toBeGreaterThan(sumPixels(shortFlat!.raw) * 1.8)
 
 		cameraSimulator.dispose()
 		expect(cameraManager.has(client, camera.name)).toBeFalse()

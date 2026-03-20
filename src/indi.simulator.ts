@@ -1738,9 +1738,9 @@ export class CameraSimulator extends DeviceSimulator {
 	readonly #noiseOutput = makeNumberVector('', 'SIMULATOR_NOISE_OUTPUT', 'Output', SIMULATION, 'rw', ['MAX_VALUE', 'Max Value', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output.maxValue, 1, 4294967295, 1, '%.0f'])
 	readonly #noiseClampMode = makeSwitchVector('', 'SIMULATOR_NOISE_CLAMP_MODE', 'Clamp Mode', SIMULATION, 'OneOfMany', 'rw', ['CLAMP', 'Clamp', true], ['NORMALIZE', 'Normalize', false], ['NONE', 'None', false])
 	// biome-ignore format: too long!
-	readonly #plotOptions = makeNumberVector('', 'SIMULATOR_PLOT_OPTIONS', 'Plot', SIMULATION, 'rw', ['BACKGROUND', 'Background', 0, 0, 10, 0.001, '%.4f'], ['SATURATION_LEVEL', 'Saturation Level', 1, 0, 10, 0.01, '%.3f'], ['FOCUS_STEP', 'Focus Step', 0, 0, 100000, 1, '%.0f'], ['BEST_FOCUS', 'Best Focus', 0, 0, 100000, 1, '%.0f'], ['PEAK_SCALE', 'Peak Scale', 1, 0.01, 20, 0.01, '%.3f'], ['ELLIPTICITY', 'Ellipticity', 0, 0, 0.8, 0.01, '%.3f'], ['THETA', 'Theta', 0, -TAU, TAU, 0.01, '%.3f'], ['SOFT_CORE', 'Soft Core', 0, 0, 10, 0.01, '%.3f'], ['BETA', 'Beta', 2.5, 1.05, 20, 0.01, '%.3f'], ['HALO_STRENGTH', 'Halo Strength', 0, 0, 5, 0.01, '%.3f'], ['HALO_SCALE', 'Halo Scale', 2.8, 1.1, 20, 0.01, '%.3f'], ['JITTER_X', 'Jitter X', 0, -5, 5, 0.01, '%.3f'], ['JITTER_Y', 'Jitter Y', 0, -5, 5, 0.01, '%.3f'], ['GAIN', 'Plot Gain', 1, 0.01, 20, 0.01, '%.3f'], ['GAMMA_COMPENSATION', 'Gamma Compensation', 2.2, 0.1, 10, 0.01, '%.3f'], ['ADDITIVE_NOISE_HINT', 'Additive Noise Hint', 0, 0, 20, 0.01, '%.3f'], ['MIN_PLOT_RADIUS', 'Min Radius', 2, 0, 50, 1, '%.0f'], ['MAX_PLOT_RADIUS', 'Max Radius', 24, 0, 100, 1, '%.0f'], ['CUTOFF_SIGMA', 'Cutoff Sigma', 4.25, 2.5, 10, 0.01, '%.3f'])
-	readonly #plotFlags = makeSwitchVector('', 'SIMULATOR_PLOT_FLAGS', 'Plot Flags', SIMULATION, 'AnyOfMany', 'rw', ['SATURATION_ENABLED', 'Saturation', false], ['GAMMA_ENABLED', 'Gamma', false])
-	readonly #plotPsfModel = makeSwitchVector('', 'SIMULATOR_PLOT_PSF_MODEL', 'PSF Model', SIMULATION, 'OneOfMany', 'rw', ['GAUSSIAN', 'Gaussian', true], ['MOFFAT', 'Moffat', false])
+	readonly #plotOptions = makeNumberVector('', 'SIMULATOR_STAR_PLOT_OPTIONS', 'Star Plot', SIMULATION, 'rw', ['BACKGROUND', 'Background', 0, 0, 10, 0.001, '%.4f'], ['SATURATION_LEVEL', 'Saturation Level', 1, 0, 10, 0.01, '%.3f'], ['FOCUS_STEP', 'Focus Step', 0, 0, 100000, 1, '%.0f'], ['BEST_FOCUS', 'Best Focus', 0, 0, 100000, 1, '%.0f'], ['PEAK_SCALE', 'Peak Scale', 1, 0.01, 20, 0.01, '%.3f'], ['ELLIPTICITY', 'Ellipticity', 0, 0, 0.8, 0.01, '%.3f'], ['THETA', 'Theta', 0, -TAU, TAU, 0.01, '%.3f'], ['SOFT_CORE', 'Soft Core', 0, 0, 10, 0.01, '%.3f'], ['BETA', 'Beta', 2.5, 1.05, 20, 0.01, '%.3f'], ['HALO_STRENGTH', 'Halo Strength', 0, 0, 5, 0.01, '%.3f'], ['HALO_SCALE', 'Halo Scale', 2.8, 1.1, 20, 0.01, '%.3f'], ['JITTER_X', 'Jitter X', 0, -5, 5, 0.01, '%.3f'], ['JITTER_Y', 'Jitter Y', 0, -5, 5, 0.01, '%.3f'], ['GAIN', 'Plot Gain', 1, 0.01, 20, 0.01, '%.3f'], ['GAMMA_COMPENSATION', 'Gamma Compensation', 2.2, 0.1, 10, 0.01, '%.3f'], ['ADDITIVE_NOISE_HINT', 'Additive Noise Hint', 0, 0, 20, 0.01, '%.3f'], ['MIN_PLOT_RADIUS', 'Min Radius', 2, 0, 50, 1, '%.0f'], ['MAX_PLOT_RADIUS', 'Max Radius', 24, 0, 100, 1, '%.0f'], ['CUTOFF_SIGMA', 'Cutoff Sigma', 4.25, 2.5, 10, 0.01, '%.3f'])
+	readonly #plotFlags = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_FLAGS', 'Star Plot Flags', SIMULATION, 'AnyOfMany', 'rw', ['SATURATION_ENABLED', 'Saturation', false], ['GAMMA_ENABLED', 'Gamma', false])
+	readonly #plotPsfModel = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_PSF_MODEL', 'Star PSF Model', SIMULATION, 'OneOfMany', 'rw', ['GAUSSIAN', 'Gaussian', true], ['MOFFAT', 'Moffat', false])
 
 	readonly #properties: readonly SimulatorProperty[] = [
 		this.#info,
@@ -1895,7 +1895,7 @@ export class CameraSimulator extends DeviceSimulator {
 			case 'SIMULATOR_NOISE_OUTPUT':
 				if (applyNumberVectorValues(this.#noiseOutput, vector.elements)) this.notify(this.#noiseOutput)
 				return
-			case 'SIMULATOR_PLOT_OPTIONS':
+			case 'SIMULATOR_STAR_PLOT_OPTIONS':
 				if (applyNumberVectorValues(this.#plotOptions, vector.elements)) this.notify(this.#plotOptions)
 				return
 		}
@@ -1940,10 +1940,10 @@ export class CameraSimulator extends DeviceSimulator {
 			case 'SIMULATOR_NOISE_CLAMP_MODE':
 				if (applyExclusiveSwitchValues(this.#noiseClampMode, vector.elements)) this.notify(this.#noiseClampMode)
 				return
-			case 'SIMULATOR_PLOT_FLAGS':
+			case 'SIMULATOR_STAR_PLOT_FLAGS':
 				if (applyMultiSwitchValues(this.#plotFlags, vector.elements)) this.notify(this.#plotFlags)
 				return
-			case 'SIMULATOR_PLOT_PSF_MODEL':
+			case 'SIMULATOR_STAR_PLOT_PSF_MODEL':
 				if (applyExclusiveSwitchValues(this.#plotPsfModel, vector.elements)) this.notify(this.#plotPsfModel)
 				return
 		}
@@ -2174,7 +2174,7 @@ export class CameraSimulator extends DeviceSimulator {
 			const stars = await this.collectFrameStars(exposureTime)
 			generateStarImage(raw, width, height, channels, stars, this.seeing, noiseConfig, this.plotOptions())
 		} else {
-			if (frameType === 'FLAT') fillFlatField(raw, width, height, channels)
+			if (frameType === 'FLAT') fillFlatField(raw, width, height, channels, exposureTime, this.#noiseExposure.elements.EXPOSURE_TIME.value)
 			generateNoiseImage(raw, width, height, channels, noiseConfig)
 		}
 
@@ -2710,21 +2710,11 @@ function magnitudeToBrightness(magnitude: number) {
 	return 10 ** (-0.4 * magnitude)
 }
 
-// Hashes a short string into a 32-bit integer.
-function hashString(value: string) {
-	let hash = 0x811c9dc5
-
-	for (let i = 0; i < value.length; i++) {
-		hash ^= value.charCodeAt(i)
-		hash = Math.imul(hash, 0x01000193)
-	}
-
-	return hash >>> 0
-}
-
-function fillFlatField(raw: ImageRawType, width: number, height: number, channels: 1 | 3) {
+function fillFlatField(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number, referenceExposureTime: number) {
 	const invWidth = width > 1 ? 2 / (width - 1) : 0
 	const invHeight = height > 1 ? 2 / (height - 1) : 0
+	// Scale the deterministic flat illumination against the simulator reference exposure.
+	const exposureScale = exposureTime / Math.max(referenceExposureTime, CAMERA_MIN_EXPOSURE)
 
 	for (let y = 0; y < height; y++) {
 		const yc = y * invHeight - 1
@@ -2733,7 +2723,7 @@ function fillFlatField(raw: ImageRawType, width: number, height: number, channel
 		for (let x = 0; x < width; x++) {
 			const xc = x * invWidth - 1
 			const radius2 = xc * xc + yc * yc
-			const illumination = clamp(0.72 - radius2 * 0.16 + (xc + yc) * 0.03, 0.15, 0.95)
+			const illumination = clamp(0.72 - radius2 * 0.16 + (xc + yc) * 0.03, 0.15, 0.95) * exposureScale
 
 			if (channels === 1) raw[row + x] = illumination
 			else {
