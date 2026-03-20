@@ -22,7 +22,7 @@ import { gnomonicProject } from './projection'
 import { mulberry32 } from './random'
 import type { PlotStarOptions } from './star.generator'
 import { formatTemporal, TIMEZONE } from './temporal'
-import { timeNow, timeUnix } from './time'
+import { timeUnix } from './time'
 import { angularSizeOfPixel } from './util'
 import { vizierQuery } from './vizier'
 
@@ -81,7 +81,7 @@ type CatalogSource = 'RANDOM' | 'VIZIER' | string
 
 export type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
 
-export type CatalogProviderStar = Omit<AstronomicalImageStar, 'x' | 'y'> & Partial<Point> & Partial<EquatorialCoordinate>
+export type CatalogProviderStar = Omit<AstronomicalImageStar, 'x' | 'y'> & Required<EquatorialCoordinate>
 
 export type CatalogProvider = (rightAscension: Angle, declination: Angle, radius: Angle) => PromiseLike<readonly CatalogProviderStar[]> | readonly CatalogProviderStar[]
 
@@ -2558,6 +2558,7 @@ export class CameraSimulator extends DeviceSimulator {
 			}
 
 			;[centerRightAscension, centerDeclination] = this.applyTelescopePeriodicError(centerRightAscension!, centerDeclination!, now)
+			;[centerRightAscension, centerDeclination] = equatorialToJ2000(centerRightAscension, centerDeclination)
 		}
 
 		const pixelScale = angularSizeOfPixel(this.telescopeFocalLength, CAMERA_PIXEL_SIZE)
@@ -2570,8 +2571,8 @@ export class CameraSimulator extends DeviceSimulator {
 		const stars =
 			catalogProvider !== undefined && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0
 				? this.mapCatalogProviderStarsToAstronomicalImageStars(await catalogProvider(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, pixelScale)
-				: catalogSource === 'VIZIER' && radius > 0 && pixelScale > 0
-					? await this.vizierSource(radius, pixelScale)
+				: catalogSource === 'VIZIER' && radius > 0 && pixelScale > 0 && centerRightAscension !== undefined && centerDeclination !== undefined
+					? await this.vizierSource(centerRightAscension, centerDeclination, radius, pixelScale)
 					: this.randomSource()
 		this.#catalog = stars
 		this.#catalogKey = key
@@ -2584,24 +2585,20 @@ export class CameraSimulator extends DeviceSimulator {
 		const sensorHeight = this.sensorHeight
 		const halfWidth = sensorWidth * 0.5
 		const halfHeight = sensorHeight * 0.5
+		const point: Point = { x: 0, y: 0 }
 
 		return stars.map((s) => {
-			if (s.x !== undefined && s.y !== undefined) {
-				return s as AstronomicalImageStar
+			if (gnomonicProject(s.rightAscension, s.declination, centerRightAscension, centerDeclination, point) === false) {
+				return undefined
 			}
-
-			const point = gnomonicProject(s.rightAscension!, s.declination!, centerRightAscension, centerDeclination)
-
-			if (point === false) return undefined
 
 			const x = halfWidth - point.x / pixelScale
 			const y = halfHeight - point.y / pixelScale
 			if (x < 0 || x >= sensorWidth || y < 0 || y >= sensorHeight) return undefined
-
-			s.x = x
-			s.y = y
-
-			return s as AstronomicalImageStar
+			point.x = x
+			point.y = y
+			Object.assign(s, point)
+			return s as never
 		})
 	}
 
@@ -2642,15 +2639,12 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Queries VizieR around the active mount and projects the stars onto the sensor.
-	private async vizierSource(radius: Angle, pixelScale: Angle) {
-		const mount = this.activeMount!
-		const now = timeNow(true)
+	private async vizierSource(centerRightAscension: Angle, centerDeclination: Angle, radius: Angle, pixelScale: Angle) {
 		const sensorWidth = this.sensorWidth
 		const sensorHeight = this.sensorHeight
 		const halfWidth = sensorWidth * 0.5
 		const halfHeight = sensorHeight * 0.5
 		const queryLimit = Math.max(CAMERA_VIZIER_MIN_STARS, Math.min(CAMERA_VIZIER_MAX_STARS, Math.trunc(sensorWidth * sensorHeight * this.#scene.elements.STAR_DENSITY.value * 2)))
-		const [centerRightAscension, centerDeclination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination, now)
 		let table: CsvRow[] | undefined
 
 		try {

@@ -5,7 +5,7 @@ import type { ImageRawType } from '../src/image.types'
 import { IndiClientHandlerSet } from '../src/indi.client'
 import type { Camera, GuideOutput } from '../src/indi.device'
 import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
-import { CameraSimulator, ClientSimulator, DustCapSimulator, FilterWheelSimulator, FocuserSimulator, LightBoxSimulator, MountSimulator, RotatorSimulator } from '../src/indi.simulator'
+import { CameraSimulator, type CatalogProvider, ClientSimulator, DustCapSimulator, FilterWheelSimulator, FocuserSimulator, LightBoxSimulator, MountSimulator, RotatorSimulator } from '../src/indi.simulator'
 import type { PropertyState } from '../src/indi.types'
 
 const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
@@ -560,6 +560,57 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { VIZIER: true } })
 		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_CATALOG_SOURCE?.elements.VIZIER.value === true)
+
+		try {
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 0, 10000, 50)
+			const image = await readImageFromBuffer(frameReceiver.lastFrame)
+			expect(image).toBeDefined()
+			expect(sumPixels(image!.raw)).toBeGreaterThan(0)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 5000)
+
+	test('projects catalog provider stars from the active mount pointing', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		const propertyManager = new DevicePropertyManager()
+		const client = new ClientSimulator('camera.catalog.provider.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		handler.add(propertyManager)
+
+		cameraManager.addHandler(frameReceiver)
+
+		const catalogProvider: CatalogProvider = () => {
+			return [{ snr: 10, hfd: 4, flux: 30, rightAscension: hour(5), declination: deg(20) }]
+		}
+
+		const mountSimulator = new MountSimulator('Mount Simulator', client)
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogProviders: { HNSKY: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(5), 1e-9))
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => propertyManager.get(client, camera.name)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { FLUX_MIN: 12, FLUX_MAX: 48 } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { HNSKY: true } })
+		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_CATALOG_SOURCE?.elements.HNSKY.value === true)
 
 		try {
 			cameraSimulator.startExposure(0.05)
