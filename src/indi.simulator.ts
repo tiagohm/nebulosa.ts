@@ -192,6 +192,7 @@ export abstract class DeviceSimulator implements Disposable {
 			case 'CONFIG':
 				if (vector.elements.LOAD === true) void this.loadProperties()
 				else if (vector.elements.SAVE === true) this.saveProperties()
+				return
 		}
 	}
 
@@ -204,6 +205,13 @@ export abstract class DeviceSimulator implements Disposable {
 	connect() {
 		if (this.isConnected) return
 		selectOnSwitch(this.connection, 'CONNECT') && handleSetSwitchVector(this.client, this.handler, this.connection)
+		if (!this.isConnected) return
+
+		for (const property of this.properties) {
+			sendDefinition(this.client, this.handler, property)
+		}
+
+		void this.loadProperties()
 	}
 
 	// Disconnects the simulated device.
@@ -224,14 +232,14 @@ export abstract class DeviceSimulator implements Disposable {
 		else if (type === 'T') handleSetTextVector(this.client, this.handler, message as never)
 	}
 
-	protected saveProperties() {
+	saveProperties() {
 		if (this.options?.save) {
 			const properties = this.properties.filter((e) => !this.propertiesToNotSave.includes(e))
 			this.options.save(this.name, properties)
 		}
 	}
 
-	protected async loadProperties() {
+	async loadProperties() {
 		if (this.options?.load) {
 			const properties = await this.options.load(this.name)
 
@@ -512,10 +520,6 @@ export class MountSimulator extends DeviceSimulator {
 		super.connect()
 
 		if (!this.isConnected) return
-
-		for (const property of this.properties) {
-			sendDefinition(this.client, this.handler, property)
-		}
 
 		this.#lastTick = Date.now()
 		this.refreshDynamicCoordinates(false)
@@ -1088,10 +1092,6 @@ export class FocuserSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
-		for (const property of this.properties) {
-			sendDefinition(this.client, this.handler, property)
-		}
-
 		this.#lastTick = Date.now()
 		this.#lastCompensationTemperature = this.temperature
 		this.#timer = setInterval(this.tick.bind(this), TICK_INTERVAL_MS)
@@ -1310,19 +1310,6 @@ export class FilterWheelSimulator extends DeviceSimulator {
 		}
 	}
 
-	// Connects the simulated filter wheel and publishes its supported properties.
-	connect() {
-		if (this.isConnected) return
-
-		super.connect()
-
-		if (!this.isConnected) return
-
-		for (const property of this.properties) {
-			sendDefinition(this.client, this.handler, property)
-		}
-	}
-
 	// Disconnects the simulated filter wheel and removes its dynamic properties.
 	disconnect() {
 		if (!this.isConnected) return
@@ -1453,10 +1440,6 @@ export class RotatorSimulator extends DeviceSimulator {
 		super.connect()
 
 		if (!this.isConnected) return
-
-		for (const property of this.properties) {
-			sendDefinition(this.client, this.handler, property)
-		}
 
 		this.#lastTick = Date.now()
 		this.#timer = setInterval(this.tick.bind(this), TICK_INTERVAL_MS)
@@ -1621,19 +1604,6 @@ export class FlatPanelSimulator extends DeviceSimulator {
 		}
 	}
 
-	// Connects the simulated flat panel and publishes its supported properties.
-	connect() {
-		if (this.isConnected) return
-
-		super.connect()
-
-		if (!this.isConnected) return
-
-		for (const property of this.properties) {
-			sendDefinition(this.client, this.handler, property)
-		}
-	}
-
 	// Disposes the flat-panel simulator and removes it from the manager view.
 	dispose() {
 		this.disconnect()
@@ -1684,19 +1654,6 @@ export class CoverSimulator extends DeviceSimulator {
 			case 'CAP_ABORT':
 				if (vector.elements.ABORT === true) this.stop()
 				return
-		}
-	}
-
-	// Connects the simulated dust cap and publishes its supported properties.
-	connect() {
-		if (this.isConnected) return
-
-		super.connect()
-
-		if (!this.isConnected) return
-
-		for (const property of this.properties) {
-			sendDefinition(this.client, this.handler, property)
 		}
 	}
 
@@ -2098,10 +2055,6 @@ export class CameraSimulator extends DeviceSimulator {
 		super.connect()
 
 		if (!this.isConnected) return
-
-		for (const property of this.properties) {
-			sendDefinition(this.client, this.handler, property)
-		}
 
 		this.#timer = setInterval(this.tick.bind(this), TICK_INTERVAL_MS)
 	}
