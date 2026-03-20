@@ -7,7 +7,7 @@ import type { FitsHeader } from './fits'
 import { writeImageToFits, writeImageToXisf } from './image'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from './image.generator'
 import type { CfaPattern, Image, ImageRawType } from './image.types'
-import { handleDefBlobVector, handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
+import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, type FrameType, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
 import { type DefNumberVector, type DefSwitchVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetVector, selectOnSwitch } from './indi.types'
 import { bufferSink } from './io'
@@ -1687,7 +1687,7 @@ function sendDefinition(client: ClientSimulator, handler: IndiClientHandler, pro
 	if (property.type === 'NUMBER') handleDefNumberVector(client, handler, property)
 	else if (property.type === 'SWITCH') handleDefSwitchVector(client, handler, property)
 	else if (property.type === 'TEXT') handleDefTextVector(client, handler, property)
-	else if (property.type === 'BLOB') handleDefBlobVector(client, handler, property as never)
+	// Don't handle DefBlobVector
 }
 
 function applyNumberVectorValues(vector: DefNumberVector, elements: Record<string, number>) {
