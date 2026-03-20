@@ -82,7 +82,13 @@ type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof
 
 export type CatalogProvider = (rightAscension: Angle, declination: Angle, radius: Angle) => readonly AstronomicalImageStar[]
 
-export interface DeviceManagers {
+export interface DeviceSimulatorOptions {
+	readonly save?: (name: string, properties: readonly SimulatorProperty[]) => void
+	readonly load?: (name: string) => PromiseLike<readonly SimulatorProperty[]> | readonly SimulatorProperty[]
+}
+
+export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
+	readonly catalogProviders?: Map<string, CatalogProvider>
 	readonly mountManager?: MountManager
 	readonly guideOutputManager?: GuideOutputManager
 	readonly focuserManager?: FocuserManager
@@ -141,6 +147,11 @@ export abstract class DeviceSimulator implements Disposable {
 	protected readonly driverInfo = makeTextVector('', 'DRIVER_INFO', 'Driver Info', GENERAL_INFO, 'ro', ['DRIVER_INTERFACE', 'Interface', ''], ['DRIVER_EXEC', 'Exec', ''], ['DRIVER_VERSION', 'Version', '1.0'], ['DRIVER_NAME', 'Name', ''])
 	protected readonly connection = makeSwitchVector('', 'CONNECTION', 'Connection', MAIN_CONTROL, 'OneOfMany', 'rw', ['CONNECT', 'Connect', false], ['DISCONNECT', 'Disconnect', true])
 	protected readonly snoopDevices = makeTextVector('', 'ACTIVE_DEVICES', 'Snoop devices', MAIN_CONTROL, 'rw', ['ACTIVE_TELESCOPE', 'Mount', ''], ['ACTIVE_FOCUSER', 'Focuser', ''], ['ACTIVE_FILTER', 'Filter Wheel', ''], ['ACTIVE_ROTATOR', 'Rotator', ''])
+	protected readonly config = makeSwitchVector('', 'CONFIG', 'Config', MAIN_CONTROL, 'AtMostOne', 'rw', ['LOAD', 'Load', false], ['SAVE', 'Save', false])
+
+	protected abstract readonly properties: readonly SimulatorProperty[]
+	protected abstract readonly propertiesToNotSave: readonly SimulatorProperty[]
+	protected abstract readonly options?: DeviceSimulatorOptions
 
 	constructor(
 		readonly name: string,
@@ -153,11 +164,13 @@ export abstract class DeviceSimulator implements Disposable {
 		this.driverInfo.elements.DRIVER_NAME.value = name
 		this.connection.device = name
 		this.snoopDevices.device = name
+		this.config.device = name
 		client.register(this)
 
 		handleDefTextVector(client, handler, this.driverInfo)
 		handleDefSwitchVector(client, handler, this.connection)
 		handleDefTextVector(client, handler, this.snoopDevices)
+		handleDefSwitchVector(client, handler, this.config)
 	}
 
 	get isConnected() {
@@ -173,9 +186,17 @@ export abstract class DeviceSimulator implements Disposable {
 	}
 
 	abstract sendNumber(vector: NewNumberVector): void
-	abstract sendSwitch(vector: NewSwitchVector): void
+
+	sendSwitch(vector: NewSwitchVector) {
+		switch (vector.name) {
+			case 'CONFIG':
+				if (vector.elements.LOAD === true) void this.loadProperties()
+				else if (vector.elements.SAVE === true) this.saveProperties()
+		}
+	}
 
 	dispose() {
+		this.handler.delProperty?.(this.client, { device: this.name })
 		this.client.unregister(this)
 	}
 
@@ -189,6 +210,10 @@ export abstract class DeviceSimulator implements Disposable {
 	disconnect() {
 		if (!this.isConnected) return
 		selectOnSwitch(this.connection, 'DISCONNECT') && handleSetSwitchVector(this.client, this.handler, this.connection)
+
+		for (const property of this.properties) {
+			handleDelProperty(this.client, this.handler, property as never)
+		}
 	}
 
 	notify(message: SetVector & { type: 'SWITCH' | 'TEXT' | 'NUMBER' }) {
@@ -197,6 +222,32 @@ export abstract class DeviceSimulator implements Disposable {
 		if (type === 'S') handleSetSwitchVector(this.client, this.handler, message as never)
 		else if (type === 'N') handleSetNumberVector(this.client, this.handler, message as never)
 		else if (type === 'T') handleSetTextVector(this.client, this.handler, message as never)
+	}
+
+	protected saveProperties() {
+		if (this.options?.save) {
+			this.options.save(
+				this.name,
+				this.properties.filter((e) => !this.propertiesToNotSave.includes(e)),
+			)
+		}
+	}
+
+	protected async loadProperties() {
+		if (this.options?.load) {
+			const properties = await this.options.load(this.name)
+
+			for (const property of properties) {
+				const actual = this.properties.find((e) => e.name === property.name)
+				if (actual === undefined || this.propertiesToNotSave.includes(actual)) continue
+
+				for (const key in actual.elements) {
+					const value = property.elements[key]
+					if (value === undefined) continue
+					actual.elements[key].value = value.value
+				}
+			}
+		}
 	}
 
 	[Symbol.dispose]() {
@@ -226,7 +277,7 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
 
-	readonly #properties: readonly SimulatorProperty[] = [
+	protected readonly properties: readonly SimulatorProperty[] = [
 		this.#onCoordSet,
 		this.#equatorialCoordinate,
 		this.#abort,
@@ -245,6 +296,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#guideNS,
 		this.#guideWE,
 	]
+	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate)
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -262,10 +314,15 @@ export class MountSimulator extends DeviceSimulator {
 	#utcTime = Date.now()
 	#utcOffset = TIMEZONE / 60
 
-	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+	constructor(
+		name: string,
+		client: ClientSimulator,
+		readonly options?: DeviceSimulatorOptions,
+		handler: IndiClientHandler = client.handler,
+	) {
 		super(name, client, handler, DeviceInterfaceType.TELESCOPE | DeviceInterfaceType.GUIDER)
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			property.device = name
 		}
 
@@ -388,6 +445,8 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
 		switch (vector.name) {
 			case 'CONNECTION':
 				if (vector.elements.CONNECT === true) this.connect()
@@ -454,7 +513,7 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			sendDefinition(this.client, this.handler, property)
 		}
 
@@ -467,15 +526,12 @@ export class MountSimulator extends DeviceSimulator {
 	disconnect() {
 		if (!this.#timer) return
 
-		super.disconnect()
 		clearInterval(this.#timer)
 		this.#timer = undefined
 		this.stop()
 		this.setTrackingEnabled(false)
 
-		for (const property of this.#properties) {
-			handleDelProperty(this.client, this.handler, property as never)
-		}
+		super.disconnect()
 	}
 
 	// Starts a time-based slew to the requested equatorial coordinate.
@@ -671,7 +727,6 @@ export class MountSimulator extends DeviceSimulator {
 	// Disposes the mount simulator and removes it from the manager view.
 	dispose() {
 		this.disconnect()
-		this.handler.delProperty?.(this.client, { device: this.name })
 		super.dispose()
 	}
 
@@ -945,7 +1000,8 @@ export class FocuserSimulator extends DeviceSimulator {
 	readonly #temperature = makeNumberVector('', 'FOCUS_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['TEMPERATURE', 'Temperature', CAMERA_AMBIENT_TEMPERATURE, -50, 70, 0.1, '%6.2f'])
 	readonly #temperatureCompensation = makeSwitchVector('', 'FOCUS_TEMPERATURE_COMPENSATION', 'Temperature Compensation', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'On', false], ['INDI_DISABLED', 'Off', true])
 
-	readonly #properties: readonly SimulatorProperty[] = [this.#position, this.#relativePosition, this.#motion, this.#abort, this.#reverse, this.#sync, this.#temperature, this.#temperatureCompensation]
+	protected readonly properties: readonly SimulatorProperty[] = [this.#position, this.#relativePosition, this.#motion, this.#abort, this.#reverse, this.#sync, this.#temperature, this.#temperatureCompensation]
+	protected propertiesToNotSave: readonly SimulatorProperty[] = this.properties.filter((e) => e !== this.#reverse && e !== this.#motion)
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -953,10 +1009,15 @@ export class FocuserSimulator extends DeviceSimulator {
 	#temperaturePhase = 0
 	#lastCompensationTemperature = CAMERA_AMBIENT_TEMPERATURE
 
-	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+	constructor(
+		name: string,
+		client: ClientSimulator,
+		readonly options?: DeviceSimulatorOptions,
+		handler: IndiClientHandler = client.handler,
+	) {
 		super(name, client, handler, DeviceInterfaceType.FOCUSER)
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			property.device = name
 		}
 
@@ -994,6 +1055,8 @@ export class FocuserSimulator extends DeviceSimulator {
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
 		switch (vector.name) {
 			case 'CONNECTION':
 				if (vector.elements.CONNECT === true) this.connect()
@@ -1025,7 +1088,7 @@ export class FocuserSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			sendDefinition(this.client, this.handler, property)
 		}
 
@@ -1038,20 +1101,16 @@ export class FocuserSimulator extends DeviceSimulator {
 	disconnect() {
 		if (!this.#timer) return
 
-		super.disconnect()
 		clearInterval(this.#timer)
 		this.#timer = undefined
 		this.stop(false)
 
-		for (const property of this.#properties) {
-			handleDelProperty(this.client, this.handler, property as never)
-		}
+		super.disconnect()
 	}
 
 	// Disposes the focuser simulator and removes it from the manager view.
 	dispose() {
 		this.disconnect()
-		this.handler.delProperty?.(this.client, { device: this.name })
 		super.dispose()
 	}
 
@@ -1208,14 +1267,20 @@ export class FilterWheelSimulator extends DeviceSimulator {
 	readonly #position = makeNumberVector('', 'FILTER_SLOT', 'Slot', MAIN_CONTROL, 'rw', ['FILTER_SLOT_VALUE', 'Slot', 1, 1, FILTER_WHEEL_SLOT_NAMES.length, 1, '%.0f'])
 	readonly #names = makeTextVector('', 'FILTER_NAME', 'Filter', MAIN_CONTROL, 'rw', ...FILTER_WHEEL_SLOT_NAMES.map((e, i) => [`FILTER_SLOT_NAME_${i + 1}`, `Slot ${i + 1}`, e] as never))
 
-	readonly #properties: readonly SimulatorProperty[] = [this.#position, this.#names]
+	protected readonly properties: readonly SimulatorProperty[] = [this.#position, this.#names]
+	protected propertiesToNotSave: readonly SimulatorProperty[] = [this.#position]
 
 	#moveTimer?: NodeJS.Timeout
 
-	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+	constructor(
+		name: string,
+		client: ClientSimulator,
+		readonly options?: DeviceSimulatorOptions,
+		handler: IndiClientHandler = client.handler,
+	) {
 		super(name, client, handler, DeviceInterfaceType.FILTER)
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			property.device = name
 		}
 
@@ -1237,6 +1302,8 @@ export class FilterWheelSimulator extends DeviceSimulator {
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
 		if (vector.name === 'CONNECTION') {
 			if (vector.elements.CONNECT === true) this.connect()
 			else if (vector.elements.DISCONNECT === true) this.disconnect()
@@ -1251,7 +1318,7 @@ export class FilterWheelSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			sendDefinition(this.client, this.handler, property)
 		}
 	}
@@ -1260,8 +1327,6 @@ export class FilterWheelSimulator extends DeviceSimulator {
 	disconnect() {
 		if (!this.isConnected) return
 
-		super.disconnect()
-
 		if (this.#moveTimer) {
 			clearTimeout(this.#moveTimer)
 			this.#moveTimer = undefined
@@ -1269,15 +1334,12 @@ export class FilterWheelSimulator extends DeviceSimulator {
 
 		this.#position.state = 'Idle'
 
-		for (const property of this.#properties) {
-			handleDelProperty(this.client, this.handler, property as never)
-		}
+		super.disconnect()
 	}
 
 	// Disposes the filter wheel simulator and removes it from the manager view.
 	dispose() {
 		this.disconnect()
-		this.handler.delProperty?.(this.client, { device: this.name })
 		super.dispose()
 	}
 
@@ -1319,17 +1381,23 @@ export class RotatorSimulator extends DeviceSimulator {
 	readonly #reverse = makeSwitchVector('', 'ROTATOR_REVERSE', 'Reverse', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
 	readonly #backlash = makeSwitchVector('', 'ROTATOR_BACKLASH_TOGGLE', 'Backlash', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
 
-	readonly #properties: readonly SimulatorProperty[] = [this.#angle, this.#sync, this.#home, this.#abort, this.#reverse, this.#backlash]
+	protected readonly properties: readonly SimulatorProperty[] = [this.#angle, this.#sync, this.#home, this.#abort, this.#reverse, this.#backlash]
+	protected propertiesToNotSave: readonly SimulatorProperty[] = [this.#sync, this.#home, this.#abort]
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
 	#targetAngle?: number
 	#homing = false
 
-	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+	constructor(
+		name: string,
+		client: ClientSimulator,
+		readonly options?: DeviceSimulatorOptions,
+		handler: IndiClientHandler = client.handler,
+	) {
 		super(name, client, handler, DeviceInterfaceType.ROTATOR)
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			property.device = name
 		}
 
@@ -1356,6 +1424,8 @@ export class RotatorSimulator extends DeviceSimulator {
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
 		switch (vector.name) {
 			case 'CONNECTION':
 				if (vector.elements.CONNECT === true) this.connect()
@@ -1384,7 +1454,7 @@ export class RotatorSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			sendDefinition(this.client, this.handler, property)
 		}
 
@@ -1396,20 +1466,16 @@ export class RotatorSimulator extends DeviceSimulator {
 	disconnect() {
 		if (!this.#timer) return
 
-		super.disconnect()
 		clearInterval(this.#timer)
 		this.#timer = undefined
 		this.stop(false)
 
-		for (const property of this.#properties) {
-			handleDelProperty(this.client, this.handler, property as never)
-		}
+		super.disconnect()
 	}
 
 	// Disposes the rotator simulator and removes it from the manager view.
 	dispose() {
 		this.disconnect()
-		this.handler.delProperty?.(this.client, { device: this.name })
 		super.dispose()
 	}
 
@@ -1517,12 +1583,18 @@ export class FlatPanelSimulator extends DeviceSimulator {
 	readonly #light = makeSwitchVector('', 'FLAT_LIGHT_CONTROL', 'Light', MAIN_CONTROL, 'OneOfMany', 'rw', ['FLAT_LIGHT_ON', 'On', false], ['FLAT_LIGHT_OFF', 'Off', true])
 	readonly #intensity = makeNumberVector('', 'FLAT_LIGHT_INTENSITY', 'Brightness', MAIN_CONTROL, 'rw', ['FLAT_LIGHT_INTENSITY_VALUE', 'Brightness', 0, 0, PANEL_MAX_INTENSITY, 1, '%.0f'])
 
-	readonly #properties: readonly SimulatorProperty[] = [this.#light, this.#intensity]
+	protected readonly properties: readonly SimulatorProperty[] = [this.#light, this.#intensity]
+	protected propertiesToNotSave: readonly SimulatorProperty[] = []
 
-	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+	constructor(
+		name: string,
+		client: ClientSimulator,
+		readonly options?: DeviceSimulatorOptions,
+		handler: IndiClientHandler = client.handler,
+	) {
 		super(name, client, handler, DeviceInterfaceType.LIGHTBOX)
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			property.device = name
 		}
 
@@ -1536,6 +1608,8 @@ export class FlatPanelSimulator extends DeviceSimulator {
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
 		switch (vector.name) {
 			case 'CONNECTION':
 				if (vector.elements.CONNECT === true) this.connect()
@@ -1555,26 +1629,14 @@ export class FlatPanelSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			sendDefinition(this.client, this.handler, property)
-		}
-	}
-
-	// Disconnects the simulated flat panel and removes its dynamic properties.
-	disconnect() {
-		if (!this.isConnected) return
-
-		super.disconnect()
-
-		for (const property of this.#properties) {
-			handleDelProperty(this.client, this.handler, property as never)
 		}
 	}
 
 	// Disposes the flat-panel simulator and removes it from the manager view.
 	dispose() {
 		this.disconnect()
-		this.handler.delProperty?.(this.client, { device: this.name })
 		super.dispose()
 	}
 }
@@ -1585,14 +1647,20 @@ export class CoverSimulator extends DeviceSimulator {
 	readonly #park = makeSwitchVector('', 'CAP_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
 	readonly #abort = makeSwitchVector('', 'CAP_ABORT', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 
-	readonly #properties: readonly SimulatorProperty[] = [this.#park, this.#abort]
+	protected readonly properties: readonly SimulatorProperty[] = [this.#park, this.#abort]
+	protected propertiesToNotSave: readonly SimulatorProperty[] = this.properties
 
 	#moveTimer?: NodeJS.Timeout
 
-	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+	constructor(
+		name: string,
+		client: ClientSimulator,
+		readonly options?: DeviceSimulatorOptions,
+		handler: IndiClientHandler = client.handler,
+	) {
 		super(name, client, handler, DeviceInterfaceType.DUSTCAP)
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			property.device = name
 		}
 
@@ -1602,6 +1670,8 @@ export class CoverSimulator extends DeviceSimulator {
 	sendNumber(vector: NewNumberVector) {}
 
 	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
 		switch (vector.name) {
 			case 'CONNECTION':
 				if (vector.elements.CONNECT === true) this.connect()
@@ -1625,7 +1695,7 @@ export class CoverSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			sendDefinition(this.client, this.handler, property)
 		}
 	}
@@ -1634,18 +1704,13 @@ export class CoverSimulator extends DeviceSimulator {
 	disconnect() {
 		if (!this.isConnected) return
 
-		super.disconnect()
 		this.stop(false)
-
-		for (const property of this.#properties) {
-			handleDelProperty(this.client, this.handler, property as never)
-		}
+		super.disconnect()
 	}
 
 	// Disposes the dust-cap simulator and removes it from the manager view.
 	dispose() {
 		this.disconnect()
-		this.handler.delProperty?.(this.client, { device: this.name })
 		super.dispose()
 	}
 
@@ -1759,15 +1824,15 @@ export class CameraSimulator extends DeviceSimulator {
 		'Telescope Effects',
 		SIMULATION,
 		'rw',
-		['PAE_AZ', 'Polar Alignment Error Azimuth (arcsec)', 0, 0, 36000, 0.1, '%.3f'],
-		['PAE_AL', 'Polar Alignment Error Altitude (arcsec)', 0, 0, 36000, 0.1, '%.3f'],
-		['PE_WE_PERIOD', 'Periodic Error W/E Period (s)', 0, 0, DAYSEC, 1, '%.0f'],
-		['PE_WE_AMPLITUDE', 'Periodic Error W/E Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'],
-		['PE_NS_PERIOD', 'Periodic Error N/S Period (s)', 0, 0, DAYSEC, 1, '%.0f'],
-		['PE_NS_AMPLITUDE', 'Periodic Error N/S Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'],
+		['PAE_AZ', 'PAE Azimuth (arcsec)', 0, 0, 36000, 0.1, '%.3f'],
+		['PAE_AL', 'PAE Altitude (arcsec)', 0, 0, 36000, 0.1, '%.3f'],
+		['PE_WE_PERIOD', 'PE W/E Period (s)', 0, 0, DAYSEC, 1, '%.0f'],
+		['PE_WE_AMPLITUDE', 'PE W/E Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'],
+		['PE_NS_PERIOD', 'PE N/S Period (s)', 0, 0, DAYSEC, 1, '%.0f'],
+		['PE_NS_AMPLITUDE', 'PE N/S Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'],
 	)
 
-	readonly #properties: readonly SimulatorProperty[] = [
+	protected readonly properties: readonly SimulatorProperty[] = [
 		this.#info,
 		this.#cooler,
 		this.#frameType,
@@ -1807,6 +1872,8 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#telescopeEffects,
 	]
 
+	protected readonly propertiesToNotSave: readonly SimulatorProperty[] = [this.#info, this.#cooler, this.#abort, this.#exposure, this.#coolerPower, this.#temperature, this.#cfa, this.#guideNS, this.#guideWE, this.#image]
+
 	#timer?: NodeJS.Timeout
 	#exposureEndTime = 0
 	#exposureDuration = 0
@@ -1827,28 +1894,27 @@ export class CameraSimulator extends DeviceSimulator {
 	constructor(
 		name: string,
 		client: ClientSimulator,
-		readonly managers?: DeviceManagers,
-		readonly catalogProviders?: Map<string, CatalogProvider>,
+		readonly options?: CameraSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
 		super(name, client, handler, DeviceInterfaceType.CCD | DeviceInterfaceType.GUIDER)
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			property.device = name
 		}
 
-		if (this.catalogProviders?.size) {
-			for (const name of this.catalogProviders.keys()) {
+		if (options?.catalogProviders?.size) {
+			for (const name of options.catalogProviders.keys()) {
 				this.#catalogSource.elements[name] = { name, label: name, value: name === 'RANDOM' }
 			}
 		}
 
 		this.driverInfo.elements.DRIVER_EXEC.value = 'camera.simulator'
 
-		this.#mountManager = managers?.mountManager
-		this.#focuserManager = managers?.focuserManager
-		this.#rotatorManager = managers?.rotatorManager
-		this.#guideOutputManager = managers?.guideOutputManager
+		this.#mountManager = options?.mountManager
+		this.#focuserManager = options?.focuserManager
+		this.#rotatorManager = options?.rotatorManager
+		this.#guideOutputManager = options?.guideOutputManager
 	}
 
 	get activeMount() {
@@ -1976,6 +2042,8 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
 		switch (vector.name) {
 			case 'CONNECTION':
 				if (vector.elements.CONNECT === true) this.connect()
@@ -2031,7 +2099,7 @@ export class CameraSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
-		for (const property of this.#properties) {
+		for (const property of this.properties) {
 			sendDefinition(this.client, this.handler, property)
 		}
 
@@ -2042,21 +2110,16 @@ export class CameraSimulator extends DeviceSimulator {
 	disconnect() {
 		if (!this.#timer) return
 
-		super.disconnect()
 		clearInterval(this.#timer)
 		this.#timer = undefined
 		this.abortExposure(false)
 		this.clearPulseGuide()
-
-		for (const property of this.#properties) {
-			handleDelProperty(this.client, this.handler, property as never)
-		}
+		super.disconnect()
 	}
 
 	// Disposes the camera simulator and removes it from the manager view.
 	dispose() {
 		this.disconnect()
-		this.handler.delProperty?.(this.client, { device: this.name })
 		super.dispose()
 	}
 
@@ -2538,8 +2601,13 @@ export class CameraSimulator extends DeviceSimulator {
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
 		const catalogSource = this.catalogSource
-		const catalogProvider = this.catalogProviders?.get(catalogSource)
-		const stars = catalogProvider !== undefined && centerRightAscension !== undefined && centerDeclination !== undefined ? catalogProvider(centerRightAscension, centerDeclination, radius) : catalogSource === 'VIZIER' ? await this.vizierSource(radius, pixelScale) : this.randomSource()
+		const catalogProvider = this.options?.catalogProviders?.get(catalogSource)
+		const stars =
+			catalogProvider !== undefined && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0
+				? catalogProvider(centerRightAscension, centerDeclination, radius)
+				: catalogSource === 'VIZIER' && radius > 0 && pixelScale > 0
+					? await this.vizierSource(radius, pixelScale)
+					: this.randomSource()
 		this.#catalog = stars
 		this.#catalogKey = key
 		this.#catalogDirty = false
@@ -2710,7 +2778,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Changes the simulated error model parameters.
-	setTelescopeEffects(azimuthPolarAlignmentError: number, altitudePolarAlignmentError: number, westEastPeriod: number, westEastAmplitude: number, northSouthPeriod: number, northSouthAmplitude: number) {
+	private setTelescopeEffects(azimuthPolarAlignmentError: number, altitudePolarAlignmentError: number, westEastPeriod: number, westEastAmplitude: number, northSouthPeriod: number, northSouthAmplitude: number) {
 		const azPolarError = clamp(azimuthPolarAlignmentError, 0, 36000)
 		const alPolarError = clamp(altitudePolarAlignmentError, 0, 36000)
 		const wePeriod = clamp(westEastPeriod, 0, DAYSEC)
