@@ -16,6 +16,7 @@ import { type DefNumberVector, type DefSwitchVector, type DefTextVector, type En
 import { bufferSink } from './io'
 import { type GeographicCoordinate, localSiderealTime } from './location'
 import { clamp } from './math'
+import { polarAlignmentError } from './polaralignment'
 import { gnomonicProject } from './projection'
 import { mulberry32 } from './random'
 import type { PlotStarOptions } from './star.generator'
@@ -124,6 +125,7 @@ export class ClientSimulator implements Client {
 
 	[Symbol.dispose]() {
 		for (const device of this.#devices.values()) device.dispose()
+		this.#devices.clear()
 	}
 }
 
@@ -1749,6 +1751,20 @@ export class CameraSimulator extends DeviceSimulator {
 	readonly #plotFlags = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_FLAGS', 'Star Plot Flags', SIMULATION, 'AnyOfMany', 'rw', ['SATURATION_ENABLED', 'Saturation', false], ['GAMMA_ENABLED', 'Gamma', false])
 	readonly #plotPsfModel = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_PSF_MODEL', 'Star PSF Model', SIMULATION, 'OneOfMany', 'rw', ['GAUSSIAN', 'Gaussian', true], ['MOFFAT', 'Moffat', false])
 
+	readonly #telescopeEffects = makeNumberVector(
+		'',
+		'TELESCOPE_EFFECTS',
+		'Telescope Effects',
+		SIMULATION,
+		'rw',
+		['PAE_AZ', 'Polar Alignment Error Azimuth (arcsec)', 0, 0, 36000, 0.1, '%.3f'],
+		['PAE_AL', 'Polar Alignment Error Altitude (arcsec)', 0, 0, 36000, 0.1, '%.3f'],
+		['PE_WE_PERIOD', 'Periodic Error W/E Period (s)', 0, 0, DAYSEC, 1, '%.0f'],
+		['PE_WE_AMPLITUDE', 'Periodic Error W/E Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'],
+		['PE_NS_PERIOD', 'Periodic Error N/S Period (s)', 0, 0, DAYSEC, 1, '%.0f'],
+		['PE_NS_AMPLITUDE', 'Periodic Error N/S Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'],
+	)
+
 	readonly #properties: readonly SimulatorProperty[] = [
 		this.#info,
 		this.#cooler,
@@ -1785,6 +1801,7 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#plotOptions,
 		this.#plotFlags,
 		this.#plotPsfModel,
+		this.#telescopeEffects,
 	]
 
 	#timer?: NodeJS.Timeout
@@ -1796,6 +1813,8 @@ export class CameraSimulator extends DeviceSimulator {
 	#catalogDirty = true
 	#pulseNorthSouthUntil = 0
 	#pulseWestEastUntil = 0
+	#mountPeriodicWestEastOffset = 0
+	#mountPeriodicNorthSouthOffset = 0
 
 	readonly #mountManager?: MountManager
 	readonly #focuserManager?: FocuserManager
@@ -1926,6 +1945,15 @@ export class CameraSimulator extends DeviceSimulator {
 			case 'SIMULATOR_STAR_PLOT_OPTIONS':
 				if (applyNumberVectorValues(this.#plotOptions, vector.elements)) this.notify(this.#plotOptions)
 				return
+			case 'TELESCOPE_EFFECTS':
+				return this.setTelescopeEffects(
+					vector.elements.PAE_AZ ?? this.#telescopeEffects.elements.PAE_AZ.value,
+					vector.elements.PAE_AL ?? this.#telescopeEffects.elements.PAE_AL.value,
+					vector.elements.PE_WE_PERIOD ?? this.#telescopeEffects.elements.PE_WE_PERIOD.value,
+					vector.elements.PE_WE_AMPLITUDE ?? this.#telescopeEffects.elements.PE_WE_AMPLITUDE.value,
+					vector.elements.PE_NS_PERIOD ?? this.#telescopeEffects.elements.PE_NS_PERIOD.value,
+					vector.elements.PE_NS_AMPLITUDE ?? this.#telescopeEffects.elements.PE_NS_AMPLITUDE.value,
+				)
 		}
 	}
 
@@ -2462,12 +2490,34 @@ export class CameraSimulator extends DeviceSimulator {
 		return projected
 	}
 
+	// Computes the current local sidereal time from the simulated clock.
+	private siderealTime(utcTime: number, longitude: Angle) {
+		return localSiderealTime(timeUnix(utcTime / 1000, undefined, true), longitude)
+	}
+
 	// Rebuilds the deterministic catalog only when scene parameters change.
 	private async ensureCatalog() {
-		const key = this.catalogKey()
+		const { elements } = this.#telescopeEffects
+		const mount = this.activeMount
+		let centerRightAscension = mount?.equatorialCoordinate.rightAscension
+		let centerDeclination = mount?.equatorialCoordinate.declination
+
+		if (mount !== undefined) {
+			const now = Date.now()
+			const latitude = mount.geographicCoordinate.latitude
+			const longitude = mount.geographicCoordinate.longitude
+
+			if (elements.PAE_AZ.value > 0 || elements.PAE_AL.value > 0) {
+				;[centerRightAscension, centerDeclination] = polarAlignmentError(centerRightAscension!, centerDeclination!, latitude, this.siderealTime(now, longitude), elements.PAE_AZ.value * ASEC2RAD, elements.PAE_AL.value * ASEC2RAD)
+			}
+
+			;[centerRightAscension, centerDeclination] = this.applyTelescopePeriodicError(centerRightAscension!, centerDeclination!, now)
+		}
+
+		const key = this.catalogKey(centerRightAscension, centerDeclination)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
-		const stars = this.catalogSource === 'VIZIER' && this.activeMount !== undefined ? await this.vizierSource() : this.randomSource()
+		const stars = this.catalogSource === 'VIZIER' ? await this.vizierSource() : this.randomSource()
 		this.#catalog = stars
 		this.#catalogKey = key
 		this.#catalogDirty = false
@@ -2475,12 +2525,9 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds a cache key for the currently selected catalog source.
-	private catalogKey() {
-		if (this.catalogSource === 'RANDOM') return `RANDOM:${this.#scene.elements.SCENE_SEED.value}`
-
-		const mount = this.activeMount
-		if (!mount) return 'VIZIER:'
-		else return `VIZIER:${mount.name}:${toHour(normalizeAngle(mount.equatorialCoordinate.rightAscension)).toFixed(6)}:${toDeg(mount.equatorialCoordinate.declination).toFixed(6)}`
+	private catalogKey(centerRightAscension?: Angle, centerDeclination?: Angle) {
+		if (this.catalogSource === 'RANDOM' || centerRightAscension === undefined || centerDeclination === undefined) return `RANDOM:${this.#scene.elements.SCENE_SEED.value}`
+		else return `VIZIER:${toHour(normalizeAngle(centerRightAscension)).toFixed(6)}:${toDeg(centerDeclination).toFixed(6)}`
 	}
 
 	// Generates a deterministic in-memory star field.
@@ -2610,6 +2657,81 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#pulseNorthSouthUntil = 0
 		this.#pulseWestEastUntil = 0
 		this.setPulsing(false)
+	}
+
+	// Applies the configurable mount periodic error model.
+	private applyTelescopePeriodicError(rightAscension: Angle, declination: Angle, utcTime: number) {
+		const { elements } = this.#telescopeEffects
+
+		const westEastPeriodicOffset = this.periodicErrorOffset(elements.PE_WE_PERIOD.value, elements.PE_WE_AMPLITUDE.value, utcTime)
+		const northSouthPeriodicOffset = this.periodicErrorOffset(elements.PE_NS_PERIOD.value, elements.PE_NS_AMPLITUDE.value, utcTime)
+
+		if (westEastPeriodicOffset !== this.#mountPeriodicWestEastOffset) {
+			rightAscension += westEastPeriodicOffset - this.#mountPeriodicWestEastOffset
+			this.#mountPeriodicWestEastOffset = westEastPeriodicOffset
+		}
+
+		if (northSouthPeriodicOffset !== this.#mountPeriodicNorthSouthOffset) {
+			declination += northSouthPeriodicOffset - this.#mountPeriodicNorthSouthOffset
+			this.#mountPeriodicNorthSouthOffset = northSouthPeriodicOffset
+		}
+
+		return [rightAscension, declination] as const
+	}
+
+	// Computes the current periodic offset for one axis in radians.
+	private periodicErrorOffset(periodSeconds: number, amplitudeArcsec: number, utcTime: number) {
+		if (periodSeconds <= 0 || amplitudeArcsec === 0) return 0
+		const periodMilliseconds = periodSeconds * 1000
+		const phase = ((utcTime % periodMilliseconds) * TAU) / periodMilliseconds
+		return Math.sin(phase) * amplitudeArcsec * ASEC2RAD
+	}
+
+	// Changes the simulated error model parameters.
+	setTelescopeEffects(azimuthPolarAlignmentError: number, altitudePolarAlignmentError: number, westEastPeriod: number, westEastAmplitude: number, northSouthPeriod: number, northSouthAmplitude: number) {
+		const azPolarError = clamp(azimuthPolarAlignmentError, 0, 36000)
+		const alPolarError = clamp(altitudePolarAlignmentError, 0, 36000)
+		const wePeriod = clamp(westEastPeriod, 0, DAYSEC)
+		const weAmplitude = clamp(westEastAmplitude, 0, 3600)
+		const nsPeriod = clamp(northSouthPeriod, 0, DAYSEC)
+		const nsAmplitude = clamp(northSouthAmplitude, 0, 3600)
+
+		const { elements } = this.#telescopeEffects
+		let updated = false
+
+		if (elements.PAE_AZ.value !== azPolarError) {
+			elements.PAE_AZ.value = azPolarError
+			updated = true
+		}
+
+		if (elements.PAE_AL.value !== alPolarError) {
+			elements.PAE_AL.value = alPolarError
+			updated = true
+		}
+
+		if (elements.PE_WE_PERIOD.value !== wePeriod) {
+			elements.PE_WE_PERIOD.value = wePeriod
+			updated = true
+		}
+
+		if (elements.PE_WE_AMPLITUDE.value !== weAmplitude) {
+			elements.PE_WE_AMPLITUDE.value = weAmplitude
+			updated = true
+		}
+
+		if (elements.PE_NS_PERIOD.value !== nsPeriod) {
+			elements.PE_NS_PERIOD.value = nsPeriod
+			updated = true
+		}
+
+		if (elements.PE_NS_AMPLITUDE.value !== nsAmplitude) {
+			elements.PE_NS_AMPLITUDE.value = nsAmplitude
+			updated = true
+		}
+
+		if (updated) {
+			this.notify(this.#telescopeEffects)
+		}
 	}
 
 	get cfaPattern() {
