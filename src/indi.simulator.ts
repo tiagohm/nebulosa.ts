@@ -6,6 +6,7 @@ import { equatorialToJ2000 } from './coordinate'
 import type { CsvRow } from './csv'
 import { meter, toMeter } from './distance'
 import type { FitsHeader } from './fits'
+import type { Point } from './geometry'
 import { writeImageToFits, writeImageToXisf } from './image'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from './image.generator'
 import type { CfaPattern, Image, ImageRawType } from './image.types'
@@ -78,9 +79,11 @@ export type ReadoutMode = 'MONO' | 'RGB'
 
 type CatalogSource = 'RANDOM' | 'VIZIER' | string
 
-type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
+export type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
 
-export type CatalogProvider = (rightAscension: Angle, declination: Angle, radius: Angle) => PromiseLike<readonly AstronomicalImageStar[]> | readonly AstronomicalImageStar[]
+export type CatalogProviderStar = Omit<AstronomicalImageStar, 'x' | 'y'> & Partial<Point> & Partial<EquatorialCoordinate>
+
+export type CatalogProvider = (rightAscension: Angle, declination: Angle, radius: Angle) => PromiseLike<readonly CatalogProviderStar[]> | readonly CatalogProviderStar[]
 
 export interface DeviceSimulatorOptions {
 	readonly save?: (name: string, properties: readonly SimulatorProperty[]) => void
@@ -1841,7 +1844,7 @@ export class CameraSimulator extends DeviceSimulator {
 	#exposureEndTime = 0
 	#exposureDuration = 0
 	#targetTemperature = CAMERA_DEFAULT_TARGET_TEMPERATURE
-	#catalog?: readonly AstronomicalImageStar[]
+	#catalog?: readonly (AstronomicalImageStar | undefined)[]
 	#catalogKey = ''
 	#catalogDirty = true
 	#pulseNorthSouthUntil = 0
@@ -2509,6 +2512,9 @@ export class CameraSimulator extends DeviceSimulator {
 
 		for (let i = 0; i < stars.length; i++) {
 			const star = stars[i]
+
+			if (star === undefined) continue
+
 			if (star.x < frameX || star.x >= frameX + frameWidth || star.y < frameY || star.y >= frameY + frameHeight) continue
 
 			const projectedStar = {
@@ -2563,7 +2569,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const catalogProvider = this.options?.catalogProviders?.[catalogSource]
 		const stars =
 			catalogProvider !== undefined && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0
-				? await catalogProvider(centerRightAscension, centerDeclination, radius)
+				? this.mapCatalogProviderStarsToAstronomicalImageStars(await catalogProvider(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, pixelScale)
 				: catalogSource === 'VIZIER' && radius > 0 && pixelScale > 0
 					? await this.vizierSource(radius, pixelScale)
 					: this.randomSource()
@@ -2571,6 +2577,32 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#catalogKey = key
 		this.#catalogDirty = false
 		return stars
+	}
+
+	private mapCatalogProviderStarsToAstronomicalImageStars(stars: readonly CatalogProviderStar[], centerRightAscension: Angle, centerDeclination: Angle, pixelScale: Angle): readonly (AstronomicalImageStar | undefined)[] {
+		const sensorWidth = this.sensorWidth
+		const sensorHeight = this.sensorHeight
+		const halfWidth = sensorWidth * 0.5
+		const halfHeight = sensorHeight * 0.5
+
+		return stars.map((s) => {
+			if (s.x !== undefined && s.y !== undefined) {
+				return s as AstronomicalImageStar
+			}
+
+			const point = gnomonicProject(s.rightAscension!, s.declination!, centerRightAscension, centerDeclination)
+
+			if (point === false) return undefined
+
+			const x = halfWidth - point.x / pixelScale
+			const y = halfHeight - point.y / pixelScale
+			if (x < 0 || x >= sensorWidth || y < 0 || y >= sensorHeight) return undefined
+
+			s.x = x
+			s.y = y
+
+			return s as AstronomicalImageStar
+		})
 	}
 
 	// Builds a cache key for the currently selected catalog source.
