@@ -2562,7 +2562,7 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 
 		const pixelScale = arcsec(angularSizeOfPixel(this.telescopeFocalLength, CAMERA_PIXEL_SIZE))
-		const radius = Math.hypot(this.sensorWidth, this.sensorHeight) * pixelScale * (0.5 * ASEC2RAD)
+		const radius = Math.hypot(this.sensorWidth, this.sensorHeight) * pixelScale * 0.5
 		const key = this.catalogKey(centerRightAscension, centerDeclination, radius)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
