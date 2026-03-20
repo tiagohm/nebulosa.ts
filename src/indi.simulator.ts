@@ -1995,6 +1995,9 @@ export class CameraSimulator extends DeviceSimulator {
 			case 'SIMULATOR_STAR_PLOT_OPTIONS':
 				if (applyNumberVectorValues(this.#plotOptions, vector.elements)) this.notify(this.#plotOptions)
 				return
+			case 'TELESCOPE_INFO':
+				if (applyNumberVectorValues(this.#telescopeInfo, vector.elements)) this.notify(this.#telescopeInfo)
+				return
 			case 'TELESCOPE_EFFECTS':
 				return this.setTelescopeEffects(
 					vector.elements.PAE_AZ ?? this.#telescopeEffects.elements.PAE_AZ.value,
