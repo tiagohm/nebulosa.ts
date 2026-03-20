@@ -12,7 +12,7 @@ import type { CfaPattern, Image, ImageRawType } from './image.types'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, type FrameType, type GuideDirection, type Mount, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
 import type { DeviceProvider } from './indi.manager'
-import { type DefNumberVector, type DefSwitchVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetVector, selectOnSwitch, type DefTextVector } from './indi.types'
+import { type DefNumberVector, type DefSwitchVector, type DefTextVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetVector, selectOnSwitch } from './indi.types'
 import { bufferSink } from './io'
 import { type GeographicCoordinate, localSiderealTime } from './location'
 import { clamp } from './math'
@@ -42,6 +42,18 @@ const CAMERA_BLOB_PADDING = 16384
 const CAMERA_CATALOG_PIXEL_SCALE = 2 * ASEC2RAD
 const CAMERA_VIZIER_MIN_STARS = 50
 const CAMERA_VIZIER_MAX_STARS = 1000
+const FOCUSER_MAX_POSITION = 100000
+const FOCUSER_INITIAL_POSITION = 50000
+const FOCUSER_MOVE_RATE = 20000
+const FOCUSER_TEMPERATURE_AMPLITUDE = 4
+const FOCUSER_TEMPERATURE_PERIOD_SECONDS = 40
+const FOCUSER_TEMPERATURE_COMPENSATION_STEPS = -250
+const FOCUSER_TEMPERATURE_COMPENSATION_HYSTERESIS = 0.05
+const FILTER_WHEEL_SLOT_NAMES = ['L', 'R', 'G', 'B', 'Ha', 'SII', 'OIII', 'Dark'] as const
+const FILTER_WHEEL_MOVE_TIME_MS = 250
+const ROTATOR_MOVE_RATE = 90
+const COVER_MOVE_TIME_MS = 500
+const PANEL_MAX_INTENSITY = 255
 
 const SLEW_RATES = [
 	{ name: 'SPEED_1', label: ' 0.5°', speed: 0.5 * DEG2RAD },
@@ -71,7 +83,7 @@ type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof
 export class ClientSimulator implements Client {
 	readonly type = 'SIMULATOR'
 
-	#devices = new Map<DeviceType, DeviceSimulator>()
+	#devices = new Map<string, DeviceSimulator>()
 
 	constructor(
 		readonly id: string,
@@ -84,27 +96,27 @@ export class ClientSimulator implements Client {
 	enableBlob(command: EnableBlob) {}
 
 	sendText(vector: NewTextVector) {
-		for (const device of this.#devices) device[1].name === vector.device && device[1].sendText(vector)
+		for (const device of this.#devices.values()) device.name === vector.device && device.sendText(vector)
 	}
 
 	sendNumber(vector: NewNumberVector) {
-		for (const device of this.#devices) device[1].name === vector.device && device[1].sendNumber(vector)
+		for (const device of this.#devices.values()) device.name === vector.device && device.sendNumber(vector)
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
-		for (const device of this.#devices) device[1].name === vector.device && device[1].sendSwitch(vector)
+		for (const device of this.#devices.values()) device.name === vector.device && device.sendSwitch(vector)
 	}
 
 	register(device: DeviceSimulator) {
-		this.#devices.set(device.type, device)
+		this.#devices.set(device.name, device)
 	}
 
 	unregister(device: DeviceSimulator) {
-		this.#devices.delete(device.type)
+		this.#devices.delete(device.name)
 	}
 
 	[Symbol.dispose]() {
-		for (const device of this.#devices) device[1].dispose()
+		for (const device of this.#devices.values()) device.dispose()
 	}
 }
 
@@ -151,7 +163,10 @@ export abstract class DeviceSimulator implements Disposable {
 
 	abstract sendNumber(vector: NewNumberVector): void
 	abstract sendSwitch(vector: NewSwitchVector): void
-	abstract dispose(): void
+
+	dispose() {
+		this.client.unregister(this)
+	}
 
 	// Connects the simulated device.
 	connect() {
@@ -646,6 +661,7 @@ export class MountSimulator extends DeviceSimulator {
 	dispose() {
 		this.disconnect()
 		this.handler.delProperty?.(this.client, { device: this.name })
+		super.dispose()
 	}
 
 	// Advances the simulated state using wall-clock time.
@@ -905,6 +921,771 @@ export class MountSimulator extends DeviceSimulator {
 		this.setCoordinate(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
 	}
 }
+
+export class FocuserSimulator extends DeviceSimulator {
+	readonly type = 'FOCUSER'
+
+	readonly #position = makeNumberVector('', 'ABS_FOCUS_POSITION', 'Position', MAIN_CONTROL, 'rw', ['FOCUS_ABSOLUTE_POSITION', 'Position', FOCUSER_INITIAL_POSITION, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
+	readonly #relativePosition = makeNumberVector('', 'REL_FOCUS_POSITION', 'Relative', MAIN_CONTROL, 'rw', ['FOCUS_RELATIVE_POSITION', 'Steps', 0, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
+	readonly #motion = makeSwitchVector('', 'FOCUS_MOTION', 'Motion', MAIN_CONTROL, 'OneOfMany', 'rw', ['FOCUS_INWARD', 'Inward', false], ['FOCUS_OUTWARD', 'Outward', true])
+	readonly #abort = makeSwitchVector('', 'FOCUS_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+	readonly #reverse = makeSwitchVector('', 'FOCUS_REVERSE_MOTION', 'Reverse', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+	readonly #sync = makeNumberVector('', 'FOCUS_SYNC', 'Sync', MAIN_CONTROL, 'rw', ['FOCUS_SYNC_VALUE', 'Position', FOCUSER_INITIAL_POSITION, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
+	readonly #temperature = makeNumberVector('', 'FOCUS_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['TEMPERATURE', 'Temperature', CAMERA_AMBIENT_TEMPERATURE, -50, 70, 0.1, '%6.2f'])
+	readonly #temperatureCompensation = makeSwitchVector('', 'FOCUS_TEMPERATURE_COMPENSATION', 'Temperature Compensation', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'On', false], ['INDI_DISABLED', 'Off', true])
+
+	readonly #properties: readonly SimulatorProperty[] = [this.#position, this.#relativePosition, this.#motion, this.#abort, this.#reverse, this.#sync, this.#temperature, this.#temperatureCompensation]
+
+	#timer?: NodeJS.Timeout
+	#lastTick = 0
+	#targetPosition?: number
+	#temperaturePhase = 0
+	#lastCompensationTemperature = CAMERA_AMBIENT_TEMPERATURE
+
+	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+		super(name, client, handler, DeviceInterfaceType.FOCUSER)
+
+		for (const property of this.#properties) {
+			property.device = name
+		}
+
+		this.driverInfo.elements.DRIVER_EXEC.value = 'focuser.simulator'
+	}
+
+	get position() {
+		return this.#position.elements.FOCUS_ABSOLUTE_POSITION.value
+	}
+
+	get isMoving() {
+		return this.#position.state === 'Busy'
+	}
+
+	get isTemperatureCompensationEnabled() {
+		return this.#temperatureCompensation.elements.INDI_ENABLED.value
+	}
+
+	get temperature() {
+		return this.#temperature.elements.TEMPERATURE.value
+	}
+
+	sendNumber(vector: NewNumberVector) {
+		switch (vector.name) {
+			case 'ABS_FOCUS_POSITION':
+				if (vector.elements.FOCUS_ABSOLUTE_POSITION !== undefined) this.moveTo(vector.elements.FOCUS_ABSOLUTE_POSITION)
+				return
+			case 'REL_FOCUS_POSITION':
+				if (vector.elements.FOCUS_RELATIVE_POSITION !== undefined) this.moveRelative(vector.elements.FOCUS_RELATIVE_POSITION)
+				return
+			case 'FOCUS_SYNC':
+				if (vector.elements.FOCUS_SYNC_VALUE !== undefined) this.syncTo(vector.elements.FOCUS_SYNC_VALUE)
+				return
+		}
+	}
+
+	sendSwitch(vector: NewSwitchVector) {
+		switch (vector.name) {
+			case 'CONNECTION':
+				if (vector.elements.CONNECT === true) this.connect()
+				else if (vector.elements.DISCONNECT === true) this.disconnect()
+				return
+			case 'FOCUS_MOTION':
+				if (applyExclusiveSwitchValues(this.#motion, vector.elements)) this.notify(this.#motion)
+				return
+			case 'FOCUS_ABORT_MOTION':
+				if (vector.elements.ABORT === true) this.stop()
+				return
+			case 'FOCUS_REVERSE_MOTION':
+				if (applyExclusiveSwitchValues(this.#reverse, vector.elements)) this.notify(this.#reverse)
+				return
+			case 'FOCUS_TEMPERATURE_COMPENSATION':
+				if (applyExclusiveSwitchValues(this.#temperatureCompensation, vector.elements)) {
+					this.#lastCompensationTemperature = this.temperature
+					this.notify(this.#temperatureCompensation)
+				}
+				return
+		}
+	}
+
+	// Connects the simulated focuser and publishes its supported properties.
+	connect() {
+		if (this.#timer) return
+
+		super.connect()
+
+		if (!this.isConnected) return
+
+		for (const property of this.#properties) {
+			sendDefinition(this.client, this.handler, property)
+		}
+
+		this.#lastTick = Date.now()
+		this.#lastCompensationTemperature = this.temperature
+		this.#timer = setInterval(this.tick.bind(this), TICK_INTERVAL_MS)
+	}
+
+	// Disconnects the simulated focuser and removes its dynamic properties.
+	disconnect() {
+		if (!this.#timer) return
+
+		super.disconnect()
+		clearInterval(this.#timer)
+		this.#timer = undefined
+		this.stop(false)
+
+		for (const property of this.#properties) {
+			handleDelProperty(this.client, this.handler, property as never)
+		}
+	}
+
+	// Disposes the focuser simulator and removes it from the manager view.
+	dispose() {
+		this.disconnect()
+		this.handler.delProperty?.(this.client, { device: this.name })
+		super.dispose()
+	}
+
+	// Starts an absolute focuser move.
+	moveTo(position: number) {
+		if (!this.isConnected) return
+
+		position = clamp(position, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
+		if (position === this.position) return
+
+		this.#targetPosition = position
+		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(position - this.position)
+		this.setMoving(true)
+	}
+
+	// Starts a relative move using the selected motion direction.
+	moveRelative(steps: number) {
+		if (!this.isConnected || steps <= 0) return
+
+		const direction = this.relativeDirection()
+		const target = clamp(this.position + steps * direction, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
+		if (target === this.position) return
+
+		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(target - this.position)
+		this.#targetPosition = target
+		this.setMoving(true)
+	}
+
+	// Applies a sync immediately without any slew time.
+	syncTo(position: number) {
+		if (!this.isConnected) return
+
+		position = clamp(position, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
+		this.#sync.elements.FOCUS_SYNC_VALUE.value = position
+		this.#position.elements.FOCUS_ABSOLUTE_POSITION.value = position
+		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
+		this.stop(false)
+		this.notify(this.#sync)
+		this.notify(this.#position)
+	}
+
+	// Aborts the active move and leaves the focuser at its current position.
+	stop(alert: boolean = true) {
+		const wasMoving = this.isMoving
+		this.#targetPosition = undefined
+		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
+		this.setMoving(false, alert)
+
+		if (alert && wasMoving) {
+			this.#abort.elements.ABORT.value = true
+			this.notify(this.#abort)
+			this.#abort.elements.ABORT.value = false
+		}
+	}
+
+	// Advances the focuser position toward the requested target.
+	private tick() {
+		const now = Date.now()
+		const dtSeconds = Math.max(0, (now - this.#lastTick) / 1000)
+		this.#lastTick = now
+
+		if (dtSeconds <= 0) return
+
+		this.advanceTemperature(dtSeconds)
+		this.applyTemperatureCompensation()
+
+		if (this.#targetPosition === undefined) return
+
+		const current = this.position
+		const delta = this.#targetPosition - current
+		const step = FOCUSER_MOVE_RATE * dtSeconds
+
+		if (Math.abs(delta) <= step) {
+			this.#position.elements.FOCUS_ABSOLUTE_POSITION.value = this.#targetPosition
+			this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
+			this.#targetPosition = undefined
+			this.setMoving(false)
+			this.notify(this.#position)
+			this.notify(this.#relativePosition)
+			return
+		}
+
+		const next = current + Math.sign(delta) * step
+		this.#position.elements.FOCUS_ABSOLUTE_POSITION.value = next
+		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(this.#targetPosition - next)
+		this.notify(this.#position)
+		this.notify(this.#relativePosition)
+	}
+
+	// Updates the moving state reflected by both focuser motion vectors.
+	private setMoving(moving: boolean, alert: boolean = false) {
+		const state = alert ? 'Alert' : moving ? 'Busy' : 'Idle'
+		let updated = false
+
+		if (this.#position.state !== state) {
+			this.#position.state = state
+			updated = true
+		}
+
+		if (this.#relativePosition.state !== state) {
+			this.#relativePosition.state = state
+			updated = true
+		}
+
+		if (updated) {
+			this.notify(this.#position)
+			this.notify(this.#relativePosition)
+		}
+	}
+
+	// Resolves the current relative-motion direction after reverse mode is applied.
+	private relativeDirection() {
+		const direction = this.#motion.elements.FOCUS_INWARD.value ? -1 : 1
+		return this.#reverse.elements.INDI_ENABLED.value ? -direction : direction
+	}
+
+	// Advances the simulated ambient temperature with a smooth periodic waveform.
+	private advanceTemperature(dtSeconds: number) {
+		this.#temperaturePhase = normalizeAngle(this.#temperaturePhase + (dtSeconds * TAU) / FOCUSER_TEMPERATURE_PERIOD_SECONDS)
+		const next = CAMERA_AMBIENT_TEMPERATURE + Math.sin(this.#temperaturePhase) * FOCUSER_TEMPERATURE_AMPLITUDE
+
+		if (Math.abs(next - this.temperature) >= 0.1) {
+			this.#temperature.elements.TEMPERATURE.value = next
+			this.notify(this.#temperature)
+		}
+	}
+
+	// Applies a simple temperature-compensation model by nudging focus position as ambient temperature drifts.
+	private applyTemperatureCompensation() {
+		if (!this.isTemperatureCompensationEnabled || this.isMoving) {
+			this.#lastCompensationTemperature = this.temperature
+			return
+		}
+
+		const delta = this.temperature - this.#lastCompensationTemperature
+		if (Math.abs(delta) < FOCUSER_TEMPERATURE_COMPENSATION_HYSTERESIS) return
+
+		const steps = Math.trunc(delta * FOCUSER_TEMPERATURE_COMPENSATION_STEPS)
+		this.#lastCompensationTemperature = this.temperature
+		if (steps === 0) return
+
+		const target = clamp(this.position + steps, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
+		if (target === this.position) return
+
+		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(target - this.position)
+		this.#targetPosition = target
+		this.setMoving(true)
+	}
+}
+
+export class FilterWheelSimulator extends DeviceSimulator {
+	readonly type = 'WHEEL'
+
+	readonly #position = makeNumberVector('', 'FILTER_SLOT', 'Slot', MAIN_CONTROL, 'rw', ['FILTER_SLOT_VALUE', 'Slot', 1, 1, FILTER_WHEEL_SLOT_NAMES.length, 1, '%.0f'])
+	readonly #names = makeTextVector('', 'FILTER_NAME', 'Filter', MAIN_CONTROL, 'rw', ...FILTER_WHEEL_SLOT_NAMES.map((e, i) => [`FILTER_SLOT_NAME_${i + 1}`, `Slot ${i + 1}`, e] as never))
+
+	readonly #properties: readonly SimulatorProperty[] = [this.#position, this.#names]
+
+	#moveTimer?: NodeJS.Timeout
+
+	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+		super(name, client, handler, DeviceInterfaceType.FILTER)
+
+		for (const property of this.#properties) {
+			property.device = name
+		}
+
+		this.driverInfo.elements.DRIVER_EXEC.value = 'filterwheel.simulator'
+	}
+
+	sendText(vector: NewTextVector) {
+		super.sendText(vector)
+
+		if (vector.name === 'FILTER_NAME' && applyTextVectorValues(this.#names, vector.elements)) {
+			this.notify(this.#names)
+		}
+	}
+
+	sendNumber(vector: NewNumberVector) {
+		if (vector.name === 'FILTER_SLOT' && vector.elements.FILTER_SLOT_VALUE !== undefined) {
+			this.moveTo(vector.elements.FILTER_SLOT_VALUE)
+		}
+	}
+
+	sendSwitch(vector: NewSwitchVector) {
+		if (vector.name === 'CONNECTION') {
+			if (vector.elements.CONNECT === true) this.connect()
+			else if (vector.elements.DISCONNECT === true) this.disconnect()
+		}
+	}
+
+	// Connects the simulated filter wheel and publishes its supported properties.
+	connect() {
+		if (this.isConnected) return
+
+		super.connect()
+
+		if (!this.isConnected) return
+
+		for (const property of this.#properties) {
+			sendDefinition(this.client, this.handler, property)
+		}
+	}
+
+	// Disconnects the simulated filter wheel and removes its dynamic properties.
+	disconnect() {
+		if (!this.isConnected) return
+
+		super.disconnect()
+
+		if (this.#moveTimer) {
+			clearTimeout(this.#moveTimer)
+			this.#moveTimer = undefined
+		}
+
+		this.#position.state = 'Idle'
+
+		for (const property of this.#properties) {
+			handleDelProperty(this.client, this.handler, property as never)
+		}
+	}
+
+	// Disposes the filter wheel simulator and removes it from the manager view.
+	dispose() {
+		this.disconnect()
+		this.handler.delProperty?.(this.client, { device: this.name })
+		super.dispose()
+	}
+
+	// Starts a slot change with a short time-based delay.
+	moveTo(slot: number) {
+		if (!this.isConnected) return
+
+		slot = clamp(Math.round(slot), this.#position.elements.FILTER_SLOT_VALUE.min, this.#position.elements.FILTER_SLOT_VALUE.max)
+		const current = this.#position.elements.FILTER_SLOT_VALUE.value
+		if (slot === current) return
+
+		if (this.#moveTimer) {
+			clearTimeout(this.#moveTimer)
+			this.#moveTimer = undefined
+		}
+
+		this.#position.state = 'Busy'
+		this.notify(this.#position)
+
+		this.#moveTimer = setTimeout(
+			() => {
+				this.#moveTimer = undefined
+				this.#position.elements.FILTER_SLOT_VALUE.value = slot
+				this.#position.state = 'Idle'
+				this.notify(this.#position)
+			},
+			Math.max(150, Math.abs(slot - current) * FILTER_WHEEL_MOVE_TIME_MS),
+		)
+	}
+}
+
+export class RotatorSimulator extends DeviceSimulator {
+	readonly type = 'ROTATOR'
+
+	readonly #angle = makeNumberVector('', 'ABS_ROTATOR_ANGLE', 'Goto', MAIN_CONTROL, 'rw', ['ANGLE', 'Angle', 0, 0, 360, 0.01, '%.2f'])
+	readonly #sync = makeNumberVector('', 'SYNC_ROTATOR_ANGLE', 'Sync', MAIN_CONTROL, 'rw', ['ANGLE', 'Angle', 0, 0, 360, 0.01, '%.2f'])
+	readonly #home = makeSwitchVector('', 'ROTATOR_HOME', 'Home', MAIN_CONTROL, 'AtMostOne', 'rw', ['HOME', 'Home', false])
+	readonly #abort = makeSwitchVector('', 'ROTATOR_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+	readonly #reverse = makeSwitchVector('', 'ROTATOR_REVERSE', 'Reverse', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+	readonly #backlash = makeSwitchVector('', 'ROTATOR_BACKLASH_TOGGLE', 'Backlash', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+
+	readonly #properties: readonly SimulatorProperty[] = [this.#angle, this.#sync, this.#home, this.#abort, this.#reverse, this.#backlash]
+
+	#timer?: NodeJS.Timeout
+	#lastTick = 0
+	#targetAngle?: number
+	#homing = false
+
+	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+		super(name, client, handler, DeviceInterfaceType.ROTATOR)
+
+		for (const property of this.#properties) {
+			property.device = name
+		}
+
+		this.driverInfo.elements.DRIVER_EXEC.value = 'rotator.simulator'
+	}
+
+	get angle() {
+		return this.#angle.elements.ANGLE.value
+	}
+
+	get isMoving() {
+		return this.#angle.state === 'Busy'
+	}
+
+	sendNumber(vector: NewNumberVector) {
+		switch (vector.name) {
+			case 'ABS_ROTATOR_ANGLE':
+				if (vector.elements.ANGLE !== undefined) this.moveTo(vector.elements.ANGLE)
+				return
+			case 'SYNC_ROTATOR_ANGLE':
+				if (vector.elements.ANGLE !== undefined) this.syncTo(vector.elements.ANGLE)
+				return
+		}
+	}
+
+	sendSwitch(vector: NewSwitchVector) {
+		switch (vector.name) {
+			case 'CONNECTION':
+				if (vector.elements.CONNECT === true) this.connect()
+				else if (vector.elements.DISCONNECT === true) this.disconnect()
+				return
+			case 'ROTATOR_HOME':
+				if (vector.elements.HOME === true) this.home()
+				return
+			case 'ROTATOR_ABORT_MOTION':
+				if (vector.elements.ABORT === true) this.stop()
+				return
+			case 'ROTATOR_REVERSE':
+				if (applyExclusiveSwitchValues(this.#reverse, vector.elements)) this.notify(this.#reverse)
+				return
+			case 'ROTATOR_BACKLASH_TOGGLE':
+				if (applyExclusiveSwitchValues(this.#backlash, vector.elements)) this.notify(this.#backlash)
+				return
+		}
+	}
+
+	// Connects the simulated rotator and publishes its supported properties.
+	connect() {
+		if (this.#timer) return
+
+		super.connect()
+
+		if (!this.isConnected) return
+
+		for (const property of this.#properties) {
+			sendDefinition(this.client, this.handler, property)
+		}
+
+		this.#lastTick = Date.now()
+		this.#timer = setInterval(this.tick.bind(this), TICK_INTERVAL_MS)
+	}
+
+	// Disconnects the simulated rotator and removes its dynamic properties.
+	disconnect() {
+		if (!this.#timer) return
+
+		super.disconnect()
+		clearInterval(this.#timer)
+		this.#timer = undefined
+		this.stop(false)
+
+		for (const property of this.#properties) {
+			handleDelProperty(this.client, this.handler, property as never)
+		}
+	}
+
+	// Disposes the rotator simulator and removes it from the manager view.
+	dispose() {
+		this.disconnect()
+		this.handler.delProperty?.(this.client, { device: this.name })
+		super.dispose()
+	}
+
+	// Starts a rotation to the requested angle.
+	moveTo(angle: number) {
+		if (!this.isConnected) return
+
+		angle = clamp(angle, this.#angle.elements.ANGLE.min, this.#angle.elements.ANGLE.max)
+		if (angle === this.angle) return
+
+		this.#targetAngle = angle
+		this.#homing = false
+		this.setMoving(true)
+	}
+
+	// Syncs the rotator immediately without moving.
+	syncTo(angle: number) {
+		if (!this.isConnected) return
+
+		angle = clamp(angle, this.#angle.elements.ANGLE.min, this.#angle.elements.ANGLE.max)
+		this.#sync.elements.ANGLE.value = angle
+		this.#angle.elements.ANGLE.value = angle
+		this.stop(false)
+		this.notify(this.#sync)
+		this.notify(this.#angle)
+	}
+
+	// Sends the rotator to the configured home angle.
+	home() {
+		if (!this.isConnected) return
+		this.#targetAngle = 0
+		this.#homing = true
+		this.setMoving(true)
+	}
+
+	// Aborts the active rotation.
+	stop(alert: boolean = true) {
+		const wasMoving = this.isMoving
+		this.#targetAngle = undefined
+		this.#homing = false
+		this.setMoving(false, alert)
+
+		if (alert && wasMoving) {
+			this.#abort.elements.ABORT.value = true
+			this.notify(this.#abort)
+			this.#abort.elements.ABORT.value = false
+		}
+	}
+
+	// Advances the rotator toward the requested angle.
+	private tick() {
+		const now = Date.now()
+		const dtSeconds = Math.max(0, (now - this.#lastTick) / 1000)
+		this.#lastTick = now
+
+		if (dtSeconds <= 0 || this.#targetAngle === undefined) return
+
+		const current = this.angle
+		const delta = shortestRotatorDelta(this.#targetAngle, current)
+		const step = ROTATOR_MOVE_RATE * dtSeconds
+
+		if (Math.abs(delta) <= step) {
+			this.#angle.elements.ANGLE.value = this.#targetAngle
+			this.notify(this.#angle)
+			this.#targetAngle = undefined
+			this.#homing = false
+			this.setMoving(false)
+			return
+		}
+
+		this.#angle.elements.ANGLE.value = wrapRotatorAngle(current + Math.sign(delta) * step)
+		this.notify(this.#angle)
+	}
+
+	// Updates the busy state reflected by the rotator angle and home properties.
+	private setMoving(moving: boolean, alert: boolean = false) {
+		const angleState = alert ? 'Alert' : moving ? 'Busy' : 'Idle'
+		let updated = false
+
+		if (this.#angle.state !== angleState) {
+			this.#angle.state = angleState
+			updated = true
+		}
+
+		const homeState = alert ? 'Alert' : this.#homing && moving ? 'Busy' : 'Idle'
+		if (this.#home.state !== homeState) {
+			this.#home.state = homeState
+			this.#home.elements.HOME.value = this.#homing && moving
+			updated = true
+		} else if (this.#home.elements.HOME.value !== (this.#homing && moving)) {
+			this.#home.elements.HOME.value = this.#homing && moving
+			updated = true
+		}
+
+		if (updated) {
+			this.notify(this.#angle)
+			this.notify(this.#home)
+		}
+	}
+}
+
+export class FlatPanelSimulator extends DeviceSimulator {
+	readonly type = 'FLAT_PANEL'
+
+	readonly #light = makeSwitchVector('', 'FLAT_LIGHT_CONTROL', 'Light', MAIN_CONTROL, 'OneOfMany', 'rw', ['FLAT_LIGHT_ON', 'On', false], ['FLAT_LIGHT_OFF', 'Off', true])
+	readonly #intensity = makeNumberVector('', 'FLAT_LIGHT_INTENSITY', 'Brightness', MAIN_CONTROL, 'rw', ['FLAT_LIGHT_INTENSITY_VALUE', 'Brightness', 0, 0, PANEL_MAX_INTENSITY, 1, '%.0f'])
+
+	readonly #properties: readonly SimulatorProperty[] = [this.#light, this.#intensity]
+
+	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+		super(name, client, handler, DeviceInterfaceType.LIGHTBOX)
+
+		for (const property of this.#properties) {
+			property.device = name
+		}
+
+		this.driverInfo.elements.DRIVER_EXEC.value = 'lightbox.simulator'
+	}
+
+	sendNumber(vector: NewNumberVector) {
+		if (vector.name === 'FLAT_LIGHT_INTENSITY' && applyNumberVectorValues(this.#intensity, vector.elements)) {
+			this.notify(this.#intensity)
+		}
+	}
+
+	sendSwitch(vector: NewSwitchVector) {
+		switch (vector.name) {
+			case 'CONNECTION':
+				if (vector.elements.CONNECT === true) this.connect()
+				else if (vector.elements.DISCONNECT === true) this.disconnect()
+				return
+			case 'FLAT_LIGHT_CONTROL':
+				if (applyExclusiveSwitchValues(this.#light, vector.elements)) this.notify(this.#light)
+				return
+		}
+	}
+
+	// Connects the simulated flat panel and publishes its supported properties.
+	connect() {
+		if (this.isConnected) return
+
+		super.connect()
+
+		if (!this.isConnected) return
+
+		for (const property of this.#properties) {
+			sendDefinition(this.client, this.handler, property)
+		}
+	}
+
+	// Disconnects the simulated flat panel and removes its dynamic properties.
+	disconnect() {
+		if (!this.isConnected) return
+
+		super.disconnect()
+
+		for (const property of this.#properties) {
+			handleDelProperty(this.client, this.handler, property as never)
+		}
+	}
+
+	// Disposes the flat-panel simulator and removes it from the manager view.
+	dispose() {
+		this.disconnect()
+		this.handler.delProperty?.(this.client, { device: this.name })
+		super.dispose()
+	}
+}
+
+export class CoverSimulator extends DeviceSimulator {
+	readonly type = 'COVER'
+
+	readonly #park = makeSwitchVector('', 'CAP_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
+	readonly #abort = makeSwitchVector('', 'CAP_ABORT', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+
+	readonly #properties: readonly SimulatorProperty[] = [this.#park, this.#abort]
+
+	#moveTimer?: NodeJS.Timeout
+
+	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+		super(name, client, handler, DeviceInterfaceType.DUSTCAP)
+
+		for (const property of this.#properties) {
+			property.device = name
+		}
+
+		this.driverInfo.elements.DRIVER_EXEC.value = 'dustcap.simulator'
+	}
+
+	sendNumber(vector: NewNumberVector) {}
+
+	sendSwitch(vector: NewSwitchVector) {
+		switch (vector.name) {
+			case 'CONNECTION':
+				if (vector.elements.CONNECT === true) this.connect()
+				else if (vector.elements.DISCONNECT === true) this.disconnect()
+				return
+			case 'CAP_PARK':
+				if (vector.elements.PARK === true) this.park()
+				else if (vector.elements.UNPARK === true) this.unpark()
+				return
+			case 'CAP_ABORT':
+				if (vector.elements.ABORT === true) this.stop()
+				return
+		}
+	}
+
+	// Connects the simulated dust cap and publishes its supported properties.
+	connect() {
+		if (this.isConnected) return
+
+		super.connect()
+
+		if (!this.isConnected) return
+
+		for (const property of this.#properties) {
+			sendDefinition(this.client, this.handler, property)
+		}
+	}
+
+	// Disconnects the simulated dust cap and removes its dynamic properties.
+	disconnect() {
+		if (!this.isConnected) return
+
+		super.disconnect()
+		this.stop(false)
+
+		for (const property of this.#properties) {
+			handleDelProperty(this.client, this.handler, property as never)
+		}
+	}
+
+	// Disposes the dust-cap simulator and removes it from the manager view.
+	dispose() {
+		this.disconnect()
+		this.handler.delProperty?.(this.client, { device: this.name })
+		super.dispose()
+	}
+
+	// Starts closing the dust cap.
+	park() {
+		if (!this.isConnected || this.#park.state === 'Busy' || this.#park.elements.PARK.value) return
+		this.startParkTransition(true)
+	}
+
+	// Starts opening the dust cap.
+	unpark() {
+		if (!this.isConnected || this.#park.state === 'Busy' || this.#park.elements.UNPARK.value) return
+		this.startParkTransition(false)
+	}
+
+	// Stops any active cap transition.
+	stop(alert: boolean = true) {
+		const wasMoving = this.#moveTimer !== undefined
+		if (this.#moveTimer) {
+			clearTimeout(this.#moveTimer)
+			this.#moveTimer = undefined
+		}
+
+		if (this.#park.state !== 'Idle') {
+			this.#park.state = alert && wasMoving ? 'Alert' : 'Idle'
+			this.notify(this.#park)
+		}
+
+		if (alert && wasMoving) {
+			this.#abort.elements.ABORT.value = true
+			this.notify(this.#abort)
+			this.#abort.elements.ABORT.value = false
+		}
+	}
+
+	// Schedules the cap open or close transition.
+	private startParkTransition(parked: boolean) {
+		this.stop(false)
+		this.#park.state = 'Busy'
+		this.notify(this.#park)
+
+		this.#moveTimer = setTimeout(() => {
+			this.#moveTimer = undefined
+			selectOnSwitch(this.#park, parked ? 'PARK' : 'UNPARK')
+			this.#park.state = 'Idle'
+			this.notify(this.#park)
+		}, COVER_MOVE_TIME_MS)
+	}
+}
+
+export { CoverSimulator as DustCapSimulator, FilterWheelSimulator as WheelSimulator, FlatPanelSimulator as LightBoxSimulator }
 
 export class CameraSimulator extends DeviceSimulator {
 	readonly type = 'CAMERA'
@@ -1202,6 +1983,7 @@ export class CameraSimulator extends DeviceSimulator {
 	dispose() {
 		this.disconnect()
 		this.handler.delProperty?.(this.client, { device: this.name })
+		super.dispose()
 	}
 
 	// Starts an exposure countdown and schedules image synthesis at completion.
@@ -1339,7 +2121,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const nextCoolerPower = coolerEnabled ? clamp(deltaFromAmbient * 6.5, 0, 100) : 0
 		let updated = false
 
-		if (Math.abs(nextTemperature - current) >= 0.02) {
+		if (Math.abs(nextTemperature - current) >= 0.1) {
 			this.#temperature.elements.CCD_TEMPERATURE_VALUE.value = nextTemperature
 			updated = true
 		}
@@ -1889,6 +2671,20 @@ function applyMultiSwitchValues(vector: DefSwitchVector, elements: Record<string
 	}
 
 	return updated
+}
+
+function wrapRotatorAngle(value: number) {
+	value %= 360
+	return value < 0 ? value + 360 : value
+}
+
+function shortestRotatorDelta(target: number, current: number) {
+	let delta = target - current
+
+	if (delta > 180) delta -= 360
+	else if (delta < -180) delta += 360
+
+	return delta
 }
 
 // Builds the Gaia DR3 cone search used by the VizieR-backed camera catalog.

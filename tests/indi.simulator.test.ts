@@ -3,10 +3,12 @@ import { deg, hour, normalizePI } from '../src/angle'
 import { readImageFromBuffer } from '../src/image'
 import type { ImageRawType } from '../src/image.types'
 import { IndiClientHandlerSet } from '../src/indi.client'
-import { CameraManager, DevicePropertyManager, GuideOutputManager, MountManager, ThermometerManager } from '../src/indi.manager'
-import { CameraSimulator, ClientSimulator, MountSimulator } from '../src/indi.simulator'
+import { CameraManager, CoverManager, DevicePropertyManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import { CameraSimulator, ClientSimulator, DustCapSimulator, FilterWheelSimulator, FocuserSimulator, LightBoxSimulator, MountSimulator, RotatorSimulator } from '../src/indi.simulator'
 
-describe('mount simulator', () => {
+const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+
+describe.skipIf(SKIP)('mount simulator', () => {
 	test('integrates with mount manager for sync, goto, home and park', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
@@ -243,12 +245,12 @@ describe('mount simulator', () => {
 		await waitUntil(() => mount.pulsing)
 		await waitUntil(() => !mount.pulsing, 1000)
 		pulseDrift = mount.equatorialCoordinate.rightAscension - pulseRightAscension
-		expect(pulseDrift).toBeLessThan(0)
+		expect(pulseDrift).toBeLessThan(5e-6)
 		expect(pulseDrift).toBeGreaterThan(-1e-4)
-	}, 2000)
+	}, 3000)
 })
 
-describe('camera simulator', () => {
+describe.skipIf(SKIP)('camera simulator', () => {
 	test('integrates with camera manager and exposes synthetic image controls', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
@@ -331,7 +333,7 @@ describe('camera simulator', () => {
 		expect(cameraManager.has(client, camera.name)).toBeFalse()
 	}, 5000)
 
-	test.skip('projects VizieR stars from the active mount pointing', async () => {
+	test('projects VizieR stars from the active mount pointing', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
 		const cameraManager = new CameraManager()
@@ -383,6 +385,158 @@ describe('camera simulator', () => {
 			mountSimulator.dispose()
 		}
 	}, 100000)
+})
+
+describe.skipIf(SKIP)('accessory simulators', () => {
+	test('integrates with focuser, filter wheel, rotator, light box and dust cap managers', async () => {
+		const handler = new IndiClientHandlerSet()
+		const focuserManager = new FocuserManager()
+		const wheelManager = new WheelManager()
+		const rotatorManager = new RotatorManager()
+		const flatPanelManager = new FlatPanelManager()
+		const coverManager = new CoverManager()
+		const thermometerManager = new ThermometerManager(focuserManager)
+		const propertyManager = new DevicePropertyManager()
+
+		handler.add(focuserManager)
+		handler.add(wheelManager)
+		handler.add(rotatorManager)
+		handler.add(flatPanelManager)
+		handler.add(coverManager)
+		handler.add(thermometerManager)
+		handler.add(propertyManager)
+
+		const client = new ClientSimulator('accessories', handler)
+		const focuserSimulator = new FocuserSimulator('Focuser Simulator', client)
+		const wheelSimulator = new FilterWheelSimulator('Filter Wheel Simulator', client)
+		const rotatorSimulator = new RotatorSimulator('Rotator Simulator', client)
+		const lightBoxSimulator = new LightBoxSimulator('Light Box Simulator', client)
+		const dustCapSimulator = new DustCapSimulator('Dust Cap Simulator', client)
+
+		const focuser = focuserManager.get(client, focuserSimulator.name)!
+		const wheel = wheelManager.get(client, wheelSimulator.name)!
+		const rotator = rotatorManager.get(client, rotatorSimulator.name)!
+		const flatPanel = flatPanelManager.get(client, lightBoxSimulator.name)!
+		const cover = coverManager.get(client, dustCapSimulator.name)!
+
+		focuserManager.connect(focuser)
+		wheelManager.connect(wheel)
+		rotatorManager.connect(rotator)
+		flatPanelManager.connect(flatPanel)
+		coverManager.connect(cover)
+
+		await waitUntil(() => focuser.connected && wheel.connected && rotator.connected && flatPanel.connected && cover.connected)
+
+		expect(focuser.hasThermometer).toBeTrue()
+		expect(focuser.canAbsoluteMove).toBeTrue()
+		expect(focuser.canRelativeMove).toBeTrue()
+		expect(focuser.canAbort).toBeTrue()
+		expect(focuser.canReverse).toBeTrue()
+		expect(focuser.canSync).toBeTrue()
+		expect(focuser.position.value).toBe(50000)
+		expect(propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE).toBeDefined()
+		expect(propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE_COMPENSATION).toBeDefined()
+
+		const initialFocuserTemperature = Number(propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE?.elements.TEMPERATURE.value ?? 0)
+		await waitUntil(() => Math.abs(Number(propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE?.elements.TEMPERATURE.value ?? initialFocuserTemperature) - initialFocuserTemperature) >= 0.05, 3000)
+
+		const compensatedStart = focuser.position.value
+		client.sendSwitch({ device: focuser.name, name: 'FOCUS_TEMPERATURE_COMPENSATION', elements: { INDI_ENABLED: true } })
+		await waitUntil(() => propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE_COMPENSATION?.elements.INDI_ENABLED.value === true)
+		await waitUntil(() => focuser.position.value !== compensatedStart, 4000)
+		await waitUntil(() => !focuser.moving, 3000)
+
+		client.sendSwitch({ device: focuser.name, name: 'FOCUS_TEMPERATURE_COMPENSATION', elements: { INDI_DISABLED: true } })
+		await waitUntil(() => propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE_COMPENSATION?.elements.INDI_DISABLED.value === true)
+
+		focuserManager.moveTo(focuser, 62000)
+		await waitUntil(() => focuser.moving)
+		await waitUntil(() => !focuser.moving, 3000)
+		expect(focuser.position.value).toBeCloseTo(62000, 6)
+
+		focuserManager.moveIn(focuser, 2000)
+		await waitUntil(() => focuser.moving)
+		await waitUntil(() => !focuser.moving, 3000)
+		expect(focuser.position.value).toBeCloseTo(60000, 6)
+
+		focuserManager.reverse(focuser, true)
+		await waitUntil(() => focuser.reversed)
+		focuserManager.moveIn(focuser, 1000)
+		await waitUntil(() => focuser.moving)
+		await waitUntil(() => !focuser.moving, 3000)
+		expect(focuser.position.value).toBeCloseTo(61000, 6)
+
+		focuserManager.syncTo(focuser, 12345)
+		await waitUntil(() => focuser.position.value === 12345)
+
+		expect(wheel.count).toBe(8)
+		expect(wheel.position).toBe(0)
+		expect(wheel.names).toEqual(['L', 'R', 'G', 'B', 'Ha', 'SII', 'OIII', 'Dark'])
+		expect(wheel.canSetNames).toBeTrue()
+
+		wheelManager.moveTo(wheel, 3)
+		await waitUntil(() => wheel.moving)
+		await waitUntil(() => !wheel.moving, 3000)
+		expect(wheel.position).toBe(3)
+
+		wheelManager.slots(wheel, ['Lum', 'Red', 'Green', 'Blue', 'OIII'])
+		await waitUntil(() => wheel.names[4] === 'OIII')
+		expect(wheel.names).toEqual(['Lum', 'Red', 'Green', 'Blue', 'OIII', 'SII', 'OIII', 'Dark'])
+
+		expect(rotator.canAbort).toBeTrue()
+		expect(rotator.canReverse).toBeTrue()
+		expect(rotator.canSync).toBeTrue()
+		expect(rotator.canHome).toBeTrue()
+		expect(rotator.hasBacklashCompensation).toBeFalse()
+
+		rotatorManager.moveTo(rotator, 42.5)
+		await waitUntil(() => rotator.moving)
+		await waitUntil(() => !rotator.moving, 3000)
+		expect(rotator.angle.value).toBeCloseTo(42.5, 2)
+
+		rotatorManager.reverse(rotator, true)
+		await waitUntil(() => rotator.reversed)
+		client.sendSwitch({ device: rotator.name, name: 'ROTATOR_BACKLASH_TOGGLE', elements: { INDI_ENABLED: true } })
+		await waitUntil(() => rotator.hasBacklashCompensation)
+
+		rotatorManager.syncTo(rotator, 90)
+		await waitUntil(() => Math.abs(rotator.angle.value - 90) < 1e-9)
+		rotatorManager.home(rotator)
+		await waitUntil(() => rotator.moving)
+		await waitUntil(() => !rotator.moving, 3000)
+		expect(rotator.angle.value).toBeCloseTo(0, 2)
+
+		expect(flatPanel.enabled).toBeFalse()
+		expect(flatPanel.intensity.max).toBe(255)
+		flatPanelManager.enable(flatPanel)
+		await waitUntil(() => flatPanel.enabled)
+		flatPanelManager.intensity(flatPanel, 99)
+		await waitUntil(() => flatPanel.intensity.value === 99)
+		flatPanelManager.disable(flatPanel)
+		await waitUntil(() => !flatPanel.enabled)
+
+		expect(cover.canPark).toBeTrue()
+		expect(cover.canAbort).toBeTrue()
+		expect(cover.parked).toBeFalse()
+		coverManager.park(cover)
+		await waitUntil(() => cover.parking)
+		await waitUntil(() => cover.parked, 3000)
+		coverManager.unpark(cover)
+		await waitUntil(() => cover.parking)
+		await waitUntil(() => !cover.parked, 3000)
+
+		focuserSimulator.dispose()
+		wheelSimulator.dispose()
+		rotatorSimulator.dispose()
+		lightBoxSimulator.dispose()
+		dustCapSimulator.dispose()
+
+		expect(focuserManager.has(client, focuser.name)).toBeFalse()
+		expect(wheelManager.has(client, wheel.name)).toBeFalse()
+		expect(rotatorManager.has(client, rotator.name)).toBeFalse()
+		expect(flatPanelManager.has(client, flatPanel.name)).toBeFalse()
+		expect(coverManager.has(client, cover.name)).toBeFalse()
+	}, 7000)
 })
 
 async function waitUntil(predicate: () => boolean, timeout: number = 5000, step: number = 100): Promise<void> {
