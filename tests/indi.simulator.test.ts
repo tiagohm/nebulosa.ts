@@ -565,7 +565,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			cameraSimulator.startExposure(0.05)
 			await waitUntil(() => frameReceiver.length > 0, 10000, 50)
 			const image = await readImageFromBuffer(frameReceiver.lastFrame)
-			expect(image).toBeDefined()
+            expect(image).toBeDefined()
 			expect(sumPixels(image!.raw)).toBeGreaterThan(0)
 		} finally {
 			cameraSimulator.dispose()
@@ -588,7 +588,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		cameraManager.addHandler(frameReceiver)
 
 		const catalogProvider: CatalogProvider = () => {
-			return [{ snr: 10, hfd: 4, flux: 30, rightAscension: hour(5), declination: deg(20) }]
+			return [{ snr: 10, hfd: 4, flux: 30, rightAscension: hour(4.97409), declination: deg(19.95913) }]
 		}
 
 		const mountSimulator = new MountSimulator('Mount Simulator', client)

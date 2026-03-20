@@ -1,5 +1,5 @@
 import type { Angle } from './angle'
-import { deg, formatDEC, formatRA, hour, normalizeAngle, normalizePI, toDeg, toHour } from './angle'
+import { arcsec, deg, formatDEC, formatRA, hour, normalizeAngle, normalizePI, toDeg, toHour } from './angle'
 import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { equatorialToJ2000 } from './coordinate'
@@ -2561,7 +2561,7 @@ export class CameraSimulator extends DeviceSimulator {
 			;[centerRightAscension, centerDeclination] = equatorialToJ2000(centerRightAscension, centerDeclination)
 		}
 
-		const pixelScale = angularSizeOfPixel(this.telescopeFocalLength, CAMERA_PIXEL_SIZE)
+		const pixelScale = arcsec(angularSizeOfPixel(this.telescopeFocalLength, CAMERA_PIXEL_SIZE))
 		const radius = Math.hypot(this.sensorWidth, this.sensorHeight) * pixelScale * (0.5 * ASEC2RAD)
 		const key = this.catalogKey(centerRightAscension, centerDeclination, radius)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
