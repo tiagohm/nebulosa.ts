@@ -12,7 +12,7 @@ import type { CfaPattern, Image, ImageRawType } from './image.types'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, type FrameType, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
 import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager } from './indi.manager'
-import { type DefNumberVector, type DefSwitchVector, type DefTextVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetVector, selectOnSwitch } from './indi.types'
+import { type DefNumberVector, type DefSwitchVector, type DefTextVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from './indi.types'
 import { bufferSink } from './io'
 import { type GeographicCoordinate, localSiderealTime } from './location'
 import { clamp } from './math'
@@ -216,7 +216,7 @@ export abstract class DeviceSimulator implements Disposable {
 		}
 	}
 
-	notify(message: SetVector & { type: 'SWITCH' | 'TEXT' | 'NUMBER' }) {
+	protected notify(message: SimulatorProperty) {
 		const type = message.type[0]
 
 		if (type === 'S') handleSetSwitchVector(this.client, this.handler, message as never)
@@ -226,10 +226,8 @@ export abstract class DeviceSimulator implements Disposable {
 
 	protected saveProperties() {
 		if (this.options?.save) {
-			this.options.save(
-				this.name,
-				this.properties.filter((e) => !this.propertiesToNotSave.includes(e)),
-			)
+			const properties = this.properties.filter((e) => !this.propertiesToNotSave.includes(e))
+			this.options.save(this.name, properties)
 		}
 	}
 
@@ -246,6 +244,8 @@ export abstract class DeviceSimulator implements Disposable {
 					if (value === undefined) continue
 					actual.elements[key].value = value.value
 				}
+
+				this.notify(actual)
 			}
 		}
 	}
