@@ -8,6 +8,7 @@ export interface PlotStarOptions {
 	readonly saturationLevel?: number
 	readonly focusStep?: number
 	readonly bestFocus?: number
+	readonly maxFocusStep?: number
 	readonly peakScale?: number
 	readonly ellipticity?: number
 	readonly theta?: number
@@ -92,11 +93,12 @@ export function effectiveGaussianSigma(hfd: number, seeing: number = 0, snr: num
 }
 
 // Maps focusStep and bestFocus into a normalized defocus amount in the [0, 1] range.
-export function focusDefocusAmount(focusStep?: number, bestFocus?: number) {
+export function focusDefocusAmount(focusStep?: number, bestFocus?: number, maxFocusStep: number = MAX_FOCUS_STEP) {
 	if (!Number.isFinite(focusStep) || !Number.isFinite(bestFocus)) return 0
-	const focus = clamp(focusStep!, 0, MAX_FOCUS_STEP)
-	const best = clamp(bestFocus!, 0, MAX_FOCUS_STEP)
-	const maxOffset = Math.max(best, MAX_FOCUS_STEP - best, 1)
+	if (!Number.isFinite(maxFocusStep) || maxFocusStep <= 0 || maxFocusStep > MAX_FOCUS_STEP) maxFocusStep = MAX_FOCUS_STEP
+	const focus = clamp(focusStep!, 0, maxFocusStep)
+	const best = clamp(bestFocus!, 0, maxFocusStep)
+	const maxOffset = Math.max(best, maxFocusStep - best, 1)
 	return clamp(Math.abs(focus - best) / maxOffset, 0, 1)
 }
 
@@ -117,7 +119,7 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 
 	const background = sanitizePositive(options.background, 0)
 	const peakScale = sanitizePositive(options.peakScale, 1)
-	const defocus = focusDefocusAmount(options.focusStep, options.bestFocus)
+	const defocus = focusDefocusAmount(options.focusStep, options.bestFocus, options.maxFocusStep)
 	const effectiveSoftCore = (options.softCore ?? 0) + defocus * 3.2
 	const effectivePeakScale = Math.max(0.2, peakScale / (1 + defocus * 1.4))
 	const sigma = effectiveGaussianSigma(hfd, seeing, snr, effectiveSoftCore, options.additiveNoiseHint ?? 0, effectivePeakScale, background) * (1 + defocus * defocus * 2.4)

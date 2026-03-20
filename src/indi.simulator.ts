@@ -931,7 +931,7 @@ export class CameraSimulator extends DeviceSimulator {
 	readonly #noiseAmpGlowPosition = makeSwitchVector('', 'SIMULATOR_NOISE_AMP_GLOW_POSITION', 'Amp Glow Position', SIMULATION, 'OneOfMany', 'rw', ['TOP_LEFT', 'Top Left', false], ['TOP_RIGHT', 'Top Right', false], ['BOTTOM_LEFT', 'Bottom Left', false], ['BOTTOM_RIGHT', 'Bottom Right', false], ['LEFT', 'Left', false], ['RIGHT', 'Right', true], ['TOP', 'Top', false], ['BOTTOM', 'Bottom', false])
 	// biome-ignore format: too long!
 	readonly #noiseArtifacts = makeNumberVector('', 'SIMULATOR_NOISE_ARTIFACTS', 'Artifacts', SIMULATION, 'rw', ['FIXED_PATTERN_NOISE_STRENGTH', 'Fixed Pattern', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.fixedPatternNoiseStrength, 0, 10, 0.001, '%.4f'], ['ROW_NOISE_STRENGTH', 'Row Noise', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.rowNoiseStrength, 0, 10, 0.001, '%.4f'], ['COLUMN_NOISE_STRENGTH', 'Column Noise', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.columnNoiseStrength, 0, 10, 0.001, '%.4f'], ['BANDING_STRENGTH', 'Banding', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.bandingStrength, 0, 10, 0.001, '%.4f'], ['BANDING_FREQUENCY', 'Banding Frequency', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.bandingFrequency, 0, 100, 0.1, '%.3f'], ['HOT_PIXEL_RATE', 'Hot Pixel Rate', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.hotPixelRate, 0, 1, 0.00001, '%.5f'], ['WARM_PIXEL_RATE', 'Warm Pixel Rate', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.warmPixelRate, 0, 1, 0.00001, '%.5f'], ['DEAD_PIXEL_RATE', 'Dead Pixel Rate', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.deadPixelRate, 0, 1, 0.00001, '%.5f'], ['HOT_PIXEL_STRENGTH', 'Hot Pixel Strength', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.hotPixelStrength, 0, 10000, 1, '%.0f'], ['WARM_PIXEL_STRENGTH', 'Warm Pixel Strength', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.warmPixelStrength, 0, 10000, 1, '%.0f'], ['DEAD_PIXEL_RESIDUAL', 'Dead Pixel Residual', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.deadPixelResidual, 0, 1, 0.001, '%.4f'])
-	readonly #noiseOutput = makeNumberVector('', 'SIMULATOR_NOISE_OUTPUT', 'Output', SIMULATION, 'rw', ['BIT_DEPTH', 'Bit Depth', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output.bitDepth, 8, 32, 1, '%.0f'], ['MAX_VALUE', 'Max Value', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output.maxValue, 1, 4294967295, 1, '%.0f'])
+	readonly #noiseOutput = makeNumberVector('', 'SIMULATOR_NOISE_OUTPUT', 'Output', SIMULATION, 'rw', ['MAX_VALUE', 'Max Value', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output.maxValue, 1, 4294967295, 1, '%.0f'])
 	readonly #noiseClampMode = makeSwitchVector('', 'SIMULATOR_NOISE_CLAMP_MODE', 'Clamp Mode', SIMULATION, 'OneOfMany', 'rw', ['CLAMP', 'Clamp', true], ['NORMALIZE', 'Normalize', false], ['NONE', 'None', false])
 	// biome-ignore format: too long!
 	readonly #plotOptions = makeNumberVector('', 'SIMULATOR_PLOT_OPTIONS', 'Plot', SIMULATION, 'rw', ['BACKGROUND', 'Background', 0, 0, 10, 0.001, '%.4f'], ['SATURATION_LEVEL', 'Saturation Level', 1, 0, 10, 0.01, '%.3f'], ['FOCUS_STEP', 'Focus Step', 0, 0, 100000, 1, '%.0f'], ['BEST_FOCUS', 'Best Focus', 0, 0, 100000, 1, '%.0f'], ['PEAK_SCALE', 'Peak Scale', 1, 0.01, 20, 0.01, '%.3f'], ['ELLIPTICITY', 'Ellipticity', 0, 0, 0.8, 0.01, '%.3f'], ['THETA', 'Theta', 0, -TAU, TAU, 0.01, '%.3f'], ['SOFT_CORE', 'Soft Core', 0, 0, 10, 0.01, '%.3f'], ['BETA', 'Beta', 2.5, 1.05, 20, 0.01, '%.3f'], ['HALO_STRENGTH', 'Halo Strength', 0, 0, 5, 0.01, '%.3f'], ['HALO_SCALE', 'Halo Scale', 2.8, 1.1, 20, 0.01, '%.3f'], ['JITTER_X', 'Jitter X', 0, -5, 5, 0.01, '%.3f'], ['JITTER_Y', 'Jitter Y', 0, -5, 5, 0.01, '%.3f'], ['GAIN', 'Plot Gain', 1, 0.01, 20, 0.01, '%.3f'], ['GAMMA_COMPENSATION', 'Gamma Compensation', 2.2, 0.1, 10, 0.01, '%.3f'], ['ADDITIVE_NOISE_HINT', 'Additive Noise Hint', 0, 0, 20, 0.01, '%.3f'], ['MIN_PLOT_RADIUS', 'Min Radius', 2, 0, 50, 1, '%.0f'], ['MAX_PLOT_RADIUS', 'Max Radius', 24, 0, 100, 1, '%.0f'], ['CUTOFF_SIGMA', 'Cutoff Sigma', 4.25, 2.5, 10, 0.01, '%.3f'])
@@ -1493,7 +1493,6 @@ export class CameraSimulator extends DeviceSimulator {
 				deadPixelResidual: this.#noiseArtifacts.elements.DEAD_PIXEL_RESIDUAL.value,
 			},
 			output: {
-				bitDepth: Math.trunc(this.#noiseOutput.elements.BIT_DEPTH.value),
 				maxValue: this.#noiseOutput.elements.MAX_VALUE.value,
 				clampMode: this.clampMode,
 				quantize: this.#noiseFeatures.elements.OUTPUT_QUANTIZE.value,
@@ -1542,7 +1541,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const projected: AstronomicalImageStar[] = []
 
 		for (let i = 0; i < stars.length; i++) {
-			const star = stars[i]!
+			const star = stars[i]
 			if (star.x < frameX || star.x >= frameX + frameWidth || star.y < frameY || star.y >= frameY + frameHeight) continue
 			projected.push({
 				x: (star.x - frameX) / binX,
@@ -1696,7 +1695,7 @@ function applyNumberVectorValues(vector: DefNumberVector, elements: Record<strin
 	for (const key in elements) {
 		const element = vector.elements[key]
 		if (!element || !Number.isFinite(elements[key])) continue
-		const next = clamp(elements[key]!, element.min, element.max)
+		const next = clamp(elements[key], element.min, element.max)
 
 		if (element.value !== next) {
 			element.value = next
