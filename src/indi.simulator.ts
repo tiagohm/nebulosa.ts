@@ -2,21 +2,26 @@ import type { Angle } from './angle'
 import { deg, hour, normalizeAngle, normalizePI, toDeg, toHour } from './angle'
 import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
+import { equatorialToJ2000 } from './coordinate'
+import type { CsvRow } from './csv'
 import { meter, toMeter } from './distance'
 import type { FitsHeader } from './fits'
 import { writeImageToFits, writeImageToXisf } from './image'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from './image.generator'
 import type { CfaPattern, Image, ImageRawType } from './image.types'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
-import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, type FrameType, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
-import { type DefNumberVector, type DefSwitchVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetVector, selectOnSwitch } from './indi.types'
+import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, type FrameType, type GuideDirection, type Mount, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
+import type { DeviceProvider } from './indi.manager'
+import { type DefNumberVector, type DefSwitchVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetVector, selectOnSwitch, type DefTextVector } from './indi.types'
 import { bufferSink } from './io'
 import { type GeographicCoordinate, localSiderealTime } from './location'
 import { clamp } from './math'
+import { gnomonicProject } from './projection'
 import { mulberry32 } from './random'
 import type { PlotStarOptions } from './star.generator'
 import { formatTemporal, TIMEZONE } from './temporal'
-import { timeUnix } from './time'
+import { timeNow, timeUnix } from './time'
+import { vizierQuery } from './vizier'
 
 const TICK_INTERVAL_MS = 100
 const SIDEREAL_DRIFT_RATE = TAU / SIDEREAL_DAYSEC
@@ -34,15 +39,18 @@ const CAMERA_AMBIENT_TEMPERATURE = 18
 const CAMERA_DEFAULT_TARGET_TEMPERATURE = 0
 const CAMERA_SCENE_SEED = 0x1d0f3a57
 const CAMERA_BLOB_PADDING = 16384
+const CAMERA_CATALOG_PIXEL_SCALE = 2 * ASEC2RAD
+const CAMERA_VIZIER_MIN_STARS = 50
+const CAMERA_VIZIER_MAX_STARS = 1000
 
 const SLEW_RATES = [
-	{ name: '1x', label: '0.5°', speed: 0.5 * DEG2RAD },
-	{ name: '2x', label: '1.0°', speed: 1.0 * DEG2RAD },
-	{ name: '4x', label: '2.0°', speed: 2.0 * DEG2RAD },
-	{ name: '8x', label: '4.0°', speed: 4.0 * DEG2RAD },
-	{ name: '16x', label: '8.0°', speed: 8.0 * DEG2RAD },
-	{ name: '32x', label: '16.0°', speed: 16.0 * DEG2RAD },
-	{ name: '64x', label: '32.0°', speed: 32.0 * DEG2RAD },
+	{ name: 'SPEED_1', label: ' 0.5°', speed: 0.5 * DEG2RAD },
+	{ name: 'SPEED_2', label: ' 1.0°', speed: 1.0 * DEG2RAD },
+	{ name: 'SPEED_3', label: ' 2.0°', speed: 2.0 * DEG2RAD },
+	{ name: 'SPEED_4', label: ' 4.0°', speed: 4.0 * DEG2RAD },
+	{ name: 'SPEED_5', label: ' 8.0°', speed: 8.0 * DEG2RAD },
+	{ name: 'SPEED_6', label: '16.0°', speed: 16.0 * DEG2RAD },
+	{ name: 'SPEED_7', label: '32.0°', speed: 32.0 * DEG2RAD },
 ] as const
 
 type CoordSetMode = 'SLEW' | 'SYNC'
@@ -54,6 +62,8 @@ type AxisDirection = -1 | 0 | 1
 export type TransferFormat = 'FITS' | 'XISF'
 
 export type ReadoutMode = 'MONO' | 'RGB'
+
+type CatalogSource = 'RANDOM' | 'VIZIER'
 
 type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
 
@@ -107,6 +117,7 @@ export abstract class DeviceSimulator implements Disposable {
 
 	protected readonly driverInfo = makeTextVector('', 'DRIVER_INFO', 'Driver Info', GENERAL_INFO, 'ro', ['DRIVER_INTERFACE', 'Interface', ''], ['DRIVER_EXEC', 'Exec', ''], ['DRIVER_VERSION', 'Version', '1.0'], ['DRIVER_NAME', 'Name', ''])
 	protected readonly connection = makeSwitchVector('', 'CONNECTION', 'Connection', MAIN_CONTROL, 'OneOfMany', 'rw', ['CONNECT', 'Connect', false], ['DISCONNECT', 'Disconnect', true])
+	protected readonly snoopDevices = makeTextVector('', 'ACTIVE_DEVICES', 'Snoop devices', MAIN_CONTROL, 'rw', ['ACTIVE_TELESCOPE', 'Mount', ''], ['ACTIVE_FOCUSER', 'Focuser', ''], ['ACTIVE_FILTER', 'Filter Wheel', ''], ['ACTIVE_ROTATOR', 'Rotator', ''])
 
 	constructor(
 		readonly name: string,
@@ -118,17 +129,26 @@ export abstract class DeviceSimulator implements Disposable {
 		this.driverInfo.elements.DRIVER_INTERFACE.value = interfaceType.toFixed(0)
 		this.driverInfo.elements.DRIVER_NAME.value = name
 		this.connection.device = name
+		this.snoopDevices.device = name
 		client.register(this)
 
 		handleDefTextVector(client, handler, this.driverInfo)
 		handleDefSwitchVector(client, handler, this.connection)
+		handleDefTextVector(client, handler, this.snoopDevices)
 	}
 
 	get isConnected() {
 		return this.connection.elements.CONNECT.value
 	}
 
-	abstract sendText(vector: NewTextVector): void
+	sendText(vector: NewTextVector) {
+		switch (vector.name) {
+			case 'ACTIVE_DEVICES':
+				applyTextVectorValues(this.snoopDevices, vector.elements) && this.notify(this.snoopDevices)
+				return
+		}
+	}
+
 	abstract sendNumber(vector: NewNumberVector): void
 	abstract sendSwitch(vector: NewSwitchVector): void
 	abstract dispose(): void
@@ -224,7 +244,7 @@ export class MountSimulator extends DeviceSimulator {
 		}
 
 		for (const rate of SLEW_RATES) {
-			this.#slewRate.elements[rate.name] = { name: rate.name, label: rate.label, value: rate.name === '8x' }
+			this.#slewRate.elements[rate.name] = { name: rate.name, label: rate.label, value: rate.name === 'SPEED_2' }
 		}
 
 		this.driverInfo.elements.DRIVER_EXEC.value = 'mount.simulator'
@@ -296,6 +316,8 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	sendText(vector: NewTextVector) {
+		super.sendText(vector)
+
 		switch (vector.name) {
 			case 'TIME_UTC':
 				if (vector.elements.UTC) {
@@ -909,6 +931,7 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// biome-ignore format: too long!
 	readonly #scene = makeNumberVector('', 'SIMULATOR_SCENE', 'Scene', SIMULATION, 'rw', ['SCENE_SEED', 'Seed', CAMERA_SCENE_SEED, 0, 0xffffffff, 1, '%.0f'], ['STAR_DENSITY', 'Star Density', 0.0006, 0, 0.01, 0.0001, '%.6f'], ['SEEING', 'Seeing (px)', 1.2, 0, 20, 0.1, '%.2f'], ['HFD_MIN', 'HFD Min (px)', 1.2, 0.35, 10, 0.1, '%.2f'], ['HFD_MAX', 'HFD Max (px)', 3.6, 0.35, 20, 0.1, '%.2f'], ['FLUX_MIN', 'Flux Min', 0.002, 0, 10, 0.001, '%.4f'], ['FLUX_MAX', 'Flux Max', 0.85, 0, 100, 0.01, '%.4f'])
+	readonly #catalogSource = makeSwitchVector('', 'SIMULATOR_CATALOG_SOURCE', 'Catalog Source', SIMULATION, 'OneOfMany', 'rw', ['RANDOM', 'Random', true], ['VIZIER', 'VizieR', false])
 	// biome-ignore format: too long!
 	readonly #noiseQuality = makeSwitchVector('', 'SIMULATOR_NOISE_QUALITY', 'Noise Quality', SIMULATION, 'OneOfMany', 'rw', ['FAST', 'Fast', false], ['BALANCED', 'Balanced', true], ['HIGH_REALISM', 'High Realism', false])
 	// biome-ignore format: too long!
@@ -957,6 +980,7 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#guideWE,
 		this.#image,
 		this.#scene,
+		this.#catalogSource,
 		this.#noiseQuality,
 		this.#noiseFeatures,
 		this.#noiseExposure,
@@ -980,11 +1004,17 @@ export class CameraSimulator extends DeviceSimulator {
 	#exposureDuration = 0
 	#targetTemperature = CAMERA_DEFAULT_TARGET_TEMPERATURE
 	#catalog?: readonly AstronomicalImageStar[]
+	#catalogKey = ''
 	#catalogDirty = true
 	#pulseNorthSouthUntil = 0
 	#pulseWestEastUntil = 0
 
-	constructor(name: string, client: ClientSimulator, handler: IndiClientHandler = client.handler) {
+	constructor(
+		name: string,
+		client: ClientSimulator,
+		readonly mountProvider: DeviceProvider<Mount>,
+		handler: IndiClientHandler = client.handler,
+	) {
 		super(name, client, handler, DeviceInterfaceType.CCD | DeviceInterfaceType.GUIDER)
 
 		for (const property of this.#properties) {
@@ -992,6 +1022,15 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 
 		this.driverInfo.elements.DRIVER_EXEC.value = 'camera.simulator'
+	}
+
+	get activeMount() {
+		return this.mountProvider.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value, 'MOUNT')
+	}
+
+	// Returns the selected catalog backend for light-frame stars.
+	get catalogSource() {
+		return findOnSwitch(this.#catalogSource)[0] as CatalogSource
 	}
 
 	get frameType(): FrameType {
@@ -1006,7 +1045,13 @@ export class CameraSimulator extends DeviceSimulator {
 		return this.#guideNS.state === 'Busy'
 	}
 
-	sendText(vector: NewTextVector) {}
+	sendText(vector: NewTextVector) {
+		super.sendText(vector)
+
+		if (vector.name === 'ACTIVE_DEVICES') {
+			this.#catalogDirty = true
+		}
+	}
 
 	sendNumber(vector: NewNumberVector) {
 		switch (vector.name) {
@@ -1095,6 +1140,12 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'CCD_FRAME_TYPE':
 				if (applyExclusiveSwitchValues(this.#frameType, vector.elements)) this.notify(this.#frameType)
+				return
+			case 'SIMULATOR_CATALOG_SOURCE':
+				if (applyExclusiveSwitchValues(this.#catalogSource, vector.elements)) {
+					this.#catalogDirty = true
+					this.notify(this.#catalogSource)
+				}
 				return
 			case 'SIMULATOR_NOISE_QUALITY':
 				if (applyExclusiveSwitchValues(this.#noiseQuality, vector.elements)) this.notify(this.#noiseQuality)
@@ -1311,13 +1362,13 @@ export class CameraSimulator extends DeviceSimulator {
 		this.notify(this.#exposure)
 
 		try {
-			const blob = await this.renderImage(exposureTime)
 			this.#image.state = 'Ok'
+			this.#exposure.state = 'Ok'
+			const blob = await this.renderImage(exposureTime)
 			this.#image.elements.CCD1.size = blob.byteLength.toFixed(0)
 			this.#image.elements.CCD1.format = this.transferFormat === 'XISF' ? '.xisf' : '.fits'
 			this.#image.elements.CCD1.value = blob
 			handleSetBlobVector(this.client, this.handler, this.#image)
-			this.#exposure.state = 'Ok'
 		} catch {
 			this.#image.state = 'Alert'
 			this.#image.elements.CCD1.size = '0'
@@ -1338,7 +1389,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const noiseConfig = this.noiseConfig(frameType, exposureTime)
 
 		if (frameType === 'LIGHT') {
-			const stars = this.collectFrameStars(exposureTime)
+			const stars = await this.collectFrameStars(exposureTime)
 			generateStarImage(raw, width, height, channels, stars, this.seeing, noiseConfig, this.plotOptions())
 		} else {
 			if (frameType === 'FLAT') fillFlatField(raw, width, height, channels)
@@ -1527,8 +1578,8 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Projects the master catalog into the current subframe and binning.
-	private collectFrameStars(exposureTime: number): AstronomicalImageStar[] {
-		const stars = this.ensureCatalog()
+	private async collectFrameStars(exposureTime: number) {
+		const stars = await this.ensureCatalog()
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
 		const frameWidth = this.#frame.elements.WIDTH.value
@@ -1543,6 +1594,7 @@ export class CameraSimulator extends DeviceSimulator {
 		for (let i = 0; i < stars.length; i++) {
 			const star = stars[i]
 			if (star.x < frameX || star.x >= frameX + frameWidth || star.y < frameY || star.y >= frameY + frameHeight) continue
+
 			projected.push({
 				x: (star.x - frameX) / binX,
 				y: (star.y - frameY) / binY,
@@ -1557,9 +1609,28 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Rebuilds the deterministic catalog only when scene parameters change.
-	private ensureCatalog(): readonly AstronomicalImageStar[] {
-		if (this.#catalog && !this.#catalogDirty) return this.#catalog
+	private async ensureCatalog() {
+		const key = this.catalogKey()
+		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
+		const stars = this.catalogSource === 'VIZIER' && this.activeMount !== undefined ? await this.vizierSource() : this.randomSource()
+		this.#catalog = stars
+		this.#catalogKey = key
+		this.#catalogDirty = false
+		return stars
+	}
+
+	// Builds a cache key for the currently selected catalog source.
+	private catalogKey() {
+		if (this.catalogSource === 'RANDOM') return `RANDOM:${this.#scene.elements.SCENE_SEED.value}`
+
+		const mount = this.activeMount
+		if (!mount) return 'VIZIER:'
+		else return `VIZIER:${mount.name}:${toHour(normalizeAngle(mount.equatorialCoordinate.rightAscension)).toFixed(6)}:${toDeg(mount.equatorialCoordinate.declination).toFixed(6)}`
+	}
+
+	// Generates a deterministic in-memory star field.
+	private randomSource() {
 		const random = mulberry32(this.#scene.elements.SCENE_SEED.value >>> 0)
 		const width = this.sensorWidth
 		const height = this.sensorHeight
@@ -1584,8 +1655,80 @@ export class CameraSimulator extends DeviceSimulator {
 			}
 		}
 
-		this.#catalog = stars
-		this.#catalogDirty = false
+		return stars
+	}
+
+	// Queries VizieR around the active mount and projects the stars onto the sensor.
+	private async vizierSource() {
+		const mount = this.activeMount!
+		const now = timeNow(true)
+		const sensorWidth = this.sensorWidth
+		const sensorHeight = this.sensorHeight
+		const halfWidth = sensorWidth * 0.5
+		const halfHeight = sensorHeight * 0.5
+		const queryRadius = Math.hypot(sensorWidth, sensorHeight) * CAMERA_CATALOG_PIXEL_SCALE * 0.5
+		const queryLimit = Math.max(CAMERA_VIZIER_MIN_STARS, Math.min(CAMERA_VIZIER_MAX_STARS, Math.trunc(sensorWidth * sensorHeight * this.#scene.elements.STAR_DENSITY.value * 2)))
+		const [centerRightAscension, centerDeclination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination, now)
+		let table: CsvRow[] | undefined
+
+		try {
+			table = await vizierQuery(makeVizierCatalogQuery(centerRightAscension, centerDeclination, queryRadius, queryLimit))
+		} catch (e) {
+			console.error('failed to fetch stars from vizier', e)
+			return []
+		}
+
+		if (!table || table.length === 0) return []
+
+		const stars: (AstronomicalImageStar & { brightness: number })[] = []
+		let brightest = 0
+
+		for (let i = 0; i < table.length; i++) {
+			const row = table[i]
+			const rightAscension = deg(+row[0])
+			const declination = deg(+row[1])
+			const magnitude = +row[2]
+
+			if (!Number.isFinite(rightAscension) || !Number.isFinite(declination) || !Number.isFinite(magnitude)) continue
+
+			const brightness = magnitudeToBrightness(magnitude)
+
+			if (brightness > brightest) {
+				brightest = brightness
+			} else if (brightness <= 0) {
+				continue
+			}
+
+			const point = gnomonicProject(rightAscension, declination, centerRightAscension, centerDeclination)
+
+			if (point === false) continue
+
+			const x = halfWidth - point.x / CAMERA_CATALOG_PIXEL_SCALE
+			const y = halfHeight - point.y / CAMERA_CATALOG_PIXEL_SCALE
+			if (x < 0 || x >= sensorWidth || y < 0 || y >= sensorHeight) continue
+
+			stars.push({ x, y, brightness, colorIndex: clamp(+row[3] || 0.65, -0.25, 1.9), hfd: 0, snr: 0, flux: 0 })
+		}
+
+		if (!stars.length || brightest <= 0) return []
+
+		const minHfd = this.#scene.elements.HFD_MIN.value
+		const maxHfd = Math.max(minHfd, this.#scene.elements.HFD_MAX.value)
+		const minFlux = this.#scene.elements.FLUX_MIN.value
+		const maxFlux = Math.max(minFlux, this.#scene.elements.FLUX_MAX.value)
+		const invBrightest = 1 / brightest
+		const random = mulberry32(this.#scene.elements.SCENE_SEED.value >>> 0)
+
+		for (let i = 0; i < stars.length; i++) {
+			const star = stars[i] as { brightness: number; flux: number; hfd: number; snr: number }
+			const normalized = clamp(star.brightness * invBrightest, 0, 1)
+			const hfdSpread = random()
+
+			star.flux = minFlux + (maxFlux - minFlux) * normalized
+			star.hfd = minHfd + (maxHfd - minHfd) * clamp((1 - normalized) * (0.35 + hfdSpread * 0.65), 0, 1)
+			star.snr = 12 + normalized * 180
+		}
+
 		return stars
 	}
 
@@ -1689,6 +1832,23 @@ function sendDefinition(client: ClientSimulator, handler: IndiClientHandler, pro
 	// Don't handle DefBlobVector
 }
 
+function applyTextVectorValues(vector: DefTextVector, elements: Record<string, string>) {
+	let updated = false
+
+	for (const key in elements) {
+		const element = vector.elements[key]
+		if (!element) continue
+		const next = elements[key]
+
+		if (element.value !== next) {
+			element.value = next
+			updated = true
+		}
+	}
+
+	return updated
+}
+
 function applyNumberVectorValues(vector: DefNumberVector, elements: Record<string, number>) {
 	let updated = false
 
@@ -1729,6 +1889,41 @@ function applyMultiSwitchValues(vector: DefSwitchVector, elements: Record<string
 	}
 
 	return updated
+}
+
+// Builds the Gaia DR3 cone search used by the VizieR-backed camera catalog.
+function makeVizierCatalogQuery(rightAscension: Angle, declination: Angle, radius: Angle, limit: number) {
+	return `
+		SELECT TOP ${Math.trunc(limit)}
+			RA_ICRS AS ra,
+			DE_ICRS AS dec,
+			Gmag AS mag,
+			"BP-RP" AS ci
+		FROM "I/355/gaiadr3"
+		WHERE Gmag IS NOT NULL
+			AND 1 = CONTAINS(
+				POINT('ICRS', RA_ICRS, DE_ICRS),
+				CIRCLE('ICRS', ${toDeg(normalizeAngle(rightAscension))}, ${toDeg(declination)}, ${toDeg(radius)})
+			)
+		ORDER BY Gmag ASC
+	`
+}
+
+// Converts visual magnitude into a relative brightness scale.
+function magnitudeToBrightness(magnitude: number) {
+	return 10 ** (-0.4 * magnitude)
+}
+
+// Hashes a short string into a 32-bit integer.
+function hashString(value: string) {
+	let hash = 0x811c9dc5
+
+	for (let i = 0; i < value.length; i++) {
+		hash ^= value.charCodeAt(i)
+		hash = Math.imul(hash, 0x01000193)
+	}
+
+	return hash >>> 0
 }
 
 function fillFlatField(raw: ImageRawType, width: number, height: number, channels: 1 | 3) {

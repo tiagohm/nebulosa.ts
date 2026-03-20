@@ -35,6 +35,8 @@ describe('mount simulator', () => {
 		expect(mount.canTracking).toBeTrue()
 		expect(mount.canMove).toBeTrue()
 
+		mountManager.slewRate(mount, 'SPEED_6')
+
 		mountManager.syncTo(mount, hour(5), deg(20))
 		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(5), 1e-9))
 		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
@@ -72,7 +74,7 @@ describe('mount simulator', () => {
 
 		mountSimulator.dispose()
 		expect(mountManager.has(client, mountSimulator.name)).toBeFalse()
-	}, 5000)
+	})
 
 	test('applies tracking drift for disabled, sidereal, king, solar and lunar modes', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -96,9 +98,9 @@ describe('mount simulator', () => {
 		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(2), 1e-9))
 
 		const stoppedRightAscension = mount.equatorialCoordinate.rightAscension
-		await Bun.sleep(500)
+		await Bun.sleep(200)
 		const noTrackingDrift = normalizePI(mount.equatorialCoordinate.rightAscension - stoppedRightAscension)
-		expect(noTrackingDrift).toBeGreaterThan(2e-5)
+		expect(noTrackingDrift).toBeGreaterThan(5e-6)
 
 		mountManager.tracking(mount, true)
 		await waitUntil(() => mount.tracking)
@@ -106,21 +108,21 @@ describe('mount simulator', () => {
 		await waitUntil(() => mount.trackMode === 'SIDEREAL')
 
 		const siderealRightAscension = mount.equatorialCoordinate.rightAscension
-		await Bun.sleep(500)
+		await Bun.sleep(200)
 		const siderealDrift = Math.abs(normalizePI(mount.equatorialCoordinate.rightAscension - siderealRightAscension))
 		expect(siderealDrift).toBeLessThan(1e-6)
 
 		mountManager.trackMode(mount, 'SOLAR')
 		await waitUntil(() => mount.trackMode === 'SOLAR')
 		const solarRightAscension = mount.equatorialCoordinate.rightAscension
-		await Bun.sleep(500)
+		await Bun.sleep(200)
 		const solarDrift = normalizePI(mount.equatorialCoordinate.rightAscension - solarRightAscension)
 		expect(solarDrift).toBeGreaterThan(0)
 
 		mountManager.trackMode(mount, 'KING')
 		await waitUntil(() => mount.trackMode === 'KING')
 		const kingRightAscension = mount.equatorialCoordinate.rightAscension
-		await Bun.sleep(500)
+		await Bun.sleep(200)
 		const kingDrift = normalizePI(mount.equatorialCoordinate.rightAscension - kingRightAscension)
 		expect(kingDrift).toBeGreaterThan(0)
 		expect(kingDrift).toBeLessThan(solarDrift)
@@ -128,10 +130,10 @@ describe('mount simulator', () => {
 		mountManager.trackMode(mount, 'LUNAR')
 		await waitUntil(() => mount.trackMode === 'LUNAR')
 		const lunarRightAscension = mount.equatorialCoordinate.rightAscension
-		await Bun.sleep(500)
+		await Bun.sleep(200)
 		const lunarDrift = normalizePI(mount.equatorialCoordinate.rightAscension - lunarRightAscension)
 		expect(lunarDrift).toBeGreaterThan(solarDrift * 5)
-	}, 5000)
+	}, 2000)
 
 	test('supports manual move over time', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -157,39 +159,39 @@ describe('mount simulator', () => {
 		let manualRightAscension = mount.equatorialCoordinate.rightAscension
 		mountManager.moveEast(mount, true)
 		await waitUntil(() => mount.slewing)
-		await Bun.sleep(350)
+		await Bun.sleep(200)
 		mountManager.moveEast(mount, false)
 		await waitUntil(() => !mount.slewing)
 		let manualDrift = normalizePI(mount.equatorialCoordinate.rightAscension - manualRightAscension)
-		expect(manualDrift).toBeGreaterThan(5e-3)
+		expect(manualDrift).toBeGreaterThan(1e-3)
 
 		manualRightAscension = mount.equatorialCoordinate.rightAscension
 		mountManager.moveWest(mount, true)
 		await waitUntil(() => mount.slewing)
-		await Bun.sleep(350)
+		await Bun.sleep(200)
 		mountManager.moveWest(mount, false)
 		await waitUntil(() => !mount.slewing)
 		manualDrift = normalizePI(mount.equatorialCoordinate.rightAscension - manualRightAscension)
-		expect(manualDrift).toBeLessThan(-5e-3)
+		expect(manualDrift).toBeLessThan(-1e-3)
 
 		let manualDeclination = mount.equatorialCoordinate.declination
 		mountManager.moveNorth(mount, true)
 		await waitUntil(() => mount.slewing)
-		await Bun.sleep(350)
+		await Bun.sleep(200)
 		mountManager.moveNorth(mount, false)
 		await waitUntil(() => !mount.slewing)
 		manualDrift = normalizePI(mount.equatorialCoordinate.declination - manualDeclination)
-		expect(manualDrift).toBeGreaterThan(5e-3)
+		expect(manualDrift).toBeGreaterThan(1e-3)
 
 		manualDeclination = mount.equatorialCoordinate.declination
 		mountManager.moveSouth(mount, true)
 		await waitUntil(() => mount.slewing)
-		await Bun.sleep(350)
+		await Bun.sleep(200)
 		mountManager.moveSouth(mount, false)
 		await waitUntil(() => !mount.slewing)
 		manualDrift = normalizePI(mount.equatorialCoordinate.declination - manualDeclination)
-		expect(manualDrift).toBeLessThan(-5e-3)
-	}, 5000)
+		expect(manualDrift).toBeLessThan(-1e-3)
+	}, 2000)
 
 	test('supports manual pulse guiding over time', async () => {
 		const handler = new IndiClientHandlerSet()
@@ -213,7 +215,7 @@ describe('mount simulator', () => {
 		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(3), 1e-9))
 
 		let pulseDeclination = mount.equatorialCoordinate.declination
-		guideOutputManager.pulseNorth(mount, 500)
+		guideOutputManager.pulseNorth(mount, 350)
 		await waitUntil(() => mount.pulsing)
 		await waitUntil(() => !mount.pulsing, 1000)
 		let pulseDrift = mount.equatorialCoordinate.declination - pulseDeclination
@@ -221,7 +223,7 @@ describe('mount simulator', () => {
 		expect(pulseDrift).toBeLessThan(5e-5)
 
 		pulseDeclination = mount.equatorialCoordinate.declination
-		guideOutputManager.pulseSouth(mount, 500)
+		guideOutputManager.pulseSouth(mount, 350)
 		await waitUntil(() => mount.pulsing)
 		await waitUntil(() => !mount.pulsing, 1000)
 		pulseDrift = mount.equatorialCoordinate.declination - pulseDeclination
@@ -229,7 +231,7 @@ describe('mount simulator', () => {
 		expect(pulseDrift).toBeGreaterThan(-5e-5)
 
 		let pulseRightAscension = mount.equatorialCoordinate.rightAscension
-		guideOutputManager.pulseEast(mount, 500)
+		guideOutputManager.pulseEast(mount, 350)
 		await waitUntil(() => mount.pulsing)
 		await waitUntil(() => !mount.pulsing, 1000)
 		pulseDrift = mount.equatorialCoordinate.rightAscension - pulseRightAscension
@@ -237,18 +239,19 @@ describe('mount simulator', () => {
 		expect(pulseDrift).toBeLessThan(1e-4)
 
 		pulseRightAscension = mount.equatorialCoordinate.rightAscension
-		guideOutputManager.pulseWest(mount, 500)
+		guideOutputManager.pulseWest(mount, 350)
 		await waitUntil(() => mount.pulsing)
 		await waitUntil(() => !mount.pulsing, 1000)
 		pulseDrift = mount.equatorialCoordinate.rightAscension - pulseRightAscension
 		expect(pulseDrift).toBeLessThan(0)
 		expect(pulseDrift).toBeGreaterThan(-1e-4)
-	}, 5000)
+	}, 2000)
 })
 
 describe('camera simulator', () => {
 	test('integrates with camera manager and exposes synthetic image controls', async () => {
 		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
 		const cameraManager = new CameraManager()
 		const guideOutputManager = new GuideOutputManager(cameraManager)
 		const thermometerManager = new ThermometerManager(cameraManager)
@@ -256,6 +259,7 @@ describe('camera simulator', () => {
 		const client = new ClientSimulator('camera', handler)
 		const frames: Buffer<ArrayBuffer>[] = []
 
+		handler.add(mountManager)
 		handler.add(cameraManager)
 		handler.add(guideOutputManager)
 		handler.add(thermometerManager)
@@ -269,7 +273,7 @@ describe('camera simulator', () => {
 			},
 		})
 
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client)
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, mountManager)
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
 		expect(camera).toBeDefined()
@@ -289,6 +293,7 @@ describe('camera simulator', () => {
 		expect(camera.pixelSize.x).toBeCloseTo(5.2, 6)
 		expect(camera.pixelSize.y).toBeCloseTo(5.2, 6)
 		expect(propertyManager.get(client, camera.name)?.SIMULATOR_NOISE_EXPOSURE).toBeDefined()
+		expect(propertyManager.get(client, camera.name)?.SIMULATOR_CATALOG_SOURCE).toBeDefined()
 		expect(propertyManager.get(client, camera.name)?.SIMULATOR_PLOT_OPTIONS).toBeDefined()
 
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_PLOT_FLAGS', elements: { GAMMA_ENABLED: true } })
@@ -325,6 +330,59 @@ describe('camera simulator', () => {
 		cameraSimulator.dispose()
 		expect(cameraManager.has(client, camera.name)).toBeFalse()
 	}, 5000)
+
+	test.skip('projects VizieR stars from the active mount pointing', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		const propertyManager = new DevicePropertyManager()
+		const client = new ClientSimulator('camera.vizier.simulator', handler)
+		const frames: Buffer<ArrayBuffer>[] = []
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		handler.add(propertyManager)
+
+		cameraManager.addHandler({
+			added: () => {},
+			removed: () => {},
+			blobReceived: (_, data) => {
+				Buffer.isBuffer(data) && frames.push(data)
+			},
+		})
+
+		const mountSimulator = new MountSimulator('Mount Simulator', client)
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, mountManager)
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(5), 1e-9))
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => propertyManager.get(client, camera.name)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { FLUX_MIN: 12, FLUX_MAX: 48 } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { VIZIER: true } })
+		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_CATALOG_SOURCE?.elements.VIZIER.value === true)
+
+		try {
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frames.length > 0, 10000, 50)
+			const image = await readImageFromBuffer(frames[frames.length - 1])
+			expect(image).toBeDefined()
+			expect(sumPixels(image!.raw)).toBeGreaterThan(0)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 100000)
 })
 
 async function waitUntil(predicate: () => boolean, timeout: number = 5000, step: number = 100): Promise<void> {

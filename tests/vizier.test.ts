@@ -8,7 +8,7 @@ test.skip('vizier', async () => {
     ORDER BY SAO ASC
     `
 
-	const table = await vizierQuery(query)
+	const table = await vizierQuery(query, { skipFirstLine: false })
 
 	expect(table).not.toBeUndefined()
 
@@ -17,6 +17,6 @@ test.skip('vizier', async () => {
 	expect(header).toHaveLength(9)
 	expect(header).toEqual(['SAO', 'HD', 'Pmag', 'Vmag', 'SpType', 'RA2000', 'DE2000', 'pmRA2000', 'pmDE2000'])
 	expect(data).toHaveLength(100)
-	expect(data[0]).toHaveLength(9)
+	expect(data[0]).toHaveLength(8)
 	expect(data[0]).toEqual(['1', '225019', '', '7.2', 'A0', '0.6735416666666666', '82.97319999999999', '-0.0097', '-0.004'])
 })

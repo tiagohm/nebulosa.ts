@@ -1,10 +1,10 @@
-import { readCsv, TSV_DELIMITER } from './csv'
+import { type ReadCsvOptions, readCsv, TSV_DELIMITER } from './csv'
 
 export const VIZIER_URL = 'http://tapvizier.cds.unistra.fr/'
 
 const VIZIER_QUERY_PATH = 'TAPVizieR/tap/sync'
 
-export interface VizierQueryOptions extends Omit<RequestInit, 'method' | 'body'> {
+export interface VizierQueryOptions extends ReadCsvOptions, Omit<RequestInit, 'method' | 'body'> {
 	baseUrl?: string
 	timeout?: number
 }
@@ -28,5 +28,6 @@ export async function vizierQuery(query: string, { baseUrl, timeout = 60000, sig
 	const response = await fetch(uri, { method: 'POST', body, signal, ...options })
 	if (response.status >= 300) return undefined
 	const text = await response.text()
-	return readCsv(text, TSV_DELIMITER)
+	options.delimiter = TSV_DELIMITER
+	return readCsv(text, options)
 }
