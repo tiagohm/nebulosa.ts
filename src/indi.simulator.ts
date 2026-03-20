@@ -10,8 +10,8 @@ import { writeImageToFits, writeImageToXisf } from './image'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from './image.generator'
 import type { CfaPattern, Image, ImageRawType } from './image.types'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
-import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, type FrameType, type GuideDirection, type Mount, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
-import type { DeviceProvider } from './indi.manager'
+import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, type FrameType, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
+import type { FocuserManager, GuideOutputManager, MountManager } from './indi.manager'
 import { type DefNumberVector, type DefSwitchVector, type DefTextVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetVector, selectOnSwitch } from './indi.types'
 import { bufferSink } from './io'
 import { type GeographicCoordinate, localSiderealTime } from './location'
@@ -78,6 +78,12 @@ export type ReadoutMode = 'MONO' | 'RGB'
 type CatalogSource = 'RANDOM' | 'VIZIER'
 
 type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
+
+export interface DeviceManagers {
+	readonly mountManager?: MountManager
+	readonly guideOutputManager?: GuideOutputManager
+	readonly focuserManager?: FocuserManager
+}
 
 // Routes MountManager commands back into the simulator.
 export class ClientSimulator implements Client {
@@ -1738,7 +1744,7 @@ export class CameraSimulator extends DeviceSimulator {
 	readonly #noiseOutput = makeNumberVector('', 'SIMULATOR_NOISE_OUTPUT', 'Output', SIMULATION, 'rw', ['MAX_VALUE', 'Max Value', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output.maxValue, 1, 4294967295, 1, '%.0f'])
 	readonly #noiseClampMode = makeSwitchVector('', 'SIMULATOR_NOISE_CLAMP_MODE', 'Clamp Mode', SIMULATION, 'OneOfMany', 'rw', ['CLAMP', 'Clamp', true], ['NORMALIZE', 'Normalize', false], ['NONE', 'None', false])
 	// biome-ignore format: too long!
-	readonly #plotOptions = makeNumberVector('', 'SIMULATOR_STAR_PLOT_OPTIONS', 'Star Plot', SIMULATION, 'rw', ['BACKGROUND', 'Background', 0, 0, 10, 0.001, '%.4f'], ['SATURATION_LEVEL', 'Saturation Level', 1, 0, 10, 0.01, '%.3f'], ['FOCUS_STEP', 'Focus Step', 0, 0, 100000, 1, '%.0f'], ['BEST_FOCUS', 'Best Focus', 0, 0, 100000, 1, '%.0f'], ['PEAK_SCALE', 'Peak Scale', 1, 0.01, 20, 0.01, '%.3f'], ['ELLIPTICITY', 'Ellipticity', 0, 0, 0.8, 0.01, '%.3f'], ['THETA', 'Theta', 0, -TAU, TAU, 0.01, '%.3f'], ['SOFT_CORE', 'Soft Core', 0, 0, 10, 0.01, '%.3f'], ['BETA', 'Beta', 2.5, 1.05, 20, 0.01, '%.3f'], ['HALO_STRENGTH', 'Halo Strength', 0, 0, 5, 0.01, '%.3f'], ['HALO_SCALE', 'Halo Scale', 2.8, 1.1, 20, 0.01, '%.3f'], ['JITTER_X', 'Jitter X', 0, -5, 5, 0.01, '%.3f'], ['JITTER_Y', 'Jitter Y', 0, -5, 5, 0.01, '%.3f'], ['GAIN', 'Plot Gain', 1, 0.01, 20, 0.01, '%.3f'], ['GAMMA_COMPENSATION', 'Gamma Compensation', 2.2, 0.1, 10, 0.01, '%.3f'], ['ADDITIVE_NOISE_HINT', 'Additive Noise Hint', 0, 0, 20, 0.01, '%.3f'], ['MIN_PLOT_RADIUS', 'Min Radius', 2, 0, 50, 1, '%.0f'], ['MAX_PLOT_RADIUS', 'Max Radius', 24, 0, 100, 1, '%.0f'], ['CUTOFF_SIGMA', 'Cutoff Sigma', 4.25, 2.5, 10, 0.01, '%.3f'])
+	readonly #plotOptions = makeNumberVector('', 'SIMULATOR_STAR_PLOT_OPTIONS', 'Star Plot', SIMULATION, 'rw', ['BACKGROUND', 'Background', 0, 0, 10, 0.001, '%.4f'], ['SATURATION_LEVEL', 'Saturation Level', 1, 0, 10, 0.01, '%.3f'], ['FOCUS_STEP', 'Focus Step', 50000, 0, 100000, 1, '%.0f'], ['BEST_FOCUS', 'Best Focus', 50000, 0, 100000, 1, '%.0f'], ['PEAK_SCALE', 'Peak Scale', 1, 0.01, 20, 0.01, '%.3f'], ['ELLIPTICITY', 'Ellipticity', 0, 0, 0.8, 0.01, '%.3f'], ['THETA', 'Theta', 0, -TAU, TAU, 0.01, '%.3f'], ['SOFT_CORE', 'Soft Core', 0, 0, 10, 0.01, '%.3f'], ['BETA', 'Beta', 2.5, 1.05, 20, 0.01, '%.3f'], ['HALO_STRENGTH', 'Halo Strength', 0, 0, 5, 0.01, '%.3f'], ['HALO_SCALE', 'Halo Scale', 2.8, 1.1, 20, 0.01, '%.3f'], ['JITTER_X', 'Jitter X', 0, -5, 5, 0.01, '%.3f'], ['JITTER_Y', 'Jitter Y', 0, -5, 5, 0.01, '%.3f'], ['GAIN', 'Plot Gain', 1, 0.01, 20, 0.01, '%.3f'], ['GAMMA_COMPENSATION', 'Gamma Compensation', 2.2, 0.1, 10, 0.01, '%.3f'], ['ADDITIVE_NOISE_HINT', 'Additive Noise Hint', 0, 0, 20, 0.01, '%.3f'], ['MIN_PLOT_RADIUS', 'Min Radius', 2, 0, 50, 1, '%.0f'], ['MAX_PLOT_RADIUS', 'Max Radius', 24, 0, 100, 1, '%.0f'], ['CUTOFF_SIGMA', 'Cutoff Sigma', 4.25, 2.5, 10, 0.01, '%.3f'])
 	readonly #plotFlags = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_FLAGS', 'Star Plot Flags', SIMULATION, 'AnyOfMany', 'rw', ['SATURATION_ENABLED', 'Saturation', false], ['GAMMA_ENABLED', 'Gamma', false])
 	readonly #plotPsfModel = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_PSF_MODEL', 'Star PSF Model', SIMULATION, 'OneOfMany', 'rw', ['GAUSSIAN', 'Gaussian', true], ['MOFFAT', 'Moffat', false])
 
@@ -1790,10 +1796,14 @@ export class CameraSimulator extends DeviceSimulator {
 	#pulseNorthSouthUntil = 0
 	#pulseWestEastUntil = 0
 
+	readonly #mountManager?: MountManager
+	readonly #focuserManager?: FocuserManager
+	readonly #guideOutputManager?: GuideOutputManager
+
 	constructor(
 		name: string,
 		client: ClientSimulator,
-		readonly mountProvider: DeviceProvider<Mount>,
+		readonly managers?: DeviceManagers,
 		handler: IndiClientHandler = client.handler,
 	) {
 		super(name, client, handler, DeviceInterfaceType.CCD | DeviceInterfaceType.GUIDER)
@@ -1803,10 +1813,20 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 
 		this.driverInfo.elements.DRIVER_EXEC.value = 'camera.simulator'
+
+		this.#mountManager = managers?.mountManager
+		this.#focuserManager = managers?.focuserManager
+		this.#guideOutputManager = managers?.guideOutputManager
 	}
 
 	get activeMount() {
-		return this.mountProvider.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value, 'MOUNT')
+		const mount = this.#mountManager?.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value)
+		return mount?.connected ? mount : undefined
+	}
+
+	get activeFocuser() {
+		const focuser = this.#focuserManager?.get(this.client, this.snoopDevices.elements.ACTIVE_FOCUSER.value)
+		return focuser?.connected ? focuser : undefined
 	}
 
 	// Returns the selected catalog backend for light-frame stars.
@@ -2081,6 +2101,13 @@ export class CameraSimulator extends DeviceSimulator {
 	// Starts a pulse-guiding interval on the requested axis.
 	pulse(direction: GuideDirection, duration: number) {
 		if (!this.isConnected || duration <= 0) return
+
+		const mount = this.activeMount
+
+		if (mount !== undefined) {
+			this.#guideOutputManager?.pulse(mount, direction, duration)
+		}
+
 		const until = Date.now() + Math.trunc(duration)
 
 		if (direction === 'NORTH' || direction === 'SOUTH') this.#pulseNorthSouthUntil = until
@@ -2212,7 +2239,7 @@ export class CameraSimulator extends DeviceSimulator {
 	// Builds a compact astronomical image header for synthetic output.
 	private imageHeader(width: number, height: number, channels: 1 | 3, exposureTime: number): FitsHeader {
 		const now = Date.now()
-		const mount = this.activeMount?.connected ? this.activeMount : undefined
+		const mount = this.activeMount
 		const start = now - Math.trunc(exposureTime * 1000)
 		let rightAscension: Angle | undefined
 		let declination: Angle | undefined
@@ -2357,8 +2384,9 @@ export class CameraSimulator extends DeviceSimulator {
 		return {
 			background: this.#plotOptions.elements.BACKGROUND.value,
 			saturationLevel: this.#plotFlags.elements.SATURATION_ENABLED.value ? this.#plotOptions.elements.SATURATION_LEVEL.value : undefined,
-			focusStep: this.#plotOptions.elements.FOCUS_STEP.value,
+			focusStep: this.activeFocuser?.position.value ?? this.#plotOptions.elements.FOCUS_STEP.value,
 			bestFocus: this.#plotOptions.elements.BEST_FOCUS.value,
+			maxFocusStep: this.activeFocuser?.position.max || undefined,
 			peakScale: this.#plotOptions.elements.PEAK_SCALE.value,
 			ellipticity: this.#plotOptions.elements.ELLIPTICITY.value,
 			theta: this.#plotOptions.elements.THETA.value,

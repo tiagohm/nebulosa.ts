@@ -3,10 +3,32 @@ import { deg, formatDEC, formatRA, hour, normalizePI } from '../src/angle'
 import { readImageFromBuffer } from '../src/image'
 import type { ImageRawType } from '../src/image.types'
 import { IndiClientHandlerSet } from '../src/indi.client'
-import { CameraManager, CoverManager, DevicePropertyManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import type { Camera, GuideOutput } from '../src/indi.device'
+import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import { CameraSimulator, ClientSimulator, DustCapSimulator, FilterWheelSimulator, FocuserSimulator, LightBoxSimulator, MountSimulator, RotatorSimulator } from '../src/indi.simulator'
+import type { PropertyState } from '../src/indi.types'
 
 const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+
+class CameraFrameReceiver implements DeviceHandler<Camera> {
+	private readonly frames: Buffer<ArrayBuffer>[] = []
+
+	added(device: Camera) {}
+	updated(device: Camera, property: keyof Camera & string, state?: PropertyState) {}
+	removed(device: Camera) {}
+
+	blobReceived(device: Camera, data: string | Buffer<ArrayBuffer>) {
+		Buffer.isBuffer(data) && this.frames.push(data)
+	}
+
+	get length() {
+		return this.frames.length
+	}
+
+	get lastFrame() {
+		return this.frames[this.frames.length - 1]
+	}
+}
 
 describe.skipIf(SKIP)('mount simulator', () => {
 	test('integrates with mount manager for sync, goto, home and park', async () => {
@@ -20,7 +42,6 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		handler.add(propertyManager)
 
 		const client = new ClientSimulator('mount', handler)
-
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		const mount = mountManager.get(client, mountSimulator.name)!
@@ -89,7 +110,6 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		handler.add(propertyManager)
 
 		const client = new ClientSimulator('mount', handler)
-
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		const mount = mountManager.get(client, mountSimulator.name)!
@@ -148,7 +168,6 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		handler.add(propertyManager)
 
 		const client = new ClientSimulator('mount', handler)
-
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		const mount = mountManager.get(client, mountSimulator.name)!
@@ -206,7 +225,6 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		handler.add(propertyManager)
 
 		const client = new ClientSimulator('mount', handler)
-
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		const mount = mountManager.get(client, mountSimulator.name)!
@@ -259,7 +277,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const thermometerManager = new ThermometerManager(cameraManager)
 		const propertyManager = new DevicePropertyManager()
 		const client = new ClientSimulator('camera', handler)
-		const frames: Buffer<ArrayBuffer>[] = []
+		const frameReceiver = new CameraFrameReceiver()
 
 		handler.add(mountManager)
 		handler.add(cameraManager)
@@ -267,15 +285,9 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		handler.add(thermometerManager)
 		handler.add(propertyManager)
 
-		cameraManager.addHandler({
-			added: () => {},
-			removed: () => {},
-			blobReceived: (_, data) => {
-				Buffer.isBuffer(data) && frames.push(data)
-			},
-		})
+		cameraManager.addHandler(frameReceiver)
 
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, mountManager)
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
 		expect(camera).toBeDefined()
@@ -312,10 +324,10 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		cameraManager.startExposure(camera, 0.05)
 		await waitUntil(() => camera.exposuring)
-		await waitUntil(() => frames.length > 0, 10000, 50)
+		await waitUntil(() => frameReceiver.length > 0, 10000, 50)
 		await waitUntil(() => !camera.exposuring, 10000, 50)
 
-		const image = await readImageFromBuffer(frames[frames.length - 1])
+		const image = await readImageFromBuffer(frameReceiver.lastFrame)
 
 		expect(image).toBeDefined()
 		expect(image!.metadata.width).toBe(80)
@@ -339,22 +351,16 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const cameraManager = new CameraManager()
 		const propertyManager = new DevicePropertyManager()
 		const client = new ClientSimulator('camera.header.simulator', handler)
-		const frames: Buffer<ArrayBuffer>[] = []
+		const frameReceiver = new CameraFrameReceiver()
 
 		handler.add(mountManager)
 		handler.add(cameraManager)
 		handler.add(propertyManager)
 
-		cameraManager.addHandler({
-			added: () => {},
-			removed: () => {},
-			blobReceived: (_, data) => {
-				Buffer.isBuffer(data) && frames.push(data)
-			},
-		})
+		cameraManager.addHandler(frameReceiver)
 
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, mountManager)
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
 		const mount = mountManager.get(client, mountSimulator.name)!
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
@@ -374,8 +380,8 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		await waitUntil(() => propertyManager.get(client, camera.name)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
 
 		cameraManager.startExposure(camera, 0.05)
-		await waitUntil(() => frames.length > 0, 5000, 50)
-		const image = await readImageFromBuffer(frames[frames.length - 1])
+		await waitUntil(() => frameReceiver.length > 0, 5000, 50)
+		const image = await readImageFromBuffer(frameReceiver.lastFrame)
 		const header = image!.header
 
 		expect(image).toBeDefined()
@@ -400,21 +406,15 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const cameraManager = new CameraManager()
 		const propertyManager = new DevicePropertyManager()
 		const client = new ClientSimulator('camera.flat.simulator', handler)
-		const frames: Buffer<ArrayBuffer>[] = []
+		const frameReceiver = new CameraFrameReceiver()
 
 		handler.add(mountManager)
 		handler.add(cameraManager)
 		handler.add(propertyManager)
 
-		cameraManager.addHandler({
-			added: () => {},
-			removed: () => {},
-			blobReceived: (_, data) => {
-				Buffer.isBuffer(data) && frames.push(data)
-			},
-		})
+		cameraManager.addHandler(frameReceiver)
 
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, mountManager)
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
 		cameraManager.connect(camera)
@@ -458,12 +458,12 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === 1)
 
 		cameraManager.startExposure(camera, 0.1)
-		await waitUntil(() => frames.length > 0, 5000, 50)
-		const shortFlat = await readImageFromBuffer(frames[frames.length - 1])
+		await waitUntil(() => frameReceiver.length > 0, 5000, 50)
+		const shortFlat = await readImageFromBuffer(frameReceiver.lastFrame)
 
 		cameraManager.startExposure(camera, 0.2)
-		await waitUntil(() => frames.length > 1, 5000, 50)
-		const longFlat = await readImageFromBuffer(frames[frames.length - 1])
+		await waitUntil(() => frameReceiver.length > 1, 5000, 50)
+		const longFlat = await readImageFromBuffer(frameReceiver.lastFrame)
 
 		expect(shortFlat).toBeDefined()
 		expect(longFlat).toBeDefined()
@@ -479,22 +479,16 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const cameraManager = new CameraManager()
 		const propertyManager = new DevicePropertyManager()
 		const client = new ClientSimulator('camera.vizier.simulator', handler)
-		const frames: Buffer<ArrayBuffer>[] = []
+		const frameReceiver = new CameraFrameReceiver()
 
 		handler.add(mountManager)
 		handler.add(cameraManager)
 		handler.add(propertyManager)
 
-		cameraManager.addHandler({
-			added: () => {},
-			removed: () => {},
-			blobReceived: (_, data) => {
-				Buffer.isBuffer(data) && frames.push(data)
-			},
-		})
+		cameraManager.addHandler(frameReceiver)
 
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, mountManager)
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
 		const mount = mountManager.get(client, mountSimulator.name)!
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
@@ -516,15 +510,49 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		try {
 			cameraSimulator.startExposure(0.05)
-			await waitUntil(() => frames.length > 0, 10000, 50)
-			const image = await readImageFromBuffer(frames[frames.length - 1])
+			await waitUntil(() => frameReceiver.length > 0, 10000, 50)
+			const image = await readImageFromBuffer(frameReceiver.lastFrame)
 			expect(image).toBeDefined()
 			expect(sumPixels(image!.raw)).toBeGreaterThan(0)
 		} finally {
 			cameraSimulator.dispose()
 			mountSimulator.dispose()
 		}
-	}, 100000)
+	}, 5000)
+
+	test('camera sends guiding pulse to mount', async () => {
+		const handler = new IndiClientHandlerSet()
+		const cameraManager = new CameraManager()
+		const mountManager = new MountManager()
+		const guideOutputProvider: DeviceProvider<GuideOutput> = { get: (client, name) => mountManager.get(client, name) ?? cameraManager.get(client, name) }
+		const guideOutputManager = new GuideOutputManager(guideOutputProvider)
+
+		handler.add(cameraManager)
+		handler.add(mountManager)
+		handler.add(guideOutputManager)
+
+		const client = new ClientSimulator('mount', handler)
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, guideOutputManager })
+		const mountSimulator = new MountSimulator('Mount Simulator', client)
+
+		const mount = mountManager.get(client, mountSimulator.name)!
+		mountManager.connect(mount)
+		await waitUntil(() => mount.connected)
+		expect(mount.canPulseGuide).toBeTrue()
+
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+		cameraManager.connect(camera)
+		await waitUntil(() => camera.connected)
+		expect(camera.canPulseGuide).toBeTrue()
+
+		cameraManager.snoop(camera, mount)
+
+		guideOutputManager.pulseNorth(camera, 350)
+		await waitUntil(() => camera.pulsing)
+		await waitUntil(() => mount.pulsing)
+		await waitUntil(() => !mount.pulsing, 1000)
+		await waitUntil(() => !camera.pulsing, 1000)
+	}, 1000)
 })
 
 describe.skipIf(SKIP)('accessory simulators', () => {
@@ -677,6 +705,53 @@ describe.skipIf(SKIP)('accessory simulators', () => {
 		expect(flatPanelManager.has(client, flatPanel.name)).toBeFalse()
 		expect(coverManager.has(client, cover.name)).toBeFalse()
 	}, 7000)
+
+	test('camera uses focuser position', async () => {
+		const handler = new IndiClientHandlerSet()
+		const cameraManager = new CameraManager()
+		const focuserManager = new FocuserManager()
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(cameraManager)
+		handler.add(focuserManager)
+
+		cameraManager.addHandler(frameReceiver)
+
+		const client = new ClientSimulator('mount', handler)
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { focuserManager })
+		const focuserSimulator = new FocuserSimulator('Focuser Simulator', client)
+
+		const focuser = focuserManager.get(client, focuserSimulator.name)!
+		focuserManager.connect(focuser)
+		await waitUntil(() => focuser.connected)
+		expect(focuser.position.max).toBe(100000)
+		expect(focuser.position.value).toBe(50000)
+
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+		cameraManager.connect(camera)
+		await waitUntil(() => camera.connected)
+
+		cameraManager.snoop(camera, undefined, focuser)
+
+		cameraSimulator.startExposure(0.05)
+		await waitUntil(() => frameReceiver.length > 0, 10000, 50)
+		const focusedImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		const focusedSumPixel = sumPixels(focusedImage!.raw)
+		expect(focusedSumPixel).toBeGreaterThan(0)
+
+		focuserManager.moveTo(focuser, 80000)
+		await waitUntil(() => focuser.moving)
+		await waitUntil(() => !focuser.moving, 3000)
+		expect(focuser.position.value).toBeCloseTo(80000, 6)
+
+		cameraSimulator.startExposure(0.05)
+		await waitUntil(() => frameReceiver.length > 1, 10000, 50)
+		const defocusedImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		const defocusedSumPixel = sumPixels(defocusedImage!.raw)
+		expect(defocusedSumPixel).toBeGreaterThan(0)
+
+		expect(defocusedSumPixel).toBeLessThan(focusedSumPixel)
+	}, 5000)
 })
 
 async function waitUntil(predicate: () => boolean, timeout: number = 5000, step: number = 100): Promise<void> {

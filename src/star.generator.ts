@@ -94,6 +94,7 @@ export function effectiveGaussianSigma(hfd: number, seeing: number = 0, snr: num
 
 // Maps focusStep and bestFocus into a normalized defocus amount in the [0, 1] range.
 export function focusDefocusAmount(focusStep?: number, bestFocus?: number, maxFocusStep: number = MAX_FOCUS_STEP) {
+	if (bestFocus === focusStep || bestFocus === 0) return 0
 	if (!Number.isFinite(focusStep) || !Number.isFinite(bestFocus)) return 0
 	if (!Number.isFinite(maxFocusStep) || maxFocusStep <= 0 || maxFocusStep > MAX_FOCUS_STEP) maxFocusStep = MAX_FOCUS_STEP
 	const focus = clamp(focusStep!, 0, maxFocusStep)
