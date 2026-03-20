@@ -22,6 +22,7 @@ import { mulberry32 } from './random'
 import type { PlotStarOptions } from './star.generator'
 import { formatTemporal, TIMEZONE } from './temporal'
 import { timeNow, timeUnix } from './time'
+import { angularSizeOfPixel } from './util'
 import { vizierQuery } from './vizier'
 
 const TICK_INTERVAL_MS = 100
@@ -40,7 +41,6 @@ const CAMERA_AMBIENT_TEMPERATURE = 18
 const CAMERA_DEFAULT_TARGET_TEMPERATURE = 0
 const CAMERA_SCENE_SEED = 0x1d0f3a57
 const CAMERA_BLOB_PADDING = 16384
-const CAMERA_CATALOG_PIXEL_SCALE = 2 * ASEC2RAD
 const CAMERA_VIZIER_MIN_STARS = 50
 const CAMERA_VIZIER_MAX_STARS = 1000
 const FOCUSER_MAX_POSITION = 100000
@@ -76,9 +76,11 @@ export type TransferFormat = 'FITS' | 'XISF'
 
 export type ReadoutMode = 'MONO' | 'RGB'
 
-type CatalogSource = 'RANDOM' | 'VIZIER'
+type CatalogSource = 'RANDOM' | 'VIZIER' | string
 
 type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
+
+export type CatalogProvider = (rightAscension: Angle, declination: Angle, radius: Angle) => readonly AstronomicalImageStar[]
 
 export interface DeviceManagers {
 	readonly mountManager?: MountManager
@@ -1750,7 +1752,7 @@ export class CameraSimulator extends DeviceSimulator {
 	readonly #plotOptions = makeNumberVector('', 'SIMULATOR_STAR_PLOT_OPTIONS', 'Star Plot', SIMULATION, 'rw', ['BACKGROUND', 'Background', 0, 0, 10, 0.001, '%.4f'], ['SATURATION_LEVEL', 'Saturation Level', 1, 0, 10, 0.01, '%.3f'], ['FOCUS_STEP', 'Focus Step', 50000, 0, 100000, 1, '%.0f'], ['BEST_FOCUS', 'Best Focus', 50000, 0, 100000, 1, '%.0f'], ['PEAK_SCALE', 'Peak Scale', 1, 0.01, 20, 0.01, '%.3f'], ['ELLIPTICITY', 'Ellipticity', 0, 0, 0.8, 0.01, '%.3f'], ['THETA', 'Theta', 0, -TAU, TAU, 0.01, '%.3f'], ['SOFT_CORE', 'Soft Core', 0, 0, 10, 0.01, '%.3f'], ['BETA', 'Beta', 2.5, 1.05, 20, 0.01, '%.3f'], ['HALO_STRENGTH', 'Halo Strength', 0, 0, 5, 0.01, '%.3f'], ['HALO_SCALE', 'Halo Scale', 2.8, 1.1, 20, 0.01, '%.3f'], ['JITTER_X', 'Jitter X', 0, -5, 5, 0.01, '%.3f'], ['JITTER_Y', 'Jitter Y', 0, -5, 5, 0.01, '%.3f'], ['GAIN', 'Plot Gain', 1, 0.01, 20, 0.01, '%.3f'], ['GAMMA_COMPENSATION', 'Gamma Compensation', 2.2, 0.1, 10, 0.01, '%.3f'], ['ADDITIVE_NOISE_HINT', 'Additive Noise Hint', 0, 0, 20, 0.01, '%.3f'], ['MIN_PLOT_RADIUS', 'Min Radius', 2, 0, 50, 1, '%.0f'], ['MAX_PLOT_RADIUS', 'Max Radius', 24, 0, 100, 1, '%.0f'], ['CUTOFF_SIGMA', 'Cutoff Sigma', 4.25, 2.5, 10, 0.01, '%.3f'])
 	readonly #plotFlags = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_FLAGS', 'Star Plot Flags', SIMULATION, 'AnyOfMany', 'rw', ['SATURATION_ENABLED', 'Saturation', false], ['GAMMA_ENABLED', 'Gamma', false])
 	readonly #plotPsfModel = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_PSF_MODEL', 'Star PSF Model', SIMULATION, 'OneOfMany', 'rw', ['GAUSSIAN', 'Gaussian', true], ['MOFFAT', 'Moffat', false])
-
+	readonly #telescopeInfo = makeNumberVector('', 'TELESCOPE_INFO', 'Telescope Info', SIMULATION, 'rw', ['FOCAL_LENGTH', 'Focal Length (mm)', 500, 1, 10000, 1, '%.0f'], ['APERTURE', 'Aperture (mm)', 80, 1, 3000, 1, '%.0f'])
 	readonly #telescopeEffects = makeNumberVector(
 		'',
 		'TELESCOPE_EFFECTS',
@@ -1801,6 +1803,7 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#plotOptions,
 		this.#plotFlags,
 		this.#plotPsfModel,
+		this.#telescopeInfo,
 		this.#telescopeEffects,
 	]
 
@@ -1825,12 +1828,19 @@ export class CameraSimulator extends DeviceSimulator {
 		name: string,
 		client: ClientSimulator,
 		readonly managers?: DeviceManagers,
+		readonly catalogProviders?: Map<string, CatalogProvider>,
 		handler: IndiClientHandler = client.handler,
 	) {
 		super(name, client, handler, DeviceInterfaceType.CCD | DeviceInterfaceType.GUIDER)
 
 		for (const property of this.#properties) {
 			property.device = name
+		}
+
+		if (this.catalogProviders?.size) {
+			for (const name of this.catalogProviders.keys()) {
+				this.#catalogSource.elements[name] = { name, label: name, value: name === 'RANDOM' }
+			}
 		}
 
 		this.driverInfo.elements.DRIVER_EXEC.value = 'camera.simulator'
@@ -1857,8 +1867,8 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Returns the selected catalog backend for light-frame stars.
-	get catalogSource() {
-		return findOnSwitch(this.#catalogSource)[0] as CatalogSource
+	get catalogSource(): CatalogSource {
+		return findOnSwitch(this.#catalogSource)[0]
 	}
 
 	get frameType(): FrameType {
@@ -1871,6 +1881,14 @@ export class CameraSimulator extends DeviceSimulator {
 
 	get isPulsing() {
 		return this.#guideNS.state === 'Busy'
+	}
+
+	get telescopeFocalLength() {
+		return this.#telescopeInfo.elements.FOCAL_LENGTH.value
+	}
+
+	get telescopeAperture() {
+		return this.#telescopeInfo.elements.APERTURE.value
 	}
 
 	sendText(vector: NewTextVector) {
@@ -2514,10 +2532,14 @@ export class CameraSimulator extends DeviceSimulator {
 			;[centerRightAscension, centerDeclination] = this.applyTelescopePeriodicError(centerRightAscension!, centerDeclination!, now)
 		}
 
-		const key = this.catalogKey(centerRightAscension, centerDeclination)
+		const pixelScale = angularSizeOfPixel(this.telescopeFocalLength, CAMERA_PIXEL_SIZE)
+		const radius = Math.hypot(this.sensorWidth, this.sensorHeight) * pixelScale * (0.5 * ASEC2RAD)
+		const key = this.catalogKey(centerRightAscension, centerDeclination, radius)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
-		const stars = this.catalogSource === 'VIZIER' ? await this.vizierSource() : this.randomSource()
+		const catalogSource = this.catalogSource
+		const catalogProvider = this.catalogProviders?.get(catalogSource)
+		const stars = catalogProvider !== undefined && centerRightAscension !== undefined && centerDeclination !== undefined ? catalogProvider(centerRightAscension, centerDeclination, radius) : catalogSource === 'VIZIER' ? await this.vizierSource(radius, pixelScale) : this.randomSource()
 		this.#catalog = stars
 		this.#catalogKey = key
 		this.#catalogDirty = false
@@ -2525,9 +2547,10 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds a cache key for the currently selected catalog source.
-	private catalogKey(centerRightAscension?: Angle, centerDeclination?: Angle) {
-		if (this.catalogSource === 'RANDOM' || centerRightAscension === undefined || centerDeclination === undefined) return `RANDOM:${this.#scene.elements.SCENE_SEED.value}`
-		else return `VIZIER:${toHour(normalizeAngle(centerRightAscension)).toFixed(6)}:${toDeg(centerDeclination).toFixed(6)}`
+	private catalogKey(centerRightAscension?: Angle, centerDeclination?: Angle, radius?: Angle) {
+		const catalogSource = this.catalogSource
+		if (catalogSource === 'RANDOM' || centerRightAscension === undefined || centerDeclination === undefined || radius === undefined || radius === 0) return `RANDOM:${this.#scene.elements.SCENE_SEED.value}`
+		else return `${catalogSource}:${toHour(normalizeAngle(centerRightAscension)).toFixed(6)}:${toDeg(centerDeclination).toFixed(6)}:${toDeg(radius).toFixed(6)}`
 	}
 
 	// Generates a deterministic in-memory star field.
@@ -2560,20 +2583,19 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Queries VizieR around the active mount and projects the stars onto the sensor.
-	private async vizierSource() {
+	private async vizierSource(radius: Angle, pixelScale: Angle) {
 		const mount = this.activeMount!
 		const now = timeNow(true)
 		const sensorWidth = this.sensorWidth
 		const sensorHeight = this.sensorHeight
 		const halfWidth = sensorWidth * 0.5
 		const halfHeight = sensorHeight * 0.5
-		const queryRadius = Math.hypot(sensorWidth, sensorHeight) * CAMERA_CATALOG_PIXEL_SCALE * 0.5
 		const queryLimit = Math.max(CAMERA_VIZIER_MIN_STARS, Math.min(CAMERA_VIZIER_MAX_STARS, Math.trunc(sensorWidth * sensorHeight * this.#scene.elements.STAR_DENSITY.value * 2)))
 		const [centerRightAscension, centerDeclination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination, now)
 		let table: CsvRow[] | undefined
 
 		try {
-			table = await vizierQuery(makeVizierCatalogQuery(centerRightAscension, centerDeclination, queryRadius, queryLimit))
+			table = await vizierQuery(makeVizierCatalogQuery(centerRightAscension, centerDeclination, radius, queryLimit))
 		} catch (e) {
 			console.error('failed to fetch stars from vizier', e)
 			return []
@@ -2604,8 +2626,8 @@ export class CameraSimulator extends DeviceSimulator {
 
 			if (point === false) continue
 
-			const x = halfWidth - point.x / CAMERA_CATALOG_PIXEL_SCALE
-			const y = halfHeight - point.y / CAMERA_CATALOG_PIXEL_SCALE
+			const x = halfWidth - point.x / pixelScale
+			const y = halfHeight - point.y / pixelScale
 			if (x < 0 || x >= sensorWidth || y < 0 || y >= sensorHeight) continue
 
 			stars.push({ x, y, brightness, colorIndex: clamp(+row[3] || 0.65, -0.25, 1.9), hfd: 0, snr: 0, flux: 0 })
