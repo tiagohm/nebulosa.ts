@@ -53,12 +53,13 @@ const FILES = {
 	'NGC3372-lz4+sh-16.1.xisf': [undefined],
 	'NGC3372-zlib-16.1.xisf': [undefined, 'xisf'],
 	'NGC3372-zlib+sh-16.1.xisf': [undefined, 'xisf'],
+	'HNSKY_g14.tar': [undefined, 'hnsky'],
 } as const
 
 const downloading = new Map<string, Promise<Bun.BunFile>>()
 
 type FileName = keyof typeof FILES
-type FileTag = 'alpaca.client' | 'alpaca.server' | 'csv' | 'daf' | 'fits' | 'hyg' | 'iers' | 'image' | 'indi' | 'location' | 'sao' | 'spk' | 'stardetector' | 'starmatching' | 'stellarium' | 'time' | 'xisf'
+type FileTag = 'alpaca.client' | 'alpaca.server' | 'csv' | 'daf' | 'fits' | 'hnsky' | 'hyg' | 'iers' | 'image' | 'indi' | 'location' | 'sao' | 'spk' | 'stardetector' | 'starmatching' | 'stellarium' | 'time' | 'xisf'
 
 export async function download(name: FileName) {
 	const task = downloading.get(name)

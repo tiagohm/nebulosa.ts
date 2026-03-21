@@ -77,13 +77,13 @@ export type TransferFormat = 'FITS' | 'XISF'
 
 export type ReadoutMode = 'MONO' | 'RGB'
 
-type CatalogSource = 'RANDOM' | 'VIZIER' | string
+type CatalogSourceType = 'RANDOM' | 'VIZIER' | string
 
 export type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
 
-export type CatalogProviderStar = Omit<AstronomicalImageStar, 'x' | 'y'> & Required<EquatorialCoordinate>
+export type CatalogSourceStar = Omit<AstronomicalImageStar, 'x' | 'y'> & Required<EquatorialCoordinate>
 
-export type CatalogProvider = (rightAscension: Angle, declination: Angle, radius: Angle) => PromiseLike<readonly CatalogProviderStar[]> | readonly CatalogProviderStar[]
+export type CatalogSource = (rightAscension: Angle, declination: Angle, radius: Angle) => PromiseLike<readonly CatalogSourceStar[]> | readonly CatalogSourceStar[]
 
 export interface DeviceSimulatorOptions {
 	readonly save?: (name: string, properties: readonly SimulatorProperty[]) => void
@@ -91,7 +91,7 @@ export interface DeviceSimulatorOptions {
 }
 
 export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
-	readonly catalogProviders?: Record<string, CatalogProvider>
+	readonly catalogSources?: Record<string, CatalogSource | undefined | null>
 	readonly mountManager?: MountManager
 	readonly guideOutputManager?: GuideOutputManager
 	readonly focuserManager?: FocuserManager
@@ -1869,9 +1869,11 @@ export class CameraSimulator extends DeviceSimulator {
 			property.device = name
 		}
 
-		if (options?.catalogProviders) {
-			for (const name of Object.keys(options.catalogProviders)) {
-				this.#catalogSource.elements[name] = { name, label: name, value: name === 'RANDOM' }
+		if (options?.catalogSources) {
+			for (const name of Object.keys(options.catalogSources)) {
+				if (options.catalogSources[name]) {
+					this.#catalogSource.elements[name] = { name, label: name, value: name === 'RANDOM' }
+				}
 			}
 		}
 
@@ -1899,7 +1901,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Returns the selected catalog backend for light-frame stars.
-	get catalogSource(): CatalogSource {
+	get catalogSourceType(): CatalogSourceType {
 		return findOnSwitch(this.#catalogSource)[0]
 	}
 
@@ -2569,12 +2571,12 @@ export class CameraSimulator extends DeviceSimulator {
 		const key = this.catalogKey(centerRightAscension, centerDeclination, radius)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
-		const catalogSource = this.catalogSource
-		const catalogProvider = this.options?.catalogProviders?.[catalogSource]
+		const type = this.catalogSourceType
+		const catalogSource = this.options?.catalogSources?.[type]
 		const stars =
-			catalogProvider !== undefined && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0
-				? this.mapCatalogProviderStarsToAstronomicalImageStars(await catalogProvider(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, pixelScale)
-				: catalogSource === 'VIZIER' && radius > 0 && pixelScale > 0 && centerRightAscension !== undefined && centerDeclination !== undefined
+			catalogSource !== undefined && catalogSource !== null && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0
+				? this.mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, pixelScale)
+				: type === 'VIZIER' && radius > 0 && pixelScale > 0 && centerRightAscension !== undefined && centerDeclination !== undefined
 					? await this.vizierSource(centerRightAscension, centerDeclination, radius, pixelScale)
 					: this.randomSource()
 		this.#catalog = stars
@@ -2583,7 +2585,7 @@ export class CameraSimulator extends DeviceSimulator {
 		return stars
 	}
 
-	private mapCatalogProviderStarsToAstronomicalImageStars(stars: readonly CatalogProviderStar[], centerRightAscension: Angle, centerDeclination: Angle, pixelScale: Angle): readonly (AstronomicalImageStar | undefined)[] {
+	private mapCatalogCatalogStarsToAstronomicalImageStars(stars: readonly CatalogSourceStar[], centerRightAscension: Angle, centerDeclination: Angle, pixelScale: Angle): readonly (AstronomicalImageStar | undefined)[] {
 		const sensorWidth = this.sensorWidth
 		const sensorHeight = this.sensorHeight
 		const halfWidth = sensorWidth * 0.5
@@ -2607,7 +2609,7 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Builds a cache key for the currently selected catalog source.
 	private catalogKey(centerRightAscension?: Angle, centerDeclination?: Angle, radius?: Angle) {
-		const catalogSource = this.catalogSource
+		const catalogSource = this.catalogSourceType
 		if (catalogSource === 'RANDOM' || centerRightAscension === undefined || centerDeclination === undefined || radius === undefined || radius === 0) return `RANDOM:${this.#scene.elements.SCENE_SEED.value}`
 		else return `${catalogSource}:${toHour(normalizeAngle(centerRightAscension)).toFixed(6)}:${toDeg(centerDeclination).toFixed(6)}:${toDeg(radius).toFixed(6)}`
 	}

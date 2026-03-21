@@ -1,4 +1,3 @@
-g16_star_database_mag16/
 *.bsp
 *.bpc
 *.csv
@@ -9,3 +8,5 @@ g16_star_database_mag16/
 *.jpg
 *.tsv
 *.txt
+*.gz
+*.tar

@@ -1,10 +1,7 @@
-import fs from 'fs/promises'
-import { join } from 'path'
 import type { Angle } from './angle'
 import { normalizeAngle, normalizePI } from './angle'
 import { PIOVERTWO, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
-import { fileHandleSource, type Seekable, type Source } from './io'
 
 const HNSKY_290_HEADER_SIZE = 110
 const HNSKY_290_RA_SCALE = TAU / 0xffffff
@@ -40,9 +37,17 @@ export const HNSKY_290_DEC_BOUNDARIES = [
 	PIOVERTWO,
 ] as const satisfies readonly Angle[]
 
+export type Hnsky290Database = 'g14' | 'g16'
+
+export type Hnsky290File = Pick<File, 'arrayBuffer'> | Buffer
+
+export type Hnsky290Files = Map<string, Hnsky290File> | Record<string, Hnsky290File>
+
+export type HnskyRecordSize = 5 | 6 | 7 | 9 | 10 | 11
+
 export interface Hnsky290FileHeader {
 	readonly description: string
-	readonly recordSize: 5 | 6 | 7 | 9 | 10 | 11
+	readonly recordSize: HnskyRecordSize
 }
 
 export interface Hnsky290Area {
@@ -102,7 +107,7 @@ export function hnsky290AreaFile(area: number): Hnsky290Area {
 
 		if (area <= offset + count) {
 			const index = area - offset
-			const fileName = `${String(ring + 1).padStart(2, '0')}${String(index).padStart(2, '0')}.290`
+			const fileName = `${(ring + 1).toFixed(0).padStart(2, '0')}${index.toFixed(0).padStart(2, '0')}.290`
 			return { area, ring: ring + 1, index, fileName, fraction: 0 }
 		}
 
@@ -128,16 +133,7 @@ export function decodeHnsky290Designation(value: number): Hnsky290Designation {
 }
 
 // Reads the shared 110-byte .290 header and validates the record size.
-export async function readHnsky290Header(source: Source & Seekable): Promise<Hnsky290FileHeader> {
-	source.seek(0)
-
-	const header = Buffer.allocUnsafe(HNSKY_290_HEADER_SIZE)
-	const read = await source.read(header)
-
-	if (read !== HNSKY_290_HEADER_SIZE) {
-		throw new Error(`invalid HNSKY .290 header size: expected ${HNSKY_290_HEADER_SIZE}, got ${read}`)
-	}
-
+export function readHnsky290Header(header: Buffer): Hnsky290FileHeader {
 	const size = header[HNSKY_290_HEADER_SIZE - 1] === 0x20 ? 11 : header[HNSKY_290_HEADER_SIZE - 1]
 
 	if (size !== 5 && size !== 6 && size !== 7 && size !== 9 && size !== 10 && size !== 11) {
@@ -153,44 +149,17 @@ export async function readHnsky290Header(source: Source & Seekable): Promise<Hns
 }
 
 // Yields all stars from one .290 tile that fall inside the square field query.
-export async function* readHnsky290Area(source: Source & Seekable, area: number, query: Readonly<Hnsky290RegionQuery>): AsyncGenerator<Hnsky290Star, void> {
-	const header = await readHnsky290Header(source)
+export function* readHnsky290Area(header: Hnsky290FileHeader, buffer: Buffer, area: number, query: Readonly<Hnsky290RegionQuery>): Generator<Hnsky290Star, void> {
 	const { recordSize } = header
 	const { rightAscension, declination, radius, magnitudeLimit } = query
 	const cosDeclination = Math.cos(declination)
-	const buffer = Buffer.allocUnsafe(Math.max(HNSKY_290_BUFFER_SIZE, recordSize * 1024))
 
-	let start = 0
-	let end = 0
+	let start = HNSKY_290_HEADER_SIZE
+	const end = buffer.byteLength - recordSize
 	let currentMagnitude = Number.NaN
 	let currentDecHigh = 0
 
-	// Refills the sequential decoder buffer while preserving any unread bytes.
-	async function refill() {
-		if (start > 0 && start < end) {
-			buffer.copy(buffer, 0, start, end)
-			end -= start
-			start = 0
-		} else if (start >= end) {
-			start = 0
-			end = 0
-		}
-
-		const read = await source.read(buffer, end, buffer.byteLength - end)
-		end += read
-		return read
-	}
-
-	while (true) {
-		if (end - start < recordSize) {
-			const read = await refill()
-
-			if (end - start < recordSize) {
-				if (read === 0 && end === start) break
-				throw new Error(`truncated HNSKY .290 file for area ${area}`)
-			}
-		}
-
+	while (start < end) {
 		const offset = start
 		const raRaw = buffer.readUIntLE(offset + (recordSize >= 9 ? 4 : 0), 3)
 		let star: Hnsky290Star | undefined
@@ -303,18 +272,23 @@ export function findHnsky290Areas(rightAscension: Angle, declination: Angle, rad
 }
 
 // Reads all stars inside the requested field from the intersecting .290 tiles.
-export async function findHnsky290Region(directory: string, database: string, query: Readonly<Hnsky290RegionQuery>): Promise<Hnsky290SearchResult> {
+export async function findHnsky290Region(files: Hnsky290Files, database: Hnsky290Database, query: Readonly<Hnsky290RegionQuery>): Promise<Hnsky290SearchResult> {
 	const areas = findHnsky290Areas(query.rightAscension, query.declination, query.radius)
 	const headers: Array<Hnsky290FileHeader & Hnsky290Area> = []
 	const stars: Hnsky290Star[] = []
 
+	const get = files instanceof Map ? (key: string) => files.get(key) : (key: string) => files[key]
+
 	for (const area of areas) {
-		const handle = await fs.open(resolveHnsky290Path(directory, database, area.fileName), 'r')
-		await using source = fileHandleSource(handle)
-		const header = await readHnsky290Header(source)
+		const file = get(`${database}_${area.fileName}`)
+
+		if (file === undefined) continue
+
+		const buffer = Buffer.isBuffer(file) ? file : Buffer.from(await file.arrayBuffer())
+		const header = readHnsky290Header(buffer)
 		headers.push(Object.assign(header, area))
 
-		for await (const star of readHnsky290Area(source, area.area, query)) {
+		for (const star of readHnsky290Area(header, buffer, area.area, query)) {
 			stars.push(star)
 		}
 	}
@@ -326,14 +300,8 @@ export async function findHnsky290Region(directory: string, database: string, qu
 }
 
 // Returns only the stars from the requested field.
-export async function findHnsky290Stars(directory: string, database: string, query: Readonly<Hnsky290RegionQuery>): Promise<readonly Hnsky290Star[]> {
-	return (await findHnsky290Region(directory, database, query)).stars
-}
-
-// Resolves the on-disk file name for a database prefix and .290 tile.
-function resolveHnsky290Path(directory: string, database: string, fileName: string) {
-	const prefix = database.endsWith('_') ? database : `${database}_`
-	return join(directory, `${prefix}${fileName}`)
+export async function findHnsky290Stars(files: Hnsky290Files, database: Hnsky290Database, query: Readonly<Hnsky290RegionQuery>): Promise<readonly Hnsky290Star[]> {
+	return (await findHnsky290Region(files, database, query)).stars
 }
 
 // Projects the square half-field from declination space into RA.

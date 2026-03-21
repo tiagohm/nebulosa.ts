@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test'
-import fs from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
+
 import { deg, hour, normalizeAngle } from '../src/angle'
 import { PIOVERTWO, TAU } from '../src/constants'
-import { findHnsky290Areas, findHnsky290Region, findHnsky290Stars, type Hnsky290RegionQuery, hnsky290AreaFile, readHnsky290Area } from '../src/hnsky'
-import { bufferSource } from '../src/io'
+import { findHnsky290Areas, findHnsky290Region, findHnsky290Stars, type Hnsky290RegionQuery, type HnskyRecordSize, hnsky290AreaFile, readHnsky290Area, readHnsky290Header } from '../src/hnsky'
+import { downloadPerTag } from './download'
+
+await downloadPerTag('hnsky')
 
 const RA_SCALE = TAU / 0xffffff
 const DEC_SCALE = PIOVERTWO / 0x7fffff
@@ -19,16 +19,12 @@ interface SyntheticStar {
 }
 
 interface SyntheticCase {
-	readonly recordSize: 5 | 6 | 7 | 9 | 10 | 11
+	readonly recordSize: HnskyRecordSize
 	readonly star: SyntheticStar
 	readonly outside: SyntheticStar
 }
 
-const REGION_QUERY: Hnsky290RegionQuery = {
-	rightAscension: hour(2),
-	declination: deg(5),
-	radius: deg(1),
-}
+const REGION_QUERY: Hnsky290RegionQuery = { rightAscension: hour(2), declination: deg(5), radius: deg(1) }
 
 const FORMAT_CASES: readonly SyntheticCase[] = [
 	{
@@ -72,12 +68,13 @@ test('findHnsky290Areas selects intersecting tiles around an RA boundary', () =>
 	expect(areas[1]!.fraction).toBeGreaterThan(0)
 })
 
-test('readHnsky290Area decodes documented record formats', async () => {
+test('readHnsky290Area decodes documented record formats', () => {
 	for (const entry of FORMAT_CASES) {
-		const source = bufferSource(makeSyntheticFile(entry))
+		const buffer = makeSyntheticFile(entry)
+		const header = readHnsky290Header(buffer)
 		const stars = []
 
-		for await (const star of readHnsky290Area(source, 146, REGION_QUERY)) {
+		for (const star of readHnsky290Area(header, buffer, 146, REGION_QUERY)) {
 			stars.push(star)
 		}
 
@@ -108,44 +105,29 @@ test('readHnsky290Area decodes documented record formats', async () => {
 })
 
 test('findHnsky290Region merges stars from intersecting files', async () => {
-	const query: Hnsky290RegionQuery = {
-		rightAscension: deg(11.1),
-		declination: deg(5),
-		radius: deg(2),
+	const query: Hnsky290RegionQuery = { rightAscension: deg(11.1), declination: deg(5), radius: deg(2) }
+
+	const archive = {
+		[`g14_${hnsky290AreaFile(146).fileName}`]: makeSyntheticFile({ recordSize: 11, star: { rightAscension: deg(10.5), declination: deg(5.1), magnitude: 2.2, designation: (100 << 20) | 1 }, outside: { rightAscension: deg(30), declination: deg(5.1), magnitude: 2.3, designation: (100 << 20) | 2 } }),
+		[`g14_${hnsky290AreaFile(147).fileName}`]: makeSyntheticFile({ recordSize: 11, star: { rightAscension: deg(11.7), declination: deg(4.9), magnitude: 1.1, designation: (101 << 20) | 1 }, outside: { rightAscension: deg(40), declination: deg(4.9), magnitude: 1.2, designation: (101 << 20) | 2 } }),
 	}
 
-	const root = join(tmpdir(), `hnsky-${Bun.randomUUIDv7()}`)
-	await fs.mkdir(root, { recursive: true })
+	const result = await findHnsky290Region(archive, 'g14', query)
+	const files = result.areas.map((area) => area.fileName).sort()
 
-	try {
-		await fs.writeFile(
-			join(root, `test_${hnsky290AreaFile(146).fileName}`),
-			makeSyntheticFile({ recordSize: 11, star: { rightAscension: deg(10.5), declination: deg(5.1), magnitude: 2.2, designation: (100 << 20) | 1 }, outside: { rightAscension: deg(30), declination: deg(5.1), magnitude: 2.3, designation: (100 << 20) | 2 } }),
-		)
-		await fs.writeFile(
-			join(root, `test_${hnsky290AreaFile(147).fileName}`),
-			makeSyntheticFile({ recordSize: 11, star: { rightAscension: deg(11.7), declination: deg(4.9), magnitude: 1.1, designation: (101 << 20) | 1 }, outside: { rightAscension: deg(40), declination: deg(4.9), magnitude: 1.2, designation: (101 << 20) | 2 } }),
-		)
-
-		const result = await findHnsky290Region(root, 'test', query)
-		const files = result.areas.map((area) => area.fileName).sort()
-
-		expect(files).toEqual(['1001.290', '1002.290'])
-		expect(result.headers).toHaveLength(2)
-		expect(result.stars).toHaveLength(2)
-		expect(result.stars[0]!.magnitude).toBeCloseTo(1.1, 6)
-		expect(result.stars[1]!.magnitude).toBeCloseTo(2.2, 6)
-		expect(result.stars[0]!.designation?.label).toBe('UCAC4 101-1')
-		expect(result.stars[1]!.designation?.label).toBe('UCAC4 100-1')
-	} finally {
-		await fs.rm(root, { recursive: true, force: true })
-	}
+	expect(files).toEqual(['1001.290', '1002.290'])
+	expect(result.headers).toHaveLength(2)
+	expect(result.stars).toHaveLength(2)
+	expect(result.stars[0]!.magnitude).toBeCloseTo(1.1, 6)
+	expect(result.stars[1]!.magnitude).toBeCloseTo(2.2, 6)
+	expect(result.stars[0]!.designation?.label).toBe('UCAC4 101-1')
+	expect(result.stars[1]!.designation?.label).toBe('UCAC4 100-1')
 })
 
-// Download it from https://sourceforge.net/projects/sky-simulator/files/program/star_databases/g16_star_database_mag16.zip/download
-test.skip('read g16 database', async () => {
-	const stars = await findHnsky290Stars('data/g16_star_database_mag16', 'g16', { rightAscension: 0, declination: 0, radius: deg(0.5) })
-	expect(stars.length).toBe(295)
+test('read g14 database', async () => {
+	const files = new Bun.Archive(await Bun.file('data/HNSKY_g14.tar').arrayBuffer())
+	const stars = await findHnsky290Stars(await files.files(), 'g14', { rightAscension: 0, declination: 0, radius: deg(0.5) })
+	expect(stars.length).toBe(97)
 })
 
 // Builds a minimal synthetic .290 file for one record format.

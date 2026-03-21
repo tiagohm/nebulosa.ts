@@ -5,7 +5,7 @@ import type { ImageRawType } from '../src/image.types'
 import { IndiClientHandlerSet } from '../src/indi.client'
 import type { Camera, GuideOutput } from '../src/indi.device'
 import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
-import { CameraSimulator, type CatalogProvider, ClientSimulator, DustCapSimulator, FilterWheelSimulator, FocuserSimulator, LightBoxSimulator, MountSimulator, RotatorSimulator } from '../src/indi.simulator'
+import { CameraSimulator, type CatalogSource, ClientSimulator, DustCapSimulator, FilterWheelSimulator, FocuserSimulator, LightBoxSimulator, MountSimulator, RotatorSimulator } from '../src/indi.simulator'
 import type { PropertyState } from '../src/indi.types'
 
 const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
@@ -565,7 +565,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			cameraSimulator.startExposure(0.05)
 			await waitUntil(() => frameReceiver.length > 0, 10000, 50)
 			const image = await readImageFromBuffer(frameReceiver.lastFrame)
-            expect(image).toBeDefined()
+			expect(image).toBeDefined()
 			expect(sumPixels(image!.raw)).toBeGreaterThan(0)
 		} finally {
 			cameraSimulator.dispose()
@@ -587,12 +587,12 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		cameraManager.addHandler(frameReceiver)
 
-		const catalogProvider: CatalogProvider = () => {
+		const catalogProvider: CatalogSource = () => {
 			return [{ snr: 10, hfd: 4, flux: 30, rightAscension: hour(4.97409), declination: deg(19.95913) }]
 		}
 
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogProviders: { HNSKY: catalogProvider } })
+		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { HNSKY: catalogProvider } })
 		const mount = mountManager.get(client, mountSimulator.name)!
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
