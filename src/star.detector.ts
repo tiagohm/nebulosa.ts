@@ -12,6 +12,7 @@ export interface DetectedStar extends Readonly<Point> {
 export interface DetectStarOptions {
 	maxStars: number
 	searchRegion?: number
+	minSNR?: number
 }
 
 type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumSq, width
@@ -22,13 +23,16 @@ const STAR_BACKGROUND_INNER_RADIUS_SQ = 25
 const STAR_BACKGROUND_OUTER_RADIUS_SQ = 49
 const STAR_PHOTOMETRY_RADIUS = 7
 const STAR_CONVOLVED_MARGIN = 4
+const STAR_MIN_HFD = 0.25
+const STAR_MIN_SNR = 0.23
 
 const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
 	maxStars: 500,
 	searchRegion: 0,
+	minSNR: STAR_MIN_SNR,
 }
 
-export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
+export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = STAR_MIN_SNR }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
 	image = grayscale(image)
 
 	const original = image.raw
@@ -38,6 +42,8 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 
 	// Run the PSF convolution
 	image = psf(image)
+
+	minSNR = Math.max(STAR_MIN_SNR, minSNR)
 
 	const { raw, metadata } = image
 	const { width, height, stride } = metadata
@@ -138,7 +144,14 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 
 			if (h < 0.1) continue
 
-			stars.add(x, y, h)
+			// Validate each candidate against the original image so hot pixels and faint ripples never enter the ranking list.
+			const [flux, snr, hfd] = measureStarPhotometry(original, width, height, stride, x, y)
+			if (flux <= 0 || snr < minSNR || hfd < STAR_MIN_HFD) continue
+
+			// Ranks detections by measured signal so real stars survive capacity limits better than noise artifacts.
+			const rank = flux * snr
+
+			stars.add(x, y, rank, flux, snr, hfd)
 		}
 	}
 
@@ -153,9 +166,7 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0 }: 
 	let i = 0
 	const res = new Array<DetectedStar>(stars.size)
 
-	for (const { x, y } of stars) {
-		// Measures the star on the filtered image using local aperture photometry.
-		const [flux, snr, hfd] = measureStarPhotometry(original, width, height, stride, x, y)
+	for (const { x, y, flux = 0, snr = 0, hfd = 0 } of stars) {
 		res[i++] = { x, y, flux, hfd, snr }
 	}
 
@@ -255,11 +266,14 @@ function buildIntegralImages(raw: Image['raw'], width: number, height: number, s
 }
 
 // Computes local mean and standard deviation from the summed-area tables.
-function localStatistics([s, sq, width]: IntegralImages, left: number, top: number, right: number, bottom: number) {
+function localStatistics(image: IntegralImages, left: number, top: number, right: number, bottom: number) {
 	const x0 = left
 	const y0 = top
 	const x1 = right + 1
 	const y1 = bottom + 1
+	const s = image[0]
+	const sq = image[1]
+	const width = image[2]
 	const a = y0 * width + x0
 	const b = y0 * width + x1
 	const c = y1 * width + x0
@@ -350,6 +364,9 @@ interface Star {
 	readonly x: number
 	readonly y: number
 	readonly h: number
+	readonly flux?: number
+	readonly snr?: number
+	readonly hfd?: number
 	next?: this
 	prev?: this
 }
@@ -366,8 +383,8 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		return this.head
 	}
 
-	addLast(x: number, y: number, h: number) {
-		const star: Star = { x, y, h }
+	addLast(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number) {
+		const star: Star = { x, y, h, flux, snr, hfd }
 
 		if (!this.head) {
 			this.head = star
@@ -381,8 +398,8 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		this.size++
 	}
 
-	addFirst(x: number, y: number, h: number) {
-		const star: Star = { x, y, h }
+	addFirst(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number) {
+		const star: Star = { x, y, h, flux, snr, hfd }
 
 		if (!this.head) {
 			this.head = star
@@ -396,13 +413,13 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		this.size++
 	}
 
-	add(x: number, y: number, h: number) {
+	add(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number) {
 		if (!this.head || h <= this.head.h) {
-			if (this.size < this.capacity) this.addFirst(x, y, h)
+			if (this.size < this.capacity) this.addFirst(x, y, h, flux, snr, hfd)
 		} else if (!this.tail || h >= this.tail.h) {
-			this.addLast(x, y, h)
+			this.addLast(x, y, h, flux, snr, hfd)
 		} else {
-			const star: Star = { x, y, h }
+			const star: Star = { x, y, h, flux, snr, hfd }
 			const headDistance = h - this.head.h
 			const tailDistance = this.tail.h - h
 

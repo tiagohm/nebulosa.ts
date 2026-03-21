@@ -468,7 +468,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 }
 
 // Plots stars first so the existing noise and output pipeline operates on the combined scene.
-export function generateStarImage(raw: ImageRawType, width: number, height: number, channels: 1 | 3, stars: readonly AstronomicalImageStar[], seeing: number, noiseConfig: AstronomicalImageNoiseConfig = DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, plotOptions: PlotStarOptions = {}) {
+export function generateStarImage(raw: ImageRawType, width: number, height: number, channels: 1 | 3, stars: readonly AstronomicalImageStar[], seeing: number, noiseConfig?: AstronomicalImageNoiseConfig, plotOptions: PlotStarOptions = {}) {
 	for (let i = 0; i < stars.length; i++) {
 		const star = stars[i]
 		plotStar(raw, width, height, channels, star.x, star.y, star.flux, star.hfd, star.snr, seeing, star.colorIndex, plotOptions)

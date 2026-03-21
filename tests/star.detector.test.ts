@@ -1,6 +1,9 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { Bitpix } from '../src/fits'
+import { type AstronomicalImageNoiseConfig, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage } from '../src/image.generator'
+import type { Image } from '../src/image.types'
 import { detectStars, excludeStarsFitWithinRegion, mergeVeryCloseStars, StarList } from '../src/star.detector'
+import { plotStar } from '../src/star.generator'
 import { medianOf } from '../src/util'
 import { downloadPerTag } from './download'
 import { readImage } from './image.util'
@@ -93,7 +96,72 @@ test('merge stars & exclusion', () => {
 	expect(array.map((e) => e.y)).toEqual([803])
 })
 
-test('detect stars', async () => {
+describe('detect stars', () => {
+	const width = 400
+	const height = 200
+	const raw = new Float32Array(width * height)
+
+	test('low noise', () => {
+		raw.fill(0)
+
+		// Plot 5 stars
+		plotStar(raw, width, height, 1, width / 2, height / 2, 0.5, 3, 100, 0)
+		plotStar(raw, width, height, 1, 50, 50, 0.5, 3, 100, 0)
+		plotStar(raw, width, height, 1, 50, 150, 0.5, 3, 100, 0)
+		plotStar(raw, width, height, 1, 350, 50, 0.5, 3, 100, 0)
+		plotStar(raw, width, height, 1, 350, 150, 0.5, 3, 100, 0)
+
+		const noise: AstronomicalImageNoiseConfig = {
+			...DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG,
+			sky: { ...DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky, enabled: false },
+			moon: { ...DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon, enabled: false },
+			lightPollution: { ...DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution, enabled: false },
+			sensor: { ...DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor, readNoise: 0, biasElectrons: 0, blackLevelElectrons: 0, channelBiasElectrons: [0, 0, 0] },
+		}
+
+		generateNoiseImage(raw, width, height, 1, noise)
+
+		const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined } }
+		const stars = detectStars(image, { maxStars: 2000 })
+		expect(stars.find((s) => s.x === 200 && s.y === 100)).toBeDefined()
+		expect(stars.find((s) => s.x === 50 && s.y === 50)).toBeDefined()
+		expect(stars.find((s) => s.x === 50 && s.y === 150)).toBeDefined()
+		expect(stars.find((s) => s.x === 350 && s.y === 50)).toBeDefined()
+		expect(stars.find((s) => s.x === 350 && s.y === 150)).toBeDefined()
+		expect(stars.length).toBe(5)
+	})
+
+	test('high noise', () => {
+		raw.fill(0)
+
+		// Plot 5 stars
+		plotStar(raw, width, height, 1, width / 2, height / 2, 0.5, 3, 100, 0)
+		plotStar(raw, width, height, 1, 50, 50, 0.5, 3, 100, 0)
+		plotStar(raw, width, height, 1, 50, 150, 0.5, 3, 100, 0)
+		plotStar(raw, width, height, 1, 350, 50, 0.5, 3, 100, 0)
+		plotStar(raw, width, height, 1, 350, 150, 0.5, 3, 100, 0)
+
+		const noise: AstronomicalImageNoiseConfig = {
+			...DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG,
+			sky: { ...DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky, enabled: true },
+			moon: { ...DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon, enabled: true },
+			lightPollution: { ...DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution, enabled: true },
+		}
+
+		generateNoiseImage(raw, width, height, 1, noise)
+
+		const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined } }
+		const stars = detectStars(image, { maxStars: 2000 })
+		expect(stars.find((s) => s.x === 200 && s.y === 100)).toBeDefined()
+		expect(stars.find((s) => s.x === 50 && s.y === 50)).toBeDefined()
+		expect(stars.find((s) => s.x === 50 && s.y === 150)).toBeDefined()
+		expect(stars.find((s) => s.x === 350 && s.y === 50)).toBeDefined()
+		expect(stars.find((s) => s.x === 350 && s.y === 150)).toBeDefined()
+		expect(stars.length).toBe(5)
+	})
+})
+
+test('detect stars from real image', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const stars = detectStars(image, { maxStars: 500 })
 
@@ -111,4 +179,4 @@ test('detect stars', async () => {
 	expect(medianOf(flux)).toBeGreaterThan(0)
 	expect(medianOf(snr)).toBeGreaterThan(0)
 	expect(medianOf(hfd)).toBeGreaterThanOrEqual(1.5)
-}, 5000)
+})
