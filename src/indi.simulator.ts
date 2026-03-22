@@ -3,7 +3,6 @@ import { arcsec, deg, formatDEC, formatRA, hour, normalizeAngle, normalizePI, to
 import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { equatorialToJ2000 } from './coordinate'
-import type { CsvRow } from './csv'
 import { meter, toMeter } from './distance'
 import type { FitsHeader } from './fits'
 import type { Point } from './geometry'
@@ -24,7 +23,6 @@ import type { PlotStarOptions } from './star.generator'
 import { formatTemporal, TIMEZONE } from './temporal'
 import { timeUnix } from './time'
 import { angularSizeOfPixel } from './util'
-import { vizierQuery } from './vizier'
 
 const TICK_INTERVAL_MS = 100
 const SIDEREAL_DRIFT_RATE = TAU / SIDEREAL_DAYSEC
@@ -42,8 +40,6 @@ const CAMERA_AMBIENT_TEMPERATURE = 18
 const CAMERA_DEFAULT_TARGET_TEMPERATURE = 0
 const CAMERA_SCENE_SEED = 0x1d0f3a57
 const CAMERA_BLOB_PADDING = 16384
-const CAMERA_VIZIER_MIN_STARS = 50
-const CAMERA_VIZIER_MAX_STARS = 1000
 const FOCUSER_MAX_POSITION = 100000
 const FOCUSER_INITIAL_POSITION = 50000
 const FOCUSER_MOVE_RATE = 20000
@@ -77,7 +73,7 @@ export type TransferFormat = 'FITS' | 'XISF'
 
 export type ReadoutMode = 'MONO' | 'RGB'
 
-type CatalogSourceType = 'RANDOM' | 'VIZIER' | string
+type CatalogSourceType = 'RANDOM' | (string & {})
 
 export type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
 
@@ -2570,9 +2566,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const stars =
 			catalogSource !== undefined && catalogSource !== null && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0
 				? this.mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, pixelScale)
-				: type === 'VIZIER' && radius > 0 && pixelScale > 0 && centerRightAscension !== undefined && centerDeclination !== undefined
-					? await this.vizierSource(centerRightAscension, centerDeclination, radius, pixelScale)
-					: this.randomSource()
+				: this.randomSource()
 		this.#catalog = stars
 		this.#catalogKey = key
 		this.#catalogDirty = false
@@ -2632,76 +2626,6 @@ export class CameraSimulator extends DeviceSimulator {
 				snr: 12 + brightness * 180,
 				colorIndex: -0.25 + random() * 1.9,
 			}
-		}
-
-		return stars
-	}
-
-	// Queries VizieR around the active mount and projects the stars onto the sensor.
-	private async vizierSource(centerRightAscension: Angle, centerDeclination: Angle, radius: Angle, pixelScale: Angle) {
-		const sensorWidth = this.sensorWidth
-		const sensorHeight = this.sensorHeight
-		const halfWidth = sensorWidth * 0.5
-		const halfHeight = sensorHeight * 0.5
-		const queryLimit = Math.max(CAMERA_VIZIER_MIN_STARS, Math.min(CAMERA_VIZIER_MAX_STARS, Math.trunc(sensorWidth * sensorHeight * this.#scene.elements.STAR_DENSITY.value * 2)))
-		let table: CsvRow[] | undefined
-
-		try {
-			table = await vizierQuery(makeVizierCatalogQuery(centerRightAscension, centerDeclination, radius, queryLimit))
-		} catch (e) {
-			console.error('failed to fetch stars from vizier', e)
-			return []
-		}
-
-		if (!table || table.length === 0) return []
-
-		const stars: (AstronomicalImageStar & { brightness: number })[] = []
-		let brightest = 0
-
-		for (let i = 0; i < table.length; i++) {
-			const row = table[i]
-			const rightAscension = deg(+row[0])
-			const declination = deg(+row[1])
-			const magnitude = +row[2]
-
-			if (!Number.isFinite(rightAscension) || !Number.isFinite(declination) || !Number.isFinite(magnitude)) continue
-
-			const brightness = magnitudeToBrightness(magnitude)
-
-			if (brightness > brightest) {
-				brightest = brightness
-			} else if (brightness <= 0) {
-				continue
-			}
-
-			const point = gnomonicProject(rightAscension, declination, centerRightAscension, centerDeclination)
-
-			if (point === false) continue
-
-			const x = halfWidth - point.x / pixelScale
-			const y = halfHeight - point.y / pixelScale
-			if (x < 0 || x >= sensorWidth || y < 0 || y >= sensorHeight) continue
-
-			stars.push({ x, y, brightness, colorIndex: clamp(+row[3] || 0.65, -0.25, 1.9), hfd: 0, snr: 0, flux: 0 })
-		}
-
-		if (!stars.length || brightest <= 0) return []
-
-		const minHfd = this.#scene.elements.HFD_MIN.value
-		const maxHfd = Math.max(minHfd, this.#scene.elements.HFD_MAX.value)
-		const minFlux = this.#scene.elements.FLUX_MIN.value
-		const maxFlux = Math.max(minFlux, this.#scene.elements.FLUX_MAX.value)
-		const invBrightest = 1 / brightest
-		const random = mulberry32(this.#scene.elements.SCENE_SEED.value >>> 0)
-
-		for (let i = 0; i < stars.length; i++) {
-			const star = stars[i] as { brightness: number; flux: number; hfd: number; snr: number }
-			const normalized = clamp(star.brightness * invBrightest, 0, 1)
-			const hfdSpread = random()
-
-			star.flux = minFlux + (maxFlux - minFlux) * normalized
-			star.hfd = minHfd + (maxHfd - minHfd) * clamp((1 - normalized) * (0.35 + hfdSpread * 0.65), 0, 1)
-			star.snr = 12 + normalized * 180
 		}
 
 		return stars
@@ -2906,29 +2830,6 @@ function shortestRotatorDelta(target: number, current: number) {
 	else if (delta < -180) delta += 360
 
 	return delta
-}
-
-// Builds the Gaia DR3 cone search used by the VizieR-backed camera catalog.
-function makeVizierCatalogQuery(rightAscension: Angle, declination: Angle, radius: Angle, limit: number) {
-	return `
-		SELECT TOP ${Math.trunc(limit)}
-			RA_ICRS AS ra,
-			DE_ICRS AS dec,
-			Gmag AS mag,
-			"BP-RP" AS ci
-		FROM "I/355/gaiadr3"
-		WHERE Gmag IS NOT NULL
-			AND 1 = CONTAINS(
-				POINT('ICRS', RA_ICRS, DE_ICRS),
-				CIRCLE('ICRS', ${toDeg(normalizeAngle(rightAscension))}, ${toDeg(declination)}, ${toDeg(radius)})
-			)
-		ORDER BY Gmag ASC
-	`
-}
-
-// Converts visual magnitude into a relative brightness scale.
-function magnitudeToBrightness(magnitude: number) {
-	return 10 ** (-0.4 * magnitude)
 }
 
 function rotateImageCoordinate(point: { x: number; y: number }, centerX: number, centerY: number, sinAngle: number, cosAngle: number) {
