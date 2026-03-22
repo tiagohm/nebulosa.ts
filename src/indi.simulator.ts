@@ -1963,7 +1963,7 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'SIMULATOR_SCENE':
 				if (applyNumberVectorValues(this.#scene, vector.elements)) {
-					this.#catalogDirty = true
+					if (this.catalogSourceType === 'RANDOM') this.#catalogDirty = true
 					this.notify(this.#scene)
 				}
 				return
@@ -2001,14 +2001,8 @@ export class CameraSimulator extends DeviceSimulator {
 				if (applyNumberVectorValues(this.#telescopeInfo, vector.elements)) this.notify(this.#telescopeInfo)
 				return
 			case 'TELESCOPE_EFFECTS':
-				return this.setTelescopeEffects(
-					vector.elements.PAE_AZ ?? this.#telescopeEffects.elements.PAE_AZ.value,
-					vector.elements.PAE_AL ?? this.#telescopeEffects.elements.PAE_AL.value,
-					vector.elements.PE_WE_PERIOD ?? this.#telescopeEffects.elements.PE_WE_PERIOD.value,
-					vector.elements.PE_WE_AMPLITUDE ?? this.#telescopeEffects.elements.PE_WE_AMPLITUDE.value,
-					vector.elements.PE_NS_PERIOD ?? this.#telescopeEffects.elements.PE_NS_PERIOD.value,
-					vector.elements.PE_NS_AMPLITUDE ?? this.#telescopeEffects.elements.PE_NS_AMPLITUDE.value,
-				)
+				if (applyNumberVectorValues(this.#telescopeEffects, vector.elements)) this.notify(this.#telescopeEffects)
+				return
 		}
 	}
 
@@ -2765,53 +2759,6 @@ export class CameraSimulator extends DeviceSimulator {
 		const periodMilliseconds = periodSeconds * 1000
 		const phase = ((utcTime % periodMilliseconds) * TAU) / periodMilliseconds
 		return Math.sin(phase) * amplitudeArcsec * ASEC2RAD
-	}
-
-	// Changes the simulated error model parameters.
-	private setTelescopeEffects(azimuthPolarAlignmentError: number, altitudePolarAlignmentError: number, westEastPeriod: number, westEastAmplitude: number, northSouthPeriod: number, northSouthAmplitude: number) {
-		const azPolarError = clamp(azimuthPolarAlignmentError, 0, 36000)
-		const alPolarError = clamp(altitudePolarAlignmentError, 0, 36000)
-		const wePeriod = clamp(westEastPeriod, 0, DAYSEC)
-		const weAmplitude = clamp(westEastAmplitude, 0, 3600)
-		const nsPeriod = clamp(northSouthPeriod, 0, DAYSEC)
-		const nsAmplitude = clamp(northSouthAmplitude, 0, 3600)
-
-		const { elements } = this.#telescopeEffects
-		let updated = false
-
-		if (elements.PAE_AZ.value !== azPolarError) {
-			elements.PAE_AZ.value = azPolarError
-			updated = true
-		}
-
-		if (elements.PAE_AL.value !== alPolarError) {
-			elements.PAE_AL.value = alPolarError
-			updated = true
-		}
-
-		if (elements.PE_WE_PERIOD.value !== wePeriod) {
-			elements.PE_WE_PERIOD.value = wePeriod
-			updated = true
-		}
-
-		if (elements.PE_WE_AMPLITUDE.value !== weAmplitude) {
-			elements.PE_WE_AMPLITUDE.value = weAmplitude
-			updated = true
-		}
-
-		if (elements.PE_NS_PERIOD.value !== nsPeriod) {
-			elements.PE_NS_PERIOD.value = nsPeriod
-			updated = true
-		}
-
-		if (elements.PE_NS_AMPLITUDE.value !== nsAmplitude) {
-			elements.PE_NS_AMPLITUDE.value = nsAmplitude
-			updated = true
-		}
-
-		if (updated) {
-			this.notify(this.#telescopeEffects)
-		}
 	}
 
 	get cfaPattern() {
