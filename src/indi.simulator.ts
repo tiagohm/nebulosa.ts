@@ -3,7 +3,7 @@ import { arcsec, deg, formatDEC, formatRA, hour, normalizeAngle, normalizePI, to
 import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { equatorialToJ2000 } from './coordinate'
-import { meter, toMeter } from './distance'
+import { meter } from './distance'
 import type { FitsHeader } from './fits'
 import type { Point } from './geometry'
 import { writeImageToFits, writeImageToXisf } from './image'
@@ -14,7 +14,7 @@ import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, ty
 import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager } from './indi.manager'
 import { type DefNumberVector, type DefSwitchVector, type DefTextVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from './indi.types'
 import { bufferSink } from './io'
-import { type GeographicCoordinate, localSiderealTime } from './location'
+import { localSiderealTime } from './location'
 import { clamp } from './math'
 import { polarAlignmentError } from './polaralignment'
 import { gnomonicProject } from './projection'
@@ -438,11 +438,11 @@ export class MountSimulator extends DeviceSimulator {
 				return
 			}
 			case 'GEOGRAPHIC_COORD':
-				return this.setGeographicCoordinate({
-					latitude: vector.elements.LAT !== undefined ? deg(vector.elements.LAT) : this.latitude,
-					longitude: vector.elements.LONG !== undefined ? normalizePI(deg(vector.elements.LONG)) : this.longitude,
-					elevation: vector.elements.ELEV ?? this.elevation,
-				})
+				if (applyNumberVectorValues(this.#geographicCoordinate, vector.elements)) {
+					this.updatePierSide()
+					this.notify(this.#geographicCoordinate)
+				}
+				return
 			case 'GUIDE_RATE':
 				this.setGuideRate(vector.elements.GUIDE_RATE_WE ?? this.guideRateRightAscension, vector.elements.GUIDE_RATE_NS ?? this.guideRateDeclination)
 				return
@@ -640,31 +640,6 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (updated) {
 			handleDefNumberVector(this.client, this.handler, this.#guideRate)
-		}
-	}
-
-	// Updates the simulated site coordinate.
-	setGeographicCoordinate(coordinate: GeographicCoordinate) {
-		let updated = false
-
-		if (this.latitude !== coordinate.latitude) {
-			this.#geographicCoordinate.elements.LAT.value = toDeg(coordinate.latitude)
-			updated = true
-		}
-
-		if (this.longitude !== coordinate.longitude) {
-			this.#geographicCoordinate.elements.LONG.value = toDeg(normalizeAngle(coordinate.longitude))
-			updated = true
-		}
-
-		if (this.elevation !== coordinate.elevation) {
-			this.#geographicCoordinate.elements.ELEV.value = toMeter(coordinate.elevation)
-			updated = true
-		}
-
-		if (updated) {
-			this.updatePierSide()
-			handleDefNumberVector(this.client, this.handler, this.#geographicCoordinate)
 		}
 	}
 
