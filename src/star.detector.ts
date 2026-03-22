@@ -23,16 +23,16 @@ const STAR_BACKGROUND_INNER_RADIUS_SQ = 25
 const STAR_BACKGROUND_OUTER_RADIUS_SQ = 49
 const STAR_PHOTOMETRY_RADIUS = 7
 const STAR_CONVOLVED_MARGIN = 4
-const STAR_MIN_HFD = 0.25
-const STAR_MIN_SNR = 0.23
+const STAR_MIN_HFD = 1
+const STAR_SCORE_GAP_RATIO = 4
 
 const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
 	maxStars: 500,
 	searchRegion: 0,
-	minSNR: STAR_MIN_SNR,
+	minSNR: 0,
 }
 
-export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = STAR_MIN_SNR }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
+export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = 0 }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
 	image = grayscale(image)
 
 	const original = image.raw
@@ -43,24 +43,17 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 	// Run the PSF convolution
 	image = psf(image)
 
-	minSNR = Math.max(STAR_MIN_SNR, minSNR)
-
 	const { raw, metadata } = image
 	const { width, height, stride } = metadata
-	const convRect: Rect = {
-		left: STAR_CONVOLVED_MARGIN,
-		top: STAR_CONVOLVED_MARGIN,
-		right: width - STAR_CONVOLVED_MARGIN - 1,
-		bottom: height - STAR_CONVOLVED_MARGIN - 1,
-	}
+	const convRect: Rect = { left: STAR_CONVOLVED_MARGIN, top: STAR_CONVOLVED_MARGIN, right: width - STAR_CONVOLVED_MARGIN - 1, bottom: height - STAR_CONVOLVED_MARGIN - 1 }
 	const maxX = convRect.right - STAR_CONVOLVED_MARGIN
 	const maxY = convRect.bottom - STAR_CONVOLVED_MARGIN
 	const stars = new StarList(Math.min(maxStars, 2000))
 	const integrals = buildIntegralImages(raw, width, height, stride)
-	const leftBounds = new Int32Array(width)
-	const rightBounds = new Int32Array(width)
-	const topBounds = new Int32Array(height)
-	const bottomBounds = new Int32Array(height)
+	const leftBounds = new Uint16Array(width)
+	const rightBounds = new Uint16Array(width)
+	const topBounds = new Uint16Array(height)
+	const bottomBounds = new Uint16Array(height)
 	const stride2 = stride * 2
 	const stride3 = stride * 3
 	const stride4 = stride * 4
@@ -144,7 +137,7 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 
 			if (h < 0.1) continue
 
-			// Validate each candidate against the original image so hot pixels and faint ripples never enter the ranking list.
+			// Validate each candidate against the original image so ranking uses measured photometry instead of only convolution response.
 			const [flux, snr, hfd] = measureStarPhotometry(original, width, height, stride, x, y)
 			if (flux <= 0 || snr < minSNR || hfd < STAR_MIN_HFD) continue
 
@@ -163,6 +156,9 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 		excludeStarsFitWithinRegion(stars, searchRegion)
 	}
 
+	// Keep only the strongest coherent score cluster when the frame has a clear star-to-noise break.
+	trimStarsByScoreGap(stars)
+
 	let i = 0
 	const res = new Array<DetectedStar>(stars.size)
 
@@ -171,6 +167,32 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 	}
 
 	return res
+}
+
+// Trims weak detections after a large score discontinuity between adjacent ranked candidates.
+function trimStarsByScoreGap(stars: StarList) {
+	if (stars.size <= 3) return
+
+	const ranked = stars.array()
+	const n = ranked.length
+	const topWindowStart = Math.max(1, n - Math.min(n, 128))
+	let keepFrom = 0
+	let bestRatio = STAR_SCORE_GAP_RATIO
+
+	for (let i = topWindowStart - 1; i < n - 1; i++) {
+		const weaker = ranked[i].h
+		const stronger = ranked[i + 1].h
+		if (weaker <= 0 || stronger <= 0) continue
+		const ratio = stronger / weaker
+		if (ratio <= bestRatio) continue
+		if (n - i - 1 < 3) continue
+		bestRatio = ratio
+		keepFrom = i + 1
+	}
+
+	for (let removeCount = keepFrom; removeCount > 0; removeCount--) {
+		stars.deleteFirst()
+	}
 }
 
 // Computes aperture flux, SNR and HFD for a detected star.

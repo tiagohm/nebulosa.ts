@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { Bitpix } from '../src/fits'
-import { type AstronomicalImageNoiseConfig, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage } from '../src/image.generator'
+import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../src/image.generator'
 import type { Image } from '../src/image.types'
+import { mulberry32 } from '../src/random'
 import { detectStars, excludeStarsFitWithinRegion, mergeVeryCloseStars, StarList } from '../src/star.detector'
-import { plotStar } from '../src/star.generator'
+import { type PlotStarOptions, plotStar } from '../src/star.generator'
 import { medianOf } from '../src/util'
 import { downloadPerTag } from './download'
 import { readImage } from './image.util'
@@ -96,7 +97,7 @@ test('merge stars & exclusion', () => {
 	expect(array.map((e) => e.y)).toEqual([803])
 })
 
-describe('detect stars', () => {
+describe('detect stars I', () => {
 	const width = 400
 	const height = 200
 	const raw = new Float32Array(width * height)
@@ -179,4 +180,102 @@ test('detect stars from real image', async () => {
 	expect(medianOf(flux)).toBeGreaterThan(0)
 	expect(medianOf(snr)).toBeGreaterThan(0)
 	expect(medianOf(hfd)).toBeGreaterThanOrEqual(1.5)
+})
+
+const BASE_NOISE_CONFIG: AstronomicalImageNoiseConfig = {
+	seed: 487537239,
+	quality: 'balanced',
+	exposure: { exposureTime: 1, analogGain: 1.5, digitalGain: 1, electronsPerAdu: 0.85 },
+	sky: DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky,
+	moon: DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon,
+	lightPollution: DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution,
+	atmosphere: DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere,
+	sensor: DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor,
+	artifacts: DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts,
+	output: DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output,
+}
+
+const BASE_PLOT_OPTIONS: PlotStarOptions = {
+	background: 0,
+	saturationLevel: 1,
+	focusStep: 50000,
+	bestFocus: 50000,
+	maxFocusStep: 100000,
+	peakScale: 1,
+	ellipticity: 0,
+	theta: 0,
+	softCore: 0,
+	psfModel: 'gaussian',
+	beta: 2.5,
+	haloStrength: 0,
+	haloScale: 2.8,
+	jitterX: 0,
+	jitterY: 0,
+	gain: 1,
+	gammaCompensation: 2.2,
+	additiveNoiseHint: 0,
+	minPlotRadius: 2,
+	maxPlotRadius: 24,
+	cutoffSigma: 4.25,
+}
+
+describe('detect stars II', () => {
+	const width = 600
+	const height = 480
+	const count = 48
+
+	function generateStars(seed: number, hfd: number, flux: number, snr: number) {
+		const random = mulberry32(seed)
+		const stars: AstronomicalImageStar[] = []
+		const minSeparation = Math.max(18, Math.ceil(hfd * 5))
+		const minSeparationSq = minSeparation * minSeparation
+
+		while (stars.length < count) {
+			const x = 24 + Math.round(random() * (width - 48))
+			const y = 24 + Math.round(random() * (height - 48))
+			let separated = true
+
+			for (let i = 0; i < stars.length; i++) {
+				const star = stars[i]
+				const dx = star.x - x
+				const dy = star.y - y
+
+				if (dx * dx + dy * dy < minSeparationSq) {
+					separated = false
+					break
+				}
+			}
+
+			if (separated) {
+				stars.push({ hfd, flux, snr, x, y })
+			}
+		}
+
+		return stars
+	}
+
+	const scenarios = [
+		{ name: 'compact bright high snr', seed: 2, hfd: 1.8, flux: 1.2, snr: 90 },
+		{ name: 'compact nominal', seed: 3, hfd: 2.2, flux: 0.8, snr: 45 },
+		{ name: 'nominal medium', seed: 4, hfd: 3.2, flux: 0.6, snr: 30 },
+		{ name: 'diffuse medium', seed: 5, hfd: 4.5, flux: 0.7, snr: 35 },
+		{ name: 'diffuse bright', seed: 6, hfd: 5.5, flux: 1.1, snr: 70 },
+		{ name: 'faint but high snr', seed: 7, hfd: 2.8, flux: 0.28, snr: 70 },
+		{ name: 'bright low snr', seed: 8, hfd: 3.1, flux: 1.2, snr: 12 },
+		{ name: 'faint low snr', seed: 9, hfd: 3.4, flux: 0.18, snr: 8 },
+		{ name: 'compact faint medium snr', seed: 10, hfd: 1.6, flux: 0.22, snr: 20 },
+	] as const
+
+	for (const scenario of scenarios) {
+		test(scenario.name, () => {
+			const raw = new Float32Array(width * height)
+			const stars = generateStars(scenario.seed, scenario.hfd, scenario.flux, scenario.snr)
+			expect(stars).toHaveLength(count)
+
+			generateStarImage(raw, width, height, 1, stars, 1.2, BASE_NOISE_CONFIG, BASE_PLOT_OPTIONS)
+			const image: Image = { raw, header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height }, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+			const detectedStars = detectStars(image, { maxStars: 500 })
+			expect(detectedStars).toHaveLength(stars.length)
+		})
+	}
 })
