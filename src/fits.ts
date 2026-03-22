@@ -801,7 +801,7 @@ function riceBlockSizeFromHeader(header: FitsHeader) {
 function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, header: FitsHeader, bitpix: BitpixOrZero, width: number, height: number, channels: number) {
 	const numberOfPixels = width * height
 	const scale = (header.BSCALE as number) || 1
-	const zero = (header.BZERO as number) || 0
+	const zero = (header.BZERO as number) || (bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0)
 	const factor = bitpix > 0 ? scale / (2 ** bitpix - 1) : 1 // Transform n-bit integer to float [0..1]
 
 	for (let i = 0, p = 0; i < numberOfPixels; i++) {

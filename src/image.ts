@@ -5,6 +5,7 @@ import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isRiceCompressedImageH
 import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageRawType, type WriteImageToFormatOptions } from './image.types'
 import { bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from './io'
 import { Jpeg } from './jpeg'
+import { clamp } from './math'
 import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type XisfWriteFormat } from './xisf'
 
 function findCompressedImageHdu(hdu: FitsHdu) {
@@ -36,6 +37,8 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * channels) : new Float64Array(pixelCount * channels)
 	if (!(await reader.read(source, raw))) return undefined
 
+	normalize(raw)
+
 	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer } } satisfies Image as Image
 }
 
@@ -54,6 +57,8 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
 	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * channels) : new Float64Array(pixelCount * channels)
 	if (!(await reader.read(source, raw))) return undefined
+
+	normalize(raw)
 
 	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer } } satisfies Image as Image
 }
@@ -111,10 +116,30 @@ export function writeImageToXisf(image: Image, output: Buffer | Sink, format?: X
 	return writeXisf(output, [image], format)
 }
 
-export function clampPixel(p: number, max: number) {
-	return Math.max(0, Math.min(p, max))
+export function truncatePixel(p: number, max: number) {
+	return clamp(Math.trunc(p * max), 0, max)
 }
 
-export function truncatePixel(p: number, max: number) {
-	return clampPixel(Math.trunc(p * max), max)
+function normalize(raw: ImageRawType) {
+	const n = raw.length
+	let min = raw[0]
+	let max = raw[0]
+
+	for (let i = 0; i < n; i++) {
+		const p = raw[i]
+		if (p < min) min = p
+		else if (p > max) max = p
+	}
+
+	if (min < 0 || max > 1) {
+		const rangeDelta = Math.abs(max - min)
+
+		if (rangeDelta <= 1e-12) {
+			raw.fill(0)
+		} else {
+			for (let i = 0; i < n; i++) {
+				raw[i] = (raw[i] - min) / rangeDelta
+			}
+		}
+	}
 }
