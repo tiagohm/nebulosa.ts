@@ -1,7 +1,7 @@
 import { type Angle, normalizeAngle } from './angle'
 import { PI, PIOVERTWO } from './constants'
 import { clamp, pmod } from './math'
-import { type MutVec3, type Vec3, vecCross, vecDot, vecNormalize, vecTripleProduct } from './vec3'
+import { type MutVec3, type Vec3, vecCross, vecDot, vecNegateMut, vecNormalize, vecTripleProduct } from './vec3'
 
 const HEALPIX_MAX_NSIDE = 2 ** 24
 const HEALPIX_FACE_COUNT = 12
@@ -726,6 +726,16 @@ function buildRegion(vertices: readonly HealpixVertexInput[], label: 'triangle' 
 		}
 	}
 
+	if (orientation === 0) {
+		throw new Error(`${label} vertices do not define a stable interior orientation`)
+	}
+
+	if (orientation < 0) {
+		for (let i = 0; i < edgeNormals.length; i++) {
+			vecNegateMut(edgeNormals[i] as MutVec3)
+		}
+	}
+
 	if (label === 'triangle' && Math.abs(vecTripleProduct(cleaned[0], cleaned[1], cleaned[2])) <= EPSILON) {
 		throw new Error('triangle vertices are degenerate')
 	}
@@ -770,16 +780,9 @@ function sameUnitVector(a: Vec3, b: Vec3) {
 
 // Computes whether a unit vector lies inside a convex spherical region.
 function pointInRegion(point: Vec3, region: HealpixRegion) {
-	let sign = 0
-
 	for (let i = 0; i < region.edgeNormals.length; i++) {
 		const side = vecDot(region.edgeNormals[i], point)
-
-		if (Math.abs(side) <= EPSILON) continue
-
-		const nextSign = side > 0 ? 1 : -1
-		if (sign === 0) sign = nextSign
-		else if (sign !== nextSign) return false
+		if (side < -EPSILON) return false
 	}
 
 	return true

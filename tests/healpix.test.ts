@@ -110,6 +110,7 @@ test('triangle query handles longitude seam crossing', () => {
 
 	index.insert('inside', 0, deg(5))
 	index.insert('outside', deg(40), 0)
+	index.insert('far-side', deg(180), deg(-5))
 
 	expect(idsOf(index.queryTriangle([deg(350), 0], [deg(10), 0], [0, deg(20)]))).toEqual(['inside'])
 })
