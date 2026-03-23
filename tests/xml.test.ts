@@ -167,4 +167,29 @@ describe('parse', () => {
 
 		expect(() => parser.parse('<person><name></person></name>')).toThrow('mismatched closing tag')
 	})
+
+	test('should parse char code > 128', () => {
+		const parse = new SimpleXmlParser()
+		const xml = `
+        <defNumberVector device="WandererCover V4-EC" name="STATUS" label="Real Time Status" group="Main Control" state="Idle" perm="ro" timeout="60" timestamp="2026-03-23T01:39:04">
+            <defNumber name="Closed_Position" label="Closed Position Set(°)" format="%4.2f" min="0" max="999" step="100">0</defNumber>
+        </defNumberVector>
+        `
+
+		const node = parse.parse(xml)
+		expect(node).toHaveLength(1)
+		expect(node[0].name).toBe('defNumberVector')
+		expect(node[0].attributes.device).toBe('WandererCover V4-EC')
+		expect(node[0].children[0].attributes.label).toBe('Closed Position Set(°)')
+	})
+
+    test('should parse unicode char', () => {
+		const parse = new SimpleXmlParser()
+		const xml = `<person status="😎"></person>`
+
+		const node = parse.parse(xml)
+		expect(node).toHaveLength(1)
+		expect(node[0].name).toBe('person')
+		expect(node[0].attributes.status).toBe('😎')
+	})
 })

@@ -42,34 +42,55 @@ const DASH = 45
 const DOT = 46
 const UNDERSCORE = 95
 
+class InternalBuffer {
+    readonly #decoder = new TextDecoder()
+
+    readonly buffer: Uint8Array
+    position = 0
+
+    constructor(size: number) {
+        this.buffer = new Uint8Array(size)
+    }
+
+    reset() {
+        this.position = 0
+    }
+
+    write(byte: number) {
+        this.buffer[this.position++] = byte
+    }
+
+    text() {
+        return this.#decoder.decode(this.buffer.subarray(0, this.position))
+    }
+}
+
 export class SimpleXmlParser {
 	private state = XmlState.START
-	private readonly tag = new GrowableBuffer(32)
-	private readonly name = new GrowableBuffer(32)
-	private readonly value = new GrowableBuffer(128)
+	private readonly tag = new InternalBuffer(256)
+	private readonly name = new InternalBuffer(256)
+	private readonly value = new InternalBuffer(1024)
 	private readonly text = new GrowableBuffer(1024 * 16)
 	private attributes: XmlNodeAttributes = {}
 	private tree: XmlNode[] = []
 	private prevCode?: number
 	private closeTagSealed = false
+	private readonly encoder = new TextEncoder()
 
-	parse(input: string | Buffer): XmlNode[] {
-		const nodes: XmlNode[] = []
-
+	parse(input: string | Buffer | Uint8Array): XmlNode[] {
 		if (typeof input === 'string') {
-			for (let i = 0; i < input.length; i++) {
-				const node = this.processByte(input.charCodeAt(i))
-				if (node) nodes.push(node)
-			}
+			return this.parse(this.encoder.encode(input))
 		} else {
+			const nodes: XmlNode[] = []
+
 			for (let i = 0; i < input.byteLength; i++) {
 				const code = input[i] & 0xff
 				const node = this.processByte(code)
 				if (node) nodes.push(node)
 			}
-		}
 
-		return nodes
+			return nodes
+		}
 	}
 
 	reset() {
@@ -86,7 +107,7 @@ export class SimpleXmlParser {
 
 	// Append a new node to the current tree and optionally keep it open.
 	private appendNode(attributes: XmlNodeAttributes, push: boolean = true): XmlNode {
-		const node: XmlNode = { name: this.tag.toString(), attributes, children: [], text: '' }
+		const node: XmlNode = { name: this.tag.text(), attributes, children: [], text: '' }
 
 		if (this.tree.length) {
 			this.tree[this.tree.length - 1].children.push(node)
@@ -117,7 +138,7 @@ export class SimpleXmlParser {
 
 	// Flush a valueless attribute that ended at whitespace, `/`, or `>`.
 	private flushAttributeName() {
-		const name = this.name.toString()
+		const name = this.name.text()
 		if (!name) return
 		this.attributes[name] = ''
 		this.name.reset()
@@ -131,7 +152,7 @@ export class SimpleXmlParser {
 
 	// Close the current node and validate the closing tag name.
 	private closeNode(): XmlNode | undefined {
-		const name = this.tag.toString()
+		const name = this.tag.text()
 		this.tag.reset()
 		this.closeTagSealed = false
 		if (!name) this.fail('missing closing tag name')
@@ -149,7 +170,7 @@ export class SimpleXmlParser {
 			if (isWhitespace(code)) {
 				// Ignore insignificant whitespace between top-level nodes.
 			} else if (isNameChar(code)) {
-				this.tag.writeInt8(code)
+				this.tag.write(code)
 				this.state = XmlState.TAG_NAME
 			} else if (code === SLASH) {
 				this.tag.reset()
@@ -160,7 +181,7 @@ export class SimpleXmlParser {
 			}
 		} else if (this.state === XmlState.TAG_NAME) {
 			if (isNameChar(code)) {
-				this.tag.writeInt8(code)
+				this.tag.write(code)
 			} else if (isWhitespace(code)) {
 				this.attributes = {}
 				this.name.reset()
@@ -178,7 +199,7 @@ export class SimpleXmlParser {
 			if (isWhitespace(code)) {
 				this.flushAttributeName()
 			} else if (isNameChar(code)) {
-				this.name.writeInt8(code)
+				this.name.write(code)
 			} else if (code === EQUAL) {
 				this.state = XmlState.ATTR_VALUE
 			} else if (code === SLASH) {
@@ -201,9 +222,9 @@ export class SimpleXmlParser {
 			}
 		} else if (this.state === XmlState.ATTR_VALUE) {
 			if (code === QUOTE) {
-				if (this.value.length > 0 || this.prevCode === QUOTE) {
-					const name = this.name.toString()
-					this.attributes[name] = this.value.toString()
+				if (this.value.position > 0 || this.prevCode === QUOTE) {
+					const name = this.name.text()
+					this.attributes[name] = this.value.text()
 					this.name.reset()
 					this.value.reset()
 					this.state = XmlState.ATTR_NAME
@@ -211,14 +232,14 @@ export class SimpleXmlParser {
 					this.value.reset()
 				}
 			} else {
-				this.value.writeInt8(code)
+				this.value.write(code)
 			}
 		} else if (this.state === XmlState.TEXT) {
 			if (code === OPEN_ANGLE) {
 				this.appendText()
 				this.state = XmlState.TAG_OPEN
 			} else {
-				this.text.writeInt8(code)
+				this.text.writeUInt8(code)
 			}
 		} else if (this.state === XmlState.SELF_CLOSE) {
 			if (code === CLOSE_ANGLE) {
@@ -236,9 +257,9 @@ export class SimpleXmlParser {
 		} else if (this.state === XmlState.TAG_CLOSE) {
 			if (isNameChar(code)) {
 				if (this.closeTagSealed) this.fail('invalid closing tag syntax')
-				this.tag.writeInt8(code)
+				this.tag.write(code)
 			} else if (isWhitespace(code)) {
-				if (this.tag.length > 0) this.closeTagSealed = true
+				if (this.tag.position > 0) this.closeTagSealed = true
 			} else if (code === CLOSE_ANGLE) {
 				const node = this.closeNode()
 				this.state = this.tree.length === 0 ? XmlState.START : XmlState.TEXT
