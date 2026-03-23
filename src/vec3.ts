@@ -242,3 +242,16 @@ export function vecRotZMut(v: MutVec3, angle: Angle): MutVec3 {
 export function vecDivScalarMut(v: MutVec3, scalar: number): MutVec3 {
 	return vecDivScalar(v, scalar, v)
 }
+
+// Computes the scalar triple product a · (b × c).
+export function vecTripleProduct(a: Vec3, b: Vec3, c: Vec3) {
+	return a[0] * (b[1] * c[2] - b[2] * c[1]) + a[1] * (b[2] * c[0] - b[0] * c[2]) + a[2] * (b[0] * c[1] - b[1] * c[0])
+}
+
+// Computes the raw cross product length without allocating.
+export function vecCrossLength(a: Vec3, b: Vec3) {
+	const x = a[1] * b[2] - a[2] * b[1]
+	const y = a[2] * b[0] - a[0] * b[2]
+	const z = a[0] * b[1] - a[1] * b[0]
+	return Math.hypot(x, y, z)
+}
