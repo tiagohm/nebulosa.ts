@@ -642,11 +642,11 @@ function interleaveBits(ix: number, iy: number, order: number) {
 	let offset = 1
 
 	for (let i = 0; i < order; i++) {
-		if ((ix & bit) !== 0) pixel |= offset
-		offset <<= 1
-		if ((iy & bit) !== 0) pixel |= offset
-		offset <<= 1
-		bit <<= 1
+		if (Math.floor(ix / bit) % 2 !== 0) pixel += offset
+		offset *= 2
+		if (Math.floor(iy / bit) % 2 !== 0) pixel += offset
+		offset *= 2
+		bit *= 2
 	}
 
 	return pixel
@@ -659,11 +659,11 @@ function deinterleaveBits(pixel: number, order: number) {
 	let bit = 1
 
 	for (let i = 0; i < order; i++) {
-		const digit = pixel & 3
-		if ((digit & 1) !== 0) ix |= bit
-		if (digit >= 2) iy |= bit
-		pixel >>= 2
-		bit <<= 1
+		const digit = pixel % 4
+		if (digit % 2 !== 0) ix += bit
+		if (digit >= 2) iy += bit
+		pixel = Math.floor(pixel / 4)
+		bit *= 2
 	}
 
 	return [ix, iy] as const
