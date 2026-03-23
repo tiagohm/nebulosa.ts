@@ -1,7 +1,5 @@
 // https://x.com/i/grok/share/3i6xCCEtUvQWeNnbiVMaermCl
 
-import { GrowableBuffer } from './io'
-
 export type XmlNodeAttributes = Record<string, string>
 
 export interface XmlNode {
@@ -43,26 +41,36 @@ const DOT = 46
 const UNDERSCORE = 95
 
 class InternalBuffer {
-    readonly #decoder = new TextDecoder()
+	readonly #decoder = new TextDecoder()
+	readonly #buffer?: ArrayBuffer
+	readonly #data: Uint8Array
 
-    readonly buffer: Uint8Array
-    position = 0
+	position = 0
 
-    constructor(size: number) {
-        this.buffer = new Uint8Array(size)
-    }
+	constructor(size: number, maxByteLength: number = 0) {
+		if (maxByteLength > 0) {
+			this.#buffer = new ArrayBuffer(size, { maxByteLength })
+			this.#data = new Uint8Array(this.#buffer)
+		} else {
+			this.#data = new Uint8Array(size)
+		}
+	}
 
-    reset() {
-        this.position = 0
-    }
+	reset() {
+		this.position = 0
+	}
 
-    write(byte: number) {
-        this.buffer[this.position++] = byte
-    }
+	write(byte: number) {
+		if (this.#buffer !== undefined && this.position >= this.#data.length) {
+			this.#buffer.resize(this.#data.length * 2)
+		}
 
-    text() {
-        return this.#decoder.decode(this.buffer.subarray(0, this.position))
-    }
+		this.#data[this.position++] = byte
+	}
+
+	text() {
+		return this.#decoder.decode(this.#data.subarray(0, this.position))
+	}
 }
 
 export class SimpleXmlParser {
@@ -70,7 +78,7 @@ export class SimpleXmlParser {
 	private readonly tag = new InternalBuffer(256)
 	private readonly name = new InternalBuffer(256)
 	private readonly value = new InternalBuffer(1024)
-	private readonly text = new GrowableBuffer(1024 * 16)
+	private readonly text = new InternalBuffer(256, 1024 * 1024 * 256)
 	private attributes: XmlNodeAttributes = {}
 	private tree: XmlNode[] = []
 	private prevCode?: number
@@ -127,7 +135,7 @@ export class SimpleXmlParser {
 			return
 		}
 
-		const value = this.text.toString(true)
+		const value = this.text.text().trim()
 		this.text.reset()
 
 		if (!value) return
@@ -239,7 +247,7 @@ export class SimpleXmlParser {
 				this.appendText()
 				this.state = XmlState.TAG_OPEN
 			} else {
-				this.text.writeUInt8(code)
+				this.text.write(code)
 			}
 		} else if (this.state === XmlState.SELF_CLOSE) {
 			if (code === CLOSE_ANGLE) {
