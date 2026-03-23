@@ -105,6 +105,16 @@ test('circle query is boundary inclusive', () => {
 	expect(idsOf(index.queryCircle(0, 0, radius))).toEqual(['center', 'edge'])
 })
 
+test('index queries ignore external target nside mismatches during bucket lookup', () => {
+	const index = new HealpixIndex<string>({ nside: 8 })
+
+	index.insert('inside', deg(5), deg(2))
+	index.insert('outside', deg(90), deg(45))
+
+	expect(idsOf(index.queryCircle(0, 0, deg(10), { targetNside: 16 }))).toEqual(['inside'])
+	expect(idsOf(index.queryCircle(0, 0, deg(10), { targetNside: 4 }))).toEqual(['inside'])
+})
+
 test('triangle query handles longitude seam crossing', () => {
 	const index = new HealpixIndex<string>({ nside: 8 })
 

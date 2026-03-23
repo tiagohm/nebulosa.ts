@@ -272,7 +272,7 @@ export class HealpixIndex<T, M = unknown> {
 		const normalizedLatitude = normalizeLatitude(centerLatitude)
 		const center = lonLatToVec(normalizedLongitude, normalizedLatitude)
 		const radiusCos = Math.cos(radius)
-		const pixels = circleToPixels(this.nside, normalizedLongitude, normalizedLatitude, radius, withOrdering(options, this.ordering))
+		const pixels = circleToPixels(this.nside, normalizedLongitude, normalizedLatitude, radius, withIndexCoverOptions(options, this.nside, this.ordering))
 
 		return this.#collectMatches(pixels, (entry) => {
 			return vecDot(entry.vector, center) >= radiusCos - EPSILON
@@ -282,14 +282,14 @@ export class HealpixIndex<T, M = unknown> {
 	// Queries objects inside a spherical triangle.
 	queryTriangle(a: HealpixVertexInput, b: HealpixVertexInput, c: HealpixVertexInput, options: HealpixCoverOptions = {}) {
 		const region = buildRegion([a, b, c], 'triangle')
-		const pixels = triangleToPixels(this.nside, a, b, c, withOrdering(options, this.ordering))
+		const pixels = triangleToPixels(this.nside, a, b, c, withIndexCoverOptions(options, this.nside, this.ordering))
 		return this.#collectMatches(pixels, (entry) => pointInRegion(entry.vector, region))
 	}
 
 	// Queries objects inside a convex spherical polygon.
 	queryPolygon(vertices: readonly HealpixVertexInput[], options: HealpixCoverOptions = {}) {
 		const region = buildRegion(vertices, 'polygon')
-		const pixels = polygonToPixels(this.nside, vertices, withOrdering(options, this.ordering))
+		const pixels = polygonToPixels(this.nside, vertices, withIndexCoverOptions(options, this.nside, this.ordering))
 		return this.#collectMatches(pixels, (entry) => pointInRegion(entry.vector, region))
 	}
 
@@ -365,11 +365,10 @@ export class HealpixIndex<T, M = unknown> {
 	}
 }
 
-// Forces query-cover outputs to match the index ordering.
-function withOrdering(options: HealpixCoverOptions, ordering: HealpixOrdering): HealpixCoverOptions {
-	if (options.ordering === ordering) return options
-	if (options.ordering === undefined && ordering === 'nested') return options
-	return { ...options, ordering }
+// Forces index query covers to match the index resolution and ordering.
+function withIndexCoverOptions(options: HealpixCoverOptions, nside: number, ordering: HealpixOrdering): HealpixCoverOptions {
+	if ((options.ordering === ordering || (options.ordering === undefined && ordering === 'nested')) && (options.targetNside === nside || options.targetNside === undefined)) return options
+	return { ...options, ordering, targetNside: nside }
 }
 
 // Validates an NSIDE value against HEALPix constraints.
