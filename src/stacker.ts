@@ -165,6 +165,7 @@ interface AlignedFrame {
 	readonly raw: ImageRawType
 	readonly valid: Uint8Array
 	readonly weight: number
+	readonly coveredPixels: number
 	readonly index: number
 	readonly id?: string | number
 	readonly quality: StackingFrameQualityMetrics
@@ -341,8 +342,8 @@ export class LiveStacker {
 		if (inverse === undefined) return this.reject(frameIndex, frame, quality, 'invalid-transform')
 
 		this.ensureWorkBuffers(this.referenceFrame.image.metadata.pixelCount * this.referenceFrame.image.metadata.channels)
-		alignIntoReference(frame.image, inverse, this.referenceFrame.image.metadata.width, this.referenceFrame.image.metadata.height, this.options.interpolationMode, this.workRaw!, this.workMask!)
-		const overlapFraction = computeOverlapFraction(this.workMask!)
+		const coveredPixels = alignIntoReference(frame.image, inverse, this.referenceFrame.image.metadata.width, this.referenceFrame.image.metadata.height, this.options.interpolationMode, this.workRaw!, this.workMask!)
+		const overlapFraction = coveredPixels / Math.max(this.workMask!.length, 1)
 		if (overlapFraction <= 0) return this.reject(frameIndex, frame, quality, 'no-overlap')
 		if (overlapFraction < this.options.minOverlapFraction) return this.reject(frameIndex, frame, quality, 'insufficient-overlap')
 
@@ -420,17 +421,24 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 	const diagnostics: FrameAcceptanceResult[] = []
 	const pixelCount = referenceFrame.image.metadata.pixelCount
 	const channels = referenceFrame.image.metadata.channels
+	const sampleBasedMethod = !(resolved.combinationMethod === 'sum' || resolved.combinationMethod === 'average' || resolved.combinationMethod === 'weighted-average')
 	const coverageMap = new Uint32Array(pixelCount)
 	const sum = new Float64Array(pixelCount * channels)
 	const weightSum = new Float64Array(pixelCount)
 	const referenceWeight = resolveFrameWeight(referenceFrame, qualities[referenceIndex], resolved)
 	const referenceNormalization = { scales: channelArray(channels, 1), offsets: channelArray(channels, 0), weight: referenceWeight }
+	const referenceValid = fullMask(pixelCount)
+	let acceptedCount = 1
+	incrementCoverage(coverageMap, referenceValid)
 
-	const referenceAligned = makeAlignedReference(referenceFrame, referenceIndex, qualities[referenceIndex], referenceNormalization, sum, weightSum, resolved.combinationMethod)
-	accepted.push(referenceAligned)
+	if (sampleBasedMethod) {
+		accepted.push(makeAlignedReference(referenceFrame, referenceIndex, qualities[referenceIndex], referenceNormalization, sum, weightSum, resolved.combinationMethod))
+	} else {
+		accumulateAlignedFrame(channels, referenceFrame.image.raw, referenceValid, sum, weightSum, undefined, resolved.combinationMethod, referenceWeight)
+	}
 
-	incrementCoverage(coverageMap, referenceAligned.valid)
 	diagnostics.push({ accepted: true, frameIndex: referenceIndex, frameId: referenceFrame.id, overlapFraction: 1, quality: qualities[referenceIndex], transform: identityTransformSummary(), normalization: referenceNormalization })
+	let acceptedWeightSum = referenceWeight
 
 	for (let i = 0; i < frames.length; i++) {
 		if (i === referenceIndex) continue
@@ -490,7 +498,7 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 		}
 
 		const aligned = createAlignedFrame(frame, i, quality, referenceFrame, inverse, resolved, transform.summary)
-		const overlapFraction = computeOverlapFraction(aligned.valid)
+		const overlapFraction = aligned.coveredPixels / Math.max(aligned.valid.length, 1)
 
 		if (overlapFraction <= 0) {
 			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: 'no-overlap' })
@@ -502,23 +510,26 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 			continue
 		}
 
-		accepted.push(aligned)
+		acceptedCount++
+		acceptedWeightSum += aligned.weight
 		incrementCoverage(coverageMap, aligned.valid)
 
-		if (resolved.combinationMethod === 'sum' || resolved.combinationMethod === 'average' || resolved.combinationMethod === 'weighted-average') {
-			accumulateAlignedFrame(channels, aligned.raw, aligned.valid, sum, weightSum, new Uint32Array(pixelCount), resolved.combinationMethod, aligned.weight)
+		if (sampleBasedMethod) {
+			accepted.push(aligned)
+		} else {
+			accumulateAlignedFrame(channels, aligned.raw, aligned.valid, sum, weightSum, undefined, resolved.combinationMethod, aligned.weight)
 		}
 
 		diagnostics.push({ accepted: true, frameIndex: i, frameId: frame.id, overlapFraction, quality, transform: transform.summary, normalization: aligned.normalization })
 	}
 
-	const finalized = resolved.combinationMethod === 'sum' || resolved.combinationMethod === 'average' || resolved.combinationMethod === 'weighted-average' ? finalizeOnlineImage(referenceFrame, resolved, sum, weightSum, coverageMap, accepted.length) : finalizeBatchImage(referenceFrame, resolved, accepted, coverageMap)
-	const cropBounds = computeEffectiveCropBounds(referenceFrame.image.metadata.width, referenceFrame.image.metadata.height, coverageMap, accepted.length, resolved)
+	const finalized = sampleBasedMethod ? finalizeBatchImage(referenceFrame, resolved, accepted, coverageMap) : finalizeOnlineImage(referenceFrame, resolved, sum, weightSum, coverageMap, acceptedCount)
+	const cropBounds = computeEffectiveCropBounds(referenceFrame.image.metadata.width, referenceFrame.image.metadata.height, coverageMap, acceptedCount, resolved)
 
 	return {
 		finalImage: finalized.image,
-		acceptedFrames: accepted.length,
-		rejectedFrames: frames.length - accepted.length,
+		acceptedFrames: acceptedCount,
+		rejectedFrames: frames.length - acceptedCount,
 		referenceFrameIndex: referenceIndex,
 		effectiveCropBounds: cropBounds,
 		diagnostics,
@@ -527,11 +538,11 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 			normalizationMode: resolved.normalizationMode,
 			weightingMode: resolved.weightingMode,
 			liveExact: isLiveCombinationMethodSupported(resolved.combinationMethod),
-			acceptedWeightSum: accepted.reduce((total, item) => total + item.weight, 0),
+			acceptedWeightSum,
 			minimumCoverage: resolved.cropMode === 'intersection' ? 1 : resolved.minimumCoverage,
 		},
 		coverageMap: resolved.keepPerPixelStatistics ? coverageMap : undefined,
-		validityMask: buildValidityMask(coverageMap, accepted.length, resolved, referenceFrame.image.metadata.width, referenceFrame.image.metadata.height, cropBounds),
+		validityMask: buildValidityMask(coverageMap, acceptedCount, resolved, referenceFrame.image.metadata.width, referenceFrame.image.metadata.height, cropBounds),
 	}
 }
 
@@ -603,14 +614,14 @@ function selectReferenceFrameIndex(frames: readonly StackingFrame[], qualities: 
 // Creates a stored aligned batch sample for the reference frame.
 function makeAlignedReference(frame: StackingFrame, index: number, quality: StackingFrameQualityMetrics, normalization: FrameNormalizationSummary, sum: Float64Array, weightSum: Float64Array, method: StackingCombinationMethod): AlignedFrame {
 	const { pixelCount, channels } = frame.image.metadata
-	const raw = cloneRaw(frame.image.raw)
+	const raw = frame.image.raw
 	const valid = fullMask(pixelCount)
 
 	if (method === 'sum' || method === 'average' || method === 'weighted-average') {
-		accumulateAlignedFrame(channels, raw, valid, sum, weightSum, new Uint32Array(pixelCount), method, normalization.weight)
+		accumulateAlignedFrame(channels, raw, valid, sum, weightSum, undefined, method, normalization.weight)
 	}
 
-	return { raw, valid, weight: normalization.weight, index, id: frame.id, quality, normalization, transform: identityTransformSummary() }
+	return { raw, valid, weight: normalization.weight, coveredPixels: pixelCount, index, id: frame.id, quality, normalization, transform: identityTransformSummary() }
 }
 
 // Creates an aligned and normalized batch sample against the reference frame grid.
@@ -618,10 +629,10 @@ function createAlignedFrame(frame: StackingFrame, index: number, quality: Stacki
 	const { pixelCount, channels, width, height } = referenceFrame.image.metadata
 	const raw = options.samplePrecision === 64 ? new Float64Array(pixelCount * channels) : new Float32Array(pixelCount * channels)
 	const valid = new Uint8Array(pixelCount)
-	alignIntoReference(frame.image, inverseTransform, width, height, options.interpolationMode, raw, valid)
+	const coveredPixels = alignIntoReference(frame.image, inverseTransform, width, height, options.interpolationMode, raw, valid)
 	const normalization = computeNormalization(raw, valid, frame, referenceFrame, quality, options)
 	applyNormalizationInPlace(raw, valid, channels, normalization.scales, normalization.offsets)
-	return { raw, valid, weight: normalization.weight, index, id: frame.id, quality, normalization, transform }
+	return { raw, valid, weight: normalization.weight, coveredPixels, index, id: frame.id, quality, normalization, transform }
 }
 
 // Builds the current live result from online accumulators.
@@ -779,12 +790,10 @@ function combinePercentileClipAverage(values: Float64Array, count: number, lower
 // Computes a conservative sigma-clipped average for one sample vector.
 function combineSigmaClip(values: Float64Array, count: number, options: Required<SigmaClipStackingOptions>) {
 	if (count <= 2) return meanOf(values.subarray(0, count))
-	const scratch = new Float64Array(count)
-	scratch.set(values.subarray(0, count))
 	let active = count
 
 	for (let iteration = 0; iteration < options.maxIterations; iteration++) {
-		const sorted = scratch.subarray(0, active)
+		const sorted = values.subarray(0, active)
 		sorted.sort()
 		const center = options.centerMethod === 'mean' ? meanOf(sorted) : medianOf(sorted, active)
 		let sigma = 0
@@ -808,7 +817,7 @@ function combineSigmaClip(values: Float64Array, count: number, options: Required
 		const high = center + options.sigmaUpper * sigma
 		let kept = 0
 
-		for (let i = 0; i < active; i++) if (sorted[i] >= low && sorted[i] <= high) scratch[kept++] = sorted[i]
+		for (let i = 0; i < active; i++) if (sorted[i] >= low && sorted[i] <= high) values[kept++] = sorted[i]
 
 		if (kept === 0) return center
 		if (kept === active) return meanOf(sorted)
@@ -816,7 +825,7 @@ function combineSigmaClip(values: Float64Array, count: number, options: Required
 		active = kept
 	}
 
-	return meanOf(scratch.subarray(0, active))
+	return meanOf(values.subarray(0, active))
 }
 
 // Computes normalization parameters from overlap samples against the reference frame.
@@ -1018,54 +1027,78 @@ function transformWithinBounds(transform: StackingTransformSummary, options: Res
 // Aligns one source image into the reference frame coordinate grid.
 function alignIntoReference(image: Image, inverseTransform: SimilarityTransform | AffineTransform, outWidth: number, outHeight: number, interpolation: StackingInterpolationMode, outRaw: ImageRawType, outMask: Uint8Array) {
 	const matrix = toAffineMatrix(inverseTransform)
+	const { raw, metadata } = image
+	const { width, height, channels } = metadata
+	const widthMinus1 = width - 1
+	const heightMinus1 = height - 1
 	outRaw.fill(0)
 	outMask.fill(0)
+	let coveredPixels = 0
 
-	for (let y = 0; y < outHeight; y++) {
+	if (interpolation === 'nearest') {
+		for (let y = 0, pixel = 0, outIndex = 0; y < outHeight; y++) {
+			let sourceX = matrix.m01 * y + matrix.tx
+			let sourceY = matrix.m11 * y + matrix.ty
+
+			for (let x = 0; x < outWidth; x++, pixel++, outIndex += channels) {
+				if (!(sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1)) {
+					sourceX += matrix.m00
+					sourceY += matrix.m10
+					continue
+				}
+
+				const ix = Math.round(sourceX)
+				const iy = Math.round(sourceY)
+				const base = (iy * width + ix) * channels
+				for (let channel = 0; channel < channels; channel++) outRaw[outIndex + channel] = raw[base + channel]
+				outMask[pixel] = 1
+				coveredPixels++
+				sourceX += matrix.m00
+				sourceY += matrix.m10
+			}
+		}
+
+		return coveredPixels
+	}
+
+	for (let y = 0, pixel = 0, outIndex = 0; y < outHeight; y++) {
 		let sourceX = matrix.m01 * y + matrix.tx
 		let sourceY = matrix.m11 * y + matrix.ty
 
-		for (let x = 0; x < outWidth; x++) {
-			const pixel = y * outWidth + x
-			if (sampleInto(image.raw, image.metadata.width, image.metadata.height, image.metadata.channels, sourceX, sourceY, interpolation, outRaw, pixel * image.metadata.channels)) outMask[pixel] = 1
+		for (let x = 0; x < outWidth; x++, pixel++, outIndex += channels) {
+			if (!(sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1)) {
+				sourceX += matrix.m00
+				sourceY += matrix.m10
+				continue
+			}
+
+			const x0 = Math.floor(sourceX)
+			const y0 = Math.floor(sourceY)
+			const x1 = Math.min(x0 + 1, widthMinus1)
+			const y1 = Math.min(y0 + 1, heightMinus1)
+			const tx = sourceX - x0
+			const ty = sourceY - y0
+			const w00 = (1 - tx) * (1 - ty)
+			const w10 = tx * (1 - ty)
+			const w01 = (1 - tx) * ty
+			const w11 = tx * ty
+			const base00 = (y0 * width + x0) * channels
+			const base10 = (y0 * width + x1) * channels
+			const base01 = (y1 * width + x0) * channels
+			const base11 = (y1 * width + x1) * channels
+
+			for (let channel = 0; channel < channels; channel++) {
+				outRaw[outIndex + channel] = raw[base00 + channel] * w00 + raw[base10 + channel] * w10 + raw[base01 + channel] * w01 + raw[base11 + channel] * w11
+			}
+
+			outMask[pixel] = 1
+			coveredPixels++
 			sourceX += matrix.m00
 			sourceY += matrix.m10
 		}
 	}
-}
 
-// Samples a source image at one floating coordinate into the destination buffer.
-function sampleInto(raw: ImageRawType, width: number, height: number, channels: number, x: number, y: number, interpolation: StackingInterpolationMode, out: ImageRawType, outIndex: number) {
-	if (!(x >= 0 && y >= 0 && x <= width - 1 && y <= height - 1)) return false
-
-	if (interpolation === 'nearest') {
-		const ix = Math.round(x)
-		const iy = Math.round(y)
-		const base = (iy * width + ix) * channels
-		for (let channel = 0; channel < channels; channel++) out[outIndex + channel] = raw[base + channel]
-		return true
-	}
-
-	const x0 = Math.floor(x)
-	const y0 = Math.floor(y)
-	const x1 = Math.min(x0 + 1, width - 1)
-	const y1 = Math.min(y0 + 1, height - 1)
-	const tx = x - x0
-	const ty = y - y0
-	const w00 = (1 - tx) * (1 - ty)
-	const w10 = tx * (1 - ty)
-	const w01 = (1 - tx) * ty
-	const w11 = tx * ty
-	const base00 = (y0 * width + x0) * channels
-	const base10 = (y0 * width + x1) * channels
-	const base01 = (y1 * width + x0) * channels
-	const base11 = (y1 * width + x1) * channels
-
-	for (let channel = 0; channel < channels; channel++) {
-		out[outIndex + channel] = raw[base00 + channel] * w00 + raw[base10 + channel] * w10 + raw[base01 + channel] * w01 + raw[base11 + channel] * w11
-	}
-
-	return true
+	return coveredPixels
 }
 
 // Converts similarity or affine parameters into a common matrix representation.
@@ -1078,23 +1111,17 @@ function toAffineMatrix(transform: SimilarityTransform | AffineTransform) {
 }
 
 // Accumulates an aligned frame into online sum and weight buffers.
-function accumulateAlignedFrame(channels: number, raw: ArrayLike<number>, valid: Uint8Array, sum: Float64Array, weightSum: Float64Array, coverageMap: Uint32Array, method: StackingCombinationMethod, weight: number) {
+function accumulateAlignedFrame(channels: number, raw: ArrayLike<number>, valid: Uint8Array, sum: Float64Array, weightSum: Float64Array, coverageMap: Uint32Array | undefined, method: StackingCombinationMethod, weight: number) {
 	const effectiveWeight = method === 'weighted-average' ? weight : 1
+	const sumMode = method === 'sum'
 
 	for (let pixel = 0; pixel < valid.length; pixel++) {
 		if (valid[pixel] === 0) continue
 		const base = pixel * channels
 		for (let channel = 0; channel < channels; channel++) sum[base + channel] += raw[base + channel] * effectiveWeight
-		weightSum[pixel] += method === 'sum' ? 1 : effectiveWeight
-		coverageMap[pixel]++
+		weightSum[pixel] += sumMode ? 1 : effectiveWeight
+		if (coverageMap !== undefined) coverageMap[pixel]++
 	}
-}
-
-// Computes overlap fraction from a validity mask.
-function computeOverlapFraction(valid: Uint8Array) {
-	let covered = 0
-	for (let i = 0; i < valid.length; i++) covered += valid[i]
-	return covered / Math.max(valid.length, 1)
 }
 
 // Builds the final validity mask for the requested crop policy.
@@ -1222,13 +1249,6 @@ function incrementCoverage(coverageMap: Uint32Array, valid: Uint8Array) {
 // Creates a typed raw buffer matching the reference storage class.
 function createLike(reference: ImageRawType, length: number) {
 	return reference instanceof Float64Array ? new Float64Array(length) : new Float32Array(length)
-}
-
-// Clones a raw pixel buffer without changing its numeric type.
-function cloneRaw(reference: ImageRawType) {
-	const out = createLike(reference, reference.length)
-	out.set(reference)
-	return out
 }
 
 // Samples sparse luminance or grayscale values from an image.
