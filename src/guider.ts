@@ -348,11 +348,10 @@ export function selectGuideStar(stars: readonly GuideStar[], width: number, heig
 	}
 
 	const candidates: SelectedGuideStar[] = []
-	const maxIsolationDistance = Math.hypot(width, height)
 
 	for (let i = 0; i < count; i++) {
 		const star = filtered.accepted[i]
-		const nearestNeighborDistance = Number.isFinite(nearestDistanceSq[i]) ? Math.sqrt(nearestDistanceSq[i]) : maxIsolationDistance
+		const nearestNeighborDistance = Number.isFinite(nearestDistanceSq[i]) ? Math.sqrt(nearestDistanceSq[i]) : Number.POSITIVE_INFINITY
 		const separationLimit = Math.max(config.minNeighborDistancePx, Math.max(star.hfd, nearestNeighborHfd[i]) * config.minNeighborDistanceHfdRatio)
 
 		if (nearestNeighborDistance < separationLimit) {

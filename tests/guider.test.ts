@@ -319,6 +319,22 @@ describe('star filtering and star matching', () => {
 		expect(selection.candidates[0].peak).toBe(32000)
 	})
 
+	test('does not reject a lone valid star as double star on a small frame', () => {
+		const width = 20
+		const height = 18
+		const lone = star(0, { x: 10, y: 9, flux: 1800, snr: 18, hfd: 2.4 })
+
+		const selection = selectGuideStar([lone], width, height, undefined, {
+			filter: { minStarSnr: 8, minFlux: 100, maxHfd: 10, borderMarginPx: 4, maxEllipticity: 0.5, maxFwhm: 12, saturationPeak: 65000 },
+			minNeighborDistancePx: 40,
+		})
+
+		expect(selection.primary?.x).toBe(lone.x)
+		expect(selection.primary?.y).toBe(lone.y)
+		expect(selection.rejectedReasons.double_star).toBeUndefined()
+		expect(selection.candidates[0].nearestNeighborDistance).toBe(Infinity)
+	})
+
 	test('enforces one-to-one nearest matching and max radius', () => {
 		const reference = [star(0), star(1), star(2)]
 		const current = [star(20, { x: reference[0].x + 1, y: reference[0].y }), star(21, { x: reference[1].x + 1, y: reference[1].y })]
