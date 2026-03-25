@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { applyCalibration, estimateTranslation, filterGuideStars, type GuideFrame, Guider, type GuiderConfig, type GuideStar, invertCalibration, validateCalibration } from '../src/guider'
+import { applyCalibration, estimateTranslation, filterGuideStars, type GuideFrame, Guider, type GuiderConfig, type GuideStar, invertCalibration, selectGuideStar, validateCalibration } from '../src/guider'
+import type { Image } from '../src/image.types'
 
 const WIDTH = 800
 const HEIGHT = 600
@@ -258,6 +259,64 @@ describe('star filtering and star matching', () => {
 		expect(filtered.rejectedReasons.nan).toBe(1)
 		expect(filtered.rejectedReasons.low_flux).toBe(1)
 		expect(filtered.rejectedReasons.high_hfd).toBe(1)
+	})
+
+	test('selects an isolated guide star and spaced alternatives', () => {
+		const crowdedA = star(0, { x: 395, y: 300, flux: 6200, snr: 38, hfd: 2.2 })
+		const crowdedB = star(1, { x: 402, y: 304, flux: 5400, snr: 34, hfd: 2.1 })
+		const primary = star(2, { x: 430, y: 320, flux: 4300, snr: 30, hfd: 2.4 })
+		const closeAlternative = star(3, { x: 452, y: 331, flux: 4100, snr: 28, hfd: 2.5 })
+		const wideAlternativeA = star(4, { x: 245, y: 215, flux: 3600, snr: 24, hfd: 2.6 })
+		const wideAlternativeB = star(5, { x: 610, y: 395, flux: 3500, snr: 23, hfd: 2.7 })
+		const edge = star(6, { x: 8, y: 300, flux: 9000, snr: 70, hfd: 2 })
+		const saturated = star(7, { x: 470, y: 260, flux: 12000, snr: 90, hfd: 2.1, peak: 70000 })
+		const frame = guideFrame([crowdedA, crowdedB, primary, closeAlternative, wideAlternativeA, wideAlternativeB, edge, saturated])
+
+		const selection = selectGuideStar(frame.stars, frame.width, frame.height, undefined, { minNeighborDistancePx: 12, alternativeSeparationPx: 32, maxAlternatives: 2 })
+
+		expect(selection.primary?.x).toBe(primary.x)
+		expect(selection.primary?.y).toBe(primary.y)
+		expect(selection.alternatives).toHaveLength(2)
+		expect(selection.alternatives.some((value) => value.x === closeAlternative.x && value.y === closeAlternative.y)).toBeFalse()
+		expect(selection.alternatives.some((value) => value.x === wideAlternativeA.x && value.y === wideAlternativeA.y)).toBeTrue()
+		expect(selection.alternatives.some((value) => value.x === wideAlternativeB.x && value.y === wideAlternativeB.y)).toBeTrue()
+		expect(selection.rejectedReasons.double_star).toBe(2)
+		expect(selection.rejectedReasons.border).toBe(1)
+		expect(selection.rejectedReasons.saturated_peak).toBe(1)
+	})
+
+	test('uses image peaks to reject saturated guide stars when the catalog lacks peak data', () => {
+		const width = 96
+		const height = 96
+		const raw = new Float64Array(width * height)
+		const image: Image = {
+			header: {},
+			raw,
+			metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined },
+		}
+		const saturated = star(0, { x: 48, y: 48, flux: 4200, snr: 28, hfd: 2.5, peak: undefined })
+		const safe = star(1, { x: 26, y: 28, flux: 3300, snr: 24, hfd: 2.6, peak: undefined })
+
+		raw[48 * width + 48] = 70000
+		raw[28 * width + 26] = 32000
+
+		const selection = selectGuideStar([saturated, safe], width, height, image, {
+			filter: {
+				minStarSnr: 8,
+				minFlux: 100,
+				maxHfd: 10,
+				borderMarginPx: 8,
+				maxEllipticity: 0.5,
+				maxFwhm: 12,
+				saturationPeak: 65000,
+			},
+			maxAlternatives: 1,
+		})
+
+		expect(selection.primary?.x).toBe(safe.x)
+		expect(selection.primary?.y).toBe(safe.y)
+		expect(selection.rejectedReasons.saturated_peak).toBe(1)
+		expect(selection.candidates[0].peak).toBe(32000)
 	})
 
 	test('enforces one-to-one nearest matching and max radius', () => {
