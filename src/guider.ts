@@ -1,3 +1,4 @@
+import type { Image } from './image.types'
 import { clamp } from './math'
 import { Matrix } from './matrix'
 import type { DetectedStar } from './star.detector'
@@ -171,6 +172,38 @@ export interface ConfigIssue {
 	readonly reason: string
 }
 
+export interface GuideStarSelectionConfig {
+	readonly filter: StarFilterConfig
+	readonly minNeighborDistancePx: number
+	readonly minNeighborDistanceHfdRatio: number
+	readonly alternativeSeparationPx: number
+	readonly maxAlternatives: number
+}
+
+export interface GuideStarSelectionOptions {
+	readonly filter?: Partial<StarFilterConfig>
+	readonly minNeighborDistancePx?: number
+	readonly minNeighborDistanceHfdRatio?: number
+	readonly alternativeSeparationPx?: number
+	readonly maxAlternatives?: number
+}
+
+export interface SelectedGuideStar extends GuideStar {
+	readonly score: number
+	readonly edgeDistance: number
+	readonly centerDistance: number
+	readonly nearestNeighborDistance: number
+	readonly nearSaturation: boolean
+}
+
+export interface GuideStarSelection {
+	readonly primary?: SelectedGuideStar
+	readonly alternatives: SelectedGuideStar[]
+	readonly candidates: SelectedGuideStar[]
+	readonly rejectedReasons: Record<string, number>
+	readonly qualityScore: number
+}
+
 export const DEFAULT_GUIDER_CONFIG: Readonly<GuiderConfig> = {
 	mode: 'multi-star',
 	calibration: [1, 0, 0, 1],
@@ -208,6 +241,14 @@ export const DEFAULT_GUIDER_CONFIG: Readonly<GuiderConfig> = {
 		maxFwhm: 12,
 		saturationPeak: 65500,
 	},
+}
+
+export const DEFAULT_GUIDE_STAR_SELECTION_CONFIG: Readonly<GuideStarSelectionConfig> = {
+	filter: DEFAULT_GUIDER_CONFIG.filter,
+	minNeighborDistancePx: 12,
+	minNeighborDistanceHfdRatio: 3.5,
+	alternativeSeparationPx: 32,
+	maxAlternatives: 5,
 }
 
 // Validates calibration matrix shape and determinant to avoid unstable transforms.
@@ -268,6 +309,92 @@ export function filterGuideStars(frame: GuideFrame, config: StarFilterConfig): F
 	return { accepted, rejectedReasons, qualityScore }
 }
 
+// Selects the strongest isolated guide star and spaced alternatives for multi-star guiding.
+export function selectGuideStar(stars: readonly GuideStar[], width: number, height: number, image?: Image, options?: GuideStarSelectionOptions): GuideStarSelection {
+	const config = mergeGuideStarSelectionConfig(options)
+	stars = enrichGuideStars(stars, image)
+	const filtered = filterGuideStars({ width, height, stars }, config.filter)
+	const rejectedReasons = { ...filtered.rejectedReasons }
+
+	if (filtered.accepted.length === 0) {
+		return { primary: undefined, alternatives: [], candidates: [], rejectedReasons, qualityScore: filtered.qualityScore }
+	}
+
+	const count = filtered.accepted.length
+	const nearestDistanceSq = new Float64Array(count)
+	const nearestNeighborHfd = new Float64Array(count)
+
+	nearestDistanceSq.fill(Infinity)
+
+	for (let i = 0; i < count; i++) {
+		const a = filtered.accepted[i]
+
+		for (let j = i + 1; j < count; j++) {
+			const b = filtered.accepted[j]
+			const dx = a.x - b.x
+			const dy = a.y - b.y
+			const distanceSq = dx * dx + dy * dy
+
+			if (distanceSq < nearestDistanceSq[i]) {
+				nearestDistanceSq[i] = distanceSq
+				nearestNeighborHfd[i] = b.hfd
+			}
+
+			if (distanceSq < nearestDistanceSq[j]) {
+				nearestDistanceSq[j] = distanceSq
+				nearestNeighborHfd[j] = a.hfd
+			}
+		}
+	}
+
+	const candidates: SelectedGuideStar[] = []
+
+	for (let i = 0; i < count; i++) {
+		const star = filtered.accepted[i]
+		const nearestNeighborDistance = Number.isFinite(nearestDistanceSq[i]) ? Math.sqrt(nearestDistanceSq[i]) : Number.POSITIVE_INFINITY
+		const separationLimit = Math.max(config.minNeighborDistancePx, Math.max(star.hfd, nearestNeighborHfd[i]) * config.minNeighborDistanceHfdRatio)
+
+		if (nearestNeighborDistance < separationLimit) {
+			rejectedReasons.double_star = (rejectedReasons.double_star ?? 0) + 1
+			continue
+		}
+
+		const edgeDistance = edgeDistanceOf(star, width, height)
+		const centerDistance = centerDistanceOf(star, width, height)
+		const score = guideStarSelectionScore(star, config, edgeDistance, centerDistance, nearestNeighborDistance, width, height)
+		const nearSaturation = isNearSaturation(star, config.filter.saturationPeak)
+
+		candidates.push({ ...star, score, edgeDistance, centerDistance, nearestNeighborDistance, nearSaturation })
+	}
+
+	candidates.sort(compareGuideStarsByScore)
+
+	const primary = candidates[0]
+	const alternatives: SelectedGuideStar[] = []
+
+	if (primary !== undefined && config.maxAlternatives > 0) {
+		const minSeparationSq = config.alternativeSeparationPx * config.alternativeSeparationPx
+
+		for (let i = 1; i < candidates.length; i++) {
+			const candidate = candidates[i]
+			let separated = true
+
+			if (minSeparationSq > 0 && distanceSqBetween(candidate, primary) < minSeparationSq) separated = false
+
+			for (let j = 0; separated && j < alternatives.length; j++) {
+				if (distanceSqBetween(candidate, alternatives[j]) < minSeparationSq) separated = false
+			}
+
+			if (!separated) continue
+
+			alternatives.push(candidate)
+			if (alternatives.length >= config.maxAlternatives) break
+		}
+	}
+
+	return { primary, alternatives, candidates, rejectedReasons, qualityScore: filtered.qualityScore }
+}
+
 // Gets rejection reason for one star using quality and geometry checks.
 function rejectStarReason(star: GuideStar, config: StarFilterConfig, borderRight: number, borderBottom: number, borderLeft: number) {
 	if (star.valid === false) return 'invalid'
@@ -281,6 +408,105 @@ function rejectStarReason(star: GuideStar, config: StarFilterConfig, borderRight
 	if (config.maxFwhm !== undefined && star.fwhm !== undefined && star.fwhm > config.maxFwhm) return 'high_fwhm'
 	if (star.x < borderLeft || star.y < borderLeft || star.x >= borderRight || star.y >= borderBottom) return 'border'
 	return null
+}
+
+// Merges selector options on top of the default filtering constraints.
+function mergeGuideStarSelectionConfig(options?: GuideStarSelectionOptions): GuideStarSelectionConfig {
+	return {
+		...DEFAULT_GUIDE_STAR_SELECTION_CONFIG,
+		...options,
+		filter: {
+			...DEFAULT_GUIDE_STAR_SELECTION_CONFIG.filter,
+			...options?.filter,
+		},
+	}
+}
+
+// Samples image peaks when the caller only provides detector photometry.
+function enrichGuideStars(stars: readonly GuideStar[], image?: Image) {
+	if (image === undefined) return stars
+
+	const enriched = new Array<GuideStar>(stars.length)
+
+	for (let i = 0; i < stars.length; i++) {
+		const star = stars[i]
+
+		if (star.peak !== undefined) {
+			enriched[i] = star
+		} else {
+			enriched[i] = { ...star, peak: samplePeakAroundStar(star, image) }
+		}
+	}
+
+	return enriched
+}
+
+// Measures the local maximum around a star centroid from a monochrome or RGB image.
+function samplePeakAroundStar(star: GuideStar, image: Image) {
+	const { raw, metadata } = image
+	const { width, height, channels, stride } = metadata
+	const x = clamp(Math.round(star.x), 0, width - 1)
+	const y = clamp(Math.round(star.y), 0, height - 1)
+	const maxY = Math.min(height - 1, y + 1)
+	const maxX = Math.min(width - 1, x + 1)
+	let peak = Number.NEGATIVE_INFINITY
+
+	for (let py = Math.max(0, y - 1); py <= maxY; py++) {
+		const row = py * stride
+
+		for (let px = Math.max(0, x - 1); px <= maxX; px++) {
+			const base = row + px * channels
+
+			for (let channel = 0; channel < channels; channel++) {
+				const value = raw[base + channel]
+				if (value > peak) peak = value
+			}
+		}
+	}
+
+	return peak
+}
+
+// Computes a border clearance metric so centered stars outrank stars near the edge.
+function edgeDistanceOf(star: GuideStar, width: number, height: number) {
+	return Math.min(star.x, star.y, width - star.x, height - star.y)
+}
+
+// Computes distance from the optical center to prefer stars with stable guide windows.
+function centerDistanceOf(star: GuideStar, width: number, height: number) {
+	const dx = star.x - width * 0.5
+	const dy = star.y - height * 0.5
+	return Math.hypot(dx, dy)
+}
+
+// Detects stars that are close enough to clipping that they should be deprioritized.
+function isNearSaturation(star: GuideStar, saturationPeak?: number) {
+	return saturationPeak !== undefined && star.peak !== undefined && star.peak >= saturationPeak * 0.85
+}
+
+// Scores one guide-star candidate using signal, compactness, isolation and geometry.
+function guideStarSelectionScore(star: GuideStar, config: GuideStarSelectionConfig, edgeDistance: number, centerDistance: number, nearestNeighborDistance: number, width: number, height: number) {
+	const snrScore = clamp(Math.log1p(Math.max(0, star.snr)) / 4, 0, 2)
+	const fluxScore = clamp(Math.log1p(Math.max(0, star.flux)) / 9, 0, 2)
+	const sharpnessScore = clamp(3 / Math.max(1, star.hfd), 0, 2)
+	const isolationScore = clamp(Math.log1p(Math.max(0, nearestNeighborDistance)) / Math.log1p(Math.max(config.alternativeSeparationPx * 2, 2)), 0, 1.25)
+	const edgeScore = clamp(edgeDistance / Math.max(Math.min(width, height) * 0.5, 1), 0, 1.5)
+	const centerScore = 1 - clamp(centerDistance / Math.max(Math.min(width, height) * 0.5, 1), 0, 1)
+	const saturationPenalty = isNearSaturation(star, config.filter.saturationPeak) && star.peak !== undefined && config.filter.saturationPeak !== undefined ? clamp((star.peak - config.filter.saturationPeak * 0.85) / Math.max(config.filter.saturationPeak * 0.15, 1e-6), 0, 1.5) : 0
+
+	return snrScore * 3 + fluxScore * 2.25 + sharpnessScore * 2 + isolationScore * 1.5 + edgeScore * 1.25 + centerScore * 3 - saturationPenalty * 3
+}
+
+// Orders stars by selection score, then by signal quality and finally by centrality.
+function compareGuideStarsByScore(a: SelectedGuideStar, b: SelectedGuideStar) {
+	return b.score - a.score || b.snr - a.snr || b.flux - a.flux || a.centerDistance - b.centerDistance
+}
+
+// Computes squared separation without an unnecessary square root.
+function distanceSqBetween(a: GuideStar, b: GuideStar) {
+	const dx = a.x - b.x
+	const dy = a.y - b.y
+	return dx * dx + dy * dy
 }
 
 // Picks a stable anchor star during initialization from the first accepted star.
@@ -601,6 +827,11 @@ export class Guider {
 	// Returns diagnostics from the most recent processed frame.
 	lastDiagnostics() {
 		return this.state.lastDiagnostics
+	}
+
+	// Selects the best guide star and spaced alternatives using this guider's filter defaults.
+	selectGuideStar(frame: GuideFrame, options?: GuideStarSelectionOptions): GuideStarSelection {
+		return selectGuideStar(frame.stars, frame.width, frame.height, undefined, { ...options, filter: { ...this.config.filter, ...options?.filter } })
 	}
 
 	// Consumes frame while the lock reference is being averaged.
