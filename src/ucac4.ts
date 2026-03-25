@@ -383,7 +383,7 @@ export class Ucac4Catalog extends BaseStarCatalog {
 			if (!zoneIntersectsDecBox(zone, box.minDEC, box.maxDEC)) continue
 
 			const binStart = clampIndex(Math.floor(box.minRA / UCAC4_INDEX_BIN_SIZE), 0, UCAC4_INDEX_BIN_COUNT - 1)
-			const binEnd = clampIndex(Math.floor(Math.max(box.maxRA - GEOMETRY_EPSILON, 0) / UCAC4_INDEX_BIN_SIZE), 0, UCAC4_INDEX_BIN_COUNT - 1)
+			const binEnd = clampIndex(Math.floor(Math.max(box.maxRA + GEOMETRY_EPSILON, 0) / UCAC4_INDEX_BIN_SIZE), 0, UCAC4_INDEX_BIN_COUNT - 1)
 
 			for (let bin = binStart; bin <= binEnd; bin++) {
 				const index = (zone - 1) * UCAC4_INDEX_BIN_COUNT + bin

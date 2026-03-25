@@ -28,6 +28,7 @@ const FIXTURE_RECORDS: readonly FixtureRecord[] = [
 	{ zone: 451, ra: deg(0.1), dec: deg(0.05), apertureMag: 12.1, modelMag: 12, includeProperMotion: false },
 	{ zone: 451, ra: deg(10), dec: deg(0.1), apertureMag: 14.5, modelMag: 14.3, pmRaCosDecMasYr: 4, pmDecMasYr: -1, objectType: 1 },
 	{ zone: 451, ra: deg(359.9), dec: 0, apertureMag: 9.5, modelMag: 9.3, pmRaCosDecMasYr: 20, pmDecMasYr: -10 },
+	{ zone: 452, ra: deg(0.25), dec: deg(0.25), apertureMag: 10.8, modelMag: 10.7, pmRaCosDecMasYr: 1, pmDecMasYr: 1 },
 	{ zone: 452, ra: deg(15), dec: deg(0.25), apertureMag: 11.2, modelMag: 11.1, pmRaCosDecMasYr: -5, pmDecMasYr: 3 },
 ] as const
 
@@ -50,6 +51,11 @@ test('queries a cone with RA wrap-around and native index use', async () => {
 test('queries a box that crosses RA 0', async () => {
 	const result = await catalog.queryBox(deg(359.7), deg(0.3), deg(-0.1), deg(0.1))
 	expect(idsOf(result)).toEqual([formatUcac4Id(451, 1), formatUcac4Id(451, 3)])
+})
+
+test('includes stars when maxRA falls exactly on a UCAC4 index bin boundary', async () => {
+	const result = await catalog.queryBox(0, deg(0.25), deg(0.2), deg(0.3))
+	expect(idsOf(result)).toEqual([formatUcac4Id(452, 1)])
 })
 
 test('queries a polygon with tangent-plane filtering', async () => {
