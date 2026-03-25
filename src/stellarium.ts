@@ -1,10 +1,11 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import { type Angle, deg, mas, normalizeAngle } from './angle'
 import { PI } from './constants'
-import type { EquatorialCoordinate } from './coordinate'
 import { type Distance, parsec } from './distance'
 import { eraAnpm } from './erfa'
+import { HealpixIndex, type HealpixIndexOptions } from './healpix'
 import type { Seekable, Source } from './io'
+import type { StarCatalogEntry } from './star.catalog'
 
 export interface StellariumProtocolHandler {
 	readonly connect?: (server: StellariumProtocolServer) => void
@@ -100,10 +101,7 @@ export class StellariumProtocolServer {
 	}
 }
 
-export interface StellariumCatalogEntry extends Readonly<EquatorialCoordinate> {
-	readonly id: number
-	readonly mB: number
-	readonly mV: number
+export interface StellariumCatalogEntry extends StarCatalogEntry<number> {
 	readonly type: StellariumObjectType
 	readonly majorAxis: Angle
 	readonly minorAxis: Angle
@@ -185,7 +183,7 @@ export enum StellariumObjectType {
 
 // https://github.com/Stellarium/stellarium/blob/master/nebulae/default/catalog.dat
 
-export async function* readCatalogDat(source: Source & Seekable) {
+export async function* readCatalogDat(source: Source & Seekable): AsyncIterable<StellariumCatalogEntry> {
 	const buffer = Buffer.allocUnsafe(1024 * 32)
 	let position = 0
 	let size = 0
@@ -280,8 +278,9 @@ export async function* readCatalogDat(source: Source & Seekable) {
 		const st = readInt()
 		const ru = readInt()
 		const vdbha = readInt()
+		const magnitude = mV === 99 ? (mB === 99 ? undefined : mB) : mV
 
-		yield { id, rightAscension, declination, mB, mV, type, majorAxis, minorAxis, orientation, redshift, px, distance, mType, ngc, ic, m, c, b, sh2, vdb, rcw, ldn, lbn, cr, mel, pgc, ugc, ced, arp, vv, pk, png, snrg, aco, hcg, eso, vdbh, dwb, tr, st, ru, vdbha } as StellariumCatalogEntry
+		yield { id, epoch: 2000, rightAscension, declination, magnitude, type, majorAxis, minorAxis, orientation, redshift, px, distance, mType, ngc, ic, m, c, b, sh2, vdb, rcw, ldn, lbn, cr, mel, pgc, ugc, ced, arp, vv, pk, png, snrg, aco, hcg, eso, vdbh, dwb, tr, st, ru, vdbha }
 	}
 }
 
@@ -347,13 +346,16 @@ export async function* readNamesDat(source: Source & Seekable) {
 	}
 }
 
-export function searchAround(entries: Pick<StellariumCatalogEntry, 'rightAscension' | 'declination'>[], rightAscension: Angle, declination: Angle, fov: Angle) {
-	const cdec = Math.cos(declination)
-	const sdec = Math.sin(declination)
+const DEFAULT_HEALPIX_INDEX_OPTIONS: HealpixIndexOptions = { nside: 8 }
 
-	function distance(ra0: Angle, dec0: Angle) {
-		return Math.acos(sdec * Math.sin(dec0) + cdec * Math.cos(dec0) * Math.cos(rightAscension - ra0))
+export class StellariumCatalog extends HealpixIndex<number, StellariumCatalogEntry> {
+	constructor({ nside = 8, ordering }: HealpixIndexOptions = DEFAULT_HEALPIX_INDEX_OPTIONS) {
+		super({ nside, ordering })
 	}
 
-	return entries.filter((e) => distance(e.rightAscension, e.declination) <= fov)
+	async load(source: Source & Seekable) {
+		for await (const entry of readCatalogDat(source)) {
+			this.add(entry.id, entry.rightAscension, entry.declination, entry)
+		}
+	}
 }
