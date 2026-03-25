@@ -4,6 +4,7 @@ import { join } from 'path'
 import { type Angle, mas } from './angle'
 import { DEG2RAD, PIOVERTWO } from './constants'
 import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type Vertex, validateDeclination } from './star.catalog'
+import { NumberComparator } from './util'
 
 // https://cdsarc.cds.unistra.fr/ftp/I/322A/UCAC4/
 // https://irsa.ipac.caltech.edu/data/USNO/UCAC4/ucac4.html
@@ -566,8 +567,6 @@ function zoneDecRange(zone: number): readonly [number, number] {
 	return [minDec, maxDec] as const
 }
 
-const ZoneComparator = (left: number, right: number) => left - right
-
 // Computes the set of zones touched by the query preselection boxes.
 function touchedZones(query: NormalizedStarCatalogQuery) {
 	const zones = new Set<number>()
@@ -581,7 +580,7 @@ function touchedZones(query: NormalizedStarCatalogQuery) {
 		}
 	}
 
-	return [...zones].sort(ZoneComparator)
+	return [...zones].sort(NumberComparator)
 }
 
 // Checks whether any part of a zone overlaps the query declination boxes.

@@ -183,7 +183,7 @@ describe('parse', () => {
 		expect(node[0].children[0].attributes.label).toBe('Closed Position Set(°)')
 	})
 
-    test('should parse unicode char', () => {
+	test('should parse unicode char', () => {
 		const parse = new SimpleXmlParser()
 		const xml = `<person status="😎"></person>`
 

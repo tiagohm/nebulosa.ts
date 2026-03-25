@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 
 import { deg, hour, normalizeAngle } from '../src/angle'
 import { PIOVERTWO, TAU } from '../src/constants'
-import { findHnsky290Areas, findHnsky290Region, findHnsky290Stars, type Hnsky290RegionQuery, type HnskyRecordSize, hnsky290AreaFile, readHnsky290Area, readHnsky290Header } from '../src/hnsky'
+import { findHnsky290Areas, findHnsky290Region, findHnsky290Stars, formatHnskyId, type Hnsky290RegionQuery, type HnskyRecordSize, hnsky290AreaFile, openHnskyCatalog, readHnsky290Area, readHnsky290Header } from '../src/hnsky'
 import { downloadPerTag } from './download'
 
 await downloadPerTag('hnsky')
@@ -122,6 +122,32 @@ test('findHnsky290Region merges stars from intersecting files', async () => {
 	expect(result.stars[1]!.magnitude).toBeCloseTo(2.2, 6)
 	expect(result.stars[0]!.designation?.label).toBe('UCAC4 101-1')
 	expect(result.stars[1]!.designation?.label).toBe('UCAC4 100-1')
+})
+
+test('HnskyCatalog exposes .290 archives through the generic star catalog API', async () => {
+	const archive = {
+		[`g14_${hnsky290AreaFile(146).fileName}`]: makeSyntheticFile({ recordSize: 11, star: { rightAscension: deg(10.5), declination: deg(5.1), magnitude: 2.2, designation: (100 << 20) | 1 }, outside: { rightAscension: deg(30), declination: deg(5.1), magnitude: 2.3, designation: (100 << 20) | 2 } }),
+		[`g14_${hnsky290AreaFile(147).fileName}`]: makeSyntheticFile({ recordSize: 11, star: { rightAscension: deg(11.7), declination: deg(4.9), magnitude: 1.1, designation: (101 << 20) | 1 }, outside: { rightAscension: deg(40), declination: deg(4.9), magnitude: 1.2, designation: (101 << 20) | 2 } }),
+	}
+
+	const catalog = openHnskyCatalog(archive, 'g14')
+
+	try {
+		const cone = await catalog.queryCone(deg(11.1), deg(5), deg(2))
+		const box = await catalog.queryBox(deg(10), deg(12), deg(4.5), deg(5.5))
+
+		expect(cone.map((e) => e.id).sort()).toEqual([formatHnskyId('g14', 146, 1), formatHnskyId('g14', 147, 1)])
+		expect(box.map((e) => e.id).sort()).toEqual([formatHnskyId('g14', 146, 1), formatHnskyId('g14', 147, 1)])
+		expect(cone[0]!.epoch).toBe(2000)
+
+		const star = await catalog.get(cone[1]!.id)
+
+		expect(star?.id).toBe(formatHnskyId('g14', 147, 1))
+		expect(star?.magnitude).toBeCloseTo(1.1, 6)
+		expect(star?.designation?.label).toBe('UCAC4 101-1')
+	} finally {
+		await catalog.close()
+	}
 })
 
 test('read g14 database', async () => {

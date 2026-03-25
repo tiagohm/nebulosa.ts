@@ -142,3 +142,13 @@ export function binarySearchWithComparator<T>(a: readonly T[], comparator: Binar
 export function angularSizeOfPixel(focalLength: number, pixelSize: number) {
 	return focalLength <= 0 ? 0 : (pixelSize / focalLength) * 206.265
 }
+
+// Sorts numeric identifiers in ascending order.
+export function NumberComparator(left: number, right: number) {
+	return left - right
+}
+
+// Sorts numeric identifiers in descending order.
+export function NumberComparatorDescensing(left: number, right: number) {
+	return right - left
+}
