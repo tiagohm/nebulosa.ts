@@ -9,6 +9,10 @@ import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry
 // https://irsa.ipac.caltech.edu/data/USNO/UCAC4/ucac4.html
 // https://irsa.ipac.caltech.edu/data/USNO/UCAC4/readme_u4.txt
 
+// The main catalog data are contained in binary zone files "z001" to "z900",
+// sorted by declination. Each zone is 0.2 degree wide, beginning with z001
+// at the south celestial pole. Stars are sorted by RA inside a zone file.
+
 const UCAC4_RECORD_SIZE = 78
 const UCAC4_ZONE_COUNT = 900
 const UCAC4_ZONE_HEIGHT = 0.2 * DEG2RAD
@@ -399,16 +403,14 @@ export class Ucac4Catalog extends BaseStarCatalog {
 		const handle = await this.openZoneHandle(zone)
 		const block = Buffer.allocUnsafe(UCAC4_BLOCK_RECORD_COUNT * UCAC4_RECORD_SIZE)
 
-		let recordNumber = startRecord
-
-		while (recordNumber <= endRecord) {
-			const batchCount = Math.min(UCAC4_BLOCK_RECORD_COUNT, endRecord - recordNumber + 1)
+		while (startRecord <= endRecord) {
+			const batchCount = Math.min(UCAC4_BLOCK_RECORD_COUNT, endRecord - startRecord + 1)
 			const bytesToRead = batchCount * UCAC4_RECORD_SIZE
 
 			let bytesRead: number
 
 			try {
-				bytesRead = (await handle.read(block, 0, bytesToRead, (recordNumber - 1) * UCAC4_RECORD_SIZE)).bytesRead
+				bytesRead = (await handle.read(block, 0, bytesToRead, (startRecord - 1) * UCAC4_RECORD_SIZE)).bytesRead
 			} catch (error) {
 				throw new Error(`unable to read UCAC4 zone ${zone}`)
 			}
@@ -418,8 +420,8 @@ export class Ucac4Catalog extends BaseStarCatalog {
 			}
 
 			for (let offset = 0; offset < bytesRead; offset += UCAC4_RECORD_SIZE) {
-				yield parseUcac4Record(block, zone, recordNumber, offset)
-				recordNumber++
+				yield parseUcac4Record(block, zone, startRecord, offset)
+				startRecord++
 			}
 		}
 	}
@@ -490,7 +492,6 @@ function parseUcac4Record(buffer: Buffer, zone: number, recordNumber: number, of
 		// uniqueStarNumber: buffer.readInt32LE(offset + 68),
 		// ucac2Zone: buffer.readInt16LE(offset + 72),
 		// ucac2RecordNumber: buffer.readInt32LE(offset + 74),
-		missingProperMotion: !hasPm,
 	}
 }
 

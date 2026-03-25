@@ -134,7 +134,7 @@ class MockCatalog extends BaseStarCatalog {
 		return Promise.resolve()
 	}
 
-	// biome-ignore lint/suspicious/useAwait: <explanation>
+	// biome-ignore lint/suspicious/useAwait: false positive
 	protected async *streamCandidateEntries(_query: NormalizedStarCatalogQuery): AsyncIterable<StarCatalogEntry> {
 		for (const entry of this.entries) {
 			yield entry
@@ -181,7 +181,7 @@ async function createCatalog() {
 	for (const [zone, records] of byZone) {
 		records.sort((left, right) => left.ra - right.ra)
 		const zonePath = join(zoneDirectory, `z${`${zone}`.padStart(3, '0')}`)
-		const output = Buffer.alloc(records.length * RECORD_SIZE)
+		const output = Buffer.allocUnsafe(records.length * RECORD_SIZE)
 
 		for (let i = 0; i < records.length; i++) {
 			writeRecord(output, i * RECORD_SIZE, records[i], i + 1)
@@ -195,7 +195,7 @@ async function createCatalog() {
 		await fs.writeFile(zonePath, output)
 	}
 
-	const index = Buffer.alloc(INDEX_BYTES)
+	const index = Buffer.allocUnsafe(INDEX_BYTES)
 
 	for (let i = 0; i < starts.length; i++) {
 		index.writeInt32LE(starts[i]!, i * 4)

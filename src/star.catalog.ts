@@ -23,7 +23,6 @@ export interface StarCatalogEntry<ID extends string | number = string> extends E
 	readonly magnitude?: number
 	readonly pmRA?: Angle // per year
 	readonly pmDEC?: Angle // per year
-	readonly missingProperMotion?: boolean
 }
 
 export interface StarCatalogConeQuery {
@@ -47,11 +46,6 @@ export interface StarCatalogPolygonQuery {
 }
 
 export type StarCatalogQuery = StarCatalogConeQuery | StarCatalogBoxQuery | StarCatalogPolygonQuery
-
-export interface StarCatalogProvider<C extends StarCatalog = StarCatalog> {
-	readonly name: string
-	readonly open: (source: unknown) => Promise<C>
-}
 
 export interface StarCatalog<ID extends string | number = string> {
 	readonly queryRegion: (query: StarCatalogQuery) => Promise<readonly StarCatalogEntry<ID>[]>
@@ -100,13 +94,11 @@ interface NormalizedPolygonQuery extends NormalizedQueryBase {
 
 export type NormalizedStarCatalogQuery = NormalizedConeQuery | NormalizedBoxQuery | NormalizedPolygonQuery
 
-// Defines a provider without forcing downstream code to know the concrete catalog class.
-export function createStarCatalogProvider<C extends StarCatalog>(name: string, open: (source: unknown) => Promise<C>): StarCatalogProvider<C> {
-	return { name, open }
-}
-
 // Implements the generic query, filtering, projection, and propagation flow for concrete catalogs.
 export abstract class BaseStarCatalog implements StarCatalog {
+	// Returns a normalized entry by source identifier when supported by the provider.
+	abstract get(id: string): Promise<StarCatalogEntry | undefined>
+
 	// Runs a normalized query and materializes a finite result set.
 	async queryRegion(query: StarCatalogQuery) {
 		const normalized = normalizeStarCatalogQuery(query)
@@ -130,7 +122,7 @@ export abstract class BaseStarCatalog implements StarCatalog {
 
 	// Runs an RA/Dec box query by adapting it to the region interface.
 	queryBox(minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: Angle) {
-		return this.queryRegion({ kind: 'box', minRA, maxRA, minDEC, maxDEC: maxDEC })
+		return this.queryRegion({ kind: 'box', minRA, maxRA, minDEC, maxDEC })
 	}
 
 	// Runs a polygon query by adapting it to the region interface.
@@ -138,16 +130,13 @@ export abstract class BaseStarCatalog implements StarCatalog {
 		return this.queryRegion({ kind: 'polygon', vertices })
 	}
 
-	// Returns a normalized entry by source identifier when supported by the provider.
-	abstract get(id: string): Promise<StarCatalogEntry | undefined>
-
 	// Streams a region query after exact filtering, optional propagation, and projection.
 	streamRegion(query: StarCatalogQuery) {
 		return this.streamNormalizedRegion(normalizeStarCatalogQuery(query))
 	}
 
 	// Streams provider candidates and applies generic exact filtering.
-	protected async *streamNormalizedRegion(query: NormalizedStarCatalogQuery): AsyncIterable<StarCatalogEntry> {
+	protected async *streamNormalizedRegion(query: NormalizedStarCatalogQuery) {
 		for await (const entry of this.streamCandidateEntries(query)) {
 			if (!matchesNormalizedGeometry(entry, query)) continue
 			yield entry
@@ -241,8 +230,8 @@ function normalizeConeQuery(query: StarCatalogConeQuery): NormalizedConeQuery {
 
 	return {
 		kind: 'cone',
-		centerRA: centerRA,
-		centerDEC: centerDEC,
+		centerRA,
+		centerDEC,
 		radius,
 		geometryMode: 'spherical',
 		wrapAround,
