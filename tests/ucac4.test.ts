@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
-import path from 'path'
+import { join } from 'path'
 import { type Angle, deg, toMas } from '../src/angle'
-import { BaseStarCatalog, type CatalogQueryStatsAccumulator, type NormalizedStarCatalogQuery, type StarCatalogCapabilities, type StarCatalogEntry, type StarCatalogMetadata } from '../src/star.catalog'
-import { benchmarkUcac4Query, formatUcac4Id, openUcac4Catalog, type Ucac4Catalog, type Ucac4CatalogSource } from '../src/ucac4'
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry } from '../src/star.catalog'
+import { formatUcac4Id, openUcac4Catalog, type Ucac4Catalog } from '../src/ucac4'
 
 const RECORD_SIZE = 78
 const ZONE_COUNT = 900
@@ -23,12 +23,6 @@ interface FixtureRecord {
 	readonly includeProperMotion?: boolean
 }
 
-interface FixtureState {
-	readonly root: string
-	readonly catalog: Ucac4Catalog
-	readonly totalBytes: number
-}
-
 const FIXTURE_RECORDS: readonly FixtureRecord[] = [
 	{ zone: 450, ra: deg(350), dec: deg(-0.25), apertureMag: 13.2, modelMag: 13.1, pmRaCosDecMasYr: 3, pmDecMasYr: 2 },
 	{ zone: 451, ra: deg(0.1), dec: deg(0.05), apertureMag: 12.1, modelMag: 12, includeProperMotion: false },
@@ -37,160 +31,69 @@ const FIXTURE_RECORDS: readonly FixtureRecord[] = [
 	{ zone: 452, ra: deg(15), dec: deg(0.25), apertureMag: 11.2, modelMag: 11.1, pmRaCosDecMasYr: -5, pmDecMasYr: 3 },
 ] as const
 
-const MOCK_METADATA: StarCatalogMetadata = {
-	catalogName: 'mock',
-	catalogVersion: '1',
-	referenceEpoch: 2000,
-	referenceFrame: 'ICRS',
-	magnitudeSystems: ['test'],
-	angularUnits: 'rad',
-	properMotionAvailability: 'partial',
-	photometricFields: ['test'],
-	sourceIdentifierFormat: 'mock-id',
-	storageLayout: 'in-memory array',
-	zoneIndex: 'none',
-	supportedQueryTypes: ['cone', 'box', 'polygon'],
-	normalizedFieldAvailability: {
-		always: ['id', 'ra', 'dec', 'epoch', 'sourceCatalog'],
-		optional: ['pmRaMasYr', 'pmDecMasYr', 'mag', 'flags', 'extras'],
-	},
-}
-
-const MOCK_CAPABILITIES: StarCatalogCapabilities = {
-	featureNames: ['cone', 'box', 'polygon', 'streaming', 'projection', 'epoch-propagation'],
-	queryTypes: ['cone', 'box', 'polygon'],
-	efficientQueryTypes: ['cone', 'box', 'polygon'],
-	supportsStreaming: true,
-	supportsRawAccess: false,
-	supportsMagnitudeFilter: true,
-	supportsQualityFilter: true,
-	supportsProjection: true,
-	supportsEpochPropagation: true,
-}
-
-let fixture: FixtureState
+let catalog: Ucac4Catalog
 
 beforeAll(async () => {
-	fixture = await createFixture()
+	catalog = await createCatalog()
 })
 
 afterAll(async () => {
-	await fixture.catalog.close()
-	await fs.rm(fixture.root, { recursive: true, force: true })
-})
-
-test('opens metadata and capabilities', () => {
-	expect(fixture.catalog.metadata().catalogName).toBe('UCAC4')
-	expect(fixture.catalog.capabilities().supportsStreaming).toBeTrue()
-	expect(fixture.catalog.supports('raw-access')).toBeTrue()
-})
-
-test('reads a raw UCAC4 record and preserves native fields', async () => {
-	const raw = await fixture.catalog.getRawById(formatUcac4Id(451, 3))
-
-	expect(raw).toBeDefined()
-	expect(raw?.zone).toBe(451)
-	expect(raw?.recordNumber).toBe(3)
-	expect(raw?.apertureMagnitudeMillimag).toBe(9500)
+	await catalog.close()
+	await fs.rm(catalog.root, { recursive: true, force: true })
 })
 
 test('queries a cone with RA wrap-around and native index use', async () => {
-	const result = await fixture.catalog.queryCone(0, 0, deg(0.3), { sortMode: 'ra' })
-
-	expect(idsOf(result.items)).toEqual([formatUcac4Id(451, 1), formatUcac4Id(451, 3)])
-	expect(result.queryStats.usedSpatialIndex).toBeTrue()
-	expect(result.queryStats.bytesRead).toBeLessThan(fixture.totalBytes)
+	const result = await catalog.queryCone(0, 0, deg(0.3))
+	expect(idsOf(result)).toEqual([formatUcac4Id(451, 1), formatUcac4Id(451, 3)])
 })
 
 test('queries a box that crosses RA 0', async () => {
-	const result = await fixture.catalog.queryBox(deg(359.7), deg(0.3), deg(-0.1), deg(0.1), { sortMode: 'id' })
-	expect(idsOf(result.items)).toEqual([formatUcac4Id(451, 1), formatUcac4Id(451, 3)])
+	const result = await catalog.queryBox(deg(359.7), deg(0.3), deg(-0.1), deg(0.1))
+	expect(idsOf(result)).toEqual([formatUcac4Id(451, 1), formatUcac4Id(451, 3)])
 })
 
 test('queries a polygon with tangent-plane filtering', async () => {
-	const result = await fixture.catalog.queryPolygon(
-		[
-			[deg(9.7), deg(-0.1)],
-			[deg(10.3), deg(-0.1)],
-			[deg(10.3), deg(0.3)],
-			[deg(9.7), deg(0.3)],
-		],
-		{ sortMode: 'id' },
-	)
+	const result = await catalog.queryPolygon([
+		[deg(9.7), deg(-0.1)],
+		[deg(10.3), deg(-0.1)],
+		[deg(10.3), deg(0.3)],
+		[deg(9.7), deg(0.3)],
+	])
 
-	expect(idsOf(result.items)).toEqual([formatUcac4Id(451, 2)])
-	expect(result.queryStats.geometryMode).toBe('planar-tangent')
-})
-
-test('filters by magnitude, truncates, and sorts', async () => {
-	const result = await fixture.catalog.queryBox(0, deg(20), deg(-1), deg(1), { magnitudeMin: 11, magnitudeMax: 15, sortMode: 'mag', limit: 2 })
-
-	expect(result.truncated).toBeTrue()
-	expect(result.items).toHaveLength(2)
-	expect(result.items[0]?.mag).toBeCloseTo(11.2, 6)
-	expect(result.items[1]?.mag).toBeCloseTo(12.1, 6)
-})
-
-test('propagates proper motion and keeps missing motion unchanged by default', async () => {
-	const propagated = await fixture.catalog.getById(formatUcac4Id(451, 3), { epochPropagation: { targetEpoch: 2010 } })
-	const missing = await fixture.catalog.getById(formatUcac4Id(451, 1), { epochPropagation: { targetEpoch: 2010 } })
-
-	expect(propagated?.epoch).toBe(2010)
-	expect(propagated?.ra).toBeCloseTo(deg(359.9000555556), 11)
-	expect(missing?.epoch).toBe(2000)
-})
-
-test('can exclude missing proper motion during propagation', async () => {
-	const missing = await fixture.catalog.getById(formatUcac4Id(451, 1), { epochPropagation: { targetEpoch: 2010, onMissingProperMotion: 'exclude' } })
-	expect(missing).toBeUndefined()
+	expect(idsOf(result)).toEqual([formatUcac4Id(451, 2)])
 })
 
 test('supports streaming and compact projection', async () => {
 	const ids: string[] = []
 
-	for await (const entry of fixture.catalog.streamRegion({ kind: 'box', minRa: deg(349), maxRa: deg(360), minDec: deg(-1), maxDec: deg(1), requestedFields: ['mag'] })) {
+	for await (const entry of catalog.streamRegion({ kind: 'box', minRA: deg(349), maxRA: deg(360), minDEC: deg(-1), maxDEC: deg(1) })) {
 		ids.push(entry.id)
-		expect(entry.sourceCatalog).toBe('UCAC4')
 	}
 
 	expect(ids.sort()).toEqual([formatUcac4Id(450, 1), formatUcac4Id(451, 3)])
 })
 
-test('estimates candidate counts and benchmarks query execution', async () => {
-	expect(await fixture.catalog.estimateCount({ kind: 'cone', centerRa: 0, centerDec: 0, radius: deg(0.3) })).toBeGreaterThanOrEqual(2)
-
-	const benchmark = await benchmarkUcac4Query(fixture.catalog, { kind: 'cone', centerRa: 0, centerDec: 0, radius: deg(0.3) }, 2)
-
-	expect(benchmark.iterations).toBe(2)
-	expect(benchmark.resultCount).toBe(2)
-	expect(benchmark.minMs).toBeGreaterThanOrEqual(0)
-})
-
-test('rejects invalid epoch propagation inputs', () => {
-	expect(fixture.catalog.queryCone(0, 0, deg(1), { epochPropagation: { targetEpoch: Number.NaN } })).rejects.toThrow()
-})
-
 test('fails cleanly when no UCAC4 zone files exist', async () => {
-	const root = await fs.mkdtemp(path.join(tmpdir(), 'nebulosa-ucac4-empty-'))
+	const root = await fs.mkdtemp(join(tmpdir(), 'nebulosa-ucac4-empty-'))
 
 	try {
-		expect(openUcac4Catalog({ root })).rejects.toThrow()
+		expect(openUcac4Catalog(root)).rejects.toThrow()
 	} finally {
 		await fs.rm(root, { recursive: true, force: true })
 	}
 })
 
 test('detects malformed records with invalid coordinates', async () => {
-	const root = await fs.mkdtemp(path.join(tmpdir(), 'nebulosa-ucac4-bad-'))
+	const root = await fs.mkdtemp(join(tmpdir(), 'nebulosa-ucac4-bad-'))
 
 	try {
-		await fs.mkdir(path.join(root, 'u4b'), { recursive: true })
+		await fs.mkdir(join(root, 'u4b'), { recursive: true })
 		const bad = Buffer.alloc(RECORD_SIZE)
 		bad.writeInt32LE(-1, 0)
 		bad.writeInt32LE(324000000, 4)
-		await fs.writeFile(path.join(root, 'u4b', 'z451'), bad)
+		await fs.writeFile(join(root, 'u4b', 'z451'), bad)
 
-		const catalog = await openUcac4Catalog({ root })
+		const catalog = await openUcac4Catalog(root)
 
 		try {
 			expect(catalog.queryCone(0, 0, deg(1))).rejects.toThrow()
@@ -203,12 +106,12 @@ test('detects malformed records with invalid coordinates', async () => {
 })
 
 test('generic consumers can swap UCAC4 and a mock provider without changing query code', async () => {
-	await assertGenericCatalogContract(fixture.catalog)
+	await assertGenericCatalogContract(catalog)
 
 	const mock = await new MockCatalog([
-		{ id: 'm1', ra: deg(359.9), dec: 0, epoch: 2000, mag: 9.5, sourceCatalog: 'mock', pmRaMasYr: 20, pmDecMasYr: -10 },
-		{ id: 'm2', ra: deg(0.1), dec: deg(0.05), epoch: 2000, mag: 12.1, sourceCatalog: 'mock' },
-		{ id: 'm3', ra: deg(10), dec: deg(0.1), epoch: 2000, mag: 14.5, sourceCatalog: 'mock' },
+		{ id: 'm1', rightAscension: deg(359.9), declination: 0, epoch: 2000, magnitude: 9.5, pmRA: 20, pmDEC: -10 },
+		{ id: 'm2', rightAscension: deg(0.1), declination: deg(0.05), epoch: 2000, magnitude: 12.1 },
+		{ id: 'm3', rightAscension: deg(10), declination: deg(0.1), epoch: 2000, magnitude: 14.5 },
 	]).open({})
 
 	try {
@@ -223,10 +126,6 @@ class MockCatalog extends BaseStarCatalog {
 		super()
 	}
 
-	metadata(): StarCatalogMetadata {
-		return MOCK_METADATA
-	}
-
 	open(_source: unknown): Promise<this> {
 		return Promise.resolve(this)
 	}
@@ -235,46 +134,35 @@ class MockCatalog extends BaseStarCatalog {
 		return Promise.resolve()
 	}
 
-	capabilities(): StarCatalogCapabilities {
-		return MOCK_CAPABILITIES
-	}
-
 	// biome-ignore lint/suspicious/useAwait: <explanation>
-	protected async *streamCandidateEntries(_query: NormalizedStarCatalogQuery, _stats: CatalogQueryStatsAccumulator): AsyncIterable<StarCatalogEntry> {
+	protected async *streamCandidateEntries(_query: NormalizedStarCatalogQuery): AsyncIterable<StarCatalogEntry> {
 		for (const entry of this.entries) {
 			yield entry
 		}
 	}
 
-	protected getEntryByIdInternal(catalogObjectId: string): Promise<StarCatalogEntry | undefined> {
-		return Promise.resolve(this.entries.find((entry) => entry.id === catalogObjectId))
-	}
-
-	protected estimateCandidateCount(): Promise<number | undefined> {
-		return Promise.resolve(this.entries.length)
+	get(id: string): Promise<StarCatalogEntry | undefined> {
+		return Promise.resolve(this.entries.find((entry) => entry.id === id))
 	}
 }
 
 async function assertGenericCatalogContract(catalog: BaseStarCatalog) {
-	const cone = await catalog.queryCone(0, 0, deg(0.3), { sortMode: 'distance' })
-	expect(cone.items).toHaveLength(2)
+	const cone = await catalog.queryCone(0, 0, deg(0.3))
+	expect(cone).toHaveLength(2)
 
 	const box = await catalog.queryBox(deg(359.7), deg(0.3), deg(-0.2), deg(0.2))
-	expect(box.items).toHaveLength(2)
-
-	const propagated = await catalog.getById(cone.items[0]!.id, { epochPropagation: { targetEpoch: 2005 } })
-	expect(propagated).toBeDefined()
+	expect(box).toHaveLength(2)
 }
 
 function idsOf(items: readonly StarCatalogEntry[]) {
 	return items.map((item) => item.id).sort()
 }
 
-async function createFixture(): Promise<FixtureState> {
-	const root = await fs.mkdtemp(path.join(tmpdir(), 'nebulosa-ucac4-'))
-	const source: Ucac4CatalogSource = { root }
-	const zoneDirectory = path.join(root, 'u4b')
-	const indexDirectory = path.join(root, 'u4i')
+async function createCatalog() {
+	const root = await fs.mkdtemp(join(tmpdir(), 'nebulosa-ucac4-'))
+	const zoneDirectory = join(root, 'u4b')
+	const indexDirectory = join(root, 'u4i')
+
 	await fs.mkdir(zoneDirectory, { recursive: true })
 	await fs.mkdir(indexDirectory, { recursive: true })
 
@@ -292,7 +180,7 @@ async function createFixture(): Promise<FixtureState> {
 
 	for (const [zone, records] of byZone) {
 		records.sort((left, right) => left.ra - right.ra)
-		const zonePath = path.join(zoneDirectory, `z${`${zone}`.padStart(3, '0')}`)
+		const zonePath = join(zoneDirectory, `z${`${zone}`.padStart(3, '0')}`)
 		const output = Buffer.alloc(records.length * RECORD_SIZE)
 
 		for (let i = 0; i < records.length; i++) {
@@ -314,11 +202,9 @@ async function createFixture(): Promise<FixtureState> {
 		index.writeInt32LE(counts[i]!, (starts.length + i) * 4)
 	}
 
-	await fs.writeFile(path.join(indexDirectory, 'u4index.unf'), index)
+	await fs.writeFile(join(indexDirectory, 'u4index.unf'), index)
 
-	const catalog = await openUcac4Catalog(source)
-
-	return { root, catalog, totalBytes }
+	return await openUcac4Catalog(root)
 }
 
 function writeRecord(buffer: Buffer, offset: number, record: FixtureRecord, recordNumber: number) {

@@ -3,20 +3,11 @@ import fs, { type FileHandle } from 'fs/promises'
 import { join } from 'path'
 import { type Angle, mas } from './angle'
 import { DEG2RAD, PIOVERTWO } from './constants'
-import {
-	BaseStarCatalog,
-	type CatalogQueryResult,
-	type CatalogQueryStatsAccumulator,
-	type NormalizedStarCatalogQuery,
-	type StarCatalogCapabilities,
-	StarCatalogDataError,
-	type StarCatalogEntry,
-	type StarCatalogMetadata,
-	type StarCatalogQuery,
-	StarCatalogQueryError,
-	StarCatalogStorageError,
-	validateDec,
-} from './star.catalog'
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type Vertex, validateDeclination } from './star.catalog'
+
+// https://cdsarc.cds.unistra.fr/ftp/I/322A/UCAC4/
+// https://irsa.ipac.caltech.edu/data/USNO/UCAC4/ucac4.html
+// https://irsa.ipac.caltech.edu/data/USNO/UCAC4/readme_u4.txt
 
 const UCAC4_RECORD_SIZE = 78
 const UCAC4_ZONE_COUNT = 900
@@ -34,92 +25,40 @@ const MAS_PER_DEG = 3600000
 const GEOMETRY_EPSILON = 1e-12
 const FULL_CIRCLE_MAS = 360 * MAS_PER_DEG
 
-const UCAC4_CAPABILITIES: StarCatalogCapabilities = {
-	featureNames: ['cone', 'box', 'polygon', 'streaming', 'raw-access', 'magnitude-filter', 'quality-filter', 'projection', 'epoch-propagation'],
-	queryTypes: ['cone', 'box', 'polygon'],
-	efficientQueryTypes: ['cone', 'box', 'polygon'],
-	supportsStreaming: true,
-	supportsRawAccess: true,
-	supportsMagnitudeFilter: true,
-	supportsQualityFilter: true,
-	supportsProjection: true,
-	supportsEpochPropagation: true,
-}
-
-const UCAC4_METADATA: StarCatalogMetadata = {
-	catalogName: 'UCAC4',
-	catalogVersion: '4',
-	referenceEpoch: 2000,
-	referenceFrame: 'ICRS',
-	magnitudeSystems: ['UCAC', '2MASS', 'APASS'],
-	angularUnits: 'rad',
-	properMotionAvailability: 'partial',
-	photometricFields: ['UCAC model', 'UCAC aperture', '2MASS J/H/Ks', 'APASS B/V/g/r/i'],
-	sourceIdentifierFormat: '4U###-record',
-	storageLayout: '78-byte fixed-length records split into 900 declination zones',
-	zoneIndex: 'Uses native UCAC4 declination zones and optional u4index.unf quarter-degree RA index',
-	supportedQueryTypes: ['cone', 'box', 'polygon'],
-	normalizedFieldAvailability: {
-		always: ['id', 'ra', 'dec', 'epoch', 'sourceCatalog'],
-		optional: ['pmRaMasYr', 'pmDecMasYr', 'mag', 'magBand', 'magBands', 'positionErrorMas', 'properMotionError', 'flags', 'raw', 'extras'],
-	},
-	notes: [
-		'Regional queries use zone-based coarse preselection and exact filtering in the generic catalog layer.',
-		'RA wrap-around near 0/360 degrees is handled both for box splitting and indexed range lookup.',
-		'Cone and box filtering use spherical geometry; polygon filtering uses a documented tangent-plane approximation best suited to smaller fields.',
-		'Normalized pmRaMasYr is derived from UCAC4 pmRA*cos(dec) when cos(dec) is numerically stable; the original raw component is preserved in extras.',
-		'Without u4index.unf the provider falls back to lazy full-zone streaming with exact rejection, avoiding whole-catalog loading.',
-	],
-}
-
 const UCAC4_ID_PATTERN = /^(?:4U|UCAC4[:\s]?)(\d{1,3})[-:](\d+)$/i
 
-export interface Ucac4CatalogSource {
-	readonly root: string
-}
-
-export interface Ucac4RawRecord {
+export interface Ucac4Record extends StarCatalogEntry {
 	readonly zone: number
 	readonly recordNumber: number
-	readonly raMas: number
-	readonly southPoleDistanceMas: number
-	readonly modelMagnitudeMillimag: number
-	readonly apertureMagnitudeMillimag: number
-	readonly magnitudeErrorCentimag: number
-	readonly objectType: number
-	readonly combinedDoubleStarFlag: number
-	readonly raSigmaMas: number
-	readonly decSigmaMas: number
-	readonly imageCount: number
-	readonly usedImageCount: number
-	readonly properMotionCatalogCount: number
-	readonly centralEpochRaYear: number
-	readonly centralEpochDecYear: number
-	readonly pmRaCosDecMasYrTenth: number
-	readonly pmDecMasYrTenth: number
-	readonly pmRaErrorMasYr: number | undefined
-	readonly pmDecErrorMasYr: number | undefined
-	readonly twoMassId: number
-	readonly twoMassMagnitudeMillimag: readonly [number, number, number]
-	readonly twoMassQualityFlags: readonly [number, number, number]
-	readonly twoMassErrorCentimag: readonly [number, number, number]
-	readonly apassMagnitudeMillimag: readonly [number, number, number, number, number]
-	readonly apassErrorCentimag: readonly [number, number, number, number, number]
-	readonly yaleSpmFlag: number
-	readonly mergedCatalogFlags: readonly [number, number, number, number, number, number, number, number, number]
-	readonly ledaFlag: number
-	readonly twoMassExtendedSourceFlag: number
-	readonly uniqueStarNumber: number
-	readonly ucac2Zone: number
-	readonly ucac2RecordNumber: number
-}
-
-export interface Ucac4BenchmarkResult {
-	readonly iterations: number
-	readonly minMs: number
-	readonly maxMs: number
-	readonly meanMs: number
-	readonly resultCount: number
+	// readonly modelMagnitudeMillimag: number
+	// readonly apertureMagnitudeMillimag: number
+	// readonly magnitudeErrorCentimag: number
+	// readonly objectType: number
+	// readonly combinedDoubleStarFlag: number
+	// readonly raSigmaMas: number
+	// readonly decSigmaMas: number
+	// readonly imageCount: number
+	// readonly usedImageCount: number
+	// readonly properMotionCatalogCount: number
+	// readonly centralEpochRaYear: number
+	// readonly centralEpochDecYear: number
+	// readonly pmRaCosDecMasYrTenth: number
+	// readonly pmDecMasYrTenth: number
+	// readonly pmRaErrorMasYr: number | undefined
+	// readonly pmDecErrorMasYr: number | undefined
+	// readonly twoMassId: number
+	// readonly twoMassMagnitudeMillimag: readonly [number, number, number]
+	// readonly twoMassQualityFlags: readonly [number, number, number]
+	// readonly twoMassErrorCentimag: readonly [number, number, number]
+	// readonly apassMagnitudeMillimag: readonly [number, number, number, number, number]
+	// readonly apassErrorCentimag: readonly [number, number, number, number, number]
+	// readonly yaleSpmFlag: number
+	// readonly mergedCatalogFlags: readonly [number, number, number, number, number, number, number, number, number]
+	// readonly ledaFlag: number
+	// readonly twoMassExtendedSourceFlag: number
+	// readonly uniqueStarNumber: number
+	// readonly ucac2Zone: number
+	// readonly ucac2RecordNumber: number
 }
 
 interface Ucac4Index {
@@ -140,7 +79,7 @@ export function parseUcac4Id(id: string): readonly [number, number] {
 	const match = UCAC4_ID_PATTERN.exec(id.trim())
 
 	if (!match) {
-		throw new StarCatalogQueryError(`invalid UCAC4 identifier: ${id}`)
+		throw new Error(`invalid UCAC4 identifier: ${id}`)
 	}
 
 	const zone = +match[1]
@@ -152,13 +91,13 @@ export function parseUcac4Id(id: string): readonly [number, number] {
 
 // Converts a declination to its native UCAC4 zone number.
 export function ucac4ZoneForDec(dec: Angle) {
-	const normalizedDec = validateDec(dec)
+	const normalizedDec = validateDeclination(dec)
 	if (normalizedDec >= PIOVERTWO) return UCAC4_ZONE_COUNT
 	return Math.floor((normalizedDec + PIOVERTWO) / UCAC4_ZONE_HEIGHT) + 1
 }
 
 // Creates and opens a UCAC4 catalog in one step.
-export async function openUcac4Catalog(source: string | Ucac4CatalogSource) {
+export async function openUcac4Catalog(source: string) {
 	return await new Ucac4Catalog().open(source)
 }
 
@@ -177,45 +116,39 @@ export class Ucac4Catalog extends BaseStarCatalog {
 		this.#zoneRecordCounts.fill(-1)
 	}
 
-	// Returns the generic UCAC4 metadata block.
-	metadata(): StarCatalogMetadata {
-		return UCAC4_METADATA
-	}
-
-	// Returns the generic UCAC4 capability description.
-	capabilities(): StarCatalogCapabilities {
-		return UCAC4_CAPABILITIES
+	get root() {
+		return this.#root
 	}
 
 	// Opens a UCAC4 storage root and eagerly loads the optional native index when available.
-	async open(source: string | Ucac4CatalogSource): Promise<this> {
-		const root = typeof source === 'string' ? source : source.root
-
+	async open(root: string) {
 		if (!root) {
-			throw new StarCatalogStorageError('missing UCAC4 root directory')
+			throw new Error('missing UCAC4 root directory')
 		}
 
 		try {
 			const stat = await fs.stat(root)
-			if (!stat.isDirectory()) throw new StarCatalogStorageError(`UCAC4 root is not a directory: ${root}`)
+			if (!stat.isDirectory()) throw new Error(`UCAC4 root is not a directory: ${root}`)
 		} catch (error) {
-			throw new StarCatalogStorageError(`unable to access UCAC4 root: ${root}`, error)
+			throw new Error(`unable to access UCAC4 root: ${root}`)
 		}
 
 		this.#root = root
-		this.#index = await this.loadNativeIndex()
 		this.#opened = await this.hasAnyZoneFile()
 
 		if (!this.#opened) {
-			throw new StarCatalogStorageError(`no UCAC4 zone files were found under ${root}`)
+			throw new Error(`no UCAC4 zone files were found under ${root}`)
 		}
+
+		this.#index = await this.loadNativeIndex()
 
 		return this
 	}
 
 	// Closes any cached zone handles.
-	async close(): Promise<void> {
+	async close() {
 		const handles = [...this.#zoneHandles.values()]
+
 		this.#zoneHandles.clear()
 		this.#zonePaths.clear()
 		this.#zoneRecordCounts.fill(-1)
@@ -228,14 +161,15 @@ export class Ucac4Catalog extends BaseStarCatalog {
 	}
 
 	// Returns a raw UCAC4 record by identifier.
-	async getRawById(id: string): Promise<Ucac4RawRecord | undefined> {
+	async get(id: string): Promise<Ucac4Record | undefined> {
 		const [zone, recordNumber] = parseUcac4Id(id)
 		return await this.readRawRecord(zone, recordNumber)
 	}
 
 	// Returns a raw UCAC4 record by native zone and record number.
-	async readRawRecord(zone: number, recordNumber: number): Promise<Ucac4RawRecord | undefined> {
+	async readRawRecord(zone: number, recordNumber: number): Promise<Ucac4Record | undefined> {
 		this.assertOpen()
+
 		validateZoneNumber(zone)
 		validateRecordNumber(recordNumber)
 
@@ -248,38 +182,31 @@ export class Ucac4Catalog extends BaseStarCatalog {
 		try {
 			const { bytesRead } = await handle.read(buffer, 0, UCAC4_RECORD_SIZE, (recordNumber - 1) * UCAC4_RECORD_SIZE)
 			if (bytesRead !== UCAC4_RECORD_SIZE) {
-				throw new StarCatalogStorageError(`short UCAC4 read for zone ${zone}, record ${recordNumber}`)
+				throw new Error(`short UCAC4 read for zone ${zone}, record ${recordNumber}`)
 			}
 		} catch (error) {
-			if (error instanceof StarCatalogStorageError) throw error
-			throw new StarCatalogStorageError(`unable to read UCAC4 zone ${zone}, record ${recordNumber}`, error)
+			if (error instanceof Error) throw error
+			else throw new Error(`unable to read UCAC4 zone ${zone}, record ${recordNumber}`)
 		}
 
 		return parseUcac4Record(buffer, zone, recordNumber)
 	}
 
 	// Streams candidate entries from the zone files touched by the coarse preselection boxes.
-	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery, stats: CatalogQueryStatsAccumulator): AsyncIterable<StarCatalogEntry> {
+	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery): AsyncIterable<StarCatalogEntry> {
 		this.assertOpen()
 
 		const zoneNumbers = touchedZones(query)
 
 		for (const zone of zoneNumbers) {
-			const ranges = await this.zoneRangesForQuery(zone, query, stats)
+			const ranges = await this.zoneRangesForQuery(zone, query)
+
 			if (!ranges.length) continue
 
-			stats.zonesTouched = (stats.zonesTouched ?? 0) + 1
-
 			for (const [startRecord, endRecord] of ranges) {
-				yield* this.streamZoneRange(zone, startRecord, endRecord, query.includeRaw, stats)
+				yield* this.streamZoneRange(zone, startRecord, endRecord)
 			}
 		}
-	}
-
-	// Looks up a normalized entry by native identifier.
-	protected async getEntryByIdInternal(catalogObjectId: string, includeRaw: boolean): Promise<StarCatalogEntry | undefined> {
-		const raw = await this.getRawById(catalogObjectId)
-		return raw ? normalizeUcac4Entry(raw, includeRaw) : undefined
 	}
 
 	// Estimates candidate counts using the native index when available.
@@ -310,7 +237,7 @@ export class Ucac4Catalog extends BaseStarCatalog {
 	// Ensures the catalog has been opened before any I/O starts.
 	private assertOpen() {
 		if (!this.#opened) {
-			throw new StarCatalogStorageError('UCAC4 catalog is not open')
+			throw new Error('UCAC4 catalog is not open')
 		}
 	}
 
@@ -339,7 +266,7 @@ export class Ucac4Catalog extends BaseStarCatalog {
 			const expectedSize = UCAC4_ZONE_COUNT * UCAC4_INDEX_BIN_COUNT * 4 * 2
 
 			if (data.byteLength !== expectedSize) {
-				throw new StarCatalogDataError(`corrupt UCAC4 index file: ${candidate}`)
+				throw new Error(`corrupt UCAC4 index file: ${candidate}`)
 			}
 
 			const totalValues = UCAC4_ZONE_COUNT * UCAC4_INDEX_BIN_COUNT
@@ -384,6 +311,7 @@ export class Ucac4Catalog extends BaseStarCatalog {
 		}
 
 		this.#zonePaths.set(zone, null)
+
 		return undefined
 	}
 
@@ -403,11 +331,11 @@ export class Ucac4Catalog extends BaseStarCatalog {
 		try {
 			stat = await fs.stat(zonePath)
 		} catch (error) {
-			throw new StarCatalogStorageError(`unable to stat UCAC4 zone file: ${zonePath}`, error)
+			throw new Error(`unable to stat UCAC4 zone file: ${zonePath}`)
 		}
 
 		if (stat.size % UCAC4_RECORD_SIZE !== 0) {
-			throw new StarCatalogDataError(`invalid UCAC4 zone size for ${zonePath}`)
+			throw new Error(`invalid UCAC4 zone size for ${zonePath}`)
 		}
 
 		const count = stat.size / UCAC4_RECORD_SIZE
@@ -422,7 +350,7 @@ export class Ucac4Catalog extends BaseStarCatalog {
 
 		const zonePath = await this.resolveZonePath(zone)
 		if (!zonePath) {
-			throw new StarCatalogStorageError(`missing UCAC4 zone file for zone ${zone}`)
+			throw new Error(`missing UCAC4 zone file for zone ${zone}`)
 		}
 
 		try {
@@ -430,38 +358,28 @@ export class Ucac4Catalog extends BaseStarCatalog {
 			this.#zoneHandles.set(zone, handle)
 			return handle
 		} catch (error) {
-			throw new StarCatalogStorageError(`unable to open UCAC4 zone file: ${zonePath}`, error)
+			throw new Error(`unable to open UCAC4 zone file: ${zonePath}`)
 		}
 	}
 
 	// Computes the candidate record ranges touched by a query inside a single zone.
-	private async zoneRangesForQuery(zone: number, query: NormalizedStarCatalogQuery, stats?: CatalogQueryStatsAccumulator) {
-		if (!zoneIntersectsQuery(zone, query)) return [] as (readonly [number, number])[]
+	private async zoneRangesForQuery(zone: number, query: NormalizedStarCatalogQuery): Promise<readonly Vertex[]> {
+		if (!zoneIntersectsQuery(zone, query)) return []
 
 		const recordCount = await this.ensureZoneRecordCount(zone)
-		if (recordCount <= 0) return [] as (readonly [number, number])[]
+		if (recordCount <= 0) return []
 
 		if (!this.#index) {
-			if (stats) {
-				stats.coarsePreselection = true
-				stats.usedSpatialIndex = false
-			}
-
 			return [[1, recordCount]] as const
 		}
 
-		if (stats) {
-			stats.coarsePreselection = true
-			stats.usedSpatialIndex = true
-		}
-
-		const ranges: (readonly [number, number])[] = []
+		const ranges: Vertex[] = []
 
 		for (const box of query.preselectionBoxes) {
-			if (!zoneIntersectsDecBox(zone, box.minDec, box.maxDec)) continue
+			if (!zoneIntersectsDecBox(zone, box.minDEC, box.maxDEC)) continue
 
-			const binStart = clampIndex(Math.floor(box.minRa / UCAC4_INDEX_BIN_SIZE), 0, UCAC4_INDEX_BIN_COUNT - 1)
-			const binEnd = clampIndex(Math.floor(Math.max(box.maxRa - GEOMETRY_EPSILON, 0) / UCAC4_INDEX_BIN_SIZE), 0, UCAC4_INDEX_BIN_COUNT - 1)
+			const binStart = clampIndex(Math.floor(box.minRA / UCAC4_INDEX_BIN_SIZE), 0, UCAC4_INDEX_BIN_COUNT - 1)
+			const binEnd = clampIndex(Math.floor(Math.max(box.maxRA - GEOMETRY_EPSILON, 0) / UCAC4_INDEX_BIN_SIZE), 0, UCAC4_INDEX_BIN_COUNT - 1)
 
 			for (let bin = binStart; bin <= binEnd; bin++) {
 				const index = (zone - 1) * UCAC4_INDEX_BIN_COUNT + bin
@@ -477,7 +395,7 @@ export class Ucac4Catalog extends BaseStarCatalog {
 	}
 
 	// Streams a contiguous zone-record range in fixed-size blocks.
-	private async *streamZoneRange(zone: number, startRecord: number, endRecord: number, includeRaw: boolean, stats: CatalogQueryStatsAccumulator): AsyncIterable<StarCatalogEntry> {
+	private async *streamZoneRange(zone: number, startRecord: number, endRecord: number): AsyncIterable<StarCatalogEntry> {
 		const handle = await this.openZoneHandle(zone)
 		const block = Buffer.allocUnsafe(UCAC4_BLOCK_RECORD_COUNT * UCAC4_RECORD_SIZE)
 
@@ -492,192 +410,118 @@ export class Ucac4Catalog extends BaseStarCatalog {
 			try {
 				bytesRead = (await handle.read(block, 0, bytesToRead, (recordNumber - 1) * UCAC4_RECORD_SIZE)).bytesRead
 			} catch (error) {
-				throw new StarCatalogStorageError(`unable to read UCAC4 zone ${zone}`, error)
+				throw new Error(`unable to read UCAC4 zone ${zone}`)
 			}
 
 			if (bytesRead !== bytesToRead) {
-				throw new StarCatalogStorageError(`short UCAC4 block read in zone ${zone}`)
+				throw new Error(`short UCAC4 block read in zone ${zone}`)
 			}
 
-			stats.bytesRead = (stats.bytesRead ?? 0) + bytesRead
-
 			for (let offset = 0; offset < bytesRead; offset += UCAC4_RECORD_SIZE) {
-				const raw = parseUcac4Record(block, zone, recordNumber, offset)
-				stats.recordsScanned = (stats.recordsScanned ?? 0) + 1
-				yield normalizeUcac4Entry(raw, includeRaw)
+				yield parseUcac4Record(block, zone, recordNumber, offset)
 				recordNumber++
 			}
 		}
 	}
 }
 
-// Benchmarks repeated UCAC4 region queries using the current provider state.
-export async function benchmarkUcac4Query(catalog: Ucac4Catalog, query: StarCatalogQuery, iterations: number = 5): Promise<Ucac4BenchmarkResult> {
-	if (!Number.isInteger(iterations) || iterations < 1) {
-		throw new StarCatalogQueryError(`invalid benchmark iteration count: ${iterations}`)
-	}
-
-	const durations: number[] = []
-	let resultCount = 0
-
-	for (let i = 0; i < iterations; i++) {
-		const start = performance.now()
-		const result: CatalogQueryResult = await catalog.queryRegion(query)
-		durations.push(performance.now() - start)
-		resultCount = result.items.length
-	}
-
-	return {
-		iterations,
-		minMs: Math.min(...durations),
-		maxMs: Math.max(...durations),
-		meanMs: durations.reduce((sum, value) => sum + value, 0) / durations.length,
-		resultCount,
-	}
-}
-
 // Parses a fixed-length native UCAC4 record from a block buffer.
-function parseUcac4Record(buffer: Buffer, zone: number, recordNumber: number, offset: number = 0): Ucac4RawRecord {
+function parseUcac4Record(buffer: Buffer, zone: number, recordNumber: number, offset: number = 0): Ucac4Record {
 	const raMas = buffer.readInt32LE(offset)
 	const southPoleDistanceMas = buffer.readInt32LE(offset + 4)
 
 	if (raMas < 0 || raMas >= FULL_CIRCLE_MAS || southPoleDistanceMas < 0 || southPoleDistanceMas > 2 * UCAC4_SPD_OFFSET_MAS) {
-		throw new StarCatalogDataError(`invalid UCAC4 coordinates in zone ${zone}, record ${recordNumber}`)
+		throw new Error(`invalid UCAC4 coordinates in zone ${zone}, record ${recordNumber}`)
 	}
 
-	const mergedCatalogFlags = decodeMergedCatalogFlags(buffer.readInt32LE(offset + 62))
+	// const mergedCatalogFlags = decodeMergedCatalogFlags(buffer.readInt32LE(offset + 62))
+	const declination = mas(southPoleDistanceMas - UCAC4_SPD_OFFSET_MAS)
+	const cosDec = Math.cos(declination)
+	const pmRaCosDecMasYrTenth = buffer.readInt16LE(offset + 24)
+	const pmDecMasYrTenth = buffer.readInt16LE(offset + 26)
+	const pmRaErrorMasYr = decodeProperMotionError(decodeOffsetByte(buffer.readInt8(offset + 28)))
+	const pmDecErrorMasYr = decodeProperMotionError(decodeOffsetByte(buffer.readInt8(offset + 29)))
+	const rawPmRaCosDecMasYr = pmRaCosDecMasYrTenth === UCAC4_PM_SENTINEL ? undefined : pmRaCosDecMasYrTenth / 10
+	const rawPmDecMasYr = pmDecMasYrTenth === UCAC4_PM_SENTINEL ? undefined : pmDecMasYrTenth / 10
+	const hasPm = pmRaErrorMasYr !== undefined && pmDecErrorMasYr !== undefined && rawPmRaCosDecMasYr !== undefined && rawPmDecMasYr !== undefined
+	const pmRA = hasPm && Math.abs(cosDec) > 1e-9 ? mas(rawPmRaCosDecMasYr / cosDec) : undefined
+	const pmDEC = hasPm ? mas(rawPmDecMasYr) : undefined
+	const modelMagnitudeMillimag = buffer.readInt16LE(offset + 8)
+	const apertureMagnitudeMillimag = buffer.readInt16LE(offset + 10)
+	const twoMassMagnitudeMillimagJ = buffer.readInt16LE(offset + 34)
+	const magnitude = pickPrimaryMagnitude(apertureMagnitudeMillimag, modelMagnitudeMillimag, twoMassMagnitudeMillimagJ)
 
 	return {
+		id: formatUcac4Id(zone, recordNumber),
 		zone,
 		recordNumber,
-		raMas,
-		southPoleDistanceMas,
-		modelMagnitudeMillimag: buffer.readInt16LE(offset + 8),
-		apertureMagnitudeMillimag: buffer.readInt16LE(offset + 10),
-		magnitudeErrorCentimag: buffer.readInt8(offset + 12),
-		objectType: buffer.readUInt8(offset + 13),
-		combinedDoubleStarFlag: buffer.readUInt8(offset + 14),
-		raSigmaMas: decodeOffsetByte(buffer.readInt8(offset + 15)),
-		decSigmaMas: decodeOffsetByte(buffer.readInt8(offset + 16)),
-		imageCount: buffer.readUInt8(offset + 17),
-		usedImageCount: buffer.readUInt8(offset + 18),
-		properMotionCatalogCount: buffer.readUInt8(offset + 19),
-		centralEpochRaYear: 1900 + buffer.readInt16LE(offset + 20) / 100,
-		centralEpochDecYear: 1900 + buffer.readInt16LE(offset + 22) / 100,
-		pmRaCosDecMasYrTenth: buffer.readInt16LE(offset + 24),
-		pmDecMasYrTenth: buffer.readInt16LE(offset + 26),
-		pmRaErrorMasYr: decodeProperMotionError(decodeOffsetByte(buffer.readInt8(offset + 28))),
-		pmDecErrorMasYr: decodeProperMotionError(decodeOffsetByte(buffer.readInt8(offset + 29))),
-		twoMassId: buffer.readInt32LE(offset + 30),
-		twoMassMagnitudeMillimag: [buffer.readInt16LE(offset + 34), buffer.readInt16LE(offset + 36), buffer.readInt16LE(offset + 38)] as const,
-		twoMassQualityFlags: [buffer.readUInt8(offset + 40), buffer.readUInt8(offset + 41), buffer.readUInt8(offset + 42)] as const,
-		twoMassErrorCentimag: [buffer.readUInt8(offset + 43), buffer.readUInt8(offset + 44), buffer.readUInt8(offset + 45)] as const,
-		apassMagnitudeMillimag: [buffer.readInt16LE(offset + 46), buffer.readInt16LE(offset + 48), buffer.readInt16LE(offset + 50), buffer.readInt16LE(offset + 52), buffer.readInt16LE(offset + 54)] as const,
-		apassErrorCentimag: [buffer.readInt8(offset + 56), buffer.readInt8(offset + 57), buffer.readInt8(offset + 58), buffer.readInt8(offset + 59), buffer.readInt8(offset + 60)] as const,
-		yaleSpmFlag: buffer.readUInt8(offset + 61),
-		mergedCatalogFlags,
-		ledaFlag: buffer.readUInt8(offset + 66),
-		twoMassExtendedSourceFlag: buffer.readUInt8(offset + 67),
-		uniqueStarNumber: buffer.readInt32LE(offset + 68),
-		ucac2Zone: buffer.readInt16LE(offset + 72),
-		ucac2RecordNumber: buffer.readInt32LE(offset + 74),
-	}
-}
-
-// Converts a raw UCAC4 record into the normalized cross-catalog entry shape.
-function normalizeUcac4Entry(raw: Ucac4RawRecord, includeRaw: boolean): StarCatalogEntry {
-	const ra = mas(raw.raMas)
-	const dec = mas(raw.southPoleDistanceMas - UCAC4_SPD_OFFSET_MAS)
-	const cosDec = Math.cos(dec)
-	const rawPmRaCosDecMasYr = raw.pmRaCosDecMasYrTenth === UCAC4_PM_SENTINEL ? undefined : raw.pmRaCosDecMasYrTenth / 10
-	const rawPmDecMasYr = raw.pmDecMasYrTenth === UCAC4_PM_SENTINEL ? undefined : raw.pmDecMasYrTenth / 10
-	const hasPm = raw.pmRaErrorMasYr !== undefined && raw.pmDecErrorMasYr !== undefined && rawPmRaCosDecMasYr !== undefined && rawPmDecMasYr !== undefined
-	const pmRaMasYr = hasPm && Math.abs(cosDec) > 1e-9 ? rawPmRaCosDecMasYr! / cosDec : undefined
-	const pmDecMasYr = hasPm ? rawPmDecMasYr : undefined
-	const magBands = buildMagnitudeBands(raw)
-	const primaryMagnitude = pickPrimaryMagnitude(raw)
-	const extras: Record<string, unknown> = {
-		ucacModelMagnitude: decodeMagnitude(raw.modelMagnitudeMillimag),
-		ucacApertureMagnitude: decodeMagnitude(raw.apertureMagnitudeMillimag),
-		centralEpochRaYear: raw.centralEpochRaYear,
-		centralEpochDecYear: raw.centralEpochDecYear,
-		pmRaCosDecMasYr: rawPmRaCosDecMasYr,
-		twoMassId: raw.twoMassId || undefined,
-		ucac2Match: raw.ucac2Zone > 0 ? { zone: raw.ucac2Zone, recordNumber: raw.ucac2RecordNumber } : undefined,
-		apassErrorCentimag: raw.apassErrorCentimag,
-		twoMassQualityFlags: raw.twoMassQualityFlags,
-		twoMassErrorCentimag: raw.twoMassErrorCentimag,
-		mergedCatalogFlags: raw.mergedCatalogFlags,
-	}
-
-	if (!hasPm) {
-		extras.missingProperMotion = true
-	}
-
-	if (raw.pmRaCosDecMasYrTenth === UCAC4_PM_SENTINEL || raw.pmDecMasYrTenth === UCAC4_PM_SENTINEL) {
-		extras.highProperMotionSupplementRequired = true
-	}
-
-	return {
-		id: formatUcac4Id(raw.zone, raw.recordNumber),
-		ra,
-		dec,
 		epoch: 2000,
-		pmRaMasYr,
-		pmDecMasYr,
-		mag: primaryMagnitude[0],
-		magBand: primaryMagnitude[1],
-		magBands,
-		positionErrorMas: Math.max(raw.raSigmaMas, raw.decSigmaMas),
-		properMotionError: raw.pmRaErrorMasYr !== undefined || raw.pmDecErrorMasYr !== undefined ? { raMasYr: raw.pmRaErrorMasYr, decMasYr: raw.pmDecErrorMasYr } : undefined,
-		flags: {
-			objectType: raw.objectType,
-			combinedDoubleStarFlag: raw.combinedDoubleStarFlag,
-			yaleSpmFlag: raw.yaleSpmFlag,
-			fkSourceFlag: raw.mergedCatalogFlags[0],
-			ledaFlag: raw.ledaFlag,
-			twoMassExtendedSourceFlag: raw.twoMassExtendedSourceFlag,
-		},
-		sourceCatalog: 'UCAC4',
-		raw: includeRaw ? raw : undefined,
-		extras,
+		rightAscension: mas(raMas),
+		declination,
+		magnitude,
+		pmRA,
+		pmDEC,
+		// modelMagnitudeMillimag,
+		// apertureMagnitudeMillimag,
+		// magnitudeErrorCentimag: buffer.readInt8(offset + 12),
+		// objectType: buffer.readUInt8(offset + 13),
+		// combinedDoubleStarFlag: buffer.readUInt8(offset + 14),
+		// raSigmaMas: decodeOffsetByte(buffer.readInt8(offset + 15)),
+		// decSigmaMas: decodeOffsetByte(buffer.readInt8(offset + 16)),
+		// imageCount: buffer.readUInt8(offset + 17),
+		// usedImageCount: buffer.readUInt8(offset + 18),
+		// properMotionCatalogCount: buffer.readUInt8(offset + 19),
+		// centralEpochRaYear: 1900 + buffer.readInt16LE(offset + 20) / 100,
+		// centralEpochDecYear: 1900 + buffer.readInt16LE(offset + 22) / 100,
+		// pmRaCosDecMasYrTenth,
+		// pmDecMasYrTenth,
+		// pmRaErrorMasYr,
+		// pmDecErrorMasYr,
+		// twoMassId: buffer.readInt32LE(offset + 30),
+		// twoMassMagnitudeMillimag: [buffer.readInt16LE(offset + 34), buffer.readInt16LE(offset + 36), buffer.readInt16LE(offset + 38)] as const,
+		// twoMassQualityFlags: [buffer.readUInt8(offset + 40), buffer.readUInt8(offset + 41), buffer.readUInt8(offset + 42)] as const,
+		// twoMassErrorCentimag: [buffer.readUInt8(offset + 43), buffer.readUInt8(offset + 44), buffer.readUInt8(offset + 45)] as const,
+		// apassMagnitudeMillimag: [buffer.readInt16LE(offset + 46), buffer.readInt16LE(offset + 48), buffer.readInt16LE(offset + 50), buffer.readInt16LE(offset + 52), buffer.readInt16LE(offset + 54)] as const,
+		// apassErrorCentimag: [buffer.readInt8(offset + 56), buffer.readInt8(offset + 57), buffer.readInt8(offset + 58), buffer.readInt8(offset + 59), buffer.readInt8(offset + 60)] as const,
+		// yaleSpmFlag: buffer.readUInt8(offset + 61),
+		// mergedCatalogFlags,
+		// ledaFlag: buffer.readUInt8(offset + 66),
+		// twoMassExtendedSourceFlag: buffer.readUInt8(offset + 67),
+		// uniqueStarNumber: buffer.readInt32LE(offset + 68),
+		// ucac2Zone: buffer.readInt16LE(offset + 72),
+		// ucac2RecordNumber: buffer.readInt32LE(offset + 74),
+		missingProperMotion: !hasPm,
 	}
 }
 
 // Builds the normalized multi-band magnitude map.
-function buildMagnitudeBands(raw: Ucac4RawRecord): Readonly<Record<string, number | undefined>> {
-	return {
-		ucacModel: decodeMagnitude(raw.modelMagnitudeMillimag),
-		ucacAperture: decodeMagnitude(raw.apertureMagnitudeMillimag),
-		j: decodeMagnitude(raw.twoMassMagnitudeMillimag[0]),
-		h: decodeMagnitude(raw.twoMassMagnitudeMillimag[1]),
-		ks: decodeMagnitude(raw.twoMassMagnitudeMillimag[2]),
-		b: decodeMagnitude(raw.apassMagnitudeMillimag[0]),
-		v: decodeMagnitude(raw.apassMagnitudeMillimag[1]),
-		g: decodeMagnitude(raw.apassMagnitudeMillimag[2]),
-		r: decodeMagnitude(raw.apassMagnitudeMillimag[3]),
-		i: decodeMagnitude(raw.apassMagnitudeMillimag[4]),
-	}
-}
+// function buildMagnitudeBands(raw: Ucac4Record): Readonly<Record<string, number | undefined>> {
+// 	return {
+// 		ucacModel: decodeMagnitude(raw.modelMagnitudeMillimag),
+// 		ucacAperture: decodeMagnitude(raw.apertureMagnitudeMillimag),
+// 		j: decodeMagnitude(raw.twoMassMagnitudeMillimag[0]),
+// 		h: decodeMagnitude(raw.twoMassMagnitudeMillimag[1]),
+// 		ks: decodeMagnitude(raw.twoMassMagnitudeMillimag[2]),
+// 		b: decodeMagnitude(raw.apassMagnitudeMillimag[0]),
+// 		v: decodeMagnitude(raw.apassMagnitudeMillimag[1]),
+// 		g: decodeMagnitude(raw.apassMagnitudeMillimag[2]),
+// 		r: decodeMagnitude(raw.apassMagnitudeMillimag[3]),
+// 		i: decodeMagnitude(raw.apassMagnitudeMillimag[4]),
+// 	}
+// }
 
 // Picks a single primary magnitude for generic consumers.
-function pickPrimaryMagnitude(raw: Ucac4RawRecord): readonly [number | undefined, string | undefined] {
-	const aperture = decodeMagnitude(raw.apertureMagnitudeMillimag)
-	if (aperture !== undefined) return [aperture, 'ucacAperture'] as const
+function pickPrimaryMagnitude(apertureMagnitudeMillimag: number, modelMagnitudeMillimag: number, twoMassMagnitudeMillimagJ: number) {
+	const aperture = decodeMagnitude(apertureMagnitudeMillimag)
+	if (aperture !== undefined) return aperture
 
-	const model = decodeMagnitude(raw.modelMagnitudeMillimag)
-	if (model !== undefined) return [model, 'ucacModel'] as const
+	const model = decodeMagnitude(modelMagnitudeMillimag)
+	if (model !== undefined) return model
 
-	const j = decodeMagnitude(raw.twoMassMagnitudeMillimag[0])
-	if (j !== undefined) return [j, 'j'] as const
+	const j = decodeMagnitude(twoMassMagnitudeMillimagJ)
+	if (j !== undefined) return j
 
-	return [undefined, undefined] as const
-}
-
-// Decodes the merged 9-digit catalog-flag integer.
-function decodeMergedCatalogFlags(value: number) {
-	const text = `${Math.abs(value)}`.padStart(9, '0')
-	return [...text].map((digit) => +digit) as unknown as readonly [number, number, number, number, number, number, number, number, number]
+	return undefined
 }
 
 // Decodes an offset-encoded signed byte stored as value-128.
@@ -703,14 +547,14 @@ function decodeMagnitude(valueMillimag: number) {
 // Validates a native zone number.
 function validateZoneNumber(zone: number) {
 	if (!Number.isInteger(zone) || zone < 1 || zone > UCAC4_ZONE_COUNT) {
-		throw new StarCatalogQueryError(`invalid UCAC4 zone number: ${zone}`)
+		throw new Error(`invalid UCAC4 zone number: ${zone}`)
 	}
 }
 
 // Validates a native record number.
 function validateRecordNumber(recordNumber: number) {
 	if (!Number.isInteger(recordNumber) || recordNumber < 1) {
-		throw new StarCatalogQueryError(`invalid UCAC4 record number: ${recordNumber}`)
+		throw new Error(`invalid UCAC4 record number: ${recordNumber}`)
 	}
 }
 
@@ -721,25 +565,27 @@ function zoneDecRange(zone: number): readonly [number, number] {
 	return [minDec, maxDec] as const
 }
 
+const ZoneComparator = (left: number, right: number) => left - right
+
 // Computes the set of zones touched by the query preselection boxes.
 function touchedZones(query: NormalizedStarCatalogQuery) {
 	const zones = new Set<number>()
 
 	for (const box of query.preselectionBoxes) {
-		const minZone = ucac4ZoneForDec(box.minDec)
-		const maxZone = ucac4ZoneForDec(box.maxDec)
+		const minZone = ucac4ZoneForDec(box.minDEC)
+		const maxZone = ucac4ZoneForDec(box.maxDEC)
 
 		for (let zone = minZone; zone <= maxZone; zone++) {
 			zones.add(zone)
 		}
 	}
 
-	return [...zones].sort((left, right) => left - right)
+	return [...zones].sort(ZoneComparator)
 }
 
 // Checks whether any part of a zone overlaps the query declination boxes.
 function zoneIntersectsQuery(zone: number, query: NormalizedStarCatalogQuery) {
-	return query.preselectionBoxes.some((box) => zoneIntersectsDecBox(zone, box.minDec, box.maxDec))
+	return query.preselectionBoxes.some((box) => zoneIntersectsDecBox(zone, box.minDEC, box.maxDEC))
 }
 
 // Checks whether a zone overlaps a declination interval.
@@ -749,17 +595,17 @@ function zoneIntersectsDecBox(zone: number, minDec: Angle, maxDec: Angle) {
 }
 
 // Merges overlapping native record ranges and clamps them to a zone length.
-function mergeRanges(ranges: readonly (readonly [number, number])[], recordCount: number) {
-	if (!ranges.length) return [] as (readonly [number, number])[]
+function mergeRanges(ranges: readonly Vertex[], recordCount: number) {
+	if (!ranges.length) return []
 
 	const sorted = [...ranges]
-		.map(([startRecord, endRecord]) => [Math.max(1, startRecord), Math.min(recordCount, endRecord)] as const)
-		.filter(([startRecord, endRecord]) => endRecord >= startRecord)
+		.map((e) => [Math.max(1, e[0]), Math.min(recordCount, e[1])] as const)
+		.filter((e) => e[1] >= e[0])
 		.sort((left, right) => left[0] - right[0])
 
-	if (!sorted.length) return [] as (readonly [number, number])[]
+	if (!sorted.length) return []
 
-	const merged: (readonly [number, number])[] = [sorted[0]]
+	const merged: Vertex[] = [sorted[0]]
 
 	for (let i = 1; i < sorted.length; i++) {
 		const current = sorted[i]
