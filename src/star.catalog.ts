@@ -47,13 +47,13 @@ export interface StarCatalogPolygonQuery {
 
 export type StarCatalogQuery = StarCatalogConeQuery | StarCatalogBoxQuery | StarCatalogPolygonQuery
 
-export interface StarCatalog<ID extends string | number = string> {
-	readonly queryRegion: (query: StarCatalogQuery) => Promise<readonly StarCatalogEntry<ID>[]>
-	readonly queryCone: (centerRA: Angle, centerDEC: Angle, radius: Angle) => Promise<readonly StarCatalogEntry<ID>[]>
-	readonly queryBox: (minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: Angle) => Promise<readonly StarCatalogEntry<ID>[]>
-	readonly queryPolygon: (vertices: readonly Vertex[]) => Promise<readonly StarCatalogEntry<ID>[]>
-	readonly get: (id: ID) => Promise<StarCatalogEntry<ID> | undefined>
-	readonly streamRegion: (query: StarCatalogQuery) => AsyncIterable<StarCatalogEntry<ID>>
+export interface StarCatalog<T extends StarCatalogEntry<ID>, ID extends string | number = string> {
+	readonly queryRegion: (query: StarCatalogQuery) => Promise<readonly T[]> | readonly T[]
+	readonly queryCone: (centerRA: Angle, centerDEC: Angle, radius: Angle) => Promise<readonly T[]> | readonly T[]
+	readonly queryBox: (minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: Angle) => Promise<readonly T[]> | readonly T[]
+	readonly queryPolygon: (vertices: readonly Vertex[]) => Promise<readonly T[]> | readonly T[]
+	readonly get: (id: ID) => Promise<T | undefined> | T | undefined
+	readonly streamRegion: (query: StarCatalogQuery) => AsyncIterable<T> | Iterable<T>
 }
 
 export interface StarCatalogRaDecBox {
@@ -95,14 +95,17 @@ interface NormalizedPolygonQuery extends NormalizedQueryBase {
 export type NormalizedStarCatalogQuery = NormalizedConeQuery | NormalizedBoxQuery | NormalizedPolygonQuery
 
 // Implements the generic query, filtering, projection, and propagation flow for concrete catalogs.
-export abstract class BaseStarCatalog implements StarCatalog {
+export abstract class BaseStarCatalog<T extends StarCatalogEntry> implements StarCatalog<T> {
 	// Returns a normalized entry by source identifier when supported by the provider.
-	abstract get(id: string): Promise<StarCatalogEntry | undefined>
+	abstract get(id: string): Promise<T | undefined> | T | undefined
+
+	// Returns provider-specific candidates for a normalized query.
+	protected abstract streamCandidateEntries(query: NormalizedStarCatalogQuery): AsyncIterable<T> | Iterable<T>
 
 	// Runs a normalized query and materializes a finite result set.
 	async queryRegion(query: StarCatalogQuery) {
 		const normalized = normalizeStarCatalogQuery(query)
-		const items: StarCatalogEntry[] = []
+		const items: T[] = []
 
 		for await (const entry of this.streamNormalizedRegion(normalized)) {
 			items.push(entry)
@@ -142,9 +145,6 @@ export abstract class BaseStarCatalog implements StarCatalog {
 			yield entry
 		}
 	}
-
-	// Returns provider-specific candidates for a normalized query.
-	protected abstract streamCandidateEntries(query: NormalizedStarCatalogQuery): AsyncIterable<StarCatalogEntry>
 }
 
 // Normalizes and validates a public query before it reaches a provider.

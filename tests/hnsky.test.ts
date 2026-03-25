@@ -139,6 +139,7 @@ test('HnskyCatalog exposes .290 archives through the generic star catalog API', 
 		expect(cone.map((e) => e.id).sort()).toEqual([formatHnskyId('g14', 146, 1), formatHnskyId('g14', 147, 1)])
 		expect(box.map((e) => e.id).sort()).toEqual([formatHnskyId('g14', 146, 1), formatHnskyId('g14', 147, 1)])
 		expect(cone[0]!.epoch).toBe(2000)
+		expect(cone[0]!.designation?.label).toBe('UCAC4 100-1')
 
 		const star = await catalog.get(cone[1]!.id)
 
@@ -146,7 +147,7 @@ test('HnskyCatalog exposes .290 archives through the generic star catalog API', 
 		expect(star?.magnitude).toBeCloseTo(1.1, 6)
 		expect(star?.designation?.label).toBe('UCAC4 101-1')
 	} finally {
-		await catalog.close()
+		catalog.close()
 	}
 })
 

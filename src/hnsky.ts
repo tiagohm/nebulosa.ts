@@ -292,7 +292,7 @@ export function openHnskyCatalog(files: Hnsky290Files, database: Hnsky290Databas
 }
 
 // Exposes HNSKY .290 archives through the generic star catalog contract.
-export class HnskyCatalog extends BaseStarCatalog {
+export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 	readonly #areas = new Map<number, Hnsky290LoadedArea | null>()
 
 	#files?: Hnsky290Files
@@ -347,7 +347,7 @@ export class HnskyCatalog extends BaseStarCatalog {
 	}
 
 	// Streams tile candidates touched by the normalized query boxes.
-	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery): AsyncIterable<StarCatalogEntry> {
+	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery) {
 		this.assertOpen()
 
 		for (const area of touchedHnsky290Areas(query)) {

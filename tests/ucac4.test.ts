@@ -114,45 +114,32 @@ test('detects malformed records with invalid coordinates', async () => {
 test('generic consumers can swap UCAC4 and a mock provider without changing query code', async () => {
 	await assertGenericCatalogContract(catalog)
 
-	const mock = await new MockCatalog([
+	const mock = new MockCatalog([
 		{ id: 'm1', rightAscension: deg(359.9), declination: 0, epoch: 2000, magnitude: 9.5, pmRA: 20, pmDEC: -10 },
 		{ id: 'm2', rightAscension: deg(0.1), declination: deg(0.05), epoch: 2000, magnitude: 12.1 },
 		{ id: 'm3', rightAscension: deg(10), declination: deg(0.1), epoch: 2000, magnitude: 14.5 },
-	]).open({})
+	])
 
-	try {
-		await assertGenericCatalogContract(mock)
-	} finally {
-		await mock.close()
-	}
+	await assertGenericCatalogContract(mock)
 })
 
-class MockCatalog extends BaseStarCatalog {
+class MockCatalog extends BaseStarCatalog<StarCatalogEntry> {
 	constructor(private readonly entries: readonly StarCatalogEntry[]) {
 		super()
 	}
 
-	open(_source: unknown): Promise<this> {
-		return Promise.resolve(this)
-	}
-
-	close(): Promise<void> {
-		return Promise.resolve()
-	}
-
-	// biome-ignore lint/suspicious/useAwait: false positive
-	protected async *streamCandidateEntries(_query: NormalizedStarCatalogQuery): AsyncIterable<StarCatalogEntry> {
+	protected *streamCandidateEntries(_query: NormalizedStarCatalogQuery): Iterable<StarCatalogEntry> {
 		for (const entry of this.entries) {
 			yield entry
 		}
 	}
 
-	get(id: string): Promise<StarCatalogEntry | undefined> {
-		return Promise.resolve(this.entries.find((entry) => entry.id === id))
+	get(id: string) {
+		return this.entries.find((entry) => entry.id === id)
 	}
 }
 
-async function assertGenericCatalogContract(catalog: BaseStarCatalog) {
+async function assertGenericCatalogContract(catalog: BaseStarCatalog<StarCatalogEntry>) {
 	const cone = await catalog.queryCone(0, 0, deg(0.3))
 	expect(cone).toHaveLength(2)
 

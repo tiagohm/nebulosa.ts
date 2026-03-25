@@ -107,7 +107,7 @@ export async function openUcac4Catalog(source: string) {
 }
 
 // Reads native UCAC4 zone files lazily and exposes them through the generic catalog contract.
-export class Ucac4Catalog extends BaseStarCatalog {
+export class Ucac4Catalog extends BaseStarCatalog<Ucac4Record> {
 	readonly #zonePaths = new Map<number, string | null>()
 	readonly #zoneHandles = new Map<number, FileHandle>()
 	readonly #zoneRecordCounts = new Int32Array(UCAC4_ZONE_COUNT)
@@ -198,7 +198,7 @@ export class Ucac4Catalog extends BaseStarCatalog {
 	}
 
 	// Streams candidate entries from the zone files touched by the coarse preselection boxes.
-	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery): AsyncIterable<StarCatalogEntry> {
+	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery) {
 		this.assertOpen()
 
 		const zoneNumbers = touchedZones(query)
@@ -400,7 +400,7 @@ export class Ucac4Catalog extends BaseStarCatalog {
 	}
 
 	// Streams a contiguous zone-record range in fixed-size blocks.
-	private async *streamZoneRange(zone: number, startRecord: number, endRecord: number): AsyncIterable<StarCatalogEntry> {
+	private async *streamZoneRange(zone: number, startRecord: number, endRecord: number) {
 		const handle = await this.openZoneHandle(zone)
 		const block = Buffer.allocUnsafe(UCAC4_BLOCK_RECORD_COUNT * UCAC4_RECORD_SIZE)
 
