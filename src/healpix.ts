@@ -1,6 +1,8 @@
 import { type Angle, normalizeAngle } from './angle'
 import { PI, PIOVERTWO } from './constants'
+import type { EquatorialCoordinate } from './coordinate'
 import { clamp, pmod } from './math'
+import type { Vertex } from './star.catalog'
 import { type MutVec3, type Vec3, vecCross, vecDot, vecNegateMut, vecNormalize, vecTripleProduct } from './vec3'
 
 const HEALPIX_MAX_NSIDE = 2 ** 24
@@ -15,7 +17,7 @@ const JPLL = [1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7] as const
 
 export type HealpixOrdering = 'nested' | 'ring'
 
-export type HealpixVertex = readonly [Angle, Angle]
+export type HealpixVertexInput = Vertex | Vec3
 
 export interface HealpixCoverOptions {
 	readonly targetNside?: number
@@ -28,28 +30,20 @@ export interface HealpixCoverOptions {
 export interface HealpixIndexOptions {
 	readonly nside: number
 	readonly ordering?: HealpixOrdering
-	readonly coordinateMode?: 'lonlat' | 'radec'
-	readonly validateInputs?: boolean
 }
 
-export interface HealpixInsertObject<T, M = unknown> {
+export interface HealpixInsertObject<T, M = unknown> extends Readonly<EquatorialCoordinate> {
 	readonly id: T
-	readonly longitude: Angle
-	readonly latitude: Angle
 	readonly metadata?: M
 }
-
-export type HealpixVertexInput = readonly [Angle, Angle] | Vec3
 
 interface HealpixRegion {
 	readonly vertices: readonly Vec3[]
 	readonly edgeNormals: readonly Vec3[]
 }
 
-interface HealpixObject<T, M> {
+interface HealpixObject<T, M> extends EquatorialCoordinate {
 	readonly id: T
-	longitude: Angle
-	latitude: Angle
 	metadata?: M
 	readonly vector: MutVec3
 	pixel: number
@@ -65,11 +59,11 @@ interface HealpixCoverState {
 }
 
 // Converts spherical coordinates to a HEALPix pixel.
-export function coordToPixel(nside: number, longitude: number, latitude: number, ordering: HealpixOrdering = 'nested') {
+export function coordToPixel(nside: number, rightAscension: number, declination: number, ordering: HealpixOrdering = 'nested') {
 	validateNside(nside)
-	const normalizedLongitude = normalizeLongitude(longitude)
-	const normalizedLatitude = normalizeLatitude(latitude)
-	const nestedPixel = vectorToPixel(nside, lonLatToVec(normalizedLongitude, normalizedLatitude))
+	const normalizedRA = normalizeLongitude(rightAscension)
+	const normalizedDEC = normalizeLatitude(declination)
+	const nestedPixel = vectorToPixel(nside, lonLatToVec(normalizedRA, normalizedDEC))
 	return ordering === 'nested' ? nestedPixel : nestedToRing(nside, nestedPixel)
 }
 
@@ -86,9 +80,7 @@ export function pixelToCenter(nside: number, pixel: number, ordering: HealpixOrd
 export function pixelToBoundary(nside: number, pixel: number, ordering: HealpixOrdering = 'nested') {
 	validateNside(nside)
 	validatePixelIndex(pixel, nside)
-
 	const [face, ix, iy] = pixelToFaceXY(ordering === 'nested' ? pixel : ringToNested(nside, pixel), nside)
-
 	return [faceXYToLonLat(face, ix, iy, nside), faceXYToLonLat(face, ix + 1, iy, nside), faceXYToLonLat(face, ix + 1, iy + 1, nside), faceXYToLonLat(face, ix, iy + 1, nside)] as const
 }
 
@@ -104,8 +96,8 @@ export function nestedToRing(nside: number, pixel: number) {
 export function ringToNested(nside: number, pixel: number) {
 	validateNside(nside)
 	validatePixelIndex(pixel, nside)
-	const [longitude, latitude] = ringPixelToLonLat(nside, pixel)
-	return coordToPixel(nside, longitude, latitude, 'nested')
+	const [rightAscension, declination] = ringPixelToLonLat(nside, pixel)
+	return coordToPixel(nside, rightAscension, declination, 'nested')
 }
 
 // Computes a conservative circle cover in nested ordering.
@@ -150,8 +142,6 @@ export function polygonToPixels(nside: number, vertices: readonly HealpixVertexI
 export class HealpixIndex<T, M = unknown> {
 	readonly nside: number
 	readonly ordering: HealpixOrdering
-	readonly coordinateMode: 'lonlat' | 'radec'
-	readonly validateInputs: boolean
 
 	#pixelBuckets = new Map<number, HealpixObject<T, M>[]>()
 	#entriesById = new Map<T, HealpixObject<T, M>>()
@@ -162,8 +152,6 @@ export class HealpixIndex<T, M = unknown> {
 
 		this.nside = options.nside
 		this.ordering = options.ordering ?? 'nested'
-		this.coordinateMode = options.coordinateMode ?? 'lonlat'
-		this.validateInputs = options.validateInputs ?? true
 	}
 
 	// Returns the number of indexed objects.
@@ -172,8 +160,8 @@ export class HealpixIndex<T, M = unknown> {
 	}
 
 	// Converts coordinates to a nested HEALPix pixel using the index resolution.
-	coordToPixel(longitude: number, latitude: number) {
-		return coordToPixel(this.nside, longitude, latitude, this.ordering)
+	coordToPixel(rightAscension: number, declination: number) {
+		return coordToPixel(this.nside, rightAscension, declination, this.ordering)
 	}
 
 	// Converts a nested HEALPix pixel to its center.
@@ -187,41 +175,23 @@ export class HealpixIndex<T, M = unknown> {
 	}
 
 	// Inserts a single object into the index.
-	insert(id: T, longitude: number, latitude: number, metadata?: M): HealpixObject<T, M> {
-		if (this.#entriesById.has(id)) {
-			throw new Error(`duplicate HEALPix object id: ${String(id)}`)
+	add(id: T, rightAscension: number, declination: number, metadata?: M) {
+		const updated = this.update(id, rightAscension, declination, metadata)
+
+		if (updated === undefined) {
+			return this.#insertNormalized(id, normalizeLongitude(rightAscension), normalizeLatitude(declination), metadata)
 		}
 
-		return this.#insertNormalized(id, longitude, latitude, metadata)
-	}
-
-	// Inserts a single object into the index.
-	add(id: T, longitude: number, latitude: number, metadata?: M): HealpixObject<T, M> {
-		return this.insert(id, longitude, latitude, metadata)
+		return updated
 	}
 
 	// Inserts many objects after validating the whole batch first.
-	insertMany(objects: readonly HealpixInsertObject<T, M>[]): HealpixObject<T, M>[] {
-		const normalized: HealpixInsertObject<T, M>[] = []
-		const ids = new Set<T>()
+	addMany(objects: readonly HealpixInsertObject<T, M>[]) {
+		const inserted = new Array<HealpixObject<T, M>>(objects.length)
+		let i = 0
 
 		for (const object of objects) {
-			if (ids.has(object.id)) {
-				throw new Error(`duplicate HEALPix object id in batch: ${String(object.id)}`)
-			}
-
-			if (this.#entriesById.has(object.id)) {
-				throw new Error(`duplicate HEALPix object id: ${String(object.id)}`)
-			}
-
-			ids.add(object.id)
-			normalized.push({ id: object.id, longitude: normalizeLongitude(object.longitude), latitude: normalizeLatitude(object.latitude), metadata: object.metadata })
-		}
-
-		const inserted: HealpixObject<T, M>[] = []
-
-		for (const object of normalized) {
-			inserted.push(this.#insertNormalized(object.id, object.longitude, object.latitude, object.metadata))
+			inserted[i++] = this.add(object.id, object.rightAscension, object.declination, object.metadata)
 		}
 
 		return inserted
@@ -231,23 +201,23 @@ export class HealpixIndex<T, M = unknown> {
 	remove(id: T) {
 		const entry = this.#entriesById.get(id)
 		if (!entry) return false
-
 		this.#removeEntry(entry)
 		return true
 	}
 
 	// Updates an object's coordinates and optional metadata.
-	update(id: T, longitude: number, latitude: number, metadata?: M) {
+	update(id: T, rightAscension: Angle, declination: Angle, metadata?: M) {
 		const entry = this.#entriesById.get(id)
-		if (!entry) return false
 
-		const normalizedLongitude = normalizeLongitude(longitude)
-		const normalizedLatitude = normalizeLatitude(latitude)
-		const nextPixel = coordToPixel(this.nside, normalizedLongitude, normalizedLatitude, this.ordering)
+		if (!entry) return undefined
 
-		entry.longitude = normalizedLongitude
-		entry.latitude = normalizedLatitude
-		lonLatToVecInto(normalizedLongitude, normalizedLatitude, entry.vector)
+		const normalizedRA = normalizeLongitude(rightAscension)
+		const normalizedDEC = normalizeLatitude(declination)
+		const nextPixel = coordToPixel(this.nside, normalizedRA, normalizedDEC, this.ordering)
+
+		entry.rightAscension = normalizedRA
+		entry.declination = normalizedDEC
+		lonLatToVecInto(normalizedRA, normalizedDEC, entry.vector)
 
 		entry.metadata = metadata
 
@@ -255,7 +225,7 @@ export class HealpixIndex<T, M = unknown> {
 			this.#moveEntry(entry, nextPixel)
 		}
 
-		return true
+		return entry
 	}
 
 	// Removes every object from the index.
@@ -265,14 +235,14 @@ export class HealpixIndex<T, M = unknown> {
 	}
 
 	// Queries objects inside a spherical cap.
-	queryCircle(centerLongitude: number, centerLatitude: number, radius: number, options: HealpixCoverOptions = {}) {
+	queryCircle(centerRA: Angle, centerDEC: Angle, radius: Angle, options: HealpixCoverOptions = {}) {
 		validateRadius(radius)
 
-		const normalizedLongitude = normalizeLongitude(centerLongitude)
-		const normalizedLatitude = normalizeLatitude(centerLatitude)
-		const center = lonLatToVec(normalizedLongitude, normalizedLatitude)
+		const normalizedRA = normalizeLongitude(centerRA)
+		const normalizedDEC = normalizeLatitude(centerDEC)
+		const center = lonLatToVec(normalizedRA, normalizedDEC)
 		const radiusCos = Math.cos(radius)
-		const pixels = circleToPixels(this.nside, normalizedLongitude, normalizedLatitude, radius, withIndexCoverOptions(options, this.nside, this.ordering))
+		const pixels = circleToPixels(this.nside, normalizedRA, normalizedDEC, radius, withIndexCoverOptions(options, this.nside, this.ordering))
 
 		return this.#collectMatches(pixels, (entry) => {
 			return vecDot(entry.vector, center) >= radiusCos - EPSILON
@@ -294,10 +264,10 @@ export class HealpixIndex<T, M = unknown> {
 	}
 
 	// Inserts a validated object into the index.
-	#insertNormalized(id: T, longitude: number, latitude: number, metadata?: M): Readonly<HealpixObject<T, M>> {
-		const pixel = coordToPixel(this.nside, longitude, latitude, this.ordering)
+	#insertNormalized(id: T, rightAscension: number, declination: number, metadata?: M): Readonly<HealpixObject<T, M>> {
+		const pixel = coordToPixel(this.nside, rightAscension, declination, this.ordering)
 		const bucket = this.#pixelBuckets.get(pixel) ?? []
-		const entry: HealpixObject<T, M> = { id, longitude, latitude, metadata, vector: lonLatToVec(longitude, latitude), pixel, bucketIndex: bucket.length }
+		const entry: HealpixObject<T, M> = { id, rightAscension, declination, metadata, vector: lonLatToVec(rightAscension, declination), pixel, bucketIndex: bucket.length }
 
 		bucket.push(entry)
 		this.#pixelBuckets.set(pixel, bucket)
@@ -394,40 +364,40 @@ function validatePixelIndex(pixel: number, nside: number) {
 	}
 }
 
-// Normalizes and validates a longitude.
-function normalizeLongitude(longitude: number) {
-	if (!Number.isFinite(longitude)) {
-		throw new Error(`invalid longitude/right ascension: ${longitude}`)
+// Normalizes and validates a rightAscension.
+function normalizeLongitude(rightAscension: number) {
+	if (!Number.isFinite(rightAscension)) {
+		throw new Error(`invalid longitude/right ascension: ${rightAscension}`)
 	}
 
-	return normalizeAngle(longitude)
+	return normalizeAngle(rightAscension)
 }
 
-// Normalizes and validates a latitude.
-function normalizeLatitude(latitude: number) {
-	if (!Number.isFinite(latitude)) {
-		throw new Error(`invalid latitude/declination: ${latitude}`)
+// Normalizes and validates a declination.
+function normalizeLatitude(declination: number) {
+	if (!Number.isFinite(declination)) {
+		throw new Error(`invalid latitude/declination: ${declination}`)
 	}
 
-	if (latitude < -PIOVERTWO - EPSILON || latitude > PIOVERTWO + EPSILON) {
-		throw new Error(`invalid latitude/declination: ${latitude}. Expected a finite value in [-pi/2, pi/2]`)
+	if (declination < -PIOVERTWO - EPSILON || declination > PIOVERTWO + EPSILON) {
+		throw new Error(`invalid latitude/declination: ${declination}. Expected a finite value in [-pi/2, pi/2]`)
 	}
 
-	return clamp(latitude, -PIOVERTWO, PIOVERTWO)
+	return clamp(declination, -PIOVERTWO, PIOVERTWO)
 }
 
 // Converts spherical coordinates to a unit vector.
-function lonLatToVec(longitude: number, latitude: number) {
-	const cosLatitude = Math.cos(latitude)
-	return [cosLatitude * Math.cos(longitude), cosLatitude * Math.sin(longitude), Math.sin(latitude)] as MutVec3
+function lonLatToVec(rightAscension: number, declination: number) {
+	const cosDEC = Math.cos(declination)
+	return [cosDEC * Math.cos(rightAscension), cosDEC * Math.sin(rightAscension), Math.sin(declination)] as MutVec3
 }
 
 // Writes spherical coordinates into an existing mutable unit vector.
-function lonLatToVecInto(longitude: number, latitude: number, out: MutVec3) {
-	const cosLatitude = Math.cos(latitude)
-	out[0] = cosLatitude * Math.cos(longitude)
-	out[1] = cosLatitude * Math.sin(longitude)
-	out[2] = Math.sin(latitude)
+function lonLatToVecInto(rightAscension: number, declination: number, out: MutVec3) {
+	const cosDEC = Math.cos(declination)
+	out[0] = cosDEC * Math.cos(rightAscension)
+	out[1] = cosDEC * Math.sin(rightAscension)
+	out[2] = Math.sin(declination)
 }
 
 // Computes the angular separation between two unit vectors.
@@ -437,10 +407,10 @@ function angularDistance(a: Vec3, b: Vec3) {
 
 // Converts a unit vector to a nested HEALPix pixel.
 function vectorToPixel(nside: number, vector: Vec3) {
-	const longitude = normalizeAngle(Math.atan2(vector[1], vector[0]))
+	const rightAscension = normalizeAngle(Math.atan2(vector[1], vector[0]))
 	const z = clamp(vector[2], -1, 1)
 	const absZ = Math.abs(z)
-	const tt = longitude * (2 / PI)
+	const tt = rightAscension * (2 / PI)
 
 	let face: number
 	let ix: number
@@ -623,15 +593,15 @@ function faceXYToLonLat(face: number, x: number, y: number, nside: number) {
 		return [normalizeAngle((JPLL[face] * PI) / 4), poleLatitude] as const
 	}
 
-	const longitude = normalizeAngle(((JPLL[face] * nr + x - y) * PI) / (4 * nr))
+	const rightAscension = normalizeAngle(((JPLL[face] * nr + x - y) * PI) / (4 * nr))
 
-	return [longitude, Math.asin(clamp(z, -1, 1))] as const
+	return [rightAscension, Math.asin(clamp(z, -1, 1))] as const
 }
 
 // Converts a face-local position to a unit vector.
 function faceXYToVec(face: number, x: number, y: number, nside: number) {
-	const [longitude, latitude] = faceXYToLonLat(face, x, y, nside)
-	return lonLatToVec(longitude, latitude)
+	const [rightAscension, declination] = faceXYToLonLat(face, x, y, nside)
+	return lonLatToVec(rightAscension, declination)
 }
 
 // Interleaves the X and Y nested bits.

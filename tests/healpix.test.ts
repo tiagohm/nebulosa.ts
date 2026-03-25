@@ -50,7 +50,7 @@ test('circle query matches brute-force filtering on a fixed catalog', () => {
 			const object = { id: `star-${counter++}`, longitude: deg(longitude), latitude: deg(latitude) }
 
 			catalog.push(object)
-			index.insert(object.id, object.longitude, object.latitude, { label: object.id })
+			index.add(object.id, object.longitude, object.latitude, { label: object.id })
 		}
 	}
 
@@ -79,8 +79,8 @@ test('ring ordering returns the same circle matches as nested ordering', () => {
 			const id = `${longitude}-${latitude}`
 			const lon = deg(longitude)
 			const lat = deg(latitude)
-			nestedIndex.insert(id, lon, lat)
-			ringIndex.insert(id, lon, lat)
+			nestedIndex.add(id, lon, lat)
+			ringIndex.add(id, lon, lat)
 		}
 	}
 
@@ -98,9 +98,9 @@ test('circle query is boundary inclusive', () => {
 	const radius = deg(12)
 	const [longitude, latitude] = sphericalDestination(0, 0, deg(90), radius)
 
-	index.insert('center', 0, 0)
-	index.insert('edge', longitude, latitude)
-	index.insert('outside', longitude, latitude + deg(0.5))
+	index.add('center', 0, 0)
+	index.add('edge', longitude, latitude)
+	index.add('outside', longitude, latitude + deg(0.5))
 
 	expect(idsOf(index.queryCircle(0, 0, radius))).toEqual(['center', 'edge'])
 })
@@ -108,8 +108,8 @@ test('circle query is boundary inclusive', () => {
 test('index queries ignore external target nside mismatches during bucket lookup', () => {
 	const index = new HealpixIndex<string>({ nside: 8 })
 
-	index.insert('inside', deg(5), deg(2))
-	index.insert('outside', deg(90), deg(45))
+	index.add('inside', deg(5), deg(2))
+	index.add('outside', deg(90), deg(45))
 
 	expect(idsOf(index.queryCircle(0, 0, deg(10), { targetNside: 16 }))).toEqual(['inside'])
 	expect(idsOf(index.queryCircle(0, 0, deg(10), { targetNside: 4 }))).toEqual(['inside'])
@@ -118,9 +118,9 @@ test('index queries ignore external target nside mismatches during bucket lookup
 test('triangle query handles longitude seam crossing', () => {
 	const index = new HealpixIndex<string>({ nside: 8 })
 
-	index.insert('inside', 0, deg(5))
-	index.insert('outside', deg(40), 0)
-	index.insert('far-side', deg(180), deg(-5))
+	index.add('inside', 0, deg(5))
+	index.add('outside', deg(40), 0)
+	index.add('far-side', deg(180), deg(-5))
 
 	expect(idsOf(index.queryTriangle([deg(350), 0], [deg(10), 0], [0, deg(20)]))).toEqual(['inside'])
 })
@@ -128,8 +128,8 @@ test('triangle query handles longitude seam crossing', () => {
 test('polygon query handles a convex polar region with a repeated closing vertex', () => {
 	const index = new HealpixIndex<string>({ nside: 8 })
 
-	index.insert('pole', deg(20), deg(85))
-	index.insert('mid', deg(20), deg(45))
+	index.add('pole', deg(20), deg(85))
+	index.add('mid', deg(20), deg(45))
 
 	const polygon = [
 		[deg(0), deg(80)],
@@ -142,15 +142,13 @@ test('polygon query handles a convex polar region with a repeated closing vertex
 	expect(idsOf(index.queryPolygon(polygon))).toEqual(['pole'])
 })
 
-test('insertMany, update, and remove keep the index consistent', () => {
+test('add many, update, and remove keep the index consistent', () => {
 	const index = new HealpixIndex<string, { readonly magnitude: number }>({ nside: 8 })
 
-	index.insertMany([
-		{ id: 'a', longitude: 0, latitude: 0, metadata: { magnitude: 1 } },
-		{ id: 'b', longitude: deg(30), latitude: 0, metadata: { magnitude: 2 } },
+	index.addMany([
+		{ id: 'a', rightAscension: 0, declination: 0, metadata: { magnitude: 1 } },
+		{ id: 'b', rightAscension: deg(30), declination: 0, metadata: { magnitude: 2 } },
 	])
-
-	expect(() => index.insert('a', deg(10), 0)).toThrow()
 
 	index.update('a', deg(120), deg(20), { magnitude: 3 })
 	expect(idsOf(index.queryCircle(deg(120), deg(20), deg(1)))).toEqual(['a'])
