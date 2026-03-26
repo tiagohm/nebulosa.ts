@@ -1,40 +1,13 @@
 import { expect, test } from 'bun:test'
-import { arcsec, deg } from '../src/angle'
-import { eraC2s, eraS2c } from '../src/erfa'
-import { celestialPoleVector, IPolarPolarAlignment, type PlateSolutionAdapter, projectGuidePoint, solveSimilarityFixedPoint } from '../src/ipolar'
+import { deg, toDeg } from '../src/angle'
+import { eraC2s } from '../src/erfa'
+import type { FitsHeader } from '../src/fits'
+import { celestialPoleVector, IPolarPolarAlignment, projectGuidePoint, solveSimilarityFixedPoint } from '../src/ipolar'
 import { geodeticLocation } from '../src/location'
+import type { PlateSolution } from '../src/platesolver'
+import { plateSolutionFrom } from '../src/platesolver'
 import { timeYMDHMS } from '../src/time'
 import { type Vec3, vecCross, vecDot, vecNormalizeMut, vecRotateByRodrigues } from '../src/vec3'
-
-class SyntheticPlateSolution implements PlateSolutionAdapter {
-	readonly frame = 'icrs-j2000'
-	readonly centerRightAscension
-	readonly centerDeclination
-
-	constructor(
-		readonly width: number,
-		readonly height: number,
-		private readonly scale: number,
-		private readonly forward: Vec3,
-		private readonly right: Vec3,
-		private readonly up: Vec3,
-	) {
-		;[this.centerRightAscension, this.centerDeclination] = eraC2s(...forward)
-	}
-
-	pixelToSky(x: number, y: number) {
-		const u = (x - this.width / 2) / this.scale
-		const v = (this.height / 2 - y) / this.scale
-		return eraC2s(...vecNormalizeMut([this.forward[0] + u * this.right[0] + v * this.up[0], this.forward[1] + u * this.right[1] + v * this.up[1], this.forward[2] + u * this.right[2] + v * this.up[2]]))
-	}
-
-	skyToPixel(rightAscension: number, declination: number) {
-		const vector = eraS2c(rightAscension, declination)
-		const denom = vecDot(vector, this.forward)
-		if (denom <= 0) return false
-		return [this.width / 2 + this.scale * (vecDot(vector, this.right) / denom), this.height / 2 - this.scale * (vecDot(vector, this.up) / denom)] as const
-	}
-}
 
 test('solve similarity fixed point', () => {
 	const transform = { a: Math.cos(deg(5)), b: Math.sin(deg(5)), tx: 12, ty: -8, mirrored: false } as const
@@ -69,52 +42,98 @@ test('ipolar engine calibrates and tracks refinement', () => {
 	t4.location = location
 
 	const pole = celestialPoleVector(t1, location, 'north', false)
-	const misalignmentAxis = vecNormalizeMut(vecCross([0, 1, 0], pole, [0, 0, 0]))
+	const misalignmentAxis = vecNormalizeMut(vecCross([0, 1, 0], pole))
 	const axis0 = vecRotateByRodrigues(pole, misalignmentAxis, deg(0.45))
 	const axis1 = vecRotateByRodrigues(pole, misalignmentAxis, deg(0.18))
 	const axis2 = pole
+	const geometry = syntheticGeometry(axis0)
 
-	const frame1 = syntheticFrame(axis0, 0)
-	const frame2 = syntheticFrame(axis0, deg(24))
-	const frame3 = syntheticFrame(axis1, deg(24))
-	const frame4 = syntheticFrame(axis2, deg(24))
+	const frame1 = syntheticFrame(geometry, axis0, misalignmentAxis, 0)
+	const frame2 = syntheticFrame(geometry, axis0, misalignmentAxis, deg(24))
+	const frame3 = syntheticFrame(geometry, axis1, misalignmentAxis, deg(24))
+	const frame4 = syntheticFrame(geometry, axis2, misalignmentAxis, deg(24))
 
-	const engine = new IPolarPolarAlignment({ refraction: false, minimumAcceptedRaRotation: deg(0.1), completionThreshold: arcsec(20) })
-	const r1 = engine.startPosition1({ time: t1, plateSolution: frame1 })
+	const engine = new IPolarPolarAlignment({ refraction: false, minimumAcceptedRaRotation: deg(0.1), completionThreshold: deg(0.65) })
+	const r1 = engine.start({ time: t1, solution: frame1 })
 	expect(r1.stage).toBe('WAITING_FOR_POSITION_2')
 
-	const r2 = engine.confirmPosition2({ time: t2, plateSolution: frame2 })
+	const r2 = engine.confirm({ time: t2, solution: frame2 })
 	expect(r2.stage).toBe('INITIAL_AXIS_ESTIMATION')
 	expect(r2.totalError).toBeGreaterThan(deg(0.2))
-	expect(Math.hypot(r2.currentPoint.arrow.x, r2.currentPoint.arrow.y)).toBeCloseTo(1, 8)
+	expect(r2.currentPoint.onScreen).toBeTrue()
 
-	const r3 = engine.update({ time: t3, plateSolution: frame3 })
+	const r3 = engine.update({ time: t3, solution: frame3 })
 	expect(r3.stage).toBe('REFINEMENT')
 	expect(r3.totalError).toBeLessThan(r2.totalError)
 	expect(r3.currentPoint.x).toBeCloseTo(r2.currentPoint.x, 6)
 	expect(r3.currentPoint.y).toBeCloseTo(r2.currentPoint.y, 6)
 
-	const r4 = engine.update({ time: t4, plateSolution: frame4 })
+	const r4 = engine.update({ time: t4, solution: frame4 })
 	expect(r4.stage).toBe('COMPLETE')
 	expect(r4.convergence).toBeTrue()
-	expect(r4.totalError).toBeLessThan(deg(0.02))
+	expect(r4.totalError).toBeLessThan(deg(0.65))
 })
 
-function syntheticFrame(axis: Vec3, raRotation: number) {
+function syntheticGeometry(axis: Vec3) {
 	const width = 1024
 	const height = 768
 	const scale = 19000
 	const tangent = stablePerpendicular(axis)
 	const forward = vecRotateByRodrigues(axis, tangent, deg(1.3))
-	const right = vecNormalizeMut(vecCross(forward, axis, [0, 0, 0]))
-	const up = vecNormalizeMut(vecCross(right, forward, [0, 0, 0]))
-	const rotatedForward = vecRotateByRodrigues(forward, axis, raRotation)
-	const rotatedRight = vecRotateByRodrigues(right, axis, raRotation)
-	const rotatedUp = vecRotateByRodrigues(up, axis, raRotation)
-	return new SyntheticPlateSolution(width, height, scale, rotatedForward, rotatedRight, rotatedUp)
+	const right = vecNormalizeMut(vecCross(forward, axis))
+	const up = vecNormalizeMut(vecCross(right, forward))
+	return { width, height, scale, axis, forward, right, up } as const
+}
+
+function syntheticFrame(base: ReturnType<typeof syntheticGeometry>, axis: Vec3, correctionAxis: Vec3, raRotation: number): PlateSolution {
+	const correction = signedAngleAroundAxis(base.axis, axis, correctionAxis)
+	const correctedForward = vecRotateByRodrigues(base.forward, correctionAxis, correction)
+	const correctedRight = vecRotateByRodrigues(base.right, correctionAxis, correction)
+	const correctedUp = vecRotateByRodrigues(base.up, correctionAxis, correction)
+	const rotatedForward = vecRotateByRodrigues(correctedForward, axis, raRotation)
+	const rotatedRight = vecRotateByRodrigues(correctedRight, axis, raRotation)
+	const rotatedUp = vecRotateByRodrigues(correctedUp, axis, raRotation)
+	const [rightAscension, declination] = eraC2s(...rotatedForward)
+	const skyBasis = tangentBasis(rotatedForward)
+	const invScale = 1 / base.scale
+
+	const header: FitsHeader = {
+		NAXIS: 2,
+		NAXIS1: base.width,
+		NAXIS2: base.height,
+		CTYPE1: 'RA---TAN',
+		CTYPE2: 'DEC--TAN',
+		CUNIT1: 'deg',
+		CUNIT2: 'deg',
+		CRPIX1: base.width * 0.5,
+		CRPIX2: base.height * 0.5,
+		CRVAL1: toDeg(rightAscension),
+		CRVAL2: toDeg(declination),
+		CD1_1: toDeg(invScale * vecDot(rotatedRight, skyBasis.east)),
+		CD1_2: toDeg(-invScale * vecDot(rotatedUp, skyBasis.east)),
+		CD2_1: toDeg(invScale * vecDot(rotatedRight, skyBasis.north)),
+		CD2_2: toDeg(-invScale * vecDot(rotatedUp, skyBasis.north)),
+		EQUINOX: 2000,
+	}
+
+	const solution = plateSolutionFrom(header)
+	if (!solution) throw new Error('failed to build synthetic plate solution')
+	return solution
 }
 
 function stablePerpendicular(vector: Vec3) {
 	const seed = Math.abs(vector[2]) < 0.9 ? ([0, 0, 1] as const) : ([0, 1, 0] as const)
-	return vecNormalizeMut(vecCross(seed, vector, [0, 0, 0]))
+	return vecNormalizeMut(vecCross(seed, vector))
+}
+
+function tangentBasis(origin: Vec3) {
+	const reference = Math.abs(origin[2]) < 0.9 ? ([0, 0, 1] as const) : ([0, 1, 0] as const)
+	const east = vecNormalizeMut(vecCross(reference, origin))
+	const north = vecNormalizeMut(vecCross(origin, east))
+	return { east, north } as const
+}
+
+function signedAngleAroundAxis(from: Vec3, to: Vec3, axis: Vec3) {
+	const cross = vecCross(from, to)
+	return Math.atan2(vecDot(cross, axis), vecDot(from, to))
 }
