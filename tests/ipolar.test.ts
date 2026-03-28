@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test'
 import { type Angle, arcmin, arcsec, deg, toDeg } from '../src/angle'
-import { observedToCirs } from '../src/astrometry'
+import { cirsToObserved, observedToCirs, refractedAltitude } from '../src/astrometry'
 import { eraC2s, eraS2c } from '../src/erfa'
 import type { FitsHeader } from '../src/fits'
 import { celestialPoleVector, decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveSimilarityFixedPoint } from '../src/ipolar'
 import { type GeographicPosition, geodeticLocation } from '../src/location'
-import { matTransposeMulVec } from '../src/mat3'
+import { matMulVec, matTransposeMulVec } from '../src/mat3'
 import { type PlateSolution, plateSolutionFrom } from '../src/platesolver'
 import { mountAdjustmentAxes } from '../src/polaralignment'
 import { precessionNutationMatrix, type Time, timeYMDHMS } from '../src/time'
@@ -46,6 +46,20 @@ test('decomposePolarError keeps azimuth and altitude offsets on their correct ax
 
 	const altitudeMetrics = decomposePolarError(altitudeOffset, target, time, false, location)
 	expect(Math.abs(altitudeMetrics.altitudeError)).toBeGreaterThan(20 * Math.abs(altitudeMetrics.azimuthError))
+})
+
+test('celestialPoleVector uses refracted pole altitude when refraction is enabled', () => {
+	const location = geodeticLocation(deg(-105), deg(42))
+	const time = timeYMDHMS(2026, 2, 3, 5, 20, 0)
+	time.location = location
+
+	const pole = celestialPoleVector(time, location)
+	const observedPole = cirsToObserved(matMulVec(precessionNutationMatrix(time), pole), time, undefined, location)
+	const expectedAltitude = refractedAltitude(Math.abs(location.latitude), { pressure: 1013.25, temperature: 15, relativeHumidity: 0.5, wl: 0.55 })
+	expect(observedPole.altitude).toBeCloseTo(expectedAltitude, 9)
+
+	const geometricPole = cirsToObserved(matMulVec(precessionNutationMatrix(time), pole), time, false, location)
+	expect(Math.abs(geometricPole.altitude - Math.abs(location.latitude))).toBeLessThan(arcsec(1))
 })
 
 const PRACTICAL_SCENARIOS = [

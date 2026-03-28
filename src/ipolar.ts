@@ -1,5 +1,5 @@
 import { type Angle, normalizePI } from './angle'
-import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, observedToCirs, type RefractionParameters } from './astrometry'
+import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, observedToCirs, type RefractionParameters, refractedAltitude } from './astrometry'
 import { ASEC2RAD, PI } from './constants'
 import { eraC2s, eraS2c } from './erfa'
 import { euclideanDistance, type Point } from './geometry'
@@ -211,7 +211,8 @@ export function projectGuidePoint(point: Point, width: number, height: number, m
 // Computes the celestial pole direction in the same inertial J2000/ICRS frame used by the plate solver.
 export function celestialPoleVector(time: Time, location: GeographicPosition = time.location!, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): Vec3 {
 	const azimuth = location.latitude >= 0 ? 0 : PI
-	const altitude = Math.abs(location.latitude)
+	const trueAltitude = Math.abs(location.latitude)
+	const altitude = refraction === false ? trueAltitude : refractedAltitude(trueAltitude, refraction)
 	const [rightAscension, declination] = observedToCirs(azimuth, altitude, time, refraction, location)
 	return vecNormalizeMut(matTransposeMulVec(precessionNutationMatrix(time), eraS2c(rightAscension, declination)))
 }
