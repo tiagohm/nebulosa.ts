@@ -73,27 +73,6 @@ const LEAP_SECOND_DRIFT: LeapSecondDrift[] = [
 	[39126, 0.002592],
 ]
 
-const EMPTY_ERA_ASTROM: EraAstrom = {
-	pmt: 0,
-	eb: [0, 0, 0],
-	eh: [0, 0, 0],
-	em: 0,
-	v: [0, 0, 0],
-	bm1: 0,
-	bpn: [0, 0, 0, 0, 0, 0, 0, 0, 0],
-	along: 0,
-	phi: 0,
-	xpl: 0,
-	ypl: 0,
-	sphi: 0,
-	cphi: 0,
-	diurab: 0,
-	eral: 0,
-	refa: 0,
-	refb: 0,
-	eo: 0,
-}
-
 export type LeapSecondChange = readonly [number, number, number]
 
 export type LeapSecondDrift = readonly [number, number]
@@ -119,6 +98,30 @@ export interface EraAstrom {
 	eo: number // Equation of the origins (radians)
 }
 
+function eraAstrom(astrom?: Partial<EraAstrom>): EraAstrom {
+	return {
+		pmt: 0,
+		eb: [0, 0, 0],
+		eh: [0, 0, 0],
+		em: 0,
+		v: [0, 0, 0],
+		bm1: 0,
+		bpn: [0, 0, 0, 0, 0, 0, 0, 0, 0],
+		along: 0,
+		phi: 0,
+		xpl: 0,
+		ypl: 0,
+		sphi: 0,
+		cphi: 0,
+		diurab: 0,
+		eral: 0,
+		refa: 0,
+		refb: 0,
+		eo: 0,
+		...astrom,
+	}
+}
+
 // Normalizes [angle] into the range -[PI] <= a < +[PI].
 export function eraAnpm(angle: Angle): Angle {
 	let w = angle % TAU
@@ -136,8 +139,8 @@ export function eraP2s(x: Distance, y: Distance, z: Distance): [Angle, Angle, Di
 // P-vector to spherical coordinates.
 export function eraC2s(x: Distance, y: Distance, z: Distance): [Angle, Angle] {
 	const d2 = x * x + y * y
-	const theta = d2 === 0 ? 0 : Math.atan2(y, x)
-	const phi = z === 0 ? 0 : Math.atan2(z, Math.sqrt(d2))
+	const theta = d2 < DBL_EPSILON ? 0 : Math.atan2(y, x)
+	const phi = Math.abs(z) < DBL_EPSILON ? 0 : Math.atan2(z, Math.sqrt(d2))
 	return [theta, phi]
 }
 
@@ -553,7 +556,7 @@ export function eraEors(rnpb: Mat3, s: Angle): Angle {
 	const zs = -x
 	const p = rnpb[0] * xs + rnpb[1] * ys + rnpb[2] * zs
 	const q = rnpb[3] * xs + rnpb[4] * ys + rnpb[5] * zs
-	return p !== 0 || q !== 0 ? s - Math.atan2(q, p) : s
+	return Math.abs(p) > DBL_EPSILON || Math.abs(q) > DBL_EPSILON ? s - Math.atan2(q, p) : s
 }
 
 // The CIO locator s, positioning the Celestial Intermediate Origin on
@@ -1111,7 +1114,7 @@ export function eraPvstar(p: Vec3, v: Vec3): [Angle, Angle, Angle, Angle, Angle,
 	// The observed-to-inertial correction terms.
 	const d = 1 + betr
 	const w = betr * betr + bett * bett
-	if (d === 0 || w > 1) return false
+	if (d < DBL_EPSILON || w > 1) return false
 	const del = -w / (Math.sqrt(1 - w) + 1)
 
 	// Scale inertial tangential velocity vector into observed (au/d).
@@ -1127,7 +1130,7 @@ export function eraPvstar(p: Vec3, v: Vec3): [Angle, Angle, Angle, Angle, Angle,
 	// [ra, dec, r, rad, decd, rd]
 	const ret = eraPv2s(p, ov)
 
-	if (ret[2] === 0) return false
+	if (Math.abs(ret[2]) < DBL_EPSILON) return false
 
 	// Return RA in range 0 to 2pi.
 	ret[0] = normalizeAngle(ret[0])
@@ -1165,7 +1168,7 @@ export function eraPv2s(p: Vec3, v: Vec3): [Angle, Angle, Angle, number, number,
 	// If null vector, move the origin along the direction of movement.
 	let rw = rtrue
 
-	if (rtrue === 0) {
+	if (rtrue < DBL_EPSILON) {
 		x = xd
 		y = yd
 		z = zd
@@ -1445,7 +1448,7 @@ export function eraApcg(tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3],
 // between ICRS and GCRS. The Earth ephemeris is supplied by the caller.
 // TT can be used instead of TDB without any significant impact on accuracy.
 export function eraApcs(tdb1: number, tdb2: number, pv: readonly [Vec3, Vec3], ebpv: readonly [Vec3, Vec3], ehp: Vec3, astrom?: EraAstrom) {
-	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
+	astrom ??= eraAstrom()
 
 	// Time since reference epoch, years (for proper motion calculation).
 	astrom.pmt = (tdb1 - J2000 + tdb2) / DAYSPERJY
@@ -1567,7 +1570,7 @@ export function eraApco(
 	flattening: number = WGS84_FLATTENING,
 	astrom?: EraAstrom,
 ) {
-	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
+	astrom ??= eraAstrom()
 
 	// Form the rotation matrix, CIRS to apparent [HA,Dec].
 	const r = matRotZ(elong, matRotX(-yp, matRotY(-xp, matRotZ(theta + sp))))
@@ -1774,7 +1777,7 @@ export function eraApio13(tt1: number, tt2: number, ut11: number, ut12: number, 
 // coordinates. The caller supplies the Earth orientation information
 // and the refraction constants as well as the site coordinates.
 export function eraApio(sp: Angle, theta: Angle, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, refa: number, refb: number, astrom?: EraAstrom) {
-	astrom ??= structuredClone(EMPTY_ERA_ASTROM)
+	astrom ??= eraAstrom()
 
 	// Form the rotation matrix, CIRS to apparent [HA,Dec].
 	const r = matRotZ(elong, matRotX(-yp, matRotY(-xp, matRotZ(theta + sp))))
