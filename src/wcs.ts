@@ -2,32 +2,9 @@ import { dlopen, type Pointer, ptr, read } from 'bun:ffi'
 import path from '../native/libwcs.shared' with { type: 'file' }
 import { type Angle, deg, toDeg } from './angle'
 import { type FitsHeader, FitsKeywordWriter } from './fits'
-import { numericKeyword } from './fits.util'
+import { isWcsFitsKeyword } from './fits.wcs'
 
-export type WcsFitsHeaderKey =
-	| 'WCSAXES'
-	| `CUNIT${number}`
-	| `CTYPE${number}`
-	| `CRPIX${number}`
-	| `CRVAL${number}`
-	| `PS_${number}_${number}`
-	| `PV_${number}_${number}`
-	| `CD_${number}_${number}`
-	| `PC_${number}_${number}`
-	| `CDELT${number}`
-	| `CROTA${number}`
-	| 'RADESYS'
-	| 'LONPOLE'
-	| 'LATPOLE'
-	| 'EQUINOX'
-	| `A_${number}_${number}`
-	| `AP__${number}_${number}`
-	| `B__${number}_${number}`
-	| `BP__${number}_${number}`
-	| 'A_ORDER'
-	| 'AP_ORDER'
-	| 'B_ORDER'
-	| 'BP_ORDER'
+export { cd, cdFromCdelt, cdMatrix, hasCd, isWcsFitsKeyword, pc2cd } from './fits.wcs'
 
 export type LibWcs = ReturnType<typeof open>
 
@@ -139,85 +116,9 @@ export class Wcs implements Disposable {
 	}
 }
 
-export function hasCd(header: FitsHeader) {
-	return 'CD1_1' in header || ('CDELT1' in header && 'CROTA2' in header) || ('CDELT1' in header && 'PC1_1' in header)
-}
-
-export function cdMatrix(header: FitsHeader) {
-	if (hasCd(header)) {
-		return [cd(header, 1, 1), cd(header, 1, 2), cd(header, 2, 1), cd(header, 2, 2)] as const
-	} else {
-		const a = numericKeyword(header, 'CDELT1', 0)
-		const b = numericKeyword(header, 'CDELT2', 0)
-		const c = deg(numericKeyword(header, 'CROTA2', 0))
-		return cdFromCdelt(a, b, c)
-	}
-}
-
-export function cd(header: FitsHeader, i: number, j: number): number {
-	if ('CD1_1' in header) {
-		return numericKeyword(header, `CD${i}_${j}`, 0)
-	} else if ('CROTA2' in header) {
-		const a = numericKeyword(header, 'CDELT1', 0)
-		const b = numericKeyword(header, 'CDELT2', 0)
-		const c = deg(numericKeyword(header, 'CROTA2', 0))
-		const cd = cdFromCdelt(a, b, c)
-		return cd[(i - 1) * 2 + (j - 1)]
-	} else if ('PC1_1' in header) {
-		const pc11 = numericKeyword(header, 'PC1_1', 0)
-		const pc12 = numericKeyword(header, 'PC1_2', 0)
-		const pc21 = numericKeyword(header, 'PC2_1', 0)
-		const pc22 = numericKeyword(header, 'PC2_2', 0)
-		const a = numericKeyword(header, 'CDELT1', 0)
-		const b = numericKeyword(header, 'CDELT2', 0)
-		const cd = pc2cd(pc11, pc12, pc21, pc22, a, b)
-		return cd[(i - 1) * 2 + (j - 1)]
-	} else {
-		return 0
-	}
-}
-
-export function cdFromCdelt(cdelt1: number, cdelt2: number, crota: Angle, flipH: boolean = false, flipV: boolean = false) {
-	const cos0 = Math.cos(crota)
-	const sin0 = Math.sin(crota)
-	const cd11 = (flipH ? -cdelt1 : cdelt1) * cos0
-	const cd12 = (flipV ? -Math.abs(cdelt2) : Math.abs(cdelt2)) * Math.sign(cdelt1) * sin0
-	const cd21 = (flipH ? Math.abs(cdelt1) : -Math.abs(cdelt1)) * Math.sign(cdelt2) * sin0
-	const cd22 = (flipV ? -cdelt2 : cdelt2) * cos0
-	return [cd11, cd12, cd21, cd22] as const
-}
-
-export function pc2cd(pc11: number, pc10: number, pc21: number, pc22: number, cdelt1: number, cdelt2: number) {
-	return [cdelt1 * pc11, cdelt2 * pc21, cdelt1 * pc10, cdelt2 * pc22] as const
-}
-
-export function isWcsFitsHeaderKey(key: keyof FitsHeader): key is WcsFitsHeaderKey {
-	return (
-		key.startsWith('WCSAXES') ||
-		key.startsWith('CUNIT') ||
-		key.startsWith('CTYPE') ||
-		key.startsWith('CRPIX') ||
-		key.startsWith('CRVAL') ||
-		key.startsWith('PS') ||
-		key.startsWith('PV') ||
-		key.startsWith('CD') ||
-		key.startsWith('PC') ||
-		key.startsWith('CDELT') ||
-		key.startsWith('CROTA') ||
-		key.startsWith('RADESYS') ||
-		key.startsWith('LONPOLE') ||
-		key.startsWith('LATPOLE') ||
-		key.startsWith('EQUINOX') ||
-		key.startsWith('A_') ||
-		key.startsWith('AP_') ||
-		key.startsWith('B_') ||
-		key.startsWith('BP_')
-	)
-}
-
 function bufferFromHeader(header: FitsHeader) {
 	const writer = new FitsKeywordWriter()
-	const keys = Object.keys(header).filter(isWcsFitsHeaderKey)
+	const keys = Object.keys(header).filter(isWcsFitsKeyword)
 	const output = Buffer.allocUnsafe(keys.length * 80)
 
 	if (keys.length > 0) {
