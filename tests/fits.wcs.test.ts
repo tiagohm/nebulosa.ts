@@ -16,6 +16,60 @@ const TAN_PC_HEADER = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 512.5, C
 const TAN_CROTA_HEADER = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 6844.54215495, CRPIX2: 2924.71455892, CRVAL1: 211.789996831, CRVAL2: 54.3250783745, CDELT1: -0.000246219, CDELT2: 0.000246219, CROTA2: 11.8 } as const
 const TAN_LONPOLE_HEADER = { ...TAN_HEADER, LONPOLE: 90 } as const
 
+const TAN_SIP_HEADER = {
+	NAXIS: 2,
+	NAXIS1: 256,
+	NAXIS2: 256,
+	CTYPE1: 'RA---TAN-SIP',
+	CTYPE2: 'DEC--TAN-SIP',
+	CRVAL1: 202.482322805429,
+	CRVAL2: 47.1751189300101,
+	CRPIX1: 128,
+	CRPIX2: 128,
+	CD1_1: 0.000249756880272355,
+	CD1_2: 0.000230177809743655,
+	CD2_1: 0.000230428519265417,
+	CD2_2: -0.000249965770576587,
+	A_ORDER: 3,
+	A_0_2: 2.9656e-6,
+	A_0_3: 3.7746e-9,
+	A_1_1: 2.1886e-5,
+	A_1_2: -1.6847e-7,
+	A_2_0: -2.3863e-5,
+	A_2_1: -8.561e-9,
+	A_3_0: -1.4172e-7,
+	A_DMAX: 1.394,
+	B_ORDER: 3,
+	B_0_2: 2.31e-5,
+	B_0_3: -1.6168e-7,
+	B_1_1: -2.4386e-5,
+	B_1_2: -5.7813e-9,
+	B_2_0: 2.1197e-6,
+	B_2_1: -1.6583e-7,
+	B_3_0: -2.0249e-8,
+	B_DMAX: 1.501,
+	AP_ORDER: 3,
+	AP_0_1: -6.4275e-7,
+	AP_0_2: -2.9425e-6,
+	AP_0_3: -3.582e-9,
+	AP_1_0: -1.4897e-5,
+	AP_1_1: -2.225e-5,
+	AP_1_2: 1.7195e-7,
+	AP_2_0: 2.4146e-5,
+	AP_2_1: 6.709e-9,
+	AP_3_0: 1.4492e-7,
+	BP_ORDER: 3,
+	BP_0_1: -1.6588e-5,
+	BP_0_2: -2.3424e-5,
+	BP_0_3: 1.651e-7,
+	BP_1_0: -2.6783e-6,
+	BP_1_1: 2.4753e-5,
+	BP_1_2: 3.8917e-9,
+	BP_2_0: -2.151e-6,
+	BP_2_1: 1.7e-7,
+	BP_3_0: 2.0482e-8,
+}
+
 function expectTanMatchesNativeProject(header: FitsHeader, rightAscension: Angle, declination: Angle, precision: number = 9) {
 	using wcs = new Wcs(header)
 	const native = wcs.skyToPix(rightAscension, declination)
@@ -144,12 +198,16 @@ describe('tan project', () => {
 		expectTanMatchesNativeProject(TAN_CROTA_HEADER, deg(211.82), deg(54.29), 8)
 	})
 
+	test('matches the native WCS projection for SIP headers', () => {
+		expectTanMatchesNativeProject(TAN_SIP_HEADER, deg(202.5715), deg(47.1726), 2)
+	})
+
 	test('rejects points outside the visible tangent hemisphere', () => {
 		expect(tanProject(TAN_HEADER, deg(TAN_HEADER.CRVAL1 + 180), -deg(TAN_HEADER.CRVAL2))).toBeUndefined()
 	})
 
-	test('rejects non-TAN axis types such as TAN-SIP', () => {
-		expect(tanProject({ ...TAN_HEADER, CTYPE1: 'RA---TAN-SIP' }, deg(TAN_HEADER.CRVAL1), deg(TAN_HEADER.CRVAL2))).toBeUndefined()
+	test('rejects non-TAN axis types', () => {
+		expect(tanProject({ ...TAN_HEADER, CTYPE1: 'RA---SIN' }, deg(TAN_HEADER.CRVAL1), deg(TAN_HEADER.CRVAL2))).toBeUndefined()
 	})
 })
 
@@ -178,5 +236,9 @@ describe('tan unproject', () => {
 
 	test('matches the native WCS inverse projection for CROTA2 headers', () => {
 		expectTanMatchesNativeUnproject(TAN_CROTA_HEADER, 7012.5, 3101.25, 10)
+	})
+
+	test('matches the native WCS inverse projection for SIP headers', () => {
+		expectTanMatchesNativeUnproject(TAN_SIP_HEADER, 255, 255, 10)
 	})
 })

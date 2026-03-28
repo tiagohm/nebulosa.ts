@@ -7,6 +7,8 @@ import { clamp } from './math'
 const DIRECT_CD_KEY_PATTERN = /^CD\d+_\d+$/
 const PC_KEY_PATTERN = /^PC\d+_\d+$/
 const WCS_FITS_KEY_PATTERN = /^(?:WCSAXES|CUNIT\d+|CTYPE\d+|CRPIX\d+|CRVAL\d+|PS\d+_\d+|PV\d+_\d+|CD\d+_\d+|PC\d+_\d+|CDELT\d+|CROTA\d+|RADESYS|LONPOLE|LATPOLE|EQUINOX|A_\d+_\d+|AP_\d+_\d+|B_\d+_\d+|BP_\d+_\d+|A_ORDER|AP_ORDER|B_ORDER|BP_ORDER)$/
+const SIP_MAX_ITERATIONS = 20
+const SIP_TOLERANCE = 1e-9
 
 export type WcsFitsKeywords =
 	| 'WCSAXES'
@@ -50,10 +52,75 @@ function pcKeyword(header: FitsHeader, i: number, j: number) {
 	return numericKeyword(header, `PC${i}_${j}`, i === j ? 1 : 0)
 }
 
+function tanAxisType(header: FitsHeader, key: 'CTYPE1' | 'CTYPE2') {
+	return textKeyword(header, key, '').trim().toUpperCase()
+}
+
+const RA_TAN = 'RA---TAN'
+const RA_TAN_SIP = 'RA---TAN-SIP'
+const DEC_TAN = 'DEC--TAN'
+const DEC_TAN_SIP = 'DEC--TAN-SIP'
+
 function hasTanAxes(header: FitsHeader) {
-	const ctype1 = textKeyword(header, 'CTYPE1', '').trim().toUpperCase()
-	const ctype2 = textKeyword(header, 'CTYPE2', '').trim().toUpperCase()
-	return (!ctype1 || ctype1 === 'RA---TAN') && (!ctype2 || ctype2 === 'DEC--TAN')
+	const ctype1 = tanAxisType(header, 'CTYPE1')
+	const ctype2 = tanAxisType(header, 'CTYPE2')
+	return (!ctype1 || ctype1 === RA_TAN || ctype1 === RA_TAN_SIP) && (!ctype2 || ctype2 === DEC_TAN || ctype2 === DEC_TAN_SIP)
+}
+
+function hasSipAxes(header: FitsHeader) {
+	return tanAxisType(header, 'CTYPE1') === RA_TAN_SIP && tanAxisType(header, 'CTYPE2') === DEC_TAN_SIP
+}
+
+function sipOrder(header: FitsHeader, key: 'A_ORDER' | 'B_ORDER' | 'AP_ORDER' | 'BP_ORDER') {
+	return Math.trunc(numericKeyword(header, key, 0))
+}
+
+// https://fits.gsfc.nasa.gov/registry/sip/SIP_distortion_v1_0.pdf
+
+function sipPolynomial(header: FitsHeader, prefix: 'A_' | 'B_' | 'AP_' | 'BP_', order: number, u: number, v: number) {
+	if (order <= 0) return 0
+
+	let value = 0
+	let up = 1
+
+	for (let p = 0; p <= order; p++) {
+		let vq = 1
+
+		for (let q = 0; p + q <= order; q++) {
+			value += numericKeyword(header, `${prefix}${p}_${q}`, 0) * up * vq
+			vq *= v
+		}
+
+		up *= u
+	}
+
+	return value
+}
+
+function forwardSip(header: FitsHeader, u: number, v: number, aOrder: number, bOrder: number) {
+	return [u + sipPolynomial(header, 'A_', aOrder, u, v), v + sipPolynomial(header, 'B_', bOrder, u, v)] as const
+}
+
+function inverseSip(header: FitsHeader, U: number, V: number, apOrder: number, bpOrder: number) {
+	return [U + sipPolynomial(header, 'AP_', apOrder, U, V), V + sipPolynomial(header, 'BP_', bpOrder, U, V)] as const
+}
+
+function invertForwardSip(header: FitsHeader, U: number, V: number, aOrder: number, bOrder: number) {
+	let u = U
+	let v = V
+
+	for (let i = 0; i < SIP_MAX_ITERATIONS; i++) {
+		const nextU = U - sipPolynomial(header, 'A_', aOrder, u, v)
+		const nextV = V - sipPolynomial(header, 'B_', bOrder, u, v)
+
+		if (!Number.isFinite(nextU) || !Number.isFinite(nextV)) return undefined
+		if (Math.abs(nextU - u) <= SIP_TOLERANCE && Math.abs(nextV - v) <= SIP_TOLERANCE) return [nextU, nextV] as const
+
+		u = nextU
+		v = nextV
+	}
+
+	return [u, v] as const
 }
 
 function tanHeader(header: FitsHeader) {
@@ -70,12 +137,17 @@ function tanHeader(header: FitsHeader) {
 	const poleRotation = normalizePI(lonpole - PI)
 	const cosPoleRotation = Math.cos(poleRotation)
 	const sinPoleRotation = Math.sin(poleRotation)
+	const sip = hasSipAxes(header)
+	const aOrder = sip ? sipOrder(header, 'A_ORDER') : 0
+	const bOrder = sip ? sipOrder(header, 'B_ORDER') : 0
+	const apOrder = sip ? sipOrder(header, 'AP_ORDER') : 0
+	const bpOrder = sip ? sipOrder(header, 'BP_ORDER') : 0
 
 	if (!Number.isFinite(crpix1) || !Number.isFinite(crpix2) || !Number.isFinite(crval1) || !Number.isFinite(crval2) || !Number.isFinite(determinant) || !(scale > 0) || Math.abs(determinant) <= Number.EPSILON * scale * scale) {
 		return undefined
 	}
 
-	return [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation] as const
+	return [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, aOrder, bOrder, apOrder, bpOrder] as const
 }
 
 // Reports whether the header contains enough WCS terms to build a CD matrix directly.
@@ -129,7 +201,7 @@ export function tanProject(header: FitsHeader, rightAscension: Angle, declinatio
 	const tan = tanHeader(header)
 	if (!tan) return undefined
 
-	const [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation] = tan
+	const [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, aOrder, bOrder, apOrder, bpOrder] = tan
 	const deltaRa = normalizePI(rightAscension - crval1)
 	const sinDec = Math.sin(declination)
 	const cosDec = Math.cos(declination)
@@ -144,9 +216,11 @@ export function tanProject(header: FitsHeader, rightAscension: Angle, declinatio
 	const eta = (cosDec0 * sinDec - sinDec0 * cosDec * cosDeltaRa) / denominator
 	const xIntermediate = (xi * cosPoleRotation - eta * sinPoleRotation) * RAD2DEG
 	const yIntermediate = (xi * sinPoleRotation + eta * cosPoleRotation) * RAD2DEG
-	const dx = (cd22 * xIntermediate - cd12 * yIntermediate) / determinant
-	const dy = (-cd21 * xIntermediate + cd11 * yIntermediate) / determinant
-	return [crpix1 + dx, crpix2 + dy] as const
+	const U = (cd22 * xIntermediate - cd12 * yIntermediate) / determinant
+	const V = (-cd21 * xIntermediate + cd11 * yIntermediate) / determinant
+	const distorted = apOrder > 0 && bpOrder > 0 ? inverseSip(header, U, V, apOrder, bpOrder) : invertForwardSip(header, U, V, aOrder, bOrder)
+	if (!distorted) return undefined
+	return [crpix1 + distorted[0], crpix2 + distorted[1]] as const
 }
 
 // Unprojects FITS TAN pixel coordinates into equatorial coordinates using the header WCS.
@@ -154,11 +228,10 @@ export function tanUnproject(header: FitsHeader, x: number, y: number) {
 	const tan = tanHeader(header)
 	if (!tan) return undefined
 
-	const [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, , cosPoleRotation, sinPoleRotation] = tan
-	const dx = x - crpix1
-	const dy = y - crpix2
-	const xIntermediate = deg(cd11 * dx + cd12 * dy)
-	const yIntermediate = deg(cd21 * dx + cd22 * dy)
+	const [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, , cosPoleRotation, sinPoleRotation, aOrder, bOrder] = tan
+	const [U, V] = forwardSip(header, x - crpix1, y - crpix2, aOrder, bOrder)
+	const xIntermediate = deg(cd11 * U + cd12 * V)
+	const yIntermediate = deg(cd21 * U + cd22 * V)
 	const xi = xIntermediate * cosPoleRotation + yIntermediate * sinPoleRotation
 	const eta = -xIntermediate * sinPoleRotation + yIntermediate * cosPoleRotation
 	const rho = Math.hypot(xi, eta)
