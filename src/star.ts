@@ -48,9 +48,10 @@ export function spaceMotion(star: StarPositionAndVelocity, time: Time): Position
 }
 
 export function observeStar<T extends Star | StarPositionAndVelocity>(star: T, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false): ObservedStar<T> {
+	if (!time.location) throw new Error('time.location is required')
 	const a = tt(time)
 	const b = ut1(time)
-	const { longitude, latitude, elevation, ellipsoid } = time.location!
+	const { longitude, latitude, elevation, ellipsoid } = time.location
 	const [sp, xp, yp] = pmAngles(time)
 	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
 
