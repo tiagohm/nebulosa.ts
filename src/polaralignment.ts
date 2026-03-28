@@ -107,7 +107,7 @@ export function threePointPolarAlignmentAfterAdjustment(
 // azimuth knob rotates around local "up", altitude knob around local east-west.
 // This was needed because the previous approach inferred a generic 3D rotation from one star vector,
 // which is underconstrained and produced systematic azimuth drift after adjustments.
-function mountAdjustmentAxes(time: Time, { longitude, latitude }: GeographicPosition) {
+export function mountAdjustmentAxes(time: Time, { longitude, latitude }: GeographicPosition) {
 	const cosLat = Math.cos(latitude)
 	const sinLat = Math.sin(latitude)
 	const cosLon = Math.cos(longitude)
@@ -125,7 +125,7 @@ function mountAdjustmentAxes(time: Time, { longitude, latitude }: GeographicPosi
 // Estimates knob deltas (azimuth/altitude) that best explain the observed star displacement.
 // We solve a 2x2 least-squares system in the tangent space, constrained to mount mechanics,
 // instead of applying an unconstrained Rodrigues rotation from "from -> to".
-function solveAzAltAdjustment(from: Vec3, to: Vec3, upAxis: Vec3, eastAxis: Vec3) {
+export function solveAzAltAdjustment(from: Vec3, to: Vec3, upAxis: Vec3, eastAxis: Vec3) {
 	// Small-angle least squares in the tangent space around fromVec:
 	// d ≈ az * (up × from) + alt * (east × from).
 	const azBasis = vecCross(upAxis, from)

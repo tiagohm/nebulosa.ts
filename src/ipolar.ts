@@ -1,4 +1,4 @@
-import type { Angle } from './angle'
+import { type Angle, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, observedToCirs, type RefractionParameters } from './astrometry'
 import { ASEC2RAD, PI } from './constants'
 import { eraC2s, eraS2c } from './erfa'
@@ -7,14 +7,12 @@ import type { GeographicPosition } from './location'
 import { matMulVec, matTransposeMulVec } from './mat3'
 import type { PlateSolution } from './platesolver'
 import type { DetectedStar } from './star.detector'
-import { matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from './star.matching'
+import { fitSimilarityTransform, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from './star.matching'
 import { precessionNutationMatrix, type Time } from './time'
 import { type MutVec3, type Vec3, vecAngle, vecCross, vecDot, vecMinus, vecMulScalar, vecNormalizeMut } from './vec3'
 import { Wcs } from './wcs'
 
 export type IPolarPolarAlignmentStage = 'WAITING_FOR_POSITION_1' | 'WAITING_FOR_POSITION_2' | 'INITIAL_AXIS_ESTIMATION' | 'REFINEMENT' | 'COMPLETE' | 'FAILED'
-
-export type IPolarPolarAlignmentHemisphereMode = 'auto' | 'north' | 'south'
 
 export type IPolarPolarAlignmentAction = 'WAIT_FOR_POSITION_1' | 'ROTATE_RA_TO_POSITION_2' | 'ADJUST_ALTITUDE_POSITIVE' | 'ADJUST_ALTITUDE_NEGATIVE' | 'ADJUST_AZIMUTH_POSITIVE' | 'ADJUST_AZIMUTH_NEGATIVE' | 'ALIGNMENT_COMPLETE' | 'INVALID_FRAME'
 
@@ -22,12 +20,10 @@ export type IPolarPolarAlignmentSolverMethod = 'gauss-newton' | 'coordinate-sear
 
 export interface IPolarPolarAlignmentObserverContext {
 	readonly location: GeographicPosition
-	readonly hemisphereMode?: IPolarPolarAlignmentHemisphereMode
 	readonly refraction?: RefractionParameters | false
 }
 
 export interface IPolarPolarAlignmentConfig {
-	readonly hemisphereMode?: IPolarPolarAlignmentHemisphereMode
 	readonly minimumAcceptedRaRotation?: Angle
 	readonly preferredRaRotationRange?: readonly [Angle, Angle]
 	readonly minimumStars?: number
@@ -84,7 +80,6 @@ export interface IPolarPolarAlignmentResult extends IPolarPolarAlignmentErrorMet
 
 export interface IPolarPolarAlignmentState {
 	readonly stage: IPolarPolarAlignmentStage
-	readonly hemisphere: 'north' | 'south'
 	readonly config: Readonly<Required<IPolarPolarAlignmentConfig>>
 	readonly observer: IPolarPolarAlignmentObserverContext
 	readonly referenceFrame?: IPolarPolarAlignmentFrameInput
@@ -115,7 +110,6 @@ interface SimilarityFixedPoint extends Readonly<Point> {
 
 interface PolarAlignmentMutableState {
 	stage: IPolarPolarAlignmentStage
-	hemisphere: 'north' | 'south'
 	config: Required<IPolarPolarAlignmentConfig>
 	observer?: IPolarPolarAlignmentObserverContext
 	referenceFrame?: IPolarPolarAlignmentFrameInput
@@ -128,9 +122,8 @@ interface PolarAlignmentMutableState {
 }
 
 const DEFAULT_POLAR_ALIGNMENT_CONFIG: Readonly<Required<IPolarPolarAlignmentConfig>> = {
-	hemisphereMode: 'auto',
 	minimumAcceptedRaRotation: 600 * ASEC2RAD,
-	preferredRaRotationRange: [1800 * ASEC2RAD, 7200 * 7200],
+	preferredRaRotationRange: [1800 * ASEC2RAD, 7200 * ASEC2RAD],
 	minimumStars: 6,
 	completionThreshold: 30 * ASEC2RAD,
 	fixedPointTolerance: 1.5,
@@ -216,8 +209,8 @@ export function projectGuidePoint(point: Point, width: number, height: number, m
 }
 
 // Computes the celestial pole direction in the same inertial J2000/ICRS frame used by the plate solver.
-export function celestialPoleVector(time: Time, location: GeographicPosition = time.location!, hemisphere: 'north' | 'south' = location.latitude >= 0 ? 'north' : 'south', refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): Vec3 {
-	const azimuth = hemisphere === 'north' ? 0 : PI
+export function celestialPoleVector(time: Time, location: GeographicPosition = time.location!, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): Vec3 {
+	const azimuth = location.latitude >= 0 ? 0 : PI
 	const altitude = Math.abs(location.latitude)
 	const [rightAscension, declination] = observedToCirs(azimuth, altitude, time, refraction, location)
 	return vecNormalizeMut(matTransposeMulVec(precessionNutationMatrix(time), eraS2c(rightAscension, declination)))
@@ -237,11 +230,18 @@ export function decomposePolarError(axisVector: Vec3, targetVector: Vec3, time: 
 
 // Estimates the RA-axis pixel fixed point from two RA-only frames using a nonlinear root solve with a derivative-free fallback.
 export function solveImageFixedPoint(reference: PlateSolution, current: PlateSolution, initialGuess?: Readonly<Point>, tolerance: number = 1.5): FixedPointSolution | false {
-	const seed = initialGuess ?? { x: reference.widthInPixels * 0.5, y: reference.heightInPixels * 0.5 }
-	const gaussNewton = solveByGaussNewton(reference, current, seed, tolerance)
-	if (gaussNewton !== false) return gaussNewton
-	const fallback = solveByCoordinateSearch(reference, current, seed, tolerance)
-	if (fallback !== false) return fallback
+	const seeds = fixedPointSeeds(reference, current, initialGuess)
+
+	for (let i = 0; i < seeds.length; i++) {
+		const gaussNewton = solveByGaussNewton(reference, current, seeds[i], tolerance)
+		if (gaussNewton !== false) return gaussNewton
+	}
+
+	for (let i = 0; i < seeds.length; i++) {
+		const fallback = solveByCoordinateSearch(reference, current, seeds[i], tolerance)
+		if (fallback !== false) return fallback
+	}
+
 	return false
 }
 
@@ -249,11 +249,10 @@ export function solveImageFixedPoint(reference: PlateSolution, current: PlateSol
 export class IPolarPolarAlignment {
 	readonly #state: PolarAlignmentMutableState
 
-	constructor(config: IPolarPolarAlignmentConfig = {}) {
+	constructor(config?: IPolarPolarAlignmentConfig) {
 		this.#state = {
 			stage: 'WAITING_FOR_POSITION_1',
-			hemisphere: 'north',
-			config: { ...DEFAULT_POLAR_ALIGNMENT_CONFIG, ...config, preferredRaRotationRange: config.preferredRaRotationRange ?? DEFAULT_POLAR_ALIGNMENT_CONFIG.preferredRaRotationRange, starMatchingConfig: { ...DEFAULT_POLAR_ALIGNMENT_CONFIG.starMatchingConfig, ...config.starMatchingConfig } },
+			config: { ...DEFAULT_POLAR_ALIGNMENT_CONFIG, ...config, preferredRaRotationRange: config?.preferredRaRotationRange ?? DEFAULT_POLAR_ALIGNMENT_CONFIG.preferredRaRotationRange, starMatchingConfig: { ...DEFAULT_POLAR_ALIGNMENT_CONFIG.starMatchingConfig, ...config?.starMatchingConfig } },
 		}
 	}
 
@@ -276,7 +275,6 @@ export class IPolarPolarAlignment {
 
 		return {
 			stage: this.#state.stage,
-			hemisphere: this.#state.hemisphere,
 			config: this.#state.config,
 			observer: this.#state.observer,
 			referenceFrame: this.#state.referenceFrame,
@@ -294,7 +292,6 @@ export class IPolarPolarAlignment {
 		const observer = observerContext ?? resolveObserverContext(frameInput, this.#state.config)
 		const warnings = validateFrame(frameInput, this.#state.config)
 		this.#state.observer = observer
-		this.#state.hemisphere = resolveHemisphere(observer.location, observer.hemisphereMode ?? this.#state.config.hemisphereMode)
 		this.#state.referenceFrame = frameInput
 		this.#state.secondFrame = undefined
 		this.#state.axisPixel = undefined
@@ -317,7 +314,9 @@ export class IPolarPolarAlignment {
 		const starMatch = maybeMatchStars(this.#state.referenceFrame.stars, frameInput.stars, this.#state.config)
 		const similaritySeed = starMatch?.success && starMatch.similarity ? solveSimilarityFixedPoint(starMatch.similarity) : false
 		const axis = solveImageFixedPoint(this.#state.referenceFrame.solution, frameInput.solution, similaritySeed === false ? undefined : similaritySeed, this.#state.config.fixedPointTolerance)
-		const acceptedRaRotation = separationBetweenCenters(this.#state.referenceFrame.solution, frameInput.solution)
+		const acceptedRaRotation = calibrationRotationEstimate(this.#state.referenceFrame.solution, frameInput.solution, axis === false ? undefined : axis, starMatch)
+		const [preferredMin, preferredMax] = this.#state.config.preferredRaRotationRange
+		if (acceptedRaRotation < preferredMin || acceptedRaRotation > preferredMax) warnings.push('RA rotation is outside the preferred calibration range')
 
 		if (acceptedRaRotation < this.#state.config.minimumAcceptedRaRotation || axis === false) {
 			const failureWarnings = [...warnings]
@@ -331,7 +330,7 @@ export class IPolarPolarAlignment {
 		this.#state.secondFrame = frameInput
 		this.#state.axisPixel = { x: axis.x, y: axis.y }
 		this.#state.axisVector = skyVectorFromPixel(frameInput.solution, this.#state.axisPixel)
-		this.#state.targetVector = celestialPoleVector(frameInput.time, this.#state.observer.location, this.#state.hemisphere, this.#state.config.refraction)
+		this.#state.targetVector = celestialPoleVector(frameInput.time, this.#state.observer.location, this.#state.config.refraction)
 		this.#state.stage = 'INITIAL_AXIS_ESTIMATION'
 		const diagnostics = buildDiagnostics(this.#state.config, warnings, starMatch, acceptedRaRotation, axis)
 		const result = this.measureFrame(frameInput, 'INITIAL_AXIS_ESTIMATION', diagnostics)
@@ -356,7 +355,7 @@ export class IPolarPolarAlignment {
 	private measureFrame(frame: IPolarPolarAlignmentFrameInput, stage: IPolarPolarAlignmentStage, diagnostics: IPolarPolarAlignmentDiagnostics): IPolarPolarAlignmentResult {
 		if (!this.#state.axisPixel || !this.#state.targetVector || !this.#state.observer) throw new Error('alignment state is incomplete')
 		const axisVector = skyVectorFromPixel(frame.solution, this.#state.axisPixel)
-		const targetVector = celestialPoleVector(frame.time, this.#state.observer.location, this.#state.hemisphere, this.#state.config.refraction)
+		const targetVector = celestialPoleVector(frame.time, this.#state.observer.location, this.#state.config.refraction)
 		const metrics = decomposePolarError(axisVector, targetVector, frame.time, this.#state.config.refraction, this.#state.observer.location)
 		const currentPoint = projectGuidePoint(this.#state.axisPixel, frame.solution.widthInPixels, frame.solution.heightInPixels)
 		const targetPixel = pixelFromSkyVector(frame.solution, targetVector)
@@ -393,7 +392,7 @@ export class IPolarPolarAlignment {
 // Resolves the observer context from the explicit argument or from the embedded time/location object.
 function resolveObserverContext(frameInput: IPolarPolarAlignmentFrameInput, config: Required<IPolarPolarAlignmentConfig>): IPolarPolarAlignmentObserverContext {
 	if (!frameInput.time.location) throw new Error('location is required when observerContext is omitted')
-	return { location: frameInput.time.location, hemisphereMode: config.hemisphereMode, refraction: config.refraction }
+	return { location: frameInput.time.location, refraction: config.refraction }
 }
 
 // Validates the minimal solve quality gates that can be checked without host-specific metadata.
@@ -433,9 +432,103 @@ function maybeMatchStars(referenceStars: readonly DetectedStar[] | undefined, cu
 	return matchStars(referenceStars, currentStars, { maxResidual: config.maxStarMatchResidual, ...config.starMatchingConfig })
 }
 
-// Computes a practical RA-rotation proxy from the separation of the two solved frame centers.
-function separationBetweenCenters(a: PlateSolution, b: PlateSolution) {
+// Combines sky and image-space cues into a practical RA-rotation estimate.
+function calibrationRotationEstimate(reference: PlateSolution, current: PlateSolution, axis?: Readonly<Point>, starMatch?: StarMatchingResult) {
+	let estimate = centerSeparation(reference, current)
+	const orientationRotation = Math.abs(normalizePI(current.orientation - reference.orientation))
+	if (orientationRotation > estimate) estimate = orientationRotation
+
+	if (axis) {
+		const orbitRotation = rotationAroundFixedPoint(reference, current, axis)
+		if (orbitRotation > estimate) estimate = orbitRotation
+	}
+
+	if (starMatch?.success && starMatch.similarity && !starMatch.similarity.mirrored) {
+		const matchedRotation = Math.abs(normalizePI(starMatch.similarity.rotation))
+		if (matchedRotation > estimate) estimate = matchedRotation
+	}
+
+	return estimate
+}
+
+// Computes the great-circle separation between the solved frame centers.
+function centerSeparation(a: PlateSolution, b: PlateSolution) {
 	return vecAngle(eraS2c(a.rightAscension, a.declination), eraS2c(b.rightAscension, b.declination))
+}
+
+// Estimates the image rotation by comparing center vectors around the solved fixed point.
+function rotationAroundFixedPoint(reference: PlateSolution, current: PlateSolution, axis: Readonly<Point>) {
+	const refDx = reference.widthInPixels * 0.5 - axis.x
+	const refDy = reference.heightInPixels * 0.5 - axis.y
+	const curDx = current.widthInPixels * 0.5 - axis.x
+	const curDy = current.heightInPixels * 0.5 - axis.y
+	const refNorm = Math.hypot(refDx, refDy)
+	const curNorm = Math.hypot(curDx, curDy)
+	if (!(refNorm > 0) || !(curNorm > 0)) return 0
+	const dot = (refDx * curDx + refDy * curDy) / (refNorm * curNorm)
+	return Math.acos(Math.max(-1, Math.min(1, dot)))
+}
+
+// Builds a robust seed list for the fixed-point solve from explicit, sampled, and center guesses.
+function fixedPointSeeds(reference: PlateSolution, current: PlateSolution, initialGuess?: Readonly<Point>) {
+	const center = { x: reference.widthInPixels * 0.5, y: reference.heightInPixels * 0.5 }
+	const sampledSeed = sampledSimilarityTransform(reference, current)
+	const similaritySeed = sampledSeed === undefined ? undefined : solveSimilarityFixedPoint(sampledSeed)
+	const seeds: Point[] = []
+
+	pushSeed(seeds, initialGuess)
+	pushSeed(seeds, similaritySeed === false ? undefined : similaritySeed)
+	pushSeed(seeds, center)
+
+	return seeds
+}
+
+// Adds only distinct finite seeds to the candidate list.
+function pushSeed(seeds: Point[], seed?: Readonly<Point>) {
+	if (!seed || !Number.isFinite(seed.x) || !Number.isFinite(seed.y)) return
+
+	for (let i = 0; i < seeds.length; i++) {
+		if (Math.abs(seeds[i].x - seed.x) <= 1e-9 && Math.abs(seeds[i].y - seed.y) <= 1e-9) return
+	}
+
+	seeds.push({ x: seed.x, y: seed.y })
+}
+
+// Fits a similarity transform from sampled WCS correspondences without requiring detected stars.
+function sampledSimilarityTransform(reference: PlateSolution, current: PlateSolution) {
+	const referenceSamples = referenceFrameSamples(reference)
+	const currentSamples: Point[] = []
+	const currentMappedReference: Point[] = []
+
+	for (let i = 0; i < referenceSamples.length; i++) {
+		const sample = referenceSamples[i]
+		const sky = pixelToSky(reference, sample.x, sample.y)
+		if (sky === false) continue
+		const mapped = skyToPixel(current, sky[0], sky[1])
+		if (mapped === false) continue
+		currentSamples.push(sample)
+		currentMappedReference.push({ x: mapped[0], y: mapped[1] })
+	}
+
+	if (currentSamples.length < 2) return undefined
+
+	return fitSimilarityTransform(currentSamples, currentMappedReference)
+}
+
+// Samples stable reference pixels across the frame interior for WCS-based transform estimation.
+function referenceFrameSamples(solution: PlateSolution) {
+	const width = solution.widthInPixels
+	const height = solution.heightInPixels
+
+	return [
+		{ x: width * 0.5, y: height * 0.5 },
+		{ x: width * 0.35, y: height * 0.35 },
+		{ x: width * 0.65, y: height * 0.35 },
+		{ x: width * 0.35, y: height * 0.65 },
+		{ x: width * 0.65, y: height * 0.65 },
+		{ x: width * 0.5, y: height * 0.35 },
+		{ x: width * 0.5, y: height * 0.65 },
+	] as const
 }
 
 // Computes the nonlinear image-space residual p - T(p) for the fixed-point solver.
@@ -449,14 +542,14 @@ function fixedPointResidual(reference: PlateSolution, current: PlateSolution, po
 }
 
 // Solves the fixed point with a finite-difference Gauss-Newton iteration.
-function solveByGaussNewton(reference: PlateSolution, current: PlateSolution, seed: Readonly<Point>, tolerance: number) {
+function solveByGaussNewton(reference: PlateSolution, current: PlateSolution, seed: Readonly<Point>, tolerance: number): FixedPointSolution | false {
 	let { x, y } = seed
 	const step = 0.5
 
 	for (let iteration = 0; iteration < 24; iteration++) {
 		const center = fixedPointResidual(reference, current, { x, y })
 		if (center === false) return false
-		if (center.residual <= tolerance) return { x, y, residual: center.residual, iterations: iteration + 1, solver: 'gauss-newton' } as const
+		if (center.residual <= tolerance) return { x, y, residual: center.residual, iterations: iteration + 1, solver: 'gauss-newton' }
 
 		const dxCandidate = fixedPointResidual(reference, current, { x: x + step, y })
 		const dyCandidate = fixedPointResidual(reference, current, { x, y: y + step })
@@ -479,7 +572,7 @@ function solveByGaussNewton(reference: PlateSolution, current: PlateSolution, se
 
 	const final = fixedPointResidual(reference, current, { x, y })
 	if (final === false || final.residual > tolerance) return false
-	return { x, y, residual: final.residual, iterations: 24, solver: 'gauss-newton' } as const
+	return { x, y, residual: final.residual, iterations: 24, solver: 'gauss-newton' }
 }
 
 // Falls back to a derivative-free coordinate search when the Jacobian-based solve is poorly conditioned.
@@ -540,13 +633,6 @@ function skyToPixel(solution: PlateSolution, rightAscension: Angle, declination:
 function pixelToSky(solution: PlateSolution, x: number, y: number) {
 	using wcs = new Wcs(solution)
 	return wcs.pixToSky(x, y) ?? false
-}
-
-// Resolves the operating hemisphere.
-function resolveHemisphere(location: GeographicPosition, mode: IPolarPolarAlignmentHemisphereMode = 'auto') {
-	if (mode === 'north') return 'north'
-	if (mode === 'south') return 'south'
-	return location.latitude >= 0 ? 'north' : 'south'
 }
 
 // Builds an orthonormal tangent basis around the given sky direction.
