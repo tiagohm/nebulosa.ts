@@ -1,12 +1,14 @@
 import { expect, test } from 'bun:test'
 import { type Angle, arcmin, arcsec, deg, toDeg } from '../src/angle'
-import { eraC2s } from '../src/erfa'
+import { observedToCirs } from '../src/astrometry'
+import { eraC2s, eraS2c } from '../src/erfa'
 import type { FitsHeader } from '../src/fits'
-import { celestialPoleVector, IPolarPolarAlignment, projectGuidePoint, solveSimilarityFixedPoint } from '../src/ipolar'
+import { celestialPoleVector, decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveSimilarityFixedPoint } from '../src/ipolar'
 import { type GeographicPosition, geodeticLocation } from '../src/location'
+import { matTransposeMulVec } from '../src/mat3'
 import { type PlateSolution, plateSolutionFrom } from '../src/platesolver'
 import { mountAdjustmentAxes } from '../src/polaralignment'
-import { type Time, timeYMDHMS } from '../src/time'
+import { precessionNutationMatrix, type Time, timeYMDHMS } from '../src/time'
 import { type Vec3, vecCross, vecDot, vecNormalizeMut, vecRotateByRodrigues } from '../src/vec3'
 
 test('solve similarity fixed point', () => {
@@ -28,6 +30,22 @@ test('project guide point clamps off-screen points to the border', () => {
 	expect(guide.clamped.y).toBeGreaterThanOrEqual(20)
 	expect(guide.clamped.y).toBeLessThanOrEqual(580)
 	expect(Math.hypot(guide.arrow.x, guide.arrow.y)).toBeCloseTo(1, 8)
+})
+
+test('decomposePolarError keeps azimuth and altitude offsets on their correct axes', () => {
+	const location = geodeticLocation(deg(-70), deg(35))
+	const time = timeYMDHMS(2026, 1, 7, 3, 15, 0)
+	time.location = location
+
+	const target = inertialVectorFromObserved(deg(40), deg(55), time, location)
+	const azimuthOffset = inertialVectorFromObserved(deg(40) + arcmin(12), deg(55), time, location)
+	const altitudeOffset = inertialVectorFromObserved(deg(40), deg(55) + arcmin(12), time, location)
+
+	const azimuthMetrics = decomposePolarError(azimuthOffset, target, time, false, location)
+	expect(Math.abs(azimuthMetrics.azimuthError)).toBeGreaterThan(20 * Math.abs(azimuthMetrics.altitudeError))
+
+	const altitudeMetrics = decomposePolarError(altitudeOffset, target, time, false, location)
+	expect(Math.abs(altitudeMetrics.altitudeError)).toBeGreaterThan(20 * Math.abs(altitudeMetrics.azimuthError))
 })
 
 const PRACTICAL_SCENARIOS = [
@@ -363,6 +381,11 @@ function scenarioNamed(name: string): PracticalScenario {
 	const scenario = PRACTICAL_SCENARIOS.find((scenario) => scenario.name === name)
 	if (!scenario) throw new Error(`unknown practical scenario: ${name}`)
 	return scenario
+}
+
+function inertialVectorFromObserved(azimuth: Angle, altitude: Angle, time: Time, location: GeographicPosition): Vec3 {
+	const [rightAscension, declination] = observedToCirs(azimuth, altitude, time, false, location)
+	return vecNormalizeMut(matTransposeMulVec(precessionNutationMatrix(time), eraS2c(rightAscension, declination)))
 }
 
 function buildPracticalScenario({ name, location, start, steps, cameraOffset = deg(1.6), pixelScale = arcsec(30), baseRoll = deg(33), width = 1280, height = 1024, minimumAcceptedRaRotation = deg(0.5), completionThreshold = arcmin(4), calibrationExpectation = 'accept' }: PracticalScenarioDefinition): PracticalScenario {

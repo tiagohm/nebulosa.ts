@@ -646,8 +646,8 @@ function tangentBasis(origin: Vec3) {
 // Builds the local tangent basis aligned with azimuth and altitude directions.
 function horizontalBasis(azimuth: Angle, altitude: Angle) {
 	return {
-		azimuth: [Math.cos(azimuth), -Math.sin(azimuth), 0] as Vec3,
-		altitude: [-Math.sin(altitude) * Math.sin(azimuth), -Math.sin(altitude) * Math.cos(azimuth), Math.cos(altitude)] as Vec3,
+		azimuth: [-Math.sin(azimuth), Math.cos(azimuth), 0] as Vec3,
+		altitude: [-Math.sin(altitude) * Math.cos(azimuth), -Math.sin(altitude) * Math.sin(azimuth), Math.cos(altitude)] as Vec3,
 	} as const
 }
 
