@@ -88,7 +88,7 @@ describe('windows', () => {
 	})
 
 	test('tsv without skip first line', async () => {
-		await readCsvAndTest(TSV.replace(/\n/g, '\r\n'), { skipFirstLine: false, delimiter: TSV_DELIMITER })
+		await readCsvAndTest(TSV.replace(/\n/g, '\r\n'), { skipFirstLine: false, delimiter: [TSV_DELIMITER] })
 	})
 
 	test('csv without skip first line', async () => {
@@ -214,4 +214,8 @@ test('IAU-CSN', async () => {
 	expect(rows).toHaveLength(452)
 	expect(rows[0]).toEqual(['Name/ASCII', 'Name/Diacritics', 'Designation', 'ID', 'ID/Diacritics', 'Con', '#', 'WDS_J', 'mag', 'bnd', 'HIP', 'HD', 'RA(J2000)', 'Dec(J2000)', 'Date', 'notes'])
 	expect(rows[451]).toEqual(['Zubeneschamali', 'Zubeneschamali', 'HR 5685', 'bet', 'β', 'Lib', '_', '_', '2.61', 'V', '74785', '135742', '229.251724', '-9.382914', '2016-08-21', ''])
+})
+
+test('do not treat tab as whitespace when tab is delimiter', () => {
+	expect(readCsv('1\t"225019"\t\t7.2\t"A0"\t0.6735416666666666\t82.97319999999999\t-0.0097\t-0.004', { skipFirstLine: false, delimiter: TSV_DELIMITER })).toEqual([['1', '225019', '', '7.2', 'A0', '0.6735416666666666', '82.97319999999999', '-0.0097', '-0.004']])
 })

@@ -11,6 +11,7 @@ export interface CsvLineParserOptions {
 	delimiter?: string | string[]
 	comment?: string | string[]
 	quote?: string | string[] | false
+	forceTrim?: boolean
 }
 
 export interface ReadCsvOptions extends CsvLineParserOptions {
@@ -31,9 +32,10 @@ export const DEFAULT_READ_CSV_STREAM_OPTIONS: Readonly<Required<ReadCsvStreamOpt
 	ignoreBOM: true,
 	fatal: false,
 	bufferSize: 1024 * 8,
+	forceTrim: true,
 }
 
-interface ParseColumnOptions {
+interface ParseColumnInfo {
 	offset: number
 	quoted: boolean
 }
@@ -44,50 +46,55 @@ export class CsvLineParser {
 	private readonly comment: string | string[]
 	private readonly isDelimiter: (c: string) => boolean
 	private readonly isQuoteChar: (c: string) => boolean
+	private readonly isWhitespace: (c: string) => boolean
+	private readonly forceTrim: boolean
 
 	constructor(options: string | string[] | CsvLineParserOptions = DEFAULT_READ_CSV_STREAM_OPTIONS) {
 		const delimiter = typeof options === 'string' || Array.isArray(options) ? options : (options.delimiter ?? DEFAULT_READ_CSV_STREAM_OPTIONS.delimiter)
 		options = typeof options === 'string' || Array.isArray(options) ? DEFAULT_READ_CSV_STREAM_OPTIONS : options
 		const quote = options.quote ?? DEFAULT_READ_CSV_STREAM_OPTIONS.quote
 		this.comment = options.comment ?? DEFAULT_READ_CSV_STREAM_OPTIONS.comment
+		this.forceTrim = options.forceTrim ?? false
 
-		if (typeof delimiter === 'string') this.isDelimiter = (c: string) => c === delimiter
-		else this.isDelimiter = (c: string) => delimiter.includes(c)
+		if (typeof delimiter === 'string') this.isDelimiter = (c) => c === delimiter
+		else this.isDelimiter = (c) => delimiter.includes(c)
 
 		if (quote === false) this.isQuoteChar = () => false
-		else if (typeof quote === 'string') this.isQuoteChar = (c: string) => c === quote
-		else this.isQuoteChar = (c: string) => quote.includes(c)
+		else if (typeof quote === 'string') this.isQuoteChar = (c) => c === quote
+		else this.isQuoteChar = (c) => quote.includes(c)
+
+		this.isWhitespace = (c) => !this.isDelimiter(c) && WHITESPACE.includes(c)
 	}
 
 	parse(line: string, offset: number = 0, row?: CsvRow) {
-		const options: ParseColumnOptions = { offset, quoted: false }
+		const info: ParseColumnInfo = { offset, quoted: false }
 
-		this.skipIfBlank(line, options)
+		this.skipIfBlank(line, info)
 
 		// Skip empty lines and comment lines
-		if (options.offset >= line.length || this.comment.includes(line[options.offset])) return false
+		if (info.offset >= line.length || this.comment.includes(line[info.offset])) return false
 
 		row ??= []
 
 		// Parse the line until the end
-		while (options.offset < line.length) {
-			const start = options.offset
-			this.skipIfBlank(line, options)
+		while (info.offset < line.length) {
+			const start = info.offset
+			this.skipIfBlank(line, info)
 
-			if (options.offset >= line.length) {
+			if (info.offset >= line.length) {
 				row.push('')
 				break
 			}
 
-			if (start < options.offset && this.isDelimiter(line[options.offset])) {
+			if (start < info.offset && this.isDelimiter(line[info.offset])) {
 				row.push('')
-				this.skipUntilDelimiter(line, options)
+				this.skipUntilDelimiter(line, info)
 				continue
 			}
 
-			const text = this.parseColumn(line, options)
-			row.push(options.quoted ? text : text.trim())
-			this.skipUntilDelimiter(line, options)
+			const text = this.parseColumn(line, info)
+			row.push(info.quoted && !this.forceTrim ? text : text.trim())
+			this.skipUntilDelimiter(line, info)
 		}
 
 		// If the last character is a delimiter, we need to add an empty column
@@ -96,21 +103,21 @@ export class CsvLineParser {
 		return row
 	}
 
-	private parseColumn(line: string, options: ParseColumnOptions) {
-		options.quoted = false
+	private parseColumn(line: string, info: ParseColumnInfo) {
+		info.quoted = false
 
-		if (this.isQuoteChar(line[options.offset])) {
-			options.quoted = true
-			options.offset++
+		if (this.isQuoteChar(line[info.offset])) {
+			info.quoted = true
+			info.offset++
 			// If the column starts with a quote, parse it as a quoted column
-			return this.parseQuotedColumn(line, options)
+			return this.parseQuotedColumn(line, info)
 		} else {
 			// Otherwise, parse it as a raw column
-			return this.parseRawColumn(line, options)
+			return this.parseRawColumn(line, info)
 		}
 	}
 
-	private parseQuotedColumn(line: string, options: ParseColumnOptions) {
+	private parseQuotedColumn(line: string, options: ParseColumnInfo) {
 		const start = options.offset
 		let segmentStart = start
 		let i = start
@@ -168,25 +175,25 @@ export class CsvLineParser {
 		return [-1, i, quoted] as const
 	}
 
-	private parseRawColumn(line: string, options: ParseColumnOptions) {
-		const start = options.offset
+	private parseRawColumn(line: string, info: ParseColumnInfo) {
+		const start = info.offset
 		let i = start
 
 		for (; i < line.length; i++) {
 			if (this.isDelimiter(line[i])) break
 		}
 
-		options.offset = i
+		info.offset = i
 
-		return line.substring(start, options.offset)
+		return line.substring(start, info.offset)
 	}
 
-	private skipUntilDelimiter(line: string, options: ParseColumnOptions) {
-		while (options.offset < line.length && !this.isDelimiter(line[options.offset++]));
+	private skipUntilDelimiter(line: string, info: ParseColumnInfo) {
+		while (info.offset < line.length && !this.isDelimiter(line[info.offset++]));
 	}
 
-	private skipIfBlank(line: string, options: ParseColumnOptions) {
-		while (options.offset < line.length && WHITESPACE.includes(line[options.offset])) options.offset++
+	private skipIfBlank(line: string, info: ParseColumnInfo) {
+		while (info.offset < line.length && this.isWhitespace(line[info.offset])) info.offset++
 	}
 }
 

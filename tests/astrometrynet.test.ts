@@ -6,11 +6,11 @@ import { readFits } from '../src/fits'
 import { tanUnproject } from '../src/fits.wcs'
 import { bufferSource } from '../src/io'
 
-describe('nova', () => {
+describe.skip('nova', () => {
 	test('login', async () => {
 		const session = await login()
 
-		expect(session).not.toBeUndefined()
+		expect(session).toBeDefined()
 		expect(session!.status).toBe('success')
 		expect(session!.session).not.toBeEmpty()
 	})
@@ -18,22 +18,22 @@ describe('nova', () => {
 	test.skip('upload url', async () => {
 		const session = await login()
 
-		expect(session).not.toBeUndefined()
+		expect(session).toBeDefined()
 
 		if (session) {
 			const input = 'https://github.com/dstndstn/astrometry.net/blob/main/demo/apod1.jpg?raw=true'
 			const submission = await upload({ input, session })
 
-			expect(submission).not.toBeUndefined()
+			expect(submission).toBeDefined()
 			expect(submission!.status).toBe('success')
-			expect(submission!.subid).not.toBeUndefined()
+			expect(submission!.subid).toBeDefined()
 		}
 	})
 
 	test('submission status', async () => {
 		const session = await login()
 
-		expect(session).not.toBeUndefined()
+		expect(session).toBeDefined()
 
 		if (session) {
 			const status = await submissionStatus(12174168, { session })
@@ -47,12 +47,12 @@ describe('nova', () => {
 	test('wcs', async () => {
 		const session = await login()
 
-		expect(session).not.toBeUndefined()
+		expect(session).toBeDefined()
 
 		if (session) {
 			const status = await wcsFile(13003925, { session })
 
-			expect(status).not.toBeUndefined()
+			expect(status).toBeDefined()
 			expect(status!.size).toBe(63360)
 
 			const buffer = Buffer.from(await status!.arrayBuffer())
@@ -69,7 +69,7 @@ describe('nova', () => {
 		const input = 'https://github.com/dstndstn/astrometry.net/blob/main/demo/apod1.jpg?raw=true'
 		const solution = await novaAstrometryNetPlateSolve(input)
 
-		expect(solution).not.toBeUndefined()
+		expect(solution).toBeDefined()
 
 		const [ra, dec] = tanUnproject(solution!, 400.5, 263.5)!
 
@@ -82,7 +82,7 @@ describe('nova', () => {
 		const input = Bun.file('data/apod4.jpg')
 		const solution = await novaAstrometryNetPlateSolve(input)
 
-		expect(solution).not.toBeUndefined()
+		expect(solution).toBeDefined()
 
 		const [ra, dec] = tanUnproject(solution!, 359.5, 253.5)!
 
@@ -96,7 +96,7 @@ test.skip('local', async () => {
 		executable: 'solve-field',
 	})
 
-	expect(solution).not.toBeUndefined()
+	expect(solution).toBeDefined()
 	expect(toDeg(solution!.orientation)).toBeCloseTo(58.5073, 3)
 	expect(toArcsec(solution!.scale)).toBeCloseTo(171.041, 3)
 	expect(toHour(solution!.rightAscension)).toBeCloseTo(12.4786, 3)

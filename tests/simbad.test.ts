@@ -10,7 +10,7 @@ test.skip('query', async () => {
 
 	const table = await simbadQuery(query)
 
-	expect(table).not.toBeUndefined()
+	expect(table).toBeDefined()
 
 	const [header, ...data] = table!
 

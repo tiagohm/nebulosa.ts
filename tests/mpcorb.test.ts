@@ -8,7 +8,7 @@ const HALLEY = '0001P         2061 08 31.8266  0.583972  0.967311  112.5470   59
 test('asteroid', () => {
 	const ceres = mpcorb(CERES)
 
-	expect(ceres).not.toBeUndefined()
+	expect(ceres).toBeDefined()
 
 	expect(ceres!.designationPacked).toBe('00001')
 	expect(ceres!.magnitudeH).toBe(3.34)
@@ -38,7 +38,7 @@ test('asteroid', () => {
 test('comet', () => {
 	const halley = mpcorbComet(HALLEY)
 
-	expect(halley).not.toBeUndefined()
+	expect(halley).toBeDefined()
 
 	expect(halley!.designationPacked).toBe('')
 	expect(halley!.magnitudeK).toBe(6)

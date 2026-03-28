@@ -19,7 +19,7 @@ test.skip('plate solve', async () => {
 	const declination = deg(-59.6022)
 	const solution = await astapPlateSolve(join(dirname(__dirname), 'data', 'NGC3372--32.1.fit'), { executable: 'astap_cli', rightAscension, declination, radius: deg(4), fov: deg(0.54) })
 
-	expect(solution).not.toBeUndefined()
+	expect(solution).toBeDefined()
 	expect(toDeg(solution!.orientation)).toBeCloseTo(-110.13, 2)
 	expect(toArcsec(solution!.scale)).toBeCloseTo(2.735, 3)
 	expect(toHour(solution!.rightAscension)).toBeCloseTo(10.7345, 3)

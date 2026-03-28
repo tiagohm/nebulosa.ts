@@ -10,7 +10,7 @@ test('NAIF/DAF', async () => {
 	await using source = fileHandleSource(await fs.open('data/de405.bsp'))
 	const daf = await readDaf(source)
 
-	expect(daf).not.toBeUndefined()
+	expect(daf).toBeDefined()
 	expect(daf.summaries).toHaveLength(15)
 
 	for (const summary of daf.summaries) expect(summary.doubles).toEqual(new Float64Array([-1.5778799588160586e9, 1.5778800641839132e9]))
@@ -36,7 +36,7 @@ test('DAF/SPK', async () => {
 	await using source = fileHandleSource(await fs.open('data/de421.bsp'))
 	const daf = await readDaf(source)
 
-	expect(daf).not.toBeUndefined()
+	expect(daf).toBeDefined()
 	expect(daf.summaries).toHaveLength(15)
 
 	for (const summary of daf.summaries) expect(summary.doubles).toEqual(new Float64Array([-3.1691952e9, 1.6968528e9]))
@@ -62,7 +62,7 @@ test('DAF/PCK', async () => {
 	await using source = fileHandleSource(await fs.open('data/moon_pa_de421_1900-2050.bpc'))
 	const daf = await readDaf(source)
 
-	expect(daf).not.toBeUndefined()
+	expect(daf).toBeDefined()
 	expect(daf.summaries).toHaveLength(1)
 	expect(daf.summaries[0].doubles).toEqual(new Float64Array([-3.1557168e9, 1.609416e9]))
 	expect(daf.summaries[0].ints).toEqual(new Int32Array([31006, 1, 2, 641, 221284]))

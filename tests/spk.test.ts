@@ -17,7 +17,7 @@ test('DE405', async () => {
 	const s = readSpk(daf)
 
 	const segment = s.segment(Naif.SSB, Naif.EMB)
-	expect(segment).not.toBeUndefined()
+	expect(segment).toBeDefined()
 	const [p, v] = await segment!.at(time)
 
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
@@ -37,7 +37,7 @@ test('DE421', async () => {
 	const spk = readSpk(daf)
 
 	const segment = spk.segment(Naif.SSB, Naif.EMB)
-	expect(segment).not.toBeUndefined()
+	expect(segment).toBeDefined()
 	const [p, v] = await segment!.at(time)
 
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
@@ -57,7 +57,7 @@ test('DE440', async () => {
 	const s = readSpk(daf)
 
 	const segment = s.segment(Naif.SSB, Naif.EMB)
-	expect(segment).not.toBeUndefined()
+	expect(segment).toBeDefined()
 	const [p, v] = await segment!.at(time)
 
 	// https://ssd.jpl.nasa.gov/horizons/app.html#/ {source: DE441}
@@ -77,7 +77,7 @@ test('65803 Didymos', async () => {
 	const s = readSpk(daf)
 
 	const segment = s.segment(Naif.SUN, Naif.DIDYMOS_BARYCENTER)
-	expect(segment).not.toBeUndefined()
+	expect(segment).toBeDefined()
 	const time = timeYMDHMS(2022, 12, 8, 20, 7, 15, Timescale.TDB)
 	const [p, v] = await segment!.at(time)
 

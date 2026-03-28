@@ -16,7 +16,7 @@ describe('parse', () => {
 		const parser = new SimpleXmlParser()
 		const [tag] = parser.parse(input)
 
-		expect(tag).not.toBeUndefined()
+		expect(tag).toBeDefined()
 		expect(tag.name).toBe('person')
 		expect(tag.attributes.id).toBe('1')
 		expect(tag.attributes.type).toBe('student')
@@ -69,7 +69,7 @@ describe('parse', () => {
 
 		const [tag] = parser.parse(lines[lines.length - 1])
 
-		expect(tag).not.toBeUndefined()
+		expect(tag).toBeDefined()
 		expect(tag.name).toBe('person')
 		expect(tag.attributes.id).toBe('1')
 		expect(tag.attributes.type).toBe('student')
