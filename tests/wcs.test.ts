@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, parseAngle } from '../src/angle'
 import type { FitsHeader } from '../src/fits'
-import { cd, Wcs } from '../src/wcs'
+import { cd } from '../src/fits.wcs'
+import { Wcs } from '../src/wcs'
 
 // https://fits.gsfc.nasa.gov/registry/sip/sipsample.txt
 // https://www.atnf.csiro.au/computing/software/wcs/WCS/example_data.html

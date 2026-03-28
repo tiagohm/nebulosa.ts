@@ -2,7 +2,7 @@ import { type Angle, deg } from './angle'
 import type { EquatorialCoordinate } from './coordinate'
 import type { FitsHeader } from './fits'
 import { heightKeyword, numericKeyword, widthKeyword } from './fits.util'
-import { cdMatrix } from './wcs'
+import { cdMatrix } from './fits.wcs'
 
 export type Parity = 'NORMAL' | 'FLIPPED'
 

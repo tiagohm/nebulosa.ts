@@ -4,8 +4,6 @@ import { type Angle, deg, toDeg } from './angle'
 import { type FitsHeader, FitsKeywordWriter } from './fits'
 import { isWcsFitsKeyword } from './fits.wcs'
 
-export { cd, cdFromCdelt, cdMatrix, hasCd, isWcsFitsKeyword, pc2cd } from './fits.wcs'
-
 export type LibWcs = ReturnType<typeof open>
 
 export function open() {

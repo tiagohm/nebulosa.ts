@@ -1,6 +1,8 @@
-import { type Angle, deg } from './angle'
+import { type Angle, deg, normalizeAngle, normalizePI } from './angle'
+import { PI, RAD2DEG } from './constants'
 import type { FitsHeader } from './fits'
-import { hasKeyword, numericKeyword } from './fits.util'
+import { hasKeyword, numericKeyword, textKeyword } from './fits.util'
+import { clamp } from './math'
 
 const DIRECT_CD_KEY_PATTERN = /^CD\d+_\d+$/
 const PC_KEY_PATTERN = /^PC\d+_\d+$/
@@ -48,6 +50,34 @@ function pcKeyword(header: FitsHeader, i: number, j: number) {
 	return numericKeyword(header, `PC${i}_${j}`, i === j ? 1 : 0)
 }
 
+function hasTanAxes(header: FitsHeader) {
+	const ctype1 = textKeyword(header, 'CTYPE1', '').trim().toUpperCase()
+	const ctype2 = textKeyword(header, 'CTYPE2', '').trim().toUpperCase()
+	return (!ctype1 || ctype1 === 'RA---TAN') && (!ctype2 || ctype2 === 'DEC--TAN')
+}
+
+function tanHeader(header: FitsHeader) {
+	if (!hasTanAxes(header)) return undefined
+
+	const crpix1 = numericKeyword(header, 'CRPIX1', NaN)
+	const crpix2 = numericKeyword(header, 'CRPIX2', NaN)
+	const crval1 = deg(numericKeyword(header, 'CRVAL1', NaN))
+	const crval2 = deg(numericKeyword(header, 'CRVAL2', NaN))
+	const lonpole = deg(numericKeyword(header, 'LONPOLE', 180))
+	const [cd11, cd12, cd21, cd22] = cdMatrix(header)
+	const scale = Math.max(Math.abs(cd11), Math.abs(cd12), Math.abs(cd21), Math.abs(cd22))
+	const determinant = cd11 * cd22 - cd12 * cd21
+	const poleRotation = normalizePI(lonpole - PI)
+	const cosPoleRotation = Math.cos(poleRotation)
+	const sinPoleRotation = Math.sin(poleRotation)
+
+	if (!Number.isFinite(crpix1) || !Number.isFinite(crpix2) || !Number.isFinite(crval1) || !Number.isFinite(crval2) || !Number.isFinite(determinant) || !(scale > 0) || Math.abs(determinant) <= Number.EPSILON * scale * scale) {
+		return undefined
+	}
+
+	return [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation] as const
+}
+
 // Reports whether the header contains enough WCS terms to build a CD matrix directly.
 export function hasCd(header: FitsHeader) {
 	return matrixKind(header) !== 'none'
@@ -92,6 +122,56 @@ export function cdFromCdelt(cdelt1: number, cdelt2: number, crota: Angle, flipH:
 // Applies CDELT scaling to a row-major PC matrix to produce a row-major CD matrix.
 export function pc2cd(pc11: number, pc12: number, pc21: number, pc22: number, cdelt1: number, cdelt2: number) {
 	return [cdelt1 * pc11, cdelt1 * pc12, cdelt2 * pc21, cdelt2 * pc22] as const
+}
+
+// Projects equatorial coordinates onto FITS TAN pixel coordinates using the header WCS.
+export function tanProject(header: FitsHeader, rightAscension: Angle, declination: Angle) {
+	const tan = tanHeader(header)
+	if (!tan) return undefined
+
+	const [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation] = tan
+	const deltaRa = normalizePI(rightAscension - crval1)
+	const sinDec = Math.sin(declination)
+	const cosDec = Math.cos(declination)
+	const sinDec0 = Math.sin(crval2)
+	const cosDec0 = Math.cos(crval2)
+	const sinDeltaRa = Math.sin(deltaRa)
+	const cosDeltaRa = Math.cos(deltaRa)
+	const denominator = sinDec0 * sinDec + cosDec0 * cosDec * cosDeltaRa
+	if (denominator <= 0) return undefined
+
+	const xi = (cosDec * sinDeltaRa) / denominator
+	const eta = (cosDec0 * sinDec - sinDec0 * cosDec * cosDeltaRa) / denominator
+	const xIntermediate = (xi * cosPoleRotation - eta * sinPoleRotation) * RAD2DEG
+	const yIntermediate = (xi * sinPoleRotation + eta * cosPoleRotation) * RAD2DEG
+	const dx = (cd22 * xIntermediate - cd12 * yIntermediate) / determinant
+	const dy = (-cd21 * xIntermediate + cd11 * yIntermediate) / determinant
+	return [crpix1 + dx, crpix2 + dy] as const
+}
+
+// Unprojects FITS TAN pixel coordinates into equatorial coordinates using the header WCS.
+export function tanUnproject(header: FitsHeader, x: number, y: number) {
+	const tan = tanHeader(header)
+	if (!tan) return undefined
+
+	const [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, , cosPoleRotation, sinPoleRotation] = tan
+	const dx = x - crpix1
+	const dy = y - crpix2
+	const xIntermediate = deg(cd11 * dx + cd12 * dy)
+	const yIntermediate = deg(cd21 * dx + cd22 * dy)
+	const xi = xIntermediate * cosPoleRotation + yIntermediate * sinPoleRotation
+	const eta = -xIntermediate * sinPoleRotation + yIntermediate * cosPoleRotation
+	const rho = Math.hypot(xi, eta)
+	if (rho === 0) return [normalizeAngle(crval1), crval2] as const
+
+	const c = Math.atan(rho)
+	const sinC = Math.sin(c)
+	const cosC = Math.cos(c)
+	const sinDec0 = Math.sin(crval2)
+	const cosDec0 = Math.cos(crval2)
+	const declination = Math.asin(clamp(cosC * sinDec0 + (eta * sinC * cosDec0) / rho, -1, 1))
+	const rightAscension = normalizeAngle(crval1 + Math.atan2(xi * sinC, rho * cosDec0 * cosC - eta * sinDec0 * sinC))
+	return [rightAscension, declination] as const
 }
 
 // Checks whether a FITS header key belongs to the WCS keyword set handled by this module.
