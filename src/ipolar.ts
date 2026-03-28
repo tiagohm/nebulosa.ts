@@ -2,6 +2,7 @@ import { type Angle, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, observedToCirs, type RefractionParameters, refractedAltitude } from './astrometry'
 import { ASEC2RAD, PI } from './constants'
 import { eraC2s, eraS2c } from './erfa'
+import { tanProject, tanUnproject } from './fits.wcs'
 import { euclideanDistance, type Point } from './geometry'
 import type { GeographicPosition } from './location'
 import { matMulVec, matTransposeMulVec } from './mat3'
@@ -10,7 +11,6 @@ import type { DetectedStar } from './star.detector'
 import { fitSimilarityTransform, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from './star.matching'
 import { precessionNutationMatrix, type Time } from './time'
 import { type MutVec3, type Vec3, vecAngle, vecCross, vecDot, vecMinus, vecMulScalar, vecNormalizeMut } from './vec3'
-import { Wcs } from './wcs'
 
 export type IPolarPolarAlignmentStage = 'WAITING_FOR_POSITION_1' | 'WAITING_FOR_POSITION_2' | 'INITIAL_AXIS_ESTIMATION' | 'REFINEMENT' | 'COMPLETE' | 'FAILED'
 
@@ -503,10 +503,10 @@ function sampledSimilarityTransform(reference: PlateSolution, current: PlateSolu
 
 	for (let i = 0; i < referenceSamples.length; i++) {
 		const sample = referenceSamples[i]
-		const sky = pixelToSky(reference, sample.x, sample.y)
-		if (sky === false) continue
-		const mapped = skyToPixel(current, sky[0], sky[1])
-		if (mapped === false) continue
+		const sky = tanUnproject(reference, sample.x, sample.y)
+		if (sky === undefined) continue
+		const mapped = tanProject(current, sky[0], sky[1])
+		if (mapped === undefined) continue
 		currentSamples.push(sample)
 		currentMappedReference.push({ x: mapped[0], y: mapped[1] })
 	}
@@ -534,10 +534,10 @@ function referenceFrameSamples(solution: PlateSolution) {
 
 // Computes the nonlinear image-space residual p - T(p) for the fixed-point solver.
 function fixedPointResidual(reference: PlateSolution, current: PlateSolution, point: Readonly<Point>): FixedPointCandidate | false {
-	const sky = pixelToSky(reference, point.x, point.y)
-	if (sky === false) return false
-	const mapped = skyToPixel(current, sky[0], sky[1])
-	if (mapped === false) return false
+	const sky = tanUnproject(reference, point.x, point.y)
+	if (sky === undefined) return false
+	const mapped = tanProject(current, sky[0], sky[1])
+	if (mapped === undefined) return false
 	const mappedPoint = { x: mapped[0], y: mapped[1] }
 	return { x: point.x, y: point.y, mapped: mappedPoint, residual: euclideanDistance(point, mappedPoint) }
 }
@@ -609,31 +609,21 @@ function solveByCoordinateSearch(reference: PlateSolution, current: PlateSolutio
 
 // Converts an image pixel into a normalized J2000/ICRS direction vector.
 function skyVectorFromPixel(solution: PlateSolution, point: Readonly<Point>) {
-	const sky = pixelToSky(solution, point.x, point.y)
-	if (sky === false) throw new Error('pixel does not map to a valid sky position')
+	const sky = tanUnproject(solution, point.x, point.y)
+	if (sky === undefined) throw new Error('pixel does not map to a valid sky position')
 	return eraS2c(sky[0], sky[1])
 }
 
 // Projects an inertial direction into the current frame and returns a best-effort pixel location.
 function pixelFromSkyVector(solution: PlateSolution, vector: Vec3) {
 	const [rightAscension, declination] = eraC2s(...vector)
-	const pixel = skyToPixel(solution, rightAscension, declination)
-	if (pixel !== false) return { x: pixel[0], y: pixel[1] }
+	const pixel = tanProject(solution, rightAscension, declination)
+	if (pixel !== undefined) return { x: pixel[0], y: pixel[1] }
 
-	const center = skyToPixel(solution, solution.rightAscension, solution.declination)
-	if (center !== false) return { x: center[0], y: center[1] }
+	const center = tanProject(solution, solution.rightAscension, solution.declination)
+	if (center !== undefined) return { x: center[0], y: center[1] }
 
 	return { x: solution.widthInPixels * 0.5, y: solution.heightInPixels * 0.5 }
-}
-
-function skyToPixel(solution: PlateSolution, rightAscension: Angle, declination: Angle) {
-	using wcs = new Wcs(solution)
-	return wcs.skyToPix(rightAscension, declination) ?? false
-}
-
-function pixelToSky(solution: PlateSolution, x: number, y: number) {
-	using wcs = new Wcs(solution)
-	return wcs.pixToSky(x, y) ?? false
 }
 
 // Builds an orthonormal tangent basis around the given sky direction.
