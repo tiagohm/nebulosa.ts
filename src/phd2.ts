@@ -308,9 +308,14 @@ export const DEFAULT_PHD2_SETTLE: Readonly<PHD2Settle> = {
 	timeout: 30, // s
 }
 
+interface PendingPHD2Command<T> {
+	readonly promise: PromiseWithResolvers<PHD2CommandResult<T>>
+	readonly timer: ReturnType<typeof setTimeout>
+	readonly command: PHD2Command
+}
+
 export class PHD2Client implements Disposable {
-	// biome-ignore lint/suspicious/noExplicitAny: any
-	private readonly commands = new Map<string, { promise: PromiseWithResolvers<PHD2CommandResult<any>>; timer: any; command: PHD2Command }>()
+	private readonly commands = new Map<string, PendingPHD2Command<unknown>>()
 	private socket?: Bun.Socket
 	private buffer?: Buffer<ArrayBufferLike>
 
@@ -335,7 +340,7 @@ export class PHD2Client implements Disposable {
 				close: (_, error) => {
 					console.info('connection closed:', error?.message)
 					this.options?.handler?.close?.(this, error)
-					this.socket = undefined
+					this.close()
 				},
 			},
 		})
@@ -346,6 +351,12 @@ export class PHD2Client implements Disposable {
 	close() {
 		this.socket?.close()
 		this.socket = undefined
+
+		for (const { timer } of this.commands.values()) {
+			clearTimeout(timer)
+		}
+
+		this.commands.clear()
 	}
 
 	[Symbol.dispose]() {
@@ -360,9 +371,9 @@ export class PHD2Client implements Disposable {
 
 		const promise = Promise.withResolvers<PHD2CommandResult<T>>()
 		const timer = setTimeout(() => promise.resolve({ success: false, error: 'timeout' }), timeout <= 0 ? 15000 : timeout)
-		this.commands.set(id, { promise, timer, command })
+		this.commands.set(id, { promise, timer, command } as PendingPHD2Command<unknown>)
 
-		this.socket.write(Buffer.from(JSON.stringify(command)))
+		this.socket.write(JSON.stringify(command))
 		this.socket.write('\r\n')
 
 		const result = await promise.promise
@@ -399,7 +410,7 @@ export class PHD2Client implements Disposable {
 	}
 
 	dither(amount: number, raOnly: boolean = false, settle: Partial<PHD2Settle> = DEFAULT_PHD2_SETTLE) {
-		settle = Object.assign({}, DEFAULT_PHD2_SETTLE, settle)
+		settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
 		return this.send<number>('shutdown', { amount, raOnly, settle })
 	}
 
@@ -504,9 +515,12 @@ export class PHD2Client implements Disposable {
 	}
 
 	guide(recalibrate: boolean = false, roi: Point & Size = DEFAULT_ROI, settle: PHD2Settle = DEFAULT_PHD2_SETTLE) {
-		settle = Object.assign({}, DEFAULT_PHD2_SETTLE, settle)
-		const { x, y, width, height } = Object.assign({}, DEFAULT_ROI, roi)
+		const x = roi.x ?? DEFAULT_ROI.x
+		const y = roi.y ?? DEFAULT_ROI.y
+		const width = roi.width ?? DEFAULT_ROI.width
+		const height = roi.height ?? DEFAULT_ROI.height
 		const subframe = width && height ? [x, y, width, height] : undefined
+		settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
 		return this.send<number>('guide', { recalibrate, roi: subframe, settle })
 	}
 
