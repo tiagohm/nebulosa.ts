@@ -261,6 +261,14 @@ test('robust linear least squares resists outliers', () => {
 	expect(robust.weights[4]).toBeLessThan(1)
 })
 
+test('linear least squares rejects invalid weights', () => {
+	const design = [new Float64Array([1, 0]), new Float64Array([1, 1])]
+	const target = new Float64Array([1, 3])
+
+	expect(() => linearLeastSquares(design, target, { weights: new Float64Array([1, -1]) })).toThrow('weight at index 1 must be finite and non-negative')
+	expect(() => linearLeastSquares(design, target, { weights: new Float64Array([1, Number.NaN]) })).toThrow('weight at index 1 must be finite and non-negative')
+})
+
 // https://github.com/mljs/levenberg-marquardt/blob/main/src/__tests__/curve.test.js
 describe('Levenberg-Marquardt regression', () => {
 	test('line', () => {
