@@ -5,7 +5,7 @@ import { sphericalDestination, sphericalSeparation } from '../src/geometry'
 import { HnskyCatalog } from '../src/hnsky'
 import { gnomonicUnproject } from '../src/projection'
 import { mulberry32, type Random } from '../src/random'
-import type { StarCatalog, StarCatalogEntry, StarCatalogQuery } from '../src/star.catalog'
+import type { StarCatalog, StarCatalogEntry, StarCatalogQuery, Vertex } from '../src/star.catalog'
 import { crossMatchStars, type StarCrossmatchCameraInfo } from '../src/star.crossmatching'
 import { type DetectedStar, detectStars } from '../src/star.detector'
 import { downloadPerTag } from './download'
@@ -58,11 +58,20 @@ class MockCatalog implements StarCatalog<SyntheticCatalogStar> {
 		switch (query.kind) {
 			case 'cone':
 				return this.queryCone(query.centerRA, query.centerDEC, query.radius)
+			case 'triangle':
+				return this.queryTriangle(query.a, query.b, query.c)
 			case 'box':
 				return this.queryBox(query.minRA, query.maxRA, query.minDEC, query.maxDEC)
 			case 'polygon':
 				return this.queryPolygon(query.vertices)
+			default:
+				return []
 		}
+	}
+
+	// Returns triangle candidates conservatively for interface completeness.
+	queryTriangle(_a: Vertex, _b: Vertex, _c: Vertex) {
+		return [...this.stars]
 	}
 
 	// Queries a possibly wrapping RA/Dec box.

@@ -15,7 +15,7 @@ export type Vertex = readonly [Angle, Angle]
 
 export type StarCatalogQueryKind = 'cone' | 'triangle' | 'box' | 'polygon'
 
-export type StarCatalogGeometryMode = 'spherical' | 'planar-tangent'
+export type StarCatalogGeometryMode = 'spherical' | 'planarTangent'
 
 export interface StarCatalogEntry extends EquatorialCoordinate {
 	readonly id: string
@@ -32,6 +32,13 @@ export interface StarCatalogConeQuery {
 	readonly radius: Angle
 }
 
+export interface StarCatalogTriangleQuery {
+	readonly kind: 'triangle'
+	readonly a: Vertex
+	readonly b: Vertex
+	readonly c: Vertex
+}
+
 export interface StarCatalogBoxQuery {
 	readonly kind: 'box'
 	readonly minRA: Angle
@@ -45,11 +52,12 @@ export interface StarCatalogPolygonQuery {
 	readonly vertices: readonly Vertex[]
 }
 
-export type StarCatalogQuery = StarCatalogConeQuery | StarCatalogBoxQuery | StarCatalogPolygonQuery
+export type StarCatalogQuery = StarCatalogConeQuery | StarCatalogTriangleQuery | StarCatalogBoxQuery | StarCatalogPolygonQuery
 
 export interface StarCatalog<T extends StarCatalogEntry = StarCatalogEntry> {
 	readonly queryRegion: (query: StarCatalogQuery) => Promise<readonly T[]> | readonly T[]
 	readonly queryCone: (centerRA: Angle, centerDEC: Angle, radius: Angle) => Promise<readonly T[]> | readonly T[]
+	readonly queryTriangle: (a: Vertex, b: Vertex, c: Vertex) => Promise<readonly T[]> | readonly T[]
 	readonly queryBox: (minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: Angle) => Promise<readonly T[]> | readonly T[]
 	readonly queryPolygon: (vertices: readonly Vertex[]) => Promise<readonly T[]> | readonly T[]
 	readonly get: (id: string) => Promise<T | undefined> | T | undefined
@@ -80,6 +88,13 @@ interface NormalizedConeQuery extends NormalizedQueryBase {
 	readonly radius: Angle
 }
 
+interface NormalizedTriangleQuery extends NormalizedQueryBase {
+	readonly kind: 'triangle'
+	readonly projectedVertices: readonly Vertex[]
+	readonly tangentCenterRA: Angle
+	readonly tangentCenterDEC: Angle
+}
+
 interface NormalizedBoxQuery extends NormalizedQueryBase {
 	readonly kind: 'box'
 	readonly boxes: readonly StarCatalogRaDecBox[]
@@ -92,7 +107,7 @@ interface NormalizedPolygonQuery extends NormalizedQueryBase {
 	readonly tangentCenterDEC: Angle
 }
 
-export type NormalizedStarCatalogQuery = NormalizedConeQuery | NormalizedBoxQuery | NormalizedPolygonQuery
+export type NormalizedStarCatalogQuery = NormalizedConeQuery | NormalizedTriangleQuery | NormalizedBoxQuery | NormalizedPolygonQuery
 
 // Implements the generic query, filtering, projection, and propagation flow for concrete catalogs.
 export abstract class BaseStarCatalog<T extends StarCatalogEntry> implements StarCatalog<T> {
@@ -121,6 +136,10 @@ export abstract class BaseStarCatalog<T extends StarCatalogEntry> implements Sta
 	// Runs a cone query by adapting it to the region interface.
 	queryCone(centerRA: Angle, centerDEC: Angle, radius: Angle) {
 		return this.queryRegion({ kind: 'cone', centerRA, centerDEC, radius })
+	}
+
+	queryTriangle(a: Vertex, b: Vertex, c: Vertex) {
+		return this.queryRegion({ kind: 'triangle', a, b, c })
 	}
 
 	// Runs an RA/Dec box query by adapting it to the region interface.
@@ -152,6 +171,8 @@ export function normalizeStarCatalogQuery(query: StarCatalogQuery): NormalizedSt
 	switch (query.kind) {
 		case 'cone':
 			return normalizeConeQuery(query)
+		case 'triangle':
+			return normalizeTriangleQuery(query)
 		case 'box':
 			return normalizeBoxQuery(query)
 		case 'polygon':
@@ -240,6 +261,32 @@ function normalizeConeQuery(query: StarCatalogConeQuery): NormalizedConeQuery {
 	}
 }
 
+// Normalizes a triangle query and builds its tangent-plane projection.
+function normalizeTriangleQuery(query: StarCatalogTriangleQuery): NormalizedTriangleQuery {
+	const normalizedVertices = [
+		[normalizeAngle(query.a[0]), validateDeclination(query.a[1])],
+		[normalizeAngle(query.b[0]), validateDeclination(query.b[1])],
+		[normalizeAngle(query.c[0]), validateDeclination(query.c[1])],
+	] as const satisfies readonly Vertex[]
+	const tangentCenterRA = meanRightAscension(normalizedVertices)
+	const tangentCenterDEC = (normalizedVertices[0][1] + normalizedVertices[1][1] + normalizedVertices[2][1]) / 3
+	const projectedVertices = normalizedVertices.map(([ra, dec]) => projectPolygonVertex(ra, dec, tangentCenterRA, tangentCenterDEC))
+	const [minProjectedX, maxProjectedX, minDEC, maxDEC] = polygonBounds(projectedVertices, tangentCenterDEC)
+	const preselectionBoxes = projectedPolygonToBoxes(minProjectedX, maxProjectedX, minDEC, maxDEC, tangentCenterRA, tangentCenterDEC)
+	const wrapAround = preselectionBoxes.length > 1
+
+	return {
+		kind: 'triangle',
+		projectedVertices,
+		tangentCenterRA: tangentCenterRA,
+		tangentCenterDEC: tangentCenterDEC,
+		geometryMode: 'planarTangent',
+		wrapAround,
+		preselectionBoxes,
+		sortAnchor: [tangentCenterRA, tangentCenterDEC],
+	}
+}
+
 // Normalizes a box query and computes its exact non-wrapping pieces.
 function normalizeBoxQuery(query: StarCatalogBoxQuery): NormalizedBoxQuery {
 	const boxes = splitRaBox(query.minRA, query.maxRA, query.minDEC, query.maxDEC)
@@ -285,7 +332,7 @@ function normalizePolygonQuery(query: StarCatalogPolygonQuery): NormalizedPolygo
 		projectedVertices,
 		tangentCenterRA: tangentCenterRA,
 		tangentCenterDEC: tangentCenterDEC,
-		geometryMode: 'planar-tangent',
+		geometryMode: 'planarTangent',
 		wrapAround,
 		preselectionBoxes,
 		sortAnchor: [tangentCenterRA, tangentCenterDEC],
@@ -299,6 +346,7 @@ function matchesNormalizedGeometry(entry: StarCatalogEntry, query: NormalizedSta
 			return sphericalSeparation(query.centerRA, query.centerDEC, entry.rightAscension, entry.declination) <= query.radius + GEOMETRY_EPSILON
 		case 'box':
 			return query.boxes.some((box) => matchesBox(entry.rightAscension, entry.declination, box))
+		case 'triangle':
 		case 'polygon':
 			return pointInProjectedPolygon(projectPolygonVertex(entry.rightAscension, entry.declination, query.tangentCenterRA, query.tangentCenterDEC), query.projectedVertices)
 		default:
