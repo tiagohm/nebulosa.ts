@@ -1,4 +1,7 @@
-import { readCsv, TSV_DELIMITER } from './csv'
+import { type Angle, deg, mas, toDeg } from './angle'
+import { type CsvRow, type ReadCsvOptions, readCsv, TSV_DELIMITER } from './csv'
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type StarCatalogRaDecBox } from './star.catalog'
+import { kilometerPerSecond } from './velocity'
 
 // https://simbad.cds.unistra.fr/simbad/sim-tap/
 
@@ -7,7 +10,7 @@ export const SIMBAD_ALTERNATIVE_URL = 'https://simbad.u-strasbg.fr/'
 
 const SIMBAD_QUERY_PATH = 'simbad/sim-tap/sync'
 
-export interface SimbadQueryOptions extends Omit<RequestInit, 'method' | 'body'> {
+export interface SimbadQueryOptions extends Omit<RequestInit, 'method' | 'body'>, ReadCsvOptions {
 	baseUrl?: string
 	timeout?: number
 }
@@ -30,7 +33,8 @@ export async function simbadQuery(query: string, { baseUrl, timeout = 60000, sig
 	const response = await fetch(uri, { method: 'POST', body, signal, ...options })
 	if (response.status >= 300) return undefined
 	const text = await response.text()
-	return readCsv(text, TSV_DELIMITER)
+	options.delimiter = TSV_DELIMITER
+	return readCsv(text, options)
 }
 
 // https://vizier.cds.unistra.fr/cgi-bin/OType
@@ -221,4 +225,138 @@ export function findSimbadObjectTypeInfoById(id: number): SimbadObjectTypeInfo |
 
 export function findSimbadObjectTypeInfoByCode(code: SimbadObjectCode): SimbadObjectTypeInfo | undefined {
 	return SIMBAD_OBJECT_TYPE_VALUES.find((info) => info.codes.includes(code as never))
+}
+
+const SIMBAD_COLUMNS = 'b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel'
+const SIMBAD_EPOCH = 2000
+const SIMBAD_PM_COS_DEC_EPSILON = 1e-12
+
+export interface SimbadCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
+	readonly epoch: 2000
+	readonly magnitude: number
+	readonly plx?: number
+	readonly type?: SimbadObjectCode
+}
+
+export class SimbadCatalog extends BaseStarCatalog<SimbadCatalogEntry> {
+	readonly options: SimbadQueryOptions
+
+	constructor(options?: SimbadQueryOptions) {
+		super()
+
+		this.options = { ...options, skipFirstLine: true, forceTrim: true }
+	}
+
+	// Retrieves a Simbad source by source identifier.
+	async get(id: string): Promise<SimbadCatalogEntry | undefined> {
+		const rows = await this.queryRows(`b.oid = ${id}`, 1)
+		return rows?.length ? parseSimbadCatalogRow(rows[0]) : undefined
+	}
+
+	// Streams Simbad candidates intersecting the normalized coarse boxes.
+	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery): AsyncIterable<SimbadCatalogEntry> {
+		const rows = await this.queryRows(buildSimbadWhere(query), 5000)
+		if (!rows?.length) return
+
+		for (const row of rows) {
+			const entry = parseSimbadCatalogRow(row)
+			if (entry) yield entry
+		}
+	}
+
+	// Executes one Simbad TSV query with only the columns needed by the catalog API.
+	private async queryRows(where: string, limit?: number) {
+		const top = limit && limit > 0 ? `TOP ${Math.trunc(limit)} ` : ''
+		const query = `SELECT ${top}${SIMBAD_COLUMNS} FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE ${where} ORDER BY V ASC`
+		return await simbadQuery(query, this.options)
+	}
+}
+
+// Parses a raw Simbad TSV row into the generic catalog shape.
+function parseSimbadCatalogRow(row: Readonly<CsvRow>): SimbadCatalogEntry | undefined {
+	const [id, type, ra, dec, magnitude, pmRaCosDecMasYr, pmDecMasYr, plx, radialVelocityKmS] = row
+	if (!id) return undefined
+
+	const rightAscension = deg(+ra)
+	const declination = deg(+dec)
+
+	if (!Number.isFinite(rightAscension) || !Number.isFinite(declination)) {
+		return undefined
+	}
+
+	const rawPmRA = parseSimbadNumber(pmRaCosDecMasYr)
+	let pmRA: Angle | undefined
+
+	if (rawPmRA !== undefined) {
+		const cosDec = Math.cos(declination)
+		if (Math.abs(cosDec) > SIMBAD_PM_COS_DEC_EPSILON) pmRA = mas(rawPmRA / cosDec)
+	}
+
+	const rawPmDEC = parseSimbadNumber(pmDecMasYr)
+	const rawRadialVelocity = parseSimbadNumber(radialVelocityKmS)
+
+	return {
+		id,
+		type: type as never,
+		epoch: SIMBAD_EPOCH,
+		rightAscension,
+		declination,
+		magnitude: +magnitude,
+		pmRA,
+		pmDEC: rawPmDEC !== undefined ? mas(rawPmDEC) : undefined,
+		rv: rawRadialVelocity !== undefined ? kilometerPerSecond(rawRadialVelocity) : undefined,
+		plx: parseSimbadNumber(plx),
+	}
+}
+
+// Builds the ADQL predicate for a normalized query.
+function buildSimbadWhere(query: NormalizedStarCatalogQuery) {
+	const constraints = [buildSimbadGeometryConstraint(query.preselectionBoxes)]
+	const magnitudeConstraint = buildSimbadMagnitudeConstraint(query)
+
+	if (magnitudeConstraint) {
+		constraints.push(magnitudeConstraint)
+	}
+
+	return constraints.join(' AND ')
+}
+
+// Builds the ADQL predicate for one or more coarse RA/Dec boxes.
+function buildSimbadGeometryConstraint(boxes: readonly StarCatalogRaDecBox[]) {
+	const predicates = new Array<string>(boxes.length)
+
+	for (let i = 0; i < boxes.length; i++) {
+		predicates[i] = buildSimbadBoxConstraint(boxes[i])
+	}
+
+	return predicates.length === 1 ? predicates[0] : `(${predicates.join(' OR ')})`
+}
+
+// Converts one coarse preselection box into an ADQL predicate.
+function buildSimbadBoxConstraint(box: StarCatalogRaDecBox) {
+	return `(b.ra >= ${toDeg(box.minRA)} AND b.ra <= ${toDeg(box.maxRA)} AND b.dec >= ${toDeg(box.minDEC)} AND b.dec <= ${toDeg(box.maxDEC)})`
+}
+
+// Pushes optional magnitude limits down to the remote query.
+function buildSimbadMagnitudeConstraint(query: NormalizedStarCatalogQuery) {
+	const constraints: string[] = []
+
+	constraints.push('f.V IS NOT NULL')
+
+	if (query.magnitudeMin !== undefined) {
+		constraints.push(`f.V >= ${query.magnitudeMin}`)
+	}
+
+	if (query.magnitudeMax !== undefined) {
+		constraints.push(`f.V <= ${query.magnitudeMax}`)
+	}
+
+	return constraints.join(' AND ')
+}
+
+// Parses an optional Gaia numeric column.
+function parseSimbadNumber(value?: string) {
+	if (!value) return undefined
+	const num = +value
+	return Number.isFinite(num) ? num : undefined
 }

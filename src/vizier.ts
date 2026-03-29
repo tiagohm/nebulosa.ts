@@ -39,8 +39,9 @@ export async function vizierQuery(query: string, { baseUrl, timeout = 60000, sig
 	return readCsv(text, options)
 }
 
-export interface VizierGaiaCatalogEntry extends Omit<StarCatalogEntry, 'epoch'> {
+export interface VizierGaiaCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
 	readonly epoch: 2000
+	readonly magnitude: number
 }
 
 export class VizierGaiaCatalog extends BaseStarCatalog<VizierGaiaCatalogEntry> {
@@ -52,7 +53,7 @@ export class VizierGaiaCatalog extends BaseStarCatalog<VizierGaiaCatalogEntry> {
 		this.options = { ...options, skipFirstLine: true, forceTrim: true }
 	}
 
-	// Retrieves a Gaia DR3 source by source identifier or designation.
+	// Retrieves a Gaia DR3 source by source identifier.
 	async get(id: string): Promise<VizierGaiaCatalogEntry | undefined> {
 		const rows = await this.queryRows(`Source = ${id}`, 1)
 		return rows?.length ? parseVizierGaiaCatalogRow(rows[0]) : undefined
@@ -70,15 +71,15 @@ export class VizierGaiaCatalog extends BaseStarCatalog<VizierGaiaCatalogEntry> {
 	}
 
 	// Executes one Gaia DR3 TSV query with only the columns needed by the catalog API.
-	private async queryRows(where: string, limit?: number): Promise<readonly CsvRow[] | undefined> {
+	private async queryRows(where: string, limit?: number) {
 		const top = limit && limit > 0 ? `TOP ${Math.trunc(limit)} ` : ''
-		const query = `SELECT ${top}${VIZIER_GAIA_DR3_COLUMNS} FROM ${VIZIER_GAIA_DR3_TABLE} WHERE ${where}`
+		const query = `SELECT ${top}${VIZIER_GAIA_DR3_COLUMNS} FROM ${VIZIER_GAIA_DR3_TABLE} WHERE ${where} ORDER BY GMag ASC`
 		return await vizierQuery(query, this.options)
 	}
 }
 
 // Parses a raw Gaia DR3 TSV row into the generic catalog shape.
-function parseVizierGaiaCatalogRow(row: readonly string[]): VizierGaiaCatalogEntry | undefined {
+function parseVizierGaiaCatalogRow(row: Readonly<CsvRow>): VizierGaiaCatalogEntry | undefined {
 	const [id, raJ2000, decJ2000, gMagnitude, pmRaCosDecMasYr, pmDecMasYr, radialVelocityKmS] = row
 	if (!id) return undefined
 
@@ -105,7 +106,7 @@ function parseVizierGaiaCatalogRow(row: readonly string[]): VizierGaiaCatalogEnt
 		epoch: VIZIER_GAIA_DR3_EPOCH,
 		rightAscension,
 		declination,
-		magnitude: parseVizierGaiaNumber(gMagnitude),
+		magnitude: +gMagnitude,
 		pmRA,
 		pmDEC: rawPmDEC !== undefined ? mas(rawPmDEC) : undefined,
 		rv: rawRadialVelocity !== undefined ? kilometerPerSecond(rawRadialVelocity) : undefined,
@@ -143,6 +144,8 @@ function buildVizierGaiaBoxConstraint(box: StarCatalogRaDecBox) {
 // Pushes optional magnitude limits down to the remote query.
 function buildVizierGaiaMagnitudeConstraint(query: NormalizedStarCatalogQuery) {
 	const constraints: string[] = []
+
+	constraints.push('Gmag IS NOT NULL')
 
 	if (query.magnitudeMin !== undefined) {
 		constraints.push(`Gmag >= ${query.magnitudeMin}`)

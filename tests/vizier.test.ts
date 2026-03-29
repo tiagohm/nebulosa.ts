@@ -41,7 +41,7 @@ describe.serial.skipIf(SKIP)('vizier gaia catalog', () => {
 		expect(star!.magnitude).toBeCloseTo(10.6, 1)
 		expect(formatRA(star!.rightAscension, true)).toBe('08 18 08')
 		expect(formatDEC(star!.declination, true)).toBe('-68 18 47')
-		expect(toMas(star!.pmRA!)).toBeCloseTo(94.794 / Math.cos(-centerDEC), 0)
+		expect(toMas(star!.pmRA!)).toBeCloseTo(94.794 / Math.cos(centerDEC), 0)
 		expect(toMas(star!.pmDEC!)).toBeCloseTo(-340, 0)
 		expect(toKilometerPerSecond(star!.rv!)).toBeCloseTo(-6.1, 0)
 	})
@@ -49,16 +49,19 @@ describe.serial.skipIf(SKIP)('vizier gaia catalog', () => {
 	test('query around cone region', async () => {
 		const stars = await catalog.queryCone(centerRA, centerDEC, radius)
 		expect(stars.find((e) => e.id === sourceId)).toBeDefined()
+		expect(stars[0].magnitude).toBeLessThanOrEqual(stars[stars.length - 1].magnitude)
 	})
 
 	test('query around triangle region', async () => {
 		const stars = await catalog.queryTriangle([centerRA - radius, centerDEC - radius], [centerRA + radius, centerDEC - radius], [centerRA, centerDEC + radius])
 		expect(stars.find((e) => e.id === sourceId)).toBeDefined()
+		expect(stars[0].magnitude).toBeLessThanOrEqual(stars[stars.length - 1].magnitude)
 	})
 
 	test('query around box region', async () => {
 		const stars = await catalog.queryBox(centerRA - radius, centerRA + radius, centerDEC - radius, centerDEC + radius)
 		expect(stars.find((e) => e.id === sourceId)).toBeDefined()
+		expect(stars[0].magnitude).toBeLessThanOrEqual(stars[stars.length - 1].magnitude)
 	})
 
 	test('query around polygon region', async () => {
@@ -69,5 +72,6 @@ describe.serial.skipIf(SKIP)('vizier gaia catalog', () => {
 			[centerRA - radius, centerDEC],
 		])
 		expect(stars.find((e) => e.id === sourceId)).toBeDefined()
+		expect(stars[0].magnitude).toBeLessThanOrEqual(stars[stars.length - 1].magnitude)
 	})
 })
