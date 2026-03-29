@@ -277,6 +277,7 @@ describe('image-based star crossmatching', () => {
 
 		expect(result.success).toBeFalse()
 		expect(result.failureReason).toBeDefined()
+		expect(result.summary.projectedCatalogCount).toBeGreaterThan(0)
 	})
 
 	test('deterministic repeated execution returns the same result', async () => {

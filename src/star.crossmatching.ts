@@ -135,6 +135,11 @@ interface MatchAttempt<S extends StarCatalogEntry> {
 	readonly solution: StarCrossmatchSolution
 }
 
+interface MatchAttemptResolution<S extends StarCatalogEntry> {
+	readonly projectedCatalogCount: number
+	readonly attempt?: MatchAttempt<S>
+}
+
 // Matches detected image stars against a queried catalog region and returns an approximate image-center RA/Dec.
 export async function crossMatchStars<S extends StarCatalogEntry>(detectedStars: readonly DetectedStar[], catalog: StarCatalog<S>, options: StarCrossmatchOptions): Promise<StarCrossmatchResult<S>> {
 	const resolved = resolveStarCrossmatchOptions(options)
@@ -155,8 +160,9 @@ export async function crossMatchStars<S extends StarCatalogEntry>(detectedStars:
 	let lastProjectedCatalogCount = 0
 
 	for (let iteration = 0; iteration <= resolved.refinementIterations; iteration++) {
-		const attempt = solveProjectedCatalogMatch(detectedStars, catalogStars, centerRA, centerDEC, resolved)
-		lastProjectedCatalogCount = attempt?.projectedCatalogStars.length ?? lastProjectedCatalogCount
+		const resolution = solveProjectedCatalogMatch(detectedStars, catalogStars, centerRA, centerDEC, resolved)
+		const attempt = resolution.attempt
+		lastProjectedCatalogCount = resolution.projectedCatalogCount
 		if (attempt === undefined) break
 		if (bestAttempt === undefined || isBetterMatchAttempt(attempt, bestAttempt)) bestAttempt = attempt
 
@@ -222,28 +228,31 @@ function resolveStarMatchingConfig(config: StarMatchingConfig | undefined, maxCa
 }
 
 // Solves one geometric match attempt around the given projection center.
-function solveProjectedCatalogMatch<S extends StarCatalogEntry>(detectedStars: readonly DetectedStar[], catalogStars: readonly S[], projectionCenterRA: Angle, projectionCenterDEC: Angle, options: ResolvedStarCrossmatchOptions): MatchAttempt<S> | undefined {
+function solveProjectedCatalogMatch<S extends StarCatalogEntry>(detectedStars: readonly DetectedStar[], catalogStars: readonly S[], projectionCenterRA: Angle, projectionCenterDEC: Angle, options: ResolvedStarCrossmatchOptions): MatchAttemptResolution<S> {
 	const projectedCatalogStars = projectCatalogStars(catalogStars, projectionCenterRA, projectionCenterDEC, options)
-	if (projectedCatalogStars.length < options.matchingConfig.minStars) return undefined
+	if (projectedCatalogStars.length < options.matchingConfig.minStars) return { projectedCatalogCount: projectedCatalogStars.length }
 
 	const referenceStars = new Array<DetectedStar>(projectedCatalogStars.length)
 	for (let index = 0; index < projectedCatalogStars.length; index++) referenceStars[index] = projectedCatalogStars[index].detectedStar
 	const starMatch = matchStars(referenceStars, detectedStars, options.matchingConfig)
-	if (!starMatch.success) return undefined
+	if (!starMatch.success) return { projectedCatalogCount: projectedCatalogStars.length }
 
 	const transform = starMatchingTransform(starMatch)
-	if (transform === undefined) return undefined
+	if (transform === undefined) return { projectedCatalogCount: projectedCatalogStars.length }
 
 	return {
-		projectionCenterRA,
-		projectionCenterDEC,
-		projectedCatalogStars,
-		starMatch,
-		transform,
-		imageCenterX: options.camera.width * 0.5,
-		imageCenterY: options.camera.height * 0.5,
-		nominalPixelsPerRadian: options.nominalPixelsPerRadian,
-		solution: buildStarCrossmatchSolution(transform, projectionCenterRA, projectionCenterDEC, options),
+		projectedCatalogCount: projectedCatalogStars.length,
+		attempt: {
+			projectionCenterRA,
+			projectionCenterDEC,
+			projectedCatalogStars,
+			starMatch,
+			transform,
+			imageCenterX: options.camera.width * 0.5,
+			imageCenterY: options.camera.height * 0.5,
+			nominalPixelsPerRadian: options.nominalPixelsPerRadian,
+			solution: buildStarCrossmatchSolution(transform, projectionCenterRA, projectionCenterDEC, options),
+		},
 	}
 }
 
