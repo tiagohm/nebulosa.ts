@@ -138,11 +138,12 @@ interface MatchAttempt<S extends StarCatalogEntry> {
 // Matches detected image stars against a queried catalog region and returns an approximate image-center RA/Dec.
 export async function crossMatchStars<S extends StarCatalogEntry>(detectedStars: readonly DetectedStar[], catalog: StarCatalog<S>, options: StarCrossmatchOptions): Promise<StarCrossmatchResult<S>> {
 	const resolved = resolveStarCrossmatchOptions(options)
-	const catalogStars = await catalog.queryCone(resolved.centerRA, resolved.centerDEC, resolved.radius)
 
 	if (detectedStars.length === 0) {
-		return failureStarCrossmatchResult(detectedStars, catalogStars, 0, 'no detected stars')
+		return failureStarCrossmatchResult(detectedStars, [], 0, 'no detected stars')
 	}
+
+	const catalogStars = await catalog.queryCone(resolved.centerRA, resolved.centerDEC, resolved.radius)
 
 	if (catalogStars.length === 0) {
 		return failureStarCrossmatchResult(detectedStars, catalogStars, 0, 'no catalog stars in query region')
