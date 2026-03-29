@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { deg, formatDEC, formatRA, normalizeAngle, parseAngle } from '../src/angle'
-import { eclipticToEquatorial, equatorEcliptic, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalatic, equatorialToJ2000, galacticToEquatorial, meridianEcliptic, meridianEquator, zenith } from '../src/coordinate'
+import { angularDistance, eclipticToEquatorial, equatorEcliptic, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalatic, equatorialToJ2000, galacticToEquatorial, meridianEcliptic, meridianEquator, zenith } from '../src/coordinate'
 import { timeNormalize, timeYMDHMS } from '../src/time'
 
 const TIME = timeYMDHMS(2026, 1, 4, 23, 30, 0)
@@ -92,4 +92,24 @@ test('equator - ecliptic', () => {
 
 	expect(formatRA(rightAscension)).toBe('00 00 00.00')
 	expect(formatDEC(declination)).toBe('+00 00 00.00')
+})
+
+test('angular distance is zero for identical coordinates', () => {
+	expect(angularDistance(deg(15), deg(-22), deg(15), deg(-22))).toBeCloseTo(0, 15)
+})
+
+test('angular distance is ninety degrees for equatorial quadrature', () => {
+	expect(angularDistance(0, 0, deg(90), 0)).toBeCloseTo(deg(90), 15)
+})
+
+test('angular distance handles RA wrap-around near zero', () => {
+	expect(angularDistance(deg(359.5), 0, deg(0.5), 0)).toBeCloseTo(deg(1), 14)
+})
+
+test('angular distance is invariant to RA at the celestial pole', () => {
+	expect(angularDistance(0, deg(90), deg(137), deg(90))).toBeCloseTo(0, 15)
+})
+
+test('angular distance is one hundred eighty degrees for antipodal poles', () => {
+	expect(angularDistance(0, deg(90), deg(13), deg(-90))).toBeCloseTo(Math.PI, 15)
 })
