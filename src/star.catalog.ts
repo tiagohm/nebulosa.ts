@@ -19,7 +19,7 @@ export type StarCatalogGeometryMode = 'spherical' | 'planar-tangent'
 
 export interface StarCatalogEntry extends EquatorialCoordinate {
 	readonly id: string
-	readonly epoch: number | `B${number}`
+	readonly epoch?: number | `B${number}`
 	readonly magnitude?: number
 	readonly pmRA?: Angle // per year
 	readonly pmDEC?: Angle // per year

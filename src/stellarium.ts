@@ -346,7 +346,7 @@ export async function* readNamesDat(source: Source & Seekable) {
 	}
 }
 
-export class StellariumCatalog extends HealpixIndex<string, StellariumCatalogEntry> {
+export class StellariumCatalog extends HealpixIndex<StellariumCatalogEntry> {
 	constructor({ nside = 8, ordering }: Partial<HealpixIndexOptions> = {}) {
 		super({ nside, ordering })
 	}

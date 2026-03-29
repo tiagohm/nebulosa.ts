@@ -34,5 +34,5 @@ test('read', async () => {
 	const catalog = new SaoCatalog()
 	catalog.addMany(entries)
 
-	expect(catalog.queryCircle(parseAngle('05h 35 16.8')!, parseAngle('-05 23 24')!, deg(1))).toHaveLength(54)
+	expect(catalog.queryCone(parseAngle('05h 35 16.8')!, parseAngle('-05 23 24')!, deg(1))).toHaveLength(54)
 })

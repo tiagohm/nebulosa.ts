@@ -1,8 +1,9 @@
 import { type Angle, normalizeAngle } from './angle'
-import { PI, PIOVERTWO } from './constants'
+import { PI, PIOVERTWO, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
+import { eraS2c } from './erfa'
 import { clamp, pmod } from './math'
-import type { Vertex } from './star.catalog'
+import { type StarCatalog, type StarCatalogEntry, type StarCatalogQuery, type StarCatalogRaDecBox, splitRaBox, type Vertex } from './star.catalog'
 import { type MutVec3, type Vec3, vecCross, vecDot, vecNegateMut, vecNormalize, vecTripleProduct } from './vec3'
 
 const HEALPIX_MAX_NSIDE = 2 ** 24
@@ -10,14 +11,13 @@ const HEALPIX_FACE_COUNT = 12
 const EQUATORIAL_Z_LIMIT = 2 / 3
 const COVER_BOUND_FACTOR = PI / 2
 const EPSILON = 1e-14
+const BOX_EPSILON = 1e-12
 const VERTEX_EPSILON = 1e-12
 
 const JRLL = [2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4] as const
 const JPLL = [1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7] as const
 
 export type HealpixOrdering = 'nested' | 'ring'
-
-export type HealpixVertexInput = Vertex | Vec3
 
 export interface HealpixCoverOptions {
 	readonly targetNside?: number
@@ -32,8 +32,8 @@ export interface HealpixIndexOptions {
 	readonly ordering?: HealpixOrdering
 }
 
-export interface HealpixInsertObject<T, M = unknown> extends Readonly<EquatorialCoordinate> {
-	readonly id: T
+export interface HealpixInsertObject<M = unknown> extends Readonly<EquatorialCoordinate> {
+	readonly id: string
 	readonly metadata?: M
 }
 
@@ -42,8 +42,7 @@ interface HealpixRegion {
 	readonly edgeNormals: readonly Vec3[]
 }
 
-interface HealpixObject<T, M> extends EquatorialCoordinate {
-	readonly id: T
+interface HealpixObject<M> extends StarCatalogEntry {
 	metadata?: M
 	readonly vector: MutVec3
 	pixel: number
@@ -63,7 +62,7 @@ export function coordToPixel(nside: number, rightAscension: number, declination:
 	validateNside(nside)
 	const normalizedRA = normalizeLongitude(rightAscension)
 	const normalizedDEC = normalizeLatitude(declination)
-	const nestedPixel = vectorToPixel(nside, lonLatToVec(normalizedRA, normalizedDEC))
+	const nestedPixel = vectorToPixel(nside, eraS2c(normalizedRA, normalizedDEC))
 	return ordering === 'nested' ? nestedPixel : nestedToRing(nside, nestedPixel)
 }
 
@@ -101,11 +100,11 @@ export function ringToNested(nside: number, pixel: number) {
 }
 
 // Computes a conservative circle cover in nested ordering.
-export function circleToPixels(nside: number, centerLongitude: number, centerLatitude: number, radius: number, options: HealpixCoverOptions = {}) {
+export function circleToPixels(nside: number, centerLongitude: number, centerLatitude: number, radius: number, options?: HealpixCoverOptions) {
 	validateNside(nside)
 	validateRadius(radius)
 
-	const center = lonLatToVec(normalizeLongitude(centerLongitude), normalizeLatitude(centerLatitude))
+	const center = eraS2c(normalizeLongitude(centerLongitude), normalizeLatitude(centerLatitude))
 
 	return coverPixels(nside, options, {
 		intersects(centerPoint: Vec3, bound: number) {
@@ -115,7 +114,7 @@ export function circleToPixels(nside: number, centerLongitude: number, centerLat
 }
 
 // Computes a conservative triangle cover in nested ordering.
-export function triangleToPixels(nside: number, a: HealpixVertexInput, b: HealpixVertexInput, c: HealpixVertexInput, options: HealpixCoverOptions = {}) {
+export function triangleToPixels(nside: number, a: Vertex, b: Vertex, c: Vertex, options?: HealpixCoverOptions) {
 	validateNside(nside)
 	const region = buildRegion([a, b, c], 'triangle')
 
@@ -127,7 +126,7 @@ export function triangleToPixels(nside: number, a: HealpixVertexInput, b: Healpi
 }
 
 // Computes a conservative convex polygon cover in nested ordering.
-export function polygonToPixels(nside: number, vertices: readonly HealpixVertexInput[], options: HealpixCoverOptions = {}) {
+export function polygonToPixels(nside: number, vertices: readonly Vertex[], options?: HealpixCoverOptions) {
 	validateNside(nside)
 	const region = buildRegion(vertices, 'polygon')
 
@@ -139,12 +138,12 @@ export function polygonToPixels(nside: number, vertices: readonly HealpixVertexI
 }
 
 // HEALPix spatial index for spherical coordinates.
-export class HealpixIndex<T, M = unknown> {
+export class HealpixIndex<M = unknown> implements StarCatalog {
 	readonly nside: number
 	readonly ordering: HealpixOrdering
 
-	#pixelBuckets = new Map<number, HealpixObject<T, M>[]>()
-	#entriesById = new Map<T, HealpixObject<T, M>>()
+	#pixelBuckets = new Map<number, HealpixObject<M>[]>()
+	#entriesById = new Map<string, HealpixObject<M>>()
 
 	// Creates a new index instance.
 	constructor(options: HealpixIndexOptions) {
@@ -175,7 +174,7 @@ export class HealpixIndex<T, M = unknown> {
 	}
 
 	// Inserts a single object into the index.
-	add(id: T, rightAscension: number, declination: number, metadata?: M) {
+	add(id: string, rightAscension: number, declination: number, metadata?: M) {
 		const updated = this.update(id, rightAscension, declination, metadata)
 
 		if (updated === undefined) {
@@ -186,8 +185,8 @@ export class HealpixIndex<T, M = unknown> {
 	}
 
 	// Inserts many objects after validating the whole batch first.
-	addMany(objects: readonly HealpixInsertObject<T, M>[]) {
-		const inserted = new Array<HealpixObject<T, M>>(objects.length)
+	addMany(objects: readonly HealpixInsertObject<M>[]) {
+		const inserted = new Array<HealpixObject<M>>(objects.length)
 		let i = 0
 
 		for (const object of objects) {
@@ -197,17 +196,22 @@ export class HealpixIndex<T, M = unknown> {
 		return inserted
 	}
 
+	// Retrieves a object by identifier.
+	get(id: string) {
+		return this.#entriesById.get(id)
+	}
+
 	// Removes an object from the index.
-	remove(id: T) {
-		const entry = this.#entriesById.get(id)
+	remove(id: string) {
+		const entry = this.get(id)
 		if (!entry) return false
 		this.#removeEntry(entry)
 		return true
 	}
 
 	// Updates an object's coordinates and optional metadata.
-	update(id: T, rightAscension: Angle, declination: Angle, metadata?: M) {
-		const entry = this.#entriesById.get(id)
+	update(id: string, rightAscension: Angle, declination: Angle, metadata?: M) {
+		const entry = this.get(id)
 
 		if (!entry) return undefined
 
@@ -219,7 +223,7 @@ export class HealpixIndex<T, M = unknown> {
 		entry.declination = normalizedDEC
 		lonLatToVecInto(normalizedRA, normalizedDEC, entry.vector)
 
-		entry.metadata = metadata
+		if (metadata !== undefined) entry.metadata = metadata
 
 		if (nextPixel !== entry.pixel) {
 			this.#moveEntry(entry, nextPixel)
@@ -235,12 +239,12 @@ export class HealpixIndex<T, M = unknown> {
 	}
 
 	// Queries objects inside a spherical cap.
-	queryCircle(centerRA: Angle, centerDEC: Angle, radius: Angle, options: HealpixCoverOptions = {}) {
+	queryCone(centerRA: Angle, centerDEC: Angle, radius: Angle, options?: HealpixCoverOptions) {
 		validateRadius(radius)
 
 		const normalizedRA = normalizeLongitude(centerRA)
 		const normalizedDEC = normalizeLatitude(centerDEC)
-		const center = lonLatToVec(normalizedRA, normalizedDEC)
+		const center = eraS2c(normalizedRA, normalizedDEC)
 		const radiusCos = Math.cos(radius)
 		const pixels = circleToPixels(this.nside, normalizedRA, normalizedDEC, radius, withIndexCoverOptions(options, this.nside, this.ordering))
 
@@ -250,24 +254,74 @@ export class HealpixIndex<T, M = unknown> {
 	}
 
 	// Queries objects inside a spherical triangle.
-	queryTriangle(a: HealpixVertexInput, b: HealpixVertexInput, c: HealpixVertexInput, options: HealpixCoverOptions = {}) {
+	queryTriangle(a: Vertex, b: Vertex, c: Vertex, options?: HealpixCoverOptions) {
 		const region = buildRegion([a, b, c], 'triangle')
 		const pixels = triangleToPixels(this.nside, a, b, c, withIndexCoverOptions(options, this.nside, this.ordering))
 		return this.#collectMatches(pixels, (entry) => pointInRegion(entry.vector, region))
 	}
 
 	// Queries objects inside a convex spherical polygon.
-	queryPolygon(vertices: readonly HealpixVertexInput[], options: HealpixCoverOptions = {}) {
+	queryPolygon(vertices: readonly Vertex[], options?: HealpixCoverOptions) {
 		const region = buildRegion(vertices, 'polygon')
 		const pixels = polygonToPixels(this.nside, vertices, withIndexCoverOptions(options, this.nside, this.ordering))
 		return this.#collectMatches(pixels, (entry) => pointInRegion(entry.vector, region))
 	}
 
+	// Queries objects inside an RA/Dec box.
+	queryBox(minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: Angle, options?: HealpixCoverOptions) {
+		const boxes = splitRaBox(minRA, maxRA, minDEC, maxDEC)
+		const coverOptions = withIndexCoverOptions(options, this.nside, this.ordering)
+
+		if (boxes.length === 1) {
+			const box = boxes[0]
+			const pixels = boxToPixels(this.nside, box, coverOptions)
+			return this.#collectMatches(pixels, (entry) => matchesBox(entry.rightAscension, entry.declination, box))
+		}
+
+		const pixels: number[] = []
+		const seenPixels = new Set<number>()
+
+		for (let i = 0; i < boxes.length; i++) {
+			const covered = boxToPixels(this.nside, boxes[i], coverOptions)
+
+			for (let j = 0; j < covered.length; j++) {
+				const pixel = covered[j]
+
+				if (seenPixels.has(pixel)) continue
+
+				seenPixels.add(pixel)
+				pixels.push(pixel)
+			}
+		}
+
+		return this.#collectMatches(pixels, (entry) => matchesAnyBox(entry.rightAscension, entry.declination, boxes))
+	}
+
+	// Queries objects inside a region.
+	queryRegion(query: StarCatalogQuery, options?: HealpixCoverOptions) {
+		switch (query.kind) {
+			case 'cone':
+				return this.queryCone(query.centerRA, query.centerDEC, query.radius, options)
+			case 'box':
+				return this.queryBox(query.minRA, query.maxRA, query.minDEC, query.maxDEC, options)
+			case 'polygon':
+				return this.queryPolygon(query.vertices, options)
+			default:
+				return []
+		}
+	}
+
+	*streamRegion(query: StarCatalogQuery) {
+		for (const entry of this.queryRegion(query)) {
+			yield entry
+		}
+	}
+
 	// Inserts a validated object into the index.
-	#insertNormalized(id: T, rightAscension: number, declination: number, metadata?: M): Readonly<HealpixObject<T, M>> {
+	#insertNormalized(id: string, rightAscension: number, declination: number, metadata?: M): Readonly<HealpixObject<M>> {
 		const pixel = coordToPixel(this.nside, rightAscension, declination, this.ordering)
 		const bucket = this.#pixelBuckets.get(pixel) ?? []
-		const entry: HealpixObject<T, M> = { id, rightAscension, declination, metadata, vector: lonLatToVec(rightAscension, declination), pixel, bucketIndex: bucket.length }
+		const entry: HealpixObject<M> = { id, rightAscension, declination, metadata, vector: eraS2c(rightAscension, declination), pixel, bucketIndex: bucket.length }
 
 		bucket.push(entry)
 		this.#pixelBuckets.set(pixel, bucket)
@@ -277,7 +331,7 @@ export class HealpixIndex<T, M = unknown> {
 	}
 
 	// Moves an existing entry between buckets.
-	#moveEntry(entry: HealpixObject<T, M>, nextPixel: number) {
+	#moveEntry(entry: HealpixObject<M>, nextPixel: number) {
 		this.#detachEntry(entry)
 
 		const bucket = this.#pixelBuckets.get(nextPixel) ?? []
@@ -288,13 +342,13 @@ export class HealpixIndex<T, M = unknown> {
 	}
 
 	// Removes an existing entry from all internal tables.
-	#removeEntry(entry: HealpixObject<T, M>) {
+	#removeEntry(entry: HealpixObject<M>) {
 		this.#detachEntry(entry)
 		this.#entriesById.delete(entry.id)
 	}
 
 	// Detaches an entry from its current bucket using swap-remove.
-	#detachEntry(entry: HealpixObject<T, M>) {
+	#detachEntry(entry: HealpixObject<M>) {
 		const bucket = this.#pixelBuckets.get(entry.pixel)
 		if (!bucket) return
 
@@ -314,8 +368,8 @@ export class HealpixIndex<T, M = unknown> {
 	}
 
 	// Collects query matches from candidate pixels.
-	#collectMatches(pixels: readonly number[], predicate: (entry: HealpixObject<T, M>) => boolean): readonly Readonly<HealpixObject<T, M>>[] {
-		const matches: HealpixObject<T, M>[] = []
+	#collectMatches(pixels: readonly number[], predicate: (entry: HealpixObject<M>) => boolean): readonly Readonly<HealpixObject<M>>[] {
+		const matches: HealpixObject<M>[] = []
 
 		for (const pixel of pixels) {
 			const bucket = this.#pixelBuckets.get(pixel)
@@ -336,8 +390,8 @@ export class HealpixIndex<T, M = unknown> {
 }
 
 // Forces index query covers to match the index resolution and ordering.
-function withIndexCoverOptions(options: HealpixCoverOptions, nside: number, ordering: HealpixOrdering): HealpixCoverOptions {
-	if ((options.ordering === ordering || (options.ordering === undefined && ordering === 'nested')) && (options.targetNside === nside || options.targetNside === undefined)) return options
+function withIndexCoverOptions(options: HealpixCoverOptions | undefined, nside: number, ordering: HealpixOrdering): HealpixCoverOptions {
+	if (options !== undefined && (options.ordering === ordering || (options.ordering === undefined && ordering === 'nested')) && (options.targetNside === nside || options.targetNside === undefined)) return options
 	return { ...options, ordering, targetNside: nside }
 }
 
@@ -384,12 +438,6 @@ function normalizeLatitude(declination: number) {
 	}
 
 	return clamp(declination, -PIOVERTWO, PIOVERTWO)
-}
-
-// Converts spherical coordinates to a unit vector.
-function lonLatToVec(rightAscension: number, declination: number) {
-	const cosDEC = Math.cos(declination)
-	return [cosDEC * Math.cos(rightAscension), cosDEC * Math.sin(rightAscension), Math.sin(declination)] as MutVec3
 }
 
 // Writes spherical coordinates into an existing mutable unit vector.
@@ -601,7 +649,7 @@ function faceXYToLonLat(face: number, x: number, y: number, nside: number) {
 // Converts a face-local position to a unit vector.
 function faceXYToVec(face: number, x: number, y: number, nside: number) {
 	const [rightAscension, declination] = faceXYToLonLat(face, x, y, nside)
-	return lonLatToVec(rightAscension, declination)
+	return eraS2c(rightAscension, declination)
 }
 
 // Interleaves the X and Y nested bits.
@@ -644,7 +692,7 @@ function nsideToOrder(nside: number) {
 }
 
 // Builds a convex spherical region from coordinate or vector vertices.
-function buildRegion(vertices: readonly HealpixVertexInput[], label: 'triangle' | 'polygon'): HealpixRegion {
+function buildRegion(vertices: readonly Vertex[], label: 'triangle' | 'polygon'): HealpixRegion {
 	const cleaned = normalizeRegionVertices(vertices)
 
 	if (cleaned.length < 3) {
@@ -713,7 +761,7 @@ function buildRegion(vertices: readonly HealpixVertexInput[], label: 'triangle' 
 }
 
 // Normalizes region vertices and removes repeated closing vertices.
-function normalizeRegionVertices(vertices: readonly HealpixVertexInput[]) {
+function normalizeRegionVertices(vertices: readonly Vertex[]) {
 	const normalized: Vec3[] = []
 
 	for (const vertex of vertices) {
@@ -734,12 +782,8 @@ function normalizeRegionVertices(vertices: readonly HealpixVertexInput[]) {
 }
 
 // Normalizes a vertex input into a unit vector.
-function normalizeVertexInput(vertex: HealpixVertexInput) {
-	if (vertex.length === 2) {
-		return lonLatToVec(normalizeLongitude(vertex[0]), normalizeLatitude(vertex[1]))
-	}
-
-	return vecNormalize(vertex)
+function normalizeVertexInput(vertex: Vertex) {
+	return eraS2c(normalizeLongitude(vertex[0]), normalizeLatitude(vertex[1]))
 }
 
 // Tests whether two unit vectors represent the same spherical position.
@@ -800,13 +844,72 @@ function pointToArcDistance(point: Vec3, start: Vec3, end: Vec3) {
 	return Math.min(angularDistance(point, start), angularDistance(point, end))
 }
 
+// Converts an RA/Dec box to a conservative HEALPix cover.
+function boxToPixels(nside: number, box: StarCatalogRaDecBox, options: HealpixCoverOptions | undefined) {
+	const fullRA = box.maxRA - box.minRA >= TAU - BOX_EPSILON
+
+	return coverPixels(nside, options, {
+		intersects(centerPoint: Vec3, bound: number) {
+			const centerDEC = Math.asin(clamp(centerPoint[2], -1, 1))
+
+			if (!declinationBandIntersects(centerDEC, bound, box.minDEC, box.maxDEC)) {
+				return false
+			}
+
+			if (fullRA) return true
+
+			const centerRA = normalizeAngle(Math.atan2(centerPoint[1], centerPoint[0]))
+			return raIntervalIntersects(centerRA, centerDEC, bound, box.minRA, box.maxRA)
+		},
+	})
+}
+
+// Checks whether a spherical cap intersects a declination band.
+function declinationBandIntersects(centerDEC: number, bound: number, minDEC: number, maxDEC: number) {
+	return centerDEC + bound >= minDEC - BOX_EPSILON && centerDEC - bound <= maxDEC + BOX_EPSILON
+}
+
+// Checks whether a spherical cap intersects a non-wrapping RA interval.
+function raIntervalIntersects(centerRA: number, centerDEC: number, bound: number, minRA: number, maxRA: number) {
+	if (centerRA + BOX_EPSILON >= minRA && centerRA <= maxRA + BOX_EPSILON) {
+		return true
+	}
+
+	return Math.min(distanceToMeridian(centerRA, centerDEC, minRA), distanceToMeridian(centerRA, centerDEC, maxRA)) <= bound + BOX_EPSILON
+}
+
+// Computes the angular distance from a point to a meridian great circle.
+function distanceToMeridian(rightAscension: number, declination: number, meridian: number) {
+	const cosDEC = Math.cos(declination)
+	if (cosDEC <= BOX_EPSILON) return 0
+	const delta = normalizeAngle(rightAscension - meridian)
+	const wrappedDelta = delta > PI ? TAU - delta : delta
+	return Math.asin(clamp(Math.sin(wrappedDelta) * cosDEC, -1, 1))
+}
+
+// Checks whether coordinates fall inside a non-wrapping RA/Dec box.
+function matchesBox(rightAscension: number, declination: number, box: StarCatalogRaDecBox) {
+	return rightAscension + BOX_EPSILON >= box.minRA && rightAscension <= box.maxRA + BOX_EPSILON && declination + BOX_EPSILON >= box.minDEC && declination <= box.maxDEC + BOX_EPSILON
+}
+
+// Checks whether coordinates fall inside any normalized RA/Dec box.
+function matchesAnyBox(rightAscension: number, declination: number, boxes: readonly StarCatalogRaDecBox[]) {
+	for (let i = 0; i < boxes.length; i++) {
+		if (matchesBox(rightAscension, declination, boxes[i])) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Recursively covers a region with nested pixels.
-function coverPixels(nside: number, options: HealpixCoverOptions, tester: { intersects(center: Vec3, bound: number): boolean }) {
-	const targetNside = options.targetNside ?? nside
+function coverPixels(nside: number, options: HealpixCoverOptions | undefined, tester: { intersects(center: Vec3, bound: number): boolean }) {
+	const targetNside = options?.targetNside ?? nside
 	validateNside(targetNside)
 
 	const order = nsideToOrder(targetNside)
-	const maxDepth = options.maxDepth === undefined ? order : validateMaxDepth(options.maxDepth, order)
+	const maxDepth = options?.maxDepth === undefined ? order : validateMaxDepth(options.maxDepth, order)
 	const pixels: number[] = []
 	const state: HealpixCoverState = {
 		nside: targetNside,
@@ -820,7 +923,7 @@ function coverPixels(nside: number, options: HealpixCoverOptions, tester: { inte
 		coverFace(state, face, 0, 0, targetNside, 0)
 	}
 
-	if (options.ordering === 'ring') {
+	if (options?.ordering === 'ring') {
 		for (let i = 0; i < pixels.length; i++) {
 			pixels[i] = nestedToRing(targetNside, pixels[i])
 		}

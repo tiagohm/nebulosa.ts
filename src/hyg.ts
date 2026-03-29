@@ -51,7 +51,7 @@ function processRow(row: CsvRow): HygCatalogEntry {
 	return { id, epoch: 2000, hip, hd, hr, bayer, flamsteed, name, rightAscension, declination, pmRA, pmDEC, rv, magnitude, distance, spType, constellation }
 }
 
-export class HygCatalog extends HealpixIndex<string, HygCatalogEntry> {
+export class HygCatalog extends HealpixIndex<HygCatalogEntry> {
 	constructor({ nside = 8, ordering }: Partial<HealpixIndexOptions> = {}) {
 		super({ nside, ordering })
 	}

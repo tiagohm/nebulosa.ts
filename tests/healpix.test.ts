@@ -40,7 +40,7 @@ test('pixel boundary vertices stay within valid spherical ranges', () => {
 })
 
 test('circle query matches brute-force filtering on a fixed catalog', () => {
-	const index = new HealpixIndex<string, { readonly label: string }>({ nside: 8 })
+	const index = new HealpixIndex<{ readonly label: string }>({ nside: 8 })
 	const catalog: { readonly id: string; readonly longitude: number; readonly latitude: number }[] = []
 
 	let counter = 0
@@ -66,7 +66,7 @@ test('circle query matches brute-force filtering on a fixed catalog', () => {
 			.map((object) => object.id)
 			.sort()
 
-		expect(idsOf(index.queryCircle(longitude, latitude, radius))).toEqual(bruteForce)
+		expect(idsOf(index.queryCone(longitude, latitude, radius))).toEqual(bruteForce)
 	}
 })
 
@@ -84,7 +84,7 @@ test('ring ordering returns the same circle matches as nested ordering', () => {
 		}
 	}
 
-	expect(idsOf(ringIndex.queryCircle(deg(350), deg(10), deg(30)))).toEqual(idsOf(nestedIndex.queryCircle(deg(350), deg(10), deg(30))))
+	expect(idsOf(ringIndex.queryCone(deg(350), deg(10), deg(30)))).toEqual(idsOf(nestedIndex.queryCone(deg(350), deg(10), deg(30))))
 
 	const ringPixels = circleToPixels(8, deg(350), deg(10), deg(30), { ordering: 'ring' })
 
@@ -102,7 +102,7 @@ test('circle query is boundary inclusive', () => {
 	index.add('edge', longitude, latitude)
 	index.add('outside', longitude, latitude + deg(0.5))
 
-	expect(idsOf(index.queryCircle(0, 0, radius))).toEqual(['center', 'edge'])
+	expect(idsOf(index.queryCone(0, 0, radius))).toEqual(['center', 'edge'])
 })
 
 test('index queries ignore external target nside mismatches during bucket lookup', () => {
@@ -111,8 +111,8 @@ test('index queries ignore external target nside mismatches during bucket lookup
 	index.add('inside', deg(5), deg(2))
 	index.add('outside', deg(90), deg(45))
 
-	expect(idsOf(index.queryCircle(0, 0, deg(10), { targetNside: 16 }))).toEqual(['inside'])
-	expect(idsOf(index.queryCircle(0, 0, deg(10), { targetNside: 4 }))).toEqual(['inside'])
+	expect(idsOf(index.queryCone(0, 0, deg(10), { targetNside: 16 }))).toEqual(['inside'])
+	expect(idsOf(index.queryCone(0, 0, deg(10), { targetNside: 4 }))).toEqual(['inside'])
 })
 
 test('triangle query handles longitude seam crossing', () => {
@@ -142,8 +142,22 @@ test('polygon query handles a convex polar region with a repeated closing vertex
 	expect(idsOf(index.queryPolygon(polygon))).toEqual(['pole'])
 })
 
+test('box query handles RA wrap-around and region dispatch', () => {
+	const index = new HealpixIndex<string>({ nside: 8 })
+
+	index.add('west', deg(359.9), 0)
+	index.add('east', deg(0.1), deg(5))
+	index.add('outside-ra', deg(20), 0)
+	index.add('outside-dec', 0, deg(20))
+
+	const query = { kind: 'box', minRA: deg(359.7), maxRA: deg(0.3), minDEC: deg(-0.1), maxDEC: deg(10) } as const
+
+	expect(idsOf(index.queryBox(query.minRA, query.maxRA, query.minDEC, query.maxDEC))).toEqual(['east', 'west'])
+	expect(idsOf(index.queryRegion(query))).toEqual(['east', 'west'])
+})
+
 test('add many, update, and remove keep the index consistent', () => {
-	const index = new HealpixIndex<string, { readonly magnitude: number }>({ nside: 8 })
+	const index = new HealpixIndex<{ readonly magnitude: number }>({ nside: 8 })
 
 	index.addMany([
 		{ id: 'a', rightAscension: 0, declination: 0, metadata: { magnitude: 1 } },
@@ -151,11 +165,11 @@ test('add many, update, and remove keep the index consistent', () => {
 	])
 
 	index.update('a', deg(120), deg(20), { magnitude: 3 })
-	expect(idsOf(index.queryCircle(deg(120), deg(20), deg(1)))).toEqual(['a'])
+	expect(idsOf(index.queryCone(deg(120), deg(20), deg(1)))).toEqual(['a'])
 
 	expect(index.remove('b')).toBeTrue()
 	expect(index.remove('missing')).toBeFalse()
-	expect(idsOf(index.queryCircle(deg(30), 0, deg(10)))).toEqual([])
+	expect(idsOf(index.queryCone(deg(30), 0, deg(10)))).toEqual([])
 })
 
 test('circle cover includes the center pixel for a zero-radius query', () => {

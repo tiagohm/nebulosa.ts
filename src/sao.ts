@@ -93,7 +93,7 @@ export async function* readSaoCatalog(source: Source & Seekable, bigEndian: bool
 	}
 }
 
-export class SaoCatalog extends HealpixIndex<string, SaoCatalogEntry> {
+export class SaoCatalog extends HealpixIndex<SaoCatalogEntry> {
 	constructor({ nside = 8, ordering }: Partial<HealpixIndexOptions> = {}) {
 		super({ nside, ordering })
 	}

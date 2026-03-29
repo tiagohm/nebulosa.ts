@@ -43,6 +43,6 @@ test('read', async () => {
 	const catalog = new HygCatalog()
 	catalog.addMany(data)
 
-	expect(catalog.queryCircle(parseAngle('05h 35 16.8')!, parseAngle('-05 23 24')!, deg(1))).toHaveLength(21)
-	expect(catalog.queryCircle(parseAngle('18h 02 42.0')!, parseAngle('-22 58 18')!, deg(1))).toHaveLength(12)
+	expect(catalog.queryCone(parseAngle('05h 35 16.8')!, parseAngle('-05 23 24')!, deg(1))).toHaveLength(21)
+	expect(catalog.queryCone(parseAngle('18h 02 42.0')!, parseAngle('-22 58 18')!, deg(1))).toHaveLength(12)
 }, 5000)
