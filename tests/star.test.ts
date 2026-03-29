@@ -13,8 +13,8 @@ const STAR = {
 	rightAscension: deg(353.22987757),
 	declination: deg(52.27730247),
 	// astropy works with pm_ra * cos(dec)
-	pmRa: mas(22.9) / Math.cos(deg(52.27730247)),
-	pmDec: mas(-2.1),
+	pmRA: mas(22.9) / Math.cos(deg(52.27730247)),
+	pmDEC: mas(-2.1),
 	parallax: mas(23),
 	rv: kilometerPerSecond(25),
 } as Star
@@ -29,7 +29,7 @@ TIME.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
 TIME.dut1 = () => -0.3495186114062241
 
 test('icrs', () => {
-	const i = star(STAR.rightAscension, STAR.declination, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.rv)
+	const i = star(STAR.rightAscension, STAR.declination, STAR.pmRA, STAR.pmDEC, STAR.parallax, STAR.rv)
 
 	expect(i[0][0]).toBeCloseTo(5448746.190298263914883137, 12)
 	expect(i[0][1]).toBeCloseTo(-646842.111761026666499674, 12)
@@ -45,7 +45,7 @@ test('icrs', () => {
 })
 
 test('space motion', () => {
-	const s = star(STAR.rightAscension, STAR.declination, STAR.pmRa, STAR.pmDec, STAR.parallax, STAR.rv)
+	const s = star(STAR.rightAscension, STAR.declination, STAR.pmRA, STAR.pmDEC, STAR.parallax, STAR.rv)
 	const b = spaceMotion(s, TIME)
 
 	expect(b[0][0]).toBeCloseTo(5448758.569350527599453926, 5)

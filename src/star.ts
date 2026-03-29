@@ -11,8 +11,8 @@ import type { Velocity } from './velocity'
 const DEFAULT_EPOCH = timeJulianYear(2000, Timescale.TDB)
 
 export interface Star extends Readonly<EquatorialCoordinate> {
-	readonly pmRa: Angle
-	readonly pmDec: Angle
+	readonly pmRA: Angle
+	readonly pmDEC: Angle
 	readonly parallax: Angle
 	readonly rv: Velocity
 }
@@ -26,12 +26,12 @@ export interface ObservedStar<T extends Star | StarPositionAndVelocity> extends 
 }
 
 // Computes the BCRS position and velocity of a star.
-export function star(ra: Angle, dec: Angle, pmRa: Angle = 0, pmDec: Angle = 0, parallax: Angle = 0, rv: Velocity = 0, epoch: Time = DEFAULT_EPOCH): StarPositionAndVelocity {
-	const s = eraStarpv(ra, dec, pmRa, pmDec, parallax, rv) as unknown as Mutable<StarPositionAndVelocity>
+export function star(ra: Angle, dec: Angle, pmRA: Angle = 0, pmDEC: Angle = 0, parallax: Angle = 0, rv: Velocity = 0, epoch: Time = DEFAULT_EPOCH): StarPositionAndVelocity {
+	const s = eraStarpv(ra, dec, pmRA, pmDEC, parallax, rv) as unknown as Mutable<StarPositionAndVelocity>
 	s.rightAscension = ra
 	s.declination = dec
-	s.pmRa = pmRa
-	s.pmDec = pmDec
+	s.pmRA = pmRA
+	s.pmDEC = pmDEC
 	s.parallax = parallax
 	s.rv = rv
 	s.epoch = epoch
@@ -68,8 +68,8 @@ export function observeStar<T extends Star | StarPositionAndVelocity>(star: T, t
 		b.fraction,
 		star.rightAscension,
 		star.declination,
-		star.pmRa,
-		star.pmDec,
+		star.pmRA,
+		star.pmDEC,
 		star.parallax,
 		star.rv,
 		longitude,
