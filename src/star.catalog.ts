@@ -47,7 +47,7 @@ export interface StarCatalogPolygonQuery {
 
 export type StarCatalogQuery = StarCatalogConeQuery | StarCatalogBoxQuery | StarCatalogPolygonQuery
 
-export interface StarCatalog<T extends StarCatalogEntry> {
+export interface StarCatalog<T extends StarCatalogEntry = StarCatalogEntry> {
 	readonly queryRegion: (query: StarCatalogQuery) => Promise<readonly T[]> | readonly T[]
 	readonly queryCone: (centerRA: Angle, centerDEC: Angle, radius: Angle) => Promise<readonly T[]> | readonly T[]
 	readonly queryBox: (minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: Angle) => Promise<readonly T[]> | readonly T[]

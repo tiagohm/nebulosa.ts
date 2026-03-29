@@ -702,12 +702,9 @@ await s.segment(Naif.SSB, Naif.EMB)!.at(time) // Compute the position and veloci
 const sirius = star(ra, dec, pmRA, pmDEC, parallax, rv, epoch) // BCRS cartesian coordinate from star parameters
 spaceMotion(sirius, time) // BCRS cartesian coordinate at time applying space motion
 sirius.observedAt(time, [ebp, ebv], ehp, refraction) // Observed spherical coordinate at time
-```
-
-### Star Generator ![](bun.webp) ![](browser.webp)
-
-```ts
 plotStar(raw, width, height, channels, x, y, flux, hfd, snr, seeing, colorIndex, options)
+matchStars(referenceStars, currentStars, options)
+crossMatchStars(stars, catalog, options)
 ```
 
 ### Statistics ![](bun.webp) ![](browser.webp)
