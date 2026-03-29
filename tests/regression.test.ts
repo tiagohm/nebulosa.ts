@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { NumberArray } from '../src/math'
-import { exponentialRegression, hyperbolicRegression, levenbergMarquardt, polynomialRegression, powerRegression, quadraticRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
+import { exponentialRegression, hyperbolicRegression, levenbergMarquardt, linearLeastSquares, polynomialRegression, powerRegression, quadraticRegression, regressionScore, robustLinearLeastSquares, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
 
 test('simple linear', () => {
 	const x = [80, 60, 10, 20, 30]
@@ -238,6 +238,27 @@ test('regression score', () => {
 	expect(score.r2).toBe(score.r * score.r)
 	// expect(score.rss).toBeLessThan(1)
 	expect(score.rmsd).toBeLessThan(1)
+})
+
+test('linear least squares', () => {
+	const design = [new Float64Array([1, 0]), new Float64Array([1, 1]), new Float64Array([1, 2]), new Float64Array([1, 3])]
+	const target = new Float64Array([1, 3, 5, 7])
+	const fit = linearLeastSquares(design, target)
+
+	expect(fit.coefficients[0]).toBeCloseTo(1, 8)
+	expect(fit.coefficients[1]).toBeCloseTo(2, 8)
+	expect(fit.rankDeficient).toBeFalse()
+	expect(fit.conditionNumber).toBeGreaterThan(1)
+})
+
+test('robust linear least squares resists outliers', () => {
+	const design = [new Float64Array([1, 0]), new Float64Array([1, 1]), new Float64Array([1, 2]), new Float64Array([1, 3]), new Float64Array([1, 4])]
+	const target = new Float64Array([1, 3, 5, 7, 100])
+	const plain = linearLeastSquares(design, target)
+	const robust = robustLinearLeastSquares(design, target, { method: 'tukey' })
+
+	expect(Math.abs(plain.coefficients[1] - 2)).toBeGreaterThan(Math.abs(robust.coefficients[1] - 2))
+	expect(robust.weights[4]).toBeLessThan(1)
 })
 
 // https://github.com/mljs/levenberg-marquardt/blob/main/src/__tests__/curve.test.js

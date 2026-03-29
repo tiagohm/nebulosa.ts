@@ -1,6 +1,7 @@
 import { type Angle, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, observedToCirs, type RefractionParameters, refractedAltitude } from './astrometry'
 import { ASEC2RAD, PI } from './constants'
+import { angularDistance } from './coordinate'
 import { eraC2s, eraS2c } from './erfa'
 import { tanProject, tanUnproject } from './fits.wcs'
 import { euclideanDistance, type Point } from './geometry'
@@ -454,7 +455,7 @@ function calibrationRotationEstimate(reference: PlateSolution, current: PlateSol
 
 // Computes the great-circle separation between the solved frame centers.
 function centerSeparation(a: PlateSolution, b: PlateSolution) {
-	return vecAngle(eraS2c(a.rightAscension, a.declination), eraS2c(b.rightAscension, b.declination))
+	return angularDistance(a.rightAscension, a.declination, b.rightAscension, b.declination)
 }
 
 // Estimates the image rotation by comparing center vectors around the solved fixed point.
