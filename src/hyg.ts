@@ -8,7 +8,7 @@ import { kilometerPerSecond, type Velocity } from './velocity'
 
 // https://codeberg.org/astronexus/hyg/src/branch/main/data/hyg/CURRENT
 
-export interface HygCatalogEntry extends Required<StarCatalogEntry<number>> {
+export interface HygCatalogEntry extends Required<StarCatalogEntry> {
 	readonly hip: number
 	readonly hd: number
 	readonly hr: number
@@ -30,7 +30,7 @@ export async function* readHygCatalog(source: Source) {
 
 // "id","hip","hd","hr","gl","bf","proper","ra","dec","dist","pmra","pmdec","rv","mag","absmag","spect","ci","x","y","z","vx","vy","vz","rarad","decrad","pmrarad","pmdecrad","bayer","flam","con","comp","comp_primary","base","lum","var","var_min","var_max"
 function processRow(row: CsvRow): HygCatalogEntry {
-	const id = +row[0]
+	const id = row[0]
 	const hip = +row[1]
 	const hd = +row[2]
 	const hr = +row[3]
@@ -51,10 +51,8 @@ function processRow(row: CsvRow): HygCatalogEntry {
 	return { id, epoch: 2000, hip, hd, hr, bayer, flamsteed, name, rightAscension, declination, pmRA, pmDEC, rv, magnitude, distance, spType, constellation }
 }
 
-const DEFAULT_HEALPIX_INDEX_OPTIONS: HealpixIndexOptions = { nside: 8 }
-
-export class HygCatalog extends HealpixIndex<number, HygCatalogEntry> {
-	constructor({ nside = 8, ordering }: HealpixIndexOptions = DEFAULT_HEALPIX_INDEX_OPTIONS) {
+export class HygCatalog extends HealpixIndex<string, HygCatalogEntry> {
+	constructor({ nside = 8, ordering }: Partial<HealpixIndexOptions> = {}) {
 		super({ nside, ordering })
 	}
 

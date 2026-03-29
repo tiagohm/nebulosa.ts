@@ -330,10 +330,6 @@ export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberA
 	const pairCount = (n * (n - 1)) / 2
 	const data = new Float64Array(Math.max(pairCount, n))
 
-	function median(values: Readonly<NumberArray>, length: number) {
-		return length % 2 === 0 ? (values[length / 2 - 1] + values[length / 2]) / 2 : values[Math.floor(length / 2)]
-	}
-
 	// slopes
 
 	let slopesLength = 0
@@ -349,8 +345,7 @@ export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberA
 	let slope = 0
 
 	if (slopesLength > 0) {
-		data.subarray(0, slopesLength).sort()
-		slope = median(data, slopesLength)
+		slope = medianOf(data.subarray(0, slopesLength).sort())
 	}
 
 	// cuts
@@ -359,10 +354,9 @@ export function theilSenRegression(x: Readonly<NumberArray>, y: Readonly<NumberA
 		data[i] = y[i] - slope * x[i]
 	}
 
-	data.subarray(0, n).sort()
-
 	// median
-	const intercept = n === 0 ? Number.NaN : median(data, n)
+
+	const intercept = n === 0 ? Number.NaN : medianOf(data.subarray(0, n).sort())
 
 	return {
 		xPoints: x,

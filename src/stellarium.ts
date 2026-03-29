@@ -101,7 +101,7 @@ export class StellariumProtocolServer {
 	}
 }
 
-export interface StellariumCatalogEntry extends StarCatalogEntry<number> {
+export interface StellariumCatalogEntry extends StarCatalogEntry {
 	readonly type: StellariumObjectType
 	readonly majorAxis: Angle
 	readonly minorAxis: Angle
@@ -233,7 +233,7 @@ export async function* readCatalogDat(source: Source & Seekable): AsyncIterable<
 			break
 		}
 
-		const id = readInt()
+		const id = readInt().toFixed(0)
 		const rightAscension = readDouble()
 		const declination = readDouble()
 		const mB = readDouble()
@@ -346,10 +346,8 @@ export async function* readNamesDat(source: Source & Seekable) {
 	}
 }
 
-const DEFAULT_HEALPIX_INDEX_OPTIONS: HealpixIndexOptions = { nside: 8 }
-
-export class StellariumCatalog extends HealpixIndex<number, StellariumCatalogEntry> {
-	constructor({ nside = 8, ordering }: HealpixIndexOptions = DEFAULT_HEALPIX_INDEX_OPTIONS) {
+export class StellariumCatalog extends HealpixIndex<string, StellariumCatalogEntry> {
+	constructor({ nside = 8, ordering }: Partial<HealpixIndexOptions> = {}) {
 		super({ nside, ordering })
 	}
 

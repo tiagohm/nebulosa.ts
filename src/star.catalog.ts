@@ -17,9 +17,9 @@ export type StarCatalogQueryKind = 'cone' | 'triangle' | 'box' | 'polygon'
 
 export type StarCatalogGeometryMode = 'spherical' | 'planar-tangent'
 
-export interface StarCatalogEntry<ID extends string | number = string> extends EquatorialCoordinate {
-	readonly id: ID
-	readonly epoch: number
+export interface StarCatalogEntry extends EquatorialCoordinate {
+	readonly id: string
+	readonly epoch: number | `B${number}`
 	readonly magnitude?: number
 	readonly pmRA?: Angle // per year
 	readonly pmDEC?: Angle // per year
@@ -47,12 +47,12 @@ export interface StarCatalogPolygonQuery {
 
 export type StarCatalogQuery = StarCatalogConeQuery | StarCatalogBoxQuery | StarCatalogPolygonQuery
 
-export interface StarCatalog<T extends StarCatalogEntry<ID>, ID extends string | number = string> {
+export interface StarCatalog<T extends StarCatalogEntry> {
 	readonly queryRegion: (query: StarCatalogQuery) => Promise<readonly T[]> | readonly T[]
 	readonly queryCone: (centerRA: Angle, centerDEC: Angle, radius: Angle) => Promise<readonly T[]> | readonly T[]
 	readonly queryBox: (minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: Angle) => Promise<readonly T[]> | readonly T[]
 	readonly queryPolygon: (vertices: readonly Vertex[]) => Promise<readonly T[]> | readonly T[]
-	readonly get: (id: ID) => Promise<T | undefined> | T | undefined
+	readonly get: (id: string) => Promise<T | undefined> | T | undefined
 	readonly streamRegion: (query: StarCatalogQuery) => AsyncIterable<T> | Iterable<T>
 }
 

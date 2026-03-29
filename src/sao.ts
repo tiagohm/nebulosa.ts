@@ -1,18 +1,11 @@
-import type { Angle } from './angle'
-import { type EquatorialCoordinate, equatorialToJ2000 } from './coordinate'
+import { HealpixIndex, type HealpixIndexOptions } from './healpix'
 import type { Seekable, Source } from './io'
-import { Timescale, timeBesselianYear } from './time'
+import type { StarCatalogEntry } from './star.catalog'
 
 // http://tdc-www.harvard.edu/catalogs/sao.html
 
-const B1950 = timeBesselianYear(1950, Timescale.TT)
-
-export interface SaoCatalogEntry extends Readonly<EquatorialCoordinate> {
-	readonly id: number
+export interface SaoCatalogEntry extends Required<StarCatalogEntry> {
 	readonly spType: string
-	readonly magnitude: number
-	readonly pmRA: Angle
-	readonly pmDec: Angle
 }
 
 export async function* readSaoCatalog(source: Source & Seekable, bigEndian: boolean) {
@@ -88,16 +81,26 @@ export async function* readSaoCatalog(source: Source & Seekable, bigEndian: bool
 		}
 
 		const xno = stnum ? readFloat() : star1++
-		const id = xno - star0
-		const rightAscensionB1950 = readDouble()
-		const declinationB1950 = readDouble()
+		const id = (xno - star0).toFixed(0)
+		const rightAscension = readDouble()
+		const declination = readDouble()
 		const spType = readString(2)
 		const magnitude = readShort() / 100
 		const pmRA = mprop ? readFloat() : 0
-		const pmDec = mprop ? readFloat() : 0
+		const pmDEC = mprop ? readFloat() : 0
 
-		const [rightAscension, declination] = equatorialToJ2000(rightAscensionB1950, declinationB1950, B1950)
+		yield { id, epoch: 'B1950', rightAscension, declination, spType, magnitude, pmRA, pmDEC } as SaoCatalogEntry
+	}
+}
 
-		yield { id, rightAscension, declination, spType, magnitude, pmRA, pmDec } as SaoCatalogEntry
+export class SaoCatalog extends HealpixIndex<string, SaoCatalogEntry> {
+	constructor({ nside = 8, ordering }: Partial<HealpixIndexOptions> = {}) {
+		super({ nside, ordering })
+	}
+
+	async load(source: Source & Seekable, bigEndian: boolean) {
+		for await (const entry of readSaoCatalog(source, bigEndian)) {
+			this.add(entry.id, entry.rightAscension, entry.declination, entry)
+		}
 	}
 }

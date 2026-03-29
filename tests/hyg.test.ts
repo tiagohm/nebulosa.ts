@@ -18,10 +18,10 @@ test('read', async () => {
 
 	expect(data).toHaveLength(119626)
 
-	expect(data[0].id).toBe(0)
+	expect(data[0].id).toBe('0')
 	expect(data[0].name).toBe('Sol')
 
-	expect(data[32263].id).toBe(32263)
+	expect(data[32263].id).toBe('32263')
 	expect(data[32263].name).toBe('Sirius')
 	expect(data[32263].hip).toBe(32349)
 	expect(data[32263].hd).toBe(48915)
@@ -38,7 +38,7 @@ test('read', async () => {
 	expect(formatRA(data[32263].rightAscension)).toBe('06 45 08.93')
 	expect(formatDEC(data[32263].declination)).toBe('-16 42 58.02')
 
-	expect(data[119625].id).toBe(119630)
+	expect(data[119625].id).toBe('119630')
 
 	const catalog = new HygCatalog()
 	catalog.addMany(data)
