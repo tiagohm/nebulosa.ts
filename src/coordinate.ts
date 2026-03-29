@@ -3,6 +3,7 @@ import { ECLIPTIC_J2000_MATRIX, GALACTIC_MATRIX, MILLIASEC2RAD, PI, PIOVERTWO, T
 import { eraC2s, eraS2c } from './erfa'
 import { localSiderealTime } from './location'
 import { matMulVec, matRotX, matTransposeMulVec } from './mat3'
+import { clamp } from './math'
 import { precessionNutationMatrix, type Time, timeNow, trueObliquity } from './time'
 import type { Vec3 } from './vec3'
 
@@ -38,8 +39,9 @@ export interface GalacticCoordinate<T = Angle> {
 	latitude: T // The angle north or south of the plane (±90°)
 }
 
-export function angularDistance(a: SphericalCoordinate, b: SphericalCoordinate): Angle {
-	return Math.acos(Math.sin(a[1]) * Math.sin(b[1]) + Math.cos(a[1]) * Math.cos(b[1]) * Math.cos(a[0] - b[0]))
+// Computes the angular separation between two equatorial coordinates.
+export function angularDistance(ra0: Angle, dec0: Angle, ra1: Angle, dec1: Angle): Angle {
+	return Math.acos(clamp(Math.sin(dec0) * Math.sin(dec1) + Math.cos(dec0) * Math.cos(dec1) * Math.cos(ra0 - ra1), -1, 1))
 }
 
 export function equatorialFromJ2000(rightAscension: Angle, declination: Angle, time: Time = timeNow(true)) {
@@ -116,7 +118,6 @@ export function meridianEcliptic(longitude: Angle, time: Time = timeNow(true)): 
 		declination = eclipticToEquatorial(lambda, 0, time)[1]
 
 		if (Math.abs(prev - declination) <= MILLIASEC2RAD) {
-			console.info(i)
 			break
 		}
 	}

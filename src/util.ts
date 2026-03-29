@@ -13,7 +13,7 @@ export function isNumberArray(a: unknown): a is NumberArray {
 	return (Array.isArray(a) && (!a.length || typeof a[0] === 'number')) || ArrayBuffer.isView(a)
 }
 
-// Finds the minimum value  and its index in an array of numeric values.
+// Finds the minimum value  and its index in an numeric array.
 // If the array is empty, it returns [NaN, -1].
 export function minOf(a: Readonly<NumberArray>): readonly [number, number] {
 	if (a.length === 0) return [NaN, -1]
@@ -32,7 +32,7 @@ export function minOf(a: Readonly<NumberArray>): readonly [number, number] {
 	return ret
 }
 
-// Finds the maximum value and its index in an array of numeric values.
+// Finds the maximum value and its index in an numeric array.
 // If the array is empty, it returns [NaN, -1].
 export function maxOf(a: Readonly<NumberArray>): readonly [number, number] {
 	if (a.length === 0) return [NaN, -1]
@@ -51,7 +51,7 @@ export function maxOf(a: Readonly<NumberArray>): readonly [number, number] {
 	return ret
 }
 
-// Computes the mean value of an array of numeric values.
+// Computes the mean value of an numeric array.
 // If the array is empty, it returns NaN.
 export function meanOf(a: Readonly<NumberArray>) {
 	if (a.length === 0) return NaN
@@ -63,7 +63,7 @@ export function meanOf(a: Readonly<NumberArray>) {
 	return s / a.length
 }
 
-// Computes the median value of a sorted array of numeric values.
+// Computes the median value of a sorted numeric array.
 export function medianOf(a: Readonly<NumberArray>, count: number = a.length) {
 	if (count === 0) return NaN
 	else if (count === 1) return a[0]
@@ -74,7 +74,7 @@ export function medianOf(a: Readonly<NumberArray>, count: number = a.length) {
 	return count % 2 === 1 ? a[mid] : (a[mid - 1] + a[mid]) * 0.5
 }
 
-// Computes median absolute deviation of a sorted array of numeric values.
+// Computes median absolute deviation of a sorted numeric array.
 export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: number, normalized: boolean, count: number = a.length) {
 	const abs = new Float64Array(count)
 	for (let i = 0; i < count; i++) abs[i] = Math.abs(a[i] - median)
@@ -92,6 +92,29 @@ export function standardDeviationOf(a: Float64Array) {
 	}
 
 	return Math.sqrt(sum / a.length)
+}
+
+// Computes a percentile from a sorted numeric array.
+export function percentileOf(values: Readonly<NumberArray>, percentile: number) {
+	if (values.length === 0) return 0
+	const index = percentile * (values.length - 1)
+	const lower = Math.floor(index)
+	const upper = Math.ceil(index)
+	const t = index - lower
+	return values[lower] + (values[upper] - values[lower]) * t
+}
+
+// Computes the root-mean-square of a numeric array.
+export function rmsOf(values: Readonly<NumberArray>) {
+	if (values.length === 0) return 0
+
+	let sumSquares = 0
+
+	for (let i = 0; i < values.length; i++) {
+		sumSquares += values[i] * values[i]
+	}
+
+	return Math.sqrt(sumSquares / values.length)
 }
 
 // Searches in the specified input using the range [from, to) for the specified key.
