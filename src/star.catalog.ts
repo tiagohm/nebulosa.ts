@@ -3,6 +3,7 @@ import { DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { sphericalSeparation } from './geometry'
 import { clamp } from './math'
+import type { Velocity } from './velocity'
 
 const FULL_CIRCLE = TAU
 const HALF_CIRCLE = PI
@@ -23,6 +24,7 @@ export interface StarCatalogEntry extends EquatorialCoordinate {
 	readonly magnitude?: number
 	readonly pmRA?: Angle // per year
 	readonly pmDEC?: Angle // per year
+	readonly rv?: Velocity
 }
 
 export interface StarCatalogConeQuery {

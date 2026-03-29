@@ -4,7 +4,7 @@ import type { StarCatalogEntry } from './star.catalog'
 
 // http://tdc-www.harvard.edu/catalogs/sao.html
 
-export interface SaoCatalogEntry extends Required<StarCatalogEntry> {
+export interface SaoCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'>, Required<Pick<StarCatalogEntry, 'epoch' | 'magnitude'>> {
 	readonly spType: string
 }
 
@@ -86,8 +86,8 @@ export async function* readSaoCatalog(source: Source & Seekable, bigEndian: bool
 		const declination = readDouble()
 		const spType = readString(2)
 		const magnitude = readShort() / 100
-		const pmRA = mprop ? readFloat() : 0
-		const pmDEC = mprop ? readFloat() : 0
+		const pmRA = mprop ? readFloat() : undefined
+		const pmDEC = mprop ? readFloat() : undefined
 
 		yield { id, epoch: 'B1950', rightAscension, declination, spType, magnitude, pmRA, pmDEC } as SaoCatalogEntry
 	}
