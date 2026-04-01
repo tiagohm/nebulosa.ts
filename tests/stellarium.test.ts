@@ -20,7 +20,7 @@ test('catalog', async () => {
 
 	expect(i).toBe(94659)
 
-	expect(entries[0].id).toBe('1')
+	expect(entries[0].id).toBe(1)
 	expect(entries[0].m).toBe(40)
 	expect(entries[0].rightAscension).toBe(3.238497018814087)
 	expect(entries[0].declination).toBe(1.0137385129928589)
@@ -32,7 +32,7 @@ test('catalog', async () => {
 	expect(entries[0].redshift).toBe(99)
 	expect(entries[0].aco).toBeUndefined()
 
-	expect(entries[311].id).toBe('312')
+	expect(entries[311].id).toBe(312)
 	expect(entries[311].ngc).toBe(281)
 	expect(entries[311].sh2).toBe(184)
 	expect(entries[311].lbn).toBe(616)
@@ -48,7 +48,7 @@ test('catalog', async () => {
 	expect(entries[311].px).toBe(2.908882202245805e-9)
 	expect(toLightYear(entries[311].distance)).toBeCloseTo(5544.6, 0)
 
-	expect(entries[94658].id).toBe('94659')
+	expect(entries[94658].id).toBe(94659)
 	expect(entries[94658].vdbha).toBe(197)
 	expect(entries[94658].rightAscension).toBe(4.391684532165527)
 	expect(entries[94658].declination).toBe(-0.8004080057144165)

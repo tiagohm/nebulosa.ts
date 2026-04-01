@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { deg } from '../src/angle'
-import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type StarCatalogRaDecBox } from '../src/star.catalog'
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogRaDecBox } from '../src/star.catalog'
 
 const GEOMETRY_EPSILON = 1e-12
 
@@ -16,7 +16,7 @@ const FIXTURE_STARS = [
 	{ id: 'polygon-outside', rightAscension: deg(228), declination: deg(34) },
 	{ id: 'triangle-inside', rightAscension: deg(102), declination: deg(12) },
 	{ id: 'triangle-outside', rightAscension: deg(108), declination: deg(18) },
-] as const satisfies readonly StarCatalogEntry[]
+] as const
 
 test('query cone keeps spherical boundary matches', async () => {
 	expect(idsOf(await catalog.queryCone(deg(120), 0, deg(10)))).toEqual(['cone-center', 'cone-edge'])
@@ -40,31 +40,28 @@ test('query polygon filters a convex polygon exactly', async () => {
 	expect(idsOf(await catalog.queryPolygon(polygon))).toEqual(['polygon-inside'])
 })
 
+export type MockCatalogEntry = (typeof FIXTURE_STARS)[number]
+
 // Keeps the generic catalog tests focused on normalized preselection boxes.
-class MockCatalog extends BaseStarCatalog<StarCatalogEntry> {
-	constructor(private readonly entries: readonly StarCatalogEntry[]) {
+class MockCatalog extends BaseStarCatalog<MockCatalogEntry> {
+	constructor(private readonly entries: readonly MockCatalogEntry[]) {
 		super()
 	}
 
 	// Streams only stars touched by the normalized preselection boxes.
-	protected *streamCandidateEntries(query: NormalizedStarCatalogQuery): Iterable<StarCatalogEntry> {
+	protected *streamCandidateEntries(query: NormalizedStarCatalogQuery): Iterable<MockCatalogEntry> {
 		for (const entry of this.entries) {
 			if (matchesAnyBox(entry.rightAscension, entry.declination, query.preselectionBoxes)) {
 				yield entry
 			}
 		}
 	}
-
-	// Returns one fixture star by identifier.
-	get(id: string) {
-		return this.entries.find((entry) => entry.id === id)
-	}
 }
 
 const catalog = new MockCatalog(FIXTURE_STARS)
 
 // Extracts sorted identifiers from query results.
-function idsOf(items: readonly StarCatalogEntry[]) {
+function idsOf(items: readonly MockCatalogEntry[]) {
 	return items.map((item) => item.id).sort()
 }
 

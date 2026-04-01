@@ -19,7 +19,6 @@ export type StarCatalogQueryKind = 'cone' | 'triangle' | 'box' | 'polygon'
 export type StarCatalogGeometryMode = 'spherical' | 'planarTangent'
 
 export interface StarCatalogEntry extends EquatorialCoordinate {
-	readonly id: string
 	readonly epoch?: number | `B${number}`
 	readonly magnitude?: number
 	readonly pmRA?: Angle // per year
@@ -62,7 +61,6 @@ export interface StarCatalog<T extends StarCatalogEntry = StarCatalogEntry> {
 	readonly queryTriangle: (a: Vertex, b: Vertex, c: Vertex) => Promise<readonly T[]> | readonly T[]
 	readonly queryBox: (minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: Angle) => Promise<readonly T[]> | readonly T[]
 	readonly queryPolygon: (vertices: readonly Vertex[]) => Promise<readonly T[]> | readonly T[]
-	readonly get: (id: string) => Promise<T | undefined> | T | undefined
 	readonly streamRegion: (query: StarCatalogQuery) => AsyncIterable<T> | Iterable<T>
 }
 
@@ -113,9 +111,6 @@ export type NormalizedStarCatalogQuery = NormalizedConeQuery | NormalizedTriangl
 
 // Implements the generic query, filtering, projection, and propagation flow for concrete catalogs.
 export abstract class BaseStarCatalog<T extends StarCatalogEntry> implements StarCatalog<T> {
-	// Returns a normalized entry by source identifier when supported by the provider.
-	abstract get(id: string): Promise<T | undefined> | T | undefined
-
 	// Returns provider-specific candidates for a normalized query.
 	protected abstract streamCandidateEntries(query: NormalizedStarCatalogQuery): AsyncIterable<T> | Iterable<T>
 

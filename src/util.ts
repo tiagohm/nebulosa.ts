@@ -167,11 +167,11 @@ export function angularSizeOfPixel(focalLength: number, pixelSize: number) {
 }
 
 // Sorts numeric identifiers in ascending order.
-export function NumberComparator(left: number, right: number) {
+export function NumberComparator<T extends number | bigint>(left: T, right: T) {
 	return left - right
 }
 
 // Sorts numeric identifiers in descending order.
-export function NumberComparatorDescensing(left: number, right: number) {
+export function NumberComparatorDescensing<T extends number | bigint>(left: T, right: T) {
 	return right - left
 }

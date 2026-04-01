@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test'
 
 import { deg, hour, normalizeAngle } from '../src/angle'
 import { PIOVERTWO, TAU } from '../src/constants'
-import { findHnsky290Areas, findHnsky290Region, findHnsky290Stars, formatHnskyId, type Hnsky290RegionQuery, type HnskyRecordSize, hnsky290AreaFile, openHnskyCatalog, readHnsky290Area, readHnsky290Header } from '../src/hnsky'
+import { findHnsky290Areas, findHnsky290Region, findHnsky290Stars, type Hnsky290RegionQuery, type HnskyRecordSize, hnsky290AreaFile, openHnskyCatalog, readHnsky290Area, readHnsky290Header } from '../src/hnsky'
+import { NumberComparator } from '../src/util'
 import { downloadPerTag } from './download'
 
 await downloadPerTag('hnsky')
@@ -136,14 +137,17 @@ test('HnskyCatalog exposes .290 archives through the generic star catalog API', 
 		const cone = await catalog.queryCone(deg(11.1), deg(5), deg(2))
 		const box = await catalog.queryBox(deg(10), deg(12), deg(4.5), deg(5.5))
 
-		expect(cone.map((e) => e.id).sort()).toEqual([formatHnskyId('g14', 146, 1), formatHnskyId('g14', 147, 1)])
-		expect(box.map((e) => e.id).sort()).toEqual([formatHnskyId('g14', 146, 1), formatHnskyId('g14', 147, 1)])
+		expect(cone.map((e) => e.area).sort(NumberComparator)).toEqual([146, 147])
+		expect(cone.map((e) => e.recordNumber).sort(NumberComparator)).toEqual([1, 1])
+		expect(box.map((e) => e.area).sort(NumberComparator)).toEqual([146, 147])
+		expect(box.map((e) => e.recordNumber).sort(NumberComparator)).toEqual([1, 1])
 		expect(cone[0]!.epoch).toBe(2000)
 		expect(cone[0]!.designation?.label).toBe('UCAC4 100-1')
 
-		const star = await catalog.get(cone[1]!.id)
+		const star = await catalog.get('g14', 147, 1)
 
-		expect(star?.id).toBe(formatHnskyId('g14', 147, 1))
+		expect(star?.area).toBe(147)
+		expect(star?.recordNumber).toBe(1)
 		expect(star?.magnitude).toBeCloseTo(1.1, 6)
 		expect(star?.designation?.label).toBe('UCAC4 101-1')
 	} finally {

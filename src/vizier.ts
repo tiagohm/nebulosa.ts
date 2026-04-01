@@ -40,6 +40,7 @@ export async function vizierQuery(query: string, { baseUrl, timeout = 60000, sig
 }
 
 export interface VizierGaiaCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
+	readonly id: string
 	readonly epoch: 2000
 	readonly magnitude: number
 }
@@ -54,7 +55,7 @@ export class VizierGaiaCatalog extends BaseStarCatalog<VizierGaiaCatalogEntry> {
 	}
 
 	// Retrieves a Gaia DR3 source by source identifier.
-	async get(id: string): Promise<VizierGaiaCatalogEntry | undefined> {
+	async get(id: number | string | bigint): Promise<VizierGaiaCatalogEntry | undefined> {
 		const rows = await this.queryRows(`Source = ${id}`, 1)
 		return rows?.length ? parseVizierGaiaCatalogRow(rows[0]) : undefined
 	}
@@ -99,7 +100,7 @@ function parseVizierGaiaCatalogRow(row: Readonly<CsvRow>): VizierGaiaCatalogEntr
 	}
 
 	const rawPmDEC = parseVizierGaiaNumber(pmDecMasYr)
-	const rawRadialVelocity = parseVizierGaiaNumber(radialVelocityKmS)
+	const rawRV = parseVizierGaiaNumber(radialVelocityKmS)
 
 	return {
 		id,
@@ -109,7 +110,7 @@ function parseVizierGaiaCatalogRow(row: Readonly<CsvRow>): VizierGaiaCatalogEntr
 		magnitude: +gMagnitude,
 		pmRA,
 		pmDEC: rawPmDEC !== undefined ? mas(rawPmDEC) : undefined,
-		rv: rawRadialVelocity !== undefined ? kilometerPerSecond(rawRadialVelocity) : undefined,
+		rv: rawRV !== undefined ? kilometerPerSecond(rawRV) : undefined,
 	}
 }
 

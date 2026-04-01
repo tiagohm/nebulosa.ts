@@ -19,13 +19,13 @@ test('read', async () => {
 
 	expect(i).toBe(258997)
 
-	expect(entries[0].id).toBe('1')
+	expect(entries[0].id).toBe(1)
 	expect(formatRA(entries[0].rightAscension)).toBe('00 00 05.10')
 	expect(formatDEC(entries[0].declination)).toBe('+82 41 41.82')
 	expect(entries[0].magnitude).toBe(7.2)
 	expect(entries[0].spType).toBe('A0')
 
-	expect(entries[258995].id).toBe('258996')
+	expect(entries[258995].id).toBe(258996)
 	expect(formatRA(entries[258995].rightAscension)).toBe('23 54 51.66')
 	expect(formatDEC(entries[258995].declination)).toBe('-82 26 52.62')
 	expect(entries[258995].magnitude).toBe(5.7)

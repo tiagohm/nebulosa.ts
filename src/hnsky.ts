@@ -13,7 +13,6 @@ const HNSKY_290_HEADER_DEC_OFFSET = 128
 const HNSKY_290_MIN_AREA_FRACTION = 0.01
 const HNSKY_290_BUFFER_SIZE = 1024 * 64
 const HNSKY_EPOCH = 2000
-const HNSKY_ID_PATTERN = /^HNSKY:(g14|g16):(\d{1,3}):(\d+)$/i
 const FULL_CIRCLE = TAU
 const GEOMETRY_EPSILON = 1e-12
 
@@ -153,24 +152,6 @@ export function decodeHnsky290Designation(value: number): Hnsky290Designation {
 	const star = raw & 0x7fff
 	const component = (raw & 0x00008000) !== 0 ? 3 : (raw & 0x40000000) !== 0 ? 2 : 1
 	return { value, catalog: 'TYC', region, star, component, label: `TYC ${region}-${star}-${component}` }
-}
-
-// Formats a stable synthetic HNSKY catalog identifier.
-export function formatHnskyId(database: Hnsky290Database, area: number, recordNumber: number) {
-	return `HNSKY:${database}:${area}:${recordNumber}`
-}
-
-// Parses a synthetic HNSKY catalog identifier.
-export function parseHnskyId(id: string): readonly [Hnsky290Database, number, number] {
-	const match = HNSKY_ID_PATTERN.exec(id.trim())
-
-	if (!match) {
-		throw new Error(`invalid HNSKY identifier: ${id}`)
-	}
-
-	const area = +match[2]
-	const recordNumber = +match[3]
-	return [match[1].toLowerCase() as Hnsky290Database, hnsky290AreaFile(area).area, validateHnskyRecordNumber(recordNumber)] as const
 }
 
 // Reads the shared 110-byte .290 header and validates the record size.
@@ -328,18 +309,18 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 	}
 
 	// Returns a normalized HNSKY entry from its synthetic identifier.
-	async get(id: string): Promise<HnskyCatalogEntry | undefined> {
+	async get(database: Hnsky290Database, area: number, recordNumber: number): Promise<HnskyCatalogEntry | undefined> {
 		this.assertOpen()
 
-		const [database, area, recordNumber] = parseHnskyId(id)
 		if (database !== this.#database) return undefined
+		validateHnskyRecordNumber(recordNumber)
 
 		const loaded = await this.loadArea(area)
 		if (!loaded) return undefined
 
 		for (const star of decodeHnsky290AreaRecords(loaded.header, loaded.buffer, area)) {
 			if (star.recordNumber === recordNumber) {
-				return toHnskyCatalogEntry(this.#database, star)
+				return toHnskyCatalogEntry(star)
 			}
 		}
 
@@ -356,7 +337,7 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 
 			for (const star of decodeHnsky290AreaRecords(loaded.header, loaded.buffer, area)) {
 				if (!matchesPreselectionBoxes(star.rightAscension, star.declination, query.preselectionBoxes)) continue
-				yield toHnskyCatalogEntry(this.#database, star)
+				yield toHnskyCatalogEntry(star)
 			}
 		}
 	}
@@ -554,9 +535,8 @@ function decodeSigned24(low: number, middle: number, high: number) {
 }
 
 // Maps a decoded tile star into the generic star catalog shape.
-function toHnskyCatalogEntry(database: Hnsky290Database, star: DecodedHnsky290Star): HnskyCatalogEntry {
+function toHnskyCatalogEntry(star: DecodedHnsky290Star): HnskyCatalogEntry {
 	return {
-		id: formatHnskyId(database, star.area, star.recordNumber),
 		epoch: HNSKY_EPOCH,
 		recordNumber: star.recordNumber,
 		area: star.area,

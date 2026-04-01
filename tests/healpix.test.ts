@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { PI, PIOVERTWO } from '../src/constants'
 import { sphericalDestination, sphericalSeparation } from '../src/geometry'
-import { circleToPixels, coordToPixel, HealpixIndex, nestedToRing, pixelToBoundary, pixelToCenter, ringToNested } from '../src/healpix'
+import { circleToPixels, coordToPixel, type HealpixId, HealpixIndex, nestedToRing, pixelToBoundary, pixelToCenter, ringToNested } from '../src/healpix'
 
 // Extracts sorted ids from query results.
-function idsOf(objects: readonly { id: string }[]) {
+function idsOf(objects: readonly { id: HealpixId }[]) {
 	return objects.map((object) => object.id).sort()
 }
 
@@ -41,13 +41,11 @@ test('pixel boundary vertices stay within valid spherical ranges', () => {
 
 test('circle query matches brute-force filtering on a fixed catalog', () => {
 	const index = new HealpixIndex<{ readonly label: string }>({ nside: 8 })
-	const catalog: { readonly id: string; readonly longitude: number; readonly latitude: number }[] = []
+	const catalog: { readonly id: HealpixId; readonly longitude: number; readonly latitude: number }[] = []
 
-	let counter = 0
-
-	for (let latitude = -60; latitude <= 60; latitude += 20) {
-		for (let longitude = 0; longitude < 360; longitude += 30) {
-			const object = { id: `star-${counter++}`, longitude: deg(longitude), latitude: deg(latitude) }
+	for (let latitude = -60, c = 0; latitude <= 60; latitude += 20) {
+		for (let longitude = 0; longitude < 360; longitude += 30, c++) {
+			const object = { id: c.toFixed(0), longitude: deg(longitude), latitude: deg(latitude) }
 
 			catalog.push(object)
 			index.add(object.id, object.longitude, object.latitude, { label: object.id })

@@ -25,14 +25,11 @@ const UCAC4_MISSING_MAG_ERROR = 99
 const UCAC4_PM_SENTINEL = 32767
 const UCAC4_PM_NO_DATA = 255
 const UCAC4_BLOCK_RECORD_COUNT = 512
-const UCAC4_ID_PREFIX = '4U'
 const MAS_PER_DEG = 3600000
 const GEOMETRY_EPSILON = 1e-12
 const FULL_CIRCLE_MAS = 360 * MAS_PER_DEG
 
-const UCAC4_ID_PATTERN = /^(?:4U|UCAC4[:\s]?)(\d{1,3})[-:](\d+)$/i
-
-export interface Ucac4Record extends StarCatalogEntry {
+export interface Ucac4CatalogEntry extends StarCatalogEntry {
 	readonly zone: number
 	readonly recordNumber: number
 	// readonly modelMagnitudeMillimag: number
@@ -72,28 +69,6 @@ interface Ucac4Index {
 	readonly base: 0 | 1
 }
 
-// Formats a stable UCAC4 identifier.
-export function formatUcac4Id(zone: number, recordNumber: number) {
-	validateZoneNumber(zone)
-	validateRecordNumber(recordNumber)
-	return `${UCAC4_ID_PREFIX}${`${zone}`.padStart(3, '0')}-${recordNumber}`
-}
-
-// Parses a stable UCAC4 identifier into zone and record components.
-export function parseUcac4Id(id: string): readonly [number, number] {
-	const match = UCAC4_ID_PATTERN.exec(id.trim())
-
-	if (!match) {
-		throw new Error(`invalid UCAC4 identifier: ${id}`)
-	}
-
-	const zone = +match[1]
-	const recordNumber = +match[2]
-	validateZoneNumber(zone)
-	validateRecordNumber(recordNumber)
-	return [zone, recordNumber] as const
-}
-
 // Converts a declination to its native UCAC4 zone number.
 export function ucac4ZoneForDec(dec: Angle) {
 	const normalizedDec = validateDeclination(dec)
@@ -107,7 +82,7 @@ export async function openUcac4Catalog(source: string) {
 }
 
 // Reads native UCAC4 zone files lazily and exposes them through the generic catalog contract.
-export class Ucac4Catalog extends BaseStarCatalog<Ucac4Record> {
+export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 	readonly #zonePaths = new Map<number, string | null>()
 	readonly #zoneHandles = new Map<number, FileHandle>()
 	readonly #zoneRecordCounts = new Int32Array(UCAC4_ZONE_COUNT)
@@ -166,13 +141,14 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4Record> {
 	}
 
 	// Returns a raw UCAC4 record by identifier.
-	async get(id: string): Promise<Ucac4Record | undefined> {
-		const [zone, recordNumber] = parseUcac4Id(id)
+	async get(zone: number, recordNumber: number) {
+		validateZoneNumber(zone)
+		validateRecordNumber(recordNumber)
 		return await this.readRawRecord(zone, recordNumber)
 	}
 
 	// Returns a raw UCAC4 record by native zone and record number.
-	async readRawRecord(zone: number, recordNumber: number): Promise<Ucac4Record | undefined> {
+	async readRawRecord(zone: number, recordNumber: number) {
 		this.assertOpen()
 
 		validateZoneNumber(zone)
@@ -429,7 +405,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4Record> {
 }
 
 // Parses a fixed-length native UCAC4 record from a block buffer.
-function parseUcac4Record(buffer: Buffer, zone: number, recordNumber: number, offset: number = 0): Ucac4Record {
+function parseUcac4Record(buffer: Buffer, zone: number, recordNumber: number, offset: number = 0): Ucac4CatalogEntry {
 	const raMas = buffer.readInt32LE(offset)
 	const southPoleDistanceMas = buffer.readInt32LE(offset + 4)
 
@@ -455,7 +431,6 @@ function parseUcac4Record(buffer: Buffer, zone: number, recordNumber: number, of
 	const magnitude = pickPrimaryMagnitude(apertureMagnitudeMillimag, modelMagnitudeMillimag, twoMassMagnitudeMillimagJ)
 
 	return {
-		id: formatUcac4Id(zone, recordNumber),
 		zone,
 		recordNumber,
 		epoch: 2000,

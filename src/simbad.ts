@@ -232,6 +232,7 @@ const SIMBAD_EPOCH = 2000
 const SIMBAD_PM_COS_DEC_EPSILON = 1e-12
 
 export interface SimbadCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
+	readonly id: number // The max id in the Simbad is 28400265 (bigint is unnecessary)
 	readonly epoch: 2000
 	readonly magnitude: number
 	readonly plx?: number
@@ -248,7 +249,7 @@ export class SimbadCatalog extends BaseStarCatalog<SimbadCatalogEntry> {
 	}
 
 	// Retrieves a Simbad source by source identifier.
-	async get(id: string): Promise<SimbadCatalogEntry | undefined> {
+	async get(id: number | string | bigint): Promise<SimbadCatalogEntry | undefined> {
 		const rows = await this.queryRows(`b.oid = ${id}`, 1)
 		return rows?.length ? parseSimbadCatalogRow(rows[0]) : undefined
 	}
@@ -296,7 +297,7 @@ function parseSimbadCatalogRow(row: Readonly<CsvRow>): SimbadCatalogEntry | unde
 	const rawRadialVelocity = parseSimbadNumber(radialVelocityKmS)
 
 	return {
-		id,
+		id: +id,
 		type: type as never,
 		epoch: SIMBAD_EPOCH,
 		rightAscension,

@@ -7,6 +7,7 @@ import type { StarCatalogEntry } from './star.catalog'
 const SAO_EPOCH = 'B1950'
 
 export interface SaoCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
+	readonly id: number
 	readonly epoch: 'B1950'
 	readonly magnitude: number
 	readonly spType: string
@@ -85,7 +86,7 @@ export async function* readSaoCatalog(source: Source & Seekable, bigEndian: bool
 		}
 
 		const xno = stnum ? readFloat() : star1++
-		const id = (xno - star0).toFixed(0)
+		const id = xno - star0
 		const rightAscension = readDouble()
 		const declination = readDouble()
 		const spType = readString(2)

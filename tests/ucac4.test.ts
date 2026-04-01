@@ -3,8 +3,7 @@ import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { type Angle, deg, toMas } from '../src/angle'
-import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry } from '../src/star.catalog'
-import { formatUcac4Id, openUcac4Catalog, type Ucac4Catalog } from '../src/ucac4'
+import { openUcac4Catalog, type Ucac4Catalog, type Ucac4CatalogEntry } from '../src/ucac4'
 
 const RECORD_SIZE = 78
 const ZONE_COUNT = 900
@@ -45,17 +44,17 @@ afterAll(async () => {
 
 test('queries a cone with RA wrap-around and native index use', async () => {
 	const result = await catalog.queryCone(0, 0, deg(0.3))
-	expect(idsOf(result)).toEqual([formatUcac4Id(451, 1), formatUcac4Id(451, 3)])
+	expect(idsOf(result)).toEqual(['451-1', '451-3'])
 })
 
 test('queries a box that crosses RA 0', async () => {
 	const result = await catalog.queryBox(deg(359.7), deg(0.3), deg(-0.1), deg(0.1))
-	expect(idsOf(result)).toEqual([formatUcac4Id(451, 1), formatUcac4Id(451, 3)])
+	expect(idsOf(result)).toEqual(['451-1', '451-3'])
 })
 
 test('includes stars when maxRA falls exactly on a UCAC4 index bin boundary', async () => {
 	const result = await catalog.queryBox(0, deg(0.25), deg(0.2), deg(0.3))
-	expect(idsOf(result)).toEqual([formatUcac4Id(452, 1)])
+	expect(idsOf(result)).toEqual(['452-1'])
 })
 
 test('queries a polygon with tangent-plane filtering', async () => {
@@ -66,17 +65,17 @@ test('queries a polygon with tangent-plane filtering', async () => {
 		[deg(9.7), deg(0.3)],
 	])
 
-	expect(idsOf(result)).toEqual([formatUcac4Id(451, 2)])
+	expect(idsOf(result)).toEqual(['451-2'])
 })
 
 test('supports streaming and compact projection', async () => {
 	const ids: string[] = []
 
 	for await (const entry of catalog.streamRegion({ kind: 'box', minRA: deg(349), maxRA: deg(360), minDEC: deg(-1), maxDEC: deg(1) })) {
-		ids.push(entry.id)
+		ids.push(`${entry.zone}-${entry.recordNumber}`)
 	}
 
-	expect(ids.sort()).toEqual([formatUcac4Id(450, 1), formatUcac4Id(451, 3)])
+	expect(ids.sort()).toEqual(['450-1', '451-3'])
 })
 
 test('fails cleanly when no UCAC4 zone files exist', async () => {
@@ -111,44 +110,8 @@ test('detects malformed records with invalid coordinates', async () => {
 	}
 })
 
-test('generic consumers can swap UCAC4 and a mock provider without changing query code', async () => {
-	await assertGenericCatalogContract(catalog)
-
-	const mock = new MockCatalog([
-		{ id: 'm1', rightAscension: deg(359.9), declination: 0, epoch: 2000, magnitude: 9.5, pmRA: 20, pmDEC: -10 },
-		{ id: 'm2', rightAscension: deg(0.1), declination: deg(0.05), epoch: 2000, magnitude: 12.1 },
-		{ id: 'm3', rightAscension: deg(10), declination: deg(0.1), epoch: 2000, magnitude: 14.5 },
-	])
-
-	await assertGenericCatalogContract(mock)
-})
-
-class MockCatalog extends BaseStarCatalog<StarCatalogEntry> {
-	constructor(private readonly entries: readonly StarCatalogEntry[]) {
-		super()
-	}
-
-	protected *streamCandidateEntries(_query: NormalizedStarCatalogQuery): Iterable<StarCatalogEntry> {
-		for (const entry of this.entries) {
-			yield entry
-		}
-	}
-
-	get(id: string) {
-		return this.entries.find((entry) => entry.id === id)
-	}
-}
-
-async function assertGenericCatalogContract(catalog: BaseStarCatalog<StarCatalogEntry>) {
-	const cone = await catalog.queryCone(0, 0, deg(0.3))
-	expect(cone).toHaveLength(2)
-
-	const box = await catalog.queryBox(deg(359.7), deg(0.3), deg(-0.2), deg(0.2))
-	expect(box).toHaveLength(2)
-}
-
-function idsOf(items: readonly StarCatalogEntry[]) {
-	return items.map((item) => item.id).sort()
+function idsOf(items: readonly Ucac4CatalogEntry[]) {
+	return items.map((item) => `${item.zone}-${item.recordNumber}`).sort()
 }
 
 async function createCatalog() {

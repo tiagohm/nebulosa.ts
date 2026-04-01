@@ -296,7 +296,7 @@ function syntheticCatalogPatternStar(x: number, y: number, magnitude?: number): 
 function ProjectedCatalogStarComparator<S extends StarCatalogEntry>(left: ProjectedCatalogStar<S>, right: ProjectedCatalogStar<S>) {
 	if (left.catalogStar.magnitude !== right.catalogStar.magnitude) return compareOptionalAscending(left.catalogStar.magnitude, right.catalogStar.magnitude)
 	if (left.projectedRadius !== right.projectedRadius) return left.projectedRadius - right.projectedRadius
-	return left.catalogStar.id.localeCompare(right.catalogStar.id)
+	return 0
 }
 
 // Builds the approximate sky solution from the fitted image-to-tangent transform.

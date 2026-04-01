@@ -14,6 +14,7 @@ import { readImage } from './image.util'
 await downloadPerTag('hnsky')
 
 interface SyntheticCatalogStar extends StarCatalogEntry {
+	readonly id: number
 	readonly magnitude?: number
 }
 
@@ -41,7 +42,7 @@ interface Scenario {
 	readonly queryRadius: Angle
 	readonly detectedStars: readonly DetectedStar[]
 	readonly catalogStars: readonly SyntheticCatalogStar[]
-	readonly truthIds: readonly string[]
+	readonly truthIds: readonly number[]
 }
 
 // Provides a deterministic in-memory catalog for the crossmatcher tests.
@@ -84,11 +85,6 @@ class MockCatalog implements StarCatalog<SyntheticCatalogStar> {
 		return [...this.stars]
 	}
 
-	// Retrieves a catalog entry by identifier.
-	get(id: string) {
-		return this.stars.find((star) => star.id === id)
-	}
-
 	// Streams generic region results.
 	*streamRegion(query: StarCatalogQuery) {
 		for (const star of this.queryRegion(query)) yield star
@@ -113,7 +109,7 @@ function createScenario(options: ScenarioOptions): Scenario {
 	const queryRadius = Math.min(deg(2), fieldRadiusRadians * 2.8 + queryOffset + arcsec(30))
 	const catalogStars: SyntheticCatalogStar[] = []
 	const detectedStars: DetectedStar[] = []
-	const truthIds: string[] = []
+	const truthIds: number[] = []
 	let attempts = 0
 
 	while (detectedStars.length < matchedStars && attempts < matchedStars * 500) {
@@ -130,7 +126,7 @@ function createScenario(options: ScenarioOptions): Scenario {
 		const sky = gnomonicUnproject(planeX, planeY, options.centerRA, options.centerDEC)
 		if (sky === false) continue
 
-		const id = detectedStars.length.toFixed(0)
+		const id = detectedStars.length
 		catalogStars.push({ id, epoch: 2000, rightAscension: sky[0], declination: sky[1], magnitude: 10 + random() * 2 })
 		detectedStars.push({ x: imagePoint.x, y: imagePoint.y, flux: 2000 + detectedStars.length * 100, snr: 20 + detectedStars.length * 0.5, hfd: 2.2 + (detectedStars.length % 3) * 0.1 })
 		truthIds.push(id)
@@ -141,7 +137,7 @@ function createScenario(options: ScenarioOptions): Scenario {
 		const angle = randomRange(random, 0, Math.PI * 2)
 		const sky = gnomonicUnproject(radius * Math.cos(angle), radius * Math.sin(angle), options.centerRA, options.centerDEC)
 		if (sky === false) continue
-		catalogStars.push({ id: `d${index}`, epoch: 2000, rightAscension: sky[0], declination: sky[1], magnitude: 12 + random() * 2 })
+		catalogStars.push({ id: index, epoch: 2000, rightAscension: sky[0], declination: sky[1], magnitude: 12 + random() * 2 })
 	}
 
 	return {

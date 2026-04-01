@@ -27,7 +27,7 @@ test.skipIf(SKIP)('query', async () => {
 
 describe.serial.skipIf(SKIP)('simbad catalog', () => {
 	const catalog = new SimbadCatalog()
-	const sourceId = '8399845' // Sirius
+	const sourceId = 8399845 // Sirius
 	const centerRA = deg(101.28715533333335)
 	const centerDEC = deg(-16.71611586111111)
 	const radius = arcmin(0.5)

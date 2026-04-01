@@ -102,6 +102,7 @@ export class StellariumProtocolServer {
 }
 
 export interface StellariumCatalogEntry extends StarCatalogEntry {
+	readonly id: number
 	readonly type: StellariumObjectType
 	readonly majorAxis: Angle
 	readonly minorAxis: Angle
@@ -233,7 +234,7 @@ export async function* readCatalogDat(source: Source & Seekable): AsyncIterable<
 			break
 		}
 
-		const id = readInt().toFixed(0)
+		const id = readInt()
 		const rightAscension = readDouble()
 		const declination = readDouble()
 		const mB = readDouble()

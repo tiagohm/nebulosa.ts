@@ -3,7 +3,7 @@ import { PI, PIOVERTWO, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
 import { clamp, pmod } from './math'
-import { type StarCatalog, type StarCatalogEntry, type StarCatalogQuery, type StarCatalogRaDecBox, splitRaBox, type Vertex } from './star.catalog'
+import { type StarCatalog, type StarCatalogQuery, type StarCatalogRaDecBox, splitRaBox, type Vertex } from './star.catalog'
 import { type MutVec3, type Vec3, vecCross, vecDot, vecNegateMut, vecNormalize, vecTripleProduct } from './vec3'
 
 const HEALPIX_MAX_NSIDE = 2 ** 24
@@ -16,6 +16,8 @@ const VERTEX_EPSILON = 1e-12
 
 const JRLL = [2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4] as const
 const JPLL = [1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7] as const
+
+export type HealpixId = number | string | bigint
 
 export type HealpixOrdering = 'nested' | 'ring'
 
@@ -32,9 +34,9 @@ export interface HealpixIndexOptions {
 	readonly ordering?: HealpixOrdering
 }
 
-export interface HealpixInsertObject<M = unknown> extends Readonly<EquatorialCoordinate> {
-	readonly id: string
-	readonly metadata?: M
+export interface HealpixInsertObject<M = unknown> extends EquatorialCoordinate {
+	readonly id: HealpixId
+	metadata?: M
 }
 
 interface HealpixRegion {
@@ -42,8 +44,7 @@ interface HealpixRegion {
 	readonly edgeNormals: readonly Vec3[]
 }
 
-interface HealpixObject<M> extends StarCatalogEntry {
-	metadata?: M
+interface HealpixObject<M> extends HealpixInsertObject<M> {
 	readonly vector: MutVec3
 	pixel: number
 	bucketIndex: number
@@ -143,7 +144,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	readonly ordering: HealpixOrdering
 
 	#pixelBuckets = new Map<number, HealpixObject<M>[]>()
-	#entriesById = new Map<string, HealpixObject<M>>()
+	#entriesById = new Map<HealpixId, HealpixObject<M>>()
 
 	// Creates a new index instance.
 	constructor(options: HealpixIndexOptions) {
@@ -174,7 +175,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	}
 
 	// Inserts a single object into the index.
-	add(id: string, rightAscension: number, declination: number, metadata?: M) {
+	add(id: HealpixId, rightAscension: number, declination: number, metadata?: M) {
 		const updated = this.update(id, rightAscension, declination, metadata)
 
 		if (updated === undefined) {
@@ -185,7 +186,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	}
 
 	// Inserts many objects after validating the whole batch first.
-	addMany(objects: readonly HealpixInsertObject<M>[]) {
+	addMany(objects: readonly Readonly<HealpixInsertObject<M>>[]) {
 		const inserted = new Array<HealpixObject<M>>(objects.length)
 		let i = 0
 
@@ -197,12 +198,12 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	}
 
 	// Retrieves a object by identifier.
-	get(id: string) {
+	get(id: HealpixId) {
 		return this.#entriesById.get(id)
 	}
 
 	// Removes an object from the index.
-	remove(id: string) {
+	remove(id: HealpixId) {
 		const entry = this.get(id)
 		if (!entry) return false
 		this.#removeEntry(entry)
@@ -210,7 +211,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	}
 
 	// Updates an object's coordinates and optional metadata.
-	update(id: string, rightAscension: Angle, declination: Angle, metadata?: M) {
+	update(id: HealpixId, rightAscension: Angle, declination: Angle, metadata?: M) {
 		const entry = this.get(id)
 
 		if (!entry) return undefined
@@ -241,16 +242,12 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	// Queries objects inside a spherical cap.
 	queryCone(centerRA: Angle, centerDEC: Angle, radius: Angle, options?: HealpixCoverOptions) {
 		validateRadius(radius)
-
 		const normalizedRA = normalizeLongitude(centerRA)
 		const normalizedDEC = normalizeLatitude(centerDEC)
 		const center = eraS2c(normalizedRA, normalizedDEC)
 		const radiusCos = Math.cos(radius)
 		const pixels = circleToPixels(this.nside, normalizedRA, normalizedDEC, radius, withIndexCoverOptions(options, this.nside, this.ordering))
-
-		return this.#collectMatches(pixels, (entry) => {
-			return vecDot(entry.vector, center) >= radiusCos - EPSILON
-		})
+		return this.#collectMatches(pixels, (entry) => vecDot(entry.vector, center) >= radiusCos - EPSILON)
 	}
 
 	// Queries objects inside a spherical triangle.
@@ -318,7 +315,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	}
 
 	// Inserts a validated object into the index.
-	#insertNormalized(id: string, rightAscension: number, declination: number, metadata?: M): Readonly<HealpixObject<M>> {
+	#insertNormalized(id: HealpixId, rightAscension: number, declination: number, metadata?: M): Readonly<HealpixObject<M>> {
 		const pixel = coordToPixel(this.nside, rightAscension, declination, this.ordering)
 		const bucket = this.#pixelBuckets.get(pixel) ?? []
 		const entry: HealpixObject<M> = { id, rightAscension, declination, metadata, vector: eraS2c(rightAscension, declination), pixel, bucketIndex: bucket.length }
@@ -871,10 +868,7 @@ function declinationBandIntersects(centerDEC: number, bound: number, minDEC: num
 
 // Checks whether a spherical cap intersects a non-wrapping RA interval.
 function raIntervalIntersects(centerRA: number, centerDEC: number, bound: number, minRA: number, maxRA: number) {
-	if (centerRA + BOX_EPSILON >= minRA && centerRA <= maxRA + BOX_EPSILON) {
-		return true
-	}
-
+	if (centerRA + BOX_EPSILON >= minRA && centerRA <= maxRA + BOX_EPSILON) return true
 	return Math.min(distanceToMeridian(centerRA, centerDEC, minRA), distanceToMeridian(centerRA, centerDEC, maxRA)) <= bound + BOX_EPSILON
 }
 
@@ -911,13 +905,7 @@ function coverPixels(nside: number, options: HealpixCoverOptions | undefined, te
 	const order = nsideToOrder(targetNside)
 	const maxDepth = options?.maxDepth === undefined ? order : validateMaxDepth(options.maxDepth, order)
 	const pixels: number[] = []
-	const state: HealpixCoverState = {
-		nside: targetNside,
-		order,
-		maxDepth,
-		pixels,
-		intersects: tester.intersects,
-	}
+	const state: HealpixCoverState = { nside: targetNside, order, maxDepth, pixels, intersects: tester.intersects }
 
 	for (let face = 0; face < HEALPIX_FACE_COUNT; face++) {
 		coverFace(state, face, 0, 0, targetNside, 0)
