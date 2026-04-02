@@ -1,10 +1,10 @@
-import type { Mutable } from 'utility-types'
 import type { Angle } from './angle'
 import { DEFAULT_REFRACTION_PARAMETERS, type Observed, type PositionAndVelocity, type RefractionParameters } from './astrometry'
 import { ELLIPSOID_PARAMETERS, PIOVERTWO } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { eraAtco13, eraStarpmpv, eraStarpv } from './erfa'
 import { pmAngles, type Time, Timescale, timeJulianYear, tt, ut1 } from './time'
+import type { Writable } from './types'
 import type { Vec3 } from './vec3'
 import type { Velocity } from './velocity'
 
@@ -27,7 +27,7 @@ export interface ObservedStar<T extends Star | StarPositionAndVelocity> extends 
 
 // Computes the BCRS position and velocity of a star.
 export function star(ra: Angle, dec: Angle, pmRA: Angle = 0, pmDEC: Angle = 0, parallax: Angle = 0, rv: Velocity = 0, epoch: Time = DEFAULT_EPOCH): StarPositionAndVelocity {
-	const s = eraStarpv(ra, dec, pmRA, pmDEC, parallax, rv) as unknown as Mutable<StarPositionAndVelocity>
+	const s = eraStarpv(ra, dec, pmRA, pmDEC, parallax, rv) as unknown as Writable<StarPositionAndVelocity>
 	s.rightAscension = ra
 	s.declination = dec
 	s.pmRA = pmRA

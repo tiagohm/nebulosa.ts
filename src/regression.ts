@@ -1,7 +1,7 @@
-import type { Mutable } from 'utility-types'
 import type { Point } from './geometry'
 import type { NumberArray } from './math'
 import { gaussianElimination, Matrix, QrDecomposition } from './matrix'
+import type { Writable } from './types'
 import { isNumberArray, meanOf, medianOf, minOf } from './util'
 
 export type TrendLineRegressionMethod = 'simple' | 'theil-sen'
@@ -311,7 +311,7 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 
 // Computes the coefficients of a quadratic regression
 export function quadraticRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, interceptAtZero?: boolean): QuadraticRegression {
-	const regression = polynomialRegression(x, y, 2, interceptAtZero) as Mutable<QuadraticRegression>
+	const regression = polynomialRegression(x, y, 2, interceptAtZero) as Writable<QuadraticRegression>
 	const coefficients = regression.coefficients
 	const a = coefficients.length === 2 ? coefficients[1] : coefficients[2]
 	const b = coefficients.length === 2 ? coefficients[0] : coefficients[1]

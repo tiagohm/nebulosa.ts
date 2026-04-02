@@ -3,11 +3,11 @@
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import type { Required } from 'utility-types'
 import { type Angle, normalizeAngle, toDeg } from './angle'
 import { readFits } from './fits'
 import { bufferSource, fileHandleSource } from './io'
 import { type PlateSolution, type PlateSolveOptions, plateSolutionFrom } from './platesolver'
+import type { RequiredOnly } from './types'
 
 export type ScaleUnit = 'degwidth' | 'arcminwidth' | 'arcsecperpix'
 
@@ -101,12 +101,12 @@ export function upload(upload: Upload<string | Blob>, signal?: AbortSignal) {
 	}
 }
 
-export function submissionStatus(submission: number | Submission, options: Required<Omit<RequestOptions, 'apiKey'>, 'session'>, signal?: AbortSignal) {
+export function submissionStatus(submission: number | Submission, options: RequiredOnly<Omit<RequestOptions, 'apiKey'>, 'session'>, signal?: AbortSignal) {
 	const subId = typeof submission === 'number' ? submission : submission.subid
 	return request<SubmissionStatus>(`${options.apiUrl || NOVA_ASTROMETRY_NET_URL}/api/submissions/${subId}`, 'GET', undefined, signal ?? options.signal)
 }
 
-export function wcsFile(jobId: number, options: Required<Omit<RequestOptions, 'apiKey'>, 'session'>, signal?: AbortSignal) {
+export function wcsFile(jobId: number, options: RequiredOnly<Omit<RequestOptions, 'apiKey'>, 'session'>, signal?: AbortSignal) {
 	return requestBlob(`${options.apiUrl || NOVA_ASTROMETRY_NET_URL}/wcs_file/${jobId}`, 'GET', undefined, signal ?? options.signal)
 }
 
@@ -147,7 +147,7 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 
 // https://astrometry.net/doc/readme.html
 
-export async function localAstrometryNetPlateSolve(input: string, options: Required<LocalAstrometryNetPlateSolveOptions, 'executable'>, signal?: AbortSignal) {
+export async function localAstrometryNetPlateSolve(input: string, options: RequiredOnly<LocalAstrometryNetPlateSolveOptions, 'executable'>, signal?: AbortSignal) {
 	const timeout = options.timeout ?? 0
 	const downsample = options.downsample ?? 2
 	const r = options?.radius ? Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180)) : 0

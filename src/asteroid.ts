@@ -1,4 +1,3 @@
-import type { Mutable } from 'utility-types'
 import { type Angle, normalizeAngle, normalizePI } from './angle'
 import type { PositionAndVelocity } from './astrometry'
 import { ECLIPTIC_J2000_MATRIX, GM_SUN_PITJEVA_2005, TAU } from './constants'
@@ -7,6 +6,7 @@ import type { Distance } from './distance'
 import { type Mat3, matMulVec, matTranspose } from './mat3'
 import { type MPCOrbit, type MPCOrbitComet, unpackDate } from './mpcorb'
 import { type Time, Timescale, tdb, time, timeSubtract, timeYMD } from './time'
+import type { Writable } from './types'
 import { type MutVec3, type Vec3, vecAngle, vecCross, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecPlus } from './vec3'
 
 const REFERENCE_FRAME = matTranspose(ECLIPTIC_J2000_MATRIX)
@@ -100,7 +100,7 @@ export function mpcComet(mpc: MPCOrbitComet) {
 }
 
 export class KeplerOrbit implements OsculatingElements {
-	private readonly oe: Partial<Mutable<OsculatingElements>> = {}
+	private readonly oe: Partial<Writable<OsculatingElements>> = {}
 	private readonly propagation: PropagationParameters
 
 	constructor(

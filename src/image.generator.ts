@@ -1,10 +1,10 @@
-import type { DeepRequired } from 'utility-types'
 import { PIOVERTWO, TAU } from './constants'
 import type { ImageRawType } from './image.types'
 import { clamp } from './math'
 import { mulberry32, type Random } from './random'
 import type { DetectedStar } from './star.detector'
 import { type PlotStarOptions, plotStar } from './star.generator'
+import type { DeepRequired } from './types'
 
 export type AstronomicalImageNoiseQuality = 'fast' | 'balanced' | 'high-realism'
 

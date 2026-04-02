@@ -13,7 +13,7 @@ const DEFAULT_MAX_CATALOG_STARS = 256
 const DEFAULT_PROJECTION_PADDING_FACTOR = 1
 const GEOMETRY_EPSILON = 1e-12
 
-const DEFAULT_STAR_CROSSMATCH_CONFIG: Readonly<Required<StarMatchingConfig>> = {
+const DEFAULT_STAR_CROSSMATCH_CONFIG: Required<StarMatchingConfig> = {
 	maxStars: DEFAULT_MAX_CATALOG_STARS,
 	minStars: 6,
 	allowMirror: true,
@@ -42,21 +42,21 @@ const DEFAULT_STAR_CROSSMATCH_CONFIG: Readonly<Required<StarMatchingConfig>> = {
 
 export type StarCrossmatchStatus = 'matched' | 'unmatched'
 
-export interface StarCrossmatchCameraInfo extends Size {
-	pixelSize?: number // µm
-	focalLength?: number // mm
+export interface StarCrossmatchCameraInfo extends Readonly<Size> {
+	readonly pixelSize?: number // µm
+	readonly focalLength?: number // mm
 }
 
 export interface StarCrossmatchOptions {
-	centerRA: Angle
-	centerDEC: Angle
-	radius: Angle
-	camera: StarCrossmatchCameraInfo
-	refinementIterations?: number
-	centerTolerance?: Angle
-	maxCatalogStars?: number
-	projectionPaddingFactor?: number
-	matchingConfig?: StarMatchingConfig
+	readonly centerRA: Angle
+	readonly centerDEC: Angle
+	readonly radius: Angle
+	readonly camera: StarCrossmatchCameraInfo
+	readonly refinementIterations?: number
+	readonly centerTolerance?: Angle
+	readonly maxCatalogStars?: number
+	readonly projectionPaddingFactor?: number
+	readonly matchingConfig?: StarMatchingConfig
 }
 
 export interface StarCrossmatchSolution {
@@ -459,7 +459,7 @@ function transformMirrored(transform: SimilarityTransform | AffineTransform) {
 }
 
 // Computes a nominal tangent-plane scale from optics when available or from the query footprint otherwise.
-function nominalPixelsPerRadian(camera: StarCrossmatchCameraInfo, queryRadius: Angle) {
+function nominalPixelsPerRadian(camera: Readonly<StarCrossmatchCameraInfo>, queryRadius: Angle) {
 	if (camera.pixelSize !== undefined && camera.focalLength !== undefined) {
 		const pixelSize = validatePositiveScalar(camera.pixelSize, 'pixel size')
 		const focalLength = validatePositiveScalar(camera.focalLength, 'focal length')
@@ -470,7 +470,7 @@ function nominalPixelsPerRadian(camera: StarCrossmatchCameraInfo, queryRadius: A
 }
 
 // Validates the camera geometry needed to convert the solved transform into a center coordinate.
-function validateCameraInfo(camera: StarCrossmatchCameraInfo): StarCrossmatchCameraInfo {
+function validateCameraInfo(camera: Readonly<StarCrossmatchCameraInfo>): Readonly<StarCrossmatchCameraInfo> {
 	const width = validatePositiveScalar(camera.width, 'camera width')
 	const height = validatePositiveScalar(camera.height, 'camera height')
 	if (camera.pixelSize !== undefined) validatePositiveScalar(camera.pixelSize, 'pixel size')

@@ -1,6 +1,6 @@
 import type { Angle } from './angle'
 import type { Point } from './geometry'
-import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, filterGuideStars, type GuideDirectionDEC, type GuideDirectionRA, type GuideFrame, type GuideStar, oppositeRA, type StarFilterConfig } from './guider'
+import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, type FilteredStars, filterGuideStars, type GuideDirectionDEC, type GuideDirectionRA, type GuideFrame, type GuideStar, oppositeRA, type StarFilterConfig } from './guider'
 import { clamp } from './math'
 
 export type GuidingCalibrationPhase = 'idle' | 'precheck' | 'acquireLock' | 'raForwardPulse' | 'raForwardMeasure' | 'raForwardComplete' | 'raClearPulse' | 'raClearMeasure' | 'decForwardPulse' | 'decForwardMeasure' | 'decBacklashClearing' | 'decForwardComplete' | 'solving' | 'validating' | 'completed' | 'failed'
@@ -280,13 +280,13 @@ export class GuidingCalibrator {
 	readonly config: GuidingCalibrationConfig
 	readonly state: GuidingCalibratorState
 
-	constructor(config: Partial<GuidingCalibrationConfig> = {}) {
+	constructor(config?: Partial<GuidingCalibrationConfig>) {
 		this.config = {
 			...DEFAULT_GUIDING_CALIBRATOR_CONFIG,
 			...config,
 			filter: {
 				...DEFAULT_GUIDING_CALIBRATOR_CONFIG.filter,
-				...(config.filter ?? {}),
+				...config?.filter,
 			},
 		}
 
@@ -439,7 +439,7 @@ export class GuidingCalibrator {
 	}
 
 	// Records one RA-forward sample and either continues pulsing or advances to clearing.
-	private handleRaForwardMeasurement(frame: GuideFrame, point: Point, filtered: ReturnType<typeof filterGuideStars>) {
+	private handleRaForwardMeasurement(frame: GuideFrame, point: Point, filtered: FilteredStars) {
 		this.transitionTo('raForwardMeasure')
 		const sample = this.recordSample(this.state.raSteps + 1, this.config.raPulse, this.config.raDirection, point, this.state.startX, this.state.startY)
 		this.state.raSteps++
@@ -486,7 +486,7 @@ export class GuidingCalibrator {
 	}
 
 	// Records one RA clearing sample and either continues reversing or starts DEC.
-	private handleRaClearMeasurement(frame: GuideFrame, point: Point, filtered: ReturnType<typeof filterGuideStars>) {
+	private handleRaClearMeasurement(frame: GuideFrame, point: Point, filtered: FilteredStars) {
 		this.transitionTo('raClearMeasure')
 
 		const sample = this.recordSample(this.state.clearingSteps + 1, this.config.raPulse, oppositeRA(this.config.raDirection), point, this.state.startX, this.state.startY)
@@ -509,7 +509,7 @@ export class GuidingCalibrator {
 	}
 
 	// Records one DEC sample, applies backlash tolerance, and either continues or solves calibration.
-	private handleDecMeasurement(frame: GuideFrame, point: Point, filtered: ReturnType<typeof filterGuideStars>) {
+	private handleDecMeasurement(frame: GuideFrame, point: Point, filtered: FilteredStars) {
 		const sample = this.recordDecSample(this.state.decSteps + 1, point)
 		this.state.decSteps++
 		this.finishMeasurement(point)
@@ -565,7 +565,7 @@ export class GuidingCalibrator {
 	}
 
 	// Solves the 2x2 calibration matrices and validates the final geometry.
-	private solveAndValidate(frame: GuideFrame, filtered: ReturnType<typeof filterGuideStars>) {
+	private solveAndValidate(frame: GuideFrame, filtered: FilteredStars) {
 		this.transitionTo('solving')
 
 		const { raSolution, decSolution } = this.state
@@ -698,7 +698,7 @@ export class GuidingCalibrator {
 	}
 
 	// Updates the mutable diagnostics snapshot used by tests and callers.
-	private updateDiagnostics(frame: GuideFrame, filtered: ReturnType<typeof filterGuideStars>, notes: readonly string[], pendingPulse?: CalibrationPulseCommand) {
+	private updateDiagnostics(frame: GuideFrame, filtered: FilteredStars, notes: readonly string[], pendingPulse?: CalibrationPulseCommand) {
 		const raNet = this.state.raSamples.length > 0 ? this.state.raSamples[this.state.raSamples.length - 1].netDistance : 0
 		const decNet = computeDecTravel(this.state.decSamples)
 		const clearingDistance = Math.hypot(this.state.currentX - this.state.startX, this.state.currentY - this.state.startY)

@@ -1,5 +1,5 @@
-import type { Mutable, Optional } from 'utility-types'
 import type { Point, Size } from './geometry'
+import type { PartialOnly, Writable } from './types'
 
 export const DEFAULT_PHD2_PORT = 4400
 
@@ -564,7 +564,7 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('set_lock_shift_enabled', [enabled])
 	}
 
-	setLockShiftParams(params: Optional<Omit<Mutable<PHD2LockShiftParams>, 'enabled'>, 'units'>) {
+	setLockShiftParams(params: PartialOnly<Omit<Writable<PHD2LockShiftParams>, 'enabled'>, 'units'>) {
 		params.units ||= params.axes === 'RA/Dec' ? 'arcsec/hr' : 'pixels/hr'
 		return this.send<number>('set_lock_shift_params', params)
 	}

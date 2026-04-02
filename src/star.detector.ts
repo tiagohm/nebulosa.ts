@@ -10,9 +10,9 @@ export interface DetectedStar extends Readonly<Point> {
 }
 
 export interface DetectStarOptions {
-	maxStars: number
-	searchRegion?: number
-	minSNR?: number
+	readonly maxStars: number
+	readonly searchRegion?: number
+	readonly minSNR?: number
 }
 
 type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumSq, width

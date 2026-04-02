@@ -18,7 +18,7 @@ export type StarCatalogQueryKind = 'cone' | 'triangle' | 'box' | 'polygon'
 
 export type StarCatalogGeometryMode = 'spherical' | 'planarTangent'
 
-export interface StarCatalogEntry extends EquatorialCoordinate {
+export interface StarCatalogEntry extends Readonly<EquatorialCoordinate> {
 	readonly epoch?: number | `B${number}`
 	readonly magnitude?: number
 	readonly pmRA?: Angle // per year

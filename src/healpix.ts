@@ -143,8 +143,8 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	readonly nside: number
 	readonly ordering: HealpixOrdering
 
-	#pixelBuckets = new Map<number, HealpixObject<M>[]>()
-	#entriesById = new Map<HealpixId, HealpixObject<M>>()
+	readonly #pixelBuckets = new Map<number, HealpixObject<M>[]>()
+	readonly #entries = new Map<HealpixId, HealpixObject<M>>()
 
 	// Creates a new index instance.
 	constructor(options: HealpixIndexOptions) {
@@ -156,7 +156,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 
 	// Returns the number of indexed objects.
 	get size() {
-		return this.#entriesById.size
+		return this.#entries.size
 	}
 
 	// Converts coordinates to a nested HEALPix pixel using the index resolution.
@@ -199,7 +199,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 
 	// Retrieves a object by identifier.
 	get(id: HealpixId) {
-		return this.#entriesById.get(id)
+		return this.#entries.get(id)
 	}
 
 	// Removes an object from the index.
@@ -236,7 +236,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	// Removes every object from the index.
 	clear() {
 		this.#pixelBuckets.clear()
-		this.#entriesById.clear()
+		this.#entries.clear()
 	}
 
 	// Queries objects inside a spherical cap.
@@ -322,7 +322,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 
 		bucket.push(entry)
 		this.#pixelBuckets.set(pixel, bucket)
-		this.#entriesById.set(id, entry)
+		this.#entries.set(id, entry)
 
 		return entry
 	}
@@ -341,7 +341,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	// Removes an existing entry from all internal tables.
 	#removeEntry(entry: HealpixObject<M>) {
 		this.#detachEntry(entry)
-		this.#entriesById.delete(entry.id)
+		this.#entries.delete(entry.id)
 	}
 
 	// Detaches an entry from its current bucket using swap-remove.

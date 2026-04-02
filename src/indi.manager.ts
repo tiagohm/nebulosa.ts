@@ -1,4 +1,3 @@
-import type { PickByValue } from 'utility-types'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, parseAngle, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import { TAU } from './constants'
@@ -12,6 +11,7 @@ import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, 
 import type { GeographicCoordinate } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
 import { type Time, timeNow } from './time'
+import type { PickByValue } from './types'
 
 export interface DeviceHandler<D extends Device> {
 	readonly added: (device: D) => void
