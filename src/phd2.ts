@@ -191,6 +191,35 @@ export interface PHD2StartCalibrationEvent extends PHD2Event<'StartCalibration'>
 	readonly Mount: string
 }
 
+export interface PHD2EventMap {
+	readonly Version: PHD2VersionEvent
+	readonly Alert: PHD2AlertEvent
+	readonly AppState: PHD2AppStateEvent
+	readonly Calibrating: PHD2CalibratingEvent
+	readonly CalibrationComplete: PHD2CalibrationCompleteEvent
+	readonly CalibrationDataFlipped: PHD2CalibrationDataFlippedEvent
+	readonly CalibrationFailed: PHD2CalibrationFailedEvent
+	readonly GuideParamChange: PHD2GuideParamChangeEvent
+	readonly GuideStep: PHD2GuideStepEvent
+	readonly GuidingDithered: PHD2GuidingDitheredEvent
+	readonly LockPositionSet: PHD2LockPositionSetEvent
+	readonly LoopingExposures: PHD2LoopingExposuresEvent
+	readonly SettleDone: PHD2SettleDoneEvent
+	readonly Settling: PHD2SettlingEvent
+	readonly StarLost: PHD2StarLostEvent
+	readonly StarSelected: PHD2StarSelectedEvent
+	readonly StartCalibration: PHD2StartCalibrationEvent
+	readonly ConfigurationChange: PHD2ConfigurationChangeEvent
+	readonly GuidingStopped: PHD2GuidingStoppedEvent
+	readonly LockPositionLost: PHD2LockPositionLostEvent
+	readonly LockPositionShiftLimitReached: PHD2LockPositionShiftLimitReachedEvent
+	readonly LoopingExposuresStopped: PHD2LoopingExposuresStoppedEvent
+	readonly Paused: PHD2PausedEvent
+	readonly Resumed: PHD2ResumedEvent
+	readonly SettleBegin: PHD2SettleBeginEvent
+	readonly StartGuiding: PHD2StartGuidingEvent
+}
+
 export interface PHD2Error {
 	readonly code: number
 	readonly message: string
