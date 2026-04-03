@@ -11,6 +11,8 @@ export type CfaPattern = 'RGGB' | 'BGGR' | 'GBRG' | 'GRBG' | 'GRGB' | 'GBGR' | '
 
 export type SCNRProtectionMethod = 'MAXIMUM_MASK' | 'ADDITIVE_MASK' | 'AVERAGE_NEUTRAL' | 'MAXIMUM_NEUTRAL' | 'MINIMUM_NEUTRAL'
 
+export type FFTFilterType = 'lowPass' | 'highPass'
+
 export type SCNRAlgorithm = (a: number, b: number, c: number, amount: number) => number
 
 export type Grayscale = Readonly<Record<Lowercase<ImageChannel>, number>>
