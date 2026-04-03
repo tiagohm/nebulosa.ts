@@ -401,7 +401,7 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('stop_capture')
 	}
 
-	clearCalibration(which: PHD2WhichMount) {
+	clearCalibration(which: PHD2WhichMount = 'MOUNT') {
 		return this.send<number>('clear_calibration', [which])
 	}
 
@@ -434,7 +434,7 @@ export class PHD2Client implements Disposable {
 		return this.send<boolean>('get_calibrated')
 	}
 
-	getCalibrationData(which: PHD2WhichMount) {
+	getCalibrationData(which: PHD2WhichMount = 'MOUNT') {
 		return this.send<PHD2CalibrationData>('get_calibration_data', [which])
 	}
 
@@ -514,7 +514,7 @@ export class PHD2Client implements Disposable {
 		return this.send<boolean>('get_use_subframes')
 	}
 
-	guide(recalibrate: boolean = false, roi: Point & Size = DEFAULT_ROI, settle: PHD2Settle = DEFAULT_PHD2_SETTLE) {
+	guide(recalibrate: boolean = false, settle: PHD2Settle = DEFAULT_PHD2_SETTLE, roi: Point & Size = DEFAULT_ROI) {
 		const x = roi.x ?? DEFAULT_ROI.x
 		const y = roi.y ?? DEFAULT_ROI.y
 		const width = roi.width ?? DEFAULT_ROI.width
@@ -524,7 +524,7 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('guide', { recalibrate, roi: subframe, settle })
 	}
 
-	guidePulse(amount: number, direction: PHD2GuideDirection, which: PHD2WhichMount) {
+	guidePulse(amount: number, direction: PHD2GuideDirection, which: PHD2WhichMount = 'MOUNT') {
 		return this.send<number>('guide_pulse', [amount, direction, which])
 	}
 
