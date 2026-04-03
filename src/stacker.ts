@@ -9,7 +9,7 @@ import { meanOf, medianAbsoluteDeviationOf, medianOf } from './util'
 
 export type StackingCombinationMethod = 'sum' | 'average' | 'weighted-average' | 'median' | 'sigma-clip' | 'min-max-average' | 'winsorized-mean' | 'percentile-clip-average'
 
-export type StackingInterpolationMode = 'nearest' | 'bilinear'
+export type StackingInterpolationMode = 'nearest' | 'bilinear' | 'bicubic'
 
 export type StackingCropMode = 'union' | 'intersection'
 
@@ -1061,6 +1061,50 @@ function alignIntoReference(image: Image, inverseTransform: SimilarityTransform 
 		return coveredPixels
 	}
 
+	if (interpolation === 'bilinear') {
+		for (let y = 0, pixel = 0, outIndex = 0; y < outHeight; y++) {
+			let sourceX = matrix.m01 * y + matrix.tx
+			let sourceY = matrix.m11 * y + matrix.ty
+
+			for (let x = 0; x < outWidth; x++, pixel++, outIndex += channels) {
+				if (!(sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1)) {
+					sourceX += matrix.m00
+					sourceY += matrix.m10
+					continue
+				}
+
+				const x0 = Math.floor(sourceX)
+				const y0 = Math.floor(sourceY)
+				const x1 = Math.min(x0 + 1, widthMinus1)
+				const y1 = Math.min(y0 + 1, heightMinus1)
+				const tx = sourceX - x0
+				const ty = sourceY - y0
+				const w00 = (1 - tx) * (1 - ty)
+				const w10 = tx * (1 - ty)
+				const w01 = (1 - tx) * ty
+				const w11 = tx * ty
+				const base00 = (y0 * width + x0) * channels
+				const base10 = (y0 * width + x1) * channels
+				const base01 = (y1 * width + x0) * channels
+				const base11 = (y1 * width + x1) * channels
+
+				for (let channel = 0; channel < channels; channel++) {
+					outRaw[outIndex + channel] = raw[base00 + channel] * w00 + raw[base10 + channel] * w10 + raw[base01 + channel] * w01 + raw[base11 + channel] * w11
+				}
+
+				outMask[pixel] = 1
+				coveredPixels++
+				sourceX += matrix.m00
+				sourceY += matrix.m10
+			}
+		}
+
+		return coveredPixels
+	}
+
+	// Bicubic uses edge-clamped Catmull-Rom taps; this is smooth but may overshoot sharp peaks.
+	const rowStride = width * channels
+
 	for (let y = 0, pixel = 0, outIndex = 0; y < outHeight; y++) {
 		let sourceX = matrix.m01 * y + matrix.tx
 		let sourceY = matrix.m11 * y + matrix.ty
@@ -1072,23 +1116,43 @@ function alignIntoReference(image: Image, inverseTransform: SimilarityTransform 
 				continue
 			}
 
-			const x0 = Math.floor(sourceX)
-			const y0 = Math.floor(sourceY)
-			const x1 = Math.min(x0 + 1, widthMinus1)
-			const y1 = Math.min(y0 + 1, heightMinus1)
-			const tx = sourceX - x0
-			const ty = sourceY - y0
-			const w00 = (1 - tx) * (1 - ty)
-			const w10 = tx * (1 - ty)
-			const w01 = (1 - tx) * ty
-			const w11 = tx * ty
-			const base00 = (y0 * width + x0) * channels
-			const base10 = (y0 * width + x1) * channels
-			const base01 = (y1 * width + x0) * channels
-			const base11 = (y1 * width + x1) * channels
+			const x1 = Math.floor(sourceX)
+			const y1 = Math.floor(sourceY)
+			const x0 = x1 > 0 ? x1 - 1 : 0
+			const x2 = x1 < widthMinus1 ? x1 + 1 : widthMinus1
+			const x3 = x1 + 2 <= widthMinus1 ? x1 + 2 : widthMinus1
+			const y0 = y1 > 0 ? y1 - 1 : 0
+			const y2 = y1 < heightMinus1 ? y1 + 1 : heightMinus1
+			const y3 = y1 + 2 <= heightMinus1 ? y1 + 2 : heightMinus1
+			const tx = sourceX - x1
+			const ty = sourceY - y1
+			const tx2 = tx * tx
+			const tx3 = tx2 * tx
+			const ty2 = ty * ty
+			const ty3 = ty2 * ty
+			const wx0 = 0.5 * (-tx3 + 2 * tx2 - tx)
+			const wx1 = 0.5 * (3 * tx3 - 5 * tx2 + 2)
+			const wx2 = 0.5 * (-3 * tx3 + 4 * tx2 + tx)
+			const wx3 = 0.5 * (tx3 - tx2)
+			const wy0 = 0.5 * (-ty3 + 2 * ty2 - ty)
+			const wy1 = 0.5 * (3 * ty3 - 5 * ty2 + 2)
+			const wy2 = 0.5 * (-3 * ty3 + 4 * ty2 + ty)
+			const wy3 = 0.5 * (ty3 - ty2)
+			const baseY0 = y0 * rowStride
+			const baseY1 = y1 * rowStride
+			const baseY2 = y2 * rowStride
+			const baseY3 = y3 * rowStride
+			const baseX0 = x0 * channels
+			const baseX1 = x1 * channels
+			const baseX2 = x2 * channels
+			const baseX3 = x3 * channels
 
 			for (let channel = 0; channel < channels; channel++) {
-				outRaw[outIndex + channel] = raw[base00 + channel] * w00 + raw[base10 + channel] * w10 + raw[base01 + channel] * w01 + raw[base11 + channel] * w11
+				const row0 = raw[baseY0 + baseX0 + channel] * wx0 + raw[baseY0 + baseX1 + channel] * wx1 + raw[baseY0 + baseX2 + channel] * wx2 + raw[baseY0 + baseX3 + channel] * wx3
+				const row1 = raw[baseY1 + baseX0 + channel] * wx0 + raw[baseY1 + baseX1 + channel] * wx1 + raw[baseY1 + baseX2 + channel] * wx2 + raw[baseY1 + baseX3 + channel] * wx3
+				const row2 = raw[baseY2 + baseX0 + channel] * wx0 + raw[baseY2 + baseX1 + channel] * wx1 + raw[baseY2 + baseX2 + channel] * wx2 + raw[baseY2 + baseX3 + channel] * wx3
+				const row3 = raw[baseY3 + baseX0 + channel] * wx0 + raw[baseY3 + baseX1 + channel] * wx1 + raw[baseY3 + baseX2 + channel] * wx2 + raw[baseY3 + baseX3 + channel] * wx3
+				outRaw[outIndex + channel] = row0 * wy0 + row1 * wy1 + row2 * wy2 + row3 * wy3
 			}
 
 			outMask[pixel] = 1
