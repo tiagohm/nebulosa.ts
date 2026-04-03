@@ -1,7 +1,7 @@
 export type Brand<T, U> = T & { __brand: U }
-export type DeepReadonly<T> = { readonly [K in keyof T]: T[K] extends object ? DeepReadonly<T[K]> : T[K] }
-export type DeepRequired<T> = Required<{ [K in keyof T]: T[K] extends Required<T[K]> ? T[K] : DeepRequired<T[K]> }>
-export type DeepWritable<T> = { -readonly [K in keyof T]: T[K] extends object ? DeepWritable<T[K]> : T[K] }
+export type DeepReadonly<T> = T extends Primitive ? T : { readonly [K in keyof T]: T[K] extends object ? DeepReadonly<T[K]> : T[K] }
+export type DeepRequired<T> = T extends Primitive ? T : Required<{ [K in keyof T]: T[K] extends Required<T[K]> ? T[K] : DeepRequired<T[K]> }>
+export type DeepWritable<T> = T extends Primitive ? T : { -readonly [K in keyof T]: T[K] extends object ? DeepWritable<T[K]> : T[K] }
 export type Exact<T extends object> = Brand<T, keyof T>
 export type Nullable<T> = T | null
 export type OmitByValue<T, V> = Pick<T, { [K in keyof T]-?: T[K] extends V ? never : K }[keyof T]>
