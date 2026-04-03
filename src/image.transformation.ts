@@ -958,13 +958,16 @@ function fftStoreChannel(image: Image, channel: number, workspace: FFTWorkspace,
 
 // Applies a centered radial FFT low-pass or high-pass filter in place.
 export function fft(image: Image, workspace: FFTWorkspace, filterType: FFTFilterType = 'lowPass', cutoff?: number, weight: number = 1): Image {
+	const { width, height, channels } = image.metadata
 	const amount = clamp(weight, 0, 1)
-	if (amount <= 0 || image.metadata.width <= 0 || image.metadata.height <= 0 || image.metadata.channels <= 0) return image
+	if (amount <= 0 || width <= 0 || height <= 0 || channels <= 0) return image
+	if (workspace.width < width || workspace.height < height) throw new Error(`FFT workspace ${workspace.width}x${workspace.height} is smaller than image ${width}x${height}`)
+
 	const threshold = clamp(cutoff ?? (filterType === 'lowPass' ? 1 : 0), 0, 1)
 	const { mask } = workspace.mask(filterType, threshold)
 	const { real, imaginary } = workspace
 
-	for (let channel = 0; channel < image.metadata.channels; channel++) {
+	for (let channel = 0; channel < channels; channel++) {
 		fftLoadChannel(image, channel, workspace)
 		fftTransform2D(workspace, false)
 
