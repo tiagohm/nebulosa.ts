@@ -1,6 +1,6 @@
 import type { Angle } from './angle'
 import type { Point } from './geometry'
-import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, type FilteredStars, filterGuideStars, type GuideDirectionDEC, type GuideDirectionRA, type GuideFrame, type GuideStar, oppositeRA, type StarFilterConfig } from './guider'
+import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, type FilteredStars, filterGuideStars, type GuideDirectionDEC, type GuideDirectionRA, type GuideFrame, type GuideStar, oppositeDEC, oppositeRA, type StarFilterConfig } from './guider'
 import { clamp } from './math'
 
 export type GuidingCalibrationPhase = 'idle' | 'precheck' | 'acquireLock' | 'raForwardPulse' | 'raForwardMeasure' | 'raForwardComplete' | 'raClearPulse' | 'raClearMeasure' | 'decForwardPulse' | 'decForwardMeasure' | 'decBacklashClearing' | 'decForwardComplete' | 'solving' | 'validating' | 'completed' | 'failed'
@@ -109,6 +109,32 @@ export interface GuidingCalibrationResult {
 	readonly decStartY: number
 	readonly clearingSteps: number
 	readonly warnings: readonly string[]
+}
+
+// Applies a 180-degree image flip and an optional DEC output reversal to a solved calibration.
+export function flipGuidingCalibration(calibration: GuidingCalibrationResult, reverseDecOutput: boolean = false, minDeterminant: number = DEFAULT_GUIDING_CALIBRATOR_CONFIG.minDeterminant): GuidingCalibrationResult {
+	const raImageScale = -1
+	const decImageScale = reverseDecOutput ? 1 : -1
+	const [m00, m01, m10, m11] = calibration.imageMotion
+	const flippedM00 = m00 * raImageScale
+	const flippedM01 = m01 * decImageScale
+	const flippedM10 = m10 * raImageScale
+	const flippedM11 = m11 * decImageScale
+	const determinant = flippedM00 * flippedM11 - flippedM01 * flippedM10
+
+	if (!Number.isFinite(determinant) || Math.abs(determinant) <= minDeterminant) {
+		throw new Error(`invalid flipped calibration matrix: determinant=${determinant}`)
+	}
+
+	return {
+		...calibration,
+		ra: flipedCalibrationAxisSolution(calibration.ra, raImageScale, calibration.ra.direction),
+		dec: flipedCalibrationAxisSolution(calibration.dec, decImageScale, reverseDecOutput ? oppositeDEC(calibration.dec.direction) : calibration.dec.direction),
+		imageMotion: [flippedM00, flippedM01, flippedM10, flippedM11],
+		imageToAxis: [flippedM11 / determinant, -flippedM01 / determinant, -flippedM10 / determinant, flippedM00 / determinant],
+		determinant,
+		warnings: calibration.warnings.slice(),
+	}
 }
 
 export interface GuidingCalibrationDiagnostics {
@@ -811,6 +837,13 @@ function solveAxisFromSamples(samples: readonly GuidingCalibrationSample[]): Gui
 	}
 
 	return { unitX, unitY, ratePxPerMs: projectedTravel / totalPulse, totalTravelPx: projectedTravel, totalPulse, angle: Math.atan2(unitY, unitX), rmsOrthogonalResidualPx: Math.sqrt(orthogonalSq / samples.length), negativeProjectionCount }
+}
+
+// Flips one solved axis basis vector while preserving the measured scalar rate and residual diagnostics.
+function flipedCalibrationAxisSolution<D extends GuideDirectionRA | GuideDirectionDEC>(solution: GuidingCalibrationAxisSolution, imageScale: number, direction: D): GuidingCalibrationAxisSolutionForDirection<D> {
+	const unitX = solution.unitX * imageScale
+	const unitY = solution.unitY * imageScale
+	return { unitX, unitY, ratePxPerMs: solution.ratePxPerMs, totalTravelPx: solution.totalTravelPx, totalPulse: solution.totalPulse, angle: Math.atan2(unitY, unitX), rmsOrthogonalResidualPx: solution.rmsOrthogonalResidualPx, negativeProjectionCount: solution.negativeProjectionCount, direction }
 }
 
 // Validates that an axis solution is finite and within the configured rate bounds.

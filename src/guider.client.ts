@@ -1,6 +1,6 @@
 import { TAU } from './constants'
 import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
-import { type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './guider.calibrator'
+import { flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './guider.calibrator'
 import { readImageFromBuffer, readImageFromSource } from './image'
 import type { Image } from './image.types'
 import type { Camera, GuideDirection, GuideOutput } from './indi.device'
@@ -30,7 +30,8 @@ const DEFAULT_LOCK_SHIFT_PARAMS: Readonly<PHD2LockShiftParams> = {
 }
 
 export interface GuiderClientOptions {
-	handler?: GuiderClientHandler
+	readonly handler?: GuiderClientHandler
+	readonly reverseDecOutputAfterMeridianFlip?: boolean
 }
 
 export interface GuiderClientHandler {
@@ -231,8 +232,16 @@ export class GuiderClient {
 		return true
 	}
 
-	// TODO: implement calibration parity flipping once the local guider exposes a safe pier-flip transform.
-	flipCalibration() {}
+	// Flips the solved calibration for a meridian flip and rebuilds the guider with the transformed axis parity.
+	flipCalibration() {
+		if (this.#calibration === undefined || this.#appState === 'Calibrating') return false
+
+		this.#calibration = flipGuidingCalibration(this.#calibration, this.options?.reverseDecOutputAfterMeridianFlip === true)
+		this.#guider = makeGuider(this.#calibration, this.#declinationGuideMode)
+		this.emitEvent('CalibrationDataFlipped', { Mount: this.#guideOutput?.name ?? '' })
+
+		return true
+	}
 
 	// Returns the current PHD2-style state mapped from the local session state machine.
 	getAppState() {
@@ -825,9 +834,16 @@ export class GuiderClient {
 	}
 }
 
-// Builds a guider instance from the current calibration and DEC mode.
+// Builds a guider instance from the current calibration, axis parity, and DEC mode.
 function makeGuider(calibration: GuidingCalibrationResult | undefined, mode: PHD2DeclinationGuideMode): Guider {
-	return new Guider({ calibration: calibration?.imageToAxis, decMode: toDeclinationGuideMode(mode) })
+	if (calibration === undefined) return new Guider({ decMode: toDeclinationGuideMode(mode) })
+
+	return new Guider({
+		calibration: calibration.imageToAxis,
+		raPositiveDirection: calibration.ra.direction,
+		decPositiveDirection: calibration.dec.direction,
+		decMode: toDeclinationGuideMode(mode),
+	})
 }
 
 // Maps PHD2 DEC guide mode values to the local guider model.
