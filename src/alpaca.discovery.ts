@@ -10,39 +10,39 @@ export interface AlpacaDiscoveryServerOptions {
 }
 
 export class AlpacaDiscoveryServer {
-	private socket?: Bun.udp.Socket<'buffer'>
-	private readonly ports = new Set<number>()
+	#socket?: Bun.udp.Socket<'buffer'>
+	readonly #ports = new Set<number>()
 
-	constructor(private readonly options?: AlpacaDiscoveryServerOptions) {}
+	constructor(readonly options?: AlpacaDiscoveryServerOptions) {}
 
 	addPort(port: number) {
-		this.ports.add(port)
+		this.#ports.add(port)
 	}
 
 	removePort(port: number) {
-		this.ports.delete(port)
+		this.#ports.delete(port)
 	}
 
 	get port() {
-		return this.socket?.port ?? -1
+		return this.#socket?.port ?? -1
 	}
 
 	get host() {
-		return this.socket?.hostname
+		return this.#socket?.hostname
 	}
 
 	get ip() {
-		return this.socket?.address.address
+		return this.#socket?.address.address
 	}
 
 	get running() {
-		return !!this.socket
+		return !!this.#socket
 	}
 
 	async start(hostname: string = '0.0.0.0', port: number = ALPACA_DISCOVERY_PORT, ignoreLocalhost = this.options?.ignoreLocalhost ?? true) {
-		if (this.socket) return false
+		if (this.#socket) return false
 
-		this.socket = await Bun.udpSocket({
+		this.#socket = await Bun.udpSocket({
 			hostname,
 			port,
 			socket: {
@@ -50,7 +50,7 @@ export class AlpacaDiscoveryServer {
 					if (ignoreLocalhost && (address === '127.0.0.1' || address === 'localhost')) return
 
 					if (data.toString('utf-8') === ALPACA_DISCOVERY_DATA) {
-						this.send(socket, port, address)
+						this.#send(socket, port, address)
 					}
 				},
 				error: (_, error) => {
@@ -63,14 +63,14 @@ export class AlpacaDiscoveryServer {
 	}
 
 	stop() {
-		if (this.socket) {
-			this.socket.close()
-			this.socket = undefined
+		if (this.#socket) {
+			this.#socket.close()
+			this.#socket = undefined
 		}
 	}
 
-	private send(socket: Bun.udp.Socket<'buffer'>, port: number, address: string) {
-		this.ports.forEach((p) => socket.send(`{"AlpacaPort": ${p.toFixed(0)}}`, port, address))
+	#send(socket: Bun.udp.Socket<'buffer'>, port: number, address: string) {
+		this.#ports.forEach((p) => socket.send(`{"AlpacaPort": ${p.toFixed(0)}}`, port, address))
 	}
 }
 
@@ -109,16 +109,16 @@ const DEFAULT_ALPACA_DISCOVERY_OPTIONS: Required<AlpacaDiscoveryOptions> = {
 }
 
 export class AlpacaDiscoveryClient implements Disposable {
-	private socket?: Bun.udp.Socket<'buffer'>
-	private timeout?: NodeJS.Timeout
-	private wait?: PromiseWithResolvers<boolean>
+	#socket?: Bun.udp.Socket<'buffer'>
+	#timeout?: NodeJS.Timeout
+	#wait?: PromiseWithResolvers<boolean>
 
 	async discovery(onDiscovery: (server: AlpacaDeviceServer) => void, options: AlpacaDiscoveryOptions = DEFAULT_ALPACA_DISCOVERY_OPTIONS) {
-		if (this.socket) return false
+		if (this.#socket) return false
 
-		this.wait = options.wait ? Promise.withResolvers<boolean>() : undefined
+		this.#wait = options.wait ? Promise.withResolvers<boolean>() : undefined
 
-		this.socket = await Bun.udpSocket({
+		this.#socket = await Bun.udpSocket({
 			hostname: options.host || DEFAULT_ALPACA_DISCOVERY_OPTIONS.host,
 			socket: {
 				data: async (socket, data, _, address) => {
@@ -148,10 +148,10 @@ export class AlpacaDiscoveryClient implements Disposable {
 		})
 
 		// https://github.com/oven-sh/bun/issues/15746
-		this.socket.setBroadcast(true)
+		this.#socket.setBroadcast(true)
 
 		if (options.timeout !== 0) {
-			this.timeout = setTimeout(() => this.close(), options.timeout ?? DEFAULT_ALPACA_DISCOVERY_OPTIONS.timeout)
+			this.#timeout = setTimeout(() => this.close(), options.timeout ?? DEFAULT_ALPACA_DISCOVERY_OPTIONS.timeout)
 		}
 
 		try {
@@ -164,7 +164,7 @@ export class AlpacaDiscoveryClient implements Disposable {
 				for (const name of names) {
 					for (const i of interfaces[name]!) {
 						if (i.family === family) {
-							this.socket.send(ALPACA_DISCOVERY_DATA, port, broadcastAddress(i, family))
+							this.#socket.send(ALPACA_DISCOVERY_DATA, port, broadcastAddress(i, family))
 						}
 					}
 				}
@@ -174,18 +174,18 @@ export class AlpacaDiscoveryClient implements Disposable {
 			console.error(e)
 		}
 
-		return this.wait?.promise ?? true
+		return this.#wait?.promise ?? true
 	}
 
 	close() {
-		clearTimeout(this.timeout)
-		this.timeout = undefined
+		clearTimeout(this.#timeout)
+		this.#timeout = undefined
 
-		this.socket?.close()
-		this.socket = undefined
+		this.#socket?.close()
+		this.#socket = undefined
 
-		this.wait?.resolve(true)
-		this.wait = undefined
+		this.#wait?.resolve(true)
+		this.#wait = undefined
 	}
 
 	[Symbol.dispose]() {

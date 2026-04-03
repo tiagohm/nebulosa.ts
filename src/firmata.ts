@@ -189,7 +189,11 @@ function resolvePinMode(mode: number) {
 }
 
 export class FirmataParser {
-	constructor(private readonly fsm: FirmataFsm) {}
+	readonly #fsm: FirmataFsm
+
+	constructor(fsm: FirmataFsm) {
+		this.#fsm = fsm
+	}
 
 	process(data: Buffer) {
 		for (let i = 0; i < data.byteLength; i++) {
@@ -198,7 +202,7 @@ export class FirmataParser {
 	}
 
 	processByte(b: number) {
-		this.fsm.process(b)
+		this.#fsm.process(b)
 	}
 }
 
@@ -599,15 +603,18 @@ class WaitingForMessageState implements FirmataFsmState {
 const WAITING_FOR_MESSAGE_STATE = new WaitingForMessageState()
 
 export class FirmataFsm {
-	private readonly handlers = new Set<FirmataClientHandler>()
+	readonly #handlers = new Set<FirmataClientHandler>()
 
 	#buffer = Buffer.alloc(256)
 	#offset = 0
+	#state: FirmataFsmState
 
 	constructor(
-		private state: FirmataFsmState,
+		state: FirmataFsmState,
 		readonly client: FirmataClient,
-	) {}
+	) {
+		this.#state = state
+	}
 
 	get offset() {
 		return this.#offset
@@ -618,20 +625,20 @@ export class FirmataFsm {
 	}
 
 	addHandler(handler: FirmataClientHandler) {
-		this.handlers.add(handler)
+		this.#handlers.add(handler)
 	}
 
 	removeHandler(handler: FirmataClientHandler) {
-		this.handlers.delete(handler)
+		this.#handlers.delete(handler)
 	}
 
 	process(byte: number) {
-		this.state.process(byte, this)
+		this.#state.process(byte, this)
 	}
 
 	transitTo(state: FirmataFsmState) {
 		this.#offset = 0
-		this.state = state
+		this.#state = state
 	}
 
 	write(b: number) {
@@ -658,71 +665,71 @@ export class FirmataFsm {
 	}
 
 	ready() {
-		this.handlers.forEach((handler) => handler.ready?.(this.client))
+		this.#handlers.forEach((handler) => handler.ready?.(this.client))
 	}
 
 	pinChange(pin: Pin) {
-		this.handlers.forEach((handler) => handler.pinChange?.(this.client, pin))
+		this.#handlers.forEach((handler) => handler.pinChange?.(this.client, pin))
 	}
 
 	customMessage(data: Buffer) {
-		this.handlers.forEach((handler) => handler.customMessage?.(this.client, data))
+		this.#handlers.forEach((handler) => handler.customMessage?.(this.client, data))
 	}
 
 	version(major: number, minor: number) {
-		this.handlers.forEach((handler) => handler.version?.(this.client, major, minor))
+		this.#handlers.forEach((handler) => handler.version?.(this.client, major, minor))
 	}
 
 	firmwareMessage(major: number, minor: number, name: string) {
-		this.handlers.forEach((handler) => handler.firmwareMessage?.(this.client, major, minor, name))
+		this.#handlers.forEach((handler) => handler.firmwareMessage?.(this.client, major, minor, name))
 	}
 
 	systemReset() {
-		this.handlers.forEach((handler) => handler.systemReset?.(this.client))
+		this.#handlers.forEach((handler) => handler.systemReset?.(this.client))
 	}
 
 	error(command: number) {
-		this.handlers.forEach((handler) => handler.error?.(this.client, command))
+		this.#handlers.forEach((handler) => handler.error?.(this.client, command))
 	}
 
 	digitalMessage(id: number, value: number) {
-		this.handlers.forEach((handler) => handler.digitalMessage?.(this.client, id, value))
+		this.#handlers.forEach((handler) => handler.digitalMessage?.(this.client, id, value))
 	}
 
 	analogMessage(port: number, value: number) {
-		this.handlers.forEach((handler) => handler.analogMessage?.(this.client, port, value))
+		this.#handlers.forEach((handler) => handler.analogMessage?.(this.client, port, value))
 	}
 
 	pinCapability(id: number, modes: Set<PinMode>) {
-		this.handlers.forEach((handler) => handler.pinCapability?.(this.client, id, modes))
+		this.#handlers.forEach((handler) => handler.pinCapability?.(this.client, id, modes))
 	}
 
 	pinCapabilitiesFinished() {
-		this.handlers.forEach((handler) => handler.pinCapabilitiesFinished?.(this.client))
+		this.#handlers.forEach((handler) => handler.pinCapabilitiesFinished?.(this.client))
 	}
 
 	analogMapping(mapping: AnalogMapping) {
-		this.handlers.forEach((handler) => handler.analogMapping?.(this.client, mapping))
+		this.#handlers.forEach((handler) => handler.analogMapping?.(this.client, mapping))
 	}
 
 	pinState(id: number, mode: PinMode, value: number) {
-		this.handlers.forEach((handler) => handler.pinState?.(this.client, id, mode, value))
+		this.#handlers.forEach((handler) => handler.pinState?.(this.client, id, mode, value))
 	}
 
 	textMessage(message: string) {
-		this.handlers.forEach((handler) => handler.textMessage?.(this.client, message))
+		this.#handlers.forEach((handler) => handler.textMessage?.(this.client, message))
 	}
 
 	twoWireMessage(address: number, register: number, data: Buffer) {
-		this.handlers.forEach((handler) => handler.twoWireMessage?.(this.client, address, register, data))
+		this.#handlers.forEach((handler) => handler.twoWireMessage?.(this.client, address, register, data))
 	}
 
 	oneWireSearchReply(pin: number, addresses: readonly Buffer[], alarms: boolean) {
-		this.handlers.forEach((handler) => handler.oneWireSearchReply?.(this.client, pin, addresses, alarms))
+		this.#handlers.forEach((handler) => handler.oneWireSearchReply?.(this.client, pin, addresses, alarms))
 	}
 
 	oneWireReadReply(pin: number, correlationId: number, data: Buffer) {
-		this.handlers.forEach((handler) => handler.oneWireReadReply?.(this.client, pin, correlationId, data))
+		this.#handlers.forEach((handler) => handler.oneWireReadReply?.(this.client, pin, correlationId, data))
 	}
 }
 
@@ -737,24 +744,26 @@ const REQUEST_PIN_CAPABILITY_DATA = new Uint8Array([START_SYSEX, CAPABILITY_QUER
 const REQUEST_ANALOG_MAPPING_DATA = new Uint8Array([START_SYSEX, ANALOG_MAPPING_QUERY, END_SYSEX])
 
 export class FirmataClient implements Disposable {
-	private readonly fsm: FirmataFsm
-	private readonly parser: FirmataParser
+	readonly #fsm: FirmataFsm
+	readonly #parser: FirmataParser
+	readonly #transport: Transport
+	readonly #board: Board
 
-	private initializing = true
-	private maxTwoWireDelay = 0
-	private oneWireCorrelationId = 0
+	#initializing = true
+	#maxTwoWireDelay = 0
+	#oneWireCorrelationId = 0
 
-	private readonly pinStateRequestQueue: number[] = []
-	private readonly pinMap = new Map<number, Pin>()
-	private readonly analogPins: AnalogMapping = {}
-	private readonly initialization = Promise.withResolvers<boolean>()
+	readonly #pinStateRequestQueue: number[] = []
+	readonly #pinMap = new Map<number, Pin>()
+	readonly #analogPins: AnalogMapping = {}
+	readonly #initialization = Promise.withResolvers<boolean>()
 
-	private readonly handler: FirmataClientHandler = {
+	readonly #handler: FirmataClientHandler = {
 		customMessage: (client: FirmataClient, data: Buffer) => {
 			//
 		},
 		firmwareMessage: (client: FirmataClient, major: number, minor: number, name: string) => {
-			this.initializing && this.requestPinCapability()
+			this.#initializing && this.requestPinCapability()
 		},
 		systemReset: (client: FirmataClient) => {
 			//
@@ -764,45 +773,45 @@ export class FirmataClient implements Disposable {
 		},
 		digitalMessage: (client: FirmataClient, id: number, value: number) => {},
 		analogMessage: (client: FirmataClient, port: number, value: number) => {
-			const pin = this.pinMap.get(this.analogPins[port])
+			const pin = this.#pinMap.get(this.#analogPins[port])
 
 			if (pin?.mode === PinMode.ANALOG && pin.value !== value) {
 				pin.value = value
-				this.fsm.pinChange(pin)
+				this.#fsm.pinChange(pin)
 			}
 		},
 		pinCapability: (client: FirmataClient, id: number, modes: Set<PinMode>) => {
-			this.pinMap.set(id, { id, modes, mode: PinMode.UNSUPPORTED, value: 0 })
+			this.#pinMap.set(id, { id, modes, mode: PinMode.UNSUPPORTED, value: 0 })
 
 			// if the pin supports some modes, we will ask for its current mode and value.
-			if (modes.size > 0) this.pinStateRequestQueue.push(id)
+			if (modes.size > 0) this.#pinStateRequestQueue.push(id)
 		},
 		pinCapabilitiesFinished: (client: FirmataClient) => {
-			if (this.pinStateRequestQueue.length) {
-				this.requestPinState(this.pinStateRequestQueue.shift()!)
-			} else if (this.initializing) {
+			if (this.#pinStateRequestQueue.length) {
+				this.requestPinState(this.#pinStateRequestQueue.shift()!)
+			} else if (this.#initializing) {
 				this.requestAnalogMapping()
 			}
 		},
 		analogMapping: (client: FirmataClient, mapping: AnalogMapping) => {
-			Object.assign(this.analogPins, mapping)
+			Object.assign(this.#analogPins, mapping)
 
-			if (this.initializing) {
-				this.initializing = false
-				this.initialization.resolve(true)
-				this.fsm.ready()
+			if (this.#initializing) {
+				this.#initializing = false
+				this.#initialization.resolve(true)
+				this.#fsm.ready()
 			}
 		},
 		pinState: (client: FirmataClient, id: number, mode: PinMode, value: number) => {
-			const pin = this.pinMap.get(id)
+			const pin = this.#pinMap.get(id)
 
 			if (pin) {
 				pin.mode = mode
 				pin.value = value
 
-				if (this.pinStateRequestQueue.length) {
-					this.requestPinState(this.pinStateRequestQueue.shift()!)
-				} else if (this.initializing) {
+				if (this.#pinStateRequestQueue.length) {
+					this.requestPinState(this.#pinStateRequestQueue.shift()!)
+				} else if (this.#initializing) {
 					this.requestAnalogMapping()
 				}
 			}
@@ -821,13 +830,12 @@ export class FirmataClient implements Disposable {
 		},
 	}
 
-	constructor(
-		private readonly transport: Transport,
-		private readonly board: Board,
-	) {
-		this.fsm = new FirmataFsm(WAITING_FOR_MESSAGE_STATE, this)
-		this.parser = new FirmataParser(this.fsm)
-		this.addHandler(this.handler)
+	constructor(transport: Transport, board: Board) {
+		this.#transport = transport
+		this.#board = board
+		this.#fsm = new FirmataFsm(WAITING_FOR_MESSAGE_STATE, this)
+		this.#parser = new FirmataParser(this.#fsm)
+		this.addHandler(this.#handler)
 	}
 
 	[Symbol.dispose]() {
@@ -835,51 +843,51 @@ export class FirmataClient implements Disposable {
 	}
 
 	get pinCount() {
-		return this.pinMap.size
+		return this.#pinMap.size
 	}
 
 	get pins(): MapIterator<Readonly<Pin>> {
-		return this.pinMap.values()
+		return this.#pinMap.values()
 	}
 
 	pinAt(id: number): Readonly<Pin> | undefined {
-		return this.pinMap.get(id)
+		return this.#pinMap.get(id)
 	}
 
 	addHandler(handler: FirmataClientHandler) {
-		this.fsm.addHandler(handler)
+		this.#fsm.addHandler(handler)
 	}
 
 	removeHandler(handler: FirmataClientHandler) {
-		this.fsm.removeHandler(handler)
+		this.#fsm.removeHandler(handler)
 	}
 
 	disconnect() {
-		this.transport.close()
+		this.#transport.close()
 		this.reset()
 	}
 
 	process(data: Buffer) {
-		this.parser.process(data)
+		this.#parser.process(data)
 	}
 
 	processByte(b: number) {
-		this.parser.processByte(b)
+		this.#parser.processByte(b)
 	}
 
 	ensureInitializationIsDone(timeout: number) {
-		const timer = timeout > 0 ? setTimeout(this.initialization.resolve, timeout, false) : undefined
-		this.initialization.promise.then(clearTimeout.bind(undefined, timer))
-		return this.initialization.promise
+		const timer = timeout > 0 ? setTimeout(this.#initialization.resolve, timeout, false) : undefined
+		this.#initialization.promise.then(clearTimeout.bind(undefined, timer))
+		return this.#initialization.promise
 	}
 
 	reset() {
-		this.fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
+		this.#fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 	}
 
 	send(message: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) {
-		this.transport.write(message, byteOffset, byteLength)
-		this.transport.flush()
+		this.#transport.write(message, byteOffset, byteLength)
+		this.#transport.flush()
 	}
 
 	requestFirmware() {
@@ -910,7 +918,7 @@ export class FirmataClient implements Disposable {
 	}
 
 	requestDigitalPinReport(pin: number, enable: boolean) {
-		this.send(new Uint8Array([REPORT_DIGITAL | this.board.pinToDigital(pin), enable ? 1 : 0]))
+		this.send(new Uint8Array([REPORT_DIGITAL | this.#board.pinToDigital(pin), enable ? 1 : 0]))
 	}
 
 	requestAnalogReport(enable: boolean) {
@@ -925,7 +933,7 @@ export class FirmataClient implements Disposable {
 	}
 
 	requestAnalogPinReport(pin: number, enable: boolean) {
-		this.send(new Uint8Array([REPORT_ANALOG | this.board.pinToAnalog(pin), enable ? 1 : 0]))
+		this.send(new Uint8Array([REPORT_ANALOG | this.#board.pinToAnalog(pin), enable ? 1 : 0]))
 	}
 
 	pinMode(pin: number, mode: PinMode) {
@@ -940,13 +948,13 @@ export class FirmataClient implements Disposable {
 		const data = Math.max(0, Math.min(0x0fffffff, Math.trunc(value)))
 
 		if (data < 0x80) {
-			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.board.pinToPWM(pin), data, END_SYSEX]))
+			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.#board.pinToPWM(pin), data, END_SYSEX]))
 		} else if (data < 0x4000) {
-			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, END_SYSEX]))
+			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.#board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, END_SYSEX]))
 		} else if (data < 0x200000) {
-			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, (data >>> 14) & 0x7f, END_SYSEX]))
+			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.#board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, (data >>> 14) & 0x7f, END_SYSEX]))
 		} else {
-			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, (data >>> 14) & 0x7f, (data >>> 21) & 0x7f, END_SYSEX]))
+			this.send(new Uint8Array([START_SYSEX, EXTENDED_ANALOG, this.#board.pinToPWM(pin), data & 0x7f, (data >>> 7) & 0x7f, (data >>> 14) & 0x7f, (data >>> 21) & 0x7f, END_SYSEX]))
 		}
 	}
 
@@ -957,9 +965,9 @@ export class FirmataClient implements Disposable {
 	}
 
 	twoWireConfig(delayInMicroseconds: number) {
-		this.maxTwoWireDelay = Math.max(this.maxTwoWireDelay, delayInMicroseconds)
+		this.#maxTwoWireDelay = Math.max(this.#maxTwoWireDelay, delayInMicroseconds)
 		const message = new Uint8Array([START_SYSEX, TWO_WIRE_CONFIG, 0, 0, END_SYSEX])
-		encodeByteAs7Bit(this.maxTwoWireDelay, message, 2)
+		encodeByteAs7Bit(this.#maxTwoWireDelay, message, 2)
 		this.send(message)
 	}
 
@@ -995,9 +1003,9 @@ export class FirmataClient implements Disposable {
 		this.twoWireReadWrite(address, 'stop', undefined, addressMode)
 	}
 
-	private nextOneWireCorrelationId() {
-		const correlationId = this.oneWireCorrelationId
-		this.oneWireCorrelationId = (this.oneWireCorrelationId + 1) & 0xffff
+	#nextOneWireCorrelationId() {
+		const correlationId = this.#oneWireCorrelationId
+		this.#oneWireCorrelationId = (this.#oneWireCorrelationId + 1) & 0xffff
 		return correlationId
 	}
 
@@ -1040,7 +1048,7 @@ export class FirmataClient implements Disposable {
 		if (bytesToRead !== undefined) {
 			command |= ONE_WIRE_READ_REQUEST_BIT
 			const n = Math.max(0, Math.min(0xffff, bytesToRead))
-			readCorrelationId = (correlationId ?? this.nextOneWireCorrelationId()) & 0xffff
+			readCorrelationId = (correlationId ?? this.#nextOneWireCorrelationId()) & 0xffff
 			payload.push(n & 0xff, (n >>> 8) & 0xff, readCorrelationId & 0xff, (readCorrelationId >>> 8) & 0xff)
 		}
 
@@ -1093,20 +1101,20 @@ export class FirmataClient implements Disposable {
 }
 
 export class FirmataClientOverTcp extends FirmataClient {
-	private socket?: Bun.Socket
+	#socket?: Bun.Socket
 
 	constructor(board: Board) {
 		super(
 			{
 				write: (data, byteOffset, byteLength) => {
-					this.socket?.write(data, byteOffset, byteLength)
+					this.#socket?.write(data, byteOffset, byteLength)
 				},
 				flush: () => {
-					this.socket?.flush()
+					this.#socket?.flush()
 				},
 				close: () => {
-					this.socket?.close()
-					this.socket = undefined
+					this.#socket?.close()
+					this.#socket = undefined
 				},
 			},
 			board,
@@ -1114,9 +1122,9 @@ export class FirmataClientOverTcp extends FirmataClient {
 	}
 
 	async connect(hostname: string, port: number, options?: Omit<Bun.TCPSocketConnectOptions<undefined>, 'hostname' | 'port' | 'socket'>) {
-		if (this.socket) return false
+		if (this.#socket) return false
 
-		this.socket = await Bun.connect({
+		this.#socket = await Bun.connect({
 			...options,
 			hostname,
 			port,
@@ -1238,7 +1246,7 @@ export class ESP8266 implements Board {
 export const DEFAULT_POLLING_INTERVAL = 5000
 
 abstract class PeripheralBase<D extends Peripheral<D>> {
-	private readonly listeners = new Set<PeripheralListener<D>>()
+	readonly #listeners = new Set<PeripheralListener<D>>()
 
 	abstract readonly client: FirmataClient
 
@@ -1250,15 +1258,15 @@ abstract class PeripheralBase<D extends Peripheral<D>> {
 	}
 
 	addListener(listener: PeripheralListener<D>) {
-		this.listeners.add(listener)
+		this.#listeners.add(listener)
 	}
 
 	removeListener(listener: PeripheralListener<D>) {
-		this.listeners.delete(listener)
+		this.#listeners.delete(listener)
 	}
 
 	protected fire() {
-		for (const listener of this.listeners) listener(this as never)
+		for (const listener of this.#listeners) listener(this as never)
 	}
 }
 
@@ -1304,35 +1312,35 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 	temperature = 0
 
 	// Initial values from datasheet (for test only)
-	private AC1 = 408
-	private AC2 = -72
-	private AC3 = -14383
-	private AC4 = 32741
-	private AC5 = 32757
-	private AC6 = 23153
+	#AC1 = 408
+	#AC2 = -72
+	#AC3 = -14383
+	#AC4 = 32741
+	#AC5 = 32757
+	#AC6 = 23153
 
-	private B1 = 6190
-	private B2 = 4
+	#B1 = 6190
+	#B2 = 4
 
-	// private MB = -32768
-	private MC = -8711
-	private MD = 2868
+	// #MB = -32768
+	#MC = -8711
+	#MD = 2868
 
-	private B5 = 0
+	#B5 = 0
 
 	static readonly ADDRESS = 0x77
 
-	private static readonly COEFFICIENTS_REG = 0xaa
-	private static readonly CONTROL_REG = 0xf4
-	private static readonly TEMP_DATA_REG = 0xf6
-	private static readonly PRES_DATA_REG = 0xf6
+	static readonly COEFFICIENTS_REG = 0xaa
+	static readonly CONTROL_REG = 0xf4
+	static readonly TEMP_DATA_REG = 0xf6
+	static readonly PRES_DATA_REG = 0xf6
 
-	private static readonly READ_TEMP_CMD = 0x2e
-	private static readonly READ_PRES_CMD = 0x34
+	static readonly READ_TEMP_CMD = 0x2e
+	static readonly READ_PRES_CMD = 0x34
 
-	private timer?: NodeJS.Timeout
-	private initialized = false
-	private command = BMP180.READ_TEMP_CMD
+	#timer?: NodeJS.Timeout
+	#initialized = false
+	#command = BMP180.READ_TEMP_CMD
 
 	constructor(
 		readonly client: FirmataClient,
@@ -1345,94 +1353,94 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
 		if (address !== BMP180.ADDRESS) return
 
-		if (!this.initialized) {
+		if (!this.#initialized) {
 			if (register !== BMP180.COEFFICIENTS_REG || data.byteLength !== 22) return
 
-			this.AC1 = data.readInt16BE(0)
-			this.AC2 = data.readInt16BE(2)
-			this.AC3 = data.readInt16BE(4)
-			this.AC4 = data.readUInt16BE(6)
-			this.AC5 = data.readUInt16BE(8)
-			this.AC6 = data.readUInt16BE(10)
-			this.B1 = data.readInt16BE(12)
-			this.B2 = data.readInt16BE(14)
+			this.#AC1 = data.readInt16BE(0)
+			this.#AC2 = data.readInt16BE(2)
+			this.#AC3 = data.readInt16BE(4)
+			this.#AC4 = data.readUInt16BE(6)
+			this.#AC5 = data.readUInt16BE(8)
+			this.#AC6 = data.readUInt16BE(10)
+			this.#B1 = data.readInt16BE(12)
+			this.#B2 = data.readInt16BE(14)
 			// this.MB = data.readInt16BE(16)
-			this.MC = data.readInt16BE(18)
-			this.MD = data.readInt16BE(20)
+			this.#MC = data.readInt16BE(18)
+			this.#MD = data.readInt16BE(20)
 
-			void this.readUncompensatedTemperature()
-			this.timer = setInterval(this.readUncompensatedTemperature.bind(this), Math.max(1000, this.pollingInterval))
+			void this.#readUncompensatedTemperature()
+			this.#timer = setInterval(this.#readUncompensatedTemperature.bind(this), Math.max(1000, this.pollingInterval))
 
-			this.initialized = true
+			this.#initialized = true
 
 			return
 		}
 
-		if (this.command === BMP180.READ_TEMP_CMD) {
+		if (this.#command === BMP180.READ_TEMP_CMD) {
 			if (register !== BMP180.TEMP_DATA_REG || data.byteLength !== 2) return
 
 			const UT = data.readInt16BE(0)
 			this.temperature = this.calculateTrueTemperature(UT)
-			this.command = BMP180.READ_PRES_CMD
-			void this.readUncompensatedPressure()
-		} else if (this.command === BMP180.READ_PRES_CMD) {
+			this.#command = BMP180.READ_PRES_CMD
+			void this.#readUncompensatedPressure()
+		} else if (this.#command === BMP180.READ_PRES_CMD) {
 			if (register !== BMP180.PRES_DATA_REG || data.byteLength !== 3) return
 
 			const UP = ((data.readUint8(0) << 16) | data.readUint16BE(1)) >> (8 - this.mode)
 			this.pressure = pascal(this.calculateTruePressure(UP))
 			this.altitude = fromPressure(this.pressure, this.temperature)
-			this.command = BMP180.READ_TEMP_CMD
+			this.#command = BMP180.READ_TEMP_CMD
 			this.fire()
 		}
 	}
 
 	start() {
-		if (this.timer === undefined) {
-			this.command = BMP180.READ_TEMP_CMD
+		if (this.#timer === undefined) {
+			this.#command = BMP180.READ_TEMP_CMD
 			this.client.addHandler(this)
 			this.client.twoWireConfig(0)
-			this.readCalibrationData()
+			this.#readCalibrationData()
 		}
 	}
 
 	stop() {
 		this.client.removeHandler(this)
-		clearInterval(this.timer)
-		this.timer = undefined
+		clearInterval(this.#timer)
+		this.#timer = undefined
 	}
 
-	private readCalibrationData() {
+	#readCalibrationData() {
 		this.client.twoWireRead(BMP180.ADDRESS, BMP180.COEFFICIENTS_REG, 22)
 	}
 
-	private async readUncompensatedTemperature() {
+	async #readUncompensatedTemperature() {
 		this.client.twoWireWrite(BMP180.ADDRESS, [BMP180.CONTROL_REG, BMP180.READ_TEMP_CMD])
 		await Bun.sleep(5)
 		this.client.twoWireRead(BMP180.ADDRESS, BMP180.TEMP_DATA_REG, 2)
 	}
 
-	private async readUncompensatedPressure() {
+	async #readUncompensatedPressure() {
 		this.client.twoWireWrite(BMP180.ADDRESS, [BMP180.CONTROL_REG, BMP180.READ_PRES_CMD | (this.mode << 6)])
 		await Bun.sleep(30)
 		this.client.twoWireRead(BMP180.ADDRESS, BMP180.PRES_DATA_REG, 3)
 	}
 
 	calculateTrueTemperature(UT: number) {
-		const X1 = ((UT - this.AC6) * this.AC5) >> 15
-		const X2 = Math.round((this.MC << 11) / (X1 + this.MD))
-		this.B5 = X1 + X2
-		return ((this.B5 + 8) >> 4) / 10
+		const X1 = ((UT - this.#AC6) * this.#AC5) >> 15
+		const X2 = Math.round((this.#MC << 11) / (X1 + this.#MD))
+		this.#B5 = X1 + X2
+		return ((this.#B5 + 8) >> 4) / 10
 	}
 
 	calculateTruePressure(UP: number) {
-		const B6 = this.B5 - 4000
+		const B6 = this.#B5 - 4000
 		const K = (B6 * B6) >> 12
-		let X3 = (this.B2 * K + this.AC2 * B6) >> 11
-		const B3 = (((this.AC1 * 4 + X3) << this.mode) + 2) >> 2
-		let X1 = (this.AC3 * B6) >> 13
-		let X2 = (this.B1 * K) >> 16
+		let X3 = (this.#B2 * K + this.#AC2 * B6) >> 11
+		const B3 = (((this.#AC1 * 4 + X3) << this.mode) + 2) >> 2
+		let X1 = (this.#AC3 * B6) >> 13
+		let X2 = (this.#B1 * K) >> 16
 		X3 = (X1 + X2 + 2) >> 2
-		const B4 = (this.AC4 * (X3 + 32768)) >>> 15
+		const B4 = (this.#AC4 * (X3 + 32768)) >>> 15
 		const B7 = (UP - B3) * (50000 >> this.mode)
 		const P = Math.round(B7 < 0x80000000 ? (B7 * 2) / B4 : (B7 / B4) * 2)
 		X1 = (P >> 8) * (P >> 8)
@@ -1450,12 +1458,12 @@ export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermome
 
 	static readonly ADDRESS = 0x40
 
-	private static readonly READ_TEMP_HOLD_CMD = 0xe3
-	private static readonly READ_HUM_HOLD_CMD = 0xe5
-	private static readonly SOFT_RESET_CMD = 0xfe
+	static readonly #READ_TEMP_HOLD_CMD = 0xe3
+	static readonly #READ_HUM_HOLD_CMD = 0xe5
+	static readonly #SOFT_RESET_CMD = 0xfe
 
-	private timer?: NodeJS.Timeout
-	private temperatureChanged = false
+	#timer?: NodeJS.Timeout
+	#temperatureChanged = false
 
 	constructor(
 		readonly client: FirmataClient,
@@ -1464,48 +1472,48 @@ export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermome
 		super()
 	}
 
-	private readMeasurement() {
-		this.client.twoWireRead(SHT21.ADDRESS, SHT21.READ_TEMP_HOLD_CMD, 2)
-		this.client.twoWireRead(SHT21.ADDRESS, SHT21.READ_HUM_HOLD_CMD, 2)
+	#readMeasurement() {
+		this.client.twoWireRead(SHT21.ADDRESS, SHT21.#READ_TEMP_HOLD_CMD, 2)
+		this.client.twoWireRead(SHT21.ADDRESS, SHT21.#READ_HUM_HOLD_CMD, 2)
 	}
 
 	start() {
-		if (this.timer === undefined) {
+		if (this.#timer === undefined) {
 			this.client.addHandler(this)
 			this.client.twoWireConfig(0)
-			this.readMeasurement()
-			this.timer = setInterval(this.readMeasurement.bind(this), Math.max(1000, this.poolingInterval))
+			this.#readMeasurement()
+			this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(1000, this.poolingInterval))
 		}
 	}
 
 	stop() {
 		this.client.removeHandler(this)
-		clearInterval(this.timer)
-		this.timer = undefined
+		clearInterval(this.#timer)
+		this.#timer = undefined
 	}
 
 	reset() {
-		this.client.twoWireWrite(SHT21.ADDRESS, [SHT21.SOFT_RESET_CMD])
+		this.client.twoWireWrite(SHT21.ADDRESS, [SHT21.#SOFT_RESET_CMD])
 	}
 
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
 		if (address !== SHT21.ADDRESS || data.byteLength < 1) return
 
-		if (register === SHT21.READ_TEMP_HOLD_CMD) {
+		if (register === SHT21.#READ_TEMP_HOLD_CMD) {
 			const raw = data.readUInt16BE(0) & 0xfffc
 			const temperature = -46.85 + (175.72 * raw) / 65536
 
 			if (temperature !== this.temperature) {
 				this.temperature = temperature
-				this.temperatureChanged = true
+				this.#temperatureChanged = true
 			}
-		} else if (register === SHT21.READ_HUM_HOLD_CMD) {
+		} else if (register === SHT21.#READ_HUM_HOLD_CMD) {
 			const raw = data.readUInt16BE(0) & 0xfffc
 			const humidity = -6 + (125 * raw) / 65536
 
-			if (humidity !== this.humidity || this.temperatureChanged) {
+			if (humidity !== this.humidity || this.#temperatureChanged) {
 				this.humidity = humidity
-				this.temperatureChanged = false
+				this.#temperatureChanged = false
 				this.fire()
 			}
 		}
@@ -1522,30 +1530,30 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 	static readonly ADDRESS = 0x76
 	static readonly ALTERNATIVE_ADDRESS = 0x77
 
-	private static readonly CALIBRATION_REG = 0x88
-	private static readonly DATA_REG = 0xf7
-	private static readonly CTRL_MEAS_REG = 0xf4
-	private static readonly CONFIG_REG = 0xf5
+	static readonly CALIBRATION_REG = 0x88
+	static readonly DATA_REG = 0xf7
+	static readonly CTRL_MEAS_REG = 0xf4
+	static readonly CONFIG_REG = 0xf5
 
 	// Initial values from datasheet (for test only)
-	private T1 = 27504
-	private T2 = 26435
-	private T3 = -1000
-	private P1 = 36477
-	private P2 = -10685
-	private P3 = 3024
-	private P4 = 2855
-	private P5 = 140
-	private P6 = -7
-	private P7 = 15500
-	private P8 = -14600
-	private P9 = 6000
-	private tFine = 0
+	#T1 = 27504
+	#T2 = 26435
+	#T3 = -1000
+	#P1 = 36477
+	#P2 = -10685
+	#P3 = 3024
+	#P4 = 2855
+	#P5 = 140
+	#P6 = -7
+	#P7 = 15500
+	#P8 = -14600
+	#P9 = 6000
+	#tFine = 0
 
-	private initialized = false
-	private timer?: NodeJS.Timeout
-	private readonly ctrlMeasValue: number
-	private readonly configValue: number
+	#initialized = false
+	#timer?: NodeJS.Timeout
+	readonly #ctrlMeasValue: number
+	readonly #configValue: number
 
 	constructor(
 		readonly client: FirmataClient,
@@ -1567,50 +1575,50 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		const filterBits = filter === 'off' ? 0 : filter === 'x2' ? 1 : filter === 'x4' ? 2 : filter === 'x8' ? 3 : 4
 		const standbyBits = standbyDuration === 0.5 ? 0 : standbyDuration === 62.5 ? 1 : standbyDuration === 125 ? 2 : standbyDuration === 250 ? 3 : standbyDuration === 500 ? 4 : standbyDuration === 1000 ? 5 : standbyDuration === 2000 ? 6 : 7
 
-		this.ctrlMeasValue = (temperatureSamplingBits << 5) | (pressureSamplingBits << 2) | modeBits
-		this.configValue = (standbyBits << 5) | (filterBits << 2)
+		this.#ctrlMeasValue = (temperatureSamplingBits << 5) | (pressureSamplingBits << 2) | modeBits
+		this.#configValue = (standbyBits << 5) | (filterBits << 2)
 	}
 
 	start() {
-		if (this.timer === undefined) {
+		if (this.#timer === undefined) {
 			this.client.addHandler(this)
 			this.client.twoWireConfig(0)
-			this.client.twoWireWrite(this.address, [BMP280.CONFIG_REG, this.configValue])
-			this.client.twoWireWrite(this.address, [BMP280.CTRL_MEAS_REG, this.ctrlMeasValue])
-			this.readCalibrationData()
+			this.client.twoWireWrite(this.address, [BMP280.CONFIG_REG, this.#configValue])
+			this.client.twoWireWrite(this.address, [BMP280.CTRL_MEAS_REG, this.#ctrlMeasValue])
+			this.#readCalibrationData()
 		}
 	}
 
 	stop() {
 		this.client.removeHandler(this)
-		clearInterval(this.timer)
-		this.timer = undefined
+		clearInterval(this.#timer)
+		this.#timer = undefined
 	}
 
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
 		if (address !== this.address) return
 
-		if (!this.initialized) {
+		if (!this.#initialized) {
 			if (register !== BMP280.CALIBRATION_REG || data.byteLength !== 24) return
 
-			this.T1 = data.readUInt16LE(0)
-			this.T2 = data.readInt16LE(2)
-			this.T3 = data.readInt16LE(4)
-			this.P1 = data.readUInt16LE(6)
-			this.P2 = data.readInt16LE(8)
-			this.P3 = data.readInt16LE(10)
-			this.P4 = data.readInt16LE(12)
-			this.P5 = data.readInt16LE(14)
-			this.P6 = data.readInt16LE(16)
-			this.P7 = data.readInt16LE(18)
-			this.P8 = data.readInt16LE(20)
-			this.P9 = data.readInt16LE(22)
-			this.initialized = this.P1 !== 0
+			this.#T1 = data.readUInt16LE(0)
+			this.#T2 = data.readInt16LE(2)
+			this.#T3 = data.readInt16LE(4)
+			this.#P1 = data.readUInt16LE(6)
+			this.#P2 = data.readInt16LE(8)
+			this.#P3 = data.readInt16LE(10)
+			this.#P4 = data.readInt16LE(12)
+			this.#P5 = data.readInt16LE(14)
+			this.#P6 = data.readInt16LE(16)
+			this.#P7 = data.readInt16LE(18)
+			this.#P8 = data.readInt16LE(20)
+			this.#P9 = data.readInt16LE(22)
+			this.#initialized = this.#P1 !== 0
 
-			if (!this.initialized) return
+			if (!this.#initialized) return
 
-			this.readMeasurement()
-			this.timer = setInterval(this.readMeasurement.bind(this), Math.max(100, this.pollingInterval))
+			this.#readMeasurement()
+			this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(100, this.pollingInterval))
 
 			return
 		}
@@ -1632,34 +1640,34 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		}
 	}
 
-	private readCalibrationData() {
+	#readCalibrationData() {
 		this.client.twoWireRead(this.address, BMP280.CALIBRATION_REG, 24)
 	}
 
-	private readMeasurement() {
+	#readMeasurement() {
 		this.client.twoWireRead(this.address, BMP280.DATA_REG, 6)
 	}
 
 	compensateTemperature(adcT: number) {
-		const var1 = (adcT / 16384 - this.T1 / 1024) * this.T2
-		const var2 = (adcT / 131072 - this.T1 / 8192) * (adcT / 131072 - this.T1 / 8192) * this.T3
-		this.tFine = var1 + var2
-		return this.tFine / 5120
+		const var1 = (adcT / 16384 - this.#T1 / 1024) * this.#T2
+		const var2 = (adcT / 131072 - this.#T1 / 8192) * (adcT / 131072 - this.#T1 / 8192) * this.#T3
+		this.#tFine = var1 + var2
+		return this.#tFine / 5120
 	}
 
 	compensatePressure(adcP: number) {
-		let var1 = this.tFine / 2 - 64000
-		let var2 = (var1 * var1 * this.P6) / 32768
-		var2 += var1 * this.P5 * 2
-		var2 = var2 / 4 + this.P4 * 65536
-		var1 = ((this.P3 * var1 * var1) / 524288 + this.P2 * var1) / 524288
-		var1 = (1 + var1 / 32768) * this.P1
+		let var1 = this.#tFine / 2 - 64000
+		let var2 = (var1 * var1 * this.#P6) / 32768
+		var2 += var1 * this.#P5 * 2
+		var2 = var2 / 4 + this.#P4 * 65536
+		var1 = ((this.#P3 * var1 * var1) / 524288 + this.#P2 * var1) / 524288
+		var1 = (1 + var1 / 32768) * this.#P1
 		if (var1 === 0) return this.pressure
 		let p = 1048576 - adcP
 		p = ((p - var2 / 4096) * 6250) / var1
-		var1 = (this.P9 * p * p) / 2147483648
-		var2 = (p * this.P8) / 32768
-		return p + (var1 + var2 + this.P7) / 16
+		var1 = (this.#P9 * p * p) / 2147483648
+		var2 = (p * this.#P8) / 32768
+		return p + (var1 + var2 + this.#P7) / 16
 	}
 }
 
@@ -1671,15 +1679,15 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 
 	static readonly ADDRESS = 0x5c
 
-	private static readonly WAKE_UP_DELAY_MS = 2
-	private static readonly MEASUREMENT_DELAY_MS = 2
-	private static readonly READ_HOLDING_REGISTERS_CMD = 0x03
-	private static readonly START_REGISTER = 0x00
-	private static readonly REGISTER_COUNT = 4
-	private static readonly FRAME_SIZE = 8
+	static readonly WAKE_UP_DELAY_MS = 2
+	static readonly MEASUREMENT_DELAY_MS = 2
+	static readonly READ_HOLDING_REGISTERS_CMD = 0x03
+	static readonly START_REGISTER = 0x00
+	static readonly REGISTER_COUNT = 4
+	static readonly FRAME_SIZE = 8
 
-	private timer?: NodeJS.Timeout
-	private reading = false
+	#timer?: NodeJS.Timeout
+	#reading = false
 
 	constructor(
 		readonly client: FirmataClient,
@@ -1689,33 +1697,33 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 	}
 
 	start() {
-		if (this.timer === undefined) {
+		if (this.#timer === undefined) {
 			this.client.addHandler(this)
 			this.client.twoWireConfig(0)
-			void this.readMeasurement()
-			this.timer = setInterval(this.readMeasurement.bind(this), Math.max(1000, this.pollingInterval))
+			void this.#readMeasurement()
+			this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(1000, this.pollingInterval))
 		}
 	}
 
 	stop() {
 		this.client.removeHandler(this)
-		clearInterval(this.timer)
-		this.timer = undefined
-		this.reading = false
+		clearInterval(this.#timer)
+		this.#timer = undefined
+		this.#reading = false
 	}
 
-	private async readMeasurement() {
-		if (this.reading) return
+	async #readMeasurement() {
+		if (this.#reading) return
 
 		try {
-			this.reading = true
+			this.#reading = true
 			this.client.twoWireWrite(AM2320.ADDRESS)
 			await Bun.sleep(AM2320.WAKE_UP_DELAY_MS)
 			this.client.twoWireWrite(AM2320.ADDRESS, [AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.START_REGISTER, AM2320.REGISTER_COUNT])
 			await Bun.sleep(AM2320.MEASUREMENT_DELAY_MS)
 			this.client.twoWireRead(AM2320.ADDRESS, -1, AM2320.FRAME_SIZE)
 		} finally {
-			this.reading = false
+			this.#reading = false
 		}
 	}
 
@@ -1740,22 +1748,22 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer, FirmataClientHandler {
 	temperature = 0
 
-	private static readonly CONVERT_T_CMD = [0x44]
-	private static readonly READ_SCRATCHPAD_CMD = [0xbe]
-	private static readonly WRITE_SCRATCHPAD_CMD = 0x4e
-	private static readonly FAMILY_CODE = 0x28
-	private static readonly DEFAULT_TH = 0x4b
-	private static readonly DEFAULT_TL = 0x46
-	private static readonly SCRATCHPAD_SIZE = 9
+	static readonly CONVERT_T_CMD = [0x44] as const
+	static readonly READ_SCRATCHPAD_CMD = [0xbe] as const
+	static readonly WRITE_SCRATCHPAD_CMD = 0x4e
+	static readonly FAMILY_CODE = 0x28
+	static readonly DEFAULT_TH = 0x4b
+	static readonly DEFAULT_TL = 0x46
+	static readonly SCRATCHPAD_SIZE = 9
 
-	private timer?: NodeJS.Timeout
-	private reading = false
-	private pendingReadCorrelationId?: number
-	private address?: Buffer
-	private skip = false
-	private readonly powerMode: OneWirePowerMode
-	private readonly conversionDelayMs: number
-	private readonly resolutionCommand?: readonly number[]
+	#timer?: NodeJS.Timeout
+	#reading = false
+	#pendingReadCorrelationId?: number
+	#address?: Buffer
+	#skip = false
+	readonly #powerMode: OneWirePowerMode
+	readonly #conversionDelayMs: number
+	readonly #resolutionCommand?: readonly number[]
 
 	constructor(
 		readonly client: FirmataClient,
@@ -1769,49 +1777,49 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer, Fir
 
 		if (address !== undefined) {
 			if (address.length !== 8) throw new RangeError(`One-Wire address must contain 8 bytes. Received ${address.length}`)
-			this.address = Buffer.from(address)
+			this.#address = Buffer.from(address)
 		} else {
-			this.skip = skip
+			this.#skip = skip
 		}
 
-		this.powerMode = powerMode
-		this.conversionDelayMs = resolution === 9 ? 94 : resolution === 10 ? 188 : resolution === 11 ? 375 : 750
+		this.#powerMode = powerMode
+		this.#conversionDelayMs = resolution === 9 ? 94 : resolution === 10 ? 188 : resolution === 11 ? 375 : 750
 
 		if (resolution !== 12) {
 			const resolutionBits = resolution === 9 ? 0x1f : resolution === 10 ? 0x3f : resolution === 11 ? 0x5f : 0x7f
-			this.resolutionCommand = [DS18B20.WRITE_SCRATCHPAD_CMD, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, resolutionBits]
+			this.#resolutionCommand = [DS18B20.WRITE_SCRATCHPAD_CMD, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, resolutionBits]
 		}
 	}
 
 	start() {
-		if (this.timer === undefined) {
+		if (this.#timer === undefined) {
 			this.client.addHandler(this)
-			this.client.oneWireConfig(this.pin, this.powerMode)
+			this.client.oneWireConfig(this.pin, this.#powerMode)
 
-			if (this.address === undefined) {
+			if (this.#address === undefined) {
 				// Search ROM address
-				if (this.skip === false) {
+				if (this.#skip === false) {
 					this.client.oneWireSearch(this.pin)
 					return
 				}
 			}
 
-			this.startMeasurement()
+			this.#startMeasurement()
 		}
 	}
 
 	stop() {
 		this.client.removeHandler(this)
-		clearInterval(this.timer)
-		this.timer = undefined
-		this.reading = false
-		this.pendingReadCorrelationId = undefined
+		clearInterval(this.#timer)
+		this.#timer = undefined
+		this.#reading = false
+		this.#pendingReadCorrelationId = undefined
 	}
 
 	oneWireReadReply(client: FirmataClient, pin: number, correlationId: number, data: Buffer) {
-		if (client !== this.client || pin !== this.pin || correlationId !== this.pendingReadCorrelationId) return
+		if (client !== this.client || pin !== this.pin || correlationId !== this.#pendingReadCorrelationId) return
 
-		this.pendingReadCorrelationId = undefined
+		this.#pendingReadCorrelationId = undefined
 
 		if (!DS18B20.isScratchpadValid(data)) return
 
@@ -1824,50 +1832,50 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer, Fir
 	}
 
 	oneWireSearchReply(client: FirmataClient, pin: number, addresses: readonly Buffer[], alarms: boolean) {
-		if (client !== this.client || pin !== this.pin || alarms || this.address !== undefined) return
+		if (client !== this.client || pin !== this.pin || alarms || this.#address !== undefined) return
 
 		const address = addresses.find((value) => value.byteLength === 8 && value[0] === DS18B20.FAMILY_CODE)
 
 		if (address === undefined) return
 
-		this.address = Buffer.from(address)
-		console.info('DS18B20 found:', this.address.toHex().toUpperCase())
+		this.#address = Buffer.from(address)
+		console.info('DS18B20 found:', this.#address.toHex().toUpperCase())
 
-		this.startMeasurement()
+		this.#startMeasurement()
 	}
 
-	private startMeasurement() {
-		this.configureResolution()
-		void this.readMeasurement()
-		this.timer ??= setInterval(this.readMeasurement.bind(this), Math.max(1000, this.pollingInterval))
+	#startMeasurement() {
+		this.#configureResolution()
+		void this.#readMeasurement()
+		this.#timer ??= setInterval(this.#readMeasurement.bind(this), Math.max(1000, this.pollingInterval))
 	}
 
-	private configureResolution() {
-		if (this.resolutionCommand !== undefined) {
-			this.client.oneWireWrite(this.pin, this.resolutionCommand, this.address)
+	#configureResolution() {
+		if (this.#resolutionCommand !== undefined) {
+			this.client.oneWireWrite(this.pin, this.#resolutionCommand, this.#address)
 		}
 	}
 
-	private async readMeasurement() {
-		if (this.reading || this.pendingReadCorrelationId !== undefined) return
-		if (this.address === undefined && !this.skip) return
+	async #readMeasurement() {
+		if (this.#reading || this.#pendingReadCorrelationId !== undefined) return
+		if (this.#address === undefined && !this.#skip) return
 
 		try {
-			this.reading = true
-			this.client.oneWireWrite(this.pin, DS18B20.CONVERT_T_CMD, this.address)
-			await Bun.sleep(this.conversionDelayMs)
-			this.pendingReadCorrelationId = this.client.oneWireWriteAndRead(this.pin, DS18B20.READ_SCRATCHPAD_CMD, DS18B20.SCRATCHPAD_SIZE, this.address)
+			this.#reading = true
+			this.client.oneWireWrite(this.pin, DS18B20.CONVERT_T_CMD, this.#address)
+			await Bun.sleep(this.#conversionDelayMs)
+			this.#pendingReadCorrelationId = this.client.oneWireWriteAndRead(this.pin, DS18B20.READ_SCRATCHPAD_CMD, DS18B20.SCRATCHPAD_SIZE, this.#address)
 		} finally {
-			this.reading = false
+			this.#reading = false
 		}
 	}
 
-	private static isScratchpadValid(data: Buffer) {
+	static isScratchpadValid(data: Buffer) {
 		if (data.byteLength < DS18B20.SCRATCHPAD_SIZE) return false
 		return DS18B20.crc8(data, 8) === data[8]
 	}
 
-	private static crc8(data: Readonly<NumberArray> | Buffer, length: number) {
+	static crc8(data: Readonly<NumberArray> | Buffer, length: number) {
 		let crc = 0
 
 		for (let i = 0; i < length; i++) {

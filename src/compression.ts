@@ -25,35 +25,35 @@ const SAMPLE_FORMAT = {
 } as const
 
 class BitWriter {
-	private buffer: Uint8Array
-	private length = 0
-	private bitBuffer = 0
-	private bitsToGo = 8
+	#buffer: Uint8Array
+	#length = 0
+	#bitBuffer = 0
+	#bitsToGo = 8
 
 	constructor(initialCapacity: number) {
-		this.buffer = new Uint8Array(Math.max(16, initialCapacity))
+		this.#buffer = new Uint8Array(Math.max(16, initialCapacity))
 	}
 
-	private ensure(extra: number) {
-		if (this.length + extra <= this.buffer.length) return
+	#ensure(extra: number) {
+		if (this.#length + extra <= this.#buffer.length) return
 
-		let next = this.buffer.length
-		const required = this.length + extra
+		let next = this.#buffer.length
+		const required = this.#length + extra
 		while (next < required) next <<= 1
 
 		const grown = new Uint8Array(next)
-		grown.set(this.buffer, 0)
-		this.buffer = grown
+		grown.set(this.#buffer, 0)
+		this.#buffer = grown
 	}
 
 	writeByte(byte: number) {
-		this.ensure(1)
-		this.buffer[this.length++] = byte & 0xff
+		this.#ensure(1)
+		this.#buffer[this.#length++] = byte & 0xff
 	}
 
 	writeBits(bits: number, n: number) {
-		let lbitBuffer = this.bitBuffer
-		let lbitsToGo = this.bitsToGo
+		let lbitBuffer = this.#bitBuffer
+		let lbitsToGo = this.#bitsToGo
 		let remaining = n
 		const value = bits >>> 0
 
@@ -74,8 +74,8 @@ class BitWriter {
 			lbitsToGo += 8
 		}
 
-		this.bitBuffer = lbitBuffer
-		this.bitsToGo = lbitsToGo
+		this.#bitBuffer = lbitBuffer
+		this.#bitsToGo = lbitsToGo
 	}
 
 	writeRiceBlock(diff: Uint32Array, count: number, fs: number, fsbits: number, fsmax: number, bbits: number) {
@@ -87,8 +87,8 @@ class BitWriter {
 
 		if (fs === 0) {
 			this.writeBits(1, fsbits)
-			let lbitBuffer = this.bitBuffer
-			let lbitsToGo = this.bitsToGo
+			let lbitBuffer = this.#bitBuffer
+			let lbitsToGo = this.#bitsToGo
 
 			for (let j = 0; j < count; j++) {
 				const top = diff[j]
@@ -113,8 +113,8 @@ class BitWriter {
 				}
 			}
 
-			this.bitBuffer = lbitBuffer
-			this.bitsToGo = lbitsToGo
+			this.#bitBuffer = lbitBuffer
+			this.#bitsToGo = lbitsToGo
 
 			return
 		}
@@ -122,8 +122,8 @@ class BitWriter {
 		this.writeBits(fs + 1, fsbits)
 
 		const fsmask = MASKS[fs]
-		let lbitBuffer = this.bitBuffer
-		let lbitsToGo = this.bitsToGo
+		let lbitBuffer = this.#bitBuffer
+		let lbitsToGo = this.#bitsToGo
 
 		for (let j = 0; j < count; j++) {
 			const value = diff[j]
@@ -158,16 +158,16 @@ class BitWriter {
 			}
 		}
 
-		this.bitBuffer = lbitBuffer
-		this.bitsToGo = lbitsToGo
+		this.#bitBuffer = lbitBuffer
+		this.#bitsToGo = lbitsToGo
 	}
 
 	finalize() {
-		if (this.bitsToGo < 8) {
-			this.writeByte(this.bitBuffer << this.bitsToGo)
+		if (this.#bitsToGo < 8) {
+			this.writeByte(this.#bitBuffer << this.#bitsToGo)
 		}
 
-		return this.buffer.slice(0, this.length)
+		return this.#buffer.slice(0, this.#length)
 	}
 }
 

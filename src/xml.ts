@@ -74,26 +74,26 @@ class InternalBuffer {
 }
 
 export class SimpleXmlParser {
-	private state = XmlState.START
-	private readonly tag = new InternalBuffer(256)
-	private readonly name = new InternalBuffer(256)
-	private readonly value = new InternalBuffer(1024)
-	private readonly text = new InternalBuffer(256, 1024 * 1024 * 256)
-	private attributes: XmlNodeAttributes = {}
-	private tree: XmlNode[] = []
-	private prevCode?: number
-	private closeTagSealed = false
-	private readonly encoder = new TextEncoder()
+	#state = XmlState.START
+	readonly #tag = new InternalBuffer(256)
+	readonly #name = new InternalBuffer(256)
+	readonly #value = new InternalBuffer(1024)
+	readonly #text = new InternalBuffer(256, 1024 * 1024 * 256)
+	#attributes: XmlNodeAttributes = {}
+	#tree: XmlNode[] = []
+	#prevCode?: number
+	#closeTagSealed = false
+	readonly #encoder = new TextEncoder()
 
 	parse(input: string | Buffer | Uint8Array): XmlNode[] {
 		if (typeof input === 'string') {
-			return this.parse(this.encoder.encode(input))
+			return this.parse(this.#encoder.encode(input))
 		} else {
 			const nodes: XmlNode[] = []
 
 			for (let i = 0; i < input.byteLength; i++) {
 				const code = input[i] & 0xff
-				const node = this.processByte(code)
+				const node = this.#processByte(code)
 				if (node) nodes.push(node)
 			}
 
@@ -102,186 +102,186 @@ export class SimpleXmlParser {
 	}
 
 	reset() {
-		this.state = XmlState.START
-		this.tag.reset()
-		this.name.reset()
-		this.value.reset()
-		this.text.reset()
-		this.attributes = {}
-		this.tree = []
-		this.prevCode = undefined
-		this.closeTagSealed = false
+		this.#state = XmlState.START
+		this.#tag.reset()
+		this.#name.reset()
+		this.#value.reset()
+		this.#text.reset()
+		this.#attributes = {}
+		this.#tree = []
+		this.#prevCode = undefined
+		this.#closeTagSealed = false
 	}
 
 	// Append a new node to the current tree and optionally keep it open.
-	private appendNode(attributes: XmlNodeAttributes, push: boolean = true): XmlNode {
-		const node: XmlNode = { name: this.tag.text(), attributes, children: [], text: '' }
+	#appendNode(attributes: XmlNodeAttributes, push: boolean = true): XmlNode {
+		const node: XmlNode = { name: this.#tag.text(), attributes, children: [], text: '' }
 
-		if (this.tree.length) {
-			this.tree[this.tree.length - 1].children.push(node)
+		if (this.#tree.length) {
+			this.#tree[this.#tree.length - 1].children.push(node)
 		}
 
-		if (push) this.tree.push(node)
+		if (push) this.#tree.push(node)
 
-		this.tag.reset()
+		this.#tag.reset()
 
 		return node
 	}
 
 	// Append the current text segment to the active node without losing mixed content.
-	private appendText() {
-		if (!this.tree.length) {
-			this.text.reset()
+	#appendText() {
+		if (!this.#tree.length) {
+			this.#text.reset()
 			return
 		}
 
-		const value = this.text.text().trim()
-		this.text.reset()
+		const value = this.#text.text().trim()
+		this.#text.reset()
 
 		if (!value) return
 
-		const node = this.tree[this.tree.length - 1]
+		const node = this.#tree[this.#tree.length - 1]
 		node.text += value
 	}
 
 	// Flush a valueless attribute that ended at whitespace, `/`, or `>`.
-	private flushAttributeName() {
-		const name = this.name.text()
+	#flushAttributeName() {
+		const name = this.#name.text()
 		if (!name) return
-		this.attributes[name] = ''
-		this.name.reset()
+		this.#attributes[name] = ''
+		this.#name.reset()
 	}
 
 	// Reset the parser before surfacing malformed input.
-	private fail(message: string) {
+	#fail(message: string) {
 		this.reset()
 		throw new Error(message)
 	}
 
 	// Close the current node and validate the closing tag name.
-	private closeNode(): XmlNode | undefined {
-		const name = this.tag.text()
-		this.tag.reset()
-		this.closeTagSealed = false
-		if (!name) this.fail('missing closing tag name')
-		const node = this.tree.pop()
-		if (!node || node.name !== name) this.fail(`mismatched closing tag: expected ${node?.name ?? 'none'}, received ${name}`)
+	#closeNode(): XmlNode | undefined {
+		const name = this.#tag.text()
+		this.#tag.reset()
+		this.#closeTagSealed = false
+		if (!name) this.#fail('missing closing tag name')
+		const node = this.#tree.pop()
+		if (!node || node.name !== name) this.#fail(`mismatched closing tag: expected ${node?.name ?? 'none'}, received ${name}`)
 		return node
 	}
 
-	private processByte(code: number): XmlNode | undefined {
-		if (this.state === XmlState.START) {
+	#processByte(code: number): XmlNode | undefined {
+		if (this.#state === XmlState.START) {
 			if (code === OPEN_ANGLE) {
-				this.state = XmlState.TAG_OPEN
+				this.#state = XmlState.TAG_OPEN
 			}
-		} else if (this.state === XmlState.TAG_OPEN) {
+		} else if (this.#state === XmlState.TAG_OPEN) {
 			if (isWhitespace(code)) {
 				// Ignore insignificant whitespace between top-level nodes.
 			} else if (isNameChar(code)) {
-				this.tag.write(code)
-				this.state = XmlState.TAG_NAME
+				this.#tag.write(code)
+				this.#state = XmlState.TAG_NAME
 			} else if (code === SLASH) {
-				this.tag.reset()
-				this.closeTagSealed = false
-				this.state = XmlState.TAG_CLOSE
+				this.#tag.reset()
+				this.#closeTagSealed = false
+				this.#state = XmlState.TAG_CLOSE
 			} else {
-				this.fail(`invalid tag start character: ${code}`)
+				this.#fail(`invalid tag start character: ${code}`)
 			}
-		} else if (this.state === XmlState.TAG_NAME) {
+		} else if (this.#state === XmlState.TAG_NAME) {
 			if (isNameChar(code)) {
-				this.tag.write(code)
+				this.#tag.write(code)
 			} else if (isWhitespace(code)) {
-				this.attributes = {}
-				this.name.reset()
-				this.state = XmlState.ATTR_NAME
+				this.#attributes = {}
+				this.#name.reset()
+				this.#state = XmlState.ATTR_NAME
 			} else if (code === CLOSE_ANGLE) {
-				this.appendNode({})
-				this.state = XmlState.TEXT
+				this.#appendNode({})
+				this.#state = XmlState.TEXT
 			} else if (code === SLASH) {
-				this.attributes = {}
-				this.state = XmlState.SELF_CLOSE
+				this.#attributes = {}
+				this.#state = XmlState.SELF_CLOSE
 			} else {
-				this.fail(`invalid tag name character: ${code}`)
+				this.#fail(`invalid tag name character: ${code}`)
 			}
-		} else if (this.state === XmlState.ATTR_NAME) {
+		} else if (this.#state === XmlState.ATTR_NAME) {
 			if (isWhitespace(code)) {
-				this.flushAttributeName()
+				this.#flushAttributeName()
 			} else if (isNameChar(code)) {
-				this.name.write(code)
+				this.#name.write(code)
 			} else if (code === EQUAL) {
-				this.state = XmlState.ATTR_VALUE
+				this.#state = XmlState.ATTR_VALUE
 			} else if (code === SLASH) {
-				this.flushAttributeName()
-				this.state = XmlState.SELF_CLOSE
+				this.#flushAttributeName()
+				this.#state = XmlState.SELF_CLOSE
 			} else if (code === CLOSE_ANGLE) {
-				this.flushAttributeName()
-				const node = this.appendNode(this.attributes)
-				this.attributes = {}
+				this.#flushAttributeName()
+				const node = this.#appendNode(this.#attributes)
+				this.#attributes = {}
 
-				if (this.tree.length === 0) {
-					this.state = XmlState.START
-					this.prevCode = undefined
+				if (this.#tree.length === 0) {
+					this.#state = XmlState.START
+					this.#prevCode = undefined
 					return node
 				}
 
-				this.state = XmlState.TEXT
+				this.#state = XmlState.TEXT
 			} else {
-				this.fail(`invalid attribute name character: ${code}`)
+				this.#fail(`invalid attribute name character: ${code}`)
 			}
-		} else if (this.state === XmlState.ATTR_VALUE) {
+		} else if (this.#state === XmlState.ATTR_VALUE) {
 			if (code === QUOTE) {
-				if (this.value.position > 0 || this.prevCode === QUOTE) {
-					const name = this.name.text()
-					this.attributes[name] = this.value.text()
-					this.name.reset()
-					this.value.reset()
-					this.state = XmlState.ATTR_NAME
+				if (this.#value.position > 0 || this.#prevCode === QUOTE) {
+					const name = this.#name.text()
+					this.#attributes[name] = this.#value.text()
+					this.#name.reset()
+					this.#value.reset()
+					this.#state = XmlState.ATTR_NAME
 				} else {
-					this.value.reset()
+					this.#value.reset()
 				}
 			} else {
-				this.value.write(code)
+				this.#value.write(code)
 			}
-		} else if (this.state === XmlState.TEXT) {
+		} else if (this.#state === XmlState.TEXT) {
 			if (code === OPEN_ANGLE) {
-				this.appendText()
-				this.state = XmlState.TAG_OPEN
+				this.#appendText()
+				this.#state = XmlState.TAG_OPEN
 			} else {
-				this.text.write(code)
+				this.#text.write(code)
 			}
-		} else if (this.state === XmlState.SELF_CLOSE) {
+		} else if (this.#state === XmlState.SELF_CLOSE) {
 			if (code === CLOSE_ANGLE) {
-				const node = this.appendNode(this.attributes, false)
-				this.attributes = {}
-				this.state = this.tree.length === 0 ? XmlState.START : XmlState.TEXT
+				const node = this.#appendNode(this.#attributes, false)
+				this.#attributes = {}
+				this.#state = this.#tree.length === 0 ? XmlState.START : XmlState.TEXT
 
-				if (this.tree.length === 0) {
-					this.prevCode = undefined
+				if (this.#tree.length === 0) {
+					this.#prevCode = undefined
 					return node
 				}
 			} else if (!isWhitespace(code)) {
-				this.fail(`invalid self-closing tag character: ${code}`)
+				this.#fail(`invalid self-closing tag character: ${code}`)
 			}
-		} else if (this.state === XmlState.TAG_CLOSE) {
+		} else if (this.#state === XmlState.TAG_CLOSE) {
 			if (isNameChar(code)) {
-				if (this.closeTagSealed) this.fail('invalid closing tag syntax')
-				this.tag.write(code)
+				if (this.#closeTagSealed) this.#fail('invalid closing tag syntax')
+				this.#tag.write(code)
 			} else if (isWhitespace(code)) {
-				if (this.tag.position > 0) this.closeTagSealed = true
+				if (this.#tag.position > 0) this.#closeTagSealed = true
 			} else if (code === CLOSE_ANGLE) {
-				const node = this.closeNode()
-				this.state = this.tree.length === 0 ? XmlState.START : XmlState.TEXT
+				const node = this.#closeNode()
+				this.#state = this.#tree.length === 0 ? XmlState.START : XmlState.TEXT
 
-				if (node && this.tree.length === 0) {
-					this.prevCode = undefined
+				if (node && this.#tree.length === 0) {
+					this.#prevCode = undefined
 					return node
 				}
 			} else {
-				this.fail(`invalid closing tag character: ${code}`)
+				this.#fail(`invalid closing tag character: ${code}`)
 			}
 		}
 
-		this.prevCode = code
+		this.#prevCode = code
 
 		return undefined
 	}

@@ -330,40 +330,40 @@ export class GuidingCalibrator {
 	processFrame(frame: GuideFrame) {
 		if (this.state.phase === 'idle') {
 			this.reset()
-			this.transitionTo('precheck')
-			const acquired = this.acquireInitialStar(frame)
+			this.#transitionTo('precheck')
+			const acquired = this.#acquireInitialStar(frame)
 			if (acquired.failure !== undefined) return acquired
-			return this.queuePulse('raForwardPulse', 'ra', this.config.raDirection, this.config.raPulse, frame, ['calibration_started'])
+			return this.#queuePulse('raForwardPulse', 'ra', this.config.raDirection, this.config.raPulse, frame, ['calibration_started'])
 		}
 
 		if (this.state.phase === 'completed' || this.state.phase === 'failed') {
-			return this.makeStepResult(undefined, frame, ['terminal_state'])
+			return this.#makeStepResult(undefined, frame, ['terminal_state'])
 		}
 
 		if (this.state.pendingPulseAxis === null) {
-			return this.fail('bad_frame', 'no pending calibration pulse to measure', frame, ['missing_pending_pulse'])
+			return this.#fail('bad_frame', 'no pending calibration pulse to measure', frame, ['missing_pending_pulse'])
 		}
 
 		if (this.state.settleFramesRemaining > 0) {
 			this.state.settleFramesRemaining--
-			return this.makeStepResult(undefined, frame, ['settling'])
+			return this.#makeStepResult(undefined, frame, ['settling'])
 		}
 
-		const tracked = this.trackStar(frame)
+		const tracked = this.#trackStar(frame)
 		if (tracked.failure !== undefined) return tracked.failure
 
 		const { point, filtered } = tracked
 
 		switch (this.state.phase) {
 			case 'raForwardPulse':
-				return this.handleRaForwardMeasurement(frame, point, filtered)
+				return this.#handleRaForwardMeasurement(frame, point, filtered)
 			case 'raClearPulse':
-				return this.handleRaClearMeasurement(frame, point, filtered)
+				return this.#handleRaClearMeasurement(frame, point, filtered)
 			case 'decForwardPulse':
 			case 'decBacklashClearing':
-				return this.handleDecMeasurement(frame, point, filtered)
+				return this.#handleDecMeasurement(frame, point, filtered)
 			default:
-				return this.fail('bad_frame', `unexpected calibration phase ${this.state.phase}`, frame, ['invalid_phase'], filtered)
+				return this.#fail('bad_frame', `unexpected calibration phase ${this.state.phase}`, frame, ['invalid_phase'], filtered)
 		}
 	}
 
@@ -399,18 +399,18 @@ export class GuidingCalibrator {
 	}
 
 	// Validates the initial frame and locks the starting guide star.
-	private acquireInitialStar(frame: GuideFrame) {
-		this.transitionTo('acquireLock')
+	#acquireInitialStar(frame: GuideFrame) {
+		this.#transitionTo('acquireLock')
 
 		const filtered = filterGuideStars(frame, this.config.filter)
 
 		if (filtered.accepted.length === 0 || filtered.qualityScore < this.config.minFrameQuality) {
-			return this.fail('no_usable_star', 'no usable guide star available for calibration start', frame, ['precheck_failed'], filtered)
+			return this.#fail('no_usable_star', 'no usable guide star available for calibration start', frame, ['precheck_failed'], filtered)
 		}
 
 		const guideStar = filtered.accepted[0]
 		if (isNearEdge(guideStar, frame.width, frame.height, this.config.edgeMarginPx)) {
-			return this.fail('star_near_edge', 'guide star is too close to the image edge for calibration', frame, ['start_edge'], filtered)
+			return this.#fail('star_near_edge', 'guide star is too close to the image edge for calibration', frame, ['start_edge'], filtered)
 		}
 
 		this.state.startX = guideStar.x
@@ -422,33 +422,33 @@ export class GuidingCalibrator {
 		this.state.decStartX = guideStar.x
 		this.state.decStartY = guideStar.y
 
-		this.updateDiagnostics(frame, filtered, ['lock_acquired'])
+		this.#updateDiagnostics(frame, filtered, ['lock_acquired'])
 
-		return this.makeStepResult(undefined, frame, ['lock_acquired'], filtered)
+		return this.#makeStepResult(undefined, frame, ['lock_acquired'], filtered)
 	}
 
 	// Tracks the current guide star and rejects invalid measurement frames.
-	private trackStar(frame: GuideFrame) {
+	#trackStar(frame: GuideFrame) {
 		const filtered = filterGuideStars(frame, this.config.filter)
 
 		if (filtered.accepted.length === 0 || filtered.qualityScore < this.config.minFrameQuality) {
 			this.state.badFrames++
 
 			if (this.state.badFrames > this.config.maxBadFrames) {
-				return { failure: this.fail('bad_frame', 'too many unusable frames during calibration', frame, ['bad_frame_limit'], filtered) } as const
+				return { failure: this.#fail('bad_frame', 'too many unusable frames during calibration', frame, ['bad_frame_limit'], filtered) } as const
 			}
 
-			return { failure: this.makeStepResult(undefined, frame, ['bad_frame'], filtered) } as const
+			return { failure: this.#makeStepResult(undefined, frame, ['bad_frame'], filtered) } as const
 		}
 
 		const tracked = pickNearestCalibrationStar(filtered.accepted, this.state.lastX, this.state.lastY, this.config.maxMatchDistancePx)
 
 		if (tracked === undefined) {
-			return { failure: this.fail('star_lost', 'guide star could not be matched in the calibration frame', frame, ['star_lost'], filtered) } as const
+			return { failure: this.#fail('star_lost', 'guide star could not be matched in the calibration frame', frame, ['star_lost'], filtered) } as const
 		}
 
 		if (isNearEdge(tracked, frame.width, frame.height, this.config.edgeMarginPx)) {
-			return { failure: this.fail('star_near_edge', 'guide star moved too close to the image edge during calibration', frame, ['edge_abort'], filtered) } as const
+			return { failure: this.#fail('star_near_edge', 'guide star moved too close to the image edge during calibration', frame, ['edge_abort'], filtered) } as const
 		}
 
 		const jumpX = tracked.x - this.state.lastX
@@ -456,7 +456,7 @@ export class GuidingCalibrator {
 		const jumpDistance = Math.hypot(jumpX, jumpY)
 
 		if (jumpDistance > this.config.maxFrameJumpPx) {
-			return { failure: this.fail('impossible_jump', 'measured star displacement exceeded the allowed frame jump threshold', frame, ['jump_rejected'], filtered) } as const
+			return { failure: this.#fail('impossible_jump', 'measured star displacement exceeded the allowed frame jump threshold', frame, ['jump_rejected'], filtered) } as const
 		}
 
 		this.state.badFrames = 0
@@ -465,96 +465,96 @@ export class GuidingCalibrator {
 	}
 
 	// Records one RA-forward sample and either continues pulsing or advances to clearing.
-	private handleRaForwardMeasurement(frame: GuideFrame, point: Point, filtered: FilteredStars) {
-		this.transitionTo('raForwardMeasure')
-		const sample = this.recordSample(this.state.raSteps + 1, this.config.raPulse, this.config.raDirection, point, this.state.startX, this.state.startY)
+	#handleRaForwardMeasurement(frame: GuideFrame, point: Point, filtered: FilteredStars) {
+		this.#transitionTo('raForwardMeasure')
+		const sample = this.#recordSample(this.state.raSteps + 1, this.config.raPulse, this.config.raDirection, point, this.state.startX, this.state.startY)
 		this.state.raSteps++
 		this.state.raSamples.push(sample)
-		this.finishMeasurement(point)
+		this.#finishMeasurement(point)
 
 		if (sample.stepDistance < this.config.minMovePerStepPx) {
 			this.state.raNoMotionSteps++
 
 			if (this.state.raNoMotionSteps > this.config.maxRaNoMotionSteps) {
-				return this.fail('too_many_ra_no_motion_steps', 'RA calibration pulses did not produce measurable motion', frame, ['ra_no_motion'], filtered)
+				return this.#fail('too_many_ra_no_motion_steps', 'RA calibration pulses did not produce measurable motion', frame, ['ra_no_motion'], filtered)
 			}
 		}
 
-		this.updateDiagnostics(frame, filtered, ['ra_measured'])
+		this.#updateDiagnostics(frame, filtered, ['ra_measured'])
 
 		if (sample.netDistance >= this.config.minNetRaTravelPx) {
 			this.state.raSolution = solveAxisFromSamples(this.state.raSamples)
 
 			if (!isAxisRateValid(this.state.raSolution, this.config.minRatePxPerMs, this.config.maxRatePxPerMs)) {
-				return this.fail('axis_rate_invalid', 'RA calibration rate is outside the accepted range', frame, ['ra_rate_invalid'], filtered)
+				return this.#fail('axis_rate_invalid', 'RA calibration rate is outside the accepted range', frame, ['ra_rate_invalid'], filtered)
 			}
 
 			if (this.state.raSolution.negativeProjectionCount > Math.max(1, Math.floor(this.state.raSamples.length / 3))) {
-				return this.fail('axis_direction_inconsistent', 'RA calibration samples contain too many reverse projections', frame, ['ra_projection_inconsistent'], filtered)
+				return this.#fail('axis_direction_inconsistent', 'RA calibration samples contain too many reverse projections', frame, ['ra_projection_inconsistent'], filtered)
 			}
 
-			this.transitionTo('raForwardComplete')
+			this.#transitionTo('raForwardComplete')
 
 			if (!this.config.clearingMoveEnabled) {
-				this.startDecPhase(point)
-				return this.queuePulse('decForwardPulse', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_started'], filtered)
+				this.#startDecPhase(point)
+				return this.#queuePulse('decForwardPulse', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_started'], filtered)
 			}
 
 			this.state.plannedClearingSteps = Math.trunc(clamp(Math.round(this.state.raSteps * this.config.clearingMoveFraction), 1, this.config.maxClearingSteps))
-			return this.queuePulse('raClearPulse', 'ra', oppositeRA(this.config.raDirection), this.config.raPulse, frame, ['ra_clearing_started'], filtered)
+			return this.#queuePulse('raClearPulse', 'ra', oppositeRA(this.config.raDirection), this.config.raPulse, frame, ['ra_clearing_started'], filtered)
 		}
 
 		if (this.state.raSteps >= this.config.maxRaSteps) {
-			return this.fail('insufficient_ra_movement', 'RA calibration did not reach the required net travel before the step limit', frame, ['ra_travel_short'], filtered)
+			return this.#fail('insufficient_ra_movement', 'RA calibration did not reach the required net travel before the step limit', frame, ['ra_travel_short'], filtered)
 		}
 
-		return this.queuePulse('raForwardPulse', 'ra', this.config.raDirection, this.config.raPulse, frame, ['ra_continue'], filtered)
+		return this.#queuePulse('raForwardPulse', 'ra', this.config.raDirection, this.config.raPulse, frame, ['ra_continue'], filtered)
 	}
 
 	// Records one RA clearing sample and either continues reversing or starts DEC.
-	private handleRaClearMeasurement(frame: GuideFrame, point: Point, filtered: FilteredStars) {
-		this.transitionTo('raClearMeasure')
+	#handleRaClearMeasurement(frame: GuideFrame, point: Point, filtered: FilteredStars) {
+		this.#transitionTo('raClearMeasure')
 
-		const sample = this.recordSample(this.state.clearingSteps + 1, this.config.raPulse, oppositeRA(this.config.raDirection), point, this.state.startX, this.state.startY)
+		const sample = this.#recordSample(this.state.clearingSteps + 1, this.config.raPulse, oppositeRA(this.config.raDirection), point, this.state.startX, this.state.startY)
 
 		this.state.clearingSteps++
 		this.state.clearingSamples.push(sample)
-		this.finishMeasurement(point)
-		this.updateDiagnostics(frame, filtered, ['ra_clearing_measured'])
+		this.#finishMeasurement(point)
+		this.#updateDiagnostics(frame, filtered, ['ra_clearing_measured'])
 
 		if (sample.netDistance <= this.config.maxClearingOffsetPx) {
-			this.startDecPhase(point)
-			return this.queuePulse('decForwardPulse', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_started'], filtered)
+			this.#startDecPhase(point)
+			return this.#queuePulse('decForwardPulse', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_started'], filtered)
 		}
 
 		if (this.state.clearingSteps >= this.state.plannedClearingSteps || this.state.clearingSteps >= this.config.maxClearingSteps) {
-			return this.fail('ra_clearing_failed', 'RA clearing pulses did not return the guide star close enough to the calibration origin', frame, ['ra_clearing_failed'], filtered)
+			return this.#fail('ra_clearing_failed', 'RA clearing pulses did not return the guide star close enough to the calibration origin', frame, ['ra_clearing_failed'], filtered)
 		}
 
-		return this.queuePulse('raClearPulse', 'ra', oppositeRA(this.config.raDirection), this.config.raPulse, frame, ['ra_clearing_continue'], filtered)
+		return this.#queuePulse('raClearPulse', 'ra', oppositeRA(this.config.raDirection), this.config.raPulse, frame, ['ra_clearing_continue'], filtered)
 	}
 
 	// Records one DEC sample, applies backlash tolerance, and either continues or solves calibration.
-	private handleDecMeasurement(frame: GuideFrame, point: Point, filtered: FilteredStars) {
-		const sample = this.recordDecSample(this.state.decSteps + 1, point)
+	#handleDecMeasurement(frame: GuideFrame, point: Point, filtered: FilteredStars) {
+		const sample = this.#recordDecSample(this.state.decSteps + 1, point)
 		this.state.decSteps++
-		this.finishMeasurement(point)
+		this.#finishMeasurement(point)
 
 		if (!this.state.decMotionDetected && sample.projectedDistance < this.config.minMovePerStepPx && Math.abs(sample.orthogonalDistance) < this.config.minMovePerStepPx) {
 			this.state.decNoMotionSteps++
 			this.state.decBacklashMs = this.state.decSteps * this.config.decPulse
-			this.transitionTo('decBacklashClearing')
-			this.updateDiagnostics(frame, filtered, ['dec_backlash'])
+			this.#transitionTo('decBacklashClearing')
+			this.#updateDiagnostics(frame, filtered, ['dec_backlash'])
 
 			if (this.state.decNoMotionSteps > this.config.maxDecNoMotionSteps) {
-				return this.fail('too_many_dec_no_motion_steps', 'DEC calibration never showed measurable motion before backlash tolerance was exhausted', frame, ['dec_no_motion'], filtered)
+				return this.#fail('too_many_dec_no_motion_steps', 'DEC calibration never showed measurable motion before backlash tolerance was exhausted', frame, ['dec_no_motion'], filtered)
 			}
 
 			if (this.state.decSteps >= this.config.maxDecSteps) {
-				return this.fail('insufficient_dec_movement', 'DEC calibration did not begin moving before the step limit', frame, ['dec_travel_short'], filtered)
+				return this.#fail('insufficient_dec_movement', 'DEC calibration did not begin moving before the step limit', frame, ['dec_travel_short'], filtered)
 			}
 
-			return this.queuePulse('decBacklashClearing', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_backlash_continue'], filtered)
+			return this.#queuePulse('decBacklashClearing', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_backlash_continue'], filtered)
 		}
 
 		if (!this.state.decMotionDetected) {
@@ -562,48 +562,48 @@ export class GuidingCalibrator {
 			this.state.decBacklashMs = (this.state.decSteps - 1) * this.config.decPulse
 		}
 
-		this.transitionTo('decForwardMeasure')
+		this.#transitionTo('decForwardMeasure')
 		this.state.decSamples.push(sample)
-		this.updateDiagnostics(frame, filtered, ['dec_measured'])
+		this.#updateDiagnostics(frame, filtered, ['dec_measured'])
 
 		const decTravel = computeDecTravel(this.state.decSamples)
 		if (decTravel >= this.config.minNetDecTravelPx) {
 			this.state.decSolution = solveAxisFromSamples(this.state.decSamples)
 
 			if (!isAxisRateValid(this.state.decSolution, this.config.minRatePxPerMs, this.config.maxRatePxPerMs)) {
-				return this.fail('axis_rate_invalid', 'DEC calibration rate is outside the accepted range', frame, ['dec_rate_invalid'], filtered)
+				return this.#fail('axis_rate_invalid', 'DEC calibration rate is outside the accepted range', frame, ['dec_rate_invalid'], filtered)
 			}
 
 			if (this.state.decSolution.negativeProjectionCount > Math.max(1, Math.floor(this.state.decSamples.length / 3))) {
-				return this.fail('axis_direction_inconsistent', 'DEC calibration samples contain too many reverse projections', frame, ['dec_projection_inconsistent'], filtered)
+				return this.#fail('axis_direction_inconsistent', 'DEC calibration samples contain too many reverse projections', frame, ['dec_projection_inconsistent'], filtered)
 			}
 
-			this.transitionTo('decForwardComplete')
+			this.#transitionTo('decForwardComplete')
 
-			return this.solveAndValidate(frame, filtered)
+			return this.#solveAndValidate(frame, filtered)
 		}
 
 		if (this.state.decSteps >= this.config.maxDecSteps) {
-			return this.fail('insufficient_dec_movement', 'DEC calibration did not reach the required net travel before the step limit', frame, ['dec_travel_short'], filtered)
+			return this.#fail('insufficient_dec_movement', 'DEC calibration did not reach the required net travel before the step limit', frame, ['dec_travel_short'], filtered)
 		}
 
-		return this.queuePulse('decForwardPulse', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_continue'], filtered)
+		return this.#queuePulse('decForwardPulse', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_continue'], filtered)
 	}
 
 	// Solves the 2x2 calibration matrices and validates the final geometry.
-	private solveAndValidate(frame: GuideFrame, filtered: FilteredStars) {
-		this.transitionTo('solving')
+	#solveAndValidate(frame: GuideFrame, filtered: FilteredStars) {
+		this.#transitionTo('solving')
 
 		const { raSolution, decSolution } = this.state
 
 		if (raSolution === undefined || decSolution === undefined) {
-			return this.fail('matrix_singular', 'calibration solve requires both RA and DEC axis solutions', frame, ['solve_missing_axis'], filtered)
+			return this.#fail('matrix_singular', 'calibration solve requires both RA and DEC axis solutions', frame, ['solve_missing_axis'], filtered)
 		}
 
 		const dot = clamp(raSolution.unitX * decSolution.unitX + raSolution.unitY * decSolution.unitY, -1, 1)
 		const separation = Math.acos(Math.abs(dot))
 		if (separation < this.config.minAxisSeparation) {
-			return this.fail('axes_too_parallel', 'RA and DEC calibration vectors are too close to parallel', frame, ['axes_parallel'], filtered)
+			return this.#fail('axes_too_parallel', 'RA and DEC calibration vectors are too close to parallel', frame, ['axes_parallel'], filtered)
 		}
 
 		const m00 = raSolution.unitX * raSolution.ratePxPerMs
@@ -613,10 +613,10 @@ export class GuidingCalibrator {
 		const determinant = m00 * m11 - m01 * m10
 
 		if (!Number.isFinite(determinant) || Math.abs(determinant) <= this.config.minDeterminant) {
-			return this.fail('matrix_singular', 'calibration image-motion matrix is singular or ill-conditioned', frame, ['matrix_singular'], filtered)
+			return this.#fail('matrix_singular', 'calibration image-motion matrix is singular or ill-conditioned', frame, ['matrix_singular'], filtered)
 		}
 
-		this.transitionTo('validating')
+		this.#transitionTo('validating')
 
 		const warnings = this.state.warnings.slice()
 		if (this.state.clearingSteps > 0 && Math.hypot(this.state.currentX - this.state.startX, this.state.currentY - this.state.startY) > this.config.maxClearingOffsetPx * 0.6) {
@@ -639,14 +639,14 @@ export class GuidingCalibrator {
 		}
 
 		this.state.warnings = warnings.slice()
-		this.transitionTo('completed')
-		this.updateDiagnostics(frame, filtered, ['completed'])
+		this.#transitionTo('completed')
+		this.#updateDiagnostics(frame, filtered, ['completed'])
 
-		return this.makeStepResult(undefined, frame, ['completed'], filtered)
+		return this.#makeStepResult(undefined, frame, ['completed'], filtered)
 	}
 
 	// Starts the DEC phase from the most recent post-clearing position.
-	private startDecPhase(point: Point) {
+	#startDecPhase(point: Point) {
 		this.state.decStartX = point.x
 		this.state.decStartY = point.y
 		this.state.decSteps = 0
@@ -656,7 +656,7 @@ export class GuidingCalibrator {
 	}
 
 	// Finalizes one measured frame by clearing the pending pulse and updating the track point.
-	private finishMeasurement(point: Point) {
+	#finishMeasurement(point: Point) {
 		this.state.currentX = point.x
 		this.state.currentY = point.y
 		this.state.lastX = point.x
@@ -667,7 +667,7 @@ export class GuidingCalibrator {
 	}
 
 	// Records one generic calibration sample against the provided origin.
-	private recordSample(step: number, pulse: number, pulseDirection: GuideDirectionRA | GuideDirectionDEC, point: Point, originX: number, originY: number): GuidingCalibrationSample {
+	#recordSample(step: number, pulse: number, pulseDirection: GuideDirectionRA | GuideDirectionDEC, point: Point, originX: number, originY: number): GuidingCalibrationSample {
 		const deltaX = point.x - this.state.lastX
 		const deltaY = point.y - this.state.lastY
 		const netX = point.x - originX
@@ -676,7 +676,7 @@ export class GuidingCalibrator {
 	}
 
 	// Records one DEC sample projected onto the RA-orthogonal seed direction.
-	private recordDecSample(step: number, point: Point): GuidingCalibrationSample {
+	#recordDecSample(step: number, point: Point): GuidingCalibrationSample {
 		const deltaX = point.x - this.state.lastX
 		const deltaY = point.y - this.state.lastY
 		const netX = point.x - this.state.decStartX
@@ -704,27 +704,27 @@ export class GuidingCalibrator {
 	}
 
 	// Queues the next pulse and returns the step result the caller should execute.
-	private queuePulse(phase: GuidingCalibrationPhase, axis: 'ra' | 'dec', direction: GuideDirectionRA | GuideDirectionDEC, duration: number, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)) {
-		this.transitionTo(phase)
+	#queuePulse(phase: GuidingCalibrationPhase, axis: 'ra' | 'dec', direction: GuideDirectionRA | GuideDirectionDEC, duration: number, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)) {
+		this.#transitionTo(phase)
 		this.state.pendingPulseAxis = axis
 		this.state.pendingPulseDirection = direction
 		this.state.pendingPulseMs = duration
 		this.state.settleFramesRemaining = this.config.settleFramesAfterMove
 		const pulse: CalibrationPulseCommand = axis === 'ra' ? { ra: { direction, duration }, dec: NO_PULSE } : { ra: NO_PULSE, dec: { direction, duration } }
-		this.updateDiagnostics(frame, filtered, notes, pulse)
-		return this.makeStepResult(pulse, frame, notes, filtered)
+		this.#updateDiagnostics(frame, filtered, notes, pulse)
+		return this.#makeStepResult(pulse, frame, notes, filtered)
 	}
 
 	// Fails calibration with a structured reason and snapshot diagnostics.
-	private fail(code: GuidingCalibrationFailureCode, message: string, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)) {
+	#fail(code: GuidingCalibrationFailureCode, message: string, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)) {
 		this.state.failure = { code, phase: this.state.phase, message, frameId: frame.frameId }
-		this.transitionTo('failed')
-		this.updateDiagnostics(frame, filtered, notes)
-		return this.makeStepResult(undefined, frame, notes, filtered)
+		this.#transitionTo('failed')
+		this.#updateDiagnostics(frame, filtered, notes)
+		return this.#makeStepResult(undefined, frame, notes, filtered)
 	}
 
 	// Updates the mutable diagnostics snapshot used by tests and callers.
-	private updateDiagnostics(frame: GuideFrame, filtered: FilteredStars, notes: readonly string[], pendingPulse?: CalibrationPulseCommand) {
+	#updateDiagnostics(frame: GuideFrame, filtered: FilteredStars, notes: readonly string[], pendingPulse?: CalibrationPulseCommand) {
 		const raNet = this.state.raSamples.length > 0 ? this.state.raSamples[this.state.raSamples.length - 1].netDistance : 0
 		const decNet = computeDecTravel(this.state.decSamples)
 		const clearingDistance = Math.hypot(this.state.currentX - this.state.startX, this.state.currentY - this.state.startY)
@@ -761,16 +761,16 @@ export class GuidingCalibrator {
 	}
 
 	// Converts internal state into the public step result payload.
-	private makeStepResult(pulse: CalibrationPulseCommand | undefined, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)): CalibrationStepResult {
+	#makeStepResult(pulse: CalibrationPulseCommand | undefined, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)): CalibrationStepResult {
 		if (this.state.lastDiagnostics.phase !== this.state.phase || this.state.lastDiagnostics.frameId !== frame.frameId) {
-			this.updateDiagnostics(frame, filtered, notes, pulse)
+			this.#updateDiagnostics(frame, filtered, notes, pulse)
 		}
 
 		return { phase: this.state.phase, pulse, completed: this.state.result, failure: this.state.failure, diagnostics: this.state.lastDiagnostics }
 	}
 
 	// Appends a phase transition while avoiding duplicate adjacent entries.
-	private transitionTo(phase: GuidingCalibrationPhase) {
+	#transitionTo(phase: GuidingCalibrationPhase) {
 		this.state.phase = phase
 
 		if (this.state.phaseHistory[this.state.phaseHistory.length - 1] !== phase) {

@@ -439,7 +439,7 @@ export class MountSimulator extends DeviceSimulator {
 			}
 			case 'GEOGRAPHIC_COORD':
 				if (applyNumberVectorValues(this.#geographicCoordinate, vector.elements)) {
-					this.updatePierSide()
+					this.#updatePierSide()
 					this.notify(this.#geographicCoordinate)
 				}
 				return
@@ -527,8 +527,8 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.isConnected) return
 
 		this.#lastTick = Date.now()
-		this.refreshDynamicCoordinates(false)
-		this.#timer = setInterval(this.tick.bind(this), TICK_INTERVAL_MS)
+		this.#refreshDynamicCoordinates(false)
+		this.#timer = setInterval(this.#tick.bind(this), TICK_INTERVAL_MS)
 	}
 
 	// Disconnects the simulated mount and removes its dynamic properties.
@@ -547,19 +547,19 @@ export class MountSimulator extends DeviceSimulator {
 	goTo(rightAscension: Angle, declination: Angle) {
 		if (!this.isConnected || this.isParked) return
 
-		this.clearManualMotion()
-		this.clearPulseGuide()
+		this.#clearManualMotion()
+		this.#clearPulseGuide()
 		this.#slewMode = 'GOTO'
 		this.#slewTarget = { rightAscension: normalizeAngle(rightAscension), declination: clampDeclination(declination) }
-		this.setSlewing(true)
-		this.setHoming(false)
-		this.setParking(false)
+		this.#setSlewing(true)
+		this.#setHoming(false)
+		this.#setParking(false)
 	}
 
 	// Applies a sync immediately without any slew time.
 	syncTo(rightAscension: Angle, declination: Angle) {
 		if (!this.isConnected) return
-		this.setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination))
+		this.#setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination))
 	}
 
 	// Slews to the configured home position.
@@ -567,9 +567,9 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.isConnected || this.isParked) return
 		this.#slewMode = 'HOME'
 		this.#slewTarget = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
-		this.setSlewing(true)
-		this.setHoming(true)
-		this.setParking(false)
+		this.#setSlewing(true)
+		this.#setHoming(true)
+		this.#setParking(false)
 	}
 
 	// Stores the current coordinate as the new home position.
@@ -581,19 +581,19 @@ export class MountSimulator extends DeviceSimulator {
 	// Parks the mount at the configured park position.
 	park() {
 		if (!this.isConnected || this.isParked) return
-		this.clearManualMotion()
-		this.clearPulseGuide()
+		this.#clearManualMotion()
+		this.#clearPulseGuide()
 		this.#slewMode = 'PARK'
 		this.#slewTarget = { rightAscension: this.#parkCoordinate.rightAscension, declination: this.#parkCoordinate.declination }
-		this.setSlewing(true)
-		this.setHoming(false)
-		this.setParking(true, false)
+		this.#setSlewing(true)
+		this.#setHoming(false)
+		this.#setParking(true, false)
 	}
 
 	// Unparks the mount without changing the current coordinate.
 	unpark() {
 		this.isParked && selectOnSwitch(this.#park, 'UNPARK') && this.notify(this.#park)
-		this.setParking(false)
+		this.#setParking(false)
 	}
 
 	// Stores the current coordinate as the park position.
@@ -651,28 +651,28 @@ export class MountSimulator extends DeviceSimulator {
 		this.#time.elements.UTC.value = formatTemporal(value.utc, 'YYYY-MM-DDTHH:mm:ss.SSSZ', 0)
 		this.#time.elements.OFFSET.value = (value.offset / 60).toFixed(2)
 		this.#lastTick = Date.now()
-		this.updatePierSide()
+		this.#updatePierSide()
 		this.notify(this.#time)
 	}
 
 	// Sets manual northward motion.
 	moveNorth(enable: boolean) {
-		this.setManualNorthSouth(enable ? 1 : 0)
+		this.#setManualNorthSouth(enable ? 1 : 0)
 	}
 
 	// Sets manual southward motion.
 	moveSouth(enable: boolean) {
-		this.setManualNorthSouth(enable ? -1 : 0)
+		this.#setManualNorthSouth(enable ? -1 : 0)
 	}
 
 	// Sets manual westward motion.
 	moveWest(enable: boolean) {
-		this.setManualWestEast(enable ? -1 : 0)
+		this.#setManualWestEast(enable ? -1 : 0)
 	}
 
 	// Sets manual eastward motion.
 	moveEast(enable: boolean) {
-		this.setManualWestEast(enable ? 1 : 0)
+		this.#setManualWestEast(enable ? 1 : 0)
 	}
 
 	// Starts a pulse guiding correction for the requested direction.
@@ -694,18 +694,18 @@ export class MountSimulator extends DeviceSimulator {
 			this.#pulseWestEastUntil = until
 		}
 
-		this.updatePulsing()
+		this.#updatePulsing()
 	}
 
 	// Aborts any active slew or manual motion.
 	stop() {
 		this.#slewMode = undefined
 		this.#slewTarget = undefined
-		this.clearManualMotion()
-		this.clearPulseGuide()
-		this.setSlewing(false)
-		this.setHoming(false)
-		this.setParking(false)
+		this.#clearManualMotion()
+		this.#clearPulseGuide()
+		this.#setSlewing(false)
+		this.#setHoming(false)
+		this.#setParking(false)
 	}
 
 	// Disposes the mount simulator and removes it from the manager view.
@@ -715,7 +715,7 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Advances the simulated state using wall-clock time.
-	private tick() {
+	#tick() {
 		const now = Date.now()
 		const dtSeconds = Math.max(0, (now - this.#lastTick) / 1000)
 		this.#lastTick = now
@@ -726,61 +726,61 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
-		this.expirePulseGuide(now)
+		this.#expirePulseGuide(now)
 
 		if (this.#slewTarget) {
-			this.advanceSlew(dtSeconds)
+			this.#advanceSlew(dtSeconds)
 		} else {
-			this.advanceFreeMotion(dtSeconds)
+			this.#advanceFreeMotion(dtSeconds)
 		}
 	}
 
 	// Moves the mount along the commanded slew vector.
-	private advanceSlew(dtSeconds: number) {
+	#advanceSlew(dtSeconds: number) {
 		const target = this.#slewTarget
 
 		if (!target) return
 
-		const speed = this.manualSlewSpeed() * 3
+		const speed = this.#manualSlewSpeed() * 3
 		const maxStep = speed * dtSeconds
 		const deltaRightAscension = normalizePI(target.rightAscension - this.rightAscension)
 		const deltaDeclination = target.declination - this.declination
 		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination))
 
 		if (span <= maxStep || span === 0) {
-			this.setCoordinate(target.rightAscension, target.declination)
+			this.#setCoordinate(target.rightAscension, target.declination)
 			const mode = this.#slewMode
 			this.#slewMode = undefined
 			this.#slewTarget = undefined
-			this.setSlewing(false)
-			this.setHoming(false)
+			this.#setSlewing(false)
+			this.#setHoming(false)
 
 			if (mode === 'PARK') {
-				this.setParking(false, true)
+				this.#setParking(false, true)
 				this.setTrackingEnabled(false)
 			} else {
-				this.setParking(false)
+				this.#setParking(false)
 			}
 
 			return
 		}
 
 		const scale = maxStep / span
-		this.setCoordinate(this.rightAscension + deltaRightAscension * scale, this.declination + deltaDeclination * scale)
+		this.#setCoordinate(this.rightAscension + deltaRightAscension * scale, this.declination + deltaDeclination * scale)
 	}
 
 	// Advances tracking, manual motion and pulse guiding when not slewing.
-	private advanceFreeMotion(dtSeconds: number) {
+	#advanceFreeMotion(dtSeconds: number) {
 		let { rightAscension, declination } = this
 		let moved = false
 
 		if (this.#manualWestEast !== 0) {
-			rightAscension += this.#manualWestEast * this.manualSlewSpeed() * dtSeconds
+			rightAscension += this.#manualWestEast * this.#manualSlewSpeed() * dtSeconds
 			moved = true
 		}
 
 		if (this.#manualNorthSouth !== 0) {
-			declination += this.#manualNorthSouth * this.manualSlewSpeed() * dtSeconds
+			declination += this.#manualNorthSouth * this.#manualSlewSpeed() * dtSeconds
 			moved = true
 		}
 
@@ -795,7 +795,7 @@ export class MountSimulator extends DeviceSimulator {
 		}
 
 		if (!moved) {
-			const trackingDrift = this.trackingDriftRate()
+			const trackingDrift = this.#trackingDriftRate()
 
 			if (trackingDrift !== 0) {
 				rightAscension += trackingDrift * dtSeconds
@@ -804,23 +804,23 @@ export class MountSimulator extends DeviceSimulator {
 		}
 
 		if (moved) {
-			this.setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination))
+			this.#setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination))
 		}
 	}
 
 	// Applies a coordinate update and notifies listeners when required.
-	private setCoordinate(rightAscension: Angle, declination: Angle, notify: boolean = true) {
+	#setCoordinate(rightAscension: Angle, declination: Angle, notify: boolean = true) {
 		this.#equatorialCoordinate.elements.RA.value = toHour(normalizeAngle(rightAscension))
 		this.#equatorialCoordinate.elements.DEC.value = toDeg(clampDeclination(declination))
-		const pierSideChanged = this.updatePierSide()
+		const pierSideChanged = this.#updatePierSide()
 
 		if (notify) this.notify(this.#equatorialCoordinate)
 		if (notify && pierSideChanged) this.notify(this.#pierSide)
 	}
 
 	// Keeps the simulated pier side consistent with the current sky position.
-	private updatePierSide() {
-		const pierSide = expectedPierSide(this.rightAscension, this.declination, this.siderealTime())
+	#updatePierSide() {
+		const pierSide = expectedPierSide(this.rightAscension, this.declination, this.#siderealTime())
 		if (pierSide === this.pierSide) return false
 
 		if (pierSide === 'EAST') selectOnSwitch(this.#pierSide, 'PIER_EAST')
@@ -834,17 +834,17 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Computes the current local sidereal time from the simulated clock.
-	private siderealTime() {
+	#siderealTime() {
 		return localSiderealTime(timeUnix(this.#utcTime / 1000, undefined, true), this.longitude)
 	}
 
 	// Returns the active free-slew speed in radians per second.
-	private manualSlewSpeed() {
+	#manualSlewSpeed() {
 		return SLEW_RATES.find((entry) => entry.name === this.slewRate)?.speed ?? SLEW_RATES[3].speed
 	}
 
 	// Returns the RA drift implied by the current tracking state.
-	private trackingDriftRate() {
+	#trackingDriftRate() {
 		if (!this.isTracking) return SIDEREAL_DRIFT_RATE
 		if (this.trackMode === 'SOLAR') return SOLAR_DRIFT_RATE
 		if (this.trackMode === 'LUNAR') return LUNAR_DRIFT_RATE
@@ -853,7 +853,7 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Expires pulse guide commands once their duration elapses.
-	private expirePulseGuide(now: number) {
+	#expirePulseGuide(now: number) {
 		let changed = false
 
 		if (this.#pulseNorthSouth !== 0 && now >= this.#pulseNorthSouthUntil) {
@@ -869,77 +869,77 @@ export class MountSimulator extends DeviceSimulator {
 		}
 
 		if (changed) {
-			this.updatePulsing()
+			this.#updatePulsing()
 		}
 	}
 
 	// Updates the combined pulse-guiding state.
-	private updatePulsing() {
-		this.setPulsing(this.#pulseNorthSouth !== 0 || this.#pulseWestEast !== 0)
+	#updatePulsing() {
+		this.#setPulsing(this.#pulseNorthSouth !== 0 || this.#pulseWestEast !== 0)
 	}
 
 	// Sets the active north/south manual motion state.
-	private setManualNorthSouth(direction: AxisDirection) {
+	#setManualNorthSouth(direction: AxisDirection) {
 		if (!this.isConnected || this.isParked) direction = 0
 		if (this.#manualNorthSouth === direction) return
-		if (direction !== 0) this.abortSlew()
+		if (direction !== 0) this.#abortSlew()
 		this.#manualNorthSouth = direction
-		this.refreshSlewingState()
+		this.#refreshSlewingState()
 	}
 
 	// Sets the active west/east manual motion state.
-	private setManualWestEast(direction: AxisDirection) {
+	#setManualWestEast(direction: AxisDirection) {
 		if (!this.isConnected || this.isParked) direction = 0
 		if (this.#manualWestEast === direction) return
-		if (direction !== 0) this.abortSlew()
+		if (direction !== 0) this.#abortSlew()
 		this.#manualWestEast = direction
-		this.refreshSlewingState()
+		this.#refreshSlewingState()
 	}
 
 	// Clears any manual motion command.
-	private clearManualMotion() {
+	#clearManualMotion() {
 		this.#manualNorthSouth = 0
 		this.#manualWestEast = 0
 	}
 
 	// Clears active pulse-guiding commands.
-	private clearPulseGuide() {
+	#clearPulseGuide() {
 		this.#pulseNorthSouth = 0
 		this.#pulseWestEast = 0
 		this.#pulseNorthSouthUntil = 0
 		this.#pulseWestEastUntil = 0
-		this.setPulsing(false)
+		this.#setPulsing(false)
 	}
 
 	// Cancels any goto, home or park slew.
-	private abortSlew() {
+	#abortSlew() {
 		this.#slewMode = undefined
 		this.#slewTarget = undefined
-		this.setHoming(false)
-		this.setParking(false)
+		this.#setHoming(false)
+		this.#setParking(false)
 	}
 
 	// Recomputes the combined slewing flag.
-	private refreshSlewingState() {
-		this.setSlewing(this.#slewTarget !== undefined || this.#manualNorthSouth !== 0 || this.#manualWestEast !== 0)
+	#refreshSlewingState() {
+		this.#setSlewing(this.#slewTarget !== undefined || this.#manualNorthSouth !== 0 || this.#manualWestEast !== 0)
 	}
 
 	// Updates the slewing flag and notifies listeners.
-	private setSlewing(value: boolean) {
+	#setSlewing(value: boolean) {
 		if (this.isSlewing === value) return
 		this.#equatorialCoordinate.state = value ? 'Busy' : 'Idle'
 		this.notify(this.#equatorialCoordinate)
 	}
 
 	// Updates the homing flag and notifies listeners.
-	private setHoming(value: boolean) {
+	#setHoming(value: boolean) {
 		if (this.isHoming === value) return
 		this.#home.state = value ? 'Busy' : 'Idle'
 		this.notify(this.#home)
 	}
 
 	// Updates the parking state and notifies listeners.
-	private setParking(parking: boolean, parked?: boolean) {
+	#setParking(parking: boolean, parked?: boolean) {
 		let updated = false
 
 		if (this.isParking !== parking) {
@@ -956,7 +956,7 @@ export class MountSimulator extends DeviceSimulator {
 		}
 	}
 
-	private setPulsing(pulsing: boolean) {
+	#setPulsing(pulsing: boolean) {
 		if (this.isPulsing === pulsing) return
 		this.#guideNS.state = pulsing ? 'Busy' : 'Idle'
 		this.#guideWE.state = this.#guideNS.state
@@ -965,10 +965,10 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Initializes the mount with a realistic pole-pointing home position.
-	private refreshDynamicCoordinates(notify: boolean) {
-		this.#homeCoordinate.rightAscension = this.siderealTime()
+	#refreshDynamicCoordinates(notify: boolean) {
+		this.#homeCoordinate.rightAscension = this.#siderealTime()
 		this.#parkCoordinate.rightAscension = this.#homeCoordinate.rightAscension
-		this.setCoordinate(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
+		this.#setCoordinate(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
 	}
 }
 
@@ -1074,7 +1074,7 @@ export class FocuserSimulator extends DeviceSimulator {
 
 		this.#lastTick = Date.now()
 		this.#lastCompensationTemperature = this.temperature
-		this.#timer = setInterval(this.tick.bind(this), TICK_INTERVAL_MS)
+		this.#timer = setInterval(this.#tick.bind(this), TICK_INTERVAL_MS)
 	}
 
 	// Disconnects the simulated focuser and removes its dynamic properties.
@@ -1103,20 +1103,20 @@ export class FocuserSimulator extends DeviceSimulator {
 
 		this.#targetPosition = position
 		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(position - this.position)
-		this.setMoving(true)
+		this.#setMoving(true)
 	}
 
 	// Starts a relative move using the selected motion direction.
 	moveRelative(steps: number) {
 		if (!this.isConnected || steps <= 0) return
 
-		const direction = this.relativeDirection()
+		const direction = this.#relativeDirection()
 		const target = clamp(this.position + steps * direction, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
 		if (target === this.position) return
 
 		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(target - this.position)
 		this.#targetPosition = target
-		this.setMoving(true)
+		this.#setMoving(true)
 	}
 
 	// Applies a sync immediately without any slew time.
@@ -1137,7 +1137,7 @@ export class FocuserSimulator extends DeviceSimulator {
 		const wasMoving = this.isMoving
 		this.#targetPosition = undefined
 		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
-		this.setMoving(false, alert)
+		this.#setMoving(false, alert)
 
 		if (alert && wasMoving) {
 			this.#abort.elements.ABORT.value = true
@@ -1147,15 +1147,15 @@ export class FocuserSimulator extends DeviceSimulator {
 	}
 
 	// Advances the focuser position toward the requested target.
-	private tick() {
+	#tick() {
 		const now = Date.now()
 		const dtSeconds = Math.max(0, (now - this.#lastTick) / 1000)
 		this.#lastTick = now
 
 		if (dtSeconds <= 0) return
 
-		this.advanceTemperature(dtSeconds)
-		this.applyTemperatureCompensation()
+		this.#advanceTemperature(dtSeconds)
+		this.#applyTemperatureCompensation()
 
 		if (this.#targetPosition === undefined) return
 
@@ -1167,7 +1167,7 @@ export class FocuserSimulator extends DeviceSimulator {
 			this.#position.elements.FOCUS_ABSOLUTE_POSITION.value = this.#targetPosition
 			this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
 			this.#targetPosition = undefined
-			this.setMoving(false)
+			this.#setMoving(false)
 			this.notify(this.#position)
 			this.notify(this.#relativePosition)
 			return
@@ -1181,7 +1181,7 @@ export class FocuserSimulator extends DeviceSimulator {
 	}
 
 	// Updates the moving state reflected by both focuser motion vectors.
-	private setMoving(moving: boolean, alert: boolean = false) {
+	#setMoving(moving: boolean, alert: boolean = false) {
 		const state = alert ? 'Alert' : moving ? 'Busy' : 'Idle'
 		let updated = false
 
@@ -1202,13 +1202,13 @@ export class FocuserSimulator extends DeviceSimulator {
 	}
 
 	// Resolves the current relative-motion direction after reverse mode is applied.
-	private relativeDirection() {
+	#relativeDirection() {
 		const direction = this.#motion.elements.FOCUS_INWARD.value ? -1 : 1
 		return this.#reverse.elements.INDI_ENABLED.value ? -direction : direction
 	}
 
 	// Advances the simulated ambient temperature with a smooth periodic waveform.
-	private advanceTemperature(dtSeconds: number) {
+	#advanceTemperature(dtSeconds: number) {
 		this.#temperaturePhase = normalizeAngle(this.#temperaturePhase + (dtSeconds * TAU) / FOCUSER_TEMPERATURE_PERIOD_SECONDS)
 		const next = CAMERA_AMBIENT_TEMPERATURE + Math.sin(this.#temperaturePhase) * FOCUSER_TEMPERATURE_AMPLITUDE
 
@@ -1219,7 +1219,7 @@ export class FocuserSimulator extends DeviceSimulator {
 	}
 
 	// Applies a simple temperature-compensation model by nudging focus position as ambient temperature drifts.
-	private applyTemperatureCompensation() {
+	#applyTemperatureCompensation() {
 		if (!this.isTemperatureCompensationEnabled || this.isMoving) {
 			this.#lastCompensationTemperature = this.temperature
 			return
@@ -1237,7 +1237,7 @@ export class FocuserSimulator extends DeviceSimulator {
 
 		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(target - this.position)
 		this.#targetPosition = target
-		this.setMoving(true)
+		this.#setMoving(true)
 	}
 }
 
@@ -1422,7 +1422,7 @@ export class RotatorSimulator extends DeviceSimulator {
 		if (!this.isConnected) return
 
 		this.#lastTick = Date.now()
-		this.#timer = setInterval(this.tick.bind(this), TICK_INTERVAL_MS)
+		this.#timer = setInterval(this.#tick.bind(this), TICK_INTERVAL_MS)
 	}
 
 	// Disconnects the simulated rotator and removes its dynamic properties.
@@ -1451,7 +1451,7 @@ export class RotatorSimulator extends DeviceSimulator {
 
 		this.#targetAngle = angle
 		this.#homing = false
-		this.setMoving(true)
+		this.#setMoving(true)
 	}
 
 	// Syncs the rotator immediately without moving.
@@ -1471,7 +1471,7 @@ export class RotatorSimulator extends DeviceSimulator {
 		if (!this.isConnected) return
 		this.#targetAngle = 0
 		this.#homing = true
-		this.setMoving(true)
+		this.#setMoving(true)
 	}
 
 	// Aborts the active rotation.
@@ -1479,7 +1479,7 @@ export class RotatorSimulator extends DeviceSimulator {
 		const wasMoving = this.isMoving
 		this.#targetAngle = undefined
 		this.#homing = false
-		this.setMoving(false, alert)
+		this.#setMoving(false, alert)
 
 		if (alert && wasMoving) {
 			this.#abort.elements.ABORT.value = true
@@ -1489,7 +1489,7 @@ export class RotatorSimulator extends DeviceSimulator {
 	}
 
 	// Advances the rotator toward the requested angle.
-	private tick() {
+	#tick() {
 		const now = Date.now()
 		const dtSeconds = Math.max(0, (now - this.#lastTick) / 1000)
 		this.#lastTick = now
@@ -1505,7 +1505,7 @@ export class RotatorSimulator extends DeviceSimulator {
 			this.notify(this.#angle)
 			this.#targetAngle = undefined
 			this.#homing = false
-			this.setMoving(false)
+			this.#setMoving(false)
 			return
 		}
 
@@ -1514,7 +1514,7 @@ export class RotatorSimulator extends DeviceSimulator {
 	}
 
 	// Updates the busy state reflected by the rotator angle and home properties.
-	private setMoving(moving: boolean, alert: boolean = false) {
+	#setMoving(moving: boolean, alert: boolean = false) {
 		const angleState = alert ? 'Alert' : moving ? 'Busy' : 'Idle'
 		let updated = false
 
@@ -1654,13 +1654,13 @@ export class CoverSimulator extends DeviceSimulator {
 	// Starts closing the dust cap.
 	park() {
 		if (!this.isConnected || this.#park.state === 'Busy' || this.#park.elements.PARK.value) return
-		this.startParkTransition(true)
+		this.#startParkTransition(true)
 	}
 
 	// Starts opening the dust cap.
 	unpark() {
 		if (!this.isConnected || this.#park.state === 'Busy' || this.#park.elements.UNPARK.value) return
-		this.startParkTransition(false)
+		this.#startParkTransition(false)
 	}
 
 	// Stops any active cap transition.
@@ -1684,7 +1684,7 @@ export class CoverSimulator extends DeviceSimulator {
 	}
 
 	// Schedules the cap open or close transition.
-	private startParkTransition(parked: boolean) {
+	#startParkTransition(parked: boolean) {
 		this.stop(false)
 		this.#park.state = 'Busy'
 		this.notify(this.#park)
@@ -2035,7 +2035,7 @@ export class CameraSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
-		this.#timer = setInterval(this.tick.bind(this), TICK_INTERVAL_MS)
+		this.#timer = setInterval(this.#tick.bind(this), TICK_INTERVAL_MS)
 	}
 
 	// Disconnects the simulated camera and removes its dynamic properties.
@@ -2045,7 +2045,7 @@ export class CameraSimulator extends DeviceSimulator {
 		clearInterval(this.#timer)
 		this.#timer = undefined
 		this.abortExposure(false)
-		this.clearPulseGuide()
+		this.#clearPulseGuide()
 		super.disconnect()
 	}
 
@@ -2162,14 +2162,14 @@ export class CameraSimulator extends DeviceSimulator {
 		if (direction === 'NORTH' || direction === 'SOUTH') this.#pulseNorthSouthUntil = until
 		else this.#pulseWestEastUntil = until
 
-		this.setPulsing(true)
+		this.#setPulsing(true)
 	}
 
 	// Advances temperature regulation, exposure progress, and guide-pulse state.
-	private tick() {
+	#tick() {
 		const now = Date.now()
-		this.advanceTemperature()
-		this.expirePulseGuide(now)
+		this.#advanceTemperature()
+		this.#expirePulseGuide(now)
 
 		if (!this.isExposuring) return
 
@@ -2181,12 +2181,12 @@ export class CameraSimulator extends DeviceSimulator {
 
 		if (remaining <= 0) {
 			this.#exposureEndTime = 0
-			void this.finishExposure()
+			void this.#finishExposure()
 		}
 	}
 
 	// Applies a simple thermal model based on ambient temperature and cooler power.
-	private advanceTemperature() {
+	#advanceTemperature() {
 		const current = this.#temperature.elements.CCD_TEMPERATURE_VALUE.value
 		const coolerEnabled = this.#cooler.elements.COOLER_ON.value
 		const target = coolerEnabled ? this.#targetTemperature : CAMERA_AMBIENT_TEMPERATURE
@@ -2213,7 +2213,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Completes the exposure and publishes the encoded synthetic image BLOB.
-	private async finishExposure() {
+	async #finishExposure() {
 		const exposureTime = this.#exposureDuration || this.#noiseExposure.elements.EXPOSURE_TIME.value
 		this.#exposureDuration = 0
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = 0
@@ -2222,7 +2222,7 @@ export class CameraSimulator extends DeviceSimulator {
 		try {
 			this.#image.state = 'Ok'
 			this.#exposure.state = 'Ok'
-			const blob = await this.renderImage(exposureTime)
+			const blob = await this.#renderImage(exposureTime)
 			this.#image.elements.CCD1.size = blob.byteLength.toFixed(0)
 			this.#image.elements.CCD1.format = this.transferFormat === 'XISF' ? '.xisf' : '.fits'
 			this.#image.elements.CCD1.value = blob
@@ -2238,24 +2238,24 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Renders the configured frame and encodes it as FITS or XISF.
-	private async renderImage(exposureTime: number) {
+	async #renderImage(exposureTime: number) {
 		const channels = this.channels
 		const width = this.imageWidth
 		const height = this.imageHeight
 		const raw = new Float32Array(width * height * channels)
 		const frameType = this.frameType
-		const noiseConfig = this.noiseConfig(frameType, exposureTime)
+		const noiseConfig = this.#noiseConfig(frameType, exposureTime)
 		const rotatorAngle = (this.activeRotator?.angle.value ?? 0) * DEG2RAD
 
 		if (frameType === 'LIGHT') {
-			const stars = await this.collectFrameStars(exposureTime, width, height, rotatorAngle)
-			generateStarImage(raw, width, height, channels, stars, this.seeing, noiseConfig, this.plotOptions())
+			const stars = await this.#collectFrameStars(exposureTime, width, height, rotatorAngle)
+			generateStarImage(raw, width, height, channels, stars, this.seeing, noiseConfig, this.#makePlotOptions())
 		} else {
 			if (frameType === 'FLAT') fillFlatField(raw, width, height, channels, exposureTime, this.#noiseExposure.elements.EXPOSURE_TIME.value)
 			generateNoiseImage(raw, width, height, channels, noiseConfig)
 		}
 
-		const image = this.imageModel(raw, width, height, channels, exposureTime)
+		const image = this.#imageModel(raw, width, height, channels, exposureTime)
 		const output = Buffer.allocUnsafe(raw.length * 2 + CAMERA_BLOB_PADDING)
 		const sink = bufferSink(output)
 
@@ -2266,12 +2266,12 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds an image model suitable for the FITS/XISF writers.
-	private imageModel(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number): Image {
+	#imageModel(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number): Image {
 		const pixelSizeInBytes = 2
 
 		return {
 			raw,
-			header: this.imageHeader(width, height, channels, exposureTime),
+			header: this.#imageHeader(width, height, channels, exposureTime),
 			metadata: {
 				width,
 				height,
@@ -2287,7 +2287,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds a compact astronomical image header for synthetic output.
-	private imageHeader(width: number, height: number, channels: 1 | 3, exposureTime: number): FitsHeader {
+	#imageHeader(width: number, height: number, channels: 1 | 3, exposureTime: number): FitsHeader {
 		const now = Date.now()
 		const mount = this.activeMount
 		const focuser = this.activeFocuser
@@ -2341,7 +2341,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds the active scalar noise configuration from simulator property vectors.
-	private noiseConfig(frameType: FrameType, exposureTime: number): AstronomicalImageNoiseConfig {
+	#noiseConfig(frameType: FrameType, exposureTime: number): AstronomicalImageNoiseConfig {
 		const gainFactor = 1 + this.#gain.elements.GAIN.value / 100
 		const offsetBias = this.#offset.elements.OFFSET.value * 2
 		const lightFrame = frameType === 'LIGHT'
@@ -2435,7 +2435,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds the active plot-star configuration from simulator property vectors.
-	private plotOptions(): PlotStarOptions {
+	#makePlotOptions(): PlotStarOptions {
 		return {
 			background: this.#plotOptions.elements.BACKGROUND.value,
 			saturationLevel: this.#plotFlags.elements.SATURATION_ENABLED.value ? this.#plotOptions.elements.SATURATION_LEVEL.value : undefined,
@@ -2462,8 +2462,8 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Projects the master catalog into the current subframe and binning.
-	private async collectFrameStars(exposureTime: number, imageWidth: number, imageHeight: number, rotatorAngle: number) {
-		const stars = await this.ensureCatalog()
+	async #collectFrameStars(exposureTime: number, imageWidth: number, imageHeight: number, rotatorAngle: number) {
+		const stars = await this.#ensureCatalog()
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
 		const frameWidth = this.#frame.elements.WIDTH.value
@@ -2507,12 +2507,12 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Computes the current local sidereal time from the simulated clock.
-	private siderealTime(utcTime: number, longitude: Angle) {
+	#siderealTime(utcTime: number, longitude: Angle) {
 		return localSiderealTime(timeUnix(utcTime / 1000, undefined, true), longitude)
 	}
 
 	// Rebuilds the deterministic catalog only when scene parameters change.
-	private async ensureCatalog() {
+	async #ensureCatalog() {
 		const { elements } = this.#telescopeEffects
 		const mount = this.activeMount
 		let centerRightAscension = mount?.equatorialCoordinate.rightAscension
@@ -2524,31 +2524,31 @@ export class CameraSimulator extends DeviceSimulator {
 			const longitude = mount.geographicCoordinate.longitude
 
 			if (elements.PAE_AZ.value > 0 || elements.PAE_AL.value > 0) {
-				;[centerRightAscension, centerDeclination] = polarAlignmentError(centerRightAscension!, centerDeclination!, latitude, this.siderealTime(now, longitude), elements.PAE_AZ.value * ASEC2RAD, elements.PAE_AL.value * ASEC2RAD)
+				;[centerRightAscension, centerDeclination] = polarAlignmentError(centerRightAscension!, centerDeclination!, latitude, this.#siderealTime(now, longitude), elements.PAE_AZ.value * ASEC2RAD, elements.PAE_AL.value * ASEC2RAD)
 			}
 
-			;[centerRightAscension, centerDeclination] = this.applyTelescopePeriodicError(centerRightAscension!, centerDeclination!, now)
+			;[centerRightAscension, centerDeclination] = this.#applyTelescopePeriodicError(centerRightAscension!, centerDeclination!, now)
 			;[centerRightAscension, centerDeclination] = equatorialToJ2000(centerRightAscension, centerDeclination)
 		}
 
 		const pixelScale = arcsec(angularSizeOfPixel(this.telescopeFocalLength, CAMERA_PIXEL_SIZE))
 		const radius = Math.hypot(this.sensorWidth, this.sensorHeight) * pixelScale * 0.5
-		const key = this.catalogKey(centerRightAscension, centerDeclination, radius)
+		const key = this.#makeCatalogKey(centerRightAscension, centerDeclination, radius)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
 		const type = this.catalogSourceType
 		const catalogSource = this.options?.catalogSources?.[type]
 		const stars =
 			catalogSource !== undefined && catalogSource !== null && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0
-				? this.mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, pixelScale)
-				: this.randomSource()
+				? this.#mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, pixelScale)
+				: this.#randomSource()
 		this.#catalog = stars
 		this.#catalogKey = key
 		this.#catalogDirty = false
 		return stars
 	}
 
-	private mapCatalogCatalogStarsToAstronomicalImageStars(stars: readonly CatalogSourceStar[], centerRightAscension: Angle, centerDeclination: Angle, pixelScale: Angle): readonly (AstronomicalImageStar | undefined)[] {
+	#mapCatalogCatalogStarsToAstronomicalImageStars(stars: readonly CatalogSourceStar[], centerRightAscension: Angle, centerDeclination: Angle, pixelScale: Angle): readonly (AstronomicalImageStar | undefined)[] {
 		const sensorWidth = this.sensorWidth
 		const sensorHeight = this.sensorHeight
 		const halfWidth = sensorWidth * 0.5
@@ -2571,14 +2571,14 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds a cache key for the currently selected catalog source.
-	private catalogKey(centerRightAscension?: Angle, centerDeclination?: Angle, radius?: Angle) {
+	#makeCatalogKey(centerRightAscension?: Angle, centerDeclination?: Angle, radius?: Angle) {
 		const catalogSource = this.catalogSourceType
 		if (catalogSource === 'RANDOM' || centerRightAscension === undefined || centerDeclination === undefined || radius === undefined || radius === 0) return `RANDOM:${this.#scene.elements.SCENE_SEED.value}`
 		else return `${catalogSource}:${toHour(normalizeAngle(centerRightAscension)).toFixed(6)}:${toDeg(centerDeclination).toFixed(6)}:${toDeg(radius).toFixed(6)}`
 	}
 
 	// Generates a deterministic in-memory star field.
-	private randomSource() {
+	#randomSource() {
 		const random = mulberry32(this.#scene.elements.SCENE_SEED.value >>> 0)
 		const width = this.sensorWidth
 		const height = this.sensorHeight
@@ -2607,17 +2607,17 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Clears pulse-guiding state once all timed pulses have expired.
-	private expirePulseGuide(now: number) {
+	#expirePulseGuide(now: number) {
 		let pulsing = false
 		if (this.#pulseNorthSouthUntil > now) pulsing = true
 		else this.#pulseNorthSouthUntil = 0
 		if (this.#pulseWestEastUntil > now) pulsing = true
 		else this.#pulseWestEastUntil = 0
-		this.setPulsing(pulsing)
+		this.#setPulsing(pulsing)
 	}
 
 	// Updates the guide-pulse busy state.
-	private setPulsing(pulsing: boolean) {
+	#setPulsing(pulsing: boolean) {
 		if (this.isPulsing === pulsing) return
 		this.#guideNS.state = pulsing ? 'Busy' : 'Idle'
 		this.#guideWE.state = this.#guideNS.state
@@ -2626,18 +2626,18 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Clears all outstanding pulse-guide intervals.
-	private clearPulseGuide() {
+	#clearPulseGuide() {
 		this.#pulseNorthSouthUntil = 0
 		this.#pulseWestEastUntil = 0
-		this.setPulsing(false)
+		this.#setPulsing(false)
 	}
 
 	// Applies the configurable mount periodic error model.
-	private applyTelescopePeriodicError(rightAscension: Angle, declination: Angle, utcTime: number) {
+	#applyTelescopePeriodicError(rightAscension: Angle, declination: Angle, utcTime: number) {
 		const { elements } = this.#telescopeEffects
 
-		const westEastPeriodicOffset = this.periodicErrorOffset(elements.PE_WE_PERIOD.value, elements.PE_WE_AMPLITUDE.value, utcTime)
-		const northSouthPeriodicOffset = this.periodicErrorOffset(elements.PE_NS_PERIOD.value, elements.PE_NS_AMPLITUDE.value, utcTime)
+		const westEastPeriodicOffset = this.#periodicErrorOffset(elements.PE_WE_PERIOD.value, elements.PE_WE_AMPLITUDE.value, utcTime)
+		const northSouthPeriodicOffset = this.#periodicErrorOffset(elements.PE_NS_PERIOD.value, elements.PE_NS_AMPLITUDE.value, utcTime)
 
 		if (westEastPeriodicOffset !== this.#mountPeriodicWestEastOffset) {
 			rightAscension += westEastPeriodicOffset - this.#mountPeriodicWestEastOffset
@@ -2653,7 +2653,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Computes the current periodic offset for one axis in radians.
-	private periodicErrorOffset(periodSeconds: number, amplitudeArcsec: number, utcTime: number) {
+	#periodicErrorOffset(periodSeconds: number, amplitudeArcsec: number, utcTime: number) {
 		if (periodSeconds <= 0 || amplitudeArcsec === 0) return 0
 		const periodMilliseconds = periodSeconds * 1000
 		const phase = ((utcTime % periodMilliseconds) * TAU) / periodMilliseconds

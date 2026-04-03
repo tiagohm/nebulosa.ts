@@ -120,7 +120,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 			throw new Error(`no UCAC4 zone files were found under ${root}`)
 		}
 
-		this.#index = await this.loadNativeIndex()
+		this.#index = await this.#loadNativeIndex()
 
 		return this
 	}
@@ -149,15 +149,15 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 
 	// Returns a raw UCAC4 record by native zone and record number.
 	async readRawRecord(zone: number, recordNumber: number) {
-		this.assertOpen()
+		this.#assertOpen()
 
 		validateZoneNumber(zone)
 		validateRecordNumber(recordNumber)
 
-		const recordCount = await this.ensureZoneRecordCount(zone)
+		const recordCount = await this.#ensureZoneRecordCount(zone)
 		if (recordNumber > recordCount) return undefined
 
-		const handle = await this.openZoneHandle(zone)
+		const handle = await this.#openZoneHandle(zone)
 		const buffer = Buffer.allocUnsafe(UCAC4_RECORD_SIZE)
 
 		try {
@@ -175,39 +175,39 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 
 	// Streams candidate entries from the zone files touched by the coarse preselection boxes.
 	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery) {
-		this.assertOpen()
+		this.#assertOpen()
 
 		const zoneNumbers = touchedZones(query)
 
 		for (const zone of zoneNumbers) {
-			const ranges = await this.zoneRangesForQuery(zone, query)
+			const ranges = await this.#zoneRangesForQuery(zone, query)
 
 			if (!ranges.length) continue
 
 			for (const [startRecord, endRecord] of ranges) {
-				yield* this.streamZoneRange(zone, startRecord, endRecord)
+				yield* this.#streamZoneRange(zone, startRecord, endRecord)
 			}
 		}
 	}
 
 	// Estimates candidate counts using the native index when available.
 	protected async estimateCandidateCount(query: NormalizedStarCatalogQuery): Promise<number | undefined> {
-		this.assertOpen()
+		this.#assertOpen()
 
 		let total = 0
 
 		for (const zone of touchedZones(query)) {
-			if (!(await this.ensureZoneRecordCount(zone))) continue
+			if (!(await this.#ensureZoneRecordCount(zone))) continue
 
 			if (!this.#index) {
 				if (zoneIntersectsQuery(zone, query)) {
-					total += await this.ensureZoneRecordCount(zone)
+					total += await this.#ensureZoneRecordCount(zone)
 				}
 
 				continue
 			}
 
-			for (const [startRecord, endRecord] of await this.zoneRangesForQuery(zone, query)) {
+			for (const [startRecord, endRecord] of await this.#zoneRangesForQuery(zone, query)) {
 				total += endRecord - startRecord + 1
 			}
 		}
@@ -216,23 +216,23 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 	}
 
 	// Ensures the catalog has been opened before any I/O starts.
-	private assertOpen() {
+	#assertOpen() {
 		if (!this.#opened) {
 			throw new Error('UCAC4 catalog is not open')
 		}
 	}
 
 	// Detects whether at least one zone file exists under the configured root.
-	private async hasAnyZoneFile() {
+	async hasAnyZoneFile() {
 		for (let zone = 1; zone <= UCAC4_ZONE_COUNT; zone++) {
-			if (await this.resolveZonePath(zone)) return true
+			if (await this.#resolveZonePath(zone)) return true
 		}
 
 		return false
 	}
 
 	// Loads the optional native u4index.unf quarter-degree index.
-	private async loadNativeIndex(): Promise<Ucac4Index | undefined> {
+	async #loadNativeIndex(): Promise<Ucac4Index | undefined> {
 		const candidates = [join(this.#root, 'u4index.unf'), join(this.#root, 'u4i', 'u4index.unf')]
 
 		for (const candidate of candidates) {
@@ -271,7 +271,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 	}
 
 	// Resolves a zone file path across the common UCAC4 directory layouts.
-	private async resolveZonePath(zone: number): Promise<string | undefined> {
+	async #resolveZonePath(zone: number): Promise<string | undefined> {
 		const cached = this.#zonePaths.get(zone)
 		if (cached !== undefined) return cached || undefined
 
@@ -297,11 +297,11 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 	}
 
 	// Returns the number of 78-byte records in a zone file.
-	private async ensureZoneRecordCount(zone: number) {
+	async #ensureZoneRecordCount(zone: number) {
 		const cached = this.#zoneRecordCounts[zone - 1]
 		if (cached >= 0) return cached
 
-		const zonePath = await this.resolveZonePath(zone)
+		const zonePath = await this.#resolveZonePath(zone)
 		if (!zonePath) {
 			this.#zoneRecordCounts[zone - 1] = 0
 			return 0
@@ -325,11 +325,11 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 	}
 
 	// Opens a zone file lazily and caches the handle for future reads.
-	private async openZoneHandle(zone: number): Promise<FileHandle> {
+	async #openZoneHandle(zone: number): Promise<FileHandle> {
 		const cached = this.#zoneHandles.get(zone)
 		if (cached) return cached
 
-		const zonePath = await this.resolveZonePath(zone)
+		const zonePath = await this.#resolveZonePath(zone)
 		if (!zonePath) {
 			throw new Error(`missing UCAC4 zone file for zone ${zone}`)
 		}
@@ -344,10 +344,10 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 	}
 
 	// Computes the candidate record ranges touched by a query inside a single zone.
-	private async zoneRangesForQuery(zone: number, query: NormalizedStarCatalogQuery): Promise<readonly Vertex[]> {
+	async #zoneRangesForQuery(zone: number, query: NormalizedStarCatalogQuery): Promise<readonly Vertex[]> {
 		if (!zoneIntersectsQuery(zone, query)) return []
 
-		const recordCount = await this.ensureZoneRecordCount(zone)
+		const recordCount = await this.#ensureZoneRecordCount(zone)
 		if (recordCount <= 0) return []
 
 		if (!this.#index) {
@@ -376,8 +376,8 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 	}
 
 	// Streams a contiguous zone-record range in fixed-size blocks.
-	private async *streamZoneRange(zone: number, startRecord: number, endRecord: number) {
-		const handle = await this.openZoneHandle(zone)
+	async *#streamZoneRange(zone: number, startRecord: number, endRecord: number) {
+		const handle = await this.#openZoneHandle(zone)
 		const block = Buffer.allocUnsafe(UCAC4_BLOCK_RECORD_COUNT * UCAC4_RECORD_SIZE)
 
 		while (startRecord <= endRecord) {

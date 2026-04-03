@@ -250,13 +250,13 @@ export class SimbadCatalog extends BaseStarCatalog<SimbadCatalogEntry> {
 
 	// Retrieves a Simbad source by source identifier.
 	async get(id: number | string | bigint): Promise<SimbadCatalogEntry | undefined> {
-		const rows = await this.queryRows(`b.oid = ${id}`, 1)
+		const rows = await this.#query(`b.oid = ${id}`, 1)
 		return rows?.length ? parseSimbadCatalogRow(rows[0]) : undefined
 	}
 
 	// Streams Simbad candidates intersecting the normalized coarse boxes.
 	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery): AsyncIterable<SimbadCatalogEntry> {
-		const rows = await this.queryRows(buildSimbadWhere(query), 5000)
+		const rows = await this.#query(buildSimbadWhere(query), 5000)
 		if (!rows?.length) return
 
 		for (const row of rows) {
@@ -266,7 +266,7 @@ export class SimbadCatalog extends BaseStarCatalog<SimbadCatalogEntry> {
 	}
 
 	// Executes one Simbad TSV query with only the columns needed by the catalog API.
-	private async queryRows(where: string, limit?: number) {
+	async #query(where: string, limit?: number) {
 		const top = limit && limit > 0 ? `TOP ${Math.trunc(limit)} ` : ''
 		const query = `SELECT ${top}${SIMBAD_COLUMNS} FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE ${where} ORDER BY V ASC`
 		return await simbadQuery(query, this.options)

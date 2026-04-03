@@ -739,12 +739,12 @@ export class Guider {
 		}
 
 		if (this.state.state === 'initializing') {
-			this.processInitializationFrame(frame)
+			this.#processInitializationFrame(frame)
 			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics }
 		}
 
 		const filtered = filterGuideStars(frame, this.config.filter)
-		const droppedFrame = this.isDroppedFrame(frame)
+		const droppedFrame = this.#isDroppedFrame(frame)
 		const notes: string[] = []
 
 		if (droppedFrame) notes.push('dropped_frame')
@@ -753,7 +753,7 @@ export class Guider {
 		let measurement: TranslationMeasurement | null = null
 
 		if (!badFrame) {
-			measurement = this.measureTranslation(filtered.accepted)
+			measurement = this.#measureTranslation(filtered.accepted)
 
 			if (measurement === null) {
 				badFrame = true
@@ -761,7 +761,7 @@ export class Guider {
 			}
 		}
 
-		if (!badFrame && measurement !== null && this.isImpossibleJump(measurement)) {
+		if (!badFrame && measurement !== null && this.#isImpossibleJump(measurement)) {
 			badFrame = true
 			notes.push('jump_rejected')
 		}
@@ -769,7 +769,7 @@ export class Guider {
 		if (badFrame) {
 			this.state.consecutiveBadFrames++
 			if (this.state.consecutiveBadFrames >= this.config.lostStarFrameCount) this.state.state = 'lost'
-			this.updateDiagnostics(frame, filtered, null, droppedFrame, true, notes)
+			this.#updateDiagnostics(frame, filtered, null, droppedFrame, true, notes)
 			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics }
 		}
 
@@ -785,10 +785,10 @@ export class Guider {
 		const dx = measurement!.x - targetX
 		const dy = measurement!.y - targetY
 		const axisError = applyCalibration(this.config.calibration, dx, dy)
-		const cadenceScale = this.cadenceScale(frame)
-		const ra = this.computeRA(axisError.ra, cadenceScale)
-		const dec = this.computeDEC(axisError.dec, cadenceScale)
-		this.updateDiagnostics(
+		const cadenceScale = this.#cadenceScale(frame)
+		const ra = this.#computeRA(axisError.ra, cadenceScale)
+		const dec = this.#computeDEC(axisError.dec, cadenceScale)
+		this.#updateDiagnostics(
 			frame,
 			filtered,
 			{
@@ -839,11 +839,11 @@ export class Guider {
 	}
 
 	// Consumes frame while the lock reference is being averaged.
-	private processInitializationFrame(frame: GuideFrame) {
+	#processInitializationFrame(frame: GuideFrame) {
 		const filtered = filterGuideStars(frame, this.config.filter)
 
 		if (filtered.accepted.length === 0) {
-			this.updateDiagnostics(frame, filtered, null, false, true, ['init_waiting'])
+			this.#updateDiagnostics(frame, filtered, null, false, true, ['init_waiting'])
 			return
 		}
 
@@ -851,7 +851,7 @@ export class Guider {
 		const preferred = previous === undefined ? pickInitialLockStar(filtered.accepted, this.config.initialPosition) : pickNearestGuideStar(filtered.accepted, previous.x, previous.y)
 
 		if (preferred === undefined) {
-			this.updateDiagnostics(frame, filtered, null, false, true, ['init_no_star'])
+			this.#updateDiagnostics(frame, filtered, null, false, true, ['init_no_star'])
 			return
 		}
 
@@ -862,7 +862,7 @@ export class Guider {
 		const dy = preferred.y - targetY
 
 		if (this.state.lockSamples.length < this.config.lockAveragingFrames) {
-			this.updateDiagnostics(
+			this.#updateDiagnostics(
 				frame,
 				filtered,
 				{
@@ -901,7 +901,7 @@ export class Guider {
 		this.state.measurementOriginY = preferred.y
 		this.state.referenceStars = this.state.lockSamples[this.state.lockSamples.length - 1].stars.slice()
 		this.state.state = 'guiding'
-		this.updateDiagnostics(
+		this.#updateDiagnostics(
 			frame,
 			filtered,
 			{
@@ -923,7 +923,7 @@ export class Guider {
 	}
 
 	// Measures current guide position using configured mode with fallback.
-	private measureTranslation(stars: readonly GuideStar[]): TranslationMeasurement | null {
+	#measureTranslation(stars: readonly GuideStar[]): TranslationMeasurement | null {
 		if (this.config.mode === 'multi-star' && this.state.referenceStars.length > 1 && stars.length > 1) {
 			const translation = estimateTranslation(this.state.referenceStars, stars, this.config.maxMatchDistancePx, this.config.outlierSigma)
 
@@ -943,7 +943,7 @@ export class Guider {
 	}
 
 	// Detects impossible centroid jumps to avoid runaway corrections.
-	private isImpossibleJump(measurement: TranslationMeasurement) {
+	#isImpossibleJump(measurement: TranslationMeasurement) {
 		if (this.state.lastGoodMeasurementX === undefined || this.state.lastGoodMeasurementY === undefined) return false
 		const dx = measurement.x - this.state.lastGoodMeasurementX
 		const dy = measurement.y - this.state.lastGoodMeasurementY
@@ -951,7 +951,7 @@ export class Guider {
 	}
 
 	// Detects dropped frames from timestamp deltas.
-	private isDroppedFrame({ timestamp }: GuideFrame) {
+	#isDroppedFrame({ timestamp }: GuideFrame) {
 		if (timestamp === undefined) return false
 
 		const lastTimestamp = this.state.lastTimestamp
@@ -969,13 +969,13 @@ export class Guider {
 	}
 
 	// Computes frame cadence scale to keep pulse gain stable across variable cadence.
-	private cadenceScale(frame: GuideFrame) {
+	#cadenceScale(frame: GuideFrame) {
 		if (frame.timestamp === undefined) return 1
 		return clamp(this.state.lastCadence / this.config.nominalCadence, 0.5, 2)
 	}
 
 	// Computes RA pulse with hysteresis smoothing, deadband and proportional gain.
-	private computeRA(axisErrorRA: number, cadenceScale: number): AxisPulse {
+	#computeRA(axisErrorRA: number, cadenceScale: number): AxisPulse {
 		const deadbanded = applyDeadband(axisErrorRA, this.config.minMoveRA)
 		this.state.filteredRA = this.config.hysteresisRA * this.state.filteredRA + (1 - this.config.hysteresisRA) * deadbanded
 		const magnitude = Math.abs(this.state.filteredRA)
@@ -986,7 +986,7 @@ export class Guider {
 	}
 
 	// Computes DEC pulse with backlash-aware reversal suppression and mode constraints.
-	private computeDEC(axisErrorDEC: number, cadenceScale: number): AxisPulse {
+	#computeDEC(axisErrorDEC: number, cadenceScale: number): AxisPulse {
 		if (this.config.decMode === 'off') return NO_PULSE
 
 		const deadbanded = applyDeadband(axisErrorDEC, this.config.minMoveDEC)
@@ -1016,7 +1016,7 @@ export class Guider {
 	}
 
 	// Updates diagnostics payload for telemetry and testing.
-	private updateDiagnostics(frame: GuideFrame, filtered: FilteredStars, measurement: DiagnosticMeasurement | null, droppedFrame: boolean, badFrame: boolean, notes: readonly string[]) {
+	#updateDiagnostics(frame: GuideFrame, filtered: FilteredStars, measurement: DiagnosticMeasurement | null, droppedFrame: boolean, badFrame: boolean, notes: readonly string[]) {
 		this.state.lastDiagnostics = {
 			frameId: frame.frameId,
 			totalStars: frame.stars.length,

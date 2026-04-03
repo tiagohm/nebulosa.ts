@@ -27,8 +27,8 @@ export function unload() {
 }
 
 export class Wcs implements Disposable {
-	private pointer?: Pointer
-	private readonly lib = load()
+	#pointer?: Pointer
+	readonly #lib = load()
 
 	constructor(header?: FitsHeader) {
 		if (header && !this.load(header)) {
@@ -44,11 +44,11 @@ export class Wcs implements Disposable {
 			const nreject = ptr(mem, 0)
 			const nwcs = ptr(mem, 4)
 			const wcsprm = ptr(mem, 8)
-			const ret = this.lib.wcspih(buffer, n, 0x000fffff, 0, nreject, nwcs, wcsprm)
+			const ret = this.#lib.wcspih(buffer, n, 0x000fffff, 0, nreject, nwcs, wcsprm)
 
 			if (ret === 0 && read.i32(nwcs) === 1) {
 				this[Symbol.dispose]()
-				this.pointer = read.ptr(wcsprm) as Pointer
+				this.#pointer = read.ptr(wcsprm) as Pointer
 				return true
 			}
 		}
@@ -57,7 +57,7 @@ export class Wcs implements Disposable {
 	}
 
 	pixToSky(x: number, y: number): [Angle, Angle] | undefined {
-		if (this.pointer) {
+		if (this.#pointer) {
 			const mem = Buffer.allocUnsafe(8 * 8 + 4)
 			mem.writeDoubleLE(x, 0)
 			mem.writeDoubleLE(y, 8)
@@ -69,7 +69,7 @@ export class Wcs implements Disposable {
 			const world = ptr(mem, 48)
 			const stat = ptr(mem, 64)
 
-			const ret = this.lib.wcsp2s(this.pointer, 1, 2, pixcrd, imgcrd, phi, theta, world, stat)
+			const ret = this.#lib.wcsp2s(this.#pointer, 1, 2, pixcrd, imgcrd, phi, theta, world, stat)
 
 			if (ret === 0) {
 				return [deg(read.f64(world)), deg(read.f64(world, 8))]
@@ -82,7 +82,7 @@ export class Wcs implements Disposable {
 	}
 
 	skyToPix(ra: Angle, dec: Angle): [number, number] | undefined {
-		if (this.pointer) {
+		if (this.#pointer) {
 			const mem = Buffer.allocUnsafe(8 * 8 + 4)
 			mem.writeDoubleLE(toDeg(ra), 48)
 			mem.writeDoubleLE(toDeg(dec), 56)
@@ -94,7 +94,7 @@ export class Wcs implements Disposable {
 			const world = ptr(mem, 48)
 			const stat = ptr(mem, 64)
 
-			const ret = this.lib.wcss2p(this.pointer, 1, 2, world, phi, theta, imgcrd, pixcrd, stat)
+			const ret = this.#lib.wcss2p(this.#pointer, 1, 2, world, phi, theta, imgcrd, pixcrd, stat)
 
 			if (ret === 0) {
 				return [read.f64(pixcrd), read.f64(pixcrd, 8)]
@@ -107,9 +107,9 @@ export class Wcs implements Disposable {
 	}
 
 	[Symbol.dispose]() {
-		if (this.pointer) {
-			this.lib.wcsfree(this.pointer)
-			this.pointer = undefined
+		if (this.#pointer) {
+			this.#lib.wcsfree(this.#pointer)
+			this.#pointer = undefined
 		}
 	}
 }

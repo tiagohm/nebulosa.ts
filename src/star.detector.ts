@@ -394,27 +394,27 @@ interface Star {
 }
 
 export class StarList implements Iterable<Star, Star | undefined, Star> {
-	private head?: Star
-	private tail?: Star
+	#head?: Star
+	#tail?: Star
 	size = 0
 
-	constructor(private readonly capacity: number = 100) {}
+	constructor(readonly capacity: number = 100) {}
 
 	// Returns the first star without allocating an iterator.
 	first() {
-		return this.head
+		return this.#head
 	}
 
 	addLast(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number) {
 		const star: Star = { x, y, h, flux, snr, hfd }
 
-		if (!this.head) {
-			this.head = star
-			this.tail = star
-		} else if (this.tail) {
-			star.prev = this.tail
-			this.tail.next = star
-			this.tail = star
+		if (!this.#head) {
+			this.#head = star
+			this.#tail = star
+		} else if (this.#tail) {
+			star.prev = this.#tail
+			this.#tail.next = star
+			this.#tail = star
 		}
 
 		this.size++
@@ -423,30 +423,30 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 	addFirst(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number) {
 		const star: Star = { x, y, h, flux, snr, hfd }
 
-		if (!this.head) {
-			this.head = star
-			this.tail = star
+		if (!this.#head) {
+			this.#head = star
+			this.#tail = star
 		} else {
-			star.next = this.head
-			this.head.prev = star
-			this.head = star
+			star.next = this.#head
+			this.#head.prev = star
+			this.#head = star
 		}
 
 		this.size++
 	}
 
 	add(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number) {
-		if (!this.head || h <= this.head.h) {
+		if (!this.#head || h <= this.#head.h) {
 			if (this.size < this.capacity) this.addFirst(x, y, h, flux, snr, hfd)
-		} else if (!this.tail || h >= this.tail.h) {
+		} else if (!this.#tail || h >= this.#tail.h) {
 			this.addLast(x, y, h, flux, snr, hfd)
 		} else {
 			const star: Star = { x, y, h, flux, snr, hfd }
-			const headDistance = h - this.head.h
-			const tailDistance = this.tail.h - h
+			const headDistance = h - this.#head.h
+			const tailDistance = this.#tail.h - h
 
 			if (tailDistance < headDistance) {
-				for (let a: Star | undefined = this.tail; a; a = a.prev) {
+				for (let a: Star | undefined = this.#tail; a; a = a.prev) {
 					if (h < a.h) continue
 
 					const next = a.next
@@ -459,7 +459,7 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 					break
 				}
 			} else {
-				for (let a: Star | undefined = this.head; a; a = a.next) {
+				for (let a: Star | undefined = this.#head; a; a = a.next) {
 					if (a.next && h >= a.next.h) continue
 
 					const next = a.next
@@ -480,11 +480,11 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 	}
 
 	deleteFirst() {
-		if (!this.head) return false
+		if (!this.#head) return false
 
-		this.head = this.head.next
-		if (this.head) this.head.prev = undefined
-		else this.tail = undefined
+		this.#head = this.#head.next
+		if (this.#head) this.#head.prev = undefined
+		else this.#tail = undefined
 
 		this.size--
 
@@ -501,7 +501,7 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		const next = current.next
 		previous.next = next
 		if (next) next.prev = previous
-		if (current === this.tail) this.tail = previous
+		if (current === this.#tail) this.#tail = previous
 		current.prev = undefined
 		current.next = undefined
 		this.size--
@@ -510,25 +510,25 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 	}
 
 	delete(s: Star) {
-		if (this.head && s === this.head) return this.deleteFirst()
+		if (this.#head && s === this.#head) return this.deleteFirst()
 		return s.prev ? this.deleteAfter(s.prev) : false
 	}
 
 	clear() {
-		this.head = undefined
-		this.tail = undefined
+		this.#head = undefined
+		this.#tail = undefined
 		this.size = 0
 	}
 
 	array() {
 		const n = this.size
 		const data = new Array<Star>(n)
-		for (let i = 0, s = this.head; i < n; i++, s = s!.next) data[i] = s!
+		for (let i = 0, s = this.#head; i < n; i++, s = s!.next) data[i] = s!
 		return data
 	}
 
 	iterator(): Iterator<Star, Star | undefined> {
-		let current = this.head
+		let current = this.#head
 
 		return {
 			next: () => {

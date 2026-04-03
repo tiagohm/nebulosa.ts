@@ -56,13 +56,13 @@ export class VizierGaiaCatalog extends BaseStarCatalog<VizierGaiaCatalogEntry> {
 
 	// Retrieves a Gaia DR3 source by source identifier.
 	async get(id: number | string | bigint): Promise<VizierGaiaCatalogEntry | undefined> {
-		const rows = await this.queryRows(`Source = ${id}`, 1)
+		const rows = await this.#query(`Source = ${id}`, 1)
 		return rows?.length ? parseVizierGaiaCatalogRow(rows[0]) : undefined
 	}
 
 	// Streams Gaia DR3 candidates intersecting the normalized coarse boxes.
 	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery): AsyncIterable<VizierGaiaCatalogEntry> {
-		const rows = await this.queryRows(buildVizierGaiaWhere(query))
+		const rows = await this.#query(buildVizierGaiaWhere(query))
 		if (!rows?.length) return
 
 		for (const row of rows) {
@@ -72,7 +72,7 @@ export class VizierGaiaCatalog extends BaseStarCatalog<VizierGaiaCatalogEntry> {
 	}
 
 	// Executes one Gaia DR3 TSV query with only the columns needed by the catalog API.
-	private async queryRows(where: string, limit?: number) {
+	async #query(where: string, limit?: number) {
 		const top = limit && limit > 0 ? `TOP ${Math.trunc(limit)} ` : ''
 		const query = `SELECT ${top}${VIZIER_GAIA_DR3_COLUMNS} FROM ${VIZIER_GAIA_DR3_TABLE} WHERE ${where} ORDER BY GMag ASC`
 		return await vizierQuery(query, this.options)

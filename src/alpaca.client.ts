@@ -30,9 +30,9 @@ export class AlpacaClient implements Client {
 	readonly remoteHost: string
 	readonly remotePort: number
 
-	private readonly devices = new Map<string, AlpacaDevice>()
-	private readonly management: AlpacaManagementApi
-	private timer?: NodeJS.Timeout
+	readonly #devices = new Map<string, AlpacaDevice>()
+	readonly #management: AlpacaManagementApi
+	#timer?: NodeJS.Timeout
 
 	constructor(
 		readonly url: string,
@@ -41,7 +41,7 @@ export class AlpacaClient implements Client {
 	) {
 		this.id = Bun.MD5.hash(url, 'hex')
 		this.description = `Alpaca Client at ${url}`
-		this.management = new AlpacaManagementApi(url)
+		this.#management = new AlpacaManagementApi(url)
 		const { protocol, hostname, port } = URL.parse(url)!
 		this.remoteHost = hostname
 		this.remotePort = +port || (protocol === 'http:' ? 80 : 443)
@@ -49,37 +49,37 @@ export class AlpacaClient implements Client {
 
 	getProperties(command?: GetProperties) {
 		if (command?.device) {
-			this.devices.get(command.device)?.sendProperties(command.name)
+			this.#devices.get(command.device)?.sendProperties(command.name)
 		} else {
-			for (const device of this.devices) device[1].sendProperties(command?.name)
+			for (const device of this.#devices) device[1].sendProperties(command?.name)
 		}
 	}
 
 	enableBlob(command: EnableBlob) {}
 
 	sendText(vector: NewTextVector) {
-		this.devices.get(vector.device)?.sendText(vector)
+		this.#devices.get(vector.device)?.sendText(vector)
 	}
 
 	sendNumber(vector: NewNumberVector) {
-		this.devices.get(vector.device)?.sendNumber(vector)
+		this.#devices.get(vector.device)?.sendNumber(vector)
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
-		this.devices.get(vector.device)?.sendSwitch(vector)
+		this.#devices.get(vector.device)?.sendSwitch(vector)
 	}
 
 	async start() {
-		if (this.timer) return false
-		const configuredDevices = await this.management.configuredDevices()
+		if (this.#timer) return false
+		const configuredDevices = await this.#management.configuredDevices()
 		if (!configuredDevices?.length) return false
-		this.initialize(configuredDevices)
+		this.#initialize(configuredDevices)
 		return true
 	}
 
-	private initialize(configuredDevices: readonly AlpacaConfiguredDevice[]) {
+	#initialize(configuredDevices: readonly AlpacaConfiguredDevice[]) {
 		for (const configuredDevice of configuredDevices) {
-			let device = this.devices.get(configuredDevice.DeviceName)
+			let device = this.#devices.get(configuredDevice.DeviceName)
 
 			if (!device) {
 				const type = configuredDevice.DeviceType
@@ -99,28 +99,28 @@ export class AlpacaClient implements Client {
 				}
 
 				if (device) {
-					this.devices.set(configuredDevice.DeviceName, device)
+					this.#devices.set(configuredDevice.DeviceName, device)
 					device.onInit()
 				}
 			}
 		}
 
-		clearInterval(this.timer)
-		this.timer = setInterval(this.update.bind(this), Math.max(1000, this.options?.poolingInterval ?? 1000))
-		this.update()
+		clearInterval(this.#timer)
+		this.#timer = setInterval(this.#update.bind(this), Math.max(1000, this.options?.poolingInterval ?? 1000))
+		this.#update()
 	}
 
-	private update() {
-		for (const device of this.devices) device[1].update()
+	#update() {
+		for (const device of this.#devices) device[1].update()
 	}
 
 	stop(server: boolean = false) {
-		if (this.timer) {
-			clearInterval(this.timer)
-			this.timer = undefined
+		if (this.#timer) {
+			clearInterval(this.#timer)
+			this.#timer = undefined
 
-			for (const device of this.devices) device[1].close()
-			this.devices.clear()
+			for (const device of this.#devices) device[1].close()
+			this.#devices.clear()
 
 			this.options?.handler?.close?.(this, server)
 		}
@@ -170,7 +170,7 @@ abstract class AlpacaDevice {
 	protected readonly connection = makeSwitchVector('', 'CONNECTION', 'Connection', MAIN_CONTROL, 'OneOfMany', 'rw', ['CONNECT', 'Connect', false], ['DISCONNECT', 'Disconnect', true])
 	protected readonly snoopDevices = makeTextVector('', 'ACTIVE_DEVICES', 'Snoop devices', MAIN_CONTROL, 'rw', ['ACTIVE_TELESCOPE', 'Mount', ''], ['ACTIVE_FOCUSER', 'Focuser', ''], ['ACTIVE_FILTER', 'Filter Wheel', ''], ['ACTIVE_ROTATOR', 'Rotator', ''])
 
-	private hasDeviceState: 0 | boolean = 0 // 0 = not checked yet
+	#hasDeviceState: 0 | boolean = 0 // 0 = not checked yet
 
 	constructor(
 		readonly client: AlpacaClient,
@@ -291,7 +291,7 @@ abstract class AlpacaDevice {
 
 	protected reset() {
 		this.state.Step = 0
-		this.hasDeviceState = 0
+		this.#hasDeviceState = 0
 		this.state.DeviceState = undefined
 	}
 
@@ -337,15 +337,15 @@ abstract class AlpacaDevice {
 
 		if (Connected) {
 			if (Step === 0) {
-				if (this.hasDeviceState === 0) {
+				if (this.#hasDeviceState === 0) {
 					// Step 0 will run again to read the device state
-					this.hasDeviceState = true
+					this.#hasDeviceState = true
 					this.enableEndpoints('DeviceState')
 					return false
 				}
 
-				if (this.hasDeviceState === true && this.state.DeviceState === undefined) {
-					this.hasDeviceState = false
+				if (this.#hasDeviceState === true && this.state.DeviceState === undefined) {
+					this.#hasDeviceState = false
 					this.enableEndpoints(...this.deviceStateEndpoints)
 					this.disableEndpoints('DeviceState')
 					this.deviceStateHasBeenDisabled()
@@ -358,7 +358,7 @@ abstract class AlpacaDevice {
 				this.state.Step = 1
 
 				return false
-			} else if (this.hasDeviceState === true) {
+			} else if (this.#hasDeviceState === true) {
 				for (const item of this.state.DeviceState!) {
 					this.state[item.Name as never] = item.Value as never
 				}
@@ -399,14 +399,14 @@ abstract class AlpacaDevice {
 		switch (vector.name) {
 			case 'CONNECTION':
 				if (vector.elements.CONNECT === true && !this.isConnected) {
-					void this.handleConnection('connect')
+					void this.#handleConnection('connect')
 				} else if (vector.elements.DISCONNECT === true && this.isConnected) {
-					void this.handleConnection('disconnect')
+					void this.#handleConnection('disconnect')
 				}
 		}
 	}
 
-	private async handleConnection(mode: 'connect' | 'disconnect') {
+	async #handleConnection(mode: 'connect' | 'disconnect') {
 		this.connection.state = 'Busy'
 		this.sendSetProperty(this.connection)
 
@@ -476,46 +476,46 @@ class AlpacaCamera extends AlpacaDevice {
 	protected readonly runningEndpoints = ['BinX', 'BinY', 'IsCoolerOn', 'Gain', 'NumX', 'NumY', 'Offset', 'ReadoutMode', 'StartX', 'StartY'] as const
 
 	// biome-ignore format: too long!
-	private readonly info = makeNumberVector('', 'CCD_INFO', 'CCD Info', GENERAL_INFO, 'ro', ['CCD_MAX_X', 'Max X', 0, 0, 16000, 1, '%.0f'],  ['CCD_MAX_Y', 'Max Y', 0, 0, 16000, 1, '%.0f'],  ['CCD_PIXEL_SIZE_X', 'Pixel size X', 0, 0, 40, 0.01, '%.2f'], ['CCD_PIXEL_SIZE_Y', 'Pixel size Y', 0, 0, 40, 0.01, '%.2f'], ['CCD_BITSPERPIXEL', 'Bits per pixel', 16, 8, 64, 1, '%.0f'])
-	private readonly cooler = makeSwitchVector('', 'CCD_COOLER', 'Cooler', MAIN_CONTROL, 'OneOfMany', 'rw', ['COOLER_ON', 'On', false], ['COOLER_OFF', 'Off', true])
-	private readonly frameType = makeSwitchVector('', 'CCD_FRAME_TYPE', 'Frame Type', MAIN_CONTROL, 'OneOfMany', 'rw', ['FRAME_LIGHT', 'Light', true], ['FRAME_DARK', 'Dark', false], ['FRAME_FLAT', 'Flat', false], ['FRAME_BIAS', 'Bias', false])
-	private readonly frameFormat = makeSwitchVector('', 'CCD_CAPTURE_FORMAT', 'Readout Mode', MAIN_CONTROL, 'OneOfMany', 'rw')
-	private readonly abort = makeSwitchVector('', 'CCD_ABORT_EXPOSURE', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
-	private readonly exposure = makeNumberVector('', 'CCD_EXPOSURE', 'Exposure', MAIN_CONTROL, 'rw', ['CCD_EXPOSURE_VALUE', 'Exposure (s)', 0, 0, 0, 1e-6, '%.6f'])
-	private readonly coolerPower = makeNumberVector('', 'CCD_COOLER_POWER', 'Cooler Power', MAIN_CONTROL, 'ro', ['CCD_COOLER_POWER', 'Power (%)', 0, 0, 100, 1, '%.0f'])
-	private readonly temperature = makeNumberVector('', 'CCD_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['CCD_TEMPERATURE_VALUE', 'Temperature', 0, -50, 70, 0.1, '%6.2f'])
-	private readonly frame = makeNumberVector('', 'CCD_FRAME', 'Frame', MAIN_CONTROL, 'rw', ['X', 'X', 0, 0, 15999, 1, '%.0f'], ['Y', 'Y', 0, 0, 15999, 1, '%.0f'], ['WIDTH', 'Width', 1, 1, 16000, 1, '%.0f'], ['HEIGHT', 'Height', 1, 1, 16000, 1, '%.0f'])
-	private readonly bin = makeNumberVector('', 'CCD_BINNING', 'Bin', MAIN_CONTROL, 'rw', ['HOR_BIN', 'X', 1, 1, 1, 1, '%.0f'], ['VER_BIN', 'Y', 1, 1, 1, 1, '%.0f'])
-	private readonly gain = makeNumberVector('', 'CCD_GAIN', 'Gain', MAIN_CONTROL, 'rw', ['GAIN', 'Gain', 0, 0, 0, 1, '%.0f'])
-	private readonly offset = makeNumberVector('', 'CCD_OFFSET', 'Offset', MAIN_CONTROL, 'rw', ['OFFSET', 'Offset', 0, 0, 0, 1, '%.0f'])
-	private readonly cfa = makeTextVector('', 'CCD_CFA', 'CFA', GENERAL_INFO, 'ro', ['CFA_OFFSET_X', 'Offset X', '0'], ['CFA_OFFSET_Y', 'Offset Y', '0'], ['CFA_TYPE', 'Type', 'RGGB']) // Only RGGB pattern is supported?
-	private readonly guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
-	private readonly guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
-	private readonly image = makeBlobVector('', 'CCD1', 'CCD Image', MAIN_CONTROL, 'ro', ['CCD1', 'Image'])
+	readonly #info = makeNumberVector('', 'CCD_INFO', 'CCD Info', GENERAL_INFO, 'ro', ['CCD_MAX_X', 'Max X', 0, 0, 16000, 1, '%.0f'],  ['CCD_MAX_Y', 'Max Y', 0, 0, 16000, 1, '%.0f'],  ['CCD_PIXEL_SIZE_X', 'Pixel size X', 0, 0, 40, 0.01, '%.2f'], ['CCD_PIXEL_SIZE_Y', 'Pixel size Y', 0, 0, 40, 0.01, '%.2f'], ['CCD_BITSPERPIXEL', 'Bits per pixel', 16, 8, 64, 1, '%.0f'])
+	readonly #cooler = makeSwitchVector('', 'CCD_COOLER', 'Cooler', MAIN_CONTROL, 'OneOfMany', 'rw', ['COOLER_ON', 'On', false], ['COOLER_OFF', 'Off', true])
+	readonly #frameType = makeSwitchVector('', 'CCD_FRAME_TYPE', 'Frame Type', MAIN_CONTROL, 'OneOfMany', 'rw', ['FRAME_LIGHT', 'Light', true], ['FRAME_DARK', 'Dark', false], ['FRAME_FLAT', 'Flat', false], ['FRAME_BIAS', 'Bias', false])
+	readonly #frameFormat = makeSwitchVector('', 'CCD_CAPTURE_FORMAT', 'Readout Mode', MAIN_CONTROL, 'OneOfMany', 'rw')
+	readonly #abort = makeSwitchVector('', 'CCD_ABORT_EXPOSURE', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+	readonly #exposure = makeNumberVector('', 'CCD_EXPOSURE', 'Exposure', MAIN_CONTROL, 'rw', ['CCD_EXPOSURE_VALUE', 'Exposure (s)', 0, 0, 0, 1e-6, '%.6f'])
+	readonly #coolerPower = makeNumberVector('', 'CCD_COOLER_POWER', 'Cooler Power', MAIN_CONTROL, 'ro', ['CCD_COOLER_POWER', 'Power (%)', 0, 0, 100, 1, '%.0f'])
+	readonly #temperature = makeNumberVector('', 'CCD_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['CCD_TEMPERATURE_VALUE', 'Temperature', 0, -50, 70, 0.1, '%6.2f'])
+	readonly #frame = makeNumberVector('', 'CCD_FRAME', 'Frame', MAIN_CONTROL, 'rw', ['X', 'X', 0, 0, 15999, 1, '%.0f'], ['Y', 'Y', 0, 0, 15999, 1, '%.0f'], ['WIDTH', 'Width', 1, 1, 16000, 1, '%.0f'], ['HEIGHT', 'Height', 1, 1, 16000, 1, '%.0f'])
+	readonly #bin = makeNumberVector('', 'CCD_BINNING', 'Bin', MAIN_CONTROL, 'rw', ['HOR_BIN', 'X', 1, 1, 1, 1, '%.0f'], ['VER_BIN', 'Y', 1, 1, 1, 1, '%.0f'])
+	readonly #gain = makeNumberVector('', 'CCD_GAIN', 'Gain', MAIN_CONTROL, 'rw', ['GAIN', 'Gain', 0, 0, 0, 1, '%.0f'])
+	readonly #offset = makeNumberVector('', 'CCD_OFFSET', 'Offset', MAIN_CONTROL, 'rw', ['OFFSET', 'Offset', 0, 0, 0, 1, '%.0f'])
+	readonly #cfa = makeTextVector('', 'CCD_CFA', 'CFA', GENERAL_INFO, 'ro', ['CFA_OFFSET_X', 'Offset X', '0'], ['CFA_OFFSET_Y', 'Offset Y', '0'], ['CFA_TYPE', 'Type', 'RGGB']) // Only RGGB pattern is supported?
+	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
+	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
+	readonly #image = makeBlobVector('', 'CCD1', 'CCD Image', MAIN_CONTROL, 'ro', ['CCD1', 'Image'])
 
-	private readonly now = timeNow() // Used in the conversion from JNOW to J2000. Changes in precession/nutation angles are negligible.
+	readonly #now = timeNow() // Used in the conversion from JNOW to J2000. Changes in precession/nutation angles are negligible.
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
 
 		const api = new AlpacaCameraApi(client.url)
 
-		this.info.device = device.DeviceName
-		this.cooler.device = device.DeviceName
-		this.frameType.device = device.DeviceName
-		this.frameFormat.device = device.DeviceName
-		this.abort.device = device.DeviceName
-		this.exposure.device = device.DeviceName
-		this.coolerPower.device = device.DeviceName
-		this.temperature.device = device.DeviceName
-		this.frame.device = device.DeviceName
-		this.bin.device = device.DeviceName
-		this.gain.device = device.DeviceName
-		this.offset.device = device.DeviceName
-		this.cfa.device = device.DeviceName
-		this.guideNS.device = device.DeviceName
-		this.guideWE.device = device.DeviceName
-		this.image.device = device.DeviceName
+		this.#info.device = device.DeviceName
+		this.#cooler.device = device.DeviceName
+		this.#frameType.device = device.DeviceName
+		this.#frameFormat.device = device.DeviceName
+		this.#abort.device = device.DeviceName
+		this.#exposure.device = device.DeviceName
+		this.#coolerPower.device = device.DeviceName
+		this.#temperature.device = device.DeviceName
+		this.#frame.device = device.DeviceName
+		this.#bin.device = device.DeviceName
+		this.#gain.device = device.DeviceName
+		this.#offset.device = device.DeviceName
+		this.#cfa.device = device.DeviceName
+		this.#guideNS.device = device.DeviceName
+		this.#guideWE.device = device.DeviceName
+		this.#image.device = device.DeviceName
 
 		this.runner.registerEndpoint('BayerOffsetX', api.getBayerOffsetX.bind(api, this.id), false)
 		this.runner.registerEndpoint('BayerOffsetY', api.getBayerOffsetY.bind(api, this.id), false)
@@ -560,7 +560,7 @@ class AlpacaCamera extends AlpacaDevice {
 	}
 
 	get isLight() {
-		return this.frameType.elements.FRAME_LIGHT?.value === true
+		return this.#frameType.elements.FRAME_LIGHT?.value === true
 	}
 
 	protected handleEndpointsAfterRun() {
@@ -572,60 +572,60 @@ class AlpacaCamera extends AlpacaDevice {
 
 		// Initial
 		if (Step === 1) {
-			this.info.elements.CCD_PIXEL_SIZE_X.value = PixelSizeX ?? 0
-			this.info.elements.CCD_PIXEL_SIZE_Y.value = PixelSizeY ?? 0
-			this.info.elements.CCD_MAX_X.value = CameraXSize!
-			this.info.elements.CCD_MAX_Y.value = CameraYSize!
-			this.sendDefProperty(this.info)
+			this.#info.elements.CCD_PIXEL_SIZE_X.value = PixelSizeX ?? 0
+			this.#info.elements.CCD_PIXEL_SIZE_Y.value = PixelSizeY ?? 0
+			this.#info.elements.CCD_MAX_X.value = CameraXSize!
+			this.#info.elements.CCD_MAX_Y.value = CameraYSize!
+			this.sendDefProperty(this.#info)
 
-			this.frame.elements.X.max = CameraXSize! - 1
-			this.frame.elements.X.value = StartX ?? 0
-			this.frame.elements.Y.max = CameraYSize! - 1
-			this.frame.elements.Y.value = StartY ?? 0
-			this.frame.elements.WIDTH.max = CameraXSize!
-			this.frame.elements.WIDTH.value = NumX ?? 0
-			this.frame.elements.HEIGHT.max = CameraYSize!
-			this.frame.elements.HEIGHT.value = NumY ?? 0
-			this.sendDefProperty(this.frame)
+			this.#frame.elements.X.max = CameraXSize! - 1
+			this.#frame.elements.X.value = StartX ?? 0
+			this.#frame.elements.Y.max = CameraYSize! - 1
+			this.#frame.elements.Y.value = StartY ?? 0
+			this.#frame.elements.WIDTH.max = CameraXSize!
+			this.#frame.elements.WIDTH.value = NumX ?? 0
+			this.#frame.elements.HEIGHT.max = CameraYSize!
+			this.#frame.elements.HEIGHT.value = NumY ?? 0
+			this.sendDefProperty(this.#frame)
 
 			if (CanStopExposure) {
-				this.sendDefProperty(this.abort)
+				this.sendDefProperty(this.#abort)
 			}
 
 			if (ExposureMax) {
-				this.exposure.elements.CCD_EXPOSURE_VALUE.min = ExposureMin ?? 0
-				this.exposure.elements.CCD_EXPOSURE_VALUE.max = ExposureMax
-				this.sendDefProperty(this.exposure)
+				this.#exposure.elements.CCD_EXPOSURE_VALUE.min = ExposureMin ?? 0
+				this.#exposure.elements.CCD_EXPOSURE_VALUE.max = ExposureMax
+				this.sendDefProperty(this.#exposure)
 			}
 
 			if (IsCoolerOn !== undefined) {
-				this.updatePropertyValue(this.cooler, IsCoolerOn ? 'COOLER_ON' : 'COOLER_OFF', true)
-				this.sendDefProperty(this.cooler)
+				this.updatePropertyValue(this.#cooler, IsCoolerOn ? 'COOLER_ON' : 'COOLER_OFF', true)
+				this.sendDefProperty(this.#cooler)
 			} else {
 				this.disableEndpoints('IsCoolerOn')
 			}
 
 			if (CCDTemperature !== undefined) {
-				this.temperature.elements.CCD_TEMPERATURE_VALUE.value = CCDTemperature
+				this.#temperature.elements.CCD_TEMPERATURE_VALUE.value = CCDTemperature
 
 				if (CanSetCcdTemperature) {
-					this.temperature.permission = 'rw'
+					this.#temperature.permission = 'rw'
 				}
 
-				this.sendDefProperty(this.temperature)
+				this.sendDefProperty(this.#temperature)
 			}
 
 			if (CanGetCoolerPower && CoolerPower !== undefined) {
-				this.coolerPower.elements.CCD_COOLER_POWER.value = CoolerPower
-				this.sendDefProperty(this.temperature)
+				this.#coolerPower.elements.CCD_COOLER_POWER.value = CoolerPower
+				this.sendDefProperty(this.#temperature)
 			}
 
 			if (MaxBinX) {
-				this.bin.elements.HOR_BIN.max = MaxBinX
-				this.bin.elements.HOR_BIN.value = BinX ?? 1
-				this.bin.elements.VER_BIN.max = MaxBinY ?? MaxBinX
-				this.bin.elements.VER_BIN.value = BinY ?? BinX ?? 1
-				this.sendDefProperty(this.bin)
+				this.#bin.elements.HOR_BIN.max = MaxBinX
+				this.#bin.elements.HOR_BIN.value = BinX ?? 1
+				this.#bin.elements.VER_BIN.max = MaxBinY ?? MaxBinX
+				this.#bin.elements.VER_BIN.value = BinY ?? BinX ?? 1
+				this.sendDefProperty(this.#bin)
 			} else {
 				this.disableEndpoints('BinX', 'BinY')
 			}
@@ -633,15 +633,15 @@ class AlpacaCamera extends AlpacaDevice {
 			if (Gain !== undefined) {
 				if (Gains?.length) {
 					// Index mode
-					this.gain.elements.GAIN.max = Gains.length - 1
-					this.gain.elements.GAIN.value = Gain
-					this.sendDefProperty(this.gain)
+					this.#gain.elements.GAIN.max = Gains.length - 1
+					this.#gain.elements.GAIN.value = Gain
+					this.sendDefProperty(this.#gain)
 				} else if (GainMax) {
 					// Value mode
-					this.gain.elements.GAIN.min = GainMin ?? 0
-					this.gain.elements.GAIN.max = GainMax
-					this.gain.elements.GAIN.value = Gain
-					this.sendDefProperty(this.gain)
+					this.#gain.elements.GAIN.min = GainMin ?? 0
+					this.#gain.elements.GAIN.max = GainMax
+					this.#gain.elements.GAIN.value = Gain
+					this.sendDefProperty(this.#gain)
 				}
 			} else {
 				this.disableEndpoints('Gain')
@@ -650,15 +650,15 @@ class AlpacaCamera extends AlpacaDevice {
 			if (Offset !== undefined) {
 				if (Offsets?.length) {
 					// Index mode
-					this.offset.elements.OFFSET.max = Offsets.length - 1
-					this.offset.elements.OFFSET.value = Offset
-					this.sendDefProperty(this.offset)
+					this.#offset.elements.OFFSET.max = Offsets.length - 1
+					this.#offset.elements.OFFSET.value = Offset
+					this.sendDefProperty(this.#offset)
 				} else if (OffsetMax) {
 					// Value mode
-					this.offset.elements.OFFSET.min = OffsetMin ?? 0
-					this.offset.elements.OFFSET.max = OffsetMax
-					this.offset.elements.OFFSET.value = Offset
-					this.sendDefProperty(this.offset)
+					this.#offset.elements.OFFSET.min = OffsetMin ?? 0
+					this.#offset.elements.OFFSET.max = OffsetMax
+					this.#offset.elements.OFFSET.value = Offset
+					this.sendDefProperty(this.#offset)
 				}
 			} else {
 				this.disableEndpoints('Offset')
@@ -667,26 +667,26 @@ class AlpacaCamera extends AlpacaDevice {
 			if (ReadoutModes?.length) {
 				for (let i = 0; i < ReadoutModes.length; i++) {
 					const name = `MODE_${i}`
-					this.frameFormat.elements[name] = { name, label: ReadoutModes[i], value: false }
+					this.#frameFormat.elements[name] = { name, label: ReadoutModes[i], value: false }
 				}
 
-				this.frameFormat.elements[`MODE_${ReadoutMode ?? 0}`].value = true
-				this.sendDefProperty(this.frameFormat)
+				this.#frameFormat.elements[`MODE_${ReadoutMode ?? 0}`].value = true
+				this.sendDefProperty(this.#frameFormat)
 			} else {
 				this.disableEndpoints('ReadoutMode')
 			}
 
 			if (CanPulseGuide) {
-				this.sendDefProperty(this.guideNS)
-				this.sendDefProperty(this.guideWE)
+				this.sendDefProperty(this.#guideNS)
+				this.sendDefProperty(this.#guideWE)
 			}
 
 			// RGGB
 			if (SensorType === 2) {
-				this.cfa.elements.CFA_OFFSET_X.value = BayerOffsetX?.toFixed(0) ?? '0'
-				this.cfa.elements.CFA_OFFSET_X.value = BayerOffsetY?.toFixed(0) ?? '0'
-				this.cfa.elements.CFA_TYPE.value = 'RGGB'
-				this.sendDefProperty(this.cfa)
+				this.#cfa.elements.CFA_OFFSET_X.value = BayerOffsetX?.toFixed(0) ?? '0'
+				this.#cfa.elements.CFA_OFFSET_X.value = BayerOffsetY?.toFixed(0) ?? '0'
+				this.#cfa.elements.CFA_TYPE.value = 'RGGB'
+				this.sendDefProperty(this.#cfa)
 			}
 
 			this.disableEndpoints(...this.initialEndpoints)
@@ -696,43 +696,43 @@ class AlpacaCamera extends AlpacaDevice {
 		// State
 		else if (Step === 2) {
 			if (IsCoolerOn !== undefined) {
-				this.updatePropertyValue(this.cooler, IsCoolerOn ? 'COOLER_ON' : 'COOLER_OFF', true) && this.sendSetProperty(this.cooler)
+				this.updatePropertyValue(this.#cooler, IsCoolerOn ? 'COOLER_ON' : 'COOLER_OFF', true) && this.sendSetProperty(this.#cooler)
 				this.state.IsCoolerOn = undefined
 			}
 
 			if (CoolerPower !== undefined) {
-				this.updatePropertyValue(this.coolerPower, 'CCD_COOLER_POWER', CoolerPower) && this.sendSetProperty(this.coolerPower)
+				this.updatePropertyValue(this.#coolerPower, 'CCD_COOLER_POWER', CoolerPower) && this.sendSetProperty(this.#coolerPower)
 			}
 
 			if (Gain !== undefined) {
-				this.updatePropertyValue(this.gain, 'GAIN', Gain) && this.sendSetProperty(this.gain)
+				this.updatePropertyValue(this.#gain, 'GAIN', Gain) && this.sendSetProperty(this.#gain)
 				this.state.Gain = undefined
 			}
 
 			if (Offset !== undefined) {
-				this.updatePropertyValue(this.offset, 'OFFSET', Offset) && this.sendSetProperty(this.offset)
+				this.updatePropertyValue(this.#offset, 'OFFSET', Offset) && this.sendSetProperty(this.#offset)
 				this.state.Offset = undefined
 			}
 
 			if (BinX !== undefined && BinY !== undefined) {
-				let updated = this.updatePropertyValue(this.bin, 'HOR_BIN', BinX)
-				updated = this.updatePropertyValue(this.bin, 'VER_BIN', BinY) || updated
-				updated && this.sendSetProperty(this.bin)
+				let updated = this.updatePropertyValue(this.#bin, 'HOR_BIN', BinX)
+				updated = this.updatePropertyValue(this.#bin, 'VER_BIN', BinY) || updated
+				updated && this.sendSetProperty(this.#bin)
 				this.state.BinX = undefined
 				this.state.BinY = undefined
 			}
 
 			if (CCDTemperature !== undefined) {
-				this.updatePropertyValue(this.temperature, 'CCD_TEMPERATURE_VALUE', Math.trunc(CCDTemperature)) && this.sendSetProperty(this.temperature)
+				this.updatePropertyValue(this.#temperature, 'CCD_TEMPERATURE_VALUE', Math.trunc(CCDTemperature)) && this.sendSetProperty(this.#temperature)
 			}
 
 			if (StartX !== undefined || StartY !== undefined || NumX !== undefined || NumY !== undefined) {
 				let updated = false
-				if (StartX !== undefined) updated = this.updatePropertyValue(this.frame, 'X', StartX)
-				if (StartY !== undefined) updated = this.updatePropertyValue(this.frame, 'Y', StartY) || updated
-				if (NumX !== undefined) updated = this.updatePropertyValue(this.frame, 'WIDTH', NumX) || updated
-				if (NumY !== undefined) updated = this.updatePropertyValue(this.frame, 'HEIGHT', NumY) || updated
-				updated && this.sendSetProperty(this.frame)
+				if (StartX !== undefined) updated = this.updatePropertyValue(this.#frame, 'X', StartX)
+				if (StartY !== undefined) updated = this.updatePropertyValue(this.#frame, 'Y', StartY) || updated
+				if (NumX !== undefined) updated = this.updatePropertyValue(this.#frame, 'WIDTH', NumX) || updated
+				if (NumY !== undefined) updated = this.updatePropertyValue(this.#frame, 'HEIGHT', NumY) || updated
+				updated && this.sendSetProperty(this.#frame)
 				this.state.StartX = undefined
 				this.state.StartY = undefined
 				this.state.NumX = undefined
@@ -741,33 +741,33 @@ class AlpacaCamera extends AlpacaDevice {
 
 			if (ReadoutMode !== undefined) {
 				const name = `MODE_${ReadoutMode}`
-				name in this.frameFormat.elements && this.updatePropertyValue(this.frameFormat, name, true) && this.sendSetProperty(this.frameFormat)
+				name in this.#frameFormat.elements && this.updatePropertyValue(this.#frameFormat, name, true) && this.sendSetProperty(this.#frameFormat)
 				this.state.ReadoutMode = undefined
 			}
 
-			if (CanPulseGuide && this.updatePropertyState(this.guideNS, IsPulseGuiding ? 'Busy' : 'Idle')) {
-				this.guideWE.state = this.guideNS.state
-				this.sendSetProperty(this.guideNS)
-				this.sendSetProperty(this.guideWE)
+			if (CanPulseGuide && this.updatePropertyState(this.#guideNS, IsPulseGuiding ? 'Busy' : 'Idle')) {
+				this.#guideWE.state = this.#guideNS.state
+				this.sendSetProperty(this.#guideNS)
+				this.sendSetProperty(this.#guideWE)
 			}
 
 			if (ImageReady) {
 				if (ExposureStarted) {
-					void this.handleImageReady()
+					void this.#handleImageReady()
 					return true
 				}
 			} else {
-				this.image.elements.CCD1.value = ''
+				this.#image.elements.CCD1.value = ''
 			}
 
 			if (ExposureStarted || CameraState === 2) {
-				let updated = this.updatePropertyState(this.exposure, 'Busy')
-				updated = this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', ExposureDuration * (1 - PercentCompleted / 100)) || updated
-				updated && this.sendSetProperty(this.exposure)
+				let updated = this.updatePropertyState(this.#exposure, 'Busy')
+				updated = this.updatePropertyValue(this.#exposure, 'CCD_EXPOSURE_VALUE', ExposureDuration * (1 - PercentCompleted / 100)) || updated
+				updated && this.sendSetProperty(this.#exposure)
 			} else if ((CameraState === 5 || CameraState === 0) && LastCameraState !== CameraState) {
-				let updated = this.updatePropertyState(this.exposure, CameraState === 5 ? 'Alert' : 'Idle')
-				updated = this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', 0) || updated
-				updated && this.sendSetProperty(this.exposure)
+				let updated = this.updatePropertyState(this.#exposure, CameraState === 5 ? 'Alert' : 'Idle')
+				updated = this.updatePropertyValue(this.#exposure, 'CCD_EXPOSURE_VALUE', 0) || updated
+				updated && this.sendSetProperty(this.#exposure)
 			}
 
 			this.state.LastCameraState = CameraState
@@ -805,8 +805,8 @@ class AlpacaCamera extends AlpacaDevice {
 				break
 			case 'CCD_FRAME_TYPE':
 				for (const key in vector.elements) {
-					if (key in this.frameType.elements && vector.elements[key] === true) {
-						this.updatePropertyValue(this.frameType, key, true) && this.sendSetProperty(this.frameType)
+					if (key in this.#frameType.elements && vector.elements[key] === true) {
+						this.updatePropertyValue(this.#frameType, key, true) && this.sendSetProperty(this.#frameType)
 						break
 					}
 				}
@@ -822,19 +822,19 @@ class AlpacaCamera extends AlpacaDevice {
 			case 'CCD_EXPOSURE':
 				if (vector.elements.CCD_EXPOSURE_VALUE) {
 					this.state.ExposureStarted = true
-					this.state.ExposureDuration = Math.max(this.exposure.elements.CCD_EXPOSURE_VALUE.min, Math.min(vector.elements.CCD_EXPOSURE_VALUE, this.exposure.elements.CCD_EXPOSURE_VALUE.max))
+					this.state.ExposureDuration = Math.max(this.#exposure.elements.CCD_EXPOSURE_VALUE.min, Math.min(vector.elements.CCD_EXPOSURE_VALUE, this.#exposure.elements.CCD_EXPOSURE_VALUE.max))
 
 					void this.api.startExposure(this.id, this.state.ExposureDuration, this.isLight).then((ok) => {
 						if (ok === true) {
-							this.updatePropertyState(this.exposure, 'Busy')
-							this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', this.state.ExposureDuration)
+							this.updatePropertyState(this.#exposure, 'Busy')
+							this.updatePropertyValue(this.#exposure, 'CCD_EXPOSURE_VALUE', this.state.ExposureDuration)
 						} else {
 							this.state.ExposureStarted = false
-							this.updatePropertyState(this.exposure, 'Alert')
-							this.updatePropertyValue(this.exposure, 'CCD_EXPOSURE_VALUE', 0)
+							this.updatePropertyState(this.#exposure, 'Alert')
+							this.updatePropertyValue(this.#exposure, 'CCD_EXPOSURE_VALUE', 0)
 						}
 
-						this.sendSetProperty(this.exposure)
+						this.sendSetProperty(this.#exposure)
 					}, console.error)
 				}
 
@@ -888,33 +888,33 @@ class AlpacaCamera extends AlpacaDevice {
 		}
 	}
 
-	private async handleImageReady() {
-		this.exposure.state = 'Busy'
-		this.exposure.elements.CCD_EXPOSURE_VALUE.value = 0
-		this.sendSetProperty(this.exposure)
+	async #handleImageReady() {
+		this.#exposure.state = 'Busy'
+		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = 0
+		this.sendSetProperty(this.#exposure)
 
 		this.state.ExposureStarted = false
-		await this.readImageDataAsFits()
+		await this.#readImageDataAsFits()
 
-		this.exposure.state = 'Ok'
-		this.sendSetProperty(this.exposure)
+		this.#exposure.state = 'Ok'
+		this.sendSetProperty(this.#exposure)
 	}
 
-	private async readImageDataAsFits() {
+	async #readImageDataAsFits() {
 		const buffer = await this.api.getImageArray(this.id)
 
 		if (buffer) {
-			this.image.state = 'Ok'
+			this.#image.state = 'Ok'
 			const camera = this.client.provider.get(this.client, this.device.DeviceName, 'CAMERA') as Camera
 			const lastExposureDuration = this.state.ExposureDuration // await this.api.getLastExposureDuration(this.id)
-			const fits = makeFitsFromImageBytes(buffer, this.now, camera, this.activeMount, this.activeWheel, this.activeFocuser, this.activeRotator, lastExposureDuration)
-			this.image.elements.CCD1.value = fits
+			const fits = makeFitsFromImageBytes(buffer, this.#now, camera, this.activeMount, this.activeWheel, this.activeFocuser, this.activeRotator, lastExposureDuration)
+			this.#image.elements.CCD1.value = fits
 		} else {
-			this.image.state = 'Alert'
-			this.image.elements.CCD1.value = ''
+			this.#image.state = 'Alert'
+			this.#image.elements.CCD1.value = ''
 		}
 
-		handleSetBlobVector(this.client, this.handler, this.image)
+		handleSetBlobVector(this.client, this.handler, this.#image)
 	}
 }
 
@@ -961,46 +961,46 @@ class AlpacaTelescope extends AlpacaDevice {
 	protected readonly deviceStateEndpoints = ['AtPark', 'Declination', 'IsPulseGuiding', 'RightAscension', 'SideOfPier', 'Slewing', 'Tracking'] as const
 	protected readonly runningEndpoints = ['TrackingRate', 'GuideRateRA', 'GuideRateDEC', 'Latitude', 'Longitude', 'Elevation', 'UTCDate'] as const
 
-	private readonly onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
-	private readonly equatorialCoordinate = makeNumberVector('', 'EQUATORIAL_EOD_COORD', 'Eq. Coordinates', MAIN_CONTROL, 'rw', ['RA', 'RA (hours)', 0, 0, 24, 0.1, '%10.6f'], ['DEC', 'DEC (deg)', 0, -90, 90, 0.1, '%10.6f'])
-	private readonly abort = makeSwitchVector('', 'TELESCOPE_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
-	private readonly trackMode = makeSwitchVector('', 'TELESCOPE_TRACK_MODE', 'Track Mode', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_SIDEREAL', 'Sidereal', true], ['TRACK_SOLAR', 'Solar', false], ['TRACK_LUNAR', 'Lunar', false], ['TRACK_KING', 'King', false])
-	private readonly tracking = makeSwitchVector('', 'TELESCOPE_TRACK_STATE', 'Tracking', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_ON', 'On', false], ['TRACK_OFF', 'Off', true])
-	private readonly home = makeSwitchVector('', 'TELESCOPE_HOME', 'Home', MAIN_CONTROL, 'AtMostOne', 'rw', ['GO', 'Go', false])
-	private readonly motionNS = makeSwitchVector('', 'TELESCOPE_MOTION_NS', 'Motion N/S', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_NORTH', 'North', false], ['MOTION_SOUTH', 'South', false])
-	private readonly motionWE = makeSwitchVector('', 'TELESCOPE_MOTION_WE', 'Motion W/E', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_WEST', 'West', false], ['MOTION_EAST', 'East', false])
-	private readonly slewRate = makeSwitchVector('', 'TELESCOPE_SLEW_RATE', 'Slew Rate', MAIN_CONTROL, 'OneOfMany', 'rw')
-	private readonly time = makeTextVector('', 'TIME_UTC', 'UTC', MAIN_CONTROL, 'rw', ['UTC', 'UTC Time', formatTemporal(Date.now(), 'YYYY-MM-DDTHH:mm:ss.SSSZ', 0)], ['OFFSET', 'UTC Offset', (TIMEZONE / 60).toFixed(2)])
-	private readonly geographicCoordinate = makeNumberVector('', 'GEOGRAPHIC_COORD', 'Location', MAIN_CONTROL, 'rw', ['LAT', 'Latitude (deg)', 0, -90, 90, 0.1, '%12.8f'], ['LONG', 'Longitude (deg)', 0, 0, 360, 0.1, '%12.8f'], ['ELEV', 'Elevation (m)', 0, -200, 10000, 1, '%.1f'])
-	private readonly park = makeSwitchVector('', 'TELESCOPE_PARK', 'Parking', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
-	private readonly pierSide = makeSwitchVector('', 'TELESCOPE_PIER_SIDE', 'Pier Side', MAIN_CONTROL, 'AtMostOne', 'ro', ['PIER_EAST', 'East', false], ['PIER_WEST', 'West', false])
-	private readonly guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'ro', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
-	private readonly guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
-	private readonly guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
+	readonly #onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
+	readonly #equatorialCoordinate = makeNumberVector('', 'EQUATORIAL_EOD_COORD', 'Eq. Coordinates', MAIN_CONTROL, 'rw', ['RA', 'RA (hours)', 0, 0, 24, 0.1, '%10.6f'], ['DEC', 'DEC (deg)', 0, -90, 90, 0.1, '%10.6f'])
+	readonly #abort = makeSwitchVector('', 'TELESCOPE_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+	readonly #trackMode = makeSwitchVector('', 'TELESCOPE_TRACK_MODE', 'Track Mode', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_SIDEREAL', 'Sidereal', true], ['TRACK_SOLAR', 'Solar', false], ['TRACK_LUNAR', 'Lunar', false], ['TRACK_KING', 'King', false])
+	readonly #tracking = makeSwitchVector('', 'TELESCOPE_TRACK_STATE', 'Tracking', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_ON', 'On', false], ['TRACK_OFF', 'Off', true])
+	readonly #home = makeSwitchVector('', 'TELESCOPE_HOME', 'Home', MAIN_CONTROL, 'AtMostOne', 'rw', ['GO', 'Go', false])
+	readonly #motionNS = makeSwitchVector('', 'TELESCOPE_MOTION_NS', 'Motion N/S', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_NORTH', 'North', false], ['MOTION_SOUTH', 'South', false])
+	readonly #motionWE = makeSwitchVector('', 'TELESCOPE_MOTION_WE', 'Motion W/E', MAIN_CONTROL, 'AtMostOne', 'rw', ['MOTION_WEST', 'West', false], ['MOTION_EAST', 'East', false])
+	readonly #slewRate = makeSwitchVector('', 'TELESCOPE_SLEW_RATE', 'Slew Rate', MAIN_CONTROL, 'OneOfMany', 'rw')
+	readonly #time = makeTextVector('', 'TIME_UTC', 'UTC', MAIN_CONTROL, 'rw', ['UTC', 'UTC Time', formatTemporal(Date.now(), 'YYYY-MM-DDTHH:mm:ss.SSSZ', 0)], ['OFFSET', 'UTC Offset', (TIMEZONE / 60).toFixed(2)])
+	readonly #geographicCoordinate = makeNumberVector('', 'GEOGRAPHIC_COORD', 'Location', MAIN_CONTROL, 'rw', ['LAT', 'Latitude (deg)', 0, -90, 90, 0.1, '%12.8f'], ['LONG', 'Longitude (deg)', 0, 0, 360, 0.1, '%12.8f'], ['ELEV', 'Elevation (m)', 0, -200, 10000, 1, '%.1f'])
+	readonly #park = makeSwitchVector('', 'TELESCOPE_PARK', 'Parking', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
+	readonly #pierSide = makeSwitchVector('', 'TELESCOPE_PIER_SIDE', 'Pier Side', MAIN_CONTROL, 'AtMostOne', 'ro', ['PIER_EAST', 'East', false], ['PIER_WEST', 'West', false])
+	readonly #guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'ro', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
+	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
+	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
 
-	private readonly now = timeNow() // Used in the conversion from J2000 to JNOW. Changes in precession/nutation angles are negligible.
+	readonly #now = timeNow() // Used in the conversion from J2000 to JNOW. Changes in precession/nutation angles are negligible.
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
 
 		const api = new AlpacaTelescopeApi(client.url)
 
-		this.onCoordSet.device = device.DeviceName
-		this.equatorialCoordinate.device = device.DeviceName
-		this.abort.device = device.DeviceName
-		this.trackMode.device = device.DeviceName
-		this.tracking.device = device.DeviceName
-		this.home.device = device.DeviceName
-		this.motionNS.device = device.DeviceName
-		this.motionWE.device = device.DeviceName
-		this.slewRate.device = device.DeviceName
-		this.time.device = device.DeviceName
-		this.geographicCoordinate.device = device.DeviceName
-		this.park.device = device.DeviceName
-		this.pierSide.device = device.DeviceName
-		this.guideRate.device = device.DeviceName
-		this.guideNS.device = device.DeviceName
-		this.guideWE.device = device.DeviceName
+		this.#onCoordSet.device = device.DeviceName
+		this.#equatorialCoordinate.device = device.DeviceName
+		this.#abort.device = device.DeviceName
+		this.#trackMode.device = device.DeviceName
+		this.#tracking.device = device.DeviceName
+		this.#home.device = device.DeviceName
+		this.#motionNS.device = device.DeviceName
+		this.#motionWE.device = device.DeviceName
+		this.#slewRate.device = device.DeviceName
+		this.#time.device = device.DeviceName
+		this.#geographicCoordinate.device = device.DeviceName
+		this.#park.device = device.DeviceName
+		this.#pierSide.device = device.DeviceName
+		this.#guideRate.device = device.DeviceName
+		this.#guideNS.device = device.DeviceName
+		this.#guideWE.device = device.DeviceName
 
 		async function canMoveAxis(id: number) {
 			return (await api.canMoveAxis(id, 0)) || (await api.canMoveAxis(id, 1))
@@ -1045,59 +1045,59 @@ class AlpacaTelescope extends AlpacaDevice {
 
 		// Initial
 		if (Step === 1) {
-			this.sendDefProperty(this.equatorialCoordinate)
-			this.sendDefProperty(this.abort)
+			this.sendDefProperty(this.#equatorialCoordinate)
+			this.sendDefProperty(this.#abort)
 
-			if (!CanSync) delete this.onCoordSet.elements.SYNC
-			if (!CanSlew) delete this.onCoordSet.elements.SLEW
-			if (CanSlew || CanSync) this.sendDefProperty(this.onCoordSet)
-			if (CanHome) this.sendDefProperty(this.home)
-			if (CanPark) this.sendDefProperty(this.park)
-			if (CanTrack) this.sendDefProperty(this.tracking)
+			if (!CanSync) delete this.#onCoordSet.elements.SYNC
+			if (!CanSlew) delete this.#onCoordSet.elements.SLEW
+			if (CanSlew || CanSync) this.sendDefProperty(this.#onCoordSet)
+			if (CanHome) this.sendDefProperty(this.#home)
+			if (CanPark) this.sendDefProperty(this.#park)
+			if (CanTrack) this.sendDefProperty(this.#tracking)
 			if (CanMoveAxis) {
-				this.sendDefProperty(this.motionNS)
-				this.sendDefProperty(this.motionWE)
+				this.sendDefProperty(this.#motionNS)
+				this.sendDefProperty(this.#motionWE)
 			}
 			if (CanPulseGuide) {
 				if (GuideRateRA !== undefined && GuideRateDEC !== undefined) {
 					if (CanSetGuideRate) {
-						this.guideRate.permission = 'rw'
+						this.#guideRate.permission = 'rw'
 					}
 
-					this.guideRate.elements.GUIDE_RATE_WE.value = roundToNthDecimal(GuideRateRA / (SIDEREAL_RATE / 3600), 6)
-					this.guideRate.elements.GUIDE_RATE_NS.value = roundToNthDecimal(GuideRateDEC / (SIDEREAL_RATE / 3600), 6)
+					this.#guideRate.elements.GUIDE_RATE_WE.value = roundToNthDecimal(GuideRateRA / (SIDEREAL_RATE / 3600), 6)
+					this.#guideRate.elements.GUIDE_RATE_NS.value = roundToNthDecimal(GuideRateDEC / (SIDEREAL_RATE / 3600), 6)
 
-					this.sendDefProperty(this.guideRate)
+					this.sendDefProperty(this.#guideRate)
 				} else {
 					this.disableEndpoints('GuideRateRA', 'GuideRateDEC')
 				}
 
-				this.sendDefProperty(this.guideNS)
-				this.sendDefProperty(this.guideWE)
+				this.sendDefProperty(this.#guideNS)
+				this.sendDefProperty(this.#guideWE)
 			}
 
 			if (SlewRates?.length) {
 				for (let i = 0; i < SlewRates.length; i++) {
 					const name = `RATE_${i}`
-					this.slewRate.elements[name] = { name, label: `${SlewRates[i].Maximum.toPrecision(3)} deg/s`, value: i === 0 }
+					this.#slewRate.elements[name] = { name, label: `${SlewRates[i].Maximum.toPrecision(3)} deg/s`, value: i === 0 }
 				}
 
-				this.sendDefProperty(this.slewRate)
-				this.sendSetProperty(this.slewRate)
+				this.sendDefProperty(this.#slewRate)
+				this.sendSetProperty(this.#slewRate)
 			}
 
 			if (TrackingRates?.length) {
-				if (!TrackingRates.includes(0)) delete this.trackMode.elements.TRACK_SIDEREAL
-				if (!TrackingRates.includes(1)) delete this.trackMode.elements.TRACK_LUNAR
-				if (!TrackingRates.includes(2)) delete this.trackMode.elements.TRACK_SOLAR
-				if (!TrackingRates.includes(3)) delete this.trackMode.elements.TRACK_KING
-				this.sendDefProperty(this.trackMode)
+				if (!TrackingRates.includes(0)) delete this.#trackMode.elements.TRACK_SIDEREAL
+				if (!TrackingRates.includes(1)) delete this.#trackMode.elements.TRACK_LUNAR
+				if (!TrackingRates.includes(2)) delete this.#trackMode.elements.TRACK_SOLAR
+				if (!TrackingRates.includes(3)) delete this.#trackMode.elements.TRACK_KING
+				this.sendDefProperty(this.#trackMode)
 			} else {
 				this.disableEndpoints('TrackingRate')
 			}
 
 			if (CanSetSideOfPier) {
-				this.pierSide.permission = 'rw'
+				this.#pierSide.permission = 'rw'
 			}
 
 			if (UTCDate) {
@@ -1105,17 +1105,17 @@ class AlpacaTelescope extends AlpacaDevice {
 
 				if (now - this.state.LastUTCDateUpdate >= 60000) {
 					this.state.LastUTCDateUpdate = now
-					this.time.elements.UTC.value = UTCDate.substring(0, 19)
-					this.sendDefProperty(this.time)
+					this.#time.elements.UTC.value = UTCDate.substring(0, 19)
+					this.sendDefProperty(this.#time)
 				}
 			}
 
-			this.geographicCoordinate.elements.LAT.value = Latitude ?? 0
-			this.geographicCoordinate.elements.LONG.value = Longitude ?? 0
-			this.geographicCoordinate.elements.ELEV.value = Elevation ?? 0
-			this.sendDefProperty(this.geographicCoordinate)
+			this.#geographicCoordinate.elements.LAT.value = Latitude ?? 0
+			this.#geographicCoordinate.elements.LONG.value = Longitude ?? 0
+			this.#geographicCoordinate.elements.ELEV.value = Elevation ?? 0
+			this.sendDefProperty(this.#geographicCoordinate)
 
-			this.sendDefProperty(this.pierSide)
+			this.sendDefProperty(this.#pierSide)
 
 			this.disableEndpoints(...this.initialEndpoints)
 
@@ -1123,51 +1123,51 @@ class AlpacaTelescope extends AlpacaDevice {
 		}
 		// State
 		else if (Step === 2) {
-			CanTrack && this.updatePropertyValue(this.tracking, Tracking ? 'TRACK_ON' : 'TRACK_OFF', true) && this.sendSetProperty(this.tracking)
-			CanPark && this.updatePropertyValue(this.park, AtPark ? 'PARK' : 'UNPARK', true) && this.sendSetProperty(this.park)
+			CanTrack && this.updatePropertyValue(this.#tracking, Tracking ? 'TRACK_ON' : 'TRACK_OFF', true) && this.sendSetProperty(this.#tracking)
+			CanPark && this.updatePropertyValue(this.#park, AtPark ? 'PARK' : 'UNPARK', true) && this.sendSetProperty(this.#park)
 
 			if (SideOfPier !== undefined) {
 				if (SideOfPier === -1) {
-					let updated = this.updatePropertyValue(this.pierSide, 'PIER_EAST', false)
-					updated = this.updatePropertyValue(this.pierSide, 'PIER_WEST', false) || updated
-					updated && this.sendSetProperty(this.pierSide)
+					let updated = this.updatePropertyValue(this.#pierSide, 'PIER_EAST', false)
+					updated = this.updatePropertyValue(this.#pierSide, 'PIER_WEST', false) || updated
+					updated && this.sendSetProperty(this.#pierSide)
 				} else {
-					this.updatePropertyValue(this.pierSide, SideOfPier === 0 ? 'PIER_EAST' : 'PIER_WEST', true) && this.sendSetProperty(this.pierSide)
+					this.updatePropertyValue(this.#pierSide, SideOfPier === 0 ? 'PIER_EAST' : 'PIER_WEST', true) && this.sendSetProperty(this.#pierSide)
 				}
 			}
 
-			if (CanPulseGuide && this.updatePropertyState(this.guideNS, IsPulseGuiding ? 'Busy' : 'Idle')) {
-				this.guideWE.state = this.guideNS.state
-				this.sendSetProperty(this.guideNS)
-				this.sendSetProperty(this.guideWE)
+			if (CanPulseGuide && this.updatePropertyState(this.#guideNS, IsPulseGuiding ? 'Busy' : 'Idle')) {
+				this.#guideWE.state = this.#guideNS.state
+				this.sendSetProperty(this.#guideNS)
+				this.sendSetProperty(this.#guideWE)
 			}
 
 			if (TrackingRate !== undefined) {
-				this.updatePropertyValue(this.trackMode, TrackingRate === 0 ? 'TRACK_SIDEREAL' : TrackingRate === 1 ? 'TRACK_LUNAR' : TrackingRate === 2 ? 'TRACK_SOLAR' : 'TRACK_KING', true) && this.sendSetProperty(this.trackMode)
+				this.updatePropertyValue(this.#trackMode, TrackingRate === 0 ? 'TRACK_SIDEREAL' : TrackingRate === 1 ? 'TRACK_LUNAR' : TrackingRate === 2 ? 'TRACK_SOLAR' : 'TRACK_KING', true) && this.sendSetProperty(this.#trackMode)
 				this.state.TrackingRate = undefined
 			}
 
 			if (GuideRateRA !== undefined && GuideRateDEC !== undefined) {
-				let updated = this.updatePropertyValue(this.guideRate, 'GUIDE_RATE_WE', roundToNthDecimal(GuideRateRA / (SIDEREAL_RATE / 3600), 6))
-				updated = this.updatePropertyValue(this.guideRate, 'GUIDE_RATE_NS', roundToNthDecimal(GuideRateDEC / (SIDEREAL_RATE / 3600), 6)) || updated
-				updated && this.sendSetProperty(this.guideRate)
+				let updated = this.updatePropertyValue(this.#guideRate, 'GUIDE_RATE_WE', roundToNthDecimal(GuideRateRA / (SIDEREAL_RATE / 3600), 6))
+				updated = this.updatePropertyValue(this.#guideRate, 'GUIDE_RATE_NS', roundToNthDecimal(GuideRateDEC / (SIDEREAL_RATE / 3600), 6)) || updated
+				updated && this.sendSetProperty(this.#guideRate)
 				this.state.GuideRateRA = undefined
 				this.state.GuideRateDEC = undefined
 			}
 
 			if (Latitude !== undefined && Longitude !== undefined) {
-				let updated = this.updatePropertyValue(this.geographicCoordinate, 'LAT', Latitude)
-				updated = this.updatePropertyValue(this.geographicCoordinate, 'LONG', Longitude) || updated
-				if (Elevation !== undefined) updated = this.updatePropertyValue(this.geographicCoordinate, 'ELEV', Elevation) || updated
-				updated && this.sendSetProperty(this.geographicCoordinate)
+				let updated = this.updatePropertyValue(this.#geographicCoordinate, 'LAT', Latitude)
+				updated = this.updatePropertyValue(this.#geographicCoordinate, 'LONG', Longitude) || updated
+				if (Elevation !== undefined) updated = this.updatePropertyValue(this.#geographicCoordinate, 'ELEV', Elevation) || updated
+				updated && this.sendSetProperty(this.#geographicCoordinate)
 				this.state.Latitude = undefined
 				this.state.Longitude = undefined
 				this.state.Elevation = undefined
 			}
 
 			if (UTCDate !== undefined) {
-				this.time.elements.UTC.value = UTCDate.substring(0, 19)
-				this.sendSetProperty(this.time)
+				this.#time.elements.UTC.value = UTCDate.substring(0, 19)
+				this.sendSetProperty(this.#time)
 				this.state.UTCDate = undefined
 			}
 
@@ -1179,13 +1179,13 @@ class AlpacaTelescope extends AlpacaDevice {
 				let declination = Declination
 
 				if (EquatorialSystem === 2) {
-					;[rightAscension, declination] = equatorialFromJ2000(RightAscension, Declination, this.now)
+					;[rightAscension, declination] = equatorialFromJ2000(RightAscension, Declination, this.#now)
 				}
 
-				let updated = this.updatePropertyState(this.equatorialCoordinate, Slewing ? 'Busy' : 'Idle')
-				updated = this.updatePropertyValue(this.equatorialCoordinate, 'RA', rightAscension) || updated
-				updated = this.updatePropertyValue(this.equatorialCoordinate, 'DEC', declination) || updated
-				updated && this.sendSetProperty(this.equatorialCoordinate)
+				let updated = this.updatePropertyState(this.#equatorialCoordinate, Slewing ? 'Busy' : 'Idle')
+				updated = this.updatePropertyValue(this.#equatorialCoordinate, 'RA', rightAscension) || updated
+				updated = this.updatePropertyValue(this.#equatorialCoordinate, 'DEC', declination) || updated
+				updated && this.sendSetProperty(this.#equatorialCoordinate)
 			}
 		}
 
@@ -1199,7 +1199,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			case 'TELESCOPE_SLEW_RATE': {
 				if (this.state.SlewRates?.length) {
 					const selected = findOnSwitch(vector)[0]
-					selected && this.updatePropertyValue(this.slewRate, selected, true) && this.sendSetProperty(this.slewRate)
+					selected && this.updatePropertyValue(this.#slewRate, selected, true) && this.sendSetProperty(this.#slewRate)
 				}
 
 				break
@@ -1208,7 +1208,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			case 'TELESCOPE_MOTION_WE': {
 				if (this.state.CanMoveAxis && this.state.SlewRates?.length) {
 					const { MOTION_NORTH, MOTION_SOUTH, MOTION_WEST, MOTION_EAST } = vector.elements
-					const { Maximum } = this.state.SlewRates[+findOnSwitch(this.slewRate)[0].substring(5)]
+					const { Maximum } = this.state.SlewRates[+findOnSwitch(this.#slewRate)[0].substring(5)]
 
 					if (vector.name.endsWith('S')) {
 						if (MOTION_NORTH === true || MOTION_SOUTH === true) {
@@ -1264,10 +1264,10 @@ class AlpacaTelescope extends AlpacaDevice {
 
 				break
 			case 'ON_COORD_SET':
-				if (vector.elements.SLEW === true || vector.elements.TRACK === true) this.updatePropertyValue(this.onCoordSet, 'SLEW', true)
-				else if (vector.elements.SYNC === true) this.updatePropertyValue(this.onCoordSet, 'SYNC', true)
+				if (vector.elements.SLEW === true || vector.elements.TRACK === true) this.updatePropertyValue(this.#onCoordSet, 'SLEW', true)
+				else if (vector.elements.SYNC === true) this.updatePropertyValue(this.#onCoordSet, 'SYNC', true)
 				else break
-				this.sendSetProperty(this.onCoordSet)
+				this.sendSetProperty(this.#onCoordSet)
 				break
 		}
 	}
@@ -1278,7 +1278,7 @@ class AlpacaTelescope extends AlpacaDevice {
 		switch (vector.name) {
 			case 'EQUATORIAL_EOD_COORD':
 				if (vector.elements.RA !== undefined || vector.elements.DEC !== undefined) {
-					void this.moveToTarget(vector.elements.RA, vector.elements.DEC)
+					void this.#moveToTarget(vector.elements.RA, vector.elements.DEC)
 				}
 
 				break
@@ -1329,7 +1329,7 @@ class AlpacaTelescope extends AlpacaDevice {
 		switch (vector.name) {
 			case 'TIME_UTC':
 				if (vector.elements.UTC && vector.elements.UTC.length >= 19) {
-					this.updatePropertyValue(this.time, 'OFFSET', vector.elements.OFFSET)
+					this.updatePropertyValue(this.#time, 'OFFSET', vector.elements.OFFSET)
 					const utc = vector.elements.UTC.substring(0, 19)
 					void this.api.setUtcDate(this.id, `${utc}Z`)
 					this.state.LastUTCDateUpdate = 0
@@ -1342,11 +1342,11 @@ class AlpacaTelescope extends AlpacaDevice {
 
 	close() {}
 
-	private async moveToTarget(rightAscension?: number, declination?: number) {
+	async #moveToTarget(rightAscension?: number, declination?: number) {
 		if (rightAscension !== undefined && declination !== undefined) {
-			if (this.state.EquatorialSystem === 2) [rightAscension, declination] = equatorialToJ2000(rightAscension, declination, this.now)
-			if (this.onCoordSet.elements.SLEW?.value === true) await this.api.slewToCoordinatesAsync(this.id, rightAscension, declination)
-			else if (this.onCoordSet.elements.SYNC?.value === true) await this.api.syncToCoordinates(this.id, rightAscension, declination)
+			if (this.state.EquatorialSystem === 2) [rightAscension, declination] = equatorialToJ2000(rightAscension, declination, this.#now)
+			if (this.#onCoordSet.elements.SLEW?.value === true) await this.api.slewToCoordinatesAsync(this.id, rightAscension, declination)
+			else if (this.#onCoordSet.elements.SYNC?.value === true) await this.api.syncToCoordinates(this.id, rightAscension, declination)
 		}
 	}
 }
@@ -1359,8 +1359,8 @@ interface AlpacaClientFilterWheelState extends AlpacaClientDeviceState {
 }
 
 class AlpacaFilterWheel extends AlpacaDevice {
-	private readonly position = makeNumberVector('', 'FILTER_SLOT', 'Position', MAIN_CONTROL, 'rw', ['FILTER_SLOT_VALUE', 'Slot', 1, 1, 1, 1, '%.0f'])
-	private readonly names = makeTextVector('', 'FILTER_NAME', 'Filter', MAIN_CONTROL, 'ro')
+	readonly #position = makeNumberVector('', 'FILTER_SLOT', 'Position', MAIN_CONTROL, 'rw', ['FILTER_SLOT_VALUE', 'Slot', 1, 1, 1, 1, '%.0f'])
+	readonly #names = makeTextVector('', 'FILTER_NAME', 'Filter', MAIN_CONTROL, 'ro')
 
 	protected readonly api: AlpacaFilterWheelApi
 	// https://ascom-standards.org/newdocs/filterwheel.html#FilterWheel.DeviceState
@@ -1373,8 +1373,8 @@ class AlpacaFilterWheel extends AlpacaDevice {
 
 		const api = new AlpacaFilterWheelApi(client.url)
 
-		this.position.device = device.DeviceName
-		this.names.device = device.DeviceName
+		this.#position.device = device.DeviceName
+		this.#names.device = device.DeviceName
 
 		this.runner.registerEndpoint('Names', api.getNames.bind(api, this.id), false)
 		this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
@@ -1390,15 +1390,15 @@ class AlpacaFilterWheel extends AlpacaDevice {
 		// Initial
 		if (Step === 1) {
 			if (Names?.length) {
-				this.position.elements.FILTER_SLOT_VALUE.max = Names.length
+				this.#position.elements.FILTER_SLOT_VALUE.max = Names.length
 
 				for (let i = 0, p = 1; i < Names.length; i++, p++) {
 					const name = `FILTER_SLOT_NAME_${p}`
-					this.names.elements[name] = { name, label: `Filter ${p}`, value: Names[i] }
+					this.#names.elements[name] = { name, label: `Filter ${p}`, value: Names[i] }
 				}
 
-				this.sendDefProperty(this.names)
-				this.sendDefProperty(this.position)
+				this.sendDefProperty(this.#names)
+				this.sendDefProperty(this.#position)
 			}
 
 			this.disableEndpoints(...this.initialEndpoints)
@@ -1407,9 +1407,9 @@ class AlpacaFilterWheel extends AlpacaDevice {
 		}
 		// State
 		else if (Step === 2) {
-			let updated = this.updatePropertyState(this.position, Position === -1 ? 'Busy' : 'Idle')
-			if (Position >= 0) updated = this.updatePropertyValue(this.position, 'FILTER_SLOT_VALUE', Position + 1) || updated
-			updated && this.sendSetProperty(this.position)
+			let updated = this.updatePropertyState(this.#position, Position === -1 ? 'Busy' : 'Idle')
+			if (Position >= 0) updated = this.updatePropertyValue(this.#position, 'FILTER_SLOT_VALUE', Position + 1) || updated
+			updated && this.sendSetProperty(this.#position)
 		}
 
 		return true
@@ -1436,13 +1436,13 @@ interface AlpacaClientFocuserState extends AlpacaClientDeviceState {
 }
 
 class AlpacaFocuser extends AlpacaDevice {
-	private readonly absolutePosition = makeNumberVector('', 'ABS_FOCUS_POSITION', 'Absolute Position', MAIN_CONTROL, 'rw', ['FOCUS_ABSOLUTE_POSITION', 'Position', 0, 0, 0, 1, '%.0f'])
-	private readonly relativePosition = makeNumberVector('', 'REL_FOCUS_POSITION', 'Relative Position', MAIN_CONTROL, 'rw', ['FOCUS_RELATIVE_POSITION', 'Steps', 0, 0, 0, 1, '%.0f'])
-	private readonly temperature = makeNumberVector('', 'FOCUS_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['TEMPERATURE', 'Temperature', 0, -50, 70, 0.1, '%6.2f'])
-	private readonly abort = makeSwitchVector('', 'FOCUS_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
-	private readonly direction = makeSwitchVector('', 'FOCUS_MOTION', 'Direction', MAIN_CONTROL, 'OneOfMany', 'rw', ['FOCUS_INWARD', 'In', true], ['FOCUS_OUTWARD', 'Out', false])
+	readonly #absolutePosition = makeNumberVector('', 'ABS_FOCUS_POSITION', 'Absolute Position', MAIN_CONTROL, 'rw', ['FOCUS_ABSOLUTE_POSITION', 'Position', 0, 0, 0, 1, '%.0f'])
+	readonly #relativePosition = makeNumberVector('', 'REL_FOCUS_POSITION', 'Relative Position', MAIN_CONTROL, 'rw', ['FOCUS_RELATIVE_POSITION', 'Steps', 0, 0, 0, 1, '%.0f'])
+	readonly #temperature = makeNumberVector('', 'FOCUS_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['TEMPERATURE', 'Temperature', 0, -50, 70, 0.1, '%6.2f'])
+	readonly #abort = makeSwitchVector('', 'FOCUS_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+	readonly #direction = makeSwitchVector('', 'FOCUS_MOTION', 'Direction', MAIN_CONTROL, 'OneOfMany', 'rw', ['FOCUS_INWARD', 'In', true], ['FOCUS_OUTWARD', 'Out', false])
 
-	private position = this.absolutePosition
+	#position = this.#absolutePosition
 
 	protected readonly api: AlpacaFocuserApi
 	// https://ascom-standards.org/newdocs/focuser.html#Focuser.DeviceState
@@ -1455,11 +1455,11 @@ class AlpacaFocuser extends AlpacaDevice {
 
 		const api = new AlpacaFocuserApi(client.url)
 
-		this.absolutePosition.device = device.DeviceName
-		this.relativePosition.device = device.DeviceName
-		this.temperature.device = device.DeviceName
-		this.abort.device = device.DeviceName
-		this.direction.device = device.DeviceName
+		this.#absolutePosition.device = device.DeviceName
+		this.#relativePosition.device = device.DeviceName
+		this.#temperature.device = device.DeviceName
+		this.#abort.device = device.DeviceName
+		this.#direction.device = device.DeviceName
 
 		this.runner.registerEndpoint('Temperature', api.getTemperature.bind(api, this.id), false)
 		this.runner.registerEndpoint('IsAbsolute', api.isAbsolute.bind(api, this.id), false)
@@ -1471,15 +1471,15 @@ class AlpacaFocuser extends AlpacaDevice {
 	}
 
 	get isAbsolute() {
-		return this.position === this.absolutePosition
+		return this.#position === this.#absolutePosition
 	}
 
 	get isFocusIn() {
-		return this.direction.elements.FOCUS_INWARD.value === true
+		return this.#direction.elements.FOCUS_INWARD.value === true
 	}
 
 	get isFocusOut() {
-		return this.direction.elements.FOCUS_OUTWARD.value === true
+		return this.#direction.elements.FOCUS_OUTWARD.value === true
 	}
 
 	protected handleEndpointsAfterRun() {
@@ -1491,23 +1491,23 @@ class AlpacaFocuser extends AlpacaDevice {
 		if (Step === 1) {
 			if (MaxStep) {
 				if (IsAbsolute) {
-					this.absolutePosition.elements.FOCUS_ABSOLUTE_POSITION.max = MaxStep
-					this.position = this.absolutePosition
+					this.#absolutePosition.elements.FOCUS_ABSOLUTE_POSITION.max = MaxStep
+					this.#position = this.#absolutePosition
 				} else {
-					this.relativePosition.elements.FOCUS_RELATIVE_POSITION.max = MaxStep
-					this.position = this.relativePosition
+					this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.max = MaxStep
+					this.#position = this.#relativePosition
 				}
 
-				this.sendDefProperty(this.position)
+				this.sendDefProperty(this.#position)
 			}
 
 			if (Temperature !== undefined) {
-				this.temperature.elements.TEMPERATURE.value = Math.trunc(Temperature)
-				this.sendDefProperty(this.temperature)
+				this.#temperature.elements.TEMPERATURE.value = Math.trunc(Temperature)
+				this.sendDefProperty(this.#temperature)
 			}
 
-			this.sendDefProperty(this.direction)
-			this.sendDefProperty(this.abort)
+			this.sendDefProperty(this.#direction)
+			this.sendDefProperty(this.#abort)
 
 			this.disableEndpoints(...this.initialEndpoints)
 
@@ -1515,12 +1515,12 @@ class AlpacaFocuser extends AlpacaDevice {
 		}
 		// State
 		else if (Step === 2) {
-			let updated = this.updatePropertyState(this.position, IsMoving ? 'Busy' : 'Idle')
-			if (IsAbsolute) updated = this.updatePropertyValue(this.position, 'FOCUS_ABSOLUTE_POSITION', Position) || updated
-			updated && this.sendSetProperty(this.position)
+			let updated = this.updatePropertyState(this.#position, IsMoving ? 'Busy' : 'Idle')
+			if (IsAbsolute) updated = this.updatePropertyValue(this.#position, 'FOCUS_ABSOLUTE_POSITION', Position) || updated
+			updated && this.sendSetProperty(this.#position)
 
 			if (Temperature !== undefined) {
-				this.updatePropertyValue(this.temperature, 'TEMPERATURE', Math.trunc(Temperature)) && this.sendSetProperty(this.temperature)
+				this.updatePropertyValue(this.#temperature, 'TEMPERATURE', Math.trunc(Temperature)) && this.sendSetProperty(this.#temperature)
 			}
 		}
 
@@ -1535,8 +1535,8 @@ class AlpacaFocuser extends AlpacaDevice {
 				if (vector.elements.ABORT === true) void this.api.halt(this.id)
 				break
 			case 'FOCUS_MOTION':
-				if (vector.elements.FOCUS_INWARD === true) this.updatePropertyValue(this.direction, 'FOCUS_INWARD', true)
-				else if (vector.elements.FOCUS_OUTWARD === true) this.updatePropertyValue(this.direction, 'FOCUS_OUTWARD', true)
+				if (vector.elements.FOCUS_INWARD === true) this.updatePropertyValue(this.#direction, 'FOCUS_INWARD', true)
+				else if (vector.elements.FOCUS_OUTWARD === true) this.updatePropertyValue(this.#direction, 'FOCUS_OUTWARD', true)
 				break
 		}
 	}
@@ -1569,10 +1569,10 @@ interface AlpacaClientCoverCalibratorState extends AlpacaClientDeviceState {
 class AlpacaCoverCalibrator extends AlpacaDevice {
 	protected readonly api: AlpacaCoverCalibratorApi
 
-	private readonly light = makeSwitchVector('', 'FLAT_LIGHT_CONTROL', 'Light', MAIN_CONTROL, 'OneOfMany', 'rw', ['FLAT_LIGHT_ON', 'On', false], ['FLAT_LIGHT_OFF', 'Off', true])
-	private readonly brightness = makeNumberVector('', 'FLAT_LIGHT_INTENSITY', 'Brightness', MAIN_CONTROL, 'rw', ['FLAT_LIGHT_INTENSITY_VALUE', 'Brightness', 0, 0, 0, 1, '%.0f'])
-	private readonly park = makeSwitchVector('', 'CAP_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
-	private readonly abort = makeSwitchVector('', 'CAP_ABORT', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+	readonly #light = makeSwitchVector('', 'FLAT_LIGHT_CONTROL', 'Light', MAIN_CONTROL, 'OneOfMany', 'rw', ['FLAT_LIGHT_ON', 'On', false], ['FLAT_LIGHT_OFF', 'Off', true])
+	readonly #brightness = makeNumberVector('', 'FLAT_LIGHT_INTENSITY', 'Brightness', MAIN_CONTROL, 'rw', ['FLAT_LIGHT_INTENSITY_VALUE', 'Brightness', 0, 0, 0, 1, '%.0f'])
+	readonly #park = makeSwitchVector('', 'CAP_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
+	readonly #abort = makeSwitchVector('', 'CAP_ABORT', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 
 	// https://ascom-standards.org/newdocs/covercalibrator.html#CoverCalibrator.DeviceState
 	protected readonly state: AlpacaClientCoverCalibratorState = { Connected: false, DeviceState: undefined, Step: 0, CoverState: 0, CoverMoving: false, CalibratorState: 0, Brightness: 0, MaxBrightness: undefined }
@@ -1584,10 +1584,10 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 
 		const api = new AlpacaCoverCalibratorApi(client.url)
 
-		this.light.device = device.DeviceName
-		this.brightness.device = device.DeviceName
-		this.park.device = device.DeviceName
-		this.abort.device = device.DeviceName
+		this.#light.device = device.DeviceName
+		this.#brightness.device = device.DeviceName
+		this.#park.device = device.DeviceName
+		this.#abort.device = device.DeviceName
 
 		this.runner.registerEndpoint('MaxBrightness', api.getMaxBrightness.bind(api, this.id), false)
 		this.runner.registerEndpoint('Brightness', api.getBrightness.bind(api, this.id), false)
@@ -1621,15 +1621,15 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 			}
 
 			if (hasCover) {
-				this.sendDefProperty(this.park)
-				this.sendDefProperty(this.abort)
+				this.sendDefProperty(this.#park)
+				this.sendDefProperty(this.#abort)
 			}
 
 			if (hasCalibrator) {
 				if (MaxBrightness) {
-					this.sendDefProperty(this.light)
-					this.brightness.elements.FLAT_LIGHT_INTENSITY_VALUE.max = MaxBrightness
-					this.sendDefProperty(this.brightness)
+					this.sendDefProperty(this.#light)
+					this.#brightness.elements.FLAT_LIGHT_INTENSITY_VALUE.max = MaxBrightness
+					this.sendDefProperty(this.#brightness)
 				}
 			}
 
@@ -1640,17 +1640,17 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 		// State
 		else if (Step === 2) {
 			if (CoverState !== 0) {
-				let updated = this.updatePropertyState(this.park, CoverState === 2 || CoverMoving ? 'Busy' : 'Idle')
-				if (CoverState === 1 || CoverState === 2) updated = this.updatePropertyValue(this.park, CoverState === 1 ? 'PARK' : 'UNPARK', true) || updated
-				updated && this.sendSetProperty(this.park)
+				let updated = this.updatePropertyState(this.#park, CoverState === 2 || CoverMoving ? 'Busy' : 'Idle')
+				if (CoverState === 1 || CoverState === 2) updated = this.updatePropertyValue(this.#park, CoverState === 1 ? 'PARK' : 'UNPARK', true) || updated
+				updated && this.sendSetProperty(this.#park)
 			}
 
 			if (CalibratorState !== 0) {
 				if (CalibratorState === 3) {
-					this.updatePropertyValue(this.light, 'FLAT_LIGHT_ON', true) && this.sendSetProperty(this.light)
-					this.updatePropertyValue(this.brightness, 'FLAT_LIGHT_INTENSITY_VALUE', Brightness as number) && this.sendSetProperty(this.brightness)
+					this.updatePropertyValue(this.#light, 'FLAT_LIGHT_ON', true) && this.sendSetProperty(this.#light)
+					this.updatePropertyValue(this.#brightness, 'FLAT_LIGHT_INTENSITY_VALUE', Brightness as number) && this.sendSetProperty(this.#brightness)
 				} else if (CalibratorState === 1) {
-					this.updatePropertyValue(this.light, 'FLAT_LIGHT_OFF', true) && this.sendSetProperty(this.light)
+					this.updatePropertyValue(this.#light, 'FLAT_LIGHT_OFF', true) && this.sendSetProperty(this.#light)
 				}
 			}
 		}
@@ -1670,7 +1670,7 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 				else if (vector.elements.UNPARK === true) void this.api.open(this.id)
 				break
 			case 'FLAT_LIGHT_CONTROL':
-				if (vector.elements.FLAT_LIGHT_ON === true) void this.api.on(this.id, Math.max(1, this.brightness.elements.FLAT_LIGHT_INTENSITY_VALUE.value))
+				if (vector.elements.FLAT_LIGHT_ON === true) void this.api.on(this.id, Math.max(1, this.#brightness.elements.FLAT_LIGHT_INTENSITY_VALUE.value))
 				else if (vector.elements.FLAT_LIGHT_OFF === true) void this.api.off(this.id)
 				break
 		}
@@ -1700,10 +1700,10 @@ interface AlpacaClientRotatorState extends AlpacaClientDeviceState {
 class AlpacaRotator extends AlpacaDevice {
 	protected readonly api: AlpacaRotatorApi
 
-	private readonly angle = makeNumberVector('', 'ABS_ROTATOR_ANGLE', 'Goto', MAIN_CONTROL, 'rw', ['ANGLE', 'Angle', 0, 0, 360, 0.01, '%.2f'])
-	private readonly reverse = makeSwitchVector('', 'ROTATOR_REVERSE', 'Reverse', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
-	private readonly abort = makeSwitchVector('', 'ROTATOR_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
-	private readonly sync = makeNumberVector('', 'SYNC_ROTATOR_ANGLE', 'Sync', MAIN_CONTROL, 'rw', ['ANGLE', 'Angle', 0, 0, 360, 0.01, '%.2f'])
+	readonly #angle = makeNumberVector('', 'ABS_ROTATOR_ANGLE', 'Goto', MAIN_CONTROL, 'rw', ['ANGLE', 'Angle', 0, 0, 360, 0.01, '%.2f'])
+	readonly #reverse = makeSwitchVector('', 'ROTATOR_REVERSE', 'Reverse', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+	readonly #abort = makeSwitchVector('', 'ROTATOR_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+	readonly #sync = makeNumberVector('', 'SYNC_ROTATOR_ANGLE', 'Sync', MAIN_CONTROL, 'rw', ['ANGLE', 'Angle', 0, 0, 360, 0.01, '%.2f'])
 
 	// https://ascom-standards.org/newdocs/rotator.html#Rotator.DeviceState
 	protected readonly state: AlpacaClientRotatorState = { Connected: false, DeviceState: undefined, Step: 0, IsMoving: false, Position: 0, CanReverse: false, IsReverse: false }
@@ -1716,10 +1716,10 @@ class AlpacaRotator extends AlpacaDevice {
 
 		const api = new AlpacaRotatorApi(client.url)
 
-		this.angle.device = device.DeviceName
-		this.reverse.device = device.DeviceName
-		this.abort.device = device.DeviceName
-		this.sync.device = device.DeviceName
+		this.#angle.device = device.DeviceName
+		this.#reverse.device = device.DeviceName
+		this.#abort.device = device.DeviceName
+		this.#sync.device = device.DeviceName
 
 		this.runner.registerEndpoint('IsMoving', api.isMoving.bind(api, this.id), false)
 		this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
@@ -1736,13 +1736,13 @@ class AlpacaRotator extends AlpacaDevice {
 
 		// Initial
 		if (Step === 1) {
-			this.sendDefProperty(this.angle)
-			this.sendDefProperty(this.abort)
-			this.sendDefProperty(this.sync)
+			this.sendDefProperty(this.#angle)
+			this.sendDefProperty(this.#abort)
+			this.sendDefProperty(this.#sync)
 
 			if (CanReverse) {
-				this.updatePropertyValue(this.reverse, IsReverse ? 'INDI_ENABLED' : 'INDI_DISABLED', true)
-				this.sendDefProperty(this.reverse)
+				this.updatePropertyValue(this.#reverse, IsReverse ? 'INDI_ENABLED' : 'INDI_DISABLED', true)
+				this.sendDefProperty(this.#reverse)
 			}
 
 			this.disableEndpoints(...this.initialEndpoints)
@@ -1751,11 +1751,11 @@ class AlpacaRotator extends AlpacaDevice {
 		}
 		// State
 		else if (Step === 2) {
-			let updated = this.updatePropertyState(this.angle, IsMoving ? 'Busy' : 'Idle')
-			updated = this.updatePropertyValue(this.angle, 'ANGLE', Position) || updated
-			updated && this.sendSetProperty(this.angle)
+			let updated = this.updatePropertyState(this.#angle, IsMoving ? 'Busy' : 'Idle')
+			updated = this.updatePropertyValue(this.#angle, 'ANGLE', Position) || updated
+			updated && this.sendSetProperty(this.#angle)
 
-			this.state.CanReverse && IsReverse !== undefined && this.updatePropertyValue(this.reverse, IsReverse ? 'INDI_ENABLED' : 'INDI_DISABLED', true) && this.sendSetProperty(this.reverse)
+			this.state.CanReverse && IsReverse !== undefined && this.updatePropertyValue(this.#reverse, IsReverse ? 'INDI_ENABLED' : 'INDI_DISABLED', true) && this.sendSetProperty(this.#reverse)
 		}
 
 		return true
@@ -1923,92 +1923,92 @@ type AlpacaApiRunnerEndpoint = () => PromiseLike<unknown>
 type AlpacaApiRunnerHandlerAfterRun = () => void
 
 class AlpacaApiRunner {
-	private readonly keys: string[] = []
-	private readonly endpoints: AlpacaApiRunnerEndpoint[] = []
-	private readonly enabled: boolean[] = []
-	private readonly interval: number[] = []
-	private readonly count: number[] = []
-	private readonly result: (PromiseLike<unknown> | undefined)[] = []
-	private readonly handlers = new Set<AlpacaApiRunnerHandlerAfterRun>()
+	readonly #keys: string[] = []
+	readonly #endpoints: AlpacaApiRunnerEndpoint[] = []
+	readonly #enabled: boolean[] = []
+	readonly #interval: number[] = []
+	readonly #count: number[] = []
+	readonly #result: (PromiseLike<unknown> | undefined)[] = []
+	readonly #handlers = new Set<AlpacaApiRunnerHandlerAfterRun>()
 
 	registerEndpoint(key: string, endpoint: AlpacaApiRunnerEndpoint, enabled: boolean, interval: number = 1) {
-		const index = this.keys.indexOf(key)
+		const index = this.#keys.indexOf(key)
 
 		if (index >= 0) {
-			this.keys[index] = key
-			this.endpoints[index] = endpoint
-			this.enabled[index] = enabled
-			this.interval[index] = interval
-			this.count[index] = 0
+			this.#keys[index] = key
+			this.#endpoints[index] = endpoint
+			this.#enabled[index] = enabled
+			this.#interval[index] = interval
+			this.#count[index] = 0
 		} else {
-			this.keys.push(key)
-			this.endpoints.push(endpoint)
-			this.enabled.push(enabled)
-			this.interval.push(interval)
-			this.count.push(0)
+			this.#keys.push(key)
+			this.#endpoints.push(endpoint)
+			this.#enabled.push(enabled)
+			this.#interval.push(interval)
+			this.#count.push(0)
 		}
 	}
 
 	unregisterEndpoint(key: string) {
-		const index = this.keys.indexOf(key)
+		const index = this.#keys.indexOf(key)
 
 		if (index >= 0) {
-			this.keys.splice(index, 1)
-			this.endpoints.splice(index, 1)
-			this.enabled.splice(index, 1)
-			this.result.splice(index, 1)
+			this.#keys.splice(index, 1)
+			this.#endpoints.splice(index, 1)
+			this.#enabled.splice(index, 1)
+			this.#result.splice(index, 1)
 		}
 	}
 
 	toggleEndpoint(key: string, force?: boolean) {
-		const index = this.keys.indexOf(key)
-		if (index >= 0) this.enabled[index] = force ?? !this.enabled[index]
+		const index = this.#keys.indexOf(key)
+		if (index >= 0) this.#enabled[index] = force ?? !this.#enabled[index]
 		else console.warn('endpoint not found:', key)
-		if (index >= 0 && this.enabled[index]) this.count[index] = 0
+		if (index >= 0 && this.#enabled[index]) this.#count[index] = 0
 	}
 
 	isEndpointEnabled(key: string) {
-		const index = this.keys.indexOf(key)
-		return index >= 0 && this.enabled[index]
+		const index = this.#keys.indexOf(key)
+		return index >= 0 && this.#enabled[index]
 	}
 
 	registerHandler(handler: AlpacaApiRunnerHandlerAfterRun) {
-		this.handlers.add(handler)
+		this.#handlers.add(handler)
 	}
 
 	unregisterHandler(handler: AlpacaApiRunnerHandlerAfterRun) {
-		this.handlers.delete(handler)
+		this.#handlers.delete(handler)
 	}
 
 	run(state: Record<string, ValueType>) {
-		const n = this.keys.length
+		const n = this.#keys.length
 
 		for (let i = 0; i < n; i++) {
-			if (this.enabled[i] && (this.interval[i] <= 1 || this.count[i] % this.interval[i] === 0)) {
-				this.result[i] = this.endpoints[i]()
+			if (this.#enabled[i] && (this.#interval[i] <= 1 || this.#count[i] % this.#interval[i] === 0)) {
+				this.#result[i] = this.#endpoints[i]()
 			} else {
-				this.result[i] = undefined
+				this.#result[i] = undefined
 			}
 
-			this.count[i]++
+			this.#count[i]++
 		}
 
-		return this.handleEndpointsAfterRun(state)
+		return this.#handleEndpointsAfterRun(state)
 	}
 
-	private async handleEndpointsAfterRun(state: Record<string, ValueType>) {
-		const result = await Promise.all(this.result)
+	async #handleEndpointsAfterRun(state: Record<string, ValueType>) {
+		const result = await Promise.all(this.#result)
 		const n = result.length
 
 		for (let i = 0; i < n; i++) {
 			const value = result[i] as never
 
-			if (this.enabled[i]) {
-				state[this.keys[i]] = value
+			if (this.#enabled[i]) {
+				state[this.#keys[i]] = value
 			}
 		}
 
-		for (const handler of this.handlers) {
+		for (const handler of this.#handlers) {
 			handler()
 		}
 	}

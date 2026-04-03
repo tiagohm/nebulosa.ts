@@ -100,8 +100,8 @@ export function mpcComet(mpc: MPCOrbitComet) {
 }
 
 export class KeplerOrbit implements OsculatingElements {
-	private readonly oe: Partial<Writable<OsculatingElements>> = {}
-	private readonly propagation: PropagationParameters
+	readonly #oe: Partial<Writable<OsculatingElements>> = {}
+	readonly #propagation: PropagationParameters
 
 	constructor(
 		readonly position: CartesianCoordinate,
@@ -110,93 +110,93 @@ export class KeplerOrbit implements OsculatingElements {
 		readonly mu: number = GM_SUN_PITJEVA_2005,
 		readonly rotation: Mat3 = REFERENCE_FRAME,
 	) {
-		this.propagation = propagationParameters(position, velocity, mu)
+		this.#propagation = propagationParameters(position, velocity, mu)
 	}
 
 	get apoapsisDistance() {
-		if (this.oe.apoapsisDistance) return this.oe.apoapsisDistance
-		this.oe.apoapsisDistance = apoapsisDistance(this.semiLatusRectum, this.eccentricity)
-		return this.oe.apoapsisDistance
+		if (this.#oe.apoapsisDistance) return this.#oe.apoapsisDistance
+		this.#oe.apoapsisDistance = apoapsisDistance(this.semiLatusRectum, this.eccentricity)
+		return this.#oe.apoapsisDistance
 	}
 
 	get argumentOfLatitude() {
-		if (this.oe.argumentOfLatitude) return this.oe.argumentOfLatitude
-		this.oe.argumentOfLatitude = argumentOfLatitude(this.argumentOfPeriapsis, this.trueAnomaly)
-		return this.oe.argumentOfLatitude
+		if (this.#oe.argumentOfLatitude) return this.#oe.argumentOfLatitude
+		this.#oe.argumentOfLatitude = argumentOfLatitude(this.argumentOfPeriapsis, this.trueAnomaly)
+		return this.#oe.argumentOfLatitude
 	}
 
 	get argumentOfPeriapsis() {
-		if (this.oe.argumentOfPeriapsis) return this.oe.argumentOfPeriapsis
-		this.oe.argumentOfPeriapsis = argumentOfPeriapsis(this.eccentricityVector, this.nodeVector, this.propagation.hv)
-		return this.oe.argumentOfPeriapsis
+		if (this.#oe.argumentOfPeriapsis) return this.#oe.argumentOfPeriapsis
+		this.#oe.argumentOfPeriapsis = argumentOfPeriapsis(this.eccentricityVector, this.nodeVector, this.#propagation.hv)
+		return this.#oe.argumentOfPeriapsis
 	}
 
 	get eccentricAnomaly() {
-		if (this.oe.eccentricAnomaly) return this.oe.eccentricAnomaly
-		this.oe.eccentricAnomaly = eccentricAnomaly(this.trueAnomaly, this.eccentricity)
-		return this.oe.eccentricAnomaly
+		if (this.#oe.eccentricAnomaly) return this.#oe.eccentricAnomaly
+		this.#oe.eccentricAnomaly = eccentricAnomaly(this.trueAnomaly, this.eccentricity)
+		return this.#oe.eccentricAnomaly
 	}
 
 	get eccentricityVector() {
-		if (this.oe.eccentricityVector) return this.oe.eccentricityVector
-		const rv0 = vecMulScalar(this.position, this.propagation.v0 ** 2 - this.mu / this.propagation.r0)
-		const vrv = vecMulScalar(this.velocity, this.propagation.rv)
-		this.oe.eccentricityVector = vecDivScalar(vecMinus(rv0, vrv, rv0), this.mu, rv0)
-		return this.oe.eccentricityVector
+		if (this.#oe.eccentricityVector) return this.#oe.eccentricityVector
+		const rv0 = vecMulScalar(this.position, this.#propagation.v0 ** 2 - this.mu / this.#propagation.r0)
+		const vrv = vecMulScalar(this.velocity, this.#propagation.rv)
+		this.#oe.eccentricityVector = vecDivScalar(vecMinus(rv0, vrv, rv0), this.mu, rv0)
+		return this.#oe.eccentricityVector
 	}
 
 	get eccentricity() {
-		if (this.oe.eccentricity) return this.oe.eccentricity
-		this.oe.eccentricity = vecLength(this.eccentricityVector)
-		return this.oe.eccentricity
+		if (this.#oe.eccentricity) return this.#oe.eccentricity
+		this.#oe.eccentricity = vecLength(this.eccentricityVector)
+		return this.#oe.eccentricity
 	}
 
 	get inclination() {
-		if (this.oe.inclination) return this.oe.inclination
-		this.oe.inclination = Math.acos(this.propagation.hv[2] / this.propagation.hvl)
-		return this.oe.inclination
+		if (this.#oe.inclination) return this.#oe.inclination
+		this.#oe.inclination = Math.acos(this.#propagation.hv[2] / this.#propagation.hvl)
+		return this.#oe.inclination
 	}
 
 	get longitudeOfAscendingNode() {
-		if (this.oe.longitudeOfAscendingNode) return this.oe.longitudeOfAscendingNode
-		this.oe.longitudeOfAscendingNode = longitudeOfAscendingNode(this.propagation.hv, this.inclination)
-		return this.oe.longitudeOfAscendingNode
+		if (this.#oe.longitudeOfAscendingNode) return this.#oe.longitudeOfAscendingNode
+		this.#oe.longitudeOfAscendingNode = longitudeOfAscendingNode(this.#propagation.hv, this.inclination)
+		return this.#oe.longitudeOfAscendingNode
 	}
 
 	get longitudeOfPeriapsis() {
-		if (this.oe.longitudeOfPeriapsis) return this.oe.longitudeOfPeriapsis
-		this.oe.longitudeOfPeriapsis = longitudeOfPeriapsis(this.longitudeOfAscendingNode, this.argumentOfPeriapsis)
-		return this.oe.longitudeOfPeriapsis
+		if (this.#oe.longitudeOfPeriapsis) return this.#oe.longitudeOfPeriapsis
+		this.#oe.longitudeOfPeriapsis = longitudeOfPeriapsis(this.longitudeOfAscendingNode, this.argumentOfPeriapsis)
+		return this.#oe.longitudeOfPeriapsis
 	}
 
 	get meanAnomaly() {
-		if (this.oe.meanAnomaly) return this.oe.meanAnomaly
-		this.oe.meanAnomaly = meanAnomaly(this.eccentricAnomaly, this.eccentricity)
-		return this.oe.meanAnomaly
+		if (this.#oe.meanAnomaly) return this.#oe.meanAnomaly
+		this.#oe.meanAnomaly = meanAnomaly(this.eccentricAnomaly, this.eccentricity)
+		return this.#oe.meanAnomaly
 	}
 
 	get meanLongitude() {
-		if (this.oe.meanLongitude) return this.oe.meanLongitude
-		this.oe.meanLongitude = meanLongitude(this.longitudeOfAscendingNode, this.argumentOfPeriapsis, this.meanAnomaly)
-		return this.oe.meanLongitude
+		if (this.#oe.meanLongitude) return this.#oe.meanLongitude
+		this.#oe.meanLongitude = meanLongitude(this.longitudeOfAscendingNode, this.argumentOfPeriapsis, this.meanAnomaly)
+		return this.#oe.meanLongitude
 	}
 
 	get meanMotionPerDay() {
-		if (this.oe.meanMotionPerDay) return this.oe.meanMotionPerDay
-		this.oe.meanMotionPerDay = meanMotion(this.semiMajorAxis, this.mu)
-		return this.oe.meanMotionPerDay
+		if (this.#oe.meanMotionPerDay) return this.#oe.meanMotionPerDay
+		this.#oe.meanMotionPerDay = meanMotion(this.semiMajorAxis, this.mu)
+		return this.#oe.meanMotionPerDay
 	}
 
 	get nodeVector() {
-		if (this.oe.nodeVector) return this.oe.nodeVector
-		this.oe.nodeVector = nodeVector(this.propagation.hv)
-		return this.oe.nodeVector
+		if (this.#oe.nodeVector) return this.#oe.nodeVector
+		this.#oe.nodeVector = nodeVector(this.#propagation.hv)
+		return this.#oe.nodeVector
 	}
 
 	get periapsisDistance() {
-		if (this.oe.periapsisDistance) return this.oe.periapsisDistance
-		this.oe.periapsisDistance = periapsisDistance(this.semiLatusRectum, this.eccentricity)
-		return this.oe.periapsisDistance
+		if (this.#oe.periapsisDistance) return this.#oe.periapsisDistance
+		this.#oe.periapsisDistance = periapsisDistance(this.semiLatusRectum, this.eccentricity)
+		return this.#oe.periapsisDistance
 	}
 
 	get periapsisTime() {
@@ -207,43 +207,43 @@ export class KeplerOrbit implements OsculatingElements {
 	}
 
 	get periodInDays() {
-		if (this.oe.periodInDays) return this.oe.periodInDays
-		this.oe.periodInDays = period(this.semiMajorAxis, this.mu)
-		return this.oe.periodInDays
+		if (this.#oe.periodInDays) return this.#oe.periodInDays
+		this.#oe.periodInDays = period(this.semiMajorAxis, this.mu)
+		return this.#oe.periodInDays
 	}
 
 	get semiLatusRectum() {
-		if (this.oe.semiLatusRectum) return this.oe.semiLatusRectum
-		this.oe.semiLatusRectum = this.propagation.hvl ** 2 / this.mu
-		return this.oe.semiLatusRectum
+		if (this.#oe.semiLatusRectum) return this.#oe.semiLatusRectum
+		this.#oe.semiLatusRectum = this.#propagation.hvl ** 2 / this.mu
+		return this.#oe.semiLatusRectum
 	}
 
 	get semiMajorAxis() {
-		if (this.oe.semiMajorAxis) return this.oe.semiMajorAxis
-		this.oe.semiMajorAxis = semiMajorAxis(this.semiLatusRectum, this.eccentricity)
-		return this.oe.semiMajorAxis
+		if (this.#oe.semiMajorAxis) return this.#oe.semiMajorAxis
+		this.#oe.semiMajorAxis = semiMajorAxis(this.semiLatusRectum, this.eccentricity)
+		return this.#oe.semiMajorAxis
 	}
 
 	get semiMinorAxis() {
-		if (this.oe.semiMinorAxis) return this.oe.semiMinorAxis
-		this.oe.semiMinorAxis = semiMinorAxis(this.semiLatusRectum, this.eccentricity)
-		return this.oe.semiMinorAxis
+		if (this.#oe.semiMinorAxis) return this.#oe.semiMinorAxis
+		this.#oe.semiMinorAxis = semiMinorAxis(this.semiLatusRectum, this.eccentricity)
+		return this.#oe.semiMinorAxis
 	}
 
 	get trueAnomaly() {
-		if (this.oe.trueAnomaly) return this.oe.trueAnomaly
-		this.oe.trueAnomaly = trueAnomaly(this.eccentricityVector, this.position, this.velocity, this.nodeVector)
-		return this.oe.trueAnomaly
+		if (this.#oe.trueAnomaly) return this.#oe.trueAnomaly
+		this.#oe.trueAnomaly = trueAnomaly(this.eccentricityVector, this.position, this.velocity, this.nodeVector)
+		return this.#oe.trueAnomaly
 	}
 
 	get trueLongitude() {
-		if (this.oe.trueLongitude) return this.oe.trueLongitude
-		this.oe.trueLongitude = meanLongitude(this.longitudeOfAscendingNode, this.argumentOfPeriapsis, this.trueAnomaly)
-		return this.oe.trueLongitude
+		if (this.#oe.trueLongitude) return this.#oe.trueLongitude
+		this.#oe.trueLongitude = meanLongitude(this.longitudeOfAscendingNode, this.argumentOfPeriapsis, this.trueAnomaly)
+		return this.#oe.trueLongitude
 	}
 
 	at(time: Time) {
-		const pv = propagate(this.position, this.velocity, this.epoch, time, this.propagation)
+		const pv = propagate(this.position, this.velocity, this.epoch, time, this.#propagation)
 
 		if (this.rotation) {
 			matMulVec(this.rotation, pv[0], pv[0] as never)

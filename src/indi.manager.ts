@@ -42,57 +42,57 @@ const DEVICES = {
 } as const
 
 export class DevicePropertyManager implements IndiClientHandler, DevicePropertyHandler {
-	private readonly clients = new Map<string, Client>()
-	private readonly properties = new Map<Client, Map<string, DeviceProperties>>()
-	private readonly handlers = new Set<DevicePropertyHandler>()
+	readonly #clients = new Map<string, Client>()
+	readonly #properties = new Map<Client, Map<string, DeviceProperties>>()
+	readonly #handlers = new Set<DevicePropertyHandler>()
 
 	get length() {
-		return this.properties.size
+		return this.#properties.size
 	}
 
 	addHandler(handler: DevicePropertyHandler) {
-		this.handlers.add(handler)
+		this.#handlers.add(handler)
 	}
 
 	removeHandler(handler: DevicePropertyHandler) {
-		this.handlers.delete(handler)
+		this.#handlers.delete(handler)
 	}
 
 	added(client: Client, device: string, property: DeviceProperty) {
-		this.handlers.forEach((e) => e.added(client, device, property))
+		this.#handlers.forEach((e) => e.added(client, device, property))
 	}
 
 	updated(client: Client, device: string, property: DeviceProperty) {
-		this.handlers.forEach((e) => e.updated(client, device, property))
+		this.#handlers.forEach((e) => e.updated(client, device, property))
 	}
 
 	removed(client: Client, device: string, property: DeviceProperty) {
-		this.handlers.forEach((e) => e.removed(client, device, property))
+		this.#handlers.forEach((e) => e.removed(client, device, property))
 	}
 
 	names(client: Client | string) {
-		client = typeof client === 'string' ? this.clients.get(client)! : client
-		return Array.from(this.properties.get(client)?.keys() ?? [])
+		client = typeof client === 'string' ? this.#clients.get(client)! : client
+		return Array.from(this.#properties.get(client)?.keys() ?? [])
 	}
 
 	get(client: Client | string, name: string) {
-		client = typeof client === 'string' ? this.clients.get(client)! : client
-		return this.properties.get(client)?.get(name)
+		client = typeof client === 'string' ? this.#clients.get(client)! : client
+		return this.#properties.get(client)?.get(name)
 	}
 
 	has(client: Client | string, name: string) {
-		client = typeof client === 'string' ? this.clients.get(client)! : client
-		return this.properties.get(client)?.has(name) === true
+		client = typeof client === 'string' ? this.#clients.get(client)! : client
+		return this.#properties.get(client)?.has(name) === true
 	}
 
 	vector(client: Client, message: DefVector | SetVector, tag: string) {
 		const { device } = message
-		let map = this.properties.get(client)
+		let map = this.#properties.get(client)
 
 		if (!map) {
 			map = new Map()
-			this.properties.set(client, map)
-			this.clients.set(client.id, client)
+			this.#properties.set(client, map)
+			this.#clients.set(client.id, client)
 		}
 
 		let properties = map.get(device)
@@ -161,14 +161,14 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 
 			if (property) {
 				delete properties[name]
-				if (Object.keys(properties).length === 0) this.properties.get(client)?.delete(device)
+				if (Object.keys(properties).length === 0) this.#properties.get(client)?.delete(device)
 				this.removed(client, device, property)
 				return true
 			}
 		} else {
 			// TODO: should notify once for all properties being removed?
 			// for (const [_, property] of Object.entries(properties)) this.removed(device, property)
-			this.properties.get(client)?.delete(device)
+			this.#properties.get(client)?.delete(device)
 			return true
 		}
 
@@ -176,7 +176,7 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 	}
 
 	close(client: Client, server: boolean) {
-		this.clients.delete(client.id)
+		this.#clients.delete(client.id)
 	}
 }
 
@@ -507,8 +507,8 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 // https://github.com/indilib/indi/blob/master/libs/indibase/indiccd.cpp
 
 export class CameraManager extends DeviceManager<Camera> {
-	private readonly gainProperty = new Map<string, readonly [string, string]>()
-	private readonly offsetProperty = new Map<string, readonly [string, string]>()
+	readonly #gainProperties = new Map<string, readonly [string, string]>()
+	readonly #offsetProperties = new Map<string, readonly [string, string]>()
 
 	cooler(camera: Camera, value: boolean, client = camera[CLIENT]!) {
 		if (camera.hasCoolerControl) {
@@ -546,7 +546,7 @@ export class CameraManager extends DeviceManager<Camera> {
 	}
 
 	gain(camera: Camera, value: number, client = camera[CLIENT]!) {
-		const property = this.gainProperty.get(camera.name)
+		const property = this.#gainProperties.get(camera.name)
 
 		if (property) {
 			const [name, element] = property
@@ -555,7 +555,7 @@ export class CameraManager extends DeviceManager<Camera> {
 	}
 
 	offset(camera: Camera, value: number, client = camera[CLIENT]!) {
-		const property = this.offsetProperty.get(camera.name)
+		const property = this.#offsetProperties.get(camera.name)
 
 		if (property) {
 			const [name, element] = property
@@ -737,12 +737,12 @@ export class CameraManager extends DeviceManager<Camera> {
 			case 'CCD_CONTROLS':
 				if (handleMinMaxValue(device.gain, message.elements.Gain, tag)) {
 					this.updated(device, 'gain', message.state)
-					this.gainProperty.set(device.name, [message.name, 'Gain'])
+					this.#gainProperties.set(device.name, [message.name, 'Gain'])
 				}
 
 				if (handleMinMaxValue(device.offset, message.elements.Offset, tag)) {
 					this.updated(device, 'offset', message.state)
-					this.offsetProperty.set(device.name, [message.name, 'Offset'])
+					this.#offsetProperties.set(device.name, [message.name, 'Offset'])
 				}
 
 				return
@@ -750,14 +750,14 @@ export class CameraManager extends DeviceManager<Camera> {
 			case 'CCD_GAIN':
 				if (handleMinMaxValue(device.gain, message.elements.GAIN, tag)) {
 					this.updated(device, 'gain', message.state)
-					this.gainProperty.set(device.name, [message.name, 'GAIN'])
+					this.#gainProperties.set(device.name, [message.name, 'GAIN'])
 				}
 
 				return
 			case 'CCD_OFFSET':
 				if (handleMinMaxValue(device.offset, message.elements.OFFSET, tag)) {
 					this.updated(device, 'offset', message.state)
-					this.offsetProperty.set(device.name, [message.name, 'OFFSET'])
+					this.#offsetProperties.set(device.name, [message.name, 'OFFSET'])
 				}
 
 				return
@@ -1534,14 +1534,14 @@ export class RotatorManager extends DeviceManager<Rotator> {
 }
 
 export class DewHeaterManager extends DeviceManager<DewHeater> {
-	private readonly pwmProperty = new Map<string, readonly [string, string]>()
+	readonly #pwmProperties = new Map<string, readonly [string, string]>()
 
 	constructor(readonly provider: DeviceProvider<DewHeater>) {
 		super()
 	}
 
 	dutyCycle(heater: DewHeater, value: number, client = heater[CLIENT]!) {
-		const property = this.pwmProperty.get(heater.name)
+		const property = this.#pwmProperties.get(heater.name)
 
 		if (property) {
 			const [name, element] = property
@@ -1560,7 +1560,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 						if (handleSwitchValue(device, 'hasDewHeater', true)) {
 							if (this.add(device)) {
 								this.updated(device, 'hasDewHeater', message.state)
-								this.pwmProperty.set(device.name, [message.name, 'Heater'])
+								this.#pwmProperties.set(device.name, [message.name, 'Heater'])
 							}
 						}
 					}

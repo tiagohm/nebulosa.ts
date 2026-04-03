@@ -21,8 +21,8 @@ export interface StellariumProtocolServerOptions {
 // https://github.com/Stellarium/stellarium/blob/master/plugins/TelescopeControl/src/TelescopeClient.cpp
 
 export class StellariumProtocolServer {
-	private readonly sockets: Socket<unknown>[] = []
-	private server?: TCPSocketListener
+	readonly #sockets: Socket<unknown>[] = []
+	#server?: TCPSocketListener
 
 	constructor(
 		readonly host: string,
@@ -31,25 +31,25 @@ export class StellariumProtocolServer {
 	) {}
 
 	start() {
-		if (this.server) return false
+		if (this.#server) return false
 
-		this.server = Bun.listen({
+		this.#server = Bun.listen({
 			hostname: this.host,
 			port: this.port,
 			allowHalfOpen: false,
 			socket: {
 				data: (_, data) => {
-					this.processData(data)
+					this.#processData(data)
 				},
 				open: (socket) => {
 					console.info('connection open')
-					this.sockets.push(socket)
+					this.#sockets.push(socket)
 					this.options.handler.connect?.(this)
 				},
 				close: (socket) => {
 					console.warn('connection closed')
-					const index = this.sockets.indexOf(socket)
-					if (index >= 0) this.sockets.splice(index, 1)
+					const index = this.#sockets.indexOf(socket)
+					if (index >= 0) this.#sockets.splice(index, 1)
 					this.options.handler.disconnect?.(this)
 				},
 				error: (_, error) => {
@@ -68,13 +68,13 @@ export class StellariumProtocolServer {
 	}
 
 	stop() {
-		this.server?.stop(true)
-		this.server = undefined
-		this.sockets.length = 0
+		this.#server?.stop(true)
+		this.#server = undefined
+		this.#sockets.length = 0
 	}
 
 	send(ra: Angle, dec: Angle) {
-		if (this.sockets.length) {
+		if (this.#sockets.length) {
 			const buffer = Buffer.allocUnsafe(24)
 			buffer.writeInt16LE(24, 0) // length
 			buffer.writeInt16LE(0, 2) // type
@@ -85,14 +85,14 @@ export class StellariumProtocolServer {
 			buffer.writeInt32LE(Math.trunc((dec / PI) * 0x80000000), 16)
 			buffer.writeInt32LE(0, 20) // status = OK
 
-			for (const socket of this.sockets) {
+			for (const socket of this.#sockets) {
 				socket.write(buffer)
 				socket.flush()
 			}
 		}
 	}
 
-	private processData(buffer: Buffer) {
+	#processData(buffer: Buffer) {
 		if (buffer.byteLength >= 20 && this.options.handler.goto) {
 			const ra = normalizeAngle((buffer.readUInt32LE(12) * PI) / 0x80000000)
 			const dec = (buffer.readInt32LE(16) * PI) / 0x80000000

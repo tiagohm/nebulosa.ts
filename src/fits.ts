@@ -340,10 +340,10 @@ const INT_REGEX = /^[+-]?\d+$/
 export class FitsKeywordReader {
 	read(line: Buffer, offset: number = 0): FitsHeaderCard {
 		const position = new Position(offset)
-		const key = this.parseKey(line, position)
-		const [value, quoted] = this.parseValue(line, key, position)
-		const comment = this.parseComment(line, position, value)
-		return [key, this.parseValueType(value, quoted), comment?.trim()]
+		const key = this.#parseKey(line, position)
+		const [value, quoted] = this.#parseValue(line, key, position)
+		const comment = this.#parseComment(line, position, value)
+		return [key, this.#parseValueType(value, quoted), comment?.trim()]
 	}
 
 	readAll(buffer: Buffer, offset: number = 0): FitsHeader {
@@ -376,7 +376,7 @@ export class FitsKeywordReader {
 		return header
 	}
 
-	private parseKey(line: Buffer, position: Position) {
+	#parseKey(line: Buffer, position: Position) {
 		// Find the '=' in the line, if any...
 		const iEq = line.indexOf(EQUAL, position.offset) - position.offset
 
@@ -390,31 +390,31 @@ export class FitsKeywordReader {
 		return key
 	}
 
-	private parseValue(line: Buffer, key: string, position: Position): readonly [string | undefined, boolean] {
-		if (!(key.length && this.skipSpaces(line, position))) {
+	#parseValue(line: Buffer, key: string, position: Position): readonly [string | undefined, boolean] {
+		if (!(key.length && this.#skipSpaces(line, position))) {
 			// nothing left to parse.
 			return [undefined, false]
 		}
 
 		if (key === 'CONTINUE') {
-			return this.parseValueBody(line, position)
+			return this.#parseValueBody(line, position)
 		} else if (line.readInt8(position.offset) === EQUAL) {
 			position.offset++
-			return this.parseValueBody(line, position)
+			return this.#parseValueBody(line, position)
 		} else {
 			return [undefined, false]
 		}
 	}
 
-	private parseValueBody(line: Buffer, position: Position): readonly [string | undefined, boolean] {
-		if (!this.skipSpaces(line, position)) {
+	#parseValueBody(line: Buffer, position: Position): readonly [string | undefined, boolean] {
+		if (!this.#skipSpaces(line, position)) {
 			// Nothing left to parse.
 			return [undefined, false]
 		}
 
-		if (this.isNextQuote(line, position)) {
+		if (this.#isNextQuote(line, position)) {
 			// Parse as a string value.
-			return [this.parseStringValue(line, position), true]
+			return [this.#parseStringValue(line, position), true]
 		} else {
 			let end = line.indexOf(SLASH, position.offset)
 
@@ -426,7 +426,7 @@ export class FitsKeywordReader {
 		}
 	}
 
-	private parseStringValue(line: Buffer, position: Position) {
+	#parseStringValue(line: Buffer, position: Position) {
 		let escaped = false
 
 		const start = ++position.offset
@@ -435,28 +435,28 @@ export class FitsKeywordReader {
 		// quotes inside the string, which are translated to single quotes within
 		// the string value itself.
 		for (; position.offset < line.byteLength; position.offset++) {
-			if (this.isNextQuote(line, position)) {
+			if (this.#isNextQuote(line, position)) {
 				position.offset++
 
-				if (!this.isNextQuote(line, position)) {
+				if (!this.#isNextQuote(line, position)) {
 					// Closing single quote
-					return this.noTrailingSpaceString(line, start, position.offset - 1, escaped)
+					return this.#noTrailingSpaceString(line, start, position.offset - 1, escaped)
 				} else {
 					escaped = true
 				}
 			}
 		}
 
-		return this.noTrailingSpaceString(line, start, position.offset, escaped)
+		return this.#noTrailingSpaceString(line, start, position.offset, escaped)
 	}
 
-	private noTrailingSpaceString(line: Buffer, start: number, end: number, escaped: boolean) {
+	#noTrailingSpaceString(line: Buffer, start: number, end: number, escaped: boolean) {
 		const text = line.toString('ascii', start, end).trimEnd()
 		return escaped ? unescapeQuotedText(text) : text
 	}
 
-	private parseComment(line: Buffer, position: Position, value?: string) {
-		if (!this.skipSpaces(line, position)) {
+	#parseComment(line: Buffer, position: Position, value?: string) {
+		if (!this.#skipSpaces(line, position)) {
 			// Nothing left to parse.
 			return
 		}
@@ -472,7 +472,7 @@ export class FitsKeywordReader {
 		return line.toString('ascii', position.offset)
 	}
 
-	private parseValueType(value: string | undefined, quoted: boolean) {
+	#parseValueType(value: string | undefined, quoted: boolean) {
 		if (quoted) return value
 		else if (!value) return undefined
 		else if (value === 'T') return true
@@ -483,7 +483,7 @@ export class FitsKeywordReader {
 		else return value
 	}
 
-	private skipSpaces(line: Buffer, position: Position) {
+	#skipSpaces(line: Buffer, position: Position) {
 		for (; position.offset < line.byteLength; position.offset++) {
 			if (line.readInt8(position.offset) !== WHITESPACE) {
 				// Line has non-space characters left to parse...
@@ -495,7 +495,7 @@ export class FitsKeywordReader {
 		return false
 	}
 
-	private isNextQuote(line: Buffer, position: Position) {
+	#isNextQuote(line: Buffer, position: Position) {
 		return position.offset < line.byteLength && line.readInt8(position.offset) === SINGLE_QUOTE
 	}
 }
@@ -535,22 +535,22 @@ export class FitsKeywordWriter {
 
 			for (const value of values) {
 				commentCard[2] = value
-				this.appendKey(output, commentCard, position)
-				this.appendComment(output, commentCard, position)
-				this.pad(output, position)
+				this.#appendKey(output, commentCard, position)
+				this.#appendComment(output, commentCard, position)
+				this.#pad(output, position)
 			}
 		} else {
-			this.appendKey(output, card, position)
-			const valueStart = this.appendValue(output, card, position)
+			this.#appendKey(output, card, position)
+			const valueStart = this.#appendValue(output, card, position)
 			const valueEnd = position.size
-			this.appendComment(output, card, position)
+			this.#appendComment(output, card, position)
 
 			if (!isCommentStyleCard(card)) {
 				// Strings must be left aligned with opening quote in byte 11 (counted from 1)
-				this.realign(output, typeof card[1] === 'string' ? valueEnd : valueStart, valueEnd, position)
+				this.#realign(output, typeof card[1] === 'string' ? valueEnd : valueStart, valueEnd, position)
 			}
 
-			this.pad(output, position)
+			this.#pad(output, position)
 		}
 
 		return position.size
@@ -595,12 +595,12 @@ export class FitsKeywordWriter {
 		return this.write(END_CARD, output, offset)
 	}
 
-	private appendKey(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
-		this.appendText(output, card[0], position)
-		this.padTo(output, FITS_MAX_KEYWORD_LENGTH, position)
+	#appendKey(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
+		this.#appendText(output, card[0], position)
+		this.#padTo(output, FITS_MAX_KEYWORD_LENGTH, position)
 	}
 
-	private appendValue(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
+	#appendValue(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
 		const [, value, comment] = card
 
 		if (isCommentStyleCard(card)) {
@@ -609,7 +609,7 @@ export class FitsKeywordWriter {
 		}
 
 		// Add assignment sequence "= "
-		this.appendText(output, '= ', position)
+		this.#appendText(output, '= ', position)
 
 		if (value === undefined) {
 			// 'null' value, nothing more to append.
@@ -619,55 +619,55 @@ export class FitsKeywordWriter {
 		const start = position.size
 
 		if (typeof value === 'string') {
-			let from = this.appendQuotedValue(output, value, comment, 0, position)
+			let from = this.#appendQuotedValue(output, value, comment, 0, position)
 
 			while (from < value.length) {
-				this.pad(output, position)
-				this.appendText(output, 'CONTINUE  ', position)
-				from += this.appendQuotedValue(output, value, comment, from, position)
+				this.#pad(output, position)
+				this.#appendText(output, 'CONTINUE  ', position)
+				from += this.#appendQuotedValue(output, value, comment, from, position)
 			}
 		} else if (typeof value === 'boolean') {
-			this.appendText(output, value ? 'T' : 'F', position)
+			this.#appendText(output, value ? 'T' : 'F', position)
 		} else if (Number.isInteger(value)) {
-			this.appendText(output, value.toFixed(0), position)
+			this.#appendText(output, value.toFixed(0), position)
 		} else {
-			this.appendText(output, value.toExponential(20).toUpperCase(), position)
+			this.#appendText(output, value.toExponential(20).toUpperCase(), position)
 		}
 
 		return start
 	}
 
-	private appendComment(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
+	#appendComment(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
 		const commentStyleCard = isCommentStyleCard(card)
 		const comment = commentStyleCard ? card[2] || (typeof card[1] === 'string' ? card[1] : undefined) : card[2] || FitsKeywordWriter.keywords[card[0]]?.comment
 
 		if (!comment) return true
 
-		const available = this.getAvailable(output, position) - (commentStyleCard ? 1 : COMMENT_PREFIX.length)
+		const available = this.#getAvailable(output, position) - (commentStyleCard ? 1 : COMMENT_PREFIX.length)
 
-		this.appendText(output, commentStyleCard ? ' ' : COMMENT_PREFIX, position)
+		this.#appendText(output, commentStyleCard ? ' ' : COMMENT_PREFIX, position)
 
 		if (available >= comment.length) {
-			this.appendText(output, comment, position)
+			this.#appendText(output, comment, position)
 			return true
 		}
 
-		this.appendText(output, comment.substring(0, available), position)
+		this.#appendText(output, comment.substring(0, available), position)
 
 		return false
 	}
 
-	private appendText(output: Buffer, text: string, position: Position) {
+	#appendText(output: Buffer, text: string, position: Position) {
 		const n = output.write(text, position.offset, 'ascii')
 		position.increment(n)
 	}
 
-	private appendQuotedValue(output: Buffer, value: string, comment: FitsHeaderComment, from: number, position: Position) {
+	#appendQuotedValue(output: Buffer, value: string, comment: FitsHeaderComment, from: number, position: Position) {
 		// Always leave room for an extra & character at the end...
-		let available = this.getAvailable(output, position) - 2
+		let available = this.#getAvailable(output, position) - 2
 
 		// If long strings are enabled leave space for '&' at the end.
-		if (comment?.length && this.isLongStringsEnabled(output, position)) available--
+		if (comment?.length && this.#isLongStringsEnabled(output, position)) available--
 
 		// The the remaining part of the string fits in the space with the
 		// quoted quotes, then it's easy...
@@ -675,30 +675,30 @@ export class FitsKeywordWriter {
 			const escaped = escapeQuotedText(from === 0 ? value : value.substring(from))
 
 			if (escaped.length <= available) {
-				this.appendText(output, "'", position)
-				this.appendText(output, escaped, position)
+				this.#appendText(output, "'", position)
+				this.#appendText(output, escaped, position)
 
 				// Earlier versions of the FITS standard required that the closing quote
 				// does not come before byte 20. It's no longer required but older tools
 				// may still expect it, so let's conform. This only affects single
 				// record card, but not continued long strings...
-				this.padTo(output, FITS_MIN_STRING_END, position)
+				this.#padTo(output, FITS_MIN_STRING_END, position)
 
-				this.appendText(output, "'", position)
+				this.#appendText(output, "'", position)
 
 				return value.length - from
 			}
 		}
 
-		if (!this.isLongStringsEnabled(output, position)) {
+		if (!this.#isLongStringsEnabled(output, position)) {
 			return value.length - from
 		}
 
 		// Now, we definitely need space for '&' at the end...
-		available = this.getAvailable(output, position) - 3
+		available = this.#getAvailable(output, position) - 3
 
 		// Opening quote
-		this.appendText(output, "'", position)
+		this.#appendText(output, "'", position)
 
 		// For counting the characters consumed from the input
 		let consumed = 0
@@ -716,26 +716,26 @@ export class FitsKeywordWriter {
 				}
 
 				// Only append the quoted quote if there is room for both.
-				this.appendText(output, "''", position)
+				this.#appendText(output, "''", position)
 			} else {
 				// Append a non-quote character.
-				this.appendText(output, c, position)
+				this.#appendText(output, c, position)
 			}
 		}
 
 		// & and closing quote.
-		this.appendText(output, "&'", position)
+		this.#appendText(output, "&'", position)
 
 		return consumed
 	}
 
-	private getAvailable(output: Buffer, position: Position) {
+	#getAvailable(output: Buffer, position: Position) {
 		const remaining = (FITS_HEADER_CARD_SIZE - (position.size % FITS_HEADER_CARD_SIZE)) % FITS_HEADER_CARD_SIZE
 		if (remaining > 0 && position.offset !== position.size && position.offset + remaining > output.byteLength) return output.byteLength - position.offset
 		return remaining
 	}
 
-	private realign(output: Buffer, at: number, from: number, position: Position) {
+	#realign(output: Buffer, at: number, from: number, position: Position) {
 		if (position.size >= FITS_HEADER_CARD_SIZE || from >= DEFAULT_COMMENT_ALIGN_POSITION) {
 			// We are beyond the alignment point already...
 			return false
@@ -743,7 +743,7 @@ export class FitsKeywordWriter {
 
 		const spaces = DEFAULT_COMMENT_ALIGN_POSITION - from
 
-		if (spaces > this.getAvailable(output, position)) {
+		if (spaces > this.#getAvailable(output, position)) {
 			// No space left in card to align the the specified position.
 			return false
 		}
@@ -763,21 +763,21 @@ export class FitsKeywordWriter {
 		return true
 	}
 
-	private padTo(output: Buffer, to: number, position: Position) {
+	#padTo(output: Buffer, to: number, position: Position) {
 		for (let pos = position.size % FITS_HEADER_CARD_SIZE; pos < to; pos++) {
 			output.writeInt8(WHITESPACE, position.offset)
 			position.increment()
 		}
 	}
 
-	private pad(output: Buffer, position: Position, n: number = this.getAvailable(output, position)) {
+	#pad(output: Buffer, position: Position, n: number = this.#getAvailable(output, position)) {
 		if (n > 0) {
 			output.fill(WHITESPACE, position.offset, position.offset + n)
 			position.increment(n)
 		}
 	}
 
-	private isLongStringsEnabled(output: Buffer, position: Position) {
+	#isLongStringsEnabled(output: Buffer, position: Position) {
 		// return Math.floor((output.byteLength) / FITS_HEADER_CARD_SIZE) > 1
 		const start = position.offset - position.size
 		return Math.floor((output.byteLength - start) / FITS_HEADER_CARD_SIZE) > 1
@@ -812,52 +812,52 @@ function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, heade
 }
 
 export class FitsImageReader {
-	private readonly compressed: boolean
-	private readonly buffer: Buffer
-	private readonly data: NumberArray
+	readonly #compressed: boolean
+	readonly #buffer: Buffer
+	readonly #data: NumberArray
 
 	constructor(
-		private readonly hdu: FitsHdu,
+		readonly hdu: FitsHdu,
 		buffer?: Buffer,
 	) {
-		this.compressed = isRiceCompressedImageHeader(hdu.header)
+		this.#compressed = isRiceCompressedImageHeader(hdu.header)
 
-		if (this.compressed) {
-			this.buffer = Buffer.alloc(0)
-			this.data = new Uint8Array(0)
+		if (this.#compressed) {
+			this.#buffer = Buffer.alloc(0)
+			this.#data = new Uint8Array(0)
 		} else {
 			const bitpix = bitpixKeyword(hdu.header, 0)
-			this.buffer = buffer?.subarray(0, hdu.data.size) ?? Buffer.allocUnsafe(hdu.data.size)
-			this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Int16Array(this.buffer.buffer) : bitpix === 32 ? new Int32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
+			this.#buffer = buffer?.subarray(0, hdu.data.size) ?? Buffer.allocUnsafe(hdu.data.size)
+			this.#data = bitpix === 8 ? new Uint8Array(this.#buffer.buffer) : bitpix === 16 ? new Int16Array(this.#buffer.buffer) : bitpix === 32 ? new Int32Array(this.#buffer.buffer) : bitpix === -32 ? new Float32Array(this.#buffer.buffer) : new Float64Array(this.#buffer.buffer)
 		}
 	}
 
 	// Reads FITS-format image from source into RGB-interleaved array
 	async read(source: Source & Seekable, output: ImageRawType) {
-		if (this.compressed) return await this.readRiceCompressed(source, output)
+		if (this.#compressed) return await this.#readRiceCompressed(source, output)
 
 		source.seek(this.hdu.data.offset)
 
-		if ((await readUntil(source, this.buffer, this.hdu.data.size, 0)) !== this.hdu.data.size) return false
+		if ((await readUntil(source, this.#buffer, this.hdu.data.size, 0)) !== this.hdu.data.size) return false
 
 		const { header } = this.hdu
 		const bitpix = bitpixKeyword(header, 0)
 		const pixelInBytes = bitpixInBytes(bitpix)
 
 		// big-endian to little-endian
-		if (pixelInBytes === 2) this.buffer.swap16()
-		else if (pixelInBytes === 4) this.buffer.swap32()
-		else if (pixelInBytes === 8) this.buffer.swap64()
+		if (pixelInBytes === 2) this.#buffer.swap16()
+		else if (pixelInBytes === 4) this.#buffer.swap32()
+		else if (pixelInBytes === 8) this.#buffer.swap64()
 
 		const width = widthKeyword(header, 0)
 		const height = heightKeyword(header, 0)
 		const channels = numberOfChannelsKeyword(header, 1)
-		writePlanarToInterleaved(this.data, output, header, bitpix, width, height, channels)
+		writePlanarToInterleaved(this.#data, output, header, bitpix, width, height, channels)
 
 		return true
 	}
 
-	private async readRiceCompressed(source: Source & Seekable, output: ImageRawType) {
+	async #readRiceCompressed(source: Source & Seekable, output: ImageRawType) {
 		const { header } = this.hdu
 		const bitpix = uncompressedBitpixKeyword(header, 0)
 		const width = uncompressedWidthKeyword(header, 0)
@@ -943,19 +943,19 @@ export class FitsImageReader {
 }
 
 export class FitsImageWriter {
-	private readonly buffer: Buffer
-	private readonly data: NumberArray
+	readonly #buffer: Buffer
+	readonly #data: NumberArray
 
 	constructor(
-		private readonly header: FitsHeader,
+		readonly header: FitsHeader,
 		buffer?: Buffer,
 	) {
 		const bitpix = bitpixKeyword(header, 0)
 		const width = widthKeyword(header, 0)
 		const height = heightKeyword(header, 0)
 		const channels = numberOfChannelsKeyword(header, 1)
-		this.buffer = buffer ?? Buffer.allocUnsafe(width * height * channels * bitpixInBytes(bitpix))
-		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Int16Array(this.buffer.buffer) : bitpix === 32 ? new Int32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
+		this.#buffer = buffer ?? Buffer.allocUnsafe(width * height * channels * bitpixInBytes(bitpix))
+		this.#data = bitpix === 8 ? new Uint8Array(this.#buffer.buffer) : bitpix === 16 ? new Int16Array(this.#buffer.buffer) : bitpix === 32 ? new Int32Array(this.#buffer.buffer) : bitpix === -32 ? new Float32Array(this.#buffer.buffer) : new Float64Array(this.#buffer.buffer)
 	}
 
 	// Writes FITS-format image from RGB-interleaved array into sink
@@ -966,13 +966,13 @@ export class FitsImageWriter {
 		const height = heightKeyword(this.header, 0)
 		const channels = numberOfChannelsKeyword(this.header, 1)
 
-		writeInterleavedToPlanar(input, this.data, bitpix, width, height, channels)
+		writeInterleavedToPlanar(input, this.#data, bitpix, width, height, channels)
 
 		// little-endian to big-endian
-		if (pixelInBytes === 2) this.buffer.swap16()
-		else if (pixelInBytes === 4) this.buffer.swap32()
-		else if (pixelInBytes === 8) this.buffer.swap64()
+		if (pixelInBytes === 2) this.#buffer.swap16()
+		else if (pixelInBytes === 4) this.#buffer.swap32()
+		else if (pixelInBytes === 8) this.#buffer.swap64()
 
-		return await sink.write(this.buffer)
+		return await sink.write(this.#buffer)
 	}
 }

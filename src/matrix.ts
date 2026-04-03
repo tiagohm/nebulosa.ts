@@ -478,8 +478,8 @@ export class Matrix {
 
 // https://en.wikipedia.org/wiki/LU_decomposition
 export class LuDecomposition {
-	private readonly A: Matrix
-	private readonly P: Int32Array
+	readonly #A: Matrix
+	readonly #P: Int32Array
 
 	constructor(matrix: Matrix) {
 		if (!matrix.isSquare) throw new Error('matrix is not square')
@@ -542,13 +542,13 @@ export class LuDecomposition {
 			}
 		}
 
-		this.A = A
-		this.P = P
+		this.#A = A
+		this.#P = P
 	}
 
 	get isSingular() {
-		const n = this.A.rows
-		const data = this.A.data
+		const n = this.#A.rows
+		const data = this.#A.data
 
 		for (let j = 0; j < n; j++) {
 			if (data[j * n + j] === 0) {
@@ -560,16 +560,16 @@ export class LuDecomposition {
 	}
 
 	get determinant() {
-		const n = this.A.rows
-		const data = this.A.data
+		const n = this.#A.rows
+		const data = this.#A.data
 		let det = data[0]
 		for (let i = 1; i < n; i++) det *= data[i * n + i]
-		return (this.P[n] - n) % 2 === 0 ? det : -det
+		return (this.#P[n] - n) % 2 === 0 ? det : -det
 	}
 
 	invert(o?: Matrix) {
-		const n = this.A.rows
-		const aData = this.A.data
+		const n = this.#A.rows
+		const aData = this.#A.data
 
 		o ??= new Matrix(n, n)
 		checkMatrixShape(o, n, n)
@@ -583,7 +583,7 @@ export class LuDecomposition {
 		for (let j = 0; j < n; j++) {
 			for (let i = 0; i < n; i++) {
 				const ij = i * n + j
-				let value = this.P[i] === j ? 1 : 0
+				let value = this.#P[i] === j ? 1 : 0
 
 				for (let k = 0; k < i; k++) {
 					value -= aData[i * n + k] * output[k * n + j]
@@ -608,15 +608,15 @@ export class LuDecomposition {
 
 	// Solves the system of linear equations A*x = B, where A is the matrix and B is the right-hand side vector.
 	solve(B: Readonly<NumberArray>) {
-		const n = this.A.rows
+		const n = this.#A.rows
 		if (B.length !== n) throw new Error('right-hand side length must match matrix rows')
 		if (this.isSingular) throw new Error('matrix is singular and cannot be solved')
 
-		const aData = this.A.data
+		const aData = this.#A.data
 		const x = new Float64Array(n)
 
 		for (let i = 0; i < n; i++) {
-			x[i] = B[this.P[i]]
+			x[i] = B[this.#P[i]]
 
 			for (let k = 0; k < i; k++) {
 				x[i] -= aData[i * n + k] * x[k]
@@ -637,8 +637,8 @@ export class LuDecomposition {
 
 // https://github.com/mljs/matrix/blob/main/src/dc/qr.js
 export class QrDecomposition {
-	private readonly QR: Matrix
-	private readonly rdiag: Float64Array
+	readonly #QR: Matrix
+	readonly #rdiag: Float64Array
 
 	constructor(matrix: Matrix) {
 		const QR = matrix.clone()
@@ -680,17 +680,17 @@ export class QrDecomposition {
 			rdiag[k] = -nrm
 		}
 
-		this.QR = QR
-		this.rdiag = rdiag
+		this.#QR = QR
+		this.#rdiag = rdiag
 	}
 
 	get isFullRank() {
-		return this.rdiag.indexOf(0) < 0
+		return this.#rdiag.indexOf(0) < 0
 	}
 
 	// Solves the system of linear equations A*x = B, where A is the matrix and B is the right-hand side vector.
 	solve(value: Readonly<NumberArray>) {
-		if (value.length !== this.QR.rows) {
+		if (value.length !== this.#QR.rows) {
 			throw new Error('matrix row dimensions must agree')
 		}
 
@@ -700,25 +700,25 @@ export class QrDecomposition {
 
 		const X = new Float64Array(value)
 
-		for (let k = 0; k < this.QR.cols; k++) {
+		for (let k = 0; k < this.#QR.cols; k++) {
 			let s = 0
 
-			for (let i = k; i < this.QR.rows; i++) {
-				s += this.QR.get(i, k) * X[i]
+			for (let i = k; i < this.#QR.rows; i++) {
+				s += this.#QR.get(i, k) * X[i]
 			}
 
-			s = -s / this.QR.get(k, k)
+			s = -s / this.#QR.get(k, k)
 
-			for (let i = k; i < this.QR.rows; i++) {
-				X[i] += s * this.QR.get(i, k)
+			for (let i = k; i < this.#QR.rows; i++) {
+				X[i] += s * this.#QR.get(i, k)
 			}
 		}
 
-		for (let k = this.QR.cols - 1; k >= 0; k--) {
-			X[k] /= this.rdiag[k]
+		for (let k = this.#QR.cols - 1; k >= 0; k--) {
+			X[k] /= this.#rdiag[k]
 
 			for (let i = 0; i < k; i++) {
-				X[i] -= X[k] * this.QR.get(i, k)
+				X[i] -= X[k] * this.#QR.get(i, k)
 			}
 		}
 

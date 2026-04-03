@@ -306,19 +306,19 @@ function decompress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, format: Xis
 }
 
 export class XisfImageReader {
-	private readonly buffer: Buffer
-	private readonly compressed?: Buffer
-	private readonly data: NumberArray
+	readonly #buffer: Buffer
+	readonly #compressed?: Buffer
+	readonly #data: NumberArray
 
 	constructor(
-		private readonly image: Pick<XisfImage, 'bitpix' | 'location' | 'compression' | 'byteOrder' | 'pixelStorage' | 'geometry'>,
+		readonly image: Pick<XisfImage, 'bitpix' | 'location' | 'compression' | 'byteOrder' | 'pixelStorage' | 'geometry'>,
 		buffer?: Buffer,
 	) {
 		const { bitpix, location, compression } = image
 		const size = compression?.uncompressedSize ?? location.size
-		this.buffer = buffer?.subarray(0, size) ?? Buffer.allocUnsafe(size)
-		this.compressed = compression ? Buffer.allocUnsafe(location.size) : undefined
-		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Uint16Array(this.buffer.buffer) : bitpix === 32 ? new Uint32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
+		this.#buffer = buffer?.subarray(0, size) ?? Buffer.allocUnsafe(size)
+		this.#compressed = compression ? Buffer.allocUnsafe(location.size) : undefined
+		this.#data = bitpix === 8 ? new Uint8Array(this.#buffer.buffer) : bitpix === 16 ? new Uint16Array(this.#buffer.buffer) : bitpix === 32 ? new Uint32Array(this.#buffer.buffer) : bitpix === -32 ? new Float32Array(this.#buffer.buffer) : new Float64Array(this.#buffer.buffer)
 	}
 
 	// Reads XISF-format image from source into RGB-interleaved array
@@ -327,32 +327,32 @@ export class XisfImageReader {
 
 		source.seek(location.offset)
 
-		const input = this.compressed ?? this.buffer
+		const input = this.#compressed ?? this.#buffer
 		if ((await readUntil(source, input, location.size, 0)) !== location.size) return false
 
 		if (compression) {
 			if (compression.format !== 'zstd' && compression.format !== 'zlib') throw new Error(`unsupported XISF compression format: ${compression.format}`)
 
 			const decompressed = await decompress(input.subarray(0, location.size), compression.format)
-			if (decompressed === undefined || decompressed.byteLength !== this.buffer.byteLength) return false
+			if (decompressed === undefined || decompressed.byteLength !== this.#buffer.byteLength) return false
 
 			if (compression.shuffled) {
 				if (compression.itemSize <= 0) return false
-				byteUnshuffle(decompressed, this.buffer, compression.itemSize)
+				byteUnshuffle(decompressed, this.#buffer, compression.itemSize)
 			} else {
-				decompressed.copy(this.buffer)
+				decompressed.copy(this.#buffer)
 			}
 		}
 
 		const pixelInBytes = bitpixInBytes(this.image.bitpix)
 
 		if (pixelInBytes > 1 && this.image.byteOrder === 'big') {
-			if (pixelInBytes === 2) this.buffer.swap16()
-			else if (pixelInBytes === 4) this.buffer.swap32()
-			else if (pixelInBytes === 8) this.buffer.swap64()
+			if (pixelInBytes === 2) this.#buffer.swap16()
+			else if (pixelInBytes === 4) this.#buffer.swap32()
+			else if (pixelInBytes === 8) this.#buffer.swap64()
 		}
 
-		const data = this.data
+		const data = this.#data
 		const { width, height, channels } = geometry
 		const numberOfPixels = width * height
 		const factor = bitpix > 0 ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
@@ -376,9 +376,9 @@ export class XisfImageReader {
 }
 
 export class XisfImageWriter {
-	private readonly buffer: Buffer
-	private readonly shuffled?: Buffer
-	private readonly data: NumberArray
+	readonly #buffer: Buffer
+	readonly #shuffled?: Buffer
+	readonly #data: NumberArray
 
 	constructor(
 		readonly xisf: Pick<XisfImage, 'byteOrder' | 'bitpix' | 'geometry' | 'pixelStorage' | 'compression'>,
@@ -387,9 +387,9 @@ export class XisfImageWriter {
 	) {
 		const { bitpix, geometry } = xisf
 		const { width, height, channels } = geometry
-		this.buffer = buffer ?? Buffer.allocUnsafe(width * height * channels * bitpixInBytes(bitpix))
-		this.data = bitpix === 8 ? new Uint8Array(this.buffer.buffer) : bitpix === 16 ? new Int16Array(this.buffer.buffer) : bitpix === 32 ? new Int32Array(this.buffer.buffer) : bitpix === -32 ? new Float32Array(this.buffer.buffer) : new Float64Array(this.buffer.buffer)
-		this.shuffled = !compression || !compression.shuffled ? undefined : Buffer.allocUnsafe(this.buffer.byteLength)
+		this.#buffer = buffer ?? Buffer.allocUnsafe(width * height * channels * bitpixInBytes(bitpix))
+		this.#data = bitpix === 8 ? new Uint8Array(this.#buffer.buffer) : bitpix === 16 ? new Int16Array(this.#buffer.buffer) : bitpix === 32 ? new Int32Array(this.#buffer.buffer) : bitpix === -32 ? new Float32Array(this.#buffer.buffer) : new Float64Array(this.#buffer.buffer)
+		this.#shuffled = !compression || !compression.shuffled ? undefined : Buffer.allocUnsafe(this.#buffer.byteLength)
 	}
 
 	// Encodes XISF-format image from RGB-interleaved array into a block buffer
@@ -399,7 +399,7 @@ export class XisfImageWriter {
 		const pixelInBytes = bitpixInBytes(bitpix)
 		const numberOfPixels = width * height
 		const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
-		const data = this.data
+		const data = this.#data
 
 		if (pixelStorage === 'Planar') {
 			for (let c = 0, p = 0; c < channels; c++) {
@@ -417,23 +417,23 @@ export class XisfImageWriter {
 
 		// little-endian to big-endian
 		if (byteOrder === 'big') {
-			if (pixelInBytes === 2) this.buffer.swap16()
-			else if (pixelInBytes === 4) this.buffer.swap32()
-			else if (pixelInBytes === 8) this.buffer.swap64()
+			if (pixelInBytes === 2) this.#buffer.swap16()
+			else if (pixelInBytes === 4) this.#buffer.swap32()
+			else if (pixelInBytes === 8) this.#buffer.swap64()
 		}
 
-		if (!this.compression) return { data: this.buffer }
+		if (!this.compression) return { data: this.#buffer }
 		if (this.compression.format !== 'zstd' && this.compression.format !== 'zlib') throw new Error(`unsupported XISF compression format: ${this.compression.format}`)
 
-		const shuffled = this.shuffled !== undefined && pixelInBytes > 1
+		const shuffled = this.#shuffled !== undefined && pixelInBytes > 1
 
 		let compressed: Buffer | undefined
 
 		if (shuffled) {
-			byteShuffle(this.buffer, this.shuffled, pixelInBytes)
-			compressed = await compress(this.shuffled, this.compression)
+			byteShuffle(this.#buffer, this.#shuffled, pixelInBytes)
+			compressed = await compress(this.#shuffled, this.compression)
 		} else {
-			compressed = await compress(this.buffer, this.compression)
+			compressed = await compress(this.#buffer, this.compression)
 		}
 
 		return {
@@ -441,7 +441,7 @@ export class XisfImageWriter {
 			compression: {
 				format: this.compression.format,
 				shuffled,
-				uncompressedSize: this.buffer.byteLength,
+				uncompressedSize: this.#buffer.byteLength,
 				itemSize: shuffled ? pixelInBytes : 0,
 			},
 		}

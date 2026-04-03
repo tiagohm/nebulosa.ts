@@ -12,27 +12,27 @@ interface HistogramCache {
 }
 
 export class Histogram {
-	private readonly cache: HistogramCache = {}
+	readonly #cache: HistogramCache = {}
 
 	constructor(
 		readonly histogram: Readonly<NumberArray>,
-		private readonly max: number,
-		private readonly maxSq: number = max * max,
+		readonly max: number,
+		readonly maxSq: number = max * max,
 	) {}
 
 	reset(key?: keyof HistogramCache) {
 		if (key) {
-			this.cache[key] = undefined
+			this.#cache[key] = undefined
 		} else {
-			for (const key in this.cache) {
-				this.cache[key as keyof HistogramCache] = undefined
+			for (const key in this.#cache) {
+				this.#cache[key as keyof HistogramCache] = undefined
 			}
 		}
 	}
 
 	get mode() {
-		if (this.cache.mode !== undefined) {
-			return this.cache.mode
+		if (this.#cache.mode !== undefined) {
+			return this.#cache.mode
 		}
 
 		let max = 0
@@ -50,14 +50,14 @@ export class Histogram {
 
 		if (this.max !== 0) ret /= this.max
 
-		this.cache.mode = [ret, max]
+		this.#cache.mode = [ret, max]
 
-		return this.cache.mode
+		return this.#cache.mode
 	}
 
 	get count() {
-		if (this.cache.count !== undefined) {
-			return this.cache.count
+		if (this.#cache.count !== undefined) {
+			return this.#cache.count
 		}
 
 		let ret = 0
@@ -73,14 +73,14 @@ export class Histogram {
 			}
 		}
 
-		this.cache.count = [ret, max]
+		this.#cache.count = [ret, max]
 
-		return this.cache.count
+		return this.#cache.count
 	}
 
 	get mean() {
-		if (this.cache.mean !== undefined) {
-			return this.cache.mean
+		if (this.#cache.mean !== undefined) {
+			return this.#cache.mean
 		}
 
 		let ret = 0
@@ -92,13 +92,13 @@ export class Histogram {
 
 		ret /= this.count[0]
 		if (this.max !== 0) ret /= this.max
-		this.cache.mean = ret
+		this.#cache.mean = ret
 		return ret
 	}
 
 	get variance() {
-		if (this.cache.variance !== undefined) {
-			return this.cache.variance
+		if (this.#cache.variance !== undefined) {
+			return this.#cache.variance
 		}
 
 		let ret = 0
@@ -116,23 +116,23 @@ export class Histogram {
 
 		ret /= this.count[0]
 		if (this.maxSq) ret /= this.maxSq
-		this.cache.variance = ret
+		this.#cache.variance = ret
 		return ret
 	}
 
 	get standardDeviation() {
-		if (this.cache.standardDeviation !== undefined) {
-			return this.cache.standardDeviation
+		if (this.#cache.standardDeviation !== undefined) {
+			return this.#cache.standardDeviation
 		}
 
 		const ret = Math.sqrt(this.variance)
-		this.cache.standardDeviation = ret
+		this.#cache.standardDeviation = ret
 		return ret
 	}
 
 	get median() {
-		if (this.cache.median !== undefined) {
-			return this.cache.median
+		if (this.#cache.median !== undefined) {
+			return this.#cache.median
 		}
 
 		let prev = 0
@@ -151,13 +151,13 @@ export class Histogram {
 		const p = (n - prev) / this.histogram[i]
 		let ret = i + p
 		if (this.max !== 0) ret /= this.max
-		this.cache.median = ret
-		return this.cache.median
+		this.#cache.median = ret
+		return this.#cache.median
 	}
 
 	get minimum() {
-		if (this.cache.minimum !== undefined) {
-			return this.cache.minimum
+		if (this.#cache.minimum !== undefined) {
+			return this.#cache.minimum
 		}
 
 		let count = 0
@@ -175,13 +175,13 @@ export class Histogram {
 		}
 
 		if (this.max !== 0) ret /= this.max
-		this.cache.minimum = [ret, count]
-		return this.cache.minimum
+		this.#cache.minimum = [ret, count]
+		return this.#cache.minimum
 	}
 
 	get maximum() {
-		if (this.cache.maximum !== undefined) {
-			return this.cache.maximum
+		if (this.#cache.maximum !== undefined) {
+			return this.#cache.maximum
 		}
 
 		let count = 0
@@ -199,7 +199,7 @@ export class Histogram {
 		}
 
 		if (this.max !== 0) ret /= this.max
-		this.cache.maximum = [ret, count]
-		return this.cache.maximum
+		this.#cache.maximum = [ret, count]
+		return this.#cache.maximum
 	}
 }

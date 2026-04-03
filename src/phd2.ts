@@ -347,21 +347,21 @@ interface PendingPHD2Command<T> {
 }
 
 export class PHD2Client implements Disposable {
-	private readonly commands = new Map<string, PendingPHD2Command<unknown>>()
-	private socket?: Bun.Socket
-	private buffer?: Buffer<ArrayBufferLike>
+	readonly #commands = new Map<string, PendingPHD2Command<unknown>>()
+	#socket?: Bun.Socket
+	#buffer?: Buffer<ArrayBufferLike>
 
-	constructor(private readonly options?: PHD2ClientOptions) {}
+	constructor(readonly options?: PHD2ClientOptions) {}
 
 	async connect(hostname: string, port: number = DEFAULT_PHD2_PORT) {
-		if (this.socket) return false
+		if (this.#socket) return false
 
-		this.socket = await Bun.connect({
+		this.#socket = await Bun.connect({
 			hostname,
 			port,
 			socket: {
 				data: (_, data) => {
-					this.process(data)
+					this.#processData(data)
 				},
 				error: (_, error) => {
 					console.error('socket error:', error)
@@ -381,14 +381,14 @@ export class PHD2Client implements Disposable {
 	}
 
 	close() {
-		this.socket?.close()
-		this.socket = undefined
+		this.#socket?.close()
+		this.#socket = undefined
 
-		for (const { timer } of this.commands.values()) {
+		for (const { timer } of this.#commands.values()) {
 			clearTimeout(timer)
 		}
 
-		this.commands.clear()
+		this.#commands.clear()
 	}
 
 	[Symbol.dispose]() {
@@ -396,17 +396,17 @@ export class PHD2Client implements Disposable {
 	}
 
 	async send<T>(method: string, params?: Record<string, unknown> | unknown[], timeout: number = 15000) {
-		if (!this.socket) return undefined
+		if (!this.#socket) return undefined
 
 		const id = Bun.randomUUIDv7()
 		const command: PHD2Command = { method, params, id }
 
 		const promise = Promise.withResolvers<PHD2CommandResult<T>>()
 		const timer = setTimeout(() => promise.resolve({ success: false, error: 'timeout' }), timeout <= 0 ? 15000 : timeout)
-		this.commands.set(id, { promise, timer, command } as PendingPHD2Command<unknown>)
+		this.#commands.set(id, { promise, timer, command } as PendingPHD2Command<unknown>)
 
-		this.socket.write(JSON.stringify(command))
-		this.socket.write('\r\n')
+		this.#socket.write(JSON.stringify(command))
+		this.#socket.write('\r\n')
 
 		const result = await promise.promise
 
@@ -614,31 +614,31 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('shutdown')
 	}
 
-	private process(data: Buffer) {
-		const buffer = this.buffer === undefined ? data : Buffer.concat([this.buffer, data])
+	#processData(data: Buffer) {
+		const buffer = this.#buffer === undefined ? data : Buffer.concat([this.#buffer, data])
 
 		const result = Bun.JSONL.parseChunk(buffer)
 
 		for (const event of result.values) {
-			this.processEvent(event as never)
+			this.#processEvent(event as never)
 		}
 
 		if (result.done) {
-			this.buffer = undefined
+			this.#buffer = undefined
 		} else {
 			// Keep only the unconsumed portion
-			this.buffer = buffer.subarray(result.read)
+			this.#buffer = buffer.subarray(result.read)
 		}
 	}
 
-	private processEvent(event: PHD2Events | PHD2JsonRpcEvent) {
+	#processEvent(event: PHD2Events | PHD2JsonRpcEvent) {
 		if ('jsonrpc' in event) {
 			const { id, error, result } = event
-			const command = this.commands.get(id)
+			const command = this.#commands.get(id)
 
 			if (command) {
 				clearTimeout(command.timer)
-				this.commands.delete(id)
+				this.#commands.delete(id)
 
 				if (error) {
 					command.promise.resolve({ success: false, error })

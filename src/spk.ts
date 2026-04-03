@@ -78,52 +78,57 @@ interface Type2And3Coefficient {
 // as a function of time. Normally, this data type is used for satellites for which the ephemerides are computed
 // from analytical theories.
 export class Type2And3Segment implements SpkSegment {
-	private initialized = false
-	private initialEpoch = 0
-	private intervalLength = 0
-	private rsize = 0
-	private n = 0
-	private readonly coefficients = new Map<number, Type2And3Coefficient>()
+	#initialized = false
+	#initialEpoch = 0
+	#intervalLength = 0
+	#rsize = 0
+	#n = 0
+	readonly #coefficients = new Map<number, Type2And3Coefficient>()
+	readonly #daf: Daf
+	readonly #type: number
 
 	constructor(
-		private readonly daf: Daf,
-		// private readonly source: string,
+		daf: Daf,
+		// readonly source: string,
 		readonly start: number,
 		readonly end: number,
 		readonly center: number,
 		readonly target: number,
-		// private readonly frame: number,
-		private readonly type: number,
+		// readonly frame: number,
+		type: number,
 		readonly startIndex: number,
 		readonly endIndex: number,
-	) {}
+	) {
+		this.#daf = daf
+		this.#type = type
+	}
 
 	async at(time: Time): Promise<PositionAndVelocity> {
-		if (!this.initialized) {
+		if (!this.#initialized) {
 			// INIT: is the initial epoch of the first record, given in ephemeris seconds past J2000.
 			// INTLEN: is the length of the interval covered by each record, in seconds.
 			// RSIZE: is the total size of (number of array elements in) each record.
 			// N: is the number of records contained in the segment.
-			const [a, b, c, d] = await this.daf.read(this.endIndex - 3, this.endIndex)
-			this.initialEpoch = a
-			this.intervalLength = b
-			this.rsize = Math.trunc(c)
-			this.n = Math.trunc(d)
-			this.initialized = true
+			const [a, b, c, d] = await this.#daf.read(this.endIndex - 3, this.endIndex)
+			this.#initialEpoch = a
+			this.#intervalLength = b
+			this.#rsize = Math.trunc(c)
+			this.#n = Math.trunc(d)
+			this.#initialized = true
 		}
 
 		const t = tdb(time)
 		const d = (t.day - J2000 + t.fraction) * DAYSEC
-		const index = Math.min(this.n, Math.trunc((d - this.initialEpoch) / this.intervalLength))
+		const index = Math.min(this.#n, Math.trunc((d - this.#initialEpoch) / this.#intervalLength))
 
-		if (!(await this.computeCoefficient(index))) {
+		if (!(await this.#computeCoefficient(index))) {
 			throw new Error(`cannot find a segment that covers the date: ${time.day}`)
 		}
 
 		// Chebyshev polynomial & differentiation.
-		const c = this.coefficients.get(index)!
+		const c = this.#coefficients.get(index)!
 
-		const s = (2 * (d - (c.mid - c.radius))) / this.intervalLength - 1
+		const s = (2 * (d - (c.mid - c.radius))) / this.#intervalLength - 1
 		const ss = 2 * s
 
 		const w0: MutVec3 = [0, 0, 0]
@@ -169,23 +174,23 @@ export class Type2And3Segment implements SpkSegment {
 		w1[2] = (c.z[0] + (s * w0[2] - w1[2])) / AU_KM
 
 		// AU/day
-		w0[0] = (((w0[0] + s * dw0[0] - dw1[0]) / this.intervalLength) * (2 * DAYSEC)) / AU_KM
-		w0[1] = (((w0[1] + s * dw0[1] - dw1[1]) / this.intervalLength) * (2 * DAYSEC)) / AU_KM
-		w0[2] = (((w0[2] + s * dw0[2] - dw1[2]) / this.intervalLength) * (2 * DAYSEC)) / AU_KM
+		w0[0] = (((w0[0] + s * dw0[0] - dw1[0]) / this.#intervalLength) * (2 * DAYSEC)) / AU_KM
+		w0[1] = (((w0[1] + s * dw0[1] - dw1[1]) / this.#intervalLength) * (2 * DAYSEC)) / AU_KM
+		w0[2] = (((w0[2] + s * dw0[2] - dw1[2]) / this.#intervalLength) * (2 * DAYSEC)) / AU_KM
 
 		return [w1, w0]
 	}
 
-	private async computeCoefficient(index: number) {
-		if (this.coefficients.has(index)) return true
+	async #computeCoefficient(index: number) {
+		if (this.#coefficients.has(index)) return true
 
-		const components = (this.type - 1) * 3
-		const count = Math.trunc((this.rsize - 2) / components)
-		const a = this.startIndex + index * this.rsize
-		const b = a + this.rsize - 1
+		const components = (this.#type - 1) * 3
+		const count = Math.trunc((this.#rsize - 2) / components)
+		const a = this.startIndex + index * this.#rsize
+		const b = a + this.#rsize - 1
 
 		if (a >= this.startIndex && a < b && b <= this.endIndex - 4) {
-			const coefficients = await this.daf.read(a, b)
+			const coefficients = await this.#daf.read(a, b)
 
 			const [mid, radius] = coefficients
 			const x = new Float64Array(count)
@@ -198,7 +203,7 @@ export class Type2And3Segment implements SpkSegment {
 				z[m] = coefficients[2 + m + 2 * count]
 			}
 
-			this.coefficients.set(index, { mid, radius, x, y, z, count })
+			this.#coefficients.set(index, { mid, radius, x, y, z, count })
 
 			return true
 		}
@@ -214,56 +219,59 @@ export class Type2And3Segment implements SpkSegment {
 // the data type defines a state by interpolating each component of a set of states whose epochs are
 // centered near the request epoch.
 export class Type9Segment implements SpkSegment {
-	private initialized = false
-	private degree = 0
-	private n = 0
-	private stateTable: Float64Array = new Float64Array(0)
-	private epochTable: Float64Array = new Float64Array(0)
+	#initialized = false
+	#degree = 0
+	#n = 0
+	#stateTable: Float64Array = new Float64Array(0)
+	#epochTable: Float64Array = new Float64Array(0)
+	readonly #daf: Daf
 
 	constructor(
-		private readonly daf: Daf,
-		// private readonly source: string,
+		daf: Daf,
+		// readonly source: string,
 		readonly start: number,
 		readonly end: number,
 		readonly center: number,
 		readonly target: number,
-		// private readonly frame: number,
-		// private readonly type: number,
+		// readonly frame: number,
+		// readonly type: number,
 		readonly startIndex: number,
 		readonly endIndex: number,
-	) {}
+	) {
+		this.#daf = daf
+	}
 
 	async at(time: Time): Promise<PositionAndVelocity> {
-		if (!this.initialized) {
-			const [a, b] = await this.daf.read(this.endIndex - 1, this.endIndex)
-			this.degree = Math.trunc(a)
-			this.n = Math.trunc(b)
+		if (!this.#initialized) {
+			const [a, b] = await this.#daf.read(this.endIndex - 1, this.endIndex)
+			this.#degree = Math.trunc(a)
+			this.#n = Math.trunc(b)
 
-			const stateLength = this.n * 6
-			this.stateTable = await this.daf.read(this.startIndex, this.startIndex + stateLength - 1)
-			this.epochTable = await this.daf.read(this.startIndex + stateLength, this.startIndex + stateLength + this.n - 1)
-			this.initialized = true
+			const stateLength = this.#n * 6
+			this.#stateTable = await this.#daf.read(this.startIndex, this.startIndex + stateLength - 1)
+			this.#epochTable = await this.#daf.read(this.startIndex + stateLength, this.startIndex + stateLength + this.#n - 1)
+			this.#initialized = true
 		}
 
 		const t = tdb(time)
 		const seconds = (t.day - J2000 + t.fraction) * DAYSEC
-		const index = this.searchEpochIndex(seconds)
+		const index = this.#searchEpochIndex(seconds)
 
 		if (index < 0) {
 			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
 		}
 
-		if (this.epochTable[index] === seconds) {
+		if (this.#epochTable[index] === seconds) {
 			const offset = index * 6
-			const p: MutVec3 = [this.stateTable[offset] / AU_KM, this.stateTable[offset + 1] / AU_KM, this.stateTable[offset + 2] / AU_KM]
-			const v: MutVec3 = [(this.stateTable[offset + 3] * DAYSEC) / AU_KM, (this.stateTable[offset + 4] * DAYSEC) / AU_KM, (this.stateTable[offset + 5] * DAYSEC) / AU_KM]
+			const p: MutVec3 = [this.#stateTable[offset] / AU_KM, this.#stateTable[offset + 1] / AU_KM, this.#stateTable[offset + 2] / AU_KM]
+			const v: MutVec3 = [(this.#stateTable[offset + 3] * DAYSEC) / AU_KM, (this.#stateTable[offset + 4] * DAYSEC) / AU_KM, (this.#stateTable[offset + 5] * DAYSEC) / AU_KM]
 			return [p, v]
 		}
 
-		const window = Math.min(this.degree + 1, this.n)
+		const window = Math.min(this.#degree + 1, this.#n)
 		let begin = index - Math.trunc(window / 2)
 		if (begin < 0) begin = 0
-		if (begin + window > this.n) begin = this.n - window
+		if (begin + window > this.#n) begin = this.#n - window
 		const end = begin + window
 
 		const p: MutVec3 = [0, 0, 0]
@@ -273,17 +281,17 @@ export class Type9Segment implements SpkSegment {
 			let sum = 0
 
 			for (let i = begin; i < end; i++) {
-				const ti = this.epochTable[i]
+				const ti = this.#epochTable[i]
 				let basis = 1
 
 				for (let j = begin; j < end; j++) {
 					if (j !== i) {
-						const tj = this.epochTable[j]
+						const tj = this.#epochTable[j]
 						basis *= (seconds - tj) / (ti - tj)
 					}
 				}
 
-				sum += this.stateTable[i * 6 + component] * basis
+				sum += this.#stateTable[i * 6 + component] * basis
 			}
 
 			if (component < 3) {
@@ -296,17 +304,17 @@ export class Type9Segment implements SpkSegment {
 		return [p, v]
 	}
 
-	private searchEpochIndex(seconds: number) {
+	#searchEpochIndex(seconds: number) {
 		let lo = 0
-		let hi = this.n - 1
+		let hi = this.#n - 1
 
-		if (seconds < this.epochTable[0] || seconds > this.epochTable[hi]) {
+		if (seconds < this.#epochTable[0] || seconds > this.#epochTable[hi]) {
 			return -1
 		}
 
 		while (lo <= hi) {
 			const mid = (lo + hi) >>> 1
-			const value = this.epochTable[mid]
+			const value = this.#epochTable[mid]
 
 			if (value < seconds) {
 				lo = mid + 1
@@ -336,51 +344,54 @@ interface Type21Coefficent {
 // These data structures use the same mathematical trajectory representation as SPK data type 1,
 // but type 21 allows use of larger, higher-degree MDAs.
 export class Type21Segment implements SpkSegment {
-	private initialized = false
-	private n = 0
-	private epochDirCount = 0
-	private maxdim = 0
-	private dlsize = 0
-	private epochTable: Float64Array = new Float64Array(0)
-	private epochDir: Float64Array = new Float64Array(0)
-	private readonly coefficients = new Map<number, Type21Coefficent>()
+	#initialized = false
+	#n = 0
+	#epochDirCount = 0
+	#maxdim = 0
+	#dlsize = 0
+	#epochTable: Float64Array = new Float64Array(0)
+	#epochDir: Float64Array = new Float64Array(0)
+	readonly #coefficients = new Map<number, Type21Coefficent>()
+	readonly #daf: Daf
 
 	constructor(
-		private readonly daf: Daf,
-		// private readonly source: string,
+		daf: Daf,
+		// readonly source: string,
 		readonly start: number,
 		readonly end: number,
 		readonly center: number,
 		readonly target: number,
-		// private readonly frame: number,
-		// private readonly type: number,
+		// readonly frame: number,
+		// readonly type: number,
 		readonly startIndex: number,
 		readonly endIndex: number,
-	) {}
+	) {
+		this.#daf = daf
+	}
 
 	async at(time: Time): Promise<PositionAndVelocity> {
-		if (!this.initialized) {
-			const [a, b] = await this.daf.read(this.endIndex - 1, this.endIndex)
-			this.maxdim = Math.trunc(a) // Difference line size.
-			this.dlsize = 4 * this.maxdim + 11
-			this.n = Math.trunc(b) // The number of records in a segment.
+		if (!this.#initialized) {
+			const [a, b] = await this.#daf.read(this.endIndex - 1, this.endIndex)
+			this.#maxdim = Math.trunc(a) // Difference line size.
+			this.#dlsize = 4 * this.#maxdim + 11
+			this.#n = Math.trunc(b) // The number of records in a segment.
 			// Epochs for all records in this segment.
-			const start = this.startIndex + this.n * this.dlsize
-			this.epochTable = await this.daf.read(start, start + this.n - 1)
-			this.epochDirCount = Math.trunc(this.n / 100)
-			if (this.epochDirCount > 0) this.epochDir = await this.daf.read(this.endIndex - this.epochDirCount - 1, this.endIndex - 2)
-			this.initialized = true
+			const start = this.startIndex + this.#n * this.#dlsize
+			this.#epochTable = await this.#daf.read(start, start + this.#n - 1)
+			this.#epochDirCount = Math.trunc(this.#n / 100)
+			if (this.#epochDirCount > 0) this.#epochDir = await this.#daf.read(this.endIndex - this.#epochDirCount - 1, this.endIndex - 2)
+			this.#initialized = true
 		}
 
 		const t = tdb(time)
 		const seconds = (t.day - J2000 + t.fraction) * DAYSEC
-		const index = this.searchCoefficientIndex(seconds)
+		const index = this.#searchCoefficientIndex(seconds)
 
-		if (!(await this.computeCoefficient(index))) {
+		if (!(await this.#computeCoefficient(index))) {
 			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
 		}
 
-		const c = this.coefficients.get(index)!
+		const c = this.#coefficients.get(index)!
 
 		// Next we set up for the computation of the various differences.
 		const delta = seconds - c.tl
@@ -466,15 +477,15 @@ export class Type21Segment implements SpkSegment {
 		return [p, v]
 	}
 
-	private searchCoefficientIndex(seconds: number): number {
+	#searchCoefficientIndex(seconds: number): number {
 		let a: number
 		let b: number
 
-		if (this.epochDirCount > 0) {
+		if (this.#epochDirCount > 0) {
 			// TODO: Not tested!
 			let subdir = 0
 
-			while (subdir < this.epochDirCount && this.epochDir[subdir] < seconds) {
+			while (subdir < this.#epochDirCount && this.#epochDir[subdir] < seconds) {
 				subdir++
 			}
 
@@ -482,14 +493,14 @@ export class Type21Segment implements SpkSegment {
 			b = (subdir + 1) * 100
 		} else {
 			a = 0
-			b = this.n
+			b = this.#n
 		}
 
 		let index = -1
 
 		// Search target epoch in epoch table.
 		for (let i = a; i < b; i++) {
-			if (i < this.epochTable.length && this.epochTable[i] >= seconds) {
+			if (i < this.#epochTable.length && this.#epochTable[i] >= seconds) {
 				index = i
 				break
 			}
@@ -502,43 +513,43 @@ export class Type21Segment implements SpkSegment {
 		return index
 	}
 
-	private async computeCoefficient(index: number) {
+	async #computeCoefficient(index: number) {
 		if (index < 0) return false
-		if (this.coefficients.has(index)) return true
+		if (this.#coefficients.has(index)) return true
 
-		const mdaRecord = await this.daf.read(this.startIndex + index * this.dlsize, this.startIndex + (index + 1) * this.dlsize - 1)
+		const mdaRecord = await this.#daf.read(this.startIndex + index * this.#dlsize, this.startIndex + (index + 1) * this.#dlsize - 1)
 
 		// Reference epoch of record.
 		const tl = mdaRecord[0]
 		// Stepsize function vector.
-		const g = mdaRecord.subarray(1, this.maxdim + 1)
+		const g = mdaRecord.subarray(1, this.#maxdim + 1)
 
 		// Reference position & velocity vector.
 		const p = new Float64Array(3)
 		const v = new Float64Array(3)
 
-		p[0] = mdaRecord[this.maxdim + 1]
-		v[0] = mdaRecord[this.maxdim + 2]
+		p[0] = mdaRecord[this.#maxdim + 1]
+		v[0] = mdaRecord[this.#maxdim + 2]
 
-		p[1] = mdaRecord[this.maxdim + 3]
-		v[1] = mdaRecord[this.maxdim + 4]
+		p[1] = mdaRecord[this.#maxdim + 3]
+		v[1] = mdaRecord[this.#maxdim + 4]
 
-		p[2] = mdaRecord[this.maxdim + 5]
-		v[2] = mdaRecord[this.maxdim + 6]
+		p[2] = mdaRecord[this.#maxdim + 5]
+		v[2] = mdaRecord[this.#maxdim + 6]
 
 		// dt = mdaRecord.sliceArray(maxdim + 7 until 4 * maxdim + 7)
-		const dt = new Array<Float64Array>(this.maxdim)
-		const dto = this.maxdim + 7
+		const dt = new Array<Float64Array>(this.#maxdim)
+		const dto = this.#maxdim + 7
 
-		for (let p = 0; p < this.maxdim; p++) {
+		for (let p = 0; p < this.#maxdim; p++) {
 			const a = new Float64Array(3)
 			a[0] = mdaRecord[dto + p]
-			a[1] = mdaRecord[dto + this.maxdim + p]
-			a[2] = mdaRecord[dto + 2 * this.maxdim + p]
+			a[1] = mdaRecord[dto + this.#maxdim + p]
+			a[2] = mdaRecord[dto + 2 * this.#maxdim + p]
 			dt[p] = a
 		}
 
-		const kqo = 4 * this.maxdim
+		const kqo = 4 * this.#maxdim
 
 		// Initializing the difference table.
 		const kqmax1 = Math.trunc(mdaRecord[kqo + 7])
@@ -547,7 +558,7 @@ export class Type21Segment implements SpkSegment {
 		kq[1] = Math.trunc(mdaRecord[kqo + 9])
 		kq[2] = Math.trunc(mdaRecord[kqo + 10])
 
-		this.coefficients.set(index, { tl, g, p, v, dt, kqmax1, kq })
+		this.#coefficients.set(index, { tl, g, p, v, dt, kqmax1, kq })
 
 		return true
 	}
@@ -561,7 +572,7 @@ export class MultipleSpkSegment implements SpkSegment {
 	readonly startIndex: number
 	readonly endIndex: number
 
-	private readonly segments: SpkSegment[]
+	readonly #segments: SpkSegment[]
 
 	constructor(segments: SpkSegment[]) {
 		if (segments.length === 0) {
@@ -579,15 +590,15 @@ export class MultipleSpkSegment implements SpkSegment {
 		this.end = segments.length > 1 ? Math.max(...segments.map((e) => e.end)) : segments[0].end
 		this.startIndex = segments.length > 1 ? Math.min(...segments.map((e) => e.startIndex)) : segments[0].startIndex
 		this.endIndex = segments.length > 1 ? Math.max(...segments.map((e) => e.endIndex)) : segments[0].endIndex
-		this.segments = segments.toSorted((a, b) => a.end - b.end)
+		this.#segments = segments.toSorted((a, b) => a.end - b.end)
 	}
 
 	at(time: Time): Promise<PositionAndVelocity> {
 		const jd = time.day + time.fraction
-		let segment = this.segments[0]
+		let segment = this.#segments[0]
 
-		for (let i = 1; i < this.segments.length; i++) {
-			const s = this.segments[i]
+		for (let i = 1; i < this.#segments.length; i++) {
+			const s = this.#segments[i]
 			if (s.end >= jd) segment = s
 		}
 

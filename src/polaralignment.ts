@@ -150,39 +150,39 @@ export function solveAzAltAdjustment(from: Vec3, to: Vec3, upAxis: Vec3, eastAxi
 }
 
 export class ThreePointPolarAlignment {
-	private readonly points = new Array<readonly [Angle, Angle]>(3)
+	readonly #points = new Array<readonly [Angle, Angle]>(3)
 
-	private position = 0
-	private referencePoint: readonly [Angle, Angle] | false = false
-	private currentError: ThreePointPolarAlignmentResult | false = false
+	#position = 0
+	#referencePoint: readonly [Angle, Angle] | false = false
+	#currentError: ThreePointPolarAlignmentResult | false = false
 
-	constructor(private refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS) {}
+	constructor(readonly refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS) {}
 
 	add(rightAscension: Angle, declination: Angle, time: Time) {
 		const point = [rightAscension, declination] as const
 
-		if (this.position < 3) {
-			this.points[this.position] = point
+		if (this.#position < 3) {
+			this.#points[this.#position] = point
 		}
 
-		this.position++
+		this.#position++
 
 		// When we have three points, compute the initial polar alignment error.
 		// After that, each new point is used to compute the adjusted error
-		if (this.position === 3) {
-			this.currentError = threePointPolarAlignmentError(this.points[0], this.points[1], this.points[2], time, this.refraction)
-			this.referencePoint = this.points[2]
-		} else if (this.position > 3 && this.currentError !== false && this.referencePoint !== false) {
-			this.currentError = threePointPolarAlignmentAfterAdjustment(this.currentError, this.referencePoint, point, time, this.refraction)
-			if (this.currentError !== false) this.referencePoint = point
+		if (this.#position === 3) {
+			this.#currentError = threePointPolarAlignmentError(this.#points[0], this.#points[1], this.#points[2], time, this.refraction)
+			this.#referencePoint = this.#points[2]
+		} else if (this.#position > 3 && this.#currentError !== false && this.#referencePoint !== false) {
+			this.#currentError = threePointPolarAlignmentAfterAdjustment(this.#currentError, this.#referencePoint, point, time, this.refraction)
+			if (this.#currentError !== false) this.#referencePoint = point
 		}
 
-		return this.currentError
+		return this.#currentError
 	}
 
 	reset() {
-		this.position = 0
-		this.referencePoint = false
-		this.currentError = false
+		this.#position = 0
+		this.#referencePoint = false
+		this.#currentError = false
 	}
 }

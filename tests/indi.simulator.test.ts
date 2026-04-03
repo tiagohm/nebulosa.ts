@@ -11,22 +11,22 @@ import type { PropertyState } from '../src/indi.types'
 const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
 
 class CameraFrameReceiver implements DeviceHandler<Camera> {
-	private readonly frames: Buffer<ArrayBuffer>[] = []
+	readonly #frames: Buffer<ArrayBuffer>[] = []
 
 	added(device: Camera) {}
 	updated(device: Camera, property: keyof Camera & string, state?: PropertyState) {}
 	removed(device: Camera) {}
 
 	blobReceived(device: Camera, data: string | Buffer<ArrayBuffer>) {
-		Buffer.isBuffer(data) && this.frames.push(data)
+		Buffer.isBuffer(data) && this.#frames.push(data)
 	}
 
 	get length() {
-		return this.frames.length
+		return this.#frames.length
 	}
 
 	get lastFrame() {
-		return this.frames[this.frames.length - 1]
+		return this.#frames[this.#frames.length - 1]
 	}
 }
 

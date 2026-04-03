@@ -521,7 +521,7 @@ export class MountPointing {
 	#diagnostics = emptyDiagnostics(0)
 	#dirty = false
 
-	constructor(private readonly defaults?: Readonly<PointingFitOptions>) {}
+	constructor(readonly defaults?: Readonly<PointingFitOptions>) {}
 
 	// Adds a sample to the internal dataset.
 	add(sample: Readonly<PointingSample>) {

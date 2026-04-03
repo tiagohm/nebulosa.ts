@@ -88,14 +88,14 @@ const FASTDCT = 2048
 // const LIMITSCANS = 32768
 
 export class Jpeg {
-	private readonly lib = load()
+	readonly #lib = load()
 
 	estimateBufferSize(width: number, height: number, chrominanceSubsampling: ChrominanceSubsampling) {
-		return this.lib.tjBufSize(width, height, CHROMINANCE_SUBSAMPLING_MAP[chrominanceSubsampling])
+		return this.#lib.tjBufSize(width, height, CHROMINANCE_SUBSAMPLING_MAP[chrominanceSubsampling])
 	}
 
 	compress(data: NodeJS.TypedArray<ArrayBufferLike> | DataView<ArrayBufferLike>, width: number, height: number, format: PixelFormat, quality: number, chrominanceSubsampling: ChrominanceSubsampling = '4:4:4', jpeg?: Buffer) {
-		const pointer = this.lib.tjInitCompress()
+		const pointer = this.#lib.tjInitCompress()
 
 		if (!pointer) {
 			throw new Error('failed to initialize JPEG compressor')
@@ -115,7 +115,7 @@ export class Jpeg {
 		p[1] = BigInt(jpeg.byteLength) // ulong* jpegSize
 
 		try {
-			const result = this.lib.tjCompress2(pointer, data, width, pitch, height, PIXEL_FORMAT_MAP[format], ptr(p, 0), ptr(p, 8), isGray ? 3 : CHROMINANCE_SUBSAMPLING_MAP[chrominanceSubsampling], quality, flag)
+			const result = this.#lib.tjCompress2(pointer, data, width, pitch, height, PIXEL_FORMAT_MAP[format], ptr(p, 0), ptr(p, 8), isGray ? 3 : CHROMINANCE_SUBSAMPLING_MAP[chrominanceSubsampling], quality, flag)
 
 			if (result === 0) {
 				// without NOREALLOC flag
@@ -124,10 +124,10 @@ export class Jpeg {
 				// return new Uint8Array(toArrayBuffer(p as never, 0, size), 0, size)
 				return jpeg.subarray(0, Number(p[1]))
 			} else {
-				console.error('JPEG compression failed:', this.lib.tjGetErrorStr().toString())
+				console.error('JPEG compression failed:', this.#lib.tjGetErrorStr().toString())
 			}
 		} finally {
-			this.lib.tjDestroy(pointer)
+			this.#lib.tjDestroy(pointer)
 		}
 
 		return undefined

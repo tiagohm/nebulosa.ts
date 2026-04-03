@@ -167,7 +167,7 @@ export class GuiderClient {
 		this.emitEvent('LockPositionSet', { X: selected.x, Y: selected.y })
 
 		if (this.#appState === 'Stopped' || this.#appState === 'Looping') {
-			this.setAppState('Selected')
+			this.#setAppState('Selected')
 		}
 
 		return this.#lockPosition
@@ -189,7 +189,7 @@ export class GuiderClient {
 
 	// Stops camera exposure and clears active guiding/looping state.
 	stopCapture() {
-		this.emitCaptureStoppedEvent()
+		this.#emitCaptureStoppedEvent()
 
 		if (this.#camera !== undefined) {
 			this.cameraManager.stopExposure(this.#camera)
@@ -205,7 +205,7 @@ export class GuiderClient {
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
 		this.#resumeState = 'Stopped'
-		this.setAppState('Stopped')
+		this.#setAppState('Stopped')
 
 		if (this.#guider.currentState.ditherActive) {
 			this.#guider.stopDither()
@@ -230,7 +230,7 @@ export class GuiderClient {
 
 		if (this.#appState === 'Calibrating' || this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
 			this.#resumeState = this.#lockPosition === undefined ? 'Looping' : 'Selected'
-			if (!this.#paused) this.setAppState(this.#resumeState)
+			if (!this.#paused) this.#setAppState(this.#resumeState)
 		}
 	}
 
@@ -256,7 +256,7 @@ export class GuiderClient {
 
 		if (this.#appState !== 'Stopped') {
 			this.#resumeState = 'Looping'
-			if (!this.#paused) this.setAppState('Looping')
+			if (!this.#paused) this.#setAppState('Looping')
 		}
 	}
 
@@ -417,11 +417,11 @@ export class GuiderClient {
 			if (recalibrate) this.#calibration = undefined
 			this.#calibrator.reset()
 			this.emitEvent('StartCalibration', { Mount: this.#guideOutput.name })
-			this.setAppState('Calibrating')
+			this.#setAppState('Calibrating')
 		} else {
 			this.#guider = this.#makeGuider(this.#calibration)
 			this.emitEvent('StartGuiding')
-			this.setAppState('Guiding')
+			this.#setAppState('Guiding')
 		}
 
 		this.startCapture(this.#exposure)
@@ -452,7 +452,7 @@ export class GuiderClient {
 		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
-		this.setAppState(this.#lockPosition === undefined ? 'Looping' : 'Selected')
+		this.#setAppState(this.#lockPosition === undefined ? 'Looping' : 'Selected')
 		this.startCapture(this.#exposure)
 
 		return true
@@ -508,10 +508,10 @@ export class GuiderClient {
 		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
 			this.#guider = this.#makeGuider(this.#calibration)
 			this.#resumeState = 'Guiding'
-			if (!this.#paused) this.setAppState('Guiding')
+			if (!this.#paused) this.#setAppState('Guiding')
 		} else if (this.#appState !== 'Stopped') {
 			this.#resumeState = 'Selected'
-			if (!this.#paused) this.setAppState('Selected')
+			if (!this.#paused) this.#setAppState('Selected')
 		}
 
 		return true
@@ -574,7 +574,7 @@ export class GuiderClient {
 			this.#fullPause = full || this.#resumeState === 'Calibrating'
 			this.#lockShiftTimestamp = 0
 			this.emitEvent('Paused')
-			this.setAppState('Paused')
+			this.#setAppState('Paused')
 			if (this.#fullPause && this.#camera !== undefined) this.cameraManager.stopExposure(this.#camera)
 			return true
 		}
@@ -583,7 +583,7 @@ export class GuiderClient {
 		this.#fullPause = true
 		this.#lockShiftTimestamp = 0
 		this.emitEvent('Resumed')
-		this.setAppState(this.#resumeState === 'Paused' ? 'Looping' : this.#resumeState)
+		this.#setAppState(this.#resumeState === 'Paused' ? 'Looping' : this.#resumeState)
 
 		if (this.#appState !== 'Stopped' && this.#camera !== undefined) {
 			this.startCapture(this.#exposure)
@@ -642,7 +642,7 @@ export class GuiderClient {
 
 		if (appState === 'Calibrating') return this.#processCalibrationFrame(frame)
 		if (appState === 'Guiding' || appState === 'LostLock') return this.#processGuidingFrame(frame)
-		if (appState === 'Looping' || appState === 'Selected') this.emitLoopingExposuresEvent(frame)
+		if (appState === 'Looping' || appState === 'Selected') this.#emitLoopingExposuresEvent(frame)
 
 		return 0
 	}
@@ -652,18 +652,18 @@ export class GuiderClient {
 		const step = this.#calibrator.processFrame(frame)
 
 		this.#updateLockPositionFromCalibration(step.diagnostics)
-		this.emitCalibratingEvent(step.diagnostics)
+		this.#emitCalibratingEvent(step.diagnostics)
 
 		if (step.failure !== undefined) {
 			this.emitEvent('CalibrationFailed', { Reason: step.failure.message })
 
 			if (this.#settling) {
 				this.#settling = false
-				this.emitSettleDoneEvent(1, step.failure.message)
+				this.#emitSettleDoneEvent(1, step.failure.message)
 			}
 
 			this.#resumeState = this.#lockPosition === undefined ? 'Looping' : 'Selected'
-			if (!this.#paused) this.setAppState(this.#resumeState)
+			if (!this.#paused) this.#setAppState(this.#resumeState)
 			return 0
 		}
 
@@ -673,7 +673,7 @@ export class GuiderClient {
 			this.emitEvent('CalibrationComplete', { Mount: this.#guideOutput?.name ?? '' })
 			this.emitEvent('StartGuiding')
 			this.#resumeState = 'Guiding'
-			if (!this.#paused) this.setAppState('Guiding')
+			if (!this.#paused) this.#setAppState('Guiding')
 			return 0
 		}
 
@@ -689,18 +689,18 @@ export class GuiderClient {
 		this.#updateLockSearchPositionFromGuider(command.diagnostics.measurementX, command.diagnostics.measurementY)
 
 		if (command.state === 'lost') {
-			this.emitStarLostEvent(frame, command)
+			this.#emitStarLostEvent(frame, command)
 			this.emitEvent('LockPositionLost')
 			this.#resumeState = 'LostLock'
-			if (!this.#paused) this.setAppState('LostLock')
+			if (!this.#paused) this.#setAppState('LostLock')
 			this.#updateSettling(undefined, undefined, true, true, timestamp)
 			return 0
 		}
 
-		this.emitGuideStepEvent(frame, command)
+		this.#emitGuideStepEvent(frame, command)
 
 		this.#resumeState = 'Guiding'
-		if (!this.#paused) this.setAppState('Guiding')
+		if (!this.#paused) this.#setAppState('Guiding')
 
 		this.#updateSettling(command.diagnostics.dx, command.diagnostics.dy, command.diagnostics.badFrame, command.diagnostics.lost, timestamp)
 		this.#updateLockShift(frame)
@@ -738,14 +738,14 @@ export class GuiderClient {
 
 		if (this.#settle.timeout > 0 && timestamp - this.#settleStartTime >= this.#settle.timeout * 1000) {
 			this.#settling = false
-			this.emitSettleDoneEvent(1, 'settle timeout')
+			this.#emitSettleDoneEvent(1, 'settle timeout')
 			return
 		}
 
 		if (badFrame || lost || dx === undefined || dy === undefined) {
 			this.#settleStableSince = 0
 			this.#settleDroppedFrameCount++
-			this.emitSettlingEvent(0, timestamp, false)
+			this.#emitSettlingEvent(0, timestamp, false)
 			return
 		}
 
@@ -753,23 +753,23 @@ export class GuiderClient {
 
 		if (distance > this.#settle.pixels) {
 			this.#settleStableSince = 0
-			this.emitSettlingEvent(distance, timestamp, true)
+			this.#emitSettlingEvent(distance, timestamp, true)
 			return
 		}
 
 		if (this.#settleStableSince === 0) {
 			this.#settleStableSince = timestamp
-			this.emitSettlingEvent(distance, timestamp, true)
+			this.#emitSettlingEvent(distance, timestamp, true)
 			return
 		}
 
 		if (timestamp - this.#settleStableSince >= this.#settle.time * 1000) {
 			this.#settling = false
-			this.emitSettleDoneEvent(0)
+			this.#emitSettleDoneEvent(0)
 			return
 		}
 
-		this.emitSettlingEvent(distance, timestamp, true)
+		this.#emitSettlingEvent(distance, timestamp, true)
 	}
 
 	// Refreshes the public lock target from guider diagnostics when available.
@@ -972,7 +972,7 @@ export class GuiderClient {
 	}
 
 	// Updates the app state and emits the paired PHD2 AppState event once.
-	private setAppState(appState: PHD2AppState) {
+	#setAppState(appState: PHD2AppState) {
 		// if (this.#appState === appState) return
 		this.#appState = appState
 		// The AppState notification is only sent when the client first connects to PHD2.
@@ -982,7 +982,7 @@ export class GuiderClient {
 	}
 
 	// Emits the capture-stop event that matches the current or paused-resume session mode.
-	private emitCaptureStoppedEvent() {
+	#emitCaptureStoppedEvent() {
 		const appState = this.#appState === 'Paused' ? this.#resumeState : this.#appState
 
 		if (appState === 'Looping' || appState === 'Selected') {
@@ -993,7 +993,7 @@ export class GuiderClient {
 	}
 
 	// Emits one passive frame event while exposures are looping.
-	private emitLoopingExposuresEvent(frame: GuideFrame) {
+	#emitLoopingExposuresEvent(frame: GuideFrame) {
 		const star = frame.stars[0]
 
 		this.emitEvent('LoopingExposures', {
@@ -1006,7 +1006,7 @@ export class GuiderClient {
 	}
 
 	// Emits a calibration progress event from the latest calibrator diagnostics.
-	private emitCalibratingEvent(diagnostics: GuidingCalibrationDiagnostics) {
+	#emitCalibratingEvent(diagnostics: GuidingCalibrationDiagnostics) {
 		const x = diagnostics.currentX ?? diagnostics.startX ?? 0
 		const y = diagnostics.currentY ?? diagnostics.startY ?? 0
 		const pendingPulse = diagnostics.pendingPulse?.ra.direction ?? diagnostics.pendingPulse?.dec.direction
@@ -1027,7 +1027,7 @@ export class GuiderClient {
 	}
 
 	// Emits one guide-step event using the latest guider command and diagnostics.
-	private emitGuideStepEvent(frame: GuideFrame, command: GuideCommand) {
+	#emitGuideStepEvent(frame: GuideFrame, command: GuideCommand) {
 		const { diagnostics, ra, dec } = command
 		const star = frame.stars[0]
 		const dx = diagnostics.dx ?? 0
@@ -1063,7 +1063,7 @@ export class GuiderClient {
 	}
 
 	// Emits a star-lost event for the current frame.
-	private emitStarLostEvent(frame: GuideFrame, command: GuideCommand) {
+	#emitStarLostEvent(frame: GuideFrame, command: GuideCommand) {
 		const star = frame.stars[0]
 		const dx = command.diagnostics.dx ?? 0
 		const dy = command.diagnostics.dy ?? 0
@@ -1081,7 +1081,7 @@ export class GuiderClient {
 	}
 
 	// Emits one in-progress settle event using PHD2's time-in-range and requested settle duration fields.
-	private emitSettlingEvent(distance: number, timestamp: number, starLocked: boolean) {
+	#emitSettlingEvent(distance: number, timestamp: number, starLocked: boolean) {
 		this.emitEvent('Settling', {
 			Distance: distance,
 			Time: this.#settleStableSince === 0 ? 0 : (timestamp - this.#settleStableSince) * 0.001,
@@ -1091,7 +1091,7 @@ export class GuiderClient {
 	}
 
 	// Emits the final settle status and clears the local settle counters.
-	private emitSettleDoneEvent(status: number, error?: string) {
+	#emitSettleDoneEvent(status: number, error?: string) {
 		this.emitEvent('SettleDone', { Status: status, TotalFrames: this.#settleFrameCount, DroppedFrames: this.#settleDroppedFrameCount, Error: error })
 		this.#settleFrameCount = 0
 		this.#settleDroppedFrameCount = 0

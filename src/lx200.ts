@@ -43,13 +43,13 @@ const TIME_FORMAT = 'HH:mm:ss'
 
 // Meade Telescope Serial Command Protocol Server.
 export class Lx200ProtocolServer {
-	private readonly sockets: Socket<unknown>[] = []
-	private server?: TCPSocketListener
+	readonly #sockets: Socket<unknown>[] = []
+	#server?: TCPSocketListener
 
-	private readonly coordinates: [Angle, Angle] = [0, 0]
-	private readonly utc: TemporalDate = [2025, 1, 1, 0, 0, 0, 0]
-	private utcOffset = 0
-	private utcStep = 0
+	readonly #coordinates: [Angle, Angle] = [0, 0]
+	readonly #utc: TemporalDate = [2025, 1, 1, 0, 0, 0, 0]
+	#utcOffset = 0
+	#utcStep = 0
 
 	constructor(
 		readonly host: string,
@@ -58,28 +58,28 @@ export class Lx200ProtocolServer {
 	) {}
 
 	start() {
-		if (this.server) return false
+		if (this.#server) return false
 
-		this.server = Bun.listen({
+		this.#server = Bun.listen({
 			hostname: this.host,
 			port: this.port,
 			allowHalfOpen: false,
 			socket: {
 				data: (socket, data) => {
-					this.processData(socket, data)
+					this.#processData(socket, data)
 				},
 				open: (socket) => {
 					console.info('connection open')
-					this.sockets.push(socket)
+					this.#sockets.push(socket)
 					this.options.handler.connect?.(this)
 
-					this.coordinates[0] = this.options.handler.rightAscension(this)
-					this.coordinates[1] = this.options.handler.declination(this)
+					this.#coordinates[0] = this.options.handler.rightAscension(this)
+					this.#coordinates[1] = this.options.handler.declination(this)
 				},
 				close: (socket) => {
 					console.warn('connection closed')
-					const index = this.sockets.indexOf(socket)
-					if (index >= 0) this.sockets.splice(index, 1)
+					const index = this.#sockets.indexOf(socket)
+					if (index >= 0) this.#sockets.splice(index, 1)
 					this.options.handler.disconnect?.(this)
 				},
 				error: (_, error) => {
@@ -98,12 +98,12 @@ export class Lx200ProtocolServer {
 	}
 
 	stop() {
-		this.server?.stop(true)
-		this.server = undefined
-		this.sockets.length = 0
+		this.#server?.stop(true)
+		this.#server = undefined
+		this.#sockets.length = 0
 	}
 
-	private processData(socket: Socket<unknown>, data: Buffer) {
+	#processData(socket: Socket<unknown>, data: Buffer) {
 		if (data.byteLength >= 2) {
 			const command = data.toString('ascii')
 
@@ -112,54 +112,54 @@ export class Lx200ProtocolServer {
 			switch (command) {
 				// LX200 protocol detection.
 				case '#\x06':
-					return this.ack(socket)
+					return this.#ack(socket)
 				// Get Telescope Product Name
 				case '#:GVP#':
-					return this.text(socket, `${this.options.name || 'LX200'}#`)
+					return this.#text(socket, `${this.options.name || 'LX200'}#`)
 				// Get Telescope Firmware Number
 				case '#:GVN#':
-					return this.text(socket, `${this.options.version || 'v1.0'}#`)
+					return this.#text(socket, `${this.options.version || 'v1.0'}#`)
 				// Get Telescope Firmware Date
 				case '#:GVD#':
-					return this.text(socket, 'Jan 01 2025#')
+					return this.#text(socket, 'Jan 01 2025#')
 				// Get Telescope Firmware Time
 				case '#:GVT#':
-					return this.text(socket, '00:00:00#')
+					return this.#text(socket, '00:00:00#')
 				// Get Telescope RA
 				case '#:GR#':
-					return this.rightAscension(socket)
+					return this.#rightAscension(socket)
 				// Get Telescope DEC
 				case '#:GD#':
-					return this.declination(socket)
+					return this.#declination(socket)
 				// Get Current Site Longitude
 				case '#:Gg#':
-					return this.longitude(socket)
+					return this.#longitude(socket)
 				// Get Current Site Latitude
 				case '#:Gt#':
-					return this.latitude(socket)
+					return this.#latitude(socket)
 				// Get current date
 				case '#:GC#':
-					return this.date(socket)
+					return this.#date(socket)
 				// Get Local Time in 24 hour format
 				case '#:GL#':
-					return this.time(socket)
+					return this.#time(socket)
 				// Get UTC offset time
 				case '#:GG#':
-					return this.zoneOffset(socket)
+					return this.#zoneOffset(socket)
 				// Returns status of the Scope
 				case '#:GW#':
-					return this.status(socket)
+					return this.#status(socket)
 				// Requests a string of bars indicating the distance to the current library object
 				case '#:D#':
-					return this.slewing(socket)
+					return this.#slewing(socket)
 				// Synchronizes the telescope's position with the currently selected database object's coordinates
 				case '#:CM#':
-					this.options.handler.sync?.(this, ...this.coordinates)
-					return this.zero(socket)
+					this.options.handler.sync?.(this, ...this.#coordinates)
+					return this.#zero(socket)
 				// Slew to Target Object
 				case '#:MS#':
-					this.options.handler.goto?.(this, ...this.coordinates)
-					return this.zero(socket)
+					this.options.handler.goto?.(this, ...this.#coordinates)
+					return this.#zero(socket)
 				// Move/Halt Telescope
 				case '#:Me#':
 				case '#:Mn#':
@@ -186,51 +186,51 @@ export class Lx200ProtocolServer {
 					// Set target object RA
 					if (command.startsWith('#:Sr')) {
 						const ra = parseAngle(command.substring(4), true)
-						if (ra !== undefined) this.coordinates[0] = ra
-						return this.one(socket)
+						if (ra !== undefined) this.#coordinates[0] = ra
+						return this.#one(socket)
 					}
 					// Set target object declination
 					else if (command.startsWith('#:Sd')) {
 						const dec = parseAngle(command.substring(4))
-						if (dec !== undefined) this.coordinates[1] = dec
-						return this.one(socket)
+						if (dec !== undefined) this.#coordinates[1] = dec
+						return this.#one(socket)
 					}
 					// Set current site’s longitude
 					else if (command.startsWith('#:Sg')) {
 						const longitude = parseAngle(command.substring(4))
 						if (longitude !== undefined) this.options.handler.longitude(this, -longitude)
-						return this.one(socket)
+						return this.#one(socket)
 					}
 					// Sets the current site latitude
 					else if (command.startsWith('#:St')) {
 						const latitude = parseAngle(command.substring(4))
 						if (latitude !== undefined) this.options.handler.latitude(this, latitude)
-						return this.one(socket)
+						return this.#one(socket)
 					}
 					// Set the number of hours added to local time to yield UTC
 					else if (command.startsWith('#:SG')) {
 						const hours = -command.substring(4, command.length - 1)
-						this.utcOffset = Math.trunc(hours * 60)
-						this.handleDateTimeAndOffset()
-						return this.one(socket)
+						this.#utcOffset = Math.trunc(hours * 60)
+						this.#handleDateTimeAndOffset()
+						return this.#one(socket)
 					}
 					// Set the local Time
 					else if (command.startsWith('#:SL')) {
 						const [h, m, s] = command.substring(4, command.length - 1).split(':')
-						this.utc[3] = +h
-						this.utc[4] = +m
-						this.utc[5] = +s
-						this.handleDateTimeAndOffset()
-						return this.one(socket)
+						this.#utc[3] = +h
+						this.#utc[4] = +m
+						this.#utc[5] = +s
+						this.#handleDateTimeAndOffset()
+						return this.#one(socket)
 					}
 					// Change Handbox Date to MM/DD/YY
 					else if (command.startsWith('#:SC')) {
 						const [m, d, y] = command.substring(4, command.length - 1).split('/')
-						this.utc[0] = 2000 + +y
-						this.utc[1] = +m
-						this.utc[2] = +d
-						this.handleDateTimeAndOffset()
-						return this.text(socket, '1Updating planetary data       #                              #')
+						this.#utc[0] = 2000 + +y
+						this.#utc[1] = +m
+						this.#utc[2] = +d
+						this.#handleDateTimeAndOffset()
+						return this.#text(socket, '1Updating planetary data       #                              #')
 					}
 
 					console.warn('unknown command', command)
@@ -240,82 +240,82 @@ export class Lx200ProtocolServer {
 		}
 	}
 
-	private ack(socket: Socket<unknown>) {
+	#ack(socket: Socket<unknown>) {
 		socket.write(ACK)
 	}
 
-	private one(socket: Socket<unknown>) {
+	#one(socket: Socket<unknown>) {
 		socket.write(ONE)
 	}
 
-	private zero(socket: Socket<unknown>) {
+	#zero(socket: Socket<unknown>) {
 		socket.write(ZERO)
 	}
 
-	private text(socket: Socket<unknown>, value: string) {
+	#text(socket: Socket<unknown>, value: string) {
 		socket.write(Buffer.from(value, 'ascii'))
 	}
 
-	private handleDateTimeAndOffset() {
-		this.utcStep++
+	#handleDateTimeAndOffset() {
+		this.#utcStep++
 
-		if (this.utcStep >= 3) {
-			this.utcStep = 0
-			this.options.handler.dateTime(this, [temporalAdd(temporalFromDate(...this.utc), -this.utcOffset, 'm'), this.utcOffset])
+		if (this.#utcStep >= 3) {
+			this.#utcStep = 0
+			this.options.handler.dateTime(this, [temporalAdd(temporalFromDate(...this.#utc), -this.#utcOffset, 'm'), this.#utcOffset])
 		}
 	}
 
-	private rightAscension(socket: Socket<unknown>) {
+	#rightAscension(socket: Socket<unknown>) {
 		const [h, m, s] = toHms(this.options.handler.rightAscension(this))
 		const command = `+${formatNumber(h)}:${formatNumber(m)}:${formatNumber(s)}#`
-		this.text(socket, command)
+		this.#text(socket, command)
 	}
 
-	private declination(socket: Socket<unknown>) {
+	#declination(socket: Socket<unknown>) {
 		const [d, m, s, neg] = toDms(this.options.handler.declination(this))
 		const command = `${neg < 0 ? '-' : '+'}${formatNumber(d)}*${formatNumber(m)}:${formatNumber(s)}#`
-		this.text(socket, command)
+		this.#text(socket, command)
 	}
 
-	private longitude(socket: Socket<unknown>) {
+	#longitude(socket: Socket<unknown>) {
 		const [d, m, , neg] = toDms(this.options.handler.longitude(this))
 		const command = `${neg < 0 ? '+' : '-'}${formatNumber(d, 3)}*${formatNumber(m)}#`
-		this.text(socket, command)
+		this.#text(socket, command)
 	}
 
-	private latitude(socket: Socket<unknown>) {
+	#latitude(socket: Socket<unknown>) {
 		const [d, m, , neg] = toDms(this.options.handler.latitude(this))
 		const command = `${neg < 0 ? '-' : '+'}${formatNumber(d)}*${formatNumber(m)}#`
-		this.text(socket, command)
+		this.#text(socket, command)
 	}
 
-	private date(socket: Socket<unknown>) {
+	#date(socket: Socket<unknown>) {
 		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], DATE_FORMAT, 0)}#`
-		this.text(socket, command)
+		this.#text(socket, command)
 	}
 
-	private time(socket: Socket<unknown>) {
+	#time(socket: Socket<unknown>) {
 		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], TIME_FORMAT, 0)}#`
-		this.text(socket, command)
+		this.#text(socket, command)
 	}
 
-	private zoneOffset(socket: Socket<unknown>) {
+	#zoneOffset(socket: Socket<unknown>) {
 		const [, offset] = this.options.handler.dateTime(this)
 		const command = `${offset < 0 ? '+' : '-'}${formatNumber(Math.abs(offset) / 60, 4, 1)}#`
-		this.text(socket, command)
+		this.#text(socket, command)
 	}
 
-	private status(socket: Socket<unknown>, type: string = 'G') {
+	#status(socket: Socket<unknown>, type: string = 'G') {
 		const a = this.options.handler.tracking(this)
 		const b = this.options.handler.parked(this)
 		const command = `${type}${a ? 'T' : 'N'}${b ? 'P' : 'H'}#`
-		this.text(socket, command)
+		this.#text(socket, command)
 	}
 
-	private slewing(socket: Socket<unknown>) {
+	#slewing(socket: Socket<unknown>) {
 		const s = this.options.handler.slewing(this)
 		const command = `${s ? '|' : ''}#`
-		this.text(socket, command)
+		this.#text(socket, command)
 	}
 }
 

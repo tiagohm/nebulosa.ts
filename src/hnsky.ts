@@ -310,7 +310,7 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 
 	// Returns a normalized HNSKY entry from its synthetic identifier.
 	async get(database: Hnsky290Database, area: number, recordNumber: number): Promise<HnskyCatalogEntry | undefined> {
-		this.assertOpen()
+		this.#assertOpen()
 
 		if (database !== this.#database) return undefined
 		validateHnskyRecordNumber(recordNumber)
@@ -329,7 +329,7 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 
 	// Streams tile candidates touched by the normalized query boxes.
 	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery) {
-		this.assertOpen()
+		this.#assertOpen()
 
 		for (const area of touchedHnsky290Areas(query)) {
 			const loaded = await this.loadArea(area)
@@ -343,14 +343,14 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 	}
 
 	// Ensures the catalog was opened before serving queries.
-	private assertOpen() {
+	#assertOpen() {
 		if (!this.#opened) {
 			throw new Error('HNSKY catalog is not open')
 		}
 	}
 
 	// Checks whether the source contains at least one tile for the selected database.
-	private hasAnyAreaFile() {
+	hasAnyAreaFile() {
 		const prefix = `${this.#database}_`
 		const suffix = '.290'
 
@@ -368,12 +368,12 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 	}
 
 	// Loads and caches one .290 tile lazily.
-	private async loadArea(area: number): Promise<Hnsky290LoadedArea | undefined> {
+	async loadArea(area: number): Promise<Hnsky290LoadedArea | undefined> {
 		const cached = this.#areas.get(area)
 		if (cached !== undefined) return cached || undefined
 
 		const file = hnsky290AreaFile(area)
-		const source = this.resolveFile(`${this.#database}_${file.fileName}`)
+		const source = this.#resolveFile(`${this.#database}_${file.fileName}`)
 
 		if (source === undefined) {
 			this.#areas.set(area, null)
@@ -387,7 +387,7 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 	}
 
 	// Resolves one archive member by its expected database-prefixed key.
-	private resolveFile(key: string) {
+	#resolveFile(key: string) {
 		if (this.#files instanceof Map) {
 			return this.#files.get(key)
 		}

@@ -44,7 +44,7 @@ export type MockCatalogEntry = (typeof FIXTURE_STARS)[number]
 
 // Keeps the generic catalog tests focused on normalized preselection boxes.
 class MockCatalog extends BaseStarCatalog<MockCatalogEntry> {
-	constructor(private readonly entries: readonly MockCatalogEntry[]) {
+	constructor(readonly entries: readonly MockCatalogEntry[]) {
 		super()
 	}
 

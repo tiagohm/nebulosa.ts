@@ -263,17 +263,17 @@ export function isLiveCombinationMethodSupported(method: StackingCombinationMeth
 
 // Implements live stacking and exposes a batch helper through the same API surface.
 export class LiveStacker {
-	private options: ResolvedStackingOptions = DEFAULT_STACKING_OPTIONS
-	private referenceFrame?: StackingFrame
-	private referenceIndex = -1
-	private diagnostics: FrameAcceptanceResult[] = []
-	private acceptedFrames = 0
-	private rejectedFrames = 0
-	private sum?: Float64Array
-	private weightSum?: Float64Array
-	private coverageMap?: Uint32Array
-	private workRaw?: ImageRawType
-	private workMask?: Uint8Array
+	#options: ResolvedStackingOptions = DEFAULT_STACKING_OPTIONS
+	#referenceFrame?: StackingFrame
+	#referenceIndex = -1
+	#diagnostics: FrameAcceptanceResult[] = []
+	#acceptedFrames = 0
+	#rejectedFrames = 0
+	#sum?: Float64Array
+	#weightSum?: Float64Array
+	#coverageMap?: Uint32Array
+	#workRaw?: ImageRawType
+	#workMask?: Uint8Array
 
 	constructor(options: StackingOptions = {}) {
 		this.initialize(options)
@@ -281,35 +281,35 @@ export class LiveStacker {
 
 	// Initializes or reinitializes the live stacker state.
 	initialize(options: StackingOptions = {}) {
-		this.options = resolveStackingOptions(options)
+		this.#options = resolveStackingOptions(options)
 		this.reset()
 	}
 
 	// Clears the live stacking state.
 	reset() {
-		this.referenceFrame = undefined
-		this.referenceIndex = -1
-		this.diagnostics = []
-		this.acceptedFrames = 0
-		this.rejectedFrames = 0
-		this.sum = undefined
-		this.weightSum = undefined
-		this.coverageMap = undefined
-		this.workRaw = undefined
-		this.workMask = undefined
+		this.#referenceFrame = undefined
+		this.#referenceIndex = -1
+		this.#diagnostics = []
+		this.#acceptedFrames = 0
+		this.#rejectedFrames = 0
+		this.#sum = undefined
+		this.#weightSum = undefined
+		this.#coverageMap = undefined
+		this.#workRaw = undefined
+		this.#workMask = undefined
 	}
 
 	// Adds a single frame to the live stack when the method supports exact incremental updates.
 	add(frame: StackingFrame): FrameAcceptanceResult {
-		const frameIndex = this.diagnostics.length
+		const frameIndex = this.#diagnostics.length
 		const quality = computeFrameQuality(frame)
 
-		if (!isImageShapeValid(frame.image)) return this.reject(frameIndex, frame, quality, 'invalid-image-shape')
-		if (!isLiveCombinationMethodSupported(this.options.combinationMethod)) return this.reject(frameIndex, frame, quality, 'combination-method-not-supported-in-live-mode')
+		if (!isImageShapeValid(frame.image)) return this.#reject(frameIndex, frame, quality, 'invalid-image-shape')
+		if (!isLiveCombinationMethodSupported(this.#options.combinationMethod)) return this.#reject(frameIndex, frame, quality, 'combination-method-not-supported-in-live-mode')
 
-		if (this.referenceFrame === undefined) {
-			if (!this.options.allowStarlessReference && frame.stars.length < this.options.minAcceptedStars) return this.reject(frameIndex, frame, quality, 'too-few-stars')
-			this.acceptReferenceFrame(frame, frameIndex, quality)
+		if (this.#referenceFrame === undefined) {
+			if (!this.#options.allowStarlessReference && frame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'too-few-stars')
+			this.#acceptReferenceFrame(frame, frameIndex, quality)
 
 			const accepted: FrameAcceptanceResult = {
 				accepted: true,
@@ -318,40 +318,40 @@ export class LiveStacker {
 				overlapFraction: 1,
 				quality,
 				transform: identityTransformSummary(),
-				normalization: { scales: channelArray(frame.image.metadata.channels, 1), offsets: channelArray(frame.image.metadata.channels, 0), weight: resolveFrameWeight(frame, quality, this.options) },
+				normalization: { scales: channelArray(frame.image.metadata.channels, 1), offsets: channelArray(frame.image.metadata.channels, 0), weight: resolveFrameWeight(frame, quality, this.#options) },
 			}
 
-			this.diagnostics.push(accepted)
+			this.#diagnostics.push(accepted)
 
 			return accepted
 		}
 
-		if (frame.image.metadata.channels !== this.referenceFrame.image.metadata.channels) return this.reject(frameIndex, frame, quality, 'channel-mismatch')
-		if (frame.stars.length < this.options.minAcceptedStars) return this.reject(frameIndex, frame, quality, 'too-few-stars')
-		if (this.referenceFrame.stars.length < this.options.minAcceptedStars) return this.reject(frameIndex, frame, quality, 'reference-has-no-stars')
+		if (frame.image.metadata.channels !== this.#referenceFrame.image.metadata.channels) return this.#reject(frameIndex, frame, quality, 'channel-mismatch')
+		if (frame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'too-few-stars')
+		if (this.#referenceFrame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'reference-has-no-stars')
 
-		const matched = matchStars(this.referenceFrame.stars, frame.stars, this.options.matchStarsConfig)
-		if (!matched.success || matched.inlierCount < this.options.minAcceptedInliers) return this.reject(frameIndex, frame, quality, 'match-failed')
-		if ((matched.rmsError ?? Infinity) > this.options.maxAcceptedTransformError) return this.reject(frameIndex, frame, quality, 'transform-error-too-high')
+		const matched = matchStars(this.#referenceFrame.stars, frame.stars, this.#options.matchStarsConfig)
+		if (!matched.success || matched.inlierCount < this.#options.minAcceptedInliers) return this.#reject(frameIndex, frame, quality, 'match-failed')
+		if ((matched.rmsError ?? Infinity) > this.#options.maxAcceptedTransformError) return this.#reject(frameIndex, frame, quality, 'transform-error-too-high')
 
 		const transform = resolveTransform(matched)
-		if (transform === undefined) return this.reject(frameIndex, frame, quality, 'invalid-transform')
-		if (!transformWithinBounds(transform.summary, this.options)) return this.reject(frameIndex, frame, quality, 'transform-out-of-bounds')
+		if (transform === undefined) return this.#reject(frameIndex, frame, quality, 'invalid-transform')
+		if (!transformWithinBounds(transform.summary, this.#options)) return this.#reject(frameIndex, frame, quality, 'transform-out-of-bounds')
 
 		const inverse = invertTransform(matched.model === 'affine' ? matched.affine! : matched.similarity!)
-		if (inverse === undefined) return this.reject(frameIndex, frame, quality, 'invalid-transform')
+		if (inverse === undefined) return this.#reject(frameIndex, frame, quality, 'invalid-transform')
 
-		this.ensureWorkBuffers(this.referenceFrame.image.metadata.pixelCount * this.referenceFrame.image.metadata.channels)
-		const coveredPixels = alignIntoReference(frame.image, inverse, this.referenceFrame.image.metadata.width, this.referenceFrame.image.metadata.height, this.options.interpolationMode, this.workRaw!, this.workMask!)
-		const overlapFraction = coveredPixels / Math.max(this.workMask!.length, 1)
-		if (overlapFraction <= 0) return this.reject(frameIndex, frame, quality, 'no-overlap')
-		if (overlapFraction < this.options.minOverlapFraction) return this.reject(frameIndex, frame, quality, 'insufficient-overlap')
+		this.#ensureWorkBuffers(this.#referenceFrame.image.metadata.pixelCount * this.#referenceFrame.image.metadata.channels)
+		const coveredPixels = alignIntoReference(frame.image, inverse, this.#referenceFrame.image.metadata.width, this.#referenceFrame.image.metadata.height, this.#options.interpolationMode, this.#workRaw!, this.#workMask!)
+		const overlapFraction = coveredPixels / Math.max(this.#workMask!.length, 1)
+		if (overlapFraction <= 0) return this.#reject(frameIndex, frame, quality, 'no-overlap')
+		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap')
 
-		const normalization = computeNormalization(this.workRaw!, this.workMask!, frame, this.referenceFrame, quality, this.options)
-		applyNormalizationInPlace(this.workRaw!, this.workMask!, frame.image.metadata.channels, normalization.scales, normalization.offsets)
-		accumulateAlignedFrame(this.referenceFrame.image.metadata.channels, this.workRaw!, this.workMask!, this.sum!, this.weightSum!, this.coverageMap!, this.options.combinationMethod, normalization.weight)
+		const normalization = computeNormalization(this.#workRaw!, this.#workMask!, frame, this.#referenceFrame, quality, this.#options)
+		applyNormalizationInPlace(this.#workRaw!, this.#workMask!, frame.image.metadata.channels, normalization.scales, normalization.offsets)
+		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, this.#workRaw!, this.#workMask!, this.#sum!, this.#weightSum!, this.#coverageMap!, this.#options.combinationMethod, normalization.weight)
 
-		this.acceptedFrames++
+		this.#acceptedFrames++
 
 		const accepted: FrameAcceptanceResult = {
 			accepted: true,
@@ -363,45 +363,45 @@ export class LiveStacker {
 			normalization,
 		}
 
-		this.diagnostics.push(accepted)
+		this.#diagnostics.push(accepted)
 
 		return accepted
 	}
 
 	// Returns the current live stacking result without mutating the stack.
 	snapshot(): StackResult | undefined {
-		if (this.referenceFrame === undefined || this.sum === undefined || this.weightSum === undefined || this.coverageMap === undefined) return undefined
-		return buildOnlineResult(this.referenceFrame, this.referenceIndex, this.acceptedFrames, this.rejectedFrames, this.diagnostics, this.options, this.sum, this.weightSum, this.coverageMap)
+		if (this.#referenceFrame === undefined || this.#sum === undefined || this.#weightSum === undefined || this.#coverageMap === undefined) return undefined
+		return buildOnlineResult(this.#referenceFrame, this.#referenceIndex, this.#acceptedFrames, this.#rejectedFrames, this.#diagnostics, this.#options, this.#sum, this.#weightSum, this.#coverageMap)
 	}
 
 	// Initializes the live stack with the first accepted reference frame.
-	private acceptReferenceFrame(frame: StackingFrame, frameIndex: number, quality: StackingFrameQualityMetrics) {
+	#acceptReferenceFrame(frame: StackingFrame, frameIndex: number, quality: StackingFrameQualityMetrics) {
 		const { channels, pixelCount } = frame.image.metadata
-		this.referenceFrame = frame
-		this.referenceIndex = frameIndex
-		this.acceptedFrames = 1
-		this.sum = new Float64Array(pixelCount * channels)
-		this.weightSum = new Float64Array(pixelCount)
-		this.coverageMap = new Uint32Array(pixelCount)
-		this.workRaw = undefined
-		this.workMask = undefined
-		const weight = resolveFrameWeight(frame, quality, this.options)
-		accumulateAlignedFrame(channels, frame.image.raw, fullMask(pixelCount), this.sum, this.weightSum, this.coverageMap, this.options.combinationMethod, weight)
+		this.#referenceFrame = frame
+		this.#referenceIndex = frameIndex
+		this.#acceptedFrames = 1
+		this.#sum = new Float64Array(pixelCount * channels)
+		this.#weightSum = new Float64Array(pixelCount)
+		this.#coverageMap = new Uint32Array(pixelCount)
+		this.#workRaw = undefined
+		this.#workMask = undefined
+		const weight = resolveFrameWeight(frame, quality, this.#options)
+		accumulateAlignedFrame(channels, frame.image.raw, fullMask(pixelCount), this.#sum, this.#weightSum, this.#coverageMap, this.#options.combinationMethod, weight)
 	}
 
 	// Records a structured rejection result.
-	private reject(frameIndex: number, frame: StackingFrame, quality: StackingFrameQualityMetrics, reason: FrameRejectionReason): FrameAcceptanceResult {
-		this.rejectedFrames++
+	#reject(frameIndex: number, frame: StackingFrame, quality: StackingFrameQualityMetrics, reason: FrameRejectionReason): FrameAcceptanceResult {
+		this.#rejectedFrames++
 		const result: FrameAcceptanceResult = { accepted: false, frameIndex, frameId: frame.id, overlapFraction: 0, quality, reason }
-		this.diagnostics.push(result)
+		this.#diagnostics.push(result)
 		return result
 	}
 
 	// Reuses alignment working buffers between live add calls.
-	private ensureWorkBuffers(length: number) {
-		const ImageType = this.options.samplePrecision === 64 ? Float64Array : Float32Array
-		if (this.workRaw === undefined || this.workRaw.length !== length) this.workRaw = new ImageType(length)
-		if (this.workMask === undefined || this.workMask.length !== length / (this.referenceFrame?.image.metadata.channels ?? 1)) this.workMask = new Uint8Array(length / (this.referenceFrame?.image.metadata.channels ?? 1))
+	#ensureWorkBuffers(length: number) {
+		const ImageType = this.#options.samplePrecision === 64 ? Float64Array : Float32Array
+		if (this.#workRaw === undefined || this.#workRaw.length !== length) this.#workRaw = new ImageType(length)
+		if (this.#workMask === undefined || this.#workMask.length !== length / (this.#referenceFrame?.image.metadata.channels ?? 1)) this.#workMask = new Uint8Array(length / (this.#referenceFrame?.image.metadata.channels ?? 1))
 	}
 }
 

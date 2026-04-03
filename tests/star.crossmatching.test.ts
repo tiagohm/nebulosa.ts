@@ -47,7 +47,7 @@ interface Scenario {
 
 // Provides a deterministic in-memory catalog for the crossmatcher tests.
 class MockCatalog implements StarCatalog<SyntheticCatalogStar> {
-	constructor(private readonly stars: readonly SyntheticCatalogStar[]) {}
+	constructor(readonly stars: readonly SyntheticCatalogStar[]) {}
 
 	// Queries the catalog with exact spherical separation.
 	queryCone(centerRA: Angle, centerDEC: Angle, radius: Angle) {

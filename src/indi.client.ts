@@ -42,40 +42,40 @@ export class IndiClient implements Client {
 
 	description: string = 'INDI Client'
 
-	private readonly parser = new SimpleXmlParser()
-	private socket?: Bun.Socket
-	private readonly metadata: [string?, string?, number?] = []
+	readonly #parser = new SimpleXmlParser()
+	#socket?: Bun.Socket
+	readonly #metadata: [string?, string?, number?] = []
 
-	constructor(private readonly options?: IndiClientOptions) {}
+	constructor(readonly options?: IndiClientOptions) {}
 
 	get id() {
-		return this.metadata[0]!
+		return this.#metadata[0]!
 	}
 
 	get remoteHost() {
-		return this.metadata[1]
+		return this.#metadata[1]
 	}
 
 	get remotePort() {
-		return this.metadata[2]
+		return this.#metadata[2]
 	}
 
 	get remoteIp() {
-		return this.socket?.remoteAddress
+		return this.#socket?.remoteAddress
 	}
 
 	get localPort() {
-		return this.socket?.localPort
+		return this.#socket?.localPort
 	}
 
 	get connected() {
-		return !!this.socket
+		return !!this.#socket
 	}
 
 	async connect(hostname: string, port: number = DEFAULT_INDI_PORT, options?: Omit<Bun.TCPSocketConnectOptions, 'hostname' | 'port' | 'socket' | 'data'>) {
-		if (this.socket) return false
+		if (this.#socket) return false
 
-		this.socket = await Bun.connect({
+		this.#socket = await Bun.connect({
 			...options,
 			hostname,
 			port,
@@ -85,12 +85,12 @@ export class IndiClient implements Client {
 				},
 				open: (socket) => {
 					console.info('connection open')
-					this.socket = socket
+					this.#socket = socket
 					this.getProperties()
 				},
 				close: () => {
 					console.warn('connection closed by client')
-					this.socket = undefined
+					this.#socket = undefined
 					this.options?.handler?.close?.(this, false)
 				},
 				error: (_, error) => {
@@ -101,7 +101,7 @@ export class IndiClient implements Client {
 				},
 				end: () => {
 					console.warn('connection closed by server')
-					this.socket = undefined
+					this.#socket = undefined
 					this.options?.handler?.close?.(this, true)
 				},
 				timeout: () => {
@@ -110,10 +110,10 @@ export class IndiClient implements Client {
 			},
 		})
 
-		const { remoteAddress, remotePort } = this.socket
-		this.metadata[0] = Bun.MD5.hash(`${remoteAddress}:${remotePort}:INDI`, 'hex')
-		this.metadata[1] = hostname
-		this.metadata[2] = remotePort
+		const { remoteAddress, remotePort } = this.#socket
+		this.#metadata[0] = Bun.MD5.hash(`${remoteAddress}:${remotePort}:INDI`, 'hex')
+		this.#metadata[1] = hostname
+		this.#metadata[2] = remotePort
 
 		this.description = `INDI Client at ${remoteAddress}:${remotePort}`
 
@@ -121,8 +121,8 @@ export class IndiClient implements Client {
 	}
 
 	close() {
-		this.socket?.terminate()
-		this.socket = undefined
+		this.#socket?.terminate()
+		this.#socket = undefined
 	}
 
 	[Symbol.dispose]() {
@@ -130,8 +130,8 @@ export class IndiClient implements Client {
 	}
 
 	parse(data: Buffer) {
-		for (const node of this.parser.parse(data)) {
-			this.processNode(node)
+		for (const node of this.#parser.parse(data)) {
+			this.#processNode(node)
 		}
 	}
 
@@ -230,7 +230,7 @@ export class IndiClient implements Client {
 		return message
 	}
 
-	private processNode(node: XmlNode) {
+	#processNode(node: XmlNode) {
 		const a = node.attributes
 		const handler = this.options?.handler
 
@@ -307,57 +307,57 @@ export class IndiClient implements Client {
 	}
 
 	getProperties(command?: GetProperties) {
-		if (this.socket) {
-			this.socket.write(`<getProperties version="1.7"`)
-			if (command?.device) this.socket.write(` device="${command.device}"`)
-			if (command?.name) this.socket.write(` name="${command.name}"`)
-			this.socket.write('></getProperties>')
-			this.socket.flush()
+		if (this.#socket) {
+			this.#socket.write(`<getProperties version="1.7"`)
+			if (command?.device) this.#socket.write(` device="${command.device}"`)
+			if (command?.name) this.#socket.write(` name="${command.name}"`)
+			this.#socket.write('></getProperties>')
+			this.#socket.flush()
 		}
 	}
 
 	enableBlob(command: EnableBlob) {
-		if (this.socket) {
-			this.socket.write(`<enableBLOB device="${command.device}"`)
-			if (command.name) this.socket.write(` name="${command.name}"`)
-			this.socket.write(`>${command.value}</enableBLOB>`)
-			this.socket.flush()
+		if (this.#socket) {
+			this.#socket.write(`<enableBLOB device="${command.device}"`)
+			if (command.name) this.#socket.write(` name="${command.name}"`)
+			this.#socket.write(`>${command.value}</enableBLOB>`)
+			this.#socket.flush()
 		}
 	}
 
 	sendText(vector: NewTextVector) {
-		if (this.socket) {
-			this.socket.write('<newTextVector')
-			this.socket.write(` device="${vector.device}"`)
-			this.socket.write(` name="${vector.name}"`)
-			this.socket.write(` timestamp="${vector.timestamp ?? ''}">`)
-			for (const name in vector.elements) this.socket.write(`<oneText name="${name}">${vector.elements[name]}</oneText>`)
-			this.socket.write('</newTextVector>')
-			this.socket.flush()
+		if (this.#socket) {
+			this.#socket.write('<newTextVector')
+			this.#socket.write(` device="${vector.device}"`)
+			this.#socket.write(` name="${vector.name}"`)
+			this.#socket.write(` timestamp="${vector.timestamp ?? ''}">`)
+			for (const name in vector.elements) this.#socket.write(`<oneText name="${name}">${vector.elements[name]}</oneText>`)
+			this.#socket.write('</newTextVector>')
+			this.#socket.flush()
 		}
 	}
 
 	sendNumber(vector: NewNumberVector) {
-		if (this.socket) {
-			this.socket.write('<newNumberVector')
-			this.socket.write(` device="${vector.device}"`)
-			this.socket.write(` name="${vector.name}"`)
-			this.socket.write(` timestamp="${vector.timestamp ?? ''}">`)
-			for (const name in vector.elements) this.socket.write(`<oneNumber name="${name}">${vector.elements[name]}</oneNumber>`)
-			this.socket.write('</newNumberVector>')
-			this.socket.flush()
+		if (this.#socket) {
+			this.#socket.write('<newNumberVector')
+			this.#socket.write(` device="${vector.device}"`)
+			this.#socket.write(` name="${vector.name}"`)
+			this.#socket.write(` timestamp="${vector.timestamp ?? ''}">`)
+			for (const name in vector.elements) this.#socket.write(`<oneNumber name="${name}">${vector.elements[name]}</oneNumber>`)
+			this.#socket.write('</newNumberVector>')
+			this.#socket.flush()
 		}
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
-		if (this.socket) {
-			this.socket.write('<newSwitchVector')
-			this.socket.write(` device="${vector.device}"`)
-			this.socket.write(` name="${vector.name}"`)
-			this.socket.write(` timestamp="${vector.timestamp ?? ''}">`)
-			for (const name in vector.elements) this.socket.write(`<oneSwitch name="${name}">${vector.elements[name] ? 'On' : 'Off'}</oneSwitch>`)
-			this.socket.write('</newSwitchVector>')
-			this.socket.flush()
+		if (this.#socket) {
+			this.#socket.write('<newSwitchVector')
+			this.#socket.write(` device="${vector.device}"`)
+			this.#socket.write(` name="${vector.name}"`)
+			this.#socket.write(` timestamp="${vector.timestamp ?? ''}">`)
+			for (const name in vector.elements) this.#socket.write(`<oneSwitch name="${name}">${vector.elements[name] ? 'On' : 'Off'}</oneSwitch>`)
+			this.#socket.write('</newSwitchVector>')
+			this.#socket.flush()
 		}
 	}
 }

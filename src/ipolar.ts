@@ -302,7 +302,7 @@ export class IPolarPolarAlignment {
 		this.#state.stage = 'WAITING_FOR_POSITION_2'
 		const diagnostics = buildDiagnostics(this.#state.config, warnings, undefined, undefined, undefined)
 		const result = emptyResult('WAITING_FOR_POSITION_2', frameInput.solution, 'ROTATE_RA_TO_POSITION_2', diagnostics) // Should rotate the RA axis to the second calibration position
-		return this.commit(result)
+		return this.#commit(result)
 	}
 
 	// Confirms the second RA-only frame, estimates the mount axis, and initializes the iterative alignment phase.
@@ -326,7 +326,7 @@ export class IPolarPolarAlignment {
 			if (axis === false) failureWarnings.push('failed to estimate a stable RA-axis fixed point')
 			const diagnostics = buildDiagnostics(this.#state.config, failureWarnings, starMatch, acceptedRaRotation, axis === false ? undefined : axis)
 			const result = emptyResult('WAITING_FOR_POSITION_2', frameInput.solution, 'INVALID_FRAME', diagnostics) // Should acquire another second-position frame with more RA rotation
-			return this.commit(result)
+			return this.#commit(result)
 		}
 
 		this.#state.secondFrame = frameInput
@@ -335,8 +335,8 @@ export class IPolarPolarAlignment {
 		this.#state.targetVector = celestialPoleVector(frameInput.time, this.#state.observer.location, this.#state.config.refraction)
 		this.#state.stage = 'INITIAL_AXIS_ESTIMATION'
 		const diagnostics = buildDiagnostics(this.#state.config, warnings, starMatch, acceptedRaRotation, axis)
-		const result = this.measureFrame(frameInput, 'INITIAL_AXIS_ESTIMATION', diagnostics)
-		const committed = this.commit(result)
+		const result = this.#measureFrame(frameInput, 'INITIAL_AXIS_ESTIMATION', diagnostics)
+		const committed = this.#commit(result)
 		this.#state.stage = committed.convergence ? 'COMPLETE' : 'REFINEMENT'
 		return committed
 	}
@@ -349,12 +349,12 @@ export class IPolarPolarAlignment {
 		const warnings = validateFrame(frameInput, this.#state.config)
 		const diagnostics = buildDiagnostics(this.#state.config, warnings, undefined, undefined, undefined)
 		this.#state.stage = this.#state.stage === 'COMPLETE' ? 'COMPLETE' : 'REFINEMENT'
-		const result = this.measureFrame(frameInput, this.#state.stage, diagnostics)
-		return this.commit(result)
+		const result = this.#measureFrame(frameInput, this.#state.stage, diagnostics)
+		return this.#commit(result)
 	}
 
 	// Measures the current frame using the calibrated fixed sensor point and the true celestial pole.
-	private measureFrame(frame: IPolarPolarAlignmentFrameInput, stage: IPolarPolarAlignmentStage, diagnostics: IPolarPolarAlignmentDiagnostics): IPolarPolarAlignmentResult {
+	#measureFrame(frame: IPolarPolarAlignmentFrameInput, stage: IPolarPolarAlignmentStage, diagnostics: IPolarPolarAlignmentDiagnostics): IPolarPolarAlignmentResult {
 		if (!this.#state.axisPixel || !this.#state.targetVector || !this.#state.observer) throw new Error('alignment state is incomplete')
 		const axisVector = skyVectorFromPixel(frame.solution, this.#state.axisPixel)
 		const targetVector = celestialPoleVector(frame.time, this.#state.observer.location, this.#state.config.refraction)
@@ -384,7 +384,7 @@ export class IPolarPolarAlignment {
 	}
 
 	// Persists the latest result and appends it to the debug history.
-	private commit(result: IPolarPolarAlignmentResult): IPolarPolarAlignmentResult {
+	#commit(result: IPolarPolarAlignmentResult): IPolarPolarAlignmentResult {
 		this.#state.latestResult = result
 		this.#state.latestDiagnostics = result.diagnostics
 		return result

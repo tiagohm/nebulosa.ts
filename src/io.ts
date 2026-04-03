@@ -165,12 +165,12 @@ export function fileHandleSource(handle: FileHandle) {
 }
 
 export class ReadableStreamSource implements Source, AsyncDisposable {
-	private readonly reader: ReadableStreamDefaultReader<Uint8Array>
-	private buffer?: Buffer
-	private position = 0
+	readonly #reader: ReadableStreamDefaultReader<Uint8Array>
+	#buffer?: Buffer
+	#position = 0
 
 	constructor(readonly stream: ReadableStream<Uint8Array>) {
-		this.reader = stream.getReader()
+		this.#reader = stream.getReader()
 	}
 
 	async read(buffer: Buffer, offset?: number, size?: number) {
@@ -178,24 +178,24 @@ export class ReadableStreamSource implements Source, AsyncDisposable {
 
 		offset ??= 0
 
-		if (!this.buffer || this.position >= this.buffer.byteLength) {
-			const { done, value } = await this.reader.read()
+		if (!this.#buffer || this.#position >= this.#buffer.byteLength) {
+			const { done, value } = await this.#reader.read()
 
 			if (done || value.byteLength === 0) return 0
 
-			this.buffer = Buffer.from(value)
-			this.position = 0
+			this.#buffer = Buffer.from(value)
+			this.#position = 0
 		}
 
-		size = Math.min(size ?? buffer.byteLength - offset, this.buffer.byteLength - this.position)
+		size = Math.min(size ?? buffer.byteLength - offset, this.#buffer.byteLength - this.#position)
 
-		size = this.buffer.copy(buffer, offset, this.position, this.position + size)
-		this.position += size
+		size = this.#buffer.copy(buffer, offset, this.#position, this.#position + size)
+		this.#position += size
 		return size
 	}
 
 	[Symbol.asyncDispose]() {
-		this.reader.releaseLock()
+		this.#reader.releaseLock()
 		return this.stream.cancel()
 	}
 }
@@ -250,19 +250,19 @@ export function rangeHttpSource(uri: string | URL) {
 export type Base64Alphabet = 'base64' | 'base64url'
 
 export class Base64Source implements Source, Seekable {
-	private readonly buffer = Buffer.allocUnsafe(1024)
-	private readonly decoded = [-1, -1, -1] // current decoded base64 bytes
-	private bpos = 0 // current position in buffer
-	private decodedPosition = 0 // current decoded byte position
-	private n = 0 // remaining bytes in buffer
-	private skip = 0 // decoded bytes to discard after seek
-	private state = -1 // current base64 decoding state
-	private spos = 0 // current position for string source
+	readonly #buffer = Buffer.allocUnsafe(1024)
+	readonly #decoded = [-1, -1, -1] // current decoded base64 bytes
+	#bpos = 0 // current position in buffer
+	#decodedPosition = 0 // current decoded byte position
+	#n = 0 // remaining bytes in buffer
+	#skip = 0 // decoded bytes to discard after seek
+	#state = -1 // current base64 decoding state
+	#spos = 0 // current position for string source
 
 	constructor(readonly source: Source | string) {}
 
 	get position() {
-		return this.decodedPosition
+		return this.#decodedPosition
 	}
 
 	seek(position: number) {
@@ -274,16 +274,16 @@ export class Base64Source implements Source, Seekable {
 
 		if (typeof this.source === 'string') {
 			if (encodedPosition > this.source.length) return false
-			this.spos = encodedPosition
+			this.#spos = encodedPosition
 			ok = true
 		} else if (isSeekable(this.source)) {
 			ok = this.source.seek(encodedPosition)
 		}
 
 		if (ok) {
-			this.resetState()
-			this.decodedPosition = position
-			this.skip = position - decodedPosition
+			this.#resetState()
+			this.#decodedPosition = position
+			this.#skip = position - decodedPosition
 			return true
 		} else {
 			return false
@@ -296,70 +296,70 @@ export class Base64Source implements Source, Seekable {
 		let written = 0
 
 		while (written < size) {
-			if (!(await this.fill())) break
+			if (!(await this.#fill())) break
 
-			while (this.skip > 0) {
-				const d = this.decode(this.n)
+			while (this.#skip > 0) {
+				const d = this.#decode(this.#n)
 				if (d === -1) break
-				this.skip--
+				this.#skip--
 			}
 
 			while (written < size) {
-				const d = this.decode(this.n)
+				const d = this.#decode(this.#n)
 				if (d === -1) break
 				buffer[offset++] = d
 				written++
-				this.decodedPosition++
+				this.#decodedPosition++
 			}
 		}
 
 		return written
 	}
 
-	private async fill() {
-		if (this.bpos < this.n) return true
+	async #fill() {
+		if (this.#bpos < this.#n) return true
 
 		const source = this.source
 
 		if (typeof source === 'string') {
 			let n = 0
-			let i = this.spos
+			let i = this.#spos
 			const max = source.length
-			for (; i < max && n < 1024; i++) this.buffer.writeUInt8(source.charCodeAt(i), n++)
-			this.n = n
-			this.spos = i
+			for (; i < max && n < 1024; i++) this.#buffer.writeUInt8(source.charCodeAt(i), n++)
+			this.#n = n
+			this.#spos = i
 		} else {
-			this.n = await source.read(this.buffer)
+			this.#n = await source.read(this.#buffer)
 		}
 
-		if (!this.n) return false
+		if (!this.#n) return false
 
-		this.bpos = 0
+		this.#bpos = 0
 		return true
 	}
 
-	private resetState() {
-		this.bpos = 0
-		this.n = 0
-		this.skip = 0
-		this.state = -1
+	#resetState() {
+		this.#bpos = 0
+		this.#n = 0
+		this.#skip = 0
+		this.#state = -1
 	}
 
-	private decode(limit: number) {
-		if (this.state >= 0 && this.state <= 2) {
-			return this.decoded[this.state++]
-		} else if (this.bpos >= limit) {
+	#decode(limit: number) {
+		if (this.#state >= 0 && this.#state <= 2) {
+			return this.#decoded[this.#state++]
+		} else if (this.#bpos >= limit) {
 			return -1
 		}
 
-		this.decoded.fill(-1)
-		this.state = 0
+		this.#decoded.fill(-1)
+		this.#state = 0
 
 		let inCount = 0
 		let word = 0
 
-		while (this.bpos < limit) {
-			const c = this.buffer.readUInt8(this.bpos++)
+		while (this.#bpos < limit) {
+			const c = this.#buffer.readUInt8(this.#bpos++)
 
 			let bits = 0
 
@@ -397,9 +397,9 @@ export class Base64Source implements Source, Seekable {
 			inCount++
 
 			if (inCount % 4 === 0) {
-				this.decoded[0] = (word >> 16) & 0xff
-				this.decoded[1] = (word >> 8) & 0xff
-				this.decoded[2] = word & 0xff
+				this.#decoded[0] = (word >> 16) & 0xff
+				this.#decoded[1] = (word >> 8) & 0xff
+				this.#decoded[2] = word & 0xff
 				break
 			}
 		}
@@ -411,17 +411,17 @@ export class Base64Source implements Source, Seekable {
 			case 2:
 				// We read 2 chars followed by "==". Emit 1 byte with 8 of those 12 bits.
 				word = word << 12
-				this.decoded[0] = (word >> 16) & 0xff
+				this.#decoded[0] = (word >> 16) & 0xff
 				break
 			case 3:
 				// We read 3 chars, followed by "=". Emit 2 bytes for 16 of those 18 bits.
 				word = word << 6
-				this.decoded[0] = (word >> 16) & 0xff
-				this.decoded[1] = (word >> 8) & 0xff
+				this.#decoded[0] = (word >> 16) & 0xff
+				this.#decoded[1] = (word >> 8) & 0xff
 				break
 		}
 
-		return this.decoded[this.state++]
+		return this.#decoded[this.#state++]
 	}
 }
 
@@ -437,17 +437,19 @@ const TRAILING = 61 // =
 const BASE64_ENCODED_BUFFER_SIZE = 128
 
 export class Base64Sink implements Sink {
-	private readonly map: Buffer
-	private readonly buffer = Buffer.allocUnsafe(3)
-	private readonly encoded = Buffer.allocUnsafe(128)
-	private state = 0
-	private position = 0
+	readonly #map: Buffer
+	readonly #buffer = Buffer.allocUnsafe(3)
+	readonly #encoded = Buffer.allocUnsafe(128)
+	#state = 0
+	#position = 0
+	readonly #sink: Sink
 
 	constructor(
-		private readonly sink: Sink,
+		sink: Sink,
 		alphabet: Base64Alphabet = 'base64',
 	) {
-		this.map = Buffer.from(alphabet === 'base64' ? BASE64_ALPHABET : BASE64_URL_SAFE_ALPHABET, 'ascii')
+		this.#sink = sink
+		this.#map = Buffer.from(alphabet === 'base64' ? BASE64_ALPHABET : BASE64_URL_SAFE_ALPHABET, 'ascii')
 	}
 
 	async write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
@@ -471,73 +473,73 @@ export class Base64Sink implements Sink {
 		}
 
 		for (let i = start; i < end; i++) {
-			this.encode(data[i]!)
+			this.#encode(data[i]!)
 
-			if (this.position >= BASE64_ENCODED_BUFFER_SIZE - 1) {
-				n += this.position
-				await this.sink.write(this.encoded, 0, this.position)
-				this.position = 0
+			if (this.#position >= BASE64_ENCODED_BUFFER_SIZE - 1) {
+				n += this.#position
+				await this.#sink.write(this.#encoded, 0, this.#position)
+				this.#position = 0
 			}
 		}
 
-		if (this.position > 0) {
-			n += this.position
-			await this.sink.write(this.encoded, 0, this.position)
-			this.position = 0
+		if (this.#position > 0) {
+			n += this.#position
+			await this.#sink.write(this.#encoded, 0, this.#position)
+			this.#position = 0
 		}
 
 		return n
 	}
 
-	private encode(b: number) {
+	#encode(b: number) {
 		let value = 0
 
-		if (this.state >= 3) {
-			value = this.map.readUInt8(this.buffer.readUInt8(2) & 0x3f)
-			this.encoded.writeUInt8(value, this.position++)
-			this.state = 0
+		if (this.#state >= 3) {
+			value = this.#map.readUInt8(this.#buffer.readUInt8(2) & 0x3f)
+			this.#encoded.writeUInt8(value, this.#position++)
+			this.#state = 0
 		}
 
-		this.buffer.writeUInt8(b, this.state)
+		this.#buffer.writeUInt8(b, this.#state)
 
-		switch (this.state) {
+		switch (this.#state) {
 			case 0:
-				value = this.map.readUInt8(b >> 2)
+				value = this.#map.readUInt8(b >> 2)
 				break
 			case 1:
-				value = this.map.readUInt8(((this.buffer.readUInt8(0) & 0x03) << 4) | (b >> 4))
+				value = this.#map.readUInt8(((this.#buffer.readUInt8(0) & 0x03) << 4) | (b >> 4))
 				break
 			case 2:
-				value = this.map.readUInt8(((this.buffer.readUInt8(1) & 0x0f) << 2) | (b >> 6))
+				value = this.#map.readUInt8(((this.#buffer.readUInt8(1) & 0x0f) << 2) | (b >> 6))
 				break
 		}
 
-		this.encoded.writeUInt8(value, this.position++)
-		this.state++
+		this.#encoded.writeUInt8(value, this.#position++)
+		this.#state++
 	}
 
 	async end() {
 		let n = 0
 
-		if (this.state > 0) {
-			switch (this.state) {
+		if (this.#state > 0) {
+			switch (this.#state) {
 				case 1:
-					this.encoded.writeUInt8(this.map.readUInt8((this.buffer.readUInt8(0) & 0x03) << 4), n++)
+					this.#encoded.writeUInt8(this.#map.readUInt8((this.#buffer.readUInt8(0) & 0x03) << 4), n++)
 					break
 				case 2:
-					this.encoded.writeUInt8(this.map.readUInt8((this.buffer.readUInt8(1) & 0x0f) << 2), n++)
+					this.#encoded.writeUInt8(this.#map.readUInt8((this.#buffer.readUInt8(1) & 0x0f) << 2), n++)
 					break
 				case 3:
-					this.encoded.writeUInt8(this.map.readUInt8(this.buffer.readUInt8(2) & 0x3f), n++)
+					this.#encoded.writeUInt8(this.#map.readUInt8(this.#buffer.readUInt8(2) & 0x3f), n++)
 					break
 			}
 
-			for (let i = 3 - this.state; i > 0; i--) {
-				this.encoded.writeUInt8(TRAILING, n++)
+			for (let i = 3 - this.#state; i > 0; i--) {
+				this.#encoded.writeUInt8(TRAILING, n++)
 			}
 
-			await this.sink.write(this.encoded, 0, n)
-			this.state = 0
+			await this.#sink.write(this.#encoded, 0, n)
+			this.#state = 0
 		}
 
 		return n
@@ -642,94 +644,94 @@ export async function sourceTransferToSink(source: Source, sink: Sink, size: num
 }
 
 export class GrowableBuffer {
-	private position = 0
-	private buffer: Buffer
+	#position = 0
+	#buffer: Buffer
 
 	constructor(size: number = 1024) {
-		this.buffer = Buffer.allocUnsafe(Math.max(1, size))
+		this.#buffer = Buffer.allocUnsafe(Math.max(1, size))
 	}
 
 	get length() {
-		return this.position
+		return this.#position
 	}
 
 	writeInt8(value: number) {
-		this.ensureCapacity(this.position + 1)
-		this.position = this.buffer.writeInt8(value, this.position)
+		this.#ensureCapacity(this.#position + 1)
+		this.#position = this.#buffer.writeInt8(value, this.#position)
 	}
 
 	writeUInt8(value: number) {
-		this.ensureCapacity(this.position + 1)
-		this.position = this.buffer.writeUInt8(value, this.position)
+		this.#ensureCapacity(this.#position + 1)
+		this.#position = this.#buffer.writeUInt8(value, this.#position)
 	}
 
 	writeInt16LE(value: number) {
-		this.ensureCapacity(this.position + 2)
-		this.position = this.buffer.writeInt16LE(value, this.position)
+		this.#ensureCapacity(this.#position + 2)
+		this.#position = this.#buffer.writeInt16LE(value, this.#position)
 	}
 
 	writeUInt16LE(value: number) {
-		this.ensureCapacity(this.position + 2)
-		this.position = this.buffer.writeUInt16LE(value, this.position)
+		this.#ensureCapacity(this.#position + 2)
+		this.#position = this.#buffer.writeUInt16LE(value, this.#position)
 	}
 
 	writeInt16BE(value: number) {
-		this.ensureCapacity(this.position + 2)
-		this.position = this.buffer.writeInt16BE(value, this.position)
+		this.#ensureCapacity(this.#position + 2)
+		this.#position = this.#buffer.writeInt16BE(value, this.#position)
 	}
 
 	writeUInt16BE(value: number) {
-		this.ensureCapacity(this.position + 2)
-		this.position = this.buffer.writeUInt16BE(value, this.position)
+		this.#ensureCapacity(this.#position + 2)
+		this.#position = this.#buffer.writeUInt16BE(value, this.#position)
 	}
 
 	writeInt32LE(value: number) {
-		this.ensureCapacity(this.position + 4)
-		this.position = this.buffer.writeInt32LE(value, this.position)
+		this.#ensureCapacity(this.#position + 4)
+		this.#position = this.#buffer.writeInt32LE(value, this.#position)
 	}
 
 	writeUInt32LE(value: number) {
-		this.ensureCapacity(this.position + 4)
-		this.position = this.buffer.writeUInt32LE(value, this.position)
+		this.#ensureCapacity(this.#position + 4)
+		this.#position = this.#buffer.writeUInt32LE(value, this.#position)
 	}
 
 	writeInt32BE(value: number) {
-		this.ensureCapacity(this.position + 4)
-		this.position = this.buffer.writeInt32BE(value, this.position)
+		this.#ensureCapacity(this.#position + 4)
+		this.#position = this.#buffer.writeInt32BE(value, this.#position)
 	}
 
 	writeUInt32BE(value: number) {
-		this.ensureCapacity(this.position + 4)
-		this.position = this.buffer.writeUInt32BE(value, this.position)
+		this.#ensureCapacity(this.#position + 4)
+		this.#position = this.#buffer.writeUInt32BE(value, this.#position)
 	}
 
 	reset() {
-		this.position = 0
+		this.#position = 0
 	}
 
-	private ensureCapacity(min: number) {
-		if (min - this.buffer.length > 0) this.resize(min)
+	#ensureCapacity(min: number) {
+		if (min - this.#buffer.length > 0) this.#resize(min)
 	}
 
-	private resize(min: number) {
-		let size = this.buffer.byteLength
+	#resize(min: number) {
+		let size = this.#buffer.byteLength
 		while (min > size) size *= 2
 		const buffer = Buffer.allocUnsafe(size)
-		this.buffer.copy(buffer, 0, 0, this.position)
-		this.buffer = buffer
+		this.#buffer.copy(buffer, 0, 0, this.#position)
+		this.#buffer = buffer
 	}
 
 	toString(trim: boolean = false, encoding?: BufferEncoding) {
-		if (this.position <= 0) return ''
-		if (!trim) return this.buffer.toString(encoding, 0, this.position)
-		const [start, end] = trimStartEnd(this.buffer, 0, this.position - 1)
-		return this.buffer.toString(encoding, start, end + 1)
+		if (this.#position <= 0) return ''
+		if (!trim) return this.#buffer.toString(encoding, 0, this.#position)
+		const [start, end] = trimStartEnd(this.#buffer, 0, this.#position - 1)
+		return this.#buffer.toString(encoding, start, end + 1)
 	}
 
 	toBuffer(trim: boolean = false) {
-		if (!trim) return this.buffer.subarray(0, this.position)
-		const [start, end] = trimStartEnd(this.buffer, 0, this.position - 1)
-		return this.buffer.subarray(start, end + 1)
+		if (!trim) return this.#buffer.subarray(0, this.#position)
+		const [start, end] = trimStartEnd(this.#buffer, 0, this.#position - 1)
+		return this.#buffer.subarray(start, end + 1)
 	}
 }
 
