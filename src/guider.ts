@@ -83,6 +83,7 @@ export interface GuiderConfig {
 	readonly mode: GuidingMode
 	readonly calibration: CalibrationMatrix
 	readonly referencePosition?: readonly [number, number] // px
+	readonly initialPosition?: readonly [number, number] // px
 	readonly lockAveragingFrames: number
 	readonly maxMatchDistancePx: number
 	readonly maxFrameJumpPx: number
@@ -263,6 +264,7 @@ export function validateCalibration(calibration: CalibrationMatrix, minDetermina
 function validateGuiderConfig(config: GuiderConfig) {
 	const issues: ConfigIssue[] = []
 	if (config.referencePosition !== undefined && (!Number.isFinite(config.referencePosition[0]) || !Number.isFinite(config.referencePosition[1]))) issues.push({ key: 'referencePosition', reason: 'must contain finite x/y values' })
+	if (config.initialPosition !== undefined && (!Number.isFinite(config.initialPosition[0]) || !Number.isFinite(config.initialPosition[1]))) issues.push({ key: 'initialPosition', reason: 'must contain finite x/y values' })
 	if (config.minMoveRA < 0) issues.push({ key: 'minMoveRA', reason: 'must be >= 0' })
 	if (config.minMoveDEC < 0) issues.push({ key: 'minMoveDEC', reason: 'must be >= 0' })
 	if (config.minPulseMsRA < 0) issues.push({ key: 'minPulseMsRA', reason: 'must be >= 0' })
@@ -846,7 +848,7 @@ export class Guider {
 		}
 
 		const previous = this.state.lockSamples[this.state.lockSamples.length - 1]
-		const preferred = previous === undefined ? pickInitialLockStar(filtered.accepted, this.config.referencePosition) : pickNearestGuideStar(filtered.accepted, previous.x, previous.y)
+		const preferred = previous === undefined ? pickInitialLockStar(filtered.accepted, this.config.initialPosition) : pickNearestGuideStar(filtered.accepted, previous.x, previous.y)
 
 		if (preferred === undefined) {
 			this.updateDiagnostics(frame, filtered, null, false, true, ['init_no_star'])
