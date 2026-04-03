@@ -82,6 +82,7 @@ export class GuiderClient {
 	#lockShiftOffsetX = 0
 	#lockShiftOffsetY = 0
 	#lockShiftTimestamp = 0
+	#lockShiftLimitReached = false
 	#focalLength = 0
 	#pixelSize = 0
 	#searchRegion = DEFAULT_SEARCH_REGION
@@ -122,6 +123,7 @@ export class GuiderClient {
 		this.cameraManager.addHandler(this.#cameraHandler)
 		this.cameraManager.enableBlob(camera)
 		this.#resetRuntimeState(true)
+		this.emitEvent('ConfigurationChange')
 
 		return true
 	}
@@ -145,6 +147,7 @@ export class GuiderClient {
 		this.#focalLength = 0
 		this.#pixelSize = 0
 		this.#resetRuntimeState(true)
+		this.emitEvent('ConfigurationChange')
 
 		return true
 	}
@@ -198,6 +201,7 @@ export class GuiderClient {
 		this.#settleFrameCount = 0
 		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
+		this.#lockShiftLimitReached = false
 		this.#resumeState = 'Stopped'
 		this.setAppState('Stopped')
 
@@ -216,9 +220,11 @@ export class GuiderClient {
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
+		this.#lockShiftLimitReached = false
 		this.#settling = false
 		this.#settleStartTime = 0
 		this.#settleStableSince = 0
+		this.emitEvent('ConfigurationChange')
 
 		if (this.#appState === 'Calibrating' || this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
 			this.#resumeState = this.#lockPosition === undefined ? 'Looping' : 'Selected'
@@ -235,6 +241,7 @@ export class GuiderClient {
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
+		this.#lockShiftLimitReached = false
 		this.#settling = false
 		this.#settleStartTime = 0
 		this.#settleStableSince = 0
@@ -281,6 +288,7 @@ export class GuiderClient {
 		this.#calibration = flipGuidingCalibration(this.#calibration, this.options?.reverseDecOutputAfterMeridianFlip === true)
 		this.#guider = this.#makeGuider(this.#calibration)
 		this.emitEvent('CalibrationDataFlipped', { Mount: this.#guideOutput?.name ?? '' })
+		this.emitEvent('ConfigurationChange')
 
 		return true
 	}
@@ -397,6 +405,7 @@ export class GuiderClient {
 		this.#settleStartTime = 0
 		this.#settleStableSince = 0
 		this.#lockShiftTimestamp = 0
+		this.#lockShiftLimitReached = false
 
 		if (recalibrate || this.#calibration === undefined) {
 			if (recalibrate) this.#calibration = undefined
@@ -436,6 +445,7 @@ export class GuiderClient {
 		this.#settleFrameCount = 0
 		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
+		this.#lockShiftLimitReached = false
 		this.setAppState(this.#lockPosition === undefined ? 'Looping' : 'Selected')
 		this.startCapture(this.#exposure)
 
@@ -447,6 +457,7 @@ export class GuiderClient {
 		this.#declinationGuideMode = mode
 		if (this.#appState !== 'Calibrating') this.#guider = this.#makeGuider(this.#calibration)
 		this.emitEvent('GuideParamChange', { Name: 'DecGuideMode', Value: mode })
+		this.emitEvent('ConfigurationChange')
 	}
 
 	// Stores the default exposure cadence for subsequent captures.
@@ -454,6 +465,7 @@ export class GuiderClient {
 		if (exposure <= 0 || !Number.isFinite(exposure)) return false
 		this.#exposure = exposure
 		this.emitEvent('GuideParamChange', { Name: 'Exposure', Value: exposure })
+		this.emitEvent('ConfigurationChange')
 		return true
 	}
 
@@ -461,6 +473,7 @@ export class GuiderClient {
 	setGuideOutputEnabled(enabled: boolean) {
 		this.#guideOutputEnabled = enabled
 		this.emitEvent('GuideParamChange', { Name: 'GuideOutputEnabled', Value: enabled })
+		this.emitEvent('ConfigurationChange')
 	}
 
 	// Stores the requested lock target and relocks to the nearest detected star unless exact matching is requested.
@@ -482,6 +495,7 @@ export class GuiderClient {
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
+		this.#lockShiftLimitReached = false
 		this.emitEvent('LockPositionSet', { X: lockX, Y: lockY })
 
 		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
@@ -505,6 +519,7 @@ export class GuiderClient {
 		}
 
 		this.emitEvent('GuideParamChange', { Name: 'StickyLockPosition', Value: enabled })
+		this.emitEvent('ConfigurationChange')
 
 		return true
 	}
@@ -517,7 +532,9 @@ export class GuiderClient {
 
 		this.#lockShiftParams.enabled = enabled
 		this.#lockShiftTimestamp = enabled ? (this.#frame?.timestamp ?? 0) : 0
+		this.#lockShiftLimitReached = false
 		this.emitEvent('GuideParamChange', { Name: 'LockShiftEnabled', Value: enabled })
+		this.emitEvent('ConfigurationChange')
 
 		return true
 	}
@@ -535,7 +552,9 @@ export class GuiderClient {
 		if (axes !== undefined) this.#lockShiftParams.axes = axes
 		this.#lockShiftParams.units = units
 		this.#lockShiftTimestamp = this.#frame?.timestamp ?? 0
+		this.#lockShiftLimitReached = false
 		this.emitEvent('GuideParamChange', { Name: 'LockShiftParams', Value: this.getLockShiftParams() })
+		this.emitEvent('ConfigurationChange')
 
 		return true
 	}
@@ -674,7 +693,7 @@ export class GuiderClient {
 		if (!this.#paused) this.setAppState('Guiding')
 
 		this.#updateSettling(command.diagnostics.dx, command.diagnostics.dy, command.diagnostics.badFrame, command.diagnostics.lost, frame.timestamp ?? Date.now())
-		this.#updateLockShift(frame.timestamp ?? Date.now())
+		this.#updateLockShift(frame)
 
 		return Math.max(this.#pulseAxis(command.ra.direction, command.ra.duration), this.#pulseAxis(command.dec.direction, command.dec.duration))
 	}
@@ -759,7 +778,9 @@ export class GuiderClient {
 	}
 
 	// Advances the lock-shift offset using elapsed time and the configured X/Y or RA/DEC drift rates.
-	#updateLockShift(timestamp: number) {
+	#updateLockShift(frame: GuideFrame) {
+		const timestamp = frame.timestamp ?? Date.now()
+
 		if (!this.#lockShiftParams.enabled || this.#paused || this.#guider.currentState.state !== 'guiding') {
 			this.#lockShiftTimestamp = timestamp
 			return
@@ -781,11 +802,35 @@ export class GuiderClient {
 		const shiftScale = elapsed / 3600000
 		this.#lockShiftOffsetX += rate[0] * shiftScale
 		this.#lockShiftOffsetY += rate[1] * shiftScale
-		this.#syncGuideTargetOffset()
 
 		const { referenceX, referenceY } = this.#guider.currentState
-		this.#lockPosition = [referenceX + this.#ditherOffsetX + this.#lockShiftOffsetX, referenceY + this.#ditherOffsetY + this.#lockShiftOffsetY] as const
+		let lockX = referenceX + this.#ditherOffsetX + this.#lockShiftOffsetX
+		let lockY = referenceY + this.#ditherOffsetY + this.#lockShiftOffsetY
+		let limitReached = false
+
+		if (frame.width > 0 && frame.height > 0) {
+			const clampedLockX = clamp(lockX, 0, frame.width - 1)
+			const clampedLockY = clamp(lockY, 0, frame.height - 1)
+			limitReached = clampedLockX !== lockX || clampedLockY !== lockY
+
+			if (limitReached) {
+				lockX = clampedLockX
+				lockY = clampedLockY
+				this.#lockShiftOffsetX = clampedLockX - referenceX - this.#ditherOffsetX
+				this.#lockShiftOffsetY = clampedLockY - referenceY - this.#ditherOffsetY
+			}
+		}
+
+		this.#syncGuideTargetOffset()
+		this.#lockPosition = [lockX, lockY] as const
 		if (!this.#stickyLockPosition) this.#lockSearchPosition = this.#lockPosition
+
+		if (limitReached) {
+			if (!this.#lockShiftLimitReached) this.emitEvent('LockPositionShiftLimitReached')
+			this.#lockShiftLimitReached = true
+		} else {
+			this.#lockShiftLimitReached = false
+		}
 	}
 
 	// Converts the configured lock-shift rate into image-space pixels/hour when the current data model can support it.
@@ -873,6 +918,7 @@ export class GuiderClient {
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
+		this.#lockShiftLimitReached = false
 		this.#lockShiftParams.enabled = false
 		this.#lockShiftParams.rate = [0, 0]
 		this.#lockShiftParams.units = 'pixels/hr'
