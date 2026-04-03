@@ -403,12 +403,15 @@ export class GuiderClient {
 		this.#paused = false
 		this.#fullPause = true
 		this.#resumeState = 'Guiding'
-		this.#settling = false
 		this.#settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
+		this.#settling = true
 		this.#settleStartTime = 0
 		this.#settleStableSince = 0
+		this.#settleFrameCount = 0
+		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
+		this.emitEvent('SettleBegin')
 
 		if (recalibrate || this.#calibration === undefined) {
 			if (recalibrate) this.#calibration = undefined
@@ -653,6 +656,12 @@ export class GuiderClient {
 
 		if (step.failure !== undefined) {
 			this.emitEvent('CalibrationFailed', { Reason: step.failure.message })
+
+			if (this.#settling) {
+				this.#settling = false
+				this.emitSettleDoneEvent(1, step.failure.message)
+			}
+
 			this.#resumeState = this.#lockPosition === undefined ? 'Looping' : 'Selected'
 			if (!this.#paused) this.setAppState(this.#resumeState)
 			return 0
@@ -674,6 +683,7 @@ export class GuiderClient {
 	// Runs the guide controller, applies settle tracking, and returns the max pulse delay.
 	#processGuidingFrame(frame: GuideFrame) {
 		const command = this.#guider.processFrame(frame)
+		const timestamp = frame.timestamp ?? Date.now()
 
 		this.#updateLockPositionFromGuider(command.diagnostics.targetX, command.diagnostics.targetY)
 		this.#updateLockSearchPositionFromGuider(command.diagnostics.measurementX, command.diagnostics.measurementY)
@@ -683,11 +693,7 @@ export class GuiderClient {
 			this.emitEvent('LockPositionLost')
 			this.#resumeState = 'LostLock'
 			if (!this.#paused) this.setAppState('LostLock')
-			this.#settling = false
-			this.#settleStartTime = 0
-			this.#settleStableSince = 0
-			this.#settleFrameCount = 0
-			this.#settleDroppedFrameCount = 0
+			this.#updateSettling(undefined, undefined, true, true, timestamp)
 			return 0
 		}
 
@@ -696,7 +702,7 @@ export class GuiderClient {
 		this.#resumeState = 'Guiding'
 		if (!this.#paused) this.setAppState('Guiding')
 
-		this.#updateSettling(command.diagnostics.dx, command.diagnostics.dy, command.diagnostics.badFrame, command.diagnostics.lost, frame.timestamp ?? Date.now())
+		this.#updateSettling(command.diagnostics.dx, command.diagnostics.dy, command.diagnostics.badFrame, command.diagnostics.lost, timestamp)
 		this.#updateLockShift(frame)
 
 		return Math.max(this.#pulseAxis(command.ra.direction, command.ra.duration), this.#pulseAxis(command.dec.direction, command.dec.duration))
