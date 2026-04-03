@@ -171,3 +171,8 @@ export function channelIndex(channel?: ImageChannelOrGray) {
 export function grayscaleFromChannel(channel?: ImageChannelOrGray): Grayscale {
 	return typeof channel === 'object' ? channel : channel ? GRAYSCALES[channel] : DEFAULT_GRAYSCALE
 }
+
+// Allocates a same-type raw pixel buffer for the cropped ROI.
+export function makeImageRawTypedArray(source: ImageRawType, size: number): ImageRawType {
+	return source.BYTES_PER_ELEMENT === 4 ? new Float32Array(size) : new Float64Array(size)
+}

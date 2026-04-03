@@ -2,16 +2,18 @@ import { TAU } from './constants'
 import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
 import { flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './guider.calibrator'
 import { readImageFromBuffer, readImageFromSource } from './image'
-import type { Image } from './image.types'
+import { type Image, type ImageRawType, makeImageRawTypedArray } from './image.types'
 import type { Camera, GuideDirection, GuideOutput } from './indi.device'
 import type { CameraManager, DeviceHandler, GuideOutputManager } from './indi.manager'
 import { base64Source } from './io'
-import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2LockShiftParams, type PHD2Settle } from './phd2'
+import { clamp } from './math'
+import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from './phd2'
 import { detectStars } from './star.detector'
 import type { PartialOnly, Writable } from './types'
 import { angularSizeOfPixel } from './util'
 
 const DEFAULT_GUIDER_EXPOSURE = 1
+const DEFAULT_SEARCH_REGION = 64
 
 const EMPTY_CALIBRATION_DATA: Readonly<PHD2CalibrationData> = {
 	calibrated: false,
@@ -33,6 +35,7 @@ const DEFAULT_LOCK_SHIFT_PARAMS: Readonly<PHD2LockShiftParams> = {
 export interface GuiderClientOptions {
 	readonly handler?: GuiderClientHandler
 	readonly reverseDecOutputAfterMeridianFlip?: boolean
+	readonly searchRegion?: number // pixels
 }
 
 export interface GuiderClientConnectOptions {
@@ -78,6 +81,7 @@ export class GuiderClient {
 	#lockShiftTimestamp = 0
 	#focalLength = 0
 	#pixelSize = 0
+	#searchRegion = DEFAULT_SEARCH_REGION
 	readonly #lockShiftParams = { ...DEFAULT_LOCK_SHIFT_PARAMS }
 	readonly #eventHandler?: GuiderClientHandler['event']
 
@@ -98,6 +102,7 @@ export class GuiderClient {
 		readonly guideOutputManager: GuideOutputManager,
 		readonly options?: GuiderClientOptions,
 	) {
+		this.#searchRegion = clamp(options?.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
 		this.#eventHandler = options?.handler?.event
 	}
 
@@ -240,7 +245,7 @@ export class GuiderClient {
 	}
 
 	// Applies a random image-space dither and tracks local settle status.
-	dither(amount: number, raOnly: boolean = false, settle: Partial<PHD2Settle> = DEFAULT_PHD2_SETTLE) {
+	dither(amount: number, raOnly: boolean = false, settle?: Partial<PHD2Settle>) {
 		if (this.#calibration === undefined || this.#guider.currentState.state !== 'guiding' || amount <= 0 || !Number.isFinite(amount)) return false
 
 		const { referenceX, referenceY } = this.#guider.currentState
@@ -350,9 +355,8 @@ export class GuiderClient {
 		return pixelSize <= 0 ? 0 : angularSizeOfPixel(this.#focalLength, pixelSize)
 	}
 
-	// TODO: expose a dedicated search-region parameter if the guider gains one.
 	getSearchRegion() {
-		return 0
+		return this.#searchRegion
 	}
 
 	// Returns true while an active dither waits for the settle criteria.
@@ -360,13 +364,18 @@ export class GuiderClient {
 		return this.#settling
 	}
 
-	// TODO: expose a PHD2-compatible star-image payload once the expected pixel encoding is defined.
-	getStarImage() {
-		return undefined
+	// Returns the most recent decoded guide frame and star position using the raw in-memory pixel buffer.
+	getStarImage(): PHD2StarImage<ImageRawType> | undefined {
+		if (this.#image === undefined) return undefined
+
+		const star = this.#frame?.stars[0]
+		// Uses the current lock target when available, otherwise the latest measured star centroid or [0, 0].
+		const [x, y] = this.#lockPosition ?? [star?.x ?? 0, star?.y ?? 0]
+		return cropStarImage(this.#image, this.#frame?.frameId ?? 0, x, y, this.#searchRegion)
 	}
 
 	// Starts guiding and triggers calibration first when requested or when no solution exists yet.
-	guide(recalibrate: boolean = false, settle: PHD2Settle = DEFAULT_PHD2_SETTLE) {
+	guide(recalibrate: boolean = false, settle?: Partial<PHD2Settle>) {
 		if (!this.#connected || this.#camera === undefined || this.#guideOutput === undefined) return false
 
 		this.#paused = false
@@ -840,9 +849,12 @@ export class GuiderClient {
 
 	// Updates the app state and emits the paired PHD2 AppState event once.
 	private setAppState(appState: PHD2AppState) {
-		if (this.#appState === appState) return
+		// if (this.#appState === appState) return
 		this.#appState = appState
-		this.emitEvent('AppState', { State: appState })
+		// The AppState notification is only sent when the client first connects to PHD2.
+		// You will need to update its notion of AppState by handling individual notification events.
+		// https://github.com/OpenPHDGuiding/phd2/wiki/EventMonitoring#appstate
+		// this.emitEvent('AppState', { State: appState })
 	}
 
 	// Emits the capture-stop event that matches the current or paused-resume session mode.
@@ -1088,4 +1100,47 @@ function resolveEffectivePixelSize(camera: Camera, pixelSize: number) {
 
 	// PHD2 exposes one scalar pixel scale, so asymmetric binned pixel sizes are averaged.
 	return 0.5 * (pixelSizeX * binX + pixelSizeY * binY)
+}
+
+// Crops a square ROI around the guide star and preserves interleaved channel ordering.
+function cropStarImage(image: Image, frame: number, x: number, y: number, searchRegion: number): PHD2StarImage<ImageRawType> {
+	const { metadata, raw } = image
+	const { width, height, channels, stride } = metadata
+	const cropWidth = resolveCropSize(searchRegion, width)
+	const cropHeight = resolveCropSize(searchRegion, height)
+	const starX = clampStarCoordinate(x, width)
+	const starY = clampStarCoordinate(y, height)
+	const cropX = Math.max(0, Math.min(width - cropWidth, Math.round(starX) - (cropWidth >> 1)))
+	const cropY = Math.max(0, Math.min(height - cropHeight, Math.round(starY) - (cropHeight >> 1)))
+	const pixels = makeImageRawTypedArray(raw, cropWidth * cropHeight * channels)
+	const rowLength = cropWidth * channels
+	let sourceOffset = cropY * stride + cropX * channels
+	let targetOffset = 0
+
+	for (let row = 0; row < cropHeight; row++) {
+		const targetRowEnd = targetOffset + rowLength
+		while (targetOffset < targetRowEnd) pixels[targetOffset++] = raw[sourceOffset++]
+		sourceOffset += stride - rowLength
+	}
+
+	return {
+		width: cropWidth,
+		height: cropHeight,
+		frame,
+		// Star coordinates are relative to the returned ROI origin.
+		star_pos: { x: starX - cropX, y: starY - cropY },
+		pixels,
+	}
+}
+
+// Resolves the clamped crop side for one image axis.
+function resolveCropSize(searchRegion: number, imageSize: number) {
+	if (!Number.isFinite(searchRegion) || searchRegion <= 0) return imageSize
+	return Math.max(1, Math.min(imageSize, Math.trunc(searchRegion)))
+}
+
+// Clamps the requested star coordinate to the valid image domain.
+function clampStarCoordinate(value: number, imageSize: number) {
+	if (!Number.isFinite(value) || imageSize <= 1) return 0
+	return Math.max(0, Math.min(imageSize - 1, value))
 }

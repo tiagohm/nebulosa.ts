@@ -1,7 +1,10 @@
 import type { Point, Size } from './geometry'
+import type { ImageRawType } from './image.types'
 import type { PartialOnly, Writable } from './types'
 
 export const DEFAULT_PHD2_PORT = 4400
+
+// https://github.com/OpenPHDGuiding/phd2/wiki/EventMonitoring
 
 export type PHD2EventType =
 	| 'Alert'
@@ -308,10 +311,10 @@ export interface PHD2Profile {
 	readonly selected: boolean
 }
 
-export interface PHD2StarImage extends Readonly<Size> {
+export interface PHD2StarImage<P extends string | ImageRawType> extends Readonly<Size> {
 	readonly frame: number
 	readonly star_pos: Readonly<Point>
-	readonly pixels: string
+	readonly pixels: P
 }
 
 export interface PHD2ClientOptions {
@@ -536,7 +539,7 @@ export class PHD2Client implements Disposable {
 	}
 
 	getStarImage() {
-		return this.send<PHD2StarImage>('get_star_image')
+		return this.send<PHD2StarImage<string>>('get_star_image')
 	}
 
 	getUseSubframes() {
