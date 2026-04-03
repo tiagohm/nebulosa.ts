@@ -27,7 +27,7 @@ export interface DevicePropertyHandler {
 }
 
 export interface DeviceProvider<D extends Device> {
-	readonly get: (client: Client, name: string, type?: DeviceType) => D | undefined
+	readonly get: (client: Client | string | undefined, id: string, type?: DeviceType) => D | undefined
 }
 
 const DEVICES = {
@@ -182,13 +182,11 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 
 export abstract class DeviceManager<D extends Device> implements IndiClientHandler, DeviceProvider<D>, DeviceHandler<D> {
 	protected readonly clients = new Map<string, Client>()
-	protected readonly devices = new Map<Client, Map<string, D>>()
+	protected readonly devices = new Map<string, D>()
 	protected readonly handlers = new Set<DeviceHandler<D>>()
 
 	get length() {
-		let n = 0
-		for (const d of this.devices) n += d[1].size
-		return n
+		return this.devices.size
 	}
 
 	addHandler(handler: DeviceHandler<D>) {
@@ -218,38 +216,28 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	list(client?: Client | string) {
 		const devices = new Set<D>()
 
-		if (client) {
-			client = typeof client === 'string' ? this.clients.get(client) : client
+		client = typeof client === 'string' ? this.clients.get(client) : client
 
-			if (client) {
-				for (const device of this.devices.get(client)!.values()) {
-					devices.add(device)
-				}
-			}
-		} else {
-			for (const client of this.devices.values()) {
-				for (const device of client.values()) {
-					devices.add(device)
-				}
-			}
+		for (const device of this.devices.values()) {
+			if (client === undefined || device[CLIENT] === client) devices.add(device)
 		}
 
 		return devices
 	}
 
-	names(client: Client | string) {
-		client = typeof client === 'string' ? this.clients.get(client)! : client
-		return Array.from(this.devices.get(client)?.keys() ?? [])
+	get(client: Client | string | undefined, id: string) {
+		client = typeof client === 'string' ? this.clients.get(client) : client
+
+		for (const device of this.devices.values()) {
+			if (device.id === id) return device
+			if (device[CLIENT] === client && device.name === id) return device
+		}
+
+		return undefined
 	}
 
-	get(client: Client | string, name: string) {
-		client = typeof client === 'string' ? this.clients.get(client)! : client
-		return this.devices.get(client)?.get(name)
-	}
-
-	has(client: Client | string, name: string) {
-		client = typeof client === 'string' ? this.clients.get(client)! : client
-		return this.devices.get(client)?.has(name) === true
+	has(client: Client | string | undefined, id: string) {
+		return this.get(client, id) !== undefined
 	}
 
 	ask(device: D, name?: string, client = device[CLIENT]!) {
@@ -337,10 +325,8 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	}
 
 	add(device: D, client = device[CLIENT] as Client) {
-		if (!this.has(client, device.name)) {
-			const devices = this.devices.get(client) ?? new Map()
-			devices.set(device.name, device)
-			this.devices.set(client, devices)
+		if (!this.has(client, device.id)) {
+			this.devices.set(device.id, device)
 			this.clients.set(client.id, client)
 			this.added(device)
 			return true
@@ -349,9 +335,8 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
-	remove(device: D, client = device[CLIENT] as Client) {
-		if (this.has(client, device.name)) {
-			this.devices.get(client)?.delete(device.name)
+	remove(device: D) {
+		if (this.devices.delete(device.id)) {
 			this.removed(device)
 			return true
 		} else {
@@ -360,15 +345,8 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	}
 
 	close(client: Client, server: boolean) {
-		const devices = this.devices.get(client)
-
-		if (devices) {
-			for (const device of devices) {
-				this.remove(device[1])
-			}
-		}
-
-		this.devices.delete(client)
+		const devices = this.list(client)
+		for (const device of devices) this.remove(device)
 		this.clients.delete(client.id)
 	}
 }

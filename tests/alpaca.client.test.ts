@@ -82,13 +82,13 @@ const coverManager = new CoverManager()
 const rotatorManager = new RotatorManager()
 
 const guideOutput = new GuideOutputManager({
-	get: (client: Client, name: string) => {
+	get: (client: Client | string | undefined, name: string) => {
 		return mountManager.get(client, name) ?? cameraManager.get(client, name)
 	},
 })
 
 const thermometerManager = new ThermometerManager({
-	get: (client: Client, name: string) => {
+	get: (client: Client | string | undefined, name: string) => {
 		return focuserManager.get(client, name) ?? cameraManager.get(client, name)
 	},
 })
@@ -130,7 +130,7 @@ const handler: AlpacaClientHandler = {
 }
 
 const deviceProvider: DeviceProvider<Device> = {
-	get: (client: Client, name: string, type?: DeviceType) => {
+	get: (client: Client | string | undefined, name: string, type?: DeviceType) => {
 		if (type === 'CAMERA') return cameraManager.get(client, name)
 		else if (type === 'MOUNT') return mountManager.get(client, name)
 		else if (type === 'FOCUSER') return focuserManager.get(client, name)
