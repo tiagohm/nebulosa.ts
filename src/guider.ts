@@ -82,6 +82,7 @@ export interface StarFilterConfig {
 export interface GuiderConfig {
 	readonly mode: GuidingMode
 	readonly calibration: CalibrationMatrix
+	readonly referencePosition?: readonly [number, number] // px
 	readonly lockAveragingFrames: number
 	readonly maxMatchDistancePx: number
 	readonly maxFrameJumpPx: number
@@ -261,6 +262,7 @@ export function validateCalibration(calibration: CalibrationMatrix, minDetermina
 // Validates guider configuration limits and controller constraints.
 function validateGuiderConfig(config: GuiderConfig) {
 	const issues: ConfigIssue[] = []
+	if (config.referencePosition !== undefined && (!Number.isFinite(config.referencePosition[0]) || !Number.isFinite(config.referencePosition[1]))) issues.push({ key: 'referencePosition', reason: 'must contain finite x/y values' })
 	if (config.minMoveRA < 0) issues.push({ key: 'minMoveRA', reason: 'must be >= 0' })
 	if (config.minMoveDEC < 0) issues.push({ key: 'minMoveDEC', reason: 'must be >= 0' })
 	if (config.minPulseMsRA < 0) issues.push({ key: 'minPulseMsRA', reason: 'must be >= 0' })
@@ -844,7 +846,7 @@ export class Guider {
 		}
 
 		const previous = this.state.lockSamples[this.state.lockSamples.length - 1]
-		const preferred = previous === undefined ? pickInitialGuideStar(filtered.accepted) : pickNearestGuideStar(filtered.accepted, previous.x, previous.y)
+		const preferred = previous === undefined ? pickInitialLockStar(filtered.accepted, this.config.referencePosition) : pickNearestGuideStar(filtered.accepted, previous.x, previous.y)
 
 		if (preferred === undefined) {
 			this.updateDiagnostics(frame, filtered, null, false, true, ['init_no_star'])
@@ -853,6 +855,10 @@ export class Guider {
 
 		this.state.lockSamples.push({ x: preferred.x, y: preferred.y, stars: filtered.accepted.slice() })
 
+		const [targetX, targetY] = this.config.referencePosition ?? [preferred.x, preferred.y]
+		const dx = preferred.x - targetX
+		const dy = preferred.y - targetY
+
 		if (this.state.lockSamples.length < this.config.lockAveragingFrames) {
 			this.updateDiagnostics(
 				frame,
@@ -860,13 +866,13 @@ export class Guider {
 				{
 					measurementX: preferred.x,
 					measurementY: preferred.y,
-					dx: 0,
-					dy: 0,
+					dx,
+					dy,
 					axisErrorRA: 0,
 					axisErrorDEC: 0,
 					modeUsed: 'single-star',
-					targetX: preferred.x,
-					targetY: preferred.y,
+					targetX,
+					targetY,
 					notes: ['init_collecting'],
 				},
 				false,
@@ -885,8 +891,10 @@ export class Guider {
 			sumY += sample.y
 		}
 
-		this.state.referenceX = sumX / this.state.lockSamples.length
-		this.state.referenceY = sumY / this.state.lockSamples.length
+		const referenceX = sumX / this.state.lockSamples.length
+		const referenceY = sumY / this.state.lockSamples.length
+		this.state.referenceX = this.config.referencePosition?.[0] ?? referenceX
+		this.state.referenceY = this.config.referencePosition?.[1] ?? referenceY
 		this.state.measurementOriginX = preferred.x
 		this.state.measurementOriginY = preferred.y
 		this.state.referenceStars = this.state.lockSamples[this.state.lockSamples.length - 1].stars.slice()
@@ -895,10 +903,10 @@ export class Guider {
 			frame,
 			filtered,
 			{
-				measurementX: this.state.referenceX,
-				measurementY: this.state.referenceY,
-				dx: 0,
-				dy: 0,
+				measurementX: preferred.x,
+				measurementY: preferred.y,
+				dx: preferred.x - this.state.referenceX,
+				dy: preferred.y - this.state.referenceY,
 				axisErrorRA: 0,
 				axisErrorDEC: 0,
 				modeUsed: this.config.mode,
@@ -1034,6 +1042,12 @@ export class Guider {
 			notes,
 		}
 	}
+}
+
+// Picks the initial lock star from an explicit reference point when provided.
+function pickInitialLockStar(stars: readonly GuideStar[], referencePosition?: readonly [number, number]) {
+	if (referencePosition !== undefined) return pickNearestGuideStar(stars, referencePosition[0], referencePosition[1])
+	return pickInitialGuideStar(stars)
 }
 
 // Gets opposite RA guide direction.

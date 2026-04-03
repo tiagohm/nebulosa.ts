@@ -61,6 +61,8 @@ export class GuiderClient {
 	#image?: Image
 	#frameId = 0
 	#lockPosition?: readonly [number, number]
+	#lockSearchPosition?: readonly [number, number]
+	#lockPositionExact = false
 	#appState: PHD2AppState = 'Stopped'
 	#resumeState: PHD2AppState = 'Stopped'
 	#declinationGuideMode: PHD2DeclinationGuideMode = 'Auto'
@@ -153,6 +155,8 @@ export class GuiderClient {
 		if (selected === undefined) return undefined
 
 		this.#lockPosition = [selected.x, selected.y] as const
+		this.#lockSearchPosition = this.#lockPosition
+		this.#lockPositionExact = false
 		this.emitEvent('StarSelected', { X: selected.x, Y: selected.y })
 		this.emitEvent('LockPositionSet', { X: selected.x, Y: selected.y })
 
@@ -205,7 +209,7 @@ export class GuiderClient {
 	clearCalibration() {
 		this.#calibration = undefined
 		this.#calibrator.reset()
-		this.#guider = makeGuider(undefined, this.#declinationGuideMode)
+		this.#guider = makeGuider(undefined, this.#declinationGuideMode, this.#guiderReferencePosition)
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#lockShiftOffsetX = 0
@@ -224,6 +228,8 @@ export class GuiderClient {
 	// Drops the preferred lock position and returns to plain looping if capture is still active.
 	deselectStar() {
 		this.#lockPosition = undefined
+		this.#lockSearchPosition = undefined
+		this.#lockPositionExact = false
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#lockShiftOffsetX = 0
@@ -273,7 +279,7 @@ export class GuiderClient {
 		if (this.#calibration === undefined || this.#appState === 'Calibrating') return false
 
 		this.#calibration = flipGuidingCalibration(this.#calibration, this.options?.reverseDecOutputAfterMeridianFlip === true)
-		this.#guider = makeGuider(this.#calibration, this.#declinationGuideMode)
+		this.#guider = makeGuider(this.#calibration, this.#declinationGuideMode, this.#guiderReferencePosition)
 		this.emitEvent('CalibrationDataFlipped', { Mount: this.#guideOutput?.name ?? '' })
 
 		return true
@@ -393,7 +399,7 @@ export class GuiderClient {
 			this.emitEvent('StartCalibration', { Mount: this.#guideOutput.name })
 			this.setAppState('Calibrating')
 		} else {
-			this.#guider = makeGuider(this.#calibration, this.#declinationGuideMode)
+			this.#guider = makeGuider(this.#calibration, this.#declinationGuideMode, this.#guiderReferencePosition)
 			this.emitEvent('StartGuiding')
 			this.setAppState('Guiding')
 		}
@@ -434,7 +440,7 @@ export class GuiderClient {
 	// Updates the DEC guide mode and rebuilds the guider with the current calibration matrix.
 	setDeclinationGuideMode(mode: PHD2DeclinationGuideMode) {
 		this.#declinationGuideMode = mode
-		if (this.#appState !== 'Calibrating') this.#guider = makeGuider(this.#calibration, mode)
+		if (this.#appState !== 'Calibrating') this.#guider = makeGuider(this.#calibration, mode, this.#guiderReferencePosition)
 		this.emitEvent('GuideParamChange', { Name: 'DecGuideMode', Value: mode })
 	}
 
@@ -456,13 +462,15 @@ export class GuiderClient {
 	setLockPosition(x: number, y: number, exact: boolean = false) {
 		if (!Number.isFinite(x) || !Number.isFinite(y)) return false
 
-		if (!exact && this.#frame !== undefined && this.#frame.stars.length > 0) {
+		if (this.#frame !== undefined && this.#frame.stars.length > 0) {
 			const nearest = nearestGuideStar(this.#frame.stars, x, y)
-			this.#lockPosition = nearest === undefined ? ([x, y] as const) : ([nearest.x, nearest.y] as const)
+			this.#lockSearchPosition = nearest === undefined ? ([x, y] as const) : ([nearest.x, nearest.y] as const)
 		} else {
-			// TODO: exact lock coordinates are stored, but Guider still relocks using nearest-star acquisition on the next frame.
-			this.#lockPosition = [x, y] as const
+			this.#lockSearchPosition = [x, y] as const
 		}
+
+		this.#lockPosition = exact ? ([x, y] as const) : this.#lockSearchPosition
+		this.#lockPositionExact = exact
 
 		const [lockX, lockY] = this.#lockPosition
 		this.#ditherOffsetX = 0
@@ -473,7 +481,7 @@ export class GuiderClient {
 		this.emitEvent('LockPositionSet', { X: lockX, Y: lockY })
 
 		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
-			this.#guider = makeGuider(this.#calibration, this.#declinationGuideMode)
+			this.#guider = makeGuider(this.#calibration, this.#declinationGuideMode, this.#guiderReferencePosition)
 			this.#resumeState = 'Guiding'
 			if (!this.#paused) this.setAppState('Guiding')
 		} else if (this.#appState !== 'Stopped') {
@@ -570,9 +578,10 @@ export class GuiderClient {
 	// Converts a decoded image into a guide frame and prioritizes the selected lock star.
 	#makeGuideFrame(image?: Image): GuideFrame {
 		const stars = image === undefined ? [] : detectStars(image)
+		const lockSearchPosition = this.#lockSearchPosition ?? this.#lockPosition
 
-		if (this.#lockPosition !== undefined && stars.length > 1) {
-			moveNearestGuideStarToFront(stars, this.#lockPosition)
+		if (lockSearchPosition !== undefined && stars.length > 1) {
+			moveNearestGuideStarToFront(stars, lockSearchPosition)
 		}
 
 		return {
@@ -611,7 +620,7 @@ export class GuiderClient {
 
 		if (step.completed !== undefined) {
 			this.#calibration = step.completed
-			this.#guider = makeGuider(this.#calibration, this.#declinationGuideMode)
+			this.#guider = makeGuider(this.#calibration, this.#declinationGuideMode, this.#guiderReferencePosition)
 			this.emitEvent('CalibrationComplete', { Mount: this.#guideOutput?.name ?? '' })
 			this.emitEvent('StartGuiding')
 			this.#resumeState = 'Guiding'
@@ -627,6 +636,7 @@ export class GuiderClient {
 		const command = this.#guider.processFrame(frame)
 
 		this.#updateLockPositionFromGuider(command.diagnostics.targetX, command.diagnostics.targetY)
+		this.#updateLockSearchPositionFromGuider(command.diagnostics.measurementX, command.diagnostics.measurementY)
 
 		if (command.state === 'lost') {
 			this.emitStarLostEvent(frame, command)
@@ -720,6 +730,14 @@ export class GuiderClient {
 	#updateLockPositionFromGuider(targetX: number | undefined, targetY: number | undefined) {
 		if (targetX !== undefined && targetY !== undefined) {
 			this.#lockPosition = [targetX, targetY] as const
+			if (!this.#lockPositionExact) this.#lockSearchPosition = this.#lockPosition
+		}
+	}
+
+	// Refreshes the star-search center from the latest measured centroid when exact lock mode is active.
+	#updateLockSearchPositionFromGuider(measurementX: number | undefined, measurementY: number | undefined) {
+		if (this.#lockPositionExact && measurementX !== undefined && measurementY !== undefined) {
+			this.#lockSearchPosition = [measurementX, measurementY] as const
 		}
 	}
 
@@ -750,6 +768,7 @@ export class GuiderClient {
 
 		const { referenceX, referenceY } = this.#guider.currentState
 		this.#lockPosition = [referenceX + this.#ditherOffsetX + this.#lockShiftOffsetX, referenceY + this.#ditherOffsetY + this.#lockShiftOffsetY] as const
+		if (!this.#lockPositionExact) this.#lockSearchPosition = this.#lockPosition
 	}
 
 	// Converts the configured lock-shift rate into image-space pixels/hour when the current data model can support it.
@@ -790,8 +809,14 @@ export class GuiderClient {
 		const y = diagnostics.currentY ?? diagnostics.startY
 
 		if (x !== undefined && y !== undefined) {
-			this.#lockPosition = [x, y] as const
+			this.#lockSearchPosition = [x, y] as const
+			if (!this.#lockPositionExact) this.#lockPosition = this.#lockSearchPosition
 		}
+	}
+
+	// Returns the exact lock reference seed used for the next guider initialization.
+	get #guiderReferencePosition() {
+		return this.#lockPositionExact ? this.#lockPosition : undefined
 	}
 
 	// Starts another exposure after pulse delay if the current session is still active.
@@ -807,6 +832,8 @@ export class GuiderClient {
 		this.#image = undefined
 		this.#frameId = 0
 		this.#lockPosition = undefined
+		this.#lockSearchPosition = undefined
+		this.#lockPositionExact = false
 		this.#appState = 'Stopped'
 		this.#resumeState = 'Stopped'
 		this.#paused = false
@@ -831,7 +858,7 @@ export class GuiderClient {
 		this.#lockShiftParams.axes = 'X/Y'
 		this.#calibrator.reset()
 		if (clearCalibration) this.#calibration = undefined
-		this.#guider = makeGuider(this.#calibration, this.#declinationGuideMode)
+		this.#guider = makeGuider(this.#calibration, this.#declinationGuideMode, this.#guiderReferencePosition)
 	}
 
 	// Emits one callback event if the caller provided an event handler.
@@ -975,14 +1002,15 @@ export class GuiderClient {
 }
 
 // Builds a guider instance from the current calibration, axis parity, and DEC mode.
-function makeGuider(calibration: GuidingCalibrationResult | undefined, mode: PHD2DeclinationGuideMode): Guider {
-	if (calibration === undefined) return new Guider({ decMode: toDeclinationGuideMode(mode) })
+function makeGuider(calibration: GuidingCalibrationResult | undefined, mode: PHD2DeclinationGuideMode, referencePosition?: readonly [number, number]): Guider {
+	if (calibration === undefined) return new Guider({ decMode: toDeclinationGuideMode(mode), referencePosition })
 
 	return new Guider({
 		calibration: calibration.imageToAxis,
 		raPositiveDirection: calibration.ra.direction,
 		decPositiveDirection: calibration.dec.direction,
 		decMode: toDeclinationGuideMode(mode),
+		referencePosition,
 	})
 }
 
