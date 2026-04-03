@@ -63,7 +63,11 @@ export class GuiderClient {
 	#settleStableSince = 0
 	#settleFrameCount = 0
 	#settleDroppedFrameCount = 0
-	#lockShiftEnabled = false
+	#ditherOffsetX = 0
+	#ditherOffsetY = 0
+	#lockShiftOffsetX = 0
+	#lockShiftOffsetY = 0
+	#lockShiftTimestamp = 0
 	readonly #lockShiftParams = { ...DEFAULT_LOCK_SHIFT_PARAMS }
 	readonly #eventHandler?: GuiderClientHandler['event']
 
@@ -169,6 +173,7 @@ export class GuiderClient {
 		this.#settleStableSince = 0
 		this.#settleFrameCount = 0
 		this.#settleDroppedFrameCount = 0
+		this.#lockShiftTimestamp = 0
 		this.#resumeState = 'Stopped'
 		this.setAppState('Stopped')
 
@@ -182,6 +187,11 @@ export class GuiderClient {
 		this.#calibration = undefined
 		this.#calibrator.reset()
 		this.#guider = makeGuider(undefined, this.#declinationGuideMode)
+		this.#ditherOffsetX = 0
+		this.#ditherOffsetY = 0
+		this.#lockShiftOffsetX = 0
+		this.#lockShiftOffsetY = 0
+		this.#lockShiftTimestamp = 0
 		this.#settling = false
 		this.#settleStartTime = 0
 		this.#settleStableSince = 0
@@ -195,6 +205,11 @@ export class GuiderClient {
 	// Drops the preferred lock position and returns to plain looping if capture is still active.
 	deselectStar() {
 		this.#lockPosition = undefined
+		this.#ditherOffsetX = 0
+		this.#ditherOffsetY = 0
+		this.#lockShiftOffsetX = 0
+		this.#lockShiftOffsetY = 0
+		this.#lockShiftTimestamp = 0
 		this.#settling = false
 		this.#settleStartTime = 0
 		this.#settleStableSince = 0
@@ -214,11 +229,13 @@ export class GuiderClient {
 	dither(amount: number, raOnly: boolean = false, settle: Partial<PHD2Settle> = DEFAULT_PHD2_SETTLE) {
 		if (this.#calibration === undefined || this.#guider.currentState.state !== 'guiding' || amount <= 0 || !Number.isFinite(amount)) return false
 
-		const { ditherOffsetX, ditherOffsetY, referenceX, referenceY } = this.#guider.currentState
+		const { referenceX, referenceY } = this.#guider.currentState
 		const [dx, dy] = raOnly ? makeRaOnlyDither(this.#calibration, amount) : makeRandomDither(amount)
 
-		this.#guider.startDither(ditherOffsetX + dx, ditherOffsetY + dy)
-		this.#lockPosition = [referenceX + ditherOffsetX + dx, referenceY + ditherOffsetY + dy] as const
+		this.#ditherOffsetX += dx
+		this.#ditherOffsetY += dy
+		this.#syncGuideTargetOffset()
+		this.#lockPosition = [referenceX + this.#ditherOffsetX + this.#lockShiftOffsetX, referenceY + this.#ditherOffsetY + this.#lockShiftOffsetY] as const
 		this.#settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
 		this.#settling = true
 		this.#settleStartTime = 0
@@ -296,12 +313,12 @@ export class GuiderClient {
 		return this.#lockPosition ?? null
 	}
 
-	// TODO: implement lock-shift drift compensation once the guider state model supports it.
+	// Returns whether lock-shift drift compensation is enabled.
 	getLockShiftEnabled() {
-		return this.#lockShiftEnabled
+		return this.#lockShiftParams.enabled
 	}
 
-	// TODO: implement lock-shift drift compensation once the guider state model supports it.
+	// Returns the current lock-shift rate and axis configuration.
 	getLockShiftParams(): PHD2LockShiftParams {
 		return this.#lockShiftParams
 	}
@@ -342,6 +359,7 @@ export class GuiderClient {
 		this.#settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
 		this.#settleStartTime = 0
 		this.#settleStableSince = 0
+		this.#lockShiftTimestamp = 0
 
 		if (recalibrate || this.#calibration === undefined) {
 			if (recalibrate) this.#calibration = undefined
@@ -380,6 +398,7 @@ export class GuiderClient {
 		this.#settleStableSince = 0
 		this.#settleFrameCount = 0
 		this.#settleDroppedFrameCount = 0
+		this.#lockShiftTimestamp = 0
 		this.setAppState(this.#lockPosition === undefined ? 'Looping' : 'Selected')
 		this.startCapture(this.#exposure)
 
@@ -420,6 +439,11 @@ export class GuiderClient {
 		}
 
 		const [lockX, lockY] = this.#lockPosition
+		this.#ditherOffsetX = 0
+		this.#ditherOffsetY = 0
+		this.#lockShiftOffsetX = 0
+		this.#lockShiftOffsetY = 0
+		this.#lockShiftTimestamp = 0
 		this.emitEvent('LockPositionSet', { X: lockX, Y: lockY })
 
 		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
@@ -434,17 +458,37 @@ export class GuiderClient {
 		return true
 	}
 
-	// TODO: implement lock-shift drift compensation once the guider state model supports it.
+	// Enables or disables drift compensation by moving the guide target at the configured lock-shift rate.
 	setLockShiftEnabled(enabled: boolean) {
-		this.#lockShiftEnabled = enabled
+		if (enabled && this.#lockShiftParams.units === 'arcsec/hr' && this.getPixelScale() <= 0) {
+			// TODO: arcsec/hr lock-shift requires a real guider pixel scale.
+			return false
+		}
+
+		this.#lockShiftParams.enabled = enabled
+		this.#lockShiftTimestamp = enabled ? (this.#frame?.timestamp ?? 0) : 0
+		this.emitEvent('GuideParamChange', { Name: 'LockShiftEnabled', Value: enabled })
+
+		return true
 	}
 
-	// TODO: implement lock-shift drift compensation once the guider state model supports it.
+	// Stores the lock-shift drift rate used to incrementally move the guider target between frames.
 	setLockShiftParams(params: PartialOnly<Omit<Writable<PHD2LockShiftParams>, 'enabled'>, 'units'>) {
-		const { rate, axes, units } = params
+		const { rate, axes } = params
+		const units = params.units ?? (axes === undefined ? this.#lockShiftParams.units : axes === 'RA/Dec' ? 'arcsec/hr' : 'pixels/hr')
+
+		if (units === 'arcsec/hr' && this.#lockShiftParams.enabled && this.getPixelScale() <= 0) {
+			// TODO: arcsec/hr lock-shift requires a real guider pixel scale.
+			return false
+		}
+
 		if (rate !== undefined) this.#lockShiftParams.rate = rate
 		if (axes !== undefined) this.#lockShiftParams.axes = axes
-		this.#lockShiftParams.units = units ?? (this.#lockShiftParams.axes === 'RA/Dec' ? 'arcsec/hr' : 'pixels/hr')
+		this.#lockShiftParams.units = units
+		this.#lockShiftTimestamp = this.#frame?.timestamp ?? 0
+		this.emitEvent('GuideParamChange', { Name: 'LockShiftParams', Value: this.getLockShiftParams() })
+
+		return true
 	}
 
 	// Pauses or resumes guide pulses, optionally stopping exposures during full pause.
@@ -453,6 +497,7 @@ export class GuiderClient {
 			if (!this.#paused) this.#resumeState = this.#appState === 'Paused' ? this.#resumeState : this.#appState
 			this.#paused = true
 			this.#fullPause = full || this.#resumeState === 'Calibrating'
+			this.#lockShiftTimestamp = 0
 			this.emitEvent('Paused')
 			this.setAppState('Paused')
 			if (this.#fullPause && this.#camera !== undefined) this.cameraManager.stopExposure(this.#camera)
@@ -461,6 +506,7 @@ export class GuiderClient {
 
 		this.#paused = false
 		this.#fullPause = true
+		this.#lockShiftTimestamp = 0
 		this.emitEvent('Resumed')
 		this.setAppState(this.#resumeState === 'Paused' ? 'Looping' : this.#resumeState)
 
@@ -577,6 +623,7 @@ export class GuiderClient {
 		if (!this.#paused) this.setAppState('Guiding')
 
 		this.#updateSettling(command.diagnostics.dx, command.diagnostics.dy, command.diagnostics.badFrame, command.diagnostics.lost, frame.timestamp ?? Date.now())
+		this.#updateLockShift(frame.timestamp ?? Date.now())
 
 		return Math.max(this.#pulseAxis(command.ra.direction, command.ra.duration), this.#pulseAxis(command.dec.direction, command.dec.duration))
 	}
@@ -652,6 +699,65 @@ export class GuiderClient {
 		}
 	}
 
+	// Advances the lock-shift offset using elapsed time and the configured X/Y or RA/DEC drift rates.
+	#updateLockShift(timestamp: number) {
+		if (!this.#lockShiftParams.enabled || this.#paused || this.#guider.currentState.state !== 'guiding') {
+			this.#lockShiftTimestamp = timestamp
+			return
+		}
+
+		if (this.#lockShiftTimestamp === 0) {
+			this.#lockShiftTimestamp = timestamp
+			return
+		}
+
+		const elapsed = timestamp - this.#lockShiftTimestamp
+		this.#lockShiftTimestamp = timestamp
+
+		if (elapsed <= 0) return
+
+		const rate = this.#lockShiftRateInImagePixelsPerHour()
+		if (rate === undefined) return
+
+		const shiftScale = elapsed / 3600000
+		this.#lockShiftOffsetX += rate[0] * shiftScale
+		this.#lockShiftOffsetY += rate[1] * shiftScale
+		this.#syncGuideTargetOffset()
+
+		const { referenceX, referenceY } = this.#guider.currentState
+		this.#lockPosition = [referenceX + this.#ditherOffsetX + this.#lockShiftOffsetX, referenceY + this.#ditherOffsetY + this.#lockShiftOffsetY] as const
+	}
+
+	// Converts the configured lock-shift rate into image-space pixels/hour when the current data model can support it.
+	#lockShiftRateInImagePixelsPerHour() {
+		const [rate0, rate1] = this.#lockShiftParams.rate
+
+		if (rate0 === 0 && rate1 === 0) return [0, 0] as const
+
+		if (this.#lockShiftParams.units === 'arcsec/hr') {
+			// TODO: arcsec/hr lock-shift requires arcsec/pixel and sky-axis orientation.
+			return undefined
+		}
+
+		if (this.#lockShiftParams.axes === 'X/Y') return [rate0, rate1] as const
+
+		if (this.#calibration === undefined) return undefined
+
+		return [this.#calibration.ra.unitX * rate0 + this.#calibration.dec.unitX * rate1, this.#calibration.ra.unitY * rate0 + this.#calibration.dec.unitY * rate1] as const
+	}
+
+	// Reapplies the combined manual dither and lock-shift target offset to the guider state.
+	#syncGuideTargetOffset() {
+		const offsetX = this.#ditherOffsetX + this.#lockShiftOffsetX
+		const offsetY = this.#ditherOffsetY + this.#lockShiftOffsetY
+
+		if (offsetX === 0 && offsetY === 0) {
+			this.#guider.stopDither()
+		} else {
+			this.#guider.startDither(offsetX, offsetY)
+		}
+	}
+
 	// Refreshes the public lock target from calibration diagnostics when available.
 	#updateLockPositionFromCalibration(diagnostics: GuidingCalibrationDiagnostics) {
 		const x = diagnostics.currentX ?? diagnostics.startX
@@ -688,7 +794,12 @@ export class GuiderClient {
 		this.#settleStableSince = 0
 		this.#settleFrameCount = 0
 		this.#settleDroppedFrameCount = 0
-		this.#lockShiftEnabled = false
+		this.#ditherOffsetX = 0
+		this.#ditherOffsetY = 0
+		this.#lockShiftOffsetX = 0
+		this.#lockShiftOffsetY = 0
+		this.#lockShiftTimestamp = 0
+		this.#lockShiftParams.enabled = false
 		this.#lockShiftParams.rate = [0, 0]
 		this.#lockShiftParams.units = 'pixels/hr'
 		this.#lockShiftParams.axes = 'X/Y'
