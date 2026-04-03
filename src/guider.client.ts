@@ -9,6 +9,7 @@ import { base64Source } from './io'
 import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2LockShiftParams, type PHD2Settle } from './phd2'
 import { detectStars } from './star.detector'
 import type { PartialOnly, Writable } from './types'
+import { angularSizeOfPixel } from './util'
 
 const DEFAULT_GUIDER_EXPOSURE = 1
 
@@ -32,6 +33,13 @@ const DEFAULT_LOCK_SHIFT_PARAMS: Readonly<PHD2LockShiftParams> = {
 export interface GuiderClientOptions {
 	readonly handler?: GuiderClientHandler
 	readonly reverseDecOutputAfterMeridianFlip?: boolean
+}
+
+export interface GuiderClientConnectOptions {
+	readonly focalLength?: number // Optical focal length in mm; takes precedence over aperture-derived focal length.
+	readonly aperture?: number // Optical aperture in mm, used together with focalRatio when focalLength is unavailable.
+	readonly focalRatio?: number // Dimensionless focal ratio, used together with aperture when focalLength is unavailable.
+	readonly pixelSize?: number // Unbinned guider pixel size in um; camera metadata is used when omitted.
 }
 
 export interface GuiderClientHandler {
@@ -68,6 +76,8 @@ export class GuiderClient {
 	#lockShiftOffsetX = 0
 	#lockShiftOffsetY = 0
 	#lockShiftTimestamp = 0
+	#focalLength = 0
+	#pixelSize = 0
 	readonly #lockShiftParams = { ...DEFAULT_LOCK_SHIFT_PARAMS }
 	readonly #eventHandler?: GuiderClientHandler['event']
 
@@ -92,11 +102,13 @@ export class GuiderClient {
 	}
 
 	// Binds the active camera and guide output, enables image BLOBs, and starts listening.
-	connect(camera: Camera, guideOutput: GuideOutput) {
+	connect(camera: Camera, guideOutput: GuideOutput, options?: GuiderClientConnectOptions) {
 		if (this.#connected) return false
 
 		this.#camera = camera
 		this.#guideOutput = guideOutput
+		this.#focalLength = resolveFocalLength(options)
+		this.#pixelSize = resolveConfiguredPixelSize(options)
 		this.#connected = true
 		this.cameraManager.addHandler(this.#cameraHandler)
 		this.cameraManager.enableBlob(camera)
@@ -121,6 +133,8 @@ export class GuiderClient {
 
 		this.#camera = undefined
 		this.#guideOutput = undefined
+		this.#focalLength = 0
+		this.#pixelSize = 0
 		this.#resetRuntimeState(true)
 
 		return true
@@ -328,9 +342,12 @@ export class GuiderClient {
 		return this.#paused
 	}
 
-	// TODO: compute arcsec/pixel only when the camera and telescope focal geometry are available.
+	// Returns the effective guider pixel scale in arcsec/pixel from focal length and binned pixel size.
 	getPixelScale() {
-		return 0
+		if (this.#camera === undefined || this.#focalLength <= 0) return 0
+
+		const pixelSize = resolveEffectivePixelSize(this.#camera, this.#pixelSize)
+		return pixelSize <= 0 ? 0 : angularSizeOfPixel(this.#focalLength, pixelSize)
 	}
 
 	// TODO: expose a dedicated search-region parameter if the guider gains one.
@@ -461,7 +478,6 @@ export class GuiderClient {
 	// Enables or disables drift compensation by moving the guide target at the configured lock-shift rate.
 	setLockShiftEnabled(enabled: boolean) {
 		if (enabled && this.#lockShiftParams.units === 'arcsec/hr' && this.getPixelScale() <= 0) {
-			// TODO: arcsec/hr lock-shift requires a real guider pixel scale.
 			return false
 		}
 
@@ -478,7 +494,6 @@ export class GuiderClient {
 		const units = params.units ?? (axes === undefined ? this.#lockShiftParams.units : axes === 'RA/Dec' ? 'arcsec/hr' : 'pixels/hr')
 
 		if (units === 'arcsec/hr' && this.#lockShiftParams.enabled && this.getPixelScale() <= 0) {
-			// TODO: arcsec/hr lock-shift requires a real guider pixel scale.
 			return false
 		}
 
@@ -730,13 +745,15 @@ export class GuiderClient {
 
 	// Converts the configured lock-shift rate into image-space pixels/hour when the current data model can support it.
 	#lockShiftRateInImagePixelsPerHour() {
-		const [rate0, rate1] = this.#lockShiftParams.rate
+		let [rate0, rate1] = this.#lockShiftParams.rate
 
 		if (rate0 === 0 && rate1 === 0) return [0, 0] as const
 
 		if (this.#lockShiftParams.units === 'arcsec/hr') {
-			// TODO: arcsec/hr lock-shift requires arcsec/pixel and sky-axis orientation.
-			return undefined
+			const pixelScale = this.getPixelScale()
+			if (pixelScale <= 0) return undefined
+			rate0 /= pixelScale
+			rate1 /= pixelScale
 		}
 
 		if (this.#lockShiftParams.axes === 'X/Y') return [rate0, rate1] as const
@@ -1041,4 +1058,34 @@ function calibrationDistanceOf(diagnostics: GuidingCalibrationDiagnostics) {
 // Converts local pulse directions to PHD2 casing and falls back to a mandatory default direction on no-pulse frames.
 function toPHD2GuideDirection(direction: AxisPulse['direction'], fallback: PHD2GuideDirection) {
 	return direction === null ? fallback : ((direction[0].toUpperCase() + direction.slice(1).toLowerCase()) as PHD2GuideDirection)
+}
+
+// Resolves the focal length in mm from explicit focal length or aperture/focal-ratio geometry.
+function resolveFocalLength(options?: GuiderClientConnectOptions) {
+	const focalLength = options?.focalLength ?? 0
+	if (focalLength > 0 && Number.isFinite(focalLength)) return focalLength
+
+	const aperture = options?.aperture ?? 0
+	const focalRatio = options?.focalRatio ?? 0
+	return aperture > 0 && focalRatio > 0 && Number.isFinite(aperture) && Number.isFinite(focalRatio) ? aperture * focalRatio : 0
+}
+
+// Resolves the fallback unbinned pixel size in um from explicit connection options.
+function resolveConfiguredPixelSize(options?: GuiderClientConnectOptions) {
+	const pixelSize = options?.pixelSize ?? 0
+	return pixelSize > 0 && Number.isFinite(pixelSize) ? pixelSize : 0
+}
+
+// Computes one scalar effective binned pixel size in um from camera metadata and optional fallback size.
+function resolveEffectivePixelSize(camera: Camera, pixelSize: number) {
+	const binX = camera.bin.x.value > 0 && Number.isFinite(camera.bin.x.value) ? camera.bin.x.value : 1
+	const binY = camera.bin.y.value > 0 && Number.isFinite(camera.bin.y.value) ? camera.bin.y.value : 1
+	const pixelSizeX = camera.pixelSize.x > 0 && Number.isFinite(camera.pixelSize.x) ? camera.pixelSize.x : pixelSize
+	const pixelSizeY = camera.pixelSize.y > 0 && Number.isFinite(camera.pixelSize.y) ? camera.pixelSize.y : pixelSize
+
+	if (pixelSizeX <= 0) return pixelSizeY <= 0 ? 0 : pixelSizeY * binY
+	if (pixelSizeY <= 0) return pixelSizeX * binX
+
+	// PHD2 exposes one scalar pixel scale, so asymmetric binned pixel sizes are averaged.
+	return 0.5 * (pixelSizeX * binX + pixelSizeY * binY)
 }
