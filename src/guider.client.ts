@@ -62,6 +62,7 @@ export class GuiderClient {
 	#frameId = 0
 	#lockPosition?: readonly [number, number]
 	#lockSearchPosition?: readonly [number, number]
+	#exactLockPosition = false
 	#stickyLockPosition = false
 	#appState: PHD2AppState = 'Stopped'
 	#resumeState: PHD2AppState = 'Stopped'
@@ -161,6 +162,7 @@ export class GuiderClient {
 
 		this.#lockPosition = [selected.x, selected.y] as const
 		this.#lockSearchPosition = this.#lockPosition
+		this.#exactLockPosition = false
 		this.emitEvent('StarSelected', { X: selected.x, Y: selected.y })
 		this.emitEvent('LockPositionSet', { X: selected.x, Y: selected.y })
 
@@ -236,6 +238,7 @@ export class GuiderClient {
 	deselectStar() {
 		this.#lockPosition = undefined
 		this.#lockSearchPosition = undefined
+		this.#exactLockPosition = false
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#lockShiftOffsetX = 0
@@ -488,6 +491,7 @@ export class GuiderClient {
 		}
 
 		this.#lockPosition = exact ? ([x, y] as const) : this.#lockSearchPosition
+		this.#exactLockPosition = exact
 
 		const [lockX, lockY] = this.#lockPosition
 		this.#ditherOffsetX = 0
@@ -514,7 +518,7 @@ export class GuiderClient {
 	setStickyLockPositionEnabled(enabled: boolean) {
 		this.#stickyLockPosition = enabled
 
-		if (!enabled && this.#lockSearchPosition !== undefined) {
+		if (!enabled && !this.#exactLockPosition && this.#lockSearchPosition !== undefined) {
 			this.#lockPosition = this.#lockSearchPosition
 		}
 
@@ -766,13 +770,13 @@ export class GuiderClient {
 	#updateLockPositionFromGuider(targetX: number | undefined, targetY: number | undefined) {
 		if (targetX !== undefined && targetY !== undefined) {
 			this.#lockPosition = [targetX, targetY] as const
-			if (!this.#stickyLockPosition) this.#lockSearchPosition = this.#lockPosition
+			if (!this.#fixedLockReferenceEnabled) this.#lockSearchPosition = this.#lockPosition
 		}
 	}
 
-	// Refreshes the star-search center from the latest measured centroid while Sticky Lock Position is active.
+	// Refreshes the star-search center from the latest measured centroid while a fixed lock reference is active.
 	#updateLockSearchPositionFromGuider(measurementX: number | undefined, measurementY: number | undefined) {
-		if (this.#stickyLockPosition && measurementX !== undefined && measurementY !== undefined) {
+		if (this.#fixedLockReferenceEnabled && measurementX !== undefined && measurementY !== undefined) {
 			this.#lockSearchPosition = [measurementX, measurementY] as const
 		}
 	}
@@ -872,13 +876,18 @@ export class GuiderClient {
 
 		if (x !== undefined && y !== undefined) {
 			this.#lockSearchPosition = [x, y] as const
-			if (!this.#stickyLockPosition) this.#lockPosition = this.#lockSearchPosition
+			if (!this.#fixedLockReferenceEnabled) this.#lockPosition = this.#lockSearchPosition
 		}
 	}
 
-	// Returns the sticky lock reference seed used for the next guider initialization.
+	// Returns true when either Sticky Lock Position or an exact lock request should preserve the reference point.
+	get #fixedLockReferenceEnabled() {
+		return this.#stickyLockPosition || this.#exactLockPosition
+	}
+
+	// Returns the fixed lock reference seed used for the next guider initialization.
 	get #guiderReferencePosition() {
-		return this.#stickyLockPosition ? this.#lockPosition : undefined
+		return this.#fixedLockReferenceEnabled ? this.#lockPosition : undefined
 	}
 
 	// Returns the current star-acquisition seed used for the next guider initialization.
@@ -900,6 +909,7 @@ export class GuiderClient {
 		this.#frameId = 0
 		this.#lockPosition = undefined
 		this.#lockSearchPosition = undefined
+		this.#exactLockPosition = false
 		this.#appState = 'Stopped'
 		this.#resumeState = 'Stopped'
 		this.#paused = false
