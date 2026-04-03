@@ -1080,12 +1080,12 @@ export class GuiderClient {
 		})
 	}
 
-	// Emits one in-progress settle event using elapsed and stable-settle timers in seconds.
+	// Emits one in-progress settle event using PHD2's time-in-range and requested settle duration fields.
 	private emitSettlingEvent(distance: number, timestamp: number, starLocked: boolean) {
 		this.emitEvent('Settling', {
 			Distance: distance,
-			Time: (timestamp - this.#settleStartTime) * 0.001,
-			SettleTime: this.#settleStableSince === 0 ? 0 : (timestamp - this.#settleStableSince) * 0.001,
+			Time: this.#settleStableSince === 0 ? 0 : (timestamp - this.#settleStableSince) * 0.001,
+			SettleTime: this.#settle.time,
 			StarLocked: starLocked,
 		})
 	}
