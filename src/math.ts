@@ -72,7 +72,7 @@ export function signed16(num: number) {
 
 // Clamps a number into the inclusive [min, max] range.
 export function clamp(value: number, min: number, max: number) {
-	if (value < min) return min
+	if (!(value >= min)) return min // handles NaN value
 	if (value > max) return max
 	return value
 }
