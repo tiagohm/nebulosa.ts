@@ -1,7 +1,10 @@
 import type { Point, Size } from './geometry'
+import type { ImageRawType } from './image.types'
 import type { PartialOnly, Writable } from './types'
 
 export const DEFAULT_PHD2_PORT = 4400
+
+// https://github.com/OpenPHDGuiding/phd2/wiki/EventMonitoring
 
 export type PHD2EventType =
 	| 'Alert'
@@ -191,6 +194,35 @@ export interface PHD2StartCalibrationEvent extends PHD2Event<'StartCalibration'>
 	readonly Mount: string
 }
 
+export interface PHD2EventMap {
+	readonly Version: PHD2VersionEvent
+	readonly Alert: PHD2AlertEvent
+	readonly AppState: PHD2AppStateEvent
+	readonly Calibrating: PHD2CalibratingEvent
+	readonly CalibrationComplete: PHD2CalibrationCompleteEvent
+	readonly CalibrationDataFlipped: PHD2CalibrationDataFlippedEvent
+	readonly CalibrationFailed: PHD2CalibrationFailedEvent
+	readonly GuideParamChange: PHD2GuideParamChangeEvent
+	readonly GuideStep: PHD2GuideStepEvent
+	readonly GuidingDithered: PHD2GuidingDitheredEvent
+	readonly LockPositionSet: PHD2LockPositionSetEvent
+	readonly LoopingExposures: PHD2LoopingExposuresEvent
+	readonly SettleDone: PHD2SettleDoneEvent
+	readonly Settling: PHD2SettlingEvent
+	readonly StarLost: PHD2StarLostEvent
+	readonly StarSelected: PHD2StarSelectedEvent
+	readonly StartCalibration: PHD2StartCalibrationEvent
+	readonly ConfigurationChange: PHD2ConfigurationChangeEvent
+	readonly GuidingStopped: PHD2GuidingStoppedEvent
+	readonly LockPositionLost: PHD2LockPositionLostEvent
+	readonly LockPositionShiftLimitReached: PHD2LockPositionShiftLimitReachedEvent
+	readonly LoopingExposuresStopped: PHD2LoopingExposuresStoppedEvent
+	readonly Paused: PHD2PausedEvent
+	readonly Resumed: PHD2ResumedEvent
+	readonly SettleBegin: PHD2SettleBeginEvent
+	readonly StartGuiding: PHD2StartGuidingEvent
+}
+
 export interface PHD2Error {
 	readonly code: number
 	readonly message: string
@@ -279,10 +311,10 @@ export interface PHD2Profile {
 	readonly selected: boolean
 }
 
-export interface PHD2StarImage extends Readonly<Size> {
+export interface PHD2StarImage<P extends string | ImageRawType> extends Readonly<Size> {
 	readonly frame: number
 	readonly star_pos: Readonly<Point>
-	readonly pixels: string
+	readonly pixels: P
 }
 
 export interface PHD2ClientOptions {
@@ -401,7 +433,7 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('stop_capture')
 	}
 
-	clearCalibration(which: PHD2WhichMount) {
+	clearCalibration(which: PHD2WhichMount = 'BOTH') {
 		return this.send<number>('clear_calibration', [which])
 	}
 
@@ -434,7 +466,7 @@ export class PHD2Client implements Disposable {
 		return this.send<boolean>('get_calibrated')
 	}
 
-	getCalibrationData(which: PHD2WhichMount) {
+	getCalibrationData(which: PHD2WhichMount = 'MOUNT') {
 		return this.send<PHD2CalibrationData>('get_calibration_data', [which])
 	}
 
@@ -507,14 +539,14 @@ export class PHD2Client implements Disposable {
 	}
 
 	getStarImage() {
-		return this.send<PHD2StarImage>('get_star_image')
+		return this.send<PHD2StarImage<string>>('get_star_image')
 	}
 
 	getUseSubframes() {
 		return this.send<boolean>('get_use_subframes')
 	}
 
-	guide(recalibrate: boolean = false, roi: Point & Size = DEFAULT_ROI, settle: PHD2Settle = DEFAULT_PHD2_SETTLE) {
+	guide(recalibrate: boolean = false, settle: PHD2Settle = DEFAULT_PHD2_SETTLE, roi: Point & Size = DEFAULT_ROI) {
 		const x = roi.x ?? DEFAULT_ROI.x
 		const y = roi.y ?? DEFAULT_ROI.y
 		const width = roi.width ?? DEFAULT_ROI.width
@@ -524,7 +556,7 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('guide', { recalibrate, roi: subframe, settle })
 	}
 
-	guidePulse(amount: number, direction: PHD2GuideDirection, which: PHD2WhichMount) {
+	guidePulse(amount: number, direction: PHD2GuideDirection, which: PHD2WhichMount = 'MOUNT') {
 		return this.send<number>('guide_pulse', [amount, direction, which])
 	}
 
