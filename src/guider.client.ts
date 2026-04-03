@@ -957,9 +957,9 @@ export class GuiderClient {
 		const event = {
 			...data,
 			Event,
-			Timestamp: Date.now(),
+			Timestamp: Date.now() / 1000,
 			Host: '', // The local guider is not a network PHD2 server, so Host defaults to an empty string.
-			Inst: 0, // There is no PHD2 instance index in this local client, so Inst defaults to zero.
+			Inst: 1, // There is no PHD2 instance index in this local client, so Inst defaults to 1-based instance number.
 		} as PHD2Events
 
 		this.#eventHandler?.(this, event)
@@ -1031,7 +1031,7 @@ export class GuiderClient {
 
 		this.emitEvent('GuideStep', {
 			Frame: frame.frameId ?? 0,
-			Time: frame.timestamp ?? 0,
+			Time: (frame.timestamp ?? 0) / 1000,
 			// Uses an empty mount name if the guide-output device is unavailable.
 			Mount: this.#guideOutput?.name ?? '',
 			dx,
