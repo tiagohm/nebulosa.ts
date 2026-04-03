@@ -433,7 +433,7 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('stop_capture')
 	}
 
-	clearCalibration(which: PHD2WhichMount = 'MOUNT') {
+	clearCalibration(which: PHD2WhichMount = 'BOTH') {
 		return this.send<number>('clear_calibration', [which])
 	}
 
