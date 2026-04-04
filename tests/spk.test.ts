@@ -1,15 +1,83 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
-import { readDaf } from '../src/daf'
+import { AU_KM, DAYSEC, J2000 } from '../src/constants'
+import { type Daf, readDaf, type Summary } from '../src/daf'
 import { fileHandleSource, rangeHttpSource } from '../src/io'
 import { Naif } from '../src/naif'
-import { readSpk } from '../src/spk'
+import { readSpk, Type2And3Segment, Type9Segment } from '../src/spk'
 import { Timescale, timeYMDHMS } from '../src/time'
 import { downloadPerTag } from './download'
 
 await downloadPerTag('spk')
 
 const time = timeYMDHMS(2025, 1, 15, 9, 20, 50, Timescale.TDB)
+
+// Builds a tiny in-memory DAF for deterministic SPK segment tests.
+function dafFrom(values: readonly number[], summaries: Summary[] = []): Daf {
+	const data = Float64Array.from(values)
+
+	return {
+		summaries,
+		read: async (start: number, end: number) => data.subarray(start - 1, end),
+	}
+}
+
+// Builds a minimal SPK summary with one segment descriptor.
+function summary(center: number, target: number, start: number, end: number, type: number, startIndex: number, endIndex: number): Summary {
+	return {
+		name: '',
+		doubles: new Float64Array([start, end]),
+		ints: new Int32Array([target, center, 1, type, startIndex, endIndex]),
+	}
+}
+
+test('type 2 segment includes the final endpoint', async () => {
+	const segment = new Type2And3Segment(dafFrom([4, 4, 1, 2, 3, 4, 5, 6, 0, 8, 8, 1]), 0, 8, 0, 1, 2, 1, 12)
+	const [p, v] = await segment.at({ day: J2000, fraction: 8 / DAYSEC, scale: Timescale.TDB })
+
+	expect(p[0]).toBeCloseTo(3 / AU_KM, 15)
+	expect(p[1]).toBeCloseTo(7 / AU_KM, 15)
+	expect(p[2]).toBeCloseTo(11 / AU_KM, 15)
+	expect(v[0]).toBeCloseTo((0.5 * DAYSEC) / AU_KM, 15)
+	expect(v[1]).toBeCloseTo(DAYSEC / AU_KM, 15)
+	expect(v[2]).toBeCloseTo((1.5 * DAYSEC) / AU_KM, 15)
+})
+
+test('type 3 segment evaluates velocity from the stored velocity coefficients', async () => {
+	const segment = new Type2And3Segment(dafFrom([4, 4, 10, 2, 20, 3, 30, 4, 100, 0, 200, 0, 300, 0, 0, 8, 14, 1]), 0, 8, 0, 1, 3, 1, 18)
+	const [p, v] = await segment.at({ day: J2000, fraction: 4 / DAYSEC, scale: Timescale.TDB })
+
+	expect(p[0]).toBeCloseTo(10 / AU_KM, 15)
+	expect(p[1]).toBeCloseTo(20 / AU_KM, 15)
+	expect(p[2]).toBeCloseTo(30 / AU_KM, 15)
+	expect(v[0]).toBeCloseTo((100 * DAYSEC) / AU_KM, 15)
+	expect(v[1]).toBeCloseTo((200 * DAYSEC) / AU_KM, 15)
+	expect(v[2]).toBeCloseTo((300 * DAYSEC) / AU_KM, 15)
+})
+
+test('type 9 odd interpolation window is centered on the closest epoch', async () => {
+	const segment = new Type9Segment(dafFrom([0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 216, 0, 0, 0, 0, 0, 0, 2, 4, 6, 2, 4]), 0, 6, 0, 1, 1, 30)
+	const [p, v] = await segment.at({ day: J2000, fraction: 2.1 / DAYSEC, scale: Timescale.TDB })
+
+	expect(p[0]).toBeCloseTo(9.66 / AU_KM, 14)
+	expect(p[1]).toBeCloseTo(0, 15)
+	expect(p[2]).toBeCloseTo(0, 15)
+	expect(v[0]).toBeCloseTo(0, 15)
+	expect(v[1]).toBeCloseTo(0, 15)
+	expect(v[2]).toBeCloseTo(0, 15)
+})
+
+test('overlapping segments use the latest matching segment in file order', async () => {
+	const spk = readSpk(dafFrom([10, 10, 1, 0, 0, 0, 20, 5, 1, 10, 10, 2, 0, 0, 0, 20, 5, 1], [summary(0, 1, 0, 20, 2, 1, 9), summary(0, 1, 0, 20, 2, 10, 18)]))
+	const [p, v] = await spk.segment(0, 1)!.at({ day: J2000, fraction: 10 / DAYSEC, scale: Timescale.TDB })
+
+	expect(p[0]).toBeCloseTo(2 / AU_KM, 15)
+	expect(p[1]).toBeCloseTo(0, 15)
+	expect(p[2]).toBeCloseTo(0, 15)
+	expect(v[0]).toBeCloseTo(0, 15)
+	expect(v[1]).toBeCloseTo(0, 15)
+	expect(v[2]).toBeCloseTo(0, 15)
+})
 
 test('DE405', async () => {
 	await using source = fileHandleSource(await fs.open('data/de405.bsp'))

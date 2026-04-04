@@ -7,6 +7,9 @@ import type { MutVec3 } from './vec3'
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/FORTRAN/req/spk.html
 // https://naif.jpl.nasa.gov/pub/naif/misc/toolkit_docs_N0067/C/req/spk.html
 
+const KM_TO_AU = 1 / AU_KM
+const KM_PER_SECOND_TO_AU_PER_DAY = DAYSEC / AU_KM
+
 export interface Spk {
 	readonly segments: readonly [number, number, SpkSegment][]
 	readonly segment: (center: number, target: number) => SpkSegment | undefined
@@ -27,20 +30,91 @@ export interface SpkSegment {
 	readonly at: (time: Time) => Promise<PositionAndVelocity>
 }
 
+// Reads SPK summaries and builds a reusable center-target segment lookup.
 export function readSpk(daf: Daf): Spk {
-	const segments = daf.summaries.map((e) => [e.ints[1], e.ints[0], makeSegment(e, daf)] as Spk['segments'][number])
+	const segments = new Array<Spk['segments'][number]>(daf.summaries.length)
+	const segmentGroups = new Map<number, Map<number, SpkSegment[]>>()
+
+	for (let i = 0; i < daf.summaries.length; i++) {
+		const summary = daf.summaries[i]
+		const segment = makeSegment(summary, daf)
+		const center = summary.ints[1]
+		const target = summary.ints[0]
+		segments[i] = [center, target, segment]
+		appendSpkSegment(segmentGroups, center, target, segment)
+	}
+
+	const segmentByTarget = buildSpkSegmentMap(segmentGroups)
 
 	return {
 		segments,
-		segment: (center, target) => {
-			const s = segments.filter((e) => e[0] === center && e[1] === target)
-			if (s.length === 0) return undefined
-			else if (s.length === 1) return s[0][2]
-			else return new MultipleSpkSegment(s.map((e) => e[2]))
-		},
+		segment: (center, target) => segmentByTarget.get(center)?.get(target),
 	}
 }
 
+// Appends a segment to the center-target group preserving file order priority.
+function appendSpkSegment(groups: Map<number, Map<number, SpkSegment[]>>, center: number, target: number, segment: SpkSegment) {
+	let targets = groups.get(center)
+
+	if (!targets) {
+		targets = new Map<number, SpkSegment[]>()
+		groups.set(center, targets)
+	}
+
+	let segments = targets.get(target)
+
+	if (!segments) {
+		segments = []
+		targets.set(target, segments)
+	}
+
+	segments.push(segment)
+}
+
+// Builds one reusable segment lookup entry per center-target pair.
+function buildSpkSegmentMap(groups: ReadonlyMap<number, ReadonlyMap<number, readonly SpkSegment[]>>): Map<number, Map<number, SpkSegment>> {
+	const segmentByTarget = new Map<number, Map<number, SpkSegment>>()
+
+	for (const [center, targets] of groups) {
+		const resolvedTargets = new Map<number, SpkSegment>()
+
+		for (const [target, segments] of targets) {
+			resolvedTargets.set(target, segments.length === 1 ? segments[0] : new MultipleSpkSegment([...segments]))
+		}
+
+		segmentByTarget.set(center, resolvedTargets)
+	}
+
+	return segmentByTarget
+}
+
+// Converts an arbitrary input instant to SPK ephemeris seconds past J2000.
+function spkSeconds(time: Time) {
+	const { day, fraction } = tdb(time)
+	return (day - J2000 + fraction) * DAYSEC
+}
+
+// Checks whether the request epoch is covered by the segment interval.
+function hasSegmentCoverage(segment: SpkSegment, seconds: number) {
+	return seconds >= segment.start && seconds <= segment.end
+}
+
+// Finds the first index whose epoch is greater than or equal to the target epoch.
+function lowerBoundEpoch(epochs: Float64Array, seconds: number, begin: number, end: number) {
+	while (begin < end) {
+		const mid = (begin + end) >>> 1
+
+		if (epochs[mid] < seconds) {
+			begin = mid + 1
+		} else {
+			end = mid
+		}
+	}
+
+	return begin
+}
+
+// Instantiates the concrete segment reader for a supported SPK data type.
 function makeSegment(summary: Summary, daf: Daf): SpkSegment {
 	const [start, end] = summary.doubles
 	const [target, center, frame, type, startIndex, endIndex] = summary.ints
@@ -66,7 +140,97 @@ interface Type2And3Coefficient {
 	readonly x: Float64Array
 	readonly y: Float64Array
 	readonly z: Float64Array
+	readonly vx?: Float64Array
+	readonly vy?: Float64Array
+	readonly vz?: Float64Array
 	readonly count: number
+}
+
+// Evaluates one 3D Chebyshev series with a shared normalized time argument.
+function evaluateChebyshevVector(x: Float64Array, y: Float64Array, z: Float64Array, s: number, o: MutVec3): MutVec3 {
+	const ss = 2 * s
+	let x0 = 0
+	let y0 = 0
+	let z0 = 0
+	let x1 = 0
+	let y1 = 0
+	let z1 = 0
+	let x2 = 0
+	let y2 = 0
+	let z2 = 0
+
+	for (let i = x.length - 1; i >= 1; i--) {
+		x2 = x1
+		y2 = y1
+		z2 = z1
+		x1 = x0
+		y1 = y0
+		z1 = z0
+		x0 = x[i] + ss * x1 - x2
+		y0 = y[i] + ss * y1 - y2
+		z0 = z[i] + ss * z1 - z2
+	}
+
+	o[0] = x[0] + s * x0 - x1
+	o[1] = y[0] + s * y0 - y1
+	o[2] = z[0] + s * z0 - z1
+
+	return o
+}
+
+// Evaluates a 3D Chebyshev position series and its first derivative in one pass.
+function evaluateChebyshevVectorDerivative(x: Float64Array, y: Float64Array, z: Float64Array, s: number, velocityScale: number, position: MutVec3, velocity: MutVec3): PositionAndVelocity {
+	const ss = 2 * s
+	let x0 = 0
+	let y0 = 0
+	let z0 = 0
+	let x1 = 0
+	let y1 = 0
+	let z1 = 0
+	let x2 = 0
+	let y2 = 0
+	let z2 = 0
+	let dx0 = 0
+	let dy0 = 0
+	let dz0 = 0
+	let dx1 = 0
+	let dy1 = 0
+	let dz1 = 0
+	let dx2 = 0
+	let dy2 = 0
+	let dz2 = 0
+
+	for (let i = x.length - 1; i >= 1; i--) {
+		x2 = x1
+		y2 = y1
+		z2 = z1
+		x1 = x0
+		y1 = y0
+		z1 = z0
+		x0 = x[i] + ss * x1 - x2
+		y0 = y[i] + ss * y1 - y2
+		z0 = z[i] + ss * z1 - z2
+
+		dx2 = dx1
+		dy2 = dy1
+		dz2 = dz1
+		dx1 = dx0
+		dy1 = dy0
+		dz1 = dz0
+		dx0 = 2 * x1 + ss * dx1 - dx2
+		dy0 = 2 * y1 + ss * dy1 - dy2
+		dz0 = 2 * z1 + ss * dz1 - dz2
+	}
+
+	position[0] = x[0] + s * x0 - x1
+	position[1] = y[0] + s * y0 - y1
+	position[2] = z[0] + s * z0 - z1
+
+	velocity[0] = (x0 + s * dx0 - dx1) * velocityScale
+	velocity[1] = (y0 + s * dy0 - dy1) * velocityScale
+	velocity[2] = (z0 + s * dz0 - dz1) * velocityScale
+
+	return [position, velocity]
 }
 
 // Type 2: Chebyshev (position only)
@@ -83,10 +247,12 @@ export class Type2And3Segment implements SpkSegment {
 	#intervalLength = 0
 	#rsize = 0
 	#n = 0
+	#count = 0
 	readonly #coefficients = new Map<number, Type2And3Coefficient>()
 	readonly #daf: Daf
 	readonly #type: number
 
+	// Stores immutable metadata and the backing DAF reader for this Chebyshev segment.
 	constructor(
 		daf: Daf,
 		// readonly source: string,
@@ -103,89 +269,68 @@ export class Type2And3Segment implements SpkSegment {
 		this.#type = type
 	}
 
+	// Evaluates position and velocity at the requested epoch.
 	async at(time: Time): Promise<PositionAndVelocity> {
-		if (!this.#initialized) {
-			// INIT: is the initial epoch of the first record, given in ephemeris seconds past J2000.
-			// INTLEN: is the length of the interval covered by each record, in seconds.
-			// RSIZE: is the total size of (number of array elements in) each record.
-			// N: is the number of records contained in the segment.
-			const [a, b, c, d] = await this.#daf.read(this.endIndex - 3, this.endIndex)
-			this.#initialEpoch = a
-			this.#intervalLength = b
-			this.#rsize = Math.trunc(c)
-			this.#n = Math.trunc(d)
-			this.#initialized = true
+		await this.#initialize()
+
+		const seconds = spkSeconds(time)
+
+		if (!hasSegmentCoverage(this, seconds)) {
+			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
 		}
 
-		const t = tdb(time)
-		const d = (t.day - J2000 + t.fraction) * DAYSEC
-		const index = Math.min(this.#n, Math.trunc((d - this.#initialEpoch) / this.#intervalLength))
+		const index = Math.max(0, Math.min(this.#n - 1, Math.floor((seconds - this.#initialEpoch) / this.#intervalLength)))
+		const c = await this.#computeCoefficient(index)
 
-		if (!(await this.#computeCoefficient(index))) {
-			throw new Error(`cannot find a segment that covers the date: ${time.day}`)
+		if (!c) {
+			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
 		}
 
-		// Chebyshev polynomial & differentiation.
-		const c = this.#coefficients.get(index)!
+		const s = (seconds - c.mid) / c.radius
+		const p: MutVec3 = [0, 0, 0]
+		const v: MutVec3 = [0, 0, 0]
 
-		const s = (2 * (d - (c.mid - c.radius))) / this.#intervalLength - 1
-		const ss = 2 * s
-
-		const w0: MutVec3 = [0, 0, 0]
-		const w1: MutVec3 = [0, 0, 0]
-		const w2 = new Float64Array(3)
-		const dw0 = new Float64Array(3)
-		const dw1 = new Float64Array(3)
-		const dw2 = new Float64Array(3)
-
-		for (let i = c.count - 1; i >= 1; i--) {
-			// Polynomial.
-
-			w2[0] = w1[0]
-			w2[1] = w1[1]
-			w2[2] = w1[2]
-
-			w1[0] = w0[0]
-			w1[1] = w0[1]
-			w1[2] = w0[2]
-
-			w0[0] = c.x[i] + (ss * w1[0] - w2[0])
-			w0[1] = c.y[i] + (ss * w1[1] - w2[1])
-			w0[2] = c.z[i] + (ss * w1[2] - w2[2])
-
-			// Differentiation.
-
-			dw2[0] = dw1[0]
-			dw2[1] = dw1[1]
-			dw2[2] = dw1[2]
-
-			dw1[0] = dw0[0]
-			dw1[1] = dw0[1]
-			dw1[2] = dw0[2]
-
-			dw0[0] = 2 * w1[0] + dw1[0] * ss - dw2[0]
-			dw0[1] = 2 * w1[1] + dw1[1] * ss - dw2[1]
-			dw0[2] = 2 * w1[2] + dw1[2] * ss - dw2[2]
+		if (this.#type === 3) {
+			evaluateChebyshevVector(c.x, c.y, c.z, s, p)
+			evaluateChebyshevVector(c.vx!, c.vy!, c.vz!, s, v)
+		} else {
+			evaluateChebyshevVectorDerivative(c.x, c.y, c.z, s, 1 / c.radius, p, v)
 		}
 
-		// AU
-		w1[0] = (c.x[0] + (s * w0[0] - w1[0])) / AU_KM
-		w1[1] = (c.y[0] + (s * w0[1] - w1[1])) / AU_KM
-		w1[2] = (c.z[0] + (s * w0[2] - w1[2])) / AU_KM
+		p[0] *= KM_TO_AU
+		p[1] *= KM_TO_AU
+		p[2] *= KM_TO_AU
+		v[0] *= KM_PER_SECOND_TO_AU_PER_DAY
+		v[1] *= KM_PER_SECOND_TO_AU_PER_DAY
+		v[2] *= KM_PER_SECOND_TO_AU_PER_DAY
 
-		// AU/day
-		w0[0] = (((w0[0] + s * dw0[0] - dw1[0]) / this.#intervalLength) * (2 * DAYSEC)) / AU_KM
-		w0[1] = (((w0[1] + s * dw0[1] - dw1[1]) / this.#intervalLength) * (2 * DAYSEC)) / AU_KM
-		w0[2] = (((w0[2] + s * dw0[2] - dw1[2]) / this.#intervalLength) * (2 * DAYSEC)) / AU_KM
-
-		return [w1, w0]
+		return [p, v]
 	}
 
-	async #computeCoefficient(index: number) {
-		if (this.#coefficients.has(index)) return true
+	// Loads INIT, INTLEN, RSIZE, and N once from the tail of the segment.
+	async #initialize(): Promise<void> {
+		if (this.#initialized) return
 
-		const components = (this.#type - 1) * 3
-		const count = Math.trunc((this.#rsize - 2) / components)
+		// INIT: is the initial epoch of the first record, given in ephemeris seconds past J2000.
+		// INTLEN: is the length of the interval covered by each record, in seconds.
+		// RSIZE: is the total size of (number of array elements in) each record.
+		// N: is the number of records contained in the segment.
+
+		const [a, b, c, d] = await this.#daf.read(this.endIndex - 3, this.endIndex)
+		this.#initialEpoch = a
+		this.#intervalLength = b
+		this.#rsize = Math.trunc(c)
+		this.#n = Math.trunc(d)
+		this.#count = Math.trunc((this.#rsize - 2) / (this.#type === 3 ? 6 : 3))
+		this.#initialized = true
+	}
+
+	// Reads and caches one Chebyshev record from the segment.
+	async #computeCoefficient(index: number): Promise<Type2And3Coefficient | undefined> {
+		const cached = this.#coefficients.get(index)
+		if (cached) return cached
+		if (index < 0 || index >= this.#n) return undefined
+
 		const a = this.startIndex + index * this.#rsize
 		const b = a + this.#rsize - 1
 
@@ -193,22 +338,40 @@ export class Type2And3Segment implements SpkSegment {
 			const coefficients = await this.#daf.read(a, b)
 
 			const [mid, radius] = coefficients
-			const x = new Float64Array(count)
-			const y = new Float64Array(count)
-			const z = new Float64Array(count)
+			const x = new Float64Array(this.#count)
+			const y = new Float64Array(this.#count)
+			const z = new Float64Array(this.#count)
 
-			for (let m = 0; m < count; m++) {
+			for (let m = 0; m < this.#count; m++) {
 				x[m] = coefficients[2 + m]
-				y[m] = coefficients[2 + m + count]
-				z[m] = coefficients[2 + m + 2 * count]
+				y[m] = coefficients[2 + m + this.#count]
+				z[m] = coefficients[2 + m + 2 * this.#count]
 			}
 
-			this.#coefficients.set(index, { mid, radius, x, y, z, count })
+			if (this.#type === 3) {
+				const vx = new Float64Array(this.#count)
+				const vy = new Float64Array(this.#count)
+				const vz = new Float64Array(this.#count)
 
-			return true
+				for (let m = 0; m < this.#count; m++) {
+					vx[m] = coefficients[2 + m + 3 * this.#count]
+					vy[m] = coefficients[2 + m + 4 * this.#count]
+					vz[m] = coefficients[2 + m + 5 * this.#count]
+				}
+
+				const coefficient = { mid, radius, x, y, z, vx, vy, vz, count: this.#count }
+				this.#coefficients.set(index, coefficient)
+
+				return coefficient
+			}
+
+			const coefficient = { mid, radius, x, y, z, count: this.#count }
+			this.#coefficients.set(index, coefficient)
+
+			return coefficient
 		}
 
-		return false
+		return undefined
 	}
 }
 
@@ -226,6 +389,7 @@ export class Type9Segment implements SpkSegment {
 	#epochTable: Float64Array = new Float64Array(0)
 	readonly #daf: Daf
 
+	// Stores immutable metadata and the backing DAF reader for this Lagrange segment.
 	constructor(
 		daf: Daf,
 		// readonly source: string,
@@ -241,102 +405,100 @@ export class Type9Segment implements SpkSegment {
 		this.#daf = daf
 	}
 
+	// Interpolates one state vector at the requested epoch.
 	async at(time: Time): Promise<PositionAndVelocity> {
-		if (!this.#initialized) {
-			const [a, b] = await this.#daf.read(this.endIndex - 1, this.endIndex)
-			this.#degree = Math.trunc(a)
-			this.#n = Math.trunc(b)
+		await this.#initialize()
 
-			const stateLength = this.#n * 6
-			this.#stateTable = await this.#daf.read(this.startIndex, this.startIndex + stateLength - 1)
-			this.#epochTable = await this.#daf.read(this.startIndex + stateLength, this.startIndex + stateLength + this.#n - 1)
-			this.#initialized = true
-		}
-
-		const t = tdb(time)
-		const seconds = (t.day - J2000 + t.fraction) * DAYSEC
+		const seconds = spkSeconds(time)
 		const index = this.#searchEpochIndex(seconds)
 
 		if (index < 0) {
 			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
 		}
 
-		if (this.#epochTable[index] === seconds) {
-			const offset = index * 6
-			const p: MutVec3 = [this.#stateTable[offset] / AU_KM, this.#stateTable[offset + 1] / AU_KM, this.#stateTable[offset + 2] / AU_KM]
-			const v: MutVec3 = [(this.#stateTable[offset + 3] * DAYSEC) / AU_KM, (this.#stateTable[offset + 4] * DAYSEC) / AU_KM, (this.#stateTable[offset + 5] * DAYSEC) / AU_KM]
-			return [p, v]
-		}
-
 		const window = Math.min(this.#degree + 1, this.#n)
-		let begin = index - Math.trunc(window / 2)
-		if (begin < 0) begin = 0
-		if (begin + window > this.#n) begin = this.#n - window
+		const begin = this.#windowStart(seconds, index, window)
 		const end = begin + window
 
 		const p: MutVec3 = [0, 0, 0]
 		const v: MutVec3 = [0, 0, 0]
 
-		for (let component = 0; component < 6; component++) {
-			let sum = 0
+		for (let i = begin; i < end; i++) {
+			const ti = this.#epochTable[i]
+			let basis = 1
 
-			for (let i = begin; i < end; i++) {
-				const ti = this.#epochTable[i]
-				let basis = 1
-
-				for (let j = begin; j < end; j++) {
-					if (j !== i) {
-						const tj = this.#epochTable[j]
-						basis *= (seconds - tj) / (ti - tj)
-					}
+			for (let j = begin; j < end; j++) {
+				if (j !== i) {
+					const tj = this.#epochTable[j]
+					basis *= (seconds - tj) / (ti - tj)
 				}
-
-				sum += this.#stateTable[i * 6 + component] * basis
 			}
 
-			if (component < 3) {
-				p[component] = sum / AU_KM
-			} else {
-				v[component - 3] = (sum * DAYSEC) / AU_KM
-			}
+			const offset = i * 6
+			p[0] += this.#stateTable[offset] * basis
+			p[1] += this.#stateTable[offset + 1] * basis
+			p[2] += this.#stateTable[offset + 2] * basis
+			v[0] += this.#stateTable[offset + 3] * basis
+			v[1] += this.#stateTable[offset + 4] * basis
+			v[2] += this.#stateTable[offset + 5] * basis
 		}
+
+		p[0] *= KM_TO_AU
+		p[1] *= KM_TO_AU
+		p[2] *= KM_TO_AU
+		v[0] *= KM_PER_SECOND_TO_AU_PER_DAY
+		v[1] *= KM_PER_SECOND_TO_AU_PER_DAY
+		v[2] *= KM_PER_SECOND_TO_AU_PER_DAY
 
 		return [p, v]
 	}
 
-	#searchEpochIndex(seconds: number) {
-		let lo = 0
-		let hi = this.#n - 1
+	// Loads all type 9 states and epochs once.
+	async #initialize(): Promise<void> {
+		if (this.#initialized) return
 
-		if (seconds < this.#epochTable[0] || seconds > this.#epochTable[hi]) {
+		const [a, b] = await this.#daf.read(this.endIndex - 1, this.endIndex)
+		this.#degree = Math.trunc(a)
+		this.#n = Math.trunc(b)
+
+		const stateLength = this.#n * 6
+		this.#stateTable = await this.#daf.read(this.startIndex, this.startIndex + stateLength - 1)
+		this.#epochTable = await this.#daf.read(this.startIndex + stateLength, this.startIndex + stateLength + this.#n - 1)
+		this.#initialized = true
+	}
+
+	// Chooses an interpolation window whose center is nearest to the request epoch when the window size is odd.
+	#windowStart(seconds: number, index: number, window: number) {
+		let center = index
+
+		if ((window & 1) === 1 && index > 0 && seconds - this.#epochTable[index - 1] <= this.#epochTable[index] - seconds) {
+			center = index - 1
+		}
+
+		let begin = center - (window >> 1)
+		if (begin < 0) begin = 0
+		if (begin + window > this.#n) begin = this.#n - window
+		return begin
+	}
+
+	// Finds the state-table insertion index for the request epoch.
+	#searchEpochIndex(seconds: number) {
+		if (!hasSegmentCoverage(this, seconds)) {
 			return -1
 		}
 
-		while (lo <= hi) {
-			const mid = (lo + hi) >>> 1
-			const value = this.#epochTable[mid]
-
-			if (value < seconds) {
-				lo = mid + 1
-			} else if (value > seconds) {
-				hi = mid - 1
-			} else {
-				return mid
-			}
-		}
-
-		return lo
+		return Math.min(lowerBoundEpoch(this.#epochTable, seconds, 0, this.#n), this.#n - 1)
 	}
 }
 
-interface Type21Coefficent {
+interface Type21Coefficient {
 	readonly tl: number
 	readonly g: Float64Array
 	readonly p: Float64Array
 	readonly v: Float64Array
-	readonly dt: Float64Array[]
+	readonly dt: Float64Array
 	readonly kqmax1: number
-	readonly kq: Float64Array
+	readonly kq: Int32Array
 }
 
 // Type 21: Extended Modified Difference Arrays
@@ -346,14 +508,16 @@ interface Type21Coefficent {
 export class Type21Segment implements SpkSegment {
 	#initialized = false
 	#n = 0
-	#epochDirCount = 0
 	#maxdim = 0
 	#dlsize = 0
 	#epochTable: Float64Array = new Float64Array(0)
-	#epochDir: Float64Array = new Float64Array(0)
-	readonly #coefficients = new Map<number, Type21Coefficent>()
+	#fc: Float64Array = new Float64Array(0)
+	#wc: Float64Array = new Float64Array(0)
+	#w: Float64Array = new Float64Array(0)
+	readonly #coefficients = new Map<number, Type21Coefficient>()
 	readonly #daf: Daf
 
+	// Stores immutable metadata and the backing DAF reader for this type 21 segment.
 	constructor(
 		daf: Daf,
 		// readonly source: string,
@@ -369,42 +533,26 @@ export class Type21Segment implements SpkSegment {
 		this.#daf = daf
 	}
 
+	// Interpolates one extended MDA record at the requested epoch.
 	async at(time: Time): Promise<PositionAndVelocity> {
-		if (!this.#initialized) {
-			const [a, b] = await this.#daf.read(this.endIndex - 1, this.endIndex)
-			this.#maxdim = Math.trunc(a) // Difference line size.
-			this.#dlsize = 4 * this.#maxdim + 11
-			this.#n = Math.trunc(b) // The number of records in a segment.
-			// Epochs for all records in this segment.
-			const start = this.startIndex + this.#n * this.#dlsize
-			this.#epochTable = await this.#daf.read(start, start + this.#n - 1)
-			this.#epochDirCount = Math.trunc(this.#n / 100)
-			if (this.#epochDirCount > 0) this.#epochDir = await this.#daf.read(this.endIndex - this.#epochDirCount - 1, this.endIndex - 2)
-			this.#initialized = true
-		}
+		await this.#initialize()
 
-		const t = tdb(time)
-		const seconds = (t.day - J2000 + t.fraction) * DAYSEC
+		const seconds = spkSeconds(time)
 		const index = this.#searchCoefficientIndex(seconds)
+		const c = await this.#computeCoefficient(index)
 
-		if (!(await this.#computeCoefficient(index))) {
+		if (!c) {
 			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
 		}
-
-		const c = this.#coefficients.get(index)!
 
 		// Next we set up for the computation of the various differences.
 		const delta = seconds - c.tl
 		let tp = delta
 		const mpq2 = c.kqmax1 - 2
 		let ks = c.kqmax1 - 1
-
-		// TP starts out as the delta t between the request time and the
-		// difference line's reference epoch. We then change it from DELTA
-		// by the components of the stepsize vector G.
-		const fc = new Float64Array(25)
-		const wc = new Float64Array(25 - 1)
-		const w = new Float64Array(25 + 3)
+		const fc = this.#fc
+		const wc = this.#wc
+		const w = this.#w
 
 		fc[0] = 1
 
@@ -446,10 +594,10 @@ export class Type21Segment implements SpkSegment {
 			let sum = 0
 
 			for (let j = kqq - 1; j >= 0; j--) {
-				sum += c.dt[j][i] * w[j + ks]
+				sum += c.dt[3 * j + i] * w[j + ks]
 			}
 
-			p[i] = (c.p[i] + delta * (c.v[i] + delta * sum)) / AU_KM
+			p[i] = (c.p[i] + delta * (c.v[i] + delta * sum)) * KM_TO_AU
 		}
 
 		// Again we need to compute the W(K) coefficients that are
@@ -468,54 +616,50 @@ export class Type21Segment implements SpkSegment {
 			let sum = 0
 
 			for (let j = kqq - 1; j >= 0; j--) {
-				sum += c.dt[j][i] * w[j + ks]
+				sum += c.dt[3 * j + i] * w[j + ks]
 			}
 
-			v[i] = ((c.v[i] + delta * sum) * DAYSEC) / AU_KM
+			v[i] = (c.v[i] + delta * sum) * KM_PER_SECOND_TO_AU_PER_DAY
 		}
 
 		return [p, v]
 	}
 
-	#searchCoefficientIndex(seconds: number): number {
-		let a: number
-		let b: number
+	// Loads the epoch table and interpolation workspace once.
+	async #initialize(): Promise<void> {
+		if (this.#initialized) return
 
-		if (this.#epochDirCount > 0) {
-			// TODO: Not tested!
-			let subdir = 0
+		const [a, b] = await this.#daf.read(this.endIndex - 1, this.endIndex)
+		this.#maxdim = Math.trunc(a)
+		this.#dlsize = 4 * this.#maxdim + 11
+		this.#n = Math.trunc(b)
 
-			while (subdir < this.#epochDirCount && this.#epochDir[subdir] < seconds) {
-				subdir++
-			}
+		// Epochs for all records in this segment.
+		const start = this.startIndex + this.#n * this.#dlsize
+		this.#epochTable = await this.#daf.read(start, start + this.#n - 1)
 
-			a = subdir * 100
-			b = (subdir + 1) * 100
-		} else {
-			a = 0
-			b = this.#n
-		}
-
-		let index = -1
-
-		// Search target epoch in epoch table.
-		for (let i = a; i < b; i++) {
-			if (i < this.#epochTable.length && this.#epochTable[i] >= seconds) {
-				index = i
-				break
-			}
-		}
-
-		if (index === -1) {
-			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
-		}
-
-		return index
+		// Reuse work arrays across calls and size them from MAXDIM instead of a fixed cap.
+		const workspaceSize = this.#maxdim + 3
+		this.#fc = new Float64Array(workspaceSize)
+		this.#wc = new Float64Array(workspaceSize)
+		this.#w = new Float64Array(workspaceSize)
+		this.#initialized = true
 	}
 
-	async #computeCoefficient(index: number) {
-		if (index < 0) return false
-		if (this.#coefficients.has(index)) return true
+	// Finds the first record whose final epoch is not less than the request epoch.
+	#searchCoefficientIndex(seconds: number) {
+		if (!hasSegmentCoverage(this, seconds)) {
+			return -1
+		}
+
+		return Math.min(lowerBoundEpoch(this.#epochTable, seconds, 0, this.#n), this.#n - 1)
+	}
+
+	// Reads and caches one extended MDA record from the segment.
+	async #computeCoefficient(index: number): Promise<Type21Coefficient | undefined> {
+		const cached = this.#coefficients.get(index)
+		if (cached) return cached
+		if (index < 0 || index >= this.#n) return undefined
 
 		const mdaRecord = await this.#daf.read(this.startIndex + index * this.#dlsize, this.startIndex + (index + 1) * this.#dlsize - 1)
 
@@ -538,29 +682,29 @@ export class Type21Segment implements SpkSegment {
 		v[2] = mdaRecord[this.#maxdim + 6]
 
 		// dt = mdaRecord.sliceArray(maxdim + 7 until 4 * maxdim + 7)
-		const dt = new Array<Float64Array>(this.#maxdim)
+		const dt = new Float64Array(3 * this.#maxdim)
 		const dto = this.#maxdim + 7
 
 		for (let p = 0; p < this.#maxdim; p++) {
-			const a = new Float64Array(3)
-			a[0] = mdaRecord[dto + p]
-			a[1] = mdaRecord[dto + this.#maxdim + p]
-			a[2] = mdaRecord[dto + 2 * this.#maxdim + p]
-			dt[p] = a
+			const i = 3 * p
+			dt[i] = mdaRecord[dto + p]
+			dt[i + 1] = mdaRecord[dto + this.#maxdim + p]
+			dt[i + 2] = mdaRecord[dto + 2 * this.#maxdim + p]
 		}
 
 		const kqo = 4 * this.#maxdim
 
 		// Initializing the difference table.
 		const kqmax1 = Math.trunc(mdaRecord[kqo + 7])
-		const kq = new Float64Array(3)
+		const kq = new Int32Array(3)
 		kq[0] = Math.trunc(mdaRecord[kqo + 8])
 		kq[1] = Math.trunc(mdaRecord[kqo + 9])
 		kq[2] = Math.trunc(mdaRecord[kqo + 10])
 
-		this.#coefficients.set(index, { tl, g, p, v, dt, kqmax1, kq })
+		const coefficient = { tl, g, p, v, dt, kqmax1, kq }
+		this.#coefficients.set(index, coefficient)
 
-		return true
+		return coefficient
 	}
 }
 
@@ -574,6 +718,7 @@ export class MultipleSpkSegment implements SpkSegment {
 
 	readonly #segments: SpkSegment[]
 
+	// Validates segment compatibility and preserves file-order priority.
 	constructor(segments: SpkSegment[]) {
 		if (segments.length === 0) {
 			throw new Error('at least one segment needs to be provided')
@@ -586,22 +731,35 @@ export class MultipleSpkSegment implements SpkSegment {
 			throw new Error('one of the segments does not match the center or target')
 		}
 
-		this.start = segments.length > 1 ? Math.min(...segments.map((e) => e.start)) : segments[0].start
-		this.end = segments.length > 1 ? Math.max(...segments.map((e) => e.end)) : segments[0].end
-		this.startIndex = segments.length > 1 ? Math.min(...segments.map((e) => e.startIndex)) : segments[0].startIndex
-		this.endIndex = segments.length > 1 ? Math.max(...segments.map((e) => e.endIndex)) : segments[0].endIndex
-		this.#segments = segments.toSorted((a, b) => a.end - b.end)
-	}
+		this.start = segments[0].start
+		this.end = segments[0].end
+		this.startIndex = segments[0].startIndex
+		this.endIndex = segments[0].endIndex
 
-	at(time: Time): Promise<PositionAndVelocity> {
-		const jd = time.day + time.fraction
-		let segment = this.#segments[0]
-
-		for (let i = 1; i < this.#segments.length; i++) {
-			const s = this.#segments[i]
-			if (s.end >= jd) segment = s
+		for (let i = 1; i < segments.length; i++) {
+			const segment = segments[i]
+			if (segment.start < this.start) this.start = segment.start
+			if (segment.end > this.end) this.end = segment.end
+			if (segment.startIndex < this.startIndex) this.startIndex = segment.startIndex
+			if (segment.endIndex > this.endIndex) this.endIndex = segment.endIndex
 		}
 
-		return segment.at(time)
+		// Preserve file order so later segments retain higher SPK priority.
+		this.#segments = segments
+	}
+
+	// Selects the highest-priority segment that covers the request epoch.
+	at(time: Time): Promise<PositionAndVelocity> {
+		const seconds = spkSeconds(time)
+
+		for (let i = this.#segments.length - 1; i >= 0; i--) {
+			const segment = this.#segments[i]
+
+			if (hasSegmentCoverage(segment, seconds)) {
+				return segment.at(time)
+			}
+		}
+
+		throw new Error(`cannot find a segment that covers the date: ${seconds}`)
 	}
 }
