@@ -1,10 +1,12 @@
 import { HealpixIndex, type HealpixIndexOptions } from './healpix'
-import type { Seekable, Source } from './io'
+import type { Source } from './io'
 import type { StarCatalogEntry } from './star.catalog'
 
 // http://tdc-www.harvard.edu/catalogs/sao.html
 
 const SAO_EPOCH = 'B1950'
+const SAO_CATALOG_BUFFER_SIZE = 64 * 1024
+const SAO_CATALOG_REFILL_THRESHOLD = SAO_CATALOG_BUFFER_SIZE - 64
 
 export interface SaoCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
 	readonly id: number
@@ -13,8 +15,8 @@ export interface SaoCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magni
 	readonly spType: string
 }
 
-export async function* readSaoCatalog(source: Source & Seekable, bigEndian: boolean) {
-	const buffer = Buffer.allocUnsafe(1024 * 32)
+export async function* readSaoCatalog(source: Source, bigEndian: boolean): AsyncIterable<SaoCatalogEntry> {
+	const buffer = Buffer.allocUnsafe(SAO_CATALOG_BUFFER_SIZE)
 	let position = 0
 	let size = 0
 
@@ -27,9 +29,14 @@ export async function* readSaoCatalog(source: Source & Seekable, bigEndian: bool
 	let nmag = 0 // Number of magnitudes present
 	let nbent = 0 // Number of bytes per star entry
 
+	// Refill the parser buffer while preserving unread bytes to avoid overlapping source reads.
 	async function read() {
+		const remaining = size - position
+
+		if (remaining > 0) buffer.copy(buffer, 0, position, size)
+
 		position = 0
-		size = await source.read(buffer)
+		size = remaining + (await source.read(buffer, remaining, buffer.byteLength - remaining))
 		return size > 0
 	}
 
@@ -78,8 +85,7 @@ export async function* readSaoCatalog(source: Source & Seekable, bigEndian: bool
 	readHeader()
 
 	while (true) {
-		if (position > 1022 * 32) {
-			source.seek(source.position - size + position)
+		if (position > SAO_CATALOG_REFILL_THRESHOLD) {
 			if (!(await read())) break
 		} else if (position >= size) {
 			break
@@ -103,7 +109,7 @@ export class SaoCatalog extends HealpixIndex<SaoCatalogEntry> {
 		super({ nside, ordering })
 	}
 
-	async load(source: Source & Seekable, bigEndian: boolean) {
+	async load(source: Source, bigEndian: boolean) {
 		for await (const entry of readSaoCatalog(source, bigEndian)) {
 			this.add(entry.id, entry.rightAscension, entry.declination, entry)
 		}

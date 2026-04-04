@@ -4,7 +4,7 @@ import { PI } from './constants'
 import { type Distance, parsec } from './distance'
 import { eraAnpm } from './erfa'
 import { HealpixIndex, type HealpixIndexOptions } from './healpix'
-import type { Seekable, Source } from './io'
+import type { Source } from './io'
 import type { StarCatalogEntry } from './star.catalog'
 
 export interface StellariumProtocolHandler {
@@ -362,7 +362,7 @@ export class StellariumCatalog extends HealpixIndex<StellariumCatalogEntry> {
 		super({ nside, ordering })
 	}
 
-	async load(source: Source & Seekable) {
+	async load(source: Source) {
 		for await (const entry of readCatalogDat(source)) {
 			this.add(entry.id, entry.rightAscension, entry.declination, entry)
 		}
