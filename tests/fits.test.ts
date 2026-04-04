@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { dms, hms } from '../src/angle'
-import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, type FitsHeaderCard, FitsKeywordReader, FitsKeywordWriter, isFits, readFits, writeFits } from '../src/fits'
+import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHdu, type FitsHeader, type FitsHeaderCard, FitsImageReader, FitsImageWriter, FitsKeywordReader, FitsKeywordWriter, isFits, readFits, writeFits } from '../src/fits'
 import { KEYWORDS } from '../src/fits.headers'
 import { declinationKeyword, heightKeyword, observationDateKeyword, rightAscensionKeyword, widthKeyword } from '../src/fits.util'
 import { readImageFromBuffer, readImageFromFits, readImageFromPath } from '../src/image'
@@ -46,7 +46,7 @@ describe('write', () => {
 
 				const output = await readImageFromBuffer(buffer)
 
-				expect(Object.keys(output!.header).length).toBeGreaterThanOrEqual(60)
+				expect(Object.keys(output!.header).length).toBe(Object.keys(image!.header).length)
 				expect(output!.header).toEqual(image!.header)
 
 				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
@@ -77,6 +77,46 @@ test('write/read RICE compressed', async () => {
 	await saveImageAndCompareHash(output, 'write-fits-rice-16-1', 'c754bf834dc1bb3948ec3cf8b9aca303')
 }, 5000)
 
+test('write uncompressed FITS from a compressed image header', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 3, 20)
+	const header: FitsHeader = {
+		XTENSION: 'BINTABLE',
+		BITPIX: 8,
+		NAXIS: 2,
+		NAXIS1: 8,
+		NAXIS2: 1,
+		PCOUNT: 0,
+		GCOUNT: 1,
+		TFIELDS: 1,
+		TTYPE1: 'COMPRESSED_DATA',
+		TFORM1: '1PB',
+		ZIMAGE: true,
+		ZCMPTYPE: 'RICE_1',
+		ZBITPIX: 16,
+		ZNAXIS: 2,
+		ZNAXIS1: 2,
+		ZNAXIS2: 1,
+		BSCALE: 1,
+		BZERO: 32768,
+		OBJECT: 'compressed source',
+	}
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float32Array([0, 1]) }], { type: false })
+
+	const fits = await readFits(bufferSource(buffer))
+	expect(fits).toBeDefined()
+	expect(fits!.hdus).toHaveLength(1)
+	expect(fits!.hdus[0].header.SIMPLE).toBeTrue()
+	expect(fits!.hdus[0].header.BITPIX).toBe(16)
+	expect(fits!.hdus[0].header.NAXIS).toBe(2)
+	expect(fits!.hdus[0].header.NAXIS1).toBe(2)
+	expect(fits!.hdus[0].header.NAXIS2).toBe(1)
+	expect(fits!.hdus[0].header.ZIMAGE).toBeUndefined()
+	expect(fits!.hdus[0].header.ZCMPTYPE).toBeUndefined()
+	expect(fits!.hdus[0].header.OBJECT).toBe('compressed source')
+	expect(Object.keys(fits!.hdus[0].header).some((key) => key.includes('\u0014'))).toBeFalse()
+})
+
 test('read keyword', () => {
 	const reader = new FitsKeywordReader()
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE * 2)
@@ -93,8 +133,23 @@ test('read keyword', () => {
 	expect(read('CDELT1  = -2.23453599999999991165E-04 / arcsec per x-pixel in degrees')).toEqual(['CDELT1', -2.23453599999999991165e-4, 'arcsec per x-pixel in degrees'])
 	expect(read("COMMENT   FITS (Flexible Image Transport System) format is defined in 'Astronomy")).toEqual(['COMMENT', undefined, "FITS (Flexible Image Transport System) format is defined in 'Astronomy"])
 	expect(read('COMMENT   /')).toEqual(['COMMENT', undefined, '/'])
+	expect(read("OBJECT  = '' / empty string")).toEqual(['OBJECT', '', 'empty string'])
 	// expect(read("HIERARCH ESO DET CHIP1 DATE  = '11/11/99'   / Date of installation [YYYY-MM-DD]")).toEqual(['HIERARCH.ESO.DET.CHIP1.DATE', '11/11/99', 'Date of installation [YYYY-MM-DD]'])
 	expect(read('END')).toEqual(['END', undefined, undefined])
+})
+
+test('read all skips blank cards inside the header', () => {
+	const source = Buffer.alloc(FITS_HEADER_CARD_SIZE * 4, 32)
+
+	source.write('SIMPLE  =                    T                                                  ', 0, 'ascii')
+	source.write('BITPIX  =                   16                                                  ', 160, 'ascii')
+	source.write('END                                                                             ', 240, 'ascii')
+
+	const reader = new FitsKeywordReader()
+	const header = reader.readAll(source)
+
+	expect(header.SIMPLE).toBeTrue()
+	expect(header.BITPIX).toBe(16)
 })
 
 test('write keyword', () => {
@@ -190,6 +245,28 @@ test('escape keyword', () => {
 	writer.write(['END'], sink, 320)
 
 	expect(sink).toEqual(source)
+})
+
+test('fits image reader and writer honor non-zero backing buffer offsets', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 2, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const writeBuffer = Buffer.alloc(16, 99)
+	const writer = new FitsImageWriter(header, writeBuffer.subarray(5, 9))
+	const sinkBuffer = Buffer.alloc(4)
+
+	expect(await writer.write(new Float32Array([0, 1]), bufferSink(sinkBuffer))).toBe(4)
+	expect(writeBuffer[4]).toBe(99)
+	expect(writeBuffer[9]).toBe(99)
+
+	const hdu: FitsHdu = { header, data: { offset: 0, size: 4 } }
+	const readBuffer = Buffer.alloc(16, 77)
+	const reader = new FitsImageReader(hdu, readBuffer.subarray(3, 7))
+	const output = new Float64Array(2)
+
+	expect(await reader.read(bufferSource(sinkBuffer), output)).toBeTrue()
+	expect(output[0]).toBeCloseTo(0, 12)
+	expect(output[1]).toBeCloseTo(1, 12)
+	expect(readBuffer[2]).toBe(77)
+	expect(readBuffer[7]).toBe(77)
 })
 
 test('width keywords', () => {

@@ -1,9 +1,10 @@
 import { type FitsKeyword, KEYWORDS } from './fits.headers'
 // biome-ignore format: too long!
-import { bitpixInBytes, bitpixKeyword, compressionTypeKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedWidthKeyword, unescapeQuotedText, widthKeyword } from './fits.util'
+import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedWidthKeyword, unescapeQuotedText, widthKeyword } from './fits.util'
 import type { Image, ImageRawType } from './image.types'
 import { readUntil, type Seekable, type Sink, type Source } from './io'
 import type { NumberArray } from './math'
+import type { Writable } from './types'
 
 export type FitsHeaderKey = string
 export type FitsHeaderValue = string | number | boolean | undefined
@@ -48,14 +49,20 @@ export const FITS_APPLICATION_MIME_TYPE = 'application/fits'
 
 export const MAGIC_BYTES = 'SIMPLE'
 
+const FITS_HEADER_PADDING = 32
+const FITS_DATA_PADDING = 0
+const FITS_HEADER_BUFFER_TOO_SMALL = 'FITS header buffer too small'
+
 export function isFits(input: ArrayBufferLike | Buffer) {
 	if (input.byteLength < 6) return false
 
-	if (Buffer.isBuffer(input)) {
-		return input.toString('ascii', 0, 6) === MAGIC_BYTES
-	} else {
-		return isFits(Buffer.from(input, 0, 6))
+	const bytes = Buffer.isBuffer(input) ? input : new Uint8Array(input, 0, MAGIC_BYTES.length)
+
+	for (let i = 0; i < MAGIC_BYTES.length; i++) {
+		if (bytes[i] !== MAGIC_BYTES.charCodeAt(i)) return false
 	}
+
+	return true
 }
 
 export function computeRemainingBytes(size: number) {
@@ -80,49 +87,68 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 
 	const hdus: FitsHdu[] = []
 	let prev: FitsHeaderCard | undefined
+	let inHeader = false
 
+	// Parses one 80-byte card and stops once trailing bytes are no longer inside an HDU.
 	function parseCard() {
 		const card = reader.read(buffer)
 		const [key, value, comment] = card
 
-		if (key) {
-			if (key === 'SIMPLE' || key === 'XTENSION') {
-				const offset = source.position - FITS_HEADER_CARD_SIZE
-				hdus.push({ header: { [key]: value }, offset, data: { offset: 0, size: 0 } })
-			} else if (key !== 'END') {
-				const { header } = hdus[hdus.length - 1]
-
-				if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
-					prev[1] = prev[1].substring(0, prev[1].length - 1) + value
-					header[prev[0]] = prev[1]
-				} else if (isCommentKeyword(key)) {
-					if (header[key] === undefined) header[key] = comment
-					else header[key] += `\n${comment}`
-					prev = undefined
-				} else {
-					header[key] = value
-					prev = card
-				}
-			} else {
-				const hdu = hdus[hdus.length - 1]
-				const { header, data } = hdu
-
-				const offset = source.position + computeRemainingBytes(source.position)
-				const size = computeHduDataSize(header)
-				source.seek(offset + size + computeRemainingBytes(size))
-				Object.assign(data, { size, offset })
-			}
+		if (!key) {
+			prev = undefined
+			return inHeader
 		}
 
-		return key
+		if (key === 'SIMPLE' || key === 'XTENSION') {
+			const offset = source.position - FITS_HEADER_CARD_SIZE
+			hdus.push({ header: { [key]: value }, offset, data: { offset: 0, size: 0 } })
+			prev = undefined
+			inHeader = true
+			return true
+		}
+
+		if (!inHeader || hdus.length === 0) {
+			prev = undefined
+			return false
+		}
+
+		const hdu = hdus[hdus.length - 1]
+		const { header } = hdu
+
+		if (key === 'END') {
+			const offset = source.position + computeRemainingBytes(source.position)
+			const size = computeHduDataSize(header)
+			const data = hdu.data as Writable<FitsData>
+			source.seek(offset + size + computeRemainingBytes(size))
+			data.size = size
+			data.offset = offset
+			prev = undefined
+			inHeader = false
+			return true
+		}
+
+		if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
+			prev[1] = prev[1].substring(0, prev[1].length - 1) + value
+			header[prev[0]] = prev[1]
+		} else if (isCommentKeyword(key)) {
+			const text = comment ?? ''
+			if (header[key] === undefined) header[key] = text
+			else header[key] += `\n${text}`
+			prev = undefined
+		} else {
+			header[key] = value
+			prev = card
+		}
+
+		return true
 	}
 
-	parseCard()
+	if (!parseCard() || hdus.length === 0) return undefined
 
 	while (true) {
 		const size = await readUntil(source, buffer)
 		if (size !== FITS_HEADER_CARD_SIZE) break
-		parseCard()
+		if (!parseCard()) break
 	}
 
 	return { hdus }
@@ -168,16 +194,51 @@ const COMPRESSION_EXTENSION_EXCLUDED_KEYS = new Set([
 	'END',
 ])
 
-function shouldUseRiceCompression(header: FitsHeader, compression: FitsCompressionOptions['type']) {
-	if (compression === false) return false
-	if (compression === RICE_1_COMPRESSION_TYPE) return true
-	return isRiceCompressedImageHeader(header) || compressionTypeKeyword(header) === RICE_1_COMPRESSION_TYPE
+// Builds canonical image HDU cards and strips stale compressed-table keywords.
+function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean): FitsHeaderCard[] {
+	const cards: FitsHeaderCard[] = [[primary ? 'SIMPLE' : 'XTENSION', primary ? true : 'IMAGE']]
+	const bitpix = uncompressedBitpixKeyword(header, 0)
+	const width = uncompressedWidthKeyword(header, 0)
+	const height = uncompressedHeightKeyword(header, 0)
+	const channels = uncompressedNumberOfChannelsKeyword(header, 1)
+	const hasImage = width > 0 && height > 0
+
+	cards.push(['BITPIX', bitpix], ['NAXIS', hasImage ? (channels > 1 ? 3 : 2) : 0])
+
+	if (hasImage) {
+		cards.push(['NAXIS1', width], ['NAXIS2', height])
+		if (channels > 1) cards.push(['NAXIS3', channels])
+	}
+
+	if (!primary) cards.push(['PCOUNT', 0], ['GCOUNT', 1])
+
+	for (const key in header) {
+		if (COMPRESSION_EXTENSION_EXCLUDED_KEYS.has(key)) continue
+		const value = header[key]
+		if (value !== undefined) cards.push([key, value])
+	}
+
+	return cards
 }
 
-function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, bitpix: BitpixOrZero, width: number, height: number, channels: number) {
+// Validates RICE tile/table dimensions before allocating buffers.
+function validatePositiveInteger(value: number, label: string) {
+	if (!Number.isInteger(value) || value < 1) {
+		throw new Error(`${label} must be a positive integer`)
+	}
+}
+
+function shouldUseRiceCompression(header: Readonly<FitsHeader>, compression: FitsCompressionOptions['type']) {
+	if (compression === false) return false
+	if (compression === RICE_1_COMPRESSION_TYPE) return true
+	return isRiceCompressedImageHeader(header)
+}
+
+function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, header: Readonly<FitsHeader>, bitpix: BitpixOrZero, width: number, height: number, channels: number) {
 	const numberOfPixels = width * height
-	const zero = bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0
-	const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
+	const zero = numericKeyword(header, 'BZERO', bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0)
+	const scale = numericKeyword(header, 'BSCALE', 1)
+	const factor = bitpix > 0 ? (2 ** bitpix - 1) / (Number.isFinite(scale) && scale !== 0 ? scale : 1) : 1 // Transform float [0..1] to n-bit integer
 
 	for (let c = 0, p = 0; c < channels; c++) {
 		for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
@@ -186,21 +247,26 @@ function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, bitp
 	}
 }
 
-async function buildRiceCompressedImage(header: FitsHeader, raw: ImageRawType, options: FitsCompressionOptions) {
-	const bitpix = bitpixKeyword(header, 0)
-	const width = widthKeyword(header, 0)
-	const height = heightKeyword(header, 0)
-	const channels = numberOfChannelsKeyword(header, 1)
+async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: ImageRawType, options: Readonly<FitsCompressionOptions>) {
+	const bitpix = uncompressedBitpixKeyword(header, 0)
+	const width = uncompressedWidthKeyword(header, 0)
+	const height = uncompressedHeightKeyword(header, 0)
+	const channels = uncompressedNumberOfChannelsKeyword(header, 1)
 	const numberOfPixels = width * height
 
 	if (width < 1 || height < 1 || channels < 1) throw new Error('invalid image dimensions')
+	if (bitpix !== 8 && bitpix !== 16 && bitpix !== 32) throw new Error('RICE 1 supports only BITPIX = 8, 16 or 32')
 
-	const tileHeight = Math.min(height, options.tileHeight || 1)
-	const blockSize = options.blockSize || RICE_DEFAULT_BLOCK_SIZE
+	const tileHeightOption = options.tileHeight ?? 1
+	const blockSize = options.blockSize ?? RICE_DEFAULT_BLOCK_SIZE
+	validatePositiveInteger(tileHeightOption, 'tile height')
+	validatePositiveInteger(blockSize, 'block size')
+
+	const tileHeight = Math.min(height, tileHeightOption)
 
 	const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
 	const imageData = new ImageTypedArray(numberOfPixels * channels)
-	writeInterleavedToPlanar(raw, imageData, bitpix, width, height, channels)
+	writeInterleavedToPlanar(raw, imageData, header, bitpix, width, height, channels)
 
 	const rowSize = 8
 	const tilesPerChannel = Math.ceil(height / tileHeight)
@@ -281,20 +347,28 @@ async function buildRiceCompressedImage(header: FitsHeader, raw: ImageRawType, o
 }
 
 export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly Readonly<Pick<Image, 'header' | 'raw'>>[], options: FitsCompressionOptions = {}) {
-	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE * 4)
+	let buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE * 4)
 	const headerWriter = new FitsKeywordWriter()
 
-	function fillWithRemainingBytes(size: number, offset: number) {
+	function fillWithRemainingBytes(size: number, offset: number, value: number) {
 		const remaining = computeRemainingBytes(size)
-		remaining > 0 && buffer.fill(20, offset, offset + remaining)
+		if (remaining > 0) buffer.fill(value, offset, offset + remaining)
 		return remaining
 	}
 
 	async function writeHeader(header: Readonly<FitsHeader> | readonly Readonly<FitsHeaderCard>[]) {
-		let offset = headerWriter.writeAll(header, buffer)
-		offset += headerWriter.writeEnd(buffer, offset)
-		offset += fillWithRemainingBytes(offset, offset)
-		await sink.write(buffer, 0, offset)
+		while (true) {
+			try {
+				let offset = headerWriter.writeAll(header, buffer)
+				offset += headerWriter.writeEnd(buffer, offset)
+				offset += fillWithRemainingBytes(offset, offset, FITS_HEADER_PADDING)
+				await sink.write(buffer, 0, offset)
+				return
+			} catch (error) {
+				if (!(error instanceof RangeError) || error.message !== FITS_HEADER_BUFFER_TOO_SMALL) throw error
+				buffer = Buffer.allocUnsafe(buffer.byteLength << 1)
+			}
+		}
 	}
 
 	let hasPrimaryHdu = false
@@ -312,14 +386,14 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 			await writeHeader(cards)
 			await sink.write(payload)
 
-			const pad = fillWithRemainingBytes(payload.length, 0)
+			const pad = fillWithRemainingBytes(payload.length, 0, FITS_DATA_PADDING)
 			if (pad > 0) await sink.write(buffer, 0, pad)
 			continue
 		}
 
-		await writeHeader(header)
+		await writeHeader(buildImageHeaderCards(header, !hasPrimaryHdu))
 		const imageWriter = new FitsImageWriter(header)
-		const offset = fillWithRemainingBytes(await imageWriter.write(raw, sink), 0)
+		const offset = fillWithRemainingBytes(await imageWriter.write(raw, sink), 0, FITS_DATA_PADDING)
 		if (offset > 0) await sink.write(buffer, 0, offset)
 		hasPrimaryHdu = true
 	}
@@ -354,20 +428,27 @@ export class FitsKeywordReader {
 			const card = this.read(buffer, offset)
 			const [key, value, comment] = card
 
-			if (key !== '' && key !== 'END') {
-				if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
-					prev[1] = prev[1].substring(0, prev[1].length - 1) + value
-					header[prev[0]] = prev[1]
-				} else if (isCommentKeyword(key)) {
-					if (header[key] === undefined) header[key] = comment
-					else header[key] += `\n${comment}`
-					prev = undefined
-				} else {
-					header[key] = value
-					prev = card
-				}
-			} else {
+			if (key === 'END') {
 				break
+			}
+
+			if (key === '') {
+				prev = undefined
+				offset += FITS_HEADER_CARD_SIZE
+				continue
+			}
+
+			if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
+				prev[1] = prev[1].substring(0, prev[1].length - 1) + value
+				header[prev[0]] = prev[1]
+			} else if (isCommentKeyword(key)) {
+				const text = comment ?? ''
+				if (header[key] === undefined) header[key] = text
+				else header[key] += `\n${text}`
+				prev = undefined
+			} else {
+				header[key] = value
+				prev = card
 			}
 
 			offset += FITS_HEADER_CARD_SIZE
@@ -382,11 +463,20 @@ export class FitsKeywordReader {
 
 		// The stem is in the first 8 characters or what precedes an '=' character before that.
 		const endStem = Math.min(iEq >= 0 && iEq <= FITS_MAX_KEYWORD_LENGTH ? iEq : FITS_MAX_KEYWORD_LENGTH, FITS_HEADER_CARD_SIZE)
-		const stem = line.toString('ascii', position.offset, position.offset + endStem)
+		const start = position.offset
+		const end = Math.min(start + endStem, line.byteLength)
+
+		let trimmedStart = start
+		let trimmedEnd = end
+
+		while (trimmedStart < trimmedEnd && line.readUInt8(trimmedStart) <= WHITESPACE) trimmedStart++
+		while (trimmedEnd > trimmedStart && line.readUInt8(trimmedEnd - 1) <= WHITESPACE) trimmedEnd--
+
+		const stem = trimmedStart < trimmedEnd ? line.toString('ascii', trimmedStart, trimmedEnd) : ''
 
 		// If not using HIERARCH, then be very resilient, and return whatever key the first 8 chars make...
-		const key = stem.trim().toUpperCase()
-		position.offset += stem.length
+		const key = stem.toUpperCase()
+		position.offset = end
 		return key
 	}
 
@@ -417,8 +507,9 @@ export class FitsKeywordReader {
 			return [this.#parseStringValue(line, position), true]
 		} else {
 			let end = line.indexOf(SLASH, position.offset)
+			const limit = cardEnd(line, position)
 
-			if (end < 0) end = position.start + FITS_HEADER_CARD_SIZE
+			if (end < 0 || end > limit) end = limit
 
 			const value = line.toString('ascii', position.offset, end).trim()
 			position.offset = end
@@ -430,11 +521,12 @@ export class FitsKeywordReader {
 		let escaped = false
 
 		const start = ++position.offset
+		const limit = cardEnd(line, position)
 
 		// Build the string value, up to the end quote and paying attention to double
 		// quotes inside the string, which are translated to single quotes within
 		// the string value itself.
-		for (; position.offset < line.byteLength; position.offset++) {
+		for (; position.offset < limit; position.offset++) {
 			if (this.#isNextQuote(line, position)) {
 				position.offset++
 
@@ -462,14 +554,14 @@ export class FitsKeywordReader {
 		}
 
 		// If no value, then everything is comment from here on...
-		if (value) {
+		if (value !== undefined) {
 			if (line.readInt8(position.offset) === SLASH) {
 				// Skip the '/' itself, the comment is whatever is after it.
 				position.offset++
 			}
 		}
 
-		return line.toString('ascii', position.offset)
+		return line.toString('ascii', position.offset, cardEnd(line, position))
 	}
 
 	#parseValueType(value: string | undefined, quoted: boolean) {
@@ -477,15 +569,17 @@ export class FitsKeywordReader {
 		else if (!value) return undefined
 		else if (value === 'T') return true
 		else if (value === 'F') return false
-		// else if (value.startsWith("'") && value.endsWith("'")) return value.substring(1, value.length - 1).trim()
-		else if (DECIMAL_REGEX.test(value)) return +value.toUpperCase().replace('D', 'E')
 		else if (INT_REGEX.test(value)) return +value
+		// else if (value.startsWith("'") && value.endsWith("'")) return value.substring(1, value.length - 1).trim()
+		else if (DECIMAL_REGEX.test(value)) return value.includes('D') || value.includes('d') ? +value.replace(/[dD]/, 'E') : +value
 		else return value
 	}
 
 	#skipSpaces(line: Buffer, position: Position) {
-		for (; position.offset < line.byteLength; position.offset++) {
-			if (line.readInt8(position.offset) !== WHITESPACE) {
+		const limit = cardEnd(line, position)
+
+		for (; position.offset < limit; position.offset++) {
+			if (line.readUInt8(position.offset) > WHITESPACE) {
 				// Line has non-space characters left to parse...
 				return true
 			}
@@ -496,7 +590,7 @@ export class FitsKeywordReader {
 	}
 
 	#isNextQuote(line: Buffer, position: Position) {
-		return position.offset < line.byteLength && line.readInt8(position.offset) === SINGLE_QUOTE
+		return position.offset < cardEnd(line, position) && line.readInt8(position.offset) === SINGLE_QUOTE
 	}
 }
 
@@ -519,6 +613,55 @@ class Position {
 	}
 }
 
+// Resolves the exclusive end offset of the current 80-byte FITS header card.
+function cardEnd(line: Buffer, position: Position) {
+	return Math.min(line.byteLength, position.start + FITS_HEADER_CARD_SIZE)
+}
+
+// Builds a correctly aligned typed view over the backing FITS image buffer.
+function imageDataView(buffer: Buffer, bitpix: BitpixOrZero): NumberArray {
+	const byteLength = buffer.byteLength
+
+	if (byteLength === 0) return new Uint8Array(0)
+
+	const pixelInBytes = bitpixInBytes(bitpix)
+
+	if (pixelInBytes < 1 || byteLength % pixelInBytes !== 0) {
+		throw new Error('invalid FITS image buffer size')
+	}
+
+	const { byteOffset } = buffer
+	const length = byteLength / pixelInBytes
+
+	switch (bitpix) {
+		case 8:
+			return new Uint8Array(buffer.buffer, byteOffset, length)
+		case 16:
+			return new Int16Array(buffer.buffer, byteOffset, length)
+		case 32:
+			return new Int32Array(buffer.buffer, byteOffset, length)
+		case -32:
+			return new Float32Array(buffer.buffer, byteOffset, length)
+		case -64:
+			return new Float64Array(buffer.buffer, byteOffset, length)
+		default:
+			throw new Error(`unsupported FITS BITPIX: ${bitpix}`)
+	}
+}
+
+// Uses the caller-provided buffer when aligned, otherwise allocates an aligned scratch buffer.
+function imageBufferView(buffer: Buffer | undefined, size: number, bitpix: BitpixOrZero): Buffer {
+	if (buffer === undefined) return Buffer.allocUnsafe(size)
+	if (buffer.byteLength < size) throw new Error('FITS image buffer is too small')
+
+	const view = buffer.subarray(0, size)
+	const pixelInBytes = bitpixInBytes(bitpix)
+
+	if (size === 0 || pixelInBytes <= 1 || view.byteOffset % pixelInBytes === 0) return view
+
+	return Buffer.allocUnsafe(size)
+}
+
 const END_CARD: FitsHeaderCard = ['END']
 
 export class FitsKeywordWriter {
@@ -534,6 +677,10 @@ export class FitsKeywordWriter {
 			const commentCard: FitsHeaderCard = [card[0], undefined, '']
 
 			for (const value of values) {
+				if (output.byteLength - position.offset < FITS_HEADER_CARD_SIZE) {
+					throw new RangeError(FITS_HEADER_BUFFER_TOO_SMALL)
+				}
+
 				commentCard[2] = value
 				this.#appendKey(output, commentCard, position)
 				this.#appendComment(output, commentCard, position)
@@ -564,6 +711,10 @@ export class FitsKeywordWriter {
 				if (card !== undefined) {
 					const n = this.write(card, output, offset)
 
+					if (n === 0) {
+						throw new RangeError(FITS_HEADER_BUFFER_TOO_SMALL)
+					}
+
 					size += n
 					offset += n
 				}
@@ -582,6 +733,10 @@ export class FitsKeywordWriter {
 
 					const n = this.write(card, output, offset)
 
+					if (n === 0) {
+						throw new RangeError(FITS_HEADER_BUFFER_TOO_SMALL)
+					}
+
 					size += n
 					offset += n
 				}
@@ -592,7 +747,13 @@ export class FitsKeywordWriter {
 	}
 
 	writeEnd(output: Buffer, offset: number = 0) {
-		return this.write(END_CARD, output, offset)
+		const size = this.write(END_CARD, output, offset)
+
+		if (size === 0) {
+			throw new RangeError(FITS_HEADER_BUFFER_TOO_SMALL)
+		}
+
+		return size
 	}
 
 	#appendKey(output: Buffer, card: Readonly<FitsHeaderCard>, position: Position) {
@@ -691,7 +852,7 @@ export class FitsKeywordWriter {
 		}
 
 		if (!this.#isLongStringsEnabled(output, position)) {
-			return value.length - from
+			throw new RangeError(FITS_HEADER_BUFFER_TOO_SMALL)
 		}
 
 		// Now, we definitely need space for '&' at the end...
@@ -784,7 +945,7 @@ export class FitsKeywordWriter {
 	}
 }
 
-function riceBlockSizeFromHeader(header: FitsHeader) {
+function riceBlockSizeFromHeader(header: Readonly<FitsHeader>) {
 	for (let i = 1; i <= 16; i++) {
 		const name = textKeyword(header, `ZNAME${i}`, '').trim().toUpperCase()
 
@@ -798,11 +959,11 @@ function riceBlockSizeFromHeader(header: FitsHeader) {
 	return Number.isFinite(fallback) && fallback > 0 ? Math.trunc(fallback) : RICE_DEFAULT_BLOCK_SIZE
 }
 
-function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, header: FitsHeader, bitpix: BitpixOrZero, width: number, height: number, channels: number) {
+function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, header: Readonly<FitsHeader>, bitpix: BitpixOrZero, width: number, height: number, channels: number) {
 	const numberOfPixels = width * height
-	const scale = (header.BSCALE as number) || 1
-	const zero = (header.BZERO as number) || (bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0)
-	const factor = bitpix > 0 ? scale / (2 ** bitpix - 1) : 1 // Transform n-bit integer to float [0..1]
+	const scale = numericKeyword(header, 'BSCALE', 1)
+	const zero = numericKeyword(header, 'BZERO', bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0)
+	const factor = bitpix > 0 ? (Number.isFinite(scale) && scale !== 0 ? scale : 1) / (2 ** bitpix - 1) : 1 // Transform n-bit integer to float [0..1]
 
 	for (let i = 0, p = 0; i < numberOfPixels; i++) {
 		for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
@@ -827,8 +988,8 @@ export class FitsImageReader {
 			this.#data = new Uint8Array(0)
 		} else {
 			const bitpix = bitpixKeyword(hdu.header, 0)
-			this.#buffer = buffer?.subarray(0, hdu.data.size) ?? Buffer.allocUnsafe(hdu.data.size)
-			this.#data = bitpix === 8 ? new Uint8Array(this.#buffer.buffer) : bitpix === 16 ? new Int16Array(this.#buffer.buffer) : bitpix === 32 ? new Int32Array(this.#buffer.buffer) : bitpix === -32 ? new Float32Array(this.#buffer.buffer) : new Float64Array(this.#buffer.buffer)
+			this.#buffer = imageBufferView(buffer, hdu.data.size, bitpix)
+			this.#data = imageDataView(this.#buffer, bitpix)
 		}
 	}
 
@@ -864,6 +1025,10 @@ export class FitsImageReader {
 		const height = uncompressedHeightKeyword(header, 0)
 		const channels = uncompressedNumberOfChannelsKeyword(header, 1)
 
+		if (width < 1 || height < 1 || channels < 1) {
+			throw new Error('invalid image dimensions')
+		}
+
 		if (bitpix !== 8 && bitpix !== 16 && bitpix !== 32) {
 			throw new Error('RICE 1 supports only BITPIX = 8, 16 or 32')
 		}
@@ -875,23 +1040,35 @@ export class FitsImageReader {
 
 		const rowSize = widthKeyword(header, 0)
 		const rowCount = heightKeyword(header, 0)
-		const heapOffset = numericKeyword(header, 'THEAP', rowSize * rowCount)
-		const tileWidth = numericKeyword(header, 'ZTILE1', width)
-		const tileHeight = numericKeyword(header, 'ZTILE2', height)
-		const tileDepth = numericKeyword(header, 'ZTILE3', 1)
+		const heapOffset = Math.trunc(numericKeyword(header, 'THEAP', rowSize * rowCount))
+		const tileWidth = Math.trunc(numericKeyword(header, 'ZTILE1', width))
+		const tileHeight = Math.trunc(numericKeyword(header, 'ZTILE2', height))
+		const tileDepth = Math.trunc(numericKeyword(header, 'ZTILE3', 1))
 		const blockSize = riceBlockSizeFromHeader(header)
+
+		validatePositiveInteger(rowSize, 'row size')
+		validatePositiveInteger(rowCount, 'row count')
+		validatePositiveInteger(tileWidth, 'tile width')
+		validatePositiveInteger(tileHeight, 'tile height')
+		validatePositiveInteger(tileDepth, 'tile depth')
+
+		if (rowSize < 8 || heapOffset < rowSize * rowCount || heapOffset > compressed.length) {
+			throw new Error('compressed FITS image has invalid heap offsets')
+		}
 
 		const tilesX = Math.ceil(width / tileWidth)
 		const tilesY = Math.ceil(height / tileHeight)
 		const tilesZ = Math.ceil(channels / tileDepth)
 		const totalTiles = tilesX * tilesY * tilesZ
+		const tilePlaneSize = tilesX * tilesY
+		const maxTilePixels = Math.min(tileWidth, width) * Math.min(tileHeight, height) * Math.min(tileDepth, channels)
 
 		if (rowCount < totalTiles) throw new Error('compressed FITS image has incomplete tile table')
 
 		const numberOfPixels = width * height
 		const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
 		const data = new ImageTypedArray(numberOfPixels * channels)
-		const tileBuffer = new ImageTypedArray(tileWidth * tileHeight * tileDepth)
+		const tileBuffer = new ImageTypedArray(maxTilePixels)
 
 		const { decompressRice } = await import('./compression')
 
@@ -906,9 +1083,8 @@ export class FitsImageReader {
 
 			if (start < 0 || end > compressed.length) throw new Error('compressed FITS image has invalid heap offsets')
 
-			const tilePlaneIndex = tilesX * tilesY
-			const tz = Math.trunc(tileIndex / tilePlaneIndex)
-			const rem = tileIndex - tz * tilePlaneIndex
+			const tz = Math.trunc(tileIndex / tilePlaneSize)
+			const rem = tileIndex - tz * tilePlaneSize
 			const ty = Math.trunc(rem / tilesX)
 			const tx = rem - ty * tilesX
 
@@ -919,7 +1095,7 @@ export class FitsImageReader {
 			const thisTileHeight = Math.min(tileHeight, height - y0)
 			const thisTileDepth = Math.min(tileDepth, channels - z0)
 			const thisTilePixels = thisTileWidth * thisTileHeight * thisTileDepth
-			const tile = tileBuffer.subarray(0, thisTilePixels)
+			const tile = thisTilePixels === tileBuffer.length ? tileBuffer : tileBuffer.subarray(0, thisTilePixels)
 
 			decompressRice(compressed.subarray(start, end), tile, blockSize)
 
@@ -928,10 +1104,19 @@ export class FitsImageReader {
 				const channelOffset = channel * numberOfPixels
 				const tileOffset = z * thisTileWidth * thisTileHeight
 
+				if (thisTileWidth === width && x0 === 0) {
+					data.set(tile.subarray(tileOffset, tileOffset + thisTileWidth * thisTileHeight), channelOffset + y0 * width)
+					continue
+				}
+
 				for (let y = 0; y < thisTileHeight; y++) {
-					const sourceOffset = tileOffset + y * thisTileWidth
-					const targetOffset = channelOffset + (y0 + y) * width + x0
-					data.set(tile.subarray(sourceOffset, sourceOffset + thisTileWidth), targetOffset)
+					let sourceOffset = tileOffset + y * thisTileWidth
+					let targetOffset = channelOffset + (y0 + y) * width + x0
+					const sourceEnd = sourceOffset + thisTileWidth
+
+					for (; sourceOffset < sourceEnd; sourceOffset++, targetOffset++) {
+						data[targetOffset] = tile[sourceOffset]
+					}
 				}
 			}
 		}
@@ -950,23 +1135,24 @@ export class FitsImageWriter {
 		readonly header: FitsHeader,
 		buffer?: Buffer,
 	) {
-		const bitpix = bitpixKeyword(header, 0)
-		const width = widthKeyword(header, 0)
-		const height = heightKeyword(header, 0)
-		const channels = numberOfChannelsKeyword(header, 1)
-		this.#buffer = buffer ?? Buffer.allocUnsafe(width * height * channels * bitpixInBytes(bitpix))
-		this.#data = bitpix === 8 ? new Uint8Array(this.#buffer.buffer) : bitpix === 16 ? new Int16Array(this.#buffer.buffer) : bitpix === 32 ? new Int32Array(this.#buffer.buffer) : bitpix === -32 ? new Float32Array(this.#buffer.buffer) : new Float64Array(this.#buffer.buffer)
+		const bitpix = uncompressedBitpixKeyword(header, 0)
+		const width = uncompressedWidthKeyword(header, 0)
+		const height = uncompressedHeightKeyword(header, 0)
+		const channels = uncompressedNumberOfChannelsKeyword(header, 1)
+		const size = width * height * channels * bitpixInBytes(bitpix)
+		this.#buffer = imageBufferView(buffer, size, bitpix)
+		this.#data = imageDataView(this.#buffer, bitpix)
 	}
 
 	// Writes FITS-format image from RGB-interleaved array into sink
 	async write(input: ImageRawType, sink: Sink) {
-		const bitpix = bitpixKeyword(this.header, 0)
+		const bitpix = uncompressedBitpixKeyword(this.header, 0)
 		const pixelInBytes = bitpixInBytes(bitpix)
-		const width = widthKeyword(this.header, 0)
-		const height = heightKeyword(this.header, 0)
-		const channels = numberOfChannelsKeyword(this.header, 1)
+		const width = uncompressedWidthKeyword(this.header, 0)
+		const height = uncompressedHeightKeyword(this.header, 0)
+		const channels = uncompressedNumberOfChannelsKeyword(this.header, 1)
 
-		writeInterleavedToPlanar(input, this.#data, bitpix, width, height, channels)
+		writeInterleavedToPlanar(input, this.#data, this.header, bitpix, width, height, channels)
 
 		// little-endian to big-endian
 		if (pixelInBytes === 2) this.#buffer.swap16()
