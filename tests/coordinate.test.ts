@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { deg, formatDEC, formatRA, normalizeAngle, parseAngle } from '../src/angle'
-import { angularDistance, eclipticToEquatorial, equatorEcliptic, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalatic, equatorialToJ2000, galacticToEquatorial, meridianEcliptic, meridianEquator, zenith } from '../src/coordinate'
+import { angularDistance, eclipticToEquatorial, equatorEcliptic, equatorialFromJ2000, equatorialToEcliptic, equatorialToEclipticJ2000, equatorialToGalatic, equatorialToHorizontal, equatorialToJ2000, galacticToEquatorial, meridianEcliptic, meridianEquator, zenith } from '../src/coordinate'
 import { timeNormalize, timeYMDHMS } from '../src/time'
 
 const TIME = timeYMDHMS(2026, 1, 4, 23, 30, 0)
@@ -112,4 +112,15 @@ test('angular distance is invariant to RA at the celestial pole', () => {
 
 test('angular distance is one hundred eighty degrees for antipodal poles', () => {
 	expect(angularDistance(0, deg(90), deg(13), deg(-90))).toBeCloseTo(Math.PI, 15)
+})
+
+test('angular distance preserves tiny separations', () => {
+	expect(angularDistance(0, 0, 1e-9, 0)).toBeCloseTo(1e-9, 15)
+})
+
+test('equatorial to horizontal handles a north-pole observer', () => {
+	const [azimuth, altitude] = equatorialToHorizontal(0, 0, deg(90), deg(90))
+
+	expect(azimuth).toBeCloseTo(deg(270), 15)
+	expect(altitude).toBeCloseTo(0, 15)
 })
