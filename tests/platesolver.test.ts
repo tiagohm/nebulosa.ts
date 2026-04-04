@@ -74,3 +74,42 @@ test('M101', () => {
 		expect(solution![key]).toBe(header[key]!)
 	}
 })
+
+test('anisotropic cd matrix', () => {
+	const header = plateHeaderFromCd(0.008660254037844387, 0.01, -0.004999999999999999, 0.017320508075688773)
+	const solution = plateSolutionFrom(header)
+
+	expect(solution).toBeDefined()
+	expect(toDeg(solution!.orientation)).toBeCloseTo(30, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(0.02, 12)
+	expect(toDeg(solution!.width)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.height)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.radius)).toBeCloseTo(Math.SQRT2 / 2, 12)
+	expect(solution!.parity).toBe('NORMAL')
+	expect(solution!.widthInPixels).toBe(100)
+	expect(solution!.heightInPixels).toBe(50)
+})
+
+test('90 degree cd matrix', () => {
+	const header = plateHeaderFromCd(0, 0.02, -0.01, 0)
+	const solution = plateSolutionFrom(header)
+
+	expect(solution).toBeDefined()
+	expect(toDeg(solution!.orientation)).toBeCloseTo(90, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(0.02, 12)
+	expect(toDeg(solution!.width)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.height)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.radius)).toBeCloseTo(Math.SQRT2 / 2, 12)
+	expect(solution!.parity).toBe('NORMAL')
+})
+
+test('singular cd matrix', () => {
+	const header = plateHeaderFromCd(0.01, 0.02, 0.01, 0.02)
+
+	expect(plateSolutionFrom(header)).toBeUndefined()
+})
+
+// Builds a minimal TAN-like header around a custom CD matrix.
+function plateHeaderFromCd(cd11: number, cd12: number, cd21: number, cd22: number): FitsHeader {
+	return { CRVAL1: 42, CRVAL2: -17, CD1_1: cd11, CD1_2: cd12, CD2_1: cd21, CD2_2: cd22, IMAGEW: 100, IMAGEH: 50 }
+}

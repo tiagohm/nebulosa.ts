@@ -40,6 +40,7 @@ export const EMPTY_PLATE_SOLUTION: Readonly<PlateSolution> = {
 	heightInPixels: 0,
 }
 
+// Converts FITS WCS keywords into a compact plate-solution summary.
 export function plateSolutionFrom(header: FitsHeader): PlateSolution | undefined {
 	// https://www.aanda.org/articles/aa/full/2002/45/aah3859/aah3859.right.html
 	const crval1 = deg(numericKeyword(header, 'CRVAL1', NaN))
@@ -49,32 +50,29 @@ export function plateSolutionFrom(header: FitsHeader): PlateSolution | undefined
 	if (Number.isNaN(crval2)) return undefined
 
 	const [cd11, cd12, cd21, cd22] = cdMatrix(header)
-	if (cd11 === 0 && cd12 === 0) return undefined
-	const crota2 = deg(numericKeyword(header, 'CROTA2', NaN)) || Math.atan2(cd12, cd11)
-	const parity = cd11 * cd22 - cd12 * cd21 >= 0 ? 'NORMAL' : 'FLIPPED'
+	const determinant = cd11 * cd22 - cd12 * cd21
+	const cdelt1 = Math.hypot(cd11, cd21)
+	const cdelt2 = Math.hypot(cd12, cd22)
 
-	// https://danmoser.github.io/notes/gai_fits-imgs.html
-	// CDELT has 1.0 deg as default value (ignore it)
-	let cdelt1 = numericKeyword(header, 'CDELT1', NaN)
-	cdelt1 = cdelt1 === 1 || Number.isNaN(cdelt1) ? deg(cd11 / Math.cos(crota2)) : deg(cdelt1)
-	let cdelt2 = numericKeyword(header, 'CDELT2', NaN)
-	cdelt2 = cdelt2 === 1 || Number.isNaN(cdelt2) ? deg(cd22 / Math.cos(crota2)) : deg(cdelt2)
+	if (!Number.isFinite(determinant) || !(cdelt1 > 0) || !(cdelt2 > 0) || Math.abs(determinant) <= Number.EPSILON * cdelt1 * cdelt2) return undefined
 
+	const parity = determinant >= 0 ? 'NORMAL' : 'FLIPPED'
+	const orientation = Math.atan2(cd12, parity === 'NORMAL' ? cd22 : -cd22)
 	const widthInPixels = widthKeyword(header, 0)
 	const heightInPixels = heightKeyword(header, 0)
-	const w = Math.abs(cdelt1 * widthInPixels)
-	const h = Math.abs(cdelt2 * heightInPixels)
+	const width = deg(cdelt1) * widthInPixels
+	const height = deg(cdelt2) * heightInPixels
 
 	return {
 		...header,
-		orientation: crota2,
-		scale: Math.abs(cdelt2),
+		orientation,
+		scale: deg(cdelt2),
 		rightAscension: crval1,
 		declination: crval2,
-		width: w,
-		height: h,
-		radius: Math.hypot(w, h) / 2,
-		parity: parity,
+		width,
+		height,
+		radius: Math.hypot(width, height) / 2,
+		parity,
 		widthInPixels,
 		heightInPixels,
 	}
