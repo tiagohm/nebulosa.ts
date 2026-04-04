@@ -7,6 +7,9 @@ interface HistogramCache {
 	variance: number | undefined
 	standardDeviation: number | undefined
 	median: number | undefined
+	entropy: number | undefined
+	skewness: number | undefined
+	kurtosis: number | undefined
 	minimum: readonly [number, number] | undefined // [pixel, count]
 	maximum: readonly [number, number] | undefined // [pixel, count]
 }
@@ -19,10 +22,14 @@ export class Histogram {
 		variance: undefined,
 		standardDeviation: undefined,
 		median: undefined,
+		entropy: undefined,
+		skewness: undefined,
+		kurtosis: undefined,
 		minimum: undefined,
 		maximum: undefined,
 	}
 
+	// Stores histogram bins and their normalization scale.
 	constructor(
 		readonly histogram: Readonly<NumberArray>,
 		readonly max: number,
@@ -40,6 +47,9 @@ export class Histogram {
 			this.#cache.variance = undefined
 			this.#cache.standardDeviation = undefined
 			this.#cache.median = undefined
+			this.#cache.entropy = undefined
+			this.#cache.skewness = undefined
+			this.#cache.kurtosis = undefined
 			this.#cache.minimum = undefined
 			this.#cache.maximum = undefined
 		}
@@ -174,17 +184,26 @@ export class Histogram {
 			return this.#cache.median
 		}
 
+		const ret = this.quantile(0.5)
+		this.#cache.median = ret
+		return ret
+	}
+
+	// Returns the normalized weighted quantile using linear interpolation within the selected bin.
+	quantile(probability: number) {
 		const { histogram, max } = this
 		const total = this.count[0]
 
 		if (!(total > 0) || histogram.length === 0) {
-			this.#cache.median = 0
 			return 0
 		}
 
+		if (!(probability > 0)) return this.minimum[0]
+		if (probability >= 1) return this.maximum[0]
+
 		let prev = 0
 		let cumulative = 0
-		const threshold = total / 2
+		const threshold = probability * total
 		const n = histogram.length
 
 		for (let i = 0; i < n; i++) {
@@ -193,15 +212,131 @@ export class Histogram {
 
 			if (cumulative >= threshold) {
 				const p = (threshold - prev) / histogram[i]
-				let ret = i + p
-				if (max !== 0) ret /= max
-				this.#cache.median = ret
-				return ret
+				const ret = i + p
+				return max !== 0 ? (ret >= max ? 1 : ret / max) : ret
 			}
 		}
 
-		const ret = max !== 0 ? (n - 1) / max : n - 1
-		this.#cache.median = ret
+		return max !== 0 ? 1 : n - 1
+	}
+
+	// Returns the cumulative probability at a normalized bin position.
+	cdf(value: number) {
+		const { histogram, max } = this
+		const total = this.count[0]
+		const n = histogram.length
+
+		if (!(total > 0) || n === 0 || !(value > 0)) return 0
+
+		const x = max !== 0 ? value * max : value
+
+		if (x >= n - 1) return 1
+
+		const bin = Math.trunc(x)
+		const fraction = x - bin
+		let cumulative = 0
+
+		for (let i = 0; i < bin; i++) {
+			cumulative += histogram[i]
+		}
+
+		return (cumulative + fraction * histogram[bin]) / total
+	}
+
+	// Returns the Shannon entropy in bits.
+	get entropy() {
+		if (this.#cache.entropy !== undefined) {
+			return this.#cache.entropy
+		}
+
+		const { histogram } = this
+		const total = this.count[0]
+
+		if (!(total > 0)) {
+			this.#cache.entropy = 0
+			return 0
+		}
+
+		const n = histogram.length
+		let ret = 0
+
+		for (let i = 0; i < n; i++) {
+			const value = histogram[i]
+
+			if (value !== 0) {
+				const p = value / total
+				ret -= p * Math.log2(p)
+			}
+		}
+
+		this.#cache.entropy = ret
+		return ret
+	}
+
+	// Returns the standardized third central moment.
+	get skewness() {
+		if (this.#cache.skewness !== undefined) {
+			return this.#cache.skewness
+		}
+
+		const { histogram, max } = this
+		const total = this.count[0]
+		const standardDeviation = max !== 0 ? this.standardDeviation * max : this.standardDeviation
+
+		if (!(total > 0) || !(standardDeviation > 0)) {
+			this.#cache.skewness = 0
+			return 0
+		}
+
+		const mean = max !== 0 ? this.mean * max : this.mean
+		const n = histogram.length
+		let ret = 0
+
+		for (let i = 0; i < n; i++) {
+			const value = histogram[i]
+
+			if (value !== 0) {
+				const z = (i - mean) / standardDeviation
+				ret += value * (z * z * z)
+			}
+		}
+
+		ret /= total
+		this.#cache.skewness = ret
+		return ret
+	}
+
+	// Returns the standardized fourth central moment minus three.
+	get kurtosis() {
+		if (this.#cache.kurtosis !== undefined) {
+			return this.#cache.kurtosis
+		}
+
+		const { histogram, max } = this
+		const total = this.count[0]
+		const standardDeviation = max !== 0 ? this.standardDeviation * max : this.standardDeviation
+
+		if (!(total > 0) || !(standardDeviation > 0)) {
+			this.#cache.kurtosis = 0
+			return 0
+		}
+
+		const mean = max !== 0 ? this.mean * max : this.mean
+		const n = histogram.length
+		let ret = 0
+
+		for (let i = 0; i < n; i++) {
+			const value = histogram[i]
+
+			if (value !== 0) {
+				const z = (i - mean) / standardDeviation
+				const z2 = z * z
+				ret += value * (z2 * z2)
+			}
+		}
+
+		ret = ret / total - 3
+		this.#cache.kurtosis = ret
 		return ret
 	}
 
