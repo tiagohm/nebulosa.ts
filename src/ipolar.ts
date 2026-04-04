@@ -11,7 +11,7 @@ import type { PlateSolution } from './platesolver'
 import type { DetectedStar } from './star.detector'
 import { fitSimilarityTransform, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from './star.matching'
 import { precessionNutationMatrix, type Time } from './time'
-import { type MutVec3, type Vec3, vecAngle, vecCross, vecDot, vecMinus, vecMulScalar, vecNormalizeMut } from './vec3'
+import { type Vec3, vecAngle, vecDot, vecMinus, vecMulScalar, vecNormalizeMut } from './vec3'
 
 export type IPolarPolarAlignmentStage = 'WAITING_FOR_POSITION_1' | 'WAITING_FOR_POSITION_2' | 'INITIAL_AXIS_ESTIMATION' | 'REFINEMENT' | 'COMPLETE' | 'FAILED'
 
@@ -133,20 +133,6 @@ const DEFAULT_POLAR_ALIGNMENT_CONFIG: Readonly<Required<IPolarPolarAlignmentConf
 	compensateEarthRotation: true,
 	useStarMatchingValidation: true,
 	starMatchingConfig: {},
-}
-
-// Converts a sky vector into tangent-plane coordinates around the chosen origin.
-export function projectUnitVectorToTangentPlane(direction: Vec3, origin: Vec3): readonly [number, number] | false {
-	const basis = tangentBasis(origin)
-	const denom = vecDot(direction, origin)
-	if (denom <= 0) return false
-	return [vecDot(direction, basis.east) / denom, vecDot(direction, basis.north) / denom] as const
-}
-
-// Unprojects tangent-plane coordinates back into a unit direction.
-export function unprojectTangentPlaneToUnitVector(x: number, y: number, origin: Vec3) {
-	const basis = tangentBasis(origin)
-	return vecNormalizeMut([origin[0] + x * basis.east[0] + y * basis.north[0], origin[1] + x * basis.east[1] + y * basis.north[1], origin[2] + x * basis.east[2] + y * basis.north[2]])
 }
 
 // Solves the fixed point of a similarity transform when the geometry is non-singular.
@@ -625,14 +611,6 @@ function pixelFromSkyVector(solution: PlateSolution, vector: Vec3) {
 	if (center !== undefined) return { x: center[0], y: center[1] }
 
 	return { x: solution.widthInPixels * 0.5, y: solution.heightInPixels * 0.5 }
-}
-
-// Builds an orthonormal tangent basis around the given sky direction.
-function tangentBasis(origin: Vec3) {
-	const reference: MutVec3 = Math.abs(origin[2]) < 0.9 ? [0, 0, 1] : [0, 1, 0]
-	const east = vecNormalizeMut(vecCross(reference, origin, reference))
-	const north = vecNormalizeMut(vecCross(origin, east))
-	return { east, north } as const
 }
 
 // Builds the local tangent basis aligned with azimuth and altitude directions.

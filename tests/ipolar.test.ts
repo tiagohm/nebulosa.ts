@@ -3,6 +3,7 @@ import { type Angle, arcmin, arcsec, deg, toDeg } from '../src/angle'
 import { cirsToObserved, observedToCirs, refractedAltitude } from '../src/astrometry'
 import { eraC2s, eraS2c } from '../src/erfa'
 import type { FitsHeader } from '../src/fits'
+import { sphericalTangentBasis } from '../src/geometry'
 import { celestialPoleVector, decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveSimilarityFixedPoint } from '../src/ipolar'
 import { type GeographicPosition, geodeticLocation } from '../src/location'
 import { matMulVec, matTransposeMulVec } from '../src/mat3'
@@ -455,7 +456,7 @@ function practicalFrame({ time, azimuthError, altitudeError, raRotation, cameraO
 	const rotatedRight = vecRotateByRodrigues(rolledRight, axis, raRotation)
 	const rotatedUp = vecRotateByRodrigues(rolledUp, axis, raRotation)
 	const [rightAscension, declination] = eraC2s(...rotatedForward)
-	const skyBasis = tangentBasis(rotatedForward)
+	const skyBasis = sphericalTangentBasis(rotatedForward)
 	const invScale = 1 / pixelScale
 	const header: FitsHeader = {
 		NAXIS: 2,
@@ -478,11 +479,4 @@ function practicalFrame({ time, azimuthError, altitudeError, raRotation, cameraO
 	const solution = plateSolutionFrom(header)
 	if (!solution) throw new Error(`failed to build synthetic plate solution for ${toDeg(rightAscension)} ${toDeg(declination)}`)
 	return solution
-}
-
-function tangentBasis(origin: Vec3) {
-	const reference = Math.abs(origin[2]) < 0.9 ? ([0, 0, 1] as const) : ([0, 1, 0] as const)
-	const east = vecNormalizeMut(vecCross(reference, origin, [0, 0, 0]))
-	const north = vecNormalizeMut(vecCross(origin, east, [0, 0, 0]))
-	return { east, north } as const
 }

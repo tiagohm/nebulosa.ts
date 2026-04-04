@@ -145,14 +145,18 @@ export function eraC2s(x: Distance, y: Distance, z: Distance): [Angle, Angle] {
 }
 
 // Spherical coordinates to Cartesian coordinates.
-export function eraS2c(theta: Angle, phi: Angle): MutVec3 {
+export function eraS2c(theta: Angle, phi: Angle, out?: MutVec3): MutVec3 {
+	out ??= [0, 0, 0]
 	const cp = Math.cos(phi)
-	return [Math.cos(theta) * cp, Math.sin(theta) * cp, Math.sin(phi)]
+	out[0] = Math.cos(theta) * cp
+	out[1] = Math.sin(theta) * cp
+	out[2] = Math.sin(phi)
+	return out
 }
 
 // Spherical polar coordinates to P-vector.
-export function eraS2p(theta: Angle, phi: Angle, r: Distance): [Distance, Distance, Distance] {
-	const u = eraS2c(theta, phi)
+export function eraS2p(theta: Angle, phi: Angle, r: Distance, out?: MutVec3): [Distance, Distance, Distance] {
+	const u = eraS2c(theta, phi, out)
 	u[0] *= r
 	u[1] *= r
 	u[2] *= r
