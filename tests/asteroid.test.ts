@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { KeplerOrbit, mpcAsteroid, mpcComet, stumpff } from '../src/asteroid'
+import { KeplerOrbit, eccentricAnomaly, meanAnomaly, mpcAsteroid, mpcComet, stumpff, timeSincePeriapsis, trueAnomalyHyperbolic, trueAnomalyParabolic } from '../src/asteroid'
 import type { CartesianCoordinate } from '../src/coordinate'
 import { mpcorb, mpcorbComet } from '../src/mpcorb'
 import { Timescale, time, timeYMDHMS } from '../src/time'
@@ -104,4 +104,38 @@ test('stumpff', () => {
 	expect(stumpff(-2)).toEqual([2.178183556608571, 1.368298872008591, 0.5890917783042855, 0.18414943600429545])
 	expect(stumpff(0.5)).toEqual([0.7602445970756302, 0.9187253698655684, 0.4795108058487397, 0.16254926026886313])
 	expect(stumpff(2)).toEqual([0.15594369476537437, 0.6984559986366083, 0.4220281526173128, 0.15077200068169583])
+})
+
+test('hyperbolic mean anomaly', () => {
+	const orbit = KeplerOrbit.meanAnomaly(1.5, 1.5, 0.2, 0.3, 0.4, 8, t)
+
+	expect(orbit.eccentricity).toBeCloseTo(1.5, 14)
+	expect(orbit.meanAnomaly).toBeCloseTo(8, 12)
+
+	const H = 4
+	const v = trueAnomalyHyperbolic(1.5, H)
+
+	expect(eccentricAnomaly(v, 1.5)).toBeCloseTo(H, 14)
+	expect(meanAnomaly(H, 1.5)).toBeCloseTo(1.5 * Math.sinh(H) - H, 14)
+
+	expect(() => KeplerOrbit.trueAnomaly(1.5, 1.5, 0.2, 0.3, 0.4, -2.4, t)).toThrow('if eccentricity is > 1, abs(true anomaly) cannot be more than acos(-1/e)')
+	expect(() => KeplerOrbit.trueAnomaly(1.5, 1.5, 0.2, 0.3, 0.4, 2 * Math.PI - 0.2, t)).not.toThrow()
+})
+
+test('parabolic mean anomaly', () => {
+	const p = 2
+	const v = 1.2
+	const M = timeSincePeriapsis(0, 0, v, p, 1) / Math.sqrt((2 * (p * p * p)) / 1)
+
+	expect(trueAnomalyParabolic(p, 1, M)).toBeCloseTo(v, 14)
+	expect(trueAnomalyParabolic(p, 1, -M)).toBeCloseTo(-v, 14)
+})
+
+test('circular equatorial true anomaly', () => {
+	const prograde = KeplerOrbit.trueAnomaly(1, 0, 0, 0, 0, Math.PI / 2, t)
+	const retrograde = KeplerOrbit.trueAnomaly(1, 0, Math.PI, 0, 0, Math.PI / 2, t)
+
+	expect(prograde.trueAnomaly).toBeCloseTo(Math.PI / 2, 14)
+	expect(prograde.trueLongitude).toBeCloseTo(Math.PI / 2, 14)
+	expect(retrograde.trueAnomaly).toBeCloseTo(Math.PI / 2, 14)
 })
