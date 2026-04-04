@@ -36,6 +36,13 @@ describe('backlash compensation', () => {
 		expect(compensator.compute(1000, 0)).toEqual([1100, 1000])
 		expect(compensator.compute(0, 1000)).toEqual([0])
 	})
+
+	test('overshoot no-op', () => {
+		const compensator = new BacklashCompensator({ mode: 'OVERSHOOT', backlashIn: 100, backlashOut: 100 }, 10000)
+
+		expect(compensator.compute(1000, 0)).toEqual([1100, 1000])
+		expect(compensator.compute(1000, 1000)).toEqual([1000])
+	})
 })
 
 // Generated using Camera Sky Simulator and NINA
@@ -73,8 +80,8 @@ describe('auto focus', () => {
 	let position = 25000
 
 	function move(step: AutoFocusStep) {
-		if (step.relative) position += step.relative
-		else if (step.absolute) position = step.absolute
+		if (step.relative !== undefined) position += step.relative
+		else if (step.absolute !== undefined) position = step.absolute
 	}
 
 	test('trend-parabolic', () => {
@@ -171,5 +178,30 @@ describe('auto focus', () => {
 
 		expect(step.type).toBe('COMPLETED')
 		expect(hyperbolicAutoFocus.focusPoint!.x).toBeCloseTo(24950, -2)
+	})
+
+	test('parabolic ignores invalid hfd samples', () => {
+		const autoFocus = new AutoFocus({ fittingMode: 'PARABOLIC', initialOffsetSteps: 5, stepSize: 100, maxPosition: 100000, reversed: false })
+		const focusPoints = new Map<number, number>()
+
+		for (let i = 0; i < GOOD_FOCUS_POINTS.length; i++) {
+			const { x, y } = GOOD_FOCUS_POINTS[i]
+			focusPoints.set(x, y)
+		}
+
+		focusPoints.set(25000, Number.NaN)
+		position = 25000
+
+		let step = autoFocus.add(position, 2)
+
+		for (let i = 0; i < 100 && step.type === 'MOVE'; i++) {
+			move(step)
+			step = autoFocus.add(position, focusPoints.get(position) ?? 2)
+		}
+
+		expect(step.type).toBe('COMPLETED')
+		expect(Number.isFinite(step.absolute)).toBe(true)
+		expect(autoFocus.focusPoint!.x).toBeCloseTo(25000, -2)
+		expect(autoFocus.focusPoint!.y).toBeGreaterThan(0)
 	})
 })

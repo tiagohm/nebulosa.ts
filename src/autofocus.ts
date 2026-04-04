@@ -30,7 +30,22 @@ export interface AutoFocusOptions {
 	maxPosition: number
 }
 
-const FocusPointComparator = (a: Point, b: Point) => a.x - b.x
+const INVALID_HFD = 0
+
+// Sorts measured focus points by absolute focuser position.
+function FocusPointComparator(a: Point, b: Point) {
+	return a.x - b.x
+}
+
+// Normalizes malformed HFD samples to the invalid-data sentinel.
+function sanitizeHfd(hfd: number) {
+	return Number.isFinite(hfd) && hfd > 0 ? hfd : INVALID_HFD
+}
+
+// Keeps only finite positions with positive HFD values in regression fits.
+function isValidFocusPoint(point: Point) {
+	return Number.isFinite(point.x) && point.y > INVALID_HFD
+}
 
 export class AutoFocus {
 	#state = 0
@@ -44,6 +59,7 @@ export class AutoFocus {
 	readonly #focusPoints: Point[] = []
 	readonly #curves: { trendLine?: TrendLineRegression; parabolic?: QuadraticRegression; hyperbolic?: HyperbolicRegression } = {}
 
+	// Precomputes the scan geometry and stores immutable fitting options.
 	constructor(readonly options: AutoFocusOptions) {
 		this.#initialOffsetSteps = options.initialOffsetSteps
 		this.#stepSize = options.stepSize
@@ -52,24 +68,33 @@ export class AutoFocus {
 		this.#maximumFocusPoints = this.#initialOffsetSteps * 10
 	}
 
-	get minimum() {
+	// Returns the leftmost sampled focus point.
+	get minimum(): Readonly<Point> | undefined {
 		return this.#focusPoints[0]
 	}
 
-	get maximum() {
+	// Returns the rightmost sampled focus point.
+	get maximum(): Readonly<Point> | undefined {
 		return this.#focusPoints[this.#focusPoints.length - 1]
 	}
 
+	// Creates a relative move step command.
 	#makeRelativeStep(type: AutoFocusStepType, relative: number): AutoFocusStep {
 		return { type, relative }
 	}
 
+	// Creates an absolute move or terminal step command.
 	#makeAbsoluteStep(type: AutoFocusStepType, absolute: number): AutoFocusStep {
 		return { type, absolute }
 	}
 
 	// Call it after each camera capture!
 	add(focusPosition: number, hfd: number): AutoFocusStep {
+		if (!Number.isFinite(focusPosition)) {
+			console.warn('invalid focus position')
+			return this.#makeAbsoluteStep('FAILED', this.#initialFocusPosition)
+		}
+
 		switch (this.#state) {
 			// Idle
 			case 0:
@@ -109,26 +134,62 @@ export class AutoFocus {
 		}
 	}
 
+	// Checks whether each side of the current minimum has enough valid or rejected samples.
 	#checkIsFocusPointsEnough() {
-		if (!this.#curves.trendLine) return false
-		const { left, right, minimum } = this.#curves.trendLine
-		return right.xPoints.length + this.#focusPoints.filter((e) => e.x > minimum.x && e.y === 0).length >= this.#initialOffsetSteps && left.xPoints.length + this.#focusPoints.filter((e) => e.x < minimum.x && e.y === 0).length >= this.#initialOffsetSteps
+		const trendLine = this.#curves.trendLine
+
+		if (!trendLine) return false
+
+		const { left, right, minimum } = trendLine
+		return right.xPoints.length + this.#countInvalidFocusPoints(minimum.x, 1) >= this.#initialOffsetSteps && left.xPoints.length + this.#countInvalidFocusPoints(minimum.x, -1) >= this.#initialOffsetSteps
 	}
 
+	// Counts rejected measurements to one side of the current minimum.
+	#countInvalidFocusPoints(minimumPosition: number, direction: -1 | 1) {
+		let count = 0
+
+		for (let i = 0; i < this.#focusPoints.length; i++) {
+			const { x, y } = this.#focusPoints[i]
+
+			if (y <= INVALID_HFD && (direction < 0 ? x < minimumPosition : x > minimumPosition)) {
+				count++
+			}
+		}
+
+		return count
+	}
+
+	// Extends the sampled V-curve on whichever side still needs support points.
 	#evaluateTrendline(focusPosition: number): AutoFocusStep {
-		const { left, right, minimum } = this.#curves.trendLine!
+		const trendLine = this.#curves.trendLine
+
+		if (!trendLine) {
+			console.warn('not enough valid focus points')
+			return this.#makeAbsoluteStep('FAILED', this.#initialFocusPosition)
+		}
+
+		const { left, right, minimum } = trendLine
+		const invalidLeftFocusPoints = this.#countInvalidFocusPoints(minimum.x, -1)
+		const invalidRightFocusPoints = this.#countInvalidFocusPoints(minimum.x, 1)
 
 		if (!left.xPoints.length && !right.xPoints.length) {
-			console.warn('not enought spreaded points')
+			console.warn('not enough spreaded points')
 			return this.#makeAbsoluteStep('FAILED', this.#initialFocusPosition)
 		}
 
 		// Let's keep moving in, one step at a time, until we have enough left trend points.
 		// Then we can think about moving out to fill in the right trend points.
-		if (left.xPoints.length < this.#initialOffsetSteps && this.#focusPoints.filter((e) => e.x < minimum.x && e.y === 0).length < this.#initialOffsetSteps) {
+		if (left.xPoints.length < this.#initialOffsetSteps && invalidLeftFocusPoints < this.#initialOffsetSteps) {
 			console.info('more data points needed to the left of the minimum')
 
-			const firstX = Math.trunc(this.minimum.x)
+			const firstFocusPoint = this.minimum
+
+			if (!firstFocusPoint) {
+				console.warn('minimum focus point is unavailable')
+				return this.#makeAbsoluteStep('FAILED', this.#initialFocusPosition)
+			}
+
+			const firstX = Math.trunc(firstFocusPoint.x)
 
 			if (focusPosition !== firstX) {
 				// Move to the leftmost point - this should never be necessary since we're already there, but just in case
@@ -137,11 +198,18 @@ export class AutoFocus {
 				// More points needed to the left.
 				return this.#makeRelativeStep('MOVE', this.#direction * -this.#stepSize)
 			}
-		} else if (right.xPoints.length < this.#initialOffsetSteps && this.#focusPoints.filter((e) => e.x > minimum.x && e.y === 0).length < this.#initialOffsetSteps) {
+		} else if (right.xPoints.length < this.#initialOffsetSteps && invalidRightFocusPoints < this.#initialOffsetSteps) {
 			// Now we can go to the right, if necessary.
 			console.info('more data points needed to the right of the minimum')
 
-			const lastX = Math.trunc(this.maximum.x)
+			const lastFocusPoint = this.maximum
+
+			if (!lastFocusPoint) {
+				console.warn('maximum focus point is unavailable')
+				return this.#makeAbsoluteStep('FAILED', this.#initialFocusPosition)
+			}
+
+			const lastX = Math.trunc(lastFocusPoint.x)
 
 			if (focusPosition !== lastX) {
 				// More points needed to the right. Let's get to the rightmost point, and keep going right one point at a time.
@@ -155,12 +223,37 @@ export class AutoFocus {
 		return this.#determinateFocusPoint()
 	}
 
+	// Updates all enabled regression fits using only valid positive-HFD measurements.
 	#computeRegression(focusPosition: number, hfd: number) {
-		this.#focusPoints.push({ x: focusPosition, y: hfd })
+		this.#focusPoints.push({ x: focusPosition, y: sanitizeHfd(hfd) })
 		this.#focusPoints.sort(FocusPointComparator)
 
-		const x = this.#focusPoints.map((e) => e.x)
-		const y = this.#focusPoints.map((e) => e.y)
+		let validCount = 0
+
+		for (let i = 0; i < this.#focusPoints.length; i++) {
+			if (isValidFocusPoint(this.#focusPoints[i])) {
+				validCount++
+			}
+		}
+
+		if (validCount === 0) {
+			this.#curves.trendLine = undefined
+			this.#curves.parabolic = undefined
+			this.#curves.hyperbolic = undefined
+			return
+		}
+
+		const x = new Float64Array(validCount)
+		const y = new Float64Array(validCount)
+
+		for (let i = 0, j = 0; i < this.#focusPoints.length; i++) {
+			const point = this.#focusPoints[i]
+
+			if (isValidFocusPoint(point)) {
+				x[j] = point.x
+				y[j++] = point.y
+			}
+		}
 
 		this.#curves.trendLine = trendLineRegression(x, y, 'theil-sen')
 
@@ -173,6 +266,7 @@ export class AutoFocus {
 		}
 	}
 
+	// Selects the final focus position and falls back to the original position when validation fails.
 	#determinateFocusPoint(): AutoFocusStep {
 		const determinedFocusPoint = this.focusPoint
 
@@ -184,8 +278,17 @@ export class AutoFocus {
 		}
 	}
 
+	// Rejects non-finite, non-positive, out-of-range, or low-quality fitted focus positions.
 	#validateCalculatedFocusPosition(focusPoint: Readonly<Point>) {
-		if (focusPoint.x < this.minimum.x || focusPoint.x > this.maximum.x) {
+		const minimum = this.minimum
+		const maximum = this.maximum
+
+		if (!minimum || !maximum || !Number.isFinite(focusPoint.x) || !Number.isFinite(focusPoint.y) || focusPoint.y <= 0) {
+			console.warn('determined focus point is not finite and positive')
+			return false
+		}
+
+		if (focusPoint.x < minimum.x || focusPoint.x > maximum.x) {
 			console.warn('determined focus point position is outside of the overall measurement points of the curve')
 			return false
 		}
@@ -225,18 +328,22 @@ export class AutoFocus {
 		return true
 	}
 
+	// Returns the current trend-line regression.
 	get trendLine() {
 		return this.#curves.trendLine
 	}
 
+	// Returns the current parabolic regression.
 	get parabolic() {
 		return this.#curves.parabolic
 	}
 
+	// Returns the current hyperbolic regression.
 	get hyperbolic() {
 		return this.#curves.hyperbolic
 	}
 
+	// Returns the fitted best-focus point for the selected fitting mode.
 	get focusPoint() {
 		const { trendLine, parabolic, hyperbolic } = this.#curves
 
@@ -261,11 +368,13 @@ export class BacklashCompensator {
 	#offset = 0
 	#lastDirection: OvershootDirection = 'NONE'
 
+	// Stores backlash parameters and the focuser travel limit.
 	constructor(
 		readonly compensation: BacklashCompensation,
 		readonly maxPosition: number,
 	) {}
 
+	// Computes one direct move or an overshoot pair to reach the target position.
 	compute(targetPosition: number, currentPosition: number): readonly number[] {
 		let newPosition = targetPosition
 
@@ -309,17 +418,22 @@ export class BacklashCompensator {
 		return [newPosition]
 	}
 
+	// Infers the latest move direction and preserves it across no-op absolute moves.
 	#determineMovingDirection(prevPosition: number, newPosition: number): OvershootDirection {
 		return newPosition > prevPosition ? 'OUT' : newPosition < prevPosition ? 'IN' : this.#lastDirection
 	}
 
+	// Updates absolute backlash offset only when the requested move reverses direction.
 	#calculateAbsoluteBacklashCompensation(lastPosition: number, newPosition: number) {
 		const direction = this.#determineMovingDirection(lastPosition, newPosition)
 		const { backlashIn, backlashOut } = this.compensation
 		return direction === 'IN' && this.#lastDirection === 'OUT' ? -backlashIn : direction === 'OUT' && this.#lastDirection === 'IN' ? backlashOut : 0
 	}
 
-	#calculateOvershootBacklashCompensation(lastPosition: number, newPosition: number): number {
+	// Computes overshoot compensation only when a move is actually requested.
+	#calculateOvershootBacklashCompensation(lastPosition: number, newPosition: number) {
+		if (newPosition === lastPosition) return 0
+
 		const direction = this.#determineMovingDirection(lastPosition, newPosition)
 		const { backlashIn, backlashOut } = this.compensation
 		return direction === 'IN' && backlashIn !== 0 ? -backlashIn : direction === 'OUT' && backlashOut !== 0 ? backlashOut : 0
