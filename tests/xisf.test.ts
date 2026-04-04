@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromPath, readImageFromXisf } from '../src/image'
-import { bufferSink, fileHandleSource } from '../src/io'
-import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf } from '../src/xisf'
+import { bufferSink, bufferSource, fileHandleSource } from '../src/io'
+import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf, XisfImageReader, XisfImageWriter } from '../src/xisf'
 import { downloadPerTag } from './download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from './image.util'
 
@@ -173,4 +173,42 @@ describe('byte shuffle and unshuffle', () => {
 			if (itemSize > 1) expect(Bun.gzipSync(shuffled.buffer).byteLength).toBeLessThan(Bun.gzipSync(original.buffer).byteLength)
 		})
 	}
+
+	test('preserves trailing bytes', () => {
+		const original = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+		const shuffled = new Uint8Array(original.length)
+		const unshuffled = new Uint8Array(original.length)
+
+		byteShuffle(original, shuffled, 4)
+		expect(shuffled).toEqual(Uint8Array.from([1, 5, 2, 6, 3, 7, 4, 8, 9, 10]))
+
+		byteUnshuffle(shuffled, unshuffled, 4)
+		expect(unshuffled).toEqual(original)
+	})
+})
+
+describe('buffer views', () => {
+	test('reader respects provided buffer offset', async () => {
+		const storage = Buffer.alloc(8, 0)
+		const buffer = storage.subarray(2, 4)
+		const reader = new XisfImageReader({ bitpix: 16, location: { offset: 0, size: 2 }, byteOrder: 'little', pixelStorage: 'Normal', geometry: { width: 1, height: 1, channels: 1 } }, buffer)
+		const output = new Float64Array(1)
+
+		expect(await reader.read(bufferSource(Buffer.from([0xff, 0xff])), output)).toBeTrue()
+		expect(output[0]).toBeCloseTo(1, 12)
+		expect(buffer).toEqual(Buffer.from([0xff, 0xff]))
+		expect(storage.subarray(0, 2)).toEqual(Buffer.from([0, 0]))
+	})
+
+	test('writer respects provided buffer offset', async () => {
+		const storage = Buffer.alloc(8, 0)
+		const buffer = storage.subarray(2, 4)
+		const writer = new XisfImageWriter({ bitpix: 16, byteOrder: 'little', pixelStorage: 'Normal', geometry: { width: 1, height: 1, channels: 1 } }, false, buffer)
+		const encoded = await writer.encode(new Float64Array([1]))
+
+		expect(encoded.compression).toBeUndefined()
+		expect(encoded.data).toEqual(Buffer.from([0xff, 0xff]))
+		expect(buffer).toEqual(Buffer.from([0xff, 0xff]))
+		expect(storage.subarray(0, 2)).toEqual(Buffer.from([0, 0]))
+	})
 })

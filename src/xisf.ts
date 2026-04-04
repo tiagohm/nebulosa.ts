@@ -30,13 +30,15 @@ export type XisfPropertyType = 'UInt8' | 'UInt16' | 'UInt32' | 'UInt64' | 'Float
 export const XISF_SIGNATURE = 'XISF0100'
 
 export function isXisf(input: ArrayBufferLike | Buffer) {
-	if (input.byteLength < 8) return false
+	if (input.byteLength < XISF_SIGNATURE.length) return false
 
-	if (Buffer.isBuffer(input)) {
-		return input.toString('ascii', 0, 8) === XISF_SIGNATURE
-	} else {
-		return isXisf(Buffer.from(input, 0, 8))
+	const bytes = Buffer.isBuffer(input) ? input : new Uint8Array(input, 0, XISF_SIGNATURE.length)
+
+	for (let i = 0; i < XISF_SIGNATURE.length; i++) {
+		if (bytes[i] !== XISF_SIGNATURE.charCodeAt(i)) return false
 	}
+
+	return true
 }
 
 export interface Xisf {
@@ -142,6 +144,77 @@ interface XisfEncodedBlock {
 	readonly compression?: XisfCompression
 }
 
+// Builds a correctly aligned typed view over the backing XISF image buffer.
+function xisfDataView(buffer: Buffer, bitpix: Bitpix): NumberArray {
+	const byteLength = buffer.byteLength
+
+	if (byteLength === 0) return new Uint8Array(0)
+
+	const pixelInBytes = bitpixInBytes(bitpix)
+
+	if (pixelInBytes < 1 || byteLength % pixelInBytes !== 0) {
+		throw new Error('invalid XISF image buffer size')
+	}
+
+	const { byteOffset } = buffer
+	const length = byteLength / pixelInBytes
+
+	switch (bitpix) {
+		case 8:
+			return new Uint8Array(buffer.buffer, byteOffset, length)
+		case 16:
+			return new Uint16Array(buffer.buffer, byteOffset, length)
+		case 32:
+			return new Uint32Array(buffer.buffer, byteOffset, length)
+		case -32:
+			return new Float32Array(buffer.buffer, byteOffset, length)
+		case -64:
+			return new Float64Array(buffer.buffer, byteOffset, length)
+		default:
+			throw new Error(`unsupported XISF BITPIX: ${bitpix}`)
+	}
+}
+
+// Uses the caller-provided buffer when aligned, otherwise allocates an aligned scratch buffer.
+function xisfBufferView(buffer: Buffer | undefined, size: number, bitpix: Bitpix): Buffer {
+	if (buffer === undefined) return Buffer.allocUnsafe(size)
+	if (buffer.byteLength < size) throw new Error('XISF image buffer is too small')
+
+	const view = buffer.subarray(0, size)
+	const pixelInBytes = bitpixInBytes(bitpix)
+
+	if (size === 0 || pixelInBytes <= 1 || view.byteOffset % pixelInBytes === 0) return view
+
+	return Buffer.allocUnsafe(size)
+}
+
+function sampleFormatFromBitpix(bitpix: Bitpix): XisfSampleFormat {
+	switch (bitpix) {
+		case 8:
+			return 'UInt8'
+		case 16:
+			return 'UInt16'
+		case 32:
+			return 'UInt32'
+		case 64:
+			return 'UInt64'
+		case -32:
+			return 'Float32'
+		case -64:
+			return 'Float64'
+		default:
+			throw new Error(`unsupported XISF BITPIX: ${bitpix}`)
+	}
+}
+
+function isSupportedSampleFormat(sampleFormat: string): sampleFormat is XisfSampleFormat {
+	return sampleFormat === 'UInt8' || sampleFormat === 'UInt16' || sampleFormat === 'UInt32' || sampleFormat === 'UInt64' || sampleFormat === 'Float32' || sampleFormat === 'Float64'
+}
+
+function isSupportedCompressionFormat(format: string): format is XisfCompressionFormat {
+	return format === 'zlib' || format === 'lz4' || format === 'lz4hc' || format === 'zstd'
+}
+
 function compress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, compression: XisfWriteCompression) {
 	if (compression.format === 'zstd') return Bun.zstdCompress(input, compression)
 	else if (compression.format === 'zlib') return deflate(input, compression)
@@ -161,7 +234,7 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 		const width = +header.NAXIS1! || 0
 		const height = +header.NAXIS2! || 0
 		const channels = (+header.NAXIS3! || 1) as number
-		const sampleFormat: XisfSampleFormat = bitpix === 8 ? 'UInt8' : bitpix === 16 ? 'UInt16' : bitpix === 32 ? 'UInt32' : bitpix === 64 ? 'UInt64' : bitpix === -32 ? 'Float32' : 'Float64'
+		const sampleFormat = sampleFormatFromBitpix(bitpix)
 		const colorSpace: XisfColorSpace = channels >= 3 ? 'RGB' : 'Gray'
 		const fitsKeywords: string[] = []
 
@@ -224,19 +297,27 @@ export function parseXisfHeader(data: Buffer) {
 	const parsedHeader = XML_PARSER.parse(data)?.xisf as XisfParsedHeader | undefined
 	if (!parsedHeader?.Image) return []
 
-	const parsedImages = parsedHeader.Image instanceof Array ? parsedHeader.Image : [parsedHeader.Image]
+	const parsedImages = Array.isArray(parsedHeader.Image) ? parsedHeader.Image : [parsedHeader.Image]
 	const images: XisfImage[] = []
 
 	for (const image of parsedImages) {
 		if (!image.location.startsWith('attachment:')) continue
-		if (image.colorSpace === 'CIELab') continue
-		if (image.sampleFormat === 'UInt64') continue
+		if (image.colorSpace !== 'Gray' && image.colorSpace !== 'RGB') continue
+		if (!isSupportedSampleFormat(image.sampleFormat) || image.sampleFormat === 'UInt64') continue
 
 		const geometry = parseGeometry(image.geometry)
-		const header = makeFitsHeaderFromParsedImage(image, geometry)
 		const location = parseLocation(image.location)
-		const compression = parseCompression(image.compression)
-		const { colorSpace, sampleFormat, byteOrder = 'little', imageType = 'Light', pixelStorage = 'Planar' } = image
+		if (!geometry || !location) continue
+
+		const compression = image.compression ? parseCompression(image.compression) : undefined
+		if (image.compression && !compression) continue
+
+		const header = makeFitsHeaderFromParsedImage(image, geometry)
+		const colorSpace = image.colorSpace
+		const sampleFormat = image.sampleFormat
+		const byteOrder = image.byteOrder === 'big' ? 'big' : 'little'
+		const imageType = image.imageType ?? 'Light'
+		const pixelStorage = image.pixelStorage === 'Normal' ? 'Normal' : 'Planar'
 
 		images.push({ header, location, geometry, compression, colorSpace, sampleFormat, bitpix: header.BITPIX as Bitpix, byteOrder, imageType, pixelStorage })
 	}
@@ -244,7 +325,7 @@ export function parseXisfHeader(data: Buffer) {
 	return images
 }
 
-function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeometry = parseGeometry(image.geometry)) {
+function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeometry = parseGeometry(image.geometry)!) {
 	const header: FitsHeader = { SIMPLE: true }
 
 	header.BITPIX = bitpixFromSampleFormat(image.sampleFormat)
@@ -254,7 +335,7 @@ function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeo
 	if (geometry.channels >= 3) header.NAXIS3 = geometry.channels
 
 	if (image.FITSKeyword) {
-		const keywords = image.FITSKeyword instanceof Array ? image.FITSKeyword : [image.FITSKeyword]
+		const keywords = Array.isArray(image.FITSKeyword) ? image.FITSKeyword : [image.FITSKeyword]
 
 		for (const keyword of keywords) {
 			const value = keyword.value as string
@@ -271,23 +352,49 @@ function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeo
 	return header
 }
 
-function parseLocation(location: XisfParsedImage['location']): XisfLocation {
-	const parts = location.split(':')
-	return { offset: +parts[1], size: +parts[2] }
+function parseLocation(location: XisfParsedImage['location']): XisfLocation | undefined {
+	const start = location.indexOf(':')
+	const end = location.indexOf(':', start + 1)
+	if (start < 0 || end < 0 || end + 1 >= location.length) return undefined
+
+	const offset = +location.slice(start + 1, end)
+	const size = +location.slice(end + 1)
+
+	if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(size) || size <= 0) return undefined
+
+	return { offset, size }
 }
 
-function parseGeometry(geometry: XisfParsedImage['geometry']): XisfGeometry {
-	const parts = geometry.split(':')
-	return { width: +parts[0], height: +parts[1], channels: +parts[2] }
+function parseGeometry(geometry: XisfParsedImage['geometry']): XisfGeometry | undefined {
+	const first = geometry.indexOf(':')
+	const second = geometry.indexOf(':', first + 1)
+	if (first <= 0 || second <= first + 1 || second + 1 >= geometry.length) return undefined
+
+	const width = +geometry.slice(0, first)
+	const height = +geometry.slice(first + 1, second)
+	const channels = +geometry.slice(second + 1)
+
+	if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0 || !Number.isInteger(channels) || channels <= 0) return undefined
+
+	return { width, height, channels }
 }
 
-function parseCompression(compression: XisfParsedImage['compression']): XisfCompression | undefined {
-	if (!compression) return undefined
-	const parts = compression.split(':')
-	const shuffled = parts[0].endsWith('+sh')
-	const format = (shuffled ? parts[0].substring(0, parts[0].length - 3) : parts[0]) as XisfCompressionFormat
-	const uncompressedSize = +parts[1]
-	const itemSize = shuffled ? +parts[2] : 0
+function parseCompression(compression: NonNullable<XisfParsedImage['compression']>): XisfCompression | undefined {
+	const first = compression.indexOf(':')
+	if (first <= 0) return undefined
+
+	const token = compression.slice(0, first)
+	const shuffled = token.endsWith('+sh')
+	const format = shuffled ? token.slice(0, token.length - 3) : token
+	if (!isSupportedCompressionFormat(format)) return undefined
+
+	const second = compression.indexOf(':', first + 1)
+	const uncompressedSize = +(second < 0 ? compression.slice(first + 1) : compression.slice(first + 1, second))
+	if (!Number.isInteger(uncompressedSize) || uncompressedSize <= 0) return undefined
+
+	const itemSize = shuffled ? +(second < 0 ? '' : compression.slice(second + 1)) : 0
+	if (shuffled && (!Number.isInteger(itemSize) || itemSize <= 0)) return undefined
+
 	return { format, shuffled, uncompressedSize, itemSize }
 }
 
@@ -297,7 +404,22 @@ function formatCompression(compression: XisfCompression) {
 }
 
 export function bitpixFromSampleFormat(sampleFormat: XisfSampleFormat): Bitpix {
-	return sampleFormat === 'UInt8' ? 8 : sampleFormat === 'UInt16' ? 16 : sampleFormat === 'UInt32' ? 32 : sampleFormat === 'UInt64' ? 64 : sampleFormat === 'Float32' ? -32 : -64
+	switch (sampleFormat) {
+		case 'UInt8':
+			return 8
+		case 'UInt16':
+			return 16
+		case 'UInt32':
+			return 32
+		case 'UInt64':
+			return 64
+		case 'Float32':
+			return -32
+		case 'Float64':
+			return -64
+		default:
+			throw new Error(`unsupported XISF sample format: ${sampleFormat}`)
+	}
 }
 
 function decompress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, format: XisfCompressionFormat) {
@@ -316,9 +438,9 @@ export class XisfImageReader {
 	) {
 		const { bitpix, location, compression } = image
 		const size = compression?.uncompressedSize ?? location.size
-		this.#buffer = buffer?.subarray(0, size) ?? Buffer.allocUnsafe(size)
+		this.#buffer = xisfBufferView(buffer, size, bitpix)
 		this.#compressed = compression ? Buffer.allocUnsafe(location.size) : undefined
-		this.#data = bitpix === 8 ? new Uint8Array(this.#buffer.buffer) : bitpix === 16 ? new Uint16Array(this.#buffer.buffer) : bitpix === 32 ? new Uint32Array(this.#buffer.buffer) : bitpix === -32 ? new Float32Array(this.#buffer.buffer) : new Float64Array(this.#buffer.buffer)
+		this.#data = xisfDataView(this.#buffer, bitpix)
 	}
 
 	// Reads XISF-format image from source into RGB-interleaved array
@@ -387,9 +509,10 @@ export class XisfImageWriter {
 	) {
 		const { bitpix, geometry } = xisf
 		const { width, height, channels } = geometry
-		this.#buffer = buffer ?? Buffer.allocUnsafe(width * height * channels * bitpixInBytes(bitpix))
-		this.#data = bitpix === 8 ? new Uint8Array(this.#buffer.buffer) : bitpix === 16 ? new Int16Array(this.#buffer.buffer) : bitpix === 32 ? new Int32Array(this.#buffer.buffer) : bitpix === -32 ? new Float32Array(this.#buffer.buffer) : new Float64Array(this.#buffer.buffer)
-		this.#shuffled = !compression || !compression.shuffled ? undefined : Buffer.allocUnsafe(this.#buffer.byteLength)
+		const pixelInBytes = bitpixInBytes(bitpix)
+		this.#buffer = xisfBufferView(buffer, width * height * channels * pixelInBytes, bitpix)
+		this.#data = xisfDataView(this.#buffer, bitpix)
+		this.#shuffled = compression !== false && compression !== undefined && compression.shuffled && pixelInBytes > 1 ? Buffer.allocUnsafe(this.#buffer.byteLength) : undefined
 	}
 
 	// Encodes XISF-format image from RGB-interleaved array into a block buffer
@@ -461,6 +584,8 @@ export class XisfImageWriter {
 
 export function byteShuffle(input: Int8Array | Uint8Array | Buffer, output: Int8Array | Uint8Array | Buffer, itemSize: number) {
 	const inputSize = input.byteLength
+	if (!Number.isInteger(itemSize) || itemSize <= 0) throw new Error('invalid byte shuffle item size')
+	if (output.byteLength < inputSize) throw new Error('byte shuffle output is too small')
 	const numberOfItems = Math.trunc(inputSize / itemSize)
 	const copyLength = inputSize % itemSize
 
@@ -473,16 +598,15 @@ export function byteShuffle(input: Int8Array | Uint8Array | Buffer, output: Int8
 			output[s++] = input[u]
 			u += itemSize
 		}
-
-		if (copyLength > 0) {
-			const begin = numberOfItems * itemSize
-			output.set(input.subarray(begin, begin + copyLength), s)
-		}
 	}
+
+	if (copyLength > 0) output.set(input.subarray(numberOfItems * itemSize, inputSize), s)
 }
 
 export function byteUnshuffle(input: Int8Array | Uint8Array | Buffer, output: Int8Array | Uint8Array | Buffer, itemSize: number) {
 	const inputSize = input.byteLength
+	if (!Number.isInteger(itemSize) || itemSize <= 0) throw new Error('invalid byte shuffle item size')
+	if (output.byteLength < inputSize) throw new Error('byte shuffle output is too small')
 	const numberOfItems = Math.trunc(inputSize / itemSize)
 	const copyLength = inputSize % itemSize
 
@@ -495,10 +619,7 @@ export function byteUnshuffle(input: Int8Array | Uint8Array | Buffer, output: In
 			output[u] = input[s++]
 			u += itemSize
 		}
-
-		if (copyLength > 0) {
-			const offset = numberOfItems * itemSize
-			output.set(input.subarray(s, s + copyLength), offset)
-		}
 	}
+
+	if (copyLength > 0) output.set(input.subarray(s, s + copyLength), numberOfItems * itemSize)
 }
