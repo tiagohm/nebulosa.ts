@@ -40,7 +40,9 @@ export interface TimeExtra {
 	precession?: Mat3
 	precessionNutation?: Mat3
 	pmAngles?: readonly [Angle, Angle, Angle] // sprime, x, y
+	pmAnglesPolarMotion?: PolarMotion
 	pmMatrix?: Mat3
+	pmMatrixPolarMotion?: PolarMotion
 	equationOfOrigins?: Mat3
 }
 
@@ -76,23 +78,38 @@ export type PolarMotion = (time: Time) => [Angle, Angle]
 
 export const NO_POLAR_MOTION: PolarMotion = () => [0, 0]
 
+const UNIX_EPOCH_DAY = 2440588
+const UNIX_EPOCH_FRACTION = -0.5
+const DAYSEC_MS = DAYSEC * 1000
+
+// Returns the polar motion provider used for this computation.
+function polarMotionProvider(time: Time, pm?: PolarMotion): PolarMotion {
+	return pm ?? time.polarMotion ?? iers.xy
+}
+
 // Computes the motion angles (sprime, x, y) from the given time.
 export function pmAngles(time: Time, pm?: PolarMotion): readonly [Angle, Angle, Angle] {
-	if (time.extra?.pmAngles) return time.extra.pmAngles
+	const polarMotion = polarMotionProvider(time, pm)
+	if (time.extra?.pmAngles && time.extra.pmAnglesPolarMotion === polarMotion) return time.extra.pmAngles
 	const t = tt(time)
 	const sprime = eraSp00(t.day, t.fraction)
-	const [x, y] = (pm ?? time.polarMotion ?? iers.xy)(time)
+	const [x, y] = polarMotion(time)
 	const a: [Angle, Angle, Angle] = [sprime, x, y]
-	extra(time).pmAngles = a
+	const e = extra(time)
+	e.pmAngles = a
+	e.pmAnglesPolarMotion = polarMotion
 	return a
 }
 
 // Computes the polar motion matrix from the given time.
 export function pmMatrix(time: Time, pm?: PolarMotion): Mat3 {
-	if (time.extra?.pmMatrix) return time.extra.pmMatrix
-	const [sprime, x, y] = pmAngles(time, pm)
+	const polarMotion = polarMotionProvider(time, pm)
+	if (time.extra?.pmMatrix && time.extra.pmMatrixPolarMotion === polarMotion) return time.extra.pmMatrix
+	const [sprime, x, y] = pmAngles(time, polarMotion)
 	const m = eraPom00(x, y, sprime)
-	extra(time).pmMatrix = m
+	const e = extra(time)
+	e.pmMatrix = m
+	e.pmMatrixPolarMotion = polarMotion
 	return m
 }
 
@@ -123,11 +140,21 @@ export function timeFromEpoch(epoch: number, unit: number, day: number, fraction
 // at 86400 seconds per UTC day.
 export function timeUnix(seconds: number, scale: Timescale = Timescale.UTC, fast: boolean = false) {
 	if (fast) {
-		const day = 2440587 + Math.trunc(seconds / DAYSEC)
-		const fraction = (seconds % DAYSEC) / DAYSEC + 0.5
+		const offsetDays = Math.trunc(seconds / DAYSEC)
+		let day = UNIX_EPOCH_DAY + offsetDays
+		let fraction = (seconds - offsetDays * DAYSEC) / DAYSEC + UNIX_EPOCH_FRACTION
+
+		if (fraction > 0.5) {
+			day++
+			fraction--
+		} else if (fraction < -0.5) {
+			day--
+			fraction++
+		}
+
 		return { day, fraction, scale }
 	} else {
-		return timeFromEpoch(seconds, DAYSEC, 2440588, -0.5, scale)
+		return timeFromEpoch(seconds, DAYSEC, UNIX_EPOCH_DAY, UNIX_EPOCH_FRACTION, scale)
 	}
 }
 
@@ -169,16 +196,12 @@ export function timeGPS(seconds: number) {
 }
 
 // Returns the sum of day and fraction as two 64-bit floats,
-// with the latter guaranteed to be within -0.5 and 0.5 (inclusive on
-// either side, as the integer is rounded to even).
+// with the latter guaranteed to be within -0.5 and 0.5 (inclusive on either side).
 // The arithmetic is all done with exact floating point operations so no
 // precision is lost to rounding error. It is assumed the sum is less
 // than about 1E16, otherwise the remainder will be greater than 1.
 export function timeNormalize(day: number, fraction: number, divisor: number = 0, scale: Timescale = Timescale.UTC): Time {
 	let [sum, err] = twoSum(day, fraction)
-	day = Math.round(sum)
-	let [extra, frac] = twoSum(sum, -day)
-	frac += extra + err
 
 	if (divisor && Number.isFinite(divisor)) {
 		const q = sum / divisor
@@ -187,8 +210,12 @@ export function timeNormalize(day: number, fraction: number, divisor: number = 0
 		;[sum, err] = twoSum(q, (c + (d + err - b)) / divisor)
 	}
 
+	day = Math.round(sum)
+	let [extra, frac] = twoSum(sum, -day)
+	frac += extra + err
+
 	// Our fraction can now have gotten >0.5 or <-0.5, which means we would
-	// loose one bit of precision. So, correct for that.
+	// lose one bit of precision. So, correct for that.
 	day += Math.round(frac)
 	;[extra, frac] = twoSum(sum, -day)
 	fraction = frac + extra + err
@@ -218,12 +245,10 @@ export function timeToUnix(time: Time) {
 	return Math.trunc(timeToUnixMillis(time) / 1000)
 }
 
-const DAYSEC_MS = DAYSEC * 1000
-
 // Converts the time to Unix timestamp in milliseconds.
 export function timeToUnixMillis(time: Time) {
 	const { day, fraction } = utc(time)
-	return Math.trunc(day * DAYSEC_MS + fraction * DAYSEC_MS - 2440587.5 * DAYSEC_MS)
+	return Math.trunc((day - UNIX_EPOCH_DAY) * DAYSEC_MS + (fraction - UNIX_EPOCH_FRACTION) * DAYSEC_MS)
 }
 
 // Converts the time to Julian day.
@@ -281,6 +306,7 @@ export function timeConvert(time: Time, scale: Timescale) {
 	else if (scale === Timescale.TT) return tt(time)
 	else if (scale === Timescale.TCG) return tcg(time)
 	else if (scale === Timescale.TDB) return tdb(time)
+	else if (scale === Timescale.TCB) return tcb(time)
 	return time
 }
 
@@ -413,7 +439,8 @@ export function tcb(time: Time, normalize: boolean = false): Time {
 
 // Computes the Greenwich Apparent Sidereal Time (GAST) at given time.
 export function greenwichApparentSiderealTime(time: Time): Angle {
-	if (time.extra?.gast) return time.extra.gast
+	const cached = time.extra?.gast
+	if (cached !== undefined) return cached
 	const u = ut1(time)
 	const t = tt(time)
 	const gast = eraGst06a(u.day, u.fraction, t.day, t.fraction)
@@ -423,7 +450,8 @@ export function greenwichApparentSiderealTime(time: Time): Angle {
 
 // Computes the Greenwich Mean Sidereal Time (GMST) at given time.
 export function greenwichMeanSiderealTime(time: Time): Angle {
-	if (time.extra?.gmst) return time.extra.gmst
+	const cached = time.extra?.gmst
+	if (cached !== undefined) return cached
 	const u = ut1(time)
 	const t = tt(time)
 	const gmst = eraGmst06(u.day, u.fraction, t.day, t.fraction)
@@ -433,7 +461,8 @@ export function greenwichMeanSiderealTime(time: Time): Angle {
 
 // Computes the Earth rotation angle (IAU 2000 model) at given time.
 export function earthRotationAngle(time: Time): Angle {
-	if (time.extra?.era) return time.extra.era
+	const cached = time.extra?.era
+	if (cached !== undefined) return cached
 	const u = ut1(time)
 	const era = eraEra00(u.day, u.fraction)
 	extra(time).era = era
@@ -442,7 +471,8 @@ export function earthRotationAngle(time: Time): Angle {
 
 // Computes the mean obliquity of the ecliptic.
 export function meanObliquity(time: Time): Angle {
-	if (time.extra?.meanObliquity) return time.extra.meanObliquity
+	const cached = time.extra?.meanObliquity
+	if (cached !== undefined) return cached
 	const t = tt(time)
 	const meanObliquity = eraObl06(t.day, t.fraction)
 	extra(time).meanObliquity = meanObliquity
@@ -504,7 +534,8 @@ export function gcrsToItrsRotationMatrix(time: Time) {
 
 // Computes UT1 - UTC in seconds at time.
 export const dut1: TimeDelta = (time) => {
-	if (time.extra?.ut1MinusUtc) return time.extra.ut1MinusUtc
+	const cached = time.extra?.ut1MinusUtc
+	if (cached !== undefined) return cached
 
 	const ut1MinusUtc = time.dut1 ?? iers.dut1
 
@@ -530,7 +561,8 @@ export const tdbMinusTt: TimeDelta = (time) => {
 	const { day, fraction, scale } = time
 
 	if (scale === Timescale.TDB || scale === Timescale.TT) {
-		if (time.extra?.tdbMinusTt) return time.extra.tdbMinusTt
+		const cached = time.extra?.tdbMinusTt
+		if (cached !== undefined) return cached
 
 		// First go from the current input time (which is either
 		// TDB or TT) to an approximate UT1. Since TT and TDB are
@@ -584,7 +616,8 @@ export const tdbMinusTtByFairheadAndBretagnon1990: TimeDelta = (time) => {
 
 // Computes TAI - UTC in seconds at time.
 export const taiMinusUtc: TimeDelta = (time) => {
-	if (time.extra?.taiMinusUtc) return time.extra.taiMinusUtc
+	const cached = time.extra?.taiMinusUtc
+	if (cached !== undefined) return cached
 	const cal = eraJdToCal(time.day, time.fraction)
 	const dt = eraDat(cal[0], cal[1], cal[2], cal[3])
 	extra(time).taiMinusUtc = dt
@@ -593,7 +626,8 @@ export const taiMinusUtc: TimeDelta = (time) => {
 
 // Computes UT1 - TAI in seconds at time.
 export const ut1MinusTai: TimeDelta = (time) => {
-	if (time.extra?.ut1MinusTai) return time.extra.ut1MinusTai
+	const cached = time.extra?.ut1MinusTai
+	if (cached !== undefined) return cached
 	const cal = eraJdToCal(time.day, time.fraction)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
 	const ut1MinusUtc = (time.dut1 ?? dut1)(time)

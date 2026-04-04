@@ -4,7 +4,7 @@ import { DAYSEC, J2000 } from '../src/constants'
 import { meter } from '../src/distance'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // biome-ignore format: too long
-import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToFractionOfYear, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/time'
+import { dut1, earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToFractionOfYear, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/time'
 import { downloadPerTag } from './download'
 
 await downloadPerTag('time')
@@ -54,17 +54,23 @@ test('time unix', () => {
 	expect(t.scale).toBe(Timescale.TAI)
 
 	t = timeUnix(0, undefined, true)
-	expect(t.day).toBe(2440587)
-	expect(t.fraction).toBe(0.5)
+	expect(t.day).toBe(2440588)
+	expect(t.fraction).toBe(-0.5)
 	expect(t.scale).toBe(Timescale.UTC)
 
 	t = timeUnix(946684800, Timescale.TAI, true)
-	expect(toJulianDay(t)).toBe(J2000 - 0.5)
+	expect(t.day).toBe(J2000)
+	expect(t.fraction).toBe(-0.5)
 	expect(t.scale).toBe(Timescale.TAI)
 })
 
 test('time unix fast mode must match normal mode', () => {
-	// expect(toJulianDay(timeUnix(1692447927.8967359999953146, undefined, true))).toBeCloseTo(toJulianDay(timeUnix(1692447927.8967359999953146, undefined, false)), 12)
+	for (const seconds of [0, 86399.75, 1692447927.896736, -0.001, -86400.5]) {
+		const precise = timeUnix(seconds, Timescale.UTC, false)
+		const fast = timeUnix(seconds, Timescale.UTC, true)
+		expect(fast).toMatchTime(precise, 1e-11)
+		expect(Math.abs(fast.fraction)).toBeLessThanOrEqual(0.5)
+	}
 })
 
 test('time MJD', () => {
@@ -131,13 +137,18 @@ test('time gregorian year', () => {
 
 test('time GPS', () => {
 	const t = timeGPS(630720013)
-	expect(toJulianDay(t)).toBe(J2000 - 0.4996296167373657)
+	expect(toJulianDay(t)).toBeCloseTo(J2000 - 0.4996296296296296, 14)
 	expect(t.scale).toBe(Timescale.TAI)
 })
 
 test('subtract', () => {
 	const dt = timeSubtract(timeYMDHMS(2020, 1, 1, 12, 0, 0), timeYMDHMS(2020, 1, 1, 10, 0, 0))
 	expect(dt).toBeCloseTo((2 * 60 * 60) / DAYSEC, 16)
+})
+
+test('time convert to tcb', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TT)
+	expect(timeConvert(t, Timescale.TCB)).toMatchTime(tcb(t))
 })
 
 test('to date', () => {
@@ -293,6 +304,10 @@ test('tcb', () => {
 })
 
 test('normalize', () => {
+	const epochOffset = timeNormalize(946684800, 0, DAYSEC)
+	expect(epochOffset.day).toBe(10957)
+	expect(epochOffset.fraction).toBe(0)
+
 	const t = timeYMDHMS(2020, 10, 7, 0, 0, 0, Timescale.TCB)
 
 	const a = ut1(t, true)
@@ -379,6 +394,37 @@ test('extra', () => {
 		expect(t.extra?.tdb).toBe(f)
 	}
 }, 200)
+
+test('polar motion override does not reuse cached default values', () => {
+	const customPolarMotion: PolarMotion = (_time: Time) => [1, 2]
+
+	const a = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	pmAngles(a)
+	const actualAngles = pmAngles(a, customPolarMotion)
+	const expectedAngles = pmAngles(timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC), customPolarMotion)
+	expect(actualAngles[0]).toBeCloseTo(expectedAngles[0], 16)
+	expect(actualAngles[1]).toBeCloseTo(expectedAngles[1], 16)
+	expect(actualAngles[2]).toBeCloseTo(expectedAngles[2], 16)
+
+	const b = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	pmMatrix(b)
+	const actualMatrix = pmMatrix(b, customPolarMotion)
+	const expectedMatrix = pmMatrix(timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC), customPolarMotion)
+	for (let i = 0; i < actualMatrix.length; i++) expect(actualMatrix[i]).toBeCloseTo(expectedMatrix[i], 16)
+})
+
+test('zero-valued DUT1 is cached', () => {
+	let callCount = 0
+	const t = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
+	t.dut1 = (_time: Time) => {
+		callCount++
+		return 0
+	}
+
+	expect(dut1(t)).toBe(0)
+	expect(dut1(t)).toBe(0)
+	expect(callCount).toBe(1)
+})
 
 test('tdb minus tt by Fairhead and Bretagnon 1990', () => {
 	expect(tdbMinusTtByFairheadAndBretagnon1990(time(2448031, 0.5, Timescale.TDB))).toBeCloseTo(0.0011585185926349208, 16)
