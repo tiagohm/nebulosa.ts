@@ -184,14 +184,22 @@ export enum StellariumObjectType {
 
 // https://github.com/Stellarium/stellarium/blob/master/nebulae/default/catalog.dat
 
-export async function* readCatalogDat(source: Source & Seekable): AsyncIterable<StellariumCatalogEntry> {
-	const buffer = Buffer.allocUnsafe(1024 * 32)
+const STELLARIUM_CATALOG_BUFFER_SIZE = 64 * 1024
+const STELLARIUM_CATALOG_REFILL_THRESHOLD = STELLARIUM_CATALOG_BUFFER_SIZE - 1024
+
+export async function* readCatalogDat(source: Source): AsyncIterable<StellariumCatalogEntry> {
+	const buffer = Buffer.allocUnsafe(STELLARIUM_CATALOG_BUFFER_SIZE)
 	let position = 0
 	let size = 0
 
+	// Refill the parser buffer while preserving unread bytes to avoid overlapping source reads.
 	async function read() {
+		const remaining = size - position
+
+		if (remaining > 0) buffer.copy(buffer, 0, position, size)
+
 		position = 0
-		size = await source.read(buffer)
+		size = remaining + (await source.read(buffer, remaining, buffer.byteLength - remaining))
 		return size > 0
 	}
 
@@ -227,8 +235,7 @@ export async function* readCatalogDat(source: Source & Seekable): AsyncIterable<
 	readText() // edition
 
 	while (true) {
-		if (position > 1024 * 31) {
-			source.seek(source.position - size + position)
+		if (position > STELLARIUM_CATALOG_REFILL_THRESHOLD) {
 			if (!(await read())) break
 		} else if (position >= size) {
 			break
@@ -292,31 +299,34 @@ export interface StellariumNameEntry {
 }
 
 const NAME_FORMAT_REGEX = /^_\("([^"]+)"\).*$/
+const STELLARIUM_NAMES_BUFFER_SIZE = 1024
+const STELLARIUM_NAMES_REFILL_THRESHOLD = 300
 
-export async function* readNamesDat(source: Source & Seekable) {
-	const buffer = Buffer.allocUnsafe(1024)
+export async function* readNamesDat(source: Source) {
+	const buffer = Buffer.allocUnsafe(STELLARIUM_NAMES_BUFFER_SIZE)
 	let position = 0
 	let size = 0
 
 	async function read() {
+		const remaining = size - position
+
+		if (remaining > 0) buffer.copy(buffer, 0, position, size)
+
 		position = 0
-		size = await source.read(buffer)
+		size = remaining + (await source.read(buffer, remaining, buffer.byteLength - remaining))
+		return size > 0
 	}
 
 	async function checkAvailableSpaceToRead(n: number) {
 		if (position > size - n) {
-			source.seek(source.position - size + position)
-
-			await read()
-
-			if (size === 0) return false
+			if (!(await read())) return false
 		}
 
 		return true
 	}
 
 	async function readLine() {
-		if (!(await checkAvailableSpaceToRead(300))) return false
+		if (!(await checkAvailableSpaceToRead(STELLARIUM_NAMES_REFILL_THRESHOLD))) return false
 
 		const index = buffer.indexOf(0x0a, position)
 
