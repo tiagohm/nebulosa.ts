@@ -4,7 +4,7 @@ import type { Distance } from './distance'
 import { eraGc2Gde, eraSp00 } from './erfa'
 import type { Frame } from './frame'
 import { type Mat3, type MutMat3, matFlipX, matMinus, matMul, matMulScalar, matMulVec, matRotX, matRotY, matRotZ } from './mat3'
-import { gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmAngles, type Time, tt } from './time'
+import { gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmAngles, type Time, timeShift, tt } from './time'
 import type { Vec3 } from './vec3'
 
 // An Earth ellipsoid that maps latitudes and longitudes to |xyz| positions.
@@ -73,7 +73,7 @@ export function localSiderealTime(time: Time, location: GeographicCoordinate | A
 		const [sprime, xp, yp] = pmAngles(time)
 		// The order of operation must be reversed in relation to astropy?
 		const r = matRotZ(longitude, matRotX(-yp, matRotY(-xp, matRotZ(theta + sprime))))
-		return Math.atan2(r[1], r[0])
+		return normalizeAngle(Math.atan2(r[1], r[0]))
 	} else if (tio === 'sp') {
 		const t = tt(time)
 		const sprime = eraSp00(t.day, t.fraction)
@@ -90,15 +90,16 @@ export function gcrsRotationAt(location: GeographicPosition, time: Time) {
 	return matMul(rLatLon(location), m, m)
 }
 
+const CENTRAL_DIFFERENCE_SCALE = 0.5 / ONE_SECOND
 const ANGULAR_VELOCITY_SCALE = 0.5
 
 function instantaneousEarthAngularVelocity(time: Time): Vec3 {
 	const r = gcrsToItrsRotationMatrix(time)
-	const rp = gcrsToItrsRotationMatrix({ day: time.day, fraction: time.fraction + ONE_SECOND, scale: time.scale })
-	const rm = gcrsToItrsRotationMatrix({ day: time.day, fraction: time.fraction - ONE_SECOND, scale: time.scale })
+	const rp = gcrsToItrsRotationMatrix(timeShift(time, ONE_SECOND))
+	const rm = gcrsToItrsRotationMatrix(timeShift(time, -ONE_SECOND))
 
 	const d = matMinus(rp, rm, rp as MutMat3)
-	matMulScalar(d, ANGULAR_VELOCITY_SCALE, d)
+	matMulScalar(d, CENTRAL_DIFFERENCE_SCALE, d)
 
 	// w = dR/dt * R^T
 	const w12 = d[3] * r[6] + d[4] * r[7] + d[5] * r[8]
@@ -108,7 +109,7 @@ function instantaneousEarthAngularVelocity(time: Time): Vec3 {
 	const w01 = d[0] * r[3] + d[1] * r[4] + d[2] * r[5]
 	const w10 = d[3] * r[0] + d[4] * r[1] + d[5] * r[2]
 
-	return [(w21 - w12) * ANGULAR_VELOCITY_SCALE, (w02 - w20) * ANGULAR_VELOCITY_SCALE, (w10 - w01) * ANGULAR_VELOCITY_SCALE]
+	return [(w12 - w21) * ANGULAR_VELOCITY_SCALE, (w20 - w02) * ANGULAR_VELOCITY_SCALE, (w01 - w10) * ANGULAR_VELOCITY_SCALE]
 }
 
 // The Geocentric Celestial Reference System (GCRS) at location.
@@ -116,7 +117,7 @@ export function gcrs(location: GeographicPosition): Frame {
 	return {
 		rotationAt: (time) => gcrsRotationAt(location, time),
 		dRdtTimesRtAt: (time) => {
-			const [x, y, z] = matMulVec(rLat(location), instantaneousEarthAngularVelocity(time))
+			const [x, y, z] = matMulVec(rLatLon(location), instantaneousEarthAngularVelocity(time))
 			return [0, -z, y, z, 0, -x, -y, x, 0]
 		},
 	}
@@ -131,22 +132,26 @@ export function polarRadius(ellipsoid: Ellipsoid): Distance {
 // Term needed for calculation of parallax effect.
 // Taken from from PAWC, p.66.
 export function rhoCosPhi(location: GeographicPosition) {
-	if (location.rhoCosPhi) return location.rhoCosPhi
+	const cached = location.rhoCosPhi
+	if (cached !== undefined) return cached
 	const { latitude, elevation, ellipsoid } = location
-	const u = Math.atan(0.99664719 * Math.tan(latitude))
-	const r = ELLIPSOID_PARAMETERS[ellipsoid].radius
-	location.rhoCosPhi = Math.cos(u) + (elevation / r) * Math.cos(latitude)
+	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
+	const oneMinusFlattening = 1 - flattening
+	const u = Math.atan(oneMinusFlattening * Math.tan(latitude))
+	location.rhoCosPhi = Math.cos(u) + (elevation / radius) * Math.cos(latitude)
 	return location.rhoCosPhi
 }
 
 // Term needed for calculation of parallax effect.
 // Taken from from PAWC, p.66.
 export function rhoSinPhi(location: GeographicPosition) {
-	if (location.rhoSinPhi) return location.rhoSinPhi
+	const cached = location.rhoSinPhi
+	if (cached !== undefined) return cached
 	const { latitude, elevation, ellipsoid } = location
-	const u = Math.atan(0.99664719 * Math.tan(latitude))
-	const r = ELLIPSOID_PARAMETERS[ellipsoid].radius
-	location.rhoSinPhi = 0.99664719 * Math.sin(u) + (elevation / r) * Math.sin(latitude)
+	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
+	const oneMinusFlattening = 1 - flattening
+	const u = Math.atan(oneMinusFlattening * Math.tan(latitude))
+	location.rhoSinPhi = oneMinusFlattening * Math.sin(u) + (elevation / radius) * Math.sin(latitude)
 	return location.rhoSinPhi
 }
 
@@ -155,22 +160,8 @@ export function subpoint(geocentric: Vec3, time: Time, ellipsoid: Ellipsoid = El
 	const itrs = matMulVec(gcrsToItrsRotationMatrix(time), geocentric)
 	const [x, y, z] = itrs
 
-	const r = Math.hypot(x, y)
-	const longitude = normalizePI(Math.atan2(y, x))
-	let latitude = Math.atan2(z, r)
-
 	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
-	const e2 = 2 * flattening - flattening * flattening
-	let c = 0
+	const [longitude, latitude, elevation] = eraGc2Gde(radius, flattening, x, y, z)
 
-	for (let i = 0; i < 3; i++) {
-		const sLat = Math.sin(latitude)
-		const sLatE2 = sLat * e2
-		c = radius / Math.sqrt(1 - sLatE2 * sLat)
-		latitude = Math.atan2(z + c * sLatE2, r)
-	}
-
-	const elevation = r / Math.cos(latitude) - radius * c
-
-	return { longitude, latitude, elevation: elevation * radius, ellipsoid, itrs }
+	return { longitude: normalizePI(longitude), latitude, elevation, ellipsoid, itrs }
 }

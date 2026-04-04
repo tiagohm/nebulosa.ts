@@ -265,6 +265,11 @@ export function timeToFractionOfYear(time: Time) {
 	return year + (time.day - jd + time.fraction) / DAYSPERJY
 }
 
+// Clones a nearby sample instant while preserving custom Earth-orientation providers.
+export function timeShift(time: Time, fraction: number): Time {
+	return { day: time.day, fraction: time.fraction + fraction, scale: time.scale, polarMotion: time.polarMotion, dut1: time.dut1, tdbMinusTt: time.tdbMinusTt, ut1MinusTai: time.ut1MinusTai, location: time.location }
+}
+
 // Caches the timescale for target based on source.
 function timescale(target: Time, source: Time) {
 	const e = extra(target, source.extra)

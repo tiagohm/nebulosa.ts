@@ -1,10 +1,12 @@
 import { expect, test } from 'bun:test'
 import { deg, formatDEC, hour, toHour } from '../src/angle'
+import { ONE_SECOND } from '../src/constants'
 import { meter } from '../src/distance'
 import { eraS2c } from '../src/erfa'
-import { Ellipsoid, gcrs, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi, subpoint } from '../src/location'
-import { matTransposeMul } from '../src/mat3'
-import { Timescale, timeYMDHMS } from '../src/time'
+import { itrs } from '../src/itrs'
+import { Ellipsoid, gcrs, gcrsRotationAt, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi, subpoint } from '../src/location'
+import { matMinus, matMulScalar, matMulTranspose, matTransposeMul, matTransposeMulVec } from '../src/mat3'
+import { gcrsToItrsRotationMatrix, Timescale, timeYMDHMS } from '../src/time'
 import { downloadPerTag } from './download'
 
 await downloadPerTag('location')
@@ -18,6 +20,16 @@ test('lst', () => {
 	expect(toHour(localSiderealTime(t, p, true, 'sp'))).toBeCloseTo(10.10634524004349899, 13)
 	expect(toHour(localSiderealTime(t, p, false, true))).toBeCloseTo(10.106038262690191232, 15)
 	expect(toHour(localSiderealTime(t, p, true, true))).toBeCloseTo(10.106345240042289291, 14)
+})
+
+test('lst with tio correction is normalized', () => {
+	const t = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
+	const p = geodeticLocation(3, 0, 0)
+	const lst = localSiderealTime(t, p, false, true)
+
+	expect(lst).toBeGreaterThanOrEqual(0)
+	expect(lst).toBeLessThan(2 * Math.PI)
+	expect(lst).toBeCloseTo(localSiderealTime(t, p, false, 'sp'), 10)
 })
 
 test('geocentric', () => {
@@ -39,7 +51,7 @@ test('rhoCosPhi', () => {
 
 test('rhoSinPhi', () => {
 	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
-	expect(rhoSinPhi(p)).toBeCloseTo(-0.388368434808665, 8)
+	expect(rhoSinPhi(p)).toBeCloseTo(-0.3883684278543266, 12)
 })
 
 test('subpoint', () => {
@@ -48,6 +60,17 @@ test('subpoint', () => {
 
 	expect(formatDEC(p.latitude)).toBe('+24 10 33.80')
 	expect(formatDEC(p.longitude)).toBe('+123 16 53.90')
+})
+
+test('subpoint preserves geodetic elevation for finite vectors', () => {
+	const t = timeYMDHMS(2020, 1, 3, 12, 45, 0, Timescale.UTC)
+	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
+	const geocentric = matTransposeMulVec(gcrsToItrsRotationMatrix(t), itrs(p))
+	const q = subpoint(geocentric, t)
+
+	expect(q.longitude).toBeCloseTo(p.longitude, 14)
+	expect(q.latitude).toBeCloseTo(p.latitude, 14)
+	expect(q.elevation).toBeCloseTo(p.elevation, 19)
 })
 
 test('gcrs dRdtTimesRtAt is skew-symmetric', () => {
@@ -69,6 +92,19 @@ test('gcrs dRdtTimesRtAt varies with time', () => {
 	const b = gcrs(p).dRdtTimesRtAt!(timeYMDHMS(2020, 7, 1, 0, 0, 0, Timescale.UTC))
 
 	expect(a).not.toEqual(b)
+})
+
+test('gcrs dRdtTimesRtAt matches finite difference of rotationAt', () => {
+	const p = geodeticLocation(1, 0.5, 0)
+	const t = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
+	const frame = gcrs(p)
+	const actual = frame.dRdtTimesRtAt!(t)
+	const r = gcrsRotationAt(p, t)
+	const rp = gcrsRotationAt(p, { day: t.day, fraction: t.fraction + ONE_SECOND, scale: t.scale })
+	const rm = gcrsRotationAt(p, { day: t.day, fraction: t.fraction - ONE_SECOND, scale: t.scale })
+	const expected = matMulTranspose(matMulScalar(matMinus(rp, rm), 0.5 / ONE_SECOND), r)
+
+	for (let i = 0; i < 9; i++) expect(actual[i]).toBeCloseTo(expected[i], 8)
 })
 
 test('gcrs rotationAt is orthonormal', () => {
