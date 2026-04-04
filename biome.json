@@ -4,11 +4,6 @@
 		"includes": ["main.ts", "src/**", "tests/**", "examples/**", "!src/*.data.ts"],
 		"ignoreUnknown": true
 	},
-	"vcs": {
-		"enabled": true,
-		"clientKind": "git",
-		"useIgnoreFile": true
-	},
 	"formatter": {
 		"enabled": true,
 		"formatWithErrors": false,
