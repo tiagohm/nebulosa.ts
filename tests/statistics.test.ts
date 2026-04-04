@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { Histogram } from '../src/statistics'
 
+// Verifies all cached histogram statistics against expected values.
 function histogram(data: number[], mode: readonly [number, number], count: readonly [number, number], mean: number, variance: number, stdev: number, median: number) {
 	const hist = new Histogram(data, 0)
 
@@ -23,4 +24,33 @@ test('histogram', () => {
 test('histogram maximum returns the last populated bin', () => {
 	const hist = new Histogram([2, 0, 5], 2)
 	expect(hist.maximum).toEqual([1, 5])
+})
+
+test('empty histogram statistics fall back to zero', () => {
+	const hist = new Histogram([], 0)
+	expect(hist.mode).toEqual([0, 0])
+	expect(hist.count).toEqual([0, 0])
+	expect(hist.mean).toBe(0)
+	expect(hist.variance).toBe(0)
+	expect(hist.standardDeviation).toBe(0)
+	expect(hist.median).toBe(0)
+	expect(hist.minimum).toEqual([0, 0])
+	expect(hist.maximum).toEqual([0, 0])
+
+	hist.reset()
+
+	expect(hist.mean).toBe(0)
+	expect(hist.median).toBe(0)
+})
+
+test('all-zero histogram statistics fall back to zero', () => {
+	const hist = new Histogram([0, 0, 0], 2)
+	expect(hist.mode).toEqual([0, 0])
+	expect(hist.count).toEqual([0, 0])
+	expect(hist.mean).toBe(0)
+	expect(hist.variance).toBe(0)
+	expect(hist.standardDeviation).toBe(0)
+	expect(hist.median).toBe(0)
+	expect(hist.minimum).toEqual([0, 0])
+	expect(hist.maximum).toEqual([0, 0])
 })
