@@ -1,8 +1,10 @@
 import { spline } from './spline'
 
+// Evaluates the Stephenson and Morrison 2004 parabola outside the historical fit interval.
 export const parabolaOfStephensonMorrison2004 = spline(1820, 1920, [0, 32, 0, -20])
 
 // https://doi.org/10.1098/rspa.2020.0776
+// Evaluates the Stephenson, Morrison and Hohenkerk 2016 parabola outside the spline interval.
 export const parabolaOfStephensonMorrisonHohenkerk2016 = spline(1825, 1925, [0, 31.4, 0, -10])
 
 const S15_LOWER = [
@@ -30,10 +32,15 @@ const S15_D = [
 	33.621, 35.093, 37.956, 40.951, 44.244, 47.291, 50.361, 52.936, 54.984, 56.373, 58.453, 60.678, 62.898, 64.083, 64.553, 65.197, 66.061, 66.92, 68.109,
 ] as const
 
+const S15_MIN_YEAR = S15_LOWER[0]
+const S15_MAX_YEAR = S15_UPPER[S15_UPPER.length - 1]
+const S15_LAST_INDEX = S15_LOWER.length - 1
+
+// Selects the S15 cubic spline segment that contains the requested decimal year.
 export function s15(year: number) {
 	let i = 0
 	while (i < S15_LOWER.length && year >= S15_LOWER[i]) i++
-	i = Math.max(0, Math.min(i - 1, S15_LOWER.length))
+	i = Math.max(0, Math.min(i - 1, S15_LAST_INDEX))
 
 	const c = new Float64Array(4)
 	c[0] = S15_A[i]
