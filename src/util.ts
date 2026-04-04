@@ -10,57 +10,62 @@ export const STANDARD_DEVIATION_SCALE = 1.482602218505602
 
 // Checks if the input is a number array.
 export function isNumberArray(a: unknown): a is NumberArray {
-	return (Array.isArray(a) && (!a.length || typeof a[0] === 'number')) || ArrayBuffer.isView(a)
+	if (Array.isArray(a)) return typeof a[0] === 'number'
+	return a instanceof Float64Array || a instanceof Float32Array || a instanceof Float16Array || a instanceof Int32Array || a instanceof Uint32Array || a instanceof Int16Array || a instanceof Uint16Array || a instanceof Int8Array || a instanceof Uint8Array || a instanceof Uint8ClampedArray
 }
 
 // Finds the minimum value  and its index in an numeric array.
 // If the array is empty, it returns [NaN, -1].
 export function minOf(a: Readonly<NumberArray>): readonly [number, number] {
-	if (a.length === 0) return [NaN, -1]
-	if (a.length === 1) return [a[0], 0]
-
-	const ret: [number, number] = [Number.MAX_VALUE, -1]
 	const n = a.length
+	if (n === 0) return [NaN, -1]
 
-	for (let i = 0; i < n; i++) {
-		if (a[i] < ret[0]) {
-			ret[0] = a[i]
-			ret[1] = i
+	let value = a[0]
+	let index = Number.isNaN(value) ? -1 : 0
+
+	for (let i = 1; i < n; i++) {
+		const current = a[i]
+
+		if (current < value || (index < 0 && !Number.isNaN(current))) {
+			value = current
+			index = i
 		}
 	}
 
-	return ret
+	return index < 0 ? [NaN, -1] : [value, index]
 }
 
 // Finds the maximum value and its index in an numeric array.
 // If the array is empty, it returns [NaN, -1].
 export function maxOf(a: Readonly<NumberArray>): readonly [number, number] {
-	if (a.length === 0) return [NaN, -1]
-	if (a.length === 1) return [a[0], 0]
-
-	const ret: [number, number] = [Number.MIN_VALUE, -1]
 	const n = a.length
+	if (n === 0) return [NaN, -1]
 
-	for (let i = 0; i < n; i++) {
-		if (a[i] > ret[0]) {
-			ret[0] = a[i]
-			ret[1] = i
+	let value = a[0]
+	let index = Number.isNaN(value) ? -1 : 0
+
+	for (let i = 1; i < n; i++) {
+		const current = a[i]
+
+		if (current > value || (index < 0 && !Number.isNaN(current))) {
+			value = current
+			index = i
 		}
 	}
 
-	return ret
+	return index < 0 ? [NaN, -1] : [value, index]
 }
 
 // Computes the mean value of an numeric array.
 // If the array is empty, it returns NaN.
 export function meanOf(a: Readonly<NumberArray>) {
-	if (a.length === 0) return NaN
-	if (a.length === 1) return a[0]
-
-	let s = 0
 	const n = a.length
-	for (let i = 0; i < n; i++) s += a[i]
-	return s / a.length
+	if (n === 0) return NaN
+	if (n === 1) return a[0]
+
+	let sum = 0
+	for (let i = 0; i < n; i++) sum += a[i]
+	return sum / n
 }
 
 // Computes the median value of a sorted numeric array.
@@ -70,7 +75,7 @@ export function medianOf(a: Readonly<NumberArray>, count: number = a.length) {
 	else if (count === 2) return (a[0] + a[1]) * 0.5
 	else if (count === 3) return a[1]
 
-	const mid = count >> 1
+	const mid = count >>> 1
 	return count % 2 === 1 ? a[mid] : (a[mid - 1] + a[mid]) * 0.5
 }
 
@@ -82,22 +87,32 @@ export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: numb
 	return normalized ? STANDARD_DEVIATION_SCALE * mad : mad
 }
 
-export function standardDeviationOf(a: Float64Array) {
-	const mean = meanOf(a)
-	let sum = 0
+// Computes the population standard deviation using a single-pass recurrence.
+export function standardDeviationOf(a: Readonly<NumberArray>) {
+	const n = a.length
+	if (n === 0) return NaN
 
-	for (let i = 0; i < a.length; i++) {
-		const delta = a[i] - mean
-		sum += delta * delta
+	let mean = 0
+	let sumSquared = 0
+
+	for (let i = 0; i < n; i++) {
+		const value = a[i]
+		const delta = value - mean
+		mean += delta / (i + 1)
+		sumSquared += delta * (value - mean)
 	}
 
-	return Math.sqrt(sum / a.length)
+	return Math.sqrt(sumSquared / n)
 }
 
 // Computes a percentile from a sorted numeric array.
 export function percentileOf(values: Readonly<NumberArray>, percentile: number) {
-	if (values.length === 0) return 0
-	const index = percentile * (values.length - 1)
+	const n = values.length
+	if (n === 0) return NaN
+	if (n === 1 || percentile <= 0) return values[0]
+	if (percentile >= 1) return values[n - 1]
+
+	const index = percentile * (n - 1)
 	const lower = Math.floor(index)
 	const upper = Math.ceil(index)
 	const t = index - lower
@@ -106,33 +121,35 @@ export function percentileOf(values: Readonly<NumberArray>, percentile: number) 
 
 // Computes the root-mean-square of a numeric array.
 export function rmsOf(values: Readonly<NumberArray>) {
-	if (values.length === 0) return 0
+	const n = values.length
+	if (n === 0) return 0
 
 	let sumSquares = 0
 
-	for (let i = 0; i < values.length; i++) {
-		sumSquares += values[i] * values[i]
+	for (let i = 0; i < n; i++) {
+		const value = values[i]
+		sumSquares += value * value
 	}
 
-	return Math.sqrt(sumSquares / values.length)
+	return Math.sqrt(sumSquares / n)
 }
 
 // Searches in the specified input using the range [from, to) for the specified key.
 export function binarySearch(a: Readonly<NumberArray>, key: number, { from = 0, to = a.length, positive }: BinarySearchOptions = {}) {
-	to--
+	let right = to - 1
 
-	while (from <= to) {
-		const index = (from + to) >>> 1
+	while (from <= right) {
+		const index = from + ((right - from) >>> 1)
 		const value = a[index]
 
 		if (value < key) {
 			from = index + 1
-		} else if (value > key) {
-			to = index - 1
+		} else if (value > key || Number.isNaN(value)) {
+			right = index - 1
 		} else if (value === key) {
 			return index
 		} else {
-			to = index - 1
+			right = index - 1
 		}
 	}
 
@@ -143,18 +160,20 @@ export type BinarySearchComparator<T> = (value: T) => number
 
 // Searches in the specified input using the range [from, to) by the specified comparator.
 export function binarySearchWithComparator<T>(a: readonly T[], comparator: BinarySearchComparator<T>, { from = 0, to = a.length, positive }: BinarySearchOptions = {}) {
-	to--
+	let right = to - 1
 
-	while (from <= to) {
-		const index = (from + to) >>> 1
+	while (from <= right) {
+		const index = from + ((right - from) >>> 1)
 		const cmp = comparator(a[index])
 
 		if (cmp < 0) {
 			from = index + 1
-		} else if (cmp > 0) {
-			to = index - 1
-		} else {
+		} else if (cmp > 0 || Number.isNaN(cmp)) {
+			right = index - 1
+		} else if (cmp === 0) {
 			return index
+		} else {
+			right = index - 1
 		}
 	}
 
@@ -168,10 +187,15 @@ export function angularSizeOfPixel(focalLength: number, pixelSize: number) {
 
 // Sorts numeric identifiers in ascending order.
 export function NumberComparator<T extends number | bigint>(left: T, right: T) {
-	return left - right
+	return left < right ? -1 : left > right ? 1 : 0
 }
 
 // Sorts numeric identifiers in descending order.
 export function NumberComparatorDescensing<T extends number | bigint>(left: T, right: T) {
-	return right - left
+	return left < right ? 1 : left > right ? -1 : 0
+}
+
+// Sorts numeric identifiers in descending order.
+export function NumberComparatorDescending<T extends number | bigint>(left: T, right: T) {
+	return NumberComparatorDescensing(left, right)
 }
