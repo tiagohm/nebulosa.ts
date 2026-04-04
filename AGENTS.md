@@ -25,7 +25,7 @@ Agents must respect all constraints below when generating or modifying code.
 * Prefer TypedArrays for large datasets.
 * Do not replace optimized loops with functional abstractions if performance degrades.
 * Avoid use `any`, use `unknown` if necessary.
-* Functions MUST NOT declare explicit return types for primitive types or tuples. Prefer returning as const for tuples. 
+* Functions MUST NOT declare explicit return types for primitive types or tuples, except for typed primitive types. Prefer returning as const for tuples. 
 * Functions MUST declare explicit return types for structured types.
 * Prefer `interface` over `type`. Use readonly tuples instead if appropriate.
 * Angle units are always in radians, otherwise must be documented.
