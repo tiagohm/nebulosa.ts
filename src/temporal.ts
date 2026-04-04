@@ -1,3 +1,4 @@
+import { pmod } from './math'
 import { type Time, timeToUnixMillis } from './time'
 
 // gv-IM, mg-MG, sn-ZW, zu-ZA
@@ -13,6 +14,7 @@ const DAYS = 86400000
 const HOURS = 3600000
 const MINUTES = 60000
 const SECONDS = 1000
+const WEEK = DAYS * 7
 
 export type Temporal = number
 
@@ -22,28 +24,31 @@ export type TemporalUnitShort = 'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'mo' | 'y'
 
 export type TemporalDate = [number, number, number, number, number, number, number]
 
+// Returns the current timestamp in milliseconds.
 export function temporalNow(): Temporal {
 	return Date.now()
 }
 
+// Converts Unix seconds to milliseconds.
 export function temporalUnix(timestamp: number): Temporal {
 	return timestamp * 1000
 }
 
+// Builds a UTC timestamp from calendar fields.
 export function temporalFromDate(year: number, month: number = 1, day: number = 1, hour: number = 0, minute: number = 0, second: number = 0, millisecond: number = 0): Temporal {
 	const days = daysFromEpochToYear(year) + DAYS_UNTIL_MONTH[month - 1] + (month > 2 && isLeapYear(year) ? 1 : 0) + (day - 1)
 	return days * DAYS + hour * HOURS + minute * MINUTES + second * SECONDS + millisecond
 }
 
-export function temporalToDate(temporal: Temporal): TemporalDate {
-	let day = Math.floor(temporal / DAYS)
-	let time = temporal % DAYS
+// Splits a timestamp into its UTC day index and milliseconds inside the day.
+function splitTemporalDay(temporal: Temporal) {
+	const day = Math.floor(temporal / DAYS)
+	return [day, temporal - day * DAYS] as const
+}
 
-	if (time < 0) {
-		const offset = Math.ceil(Math.abs(time) / DAYS)
-		time += offset * DAYS
-		day -= offset
-	}
+// Converts a UTC timestamp to calendar fields.
+export function temporalToDate(temporal: Temporal) {
+	let [day, time] = splitTemporalDay(temporal)
 
 	let year = 1970 + Math.floor(day / 365.2425)
 	let daysUpToYear = daysFromEpochToYear(year)
@@ -74,8 +79,6 @@ export function temporalToDate(temporal: Temporal): TemporalDate {
 
 	day++
 
-	time = Math.abs(time)
-
 	const hour = Math.floor(time / HOURS)
 	time %= HOURS
 	const minute = Math.floor(time / MINUTES)
@@ -83,44 +86,21 @@ export function temporalToDate(temporal: Temporal): TemporalDate {
 	const second = Math.floor(time / SECONDS)
 	const millisecond = time % SECONDS
 
-	return [year, month, day, hour, minute, second, millisecond]
+	return [year, month, day, hour, minute, second, millisecond] as const
 }
 
+// Converts a Time object to Temporal milliseconds.
 export function temporalFromTime(time: Time): Temporal {
 	return timeToUnixMillis(time)
 }
 
-export function temporalFromFractionOfYear(year: number, days: number) {
-	const dayOfYear = Math.floor(days)
-
-	let month = 1
-	let temp = 0
-
-	while (true) {
-		const days = daysInMonth(year, month)
-
-		if (dayOfYear > temp + days && month < 12) {
-			temp += days
-			month++
-		} else {
-			break
-		}
-	}
-
-	const day = dayOfYear - temp
-
-	// Find hours minutes and seconds
-	temp = (days - dayOfYear) * 24
-	const hour = Math.floor(temp)
-	temp = (temp - hour) * 60
-	const minute = Math.floor(temp)
-	temp = (temp - minute) * 60
-	const second = Math.floor(temp)
-	const millisecond = (temp - second) * 1000
-
-	return temporalFromDate(year, month, day, hour, minute, second, millisecond)
+// Converts 1-based fractional day-of-year into a UTC timestamp.
+export function temporalFromFractionOfYear(year: number, days: number): Temporal {
+	// Round once to millisecond precision to avoid carrying fractional-ms noise.
+	return temporalFromDate(year) + Math.round((days - 1) * DAYS)
 }
 
+// Adds a duration in calendar or fixed-size time units.
 export function temporalAdd(temporal: Temporal, duration: number, unit: TemporalUnit | TemporalUnitShort): Temporal {
 	if (duration === 0) return temporal
 	if (unit === 'ms' || unit === 'millisecond') return temporal + duration
@@ -128,44 +108,50 @@ export function temporalAdd(temporal: Temporal, duration: number, unit: Temporal
 	else if (unit === 'm' || unit === 'minute') return temporal + duration * MINUTES
 	else if (unit === 'h' || unit === 'hour') return temporal + duration * HOURS
 	else if (unit === 'd' || unit === 'day') return temporal + duration * DAYS
-	else if (unit === 'w' || unit === 'week') return temporal + duration * (DAYS * 7)
+	else if (unit === 'w' || unit === 'week') return temporal + duration * WEEK
 	else {
-		const date = temporalToDate(temporal)
+		const [year, month, day, hour, minute, second, millisecond] = temporalToDate(temporal)
 
 		if (unit === 'y' || unit === 'year') {
-			date[0] += duration
-			return temporalFromDate(...date)
+			const nextYear = year + duration
+			return temporalFromDate(nextYear, month, Math.min(day, daysInMonth(nextYear, month)), hour, minute, second, millisecond)
 		} else {
-			const months = date[0] * 12 + (date[1] - 1) + duration
-			date[0] = Math.floor(months / 12)
-			date[1] = (months % 12) + 1
-			date[2] = Math.min(date[2], daysInMonth(date[0], date[1]))
-			return temporalFromDate(...date)
+			const totalMonths = year * 12 + (month - 1) + duration
+			const nextYear = Math.floor(totalMonths / 12)
+			const nextMonth = pmod(totalMonths, 12) + 1
+			return temporalFromDate(nextYear, nextMonth, Math.min(day, daysInMonth(nextYear, nextMonth)), hour, minute, second, millisecond)
 		}
 	}
 }
 
+// Subtracts a duration in calendar or fixed-size time units.
 export function temporalSubtract(temporal: Temporal, duration: number, unit: TemporalUnit | TemporalUnitShort): Temporal {
 	return temporalAdd(temporal, -duration, unit)
 }
 
+// Floors a timestamp to the start of its UTC day.
 export function temporalStartOfDay(temporal: Temporal): Temporal {
-	return temporal - (temporal % DAYS)
+	return Math.floor(temporal / DAYS) * DAYS
 }
 
+// Ceils a timestamp to the end of its UTC day.
 export function temporalEndOfDay(temporal: Temporal): Temporal {
-	return temporal + (DAYS - (temporal % DAYS)) - 1
+	return Math.floor(temporal / DAYS) * DAYS + DAYS - 1
 }
 
+// Returns the UTC day of week where 0 is Sunday.
 export function temporalDayOfWeek(temporal: Temporal) {
-	return (((Math.floor(temporal / DAYS) + 4) % 7) + 7) % 7
+	return pmod(Math.floor(temporal / DAYS) + 4, 7)
 }
 
+// Reads a single UTC calendar or time field.
 export function temporalGet(temporal: Temporal, unit: TemporalUnit | TemporalUnitShort) {
-	if (unit === 'ms' || unit === 'millisecond') return temporal % 1000
-	else if (unit === 's' || unit === 'second') return Math.floor(temporal / 1000) % 60
-	else if (unit === 'm' || unit === 'minute') return Math.floor(temporal / 60000) % 60
-	else if (unit === 'h' || unit === 'hour') return Math.floor(temporal / 3600000) % 24
+	const [, time] = splitTemporalDay(temporal)
+
+	if (unit === 'ms' || unit === 'millisecond') return time % SECONDS
+	else if (unit === 's' || unit === 'second') return Math.floor(time / SECONDS) % 60
+	else if (unit === 'm' || unit === 'minute') return Math.floor(time / MINUTES) % 60
+	else if (unit === 'h' || unit === 'hour') return Math.floor(time / HOURS)
 	else if (unit === 'd' || unit === 'day') return temporalToDate(temporal)[2]
 	else if (unit === 'w' || unit === 'week') return temporalDayOfWeek(temporal)
 	else if (unit === 'mo' || unit === 'month') return temporalToDate(temporal)[1]
@@ -173,29 +159,30 @@ export function temporalGet(temporal: Temporal, unit: TemporalUnit | TemporalUni
 	return 0
 }
 
+// Replaces a single UTC calendar or time field.
 export function temporalSet(temporal: Temporal, value: number, unit: TemporalUnit | TemporalUnitShort) {
-	if (unit === 'ms' || unit === 'millisecond') return temporal - (temporal % 1000) + value
-	else if (unit === 's' || unit === 'second') return temporal - (temporal % 60000) + value * 1000 + (temporal % 1000)
-	else if (unit === 'm' || unit === 'minute') return temporal - (temporal % 3600000) + value * 60000 + (temporal % 60000)
-	else if (unit === 'h' || unit === 'hour') return temporal - (temporal % 86400000) + value * 3600000 + (temporal % 3600000)
+	const [day, time] = splitTemporalDay(temporal)
+	const dayStart = day * DAYS
+
+	if (unit === 'ms' || unit === 'millisecond') return dayStart + Math.floor(time / SECONDS) * SECONDS + value
+	else if (unit === 's' || unit === 'second') return dayStart + Math.floor(time / MINUTES) * MINUTES + value * SECONDS + (time % SECONDS)
+	else if (unit === 'm' || unit === 'minute') return dayStart + Math.floor(time / HOURS) * HOURS + value * MINUTES + (time % MINUTES)
+	else if (unit === 'h' || unit === 'hour') return dayStart + value * HOURS + (time % HOURS)
 	else if (unit === 'd' || unit === 'day') {
-		const date = temporalToDate(temporal)
-		date[2] = value
-		return temporalFromDate(...date)
+		const [year, month, , hour, minute, second, millisecond] = temporalToDate(temporal)
+		return temporalFromDate(year, month, value, hour, minute, second, millisecond)
 	} else if (unit === 'mo' || unit === 'month') {
-		const date = temporalToDate(temporal)
-		date[1] = value
-		date[2] = Math.min(date[2], daysInMonth(date[0], date[1]))
-		return temporalFromDate(...date)
+		const [year, , day, hour, minute, second, millisecond] = temporalToDate(temporal)
+		return temporalFromDate(year, value, Math.min(day, daysInMonth(year, value)), hour, minute, second, millisecond)
 	} else if (unit === 'y' || unit === 'year') {
-		const date = temporalToDate(temporal)
-		date[0] = value
-		return temporalFromDate(...date)
+		const [, month, day, hour, minute, second, millisecond] = temporalToDate(temporal)
+		return temporalFromDate(value, month, Math.min(day, daysInMonth(value, month)), hour, minute, second, millisecond)
 	}
 
 	return temporal
 }
 
+// Formats a timestamp with either a custom pattern or Intl.DateTimeFormat.
 export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat | string = DATE_TIME_FORMAT, timezone: number = TIMEZONE) {
 	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format, timezone) : format.format(temporal)
 }
@@ -206,51 +193,54 @@ const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
 const SHORT_WEEK_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const WEEK_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const PATTERN_SYMBOLS = 'YMDWHmsS'
+const PATTERN_TOKEN_CACHE = new Map<string, Readonly<PatternToken>[]>()
 
+// Parses a UTC timestamp from a fixed-width pattern.
 export function parseTemporal(input: string, pattern: string): Temporal {
-	const date: TemporalDate = [0, 0, 0, 0, 0, 0, 0]
+	const date: TemporalDate = [1970, 1, 1, 0, 0, 0, 0]
 	const tokens = tokenizePattern(pattern)
 
 	input = input.trim()
 
-	for (const { start, end, found } of tokens) {
+	for (const { start, end, found, text } of tokens) {
 		if (end > input.length) break
 
-		const p = pattern.substring(start, end)
 		const i = input.substring(start, end)
 
 		if (found) {
-			switch (p) {
+			switch (text) {
 				case 'YYYY':
-					date[0] = +i
+					date[0] = parsePatternNumber(i, text)
 					break
 				case 'YY':
-					date[0] = +i + 2000
+					date[0] = parsePatternNumber(i, text) + 2000
 					break
 				case 'MMM':
 					date[1] = LOWERCASE_SHORT_MONTH_NAMES.indexOf(i.toLowerCase()) + 1
 					break
 				case 'MM':
-					date[1] = +i
+					date[1] = parsePatternNumber(i, text)
 					break
 				case 'DD':
-					date[2] = +i
+					date[2] = parsePatternNumber(i, text)
 					break
 				case 'HH':
-					date[3] = +i
+					date[3] = parsePatternNumber(i, text)
 					break
 				case 'mm':
-					date[4] = +i
+					date[4] = parsePatternNumber(i, text)
 					break
 				case 'ss':
-					date[5] = +i
+					date[5] = parsePatternNumber(i, text)
 					break
 				case 'SSS':
-					date[6] = +i
+					date[6] = parsePatternNumber(i, text)
 					break
 				default:
-					throw new Error(`invalid pattern found: ${p}`)
+					throw new Error(`invalid pattern found: ${text}`)
 			}
+		} else if (i !== text) {
+			throw new Error(`invalid date. expected "${text}" at position ${start}, but got "${i}"`)
 		}
 	}
 
@@ -258,8 +248,26 @@ export function parseTemporal(input: string, pattern: string): Temporal {
 		throw new Error(`invalid month. expected [1-12], but got ${date[1]}`)
 	}
 
-	if (date[2] < 1 || date[2] > 31) {
-		throw new Error(`invalid day of month. expected [1-31], but got ${date[2]}`)
+	const monthDays = daysInMonth(date[0], date[1])
+
+	if (date[2] < 1 || date[2] > monthDays) {
+		throw new Error(`invalid day of month. expected [1-${monthDays}], but got ${date[2]}`)
+	}
+
+	if (date[3] < 0 || date[3] > 23) {
+		throw new Error(`invalid hour. expected [0-23], but got ${date[3]}`)
+	}
+
+	if (date[4] < 0 || date[4] > 59) {
+		throw new Error(`invalid minute. expected [0-59], but got ${date[4]}`)
+	}
+
+	if (date[5] < 0 || date[5] > 59) {
+		throw new Error(`invalid second. expected [0-59], but got ${date[5]}`)
+	}
+
+	if (date[6] < 0 || date[6] > 999) {
+		throw new Error(`invalid millisecond. expected [0-999], but got ${date[6]}`)
 	}
 
 	return temporalFromDate(...date)
@@ -267,78 +275,78 @@ export function parseTemporal(input: string, pattern: string): Temporal {
 
 export const TIMEZONE = -new Date().getTimezoneOffset()
 
+// Formats a UTC timestamp using a fixed-width pattern.
 export function formatTemporalFromPattern(temporal: Temporal, pattern: string, timezone: number = TIMEZONE) {
 	const tokens = tokenizePattern(pattern)
 	const output: string[] = []
 
 	if (timezone) temporal += timezone * MINUTES
 
-	const date = pattern.includes('Y') || pattern.includes('M') || pattern.includes('D') ? temporalToDate(temporal) : undefined
+	const [year, month, day, hour, minute, second, millisecond] = temporalToDate(temporal)
+	const weekday = temporalDayOfWeek(temporal)
 
-	for (const { start, end, found } of tokens) {
-		const text = pattern.substring(start, end)
-
+	for (const { found, text } of tokens) {
 		if (found) {
 			switch (text) {
 				case 'YYYY':
-					output.push(date![0].toFixed(0).padStart(4, '0'))
+					output.push(year.toFixed(0).padStart(4, '0'))
 					break
 				case 'YYY':
-					output.push(date![0].toFixed(0))
+					output.push(year.toFixed(0))
 					break
 				case 'YY':
-					output.push((date![0] % 100).toFixed(0).padStart(2, '0'))
+					output.push((year % 100).toFixed(0).padStart(2, '0'))
 					break
 				case 'Y':
-					output.push((date![0] % 100).toFixed(0))
+					output.push((year % 100).toFixed(0))
 					break
 				case 'MMMM':
-					output.push(MONTH_NAMES[date![1] - 1])
+					output.push(MONTH_NAMES[month - 1])
 					break
 				case 'MMM':
-					output.push(SHORT_MONTH_NAMES[date![1] - 1])
+					output.push(SHORT_MONTH_NAMES[month - 1])
 					break
 				case 'MM':
-					output.push(date![1].toFixed(0).padStart(2, '0'))
+					output.push(month.toFixed(0).padStart(2, '0'))
 					break
 				case 'M':
-					output.push(date![1].toFixed(0))
+					output.push(month.toFixed(0))
 					break
 				case 'WW':
-					output.push(WEEK_NAMES[temporalDayOfWeek(temporal)])
+					output.push(WEEK_NAMES[weekday])
 					break
 				case 'W':
-					output.push(SHORT_WEEK_NAMES[temporalDayOfWeek(temporal)])
+					output.push(SHORT_WEEK_NAMES[weekday])
 					break
 				case 'DD':
-					output.push(date![2].toFixed(0).padStart(2, '0'))
+					output.push(day.toFixed(0).padStart(2, '0'))
 					break
 				case 'D':
-					output.push(date![2].toFixed(0))
+					output.push(day.toFixed(0))
 					break
 				case 'HH':
-					output.push(temporalGet(temporal, 'h').toFixed(0).padStart(2, '0'))
+					output.push(hour.toFixed(0).padStart(2, '0'))
 					break
 				case 'H':
-					output.push(temporalGet(temporal, 'h').toFixed(0))
+					output.push(hour.toFixed(0))
 					break
 				case 'mm':
-					output.push(temporalGet(temporal, 'm').toFixed(0).padStart(2, '0'))
+					output.push(minute.toFixed(0).padStart(2, '0'))
 					break
 				case 'm':
-					output.push(temporalGet(temporal, 'm').toFixed(0))
+					output.push(minute.toFixed(0))
 					break
 				case 'ss':
-					output.push(temporalGet(temporal, 's').toFixed(0).padStart(2, '0'))
+					output.push(second.toFixed(0).padStart(2, '0'))
 					break
 				case 's':
-					output.push(temporalGet(temporal, 's').toFixed(0))
+					output.push(second.toFixed(0))
 					break
 				case 'SSS':
-					output.push(temporalGet(temporal, 'ms').toFixed(0).padStart(3, '0'))
+					output.push(millisecond.toFixed(0).padStart(3, '0'))
 					break
 				case 'S':
-					output.push(temporalGet(temporal, 'ms').toFixed(0))
+					output.push(millisecond.toFixed(0))
 					break
 			}
 		} else {
@@ -351,42 +359,50 @@ export function formatTemporalFromPattern(temporal: Temporal, pattern: string, t
 
 interface PatternToken {
 	readonly start: number
-	end: number
+	readonly end: number
+	readonly text: string
 	readonly found: boolean
 }
 
+// Parses a fixed-width numeric token and rejects malformed values.
+function parsePatternNumber(input: string, token: string) {
+	const value = +input
+	if (!Number.isFinite(value)) throw new Error(`invalid ${token} value: ${input}`)
+	return value
+}
+
+// Tokenizes and caches fixed-width pattern segments.
 function tokenizePattern(pattern: string): Readonly<PatternToken>[] {
+	const cached = PATTERN_TOKEN_CACHE.get(pattern)
+	if (cached) return cached
+	if (!pattern) return []
+
 	const tokens: PatternToken[] = []
-	let state = 0 // 0 = not initialized, 1 = pattern found, 2 = pattern not found
-	let position = 0
-	let prev = ''
+	let start = 0
+	let found = PATTERN_SYMBOLS.includes(pattern[0])
 
-	for (let i = 0; i < pattern.length; i++) {
+	for (let i = 1; i < pattern.length; i++) {
 		const c = pattern[i]
+		const nextFound = PATTERN_SYMBOLS.includes(c)
 
-		const found = PATTERN_SYMBOLS.includes(c)
-		const token = tokens[position] ?? { start: i, end: i + 1, found }
-		tokens[position] = token
-
-		if (state === 0) {
-			state = found ? 1 : 2
-		} else if (c === prev) {
-			token.end++
-		} else {
-			tokens[++position] = { start: i, end: i + 1, found }
-			state = found ? 1 : 2
+		if (nextFound !== found || (nextFound && c !== pattern[i - 1])) {
+			tokens.push({ start, end: i, text: pattern.substring(start, i), found })
+			start = i
+			found = nextFound
 		}
-
-		prev = c
 	}
 
+	tokens.push({ start, end: pattern.length, text: pattern.substring(start), found })
+	PATTERN_TOKEN_CACHE.set(pattern, tokens)
 	return tokens
 }
 
+// Checks Gregorian leap years in the proleptic calendar.
 export function isLeapYear(year: number) {
 	return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
 }
 
+// Returns the number of days in a month.
 export function daysInMonth(year: number, month: number) {
 	return month === 2 && isLeapYear(year) ? 29 : DAYS_IN_MONTH[month - 1]
 }
@@ -398,11 +414,13 @@ const DAYS_UNTIL_YEAR = [
 	761896, 762261, 762627, 762992, 763357, 763722, 764088, 764453, 764818, 765183, 765549, 765914, 766279, 766644,
 ]
 
+// Returns the number of days elapsed before January 1st of the given year.
 function daysUntilYear(year: number) {
 	if (year >= 1970 && year <= 2100) return DAYS_UNTIL_YEAR[year - 1970]
 	return --year * 365 + Math.floor(year / 4) - Math.floor(year / 100) + Math.floor(year / 400)
 }
 
+// Returns the number of days between 1970-01-01 and the start of year.
 function daysFromEpochToYear(year: number) {
 	return daysUntilYear(year) - 719162 // daysUntilYear(1970)
 }

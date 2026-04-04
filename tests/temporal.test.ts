@@ -53,7 +53,10 @@ test('temporal to date', () => {
 	expect(temporalToDate(1677674096000)).toEqual([2023, 3, 1, 12, 34, 56, 0])
 	expect(temporalToDate(1756510498123)).toEqual([2025, 8, 29, 23, 34, 58, 123])
 	expect(temporalToDate(1788046498123)).toEqual([2026, 8, 29, 23, 34, 58, 123])
-	// expect(temporalToDate(-1788046498123)).toEqual([1913, 5, 5, 0, 25, 1, 877])
+	expect(temporalToDate(-1)).toEqual([1969, 12, 31, 23, 59, 59, 999])
+	expect(temporalToDate(-877)).toEqual([1969, 12, 31, 23, 59, 59, 123])
+	expect(temporalToDate(-2203932303211)).toEqual([1900, 2, 28, 12, 34, 56, 789])
+	expect(temporalToDate(-1788046498123)).toEqual([1913, 5, 5, 0, 25, 1, 877])
 
 	let ms = temporalFromDate(2020, 1, 1, 0, 0, 0, 456)
 
@@ -119,6 +122,12 @@ describe('add', () => {
 		expect(temporalToDate(temporalAdd(date, 1, 'mo'))).toEqual([2026, 1, 29, 23, 34, 58, 123])
 		expect(temporalToDate(temporalAdd(date, 1, 'y'))).toEqual([2026, 12, 29, 23, 34, 58, 123])
 	})
+
+	test('leap day and negative year', () => {
+		const leap = temporalFromDate(2024, 2, 29, 12, 0, 0, 0)
+		expect(temporalToDate(temporalAdd(leap, 1, 'y'))).toEqual([2025, 2, 28, 12, 0, 0, 0])
+		expect(temporalToDate(temporalAdd(temporalFromDate(0, 1, 31, 0, 0, 0, 0), -1, 'mo'))).toEqual([-1, 12, 31, 0, 0, 0, 0])
+	})
 })
 
 describe('subtract', () => {
@@ -159,11 +168,15 @@ describe('subtract', () => {
 test('start of day', () => {
 	expect(temporalToDate(temporalStartOfDay(1709210096000))).toEqual([2024, 2, 29, 0, 0, 0, 0])
 	expect(temporalToDate(temporalStartOfDay(1756510498123))).toEqual([2025, 8, 29, 0, 0, 0, 0])
+	expect(temporalStartOfDay(-1)).toBe(-86400000)
+	expect(temporalStartOfDay(-2203932303211)).toBe(-2203977600000)
 })
 
 test('end of day', () => {
 	expect(temporalToDate(temporalEndOfDay(1709210096000))).toEqual([2024, 2, 29, 23, 59, 59, 999])
 	expect(temporalToDate(temporalEndOfDay(1756510498123))).toEqual([2025, 8, 29, 23, 59, 59, 999])
+	expect(temporalEndOfDay(-1)).toBe(-1)
+	expect(temporalEndOfDay(-2203932303211)).toBe(-2203891200001)
 })
 
 test('day of week', () => {
@@ -180,6 +193,10 @@ test('get', () => {
 	expect(temporalGet(1709210096000, 'm')).toBe(34)
 	expect(temporalGet(1709210096000, 's')).toBe(56)
 	expect(temporalGet(1709210096128, 'ms')).toBe(128)
+	expect(temporalGet(-877, 'h')).toBe(23)
+	expect(temporalGet(-877, 'm')).toBe(59)
+	expect(temporalGet(-877, 's')).toBe(59)
+	expect(temporalGet(-877, 'ms')).toBe(123)
 })
 
 test('set', () => {
@@ -192,6 +209,9 @@ test('set', () => {
 	expect(temporalToDate(temporalSet(date, 12, 'mo'))).toEqual([2025, 12, 29, 23, 34, 58, 123])
 	expect(temporalToDate(temporalSet(date, 2, 'mo'))).toEqual([2025, 2, 28, 23, 34, 58, 123])
 	expect(temporalToDate(temporalSet(date, 2000, 'y'))).toEqual([2000, 8, 29, 23, 34, 58, 123])
+	expect(temporalToDate(temporalSet(-877, 1, 'ms'))).toEqual([1969, 12, 31, 23, 59, 59, 1])
+	expect(temporalToDate(temporalSet(-877, 0, 's'))).toEqual([1969, 12, 31, 23, 59, 0, 123])
+	expect(temporalToDate(temporalSet(temporalFromDate(2024, 2, 29, 12, 0, 0, 0), 2023, 'y'))).toEqual([2023, 2, 28, 12, 0, 0, 0])
 })
 
 describe('format', () => {
@@ -325,6 +345,10 @@ describe('format using pattern', () => {
 		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss', 60)).toEqual('2028-08-08T09:09:07')
 		expect(formatTemporalFromPattern(date, 'YYYY-MM-DDTHH:mm:ss', -180)).toEqual('2028-08-08T05:09:07')
 	})
+
+	test('negative timestamp', () => {
+		expect(formatTemporalFromPattern(-1, 'YYYY-MM-DD HH:mm:ss.SSS', 0)).toEqual('1969-12-31 23:59:59.999')
+	})
 })
 
 describe('parse', () => {
@@ -347,5 +371,15 @@ describe('parse', () => {
 		expect(temporalToDate(parseTemporal('02-01-2028 08:09:07', 'MM-DD-YYYY HH:mm:ss'))).toEqual([2028, 2, 1, 8, 9, 7, 0])
 		expect(temporalToDate(parseTemporal('20280101080907008Z', 'YYYYMMDDHHmmssSSSZ'))).toEqual([2028, 1, 1, 8, 9, 7, 8])
 		expect(temporalToDate(parseTemporal('2028-01-01', 'YYYY-MM-DDTHH:mm:ss.SSS'))).toEqual([2028, 1, 1, 0, 0, 0, 0])
+		expect(temporalToDate(parseTemporal('08:09:07', 'HH:mm:ss'))).toEqual([1970, 1, 1, 8, 9, 7, 0])
+	})
+
+	test('invalid input', () => {
+		expect(() => parseTemporal('2028/01/01', 'YYYY-MM-DD')).toThrow()
+		expect(() => parseTemporal('2023-02-29', 'YYYY-MM-DD')).toThrow()
+		expect(() => parseTemporal('2024-01-01T24:00:00.000', 'YYYY-MM-DDTHH:mm:ss.SSS')).toThrow()
+		expect(() => parseTemporal('2024-01-01T23:60:00.000', 'YYYY-MM-DDTHH:mm:ss.SSS')).toThrow()
+		expect(() => parseTemporal('2024-01-01T23:00:60.000', 'YYYY-MM-DDTHH:mm:ss.SSS')).toThrow()
+		expect(() => parseTemporal('2024-01-01T23:00:00.abc', 'YYYY-MM-DDTHH:mm:ss.SSS')).toThrow()
 	})
 })
