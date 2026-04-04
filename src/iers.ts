@@ -5,6 +5,8 @@ import type { NumberArray } from './math'
 import type { PolarMotion, Time, TimeDelta } from './time'
 import { binarySearch } from './util'
 
+const EMPTY_TABLE = new Float64Array(0)
+
 export interface Iers {
 	readonly dut1: TimeDelta
 	readonly xy: PolarMotion
@@ -13,54 +15,72 @@ export interface Iers {
 	readonly clear: () => void
 }
 
-function interpolate(time: Time, input: NumberArray, ...data: NumberArray[]): NumberArray {
-	const ret = new Float64Array(data.length)
+// Parses one fixed-width numeric field and preserves blanks as NaN.
+function parseNumber(line: string, start: number, end: number) {
+	const value = line.substring(start, end).trim()
+	return value ? +value : NaN
+}
 
-	if (!input.length) return ret
+// Returns the preferred finite value without treating zero as missing.
+function selectFinite(value: number, fallback: number) {
+	return Number.isFinite(value) ? value : fallback
+}
 
-	// const value = time.value
-	const mjd = Math.floor(time.day - MJD0 + time.fraction)
-	const utc = time.day - (MJD0 + mjd) + time.fraction
+// Computes the MJD value represented by the given time sample.
+function modifiedJulianDate(time: Time) {
+	return time.day - MJD0 + time.fraction
+}
 
-	const i = binarySearch(input, mjd, { positive: true })
-	const k = Math.max(1, Math.min(i + 1, input.length - 1))
-	const t0 = input[k - 1]
-	const t1 = input[k]
+// Linearly interpolates one EOP column and clamps outside the tabulated range.
+function interpolate(time: Time, input: NumberArray, data: NumberArray) {
+	const n = input.length
 
-	for (let z = 0; z < data.length; z++) {
-		// Do not extrapolate outside range, instead just propagate last values.
-		if (i <= 0) {
-			ret[z] = data[z][0]
-		} else if (i >= input.length) {
-			ret[z] = data[z][data[z].length - 1]
-		} else {
-			const a = data[z][k - 1]
-			const b = data[z][k]
+	if (!n) return NaN
 
-			if (Number.isFinite(a) && Number.isFinite(b)) {
-				// a + ((b - a) / (t1 - t0)) * (value - t0)
-				ret[z] = a + ((mjd - t0 + utc) / (t1 - t0)) * (b - a)
-			} else {
-				ret[z] = NaN
-			}
-		}
+	const mjd = modifiedJulianDate(time)
+	const day = Math.floor(mjd)
+	const i = binarySearch(input, day)
+
+	if (i < 0) {
+		const k = -(i + 1)
+
+		// Do not extrapolate outside range, instead just propagate edge values.
+		if (k <= 0) return data[0]
+		if (k >= n) return data[n - 1]
+
+		const t0 = input[k - 1]
+		const t1 = input[k]
+		const a = data[k - 1]
+		const b = data[k]
+
+		return Number.isFinite(a) && Number.isFinite(b) ? a + ((mjd - t0) / (t1 - t0)) * (b - a) : NaN
 	}
 
-	return ret
+	// Exact hits on the final row must clamp to the last known value.
+	if (i >= n - 1) return data[n - 1]
+
+	const t0 = input[i]
+	const t1 = input[i + 1]
+	const a = data[i]
+	const b = data[i + 1]
+
+	return Number.isFinite(a) && Number.isFinite(b) ? a + ((mjd - t0) / (t1 - t0)) * (b - a) : NaN
 }
 
 export abstract class IersBase implements Iers {
-	protected mjd: number[] = []
-	protected pmX: number[] = []
-	protected pmY: number[] = []
-	protected ut1MinusUtc: number[] = []
+	protected mjd: NumberArray = EMPTY_TABLE
+	protected pmX: NumberArray = EMPTY_TABLE
+	protected pmY: NumberArray = EMPTY_TABLE
+	protected ut1MinusUtc: NumberArray = EMPTY_TABLE
 
 	dut1(time: Time): number {
-		return interpolate(time, this.mjd, this.ut1MinusUtc)[0] || 0
+		const dut1 = interpolate(time, this.mjd, this.ut1MinusUtc)
+		return Number.isFinite(dut1) ? dut1 : 0
 	}
 
 	xy(time: Time): [Angle, Angle] {
-		const [x, y] = interpolate(time, this.mjd, this.pmX, this.pmY)
+		const x = interpolate(time, this.mjd, this.pmX)
+		const y = interpolate(time, this.mjd, this.pmY)
 
 		if (Number.isFinite(x) && Number.isFinite(y)) {
 			return [arcsec(x), arcsec(y)]
@@ -71,11 +91,37 @@ export abstract class IersBase implements Iers {
 
 	abstract load(source: Source): Promise<void>
 
+	// Checks whether the requested time lies inside this table coverage range.
+	covers(time: Time) {
+		const n = this.mjd.length
+		if (!n) return false
+		const mjd = modifiedJulianDate(time)
+		return mjd >= this.mjd[0] && mjd <= this.mjd[n - 1]
+	}
+
+	// Computes the distance in days from this table coverage interval.
+	distance(time: Time) {
+		const n = this.mjd.length
+		if (!n) return Number.POSITIVE_INFINITY
+		const mjd = modifiedJulianDate(time)
+		if (mjd < this.mjd[0]) return this.mjd[0] - mjd
+		if (mjd > this.mjd[n - 1]) return mjd - this.mjd[n - 1]
+		return 0
+	}
+
+	// Replaces the active EOP table with compact numeric arrays.
+	protected setTable(mjd: number[], pmX: number[], pmY: number[], ut1MinusUtc: number[]) {
+		this.mjd = Float64Array.from(mjd)
+		this.pmX = Float64Array.from(pmX)
+		this.pmY = Float64Array.from(pmY)
+		this.ut1MinusUtc = Float64Array.from(ut1MinusUtc)
+	}
+
 	clear() {
-		this.mjd = []
-		this.pmX = []
-		this.pmY = []
-		this.ut1MinusUtc = []
+		this.mjd = EMPTY_TABLE
+		this.pmX = EMPTY_TABLE
+		this.pmY = EMPTY_TABLE
+		this.ut1MinusUtc = EMPTY_TABLE
 	}
 }
 
@@ -83,24 +129,26 @@ export abstract class IersBase implements Iers {
 // https://maia.usno.navy.mil/ser7/readme.finals2000A
 export class IersA extends IersBase {
 	async load(source: Source) {
-		this.clear()
+		const mjd: number[] = []
+		const pmX: number[] = []
+		const pmY: number[] = []
+		const ut1MinusUtc: number[] = []
 
 		for await (const line of readLines(source, 188)) {
-			const pmXa = +line.substring(18, 27)
-			const pmYa = +line.substring(37, 46)
-			const pmXb = +line.substring(134, 144)
-			const pmYb = +line.substring(144, 154)
-			const dut1a = +line.substring(58, 68)
-			const dut1b = +line.substring(154, 165)
+			const epoch = parseNumber(line, 7, 15)
+			const x = selectFinite(parseNumber(line, 134, 144), parseNumber(line, 18, 27))
+			const y = selectFinite(parseNumber(line, 144, 154), parseNumber(line, 37, 46))
+			const dut1 = selectFinite(parseNumber(line, 154, 165), parseNumber(line, 58, 68))
 
-			if ((pmXb || pmXa) && (pmYb || pmYa) && (dut1b || dut1a)) {
-				const mjd = +line.substring(7, 15)
-				this.mjd.push(mjd)
-				this.pmX.push(pmXb || pmXa)
-				this.pmY.push(pmYb || pmYa)
-				this.ut1MinusUtc.push(dut1b || dut1a)
+			if (Number.isFinite(epoch) && Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(dut1)) {
+				mjd.push(epoch)
+				pmX.push(x)
+				pmY.push(y)
+				ut1MinusUtc.push(dut1)
 			}
 		}
+
+		this.setTable(mjd, pmX, pmY, ut1MinusUtc)
 	}
 }
 
@@ -108,23 +156,28 @@ export class IersA extends IersBase {
 // https://hpiers.obspm.fr/eoppc/eop/eopc04/eopc04.txt
 export class IersB extends IersBase {
 	async load(source: Source) {
-		this.clear()
+		const mjd: number[] = []
+		const pmX: number[] = []
+		const pmY: number[] = []
+		const ut1MinusUtc: number[] = []
 
 		for await (const line of readLines(source, 219)) {
 			if (line.startsWith('#')) continue
 
-			const pmX = +line.substring(26, 38)
-			const pmY = +line.substring(38, 50)
-			const dut1 = +line.substring(50, 62)
+			const epoch = parseNumber(line, 16, 26)
+			const x = parseNumber(line, 26, 38)
+			const y = parseNumber(line, 38, 50)
+			const dut1 = parseNumber(line, 50, 62)
 
-			if (pmX && pmY && dut1) {
-				const mjd = +line.substring(16, 26)
-				this.mjd.push(mjd)
-				this.pmX.push(pmX)
-				this.pmY.push(pmY)
-				this.ut1MinusUtc.push(dut1)
+			if (Number.isFinite(epoch) && Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(dut1)) {
+				mjd.push(epoch)
+				pmX.push(x)
+				pmY.push(y)
+				ut1MinusUtc.push(dut1)
 			}
 		}
+
+		this.setTable(mjd, pmX, pmY, ut1MinusUtc)
 	}
 }
 
@@ -134,14 +187,19 @@ export class IersAB implements Iers {
 		readonly b: IersB,
 	) {}
 
+	// Picks the highest-priority table that covers this time, otherwise the nearest edge table.
+	#table(time: Time) {
+		if (this.b.covers(time)) return this.b
+		if (this.a.covers(time)) return this.a
+		return this.b.distance(time) <= this.a.distance(time) ? this.b : this.a
+	}
+
 	dut1(time: Time): number {
-		return this.b.dut1(time) || this.a.dut1(time)
+		return this.#table(time).dut1(time)
 	}
 
 	xy(time: Time): [Angle, Angle] {
-		const b = this.b.xy(time)
-		if (!(b[0] && b[1])) return this.a.xy(time)
-		return b
+		return this.#table(time).xy(time)
 	}
 
 	load(source: Source): Promise<void> {
