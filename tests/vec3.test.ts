@@ -8,6 +8,8 @@ test('angle', () => {
 	expect(vecAngle([1, 2, 3], [-1, -2, -3])).toBe(PI)
 	expect(vecAngle([2, -3, 1], [4, -6, 2])).toBe(0)
 	expect(vecAngle([3, 4, 5], [1, 2, 2])).toBeCloseTo(Math.acos(1.4 / Math.sqrt(2)), 14)
+	expect(vecAngle([1, 1e-8, 0], [1, 0, 0])).toBeCloseTo(1e-8, 15)
+	expect(vecAngle([0, 0, 0], [1, 0, 0])).toBe(0)
 })
 
 test('normalize', () => {

@@ -1,5 +1,4 @@
 import { type Angle, normalizeAngle } from './angle'
-import { PI } from './constants'
 
 // Mutable vector of numbers with three axis.
 export type MutVec3 = [number, number, number]
@@ -56,15 +55,26 @@ export function vecClone(v: Vec3): MutVec3 {
 
 // Computes the angle between the vectors.
 export function vecAngle(a: Vec3, b: Vec3): Angle {
-	// https://people.eecs.berkeley.edu/~wkahan/Mindless.pdf
-	// const c = mulScalar(a, length(b))
-	// const d = mulScalar(b, length(a))
-	// return 2 * Math.atan2(length(minus(c, d)), length(plus(c, d)))
+	const alen = vecLength(a)
+	const blen = vecLength(b)
 
-	const d = vecDot(a, b)
-	const v = d / (vecLength(a) * vecLength(b))
-	if (Math.abs(v) > 1) return v < 0 ? PI : 0
-	else return Math.acos(v)
+	if (alen === 0 || blen === 0) return 0
+
+	// Kahan's formula is more accurate than acos(dot / |a||b|) near 0 and PI.
+	const ax = a[0] * blen
+	const ay = a[1] * blen
+	const az = a[2] * blen
+	const bx = b[0] * alen
+	const by = b[1] * alen
+	const bz = b[2] * alen
+	const cx = ax - bx
+	const cy = ay - by
+	const cz = az - bz
+	const dx = ax + bx
+	const dy = ay + by
+	const dz = az + bz
+
+	return 2 * Math.atan2(Math.sqrt(cx * cx + cy * cy + cz * cz), Math.sqrt(dx * dx + dy * dy + dz * dz))
 }
 
 // Creates a new zeroed vector.
