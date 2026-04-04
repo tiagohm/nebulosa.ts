@@ -42,34 +42,46 @@ const UNDERSCORE = 95
 
 class InternalBuffer {
 	readonly #decoder = new TextDecoder()
-	readonly #buffer?: ArrayBuffer
-	readonly #data: Uint8Array
+	readonly #maxByteLength: number
+	#data: Uint8Array
 
 	position = 0
 
+	// Allocate only the initial capacity and defer growth until writes exceed it.
 	constructor(size: number, maxByteLength: number = 0) {
-		if (maxByteLength > 0) {
-			this.#buffer = new ArrayBuffer(size, { maxByteLength })
-			this.#data = new Uint8Array(this.#buffer)
-		} else {
-			this.#data = new Uint8Array(size)
-		}
+		this.#maxByteLength = maxByteLength > 0 ? Math.max(size, maxByteLength) : 0
+		this.#data = new Uint8Array(size)
 	}
 
+	// Reset the logical cursor while retaining the current allocation.
 	reset() {
 		this.position = 0
 	}
 
+	// Append one byte and grow the storage geometrically only when capacity is exhausted.
 	write(byte: number) {
-		if (this.#buffer !== undefined && this.position >= this.#data.length) {
-			this.#buffer.resize(this.#data.length * 2)
-		}
+		if (this.position >= this.#data.length) this.#grow()
 
 		this.#data[this.position++] = byte
 	}
 
+	// Decode the bytes written since the last reset.
 	text() {
 		return this.#decoder.decode(this.#data.subarray(0, this.position))
+	}
+
+	// Grow without eagerly reserving the full max byte length.
+	#grow() {
+		const currentLength = this.#data.length
+		const nextLength = this.#maxByteLength > 0 ? Math.min(currentLength * 2, this.#maxByteLength) : currentLength * 2
+
+		if (nextLength <= currentLength) {
+			throw new RangeError(`internal buffer exceeded max byte length: ${this.#maxByteLength}`)
+		}
+
+		const data = new Uint8Array(nextLength)
+		data.set(this.#data)
+		this.#data = data
 	}
 }
 
