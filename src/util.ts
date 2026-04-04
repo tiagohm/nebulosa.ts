@@ -10,7 +10,7 @@ export const STANDARD_DEVIATION_SCALE = 1.482602218505602
 
 // Checks if the input is a number array.
 export function isNumberArray(a: unknown): a is NumberArray {
-	if (Array.isArray(a)) return typeof a[0] === 'number'
+	if (Array.isArray(a)) return a.length === 0 || typeof a[0] === 'number'
 	return a instanceof Float64Array || a instanceof Float32Array || a instanceof Float16Array || a instanceof Int32Array || a instanceof Uint32Array || a instanceof Int16Array || a instanceof Uint16Array || a instanceof Int8Array || a instanceof Uint8Array || a instanceof Uint8ClampedArray
 }
 
