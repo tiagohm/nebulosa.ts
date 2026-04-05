@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { BMP180, BMP280, HMC5883L, MAX44009 } from '../src/firmata.peripheral'
+import { BMP180, BMP280, HMC5883L, MAX44009, TSL2561 } from '../src/firmata.peripheral'
 
 type MockFirmataMessage = readonly ['config', number] | readonly ['write', number, Buffer] | readonly ['read', number, number, number, boolean, TwoWireAddressMode, TwoWireAutoRestartMode]
 
@@ -385,6 +385,43 @@ test('HMC5883L configures i2c reads and decodes xyz updates', () => {
 	expect(updates).toBe(1)
 
 	hmc5883l.stop()
+	expect(client.handlers.size).toBe(0)
+})
+
+test('TSL2561 calculates lux from channel data', () => {
+	const tsl2561 = new TSL2561(undefined as never)
+	expect(tsl2561.calculateLux(67, 12)).toBeCloseTo(26.605572786225, 6)
+	expect(tsl2561.calculateLux(0, 0)).toBe(0)
+})
+
+test('TSL2561 configures i2c reads and emits lux updates', () => {
+	const client = new MockFirmataClient()
+	const tsl2561 = new TSL2561(client as never, TSL2561.ADDRESS, 1000)
+	let updates = 0
+
+	tsl2561.addListener(() => {
+		updates++
+	})
+
+	tsl2561.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', TSL2561.ADDRESS, Buffer.from([TSL2561.COMMAND_BIT | TSL2561.CONTROL_REG, TSL2561.POWER_UP])],
+		['write', TSL2561.ADDRESS, Buffer.from([TSL2561.COMMAND_BIT | TSL2561.TIMING_REG, 0x02])],
+		['read', TSL2561.ADDRESS, TSL2561.COMMAND_BIT | TSL2561.BLOCK_BIT | TSL2561.DATA0LOW_REG, 4, false, 7, 'stop'],
+	])
+
+	tsl2561.twoWireMessage(client as never, TSL2561.ADDRESS, TSL2561.COMMAND_BIT | TSL2561.BLOCK_BIT | TSL2561.DATA0LOW_REG, Buffer.from([0x43, 0x00, 0x0c, 0x00]))
+	expect(tsl2561.broadband).toBe(67)
+	expect(tsl2561.infrared).toBe(12)
+	expect(tsl2561.lux).toBeCloseTo(26.605572786225, 6)
+	expect(updates).toBe(1)
+
+	tsl2561.twoWireMessage(client as never, TSL2561.ADDRESS, TSL2561.COMMAND_BIT | TSL2561.BLOCK_BIT | TSL2561.DATA0LOW_REG, Buffer.from([0x43, 0x00, 0x0c, 0x00]))
+	expect(updates).toBe(1)
+
+	tsl2561.stop()
 	expect(client.handlers.size).toBe(0)
 })
 

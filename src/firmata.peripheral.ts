@@ -22,6 +22,10 @@ export type HMC5883LDataRate = 0.75 | 1.5 | 3 | 7.5 | 15 | 30 | 75
 
 export type HMC5883LRange = 0.88 | 1.3 | 1.9 | 2.5 | 4.0 | 4.7 | 5.6 | 8.1 // gauss
 
+export type TSL2561Gain = 1 | 16
+
+export type TSL2561IntegrationTime = 13.7 | 101 | 402 // ms
+
 export type DS18B20Resolution = 9 | 10 | 11 | 12
 
 export enum BMP180Mode {
@@ -79,6 +83,11 @@ export interface HMC5883LOptions {
 	readonly range?: HMC5883LRange // gauss
 }
 
+export interface TSL2561Options {
+	readonly gain?: TSL2561Gain
+	readonly integrationTime?: TSL2561IntegrationTime // ms
+}
+
 export interface MAX44009Options {
 	readonly continuousMode?: boolean
 }
@@ -102,6 +111,11 @@ export const DEFAULT_HMC5883L_OPTIONS: Required<HMC5883LOptions> = {
 	sampleAveraging: 1,
 	dataRate: 15,
 	range: 1.3,
+}
+
+export const DEFAULT_TSL2561_OPTIONS: Required<TSL2561Options> = {
+	gain: 1,
+	integrationTime: 402,
 }
 
 export const DEFAULT_MAX44009_OPTIONS: Required<MAX44009Options> = {
@@ -707,6 +721,117 @@ export class HMC5883L extends PeripheralBase<HMC5883L> implements Magnetometer, 
 	// Requests the full X/Z/Y output frame starting at register 0x03.
 	#readMeasurement() {
 		this.client.twoWireRead(this.address, HMC5883L.DATA_X_MSB_REG, 6)
+	}
+}
+
+// https://www.mouser.com/datasheet/2/588/TSL2561_DS000110_3_00-2066792.pdf
+
+export class TSL2561 extends PeripheralBase<TSL2561> implements LuxMeter, FirmataClientHandler {
+	lux = 0
+	broadband = 0
+	infrared = 0
+
+	static readonly ADDRESS = 0x39
+	static readonly LOW_ADDRESS = 0x29
+	static readonly HIGH_ADDRESS = 0x49
+
+	static readonly COMMAND_BIT = 0x80
+	static readonly BLOCK_BIT = 0x10
+
+	static readonly CONTROL_REG = 0x00
+	static readonly TIMING_REG = 0x01
+	static readonly DATA0LOW_REG = 0x0c
+
+	static readonly POWER_UP = 0x03
+	static readonly SCALE_13_7_MS = 322 / 11
+	static readonly SCALE_101_MS = 322 / 81
+	static readonly CLIP_13_7_MS = 5047
+	static readonly CLIP_101_MS = 37177
+	static readonly CLIP_402_MS = 65535
+
+	#timer?: NodeJS.Timeout
+	readonly #timing: number
+	readonly #gainScale: number
+	readonly #integrationScale: number
+	readonly #clipThreshold: number
+	readonly #minimumPollingInterval: number
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly address: number = TSL2561.ADDRESS,
+		readonly pollingInterval: number = DEFAULT_POLLING_INTERVAL,
+		options: TSL2561Options = DEFAULT_TSL2561_OPTIONS,
+	) {
+		super()
+
+		const gain = options.gain ?? DEFAULT_TSL2561_OPTIONS.gain
+		const integrationTime = options.integrationTime ?? DEFAULT_TSL2561_OPTIONS.integrationTime
+		const integrationBits = integrationTime === 13.7 ? 0 : integrationTime === 101 ? 1 : 2
+
+		this.#timing = (gain === 16 ? 0x10 : 0) | integrationBits
+		this.#gainScale = gain === 1 ? 16 : 1
+		this.#integrationScale = integrationTime === 13.7 ? TSL2561.SCALE_13_7_MS : integrationTime === 101 ? TSL2561.SCALE_101_MS : 1
+		this.#clipThreshold = integrationTime === 13.7 ? TSL2561.CLIP_13_7_MS : integrationTime === 101 ? TSL2561.CLIP_101_MS : TSL2561.CLIP_402_MS
+		this.#minimumPollingInterval = Math.ceil(integrationTime)
+	}
+
+	// Powers up the device, configures timing, and starts reading both ADC channels.
+	start() {
+		if (this.#timer === undefined) {
+			this.client.addHandler(this)
+			this.client.twoWireConfig(0)
+			this.client.twoWireWrite(this.address, [TSL2561.COMMAND_BIT | TSL2561.CONTROL_REG, TSL2561.POWER_UP])
+			this.client.twoWireWrite(this.address, [TSL2561.COMMAND_BIT | TSL2561.TIMING_REG, this.#timing])
+			this.#readMeasurement()
+			this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(this.#minimumPollingInterval, this.pollingInterval))
+		}
+	}
+
+	// Stops polling and detaches the Firmata handler.
+	stop() {
+		this.client.removeHandler(this)
+		clearInterval(this.#timer)
+		this.#timer = undefined
+	}
+
+	// Decodes both ADC channels and updates the computed lux value.
+	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
+		if (client !== this.client || address !== this.address || register !== (TSL2561.COMMAND_BIT | TSL2561.BLOCK_BIT | TSL2561.DATA0LOW_REG) || data.byteLength !== 4) return
+
+		const broadband = data.readUInt16LE(0)
+		const infrared = data.readUInt16LE(2)
+		const lux = this.calculateLux(broadband, infrared)
+
+		if (broadband !== this.broadband || infrared !== this.infrared || lux !== this.lux) {
+			this.broadband = broadband
+			this.infrared = infrared
+			this.lux = lux
+			this.fire()
+		}
+	}
+
+	// Converts raw channel counts into lux using the T package coefficients from the datasheet.
+	calculateLux(broadband: number, infrared: number) {
+		if (broadband <= 0 || infrared < 0) return 0
+		if (broadband >= this.#clipThreshold || infrared >= this.#clipThreshold) return this.lux
+
+		const scaledBroadband = broadband * this.#gainScale * this.#integrationScale
+		const scaledInfrared = infrared * this.#gainScale * this.#integrationScale
+		const ratio = scaledInfrared / scaledBroadband
+
+		let lux = 0
+
+		if (ratio <= 0.5) lux = 0.0304 * scaledBroadband - 0.062 * scaledBroadband * ratio ** 1.4
+		else if (ratio <= 0.61) lux = 0.0224 * scaledBroadband - 0.031 * scaledInfrared
+		else if (ratio <= 0.8) lux = 0.0128 * scaledBroadband - 0.0153 * scaledInfrared
+		else if (ratio <= 1.3) lux = 0.00146 * scaledBroadband - 0.00112 * scaledInfrared
+
+		return Math.max(0, lux)
+	}
+
+	// Reads both ADC channels in a single block transaction.
+	#readMeasurement() {
+		this.client.twoWireRead(this.address, TSL2561.COMMAND_BIT | TSL2561.BLOCK_BIT | TSL2561.DATA0LOW_REG, 4)
 	}
 }
 
