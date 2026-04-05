@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { BMP180, BMP280, HMC5883L, MAX44009, TSL2561 } from '../src/firmata.peripheral'
+import { BH1750, BMP180, BMP280, HMC5883L, MAX44009, TSL2561 } from '../src/firmata.peripheral'
 
 type MockFirmataMessage = readonly ['config', number] | readonly ['write', number, Buffer] | readonly ['read', number, number, number, boolean, TwoWireAddressMode, TwoWireAutoRestartMode]
 
@@ -386,6 +386,48 @@ test('HMC5883L configures i2c reads and decodes xyz updates', () => {
 
 	hmc5883l.stop()
 	expect(client.handlers.size).toBe(0)
+})
+
+test('BH1750 calculates lux from the raw reading', () => {
+	const bh1750 = new BH1750(undefined as never)
+	expect(bh1750.calculateLux(120)).toBeCloseTo(100, 6)
+	expect(bh1750.calculateLux(0)).toBe(0)
+})
+
+test('BH1750 configures i2c measurements and emits lux updates', async () => {
+	const client = new MockFirmataClient()
+	const bh1750 = new BH1750(client as never, BH1750.ADDRESS, 1000, { mode: 'continuousLowResolution', measurementTime: 31 })
+	let updates = 0
+
+	bh1750.addListener(() => {
+		updates++
+	})
+
+	bh1750.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', BH1750.ADDRESS, Buffer.from([BH1750.POWER_ON_CMD])],
+		['write', BH1750.ADDRESS, Buffer.from([0x40])],
+		['write', BH1750.ADDRESS, Buffer.from([0x7f])],
+		['write', BH1750.ADDRESS, Buffer.from([BH1750.CONTINUOUS_LOW_RESOLUTION_CMD])],
+	])
+
+	await Bun.sleep(20)
+
+	expect(client.messages[5]).toEqual(['read', BH1750.ADDRESS, -1, 2, false, 7, 'stop'])
+
+	bh1750.twoWireMessage(client as never, BH1750.ADDRESS, -1, Buffer.from([0x00, 0x78]))
+	expect(bh1750.raw).toBe(120)
+	expect(bh1750.lux).toBeCloseTo(222.58064516129, 6)
+	expect(updates).toBe(1)
+
+	bh1750.twoWireMessage(client as never, BH1750.ADDRESS, -1, Buffer.from([0x00, 0x78]))
+	expect(updates).toBe(1)
+
+	bh1750.stop()
+	expect(client.handlers.size).toBe(0)
+	expect(client.messages.at(-1)).toEqual(['write', BH1750.ADDRESS, Buffer.from([BH1750.POWER_DOWN_CMD])])
 })
 
 test('TSL2561 calculates lux from channel data', () => {

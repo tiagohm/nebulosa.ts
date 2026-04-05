@@ -22,6 +22,8 @@ export type HMC5883LDataRate = 0.75 | 1.5 | 3 | 7.5 | 15 | 30 | 75
 
 export type HMC5883LRange = 0.88 | 1.3 | 1.9 | 2.5 | 4.0 | 4.7 | 5.6 | 8.1 // gauss
 
+export type BH1750Mode = 'continuousHighResolution' | 'continuousHighResolution2' | 'continuousLowResolution' | 'oneTimeHighResolution' | 'oneTimeHighResolution2' | 'oneTimeLowResolution'
+
 export type TSL2561Gain = 1 | 16
 
 export type TSL2561IntegrationTime = 13.7 | 101 | 402 // ms
@@ -83,6 +85,11 @@ export interface HMC5883LOptions {
 	readonly range?: HMC5883LRange // gauss
 }
 
+export interface BH1750Options {
+	readonly mode?: BH1750Mode
+	readonly measurementTime?: number
+}
+
 export interface TSL2561Options {
 	readonly gain?: TSL2561Gain
 	readonly integrationTime?: TSL2561IntegrationTime // ms
@@ -111,6 +118,11 @@ export const DEFAULT_HMC5883L_OPTIONS: Required<HMC5883LOptions> = {
 	sampleAveraging: 1,
 	dataRate: 15,
 	range: 1.3,
+}
+
+export const DEFAULT_BH1750_OPTIONS: Required<BH1750Options> = {
+	mode: 'continuousHighResolution',
+	measurementTime: 69,
 }
 
 export const DEFAULT_TSL2561_OPTIONS: Required<TSL2561Options> = {
@@ -721,6 +733,143 @@ export class HMC5883L extends PeripheralBase<HMC5883L> implements Magnetometer, 
 	// Requests the full X/Z/Y output frame starting at register 0x03.
 	#readMeasurement() {
 		this.client.twoWireRead(this.address, HMC5883L.DATA_X_MSB_REG, 6)
+	}
+}
+
+// https://www.rohm.com/products/sensor/ambient-light-sensor-ics/bh1750fvi-product
+
+export class BH1750 extends PeripheralBase<BH1750> implements LuxMeter, FirmataClientHandler {
+	lux = 0
+	raw = 0
+
+	static readonly ADDRESS = 0x23
+	static readonly ALTERNATIVE_ADDRESS = 0x5c
+
+	static readonly POWER_DOWN_CMD = 0x00
+	static readonly POWER_ON_CMD = 0x01
+	static readonly RESET_CMD = 0x07
+	static readonly CONTINUOUS_HIGH_RESOLUTION_CMD = 0x10
+	static readonly CONTINUOUS_HIGH_RESOLUTION2_CMD = 0x11
+	static readonly CONTINUOUS_LOW_RESOLUTION_CMD = 0x13
+	static readonly ONE_TIME_HIGH_RESOLUTION_CMD = 0x20
+	static readonly ONE_TIME_HIGH_RESOLUTION2_CMD = 0x21
+	static readonly ONE_TIME_LOW_RESOLUTION_CMD = 0x23
+	static readonly CHANGE_MEASUREMENT_TIME_HIGH_BIT_CMD = 0x40
+	static readonly CHANGE_MEASUREMENT_TIME_LOW_BIT_CMD = 0x60
+	static readonly DEFAULT_MEASUREMENT_TIME = 69
+	static readonly MIN_MEASUREMENT_TIME = 31
+	static readonly MAX_MEASUREMENT_TIME = 254
+
+	#timer?: NodeJS.Timeout
+	#reading = false
+	readonly #modeCommand: number
+	readonly #measurementTime: number
+	readonly #measurementDelayMs: number
+	readonly #oneTimeMode: boolean
+	readonly #halfLuxResolution: boolean
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly address: number = BH1750.ADDRESS,
+		readonly pollingInterval: number = DEFAULT_POLLING_INTERVAL,
+		options: BH1750Options = DEFAULT_BH1750_OPTIONS,
+	) {
+		super()
+
+		const mode = options.mode ?? 'continuousHighResolution'
+		const measurementTime = Math.max(BH1750.MIN_MEASUREMENT_TIME, Math.min(BH1750.MAX_MEASUREMENT_TIME, Math.trunc(options.measurementTime ?? BH1750.DEFAULT_MEASUREMENT_TIME)))
+		const lowResolutionMode = mode === 'continuousLowResolution' || mode === 'oneTimeLowResolution'
+
+		this.#modeCommand =
+			mode === 'continuousHighResolution'
+				? BH1750.CONTINUOUS_HIGH_RESOLUTION_CMD
+				: mode === 'continuousHighResolution2'
+					? BH1750.CONTINUOUS_HIGH_RESOLUTION2_CMD
+					: mode === 'continuousLowResolution'
+						? BH1750.CONTINUOUS_LOW_RESOLUTION_CMD
+						: mode === 'oneTimeHighResolution'
+							? BH1750.ONE_TIME_HIGH_RESOLUTION_CMD
+							: mode === 'oneTimeHighResolution2'
+								? BH1750.ONE_TIME_HIGH_RESOLUTION2_CMD
+								: BH1750.ONE_TIME_LOW_RESOLUTION_CMD
+		this.#measurementTime = measurementTime
+		this.#measurementDelayMs = Math.ceil((lowResolutionMode ? 24 : 180) * (measurementTime / BH1750.DEFAULT_MEASUREMENT_TIME))
+		this.#oneTimeMode = mode === 'oneTimeHighResolution' || mode === 'oneTimeHighResolution2' || mode === 'oneTimeLowResolution'
+		this.#halfLuxResolution = mode === 'continuousHighResolution2' || mode === 'oneTimeHighResolution2'
+	}
+
+	// Powers on the device, configures MTreg, and starts periodic measurements.
+	start() {
+		if (this.#timer === undefined) {
+			this.client.addHandler(this)
+			this.client.twoWireConfig(0)
+			this.client.twoWireWrite(this.address, [BH1750.POWER_ON_CMD])
+			this.#configureMeasurementTime()
+			void this.#readMeasurement()
+			this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(this.#measurementDelayMs, this.pollingInterval))
+		}
+	}
+
+	// Stops polling and powers the device down.
+	stop() {
+		this.client.removeHandler(this)
+		clearInterval(this.#timer)
+		this.#timer = undefined
+		this.#reading = false
+		this.client.twoWireWrite(this.address, [BH1750.POWER_DOWN_CMD])
+	}
+
+	// Resets the data register while the device is powered on.
+	reset() {
+		this.client.twoWireWrite(this.address, [BH1750.POWER_ON_CMD])
+		this.client.twoWireWrite(this.address, [BH1750.RESET_CMD])
+	}
+
+	// Decodes the 16-bit sensor output into lux.
+	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
+		if (client !== this.client || address !== this.address || register !== -1 || data.byteLength !== 2) return
+
+		const raw = data.readUInt16BE(0)
+		const lux = this.calculateLux(raw)
+
+		if (raw !== this.raw || lux !== this.lux) {
+			this.raw = raw
+			this.lux = lux
+			this.fire()
+		}
+	}
+
+	// Converts the raw measurement value into lux, compensating for MTreg and mode.
+	calculateLux(raw: number) {
+		if (raw <= 0) return 0
+		const modeScale = this.#halfLuxResolution ? 2.4 : 1.2
+		return (raw * (BH1750.DEFAULT_MEASUREMENT_TIME / this.#measurementTime)) / modeScale
+	}
+
+	// Writes the two MTreg adjustment commands.
+	#configureMeasurementTime() {
+		this.client.twoWireWrite(this.address, [BH1750.CHANGE_MEASUREMENT_TIME_HIGH_BIT_CMD | (this.#measurementTime >>> 5)])
+		this.client.twoWireWrite(this.address, [BH1750.CHANGE_MEASUREMENT_TIME_LOW_BIT_CMD | (this.#measurementTime & 0x1f)])
+	}
+
+	// Starts one measurement cycle and reads back the 16-bit result after conversion.
+	async #readMeasurement() {
+		if (this.#reading) return
+
+		try {
+			this.#reading = true
+
+			if (this.#oneTimeMode) {
+				this.client.twoWireWrite(this.address, [BH1750.POWER_ON_CMD])
+				this.#configureMeasurementTime()
+			}
+
+			this.client.twoWireWrite(this.address, [this.#modeCommand])
+			await Bun.sleep(this.#measurementDelayMs)
+			this.client.twoWireRead(this.address, -1, 2)
+		} finally {
+			this.#reading = false
+		}
 	}
 }
 
