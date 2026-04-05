@@ -24,7 +24,7 @@ export interface AstapPlateSolveOptions extends PlateSolveOptions {
 
 const DEFAULT_TIMEOUT = 300000 // 5 minutes
 
-export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, outputDirectory, executable, timeout }: AstapStarDetectionOptions = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
+export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, outputDirectory, executable, timeout }: Readonly<AstapStarDetectionOptions> = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
 	if (!input || !(await Bun.file(input).exists())) return []
 
 	const cwd = outputDirectory || dirname(input)
