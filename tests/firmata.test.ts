@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { deg } from '../src/angle'
+import { G } from '../src/constants'
 import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { BH1750, BMP180, BMP280, HMC5883L, MAX44009, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
+import { BH1750, BMP180, BMP280, HMC5883L, MAX44009, MPU6050, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
 
 type MockFirmataMessage = readonly ['mode', number, PinMode] | readonly ['analogReport', number, boolean] | readonly ['config', number] | readonly ['write', number, Buffer] | readonly ['read', number, number, number, boolean, TwoWireAddressMode, TwoWireAutoRestartMode]
 
@@ -387,6 +389,47 @@ test('TEMT6000 configures analog reporting and emits lux updates', () => {
 	temt6000.stop()
 	expect(client.handlers.size).toBe(0)
 	expect(client.messages.at(-1)).toEqual(['analogReport', 3, false])
+})
+
+test('MPU6050 converts raw acceleration and angular velocity', () => {
+	const mpu6050 = new MPU6050(undefined as never)
+	expect(mpu6050.calculateAcceleration(16384)).toBeCloseTo(G, 6)
+	expect(mpu6050.calculateAngularVelocity(131)).toBeCloseTo(deg(1), 6)
+})
+
+test('MPU6050 configures i2c reads and decodes motion updates', () => {
+	const client = new MockFirmataClient()
+	const mpu6050 = new MPU6050(client as never, MPU6050.ADDRESS, 1000)
+	let updates = 0
+
+	mpu6050.addListener(() => {
+		updates++
+	})
+
+	mpu6050.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', MPU6050.ADDRESS, Buffer.from([MPU6050.PWR_MGMT_1_REG, MPU6050.WAKE_UP])],
+		['write', MPU6050.ADDRESS, Buffer.from([MPU6050.ACCEL_CONFIG_REG, 0x00])],
+		['write', MPU6050.ADDRESS, Buffer.from([MPU6050.GYRO_CONFIG_REG, 0x00])],
+		['read', MPU6050.ADDRESS, MPU6050.ACCEL_XOUT_H_REG, 14, false, 7, 'stop'],
+	])
+
+	mpu6050.twoWireMessage(client as never, MPU6050.ADDRESS, MPU6050.ACCEL_XOUT_H_REG, Buffer.from([0x40, 0x00, 0xc0, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x83, 0xfe, 0xfa, 0x02, 0x8f]))
+	expect(mpu6050.ax).toBeCloseTo(G, 6)
+	expect(mpu6050.ay).toBeCloseTo(-G, 6)
+	expect(mpu6050.az).toBeCloseTo(G / 2, 6)
+	expect(mpu6050.gx).toBeCloseTo(deg(1), 6)
+	expect(mpu6050.gy).toBeCloseTo(deg(-2), 6)
+	expect(mpu6050.gz).toBeCloseTo(deg(5), 6)
+	expect(updates).toBe(1)
+
+	mpu6050.twoWireMessage(client as never, MPU6050.ADDRESS, MPU6050.ACCEL_XOUT_H_REG, Buffer.from([0x40, 0x00, 0xc0, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x83, 0xfe, 0xfa, 0x02, 0x8f]))
+	expect(updates).toBe(1)
+
+	mpu6050.stop()
+	expect(client.handlers.size).toBe(0)
 })
 
 test('HMC5883L converts raw values to gauss', () => {

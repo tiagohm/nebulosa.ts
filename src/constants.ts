@@ -138,6 +138,9 @@ export const ONE_MEGAPARSEC = 1000000 * ONE_PARSEC
 // 1000000000 parsecs in AU.
 export const ONE_GIGAPARSEC = 1000000000 * ONE_PARSEC
 
+// Standard gravity (m/s²)
+export const G = 9.80665
+
 // 1 ATM.
 export const ONE_ATM = 1013.25
 

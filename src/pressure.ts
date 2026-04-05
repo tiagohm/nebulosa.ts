@@ -1,4 +1,4 @@
-import { ONE_ATM } from './constants'
+import { G, ONE_ATM } from './constants'
 import { type Distance, toMeter } from './distance'
 import { type Temperature, toKelvin } from './temperature'
 
@@ -28,7 +28,7 @@ export function toAtm(value: Pressure): number {
 // Converts the altitude to pressure at specific temperature.
 // https://www.mide.com/air-pressure-at-altitude-calculator
 export function pressureFrom(altitude: Distance, temperature: Temperature = 15): Pressure {
-	const e = (9.80665 * 0.0289644) / (8.31432 * -0.0065)
+	const e = (G * 0.0289644) / (8.31432 * -0.0065)
 	const k = toKelvin(temperature)
 	const m = toMeter(altitude)
 
@@ -37,6 +37,6 @@ export function pressureFrom(altitude: Distance, temperature: Temperature = 15):
 	} else {
 		const a = ONE_ATM * (k / (k + -0.0065 * 11000)) ** e
 		const c = k + 11000 * -0.0065
-		return a * Math.exp((-9.80665 * 0.0289644 * (m - 11000)) / (8.31432 * c))
+		return a * Math.exp((-G * 0.0289644 * (m - 11000)) / (8.31432 * c))
 	}
 }
