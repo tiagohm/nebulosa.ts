@@ -74,11 +74,28 @@ export function dms(d: number, min: number = 0, sec: number = 0): Angle {
 	return neg ? -angle : angle
 }
 
+// Creates a new signed Angle from degrees, minutes and seconds.
+export function signedDms(negative: boolean, d: number, min: number = 0, sec: number = 0): Angle {
+	const angle = deg(Math.abs(d) + Math.abs(min) / 60 + Math.abs(sec) / 3600)
+	return negative ? -angle : angle
+}
+
 // Creates a new Angle from hours, minutes and seconds.
 export function hms(h: number, min: number = 0, sec: number = 0): Angle {
 	const neg = h < 0
 	const angle = hour(Math.abs(h) + Math.abs(min) / 60 + Math.abs(sec) / 3600)
 	return neg ? -angle : angle
+}
+
+// Creates a new signed Angle from hours, minutes and seconds.
+export function signedHms(negative: boolean, h: number, min: number = 0, sec: number = 0): Angle {
+	const angle = hour(Math.abs(h) + Math.abs(min) / 60 + Math.abs(sec) / 3600)
+	return negative ? -angle : angle
+}
+
+// Creates a new Angle from seconds of time.
+export function timeSec(value: number): Angle {
+	return value * (PI / 43200)
 }
 
 // Converts the angle to degrees.
@@ -89,6 +106,11 @@ export function toDeg(angle: Angle): number {
 // Converts the angle to hours.
 export function toHour(angle: Angle): number {
 	return angle * (12 / PI)
+}
+
+// Converts the angle to seconds of time.
+export function toTimeSec(angle: Angle): number {
+	return angle * (43200 / PI)
 }
 
 // Converts the angle to arcmin.
