@@ -131,3 +131,10 @@ export function smoothstep(edge0: number, edge1: number, value: number) {
 	const t = clamp(inverseLerp(edge0, edge1, value), 0, 1)
 	return t * t * (3 - 2 * t)
 }
+
+// Separates integer part from fraction
+export function modf(n: number) {
+	const i = Math.trunc(n)
+	const f = Math.abs(n - i)
+	return [i, f] as const
+}

@@ -302,39 +302,8 @@ export class CalendarGregorian extends Calendar {
 
 // -----------------------------------------------------------------------------
 
-/**
- * base conversion from calendar date to julian day
- */
-export function CalendarToJD (y, m, d, isJulian) {
-  let b = 0
-  if (m < 3) {
-    y--
-    m += 12
-  }
-  if (!isJulian) {
-    const a = base.floorDiv(y, 100)
-    b = 2 - a + base.floorDiv(a, 4)
-  }
-  // (7.1) p. 61
-  const jd = (base.floorDiv(36525 * (int(y + 4716)), 100)) +
-    (base.floorDiv(306 * (m + 1), 10) + b) + d - 1524.5
-  return jd
-}
 
-/**
- * CalendarGregorianToJD converts a Gregorian year, month, and day of month
- * to Julian day.
- *
- * Negative years are valid, back to JD 0.  The result is not valid for
- * dates before JD 0.
- * @param {number} y - year (int)
- * @param {number} m - month (int)
- * @param {number} d - day (float)
- * @returns {number} jd - Julian day (float)
- */
-export function CalendarGregorianToJD (y, m, d) {
-  return CalendarToJD(y, m, d, false)
-}
+
 
 /**
  * CalendarJulianToJD converts a Julian year, month, and day of month to Julian day.
@@ -366,53 +335,6 @@ export function LeapYearJulian (y) {
  */
 export function LeapYearGregorian (y) {
   return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
-}
-
-/**
- * JDToCalendar returns the calendar date for the given jd.
- *
- * Note that this function returns a date in either the Julian or Gregorian
- * Calendar, as appropriate.
- * @param {number} jd - Julian day (float)
- * @param {boolean} isJulian - set true for Julian Calendar, otherwise Gregorian is used
- * @returns {object} `{ (int) year, (int) month, (float) day }`
- */
-export function JDToCalendar (jd, isJulian) {
-  const [z, f] = base.modf(jd + 0.5)
-  let a = z
-  if (!isJulian) {
-    const alpha = base.floorDiv(z * 100 - 186721625, 3652425)
-    a = z + 1 + alpha - base.floorDiv(alpha, 4)
-  }
-  const b = a + 1524
-  const c = base.floorDiv(b * 100 - 12210, 36525)
-  const d = base.floorDiv(36525 * c, 100)
-  const e = int(base.floorDiv((b - d) * 1e4, 306001))
-  // compute return values
-  let year
-  let month
-  const day = (int(b - d) - base.floorDiv(306001 * e, 1e4)) + f
-  if (e === 14 || e === 15) {
-    month = e - 13
-  } else {
-    month = e - 1
-  }
-  if (month < 3) {
-    year = int(c) - 4715
-  } else {
-    year = int(c) - 4716
-  }
-  return { year, month, day }
-}
-
-/**
- * JDToCalendarGregorian returns the calendar date for the given jd in the Gregorian Calendar.
- *
- * @param {number} jd - Julian day (float)
- * @returns {object} `{ (int) year, (int) month, (float) day }`
- */
-export function JDToCalendarGregorian (jd) {
-  return JDToCalendar(jd, false)
 }
 
 /**
