@@ -1,7 +1,34 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
+import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { BMP180, BMP280 } from '../src/firmata.peripheral'
+import { BMP180, BMP280, MAX44009 } from '../src/firmata.peripheral'
+
+type MockFirmataMessage = readonly ['config', number] | readonly ['write', number, Buffer] | readonly ['read', number, number, number, boolean, TwoWireAddressMode, TwoWireAutoRestartMode]
+
+class MockFirmataClient {
+	readonly messages: MockFirmataMessage[] = []
+	readonly handlers = new Set<FirmataClientHandler>()
+
+	addHandler(handler: FirmataClientHandler) {
+		this.handlers.add(handler)
+	}
+
+	removeHandler(handler: FirmataClientHandler) {
+		this.handlers.delete(handler)
+	}
+
+	twoWireConfig(delayInMicroseconds: number) {
+		this.messages.push(['config', delayInMicroseconds])
+	}
+
+	twoWireWrite(address: number, data?: Buffer | readonly number[]) {
+		this.messages.push(['write', address, Buffer.from(data ?? [])])
+	}
+
+	twoWireRead(address: number, register: number, bytesToRead: number, continuous: boolean = false, addressMode: 7 | 10 = 7, autoRestart: 'stop' | 'restart' = 'stop') {
+		this.messages.push(['read', address, register, bytesToRead, continuous, addressMode, autoRestart])
+	}
+}
 
 describe('command decoding', () => {
 	const result: unknown[] = []
@@ -318,4 +345,41 @@ test('BMP280 compensate temperature & pressure', () => {
 	const bmp280 = new BMP280(undefined as never, 0)
 	expect(bmp280.compensateTemperature(519888)).toBeCloseTo(25.08, 2)
 	expect(bmp280.compensatePressure(415148)).toBeCloseTo(100653.27, 2)
+})
+
+test('MAX44009 calculate lux', () => {
+	const max44009 = new MAX44009(undefined as never)
+	expect(max44009.calculateLux(0x00, 0x01)).toBeCloseTo(0.045, 6)
+	expect(max44009.calculateLux(0x01, 0x00)).toBeCloseTo(0.72, 6)
+	expect(max44009.calculateLux(0x10, 0x01)).toBeCloseTo(0.09, 6)
+	expect(max44009.calculateLux(0xef, 0x0f)).toBeCloseTo(188006.4, 1)
+	expect(max44009.calculateLux(0xf0, 0x00)).toBe(MAX44009.MAX_LUX)
+})
+
+test('MAX44009 configures i2c reads and emits lux updates', () => {
+	const client = new MockFirmataClient()
+	const max44009 = new MAX44009(client as never, MAX44009.ADDRESS, 1000)
+	let updates = 0
+
+	max44009.addListener(() => {
+		updates++
+	})
+
+	max44009.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', MAX44009.ADDRESS, Buffer.from([MAX44009.CONFIGURATION_REG, MAX44009.DEFAULT_CONFIGURATION])],
+		['read', MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, 2, false, 7, 'restart'],
+	])
+
+	max44009.twoWireMessage(client as never, MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, Buffer.from([0x10, 0x01]))
+	expect(max44009.lux).toBeCloseTo(0.09, 6)
+	expect(updates).toBe(1)
+
+	max44009.twoWireMessage(client as never, MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, Buffer.from([0x10, 0x01]))
+	expect(updates).toBe(1)
+
+	max44009.stop()
+	expect(client.handlers.size).toBe(0)
 })

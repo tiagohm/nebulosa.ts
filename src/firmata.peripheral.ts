@@ -49,12 +49,20 @@ export interface Altimeter {
 	readonly altitude: Distance
 }
 
+export interface LuxMeter {
+	readonly lux: number
+}
+
 export interface BMP280Options {
 	readonly mode?: BMP280OperatingMode
 	readonly temperatureSampling?: BMP280Sampling // Reduces noise and increases the output resolution by one bit
 	readonly pressureSampling?: BMP280Sampling // Reduces noise and increases the output resolution by one bit
 	readonly filter?: BMP280Filter // Supress environment disturbances in the output data
 	readonly standbyDuration?: BMP280StandbyDuration // Standby period between two measurement cycles in normal mode
+}
+
+export interface MAX44009Options {
+	readonly continuousMode?: boolean
 }
 
 export interface DS18B20Options {
@@ -70,6 +78,10 @@ export const DEFAULT_BMP280_OPTIONS: Required<BMP280Options> = {
 	pressureSampling: 'x1',
 	filter: 'off',
 	standbyDuration: 1000,
+}
+
+export const DEFAULT_MAX44009_OPTIONS: Required<MAX44009Options> = {
+	continuousMode: false,
 }
 
 export const DEFAULT_DS18B20_OPTIONS: DS18B20Options = {
@@ -573,6 +585,76 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 			this.temperature = temperature
 			this.fire()
 		}
+	}
+}
+
+// https://www.analog.com/media/en/technical-documentation/data-sheets/max44009.pdf
+
+export class MAX44009 extends PeripheralBase<MAX44009> implements LuxMeter, FirmataClientHandler {
+	lux = 0
+
+	static readonly ADDRESS = 0x4a
+	static readonly ALTERNATIVE_ADDRESS = 0x4b
+
+	static readonly CONFIGURATION_REG = 0x02
+	static readonly LUX_HIGH_REG = 0x03
+	static readonly LUX_LOW_REG = 0x04
+	static readonly DEFAULT_CONFIGURATION = 0x03
+	static readonly CONTINUOUS_MODE_BIT = 0x80
+	static readonly MAX_LUX = 188006.4
+
+	#timer?: NodeJS.Timeout
+	readonly #configuration: number
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly address: number = MAX44009.ADDRESS,
+		readonly pollingInterval: number = DEFAULT_POLLING_INTERVAL,
+		options: MAX44009Options = DEFAULT_MAX44009_OPTIONS,
+	) {
+		super()
+		this.#configuration = (options.continuousMode ? MAX44009.CONTINUOUS_MODE_BIT : 0) | MAX44009.DEFAULT_CONFIGURATION
+	}
+
+	start() {
+		if (this.#timer === undefined) {
+			this.client.addHandler(this)
+			this.client.twoWireConfig(0)
+			this.client.twoWireWrite(this.address, [MAX44009.CONFIGURATION_REG, this.#configuration])
+			this.#readMeasurement()
+			this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(100, this.pollingInterval))
+		}
+	}
+
+	stop() {
+		this.client.removeHandler(this)
+		clearInterval(this.#timer)
+		this.#timer = undefined
+	}
+
+	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
+		if (client !== this.client || address !== this.address || register !== MAX44009.LUX_HIGH_REG || data.byteLength !== 2) return
+
+		const lux = this.calculateLux(data[0], data[1])
+
+		if (lux !== this.lux) {
+			this.lux = lux
+			this.fire()
+		}
+	}
+
+	// Decodes the exponent and mantissa registers into the ambient light level in lux.
+	calculateLux(highByte: number, lowByte: number) {
+		const exponent = (highByte >>> 4) & 0x0f
+
+		if (exponent === 0x0f) return MAX44009.MAX_LUX
+
+		const mantissa = ((highByte & 0x0f) << 4) | (lowByte & 0x0f)
+		return 2 ** exponent * mantissa * 0.045
+	}
+
+	#readMeasurement() {
+		this.client.twoWireRead(this.address, MAX44009.LUX_HIGH_REG, 2, false, 7, 'restart')
 	}
 }
 
