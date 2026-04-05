@@ -3,7 +3,7 @@ import { deg } from '../src/angle'
 import { G } from '../src/constants'
 import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { BH1750, BMP180, BMP280, HMC5883L, MAX44009, MPU6050, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
+import { ACS712, BH1750, BMP180, BMP280, HMC5883L, MAX44009, MPU6050, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
 
 type MockFirmataMessage = readonly ['mode', number, PinMode] | readonly ['analogReport', number, boolean] | readonly ['config', number] | readonly ['write', number, Buffer] | readonly ['read', number, number, number, boolean, TwoWireAddressMode, TwoWireAutoRestartMode]
 
@@ -389,6 +389,40 @@ test('TEMT6000 configures analog reporting and emits lux updates', () => {
 	temt6000.stop()
 	expect(client.handlers.size).toBe(0)
 	expect(client.messages.at(-1)).toEqual(['analogReport', 3, false])
+})
+
+test('ACS712 converts ADC counts to current', () => {
+	const acs712 = new ACS712(undefined as never, 0)
+	expect(acs712.calculateCurrent(511.5)).toBeCloseTo(0, 6)
+	expect(acs712.calculateCurrent(549.351)).toBeCloseTo(1, 3)
+})
+
+test('ACS712 configures analog reporting and emits current updates', () => {
+	const client = new MockFirmataClient()
+	const acs712 = new ACS712(client as never, 4)
+	let updates = 0
+
+	acs712.addListener(() => {
+		updates++
+	})
+
+	acs712.start()
+
+	expect(client.messages).toEqual([
+		['mode', 4, PinMode.ANALOG],
+		['analogReport', 4, true],
+	])
+
+	acs712.pinChange(client as never, { id: 4, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 549.351 })
+	expect(acs712.current).toBeCloseTo(1, 3)
+	expect(updates).toBe(1)
+
+	acs712.pinChange(client as never, { id: 4, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 549.351 })
+	expect(updates).toBe(1)
+
+	acs712.stop()
+	expect(client.handlers.size).toBe(0)
+	expect(client.messages.at(-1)).toEqual(['analogReport', 4, false])
 })
 
 test('MPU6050 converts raw acceleration and angular velocity', () => {

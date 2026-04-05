@@ -24,6 +24,8 @@ export type HMC5883LDataRate = 0.75 | 1.5 | 3 | 7.5 | 15 | 30 | 75
 
 export type HMC5883LRange = 0.88 | 1.3 | 1.9 | 2.5 | 4.0 | 4.7 | 5.6 | 8.1 // gauss
 
+export type ACS712Range = 5 | 20 | 30 // A
+
 export type MPU6050AccelerometerRange = 2 | 4 | 8 | 16 // g
 
 export type MPU6050GyroscopeRange = 250 | 500 | 1000 | 2000 // deg/s
@@ -71,6 +73,10 @@ export interface LuxMeter {
 	readonly lux: number
 }
 
+export interface Ammeter {
+	readonly current: number // A
+}
+
 export interface Accelerometer {
 	readonly ax: number // m/s^2
 	readonly ay: number // m/s^2
@@ -101,6 +107,14 @@ export interface HMC5883LOptions {
 	readonly sampleAveraging?: HMC5883LSampleAveraging
 	readonly dataRate?: HMC5883LDataRate
 	readonly range?: HMC5883LRange // gauss
+}
+
+export interface ACS712Options {
+	readonly range?: ACS712Range // A
+	readonly aref?: number // volts
+	readonly zeroCurrentVoltage?: number // volts
+	readonly adcResolution?: number
+	readonly voltsPerAmp?: number
 }
 
 export interface MPU6050Options {
@@ -148,6 +162,14 @@ export const DEFAULT_HMC5883L_OPTIONS: Required<HMC5883LOptions> = {
 	sampleAveraging: 1,
 	dataRate: 15,
 	range: 1.3,
+}
+
+export const DEFAULT_ACS712_OPTIONS: Required<ACS712Options> = {
+	range: 5,
+	aref: 5,
+	zeroCurrentVoltage: 2.5,
+	adcResolution: 1023,
+	voltsPerAmp: 0.185,
 }
 
 export const DEFAULT_MPU6050_OPTIONS: Required<MPU6050Options> = {
@@ -291,6 +313,62 @@ export class TEMT6000 extends PeripheralBase<TEMT6000> implements LuxMeter, Firm
 	// Converts the raw ADC step count into lux.
 	calculateLux(steps: number) {
 		return steps * this.#luxPerStep
+	}
+}
+
+// https://www.allegromicro.com/en/products/sense/current-sensor-ics/integrated-current-sensors/acs712
+
+export class ACS712 extends PeripheralBase<ACS712> implements Ammeter, FirmataClientHandler {
+	current = 0
+
+	readonly #ampsPerStep: number
+	readonly #zeroCurrentSteps: number
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly pin: number,
+		options: ACS712Options = DEFAULT_ACS712_OPTIONS,
+	) {
+		super()
+
+		const range = options.range ?? DEFAULT_ACS712_OPTIONS.range
+		const aref = options.aref ?? DEFAULT_ACS712_OPTIONS.aref
+		const zeroCurrentVoltage = options.zeroCurrentVoltage ?? DEFAULT_ACS712_OPTIONS.zeroCurrentVoltage
+		const adcResolution = options.adcResolution ?? DEFAULT_ACS712_OPTIONS.adcResolution
+		const voltsPerAmp = options.voltsPerAmp ?? (range === 5 ? 0.185 : range === 20 ? 0.1 : 0.066)
+
+		this.#ampsPerStep = aref / (adcResolution * voltsPerAmp)
+		this.#zeroCurrentSteps = (zeroCurrentVoltage * adcResolution) / aref
+	}
+
+	// Converts one ADC sample into current using the configured sensitivity and zero-current offset.
+	pinChange(client: FirmataClient, pin: Pin) {
+		if (this.client !== client || pin.id !== this.pin) return
+
+		const current = this.calculateCurrent(pin.value)
+
+		if (current !== this.current) {
+			this.current = current
+			this.fire()
+		}
+	}
+
+	// Enables analog reporting for the configured pin.
+	start() {
+		this.client.addHandler(this)
+		this.client.pinMode(this.pin, PinMode.ANALOG)
+		this.client.requestAnalogPinReport(this.pin, true)
+	}
+
+	// Disables analog reporting and detaches the Firmata handler.
+	stop() {
+		this.client.removeHandler(this)
+		this.client.requestAnalogPinReport(this.pin, false)
+	}
+
+	// Converts a raw ADC step count into amperes.
+	calculateCurrent(steps: number) {
+		return (steps - this.#zeroCurrentSteps) * this.#ampsPerStep
 	}
 }
 
