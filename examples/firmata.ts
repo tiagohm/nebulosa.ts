@@ -1,7 +1,9 @@
-// biome-ignore-all lint/correctness/noConstantCondition: example!
+// biome-ignore-all lint/correctness/noConstantCondition: this is a example!
 
 import { toMeter } from '../src/distance'
-import { AM2320, BMP180, BMP180Mode, BMP280, DS18B20, ESP8266, type FirmataClientHandler, FirmataClientOverTcp, LM35, SHT21 } from '../src/firmata'
+import { type FirmataClientHandler, FirmataClientOverTcp } from '../src/firmata'
+import { ESP8266 } from '../src/firmata.board'
+import { AM2320, BMP180, BMP180Mode, BMP280, DS18B20, LM35, SHT21 } from '../src/firmata.peripheral'
 
 const handler: FirmataClientHandler = {
 	ready: (client) => {

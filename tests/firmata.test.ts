@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { type AnalogMapping, BMP180, BMP280, decodePacked7Bit, ESP8266, encodePacked7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
+import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport } from '../src/firmata'
+import { ESP8266 } from '../src/firmata.board'
+import { BMP180, BMP280 } from '../src/firmata.peripheral'
 
 describe('command decoding', () => {
 	const result: unknown[] = []
