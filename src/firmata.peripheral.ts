@@ -85,6 +85,13 @@ export interface HMC5883LOptions {
 	readonly range?: HMC5883LRange // gauss
 }
 
+export interface TEMT6000Options {
+	readonly aref?: number // volts
+	readonly loadResistance?: number // ohms
+	readonly adcResolution?: number
+	readonly microampsPerLux?: number
+}
+
 export interface BH1750Options {
 	readonly mode?: BH1750Mode
 	readonly measurementTime?: number
@@ -118,6 +125,13 @@ export const DEFAULT_HMC5883L_OPTIONS: Required<HMC5883LOptions> = {
 	sampleAveraging: 1,
 	dataRate: 15,
 	range: 1.3,
+}
+
+export const DEFAULT_TEMT6000_OPTIONS: Required<TEMT6000Options> = {
+	aref: 5,
+	loadResistance: 10000,
+	adcResolution: 1023,
+	microampsPerLux: 0.5,
 }
 
 export const DEFAULT_BH1750_OPTIONS: Required<BH1750Options> = {
@@ -196,6 +210,59 @@ export class LM35 extends PeripheralBase<LM35> implements Thermometer, FirmataCl
 	stop() {
 		this.client.removeHandler(this)
 		this.client.requestAnalogPinReport(this.pin, false)
+	}
+}
+
+// https://www.alldatasheet.com/html-pdf/117488/VISHAY/TEMT6000/440/2/TEMT6000.html
+
+export class TEMT6000 extends PeripheralBase<TEMT6000> implements LuxMeter, FirmataClientHandler {
+	lux = 0
+
+	readonly #luxPerStep: number
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly pin: number,
+		options: TEMT6000Options = DEFAULT_TEMT6000_OPTIONS,
+	) {
+		super()
+
+		const aref = options.aref ?? DEFAULT_TEMT6000_OPTIONS.aref
+		const loadResistance = options.loadResistance ?? DEFAULT_TEMT6000_OPTIONS.loadResistance
+		const adcResolution = options.adcResolution ?? DEFAULT_TEMT6000_OPTIONS.adcResolution
+		const microampsPerLux = options.microampsPerLux ?? DEFAULT_TEMT6000_OPTIONS.microampsPerLux
+
+		this.#luxPerStep = (aref * 1e6) / (loadResistance * adcResolution * microampsPerLux)
+	}
+
+	// Converts one ADC sample into lux for the configured analog front-end.
+	pinChange(client: FirmataClient, pin: Pin) {
+		if (this.client !== client || pin.id !== this.pin) return
+
+		const lux = this.calculateLux(pin.value)
+
+		if (lux !== this.lux) {
+			this.lux = lux
+			this.fire()
+		}
+	}
+
+	// Enables analog reporting for the configured pin.
+	start() {
+		this.client.addHandler(this)
+		this.client.pinMode(this.pin, PinMode.ANALOG)
+		this.client.requestAnalogPinReport(this.pin, true)
+	}
+
+	// Disables analog reporting and detaches the Firmata handler.
+	stop() {
+		this.client.removeHandler(this)
+		this.client.requestAnalogPinReport(this.pin, false)
+	}
+
+	// Converts the raw ADC step count into lux.
+	calculateLux(steps: number) {
+		return steps * this.#luxPerStep
 	}
 }
 
@@ -776,8 +843,8 @@ export class BH1750 extends PeripheralBase<BH1750> implements LuxMeter, FirmataC
 	) {
 		super()
 
-		const mode = options.mode ?? 'continuousHighResolution'
-		const measurementTime = Math.max(BH1750.MIN_MEASUREMENT_TIME, Math.min(BH1750.MAX_MEASUREMENT_TIME, Math.trunc(options.measurementTime ?? BH1750.DEFAULT_MEASUREMENT_TIME)))
+		const mode = options.mode ?? DEFAULT_BH1750_OPTIONS.mode
+		const measurementTime = Math.max(BH1750.MIN_MEASUREMENT_TIME, Math.min(BH1750.MAX_MEASUREMENT_TIME, Math.trunc(options.measurementTime ?? DEFAULT_BH1750_OPTIONS.measurementTime)))
 		const lowResolutionMode = mode === 'continuousLowResolution' || mode === 'oneTimeLowResolution'
 
 		this.#modeCommand =
