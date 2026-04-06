@@ -194,17 +194,21 @@ export const ELLIPSOID_PARAMETERS: Readonly<Record<Ellipsoid, EllipsoidParameter
 	0: {
 		radius: GRS80_RADIUS,
 		flattening: GRS80_FLATTENING,
+		oneMinusFlattening: 1 - GRS80_FLATTENING,
 	},
 	1: {
 		radius: WGS72_RADIUS,
 		flattening: WGS72_FLATTENING,
+		oneMinusFlattening: 1 - WGS72_FLATTENING,
 	},
 	2: {
 		radius: WGS84_RADIUS,
 		flattening: WGS84_FLATTENING,
+		oneMinusFlattening: 1 - WGS84_FLATTENING,
 	},
 	3: {
 		radius: IERS2010_RADIUS,
 		flattening: IERS2010_FLATTENING,
+		oneMinusFlattening: 1 - IERS2010_FLATTENING,
 	},
 }
