@@ -1,5 +1,5 @@
 import type { Angle } from './angle'
-import { PI, TAU } from './constants'
+import { ASEC2RAD, DEG2RAD, PI, TAU } from './constants'
 import type { Distance } from './distance'
 import { floorDiv, modf, type NumberArray } from './math'
 
@@ -631,5 +631,242 @@ export namespace AngularSeparation {
 		const [sind2, cosd2] = Base.sincos(c2[1])
 		const p = Math.atan2(sinDeltar, cosd2 * Math.tan(c1[1]) - sind2 * cosDeltar)
 		return p
+	}
+}
+
+// Chapter 50, Perigee and apogee of the Moon
+export namespace Apsis {
+	// Conversion factor from k to T, given in (50.3) p. 356
+	const CK = 1 / 1325.55
+
+	// http://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html
+	export const EARTH_RADIUS = 6378.137 // km
+	// http://nssdc.gsfc.nasa.gov/planetary/factsheet/moonfact.html
+	export const MOON_RADIUS = 1738.1 // km
+
+	// Computes mean time of perigee or apogee
+	export function mean(T: number) {
+		return Base.horner(T, [2451534.6698, 27.55454989 / CK, -0.0006691, -0.000001098, 0.0000000052])
+	}
+
+	// Returns k at half h nearest year y.
+	export function snap(y: number, h: number) {
+		const k = (y - 1999.97) * 13.2555 // (50.2) p. 355
+		return Math.floor(k - h + 0.5) + h
+	}
+
+	// Computes the jde of the mean perigee of the Moon nearest the given date.
+	export function meanPerigee(year: number) {
+		return mean(snap(year, 0) * CK)
+	}
+
+	// Computes the jde of perigee of the Moon nearest the given date.
+	export function perigee(year: number) {
+		const [T, D, M, F] = tdmf(year, 0)
+
+		const corr =
+			-1.6769 * Math.sin(2 * D) +
+			0.4589 * Math.sin(4 * D) +
+			-0.1856 * Math.sin(6 * D) +
+			0.0883 * Math.sin(8 * D) +
+			(-0.0773 + 0.00019 * T) * Math.sin(2 * D - M) +
+			(0.0502 - 0.00013 * T) * Math.sin(M) +
+			-0.046 * Math.sin(10 * D) +
+			(0.0422 - 0.00011 * T) * Math.sin(4 * D - M) +
+			-0.0256 * Math.sin(6 * D - M) +
+			0.0253 * Math.sin(12 * D) +
+			0.0237 * Math.sin(D) +
+			0.0162 * Math.sin(8 * D - M) +
+			-0.0145 * Math.sin(14 * D) +
+			0.0129 * Math.sin(2 * F) +
+			-0.0112 * Math.sin(3 * D) +
+			-0.0104 * Math.sin(10 * D - M) +
+			0.0086 * Math.sin(16 * D) +
+			0.0069 * Math.sin(12 * D - M) +
+			0.0066 * Math.sin(5 * D) +
+			-0.0053 * Math.sin(2 * (D + F)) +
+			-0.0052 * Math.sin(18 * D) +
+			-0.0046 * Math.sin(14 * D - M) +
+			-0.0041 * Math.sin(7 * D) +
+			0.004 * Math.sin(2 * D + M) +
+			0.0032 * Math.sin(20 * D) +
+			-0.0032 * Math.sin(D + M) +
+			0.0031 * Math.sin(16 * D - M) +
+			-0.0029 * Math.sin(4 * D + M) +
+			0.0027 * Math.sin(9 * D) +
+			0.0027 * Math.sin(4 * D + 2 * F) +
+			-0.0027 * Math.sin(2 * (D - M)) +
+			0.0024 * Math.sin(4 * D - 2 * M) +
+			-0.0021 * Math.sin(6 * D - 2 * M) +
+			-0.0021 * Math.sin(22 * D) +
+			-0.0021 * Math.sin(18 * D - M) +
+			0.0019 * Math.sin(6 * D + M) +
+			-0.0018 * Math.sin(11 * D) +
+			-0.0014 * Math.sin(8 * D + M) +
+			-0.0014 * Math.sin(4 * D - 2 * F) +
+			-0.0014 * Math.sin(6 * D + 2 * F) +
+			0.0014 * Math.sin(3 * D + M) +
+			-0.0014 * Math.sin(5 * D + M) +
+			0.0013 * Math.sin(13 * D) +
+			0.0013 * Math.sin(20 * D - M) +
+			0.0011 * Math.sin(3 * D + 2 * M) +
+			-0.0011 * Math.sin(2 * (2 * D + F - M)) +
+			-0.001 * Math.sin(D + 2 * M) +
+			-0.0009 * Math.sin(22 * D - M) +
+			-0.0008 * Math.sin(4 * F) +
+			0.0008 * Math.sin(6 * D - 2 * F) +
+			0.0008 * Math.sin(2 * (D - F) + M) +
+			0.0007 * Math.sin(2 * M) +
+			0.0007 * Math.sin(2 * F - M) +
+			0.0007 * Math.sin(2 * D + 4 * F) +
+			-0.0006 * Math.sin(2 * (F - M)) +
+			-0.0006 * Math.sin(2 * (D - F + M)) +
+			0.0006 * Math.sin(24 * D) +
+			0.0005 * Math.sin(4 * (D - F)) +
+			0.0005 * Math.sin(2 * (D + M)) +
+			-0.0004 * Math.sin(D - M)
+
+		return mean(T) + corr
+	}
+
+	// Computes the jde of the mean apogee of the Moon nearest the given date.
+	export function meanApogee(year: number) {
+		return mean(snap(year, 0.5) * CK)
+	}
+
+	// Computes the jde of apogee of the Moon nearest the given date.
+	export function apogee(year: number) {
+		const [T, D, M, F] = tdmf(year, 0.5)
+
+		const corr =
+			0.4392 * Math.sin(2 * D) +
+			0.0684 * Math.sin(4 * D) +
+			(0.0456 - 0.00011 * T) * Math.sin(M) +
+			(0.0426 - 0.00011 * T) * Math.sin(2 * D - M) +
+			0.0212 * Math.sin(2 * F) +
+			-0.0189 * Math.sin(D) +
+			0.0144 * Math.sin(6 * D) +
+			0.0113 * Math.sin(4 * D - M) +
+			0.0047 * Math.sin(2 * (D + F)) +
+			0.0036 * Math.sin(D + M) +
+			0.0035 * Math.sin(8 * D) +
+			0.0034 * Math.sin(6 * D - M) +
+			-0.0034 * Math.sin(2 * (D - F)) +
+			0.0022 * Math.sin(2 * (D - M)) +
+			-0.0017 * Math.sin(3 * D) +
+			0.0013 * Math.sin(4 * D + 2 * F) +
+			0.0011 * Math.sin(8 * D - M) +
+			0.001 * Math.sin(4 * D - 2 * M) +
+			0.0009 * Math.sin(10 * D) +
+			0.0007 * Math.sin(3 * D + M) +
+			0.0006 * Math.sin(2 * M) +
+			0.0005 * Math.sin(2 * D + M) +
+			0.0005 * Math.sin(2 * (D + M)) +
+			0.0004 * Math.sin(6 * D + 2 * F) +
+			0.0004 * Math.sin(6 * D - 2 * M) +
+			0.0004 * Math.sin(10 * D - M) +
+			-0.0004 * Math.sin(5 * D) +
+			-0.0004 * Math.sin(4 * D - 2 * F) +
+			0.0003 * Math.sin(2 * F + M) +
+			0.0003 * Math.sin(12 * D) +
+			0.0003 * Math.sin(2 * D + 2 * F - M) +
+			-0.0003 * Math.sin(D - M)
+
+		return mean(T) + corr
+	}
+
+	// Computes equatorial horizontal parallax of the Moon at the Apogee nearest the given date.
+	export function apogeeParallax(year: number) {
+		const [T, D, M, F] = tdmf(year, 0.5)
+
+		return (
+			3245.251 * ASEC2RAD +
+			-9.147 * ASEC2RAD * Math.cos(2 * D) +
+			-0.841 * ASEC2RAD * Math.cos(D) +
+			0.697 * ASEC2RAD * Math.cos(2 * F) +
+			(-0.656 * ASEC2RAD + 0.0016 * ASEC2RAD * T) * Math.cos(M) +
+			0.355 * ASEC2RAD * Math.cos(4 * D) +
+			0.159 * ASEC2RAD * Math.cos(2 * D - M) +
+			0.127 * ASEC2RAD * Math.cos(D + M) +
+			0.065 * ASEC2RAD * Math.cos(4 * D - M) +
+			0.052 * ASEC2RAD * Math.cos(6 * D) +
+			0.043 * ASEC2RAD * Math.cos(2 * D + M) +
+			0.031 * ASEC2RAD * Math.cos(2 * (D + F)) +
+			-0.023 * ASEC2RAD * Math.cos(2 * (D - F)) +
+			0.022 * ASEC2RAD * Math.cos(2 * (D - M)) +
+			0.019 * ASEC2RAD * Math.cos(2 * (D + M)) +
+			-0.016 * ASEC2RAD * Math.cos(2 * M) +
+			0.014 * ASEC2RAD * Math.cos(6 * D - M) +
+			0.01 * ASEC2RAD * Math.cos(8 * D)
+		)
+	}
+
+	// Computes equatorial horizontal parallax of the Moon at the Apogee nearest the given date.
+	export function perigeeParallax(year: number) {
+		const [T, D, M, F] = tdmf(year, 0)
+
+		return (
+			3629.215 * ASEC2RAD +
+			63.224 * ASEC2RAD * Math.cos(2 * D) +
+			-6.99 * ASEC2RAD * Math.cos(4 * D) +
+			(2.834 * ASEC2RAD - 0.0071 * T * ASEC2RAD) * Math.cos(2 * D - M) +
+			1.927 * ASEC2RAD * Math.cos(6 * D) +
+			-1.263 * ASEC2RAD * Math.cos(D) +
+			-0.702 * ASEC2RAD * Math.cos(8 * D) +
+			(0.696 * ASEC2RAD - 0.0017 * T * ASEC2RAD) * Math.cos(M) +
+			-0.69 * ASEC2RAD * Math.cos(2 * F) +
+			(-0.629 * ASEC2RAD + 0.0016 * T * ASEC2RAD) * Math.cos(4 * D - M) +
+			-0.392 * ASEC2RAD * Math.cos(2 * (D - F)) +
+			0.297 * ASEC2RAD * Math.cos(10 * D) +
+			0.26 * ASEC2RAD * Math.cos(6 * D - M) +
+			0.201 * ASEC2RAD * Math.cos(3 * D) +
+			-0.161 * ASEC2RAD * Math.cos(2 * D + M) +
+			0.157 * ASEC2RAD * Math.cos(D + M) +
+			-0.138 * ASEC2RAD * Math.cos(12 * D) +
+			-0.127 * ASEC2RAD * Math.cos(8 * D - M) +
+			0.104 * ASEC2RAD * Math.cos(2 * (D + F)) +
+			0.104 * ASEC2RAD * Math.cos(2 * (D - M)) +
+			-0.079 * ASEC2RAD * Math.cos(5 * D) +
+			0.068 * ASEC2RAD * Math.cos(14 * D) +
+			0.067 * ASEC2RAD * Math.cos(10 * D - M) +
+			0.054 * ASEC2RAD * Math.cos(4 * D + M) +
+			-0.038 * ASEC2RAD * Math.cos(12 * D - M) +
+			-0.038 * ASEC2RAD * Math.cos(4 * D - 2 * M) +
+			0.037 * ASEC2RAD * Math.cos(7 * D) +
+			-0.037 * ASEC2RAD * Math.cos(4 * D + 2 * F) +
+			-0.035 * ASEC2RAD * Math.cos(16 * D) +
+			-0.03 * ASEC2RAD * Math.cos(3 * D + M) +
+			0.029 * ASEC2RAD * Math.cos(D - M) +
+			-0.025 * ASEC2RAD * Math.cos(6 * D + M) +
+			0.023 * ASEC2RAD * Math.cos(2 * M) +
+			0.023 * ASEC2RAD * Math.cos(14 * D - M) +
+			-0.023 * ASEC2RAD * Math.cos(2 * (D + M)) +
+			0.022 * ASEC2RAD * Math.cos(6 * D - 2 * M) +
+			-0.021 * ASEC2RAD * Math.cos(2 * D - 2 * F - M) +
+			-0.02 * ASEC2RAD * Math.cos(9 * D) +
+			0.019 * ASEC2RAD * Math.cos(18 * D) +
+			0.017 * ASEC2RAD * Math.cos(6 * D + 2 * F) +
+			0.014 * ASEC2RAD * Math.cos(2 * F - M) +
+			-0.014 * ASEC2RAD * Math.cos(16 * D - M) +
+			0.013 * ASEC2RAD * Math.cos(4 * D - 2 * F) +
+			0.012 * ASEC2RAD * Math.cos(8 * D + M) +
+			0.011 * ASEC2RAD * Math.cos(11 * D) +
+			0.01 * ASEC2RAD * Math.cos(5 * D + M) +
+			-0.01 * ASEC2RAD * Math.cos(20 * D)
+		)
+	}
+
+	// Computes the distance earth - moon (center to center) using the parallax angle in radians
+	export function distance(parallax: Angle) {
+		return EARTH_RADIUS / Math.sin(parallax)
+	}
+
+	function tdmf(year: number, h: number) {
+		const k = snap(year, h)
+		const T = k * CK // (50.3) p. 350
+		const D = Base.horner(T, [171.9179 * DEG2RAD, (335.9106046 * DEG2RAD) / CK, -0.0100383 * DEG2RAD, -0.00001156 * DEG2RAD, 0.000000055 * DEG2RAD])
+		const M = Base.horner(T, [347.3477 * DEG2RAD, (27.1577721 * DEG2RAD) / CK, -0.000813 * DEG2RAD, -0.000001 * DEG2RAD])
+		const F = Base.horner(T, [316.6109 * DEG2RAD, (364.5287911 * DEG2RAD) / CK, -0.0125053 * DEG2RAD, -0.0000148 * DEG2RAD])
+		return [T, D, M, F] as const
 	}
 }

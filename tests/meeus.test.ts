@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { deg, formatALT, formatRA, hms, signedDms } from '../src/angle'
+import { deg, formatALT, formatRA, hms, signedDms, toArcsec } from '../src/angle'
 import { DAYSEC } from '../src/constants'
-import { AngularSeparation, Base, Interpolation, Julian } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, Interpolation, Julian } from '../src/meeus'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
 	expect(actual).toBeCloseTo(expected, numDigits)
@@ -344,5 +344,88 @@ describe('AngularSeparation', () => {
 			const exp = (224 * Math.PI) / 180 / 3600 // on p. 111
 			expect(Math.abs((sep - exp) / sep) < 1e-2).toBeTrue()
 		})
+	})
+})
+
+describe('Apsis', () => {
+	test('meanApogee', () => {
+		// Example 50.a, p. 357.0
+		const res = Apsis.meanApogee(1988.75)
+		strictEqual(res, 2447442.8191, 4)
+	})
+
+	test('apogee', () => {
+		// Example 50.a, p. 357.0
+		const j = Apsis.apogee(1988.75)
+		strictEqual(j, 2447442.3543, 4)
+	})
+
+	test('apogeeParallax', () => {
+		// Example 50.a, p. 357.0
+		const p = Apsis.apogeeParallax(1988.75)
+		strictEqual(toArcsec(p), 3240.679, 3)
+	})
+
+	// Test cases from p. 361.0
+	describe('perigee', () => {
+		const dates = [
+			[1997, 12, 9 + 16.9 / 24, 1997.93],
+			[1998, 1, 3 + 8.5 / 24, 1998.01],
+			[1990, 12, 2 + 10.8 / 24, 1990.92],
+			[1990, 12, 30 + 23.8 / 24, 1991],
+		] as const
+
+		dates.forEach(([y, m, d, dy]) => {
+			test(dy.toString(), () => {
+				const ref = Julian.calendarGregorianToJD(y, m, d)
+				const j = Apsis.perigee(dy)
+				expect(Math.abs(j - ref) < 0.1).toBeTrue()
+			})
+		})
+	})
+
+	test('perigeeParallax', () => {
+		const p = Apsis.perigeeParallax(1997.93)
+		strictEqual(toArcsec(p), 3566.637, 3)
+	})
+
+	test('perigeeDistance', () => {
+		const y = 1997.93
+		const p = Apsis.perigeeParallax(y)
+		const d = Apsis.distance(p)
+		strictEqual(d, 368877, 0)
+		const per = Apsis.perigee(y)
+		// TODO: const dist = moonposition.position(per).range
+		// strictEqual(float(dist).toFixed(0), 368881)
+	})
+
+	test('comparing perigeeParallax with parallax from position', () => {
+		const y = 1997.93
+		const perPar = Apsis.perigeeParallax(y)
+		const per = Apsis.perigee(y)
+		// const dist = moonposition.position(per).range
+		// const par = moonposition.parallax(dist)
+		// const Δ = (Math.abs(perPar - par) / Math.PI) * 180 * 3600 // difference in arc seconds
+		// ok(Δ < 0.1, Δ + ' should be less than 0.1')
+	})
+
+	test('apogeeDistance', () => {
+		const y = 1997.9
+		const p = Apsis.apogeeParallax(y)
+		const d = Apsis.distance(p)
+		strictEqual(d, 404695, 0)
+		const apo = Apsis.apogee(y)
+		// TODO: const dist = moonposition.position(apo).range
+		// strictEqual(float(dist).toFixed(0), 404697)
+	})
+
+	test('comparing apogeeParallax with parallax from position', () => {
+		const y = 1997.9
+		const apoPar = Apsis.apogeeParallax(y)
+		const apo = Apsis.apogee(y)
+		// const dist = moonposition.position(apo).range
+		// const par = moonposition.parallax(dist)
+		// const Δ = toArcsec(Math.abs(apoPar - par)) // difference in arc seconds
+		// ok(Δ < 0.1, Δ + ' should be less than 0.1')
 	})
 })
