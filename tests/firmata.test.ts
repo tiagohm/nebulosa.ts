@@ -359,8 +359,11 @@ test('BMP280 compensate temperature & pressure', () => {
 
 test('TEMT6000 converts ADC counts to lux', () => {
 	const temt6000 = new TEMT6000(undefined as never, 0)
-	expect(temt6000.calculateLux(1023)).toBeCloseTo(1000, 6)
-	expect(temt6000.calculateLux(0)).toBe(0)
+	expect(temt6000.calculate(1023)).toBeTrue()
+	expect(temt6000.lux).toBeCloseTo(1000, 6)
+	expect(temt6000.calculate(0)).toBeTrue()
+	expect(temt6000.lux).toBe(0)
+	expect(temt6000.calculate(0)).toBeFalse()
 })
 
 test('TEMT6000 configures analog reporting and emits lux updates', () => {
@@ -393,8 +396,11 @@ test('TEMT6000 configures analog reporting and emits lux updates', () => {
 
 test('ACS712 converts ADC counts to current', () => {
 	const acs712 = new ACS712(undefined as never, 0)
-	expect(acs712.calculateCurrent(511.5)).toBeCloseTo(0, 6)
-	expect(acs712.calculateCurrent(549.351)).toBeCloseTo(1, 3)
+	expect(acs712.calculate(549.351)).toBeTrue()
+	expect(acs712.current).toBeCloseTo(1, 3)
+	expect(acs712.calculate(511.5)).toBeTrue()
+	expect(acs712.current).toBeCloseTo(0, 6)
+	expect(acs712.calculate(511.5)).toBeFalse()
 })
 
 test('ACS712 configures analog reporting and emits current updates', () => {

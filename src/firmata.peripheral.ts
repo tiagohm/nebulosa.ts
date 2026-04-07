@@ -229,7 +229,19 @@ abstract class PeripheralBase<D extends Peripheral<D>> {
 	}
 }
 
-export class LM35 extends PeripheralBase<LM35> implements Thermometer, FirmataClientHandler {
+export abstract class ADCPeripheral<D extends Peripheral<D>> extends PeripheralBase<D> implements FirmataClientHandler {
+	abstract readonly pin: number
+
+	abstract calculate(value: number): boolean
+
+	pinChange(client: FirmataClient, pin: Pin) {
+		if (this.client === client && pin.id === this.pin) {
+			if (this.calculate(pin.value)) this.fire()
+		}
+	}
+}
+
+export class LM35 extends ADCPeripheral<LM35> implements Thermometer {
 	temperature = 0
 
 	constructor(
@@ -240,15 +252,15 @@ export class LM35 extends PeripheralBase<LM35> implements Thermometer, FirmataCl
 		super()
 	}
 
-	pinChange(client: FirmataClient, pin: Pin) {
-		if (this.client === client && pin.id === this.pin) {
-			const temperature = (this.aref * 100 * pin.value) / 1023
+	calculate(value: number) {
+		const temperature = (this.aref * 100 * value) / 1023
 
-			if (temperature !== this.temperature) {
-				this.temperature = temperature
-				this.fire()
-			}
+		if (temperature !== this.temperature) {
+			this.temperature = temperature
+			return true
 		}
+
+		return false
 	}
 
 	start() {
@@ -265,7 +277,7 @@ export class LM35 extends PeripheralBase<LM35> implements Thermometer, FirmataCl
 
 // https://www.alldatasheet.com/html-pdf/117488/VISHAY/TEMT6000/440/2/TEMT6000.html
 
-export class TEMT6000 extends PeripheralBase<TEMT6000> implements LuxMeter, FirmataClientHandler {
+export class TEMT6000 extends ADCPeripheral<TEMT6000> implements LuxMeter {
 	lux = 0
 
 	readonly #luxPerStep: number
@@ -286,15 +298,15 @@ export class TEMT6000 extends PeripheralBase<TEMT6000> implements LuxMeter, Firm
 	}
 
 	// Converts one ADC sample into lux for the configured analog front-end.
-	pinChange(client: FirmataClient, pin: Pin) {
-		if (this.client !== client || pin.id !== this.pin) return
-
-		const lux = this.calculateLux(pin.value)
+	calculate(value: number) {
+		const lux = value * this.#luxPerStep
 
 		if (lux !== this.lux) {
 			this.lux = lux
-			this.fire()
+			return true
 		}
+
+		return false
 	}
 
 	// Enables analog reporting for the configured pin.
@@ -309,16 +321,11 @@ export class TEMT6000 extends PeripheralBase<TEMT6000> implements LuxMeter, Firm
 		this.client.removeHandler(this)
 		this.client.requestAnalogPinReport(this.pin, false)
 	}
-
-	// Converts the raw ADC step count into lux.
-	calculateLux(steps: number) {
-		return steps * this.#luxPerStep
-	}
 }
 
 // https://www.allegromicro.com/en/products/sense/current-sensor-ics/integrated-current-sensors/acs712
 
-export class ACS712 extends PeripheralBase<ACS712> implements Ammeter, FirmataClientHandler {
+export class ACS712 extends ADCPeripheral<ACS712> implements Ammeter {
 	current = 0
 
 	readonly #ampsPerStep: number
@@ -342,15 +349,15 @@ export class ACS712 extends PeripheralBase<ACS712> implements Ammeter, FirmataCl
 	}
 
 	// Converts one ADC sample into current using the configured sensitivity and zero-current offset.
-	pinChange(client: FirmataClient, pin: Pin) {
-		if (this.client !== client || pin.id !== this.pin) return
-
-		const current = this.calculateCurrent(pin.value)
+	calculate(value: number) {
+		const current = (value - this.#zeroCurrentSteps) * this.#ampsPerStep
 
 		if (current !== this.current) {
 			this.current = current
-			this.fire()
+			return true
 		}
+
+		return false
 	}
 
 	// Enables analog reporting for the configured pin.
@@ -364,11 +371,6 @@ export class ACS712 extends PeripheralBase<ACS712> implements Ammeter, FirmataCl
 	stop() {
 		this.client.removeHandler(this)
 		this.client.requestAnalogPinReport(this.pin, false)
-	}
-
-	// Converts a raw ADC step count into amperes.
-	calculateCurrent(steps: number) {
-		return (steps - this.#zeroCurrentSteps) * this.#ampsPerStep
 	}
 }
 
