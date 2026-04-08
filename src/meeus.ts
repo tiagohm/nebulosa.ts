@@ -1,9 +1,17 @@
-import type { Angle } from './angle'
-import { ASEC2RAD, DEG2RAD, PI, TAU } from './constants'
+import { type Angle, normalizeAngle } from './angle'
+import { ASEC2RAD, AU_KM, DEG2RAD, PI, TAU } from './constants'
 import type { Distance } from './distance'
 import { floorDiv, modf, type NumberArray } from './math'
 
+const { sin, cos, tan, asin, acos, atan2, sqrt, hypot, abs, trunc, floor } = Math
+
 // https://github.com/commenthol/astronomia/blob/master/src/
+
+export const EARTH_RADIUS_KM = 6378.137 // km
+export const EARTH_RADIUS = EARTH_RADIUS_KM / AU_KM // au
+
+export const MOON_RADIUS_KM = 1738.1 // km
+export const MOON_RADIUS = MOON_RADIUS_KM / AU_KM // au
 
 // Functions and other definitions useful with multiple packages.
 export namespace Base {
@@ -46,19 +54,19 @@ export namespace Base {
 	// Computes the illuminated fraction of a body's disk.
 	export function illuminated(i: Angle) {
 		// (41.1) p. 283, also (48.1) p. 345.
-		return (1 + Math.cos(i)) * 0.5
+		return (1 + cos(i)) * 0.5
 	}
 
 	// Computes position angle of the midpoint of an illuminated limb.
 	export function limb(bra: Angle, bdec: Angle, sra: Angle, sdec: Angle): Angle {
 		// Mentioned in ch 41, p. 283.  Formula (48.5) p. 346
-		const sδ = Math.sin(bdec)
-		const cδ = Math.cos(bdec)
-		const sδ0 = Math.sin(sdec)
-		const cδ0 = Math.cos(sdec)
-		const sa0a = Math.sin(sra - bra)
-		const ca0a = Math.cos(sra - bra)
-		const x = Math.atan2(cδ0 * sa0a, sδ0 * cδ - cδ0 * sδ * ca0a)
+		const sδ = sin(bdec)
+		const cδ = cos(bdec)
+		const sδ0 = sin(sdec)
+		const cδ0 = cos(sdec)
+		const sa0a = sin(sra - bra)
+		const ca0a = cos(sra - bra)
+		const x = atan2(cδ0 * sa0a, sδ0 * cδ - cδ0 * sδ * ca0a)
 		return x >= 0 ? x : x + TAU
 	}
 
@@ -72,7 +80,7 @@ export namespace Base {
 
 	// Computes sine and cosine.
 	export function sincos(epsilon: Angle) {
-		return [Math.sin(epsilon), Math.cos(epsilon)]
+		return [sin(epsilon), cos(epsilon)]
 	}
 
 	// Computes the Julian ephemeris day for a Julian year.
@@ -193,7 +201,7 @@ export namespace Interpolation {
 			const n1 = f(n0)
 
 			if (!Number.isFinite(n1) || Number.isNaN(n1)) break
-			if (Math.abs((n1 - n0) / n0) < 1e-15) return [n1, true] as const
+			if (abs((n1 - n0) / n0) < 1e-15) return [n1, true] as const
 
 			n0 = n1
 		}
@@ -340,7 +348,7 @@ export namespace Interpolation {
 
 			if (interval === 0) throw new Error('xN cannot equal x1')
 
-			let nearestX = Math.trunc((x - x1) / interval + 0.5)
+			let nearestX = trunc((x - x1) / interval + 0.5)
 
 			if (nearestX < 1) {
 				nearestX = 1
@@ -424,7 +432,7 @@ export namespace Interpolation {
 		const interval = (xN - x1) / (y.length - 1)
 		if (interval === 0) throw new Error('xN cannot equal x1')
 
-		let nearestX = Math.floor((x - x1) / interval)
+		let nearestX = floor((x - x1) / interval)
 
 		if (nearestX < 0) {
 			nearestX = 0
@@ -461,7 +469,7 @@ export namespace Julian {
 		}
 
 		// (7.1) p. 61
-		return floorDiv(36525 * Math.trunc(y + 4716), 100) + (floorDiv(306 * (m + 1), 10) + b) + d - 1524.5
+		return floorDiv(36525 * trunc(y + 4716), 100) + (floorDiv(306 * (m + 1), 10) + b) + d - 1524.5
 	}
 
 	// Returns the calendar date for the given jd.
@@ -477,9 +485,9 @@ export namespace Julian {
 		const b = a + 1524
 		const c = floorDiv(b * 100 - 12210, 36525)
 		const d = floorDiv(36525 * c, 100)
-		const e = Math.trunc(floorDiv((b - d) * 1e4, 306001))
+		const e = trunc(floorDiv((b - d) * 1e4, 306001))
 
-		const day = Math.trunc(b - d) - floorDiv(306001 * e, 1e4) + f
+		const day = trunc(b - d) - floorDiv(306001 * e, 1e4) + f
 
 		let month = 0
 
@@ -492,9 +500,9 @@ export namespace Julian {
 		let year = 0
 
 		if (month < 3) {
-			year = Math.trunc(c) - 4715
+			year = trunc(c) - 4715
 		} else {
-			year = Math.trunc(c) - 4716
+			year = trunc(c) - 4716
 		}
 
 		return [year, month, day] as const
@@ -518,13 +526,13 @@ export namespace AngularSeparation {
 		const [sind1, cosd1] = Base.sincos(c1[1])
 		const [sind2, cosd2] = Base.sincos(c2[1])
 
-		const cd = sind1 * sind2 + cosd1 * cosd2 * Math.cos(c1[0] - c2[0]) // (17.1) p. 109
+		const cd = sind1 * sind2 + cosd1 * cosd2 * cos(c1[0] - c2[0]) // (17.1) p. 109
 
 		if (cd < Base.COS_SMALL_ANGLE) {
-			return Math.acos(cd)
+			return acos(cd)
 		} else {
-			const cosd = Math.cos((c2[1] + c1[1]) / 2) // average dec of two bodies
-			return Math.hypot((c2[0] - c1[0]) * cosd, c2[1] - c1[1]) // (17.2) p. 109
+			const cosd = cos((c2[1] + c1[1]) / 2) // average dec of two bodies
+			return hypot((c2[0] - c1[0]) * cosd, c2[1] - c1[1]) // (17.2) p. 109
 		}
 	}
 
@@ -545,10 +553,10 @@ export namespace AngularSeparation {
 		const uv = (c1: Coord, c2: Coord) => {
 			const [sind1, cosd1] = Base.sincos(c1[1])
 			const deltar = c2[0] - c1[0]
-			const tanDeltar = Math.tan(deltar)
-			const tanhDeltar = Math.tan(deltar / 2)
+			const tanDeltar = tan(deltar)
+			const tanhDeltar = tan(deltar / 2)
 			const K = 1 / (1 + sind1 * sind1 * tanDeltar * tanhDeltar)
-			const sinDeltad = Math.sin(c2[1] - c1[1])
+			const sinDeltad = sin(c2[1] - c1[1])
 			const u = -K * (1 - (sind1 / cosd1) * sinDeltad) * cosd1 * tanDeltar
 			const v = K * (sinDeltad + sind1 * cosd1 * tanDeltar * tanhDeltar)
 			return [u, v] as const
@@ -580,8 +588,8 @@ export namespace AngularSeparation {
 			u = u3.interpolateN(n)
 			v = v3.interpolateN(n)
 
-			if (Math.abs(dn) < 1e-5) {
-				return Math.hypot(u, v) // success
+			if (abs(dn) < 1e-5) {
+				return hypot(u, v) // success
 			}
 
 			const up = up0 + n * up1
@@ -595,13 +603,13 @@ export namespace AngularSeparation {
 
 	// The haversine function (17.5) p. 115
 	export function hav(a: number) {
-		return 0.5 * (1 - Math.cos(a))
+		return 0.5 * (1 - cos(a))
 	}
 
 	// Computes the angular separation between two celestial bodies.
 	export function sepHav(c1: Coord, c2: Coord) {
 		// using (17.5) p. 115
-		return 2 * Math.asin(Math.sqrt(hav(c2[1] - c1[1]) + Math.cos(c1[1]) * Math.cos(c2[1]) * hav(c2[0] - c1[0])))
+		return 2 * asin(sqrt(hav(c2[1] - c1[1]) + cos(c1[1]) * cos(c2[1]) * hav(c2[0] - c1[0])))
 	}
 
 	// Computes the minimum separation between two moving objects.
@@ -613,11 +621,11 @@ export namespace AngularSeparation {
 	export function sepPauwels(c1: Coord, c2: Coord) {
 		const [sind1, cosd1] = Base.sincos(c1[1])
 		const [sind2, cosd2] = Base.sincos(c2[1])
-		const cosdr = Math.cos(c2[0] - c1[0])
+		const cosdr = cos(c2[0] - c1[0])
 		const x = cosd1 * sind2 - sind1 * cosd2 * cosdr
-		const y = cosd2 * Math.sin(c2[0] - c1[0])
+		const y = cosd2 * sin(c2[0] - c1[0])
 		const z = sind1 * sind2 + cosd1 * cosd2 * cosdr
-		return Math.atan2(Math.hypot(x, y), z)
+		return atan2(hypot(x, y), z)
 	}
 
 	// Computes the minimum separation between two moving objects.
@@ -629,8 +637,255 @@ export namespace AngularSeparation {
 	export function relativePosition(c1: Coord, c2: Coord) {
 		const [sinDeltar, cosDeltar] = Base.sincos(c1[0] - c2[0])
 		const [sind2, cosd2] = Base.sincos(c2[1])
-		const p = Math.atan2(sinDeltar, cosd2 * Math.tan(c1[1]) - sind2 * cosDeltar)
+		const p = atan2(sinDeltar, cosd2 * tan(c1[1]) - sind2 * cosDeltar)
 		return p
+	}
+}
+
+// Chapter 47, Position of the Moon.
+export namespace MoonPosition {
+	// Computes the equatorial horizontal parallax of the Moon.
+	export function parallax(distance: Distance): Angle {
+		// p. 337
+		return asin(EARTH_RADIUS / distance)
+	}
+
+	function dmf(T: number) {
+		const d = Base.horner(T, [297.8501921 * DEG2RAD, 445267.1114034 * DEG2RAD, -0.0018819 * DEG2RAD, DEG2RAD / 545868, -DEG2RAD / 113065000])
+		const m = Base.horner(T, [357.5291092 * DEG2RAD, 35999.0502909 * DEG2RAD, -0.0001536 * DEG2RAD, DEG2RAD / 24490000])
+		const m_ = Base.horner(T, [134.9633964 * DEG2RAD, 477198.8675055 * DEG2RAD, 0.0087414 * DEG2RAD, DEG2RAD / 69699, -DEG2RAD / 14712000])
+		const f = Base.horner(T, [93.272095 * DEG2RAD, 483202.0175233 * DEG2RAD, -0.0036539 * DEG2RAD, -DEG2RAD / 3526000, DEG2RAD / 863310000])
+		return [d, m, m_, f]
+	}
+
+	// Computes the geocentric location of the Moon, referenced to mean equinox of date and do not include the effect of nutation.
+	export function position(jde: number) {
+		const T = Base.j2000Century(jde)
+		const l_ = Base.horner(T, [218.3164477 * DEG2RAD, 481267.88123421 * DEG2RAD, -0.0015786 * DEG2RAD, DEG2RAD / 538841, -DEG2RAD / 65194000])
+		const [d, m, m_, f] = dmf(T)
+		const a1 = 119.75 * DEG2RAD + 131.849 * DEG2RAD * T
+		const a2 = 53.09 * DEG2RAD + 479264.29 * DEG2RAD * T
+		const a3 = 313.45 * DEG2RAD + 481266.484 * DEG2RAD * T
+		const e = Base.horner(T, [1, -0.002516, -0.0000074])
+		const e2 = e * e
+
+		let sigmal = 3958 * sin(a1) + 1962 * sin(l_ - f) + 318 * sin(a2)
+		let sigmar = 0
+		let sigmab = -2235 * sin(l_) + 382 * sin(a3) + 175 * sin(a1 - f) + 175 * sin(a1 + f) + 127 * sin(l_ - m_) - 115 * sin(l_ + m_)
+
+		for (const r of TA) {
+			const [sina, cosa] = Base.sincos(d * r[0] + m * r[1] + m_ * r[2] + f * r[3])
+
+			switch (r[1]) {
+				case 0:
+					sigmal += r[4] * sina
+					sigmar += r[5] * cosa
+					break
+				case -1:
+				case 1:
+					sigmal += r[4] * sina * e
+					sigmar += r[5] * cosa * e
+					break
+				default:
+					sigmal += r[4] * sina * e2
+					sigmar += r[5] * cosa * e2
+					break
+			}
+		}
+
+		for (const r of TB) {
+			const sb = sin(d * r[0] + m * r[1] + m_ * r[2] + f * r[3])
+
+			switch (r[1]) {
+				case 0:
+					sigmab += r[4] * sb
+					break
+				case -1:
+				case 1:
+					sigmab += r[4] * sb * e
+					break
+				default:
+					sigmab += r[4] * sb * e2
+					break
+			}
+		}
+
+		const lon = normalizeAngle(l_) + sigmal * (1e-6 * DEG2RAD)
+		const lat = sigmab * (1e-6 * DEG2RAD)
+		const range = 385000.56 / AU_KM + sigmar * (1e-3 / AU_KM)
+		return [lon, lat, range] as const
+	}
+
+	const TA = [
+		// d, m, m_, f, sigmal, sigmar
+		[0, 0, 1, 0, 6288774, -20905355],
+		[2, 0, -1, 0, 1274027, -3699111],
+		[2, 0, 0, 0, 658314, -2955968],
+		[0, 0, 2, 0, 213618, -569925],
+
+		[0, 1, 0, 0, -185116, 48888],
+		[0, 0, 0, 2, -114332, -3149],
+		[2, 0, -2, 0, 58793, 246158],
+		[2, -1, -1, 0, 57066, -152138],
+
+		[2, 0, 1, 0, 53322, -170733],
+		[2, -1, 0, 0, 45758, -204586],
+		[0, 1, -1, 0, -40923, -129620],
+		[1, 0, 0, 0, -34720, 108743],
+
+		[0, 1, 1, 0, -30383, 104755],
+		[2, 0, 0, -2, 15327, 10321],
+		[0, 0, 1, 2, -12528, 0],
+		[0, 0, 1, -2, 10980, 79661],
+
+		[4, 0, -1, 0, 10675, -34782],
+		[0, 0, 3, 0, 10034, -23210],
+		[4, 0, -2, 0, 8548, -21636],
+		[2, 1, -1, 0, -7888, 24208],
+
+		[2, 1, 0, 0, -6766, 30824],
+		[1, 0, -1, 0, -5163, -8379],
+		[1, 1, 0, 0, 4987, -16675],
+		[2, -1, 1, 0, 4036, -12831],
+
+		[2, 0, 2, 0, 3994, -10445],
+		[4, 0, 0, 0, 3861, -11650],
+		[2, 0, -3, 0, 3665, 14403],
+		[0, 1, -2, 0, -2689, -7003],
+
+		[2, 0, -1, 2, -2602, 0],
+		[2, -1, -2, 0, 2390, 10056],
+		[1, 0, 1, 0, -2348, 6322],
+		[2, -2, 0, 0, 2236, -9884],
+
+		[0, 1, 2, 0, -2120, 5751],
+		[0, 2, 0, 0, -2069, 0],
+		[2, -2, -1, 0, 2048, -4950],
+		[2, 0, 1, -2, -1773, 4130],
+
+		[2, 0, 0, 2, -1595, 0],
+		[4, -1, -1, 0, 1215, -3958],
+		[0, 0, 2, 2, -1110, 0],
+		[3, 0, -1, 0, -892, 3258],
+
+		[2, 1, 1, 0, -810, 2616],
+		[4, -1, -2, 0, 759, -1897],
+		[0, 2, -1, 0, -713, -2117],
+		[2, 2, -1, 0, -700, 2354],
+
+		[2, 1, -2, 0, 691, 0],
+		[2, -1, 0, -2, 596, 0],
+		[4, 0, 1, 0, 549, -1423],
+		[0, 0, 4, 0, 537, -1117],
+
+		[4, -1, 0, 0, 520, -1571],
+		[1, 0, -2, 0, -487, -1739],
+		[2, 1, 0, -2, -399, 0],
+		[0, 0, 2, -2, -381, -4421],
+
+		[1, 1, 1, 0, 351, 0],
+		[3, 0, -2, 0, -340, 0],
+		[4, 0, -3, 0, 330, 0],
+		[2, -1, 2, 0, 327, 0],
+
+		[0, 2, 1, 0, -323, 1165],
+		[1, 1, -1, 0, 299, 0],
+		[2, 0, 3, 0, 294, 0],
+		[2, 0, -1, -2, 0, 8752],
+	] as const
+
+	const TB = [
+		[0, 0, 0, 1, 5128122],
+		[0, 0, 1, 1, 280602],
+		[0, 0, 1, -1, 277693],
+		[2, 0, 0, -1, 173237],
+
+		[2, 0, -1, 1, 55413],
+		[2, 0, -1, -1, 46271],
+		[2, 0, 0, 1, 32573],
+		[0, 0, 2, 1, 17198],
+
+		[2, 0, 1, -1, 9266],
+		[0, 0, 2, -1, 8822],
+		[2, -1, 0, -1, 8216],
+		[2, 0, -2, -1, 4324],
+
+		[2, 0, 1, 1, 4200],
+		[2, 1, 0, -1, -3359],
+		[2, -1, -1, 1, 2463],
+		[2, -1, 0, 1, 2211],
+
+		[2, -1, -1, -1, 2065],
+		[0, 1, -1, -1, -1870],
+		[4, 0, -1, -1, 1828],
+		[0, 1, 0, 1, -1794],
+
+		[0, 0, 0, 3, -1749],
+		[0, 1, -1, 1, -1565],
+		[1, 0, 0, 1, -1491],
+		[0, 1, 1, 1, -1475],
+
+		[0, 1, 1, -1, -1410],
+		[0, 1, 0, -1, -1344],
+		[1, 0, 0, -1, -1335],
+		[0, 0, 3, 1, 1107],
+
+		[4, 0, 0, -1, 1021],
+		[4, 0, -1, 1, 833],
+
+		[0, 0, 1, -3, 777],
+		[4, 0, -2, 1, 671],
+		[2, 0, 0, -3, 607],
+		[2, 0, 2, -1, 596],
+
+		[2, -1, 1, -1, 491],
+		[2, 0, -2, 1, -451],
+		[0, 0, 3, -1, 439],
+		[2, 0, 2, 1, 422],
+
+		[2, 0, -3, -1, 421],
+		[2, 1, -1, 1, -366],
+		[2, 1, 0, 1, -351],
+		[4, 0, 0, 1, 331],
+
+		[2, -1, 1, 1, 315],
+		[2, -2, 0, -1, 302],
+		[0, 0, 1, 3, -283],
+		[2, 1, 1, -1, -229],
+
+		[1, 1, 0, -1, 223],
+		[1, 1, 0, 1, 223],
+		[0, 1, -2, -1, -220],
+		[2, 1, -1, -1, -220],
+
+		[1, 0, 1, 1, -185],
+		[2, -1, -2, -1, 181],
+		[0, 1, 2, 1, -177],
+		[4, 0, -2, -1, 176],
+
+		[4, -1, -1, -1, 166],
+		[1, 0, 1, -1, -164],
+		[4, 0, 1, -1, 132],
+		[1, 0, -1, -1, -119],
+
+		[4, -1, 0, -1, 115],
+		[2, -2, 0, 1, 107],
+	] as const
+
+	// Computes the longitude of the mean ascending node of the lunar orbit.
+	export function node(jde: number) {
+		return normalizeAngle(Base.horner(Base.j2000Century(jde), [125.0445479 * DEG2RAD, -1934.1362891 * DEG2RAD, 0.0020754 * DEG2RAD, DEG2RAD / 467441, -DEG2RAD / 60616000]))
+	}
+
+	// Computes the longitude of perigee of the lunar orbit.
+	export function perigee(jde: number) {
+		return normalizeAngle(Base.horner(Base.j2000Century(jde), [83.3532465 * DEG2RAD, 4069.0137287 * DEG2RAD, -0.01032 * DEG2RAD, -DEG2RAD / 80053, DEG2RAD / 18999000]))
+	}
+
+	// Computes the longitude of the true ascending node. That is, the node of the instantaneous lunar orbit.
+	export function trueNode(jde: number) {
+		const [d, m, m_, f] = dmf(Base.j2000Century(jde))
+		return node(jde) + -1.4979 * DEG2RAD * sin(2 * (d - f)) + -0.15 * DEG2RAD * sin(m) + -0.1226 * DEG2RAD * sin(2 * d) + 0.1176 * DEG2RAD * sin(2 * f) + -0.0801 * DEG2RAD * sin(2 * (m_ - f))
 	}
 }
 
@@ -638,11 +893,6 @@ export namespace AngularSeparation {
 export namespace Apsis {
 	// Conversion factor from k to T, given in (50.3) p. 356
 	const CK = 1 / 1325.55
-
-	// http://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html
-	export const EARTH_RADIUS = 6378.137 // km
-	// http://nssdc.gsfc.nasa.gov/planetary/factsheet/moonfact.html
-	export const MOON_RADIUS = 1738.1 // km
 
 	// Computes mean time of perigee or apogee
 	export function mean(T: number) {
@@ -652,7 +902,7 @@ export namespace Apsis {
 	// Returns k at half h nearest year y.
 	export function snap(y: number, h: number) {
 		const k = (y - 1999.97) * 13.2555 // (50.2) p. 355
-		return Math.floor(k - h + 0.5) + h
+		return floor(k - h + 0.5) + h
 	}
 
 	// Computes the jde of the mean perigee of the Moon nearest the given date.
@@ -665,66 +915,66 @@ export namespace Apsis {
 		const [T, D, M, F] = tdmf(year, 0)
 
 		const corr =
-			-1.6769 * Math.sin(2 * D) +
-			0.4589 * Math.sin(4 * D) +
-			-0.1856 * Math.sin(6 * D) +
-			0.0883 * Math.sin(8 * D) +
-			(-0.0773 + 0.00019 * T) * Math.sin(2 * D - M) +
-			(0.0502 - 0.00013 * T) * Math.sin(M) +
-			-0.046 * Math.sin(10 * D) +
-			(0.0422 - 0.00011 * T) * Math.sin(4 * D - M) +
-			-0.0256 * Math.sin(6 * D - M) +
-			0.0253 * Math.sin(12 * D) +
-			0.0237 * Math.sin(D) +
-			0.0162 * Math.sin(8 * D - M) +
-			-0.0145 * Math.sin(14 * D) +
-			0.0129 * Math.sin(2 * F) +
-			-0.0112 * Math.sin(3 * D) +
-			-0.0104 * Math.sin(10 * D - M) +
-			0.0086 * Math.sin(16 * D) +
-			0.0069 * Math.sin(12 * D - M) +
-			0.0066 * Math.sin(5 * D) +
-			-0.0053 * Math.sin(2 * (D + F)) +
-			-0.0052 * Math.sin(18 * D) +
-			-0.0046 * Math.sin(14 * D - M) +
-			-0.0041 * Math.sin(7 * D) +
-			0.004 * Math.sin(2 * D + M) +
-			0.0032 * Math.sin(20 * D) +
-			-0.0032 * Math.sin(D + M) +
-			0.0031 * Math.sin(16 * D - M) +
-			-0.0029 * Math.sin(4 * D + M) +
-			0.0027 * Math.sin(9 * D) +
-			0.0027 * Math.sin(4 * D + 2 * F) +
-			-0.0027 * Math.sin(2 * (D - M)) +
-			0.0024 * Math.sin(4 * D - 2 * M) +
-			-0.0021 * Math.sin(6 * D - 2 * M) +
-			-0.0021 * Math.sin(22 * D) +
-			-0.0021 * Math.sin(18 * D - M) +
-			0.0019 * Math.sin(6 * D + M) +
-			-0.0018 * Math.sin(11 * D) +
-			-0.0014 * Math.sin(8 * D + M) +
-			-0.0014 * Math.sin(4 * D - 2 * F) +
-			-0.0014 * Math.sin(6 * D + 2 * F) +
-			0.0014 * Math.sin(3 * D + M) +
-			-0.0014 * Math.sin(5 * D + M) +
-			0.0013 * Math.sin(13 * D) +
-			0.0013 * Math.sin(20 * D - M) +
-			0.0011 * Math.sin(3 * D + 2 * M) +
-			-0.0011 * Math.sin(2 * (2 * D + F - M)) +
-			-0.001 * Math.sin(D + 2 * M) +
-			-0.0009 * Math.sin(22 * D - M) +
-			-0.0008 * Math.sin(4 * F) +
-			0.0008 * Math.sin(6 * D - 2 * F) +
-			0.0008 * Math.sin(2 * (D - F) + M) +
-			0.0007 * Math.sin(2 * M) +
-			0.0007 * Math.sin(2 * F - M) +
-			0.0007 * Math.sin(2 * D + 4 * F) +
-			-0.0006 * Math.sin(2 * (F - M)) +
-			-0.0006 * Math.sin(2 * (D - F + M)) +
-			0.0006 * Math.sin(24 * D) +
-			0.0005 * Math.sin(4 * (D - F)) +
-			0.0005 * Math.sin(2 * (D + M)) +
-			-0.0004 * Math.sin(D - M)
+			-1.6769 * sin(2 * D) +
+			0.4589 * sin(4 * D) +
+			-0.1856 * sin(6 * D) +
+			0.0883 * sin(8 * D) +
+			(-0.0773 + 0.00019 * T) * sin(2 * D - M) +
+			(0.0502 - 0.00013 * T) * sin(M) +
+			-0.046 * sin(10 * D) +
+			(0.0422 - 0.00011 * T) * sin(4 * D - M) +
+			-0.0256 * sin(6 * D - M) +
+			0.0253 * sin(12 * D) +
+			0.0237 * sin(D) +
+			0.0162 * sin(8 * D - M) +
+			-0.0145 * sin(14 * D) +
+			0.0129 * sin(2 * F) +
+			-0.0112 * sin(3 * D) +
+			-0.0104 * sin(10 * D - M) +
+			0.0086 * sin(16 * D) +
+			0.0069 * sin(12 * D - M) +
+			0.0066 * sin(5 * D) +
+			-0.0053 * sin(2 * (D + F)) +
+			-0.0052 * sin(18 * D) +
+			-0.0046 * sin(14 * D - M) +
+			-0.0041 * sin(7 * D) +
+			0.004 * sin(2 * D + M) +
+			0.0032 * sin(20 * D) +
+			-0.0032 * sin(D + M) +
+			0.0031 * sin(16 * D - M) +
+			-0.0029 * sin(4 * D + M) +
+			0.0027 * sin(9 * D) +
+			0.0027 * sin(4 * D + 2 * F) +
+			-0.0027 * sin(2 * (D - M)) +
+			0.0024 * sin(4 * D - 2 * M) +
+			-0.0021 * sin(6 * D - 2 * M) +
+			-0.0021 * sin(22 * D) +
+			-0.0021 * sin(18 * D - M) +
+			0.0019 * sin(6 * D + M) +
+			-0.0018 * sin(11 * D) +
+			-0.0014 * sin(8 * D + M) +
+			-0.0014 * sin(4 * D - 2 * F) +
+			-0.0014 * sin(6 * D + 2 * F) +
+			0.0014 * sin(3 * D + M) +
+			-0.0014 * sin(5 * D + M) +
+			0.0013 * sin(13 * D) +
+			0.0013 * sin(20 * D - M) +
+			0.0011 * sin(3 * D + 2 * M) +
+			-0.0011 * sin(2 * (2 * D + F - M)) +
+			-0.001 * sin(D + 2 * M) +
+			-0.0009 * sin(22 * D - M) +
+			-0.0008 * sin(4 * F) +
+			0.0008 * sin(6 * D - 2 * F) +
+			0.0008 * sin(2 * (D - F) + M) +
+			0.0007 * sin(2 * M) +
+			0.0007 * sin(2 * F - M) +
+			0.0007 * sin(2 * D + 4 * F) +
+			-0.0006 * sin(2 * (F - M)) +
+			-0.0006 * sin(2 * (D - F + M)) +
+			0.0006 * sin(24 * D) +
+			0.0005 * sin(4 * (D - F)) +
+			0.0005 * sin(2 * (D + M)) +
+			-0.0004 * sin(D - M)
 
 		return mean(T) + corr
 	}
@@ -739,38 +989,38 @@ export namespace Apsis {
 		const [T, D, M, F] = tdmf(year, 0.5)
 
 		const corr =
-			0.4392 * Math.sin(2 * D) +
-			0.0684 * Math.sin(4 * D) +
-			(0.0456 - 0.00011 * T) * Math.sin(M) +
-			(0.0426 - 0.00011 * T) * Math.sin(2 * D - M) +
-			0.0212 * Math.sin(2 * F) +
-			-0.0189 * Math.sin(D) +
-			0.0144 * Math.sin(6 * D) +
-			0.0113 * Math.sin(4 * D - M) +
-			0.0047 * Math.sin(2 * (D + F)) +
-			0.0036 * Math.sin(D + M) +
-			0.0035 * Math.sin(8 * D) +
-			0.0034 * Math.sin(6 * D - M) +
-			-0.0034 * Math.sin(2 * (D - F)) +
-			0.0022 * Math.sin(2 * (D - M)) +
-			-0.0017 * Math.sin(3 * D) +
-			0.0013 * Math.sin(4 * D + 2 * F) +
-			0.0011 * Math.sin(8 * D - M) +
-			0.001 * Math.sin(4 * D - 2 * M) +
-			0.0009 * Math.sin(10 * D) +
-			0.0007 * Math.sin(3 * D + M) +
-			0.0006 * Math.sin(2 * M) +
-			0.0005 * Math.sin(2 * D + M) +
-			0.0005 * Math.sin(2 * (D + M)) +
-			0.0004 * Math.sin(6 * D + 2 * F) +
-			0.0004 * Math.sin(6 * D - 2 * M) +
-			0.0004 * Math.sin(10 * D - M) +
-			-0.0004 * Math.sin(5 * D) +
-			-0.0004 * Math.sin(4 * D - 2 * F) +
-			0.0003 * Math.sin(2 * F + M) +
-			0.0003 * Math.sin(12 * D) +
-			0.0003 * Math.sin(2 * D + 2 * F - M) +
-			-0.0003 * Math.sin(D - M)
+			0.4392 * sin(2 * D) +
+			0.0684 * sin(4 * D) +
+			(0.0456 - 0.00011 * T) * sin(M) +
+			(0.0426 - 0.00011 * T) * sin(2 * D - M) +
+			0.0212 * sin(2 * F) +
+			-0.0189 * sin(D) +
+			0.0144 * sin(6 * D) +
+			0.0113 * sin(4 * D - M) +
+			0.0047 * sin(2 * (D + F)) +
+			0.0036 * sin(D + M) +
+			0.0035 * sin(8 * D) +
+			0.0034 * sin(6 * D - M) +
+			-0.0034 * sin(2 * (D - F)) +
+			0.0022 * sin(2 * (D - M)) +
+			-0.0017 * sin(3 * D) +
+			0.0013 * sin(4 * D + 2 * F) +
+			0.0011 * sin(8 * D - M) +
+			0.001 * sin(4 * D - 2 * M) +
+			0.0009 * sin(10 * D) +
+			0.0007 * sin(3 * D + M) +
+			0.0006 * sin(2 * M) +
+			0.0005 * sin(2 * D + M) +
+			0.0005 * sin(2 * (D + M)) +
+			0.0004 * sin(6 * D + 2 * F) +
+			0.0004 * sin(6 * D - 2 * M) +
+			0.0004 * sin(10 * D - M) +
+			-0.0004 * sin(5 * D) +
+			-0.0004 * sin(4 * D - 2 * F) +
+			0.0003 * sin(2 * F + M) +
+			0.0003 * sin(12 * D) +
+			0.0003 * sin(2 * D + 2 * F - M) +
+			-0.0003 * sin(D - M)
 
 		return mean(T) + corr
 	}
@@ -781,23 +1031,23 @@ export namespace Apsis {
 
 		return (
 			3245.251 * ASEC2RAD +
-			-9.147 * ASEC2RAD * Math.cos(2 * D) +
-			-0.841 * ASEC2RAD * Math.cos(D) +
-			0.697 * ASEC2RAD * Math.cos(2 * F) +
-			(-0.656 * ASEC2RAD + 0.0016 * ASEC2RAD * T) * Math.cos(M) +
-			0.355 * ASEC2RAD * Math.cos(4 * D) +
-			0.159 * ASEC2RAD * Math.cos(2 * D - M) +
-			0.127 * ASEC2RAD * Math.cos(D + M) +
-			0.065 * ASEC2RAD * Math.cos(4 * D - M) +
-			0.052 * ASEC2RAD * Math.cos(6 * D) +
-			0.043 * ASEC2RAD * Math.cos(2 * D + M) +
-			0.031 * ASEC2RAD * Math.cos(2 * (D + F)) +
-			-0.023 * ASEC2RAD * Math.cos(2 * (D - F)) +
-			0.022 * ASEC2RAD * Math.cos(2 * (D - M)) +
-			0.019 * ASEC2RAD * Math.cos(2 * (D + M)) +
-			-0.016 * ASEC2RAD * Math.cos(2 * M) +
-			0.014 * ASEC2RAD * Math.cos(6 * D - M) +
-			0.01 * ASEC2RAD * Math.cos(8 * D)
+			-9.147 * ASEC2RAD * cos(2 * D) +
+			-0.841 * ASEC2RAD * cos(D) +
+			0.697 * ASEC2RAD * cos(2 * F) +
+			(-0.656 * ASEC2RAD + 0.0016 * ASEC2RAD * T) * cos(M) +
+			0.355 * ASEC2RAD * cos(4 * D) +
+			0.159 * ASEC2RAD * cos(2 * D - M) +
+			0.127 * ASEC2RAD * cos(D + M) +
+			0.065 * ASEC2RAD * cos(4 * D - M) +
+			0.052 * ASEC2RAD * cos(6 * D) +
+			0.043 * ASEC2RAD * cos(2 * D + M) +
+			0.031 * ASEC2RAD * cos(2 * (D + F)) +
+			-0.023 * ASEC2RAD * cos(2 * (D - F)) +
+			0.022 * ASEC2RAD * cos(2 * (D - M)) +
+			0.019 * ASEC2RAD * cos(2 * (D + M)) +
+			-0.016 * ASEC2RAD * cos(2 * M) +
+			0.014 * ASEC2RAD * cos(6 * D - M) +
+			0.01 * ASEC2RAD * cos(8 * D)
 		)
 	}
 
@@ -807,58 +1057,58 @@ export namespace Apsis {
 
 		return (
 			3629.215 * ASEC2RAD +
-			63.224 * ASEC2RAD * Math.cos(2 * D) +
-			-6.99 * ASEC2RAD * Math.cos(4 * D) +
-			(2.834 * ASEC2RAD - 0.0071 * T * ASEC2RAD) * Math.cos(2 * D - M) +
-			1.927 * ASEC2RAD * Math.cos(6 * D) +
-			-1.263 * ASEC2RAD * Math.cos(D) +
-			-0.702 * ASEC2RAD * Math.cos(8 * D) +
-			(0.696 * ASEC2RAD - 0.0017 * T * ASEC2RAD) * Math.cos(M) +
-			-0.69 * ASEC2RAD * Math.cos(2 * F) +
-			(-0.629 * ASEC2RAD + 0.0016 * T * ASEC2RAD) * Math.cos(4 * D - M) +
-			-0.392 * ASEC2RAD * Math.cos(2 * (D - F)) +
-			0.297 * ASEC2RAD * Math.cos(10 * D) +
-			0.26 * ASEC2RAD * Math.cos(6 * D - M) +
-			0.201 * ASEC2RAD * Math.cos(3 * D) +
-			-0.161 * ASEC2RAD * Math.cos(2 * D + M) +
-			0.157 * ASEC2RAD * Math.cos(D + M) +
-			-0.138 * ASEC2RAD * Math.cos(12 * D) +
-			-0.127 * ASEC2RAD * Math.cos(8 * D - M) +
-			0.104 * ASEC2RAD * Math.cos(2 * (D + F)) +
-			0.104 * ASEC2RAD * Math.cos(2 * (D - M)) +
-			-0.079 * ASEC2RAD * Math.cos(5 * D) +
-			0.068 * ASEC2RAD * Math.cos(14 * D) +
-			0.067 * ASEC2RAD * Math.cos(10 * D - M) +
-			0.054 * ASEC2RAD * Math.cos(4 * D + M) +
-			-0.038 * ASEC2RAD * Math.cos(12 * D - M) +
-			-0.038 * ASEC2RAD * Math.cos(4 * D - 2 * M) +
-			0.037 * ASEC2RAD * Math.cos(7 * D) +
-			-0.037 * ASEC2RAD * Math.cos(4 * D + 2 * F) +
-			-0.035 * ASEC2RAD * Math.cos(16 * D) +
-			-0.03 * ASEC2RAD * Math.cos(3 * D + M) +
-			0.029 * ASEC2RAD * Math.cos(D - M) +
-			-0.025 * ASEC2RAD * Math.cos(6 * D + M) +
-			0.023 * ASEC2RAD * Math.cos(2 * M) +
-			0.023 * ASEC2RAD * Math.cos(14 * D - M) +
-			-0.023 * ASEC2RAD * Math.cos(2 * (D + M)) +
-			0.022 * ASEC2RAD * Math.cos(6 * D - 2 * M) +
-			-0.021 * ASEC2RAD * Math.cos(2 * D - 2 * F - M) +
-			-0.02 * ASEC2RAD * Math.cos(9 * D) +
-			0.019 * ASEC2RAD * Math.cos(18 * D) +
-			0.017 * ASEC2RAD * Math.cos(6 * D + 2 * F) +
-			0.014 * ASEC2RAD * Math.cos(2 * F - M) +
-			-0.014 * ASEC2RAD * Math.cos(16 * D - M) +
-			0.013 * ASEC2RAD * Math.cos(4 * D - 2 * F) +
-			0.012 * ASEC2RAD * Math.cos(8 * D + M) +
-			0.011 * ASEC2RAD * Math.cos(11 * D) +
-			0.01 * ASEC2RAD * Math.cos(5 * D + M) +
-			-0.01 * ASEC2RAD * Math.cos(20 * D)
+			63.224 * ASEC2RAD * cos(2 * D) +
+			-6.99 * ASEC2RAD * cos(4 * D) +
+			(2.834 * ASEC2RAD - 0.0071 * T * ASEC2RAD) * cos(2 * D - M) +
+			1.927 * ASEC2RAD * cos(6 * D) +
+			-1.263 * ASEC2RAD * cos(D) +
+			-0.702 * ASEC2RAD * cos(8 * D) +
+			(0.696 * ASEC2RAD - 0.0017 * T * ASEC2RAD) * cos(M) +
+			-0.69 * ASEC2RAD * cos(2 * F) +
+			(-0.629 * ASEC2RAD + 0.0016 * T * ASEC2RAD) * cos(4 * D - M) +
+			-0.392 * ASEC2RAD * cos(2 * (D - F)) +
+			0.297 * ASEC2RAD * cos(10 * D) +
+			0.26 * ASEC2RAD * cos(6 * D - M) +
+			0.201 * ASEC2RAD * cos(3 * D) +
+			-0.161 * ASEC2RAD * cos(2 * D + M) +
+			0.157 * ASEC2RAD * cos(D + M) +
+			-0.138 * ASEC2RAD * cos(12 * D) +
+			-0.127 * ASEC2RAD * cos(8 * D - M) +
+			0.104 * ASEC2RAD * cos(2 * (D + F)) +
+			0.104 * ASEC2RAD * cos(2 * (D - M)) +
+			-0.079 * ASEC2RAD * cos(5 * D) +
+			0.068 * ASEC2RAD * cos(14 * D) +
+			0.067 * ASEC2RAD * cos(10 * D - M) +
+			0.054 * ASEC2RAD * cos(4 * D + M) +
+			-0.038 * ASEC2RAD * cos(12 * D - M) +
+			-0.038 * ASEC2RAD * cos(4 * D - 2 * M) +
+			0.037 * ASEC2RAD * cos(7 * D) +
+			-0.037 * ASEC2RAD * cos(4 * D + 2 * F) +
+			-0.035 * ASEC2RAD * cos(16 * D) +
+			-0.03 * ASEC2RAD * cos(3 * D + M) +
+			0.029 * ASEC2RAD * cos(D - M) +
+			-0.025 * ASEC2RAD * cos(6 * D + M) +
+			0.023 * ASEC2RAD * cos(2 * M) +
+			0.023 * ASEC2RAD * cos(14 * D - M) +
+			-0.023 * ASEC2RAD * cos(2 * (D + M)) +
+			0.022 * ASEC2RAD * cos(6 * D - 2 * M) +
+			-0.021 * ASEC2RAD * cos(2 * D - 2 * F - M) +
+			-0.02 * ASEC2RAD * cos(9 * D) +
+			0.019 * ASEC2RAD * cos(18 * D) +
+			0.017 * ASEC2RAD * cos(6 * D + 2 * F) +
+			0.014 * ASEC2RAD * cos(2 * F - M) +
+			-0.014 * ASEC2RAD * cos(16 * D - M) +
+			0.013 * ASEC2RAD * cos(4 * D - 2 * F) +
+			0.012 * ASEC2RAD * cos(8 * D + M) +
+			0.011 * ASEC2RAD * cos(11 * D) +
+			0.01 * ASEC2RAD * cos(5 * D + M) +
+			-0.01 * ASEC2RAD * cos(20 * D)
 		)
 	}
 
 	// Computes the distance earth - moon (center to center) using the parallax angle in radians
-	export function distance(parallax: Angle) {
-		return EARTH_RADIUS / Math.sin(parallax)
+	export function distance(parallax: Angle): Distance {
+		return EARTH_RADIUS / sin(parallax)
 	}
 
 	function tdmf(year: number, h: number) {
