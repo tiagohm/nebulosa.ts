@@ -1,5 +1,6 @@
 import type { Angle } from './angle'
 import { DEG2RAD, G } from './constants'
+import { CRC } from './crc'
 import { type Distance, fromPressure } from './distance'
 import { type FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type Pin, PinMode } from './firmata'
 import type { NumberArray } from './math'
@@ -1466,23 +1467,6 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer, Fir
 
 	static isScratchpadValid(data: Buffer) {
 		if (data.byteLength < DS18B20.SCRATCHPAD_SIZE) return false
-		return DS18B20.crc8(data, 8) === data[8]
-	}
-
-	static crc8(data: Readonly<NumberArray> | Buffer, length: number) {
-		let crc = 0
-
-		for (let i = 0; i < length; i++) {
-			let value = data[i]
-
-			for (let j = 0; j < 8; j++) {
-				const mix = (crc ^ value) & 0x01
-				crc >>= 1
-				if (mix !== 0) crc ^= 0x8c
-				value >>= 1
-			}
-		}
-
-		return crc & 0xff
+		return CRC.crc8maxim.compute(data, undefined, 0, 8) === data[8]
 	}
 }

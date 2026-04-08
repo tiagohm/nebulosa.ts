@@ -1,15 +1,27 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { G } from '../src/constants'
-import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
+import { CRC } from '../src/crc'
+import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { ACS712, BH1750, BMP180, BMP280, HMC5883L, MAX44009, MPU6050, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
+import { ACS712, AM2320, BH1750, BMP180, BMP280, DS18B20, HMC5883L, LM35, MAX44009, MPU6050, SHT21, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
 
-type MockFirmataMessage = readonly ['mode', number, PinMode] | readonly ['analogReport', number, boolean] | readonly ['config', number] | readonly ['write', number, Buffer] | readonly ['read', number, number, number, boolean, TwoWireAddressMode, TwoWireAutoRestartMode]
+type MockFirmataMessage =
+	| readonly ['mode', number, PinMode]
+	| readonly ['analogReport', number, boolean]
+	| readonly ['config', number]
+	| readonly ['write', number, Buffer]
+	| readonly ['read', number, number, number, boolean, TwoWireAddressMode, TwoWireAutoRestartMode]
+	| readonly ['oneWireConfig', number, OneWirePowerMode]
+	| readonly ['oneWireSearch', number, OneWireSearchMode]
+	| readonly ['oneWireWrite', number, Buffer, Buffer | undefined]
+	| readonly ['oneWireWriteAndRead', number, Buffer, number, Buffer | undefined, number]
 
 class MockFirmataClient {
 	readonly messages: MockFirmataMessage[] = []
 	readonly handlers = new Set<FirmataClientHandler>()
+
+	#oneWireCorrelationId = 0x4000
 
 	addHandler(handler: FirmataClientHandler) {
 		this.handlers.add(handler)
@@ -37,6 +49,25 @@ class MockFirmataClient {
 
 	twoWireRead(address: number, register: number, bytesToRead: number, continuous: boolean = false, addressMode: 7 | 10 = 7, autoRestart: 'stop' | 'restart' = 'stop') {
 		this.messages.push(['read', address, register, bytesToRead, continuous, addressMode, autoRestart])
+	}
+
+	oneWireConfig(pin: number, powerMode: OneWirePowerMode = 'normal') {
+		this.messages.push(['oneWireConfig', pin, powerMode])
+	}
+
+	oneWireSearch(pin: number, mode: OneWireSearchMode = 'all') {
+		this.messages.push(['oneWireSearch', pin, mode])
+	}
+
+	oneWireWrite(pin: number, data: Buffer | readonly number[], address?: Buffer | readonly number[]) {
+		this.messages.push(['oneWireWrite', pin, Buffer.from(data), address ? Buffer.from(address) : undefined])
+	}
+
+	oneWireWriteAndRead(pin: number, data: Buffer | readonly number[], bytesToRead: number, address?: Buffer | readonly number[]) {
+		const correlationId = this.#oneWireCorrelationId
+		this.#oneWireCorrelationId = (this.#oneWireCorrelationId + 1) & 0xffff
+		this.messages.push(['oneWireWriteAndRead', pin, Buffer.from(data), bytesToRead, address ? Buffer.from(address) : undefined, correlationId])
+		return correlationId
 	}
 }
 
@@ -357,6 +388,78 @@ test('BMP280 compensate temperature & pressure', () => {
 	expect(bmp280.compensatePressure(415148)).toBeCloseTo(100653.27, 2)
 })
 
+test('SHT21 configures i2c reads and emits temperature and humidity updates', () => {
+	const client = new MockFirmataClient()
+	const sht21 = new SHT21(client as never, 1000)
+	let updates = 0
+
+	sht21.addListener(() => {
+		updates++
+	})
+
+	sht21.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['read', SHT21.ADDRESS, 0xe3, 2, false, 7, 'stop'],
+		['read', SHT21.ADDRESS, 0xe5, 2, false, 7, 'stop'],
+	])
+
+	sht21.twoWireMessage(client as never, SHT21.ADDRESS, 0xe3, Buffer.from([0x68, 0xac]))
+	expect(sht21.temperature).toBeCloseTo(25, 2)
+	expect(updates).toBe(0)
+
+	sht21.twoWireMessage(client as never, SHT21.ADDRESS, 0xe5, Buffer.from([0x7d, 0xf4]))
+	expect(sht21.humidity).toBeCloseTo(55.5, 2)
+	expect(updates).toBe(1)
+
+	sht21.twoWireMessage(client as never, SHT21.ADDRESS, 0xe5, Buffer.from([0x7d, 0xf4]))
+	expect(updates).toBe(1)
+
+	sht21.reset()
+	expect(client.messages.at(-1)).toEqual(['write', SHT21.ADDRESS, Buffer.from([0xfe])])
+
+	sht21.stop()
+	expect(client.handlers.size).toBe(0)
+})
+
+test('LM35 converts ADC counts to temperature', () => {
+	const lm35 = new LM35(undefined as never, 0)
+	expect(lm35.calculate(51.15)).toBeTrue()
+	expect(lm35.temperature).toBeCloseTo(25, 6)
+	expect(lm35.calculate(0)).toBeTrue()
+	expect(lm35.temperature).toBe(0)
+	expect(lm35.calculate(0)).toBeFalse()
+})
+
+test('LM35 configures analog reporting and emits temperature updates', () => {
+	const client = new MockFirmataClient()
+	const lm35 = new LM35(client as never, 2)
+	let updates = 0
+
+	lm35.addListener(() => {
+		updates++
+	})
+
+	lm35.start()
+
+	expect(client.messages).toEqual([
+		['mode', 2, PinMode.ANALOG],
+		['analogReport', 2, true],
+	])
+
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 51.15 })
+	expect(lm35.temperature).toBeCloseTo(25, 6)
+	expect(updates).toBe(1)
+
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 51.15 })
+	expect(updates).toBe(1)
+
+	lm35.stop()
+	expect(client.handlers.size).toBe(0)
+	expect(client.messages.at(-1)).toEqual(['analogReport', 2, false])
+})
+
 test('TEMT6000 converts ADC counts to lux', () => {
 	const temt6000 = new TEMT6000(undefined as never, 0)
 	expect(temt6000.calculate(1023)).toBeTrue()
@@ -469,6 +572,39 @@ test('MPU6050 configures i2c reads and decodes motion updates', () => {
 	expect(updates).toBe(1)
 
 	mpu6050.stop()
+	expect(client.handlers.size).toBe(0)
+})
+
+test('AM2320 configures i2c reads and emits humidity and temperature updates', async () => {
+	const client = new MockFirmataClient()
+	const am2320 = new AM2320(client as never, 1000)
+	let updates = 0
+
+	am2320.addListener(() => {
+		updates++
+	})
+
+	am2320.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', AM2320.ADDRESS, Buffer.from([])],
+	])
+
+	await Bun.sleep(20)
+
+	expect(client.messages[2]).toEqual(['write', AM2320.ADDRESS, Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.START_REGISTER, AM2320.REGISTER_COUNT])])
+	expect(client.messages[3]).toEqual(['read', AM2320.ADDRESS, -1, AM2320.FRAME_SIZE, false, 7, 'stop'])
+
+	am2320.twoWireMessage(client as never, AM2320.ADDRESS, -1, Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.REGISTER_COUNT, 0x02, 0x2b, 0x80, 0x7b, 0x00, 0x00]))
+	expect(am2320.humidity).toBeCloseTo(55.5, 6)
+	expect(am2320.temperature).toBeCloseTo(-12.3, 6)
+	expect(updates).toBe(1)
+
+	am2320.twoWireMessage(client as never, AM2320.ADDRESS, -1, Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.REGISTER_COUNT, 0x02, 0x2b, 0x80, 0x7b, 0x00, 0x00]))
+	expect(updates).toBe(1)
+
+	am2320.stop()
 	expect(client.handlers.size).toBe(0)
 })
 
@@ -628,3 +764,51 @@ test('MAX44009 configures i2c reads and emits lux updates', () => {
 	max44009.stop()
 	expect(client.handlers.size).toBe(0)
 })
+
+test('DS18B20 validates scratchpad CRC', () => {
+	const scratchpad = createDS18B20Scratchpad(23.5)
+	expect(DS18B20.isScratchpadValid(scratchpad)).toBeTrue()
+	scratchpad[8] ^= 0xff
+	expect(DS18B20.isScratchpadValid(scratchpad)).toBeFalse()
+})
+
+test('DS18B20 configures one-wire reads and emits temperature updates', async () => {
+	const client = new MockFirmataClient()
+	const address = Buffer.from([DS18B20.FAMILY_CODE, 0x1a, 0xbc, 0x4d, 0x2f, 0x00, 0x00, 0xc1])
+	const ds18b20 = new DS18B20(client as never, 6, 1000, { address, powerMode: 'parasitic', resolution: 9 })
+	let updates = 0
+
+	ds18b20.addListener(() => {
+		updates++
+	})
+
+	ds18b20.start()
+
+	expect(client.messages).toEqual([
+		['oneWireConfig', 6, 'parasitic'],
+		['oneWireWrite', 6, Buffer.from([DS18B20.WRITE_SCRATCHPAD_CMD, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, 0x1f]), address],
+		['oneWireWrite', 6, Buffer.from(DS18B20.CONVERT_T_CMD), address],
+	])
+
+	await Bun.sleep(110)
+
+	const readMessage = client.messages[3] as readonly ['oneWireWriteAndRead', number, Buffer, number, Buffer | undefined, number]
+	expect(readMessage).toEqual(['oneWireWriteAndRead', 6, Buffer.from(DS18B20.READ_SCRATCHPAD_CMD), DS18B20.SCRATCHPAD_SIZE, address, 0x4000])
+
+	ds18b20.oneWireReadReply(client as never, 6, readMessage[5], createDS18B20Scratchpad(23.5))
+	expect(ds18b20.temperature).toBeCloseTo(23.5, 6)
+	expect(updates).toBe(1)
+
+	ds18b20.oneWireReadReply(client as never, 6, readMessage[5], createDS18B20Scratchpad(23.5))
+	expect(updates).toBe(1)
+
+	ds18b20.stop()
+	expect(client.handlers.size).toBe(0)
+})
+
+function createDS18B20Scratchpad(temperature: number) {
+	const scratchpad = Buffer.from([0, 0, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, 0x1f, 0xff, 0x0c, 0x10, 0])
+	scratchpad.writeInt16LE(Math.round(temperature * 16), 0)
+	scratchpad[8] = CRC.crc8maxim.compute(scratchpad, undefined, 0, 8)
+	return scratchpad
+}

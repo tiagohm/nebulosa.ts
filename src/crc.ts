@@ -148,9 +148,9 @@ export class CRC {
 	}
 
 	// Computes the checksum, optionally continuing from the previous CRC checksum.
-	compute(data: CRCArrayType, previous?: number) {
-		const bytes = data instanceof Uint8Array ? data : new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+	compute(data: CRCArrayType, previous?: number, offset: number = data.byteOffset, length: number = data.byteLength - offset) {
 		const bit = this.#bit
+		const bytes = new Uint8Array(data.buffer, offset, length)
 		let value = previous === undefined ? this.#initial : definalizeCrc(previous, bit, this.#finalXor, this.#reorder)
 
 		if (bit < 8) {

@@ -323,13 +323,13 @@ test('crc32 should match Bun.hash.crc32', () => {
 	}
 })
 
-describe('crc should support seed', () => {
+describe('crc should accept previous value', () => {
 	for (const algorithm of CRC_ALGORITHMS) {
 		test(algorithm, () => {
 			let checksum: number | undefined
 
 			for (let i = 0; i < buffer.byteLength; i++) {
-				checksum = CRC[algorithm].compute(buffer.subarray(i, i + 1), checksum)
+				checksum = CRC[algorithm].compute(buffer, checksum, i, 1)
 			}
 
 			expect(checksum).toBe(CRC[algorithm].compute(buffer))
