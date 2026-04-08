@@ -1,5 +1,5 @@
 import { type Angle, normalizeAngle } from './angle'
-import { ASEC2RAD, AU_KM, DEG2RAD, PI, TAU } from './constants'
+import { ASEC2RAD, AU_KM, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { Distance } from './distance'
 import { floorDiv, modf, type NumberArray } from './math'
 
@@ -639,6 +639,57 @@ export namespace AngularSeparation {
 		const [sind2, cosd2] = Base.sincos(c2[1])
 		const p = atan2(sinDeltar, cosd2 * tan(c1[1]) - sind2 * cosDeltar)
 		return p
+	}
+}
+
+// Chapter 16: Atmospheric Refraction.
+// Functions here assume atmospheric pressure of 1010 mb, temperature of 10°C, and yellow light.
+export namespace Refraction {
+	const GT15_TRUE_1 = 58.294 * ASEC2RAD
+	const GT15_TRUE_2 = 0.0668 * ASEC2RAD
+	const GT15_APP_1 = 58.276 * ASEC2RAD
+	const GT15_APP_2 = 0.0824 * ASEC2RAD
+
+	// Computes the refraction to be subtracted from h0 to obtain the true altitude when altitude is greater than 15 degrees.
+	export function gt15True(h0: Angle): Angle {
+		// (16.1) p. 105
+		const t = tan(PIOVERTWO - h0)
+		return GT15_TRUE_1 * t - GT15_TRUE_2 * t * t * t
+	}
+
+	// Computes the refraction to be added to h to obtain the apparent altitude of the body.
+	export function gt15Apparent(h: Angle) {
+		// (16.2) p. 105
+		const t = tan(PIOVERTWO - h)
+		return GT15_APP_1 * t - GT15_APP_2 * t * t * t
+	}
+
+	// Computes the refraction to be subtracted from h0 to obtain the true altitude with accurate of 0.07 arc min from horizon to zenith.
+	export function bennett(h0: Angle): Angle {
+		// (16.3) p. 106
+		const c1 = DEG2RAD / 60
+		const c731 = 7.31 * DEG2RAD * DEG2RAD
+		const c44 = 4.4 * DEG2RAD
+		return c1 / tan(h0 + c731 / (h0 + c44))
+	}
+
+	// Computes refraction for obtaining true altitude with accurate of 0.015 arc min.
+	export function bennett2(h0: Angle): Angle {
+		const cMin = 60 / DEG2RAD
+		const c06 = 0.06 / cMin
+		const c147 = 14.7 * cMin * DEG2RAD
+		const c13 = 13 * DEG2RAD
+		const R = bennett(h0)
+		return R - c06 * sin(c147 * R + c13)
+	}
+
+	// Computes the refraction to be added to h (computed true "airless" altitude of a celestial body) to obtain the apparent altitude of the body.
+	export function saemundsson(h: Angle): Angle {
+		// (16.4) p. 106
+		const c102 = (1.02 * DEG2RAD) / 60
+		const c103 = 10.3 * DEG2RAD * DEG2RAD
+		const c511 = 5.11 * DEG2RAD
+		return c102 / tan(h + c103 / (h + c511))
 	}
 }
 

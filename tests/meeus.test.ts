@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toDeg } from '../src/angle'
 import { DAYSEC, PI } from '../src/constants'
 import { toKilometer } from '../src/distance'
-import { AngularSeparation, Apsis, Base, Interpolation, Julian, MoonPosition, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, Interpolation, Julian, MoonPosition, Refraction, Stellar } from '../src/meeus'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
 	expect(actual).toBeCloseTo(expected, numDigits)
@@ -324,27 +324,52 @@ describe('AngularSeparation', () => {
 		// Second exercise, p. 110.0
 		test('minSep', () => {
 			const sep = AngularSeparation.minSep(jd1, jd3, coords1, coords2)
-			const exp = (0.5017 * Math.PI) / 180 // on p. 111
+			const exp = (0.5017 * PI) / 180 // on p. 111
 			expect(Math.abs((sep - exp) / sep) < 1e-3).toBeTrue()
 		})
 
 		test('minSepHav', () => {
 			const sep = AngularSeparation.minSepHav(jd1, jd3, coords1, coords2)
-			const exp = (0.5017 * Math.PI) / 180 // on p. 111
+			const exp = (0.5017 * PI) / 180 // on p. 111
 			expect(Math.abs((sep - exp) / sep) < 1e-3).toBeTrue()
 		})
 
 		test('minSepPauwels', () => {
 			const sep = AngularSeparation.minSepPauwels(jd1, jd3, coords1, coords2)
-			const exp = (0.5017 * Math.PI) / 180 // on p. 111
+			const exp = (0.5017 * PI) / 180 // on p. 111
 			expect(Math.abs((sep - exp) / sep) < 1e-3).toBeTrue()
 		})
 
 		test('minSepRect', () => {
 			const sep = AngularSeparation.minSepRect(jd1, jd3, coords1, coords2)
-			const exp = (224 * Math.PI) / 180 / 3600 // on p. 111
+			const exp = (224 * PI) / 180 / 3600 // on p. 111
 			expect(Math.abs((sep - exp) / sep) < 1e-2).toBeTrue()
 		})
+	})
+})
+
+describe('#refraction', () => {
+	test('bennett', () => {
+		// Example 16.a, p. 107.0
+		const h0 = (0.5 * PI) / 180
+		const R = Refraction.bennett(h0)
+		const cMin = (60 * 180) / PI
+		strictEqual(R * cMin, 28.754, 3) // R Lower: 28.754
+		const hLower = h0 - R
+		strictEqual(hLower * cMin, 1.246, 3) // h Lower: 1.246
+		const hUpper = hLower + (32 * PI) / (180 * 60)
+		strictEqual(hUpper * cMin, 33.246, 3) // h Upper: 33.246
+		const Rh = Refraction.saemundsson(hUpper)
+		strictEqual(Rh * cMin, 24.618, 3) // R Upper: 24.618
+	})
+
+	// Test two values for zenith given on p. 106.0
+	test('bennett2', () => {
+		let R = Refraction.bennett(PI / 2)
+		const cSec = (3600 * 180) / PI
+		expect(Math.abs(0.08 + R * cSec) < 0.01).toBeTrue()
+		R = Refraction.bennett2(PI / 2)
+		expect(Math.abs(0.89 + R * cSec) < 0.01).toBeTrue()
 	})
 })
 
