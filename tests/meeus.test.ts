@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toDeg } from '../src/angle'
 import { DAYSEC, PI } from '../src/constants'
 import { toKilometer } from '../src/distance'
-import { AngularSeparation, Apsis, Base, Interpolation, Julian, MoonPosition, Refraction, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, Circle, Interpolation, Julian, MoonPosition, Refraction, Stellar } from '../src/meeus'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
 	expect(actual).toBeCloseTo(expected, numDigits)
@@ -348,7 +348,7 @@ describe('AngularSeparation', () => {
 	})
 })
 
-describe('#refraction', () => {
+describe('Refraction', () => {
 	test('bennett', () => {
 		// Example 16.a, p. 107.0
 		const h0 = (0.5 * PI) / 180
@@ -370,6 +370,28 @@ describe('#refraction', () => {
 		expect(Math.abs(0.08 + R * cSec) < 0.01).toBeTrue()
 		R = Refraction.bennett2(PI / 2)
 		expect(Math.abs(0.89 + R * cSec) < 0.01).toBeTrue()
+	})
+})
+
+describe('Circle', () => {
+	test('smallest type I', () => {
+		// Exercise, p. 128.0
+		const c1 = [hms(9, 5, 41.44), signedDms(false, 18, 30, 30)] as const
+		const c2 = [hms(9, 9, 29), signedDms(false, 17, 43, 56.7)] as const
+		const c3 = [hms(8, 59, 47.14), signedDms(false, 17, 49, 36.8)] as const
+		const a = Circle.smallest(c1, c2, c3)
+		expect(formatALT(a[0], true)).toBe('+02 18 38') // Δ = 2°.31054 = 2°19′
+		expect(a[1]).toBeTrue() // type I
+	})
+
+	test('smallest type II', () => {
+		// Example 20.a, p. 128.0
+		const c1 = [hms(12, 41, 8.64), signedDms(true, 5, 37, 54.2)] as const
+		const c2 = [hms(12, 52, 5.21), signedDms(true, 4, 22, 26.2)] as const
+		const c3 = [hms(12, 39, 28.11), signedDms(true, 1, 50, 3.7)] as const
+		const a = Circle.smallest(c1, c2, c3)
+		expect(formatALT(a[0], true)).toBe('+04 15 49') // Δ = 4°.26363 = 4°16′
+		expect(a[1]).toBeFalse() // type II
 	})
 })
 

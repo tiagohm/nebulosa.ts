@@ -693,6 +693,37 @@ export namespace Refraction {
 	}
 }
 
+// Chapter 20, Smallest Circle containing three Celestial Bodies.
+export namespace Circle {
+	// Finds the smallest circle containing three points.
+	export function smallest(c1: Coord, c2: Coord, c3: Coord) {
+		// Using haversine formula
+		const cd1 = Math.cos(c1[1])
+		const cd2 = Math.cos(c2[1])
+		const cd3 = Math.cos(c3[1])
+		let a = 2 * Math.asin(Math.sqrt(AngularSeparation.hav(c2[1] - c1[1]) + cd1 * cd2 * AngularSeparation.hav(c2[0] - c1[0])))
+		let b = 2 * Math.asin(Math.sqrt(AngularSeparation.hav(c3[1] - c2[1]) + cd2 * cd3 * AngularSeparation.hav(c3[0] - c2[0])))
+		let c = 2 * Math.asin(Math.sqrt(AngularSeparation.hav(c1[1] - c3[1]) + cd3 * cd1 * AngularSeparation.hav(c1[0] - c3[0])))
+
+		if (b > a) {
+			const t = a
+			a = b
+			b = t
+		}
+
+		if (c > a) {
+			const t = a
+			a = c
+			c = t
+		}
+
+		if (a * a >= b * b + c * c) return [a, true] as const
+
+		// (20.1) p. 128
+		return [(2 * a * b * c) / Math.sqrt((a + b + c) * (a + b - c) * (b + c - a) * (a + c - b)), false] as const
+	}
+}
+
 // Chapter 47, Position of the Moon.
 export namespace MoonPosition {
 	// Computes the equatorial horizontal parallax of the Moon.
