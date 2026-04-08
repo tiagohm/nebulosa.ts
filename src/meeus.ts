@@ -1120,3 +1120,40 @@ export namespace Apsis {
 		return [T, D, M, F] as const
 	}
 }
+
+// Chapter 56, Stellar Magnitudes.
+export namespace Stellar {
+	// Computes the combined apparent magnitude of two stars.
+	export function sum(m1: number, m2: number) {
+		const x = 0.4 * (m2 - m1)
+		return m2 - 2.5 * Math.log10(10 ** x + 1)
+	}
+
+	// Computes the combined apparent magnitude of a number of stars.
+	export function sumN(m: readonly number[]) {
+		let s = 0
+		for (const mi of m) s += 10 ** (-0.4 * mi)
+		return -2.5 * Math.log10(s)
+	}
+
+	// Computes the brightness ratio of two apparent magnitudes.
+	export function ratio(m1: number, m2: number) {
+		const x = 0.4 * (m2 - m1)
+		return 10 ** x
+	}
+
+	// Computes the difference in apparent magnitude of two stars given their brightness ratio.
+	export function difference(ratio: number) {
+		return 2.5 * Math.log10(ratio)
+	}
+
+	// Computes absolute magnitude given apparent magnitude, and annual parallax in arc seconds.
+	export function absoluteByParallax(m: number, pi: number) {
+		return m + 5 + 5 * Math.log10(pi)
+	}
+
+	// Computes absolute magnitude given apparent magnitude, and distance in parsecs.
+	export function absoluteByDistance(m: number, d: number) {
+		return m + 5 - 5 * Math.log10(d)
+	}
+}

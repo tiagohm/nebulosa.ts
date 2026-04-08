@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toDeg } from '../src/angle'
 import { DAYSEC, PI } from '../src/constants'
 import { toKilometer } from '../src/distance'
-import { AngularSeparation, Apsis, Base, Interpolation, Julian, MoonPosition } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, Interpolation, Julian, MoonPosition, Stellar } from '../src/meeus'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
 	expect(actual).toBeCloseTo(expected, numDigits)
@@ -497,5 +497,44 @@ describe('Apsis', () => {
 		const dist = MoonPosition.position(apo)
 		const par = MoonPosition.parallax(dist[2])
 		expect(toArcsec(Math.abs(apoPar - par)) < 0.1).toBeTrue()
+	})
+})
+
+describe('stellar', () => {
+	test('sum', () => {
+		// Example 56.a, p. 393
+		const res = Stellar.sum(1.96, 2.89)
+		strictEqual(res, 1.58, 2)
+	})
+
+	test('sumN triple', () => {
+		// Example 56.b, p. 394
+		const res = Stellar.sumN([4.73, 5.22, 5.6])
+		strictEqual(res, 3.93, 2)
+	})
+
+	test('sumN cluster', () => {
+		// Example 56.c, p. 394
+		const c: number[] = []
+
+		for (let i = 0; i < 4; i++) c.push(5)
+		for (let i = 0; i < 14; i++) c.push(6)
+		for (let i = 0; i < 23; i++) c.push(7)
+		for (let i = 0; i < 38; i++) c.push(8)
+
+		const res = Stellar.sumN(c)
+		strictEqual(res, 2.02, 2)
+	})
+
+	test('ratio', () => {
+		// Example 56.d, p. 395
+		const res = Stellar.ratio(0.14, 2.12)
+		strictEqual(res, 6.19, 2)
+	})
+
+	test('difference', () => {
+		// Example 56.e, p. 395
+		const res = Stellar.difference(500)
+		strictEqual(res, 6.75, 2)
 	})
 })
