@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toDeg } from '../src/angle'
 import { DAYSEC, PI } from '../src/constants'
 import { toKilometer } from '../src/distance'
-import { AngularSeparation, Apsis, Base, Circle, Interpolation, Julian, MoonPosition, Refraction, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, Circle, Interpolation, Julian, MoonPosition, Node, Refraction, Stellar } from '../src/meeus'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
 	expect(actual).toBeCloseTo(expected, numDigits)
@@ -393,6 +393,73 @@ describe('Circle', () => {
 		expect(formatALT(a[0], true)).toBe('+04 15 49') // Δ = 4°.26363 = 4°16′
 		expect(a[1]).toBeFalse() // type II
 	})
+})
+
+describe('Node', () => {
+	test('EllipticAscending', () => {
+		// Example 39.a, p. 276
+		const res = Node.ellipticAscending(17.9400782, 0.96727426, (111.84644 * PI) / 180, Julian.calendarGregorianToJD(1986, 2, 9.45891))
+		const t = res[0]
+		const r = res[1]
+		const d = Julian.jdToCalendar(t)
+		strictEqual(d[0], 1985)
+		strictEqual(d[1], 11)
+		strictEqual(d[2], 9.16, 2)
+		strictEqual(r, 1.8045, 4) // AU
+	})
+
+	test('EllipticDescending', () => {
+		// Example 39.a, p. 276
+		const res = Node.ellipticDescending(17.9400782, 0.96727426, (111.84644 * PI) / 180, Julian.calendarGregorianToJD(1986, 2, 9.45891))
+		const t = res[0]
+		const r = res[1]
+		const d = Julian.jdToCalendar(t)
+		strictEqual(d[0], 1986)
+		strictEqual(d[1], 3)
+		strictEqual(d[2], 10.37, 2)
+		strictEqual(r, 0.8493, 4) // AU
+	})
+
+	test('parabolicAscending', () => {
+		// Example 29.b, p. 277
+		const res = Node.parabolicAscending(1.324502, (154.9103 * PI) / 180, Julian.calendarGregorianToJD(1989, 8, 20.291))
+		const t = res[0]
+		const r = res[1]
+		const d = Julian.jdToCalendar(t)
+		strictEqual(d[0], 1977)
+		strictEqual(d[1], 9)
+		strictEqual(d[2], 17.6, 1)
+		strictEqual(r, 28.07, 2) // AU
+	})
+
+	test('parabolicDescending', () => {
+		// Example 29.b, p. 277
+		const res = Node.parabolicDescending(1.324502, (154.9103 * PI) / 180, Julian.calendarGregorianToJD(1989, 8, 20.291))
+		const t = res[0]
+		const r = res[1]
+		const d = Julian.jdToCalendar(t)
+		strictEqual(d[0], 1989)
+		strictEqual(d[1], 9)
+		strictEqual(d[2], 17.636, 3)
+		strictEqual(r, 1.3901, 4) // AU
+	})
+
+	// TODO: test('ellipticAscending of venus', () => {
+	// 	// Example 39.c, p. 278
+	// 	const k = planetelements.mean(planetelements.venus, Julian.calendarGregorianToJD(1979, 1, 1))
+	// 	const res = Node.ellipticAscending(
+	// 		// eslint-disable-line no-unused-vars
+	// 		k.axis,
+	// 		k.ecc,
+	// 		k.peri - k.node,
+	// 		perihelion.perihelion(perihelion.venus, 1979),
+	// 	)
+	// 	const t = res[0]
+	// 	const d = Julian.jDToCalendar(t)
+	// 	strictEqual(d[0], 1978)
+	// 	strictEqual(d[1], 11)
+	// 	strictEqual(d[2], 27.409, 3)
+	// })
 })
 
 describe('Moon Position', () => {

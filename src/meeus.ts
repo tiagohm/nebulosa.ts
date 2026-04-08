@@ -473,7 +473,7 @@ export namespace Julian {
 	}
 
 	// Returns the calendar date for the given jd.
-	export function jdToCalendar(jd: number, isJulian: boolean) {
+	export function jdToCalendar(jd: number, isJulian: boolean = false) {
 		const [z, f] = modf(jd + 0.5)
 		let a = z
 
@@ -721,6 +721,46 @@ export namespace Circle {
 
 		// (20.1) p. 128
 		return [(2 * a * b * c) / Math.sqrt((a + b + c) * (a + b - c) * (b + c - a) * (a + c - b)), false] as const
+	}
+}
+
+// Chapter 39, Passages through the Nodes.
+export namespace Node {
+	// Computes time and distance of passage through the ascending node of a body in an elliptical orbit.
+	export function ellipticAscending(axis: Distance, ecc: number, argP: Angle, timeP: number) {
+		return elliptic(-argP, axis, ecc, timeP)
+	}
+
+	// Computes time and distance of passage through the descending node of a body in an elliptical orbit.
+	export function ellipticDescending(axis: Distance, ecc: number, argP: Angle, timeP: number) {
+		return elliptic(PI - argP, axis, ecc, timeP)
+	}
+
+	export function elliptic(nu: Angle, axis: Distance, ecc: number, timeP: number): readonly [number, Distance] {
+		const E = 2 * Math.atan(Math.sqrt((1 - ecc) / (1 + ecc)) * Math.tan(nu * 0.5))
+		const [sE, cE] = Base.sincos(E)
+		const M = E - ecc * sE
+		const n = Base.K / axis / Math.sqrt(axis)
+		const jde = timeP + M / n
+		const r = axis * (1 - ecc * cE)
+		return [jde, r]
+	}
+
+	// Computes time and distance of passage through the ascending node of a body in a parabolic orbit.
+	export function parabolicAscending(q: Distance, argP: Angle, timeP: number) {
+		return parabolic(-argP, q, timeP)
+	}
+
+	// Computes time and distance of passage through the descending node of a body in a parabolic orbit.
+	export function parabolicDescending(q: Distance, argP: Angle, timeP: number) {
+		return parabolic(Math.PI - argP, q, timeP)
+	}
+
+	export function parabolic(nu: Angle, q: Distance, timeP: number): readonly [number, Distance] {
+		const s = Math.tan(nu * 0.5)
+		const jde = timeP + 27.403895 * s * (s * s + 3) * q * Math.sqrt(q)
+		const r = q * (1 + s * s)
+		return [jde, r]
 	}
 }
 
