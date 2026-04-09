@@ -4,7 +4,7 @@ import { G } from '../src/constants'
 import { CRC } from '../src/crc'
 import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { ACS712, AM2320, BH1750, BMP180, BMP280, DS18B20, HMC5883L, LM35, MAX44009, MPU6050, RDA5807, SHT21, TEA5767, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
+import { ACS712, AM2320, BH1750, BMP180, BMP280, DS18B20, HMC5883L, LM35, MAX44009, MCP4725, MPU6050, RDA5807, SHT21, TEA5767, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
 
 type MockFirmataMessage =
 	| readonly ['mode', number, PinMode]
@@ -762,6 +762,59 @@ test('MAX44009 configures i2c reads and emits lux updates', () => {
 	expect(updates).toBe(1)
 
 	max44009.stop()
+	expect(client.handlers.size).toBe(0)
+})
+
+test('MCP4725 clamps raw and normalized output values', () => {
+	const dac = new MCP4725(undefined as never)
+
+	expect(dac.value).toBe(0)
+
+	dac.value = 5000
+	expect(dac.value).toBe(MCP4725.MAX_VALUE)
+
+	dac.powerDownMode = '1k'
+	expect(dac.powerDownMode).toBe('1k')
+
+	dac.powerDownMode = 'normal'
+	expect(dac.powerDownMode).toBe('normal')
+})
+
+test('MCP4725 configures i2c writes, power-down mode and EEPROM persistence', () => {
+	const client = new MockFirmataClient()
+	const dac = new MCP4725(client as never, MCP4725.ADDRESS, { value: 0x123 })
+	let updates = 0
+
+	dac.addListener(() => {
+		updates++
+	})
+
+	dac.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', MCP4725.ADDRESS, Buffer.from([0x01, 0x23])],
+	])
+
+	dac.value = 0x800
+	expect(dac.value).toBe(0x800)
+	expect(client.messages.at(-1)).toEqual(['write', MCP4725.ADDRESS, Buffer.from([0x08, 0x00])])
+	expect(updates).toBe(1)
+
+	const writesAfterValueChange = client.messages.length
+	dac.value = 0x800
+	expect(client.messages.length).toBe(writesAfterValueChange)
+	expect(updates).toBe(1)
+
+	dac.powerDownMode = '100k'
+	expect(dac.powerDownMode).toBe('100k')
+	expect(client.messages.at(-1)).toEqual(['write', MCP4725.ADDRESS, Buffer.from([0x28, 0x00])])
+	expect(updates).toBe(2)
+
+	dac.persist()
+	expect(client.messages.at(-1)).toEqual(['write', MCP4725.ADDRESS, Buffer.from([0x64, 0x80, 0x00])])
+
+	dac.stop()
 	expect(client.handlers.size).toBe(0)
 })
 
