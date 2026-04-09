@@ -325,7 +325,7 @@ export const DEFAULT_TEA5767_OPTIONS: Required<TEA5767Options> = {
 	wrap: true,
 }
 
-abstract class PeripheralBase<D extends Peripheral<D> = never> {
+abstract class PeripheralBase<D extends Peripheral<D> = never> implements FirmataClientHandler {
 	readonly #listeners = new Set<PeripheralListener<D>>()
 	readonly #pendingTwoWireReads = new Map<string, PendingTwoWireRead[]>()
 
@@ -409,9 +409,13 @@ abstract class PeripheralBase<D extends Peripheral<D> = never> {
 	#pendingTwoWireReadKey(address: number, register: number) {
 		return `ADDR:0x${address.toString(16).padStart(2, '0')}:REG:0x${register.toString(16).padStart(2, '0')}`
 	}
+
+	close(client: FirmataClient) {
+		if (this.client === client) this.stop()
+	}
 }
 
-export abstract class ADCPeripheral<D extends Peripheral<D>> extends PeripheralBase<D> implements FirmataClientHandler {
+export abstract class ADCPeripheral<D extends Peripheral<D>> extends PeripheralBase<D> {
 	abstract readonly pin: number
 
 	abstract calculate(value: number): boolean
@@ -564,7 +568,7 @@ export class ACS712 extends ADCPeripheral<ACS712> implements Ammeter {
 
 // https://invensense.tdk.com/products/motion-tracking/6-axis/mpu-6050/
 
-export class MPU6050 extends PeripheralBase<MPU6050> implements Accelerometer, Gyroscope, FirmataClientHandler {
+export class MPU6050 extends PeripheralBase<MPU6050> implements Accelerometer, Gyroscope {
 	ax = 0
 	ay = 0
 	az = 0
@@ -669,7 +673,7 @@ export class MPU6050 extends PeripheralBase<MPU6050> implements Accelerometer, G
 
 // https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf
 
-export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimeter, Thermometer, FirmataClientHandler {
+export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimeter, Thermometer {
 	pressure = 0
 	altitude = 0
 	temperature = 0
@@ -817,7 +821,7 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 
 // https://sensirion.com/media/documents/120BBE4C/63500094/Sensirion_Datasheet_Humidity_Sensor_SHT21.pdf
 
-export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermometer, FirmataClientHandler {
+export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermometer {
 	humidity = 0
 	temperature = 0
 
@@ -889,7 +893,7 @@ export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermome
 
 // https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp280-ds001.pdf
 
-export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimeter, Thermometer, FirmataClientHandler {
+export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimeter, Thermometer {
 	pressure = 0
 	altitude = 0
 	temperature = 0
@@ -1042,7 +1046,7 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 
 // https://cdn-shop.adafruit.com/product-files/3721/AM2320.pdf
 
-export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermometer, FirmataClientHandler {
+export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermometer {
 	humidity = 0
 	temperature = 0
 
@@ -1116,7 +1120,7 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 
 // https://www.digikey.com/htmldatasheets/production/1640724/0/0/1/hmc5883l-datasheet.html
 
-export class HMC5883L extends PeripheralBase<HMC5883L> implements Magnetometer, FirmataClientHandler {
+export class HMC5883L extends PeripheralBase<HMC5883L> implements Magnetometer {
 	x = 0
 	y = 0
 	z = 0
@@ -1216,7 +1220,7 @@ export class HMC5883L extends PeripheralBase<HMC5883L> implements Magnetometer, 
 
 // https://www.rohm.com/products/sensor/ambient-light-sensor-ics/bh1750fvi-product
 
-export class BH1750 extends PeripheralBase<BH1750> implements Luxmeter, FirmataClientHandler {
+export class BH1750 extends PeripheralBase<BH1750> implements Luxmeter {
 	lux = 0
 	raw = 0
 
@@ -1355,7 +1359,7 @@ export class BH1750 extends PeripheralBase<BH1750> implements Luxmeter, FirmataC
 
 // https://www.mouser.com/datasheet/2/588/TSL2561_DS000110_3_00-2066792.pdf
 
-export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter, FirmataClientHandler {
+export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
 	lux = 0
 	broadband = 0
 	infrared = 0
@@ -1468,7 +1472,7 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter, Firmat
 
 // https://www.analog.com/media/en/technical-documentation/data-sheets/max44009.pdf
 
-export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter, FirmataClientHandler {
+export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 	lux = 0
 
 	static readonly ADDRESS = 0x4a
@@ -1542,7 +1546,7 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter, Firm
 
 // https://cdn.sparkfun.com/assets/4/5/f/a/d/TEA5767.pdf
 
-export class TEA5767 extends PeripheralBase<TEA5767> implements Radio, FirmataClientHandler {
+export class TEA5767 extends PeripheralBase<TEA5767> implements Radio {
 	#frequency: number
 	#muted: boolean
 	#stereo: boolean
@@ -1967,7 +1971,7 @@ export class TEA5767 extends PeripheralBase<TEA5767> implements Radio, FirmataCl
 
 // https://cdn-shop.adafruit.com/product-files/5651/5651_tuner84_RDA5807M_datasheet_v1.pdf
 
-export class RDA5807 extends PeripheralBase<RDA5807> implements Radio, FirmataClientHandler {
+export class RDA5807 extends PeripheralBase<RDA5807> implements Radio {
 	#frequency: number
 	#volume: number
 	#muted: boolean
@@ -2340,7 +2344,7 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements Radio, FirmataCl
 
 // https://www.analog.com/media/en/technical-documentation/data-sheets/ds18b20.pdf
 
-export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer, FirmataClientHandler {
+export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 	temperature = 0
 
 	static readonly CONVERT_T_CMD = [0x44] as const

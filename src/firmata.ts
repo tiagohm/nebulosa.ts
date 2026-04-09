@@ -72,6 +72,8 @@ export interface FirmataClientHandler {
 	readonly twoWireMessage?: (client: FirmataClient, address: number, register: number, data: Buffer) => void
 	readonly oneWireSearchReply?: (client: FirmataClient, pin: number, addresses: readonly Buffer[], alarms: boolean) => void
 	readonly oneWireReadReply?: (client: FirmataClient, pin: number, correlationId: number, data: Buffer) => void
+
+	readonly close?: (client: FirmataClient) => void
 }
 
 export interface FirmataFsmState {
@@ -656,6 +658,10 @@ export class FirmataFsm {
 	oneWireReadReply(pin: number, correlationId: number, data: Buffer) {
 		this.#handlers.forEach((handler) => handler.oneWireReadReply?.(this.client, pin, correlationId, data))
 	}
+
+	close() {
+		this.#handlers.forEach((handler) => handler.close?.(this.client))
+	}
 }
 
 // Writes a 14-bit value as two 7-bit bytes.
@@ -1023,6 +1029,10 @@ export class FirmataClient implements Disposable {
 	oneWireWriteAndRead(pin: number, data: Readonly<NumberArray> | Buffer, bytesToRead: number, address?: Readonly<NumberArray> | Buffer, correlationId?: number) {
 		return this.oneWireCommand(pin, { reset: true, skip: address === undefined, address, bytesToRead, correlationId, data })
 	}
+
+	close() {
+		this.#fsm.close()
+	}
 }
 
 export class FirmataClientOverTcp extends FirmataClient {
@@ -1038,8 +1048,7 @@ export class FirmataClientOverTcp extends FirmataClient {
 					this.#socket?.flush()
 				},
 				close: () => {
-					this.#socket?.close()
-					this.#socket = undefined
+					this.close()
 				},
 			},
 			board,
@@ -1058,12 +1067,26 @@ export class FirmataClientOverTcp extends FirmataClient {
 					this.process(buffer)
 				},
 				error: (_, error) => {
-					console.error('socket error:', error)
+					console.error('firmata socket error:', error)
 					this.reset()
 				},
 				connectError: (_, error) => {
-					console.error('connection failed:', error)
+					console.error('firmata connection failed:', error)
 					this.reset()
+				},
+				end: () => {
+					console.info('firmata socket ended')
+					super.close()
+				},
+				open(socket) {
+					console.info('firmata socket open at %s:%s', socket.remoteAddress, socket.localPort)
+				},
+				timeout() {
+					console.info('firmata socket timed out')
+				},
+				close: (_, error) => {
+					console.info('firmata socket closed:', error)
+					super.close()
 				},
 			},
 		})
@@ -1071,5 +1094,10 @@ export class FirmataClientOverTcp extends FirmataClient {
 		this.requestFirmware()
 
 		return true
+	}
+
+	close() {
+		this.#socket?.close()
+		this.#socket = undefined
 	}
 }
