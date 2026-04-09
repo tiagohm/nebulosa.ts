@@ -3,13 +3,15 @@ import { DEG2RAD, G } from './constants'
 import { CRC } from './crc'
 import { type Distance, fromPressure } from './distance'
 import { type FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type Pin, PinMode } from './firmata'
-import type { NumberArray } from './math'
+import { clamp, type NumberArray } from './math'
 import { type Pressure, pascal } from './pressure'
 import type { Temperature } from './temperature'
 
 export const DEFAULT_POLLING_INTERVAL = 5000
 
 export type PeripheralListener<D extends Peripheral<D>> = (device: D) => void
+
+export type RadioSeekDirection = 'up' | 'down'
 
 export type BMP280OperatingMode = 'sleep' | 'forced' | 'normal'
 
@@ -39,6 +41,12 @@ export type TSL2561IntegrationTime = 13.7 | 101 | 402 // ms
 
 export type DS18B20Resolution = 9 | 10 | 11 | 12
 
+export type RDA5807Band = 'usEurope' | 'japanWide' | 'world' | 'eastEurope'
+
+export type RDA5807ChannelSpacing = 25 | 50 | 100 | 200 // kHz
+
+export type RDA5807EastEuropeMode = '65_76' | '50_65'
+
 export enum BMP180Mode {
 	ULTRA_LOW_POWER, // 5 ms
 	STANDARD, // 8 ms
@@ -46,7 +54,8 @@ export enum BMP180Mode {
 	ULTRA_HIGH_RESOLUTION, // 26 ms
 }
 
-export interface Peripheral<D extends Peripheral<D>> extends Disposable {
+export interface Peripheral<D extends Peripheral<D> = never> extends Disposable {
+	readonly name: string
 	readonly client: FirmataClient
 	readonly addListener: (listener: PeripheralListener<D>) => void
 	readonly removeListener: (listener: PeripheralListener<D>) => void
@@ -54,46 +63,63 @@ export interface Peripheral<D extends Peripheral<D>> extends Disposable {
 	readonly stop: () => void
 }
 
-export interface Thermometer {
+export interface Thermometer extends Pick<Peripheral, 'name' | 'client'> {
 	readonly temperature: Temperature
 }
 
-export interface Hygrometer {
+export interface Hygrometer extends Pick<Peripheral, 'name' | 'client'> {
 	readonly humidity: number
 }
 
-export interface Barometer {
+export interface Barometer extends Pick<Peripheral, 'name' | 'client'> {
 	readonly pressure: Pressure
 }
 
-export interface Altimeter {
+export interface Altimeter extends Pick<Peripheral, 'name' | 'client'> {
 	readonly altitude: Distance
 }
 
-export interface LuxMeter {
+export interface Luxmeter extends Pick<Peripheral, 'name' | 'client'> {
 	readonly lux: number
 }
 
-export interface Ammeter {
+export interface Ammeter extends Pick<Peripheral, 'name' | 'client'> {
 	readonly current: number // A
 }
 
-export interface Accelerometer {
+export interface Accelerometer extends Pick<Peripheral, 'name' | 'client'> {
 	readonly ax: number // m/s^2
 	readonly ay: number // m/s^2
 	readonly az: number // m/s^2
 }
 
-export interface Gyroscope {
+export interface Gyroscope extends Pick<Peripheral, 'name' | 'client'> {
 	readonly gx: Angle // rad/s
 	readonly gy: Angle // rad/s
 	readonly gz: Angle // rad/s
 }
 
-export interface Magnetometer {
+export interface Magnetometer extends Pick<Peripheral, 'name' | 'client'> {
 	readonly x: number // gauss
 	readonly y: number // gauss
 	readonly z: number // gauss
+}
+
+export interface Radio extends Pick<Peripheral, 'name' | 'client'> {
+	readonly frequency: number // MHz
+	readonly volume: number // 0..100
+	readonly muted: boolean
+	readonly stereo?: boolean
+	readonly seekFailed?: boolean
+	readonly rssi?: number // 0..127 logarithmic RSSI scale
+	readonly station?: boolean
+	readonly frequencyUp: () => void
+	readonly frequencyDown: () => void
+	readonly volumeUp: () => void
+	readonly volumeDown: () => void
+	readonly mute: () => void
+	readonly unmute: () => void
+	readonly seek: (direction: RadioSeekDirection, wrap: boolean) => void
 }
 
 export interface BMP280Options {
@@ -151,6 +177,37 @@ export interface DS18B20Options {
 	readonly powerMode?: OneWirePowerMode
 }
 
+export interface RDA5807Options {
+	readonly frequency?: number // MHz
+	readonly volume?: number
+	readonly muted?: boolean
+	readonly band?: RDA5807Band
+	readonly stereo?: boolean
+	readonly bassBoost?: boolean
+	readonly audioOutputHighZ?: boolean
+	readonly eastEuropeMode?: RDA5807EastEuropeMode
+	readonly spacing?: RDA5807ChannelSpacing // kHz
+	readonly seekThreshold?: number
+	readonly wrap?: boolean
+}
+
+interface RDA5807Status {
+	readonly rdsReady: boolean
+	readonly seekTuneComplete: boolean
+	readonly seekFailed: boolean
+	readonly stereo: boolean
+	readonly channel: number
+	readonly rssi: number
+	readonly station: boolean
+	readonly ready: boolean
+}
+
+interface PendingTwoWireRead {
+	readonly reject: (error: Error) => void
+	readonly resolve: (data: Buffer) => void
+	readonly timer: NodeJS.Timeout
+}
+
 export const DEFAULT_BMP280_OPTIONS: Required<BMP280Options> = {
 	mode: 'normal',
 	temperatureSampling: 'x1',
@@ -205,8 +262,25 @@ export const DEFAULT_DS18B20_OPTIONS: Required<Omit<DS18B20Options, 'address'>> 
 	skip: false, // true for skip search ROM address when address is not provided
 }
 
-abstract class PeripheralBase<D extends Peripheral<D>> {
+const RDA5807_VOLUME_FACTOR = 100 / 15
+
+export const DEFAULT_RDA5807_OPTIONS: Required<RDA5807Options> = {
+	frequency: 87,
+	volume: 100,
+	muted: false,
+	band: 'usEurope',
+	stereo: true,
+	bassBoost: false,
+	audioOutputHighZ: false,
+	eastEuropeMode: '65_76',
+	spacing: 100,
+	seekThreshold: 8,
+	wrap: true,
+}
+
+abstract class PeripheralBase<D extends Peripheral<D> = never> {
 	readonly #listeners = new Set<PeripheralListener<D>>()
+	readonly #pendingTwoWireReads = new Map<string, PendingTwoWireRead[]>()
 
 	abstract readonly client: FirmataClient
 
@@ -228,6 +302,66 @@ abstract class PeripheralBase<D extends Peripheral<D>> {
 	protected fire() {
 		for (const listener of this.#listeners) listener(this as never)
 	}
+
+	// Resolves one queued I2C register read for the current device instance.
+	protected resolvePendingTwoWireRead(client: FirmataClient, address: number, register: number, data: Buffer) {
+		if (client !== this.client) return false
+
+		const requests = this.#pendingTwoWireReads.get(this.#pendingTwoWireReadKey(address, register))
+		if (requests === undefined || requests.length === 0) return false
+
+		const request = requests.shift()
+		if (requests.length === 0) this.#pendingTwoWireReads.delete(this.#pendingTwoWireReadKey(address, register))
+		if (request === undefined) return false
+
+		clearTimeout(request.timer)
+		request.resolve(Buffer.from(data))
+		return true
+	}
+
+	// Queues one I2C register read and resolves when Firmata returns the matching reply.
+	protected readTwoWireRegister(address: number, register: number, bytesToRead: number, timeoutMs: number = 1000): Promise<Buffer> {
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				const requests = this.#pendingTwoWireReads.get(this.#pendingTwoWireReadKey(address, register))
+
+				if (requests !== undefined) {
+					const index = requests.findIndex((request) => request.timer === timer)
+					if (index >= 0) requests.splice(index, 1)
+					if (requests.length === 0) this.#pendingTwoWireReads.delete(this.#pendingTwoWireReadKey(address, register))
+				}
+
+				reject(new Error(`${this.constructor.name} register 0x${register.toString(16).padStart(2, '0')} read timed out.`))
+			}, timeoutMs)
+
+			const requests = this.#pendingTwoWireReads.get(this.#pendingTwoWireReadKey(address, register))
+			const request = { resolve, reject, timer }
+
+			if (requests === undefined) this.#pendingTwoWireReads.set(this.#pendingTwoWireReadKey(address, register), [request])
+			else requests.push(request)
+
+			this.client.twoWireRead(address, register, bytesToRead)
+		})
+	}
+
+	// Rejects any queued I2C register reads when the device shuts down.
+	protected clearPendingTwoWireReads(error: Error | string) {
+		const reason = typeof error === 'string' ? new Error(error) : error
+
+		for (const [key, requests] of this.#pendingTwoWireReads) {
+			for (const request of requests) {
+				clearTimeout(request.timer)
+				request.reject(new Error(`${reason.message} (${key})`))
+			}
+		}
+
+		this.#pendingTwoWireReads.clear()
+	}
+
+	// Builds a stable map key for one I2C address/register pair.
+	#pendingTwoWireReadKey(address: number, register: number) {
+		return `ADDR:0x${address.toString(16).padStart(2, '0')}:REG:0x${register.toString(16).padStart(2, '0')}`
+	}
 }
 
 export abstract class ADCPeripheral<D extends Peripheral<D>> extends PeripheralBase<D> implements FirmataClientHandler {
@@ -244,6 +378,8 @@ export abstract class ADCPeripheral<D extends Peripheral<D>> extends PeripheralB
 
 export class LM35 extends ADCPeripheral<LM35> implements Thermometer {
 	temperature = 0
+
+	readonly name = 'LM35'
 
 	constructor(
 		readonly client: FirmataClient,
@@ -278,10 +414,12 @@ export class LM35 extends ADCPeripheral<LM35> implements Thermometer {
 
 // https://www.alldatasheet.com/html-pdf/117488/VISHAY/TEMT6000/440/2/TEMT6000.html
 
-export class TEMT6000 extends ADCPeripheral<TEMT6000> implements LuxMeter {
+export class TEMT6000 extends ADCPeripheral<TEMT6000> implements Luxmeter {
 	lux = 0
 
 	readonly #luxPerStep: number
+
+	readonly name = 'TEMPT6000'
 
 	constructor(
 		readonly client: FirmataClient,
@@ -331,6 +469,8 @@ export class ACS712 extends ADCPeripheral<ACS712> implements Ammeter {
 
 	readonly #ampsPerStep: number
 	readonly #zeroCurrentSteps: number
+
+	readonly name = 'ACS712'
 
 	constructor(
 		readonly client: FirmataClient,
@@ -398,6 +538,8 @@ export class MPU6050 extends PeripheralBase<MPU6050> implements Accelerometer, G
 	readonly #gyroscopeScale: number
 	readonly #accelerometerConfig: number
 	readonly #gyroscopeConfig: number
+
+	readonly name = 'MPU6050'
 
 	constructor(
 		readonly client: FirmataClient,
@@ -515,6 +657,8 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 	#timer?: NodeJS.Timeout
 	#initialized = false
 	#command = BMP180.READ_TEMP_CMD
+
+	readonly name = 'BMP180'
 
 	constructor(
 		readonly client: FirmataClient,
@@ -639,6 +783,8 @@ export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermome
 	#timer?: NodeJS.Timeout
 	#temperatureChanged = false
 
+	readonly name = 'SHT21'
+
 	constructor(
 		readonly client: FirmataClient,
 		readonly poolingInterval: number = DEFAULT_POLLING_INTERVAL,
@@ -728,6 +874,8 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 	#timer?: NodeJS.Timeout
 	readonly #ctrlMeasValue: number
 	readonly #configValue: number
+
+	readonly name = 'BMP280'
 
 	constructor(
 		readonly client: FirmataClient,
@@ -863,6 +1011,8 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 	#timer?: NodeJS.Timeout
 	#reading = false
 
+	readonly name = 'AM2320'
+
 	constructor(
 		readonly client: FirmataClient,
 		readonly pollingInterval: number = DEFAULT_POLLING_INTERVAL,
@@ -938,6 +1088,8 @@ export class HMC5883L extends PeripheralBase<HMC5883L> implements Magnetometer, 
 	readonly #configB: number
 	readonly #gaussPerCount: number
 	readonly #minimumPollingInterval: number
+
+	readonly name = 'HMC5883L'
 
 	constructor(
 		readonly client: FirmataClient,
@@ -1017,7 +1169,7 @@ export class HMC5883L extends PeripheralBase<HMC5883L> implements Magnetometer, 
 
 // https://www.rohm.com/products/sensor/ambient-light-sensor-ics/bh1750fvi-product
 
-export class BH1750 extends PeripheralBase<BH1750> implements LuxMeter, FirmataClientHandler {
+export class BH1750 extends PeripheralBase<BH1750> implements Luxmeter, FirmataClientHandler {
 	lux = 0
 	raw = 0
 
@@ -1046,6 +1198,8 @@ export class BH1750 extends PeripheralBase<BH1750> implements LuxMeter, FirmataC
 	readonly #measurementDelayMs: number
 	readonly #oneTimeMode: boolean
 	readonly #halfLuxResolution: boolean
+
+	readonly name = 'BH1750'
 
 	constructor(
 		readonly client: FirmataClient,
@@ -1154,7 +1308,7 @@ export class BH1750 extends PeripheralBase<BH1750> implements LuxMeter, FirmataC
 
 // https://www.mouser.com/datasheet/2/588/TSL2561_DS000110_3_00-2066792.pdf
 
-export class TSL2561 extends PeripheralBase<TSL2561> implements LuxMeter, FirmataClientHandler {
+export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter, FirmataClientHandler {
 	lux = 0
 	broadband = 0
 	infrared = 0
@@ -1183,6 +1337,8 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements LuxMeter, Firmat
 	readonly #integrationScale: number
 	readonly #clipThreshold: number
 	readonly #minimumPollingInterval: number
+
+	readonly name = 'TSL2561'
 
 	constructor(
 		readonly client: FirmataClient,
@@ -1265,7 +1421,7 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements LuxMeter, Firmat
 
 // https://www.analog.com/media/en/technical-documentation/data-sheets/max44009.pdf
 
-export class MAX44009 extends PeripheralBase<MAX44009> implements LuxMeter, FirmataClientHandler {
+export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter, FirmataClientHandler {
 	lux = 0
 
 	static readonly ADDRESS = 0x4a
@@ -1280,6 +1436,8 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements LuxMeter, Firm
 
 	#timer?: NodeJS.Timeout
 	readonly #configuration: number
+
+	readonly name = 'MAX44009'
 
 	constructor(
 		readonly client: FirmataClient,
@@ -1335,6 +1493,378 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements LuxMeter, Firm
 	}
 }
 
+// https://cdn-shop.adafruit.com/product-files/5651/5651_tuner84_RDA5807M_datasheet_v1.pdf
+
+export class RDA5807 extends PeripheralBase<RDA5807> implements Radio, FirmataClientHandler {
+	#frequency: number
+	#volume: number
+	#muted: boolean
+	#bassBoost: boolean
+	#audioOutputHighZ: boolean
+	#eastEuropeMode: RDA5807EastEuropeMode
+	#seekFailed = false
+	#stereo = false
+	#rssi = 0
+	#station = false
+
+	static readonly ADDRESS = 0x11
+
+	static readonly DEVICE_ID_REG = 0x00
+	static readonly CONTROL_REG = 0x02
+	static readonly TUNING_REG = 0x03
+	static readonly AUDIO_REG = 0x05
+	static readonly SYSTEM_REG = 0x06
+	static readonly BAND_REG = 0x07
+	static readonly STATUS_REG = 0x0a
+
+	static readonly REG02_DHIZ = 1 << 15
+	static readonly REG02_DMUTE = 1 << 14
+	static readonly REG02_MONO = 1 << 13
+	static readonly REG02_BASS = 1 << 12
+	static readonly REG02_SEEKUP = 1 << 9
+	static readonly REG02_SEEK = 1 << 8
+	static readonly REG02_SKMODE = 1 << 7
+	static readonly REG02_ENABLE = 1 << 0
+
+	static readonly REG03_CHAN_SHIFT = 6
+	static readonly REG03_TUNE = 1 << 4
+
+	static readonly REG06_OPEN_MODE_SHIFT = 13
+	static readonly REG06_OPEN_WRITE = 0b11 << RDA5807.REG06_OPEN_MODE_SHIFT
+
+	static readonly REG05_SEEKTH_SHIFT = 8
+	static readonly REG05_SEEKTH_MASK = 0x0f << RDA5807.REG05_SEEKTH_SHIFT
+	static readonly REG05_LNA_PORT_SEL_SHIFT = 6
+	static readonly REG05_VOLUME_MASK = 0x0f
+
+	static readonly REG07_SOFTBLEND_THRESHOLD_SHIFT = 10
+	static readonly REG07_SOFTBLEND_THRESHOLD_DEFAULT = 0x10 << RDA5807.REG07_SOFTBLEND_THRESHOLD_SHIFT
+	static readonly REG07_EAST_EUROPE_65_76 = 1 << 9
+	static readonly REG07_SOFTBLEND_ENABLE = 1 << 1
+
+	static readonly STATUS_RDS_READY = 1 << 15
+	static readonly STATUS_SEEK_TUNE_COMPLETE = 1 << 14
+	static readonly STATUS_SEEK_FAILED = 1 << 13
+	static readonly STATUS_STEREO = 1 << 10
+	static readonly STATUS_CHANNEL_MASK = 0x03ff
+	static readonly SIGNAL_RSSI_SHIFT = 9
+	static readonly SIGNAL_RSSI_MASK = 0x7f << RDA5807.SIGNAL_RSSI_SHIFT
+	static readonly SIGNAL_STATION = 1 << 8
+	static readonly SIGNAL_READY = 1 << 7
+
+	readonly #bandStartKHz: number
+	readonly #bandEndKHz: number
+	readonly #bandBits: number
+	readonly #spacingKHz: number
+	readonly #spacingBits: number
+	readonly #wrapAround: boolean
+
+	#frequencyKHz: number
+	#started = false
+	#seeking = false
+	#reg02: number
+	#reg05: number
+	#reg06: number
+	#reg07: number
+	#timer?: NodeJS.Timeout
+
+	readonly name = 'RDA5807'
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly address: number = RDA5807.ADDRESS,
+		readonly pollingInterval: number = DEFAULT_POLLING_INTERVAL,
+		options: RDA5807Options = DEFAULT_RDA5807_OPTIONS,
+	) {
+		super()
+
+		const band = options.band ?? DEFAULT_RDA5807_OPTIONS.band
+		const spacing = options.spacing ?? DEFAULT_RDA5807_OPTIONS.spacing
+		const seekThreshold = clamp(Math.trunc(options.seekThreshold ?? DEFAULT_RDA5807_OPTIONS.seekThreshold), 0, 15)
+		const volume = clamp(Math.round((options.volume ?? DEFAULT_RDA5807_OPTIONS.volume) / RDA5807_VOLUME_FACTOR), 0, 15)
+		const muted = options.muted ?? DEFAULT_RDA5807_OPTIONS.muted
+		const stereo = options.stereo ?? DEFAULT_RDA5807_OPTIONS.stereo
+		const bassBoost = options.bassBoost ?? DEFAULT_RDA5807_OPTIONS.bassBoost
+		const audioOutputHighZ = options.audioOutputHighZ ?? DEFAULT_RDA5807_OPTIONS.audioOutputHighZ
+		const eastEuropeMode = options.eastEuropeMode ?? DEFAULT_RDA5807_OPTIONS.eastEuropeMode
+
+		this.#bandStartKHz = band === 'usEurope' ? 87000 : band === 'japanWide' || band === 'world' ? 76000 : eastEuropeMode === '50_65' ? 50000 : 65000
+		this.#bandEndKHz = band === 'usEurope' ? 108000 : band === 'japanWide' ? 91000 : band === 'world' ? 108000 : eastEuropeMode === '50_65' ? 65000 : 76000
+		this.#bandBits = band === 'usEurope' ? 0 : band === 'japanWide' ? 1 : band === 'world' ? 2 : 3
+		this.#spacingKHz = spacing
+		this.#spacingBits = spacing === 100 ? 0 : spacing === 200 ? 1 : spacing === 50 ? 2 : 3
+		this.#wrapAround = options.wrap ?? DEFAULT_RDA5807_OPTIONS.wrap
+		this.#frequencyKHz = this.#normalizeFrequencyKHz(options.frequency ?? DEFAULT_RDA5807_OPTIONS.frequency)
+		this.#frequency = this.#frequencyKHz / 1000
+		this.#volume = volume
+		this.#muted = muted
+		this.#stereo = stereo
+		this.#bassBoost = bassBoost
+		this.#audioOutputHighZ = audioOutputHighZ
+		this.#eastEuropeMode = eastEuropeMode
+		this.#reg02 = (audioOutputHighZ ? 0 : RDA5807.REG02_DHIZ) | (muted ? 0 : RDA5807.REG02_DMUTE) | (stereo === false ? RDA5807.REG02_MONO : 0) | (bassBoost ? RDA5807.REG02_BASS : 0) | RDA5807.REG02_ENABLE
+		this.#reg05 = (seekThreshold << RDA5807.REG05_SEEKTH_SHIFT) | (2 << RDA5807.REG05_LNA_PORT_SEL_SHIFT) | volume
+		this.#reg06 = RDA5807.REG06_OPEN_WRITE
+		this.#reg07 = RDA5807.REG07_SOFTBLEND_THRESHOLD_DEFAULT | (eastEuropeMode === '65_76' ? RDA5807.REG07_EAST_EUROPE_65_76 : 0) | RDA5807.REG07_SOFTBLEND_ENABLE
+	}
+
+	// Powers the tuner on, configures the audio path, and tunes the initial frequency.
+	start() {
+		if (this.#started) return
+
+		this.#started = true
+		this.client.addHandler(this)
+		this.client.twoWireConfig(0)
+		this.#writeRegister(RDA5807.CONTROL_REG, this.#reg02)
+		this.#writeRegister(RDA5807.AUDIO_REG, this.#reg05)
+		if (this.#bandBits === 3) {
+			this.#writeRegister(RDA5807.SYSTEM_REG, this.#reg06)
+			this.#writeRegister(RDA5807.BAND_REG, this.#reg07)
+		}
+		this.#writeRegister(RDA5807.TUNING_REG, this.#tuningValue(true))
+		this.#requestStatus()
+		this.#timer = setInterval(this.#requestStatus.bind(this), Math.max(100, this.pollingInterval))
+	}
+
+	// Powers the tuner down and clears any pending register reads.
+	stop() {
+		if (!this.#started) return
+
+		this.#started = false
+		this.#seeking = false
+		this.client.removeHandler(this)
+		clearInterval(this.#timer)
+		this.#timer = undefined
+		this.#writeRegister(RDA5807.CONTROL_REG, this.#reg02 & ~RDA5807.REG02_ENABLE & ~RDA5807.REG02_SEEK)
+		this.clearPendingTwoWireReads(new Error('RDA5807 stopped before the I2C read completed.'))
+	}
+
+	// Gets the current tuned frequency in MHz.
+	get frequency() {
+		return this.#frequency
+	}
+
+	// Sets the current tuned frequency in MHz.
+	set frequency(value: number) {
+		const nextFrequencyKHz = this.#normalizeFrequencyKHz(value)
+		this.#seeking = false
+		this.#frequencyKHz = nextFrequencyKHz
+		this.#frequency = nextFrequencyKHz / 1000
+		this.#seekFailed = false
+
+		if (this.#started) {
+			this.#clearSeekTuneState()
+			this.#writeRegister(RDA5807.TUNING_REG, this.#tuningValue(true))
+		}
+	}
+
+	// Steps the frequency up by the configured channel spacing and wraps at band end.
+	frequencyUp() {
+		const nextFrequencyKHz = this.#frequencyKHz < this.#bandEndKHz ? this.#frequencyKHz + this.#spacingKHz : this.#bandStartKHz
+		this.frequency = nextFrequencyKHz / 1000
+	}
+
+	// Steps the frequency down by the configured channel spacing and wraps at band start.
+	frequencyDown() {
+		const nextFrequencyKHz = this.#frequencyKHz > this.#bandStartKHz ? this.#frequencyKHz - this.#spacingKHz : this.#bandEndKHz
+		this.frequency = nextFrequencyKHz / 1000
+	}
+
+	// Returns whether the configured output audio mode is stereo.
+	get stereo() {
+		return this.#stereo
+	}
+
+	// Gets the current RSSI level from the chip status register.
+	get rssi() {
+		return this.#rssi
+	}
+
+	// Returns whether the current channel is considered a valid station.
+	get station() {
+		return this.#station
+	}
+
+	// Gets the output volume level between 0 and 100.
+	get volume() {
+		return Math.round(this.#volume * RDA5807_VOLUME_FACTOR)
+	}
+
+	// Sets the output volume level between 0 and 100.
+	set volume(volume: number) {
+		const nextVolume = clamp(Math.round(volume / RDA5807_VOLUME_FACTOR), 0, 15)
+		this.#volume = nextVolume
+		this.#reg05 = (this.#reg05 & ~RDA5807.REG05_VOLUME_MASK) | nextVolume
+		if (this.#started) this.#writeRegister(RDA5807.AUDIO_REG, this.#reg05)
+	}
+
+	// Increments the output volume by one step.
+	volumeUp() {
+		this.volume += RDA5807_VOLUME_FACTOR
+	}
+
+	// Decrements the output volume by one step.
+	volumeDown() {
+		this.volume -= RDA5807_VOLUME_FACTOR
+	}
+
+	// Returns whether the audio is muted.
+	get muted() {
+		return this.#muted
+	}
+
+	// Sets whether the tuner should force mono or allow stereo decoding.
+	set stereo(value: boolean) {
+		this.#stereo = value
+		this.#reg02 = value === false ? this.#reg02 | RDA5807.REG02_MONO : this.#reg02 & ~RDA5807.REG02_MONO
+		if (this.#started) this.#writeRegister(RDA5807.CONTROL_REG, this.#reg02 & ~RDA5807.REG02_SEEK)
+	}
+
+	// Returns whether bass boost is enabled.
+	get bassBoost() {
+		return this.#bassBoost
+	}
+
+	// Enables or disables bass boost.
+	set bassBoost(value: boolean) {
+		this.#bassBoost = value
+		this.#reg02 = value ? this.#reg02 | RDA5807.REG02_BASS : this.#reg02 & ~RDA5807.REG02_BASS
+		if (this.#started) this.#writeRegister(RDA5807.CONTROL_REG, this.#reg02 & ~RDA5807.REG02_SEEK)
+	}
+
+	// Enables or disables high-impedance analog audio output.
+	set audioOutputHighZ(value: boolean) {
+		this.#audioOutputHighZ = value
+		this.#reg02 = value ? this.#reg02 & ~RDA5807.REG02_DHIZ : this.#reg02 | RDA5807.REG02_DHIZ
+		if (this.#started) this.#writeRegister(RDA5807.CONTROL_REG, this.#reg02 & ~RDA5807.REG02_SEEK)
+	}
+
+	// Enables or disables the audio mute bit.
+	set muted(value: boolean) {
+		this.#muted = value
+		this.#reg02 = value ? this.#reg02 & ~RDA5807.REG02_DMUTE : this.#reg02 | RDA5807.REG02_DMUTE
+		if (this.#started) this.#writeRegister(RDA5807.CONTROL_REG, this.#reg02 & ~RDA5807.REG02_SEEK)
+	}
+
+	// Mutes the tuner audio output.
+	mute() {
+		this.muted = true
+	}
+
+	// Unmutes the tuner audio output.
+	unmute() {
+		this.muted = false
+	}
+
+	get seekFailed() {
+		return this.#seekFailed
+	}
+
+	// Starts seeking in the requested direction and completes when the next status frame reports STC.
+	seek(direction: RadioSeekDirection = 'up', wrap: boolean = this.#wrapAround) {
+		this.#ensureStarted()
+		this.#clearSeekTuneState()
+
+		const seekDirection = direction === 'up' ? RDA5807.REG02_SEEKUP : 0
+		const seekMode = wrap ? 0 : RDA5807.REG02_SKMODE
+		this.#seeking = true
+		this.#seekFailed = false
+		this.#writeRegister(RDA5807.CONTROL_REG, (this.#reg02 & ~(RDA5807.REG02_SEEKUP | RDA5807.REG02_SKMODE)) | seekDirection | seekMode | RDA5807.REG02_SEEK)
+		this.#requestStatus()
+	}
+
+	// Decodes polled status frames and finalizes seek completion when STC is asserted.
+	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
+		if (client !== this.client || address !== this.address || register !== RDA5807.STATUS_REG || data.byteLength !== 4) return
+
+		const status = this.#decodeStatus(data)
+		const applyStatus = !this.#seeking || status.seekTuneComplete
+		const nextFrequency = applyStatus ? this.#frequencyFromChannel(status.channel) : this.#frequency
+		const nextSeekFailed = applyStatus ? status.seekFailed : this.#seekFailed
+		const nextStereo = applyStatus ? status.stereo : this.#stereo
+		const nextRssi = applyStatus ? status.rssi : this.#rssi
+		const nextStation = applyStatus ? status.station : this.#station
+		const changed = nextFrequency !== this.#frequency || nextSeekFailed !== this.#seekFailed || nextStereo !== this.#stereo || nextRssi !== this.#rssi || nextStation !== this.#station
+
+		this.#frequencyKHz = Math.round(nextFrequency * 1000)
+		this.#frequency = nextFrequency
+		this.#seekFailed = nextSeekFailed
+		this.#stereo = nextStereo
+		this.#rssi = nextRssi
+		this.#station = nextStation
+
+		if (this.#seeking && status.seekTuneComplete) {
+			this.#seeking = false
+			this.#writeRegister(RDA5807.CONTROL_REG, this.#reg02 & ~(RDA5807.REG02_SEEKUP | RDA5807.REG02_SKMODE | RDA5807.REG02_SEEK))
+		}
+
+		if (changed) this.fire()
+	}
+
+	// Converts the polled 0x0A/0x0B status frame into decoded tuner state.
+	#decodeStatus(data: Buffer): RDA5807Status {
+		const status = data.readUInt16BE(0)
+		const signal = data.readUInt16BE(2)
+
+		return {
+			rdsReady: (status & RDA5807.STATUS_RDS_READY) !== 0,
+			seekTuneComplete: (status & RDA5807.STATUS_SEEK_TUNE_COMPLETE) !== 0,
+			seekFailed: (status & RDA5807.STATUS_SEEK_FAILED) !== 0,
+			stereo: (status & RDA5807.STATUS_STEREO) !== 0,
+			channel: status & RDA5807.STATUS_CHANNEL_MASK,
+			rssi: (signal & RDA5807.SIGNAL_RSSI_MASK) >>> RDA5807.SIGNAL_RSSI_SHIFT,
+			station: (signal & RDA5807.SIGNAL_STATION) !== 0,
+			ready: (signal & RDA5807.SIGNAL_READY) !== 0,
+		}
+	}
+
+	// Writes a 16-bit register through the direct-access I2C address.
+	#writeRegister(register: number, value: number) {
+		this.client.twoWireWrite(this.address, [register, value >>> 8, value & 0xff])
+	}
+
+	// Builds the tuning register value for the current band, spacing, and frequency.
+	#tuningValue(tune: boolean) {
+		return (this.#frequencyToChannel(this.#frequencyKHz) << RDA5807.REG03_CHAN_SHIFT) | (tune ? RDA5807.REG03_TUNE : 0) | (this.#bandBits << 2) | this.#spacingBits
+	}
+
+	// Clears any stale seek/tune bits before starting a new operation.
+	#clearSeekTuneState() {
+		this.#seeking = false
+		this.#writeRegister(RDA5807.CONTROL_REG, this.#reg02 & ~RDA5807.REG02_SEEK)
+		this.#writeRegister(RDA5807.TUNING_REG, this.#tuningValue(false))
+	}
+
+	// Requests a combined 0x0A/0x0B status frame.
+	#requestStatus() {
+		if (!this.#started) return
+		this.client.twoWireRead(this.address, RDA5807.STATUS_REG, 4)
+	}
+
+	// Throws when an active I2C session is required for the operation.
+	#ensureStarted() {
+		if (!this.#started) throw new Error('RDA5807 has not been started.')
+	}
+
+	// Converts a channel index into the corresponding FM frequency in MHz.
+	#frequencyFromChannel(channel: number) {
+		return (this.#bandStartKHz + channel * this.#spacingKHz) / 1000
+	}
+
+	// Converts a normalized frequency into the chip channel index.
+	#frequencyToChannel(frequencyKHz: number) {
+		return Math.max(0, Math.min(0x03ff, Math.round((frequencyKHz - this.#bandStartKHz) / this.#spacingKHz)))
+	}
+
+	// Clamps a requested frequency to the current band and channel spacing.
+	#normalizeFrequencyKHz(frequency: number) {
+		const requestedFrequencyKHz = Math.round(frequency * 1000)
+		const clampedFrequencyKHz = Math.max(this.#bandStartKHz, Math.min(this.#bandEndKHz, requestedFrequencyKHz))
+		const channel = Math.round((clampedFrequencyKHz - this.#bandStartKHz) / this.#spacingKHz)
+		return this.#bandStartKHz + channel * this.#spacingKHz
+	}
+}
+
 // https://www.analog.com/media/en/technical-documentation/data-sheets/ds18b20.pdf
 
 export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer, FirmataClientHandler {
@@ -1356,6 +1886,8 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer, Fir
 	readonly #powerMode: OneWirePowerMode
 	readonly #conversionDelayMs: number
 	readonly #resolutionCommand?: readonly number[]
+
+	readonly name = 'DS18B20'
 
 	constructor(
 		readonly client: FirmataClient,

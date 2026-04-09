@@ -4,7 +4,7 @@ import { G } from '../src/constants'
 import { CRC } from '../src/crc'
 import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { ACS712, AM2320, BH1750, BMP180, BMP280, DS18B20, HMC5883L, LM35, MAX44009, MPU6050, SHT21, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
+import { ACS712, AM2320, BH1750, BMP180, BMP280, DS18B20, HMC5883L, LM35, MAX44009, MPU6050, RDA5807, SHT21, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
 
 type MockFirmataMessage =
 	| readonly ['mode', number, PinMode]
@@ -591,7 +591,7 @@ test('AM2320 configures i2c reads and emits humidity and temperature updates', a
 		['write', AM2320.ADDRESS, Buffer.from([])],
 	])
 
-	await Bun.sleep(20)
+	await Bun.sleep(30)
 
 	expect(client.messages[2]).toEqual(['write', AM2320.ADDRESS, Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.START_REGISTER, AM2320.REGISTER_COUNT])])
 	expect(client.messages[3]).toEqual(['read', AM2320.ADDRESS, -1, AM2320.FRAME_SIZE, false, 7, 'stop'])
@@ -763,6 +763,163 @@ test('MAX44009 configures i2c reads and emits lux updates', () => {
 
 	max44009.stop()
 	expect(client.handlers.size).toBe(0)
+})
+
+test('RDA5807 tunes frequency steps and wraps within the configured band', () => {
+	const tuner = new RDA5807(undefined as never)
+
+	expect(tuner.frequency).toBe(87)
+
+	tuner.frequencyUp()
+	expect(tuner.frequency).toBe(87.1)
+
+	tuner.frequency = 107.95
+	expect(tuner.frequency).toBe(108)
+
+	tuner.frequencyUp()
+	expect(tuner.frequency).toBe(87)
+
+	tuner.frequencyDown()
+	expect(tuner.frequency).toBe(108)
+})
+
+test('RDA5807 clamps volume and mute state', () => {
+	const tuner = new RDA5807(undefined as never)
+
+	tuner.volume = 7.8
+	expect(tuner.volume).toBe(7)
+
+	tuner.volumeUp()
+	expect(tuner.volume).toBe(13)
+
+	tuner.volumeDown()
+	expect(tuner.volume).toBe(7)
+
+	tuner.volume = 99
+	expect(tuner.volume).toBe(100)
+
+	tuner.volume = 1
+	expect(tuner.volume).toBe(0)
+
+	tuner.volume = 50
+	expect(tuner.volume).toBe(53)
+
+	tuner.mute()
+	expect(tuner.muted).toBeTrue()
+
+	tuner.unmute()
+	expect(tuner.muted).toBeFalse()
+})
+
+test('RDA5807 configures the tuner and writes frequency and volume changes', () => {
+	const client = new MockFirmataClient()
+	const tuner = new RDA5807(client as never)
+
+	tuner.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0xc0, 0x01])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.AUDIO_REG, 0x08, 0x8f])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.TUNING_REG, 0x00, 0x10])],
+		['read', RDA5807.ADDRESS, RDA5807.STATUS_REG, 4, false, 7, 'stop'],
+	])
+
+	tuner.frequency = 103.9
+	expect(client.messages.slice(-3)).toEqual([
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0xc0, 0x01])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.TUNING_REG, 0x2a, 0x40])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.TUNING_REG, 0x2a, 0x50])],
+	])
+
+	tuner.volume = 7
+	expect(client.messages.at(-1)).toEqual(['write', RDA5807.ADDRESS, Buffer.from([RDA5807.AUDIO_REG, 0x08, 0x81])])
+
+	tuner.mute()
+	expect(client.messages.at(-1)).toEqual(['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0x80, 0x01])])
+
+	tuner.unmute()
+	expect(client.messages.at(-1)).toEqual(['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0xc0, 0x01])])
+
+	tuner.stop()
+	expect(client.handlers.size).toBe(0)
+	expect(client.messages.at(-1)).toEqual(['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0xc0, 0x00])])
+})
+
+test('RDA5807 applies stereo mode, bass boost, high-z output and east europe 50-65 MHz mode', () => {
+	const client = new MockFirmataClient()
+	const tuner = new RDA5807(client as never, RDA5807.ADDRESS, 1000, {
+		band: 'eastEurope',
+		eastEuropeMode: '50_65',
+		frequency: 50,
+		stereo: false,
+		bassBoost: true,
+		audioOutputHighZ: true,
+	})
+
+	tuner.start()
+
+	expect(tuner.stereo).toBe(false)
+	expect(tuner.bassBoost).toBeTrue()
+	expect(tuner.frequency).toBe(50)
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0x70, 0x01])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.AUDIO_REG, 0x08, 0x8f])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.SYSTEM_REG, 0x60, 0x00])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.BAND_REG, 0x40, 0x02])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.TUNING_REG, 0x00, 0x1c])],
+		['read', RDA5807.ADDRESS, RDA5807.STATUS_REG, 4, false, 7, 'stop'],
+	])
+
+	tuner.stop()
+})
+
+test('RDA5807 seeks to the next station and updates stereo, rssi and station state', () => {
+	const client = new MockFirmataClient()
+	const tuner = new RDA5807(client as never, RDA5807.ADDRESS, 1000, { frequency: 100.9, volume: 5 })
+	let updates = 0
+
+	tuner.addListener(() => {
+		updates++
+	})
+
+	tuner.start()
+	client.messages.length = 0
+
+	tuner.seek('up')
+
+	expect(client.messages).toEqual([
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0xc0, 0x01])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.TUNING_REG, 0x22, 0xc0])],
+		['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0xc3, 0x01])],
+		['read', RDA5807.ADDRESS, RDA5807.STATUS_REG, 4, false, 7, 'stop'],
+	])
+
+	tuner.twoWireMessage(client as never, RDA5807.ADDRESS, RDA5807.STATUS_REG, Buffer.from([0x44, 0x8d, 0x81, 0x80]))
+
+	expect(tuner.frequency).toBe(101.1)
+	expect(tuner.seekFailed).toBeFalse()
+	expect(tuner.stereo).toBeTrue()
+	expect(tuner.rssi).toBe(64)
+	expect(tuner.station).toBeTrue()
+	expect(updates).toBe(1)
+	expect(client.messages.at(-1)).toEqual(['write', RDA5807.ADDRESS, Buffer.from([RDA5807.CONTROL_REG, 0xc0, 0x01])])
+})
+
+test('RDA5807 polls status frames', async () => {
+	const client = new MockFirmataClient()
+	const tuner = new RDA5807(client as never, RDA5807.ADDRESS, 10)
+
+	tuner.start()
+	client.messages.length = 0
+
+	await Bun.sleep(130)
+
+	expect(client.messages.length).toBeGreaterThan(0)
+	expect(client.messages[0]).toEqual(['read', RDA5807.ADDRESS, RDA5807.STATUS_REG, 4, false, 7, 'stop'])
+	tuner.stop()
 })
 
 test('DS18B20 validates scratchpad CRC', () => {
