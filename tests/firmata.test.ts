@@ -4,7 +4,7 @@ import { G } from '../src/constants'
 import { CRC } from '../src/crc'
 import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { ACS712, AM2320, BH1750, BMP180, BMP280, DS18B20, HMC5883L, LM35, MAX44009, MPU6050, RDA5807, SHT21, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
+import { ACS712, AM2320, BH1750, BMP180, BMP280, DS18B20, HMC5883L, LM35, MAX44009, MPU6050, RDA5807, SHT21, TEA5767, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
 
 type MockFirmataMessage =
 	| readonly ['mode', number, PinMode]
@@ -763,6 +763,101 @@ test('MAX44009 configures i2c reads and emits lux updates', () => {
 
 	max44009.stop()
 	expect(client.handlers.size).toBe(0)
+})
+
+test('TEA5767 tunes frequency steps and wraps within the configured band', () => {
+	const tuner = new TEA5767(undefined as never)
+
+	expect(tuner.frequency).toBe(87.5)
+
+	tuner.frequencyUp()
+	expect(tuner.frequency).toBe(87.6)
+
+	tuner.frequency = 107.95
+	expect(tuner.frequency).toBe(108)
+
+	tuner.frequencyUp()
+	expect(tuner.frequency).toBe(87.5)
+
+	tuner.frequencyDown()
+	expect(tuner.frequency).toBe(108)
+})
+
+test('TEA5767 reports fixed volume support and mute state', () => {
+	const tuner = new TEA5767(undefined as never)
+
+	expect(tuner.volume).toBe(100)
+
+	tuner.volumeDown()
+	expect(tuner.volume).toBe(100)
+
+	tuner.stereo = false
+	expect(tuner.stereo).toBeFalse()
+
+	tuner.mute()
+	expect(tuner.muted).toBeTrue()
+
+	tuner.unmute()
+	expect(tuner.muted).toBeFalse()
+})
+
+test('TEA5767 configures the tuner and writes frequency and mute changes', () => {
+	const client = new MockFirmataClient()
+	const tuner = new TEA5767(client as never)
+
+	tuner.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', TEA5767.ADDRESS, Buffer.from([0x29, 0xd5, 0xd0, 0x1e, 0x00])],
+		['read', TEA5767.ADDRESS, -1, 5, false, 7, 'stop'],
+	])
+
+	tuner.frequency = 103.9
+	expect(client.messages.slice(-2)).toEqual([
+		['write', TEA5767.ADDRESS, Buffer.from([0x31, 0xa7, 0xd0, 0x1e, 0x00])],
+		['read', TEA5767.ADDRESS, -1, 5, false, 7, 'stop'],
+	])
+
+	tuner.mute()
+	expect(client.messages.at(-1)).toEqual(['write', TEA5767.ADDRESS, Buffer.from([0xb1, 0xa7, 0xd0, 0x1e, 0x00])])
+
+	tuner.unmute()
+	expect(client.messages.at(-1)).toEqual(['write', TEA5767.ADDRESS, Buffer.from([0x31, 0xa7, 0xd0, 0x1e, 0x00])])
+
+	tuner.stop()
+	expect(client.handlers.size).toBe(0)
+	expect(client.messages.at(-1)).toEqual(['write', TEA5767.ADDRESS, Buffer.from([0x31, 0xa7, 0xd0, 0x5e, 0x00])])
+})
+
+test('TEA5767 seeks to the next station and updates stereo, rssi and station state', () => {
+	const client = new MockFirmataClient()
+	const tuner = new TEA5767(client as never, TEA5767.ADDRESS, 1000, { frequency: 100.9 })
+	let updates = 0
+
+	tuner.addListener(() => {
+		updates++
+	})
+
+	tuner.start()
+	client.messages.length = 0
+
+	tuner.seek('up')
+
+	expect(client.messages).toEqual([
+		['write', TEA5767.ADDRESS, Buffer.from([0xf0, 0x45, 0xd0, 0x1e, 0x00])],
+		['read', TEA5767.ADDRESS, -1, 5, false, 7, 'stop'],
+	])
+
+	tuner.twoWireMessage(client as never, TEA5767.ADDRESS, 0, Buffer.from([0xb0, 0x51, 0xb8, 0xa0, 0x00]))
+
+	expect(tuner.frequency).toBe(101.1)
+	expect(tuner.seekFailed).toBeFalse()
+	expect(tuner.stereo).toBeTrue()
+	expect(tuner.rssi).toBe(85)
+	expect(tuner.station).toBeTrue()
+	expect(updates).toBe(1)
+	expect(client.messages.at(-1)).toEqual(['write', TEA5767.ADDRESS, Buffer.from([0x30, 0x51, 0xd0, 0x1e, 0x00])])
 })
 
 test('RDA5807 tunes frequency steps and wraps within the configured band', () => {

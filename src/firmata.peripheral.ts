@@ -47,6 +47,14 @@ export type RDA5807ChannelSpacing = 25 | 50 | 100 | 200 // kHz
 
 export type RDA5807EastEuropeMode = '65_76' | '50_65'
 
+export type TEA5767Band = 'usEurope' | 'japan'
+
+export type TEA5767DeEmphasis = 50 | 75 // us
+
+export type TEA5767ReferenceClock = 32768 | 6500000 | 13000000 // Hz
+
+export type TEA5767SearchStopLevel = 'low' | 'mid' | 'high'
+
 export enum BMP180Mode {
 	ULTRA_LOW_POWER, // 5 ms
 	STANDARD, // 8 ms
@@ -191,6 +199,21 @@ export interface RDA5807Options {
 	readonly wrap?: boolean
 }
 
+export interface TEA5767Options {
+	readonly frequency?: number // MHz
+	readonly muted?: boolean
+	readonly band?: TEA5767Band
+	readonly stereo?: boolean
+	readonly softMute?: boolean
+	readonly highCutControl?: boolean
+	readonly stereoNoiseCancelling?: boolean
+	readonly highSideInjection?: boolean
+	readonly referenceClock?: TEA5767ReferenceClock // Hz
+	readonly deEmphasis?: TEA5767DeEmphasis // us
+	readonly searchStopLevel?: TEA5767SearchStopLevel
+	readonly wrap?: boolean
+}
+
 interface RDA5807Status {
 	readonly rdsReady: boolean
 	readonly seekTuneComplete: boolean
@@ -200,6 +223,15 @@ interface RDA5807Status {
 	readonly rssi: number
 	readonly station: boolean
 	readonly ready: boolean
+}
+
+interface TEA5767Status {
+	readonly ready: boolean
+	readonly bandLimit: boolean
+	readonly pll: number
+	readonly stereo: boolean
+	readonly ifCounter: number
+	readonly level: number
 }
 
 interface PendingTwoWireRead {
@@ -275,6 +307,21 @@ export const DEFAULT_RDA5807_OPTIONS: Required<RDA5807Options> = {
 	eastEuropeMode: '65_76',
 	spacing: 100,
 	seekThreshold: 8,
+	wrap: true,
+}
+
+export const DEFAULT_TEA5767_OPTIONS: Required<TEA5767Options> = {
+	frequency: 87.5,
+	muted: false,
+	band: 'usEurope',
+	stereo: true,
+	softMute: true,
+	highCutControl: true,
+	stereoNoiseCancelling: true,
+	highSideInjection: true,
+	referenceClock: 32768,
+	deEmphasis: 50,
+	searchStopLevel: 'mid',
 	wrap: true,
 }
 
@@ -1493,6 +1540,431 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter, Firm
 	}
 }
 
+// https://cdn.sparkfun.com/assets/4/5/f/a/d/TEA5767.pdf
+
+export class TEA5767 extends PeripheralBase<TEA5767> implements Radio, FirmataClientHandler {
+	#frequency: number
+	#muted: boolean
+	#stereo: boolean
+	#softMute: boolean
+	#highCutControl: boolean
+	#stereoNoiseCancelling: boolean
+	#highSideInjection: boolean
+	#seekFailed = false
+	#station = false
+	#rssi = 0
+
+	static readonly ADDRESS = 0x60
+	static readonly STATUS_BYTES = 5
+	static readonly FREQUENCY_STEP_KHZ = 100
+	static readonly IF_KHZ = 225
+	static readonly MAX_LEVEL = 15
+	static readonly MAX_RSSI = 127
+	static readonly IF_VALID_MIN = 0x29
+	static readonly IF_VALID_MAX = 0x7f
+
+	static readonly BYTE1_MUTE = 1 << 7
+	static readonly BYTE1_SEARCH = 1 << 6
+	static readonly BYTE3_SEARCH_UP = 1 << 7
+	static readonly BYTE3_SEARCH_STOP_LEVEL_SHIFT = 5
+	static readonly BYTE3_HIGH_SIDE_INJECTION = 1 << 4
+	static readonly BYTE3_FORCE_MONO = 1 << 3
+	static readonly BYTE4_STANDBY = 1 << 6
+	static readonly BYTE4_BAND_LIMIT_JAPAN = 1 << 5
+	static readonly BYTE4_XTAL_32768HZ = 1 << 4
+	static readonly BYTE4_SOFT_MUTE = 1 << 3
+	static readonly BYTE4_HIGH_CUT_CONTROL = 1 << 2
+	static readonly BYTE4_STEREO_NOISE_CANCELLING = 1 << 1
+	static readonly BYTE5_PLLREF_6500KHZ = 1 << 7
+	static readonly BYTE5_DEEMPHASIS_75US = 1 << 6
+
+	static readonly STATUS_READY = 1 << 7
+	static readonly STATUS_BAND_LIMIT = 1 << 6
+	static readonly STATUS_PLL_HIGH_MASK = 0x3f
+	static readonly STATUS_STEREO = 1 << 7
+	static readonly STATUS_LEVEL_SHIFT = 4
+
+	readonly #bandStartKHz: number
+	readonly #bandEndKHz: number
+	readonly #bandBits: number
+	readonly #xtalBit: number
+	readonly #pllRefBit: number
+	readonly #deEmphasisBit: number
+	readonly #referenceDividerHz: number
+	readonly #searchStopBits: number
+	readonly #wrapAround: boolean
+
+	#frequencyKHz: number
+	#started = false
+	#seeking = false
+	#stereoAllowed: boolean
+	#seekDirection: RadioSeekDirection = 'up'
+	#seekWrapRemaining = 0
+	#timer?: NodeJS.Timeout
+
+	readonly name = 'TEA5767'
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly address: number = TEA5767.ADDRESS,
+		readonly pollingInterval: number = DEFAULT_POLLING_INTERVAL,
+		options: TEA5767Options = DEFAULT_TEA5767_OPTIONS,
+	) {
+		super()
+
+		const band = options.band ?? DEFAULT_TEA5767_OPTIONS.band
+		const referenceClock = options.referenceClock ?? DEFAULT_TEA5767_OPTIONS.referenceClock
+		const searchStopLevel = options.searchStopLevel ?? DEFAULT_TEA5767_OPTIONS.searchStopLevel
+		const stereo = options.stereo ?? DEFAULT_TEA5767_OPTIONS.stereo
+
+		this.#bandStartKHz = band === 'japan' ? 76000 : 87500
+		this.#bandEndKHz = band === 'japan' ? 91000 : 108000
+		this.#bandBits = band === 'japan' ? TEA5767.BYTE4_BAND_LIMIT_JAPAN : 0
+		this.#xtalBit = referenceClock === 32768 ? TEA5767.BYTE4_XTAL_32768HZ : 0
+		this.#pllRefBit = referenceClock === 6500000 ? TEA5767.BYTE5_PLLREF_6500KHZ : 0
+		this.#deEmphasisBit = (options.deEmphasis ?? DEFAULT_TEA5767_OPTIONS.deEmphasis) === 75 ? TEA5767.BYTE5_DEEMPHASIS_75US : 0
+		this.#referenceDividerHz = referenceClock === 32768 ? 32768 : 50000
+		this.#searchStopBits = this.#searchStopLevelBits(searchStopLevel)
+		this.#wrapAround = options.wrap ?? DEFAULT_TEA5767_OPTIONS.wrap
+		this.#frequencyKHz = this.#normalizeFrequencyKHz(options.frequency ?? DEFAULT_TEA5767_OPTIONS.frequency)
+		this.#frequency = this.#frequencyKHz / 1000
+		this.#muted = options.muted ?? DEFAULT_TEA5767_OPTIONS.muted
+		this.#stereoAllowed = stereo
+		this.#stereo = stereo
+		this.#softMute = options.softMute ?? DEFAULT_TEA5767_OPTIONS.softMute
+		this.#highCutControl = options.highCutControl ?? DEFAULT_TEA5767_OPTIONS.highCutControl
+		this.#stereoNoiseCancelling = options.stereoNoiseCancelling ?? DEFAULT_TEA5767_OPTIONS.stereoNoiseCancelling
+		this.#highSideInjection = options.highSideInjection ?? DEFAULT_TEA5767_OPTIONS.highSideInjection
+	}
+
+	// Powers the tuner on and schedules periodic raw status polling.
+	start() {
+		if (this.#started) return
+
+		this.#started = true
+		this.client.addHandler(this)
+		this.client.twoWireConfig(0)
+		this.#writeState()
+		this.#requestStatus()
+		this.#timer = setInterval(this.#requestStatus.bind(this), Math.max(100, this.pollingInterval))
+	}
+
+	// Puts the tuner into standby mode and stops status polling.
+	stop() {
+		if (!this.#started) return
+
+		this.#started = false
+		this.#seeking = false
+		this.client.removeHandler(this)
+		clearInterval(this.#timer)
+		this.#timer = undefined
+		this.#writeState(false, true)
+	}
+
+	// Gets the current tuned frequency in MHz.
+	get frequency() {
+		return this.#frequency
+	}
+
+	// Sets the current tuned frequency in MHz and requests a fresh status frame.
+	set frequency(value: number) {
+		this.#frequencyKHz = this.#normalizeFrequencyKHz(value)
+		this.#frequency = this.#frequencyKHz / 1000
+		this.#seekFailed = false
+		this.#seeking = false
+
+		if (this.#started) {
+			this.#writeState()
+			this.#requestStatus()
+		}
+	}
+
+	// Steps the frequency up by 100 kHz and wraps at band end.
+	frequencyUp() {
+		const nextFrequencyKHz = this.#frequencyKHz < this.#bandEndKHz ? this.#frequencyKHz + TEA5767.FREQUENCY_STEP_KHZ : this.#bandStartKHz
+		this.frequency = nextFrequencyKHz / 1000
+	}
+
+	// Steps the frequency down by 100 kHz and wraps at band start.
+	frequencyDown() {
+		const nextFrequencyKHz = this.#frequencyKHz > this.#bandStartKHz ? this.#frequencyKHz - TEA5767.FREQUENCY_STEP_KHZ : this.#bandEndKHz
+		this.frequency = nextFrequencyKHz / 1000
+	}
+
+	// Returns whether the current reception is stereo.
+	get stereo() {
+		return this.#stereo
+	}
+
+	// Forces mono reception when false and allows stereo decoding when true.
+	set stereo(value: boolean) {
+		this.#stereoAllowed = value
+		if (!value) this.#stereo = false
+		if (this.#started) {
+			this.#writeState(this.#seeking)
+			this.#requestStatus()
+		}
+	}
+
+	// Returns whether the tuner audio path is muted.
+	get muted() {
+		return this.#muted
+	}
+
+	// Enables or disables the tuner mute bit.
+	set muted(value: boolean) {
+		this.#muted = value
+		if (this.#started) this.#writeState(this.#seeking)
+	}
+
+	// Mutes the tuner audio output.
+	mute() {
+		this.muted = true
+	}
+
+	// Unmutes the tuner audio output.
+	unmute() {
+		this.muted = false
+	}
+
+	// Returns the derived signal level mapped to the shared 0..127 radio RSSI scale.
+	get rssi() {
+		return this.#rssi
+	}
+
+	// Returns whether the current tuned channel passed the IF counter and level checks.
+	get station() {
+		return this.#station
+	}
+
+	// Returns whether the latest seek hit a band limit without finding a valid station.
+	get seekFailed() {
+		return this.#seekFailed
+	}
+
+	// Returns 100 because TEA5767 has no on-chip hardware volume control.
+	get volume() {
+		return 100
+	}
+
+	// TEA5767 leaves volume control to the downstream analog amplifier.
+	volumeUp() {}
+
+	// TEA5767 leaves volume control to the downstream analog amplifier.
+	volumeDown() {}
+
+	// Enables or disables the chip soft mute function.
+	set softMute(value: boolean) {
+		this.#softMute = value
+		if (this.#started) this.#writeState(this.#seeking)
+	}
+
+	// Enables or disables the chip high-cut control.
+	set highCutControl(value: boolean) {
+		this.#highCutControl = value
+		if (this.#started) this.#writeState(this.#seeking)
+	}
+
+	// Enables or disables stereo noise cancelling.
+	set stereoNoiseCancelling(value: boolean) {
+		this.#stereoNoiseCancelling = value
+		if (this.#started) this.#writeState(this.#seeking)
+	}
+
+	// Selects high-side or low-side local oscillator injection.
+	set highSideInjection(value: boolean) {
+		this.#highSideInjection = value
+		if (this.#started) {
+			this.#writeState(this.#seeking)
+			this.#requestStatus()
+		}
+	}
+
+	// Starts an autonomous seek and optionally wraps once at the band limit.
+	seek(direction: RadioSeekDirection = 'up', wrap: boolean = this.#wrapAround) {
+		this.#ensureStarted()
+		this.#seekDirection = direction
+		this.#seekFailed = false
+		this.#seeking = true
+		this.#seekWrapRemaining = wrap ? 1 : 0
+		this.#beginSeekCycle()
+	}
+
+	// Decodes 5-byte raw status frames returned by the chip read mode.
+	twoWireMessage(client: FirmataClient, address: number, _register: number, data: Buffer) {
+		if (client !== this.client || address !== this.address || data.byteLength !== TEA5767.STATUS_BYTES) return
+
+		const previousFrequency = this.#frequency
+		const status = this.#decodeStatus(data)
+		const nextFrequencyKHz = this.#frequencyFromPll(status.pll)
+
+		this.#frequencyKHz = nextFrequencyKHz
+		this.#frequency = nextFrequencyKHz / 1000
+
+		if (this.#seeking) {
+			this.#handleSeekStatus(status, previousFrequency)
+			return
+		}
+
+		console.info('%j', status)
+
+		if (!status.ready) return
+
+		const nextStereo = this.#stereoAllowed && status.stereo
+		const nextRssi = this.#rssiFromLevel(status.level)
+		const nextStation = this.#isStation(status)
+		const changed = this.#frequency !== previousFrequency || nextStereo !== this.#stereo || nextRssi !== this.#rssi || nextStation !== this.#station
+
+		this.#stereo = nextStereo
+		this.#rssi = nextRssi
+		this.#station = nextStation
+
+		if (changed) this.fire()
+	}
+
+	// Handles seek completion, false stops, and optional one-pass wraparound.
+	#handleSeekStatus(status: TEA5767Status, previousFrequency: number) {
+		if (!status.ready) return
+
+		const nextStation = !status.bandLimit && this.#isStation(status)
+
+		if (!nextStation) {
+			this.#beginSeekCycle()
+			return
+		}
+
+		const nextStereo = this.#stereoAllowed && status.stereo
+		const nextRssi = this.#rssiFromLevel(status.level)
+		const changed = this.#frequency !== previousFrequency || nextStereo !== this.#stereo || nextRssi !== this.#rssi || nextStation !== this.#station
+
+		this.#seeking = false
+		this.#stereo = nextStereo
+		this.#rssi = nextRssi
+		this.#station = nextStation
+		this.#seekFailed = false
+		this.#writeState()
+
+		if (changed) this.fire()
+	}
+
+	// Advances to the next search start frequency or marks the seek as failed.
+	#beginSeekCycle() {
+		const nextFrequencyKHz = this.#nextSeekFrequencyKHz()
+
+		if (nextFrequencyKHz === undefined) {
+			const changed = this.#seekFailed === false || this.#station !== false
+
+			this.#seeking = false
+			this.#seekFailed = true
+			this.#station = false
+			this.#stereo = false
+			this.#rssi = 0
+			this.#writeState()
+			if (changed) this.fire()
+			return
+		}
+
+		this.#frequencyKHz = nextFrequencyKHz
+		this.#frequency = nextFrequencyKHz / 1000
+		this.#writeState(true)
+		this.#requestStatus()
+	}
+
+	// Computes the next search entry point while honoring the optional wraparound.
+	#nextSeekFrequencyKHz() {
+		if (this.#seekDirection === 'up') {
+			if (this.#frequencyKHz < this.#bandEndKHz) return Math.min(this.#bandEndKHz, this.#frequencyKHz + TEA5767.FREQUENCY_STEP_KHZ)
+			if (this.#seekWrapRemaining > 0) {
+				this.#seekWrapRemaining--
+				return this.#bandStartKHz
+			}
+		} else {
+			if (this.#frequencyKHz > this.#bandStartKHz) return Math.max(this.#bandStartKHz, this.#frequencyKHz - TEA5767.FREQUENCY_STEP_KHZ)
+			if (this.#seekWrapRemaining > 0) {
+				this.#seekWrapRemaining--
+				return this.#bandEndKHz
+			}
+		}
+	}
+
+	// Packs the current state into the chip 5-byte write frame.
+	#writeState(search: boolean = false, standby: boolean = false) {
+		const pll = this.#frequencyToPll(this.#frequencyKHz)
+		const data = Buffer.allocUnsafe(TEA5767.STATUS_BYTES)
+
+		data[0] = (this.#muted || search ? TEA5767.BYTE1_MUTE : 0) | (search ? TEA5767.BYTE1_SEARCH : 0) | ((pll >>> 8) & TEA5767.STATUS_PLL_HIGH_MASK)
+		data[1] = pll & 0xff
+		data[2] = (this.#seekDirection === 'up' ? TEA5767.BYTE3_SEARCH_UP : 0) | this.#searchStopBits | (this.#highSideInjection ? TEA5767.BYTE3_HIGH_SIDE_INJECTION : 0) | (this.#stereoAllowed ? 0 : TEA5767.BYTE3_FORCE_MONO)
+		data[3] = (standby ? TEA5767.BYTE4_STANDBY : 0) | this.#bandBits | this.#xtalBit | (this.#softMute ? TEA5767.BYTE4_SOFT_MUTE : 0) | (this.#highCutControl ? TEA5767.BYTE4_HIGH_CUT_CONTROL : 0) | (this.#stereoNoiseCancelling ? TEA5767.BYTE4_STEREO_NOISE_CANCELLING : 0)
+		data[4] = this.#pllRefBit | this.#deEmphasisBit
+
+		this.client.twoWireWrite(this.address, data)
+	}
+
+	// Requests the next 5-byte read-mode status frame.
+	#requestStatus() {
+		if (!this.#started) return
+		this.client.twoWireRead(this.address, -1, TEA5767.STATUS_BYTES)
+	}
+
+	// Throws when an active I2C session is required for the operation.
+	#ensureStarted() {
+		if (!this.#started) throw new Error('TEA5767 has not been started.')
+	}
+
+	// Decodes the read-mode status bytes into a convenient internal structure.
+	#decodeStatus(data: Buffer): TEA5767Status {
+		return {
+			ready: (data[0] & TEA5767.STATUS_READY) !== 0,
+			bandLimit: (data[0] & TEA5767.STATUS_BAND_LIMIT) !== 0,
+			pll: ((data[0] & TEA5767.STATUS_PLL_HIGH_MASK) << 8) | data[1],
+			stereo: (data[2] & TEA5767.STATUS_STEREO) !== 0,
+			ifCounter: data[2] & 0x7f,
+			level: (data[3] >>> TEA5767.STATUS_LEVEL_SHIFT) & 0x0f,
+		}
+	}
+
+	// Converts the 4-bit level ADC reading into the shared radio RSSI scale.
+	#rssiFromLevel(level: number) {
+		return Math.round(level * (TEA5767.MAX_RSSI / TEA5767.MAX_LEVEL))
+	}
+
+	// Checks whether the current tuned channel satisfies the IF and level validity rules.
+	#isStation(status: TEA5767Status) {
+		return status.ifCounter >= TEA5767.IF_VALID_MIN && status.ifCounter <= TEA5767.IF_VALID_MAX
+	}
+
+	// Maps the selected stop level to the write-mode search threshold bits.
+	#searchStopLevelBits(searchStopLevel: TEA5767SearchStopLevel) {
+		const value = searchStopLevel === 'low' ? 0b01 : searchStopLevel === 'mid' ? 0b10 : 0b11
+		return value << TEA5767.BYTE3_SEARCH_STOP_LEVEL_SHIFT
+	}
+
+	// Converts a tuned frequency to the PLL word using the configured reference clock.
+	#frequencyToPll(frequencyKHz: number) {
+		const oscillatorFrequencyHz = frequencyKHz * 1000 + (this.#highSideInjection ? TEA5767.IF_KHZ * 1000 : -TEA5767.IF_KHZ * 1000)
+		return Math.max(0, Math.min(0x3fff, Math.round((4 * oscillatorFrequencyHz) / this.#referenceDividerHz)))
+	}
+
+	// Converts the PLL word back to the nearest public FM frequency.
+	#frequencyFromPll(pll: number) {
+		const frequencyKHz = Math.round(((pll * this.#referenceDividerHz) / 4 + (this.#highSideInjection ? -TEA5767.IF_KHZ * 1000 : TEA5767.IF_KHZ * 1000)) / 1000)
+		return this.#normalizeFrequencyKHzValue(frequencyKHz)
+	}
+
+	// Clamps a requested frequency to the current band and public 100 kHz tuning grid.
+	#normalizeFrequencyKHz(frequency: number) {
+		return this.#normalizeFrequencyKHzValue(Math.round(frequency * 1000))
+	}
+
+	// Clamps a kHz value to the band and rounds it to the nearest 100 kHz step.
+	#normalizeFrequencyKHzValue(frequencyKHz: number) {
+		const clampedFrequencyKHz = Math.max(this.#bandStartKHz, Math.min(this.#bandEndKHz, frequencyKHz))
+		const channel = Math.round((clampedFrequencyKHz - this.#bandStartKHz) / TEA5767.FREQUENCY_STEP_KHZ)
+		return this.#bandStartKHz + channel * TEA5767.FREQUENCY_STEP_KHZ
+	}
+}
+
 // https://cdn-shop.adafruit.com/product-files/5651/5651_tuner84_RDA5807M_datasheet_v1.pdf
 
 export class RDA5807 extends PeripheralBase<RDA5807> implements Radio, FirmataClientHandler {
@@ -1718,6 +2190,7 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements Radio, FirmataCl
 		this.#stereo = value
 		this.#reg02 = value === false ? this.#reg02 | RDA5807.REG02_MONO : this.#reg02 & ~RDA5807.REG02_MONO
 		if (this.#started) this.#writeRegister(RDA5807.CONTROL_REG, this.#reg02 & ~RDA5807.REG02_SEEK)
+		this.#requestStatus()
 	}
 
 	// Returns whether bass boost is enabled.

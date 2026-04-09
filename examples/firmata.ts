@@ -3,7 +3,7 @@
 import { toMeter } from '../src/distance'
 import { type FirmataClientHandler, FirmataClientOverTcp } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { type Accelerometer, type Altimeter, AM2320, type Ammeter, type Barometer, BMP180, BMP180Mode, BMP280, DS18B20, type Gyroscope, type Hygrometer, LM35, type Luxmeter, type Magnetometer, type Radio, RDA5807, SHT21, type Thermometer } from '../src/firmata.peripheral'
+import { type Accelerometer, type Altimeter, AM2320, type Ammeter, type Barometer, BMP180, BMP180Mode, BMP280, DS18B20, type Gyroscope, type Hygrometer, LM35, type Luxmeter, type Magnetometer, type Radio, RDA5807, SHT21, TEA5767, type Thermometer } from '../src/firmata.peripheral'
 
 const handler: FirmataClientHandler = {
 	ready: (client) => {
@@ -38,6 +38,7 @@ function print(device: Thermometer | Hygrometer | Barometer | Altimeter | Luxmet
 	if ('frequency' in device) output.push(`frequency: ${device.frequency} MHz`)
 	if ('volume' in device) output.push(`volume: ${device.volume}`)
 	if ('muted' in device) output.push(`muted: ${device.muted}`)
+	if ('stereo' in device) output.push(`stereo: ${device.stereo}`)
 	if ('rssi' in device) output.push(`rssi: ${device.rssi}`)
 	if ('station' in device) output.push(`station: ${device.station}`)
 	if ('lux' in device) output.push(`lux: ${device.lux}`)
@@ -92,8 +93,15 @@ if (false) {
 	ds18b20.start()
 }
 
-if (true) {
+if (false) {
 	const radio = new RDA5807(client, RDA5807.ADDRESS)
+	radio.addListener(print)
+	radio.start()
+	radio.frequency = 100.1
+}
+
+if (true) {
+	const radio = new TEA5767(client, TEA5767.ADDRESS)
 	radio.addListener(print)
 	radio.start()
 	radio.frequency = 100.1
