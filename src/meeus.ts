@@ -7,6 +7,8 @@ const { sin, cos, tan, asin, acos, atan, atan2, sqrt, hypot, log10, abs, trunc, 
 
 // https://github.com/commenthol/astronomia/blob/master/src/
 
+export type Coord = readonly [Angle, Angle]
+
 export const EARTH_RADIUS_KM = 6378.137 // km
 export const EARTH_RADIUS = EARTH_RADIUS_KM / AU_KM // au
 
@@ -567,8 +569,6 @@ export namespace Julian {
 // Rise: Chapter 15, Rising, Transit, and Setting.
 export namespace Rise {}
 
-export type Coord = readonly [Angle, Angle]
-
 // Chapter 17: Angular Separation.
 export namespace AngularSeparation {
 	// Computes the angular separation between two celestial bodies.
@@ -772,6 +772,165 @@ export namespace Circle {
 		// (20.1) p. 128
 		return [(2 * a * b * c) / Math.sqrt((a + b + c) * (a + b - c) * (b + c - a) * (a + c - b)), false] as const
 	}
+}
+
+// Chapter 22, Nutation and the Obliquity of the Ecliptic.
+export namespace Nutation {
+	const D_TERMS = [297.85036 * DEG2RAD, 445267.11148 * DEG2RAD, -0.0019142 * DEG2RAD, DEG2RAD / 189474] as const
+	const M_TERMS = [357.52772 * DEG2RAD, 35999.05034 * DEG2RAD, -0.0001603 * DEG2RAD, -DEG2RAD / 300000] as const
+	const N_TERMS = [134.96298 * DEG2RAD, 477198.867398 * DEG2RAD, 0.0086972 * DEG2RAD, DEG2RAD / 56250] as const
+	const F_TERMS = [93.27191 * DEG2RAD, 483202.017538 * DEG2RAD, -0.0036825 * DEG2RAD, DEG2RAD / 327270] as const
+	const OMEGA_TERMS = [125.04452 * DEG2RAD, -1934.136261 * DEG2RAD, 0.0020708 * DEG2RAD, DEG2RAD / 450000] as const
+
+	// Computes nutation in longitude (deltaPsi) and nutation in obliquity (deltaEpsilon) for a given JDE (UT + deltaT).
+	export function nutation(jde: number) {
+		const T = Base.j2000Century(jde)
+		// Mean elongation of the Moon from the sun
+		const D = Base.horner(T, D_TERMS)
+		// Mean anomaly of the Sun (Earth)
+		const M = Base.horner(T, M_TERMS)
+		// Mean anomaly of the Moon
+		const N = Base.horner(T, N_TERMS)
+		// Moon's argument of latitude
+		const F = Base.horner(T, F_TERMS)
+		// Longitude of the ascending node of the Moon's mean orbit on the ecliptic, measured from mean equinox of date
+		const omega = Base.horner(T, OMEGA_TERMS)
+
+		let deltaPsi = 0
+		let deltaEpsilon = 0
+
+		// Sum in reverse order to accumulate smaller terms first
+		for (let i = TABLE_22A.length - 1; i >= 0; i--) {
+			const row = TABLE_22A[i]
+			const arg = row[0] * D + row[1] * M + row[2] * N + row[3] * F + row[4] * omega
+			deltaPsi += sin(arg) * (row[5] + row[6] * T)
+			deltaEpsilon += cos(arg) * (row[7] + row[8] * T)
+		}
+
+		deltaPsi *= 0.0001 * (DEG2RAD / 3600)
+		deltaEpsilon *= 0.0001 * (DEG2RAD / 3600)
+
+		return [deltaPsi, deltaEpsilon] as const
+	}
+
+	// Computes a fast approximation of nutation in longitude (deltaPsi) and nutation in obliquity (deltaEpsilon) for a given JDE.
+	// Accuracy is 0.5" in deltaPsi, 0.1" in deltaEpsilon.
+	export function approxNutation(jde: number) {
+		const T = (jde - Base.J2000) / Base.JULIAN_CENTURY
+		const omega = 125.04452 * DEG2RAD - 1934.136261 * DEG2RAD * T
+		const L = 280.4665 * DEG2RAD + 36000.7698 * DEG2RAD * T
+		const N = 218.3165 * DEG2RAD + 481267.8813 * DEG2RAD * T
+		const [sOmega, cOmega] = Base.sincos(omega)
+		const [s2L, c2L] = Base.sincos(2 * L)
+		const [s2N, c2N] = Base.sincos(2 * N)
+		const [s2Omega, c2Omega] = Base.sincos(2 * omega)
+		const deltaPsi = (-17.2 * sOmega - 1.32 * s2L - 0.23 * s2N + 0.21 * s2Omega) * (DEG2RAD / 3600)
+		const deltaEpsilon = (9.2 * cOmega + 0.57 * c2L + 0.1 * c2N - 0.09 * c2Omega) * (DEG2RAD / 3600)
+		return [deltaPsi, deltaEpsilon] as const
+	}
+
+	// Computes mean obliquity (epsilon₀) following the IAU 1980 polynomial.
+	// Accuracy is 1″ over the range 1000 to 3000 years and 10″ over the range 0 to 4000 years.
+	export function meanObliquity(jde: number) {
+		// (22.2) p. 147
+		return Base.horner(Base.j2000Century(jde), [0.4090928042223289, (-46.815 / 3600) * DEG2RAD, (-0.00059 / 3600) * DEG2RAD, (0.001813 / 3600) * DEG2RAD])
+	}
+
+	const MEAN_OBLIQUITY_LASKAR_TERMS = [
+		0.4090928042223289, // 23h 26' 21.448"
+		(-4680.93 / 3600) * DEG2RAD,
+		(-1.55 / 3600) * DEG2RAD,
+		(1999.25 / 3600) * DEG2RAD,
+		(-51.38 / 3600) * DEG2RAD,
+		(-249.67 / 3600) * DEG2RAD,
+		(-39.05 / 3600) * DEG2RAD,
+		(7.12 / 3600) * DEG2RAD,
+		(27.87 / 3600) * DEG2RAD,
+		(5.79 / 3600) * DEG2RAD,
+		(2.45 / 3600) * DEG2RAD,
+	] as const
+
+	// Computes mean obliquity (epsilon₀) following the Laskar 1986 polynomial.	 *
+	// Accuracy over the range 1000 to 3000 years is .01″.
+	// Accuracy over the valid date range of -8000 to +12000 years is "a few seconds.
+	export function meanObliquityLaskar(jde: number) {
+		// (22.3) p. 147
+		return Base.horner(Base.j2000Century(jde) * 0.01, MEAN_OBLIQUITY_LASKAR_TERMS)
+	}
+
+	// Computes "nutation in right ascension" or "equation of the equinoxes".
+	export function nutationInRA(jde: number) {
+		const [deltaPsi, deltaEpsilon] = nutation(jde)
+		const epsilon0 = meanObliquity(jde)
+		return deltaPsi * Math.cos(epsilon0 + deltaEpsilon)
+	}
+
+	const TABLE_22A = [
+		// d,m,n,f,omega,s0,s1,c0,c1
+		[0, 0, 0, 0, 1, -171996, -174.2, 92025, 8.9],
+		[-2, 0, 0, 2, 2, -13187, -1.6, 5736, -3.1],
+		[0, 0, 0, 2, 2, -2274, -0.2, 977, -0.5],
+		[0, 0, 0, 0, 2, 2062, 0.2, -895, 0.5],
+		[0, 1, 0, 0, 0, 1426, -3.4, 54, -0.1],
+		[0, 0, 1, 0, 0, 712, 0.1, -7, 0],
+		[-2, 1, 0, 2, 2, -517, 1.2, 224, -0.6],
+		[0, 0, 0, 2, 1, -386, -0.4, 200, 0],
+		[0, 0, 1, 2, 2, -301, 0, 129, -0.1],
+		[-2, -1, 0, 2, 2, 217, -0.5, -95, 0.3],
+		[-2, 0, 1, 0, 0, -158, 0, 0, 0],
+		[-2, 0, 0, 2, 1, 129, 0.1, -70, 0],
+		[0, 0, -1, 2, 2, 123, 0, -53, 0],
+		[2, 0, 0, 0, 0, 63, 0, 0, 0],
+		[0, 0, 1, 0, 1, 63, 0.1, -33, 0],
+		[2, 0, -1, 2, 2, -59, 0, 26, 0],
+		[0, 0, -1, 0, 1, -58, -0.1, 32, 0],
+		[0, 0, 1, 2, 1, -51, 0, 27, 0],
+		[-2, 0, 2, 0, 0, 48, 0, 0, 0],
+		[0, 0, -2, 2, 1, 46, 0, -24, 0],
+		[2, 0, 0, 2, 2, -38, 0, 16, 0],
+		[0, 0, 2, 2, 2, -31, 0, 13, 0],
+		[0, 0, 2, 0, 0, 29, 0, 0, 0],
+		[-2, 0, 1, 2, 2, 29, 0, -12, 0],
+		[0, 0, 0, 2, 0, 26, 0, 0, 0],
+		[-2, 0, 0, 2, 0, -22, 0, 0, 0],
+		[0, 0, -1, 2, 1, 21, 0, -10, 0],
+		[0, 2, 0, 0, 0, 17, -0.1, 0, 0],
+		[2, 0, -1, 0, 1, 16, 0, -8, 0],
+		[-2, 2, 0, 2, 2, -16, 0.1, 7, 0],
+		[0, 1, 0, 0, 1, -15, 0, 9, 0],
+		[-2, 0, 1, 0, 1, -13, 0, 7, 0],
+		[0, -1, 0, 0, 1, -12, 0, 6, 0],
+		[0, 0, 2, -2, 0, 11, 0, 0, 0],
+		[2, 0, -1, 2, 1, -10, 0, 5, 0],
+		[2, 0, 1, 2, 2, -8, 0, 3, 0],
+		[0, 1, 0, 2, 2, 7, 0, -3, 0],
+		[-2, 1, 1, 0, 0, -7, 0, 0, 0],
+		[0, -1, 0, 2, 2, -7, 0, 3, 0],
+		[2, 0, 0, 2, 1, -7, 0, 3, 0],
+		[2, 0, 1, 0, 0, 6, 0, 0, 0],
+		[-2, 0, 2, 2, 2, 6, 0, -3, 0],
+		[-2, 0, 1, 2, 1, 6, 0, -3, 0],
+		[2, 0, -2, 0, 1, -6, 0, 3, 0],
+		[2, 0, 0, 0, 1, -6, 0, 3, 0],
+		[0, -1, 1, 0, 0, 5, 0, 0, 0],
+		[-2, -1, 0, 2, 1, -5, 0, 3, 0],
+		[-2, 0, 0, 0, 1, -5, 0, 3, 0],
+		[0, 0, 2, 2, 1, -5, 0, 3, 0],
+		[-2, 0, 2, 0, 1, 4, 0, 0, 0],
+		[-2, 1, 0, 2, 1, 4, 0, 0, 0],
+		[0, 0, 1, -2, 0, 4, 0, 0, 0],
+		[-1, 0, 1, 0, 0, -4, 0, 0, 0],
+		[-2, 1, 0, 0, 0, -4, 0, 0, 0],
+		[1, 0, 0, 0, 0, -4, 0, 0, 0],
+		[0, 0, 1, 2, 0, 3, 0, 0, 0],
+		[0, 0, -2, 2, 2, -3, 0, 0, 0],
+		[-1, -1, 1, 0, 0, -3, 0, 0, 0],
+		[0, 1, 1, 0, 0, -3, 0, 0, 0],
+		[0, -1, 1, 2, 2, -3, 0, 0, 0],
+		[2, -1, -1, 2, 2, -3, 0, 0, 0],
+		[0, 0, 3, 2, 2, -3, 0, 0, 0],
+		[2, -1, 0, 2, 2, -3, 0, 0, 0],
+	] as const
 }
 
 // Chapter 30, Equation of Kepler.

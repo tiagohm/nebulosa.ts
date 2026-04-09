@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toDeg } from '../src/angle'
-import { DAYSEC, PI } from '../src/constants'
+import { DAYSEC, PI, RAD2DEG } from '../src/constants'
 import { toKilometer } from '../src/distance'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Refraction, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Refraction, Stellar } from '../src/meeus'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
 	expect(actual).toBeCloseTo(expected, numDigits)
@@ -431,6 +431,56 @@ describe('Circle', () => {
 	})
 })
 
+describe('Nutation', () => {
+	test('nutation and meanObliquity', () => {
+		// Example 22.a, p. 148.
+		const jd = Julian.calendarGregorianToJD(1987, 4, 10)
+		const nu = Nutation.nutation(jd)
+		const Δε = nu[1]
+		const ε0 = Nutation.meanObliquity(jd)
+		const ε = ε0 + Δε
+		expect(formatALT(nu[0])).toBe('-00 00 03.79')
+		expect(formatALT(nu[1])).toBe('+00 00 09.44')
+		expect(formatALT(ε0)).toBe('+23 26 27.41')
+		expect(formatALT(ε)).toBe('+23 26 36.85')
+	})
+
+	test('approxNutation', () => {
+		const jd = Julian.calendarGregorianToJD(1987, 4, 10)
+		const nu = Nutation.approxNutation(jd)
+		expect(formatALT(nu[0])).toBe('-00 00 03.86')
+		expect(Math.abs(nu[0] * RAD2DEG * 3600 + 3.788) < 0.5).toBeTrue()
+		expect(formatALT(nu[1])).toBe('+00 00 09.47')
+		expect(Math.abs(nu[1] * RAD2DEG * 3600 - 9.443) < 0.1).toBeTrue()
+	})
+
+	test('nutationInRA', () => {
+		const jd = Julian.calendarGregorianToJD(1987, 4, 10)
+		const a = Nutation.nutationInRA(jd)
+		strictEqual(a, -0.000016848469493116356)
+	})
+
+	describe('meanObliquityLaskar', () => {
+		for (const y of [1000, 2000, 3000] as const) {
+			test(y.toFixed(0), () => {
+				const jd = Julian.calendarGregorianToJD(y, 0, 0)
+				const i = Nutation.meanObliquity(jd)
+				const l = Nutation.meanObliquityLaskar(jd)
+				expect(Math.abs(i - l) * RAD2DEG * 3600 < 1).toBeTrue()
+			})
+		}
+
+		for (const y of [0, 4000] as const) {
+			test(y.toFixed(0), () => {
+				const jd = Julian.calendarGregorianToJD(y, 0, 0)
+				const i = Nutation.meanObliquity(jd)
+				const l = Nutation.meanObliquityLaskar(jd)
+				expect(Math.abs(i - l) * RAD2DEG * 3600 < 10).toBeTrue()
+			})
+		}
+	})
+})
+
 describe('Kepler', () => {
 	test('kepler1', () => {
 		// Example 30.a, p. 196
@@ -453,7 +503,7 @@ describe('Kepler', () => {
 	test('kepler2b', () => {
 		// Example data from p. 205
 		const E = Kepler.kepler2b(0.99, 0.2, 14)
-		strictEqual((E), 1.066997365282, 12)
+		strictEqual(E, 1.066997365282, 12)
 	})
 
 	test('kepler3', () => {
