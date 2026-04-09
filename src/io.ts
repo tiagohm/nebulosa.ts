@@ -5,7 +5,7 @@ export interface Flushable {
 }
 
 export function isFlushable(o: object): o is Flushable {
-	return 'flush' in o
+	return 'flush' in o && o.flush instanceof Function
 }
 
 export interface Exhaustible {
@@ -13,7 +13,7 @@ export interface Exhaustible {
 }
 
 export function isExhaustible(o: object): o is Exhaustible {
-	return 'exhausted' in o
+	return 'exhausted' in o && typeof o.exhausted === 'boolean'
 }
 
 export interface Seekable {
@@ -444,10 +444,7 @@ export class Base64Sink implements Sink {
 	#position = 0
 	readonly #sink: Sink
 
-	constructor(
-		sink: Sink,
-		alphabet: Base64Alphabet = 'base64',
-	) {
+	constructor(sink: Sink, alphabet: Base64Alphabet = 'base64') {
 		this.#sink = sink
 		this.#map = Buffer.from(alphabet === 'base64' ? BASE64_ALPHABET : BASE64_URL_SAFE_ALPHABET, 'ascii')
 	}

@@ -44,7 +44,7 @@ export const HNSKY_290_DEC_BOUNDARIES = [
 
 export type Hnsky290Database = 'g14' | 'g16'
 
-export type Hnsky290File = Pick<File, 'arrayBuffer'> | Buffer
+export type Hnsky290File = Pick<File, 'arrayBuffer'> | Bun.BufferSource
 
 export type Hnsky290Files = Map<string, Hnsky290File> | Record<string, Hnsky290File>
 
@@ -247,7 +247,7 @@ export async function findHnsky290Region(files: Hnsky290Files, database: Hnsky29
 
 		if (file === undefined) continue
 
-		const buffer = Buffer.isBuffer(file) ? file : Buffer.from(await file.arrayBuffer())
+		const buffer = await bufferFromHnsky290File(file)
 		const header = readHnsky290Header(buffer)
 		headers.push(Object.assign(header, area))
 
@@ -380,7 +380,7 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 			return undefined
 		}
 
-		const buffer = Buffer.isBuffer(source) ? source : Buffer.from(await source.arrayBuffer())
+		const buffer = await bufferFromHnsky290File(source)
 		const loaded = { ...file, header: readHnsky290Header(buffer), buffer }
 		this.#areas.set(area, loaded)
 		return loaded
@@ -394,6 +394,10 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 
 		return this.#files?.[key]
 	}
+}
+
+async function bufferFromHnsky290File(file: Hnsky290File) {
+	return Buffer.isBuffer(file) ? file : 'arrayBuffer' in file ? Buffer.from(await file.arrayBuffer()) : ArrayBuffer.isView(file) ? Buffer.from(file.buffer, file.byteOffset, file.byteLength) : Buffer.from(file)
 }
 
 // Projects the square half-field from declination space into RA.
