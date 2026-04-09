@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toDeg } from '../src/angle'
 import { DAYSEC, PI } from '../src/constants'
 import { toKilometer } from '../src/distance'
-import { AngularSeparation, Apsis, Base, Circle, Interpolation, Julian, MoonPosition, Node, Refraction, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Refraction, Stellar } from '../src/meeus'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
 	expect(actual).toBeCloseTo(expected, numDigits)
@@ -212,6 +212,42 @@ describe('Interpolation', () => {
 	}
 })
 
+describe('Iteration', () => {
+	test('decimalPlaces', () => {
+		// Example 5.a, p. 48.0
+		const betterSqrt = (n: number) => (n + 159 / n) / 2
+		const n = Iteration.decimalPlaces(betterSqrt, 12, 8, 20)
+		strictEqual(n, 12.60952021, 8)
+	})
+
+	test('fullPrecision', () => {
+		// Example 5.b, p. 48.0
+		const betterRoot = (x: number) => (8 - x ** 5) / 17
+		const x = Iteration.fullPrecision(betterRoot, 0, 20)
+		strictEqual(x, 0.4692498784547387)
+	})
+
+	test('fullPrecision diverging', () => {
+		// Example 5.c, p. 49.0
+		const betterRoot = (x: number) => (8 - x ** 5) / 3
+		expect(() => Iteration.fullPrecision(betterRoot, 0, 20)).toThrow('maximum iterations reached')
+	})
+
+	test('fullPrecision converging', () => {
+		// Example 5.d, p.49.
+		const betterRoot = (x: number) => (8 - 3 * x) ** 0.2
+		const x = Iteration.fullPrecision(betterRoot, 0, 30)
+		strictEqual(x, 1.321785627117658)
+	})
+
+	test('binaryRoot', () => {
+		// Example  from p. 53.0
+		const f = (x: number) => x ** 5 + 17 * x - 8
+		const x = Iteration.binaryRoot(f, 0, 1)
+		strictEqual(x, 0.46924987845473876)
+	})
+})
+
 describe('Julian', () => {
 	describe('gregorian', () => {
 		const dates = [
@@ -392,6 +428,45 @@ describe('Circle', () => {
 		const a = Circle.smallest(c1, c2, c3)
 		expect(formatALT(a[0], true)).toBe('+04 15 49') // Δ = 4°.26363 = 4°16′
 		expect(a[1]).toBeFalse() // type II
+	})
+})
+
+describe('Kepler', () => {
+	test('kepler1', () => {
+		// Example 30.a, p. 196
+		const E = Kepler.kepler1(0.1, deg(5), 8)
+		strictEqual(toDeg(E), 5.554589, 6)
+	})
+
+	test('kepler2', () => {
+		// Example 30.b, p. 199
+		const E = Kepler.kepler2(0.1, deg(5), 11)
+		strictEqual(toDeg(E), 5.554589254, 9)
+	})
+
+	test('kepler2a', () => {
+		// Example data from p. 205
+		const E = Kepler.kepler2a(0.99, 0.2, 14)
+		strictEqual(E, 1.066997365282, 12)
+	})
+
+	test('kepler2b', () => {
+		// Example data from p. 205
+		const E = Kepler.kepler2b(0.99, 0.2, 14)
+		strictEqual((E), 1.066997365282, 12)
+	})
+
+	test('kepler3', () => {
+		// Example data from p. 205
+		const E = Kepler.kepler3(0.99, 0.2)
+		strictEqual(E, 1.066997365282, 12)
+	})
+
+	test('kepler4', () => {
+		// Input data from example 30.a, p. 196,
+		// result from p. 207
+		const E = Kepler.kepler4(0.1, deg(5))
+		strictEqual(toDeg(E), 5.554599, 6)
 	})
 })
 
@@ -614,7 +689,7 @@ describe('Apsis', () => {
 	})
 })
 
-describe('stellar', () => {
+describe('Stellar', () => {
 	test('sum', () => {
 		// Example 56.a, p. 393
 		const res = Stellar.sum(1.96, 2.89)
@@ -650,5 +725,23 @@ describe('stellar', () => {
 		// Example 56.e, p. 395
 		const res = Stellar.difference(500)
 		strictEqual(res, 6.75, 2)
+	})
+})
+
+describe('BinaryStars', () => {
+	test('position', () => {
+		// Example 57.1, p. 398
+		const M = BinaryStars.meanAnomaly(1980, 1934.008, 41.623)
+		const E = Kepler.kepler1(0.2763, M, 6)
+		const a = BinaryStars.position(0.907, 0.2763, deg(59.025), deg(23.717), deg(219.907), E)
+		strictEqual(toDeg(M), 37.788, 3)
+		strictEqual(toDeg(a[0]), 318.4, 1)
+		strictEqual(a[1], 0.411, 3)
+	})
+
+	test('apparentEccentricity', () => {
+		// Example 57.b, p. 400
+		const res = BinaryStars.apparentEccentricity(0.2763, deg(59.025), deg(219.907))
+		strictEqual(res, 0.86, 3)
 	})
 })

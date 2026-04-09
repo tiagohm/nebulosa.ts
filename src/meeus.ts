@@ -3,7 +3,7 @@ import { ASEC2RAD, AU_KM, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { Distance } from './distance'
 import { floorDiv, modf, type NumberArray } from './math'
 
-const { sin, cos, tan, asin, acos, atan2, sqrt, hypot, abs, trunc, floor } = Math
+const { sin, cos, tan, asin, acos, atan, atan2, sqrt, hypot, log10, abs, trunc, floor } = Math
 
 // https://github.com/commenthol/astronomia/blob/master/src/
 
@@ -113,6 +113,7 @@ export namespace Base {
 	}
 }
 
+// Chapter 3, Interpolation.
 export namespace Interpolation {
 	// Len3 allows second difference interpolation.
 	export class Len3 {
@@ -446,6 +447,55 @@ export namespace Interpolation {
 	}
 }
 
+// Chapter 5, Iteration.
+export namespace Iteration {
+	// Iterates to a fixed number of decimal places.
+	export function decimalPlaces(better: (num: number) => number, start: number, places: number, maxIterations: number) {
+		const d = 10 ** -places
+
+		for (let i = 0; i < maxIterations; i++) {
+			const n = better(start)
+			if (abs(n - start) < d) return n
+			start = n
+		}
+
+		throw new Error('maximum iterations reached')
+	}
+
+	// Iterates to (nearly) the full precision of a float64.
+	export function fullPrecision(better: (num: number) => number, start: number, maxIterations: number) {
+		for (let i = 0; i < maxIterations; i++) {
+			const n = better(start)
+			if (abs((n - start) / n) < 1e-15) return n
+			start = n
+		}
+
+		throw new Error('maximum iterations reached')
+	}
+
+	// Finds a root between given bounds by binary search.
+	export function binaryRoot(f: (num: number) => number, lower: number, upper: number) {
+		let yLower = f(lower)
+		let mid = 0
+
+		for (let j = 0; j < 52; j++) {
+			mid = (lower + upper) / 2
+			const yMid = f(mid)
+
+			if (yMid === 0) break
+
+			if (yLower < 0 === yMid < 0) {
+				lower = mid
+				yLower = yMid
+			} else {
+				upper = mid
+			}
+		}
+
+		return mid
+	}
+}
+
 // Chapter 7, Julian day.
 export namespace Julian {
 	// Converts a Gregorian year, month, and day of month to Julian day.
@@ -645,23 +695,23 @@ export namespace AngularSeparation {
 // Chapter 16: Atmospheric Refraction.
 // Functions here assume atmospheric pressure of 1010 mb, temperature of 10°C, and yellow light.
 export namespace Refraction {
-	const GT15_TRUE_1 = 58.294 * ASEC2RAD
-	const GT15_TRUE_2 = 0.0668 * ASEC2RAD
-	const GT15_APP_1 = 58.276 * ASEC2RAD
-	const GT15_APP_2 = 0.0824 * ASEC2RAD
+	const GT15_T1 = 58.294 * ASEC2RAD
+	const GT15_T2 = 0.0668 * ASEC2RAD
+	const GT15_A1 = 58.276 * ASEC2RAD
+	const GT15_A2 = 0.0824 * ASEC2RAD
 
 	// Computes the refraction to be subtracted from h0 to obtain the true altitude when altitude is greater than 15 degrees.
 	export function gt15True(h0: Angle): Angle {
 		// (16.1) p. 105
 		const t = tan(PIOVERTWO - h0)
-		return GT15_TRUE_1 * t - GT15_TRUE_2 * t * t * t
+		return GT15_T1 * t - GT15_T2 * t * t * t
 	}
 
 	// Computes the refraction to be added to h to obtain the apparent altitude of the body.
 	export function gt15Apparent(h: Angle) {
 		// (16.2) p. 105
 		const t = tan(PIOVERTWO - h)
-		return GT15_APP_1 * t - GT15_APP_2 * t * t * t
+		return GT15_A1 * t - GT15_A2 * t * t * t
 	}
 
 	// Computes the refraction to be subtracted from h0 to obtain the true altitude with accurate of 0.07 arc min from horizon to zenith.
@@ -698,11 +748,11 @@ export namespace Circle {
 	// Finds the smallest circle containing three points.
 	export function smallest(c1: Coord, c2: Coord, c3: Coord) {
 		// Using haversine formula
-		const cd1 = Math.cos(c1[1])
-		const cd2 = Math.cos(c2[1])
-		const cd3 = Math.cos(c3[1])
-		let a = 2 * Math.asin(Math.sqrt(AngularSeparation.hav(c2[1] - c1[1]) + cd1 * cd2 * AngularSeparation.hav(c2[0] - c1[0])))
-		let b = 2 * Math.asin(Math.sqrt(AngularSeparation.hav(c3[1] - c2[1]) + cd2 * cd3 * AngularSeparation.hav(c3[0] - c2[0])))
+		const cd1 = cos(c1[1])
+		const cd2 = cos(c2[1])
+		const cd3 = cos(c3[1])
+		let a = 2 * asin(sqrt(AngularSeparation.hav(c2[1] - c1[1]) + cd1 * cd2 * AngularSeparation.hav(c2[0] - c1[0])))
+		let b = 2 * asin(Math.sqrt(AngularSeparation.hav(c3[1] - c2[1]) + cd2 * cd3 * AngularSeparation.hav(c3[0] - c2[0])))
 		let c = 2 * Math.asin(Math.sqrt(AngularSeparation.hav(c1[1] - c3[1]) + cd3 * cd1 * AngularSeparation.hav(c1[0] - c3[0])))
 
 		if (b > a) {
@@ -724,6 +774,102 @@ export namespace Circle {
 	}
 }
 
+// Chapter 30, Equation of Kepler.
+export namespace Kepler {
+	// Computes true anomaly nu for given eccentric anomaly E.
+	export function trueAnomaly(E: number, e: Angle) {
+		// (30.1) p. 195
+		return 2 * atan(sqrt((1 + e) / (1 - e)) * tan(E * 0.5))
+	}
+
+	// Computes radius distance r (in units of a) for given eccentric anomaly E.
+	export function radius(E: Angle, e: number, a: number) {
+		// (30.2) p. 195
+		return a * (1 - e * cos(E))
+	}
+
+	// Kepler1 solves Kepler's equation by iteration. The iterated formula is E1 = m + e * sin(E0).
+	// For some vaues of e and M it will fail to converge and the function will return an error.
+	export function kepler1(e: number, m: Angle, places: number) {
+		// (30.5) p. 195
+		const f = (E0: number) => m + e * Math.sin(E0)
+		return Iteration.decimalPlaces(f, m, places, places * 5)
+	}
+
+	// Kepler2 solves Kepler's equation by iteration. The iterated formula is E1 = E0 + (m + e * sin(E0) - E0) / (1 - e * cos(E0))
+	// The function converges over a wider range of inputs than does Kepler1 but it also fails to converge for some values of e and M.
+	export function kepler2(e: number, m: Angle, places: number) {
+		const f = (E0: number) => {
+			const se = sin(E0)
+			const ce = cos(E0)
+			return E0 + (m + e * se - E0) / (1 - e * ce) // (30.7) p. 199
+		}
+
+		return Iteration.decimalPlaces(f, m, places, places)
+	}
+
+	// Solves Kepler's equation by iteration. The iterated formula is the same as in Kepler2 but a limiting function avoids divergence.
+	export function kepler2a(e: number, m: Angle, places: number) {
+		const f = (E0: number) => {
+			const se = sin(E0)
+			const ce = cos(E0)
+			// method of Leingärtner, p. 205
+			return E0 + asin(sin((m + e * se - E0) / (1 - e * ce)))
+		}
+
+		return Iteration.decimalPlaces(f, m, places, places * 5)
+	}
+
+	// Kepler2b solves Kepler's equation by iteration. The iterated formula is the same as in Kepler2 but a (different) limiting function avoids divergence.
+	export function kepler2b(e: number, m: Angle, places: number) {
+		const f = (E0: number) => {
+			const se = sin(E0)
+			const ce = cos(E0)
+			let d = (m + e * se - E0) / (1 - e * ce)
+			// method of Steele, p. 205
+			if (d > 0.5) d = 0.5
+			else if (d < -0.5) d = -0.5
+			return E0 + d
+		}
+
+		return Iteration.decimalPlaces(f, m, places, places)
+	}
+
+	// Solves Kepler's equation by binary search.
+	export function kepler3(e: number, m: number) {
+		// adapted from BASIC, p. 206
+		m = normalizeAngle(m)
+		let f = 1
+
+		if (m > PI) {
+			f = -1
+			m = 2 * PI - m
+		}
+
+		let E0 = PI * 0.5
+		let d = PI * 0.25
+
+		for (let i = 0; i < 53; i++) {
+			const M1 = E0 - e * sin(E0)
+
+			if (m - M1 < 0) {
+				E0 -= d
+			} else {
+				E0 += d
+			}
+
+			d *= 0.5
+		}
+
+		return f < 0 ? -E0 : E0
+	}
+
+	// Computes an approximate solution to Kepler's equation. It is valid only for small values of e.
+	export function kepler4(e: number, m: number) {
+		return atan2(sin(m), cos(m) - e) // (30.8) p. 206
+	}
+}
+
 // Chapter 39, Passages through the Nodes.
 export namespace Node {
 	// Computes time and distance of passage through the ascending node of a body in an elliptical orbit.
@@ -737,10 +883,10 @@ export namespace Node {
 	}
 
 	export function elliptic(nu: Angle, axis: Distance, ecc: number, timeP: number): readonly [number, Distance] {
-		const E = 2 * Math.atan(Math.sqrt((1 - ecc) / (1 + ecc)) * Math.tan(nu * 0.5))
+		const E = 2 * atan(sqrt((1 - ecc) / (1 + ecc)) * tan(nu * 0.5))
 		const [sE, cE] = Base.sincos(E)
 		const M = E - ecc * sE
-		const n = Base.K / axis / Math.sqrt(axis)
+		const n = Base.K / axis / sqrt(axis)
 		const jde = timeP + M / n
 		const r = axis * (1 - ecc * cE)
 		return [jde, r]
@@ -753,12 +899,12 @@ export namespace Node {
 
 	// Computes time and distance of passage through the descending node of a body in a parabolic orbit.
 	export function parabolicDescending(q: Distance, argP: Angle, timeP: number) {
-		return parabolic(Math.PI - argP, q, timeP)
+		return parabolic(PI - argP, q, timeP)
 	}
 
 	export function parabolic(nu: Angle, q: Distance, timeP: number): readonly [number, Distance] {
-		const s = Math.tan(nu * 0.5)
-		const jde = timeP + 27.403895 * s * (s * s + 3) * q * Math.sqrt(q)
+		const s = tan(nu * 0.5)
+		const jde = timeP + 27.403895 * s * (s * s + 3) * q * sqrt(q)
 		const r = q * (1 + s * s)
 		return [jde, r]
 	}
@@ -1248,14 +1394,14 @@ export namespace Stellar {
 	// Computes the combined apparent magnitude of two stars.
 	export function sum(m1: number, m2: number) {
 		const x = 0.4 * (m2 - m1)
-		return m2 - 2.5 * Math.log10(10 ** x + 1)
+		return m2 - 2.5 * log10(10 ** x + 1)
 	}
 
 	// Computes the combined apparent magnitude of a number of stars.
 	export function sumN(m: readonly number[]) {
 		let s = 0
 		for (const mi of m) s += 10 ** (-0.4 * mi)
-		return -2.5 * Math.log10(s)
+		return -2.5 * log10(s)
 	}
 
 	// Computes the brightness ratio of two apparent magnitudes.
@@ -1266,16 +1412,49 @@ export namespace Stellar {
 
 	// Computes the difference in apparent magnitude of two stars given their brightness ratio.
 	export function difference(ratio: number) {
-		return 2.5 * Math.log10(ratio)
+		return 2.5 * log10(ratio)
 	}
 
 	// Computes absolute magnitude given apparent magnitude, and annual parallax in arc seconds.
 	export function absoluteByParallax(m: number, pi: number) {
-		return m + 5 + 5 * Math.log10(pi)
+		return m + 5 + 5 * log10(pi)
 	}
 
 	// Computes absolute magnitude given apparent magnitude, and distance in parsecs.
 	export function absoluteByDistance(m: number, d: number) {
-		return m + 5 - 5 * Math.log10(d)
+		return m + 5 - 5 * log10(d)
+	}
+}
+
+// Chapter 57, Binary Stars
+export namespace BinaryStars {
+	// Computes mean anomaly for the given decimal year, time of periastron (decimal year) and period of revolution in mean solar years.
+	export function meanAnomaly(year: number, T: number, P: number): Angle {
+		return normalizeAngle((TAU / P) * (year - T))
+	}
+
+	// Computes apparent position angle and angular distance of components of a binary star.
+	export function position(a: Angle, e: number, i: Angle, ascendingNode: Angle, periastron: Angle, E: Angle) {
+		const r = a * (1 - e * cos(E))
+		const nu = 2 * atan(sqrt((1 + e) / (1 - e)) * tan(E / 2))
+		const [sinNuOmega, cosNuOmega] = Base.sincos(nu + periastron)
+		const cosi = cos(i)
+		const num = sinNuOmega * cosi
+		let theta = atan2(num, cosNuOmega) + ascendingNode
+		if (theta < 0) theta += 2 * PI
+		const rho = r * sqrt(num * num + cosNuOmega * cosNuOmega)
+		return [theta, rho] as const
+	}
+
+	// Computes the apparent eccenticity of a binary star given true orbital elements.
+	export function apparentEccentricity(e: number, i: Angle, omega: Angle) {
+		const cosi = cos(i)
+		const [sinOmega, cosOmega] = Base.sincos(omega)
+		const A = (1 - e * e * cosOmega * cosOmega) * cosi * cosi
+		const B = e * e * sinOmega * cosOmega * cosi
+		const C = 1 - e * e * sinOmega * sinOmega
+		const d = A - C
+		const sqrtD = sqrt(d * d + 4 * B * B)
+		return sqrt((2 * sqrtD) / (A + C + sqrtD))
 	}
 }
