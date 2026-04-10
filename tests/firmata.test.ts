@@ -12,6 +12,7 @@ import { AM2320, SHT21 } from '../src/firmata.hygrometer'
 import { BH1750, MAX44009, TEMT6000, TSL2561 } from '../src/firmata.luxmeter'
 import { HMC5883L } from '../src/firmata.magnetometer'
 import { KT0803L, RDA5807, TEA5767 } from '../src/firmata.radio'
+import { DS3231 } from '../src/firmata.rtc'
 import { DS18B20, LM35 } from '../src/firmata.thermometer'
 
 type MockFirmataMessage =
@@ -599,7 +600,7 @@ test('AM2320 configures i2c reads and emits humidity and temperature updates', a
 		['write', AM2320.ADDRESS, Buffer.from([])],
 	])
 
-	await Bun.sleep(30)
+	await Bun.sleep(60)
 
 	expect(client.messages[2]).toEqual(['write', AM2320.ADDRESS, Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.START_REGISTER, AM2320.REGISTER_COUNT])])
 	expect(client.messages[3]).toEqual(['read', AM2320.ADDRESS, -1, AM2320.FRAME_SIZE, false, 7, 'stop'])
@@ -1170,6 +1171,66 @@ test('RDA5807 polls status frames', async () => {
 	expect(client.messages.length).toBeGreaterThan(0)
 	expect(client.messages[0]).toEqual(['read', RDA5807.ADDRESS, RDA5807.STATUS_REG, 4, false, 7, 'stop'])
 	tuner.stop()
+})
+
+test('DS3231 configures i2c reads and decodes RTC updates', () => {
+	const client = new MockFirmataClient()
+	const rtc = new DS3231(client as never, DS3231.ADDRESS, 1000)
+	let updates = 0
+
+	rtc.addListener(() => {
+		updates++
+	})
+
+	rtc.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['read', DS3231.ADDRESS, DS3231.TIME_REG, DS3231.TIME_BYTES, false, 7, 'stop'],
+	])
+
+	rtc.twoWireMessage(client as never, DS3231.ADDRESS, DS3231.TIME_REG, Buffer.from([0x45, 0x58, 0x23, 0x05, 0x09, 0x04, 0x26]))
+	expect(rtc.year).toBe(2026)
+	expect(rtc.month).toBe(4)
+	expect(rtc.day).toBe(9)
+	expect(rtc.hour).toBe(23)
+	expect(rtc.minute).toBe(58)
+	expect(rtc.second).toBe(45)
+	expect(rtc.millisecond).toBe(0)
+	expect(updates).toBe(1)
+
+	rtc.twoWireMessage(client as never, DS3231.ADDRESS, DS3231.TIME_REG, Buffer.from([0x45, 0x58, 0x23, 0x05, 0x09, 0x04, 0x26]))
+	expect(updates).toBe(1)
+
+	rtc.stop()
+	expect(client.handlers.size).toBe(0)
+})
+
+test('DS3231 decodes 12-hour frames', () => {
+	const client = new MockFirmataClient()
+	const rtc = new DS3231(client as never)
+
+	rtc.twoWireMessage(client as never, DS3231.ADDRESS, DS3231.TIME_REG, Buffer.from([0x07, 0x05, 0x69, 0x03, 0x31, 0x12, 0x24]))
+	expect(rtc.year).toBe(2024)
+	expect(rtc.month).toBe(12)
+	expect(rtc.day).toBe(31)
+	expect(rtc.dayOfWeek).toBe(2)
+	expect(rtc.hour).toBe(21)
+	expect(rtc.minute).toBe(5)
+	expect(rtc.second).toBe(7)
+})
+
+test('DS3231 sync writes staged fields in 24-hour mode', () => {
+	const client = new MockFirmataClient()
+	const rtc = new DS3231(client as never)
+
+	rtc.update(2026, 4, 9, 4, 23, 58, 45, 123)
+
+	expect(client.messages.slice(0, 2)).toEqual([
+		['config', 0],
+		['write', DS3231.ADDRESS, Buffer.from([DS3231.TIME_REG, 0x45, 0x58, 0x23, 0x05, 0x09, 0x04, 0x26])],
+	])
+	expect(rtc.millisecond).toBe(0)
 })
 
 test('DS18B20 validates scratchpad CRC', () => {

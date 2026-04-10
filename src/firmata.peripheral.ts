@@ -86,6 +86,18 @@ export interface RadioTransmitter extends Pick<Peripheral, 'name' | 'client'> {
 	readonly unmute: () => void
 }
 
+export interface RealTimeClock extends Pick<Peripheral, 'name' | 'client'> {
+	readonly year: number
+	readonly month: number
+	readonly day: number
+	readonly hour: number
+	readonly minute: number
+	readonly second: number
+	readonly millisecond: number
+	readonly update: (year?: number, month?: number, day?: number, dayOfWeek?: number, hour?: number, minute?: number, second?: number, millisecond?: number) => void
+	readonly sync: (date?: Date) => void
+}
+
 interface PendingTwoWireRead {
 	readonly reject: (error: Error) => void
 	readonly resolve: (data: Buffer) => void
