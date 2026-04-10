@@ -4,62 +4,60 @@ import type { FirmataClient, FirmataClientHandler, Pin, PinMode } from './firmat
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 
-export type PeripheralListener<D extends Peripheral<D>> = (device: D) => void
+export type PeripheralListener<D extends Peripheral> = (device: D) => void
 
 export type RadioTunerSeekDirection = 'up' | 'down'
 
-export interface Peripheral<D extends Peripheral<D> = never> extends Disposable {
+export interface Peripheral extends Disposable {
 	readonly name: string
 	readonly client: FirmataClient
-	readonly addListener: (listener: PeripheralListener<D>) => void
-	readonly removeListener: (listener: PeripheralListener<D>) => void
 	readonly start: () => void
 	readonly stop: () => void
 }
 
-export interface Thermometer extends Pick<Peripheral, 'name' | 'client'> {
+export interface Thermometer extends Peripheral {
 	readonly temperature: Temperature
 }
 
-export interface Hygrometer extends Pick<Peripheral, 'name' | 'client'> {
+export interface Hygrometer extends Peripheral {
 	readonly humidity: number
 }
 
-export interface Barometer extends Pick<Peripheral, 'name' | 'client'> {
+export interface Barometer extends Peripheral {
 	readonly pressure: Pressure
 }
 
-export interface Altimeter extends Pick<Peripheral, 'name' | 'client'> {
+export interface Altimeter extends Peripheral {
 	readonly altitude: Distance
 }
 
-export interface Luxmeter extends Pick<Peripheral, 'name' | 'client'> {
+export interface Luxmeter extends Peripheral {
 	readonly lux: number
 }
 
-export interface Ammeter extends Pick<Peripheral, 'name' | 'client'> {
+export interface Ammeter extends Peripheral {
 	readonly current: number // A
 }
 
-export interface Accelerometer extends Pick<Peripheral, 'name' | 'client'> {
+export interface Accelerometer extends Peripheral {
 	readonly ax: number // m/s^2
 	readonly ay: number // m/s^2
 	readonly az: number // m/s^2
 }
 
-export interface Gyroscope extends Pick<Peripheral, 'name' | 'client'> {
+export interface Gyroscope extends Peripheral {
 	readonly gx: Angle // rad/s
 	readonly gy: Angle // rad/s
 	readonly gz: Angle // rad/s
 }
 
-export interface Magnetometer extends Pick<Peripheral, 'name' | 'client'> {
+export interface Magnetometer extends Peripheral {
 	readonly x: number // gauss
 	readonly y: number // gauss
 	readonly z: number // gauss
 }
 
-export interface RadioTuner extends Pick<Peripheral, 'name' | 'client'> {
+export interface RadioTuner extends Peripheral {
 	frequency: number // MHz
 	volume: number // 0..100
 	muted: boolean
@@ -76,7 +74,7 @@ export interface RadioTuner extends Pick<Peripheral, 'name' | 'client'> {
 	readonly seek: (direction: RadioTunerSeekDirection, wrap: boolean) => void
 }
 
-export interface RadioTransmitter extends Pick<Peripheral, 'name' | 'client'> {
+export interface RadioTransmitter extends Peripheral {
 	frequency: number // MHz
 	muted: boolean
 	stereo: boolean
@@ -86,7 +84,7 @@ export interface RadioTransmitter extends Pick<Peripheral, 'name' | 'client'> {
 	readonly unmute: () => void
 }
 
-export interface RealTimeClock extends Pick<Peripheral, 'name' | 'client'> {
+export interface RealTimeClock extends Peripheral {
 	readonly year: number
 	readonly month: number
 	readonly day: number
@@ -98,10 +96,35 @@ export interface RealTimeClock extends Pick<Peripheral, 'name' | 'client'> {
 	readonly sync: (date?: Date) => void
 }
 
-export interface IOExpander extends Pick<Peripheral, 'name' | 'client'> {
+export interface IOExpander extends Peripheral {
 	readonly pinMode: (pin: number, mode: PinMode) => void
 	readonly pinRead: (pin: number) => number | boolean
-	readonly pinWrite: (pin: number, value: number | boolean) => void
+	readonly pinWrite: (pin: number, value: number | boolean, flush?: boolean) => void
+	readonly flush: () => void
+}
+
+export interface Display extends Peripheral {
+	readonly begin: (columns: number, rows: number) => void
+	readonly clear: () => void
+	readonly home: () => void
+	readonly setCursor: (column: number, row: number) => void
+	readonly noBacklight: () => void
+	readonly backlight: () => void
+	readonly noDisplay: () => void
+	readonly display: () => void
+	readonly noBlink: () => void
+	readonly blink: () => void
+	readonly noCursor: () => void
+	readonly cursor: () => void
+	readonly scrollDisplayLeft: () => void
+	readonly scrollDisplayRight: () => void
+	readonly leftToRight: () => void
+	readonly rightToLeft: () => void
+	readonly autoscroll: () => void
+	readonly noAutoscroll: () => void
+	readonly createChar: (location: number, charmap: ArrayLike<number>) => void
+	readonly write: (value: number) => number
+	readonly print: (text: string | number | boolean | bigint) => number
 }
 
 interface PendingTwoWireRead {
@@ -112,7 +135,7 @@ interface PendingTwoWireRead {
 
 export const DEFAULT_POLLING_INTERVAL = 5000
 
-export abstract class PeripheralBase<D extends Peripheral<D> = never> implements FirmataClientHandler {
+export abstract class PeripheralBase<D extends Peripheral = never> implements FirmataClientHandler {
 	readonly #listeners = new Set<PeripheralListener<D>>()
 	readonly #pendingTwoWireReads = new Map<string, PendingTwoWireRead[]>()
 
@@ -202,7 +225,7 @@ export abstract class PeripheralBase<D extends Peripheral<D> = never> implements
 	}
 }
 
-export abstract class ADCPeripheral<D extends Peripheral<D>> extends PeripheralBase<D> {
+export abstract class ADCPeripheral<D extends Peripheral = never> extends PeripheralBase<D> {
 	abstract readonly pin: number
 
 	abstract calculate(value: number): boolean

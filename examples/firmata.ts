@@ -4,7 +4,9 @@ import { toMeter } from '../src/distance'
 import { type FirmataClientHandler, FirmataClientOverTcp } from '../src/firmata'
 import { BMP180, BMP180Mode, BMP280 } from '../src/firmata.barometer'
 import { ESP8266 } from '../src/firmata.board'
+import { HD44780 } from '../src/firmata.display'
 import { AM2320, SHT21 } from '../src/firmata.hygrometer'
+import { PCF8574 } from '../src/firmata.io'
 import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, Luxmeter, Magnetometer, RadioTransmitter, RadioTuner, Thermometer } from '../src/firmata.peripheral'
 import { KT0803L, RDA5807, TEA5767 } from '../src/firmata.radio'
 import { DS18B20, LM35 } from '../src/firmata.thermometer'
@@ -111,9 +113,22 @@ if (false) {
 	radio.frequency = 100.1
 }
 
-if (true) {
+if (false) {
 	const transmitter = new KT0803L(client, KT0803L.ADDRESS, { audioEnhancement: false, gain: 8, stereo: false })
 	transmitter.addListener(print)
 	transmitter.start()
 	transmitter.frequency = 90
+}
+
+if (true) {
+	const expander = new PCF8574(client, 0x27)
+	const lcd = new HD44780(expander)
+	lcd.begin(16, 2)
+	const heart = [0b00000, 0b00000, 0b01010, 0b11111, 0b11111, 0b01110, 0b00100, 0b00000]
+	lcd.createChar(0, heart)
+	lcd.setCursor(1, 1)
+	lcd.print('Tiago')
+	lcd.write(0)
+	lcd.print('Giovanna')
+    lcd.backlight()
 }

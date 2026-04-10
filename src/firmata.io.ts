@@ -1,5 +1,5 @@
 import { type FirmataClient, PinMode } from './firmata'
-import { type IOExpander, PeripheralBase } from './firmata.peripheral'
+import { DEFAULT_POLLING_INTERVAL, type IOExpander, PeripheralBase } from './firmata.peripheral'
 import { clamp } from './math'
 
 export interface PCF8574Options {
@@ -11,8 +11,6 @@ export const DEFAULT_PCF8574_OPTIONS: Required<PCF8574Options> = {
 	output: 0xff,
 	inputMask: 0xff,
 }
-
-export const DEFAULT_PCF8574_POLLING_INTERVAL = 100
 
 // https://www.ti.com/lit/ds/symlink/pcf8574.pdf
 
@@ -36,7 +34,7 @@ export class PCF8574 extends PeripheralBase<PCF8574> implements IOExpander {
 	constructor(
 		readonly client: FirmataClient,
 		readonly address: number = PCF8574.ADDRESS,
-		readonly pollingInterval: number = DEFAULT_PCF8574_POLLING_INTERVAL,
+		readonly pollingInterval: number = DEFAULT_POLLING_INTERVAL,
 		options: PCF8574Options = DEFAULT_PCF8574_OPTIONS,
 	) {
 		super()
@@ -52,8 +50,7 @@ export class PCF8574 extends PeripheralBase<PCF8574> implements IOExpander {
 		this.#started = true
 		this.client.addHandler(this)
 		this.client.twoWireConfig(0)
-		this.#writeState()
-		this.#requestState()
+		this.flush()
 
 		if (this.pollingInterval > 0) {
 			this.#timer = setInterval(this.#requestState.bind(this), Math.max(1, this.pollingInterval))
@@ -70,49 +67,18 @@ export class PCF8574 extends PeripheralBase<PCF8574> implements IOExpander {
 		this.#timer = undefined
 	}
 
-	// Returns the last 8-bit port snapshot observed on the bus.
-	get state() {
-		return this.#state
-	}
-
-	// Returns the staged output bits used when one pin is configured as output.
-	get output() {
-		return this.#output
-	}
-
-	// Updates all staged output bits without changing the input mask.
-	set output(value: number) {
-		const nextOutput = this.#normalizeByte(value)
-
-		if (nextOutput === this.#output) return
-
-		this.#output = nextOutput
-
-		if (this.#started) {
-			this.#writeState()
-			this.#requestState()
-		}
-
-		this.fire()
-	}
-
 	// Changes one expander pin between input and output semantics.
 	pinMode(pin: number, mode: PinMode) {
 		const mask = this.#pinMask(pin)
 		const value = mode === PinMode.INPUT ? this.#inputMask | mask : this.#inputMask & ~mask
-
 		const nextInputMask = this.#normalizeByte(value)
 		if (nextInputMask === this.#inputMask) return
 		this.#inputMask = nextInputMask
-
-		if (this.#started) {
-			this.#writeState()
-			this.#requestState()
-		}
+		this.flush()
 	}
 
 	// Stages one output bit and implicitly switches the selected pin to output mode.
-	pinWrite(pin: number, value: boolean | number) {
+	pinWrite(pin: number, value: boolean | number, flush: boolean = true) {
 		const mask = this.#pinMask(pin)
 		const nextOutput = value ? this.#output | mask : this.#output & ~mask
 		const nextInputMask = this.#inputMask & ~mask
@@ -122,15 +88,22 @@ export class PCF8574 extends PeripheralBase<PCF8574> implements IOExpander {
 		this.#output = nextOutput
 		this.#inputMask = nextInputMask
 
-		if (this.#started) {
-			this.#writeState()
-			this.#requestState()
+		if (flush) {
+			this.flush()
 		}
 	}
 
 	// Returns the cached logic level of one pin from the latest port snapshot.
 	pinRead(pin: number) {
 		return ((this.#state >>> this.#normalizePin(pin)) & 1) !== 0
+	}
+
+	// Writes the current pin state and requests a new one.
+	flush() {
+		if (this.#started) {
+			this.#writeState()
+			this.#requestState()
+		}
 	}
 
 	// Requests one fresh 8-bit port snapshot from the expander.
