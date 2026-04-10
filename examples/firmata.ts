@@ -3,7 +3,7 @@
 import { toMeter } from '../src/distance'
 import { type FirmataClientHandler, FirmataClientOverTcp } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { type Accelerometer, type Altimeter, AM2320, type Ammeter, type Barometer, BMP180, BMP180Mode, BMP280, DS18B20, type Gyroscope, type Hygrometer, LM35, type Luxmeter, type Magnetometer, type Radio, RDA5807, SHT21, TEA5767, type Thermometer } from '../src/firmata.peripheral'
+import { type Accelerometer, type Altimeter, AM2320, type Ammeter, type Barometer, BMP180, BMP180Mode, BMP280, DS18B20, type Gyroscope, type Hygrometer, KT0803L, LM35, type Luxmeter, type Magnetometer, type RadioTransmitter, type RadioTuner, RDA5807, SHT21, TEA5767, type Thermometer } from '../src/firmata.peripheral'
 
 const handler: FirmataClientHandler = {
 	ready: (client) => {
@@ -29,7 +29,7 @@ client.samplingInterval(100)
 client.requestDigitalReport(false)
 client.requestAnalogReport(false)
 
-function print(device: Thermometer | Hygrometer | Barometer | Altimeter | Luxmeter | Ammeter | Accelerometer | Gyroscope | Magnetometer | Radio) {
+function print(device: Thermometer | Hygrometer | Barometer | Altimeter | Luxmeter | Ammeter | Accelerometer | Gyroscope | Magnetometer | RadioTuner | RadioTransmitter) {
 	const output: string[] = []
 	if ('temperature' in device) output.push(`temperature: ${device.temperature} °C`)
 	if ('humidity' in device) output.push(`humidity: ${device.humidity} %`)
@@ -100,9 +100,16 @@ if (false) {
 	radio.frequency = 100.1
 }
 
-if (true) {
+if (false) {
 	const radio = new TEA5767(client, TEA5767.ADDRESS)
 	radio.addListener(print)
 	radio.start()
 	radio.frequency = 100.1
+}
+
+if (true) {
+	const transmitter = new KT0803L(client, KT0803L.ADDRESS, { audioEnhancement: false, gain: 8, stereo: false })
+	transmitter.addListener(print)
+	transmitter.start()
+	transmitter.frequency = 90
 }

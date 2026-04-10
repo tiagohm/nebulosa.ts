@@ -55,6 +55,10 @@ export type TEA5767ReferenceClock = 32768 | 6500000 | 13000000 // Hz
 
 export type TEA5767SearchStopLevel = 'low' | 'mid' | 'high'
 
+export type KT0803LBassBoost = 0 | 5 | 11 | 17 // dB
+
+export type KT0803LFrequencyDeviation = 75 | 112.5 // kHz
+
 export enum BMP180Mode {
 	ULTRA_LOW_POWER, // 5 ms
 	STANDARD, // 8 ms
@@ -113,7 +117,7 @@ export interface Magnetometer extends Pick<Peripheral, 'name' | 'client'> {
 	readonly z: number // gauss
 }
 
-export interface Radio extends Pick<Peripheral, 'name' | 'client'> {
+export interface RadioTuner extends Pick<Peripheral, 'name' | 'client'> {
 	frequency: number // MHz
 	volume: number // 0..100
 	muted: boolean
@@ -128,6 +132,16 @@ export interface Radio extends Pick<Peripheral, 'name' | 'client'> {
 	readonly mute: () => void
 	readonly unmute: () => void
 	readonly seek: (direction: RadioSeekDirection, wrap: boolean) => void
+}
+
+export interface RadioTransmitter extends Pick<Peripheral, 'name' | 'client'> {
+	frequency: number // MHz
+	muted: boolean
+	stereo: boolean
+	readonly frequencyUp: () => void
+	readonly frequencyDown: () => void
+	readonly mute: () => void
+	readonly unmute: () => void
 }
 
 export interface BMP280Options {
@@ -217,6 +231,22 @@ export interface TEA5767Options {
 	readonly deEmphasis?: TEA5767DeEmphasis // us
 	readonly searchStopLevel?: TEA5767SearchStopLevel
 	readonly wrap?: boolean
+}
+
+export interface KT0803LOptions {
+	readonly frequency?: number // MHz
+	readonly muted?: boolean
+	readonly stereo?: boolean
+	readonly gain?: number // dB
+	readonly transmitPower?: number // Datasheet Table 4 RFGAIN code, 0..15
+	readonly bassBoost?: KT0803LBassBoost // dB
+	readonly preEmphasis?: TEA5767DeEmphasis // us
+	readonly pilotToneHigh?: boolean
+	readonly automaticLevelControl?: boolean
+	readonly automaticPowerDown?: boolean
+	readonly powerAmplifierBias?: boolean
+	readonly deviation?: KT0803LFrequencyDeviation // kHz
+	readonly audioEnhancement?: boolean
 }
 
 interface RDA5807Status {
@@ -337,7 +367,23 @@ export const DEFAULT_TEA5767_OPTIONS: Required<TEA5767Options> = {
 	wrap: true,
 }
 
-abstract class PeripheralBase<D extends Peripheral<D> = never> implements FirmataClientHandler {
+export const DEFAULT_KT0803L_OPTIONS: Required<KT0803LOptions> = {
+	frequency: 89.7,
+	muted: false,
+	stereo: true,
+	gain: 0,
+	transmitPower: 15,
+	bassBoost: 0,
+	preEmphasis: 75,
+	pilotToneHigh: false,
+	automaticLevelControl: false,
+	automaticPowerDown: false,
+	powerAmplifierBias: true,
+	deviation: 75,
+	audioEnhancement: false,
+}
+
+export abstract class PeripheralBase<D extends Peripheral<D> = never> implements FirmataClientHandler {
 	readonly #listeners = new Set<PeripheralListener<D>>()
 	readonly #pendingTwoWireReads = new Map<string, PendingTwoWireRead[]>()
 
@@ -1651,9 +1697,438 @@ export class MCP4725 extends PeripheralBase<MCP4725> {
 	}
 }
 
+// https://www.radiolocman.com/datasheet/pdf.html?di=186075
+
+export class KT0803L extends PeripheralBase<KT0803L> implements RadioTransmitter {
+	static readonly ADDRESS = 0x3e
+	static readonly MIN_CHANNEL = 1400 // 70.0 MHz * 20
+	static readonly MAX_CHANNEL = 2160 // 108.0 MHz * 20
+	static readonly DEFAULT_CHANNEL = 1720 // 86.0 MHz * 20
+	static readonly CHANNELS_PER_MHZ = 20
+
+	static readonly REG00 = 0x00
+	static readonly REG01 = 0x01
+	static readonly REG02 = 0x02
+	static readonly REG04 = 0x04
+	static readonly REG0B = 0x0b
+	static readonly REG0E = 0x0e
+	static readonly REG10 = 0x10
+	static readonly REG13 = 0x13
+	static readonly REG17 = 0x17
+
+	static readonly REG02_CHSEL_LSB = 1 << 7
+	static readonly REG02_RFGAIN3 = 1 << 6
+	static readonly REG02_MUTE = 1 << 3
+	static readonly REG02_PILOT_HIGH = 1 << 2
+	static readonly REG02_PREEMPHASIS_50 = 1 << 0
+
+	static readonly REG04_ALC_ENABLE = 1 << 7
+	static readonly REG04_MONO = 1 << 6
+	static readonly REG04_PGA_LSB_SHIFT = 4
+	static readonly REG04_RESERVED = 0x04
+
+	static readonly REG0B_STANDBY = 1 << 7
+	static readonly REG0B_AUTO_POWER_DOWN = 1 << 2
+
+	static readonly REG0E_PA_BIAS = 1 << 1
+
+	static readonly REG10_RESERVED = 0xa8
+	static readonly REG10_PGA_1DB_MODE = 1 << 0
+
+	static readonly REG13_RFGAIN2 = 1 << 7
+
+	static readonly REG17_DEVIATION_112_5_KHZ = 1 << 6
+	static readonly REG17_AUDIO_ENHANCEMENT = 1 << 5
+
+	#channel: number
+	#muted: boolean
+	#stereo: boolean
+	#gain: number
+	#transmitPower: number
+	#bassBoost: KT0803LBassBoost
+	#preEmphasis: TEA5767DeEmphasis
+	#pilotToneHigh: boolean
+	#automaticLevelControl: boolean
+	#automaticPowerDown: boolean
+	#powerAmplifierBias: boolean
+	#deviation: KT0803LFrequencyDeviation
+	#audioEnhancement: boolean
+	#started = false
+
+	readonly name = 'KT0803L'
+
+	constructor(
+		readonly client: FirmataClient,
+		readonly address: number = KT0803L.ADDRESS,
+		options: KT0803LOptions = DEFAULT_KT0803L_OPTIONS,
+	) {
+		super()
+
+		this.#channel = this.#normalizeChannel(options.frequency ?? DEFAULT_KT0803L_OPTIONS.frequency)
+		this.#muted = options.muted ?? DEFAULT_KT0803L_OPTIONS.muted
+		this.#stereo = options.stereo ?? DEFAULT_KT0803L_OPTIONS.stereo
+		this.#gain = this.#normalizeGain(options.gain ?? DEFAULT_KT0803L_OPTIONS.gain)
+		this.#transmitPower = this.#normalizeTransmitPower(options.transmitPower ?? DEFAULT_KT0803L_OPTIONS.transmitPower)
+		this.#bassBoost = this.#normalizeBassBoost(options.bassBoost ?? DEFAULT_KT0803L_OPTIONS.bassBoost)
+		this.#preEmphasis = (options.preEmphasis ?? DEFAULT_KT0803L_OPTIONS.preEmphasis) === 50 ? 50 : 75
+		this.#pilotToneHigh = options.pilotToneHigh ?? DEFAULT_KT0803L_OPTIONS.pilotToneHigh
+		this.#automaticLevelControl = options.automaticLevelControl ?? DEFAULT_KT0803L_OPTIONS.automaticLevelControl
+		this.#automaticPowerDown = options.automaticPowerDown ?? DEFAULT_KT0803L_OPTIONS.automaticPowerDown
+		this.#powerAmplifierBias = options.powerAmplifierBias ?? DEFAULT_KT0803L_OPTIONS.powerAmplifierBias
+		this.#deviation = (options.deviation ?? DEFAULT_KT0803L_OPTIONS.deviation) === 112.5 ? 112.5 : 75
+		this.#audioEnhancement = options.audioEnhancement ?? DEFAULT_KT0803L_OPTIONS.audioEnhancement
+	}
+
+	// Puts the transmitter in standby, applies the current configuration, and resumes transmission.
+	start() {
+		if (this.#started) return
+
+		this.#started = true
+		this.client.addHandler(this)
+		this.client.twoWireConfig(0)
+		this.#applyConfiguration()
+	}
+
+	// Places the transmitter in standby and detaches the Firmata handler.
+	stop() {
+		if (!this.#started) return
+
+		this.#started = false
+		this.#writeRegister(KT0803L.REG0B, this.#register0BValue(true))
+		this.client.removeHandler(this)
+	}
+
+	// Gets the current transmit frequency in MHz.
+	get frequency() {
+		return this.#frequencyFromChannel(this.#channel)
+	}
+
+	// Sets the transmit frequency in 50 kHz steps within the chip band limits.
+	set frequency(value: number) {
+		const nextChannel = this.#normalizeChannel(value)
+		if (nextChannel === this.#channel) return
+		this.#channel = nextChannel
+		if (this.#started) this.#writeFrequency()
+		this.fire()
+	}
+
+	// Steps the transmit frequency up by 50 kHz and wraps at the upper band edge.
+	frequencyUp() {
+		this.frequency = this.#channel < KT0803L.MAX_CHANNEL ? this.#frequencyFromChannel(this.#channel + 1) : this.#frequencyFromChannel(KT0803L.MIN_CHANNEL)
+	}
+
+	// Steps the transmit frequency down by 50 kHz and wraps at the lower band edge.
+	frequencyDown() {
+		this.frequency = this.#channel > KT0803L.MIN_CHANNEL ? this.#frequencyFromChannel(this.#channel - 1) : this.#frequencyFromChannel(KT0803L.MAX_CHANNEL)
+	}
+
+	// Returns whether the audio input path is muted.
+	get muted() {
+		return this.#muted
+	}
+
+	// Enables or disables the transmitter mute bit.
+	set muted(value: boolean) {
+		if (value === this.#muted) return
+		this.#muted = value
+		if (this.#started) this.#writeRegister(KT0803L.REG02, this.#register02Value())
+		this.fire()
+	}
+
+	// Mutes the audio input path.
+	mute() {
+		this.muted = true
+	}
+
+	// Unmutes the audio input path.
+	unmute() {
+		this.muted = false
+	}
+
+	// Returns whether the stereo encoder is enabled.
+	get stereo() {
+		return this.#stereo
+	}
+
+	// Enables stereo multiplexing when true and forces mono when false.
+	set stereo(value: boolean) {
+		if (value === this.#stereo) return
+		this.#stereo = value
+		if (this.#started) this.#writeRegister(KT0803L.REG04, this.#register04Value())
+		this.fire()
+	}
+
+	// Returns the configured PGA gain in dB.
+	get gain() {
+		return this.#gain
+	}
+
+	// Sets the PGA gain in dB using the KT0803L 1 dB mode.
+	set gain(value: number) {
+		const nextGain = this.#normalizeGain(value)
+		if (nextGain === this.#gain) return
+		this.#gain = nextGain
+
+		if (this.#started) {
+			this.#writeRegister(KT0803L.REG01, this.#register01Value())
+			this.#writeRegister(KT0803L.REG04, this.#register04Value())
+		}
+
+		this.fire()
+	}
+
+	// Returns the current RFGAIN code from datasheet Table 4.
+	get transmitPower() {
+		return this.#transmitPower
+	}
+
+	// Sets the RF output level using the datasheet RFGAIN code range 0..15.
+	set transmitPower(value: number) {
+		const nextTransmitPower = this.#normalizeTransmitPower(value)
+		if (nextTransmitPower === this.#transmitPower) return
+		this.#transmitPower = nextTransmitPower
+
+		if (this.#started) {
+			this.#writeRegister(KT0803L.REG13, this.#register13Value())
+			this.#writeRegister(KT0803L.REG01, this.#register01Value())
+			this.#writeRegister(KT0803L.REG02, this.#register02Value())
+		}
+
+		this.fire()
+	}
+
+	// Returns the configured low-frequency bass boost amount in dB.
+	get bassBoost() {
+		return this.#bassBoost
+	}
+
+	// Sets the low-frequency bass boost to the closest supported datasheet value.
+	set bassBoost(value: KT0803LBassBoost) {
+		const nextBassBoost = this.#normalizeBassBoost(value)
+		if (nextBassBoost === this.#bassBoost) return
+		this.#bassBoost = nextBassBoost
+		if (this.#started) this.#writeRegister(KT0803L.REG04, this.#register04Value())
+		this.fire()
+	}
+
+	// Returns the configured pre-emphasis time constant in microseconds.
+	get preEmphasis() {
+		return this.#preEmphasis
+	}
+
+	// Sets the audio pre-emphasis time constant.
+	set preEmphasis(value: TEA5767DeEmphasis) {
+		const nextPreEmphasis = value === 50 ? 50 : 75
+		if (nextPreEmphasis === this.#preEmphasis) return
+		this.#preEmphasis = nextPreEmphasis
+		if (this.#started) this.#writeRegister(KT0803L.REG02, this.#register02Value())
+		this.fire()
+	}
+
+	// Returns whether the higher pilot tone amplitude is selected.
+	get pilotToneHigh() {
+		return this.#pilotToneHigh
+	}
+
+	// Selects the higher or lower pilot tone amplitude.
+	set pilotToneHigh(value: boolean) {
+		if (value === this.#pilotToneHigh) return
+		this.#pilotToneHigh = value
+		if (this.#started) this.#writeRegister(KT0803L.REG02, this.#register02Value())
+		this.fire()
+	}
+
+	// Returns whether the automatic level control loop is enabled.
+	get automaticLevelControl() {
+		return this.#automaticLevelControl
+	}
+
+	// Enables or disables the automatic level control loop.
+	set automaticLevelControl(value: boolean) {
+		if (value === this.#automaticLevelControl) return
+		this.#automaticLevelControl = value
+		if (this.#started) this.#writeRegister(KT0803L.REG04, this.#register04Value())
+		this.fire()
+	}
+
+	// Returns whether automatic power-down on silence is enabled.
+	get automaticPowerDown() {
+		return this.#automaticPowerDown
+	}
+
+	// Enables or disables automatic power-down on silence.
+	set automaticPowerDown(value: boolean) {
+		if (value === this.#automaticPowerDown) return
+		this.#automaticPowerDown = value
+		if (this.#started) this.#writeRegister(KT0803L.REG0B, this.#register0BValue())
+		this.fire()
+	}
+
+	// Returns whether the PA bias path is enabled.
+	get powerAmplifierBias() {
+		return this.#powerAmplifierBias
+	}
+
+	// Enables or disables the PA bias helper bit.
+	set powerAmplifierBias(value: boolean) {
+		if (value === this.#powerAmplifierBias) return
+		this.#powerAmplifierBias = value
+		if (this.#started) this.#writeRegister(KT0803L.REG0E, this.#register0EValue())
+		this.fire()
+	}
+
+	// Returns the configured peak frequency deviation in kHz.
+	get deviation() {
+		return this.#deviation
+	}
+
+	// Selects either 75 kHz or 112.5 kHz peak frequency deviation.
+	set deviation(value: KT0803LFrequencyDeviation) {
+		const nextDeviation = value === 112.5 ? 112.5 : 75
+		if (nextDeviation === this.#deviation) return
+		this.#deviation = nextDeviation
+		if (this.#started) this.#writeRegister(KT0803L.REG17, this.#register17Value())
+		this.fire()
+	}
+
+	// Returns whether audio enhancement is enabled.
+	get audioEnhancement() {
+		return this.#audioEnhancement
+	}
+
+	// Enables or disables the internal audio enhancement block.
+	set audioEnhancement(value: boolean) {
+		if (value === this.#audioEnhancement) return
+		this.#audioEnhancement = value
+		if (this.#started) this.#writeRegister(KT0803L.REG17, this.#register17Value())
+		this.fire()
+	}
+
+	// Applies the full write-only configuration while holding the transmitter in standby.
+	#applyConfiguration() {
+		this.#writeRegister(KT0803L.REG0B, this.#register0BValue(true))
+		this.#writeRegister(KT0803L.REG10, this.#register10Value())
+		this.#writeRegister(KT0803L.REG04, this.#register04Value())
+		this.#writeRegister(KT0803L.REG0E, this.#register0EValue())
+		this.#writeRegister(KT0803L.REG17, this.#register17Value())
+		this.#writeRegister(KT0803L.REG13, this.#register13Value())
+		this.#writeFrequency()
+		this.#writeRegister(KT0803L.REG0B, this.#register0BValue())
+	}
+
+	// Writes the channel-dependent frequency and RF power registers.
+	#writeFrequency() {
+		this.#writeRegister(KT0803L.REG01, this.#register01Value())
+		this.#writeRegister(KT0803L.REG02, this.#register02Value())
+		this.#writeRegister(KT0803L.REG00, this.#register00Value())
+	}
+
+	// Writes one register/value pair to the KT0803L I2C address.
+	#writeRegister(register: number, value: number) {
+		this.client.twoWireWrite(this.address, [register, value & 0xff])
+	}
+
+	// Encodes CHSEL[8:1] into register 0x00.
+	#register00Value() {
+		return (this.#channel >>> 1) & 0xff
+	}
+
+	// Encodes RFGAIN[1:0], PGA[2:0], and CHSEL[11:9] into register 0x01.
+	#register01Value() {
+		const [pga, _pgaLsb] = this.#gainCode()
+		return ((this.#transmitPower & 0x03) << 6) | (pga << 3) | ((this.#channel >>> 9) & 0x07)
+	}
+
+	// Encodes CHSEL[0], RFGAIN[3], mute, pilot, and pre-emphasis into register 0x02.
+	#register02Value() {
+		return (this.#channel & 1 ? KT0803L.REG02_CHSEL_LSB : 0) | (this.#transmitPower & 0x08 ? KT0803L.REG02_RFGAIN3 : 0) | (this.#muted ? KT0803L.REG02_MUTE : 0) | (this.#pilotToneHigh ? KT0803L.REG02_PILOT_HIGH : 0) | (this.#preEmphasis === 50 ? KT0803L.REG02_PREEMPHASIS_50 : 0)
+	}
+
+	// Encodes ALC, mono/stereo, PGA_LSB, and bass boost into register 0x04.
+	#register04Value() {
+		const [_pga, pgaLsb] = this.#gainCode()
+		return (this.#automaticLevelControl ? KT0803L.REG04_ALC_ENABLE : 0) | (this.#stereo ? 0 : KT0803L.REG04_MONO) | (pgaLsb << KT0803L.REG04_PGA_LSB_SHIFT) | KT0803L.REG04_RESERVED | this.#bassBoostBits()
+	}
+
+	// Encodes standby and automatic power-down into register 0x0B.
+	#register0BValue(standby: boolean = false) {
+		return (standby ? KT0803L.REG0B_STANDBY : 0) | (this.#automaticPowerDown ? KT0803L.REG0B_AUTO_POWER_DOWN : 0)
+	}
+
+	// Encodes the PA bias helper bit into register 0x0E.
+	#register0EValue() {
+		return this.#powerAmplifierBias ? KT0803L.REG0E_PA_BIAS : 0
+	}
+
+	// Enables the KT0803L 1 dB PGA mode while preserving reserved default bits.
+	#register10Value() {
+		return KT0803L.REG10_RESERVED | KT0803L.REG10_PGA_1DB_MODE
+	}
+
+	// Encodes RFGAIN[2] into register 0x13.
+	#register13Value() {
+		return this.#transmitPower & 0x04 ? KT0803L.REG13_RFGAIN2 : 0
+	}
+
+	// Encodes deviation and audio enhancement into register 0x17.
+	#register17Value() {
+		return (this.#deviation === 112.5 ? KT0803L.REG17_DEVIATION_112_5_KHZ : 0) | (this.#audioEnhancement ? KT0803L.REG17_AUDIO_ENHANCEMENT : 0)
+	}
+
+	// Converts the public gain in dB into PGA[2:0] and PGA_LSB[1:0].
+	#gainCode() {
+		if (this.#gain === 0) return [0, 0] as const
+
+		if (this.#gain > 0) {
+			const positiveGain = this.#gain - 1
+			return [5 + Math.floor(positiveGain / 4), positiveGain & 0x03] as const
+		}
+
+		const negativeGain = -this.#gain
+		return [Math.floor(negativeGain / 4), negativeGain & 0x03] as const
+	}
+
+	// Converts the selected bass boost value into the register field bits.
+	#bassBoostBits() {
+		return this.#bassBoost === 5 ? 0x01 : this.#bassBoost === 11 ? 0x02 : this.#bassBoost === 17 ? 0x03 : 0x00
+	}
+
+	// Clamps the requested frequency to the chip band and rounds to 50 kHz steps.
+	#normalizeChannel(frequency: number) {
+		const requestedChannel = Number.isFinite(frequency) ? Math.round(frequency * KT0803L.CHANNELS_PER_MHZ) : KT0803L.DEFAULT_CHANNEL
+		return clamp(requestedChannel, KT0803L.MIN_CHANNEL, KT0803L.MAX_CHANNEL)
+	}
+
+	// Converts one internal channel index back into the public MHz frequency.
+	#frequencyFromChannel(channel: number) {
+		return channel / KT0803L.CHANNELS_PER_MHZ
+	}
+
+	// Clamps the PGA gain to the supported 1 dB range.
+	#normalizeGain(gain: number) {
+		const requestedGain = Number.isFinite(gain) ? Math.round(gain) : DEFAULT_KT0803L_OPTIONS.gain
+		return clamp(requestedGain, -15, 12)
+	}
+
+	// Clamps the datasheet RFGAIN code to the supported nibble range.
+	#normalizeTransmitPower(transmitPower: number) {
+		const requestedTransmitPower = Number.isFinite(transmitPower) ? Math.round(transmitPower) : DEFAULT_KT0803L_OPTIONS.transmitPower
+		return clamp(requestedTransmitPower, 0, 15)
+	}
+
+	// Snaps one requested bass boost value to the nearest supported hardware setting.
+	#normalizeBassBoost(bassBoost: number) {
+		const requestedBassBoost = Number.isFinite(bassBoost) ? bassBoost : DEFAULT_KT0803L_OPTIONS.bassBoost
+		if (requestedBassBoost < 2.5) return 0
+		if (requestedBassBoost < 8) return 5
+		if (requestedBassBoost < 14) return 11
+		return 17
+	}
+}
+
 // https://cdn.sparkfun.com/assets/4/5/f/a/d/TEA5767.pdf
 
-export class TEA5767 extends PeripheralBase<TEA5767> implements Radio {
+export class TEA5767 extends PeripheralBase<TEA5767> implements RadioTuner {
 	#frequency: number
 	#muted: boolean
 	#stereo: boolean
@@ -2078,7 +2553,7 @@ export class TEA5767 extends PeripheralBase<TEA5767> implements Radio {
 
 // https://cdn-shop.adafruit.com/product-files/5651/5651_tuner84_RDA5807M_datasheet_v1.pdf
 
-export class RDA5807 extends PeripheralBase<RDA5807> implements Radio {
+export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
 	#frequency: number
 	#volume: number
 	#muted: boolean

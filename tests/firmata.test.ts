@@ -4,7 +4,7 @@ import { G } from '../src/constants'
 import { CRC } from '../src/crc'
 import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { ESP8266 } from '../src/firmata.board'
-import { ACS712, AM2320, BH1750, BMP180, BMP280, DS18B20, HMC5883L, LM35, MAX44009, MCP4725, MPU6050, RDA5807, SHT21, TEA5767, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
+import { ACS712, AM2320, BH1750, BMP180, BMP280, DS18B20, HMC5883L, KT0803L, LM35, MAX44009, MCP4725, MPU6050, RDA5807, SHT21, TEA5767, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
 
 type MockFirmataMessage =
 	| readonly ['mode', number, PinMode]
@@ -816,6 +816,100 @@ test('MCP4725 configures i2c writes, power-down mode and EEPROM persistence', ()
 
 	dac.stop()
 	expect(client.handlers.size).toBe(0)
+})
+
+test('KT0803L tunes frequency steps and wraps within the supported band', () => {
+	const transmitter = new KT0803L(undefined as never)
+
+	expect(transmitter.frequency).toBe(86)
+
+	transmitter.frequencyUp()
+	expect(transmitter.frequency).toBe(86.05)
+
+	transmitter.frequency = 107.98
+	expect(transmitter.frequency).toBe(108)
+
+	transmitter.frequencyUp()
+	expect(transmitter.frequency).toBe(70)
+
+	transmitter.frequencyDown()
+	expect(transmitter.frequency).toBe(108)
+})
+
+test('KT0803L configures the transmitter and updates register-backed settings', () => {
+	const client = new MockFirmataClient()
+	const transmitter = new KT0803L(client as never, KT0803L.ADDRESS, {
+		frequency: 100.1,
+		muted: true,
+		stereo: false,
+		gain: 5,
+		transmitPower: 9,
+		bassBoost: 11,
+		preEmphasis: 50,
+		pilotToneHigh: true,
+		automaticLevelControl: true,
+		automaticPowerDown: true,
+		powerAmplifierBias: false,
+		deviation: 112.5,
+		audioEnhancement: true,
+	})
+
+	let updates = 0
+
+	transmitter.addListener(() => {
+		updates++
+	})
+
+	transmitter.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG0B, 0x84])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG10, 0xa9])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG04, 0xc6])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG0E, 0x00])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG17, 0x60])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG13, 0x00])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG01, 0x73])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG02, 0x4d])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG00, 0xe9])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG0B, 0x04])],
+	])
+
+	transmitter.frequency = 70
+	expect(transmitter.frequency).toBe(70)
+	expect(client.messages.slice(-3)).toEqual([
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG01, 0x72])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG02, 0x4d])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG00, 0xbc])],
+	])
+	expect(updates).toBe(1)
+
+	transmitter.transmitPower = 4
+	expect(transmitter.transmitPower).toBe(4)
+	expect(client.messages.slice(-3)).toEqual([
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG13, 0x80])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG01, 0x32])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG02, 0x0d])],
+	])
+	expect(updates).toBe(2)
+
+	transmitter.gain = -3
+	expect(transmitter.gain).toBe(-3)
+	expect(client.messages.slice(-2)).toEqual([
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG01, 0x02])],
+		['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG04, 0xf6])],
+	])
+	expect(updates).toBe(3)
+
+	transmitter.unmute()
+	expect(transmitter.muted).toBeFalse()
+	expect(client.messages.at(-1)).toEqual(['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG02, 0x05])])
+	expect(updates).toBe(4)
+
+	transmitter.stop()
+	expect(client.handlers.size).toBe(0)
+	expect(client.messages.at(-1)).toEqual(['write', KT0803L.ADDRESS, Buffer.from([KT0803L.REG0B, 0x84])])
 })
 
 test('TEA5767 tunes frequency steps and wraps within the configured band', () => {
