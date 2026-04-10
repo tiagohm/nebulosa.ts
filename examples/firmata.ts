@@ -2,8 +2,12 @@
 
 import { toMeter } from '../src/distance'
 import { type FirmataClientHandler, FirmataClientOverTcp } from '../src/firmata'
+import { BMP180, BMP180Mode, BMP280 } from '../src/firmata.barometer'
 import { ESP8266 } from '../src/firmata.board'
-import { type Accelerometer, type Altimeter, AM2320, type Ammeter, type Barometer, BMP180, BMP180Mode, BMP280, DS18B20, type Gyroscope, type Hygrometer, KT0803L, LM35, type Luxmeter, type Magnetometer, type RadioTransmitter, type RadioTuner, RDA5807, SHT21, TEA5767, type Thermometer } from '../src/firmata.peripheral'
+import { AM2320, SHT21 } from '../src/firmata.hygrometer'
+import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, Luxmeter, Magnetometer, RadioTransmitter, RadioTuner, Thermometer } from '../src/firmata.peripheral'
+import { KT0803L, RDA5807, TEA5767 } from '../src/firmata.radio'
+import { DS18B20, LM35 } from '../src/firmata.thermometer'
 
 const handler: FirmataClientHandler = {
 	ready: (client) => {

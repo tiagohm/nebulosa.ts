@@ -3,8 +3,16 @@ import { deg } from '../src/angle'
 import { G } from '../src/constants'
 import { CRC } from '../src/crc'
 import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
+import { MPU6050 } from '../src/firmata.accelerometer'
+import { ACS712 } from '../src/firmata.ammeter'
+import { BMP180, BMP280 } from '../src/firmata.barometer'
 import { ESP8266 } from '../src/firmata.board'
-import { ACS712, AM2320, BH1750, BMP180, BMP280, DS18B20, HMC5883L, KT0803L, LM35, MAX44009, MCP4725, MPU6050, RDA5807, SHT21, TEA5767, TEMT6000, TSL2561 } from '../src/firmata.peripheral'
+import { MCP4725 } from '../src/firmata.dac'
+import { AM2320, SHT21 } from '../src/firmata.hygrometer'
+import { BH1750, MAX44009, TEMT6000, TSL2561 } from '../src/firmata.luxmeter'
+import { HMC5883L } from '../src/firmata.magnetometer'
+import { KT0803L, RDA5807, TEA5767 } from '../src/firmata.radio'
+import { DS18B20, LM35 } from '../src/firmata.thermometer'
 
 type MockFirmataMessage =
 	| readonly ['mode', number, PinMode]
@@ -821,10 +829,10 @@ test('MCP4725 configures i2c writes, power-down mode and EEPROM persistence', ()
 test('KT0803L tunes frequency steps and wraps within the supported band', () => {
 	const transmitter = new KT0803L(undefined as never)
 
-	expect(transmitter.frequency).toBe(86)
+	expect(transmitter.frequency).toBe(89.7)
 
 	transmitter.frequencyUp()
-	expect(transmitter.frequency).toBe(86.05)
+	expect(transmitter.frequency).toBe(89.75)
 
 	transmitter.frequency = 107.98
 	expect(transmitter.frequency).toBe(108)
