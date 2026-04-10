@@ -80,6 +80,14 @@ export interface ApplyScreenTransferFunctionOptions {
 	bits: number
 }
 
+export interface ArcsinhStretchOptions {
+	stretchFactor: number
+	blackPoint: number
+	protectHighlights: boolean
+	useRgbWorkingSpace: boolean
+	rgbWorkingSpace: GrayscaleAlgorithm
+}
+
 export interface AdaptiveDisplayFunctionOptions extends HistogramOptions {
 	meanBackground: number // Controls the global illumination of the displayed image
 	clippingPoint: number // Controls the overall contrast of the displayed image
@@ -144,6 +152,14 @@ export const DEFAULT_HISTOGRAM_OPTIONS: Readonly<HistogramOptions> = {
 export const DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS: Readonly<ApplyScreenTransferFunctionOptions> = {
 	channel: 'GRAY',
 	bits: 16,
+}
+
+export const DEFAULT_ARCSINH_STRETCH_OPTIONS: Readonly<ArcsinhStretchOptions> = {
+	stretchFactor: 1,
+	blackPoint: 0,
+	protectHighlights: false,
+	useRgbWorkingSpace: false,
+	rgbWorkingSpace: BT709_GRAYSCALE,
 }
 
 export const DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS: Readonly<AdaptiveDisplayFunctionOptions> = {

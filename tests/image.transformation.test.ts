@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { Bitpix } from '../src/fits'
-import { clone, FFTWorkspace, fft } from '../src/image.transformation'
+import { arcsinhStretch, clone, FFTWorkspace, fft } from '../src/image.transformation'
 import type { Image } from '../src/image.types'
 import type { NumberArray } from '../src/math'
 
@@ -260,4 +260,47 @@ test('fft low-pass keeps a visible inner halo gradient at hard cutoff and high w
 	expect(x1).toBeGreaterThan(x8 * 2.3)
 	expect(x2).toBeGreaterThan(x16 * 3)
 	expect(x16).toBeGreaterThan(0)
+})
+
+test('arcsinhStretch applies black point normalization on monochrome data', () => {
+	const image = makeImage(3, 1, 1, [0.25, 0.5, 1])
+
+	arcsinhStretch(image, { stretchFactor: 1, blackPoint: 0.25 })
+
+	expect(image.raw[0]).toBeCloseTo(0, 8)
+	expect(image.raw[1]).toBeCloseTo(1 / 3, 7)
+	expect(image.raw[2]).toBeCloseTo(1, 8)
+})
+
+test('arcsinhStretch preserves RGB ratios above the black point', () => {
+	const image = makeImage(1, 1, 3, [0.2, 0.1, 0.05])
+
+	arcsinhStretch(image, { stretchFactor: 12 })
+
+	expect(image.raw[0] / image.raw[1]).toBeCloseTo(2, 6)
+	expect(image.raw[1] / image.raw[2]).toBeCloseTo(2, 6)
+})
+
+test('arcsinhStretch protectHighlights rescales instead of clipping saturated channels', () => {
+	const input = makeImage(1, 1, 3, [0.98, 0.25, 0.25])
+	const unclipped = clone(input)
+	const protectedImage = clone(input)
+
+	arcsinhStretch(unclipped, { stretchFactor: 20, protectHighlights: false })
+	arcsinhStretch(protectedImage, { stretchFactor: 20, protectHighlights: true })
+
+	expect(unclipped.raw[0]).toBe(1)
+	expect(protectedImage.raw[1]).toBeLessThan(unclipped.raw[1])
+	expect(protectedImage.raw[0] / protectedImage.raw[1]).toBeCloseTo(input.raw[0] / input.raw[1], 6)
+})
+
+test('arcsinhStretch uses RGB working-space weights when requested', () => {
+	const equalWeights = makeImage(1, 1, 3, [0.55, 0.1, 0.1])
+	const workingSpace = makeImage(1, 1, 3, [0.55, 0.1, 0.1])
+
+	arcsinhStretch(equalWeights, { stretchFactor: 8, useRgbWorkingSpace: false })
+	arcsinhStretch(workingSpace, { stretchFactor: 8, useRgbWorkingSpace: true, rgbWorkingSpace: { red: 0.8, green: 0.1, blue: 0.1 } })
+
+	expect(workingSpace.raw[0]).toBeLessThan(equalWeights.raw[0])
+	expect(workingSpace.raw[1]).toBeLessThan(equalWeights.raw[1])
 })

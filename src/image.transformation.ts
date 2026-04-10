@@ -3,7 +3,7 @@ import { exposureTimeKeyword } from './fits.util'
 import { truncatePixel } from './image'
 import { estimateBackgroundUsingMode } from './image.computation'
 // biome-ignore format: too long!
-import { type ApplyScreenTransferFunctionOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type FFTFilterType, type GaussianBlurConvolutionOptions, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
+import { type ApplyScreenTransferFunctionOptions, type ArcsinhStretchOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_ARCSINH_STRETCH_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type FFTFilterType, type GaussianBlurConvolutionOptions, GRAYSCALES, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
 import { clamp, type NumberArray } from './math'
 import { meanOf } from './util'
 
@@ -39,6 +39,117 @@ export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, hig
 			lut[p] = value
 			raw[i] = value
 		}
+	}
+
+	return image
+}
+
+// Solves beta/asinh(beta)=stretchFactor for the PixInsight-compatible softening factor.
+function arcsinhStretchBeta(stretchFactor: number) {
+	if (!(stretchFactor > 1)) return 0
+
+	let low = 0
+	let high = 1
+
+	while (high / Math.asinh(high) < stretchFactor) {
+		high *= 2
+	}
+
+	for (let i = 0; i < 56; i++) {
+		const mid = 0.5 * (low + high)
+		if (mid / Math.asinh(mid) < stretchFactor) low = mid
+		else high = mid
+	}
+
+	return 0.5 * (low + high)
+}
+
+// Clips the black point and renormalizes the remaining range back to [0,1].
+function normalizeArcsinhStretchPixel(value: number, blackPoint: number, inverseSpan: number) {
+	if (value <= blackPoint) return 0
+	return inverseSpan === 0 ? 1 : Math.min(1, (value - blackPoint) * inverseSpan)
+}
+
+// Apply a PixInsight-style arcsinh stretch while preserving RGB ratios above the black point.
+// https://pixinsight.com/doc/tools/ArcsinhStretch/ArcsinhStretch.html
+export function arcsinhStretch(image: Image, options: Partial<ArcsinhStretchOptions> = DEFAULT_ARCSINH_STRETCH_OPTIONS) {
+	const stretchFactor = options.stretchFactor ?? DEFAULT_ARCSINH_STRETCH_OPTIONS.stretchFactor
+	const blackPoint = options.blackPoint ?? DEFAULT_ARCSINH_STRETCH_OPTIONS.blackPoint
+	const protectHighlights = options.protectHighlights ?? DEFAULT_ARCSINH_STRETCH_OPTIONS.protectHighlights
+	const useRgbWorkingSpace = options.useRgbWorkingSpace ?? DEFAULT_ARCSINH_STRETCH_OPTIONS.useRgbWorkingSpace
+	const rgbWorkingSpace = options.rgbWorkingSpace ?? DEFAULT_ARCSINH_STRETCH_OPTIONS.rgbWorkingSpace
+
+	const resolvedStretchFactor = Number.isFinite(stretchFactor) ? Math.max(1, stretchFactor) : DEFAULT_ARCSINH_STRETCH_OPTIONS.stretchFactor
+	const resolvedBlackPoint = Number.isFinite(blackPoint) ? clamp(blackPoint, 0, 1) : DEFAULT_ARCSINH_STRETCH_OPTIONS.blackPoint
+
+	if (resolvedStretchFactor === 1 && resolvedBlackPoint === 0) return image
+
+	const inverseSpan = resolvedBlackPoint === 1 ? 0 : 1 / (1 - resolvedBlackPoint)
+
+	const beta = arcsinhStretchBeta(resolvedStretchFactor)
+	const betaScale = beta === 0 ? 0 : 1 / Math.asinh(beta)
+	const { raw, metadata } = image
+
+	if (metadata.channels === 1) {
+		const n = raw.length
+
+		for (let i = 0; i < n; i++) {
+			const value = normalizeArcsinhStretchPixel(raw[i], resolvedBlackPoint, inverseSpan)
+			raw[i] = beta === 0 ? value : Math.asinh(beta * value) * betaScale
+		}
+
+		return image
+	}
+
+	let redWeight = 1 / 3
+	let greenWeight = 1 / 3
+	let blueWeight = 1 / 3
+
+	if (useRgbWorkingSpace) {
+		const grayscale = typeof rgbWorkingSpace === 'object' ? rgbWorkingSpace : GRAYSCALES[rgbWorkingSpace]
+		const sum = grayscale.red + grayscale.green + grayscale.blue
+
+		if (Number.isFinite(sum) && sum > 0) {
+			redWeight = grayscale.red / sum
+			greenWeight = grayscale.green / sum
+			blueWeight = grayscale.blue / sum
+		}
+	}
+
+	let maxValue = 1
+	const n = raw.length
+
+	for (let i = 0; i < n; i += 3) {
+		const r = normalizeArcsinhStretchPixel(raw[i], resolvedBlackPoint, inverseSpan)
+		const g = normalizeArcsinhStretchPixel(raw[i + 1], resolvedBlackPoint, inverseSpan)
+		const b = normalizeArcsinhStretchPixel(raw[i + 2], resolvedBlackPoint, inverseSpan)
+		const luminance = r * redWeight + g * greenWeight + b * blueWeight
+
+		if (luminance === 0 || beta === 0) {
+			raw[i] = r
+			raw[i + 1] = g
+			raw[i + 2] = b
+		} else {
+			const multiplier = (Math.asinh(beta * luminance) * betaScale) / luminance
+			raw[i] = r * multiplier
+			raw[i + 1] = g * multiplier
+			raw[i + 2] = b * multiplier
+		}
+
+		if (protectHighlights) {
+			if (raw[i] > maxValue) maxValue = raw[i]
+			if (raw[i + 1] > maxValue) maxValue = raw[i + 1]
+			if (raw[i + 2] > maxValue) maxValue = raw[i + 2]
+		} else {
+			raw[i] = Math.min(1, raw[i])
+			raw[i + 1] = Math.min(1, raw[i + 1])
+			raw[i + 2] = Math.min(1, raw[i + 2])
+		}
+	}
+
+	if (protectHighlights && maxValue > 1) {
+		const scale = 1 / maxValue
+		for (let i = 0; i < n; i++) raw[i] *= scale
 	}
 
 	return image
