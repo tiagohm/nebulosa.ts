@@ -1,6 +1,6 @@
 import type { Angle } from './angle'
 import type { Distance } from './distance'
-import type { FirmataClient, FirmataClientHandler, Pin } from './firmata'
+import type { FirmataClient, FirmataClientHandler, Pin, PinMode } from './firmata'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 
@@ -96,6 +96,12 @@ export interface RealTimeClock extends Pick<Peripheral, 'name' | 'client'> {
 	readonly millisecond: number
 	readonly update: (year?: number, month?: number, day?: number, dayOfWeek?: number, hour?: number, minute?: number, second?: number, millisecond?: number) => void
 	readonly sync: (date?: Date) => void
+}
+
+export interface IOExpander extends Pick<Peripheral, 'name' | 'client'> {
+	readonly pinMode: (pin: number, mode: PinMode) => void
+	readonly pinRead: (pin: number) => number | boolean
+	readonly pinWrite: (pin: number, value: number | boolean) => void
 }
 
 interface PendingTwoWireRead {
