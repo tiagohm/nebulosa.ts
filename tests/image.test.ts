@@ -328,12 +328,12 @@ describe('fft', () => {
 test('mmt', () => {
 	const options: MultiscaleMedianTransformOptions = {
 		layers: 2,
-		detailLayers: [{ threshold: 4 }, { threshold: 2 }],
+		detailLayers: [{ threshold: 2 }, { threshold: 1 }],
 		residualGain: 1,
 	}
 
-	return readImageTransformAndSave((i) => autoStf(multiscaleMedianTransform(i, options)), 'mmt', 'd67fcd85d7dfdb502e4f7c7c1a8c6622')
-}, 10000)
+	return readImageTransformAndSave((i) => autoStf(multiscaleMedianTransform(i, options)), 'mmt', 'b9bdeda38c1423468f6602451144546e')
+}, 5000)
 
 test('estimate background', async () => {
 	const light = await readImageFromPath('data/LIGHT.fit')

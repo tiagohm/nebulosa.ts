@@ -745,30 +745,82 @@ export function gaussianBlur(image: Image, options: Partial<GaussianBlurConvolut
 	return convolution(image, gaussianBlurKernel(options.sigma, options.size), options)
 }
 
-// Fills the output with per-channel global medians once the median radius covers the whole frame.
-function multiscaleMedian(raw: ImageRawType, output: ImageRawType, channels: number) {
-	const pixelCount = raw.length / channels
-	const samples = new Float64Array(pixelCount)
-	const medians = new Float64Array(channels)
+const MMT_MEDIAN_HISTOGRAM_BITS = 14
+const MMT_MEDIAN_HISTOGRAM_SIZE = 1 << MMT_MEDIAN_HISTOGRAM_BITS
+const MMT_MEDIAN_HISTOGRAM_LAST = MMT_MEDIAN_HISTOGRAM_SIZE - 1
+const MMT_MEDIAN_HISTOGRAM_GROUP_BITS = 6
+const MMT_MEDIAN_HISTOGRAM_GROUP_SIZE = 1 << MMT_MEDIAN_HISTOGRAM_GROUP_BITS
+const MMT_MEDIAN_HISTOGRAM_GROUP_COUNT = MMT_MEDIAN_HISTOGRAM_SIZE >> MMT_MEDIAN_HISTOGRAM_GROUP_BITS
 
-	for (let channel = 0; channel < channels; channel++) {
-		for (let i = channel, k = 0; i < raw.length; i += channels, k++) {
-			samples[k] = raw[i]
-		}
+// Tracks the quantization range for one image channel.
+function multiscaleMedianHistogramRange(raw: ImageRawType, channels: number, channel: number) {
+	let min = Number.POSITIVE_INFINITY
+	let max = Number.NEGATIVE_INFINITY
 
-		medians[channel] = medianOf(samples.sort())
+	for (let i = channel; i < raw.length; i += channels) {
+		const value = raw[i]
+
+		if (value < min) min = value
+		if (value > max) max = value
 	}
 
-	for (let i = 0; i < raw.length; i += channels) {
-		for (let channel = 0; channel < channels; channel++) {
-			output[i + channel] = medians[channel]
-		}
-	}
-
-	return output
+	return [min, max] as const
 }
 
-// Applies a naive square median filter with truncated borders.
+// Quantizes one value into the MMT histogram domain.
+function multiscaleMedianHistogramBin(value: number, min: number, inverse: number) {
+	const bin = Math.round((value - min) * inverse)
+	if (bin <= 0) return 0
+	if (bin >= MMT_MEDIAN_HISTOGRAM_LAST) return MMT_MEDIAN_HISTOGRAM_LAST
+	return bin
+}
+
+// Updates both fine and coarse histograms for one quantized sample.
+function multiscaleMedianHistogramUpdate(fine: Int32Array, coarse: Int32Array, bin: number, delta: number) {
+	fine[bin] += delta
+	coarse[bin >>> MMT_MEDIAN_HISTOGRAM_GROUP_BITS] += delta
+}
+
+// Adds or removes a full window column from the histogram.
+function multiscaleMedianHistogramColumn(raw: ImageRawType, stride: number, channels: number, channel: number, x: number, y0: number, y1: number, min: number, inverse: number, fine: Int32Array, coarse: Int32Array, delta: number) {
+	for (let y = y0, i = y0 * stride + x * channels + channel; y <= y1; y++, i += stride) {
+		const bin = multiscaleMedianHistogramBin(raw[i], min, inverse)
+		multiscaleMedianHistogramUpdate(fine, coarse, bin, delta)
+	}
+}
+
+// Finds the first bin whose cumulative population exceeds the requested rank.
+function multiscaleMedianHistogramSelect(fine: Int32Array, coarse: Int32Array, rank: number) {
+	let cumulative = 0
+	let group = 0
+
+	for (; group < coarse.length; group++) {
+		const next = cumulative + coarse[group]
+		if (next > rank) break
+		cumulative = next
+	}
+
+	const start = group << MMT_MEDIAN_HISTOGRAM_GROUP_BITS
+	const end = Math.min(start + MMT_MEDIAN_HISTOGRAM_GROUP_SIZE, fine.length)
+
+	for (let bin = start; bin < end; bin++) {
+		cumulative += fine[bin]
+		if (cumulative > rank) return bin
+	}
+
+	return MMT_MEDIAN_HISTOGRAM_LAST
+}
+
+// Returns the quantized median value for the current histogram population.
+function multiscaleMedianHistogramMedian(fine: Int32Array, coarse: Int32Array, count: number, min: number, scale: number) {
+	if (count <= 1 || scale === 0) return min
+
+	const lower = multiscaleMedianHistogramSelect(fine, coarse, (count - 1) >>> 1)
+	const upper = multiscaleMedianHistogramSelect(fine, coarse, count >>> 1)
+	return min + (lower + upper) * 0.5 * scale
+}
+
+// Applies a quantized Huang-style sliding median with truncated borders.
 function multiscaleMedianFilter(raw: ImageRawType, output: ImageRawType, metadata: ImageMetadata, radius: number) {
 	if (radius <= 0) {
 		output.set(raw)
@@ -776,36 +828,57 @@ function multiscaleMedianFilter(raw: ImageRawType, output: ImageRawType, metadat
 	}
 
 	const { width, height, channels, stride } = metadata
+	const fine = new Int32Array(MMT_MEDIAN_HISTOGRAM_SIZE)
+	const coarse = new Int32Array(MMT_MEDIAN_HISTOGRAM_GROUP_COUNT)
 
-	if (radius >= width && radius >= height) {
-		return multiscaleMedian(raw, output, channels)
-	}
+	for (let channel = 0; channel < channels; channel++) {
+		const range = multiscaleMedianHistogramRange(raw, channels, channel)
 
-	const windowSize = Math.min(width, 2 * radius + 1) * Math.min(height, 2 * radius + 1)
-	const samples = new Float64Array(windowSize)
+		const [min, max] = range
+		const scale = (max - min) / MMT_MEDIAN_HISTOGRAM_LAST
 
-	for (let y = 0, pi = 0; y < height; y++) {
-		const y0 = Math.max(0, y - radius)
-		const y1 = Math.min(height - 1, y + radius)
+		if (scale === 0) {
+			for (let y = 0, i = channel; y < height; y++) {
+				for (let x = 0; x < width; x++, i += channels) {
+					output[i] = min
+				}
+			}
 
-		for (let x = 0; x < width; x++) {
-			const x0 = Math.max(0, x - radius)
-			const x1 = Math.min(width - 1, x + radius)
-			const countPerRow = x1 - x0 + 1
+			continue
+		}
 
-			for (let channel = 0; channel < channels; channel++, pi++) {
-				let count = 0
+		const inverse = 1 / scale
 
-				for (let yy = y0; yy <= y1; yy++) {
-					let i = yy * stride + x0 * channels + channel
-					const end = i + countPerRow * channels
+		for (let y = 0; y < height; y++) {
+			const y0 = Math.max(0, y - radius)
+			const y1 = Math.min(height - 1, y + radius)
+			const rowCount = y1 - y0 + 1
 
-					for (; i < end; i += channels) {
-						samples[count++] = raw[i]
-					}
+			fine.fill(0)
+			coarse.fill(0)
+
+			for (let x = 0, end = Math.min(width - 1, radius); x <= end; x++) {
+				multiscaleMedianHistogramColumn(raw, stride, channels, channel, x, y0, y1, min, inverse, fine, coarse, 1)
+			}
+
+			for (let x = 0, i = y * stride + channel; x < width; x++, i += channels) {
+				const left = Math.max(0, x - radius)
+				const right = Math.min(width - 1, x + radius)
+				const count = rowCount * (right - left + 1)
+
+				output[i] = multiscaleMedianHistogramMedian(fine, coarse, count, min, scale)
+
+				const removeX = x - radius
+
+				if (removeX >= 0) {
+					multiscaleMedianHistogramColumn(raw, stride, channels, channel, removeX, y0, y1, min, inverse, fine, coarse, -1)
 				}
 
-				output[pi] = medianOf(samples.subarray(0, count).sort())
+				const addX = x + radius + 1
+
+				if (addX < width) {
+					multiscaleMedianHistogramColumn(raw, stride, channels, channel, addX, y0, y1, min, inverse, fine, coarse, 1)
+				}
 			}
 		}
 	}

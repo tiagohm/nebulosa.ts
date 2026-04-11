@@ -5,6 +5,7 @@ import { cfaPatternKeyword } from '../src/fits.util'
 import { arcsinhStretch, bayer, blur, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, linear, mean, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import type { Image } from '../src/image.types'
 import type { NumberArray } from '../src/math'
+import { medianOf } from '../src/util'
 
 // Creates a normalized Float32 image with the provided interleaved pixel data.
 function makeImage(width: number, height: number, channels: number, values: Readonly<NumberArray>, header?: FitsHeader): Image {
@@ -78,6 +79,36 @@ function halfMaximumRadius(image: Image, centerX: number, centerY: number, stepX
 	return maxRadius
 }
 
+// Computes the exact monochrome square-window median with truncated borders.
+function exactMedianFilter(width: number, height: number, values: Readonly<NumberArray>, radius: number) {
+	const output = new Float32Array(width * height)
+	const samples = new Float64Array((2 * radius + 1) ** 2)
+
+	for (let y = 0, i = 0; y < height; y++) {
+		const y0 = Math.max(0, y - radius)
+		const y1 = Math.min(height - 1, y + radius)
+
+		for (let x = 0; x < width; x++, i++) {
+			const x0 = Math.max(0, x - radius)
+			const x1 = Math.min(width - 1, x + radius)
+			let count = 0
+
+			for (let yy = y0; yy <= y1; yy++) {
+				let k = yy * width + x0
+				const end = yy * width + x1 + 1
+
+				for (; k < end; k++) {
+					samples[count++] = values[k]
+				}
+			}
+
+			output[i] = medianOf(samples.subarray(0, count).sort())
+		}
+	}
+
+	return output
+}
+
 test('multiscaleMedianTransform reconstructs the original image with default settings', () => {
 	const image = makeImage(2, 2, 3, [0.1, 0.2, 0.3, 0.9, 0.8, 0.7, 0.4, 0.5, 0.6, 0.2, 0.3, 0.4])
 	const before = new Float32Array(image.raw)
@@ -126,6 +157,16 @@ test('multiscaleMedianTransform collapses tiny images toward the global median a
 	const image = makeImage(2, 2, 1, [0, 1, 2, 3])
 	multiscaleMedianTransform(image, { layers: 3, detailLayers: [{ bias: -1 }, { bias: -1 }, { bias: -1 }] })
 	expectImageValues(image, [1.5, 1.5, 1.5, 1.5], 8)
+})
+
+test('multiscaleMedianTransform median layer stays close to the exact sorted-window median', () => {
+	const values = [0.1, 0.9, 0.3, 0.8, 0.2, 0.4, 0.7, 0.6, 0.5, 0.3, 0.9, 0.2, 0.1, 0.8, 0.4, 0.5, 0.3, 0.7, 0.2, 0.6]
+	const image = makeImage(5, 4, 1, values)
+	const expected = exactMedianFilter(5, 4, values, 1)
+
+	multiscaleMedianTransform(image, { layers: 1, detailLayers: [{ bias: -1 }] })
+
+	expectImageValues(image, expected, 3)
 })
 
 test('fft keeps the input unchanged when weight is zero', () => {
