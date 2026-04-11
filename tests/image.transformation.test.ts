@@ -260,6 +260,18 @@ test('curvesTransformation rejects mismatched control point arrays', () => {
 	expect(() => curvesTransformation(image, { curves: [{ channel: 'GRAY', x: [0, 1], y: [0] }] })).toThrow('curves transformation x and y arrays must have the same length')
 })
 
+test('curvesTransformation rejects NaN control points before clamping', () => {
+	const image = makeImage(1, 1, 1, [0.5])
+
+	expect(() => curvesTransformation(image, { curves: [{ channel: 'GRAY', x: [Number.NaN, 1], y: [0, 1] }] })).toThrow('curves transformation control points must be finite')
+})
+
+test('curvesTransformation rejects infinite control points before clamping', () => {
+	const image = makeImage(1, 1, 1, [0.5])
+
+	expect(() => curvesTransformation(image, { curves: [{ channel: 'GRAY', x: [0, 1], y: [Number.POSITIVE_INFINITY, 1] }] })).toThrow('curves transformation control points must be finite')
+})
+
 test('backgroundNeutralization uses a lower-exclusive and upper-inclusive significance interval', () => {
 	const image = makeImage(2, 1, 3, [0.1, 0.2, 0.3, 0.5, 0.6, 0.7])
 	backgroundNeutralization(image, { lowerLimit: 0.1, upperLimit: 0.7, mode: 'targetBackground', targetBackground: 0.4 })

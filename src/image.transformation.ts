@@ -395,6 +395,10 @@ function resolveCurvesTransformationCurve(curve: CurvesTransformationCurve | und
 	if (n !== cy.length) throw new Error('curves transformation x and y arrays must have the same length')
 	if (n === 0) return { channel: curve.channel, x: IDENTITY_CURVES_TRANSFORMATION, y: IDENTITY_CURVES_TRANSFORMATION, identity: true }
 
+	for (let i = 0; i < n; i++) {
+		if (!Number.isFinite(cx[i]) || !Number.isFinite(cy[i])) throw new Error('curves transformation control points must be finite')
+	}
+
 	const firstX = clamp(cx[0], 0, 1)
 	const lastX = clamp(cx[n - 1], 0, 1)
 	const prepend = firstX > 0 ? 1 : 0
@@ -460,7 +464,7 @@ function applyCurvesTransformation(image: Image, lut: Float32Array, channel: Ima
 			const p = clamp(red * r + green * g + blue * b, 0, 1)
 			const v = lut[truncatePixel(p, max)]
 
-            if (p > 0) {
+			if (p > 0) {
 				const scale = v / p
 				raw[i] = clamp(r * scale, 0, 1)
 				raw[i + 1] = clamp(g * scale, 0, 1)
