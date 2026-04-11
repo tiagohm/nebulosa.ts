@@ -1,4 +1,4 @@
-import { type Angle, normalizeAngle } from './angle'
+import { type Angle, normalizeAngle, toDeg } from './angle'
 import { ASEC2RAD, AU_KM, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { Distance } from './distance'
 import { floorDiv, modf, type NumberArray } from './math'
@@ -1271,8 +1271,8 @@ export namespace Planetary {
 	] as const
 
 	const NAA = [
-		[207.83 * DEG2RAD , 8.51 * DEG2RAD],
-		[276.74 * DEG2RAD , 209.98 * DEG2RAD],
+		[207.83 * DEG2RAD, 8.51 * DEG2RAD],
+		[276.74 * DEG2RAD, 209.98 * DEG2RAD],
 	] as const
 
 	// Table 33.B, p. 256
@@ -1444,6 +1444,163 @@ export namespace Node {
 		const jde = timeP + 27.403895 * s * (s * s + 3) * q * sqrt(q)
 		const r = q * (1 + s * s)
 		return [jde, r]
+	}
+}
+
+// Chapter 41, Illuminated Fraction of the Disk and Magnitude of a Planet.
+export namespace Illuminated {
+	// Computes the phase angle of a planet.
+	// r is planet's distance to Sun, delta its distance to Earth, and R the distance from Sun to Earth.  All distances in AU.
+	export function phaseAngle(r: Distance, delta: Distance, R: Distance) {
+		return Math.acos((r * r + delta * delta - R * R) / (2 * r * delta))
+	}
+
+	// Computes the illuminated fraction of the disk of a planet.
+	// r is planet's distance to Sun, delta its distance to Earth, and R the distance from Sun to Earth.  All distances in AU.
+	export function fraction(r: Distance, delta: Distance, R: Distance) {
+		// (41.2) p. 283
+		const s = r + delta
+		return (s * s - R * R) / (4 * r * delta)
+	}
+
+	// Computes the phase angle of a planet.
+	// L, B, R are heliocentric ecliptical coordinates of the planet.
+	// L0, R0 are longitude and radius for Earth, delta is distance from Earth to the planet.
+	export function phaseAngle2(L: Angle, B: Angle, R: Distance, L0: Angle, R0: Distance, delta: Distance) {
+		// (41.3) p. 283
+		return Math.acos((R - R0 * Math.cos(B) * Math.cos(L - L0)) / delta)
+	}
+
+	// Computes the phase angle of a planet.
+	// L, B are heliocentric ecliptical longitude and latitude of the
+	// planet. x, y, z are cartesian coordinates of the planet, delta is distance
+	// from Earth to the planet.  All distances in AU, angles in radians.
+	export function phaseAngle3(L: Angle, B: Angle, R: Distance, L0: Angle, R0: Distance, delta: Distance) {
+		// (41.4) p. 283
+		const [sL, cL] = Base.sincos(L)
+		const [sB, cB] = Base.sincos(B)
+		return Math.acos((R * cB * cL + L0 * cB * sL + R0 * sB) / delta)
+	}
+
+	// Computes an approximation of the illumanted fraction of Venus.
+	export function fractionVenus(jde: number) {
+		const T = Base.j2000Century(jde)
+		const V = 261.51 * DEG2RAD + 22518.443 * DEG2RAD * T
+		const M = 177.53 * DEG2RAD + 35999.05 * DEG2RAD * T
+		const N = 50.42 * DEG2RAD + 58517.811 * DEG2RAD * T
+		const W = V + (1.91 * DEG2RAD * Math.sin(M) + 0.78 * DEG2RAD * Math.sin(N))
+		const delta = Math.sqrt(1.52321 + 1.44666 * Math.cos(W))
+		const s = 0.72333 + delta
+		return (s * s - 1) / 2.89332 / delta
+	}
+
+	// Computes the visual magnitude of Mercury. Formula by G. Müller.
+	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
+	export function mercury(r: Distance, delta: Distance, i: Angle) {
+		const s = toDeg(i) - 50
+		return 1.16 + 5 * Math.log10(r * delta) + (0.02838 + 0.0001023 * s) * s
+	}
+
+	// Computes the visual magnitude of Venus. Formula by G. Müller.
+	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
+	export function venus(r: Distance, delta: Distance, i: Angle) {
+		const id = toDeg(i)
+		return -4 + 5 * Math.log10(r * delta) + (0.01322 + 0.0000004247 * id * id) * id
+	}
+
+	// Computes the visual magnitude of Mars. Formula by G. Müller.
+	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
+	export function mars(r: Distance, delta: Distance, i: Angle) {
+		return -1.3 + 5 * Math.log10(r * delta) + 0.01486 * toDeg(i)
+	}
+
+	// Computes the visual magnitude of Jupiter. Formula by G. Müller. Effect of phase not considered.
+	// r is the planet's distance from the Sun, delta the distance from Earth.
+	export function jupiter(r: Distance, delta: Distance) {
+		return -8.93 + 5 * Math.log10(r * delta)
+	}
+
+	// Computes the visual magnitude of Saturn. Formula by G. Müller.
+	// Sun's altitude above the plane of the ring is not considered.
+	// r is the planet's distance from the Sun, delta the distance from Earth.
+	// B is the Saturnicentric latitude of the Earth referred to the plane of Saturn's ring.
+	// deltaU is the difference between the Saturnicentric longitudes of the Sun and the Earth, measured in the plane of the ring.
+	// You can use SaturnSisk.Disk to obtain B and deltaU.
+	export function saturn(r: Distance, delta: Distance, B: Angle, deltaU: Angle) {
+		const s = Math.sin(Math.abs(B))
+		return -8.68 + 5 * Math.log10(r * delta) + 0.044 * Math.abs(toDeg(deltaU)) - 2.6 * s + 1.25 * s * s
+	}
+
+	// Computes the visual magnitude of Uranus. Formula by G. Müller.
+	// r is the planet's distance from the Sun, delta the distance from Earth.
+	export function uranus(r: Distance, delta: Distance) {
+		return -6.85 + 5 * Math.log10(r * delta)
+	}
+
+	// Computes the visual magnitude of Neptune. Formulae by G. Müller.
+	// r is the planet's distance from the Sun, delta the distance from Earth.
+	export function neptune(r: Distance, delta: Distance) {
+		return -7.05 + 5 * Math.log10(r * delta)
+	}
+
+	// Computes the visual magnitude of Mercury.
+	// The formula is that adopted in "Astronomical Almanac" in 1984.0
+	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
+	export function mercury84(r: Distance, delta: Distance, i: Angle) {
+		return Base.horner(toDeg(i), [-0.42 + 5 * Math.log10(r * delta), 0.038, -0.000273, 0.000002])
+	}
+
+	// Computes the visual magnitude of Venus.
+	// The formula is that adopted in "Astronomical Almanac" in 1984.0
+	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
+	export function venus84(r: Distance, delta: Distance, i: Angle) {
+		return Base.horner(toDeg(i), [-4.4 + 5 * Math.log10(r * delta), 0.0009, 0.000239, -0.00000065])
+	}
+
+	// Computes the visual magnitude of Mars.
+	// The formula is that adopted in "Astronomical Almanac" in 1984.0
+	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
+	export function mars84(r: Distance, delta: Distance, i: Angle) {
+		return -1.52 + 5 * Math.log10(r * delta) + 0.016 * toDeg(i)
+	}
+
+	// Computes the visual magnitude of Jupiter.
+	// The formula is that adopted in "Astronomical Almanac" in 1984.0
+	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
+	export function jupiter84(r: Distance, delta: Distance, i: Angle) {
+		return -9.4 + 5 * Math.log10(r * delta) + 0.005 * toDeg(i)
+	}
+
+	// Computes the visual magnitude of Saturn.
+	// The formula is that adopted in "Astronomical Almanac" in 1984.0
+	// r is the planet's distance from the Sun, delta the distance from Earth.
+	// B is the Saturnicentric latitude of the Earth referred to the plane of Saturn's ring.
+	// deltaU is the difference between the Saturnicentric longitudes
+	// of the Sun and the Earth, measured in the plane of the ring.
+	export function saturn84(r: Distance, delta: Distance, B: Angle, deltaU: Angle) {
+		const s = Math.sin(Math.abs(B))
+		return -8.88 + 5 * Math.log10(r * delta) + 0.044 * Math.abs(toDeg(deltaU)) - 2.6 * s + 1.25 * s * s
+	}
+
+	// Computes the visual magnitude of Uranus.
+	// The formula is that adopted in "Astronomical Almanac" in 1984.0
+	// r is the planet's distance from the Sun, delta the distance from Earth.
+	export function uranus84(r: Distance, delta: Distance) {
+		return -7.19 + 5 * Math.log10(r * delta)
+	}
+
+	// Computes the visual magnitude of Neptune.
+	// The formula is that adopted in "Astronomical Almanac" in 1984.0
+	// r is the planet's distance from the Sun, delta the distance from Earth.
+	export function neptune84(r: Distance, delta: Distance) {
+		return -6.87 + 5 * Math.log10(r * delta)
+	}
+
+	// Computes the visual magnitude of Pluto.
+	// The formula is that adopted in "Astronomical Almanac" in 1984.0
+	// r is the planet's distance from the Sun, delta the distance from Earth.
+	export function pluto84(r: Distance, delta: Distance) {
+		return -1 + 5 * Math.log10(r * delta)
 	}
 }
 

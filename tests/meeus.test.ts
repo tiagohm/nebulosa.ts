@@ -3,7 +3,7 @@ import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toD
 import { DAYSEC, PI, RAD2DEG } from '../src/constants'
 import { toKilometer } from '../src/distance'
 import { modf } from '../src/math'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
 	expect(actual).toBeCloseTo(expected, numDigits)
@@ -996,6 +996,62 @@ describe('Node', () => {
 	// 	strictEqual(d[1], 11)
 	// 	strictEqual(d[2], 27.409, 3)
 	// })
+})
+
+describe('Illuminated', () => {
+	test('phaseAngle', () => {
+		// Example 41.a, p. 284
+		const i = Illuminated.phaseAngle(0.724604, 0.910947, 0.983824)
+		strictEqual(Math.cos(i), 0.29312, 5)
+	})
+
+	test('fraction', () => {
+		// Example 41.a, p. 284
+		const k = Illuminated.fraction(0.724604, 0.910947, 0.983824)
+		strictEqual(k, 0.647, 3)
+	})
+
+	test('phaseAngle2', () => {
+		// Example 41.a, p. 284
+		const i = Illuminated.phaseAngle2(deg(26.10588), deg(-2.62102), 0.724604, deg(88.35704), 0.983824, 0.910947)
+		strictEqual(Math.cos(i), 0.29312, 5)
+	})
+
+	test('phaseAngle3', () => {
+		// Example 41.a, p. 284
+		const i = Illuminated.phaseAngle3(deg(26.10588), deg(-2.62102), 0.621794, -0.664905, -0.033138, 0.910947)
+		strictEqual(Math.cos(i), 0.29312, 5)
+	})
+
+	test('fractionVenus', () => {
+		// Example 41.b, p. 284
+		const k = Illuminated.fractionVenus(2448976.5)
+		strictEqual(k, 0.64, 3)
+	})
+
+	test('venus', () => {
+		// Example 41.c, p. 285
+		const v = Illuminated.venus(0.724604, 0.910947, deg(72.96))
+		strictEqual(v, -3.8, 1)
+	})
+
+	test('saturn', () => {
+		// Example 41.d, p. 285
+		const v = Illuminated.saturn(9.867882, 10.464606, deg(16.442), deg(4.198))
+		strictEqual(v, 0.9, 1)
+	})
+
+	test('venus84', () => {
+		// modified Example 41.c, p. 285
+		const v = Illuminated.venus84(0.724604, 0.910947, deg(72.96))
+		strictEqual(v, -4.2, 1)
+	})
+
+	test('saturn84', () => {
+		// modified Example 41.d, p. 285
+		const v = Illuminated.saturn84(9.867882, 10.464606, deg(16.442), deg(4.198))
+		strictEqual(v, 0.7, 1)
+	})
 })
 
 describe('Moon Position', () => {
