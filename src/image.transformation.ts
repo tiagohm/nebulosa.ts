@@ -459,10 +459,17 @@ function applyCurvesTransformation(image: Image, lut: Float32Array, channel: Ima
 			const b = raw[i + 2]
 			const p = clamp(red * r + green * g + blue * b, 0, 1)
 			const v = lut[truncatePixel(p, max)]
-			const scale = p > 0 ? v / p : 0
-			raw[i] = clamp(r * scale, 0, 1)
-			raw[i + 1] = clamp(g * scale, 0, 1)
-			raw[i + 2] = clamp(b * scale, 0, 1)
+
+            if (p > 0) {
+				const scale = v / p
+				raw[i] = clamp(r * scale, 0, 1)
+				raw[i + 1] = clamp(g * scale, 0, 1)
+				raw[i + 2] = clamp(b * scale, 0, 1)
+			} else {
+				raw[i] = v
+				raw[i + 1] = v
+				raw[i + 2] = v
+			}
 		}
 	}
 

@@ -219,6 +219,14 @@ test('curvesTransformation applies the RGB curve through the configured LUT', ()
 	expectImageValues(image, [quarter, 0, 1], 6)
 })
 
+test('curvesTransformation lifts pure-black RGB pixels for RGB/K curves', () => {
+	const quarter = 64 / 255
+	const image = makeImage(1, 1, 3, [0, 0, 0])
+
+	curvesTransformation(image, { bits: 8, curves: [{ channel: 'GRAY', x: [0, 1], y: [quarter, 1] }] })
+	expectImageValues(image, [quarter, quarter, quarter], 6)
+})
+
 test('curvesTransformation can use Akima interpolation', () => {
 	const midpoint = 128 / 255
 	const quarter = 64 / 255
