@@ -130,5 +130,5 @@ if (true) {
 	lcd.print('Tiago')
 	lcd.write(0)
 	lcd.print('Giovanna')
-    lcd.backlight()
+	lcd.backlight()
 }

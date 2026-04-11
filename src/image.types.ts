@@ -29,6 +29,8 @@ export type SigmaClipCenterMethod = 'median' | 'mean'
 
 export type SigmaClipDispersionMethod = 'std' | 'mad'
 
+export type CurvesTransformationInterpolation = 'cubicHermite' | 'akima' | 'catmullRom' | 'naturalCubic'
+
 export type ImageRawType = Float64Array | Float32Array
 
 export interface WriteImageToFormatOptions {
@@ -87,6 +89,18 @@ export interface HistogramOptions {
 	transform: HistogramPixelTransform
 	bits: NumberArray | number
 	sigmaClip?: Int8Array | Uint8Array
+}
+
+export interface CurvesTransformationCurve {
+	readonly channel: ImageChannelOrGray
+	readonly x: Readonly<NumberArray>
+	readonly y: Readonly<NumberArray>
+}
+
+export interface CurvesTransformationOptions {
+	readonly bits: number
+	readonly interpolation: CurvesTransformationInterpolation
+	readonly curves: readonly (CurvesTransformationCurve | undefined)[]
 }
 
 export interface ApplyScreenTransferFunctionOptions {
@@ -185,6 +199,12 @@ export const DEFAULT_HISTOGRAM_PIXEL_TRANSFORM: HistogramPixelTransform = (p) =>
 export const DEFAULT_HISTOGRAM_OPTIONS: Readonly<HistogramOptions> = {
 	transform: DEFAULT_HISTOGRAM_PIXEL_TRANSFORM,
 	bits: 16,
+}
+
+export const DEFAULT_CURVES_TRANSFORMATION_OPTIONS: Readonly<CurvesTransformationOptions> = {
+	bits: 16,
+	interpolation: 'akima',
+	curves: [undefined],
 }
 
 export const DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS: Readonly<ApplyScreenTransferFunctionOptions> = {

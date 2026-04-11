@@ -50,7 +50,6 @@ Agents must respect all constraints below when generating or modifying code.
 * Prefer destructuring.
 * The commit message must be in English and entirely in lowercase letters, except for acronyms and file names.
 * The commit message should begin with verbs in the present tense like `implement`, `fix`, `improve`, `update`, `use`.
-* If available, index that project on each new iteration.
 
 ## Environment
 

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { Bitpix, type FitsHeader } from '../src/fits'
 import { cfaPatternKeyword } from '../src/fits.util'
 // biome-ignore format: too long!
-import { approximateArcsinhStretchParameters, arcsinhStretch, backgroundNeutralization, bayer, blur, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, linear, mean, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import { approximateArcsinhStretchParameters, arcsinhStretch, backgroundNeutralization, bayer, blur, brightness, calibrate, clone, contrast, convolution, convolutionKernel, curvesTransformation, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, linear, mean, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import type { Image } from '../src/image.types'
 import type { NumberArray } from '../src/math'
 import { medianOf } from '../src/util'
@@ -47,6 +47,12 @@ function imageMean(image: Image) {
 	let sum = 0
 	for (let i = 0; i < image.raw.length; i++) sum += image.raw[i]
 	return sum / image.raw.length
+}
+
+// Computes the linear BT.709 luminance of one RGB pixel.
+function rgbLuminance(image: Image, pixel: number = 0) {
+	const i = pixel * 3
+	return 0.21263900587151027 * image.raw[i] + 0.7151686787677559 * image.raw[i + 1] + 0.07219231536073371 * image.raw[i + 2]
 }
 
 // Computes the linear raw offset of a pixel channel.
@@ -194,6 +200,56 @@ test('approximateArcsinhStretchParameters yields a close visual match to STF on 
 	expect(parameters.blackPoint).toBeLessThanOrEqual(0.03)
 	expect(parameters.stretchFactor).toBeGreaterThan(1)
 	expect(meanAbsoluteDifference(stfImage, arcsinhImage)).toBeLessThan(0.025)
+})
+
+test('curvesTransformation is a no-op by default', () => {
+	const image = makeImage(2, 1, 3, [0.1, 0.3, 0.5, 0.7, 0.2, 0.9])
+	const before = new Float32Array(image.raw)
+
+	expect(curvesTransformation(image)).toBe(image)
+	expectImageValues(image, before, 8)
+})
+
+test('curvesTransformation applies the RGB curve through the configured LUT', () => {
+	const midpoint = 128 / 255
+	const quarter = 64 / 255
+	const image = makeImage(1, 1, 3, [midpoint, 0, 1])
+
+	curvesTransformation(image, { bits: 8, curves: [{ channel: 'RED', x: [0, midpoint, 1], y: [0, quarter, 1] }] })
+	expectImageValues(image, [quarter, 0, 1], 6)
+})
+
+test('curvesTransformation can use Akima interpolation', () => {
+	const midpoint = 128 / 255
+	const quarter = 64 / 255
+	const image = makeImage(1, 1, 3, [midpoint, 0, 1])
+
+	curvesTransformation(image, { bits: 8, interpolation: 'akima', curves: [{ channel: 'RED', x: [0, midpoint, 1], y: [0, quarter, 1] }] })
+	expectImageValues(image, [quarter, 0, 1], 6)
+})
+
+test('curvesTransformation can use Catmull-Rom interpolation', () => {
+	const midpoint = 128 / 255
+	const quarter = 64 / 255
+	const image = makeImage(1, 1, 3, [midpoint, 0, 1])
+
+	curvesTransformation(image, { bits: 8, interpolation: 'catmullRom', curves: [{ channel: 'RED', x: [0, midpoint, 1], y: [0, quarter, 1] }] })
+	expectImageValues(image, [quarter, 0, 1], 6)
+})
+
+test('curvesTransformation can use natural cubic interpolation', () => {
+	const midpoint = 128 / 255
+	const quarter = 64 / 255
+	const image = makeImage(1, 1, 3, [midpoint, 0, 1])
+
+	curvesTransformation(image, { bits: 8, interpolation: 'naturalCubic', curves: [{ channel: 'RED', x: [0, midpoint, 1], y: [0, quarter, 1] }] })
+	expectImageValues(image, [quarter, 0, 1], 6)
+})
+
+test('curvesTransformation rejects mismatched control point arrays', () => {
+	const image = makeImage(1, 1, 1, [0.5])
+
+	expect(() => curvesTransformation(image, { curves: [{ channel: 'GRAY', x: [0, 1], y: [0] }] })).toThrow('curves transformation x and y arrays must have the same length')
 })
 
 test('backgroundNeutralization uses a lower-exclusive and upper-inclusive significance interval', () => {
