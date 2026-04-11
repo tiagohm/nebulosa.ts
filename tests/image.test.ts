@@ -3,13 +3,17 @@ import { Bitpix } from '../src/fits'
 import { readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../src/image'
 import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../src/image.computation'
 // biome-ignore format: too long!
-import { bayer, blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
-import type { Image } from '../src/image.types'
+import { bayer, blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import type { Image, MultiscaleMedianTransformOptions } from '../src/image.types'
 import { bufferSink, bufferSource } from '../src/io'
 import { downloadPerTag } from './download'
 import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
 await downloadPerTag('image')
+
+function autoStf(image: Image) {
+	return stf(image, ...adf(image))
+}
 
 test('read image from fits', async () => {
 	for (const bitpix of BITPIXES) {
@@ -312,18 +316,24 @@ test.skip('median', () => {
 describe('fft', () => {
 	const workspace = new FFTWorkspace(1037, 706)
 
-	function autoStf(image: Image) {
-		return stf(image, ...adf(image))
-	}
-
 	test('low-pass', () => {
 		return readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'lowPass', 0.015, 0.8)), 'fft-low-pass', '56a0759224001a7b3441f1393538921b')
-	}, 10000)
+	}, 5000)
 
 	test('high-pass', () => {
 		return readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'highPass', 0.5, 0.3)), 'fft-high-pass', '16478c59f81f07e8cb82b2f4246c304a')
-	}, 10000)
+	}, 5000)
 })
+
+test('mmt', () => {
+	const options: MultiscaleMedianTransformOptions = {
+		layers: 2,
+		detailLayers: [{ threshold: 4 }, { threshold: 2 }],
+		residualGain: 1,
+	}
+
+	return readImageTransformAndSave((i) => autoStf(multiscaleMedianTransform(i, options)), 'mmt', 'd67fcd85d7dfdb502e4f7c7c1a8c6622')
+}, 10000)
 
 test('estimate background', async () => {
 	const light = await readImageFromPath('data/LIGHT.fit')

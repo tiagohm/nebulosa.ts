@@ -67,6 +67,18 @@ export interface GaussianBlurConvolutionOptions extends ConvolutionOptions {
 	size: number
 }
 
+export interface MultiscaleMedianTransformLayerOptions {
+	readonly threshold: number
+	readonly amount: number
+	readonly bias: number
+}
+
+export interface MultiscaleMedianTransformOptions {
+	readonly layers: number
+	readonly detailLayers: readonly Partial<MultiscaleMedianTransformLayerOptions>[]
+	readonly residualGain: number
+}
+
 export interface HistogramOptions {
 	channel?: ImageChannelOrGray
 	area?: Partial<Rect>
@@ -140,6 +152,18 @@ export const DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS: Readonly<GaussianBlurCon
 	...DEFAULT_CONVOLUTION_OPTIONS,
 	sigma: 1.4,
 	size: 5,
+}
+
+export const DEFAULT_MMT_LAYER_OPTIONS: Readonly<MultiscaleMedianTransformLayerOptions> = {
+	threshold: 0,
+	amount: 1,
+	bias: 0,
+}
+
+export const DEFAULT_MMT_OPTIONS: Readonly<MultiscaleMedianTransformOptions> = {
+	layers: 3,
+	detailLayers: [],
+	residualGain: 1,
 }
 
 export const DEFAULT_HISTOGRAM_PIXEL_TRANSFORM: HistogramPixelTransform = (p) => p

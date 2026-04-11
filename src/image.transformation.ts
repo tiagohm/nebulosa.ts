@@ -3,9 +3,9 @@ import { exposureTimeKeyword } from './fits.util'
 import { truncatePixel } from './image'
 import { estimateBackgroundUsingMode } from './image.computation'
 // biome-ignore format: too long!
-import { type ApplyScreenTransferFunctionOptions, type ArcsinhStretchOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_ARCSINH_STRETCH_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type FFTFilterType, type GaussianBlurConvolutionOptions, GRAYSCALES, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
+import { type ApplyScreenTransferFunctionOptions, type ArcsinhStretchOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_ARCSINH_STRETCH_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, DEFAULT_MMT_LAYER_OPTIONS, DEFAULT_MMT_OPTIONS, type FFTFilterType, type GaussianBlurConvolutionOptions, GRAYSCALES, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type MultiscaleMedianTransformOptions, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
 import { clamp, type NumberArray } from './math'
-import { meanOf } from './util'
+import { meanOf, medianOf, STANDARD_DEVIATION_SCALE } from './util'
 
 // Apply Screen Transfer Function to image.
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Display_Function__
@@ -743,6 +743,160 @@ export function blur7x7(image: Image, options: Partial<ConvolutionOptions> = DEF
 
 export function gaussianBlur(image: Image, options: Partial<GaussianBlurConvolutionOptions> = DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS) {
 	return convolution(image, gaussianBlurKernel(options.sigma, options.size), options)
+}
+
+// Fills the output with per-channel global medians once the median radius covers the whole frame.
+function multiscaleMedian(raw: ImageRawType, output: ImageRawType, channels: number) {
+	const pixelCount = raw.length / channels
+	const samples = new Float64Array(pixelCount)
+	const medians = new Float64Array(channels)
+
+	for (let channel = 0; channel < channels; channel++) {
+		for (let i = channel, k = 0; i < raw.length; i += channels, k++) {
+			samples[k] = raw[i]
+		}
+
+		medians[channel] = medianOf(samples.sort())
+	}
+
+	for (let i = 0; i < raw.length; i += channels) {
+		for (let channel = 0; channel < channels; channel++) {
+			output[i + channel] = medians[channel]
+		}
+	}
+
+	return output
+}
+
+// Applies a naive square median filter with truncated borders.
+function multiscaleMedianFilter(raw: ImageRawType, output: ImageRawType, metadata: ImageMetadata, radius: number) {
+	if (radius <= 0) {
+		output.set(raw)
+		return output
+	}
+
+	const { width, height, channels, stride } = metadata
+
+	if (radius >= width && radius >= height) {
+		return multiscaleMedian(raw, output, channels)
+	}
+
+	const windowSize = Math.min(width, 2 * radius + 1) * Math.min(height, 2 * radius + 1)
+	const samples = new Float64Array(windowSize)
+
+	for (let y = 0, pi = 0; y < height; y++) {
+		const y0 = Math.max(0, y - radius)
+		const y1 = Math.min(height - 1, y + radius)
+
+		for (let x = 0; x < width; x++) {
+			const x0 = Math.max(0, x - radius)
+			const x1 = Math.min(width - 1, x + radius)
+			const countPerRow = x1 - x0 + 1
+
+			for (let channel = 0; channel < channels; channel++, pi++) {
+				let count = 0
+
+				for (let yy = y0; yy <= y1; yy++) {
+					let i = yy * stride + x0 * channels + channel
+					const end = i + countPerRow * channels
+
+					for (; i < end; i += channels) {
+						samples[count++] = raw[i]
+					}
+				}
+
+				output[pi] = medianOf(samples.subarray(0, count).sort())
+			}
+		}
+	}
+
+	return output
+}
+
+// Estimates a robust per-channel coefficient scale for MMT thresholding.
+function multiscaleMedianScales(working: ImageRawType, filtered: ImageRawType, channels: number) {
+	const pixelCount = working.length / channels
+	const samples = new Float64Array(pixelCount)
+	const scales = new Float64Array(channels)
+
+	for (let channel = 0; channel < channels; channel++) {
+		let sumSquares = 0
+
+		for (let i = channel, k = 0; i < working.length; i += channels, k++) {
+			const value = working[i] - filtered[i]
+			const absolute = Math.abs(value)
+			samples[k] = absolute
+			sumSquares += value * value
+		}
+
+		let scale = STANDARD_DEVIATION_SCALE * medianOf(samples.sort(), pixelCount)
+
+		// Sparse detail layers can have zero MAD, so fall back to RMS.
+		if (!(scale > 0)) {
+			scale = Math.sqrt(sumSquares / pixelCount)
+		}
+
+		scales[channel] = scale
+	}
+
+	return scales
+}
+
+// Applies a redundant dyadic multiscale median transform similar to PixInsight's MMT.
+export function multiscaleMedianTransform(image: Image, options: Partial<MultiscaleMedianTransformOptions> = DEFAULT_MMT_OPTIONS): Image {
+	const resolvedLayers = options.layers ?? DEFAULT_MMT_OPTIONS.layers
+	const layers = Number.isFinite(resolvedLayers) ? Math.max(0, Math.trunc(resolvedLayers)) : DEFAULT_MMT_OPTIONS.layers
+
+	if (layers === 0) return image
+
+	const detailLayers = options.detailLayers ?? DEFAULT_MMT_OPTIONS.detailLayers
+	const resolvedResidualGain = options.residualGain ?? DEFAULT_MMT_OPTIONS.residualGain
+	const residualGain = Number.isFinite(resolvedResidualGain) ? resolvedResidualGain : DEFAULT_MMT_OPTIONS.residualGain
+	const { raw, metadata } = image
+	const n = raw.length
+	const working = raw.slice()
+	const filtered = raw instanceof Float64Array ? new Float64Array(n) : new Float32Array(n)
+
+	raw.fill(0)
+
+	for (let layer = 0; layer < layers; layer++) {
+		const radius = 1 << layer
+		const detailLayer = detailLayers[layer]
+		const resolvedThreshold = detailLayer?.threshold ?? DEFAULT_MMT_LAYER_OPTIONS.threshold
+		const threshold = Number.isFinite(resolvedThreshold) ? Math.max(0, resolvedThreshold) : DEFAULT_MMT_LAYER_OPTIONS.threshold
+		const resolvedAmount = detailLayer?.amount ?? DEFAULT_MMT_LAYER_OPTIONS.amount
+		const amount = Number.isFinite(resolvedAmount) ? clamp(resolvedAmount, 0, 1) : DEFAULT_MMT_LAYER_OPTIONS.amount
+		const resolvedBias = detailLayer?.bias ?? DEFAULT_MMT_LAYER_OPTIONS.bias
+		const bias = Number.isFinite(resolvedBias) ? resolvedBias : DEFAULT_MMT_LAYER_OPTIONS.bias
+		const gain = 1 + bias
+
+		multiscaleMedianFilter(working, filtered, metadata, radius)
+
+		const scales = threshold > 0 && amount > 0 ? multiscaleMedianScales(working, filtered, metadata.channels) : undefined
+
+		for (let i = 0; i < n; i++) {
+			let value = working[i] - filtered[i]
+
+			if (scales !== undefined) {
+				const limit = threshold * scales[i % metadata.channels]
+
+				if (Math.abs(value) <= limit) {
+					value *= 1 - amount
+				}
+			}
+
+			raw[i] += value * gain
+			working[i] = filtered[i]
+		}
+	}
+
+	if (residualGain !== 0) {
+		for (let i = 0; i < n; i++) {
+			raw[i] += working[i] * residualGain
+		}
+	}
+
+	return image
 }
 
 interface FFTPlan {
