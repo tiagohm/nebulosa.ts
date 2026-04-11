@@ -3,7 +3,7 @@ import { exposureTimeKeyword } from './fits.util'
 import { truncatePixel } from './image'
 import { estimateBackgroundUsingMode } from './image.computation'
 // biome-ignore format: too long!
-import { type ApplyScreenTransferFunctionOptions, type ArcsinhStretchOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_ARCSINH_STRETCH_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, DEFAULT_MMT_LAYER_OPTIONS, DEFAULT_MMT_OPTIONS, type FFTFilterType, type GaussianBlurConvolutionOptions, GRAYSCALES, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type MultiscaleMedianTransformOptions, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
+import { type ApplyScreenTransferFunctionOptions, type ApproximateArcsinhStretchParameters, type ArcsinhStretchOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_ARCSINH_STRETCH_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, DEFAULT_MMT_LAYER_OPTIONS, DEFAULT_MMT_OPTIONS, type FFTFilterType, type GaussianBlurConvolutionOptions, GRAYSCALES, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type MultiscaleMedianTransformOptions, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
 import { clamp, type NumberArray } from './math'
 import { meanOf, medianOf, STANDARD_DEVIATION_SCALE } from './util'
 
@@ -153,6 +153,109 @@ export function arcsinhStretch(image: Image, options: Partial<ArcsinhStretchOpti
 	}
 
 	return image
+}
+
+// Evaluates the monochrome arcsinh stretch curve for one normalized sample.
+function arcsinhStretchCurve(value: number, beta: number, blackPoint: number) {
+	const normalized = normalizeArcsinhStretchPixel(value, blackPoint, blackPoint === 1 ? 0 : 1 / (1 - blackPoint))
+	return beta === 0 ? normalized : Math.asinh(beta * normalized) / Math.asinh(beta)
+}
+
+// Solves beta so that arcsinh(normalizedMidpoint)=0.5 whenever the midpoint is stretchable.
+function approximateArcsinhStretchBeta(normalizedMidpoint: number) {
+	if (!(normalizedMidpoint > 0 && normalizedMidpoint < 0.5)) return 0
+
+	let low = 0
+	let high = 1
+
+	while (Math.asinh(high * normalizedMidpoint) / Math.asinh(high) < 0.5) {
+		high *= 2
+	}
+
+	for (let i = 0; i < 56; i++) {
+		const mid = 0.5 * (low + high)
+		if (Math.asinh(mid * normalizedMidpoint) / Math.asinh(mid) < 0.5) low = mid
+		else high = mid
+	}
+
+	return 0.5 * (low + high)
+}
+
+// Measures the RMS curve error between STF and monochrome arcsinh over normalized samples.
+function approximateArcsinhStretchError(midtone: number, shadow: number, highlight: number, beta: number, blackPoint: number) {
+	let sum = 0
+
+	// Evaluates the STF transfer curve for one normalized sample.
+	function stfCurve(value: number) {
+		if (value <= shadow) return 0
+		if (value >= highlight) return 1
+
+		const factor = 1 / (highlight - shadow)
+		const d = value - shadow
+		const k1 = (midtone - 1) * factor
+		const k2 = (2 * midtone - 1) * factor
+		return (d * k1) / (d * k2 - midtone)
+	}
+
+	for (let i = 0; i <= 128; i++) {
+		const value = i / 128
+		const delta = stfCurve(value) - arcsinhStretchCurve(value, beta, blackPoint)
+		sum += delta * delta
+	}
+
+	return Math.sqrt(sum / 129)
+}
+
+// Approximates arcsinh parameters that best match an STF curve over [0,1].
+// searches blackPoint in [0, shadow]
+// for each candidate, solves the arcsinh strength so the STF midpoint lands near 0.5
+// picks the pair with the lowest RMS curve error over sampled [0,1]
+export function approximateArcsinhStretchParameters(midtone: number = 0.5, shadow: number = 0, highlight: number = 1): ApproximateArcsinhStretchParameters {
+	const resolvedMidtone = Number.isFinite(midtone) ? clamp(midtone, 1e-6, 1 - 1e-6) : 0.5
+	const a = Number.isFinite(shadow) ? clamp(shadow, 0, 1) : 0
+	const b = Number.isFinite(highlight) ? clamp(highlight, 0, 1) : 1
+	shadow = Math.min(a, b)
+	highlight = Math.max(b, shadow + 1e-6)
+
+	if (resolvedMidtone === 0.5 && shadow === 0 && highlight === 1) {
+		return { stretchFactor: 1, blackPoint: 0 }
+	}
+
+	const midpoint = shadow + resolvedMidtone * (highlight - shadow)
+	const maxBlackPoint = Math.min(shadow, midpoint - 1e-6)
+
+	let bestBlackPoint = Math.max(0, maxBlackPoint)
+	let bestBeta = approximateArcsinhStretchBeta(normalizeArcsinhStretchPixel(midpoint, bestBlackPoint, bestBlackPoint === 1 ? 0 : 1 / (1 - bestBlackPoint)))
+	let bestError = approximateArcsinhStretchError(resolvedMidtone, shadow, highlight, bestBeta, bestBlackPoint)
+	let low = 0
+	let high = Math.max(0, maxBlackPoint)
+
+	for (let pass = 0; pass < 4; pass++) {
+		const span = high - low
+		const steps = 24
+
+		for (let i = 0; i <= steps; i++) {
+			const blackPoint = span === 0 ? low : low + (span * i) / steps
+			const normalizedMidpoint = normalizeArcsinhStretchPixel(midpoint, blackPoint, blackPoint === 1 ? 0 : 1 / (1 - blackPoint))
+			const beta = approximateArcsinhStretchBeta(normalizedMidpoint)
+			const error = approximateArcsinhStretchError(resolvedMidtone, shadow, highlight, beta, blackPoint)
+
+			if (error < bestError) {
+				bestError = error
+				bestBlackPoint = blackPoint
+				bestBeta = beta
+			}
+		}
+
+		const radius = span === 0 ? 0 : (2 * span) / steps
+		low = Math.max(0, bestBlackPoint - radius)
+		high = Math.max(low, Math.min(maxBlackPoint, bestBlackPoint + radius))
+	}
+
+	return {
+		stretchFactor: bestBeta === 0 ? 1 : bestBeta / Math.asinh(bestBeta),
+		blackPoint: bestBlackPoint,
+	}
 }
 
 const CFA_PATTERNS: Record<CfaPattern, Uint8Array[]> = {

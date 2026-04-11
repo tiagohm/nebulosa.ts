@@ -100,6 +100,11 @@ export interface ArcsinhStretchOptions {
 	rgbWorkingSpace: GrayscaleAlgorithm
 }
 
+export interface ApproximateArcsinhStretchParameters {
+	readonly stretchFactor: number
+	readonly blackPoint: number
+}
+
 export interface AdaptiveDisplayFunctionOptions extends HistogramOptions {
 	meanBackground: number // Controls the global illumination of the displayed image
 	clippingPoint: number // Controls the overall contrast of the displayed image

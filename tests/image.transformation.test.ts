@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { Bitpix, type FitsHeader } from '../src/fits'
 import { cfaPatternKeyword } from '../src/fits.util'
 // biome-ignore format: too long!
-import { arcsinhStretch, bayer, blur, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, linear, mean, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import { approximateArcsinhStretchParameters, arcsinhStretch, bayer, blur, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, linear, mean, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import type { Image } from '../src/image.types'
 import type { NumberArray } from '../src/math'
 import { medianOf } from '../src/util'
@@ -167,6 +167,33 @@ test('multiscaleMedianTransform median layer stays close to the exact sorted-win
 	multiscaleMedianTransform(image, { layers: 1, detailLayers: [{ bias: -1 }] })
 
 	expectImageValues(image, expected, 3)
+})
+
+test('approximateArcsinhStretchParameters returns identity for the default STF', () => {
+	const parameters = approximateArcsinhStretchParameters()
+
+	expect(parameters.stretchFactor).toBeCloseTo(1, 8)
+	expect(parameters.blackPoint).toBeCloseTo(0, 8)
+})
+
+test('approximateArcsinhStretchParameters yields a close visual match to STF on a ramp', () => {
+	const values = new Float32Array(257)
+
+	for (let i = 0; i < values.length; i++) {
+		values[i] = i / 256
+	}
+
+	const parameters = approximateArcsinhStretchParameters(0.18, 0.03, 0.97)
+	const stfImage = makeImage(values.length, 1, 1, values)
+	const arcsinhImage = makeImage(values.length, 1, 1, values)
+
+	stf(stfImage, 0.18, 0.03, 0.97)
+	arcsinhStretch(arcsinhImage, parameters)
+
+	expect(parameters.blackPoint).toBeGreaterThanOrEqual(0)
+	expect(parameters.blackPoint).toBeLessThanOrEqual(0.03)
+	expect(parameters.stretchFactor).toBeGreaterThan(1)
+	expect(meanAbsoluteDifference(stfImage, arcsinhImage)).toBeLessThan(0.025)
 })
 
 test('fft keeps the input unchanged when weight is zero', () => {
