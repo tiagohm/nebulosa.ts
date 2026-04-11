@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { Bitpix, type FitsHeader } from '../src/fits'
 import { cfaPatternKeyword } from '../src/fits.util'
 // biome-ignore format: too long!
-import { approximateArcsinhStretchParameters, arcsinhStretch, bayer, blur, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, linear, mean, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import { approximateArcsinhStretchParameters, arcsinhStretch, backgroundNeutralization, bayer, blur, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, linear, mean, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import type { Image } from '../src/image.types'
 import type { NumberArray } from '../src/math'
 import { medianOf } from '../src/util'
@@ -194,6 +194,43 @@ test('approximateArcsinhStretchParameters yields a close visual match to STF on 
 	expect(parameters.blackPoint).toBeLessThanOrEqual(0.03)
 	expect(parameters.stretchFactor).toBeGreaterThan(1)
 	expect(meanAbsoluteDifference(stfImage, arcsinhImage)).toBeLessThan(0.025)
+})
+
+test('backgroundNeutralization uses a lower-exclusive and upper-inclusive significance interval', () => {
+	const image = makeImage(2, 1, 3, [0.1, 0.2, 0.3, 0.5, 0.6, 0.7])
+	backgroundNeutralization(image, { lowerLimit: 0.1, upperLimit: 0.7, mode: 'targetBackground', targetBackground: 0.4 })
+	expectImageValues(image, [0, 0.2, 0.2, 0.4, 0.6, 0.6], 6)
+})
+
+test('backgroundNeutralization rescale mode remaps the full image range to [0,1]', () => {
+	const image = makeImage(2, 1, 3, [0.2, 0.4, 0.6, 0.3, 0.5, 0.7])
+	backgroundNeutralization(image, { mode: 'rescale' })
+	expectImageValues(image, [0, 0, 0, 1, 1, 1], 6)
+})
+
+test('backgroundNeutralization rescaleAsNeeded rescales when whole-image neutralization produces negatives', () => {
+	const image = makeImage(2, 1, 3, [0.1, 0.2, 0.3, 0.5, 0.6, 0.7])
+	backgroundNeutralization(image, { mode: 'rescaleAsNeeded' })
+	expectImageValues(image, [0, 0, 0, 1, 1, 1], 6)
+})
+
+test('backgroundNeutralization truncate mode clamps without rescaling', () => {
+	const image = makeImage(2, 1, 3, [0.2, 0.4, 0.6, 0.3, 0.5, 0.7])
+	backgroundNeutralization(image, { mode: 'truncate' })
+	expectImageValues(image, [0, 0, 0, 0.05, 0.05, 0.05], 6)
+})
+
+test('backgroundNeutralization is a no-op on monochrome images', () => {
+	const image = makeImage(2, 2, 1, [0.1, 0.2, 0.3, 0.4])
+	const before = new Float32Array(image.raw)
+
+	expect(backgroundNeutralization(image)).toBe(image)
+	expectImageValues(image, before, 8)
+})
+
+test('backgroundNeutralization rejects reference regions without significant samples', () => {
+	const image = makeImage(2, 1, 3, [0.9, 0.8, 0.7, 0.95, 0.85, 0.75])
+	expect(() => backgroundNeutralization(image, { upperLimit: 0.5 })).toThrow('background neutralization requires at least one significant RED sample in the reference area')
 })
 
 test('fft keeps the input unchanged when weight is zero', () => {

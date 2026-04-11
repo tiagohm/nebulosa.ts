@@ -15,6 +15,8 @@ export type FFTFilterType = 'lowPass' | 'highPass'
 
 export type SCNRAlgorithm = (a: number, b: number, c: number, amount: number) => number
 
+export type BackgroundNeutralizationMode = 'targetBackground' | 'rescale' | 'rescaleAsNeeded' | 'truncate'
+
 export type Grayscale = Readonly<Record<Lowercase<ImageChannel>, number>>
 
 export type GrayscaleAlgorithm = 'BT709' | 'RMY' | 'Y' | Grayscale
@@ -105,6 +107,13 @@ export interface ApproximateArcsinhStretchParameters {
 	readonly blackPoint: number
 }
 
+export interface BackgroundNeutralizationOptions {
+	lowerLimit: number
+	upperLimit: number
+	targetBackground: number
+	mode: BackgroundNeutralizationMode
+}
+
 export interface AdaptiveDisplayFunctionOptions extends HistogramOptions {
 	meanBackground: number // Controls the global illumination of the displayed image
 	clippingPoint: number // Controls the overall contrast of the displayed image
@@ -189,6 +198,13 @@ export const DEFAULT_ARCSINH_STRETCH_OPTIONS: Readonly<ArcsinhStretchOptions> = 
 	protectHighlights: false,
 	useRgbWorkingSpace: false,
 	rgbWorkingSpace: BT709_GRAYSCALE,
+}
+
+export const DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS: Readonly<BackgroundNeutralizationOptions> = {
+	lowerLimit: 0,
+	upperLimit: 1,
+	targetBackground: 0.05,
+	mode: 'rescaleAsNeeded',
 }
 
 export const DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS: Readonly<AdaptiveDisplayFunctionOptions> = {

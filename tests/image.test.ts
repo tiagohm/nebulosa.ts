@@ -3,7 +3,7 @@ import { Bitpix } from '../src/fits'
 import { readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../src/image'
 import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../src/image.computation'
 // biome-ignore format: too long!
-import { approximateArcsinhStretchParameters, arcsinhStretch, bayer, blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import { approximateArcsinhStretchParameters, arcsinhStretch, backgroundNeutralization, bayer, blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import type { Image, MultiscaleMedianTransformOptions } from '../src/image.types'
 import { bufferSink, bufferSource } from '../src/io'
 import { downloadPerTag } from './download'
@@ -327,6 +327,10 @@ describe('fft', () => {
 
 test('arcsinh stretch', () => {
 	return readImageTransformAndSave((i) => arcsinhStretch(i, approximateArcsinhStretchParameters(...adf(i))), 'arcsinh', 'f2eaccfae404773ebd06f1200fb67c10')
+})
+
+test('background neutralization', () => {
+	return readImageTransformAndSave((i) => autoStf(backgroundNeutralization(i, { upperLimit: 0.1 })), 'background-neutralization', '123c3c9df7ca332a67098b7eeed55981')
 })
 
 test('mmt', () => {

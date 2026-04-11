@@ -3,7 +3,7 @@ import { exposureTimeKeyword } from './fits.util'
 import { truncatePixel } from './image'
 import { estimateBackgroundUsingMode } from './image.computation'
 // biome-ignore format: too long!
-import { type ApplyScreenTransferFunctionOptions, type ApproximateArcsinhStretchParameters, type ArcsinhStretchOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_ARCSINH_STRETCH_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, DEFAULT_MMT_LAYER_OPTIONS, DEFAULT_MMT_OPTIONS, type FFTFilterType, type GaussianBlurConvolutionOptions, GRAYSCALES, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type MultiscaleMedianTransformOptions, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
+import { type ApplyScreenTransferFunctionOptions, type ApproximateArcsinhStretchParameters, type ArcsinhStretchOptions, type BackgroundNeutralizationOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_ARCSINH_STRETCH_OPTIONS, DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, DEFAULT_MMT_LAYER_OPTIONS, DEFAULT_MMT_OPTIONS, type FFTFilterType, type GaussianBlurConvolutionOptions, GRAYSCALES, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type MultiscaleMedianTransformOptions, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
 import { clamp, type NumberArray } from './math'
 import { meanOf, medianOf, STANDARD_DEVIATION_SCALE } from './util'
 
@@ -256,6 +256,123 @@ export function approximateArcsinhStretchParameters(midtone: number = 0.5, shado
 		stretchFactor: bestBeta === 0 ? 1 : bestBeta / Math.asinh(bestBeta),
 		blackPoint: bestBlackPoint,
 	}
+}
+
+// Computes the median of all significant reference samples for one RGB channel.
+function backgroundNeutralizationMedian(raw: ImageRawType, lowerLimit: number, upperLimit: number, channel: number, samples: Float64Array, tolerance: number) {
+	let count = 0
+
+	const n = raw.length
+
+	for (let i = channel; i < n; i += 3) {
+		const value = raw[i]
+
+		if (value > lowerLimit + tolerance && value <= upperLimit + tolerance) {
+			samples[count++] = value
+		}
+	}
+
+	if (count === 0) return NaN
+
+	return medianOf(samples.subarray(0, count).sort())
+}
+
+// Affinely rescales the current image range to [0,1].
+function backgroundNeutralizationRescale(image: Image, minValue: number, maxValue: number) {
+	const { raw } = image
+	const n = raw.length
+	const span = maxValue - minValue
+
+	if (!(span > 0) || !Number.isFinite(span)) {
+		for (let i = 0; i < n; i++) raw[i] = clamp(raw[i], 0, 1)
+		return image
+	}
+
+	const scale = 1 / span
+
+	for (let i = 0; i < n; i++) {
+		raw[i] = (raw[i] - minValue) * scale
+	}
+
+	return image
+}
+
+// Clamps all pixels to the normalized floating-point image range.
+function backgroundNeutralizationTruncate(image: Image) {
+	const { raw } = image
+	const n = raw.length
+
+	for (let i = 0; i < n; i++) {
+		raw[i] = clamp(raw[i], 0, 1)
+	}
+
+	return image
+}
+
+// Neutralizes the RGB background by matching per-channel medians on a reference region.
+// PixInsight's classic BackgroundNeutralization works additively: v1 = v0 + M1 - M0.
+export function backgroundNeutralization(image: Image, options: Partial<BackgroundNeutralizationOptions> = DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS) {
+	if (image.metadata.channels !== 3) return image
+
+	const mode = options.mode ?? DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.mode
+	const targetBackground = Number.isFinite(options.targetBackground) ? clamp(options.targetBackground as number, 0, 1) : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.targetBackground
+	const lowerInput = Number.isFinite(options.lowerLimit) ? (options.lowerLimit as number) : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.lowerLimit
+	const upperInput = Number.isFinite(options.upperLimit) ? (options.upperLimit as number) : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.upperLimit
+	const lowerLimit = Math.min(lowerInput, upperInput)
+	const upperLimit = Math.max(lowerInput, upperInput)
+
+	const { raw, metadata } = image
+	const samples = new Float64Array(metadata.pixelCount)
+	const medians = new Float64Array(3)
+	const limitTolerance = raw instanceof Float32Array ? 1e-7 : 1e-12
+
+	for (let channel = 0; channel < 3; channel++) {
+		const median = backgroundNeutralizationMedian(raw, lowerLimit, upperLimit, channel, samples, limitTolerance)
+
+		if (!Number.isFinite(median)) {
+			throw new Error(`background neutralization requires at least one significant ${channel === 0 ? 'RED' : channel === 1 ? 'GREEN' : 'BLUE'} sample in the reference area`)
+		}
+
+		medians[channel] = median
+	}
+
+	const targetMedian = mode === 'targetBackground' ? targetBackground : 0
+	const redShift = targetMedian - medians[0]
+	const greenShift = targetMedian - medians[1]
+	const blueShift = targetMedian - medians[2]
+	let minValue = Number.POSITIVE_INFINITY
+	let maxValue = Number.NEGATIVE_INFINITY
+
+	for (let i = 0; i < raw.length; i += 3) {
+		const red = raw[i] + redShift
+		const green = raw[i + 1] + greenShift
+		const blue = raw[i + 2] + blueShift
+
+		raw[i] = red
+		raw[i + 1] = green
+		raw[i + 2] = blue
+
+		if (Number.isFinite(red)) {
+			if (red < minValue) minValue = red
+			if (red > maxValue) maxValue = red
+		}
+
+		if (Number.isFinite(green)) {
+			if (green < minValue) minValue = green
+			if (green > maxValue) maxValue = green
+		}
+
+		if (Number.isFinite(blue)) {
+			if (blue < minValue) minValue = blue
+			if (blue > maxValue) maxValue = blue
+		}
+	}
+
+	if (mode === 'rescale') return backgroundNeutralizationRescale(image, minValue, maxValue)
+	if (mode === 'rescaleAsNeeded' && minValue < 0) return backgroundNeutralizationRescale(image, minValue, maxValue)
+	if (mode === 'truncate' || mode === 'targetBackground') return backgroundNeutralizationTruncate(image)
+
+	return image
 }
 
 const CFA_PATTERNS: Record<CfaPattern, Uint8Array[]> = {
