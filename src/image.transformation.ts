@@ -265,15 +265,19 @@ function backgroundNeutralizationMedian(raw: ImageRawType, lowerLimit: number, u
 
 	const n = raw.length
 
+	lowerLimit += tolerance
+	upperLimit += tolerance
+
 	for (let i = channel; i < n; i += 3) {
 		const value = raw[i]
 
-		if (value > lowerLimit + tolerance && value <= upperLimit + tolerance) {
+		if (value > lowerLimit && value <= upperLimit) {
 			samples[count++] = value
 		}
 	}
 
 	if (count === 0) return NaN
+	if (count === 1) return samples[0]
 
 	return medianOf(samples.subarray(0, count).sort())
 }
@@ -370,7 +374,7 @@ export function backgroundNeutralization(image: Image, options: Partial<Backgrou
 	}
 
 	if (mode === 'rescale') return backgroundNeutralizationRescale(image, minValue, maxValue)
-	if (mode === 'rescaleAsNeeded' && minValue < 0) return backgroundNeutralizationRescale(image, minValue, maxValue)
+	if (mode === 'rescaleAsNeeded' && (minValue < 0 || maxValue > 1)) return backgroundNeutralizationRescale(image, minValue, maxValue)
 	if (mode === 'truncate' || mode === 'targetBackground') return backgroundNeutralizationTruncate(image)
 
 	return image

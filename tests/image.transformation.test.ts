@@ -290,6 +290,17 @@ test('backgroundNeutralization rescaleAsNeeded rescales when whole-image neutral
 	expectImageValues(image, [0, 0, 0, 1, 1, 1], 6)
 })
 
+test('backgroundNeutralization defaults should not include negative calibrated backgrounds in the reference set', () => {
+	const image = makeImage(2, 1, 3, [-0.3, -0.2, -0.1, -0.2, -0.1, 0])
+	expect(() => backgroundNeutralization(image)).toThrow('background neutralization requires at least one significant RED sample in the reference area')
+})
+
+test('backgroundNeutralization rescaleAsNeeded rescales when neutralization only overflows above one', () => {
+	const image = makeImage(3, 1, 3, [-0.2, -0.2, -0.2, -0.2, -0.2, -0.2, 1.1, 1.1, 1.1])
+	backgroundNeutralization(image, { lowerLimit: -1, upperLimit: 2, mode: 'rescaleAsNeeded' })
+	expectImageValues(image, [0, 0, 0, 0, 0, 0, 1, 1, 1], 6)
+})
+
 test('backgroundNeutralization truncate mode clamps without rescaling', () => {
 	const image = makeImage(2, 1, 3, [0.2, 0.4, 0.6, 0.3, 0.5, 0.7])
 	backgroundNeutralization(image, { mode: 'truncate' })
