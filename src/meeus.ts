@@ -500,10 +500,21 @@ export namespace Iteration {
 
 // Chapter 7, Julian day.
 export namespace Julian {
+	// 1582-10-05 Julian Date is 1st Gregorian Date (1582-10-15)
+	export const GREGORIAN0JD = 2299160.5
+
+	const DAYS_OF_YEAR = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+
 	// Converts a Gregorian year, month, and day of month to Julian day.
-	// Negative years are valid, back to JD 0.  The result is not valid for dates before JD 0.
+	// Negative years are valid, back to JD 0. The result is not valid for dates before JD 0.
 	export function calendarGregorianToJD(y: number, m: number, d: number) {
 		return calendarToJD(y, m, d, false)
+	}
+
+	// Converts a Julian year, month, and day of month to Julian day.
+	// Negative years are valid, back to JD 0. The result is not valid for dates before JD 0.
+	export function calendarJulianToJD(y: number, m: number, d: number) {
+		return calendarToJD(y, m, d, true)
 	}
 
 	// Converts from calendar date to julian day
@@ -563,6 +574,88 @@ export namespace Julian {
 	// Returns the calendar date for the given jd in the Gregorian Calendar.
 	export function jdToCalendarGregorian(jd: number) {
 		return jdToCalendar(jd, false)
+	}
+
+	// Returns the calendar date for the given jd in the Julian Calendar.
+	export function jdToCalendarJulian(jd: number) {
+		return jdToCalendar(jd, true)
+	}
+
+	// Returns true if year y in the Julian calendar is a leap year.
+	export function isLeapYearJulian(y: number) {
+		return y % 4 === 0
+	}
+
+	// Returns true if year y in the Gregorian calendar is a leap year.
+	export function isLeapYearGregorian(y: number) {
+		return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
+	}
+
+	// Checks if Julian day `jd` falls into the Gregorian calendar
+	export function isJDCalendarGregorian(jd: number) {
+		return jd >= GREGORIAN0JD
+	}
+
+	// Checks if date falls into the Gregorian calendar
+	export function isCalendarGregorian(year: number, month: number = 1, day: number = 1) {
+		return year > 1582 || (year === 1582 && month > 10) || (year === 1582 && month === 10 && day >= 15)
+	}
+
+	// Converts Modified Julian Day to Julian Day.
+	export function mjdToJD(mjd: number) {
+		return mjd + Base.JMOD
+	}
+
+	// Converts Julian Day to Modified Julian Day
+	// The MJD sometimes appear when mentioning orbital elements of artificial satellites.
+	// Contrary to JD the MJD begins at Greenwich mean midnight.
+	export function jdToMJD(jd: number) {
+		return jd - Base.JMOD
+	}
+
+	// Determines the day of the week for a given JD.
+	// The value returned is an integer in the range 0 to 6, where 0 represents Sunday.
+	export function dayOfWeek(jd: number) {
+		return Math.trunc(jd + 1.5) % 7
+	}
+
+	// Computes the day number within the year of the Gregorian calendar.
+	export function dayOfYearGregorian(y: number, m: number, d: number) {
+		return dayOfYear(y, m, Math.trunc(d), isLeapYearGregorian(y))
+	}
+
+	// Computes the day number within the year of the Julian calendar.
+	export function dayOfYearJulian(y: number, m: number, d: number) {
+		return dayOfYear(y, m, Math.trunc(d), isLeapYearJulian(y))
+	}
+
+	// Computes the day number within the year.
+	// This form of the function is not specific to the Julian or Gregorian
+	// calendar, but you must tell it whether the year is a leap year.
+	export function dayOfYear(y: number, m: number, d: number, leap: boolean) {
+		let k = 0
+		if (leap && m > 1) k = 1
+		return k + DAYS_OF_YEAR[m] + Math.trunc(d)
+	}
+
+	// Computes the calendar month and day for a given day of year and leap year status.
+	export function dayOfYearToCalendar(n: number, leap: boolean) {
+		let month = 0
+		let k = 0
+
+		if (leap) {
+			k = 1
+		}
+
+		for (month = 1; month <= 12; month++) {
+			if (k + DAYS_OF_YEAR[month] > n) {
+				month = month - 1
+				break
+			}
+		}
+
+		const day = n - k - DAYS_OF_YEAR[month]
+		return { month, day }
 	}
 }
 
@@ -1027,6 +1120,291 @@ export namespace Kepler {
 	export function kepler4(e: number, m: number) {
 		return atan2(sin(m), cos(m) - e) // (30.8) p. 206
 	}
+}
+
+// Chapter 36, The Calculation of some Planetary Phenomena.
+export namespace Planetary {
+	// Computes some intermediate values for a mean planetary configuration
+	// given a year and a row of coefficients from Table 36.A, p. 250.0
+	export function mean(y: number, a: readonly [number, number, number, number]) {
+		// (36.1) p. 250
+		const k = Math.floor((365.2425 * y + 1721060 - a[0]) / a[1] + 0.5)
+		const J = a[0] + k * a[1]
+		const M = normalizeAngle(a[2] + k * a[3])
+		const T = Base.j2000Century(J)
+		return [J, M, T]
+	}
+
+	// Computes a sum of periodic terms.
+	export function sum(T: number, M: number, c: readonly Readonly<NumberArray>[]) {
+		let j = Base.horner(T, c[0])
+		let mm = 0
+
+		for (let i = 1; i < c.length; i++) {
+			mm += M
+
+			const [smm, cmm] = Base.sincos(mm)
+			j += smm * Base.horner(T, c[i++])
+			j += cmm * Base.horner(T, c[i])
+		}
+
+		return j
+	}
+
+	// Computes the mean time corrected by a sum.
+	export function ms(y: number, a: readonly [number, number, number, number], c: readonly Readonly<NumberArray>[]) {
+		const [J, M, T] = mean(y, a)
+		return J + sum(T, M, c)
+	}
+
+	// Computes the time of an inferior conjunction of Mercury.
+	export function mercuryInfConj(y: number) {
+		return ms(y, MICA, MICB)
+	}
+
+	// Computes the time of a superior conjunction of Mercury.
+	export function mercurySupConj(y: number) {
+		return ms(y, MSCA, MSCB)
+	}
+
+	// Computes the time of an inferior conjunction of Venus.
+	export function venusInfConj(y: number) {
+		return ms(y, VICA, VICB)
+	}
+
+	// Computes the time of an opposition of Mars.
+	export function marsOpp(y: number) {
+		return ms(y, MOA, MOB)
+	}
+
+	// Computes the sum of periodic terms with "additional angles"
+	export function sumA(T: number, M: number, c: readonly Readonly<NumberArray>[], aa: readonly Readonly<[number, number]>[]) {
+		let i = c.length - 2 * aa.length
+		let j = sum(T, M, c.slice(0, i))
+
+		for (let k = 0; k < aa.length; k++) {
+			const [saa, caa] = Base.sincos(aa[k][0] + aa[k][1] * T)
+			j += saa * Base.horner(T, c[i++])
+			j += caa * Base.horner(T, c[i++])
+		}
+
+		return j
+	}
+
+	// Computes the mean time corrected by a sum.
+	export function msa(y: number, a: readonly [number, number, number, number], c: readonly Readonly<NumberArray>[], aa: readonly Readonly<[number, number]>[]) {
+		const [J, M, T] = mean(y, a)
+		return J + sumA(T, M, c, aa)
+	}
+
+	// Computes the time of an opposition of Jupiter.
+	export function jupiterOpp(y: number) {
+		return msa(y, JOA, JOB, JAA)
+	}
+
+	// Computes the time of an opposition of Saturn.
+	export function saturnOpp(y: number) {
+		return msa(y, SOA, SOB, SAA)
+	}
+
+	// Computes the time of a conjunction of Saturn.
+	export function saturnConj(y: number) {
+		return msa(y, SCA, SCB, SAA)
+	}
+
+	// Computes the time of an opposition of Uranus.
+	export function uranusOpp(y: number) {
+		return msa(y, UOA, UOB, UAA)
+	}
+
+	// Computes the time of an opposition of Neptune.
+	export function neptuneOpp(y: number) {
+		return msa(y, NOA, NOB, NAA)
+	}
+
+	// Computes time and elongation of a greatest elongation event.
+	export function el(y: number, a: unknown, t: readonly Readonly<NumberArray>[], e: readonly Readonly<NumberArray>[]) {
+		const [J, M, T] = mean(y, MICA)
+		return [J + sum(T, M, t), sum(T, M, e) * DEG2RAD] as const
+	}
+
+	// Computes the time and elongation of a greatest eastern elongation of Mercury.
+	export function mercuryEastElongation(y: number) {
+		return el(y, MICA, MET, MEE)
+	}
+
+	// Computes the time and elongation of a greatest western elongation of Mercury.
+	export function mercuryWestElongation(y: number) {
+		return el(y, MICA, MWT, MWE)
+	}
+
+	export function marsStation2(y: number) {
+		const [J, M, T] = mean(y, MOA)
+		return J + sum(T, M, MS2)
+	}
+
+	// Table 36.A, p. 250
+	const MICA = [2451612.023, 115.8774771, 63.5867 * DEG2RAD, 114.2088742 * DEG2RAD] as const
+	const MSCA = [2451554.084, 115.8774771, 6.4822 * DEG2RAD, 114.2088742 * DEG2RAD] as const
+	const VICA = [2451996.706, 583.921361, 82.7311 * DEG2RAD, 215.513058 * DEG2RAD] as const
+	const MOA = [2452097.382, 779.936104, 181.9573 * DEG2RAD, 48.705244 * DEG2RAD] as const
+	const JOA = [2451870.628, 398.884046, 318.4681 * DEG2RAD, 33.140229 * DEG2RAD] as const
+	const SOA = [2451870.17, 378.091904, 318.0172 * DEG2RAD, 12.647487 * DEG2RAD] as const
+	const SCA = [2451681.124, 378.091904, 131.6934 * DEG2RAD, 12.647487 * DEG2RAD] as const
+	const UOA = [2451764.317, 369.656035, 213.6884 * DEG2RAD, 4.333093 * DEG2RAD] as const
+	const NOA = [2451753.122, 367.486703, 202.6544 * DEG2RAD, 2.194998 * DEG2RAD] as const
+
+	// Holds coefficients for "additional angles" for outer planets as given on p. 251
+
+	const JAA = [[82.74 * DEG2RAD, 40.76 * DEG2RAD]] as const
+
+	const SAA = [
+		[82.74 * DEG2RAD, 40.76 * DEG2RAD],
+		[29.86 * DEG2RAD, 1181.36 * DEG2RAD],
+		[14.13 * DEG2RAD, 590.68 * DEG2RAD],
+		[220.02 * DEG2RAD, 1262.87 * DEG2RAD],
+	] as const
+
+	const UAA = [
+		[207.83 * DEG2RAD, 8.51 * DEG2RAD],
+		[108.84 * DEG2RAD, 419.96 * DEG2RAD],
+	] as const
+
+	const NAA = [
+		[207.83 * DEG2RAD , 8.51 * DEG2RAD],
+		[276.74 * DEG2RAD , 209.98 * DEG2RAD],
+	] as const
+
+	// Table 33.B, p. 256
+	const MICB = [
+		[0.0545, 0.0002],
+		[-6.2008, 0.0074, 0.00003],
+		[-3.275, -0.0197, 0.00001],
+		[0.4737, -0.0052, -0.00001],
+		[0.8111, 0.0033, -0.00002],
+		[0.0037, 0.0018],
+		[-0.1768, 0, 0.00001],
+		[-0.0211, -0.0004],
+		[0.0326, -0.0003],
+		[0.0083, 0.0001],
+		[-0.004, 0.0001],
+	] as const
+
+	const MSCB = [
+		[-0.0548, -0.0002],
+		[7.3894, -0.01, -0.00003],
+		[3.22, 0.0197, -0.00001],
+		[0.8383, -0.0064, -0.00001],
+		[0.9666, 0.0039, -0.00003],
+		[0.077, -0.0026],
+		[0.2758, 0.0002, -0.00002],
+		[-0.0128, -0.0008],
+		[0.0734, -0.0004, -0.00001],
+		[-0.0122, -0.0002],
+		[0.0173, -0.0002],
+	] as const
+
+	const VICB = [
+		[-0.0096, 0.0002, -0.00001],
+		[2.0009, -0.0033, -0.00001],
+		[0.598, -0.0104, 0.00001],
+		[0.0967, -0.0018, -0.00003],
+		[0.0913, 0.0009, -0.00002],
+		[0.0046, -0.0002],
+		[0.0079, 0.0001],
+	] as const
+
+	const MOB = [
+		[-0.3088, 0, 0.00002],
+		[-17.6965, 0.0363, 0.00005],
+		[18.3131, 0.0467, -0.00006],
+		[-0.2162, -0.0198, -0.00001],
+		[-4.5028, -0.0019, 0.00007],
+		[0.8987, 0.0058, -0.00002],
+		[0.7666, -0.005, -0.00003],
+		[-0.3636, -0.0001, 0.00002],
+		[0.0402, 0.0032],
+		[0.0737, -0.0008],
+		[-0.098, -0.0011],
+	] as const
+
+	const JOB = [
+		[-0.1029, 0, -0.00009],
+		[-1.9658, -0.0056, 0.00007],
+		[6.1537, 0.021, -0.00006],
+		[-0.2081, -0.0013],
+		[-0.1116, -0.001],
+		[0.0074, 0.0001],
+		[-0.0097, -0.0001],
+		[0, 0.0144, -0.00008],
+		[0.3642, -0.0019, -0.00029],
+	] as const
+
+	const SOB = [
+		[-0.0209, 0.0006, 0.00023],
+		[4.5795, -0.0312, -0.00017],
+		[1.1462, -0.0351, 0.00011],
+		[0.0985, -0.0015],
+		[0.0733, -0.0031, 0.00001],
+		[0.0025, -0.0001],
+		[0.005, -0.0002],
+		[0, -0.0337, 0.00018],
+		[-0.851, 0.0044, 0.00068],
+		[0, -0.0064, 0.00004],
+		[0.2397, -0.0012, -0.00008],
+		[0, -0.001],
+		[0.1245, 0.0006],
+		[0, 0.0024, -0.00003],
+		[0.0477, -0.0005, -0.00006],
+	] as const
+
+	const SCB = [
+		[0.0172, -0.0006, 0.00023],
+		[-8.5885, 0.0411, 0.0002],
+		[-1.147, 0.0352, -0.00011],
+		[0.3331, -0.0034, -0.00001],
+		[0.1145, -0.0045, 0.00002],
+		[-0.0169, 0.0002],
+		[-0.0109, 0.0004],
+		[0, -0.0337, 0.00018],
+		[-0.851, 0.0044, 0.00068],
+		[0, -0.0064, 0.00004],
+		[0.2397, -0.0012, -0.00008],
+		[0, -0.001],
+		[0.1245, 0.0006],
+		[0, 0.0024, -0.00003],
+		[0.0477, -0.0005, -0.00006],
+	] as const
+
+	const UOB = [[0.0844, -0.0006], [-0.1048, 0.0246], [-5.1221, 0.0104, 0.00003], [-0.1428, 0.0005], [-0.0148, -0.0013], [0], [0.0055], [0], [0.885], [0], [0.2153]] as const
+
+	const NOB = [[-0.014, 0, 0.00001], [-1.3486, 0.001, 0.00001], [0.8597, 0.0037], [-0.0082, -0.0002, 0.00001], [0.0037, -0.0003], [0], [-0.5964], [0], [0.0728]] as const
+
+	// Table 36.C, p. 259
+
+	const MET = [[-21.6106, 0.0002], [-1.9803, -0.006, 0.00001], [1.4151, -0.0072, -0.00001], [0.5528, -0.0005, -0.00001], [0.2905, 0.0034, 0.00001], [-0.1121, -0.0001, 0.00001], [-0.0098, -0.0015], [0.0192], [0.0111, 0.0004], [-0.0061], [-0.0032, -0.0001]] as const
+
+	const MEE = [[22.4697], [-4.2666, 0.0054, 0.00002], [-1.8537, -0.0137], [0.3598, 0.0008, -0.00001], [-0.068, 0.0026], [-0.0524, -0.0003], [0.0052, -0.0006], [0.0107, 0.0001], [-0.0013, 0.0001], [-0.0021], [0.0003]] as const
+
+	const MWT = [[21.6249, -0.0002], [0.1306, 0.0065], [-2.7661, -0.0011, 0.00001], [0.2438, -0.0024, -0.00001], [0.5767, 0.0023], [0.1041], [-0.0184, 0.0007], [-0.0051, -0.0001], [0.0048, 0.0001], [0.0026], [0.0037]] as const
+
+	const MWE = [[22.4143, -0.0001], [4.3651, -0.0048, -0.00002], [2.3787, 0.0121, -0.00001], [0.2674, 0.0022], [-0.3873, 0.0008, 0.00001], [-0.0369, -0.0001], [0.0017, -0.0001], [0.0059], [0.0061, 0.0001], [0.0007], [-0.0011]] as const
+
+	// Table 36.D, p. 261
+
+	const MS2 = [
+		[36.7191, 0.0016, 0.00003],
+		[-12.6163, 0.0417, -0.00001],
+		[20.1218, 0.0379, -0.00006],
+		[-1.636, -0.019],
+		[-3.9657, 0.0045, 0.00007],
+		[1.1546, 0.0029, -0.00003],
+		[0.2888, -0.0073, -0.00002],
+		[-0.3128, 0.0017, 0.00002],
+		[0.2513, 0.0026, -0.00002],
+		[-0.0021, -0.0016],
+		[-0.1497, -0.0006],
+	] as const
 }
 
 // Chapter 39, Passages through the Nodes.

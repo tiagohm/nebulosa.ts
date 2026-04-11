@@ -11,12 +11,6 @@
 
 import * as base from './base.js'
 
-const int = Math.trunc
-
-/** 1582-10-05 Julian Date is 1st Gregorian Date (1582-10-15) */
-export const GREGORIAN0JD = 2299160.5
-
-const DAYS_OF_YEAR = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
 const SECS_OF_DAY = 86400 // 24 * 60 * 60
 
 // Returns delta T in seconds, defaulting to zero because the original deltat module is not ported.
@@ -302,74 +296,6 @@ export class CalendarGregorian extends Calendar {
 
 // -----------------------------------------------------------------------------
 
-
-
-
-/**
- * CalendarJulianToJD converts a Julian year, month, and day of month to Julian day.
- *
- * Negative years are valid, back to JD 0.  The result is not valid for
- * dates before JD 0.
- * @param {number} y - year (int)
- * @param {number} m - month (int)
- * @param {number} d - day (float)
- * @returns {number} jd - Julian day (float)
- */
-export function CalendarJulianToJD (y, m, d) {
-  return CalendarToJD(y, m, d, true)
-}
-
-/**
- * LeapYearJulian returns true if year y in the Julian calendar is a leap year.
- * @param {number} y - year (int)
- * @returns {boolean} true if leap year in Julian Calendar
- */
-export function LeapYearJulian (y) {
-  return y % 4 === 0
-}
-
-/**
- * LeapYearGregorian returns true if year y in the Gregorian calendar is a leap year.
- * @param {number} y - year (int)
- * @returns {boolean} true if leap year in Gregorian Calendar
- */
-export function LeapYearGregorian (y) {
-  return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
-}
-
-/**
- * JDToCalendarJulian returns the calendar date for the given jd in the Julian Calendar.
- *
- * @param {number} jd - Julian day (float)
- * @returns {object} { (int) year, (int) month, (float) day }
- */
-export function JDToCalendarJulian (jd) {
-  return JDToCalendar(jd, true)
-}
-
-/**
- * isJDCalendarGregorian tests if Julian day `jd` falls into the Gregorian calendar
- * @param {number} jd - Julian day (float)
- * @returns {boolean} true for Gregorian, false for Julian calendar
- */
-export function isJDCalendarGregorian (jd) {
-  return (jd >= GREGORIAN0JD)
-}
-
-/**
- * isCalendarGregorian tests if date falls into the Gregorian calendar
- * @param {number} year - julian/gregorian year
- * @param {number} [month] - month of julian/gregorian year
- * @param {number} [day] - day of julian/gregorian year
- * @returns {boolean} true for Gregorian, false for Julian calendar
- */
-export function isCalendarGregorian (year, month = 1, day = 1) {
-  return (year > 1582 ||
-    (year === 1582 && month > 10) ||
-    (year === 1582 && month === 10 && day >= 15)
-  )
-}
-
 /**
  * JDToDate converts a Julian day `jd` to a Date Object (Gregorian Calendar)
  *
@@ -427,105 +353,6 @@ export function JDEToDate (jde) {
  */
 export function DateToJDE (date) {
   return new CalendarGregorian().fromDate(date).toJDE()
-}
-
-/**
- * converts Modified Julian Day `mjd` to Julian Day `jd`
- * @param {Number} mjd - Modified Julian Day
- * @returns {Number} jd - Julian Day
- */
-export function MJDToJD (mjd) {
-  return mjd + base.JMod
-}
-
-/**
- * converts Julian Day `jd` to Modified Julian Day `mjd`
- * The MJD sometimes appear when mentioning orbital elements of artificial satellites.
- * Contrary to JD the MJD begins at Greenwich mean midnight.
- * @param {Number} jd - Julian Day
- * @returns {Number} mjd - Modified Julian Day MJD
- */
-export function JDToMJD (jd) {
-  return jd - base.JMod
-}
-
-/**
- * DayOfWeek determines the day of the week for a given JD.
- *
- * The value returned is an integer in the range 0 to 6, where 0 represents
- * Sunday.  This is the same convention followed in the time package of the
- * Javascript standard library.
- * @param {number} jd - Julian day (float)
- * @returns {number} (int) 0 == sunday; ...; 6 == saturday
- */
-export function DayOfWeek (jd) {
-  return int(jd + 1.5) % 7
-}
-
-/**
- * DayOfYearGregorian computes the day number within the year of the Gregorian
- * calendar.
- * @param {number} y - year (int)
- * @param {number} m - month (int)
- * @param {number} d - day (float)
- * @returns {number} day of year
- */
-export function DayOfYearGregorian (y, m, d) {
-  return DayOfYear(y, m, int(d), LeapYearGregorian(y))
-}
-
-/**
- * DayOfYearJulian computes the day number within the year of the Julian
- * calendar.
- * @param {number} y - year (int)
- * @param {number} m - month (int)
- * @param {number} d - day (float)
- * @returns {number} day of year
- */
-export function DayOfYearJulian (y, m, d) {
-  return DayOfYear(y, m, int(d), LeapYearJulian(y))
-}
-
-/**
- * DayOfYear computes the day number within the year.
- *
- * This form of the function is not specific to the Julian or Gregorian
- * calendar, but you must tell it whether the year is a leap year.
- * @param {number} y - year (int)
- * @param {number} m - month (int)
- * @param {number} d - day (float)
- * @param {boolean} leap - set `true` if `y` is leap year
- * @returns {number} day of year
- */
-export function DayOfYear (y, m, d, leap) {
-  let k = 0
-  if (leap && m > 1) {
-    k = 1
-  }
-  return k + DAYS_OF_YEAR[m] + int(d)
-}
-
-/**
- * DayOfYearToCalendar returns the calendar month and day for a given
- * day of year and leap year status.
- * @param {number} n - day of year (int)
- * @param {boolean} leap - set `true` if `y` is leap year
- * @returns {object} `{ (int) month, (float) day }`
- */
-export function DayOfYearToCalendar (n, leap) {
-  let month
-  let k = 0
-  if (leap) {
-    k = 1
-  }
-  for (month = 1; month <= 12; month++) {
-    if (k + DAYS_OF_YEAR[month] > n) {
-      month = month - 1
-      break
-    }
-  }
-  const day = n - k - DAYS_OF_YEAR[month]
-  return { month, day }
 }
 
 /**

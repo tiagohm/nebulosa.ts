@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toDeg } from '../src/angle'
 import { DAYSEC, PI, RAD2DEG } from '../src/constants'
 import { toKilometer } from '../src/distance'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Refraction, Stellar } from '../src/meeus'
+import { modf } from '../src/math'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
 	expect(actual).toBeCloseTo(expected, numDigits)
@@ -279,18 +280,18 @@ describe('Julian', () => {
 				strictEqual(jd2 - jd1, 27689)
 			})
 
-			dates.forEach((date) => {
+			for (const date of dates) {
 				const name = [date[0], date[1], date[2]].join('-')
 
 				test(name, () => {
 					const jd = Julian.calendarGregorianToJD(date[0], date[1], date[2])
 					strictEqual(jd, date[3])
 				})
-			})
+			}
 		})
 
 		describe('jdToCalendarGregorian', () => {
-			dates.forEach((date) => {
+			for (const date of dates) {
 				const name = [date[0], date[1], date[2]].join('-')
 
 				test(name, () => {
@@ -299,9 +300,373 @@ describe('Julian', () => {
 					strictEqual(month, date[1])
 					strictEqual(day, date[2])
 				})
-			})
+			}
 		})
 	})
+
+	describe('julian', () => {
+		const dates = [
+			[-4712, 1, 1.5, 0],
+			[-1000, 7, 12.5, 1356001],
+			[-1000, 2, 29, 1355866.5],
+			[-1001, 8, 17.9, 1355671.4],
+			[-123, 12, 31, 1676496.5],
+			[-122, 1, 1, 1676497.5],
+			[-584, 5, 28.63, 1507900.13],
+			[333, 1, 27.5, 1842713],
+			[837, 4, 10.3, 2026871.8], // more examples, p. 62
+			[1582, 10, 5.5, 2299161], // 1st day in Gregorian Calendar => 1582-10-15
+			[1582, 10, 4.5, 2299160],
+			[2000, 12, 24, 2451915.5],
+		] as const
+
+		describe('calendarJulianToJD', () => {
+			test('sample', () => {
+				// Example 7.b, p. 61.
+				const jd = Julian.calendarJulianToJD(333, 1, 27.5)
+				strictEqual(jd, 1842713.0)
+			})
+
+			for (const date of dates) {
+				test(date.join('-'), () => {
+					const jd = Julian.calendarJulianToJD(date[0], date[1], date[2])
+					strictEqual(jd, date[3])
+				})
+			}
+		})
+
+		describe('jdToCalendarJulian', () => {
+			for (const date of dates) {
+				test(date.join(' '), () => {
+					const [year, month, day] = Julian.jdToCalendarJulian(date[3])
+					strictEqual(year, date[0], 8)
+					strictEqual(month, date[1], 8)
+					strictEqual(day, date[2], 8)
+				})
+			}
+		})
+	})
+
+	describe('isLeapYearJulian', () => {
+		const years = [
+			[900, true],
+			[1236, true],
+			[750, false],
+			[1429, false],
+		] as const
+
+		for (const year of years) {
+			test(year[0].toFixed(0), () => {
+				expect(Julian.isLeapYearJulian(year[0])).toBe(year[1])
+			})
+		}
+	})
+
+	describe('isLeapYearGregorian', () => {
+		const years = [
+			[1700, false],
+			[1800, false],
+			[1900, false],
+			[2100, false],
+			[1600, true],
+			[2400, true],
+			[2000, true],
+		] as const
+
+		for (const year of years) {
+			test(year[0].toFixed(0), () => {
+				expect(Julian.isLeapYearGregorian(year[0])).toBe(year[1])
+			})
+		}
+	})
+
+	// TODO:
+	// describe('date', () => {
+	// 	const dates = [
+	// 		[Base.J2000, new Date('2000-01-01T12:00:00Z')],
+	// 		[2451915.5, new Date('2001-01-06T00:00:00Z')],
+	// 		[2436116.31, new Date('1957-10-04T19:26:24.000Z')],
+	// 		[1842712, new Date('0333-01-27T12:00:00.000Z')],
+	// 		[1507900.13, new Date('-000584-05-22T15:07:12.000Z')],
+	// 	] as const
+
+	// 	describe('jdToDate', () => {
+	// 		for (const date of dates) {
+	// 			test(date[0].toFixed(0), () => {
+	// 				deepStrictEqual(Julian.jDToDate(date[0]), date[1])
+	// 			})
+	// 		}
+	// 	})
+
+	// 	describe('dateToJD', () => {
+	// 		for (const date of dates) {
+	// 			test(date[1].toISOString(), () => {
+	// 				deepStrictEqual(base.round(Julian.dateToJD(date[1]), 2), date[0])
+	// 			})
+	// 		}
+	// 	})
+
+	// 	describe('jdeToDate', () => {
+	// 		test('conversion', () => {
+	// 			// Example 10.a p.78
+	// 			const d = new Date('1977-02-18T03:37:40Z') // is in fact a jde
+	// 			const jde = Julian.dateToJD(d)
+	// 			const res = Julian.jdeToDate(jde)
+	// 			strictEqual(res.toISOString(), '1977-02-18T03:36:52.351Z')
+	// 		})
+	// 	})
+	// })
+
+	describe('DayOf', () => {
+		test('dayOfWeek', () => {
+			// Example 7.e, p. 65.
+			const res = Julian.dayOfWeek(2434923.5)
+			strictEqual(res, 3) // Wednesday
+		})
+
+		const dates = [
+			[1978, 11, 14, false, 318],
+			[1988, 4, 22, true, 113],
+		] as const
+
+		describe('dayOfYear', () => {
+			for (const date of dates) {
+				const [year, month, day, leap, dayOfYear] = date
+
+				test([year, month, day].join(' '), () => {
+					// Example 7.f, p. 65.
+					const res = Julian.dayOfYear(year, month, day, leap)
+					strictEqual(res, dayOfYear)
+				})
+			}
+		})
+
+		// describe('dayOfYearToCalendar', () => {
+		// 	for (const date of dates) {
+		// 		const [year, month, day, leap, dayOfYear] = date
+
+		// 		test([year, month, day].join(' '), () => {
+		// 			// Example 7.f, p. 65.
+		// 			const res = Julian.dayOfYearToCalendar(dayOfYear, leap)
+		// 			deepStrictEqual(res, { month, day })
+		// 		})
+		// 	}
+		// })
+
+		// describe('dayOfYearToCalendarGregorian', () => {
+		// 	for (const date of dates) {
+		// 		const [year, month, day, leap, dayOfYear] = date
+		// 		const name = [year, month, day].join(' ')
+		// 		test(name, () => {
+		// 			// Example 7.f, p. 65.
+		// 			const res = Julian.dayOfYearToCalendarGregorian(year, dayOfYear)
+		// 			deepStrictEqual(res, new Julian.calendarGregorian(year, month, day))
+		// 		})
+		// 	}
+		// })
+
+		// describe('dayOfYearToCalendarJulian', () => {
+		// 	const dates = [
+		// 		[1978, 11, 14, false, 318],
+		// 		[1988, 4, 22, true, 113],
+		// 		[1236, 11, 14, true, 319],
+		// 		[750, 11, 14, false, 318],
+		// 	] as const
+
+		// 	for (const date of dates) {
+		// 		const [year, month, day, leap, dayOfYear] = date
+
+		// 		test([year, month, day].join(' '), () => {
+		// 			// Example 7.f, p. 65.
+		// 			const res = Julian.dayOfYearToCalendarJulian(year, dayOfYear)
+		// 			deepStrictEqual(res, new Julian.calendarJulian(year, month, day))
+		// 		})
+		// 	}
+		// })
+
+		// describe('calendarGregorian.toYear', () => {
+		// 	test('1977-02-14', () => {
+		// 		const res = new Julian.calendarGregorian(1977, 2, 14).toYear()
+		// 		strictEqual(res, 1977.12055, 5)
+		// 	})
+
+		//     test('1977-01-01', () => {
+		// 		const res = new Julian.calendarGregorian(1977, 1, 1).toYear()
+		// 		strictEqual(res, 1977.0, 5)
+
+		//     test('1977-12-31', () => {
+		// 		const res = new Julian.calendarGregorian(1977, 12, 31.999).toYear()
+		// 		strictEqual(res, 1977.999997260274)
+		// 	})
+		// })
+
+		// describe('calendarGregorian.fromYear', () => {
+		// 	test('1977-02-14', () => {
+		// 		const res = new Julian.calendarGregorian().fromYear(1977.12055)
+		// 		deepStrictEqual(res.getDate(), { year: 1977, month: 2, day: 14 })
+		// 	})
+
+		// 	test('1977-01-01', () => {
+		// 		const res = new Julian.calendarGregorian().fromYear(1977.0)
+		// 		deepStrictEqual(res.getDate(), { year: 1977, month: 1, day: 1 })
+		// 	})
+
+		// 	test('1977-12-31', () => {
+		// 		const res = new Julian.calendarGregorian().fromYear(1977.999997260274)
+		// 		deepStrictEqual(res.getDate(), { year: 1977, month: 12, day: 31 })
+
+		//     test('1977-02-01', () => {
+		// 		const y = new Julian.calendarGregorian(1977, 2, 1).toYear()
+		// 		const res = new Julian.calendarGregorian().fromYear(y)
+		// 		deepStrictEqual(res.getDate(), { year: 1977, month: 2, day: 1 })
+		// 	})
+		// })
+
+		// describe('calendarJulian.toYear', () => {
+		// 	test('1977-02-14', () => {
+		// 		const res = new Julian.calendarJulian(1977, 2, 14).toYear()
+		// 		strictEqual(res, 1977.12055, 5)
+		// 	})
+		// })
+	})
+
+	describe('check Gregorian calendar', () => {
+		test('1582-10-15 GC', () => {
+			const jd = Julian.calendarGregorianToJD(1582, 10, 15)
+			expect(Julian.isJDCalendarGregorian(jd)).toBeTrue()
+		})
+
+		test('1582-10-14 GC', () => {
+			const jd = Julian.calendarGregorianToJD(1582, 10, 14)
+			expect(Julian.isJDCalendarGregorian(jd)).toBeFalse()
+		})
+
+		test('1582-10-04 JC', () => {
+			const jd = Julian.calendarJulianToJD(1582, 10, 4)
+			expect(Julian.isJDCalendarGregorian(jd)).toBeFalse()
+		})
+
+		test('1582-10-05 JC', () => {
+			const jd = Julian.calendarJulianToJD(1582, 10, 5)
+			expect(Julian.isJDCalendarGregorian(jd)).toBeTrue()
+		})
+	})
+
+	// TODO:
+	// describe('Calendar', () => {
+	// 	test('can instatiate with year', () => {
+	// 		const d = new Julian.calendar(2015)
+	// 		strictEqual(d.year, 2015)
+	// 		strictEqual(d.month, 1)
+	// 		strictEqual(d.day, 1)
+	// 	})
+
+	// 	test('can instatiate with Date', () => {
+	// 		const d = new Julian.calendar(new Date('2015-10-20T12:00:00Z'))
+	// 		strictEqual(d.year, 2015)
+	// 		strictEqual(d.month, 10)
+	// 		strictEqual(d.day, 20.5)
+	// 	})
+
+	// 	test('can convert from Date to JD', () => {
+	// 		const d = new Julian.calendar().fromDate(new Date('2000-01-01T12:00:00Z'))
+	// 		const jd = d.toJD()
+	// 		strictEqual(jd, base.J2000)
+	// 	})
+
+	// 	test('can convert from JD to Date', () => {
+	// 		const d = new Julian.calendar().fromJD(base.J2000)
+	// 		const date = d.toDate()
+	// 		strictEqual(date.toISOString(), '2000-01-01T12:00:00.000Z')
+	// 	})
+
+	// 	test('can set date to midnight of same day and convert date to iso string', () => {
+	// 		const d = new Julian.calendar(2015, 10, 20.4)
+	// 		const datestr = d.midnight().toISOString()
+	// 		strictEqual(datestr, '2015-10-20T00:00:00.000Z')
+	// 	})
+
+	// 	test('can set date to noon of same day', () => {
+	// 		const d = new Julian.calendar(2015, 10, 20.4)
+	// 		const date = d.noon().toDate()
+	// 		strictEqual(date.toISOString(), '2015-10-20T12:00:00.000Z')
+	// 	})
+
+	// 	test('can return date', () => {
+	// 		const d = new Julian.calendar(2015, 10, 20.4)
+	// 		deepStrictEqual(d.getDate(), { year: 2015, month: 10, day: 20 })
+	// 	})
+
+	// 	test('can return time', () => {
+	// 		const d = new Julian.calendar(new Date('2015-10-20T08:00:00.000Z'))
+	// 		deepStrictEqual(d.getTime(), { hour: 8, minute: 0, second: 0, millisecond: 0 })
+	// 	})
+
+	// 	test('can return time 2', () => {
+	// 		const d = new Julian.calendar(2015, 10, 20.33333333)
+	// 		deepStrictEqual(d.getTime(), { hour: 7, minute: 59, second: 59, millisecond: 999 })
+	// 	})
+
+	// 	test('can convert to Dynamical Time and back to Universal Time', () => {
+	// 		const d = new Julian.calendar(1, 1, 1)
+	// 		strictEqual(d.toISOString(), '0001-01-01T00:00:00.000Z')
+	// 		d.deltaT() // convert to Dynamical Time
+	// 		strictEqual(d.toISOString(), '0001-01-01T02:56:13.459Z')
+	// 		d.deltaT(true) // convert back to Universal Time
+	// 		strictEqual(d.toISOString(), '0001-01-01T00:00:00.003Z') // 3 ms precision error
+	// 	})
+
+	// 	test('can convert to decimal year', () => {
+	// 		const d = new Julian.calendar(2000, 7, 2)
+	// 		strictEqual(d.toYear(), 2000.5)
+	// 	})
+
+	// 	test('can get day of year', () => {
+	// 		const d = new Julian.calendar(1400, 12, 24)
+	// 		strictEqual(d.dayOfYear(), 359)
+	// 	})
+
+	// 	test('can get day of week', () => {
+	// 		const d = new Julian.calendar(1400, 12, 24)
+	// 		const weekday = 'sun mon tue wed thu fri sat'.split(' ')
+	// 		strictEqual(weekday[d.dayOfWeek()], 'fri')
+	// 	})
+
+	// 	test('1582-10-15 GC', () => {
+	// 		const d = new Julian.calendar(1582, 10, 15)
+	// 		strictEqual(d.isGregorian(), true)
+	// 	})
+
+	// 	test('1582-10-14 JC', () => {
+	// 		const d = new Julian.calendar(1582, 10, 14)
+	// 		strictEqual(d.isGregorian(), false)
+	// 	})
+
+	// 	test('1582-10-15 GC using Date', () => {
+	// 		const d = new Julian.calendar(new Date('1582-10-15T00:00:00Z'))
+	// 		strictEqual(d.isGregorian(), true)
+	// 	})
+	// })
+
+	// test('can convert date to Julian Calendar', () => {
+	// 	const d = new Julian.calendarGregorian(1582, 10, 15)
+	// 	deepStrictEqual(d.toJulian().getDate(), { year: 1582, month: 10, day: 5 })
+	// })
+
+	// test('can convert date to Gregorian Calendar', () => {
+	// 	const d = new Julian.calendarJulian(1582, 10, 5)
+	// 	deepStrictEqual(d.toGregorian().getDate(), { year: 1582, month: 10, day: 15 })
+	// })
+
+	// test('JD to MJD', () => {
+	// 	const d = new Julian.calendarGregorian(1858, 11, 17)
+	// 	strictEqual(Julian.jDToMJD(d.toJD()), 0.0)
+	// })
+
+	// test('MJD to JD', () => {
+	// 	const d = Julian.jDToCalendarGregorian(Julian.mJDToJD(0))
+	// 	deepStrictEqual(d, { year: 1858, month: 11, day: 17 })
+	// })
 })
 
 describe('AngularSeparation', () => {
@@ -520,6 +885,53 @@ describe('Kepler', () => {
 	})
 })
 
+describe('Planetary', () => {
+	test('mercuryInfConj', () => {
+		// Example 36.a, p. 252
+		const j = Planetary.mercuryInfConj(1993.75)
+		strictEqual(j, 2449297.645, 3)
+	})
+
+	test('saturnConj', () => {
+		// Example 36.b, p. 252
+		const j = Planetary.saturnConj(2125.5)
+		strictEqual(j, 2497437.904, 3)
+	})
+
+	test('mercuryWestElongation', () => {
+		// Example 36.c, p. 253
+		const res = Planetary.mercuryWestElongation(1993.9)
+		const j = res[0]
+		const e = res[1]
+		strictEqual(j, 2449314.14, 2)
+		strictEqual(toDeg(e), 19.7506, 4)
+		expect(formatALT(e, true)).toBe('+19 45 02')
+	})
+
+	test('marsStation2', () => {
+		// Example 36.d, p. 254
+		const j = Planetary.marsStation2(1997.3)
+		strictEqual(j, 2450566.255, 3)
+	})
+
+	const dates = [
+		[Planetary.mercuryInfConj, Julian.calendarGregorianToJD(1631, 11, 7), 7],
+		[Planetary.venusInfConj, Julian.calendarGregorianToJD(1882, 12, 6), 17],
+		[Planetary.marsOpp, Julian.calendarGregorianToJD(2729, 9, 9), 3],
+		[Planetary.jupiterOpp, Julian.calendarJulianToJD(-6, 9, 15), 7],
+		[Planetary.saturnOpp, Julian.calendarJulianToJD(-6, 9, 14), 9],
+		[Planetary.uranusOpp, Julian.calendarGregorianToJD(1780, 12, 17), 14],
+		[Planetary.neptuneOpp, Julian.calendarGregorianToJD(1846, 8, 20), 4],
+	] as const
+
+	for (const d of dates) {
+		test(d[0].name, () => {
+			const f = modf(0.5 + d[0](Base.jdeToJulianYear(d[1])))[1]
+			strictEqual(Math.floor(f * 24 + 0.5), d[2])
+		})
+	}
+})
+
 describe('Node', () => {
 	test('EllipticAscending', () => {
 		// Example 39.a, p. 276
@@ -573,7 +985,6 @@ describe('Node', () => {
 	// 	// Example 39.c, p. 278
 	// 	const k = planetelements.mean(planetelements.venus, Julian.calendarGregorianToJD(1979, 1, 1))
 	// 	const res = Node.ellipticAscending(
-	// 		// eslint-disable-line no-unused-vars
 	// 		k.axis,
 	// 		k.ecc,
 	// 		k.peri - k.node,
