@@ -3,7 +3,7 @@ import { ASEC2RAD, AU_KM, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { Distance } from './distance'
 import { floorDiv, modf, type NumberArray } from './math'
 
-const { sin, cos, tan, asin, acos, atan, atan2, sqrt, hypot, log10, abs, trunc, floor } = Math
+const { sin, cos, tan, asin, acos, atan, atan2, sqrt, hypot, log10, abs, trunc, floor, min } = Math
 
 // https://github.com/commenthol/astronomia/blob/master/src/
 
@@ -453,6 +453,148 @@ export namespace Interpolation {
 		const y2 = y.slice(nearestX, nearestX + 2)
 		const x01 = x1 + nearestX * interval
 		return y2[0] + ((y[1] - y[0]) * (x - x01)) / interval
+	}
+}
+
+// Chapter 4, Curve Fitting.
+export namespace Fit {
+	// Fits y = ax + b to sample data.
+	export function linear(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
+		const n = min(x.length, y.length)
+
+		let sx = 0
+		let sy = 0
+		let sx2 = 0
+		let sxy = 0
+
+		for (let i = 0; i < n; i++) {
+			const xi = x[i]
+			const yi = y[i]
+			sx += xi
+			sy += yi
+			sx2 += xi * xi
+			sxy += xi * yi
+		}
+
+		// (4.2) p. 36
+		const d = n * sx2 - sx * sx
+		const a = (n * sxy - sx * sy) / d
+		const b = (sy * sx2 - sx * sxy) / d
+		return [a, b] as const
+	}
+
+	// Computes the correlation coefficient for sample data.
+	export function correlationCoefficient(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
+		const n = Math.min(x.length, y.length)
+
+		let sx = 0
+		let sy = 0
+		let sx2 = 0
+		let sy2 = 0
+		let sxy = 0
+
+		for (let i = 0; i < n; i++) {
+			const xi = x[i]
+			const yi = y[i]
+			sx += xi
+			sy += yi
+			sx2 += xi * xi
+			sy2 += yi * yi
+			sxy += xi * yi
+		}
+
+		// (4.3) p. 38
+		return (n * sxy - sx * sy) / (sqrt(n * sx2 - sx * sx) * sqrt(n * sy2 - sy * sy))
+	}
+
+	// Fits y = ax² + bx + c to sample data.
+	export function quadratic(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
+		const N = Math.min(x.length, y.length)
+
+		let P = 0
+		let Q = 0
+		let R = 0
+		let S = 0
+		let T = 0
+		let U = 0
+		let V = 0
+
+		for (let i = 0; i < N; i++) {
+			const xi = x[i]
+			const yi = y[i]
+			const x2 = xi * xi
+			P += xi
+			Q += x2
+			R += xi * x2
+			S += x2 * x2
+			T += yi
+			U += xi * yi
+			V += x2 * yi
+		}
+
+		// (4.5) p. 43
+		const D = N * Q * S + 2 * P * Q * R - Q * Q * Q - P * P * S - N * R * R
+		// (4.6) p. 43
+		const a = (N * Q * V + P * R * T + P * Q * U - Q * Q * T - P * P * V - N * R * U) / D
+		const b = (N * S * U + P * Q * V + Q * R * T - Q * Q * U - P * S * T - N * R * V) / D
+		const c = (Q * S * T + Q * R * U + P * R * V - Q * Q * V - P * S * U - R * R * T) / D
+		return [a, b, c] as const
+	}
+
+	// Fits y = aƒ0(x) + bƒ1(x) + cƒ2(x) to a sample data.
+	export function func3(x: Readonly<NumberArray>, y: Readonly<NumberArray>, f0: (a: number) => number, f1: (a: number) => number, f2: (a: number) => number) {
+		const N = Math.min(x.length, y.length)
+
+		let M = 0
+		let P = 0
+		let Q = 0
+		let R = 0
+		let S = 0
+		let T = 0
+		let U = 0
+		let V = 0
+		let W = 0
+
+		for (let i = 0; i < N; i++) {
+			const xi = x[i]
+			const yi = y[i]
+			const y0 = f0(xi)
+			const y1 = f1(xi)
+			const y2 = f2(xi)
+			M += y0 * y0
+			P += y0 * y1
+			Q += y0 * y2
+			R += y1 * y1
+			S += y1 * y2
+			T += y2 * y2
+			U += yi * y0
+			V += yi * y1
+			W += yi * y2
+		}
+
+		// (4.7) p. 44
+		const D = M * R * T + 2 * P * Q * S - M * S * S - R * Q * Q - T * P * P
+		const a = (U * (R * T - S * S) + V * (Q * S - P * T) + W * (P * S - Q * R)) / D
+		const b = (U * (S * Q - P * T) + V * (M * T - Q * Q) + W * (P * Q - M * S)) / D
+		const c = (U * (P * S - R * Q) + V * (P * Q - M * S) + W * (M * R - P * P)) / D
+		return [a, b, c] as const
+	}
+
+	// Fits y = aƒ(x) to sample data.
+	export function func1(x: Readonly<NumberArray>, y: Readonly<NumberArray>, f: (a: number) => number) {
+		const n = Math.min(x.length, y.length)
+
+		let syf = 0
+		let sf2 = 0
+
+		// (4.8) p. 45
+		for (let i = 0; i < n; i++) {
+			const fx = f(x[i])
+			syf += y[i] * fx
+			sf2 += fx * fx
+		}
+
+		return syf / sf2
 	}
 }
 

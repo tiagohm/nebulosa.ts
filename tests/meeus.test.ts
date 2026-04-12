@@ -3,7 +3,7 @@ import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toD
 import { DAYSEC, PI, RAD2DEG } from '../src/constants'
 import { meter, toKilometer, toMeter } from '../src/distance'
 import { modf } from '../src/math'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
 import { time, timeToDate, timeYMD } from '../src/time'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
@@ -668,6 +668,79 @@ describe('Julian', () => {
 	// 	const d = Julian.jDToCalendarGregorian(Julian.mJDToJD(0))
 	// 	deepStrictEqual(d, { year: 1858, month: 11, day: 17 })
 	// })
+})
+
+describe('Fit', () => {
+	test('linear', () => {
+		// Example 4.a, p. 37.0
+		const x = [0.2982, 0.2969, 0.2918, 0.2905, 0.2707, 0.2574, 0.2485, 0.2287, 0.2238, 0.2156, 0.1992, 0.1948, 0.1931, 0.1889, 0.1781, 0.1772, 0.177, 0.1755, 0.1746]
+		const y = [10.92, 11.01, 10.99, 10.78, 10.87, 10.8, 10.75, 10.14, 10.21, 9.97, 9.69, 9.57, 9.66, 9.63, 9.65, 9.44, 9.44, 9.32, 9.2]
+
+		const [a, b] = Fit.linear(x, y)
+
+		strictEqual(a, 13.67, 2)
+		strictEqual(b, 7.03, 2)
+	})
+
+	test('correlationCoefficient', () => {
+		// Example 4.b, p. 40.0
+		const x = [73, 38, 35, 42, 78, 68, 74, 42, 52, 54, 39, 61, 42, 49, 50, 62, 44, 39, 43, 54, 44, 37]
+		const y = [90.4, 125.3, 161.8, 143.4, 52.5, 50.8, 71.5, 152.8, 131.3, 98.5, 144.8, 78.1, 89.5, 63.9, 112.1, 82.0, 119.8, 161.2, 208.4, 111.6, 167.1, 162.1]
+		const [a, b] = Fit.linear(x, y)
+
+		// y = -2.49x + 244.18
+		strictEqual(a, -2.49, 2)
+		strictEqual(b, 244.18, 2)
+		strictEqual(Fit.correlationCoefficient(x, y), -0.767, 3)
+	})
+
+	// example data p. 40.0
+	const qdatax = [-4, -3, -2, -1, 0, 1, 2]
+	const qdatay = [-6, -1, 2, 3, 2, -1, -6]
+
+	test('quadratic', () => {
+		const [a, b, c] = Fit.quadratic(qdatax, qdatay)
+		strictEqual(a, -1)
+		strictEqual(b, -2)
+		strictEqual(c, 2)
+	})
+
+	test('func3', () => {
+		const [a, b, c] = Fit.func3(
+			qdatax,
+			qdatay,
+			(x) => x * x,
+			(x) => x,
+			() => 1,
+		)
+
+		strictEqual(a, -1)
+		strictEqual(b, -2)
+		strictEqual(c, 2)
+	})
+
+	test('func3 sin', () => {
+		// Example 4.c, p. 44.0
+		const x = [3, 20, 34, 50, 75, 88, 111, 129, 143, 160, 183, 200, 218, 230, 248, 269, 290, 303, 320, 344].map(deg)
+		const y = [0.0433, 0.2532, 0.3386, 0.356, 0.4983, 0.7577, 1.4585, 1.8628, 1.8264, 1.2431, -0.2043, -1.2431, -1.8422, -1.8726, -1.4889, -0.8372, -0.4377, -0.364, -0.3508, -0.2126]
+
+		const res = Fit.func3(
+			x,
+			y,
+			Math.sin,
+			(x) => Math.sin(2 * x),
+			(x) => Math.sin(3 * x),
+		)
+
+		strictEqual(res[0], 1.2, 4)
+		strictEqual(res[1], -0.77, 4)
+		strictEqual(res[2], 0.39, 4)
+	})
+
+	test('func1', () => {
+		const a = Fit.func1([0, 1, 2, 3, 4, 5], [0, 1.2, 1.4, 1.7, 2.1, 2.2], Math.sqrt)
+		strictEqual(a, 1.016, 3) // y = 1.016√x
+	})
 })
 
 describe('Globe', () => {
