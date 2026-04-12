@@ -3,7 +3,8 @@ import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toD
 import { DAYSEC, PI, RAD2DEG } from '../src/constants'
 import { meter, toKilometer, toMeter } from '../src/distance'
 import { modf } from '../src/math'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
+import { time, timeToDate, timeYMD } from '../src/time'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
 	expect(actual).toBeCloseTo(expected, numDigits)
@@ -731,7 +732,7 @@ describe('Globe', () => {
 		})
 
 		test('approxLinearDistance', () => {
-            // d = acos(approxAngularDistance)
+			// d = acos(approxAngularDistance)
 			const ld = Globe.approxLinearDistance(0.9677597323715493)
 			strictEqual(toKilometer(ld), 6166, 0)
 		})
@@ -815,6 +816,76 @@ describe('AngularSeparation', () => {
 			const exp = (224 * PI) / 180 / 3600 // on p. 111
 			expect(Math.abs((sep - exp) / sep) < 1e-2).toBeTrue()
 		})
+	})
+})
+
+describe('Conjunction', () => {
+	test('planetary', () => {
+		// Example 18.a, p. 117.0
+
+		// Text asks for Mercury-Venus conjunction, so r1, d1 is Venus ephemeris,
+		// r2, d2 is Mercury ephemeris.
+
+		// Venus
+		const cs1 = [
+			[hms(10, 27, 27.175), signedDms(false, 4, 4, 41.83)],
+			[hms(10, 26, 32.41), signedDms(false, 3, 55, 54.66)],
+			[hms(10, 25, 29.042), signedDms(false, 3, 48, 3.51)],
+			[hms(10, 24, 17.191), signedDms(false, 3, 41, 10.25)],
+			[hms(10, 22, 57.024), signedDms(false, 3, 35, 16.61)],
+		] as const
+
+		// Mercury
+		const cs2 = [
+			[hms(10, 24, 30.125), signedDms(false, 6, 26, 32.05)],
+			[hms(10, 25, 0.342), signedDms(false, 6, 10, 57.72)],
+			[hms(10, 25, 12.515), signedDms(false, 5, 57, 33.08)],
+			[hms(10, 25, 6.235), signedDms(false, 5, 46, 27.07)],
+			[hms(10, 24, 41.185), signedDms(false, 5, 37, 48.45)],
+		] as const
+
+		// Compute conjunction
+		// Day of month is sufficient for a time scale.
+		const a = Conjunction.planetary(5, 9, cs1, cs2)
+
+		// 1991-08-07T05:42:40.908Z
+		const [d, f] = modf(a[0])
+		const { day, fraction } = timeYMD(1991, 8, d)
+		expect(timeToDate(time(day, fraction + f))).toEqual([1991, 8, 7, 5, 42, 40, 907996773])
+		expect(formatALT(a[1], true), '+02 08 22')
+	})
+
+	test('stellar', () => {
+		// Exercise, p. 119.0
+
+		const cs2 = [
+			[hms(15, 3, 51.937), signedDms(true, 8, 57, 34.51)], // 1996-02-07
+			[hms(15, 9, 57.327), signedDms(true, 9, 9, 3.88)], // 1996-02-12
+			[hms(15, 15, 37.898), signedDms(true, 9, 17, 37.94)], // 1996-02-17
+			[hms(15, 20, 50.632), signedDms(true, 9, 23, 16.25)], // 1996-02-22
+			[hms(15, 25, 32.695), signedDms(true, 9, 26, 1.01)], // 1996-02-27
+		] as const
+
+		const jd = Julian.calendarGregorianToJD(1996, 2, 17)
+		const dt = jd - Base.J2000
+		const dy = dt / Base.JULIAN_YEAR
+		const dc = dy / 100
+
+		const pmr = -0.649 // sec/cen
+		const pmd = -1.91 // sec/cen
+		// Careful with quick and dirty way of applying correction to seconds
+		// component before converting to radians. The dec here is negative
+		// so correction must be subtracted. Alternative, less error-prone,
+		// way would be to convert both to radians, then add.
+		const c1 = [hms(15, 17, 0.421 + pmr * dc), signedDms(true, 9, 22, 58.54 - pmd * dc)] as const
+
+		const a = Conjunction.stellar(7, 27, c1, cs2)
+
+		// 1996-02-18T06:36:55.352Z
+		const [d, f] = modf(a[0])
+		const { day, fraction } = timeYMD(1996, 2, d)
+		expect(timeToDate(time(day, fraction + f))).toEqual([1996, 2, 18, 6, 36, 55, 352058930])
+		expect(formatALT(a[1], true), '+00 03 38')
 	})
 })
 

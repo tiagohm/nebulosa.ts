@@ -773,6 +773,57 @@ export namespace Globe {
 // Rise: Chapter 15, Rising, Transit, and Setting.
 export namespace Rise {}
 
+// Chapter 16: Atmospheric Refraction.
+// Functions here assume atmospheric pressure of 1010 mb, temperature of 10°C, and yellow light.
+export namespace Refraction {
+	const GT15_T1 = 58.294 * ASEC2RAD
+	const GT15_T2 = 0.0668 * ASEC2RAD
+	const GT15_A1 = 58.276 * ASEC2RAD
+	const GT15_A2 = 0.0824 * ASEC2RAD
+
+	// Computes the refraction to be subtracted from h0 to obtain the true altitude when altitude is greater than 15 degrees.
+	export function gt15True(h0: Angle): Angle {
+		// (16.1) p. 105
+		const t = tan(PIOVERTWO - h0)
+		return GT15_T1 * t - GT15_T2 * t * t * t
+	}
+
+	// Computes the refraction to be added to h to obtain the apparent altitude of the body.
+	export function gt15Apparent(h: Angle) {
+		// (16.2) p. 105
+		const t = tan(PIOVERTWO - h)
+		return GT15_A1 * t - GT15_A2 * t * t * t
+	}
+
+	// Computes the refraction to be subtracted from h0 to obtain the true altitude with accurate of 0.07 arc min from horizon to zenith.
+	export function bennett(h0: Angle): Angle {
+		// (16.3) p. 106
+		const c1 = DEG2RAD / 60
+		const c731 = 7.31 * DEG2RAD * DEG2RAD
+		const c44 = 4.4 * DEG2RAD
+		return c1 / tan(h0 + c731 / (h0 + c44))
+	}
+
+	// Computes refraction for obtaining true altitude with accurate of 0.015 arc min.
+	export function bennett2(h0: Angle): Angle {
+		const cMin = 60 / DEG2RAD
+		const c06 = 0.06 / cMin
+		const c147 = 14.7 * cMin * DEG2RAD
+		const c13 = 13 * DEG2RAD
+		const R = bennett(h0)
+		return R - c06 * sin(c147 * R + c13)
+	}
+
+	// Computes the refraction to be added to h (computed true "airless" altitude of a celestial body) to obtain the apparent altitude of the body.
+	export function saemundsson(h: Angle): Angle {
+		// (16.4) p. 106
+		const c102 = (1.02 * DEG2RAD) / 60
+		const c103 = 10.3 * DEG2RAD * DEG2RAD
+		const c511 = 5.11 * DEG2RAD
+		return c102 / tan(h + c103 / (h + c511))
+	}
+}
+
 // Chapter 17: Angular Separation.
 export namespace AngularSeparation {
 	// Computes the angular separation between two celestial bodies.
@@ -896,54 +947,46 @@ export namespace AngularSeparation {
 	}
 }
 
-// Chapter 16: Atmospheric Refraction.
-// Functions here assume atmospheric pressure of 1010 mb, temperature of 10°C, and yellow light.
-export namespace Refraction {
-	const GT15_T1 = 58.294 * ASEC2RAD
-	const GT15_T2 = 0.0668 * ASEC2RAD
-	const GT15_A1 = 58.276 * ASEC2RAD
-	const GT15_A2 = 0.0824 * ASEC2RAD
+// Chapter 18: Planetary Conjunctions.
+export namespace Conjunction {
+	// Computes the time of conjunction between two moving objects, such as planets.
+	// t1, t5 are times of first and last rows of ephemerides. The scale is arbitrary.
+	// cs1 is the ephemeris of the first object (equatorial or ecliptic).
+	// cs2 is the ephemeris of the second object, in the same frame as the first.
+	export function planetary(t1: number, t5: number, cs1: readonly Coord[], cs2: readonly Coord[]) {
+		if (cs1.length !== 5 || cs1.length !== cs2.length) throw new Error('five rows required in ephemerides')
 
-	// Computes the refraction to be subtracted from h0 to obtain the true altitude when altitude is greater than 15 degrees.
-	export function gt15True(h0: Angle): Angle {
-		// (16.1) p. 105
-		const t = tan(PIOVERTWO - h0)
-		return GT15_T1 * t - GT15_T2 * t * t * t
+		const dr = new Float64Array(cs1.length)
+		const dd = new Float64Array(cs1.length)
+
+		for (let i = 0; i < cs2.length; i++) {
+			dr[i] = cs2[i][0] - cs1[i][0]
+			dd[i] = cs2[i][1] - cs1[i][1]
+		}
+
+		return conj(t1, t5, dr, dd)
 	}
 
-	// Computes the refraction to be added to h to obtain the apparent altitude of the body.
-	export function gt15Apparent(h: Angle) {
-		// (16.2) p. 105
-		const t = tan(PIOVERTWO - h)
-		return GT15_A1 * t - GT15_A2 * t * t * t
+	// Computes a conjunction between a moving and non-moving object.
+	export function stellar(t1: number, t5: number, c1: Coord, cs2: readonly Coord[]) {
+		if (cs2.length !== 5) throw new Error('five rows required in ephemerides')
+
+		const dr = new Float64Array(cs2.length)
+		const dd = new Float64Array(cs2.length)
+
+		for (let i = 0; i < cs2.length; i++) {
+			dr[i] = cs2[i][0] - c1[0]
+			dd[i] = cs2[i][1] - c1[1]
+		}
+
+		return conj(t1, t5, dr, dd)
 	}
 
-	// Computes the refraction to be subtracted from h0 to obtain the true altitude with accurate of 0.07 arc min from horizon to zenith.
-	export function bennett(h0: Angle): Angle {
-		// (16.3) p. 106
-		const c1 = DEG2RAD / 60
-		const c731 = 7.31 * DEG2RAD * DEG2RAD
-		const c44 = 4.4 * DEG2RAD
-		return c1 / tan(h0 + c731 / (h0 + c44))
-	}
-
-	// Computes refraction for obtaining true altitude with accurate of 0.015 arc min.
-	export function bennett2(h0: Angle): Angle {
-		const cMin = 60 / DEG2RAD
-		const c06 = 0.06 / cMin
-		const c147 = 14.7 * cMin * DEG2RAD
-		const c13 = 13 * DEG2RAD
-		const R = bennett(h0)
-		return R - c06 * sin(c147 * R + c13)
-	}
-
-	// Computes the refraction to be added to h (computed true "airless" altitude of a celestial body) to obtain the apparent altitude of the body.
-	export function saemundsson(h: Angle): Angle {
-		// (16.4) p. 106
-		const c102 = (1.02 * DEG2RAD) / 60
-		const c103 = 10.3 * DEG2RAD * DEG2RAD
-		const c511 = 5.11 * DEG2RAD
-		return c102 / tan(h + c103 / (h + c511))
+	// Returns the time of conjunction in JDE and the amount that object 2 was "above" object 1 at the time of conjunction.
+	function conj(t1: number, t5: number, dr: NumberArray, dd: NumberArray) {
+		const t = new Interpolation.Len5(t1, t5, dr).zero(true)
+		const deltad = new Interpolation.Len5(t1, t5, dd).interpolateXStrict(t)
+		return [t, deltad] as const
 	}
 }
 
