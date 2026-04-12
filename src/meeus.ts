@@ -85,6 +85,13 @@ export namespace Base {
 		return [sin(epsilon), cos(epsilon)]
 	}
 
+	// Computes sine² and cosine².
+	export function sincos2(epsilon: Angle) {
+		const s = sin(epsilon)
+		const c = cos(epsilon)
+		return [s * s, c * c]
+	}
+
 	// Computes the Julian ephemeris day for a Julian year.
 	export function julianYearToJDE(year: number) {
 		return J2000 + JULIAN_YEAR * (year - 2000)
@@ -551,22 +558,8 @@ export namespace Julian {
 		const e = trunc(floorDiv((b - d) * 1e4, 306001))
 
 		const day = trunc(b - d) - floorDiv(306001 * e, 1e4) + f
-
-		let month = 0
-
-		if (e === 14 || e === 15) {
-			month = e - 13
-		} else {
-			month = e - 1
-		}
-
-		let year = 0
-
-		if (month < 3) {
-			year = trunc(c) - 4715
-		} else {
-			year = trunc(c) - 4716
-		}
+		const month = e === 14 || e === 15 ? e - 13 : e - 1
+		const year = month < 3 ? trunc(c) - 4715 : trunc(c) - 4716
 
 		return [year, month, day] as const
 	}
@@ -616,17 +609,17 @@ export namespace Julian {
 	// Determines the day of the week for a given JD.
 	// The value returned is an integer in the range 0 to 6, where 0 represents Sunday.
 	export function dayOfWeek(jd: number) {
-		return Math.trunc(jd + 1.5) % 7
+		return trunc(jd + 1.5) % 7
 	}
 
 	// Computes the day number within the year of the Gregorian calendar.
 	export function dayOfYearGregorian(y: number, m: number, d: number) {
-		return dayOfYear(y, m, Math.trunc(d), isLeapYearGregorian(y))
+		return dayOfYear(y, m, trunc(d), isLeapYearGregorian(y))
 	}
 
 	// Computes the day number within the year of the Julian calendar.
 	export function dayOfYearJulian(y: number, m: number, d: number) {
-		return dayOfYear(y, m, Math.trunc(d), isLeapYearJulian(y))
+		return dayOfYear(y, m, trunc(d), isLeapYearJulian(y))
 	}
 
 	// Computes the day number within the year.
@@ -635,7 +628,7 @@ export namespace Julian {
 	export function dayOfYear(y: number, m: number, d: number, leap: boolean) {
 		let k = 0
 		if (leap && m > 1) k = 1
-		return k + DAYS_OF_YEAR[m] + Math.trunc(d)
+		return k + DAYS_OF_YEAR[m] + trunc(d)
 	}
 
 	// Computes the calendar month and day for a given day of year and leap year status.
@@ -656,6 +649,124 @@ export namespace Julian {
 
 		const day = n - k - DAYS_OF_YEAR[month]
 		return { month, day }
+	}
+}
+
+// Chapter 11, The Earth's Globe.
+export namespace Globe {
+	// Represents an ellipsoid of revolution.
+	export class Ellipsoid {
+		readonly #radius: Distance
+		readonly #flat: number
+
+		constructor(radius: Distance, flat: number) {
+			this.#radius = radius
+			this.#flat = flat
+		}
+
+		get A() {
+			return this.#radius
+		}
+
+		// Returns the polar radius.
+		get B() {
+			return this.#radius * (1 - this.#flat)
+		}
+
+		// Returns the eccentricity of a meridian.
+		get eccentricity() {
+			return sqrt((2 - this.#flat) * this.#flat)
+		}
+
+		// Computes parallax constants rho sin phi' and rho cos phi' given latitude and height above the ellipsoid.
+		parallaxConstants(phi: Angle, h: Distance) {
+			const boa = 1 - this.#flat
+			const u = atan(boa * tan(phi))
+			const su = sin(u)
+			const cu = cos(u)
+			const sp = sin(phi)
+			const cp = cos(phi)
+			const hoa = (h * 0.001) / this.#radius
+			const rhosPhi = su * boa + hoa * sp
+			const rhocPhi = cu + hoa * cp
+			return [rhosPhi, rhocPhi] as const
+		}
+
+		// Computes rho, the distance (in unit is fraction of the equatorial radius) from Earth center to a point on the ellipsoid.
+		rho(phi: Angle) {
+			// Magic numbers...
+			return 0.9983271 + 0.0016764 * cos(2 * phi) - 0.0000035 * cos(4 * phi)
+		}
+
+		// Computes the the radius of the circle that is the parallel of latitude at phi.
+		radiusAtLatitude(phi: Angle): Distance {
+			const s = sin(phi)
+			const c = cos(phi)
+			return (this.#radius * c) / sqrt(1 - (2 - this.#flat) * this.#flat * s * s)
+		}
+
+		// Computes the radius of meridian at latitude phi.
+		radiusOfCurvature(phi: Angle): Distance {
+			const s = sin(phi)
+			const e2 = (2 - this.#flat) * this.#flat
+			return (this.#radius * (1 - e2)) / (1 - e2 * s * s) ** 1.5
+		}
+
+		// Computes the distance between two points measured along the surface of an ellipsoid.
+		// Accuracy is much better than that of approxAngularDistance or approxLinearDistance.
+		distance(lon1: Angle, lat1: Angle, lon2: Angle, lat2: Angle): Distance {
+			// From AA, ch 11, p 84.
+			const [s2f, c2f] = Base.sincos2((lat1 + lat2) / 2)
+			const [s2g, c2g] = Base.sincos2((lat1 - lat2) / 2)
+			const [s2Lambda, c2Lambda] = Base.sincos2((lon1 - lon2) / 2)
+			const s = s2g * c2Lambda + c2f * s2Lambda
+			const c = c2g * c2Lambda + s2f * s2Lambda
+			const omega = atan(sqrt(s / c))
+			const r = sqrt(s * c) / omega
+			const d = 2 * omega * this.#radius
+			const h1 = (3 * r - 1) / (2 * c)
+			const h2 = (3 * r + 1) / (2 * s)
+			return d * (1 + this.#flat * (h1 * s2f * c2g - h2 * c2f * s2g))
+		}
+	}
+
+	// IAU 1976.
+	export const EARTH76 = new Ellipsoid(6.37814 / AU_KM, 1 / 298.257)
+
+	// RotationRate1996_5 is the rotational angular velocity of the Earth
+	// with respect to the stars at the epoch 1996.5.
+	export const ROTATION_RATE_1996_5 = 7.292114992e-5 // rad/s
+
+	// Computes the length of one degree of longitude.
+	export function oneDegreeOfLongitude(rp: Distance): Distance {
+		return rp * DEG2RAD
+	}
+
+	// Computes the length of one degree of latitude.
+	export function oneDegreeOfLatitude(rm: Distance): Distance {
+		return rm * DEG2RAD
+	}
+
+	// Computes geographic latitude - geocentric latitude (phi - phi') with given geographic latitude (phi).
+	export function geocentricLatitudeDifference(phi: Angle): Angle {
+		// This appears to be an approximation with hard coded magic numbers.
+		// No explanation is given in the text. The ellipsoid is not specified.
+		// Perhaps the approximation works well enough for all ellipsoids?
+		return ((692.73 * sin(2 * phi) - 1.16 * sin(4 * phi)) * PI) / (180 * 3600)
+	}
+
+	// Computes the cosine of the angle between two points.
+	// The accuracy deteriorates at small angles.
+	// Use d = acos(cos) to obtain geocentric angular distance in radians.
+	export function approxAngularDistance(lon1: Angle, lat1: Angle, lon2: Angle, lat2: Angle) {
+		return sin(lat1) * sin(lat2) + cos(lat1) * cos(lat2) * cos(lon1 - lon2)
+	}
+
+	// Computes a distance across the surface of the Earth.
+	// Approximating the Earth as a sphere, the function takes a geocentric angular
+	// distance in radians and returns the corresponding linear distance.
+	export function approxLinearDistance(d: Angle): Distance {
+		return (6371 / AU_KM) * d
 	}
 }
 
@@ -845,8 +956,8 @@ export namespace Circle {
 		const cd2 = cos(c2[1])
 		const cd3 = cos(c3[1])
 		let a = 2 * asin(sqrt(AngularSeparation.hav(c2[1] - c1[1]) + cd1 * cd2 * AngularSeparation.hav(c2[0] - c1[0])))
-		let b = 2 * asin(Math.sqrt(AngularSeparation.hav(c3[1] - c2[1]) + cd2 * cd3 * AngularSeparation.hav(c3[0] - c2[0])))
-		let c = 2 * Math.asin(Math.sqrt(AngularSeparation.hav(c1[1] - c3[1]) + cd3 * cd1 * AngularSeparation.hav(c1[0] - c3[0])))
+		let b = 2 * asin(sqrt(AngularSeparation.hav(c3[1] - c2[1]) + cd2 * cd3 * AngularSeparation.hav(c3[0] - c2[0])))
+		let c = 2 * asin(sqrt(AngularSeparation.hav(c1[1] - c3[1]) + cd3 * cd1 * AngularSeparation.hav(c1[0] - c3[0])))
 
 		if (b > a) {
 			const t = a
@@ -863,7 +974,7 @@ export namespace Circle {
 		if (a * a >= b * b + c * c) return [a, true] as const
 
 		// (20.1) p. 128
-		return [(2 * a * b * c) / Math.sqrt((a + b + c) * (a + b - c) * (b + c - a) * (a + c - b)), false] as const
+		return [(2 * a * b * c) / sqrt((a + b + c) * (a + b - c) * (b + c - a) * (a + c - b)), false] as const
 	}
 }
 
@@ -955,7 +1066,7 @@ export namespace Nutation {
 	export function nutationInRA(jde: number) {
 		const [deltaPsi, deltaEpsilon] = nutation(jde)
 		const epsilon0 = meanObliquity(jde)
-		return deltaPsi * Math.cos(epsilon0 + deltaEpsilon)
+		return deltaPsi * cos(epsilon0 + deltaEpsilon)
 	}
 
 	const TABLE_22A = [
@@ -1044,7 +1155,7 @@ export namespace Kepler {
 	// For some vaues of e and M it will fail to converge and the function will return an error.
 	export function kepler1(e: number, m: Angle, places: number) {
 		// (30.5) p. 195
-		const f = (E0: number) => m + e * Math.sin(E0)
+		const f = (E0: number) => m + e * sin(E0)
 		return Iteration.decimalPlaces(f, m, places, places * 5)
 	}
 
@@ -1128,7 +1239,7 @@ export namespace Planetary {
 	// given a year and a row of coefficients from Table 36.A, p. 250.0
 	export function mean(y: number, a: readonly [number, number, number, number]) {
 		// (36.1) p. 250
-		const k = Math.floor((365.2425 * y + 1721060 - a[0]) / a[1] + 0.5)
+		const k = floor((365.2425 * y + 1721060 - a[0]) / a[1] + 0.5)
 		const J = a[0] + k * a[1]
 		const M = normalizeAngle(a[2] + k * a[3])
 		const T = Base.j2000Century(J)
@@ -1452,7 +1563,7 @@ export namespace Illuminated {
 	// Computes the phase angle of a planet.
 	// r is planet's distance to Sun, delta its distance to Earth, and R the distance from Sun to Earth.  All distances in AU.
 	export function phaseAngle(r: Distance, delta: Distance, R: Distance) {
-		return Math.acos((r * r + delta * delta - R * R) / (2 * r * delta))
+		return acos((r * r + delta * delta - R * R) / (2 * r * delta))
 	}
 
 	// Computes the illuminated fraction of the disk of a planet.
@@ -1468,7 +1579,7 @@ export namespace Illuminated {
 	// L0, R0 are longitude and radius for Earth, delta is distance from Earth to the planet.
 	export function phaseAngle2(L: Angle, B: Angle, R: Distance, L0: Angle, R0: Distance, delta: Distance) {
 		// (41.3) p. 283
-		return Math.acos((R - R0 * Math.cos(B) * Math.cos(L - L0)) / delta)
+		return acos((R - R0 * cos(B) * cos(L - L0)) / delta)
 	}
 
 	// Computes the phase angle of a planet.
@@ -1479,7 +1590,7 @@ export namespace Illuminated {
 		// (41.4) p. 283
 		const [sL, cL] = Base.sincos(L)
 		const [sB, cB] = Base.sincos(B)
-		return Math.acos((R * cB * cL + L0 * cB * sL + R0 * sB) / delta)
+		return acos((R * cB * cL + L0 * cB * sL + R0 * sB) / delta)
 	}
 
 	// Computes an approximation of the illumanted fraction of Venus.
@@ -1488,8 +1599,8 @@ export namespace Illuminated {
 		const V = 261.51 * DEG2RAD + 22518.443 * DEG2RAD * T
 		const M = 177.53 * DEG2RAD + 35999.05 * DEG2RAD * T
 		const N = 50.42 * DEG2RAD + 58517.811 * DEG2RAD * T
-		const W = V + (1.91 * DEG2RAD * Math.sin(M) + 0.78 * DEG2RAD * Math.sin(N))
-		const delta = Math.sqrt(1.52321 + 1.44666 * Math.cos(W))
+		const W = V + (1.91 * DEG2RAD * sin(M) + 0.78 * DEG2RAD * sin(N))
+		const delta = sqrt(1.52321 + 1.44666 * cos(W))
 		const s = 0.72333 + delta
 		return (s * s - 1) / 2.89332 / delta
 	}
@@ -1498,26 +1609,26 @@ export namespace Illuminated {
 	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
 	export function mercury(r: Distance, delta: Distance, i: Angle) {
 		const s = toDeg(i) - 50
-		return 1.16 + 5 * Math.log10(r * delta) + (0.02838 + 0.0001023 * s) * s
+		return 1.16 + 5 * log10(r * delta) + (0.02838 + 0.0001023 * s) * s
 	}
 
 	// Computes the visual magnitude of Venus. Formula by G. Müller.
 	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
 	export function venus(r: Distance, delta: Distance, i: Angle) {
 		const id = toDeg(i)
-		return -4 + 5 * Math.log10(r * delta) + (0.01322 + 0.0000004247 * id * id) * id
+		return -4 + 5 * log10(r * delta) + (0.01322 + 0.0000004247 * id * id) * id
 	}
 
 	// Computes the visual magnitude of Mars. Formula by G. Müller.
 	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
 	export function mars(r: Distance, delta: Distance, i: Angle) {
-		return -1.3 + 5 * Math.log10(r * delta) + 0.01486 * toDeg(i)
+		return -1.3 + 5 * log10(r * delta) + 0.01486 * toDeg(i)
 	}
 
 	// Computes the visual magnitude of Jupiter. Formula by G. Müller. Effect of phase not considered.
 	// r is the planet's distance from the Sun, delta the distance from Earth.
 	export function jupiter(r: Distance, delta: Distance) {
-		return -8.93 + 5 * Math.log10(r * delta)
+		return -8.93 + 5 * log10(r * delta)
 	}
 
 	// Computes the visual magnitude of Saturn. Formula by G. Müller.
@@ -1527,48 +1638,48 @@ export namespace Illuminated {
 	// deltaU is the difference between the Saturnicentric longitudes of the Sun and the Earth, measured in the plane of the ring.
 	// You can use SaturnSisk.Disk to obtain B and deltaU.
 	export function saturn(r: Distance, delta: Distance, B: Angle, deltaU: Angle) {
-		const s = Math.sin(Math.abs(B))
-		return -8.68 + 5 * Math.log10(r * delta) + 0.044 * Math.abs(toDeg(deltaU)) - 2.6 * s + 1.25 * s * s
+		const s = sin(abs(B))
+		return -8.68 + 5 * log10(r * delta) + 0.044 * abs(toDeg(deltaU)) - 2.6 * s + 1.25 * s * s
 	}
 
 	// Computes the visual magnitude of Uranus. Formula by G. Müller.
 	// r is the planet's distance from the Sun, delta the distance from Earth.
 	export function uranus(r: Distance, delta: Distance) {
-		return -6.85 + 5 * Math.log10(r * delta)
+		return -6.85 + 5 * log10(r * delta)
 	}
 
 	// Computes the visual magnitude of Neptune. Formulae by G. Müller.
 	// r is the planet's distance from the Sun, delta the distance from Earth.
 	export function neptune(r: Distance, delta: Distance) {
-		return -7.05 + 5 * Math.log10(r * delta)
+		return -7.05 + 5 * log10(r * delta)
 	}
 
 	// Computes the visual magnitude of Mercury.
 	// The formula is that adopted in "Astronomical Almanac" in 1984.0
 	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
 	export function mercury84(r: Distance, delta: Distance, i: Angle) {
-		return Base.horner(toDeg(i), [-0.42 + 5 * Math.log10(r * delta), 0.038, -0.000273, 0.000002])
+		return Base.horner(toDeg(i), [-0.42 + 5 * log10(r * delta), 0.038, -0.000273, 0.000002])
 	}
 
 	// Computes the visual magnitude of Venus.
 	// The formula is that adopted in "Astronomical Almanac" in 1984.0
 	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
 	export function venus84(r: Distance, delta: Distance, i: Angle) {
-		return Base.horner(toDeg(i), [-4.4 + 5 * Math.log10(r * delta), 0.0009, 0.000239, -0.00000065])
+		return Base.horner(toDeg(i), [-4.4 + 5 * log10(r * delta), 0.0009, 0.000239, -0.00000065])
 	}
 
 	// Computes the visual magnitude of Mars.
 	// The formula is that adopted in "Astronomical Almanac" in 1984.0
 	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
 	export function mars84(r: Distance, delta: Distance, i: Angle) {
-		return -1.52 + 5 * Math.log10(r * delta) + 0.016 * toDeg(i)
+		return -1.52 + 5 * log10(r * delta) + 0.016 * toDeg(i)
 	}
 
 	// Computes the visual magnitude of Jupiter.
 	// The formula is that adopted in "Astronomical Almanac" in 1984.0
 	// r is the planet's distance from the Sun, delta the distance from Earth, and i the phase angle in radians.
 	export function jupiter84(r: Distance, delta: Distance, i: Angle) {
-		return -9.4 + 5 * Math.log10(r * delta) + 0.005 * toDeg(i)
+		return -9.4 + 5 * log10(r * delta) + 0.005 * toDeg(i)
 	}
 
 	// Computes the visual magnitude of Saturn.
@@ -1578,29 +1689,29 @@ export namespace Illuminated {
 	// deltaU is the difference between the Saturnicentric longitudes
 	// of the Sun and the Earth, measured in the plane of the ring.
 	export function saturn84(r: Distance, delta: Distance, B: Angle, deltaU: Angle) {
-		const s = Math.sin(Math.abs(B))
-		return -8.88 + 5 * Math.log10(r * delta) + 0.044 * Math.abs(toDeg(deltaU)) - 2.6 * s + 1.25 * s * s
+		const s = sin(abs(B))
+		return -8.88 + 5 * log10(r * delta) + 0.044 * abs(toDeg(deltaU)) - 2.6 * s + 1.25 * s * s
 	}
 
 	// Computes the visual magnitude of Uranus.
 	// The formula is that adopted in "Astronomical Almanac" in 1984.0
 	// r is the planet's distance from the Sun, delta the distance from Earth.
 	export function uranus84(r: Distance, delta: Distance) {
-		return -7.19 + 5 * Math.log10(r * delta)
+		return -7.19 + 5 * log10(r * delta)
 	}
 
 	// Computes the visual magnitude of Neptune.
 	// The formula is that adopted in "Astronomical Almanac" in 1984.0
 	// r is the planet's distance from the Sun, delta the distance from Earth.
 	export function neptune84(r: Distance, delta: Distance) {
-		return -6.87 + 5 * Math.log10(r * delta)
+		return -6.87 + 5 * log10(r * delta)
 	}
 
 	// Computes the visual magnitude of Pluto.
 	// The formula is that adopted in "Astronomical Almanac" in 1984.0
 	// r is the planet's distance from the Sun, delta the distance from Earth.
 	export function pluto84(r: Distance, delta: Distance) {
-		return -1 + 5 * Math.log10(r * delta)
+		return -1 + 5 * log10(r * delta)
 	}
 }
 

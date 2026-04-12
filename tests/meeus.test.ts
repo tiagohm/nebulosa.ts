@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toDeg } from '../src/angle'
 import { DAYSEC, PI, RAD2DEG } from '../src/constants'
-import { toKilometer } from '../src/distance'
+import { meter, toKilometer, toMeter } from '../src/distance'
 import { modf } from '../src/math'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
 	expect(actual).toBeCloseTo(expected, numDigits)
@@ -667,6 +667,75 @@ describe('Julian', () => {
 	// 	const d = Julian.jDToCalendarGregorian(Julian.mJDToJD(0))
 	// 	deepStrictEqual(d, { year: 1858, month: 11, day: 17 })
 	// })
+})
+
+describe('Globe', () => {
+	const rm = Globe.EARTH76.radiusOfCurvature(deg(42))
+	const rp = Globe.EARTH76.radiusAtLatitude(deg(42))
+
+	test('parallaxConstants', () => {
+		// Example 11.a, p 82.
+		const φ = signedDms(false, 33, 21, 22)
+		const res = Globe.EARTH76.parallaxConstants(φ, meter(1706))
+		strictEqual(res[0], 0.5468608240604509)
+		strictEqual(res[1], 0.8363392323525684)
+	})
+
+	test('geocentricLatitudeDifference', () => {
+		// p. 83
+		const φ0 = signedDms(false, 45, 5, 46.36)
+		const diff = Globe.geocentricLatitudeDifference(φ0)
+		expect(formatALT(diff)).toBe('+00 11 32.73')
+	})
+
+	describe('radius', () => {
+		// Example 11.b p 84.
+
+		test('radiusAtLatitude', () => {
+			strictEqual(toMeter(rp), 4747.001, 3)
+		})
+
+		test('RotationRate1996_5', () => {
+			const ωRp = toMeter(rp) * Globe.ROTATION_RATE_1996_5
+			strictEqual(ωRp, 0.34616, 5)
+		})
+
+		test('radiusOfCurvature', () => {
+			strictEqual(toMeter(rm), 6364.033, 3)
+		})
+
+		test('oneDegreeOfLongitude', () => {
+			strictEqual(toMeter(Globe.oneDegreeOfLongitude(rp)), 82.8508, 4)
+		})
+
+		test('oneDegreeOfLatitude', () => {
+			strictEqual(toMeter(Globe.oneDegreeOfLatitude(rm)), 111.0733, 4)
+		})
+	})
+
+	describe('distance', () => {
+		// Example 11.c p 85.
+		const c1 = [signedDms(true, 2, 20, 14), signedDms(false, 48, 50, 11)] as const
+		const c2 = [signedDms(false, 77, 3, 56), signedDms(false, 38, 55, 17)] as const
+
+		test('distance', () => {
+			const distance = Globe.EARTH76.distance(...c1, ...c2)
+			strictEqual(toMeter(distance), 6181.63, 2)
+		})
+
+		test('approxAngularDistance', () => {
+			const cos = Globe.approxAngularDistance(...c1, ...c2)
+			const d = Math.acos(cos)
+			strictEqual(cos, 0.567146, 6)
+			expect(formatALT(d)).toBe('+55 26 54.77')
+		})
+
+		test('approxLinearDistance', () => {
+            // d = acos(approxAngularDistance)
+			const ld = Globe.approxLinearDistance(0.9677597323715493)
+			strictEqual(toKilometer(ld), 6166, 0)
+		})
+	})
 })
 
 describe('AngularSeparation', () => {
