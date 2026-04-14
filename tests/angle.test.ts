@@ -337,7 +337,8 @@ test('formatHms', () => {
 	expect(formatHMS(hour(23.5634453))).toBe('23:33:48.40')
 	expect(formatHMS(hour(-23.5634453))).toBe('00:26:11.60')
 	expect(formatHMS(hour(10))).toBe('10:00:00.00')
-	expect(formatHMS(hour(10), true)).toBe('10:00:00')
+	expect(formatHMS(hour(10), false)).toBe('10:00:00')
+	expect(formatHMS(hour(10), 5)).toBe('10:00:00.00000')
 	expect(formatHMS(hour(24))).toBe('00:00:00.00')
 	expect(formatHMS(hour(25))).toBe('01:00:00.00')
 })
@@ -346,7 +347,8 @@ test('formatDms', () => {
 	expect(formatDMS(deg(23.5634453))).toBe('23d33m48.40s')
 	expect(formatDMS(deg(-23.5634453))).toBe('-23d33m48.40s')
 	expect(formatDMS(deg(10))).toBe('10d00m00.00s')
-	expect(formatDMS(deg(10), true)).toBe('10d00m00s')
+	expect(formatDMS(deg(10), false)).toBe('10d00m00s')
+	expect(formatDMS(deg(10), 5)).toBe('10d00m00.00000s')
 	expect(formatDMS(deg(-10))).toBe('-10d00m00.00s')
 })
 
@@ -354,7 +356,8 @@ test('formatSignedDms', () => {
 	expect(formatSignedDMS(deg(23.5634453))).toBe('+23d33m48.40s')
 	expect(formatSignedDMS(deg(-23.5634453))).toBe('-23d33m48.40s')
 	expect(formatSignedDMS(deg(10))).toBe('+10d00m00.00s')
-	expect(formatSignedDMS(deg(10), true)).toBe('+10d00m00s')
+	expect(formatSignedDMS(deg(10), false)).toBe('+10d00m00s')
+	expect(formatSignedDMS(deg(10), 5)).toBe('+10d00m00.00000s')
 	expect(formatSignedDMS(deg(-10))).toBe('-10d00m00.00s')
 })
 
@@ -364,7 +367,8 @@ test('formatRA', () => {
 	expect(formatRA(hour(10))).toBe('10 00 00.00')
 	expect(formatRA(hour(24))).toBe('00 00 00.00')
 	expect(formatRA(hour(25))).toBe('01 00 00.00')
-	expect(formatRA(hour(25), true)).toBe('01 00 00')
+	expect(formatRA(hour(25), false)).toBe('01 00 00')
+	expect(formatRA(hour(25), 5)).toBe('01 00 00.00000')
 })
 
 test('formatDEC', () => {
@@ -372,7 +376,8 @@ test('formatDEC', () => {
 	expect(formatDEC(deg(-23.5634453))).toBe('-23 33 48.40')
 	expect(formatDEC(deg(10))).toBe('+10 00 00.00')
 	expect(formatDEC(deg(-10))).toBe('-10 00 00.00')
-	expect(formatDEC(deg(-10), true)).toBe('-10 00 00')
+	expect(formatDEC(deg(-10), false)).toBe('-10 00 00')
+	expect(formatDEC(deg(-10), 5)).toBe('-10 00 00.00000')
 })
 
 test('formatAZ', () => {
@@ -380,7 +385,8 @@ test('formatAZ', () => {
 	expect(formatAZ(deg(10))).toBe('010 00 00.00')
 	expect(formatAZ(0)).toBe('000 00 00.00')
 	expect(formatAZ(-0)).toBe('000 00 00.00')
-	expect(formatAZ(deg(10), true)).toBe('010 00 00')
+	expect(formatAZ(deg(10), false)).toBe('010 00 00')
+	expect(formatAZ(deg(10), 5)).toBe('010 00 00.00000')
 })
 
 test('formatALT', () => {
@@ -388,5 +394,6 @@ test('formatALT', () => {
 	expect(formatALT(deg(-83.5634453))).toBe('-83 33 48.40')
 	expect(formatALT(deg(10))).toBe('+10 00 00.00')
 	expect(formatALT(deg(-10))).toBe('-10 00 00.00')
-	expect(formatALT(deg(-10), true)).toBe('-10 00 00')
+	expect(formatALT(deg(-10), false)).toBe('-10 00 00')
+	expect(formatALT(deg(-10), 5)).toBe('-10 00 00.00000')
 })

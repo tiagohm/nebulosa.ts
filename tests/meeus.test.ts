@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toDeg, toDms, toHms } from '../src/angle'
+import { deg, formatALT, formatRA, hms, normalizeAngle, secondsOfTime, signedDms, toArcsec, toDeg, toDms, toHms } from '../src/angle'
 import { DAYSEC, PI, RAD2DEG } from '../src/constants'
 import { meter, toKilometer, toMeter } from '../src/distance'
 import { modf, roundToNthDecimal } from '../src/math'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Sidereal, Stellar } from '../src/meeus'
 import { time, timeToDate, timeYMD } from '../src/time'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
@@ -812,6 +812,20 @@ describe('Globe', () => {
 	})
 })
 
+describe('Sidereal', () => {
+	test('mean', () => {
+		// Example 12.a, p. 88.
+		const s = Sidereal.mean(2446895.5)
+		expect(formatRA(secondsOfTime(s), 5)).toBe('13 10 46.36683')
+	})
+
+	test('apparent', () => {
+		// Example 12.a, p. 88.
+		const a = Sidereal.apparent(2446895.5)
+		expect(formatRA(secondsOfTime(a), 5)).toBe('13 10 46.13514')
+	})
+})
+
 describe('Coords', () => {
 	test('Equatorial.toEcliptic', () => {
 		// Example 13.a, p. 95.
@@ -876,24 +890,24 @@ describe('AngularSeparation', () => {
 		test('sep', () => {
 			// Example 17.a, p. 110.0
 			const d = AngularSeparation.sep(c1, c2)
-			expect(formatALT(d, true)).toBe('+32 47 35')
+			expect(formatALT(d, false)).toBe('+32 47 35')
 		})
 
 		test('sepHav', () => {
 			// Example 17.a, p. 110.0
 			const d = AngularSeparation.sepHav(c1, c2)
-			expect(formatALT(d, true)).toBe('+32 47 35')
+			expect(formatALT(d, false)).toBe('+32 47 35')
 		})
 
 		test('sepPauwels', () => {
 			// Example 17.b, p. 116.0
 			const d = AngularSeparation.sepPauwels(c1, c2)
-			expect(formatALT(d, true)).toBe('+32 47 35')
+			expect(formatALT(d, false)).toBe('+32 47 35')
 		})
 
 		test('relativePosition', () => {
 			const p = AngularSeparation.relativePosition(c1, c2)
-			expect(formatALT(p, true)).toBe('+22 23 25')
+			expect(formatALT(p, false)).toBe('+22 23 25')
 		})
 	})
 
@@ -1050,7 +1064,7 @@ describe('Circle', () => {
 		const c2 = [hms(9, 9, 29), signedDms(false, 17, 43, 56.7)] as const
 		const c3 = [hms(8, 59, 47.14), signedDms(false, 17, 49, 36.8)] as const
 		const a = Circle.smallest(c1, c2, c3)
-		expect(formatALT(a[0], true)).toBe('+02 18 38') // Δ = 2°.31054 = 2°19′
+		expect(formatALT(a[0], false)).toBe('+02 18 38') // Δ = 2°.31054 = 2°19′
 		expect(a[1]).toBeTrue() // type I
 	})
 
@@ -1060,7 +1074,7 @@ describe('Circle', () => {
 		const c2 = [hms(12, 52, 5.21), signedDms(true, 4, 22, 26.2)] as const
 		const c3 = [hms(12, 39, 28.11), signedDms(true, 1, 50, 3.7)] as const
 		const a = Circle.smallest(c1, c2, c3)
-		expect(formatALT(a[0], true)).toBe('+04 15 49') // Δ = 4°.26363 = 4°16′
+		expect(formatALT(a[0], false)).toBe('+04 15 49') // Δ = 4°.26363 = 4°16′
 		expect(a[1]).toBeFalse() // type II
 	})
 })
@@ -1174,7 +1188,7 @@ describe('Planetary', () => {
 		const e = res[1]
 		strictEqual(j, 2449314.14, 2)
 		strictEqual(toDeg(e), 19.7506, 4)
-		expect(formatALT(e, true)).toBe('+19 45 02')
+		expect(formatALT(e, false)).toBe('+19 45 02')
 	})
 
 	test('marsStation2', () => {

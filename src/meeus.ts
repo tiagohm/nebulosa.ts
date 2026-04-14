@@ -1,7 +1,7 @@
-import { type Angle, hms, normalizeAngle, timeSec, toDeg } from './angle'
+import { type Angle, normalizeAngle, secondsOfTime, toDeg } from './angle'
 import { ASEC2RAD, AU_KM, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { Distance } from './distance'
-import { floorDiv, modf, type NumberArray } from './math'
+import { floorDiv, modf, type NumberArray, pmod } from './math'
 
 const { sin, cos, tan, asin, acos, atan, atan2, sqrt, hypot, log10, abs, trunc, floor, min } = Math
 
@@ -61,7 +61,7 @@ export namespace Base {
 
 	// Computes position angle of the midpoint of an illuminated limb.
 	export function limb(bra: Angle, bdec: Angle, sra: Angle, sdec: Angle): Angle {
-		// Mentioned in ch 41, p. 283.  Formula (48.5) p. 346
+		// Mentioned in ch 41, p. 283. Formula (48.5) p. 346
 		const sδ = sin(bdec)
 		const cδ = cos(bdec)
 		const sδ0 = sin(sdec)
@@ -912,6 +912,67 @@ export namespace Globe {
 	}
 }
 
+// Chapter 12, Sidereal Time at Greenwich.
+export namespace Sidereal {
+	// Returns values for use in computing sidereal time at Greenwich.
+	// Cen is centuries from J2000 of the JD at 0h UT of argument jd. This is
+	// the value to use for evaluating the IAU sidereal time polynomial.
+	// DayFrac is the fraction of jd after 0h UT. It is used to compute the
+	// final value of sidereal time.
+	export function jdToCFrac(jd: number) {
+		const j0f = modf(jd + 0.5)
+		return [Base.j2000Century(j0f[0] - 0.5), j0f[1]] as const
+	}
+
+	// Polynomial giving mean sidereal time at Greenwich at 0h UT.
+	// The polynomial is in centuries from J2000.0, as given by JDToCFrac.
+	// Coefficients are those adopted in 1982 by the International Astronomical
+	// Union and are given in (12.2) p. 87.
+	export const IAU82 = [24110.54841, 8640184.812866, 0.093104, -0.0000062] as const
+
+	// Computes the mean sidereal time (in seconds of time) at Greenwich for a given JD.
+	// Computation is by IAU 1982 coefficients.
+	export function mean(jd: number) {
+		return pmod(_mean(jd), 86400)
+	}
+
+	function _mean(jd: number) {
+		const sf = _mean0UT(jd)
+		return sf[0] + sf[1] * 1.00273790935 * 86400
+	}
+
+	// Computes mean sidereal time (in seconds of time) at Greenwich at 0h UT on the given JD.
+	export function mean0UT(jd: number) {
+		const s = _mean0UT(jd)
+		return pmod(s[0], 86400)
+	}
+
+	function _mean0UT(jd: number) {
+		const cf = jdToCFrac(jd)
+		// (12.2) p. 87
+		return [Base.horner(cf[0], IAU82), cf[1]] as const
+	}
+
+	// Computes the apparent sidereal time (in seconds of time) at Greenwich for the given JD.
+	// Apparent is mean plus the nutation in right ascension.
+	export function apparent(jd: number) {
+		const s = _mean(jd) // seconds of time
+		const n = Nutation.nutationInRA(jd) // angle (radians) of RA
+		const ns = (n * 3600 * 180) / PI / 15 // convert RA to time in seconds
+		return pmod(s + ns, 86400)
+	}
+
+	// Computes the apparent sidereal time (in seconds of time) at Greenwich at 0h UT on the given JD.
+	export function apparent0UT(jd: number) {
+		const [j0, f] = modf(jd + 0.5)
+		const cen = (j0 - 0.5 - Base.J2000) / 36525
+		const s = Base.horner(cen, IAU82) + f * 1.00273790935 * 86400
+		const n = Nutation.nutationInRA(j0) // angle (radians) of RA
+		const ns = (n * 3600 * 180) / Math.PI / 15 // convert RA to time in seconds
+		return pmod(s + ns, 86400)
+	}
+}
+
 // Chapter 13, Transformation of Coordinates.
 export namespace Coords {
 	// Converts ecliptic coordinates to equatorial coordinates given ecliptic obliquity.
@@ -938,7 +999,7 @@ export namespace Coords {
 	// Computes Horizontal coordinates from equatorial coordinates given is the location of the observer on the Earth and the sidereal time at Greenwich.
 	// Sidereal time must be consistent with the equatorial coordinates. If coordinates are apparent, sidereal time must be apparent as well.
 	export function equatorialToHorizontal(rightAscension: Angle, declination: Angle, longitude: Angle, latitude: Angle, st: number) {
-		const H = timeSec(st) - longitude - rightAscension
+		const H = secondsOfTime(st) - longitude - rightAscension
 		const [sH, cH] = Base.sincos(H)
 		const [sPhi, cPhi] = Base.sincos(latitude)
 		const [sDelta, cDelta] = Base.sincos(declination)
@@ -969,14 +1030,14 @@ export namespace Coords {
 		const [sh, ch] = Base.sincos(altitude)
 		const [sPhi, cPhi] = Base.sincos(latitude)
 		const H = atan2(sA, cA * sPhi + (sh / ch) * cPhi)
-		const ra = normalizeAngle(timeSec(st) - longitude - H)
+		const ra = normalizeAngle(secondsOfTime(st) - longitude - H)
 		const dec = asin(sPhi * sh - cPhi * ch * cA)
 		return [ra, dec] as const
 	}
 
 	// Converts galactic coordinates to equatorial coordinates.
 	// Resulting equatorial coordinates will be referred to the standard equinox of
-	// B1950.0.  For subsequent conversion to other epochs, see package precess and
+	// B1950.0. For subsequent conversion to other epochs, see package precess and
 	// utility functions in package meeus.
 	export function galacticToEquatorial(longitude: Angle, latitude: Angle) {
 		// (-galactic0Lon1950 - Pi/2) = magic number of -123 deg
@@ -991,7 +1052,7 @@ export namespace Coords {
 	}
 
 	// Equatorial IAU B1950.0 coordinates of galactic North Pole
-	export const GALACTIC_NORTH_RA = hms(12, 49, 0)
+	export const GALACTIC_NORTH_RA = (12 + 49 / 60) * 15 * DEG2RAD // 12h49m
 	export const GALACTIC_NORTH_DEC = 27.4 * DEG2RAD
 
 	// Galactic Longitude 0°
@@ -1835,13 +1896,13 @@ export namespace Node {
 // Chapter 41, Illuminated Fraction of the Disk and Magnitude of a Planet.
 export namespace Illuminated {
 	// Computes the phase angle of a planet.
-	// r is planet's distance to Sun, delta its distance to Earth, and R the distance from Sun to Earth.  All distances in AU.
+	// r is planet's distance to Sun, delta its distance to Earth, and R the distance from Sun to Earth. All distances in AU.
 	export function phaseAngle(r: Distance, delta: Distance, R: Distance) {
 		return acos((r * r + delta * delta - R * R) / (2 * r * delta))
 	}
 
 	// Computes the illuminated fraction of the disk of a planet.
-	// r is planet's distance to Sun, delta its distance to Earth, and R the distance from Sun to Earth.  All distances in AU.
+	// r is planet's distance to Sun, delta its distance to Earth, and R the distance from Sun to Earth. All distances in AU.
 	export function fraction(r: Distance, delta: Distance, R: Distance) {
 		// (41.2) p. 283
 		const s = r + delta
@@ -1859,7 +1920,7 @@ export namespace Illuminated {
 	// Computes the phase angle of a planet.
 	// L, B are heliocentric ecliptical longitude and latitude of the
 	// planet. x, y, z are cartesian coordinates of the planet, delta is distance
-	// from Earth to the planet.  All distances in AU, angles in radians.
+	// from Earth to the planet. All distances in AU, angles in radians.
 	export function phaseAngle3(L: Angle, B: Angle, R: Distance, L0: Angle, R0: Distance, delta: Distance) {
 		// (41.4) p. 283
 		const [sL, cL] = Base.sincos(L)
