@@ -3,7 +3,7 @@ import { deg, formatALT, formatRA, hms, normalizeAngle, secondsOfTime, signedDms
 import { DAYSEC, PI, RAD2DEG } from '../src/constants'
 import { meter, toKilometer, toMeter } from '../src/distance'
 import { modf, roundToNthDecimal } from '../src/math'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Sidereal, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, ElementEquinox, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Sidereal, Stellar } from '../src/meeus'
 import { time, timeToDate, timeYMD } from '../src/time'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
@@ -1126,6 +1126,26 @@ describe('Nutation', () => {
 				expect(Math.abs(i - l) * RAD2DEG * 3600 < 10).toBeTrue()
 			})
 		}
+	})
+})
+
+describe('ElementeEuinox', () => {
+	test('reduceB1950ToJ2000', () => {
+		// Example 24.b, p. 161.
+		const from = [deg(11.93911), deg(334.04096), deg(186.24444)] as const
+		const to = ElementEquinox.reduceB1950ToJ2000(from)
+		strictEqual(toDeg(to[0]), 11.945236764689536)
+		strictEqual(toDeg(to[1]), 334.7500602425115)
+		strictEqual(toDeg(to[2]), 186.23351531378918)
+	})
+
+	test('reduceB1950FK4ToJ2000FK5', () => {
+		// Example 24.c, p. 162.
+		const from = [deg(11.93911), deg(334.04096), deg(186.24444)] as const
+		const to = ElementEquinox.reduceB1950FK4ToJ2000FK5(from)
+		strictEqual(toDeg(to[0]), 11.945206561406797)
+		strictEqual(toDeg(to[1]), 334.75042895869086)
+		strictEqual(toDeg(to[2]), 186.23327459848562)
 	})
 })
 

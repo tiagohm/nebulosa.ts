@@ -968,7 +968,7 @@ export namespace Sidereal {
 		const cen = (j0 - 0.5 - Base.J2000) / 36525
 		const s = Base.horner(cen, IAU82) + f * 1.00273790935 * 86400
 		const n = Nutation.nutationInRA(j0) // angle (radians) of RA
-		const ns = (n * 3600 * 180) / Math.PI / 15 // convert RA to time in seconds
+		const ns = (n * 3600 * 180) / PI / 15 // convert RA to time in seconds
 		return pmod(s + ns, 86400)
 	}
 }
@@ -1470,6 +1470,45 @@ export namespace Nutation {
 		[0, 0, 3, 2, 2, -3, 0, 0, 0],
 		[2, -1, 0, 2, 2, -3, 0, 0, 0],
 	] as const
+}
+
+export type EquinoxOrbitalElements = readonly [Angle, Angle, Angle] // inclination, longitude of ascending node, argument of perihelion
+
+// Chapter 24, Reduction of Ecliptical Elements from one Equinox to another one.
+export namespace ElementEquinox {
+	// (24.4) p. 161
+	const S = 0.0001139788
+	const C = 0.9999999935
+
+	// ReduceB1950ToJ2000 reduces orbital elements of a solar system body from equinox B1950 to J2000.
+	export function reduceB1950ToJ2000(from: EquinoxOrbitalElements): EquinoxOrbitalElements {
+		const W = from[1] - 174.298782 * DEG2RAD
+		const [si, ci] = Base.sincos(from[0])
+		const [sW, cW] = Base.sincos(W)
+		const A = si * sW
+		const B = C * si * cW - S * ci
+		const inc = asin(hypot(A, B))
+		const node = normalizeAngle(174.997194 * DEG2RAD + atan2(A, B))
+		const peri = normalizeAngle(from[2] + atan2(-S * sW, C * si - S * ci * cW))
+		return [inc, node, peri]
+	}
+
+	const Lp = 4.50001688 * DEG2RAD
+	const L = 5.19856209 * DEG2RAD
+	const J = 0.00651966 * DEG2RAD
+	const [SJ, CJ] = Base.sincos(J)
+
+	// Reduces orbital elements of a solar system body from
+	// equinox B1950 in the FK4 system to equinox J2000 in the FK5 system.
+	export function reduceB1950FK4ToJ2000FK5(from: EquinoxOrbitalElements): EquinoxOrbitalElements {
+		const W = L + from[1]
+		const [si, ci] = Base.sincos(from[0])
+		const [sW, cW] = Base.sincos(W)
+		const inc = acos(ci * CJ - si * SJ * cW)
+		const node = normalizeAngle(atan2(si * sW, ci * SJ + si * CJ * cW) - Lp)
+		const peri = normalizeAngle(from[2] + atan2(SJ * sW, si * CJ + ci * SJ * cW))
+		return [inc, node, peri]
+	}
 }
 
 // Chapter 30, Equation of Kepler.
