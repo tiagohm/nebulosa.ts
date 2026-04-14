@@ -613,6 +613,7 @@ function debayerPixel(raw: ImageRawType, output: ImageRawType, width: number, ci
 	output[oi] = values[2] / counters[2]
 }
 
+// Debayers a mono CFA frame back into RGB using neighborhood averaging.
 export function debayer(image: Image, pattern?: CfaPattern): Image | undefined {
 	const { metadata, raw } = image
 
@@ -715,26 +716,31 @@ export function debayer(image: Image, pattern?: CfaPattern): Image | undefined {
 	return undefined
 }
 
+// Computes the maximum-mask SCNR attenuation for one protected channel sample.
 export function scnrMaximumMask(a: number, b: number, c: number, amount: number) {
 	const m = Math.max(b, c)
 	return a * (1 - amount) * (1 - m) + m * a
 }
 
+// Computes the additive-mask SCNR attenuation for one protected channel sample.
 export function scnrAdditiveMask(a: number, b: number, c: number, amount: number) {
 	const m = Math.min(1, b + c)
 	return a * (1 - amount) * (1 - m) + m * a
 }
 
+// Computes the average-neutral SCNR replacement for one protected channel sample.
 export function scnrAverageNeutral(a: number, b: number, c: number, amount: number) {
 	const m = 0.5 * (b + c)
 	return Math.min(a, m)
 }
 
+// Computes the maximum-neutral SCNR replacement for one protected channel sample.
 export function scnrMaximumNeutral(a: number, b: number, c: number, amount: number) {
 	const m = Math.max(b, c)
 	return Math.min(a, m)
 }
 
+// Computes the minimum-neutral SCNR replacement for one protected channel sample.
 export function scnrMinimumNeutral(a: number, b: number, c: number, amount: number) {
 	const m = Math.min(b, c)
 	return Math.min(a, m)
@@ -771,6 +777,7 @@ export function scnr(image: Image, channel: ImageChannel = 'GREEN', amount: numb
 	return image
 }
 
+// Mirrors the image across the vertical axis in place.
 export function horizontalFlip(image: Image) {
 	const { raw, metadata } = image
 	const { height, channels, stride } = metadata
@@ -795,6 +802,7 @@ export function horizontalFlip(image: Image) {
 	return image
 }
 
+// Mirrors the image across the horizontal axis in place.
 export function verticalFlip(image: Image) {
 	const { raw, metadata } = image
 	const { height, channels, stride } = metadata
@@ -820,6 +828,7 @@ export function verticalFlip(image: Image) {
 	return image
 }
 
+// Inverts every normalized sample in place.
 export function invert(image: Image) {
 	const { raw } = image
 	const n = raw.length
@@ -831,6 +840,7 @@ export function invert(image: Image) {
 	return image
 }
 
+// Converts an RGB image to a single grayscale channel.
 export function grayscale(image: Image, channel?: ImageChannelOrGray): Image {
 	if (image.metadata.channels === 1) return image
 
@@ -859,6 +869,7 @@ export function grayscale(image: Image, channel?: ImageChannelOrGray): Image {
 	return { header, metadata, raw }
 }
 
+// Builds a convolution kernel descriptor and infers its divisor when omitted.
 export function convolutionKernel(kernel: Readonly<NumberArray>, width: number, height: number = width, divisor?: number): ConvolutionKernel {
 	if (kernel.length < width * height) {
 		throw new Error('invalid kernel size')
@@ -869,6 +880,7 @@ export function convolutionKernel(kernel: Readonly<NumberArray>, width: number, 
 	return { kernel, width, height, divisor }
 }
 
+// Rotates the convolution row buffer forward by one slot.
 function shift(buffer: NumberArray[]) {
 	const n = buffer.length - 1
 	const first = buffer[0]
@@ -876,6 +888,7 @@ function shift(buffer: NumberArray[]) {
 	buffer[n] = first
 }
 
+// Applies a spatial convolution kernel in place with optional edge renormalization.
 export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDivisorForEdges = true, normalize = true }: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	if (kernel.width % 2 === 0 || kernel.height % 2 === 0) {
 		throw new Error('kernel size must be odd')
@@ -893,6 +906,7 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 	const { width: kw, height: kh, kernel: kd } = kernel
 	const buffer = new Array<ImageRawType>(kh)
 
+	// Copies one source row into the rolling convolution buffer when it is in bounds.
 	function read(y: number, output: ImageRawType) {
 		if (y < 0 || y >= ih) {
 			// output.fill(0)
@@ -974,6 +988,7 @@ const BLUR_3x3 = convolutionKernel(new Int8Array([1, 2, 1, 2, 4, 2, 1, 2, 1]), 3
 const BLUR_5x5 = convolutionKernel(new Int8Array([1, 2, 3, 2, 1, 2, 4, 6, 4, 2, 3, 6, 9, 6, 3, 2, 4, 6, 4, 2, 1, 2, 3, 2, 1]), 5, 5, 81)
 const BLUR_7x7 = convolutionKernel(new Int8Array([1, 2, 3, 4, 3, 2, 1, 2, 4, 6, 8, 6, 4, 2, 3, 6, 9, 12, 9, 6, 3, 4, 8, 12, 16, 12, 8, 4, 3, 6, 9, 12, 9, 6, 3, 2, 4, 6, 8, 6, 4, 2, 1, 2, 3, 4, 3, 2, 1]), 7, 7, 256)
 
+// Builds a normalized Gaussian convolution kernel from sigma and kernel size.
 export function gaussianBlurKernel(sigma: number = 1.4, size: number = 5) {
 	if (size < 2 || size % 2 === 0) {
 		throw new Error('size must be odd and greater or equal to 3')
@@ -985,6 +1000,7 @@ export function gaussianBlurKernel(sigma: number = 1.4, size: number = 5) {
 	const sigmaSquared = sigma * sigma
 	const r = Math.trunc(Math.trunc(size) / 2)
 
+	// Evaluates the continuous 2D Gaussian density at one kernel offset.
 	function gaussian2D(x: number, y: number) {
 		return Math.exp((x * x + y * y) / (-2 * sigmaSquared)) / (TAU * sigmaSquared)
 	}
@@ -1006,14 +1022,17 @@ export function gaussianBlurKernel(sigma: number = 1.4, size: number = 5) {
 	return convolutionKernel(kernel, size)
 }
 
+// Applies the 3x3 edge-detection kernel.
 export function edges(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, EDGES, options)
 }
 
+// Applies the 3x3 emboss kernel.
 export function emboss(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, EMBOSS, options)
 }
 
+// Builds a box-blur kernel of arbitrary odd size.
 export function meanConvolutionKernel(size: number) {
 	if (size < 3) throw new Error('size must be greater or equal to 3')
 	if (size > 99) throw new Error('size must be less or equal to 99')
@@ -1023,6 +1042,7 @@ export function meanConvolutionKernel(size: number) {
 	return convolutionKernel(kernel, size, size, kernel.length)
 }
 
+// Applies mean convolution with optimized kernels for common sizes.
 export function mean(image: Image, size: number, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	if (size === 3) return mean3x3(image, options)
 	if (size === 5) return mean5x5(image, options)
@@ -1031,22 +1051,27 @@ export function mean(image: Image, size: number, options: Partial<ConvolutionOpt
 	return convolution(image, meanConvolutionKernel(size), options)
 }
 
+// Applies the 3x3 mean blur kernel.
 export function mean3x3(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, MEAN_3x3, options)
 }
 
+// Applies the 5x5 mean blur kernel.
 export function mean5x5(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, MEAN_5x5, options)
 }
 
+// Applies the 7x7 mean blur kernel.
 export function mean7x7(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, MEAN_7x7, options)
 }
 
+// Applies the 3x3 sharpening kernel.
 export function sharpen(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, SHARPEN, options)
 }
 
+// Builds a pyramid-weight blur kernel of arbitrary odd size.
 export function blurConvolutionKernel(size: number) {
 	if (size < 3) throw new Error('size must be greater or equal to 3')
 	if (size > 99) throw new Error('size must be less or equal to 99')
@@ -1069,6 +1094,7 @@ export function blurConvolutionKernel(size: number) {
 	return convolutionKernel(kernel, size, size, divisor * divisor)
 }
 
+// Applies pyramid blur convolution with optimized kernels for common sizes.
 export function blur(image: Image, size: number, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	if (size === 3) return blur3x3(image, options)
 	if (size === 5) return blur5x5(image, options)
@@ -1077,18 +1103,22 @@ export function blur(image: Image, size: number, options: Partial<ConvolutionOpt
 	return convolution(image, blurConvolutionKernel(size), options)
 }
 
+// Applies the 3x3 pyramid blur kernel.
 export function blur3x3(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, BLUR_3x3, options)
 }
 
+// Applies the 5x5 pyramid blur kernel.
 export function blur5x5(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, BLUR_5x5, options)
 }
 
+// Applies the 7x7 pyramid blur kernel.
 export function blur7x7(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, BLUR_7x7, options)
 }
 
+// Applies Gaussian blur using a generated kernel.
 export function gaussianBlur(image: Image, options: Partial<GaussianBlurConvolutionOptions> = DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS) {
 	return convolution(image, gaussianBlurKernel(options.sigma, options.size), options)
 }
@@ -1401,6 +1431,7 @@ export class FFTWorkspace {
 
 	#mask?: FFTMaskCache
 
+	// Allocates reusable padded FFT buffers for the requested image size.
 	constructor(width: number, height: number) {
 		width = fftPaddedSize(width)
 		height = fftPaddedSize(height)
@@ -1419,6 +1450,7 @@ export class FFTWorkspace {
 		this.columnImaginary = new Float64Array(columnSize)
 	}
 
+	// Returns a cached radial mask for the current workspace dimensions.
 	mask(filterType: FFTFilterType, cutoff: number) {
 		if (this.#mask !== undefined && this.#mask.filterType === filterType && Math.abs(this.#mask.cutoff - cutoff) <= Number.EPSILON) {
 			return this.#mask
@@ -1693,11 +1725,13 @@ const PSF = new Float32Array([0.906, 0.584, 0.365, 0.117, 0.049, -0.05, -0.064, 
 // 8@C2, D2
 // 44 * D3
 
+// Applies the KStars internal guider PSF filter in place.
 export function psf(image: Image) {
 	const { raw, metadata } = image
 	const { width: iw, height: ih, channels, stride } = metadata
 	const buffer = new Array<ImageRawType>(9)
 
+	// Copies one source row into the rolling PSF buffer when it is in bounds.
 	function read(y: number, output: ImageRawType) {
 		if (y < 0 || y >= ih) {
 			// output.fill(0)
@@ -1840,12 +1874,14 @@ export function gamma(image: Image, value: number) {
 	return image
 }
 
+// Verifies that two images share the same dimensions and channel layout.
 function checkDimensions(a: Image, b: Image) {
 	if (a.metadata.channels !== b.metadata.channels) throw new Error(`channels does not match: ${a.metadata.channels} != ${b.metadata.channels}`)
 	if (a.metadata.width !== b.metadata.width) throw new Error(`width does not match: ${a.metadata.width} != ${b.metadata.width}`)
 	if (a.metadata.height !== b.metadata.height) throw new Error(`height does not match: ${a.metadata.height} != ${b.metadata.height}`)
 }
 
+// Deep-clones image header, metadata, and pixel storage.
 export function clone(image: Image): Image {
 	const header = structuredClone(image.header)
 	const metadata = structuredClone(image.metadata)
@@ -1854,6 +1890,7 @@ export function clone(image: Image): Image {
 	return { header, metadata, raw }
 }
 
+// Copies pixel samples from one image into another with matching dimensions.
 export function copyInto(from: Image, to: Image) {
 	checkDimensions(from, to)
 
@@ -1864,6 +1901,7 @@ export function copyInto(from: Image, to: Image) {
 	return to
 }
 
+// Adds two images sample by sample and clamps the result to [0,1].
 export function plus(a: Image, b: Image, out: Image = a) {
 	checkDimensions(a, b)
 	checkDimensions(b, out)
@@ -1873,6 +1911,7 @@ export function plus(a: Image, b: Image, out: Image = a) {
 	return out
 }
 
+// Adds a scalar to every sample and clamps the result to [0,1].
 export function plusScalar(a: Image, scalar: number, out: Image = a) {
 	checkDimensions(a, out)
 
@@ -1881,6 +1920,7 @@ export function plusScalar(a: Image, scalar: number, out: Image = a) {
 	return out
 }
 
+// Subtracts one image from another sample by sample and clamps at zero.
 export function subtract(a: Image, b: Image, out: Image = a) {
 	checkDimensions(a, b)
 	checkDimensions(b, out)
@@ -1890,6 +1930,7 @@ export function subtract(a: Image, b: Image, out: Image = a) {
 	return out
 }
 
+// Subtracts a scalar from every sample and clamps at zero.
 export function subtractScalar(a: Image, scalar: number, out: Image = a) {
 	checkDimensions(a, out)
 
@@ -1898,6 +1939,7 @@ export function subtractScalar(a: Image, scalar: number, out: Image = a) {
 	return out
 }
 
+// Multiplies two images sample by sample.
 export function multiply(a: Image, b: Image, out: Image = a) {
 	checkDimensions(a, b)
 	checkDimensions(b, out)
@@ -1907,6 +1949,7 @@ export function multiply(a: Image, b: Image, out: Image = a) {
 	return out
 }
 
+// Multiplies every sample by a scalar.
 export function multiplyScalar(a: Image, scalar: number, out: Image = a) {
 	checkDimensions(a, out)
 
@@ -1915,6 +1958,7 @@ export function multiplyScalar(a: Image, scalar: number, out: Image = a) {
 	return out
 }
 
+// Divides one image by another sample by sample.
 export function divide(a: Image, b: Image, out: Image = a) {
 	checkDimensions(a, b)
 	checkDimensions(b, out)
@@ -1924,6 +1968,7 @@ export function divide(a: Image, b: Image, out: Image = a) {
 	return out
 }
 
+// Divides every sample by a scalar.
 export function divideScalar(a: Image, scalar: number, out: Image = a) {
 	checkDimensions(a, out)
 

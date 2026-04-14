@@ -325,6 +325,8 @@ export function parseXisfHeader(data: Buffer) {
 	return images
 }
 
+const NUMERIC_VALUE_REGEX = /^[-+]?([0-9]*\.[0-9]+|[0-9]+)$/
+
 function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeometry = parseGeometry(image.geometry)!) {
 	const header: FitsHeader = { SIMPLE: true }
 
@@ -338,14 +340,16 @@ function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeo
 		const keywords = Array.isArray(image.FITSKeyword) ? image.FITSKeyword : [image.FITSKeyword]
 
 		for (const keyword of keywords) {
-			const value = keyword.value as string
-
 			if (keyword.name in header) continue
+
+			const value = (keyword.value as string | undefined)?.trim()
+
 			if (value === '' || value === undefined || value === null) continue
 			else if (value === 'T') header[keyword.name] = true
 			else if (value === 'F') header[keyword.name] = false
 			else if (value.startsWith("'") && value.endsWith("'")) header[keyword.name] = unescapeQuotedText(value.substring(1, value.length - 1).trim())
-			else header[keyword.name] = +value
+			else if (NUMERIC_VALUE_REGEX.test(value)) header[keyword.name] = +value
+			else header[keyword.name] = value
 		}
 	}
 
