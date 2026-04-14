@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toDeg } from '../src/angle'
+import { deg, formatALT, formatRA, hms, normalizeAngle, signedDms, toArcsec, toDeg, toDms, toHms } from '../src/angle'
 import { DAYSEC, PI, RAD2DEG } from '../src/constants'
 import { meter, toKilometer, toMeter } from '../src/distance'
-import { modf } from '../src/math'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
+import { modf, roundToNthDecimal } from '../src/math'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Stellar } from '../src/meeus'
 import { time, timeToDate, timeYMD } from '../src/time'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
@@ -809,6 +809,62 @@ describe('Globe', () => {
 			const ld = Globe.approxLinearDistance(0.9677597323715493)
 			strictEqual(toKilometer(ld), 6166, 0)
 		})
+	})
+})
+
+describe('Coords', () => {
+	test('Equatorial.toEcliptic', () => {
+		// Example 13.a, p. 95.
+		const [lon, lat] = Coords.equatorialToEcliptic(hms(7, 45, 18.946), signedDms(false, 28, 1, 34.26), deg(23.4392911))
+		strictEqual(toDeg(lon), 113.21563, 5)
+		strictEqual(toDeg(lat), 6.68417, 5)
+	})
+
+	test('Equatorial.toEcliptic.toEquatorial', () => {
+		// repeat example above
+		const eq = Coords.equatorialToEcliptic(hms(7, 45, 18.946), signedDms(false, 28, 1, 34.26), deg(23.4392911))
+		const [ra, dec] = Coords.eclipticToEquatorial(...eq, deg(23.4392911))
+
+		expect(toHms(ra).map((e) => roundToNthDecimal(e, 3))).toEqual([7, 45, 18.946])
+		expect(toDms(dec).map((e) => roundToNthDecimal(e, 3))).toEqual([28, 1, 34.26, 1])
+	})
+
+	// TODO
+	// test('Equatorial.toHorizontal', () => {
+	// 	// Example 13.b, p. 95.
+	// 	// Venus apparent equatorial coordinates
+	// 	const jd = Julian.dateToJD(new Date(Date.UTC(1987, 3, 10, 19, 21, 0, 0)))
+	// 	const st = Sidereal.apparent(jd)
+	// 	// coordinates at Washington D.C. Longitude is measured positively westwards!
+	// 	const [az, alt] = Coords.equatorialToHorizontal(hms(23, 9, 16.641), signedDms(true, 6, 43, 11.61), signedDms(false, 77, 3, 56), signedDms(false, 38, 55, 17), st)
+	// 	strictEqual(toDeg(az), 68.034, 3)
+	// 	strictEqual(toDeg(alt), 15.125, 3)
+	// })
+
+	// test('Equatorial.toHorizontal.toEquatorial', () => {
+	// 	// Example 13.b, p. 95.
+	// 	// Venus apparent equatorial coordinates
+	// 	const jd = Julian.dateToJD(new Date(Date.UTC(1987, 3, 10, 19, 21, 0, 0)))
+	// 	const st = Sidereal.apparent(jd)
+	// 	// coordinates at Washington D.C. Longitude is measured positively westwards!
+	// 	const hz = Coords.equatorialToHorizontal(hms(23, 9, 16.641), signedDms(true, 6, 43, 11.61), signedDms(false, 77, 3, 56), signedDms(false, 38, 55, 17), st)
+	// 	const [ra, dec] = Coords.horizontalToEquatorial(...hz, signedDms(false, 77, 3, 56), signedDms(false, 38, 55, 17), st)
+	// 	expect(toHms(ra)).toEqual([23, 9, 16.641])
+	// 	expect(formatALT(dec)).toBe('-06 43 11.61')
+	// })
+
+	test('Equatorial.toGalactic', () => {
+		// Exercise, p. 96.
+		const [lon, lat] = Coords.equatorialToGalactic(hms(17, 48, 59.74), signedDms(true, 14, 43, 8.2))
+		strictEqual(toDeg(lon), 12.9593, 4)
+		strictEqual(toDeg(lat), 6.0463, 4)
+	})
+
+	test('Equatorial.toGalactic.toEquatorial', () => {
+		const g = Coords.equatorialToGalactic(hms(17, 48, 59.74), signedDms(true, 14, 43, 8.2))
+		const [ra, dec] = Coords.galacticToEquatorial(...g)
+		expect(toHms(ra).map((e) => roundToNthDecimal(e, 3))).toEqual([17, 48, 59.74])
+		expect(formatALT(dec)).toBe('-14 43 08.20')
 	})
 })
 

@@ -1,4 +1,4 @@
-import { type Angle, normalizeAngle, toDeg } from './angle'
+import { type Angle, hms, normalizeAngle, timeSec, toDeg } from './angle'
 import { ASEC2RAD, AU_KM, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { Distance } from './distance'
 import { floorDiv, modf, type NumberArray } from './math'
@@ -485,7 +485,7 @@ export namespace Fit {
 
 	// Computes the correlation coefficient for sample data.
 	export function correlationCoefficient(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
-		const n = Math.min(x.length, y.length)
+		const n = min(x.length, y.length)
 
 		let sx = 0
 		let sy = 0
@@ -509,7 +509,7 @@ export namespace Fit {
 
 	// Fits y = ax² + bx + c to sample data.
 	export function quadratic(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
-		const N = Math.min(x.length, y.length)
+		const N = min(x.length, y.length)
 
 		let P = 0
 		let Q = 0
@@ -543,7 +543,7 @@ export namespace Fit {
 
 	// Fits y = aƒ0(x) + bƒ1(x) + cƒ2(x) to a sample data.
 	export function func3(x: Readonly<NumberArray>, y: Readonly<NumberArray>, f0: (a: number) => number, f1: (a: number) => number, f2: (a: number) => number) {
-		const N = Math.min(x.length, y.length)
+		const N = min(x.length, y.length)
 
 		let M = 0
 		let P = 0
@@ -582,7 +582,7 @@ export namespace Fit {
 
 	// Fits y = aƒ(x) to sample data.
 	export function func1(x: Readonly<NumberArray>, y: Readonly<NumberArray>, f: (a: number) => number) {
-		const n = Math.min(x.length, y.length)
+		const n = min(x.length, y.length)
 
 		let syf = 0
 		let sf2 = 0
@@ -910,6 +910,95 @@ export namespace Globe {
 	export function approxLinearDistance(d: Angle): Distance {
 		return (6371 / AU_KM) * d
 	}
+}
+
+// Chapter 13, Transformation of Coordinates.
+export namespace Coords {
+	// Converts ecliptic coordinates to equatorial coordinates given ecliptic obliquity.
+	// IMPORTANT: Longitudes are measured *positively* westwards, e.g. Washington D.C. +77°04; Vienna -16°23'.
+	export function eclipticToEquatorial(longitude: Angle, latitude: Angle, epsilon: Angle) {
+		const [epsilonsin, epsiloncos] = Base.sincos(epsilon)
+		const [sBeta, cBeta] = Base.sincos(latitude)
+		const [sLambda, cLambda] = Base.sincos(longitude)
+		const ra = atan2(sLambda * epsiloncos - (sBeta / cBeta) * epsilonsin, cLambda) // (13.3) p. 93
+		const dec = asin(sBeta * epsiloncos + cBeta * epsilonsin * sLambda) // (13.4) p. 93
+		return [normalizeAngle(ra), dec] as const
+	}
+
+	// Converts equatorial coordinates to ecliptic coordinates given ecliptic obliquity.
+	export function equatorialToEcliptic(rightAscension: Angle, declination: Angle, epsilon: Angle) {
+		const [epsilonsin, epsiloncos] = Base.sincos(epsilon)
+		const [sAlpha, cAlpha] = Base.sincos(rightAscension)
+		const [sDelta, cDelta] = Base.sincos(declination)
+		const lon = atan2(sAlpha * epsiloncos + (sDelta / cDelta) * epsilonsin, cAlpha) // (13.1) p. 93
+		const lat = asin(sDelta * epsiloncos - cDelta * epsilonsin * sAlpha) // (13.2) p. 93
+		return [lon, lat] as const
+	}
+
+	// Computes Horizontal coordinates from equatorial coordinates given is the location of the observer on the Earth and the sidereal time at Greenwich.
+	// Sidereal time must be consistent with the equatorial coordinates. If coordinates are apparent, sidereal time must be apparent as well.
+	export function equatorialToHorizontal(rightAscension: Angle, declination: Angle, longitude: Angle, latitude: Angle, st: number) {
+		const H = timeSec(st) - longitude - rightAscension
+		const [sH, cH] = Base.sincos(H)
+		const [sPhi, cPhi] = Base.sincos(latitude)
+		const [sDelta, cDelta] = Base.sincos(declination)
+		const azimuth = atan2(sH, cH * sPhi - (sDelta / cDelta) * cPhi) // (13.5) p. 93
+		const altitude = asin(sPhi * sDelta + cPhi * cDelta * cH) // (13.6) p. 93
+		return [azimuth, altitude] as const
+	}
+
+	// Converts equatorial coordinates to galactic coordinates.
+	// Equatorial coordinates must be referred to the standard equinox of B1950.0.
+	// For conversion to B1950, see package precess and utility functions in packkage "common".
+	export function equatorialToGalactic(rightAscension: Angle, declination: Angle) {
+		const [sdAlpha, cdAlpha] = Base.sincos(GALACTIC_NORTH_RA - rightAscension)
+		const [sgDelta, cgDelta] = Base.sincos(GALACTIC_NORTH_DEC)
+		const [sDelta, cDelta] = Base.sincos(declination)
+		const x = atan2(sdAlpha, cdAlpha * sgDelta - (sDelta / cDelta) * cgDelta) // (13.7) p. 94
+		// (galactic0Lon1950 + 1.5 * PI) = magic number of 303 deg
+		const lon = (GALACTIC_LON_0 + 1.5 * PI - x) % TAU // (13.8) p. 94
+		const lat = asin(sDelta * sgDelta + cDelta * cgDelta * cdAlpha)
+		return [lon, lat] as const
+	}
+
+	// Converts horizontal coordinates to equatorial coordinates.
+	// Sidereal time must be consistent with the equatorial coordinates.
+	// If coordinates are apparent, sidereal time must be apparent as well.
+	export function horizontalToEquatorial(azimuth: Angle, altitude: Angle, longitude: Angle, latitude: Angle, st: number) {
+		const [sA, cA] = Base.sincos(azimuth)
+		const [sh, ch] = Base.sincos(altitude)
+		const [sPhi, cPhi] = Base.sincos(latitude)
+		const H = atan2(sA, cA * sPhi + (sh / ch) * cPhi)
+		const ra = normalizeAngle(timeSec(st) - longitude - H)
+		const dec = asin(sPhi * sh - cPhi * ch * cA)
+		return [ra, dec] as const
+	}
+
+	// Converts galactic coordinates to equatorial coordinates.
+	// Resulting equatorial coordinates will be referred to the standard equinox of
+	// B1950.0.  For subsequent conversion to other epochs, see package precess and
+	// utility functions in package meeus.
+	export function galacticToEquatorial(longitude: Angle, latitude: Angle) {
+		// (-galactic0Lon1950 - Pi/2) = magic number of -123 deg
+		const [sdLon, cdLon] = Base.sincos(longitude - GALACTIC_LON_0 - PIOVERTWO)
+		const [sgDelta, cgDelta] = Base.sincos(GALACTIC_NORTH_DEC)
+		const [sb, cb] = Base.sincos(latitude)
+		const y = atan2(sdLon, cdLon * sgDelta - (sb / cb) * cgDelta)
+		// (galacticNorth1950.RA - PI) = magic number of 12.25 deg
+		const ra = normalizeAngle(y + GALACTIC_NORTH_RA - PI)
+		const dec = asin(sb * sgDelta + cb * cgDelta * cdLon)
+		return [ra, dec] as const
+	}
+
+	// Equatorial IAU B1950.0 coordinates of galactic North Pole
+	export const GALACTIC_NORTH_RA = hms(12, 49, 0)
+	export const GALACTIC_NORTH_DEC = 27.4 * DEG2RAD
+
+	// Galactic Longitude 0°
+	// Meeus gives 33 as the origin of galactic longitudes relative to the
+	// ascending node of of the galactic equator. 33 + 90 = 123, the IAU
+	// value for origin relative to the equatorial pole.
+	export const GALACTIC_LON_0 = 33 * DEG2RAD
 }
 
 // Rise: Chapter 15, Rising, Transit, and Setting.
