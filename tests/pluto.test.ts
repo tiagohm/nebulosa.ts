@@ -8,7 +8,7 @@ const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
 test('pluto', () => {
 	const p = pluto(TIME)
 
-	expect(p[0]).toBeCloseTo(1.897082455989403e1, 3)
+	expect(p[0]).toBeCloseTo(1.897082455989403e1, 4)
 	expect(p[1]).toBeCloseTo(-2.637625218763833e1, 3)
 	expect(p[2]).toBeCloseTo(-1.394557188546127e1, 3)
 })
