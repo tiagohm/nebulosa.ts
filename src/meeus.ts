@@ -1313,6 +1313,214 @@ export namespace Circle {
 	}
 }
 
+// Chapter 21, Precession.
+export namespace Precession {
+	// Functions in this package take Julian epoch argurments rather than Julian
+	// days. Use Base.jdeToJulianYear() to convert.
+
+	// Computes the approximate annual precision in right ascension and declination.
+	// The two epochs should be within a few hundred years.
+	// The declinations should not be too close to the poles.
+	export function approxAnnualPrecession(rightAscension: Angle, declination: Angle, epochFrom: number, epochTo: number) {
+		const [m, na, nd] = mn(epochFrom, epochTo)
+		const [sa, ca] = Base.sincos(rightAscension)
+		// (21.1) p. 132
+		const da = m + na * sa * Math.tan(declination) // seconds of RA
+		const dd = nd * ca // seconds of DEC
+		return [da * ASEC2RAD * 15, dd * ASEC2RAD] as const
+	}
+
+	export function mn(epochFrom: number, epochTo: number) {
+		const T = (epochTo - epochFrom) * 0.01
+		const m = 3.07496 + 0.00186 * T
+		const na = 1.33621 - 0.00057 * T
+		const nd = 20.0431 - 0.0085 * T
+		return [m, na, nd] as const
+	}
+
+	// Uses ApproxAnnualPrecession to compute a simple and quick precession while still considering proper motion.
+	export function approxPosition(rightAscension: Angle, declination: Angle, epochFrom: number, epochTo: number, mAlpha: Angle, mDelta: Angle) {
+		const [ra, dec] = approxAnnualPrecession(rightAscension, declination, epochFrom, epochTo)
+		const dy = epochTo - epochFrom
+		return [rightAscension + (ra + mAlpha) * dy, declination + (dec + mDelta) * dy] as const
+	}
+
+	// coefficients from (21.2) p. 134
+	const ZETA_T = [2306.2181 * ASEC2RAD, 1.39656 * ASEC2RAD, -0.000139 * ASEC2RAD] as const
+	const Z_T = [2306.2181 * ASEC2RAD, 1.39656 * ASEC2RAD, -0.000139 * ASEC2RAD] as const
+	const THETA_T = [2004.3109 * ASEC2RAD, -0.8533 * ASEC2RAD, -0.000217 * ASEC2RAD] as const
+	// coefficients from (21.3) p. 134
+	const ZETAT = [2306.2181 * ASEC2RAD, 0.30188 * ASEC2RAD, 0.017998 * ASEC2RAD] as const
+	const ZT = [2306.2181 * ASEC2RAD, 1.09468 * ASEC2RAD, 0.018203 * ASEC2RAD] as const
+	const THETAT = [2004.3109 * ASEC2RAD, -0.42665 * ASEC2RAD, -0.041833 * ASEC2RAD] as const
+
+	// Precessor represents precession from one epoch to another.
+	export class Precessor {
+		readonly #zeta: number
+		readonly #z: number
+		readonly #sTheta: number
+		readonly #cTheta: number
+
+		constructor(
+			readonly epochFrom: number,
+			readonly epochTo: number,
+		) {
+			// (21.2) p. 134
+			let zetaCoeff = ZETAT
+			let zCoeff = ZT
+			let thetaCoeff = THETAT
+
+			if (epochFrom !== 2000) {
+				const T = (epochFrom - 2000) * 0.01
+				zetaCoeff = [Base.horner(T, ZETA_T), 0.30188 * ASEC2RAD - 0.000344 * ASEC2RAD * T, 0.017998 * ASEC2RAD]
+				zCoeff = [Base.horner(T, Z_T), 1.09468 * ASEC2RAD + 0.000066 * ASEC2RAD * T, 0.018203 * ASEC2RAD]
+				thetaCoeff = [Base.horner(T, THETA_T), -0.42665 * ASEC2RAD - 0.000217 * ASEC2RAD * T, -0.041833 * ASEC2RAD]
+			}
+
+			const t = (epochTo - epochFrom) * 0.01
+			this.#zeta = Base.horner(t, zetaCoeff) * t
+			this.#z = Base.horner(t, zCoeff) * t
+			const theta = Base.horner(t, thetaCoeff) * t
+			this.#sTheta = sin(theta)
+			this.#cTheta = cos(theta)
+		}
+
+		// Precesses equatorial coordinates.
+		precess(rightAscension: Angle, declination: Angle) {
+			// (21.4) p. 134
+			const [sDelta, cDelta] = Base.sincos(declination)
+			const [sAlphaZeta, cAlphaZeta] = Base.sincos(rightAscension + this.#zeta)
+			const A = cDelta * sAlphaZeta
+			const B = this.#cTheta * cDelta * cAlphaZeta - this.#sTheta * sDelta
+			const C = this.#sTheta * cDelta * cAlphaZeta + this.#cTheta * sDelta
+			const ra = Math.atan2(A, B) + this.#z
+			const dec = C < Base.COS_SMALL_ANGLE ? Math.asin(C) : Math.acos(Math.hypot(A, B)) // near pole
+			return [ra, dec] as const
+		}
+	}
+
+	// Precesses equatorial coordinates from one epoch to another, including proper motions.
+	export function position(p: Precessor, rightAscension: Angle, declination: Angle, pmRA: Angle, pmDEC: Angle) {
+		const t = p.epochTo - p.epochFrom
+		return p.precess(rightAscension + pmRA * t, declination + pmDEC * t)
+	}
+
+	// coefficients from (21.5) p. 136
+	const ETA_T = [47.0029 * ASEC2RAD, -0.06603 * ASEC2RAD, 0.000598 * ASEC2RAD] as const
+	const PI_T = [174.876384 * DEG2RAD, 3289.4789 * ASEC2RAD, 0.60622 * ASEC2RAD] as const
+	const P_T = [5029.0966 * ASEC2RAD, 2.22226 * ASEC2RAD, -0.000042 * ASEC2RAD] as const
+	const ETAT = [47.0029 * ASEC2RAD, -0.03302 * ASEC2RAD, 0.00006 * ASEC2RAD] as const
+	const PIT = [174.876384 * DEG2RAD, -869.8089 * ASEC2RAD, 0.03536 * ASEC2RAD] as const
+	const PT = [5029.0966 * ASEC2RAD, 1.11113 * ASEC2RAD, -0.000006 * ASEC2RAD] as const
+
+	// Represents precession from one epoch to another.
+	export class EclipticPrecessor {
+		readonly #pi: number
+		readonly #p: number
+		readonly #sEta: number
+		readonly #cEta: number
+
+		constructor(
+			readonly epochFrom: number,
+			readonly epochTo: number,
+		) {
+			// (21.5) p. 136
+			let etaCoeff = ETAT
+			let piCoeff = PIT
+			let pCoeff = PT
+
+			if (epochFrom !== 2000) {
+				const T = (epochFrom - 2000) * 0.01
+				etaCoeff = [Base.horner(T, ETA_T), -0.03302 * ASEC2RAD + 0.000598 * ASEC2RAD * T, 0.00006 * ASEC2RAD]
+				piCoeff = [Base.horner(T, PI_T), -869.8089 * ASEC2RAD - 0.50491 * ASEC2RAD * T, 0.03536 * ASEC2RAD]
+				pCoeff = [Base.horner(T, P_T), 1.11113 * ASEC2RAD - 0.000042 * ASEC2RAD * T, -0.000006 * ASEC2RAD]
+			}
+
+			const t = (epochTo - epochFrom) * 0.01
+			this.#pi = Base.horner(t, piCoeff)
+			this.#p = Base.horner(t, pCoeff) * t
+			const eta = Base.horner(t, etaCoeff) * t
+			this.#sEta = Math.sin(eta)
+			this.#cEta = Math.cos(eta)
+		}
+
+		// Precesses coordinates eclFrom, leaving result in eclTo.
+		precess(longitude: Angle, latitude: Angle) {
+			// (21.7) p. 137
+			const [sBeta, cBeta] = Base.sincos(latitude)
+			const [sd, cd] = Base.sincos(this.#pi - longitude)
+			const A = this.#cEta * cBeta * sd - this.#sEta * sBeta
+			const B = cBeta * cd
+			const C = this.#cEta * sBeta + this.#sEta * cBeta * sd
+			const lon = this.#p + this.#pi - Math.atan2(A, B)
+			const lat = C < Base.COS_SMALL_ANGLE ? Math.asin(C) : Math.acos(Math.hypot(A, B)) // near pole
+			return [lon, lat]
+		}
+
+		// Reduces orbital elements of a solar system body from one equinox to another.
+		reduceElements(eFrom: EquinoxOrbitalElements): EquinoxOrbitalElements {
+			const psi = this.#pi + this.#p
+			const [si, ci] = Base.sincos(eFrom[0])
+			const [snp, cnp] = Base.sincos(eFrom[1] - this.#pi)
+			// (24.1) p. 159
+			const inc = Math.acos(ci * this.#cEta + si * this.#sEta * cnp)
+			// (24.2) p. 159
+			const node = Math.atan2(si * snp, this.#cEta * si * cnp - this.#sEta * ci) + psi
+			// (24.3) p. 159
+			const peri = Math.atan2(-this.#sEta * snp, si * this.#cEta - ci * this.#sEta * cnp) + eFrom[2]
+			return [inc, node, peri]
+		}
+	}
+
+	// Precesses ecliptic coordinates from one epoch to another, including proper motions.
+	export function eclipticPosition(p: EclipticPrecessor, longitude: Angle, latitude: Angle, pmRA: Angle = 0, pmDEC: Angle = 0) {
+		if (Number.isFinite(pmRA) && Number.isFinite(pmDEC) && pmRA !== 0 && pmDEC !== 0) {
+			const [lon, lat] = properMotion(pmRA, pmDEC, p.epochFrom, longitude, latitude)
+			const t = p.epochTo - p.epochFrom
+			longitude += lon * t
+			latitude += lat * t
+		}
+
+		return p.precess(longitude, latitude)
+	}
+
+	export function properMotion(pmRA: Angle, pmDEC: Angle, epoch: number, longitude: Angle, latitude: Angle) {
+		if (!pmRA && !pmDEC) return [longitude, latitude] as const
+		const epsilon = Nutation.meanObliquity(Base.julianYearToJDE(epoch))
+		const [epsilonsin, epsiloncos] = Base.sincos(epsilon)
+		const [ra, dec] = Coords.eclipticToEquatorial(longitude, latitude, epsilon)
+		const [sAlpha, cAlpha] = Base.sincos(ra)
+		const [sDelta, cDelta] = Base.sincos(dec)
+		const cBeta = Math.cos(latitude)
+		const lon = (pmDEC * epsilonsin * cAlpha + pmRA * cDelta * (epsiloncos * cDelta + epsilonsin * sDelta * sAlpha)) / (cBeta * cBeta)
+		const lat = (pmDEC * (epsiloncos * cDelta + epsilonsin * sDelta * sAlpha) - pmRA * epsilonsin * cAlpha * cDelta) / cBeta
+		return [lon, lat] as const
+	}
+
+	// Takes the 3D equatorial coordinates of an object at one epoch and computes its
+	// coordinates at a new epoch, considering proper motion and radial velocity.
+	// Radial distance (r) must be in parsecs, radial velocitiy (mr) in parsecs per year.
+	export function properMotion3D(rightAscension: Angle, declination: Angle, epochFrom: number, epochTo: number, r: number, mr: number, pmRA: Angle, pmDEC: Angle) {
+		const [sAlpha, cAlpha] = Base.sincos(rightAscension)
+		const [sDelta, cDelta] = Base.sincos(declination)
+		const x = r * cDelta * cAlpha
+		const y = r * cDelta * sAlpha
+		const z = r * sDelta
+		const mrr = mr / r
+		const zmDelta = z * pmDEC
+		const mx = x * mrr - zmDelta * cAlpha - y * pmRA
+		const my = y * mrr - zmDelta * sAlpha + x * pmRA
+		const mz = z * mrr + r * pmDEC * cDelta
+		const t = epochTo - epochFrom
+		const xp = x + t * mx
+		const yp = y + t * my
+		const zp = z + t * mz
+		const ra = Math.atan2(yp, xp)
+		const dec = Math.atan2(zp, Math.hypot(xp, yp))
+		return [ra, dec] as const
+	}
+}
+
 // Chapter 22, Nutation and the Obliquity of the Ecliptic.
 export namespace Nutation {
 	const D_TERMS = [297.85036 * DEG2RAD, 445267.11148 * DEG2RAD, -0.0019142 * DEG2RAD, DEG2RAD / 189474] as const
@@ -1480,7 +1688,7 @@ export namespace ElementEquinox {
 	const S = 0.0001139788
 	const C = 0.9999999935
 
-	// ReduceB1950ToJ2000 reduces orbital elements of a solar system body from equinox B1950 to J2000.
+	// Reduces orbital elements of a solar system body from equinox B1950 to J2000.
 	export function reduceB1950ToJ2000(from: EquinoxOrbitalElements): EquinoxOrbitalElements {
 		const W = from[1] - 174.298782 * DEG2RAD
 		const [si, ci] = Base.sincos(from[0])

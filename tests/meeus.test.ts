@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, formatALT, formatRA, hms, normalizeAngle, secondsOfTime, signedDms, toArcsec, toDeg, toDms, toHms } from '../src/angle'
-import { DAYSEC, PI, RAD2DEG } from '../src/constants'
+import { DAYSEC, DEG2RAD, PI, RAD2DEG } from '../src/constants'
 import { meter, toKilometer, toMeter } from '../src/distance'
 import { modf, roundToNthDecimal } from '../src/math'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, ElementEquinox, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Refraction, Sidereal, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, ElementEquinox, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Precession, Refraction, Sidereal, Stellar } from '../src/meeus'
 import { time, timeToDate, timeYMD } from '../src/time'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
@@ -402,7 +402,7 @@ describe('Julian', () => {
 	// 	describe('dateToJD', () => {
 	// 		for (const date of dates) {
 	// 			test(date[1].toISOString(), () => {
-	// 				deepStrictEqual(base.round(Julian.dateToJD(date[1]), 2), date[0])
+	// 				deepStrictEqual(Base.round(Julian.dateToJD(date[1]), 2), date[0])
 	// 			})
 	// 		}
 	// 	})
@@ -572,11 +572,11 @@ describe('Julian', () => {
 	// 	test('can convert from Date to JD', () => {
 	// 		const d = new Julian.calendar().fromDate(new Date('2000-01-01T12:00:00Z'))
 	// 		const jd = d.toJD()
-	// 		strictEqual(jd, base.J2000)
+	// 		strictEqual(jd, Base.J2000)
 	// 	})
 
 	// 	test('can convert from JD to Date', () => {
-	// 		const d = new Julian.calendar().fromJD(base.J2000)
+	// 		const d = new Julian.calendar().fromJD(Base.J2000)
 	// 		const date = d.toDate()
 	// 		strictEqual(date.toISOString(), '2000-01-01T12:00:00.000Z')
 	// 	})
@@ -1064,7 +1064,7 @@ describe('Circle', () => {
 		const c2 = [hms(9, 9, 29), signedDms(false, 17, 43, 56.7)] as const
 		const c3 = [hms(8, 59, 47.14), signedDms(false, 17, 49, 36.8)] as const
 		const a = Circle.smallest(c1, c2, c3)
-		expect(formatALT(a[0], false)).toBe('+02 18 38') // Δ = 2°.31054 = 2°19′
+		expect(formatALT(a[0], false)).toBe('+02 18 38')
 		expect(a[1]).toBeTrue() // type I
 	})
 
@@ -1074,8 +1074,164 @@ describe('Circle', () => {
 		const c2 = [hms(12, 52, 5.21), signedDms(true, 4, 22, 26.2)] as const
 		const c3 = [hms(12, 39, 28.11), signedDms(true, 1, 50, 3.7)] as const
 		const a = Circle.smallest(c1, c2, c3)
-		expect(formatALT(a[0], false)).toBe('+04 15 49') // Δ = 4°.26363 = 4°16′
+		expect(formatALT(a[0], false)).toBe('+04 15 49')
 		expect(a[1]).toBeFalse() // type II
+	})
+})
+
+describe('Precession', () => {
+	describe('mn', () => {
+		// test data from p. 132.
+		const dates = [
+			[1700, 3.069, 1.338, 20.07],
+			[1800, 3.071, 1.337, 20.06],
+			[1900, 3.073, 1.337, 20.05],
+			[2000, 3.075, 1.336, 20.04],
+			[2100, 3.077, 1.336, 20.03],
+			[2200, 3.079, 1.335, 20.03],
+		] as const
+
+		for (const [epoch, m, na, nd] of dates) {
+			const a = Precession.mn(2000, epoch)
+
+			test(epoch.toFixed(0), () => {
+				expect(Math.abs(a[0] - m) < 1e-3).toBeTrue()
+				expect(Math.abs(a[1] - na) < 1e-3).toBeTrue()
+				expect(Math.abs(a[2] - nd) < 1e-2).toBeTrue()
+			})
+		}
+	})
+
+	test('approxAnnualPrecession', () => {
+		// Example 21.a, p. 132.
+		const [ra, dec] = Precession.approxAnnualPrecession(hms(10, 8, 22.3), signedDms(false, 11, 58, 2), 2000, 1978)
+		expect(formatRA(ra, 3)).toBe('00 00 03.207')
+		expect(formatALT(dec)).toBe('-00 00 17.71')
+	})
+
+	test('approxPosition', () => {
+		// Example 21.a, p. 132.
+		const ma = -hms(0, 0, 0.0169)
+		const md = signedDms(false, 0, 0, 0.006)
+		const [ra, dec] = Precession.approxPosition(hms(10, 8, 22.3), signedDms(false, 11, 58, 2), 2000, 1978, ma, md)
+		expect(formatRA(ra, 1)).toBe('10 07 12.1')
+		expect(formatALT(dec, 0)).toBe('+12 04 32')
+	})
+
+	test('position', () => {
+		// Example 21.b, p. 135.
+		const jdTo = Julian.calendarGregorianToJD(2028, 11, 13.19)
+		const epochTo = Base.jdeToJulianYear(jdTo)
+		const p = new Precession.Precessor(2000, epochTo)
+		const [ra, dec] = Precession.position(p, hms(2, 44, 11.986), signedDms(false, 49, 13, 42.48), hms(0, 0, 0.03425), signedDms(true, 0, 0, 0.0895))
+		expect(formatRA(ra, 3)).toBe('02 46 11.331')
+		expect(formatALT(dec, 2)).toBe('+49 20 54.54')
+	})
+
+	test('properMotion', () => {
+		// Test with proper motion of Regulus, with equatorial motions given
+		// in Example 21.a, p. 132, and ecliptic motions given in table 21.A, p. 138.
+		const ε = Nutation.meanObliquity(Base.J2000)
+		const [lon, lat] = Precession.properMotion(-hms(0, 0, 0.0169), signedDms(false, 0, 0, 0.006), 2000, ...Coords.equatorialToEcliptic(hms(10, 8, 22.3), signedDms(false, 11, 58, 2), ε))
+
+		let d = Math.abs((lon - signedDms(true, 0, 0, 0.2348)) / lon)
+		expect(d * 169 < 1).toBeTrue() // 169 = significant digits of given lon
+		d = Math.abs((lat - signedDms(true, 0, 0, 0.0813)) / lat)
+		expect(d * 6 < 1).toBeTrue() // 6 = significant digit of given lat
+	})
+
+	describe('position JDE', () => {
+		// Exercise, p. 136.
+		const eqFrom = [hms(2, 31, 48.704), signedDms(false, 89, 15, 50.72)] as const
+		const ma = hms(0, 0, 0.19877)
+		const md = signedDms(true, 0, 0, 0.0152)
+
+		const dates = [
+			[Base.besselianYearToJDE(1900), '01 22 33.9', '+88 46 26.18'],
+			[Base.julianYearToJDE(2050), '03 48 16.43', '+89 27 15.38'],
+			[Base.julianYearToJDE(2100), '05 53 29.17', '+89 32 22.18'],
+		] as const
+
+		for (const [date, ra, dec] of dates) {
+			test(date.toFixed(0), () => {
+				const epochTo = Base.jdeToJulianYear(date)
+				const p = new Precession.Precessor(2000, epochTo)
+				const eqTo = Precession.position(p, ...eqFrom, ma, md)
+				expect(formatRA(eqTo[0]), ra)
+				expect(formatALT(eqTo[1]), dec)
+			})
+		}
+	})
+
+	describe('position Epochs', () => {
+		// Exercise, p. 136.
+		const eqFrom = [hms(2, 31, 48.704), signedDms(false, 89, 15, 50.72)] as const
+		const ma = hms(0, 0, 0.19877)
+		const md = signedDms(false, 0, 0, -0.0152)
+		const epochs = [
+			[Base.jdeToJulianYear(Base.B1900), '1 22 33.9', '88 46 26.18'],
+			[2050, '3 48 16.43', '89 27 15.38'],
+			[2100, '5 53 29.17', '89 32 22.18'],
+		] as const
+
+		for (const [epochTo, ra, dec] of epochs) {
+			test(epochTo.toFixed(0), () => {
+				const p = new Precession.Precessor(2000, epochTo)
+				const eqTo = Precession.position(p, ...eqFrom, ma, md)
+				expect(formatRA(eqTo[0]), ra)
+				expect(formatALT(eqTo[1]), dec)
+			})
+		}
+	})
+
+	describe('eclipticPosition', () => {
+		test('example', () => {
+			// Example 21.c, p. 137.
+			const epochTo = Base.jdeToJulianYear(Julian.calendarJulianToJD(-214, 6, 30))
+			const p = new Precession.EclipticPrecessor(2000, epochTo)
+			const [lon, lat] = Precession.eclipticPosition(p, deg(149.48194), deg(1.76549))
+			strictEqual(toDeg(lon), 118.70416774861883)
+			strictEqual(toDeg(lat), 1.6153320055611455)
+		})
+
+		test('reduceElements', () => {
+			// Example 24.a, p. 160.
+			let ele = [47.122 * DEG2RAD, 45.7481 * DEG2RAD, 151.4486 * DEG2RAD] as const
+
+			const JFrom = Base.jdeToJulianYear(Base.besselianYearToJDE(1744))
+			const JTo = Base.jdeToJulianYear(Base.besselianYearToJDE(1950))
+			const p = new Precession.EclipticPrecessor(JFrom, JTo)
+			ele = p.reduceElements(ele)
+
+			strictEqual(toDeg(ele[0]), 47.13795835860312)
+			strictEqual(toDeg(ele[1]), 48.6036896626305)
+			strictEqual(toDeg(ele[2]), 151.47823843361917)
+		})
+	})
+
+	describe('properMotion3D', () => {
+		// Example 21.d, p. 141.
+		const eqFrom = [hms(6, 45, 8.871), signedDms(true, 16, 42, 57.99)] as const
+		const mra = hms(0, 0, -0.03847)
+		const mdec = signedDms(false, 0, 0, -1.2053)
+		const r = 2.64 // given in correct unit
+		const mr = -7.6 / 977792 // magic conversion factor
+
+		const epochs = [
+			[1000.0, '6 45 47.16', '-16 22 56.03'],
+			[0.0, '6 46 25.09', '-16 3 .77'],
+			[-1000.0, '6 47 2.67', '-15 43 12.27'],
+			[-2000.0, '6 47 39.91', '-15 23 30.57'],
+			[-10000.0, '6 52 25.72', '-12 50 6.7'],
+		] as const
+
+		for (const [epoch, ra, dec] of epochs) {
+			test(epoch.toFixed(0), () => {
+				const eqTo = Precession.properMotion3D(...eqFrom, 2000, epoch, r, mr, mra, mdec)
+				expect(formatRA(eqTo[0]), ra)
+				expect(formatALT(eqTo[1]), dec)
+			})
+		}
 	})
 })
 
