@@ -16,7 +16,7 @@
 	"peerDependencies": {
 		"@types/bun": "latest",
 		"fast-xml-parser": "latest",
-		"typescript": "beta"
+		"typescript": "6"
 	},
 	"optionalDependencies": {
 		"@typescript/native-preview": "latest"
