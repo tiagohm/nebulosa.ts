@@ -31,7 +31,8 @@ await alpacaTelescopeApi.connect(id)
 ### Angle ![](bun.webp) ![](browser.webp)
 
 ```ts
-normalizeAngle(TAU + PI) // Normalize the angle in radians
+normalizeAngle(TAU + PI) // Normalize the angle to [0..TAU)
+normalizePI(-TAU) // Normalize the angle to [-PI..PI)
 deg(90) // Convert degree to radian
 hour(22) // Convert hour to radian
 arcmin(10) // Convert arcminute to radian
@@ -52,9 +53,9 @@ formatHMS(PI) // Format the angle as 00:00:00.00
 formatDMS(PI) // Format the angle as 00d00m00.00s
 formatSignedDMS(PI) // Format the angle as +00d00m00.00s
 formatRA(PI) // Format the angle in hours as 00 00 00.00
-formatDEC(PI) // Format the angle in degress as +00 00 00.00
-formatAZ(PI) // Format the angle in degress as 000 00 00.00
-formatALT(PI) // Format the angle in degress as +00 00 00.00
+formatDEC(PI) // Format the angle in degrees as +00 00 00.00
+formatAZ(PI) // Format the angle in degrees as 000 00 00.00
+formatALT(PI) // Format the angle in degrees as +00 00 00.00
 ```
 
 ### Astap ![](bun.webp)
@@ -127,6 +128,10 @@ refractedAltitude(altitude, refraction) // Compute the refracted altitude given 
 ### Astrometry.net ![](bun.webp)
 
 ```ts
+login({ apiKey }) // Start a nova.astrometry.net session
+upload({ input, session, rightAscension, declination, radius }) // Submit an image path, URL, or Blob for solving
+submissionStatus(submission, { session }) // Inspect submission jobs and progress
+wcsFile(jobId, { session }) // Download the solved WCS FITS blob
 novaAstrometryNetPlateSolve(input, options)
 localAstrometryNetPlateSolve(input, options)
 ```
@@ -143,12 +148,120 @@ const step = autoFocus.add(focusPosition, hfd)
 ```ts
 compressRice(input, blockSize, initialCapacity)
 decompressRice(input, output, blockSize)
+inflate(input) // Decompress deflate-compressed bytes
+deflate(input) // Compress bytes with deflate
 ```
 
 ### Constellation ![](bun.webp) ![](browser.webp)
 
 ```ts
 constellation(ra, dec, equinox) // Constellation at RA/DEC coordinate
+```
+
+### Coordinate ![](bun.webp) ![](browser.webp)
+
+```ts
+angularDistance(ra0, dec0, ra1, dec1) // Angular separation between two equatorial coordinates
+equatorialFromJ2000(raJ2000, decJ2000, time) // Convert J2000 RA/DEC to the current equatorial frame
+equatorialToJ2000(ra, dec, time) // Convert current RA/DEC to J2000
+equatorialToHorizontal(ra, dec, latitude, lst) // Convert equatorial to azimuth/altitude
+equatorialToEclipticJ2000(ra, dec) // Convert J2000 equatorial to J2000 ecliptic
+equatorialToEcliptic(ra, dec, time) // Convert current equatorial to current ecliptic
+eclipticJ2000ToEquatorial(longitude, latitude) // Convert J2000 ecliptic to J2000 equatorial
+eclipticToEquatorial(longitude, latitude, time) // Convert current ecliptic to current equatorial
+galacticToEquatorial(longitude, latitude) // Convert galactic to equatorial
+equatorialToGalatic(ra, dec) // Convert equatorial to galactic
+zenith(longitude, latitude, time) // Current equatorial coordinates of the local zenith
+meridianEquator(longitude, time) // Current equatorial coordinates where the meridian crosses the celestial equator
+meridianEcliptic(longitude, time) // Current equatorial coordinates where the meridian crosses the ecliptic
+equatorEcliptic(longitude, time) // Nearer equinox node where the equator crosses the ecliptic
+```
+
+### CRC ![](bun.webp) ![](browser.webp)
+
+```ts
+CRC.crc3gsm.compute(data)
+CRC.crc4itu.compute(data)
+CRC.crc4interlaken.compute(data)
+CRC.crc5epc.compute(data)
+CRC.crc5itu.compute(data)
+CRC.crc5usb.compute(data)
+CRC.crc6cdma2000a.compute(data)
+CRC.crc6cdma2000b.compute(data)
+CRC.crc6darc.compute(data)
+CRC.crc6gsm.compute(data)
+CRC.crc6itu.compute(data)
+CRC.crc7.compute(data)
+CRC.crc7umts.compute(data)
+CRC.crc8.compute(data)
+CRC.crc8cdma2000.compute(data)
+CRC.crc8darc.compute(data)
+CRC.crc8dvbs2.compute(data)
+CRC.crc8ebu.compute(data)
+CRC.crc8icode.compute(data)
+CRC.crc8itu.compute(data)
+CRC.crc8maxim.compute(data)
+CRC.crc8rohc.compute(data)
+CRC.crc8wcdma.compute(data)
+CRC.crc10.compute(data)
+CRC.crc10cdma2000.compute(data)
+CRC.crc10gsm.compute(data)
+CRC.crc11.compute(data)
+CRC.crc12.compute(data)
+CRC.crc12cdma2000.compute(data)
+CRC.crc12gsm.compute(data)
+CRC.crc13bbc.compute(data)
+CRC.crc14darc.compute(data)
+CRC.crc14gsm.compute(data)
+CRC.crc15can.compute(data)
+CRC.crc15mpt1327.compute(data)
+CRC.crc16.compute(data)
+CRC.crc16ccittfalse.compute(data)
+CRC.crc16augccitt.compute(data)
+CRC.crc16buypass.compute(data)
+CRC.crc16cdma2000.compute(data)
+CRC.crc16dds110.compute(data)
+CRC.crc16dectr.compute(data)
+CRC.crc16dectx.compute(data)
+CRC.crc16dnp.compute(data)
+CRC.crc16en13757.compute(data)
+CRC.crc16genibus.compute(data)
+CRC.crc16maxim.compute(data)
+CRC.crc16mcrf4cc.compute(data)
+CRC.crc16riello.compute(data)
+CRC.crc16t10dif.compute(data)
+CRC.crc16teledisk.compute(data)
+CRC.crc16tms13157.compute(data)
+CRC.crc16usb.compute(data)
+CRC.crca.compute(data)
+CRC.crc16kermit.compute(data)
+CRC.crc16modbus.compute(data) // Compute CRC-16/MODBUS using a built-in preset
+CRC.crc16x25.compute(data)
+CRC.crc16xmodem.compute(data)
+CRC.crc17can.compute(data)
+CRC.crc21can.compute(data)
+CRC.crc24.compute(data)
+CRC.crc24ble.compute(data)
+CRC.crc24flexraya.compute(data)
+CRC.crc24flexrayb.compute(data)
+CRC.crc24ltea.compute(data)
+CRC.crc24lteb.compute(data)
+CRC.crc24os9.compute(data)
+CRC.crc30cdma.compute(data)
+CRC.crc32.compute(data) // Compute CRC-32 using a built-in preset
+CRC.crc32mhash.compute(data)
+CRC.crc32bzip2.compute(data)
+CRC.crc32c.compute(data)
+CRC.crc32d.compute(data)
+CRC.crc32mpeg2.compute(data)
+CRC.crc32posix.compute(data)
+CRC.crc32q.compute(data)
+CRC.crc32jamcrc.compute(data)
+CRC.crc32xfer.compute(data)
+CRC.crc32.compute(chunk, previous) // Continue an incremental CRC calculation
+
+const custom = new CRC(bit, polynomial, initial, reflect, finalXor)
+custom.compute(data) // Compute a checksum using a custom CRC definition
 ```
 
 ### Csv ![](bun.webp) ![](browser.webp)
@@ -162,6 +275,14 @@ const rows = await readCsvStream(source, options) // Read CSV file from source
 
 ```ts
 readDaf(source) // Read NASA DAF file
+```
+
+### Delta T ![](bun.webp) ![](browser.webp)
+
+```ts
+parabolaOfStephensonMorrison2004.compute(year) // Historical quadratic Delta T model
+parabolaOfStephensonMorrisonHohenkerk2016.compute(year) // Revised historical quadratic Delta T model
+s15(year) // Delta T estimate from Stephenson et al. 2021
 ```
 
 ### Distance ![](bun.webp) ![](browser.webp)
@@ -183,10 +304,56 @@ toParsec(1) // Convert AU to parsec
 const [p, v] = moon(time) // Geocentric cartesian position & velocity of Moon at time
 ```
 
+### Ephemeris ![](bun.webp) ![](browser.webp)
+
+```ts
+ellipticToRectangular(a, n, elements, dt) // Position and velocity from elliptic orbital elements
+ellipticToRectangularN(mu, elements, dt) // Position and velocity using the mean-motion formulation
+ellipticToRectangularA(mu, elements, dt) // Position and velocity using the semimajor-axis formulation
+```
+
 ### Erfa ![](bun.webp) ![](browser.webp)
 
 ```ts
-TODO
+eraAnpm(angle) // Normalize an angle into [-PI..PI)
+eraP2s(x, y, z) // Cartesian to spherical with radius
+eraC2s(x, y, z) // Cartesian to spherical angles
+eraS2c(theta, phi) // Spherical angles to Cartesian unit vector
+eraS2p(theta, phi, r) // Spherical to Cartesian with radius
+
+eraTaiUtc(tai1, tai2) // TAI to UTC two-part Julian date
+eraUtcTai(utc1, utc2) // UTC to TAI two-part Julian date
+eraUtcUt1(utc1, utc2, dut1) // UTC to UT1
+eraUt1Utc(ut11, ut12, dut1) // UT1 to UTC
+eraJdToCal(dj1, dj2) // Julian date to calendar date
+eraCalToJd(year, month, day) // Calendar date to Julian date
+eraDat(year, month, day, dayFraction) // TAI-UTC leap seconds at date
+
+eraEra00(ut11, ut12) // Earth rotation angle
+eraGmst06(ut11, ut12, tt1, tt2) // Greenwich mean sidereal time
+eraGst06a(ut11, ut12, tt1, tt2) // Greenwich apparent sidereal time
+eraObl06(tt1, tt2) // Mean obliquity of the ecliptic
+eraNut06a(tt1, tt2) // Nutation angles
+eraPnm06a(tt1, tt2) // Precession-nutation matrix
+eraC2i06a(tt1, tt2) // Celestial-to-intermediate matrix
+eraC2t06a(tt1, tt2, ut11, ut12, xp, yp, sp) // Celestial-to-terrestrial matrix
+eraPom00(xp, yp, sp) // Polar motion matrix
+
+eraGc2Gde(radius, flattening, x, y, z) // Geocentric Cartesian to geodetic
+eraGd2Gce(radius, flattening, longitude, latitude, height) // Geodetic to geocentric Cartesian
+eraStarpv(ra, dec, pmRa, pmDec, parallax, rv) // Catalog star data to position/velocity
+eraPvstar(p, v) // Position/velocity to catalog star parameters
+eraSeps(al, ap, bl, bp) // Angular separation between spherical points
+eraSepp(a, b) // Angular separation between Cartesian vectors
+eraRefco(pressure, temperature, humidity, wavelength) // Atmospheric refraction coefficients
+
+eraApci13(tdb1, tdb2, ebpv, ehp) // Astrometry parameters for ICRS to CIRS transforms
+eraApco13(tt1, tt2, ut11, ut12, lon, lat, height, xp, yp, sp, pressure, temperature, humidity, wavelength, ebpv, ehp) // Astrometry parameters for observed-place transforms
+eraApio13(tt1, tt2, ut11, ut12, lon, lat, height, xp, yp, sp, pressure, temperature, humidity, wavelength) // CIRS-to-observed-place parameters
+eraAtci13(tdb1, tdb2, rc, dc, pr, pd, px, rv, ebpv, ehp) // ICRS to CIRS
+eraAtco13(tt1, tt2, ut11, ut12, rc, dc, pr, pd, px, rv, lon, lat, height, xp, yp, sp, pressure, temperature, humidity, wavelength, ebpv, ehp) // ICRS to observed place
+eraAtoc13(type, ob1, ob2, tt1, tt2, ut11, ut12, lon, lat, height, xp, yp, sp, pressure, temperature, humidity, wavelength, ebpv, ehp) // Observed place to ICRS
+eraAticq(ri, di, astrom) // CIRS to ICRS using precomputed astrometry parameters
 ```
 
 ### Firmata ![](bun.webp)
@@ -227,13 +394,74 @@ client.oneWireWrite(pin, data, address)
 client.oneWireRead(pin, bytesToRead, address, correlationId)
 client.oneWireWriteAndRead(pin, data, bytesToRead, address, correlationId)
 
+const sensor = new ACS712(client, pin, options)
+const sensor = new AM2320(client, pollingInterval)
+const sensor = new BH1750(client, address, pollingInterval, options)
 const sensor = new LM35(client, pin, aref)
 const sensor = new BMP180(client, mode, pollingInterval)
-const sensor = new SHT21(client, pollingInterval)
 const sensor = new BMP280(client, address, pollingInterval, options)
-const sensor = new AM2320(client, pollingInterval)
 const sensor = new DS18B20(client, pin, pollingInterval, options)
+const sensor = new DS1307(client, address, pollingInterval)
+const sensor = new DS3231(client, address, pollingInterval)
+const sensor = new HMC5883L(client, address, pollingInterval, options)
+const sensor = new MAX44009(client, address, pollingInterval, options)
+const sensor = new MPU6050(client, address, pollingInterval, options)
+const sensor = new SHT21(client, pollingInterval)
+const sensor = new TEMT6000(client, pin, options)
+const sensor = new TSL2561(client, address, pollingInterval, options)
 
+const dac = new MCP4725(client, address, options)
+dac.value = value
+dac.powerDownMode = mode
+dac.persist()
+
+const expander = new PCF8574(client, address, pollingInterval, options)
+expander.pinMode(pin, mode)
+expander.pinWrite(pin, value)
+expander.pinRead(pin)
+expander.flush()
+expander.refresh()
+
+const display = new HD44780(expander, options)
+display.begin(columns, rows)
+display.clear()
+display.home()
+display.setCursor(column, row)
+display.print(value)
+
+const clock = new DS3231(client, address, pollingInterval)
+clock.update(year, month, day, dayOfWeek, hour, minute, second, millisecond)
+clock.sync(date)
+
+const clock = new DS1307(client, address, pollingInterval)
+clock.update(year, month, day, dayOfWeek, hour, minute, second, millisecond)
+clock.sync(date)
+
+const radio = new TEA5767(client, address, pollingInterval, options)
+radio.frequency = value
+radio.frequencyUp()
+radio.frequencyDown()
+radio.mute()
+radio.unmute()
+radio.seek('up')
+
+const radio = new RDA5807(client, address, pollingInterval, options)
+radio.frequency = value
+radio.frequencyUp()
+radio.frequencyDown()
+radio.volume = value
+radio.mute()
+radio.unmute()
+radio.seek('up')
+
+const transmitter = new KT0803L(client, address, options)
+transmitter.frequency = value
+transmitter.frequencyUp()
+transmitter.frequencyDown()
+transmitter.mute()
+transmitter.unmute()
+
+sensor.reset() // Reset supported light sensors
 sensor.addListener(listener)
 sensor.start()
 sensor.stop()
@@ -288,6 +516,42 @@ const c = rectIntersection(a, b)
 const [a, b] = intersectLineAndSphere(endpoint, center, radius)
 ```
 
+### Guider ![](bun.webp)
+
+```ts
+validateCalibration(calibration) // Validate a guider calibration matrix
+invertCalibration(calibration) // Invert image-motion calibration into axis space
+applyCalibration(calibration, dx, dy) // Convert pixel error into RA/DEC axis error
+filterGuideStars(frame, config) // Filter stars for guiding and compute frame quality
+selectGuideStar(stars, width, height, image, options) // Pick the best lock star and alternatives
+estimateTranslation(referenceStars, stars, maxMatchDistancePx, outlierSigma) // Measure frame drift between star lists
+applyDeadband(error, minMove) // Suppress corrections smaller than the guiding deadband
+
+const guider = new Guider(config)
+const command = guider.processFrame(frame) // Compute RA/DEC guide pulses from a guide frame
+guider.startDither(dx, dy)
+guider.stopDither()
+guider.lastDiagnostics()
+guider.currentState
+
+const calibrator = new GuidingCalibrator(config)
+const step = calibrator.processFrame(frame) // Advance the calibration state machine
+flipGuidingCalibration(calibration, reverseDecOutput) // Mirror a solved calibration after a meridian flip
+calibrator.reset()
+calibrator.lastDiagnostics()
+calibrator.currentState
+
+const client = new GuiderClient(cameraManager, guideOutputManager, options)
+client.connect(camera, guideOutput, connectOptions)
+client.findStar()
+client.startCapture(exposure)
+client.guide(recalibrate, settle)
+client.dither(amount, raOnly, settle)
+client.flipCalibration()
+client.stopCapture()
+client.disconnect()
+```
+
 ### GUST86 ![](bun.webp) ![](browser.webp)
 
 ```ts
@@ -296,6 +560,22 @@ umbriel(time) // Position and velocity of Umbriel at given time
 oberon(time) // Position and velocity of Oberon at given time
 titania(time) // Position and velocity of Titania at given time
 miranda(time) // Position and velocity of Miranda at given time
+```
+
+### HEALPix ![](bun.webp) ![](browser.webp)
+
+```ts
+const index = new HealpixIndex({ nside: 1024, ordering: 'nested' })
+index.add(id, ra, dec, metadata)
+index.addMany(objects)
+index.get(id)
+index.update(id, ra, dec, metadata)
+index.remove(id)
+index.queryCone(ra, dec, radius)
+index.queryPolygon(vertices)
+index.queryBox(minRa, maxRa, minDec, maxDec)
+index.queryRegion(query)
+index.clear()
 ```
 
 ### Hips2Fits ![](bun.webp) ![](browser.webp)
@@ -355,34 +635,69 @@ writeImageToFormat(image, path, format) // Write image to path as png, jpeg, web
 writeImageToFits(image, sink) // Write image to sink as FITS format
 writeImageToXisf(image, sink, format) // Write image to sink as XISF format
 clone(image) // Clone the image
-stf(image, midtone, shadow, highlight, channel) // Apply STF to image
+copyInto(from, to) // Copy one image into another
+plus(a, b, out) // Add two images
+plusScalar(a, scalar, out) // Add a scalar to an image
+subtract(a, b, out) // Subtract one image from another
+subtractScalar(a, scalar, out) // Subtract a scalar from an image
+multiply(a, b, out) // Multiply two images
+multiplyScalar(a, scalar, out) // Multiply image by scalar
+divide(a, b, out) // Divide one image by another
+divideScalar(a, scalar, out) // Divide image by scalar
+stf(image, midtone, shadow, highlight, options) // Apply STF to image
+arcsinhStretch(image, options) // Stretch image using arcsinh
+approximateArcsinhStretchParameters(midtone, shadow, highlight) // Estimate arcsinh parameters from STF values
+backgroundNeutralization(image, options) // Neutralize the image background
+curvesTransformation(image, options) // Apply a curves transform
 adf(image, options) // Calculate the STF parameters
-sigmaClip(image, options) // Generate rejection map using sigma-clip
-debayer(image, pattern) // Debayer the image
 bayer(image, pattern) // Bayer the image using the CFA pattern
+debayer(image, pattern) // Debayer the image
+scnrMaximumMask(a, b, c, amount) // Compute the SCNR maximum mask
+scnrAdditiveMask(a, b, c, amount) // Compute the SCNR additive mask
+scnrAverageNeutral(a, b, c, amount) // SCNR average neutralization
+scnrMaximumNeutral(a, b, c, amount) // SCNR maximum neutralization
+scnrMinimumNeutral(a, b, c, amount) // SCNR minimum neutralization
 scnr(image, channel, amount, method) // Apply SCNR to image
 horizontalFlip(image) // Horizontal flip the image
 verticalFlip(image) // Vertical flip the image
-grayscale(image)
-convolution(image)
-edge(image)
-emboss(image)
-mean(image)
-sharpen(image)
-blur(image)
-gaussianBlur(image)
-psf(image)
+invert(image) // Invert image values
+grayscale(image, channel) // Convert image to grayscale
+convolutionKernel(kernel, width, height, divisor) // Create a convolution kernel
+convolution(image, kernel, options) // Apply a convolution kernel
+gaussianBlurKernel(sigma, size) // Create a Gaussian blur kernel
+edges(image, options) // Enhance image edges
+emboss(image, options) // Emboss the image
+meanConvolutionKernel(size) // Create a mean convolution kernel
+mean(image, size, options) // Apply a mean filter
+mean3x3(image, options) // Apply a 3x3 mean filter
+mean5x5(image, options) // Apply a 5x5 mean filter
+mean7x7(image, options) // Apply a 7x7 mean filter
+sharpen(image, options) // Sharpen the image
+blurConvolutionKernel(size) // Create a blur kernel
+blur(image, size, options) // Apply a blur filter
+blur3x3(image, options) // Apply a 3x3 blur filter
+blur5x5(image, options) // Apply a 5x5 blur filter
+blur7x7(image, options) // Apply a 7x7 blur filter
+gaussianBlur(image, options) // Apply Gaussian blur
+multiscaleMedianTransform(image, options) // Apply a multiscale median transform
+
+const workspace = new FFTWorkspace(width, height)
+workspace.mask(filterType, cutoff) // Generate a frequency-domain mask
+fft(image, workspace, filterType, cutoff, weight) // Apply FFT filtering
+
+psf(image) // Estimate the image point spread function
 histogram(image, options) // Generate the histogram from image
 median(image, options) // Calculate the median from image
-medianAbsoluteDiviation(image, normalize, options) // Calculate the MAD from image
-brightness(image, value)
-saturation(image, value, channel)
-linear(image, slope, intercept)
-contrast(image, value)
-gamma(image, value)
-estimateBackground(image)
-estimateBackgroundUsingMode(image)
-calibrate(image, dark, flat, bias, darkFlat)
+medianAbsoluteDeviation(image, median, normalized, options) // Calculate the MAD from image
+sigmaClip(image, options) // Generate rejection map using sigma-clip
+estimateBackground(image, options) // Estimate the image background
+estimateBackgroundUsingMode(image, options) // Estimate the background using the mode
+brightness(image, value) // Adjust image brightness
+saturation(image, value, channel) // Adjust image saturation
+linear(image, slope, intercept) // Apply a linear transform
+contrast(image, value) // Adjust image contrast
+gamma(image, value) // Apply gamma correction
+calibrate(light, dark, flat, bias, darkFlat) // Calibrate a light frame
 generateNoiseImage(raw, width, height, channels, config)
 generateStarImage(raw, width, height, channels, stars, noiseConfig, plotOptions)
 ```
@@ -413,6 +728,23 @@ base64Source(source) // Create a source that decodes a base64-encoded source
 readUntil(source, buffer, size, offset) // Read n bytes from source
 readLines(source, chunkSize) // Read lines from source
 sourceTransferToSink(source, sink) // Transfer from source to sink
+```
+
+### iPolar ![](bun.webp) ![](browser.webp)
+
+```ts
+solveSimilarityFixedPoint(transform) // Solve the fixed point from a similarity transform
+projectGuidePoint(point, width, height, margin) // Project a guide point into image coordinates
+celestialPoleVector(time, location, refraction) // Pole vector for the observer and time
+decomposePolarError(axisVector, targetVector, time, refraction, location) // Convert axis error to altitude/azimuth components
+solveImageFixedPoint(reference, current, initialGuess, tolerance) // Refine the fixed point from two images
+
+const alignment = new IPolarPolarAlignment(config)
+alignment.reset()
+alignment.getState()
+alignment.start(frameInput, observerContext)
+alignment.confirm(frameInput)
+alignment.update(frameInput)
 ```
 
 ### ITRS ![](bun.webp) ![](browser.webp)
@@ -520,7 +852,10 @@ const x = gaussianElimination(A, B) // Solve A*x=B using Gaussian elimination
 ### Meeus ![](bun.webp) ![](browser.webp)
 
 ```ts
-TODO
+Base.lightTime(distance) // Light-travel time in days
+Base.illuminated(phaseAngle) // Illuminated fraction of a body's disk
+Base.limb(bodyRa, bodyDec, sunRa, sunDec) // Position angle of the bright limb midpoint
+Base.horner(x, coefficients) // Polynomial evaluation with Horner's method
 ```
 
 ### Moon ![](bun.webp) ![](browser.webp)
@@ -533,6 +868,23 @@ nearestLunarPhase(time, phase, next) // Compute the nearest lunar phase at a giv
 nearestLunarEclipse(time, next) // Compute the nearest lunar eclipse at a given time
 lunarSaros(time) // Compute the saros series number for the lunar eclipse at time
 nearestLunarApsis(time, apsis, next) // Compute the nearest lunar apsis at time
+```
+
+### Mount Pointing ![](bun.webp) ![](browser.webp)
+
+```ts
+computePointingError(targetRa, targetDec, solvedRa, solvedDec) // Pointing error in tangent coordinates
+fitPointingModel(samples, options) // Fit an empirical, semi-physical, or hybrid pointing model
+predictPointingModelError(model, input) // Predict local pointing error for a new sample
+correctPointingCoordinate(model, input) // Apply the fitted correction to a target coordinate
+
+const pointing = new MountPointing(defaults)
+pointing.add(sample)
+const model = pointing.fit(options)
+const predicted = pointing.predictError(input)
+const corrected = pointing.correctCoordinate(input)
+pointing.export() // Serialize the fitted model
+pointing.import(model) // Restore a previously fitted model
 ```
 
 ### MPCORB ![](bun.webp) ![](browser.webp)
@@ -598,6 +950,12 @@ await client.setProfile(profile)
 await client.shutdown()
 ```
 
+### Platesolver ![](bun.webp) ![](browser.webp)
+
+```ts
+plateSolutionFrom(header) // Convert FITS WCS keywords into a compact plate solution
+```
+
 ### Pluto ![](bun.webp) ![](browser.webp)
 
 ```ts
@@ -624,10 +982,26 @@ toPascal(1) // Convert millibar to pascal
 toAtm(1) // Convert millibar to atm
 ```
 
+### Projection ![](bun.webp) ![](browser.webp)
+
+```ts
+gnomonicProject(longitude, latitude, centerLongitude, centerLatitude) // Tangent-plane projection
+gnomonicUnproject(x, y, centerLongitude, centerLatitude) // Inverse gnomonic projection
+stereographicProject(longitude, latitude, centerLongitude, centerLatitude) // Stereographic projection
+stereographicUnproject(x, y, centerLongitude, centerLatitude) // Inverse stereographic projection
+orthographicProject(longitude, latitude, centerLongitude, centerLatitude) // Orthographic projection
+orthographicUnproject(x, y, centerLongitude, centerLatitude) // Inverse orthographic projection
+lambertAzimuthalEqualAreaProject(longitude, latitude, centerLongitude, centerLatitude) // Lambert azimuthal equal-area projection
+lambertAzimuthalEqualAreaUnproject(x, y, centerLongitude, centerLatitude) // Inverse Lambert azimuthal equal-area projection
+azimuthalEquidistantProject(longitude, latitude, centerLongitude, centerLatitude) // Azimuthal equidistant projection
+azimuthalEquidistantUnproject(x, y, centerLongitude, centerLatitude) // Inverse azimuthal equidistant projection
+```
+
 ### Random ![](bun.webp) ![](browser.webp)
 
 ```ts
 const random = mulberry32(seed)
+const random = sfc32(seed)
 const random = xorshift32(seed)
 const random = splitmix32(seed)
 const random = mt19937(seed)
@@ -639,6 +1013,12 @@ exponential(random, lambda)
 geometric(random, p)
 pareto(random, alpha)
 normal(random, mu, sigma)
+gaussian(random, sigma)
+triangular(random, min, max, mode)
+rayleigh(random, sigma)
+logNormal(random, mu, sigma)
+cauchy(random, x0, gamma)
+shuffle(items, random)
 ```
 
 ### Regression ![](bun.webp) ![](browser.webp)
@@ -696,6 +1076,28 @@ const s = await readSpk(daf) // Read a SPK file
 await s.segment(Naif.SSB, Naif.EMB)!.at(time) // Compute the position and velocity at time
 ```
 
+### Spline ![](bun.webp) ![](browser.webp)
+
+```ts
+const s = spline(lower, upper, coefficients) // Polynomial spline over a normalized interval
+s.compute(x)
+s.derivative()
+s.integral(constant)
+
+splineGivenEnds(x0, y0, slope0, x1, y1, slope1) // Cubic spline constrained by endpoint values and slopes
+
+const cubic = cubicHermiteSpline(x, y) // Shape-preserving cubic Hermite interpolation
+const akima = akimaSpline(x, y) // Akima interpolation
+const catmull = catmullRomSpline(x, y) // Catmull-Rom interpolation
+const natural = naturalCubicSpline(x, y) // Natural cubic spline interpolation
+
+cubic.compute(xi) // Evaluate an interpolating spline
+cubicHermiteSplineLUT(x, y, size) // Dense lookup table sampled from a cubic Hermite spline
+akimaSplineLUT(x, y, size) // Dense lookup table sampled from an Akima spline
+catmullRomSplineLUT(x, y, size) // Dense lookup table sampled from a Catmull-Rom spline
+naturalCubicSplineLUT(x, y, size) // Dense lookup table sampled from a natural cubic spline
+```
+
 ### Star ![](bun.webp) ![](browser.webp)
 
 ```ts
@@ -717,6 +1119,17 @@ h.mean // Arithmetic mean of data
 h.variance // (Population) variance of data
 h.standardDeviation // (Population) standard deviation of data
 h.median // Median (middle value with interpolation) of data
+```
+
+### Stacker ![](bun.webp) ![](browser.webp)
+
+```ts
+const live = new LiveStacker(options)
+live.add(frame) // Add one frame to a live stack
+const preview = live.snapshot() // Current live stacked image and diagnostics
+live.reset()
+
+const result = stackFrames(frames, options) // Full batch stack with diagnostics and coverage information
 ```
 
 ### Stellarium ![](bun.webp)
@@ -779,7 +1192,7 @@ temporalEndOfDay(temporal) // Get the end of the day for a temporal
 temporalGet(temporal, unit) // Get a specific unit from a temporal
 temporalSet(temporal, value, unit) // Set a specific unit in a temporal
 formatTemporal(temporal, format) // Format a temporal to a string
-parseTemportal(text, format) // Parse a temporal from a string
+parseTemporal(text, format) // Parse a temporal from a string
 ```
 
 ### Time ![](bun.webp) ![](browser.webp)
@@ -827,6 +1240,18 @@ pmMatrix(time) // Polar Motion matrix at time
 
 ```ts
 tirsRotationAt(time) // TIRS rotation matrix at time
+```
+
+### UCAC4 ![](bun.webp)
+
+```ts
+ucac4ZoneForDec(dec) // Native UCAC4 zone number for a declination
+
+const catalog = await openUcac4Catalog(directory)
+await catalog.get(zone, recordNumber) // Read a raw UCAC4 entry by native identifier
+await catalog.queryCone(ra, dec, radius) // Search around a coordinate using the generic star-catalog API
+await catalog.queryBox(minRa, maxRa, minDec, maxDec) // Search a RA/DEC box using the generic star-catalog API
+await catalog.close()
 ```
 
 ### Util ![](bun.webp) ![](browser.webp)
