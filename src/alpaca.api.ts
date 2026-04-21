@@ -1,4 +1,4 @@
-// biome-ignore format: too long!
+// oxfmt-ignore
 import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaGuideDirection, AlpacaResponse, AlpacaStateItem, AlpacaTelescopeAlignmentMode, AlpacaTelescopeAxis, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate } from './alpaca.types'
 
 // https://ascom-standards.org/api/

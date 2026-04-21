@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { Bitpix, type FitsHeader } from '../src/fits'
 import { cfaPatternKeyword } from '../src/fits.util'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import { approximateArcsinhStretchParameters, arcsinhStretch, backgroundNeutralization, bayer, blur, brightness, calibrate, clone, contrast, convolution, convolutionKernel, curvesTransformation, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, linear, mean, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
 import type { Image } from '../src/image.types'
 import type { NumberArray } from '../src/math'

@@ -1,17 +1,19 @@
 {
 	"name": "nebulosa",
 	"version": "0.1.0",
-	"module": "main.ts",
 	"type": "module",
 	"sideEffects": false,
+	"module": "main.ts",
 	"scripts": {
 		"postinstall": "bun run native/copy.ts",
 		"lint": "biome lint --write",
-		"format": "biome format --write",
-		"tsc": "tsgo --noEmit"
+		"tsc": "tsgo --noEmit",
+		"fmt": "oxfmt",
+		"fmt:check": "oxfmt --check"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "latest"
+		"@biomejs/biome": "latest",
+		"oxfmt": "latest"
 	},
 	"peerDependencies": {
 		"@types/bun": "latest",
@@ -21,10 +23,10 @@
 	"optionalDependencies": {
 		"@typescript/native-preview": "latest"
 	},
+	"overrides": {
+		"@typescript/native-preview": "beta"
+	},
 	"trustedDependencies": [
 		"@biomejs/biome"
-	],
-	"overrides": {
-		"@typescript/native-preview": "7.0.0-dev.20260301.1"
-	}
+	]
 }

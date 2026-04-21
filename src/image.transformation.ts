@@ -2,7 +2,7 @@ import { TAU } from './constants'
 import { exposureTimeKeyword } from './fits.util'
 import { truncatePixel } from './image'
 import { estimateBackgroundUsingMode } from './image.computation'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import { type ApplyScreenTransferFunctionOptions, type ApproximateArcsinhStretchParameters, type ArcsinhStretchOptions, type BackgroundNeutralizationOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, type CurvesTransformationCurve, type CurvesTransformationInterpolation, type CurvesTransformationOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_ARCSINH_STRETCH_OPTIONS, DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_CURVES_TRANSFORMATION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, DEFAULT_MMT_LAYER_OPTIONS, DEFAULT_MMT_OPTIONS, type FFTFilterType, type GaussianBlurConvolutionOptions, GRAYSCALES, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type MultiscaleMedianTransformOptions, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
 import { clamp, type NumberArray } from './math'
 import { akimaSplineLUT, catmullRomSplineLUT, cubicHermiteSplineLUT, naturalCubicSplineLUT } from './spline'

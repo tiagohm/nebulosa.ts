@@ -1,6 +1,6 @@
 export type CRCArrayType = Buffer | Uint8Array | Uint8ClampedArray | DataView
 
-// biome-ignore format: too long!
+// oxfmt-ignore
 export const CRC_ALGORITHMS = [
 	'crc3gsm', 'crc4itu', 'crc4interlaken', 'crc5epc', 'crc5itu', 'crc5usb', 'crc6cdma2000a', 'crc6cdma2000b',
 	'crc6darc', 'crc6gsm', 'crc6itu', 'crc7', 'crc7umts', 'crc8', 'crc8cdma2000', 'crc8darc',

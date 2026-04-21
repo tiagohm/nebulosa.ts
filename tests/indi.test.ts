@@ -3,7 +3,7 @@ import { IndiClient, type IndiClientHandler } from '../src/indi.client'
 import type { Camera, Cover, FlatPanel, Focuser, GuideOutput, Mount, Power, Rotator, Thermometer, Wheel } from '../src/indi.device'
 import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import type { DefSwitchVector, PropertyState } from '../src/indi.types'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import { SimpleXmlParser } from '../src/xml'
 import { downloadPerTag } from './download'
 

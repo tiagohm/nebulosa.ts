@@ -1,5 +1,5 @@
 import type { Client } from './indi.device'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import type { DefBlob, DefBlobVector, DefLight, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, EnableBlob, GetProperties, Message, NewNumberVector, NewSwitchVector, NewTextVector, OneBlob, OneLight, OneNumber, OneSwitch, OneText, SetBlobVector, SetLightVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, SwitchRule, VectorType } from './indi.types'
 import { SimpleXmlParser, type XmlNode } from './xml'
 

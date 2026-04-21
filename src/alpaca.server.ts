@@ -1,4 +1,4 @@
-// biome-ignore format: too long!
+// oxfmt-ignore
 import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './alpaca.types'
 import { type Angle, deg, hour, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
@@ -6,7 +6,7 @@ import { type EquatorialCoordinate, equatorialToHorizontal } from './coordinate'
 import { meter, toMeter } from './distance'
 import { Bitpix, computeRemainingBytes, FitsKeywordReader } from './fits'
 import { bitpixInBytes } from './fits.util'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type TrackMode, type Wheel } from './indi.device'
 import type { DeviceHandler, DeviceManager } from './indi.manager'
 import { type GeographicCoordinate, localSiderealTime } from './location'

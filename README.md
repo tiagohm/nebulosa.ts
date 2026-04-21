@@ -566,7 +566,7 @@ index.clear()
 ### Hips2Fits ![](bun.webp) ![](browser.webp)
 
 ```ts
-hips2Fits(survey, ra, dec, options) // Extract a FITS image from a HiPS 
+hips2Fits(survey, ra, dec, options) // Extract a FITS image from a HiPS
 hipsSurveys() // List available HiPS
 ```
 

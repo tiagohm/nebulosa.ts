@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { eraC2s, eraS2c, eraS2p } from '../src/erfa'
-// biome-ignore format: too long
+// oxfmt-ignore
 import { intersectLineAndSphere, midPoint, rectIntersection, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalUnprojectTangentPlane } from '../src/geometry'
 import { type Vec3, vecCross, vecDot, vecLength, vecNormalize } from '../src/vec3'
 
