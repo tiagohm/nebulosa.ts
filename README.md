@@ -401,8 +401,6 @@ const sensor = new LM35(client, pin, aref)
 const sensor = new BMP180(client, mode, pollingInterval)
 const sensor = new BMP280(client, address, pollingInterval, options)
 const sensor = new DS18B20(client, pin, pollingInterval, options)
-const sensor = new DS1307(client, address, pollingInterval)
-const sensor = new DS3231(client, address, pollingInterval)
 const sensor = new HMC5883L(client, address, pollingInterval, options)
 const sensor = new MAX44009(client, address, pollingInterval, options)
 const sensor = new MPU6050(client, address, pollingInterval, options)
@@ -413,14 +411,11 @@ const sensor = new TSL2561(client, address, pollingInterval, options)
 const dac = new MCP4725(client, address, options)
 dac.value = value
 dac.powerDownMode = mode
-dac.persist()
 
 const expander = new PCF8574(client, address, pollingInterval, options)
 expander.pinMode(pin, mode)
 expander.pinWrite(pin, value)
 expander.pinRead(pin)
-expander.flush()
-expander.refresh()
 
 const display = new HD44780(expander, options)
 display.begin(columns, rows)
@@ -430,21 +425,11 @@ display.setCursor(column, row)
 display.print(value)
 
 const clock = new DS3231(client, address, pollingInterval)
-clock.update(year, month, day, dayOfWeek, hour, minute, second, millisecond)
-clock.sync(date)
-
 const clock = new DS1307(client, address, pollingInterval)
 clock.update(year, month, day, dayOfWeek, hour, minute, second, millisecond)
 clock.sync(date)
 
 const radio = new TEA5767(client, address, pollingInterval, options)
-radio.frequency = value
-radio.frequencyUp()
-radio.frequencyDown()
-radio.mute()
-radio.unmute()
-radio.seek('up')
-
 const radio = new RDA5807(client, address, pollingInterval, options)
 radio.frequency = value
 radio.frequencyUp()
@@ -461,7 +446,7 @@ transmitter.frequencyDown()
 transmitter.mute()
 transmitter.unmute()
 
-sensor.reset() // Reset supported light sensors
+sensor.reset()
 sensor.addListener(listener)
 sensor.start()
 sensor.stop()

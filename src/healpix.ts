@@ -4,7 +4,7 @@ import type { EquatorialCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
 import { clamp, pmod } from './math'
 import { type StarCatalog, type StarCatalogQuery, type StarCatalogRaDecBox, splitRaBox, type Vertex } from './star.catalog'
-import { type MutVec3, type Vec3, vecCross, vecDot, vecNegateMut, vecNormalize, vecTripleProduct } from './vec3'
+import { type MutVec3, type Vec3, vecCross, vecDot, vecLength, vecNegateMut, vecNormalize, vecTripleProduct } from './vec3'
 
 const HEALPIX_MAX_NSIDE = 2 ** 24
 const HEALPIX_FACE_COUNT = 12
@@ -709,13 +709,13 @@ function buildRegion(vertices: readonly Vertex[], label: 'triangle' | 'polygon')
 		centroid[2] += vertex[2]
 	}
 
-	if (Math.hypot(centroid[0], centroid[1], centroid[2]) <= EPSILON) {
+	if (vecLength(centroid) <= EPSILON) {
 		throw new Error(`${label} vertices do not define a stable convex region`)
 	}
 
 	const normalizedCentroid = vecNormalize(centroid)
 
-	const edgeNormals: Vec3[] = []
+	const edgeNormals = new Array<Vec3>(cleaned.length)
 	let orientation = 0
 
 	for (let i = 0; i < cleaned.length; i++) {
@@ -728,7 +728,7 @@ function buildRegion(vertices: readonly Vertex[], label: 'triangle' | 'polygon')
 			throw new Error(`${label} contains repeated or antipodal vertices`)
 		}
 
-		edgeNormals.push([normal[0] / normalLength, normal[1] / normalLength, normal[2] / normalLength])
+		edgeNormals[i] = [normal[0] / normalLength, normal[1] / normalLength, normal[2] / normalLength]
 
 		const side = vecDot(normal, normalizedCentroid)
 		if (Math.abs(side) <= EPSILON) continue
