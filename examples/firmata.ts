@@ -1,4 +1,4 @@
-// biome-ignore-all lint/correctness/noConstantCondition: this is a example!
+// oxlint-disable no-constant-condition
 
 import { toMeter } from '../src/distance'
 import { type FirmataClientHandler, FirmataClientOverTcp } from '../src/firmata'

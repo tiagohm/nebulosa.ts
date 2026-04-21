@@ -905,6 +905,7 @@ function coverPixels(nside: number, options: HealpixCoverOptions | undefined, te
 	const order = nsideToOrder(targetNside)
 	const maxDepth = options?.maxDepth === undefined ? order : validateMaxDepth(options.maxDepth, order)
 	const pixels: number[] = []
+	// oxlint-disable-next-line typescript/unbound-method
 	const state: HealpixCoverState = { nside: targetNside, order, maxDepth, pixels, intersects: tester.intersects }
 
 	for (let face = 0; face < HEALPIX_FACE_COUNT; face++) {

@@ -455,7 +455,7 @@ export class AlpacaServer {
 
 	stop() {
 		if (this.#server) {
-			this.#server.stop(true)
+			void this.#server.stop(true)
 			this.#server = undefined
 		}
 
@@ -516,7 +516,7 @@ export class AlpacaServer {
 			if (device.connected) {
 				console.info('device connected:', device.name)
 
-				Bun.sleep(500).then(() => {
+				void Bun.sleep(500).then(() => {
 					task.resolve(device.connected)
 				})
 			} else {
@@ -799,7 +799,7 @@ export class AlpacaServer {
 	}
 
 	#cameraGetGains() {
-		return makeAlpacaResponse([], AlpacaException.MethodNotImplemented, 'Gain modes is not supported')
+		return makeAlpacaResponse([], AlpacaException.MethodOrPropertyNotImplemented, 'Gain modes is not supported')
 	}
 
 	#cameraHasShutter() {
@@ -873,7 +873,7 @@ export class AlpacaServer {
 	}
 
 	#cameraGetOffsets() {
-		return makeAlpacaResponse([], AlpacaException.MethodNotImplemented, 'Offset modes is not supported')
+		return makeAlpacaResponse([], AlpacaException.MethodOrPropertyNotImplemented, 'Offset modes is not supported')
 	}
 
 	#cameraGetPercentCompleted(id: number) {
@@ -1039,11 +1039,11 @@ export class AlpacaServer {
 	}
 
 	#mountGetApertureArea() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have aperture area')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have aperture area')
 	}
 
 	#mountGetApertureDiameter() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have aperture diameter')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have aperture diameter')
 	}
 
 	#mountIsAtHome(id: number) {
@@ -1129,11 +1129,11 @@ export class AlpacaServer {
 	}
 
 	#mountGetDeclinationRate(id: number) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not have declination rate')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have declination rate')
 	}
 
 	#mountSetDeclinationRate(id: number, data: { DeclinationRate: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not have declination rate')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have declination rate')
 	}
 
 	#mountGetDeviceState(id: number) {
@@ -1170,23 +1170,23 @@ export class AlpacaServer {
 	}
 
 	#mountGetFocalLength() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have focal length')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have focal length')
 	}
 
 	#mountGetGuideRateDeclination() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have guide rate declination')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have guide rate declination')
 	}
 
 	#mountSetGuideRateDeclination(id: number, data: { GuideRateDeclination: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have guide rate declination')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have guide rate declination')
 	}
 
 	#mountGetGuideRateRightAscension() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have guide rate right ascension')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have guide rate right ascension')
 	}
 
 	#mountSetGuideRateRightAscension(id: number, data: { GuideRateRightAscension: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have guide rate right ascension')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have guide rate right ascension')
 	}
 
 	#mountGetRightAscension(id: number) {
@@ -1194,11 +1194,11 @@ export class AlpacaServer {
 	}
 
 	#mountGetRightAscensionRate(id: number) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not have right ascension rate')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have right ascension rate')
 	}
 
 	#mountSetRightAscensionRate(id: number, data: { RightAscensionRate: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not have right ascension rate')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have right ascension rate')
 	}
 
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.PierSide
@@ -1207,7 +1207,7 @@ export class AlpacaServer {
 	}
 
 	#mountSetSideOfPier(id: number, data: { SideOfPier: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not support set side of pier')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not support set side of pier')
 	}
 
 	#mountGetSiderealTime(id: number) {
@@ -1405,7 +1405,7 @@ export class AlpacaServer {
 	}
 
 	#mountSyncToAltAz(id: number, data: { Azimuth: string; Altitude: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not support slew alt/az') // TODO: Compute this!
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not support slew alt/az') // TODO: Compute this!
 	}
 
 	#mountSyncToCoordinates(id: number, data: { RightAscension: string | number; Declination: string | number }) {
@@ -1456,7 +1456,7 @@ export class AlpacaServer {
 	}
 
 	#focuserGetStepSize() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Focuser does not support step size')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Focuser does not support step size')
 	}
 
 	#focuserGetTempComp() {

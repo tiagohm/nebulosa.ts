@@ -209,7 +209,7 @@ export class Lx200ProtocolServer {
 					}
 					// Set the number of hours added to local time to yield UTC
 					else if (command.startsWith('#:SG')) {
-						const hours = -command.substring(4, command.length - 1)
+						const hours = -Number(command.substring(4, command.length - 1))
 						this.#utcOffset = Math.trunc(hours * 60)
 						this.#handleDateTimeAndOffset()
 						return this.#one(socket)

@@ -6,14 +6,16 @@
 	"module": "main.ts",
 	"scripts": {
 		"postinstall": "bun run native/copy.ts",
-		"lint": "biome lint --write",
+		"lint": "oxlint",
+		"lint:fix": "oxlint --fix",
 		"tsc": "tsgo --noEmit",
 		"fmt": "oxfmt",
 		"fmt:check": "oxfmt --check"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "latest",
-		"oxfmt": "latest"
+		"oxfmt": "latest",
+		"oxlint": "latest",
+		"oxlint-tsgolint": "latest"
 	},
 	"peerDependencies": {
 		"@types/bun": "latest",
@@ -25,8 +27,5 @@
 	},
 	"overrides": {
 		"@typescript/native-preview": "beta"
-	},
-	"trustedDependencies": [
-		"@biomejs/biome"
-	]
+	}
 }

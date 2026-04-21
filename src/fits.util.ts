@@ -179,10 +179,10 @@ export function unescapeQuotedText(text: string) {
 	return text.replaceAll("''", "'")
 }
 
-const NO_VALUE_KEYWORDS = ['COMMENT', 'HISTORY', 'END']
+const NO_VALUE_KEYWORDS = new Set(['COMMENT', 'HISTORY', 'END'])
 
 export function isCommentKeyword(keyword: string) {
-	return NO_VALUE_KEYWORDS.includes(keyword)
+	return NO_VALUE_KEYWORDS.has(keyword)
 }
 
 export function isCommentStyleCard(card: Readonly<FitsHeaderCard>) {

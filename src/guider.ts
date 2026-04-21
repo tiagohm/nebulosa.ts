@@ -691,7 +691,7 @@ export class Guider {
 			...config,
 			filter: {
 				...DEFAULT_GUIDER_CONFIG.filter,
-				...(config.filter ?? {}),
+				...config.filter,
 			},
 		}
 

@@ -16,8 +16,7 @@ export type CoverCalibrator = Cover & FlatPanel
 
 // https://ascom-standards.org/newdocs/exceptions.html
 export enum AlpacaException {
-	MethodNotImplemented = 1024,
-	PropertyNotImplemented = 1024,
+	MethodOrPropertyNotImplemented = 1024,
 	InvalidValue = 1025,
 	ValueNotSet = 1026,
 	NotConnected = 1031,

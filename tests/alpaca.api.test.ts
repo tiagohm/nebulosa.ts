@@ -5,9 +5,9 @@ const alpaca = new AlpacaApi('http://localhost:32323')
 
 const configuredDevices = await alpaca.management.configuredDevices()
 const isAlpacaTestEnabled = process.env.ALPACA === 'true'
-const filterWheel = isAlpacaTestEnabled && configuredDevices?.filter((e) => e.DeviceType === 'filterwheel')?.[0]
-const focuser = isAlpacaTestEnabled && configuredDevices?.filter((e) => e.DeviceType === 'focuser')?.[0]
-const coverCalibrator = isAlpacaTestEnabled && configuredDevices?.filter((e) => e.DeviceType === 'covercalibrator')?.[0]
+const filterWheel = isAlpacaTestEnabled && configuredDevices?.find((e) => e.DeviceType === 'filterwheel')
+const focuser = isAlpacaTestEnabled && configuredDevices?.find((e) => e.DeviceType === 'focuser')
+const coverCalibrator = isAlpacaTestEnabled && configuredDevices?.find((e) => e.DeviceType === 'covercalibrator')
 
 if (filterWheel) {
 	test('filter wheel', async () => {

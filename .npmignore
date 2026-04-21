@@ -13,5 +13,6 @@ Makefile
 .gitattributes
 .gitmodules
 .editorconfig
-biome.json
+oxfmtrc.json
+oxlintrc.json
 main.ts

@@ -808,7 +808,7 @@ export class FirmataClient implements Disposable {
 
 	ensureInitializationIsDone(timeout: number) {
 		const timer = timeout > 0 ? setTimeout(this.#initialization.resolve, timeout, false) : undefined
-		this.#initialization.promise.then(clearTimeout.bind(undefined, timer))
+		void this.#initialization.promise.then(clearTimeout.bind(undefined, timer))
 		return this.#initialization.promise
 	}
 

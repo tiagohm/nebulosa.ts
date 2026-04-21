@@ -43,7 +43,7 @@ Prefer the MCP graph tools for code discovery:
 
 - Use **Bun** for install, scripts, and tests.
 - Treat `bun run tsc` as the authoritative type-check command. It runs `tsgo --noEmit`, not stock `tsc`.
-- `bun run lint` and `bun run fmt` both write changes because they invoke Biome with `--write`.
+- `bun run lint:fix` and `bun run fmt` both write changes.
 - Tests run through Bun with `bunfig.toml` configured to use `tests/` as the test root and `tests/setup.ts` as preload.
 - Some tests depend on large fixtures in `data/`, and missing fixtures may trigger downloads through `tests/download.ts`.
 

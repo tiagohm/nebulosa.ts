@@ -1997,6 +1997,7 @@ class AlpacaApiRunner {
 	}
 
 	async #handleEndpointsAfterRun(state: Record<string, ValueType>) {
+		// oxlint-disable-next-line typescript/await-thenable
 		const result = await Promise.all(this.#result)
 		const n = result.length
 

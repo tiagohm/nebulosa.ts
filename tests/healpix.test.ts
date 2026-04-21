@@ -4,9 +4,16 @@ import { PI, PIOVERTWO } from '../src/constants'
 import { sphericalDestination, sphericalSeparation } from '../src/geometry'
 import { circleToPixels, coordToPixel, type HealpixId, HealpixIndex, nestedToRing, pixelToBoundary, pixelToCenter, ringToNested } from '../src/healpix'
 
+function HealpixIdComparator(a: HealpixId, b: HealpixId) {
+	if (typeof a === 'number' && typeof b === 'number') return a - b
+	if (typeof a === 'string' && typeof b === 'string') return a.localeCompare(b)
+	if (typeof a === 'bigint' && typeof b === 'bigint') return a.toString().localeCompare(b.toString())
+	return 0
+}
+
 // Extracts sorted ids from query results.
 function idsOf(objects: readonly { id: HealpixId }[]) {
-	return objects.map((object) => object.id).sort()
+	return objects.map((object) => object.id).sort(HealpixIdComparator)
 }
 
 test('pixel centers round-trip at nside 1', () => {
@@ -62,7 +69,7 @@ test('circle query matches brute-force filtering on a fixed catalog', () => {
 		const bruteForce = catalog
 			.filter((object) => sphericalSeparation(longitude, latitude, object.longitude, object.latitude) <= radius + 1e-12)
 			.map((object) => object.id)
-			.sort()
+			.sort(HealpixIdComparator)
 
 		expect(idsOf(index.queryCone(longitude, latitude, radius))).toEqual(bruteForce)
 	}

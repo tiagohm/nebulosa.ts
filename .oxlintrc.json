@@ -1,0 +1,37 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"ignorePatterns": ["*.data.ts"],
+	"plugins": ["typescript", "unicorn", "oxc", "promise"],
+	"categories": {
+		"correctness": "error",
+		"pedantic": "off",
+		"suspicious": "off",
+		"perf": "error",
+		"nursery": "off",
+		"restriction": "off",
+		"style": "off"
+	},
+	"options": {
+		"typeAware": true,
+		"typeCheck": true
+	},
+	"rules": {
+		"eslint/no-loss-of-precision": "off",
+		"eslint/no-unused-expressions": [
+			"error",
+			{
+				"allowShortCircuit": true,
+				"allowTernary": true
+			}
+		],
+		"eslint/no-unused-vars": "off",
+		"eslint/max-lines-per-function": "off",
+		"unicorn/no-new-array": "off",
+		"no-await-in-loop": "off",
+		"typescript/restrict-template-expressions": "off",
+		"unicorn/no-invalid-fetch-options": "off"
+	},
+	"env": {
+		"builtin": true
+	}
+}

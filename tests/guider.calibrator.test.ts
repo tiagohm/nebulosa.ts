@@ -75,8 +75,8 @@ function calibrationConfig(config: Partial<GuidingCalibrationConfig> = {}) {
 		...config,
 		filter: {
 			...DEFAULT_GUIDING_CALIBRATOR_CONFIG.filter,
-			...(BASE_CONFIG.filter ?? {}),
-			...(config.filter ?? {}),
+			...BASE_CONFIG.filter,
+			...config.filter,
 		},
 	}
 }

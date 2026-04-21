@@ -84,7 +84,7 @@ export interface FrameAcceptanceResult {
 	readonly accepted: boolean
 	readonly frameIndex: number
 	readonly frameId?: string | number
-	readonly reason?: FrameRejectionReason | string
+	readonly reason?: FrameRejectionReason
 	readonly transform?: StackingTransformSummary
 	readonly overlapFraction: number
 	readonly quality: StackingFrameQualityMetrics
