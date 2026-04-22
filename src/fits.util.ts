@@ -7,12 +7,12 @@ export function hasKeyword(header: FitsHeader, key: FitsHeaderKey) {
 	return key in header && header[key] !== undefined
 }
 
-export function numericKeyword<T extends number | undefined = number>(header: FitsHeader, key: FitsHeaderKey, defaultValue: NoInfer<T>) {
+export function numericKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, key: FitsHeaderKey, defaultValue: D) {
 	const value = header[key]
 	if (value === undefined) return defaultValue
-	else if (typeof value === 'number') return value
-	else if (typeof value === 'boolean') return value ? 1 : 0
-	else return parseFloat(value)
+	else if (typeof value === 'number') return value as D | T
+	else if (typeof value === 'boolean') return (value ? 1 : 0) as D | T
+	else return parseFloat(value) as D | T
 }
 
 export function booleanKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue: boolean = false) {
@@ -30,35 +30,35 @@ export function textKeyword(header: FitsHeader, key: FitsHeaderKey, defaultValue
 	else return `${value}`
 }
 
-export function numberOfAxesKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T>(header, 'NAXIS', defaultValue)
+export function numberOfAxesKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
+	return numericKeyword(header, 'NAXIS', defaultValue)
 }
 
-export function widthKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'NAXIS1', undefined) ?? numericKeyword<T>(header, 'IMAGEW', defaultValue)
+export function widthKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
+	return numericKeyword(header, 'NAXIS1', undefined) ?? numericKeyword(header, 'IMAGEW', defaultValue)
 }
 
-export function heightKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'NAXIS2', undefined) ?? numericKeyword<T>(header, 'IMAGEH', defaultValue)
+export function heightKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
+	return numericKeyword(header, 'NAXIS2', undefined) ?? numericKeyword(header, 'IMAGEH', defaultValue)
 }
 
-export function numberOfChannelsKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T>(header, 'NAXIS3', defaultValue)
+export function numberOfChannelsKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
+	return numericKeyword(header, 'NAXIS3', defaultValue)
 }
 
-export function bitpixKeyword<T extends BitpixOrZero | undefined = BitpixOrZero>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T>(header, 'BITPIX', defaultValue) as T
+export function bitpixKeyword<T extends BitpixOrZero = BitpixOrZero, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
+	return numericKeyword(header, 'BITPIX', defaultValue)
 }
 
-export function exposureTimeKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'EXPTIME', undefined) ?? numericKeyword<T>(header, 'EXPOSURE', defaultValue)
+export function exposureTimeKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
+	return numericKeyword(header, 'EXPTIME', undefined) ?? numericKeyword(header, 'EXPOSURE', defaultValue)
 }
 
 export function cfaPatternKeyword(header: FitsHeader) {
 	return textKeyword(header, 'BAYERPAT') as CfaPattern | undefined
 }
 
-export function rightAscensionKeyword<T extends Angle | undefined = Angle>(header: FitsHeader, defaultValue: NoInfer<T>) {
+export function rightAscensionKeyword<T extends Angle = Angle, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
 	if (hasKeyword(header, 'RA')) {
 		const value = deg(numericKeyword(header, 'RA', 0))
 		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
@@ -82,7 +82,7 @@ export function rightAscensionKeyword<T extends Angle | undefined = Angle>(heade
 	return defaultValue
 }
 
-export function declinationKeyword<T extends Angle | undefined = Angle>(header: FitsHeader, defaultValue: NoInfer<T>) {
+export function declinationKeyword<T extends Angle = Angle, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
 	if (hasKeyword(header, 'DEC')) {
 		const value = deg(numericKeyword(header, 'DEC', 0))
 		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
@@ -123,23 +123,23 @@ export function compressionTypeKeyword(header: FitsHeader): FitsCompressionType 
 }
 
 // The value of the NAXIS1 keywords in the uncompressed FITS image
-export function uncompressedWidthKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'ZNAXIS1', undefined) ?? widthKeyword<T>(header, defaultValue)
+export function uncompressedWidthKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
+	return numericKeyword(header, 'ZNAXIS1', undefined) ?? widthKeyword(header, defaultValue)
 }
 
 // The value of the NAXIS2 keywords in the uncompressed FITS image
-export function uncompressedHeightKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'ZNAXIS2', undefined) ?? heightKeyword<T>(header, defaultValue)
+export function uncompressedHeightKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
+	return numericKeyword(header, 'ZNAXIS2', undefined) ?? heightKeyword(header, defaultValue)
 }
 
 // The value of the NAXIS3 keywords in the uncompressed FITS image
-export function uncompressedNumberOfChannelsKeyword<T extends number | undefined = number>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return numericKeyword<T | undefined>(header, 'ZNAXIS3', undefined) ?? numberOfChannelsKeyword<T>(header, defaultValue)
+export function uncompressedNumberOfChannelsKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
+	return numericKeyword(header, 'ZNAXIS3', undefined) ?? numberOfChannelsKeyword(header, defaultValue)
 }
 
 // The value of the BITPIX keyword in the uncompressed FITS image
-export function uncompressedBitpixKeyword<T extends BitpixOrZero | undefined = BitpixOrZero>(header: FitsHeader, defaultValue: NoInfer<T>) {
-	return (numericKeyword<T | undefined>(header, 'ZBITPIX', undefined) ?? bitpixKeyword(header, defaultValue)) as T
+export function uncompressedBitpixKeyword<T extends BitpixOrZero = BitpixOrZero, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
+	return numericKeyword(header, 'ZBITPIX', undefined) ?? bitpixKeyword(header, defaultValue)
 }
 
 export function isCompressedImageHeader(header: FitsHeader) {

@@ -396,7 +396,7 @@ test('extra', () => {
 }, 200)
 
 test('polar motion override does not reuse cached default values', () => {
-	const customPolarMotion: PolarMotion = (_time: Time) => [1, 2]
+	const customPolarMotion: PolarMotion = () => [1, 2]
 
 	const a = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	pmAngles(a)

@@ -42,7 +42,7 @@ Prefer the MCP graph tools for code discovery:
 ## Tooling
 
 - Use **Bun** for install, scripts, and tests.
-- Treat `bun run tsc` as the authoritative type-check command. It runs `tsgo --noEmit`, not stock `tsc`.
+- Treat `bun run lint` as the authoritative type-check command. It runs `oxlint` with `tsgo`, not stock `tsc`.
 - `bun run lint:fix` and `bun run fmt` both write changes.
 - Tests run through Bun with `bunfig.toml` configured to use `tests/` as the test root and `tests/setup.ts` as preload.
 - Some tests depend on large fixtures in `data/`, and missing fixtures may trigger downloads through `tests/download.ts`.
@@ -51,7 +51,7 @@ Prefer the MCP graph tools for code discovery:
 
 - All changes must leave the touched area with zero TypeScript errors, passing related tests, and no obvious performance regression.
 - Always run the most relevant targeted tests for the files you changed.
-- Run `bun run tsc` after TypeScript changes.
+- Run `bun run lint` after TypeScript changes.
 - Prefer targeted test commands such as `bun test tests/vec3.test.ts` before considering broader runs.
 - If a touched feature is fixture-backed, verify with the closest real test rather than only unit-level smoke checks.
 - If network or fixture availability prevents full verification, state that explicitly.
@@ -137,7 +137,7 @@ Prefer the MCP graph tools for code discovery:
 bun i
 ```
 
-### Lint
+### Lint and type check
 
 ```bash
 bun run lint
@@ -147,12 +147,6 @@ bun run lint
 
 ```bash
 bun run fmt
-```
-
-### Type check
-
-```bash
-bun run tsc
 ```
 
 ### Run a targeted test

@@ -58,23 +58,23 @@ describe('linux', () => {
 	})
 
 	test('csv without skip first line', async () => {
-		await readCsvAndTest(CSV, { skipFirstLine: false })!
+		await readCsvAndTest(CSV, { skipFirstLine: false })
 	})
 
 	test('csv with comments', async () => {
-		await readCsvAndTest(CSV_WITH_COMMENTS)!
+		await readCsvAndTest(CSV_WITH_COMMENTS)
 	})
 
 	test('csv with quoted columns', async () => {
-		await readCsvAndTest(CSV_QUOTED)!
+		await readCsvAndTest(CSV_QUOTED)
 	})
 
 	test('tsv with empty column', async () => {
-		await readCsvAndTest(TSV_WITH_EMPTY_COLUMN, TSV_DELIMITER)!
+		await readCsvAndTest(TSV_WITH_EMPTY_COLUMN, TSV_DELIMITER)
 	})
 
 	test('csv with empty lines at end', async () => {
-		await readCsvAndTest(CSV_WITH_EMPTY_LINES_AT_END)!
+		await readCsvAndTest(CSV_WITH_EMPTY_LINES_AT_END)
 	})
 
 	test('tsv with spaced columns', async () => {
@@ -92,23 +92,23 @@ describe('windows', () => {
 	})
 
 	test('csv without skip first line', async () => {
-		await readCsvAndTest(CSV.replaceAll('\n', '\r\n'), { skipFirstLine: false })!
+		await readCsvAndTest(CSV.replaceAll('\n', '\r\n'), { skipFirstLine: false })
 	})
 
 	test('csv with comments', async () => {
-		await readCsvAndTest(CSV_WITH_COMMENTS.replaceAll('\n', '\r\n'))!
+		await readCsvAndTest(CSV_WITH_COMMENTS.replaceAll('\n', '\r\n'))
 	})
 
 	test('csv with quoted columns', async () => {
-		await readCsvAndTest(CSV_QUOTED.replaceAll('\n', '\r\n'))!
+		await readCsvAndTest(CSV_QUOTED.replaceAll('\n', '\r\n'))
 	})
 
 	test('tsv with empty column', async () => {
-		await readCsvAndTest(TSV_WITH_EMPTY_COLUMN.replaceAll('\n', '\r\n'), TSV_DELIMITER)!
+		await readCsvAndTest(TSV_WITH_EMPTY_COLUMN.replaceAll('\n', '\r\n'), TSV_DELIMITER)
 	})
 
 	test('csv with empty lines at end', async () => {
-		await readCsvAndTest(CSV_WITH_EMPTY_LINES_AT_END.replaceAll('\n', '\r\n'))!
+		await readCsvAndTest(CSV_WITH_EMPTY_LINES_AT_END.replaceAll('\n', '\r\n'))
 	})
 
 	test('tsv with spaced columns', async () => {
@@ -126,23 +126,23 @@ describe('stream', () => {
 	})
 
 	test('csv without skip first line', async () => {
-		await readCsvAndTest(Buffer.from(CSV), { skipFirstLine: false })!
+		await readCsvAndTest(Buffer.from(CSV), { skipFirstLine: false })
 	})
 
 	test('csv with comments', async () => {
-		await readCsvAndTest(Buffer.from(CSV_WITH_COMMENTS))!
+		await readCsvAndTest(Buffer.from(CSV_WITH_COMMENTS))
 	})
 
 	test('csv with quoted columns', async () => {
-		await readCsvAndTest(Buffer.from(CSV_QUOTED))!
+		await readCsvAndTest(Buffer.from(CSV_QUOTED))
 	})
 
 	test('tsv with empty column', async () => {
-		await readCsvAndTest(Buffer.from(TSV_WITH_EMPTY_COLUMN), TSV_DELIMITER)!
+		await readCsvAndTest(Buffer.from(TSV_WITH_EMPTY_COLUMN), TSV_DELIMITER)
 	})
 
 	test('csv with empty lines at end', async () => {
-		await readCsvAndTest(Buffer.from(CSV_WITH_EMPTY_LINES_AT_END))!
+		await readCsvAndTest(Buffer.from(CSV_WITH_EMPTY_LINES_AT_END))
 	})
 
 	test('tsv with spaced columns', async () => {

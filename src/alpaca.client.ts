@@ -834,7 +834,7 @@ class AlpacaCamera extends AlpacaDevice {
 							this.updatePropertyValue(this.#exposure, 'CCD_EXPOSURE_VALUE', 0)
 						}
 
-						this.sendSetProperty(this.#exposure)
+						return this.sendSetProperty(this.#exposure)
 					}, console.error)
 				}
 
@@ -1212,12 +1212,12 @@ class AlpacaTelescope extends AlpacaDevice {
 
 					if (vector.name.endsWith('S')) {
 						if (MOTION_NORTH === true || MOTION_SOUTH === true) {
-							void this.api.moveAxis(this.id, 1, MOTION_NORTH === true ? +Maximum : -Maximum)
+							void this.api.moveAxis(this.id, 1, MOTION_NORTH === true ? Maximum : -Maximum)
 						} else if (MOTION_NORTH === false || MOTION_SOUTH === false) {
 							void this.api.moveAxis(this.id, 1, 0)
 						}
 					} else if (MOTION_WEST === true || MOTION_EAST === true) {
-						void this.api.moveAxis(this.id, 0, MOTION_WEST === true ? +Maximum : -Maximum)
+						void this.api.moveAxis(this.id, 0, MOTION_WEST === true ? Maximum : -Maximum)
 					} else if (MOTION_WEST === false || MOTION_EAST === false) {
 						void this.api.moveAxis(this.id, 0, 0)
 					}
@@ -1648,7 +1648,7 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 			if (CalibratorState !== 0) {
 				if (CalibratorState === 3) {
 					this.updatePropertyValue(this.#light, 'FLAT_LIGHT_ON', true) && this.sendSetProperty(this.#light)
-					this.updatePropertyValue(this.#brightness, 'FLAT_LIGHT_INTENSITY_VALUE', Brightness as number) && this.sendSetProperty(this.#brightness)
+					this.updatePropertyValue(this.#brightness, 'FLAT_LIGHT_INTENSITY_VALUE', Brightness) && this.sendSetProperty(this.#brightness)
 				} else if (CalibratorState === 1) {
 					this.updatePropertyValue(this.#light, 'FLAT_LIGHT_OFF', true) && this.sendSetProperty(this.#light)
 				}

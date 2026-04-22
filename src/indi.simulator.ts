@@ -313,15 +313,15 @@ export class MountSimulator extends DeviceSimulator {
 	#lastTick = 0
 	#coordSetMode: CoordSetMode = 'SLEW'
 	#slewMode?: SlewMode
-	#slewTarget?: EquatorialCoordinate<Angle>
+	#slewTarget?: EquatorialCoordinate
 	#manualNorthSouth: AxisDirection = 0
 	#manualWestEast: AxisDirection = 0
 	#pulseNorthSouth: AxisDirection = 0
 	#pulseWestEast: AxisDirection = 0
 	#pulseNorthSouthUntil = 0
 	#pulseWestEastUntil = 0
-	#homeCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
-	#parkCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
+	#homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
+	#parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	#utcTime = Date.now()
 	#utcOffset = TIMEZONE / 60
 

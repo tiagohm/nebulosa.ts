@@ -550,7 +550,7 @@ export class FitsKeywordReader {
 	#parseComment(line: Buffer, position: Position, value?: string) {
 		if (!this.#skipSpaces(line, position)) {
 			// Nothing left to parse.
-			return
+			return undefined
 		}
 
 		// If no value, then everything is comment from here on...

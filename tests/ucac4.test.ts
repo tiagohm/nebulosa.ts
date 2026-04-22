@@ -154,8 +154,8 @@ async function createCatalog() {
 	const index = Buffer.allocUnsafe(INDEX_BYTES)
 
 	for (let i = 0; i < starts.length; i++) {
-		index.writeInt32LE(starts[i]!, i * 4)
-		index.writeInt32LE(counts[i]!, (starts.length + i) * 4)
+		index.writeInt32LE(starts[i], i * 4)
+		index.writeInt32LE(counts[i], (starts.length + i) * 4)
 	}
 
 	await fs.writeFile(join(indexDirectory, 'u4index.unf'), index)

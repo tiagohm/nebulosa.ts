@@ -455,28 +455,30 @@ function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate,
 	let lower = dt < 0 ? x : 0
 	let upper = dt > 0 ? x : 0
 
-	while (dt < 0 && kfun > dt) {
-		upper = lower
+	if (dt < 0) {
+		while (kfun > dt) {
+			upper = lower
 
-		lower *= 2
+			lower *= 2
 
-		const px = x
-		x = Math.max(-bound, Math.min(lower, bound))
-		if (x === px) throw new Error(`The delta time ${dt} is beyond the range`)
+			const px = x
+			x = Math.max(-bound, Math.min(lower, bound))
+			if (x === px) throw new Error(`The delta time ${dt} is beyond the range`)
 
-		kfun = propagationKepler(x, f, br0, b2rv, bq, s)
-	}
+			kfun = propagationKepler(x, f, br0, b2rv, bq, s)
+		}
+	} else if (dt > 0) {
+		while (kfun < dt) {
+			lower = upper
 
-	while (dt > 0 && kfun < dt) {
-		lower = upper
+			upper *= 2
 
-		upper *= 2
+			const px = x
+			x = Math.max(-bound, Math.min(upper, bound))
+			if (x === px) throw new Error(`The delta time ${dt} is beyond the range`)
 
-		const px = x
-		x = Math.max(-bound, Math.min(upper, bound))
-		if (x === px) throw new Error(`The delta time ${dt} is beyond the range`)
-
-		kfun = propagationKepler(x, f, br0, b2rv, bq, s)
+			kfun = propagationKepler(x, f, br0, b2rv, bq, s)
+		}
 	}
 
 	x = lower <= upper ? (upper + lower) / 2 : upper

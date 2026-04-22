@@ -493,6 +493,8 @@ export class TEA5767 extends PeripheralBase<TEA5767> implements RadioTuner {
 				return this.#bandEndKHz
 			}
 		}
+
+		return undefined
 	}
 
 	// Packs the current state into the chip 5-byte write frame.

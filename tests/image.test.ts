@@ -20,7 +20,7 @@ test('read image from fits', async () => {
 		for (const channel of CHANNELS) {
 			const [image, fits] = await readImage(bitpix, channel)
 
-			expect(image!.header).toBe(fits!.hdus[0].header)
+			expect(image.header).toBe(fits.hdus[0].header)
 
 			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 

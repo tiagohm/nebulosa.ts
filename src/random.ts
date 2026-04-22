@@ -314,7 +314,7 @@ export function cauchy(random: Random, x0: number = 0, gamma: number = 1): Rando
 }
 
 // Shuffles the array using a random.
-export function shuffle<T>(items: T[] | NumberArray, random: Random) {
+export function shuffle(items: unknown[] | NumberArray, random: Random) {
 	for (let i = items.length - 1; i > 0; i--) {
 		const k = Math.floor(clampClosedOpen(random()) * (i + 1))
 		const value = items[i]

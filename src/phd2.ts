@@ -349,7 +349,7 @@ interface PendingPHD2Command<T> {
 export class PHD2Client implements Disposable {
 	readonly #commands = new Map<string, PendingPHD2Command<unknown>>()
 	#socket?: Bun.Socket
-	#buffer?: Buffer<ArrayBufferLike>
+	#buffer?: Buffer
 
 	constructor(readonly options?: PHD2ClientOptions) {}
 

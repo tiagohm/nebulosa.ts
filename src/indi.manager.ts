@@ -131,7 +131,7 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 					const element = property.elements[key]
 
 					if (element) {
-						const value = elements[key]!.value
+						const value = elements[key].value
 
 						if (value !== element.value) {
 							element.value = value as ValueType
@@ -147,6 +147,8 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 
 			return updated
 		}
+
+		return false
 	}
 
 	delProperty(client: Client, message: DelProperty) {
@@ -304,7 +306,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 
 	protected handleDriverInfo(client: Client, message: DefTextVector | SetTextVector, interfaceType: DeviceInterfaceType) {
 		const { elements } = message
-		const type = +elements.DRIVER_INTERFACE!.value
+		const type = +elements.DRIVER_INTERFACE.value
 		const name = message.device
 		let device = this.get(client, name)
 
@@ -312,7 +314,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 			if (!device) {
 				device = structuredClone<D>(DEVICES[interfaceType as never])
 				const id = Bun.MD5.hash(`${client.id}:${device.type}:${name}`, 'hex')
-				device = { ...device, id, name, [CLIENT]: client, driver: { executable: elements.DRIVER_EXEC!.value, version: elements.DRIVER_VERSION!.value }, client: { type: client.type, id: client.id } }
+				device = { ...device, id, name, [CLIENT]: client, driver: { executable: elements.DRIVER_EXEC.value, version: elements.DRIVER_VERSION.value }, client: { type: client.type, id: client.id } }
 
 				this.add(device)
 				this.ask(device)
@@ -765,9 +767,9 @@ export class CameraManager extends DeviceManager<Camera> {
 
 		switch (message.name) {
 			case 'CCD_CFA':
-				device.cfa.offsetX = +message.elements.CFA_OFFSET_X!.value
-				device.cfa.offsetY = +message.elements.CFA_OFFSET_Y!.value
-				device.cfa.type = message.elements.CFA_TYPE!.value as CfaPattern
+				device.cfa.offsetX = +message.elements.CFA_OFFSET_X.value
+				device.cfa.offsetY = +message.elements.CFA_OFFSET_Y.value
+				device.cfa.type = message.elements.CFA_TYPE.value as CfaPattern
 				this.updated(device, 'cfa', message.state)
 		}
 	}
@@ -961,7 +963,7 @@ export class MountManager extends DeviceManager<Mount> {
 				}
 
 				for (const key in elements) {
-					const element = elements[key]!
+					const element = elements[key]
 
 					if (element.value) {
 						if (device.slewRate !== element.name) {
@@ -990,7 +992,7 @@ export class MountManager extends DeviceManager<Mount> {
 				}
 
 				for (const key in elements) {
-					const element = elements[key]!
+					const element = elements[key]
 
 					if (element.value) {
 						const trackMode = element.name.replace('TRACK_', '') as TrackMode
@@ -1149,7 +1151,7 @@ export class MountManager extends DeviceManager<Mount> {
 			case 'TIME_UTC': {
 				if (message.elements.UTC?.value) {
 					const utc = parseTemporal(message.elements.UTC.value, 'YYYY-MM-DDTHH:mm:ss')
-					const offset = parseUTCOffset(message.elements.OFFSET!.value)
+					const offset = parseUTCOffset(message.elements.OFFSET.value)
 
 					let updated = handleNumberValue(device.time, 'utc', utc)
 					updated = handleNumberValue(device.time, 'offset', offset) || updated
@@ -1766,7 +1768,7 @@ function handleParkable<D extends Device & Parkable>(manager: DeviceManager<D>, 
 		manager.updated(device, 'parking', message.state)
 	}
 
-	if (handleSwitchValue<Device & Parkable>(device, 'parked', !!message.elements.PARK?.value)) {
+	if (handleSwitchValue<Device & Parkable>(device, 'parked', message.elements.PARK?.value)) {
 		manager.updated(device, 'parked', message.state)
 	}
 }

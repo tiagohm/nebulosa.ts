@@ -71,7 +71,7 @@ test('M101', () => {
 	expect(solution!.heightInPixels).toBe(6870)
 
 	for (const key in header) {
-		expect(solution![key]).toBe(header[key]!)
+		expect(solution![key]).toBe(header[key])
 	}
 })
 

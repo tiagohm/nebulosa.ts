@@ -1,5 +1,5 @@
 // oxfmt-ignore
-import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './alpaca.types'
+import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './alpaca.types'
 import { type Angle, deg, hour, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import { type EquatorialCoordinate, equatorialToHorizontal } from './coordinate'
@@ -62,12 +62,12 @@ export class AlpacaServer {
 		focuser: new Map<Device, AlpacaRegisteredDevice<Focuser>>(),
 		filterwheel: new Map<Device, AlpacaRegisteredDevice<Wheel>>(),
 		rotator: new Map<Device, AlpacaRegisteredDevice<Rotator>>(),
-		dome: new Map<Device, AlpacaRegisteredDevice<Device>>(),
-		switch: new Map<Device, AlpacaRegisteredDevice<Device>>(),
+		dome: new Map<Device, AlpacaRegisteredDevice>(),
+		switch: new Map<Device, AlpacaRegisteredDevice>(),
 		covercalibrator: new Map<Device, AlpacaRegisteredDevice<Cover | FlatPanel>>(),
-		observingconditions: new Map<Device, AlpacaRegisteredDevice<Device>>(),
-		safetymonitor: new Map<Device, AlpacaRegisteredDevice<Device>>(),
-		video: new Map<Device, AlpacaRegisteredDevice<Device>>(),
+		observingconditions: new Map<Device, AlpacaRegisteredDevice>(),
+		safetymonitor: new Map<Device, AlpacaRegisteredDevice>(),
+		video: new Map<Device, AlpacaRegisteredDevice>(),
 	} as const
 
 	readonly #deviceManager: DeviceManager<Device>
@@ -515,10 +515,7 @@ export class AlpacaServer {
 			// wait for all properties to be received
 			if (device.connected) {
 				console.info('device connected:', device.name)
-
-				void Bun.sleep(500).then(() => {
-					task.resolve(device.connected)
-				})
+				void Bun.sleep(500).then(() => task.resolve(device.connected))
 			} else {
 				console.info('device disconnected:', device.name)
 				task.resolve(true)
@@ -533,7 +530,7 @@ export class AlpacaServer {
 	}
 
 	#apiDescription() {
-		return makeAlpacaResponse<AlpacaServerDescription>({ ServerName: this.options.name || 'Nebulosa', Manufacturer: this.options.manufacturer || 'Tiago Melo', ManufacturerVersion: this.options.version || '1.0.0', Location: 'None' })
+		return makeAlpacaResponse({ ServerName: this.options.name || 'Nebulosa', Manufacturer: this.options.manufacturer || 'Tiago Melo', ManufacturerVersion: this.options.version || '1.0.0', Location: 'None' })
 	}
 
 	configuredDevices() {
@@ -612,7 +609,7 @@ export class AlpacaServer {
 	}
 
 	#deviceIsConnected(id: number, type: AlpacaDeviceType) {
-		return makeAlpacaResponse(!!this.#device(id, type)?.device.connected)
+		return makeAlpacaResponse(this.#device(id, type)?.device.connected)
 	}
 
 	#deviceIsConnecting(id: number, type: AlpacaDeviceType) {
@@ -1715,7 +1712,7 @@ function isTrue(value: string) {
 	return value.toLowerCase() === 'true'
 }
 
-function makeAlpacaResponse<T>(data: T, code: AlpacaException | 0 = 0, message: string = '') {
+function makeAlpacaResponse(data: unknown, code: AlpacaException | 0 = 0, message: string = '') {
 	return Response.json({ Value: data, ClientTransactionID: 0, ServerTransactionID: 0, ErrorNumber: code, ErrorMessage: message })
 }
 

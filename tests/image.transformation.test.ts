@@ -917,7 +917,7 @@ test('contrast with zero amount collapses the image to mid-gray', () => {
 test('gamma applies the inverse power to each pixel', () => {
 	const image = makeImage(3, 1, 1, [0.25, 0.5, 1])
 	gamma(image, 2)
-	expectImageValues(image, [0.5, 0.7071067811865476, 1], 6)
+	expectImageValues(image, [0.5, Math.SQRT1_2, 1], 6)
 })
 
 test('gamma is a no-op outside the supported range', () => {

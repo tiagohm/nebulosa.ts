@@ -195,7 +195,7 @@ function transformAgreement(expected: SimilarityTransform | AffineTransform, act
 }
 
 function expectTransformAgreement(expected: SimilarityTransform | AffineTransform, actual: SimilarityTransform | AffineTransform, current: readonly DetectedStar[]) {
-	const agreement = transformAgreement(expected, actual!, current)
+	const agreement = transformAgreement(expected, actual, current)
 	expect(medianOf(agreement)).toBeLessThan(0.05)
 	expect(agreement.at(-1)).toBeLessThan(0.25)
 }
@@ -499,7 +499,7 @@ describe('real stars dataset', async () => {
 				expectTransformAgreement(entry.transform, actual!, current)
 
 				if (entry.model === 'similarity') {
-					expect(result.similarity?.mirrored).toBe((entry.transform as SimilarityTransform).mirrored)
+					expect(result.similarity?.mirrored).toBe(entry.transform.mirrored)
 				} else {
 					expect(result.rmsError ?? Infinity).toBeLessThan(0.05)
 				}

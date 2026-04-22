@@ -591,9 +591,9 @@ function areaIntersectsRaDecBox(area: number, box: StarCatalogRaDecBox) {
 function hnsky290AreaBounds(area: number): StarCatalogRaDecBox {
 	const file = hnsky290AreaFile(area)
 	const band = file.ring - 1
-	const minDEC = HNSKY_290_DEC_BOUNDARIES[band]!
-	const maxDEC = HNSKY_290_DEC_BOUNDARIES[band + 1]!
-	const count = HNSKY_290_RING_COUNTS[band]!
+	const minDEC = HNSKY_290_DEC_BOUNDARIES[band]
+	const maxDEC = HNSKY_290_DEC_BOUNDARIES[band + 1]
+	const count = HNSKY_290_RING_COUNTS[band]
 
 	if (count === 1) {
 		return { minRA: 0, maxRA: FULL_CIRCLE, minDEC, maxDEC }

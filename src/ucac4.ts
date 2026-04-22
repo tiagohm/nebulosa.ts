@@ -109,8 +109,8 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		try {
 			const stat = await fs.stat(root)
 			if (!stat.isDirectory()) throw new Error(`UCAC4 root is not a directory: ${root}`)
-		} catch (error) {
-			throw new Error(`unable to access UCAC4 root: ${root}`)
+		} catch (cause) {
+			throw new Error(`unable to access UCAC4 root: ${root}`, { cause })
 		}
 
 		this.#root = root
@@ -162,12 +162,12 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 
 		try {
 			const { bytesRead } = await handle.read(buffer, 0, UCAC4_RECORD_SIZE, (recordNumber - 1) * UCAC4_RECORD_SIZE)
+
 			if (bytesRead !== UCAC4_RECORD_SIZE) {
 				throw new Error(`short UCAC4 read for zone ${zone}, record ${recordNumber}`)
 			}
-		} catch (error) {
-			if (error instanceof Error) throw error
-			else throw new Error(`unable to read UCAC4 zone ${zone}, record ${recordNumber}`)
+		} catch (cause) {
+			throw new Error(`unable to read UCAC4 zone ${zone}, record ${recordNumber}`, { cause })
 		}
 
 		return parseUcac4Record(buffer, zone, recordNumber)
@@ -311,8 +311,8 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 
 		try {
 			stat = await fs.stat(zonePath)
-		} catch (error) {
-			throw new Error(`unable to stat UCAC4 zone file: ${zonePath}`)
+		} catch (cause) {
+			throw new Error(`unable to stat UCAC4 zone file: ${zonePath}`, { cause })
 		}
 
 		if (stat.size % UCAC4_RECORD_SIZE !== 0) {
@@ -338,8 +338,8 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 			const handle = await fs.open(zonePath, 'r')
 			this.#zoneHandles.set(zone, handle)
 			return handle
-		} catch (error) {
-			throw new Error(`unable to open UCAC4 zone file: ${zonePath}`)
+		} catch (cause) {
+			throw new Error(`unable to open UCAC4 zone file: ${zonePath}`, { cause })
 		}
 	}
 
@@ -388,8 +388,8 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 
 			try {
 				bytesRead = (await handle.read(block, 0, bytesToRead, (startRecord - 1) * UCAC4_RECORD_SIZE)).bytesRead
-			} catch (error) {
-				throw new Error(`unable to read UCAC4 zone ${zone}`)
+			} catch (cause) {
+				throw new Error(`unable to read UCAC4 zone ${zone}`, { cause })
 			}
 
 			if (bytesRead !== bytesToRead) {

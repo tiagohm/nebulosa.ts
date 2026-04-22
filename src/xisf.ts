@@ -218,6 +218,7 @@ function isSupportedCompressionFormat(format: string): format is XisfCompression
 function compress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, compression: XisfWriteCompression) {
 	if (compression.format === 'zstd') return Bun.zstdCompress(input, compression)
 	else if (compression.format === 'zlib') return deflate(input, compression)
+	return undefined
 }
 
 function escapeXml(text: string) {
@@ -233,7 +234,7 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 		const bitpix = (header.BITPIX as Bitpix) || -64
 		const width = +header.NAXIS1! || 0
 		const height = +header.NAXIS2! || 0
-		const channels = (+header.NAXIS3! || 1) as number
+		const channels = +header.NAXIS3! || 1
 		const sampleFormat = sampleFormatFromBitpix(bitpix)
 		const colorSpace: XisfColorSpace = channels >= 3 ? 'RGB' : 'Gray'
 		const fitsKeywords: string[] = []
@@ -425,6 +426,7 @@ export function bitpixFromSampleFormat(sampleFormat: XisfSampleFormat): Bitpix {
 function decompress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, format: XisfCompressionFormat) {
 	if (format === 'zstd') return Bun.zstdDecompress(input)
 	else if (format === 'zlib') return inflate(input)
+	return undefined
 }
 
 export class XisfImageReader {

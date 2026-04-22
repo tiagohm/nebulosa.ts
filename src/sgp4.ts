@@ -402,8 +402,8 @@ function daysToMonthDayHourMinuteSecond(year: number, days: number) {
 	let month = 1
 	let sum = 0
 
-	while (month < 12 && dayOfYear > sum + monthLength[month - 1]!) {
-		sum += monthLength[month - 1]!
+	while (month < 12 && dayOfYear > sum + monthLength[month - 1]) {
+		sum += monthLength[month - 1]
 		month++
 	}
 
@@ -2191,7 +2191,7 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 				no: satrec.no,
 				nodeo: satrec.nodeo,
 				nodedot: satrec.nodedot,
-				xpidot: xpidot!,
+				xpidot: xpidot,
 				z1,
 				z3,
 				z11,

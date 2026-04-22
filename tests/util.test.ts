@@ -101,6 +101,7 @@ test('binary search', () => {
 })
 
 test('binary search with comparator', () => {
+	// oxlint-disable-next-line unicorn/consistent-function-scoping
 	function comparator(key: number) {
 		return (a: number) => a - key
 	}

@@ -331,7 +331,7 @@ describe('Levenberg-Marquardt regression', () => {
 		}
 
 		const x = [0, 1, 2, 3, 4, 5, 6]
-		const y = [1, 2.718, 7.389, 20.085, 54.598, 148.413, 403.429]
+		const y = [1, Math.E, 7.389, 20.085, 54.598, 148.413, 403.429]
 		const result = levenbergMarquardt(x, y, exponential, [1, 1])
 
 		expect(result[0]).toBeCloseTo(1, 5)
@@ -368,7 +368,7 @@ describe('Levenberg-Marquardt regression', () => {
 		}
 
 		const x = [1, 2, 3, 4, 5, 6]
-		const y = [0, 0.693, 1.099, 1.386, 1.609, 1.792]
+		const y = [0, Math.LN2, 1.099, 1.386, 1.609, 1.792]
 		const result = levenbergMarquardt(x, y, logarithmic, [1, 3])
 
 		expect(result[0]).toBeCloseTo(1, 4)

@@ -1055,7 +1055,7 @@ export class FirmataClientOverTcp extends FirmataClient {
 		)
 	}
 
-	async connect(hostname: string, port: number, options?: Omit<Bun.TCPSocketConnectOptions<undefined>, 'hostname' | 'port' | 'socket'>) {
+	async connect(hostname: string, port: number, options?: Omit<Bun.TCPSocketConnectOptions, 'hostname' | 'port' | 'socket'>) {
 		if (this.#socket) return false
 
 		this.#socket = await Bun.connect({

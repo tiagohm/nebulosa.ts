@@ -65,8 +65,8 @@ test('findHnsky290Areas selects intersecting tiles around an RA boundary', () =>
 	const files = areas.map((area) => area.fileName).sort()
 
 	expect(files).toEqual(['1001.290', '1002.290'])
-	expect(areas[0]!.fraction).toBeGreaterThan(0)
-	expect(areas[1]!.fraction).toBeGreaterThan(0)
+	expect(areas[0].fraction).toBeGreaterThan(0)
+	expect(areas[1].fraction).toBeGreaterThan(0)
 })
 
 test('readHnsky290Area decodes documented record formats', () => {
@@ -82,25 +82,25 @@ test('readHnsky290Area decodes documented record formats', () => {
 		expect(stars).toHaveLength(1)
 
 		const [star] = stars
-		expect(star!.area).toBe(146)
-		expect(star!.rightAscension).toBeCloseTo(entry.star.rightAscension, 6)
-		expect(star!.declination).toBeCloseTo(entry.star.declination, 6)
-		expect(star!.magnitude).toBeCloseTo(entry.star.magnitude, 6)
+		expect(star.area).toBe(146)
+		expect(star.rightAscension).toBeCloseTo(entry.star.rightAscension, 6)
+		expect(star.declination).toBeCloseTo(entry.star.declination, 6)
+		expect(star.magnitude).toBeCloseTo(entry.star.magnitude, 6)
 
 		if (entry.star.bpRp === undefined) {
-			expect(star!.bpRp).toBeUndefined()
+			expect(star.bpRp).toBeUndefined()
 		} else {
-			expect(star!.bpRp).toBeCloseTo(entry.star.bpRp, 6)
+			expect(star.bpRp).toBeCloseTo(entry.star.bpRp, 6)
 		}
 
 		if (entry.recordSize === 9) {
-			expect(star!.designation?.label).toBe('TYC 1234-42-1')
+			expect(star.designation?.label).toBe('TYC 1234-42-1')
 		} else if (entry.recordSize === 10) {
-			expect(star!.designation?.label).toBe('UCAC4 321-12345')
+			expect(star.designation?.label).toBe('UCAC4 321-12345')
 		} else if (entry.recordSize === 11) {
-			expect(star!.designation?.label).toBe('TYC 200-55-2')
+			expect(star.designation?.label).toBe('TYC 200-55-2')
 		} else {
-			expect(star!.designation).toBeUndefined()
+			expect(star.designation).toBeUndefined()
 		}
 	}
 })
@@ -119,10 +119,10 @@ test('findHnsky290Region merges stars from intersecting files', async () => {
 	expect(files).toEqual(['1001.290', '1002.290'])
 	expect(result.headers).toHaveLength(2)
 	expect(result.stars).toHaveLength(2)
-	expect(result.stars[0]!.magnitude).toBeCloseTo(1.1, 6)
-	expect(result.stars[1]!.magnitude).toBeCloseTo(2.2, 6)
-	expect(result.stars[0]!.designation?.label).toBe('UCAC4 101-1')
-	expect(result.stars[1]!.designation?.label).toBe('UCAC4 100-1')
+	expect(result.stars[0].magnitude).toBeCloseTo(1.1, 6)
+	expect(result.stars[1].magnitude).toBeCloseTo(2.2, 6)
+	expect(result.stars[0].designation?.label).toBe('UCAC4 101-1')
+	expect(result.stars[1].designation?.label).toBe('UCAC4 100-1')
 })
 
 test('HnskyCatalog exposes .290 archives through the generic star catalog API', async () => {
@@ -141,8 +141,8 @@ test('HnskyCatalog exposes .290 archives through the generic star catalog API', 
 		expect(cone.map((e) => e.recordNumber).sort(NumberComparator)).toEqual([1, 1])
 		expect(box.map((e) => e.area).sort(NumberComparator)).toEqual([146, 147])
 		expect(box.map((e) => e.recordNumber).sort(NumberComparator)).toEqual([1, 1])
-		expect(cone[0]!.epoch).toBe(2000)
-		expect(cone[0]!.designation?.label).toBe('UCAC4 100-1')
+		expect(cone[0].epoch).toBe(2000)
+		expect(cone[0].designation?.label).toBe('UCAC4 100-1')
 
 		const star = await catalog.get('g14', 147, 1)
 

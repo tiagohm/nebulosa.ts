@@ -485,30 +485,30 @@ function resolveAstronomicalImageNoiseConfig(raw: ImageRawType, width: number, h
 	const expectedLength = width * height * channels
 	if (raw.length < expectedLength) throw new RangeError(`buffer length mismatch: expected ${expectedLength}, received ${raw.length}`)
 
-	const exposure = config.exposure ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure!
-	const sky = config.sky ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky!
-	const moon = config.moon ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon!
-	const lightPollution = config.lightPollution ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution!
-	const atmosphere = config.atmosphere ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere!
-	const sensor = config.sensor ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!
-	const artifacts = config.artifacts ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts!
-	const output = config.output ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output!
-	const ampGlow = sensor.ampGlow ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.ampGlow!
+	const exposure = config.exposure ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure
+	const sky = config.sky ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky
+	const moon = config.moon ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon
+	const lightPollution = config.lightPollution ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution
+	const atmosphere = config.atmosphere ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere
+	const sensor = config.sensor ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor
+	const artifacts = config.artifacts ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts
+	const output = config.output ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output
+	const ampGlow = sensor.ampGlow ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow
 
-	const quality = config.quality ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.quality!
+	const quality = config.quality ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.quality
 	const poissonThreshold = quality === 'fast' ? 16 : quality === 'high-realism' ? 64 : 32
-	const exposureTime = requirePositiveFinite('exposure.exposureTime', exposure.exposureTime ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure!.exposureTime!)
-	const analogGain = requirePositiveFinite('exposure.analogGain', exposure.analogGain ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure!.analogGain!)
-	const digitalGain = requirePositiveFinite('exposure.digitalGain', exposure.digitalGain ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure!.digitalGain!)
-	const electronsPerAdu = requirePositiveFinite('exposure.electronsPerAdu', exposure.electronsPerAdu ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure!.electronsPerAdu!)
+	const exposureTime = requirePositiveFinite('exposure.exposureTime', exposure.exposureTime ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure.exposureTime)
+	const analogGain = requirePositiveFinite('exposure.analogGain', exposure.analogGain ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure.analogGain)
+	const digitalGain = requirePositiveFinite('exposure.digitalGain', exposure.digitalGain ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure.digitalGain)
+	const electronsPerAdu = requirePositiveFinite('exposure.electronsPerAdu', exposure.electronsPerAdu ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure.electronsPerAdu)
 	const totalGain = analogGain * digitalGain
-	const bitDepth = requireIntegerInRange('output.bitDepth', output.bitDepth ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output!.bitDepth!, 1, 32)
+	const bitDepth = requireIntegerInRange('output.bitDepth', output.bitDepth ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output.bitDepth, 1, 32)
 	const outputLevels = output.maxValue === undefined ? 2 ** bitDepth - 1 : requirePositiveFinite('output.maxValue', output.maxValue)
-	const fullWellCapacity = requirePositiveFinite('sensor.fullWellCapacity', sensor.fullWellCapacity ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor!.fullWellCapacity!)
+	const fullWellCapacity = requirePositiveFinite('sensor.fullWellCapacity', sensor.fullWellCapacity ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.fullWellCapacity)
 	const adcSaturationElectrons = (outputLevels * electronsPerAdu) / totalGain
 	const saturationElectrons = Math.max(1, Math.min(fullWellCapacity, adcSaturationElectrons))
 	const normalizedPerElectron = 1 / saturationElectrons
-	const seed = normalizeSeed(config.seed ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.seed!)
+	const seed = normalizeSeed(config.seed ?? DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.seed)
 
 	return {
 		width,
