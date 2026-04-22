@@ -74,7 +74,7 @@ export class StellariumProtocolServer {
 	}
 
 	send(ra: Angle, dec: Angle) {
-		if (this.#sockets.length) {
+		if (this.#sockets.length > 0) {
 			const buffer = Buffer.allocUnsafe(24)
 			buffer.writeInt16LE(24, 0) // length
 			buffer.writeInt16LE(0, 2) // type
@@ -347,9 +347,9 @@ export async function* readNamesDat(source: Source) {
 		if (!line) break
 		if (line.startsWith('#')) continue
 
-		const prefix = line.substring(0, 5).trim()
-		const id = line.substring(5, 20).trim()
-		const name = NAME_FORMAT_REGEX.exec(line.substring(20).trim())?.[1] ?? ''
+		const prefix = line.slice(0, 5).trim()
+		const id = line.slice(5, 20).trim()
+		const name = NAME_FORMAT_REGEX.exec(line.slice(20).trim())?.[1] ?? ''
 
 		if (!name) continue
 

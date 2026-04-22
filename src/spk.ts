@@ -129,7 +129,7 @@ function makeSegment(summary: Summary, daf: Daf): SpkSegment {
 			return new Type21Segment(daf, start, end, center, target, startIndex, endIndex)
 	}
 
-	throw Error('only binary SPK data types 2, 3, 9 and 21 are supported')
+	throw new Error('only binary SPK data types 2, 3, 9 and 21 are supported')
 }
 
 // More info about spk types: https://spiceypy.readthedocs.io/en/latest/spk.html
@@ -727,7 +727,7 @@ export class MultipleSpkSegment implements SpkSegment {
 		this.center = segments[0].center
 		this.target = segments[0].target
 
-		if (segments.length > 1 && segments.find((e) => e.center !== this.center || e.target !== this.target)) {
+		if (segments.length > 1 && segments.some((e) => e.center !== this.center || e.target !== this.target)) {
 			throw new Error('one of the segments does not match the center or target')
 		}
 

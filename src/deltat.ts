@@ -33,7 +33,7 @@ const S15_D = [
 ] as const
 
 const S15_MIN_YEAR = S15_LOWER[0]
-const S15_MAX_YEAR = S15_UPPER[S15_UPPER.length - 1]
+const S15_MAX_YEAR = S15_UPPER.at(-1)
 const S15_LAST_INDEX = S15_LOWER.length - 1
 
 // Selects the S15 cubic spline segment that contains the requested decimal year.

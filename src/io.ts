@@ -54,9 +54,9 @@ export class BufferSink implements Sink, Seekable, Exhaustible {
 
 		if (typeof chunk === 'string')
 			if (size === undefined && !offset) size = this.buffer.write(chunk, this.position, encoding)
-			else if (size === undefined) size = this.buffer.write(chunk.substring(offset), this.position, encoding)
-			else if (!offset) size = this.buffer.write(chunk.substring(0, size), this.position, encoding)
-			else size = this.buffer.write(chunk.substring(offset, offset + size), this.position, encoding)
+			else if (size === undefined) size = this.buffer.write(chunk.slice(offset), this.position, encoding)
+			else if (!offset) size = this.buffer.write(chunk.slice(0, size), this.position, encoding)
+			else size = this.buffer.write(chunk.slice(offset, offset + size), this.position, encoding)
 		else size = chunk.copy(this.buffer, this.position, offset, offset + (size ?? chunk.byteLength))
 		this.position += size
 		return size
@@ -84,9 +84,9 @@ export class FileHandleSink implements Sink, Seekable, AsyncDisposable {
 
 		if (typeof chunk === 'string')
 			if (size === undefined && !offset) size = (await this.handle.write(chunk, this.position, encoding)).bytesWritten
-			else if (size === undefined) size = (await this.handle.write(chunk.substring(offset!), this.position, encoding)).bytesWritten
-			else if (!offset) size = (await this.handle.write(chunk.substring(0, size), this.position, encoding)).bytesWritten
-			else size = (await this.handle.write(chunk.substring(offset, offset + size), this.position, encoding)).bytesWritten
+			else if (size === undefined) size = (await this.handle.write(chunk.slice(offset!), this.position, encoding)).bytesWritten
+			else if (!offset) size = (await this.handle.write(chunk.slice(0, size), this.position, encoding)).bytesWritten
+			else size = (await this.handle.write(chunk.slice(offset, offset + size), this.position, encoding)).bytesWritten
 		else size = (await this.handle.write(chunk, offset, size, this.position)).bytesWritten
 		this.position += size
 		return size
@@ -459,9 +459,9 @@ export class Base64Sink implements Sink {
 
 		if (typeof chunk === 'string') {
 			if (size === undefined && !offset) data = Buffer.from(chunk, encoding)
-			else if (size === undefined) data = Buffer.from(chunk.substring(offset!), encoding)
-			else if (!offset) data = Buffer.from(chunk.substring(0, size), encoding)
-			else data = Buffer.from(chunk.substring(offset, offset + size), encoding)
+			else if (size === undefined) data = Buffer.from(chunk.slice(offset!), encoding)
+			else if (!offset) data = Buffer.from(chunk.slice(0, size), encoding)
+			else data = Buffer.from(chunk.slice(offset, offset + size), encoding)
 			end = data.byteLength
 		} else {
 			data = chunk

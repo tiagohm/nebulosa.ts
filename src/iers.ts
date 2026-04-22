@@ -17,7 +17,7 @@ export interface Iers {
 
 // Parses one fixed-width numeric field and preserves blanks as NaN.
 function parseNumber(line: string, start: number, end: number) {
-	const value = line.substring(start, end).trim()
+	const value = line.slice(start, end).trim()
 	return value ? +value : NaN
 }
 

@@ -351,16 +351,28 @@ export class TEA5767 extends PeripheralBase<TEA5767> implements RadioTuner {
 		if (this.#started) this.#writeState(this.#seeking)
 	}
 
+	get softMute() {
+		return this.#softMute
+	}
+
 	// Enables or disables the chip high-cut control.
 	set highCutControl(value: boolean) {
 		this.#highCutControl = value
 		if (this.#started) this.#writeState(this.#seeking)
 	}
 
+	get highCutControl() {
+		return this.#highCutControl
+	}
+
 	// Enables or disables stereo noise cancelling.
 	set stereoNoiseCancelling(value: boolean) {
 		this.#stereoNoiseCancelling = value
 		if (this.#started) this.#writeState(this.#seeking)
+	}
+
+	get stereoNoiseCancelling() {
+		return this.#stereoNoiseCancelling
 	}
 
 	// Selects high-side or low-side local oscillator injection.
@@ -370,6 +382,10 @@ export class TEA5767 extends PeripheralBase<TEA5767> implements RadioTuner {
 			this.#writeState(this.#seeking)
 			this.#requestStatus()
 		}
+	}
+
+	get highSideInjection() {
+		return this.#highSideInjection
 	}
 
 	// Starts an autonomous seek and optionally wraps once at the band limit.
@@ -564,6 +580,7 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
 	#volume: number
 	#muted: boolean
 	#bassBoost: boolean
+	#audioOutputHighZ: boolean
 	#seekFailed = false
 	#stereo = false
 	#rssi = 0
@@ -662,6 +679,7 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
 		this.#muted = muted
 		this.#stereo = stereo
 		this.#bassBoost = bassBoost
+		this.#audioOutputHighZ = audioOutputHighZ
 		this.#reg02 = (audioOutputHighZ ? 0 : RDA5807.REG02_DHIZ) | (muted ? 0 : RDA5807.REG02_DMUTE) | (stereo === false ? RDA5807.REG02_MONO : 0) | (bassBoost ? RDA5807.REG02_BASS : 0) | RDA5807.REG02_ENABLE
 		this.#reg05 = (seekThreshold << RDA5807.REG05_SEEKTH_SHIFT) | (2 << RDA5807.REG05_LNA_PORT_SEL_SHIFT) | volume
 		this.#reg06 = RDA5807.REG06_OPEN_WRITE
@@ -795,8 +813,13 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
 
 	// Enables or disables high-impedance analog audio output.
 	set audioOutputHighZ(value: boolean) {
+		this.#audioOutputHighZ = value
 		this.#reg02 = value ? this.#reg02 & ~RDA5807.REG02_DHIZ : this.#reg02 | RDA5807.REG02_DHIZ
 		if (this.#started) this.#writeRegister(RDA5807.CONTROL_REG, this.#reg02 & ~RDA5807.REG02_SEEK)
+	}
+
+	get audioOutputHighZ() {
+		return this.#audioOutputHighZ
 	}
 
 	// Enables or disables the audio mute bit.

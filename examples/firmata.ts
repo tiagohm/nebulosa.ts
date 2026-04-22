@@ -59,7 +59,7 @@ function print(device: Thermometer | Hygrometer | Barometer | Altimeter | Luxmet
 	if ('gy' in device) output.push(`gy: ${device.gy}`)
 	if ('gz' in device) output.push(`gz: ${device.gz}`)
 
-	if (output.length) console.info(device.name, output.join(' | '))
+	if (output.length > 0) console.info(device.name, output.join(' | '))
 }
 
 if (false) {

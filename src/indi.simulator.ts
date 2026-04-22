@@ -180,7 +180,6 @@ export abstract class DeviceSimulator implements Disposable {
 		switch (vector.name) {
 			case 'ACTIVE_DEVICES':
 				applyTextVectorValues(this.snoopDevices, vector.elements) && this.notify(this.snoopDevices)
-				return
 		}
 	}
 
@@ -191,7 +190,6 @@ export abstract class DeviceSimulator implements Disposable {
 			case 'CONFIG':
 				if (vector.elements.LOAD === true) void this.loadProperties()
 				else if (vector.elements.SAVE === true) this.saveProperties()
-				return
 		}
 	}
 
@@ -421,8 +419,6 @@ export class MountSimulator extends DeviceSimulator {
 					const offset = Math.trunc(+vector.elements.OFFSET * 60)
 					if (!Number.isNaN(utc)) this.setTime({ utc, offset })
 				}
-
-				return
 		}
 	}
 
@@ -453,7 +449,6 @@ export class MountSimulator extends DeviceSimulator {
 			case 'TELESCOPE_TIMED_GUIDE_WE':
 				if ((vector.elements.TIMED_GUIDE_W ?? 0) > 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
 				else if ((vector.elements.TIMED_GUIDE_E ?? 0) > 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
-				return
 		}
 	}
 
@@ -514,7 +509,6 @@ export class MountSimulator extends DeviceSimulator {
 			case 'ON_COORD_SET':
 				if (vector.elements.SYNC === true) this.#coordSetMode = 'SYNC'
 				else if (vector.elements.SLEW === true) this.#coordSetMode = 'SLEW'
-				return
 		}
 	}
 
@@ -1034,7 +1028,6 @@ export class FocuserSimulator extends DeviceSimulator {
 				return
 			case 'FOCUS_SYNC':
 				if (vector.elements.FOCUS_SYNC_VALUE !== undefined) this.syncTo(vector.elements.FOCUS_SYNC_VALUE)
-				return
 		}
 	}
 
@@ -1060,7 +1053,6 @@ export class FocuserSimulator extends DeviceSimulator {
 					this.#lastCompensationTemperature = this.temperature
 					this.notify(this.#temperatureCompensation)
 				}
-				return
 		}
 	}
 
@@ -1386,7 +1378,6 @@ export class RotatorSimulator extends DeviceSimulator {
 				return
 			case 'SYNC_ROTATOR_ANGLE':
 				if (vector.elements.ANGLE !== undefined) this.syncTo(vector.elements.ANGLE)
-				return
 		}
 	}
 
@@ -1409,7 +1400,6 @@ export class RotatorSimulator extends DeviceSimulator {
 				return
 			case 'ROTATOR_BACKLASH_TOGGLE':
 				if (applyExclusiveSwitchValues(this.#backlash, vector.elements)) this.notify(this.#backlash)
-				return
 		}
 	}
 
@@ -1580,7 +1570,6 @@ export class FlatPanelSimulator extends DeviceSimulator {
 				return
 			case 'FLAT_LIGHT_CONTROL':
 				if (applyExclusiveSwitchValues(this.#light, vector.elements)) this.notify(this.#light)
-				return
 		}
 	}
 
@@ -1633,7 +1622,6 @@ export class CoverSimulator extends DeviceSimulator {
 				return
 			case 'CAP_ABORT':
 				if (vector.elements.ABORT === true) this.stop()
-				return
 		}
 	}
 
@@ -1973,7 +1961,6 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'TELESCOPE_EFFECTS':
 				if (applyNumberVectorValues(this.#telescopeEffects, vector.elements)) this.notify(this.#telescopeEffects)
-				return
 		}
 	}
 
@@ -2023,7 +2010,6 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'SIMULATOR_STAR_PLOT_PSF_MODEL':
 				if (applyExclusiveSwitchValues(this.#plotPsfModel, vector.elements)) this.notify(this.#plotPsfModel)
-				return
 		}
 	}
 

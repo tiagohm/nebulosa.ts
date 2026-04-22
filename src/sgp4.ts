@@ -242,19 +242,19 @@ export function parseTLE(line1: string, line2: string, name?: string): TLE {
 	if (line1[0] !== '1') throw new Error('TLE line 1 must start with "1"')
 	if (line2[0] !== '2') throw new Error('TLE line 2 must start with "2"')
 
-	const satelliteNumber = line1.substring(2, 7).trim()
-	const epochYear = +line1.substring(18, 20)
-	const epochDays = +line1.substring(20, 32)
-	const meanMotionDot = +line1.substring(33, 43)
-	const meanMotionDdot = parseTleExponent(line1.substring(44, 52))
-	const bstar = parseTleExponent(line1.substring(53, 61))
-	const inclination = +line2.substring(8, 16) * DEG2RAD
-	const rightAscensionOfAscendingNode = +line2.substring(17, 25) * DEG2RAD
-	const eccentricity = +`0.${line2.substring(26, 33).replaceAll(' ', '0')}`
-	const argumentOfPerigee = +line2.substring(34, 42) * DEG2RAD
-	const meanAnomaly = +line2.substring(43, 51) * DEG2RAD
-	const meanMotion = +line2.substring(52, 63)
-	const revolutionNumberAtEpoch = +line2.substring(63, 68) || 0
+	const satelliteNumber = line1.slice(2, 7).trim()
+	const epochYear = +line1.slice(18, 20)
+	const epochDays = +line1.slice(20, 32)
+	const meanMotionDot = +line1.slice(33, 43)
+	const meanMotionDdot = parseTleExponent(line1.slice(44, 52))
+	const bstar = parseTleExponent(line1.slice(53, 61))
+	const inclination = +line2.slice(8, 16) * DEG2RAD
+	const rightAscensionOfAscendingNode = +line2.slice(17, 25) * DEG2RAD
+	const eccentricity = +`0.${line2.slice(26, 33).replaceAll(' ', '0')}`
+	const argumentOfPerigee = +line2.slice(34, 42) * DEG2RAD
+	const meanAnomaly = +line2.slice(43, 51) * DEG2RAD
+	const meanMotion = +line2.slice(52, 63)
+	const revolutionNumberAtEpoch = +line2.slice(63, 68) || 0
 	const year = epochYear < 57 ? epochYear + 2000 : epochYear + 1900
 	const [month, day, hour, minute, second] = daysToMonthDayHourMinuteSecond(year, epochDays)
 	const epoch = timeYMDHMS(year, month, day, hour, minute, second, Timescale.UTC)

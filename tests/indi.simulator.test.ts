@@ -26,7 +26,7 @@ class CameraFrameReceiver implements DeviceHandler<Camera> {
 	}
 
 	get lastFrame() {
-		return this.#frames[this.#frames.length - 1]
+		return this.#frames.at(-1)!
 	}
 }
 

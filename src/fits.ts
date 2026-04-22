@@ -112,7 +112,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 			return false
 		}
 
-		const hdu = hdus[hdus.length - 1]
+		const hdu = hdus.at(-1)!
 		const { header } = hdu
 
 		if (key === 'END') {
@@ -128,7 +128,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 		}
 
 		if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
-			prev[1] = prev[1].substring(0, prev[1].length - 1) + value
+			prev[1] = prev[1].slice(0, prev[1].length - 1) + value
 			header[prev[0]] = prev[1]
 		} else if (isCommentKeyword(key)) {
 			const text = comment ?? ''
@@ -439,7 +439,7 @@ export class FitsKeywordReader {
 			}
 
 			if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
-				prev[1] = prev[1].substring(0, prev[1].length - 1) + value
+				prev[1] = prev[1].slice(0, prev[1].length - 1) + value
 				header[prev[0]] = prev[1]
 			} else if (isCommentKeyword(key)) {
 				const text = comment ?? ''
@@ -481,7 +481,7 @@ export class FitsKeywordReader {
 	}
 
 	#parseValue(line: Buffer, key: string, position: Position): readonly [string | undefined, boolean] {
-		if (!(key.length && this.#skipSpaces(line, position))) {
+		if (!(key.length > 0 && this.#skipSpaces(line, position))) {
 			// nothing left to parse.
 			return [undefined, false]
 		}
@@ -570,7 +570,7 @@ export class FitsKeywordReader {
 		else if (value === 'T') return true
 		else if (value === 'F') return false
 		else if (INT_REGEX.test(value)) return +value
-		// else if (value.startsWith("'") && value.endsWith("'")) return value.substring(1, value.length - 1).trim()
+		// else if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, value.length - 1).trim()
 		else if (DECIMAL_REGEX.test(value)) return value.includes('D') || value.includes('d') ? +value.replace(/[dD]/, 'E') : +value
 		else return value
 	}
@@ -813,7 +813,7 @@ export class FitsKeywordWriter {
 			return true
 		}
 
-		this.#appendText(output, comment.substring(0, available), position)
+		this.#appendText(output, comment.slice(0, available), position)
 
 		return false
 	}
@@ -833,7 +833,7 @@ export class FitsKeywordWriter {
 		// The the remaining part of the string fits in the space with the
 		// quoted quotes, then it's easy...
 		if (available >= value.length - from) {
-			const escaped = escapeQuotedText(from === 0 ? value : value.substring(from))
+			const escaped = escapeQuotedText(from === 0 ? value : value.slice(from))
 
 			if (escaped.length <= available) {
 				this.#appendText(output, "'", position)

@@ -370,7 +370,7 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 	// Loads and caches one .290 tile lazily.
 	async loadArea(area: number): Promise<Hnsky290LoadedArea | undefined> {
 		const cached = this.#areas.get(area)
-		if (cached !== undefined) return cached || undefined
+		if (cached !== undefined) return cached ?? undefined
 
 		const file = hnsky290AreaFile(area)
 		const source = this.#resolveFile(`${this.#database}_${file.fileName}`)

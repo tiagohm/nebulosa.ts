@@ -85,9 +85,8 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	executable ||= executableForCurrentPlatform()
 	timeout ||= DEFAULT_TIMEOUT
 
-	const commands = [executable, '-o', wcs, '-z', downsample.toFixed(0), '-wcs', '-f', input]
+	const commands = [executable, '-o', wcs, '-z', downsample.toFixed(0), '-wcs', '-f', input, '-fov', `${fov}`]
 
-	commands.push('-fov', `${fov}`)
 	if (sip) commands.push('-sip')
 	if (radius) commands.push('-ra', `${rightAscension}`, '-spd', `${spd}`, '-r', `${radius}`)
 	else commands.push('-r', '180')

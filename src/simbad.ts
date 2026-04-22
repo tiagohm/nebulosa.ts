@@ -340,9 +340,7 @@ function buildSimbadBoxConstraint(box: StarCatalogRaDecBox) {
 
 // Pushes optional magnitude limits down to the remote query.
 function buildSimbadMagnitudeConstraint(query: NormalizedStarCatalogQuery) {
-	const constraints: string[] = []
-
-	constraints.push('f.V IS NOT NULL')
+	const constraints = ['f.V IS NOT NULL']
 
 	if (query.magnitudeMin !== undefined) {
 		constraints.push(`f.V >= ${query.magnitudeMin}`)

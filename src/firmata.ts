@@ -718,7 +718,7 @@ export class FirmataClient implements Disposable {
 			if (modes.size > 0) this.#pinStateRequestQueue.push(id)
 		},
 		pinCapabilitiesFinished: (client: FirmataClient) => {
-			if (this.#pinStateRequestQueue.length) {
+			if (this.#pinStateRequestQueue.length > 0) {
 				this.requestPinState(this.#pinStateRequestQueue.shift()!)
 			} else if (this.#initializing) {
 				this.requestAnalogMapping()
@@ -740,7 +740,7 @@ export class FirmataClient implements Disposable {
 				pin.mode = mode
 				pin.value = value
 
-				if (this.#pinStateRequestQueue.length) {
+				if (this.#pinStateRequestQueue.length > 0) {
 					this.requestPinState(this.#pinStateRequestQueue.shift()!)
 				} else if (this.#initializing) {
 					this.requestAnalogMapping()
@@ -997,7 +997,7 @@ export class FirmataClient implements Disposable {
 			}
 		}
 
-		const encodedData = payload.length ? encodePacked7Bit(payload) : undefined
+		const encodedData = payload.length > 0 ? encodePacked7Bit(payload) : undefined
 		const message = Buffer.alloc(5 + (encodedData?.length ?? 0))
 
 		message[0] = START_SYSEX

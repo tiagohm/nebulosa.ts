@@ -278,8 +278,6 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 				if (this.handleConnection(device, message)) {
 					this.updated(device, 'connected', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -436,8 +434,6 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 						this.updated(device, 'guideRate', message.state)
 					}
 				}
-
-				return
 			}
 		}
 	}
@@ -483,8 +479,6 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 						this.updated(device, 'temperature', message.state)
 					}
 				}
-
-				return
 			}
 		}
 	}
@@ -635,8 +629,6 @@ export class CameraManager extends DeviceManager<Camera> {
 				if (handleTextValue(device, 'frameType', message.elements.FRAME_BIAS?.value ? 'BIAS' : message.elements.FRAME_FLAT?.value ? 'FLAT' : message.elements.FRAME_DARK?.value ? 'DARK' : 'LIGHT')) {
 					this.updated(device, 'frameType', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -759,8 +751,6 @@ export class CameraManager extends DeviceManager<Camera> {
 					this.updated(device, 'offset', message.state)
 					this.#offsetProperties.set(device.name, [message.name, 'OFFSET'])
 				}
-
-				return
 		}
 	}
 
@@ -779,8 +769,6 @@ export class CameraManager extends DeviceManager<Camera> {
 				device.cfa.offsetY = +message.elements.CFA_OFFSET_Y!.value
 				device.cfa.type = message.elements.CFA_TYPE!.value as CfaPattern
 				this.updated(device, 'cfa', message.state)
-
-				return
 		}
 	}
 
@@ -800,8 +788,6 @@ export class CameraManager extends DeviceManager<Camera> {
 						console.warn(`received empty BLOB for device ${device.name}`)
 					}
 				}
-
-				return
 		}
 	}
 }
@@ -968,7 +954,7 @@ export class MountManager extends DeviceManager<Mount> {
 						rates.push({ name: element.name, label: element.label! })
 					}
 
-					if (rates.length) {
+					if (rates.length > 0) {
 						device.slewRates = rates
 						this.updated(device, 'slewRates', message.state)
 					}
@@ -997,7 +983,7 @@ export class MountManager extends DeviceManager<Mount> {
 						modes.push(element.name.replace('TRACK_', '') as TrackMode)
 					}
 
-					if (modes.length) {
+					if (modes.length > 0) {
 						device.trackModes = modes
 						this.updated(device, 'trackModes', message.state)
 					}
@@ -1111,8 +1097,6 @@ export class MountManager extends DeviceManager<Mount> {
 						this.updated(device, 'canMove', message.state)
 					}
 				}
-
-				return
 		}
 	}
 
@@ -1148,8 +1132,6 @@ export class MountManager extends DeviceManager<Mount> {
 				if (updated) {
 					this.updated(device, 'geographicCoordinate', message.state)
 				}
-
-				return
 			}
 		}
 	}
@@ -1176,8 +1158,6 @@ export class MountManager extends DeviceManager<Mount> {
 						this.updated(device, 'time', message.state)
 					}
 				}
-
-				return
 			}
 		}
 	}
@@ -1216,8 +1196,6 @@ export class WheelManager extends DeviceManager<Wheel> {
 				if (handleSwitchValue(device, 'moving', message.state === 'Busy')) {
 					this.updated(device, 'moving', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1244,8 +1222,6 @@ export class WheelManager extends DeviceManager<Wheel> {
 					device.names = names.map((e) => e.value)
 					this.updated(device, 'names', message.state)
 				}
-
-				return
 			}
 		}
 	}
@@ -1318,8 +1294,6 @@ export class FocuserManager extends DeviceManager<Focuser> {
 				if (handleSwitchValue(device, 'reversed', message.elements.INDI_ENABLED?.value)) {
 					this.updated(device, 'reversed', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1363,8 +1337,6 @@ export class FocuserManager extends DeviceManager<Focuser> {
 				if (handleSwitchValue(device, 'moving', message.state === 'Busy')) {
 					this.updated(device, 'moving', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1411,8 +1383,6 @@ export class CoverManager extends DeviceManager<Cover> {
 				if (handleSwitchValue(device, 'canAbort', true)) {
 					this.updated(device, 'canAbort', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1494,8 +1464,6 @@ export class RotatorManager extends DeviceManager<Rotator> {
 				if (handleSwitchValue(device, 'hasBacklashCompensation', message.elements.INDI_ENABLED?.value)) {
 					this.updated(device, 'hasBacklashCompensation', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1521,8 +1489,6 @@ export class RotatorManager extends DeviceManager<Rotator> {
 						this.updated(device, 'canSync', message.state)
 					}
 				}
-
-				return
 		}
 	}
 
@@ -1569,8 +1535,6 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 						this.updated(device, 'dutyCycle', message.state)
 					}
 				}
-
-				return
 			}
 		}
 	}
@@ -1621,8 +1585,6 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 				if (handleSwitchValue(device, 'enabled', message.elements.FLAT_LIGHT_ON?.value)) {
 					this.updated(device, 'enabled', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1636,8 +1598,6 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 				if (handleMinMaxValue(device.intensity, message.elements.FLAT_LIGHT_INTENSITY_VALUE, tag)) {
 					this.updated(device, 'intensity', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1695,8 +1655,6 @@ export class PowerManager extends DeviceManager<Power> {
 						this.updated(device, 'hasPowerCycle', message.state)
 					}
 				}
-
-				return
 		}
 	}
 
@@ -1732,7 +1690,6 @@ export class PowerManager extends DeviceManager<Power> {
 				return
 			case 'VARIABLE_VOLTAGES':
 				handlePowerChannel(this, device, message, tag, 'variableVoltage', 'value')
-				return
 		}
 	}
 
@@ -1757,7 +1714,6 @@ export class PowerManager extends DeviceManager<Power> {
 				return
 			case 'VARIABLE_LABELS':
 				handlePowerChannel(this, device, message, tag, 'variableVoltage', 'label')
-				return
 		}
 	}
 }

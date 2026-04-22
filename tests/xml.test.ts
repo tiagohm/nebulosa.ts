@@ -67,7 +67,7 @@ describe('parse', () => {
 			expect(parser.parse(lines[i])).toBeEmpty()
 		}
 
-		const [tag] = parser.parse(lines[lines.length - 1])
+		const [tag] = parser.parse(lines.at(-1)!)
 
 		expect(tag).toBeDefined()
 		expect(tag.name).toBe('person')

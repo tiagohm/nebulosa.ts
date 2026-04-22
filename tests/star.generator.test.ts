@@ -182,8 +182,8 @@ test('clips safely near each border and preserves sentinel values', () => {
 		expect(plotStar(buffer, WIDTH, HEIGHT, 1, layout.x, layout.y, 0.35, 3.5, 18, 1.4)).toBe(true)
 		expect(guard[0]).toBe(123)
 		expect(guard[1]).toBe(456)
-		expect(guard[guard.length - 2]).toBe(789)
-		expect(guard[guard.length - 1]).toBe(101112)
+		expect(guard.at(-2)).toBe(789)
+		expect(guard.at(-1)).toBe(101112)
 		expect(monoSum(buffer)).toBeGreaterThan(0)
 	}
 })

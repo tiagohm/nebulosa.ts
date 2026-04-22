@@ -144,9 +144,7 @@ function buildVizierGaiaBoxConstraint(box: StarCatalogRaDecBox) {
 
 // Pushes optional magnitude limits down to the remote query.
 function buildVizierGaiaMagnitudeConstraint(query: NormalizedStarCatalogQuery) {
-	const constraints: string[] = []
-
-	constraints.push('Gmag IS NOT NULL')
+	const constraints = ['Gmag IS NOT NULL']
 
 	if (query.magnitudeMin !== undefined) {
 		constraints.push(`Gmag >= ${query.magnitudeMin}`)

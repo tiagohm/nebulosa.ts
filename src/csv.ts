@@ -98,7 +98,7 @@ export class CsvLineParser {
 		}
 
 		// If the last character is a delimiter, we need to add an empty column
-		if (this.#isDelimiter(line[line.length - 1])) row.push('')
+		if (this.#isDelimiter(line.at(-1)!)) row.push('')
 
 		return row
 	}
@@ -130,15 +130,15 @@ export class CsvLineParser {
 				const next = i + 1
 
 				if (next < line.length && this.#isQuoteChar(line[next])) {
-					if (segmentStart < i) text += line.substring(segmentStart, i)
+					if (segmentStart < i) text += line.slice(segmentStart, i)
 					text += c
 					i = next
 					segmentStart = i + 1
 				} else {
 					options.offset = next
 					// If the quote is not followed by another quote, return the quoted text
-					if (!text.length && segmentStart === start) return line.substring(start, i)
-					if (segmentStart < i) text += line.substring(segmentStart, i)
+					if (text.length === 0 && segmentStart === start) return line.slice(start, i)
+					if (segmentStart < i) text += line.slice(segmentStart, i)
 					return text
 				}
 			}
@@ -146,8 +146,8 @@ export class CsvLineParser {
 
 		options.offset = i
 
-		if (!text.length && segmentStart === start) return line.substring(start, options.offset)
-		if (segmentStart < i) text += line.substring(segmentStart, i)
+		if (text.length === 0 && segmentStart === start) return line.slice(start, options.offset)
+		if (segmentStart < i) text += line.slice(segmentStart, i)
 		return text
 	}
 
@@ -185,7 +185,7 @@ export class CsvLineParser {
 
 		info.offset = i
 
-		return line.substring(start, info.offset)
+		return line.slice(start, info.offset)
 	}
 
 	#skipUntilDelimiter(line: string, info: ParseColumnInfo) {
@@ -209,7 +209,7 @@ export function readCsv(input: string | string[], options: string | string[] | R
 
 	while (offset < input.length) {
 		const [index, next, nextQuoted] = parser.scanLineBreak(input, offset, quoted)
-		const row = parser.parse(index >= 0 ? input.substring(offset, index) : input.substring(offset))
+		const row = parser.parse(index >= 0 ? input.slice(offset, index) : input.slice(offset))
 
 		if (index >= 0) {
 			offset = next
@@ -259,12 +259,12 @@ export async function* readCsvStream(source: Source, options: string | string[] 
 				const [index, next, nextQuoted] = parser.scanLineBreak(decoded, offset, quoted)
 
 				if (index < 0) {
-					line += offset > 0 ? decoded.substring(offset) : decoded
+					line += offset > 0 ? decoded.slice(offset) : decoded
 					quoted = nextQuoted
 					break
 				}
 
-				line += decoded.substring(offset, index)
+				line += decoded.slice(offset, index)
 
 				// Parse the line into a CSV row
 				const row = parser.parse(line)

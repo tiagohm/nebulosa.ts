@@ -48,9 +48,9 @@ jobs:
                   restore-keys: |
                       data-cache-
 
-            - name: Type Check
+            - name: Lint
               if: ${{ matrix.os == 'ubuntu-24.04' }}
-              run: bun tsc
+              run: bun lint
 
             - name: Run Tests
               if: ${{ matrix.os == 'ubuntu-24.04' }}

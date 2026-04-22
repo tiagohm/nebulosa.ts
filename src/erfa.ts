@@ -1950,7 +1950,7 @@ export function eraAtoiq(type: 'R' | 'H' | 'A', ob1: Angle, ob2: Angle, astrom: 
 	// Refraction
 
 	// Fast algorithm using two constant model.
-	const tz = sz / (zaeo > 0.05 ? zaeo : 0.05)
+	const tz = sz / Math.max(zaeo, 0.05)
 	const dref = (refa + refb * tz * tz) * tz
 	const zdt = zdo + dref
 

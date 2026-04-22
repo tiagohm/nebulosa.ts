@@ -155,7 +155,7 @@ export async function identify(dateTime: Temporal | Time, longitude: Angle, lati
 // Retrieves close approaches of small bodies to Earth
 export async function closeApproaches(dateMin?: Temporal | 'now', dateMax: Temporal | `${number}d` = '7d', distance: number = 10) {
 	dateMin = !dateMin || dateMin === 'now' ? temporalNow() : dateMin
-	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatTemporal(dateMin, DATE_FORMAT, 0)}&date-max=${typeof dateMax === 'string' ? `%2B${dateMax.substring(0, dateMax.length - 1)}` : formatTemporal(dateMax, DATE_FORMAT, 0)}&dist-max=${distance}LD`
+	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatTemporal(dateMin, DATE_FORMAT, 0)}&date-max=${typeof dateMax === 'string' ? `%2B${dateMax.slice(0, dateMax.length - 1)}` : formatTemporal(dateMax, DATE_FORMAT, 0)}&dist-max=${distance}LD`
 	const response = await fetch(uri)
 	return (await response.json()) as SmallBodyCloseApproach
 }

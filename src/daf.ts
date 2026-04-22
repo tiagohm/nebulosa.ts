@@ -8,7 +8,7 @@ export interface Summary {
 
 export interface Daf {
 	readonly summaries: Summary[]
-	readonly read: (start: number, end: number) => Promise<Float64Array>
+	readonly read: (start: number, end: number) => Promise<Float64Array> | Float64Array
 }
 
 export interface DafRecord {
@@ -19,7 +19,7 @@ export interface DafRecord {
 	readonly bward: number
 }
 
-const FTPSTR = Buffer.from('FTPSTR:\r:\n:\r\n:\r\x00:\x81:\x10\xCE:ENDFTP', 'ascii')
+const FTPSTR = Buffer.from('FTPSTR:\r:\n:\r\n:\r\u0000:\u0081:\u0010\u00CE:ENDFTP', 'ascii')
 const FTPSTR_OFFSET = 699
 const FTPSTR_LENGTH = 28
 const RECORD_SIZE = 1024

@@ -335,7 +335,7 @@ export function backgroundNeutralization(image: Image, options: Partial<Backgrou
 		const median = backgroundNeutralizationMedian(raw, lowerLimit, upperLimit, channel, samples, limitTolerance)
 
 		if (!Number.isFinite(median)) {
-			throw new Error(`background neutralization requires at least one significant ${channel === 0 ? 'RED' : channel === 1 ? 'GREEN' : 'BLUE'} sample in the reference area`)
+			throw new TypeError(`background neutralization requires at least one significant ${channel === 0 ? 'RED' : channel === 1 ? 'GREEN' : 'BLUE'} sample in the reference area`)
 		}
 
 		medians[channel] = median
@@ -972,7 +972,7 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 		}
 
 		shift(buffer)
-		read(y + yr + 1, buffer[buffer.length - 1])
+		read(y + yr + 1, buffer.at(-1)!)
 	}
 
 	return image
@@ -1798,7 +1798,7 @@ export function psf(image: Image) {
 		}
 
 		shift(buffer)
-		read(y + 5, buffer[buffer.length - 1])
+		read(y + 5, buffer.at(-1)!)
 	}
 
 	return image

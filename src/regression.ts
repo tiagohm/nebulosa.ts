@@ -693,7 +693,7 @@ function solveLinearLeastSquares(design: readonly Readonly<NumberArray>[], targe
 
 	if (cols === 0) return new Float64Array(0)
 
-	const effectiveRidge = ridge > 0 ? ridge : 0
+	const effectiveRidge = Math.max(ridge, 0)
 	const augmentedRows = rows + (effectiveRidge > 0 ? cols : 0)
 	const matrix = new Matrix(augmentedRows, cols)
 	const matrixData = matrix.data

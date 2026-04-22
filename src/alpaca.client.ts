@@ -1105,7 +1105,7 @@ class AlpacaTelescope extends AlpacaDevice {
 
 				if (now - this.state.LastUTCDateUpdate >= 60000) {
 					this.state.LastUTCDateUpdate = now
-					this.#time.elements.UTC.value = UTCDate.substring(0, 19)
+					this.#time.elements.UTC.value = UTCDate.slice(0, 19)
 					this.sendDefProperty(this.#time)
 				}
 			}
@@ -1166,7 +1166,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			}
 
 			if (UTCDate !== undefined) {
-				this.#time.elements.UTC.value = UTCDate.substring(0, 19)
+				this.#time.elements.UTC.value = UTCDate.slice(0, 19)
 				this.sendSetProperty(this.#time)
 				this.state.UTCDate = undefined
 			}
@@ -1208,7 +1208,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			case 'TELESCOPE_MOTION_WE': {
 				if (this.state.CanMoveAxis && this.state.SlewRates?.length) {
 					const { MOTION_NORTH, MOTION_SOUTH, MOTION_WEST, MOTION_EAST } = vector.elements
-					const { Maximum } = this.state.SlewRates[+findOnSwitch(this.#slewRate)[0].substring(5)]
+					const { Maximum } = this.state.SlewRates[+findOnSwitch(this.#slewRate)[0].slice(5)]
 
 					if (vector.name.endsWith('S')) {
 						if (MOTION_NORTH === true || MOTION_SOUTH === true) {
@@ -1330,7 +1330,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			case 'TIME_UTC':
 				if (vector.elements.UTC && vector.elements.UTC.length >= 19) {
 					this.updatePropertyValue(this.#time, 'OFFSET', vector.elements.OFFSET)
-					const utc = vector.elements.UTC.substring(0, 19)
+					const utc = vector.elements.UTC.slice(0, 19)
 					void this.api.setUtcDate(this.id, `${utc}Z`)
 					this.state.LastUTCDateUpdate = 0
 					this.enableEndpoints('UTCDate')

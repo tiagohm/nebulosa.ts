@@ -4,7 +4,7 @@
 	"plugins": ["typescript", "unicorn", "oxc", "promise"],
 	"categories": {
 		"correctness": "error",
-		"pedantic": "off",
+		"pedantic": "error",
 		"suspicious": "off",
 		"perf": "error",
 		"nursery": "off",
@@ -29,7 +29,40 @@
 		"unicorn/no-new-array": "off",
 		"no-await-in-loop": "off",
 		"typescript/restrict-template-expressions": "off",
-		"unicorn/no-invalid-fetch-options": "off"
+		"unicorn/no-invalid-fetch-options": "off",
+		"typescript/prefer-readonly-parameter-types": "off",
+		"typescript/strict-boolean-expressions": "off",
+		"typescript/strict-void-return": "off",
+		"max-classes-per-file": "off",
+		"max-lines": "off",
+		"max-depth": "off",
+		"typescript/return-await": "off",
+		"no-inline-comments": "off",
+		"unicorn/no-instanceof-array": "off",
+		"typescript/no-confusing-void-expression": "off",
+		"unicorn/prefer-math-trunc": "off",
+		"unicorn/no-useless-undefined": "off",
+		"no-negated-condition": "off",
+		"sort-vars": "off",
+		"no-else-return": "off",
+		"typescript/switch-exhaustiveness-check": "off",
+		"typescript/prefer-enum-initializers": "off",
+		"typescript/no-misused-promises": "off",
+		"unicorn/no-lonely-if": "off",
+		"no-warning-comments": "off",
+		"typescript/ban-types": "off",
+		"unicorn/no-array-callback-reference": "off",
+		"no-loop-func": "off",
+		"unicorn/prefer-code-point": "off",
+		"typescript/no-unsafe-member-access": "off",
+		"typescript/no-unsafe-argument": "off",
+		"typescript/no-unsafe-return": "off",
+		"typescript/prefer-nullish-coalescing": [
+			"error",
+			{
+				"ignorePrimitives": true
+			}
+		]
 	},
 	"env": {
 		"builtin": true

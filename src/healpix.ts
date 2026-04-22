@@ -418,7 +418,7 @@ function validatePixelIndex(pixel: number, nside: number) {
 // Normalizes and validates a rightAscension.
 function normalizeLongitude(rightAscension: number) {
 	if (!Number.isFinite(rightAscension)) {
-		throw new Error(`invalid longitude/right ascension: ${rightAscension}`)
+		throw new TypeError(`invalid longitude/right ascension: ${rightAscension}`)
 	}
 
 	return normalizeAngle(rightAscension)
@@ -427,7 +427,7 @@ function normalizeLongitude(rightAscension: number) {
 // Normalizes and validates a declination.
 function normalizeLatitude(declination: number) {
 	if (!Number.isFinite(declination)) {
-		throw new Error(`invalid latitude/declination: ${declination}`)
+		throw new TypeError(`invalid latitude/declination: ${declination}`)
 	}
 
 	if (declination < -PIOVERTWO - EPSILON || declination > PIOVERTWO + EPSILON) {
@@ -764,14 +764,14 @@ function normalizeRegionVertices(vertices: readonly Vertex[]) {
 	for (const vertex of vertices) {
 		const vector = normalizeVertexInput(vertex)
 
-		if (normalized.length > 0 && sameUnitVector(vector, normalized[normalized.length - 1])) {
+		if (normalized.length > 0 && sameUnitVector(vector, normalized.at(-1)!)) {
 			continue
 		}
 
 		normalized.push(vector)
 	}
 
-	if (normalized.length > 1 && sameUnitVector(normalized[0], normalized[normalized.length - 1])) {
+	if (normalized.length > 1 && sameUnitVector(normalized[0], normalized.at(-1)!)) {
 		normalized.pop()
 	}
 

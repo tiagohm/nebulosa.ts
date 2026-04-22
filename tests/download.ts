@@ -79,7 +79,7 @@ export async function download(name: FileName) {
 		if (!(await file.exists())) {
 			console.info('downloading:', name)
 			const startTime = Bun.nanoseconds()
-			const response = await fetch(FILES[name][0] || `${GITHUB_URL}${name}`, { signal })
+			const response = await fetch(FILES[name][0] ?? `${GITHUB_URL}${name}`, { signal })
 			const bytes = await response.blob()
 			const size = await Bun.write(file, bytes)
 			console.info('downloaded:', name, (Bun.nanoseconds() - startTime) / 1000000, 'ms', size, 'B')

@@ -499,7 +499,7 @@ function validatePositiveAngle(value: Angle, label: string) {
 // Validates a positive scalar input.
 function validatePositiveScalar(value: number, label: string) {
 	if (!Number.isFinite(value) || value <= 0) {
-		throw new Error(`invalid ${label}: ${value}`)
+		throw new TypeError(`invalid ${label}: ${value}`)
 	}
 
 	return value
@@ -508,7 +508,7 @@ function validatePositiveScalar(value: number, label: string) {
 // Normalizes required right ascension input or throws on invalid values.
 function normalizeCoordinateRightAscension(value: Angle) {
 	if (!Number.isFinite(value)) {
-		throw new Error(`invalid right ascension: ${value}`)
+		throw new TypeError(`invalid right ascension: ${value}`)
 	}
 
 	return normalizeAngle(value)
@@ -517,7 +517,7 @@ function normalizeCoordinateRightAscension(value: Angle) {
 // Validates a declination value in radians.
 function validateDeclination(declination: Angle) {
 	if (!Number.isFinite(declination) || declination < -PIOVERTWO - GEOMETRY_EPSILON || declination > PIOVERTWO + GEOMETRY_EPSILON) {
-		throw new Error(`invalid declination: ${declination}`)
+		throw new TypeError(`invalid declination: ${declination}`)
 	}
 
 	return clamp(declination, -PIOVERTWO, PIOVERTWO)

@@ -129,8 +129,8 @@ export class SimpleXmlParser {
 	#appendNode(attributes: XmlNodeAttributes, push: boolean = true): XmlNode {
 		const node: XmlNode = { name: this.#tag.text(), attributes, children: [], text: '' }
 
-		if (this.#tree.length) {
-			this.#tree[this.#tree.length - 1].children.push(node)
+		if (this.#tree.length > 0) {
+			this.#tree.at(-1)!.children.push(node)
 		}
 
 		if (push) this.#tree.push(node)
@@ -142,7 +142,7 @@ export class SimpleXmlParser {
 
 	// Append the current text segment to the active node without losing mixed content.
 	#appendText() {
-		if (!this.#tree.length) {
+		if (this.#tree.length === 0) {
 			this.#text.reset()
 			return
 		}
@@ -152,7 +152,7 @@ export class SimpleXmlParser {
 
 		if (!value) return
 
-		const node = this.#tree[this.#tree.length - 1]
+		const node = this.#tree.at(-1)!
 		node.text += value
 	}
 

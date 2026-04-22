@@ -182,7 +182,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		for (const zone of zoneNumbers) {
 			const ranges = await this.#zoneRangesForQuery(zone, query)
 
-			if (!ranges.length) continue
+			if (ranges.length === 0) continue
 
 			for (const [startRecord, endRecord] of ranges) {
 				yield* this.#streamZoneRange(zone, startRecord, endRecord)
@@ -571,20 +571,20 @@ function zoneIntersectsDecBox(zone: number, minDec: Angle, maxDec: Angle) {
 
 // Merges overlapping native record ranges and clamps them to a zone length.
 function mergeRanges(ranges: readonly Vertex[], recordCount: number) {
-	if (!ranges.length) return []
+	if (ranges.length === 0) return []
 
 	const sorted = [...ranges]
 		.map((e) => [Math.max(1, e[0]), Math.min(recordCount, e[1])] as const)
 		.filter((e) => e[1] >= e[0])
 		.sort((left, right) => left[0] - right[0])
 
-	if (!sorted.length) return []
+	if (sorted.length === 0) return []
 
 	const merged: Vertex[] = [sorted[0]]
 
 	for (let i = 1; i < sorted.length; i++) {
 		const current = sorted[i]
-		const last = merged[merged.length - 1]
+		const last = merged.at(-1)!
 
 		if (current[0] <= last[1] + 1) {
 			merged[merged.length - 1] = [last[0], Math.max(last[1], current[1])] as const

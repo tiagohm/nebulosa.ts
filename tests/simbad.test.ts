@@ -50,19 +50,19 @@ describe.serial.skipIf(SKIP)('simbad catalog', () => {
 	test('query around cone region', async () => {
 		const stars = await catalog.queryCone(centerRA, centerDEC, radius)
 		expect(stars.find((e) => e.id === sourceId)).toBeDefined()
-		expect(stars[0].magnitude).toBeLessThanOrEqual(stars[stars.length - 1].magnitude)
+		expect(stars[0].magnitude).toBeLessThanOrEqual(stars.at(-1)!.magnitude)
 	})
 
 	test('query around triangle region', async () => {
 		const stars = await catalog.queryTriangle([centerRA - radius, centerDEC - radius], [centerRA + radius, centerDEC - radius], [centerRA, centerDEC + radius])
 		expect(stars.find((e) => e.id === sourceId)).toBeDefined()
-		expect(stars[0].magnitude).toBeLessThanOrEqual(stars[stars.length - 1].magnitude)
+		expect(stars[0].magnitude).toBeLessThanOrEqual(stars.at(-1)!.magnitude)
 	})
 
 	test('query around box region', async () => {
 		const stars = await catalog.queryBox(centerRA - radius, centerRA + radius, centerDEC - radius, centerDEC + radius)
 		expect(stars.find((e) => e.id === sourceId)).toBeDefined()
-		expect(stars[0].magnitude).toBeLessThanOrEqual(stars[stars.length - 1].magnitude)
+		expect(stars[0].magnitude).toBeLessThanOrEqual(stars.at(-1)!.magnitude)
 	})
 
 	test('query around polygon region', async () => {
@@ -73,6 +73,6 @@ describe.serial.skipIf(SKIP)('simbad catalog', () => {
 			[centerRA - radius, centerDEC],
 		])
 		expect(stars.find((e) => e.id === sourceId)).toBeDefined()
-		expect(stars[0].magnitude).toBeLessThanOrEqual(stars[stars.length - 1].magnitude)
+		expect(stars[0].magnitude).toBeLessThanOrEqual(stars.at(-1)!.magnitude)
 	})
 })

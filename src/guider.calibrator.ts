@@ -725,7 +725,7 @@ export class GuidingCalibrator {
 
 	// Updates the mutable diagnostics snapshot used by tests and callers.
 	#updateDiagnostics(frame: GuideFrame, filtered: FilteredStars, notes: readonly string[], pendingPulse?: CalibrationPulseCommand) {
-		const raNet = this.state.raSamples.length > 0 ? this.state.raSamples[this.state.raSamples.length - 1].netDistance : 0
+		const raNet = this.state.raSamples.length > 0 ? this.state.raSamples.at(-1)!.netDistance : 0
 		const decNet = computeDecTravel(this.state.decSamples)
 		const clearingDistance = Math.hypot(this.state.currentX - this.state.startX, this.state.currentY - this.state.startY)
 		this.state.lastDiagnostics = {
@@ -773,7 +773,7 @@ export class GuidingCalibrator {
 	#transitionTo(phase: GuidingCalibrationPhase) {
 		this.state.phase = phase
 
-		if (this.state.phaseHistory[this.state.phaseHistory.length - 1] !== phase) {
+		if (this.state.phaseHistory.at(-1) !== phase) {
 			this.state.phaseHistory.push(phase)
 		}
 	}

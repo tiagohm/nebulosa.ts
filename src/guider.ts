@@ -847,7 +847,7 @@ export class Guider {
 			return
 		}
 
-		const previous = this.state.lockSamples[this.state.lockSamples.length - 1]
+		const previous = this.state.lockSamples.at(-1)
 		const preferred = previous === undefined ? pickInitialLockStar(filtered.accepted, this.config.initialPosition) : pickNearestGuideStar(filtered.accepted, previous.x, previous.y)
 
 		if (preferred === undefined) {
@@ -899,7 +899,7 @@ export class Guider {
 		this.state.referenceY = this.config.referencePosition?.[1] ?? referenceY
 		this.state.measurementOriginX = preferred.x
 		this.state.measurementOriginY = preferred.y
-		this.state.referenceStars = this.state.lockSamples[this.state.lockSamples.length - 1].stars.slice()
+		this.state.referenceStars = this.state.lockSamples.at(-1)!.stars.slice()
 		this.state.state = 'guiding'
 		this.#updateDiagnostics(
 			frame,

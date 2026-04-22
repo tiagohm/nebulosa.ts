@@ -197,7 +197,7 @@ function transformAgreement(expected: SimilarityTransform | AffineTransform, act
 function expectTransformAgreement(expected: SimilarityTransform | AffineTransform, actual: SimilarityTransform | AffineTransform, current: readonly DetectedStar[]) {
 	const agreement = transformAgreement(expected, actual!, current)
 	expect(medianOf(agreement)).toBeLessThan(0.05)
-	expect(agreement[agreement.length - 1]).toBeLessThan(0.25)
+	expect(agreement.at(-1)).toBeLessThan(0.25)
 }
 
 describe('triangle descriptors', () => {

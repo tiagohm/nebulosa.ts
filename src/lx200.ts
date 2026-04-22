@@ -111,7 +111,7 @@ export class Lx200ProtocolServer {
 
 			switch (command) {
 				// LX200 protocol detection.
-				case '#\x06':
+				case '#\u0006':
 					return this.#ack(socket)
 				// Get Telescope Product Name
 				case '#:GVP#':
@@ -185,38 +185,38 @@ export class Lx200ProtocolServer {
 				default:
 					// Set target object RA
 					if (command.startsWith('#:Sr')) {
-						const ra = parseAngle(command.substring(4), true)
+						const ra = parseAngle(command.slice(4), true)
 						if (ra !== undefined) this.#coordinates[0] = ra
 						return this.#one(socket)
 					}
 					// Set target object declination
 					else if (command.startsWith('#:Sd')) {
-						const dec = parseAngle(command.substring(4))
+						const dec = parseAngle(command.slice(4))
 						if (dec !== undefined) this.#coordinates[1] = dec
 						return this.#one(socket)
 					}
 					// Set current site’s longitude
 					else if (command.startsWith('#:Sg')) {
-						const longitude = parseAngle(command.substring(4))
+						const longitude = parseAngle(command.slice(4))
 						if (longitude !== undefined) this.options.handler.longitude(this, -longitude)
 						return this.#one(socket)
 					}
 					// Sets the current site latitude
 					else if (command.startsWith('#:St')) {
-						const latitude = parseAngle(command.substring(4))
+						const latitude = parseAngle(command.slice(4))
 						if (latitude !== undefined) this.options.handler.latitude(this, latitude)
 						return this.#one(socket)
 					}
 					// Set the number of hours added to local time to yield UTC
 					else if (command.startsWith('#:SG')) {
-						const hours = -Number(command.substring(4, command.length - 1))
+						const hours = -Number(command.slice(4, command.length - 1))
 						this.#utcOffset = Math.trunc(hours * 60)
 						this.#handleDateTimeAndOffset()
 						return this.#one(socket)
 					}
 					// Set the local Time
 					else if (command.startsWith('#:SL')) {
-						const [h, m, s] = command.substring(4, command.length - 1).split(':')
+						const [h, m, s] = command.slice(4, command.length - 1).split(':')
 						this.#utc[3] = +h
 						this.#utc[4] = +m
 						this.#utc[5] = +s
@@ -225,7 +225,7 @@ export class Lx200ProtocolServer {
 					}
 					// Change Handbox Date to MM/DD/YY
 					else if (command.startsWith('#:SC')) {
-						const [m, d, y] = command.substring(4, command.length - 1).split('/')
+						const [m, d, y] = command.slice(4, command.length - 1).split('/')
 						this.#utc[0] = 2000 + +y
 						this.#utc[1] = +m
 						this.#utc[2] = +d

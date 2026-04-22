@@ -231,8 +231,8 @@ export abstract class ADCPeripheral<D extends Peripheral = never> extends Periph
 	abstract calculate(value: number): boolean
 
 	pinChange(client: FirmataClient, pin: Pin) {
-		if (this.client === client && pin.id === this.pin) {
-			if (this.calculate(pin.value)) this.fire()
+		if (this.client === client && pin.id === this.pin && this.calculate(pin.value)) {
+			this.fire()
 		}
 	}
 }
