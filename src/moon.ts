@@ -29,6 +29,9 @@ export interface LunarEclipse {
 }
 
 const DEFAULT_MINIMAL_LUNAR_ECLIPSE_TIME = time(0, 0, Timescale.TT, false)
+const LUNAR_ECLIPSE_UMBRA_LIMIT = 1.0128
+const LUNAR_ECLIPSE_PENUMBRA_LIMIT = 1.5573
+const LUNAR_ECLIPSE_MAGNITUDE_DENOMINATOR = 0.545
 
 // Computes the parallax of the Moon at a given distance
 export function moonParallax(distance: Distance) {
@@ -108,96 +111,130 @@ export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean):
 
 		// Multiplier related to the eccentricity of the Earth orbit
 		const E = 1 - 0.002516 * T - 0.0000074 * T2
+		const E2 = E * E
+		const sinSM = Math.sin(SM)
+		const cosSM = Math.cos(SM)
+		const sin2SM = Math.sin(2 * SM)
+		const sin3SM = Math.sin(3 * SM)
+		const sinMM = Math.sin(MM)
+		const cosMM = Math.cos(MM)
+		const sin2MM = Math.sin(2 * MM)
+		const sin3MM = Math.sin(3 * MM)
+		const sin4MM = Math.sin(4 * MM)
+		const twoF = 2 * F
+		const sin2F = Math.sin(twoF)
+		const cos2F = Math.cos(twoF)
+		const mmPlusSm = MM + SM
+		const mmMinusSm = MM - SM
+		const sinMMPlusSM = Math.sin(mmPlusSm)
+		const sinMMMinusSM = Math.sin(mmMinusSm)
+		const cosMMPlusSM = Math.cos(mmPlusSm)
+		const cosMMMinusSM = Math.cos(mmMinusSm)
+		const mmMinus2F = MM - twoF
+		const mmPlus2F = MM + twoF
+		const sinMMMinus2F = Math.sin(mmMinus2F)
+		const sinMMPlus2F = Math.sin(mmPlus2F)
+		const smPlus2F = SM + twoF
+		const smMinus2F = SM - twoF
+		const sinSMPlus2F = Math.sin(smPlus2F)
+		const sinSMMinus2F = Math.sin(smMinus2F)
+		const sinMMPlus2SM = Math.sin(MM + 2 * SM)
+		const sin2MMMinus2F = Math.sin(2 * MM - twoF)
+		const sinMMPlusSMMinus2F = Math.sin(mmPlusSm - twoF)
+		const sin2MMPlus2F = Math.sin(2 * MM + twoF)
+		const sinMMPlusSMPlus2F = Math.sin(mmPlusSm + twoF)
+		const sinMMMinusSMPlus2F = Math.sin(mmMinusSm + twoF)
+		const sinMMMinusSMMinus2F = Math.sin(mmMinusSm - twoF)
+		const sin3MMPlusSM = Math.sin(3 * MM + SM)
+		const sin2MMPlusSM = Math.sin(2 * MM + SM)
+		const sin2MMMinusSM = Math.sin(2 * MM - SM)
+		const sinMMMinus2SM = Math.sin(MM - 2 * SM)
 
 		let addition = 0
 
 		if (phase === 'NEW') {
 			addition =
-				-0.4072 * Math.sin(MM) +
-				0.17241 * E * Math.sin(SM) +
-				0.01608 * Math.sin(2 * MM) +
-				0.01039 * Math.sin(2 * F) +
-				0.00739 * E * Math.sin(MM - SM) -
-				0.00514 * E * Math.sin(MM + SM) +
-				0.00208 * E * E * Math.sin(2 * SM) -
-				0.00111 * Math.sin(MM - 2 * F) -
-				0.00057 * Math.sin(MM + 2 * F) +
-				0.00056 * E * Math.sin(2 * MM + SM) -
-				0.00042 * Math.sin(3 * MM) +
-				0.00042 * E * Math.sin(SM + 2 * F) +
-				0.00038 * E * Math.sin(SM - 2 * F) -
-				0.00024 * E * Math.sin(2 * MM - SM) -
+				-0.4072 * sinMM +
+				0.17241 * E * sinSM +
+				0.01608 * sin2MM +
+				0.01039 * sin2F +
+				0.00739 * E * sinMMMinusSM -
+				0.00514 * E * sinMMPlusSM +
+				0.00208 * E2 * sin2SM -
+				0.00111 * sinMMMinus2F -
+				0.00057 * sinMMPlus2F +
+				0.00056 * E * sin2MMPlusSM -
+				0.00042 * sin3MM +
+				0.00042 * E * sinSMPlus2F +
+				0.00038 * E * sinSMMinus2F -
+				0.00024 * E * sin2MMMinusSM -
 				0.00017 * Math.sin(omega) -
-				0.00007 * Math.sin(MM + 2 * SM) +
-				0.00004 * Math.sin(2 * MM - 2 * F) +
-				0.00004 * Math.sin(3 * SM) +
-				0.00003 * Math.sin(MM + SM - 2 * F) +
-				0.00003 * Math.sin(2 * MM + 2 * F) -
-				0.00003 * Math.sin(MM + SM + 2 * F) +
-				0.00003 * Math.sin(MM - SM + 2 * F) -
-				0.00002 * Math.sin(MM - SM - 2 * F) -
-				0.00002 * Math.sin(3 * MM + SM) +
-				0.00002 * Math.sin(4 * MM)
-		}
-
-		if (phase === 'FULL') {
+				0.00007 * sinMMPlus2SM +
+				0.00004 * sin2MMMinus2F +
+				0.00004 * sin3SM +
+				0.00003 * sinMMPlusSMMinus2F +
+				0.00003 * sin2MMPlus2F -
+				0.00003 * sinMMPlusSMPlus2F +
+				0.00003 * sinMMMinusSMPlus2F -
+				0.00002 * sinMMMinusSMMinus2F -
+				0.00002 * sin3MMPlusSM +
+				0.00002 * sin4MM
+		} else if (phase === 'FULL') {
 			addition =
-				-0.40614 * Math.sin(MM) +
-				0.17302 * E * Math.sin(SM) +
-				0.01614 * Math.sin(2 * MM) +
-				0.01043 * Math.sin(2 * F) +
-				0.00734 * E * Math.sin(MM - SM) -
-				0.00515 * E * Math.sin(MM + SM) +
-				0.00209 * E * E * Math.sin(2 * SM) -
-				0.00111 * Math.sin(MM - 2 * F) -
-				0.00057 * Math.sin(MM + 2 * F) +
-				0.00056 * E * Math.sin(2 * MM + SM) -
-				0.00042 * Math.sin(3 * MM) +
-				0.00042 * E * Math.sin(SM + 2 * F) +
-				0.00038 * E * Math.sin(SM - 2 * F) -
-				0.00024 * E * Math.sin(2 * MM - SM) -
+				-0.40614 * sinMM +
+				0.17302 * E * sinSM +
+				0.01614 * sin2MM +
+				0.01043 * sin2F +
+				0.00734 * E * sinMMMinusSM -
+				0.00515 * E * sinMMPlusSM +
+				0.00209 * E2 * sin2SM -
+				0.00111 * sinMMMinus2F -
+				0.00057 * sinMMPlus2F +
+				0.00056 * E * sin2MMPlusSM -
+				0.00042 * sin3MM +
+				0.00042 * E * sinSMPlus2F +
+				0.00038 * E * sinSMMinus2F -
+				0.00024 * E * sin2MMMinusSM -
 				0.00017 * Math.sin(omega) -
-				0.00007 * Math.sin(MM + 2 * SM) +
-				0.00004 * Math.sin(2 * MM - 2 * F) +
-				0.00004 * Math.sin(3 * SM) +
-				0.00003 * Math.sin(MM + SM - 2 * F) +
-				0.00003 * Math.sin(2 * MM + 2 * F) -
-				0.00003 * Math.sin(MM + SM + 2 * F) +
-				0.00003 * Math.sin(MM - SM + 2 * F) -
-				0.00002 * Math.sin(MM - SM - 2 * F) -
-				0.00002 * Math.sin(3 * MM + SM) +
-				0.00002 * Math.sin(4 * MM)
-		}
-
-		if (phase === 'FIRST_QUARTER' || phase === 'LAST_QUARTER') {
+				0.00007 * sinMMPlus2SM +
+				0.00004 * sin2MMMinus2F +
+				0.00004 * sin3SM +
+				0.00003 * sinMMPlusSMMinus2F +
+				0.00003 * sin2MMPlus2F -
+				0.00003 * sinMMPlusSMPlus2F +
+				0.00003 * sinMMMinusSMPlus2F -
+				0.00002 * sinMMMinusSMMinus2F -
+				0.00002 * sin3MMPlusSM +
+				0.00002 * sin4MM
+		} else {
 			addition =
-				-0.62801 * Math.sin(MM) +
-				0.17172 * E * Math.sin(SM) -
-				0.01183 * E * Math.sin(MM + SM) +
-				0.00862 * Math.sin(2 * MM) +
-				0.00804 * Math.sin(2 * F) +
-				0.00454 * E * Math.sin(MM - SM) +
-				0.00204 * E * E * Math.sin(2 * SM) -
-				0.0018 * Math.sin(MM - 2 * F) -
-				0.0007 * Math.sin(MM + 2 * F) -
-				0.0004 * Math.sin(3 * MM) -
-				0.00034 * E * Math.sin(2 * MM - SM) +
-				0.00032 * E * Math.sin(SM + 2 * F) +
-				0.00032 * E * Math.sin(SM - 2 * F) -
-				0.00028 * E * E * Math.sin(MM + 2 * SM) +
-				0.00027 * E * Math.sin(2 * MM + SM) -
+				-0.62801 * sinMM +
+				0.17172 * E * sinSM -
+				0.01183 * E * sinMMPlusSM +
+				0.00862 * sin2MM +
+				0.00804 * sin2F +
+				0.00454 * E * sinMMMinusSM +
+				0.00204 * E2 * sin2SM -
+				0.0018 * sinMMMinus2F -
+				0.0007 * sinMMPlus2F -
+				0.0004 * sin3MM -
+				0.00034 * E * sin2MMMinusSM +
+				0.00032 * E * sinSMPlus2F +
+				0.00032 * E * sinSMMinus2F -
+				0.00028 * E2 * sinMMPlus2SM +
+				0.00027 * E * sin2MMPlusSM -
 				0.00017 * Math.sin(omega) -
-				0.00005 * Math.sin(MM - SM - 2 * F) +
-				0.00004 * Math.sin(2 * MM + 2 * F) -
-				0.00004 * Math.sin(MM + SM + 2 * F) +
-				0.00004 * Math.sin(MM - 2 * SM) +
-				0.00003 * Math.sin(MM + SM - 2 * F) +
-				0.00003 * Math.sin(3 * SM) +
-				0.00002 * Math.sin(2 * MM - 2 * F) +
-				0.00002 * Math.sin(MM - SM + 2 * F) -
-				0.00002 * Math.sin(3 * MM + SM)
+				0.00005 * sinMMMinusSMMinus2F +
+				0.00004 * sin2MMPlus2F -
+				0.00004 * sinMMPlusSMPlus2F +
+				0.00004 * sinMMMinus2SM +
+				0.00003 * sinMMPlusSMMinus2F +
+				0.00003 * sin3SM +
+				0.00002 * sin2MMMinus2F +
+				0.00002 * sinMMMinusSMPlus2F -
+				0.00002 * sin3MMPlusSM
 
-			const W = 0.00306 - 0.00038 * E * Math.cos(SM) + 0.00026 * Math.cos(MM) - 0.00002 * Math.cos(MM - SM) + 0.00002 * Math.cos(MM + SM) + 0.00002 * Math.cos(2 * F)
+			const W = 0.00306 - 0.00038 * E * cosSM + 0.00026 * cosMM - 0.00002 * cosMMMinusSM + 0.00002 * cosMMPlusSM + 0.00002 * cos2F
 
 			if (phase === 'FIRST_QUARTER') addition += W
 			else addition -= W
@@ -280,37 +317,63 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 			// Multiplier related to the eccentricity of the Earth orbit
 			const E = 1 - 0.002516 * T - 0.0000074 * T2
 
-			const F1 = F - 0.02665 * DEG2RAD * Math.sin(omega)
+			const sinSM = Math.sin(SM)
+			const cosSM = Math.cos(SM)
+			const sin2SM = Math.sin(2 * SM)
+			const cos2SM = Math.cos(2 * SM)
+			const sinMM = Math.sin(MM)
+			const cosMM = Math.cos(MM)
+			const sin2MM = Math.sin(2 * MM)
+			const cos2MM = Math.cos(2 * MM)
+			const sinOmega = Math.sin(omega)
+			const mmPlusSm = MM + SM
+			const mmMinusSm = MM - SM
+			const sinMMPlusSM = Math.sin(mmPlusSm)
+			const cosMMPlusSM = Math.cos(mmPlusSm)
+			const sinMMMinusSM = Math.sin(mmMinusSm)
+			const cosMMMinusSM = Math.cos(mmMinusSm)
+			const F1 = F - 0.02665 * DEG2RAD * sinOmega
 			const A1 = deg(299.77 + 0.107408 * k - 0.009173 * T2)
+			const sinF1 = Math.sin(F1)
+			const cosF1 = Math.cos(F1)
+			const sin2F1 = Math.sin(2 * F1)
+			const sinMMMinus2F1 = Math.sin(MM - 2 * F1)
+			const sinMMPlus2F1 = Math.sin(MM + 2 * F1)
+			const sin2MMPlusSM = Math.sin(2 * MM + SM)
+			const sin3MM = Math.sin(3 * MM)
+			const sinSMPlus2F1 = Math.sin(SM + 2 * F1)
+			const sinSMMinus2F1 = Math.sin(SM - 2 * F1)
+			const sin2MMMinusSM = Math.sin(2 * MM - SM)
 
-			const P = 0.207 * E * Math.sin(SM) + 0.0024 * E * Math.sin(2 * SM) - 0.0392 * Math.sin(MM) + 0.0116 * Math.sin(2 * MM) - 0.0073 * E * Math.sin(MM + SM) + 0.0067 * E * Math.sin(MM - SM) + 0.0118 * Math.sin(2 * F1)
-			const Q = 5.2207 - 0.0048 * E * Math.cos(SM) + 0.002 * E * Math.cos(2 * SM) - 0.3299 * Math.cos(MM) - 0.006 * E * Math.cos(MM + SM) + 0.0041 * E * Math.cos(MM - SM)
-			const W = Math.abs(Math.cos(F1))
-			const gamma = (P * Math.cos(F1) + Q * Math.sin(F1)) * (1 - 0.0048 * W)
-			const u = 0.0059 + 0.0046 * E * Math.cos(SM) - 0.0182 * Math.cos(MM) + 0.0004 * Math.cos(2 * MM) - 0.0005 * E * Math.cos(SM + MM)
+			const P = 0.207 * E * sinSM + 0.0024 * E * sin2SM - 0.0392 * sinMM + 0.0116 * sin2MM - 0.0073 * E * sinMMPlusSM + 0.0067 * E * sinMMMinusSM + 0.0118 * sin2F1
+			const Q = 5.2207 - 0.0048 * E * cosSM + 0.002 * E * cos2SM - 0.3299 * cosMM - 0.006 * E * cosMMPlusSM + 0.0041 * E * cosMMMinusSM
+			const W = Math.abs(cosF1)
+			const gamma = (P * cosF1 + Q * sinF1) * (1 - 0.0048 * W)
+			const u = 0.0059 + 0.0046 * E * cosSM - 0.0182 * cosMM + 0.0004 * cos2MM - 0.0005 * cosMMPlusSM
 			const rho = 1.2848 + u
 			const sigma = 0.7403 - u
-			let mag = (1.0128 - u - Math.abs(gamma)) / 0.545
+			const absGamma = Math.abs(gamma)
+			let mag = (LUNAR_ECLIPSE_UMBRA_LIMIT - u - absGamma) / LUNAR_ECLIPSE_MAGNITUDE_DENOMINATOR
 
 			const timeOfGreatestEclipseDay = 2451550 + 29 * k
 			const timeOfGreatestEclipseFraction = 0.530588861 * k + 0.09766 + 0.00015437 * T - 0.00000015 * T2 + 0.00000000073 * T3
 			const timeOfGreatestEclipseCorrection =
-				-0.4065 * Math.sin(MM) +
-				0.1727 * E * Math.sin(SM) +
-				0.0161 * Math.sin(2 * MM) -
-				0.0097 * Math.sin(2 * F1) +
-				0.0073 * E * Math.sin(MM - SM) -
-				0.005 * E * Math.sin(MM + SM) -
-				0.0023 * Math.sin(MM - 2 * F1) +
-				0.0021 * E * Math.sin(2 * SM) +
-				0.0012 * Math.sin(MM + 2 * F1) +
-				0.0006 * E * Math.sin(2 * MM + SM) -
-				0.0004 * Math.sin(3 * MM) -
-				0.0003 * E * Math.sin(SM + 2 * F1) +
+				-0.4065 * sinMM +
+				0.1727 * E * sinSM +
+				0.0161 * sin2MM -
+				0.0097 * sin2F1 +
+				0.0073 * E * sinMMMinusSM -
+				0.005 * E * sinMMPlusSM -
+				0.0023 * sinMMMinus2F1 +
+				0.0021 * E * sin2SM +
+				0.0012 * sinMMPlus2F1 +
+				0.0006 * E * sin2MMPlusSM -
+				0.0004 * sin3MM -
+				0.0003 * E * sinSMPlus2F1 +
 				0.0003 * Math.sin(A1) -
-				0.0002 * E * Math.sin(SM - 2 * F1) -
-				0.0002 * E * Math.sin(2 * MM - SM) -
-				0.0002 * Math.sin(omega)
+				0.0002 * E * sinSMMinus2F1 -
+				0.0002 * E * sin2MMMinusSM -
+				0.0002 * sinOmega
 
 			if (mag >= 1) {
 				eclipse.type = 'TOTAL'
@@ -321,7 +384,7 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 			// Check if elipse is penumbral only
 			else {
 				eclipse.type = 'PENUMBRAL'
-				mag = (1.5573 + u - Math.abs(gamma)) / 0.545
+				mag = (LUNAR_ECLIPSE_PENUMBRA_LIMIT + u - absGamma) / LUNAR_ECLIPSE_MAGNITUDE_DENOMINATOR
 			}
 
 			// No eclipse, if both phases is less than 0.
@@ -347,10 +410,10 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 				eclipse.sigma = sigma
 				eclipse.u = u
 
-				const p = 1.0128 - u
+				const p = LUNAR_ECLIPSE_UMBRA_LIMIT - u
 				const t = 0.4678 - u
 				const n = 1 / (24 * (0.5458 + 0.04 * Math.cos(MM)))
-				const h = 1.5573 + u
+				const h = LUNAR_ECLIPSE_PENUMBRA_LIMIT + u
 				const g2 = gamma * gamma
 
 				const sdPartial = n * Math.sqrt(p * p - g2)
