@@ -1335,7 +1335,7 @@ function sampleImageValues(raw: ImageRawType, channels: number, width: number, h
 
 // Computes a percentile from a sorted numeric array.
 function percentileSorted(values: Float64Array, count: number, percentile: number) {
-	if (count <= 0) return NaN
+	if (count <= 0) return Number.NaN
 	if (count === 1) return values[0]
 	const clamped = clamp(percentile, 0, 1)
 	const index = clamped * (count - 1)

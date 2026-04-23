@@ -59,15 +59,15 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 	}
 
 	added(client: Client, device: string, property: DeviceProperty) {
-		this.#handlers.forEach((e) => e.added(client, device, property))
+		for (const e of this.#handlers) e.added(client, device, property)
 	}
 
 	updated(client: Client, device: string, property: DeviceProperty) {
-		this.#handlers.forEach((e) => e.updated(client, device, property))
+		for (const e of this.#handlers) e.updated(client, device, property)
 	}
 
 	removed(client: Client, device: string, property: DeviceProperty) {
-		this.#handlers.forEach((e) => e.removed(client, device, property))
+		for (const e of this.#handlers) e.removed(client, device, property)
 	}
 
 	names(client: Client | string) {
@@ -324,7 +324,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
-	add(device: D, client = device[CLIENT] as Client) {
+	add(device: D, client = device[CLIENT]!) {
 		if (!this.has(client, device.id)) {
 			this.devices.set(device.id, device)
 			this.clients.set(client.id, client)
@@ -1174,7 +1174,7 @@ export class WheelManager extends DeviceManager<Wheel> {
 
 	slots(wheel: Wheel, names: readonly string[], client = wheel[CLIENT]!) {
 		const elements: Record<string, string> = {}
-		names.forEach((name, index) => (elements[`FILTER_SLOT_NAME_${index + 1}`] = name))
+		for (let i = 0; i < names.length; i++) elements[`FILTER_SLOT_NAME_${i + 1}`] = names[i]
 		client.sendText({ device: wheel.name, name: 'FILTER_NAME', elements })
 	}
 
@@ -1725,7 +1725,8 @@ function handlePowerChannel(manager: DeviceManager<Power>, device: Power, messag
 	const channels = device[type]
 	let updated = false
 
-	entries.forEach(([name, entry], i) => {
+	for (let i = 0; i < entries.length; i++) {
+		const [name, entry] = entries[i]
 		const p = channels[i] ?? ({ type, name, label: entry.label ?? '', enabled: false, value: 0, min: 0, max: 0, step: 0 } satisfies PowerChannel)
 
 		if (tag[0] === 'd' && 'max' in entry) {
@@ -1743,7 +1744,7 @@ function handlePowerChannel(manager: DeviceManager<Power>, device: Power, messag
 			channels[i] = p
 			updated = true
 		}
-	})
+	}
 
 	if (entries.length < channels.length) {
 		channels.splice(entries.length, channels.length - entries.length)

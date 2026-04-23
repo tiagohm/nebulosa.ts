@@ -547,13 +547,13 @@ export class AlpacaServer {
 			}
 		}
 
-		this.options.camera?.list().forEach((e) => add(e, 'camera'))
-		this.options.mount?.list().forEach((e) => add(e, 'telescope'))
-		this.options.focuser?.list().forEach((e) => add(e, 'focuser'))
-		this.options.wheel?.list().forEach((e) => add(e, 'filterwheel'))
-		this.options.rotator?.list().forEach((e) => add(e, 'rotator'))
-		this.options.flatPanel?.list().forEach((e) => add(e, 'covercalibrator'))
-		this.options.cover?.list().forEach((e) => add(e, 'covercalibrator'))
+		if (this.options.camera) for (const e of this.options.camera.list()) add(e, 'camera')
+		if (this.options.mount) for (const e of this.options.mount.list()) add(e, 'telescope')
+		if (this.options.focuser) for (const e of this.options.focuser.list()) add(e, 'focuser')
+		if (this.options.wheel) for (const e of this.options.wheel.list()) add(e, 'filterwheel')
+		if (this.options.rotator) for (const e of this.options.rotator.list()) add(e, 'rotator')
+		if (this.options.flatPanel) for (const e of this.options.flatPanel.list()) add(e, 'covercalibrator')
+		if (this.options.cover) for (const e of this.options.cover.list()) add(e, 'covercalibrator')
 
 		return configuredDevices
 	}
@@ -1596,7 +1596,7 @@ export class AlpacaServer {
 async function params<T extends Record<string, string | number | boolean | undefined>>(req: Bun.BunRequest) {
 	const data = req.headers.get('Content-Type')?.startsWith('application/x-www-form-urlencoded') ? await req.formData() : undefined
 	const res: Record<string, string> = req.params
-	data?.forEach((value, key) => typeof value === 'string' && (res[key] = value))
+	if (data !== undefined) for (const [key, value] of data) if (typeof value === 'string') res[key] = value
 	return res as T
 }
 

@@ -21,7 +21,7 @@ export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, hig
 	const { raw, metadata } = image
 	const isColor = metadata.channels === 3
 	const { channel = DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS.channel, bits = DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS.bits } = options
-	const lut = new Float32Array(1 << bits).fill(NaN)
+	const lut = new Float32Array(1 << bits).fill(Number.NaN)
 	const max = lut.length - 1
 
 	const step = isColor && (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') ? 3 : 1
@@ -276,7 +276,7 @@ function backgroundNeutralizationMedian(raw: ImageRawType, lowerLimit: number, u
 		}
 	}
 
-	if (count === 0) return NaN
+	if (count === 0) return Number.NaN
 	if (count === 1) return samples[0]
 
 	return medianOf(samples.subarray(0, count).sort())
@@ -320,9 +320,9 @@ export function backgroundNeutralization(image: Image, options: Partial<Backgrou
 	if (image.metadata.channels !== 3) return image
 
 	const mode = options.mode ?? DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.mode
-	const targetBackground = Number.isFinite(options.targetBackground) ? clamp(options.targetBackground as number, 0, 1) : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.targetBackground
-	const lowerInput = Number.isFinite(options.lowerLimit) ? (options.lowerLimit as number) : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.lowerLimit
-	const upperInput = Number.isFinite(options.upperLimit) ? (options.upperLimit as number) : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.upperLimit
+	const targetBackground = Number.isFinite(options.targetBackground) ? clamp(options.targetBackground!, 0, 1) : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.targetBackground
+	const lowerInput = Number.isFinite(options.lowerLimit) ? options.lowerLimit! : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.lowerLimit
+	const upperInput = Number.isFinite(options.upperLimit) ? options.upperLimit! : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.upperLimit
 	const lowerLimit = Math.min(lowerInput, upperInput)
 	const upperLimit = Math.max(lowerInput, upperInput)
 

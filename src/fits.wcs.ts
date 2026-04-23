@@ -126,10 +126,10 @@ function invertForwardSip(header: FitsHeader, U: number, V: number, aOrder: numb
 function tanHeader(header: FitsHeader) {
 	if (!hasTanAxes(header)) return undefined
 
-	const crpix1 = numericKeyword(header, 'CRPIX1', NaN)
-	const crpix2 = numericKeyword(header, 'CRPIX2', NaN)
-	const crval1 = deg(numericKeyword(header, 'CRVAL1', NaN))
-	const crval2 = deg(numericKeyword(header, 'CRVAL2', NaN))
+	const crpix1 = numericKeyword(header, 'CRPIX1', Number.NaN)
+	const crpix2 = numericKeyword(header, 'CRPIX2', Number.NaN)
+	const crval1 = deg(numericKeyword(header, 'CRVAL1', Number.NaN))
+	const crval2 = deg(numericKeyword(header, 'CRVAL2', Number.NaN))
 	const lonpole = deg(numericKeyword(header, 'LONPOLE', 180))
 	const [cd11, cd12, cd21, cd22] = cdMatrix(header)
 	const scale = Math.max(Math.abs(cd11), Math.abs(cd12), Math.abs(cd21), Math.abs(cd22))

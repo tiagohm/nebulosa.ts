@@ -169,7 +169,7 @@ export function refractedAltitude(altitude: Angle, refraction: RefractionParamet
 		const dZ = refa * Math.tan(refractedZenithDistance) + refb * Math.tan(refractedZenithDistance) ** 3
 
 		if (Number.isNaN(dZ)) {
-			return NaN
+			return Number.NaN
 		}
 
 		const originalZenithDistance = refractedZenithDistance + dZ
@@ -181,5 +181,5 @@ export function refractedAltitude(altitude: Angle, refraction: RefractionParamet
 		roller += increment
 	}
 
-	return NaN
+	return Number.NaN
 }

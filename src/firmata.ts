@@ -592,75 +592,75 @@ export class FirmataFsm {
 	}
 
 	ready() {
-		this.#handlers.forEach((handler) => handler.ready?.(this.client))
+		for (const handler of this.#handlers) handler.ready?.(this.client)
 	}
 
 	pinChange(pin: Pin) {
-		this.#handlers.forEach((handler) => handler.pinChange?.(this.client, pin))
+		for (const handler of this.#handlers) handler.pinChange?.(this.client, pin)
 	}
 
 	customMessage(data: Buffer) {
-		this.#handlers.forEach((handler) => handler.customMessage?.(this.client, data))
+		for (const handler of this.#handlers) handler.customMessage?.(this.client, data)
 	}
 
 	version(major: number, minor: number) {
-		this.#handlers.forEach((handler) => handler.version?.(this.client, major, minor))
+		for (const handler of this.#handlers) handler.version?.(this.client, major, minor)
 	}
 
 	firmwareMessage(major: number, minor: number, name: string) {
-		this.#handlers.forEach((handler) => handler.firmwareMessage?.(this.client, major, minor, name))
+		for (const handler of this.#handlers) handler.firmwareMessage?.(this.client, major, minor, name)
 	}
 
 	systemReset() {
-		this.#handlers.forEach((handler) => handler.systemReset?.(this.client))
+		for (const handler of this.#handlers) handler.systemReset?.(this.client)
 	}
 
 	error(command: number) {
-		this.#handlers.forEach((handler) => handler.error?.(this.client, command))
+		for (const handler of this.#handlers) handler.error?.(this.client, command)
 	}
 
 	digitalMessage(id: number, value: number) {
-		this.#handlers.forEach((handler) => handler.digitalMessage?.(this.client, id, value))
+		for (const handler of this.#handlers) handler.digitalMessage?.(this.client, id, value)
 	}
 
 	analogMessage(port: number, value: number) {
-		this.#handlers.forEach((handler) => handler.analogMessage?.(this.client, port, value))
+		for (const handler of this.#handlers) handler.analogMessage?.(this.client, port, value)
 	}
 
 	pinCapability(id: number, modes: Set<PinMode>) {
-		this.#handlers.forEach((handler) => handler.pinCapability?.(this.client, id, modes))
+		for (const handler of this.#handlers) handler.pinCapability?.(this.client, id, modes)
 	}
 
 	pinCapabilitiesFinished() {
-		this.#handlers.forEach((handler) => handler.pinCapabilitiesFinished?.(this.client))
+		for (const handler of this.#handlers) handler.pinCapabilitiesFinished?.(this.client)
 	}
 
 	analogMapping(mapping: AnalogMapping) {
-		this.#handlers.forEach((handler) => handler.analogMapping?.(this.client, mapping))
+		for (const handler of this.#handlers) handler.analogMapping?.(this.client, mapping)
 	}
 
 	pinState(id: number, mode: PinMode, value: number) {
-		this.#handlers.forEach((handler) => handler.pinState?.(this.client, id, mode, value))
+		for (const handler of this.#handlers) handler.pinState?.(this.client, id, mode, value)
 	}
 
 	textMessage(message: string) {
-		this.#handlers.forEach((handler) => handler.textMessage?.(this.client, message))
+		for (const handler of this.#handlers) handler.textMessage?.(this.client, message)
 	}
 
 	twoWireMessage(address: number, register: number, data: Buffer) {
-		this.#handlers.forEach((handler) => handler.twoWireMessage?.(this.client, address, register, data))
+		for (const handler of this.#handlers) handler.twoWireMessage?.(this.client, address, register, data)
 	}
 
 	oneWireSearchReply(pin: number, addresses: readonly Buffer[], alarms: boolean) {
-		this.#handlers.forEach((handler) => handler.oneWireSearchReply?.(this.client, pin, addresses, alarms))
+		for (const handler of this.#handlers) handler.oneWireSearchReply?.(this.client, pin, addresses, alarms)
 	}
 
 	oneWireReadReply(pin: number, correlationId: number, data: Buffer) {
-		this.#handlers.forEach((handler) => handler.oneWireReadReply?.(this.client, pin, correlationId, data))
+		for (const handler of this.#handlers) handler.oneWireReadReply?.(this.client, pin, correlationId, data)
 	}
 
 	close() {
-		this.#handlers.forEach((handler) => handler.close?.(this.client))
+		for (const handler of this.#handlers) handler.close?.(this.client)
 	}
 }
 

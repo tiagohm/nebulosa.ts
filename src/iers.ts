@@ -18,7 +18,7 @@ export interface Iers {
 // Parses one fixed-width numeric field and preserves blanks as NaN.
 function parseNumber(line: string, start: number, end: number) {
 	const value = line.slice(start, end).trim()
-	return value ? +value : NaN
+	return value ? +value : Number.NaN
 }
 
 // Returns the preferred finite value without treating zero as missing.
@@ -35,7 +35,7 @@ function modifiedJulianDate(time: Time) {
 function interpolate(time: Time, input: NumberArray, data: NumberArray) {
 	const n = input.length
 
-	if (!n) return NaN
+	if (!n) return Number.NaN
 
 	const mjd = modifiedJulianDate(time)
 	const day = Math.floor(mjd)
@@ -53,7 +53,7 @@ function interpolate(time: Time, input: NumberArray, data: NumberArray) {
 		const a = data[k - 1]
 		const b = data[k]
 
-		return Number.isFinite(a) && Number.isFinite(b) ? a + ((mjd - t0) / (t1 - t0)) * (b - a) : NaN
+		return Number.isFinite(a) && Number.isFinite(b) ? a + ((mjd - t0) / (t1 - t0)) * (b - a) : Number.NaN
 	}
 
 	// Exact hits on the final row must clamp to the last known value.
@@ -64,7 +64,7 @@ function interpolate(time: Time, input: NumberArray, data: NumberArray) {
 	const a = data[i]
 	const b = data[i + 1]
 
-	return Number.isFinite(a) && Number.isFinite(b) ? a + ((mjd - t0) / (t1 - t0)) * (b - a) : NaN
+	return Number.isFinite(a) && Number.isFinite(b) ? a + ((mjd - t0) / (t1 - t0)) * (b - a) : Number.NaN
 }
 
 export abstract class IersBase implements Iers {

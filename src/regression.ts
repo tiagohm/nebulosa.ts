@@ -521,7 +521,7 @@ export function regressionScore(regression: Regression, x: Readonly<NumberArray>
 	}
 
 	const denom = Math.sqrt((n * sx2 - sx * sx) * (n * sy2 - sy * sy))
-	const r = denom === 0 ? NaN : (n * sxy - sx * sy) / denom
+	const r = denom === 0 ? Number.NaN : (n * sxy - sx * sy) / denom
 	const r2 = r * r
 	const rmsd = Math.sqrt(rss / n)
 
