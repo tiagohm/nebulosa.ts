@@ -177,6 +177,23 @@ test('add many, update, and remove keep the index consistent', () => {
 	expect(idsOf(index.queryCone(deg(30), 0, deg(10)))).toEqual([])
 })
 
+test('add many validates the whole batch before mutating the index', () => {
+	const index = new HealpixIndex<string>({ nside: 8 })
+
+	index.add('existing', deg(20), 0)
+
+	expect(() =>
+		index.addMany([
+			{ id: 'existing', rightAscension: deg(90), declination: 0 },
+			{ id: 'new', rightAscension: 0, declination: PIOVERTWO + deg(1) },
+		]),
+	).toThrow('invalid latitude/declination')
+
+	expect(index.size).toBe(1)
+	expect(index.get('new')).toBeUndefined()
+	expect(index.get('existing')?.rightAscension).toBeCloseTo(deg(20), 14)
+})
+
 test('circle cover includes the center pixel for a zero-radius query', () => {
 	const pixel = coordToPixel(8, deg(15), deg(-10))
 	const [longitude, latitude] = pixelToCenter(8, pixel)
