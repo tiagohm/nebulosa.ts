@@ -278,7 +278,7 @@ export class SimbadCatalog extends BaseStarCatalog<SimbadCatalogEntry> {
 	// Executes one Simbad TSV query with only the columns needed by the catalog API.
 	async #query(where: string, limit?: number) {
 		const top = limit && limit > 0 ? `TOP ${Math.trunc(limit)} ` : ''
-		const query = `SELECT ${top}${SIMBAD_COLUMNS} FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE ${where} ORDER BY f.V ASC`
+		const query = `SELECT ${top}${SIMBAD_COLUMNS} FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE ${where} ORDER BY V ASC` // NOTE: order by doesn't support tables
 		return await simbadQuery(query, this.options)
 	}
 }
@@ -315,7 +315,7 @@ function parseSimbadCatalogRow(row: Readonly<CsvRow>): SimbadCatalogEntry | unde
 
 	return {
 		id: objectId,
-		type: type as never,
+		type: type ? (type as never) : undefined,
 		epoch: SIMBAD_EPOCH,
 		rightAscension,
 		declination,
