@@ -20,7 +20,7 @@ const DEFAULT_SIMBAD_QUERY_OPTIONS: SimbadQueryOptions = {
 	timeout: 60000,
 }
 
-export async function simbadQuery(query: string, { baseUrl, timeout = 60000, signal, ...options }: SimbadQueryOptions = DEFAULT_SIMBAD_QUERY_OPTIONS): Promise<string[][] | undefined> {
+export async function simbadQuery(query: string, { baseUrl, timeout = 60000, signal, ...options }: Readonly<SimbadQueryOptions> = DEFAULT_SIMBAD_QUERY_OPTIONS): Promise<string[][] | undefined> {
 	const uri = `${baseUrl || SIMBAD_URL}${SIMBAD_QUERY_PATH}`
 	signal ??= timeout ? AbortSignal.timeout(timeout) : undefined
 
@@ -30,11 +30,10 @@ export async function simbadQuery(query: string, { baseUrl, timeout = 60000, sig
 	body.append('format', 'tsv')
 	body.append('query', query)
 
-	const response = await fetch(uri, { method: 'POST', body, signal, ...options })
+	const response = await fetch(uri, { ...options, method: 'POST', body, signal })
 	if (response.status >= 300) return undefined
 	const text = await response.text()
-	options.delimiter = TSV_DELIMITER
-	return readCsv(text, options)
+	return readCsv(text, { ...options, delimiter: TSV_DELIMITER })
 }
 
 // https://vizier.cds.unistra.fr/cgi-bin/OType
@@ -218,18 +217,29 @@ export interface SimbadObjectTypeInfo {
 }
 
 const SIMBAD_OBJECT_TYPE_VALUES = Object.values(SIMBAD_OBJECT_TYPES)
+const SIMBAD_OBJECT_TYPE_BY_ID = new Map<number, SimbadObjectTypeInfo>()
+const SIMBAD_OBJECT_TYPE_BY_CODE = new Map<SimbadObjectCode, SimbadObjectTypeInfo>()
 
-export function findSimbadObjectTypeInfoById(id: number): SimbadObjectTypeInfo | undefined {
-	return SIMBAD_OBJECT_TYPE_VALUES.find((info) => info.id === id)
+for (const info of SIMBAD_OBJECT_TYPE_VALUES) {
+	SIMBAD_OBJECT_TYPE_BY_ID.set(info.id, info)
+
+	for (const code of info.codes) {
+		SIMBAD_OBJECT_TYPE_BY_CODE.set(code, info)
+	}
 }
 
-export function findSimbadObjectTypeInfoByCode(code: SimbadObjectCode): SimbadObjectTypeInfo | undefined {
-	return SIMBAD_OBJECT_TYPE_VALUES.find((info) => info.codes.includes(code as never))
+export function findSimbadObjectTypeInfoById(id: number) {
+	return SIMBAD_OBJECT_TYPE_BY_ID.get(id)
+}
+
+export function findSimbadObjectTypeInfoByCode(code: SimbadObjectCode) {
+	return SIMBAD_OBJECT_TYPE_BY_CODE.get(code)
 }
 
 const SIMBAD_COLUMNS = 'b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel'
 const SIMBAD_EPOCH = 2000
 const SIMBAD_PM_COS_DEC_EPSILON = 1e-12
+const SIMBAD_OBJECT_ID_REGEX = /^\d+$/
 
 export interface SimbadCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
 	readonly id: number // The max id in the Simbad is 28400265 (bigint is unnecessary)
@@ -250,7 +260,7 @@ export class SimbadCatalog extends BaseStarCatalog<SimbadCatalogEntry> {
 
 	// Retrieves a Simbad source by source identifier.
 	async get(id: number | string | bigint): Promise<SimbadCatalogEntry | undefined> {
-		const rows = await this.#query(`b.oid = ${id}`, 1)
+		const rows = await this.#query(`b.oid = ${formatSimbadObjectId(id)}`, 1)
 		return rows?.length ? parseSimbadCatalogRow(rows[0]) : undefined
 	}
 
@@ -268,7 +278,7 @@ export class SimbadCatalog extends BaseStarCatalog<SimbadCatalogEntry> {
 	// Executes one Simbad TSV query with only the columns needed by the catalog API.
 	async #query(where: string, limit?: number) {
 		const top = limit && limit > 0 ? `TOP ${Math.trunc(limit)} ` : ''
-		const query = `SELECT ${top}${SIMBAD_COLUMNS} FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE ${where} ORDER BY V ASC`
+		const query = `SELECT ${top}${SIMBAD_COLUMNS} FROM basic b JOIN allfluxes f ON f.oidref = b.oid WHERE ${where} ORDER BY f.V ASC`
 		return await simbadQuery(query, this.options)
 	}
 }
@@ -276,10 +286,17 @@ export class SimbadCatalog extends BaseStarCatalog<SimbadCatalogEntry> {
 // Parses a raw Simbad TSV row into the generic catalog shape.
 function parseSimbadCatalogRow(row: Readonly<CsvRow>): SimbadCatalogEntry | undefined {
 	const [id, type, ra, dec, magnitude, pmRaCosDecMasYr, pmDecMasYr, plx, radialVelocityKmS] = row
-	if (!id) return undefined
+	const objectId = parseSimbadObjectId(id)
+	const rawRightAscension = parseSimbadNumber(ra)
+	const rawDeclination = parseSimbadNumber(dec)
+	const visualMagnitude = parseSimbadNumber(magnitude)
 
-	const rightAscension = deg(+ra)
-	const declination = deg(+dec)
+	if (objectId === undefined || rawRightAscension === undefined || rawDeclination === undefined || visualMagnitude === undefined) {
+		return undefined
+	}
+
+	const rightAscension = deg(rawRightAscension)
+	const declination = deg(rawDeclination)
 
 	if (!Number.isFinite(rightAscension) || !Number.isFinite(declination)) {
 		return undefined
@@ -297,12 +314,12 @@ function parseSimbadCatalogRow(row: Readonly<CsvRow>): SimbadCatalogEntry | unde
 	const rawRadialVelocity = parseSimbadNumber(radialVelocityKmS)
 
 	return {
-		id: +id,
+		id: objectId,
 		type: type as never,
 		epoch: SIMBAD_EPOCH,
 		rightAscension,
 		declination,
-		magnitude: +magnitude,
+		magnitude: visualMagnitude,
 		pmRA,
 		pmDEC: rawPmDEC !== undefined ? mas(rawPmDEC) : undefined,
 		rv: rawRadialVelocity !== undefined ? kilometerPerSecond(rawRadialVelocity) : undefined,
@@ -353,9 +370,32 @@ function buildSimbadMagnitudeConstraint(query: NormalizedStarCatalogQuery) {
 	return constraints.join(' AND ')
 }
 
-// Parses an optional Gaia numeric column.
+// Parses an optional Simbad numeric column.
 function parseSimbadNumber(value?: string) {
-	if (!value) return undefined
-	const num = +value
+	const text = value?.trim()
+	if (!text) return undefined
+	const num = +text
 	return Number.isFinite(num) ? num : undefined
+}
+
+// Parses a Simbad object id into the public numeric shape.
+function parseSimbadObjectId(value?: string) {
+	const text = value?.trim()
+	if (!text || !SIMBAD_OBJECT_ID_REGEX.test(text)) return undefined
+	const id = +text
+	return Number.isSafeInteger(id) ? id : undefined
+}
+
+// Formats a Simbad object id as an ADQL integer literal.
+function formatSimbadObjectId(id: number | string | bigint) {
+	if (typeof id === 'bigint') {
+		if (id >= 0n) return id.toString()
+	} else if (typeof id === 'number') {
+		if (Number.isSafeInteger(id) && id >= 0) return `${id}`
+	} else {
+		const text = id.trim()
+		if (SIMBAD_OBJECT_ID_REGEX.test(text)) return text
+	}
+
+	throw new Error(`invalid Simbad object id: ${id}`)
 }

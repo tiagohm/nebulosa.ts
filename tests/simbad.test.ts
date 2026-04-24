@@ -1,9 +1,81 @@
 import { describe, expect, test } from 'bun:test'
-import { arcmin, deg, formatDEC, formatRA, toMas } from '../src/angle'
+import { arcmin, deg, formatDEC, formatRA, toDeg, toMas } from '../src/angle'
 import { SimbadCatalog, simbadQuery } from '../src/simbad'
 import { toKilometerPerSecond } from '../src/velocity'
 
 const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+const SIMBAD_HEADER = 'oid\totype\tra\tdec\tV\tpmra\tpmdec\tplx_value\trvz_radvel'
+
+async function withMockSimbadCatalog<T>(rows: readonly string[], callback: (catalog: SimbadCatalog, queries: string[]) => Promise<T> | T) {
+	const queries: string[] = []
+	const server = Bun.serve({
+		hostname: '127.0.0.1',
+		port: 0,
+		async fetch(request) {
+			const form = await request.formData()
+			const query = form.get('query')
+			queries.push(typeof query === 'string' ? query : '')
+			return new Response(`${SIMBAD_HEADER}\n${rows.join('\n')}`)
+		},
+	})
+
+	try {
+		const catalog = new SimbadCatalog({ baseUrl: `http://127.0.0.1:${server.port}/`, timeout: 1000 })
+		return await callback(catalog, queries)
+	} finally {
+		await server.stop(true)
+	}
+}
+
+async function expectInvalidSimbadObjectId(value: Promise<unknown>) {
+	let error: unknown
+
+	try {
+		await value
+	} catch (cause) {
+		error = cause
+	}
+
+	expect(error).toBeInstanceOf(Error)
+	expect((error as Error).message).toContain('invalid Simbad object id')
+}
+
+test('SimbadCatalog rejects invalid object ids before querying', async () => {
+	await withMockSimbadCatalog(['1\t*\t0\t0\t0\t0\t0\t0\t0'], async (catalog, queries) => {
+		await expectInvalidSimbadObjectId(catalog.get('1 OR 1 = 1'))
+		await expectInvalidSimbadObjectId(catalog.get(Number.MAX_SAFE_INTEGER + 1))
+		await expectInvalidSimbadObjectId(catalog.get(-1n))
+		expect(queries).toEqual([])
+	})
+})
+
+test('SimbadCatalog preserves zero-valued numeric columns', async () => {
+	await withMockSimbadCatalog(['0\t\t0\t0\t0\t0\t0\t0\t0'], async (catalog, queries) => {
+		const star = await catalog.get(' 0 ')
+
+		expect(queries[0]).toContain('WHERE b.oid = 0 ORDER BY')
+		expect(star).toBeDefined()
+		expect(star!.id).toBe(0)
+		expect(star!.type).toBeUndefined()
+		expect(star!.magnitude).toBe(0)
+		expect(toDeg(star!.rightAscension)).toBe(0)
+		expect(toDeg(star!.declination)).toBe(0)
+		expect(toMas(star!.pmRA!)).toBe(0)
+		expect(toMas(star!.pmDEC!)).toBe(0)
+		expect(star!.plx).toBe(0)
+		expect(toKilometerPerSecond(star!.rv!)).toBe(0)
+	})
+})
+
+test('SimbadCatalog skips rows with missing required numeric columns', async () => {
+	const rows = ['x\t*\t0\t0\t1\t0\t0\t0\t0', '1\t*\t\t0\t1\t0\t0\t0\t0', '1\t*\t0\t\t1\t0\t0\t0\t0', '1\t*\t0\t0\t   \t0\t0\t0\t0']
+
+	for (const row of rows) {
+		await withMockSimbadCatalog([row], async (catalog) => {
+			expect(await catalog.get('1')).toBeUndefined()
+		})
+	}
+})
 
 test.skipIf(SKIP)('query', async () => {
 	const query = `
