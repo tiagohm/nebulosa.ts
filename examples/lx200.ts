@@ -1,14 +1,18 @@
 import { Lx200ProtocolServer } from '../src/lx200'
 import { temporalAdd, temporalNow } from '../src/temporal'
 
+const UTC_OFFSET = -180
+
 const state = {
 	rightAscension: 0,
 	declination: 0,
 	latitude: 0,
 	longitude: 0,
+	dateTime: temporalAdd(temporalNow(), UTC_OFFSET, 'm'),
+	utcOffset: UTC_OFFSET,
 }
 
-const server = new Lx200ProtocolServer('0.0.0.0', 10001, {
+const server = new Lx200ProtocolServer({
 	name: 'Nebulosa',
 	version: '0.2.0',
 	handler: {
@@ -36,7 +40,13 @@ const server = new Lx200ProtocolServer('0.0.0.0', 10001, {
 		},
 		dateTime: (server, date) => {
 			console.info('date time', date)
-			return date ?? [temporalAdd(temporalNow(), -3, 'h'), -180]
+
+			if (date !== undefined) {
+				state.dateTime = date[0]
+				state.utcOffset = date[1]
+			}
+
+			return [state.dateTime, state.utcOffset] as const
 		},
 		tracking: (server) => {
 			console.info('tracking')
@@ -71,4 +81,4 @@ const server = new Lx200ProtocolServer('0.0.0.0', 10001, {
 	},
 })
 
-server.start()
+server.start('0.0.0.0', 10001)
