@@ -1,9 +1,77 @@
 import { describe, expect, test } from 'bun:test'
-import { arcmin, formatDEC, formatRA, toMas } from '../src/angle'
+import { arcmin, formatDEC, formatRA, toDeg, toMas } from '../src/angle'
 import { toKilometerPerSecond } from '../src/velocity'
 import { VizierGaiaCatalog, vizierQuery } from '../src/vizier'
 
 const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+const VIZIER_GAIA_HEADER = 'Source\tRAJ2000\tDEJ2000\tGmag\tpmRA\tpmDE\tRV'
+
+async function withMockVizierGaiaCatalog<T>(rows: readonly string[], callback: (catalog: VizierGaiaCatalog, queries: string[]) => Promise<T> | T) {
+	const queries: string[] = []
+	const server = Bun.serve({
+		hostname: '127.0.0.1',
+		port: 0,
+		async fetch(request) {
+			const form = await request.formData()
+			const query = form.get('query')
+			queries.push(typeof query === 'string' ? query : '')
+			return new Response(`${VIZIER_GAIA_HEADER}\n${rows.join('\n')}`)
+		},
+	})
+
+	try {
+		const catalog = new VizierGaiaCatalog({ baseUrl: `http://127.0.0.1:${server.port}/`, timeout: 1000 })
+		return await callback(catalog, queries)
+	} finally {
+		await server.stop(true)
+	}
+}
+
+async function expectInvalidVizierGaiaSourceId(value: Promise<unknown>) {
+	let error: unknown
+
+	try {
+		await value
+	} catch (cause) {
+		error = cause
+	}
+
+	expect(error).toBeInstanceOf(Error)
+	expect((error as Error).message).toContain('invalid VizieR Gaia source id')
+}
+
+test('VizierGaiaCatalog rejects invalid source ids before querying', async () => {
+	const catalog = new VizierGaiaCatalog()
+	await expectInvalidVizierGaiaSourceId(catalog.get('1 OR 1 = 1'))
+	await expectInvalidVizierGaiaSourceId(catalog.get(Number.MAX_SAFE_INTEGER + 1))
+	await expectInvalidVizierGaiaSourceId(catalog.get(-1n))
+})
+
+test('VizierGaiaCatalog preserves zero-valued Gaia numeric columns', async () => {
+	await withMockVizierGaiaCatalog(['0\t0\t0\t0\t0\t0\t0'], async (catalog, queries) => {
+		const star = await catalog.get(' 0 ')
+
+		expect(queries[0]).toContain('WHERE Source = 0 ORDER BY')
+		expect(star).toBeDefined()
+		expect(star!.id).toBe('0')
+		expect(star!.magnitude).toBe(0)
+		expect(toDeg(star!.rightAscension)).toBe(0)
+		expect(toDeg(star!.declination)).toBe(0)
+		expect(toMas(star!.pmRA!)).toBe(0)
+		expect(toMas(star!.pmDEC!)).toBe(0)
+		expect(toKilometerPerSecond(star!.rv!)).toBe(0)
+	})
+})
+
+test('VizierGaiaCatalog skips rows with missing required numeric columns', async () => {
+	const rows = ['1\t\t0\t1\t0\t0\t0', '1\t0\t\t1\t0\t0\t0', '1\t0\t0\t\t0\t0\t0', '1\t0\t0\t   \t0\t0\t0']
+
+	for (const row of rows) {
+		await withMockVizierGaiaCatalog([row], async (catalog) => {
+			expect(await catalog.get('1')).toBeUndefined()
+		})
+	}
+})
 
 test.skipIf(SKIP)('vizier', async () => {
 	const query = `
