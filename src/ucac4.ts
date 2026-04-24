@@ -1,4 +1,4 @@
-import type { Stats } from 'fs'
+import type { Dirent, Stats } from 'fs'
 import fs, { type FileHandle } from 'fs/promises'
 import { join } from 'path'
 import { type Angle, mas } from './angle'
@@ -19,6 +19,8 @@ const UCAC4_ZONE_COUNT = 900
 const UCAC4_ZONE_HEIGHT = 0.2 * DEG2RAD
 const UCAC4_INDEX_BIN_COUNT = 1440
 const UCAC4_INDEX_BIN_SIZE = 0.25 * DEG2RAD
+const UCAC4_INDEX_VALUE_COUNT = UCAC4_ZONE_COUNT * UCAC4_INDEX_BIN_COUNT
+const INT32_BYTES = 4
 const UCAC4_SPD_OFFSET_MAS = 324000000
 const UCAC4_MISSING_MAG_MMAG = 20000
 const UCAC4_MISSING_MAG_ERROR = 99
@@ -28,6 +30,7 @@ const UCAC4_BLOCK_RECORD_COUNT = 512
 const MAS_PER_DEG = 3600000
 const GEOMETRY_EPSILON = 1e-12
 const FULL_CIRCLE_MAS = 360 * MAS_PER_DEG
+const IS_LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1
 
 export interface Ucac4CatalogEntry extends StarCatalogEntry {
 	readonly zone: number
@@ -197,17 +200,18 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		let total = 0
 
 		for (const zone of touchedZones(query)) {
-			if (!(await this.#ensureZoneRecordCount(zone))) continue
+			const recordCount = await this.#ensureZoneRecordCount(zone)
+			if (recordCount <= 0) continue
 
 			if (!this.#index) {
 				if (zoneIntersectsQuery(zone, query)) {
-					total += await this.#ensureZoneRecordCount(zone)
+					total += recordCount
 				}
 
 				continue
 			}
 
-			for (const [startRecord, endRecord] of await this.#zoneRangesForQuery(zone, query)) {
+			for (const [startRecord, endRecord] of await this.#zoneRangesForQuery(zone, query, recordCount)) {
 				total += endRecord - startRecord + 1
 			}
 		}
@@ -224,11 +228,45 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 
 	// Detects whether at least one zone file exists under the configured root.
 	async hasAnyZoneFile() {
-		for (let zone = 1; zone <= UCAC4_ZONE_COUNT; zone++) {
-			if (await this.#resolveZonePath(zone)) return true
+		let found = false
+
+		for (const directoryName of ['', 'u4b', 'u4s', 'u4n']) {
+			const directory = directoryName ? join(this.#root, directoryName) : this.#root
+			let entries: Dirent[]
+
+			try {
+				entries = await fs.readdir(directory, { withFileTypes: true })
+			} catch {
+				continue
+			}
+
+			for (const entry of entries) {
+				const zone = ucac4ZoneFromFileName(entry.name)
+				if (zone === undefined) continue
+				if (this.#zonePaths.has(zone)) continue
+
+				const candidate = join(directory, entry.name)
+
+				if (entry.isFile()) {
+					this.#zonePaths.set(zone, candidate)
+					found = true
+					continue
+				}
+
+				if (entry.isSymbolicLink()) {
+					try {
+						if ((await fs.stat(candidate)).isFile()) {
+							this.#zonePaths.set(zone, candidate)
+							found = true
+						}
+					} catch {
+						//
+					}
+				}
+			}
 		}
 
-		return false
+		return found
 	}
 
 	// Loads the optional native u4index.unf quarter-degree index.
@@ -244,27 +282,13 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 				continue
 			}
 
-			const expectedSize = UCAC4_ZONE_COUNT * UCAC4_INDEX_BIN_COUNT * 4 * 2
+			const expectedSize = UCAC4_INDEX_VALUE_COUNT * INT32_BYTES * 2
 
 			if (data.byteLength !== expectedSize) {
 				throw new Error(`corrupt UCAC4 index file: ${candidate}`)
 			}
 
-			const totalValues = UCAC4_ZONE_COUNT * UCAC4_INDEX_BIN_COUNT
-			const starts = new Int32Array(totalValues)
-			const counts = new Int32Array(totalValues)
-			let minStart = Number.POSITIVE_INFINITY
-
-			for (let i = 0; i < totalValues; i++) {
-				starts[i] = data.readInt32LE(i * 4)
-				counts[i] = data.readInt32LE((totalValues + i) * 4)
-
-				if (counts[i] > 0 && starts[i] < minStart) {
-					minStart = starts[i]
-				}
-			}
-
-			return { starts, counts, base: minStart === 0 ? 0 : 1 }
+			return readUcac4Index(data)
 		}
 
 		return undefined
@@ -344,32 +368,58 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 	}
 
 	// Computes the candidate record ranges touched by a query inside a single zone.
-	async #zoneRangesForQuery(zone: number, query: NormalizedStarCatalogQuery): Promise<readonly Vertex[]> {
-		if (!zoneIntersectsQuery(zone, query)) return []
-
-		const recordCount = await this.#ensureZoneRecordCount(zone)
-		if (recordCount <= 0) return []
-
-		if (!this.#index) {
-			return [[1, recordCount]] as const
-		}
-
+	async #zoneRangesForQuery(zone: number, query: NormalizedStarCatalogQuery, knownRecordCount?: number): Promise<readonly Vertex[]> {
+		const zoneMinDec = -PIOVERTWO + (zone - 1) * UCAC4_ZONE_HEIGHT
+		const zoneMaxDec = zone === UCAC4_ZONE_COUNT ? PIOVERTWO : zoneMinDec + UCAC4_ZONE_HEIGHT
+		const index = this.#index
 		const ranges: Vertex[] = []
+		const zoneIndexOffset = (zone - 1) * UCAC4_INDEX_BIN_COUNT
+		const baseAdjustment = index?.base === 0 ? 1 : 0
+		let intersects = false
 
 		for (const box of query.preselectionBoxes) {
-			if (!zoneIntersectsDecBox(zone, box.minDEC, box.maxDEC)) continue
+			if (!decRangesIntersect(zoneMinDec, zoneMaxDec, box.minDEC, box.maxDEC)) continue
+
+			intersects = true
+			if (!index) break
 
 			const binStart = clampIndex(Math.floor(box.minRA / UCAC4_INDEX_BIN_SIZE), 0, UCAC4_INDEX_BIN_COUNT - 1)
 			const binEnd = clampIndex(Math.floor(Math.max(box.maxRA + GEOMETRY_EPSILON, 0) / UCAC4_INDEX_BIN_SIZE), 0, UCAC4_INDEX_BIN_COUNT - 1)
+			let rangeStart = 0
+			let rangeEnd = 0
 
 			for (let bin = binStart; bin <= binEnd; bin++) {
-				const index = (zone - 1) * UCAC4_INDEX_BIN_COUNT + bin
-				const count = this.#index.counts[index]
+				const indexOffset = zoneIndexOffset + bin
+				const count = index.counts[indexOffset]
 				if (count <= 0) continue
 
-				const startRecord = this.#index.starts[index] + (this.#index.base === 0 ? 1 : 0)
-				ranges.push([startRecord, startRecord + count - 1] as const)
+				const startRecord = index.starts[indexOffset] + baseAdjustment
+				const endRecord = startRecord + count - 1
+
+				if (rangeStart === 0) {
+					rangeStart = startRecord
+					rangeEnd = endRecord
+				} else if (startRecord <= rangeEnd + 1) {
+					rangeEnd = Math.max(rangeEnd, endRecord)
+				} else {
+					ranges.push([rangeStart, rangeEnd] as const)
+					rangeStart = startRecord
+					rangeEnd = endRecord
+				}
 			}
+
+			if (rangeStart > 0) {
+				ranges.push([rangeStart, rangeEnd] as const)
+			}
+		}
+
+		if (!intersects || (index && ranges.length === 0)) return []
+
+		const recordCount = knownRecordCount ?? (await this.#ensureZoneRecordCount(zone))
+		if (recordCount <= 0) return []
+
+		if (!index) {
+			return [[1, recordCount]] as const
 		}
 
 		return mergeRanges(ranges, recordCount)
@@ -521,6 +571,35 @@ function decodeMagnitude(valueMillimag: number) {
 	return valueMillimag === UCAC4_MISSING_MAG_MMAG ? undefined : valueMillimag / 1000
 }
 
+// Builds typed views over native index data when the host representation is compatible.
+function readUcac4Index(data: Buffer): Ucac4Index {
+	let starts: Int32Array
+	let counts: Int32Array
+
+	if (IS_LITTLE_ENDIAN && data.byteOffset % INT32_BYTES === 0) {
+		starts = new Int32Array(data.buffer, data.byteOffset, UCAC4_INDEX_VALUE_COUNT)
+		counts = new Int32Array(data.buffer, data.byteOffset + UCAC4_INDEX_VALUE_COUNT * INT32_BYTES, UCAC4_INDEX_VALUE_COUNT)
+	} else {
+		starts = new Int32Array(UCAC4_INDEX_VALUE_COUNT)
+		counts = new Int32Array(UCAC4_INDEX_VALUE_COUNT)
+
+		for (let i = 0; i < UCAC4_INDEX_VALUE_COUNT; i++) {
+			starts[i] = data.readInt32LE(i * INT32_BYTES)
+			counts[i] = data.readInt32LE((UCAC4_INDEX_VALUE_COUNT + i) * INT32_BYTES)
+		}
+	}
+
+	let minStart = Number.POSITIVE_INFINITY
+
+	for (let i = 0; i < UCAC4_INDEX_VALUE_COUNT; i++) {
+		if (counts[i] > 0 && starts[i] < minStart) {
+			minStart = starts[i]
+		}
+	}
+
+	return { starts, counts, base: minStart === 0 ? 0 : 1 }
+}
+
 // Validates a native zone number.
 function validateZoneNumber(zone: number) {
 	if (!Number.isInteger(zone) || zone < 1 || zone > UCAC4_ZONE_COUNT) {
@@ -533,13 +612,6 @@ function validateRecordNumber(recordNumber: number) {
 	if (!Number.isInteger(recordNumber) || recordNumber < 1) {
 		throw new Error(`invalid UCAC4 record number: ${recordNumber}`)
 	}
-}
-
-// Returns the native declination range of a zone.
-function zoneDecRange(zone: number): readonly [number, number] {
-	const minDec = -PIOVERTWO + (zone - 1) * UCAC4_ZONE_HEIGHT
-	const maxDec = zone === UCAC4_ZONE_COUNT ? PIOVERTWO : minDec + UCAC4_ZONE_HEIGHT
-	return [minDec, maxDec] as const
 }
 
 // Computes the set of zones touched by the query preselection boxes.
@@ -565,33 +637,61 @@ function zoneIntersectsQuery(zone: number, query: NormalizedStarCatalogQuery) {
 
 // Checks whether a zone overlaps a declination interval.
 function zoneIntersectsDecBox(zone: number, minDec: Angle, maxDec: Angle) {
-	const [zoneMinDec, zoneMaxDec] = zoneDecRange(zone)
+	const zoneMinDec = -PIOVERTWO + (zone - 1) * UCAC4_ZONE_HEIGHT
+	const zoneMaxDec = zone === UCAC4_ZONE_COUNT ? PIOVERTWO : zoneMinDec + UCAC4_ZONE_HEIGHT
+	return decRangesIntersect(zoneMinDec, zoneMaxDec, minDec, maxDec)
+}
+
+function decRangesIntersect(zoneMinDec: Angle, zoneMaxDec: Angle, minDec: Angle, maxDec: Angle) {
 	return maxDec >= zoneMinDec - GEOMETRY_EPSILON && minDec <= zoneMaxDec + GEOMETRY_EPSILON
+}
+
+// Parses a native zone file name into its UCAC4 zone number.
+function ucac4ZoneFromFileName(name: string) {
+	if (name.length !== 4 || name[0] !== 'z') return undefined
+
+	const zone = Number(name.slice(1))
+	if (!Number.isInteger(zone) || zone < 1 || zone > UCAC4_ZONE_COUNT) return undefined
+
+	return `z${`${zone}`.padStart(3, '0')}` === name ? zone : undefined
 }
 
 // Merges overlapping native record ranges and clamps them to a zone length.
 function mergeRanges(ranges: readonly Vertex[], recordCount: number) {
 	if (ranges.length === 0) return []
 
-	const sorted = [...ranges]
-		.map((e) => [Math.max(1, e[0]), Math.min(recordCount, e[1])] as const)
-		.filter((e) => e[1] >= e[0])
-		.sort((left, right) => left[0] - right[0])
+	const sorted: Vertex[] = []
+
+	for (const range of ranges) {
+		const startRecord = Math.max(1, range[0])
+		const endRecord = Math.min(recordCount, range[1])
+
+		if (endRecord >= startRecord) {
+			sorted.push([startRecord, endRecord] as const)
+		}
+	}
 
 	if (sorted.length === 0) return []
 
-	const merged: Vertex[] = [sorted[0]]
+	sorted.sort((left, right) => left[0] - right[0])
+
+	const merged: Vertex[] = []
+	let mergedStart = sorted[0][0]
+	let mergedEnd = sorted[0][1]
 
 	for (let i = 1; i < sorted.length; i++) {
 		const current = sorted[i]
-		const last = merged.at(-1)!
 
-		if (current[0] <= last[1] + 1) {
-			merged[merged.length - 1] = [last[0], Math.max(last[1], current[1])] as const
+		if (current[0] <= mergedEnd + 1) {
+			mergedEnd = Math.max(mergedEnd, current[1])
 		} else {
-			merged.push(current)
+			merged.push([mergedStart, mergedEnd] as const)
+			mergedStart = current[0]
+			mergedEnd = current[1]
 		}
 	}
+
+	merged.push([mergedStart, mergedEnd] as const)
 
 	return merged
 }
