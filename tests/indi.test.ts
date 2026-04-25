@@ -239,7 +239,7 @@ async function isIndiRunning(port: number = 7624) {
 }
 
 const INDI_HOST: string = 'localhost'
-const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true' && !(await isIndiRunning())
+const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true' || !(await isIndiRunning())
 
 // indiserver indi_simulator_ccd indi_simulator_telescope indi_simulator_focus indi_simulator_wheel indi_simulator_dustcover indi_simulator_lightpanel indi_simulator_rotator
 describe.skipIf(SKIP)('manager', () => {
