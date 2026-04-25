@@ -439,8 +439,3 @@ async function expectUntil<D, K extends keyof D>(device: D, key: K, value: D[K],
 		expect(timeout).toBeGreaterThan(0)
 	}
 }
-
-test.skip('download from Sky Simulator', async () => {
-	const response = await fetch('http://localhost:11111/api/v1/camera/0/imagearray', { headers: { Accept: 'application/imagebytes' } })
-	await Bun.write('Sky Simulator.dat', await response.blob())
-})

@@ -285,10 +285,6 @@ test('convolution gaussian blur', () => {
 	return readImageTransformAndSave((i) => gaussianBlur(i), 'conv-gaussian-blur', 'fde35723b23615cbef1ece1fbaecb0e2')
 }, 8000)
 
-test.skip('convolution gaussian blur 11x11', () => {
-	return readImageTransformAndSave((i) => gaussianBlur(i, { sigma: 3, size: 11 }), 'conv-gaussian-blur-11', 'b4884871f1780a44e134a52392f85bed')
-}, 8000)
-
 test('psf', () => {
 	return readImageTransformAndSave((i) => psf(i), 'psf', '8958ad9f3e3888329faad7fd61e17e73')
 }, 5000)
@@ -307,10 +303,6 @@ test('saturation', () => {
 
 test('gamma', () => {
 	return readImageTransformAndSave((i) => gamma(i, 2.2), 'gamma', '086f10359a135f12f8cf0e7e27d52731')
-}, 5000)
-
-test.skip('median', () => {
-	// return readImageAndSaveWithOptions({ median: true }, 'median', '18ab1f9f14e5776e00b3c3b7eddff13d')
 }, 5000)
 
 describe('fft', () => {
