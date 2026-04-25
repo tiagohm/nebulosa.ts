@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { toArcsec, toDeg } from '../src/angle'
 import type { FitsHeader } from '../src/fits'
 import { plateSolutionFrom } from '../src/platesolver'
+import { DEC_TAN_SIP, RA_TAN_SIP } from '../src/fits.wcs'
 
 // https://nova.astrometry.net/user_images/12367041
 test('M101', () => {
@@ -10,8 +11,8 @@ test('M101', () => {
 		BITPIX: 8,
 		NAXIS: 0,
 		WCSAXES: 2,
-		CTYPE1: 'RA---TAN-SIP',
-		CTYPE2: 'DEC--TAN-SIP',
+		CTYPE1: RA_TAN_SIP,
+		CTYPE2: DEC_TAN_SIP,
 		EQUINOX: 2000,
 		LONPOLE: 180,
 		LATPOLE: 0,

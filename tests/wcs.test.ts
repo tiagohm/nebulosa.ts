@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, parseAngle } from '../src/angle'
 import type { FitsHeader } from '../src/fits'
-import { cd } from '../src/fits.wcs'
+import { cd, DEC_TAN_SIP, RA_TAN_SIP } from '../src/fits.wcs'
 import { Wcs } from '../src/wcs'
 
 // https://fits.gsfc.nasa.gov/registry/sip/sipsample.txt
@@ -191,8 +191,8 @@ test('sip', () => {
 		NAXIS: 2,
 		NAXIS1: 256,
 		NAXIS2: 256,
-		CTYPE1: 'RA---TAN-SIP',
-		CTYPE2: 'DEC--TAN-SIP',
+		CTYPE1: RA_TAN_SIP,
+		CTYPE2: DEC_TAN_SIP,
 		CRVAL1: 202.482322805429,
 		CRVAL2: 47.1751189300101,
 		CRPIX1: 128,

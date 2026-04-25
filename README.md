@@ -455,8 +455,10 @@ sensor.stop()
 ### Fits ![](bun.webp)
 
 ```ts
+isFits(buffer)
+computeRemainingBytes(size)
 readFits(source) // Read FITS file from source
-writeFits(sink, fits) // Write FITS file to sink
+writeFits(sink, fits, options) // Write FITS file to sink
 hasKeyword(header, keyword) // Check if the FITS header has a keyword
 textKeyword(header, keyword) // Get the text value of a keyword from the FITS header
 numericKeyword(header, keyword) // Get the number value of a keyword from the FITS header
@@ -471,6 +473,44 @@ widthKeyword(header) // Get the width (NAXIS2) from the FITS header
 numberOfChannelsKeyword(header) // Get the number of channels (NAXIS3) from the FITS header
 exposureTimeKeyword(header) // Get the exposure time from the FITS header
 cfaPatternKeyword(header) // Get the CFA pattern from the FITS header
+
+const reader = new FitsKeywordReader()
+reader.read(line, offset)
+reader.readAll(buffer, offset)
+
+const writer = new FitsKeywordWriter()
+writer.write(card, output, offset)
+writer.writeAll(header, output, offset)
+writer.writeEnd(output, offset)
+
+const reader = new FitsImageReader(hdu)
+reader.read(source, output)
+
+const writer = new FitsImageWriter(header)
+writer.write(image, sink)
+
+// WCS
+
+matrixKind(header)
+tanHeader(header)
+hasCd(header)
+cdMatrix(header)
+cd(header, i, j)
+cdFromCdelt(cdelt1, cdelt2, crota, flipH, flipV)
+pc2cd(pc11, pc12, pc21, pc22, cdelt1, cdelt2)
+tanProject(header, rightAscension, declination)
+tanUnproject(header, x, y)
+isWcsFitsKeyword(key)
+
+// SIP
+
+countSipTerms(order)
+listSipTerms(order)
+buildSipDesignMatrix(stars, wcs, order)
+fitSipDistortion(matchedStars, wcs, options)
+evaluateSipCorrection(x, y, sipModel, wcs)
+applySipCorrection(x, y, sipModel, wcs)
+sipModelIntoFitsHeader(model, header)
 ```
 
 ### FK5 ![](bun.webp) ![](browser.webp)
