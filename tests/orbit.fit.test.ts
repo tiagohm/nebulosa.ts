@@ -7,6 +7,7 @@ import { type OrbitFitAngularResidual, type OrbitFitOptions, fitOrbit, type Orbi
 import { type Time, Timescale, timeShift, timeYMDHMS } from '../src/time'
 import { vecDistance, type MutVec3, type Vec3 } from '../src/vec3'
 import { mulberry32, normal } from '../src/random'
+import type { EquatorialCoordinate } from '../src/coordinate'
 
 const IDENTITY_ROTATION = matIdentity()
 const EPOCH = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.TT)
@@ -39,8 +40,8 @@ function makeSyntheticObservations(options: SyntheticOptions = {}) {
 
 		observations[i] = {
 			time,
-			rightAscension: normalizeAngle(model.ra + raNoise),
-			declination: model.dec + decNoise,
+			rightAscension: normalizeAngle(model.rightAscension + raNoise),
+			declination: model.declination + decNoise,
 			raErr: options.raErr ?? ASTROMETRY_ERR,
 			decErr: options.decErr ?? ASTROMETRY_ERR,
 			observerPosition,
@@ -55,17 +56,13 @@ function observerPositionAt(offsetDays: number): MutVec3 {
 	return [Math.cos(angle), Math.sin(angle), 0.04 * Math.sin(2 * angle)]
 }
 
-function modelRaDec(orbit: KeplerOrbit, time: Time, observerPosition: Vec3) {
+function modelRaDec(orbit: KeplerOrbit, time: Time, observerPosition: Vec3): EquatorialCoordinate {
 	const position = orbit.at(time)[0]
 	const x = position[0] - observerPosition[0]
 	const y = position[1] - observerPosition[1]
 	const z = position[2] - observerPosition[2]
 	const range = Math.hypot(x, y, z)
-
-	return {
-		ra: normalizeAngle(Math.atan2(y, x)),
-		dec: Math.asin(Math.max(-1, Math.min(1, z / range))),
-	}
+	return { rightAscension: normalizeAngle(Math.atan2(y, x)), declination: Math.asin(Math.max(-1, Math.min(1, z / range))) }
 }
 
 function perturbedPosition(): MutVec3 {
@@ -104,11 +101,11 @@ test('uses the short residual across the RA wrap boundary', () => {
 	const orbit = new KeplerOrbit(p, v, EPOCH, undefined, IDENTITY_ROTATION)
 	const observerPosition: Vec3 = [0, 0, 0]
 	const model = modelRaDec(orbit, EPOCH, observerPosition)
-	const observations = Array.from({ length: 3 }, () => <OrbitFitObservation>{ time: EPOCH, rightAscension: normalizeAngle(model.ra - 3e-6), declination: model.dec, raErr: ASEC2RAD, decErr: ASEC2RAD, observerPosition })
+	const observations = Array.from({ length: 3 }, () => <OrbitFitObservation>{ time: EPOCH, rightAscension: normalizeAngle(model.rightAscension - 3e-6), declination: model.declination, raErr: ASEC2RAD, decErr: ASEC2RAD, observerPosition })
 
 	const result = fitOrbit(observations, EPOCH, p, v, { maxIterations: 0, computeCovariance: false })
 
-	expect(result.residuals.angular[0].dRA).toBeCloseTo(-3e-6 * Math.cos(model.dec), 14)
+	expect(result.residuals.angular[0].dRA).toBeCloseTo(-3e-6 * Math.cos(model.declination), 14)
 	expect(Math.abs(result.residuals.angular[0].dRA)).toBeLessThan(1e-5)
 })
 

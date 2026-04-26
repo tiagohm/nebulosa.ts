@@ -101,7 +101,7 @@ interface ResidualEvaluation {
 	readonly orbit: KeplerOrbit
 	readonly state: OrbitFitCartesianState
 	readonly normalized: Float64Array
-	readonly angular: OrbitFitAngularResidual[]
+	readonly angular: readonly OrbitFitAngularResidual[]
 	readonly chi2: number
 }
 
@@ -110,7 +110,7 @@ export function fitOrbit(observations: readonly OrbitFitObservation[], epoch: Ti
 	const config = resolveFitOptions(options)
 	validateInput(observations, epoch, position, velocity, config)
 
-	let params = stateToParams({ epoch, position, velocity })
+	let params = stateToParams(position, velocity)
 	let current = evaluateResiduals(params, observations, epoch, config)
 
 	if (!current) {
@@ -147,8 +147,8 @@ export function fitOrbit(observations: readonly OrbitFitObservation[], epoch: Ti
 				continue
 			}
 
-			const stepNorm = vectorNorm(step)
-			const parameterScale = vectorNorm(params) + config.parameterTolerance
+			const stepNorm = vecLength(step as unknown as Vec3)
+			const parameterScale = vecLength(params as unknown as Vec3) + config.parameterTolerance
 
 			if (stepNorm <= config.parameterTolerance * parameterScale) {
 				converged = true
@@ -287,9 +287,7 @@ function validateTime(time: Time, name: string) {
 }
 
 function validateVector(vector: Vec3, name: string) {
-	if (vector.length !== 3) {
-		throw new Error(`${name} must have 3 components`)
-	}
+	if (vector.length !== 3) throw new TypeError(`${name} must have 3 components`)
 
 	validateFinite(vector[0], `${name}[0]`)
 	validateFinite(vector[1], `${name}[1]`)
@@ -297,29 +295,21 @@ function validateVector(vector: Vec3, name: string) {
 }
 
 function validateFinite(value: number, name: string) {
-	if (!Number.isFinite(value)) {
-		throw new TypeError(`${name} must be finite`)
-	}
+	if (!Number.isFinite(value)) throw new TypeError(`${name} must be finite`)
 }
 
 function validatePositiveFinite(value: number, name: string) {
 	validateFinite(value, name)
-
-	if (value <= 0) {
-		throw new Error(`${name} must be positive`)
-	}
+	if (value <= 0) throw new Error(`${name} must be positive`)
 }
 
 function validateNonNegativeFinite(value: number, name: string) {
 	validateFinite(value, name)
-
-	if (value < 0) {
-		throw new Error(`${name} must be non-negative`)
-	}
+	if (value < 0) throw new Error(`${name} must be non-negative`)
 }
 
-function stateToParams(state: OrbitFitCartesianState): Float64Array {
-	return Float64Array.of(state.position[0], state.position[1], state.position[2], state.velocity[0], state.velocity[1], state.velocity[2])
+function stateToParams(position: CartesianCoordinate, velocity: CartesianCoordinate): Float64Array {
+	return Float64Array.of(position[0], position[1], position[2], velocity[0], velocity[1], velocity[2])
 }
 
 function paramsToState(params: Readonly<Float64Array>, epoch: Time): OrbitFitCartesianState | undefined {
@@ -354,8 +344,8 @@ function evaluateResiduals(params: Readonly<Float64Array>, observations: readonl
 
 		if (!model) return undefined
 
-		const dRA = normalizePI(observation.rightAscension - model.ra) * Math.cos(observation.declination)
-		const dDEC = observation.declination - model.dec
+		const dRA = normalizePI(observation.rightAscension - model.rightAscension) * Math.cos(observation.declination)
+		const dDEC = observation.declination - model.declination
 		const total = Math.hypot(dRA, dDEC)
 
 		if (!Number.isFinite(total)) return undefined
@@ -401,11 +391,7 @@ function computeModelRaDec(orbit: KeplerOrbit, observation: OrbitFitObservation,
 
 	if (!Number.isFinite(range) || range < minTopocentricDistance) return undefined
 
-	return {
-		ra: normalizeAngle(Math.atan2(y, x)),
-		dec: Math.asin(clamp(z / range, -1, 1)),
-		range,
-	} as const
+	return { rightAscension: normalizeAngle(Math.atan2(y, x)), declination: Math.asin(clamp(z / range, -1, 1)), range } as const
 }
 
 function numericalJacobian(f: (params: Readonly<Float64Array>) => Float64Array | undefined, params: Readonly<Float64Array>, baseResiduals: Readonly<Float64Array>, options: ResolvedOrbitFitOptions) {
@@ -654,11 +640,7 @@ function symmetrize(matrix: Matrix) {
 
 function addStep(params: Readonly<Float64Array>, step: Readonly<Float64Array>) {
 	const candidate = new Float64Array(PARAMETER_COUNT)
-
-	for (let i = 0; i < PARAMETER_COUNT; i++) {
-		candidate[i] = params[i] + step[i]
-	}
-
+	for (let i = 0; i < PARAMETER_COUNT; i++) candidate[i] = params[i] + step[i]
 	return candidate
 }
 
@@ -668,31 +650,13 @@ function nextDamping(damping: number) {
 
 function angularRms(residuals: readonly OrbitFitAngularResidual[]) {
 	let sum = 0
-
-	for (let i = 0; i < residuals.length; i++) {
-		sum += residuals[i].total * residuals[i].total
-	}
-
+	for (let i = 0; i < residuals.length; i++) sum += residuals[i].total * residuals[i].total
 	return Math.sqrt(sum / residuals.length)
-}
-
-function vectorNorm(vector: Readonly<Float64Array>) {
-	let sum = 0
-
-	for (let i = 0; i < vector.length; i++) {
-		sum += vector[i] * vector[i]
-	}
-
-	return Math.sqrt(sum)
 }
 
 function maxAbs(vector: Readonly<Float64Array>) {
 	let max = 0
-
-	for (let i = 0; i < vector.length; i++) {
-		max = Math.max(max, Math.abs(vector[i]))
-	}
-
+	for (let i = 0; i < vector.length; i++) max = Math.max(max, Math.abs(vector[i]))
 	return max
 }
 
@@ -701,10 +665,7 @@ function isFiniteVector(vector: Vec3) {
 }
 
 function allFinite(values: Readonly<Float64Array>) {
-	for (let i = 0; i < values.length; i++) {
-		if (!Number.isFinite(values[i])) return false
-	}
-
+	for (let i = 0; i < values.length; i++) if (!Number.isFinite(values[i])) return false
 	return true
 }
 
