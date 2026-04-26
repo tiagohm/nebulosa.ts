@@ -921,6 +921,12 @@ unpackDate('K01AM') // Packed date to year-month-day
 packDate(year, month, day) // year-month-day to packed date format
 ```
 
+### Orbit ![](bun.webp) ![](browser.webp)
+
+```ts
+const result = fitOrbit(observations, epoch, position, velocity, options)
+```
+
 ### PHD2 ![](bun.webp)
 
 ```ts
