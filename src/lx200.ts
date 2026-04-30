@@ -55,6 +55,10 @@ export class Lx200ProtocolServer {
 
 	constructor(readonly options: Readonly<Lx200ProtocolServerOptions>) {}
 
+	get hostname() {
+		return this.#server?.hostname
+	}
+
 	get port() {
 		return this.#server?.port ?? -1
 	}
