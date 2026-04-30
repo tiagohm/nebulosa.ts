@@ -24,18 +24,22 @@ export class StellariumProtocolServer {
 	readonly #sockets: Socket<unknown>[] = []
 	#server?: TCPSocketListener
 
-	constructor(
-		readonly host: string,
-		readonly port: number,
-		readonly options: Readonly<StellariumProtocolServerOptions>,
-	) {}
+	constructor(readonly options: Readonly<StellariumProtocolServerOptions>) {}
 
-	start() {
+	get hostname() {
+		return this.#server?.hostname
+	}
+
+	get port() {
+		return this.#server?.port ?? -1
+	}
+
+	start(hostname: string, port: number) {
 		if (this.#server) return false
 
 		this.#server = Bun.listen({
-			hostname: this.host,
-			port: this.port,
+			hostname,
+			port,
 			allowHalfOpen: false,
 			socket: {
 				data: (_, data) => {
