@@ -160,7 +160,7 @@ describe('trend line regression', () => {
 
 test('quadractic regression', () => {
 	const x = [1000, 1200, 1400, 1600, 1800]
-	const y = [3.2, 2.5, 2.0, 2.3, 2.8]
+	const y = [3.2, 2.5, 2, 2.3, 2.8]
 	const regression = quadraticRegression(x, y)
 
 	expect(regression.coefficients[0]).toBeCloseTo(14.00285714285714, 10)
@@ -182,7 +182,7 @@ test('quadractic regression with origin on 0', () => {
 
 test('exponential regression', () => {
 	const x = [0, 1, 2, 3, 4]
-	const y = [1.5, 2.5, 3.5, 5.0, 7.5]
+	const y = [1.5, 2.5, 3.5, 5, 7.5]
 	const regression = exponentialRegression(x, y)
 
 	expect(regression.a).toBeCloseTo(0.3912023, 6)
@@ -404,7 +404,7 @@ describe('Levenberg-Marquardt regression', () => {
 			return a * (1 - Math.exp(-b * x))
 		}
 
-		const x = [77.6, 114.9, 141.1, 190.8, 239.9, 289.0, 332.8, 378.4, 434.8, 477.3, 536.8, 593.1, 689.1, 760.0]
+		const x = [77.6, 114.9, 141.1, 190.8, 239.9, 289, 332.8, 378.4, 434.8, 477.3, 536.8, 593.1, 689.1, 760]
 		const y = [10.07, 14.73, 17.94, 23.93, 29.61, 35.18, 40.02, 44.82, 50.76, 55.05, 61.01, 66.4, 75.47, 81.78]
 		const result = levenbergMarquardt(x, y, misra1a, [250, 0.0005])
 

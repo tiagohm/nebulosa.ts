@@ -55,12 +55,12 @@ const PANEL_MAX_INTENSITY = 255
 
 const SLEW_RATES = [
 	{ name: 'SPEED_1', label: ' 0.5°', speed: 0.5 * DEG2RAD },
-	{ name: 'SPEED_2', label: ' 1.0°', speed: 1.0 * DEG2RAD },
-	{ name: 'SPEED_3', label: ' 2.0°', speed: 2.0 * DEG2RAD },
-	{ name: 'SPEED_4', label: ' 4.0°', speed: 4.0 * DEG2RAD },
-	{ name: 'SPEED_5', label: ' 8.0°', speed: 8.0 * DEG2RAD },
-	{ name: 'SPEED_6', label: '16.0°', speed: 16.0 * DEG2RAD },
-	{ name: 'SPEED_7', label: '32.0°', speed: 32.0 * DEG2RAD },
+	{ name: 'SPEED_2', label: ' 1.0°', speed: 1 * DEG2RAD },
+	{ name: 'SPEED_3', label: ' 2.0°', speed: 2 * DEG2RAD },
+	{ name: 'SPEED_4', label: ' 4.0°', speed: 4 * DEG2RAD },
+	{ name: 'SPEED_5', label: ' 8.0°', speed: 8 * DEG2RAD },
+	{ name: 'SPEED_6', label: '16.0°', speed: 16 * DEG2RAD },
+	{ name: 'SPEED_7', label: '32.0°', speed: 32 * DEG2RAD },
 ] as const
 
 type CoordSetMode = 'SLEW' | 'SYNC'
@@ -98,7 +98,7 @@ export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
 export class ClientSimulator implements Client {
 	readonly type = 'SIMULATOR'
 
-	#devices = new Map<string, DeviceSimulator>()
+	readonly #devices = new Map<string, DeviceSimulator>()
 
 	constructor(
 		readonly id: string,
@@ -320,8 +320,8 @@ export class MountSimulator extends DeviceSimulator {
 	#pulseWestEast: AxisDirection = 0
 	#pulseNorthSouthUntil = 0
 	#pulseWestEastUntil = 0
-	#homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
-	#parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
+	readonly #homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
+	readonly #parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	#utcTime = Date.now()
 	#utcOffset = TIMEZONE / 60
 

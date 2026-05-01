@@ -300,7 +300,7 @@ export const DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG: Readonly<DeepRequired<Astr
 		direction: -PIOVERTWO,
 		gradientStrength: 0.2,
 		domeSharpness: 1.2,
-		tint: [1.12, 1.0, 0.82],
+		tint: [1.12, 1, 0.82],
 	},
 	atmosphere: {
 		airglowStrength: 0.08,

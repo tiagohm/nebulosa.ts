@@ -645,8 +645,8 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
 	#seeking = false
 	#reg02: number
 	#reg05: number
-	#reg06: number
-	#reg07: number
+	readonly #reg06: number
+	readonly #reg07: number
 	#timer?: NodeJS.Timeout
 
 	readonly name = 'RDA5807'

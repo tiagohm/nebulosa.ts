@@ -10,7 +10,7 @@ export namespace Base {
 	// K is the Gaussian gravitational constant.
 	export const K = 0.01720209895
 	// Julian days of Julian epoch 1900
-	export const J1900 = 2415020.0
+	export const J1900 = 2415020
 	// Julian days of Besselian epoch 1900
 	export const B1900 = 2415020.3135
 	// Julian days of Besselian epoch 1950

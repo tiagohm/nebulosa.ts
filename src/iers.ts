@@ -217,10 +217,6 @@ export const iersb = new IersB()
 export const iersab = new IersAB(iersa, iersb)
 
 // Computes UT1 - UTC in seconds
-export const dut1: TimeDelta = (time) => {
-	return iersab.dut1(time)
-}
+export const dut1: TimeDelta = (time) => iersab.dut1(time)
 
-export const xy: PolarMotion = (time) => {
-	return iersab.xy(time)
-}
+export const xy: PolarMotion = (time) => iersab.xy(time)

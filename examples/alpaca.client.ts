@@ -27,15 +27,11 @@ const flatPanelManager = new FlatPanelManager()
 const coverManager = new CoverManager()
 
 const guideOutput = new GuideOutputManager({
-	get: (client: Client | string | undefined, name: string) => {
-		return mountManager.get(client, name) ?? cameraManager.get(client, name)
-	},
+	get: (client: Client | string | undefined, name: string) => mountManager.get(client, name) ?? cameraManager.get(client, name),
 })
 
 const thermometerManager = new ThermometerManager({
-	get: (client: Client | string | undefined, name: string) => {
-		return focuserManager.get(client, name) ?? cameraManager.get(client, name)
-	},
+	get: (client: Client | string | undefined, name: string) => focuserManager.get(client, name) ?? cameraManager.get(client, name),
 })
 
 cameraManager.addHandler(deviceHandler)

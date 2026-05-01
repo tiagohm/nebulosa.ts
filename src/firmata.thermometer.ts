@@ -71,7 +71,7 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 	#reading = false
 	#pendingReadCorrelationId?: number
 	#address?: Buffer
-	#skip = false
+	readonly #skip: boolean = false
 	readonly #powerMode: OneWirePowerMode
 	readonly #conversionDelayMs: number
 	readonly #resolutionCommand?: readonly number[]

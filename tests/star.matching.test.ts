@@ -345,7 +345,7 @@ describe('star matching synthetic registration', () => {
 	test('recovers mirrored data', () => {
 		const scenario = generateScenario({ seed: 3, transform: similarity(1.01, 0.44, 130, 42, true), noiseStd: 0.12 })
 		const result = matchStars(scenario.reference, scenario.current, { allowMirror: true })
-		expectRecovered(result, scenario.reference, scenario.current, 12, 1.0)
+		expectRecovered(result, scenario.reference, scenario.current, 12, 1)
 		expect(result.similarity?.mirrored).toBeTrue()
 	})
 
