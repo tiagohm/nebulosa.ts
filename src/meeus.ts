@@ -1,5 +1,5 @@
 import { type Angle, normalizeAngle, secondsOfTime, toDeg } from './angle'
-import { ASEC2RAD, AU_KM, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
+import { ASEC2RAD, AU_KM, AU_M, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { Distance } from './distance'
 import { floorDiv, modf, type NumberArray, pmod } from './math'
 
@@ -1282,6 +1282,81 @@ export namespace Conjunction {
 	}
 }
 
+// Chapter 19, Bodies in Straight Line
+export namespace Line {
+	// Computes the time at which a moving body is on a straight line (great
+	// circle) between two fixed points, such as stars.
+	export function time(r1: Angle, d1: Angle, r2: Angle, d2: Angle, r3: readonly Angle[], d3: readonly [Angle, Angle, Angle, Angle, Angle], t1: number, t5: number) {
+		const gc = new Array<number>(5)
+
+		for (let i = 0; i < 5; i++) {
+			// (19.1) p. 121
+			const r3i = r3[i]
+			gc[i] = tan(d1) * sin(r2 - r3i) + tan(d2) * sin(r3i - r1) + tan(d3[i]) * sin(r1 - r2)
+		}
+
+		return new Interpolation.Len5(t1, t5, gc).zero(false)
+	}
+
+	// Computes the angle between great circles defined by three points.
+	export function angle(r1: Angle, d1: Angle, r2: Angle, d2: Angle, r3: Angle, d3: Angle) {
+		const [sd2, cd2] = Base.sincos(d2)
+		const [sr21, cr21] = Base.sincos(r2 - r1)
+		const [sr32, cr32] = Base.sincos(r3 - r2)
+		const C1 = atan2(sr21, cd2 * tan(d1) - sd2 * cr21)
+		const C2 = atan2(sr32, cd2 * tan(d3) - sd2 * cr32)
+		return C1 + C2
+	}
+
+	// Computes an error angle of three nearly co-linear points.
+	export function error(r1: Angle, d1: Angle, r2: Angle, d2: Angle, r0: Angle, d0: Angle) {
+		const [sr1, cr1] = Base.sincos(r1)
+		const [sd1, cd1] = Base.sincos(d1)
+		const [sr2, cr2] = Base.sincos(r2)
+		const [sd2, cd2] = Base.sincos(d2)
+		const X1 = cd1 * cr1
+		const X2 = cd2 * cr2
+		const Y1 = cd1 * sr1
+		const Y2 = cd2 * sr2
+		const Z1 = sd1
+		const Z2 = sd2
+		const A = Y1 * Z2 - Z1 * Y2
+		const B = Z1 * X2 - X1 * Z2
+		const C = X1 * Y2 - Y1 * X2
+		const m = tan(r0)
+		const n = tan(d0) / cos(r0)
+		return asin((A + B * m + C * n) / (sqrt(A * A + B * B + C * C) * sqrt(1 + m * m + n * n)))
+	}
+
+	// Computes angle between great circles defined by three points and the error angle of three nearly co-linear points.
+	export function angleError(r1: Angle, d1: Angle, r2: Angle, d2: Angle, r3: Angle, d3: Angle) {
+		const [sr1, cr1] = Base.sincos(r1)
+		const [c1, cd1] = Base.sincos(d1)
+		const [sr2, cr2] = Base.sincos(r2)
+		const [c2, cd2] = Base.sincos(d2)
+		const [sr3, cr3] = Base.sincos(r3)
+		const [c3, cd3] = Base.sincos(d3)
+		const a1 = cd1 * cr1
+		const a2 = cd2 * cr2
+		const a3 = cd3 * cr3
+		const b1 = cd1 * sr1
+		const b2 = cd2 * sr2
+		const b3 = cd3 * sr3
+		const l1 = b1 * c2 - b2 * c1
+		const l2 = b2 * c3 - b3 * c2
+		const l3 = b1 * c3 - b3 * c1
+		const m1 = c1 * a2 - c2 * a1
+		const m2 = c2 * a3 - c3 * a2
+		const m3 = c1 * a3 - c3 * a1
+		const n1 = a1 * b2 - a2 * b1
+		const n2 = a2 * b3 - a3 * b2
+		const n3 = a1 * b3 - a3 * b1
+		const psi = acos((l1 * l2 + m1 * m2 + n1 * n2) / (sqrt(l1 * l1 + m1 * m1 + n1 * n1) * sqrt(l2 * l2 + m2 * m2 + n2 * n2)))
+		const omega = asin((a2 * l3 + b2 * m3 + c2 * n3) / (sqrt(a2 * a2 + b2 * b2 + c2 * c2) * sqrt(l3 * l3 + m3 * m3 + n3 * n3)))
+		return [psi, omega] as const
+	}
+}
+
 // Chapter 20, Smallest Circle containing three Celestial Bodies.
 export namespace Circle {
 	// Finds the smallest circle containing three points.
@@ -1325,7 +1400,7 @@ export namespace Precession {
 		const [m, na, nd] = mn(epochFrom, epochTo)
 		const [sa, ca] = Base.sincos(rightAscension)
 		// (21.1) p. 132
-		const da = m + na * sa * Math.tan(declination) // seconds of RA
+		const da = m + na * sa * tan(declination) // seconds of RA
 		const dd = nd * ca // seconds of DEC
 		return [da * ASEC2RAD * 15, dd * ASEC2RAD] as const
 	}
@@ -1393,8 +1468,8 @@ export namespace Precession {
 			const A = cDelta * sAlphaZeta
 			const B = this.#cTheta * cDelta * cAlphaZeta - this.#sTheta * sDelta
 			const C = this.#sTheta * cDelta * cAlphaZeta + this.#cTheta * sDelta
-			const ra = Math.atan2(A, B) + this.#z
-			const dec = C < Base.COS_SMALL_ANGLE ? Math.asin(C) : Math.acos(Math.hypot(A, B)) // near pole
+			const ra = atan2(A, B) + this.#z
+			const dec = C < Base.COS_SMALL_ANGLE ? asin(C) : acos(hypot(A, B)) // near pole
 			return [ra, dec] as const
 		}
 	}
@@ -1440,8 +1515,8 @@ export namespace Precession {
 			this.#pi = Base.horner(t, piCoeff)
 			this.#p = Base.horner(t, pCoeff) * t
 			const eta = Base.horner(t, etaCoeff) * t
-			this.#sEta = Math.sin(eta)
-			this.#cEta = Math.cos(eta)
+			this.#sEta = sin(eta)
+			this.#cEta = cos(eta)
 		}
 
 		// Precesses coordinates eclFrom, leaving result in eclTo.
@@ -1452,8 +1527,8 @@ export namespace Precession {
 			const A = this.#cEta * cBeta * sd - this.#sEta * sBeta
 			const B = cBeta * cd
 			const C = this.#cEta * sBeta + this.#sEta * cBeta * sd
-			const lon = this.#p + this.#pi - Math.atan2(A, B)
-			const lat = C < Base.COS_SMALL_ANGLE ? Math.asin(C) : Math.acos(Math.hypot(A, B)) // near pole
+			const lon = this.#p + this.#pi - atan2(A, B)
+			const lat = C < Base.COS_SMALL_ANGLE ? asin(C) : acos(hypot(A, B)) // near pole
 			return [lon, lat]
 		}
 
@@ -1463,11 +1538,11 @@ export namespace Precession {
 			const [si, ci] = Base.sincos(eFrom[0])
 			const [snp, cnp] = Base.sincos(eFrom[1] - this.#pi)
 			// (24.1) p. 159
-			const inc = Math.acos(ci * this.#cEta + si * this.#sEta * cnp)
+			const inc = acos(ci * this.#cEta + si * this.#sEta * cnp)
 			// (24.2) p. 159
-			const node = Math.atan2(si * snp, this.#cEta * si * cnp - this.#sEta * ci) + psi
+			const node = atan2(si * snp, this.#cEta * si * cnp - this.#sEta * ci) + psi
 			// (24.3) p. 159
-			const peri = Math.atan2(-this.#sEta * snp, si * this.#cEta - ci * this.#sEta * cnp) + eFrom[2]
+			const peri = atan2(-this.#sEta * snp, si * this.#cEta - ci * this.#sEta * cnp) + eFrom[2]
 			return [inc, node, peri]
 		}
 	}
@@ -1491,7 +1566,7 @@ export namespace Precession {
 		const [ra, dec] = Coords.eclipticToEquatorial(longitude, latitude, epsilon)
 		const [sAlpha, cAlpha] = Base.sincos(ra)
 		const [sDelta, cDelta] = Base.sincos(dec)
-		const cBeta = Math.cos(latitude)
+		const cBeta = cos(latitude)
 		const lon = (pmDEC * epsilonsin * cAlpha + pmRA * cDelta * (epsiloncos * cDelta + epsilonsin * sDelta * sAlpha)) / (cBeta * cBeta)
 		const lat = (pmDEC * (epsiloncos * cDelta + epsilonsin * sDelta * sAlpha) - pmRA * epsilonsin * cAlpha * cDelta) / cBeta
 		return [lon, lat] as const
@@ -1515,8 +1590,8 @@ export namespace Precession {
 		const xp = x + t * mx
 		const yp = y + t * my
 		const zp = z + t * mz
-		const ra = Math.atan2(yp, xp)
-		const dec = Math.atan2(zp, Math.hypot(xp, yp))
+		const ra = atan2(yp, xp)
+		const dec = atan2(zp, hypot(xp, yp))
 		return [ra, dec] as const
 	}
 }
@@ -2147,7 +2222,7 @@ export namespace Parallax {
 	// Computes equatorial horizontal parallax of a body.
 	export function horizontal(delta: Distance): Angle {
 		// (40.1) p. 279
-		return Math.asin(Math.sin(HOR_PAR) / delta)
+		return asin(sin(HOR_PAR) / delta)
 		// return horPar / delta // with sufficient accuracy
 	}
 
@@ -2157,12 +2232,12 @@ export namespace Parallax {
 		const pi = horizontal(distance)
 		const theta0 = secondsOfTime(Sidereal.apparent(jde))
 		const H = normalizeAngle(theta0 - longitude - rightAscension)
-		const sPi = Math.sin(pi)
+		const sPi = sin(pi)
 		const [sH, cH] = Base.sincos(H)
 		const [sDelta, cDelta] = Base.sincos(declination)
-		const deltaAlpha = Math.atan2(-rhocPhi * sPi * sH, cDelta - rhocPhi * sPi * cH) // (40.2) p. 279
+		const deltaAlpha = atan2(-rhocPhi * sPi * sH, cDelta - rhocPhi * sPi * cH) // (40.2) p. 279
 		const alpha = rightAscension + deltaAlpha
-		const delta = Math.atan2((sDelta - rhosPhi * sPi) * Math.cos(deltaAlpha), cDelta - rhocPhi * sPi * cH) // (40.3) p. 279
+		const delta = atan2((sDelta - rhosPhi * sPi) * cos(deltaAlpha), cDelta - rhocPhi * sPi * cH) // (40.3) p. 279
 		return [alpha, delta] as const
 	}
 
@@ -2183,14 +2258,14 @@ export namespace Parallax {
 		const pi = horizontal(distance)
 		const theta0 = secondsOfTime(Sidereal.apparent(jde))
 		const H = normalizeAngle(theta0 - longitude - rightAscension)
-		const sPi = Math.sin(pi)
+		const sPi = sin(pi)
 		const [sH, cH] = Base.sincos(H)
 		const [sDelta, cDelta] = Base.sincos(declination)
 		const A = cDelta * sH
 		const B = cDelta * cH - rhocPhi * sPi
 		const C = sDelta - rhosPhi * sPi
-		const q = Math.sqrt(A * A + B * B + C * C)
-		return [Math.atan2(A, B), Math.asin(C / q)] as const
+		const q = sqrt(A * A + B * B + C * C)
+		return [atan2(A, B), asin(C / q)] as const
 	}
 
 	// Computes topocentric ecliptical coordinates including parallax given geocentric ecliptical longitude and latitude of a body,
@@ -2202,12 +2277,12 @@ export namespace Parallax {
 		const [sBeta, cBeta] = Base.sincos(latitude)
 		const [sEpsilon, cEpsilon] = Base.sincos(epsilon)
 		const [sTheta, cTheta] = Base.sincos(theta)
-		const sPi = Math.sin(pi)
+		const sPi = sin(pi)
 		const N = cLambda * cBeta - C * sPi * cTheta
-		const lambda = normalizeAngle(Math.atan2(sLambda * cBeta - sPi * (S * sEpsilon + C * cEpsilon * sTheta), N))
-		const cLambda_ = Math.cos(lambda)
-		const beta = Math.atan((cLambda_ * (sBeta - sPi * (S * cEpsilon - C * sEpsilon * sTheta))) / N)
-		const s_ = Math.asin((cLambda_ * Math.cos(beta) * Math.sin(s)) / N)
+		const lambda = normalizeAngle(atan2(sLambda * cBeta - sPi * (S * sEpsilon + C * cEpsilon * sTheta), N))
+		const cLambda_ = cos(lambda)
+		const beta = atan((cLambda_ * (sBeta - sPi * (S * cEpsilon - C * sEpsilon * sTheta))) / N)
+		const s_ = asin((cLambda_ * cos(beta) * sin(s)) / N)
 		return [lambda, beta, s_]
 	}
 }
@@ -2845,6 +2920,68 @@ export namespace Apsis {
 		const M = Base.horner(T, [347.3477 * DEG2RAD, (27.1577721 * DEG2RAD) / CK, -0.000813 * DEG2RAD, -0.000001 * DEG2RAD])
 		const F = Base.horner(T, [316.6109 * DEG2RAD, (364.5287911 * DEG2RAD) / CK, -0.0125053 * DEG2RAD, -0.0000148 * DEG2RAD])
 		return [T, D, M, F] as const
+	}
+}
+
+// Chapter 55, Semidiameters of the Sun, Moon, and Planets.
+export namespace Semidiameter {
+	// Standard semidiameters at unit distance of 1 AU, scaled to radians.
+	export const SUN = 959.63 * ASEC2RAD
+	export const MERCURY = 3.36 * ASEC2RAD
+	export const VENUS_SURFACE = 8.34 * ASEC2RAD
+	export const VENUS_CLOUD = 8.41 * ASEC2RAD
+	export const MARS = 4.68 * ASEC2RAD
+	export const JUPITER_EQUATORIAL = 98.44 * ASEC2RAD
+	export const JUPITER_POLAR = 92.06 * ASEC2RAD
+	export const SATURN_EQUATORIAL = 82.73 * ASEC2RAD
+	export const SATURN_POLAR = 73.82 * ASEC2RAD
+	export const URANUS = 35.02 * ASEC2RAD
+	export const NEPTUNE = 33.5 * ASEC2RAD
+	export const PLUTO = 2.07 * ASEC2RAD
+	export const MOON = (358473400 / AU_M) * ASEC2RAD
+
+	// Computes the semidiameter at specified distance.
+	export function semidiameter(s0: number, delta: Distance) {
+		return s0 / delta
+	}
+
+	// Computes apparent polar semidiameter of Saturn at specified distance.
+	// Argument delta must be observer-Saturn distance in AU. Argument B is
+	// Saturnicentric latitude of the observer as given by function saturnring.UB
+	export function saturnApparentPolar(delta: Distance, B: Angle) {
+		let k = SATURN_POLAR / SATURN_EQUATORIAL
+		k = 1 - k * k
+		const cB = cos(B)
+		return (SATURN_EQUATORIAL / delta) * sqrt(1 - k * cB * cB)
+	}
+
+	// Computes the observed topocentric semidiameter of the Moon.
+	export function moonTopocentric(distance: Distance, declination: Angle, H: Angle, rhosPhi: number, rhocPhi: number) {
+		const sPi = sin(Parallax.horizontal(distance))
+		// q computed by (40.6, 40.7) p. 280, ch 40.0
+		const [sDelta, cDelta] = Base.sincos(declination)
+		const [sH, cH] = Base.sincos(H)
+		const A = cDelta * sH
+		const B = cDelta * cH - rhocPhi * sPi
+		const C = sDelta - rhosPhi * sPi
+		const q = sqrt(A * A + B * B + C * C)
+		return (0.272481 / q) * sPi
+	}
+
+	// Computes the observed topocentric semidiameter of the Moon by a less rigorous method
+	// using the altitude of the Moon above the observer's horizon.
+	export function moonTopocentric2(delta: Distance, h: Angle) {
+		return (MOON / delta) * (1 + sin(h) * sin(Parallax.horizontal(delta)))
+	}
+
+	// Computes the approximate diameter in km given absolute magnitude H and albedo A.
+	export function asteroidDiameter(H: number, A: number) {
+		return 10 ** (3.12 - 0.2 * H - 0.5 * log10(A))
+	}
+
+	// Computes the  semidiameter of an asteroid with a given diameter in km at given distance.
+	export function asteroid(d: number, delta: Distance) {
+		return ((0.0013788 * d) / delta) * ASEC2RAD
 	}
 }
 

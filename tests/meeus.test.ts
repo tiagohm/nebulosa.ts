@@ -3,7 +3,7 @@ import { deg, dms, formatALT, formatRA, hms, normalizeAngle, secondsOfTime, sign
 import { ASEC2RAD, DAYSEC, DEG2RAD, PI, RAD2DEG } from '../src/constants'
 import { meter, toKilometer, toMeter } from '../src/distance'
 import { modf, roundToNthDecimal } from '../src/math'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, ElementEquinox, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Parallax, Planetary, Precession, Refraction, Sidereal, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, ElementEquinox, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, Line, MoonPosition, Node, Nutation, Parallax, Planetary, Precession, Refraction, Semidiameter, Sidereal, Stellar } from '../src/meeus'
 import { time, timeToDate, timeYMD } from '../src/time'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
@@ -1032,6 +1032,67 @@ describe('Conjunction', () => {
 	})
 })
 
+describe('Line', () => {
+	test('time', () => {
+		// Example 19.a, p. 121.0
+
+		// apparent equatorial coordinates Castor
+		const r1 = 113.56833 * DEG2RAD
+		const d1 = 31.89756 * DEG2RAD
+		// apparent equatorial coordinates Pollux
+		const r2 = 116.25042 * DEG2RAD
+		const d2 = 28.03681 * DEG2RAD
+		// apparent equatorial coordinates Mars from 29/9 to 3/10/1994
+		const r3 = [118.98067 * DEG2RAD, 119.59396 * DEG2RAD, 120.20413 * DEG2RAD, 120.81108 * DEG2RAD, 121.41475 * DEG2RAD] as const
+		const d3 = [21.68417 * DEG2RAD, 21.58983 * DEG2RAD, 21.49394 * DEG2RAD, 21.39653 * DEG2RAD, 21.29761 * DEG2RAD] as const
+
+		// use JD as time to handle month boundary
+		const day = Line.time(r1, d1, r2, d2, r3, d3, Julian.calendarGregorianToJD(1994, 9, 29), Julian.calendarGregorianToJD(1994, 10, 3))
+
+		expect(timeToDate({ day, fraction: 0, scale: 1 })).toEqual([1994, 10, 1, 5, 21, 33, 530032038])
+	})
+
+	test('angle', () => {
+		// Example p. 123.0
+		const rδ = hms(5, 32, 0.4)
+		const dδ = signedDms(true, 0, 17, 56.9)
+		const rε = hms(5, 36, 12.81)
+		const dε = signedDms(true, 1, 12, 7)
+		const rζ = hms(5, 40, 45.52)
+		const dζ = signedDms(true, 1, 56, 33.3)
+
+		const n = Line.angle(rδ, dδ, rε, dε, rζ, dζ)
+		strictEqual(toDeg(n), 172.483, 4)
+	})
+
+	test('error', () => {
+		// Example p. 124.0
+		const rδ = hms(5, 32, 0.4)
+		const dδ = signedDms(true, 0, 17, 56.9)
+		const rε = hms(5, 36, 12.81)
+		const dε = signedDms(true, 1, 12, 7)
+		const rζ = hms(5, 40, 45.52)
+		const dζ = signedDms(true, 1, 56, 33.3)
+
+		const ω = Line.error(rζ, dζ, rδ, dδ, rε, dε)
+		strictEqual(toArcsec(ω), 324, 0)
+	})
+
+	test('angleError', () => {
+		// Example p. 125.0
+		const rδ = hms(5, 32, 0.4)
+		const dδ = signedDms(true, 0, 17, 56.9)
+		const rε = hms(5, 36, 12.81)
+		const dε = signedDms(true, 1, 12, 7)
+		const rζ = hms(5, 40, 45.52)
+		const dζ = signedDms(true, 1, 56, 33.3)
+
+		const [n, ω] = Line.angleError(rδ, dδ, rε, dε, rζ, dζ)
+		expect(formatALT(n, false)).toBe('+07 31 01')
+		expect(formatALT(ω, false)).toBe('-00 05 24')
+	})
+})
+
 describe('Refraction', () => {
 	test('bennett', () => {
 		// Example 16.a, p. 107.0
@@ -1731,6 +1792,12 @@ describe('Apsis', () => {
 		const dist = MoonPosition.position(apo)
 		const par = MoonPosition.parallax(dist[2])
 		expect(toArcsec(Math.abs(apoPar - par)) < 0.1).toBeTrue()
+	})
+})
+
+describe('Semidiameter', () => {
+	test('asteroidDiameter', () => {
+		strictEqual(Semidiameter.asteroidDiameter(26.76, 0.15), 0.015, 3)
 	})
 })
 
