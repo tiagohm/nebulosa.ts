@@ -26,6 +26,10 @@ export interface LunarEclipse {
 	gamma: number // Least distance from the center of the Moon to the axis of the Earth shadow, in units of equatorial radius of the Earth.
 	rho: number // Radius of penumbra, in equatorial Earth radii, at eclipse plane
 	u: number // Radius of the Earth umbral cone in the eclipse plane, in units of equatorial radius of the Earth.
+	p: number
+	sdPartial: number // Fraction of day
+	sdTotal: number // Fraction of day
+	sdPenumbra: number // Fraction of day
 }
 
 const DEFAULT_MINIMAL_LUNAR_ECLIPSE_TIME = time(0, 0, Timescale.TT, false)
@@ -291,6 +295,10 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 		gamma: 0,
 		rho: 0,
 		u: 0,
+		p: 0,
+		sdTotal: 0,
+		sdPartial: 0,
+		sdPenumbra: 0,
 	}
 
 	while (!found) {
@@ -416,6 +424,8 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 				const h = LUNAR_ECLIPSE_PENUMBRA_LIMIT + u
 				const g2 = gamma * gamma
 
+				eclipse.p = p
+
 				const sdPartial = n * Math.sqrt(p * p - g2)
 				const sdTotal = n * Math.sqrt(t * t - g2)
 				const sdPenumbra = n * Math.sqrt(h * h - g2)
@@ -427,6 +437,9 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 				if (!Number.isNaN(sdPartial)) eclipse.lastContactUmbraTime = timeNormalize(eclipse.maximalTime.day + sdPartial, eclipse.maximalTime.fraction, 0, Timescale.TT)
 				eclipse.lastContactPenumbraTime = timeNormalize(eclipse.maximalTime.day + sdPenumbra, eclipse.maximalTime.fraction, 0, Timescale.TT)
 				eclipse.lunation = Math.round(k - 0.5)
+				eclipse.sdPartial = sdPartial
+				eclipse.sdTotal = sdTotal
+				eclipse.sdPenumbra = sdPenumbra
 
 				break
 			}

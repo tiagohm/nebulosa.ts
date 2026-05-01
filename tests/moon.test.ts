@@ -64,6 +64,21 @@ describe('nearest lunar phase', () => {
 		expect(timeToDate(utc(nearestLunarPhase(timeYMDHMS(1994, 1, 19, 20, 26), 'FIRST_QUARTER', true))).slice(0, 5)).toEqual([1994, 1, 19, 20, 26])
 		expect(timeToDate(utc(nearestLunarPhase(timeYMDHMS(1994, 1, 19, 20, 28), 'FIRST_QUARTER', true))).slice(0, 5)).toEqual([1994, 2, 18, 17, 47])
 	})
+
+	const dates: { readonly hunt: readonly [number, number, number]; readonly exp: number[] }[] = [
+		{ hunt: [1990, 10, 18], exp: [1990, 10, 18, 15, 37] },
+		{ hunt: [1990, 11, 17], exp: [1990, 11, 17, 9, 5] },
+		{ hunt: [1990, 12, 17], exp: [1990, 12, 17, 4, 22] },
+		{ hunt: [1991, 1, 15], exp: [1991, 1, 15, 23, 50] },
+		{ hunt: [1991, 2, 14], exp: [1991, 2, 14, 17, 32] },
+	]
+
+	for (const date of dates) {
+		test(`new moon from ${date.hunt[0]}-${date.hunt[1]}-${date.hunt[2]}`, () => {
+			const time = nearestLunarPhase(timeYMDHMS(...date.hunt), 'NEW', true)
+			expect(timeToDate(time).slice(0, 5)).toEqual(date.exp)
+		})
+	}
 })
 
 describe('nearest lunar eclipse', () => {
@@ -114,6 +129,36 @@ describe('nearest lunar eclipse', () => {
 	test('next', () => {
 		expect(timeToDate(utc(nearestLunarEclipse(timeYMDHMS(1997, 9, 16, 18, 46), true).maximalTime)).slice(0, 5)).toEqual([1997, 9, 16, 18, 47])
 		expect(timeToDate(utc(nearestLunarEclipse(timeYMDHMS(1997, 9, 16, 18, 48), true).maximalTime)).slice(0, 5)).toEqual([1998, 3, 13, 4, 20])
+	})
+
+	test('1973', () => {
+		const eclipse = nearestLunarEclipse(timeYMDHMS(1973, 4, 1), true)
+
+		expect(eclipse.type).toBe('PENUMBRAL')
+		expect(eclipse.maximalTime.day).toBe(2441849)
+		expect(eclipse.maximalTime.fraction).toBeCloseTo(0.3686, 4)
+		expect(eclipse.sigma).toBeCloseTo(0.7206, 4) // u
+		expect(eclipse.rho).toBeCloseTo(1.3045, 4) // p
+		expect(eclipse.magnitude).toBeCloseTo(0.4625, 2)
+		expect(eclipse.gamma).toBeCloseTo(-1.3249, 4) // distance
+		expect(eclipse.sdPenumbra).toBeCloseTo(101.5 / 24 / 60, 4) // min
+		expect(eclipse.sdPartial).toBeNaN()
+		expect(eclipse.sdTotal).toBeNaN()
+	})
+
+	test('1997', () => {
+		const eclipse = nearestLunarEclipse(timeYMDHMS(1997, 7, 1), true)
+
+		expect(eclipse.type).toBe('TOTAL')
+		expect(eclipse.maximalTime.day).toBe(2450708)
+		expect(eclipse.maximalTime.fraction).toBeCloseTo(0.2835, 4)
+		expect(eclipse.sigma).toBeCloseTo(0.7534, 4)
+		expect(eclipse.rho).toBeCloseTo(1.2717, 4)
+		expect(eclipse.magnitude).toBeCloseTo(1.1868, 4)
+		expect(eclipse.gamma).toBeCloseTo(-0.3791, 4)
+		expect(eclipse.sdPenumbra).toBeCloseTo(153.36 / 24 / 60, 4)
+		expect(eclipse.sdPartial).toBeCloseTo(97.632 / 24 / 60, 4)
+		expect(eclipse.sdTotal).toBeCloseTo(30.384 / 24 / 60, 4)
 	})
 })
 

@@ -1612,13 +1612,13 @@ describe('Apsis', () => {
 			[1990, 12, 30 + 23.8 / 24, 1991],
 		] as const
 
-		dates.forEach(([y, m, d, dy]) => {
+		for (const [y, m, d, dy] of dates) {
 			test(dy.toString(), () => {
 				const ref = Julian.calendarGregorianToJD(y, m, d)
 				const j = Apsis.perigee(dy)
 				expect(Math.abs(j - ref) < 0.1).toBeTrue()
 			})
-		})
+		}
 	})
 
 	test('perigeeParallax', () => {

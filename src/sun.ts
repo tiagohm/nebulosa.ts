@@ -18,7 +18,9 @@ export interface SolarEclipse {
 	// Radius of the Moon's umbral cone in the fundamental plane,
 	// in units of equatorial radius of the Earth.
 	u: number
+	p: number // penumbral
 	type: SolarEclipseType
+	central: boolean
 }
 
 const DEFAULT_MINIMAL_SOLAR_ECLIPSE_TIME = time(0, 0, Timescale.TT, false)
@@ -121,7 +123,9 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 		magnitude: 0,
 		gamma: 0,
 		u: 0,
+		p: 0,
 		type: 'TOTAL',
+		central: true,
 	}
 
 	let found = false
@@ -223,12 +227,14 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 			}
 
 			eclipse.u = u
+			eclipse.p = u + 0.5461
 			eclipse.gamma = gamma
 			eclipse.maximalTime = timeNormalize(timeOfGreatestEclipseDay, fraction, 0, Timescale.TT)
 			eclipse.lunation = k
 
 			// Rare polar non-central annular/total eclipses still occur when the umbral or antumbral cone grazes Earth.
 			if (absG >= SOLAR_ECLIPSE_CENTRAL_LIMIT) {
+				eclipse.central = false
 				eclipse.magnitude = (SOLAR_ECLIPSE_SURFACE_LIMIT + u - absG) / (SOLAR_ECLIPSE_PARTIAL_DENOMINATOR + 2 * u)
 				eclipse.type = absG < SOLAR_ECLIPSE_CENTRAL_LIMIT + Math.abs(u) ? (u < 0 ? 'TOTAL' : 'ANNULAR') : 'PARTIAL'
 			}

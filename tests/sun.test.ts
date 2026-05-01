@@ -88,4 +88,30 @@ describe('nearest solar eclipse', () => {
 		expect(eclipse.type).toBe('ANNULAR')
 		expect(timeToDate(utc(nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 46), true).maximalTime)).slice(0, 5)).toEqual([2025, 3, 29, 10, 48])
 	})
+
+	test('1993', () => {
+		const eclipse = nearestSolarEclipse(timeYMDHMS(1993, 1, 1), true)
+
+		expect(eclipse.type).toBe('PARTIAL')
+		expect(eclipse.maximalTime.day).toBe(2449129)
+		expect(eclipse.maximalTime.fraction).toBeCloseTo(0.0978, 4)
+		expect(eclipse.central).toBeFalse()
+		expect(eclipse.u).toBeCloseTo(0.0097, 4)
+		expect(eclipse.p).toBeCloseTo(0.5558, 4)
+		expect(eclipse.magnitude).toBeCloseTo(0.74, 2)
+		expect(eclipse.gamma).toBeCloseTo(1.1348, 4)
+	})
+
+	test('2009', () => {
+		const eclipse = nearestSolarEclipse(timeYMDHMS(2009, 6, 1), true)
+
+		expect(eclipse.type).toBe('TOTAL')
+		expect(eclipse.maximalTime.day).toBe(2455035)
+		expect(eclipse.maximalTime.fraction).toBeCloseTo(-0.3912, 4)
+		expect(eclipse.central).toBeTrue()
+		expect(eclipse.u).toBeCloseTo(-0.0157, 4)
+		expect(eclipse.p).toBeCloseTo(0.5304, 4)
+		expect(eclipse.magnitude).toBe(0)
+		expect(eclipse.gamma).toBeCloseTo(0.0695, 4)
+	})
 })
