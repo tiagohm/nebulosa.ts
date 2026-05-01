@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import { type MutMat3, matClone, matDeterminant, matDivScalar, matFlipX, matFlipY, matIdentity, matMinus, matMinusScalar, matMul, matMulScalar, matMulTranspose, matMulVec, matPlus, matPlusScalar, matRodriguesRotation, matRotX, matRotY, matRotZ, matTranspose, matTransposeMul, matTransposeMulTranspose, matZero } from '../src/mat3'
 import type { MutVec3 } from '../src/vec3'
 

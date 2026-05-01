@@ -685,7 +685,7 @@ export class QrDecomposition {
 	}
 
 	get isFullRank() {
-		return this.#rdiag.indexOf(0) < 0
+		return !this.#rdiag.includes(0)
 	}
 
 	// Solves the system of linear equations A*x = B, where A is the matrix and B is the right-hand side vector.

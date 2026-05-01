@@ -104,7 +104,7 @@ export interface GuideOutput extends Device {
 	pulsing: boolean
 	hasGuideRate: boolean
 	canSetGuideRate: boolean
-	readonly guideRate: EquatorialCoordinate<number>
+	readonly guideRate: EquatorialCoordinate
 }
 
 export interface Thermometer extends Device {

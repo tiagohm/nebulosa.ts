@@ -21,7 +21,7 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 	const hdu = 'hdus' in fits ? (fits.hdus.find(findCompressedImageHdu) ?? fits.hdus.find(findUncompressedImageHdu) ?? fits.hdus[0]) : fits
 	const { header } = hdu
 
-	const bitpix = uncompressedBitpixKeyword(header, 8) as Bitpix
+	const bitpix = uncompressedBitpixKeyword<Bitpix>(header, 8)
 	const width = uncompressedWidthKeyword(header, 0)
 	const height = uncompressedHeightKeyword(header, 0)
 	const channels = uncompressedNumberOfChannelsKeyword(header, 1)

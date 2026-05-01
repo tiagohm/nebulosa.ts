@@ -134,7 +134,7 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 	const psfModel = options.psfModel === 'moffat' ? 'moffat' : 'gaussian'
 	const beta = Math.max(1.05, sanitizePositive(options.beta, DEFAULT_BETA))
 	const saturationEnabled = options.saturationLevel !== undefined && Number.isFinite(options.saturationLevel)
-	const saturationLevel = saturationEnabled ? Math.max(0, options.saturationLevel!) : 0
+	const saturationLevel = saturationEnabled ? Math.max(0, options.saturationLevel) : 0
 	const cutoffSigma = clamp(sanitizePositive(options.cutoffSigma, DEFAULT_CUTOFF_SIGMA), 2.5, 7)
 	const minPlotRadius = Math.max(0, sanitizePositive(options.minPlotRadius, DEFAULT_MIN_RADIUS))
 	const maxPlotRadius = Math.max(minPlotRadius, sanitizePositive(options.maxPlotRadius, DEFAULT_MAX_RADIUS))

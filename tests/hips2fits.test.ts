@@ -4,7 +4,9 @@ import { readFits } from '../src/fits'
 import { HIPS2FITS_ALTERNATIVE_URL, type Hips2FitsOptions, hips2Fits, hipsSurveys } from '../src/hips2fits'
 import { bufferSource } from '../src/io'
 
-test.skip('fits', async () => {
+const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+
+test.skipIf(SKIP)('fits', async () => {
 	const options: Hips2FitsOptions = { width: 400, height: 400, baseUrl: HIPS2FITS_ALTERNATIVE_URL }
 	const blob = await hips2Fits('CDS/P/DSS2/red', deg(201.36506337683), deg(-43.01911250808), options)
 	const buffer = Buffer.from(await blob!.arrayBuffer())
@@ -33,7 +35,7 @@ test.skip('fits', async () => {
 	expect(header.RADESYS).toBe('ICRS')
 })
 
-test.skip('hips surveys', async () => {
+test.skipIf(SKIP)('hips surveys', async () => {
 	const surveys = await hipsSurveys()
 
 	expect(surveys).toHaveLength(97)

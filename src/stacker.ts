@@ -84,7 +84,7 @@ export interface FrameAcceptanceResult {
 	readonly accepted: boolean
 	readonly frameIndex: number
 	readonly frameId?: string | number
-	readonly reason?: FrameRejectionReason | string
+	readonly reason?: FrameRejectionReason
 	readonly transform?: StackingTransformSummary
 	readonly overlapFraction: number
 	readonly quality: StackingFrameQualityMetrics
@@ -349,7 +349,7 @@ export class LiveStacker {
 
 		const normalization = computeNormalization(this.#workRaw!, this.#workMask!, frame, this.#referenceFrame, quality, this.#options)
 		applyNormalizationInPlace(this.#workRaw!, this.#workMask!, frame.image.metadata.channels, normalization.scales, normalization.offsets)
-		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, this.#workRaw!, this.#workMask!, this.#sum!, this.#weightSum!, this.#coverageMap!, this.#options.combinationMethod, normalization.weight)
+		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, this.#workRaw!, this.#workMask!, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.weight)
 
 		this.#acceptedFrames++
 
@@ -710,7 +710,8 @@ function combineValues(method: StackingCombinationMethod, values: Float64Array, 
 	const sortedWeights = weights.subarray(0, count)
 
 	switch (method) {
-		case 'sum': {
+		case 'sum':
+		default: {
 			let sum = 0
 			for (let i = 0; i < count; i++) sum += sorted[i]
 			return sum
@@ -920,7 +921,7 @@ function solveNormalization(reference: readonly number[], current: readonly numb
 			const scale = refSpan / curSpan
 			return { scale: finiteOr(scale, 1), offset: refBg - scale * curBg }
 		}
-		case 'none':
+		default:
 			return { scale: 1, offset: 0 }
 	}
 }
@@ -940,6 +941,7 @@ function resolveFrameWeight(frame: StackingFrame, quality: StackingFrameQualityM
 
 	switch (options.weightingMode) {
 		case 'none':
+		default:
 			return base
 		case 'snr':
 			return base * clamp(Math.max(quality.medianSNR, 1) / 10, 0.25, 4)
@@ -1333,7 +1335,7 @@ function sampleImageValues(raw: ImageRawType, channels: number, width: number, h
 
 // Computes a percentile from a sorted numeric array.
 function percentileSorted(values: Float64Array, count: number, percentile: number) {
-	if (count <= 0) return NaN
+	if (count <= 0) return Number.NaN
 	if (count === 1) return values[0]
 	const clamped = clamp(percentile, 0, 1)
 	const index = clamped * (count - 1)

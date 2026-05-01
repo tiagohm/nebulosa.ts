@@ -35,12 +35,18 @@ export type WcsFitsKeywords =
 	| 'B_ORDER'
 	| 'BP_ORDER'
 
+export type TanHeader = readonly [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number] // crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, aOrder, bOrder, apOrder, bpOrder
+
+export type CDMatrix = readonly [number, number, number, number]
+
+export type CDMatrixKind = 'cd' | 'pc' | 'crota' | 'none'
+
 function hasMatchingKeyword(header: FitsHeader, pattern: RegExp) {
 	for (const key in header) if (header[key] !== undefined && pattern.test(key)) return true
 	return false
 }
 
-function matrixKind(header: FitsHeader) {
+export function matrixKind(header: FitsHeader): CDMatrixKind {
 	if (hasMatchingKeyword(header, DIRECT_CD_KEY_PATTERN)) return 'cd'
 	const hasScale = hasKeyword(header, 'CDELT1') && hasKeyword(header, 'CDELT2')
 	if (hasScale && hasMatchingKeyword(header, PC_KEY_PATTERN)) return 'pc'
@@ -56,10 +62,10 @@ function tanAxisType(header: FitsHeader, key: 'CTYPE1' | 'CTYPE2') {
 	return textKeyword(header, key, '').trim().toUpperCase()
 }
 
-const RA_TAN = 'RA---TAN'
-const RA_TAN_SIP = 'RA---TAN-SIP'
-const DEC_TAN = 'DEC--TAN'
-const DEC_TAN_SIP = 'DEC--TAN-SIP'
+export const RA_TAN = 'RA---TAN'
+export const RA_TAN_SIP = 'RA---TAN-SIP'
+export const DEC_TAN = 'DEC--TAN'
+export const DEC_TAN_SIP = 'DEC--TAN-SIP'
 
 function hasTanAxes(header: FitsHeader) {
 	const ctype1 = tanAxisType(header, 'CTYPE1')
@@ -123,13 +129,13 @@ function invertForwardSip(header: FitsHeader, U: number, V: number, aOrder: numb
 	return [u, v] as const
 }
 
-function tanHeader(header: FitsHeader) {
+export function tanHeader(header: FitsHeader): TanHeader | undefined {
 	if (!hasTanAxes(header)) return undefined
 
-	const crpix1 = numericKeyword(header, 'CRPIX1', NaN)
-	const crpix2 = numericKeyword(header, 'CRPIX2', NaN)
-	const crval1 = deg(numericKeyword(header, 'CRVAL1', NaN))
-	const crval2 = deg(numericKeyword(header, 'CRVAL2', NaN))
+	const crpix1 = numericKeyword(header, 'CRPIX1', Number.NaN)
+	const crpix2 = numericKeyword(header, 'CRPIX2', Number.NaN)
+	const crval1 = deg(numericKeyword(header, 'CRVAL1', Number.NaN))
+	const crval2 = deg(numericKeyword(header, 'CRVAL2', Number.NaN))
 	const lonpole = deg(numericKeyword(header, 'LONPOLE', 180))
 	const [cd11, cd12, cd21, cd22] = cdMatrix(header)
 	const scale = Math.max(Math.abs(cd11), Math.abs(cd12), Math.abs(cd21), Math.abs(cd22))
@@ -147,7 +153,7 @@ function tanHeader(header: FitsHeader) {
 		return undefined
 	}
 
-	return [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, aOrder, bOrder, apOrder, bpOrder] as const
+	return [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, aOrder, bOrder, apOrder, bpOrder]
 }
 
 // Reports whether the header contains enough WCS terms to build a CD matrix directly.
@@ -156,10 +162,10 @@ export function hasCd(header: FitsHeader) {
 }
 
 // Builds the 2x2 CD matrix in row-major order from FITS WCS keywords.
-export function cdMatrix(header: FitsHeader) {
-	switch (matrixKind(header)) {
+export function cdMatrix(header: FitsHeader, kind: CDMatrixKind = matrixKind(header)): CDMatrix {
+	switch (kind) {
 		case 'cd':
-			return [numericKeyword(header, 'CD1_1', 0), numericKeyword(header, 'CD1_2', 0), numericKeyword(header, 'CD2_1', 0), numericKeyword(header, 'CD2_2', 0)] as const
+			return [numericKeyword(header, 'CD1_1', 0), numericKeyword(header, 'CD1_2', 0), numericKeyword(header, 'CD2_1', 0), numericKeyword(header, 'CD2_2', 0)]
 		case 'pc': {
 			const a = numericKeyword(header, 'CDELT1', 0)
 			const b = numericKeyword(header, 'CDELT2', 0)
@@ -181,19 +187,19 @@ export function cd(header: FitsHeader, i: number, j: number) {
 }
 
 // Converts CDELT and CROTA2 keywords into a row-major CD matrix, optionally flipping axes.
-export function cdFromCdelt(cdelt1: number, cdelt2: number, crota: Angle, flipH: boolean = false, flipV: boolean = false) {
+export function cdFromCdelt(cdelt1: number, cdelt2: number, crota: Angle, flipH: boolean = false, flipV: boolean = false): CDMatrix {
 	const cos0 = Math.cos(crota)
 	const sin0 = Math.sin(crota)
 	const cd11 = (flipH ? -cdelt1 : cdelt1) * cos0
 	const cd12 = (flipV ? -Math.abs(cdelt2) : Math.abs(cdelt2)) * Math.sign(cdelt1) * sin0
 	const cd21 = (flipH ? Math.abs(cdelt1) : -Math.abs(cdelt1)) * Math.sign(cdelt2) * sin0
 	const cd22 = (flipV ? -cdelt2 : cdelt2) * cos0
-	return [cd11, cd12, cd21, cd22] as const
+	return [cd11, cd12, cd21, cd22]
 }
 
 // Applies CDELT scaling to a row-major PC matrix to produce a row-major CD matrix.
-export function pc2cd(pc11: number, pc12: number, pc21: number, pc22: number, cdelt1: number, cdelt2: number) {
-	return [cdelt1 * pc11, cdelt1 * pc12, cdelt2 * pc21, cdelt2 * pc22] as const
+export function pc2cd(pc11: number, pc12: number, pc21: number, pc22: number, cdelt1: number, cdelt2: number): CDMatrix {
+	return [cdelt1 * pc11, cdelt1 * pc12, cdelt2 * pc21, cdelt2 * pc22]
 }
 
 // Projects equatorial coordinates onto FITS TAN pixel coordinates using the header WCS.

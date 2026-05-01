@@ -15,6 +15,8 @@ export type FFTFilterType = 'lowPass' | 'highPass'
 
 export type SCNRAlgorithm = (a: number, b: number, c: number, amount: number) => number
 
+export type BackgroundNeutralizationMode = 'targetBackground' | 'rescale' | 'rescaleAsNeeded' | 'truncate'
+
 export type Grayscale = Readonly<Record<Lowercase<ImageChannel>, number>>
 
 export type GrayscaleAlgorithm = 'BT709' | 'RMY' | 'Y' | Grayscale
@@ -26,6 +28,8 @@ export type HistogramPixelTransform = (p: number, i: number) => number
 export type SigmaClipCenterMethod = 'median' | 'mean'
 
 export type SigmaClipDispersionMethod = 'std' | 'mad'
+
+export type CurvesTransformationInterpolation = 'cubicHermite' | 'akima' | 'catmullRom' | 'naturalCubic'
 
 export type ImageRawType = Float64Array | Float32Array
 
@@ -67,6 +71,18 @@ export interface GaussianBlurConvolutionOptions extends ConvolutionOptions {
 	size: number
 }
 
+export interface MultiscaleMedianTransformLayerOptions {
+	readonly threshold: number
+	readonly amount: number
+	readonly bias: number
+}
+
+export interface MultiscaleMedianTransformOptions {
+	readonly layers: number
+	readonly detailLayers: readonly Partial<MultiscaleMedianTransformLayerOptions>[]
+	readonly residualGain: number
+}
+
 export interface HistogramOptions {
 	channel?: ImageChannelOrGray
 	area?: Partial<Rect>
@@ -75,9 +91,41 @@ export interface HistogramOptions {
 	sigmaClip?: Int8Array | Uint8Array
 }
 
+export interface CurvesTransformationCurve {
+	readonly channel: ImageChannelOrGray
+	readonly x: Readonly<NumberArray>
+	readonly y: Readonly<NumberArray>
+}
+
+export interface CurvesTransformationOptions {
+	readonly bits: number
+	readonly interpolation: CurvesTransformationInterpolation
+	readonly curves: readonly (CurvesTransformationCurve | undefined)[]
+}
+
 export interface ApplyScreenTransferFunctionOptions {
 	channel?: ImageChannelOrGray
 	bits: number
+}
+
+export interface ArcsinhStretchOptions {
+	stretchFactor: number
+	blackPoint: number
+	protectHighlights: boolean
+	useRgbWorkingSpace: boolean
+	rgbWorkingSpace: GrayscaleAlgorithm
+}
+
+export interface ApproximateArcsinhStretchParameters {
+	readonly stretchFactor: number
+	readonly blackPoint: number
+}
+
+export interface BackgroundNeutralizationOptions {
+	lowerLimit: number
+	upperLimit: number
+	targetBackground: number
+	mode: BackgroundNeutralizationMode
 }
 
 export interface AdaptiveDisplayFunctionOptions extends HistogramOptions {
@@ -134,6 +182,18 @@ export const DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS: Readonly<GaussianBlurCon
 	size: 5,
 }
 
+export const DEFAULT_MMT_LAYER_OPTIONS: Readonly<MultiscaleMedianTransformLayerOptions> = {
+	threshold: 0,
+	amount: 1,
+	bias: 0,
+}
+
+export const DEFAULT_MMT_OPTIONS: Readonly<MultiscaleMedianTransformOptions> = {
+	layers: 3,
+	detailLayers: [],
+	residualGain: 1,
+}
+
 export const DEFAULT_HISTOGRAM_PIXEL_TRANSFORM: HistogramPixelTransform = (p) => p
 
 export const DEFAULT_HISTOGRAM_OPTIONS: Readonly<HistogramOptions> = {
@@ -141,9 +201,30 @@ export const DEFAULT_HISTOGRAM_OPTIONS: Readonly<HistogramOptions> = {
 	bits: 16,
 }
 
+export const DEFAULT_CURVES_TRANSFORMATION_OPTIONS: Readonly<CurvesTransformationOptions> = {
+	bits: 16,
+	interpolation: 'akima',
+	curves: [undefined],
+}
+
 export const DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS: Readonly<ApplyScreenTransferFunctionOptions> = {
 	channel: 'GRAY',
 	bits: 16,
+}
+
+export const DEFAULT_ARCSINH_STRETCH_OPTIONS: Readonly<ArcsinhStretchOptions> = {
+	stretchFactor: 1,
+	blackPoint: 0,
+	protectHighlights: false,
+	useRgbWorkingSpace: false,
+	rgbWorkingSpace: BT709_GRAYSCALE,
+}
+
+export const DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS: Readonly<BackgroundNeutralizationOptions> = {
+	lowerLimit: 0,
+	upperLimit: 1,
+	targetBackground: 0.05,
+	mode: 'rescaleAsNeeded',
 }
 
 export const DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS: Readonly<AdaptiveDisplayFunctionOptions> = {

@@ -2,10 +2,11 @@ import { TAU } from './constants'
 import { exposureTimeKeyword } from './fits.util'
 import { truncatePixel } from './image'
 import { estimateBackgroundUsingMode } from './image.computation'
-// biome-ignore format: too long!
-import { type ApplyScreenTransferFunctionOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type FFTFilterType, type GaussianBlurConvolutionOptions, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
+// oxfmt-ignore
+import { type ApplyScreenTransferFunctionOptions, type ApproximateArcsinhStretchParameters, type ArcsinhStretchOptions, type BackgroundNeutralizationOptions, type CfaPattern, type ConvolutionKernel, type ConvolutionOptions, type CurvesTransformationCurve, type CurvesTransformationInterpolation, type CurvesTransformationOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, DEFAULT_ARCSINH_STRETCH_OPTIONS, DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_CURVES_TRANSFORMATION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, DEFAULT_MMT_LAYER_OPTIONS, DEFAULT_MMT_OPTIONS, type FFTFilterType, type GaussianBlurConvolutionOptions, GRAYSCALES, grayscaleFromChannel, type Image, type ImageChannel, type ImageChannelOrGray, type ImageMetadata, type ImageRawType, type MultiscaleMedianTransformOptions, type SCNRAlgorithm, type SCNRProtectionMethod } from './image.types'
 import { clamp, type NumberArray } from './math'
-import { meanOf } from './util'
+import { akimaSplineLUT, catmullRomSplineLUT, cubicHermiteSplineLUT, naturalCubicSplineLUT } from './spline'
+import { meanOf, medianOf, STANDARD_DEVIATION_SCALE } from './util'
 
 // Apply Screen Transfer Function to image.
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Display_Function__
@@ -20,7 +21,7 @@ export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, hig
 	const { raw, metadata } = image
 	const isColor = metadata.channels === 3
 	const { channel = DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS.channel, bits = DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS.bits } = options
-	const lut = new Float32Array(1 << bits).fill(NaN)
+	const lut = new Float32Array(1 << bits).fill(Number.NaN)
 	const max = lut.length - 1
 
 	const step = isColor && (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') ? 3 : 1
@@ -39,6 +40,464 @@ export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, hig
 			lut[p] = value
 			raw[i] = value
 		}
+	}
+
+	return image
+}
+
+// Solves beta/asinh(beta)=stretchFactor for the PixInsight-compatible softening factor.
+function arcsinhStretchBeta(stretchFactor: number) {
+	if (!(stretchFactor > 1)) return 0
+
+	let low = 0
+	let high = 1
+
+	while (high / Math.asinh(high) < stretchFactor) {
+		high *= 2
+	}
+
+	for (let i = 0; i < 56; i++) {
+		const mid = 0.5 * (low + high)
+		if (mid / Math.asinh(mid) < stretchFactor) low = mid
+		else high = mid
+	}
+
+	return 0.5 * (low + high)
+}
+
+// Clips the black point and renormalizes the remaining range back to [0,1].
+function normalizeArcsinhStretchPixel(value: number, blackPoint: number, inverseSpan: number) {
+	if (value <= blackPoint) return 0
+	return inverseSpan === 0 ? 1 : Math.min(1, (value - blackPoint) * inverseSpan)
+}
+
+// Apply a PixInsight-style arcsinh stretch while preserving RGB ratios above the black point.
+// https://pixinsight.com/doc/tools/ArcsinhStretch/ArcsinhStretch.html
+export function arcsinhStretch(image: Image, options: Partial<ArcsinhStretchOptions> = DEFAULT_ARCSINH_STRETCH_OPTIONS) {
+	const stretchFactor = options.stretchFactor ?? DEFAULT_ARCSINH_STRETCH_OPTIONS.stretchFactor
+	const blackPoint = options.blackPoint ?? DEFAULT_ARCSINH_STRETCH_OPTIONS.blackPoint
+	const protectHighlights = options.protectHighlights ?? DEFAULT_ARCSINH_STRETCH_OPTIONS.protectHighlights
+	const useRgbWorkingSpace = options.useRgbWorkingSpace ?? DEFAULT_ARCSINH_STRETCH_OPTIONS.useRgbWorkingSpace
+	const rgbWorkingSpace = options.rgbWorkingSpace ?? DEFAULT_ARCSINH_STRETCH_OPTIONS.rgbWorkingSpace
+
+	const resolvedStretchFactor = Number.isFinite(stretchFactor) ? Math.max(1, stretchFactor) : DEFAULT_ARCSINH_STRETCH_OPTIONS.stretchFactor
+	const resolvedBlackPoint = Number.isFinite(blackPoint) ? clamp(blackPoint, 0, 1) : DEFAULT_ARCSINH_STRETCH_OPTIONS.blackPoint
+
+	if (resolvedStretchFactor === 1 && resolvedBlackPoint === 0) return image
+
+	const inverseSpan = resolvedBlackPoint === 1 ? 0 : 1 / (1 - resolvedBlackPoint)
+
+	const beta = arcsinhStretchBeta(resolvedStretchFactor)
+	const betaScale = beta === 0 ? 0 : 1 / Math.asinh(beta)
+	const { raw, metadata } = image
+
+	if (metadata.channels === 1) {
+		const n = raw.length
+
+		for (let i = 0; i < n; i++) {
+			const value = normalizeArcsinhStretchPixel(raw[i], resolvedBlackPoint, inverseSpan)
+			raw[i] = beta === 0 ? value : Math.asinh(beta * value) * betaScale
+		}
+
+		return image
+	}
+
+	let redWeight = 1 / 3
+	let greenWeight = 1 / 3
+	let blueWeight = 1 / 3
+
+	if (useRgbWorkingSpace) {
+		const grayscale = typeof rgbWorkingSpace === 'object' ? rgbWorkingSpace : GRAYSCALES[rgbWorkingSpace]
+		const sum = grayscale.red + grayscale.green + grayscale.blue
+
+		if (Number.isFinite(sum) && sum > 0) {
+			redWeight = grayscale.red / sum
+			greenWeight = grayscale.green / sum
+			blueWeight = grayscale.blue / sum
+		}
+	}
+
+	let maxValue = 1
+	const n = raw.length
+
+	for (let i = 0; i < n; i += 3) {
+		const r = normalizeArcsinhStretchPixel(raw[i], resolvedBlackPoint, inverseSpan)
+		const g = normalizeArcsinhStretchPixel(raw[i + 1], resolvedBlackPoint, inverseSpan)
+		const b = normalizeArcsinhStretchPixel(raw[i + 2], resolvedBlackPoint, inverseSpan)
+		const luminance = r * redWeight + g * greenWeight + b * blueWeight
+
+		if (luminance === 0 || beta === 0) {
+			raw[i] = r
+			raw[i + 1] = g
+			raw[i + 2] = b
+		} else {
+			const multiplier = (Math.asinh(beta * luminance) * betaScale) / luminance
+			raw[i] = r * multiplier
+			raw[i + 1] = g * multiplier
+			raw[i + 2] = b * multiplier
+		}
+
+		if (protectHighlights) {
+			if (raw[i] > maxValue) maxValue = raw[i]
+			if (raw[i + 1] > maxValue) maxValue = raw[i + 1]
+			if (raw[i + 2] > maxValue) maxValue = raw[i + 2]
+		} else {
+			raw[i] = Math.min(1, raw[i])
+			raw[i + 1] = Math.min(1, raw[i + 1])
+			raw[i + 2] = Math.min(1, raw[i + 2])
+		}
+	}
+
+	if (protectHighlights && maxValue > 1) {
+		const scale = 1 / maxValue
+		for (let i = 0; i < n; i++) raw[i] *= scale
+	}
+
+	return image
+}
+
+// Evaluates the monochrome arcsinh stretch curve for one normalized sample.
+function arcsinhStretchCurve(value: number, beta: number, blackPoint: number) {
+	const normalized = normalizeArcsinhStretchPixel(value, blackPoint, blackPoint === 1 ? 0 : 1 / (1 - blackPoint))
+	return beta === 0 ? normalized : Math.asinh(beta * normalized) / Math.asinh(beta)
+}
+
+// Solves beta so that arcsinh(normalizedMidpoint)=0.5 whenever the midpoint is stretchable.
+function approximateArcsinhStretchBeta(normalizedMidpoint: number) {
+	if (!(normalizedMidpoint > 0 && normalizedMidpoint < 0.5)) return 0
+
+	let low = 0
+	let high = 1
+
+	while (Math.asinh(high * normalizedMidpoint) / Math.asinh(high) < 0.5) {
+		high *= 2
+	}
+
+	for (let i = 0; i < 56; i++) {
+		const mid = 0.5 * (low + high)
+		if (Math.asinh(mid * normalizedMidpoint) / Math.asinh(mid) < 0.5) low = mid
+		else high = mid
+	}
+
+	return 0.5 * (low + high)
+}
+
+// Measures the RMS curve error between STF and monochrome arcsinh over normalized samples.
+function approximateArcsinhStretchError(midtone: number, shadow: number, highlight: number, beta: number, blackPoint: number) {
+	let sum = 0
+
+	// Evaluates the STF transfer curve for one normalized sample.
+	function stfCurve(value: number) {
+		if (value <= shadow) return 0
+		if (value >= highlight) return 1
+
+		const factor = 1 / (highlight - shadow)
+		const d = value - shadow
+		const k1 = (midtone - 1) * factor
+		const k2 = (2 * midtone - 1) * factor
+		return (d * k1) / (d * k2 - midtone)
+	}
+
+	for (let i = 0; i <= 128; i++) {
+		const value = i / 128
+		const delta = stfCurve(value) - arcsinhStretchCurve(value, beta, blackPoint)
+		sum += delta * delta
+	}
+
+	return Math.sqrt(sum / 129)
+}
+
+// Approximates arcsinh parameters that best match an STF curve over [0,1].
+// searches blackPoint in [0, shadow]
+// for each candidate, solves the arcsinh strength so the STF midpoint lands near 0.5
+// picks the pair with the lowest RMS curve error over sampled [0,1]
+export function approximateArcsinhStretchParameters(midtone: number = 0.5, shadow: number = 0, highlight: number = 1): ApproximateArcsinhStretchParameters {
+	const resolvedMidtone = Number.isFinite(midtone) ? clamp(midtone, 1e-6, 1 - 1e-6) : 0.5
+	const a = Number.isFinite(shadow) ? clamp(shadow, 0, 1) : 0
+	const b = Number.isFinite(highlight) ? clamp(highlight, 0, 1) : 1
+	shadow = Math.min(a, b)
+	highlight = Math.max(b, shadow + 1e-6)
+
+	if (resolvedMidtone === 0.5 && shadow === 0 && highlight === 1) {
+		return { stretchFactor: 1, blackPoint: 0 }
+	}
+
+	const midpoint = shadow + resolvedMidtone * (highlight - shadow)
+	const maxBlackPoint = Math.min(shadow, midpoint - 1e-6)
+
+	let bestBlackPoint = Math.max(0, maxBlackPoint)
+	let bestBeta = approximateArcsinhStretchBeta(normalizeArcsinhStretchPixel(midpoint, bestBlackPoint, bestBlackPoint === 1 ? 0 : 1 / (1 - bestBlackPoint)))
+	let bestError = approximateArcsinhStretchError(resolvedMidtone, shadow, highlight, bestBeta, bestBlackPoint)
+	let low = 0
+	let high = Math.max(0, maxBlackPoint)
+
+	for (let pass = 0; pass < 4; pass++) {
+		const span = high - low
+		const steps = 24
+
+		for (let i = 0; i <= steps; i++) {
+			const blackPoint = span === 0 ? low : low + (span * i) / steps
+			const normalizedMidpoint = normalizeArcsinhStretchPixel(midpoint, blackPoint, blackPoint === 1 ? 0 : 1 / (1 - blackPoint))
+			const beta = approximateArcsinhStretchBeta(normalizedMidpoint)
+			const error = approximateArcsinhStretchError(resolvedMidtone, shadow, highlight, beta, blackPoint)
+
+			if (error < bestError) {
+				bestError = error
+				bestBlackPoint = blackPoint
+				bestBeta = beta
+			}
+		}
+
+		const radius = span === 0 ? 0 : (2 * span) / steps
+		low = Math.max(0, bestBlackPoint - radius)
+		high = Math.max(low, Math.min(maxBlackPoint, bestBlackPoint + radius))
+	}
+
+	return {
+		stretchFactor: bestBeta === 0 ? 1 : bestBeta / Math.asinh(bestBeta),
+		blackPoint: bestBlackPoint,
+	}
+}
+
+// Computes the median of all significant reference samples for one RGB channel.
+function backgroundNeutralizationMedian(raw: ImageRawType, lowerLimit: number, upperLimit: number, channel: number, samples: Float64Array, tolerance: number) {
+	let count = 0
+
+	const n = raw.length
+
+	lowerLimit += tolerance
+	upperLimit += tolerance
+
+	for (let i = channel; i < n; i += 3) {
+		const value = raw[i]
+
+		if (value > lowerLimit && value <= upperLimit) {
+			samples[count++] = value
+		}
+	}
+
+	if (count === 0) return Number.NaN
+	if (count === 1) return samples[0]
+
+	return medianOf(samples.subarray(0, count).sort())
+}
+
+// Affinely rescales the current image range to [0,1].
+function backgroundNeutralizationRescale(image: Image, minValue: number, maxValue: number) {
+	const { raw } = image
+	const n = raw.length
+	const span = maxValue - minValue
+
+	if (!(span > 0) || !Number.isFinite(span)) {
+		for (let i = 0; i < n; i++) raw[i] = clamp(raw[i], 0, 1)
+		return image
+	}
+
+	const scale = 1 / span
+
+	for (let i = 0; i < n; i++) {
+		raw[i] = (raw[i] - minValue) * scale
+	}
+
+	return image
+}
+
+// Clamps all pixels to the normalized floating-point image range.
+function backgroundNeutralizationTruncate(image: Image) {
+	const { raw } = image
+	const n = raw.length
+
+	for (let i = 0; i < n; i++) {
+		raw[i] = clamp(raw[i], 0, 1)
+	}
+
+	return image
+}
+
+// Neutralizes the RGB background by matching per-channel medians on a reference region.
+// PixInsight's classic BackgroundNeutralization works additively: v1 = v0 + M1 - M0.
+export function backgroundNeutralization(image: Image, options: Partial<BackgroundNeutralizationOptions> = DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS) {
+	if (image.metadata.channels !== 3) return image
+
+	const mode = options.mode ?? DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.mode
+	const targetBackground = Number.isFinite(options.targetBackground) ? clamp(options.targetBackground!, 0, 1) : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.targetBackground
+	const lowerInput = Number.isFinite(options.lowerLimit) ? options.lowerLimit! : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.lowerLimit
+	const upperInput = Number.isFinite(options.upperLimit) ? options.upperLimit! : DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS.upperLimit
+	const lowerLimit = Math.min(lowerInput, upperInput)
+	const upperLimit = Math.max(lowerInput, upperInput)
+
+	const { raw, metadata } = image
+	const samples = new Float64Array(metadata.pixelCount)
+	const medians = new Float64Array(3)
+	const limitTolerance = raw instanceof Float32Array ? 1e-7 : 1e-12
+
+	for (let channel = 0; channel < 3; channel++) {
+		const median = backgroundNeutralizationMedian(raw, lowerLimit, upperLimit, channel, samples, limitTolerance)
+
+		if (!Number.isFinite(median)) {
+			throw new TypeError(`background neutralization requires at least one significant ${channel === 0 ? 'RED' : channel === 1 ? 'GREEN' : 'BLUE'} sample in the reference area`)
+		}
+
+		medians[channel] = median
+	}
+
+	const targetMedian = mode === 'targetBackground' ? targetBackground : 0
+	const redShift = targetMedian - medians[0]
+	const greenShift = targetMedian - medians[1]
+	const blueShift = targetMedian - medians[2]
+	let minValue = Number.POSITIVE_INFINITY
+	let maxValue = Number.NEGATIVE_INFINITY
+
+	for (let i = 0; i < raw.length; i += 3) {
+		const red = raw[i] + redShift
+		const green = raw[i + 1] + greenShift
+		const blue = raw[i + 2] + blueShift
+
+		raw[i] = red
+		raw[i + 1] = green
+		raw[i + 2] = blue
+
+		if (Number.isFinite(red)) {
+			if (red < minValue) minValue = red
+			if (red > maxValue) maxValue = red
+		}
+
+		if (Number.isFinite(green)) {
+			if (green < minValue) minValue = green
+			if (green > maxValue) maxValue = green
+		}
+
+		if (Number.isFinite(blue)) {
+			if (blue < minValue) minValue = blue
+			if (blue > maxValue) maxValue = blue
+		}
+	}
+
+	if (mode === 'rescale') return backgroundNeutralizationRescale(image, minValue, maxValue)
+	if (mode === 'rescaleAsNeeded' && (minValue < 0 || maxValue > 1)) return backgroundNeutralizationRescale(image, minValue, maxValue)
+	if (mode === 'truncate' || mode === 'targetBackground') return backgroundNeutralizationTruncate(image)
+
+	return image
+}
+
+interface ResolvedCurvesTransformationCurve {
+	readonly channel: ImageChannelOrGray
+	readonly x: Float64Array
+	readonly y: Float64Array
+	readonly identity: boolean
+}
+
+const IDENTITY_CURVES_TRANSFORMATION = new Float64Array([0, 1])
+
+// Resolves one user curve, injects missing end points, and detects identity mappings.
+function resolveCurvesTransformationCurve(curve: CurvesTransformationCurve | undefined): ResolvedCurvesTransformationCurve {
+	if (curve === undefined) return { channel: 'GRAY', x: IDENTITY_CURVES_TRANSFORMATION, y: IDENTITY_CURVES_TRANSFORMATION, identity: true }
+
+	const { x: cx, y: cy } = curve
+	const n = cx.length
+
+	if (n !== cy.length) throw new Error('curves transformation x and y arrays must have the same length')
+	if (n === 0) return { channel: curve.channel, x: IDENTITY_CURVES_TRANSFORMATION, y: IDENTITY_CURVES_TRANSFORMATION, identity: true }
+
+	for (let i = 0; i < n; i++) {
+		if (!Number.isFinite(cx[i]) || !Number.isFinite(cy[i])) throw new Error('curves transformation control points must be finite')
+	}
+
+	const firstX = clamp(cx[0], 0, 1)
+	const lastX = clamp(cx[n - 1], 0, 1)
+	const prepend = firstX > 0 ? 1 : 0
+	const append = lastX < 1 ? 1 : 0
+	const x = new Float64Array(n + prepend + append)
+	const y = new Float64Array(n + prepend + append)
+	let offset = 0
+
+	if (prepend) {
+		x[0] = 0
+		y[0] = 0
+		offset = 1
+	}
+
+	for (let i = 0; i < n; i++) {
+		x[i + offset] = clamp(cx[i], 0, 1)
+		y[i + offset] = clamp(cy[i], 0, 1)
+	}
+
+	if (append) {
+		x[x.length - 1] = 1
+		y[y.length - 1] = 1
+	}
+
+	let identity = true
+
+	for (let i = 0; i < x.length; i++) {
+		if (!Number.isFinite(x[i]) || !Number.isFinite(y[i])) throw new Error('curves transformation control points must be finite')
+		if (i > 0 && !(x[i] > x[i - 1])) throw new Error('curves transformation x coordinates must be strictly increasing after clamping')
+		if (identity && Math.abs(x[i] - y[i]) > 1e-12) identity = false
+	}
+
+	return { channel: curve.channel, x, y, identity }
+}
+
+// Builds and clamps a LUT for one resolved interpolation curve.
+function curvesTransformationLUT(curve: ResolvedCurvesTransformationCurve, bits: number, interpolation: CurvesTransformationInterpolation) {
+	if (curve.identity) return undefined
+	const size = 1 << bits
+	const lut = interpolation === 'cubicHermite' ? cubicHermiteSplineLUT(curve.x, curve.y, size) : interpolation === 'catmullRom' ? catmullRomSplineLUT(curve.x, curve.y, size) : interpolation === 'naturalCubic' ? naturalCubicSplineLUT(curve.x, curve.y, size) : akimaSplineLUT(curve.x, curve.y, size)
+	const n = lut.length
+	for (let i = 0; i < n; i++) lut[i] = clamp(lut[i], 0, 1)
+	return lut
+}
+
+// Applies the shared RGB/K-style curve to every stored sample.
+function applyCurvesTransformation(image: Image, lut: Float32Array, channel: ImageChannelOrGray) {
+	const { raw, metadata } = image
+	const max = lut.length - 1
+	const n = raw.length
+
+	if (metadata.channels === 1) for (let i = 0; i < n; i++) raw[i] = lut[truncatePixel(raw[i], max)]
+	else if (channel === 'RED') for (let i = 0; i < n; i += 3) raw[i] = lut[truncatePixel(raw[i], max)]
+	else if (channel === 'GREEN') for (let i = 1; i < n; i += 3) raw[i] = lut[truncatePixel(raw[i], max)]
+	else if (channel === 'BLUE') for (let i = 2; i < n; i += 3) raw[i] = lut[truncatePixel(raw[i], max)]
+	else {
+		const { red, green, blue } = typeof channel === 'string' ? GRAYSCALES[channel] : channel
+
+		for (let i = 0; i < n; i += 3) {
+			const r = raw[i]
+			const g = raw[i + 1]
+			const b = raw[i + 2]
+			const p = clamp(red * r + green * g + blue * b, 0, 1)
+			const v = lut[truncatePixel(p, max)]
+
+			if (p > 0) {
+				const scale = v / p
+				raw[i] = clamp(r * scale, 0, 1)
+				raw[i + 1] = clamp(g * scale, 0, 1)
+				raw[i + 2] = clamp(b * scale, 0, 1)
+			} else {
+				raw[i] = v
+				raw[i + 1] = v
+				raw[i + 2] = v
+			}
+		}
+	}
+
+	return image
+}
+
+// Applies RGB/K curves through a configurable spline LUT.
+// https://pixinsight.com/doc/legacy/LE/17_curves/curves_transforms/curves_transforms.html
+// https://pixinsight.com/doc/legacy/LE/17_curves/curves_window/curves_window.html
+// https://pixinsight.com/forum/index.php?threads/creating-a-smooth-surface-from-an-array-of-points.14567/
+export function curvesTransformation(image: Image, options: Partial<CurvesTransformationOptions> = DEFAULT_CURVES_TRANSFORMATION_OPTIONS): Image {
+	const curves = !options.curves || options.curves?.length === 0 ? DEFAULT_CURVES_TRANSFORMATION_OPTIONS.curves : options.curves
+	const bits = Number.isFinite(options.bits) ? clamp(Math.trunc(options.bits ?? DEFAULT_CURVES_TRANSFORMATION_OPTIONS.bits), 8, 24) : DEFAULT_CURVES_TRANSFORMATION_OPTIONS.bits
+	const interpolation = options.interpolation || DEFAULT_CURVES_TRANSFORMATION_OPTIONS.interpolation
+	const resolvedCurves = curves.map(resolveCurvesTransformationCurve)
+
+	for (const curve of resolvedCurves) {
+		if (curve.identity) continue
+		const lut = curvesTransformationLUT(curve, bits, interpolation)
+		lut !== undefined && applyCurvesTransformation(image, lut, curve.channel)
 	}
 
 	return image
@@ -154,6 +613,7 @@ function debayerPixel(raw: ImageRawType, output: ImageRawType, width: number, ci
 	output[oi] = values[2] / counters[2]
 }
 
+// Debayers a mono CFA frame back into RGB using neighborhood averaging.
 export function debayer(image: Image, pattern?: CfaPattern): Image | undefined {
 	const { metadata, raw } = image
 
@@ -256,26 +716,31 @@ export function debayer(image: Image, pattern?: CfaPattern): Image | undefined {
 	return undefined
 }
 
+// Computes the maximum-mask SCNR attenuation for one protected channel sample.
 export function scnrMaximumMask(a: number, b: number, c: number, amount: number) {
 	const m = Math.max(b, c)
 	return a * (1 - amount) * (1 - m) + m * a
 }
 
+// Computes the additive-mask SCNR attenuation for one protected channel sample.
 export function scnrAdditiveMask(a: number, b: number, c: number, amount: number) {
 	const m = Math.min(1, b + c)
 	return a * (1 - amount) * (1 - m) + m * a
 }
 
+// Computes the average-neutral SCNR replacement for one protected channel sample.
 export function scnrAverageNeutral(a: number, b: number, c: number, amount: number) {
 	const m = 0.5 * (b + c)
 	return Math.min(a, m)
 }
 
+// Computes the maximum-neutral SCNR replacement for one protected channel sample.
 export function scnrMaximumNeutral(a: number, b: number, c: number, amount: number) {
 	const m = Math.max(b, c)
 	return Math.min(a, m)
 }
 
+// Computes the minimum-neutral SCNR replacement for one protected channel sample.
 export function scnrMinimumNeutral(a: number, b: number, c: number, amount: number) {
 	const m = Math.min(b, c)
 	return Math.min(a, m)
@@ -312,6 +777,7 @@ export function scnr(image: Image, channel: ImageChannel = 'GREEN', amount: numb
 	return image
 }
 
+// Mirrors the image across the vertical axis in place.
 export function horizontalFlip(image: Image) {
 	const { raw, metadata } = image
 	const { height, channels, stride } = metadata
@@ -336,6 +802,7 @@ export function horizontalFlip(image: Image) {
 	return image
 }
 
+// Mirrors the image across the horizontal axis in place.
 export function verticalFlip(image: Image) {
 	const { raw, metadata } = image
 	const { height, channels, stride } = metadata
@@ -361,6 +828,7 @@ export function verticalFlip(image: Image) {
 	return image
 }
 
+// Inverts every normalized sample in place.
 export function invert(image: Image) {
 	const { raw } = image
 	const n = raw.length
@@ -372,6 +840,7 @@ export function invert(image: Image) {
 	return image
 }
 
+// Converts an RGB image to a single grayscale channel.
 export function grayscale(image: Image, channel?: ImageChannelOrGray): Image {
 	if (image.metadata.channels === 1) return image
 
@@ -400,6 +869,7 @@ export function grayscale(image: Image, channel?: ImageChannelOrGray): Image {
 	return { header, metadata, raw }
 }
 
+// Builds a convolution kernel descriptor and infers its divisor when omitted.
 export function convolutionKernel(kernel: Readonly<NumberArray>, width: number, height: number = width, divisor?: number): ConvolutionKernel {
 	if (kernel.length < width * height) {
 		throw new Error('invalid kernel size')
@@ -410,6 +880,7 @@ export function convolutionKernel(kernel: Readonly<NumberArray>, width: number, 
 	return { kernel, width, height, divisor }
 }
 
+// Rotates the convolution row buffer forward by one slot.
 function shift(buffer: NumberArray[]) {
 	const n = buffer.length - 1
 	const first = buffer[0]
@@ -417,6 +888,7 @@ function shift(buffer: NumberArray[]) {
 	buffer[n] = first
 }
 
+// Applies a spatial convolution kernel in place with optional edge renormalization.
 export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDivisorForEdges = true, normalize = true }: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	if (kernel.width % 2 === 0 || kernel.height % 2 === 0) {
 		throw new Error('kernel size must be odd')
@@ -434,6 +906,7 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 	const { width: kw, height: kh, kernel: kd } = kernel
 	const buffer = new Array<ImageRawType>(kh)
 
+	// Copies one source row into the rolling convolution buffer when it is in bounds.
 	function read(y: number, output: ImageRawType) {
 		if (y < 0 || y >= ih) {
 			// output.fill(0)
@@ -499,7 +972,7 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 		}
 
 		shift(buffer)
-		read(y + yr + 1, buffer[buffer.length - 1])
+		read(y + yr + 1, buffer.at(-1)!)
 	}
 
 	return image
@@ -515,6 +988,7 @@ const BLUR_3x3 = convolutionKernel(new Int8Array([1, 2, 1, 2, 4, 2, 1, 2, 1]), 3
 const BLUR_5x5 = convolutionKernel(new Int8Array([1, 2, 3, 2, 1, 2, 4, 6, 4, 2, 3, 6, 9, 6, 3, 2, 4, 6, 4, 2, 1, 2, 3, 2, 1]), 5, 5, 81)
 const BLUR_7x7 = convolutionKernel(new Int8Array([1, 2, 3, 4, 3, 2, 1, 2, 4, 6, 8, 6, 4, 2, 3, 6, 9, 12, 9, 6, 3, 4, 8, 12, 16, 12, 8, 4, 3, 6, 9, 12, 9, 6, 3, 2, 4, 6, 8, 6, 4, 2, 1, 2, 3, 4, 3, 2, 1]), 7, 7, 256)
 
+// Builds a normalized Gaussian convolution kernel from sigma and kernel size.
 export function gaussianBlurKernel(sigma: number = 1.4, size: number = 5) {
 	if (size < 2 || size % 2 === 0) {
 		throw new Error('size must be odd and greater or equal to 3')
@@ -526,6 +1000,7 @@ export function gaussianBlurKernel(sigma: number = 1.4, size: number = 5) {
 	const sigmaSquared = sigma * sigma
 	const r = Math.trunc(Math.trunc(size) / 2)
 
+	// Evaluates the continuous 2D Gaussian density at one kernel offset.
 	function gaussian2D(x: number, y: number) {
 		return Math.exp((x * x + y * y) / (-2 * sigmaSquared)) / (TAU * sigmaSquared)
 	}
@@ -547,14 +1022,17 @@ export function gaussianBlurKernel(sigma: number = 1.4, size: number = 5) {
 	return convolutionKernel(kernel, size)
 }
 
+// Applies the 3x3 edge-detection kernel.
 export function edges(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, EDGES, options)
 }
 
+// Applies the 3x3 emboss kernel.
 export function emboss(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, EMBOSS, options)
 }
 
+// Builds a box-blur kernel of arbitrary odd size.
 export function meanConvolutionKernel(size: number) {
 	if (size < 3) throw new Error('size must be greater or equal to 3')
 	if (size > 99) throw new Error('size must be less or equal to 99')
@@ -564,6 +1042,7 @@ export function meanConvolutionKernel(size: number) {
 	return convolutionKernel(kernel, size, size, kernel.length)
 }
 
+// Applies mean convolution with optimized kernels for common sizes.
 export function mean(image: Image, size: number, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	if (size === 3) return mean3x3(image, options)
 	if (size === 5) return mean5x5(image, options)
@@ -572,22 +1051,27 @@ export function mean(image: Image, size: number, options: Partial<ConvolutionOpt
 	return convolution(image, meanConvolutionKernel(size), options)
 }
 
+// Applies the 3x3 mean blur kernel.
 export function mean3x3(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, MEAN_3x3, options)
 }
 
+// Applies the 5x5 mean blur kernel.
 export function mean5x5(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, MEAN_5x5, options)
 }
 
+// Applies the 7x7 mean blur kernel.
 export function mean7x7(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, MEAN_7x7, options)
 }
 
+// Applies the 3x3 sharpening kernel.
 export function sharpen(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, SHARPEN, options)
 }
 
+// Builds a pyramid-weight blur kernel of arbitrary odd size.
 export function blurConvolutionKernel(size: number) {
 	if (size < 3) throw new Error('size must be greater or equal to 3')
 	if (size > 99) throw new Error('size must be less or equal to 99')
@@ -610,6 +1094,7 @@ export function blurConvolutionKernel(size: number) {
 	return convolutionKernel(kernel, size, size, divisor * divisor)
 }
 
+// Applies pyramid blur convolution with optimized kernels for common sizes.
 export function blur(image: Image, size: number, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	if (size === 3) return blur3x3(image, options)
 	if (size === 5) return blur5x5(image, options)
@@ -618,20 +1103,251 @@ export function blur(image: Image, size: number, options: Partial<ConvolutionOpt
 	return convolution(image, blurConvolutionKernel(size), options)
 }
 
+// Applies the 3x3 pyramid blur kernel.
 export function blur3x3(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, BLUR_3x3, options)
 }
 
+// Applies the 5x5 pyramid blur kernel.
 export function blur5x5(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, BLUR_5x5, options)
 }
 
+// Applies the 7x7 pyramid blur kernel.
 export function blur7x7(image: Image, options: Partial<ConvolutionOptions> = DEFAULT_CONVOLUTION_OPTIONS) {
 	return convolution(image, BLUR_7x7, options)
 }
 
+// Applies Gaussian blur using a generated kernel.
 export function gaussianBlur(image: Image, options: Partial<GaussianBlurConvolutionOptions> = DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS) {
 	return convolution(image, gaussianBlurKernel(options.sigma, options.size), options)
+}
+
+const MMT_MEDIAN_HISTOGRAM_BITS = 14
+const MMT_MEDIAN_HISTOGRAM_SIZE = 1 << MMT_MEDIAN_HISTOGRAM_BITS
+const MMT_MEDIAN_HISTOGRAM_LAST = MMT_MEDIAN_HISTOGRAM_SIZE - 1
+const MMT_MEDIAN_HISTOGRAM_GROUP_BITS = 6
+const MMT_MEDIAN_HISTOGRAM_GROUP_SIZE = 1 << MMT_MEDIAN_HISTOGRAM_GROUP_BITS
+const MMT_MEDIAN_HISTOGRAM_GROUP_COUNT = MMT_MEDIAN_HISTOGRAM_SIZE >> MMT_MEDIAN_HISTOGRAM_GROUP_BITS
+
+// Tracks the quantization range for one image channel.
+function multiscaleMedianHistogramRange(raw: ImageRawType, channels: number, channel: number) {
+	let min = Number.POSITIVE_INFINITY
+	let max = Number.NEGATIVE_INFINITY
+
+	for (let i = channel; i < raw.length; i += channels) {
+		const value = raw[i]
+
+		if (value < min) min = value
+		if (value > max) max = value
+	}
+
+	return [min, max] as const
+}
+
+// Quantizes one value into the MMT histogram domain.
+function multiscaleMedianHistogramBin(value: number, min: number, inverse: number) {
+	const bin = Math.round((value - min) * inverse)
+	if (bin <= 0) return 0
+	if (bin >= MMT_MEDIAN_HISTOGRAM_LAST) return MMT_MEDIAN_HISTOGRAM_LAST
+	return bin
+}
+
+// Updates both fine and coarse histograms for one quantized sample.
+function multiscaleMedianHistogramUpdate(fine: Int32Array, coarse: Int32Array, bin: number, delta: number) {
+	fine[bin] += delta
+	coarse[bin >>> MMT_MEDIAN_HISTOGRAM_GROUP_BITS] += delta
+}
+
+// Adds or removes a full window column from the histogram.
+function multiscaleMedianHistogramColumn(raw: ImageRawType, stride: number, channels: number, channel: number, x: number, y0: number, y1: number, min: number, inverse: number, fine: Int32Array, coarse: Int32Array, delta: number) {
+	for (let y = y0, i = y0 * stride + x * channels + channel; y <= y1; y++, i += stride) {
+		const bin = multiscaleMedianHistogramBin(raw[i], min, inverse)
+		multiscaleMedianHistogramUpdate(fine, coarse, bin, delta)
+	}
+}
+
+// Finds the first bin whose cumulative population exceeds the requested rank.
+function multiscaleMedianHistogramSelect(fine: Int32Array, coarse: Int32Array, rank: number) {
+	let cumulative = 0
+	let group = 0
+
+	for (; group < coarse.length; group++) {
+		const next = cumulative + coarse[group]
+		if (next > rank) break
+		cumulative = next
+	}
+
+	const start = group << MMT_MEDIAN_HISTOGRAM_GROUP_BITS
+	const end = Math.min(start + MMT_MEDIAN_HISTOGRAM_GROUP_SIZE, fine.length)
+
+	for (let bin = start; bin < end; bin++) {
+		cumulative += fine[bin]
+		if (cumulative > rank) return bin
+	}
+
+	return MMT_MEDIAN_HISTOGRAM_LAST
+}
+
+// Returns the quantized median value for the current histogram population.
+function multiscaleMedianHistogramMedian(fine: Int32Array, coarse: Int32Array, count: number, min: number, scale: number) {
+	if (count <= 1 || scale === 0) return min
+
+	const lower = multiscaleMedianHistogramSelect(fine, coarse, (count - 1) >>> 1)
+	const upper = multiscaleMedianHistogramSelect(fine, coarse, count >>> 1)
+	return min + (lower + upper) * 0.5 * scale
+}
+
+// Applies a quantized Huang-style sliding median with truncated borders.
+function multiscaleMedianFilter(raw: ImageRawType, output: ImageRawType, metadata: ImageMetadata, radius: number) {
+	if (radius <= 0) {
+		output.set(raw)
+		return output
+	}
+
+	const { width, height, channels, stride } = metadata
+	const fine = new Int32Array(MMT_MEDIAN_HISTOGRAM_SIZE)
+	const coarse = new Int32Array(MMT_MEDIAN_HISTOGRAM_GROUP_COUNT)
+
+	for (let channel = 0; channel < channels; channel++) {
+		const range = multiscaleMedianHistogramRange(raw, channels, channel)
+
+		const [min, max] = range
+		const scale = (max - min) / MMT_MEDIAN_HISTOGRAM_LAST
+
+		if (scale === 0) {
+			for (let y = 0, i = channel; y < height; y++) {
+				for (let x = 0; x < width; x++, i += channels) {
+					output[i] = min
+				}
+			}
+
+			continue
+		}
+
+		const inverse = 1 / scale
+
+		for (let y = 0; y < height; y++) {
+			const y0 = Math.max(0, y - radius)
+			const y1 = Math.min(height - 1, y + radius)
+			const rowCount = y1 - y0 + 1
+
+			fine.fill(0)
+			coarse.fill(0)
+
+			for (let x = 0, end = Math.min(width - 1, radius); x <= end; x++) {
+				multiscaleMedianHistogramColumn(raw, stride, channels, channel, x, y0, y1, min, inverse, fine, coarse, 1)
+			}
+
+			for (let x = 0, i = y * stride + channel; x < width; x++, i += channels) {
+				const left = Math.max(0, x - radius)
+				const right = Math.min(width - 1, x + radius)
+				const count = rowCount * (right - left + 1)
+
+				output[i] = multiscaleMedianHistogramMedian(fine, coarse, count, min, scale)
+
+				const removeX = x - radius
+
+				if (removeX >= 0) {
+					multiscaleMedianHistogramColumn(raw, stride, channels, channel, removeX, y0, y1, min, inverse, fine, coarse, -1)
+				}
+
+				const addX = x + radius + 1
+
+				if (addX < width) {
+					multiscaleMedianHistogramColumn(raw, stride, channels, channel, addX, y0, y1, min, inverse, fine, coarse, 1)
+				}
+			}
+		}
+	}
+
+	return output
+}
+
+// Estimates a robust per-channel coefficient scale for MMT thresholding.
+function multiscaleMedianScales(working: ImageRawType, filtered: ImageRawType, channels: number) {
+	const pixelCount = working.length / channels
+	const samples = new Float64Array(pixelCount)
+	const scales = new Float64Array(channels)
+
+	for (let channel = 0; channel < channels; channel++) {
+		let sumSquares = 0
+
+		for (let i = channel, k = 0; i < working.length; i += channels, k++) {
+			const value = working[i] - filtered[i]
+			const absolute = Math.abs(value)
+			samples[k] = absolute
+			sumSquares += value * value
+		}
+
+		let scale = STANDARD_DEVIATION_SCALE * medianOf(samples.sort(), pixelCount)
+
+		// Sparse detail layers can have zero MAD, so fall back to RMS.
+		if (!(scale > 0)) {
+			scale = Math.sqrt(sumSquares / pixelCount)
+		}
+
+		scales[channel] = scale
+	}
+
+	return scales
+}
+
+// Applies a redundant dyadic multiscale median transform similar to PixInsight's MMT.
+export function multiscaleMedianTransform(image: Image, options: Partial<MultiscaleMedianTransformOptions> = DEFAULT_MMT_OPTIONS): Image {
+	const resolvedLayers = options.layers ?? DEFAULT_MMT_OPTIONS.layers
+	const layers = Number.isFinite(resolvedLayers) ? Math.max(0, Math.trunc(resolvedLayers)) : DEFAULT_MMT_OPTIONS.layers
+
+	if (layers === 0) return image
+
+	const detailLayers = options.detailLayers ?? DEFAULT_MMT_OPTIONS.detailLayers
+	const resolvedResidualGain = options.residualGain ?? DEFAULT_MMT_OPTIONS.residualGain
+	const residualGain = Number.isFinite(resolvedResidualGain) ? resolvedResidualGain : DEFAULT_MMT_OPTIONS.residualGain
+	const { raw, metadata } = image
+	const n = raw.length
+	const working = raw.slice()
+	const filtered = raw instanceof Float64Array ? new Float64Array(n) : new Float32Array(n)
+
+	raw.fill(0)
+
+	for (let layer = 0; layer < layers; layer++) {
+		const radius = 1 << layer
+		const detailLayer = detailLayers[layer]
+		const resolvedThreshold = detailLayer?.threshold ?? DEFAULT_MMT_LAYER_OPTIONS.threshold
+		const threshold = Number.isFinite(resolvedThreshold) ? Math.max(0, resolvedThreshold) : DEFAULT_MMT_LAYER_OPTIONS.threshold
+		const resolvedAmount = detailLayer?.amount ?? DEFAULT_MMT_LAYER_OPTIONS.amount
+		const amount = Number.isFinite(resolvedAmount) ? clamp(resolvedAmount, 0, 1) : DEFAULT_MMT_LAYER_OPTIONS.amount
+		const resolvedBias = detailLayer?.bias ?? DEFAULT_MMT_LAYER_OPTIONS.bias
+		const bias = Number.isFinite(resolvedBias) ? resolvedBias : DEFAULT_MMT_LAYER_OPTIONS.bias
+		const gain = 1 + bias
+
+		multiscaleMedianFilter(working, filtered, metadata, radius)
+
+		const scales = threshold > 0 && amount > 0 ? multiscaleMedianScales(working, filtered, metadata.channels) : undefined
+
+		for (let i = 0; i < n; i++) {
+			let value = working[i] - filtered[i]
+
+			if (scales !== undefined) {
+				const limit = threshold * scales[i % metadata.channels]
+
+				if (Math.abs(value) <= limit) {
+					value *= 1 - amount
+				}
+			}
+
+			raw[i] += value * gain
+			working[i] = filtered[i]
+		}
+	}
+
+	if (residualGain !== 0) {
+		for (let i = 0; i < n; i++) {
+			raw[i] += working[i] * residualGain
+		}
+	}
+
+	return image
 }
 
 interface FFTPlan {
@@ -715,6 +1431,7 @@ export class FFTWorkspace {
 
 	#mask?: FFTMaskCache
 
+	// Allocates reusable padded FFT buffers for the requested image size.
 	constructor(width: number, height: number) {
 		width = fftPaddedSize(width)
 		height = fftPaddedSize(height)
@@ -733,6 +1450,7 @@ export class FFTWorkspace {
 		this.columnImaginary = new Float64Array(columnSize)
 	}
 
+	// Returns a cached radial mask for the current workspace dimensions.
 	mask(filterType: FFTFilterType, cutoff: number) {
 		if (this.#mask !== undefined && this.#mask.filterType === filterType && Math.abs(this.#mask.cutoff - cutoff) <= Number.EPSILON) {
 			return this.#mask
@@ -1007,11 +1725,13 @@ const PSF = new Float32Array([0.906, 0.584, 0.365, 0.117, 0.049, -0.05, -0.064, 
 // 8@C2, D2
 // 44 * D3
 
+// Applies the KStars internal guider PSF filter in place.
 export function psf(image: Image) {
 	const { raw, metadata } = image
 	const { width: iw, height: ih, channels, stride } = metadata
 	const buffer = new Array<ImageRawType>(9)
 
+	// Copies one source row into the rolling PSF buffer when it is in bounds.
 	function read(y: number, output: ImageRawType) {
 		if (y < 0 || y >= ih) {
 			// output.fill(0)
@@ -1078,7 +1798,7 @@ export function psf(image: Image) {
 		}
 
 		shift(buffer)
-		read(y + 5, buffer[buffer.length - 1])
+		read(y + 5, buffer.at(-1)!)
 	}
 
 	return image
@@ -1154,12 +1874,14 @@ export function gamma(image: Image, value: number) {
 	return image
 }
 
+// Verifies that two images share the same dimensions and channel layout.
 function checkDimensions(a: Image, b: Image) {
 	if (a.metadata.channels !== b.metadata.channels) throw new Error(`channels does not match: ${a.metadata.channels} != ${b.metadata.channels}`)
 	if (a.metadata.width !== b.metadata.width) throw new Error(`width does not match: ${a.metadata.width} != ${b.metadata.width}`)
 	if (a.metadata.height !== b.metadata.height) throw new Error(`height does not match: ${a.metadata.height} != ${b.metadata.height}`)
 }
 
+// Deep-clones image header, metadata, and pixel storage.
 export function clone(image: Image): Image {
 	const header = structuredClone(image.header)
 	const metadata = structuredClone(image.metadata)
@@ -1168,6 +1890,7 @@ export function clone(image: Image): Image {
 	return { header, metadata, raw }
 }
 
+// Copies pixel samples from one image into another with matching dimensions.
 export function copyInto(from: Image, to: Image) {
 	checkDimensions(from, to)
 
@@ -1178,6 +1901,7 @@ export function copyInto(from: Image, to: Image) {
 	return to
 }
 
+// Adds two images sample by sample and clamps the result to [0,1].
 export function plus(a: Image, b: Image, out: Image = a) {
 	checkDimensions(a, b)
 	checkDimensions(b, out)
@@ -1187,6 +1911,7 @@ export function plus(a: Image, b: Image, out: Image = a) {
 	return out
 }
 
+// Adds a scalar to every sample and clamps the result to [0,1].
 export function plusScalar(a: Image, scalar: number, out: Image = a) {
 	checkDimensions(a, out)
 
@@ -1195,6 +1920,7 @@ export function plusScalar(a: Image, scalar: number, out: Image = a) {
 	return out
 }
 
+// Subtracts one image from another sample by sample and clamps at zero.
 export function subtract(a: Image, b: Image, out: Image = a) {
 	checkDimensions(a, b)
 	checkDimensions(b, out)
@@ -1204,6 +1930,7 @@ export function subtract(a: Image, b: Image, out: Image = a) {
 	return out
 }
 
+// Subtracts a scalar from every sample and clamps at zero.
 export function subtractScalar(a: Image, scalar: number, out: Image = a) {
 	checkDimensions(a, out)
 
@@ -1212,6 +1939,7 @@ export function subtractScalar(a: Image, scalar: number, out: Image = a) {
 	return out
 }
 
+// Multiplies two images sample by sample.
 export function multiply(a: Image, b: Image, out: Image = a) {
 	checkDimensions(a, b)
 	checkDimensions(b, out)
@@ -1221,6 +1949,7 @@ export function multiply(a: Image, b: Image, out: Image = a) {
 	return out
 }
 
+// Multiplies every sample by a scalar.
 export function multiplyScalar(a: Image, scalar: number, out: Image = a) {
 	checkDimensions(a, out)
 
@@ -1229,6 +1958,7 @@ export function multiplyScalar(a: Image, scalar: number, out: Image = a) {
 	return out
 }
 
+// Divides one image by another sample by sample.
 export function divide(a: Image, b: Image, out: Image = a) {
 	checkDimensions(a, b)
 	checkDimensions(b, out)
@@ -1238,6 +1968,7 @@ export function divide(a: Image, b: Image, out: Image = a) {
 	return out
 }
 
+// Divides every sample by a scalar.
 export function divideScalar(a: Image, scalar: number, out: Image = a) {
 	checkDimensions(a, out)
 

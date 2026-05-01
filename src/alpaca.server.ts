@@ -1,12 +1,12 @@
-// biome-ignore format: too long!
-import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerDescription, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './alpaca.types'
+// oxfmt-ignore
+import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './alpaca.types'
 import { type Angle, deg, hour, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import { type EquatorialCoordinate, equatorialToHorizontal } from './coordinate'
 import { meter, toMeter } from './distance'
 import { Bitpix, computeRemainingBytes, FitsKeywordReader } from './fits'
 import { bitpixInBytes } from './fits.util'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type TrackMode, type Wheel } from './indi.device'
 import type { DeviceHandler, DeviceManager } from './indi.manager'
 import { type GeographicCoordinate, localSiderealTime } from './location'
@@ -62,12 +62,12 @@ export class AlpacaServer {
 		focuser: new Map<Device, AlpacaRegisteredDevice<Focuser>>(),
 		filterwheel: new Map<Device, AlpacaRegisteredDevice<Wheel>>(),
 		rotator: new Map<Device, AlpacaRegisteredDevice<Rotator>>(),
-		dome: new Map<Device, AlpacaRegisteredDevice<Device>>(),
-		switch: new Map<Device, AlpacaRegisteredDevice<Device>>(),
+		dome: new Map<Device, AlpacaRegisteredDevice>(),
+		switch: new Map<Device, AlpacaRegisteredDevice>(),
 		covercalibrator: new Map<Device, AlpacaRegisteredDevice<Cover | FlatPanel>>(),
-		observingconditions: new Map<Device, AlpacaRegisteredDevice<Device>>(),
-		safetymonitor: new Map<Device, AlpacaRegisteredDevice<Device>>(),
-		video: new Map<Device, AlpacaRegisteredDevice<Device>>(),
+		observingconditions: new Map<Device, AlpacaRegisteredDevice>(),
+		safetymonitor: new Map<Device, AlpacaRegisteredDevice>(),
+		video: new Map<Device, AlpacaRegisteredDevice>(),
 	} as const
 
 	readonly #deviceManager: DeviceManager<Device>
@@ -455,7 +455,7 @@ export class AlpacaServer {
 
 	stop() {
 		if (this.#server) {
-			this.#server.stop(true)
+			void this.#server.stop(true)
 			this.#server = undefined
 		}
 
@@ -515,10 +515,7 @@ export class AlpacaServer {
 			// wait for all properties to be received
 			if (device.connected) {
 				console.info('device connected:', device.name)
-
-				Bun.sleep(500).then(() => {
-					task.resolve(device.connected)
-				})
+				void Bun.sleep(500).then(() => task.resolve(device.connected))
 			} else {
 				console.info('device disconnected:', device.name)
 				task.resolve(true)
@@ -533,7 +530,7 @@ export class AlpacaServer {
 	}
 
 	#apiDescription() {
-		return makeAlpacaResponse<AlpacaServerDescription>({ ServerName: this.options.name || 'Nebulosa', Manufacturer: this.options.manufacturer || 'Tiago Melo', ManufacturerVersion: this.options.version || '1.0.0', Location: 'None' })
+		return makeAlpacaResponse({ ServerName: this.options.name || 'Nebulosa', Manufacturer: this.options.manufacturer || 'Tiago Melo', ManufacturerVersion: this.options.version || '1.0.0', Location: 'None' })
 	}
 
 	configuredDevices() {
@@ -550,13 +547,13 @@ export class AlpacaServer {
 			}
 		}
 
-		this.options.camera?.list().forEach((e) => add(e, 'camera'))
-		this.options.mount?.list().forEach((e) => add(e, 'telescope'))
-		this.options.focuser?.list().forEach((e) => add(e, 'focuser'))
-		this.options.wheel?.list().forEach((e) => add(e, 'filterwheel'))
-		this.options.rotator?.list().forEach((e) => add(e, 'rotator'))
-		this.options.flatPanel?.list().forEach((e) => add(e, 'covercalibrator'))
-		this.options.cover?.list().forEach((e) => add(e, 'covercalibrator'))
+		if (this.options.camera) for (const e of this.options.camera.list()) add(e, 'camera')
+		if (this.options.mount) for (const e of this.options.mount.list()) add(e, 'telescope')
+		if (this.options.focuser) for (const e of this.options.focuser.list()) add(e, 'focuser')
+		if (this.options.wheel) for (const e of this.options.wheel.list()) add(e, 'filterwheel')
+		if (this.options.rotator) for (const e of this.options.rotator.list()) add(e, 'rotator')
+		if (this.options.flatPanel) for (const e of this.options.flatPanel.list()) add(e, 'covercalibrator')
+		if (this.options.cover) for (const e of this.options.cover.list()) add(e, 'covercalibrator')
 
 		return configuredDevices
 	}
@@ -612,7 +609,7 @@ export class AlpacaServer {
 	}
 
 	#deviceIsConnected(id: number, type: AlpacaDeviceType) {
-		return makeAlpacaResponse(!!this.#device(id, type)?.device.connected)
+		return makeAlpacaResponse(this.#device(id, type)?.device.connected)
 	}
 
 	#deviceIsConnecting(id: number, type: AlpacaDeviceType) {
@@ -799,7 +796,7 @@ export class AlpacaServer {
 	}
 
 	#cameraGetGains() {
-		return makeAlpacaResponse([], AlpacaException.MethodNotImplemented, 'Gain modes is not supported')
+		return makeAlpacaResponse([], AlpacaException.MethodOrPropertyNotImplemented, 'Gain modes is not supported')
 	}
 
 	#cameraHasShutter() {
@@ -873,7 +870,7 @@ export class AlpacaServer {
 	}
 
 	#cameraGetOffsets() {
-		return makeAlpacaResponse([], AlpacaException.MethodNotImplemented, 'Offset modes is not supported')
+		return makeAlpacaResponse([], AlpacaException.MethodOrPropertyNotImplemented, 'Offset modes is not supported')
 	}
 
 	#cameraGetPercentCompleted(id: number) {
@@ -1039,11 +1036,11 @@ export class AlpacaServer {
 	}
 
 	#mountGetApertureArea() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have aperture area')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have aperture area')
 	}
 
 	#mountGetApertureDiameter() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have aperture diameter')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have aperture diameter')
 	}
 
 	#mountIsAtHome(id: number) {
@@ -1129,11 +1126,11 @@ export class AlpacaServer {
 	}
 
 	#mountGetDeclinationRate(id: number) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not have declination rate')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have declination rate')
 	}
 
 	#mountSetDeclinationRate(id: number, data: { DeclinationRate: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not have declination rate')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have declination rate')
 	}
 
 	#mountGetDeviceState(id: number) {
@@ -1170,23 +1167,23 @@ export class AlpacaServer {
 	}
 
 	#mountGetFocalLength() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have focal length')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have focal length')
 	}
 
 	#mountGetGuideRateDeclination() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have guide rate declination')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have guide rate declination')
 	}
 
 	#mountSetGuideRateDeclination(id: number, data: { GuideRateDeclination: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have guide rate declination')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have guide rate declination')
 	}
 
 	#mountGetGuideRateRightAscension() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have guide rate right ascension')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have guide rate right ascension')
 	}
 
 	#mountSetGuideRateRightAscension(id: number, data: { GuideRateRightAscension: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Telescope does not have guide rate right ascension')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have guide rate right ascension')
 	}
 
 	#mountGetRightAscension(id: number) {
@@ -1194,11 +1191,11 @@ export class AlpacaServer {
 	}
 
 	#mountGetRightAscensionRate(id: number) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not have right ascension rate')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have right ascension rate')
 	}
 
 	#mountSetRightAscensionRate(id: number, data: { RightAscensionRate: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not have right ascension rate')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have right ascension rate')
 	}
 
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.PierSide
@@ -1207,7 +1204,7 @@ export class AlpacaServer {
 	}
 
 	#mountSetSideOfPier(id: number, data: { SideOfPier: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not support set side of pier')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not support set side of pier')
 	}
 
 	#mountGetSiderealTime(id: number) {
@@ -1405,7 +1402,7 @@ export class AlpacaServer {
 	}
 
 	#mountSyncToAltAz(id: number, data: { Azimuth: string; Altitude: string }) {
-		return makeAlpacaErrorResponse(AlpacaException.MethodNotImplemented, 'Telescope does not support slew alt/az') // TODO: Compute this!
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not support slew alt/az') // TODO: Compute this!
 	}
 
 	#mountSyncToCoordinates(id: number, data: { RightAscension: string | number; Declination: string | number }) {
@@ -1456,7 +1453,7 @@ export class AlpacaServer {
 	}
 
 	#focuserGetStepSize() {
-		return makeAlpacaErrorResponse(AlpacaException.PropertyNotImplemented, 'Focuser does not support step size')
+		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Focuser does not support step size')
 	}
 
 	#focuserGetTempComp() {
@@ -1599,7 +1596,7 @@ export class AlpacaServer {
 async function params<T extends Record<string, string | number | boolean | undefined>>(req: Bun.BunRequest) {
 	const data = req.headers.get('Content-Type')?.startsWith('application/x-www-form-urlencoded') ? await req.formData() : undefined
 	const res: Record<string, string> = req.params
-	data?.forEach((value, key) => typeof value === 'string' && (res[key] = value))
+	if (data !== undefined) for (const [key, value] of data) if (typeof value === 'string') res[key] = value
 	return res as T
 }
 
@@ -1715,7 +1712,7 @@ function isTrue(value: string) {
 	return value.toLowerCase() === 'true'
 }
 
-function makeAlpacaResponse<T>(data: T, code: AlpacaException | 0 = 0, message: string = '') {
+function makeAlpacaResponse(data: unknown, code: AlpacaException | 0 = 0, message: string = '') {
 	return Response.json({ Value: data, ClientTransactionID: 0, ServerTransactionID: 0, ErrorNumber: code, ErrorMessage: message })
 }
 

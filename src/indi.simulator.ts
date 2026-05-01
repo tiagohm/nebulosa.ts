@@ -180,7 +180,6 @@ export abstract class DeviceSimulator implements Disposable {
 		switch (vector.name) {
 			case 'ACTIVE_DEVICES':
 				applyTextVectorValues(this.snoopDevices, vector.elements) && this.notify(this.snoopDevices)
-				return
 		}
 	}
 
@@ -191,7 +190,6 @@ export abstract class DeviceSimulator implements Disposable {
 			case 'CONFIG':
 				if (vector.elements.LOAD === true) void this.loadProperties()
 				else if (vector.elements.SAVE === true) this.saveProperties()
-				return
 		}
 	}
 
@@ -315,15 +313,15 @@ export class MountSimulator extends DeviceSimulator {
 	#lastTick = 0
 	#coordSetMode: CoordSetMode = 'SLEW'
 	#slewMode?: SlewMode
-	#slewTarget?: EquatorialCoordinate<Angle>
+	#slewTarget?: EquatorialCoordinate
 	#manualNorthSouth: AxisDirection = 0
 	#manualWestEast: AxisDirection = 0
 	#pulseNorthSouth: AxisDirection = 0
 	#pulseWestEast: AxisDirection = 0
 	#pulseNorthSouthUntil = 0
 	#pulseWestEastUntil = 0
-	#homeCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
-	#parkCoordinate: EquatorialCoordinate<Angle> = { rightAscension: 0, declination: PIOVERTWO }
+	#homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
+	#parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	#utcTime = Date.now()
 	#utcOffset = TIMEZONE / 60
 
@@ -421,8 +419,6 @@ export class MountSimulator extends DeviceSimulator {
 					const offset = Math.trunc(+vector.elements.OFFSET * 60)
 					if (!Number.isNaN(utc)) this.setTime({ utc, offset })
 				}
-
-				return
 		}
 	}
 
@@ -453,7 +449,6 @@ export class MountSimulator extends DeviceSimulator {
 			case 'TELESCOPE_TIMED_GUIDE_WE':
 				if ((vector.elements.TIMED_GUIDE_W ?? 0) > 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
 				else if ((vector.elements.TIMED_GUIDE_E ?? 0) > 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
-				return
 		}
 	}
 
@@ -514,7 +509,6 @@ export class MountSimulator extends DeviceSimulator {
 			case 'ON_COORD_SET':
 				if (vector.elements.SYNC === true) this.#coordSetMode = 'SYNC'
 				else if (vector.elements.SLEW === true) this.#coordSetMode = 'SLEW'
-				return
 		}
 	}
 
@@ -1034,7 +1028,6 @@ export class FocuserSimulator extends DeviceSimulator {
 				return
 			case 'FOCUS_SYNC':
 				if (vector.elements.FOCUS_SYNC_VALUE !== undefined) this.syncTo(vector.elements.FOCUS_SYNC_VALUE)
-				return
 		}
 	}
 
@@ -1060,7 +1053,6 @@ export class FocuserSimulator extends DeviceSimulator {
 					this.#lastCompensationTemperature = this.temperature
 					this.notify(this.#temperatureCompensation)
 				}
-				return
 		}
 	}
 
@@ -1386,7 +1378,6 @@ export class RotatorSimulator extends DeviceSimulator {
 				return
 			case 'SYNC_ROTATOR_ANGLE':
 				if (vector.elements.ANGLE !== undefined) this.syncTo(vector.elements.ANGLE)
-				return
 		}
 	}
 
@@ -1409,7 +1400,6 @@ export class RotatorSimulator extends DeviceSimulator {
 				return
 			case 'ROTATOR_BACKLASH_TOGGLE':
 				if (applyExclusiveSwitchValues(this.#backlash, vector.elements)) this.notify(this.#backlash)
-				return
 		}
 	}
 
@@ -1580,7 +1570,6 @@ export class FlatPanelSimulator extends DeviceSimulator {
 				return
 			case 'FLAT_LIGHT_CONTROL':
 				if (applyExclusiveSwitchValues(this.#light, vector.elements)) this.notify(this.#light)
-				return
 		}
 	}
 
@@ -1633,7 +1622,6 @@ export class CoverSimulator extends DeviceSimulator {
 				return
 			case 'CAP_ABORT':
 				if (vector.elements.ABORT === true) this.stop()
-				return
 		}
 	}
 
@@ -1703,7 +1691,7 @@ export { CoverSimulator as DustCapSimulator, FilterWheelSimulator as WheelSimula
 export class CameraSimulator extends DeviceSimulator {
 	readonly type = 'CAMERA'
 
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #info = makeNumberVector('', 'CCD_INFO', 'CCD Info', GENERAL_INFO, 'ro', ['CCD_MAX_X', 'Max X', CAMERA_SENSOR_WIDTH, 0, 16000, 1, '%.0f'],  ['CCD_MAX_Y', 'Max Y', CAMERA_SENSOR_HEIGHT, 0, 16000, 1, '%.0f'],  ['CCD_PIXEL_SIZE_X', 'Pixel size X', CAMERA_PIXEL_SIZE, 0, 40, 0.01, '%.2f'], ['CCD_PIXEL_SIZE_Y', 'Pixel size Y', CAMERA_PIXEL_SIZE, 0, 40, 0.01, '%.2f'], ['CCD_BITSPERPIXEL', 'Bits per pixel', 16, 8, 64, 1, '%.0f'])
 	readonly #cooler = makeSwitchVector('', 'CCD_COOLER', 'Cooler', MAIN_CONTROL, 'OneOfMany', 'rw', ['COOLER_ON', 'On', false], ['COOLER_OFF', 'Off', true])
 	readonly #frameType = makeSwitchVector('', 'CCD_FRAME_TYPE', 'Frame Type', MAIN_CONTROL, 'OneOfMany', 'rw', ['FRAME_LIGHT', 'Light', true], ['FRAME_DARK', 'Dark', false], ['FRAME_FLAT', 'Flat', false], ['FRAME_BIAS', 'Bias', false])
@@ -1713,7 +1701,7 @@ export class CameraSimulator extends DeviceSimulator {
 	readonly #exposure = makeNumberVector('', 'CCD_EXPOSURE', 'Exposure', MAIN_CONTROL, 'rw', ['CCD_EXPOSURE_VALUE', 'Exposure (s)', 0, CAMERA_MIN_EXPOSURE, CAMERA_MAX_EXPOSURE, 1e-3, '%.6f'])
 	readonly #coolerPower = makeNumberVector('', 'CCD_COOLER_POWER', 'Cooler Power', MAIN_CONTROL, 'ro', ['CCD_COOLER_POWER', 'Power (%)', 0, 0, 100, 1, '%.0f'])
 	readonly #temperature = makeNumberVector('', 'CCD_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'rw', ['CCD_TEMPERATURE_VALUE', 'Temperature', CAMERA_AMBIENT_TEMPERATURE, -50, 70, 0.1, '%6.2f'])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #frame = makeNumberVector('', 'CCD_FRAME', 'Frame', MAIN_CONTROL, 'rw', ['X', 'X', 0, 0, CAMERA_SENSOR_WIDTH - 1, 1, '%.0f'], ['Y', 'Y', 0, 0, CAMERA_SENSOR_HEIGHT - 1, 1, '%.0f'], ['WIDTH', 'Width', CAMERA_SENSOR_WIDTH, 1, CAMERA_SENSOR_WIDTH, 1, '%.0f'], ['HEIGHT', 'Height', CAMERA_SENSOR_HEIGHT, 1, CAMERA_SENSOR_HEIGHT, 1, '%.0f'])
 	readonly #bin = makeNumberVector('', 'CCD_BINNING', 'Bin', MAIN_CONTROL, 'rw', ['HOR_BIN', 'X', 1, 1, CAMERA_MAX_BIN, 1, '%.0f'], ['VER_BIN', 'Y', 1, 1, CAMERA_MAX_BIN, 1, '%.0f'])
 	readonly #gain = makeNumberVector('', 'CCD_GAIN', 'Gain', MAIN_CONTROL, 'rw', ['GAIN', 'Gain', 0, 0, 400, 1, '%.0f'])
@@ -1723,34 +1711,34 @@ export class CameraSimulator extends DeviceSimulator {
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
 	readonly #image = makeBlobVector('', 'CCD1', 'CCD Image', MAIN_CONTROL, 'ro', ['CCD1', 'Image'])
 
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #scene = makeNumberVector('', 'SIMULATOR_SCENE', 'Scene', SIMULATION, 'rw', ['SCENE_SEED', 'Seed', CAMERA_SCENE_SEED, 0, 0xffffffff, 1, '%.0f'], ['STAR_DENSITY', 'Star Density', 0.0006, 0, 0.01, 0.0001, '%.6f'], ['SEEING', 'Seeing (px)', 1.2, 0, 20, 0.1, '%.2f'], ['HFD_MIN', 'HFD Min (px)', 1.2, 0.35, 10, 0.1, '%.2f'], ['HFD_MAX', 'HFD Max (px)', 3.6, 0.35, 20, 0.1, '%.2f'], ['FLUX_MIN', 'Flux Min', 0.002, 0, 10, 0.001, '%.4f'], ['FLUX_MAX', 'Flux Max', 0.85, 0, 100, 0.01, '%.4f'])
 	readonly #catalogSource = makeSwitchVector('', 'SIMULATOR_CATALOG_SOURCE', 'Catalog Source', SIMULATION, 'OneOfMany', 'rw', ['RANDOM', 'Random', true], ['VIZIER', 'VizieR', false])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #noiseQuality = makeSwitchVector('', 'SIMULATOR_NOISE_QUALITY', 'Noise Quality', SIMULATION, 'OneOfMany', 'rw', ['FAST', 'Fast', false], ['BALANCED', 'Balanced', true], ['HIGH_REALISM', 'High Realism', false])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #noiseFeatures = makeSwitchVector('', 'SIMULATOR_NOISE_FEATURES', 'Noise Features', SIMULATION, 'AnyOfMany', 'rw', ['SKY_ENABLED', 'Sky', true], ['MOON_ENABLED', 'Moon', false], ['LIGHT_POLLUTION_ENABLED', 'Light Pollution', true], ['AMP_GLOW_ENABLED', 'Amp Glow', false], ['OUTPUT_QUANTIZE', 'Quantize', false])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #noiseExposure = makeNumberVector('', 'SIMULATOR_NOISE_EXPOSURE', 'Noise Exposure', SIMULATION, 'rw', ['EXPOSURE_TIME', 'Exposure Time', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure.exposureTime, CAMERA_MIN_EXPOSURE, CAMERA_MAX_EXPOSURE, 0.1, '%.3f'], ['ANALOG_GAIN', 'Analog Gain', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure.analogGain, 0.01, 20, 0.01, '%.3f'], ['DIGITAL_GAIN', 'Digital Gain', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure.digitalGain, 0.01, 20, 0.01, '%.3f'], ['ELECTRONS_PER_ADU', 'Electrons/ADU', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.exposure.electronsPerAdu, 0.01, 100, 0.01, '%.3f'])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #noiseSky = makeNumberVector('', 'SIMULATOR_NOISE_SKY', 'Sky', SIMULATION, 'rw', ['BASE_RATE', 'Base Rate', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.baseRate, 0, 50, 0.01, '%.3f'], ['GLOBAL_OFFSET', 'Global Offset', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.globalOffset, -10, 10, 0.01, '%.3f'], ['GRADIENT_STRENGTH', 'Gradient Strength', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.gradientStrength, 0, 10, 0.01, '%.3f'], ['GRADIENT_DIRECTION', 'Gradient Direction', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.gradientDirection, -TAU, TAU, 0.01, '%.3f'], ['RADIAL_GRADIENT_STRENGTH', 'Radial Gradient', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.radialGradientStrength, 0, 10, 0.01, '%.3f'], ['LOW_FREQUENCY_VARIATION_STRENGTH', 'Low Freq Variation', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sky.lowFrequencyVariationStrength, 0, 10, 0.01, '%.3f'])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #noiseMoon = makeNumberVector('', 'SIMULATOR_NOISE_MOON', 'Moon', SIMULATION, 'rw', ['ILLUMINATION_FRACTION', 'Illumination', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.illuminationFraction, 0, 1, 0.01, '%.3f'], ['ALTITUDE', 'Altitude', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.altitude, -PIOVERTWO, PIOVERTWO, 0.01, '%.3f'], ['ANGULAR_DISTANCE', 'Angular Distance', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.angularDistance, 0, TAU, 0.01, '%.3f'], ['POSITION_ANGLE', 'Position Angle', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.positionAngle, -TAU, TAU, 0.01, '%.3f'], ['STRENGTH', 'Strength', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.moon.strength, 0, 10, 0.01, '%.3f'])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #noiseLightPollution = makeNumberVector('', 'SIMULATOR_NOISE_LIGHT_POLLUTION', 'Light Pollution', SIMULATION, 'rw', ['STRENGTH', 'Strength', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution.strength, 0, 10, 0.01, '%.3f'], ['DIRECTION', 'Direction', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution.direction, -TAU, TAU, 0.01, '%.3f'], ['GRADIENT_STRENGTH', 'Gradient Strength', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution.gradientStrength, 0, 10, 0.01, '%.3f'], ['DOME_SHARPNESS', 'Dome Sharpness', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.lightPollution.domeSharpness, 0, 20, 0.01, '%.3f'])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #noiseAtmosphere = makeNumberVector('', 'SIMULATOR_NOISE_ATMOSPHERE', 'Atmosphere', SIMULATION, 'rw', ['AIRGLOW_STRENGTH', 'Airglow', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.airglowStrength, 0, 10, 0.01, '%.3f'], ['TRANSPARENCY', 'Transparency', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.transparency, 0, 2, 0.01, '%.3f'], ['AIRMASS', 'Airmass', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.airmass, 0, 10, 0.01, '%.3f'], ['HAZE', 'Haze', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.haze, 0, 10, 0.01, '%.3f'], ['HUMIDITY', 'Humidity', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.humidity, 0, 1, 0.01, '%.3f'], ['THIN_CLOUD_VEIL', 'Thin Cloud Veil', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.thinCloudVeil, 0, 10, 0.01, '%.3f'], ['TWILIGHT_CONTRIBUTION', 'Twilight', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.twilightContribution, 0, 10, 0.01, '%.3f'], ['HORIZON_GLOW', 'Horizon Glow', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.horizonGlow, 0, 10, 0.01, '%.3f'], ['ZODIACAL_LIGHT_FACTOR', 'Zodiacal Light', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.zodiacalLightFactor, 0, 10, 0.01, '%.3f'], ['MILKY_WAY_BACKGROUND_FACTOR', 'Milky Way', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.atmosphere.milkyWayBackgroundFactor, 0, 10, 0.01, '%.3f'])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #noiseSensor = makeNumberVector('', 'SIMULATOR_NOISE_SENSOR', 'Sensor', SIMULATION, 'rw', ['READ_NOISE', 'Read Noise', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.readNoise, 0, 100, 0.01, '%.3f'], ['BIAS_ELECTRONS', 'Bias Electrons', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.biasElectrons, 0, 10000, 1, '%.0f'], ['BLACK_LEVEL_ELECTRONS', 'Black Level', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.blackLevelElectrons, 0, 10000, 1, '%.0f'], ['DARK_CURRENT_AT_REFERENCE_TEMP', 'Dark Current', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.darkCurrentAtReferenceTemp, 0, 100, 0.001, '%.4f'], ['REFERENCE_TEMPERATURE', 'Reference Temp', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.referenceTemperature, -50, 70, 0.1, '%.2f'], ['TEMPERATURE', 'Sensor Temp', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.temperature, -50, 70, 0.1, '%.2f'], ['TEMPERATURE_DOUBLING_INTERVAL', 'Doubling Interval', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.temperatureDoublingInterval, 0.1, 50, 0.1, '%.2f'], ['DARK_SIGNAL_NON_UNIFORMITY', 'DSNU', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.darkSignalNonUniformity, 0, 10, 0.001, '%.4f'], ['FULL_WELL_CAPACITY', 'Full Well', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.fullWellCapacity, 1, 1000000, 1, '%.0f'], ['CHANNEL_CORRELATION', 'Channel Correlation', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.channelCorrelation, 0, 1, 0.01, '%.3f'])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #noiseAmpGlow = makeNumberVector('', 'SIMULATOR_NOISE_AMP_GLOW', 'Amp Glow', SIMULATION, 'rw', ['STRENGTH', 'Strength', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow.strength, 0, 10, 0.001, '%.4f'], ['RADIUS_X', 'Radius X', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow.radiusX, 0.01, 2, 0.01, '%.3f'], ['RADIUS_Y', 'Radius Y', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow.radiusY, 0.01, 2, 0.01, '%.3f'], ['FALLOFF', 'Falloff', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.sensor.ampGlow.falloff, 0.1, 20, 0.1, '%.2f'])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #noiseAmpGlowPosition = makeSwitchVector('', 'SIMULATOR_NOISE_AMP_GLOW_POSITION', 'Amp Glow Position', SIMULATION, 'OneOfMany', 'rw', ['TOP_LEFT', 'Top Left', false], ['TOP_RIGHT', 'Top Right', false], ['BOTTOM_LEFT', 'Bottom Left', false], ['BOTTOM_RIGHT', 'Bottom Right', false], ['LEFT', 'Left', false], ['RIGHT', 'Right', true], ['TOP', 'Top', false], ['BOTTOM', 'Bottom', false])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #noiseArtifacts = makeNumberVector('', 'SIMULATOR_NOISE_ARTIFACTS', 'Artifacts', SIMULATION, 'rw', ['FIXED_PATTERN_NOISE_STRENGTH', 'Fixed Pattern', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.fixedPatternNoiseStrength, 0, 10, 0.001, '%.4f'], ['ROW_NOISE_STRENGTH', 'Row Noise', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.rowNoiseStrength, 0, 10, 0.001, '%.4f'], ['COLUMN_NOISE_STRENGTH', 'Column Noise', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.columnNoiseStrength, 0, 10, 0.001, '%.4f'], ['BANDING_STRENGTH', 'Banding', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.bandingStrength, 0, 10, 0.001, '%.4f'], ['BANDING_FREQUENCY', 'Banding Frequency', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.bandingFrequency, 0, 100, 0.1, '%.3f'], ['HOT_PIXEL_RATE', 'Hot Pixel Rate', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.hotPixelRate, 0, 1, 0.00001, '%.5f'], ['WARM_PIXEL_RATE', 'Warm Pixel Rate', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.warmPixelRate, 0, 1, 0.00001, '%.5f'], ['DEAD_PIXEL_RATE', 'Dead Pixel Rate', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.deadPixelRate, 0, 1, 0.00001, '%.5f'], ['HOT_PIXEL_STRENGTH', 'Hot Pixel Strength', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.hotPixelStrength, 0, 10000, 1, '%.0f'], ['WARM_PIXEL_STRENGTH', 'Warm Pixel Strength', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.warmPixelStrength, 0, 10000, 1, '%.0f'], ['DEAD_PIXEL_RESIDUAL', 'Dead Pixel Residual', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.artifacts.deadPixelResidual, 0, 1, 0.001, '%.4f'])
 	readonly #noiseOutput = makeNumberVector('', 'SIMULATOR_NOISE_OUTPUT', 'Output', SIMULATION, 'rw', ['MAX_VALUE', 'Max Value', DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG.output.maxValue, 1, 4294967295, 1, '%.0f'])
 	readonly #noiseClampMode = makeSwitchVector('', 'SIMULATOR_NOISE_CLAMP_MODE', 'Clamp Mode', SIMULATION, 'OneOfMany', 'rw', ['CLAMP', 'Clamp', true], ['NORMALIZE', 'Normalize', false], ['NONE', 'None', false])
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #plotOptions = makeNumberVector('', 'SIMULATOR_STAR_PLOT_OPTIONS', 'Star Plot', SIMULATION, 'rw', ['BACKGROUND', 'Background', 0, 0, 10, 0.001, '%.4f'], ['SATURATION_LEVEL', 'Saturation Level', 1, 0, 10, 0.01, '%.3f'], ['FOCUS_STEP', 'Focus Step', 50000, 0, 100000, 1, '%.0f'], ['BEST_FOCUS', 'Best Focus', 50000, 0, 100000, 1, '%.0f'], ['PEAK_SCALE', 'Peak Scale', 1, 0.01, 20, 0.01, '%.3f'], ['ELLIPTICITY', 'Ellipticity', 0, 0, 0.8, 0.01, '%.3f'], ['THETA', 'Theta', 0, -TAU, TAU, 0.01, '%.3f'], ['SOFT_CORE', 'Soft Core', 0, 0, 10, 0.01, '%.3f'], ['BETA', 'Beta', 2.5, 1.05, 20, 0.01, '%.3f'], ['HALO_STRENGTH', 'Halo Strength', 0, 0, 5, 0.01, '%.3f'], ['HALO_SCALE', 'Halo Scale', 2.8, 1.1, 20, 0.01, '%.3f'], ['JITTER_X', 'Jitter X', 0, -5, 5, 0.01, '%.3f'], ['JITTER_Y', 'Jitter Y', 0, -5, 5, 0.01, '%.3f'], ['GAIN', 'Plot Gain', 1, 0.01, 20, 0.01, '%.3f'], ['GAMMA_COMPENSATION', 'Gamma Compensation', 2.2, 0.1, 10, 0.01, '%.3f'], ['ADDITIVE_NOISE_HINT', 'Additive Noise Hint', 0, 0, 20, 0.01, '%.3f'], ['MIN_PLOT_RADIUS', 'Min Radius', 2, 0, 50, 1, '%.0f'], ['MAX_PLOT_RADIUS', 'Max Radius', 24, 0, 100, 1, '%.0f'], ['CUTOFF_SIGMA', 'Cutoff Sigma', 4.25, 2.5, 10, 0.01, '%.3f'])
 	readonly #plotFlags = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_FLAGS', 'Star Plot Flags', SIMULATION, 'AnyOfMany', 'rw', ['SATURATION_ENABLED', 'Saturation', false], ['GAMMA_ENABLED', 'Gamma', false])
 	readonly #plotPsfModel = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_PSF_MODEL', 'Star PSF Model', SIMULATION, 'OneOfMany', 'rw', ['GAUSSIAN', 'Gaussian', true], ['MOFFAT', 'Moffat', false])
@@ -1973,7 +1961,6 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'TELESCOPE_EFFECTS':
 				if (applyNumberVectorValues(this.#telescopeEffects, vector.elements)) this.notify(this.#telescopeEffects)
-				return
 		}
 	}
 
@@ -2023,7 +2010,6 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'SIMULATOR_STAR_PLOT_PSF_MODEL':
 				if (applyExclusiveSwitchValues(this.#plotPsfModel, vector.elements)) this.notify(this.#plotPsfModel)
-				return
 		}
 	}
 

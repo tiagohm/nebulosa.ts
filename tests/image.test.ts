@@ -2,21 +2,25 @@ import { describe, expect, test } from 'bun:test'
 import { Bitpix } from '../src/fits'
 import { readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../src/image'
 import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../src/image.computation'
-// biome-ignore format: too long!
-import { bayer, blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
-import type { Image } from '../src/image.types'
+// oxfmt-ignore
+import { approximateArcsinhStretchParameters, arcsinhStretch, backgroundNeutralization, bayer, blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, curvesTransformation, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
+import type { CurvesTransformationCurve, Image, MultiscaleMedianTransformOptions } from '../src/image.types'
 import { bufferSink, bufferSource } from '../src/io'
 import { downloadPerTag } from './download'
 import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from './image.util'
 
 await downloadPerTag('image')
 
+function autoStf(image: Image) {
+	return stf(image, ...adf(image))
+}
+
 test('read image from fits', async () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
 			const [image, fits] = await readImage(bitpix, channel)
 
-			expect(image!.header).toBe(fits!.hdus[0].header)
+			expect(image.header).toBe(fits.hdus[0].header)
 
 			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 
@@ -281,10 +285,6 @@ test('convolution gaussian blur', () => {
 	return readImageTransformAndSave((i) => gaussianBlur(i), 'conv-gaussian-blur', 'fde35723b23615cbef1ece1fbaecb0e2')
 }, 8000)
 
-test.skip('convolution gaussian blur 11x11', () => {
-	return readImageTransformAndSave((i) => gaussianBlur(i, { sigma: 3, size: 11 }), 'conv-gaussian-blur-11', 'b4884871f1780a44e134a52392f85bed')
-}, 8000)
-
 test('psf', () => {
 	return readImageTransformAndSave((i) => psf(i), 'psf', '8958ad9f3e3888329faad7fd61e17e73')
 }, 5000)
@@ -305,24 +305,85 @@ test('gamma', () => {
 	return readImageTransformAndSave((i) => gamma(i, 2.2), 'gamma', '086f10359a135f12f8cf0e7e27d52731')
 }, 5000)
 
-test.skip('median', () => {
-	// return readImageAndSaveWithOptions({ median: true }, 'median', '18ab1f9f14e5776e00b3c3b7eddff13d')
-}, 5000)
-
 describe('fft', () => {
 	const workspace = new FFTWorkspace(1037, 706)
 
-	function autoStf(image: Image) {
-		return stf(image, ...adf(image))
-	}
-
 	test('low-pass', () => {
 		return readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'lowPass', 0.015, 0.8)), 'fft-low-pass', '56a0759224001a7b3441f1393538921b')
-	}, 10000)
+	}, 5000)
 
 	test('high-pass', () => {
 		return readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'highPass', 0.5, 0.3)), 'fft-high-pass', '16478c59f81f07e8cb82b2f4246c304a')
-	}, 10000)
+	}, 5000)
+})
+
+test('arcsinh stretch', () => {
+	return readImageTransformAndSave((i) => arcsinhStretch(i, approximateArcsinhStretchParameters(...adf(i))), 'arcsinh', 'f2eaccfae404773ebd06f1200fb67c10')
+})
+
+test('background neutralization', () => {
+	return readImageTransformAndSave((i) => autoStf(backgroundNeutralization(i, { upperLimit: 0.1 })), 'background-neutralization', '123c3c9df7ca332a67098b7eeed55981')
+})
+
+test('mmt', () => {
+	const options: MultiscaleMedianTransformOptions = {
+		layers: 2,
+		detailLayers: [{ threshold: 2 }, { threshold: 1 }],
+		residualGain: 1,
+	}
+
+	return readImageTransformAndSave((i) => autoStf(multiscaleMedianTransform(i, options)), 'mmt', 'b9bdeda38c1423468f6602451144546e')
+}, 5000)
+
+test('curves transformation - mono', () => {
+	return readImageTransformAndSave((i) => autoStf(curvesTransformation(i, { curves: [{ channel: 'GRAY', x: [0.007], y: [0.08] }] })), 'ct-mono', 'f51a8f097b44ddebbedc8bea320f1c43', undefined, 1)
+})
+
+describe('curves transformation - RGB', () => {
+	const scenarios: { name: string; curves: readonly CurvesTransformationCurve[]; hash: string }[] = [
+		{
+			name: 'gray-shadow-lift',
+			curves: [{ channel: 'GRAY', x: [0.004], y: [0.08] }],
+			hash: 'ed36b22d4cec83e486c2d8c50cce1712',
+		},
+		{
+			name: 'red-boost',
+			curves: [{ channel: 'RED', x: [0.02, 0.55], y: [0.08, 0.72] }],
+			hash: '988dc15d5063fe08095df263ac813f17',
+		},
+		{
+			name: 'green-boost',
+			curves: [{ channel: 'GREEN', x: [0.02, 0.55], y: [0.08, 0.72] }],
+			hash: '52950fe45e3ad347728c749d9d754690',
+		},
+		{
+			name: 'blue-boost',
+			curves: [{ channel: 'BLUE', x: [0.02, 0.55], y: [0.08, 0.72] }],
+			hash: '3f8f1daad375e0e1db743708db27297d',
+		},
+		{
+			name: 'warm-balance',
+			curves: [
+				{ channel: 'RED', x: [0.03, 0.45], y: [0.1, 0.6] },
+				{ channel: 'BLUE', x: [0.08, 0.6], y: [0.04, 0.52] },
+			],
+			hash: 'bd0df21275ecf5044728d20f52ffae80',
+		},
+		{
+			name: 'cool-balance',
+			curves: [
+				{ channel: 'RED', x: [0.08, 0.6], y: [0.04, 0.52] },
+				{ channel: 'BLUE', x: [0.03, 0.45], y: [0.1, 0.6] },
+			],
+			hash: '94286951a92691c5b6b2b138ca8bbf67',
+		},
+	]
+
+	for (const scenario of scenarios) {
+		test(scenario.name, () => {
+			return readImageTransformAndSave((i) => autoStf(curvesTransformation(i, { curves: scenario.curves })), `ct-rgb-${scenario.name}`, scenario.hash)
+		})
+	}
 })
 
 test('estimate background', async () => {

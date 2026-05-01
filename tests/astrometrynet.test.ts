@@ -3,7 +3,7 @@ import { dirname, join } from 'path/posix'
 import { toArcsec, toDeg, toHour } from '../src/angle'
 import { localAstrometryNetPlateSolve, login, novaAstrometryNetPlateSolve, submissionStatus, upload, wcsFile } from '../src/astrometrynet'
 import { readFits } from '../src/fits'
-import { tanUnproject } from '../src/fits.wcs'
+import { RA_TAN_SIP, tanUnproject } from '../src/fits.wcs'
 import { bufferSource } from '../src/io'
 
 describe.skip('nova', () => {
@@ -108,5 +108,5 @@ test.skip('local', async () => {
 	expect(solution!.widthInPixels).toBe(719)
 	expect(solution!.heightInPixels).toBe(507)
 
-	expect(solution!.CTYPE1).toBe('RA---TAN-SIP')
+	expect(solution!.CTYPE1).toBe(RA_TAN_SIP)
 })

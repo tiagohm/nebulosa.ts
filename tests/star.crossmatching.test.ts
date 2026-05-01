@@ -339,9 +339,9 @@ test('real scenario', async () => {
 	})
 
 	expect(result.solution).toBeDefined()
-	expect(formatRA(result.solution!.rightAscension).substring(0, 8)).toBe('10 43 45')
-	expect(formatDEC(result.solution!.declination).substring(0, 9)).toBe('-59 34 04')
-	expect(formatAZ(result.solution!.rotation).substring(0, 9)).toBe('112 12 47')
+	expect(formatRA(result.solution!.rightAscension).slice(0, 8)).toBe('10 43 45')
+	expect(formatDEC(result.solution!.declination).slice(0, 9)).toBe('-59 34 04')
+	expect(formatAZ(result.solution!.rotation).slice(0, 9)).toBe('112 12 47')
 	expect(toArcsec(result.solution!.scale)).toBeCloseTo(2.735, 2)
-	expect(formatAZ(result.solution!.fieldRadius).substring(0, 9)).toBe('000 28 35')
+	expect(formatAZ(result.solution!.fieldRadius).slice(0, 9)).toBe('000 28 35')
 }, 2500)

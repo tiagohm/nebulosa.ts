@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalFromFractionOfYear, temporalFromTime, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../src/temporal'
 import { timeYMDHMS } from '../src/time'
 

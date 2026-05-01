@@ -42,6 +42,7 @@ function readUdpMessages(socket: Socket, expectedCount: number, timeout: number)
 			if (messages.length === expectedCount) {
 				socket.off('message', onMessage)
 				clearTimeout(timer)
+				// oxlint-disable-next-line promise/no-multiple-resolved
 				resolve(messages)
 			}
 		}

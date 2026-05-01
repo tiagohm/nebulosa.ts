@@ -1,5 +1,5 @@
 import { AlpacaCameraApi, AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaRotatorApi, AlpacaTelescopeApi } from './alpaca.api'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import { type AlpacaAxisRate, type AlpacaCameraSensorType, type AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, type AlpacaStateItem, type AlpacaTelescopeEquatorialCoordinateType, type AlpacaTelescopePierSide, type AlpacaTelescopeTrackingRate, alpacaImageElementTypeToBitpix, type ImageBytesMetadata } from './alpaca.types'
 import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from './angle'
 import { SIDEREAL_RATE } from './constants'
@@ -9,7 +9,7 @@ import { bitpixInBytes } from './fits.util'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import type { Camera, Client, Device, Focuser, Mount, Rotator, Wheel } from './indi.device'
 import type { DeviceProvider } from './indi.manager'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import { type DefSwitchVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, type ValueType, type VectorType } from './indi.types'
 import { roundToNthDecimal } from './math'
 import { formatTemporal, TIMEZONE } from './temporal'
@@ -468,14 +468,14 @@ interface AlpacaClientCameraState extends AlpacaClientDeviceState {
 class AlpacaCamera extends AlpacaDevice {
 	protected readonly api: AlpacaCameraApi
 	// https://ascom-standards.org/newdocs/camera.html#Camera.DeviceState
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	protected readonly state: AlpacaClientCameraState = { Connected: false, Step: 0, CameraState: 0, CCDTemperature: 0, CoolerPower: 0, ImageReady: false, IsPulseGuiding: false, PercentCompleted: 0, ExposureDuration: 0, ExposureStarted: false, LastCameraState: 0 }
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	protected readonly initialEndpoints = ['BayerOffsetX', 'BayerOffsetY', 'SensorType', 'CameraXSize', 'CameraYSize', 'CanGetCoolerPower', 'CanPulseGuide', 'CanSetCcdTemperature', 'CanStopExposure', 'ExposureMax', 'ExposureMin', 'GainMax', 'GainMin', 'Gains', 'MaxBinX', 'MaxBinY', 'OffsetMax', 'OffsetMin', 'Offsets', 'PixelSizeX', 'PixelSizeY', 'ReadoutModes'] as const
 	protected readonly deviceStateEndpoints = ['CameraState', 'CCDTemperature', 'CoolerPower', 'ImageReady', 'IsPulseGuiding', 'PercentCompleted'] as const
 	protected readonly runningEndpoints = ['BinX', 'BinY', 'IsCoolerOn', 'Gain', 'NumX', 'NumY', 'Offset', 'ReadoutMode', 'StartX', 'StartY'] as const
 
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	readonly #info = makeNumberVector('', 'CCD_INFO', 'CCD Info', GENERAL_INFO, 'ro', ['CCD_MAX_X', 'Max X', 0, 0, 16000, 1, '%.0f'],  ['CCD_MAX_Y', 'Max Y', 0, 0, 16000, 1, '%.0f'],  ['CCD_PIXEL_SIZE_X', 'Pixel size X', 0, 0, 40, 0.01, '%.2f'], ['CCD_PIXEL_SIZE_Y', 'Pixel size Y', 0, 0, 40, 0.01, '%.2f'], ['CCD_BITSPERPIXEL', 'Bits per pixel', 16, 8, 64, 1, '%.0f'])
 	readonly #cooler = makeSwitchVector('', 'CCD_COOLER', 'Cooler', MAIN_CONTROL, 'OneOfMany', 'rw', ['COOLER_ON', 'On', false], ['COOLER_OFF', 'Off', true])
 	readonly #frameType = makeSwitchVector('', 'CCD_FRAME_TYPE', 'Frame Type', MAIN_CONTROL, 'OneOfMany', 'rw', ['FRAME_LIGHT', 'Light', true], ['FRAME_DARK', 'Dark', false], ['FRAME_FLAT', 'Flat', false], ['FRAME_BIAS', 'Bias', false])
@@ -834,7 +834,7 @@ class AlpacaCamera extends AlpacaDevice {
 							this.updatePropertyValue(this.#exposure, 'CCD_EXPOSURE_VALUE', 0)
 						}
 
-						this.sendSetProperty(this.#exposure)
+						return this.sendSetProperty(this.#exposure)
 					}, console.error)
 				}
 
@@ -955,7 +955,7 @@ interface AlpacaClientTelescopeState extends AlpacaClientDeviceState {
 class AlpacaTelescope extends AlpacaDevice {
 	protected readonly api: AlpacaTelescopeApi
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
-	// biome-ignore format: too long!
+	// oxfmt-ignore
 	protected readonly state: AlpacaClientTelescopeState = { Connected: false, Step: 0, CanTrack: false, CanHome: false, CanPark: false, CanMoveAxis: false, CanPulseGuide: false, CanSlew: false, CanSync: false, CanSetGuideRate: false, CanSetSideOfPier: false, Tracking: false, AtPark: false, IsPulseGuiding: false, Slewing: false, RightAscension: 0, Declination: 0, LastUTCDateUpdate: 0, EquatorialSystem: 1 }
 	protected readonly initialEndpoints = ['CanHome', 'CanPark', 'CanMoveAxis', 'CanPulseGuide', 'CanTrack', 'CanSlew', 'CanSync', 'CanSetGuideRate', 'SlewRates', 'TrackingRates', 'CanSetSideOfPier', 'EquatorialSystem'] as const
 	protected readonly deviceStateEndpoints = ['AtPark', 'Declination', 'IsPulseGuiding', 'RightAscension', 'SideOfPier', 'Slewing', 'Tracking'] as const
@@ -1105,7 +1105,7 @@ class AlpacaTelescope extends AlpacaDevice {
 
 				if (now - this.state.LastUTCDateUpdate >= 60000) {
 					this.state.LastUTCDateUpdate = now
-					this.#time.elements.UTC.value = UTCDate.substring(0, 19)
+					this.#time.elements.UTC.value = UTCDate.slice(0, 19)
 					this.sendDefProperty(this.#time)
 				}
 			}
@@ -1166,7 +1166,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			}
 
 			if (UTCDate !== undefined) {
-				this.#time.elements.UTC.value = UTCDate.substring(0, 19)
+				this.#time.elements.UTC.value = UTCDate.slice(0, 19)
 				this.sendSetProperty(this.#time)
 				this.state.UTCDate = undefined
 			}
@@ -1208,16 +1208,16 @@ class AlpacaTelescope extends AlpacaDevice {
 			case 'TELESCOPE_MOTION_WE': {
 				if (this.state.CanMoveAxis && this.state.SlewRates?.length) {
 					const { MOTION_NORTH, MOTION_SOUTH, MOTION_WEST, MOTION_EAST } = vector.elements
-					const { Maximum } = this.state.SlewRates[+findOnSwitch(this.#slewRate)[0].substring(5)]
+					const { Maximum } = this.state.SlewRates[+findOnSwitch(this.#slewRate)[0].slice(5)]
 
 					if (vector.name.endsWith('S')) {
 						if (MOTION_NORTH === true || MOTION_SOUTH === true) {
-							void this.api.moveAxis(this.id, 1, MOTION_NORTH === true ? +Maximum : -Maximum)
+							void this.api.moveAxis(this.id, 1, MOTION_NORTH === true ? Maximum : -Maximum)
 						} else if (MOTION_NORTH === false || MOTION_SOUTH === false) {
 							void this.api.moveAxis(this.id, 1, 0)
 						}
 					} else if (MOTION_WEST === true || MOTION_EAST === true) {
-						void this.api.moveAxis(this.id, 0, MOTION_WEST === true ? +Maximum : -Maximum)
+						void this.api.moveAxis(this.id, 0, MOTION_WEST === true ? Maximum : -Maximum)
 					} else if (MOTION_WEST === false || MOTION_EAST === false) {
 						void this.api.moveAxis(this.id, 0, 0)
 					}
@@ -1330,7 +1330,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			case 'TIME_UTC':
 				if (vector.elements.UTC && vector.elements.UTC.length >= 19) {
 					this.updatePropertyValue(this.#time, 'OFFSET', vector.elements.OFFSET)
-					const utc = vector.elements.UTC.substring(0, 19)
+					const utc = vector.elements.UTC.slice(0, 19)
 					void this.api.setUtcDate(this.id, `${utc}Z`)
 					this.state.LastUTCDateUpdate = 0
 					this.enableEndpoints('UTCDate')
@@ -1648,7 +1648,7 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 			if (CalibratorState !== 0) {
 				if (CalibratorState === 3) {
 					this.updatePropertyValue(this.#light, 'FLAT_LIGHT_ON', true) && this.sendSetProperty(this.#light)
-					this.updatePropertyValue(this.#brightness, 'FLAT_LIGHT_INTENSITY_VALUE', Brightness as number) && this.sendSetProperty(this.#brightness)
+					this.updatePropertyValue(this.#brightness, 'FLAT_LIGHT_INTENSITY_VALUE', Brightness) && this.sendSetProperty(this.#brightness)
 				} else if (CalibratorState === 1) {
 					this.updatePropertyValue(this.#light, 'FLAT_LIGHT_OFF', true) && this.sendSetProperty(this.#light)
 				}
@@ -1997,6 +1997,7 @@ class AlpacaApiRunner {
 	}
 
 	async #handleEndpointsAfterRun(state: Record<string, ValueType>) {
+		// oxlint-disable-next-line typescript/await-thenable
 		const result = await Promise.all(this.#result)
 		const n = result.length
 

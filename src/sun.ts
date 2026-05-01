@@ -22,6 +22,10 @@ export interface SolarEclipse {
 }
 
 const DEFAULT_MINIMAL_SOLAR_ECLIPSE_TIME = time(0, 0, Timescale.TT, false)
+const SOLAR_ECLIPSE_CENTRAL_LIMIT = 0.9972
+const SOLAR_ECLIPSE_SURFACE_LIMIT = 1.5433
+const SOLAR_ECLIPSE_PARTIAL_DENOMINATOR = 0.5461
+const SOLAR_ECLIPSE_HYBRID_LIMIT = 0.00464
 
 // Computes the parallax of the Sun at a given distance
 export function sunParallax(distance: Distance) {
@@ -146,18 +150,43 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 			// Multiplier related to the eccentricity of the Earth orbit
 			const E = 1 - 0.002516 * T - 0.0000074 * T2
 
-			const F1 = F - 0.02665 * DEG2RAD * Math.sin(omega)
+			const sinSM = Math.sin(SM)
+			const cosSM = Math.cos(SM)
+			const sin2SM = Math.sin(2 * SM)
+			const cos2SM = Math.cos(2 * SM)
+			const sinMM = Math.sin(MM)
+			const cosMM = Math.cos(MM)
+			const sin2MM = Math.sin(2 * MM)
+			const cos2MM = Math.cos(2 * MM)
+			const sinOmega = Math.sin(omega)
+			const mmPlusSm = MM + SM
+			const mmMinusSm = MM - SM
+			const sinMMPlusSM = Math.sin(mmPlusSm)
+			const cosMMPlusSM = Math.cos(mmPlusSm)
+			const sinMMMinusSM = Math.sin(mmMinusSm)
+			const cosMMMinusSM = Math.cos(mmMinusSm)
+			const F1 = F - 0.02665 * DEG2RAD * sinOmega
 			const A1 = deg(299.77 + 0.107408 * k - 0.009173 * T2)
+			const sinF1 = Math.sin(F1)
+			const cosF1 = Math.cos(F1)
+			const sin2F1 = Math.sin(2 * F1)
+			const sinMMMinus2F1 = Math.sin(MM - 2 * F1)
+			const sinMMPlus2F1 = Math.sin(MM + 2 * F1)
+			const sin2MMPlusSM = Math.sin(2 * MM + SM)
+			const sin3MM = Math.sin(3 * MM)
+			const sinSMPlus2F1 = Math.sin(SM + 2 * F1)
+			const sinSMMinus2F1 = Math.sin(SM - 2 * F1)
+			const sin2MMMinusSM = Math.sin(2 * MM - SM)
 
-			const P = 0.207 * E * Math.sin(SM) + 0.0024 * E * Math.sin(2 * SM) - 0.0392 * Math.sin(MM) + 0.0116 * Math.sin(2 * MM) - 0.0073 * E * Math.sin(MM + SM) + 0.0067 * E * Math.sin(MM - SM) + 0.0118 * Math.sin(2 * F1)
-			const Q = 5.2207 - 0.0048 * E * Math.cos(SM) + 0.002 * E * Math.cos(2 * SM) - 0.3299 * Math.cos(MM) - 0.006 * E * Math.cos(MM + SM) + 0.0041 * E * Math.cos(MM - SM)
-			const W = Math.abs(Math.cos(F1))
-			const gamma = (P * Math.cos(F1) + Q * Math.sin(F1)) * (1 - 0.0048 * W)
-			const u = 0.0059 + 0.0046 * E * Math.cos(SM) - 0.0182 * Math.cos(MM) + 0.0004 * Math.cos(2 * MM) - 0.0005 * Math.cos(SM + MM)
+			const P = 0.207 * E * sinSM + 0.0024 * E * sin2SM - 0.0392 * sinMM + 0.0116 * sin2MM - 0.0073 * E * sinMMPlusSM + 0.0067 * E * sinMMMinusSM + 0.0118 * sin2F1
+			const Q = 5.2207 - 0.0048 * E * cosSM + 0.002 * E * cos2SM - 0.3299 * cosMM - 0.006 * E * cosMMPlusSM + 0.0041 * E * cosMMMinusSM
+			const W = Math.abs(cosF1)
+			const gamma = (P * cosF1 + Q * sinF1) * (1 - 0.0048 * W)
+			const u = 0.0059 + 0.0046 * E * cosSM - 0.0182 * cosMM + 0.0004 * cos2MM - 0.0005 * cosMMPlusSM
 			const absG = Math.abs(gamma)
 
 			// no eclipse visible from the Earth surface
-			if (absG > 1.5433 + u) {
+			if (absG > SOLAR_ECLIPSE_SURFACE_LIMIT + u) {
 				found = false
 				if (next) k++
 				else k--
@@ -167,22 +196,22 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 			const timeOfGreatestEclipseDay = 2451550 + 29 * k
 			const timeOfGreatestEclipseFraction = 0.530588861 * k + 0.09766 + 0.00015437 * T - 0.00000015 * T2 + 0.00000000073 * T3
 			const timeOfGreatestEclipseCorrection =
-				-0.4075 * Math.sin(MM) +
-				0.1721 * E * Math.sin(SM) +
-				0.0161 * Math.sin(2 * MM) -
-				0.0097 * Math.sin(2 * F1) +
-				0.0073 * E * Math.sin(MM - SM) -
-				0.005 * E * Math.sin(MM + SM) -
-				0.0023 * Math.sin(MM - 2 * F1) +
-				0.0021 * E * Math.sin(2 * SM) +
-				0.0012 * Math.sin(MM + 2 * F1) +
-				0.0006 * E * Math.sin(2 * MM + SM) -
-				0.0004 * Math.sin(3 * MM) -
-				0.0003 * E * Math.sin(SM + 2 * F1) +
+				-0.4075 * sinMM +
+				0.1721 * E * sinSM +
+				0.0161 * sin2MM -
+				0.0097 * sin2F1 +
+				0.0073 * E * sinMMMinusSM -
+				0.005 * E * sinMMPlusSM -
+				0.0023 * sinMMMinus2F1 +
+				0.0021 * E * sin2SM +
+				0.0012 * sinMMPlus2F1 +
+				0.0006 * E * sin2MMPlusSM -
+				0.0004 * sin3MM -
+				0.0003 * E * sinSMPlus2F1 +
 				0.0003 * Math.sin(A1) -
-				0.0002 * E * Math.sin(SM - 2 * F1) -
-				0.0002 * E * Math.sin(2 * MM - SM) -
-				0.0002 * Math.sin(omega)
+				0.0002 * E * sinSMMinus2F1 -
+				0.0002 * E * sin2MMMinusSM -
+				0.0002 * sinOmega
 
 			const fraction = timeOfGreatestEclipseFraction + timeOfGreatestEclipseCorrection
 
@@ -198,17 +227,17 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 			eclipse.maximalTime = timeNormalize(timeOfGreatestEclipseDay, fraction, 0, Timescale.TT)
 			eclipse.lunation = k
 
-			// non-central eclipse
-			if (absG >= 0.9972) {
-				eclipse.type = 'PARTIAL'
-				eclipse.magnitude = (1.5433 + u - absG) / (0.5461 + 2 * u)
+			// Rare polar non-central annular/total eclipses still occur when the umbral or antumbral cone grazes Earth.
+			if (absG >= SOLAR_ECLIPSE_CENTRAL_LIMIT) {
+				eclipse.magnitude = (SOLAR_ECLIPSE_SURFACE_LIMIT + u - absG) / (SOLAR_ECLIPSE_PARTIAL_DENOMINATOR + 2 * u)
+				eclipse.type = absG < SOLAR_ECLIPSE_CENTRAL_LIMIT + Math.abs(u) ? (u < 0 ? 'TOTAL' : 'ANNULAR') : 'PARTIAL'
 			}
 			// central eclipse
 			else if (u < 0) {
 				eclipse.type = 'TOTAL'
 			} else if (u > 0.0047) {
 				eclipse.type = 'ANNULAR'
-			} else if (u < 0.00464 * Math.sqrt(1 - gamma * gamma)) {
+			} else if (u < SOLAR_ECLIPSE_HYBRID_LIMIT * Math.sqrt(1 - gamma * gamma)) {
 				eclipse.type = 'HYBRID'
 			} else {
 				eclipse.type = 'ANNULAR'

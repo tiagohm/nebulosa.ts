@@ -32,11 +32,11 @@ test('min of', () => {
 	expect(minOf([3, 2, 1])).toEqual([1, 2])
 	expect(minOf([2, 3, 1])).toEqual([1, 2])
 	expect(minOf([1])).toEqual([1, 0])
-	expect(minOf([])).toEqual([NaN, -1])
+	expect(minOf([])).toEqual([Number.NaN, -1])
 	expect(minOf([Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY])).toEqual([Number.POSITIVE_INFINITY, 0])
-	expect(minOf([NaN, NaN, NaN])).toEqual([NaN, -1])
-	expect(minOf([1, 2, NaN])).toEqual([1, 0])
-	expect(minOf([NaN, 2, 1])).toEqual([1, 2])
+	expect(minOf([Number.NaN, Number.NaN, Number.NaN])).toEqual([Number.NaN, -1])
+	expect(minOf([1, 2, Number.NaN])).toEqual([1, 0])
+	expect(minOf([Number.NaN, 2, 1])).toEqual([1, 2])
 })
 
 test('max of', () => {
@@ -45,11 +45,11 @@ test('max of', () => {
 	expect(maxOf([2, 3, 1])).toEqual([3, 1])
 	expect(maxOf([-3, -2, -7])).toEqual([-2, 1])
 	expect(maxOf([1])).toEqual([1, 0])
-	expect(maxOf([])).toEqual([NaN, -1])
+	expect(maxOf([])).toEqual([Number.NaN, -1])
 	expect(maxOf([Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY])).toEqual([Number.NEGATIVE_INFINITY, 0])
-	expect(maxOf([NaN, NaN, NaN])).toEqual([NaN, -1])
-	expect(maxOf([1, 2, NaN])).toEqual([2, 1])
-	expect(maxOf([NaN, 2, 1])).toEqual([2, 1])
+	expect(maxOf([Number.NaN, Number.NaN, Number.NaN])).toEqual([Number.NaN, -1])
+	expect(maxOf([1, 2, Number.NaN])).toEqual([2, 1])
+	expect(maxOf([Number.NaN, 2, 1])).toEqual([2, 1])
 })
 
 test('mean of', () => {
@@ -97,10 +97,11 @@ test('binary search', () => {
 	expect(binarySearch([0, 1, 2, 3, 4], 5)).toBe(-6)
 	expect(binarySearch([0, 1, 2, 3, 4], 0.5)).toBe(-2)
 	expect(binarySearch([0, 1, 2, 3, 4], 0.5, { positive: true })).toBe(1)
-	expect(binarySearch([NaN, NaN, NaN], 3)).toBe(-1)
+	expect(binarySearch([Number.NaN, Number.NaN, Number.NaN], 3)).toBe(-1)
 })
 
 test('binary search with comparator', () => {
+	// oxlint-disable-next-line unicorn/consistent-function-scoping
 	function comparator(key: number) {
 		return (a: number) => a - key
 	}

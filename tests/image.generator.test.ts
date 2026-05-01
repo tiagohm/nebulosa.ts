@@ -502,12 +502,16 @@ describe('generate image', () => {
 		const { name, channels, hash, config } = scenario
 		const slug = name.replaceAll(' ', '-')
 
-		test(name, async () => {
-			const raw = new Float64Array(width * height * channels)
-			generateNoiseImage(raw, width, height, channels, config)
-			const image: Image = { raw, header: {}, metadata: { width, height, channels, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width * channels, strideInBytes: width * channels * 8, bayer: undefined } }
-			await saveImageAndCompareHash(stf(image, ...adf(image)), `generate-image-${slug}`, hash)
-		}, 5000)
+		test(
+			name,
+			async () => {
+				const raw = new Float64Array(width * height * channels)
+				generateNoiseImage(raw, width, height, channels, config)
+				const image: Image = { raw, header: {}, metadata: { width, height, channels, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width * channels, strideInBytes: width * channels * 8, bayer: undefined } }
+				await saveImageAndCompareHash(stf(image, ...adf(image)), `generate-image-${slug}`, hash)
+			},
+			5000,
+		)
 	}
 })
 

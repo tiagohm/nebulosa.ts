@@ -209,9 +209,9 @@ export function parseAngle(input?: string | number, options?: ParseAngleOptions 
 	let angle = 0
 
 	if (res?.[1]) {
-		const a = parseFloat(res[1])
-		const b = res[3] ? parseFloat(res[3]) : 0
-		const c = res[5] ? parseFloat(res[5]) : 0
+		const a = +res[1]
+		const b = res[3] ? +res[3] : 0
+		const c = res[5] ? +res[5] : 0
 
 		neg = a < 0
 

@@ -59,6 +59,22 @@ describe('nearest solar eclipse', () => {
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2025, 9, 21, 19, 41])
 	})
 
+	test('non-central annular', () => {
+		// https://eclipse.gsfc.nasa.gov/SEsearch/SEdata.php?Ecl=20140429
+		const eclipse = nearestSolarEclipse(timeYMD(2014, 1, 1), true)
+		expect(eclipse.type).toBe('ANNULAR')
+		expect(eclipse.magnitude).toBeCloseTo(0.9868, 2)
+		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2014, 4, 29, 6, 3])
+	})
+
+	test('non-central total', () => {
+		// https://eclipse.gsfc.nasa.gov/SEsearch/SEdata.php?Ecl=20430409
+		const eclipse = nearestSolarEclipse(timeYMD(2043, 1, 1), true)
+		expect(eclipse.type).toBe('TOTAL')
+		expect(eclipse.magnitude).toBeCloseTo(1.0095, 2)
+		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2043, 4, 9, 18, 56])
+	})
+
 	test('previous', () => {
 		const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 46), false)
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])

@@ -18,7 +18,7 @@ export function isNumberArray(a: unknown): a is NumberArray {
 // If the array is empty, it returns [NaN, -1].
 export function minOf(a: Readonly<NumberArray>): readonly [number, number] {
 	const n = a.length
-	if (n === 0) return [NaN, -1]
+	if (n === 0) return [Number.NaN, -1]
 
 	let value = a[0]
 	let index = Number.isNaN(value) ? -1 : 0
@@ -32,14 +32,14 @@ export function minOf(a: Readonly<NumberArray>): readonly [number, number] {
 		}
 	}
 
-	return index < 0 ? [NaN, -1] : [value, index]
+	return index < 0 ? [Number.NaN, -1] : [value, index]
 }
 
 // Finds the maximum value and its index in an numeric array.
 // If the array is empty, it returns [NaN, -1].
 export function maxOf(a: Readonly<NumberArray>): readonly [number, number] {
 	const n = a.length
-	if (n === 0) return [NaN, -1]
+	if (n === 0) return [Number.NaN, -1]
 
 	let value = a[0]
 	let index = Number.isNaN(value) ? -1 : 0
@@ -53,14 +53,14 @@ export function maxOf(a: Readonly<NumberArray>): readonly [number, number] {
 		}
 	}
 
-	return index < 0 ? [NaN, -1] : [value, index]
+	return index < 0 ? [Number.NaN, -1] : [value, index]
 }
 
 // Computes the mean value of an numeric array.
 // If the array is empty, it returns NaN.
 export function meanOf(a: Readonly<NumberArray>) {
 	const n = a.length
-	if (n === 0) return NaN
+	if (n === 0) return Number.NaN
 	if (n === 1) return a[0]
 
 	let sum = 0
@@ -70,7 +70,7 @@ export function meanOf(a: Readonly<NumberArray>) {
 
 // Computes the median value of a sorted numeric array.
 export function medianOf(a: Readonly<NumberArray>, count: number = a.length) {
-	if (count === 0) return NaN
+	if (count === 0) return Number.NaN
 	else if (count === 1) return a[0]
 	else if (count === 2) return (a[0] + a[1]) * 0.5
 	else if (count === 3) return a[1]
@@ -90,7 +90,7 @@ export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: numb
 // Computes the population standard deviation using a single-pass recurrence.
 export function standardDeviationOf(a: Readonly<NumberArray>) {
 	const n = a.length
-	if (n === 0) return NaN
+	if (n === 0) return Number.NaN
 
 	let mean = 0
 	let sumSquared = 0
@@ -108,7 +108,7 @@ export function standardDeviationOf(a: Readonly<NumberArray>) {
 // Computes a percentile from a sorted numeric array.
 export function percentileOf(values: Readonly<NumberArray>, percentile: number) {
 	const n = values.length
-	if (n === 0) return NaN
+	if (n === 0) return Number.NaN
 	if (n === 1 || percentile <= 0) return values[0]
 	if (percentile >= 1) return values[n - 1]
 

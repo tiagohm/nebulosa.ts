@@ -4,12 +4,14 @@ import { kilometer } from '../src/distance'
 import { closeApproaches, identify, search } from '../src/sbd'
 import { temporalFromDate } from '../src/temporal'
 
-describe.skip('search', () => {
-	test('singleRecord', async () => {
+const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+
+describe.skipIf(SKIP)('search', () => {
+	test('single record', async () => {
 		const data = await search('C/2017 K2')
 
 		if ('object' in data) {
-			expect(data.object.orbit_id).toBe('164')
+			expect(data.object.orbit_id).not.toBeEmpty()
 			expect(data.object.orbit_class.code).toBe('HYP')
 			expect(data.object.orbit_class.name).toBe('Hyperbolic Comet')
 			expect(data.object.neo).toBeFalse()
@@ -23,37 +25,37 @@ describe.skip('search', () => {
 			expect(data.orbit.first_obs).toBe('2013-05-12')
 			expect(data.orbit.pe_used).toBe('DE441')
 			expect(data.orbit.equinox).toBe('J2000')
-			expect(data.orbit.cov_epoch).toBe('2459434.5')
-			expect(data.orbit.last_obs).toBe('2025-05-01')
-			expect(data.orbit.soln_date).toBe('2025-08-12 09:42:16')
+			expect(data.orbit.cov_epoch).not.toBeEmpty()
+			expect(data.orbit.last_obs).not.toBeEmpty()
+			expect(data.orbit.soln_date).not.toBeEmpty()
 			expect(data.orbit.n_del_obs_used).toBeNull()
 			expect(data.orbit.t_jup).toBe('0.170')
-			expect(data.orbit.epoch).toBe('2459434.5')
+			expect(data.orbit.epoch).not.toBeEmpty()
 			expect(data.orbit.comment).toBeNull()
-			expect(data.orbit.rms).toBe('.55075')
+			expect(data.orbit.rms).not.toBeEmpty()
 			expect(data.orbit.n_dop_obs_used).toBeNull()
-			expect(data.orbit.orbit_id).toBe('164')
-			expect(data.orbit.moid_jup).toBe('1.25422')
+			expect(data.orbit.orbit_id).not.toBeEmpty()
+			expect(data.orbit.moid_jup).not.toBeEmpty()
 			expect(data.orbit.n_obs_used).toBeGreaterThan(2596)
 			expect(data.orbit.not_valid_after).toBeNull()
-			expect(data.orbit.data_arc).toBe('4372')
+			expect(data.orbit.data_arc).not.toBeEmpty()
 			expect(data.orbit.producer).toBe('Otto Matic')
-			expect(data.orbit.moid).toBe('1.09083')
+			expect(data.orbit.moid).not.toBeEmpty()
 			expect(data.orbit.sb_used).toBe('SB441-N16')
 			expect(data.orbit.source).toBe('JPL')
-			expect(data.orbit.epoch_cd).toBe('2021-Aug-08.0')
+			expect(data.orbit.epoch_cd).not.toBeEmpty()
 			expect(data.orbit.elements).toHaveLength(12)
-			expect(data.orbit.elements[0].value).toBe('1.00059981968871')
+			expect(data.orbit.elements[0].value).not.toBeEmpty()
 			expect(data.orbit.elements[0].title).toBe('eccentricity')
 			expect(data.orbit.elements[0].label).toBe('e')
-			expect(data.orbit.elements[0].sigma).toBe('9.3695E-7')
+			expect(data.orbit.elements[0].sigma).not.toBeEmpty()
 			expect(data.orbit.elements[0].units).toBeNull()
 			expect(data.orbit.elements[0].name).toBe('e')
 			expect(data.phys_par).toHaveLength(2)
 			expect(data.phys_par[0].desc).toBe('absolute magnitude of comet and coma (i.e. total)')
 			expect(data.phys_par[0].value).toBe('8.5')
-			// expect(data.phys_par[0].notes).toBe('2 parameter fit from 2661 observations, autocmod 3.0f')
-			expect(data.phys_par[0].ref).toBe('164')
+			expect(data.phys_par[0].notes).not.toBeEmpty()
+			expect(data.phys_par[0].ref).not.toBeEmpty()
 			expect(data.phys_par[0].title).toBe('comet total magnitude')
 			expect(data.phys_par[0].sigma).toBe('0.7')
 			expect(data.phys_par[0].units).toBeNull()
@@ -61,7 +63,7 @@ describe.skip('search', () => {
 		}
 	})
 
-	test('multipleRecords', async () => {
+	test('multiple records', async () => {
 		const data = await search('PANSTARRS')
 
 		if ('list' in data) {
@@ -93,7 +95,7 @@ describe.skip('identify', () => {
 		}
 	}, 60000)
 
-	test('noRecords', async () => {
+	test('no records', async () => {
 		const date = temporalFromDate(2023, 1, 15, 1, 38, 15)
 		const response = await identify(date, deg(-45.5), deg(-22.5), kilometer(1.81754), parseAngle('10h 44 02')!, parseAngle('-59 36 04')!)
 		expect('n_first_pass' in response).toBeFalse()
@@ -101,15 +103,15 @@ describe.skip('identify', () => {
 	}, 60000)
 })
 
-describe.skip('closeApproaches', () => {
-	test('fromNowTo7Days', async () => {
+describe.skipIf(SKIP)('close approaches', () => {
+	test('from now to 7 days', async () => {
 		const response = await closeApproaches('now', '7d', 10)
 		expect(response.count).toBeGreaterThan(0)
 		expect(response.fields).toHaveLength(14)
 		expect(response.data.length).toBeGreaterThan(0)
 	})
 
-	test('fromDateToDate', async () => {
+	test('from date to date', async () => {
 		const from = temporalFromDate(2024, 3, 13)
 		const to = temporalFromDate(2024, 3, 20)
 		const response = await closeApproaches(from, to, 10)

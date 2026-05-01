@@ -10,6 +10,7 @@ const VIZIER_GAIA_DR3_TABLE = '"I/355/gaiadr3"'
 const VIZIER_GAIA_DR3_COLUMNS = 'Source, RAJ2000, DEJ2000, Gmag, pmRA, pmDE, RV'
 const VIZIER_GAIA_DR3_EPOCH = 2000
 const VIZIER_GAIA_DR3_PM_COS_DEC_EPSILON = 1e-12
+const VIZIER_GAIA_SOURCE_ID_REGEX = /^\d+$/
 
 export interface VizierQueryOptions extends ReadCsvOptions, Omit<RequestInit, 'method' | 'body'> {
 	baseUrl?: string
@@ -22,7 +23,7 @@ const DEFAULT_VIZIER_QUERY_OPTIONS: VizierQueryOptions = {
 }
 
 // Executes a VizieR query.
-export async function vizierQuery(query: string, { baseUrl, timeout = 60000, signal, ...options }: VizierQueryOptions = DEFAULT_VIZIER_QUERY_OPTIONS) {
+export async function vizierQuery(query: string, { baseUrl, timeout = 60000, signal, ...options }: Readonly<VizierQueryOptions> = DEFAULT_VIZIER_QUERY_OPTIONS) {
 	const uri = `${baseUrl || VIZIER_URL}${VIZIER_QUERY_PATH}`
 	signal ??= timeout ? AbortSignal.timeout(timeout) : undefined
 
@@ -32,11 +33,10 @@ export async function vizierQuery(query: string, { baseUrl, timeout = 60000, sig
 	body.append('format', 'tsv')
 	body.append('query', query)
 
-	const response = await fetch(uri, { method: 'POST', body, signal, ...options })
+	const response = await fetch(uri, { ...options, method: 'POST', body, signal })
 	if (response.status >= 300) return undefined
 	const text = await response.text()
-	options.delimiter = TSV_DELIMITER
-	return readCsv(text, options)
+	return readCsv(text, { ...options, delimiter: TSV_DELIMITER })
 }
 
 export interface VizierGaiaCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
@@ -56,7 +56,7 @@ export class VizierGaiaCatalog extends BaseStarCatalog<VizierGaiaCatalogEntry> {
 
 	// Retrieves a Gaia DR3 source by source identifier.
 	async get(id: number | string | bigint): Promise<VizierGaiaCatalogEntry | undefined> {
-		const rows = await this.#query(`Source = ${id}`, 1)
+		const rows = await this.#query(`Source = ${formatVizierGaiaSourceId(id)}`, 1)
 		return rows?.length ? parseVizierGaiaCatalogRow(rows[0]) : undefined
 	}
 
@@ -84,8 +84,16 @@ function parseVizierGaiaCatalogRow(row: Readonly<CsvRow>): VizierGaiaCatalogEntr
 	const [id, raJ2000, decJ2000, gMagnitude, pmRaCosDecMasYr, pmDecMasYr, radialVelocityKmS] = row
 	if (!id) return undefined
 
-	const rightAscension = deg(+raJ2000)
-	const declination = deg(+decJ2000)
+	const rawRightAscension = parseVizierGaiaNumber(raJ2000)
+	const rawDeclination = parseVizierGaiaNumber(decJ2000)
+	const magnitude = parseVizierGaiaNumber(gMagnitude)
+
+	if (rawRightAscension === undefined || rawDeclination === undefined || magnitude === undefined) {
+		return undefined
+	}
+
+	const rightAscension = deg(rawRightAscension)
+	const declination = deg(rawDeclination)
 
 	if (!Number.isFinite(rightAscension) || !Number.isFinite(declination)) {
 		return undefined
@@ -107,7 +115,7 @@ function parseVizierGaiaCatalogRow(row: Readonly<CsvRow>): VizierGaiaCatalogEntr
 		epoch: VIZIER_GAIA_DR3_EPOCH,
 		rightAscension,
 		declination,
-		magnitude: +gMagnitude,
+		magnitude,
 		pmRA,
 		pmDEC: rawPmDEC !== undefined ? mas(rawPmDEC) : undefined,
 		rv: rawRV !== undefined ? kilometerPerSecond(rawRV) : undefined,
@@ -144,9 +152,7 @@ function buildVizierGaiaBoxConstraint(box: StarCatalogRaDecBox) {
 
 // Pushes optional magnitude limits down to the remote query.
 function buildVizierGaiaMagnitudeConstraint(query: NormalizedStarCatalogQuery) {
-	const constraints: string[] = []
-
-	constraints.push('Gmag IS NOT NULL')
+	const constraints = ['Gmag IS NOT NULL']
 
 	if (query.magnitudeMin !== undefined) {
 		constraints.push(`Gmag >= ${query.magnitudeMin}`)
@@ -161,7 +167,22 @@ function buildVizierGaiaMagnitudeConstraint(query: NormalizedStarCatalogQuery) {
 
 // Parses an optional Gaia numeric column.
 function parseVizierGaiaNumber(value?: string) {
-	if (!value) return undefined
-	const num = +value
+	const text = value?.trim()
+	if (!text) return undefined
+	const num = +text
 	return Number.isFinite(num) ? num : undefined
+}
+
+// Formats a Gaia source id as an ADQL integer literal.
+function formatVizierGaiaSourceId(id: number | string | bigint) {
+	if (typeof id === 'bigint') {
+		if (id >= 0n) return id.toString()
+	} else if (typeof id === 'number') {
+		if (Number.isSafeInteger(id) && id >= 0) return `${id}`
+	} else {
+		const text = id.trim()
+		if (VIZIER_GAIA_SOURCE_ID_REGEX.test(text)) return text
+	}
+
+	throw new Error(`invalid VizieR Gaia source id: ${id}`)
 }

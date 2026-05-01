@@ -5,7 +5,7 @@ import { eclipticToEquatorial, equatorialFromJ2000, galacticToEquatorial } from 
 import { meter, toMeter } from './distance'
 import type { CfaPattern } from './image.types'
 import type { IndiClientHandler } from './indi.client'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type NameAndLabel, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type Thermometer, type TrackMode, type Wheel } from './indi.device'
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, ValueType } from './indi.types'
 import type { GeographicCoordinate } from './location'
@@ -59,15 +59,15 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 	}
 
 	added(client: Client, device: string, property: DeviceProperty) {
-		this.#handlers.forEach((e) => e.added(client, device, property))
+		for (const e of this.#handlers) e.added(client, device, property)
 	}
 
 	updated(client: Client, device: string, property: DeviceProperty) {
-		this.#handlers.forEach((e) => e.updated(client, device, property))
+		for (const e of this.#handlers) e.updated(client, device, property)
 	}
 
 	removed(client: Client, device: string, property: DeviceProperty) {
-		this.#handlers.forEach((e) => e.removed(client, device, property))
+		for (const e of this.#handlers) e.removed(client, device, property)
 	}
 
 	names(client: Client | string) {
@@ -131,7 +131,7 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 					const element = property.elements[key]
 
 					if (element) {
-						const value = elements[key]!.value
+						const value = elements[key].value
 
 						if (value !== element.value) {
 							element.value = value as ValueType
@@ -147,6 +147,8 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 
 			return updated
 		}
+
+		return false
 	}
 
 	delProperty(client: Client, message: DelProperty) {
@@ -278,8 +280,6 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 				if (this.handleConnection(device, message)) {
 					this.updated(device, 'connected', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -306,7 +306,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 
 	protected handleDriverInfo(client: Client, message: DefTextVector | SetTextVector, interfaceType: DeviceInterfaceType) {
 		const { elements } = message
-		const type = +elements.DRIVER_INTERFACE!.value
+		const type = +elements.DRIVER_INTERFACE.value
 		const name = message.device
 		let device = this.get(client, name)
 
@@ -314,7 +314,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 			if (!device) {
 				device = structuredClone<D>(DEVICES[interfaceType as never])
 				const id = Bun.MD5.hash(`${client.id}:${device.type}:${name}`, 'hex')
-				device = { ...device, id, name, [CLIENT]: client, driver: { executable: elements.DRIVER_EXEC!.value, version: elements.DRIVER_VERSION!.value }, client: { type: client.type, id: client.id } }
+				device = { ...device, id, name, [CLIENT]: client, driver: { executable: elements.DRIVER_EXEC.value, version: elements.DRIVER_VERSION.value }, client: { type: client.type, id: client.id } }
 
 				this.add(device)
 				this.ask(device)
@@ -324,7 +324,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
-	add(device: D, client = device[CLIENT] as Client) {
+	add(device: D, client = device[CLIENT]!) {
 		if (!this.has(client, device.id)) {
 			this.devices.set(device.id, device)
 			this.clients.set(client.id, client)
@@ -436,8 +436,6 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 						this.updated(device, 'guideRate', message.state)
 					}
 				}
-
-				return
 			}
 		}
 	}
@@ -483,8 +481,6 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 						this.updated(device, 'temperature', message.state)
 					}
 				}
-
-				return
 			}
 		}
 	}
@@ -635,8 +631,6 @@ export class CameraManager extends DeviceManager<Camera> {
 				if (handleTextValue(device, 'frameType', message.elements.FRAME_BIAS?.value ? 'BIAS' : message.elements.FRAME_FLAT?.value ? 'FLAT' : message.elements.FRAME_DARK?.value ? 'DARK' : 'LIGHT')) {
 					this.updated(device, 'frameType', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -759,8 +753,6 @@ export class CameraManager extends DeviceManager<Camera> {
 					this.updated(device, 'offset', message.state)
 					this.#offsetProperties.set(device.name, [message.name, 'OFFSET'])
 				}
-
-				return
 		}
 	}
 
@@ -775,12 +767,10 @@ export class CameraManager extends DeviceManager<Camera> {
 
 		switch (message.name) {
 			case 'CCD_CFA':
-				device.cfa.offsetX = +message.elements.CFA_OFFSET_X!.value
-				device.cfa.offsetY = +message.elements.CFA_OFFSET_Y!.value
-				device.cfa.type = message.elements.CFA_TYPE!.value as CfaPattern
+				device.cfa.offsetX = +message.elements.CFA_OFFSET_X.value
+				device.cfa.offsetY = +message.elements.CFA_OFFSET_Y.value
+				device.cfa.type = message.elements.CFA_TYPE.value as CfaPattern
 				this.updated(device, 'cfa', message.state)
-
-				return
 		}
 	}
 
@@ -800,8 +790,6 @@ export class CameraManager extends DeviceManager<Camera> {
 						console.warn(`received empty BLOB for device ${device.name}`)
 					}
 				}
-
-				return
 		}
 	}
 }
@@ -968,14 +956,14 @@ export class MountManager extends DeviceManager<Mount> {
 						rates.push({ name: element.name, label: element.label! })
 					}
 
-					if (rates.length) {
+					if (rates.length > 0) {
 						device.slewRates = rates
 						this.updated(device, 'slewRates', message.state)
 					}
 				}
 
 				for (const key in elements) {
-					const element = elements[key]!
+					const element = elements[key]
 
 					if (element.value) {
 						if (device.slewRate !== element.name) {
@@ -997,14 +985,14 @@ export class MountManager extends DeviceManager<Mount> {
 						modes.push(element.name.replace('TRACK_', '') as TrackMode)
 					}
 
-					if (modes.length) {
+					if (modes.length > 0) {
 						device.trackModes = modes
 						this.updated(device, 'trackModes', message.state)
 					}
 				}
 
 				for (const key in elements) {
-					const element = elements[key]!
+					const element = elements[key]
 
 					if (element.value) {
 						const trackMode = element.name.replace('TRACK_', '') as TrackMode
@@ -1111,8 +1099,6 @@ export class MountManager extends DeviceManager<Mount> {
 						this.updated(device, 'canMove', message.state)
 					}
 				}
-
-				return
 		}
 	}
 
@@ -1148,8 +1134,6 @@ export class MountManager extends DeviceManager<Mount> {
 				if (updated) {
 					this.updated(device, 'geographicCoordinate', message.state)
 				}
-
-				return
 			}
 		}
 	}
@@ -1167,7 +1151,7 @@ export class MountManager extends DeviceManager<Mount> {
 			case 'TIME_UTC': {
 				if (message.elements.UTC?.value) {
 					const utc = parseTemporal(message.elements.UTC.value, 'YYYY-MM-DDTHH:mm:ss')
-					const offset = parseUTCOffset(message.elements.OFFSET!.value)
+					const offset = parseUTCOffset(message.elements.OFFSET.value)
 
 					let updated = handleNumberValue(device.time, 'utc', utc)
 					updated = handleNumberValue(device.time, 'offset', offset) || updated
@@ -1176,8 +1160,6 @@ export class MountManager extends DeviceManager<Mount> {
 						this.updated(device, 'time', message.state)
 					}
 				}
-
-				return
 			}
 		}
 	}
@@ -1192,7 +1174,7 @@ export class WheelManager extends DeviceManager<Wheel> {
 
 	slots(wheel: Wheel, names: readonly string[], client = wheel[CLIENT]!) {
 		const elements: Record<string, string> = {}
-		names.forEach((name, index) => (elements[`FILTER_SLOT_NAME_${index + 1}`] = name))
+		for (let i = 0; i < names.length; i++) elements[`FILTER_SLOT_NAME_${i + 1}`] = names[i]
 		client.sendText({ device: wheel.name, name: 'FILTER_NAME', elements })
 	}
 
@@ -1216,8 +1198,6 @@ export class WheelManager extends DeviceManager<Wheel> {
 				if (handleSwitchValue(device, 'moving', message.state === 'Busy')) {
 					this.updated(device, 'moving', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1244,8 +1224,6 @@ export class WheelManager extends DeviceManager<Wheel> {
 					device.names = names.map((e) => e.value)
 					this.updated(device, 'names', message.state)
 				}
-
-				return
 			}
 		}
 	}
@@ -1318,8 +1296,6 @@ export class FocuserManager extends DeviceManager<Focuser> {
 				if (handleSwitchValue(device, 'reversed', message.elements.INDI_ENABLED?.value)) {
 					this.updated(device, 'reversed', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1363,8 +1339,6 @@ export class FocuserManager extends DeviceManager<Focuser> {
 				if (handleSwitchValue(device, 'moving', message.state === 'Busy')) {
 					this.updated(device, 'moving', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1411,8 +1385,6 @@ export class CoverManager extends DeviceManager<Cover> {
 				if (handleSwitchValue(device, 'canAbort', true)) {
 					this.updated(device, 'canAbort', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1494,8 +1466,6 @@ export class RotatorManager extends DeviceManager<Rotator> {
 				if (handleSwitchValue(device, 'hasBacklashCompensation', message.elements.INDI_ENABLED?.value)) {
 					this.updated(device, 'hasBacklashCompensation', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1521,8 +1491,6 @@ export class RotatorManager extends DeviceManager<Rotator> {
 						this.updated(device, 'canSync', message.state)
 					}
 				}
-
-				return
 		}
 	}
 
@@ -1569,8 +1537,6 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 						this.updated(device, 'dutyCycle', message.state)
 					}
 				}
-
-				return
 			}
 		}
 	}
@@ -1621,8 +1587,6 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 				if (handleSwitchValue(device, 'enabled', message.elements.FLAT_LIGHT_ON?.value)) {
 					this.updated(device, 'enabled', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1636,8 +1600,6 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 				if (handleMinMaxValue(device.intensity, message.elements.FLAT_LIGHT_INTENSITY_VALUE, tag)) {
 					this.updated(device, 'intensity', message.state)
 				}
-
-				return
 		}
 	}
 
@@ -1695,8 +1657,6 @@ export class PowerManager extends DeviceManager<Power> {
 						this.updated(device, 'hasPowerCycle', message.state)
 					}
 				}
-
-				return
 		}
 	}
 
@@ -1732,7 +1692,6 @@ export class PowerManager extends DeviceManager<Power> {
 				return
 			case 'VARIABLE_VOLTAGES':
 				handlePowerChannel(this, device, message, tag, 'variableVoltage', 'value')
-				return
 		}
 	}
 
@@ -1757,7 +1716,6 @@ export class PowerManager extends DeviceManager<Power> {
 				return
 			case 'VARIABLE_LABELS':
 				handlePowerChannel(this, device, message, tag, 'variableVoltage', 'label')
-				return
 		}
 	}
 }
@@ -1767,7 +1725,8 @@ function handlePowerChannel(manager: DeviceManager<Power>, device: Power, messag
 	const channels = device[type]
 	let updated = false
 
-	entries.forEach(([name, entry], i) => {
+	for (let i = 0; i < entries.length; i++) {
+		const [name, entry] = entries[i]
 		const p = channels[i] ?? ({ type, name, label: entry.label ?? '', enabled: false, value: 0, min: 0, max: 0, step: 0 } satisfies PowerChannel)
 
 		if (tag[0] === 'd' && 'max' in entry) {
@@ -1785,7 +1744,7 @@ function handlePowerChannel(manager: DeviceManager<Power>, device: Power, messag
 			channels[i] = p
 			updated = true
 		}
-	})
+	}
 
 	if (entries.length < channels.length) {
 		channels.splice(entries.length, channels.length - entries.length)
@@ -1810,7 +1769,7 @@ function handleParkable<D extends Device & Parkable>(manager: DeviceManager<D>, 
 		manager.updated(device, 'parking', message.state)
 	}
 
-	if (handleSwitchValue<Device & Parkable>(device, 'parked', !!message.elements.PARK?.value)) {
+	if (handleSwitchValue<Device & Parkable>(device, 'parked', message.elements.PARK?.value)) {
 		manager.updated(device, 'parked', message.state)
 	}
 }

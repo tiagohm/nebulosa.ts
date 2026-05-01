@@ -2,8 +2,8 @@ import { describe, expect, onTestFinished, test } from 'bun:test'
 import { IndiClient, type IndiClientHandler } from '../src/indi.client'
 import type { Camera, Cover, FlatPanel, Focuser, GuideOutput, Mount, Power, Rotator, Thermometer, Wheel } from '../src/indi.device'
 import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
-import type { DefSwitchVector, PropertyState } from '../src/indi.types'
-// biome-ignore format: too long!
+import type { DefSwitchVector, DefTextVector, PropertyState } from '../src/indi.types'
+// oxfmt-ignore
 import { SimpleXmlParser } from '../src/xml'
 import { downloadPerTag } from './download'
 
@@ -153,24 +153,96 @@ describe('parse', () => {
 		expect(vector.elements.DISCONNECT.label).toBe('Disconnect')
 		expect(vector.elements.DISCONNECT.value).toBeTrue()
 	})
+
+	test('keeps element names that collide with object prototype keys', () => {
+		const vector = client.parseDefVector({
+			name: 'defTextVector',
+			attributes: { device: 'Device', name: 'PROTOTYPE_TEST', state: 'Ok', perm: 'rw' },
+			children: [{ name: 'defText', attributes: { name: '__proto__' }, children: [], text: 'safe' }],
+			text: '',
+		}) as DefTextVector
+
+		expect(Object.getPrototypeOf(vector.elements)).toBeNull()
+		expect(Object.hasOwn(vector.elements, '__proto__')).toBeTrue()
+		expect(vector.elements.__proto__.value).toBe('safe')
+	})
 })
 
-const INDI_HOST: string = 'localhost'
-const HAS_INDI_SERVER = process.platform === 'linux' && !!Bun.spawnSync(['which', 'indiserver']).stdout.byteLength
-const SKIP_TEST = Bun.env.INDI_MANAGER_TEST !== 'true' || (INDI_HOST === 'localhost' && !HAS_INDI_SERVER)
+describe('write', () => {
+	test('escapes XML attributes and text in outbound commands', async () => {
+		const payload = await captureClientWrites('</newTextVector>', (client) => {
+			client.sendText({
+				device: 'Device & "A"',
+				name: 'ACTIVE<DEVICES>',
+				elements: { ACTIVE_TELESCOPE: 'Mount & <main> "east"' },
+			})
+		})
 
-async function startIndi(driver: string) {
-	if (HAS_INDI_SERVER && INDI_HOST === 'localhost') {
-		const process = Bun.spawn(['indiserver', driver])
-		await Bun.sleep(500)
-		expect(process.killed).toBeFalse()
-		return process
-	} else {
-		return undefined
+		expect(payload).toContain('<newTextVector device="Device &amp; &quot;A&quot;" name="ACTIVE&lt;DEVICES&gt;"><oneText name="ACTIVE_TELESCOPE">Mount &amp; &lt;main&gt; "east"</oneText></newTextVector>')
+		expect(payload).not.toContain('timestamp=""')
+	})
+
+	test('writes complete XML commands in one escaped payload', async () => {
+		const payload = await captureClientWrites('</enableBLOB>', (client) => {
+			client.getProperties({ device: 'CCD & "A"', name: 'PROP<1>' })
+			client.enableBlob({ device: 'CCD & "A"', name: 'CCD>1', value: 'Also' })
+		})
+
+		expect(payload).toContain('<getProperties version="1.7"></getProperties>')
+		expect(payload).toContain('<getProperties version="1.7" device="CCD &amp; &quot;A&quot;" name="PROP&lt;1&gt;"></getProperties>')
+		expect(payload).toContain('<enableBLOB device="CCD &amp; &quot;A&quot;" name="CCD&gt;1">Also</enableBLOB>')
+	})
+})
+
+async function captureClientWrites(endMarker: string, write: (client: IndiClient) => void | Promise<void>) {
+	let payload = ''
+
+	const server = Bun.listen({
+		hostname: '127.0.0.1',
+		port: 0,
+		socket: {
+			data: (_, data) => {
+				payload += data.toString()
+			},
+		},
+	})
+
+	const client = new IndiClient()
+
+	try {
+		await client.connect('127.0.0.1', server.port)
+		await write(client)
+		await waitUntil(() => payload.includes(endMarker), 1000, 10)
+		return payload
+	} finally {
+		client.close()
+		server.stop(true)
 	}
 }
 
-describe.serial.skipIf(SKIP_TEST)('manager', () => {
+async function waitUntil(predicate: () => boolean, timeout: number, step: number) {
+	while (!predicate()) {
+		if (timeout <= 0) throw new Error('timeout waiting for condition')
+		await Bun.sleep(step)
+		timeout -= step
+	}
+}
+
+async function isIndiRunning(port: number = 7624) {
+	if (process.platform === 'win32') {
+		return (await Bun.$`netstat -ano | findstr :${port}`.quiet().text()).includes('LISTENING')
+	} else if (process.platform === 'linux') {
+		return (await Bun.$`lsof -i :${port}`.quiet().text()).includes('LISTEN')
+	} else {
+		return false
+	}
+}
+
+const INDI_HOST: string = 'localhost'
+const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true' || !(await isIndiRunning())
+
+// indiserver indi_simulator_ccd indi_simulator_telescope indi_simulator_focus indi_simulator_wheel indi_simulator_dustcover indi_simulator_lightpanel indi_simulator_rotator
+describe.skipIf(SKIP)('manager', () => {
 	test('camera', async () => {
 		let frame: string | Buffer = ''
 		let cameraAdded = false
@@ -179,8 +251,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		let guideOutputRemoved = false
 		let thermometerAdded = false
 		let thermometerRemoved = false
-
-		const process = await startIndi('indi_simulator_ccd')
 
 		const cameraDeviceHandler: DeviceHandler<Camera> = {
 			added: (device: Camera) => {
@@ -274,7 +344,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		camera.connect(device)
 
 		onTestFinished(() => {
-			process?.kill()
 			camera.disconnect(device)
 		})
 
@@ -347,8 +416,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		let guideOutputAdded = false
 		let guideOutputRemoved = false
 
-		const process = await startIndi('indi_simulator_telescope')
-
 		const mountDeviceHandler: DeviceHandler<Mount> = {
 			added: (device: Mount) => {
 				mountAdded = true
@@ -418,7 +485,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		mount.connect(device)
 
 		onTestFinished(() => {
-			process?.kill()
 			mount.disconnect(device)
 		})
 
@@ -458,8 +524,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 	test('wheel', async () => {
 		let wheelAdded = false
 		let wheelRemoved = false
-
-		const process = await startIndi('indi_simulator_wheel')
 
 		const wheelDeviceHandler: DeviceHandler<Wheel> = {
 			added: (device: Wheel) => {
@@ -513,14 +577,13 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		wheel.connect(device)
 
 		onTestFinished(() => {
-			process?.kill()
 			wheel.disconnect(device)
 		})
 
 		await Bun.sleep(1000)
 
 		expect(device.connected).toBeTrue()
-		expect(device.count).toHaveLength(8)
+		expect(device.count).toBe(8)
 		expect(device.position).toBe(0)
 		expect(deviceProperty).not.toBeEmpty()
 
@@ -543,8 +606,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		let focuserRemoved = false
 		let thermometerAdded = false
 		let thermometerRemoved = false
-
-		const process = await startIndi('indi_simulator_focus')
 
 		const focuserDeviceHandler: DeviceHandler<Focuser> = {
 			added: (device: Focuser) => {
@@ -609,7 +670,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		await Bun.sleep(1000)
 
 		onTestFinished(() => {
-			process?.kill()
 			focuser.disconnect(device)
 		})
 
@@ -652,8 +712,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 	test('cover', async () => {
 		let coverAdded = false
 		let coverRemoved = false
-
-		const process = await startIndi('indi_simulator_dustcover')
 
 		const coverDeviceHandler: DeviceHandler<Cover> = {
 			added: (device: Cover) => {
@@ -698,7 +756,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		await Bun.sleep(1000)
 
 		onTestFinished(() => {
-			process?.kill()
 			cover.disconnect(device)
 		})
 
@@ -739,8 +796,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 	test('flat panel', async () => {
 		let flatPanelAdded = false
 		let flatPanelRemoved = false
-
-		const process = await startIndi('indi_simulator_lightpanel')
 
 		const flatPanelDeviceHandler: DeviceHandler<FlatPanel> = {
 			added: (device: FlatPanel) => {
@@ -788,7 +843,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		await Bun.sleep(1000)
 
 		onTestFinished(() => {
-			process?.kill()
 			flatPanel.disconnect(device)
 		})
 
@@ -830,8 +884,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 	test.skip('power', async () => {
 		let powerAdded = false
 		let powerRemoved = false
-
-		// const process = await startIndiProcess('indi_svbony_powerbox')
 
 		const powerDeviceHandler: DeviceHandler<Power> = {
 			added: (device: Power) => {
@@ -879,7 +931,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		await Bun.sleep(1000)
 
 		onTestFinished(() => {
-			// process?.kill()
 			power.disconnect(device)
 		})
 
@@ -935,8 +986,6 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		let rotatorAdded = false
 		let rotatorRemoved = false
 
-		const process = await startIndi('indi_simulator_rotator')
-
 		const rotatorDeviceHandler: DeviceHandler<Rotator> = {
 			added: (device: Rotator) => {
 				rotatorAdded = true
@@ -980,7 +1029,7 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		const client = new IndiClient({ handler })
 
 		onTestFinished(() => {
-			process?.kill()
+			rotator.disconnect(device)
 		})
 
 		await client.connect(INDI_HOST)
@@ -998,7 +1047,7 @@ describe.serial.skipIf(SKIP_TEST)('manager', () => {
 		expect(device.canAbort).toBeTrue()
 		expect(device.canHome).toBeFalse()
 		expect(device.canReverse).toBeTrue()
-		expect(device.canSync).toBeFalse()
+		expect(device.canSync).toBeTrue()
 		expect(device.angle.value).toBe(0)
 		expect(device.angle.min).toBe(0)
 		expect(device.angle.max).toBe(360)

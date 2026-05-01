@@ -1,6 +1,7 @@
 import { normalizeAngle } from './angle'
 import { PI } from './constants'
 import { eraS2c } from './erfa'
+import { clamp } from './math'
 import { type MutVec3, type Vec3, vecCross, vecDot, vecFill, vecNormalize, vecNormalizeMut } from './vec3'
 
 export interface Point<T = number> {
@@ -360,7 +361,7 @@ export function sphericalInterpolate(longitudeA: number, latitudeA: number, long
 	const by = cosLatitudeB * Math.sin(longitudeB)
 	const bz = Math.sin(latitudeB)
 	const dot = ax * bx + ay * by + az * bz
-	const clampedDot = dot <= -1 ? -1 : dot >= 1 ? 1 : dot
+	const clampedDot = clamp(dot, -1, 1)
 	const omega = Math.acos(clampedDot)
 	const sinOmega = Math.sin(omega)
 

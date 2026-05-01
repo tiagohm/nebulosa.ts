@@ -1,5 +1,5 @@
 import type { Client } from './indi.device'
-// biome-ignore format: too long!
+// oxfmt-ignore
 import type { DefBlob, DefBlobVector, DefLight, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, EnableBlob, GetProperties, Message, NewNumberVector, NewSwitchVector, NewTextVector, OneBlob, OneLight, OneNumber, OneSwitch, OneText, SetBlobVector, SetLightVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, SwitchRule, VectorType } from './indi.types'
 import { SimpleXmlParser, type XmlNode } from './xml'
 
@@ -146,7 +146,7 @@ export class IndiClient implements Client {
 			timeout: +node.attributes.timeout,
 			timestamp: node.attributes.timestamp,
 			message: node.attributes.message,
-			elements: {},
+			elements: createElementRecord(),
 		} as DefVector
 
 		if (node.name === 'defSwitchVector') {
@@ -194,7 +194,7 @@ export class IndiClient implements Client {
 			timeout: +node.attributes.timeout,
 			timestamp: node.attributes.timestamp,
 			message: node.attributes.message,
-			elements: {},
+			elements: createElementRecord(),
 		} as SetVector
 
 		for (const child of node.children) {
@@ -307,58 +307,58 @@ export class IndiClient implements Client {
 	}
 
 	getProperties(command?: GetProperties) {
-		if (this.#socket) {
-			this.#socket.write(`<getProperties version="1.7"`)
-			if (command?.device) this.#socket.write(` device="${command.device}"`)
-			if (command?.name) this.#socket.write(` name="${command.name}"`)
-			this.#socket.write('></getProperties>')
-			this.#socket.flush()
-		}
+		let message = '<getProperties version="1.7"'
+		if (command?.device) message += ` device="${escapeXmlAttribute(command.device)}"`
+		if (command?.name) message += ` name="${escapeXmlAttribute(command.name)}"`
+		this.#writeXml(`${message}></getProperties>`)
 	}
 
 	enableBlob(command: EnableBlob) {
-		if (this.#socket) {
-			this.#socket.write(`<enableBLOB device="${command.device}"`)
-			if (command.name) this.#socket.write(` name="${command.name}"`)
-			this.#socket.write(`>${command.value}</enableBLOB>`)
-			this.#socket.flush()
-		}
+		let message = `<enableBLOB device="${escapeXmlAttribute(command.device)}"`
+		if (command.name) message += ` name="${escapeXmlAttribute(command.name)}"`
+		this.#writeXml(`${message}>${escapeXmlText(command.value)}</enableBLOB>`)
 	}
 
 	sendText(vector: NewTextVector) {
-		if (this.#socket) {
-			this.#socket.write('<newTextVector')
-			this.#socket.write(` device="${vector.device}"`)
-			this.#socket.write(` name="${vector.name}"`)
-			this.#socket.write(` timestamp="${vector.timestamp ?? ''}">`)
-			for (const name in vector.elements) this.#socket.write(`<oneText name="${name}">${vector.elements[name]}</oneText>`)
-			this.#socket.write('</newTextVector>')
-			this.#socket.flush()
+		let message = `<newTextVector device="${escapeXmlAttribute(vector.device)}" name="${escapeXmlAttribute(vector.name)}"`
+		if (vector.timestamp !== undefined) message += ` timestamp="${escapeXmlAttribute(vector.timestamp)}"`
+		message += '>'
+
+		for (const [name, value] of Object.entries(vector.elements)) {
+			message += `<oneText name="${escapeXmlAttribute(name)}">${escapeXmlText(value)}</oneText>`
 		}
+
+		this.#writeXml(`${message}</newTextVector>`)
 	}
 
 	sendNumber(vector: NewNumberVector) {
-		if (this.#socket) {
-			this.#socket.write('<newNumberVector')
-			this.#socket.write(` device="${vector.device}"`)
-			this.#socket.write(` name="${vector.name}"`)
-			this.#socket.write(` timestamp="${vector.timestamp ?? ''}">`)
-			for (const name in vector.elements) this.#socket.write(`<oneNumber name="${name}">${vector.elements[name]}</oneNumber>`)
-			this.#socket.write('</newNumberVector>')
-			this.#socket.flush()
+		let message = `<newNumberVector device="${escapeXmlAttribute(vector.device)}" name="${escapeXmlAttribute(vector.name)}"`
+		if (vector.timestamp !== undefined) message += ` timestamp="${escapeXmlAttribute(vector.timestamp)}"`
+		message += '>'
+
+		for (const [name, value] of Object.entries(vector.elements)) {
+			message += `<oneNumber name="${escapeXmlAttribute(name)}">${escapeXmlText(value)}</oneNumber>`
 		}
+
+		this.#writeXml(`${message}</newNumberVector>`)
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
-		if (this.#socket) {
-			this.#socket.write('<newSwitchVector')
-			this.#socket.write(` device="${vector.device}"`)
-			this.#socket.write(` name="${vector.name}"`)
-			this.#socket.write(` timestamp="${vector.timestamp ?? ''}">`)
-			for (const name in vector.elements) this.#socket.write(`<oneSwitch name="${name}">${vector.elements[name] ? 'On' : 'Off'}</oneSwitch>`)
-			this.#socket.write('</newSwitchVector>')
-			this.#socket.flush()
+		let message = `<newSwitchVector device="${escapeXmlAttribute(vector.device)}" name="${escapeXmlAttribute(vector.name)}"`
+		if (vector.timestamp !== undefined) message += ` timestamp="${escapeXmlAttribute(vector.timestamp)}"`
+		message += '>'
+
+		for (const [name, value] of Object.entries(vector.elements)) {
+			message += `<oneSwitch name="${escapeXmlAttribute(name)}">${value ? 'On' : 'Off'}</oneSwitch>`
 		}
+
+		this.#writeXml(`${message}</newSwitchVector>`)
+	}
+
+	#writeXml(message: string) {
+		if (!this.#socket) return
+		this.#socket.write(message)
+		this.#socket.flush()
 	}
 }
 
@@ -524,4 +524,48 @@ export function handleDelProperty(client: Client, handler: IndiClientHandler, ..
 			handler.delProperty(client, message)
 		}
 	}
+}
+
+function createElementRecord<T>() {
+	return Object.create(null) as Record<string, T>
+}
+
+function escapeXmlAttribute(value: string | number | boolean) {
+	return escapeXml(value, true)
+}
+
+function escapeXmlText(value: string | number | boolean) {
+	return escapeXml(value, false)
+}
+
+function escapeXml(value: string | number | boolean, attribute: boolean) {
+	const text = String(value)
+	let escaped = ''
+	let start = 0
+
+	for (let i = 0; i < text.length; i++) {
+		let replacement = ''
+
+		switch (text.charCodeAt(i)) {
+			case 34:
+				if (attribute) replacement = '&quot;'
+				break
+			case 38:
+				replacement = '&amp;'
+				break
+			case 60:
+				replacement = '&lt;'
+				break
+			case 62:
+				replacement = '&gt;'
+				break
+		}
+
+		if (replacement) {
+			escaped += text.slice(start, i) + replacement
+			start = i + 1
+		}
+	}
+
+	return start === 0 ? text : escaped + text.slice(start)
 }

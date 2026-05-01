@@ -3,7 +3,7 @@ const GITHUB_URL = 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main
 const FILES = {
 	'finals2000A.txt': [undefined, 'iers'],
 	'eopc04.1962-now.txt': [undefined, 'iers', 'location', 'time'],
-	'apod4.jpg': [undefined], // astap
+	'apod4.jpg': [undefined, 'astap'],
 	'IAU-CSN.tsv': [undefined, 'csv'],
 	'de405.bsp': [undefined, 'daf', 'spk'],
 	'de421.bsp': [undefined, 'daf', 'spk'],
@@ -18,7 +18,7 @@ const FILES = {
 	'NGC3372-8.1.fit': [undefined, 'alpaca.client', 'alpaca.server', 'fits', 'image'],
 	'NGC3372-16.1.fit': [undefined, 'alpaca.client', 'alpaca.server', 'fits', 'image', 'starmatching'],
 	'NGC3372-32.1.fit': [undefined, 'alpaca.client', 'fits', 'image'],
-	'NGC3372--32.1.fit': [undefined, 'alpaca.client', 'fits', 'image'],
+	'NGC3372--32.1.fit': [undefined, 'alpaca.client', 'astap', 'fits', 'image'],
 	'NGC3372--64.1.fit': [undefined, 'alpaca.client', 'fits', 'image'],
 	'NGC3372-8.3.fit': [undefined, 'alpaca.client', 'alpaca.server', 'fits', 'image'],
 	'NGC3372-16.3.fit': [undefined, 'alpaca.client', 'alpaca.server', 'fits', 'image'],
@@ -59,7 +59,7 @@ const FILES = {
 const downloading = new Map<string, Promise<Bun.BunFile>>()
 
 type FileName = keyof typeof FILES
-type FileTag = 'alpaca.client' | 'alpaca.server' | 'csv' | 'daf' | 'fits' | 'hnsky' | 'hyg' | 'iers' | 'image' | 'indi' | 'location' | 'sao' | 'spk' | 'stardetector' | 'starmatching' | 'stellarium' | 'time' | 'xisf'
+type FileTag = 'alpaca.client' | 'alpaca.server' | 'astap' | 'csv' | 'daf' | 'fits' | 'hnsky' | 'hyg' | 'iers' | 'image' | 'indi' | 'location' | 'sao' | 'spk' | 'stardetector' | 'starmatching' | 'stellarium' | 'time' | 'xisf'
 
 export async function download(name: FileName) {
 	const task = downloading.get(name)
@@ -79,7 +79,7 @@ export async function download(name: FileName) {
 		if (!(await file.exists())) {
 			console.info('downloading:', name)
 			const startTime = Bun.nanoseconds()
-			const response = await fetch(FILES[name][0] || `${GITHUB_URL}${name}`, { signal })
+			const response = await fetch(FILES[name][0] ?? `${GITHUB_URL}${name}`, { signal })
 			const bytes = await response.blob()
 			const size = await Bun.write(file, bytes)
 			console.info('downloaded:', name, (Bun.nanoseconds() - startTime) / 1000000, 'ms', size, 'B')

@@ -878,6 +878,7 @@ export function eraC2teqx(rbpn: Mat3, gast: Angle, rpom: Mat3) {
 
 // Transform geocentric coordinates to geodetic for a reference ellipsoid of specified form.
 export function eraGc2Gde(radius: Distance, flattening: number, x: Distance, y: Distance, z: Distance): [Angle, Angle, Distance] {
+	// oxlint-disable-next-line oxc/erasing-op
 	const aeps2 = radius * radius * 1e-32
 	const e2 = (2 - flattening) * flattening
 
@@ -1949,7 +1950,7 @@ export function eraAtoiq(type: 'R' | 'H' | 'A', ob1: Angle, ob2: Angle, astrom: 
 	// Refraction
 
 	// Fast algorithm using two constant model.
-	const tz = sz / (zaeo > 0.05 ? zaeo : 0.05)
+	const tz = sz / Math.max(zaeo, 0.05)
 	const dref = (refa + refb * tz * tz) * tz
 	const zdt = zdo + dref
 

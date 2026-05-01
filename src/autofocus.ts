@@ -75,7 +75,7 @@ export class AutoFocus {
 
 	// Returns the rightmost sampled focus point.
 	get maximum(): Readonly<Point> | undefined {
-		return this.#focusPoints[this.#focusPoints.length - 1]
+		return this.#focusPoints.at(-1)
 	}
 
 	// Creates a relative move step command.
@@ -172,7 +172,7 @@ export class AutoFocus {
 		const invalidLeftFocusPoints = this.#countInvalidFocusPoints(minimum.x, -1)
 		const invalidRightFocusPoints = this.#countInvalidFocusPoints(minimum.x, 1)
 
-		if (!left.xPoints.length && !right.xPoints.length) {
+		if (left.xPoints.length === 0 && right.xPoints.length === 0) {
 			console.warn('not enough spreaded points')
 			return this.#makeAbsoluteStep('FAILED', this.#initialFocusPosition)
 		}

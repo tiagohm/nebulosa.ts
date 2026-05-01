@@ -6,15 +6,8 @@ type RadialDistance = (sinC: number, cosC: number) => number | false
 
 type AngularDistance = (rho: number) => number | false
 
-interface Azimuthal {
-	readonly x: number
-	readonly y: number
-	readonly sinC: number
-	readonly cosC: number
-}
-
-// Computes the local east/north basis components and angular distance from the projection center.
-function azimuthal(longitude: number, latitude: number, centerLongitude: number, centerLatitude: number): Azimuthal {
+// Projects a spherical point using a radial azimuthal scaling law.
+function azimuthalProject(longitude: number, latitude: number, centerLongitude: number, centerLatitude: number, radialDistance: RadialDistance, out?: Point): Point | false {
 	const dLongitude = normalizePI(longitude - centerLongitude)
 	const sinLatitude = Math.sin(latitude)
 	const cosLatitude = Math.cos(latitude)
@@ -24,16 +17,11 @@ function azimuthal(longitude: number, latitude: number, centerLongitude: number,
 	const cosDLongitude = Math.cos(dLongitude)
 	const x = cosLatitude * sinDLongitude
 	const y = cosCenterLatitude * sinLatitude - sinCenterLatitude * cosLatitude * cosDLongitude
+	const sinC = Math.hypot(x, y)
 	const cosC = sinCenterLatitude * sinLatitude + cosCenterLatitude * cosLatitude * cosDLongitude
-	return { x, y, sinC: Math.hypot(x, y), cosC }
-}
 
-// Projects a spherical point using a radial azimuthal scaling law.
-function azimuthalProject(longitude: number, latitude: number, centerLongitude: number, centerLatitude: number, radialDistance: RadialDistance, out?: Point): Point | false {
-	const basis = azimuthal(longitude, latitude, centerLongitude, centerLatitude)
-
-	if (basis.sinC <= Number.EPSILON) {
-		if (basis.cosC < 0) return false
+	if (sinC <= Number.EPSILON) {
+		if (cosC < 0) return false
 
 		out ??= { x: 0, y: 0 }
 		out.x = 0
@@ -41,14 +29,14 @@ function azimuthalProject(longitude: number, latitude: number, centerLongitude: 
 		return out
 	}
 
-	const rho = radialDistance(basis.sinC, basis.cosC)
+	const rho = radialDistance(sinC, cosC)
 
 	if (rho === false) return false
 
-	const scale = rho / basis.sinC
+	const scale = rho / sinC
 	out ??= { x: 0, y: 0 }
-	out.x = basis.x * scale
-	out.y = basis.y * scale
+	out.x = x * scale
+	out.y = y * scale
 	return out
 }
 

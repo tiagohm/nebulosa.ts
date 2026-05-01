@@ -4,9 +4,16 @@ import { PI, PIOVERTWO } from '../src/constants'
 import { sphericalDestination, sphericalSeparation } from '../src/geometry'
 import { circleToPixels, coordToPixel, type HealpixId, HealpixIndex, nestedToRing, pixelToBoundary, pixelToCenter, ringToNested } from '../src/healpix'
 
+function HealpixIdComparator(a: HealpixId, b: HealpixId) {
+	if (typeof a === 'number' && typeof b === 'number') return a - b
+	if (typeof a === 'string' && typeof b === 'string') return a.localeCompare(b)
+	if (typeof a === 'bigint' && typeof b === 'bigint') return a.toString().localeCompare(b.toString())
+	return 0
+}
+
 // Extracts sorted ids from query results.
 function idsOf(objects: readonly { id: HealpixId }[]) {
-	return objects.map((object) => object.id).sort()
+	return objects.map((object) => object.id).sort(HealpixIdComparator)
 }
 
 test('pixel centers round-trip at nside 1', () => {
@@ -62,7 +69,7 @@ test('circle query matches brute-force filtering on a fixed catalog', () => {
 		const bruteForce = catalog
 			.filter((object) => sphericalSeparation(longitude, latitude, object.longitude, object.latitude) <= radius + 1e-12)
 			.map((object) => object.id)
-			.sort()
+			.sort(HealpixIdComparator)
 
 		expect(idsOf(index.queryCone(longitude, latitude, radius))).toEqual(bruteForce)
 	}
@@ -168,6 +175,23 @@ test('add many, update, and remove keep the index consistent', () => {
 	expect(index.remove('b')).toBeTrue()
 	expect(index.remove('missing')).toBeFalse()
 	expect(idsOf(index.queryCone(deg(30), 0, deg(10)))).toEqual([])
+})
+
+test('add many validates the whole batch before mutating the index', () => {
+	const index = new HealpixIndex<string>({ nside: 8 })
+
+	index.add('existing', deg(20), 0)
+
+	expect(() =>
+		index.addMany([
+			{ id: 'existing', rightAscension: deg(90), declination: 0 },
+			{ id: 'new', rightAscension: 0, declination: PIOVERTWO + deg(1) },
+		]),
+	).toThrow('invalid latitude/declination')
+
+	expect(index.size).toBe(1)
+	expect(index.get('new')).toBeUndefined()
+	expect(index.get('existing')?.rightAscension).toBeCloseTo(deg(20), 14)
 })
 
 test('circle cover includes the center pixel for a zero-radius query', () => {

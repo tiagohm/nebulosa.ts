@@ -18,6 +18,6 @@
 		"noUnusedParameters": false,
 		"noPropertyAccessFromIndexSignature": false,
 		"incremental": false,
-        "types": ["bun"]
+		"types": ["bun"]
 	}
 }

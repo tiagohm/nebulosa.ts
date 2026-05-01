@@ -5,7 +5,7 @@ import type { Image } from '../src/image.types'
 import { mulberry32 } from '../src/random'
 import { detectStars, excludeStarsFitWithinRegion, mergeVeryCloseStars, StarList } from '../src/star.detector'
 import { type PlotStarOptions, plotStar } from '../src/star.generator'
-import { medianOf } from '../src/util'
+import { medianOf, NumberComparator } from '../src/util'
 import { downloadPerTag } from './download'
 import { readImage } from './image.util'
 
@@ -167,9 +167,9 @@ test('detect stars from real image', async () => {
 	const stars = detectStars(image, { maxStars: 500 })
 
 	expect(stars).toHaveLength(500)
-	const flux = stars.map((e) => e.flux).sort()
-	const snr = stars.map((e) => e.snr).sort()
-	const hfd = stars.map((e) => e.hfd).sort()
+	const flux = stars.map((e) => e.flux).sort(NumberComparator)
+	const snr = stars.map((e) => e.snr).sort(NumberComparator)
+	const hfd = stars.map((e) => e.hfd).sort(NumberComparator)
 	const carina = stars.find((e) => e.x === 564 && e.y === 544)
 	expect(carina).toBeDefined()
 	expect(carina!.x).toBe(564)

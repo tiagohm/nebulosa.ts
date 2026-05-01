@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test'
 import { camera, cameras, sensor, sensors, telescope, telescopes } from '../src/astrobin'
+import { NumberComparator } from '../src/util'
 
-test.skip('sensor', async () => {
+const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+
+test.skipIf(SKIP)('sensor', async () => {
 	const data = (await sensors(1))!
 
 	expect(data.count).toBeGreaterThanOrEqual(474)
@@ -21,10 +24,10 @@ test.skip('sensor', async () => {
 	expect(s.frameRate).toBe(16)
 	expect(s.adc).toBe(12)
 	expect(s.colorOrMono).toBe('M')
-	expect(s.cameras).toEqual([189, 529, 272, 8119, 14125, 19372, 56, 1218, 4393, 1244])
+	expect(s.cameras.sort(NumberComparator)).toEqual([56, 189, 272, 529, 1218, 1244, 4393, 8119, 14125, 19372])
 })
 
-test.skip('camera', async () => {
+test.skipIf(SKIP)('camera', async () => {
 	const data = (await cameras(1))!
 
 	expect(data.count).toBeGreaterThanOrEqual(3512)
@@ -40,7 +43,7 @@ test.skip('camera', async () => {
 	expect(c.sensor).toBe(184)
 })
 
-test.skip('telescope', async () => {
+test.skipIf(SKIP)('telescope', async () => {
 	const data = (await telescopes(1))!
 
 	expect(data.count).toBeGreaterThanOrEqual(3952)
@@ -57,7 +60,7 @@ test.skip('telescope', async () => {
 	expect(t.maxFocalLength).toBe('1368.00')
 })
 
-test.skip('invalid page', async () => {
+test.skipIf(SKIP)('invalid page', async () => {
 	const data = await sensors(100)
 
 	expect(data).toBeUndefined()

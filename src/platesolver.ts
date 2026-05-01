@@ -43,10 +43,10 @@ export const EMPTY_PLATE_SOLUTION: Readonly<PlateSolution> = {
 // Converts FITS WCS keywords into a compact plate-solution summary.
 export function plateSolutionFrom(header: FitsHeader): PlateSolution | undefined {
 	// https://www.aanda.org/articles/aa/full/2002/45/aah3859/aah3859.right.html
-	const crval1 = deg(numericKeyword(header, 'CRVAL1', NaN))
+	const crval1 = deg(numericKeyword(header, 'CRVAL1', Number.NaN))
 	if (Number.isNaN(crval1)) return undefined
 
-	const crval2 = deg(numericKeyword(header, 'CRVAL2', NaN))
+	const crval2 = deg(numericKeyword(header, 'CRVAL2', Number.NaN))
 	if (Number.isNaN(crval2)) return undefined
 
 	const [cd11, cd12, cd21, cd22] = cdMatrix(header)

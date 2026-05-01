@@ -4,30 +4,22 @@
 	"js/ts.format.semicolons": "remove",
 	"js/ts.preferences.quoteStyle": "single",
 	"js/ts.tsdk.path": "node_modules/typescript/lib",
-    "js/ts.experimental.useTsgo": true,
+	"js/ts.experimental.useTsgo": true,
 	"html.format.indentInnerHtml": true,
 	"html.format.wrapAttributes": "force-aligned",
-	"html.format.wrapLineLength": 300,
+	"html.format.wrapLineLength": 320,
 	"json.format.keepLines": true,
-	"python.defaultInterpreterPath": "./scripts/.venv/bin/python",
 	"editor.codeActionsOnSave": {
 		"source.removeUnusedImports": "explicit",
-		"source.action.useSortedAttributes.biome": "explicit",
-		"source.fixAll.biome": "explicit"
+		"source.fixAll.oxc": "always"
 	},
 	"[typescript]": {
-		"editor.defaultFormatter": "biomejs.biome"
+		"editor.defaultFormatter": "oxc.oxc-vscode"
 	},
 	"[json]": {
-		"editor.defaultFormatter": "biomejs.biome"
+		"editor.defaultFormatter": "oxc.oxc-vscode"
 	},
 	"[jsonc]": {
-		"editor.defaultFormatter": "biomejs.biome"
-	},
-	"[python]": {
-		"editor.defaultFormatter": "charliermarsh.ruff",
-		"editor.codeActionsOnSave": {
-			"source.organizeImports.ruff": "explicit"
-		}
+		"editor.defaultFormatter": "oxc.oxc-vscode"
 	}
 }

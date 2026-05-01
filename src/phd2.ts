@@ -323,7 +323,7 @@ export interface PHD2ClientOptions {
 
 export interface PHD2ClientHandler {
 	readonly event?: (client: PHD2Client, event: PHD2Events) => void
-	readonly command?: (client: PHD2Client, command: PHD2Command, success: boolean, result: PHD2Error | unknown) => void
+	readonly command?: (client: PHD2Client, command: PHD2Command, success: boolean, result: unknown) => void
 	readonly close?: (client: PHD2Client, error?: Error) => void
 }
 
@@ -349,7 +349,7 @@ interface PendingPHD2Command<T> {
 export class PHD2Client implements Disposable {
 	readonly #commands = new Map<string, PendingPHD2Command<unknown>>()
 	#socket?: Bun.Socket
-	#buffer?: Buffer<ArrayBufferLike>
+	#buffer?: Buffer
 
 	constructor(readonly options?: PHD2ClientOptions) {}
 

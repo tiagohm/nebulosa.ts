@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { spline, splineGivenEnds } from '../src/spline'
+import { akimaSpline, akimaSplineLUT, catmullRomSpline, catmullRomSplineLUT, cubicHermiteSpline, cubicHermiteSplineLUT, naturalCubicSpline, naturalCubicSplineLUT, spline, splineGivenEnds } from '../src/spline'
 
 test('constant', () => {
 	const c = Math.random() + 0.5
@@ -71,7 +71,101 @@ test('given ends', () => {
 	expect(d.compute(5)).toBeCloseTo(2, 15)
 })
 
+test('cubic Hermite spline interpolates all control points', () => {
+	const x = [0, 0.3, 0.7, 1]
+	const y = [0, 0.2, 0.8, 1]
+	const s = cubicHermiteSpline(x, y)
+
+	expect(s.compute(0)).toBeCloseTo(0, 15)
+	expect(s.compute(0.3)).toBeCloseTo(0.2, 15)
+	expect(s.compute(0.7)).toBeCloseTo(0.8, 15)
+	expect(s.compute(1)).toBeCloseTo(1, 15)
+})
+
+test('cubic Hermite LUT preserves a bounded local extremum', () => {
+	const lut = cubicHermiteSplineLUT([0, 0.5, 1], [0, 1, 0], 65)
+
+	expect(lut[0]).toBeCloseTo(0, 15)
+	expect(lut[32]).toBeCloseTo(1, 15)
+	expect(lut[64]).toBeCloseTo(0, 15)
+
+	for (let i = 0; i < lut.length; i++) {
+		expect(lut[i]).toBeGreaterThanOrEqual(0)
+		expect(lut[i]).toBeLessThanOrEqual(1)
+	}
+})
+
+test('Akima spline interpolates all control points', () => {
+	const x = [0, 0.2, 0.5, 0.8, 1]
+	const y = [0, 0.3, 0.1, 0.9, 1]
+	const s = akimaSpline(x, y)
+
+	expect(s.compute(0)).toBeCloseTo(0, 15)
+	expect(s.compute(0.2)).toBeCloseTo(0.3, 15)
+	expect(s.compute(0.5)).toBeCloseTo(0.1, 15)
+	expect(s.compute(0.8)).toBeCloseTo(0.9, 15)
+	expect(s.compute(1)).toBeCloseTo(1, 15)
+})
+
+test('Akima LUT interpolates exact control-point samples', () => {
+	const lut = akimaSplineLUT([0, 0.5, 1], [0, 1, 0], 65)
+
+	expect(lut[0]).toBeCloseTo(0, 15)
+	expect(lut[32]).toBeCloseTo(1, 15)
+	expect(lut[64]).toBeCloseTo(0, 15)
+	expect(lut[31]).toBeLessThanOrEqual(1)
+	expect(lut[33]).toBeLessThanOrEqual(1)
+})
+
+test('Catmull-Rom spline interpolates all control points', () => {
+	const x = [0, 0.2, 0.5, 0.8, 1]
+	const y = [0, 0.3, 0.1, 0.9, 1]
+	const s = catmullRomSpline(x, y)
+
+	expect(s.compute(0)).toBeCloseTo(0, 15)
+	expect(s.compute(0.2)).toBeCloseTo(0.3, 15)
+	expect(s.compute(0.5)).toBeCloseTo(0.1, 15)
+	expect(s.compute(0.8)).toBeCloseTo(0.9, 15)
+	expect(s.compute(1)).toBeCloseTo(1, 15)
+})
+
+test('Catmull-Rom LUT interpolates exact control-point samples', () => {
+	const lut = catmullRomSplineLUT([0, 0.5, 1], [0, 1, 0], 65)
+
+	expect(lut[0]).toBeCloseTo(0, 15)
+	expect(lut[32]).toBeCloseTo(1, 15)
+	expect(lut[64]).toBeCloseTo(0, 15)
+})
+
+test('natural cubic spline reproduces a straight line exactly', () => {
+	const s = naturalCubicSpline([0, 0.3, 0.7, 1], [0, 0.3, 0.7, 1])
+
+	expect(s.compute(0.15)).toBeCloseTo(0.15, 12)
+	expect(s.compute(0.5)).toBeCloseTo(0.5, 12)
+	expect(s.compute(0.9)).toBeCloseTo(0.9, 12)
+})
+
+test('natural cubic LUT interpolates exact control-point samples', () => {
+	const lut = naturalCubicSplineLUT([0, 0.5, 1], [0, 1, 0], 65)
+
+	expect(lut[0]).toBeCloseTo(0, 15)
+	expect(lut[32]).toBeCloseTo(1, 15)
+	expect(lut[64]).toBeCloseTo(0, 15)
+})
+
 test('invalid input', () => {
-	expect(() => spline(1, 1, [2])).toThrow(RangeError)
-	expect(() => spline(0, 1, [])).toThrow(RangeError)
+	expect(() => spline(1, 1, [2])).toThrow('spline interval must have a finite non-zero width')
+	expect(() => spline(0, 1, [])).toThrow('spline requires at least one coefficient')
+	expect(() => cubicHermiteSpline([0, 1], [0])).toThrow('spline x and y arrays must have the same length')
+	expect(() => cubicHermiteSpline([0, 0, 1], [0, 0.5, 1])).toThrow('spline x coordinates must be strictly increasing')
+	expect(() => cubicHermiteSplineLUT([0, 1], [0, 1], 1)).toThrow('spline LUT size must be at least two')
+	expect(() => akimaSpline([0, 1], [0])).toThrow('spline x and y arrays must have the same length')
+	expect(() => akimaSpline([0, 0, 1], [0, 0.5, 1])).toThrow('spline x coordinates must be strictly increasing')
+	expect(() => akimaSplineLUT([0, 1], [0, 1], 1)).toThrow('spline LUT size must be at least two')
+	expect(() => catmullRomSpline([0, 1], [0])).toThrow('spline x and y arrays must have the same length')
+	expect(() => catmullRomSpline([0, 0, 1], [0, 0.5, 1])).toThrow('spline x coordinates must be strictly increasing')
+	expect(() => catmullRomSplineLUT([0, 1], [0, 1], 1)).toThrow('spline LUT size must be at least two')
+	expect(() => naturalCubicSpline([0, 1], [0])).toThrow('spline x and y arrays must have the same length')
+	expect(() => naturalCubicSpline([0, 0, 1], [0, 0.5, 1])).toThrow('spline x coordinates must be strictly increasing')
+	expect(() => naturalCubicSplineLUT([0, 1], [0, 1], 1)).toThrow('spline LUT size must be at least two')
 })

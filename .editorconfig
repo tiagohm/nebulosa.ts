@@ -5,13 +5,13 @@ charset = utf-8
 end_of_line = lf
 tab_width = 4
 indent_size = 4
-indent_style = space
+indent_style = tab
 insert_final_newline = true
-max_line_length = 999
+max_line_length = 320
 trim_trailing_whitespace = true
 
-[*.md]
-trim_trailing_whitespace = false
+[*.yml]
+indent_style = space
 
 [Makefile]
 indent_style = tab

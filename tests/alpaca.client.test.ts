@@ -257,9 +257,9 @@ describe.skipIf(process.platform !== 'win32' || process.env.ALPACA !== 'true')('
 			expect(image).toBeDefined()
 
 			expect(state[1]).toBe('Busy')
-			expect(state[state.length - 1]).toBe('Ok')
+			expect(state.at(-1)).toBe('Ok')
 			expect(exposure[0]).toBe(2)
-			expect(exposure[exposure.length - 1]).toBe(0)
+			expect(exposure.at(-1)).toBe(0)
 
 			image = undefined
 
@@ -268,7 +268,7 @@ describe.skipIf(process.platform !== 'win32' || process.env.ALPACA !== 'true')('
 			cameraManager.stopExposure(camera)
 			await expectUntil(camera, 'exposuring', false)
 			await Bun.sleep(5000)
-			expect(state[state.length - 1]).toBe('Idle')
+			expect(state.at(-1)).toBe('Idle')
 
 			cameraManager.disconnect(camera)
 			await expectUntil(camera, 'connected', false)
@@ -439,8 +439,3 @@ async function expectUntil<D, K extends keyof D>(device: D, key: K, value: D[K],
 		expect(timeout).toBeGreaterThan(0)
 	}
 }
-
-test.skip('download from Sky Simulator', async () => {
-	const response = await fetch('http://localhost:11111/api/v1/camera/0/imagearray', { headers: { Accept: 'application/imagebytes' } })
-	await Bun.write('Sky Simulator.dat', await response.blob())
-})

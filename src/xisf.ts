@@ -218,6 +218,7 @@ function isSupportedCompressionFormat(format: string): format is XisfCompression
 function compress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, compression: XisfWriteCompression) {
 	if (compression.format === 'zstd') return Bun.zstdCompress(input, compression)
 	else if (compression.format === 'zlib') return deflate(input, compression)
+	return undefined
 }
 
 function escapeXml(text: string) {
@@ -233,7 +234,7 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 		const bitpix = (header.BITPIX as Bitpix) || -64
 		const width = +header.NAXIS1! || 0
 		const height = +header.NAXIS2! || 0
-		const channels = (+header.NAXIS3! || 1) as number
+		const channels = +header.NAXIS3! || 1
 		const sampleFormat = sampleFormatFromBitpix(bitpix)
 		const colorSpace: XisfColorSpace = channels >= 3 ? 'RGB' : 'Gray'
 		const fitsKeywords: string[] = []
@@ -254,10 +255,10 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 
 		for (const entry of entries) {
 			const bounds = entry.bitpix === -64 || entry.bitpix === -32 ? ' bounds="0:1"' : ''
-			const byteOrder = entry.bitpix !== 8 ? ` byteOrder="${options.byteOrder}"` : ''
+			const byteOrder = entry.bitpix === 8 ? '' : ` byteOrder="${options.byteOrder}"`
 			const compression = entry.encoded.compression ? ` compression="${formatCompression(entry.encoded.compression)}"` : ''
 			xml += `<Image geometry="${entry.width}:${entry.height}:${entry.channels}" sampleFormat="${entry.sampleFormat}" colorSpace="${entry.colorSpace}" location="attachment:${offset}:${entry.encoded.data.byteLength}" pixelStorage="${options.pixelStorage}"${byteOrder}${bounds}${compression}>`
-			if (entry.fitsKeywords.length) xml += entry.fitsKeywords.join('')
+			if (entry.fitsKeywords.length > 0) xml += entry.fitsKeywords.join('')
 			xml += '</Image>'
 			offset += entry.encoded.data.byteLength
 		}
@@ -297,7 +298,7 @@ export function parseXisfHeader(data: Buffer) {
 	const parsedHeader = XML_PARSER.parse(data)?.xisf as XisfParsedHeader | undefined
 	if (!parsedHeader?.Image) return []
 
-	const parsedImages = Array.isArray(parsedHeader.Image) ? parsedHeader.Image : [parsedHeader.Image]
+	const parsedImages = parsedHeader.Image instanceof Array ? parsedHeader.Image : [parsedHeader.Image]
 	const images: XisfImage[] = []
 
 	for (const image of parsedImages) {
@@ -325,27 +326,27 @@ export function parseXisfHeader(data: Buffer) {
 	return images
 }
 
-function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeometry = parseGeometry(image.geometry)!) {
-	const header: FitsHeader = { SIMPLE: true }
+const NUMERIC_VALUE_REGEX = /^[-+]?([0-9]*\.[0-9]+|[0-9]+)$/
 
-	header.BITPIX = bitpixFromSampleFormat(image.sampleFormat)
-	header.NAXIS = geometry.channels >= 3 ? 3 : 2
-	header.NAXIS1 = geometry.width
-	header.NAXIS2 = geometry.height
+function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeometry = parseGeometry(image.geometry)!) {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: bitpixFromSampleFormat(image.sampleFormat), NAXIS: geometry.channels >= 3 ? 3 : 2, NAXIS1: geometry.width, NAXIS2: geometry.height }
+
 	if (geometry.channels >= 3) header.NAXIS3 = geometry.channels
 
 	if (image.FITSKeyword) {
-		const keywords = Array.isArray(image.FITSKeyword) ? image.FITSKeyword : [image.FITSKeyword]
+		const keywords = image.FITSKeyword instanceof Array ? image.FITSKeyword : [image.FITSKeyword]
 
 		for (const keyword of keywords) {
-			const value = keyword.value as string
-
 			if (keyword.name in header) continue
+
+			const value = (keyword.value as string | undefined)?.trim()
+
 			if (value === '' || value === undefined || value === null) continue
 			else if (value === 'T') header[keyword.name] = true
 			else if (value === 'F') header[keyword.name] = false
-			else if (value.startsWith("'") && value.endsWith("'")) header[keyword.name] = unescapeQuotedText(value.substring(1, value.length - 1).trim())
-			else header[keyword.name] = +value
+			else if (value.startsWith("'") && value.endsWith("'")) header[keyword.name] = unescapeQuotedText(value.slice(1, value.length - 1).trim())
+			else if (NUMERIC_VALUE_REGEX.test(value)) header[keyword.name] = +value
+			else header[keyword.name] = value
 		}
 	}
 
@@ -425,6 +426,7 @@ export function bitpixFromSampleFormat(sampleFormat: XisfSampleFormat): Bitpix {
 function decompress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, format: XisfCompressionFormat) {
 	if (format === 'zstd') return Bun.zstdDecompress(input)
 	else if (format === 'zlib') return inflate(input)
+	return undefined
 }
 
 export class XisfImageReader {

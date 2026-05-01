@@ -456,7 +456,7 @@ function randomBase64(n: number, alphabet: Base64Alphabet) {
 function mockRangeFetch(data: Buffer, chunkSize?: number) {
 	const restore = globalThis.fetch
 
-	// biome-ignore lint/suspicious/useAwait: mock
+	// oxlint-disable-next-line require-await
 	globalThis.fetch = (async (_input, init) => {
 		const headers = new Headers(init?.headers)
 		const range = headers.get('Range')

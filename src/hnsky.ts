@@ -3,7 +3,6 @@ import { normalizeAngle, normalizePI } from './angle'
 import { PIOVERTWO, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type StarCatalogRaDecBox } from './star.catalog'
-import { NumberComparator } from './util'
 
 const HNSKY_290_HEADER_SIZE = 110
 const HNSKY_290_RA_SCALE = TAU / 0xffffff
@@ -15,6 +14,7 @@ const HNSKY_290_BUFFER_SIZE = 1024 * 64
 const HNSKY_EPOCH = 2000
 const FULL_CIRCLE = TAU
 const GEOMETRY_EPSILON = 1e-12
+const HNSKY_290_AREA_COUNT = 290
 
 const HNSKY_290_RING_COUNTS = [1, 4, 8, 12, 16, 20, 24, 28, 32, 32, 28, 24, 20, 16, 12, 8, 4, 1] as const
 
@@ -42,9 +42,12 @@ export const HNSKY_290_DEC_BOUNDARIES = [
 	PIOVERTWO,
 ] as const satisfies readonly Angle[]
 
+const HNSKY_290_AREAS = buildHnsky290Areas()
+const HNSKY_290_AREA_BOUNDS = buildHnsky290AreaBounds()
+
 export type Hnsky290Database = 'g14' | 'g16'
 
-export type Hnsky290File = Pick<File, 'arrayBuffer'> | Buffer
+export type Hnsky290File = Pick<File, 'arrayBuffer'> | Bun.BufferSource
 
 export type Hnsky290Files = Map<string, Hnsky290File> | Record<string, Hnsky290File>
 
@@ -117,26 +120,51 @@ interface Hnsky290LoadedArea extends Hnsky290Area {
 
 // Computes the HNSKY ring number and file index for a 1-based area number.
 export function hnsky290AreaFile(area: number): Hnsky290Area {
-	if (!Number.isInteger(area) || area < 1 || area > 290) {
+	return { ...lookupHnsky290Area(area) }
+}
+
+function lookupHnsky290Area(area: number) {
+	if (!Number.isInteger(area) || area < 1 || area > HNSKY_290_AREA_COUNT) {
 		throw new RangeError(`invalid HNSKY .290 area: ${area}`)
 	}
 
-	let ring = 0
+	return HNSKY_290_AREAS[area - 1]
+}
+
+function buildHnsky290Areas(): readonly Hnsky290Area[] {
+	const areas: Hnsky290Area[] = []
 	let offset = 0
 
-	for (; ring < HNSKY_290_RING_COUNTS.length; ring++) {
+	for (let ring = 0; ring < HNSKY_290_RING_COUNTS.length; ring++) {
 		const count = HNSKY_290_RING_COUNTS[ring]
 
-		if (area <= offset + count) {
-			const index = area - offset
+		for (let index = 1; index <= count; index++) {
+			const area = offset + index
 			const fileName = `${(ring + 1).toFixed(0).padStart(2, '0')}${index.toFixed(0).padStart(2, '0')}.290`
-			return { area, ring: ring + 1, index, fileName, fraction: 0 }
+			areas.push({ area, ring: ring + 1, index, fileName, fraction: 0 })
 		}
 
 		offset += count
 	}
 
-	throw new RangeError(`invalid HNSKY .290 area: ${area}`)
+	return areas
+}
+
+function buildHnsky290AreaBounds(): readonly StarCatalogRaDecBox[] {
+	return HNSKY_290_AREAS.map((file) => {
+		const band = file.ring - 1
+		const minDEC = HNSKY_290_DEC_BOUNDARIES[band]
+		const maxDEC = HNSKY_290_DEC_BOUNDARIES[band + 1]
+		const count = HNSKY_290_RING_COUNTS[band]
+
+		if (count === 1) {
+			return { minRA: 0, maxRA: FULL_CIRCLE, minDEC, maxDEC }
+		}
+
+		const width = FULL_CIRCLE / count
+		const minRA = (file.index - 1) * width
+		return { minRA, maxRA: minRA + width, minDEC, maxDEC }
+	})
 }
 
 // Decodes a stored .290 designation into a typed catalog identifier.
@@ -174,9 +202,10 @@ export function readHnsky290Header(header: Buffer): Hnsky290FileHeader {
 export function* readHnsky290Area(header: Hnsky290FileHeader, buffer: Buffer, area: number, query: Readonly<Hnsky290RegionQuery>): Generator<Hnsky290Star, void> {
 	const { rightAscension, declination, radius, magnitudeLimit } = query
 	const cosDeclination = Math.cos(declination)
+	const maxMagnitude = Number.isFinite(magnitudeLimit) ? magnitudeLimit! : Number.POSITIVE_INFINITY
 
 	for (const star of decodeHnsky290AreaRecords(header, buffer, area)) {
-		if (Number.isFinite(magnitudeLimit) && star.magnitude > magnitudeLimit!) break
+		if (star.magnitude > maxMagnitude) break
 
 		const deltaRa = Math.abs(normalizePI(star.rightAscension - rightAscension))
 
@@ -211,16 +240,21 @@ export function findHnsky290Areas(rightAscension: Angle, declination: Angle, rad
 	corners[3].fraction = (Math.min(corners[3].area.spaceEast, diameter) * Math.min(corners[3].area.spaceNorth, diameter)) / diameter2
 
 	const unique: Hnsky290Area[] = []
-	const indexByArea = new Map<number, number>()
 
 	for (const { area, fraction } of corners) {
 		if (fraction < HNSKY_290_MIN_AREA_FRACTION) continue
 
-		const known = indexByArea.get(area.area)
+		let known = -1
 
-		if (known === undefined) {
-			const file = hnsky290AreaFile(area.area)
-			indexByArea.set(area.area, unique.length)
+		for (let i = 0; i < unique.length; i++) {
+			if (unique[i].area === area.area) {
+				known = i
+				break
+			}
+		}
+
+		if (known < 0) {
+			const file = lookupHnsky290Area(area.area)
 			unique.push({ ...file, fraction })
 		} else {
 			const actual = unique[known]
@@ -247,7 +281,7 @@ export async function findHnsky290Region(files: Hnsky290Files, database: Hnsky29
 
 		if (file === undefined) continue
 
-		const buffer = Buffer.isBuffer(file) ? file : Buffer.from(await file.arrayBuffer())
+		const buffer = await bufferFromHnsky290File(file)
 		const header = readHnsky290Header(buffer)
 		headers.push(Object.assign(header, area))
 
@@ -370,9 +404,9 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 	// Loads and caches one .290 tile lazily.
 	async loadArea(area: number): Promise<Hnsky290LoadedArea | undefined> {
 		const cached = this.#areas.get(area)
-		if (cached !== undefined) return cached || undefined
+		if (cached !== undefined) return cached ?? undefined
 
-		const file = hnsky290AreaFile(area)
+		const file = lookupHnsky290Area(area)
 		const source = this.#resolveFile(`${this.#database}_${file.fileName}`)
 
 		if (source === undefined) {
@@ -380,7 +414,7 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 			return undefined
 		}
 
-		const buffer = Buffer.isBuffer(source) ? source : Buffer.from(await source.arrayBuffer())
+		const buffer = await bufferFromHnsky290File(source)
 		const loaded = { ...file, header: readHnsky290Header(buffer), buffer }
 		this.#areas.set(area, loaded)
 		return loaded
@@ -396,6 +430,10 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 	}
 }
 
+async function bufferFromHnsky290File(file: Hnsky290File) {
+	return Buffer.isBuffer(file) ? file : 'arrayBuffer' in file ? Buffer.from(await file.arrayBuffer()) : ArrayBuffer.isView(file) ? Buffer.from(file.buffer, file.byteOffset, file.byteLength) : Buffer.from(file)
+}
+
 // Projects the square half-field from declination space into RA.
 function projectRaHalfSpan(halfField: Angle, declination: Angle) {
 	const cosDeclination = Math.cos(declination)
@@ -409,7 +447,7 @@ function areaAndBoundaries(rightAscension: Angle, declination: Angle): Hnsky290B
 	}
 
 	if (declination >= HNSKY_290_DEC_BOUNDARIES[18]) {
-		return { area: 290, spaceEast: TAU, spaceWest: TAU, spaceNorth: HNSKY_290_DEC_BOUNDARIES[18] - HNSKY_290_DEC_BOUNDARIES[17], spaceSouth: HNSKY_290_DEC_BOUNDARIES[18] - HNSKY_290_DEC_BOUNDARIES[17] }
+		return { area: HNSKY_290_AREA_COUNT, spaceEast: TAU, spaceWest: TAU, spaceNorth: HNSKY_290_DEC_BOUNDARIES[18] - HNSKY_290_DEC_BOUNDARIES[17], spaceSouth: HNSKY_290_DEC_BOUNDARIES[18] - HNSKY_290_DEC_BOUNDARIES[17] }
 	}
 
 	let band = 0
@@ -426,7 +464,7 @@ function areaAndBoundaries(rightAscension: Angle, declination: Angle): Hnsky290B
 	const northBoundary = HNSKY_290_DEC_BOUNDARIES[band + 1]
 
 	if (count === 1) {
-		return { area: band === 0 ? 1 : 290, spaceEast: TAU, spaceWest: TAU, spaceNorth: northBoundary - declination, spaceSouth: declination - southBoundary }
+		return { area: band === 0 ? 1 : HNSKY_290_AREA_COUNT, spaceEast: TAU, spaceWest: TAU, spaceNorth: northBoundary - declination, spaceSouth: declination - southBoundary }
 	}
 
 	const rotation = (normalizeAngle(rightAscension) * count) / TAU
@@ -444,21 +482,21 @@ function areaAndBoundaries(rightAscension: Angle, declination: Angle): Hnsky290B
 }
 
 // Decodes a compact record that inherits declination high bits and magnitude from a header record.
-function decodeCompactStar(area: number, raRaw: number, decLow: number, decMid: number, decHigh: number, magnitude: number, bpRp?: number, designationValue?: number): Hnsky290Star {
-	return decodeStar(area, raRaw, decodeSigned24(decLow, decMid, decHigh), magnitude, bpRp, designationValue)
+function decodeCompactStar(area: number, recordNumber: number, raRaw: number, decLow: number, decMid: number, decHigh: number, magnitude: number, bpRp?: number, designationValue?: number): DecodedHnsky290Star {
+	return decodeStar(area, recordNumber, raRaw, decodeSigned24(decLow, decMid, decHigh), magnitude, bpRp, designationValue)
 }
 
 // Decodes a full record that stores the complete three-byte declination in the record itself.
-function decodeFullStar(area: number, raRaw: number, decLow: number, decMid: number, decHigh: number, magnitude: number, bpRp?: number, designationValue?: number): Hnsky290Star {
-	return decodeStar(area, raRaw, decodeSigned24(decLow, decMid, decHigh), magnitude, bpRp, designationValue)
+function decodeFullStar(area: number, recordNumber: number, raRaw: number, decLow: number, decMid: number, decHigh: number, magnitude: number, bpRp?: number, designationValue?: number): DecodedHnsky290Star {
+	return decodeStar(area, recordNumber, raRaw, decodeSigned24(decLow, decMid, decHigh), magnitude, bpRp, designationValue)
 }
 
 // Converts the packed .290 coordinates into an equatorial star entry.
-function decodeStar(area: number, raRaw: number, decRaw: number, magnitude: number, bpRp?: number, designationValue?: number): Hnsky290Star {
+function decodeStar(area: number, recordNumber: number, raRaw: number, decRaw: number, magnitude: number, bpRp?: number, designationValue?: number): DecodedHnsky290Star {
 	const rightAscension = raRaw * HNSKY_290_RA_SCALE
 	const declination = decRaw * HNSKY_290_DEC_SCALE
 	const designation = designationValue === undefined ? undefined : decodeHnsky290Designation(designationValue)
-	return { area, rightAscension, declination, magnitude, bpRp, designation }
+	return { area, recordNumber, rightAscension, declination, magnitude, bpRp, designation }
 }
 
 // Decodes all star records from one tile while preserving their raw record numbers.
@@ -466,16 +504,18 @@ function* decodeHnsky290AreaRecords(header: Hnsky290FileHeader, buffer: Buffer, 
 	const { recordSize } = header
 	let start = HNSKY_290_HEADER_SIZE
 	const end = buffer.byteLength - recordSize
+	let recordNumber = 1
 	let currentMagnitude = Number.NaN
 	let currentDecHigh = 0
 
 	while (start < end) {
 		const offset = start
-		const recordNumber = (offset - HNSKY_290_HEADER_SIZE) / recordSize + 1
+		const currentRecordNumber = recordNumber
 		const raRaw = buffer.readUIntLE(offset + (recordSize >= 9 ? 4 : 0), 3)
-		let star: Hnsky290Star | undefined
+		let star: DecodedHnsky290Star | undefined
 
 		start += recordSize
+		recordNumber++
 
 		switch (recordSize) {
 			case 5:
@@ -483,7 +523,7 @@ function* decodeHnsky290AreaRecords(header: Hnsky290FileHeader, buffer: Buffer, 
 					currentDecHigh = buffer[offset + 3] - HNSKY_290_HEADER_DEC_OFFSET
 					currentMagnitude = (buffer[offset + 4] - HNSKY_290_HEADER_MAG_OFFSET) / 10
 				} else {
-					star = decodeCompactStar(area, raRaw, buffer[offset + 3], buffer[offset + 4], currentDecHigh, currentMagnitude)
+					star = decodeCompactStar(area, currentRecordNumber, raRaw, buffer[offset + 3], buffer[offset + 4], currentDecHigh, currentMagnitude)
 				}
 
 				break
@@ -492,12 +532,12 @@ function* decodeHnsky290AreaRecords(header: Hnsky290FileHeader, buffer: Buffer, 
 					currentDecHigh = buffer[offset + 3] - HNSKY_290_HEADER_DEC_OFFSET
 					currentMagnitude = (buffer[offset + 4] - HNSKY_290_HEADER_MAG_OFFSET) / 10
 				} else {
-					star = decodeCompactStar(area, raRaw, buffer[offset + 3], buffer[offset + 4], currentDecHigh, currentMagnitude, buffer.readInt8(offset + 5) / 10)
+					star = decodeCompactStar(area, currentRecordNumber, raRaw, buffer[offset + 3], buffer[offset + 4], currentDecHigh, currentMagnitude, buffer.readInt8(offset + 5) / 10)
 				}
 
 				break
 			case 7: {
-				star = decodeFullStar(area, raRaw, buffer[offset + 3], buffer[offset + 4], buffer.readInt8(offset + 5), buffer.readInt8(offset + 6) / 10)
+				star = decodeFullStar(area, currentRecordNumber, raRaw, buffer[offset + 3], buffer[offset + 4], buffer.readInt8(offset + 5), buffer.readInt8(offset + 6) / 10)
 				break
 			}
 			case 9:
@@ -505,7 +545,7 @@ function* decodeHnsky290AreaRecords(header: Hnsky290FileHeader, buffer: Buffer, 
 					currentDecHigh = buffer[offset + 7] - HNSKY_290_HEADER_DEC_OFFSET
 					currentMagnitude = (buffer[offset + 8] - HNSKY_290_HEADER_MAG_OFFSET) / 10
 				} else {
-					star = decodeCompactStar(area, raRaw, buffer[offset + 7], buffer[offset + 8], currentDecHigh, currentMagnitude, undefined, buffer.readInt32LE(offset))
+					star = decodeCompactStar(area, currentRecordNumber, raRaw, buffer[offset + 7], buffer[offset + 8], currentDecHigh, currentMagnitude, undefined, buffer.readInt32LE(offset))
 				}
 
 				break
@@ -513,19 +553,19 @@ function* decodeHnsky290AreaRecords(header: Hnsky290FileHeader, buffer: Buffer, 
 				if (raRaw === 0xffffff) {
 					currentMagnitude = buffer.readInt8(offset + 9) / 10
 				} else {
-					star = decodeFullStar(area, raRaw, buffer[offset + 7], buffer[offset + 8], buffer.readInt8(offset + 9), currentMagnitude, undefined, buffer.readInt32LE(offset))
+					star = decodeFullStar(area, currentRecordNumber, raRaw, buffer[offset + 7], buffer[offset + 8], buffer.readInt8(offset + 9), currentMagnitude, undefined, buffer.readInt32LE(offset))
 				}
 
 				break
 			case 11: {
-				star = decodeFullStar(area, raRaw, buffer[offset + 7], buffer[offset + 8], buffer.readInt8(offset + 9), buffer.readInt8(offset + 10) / 10, undefined, buffer.readInt32LE(offset))
+				star = decodeFullStar(area, currentRecordNumber, raRaw, buffer[offset + 7], buffer[offset + 8], buffer.readInt8(offset + 9), buffer.readInt8(offset + 10) / 10, undefined, buffer.readInt32LE(offset))
 				break
 			}
 		}
 
 		if (!star) continue
 
-		yield { ...star, recordNumber }
+		yield star
 	}
 }
 
@@ -550,22 +590,36 @@ function toHnskyCatalogEntry(star: DecodedHnsky290Star): HnskyCatalogEntry {
 
 // Computes the set of tiles touched by the query preselection boxes.
 function touchedHnsky290Areas(query: NormalizedStarCatalogQuery) {
-	const areas = new Set<number>()
+	const touched = new Uint8Array(HNSKY_290_AREA_COUNT + 1)
 
 	for (const box of query.preselectionBoxes) {
-		for (let area = 1; area <= 290; area++) {
-			if (areaIntersectsRaDecBox(area, box)) {
-				areas.add(area)
+		for (let area = 1; area <= HNSKY_290_AREA_COUNT; area++) {
+			if (!touched[area] && areaIntersectsRaDecBox(area, box)) {
+				touched[area] = 1
 			}
 		}
 	}
 
-	return [...areas].sort(NumberComparator)
+	const areas: number[] = []
+
+	for (let area = 1; area <= HNSKY_290_AREA_COUNT; area++) {
+		if (touched[area]) {
+			areas.push(area)
+		}
+	}
+
+	return areas
 }
 
 // Checks whether a star lies inside any coarse preselection box.
 function matchesPreselectionBoxes(rightAscension: Angle, declination: Angle, boxes: readonly StarCatalogRaDecBox[]) {
-	return boxes.some((box) => matchesRaDecBox(rightAscension, declination, box))
+	for (const box of boxes) {
+		if (matchesRaDecBox(rightAscension, declination, box)) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Checks whether one HNSKY tile overlaps a non-wrapping RA/Dec box.
@@ -585,19 +639,8 @@ function areaIntersectsRaDecBox(area: number, box: StarCatalogRaDecBox) {
 
 // Computes the coarse RA/Dec bounds of one HNSKY tile.
 function hnsky290AreaBounds(area: number): StarCatalogRaDecBox {
-	const file = hnsky290AreaFile(area)
-	const band = file.ring - 1
-	const minDEC = HNSKY_290_DEC_BOUNDARIES[band]!
-	const maxDEC = HNSKY_290_DEC_BOUNDARIES[band + 1]!
-	const count = HNSKY_290_RING_COUNTS[band]!
-
-	if (count === 1) {
-		return { minRA: 0, maxRA: FULL_CIRCLE, minDEC, maxDEC }
-	}
-
-	const width = FULL_CIRCLE / count
-	const minRA = (file.index - 1) * width
-	return { minRA, maxRA: minRA + width, minDEC, maxDEC }
+	lookupHnsky290Area(area)
+	return HNSKY_290_AREA_BOUNDS[area - 1]
 }
 
 // Checks whether one point lies inside a non-wrapping RA/Dec box.

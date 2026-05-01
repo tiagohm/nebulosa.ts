@@ -355,7 +355,7 @@ export class AlpacaDiscoveryClient implements Disposable {
 			const interfaces = networkInterfaces()
 			const names = Object.keys(interfaces)
 
-			if (names.length) {
+			if (names.length > 0) {
 				for (const name of names) {
 					for (const i of interfaces[name]!) {
 						if (i.family === family) {

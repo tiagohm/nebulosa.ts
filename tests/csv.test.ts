@@ -13,7 +13,7 @@ const CSV_QUOTED = `"HIP","RA","DEC","MAG"\n"1","00 00 00.22","+01 05 20.4","9.1
 const CSV_QUOTED_ESCAPED = `"HIP","NOTE"\n"1","said ""hello"""`
 const CSV_QUOTED_WHITESPACE = `"HIP","NOTE"\n"1", "  padded  "`
 const CSV_QUOTED_MULTILINE = `"HIP","NOTE"\n"1","line 1\nline 2"`
-const CSV = TSV.replace(/\t/g, ', ')
+const CSV = TSV.replaceAll('\t', ', ')
 const CSV_WITH_COMMENTS = `# This is a comment\n# Another comment\n${CSV}\n# Yet another comment`
 const CSV_WITH_EMPTY_LINES_AT_END = `${CSV}\n \n\n`
 
@@ -58,23 +58,23 @@ describe('linux', () => {
 	})
 
 	test('csv without skip first line', async () => {
-		await readCsvAndTest(CSV, { skipFirstLine: false })!
+		await readCsvAndTest(CSV, { skipFirstLine: false })
 	})
 
 	test('csv with comments', async () => {
-		await readCsvAndTest(CSV_WITH_COMMENTS)!
+		await readCsvAndTest(CSV_WITH_COMMENTS)
 	})
 
 	test('csv with quoted columns', async () => {
-		await readCsvAndTest(CSV_QUOTED)!
+		await readCsvAndTest(CSV_QUOTED)
 	})
 
 	test('tsv with empty column', async () => {
-		await readCsvAndTest(TSV_WITH_EMPTY_COLUMN, TSV_DELIMITER)!
+		await readCsvAndTest(TSV_WITH_EMPTY_COLUMN, TSV_DELIMITER)
 	})
 
 	test('csv with empty lines at end', async () => {
-		await readCsvAndTest(CSV_WITH_EMPTY_LINES_AT_END)!
+		await readCsvAndTest(CSV_WITH_EMPTY_LINES_AT_END)
 	})
 
 	test('tsv with spaced columns', async () => {
@@ -84,35 +84,35 @@ describe('linux', () => {
 
 describe('windows', () => {
 	test('tsv', async () => {
-		await readCsvAndTest(TSV.replace(/\n/g, '\r\n'), TSV_DELIMITER)
+		await readCsvAndTest(TSV.replaceAll('\n', '\r\n'), TSV_DELIMITER)
 	})
 
 	test('tsv without skip first line', async () => {
-		await readCsvAndTest(TSV.replace(/\n/g, '\r\n'), { skipFirstLine: false, delimiter: [TSV_DELIMITER] })
+		await readCsvAndTest(TSV.replaceAll('\n', '\r\n'), { skipFirstLine: false, delimiter: [TSV_DELIMITER] })
 	})
 
 	test('csv without skip first line', async () => {
-		await readCsvAndTest(CSV.replace(/\n/g, '\r\n'), { skipFirstLine: false })!
+		await readCsvAndTest(CSV.replaceAll('\n', '\r\n'), { skipFirstLine: false })
 	})
 
 	test('csv with comments', async () => {
-		await readCsvAndTest(CSV_WITH_COMMENTS.replace(/\n/g, '\r\n'))!
+		await readCsvAndTest(CSV_WITH_COMMENTS.replaceAll('\n', '\r\n'))
 	})
 
 	test('csv with quoted columns', async () => {
-		await readCsvAndTest(CSV_QUOTED.replace(/\n/g, '\r\n'))!
+		await readCsvAndTest(CSV_QUOTED.replaceAll('\n', '\r\n'))
 	})
 
 	test('tsv with empty column', async () => {
-		await readCsvAndTest(TSV_WITH_EMPTY_COLUMN.replace(/\n/g, '\r\n'), TSV_DELIMITER)!
+		await readCsvAndTest(TSV_WITH_EMPTY_COLUMN.replaceAll('\n', '\r\n'), TSV_DELIMITER)
 	})
 
 	test('csv with empty lines at end', async () => {
-		await readCsvAndTest(CSV_WITH_EMPTY_LINES_AT_END.replace(/\n/g, '\r\n'))!
+		await readCsvAndTest(CSV_WITH_EMPTY_LINES_AT_END.replaceAll('\n', '\r\n'))
 	})
 
 	test('tsv with spaced columns', async () => {
-		await readCsvAndTest(TSV_WITH_SPACED_COLUMNS.replace(/\n/g, '\r\n'), { delimiter: TSV_DELIMITER })
+		await readCsvAndTest(TSV_WITH_SPACED_COLUMNS.replaceAll('\n', '\r\n'), { delimiter: TSV_DELIMITER })
 	})
 })
 
@@ -126,23 +126,23 @@ describe('stream', () => {
 	})
 
 	test('csv without skip first line', async () => {
-		await readCsvAndTest(Buffer.from(CSV), { skipFirstLine: false })!
+		await readCsvAndTest(Buffer.from(CSV), { skipFirstLine: false })
 	})
 
 	test('csv with comments', async () => {
-		await readCsvAndTest(Buffer.from(CSV_WITH_COMMENTS))!
+		await readCsvAndTest(Buffer.from(CSV_WITH_COMMENTS))
 	})
 
 	test('csv with quoted columns', async () => {
-		await readCsvAndTest(Buffer.from(CSV_QUOTED))!
+		await readCsvAndTest(Buffer.from(CSV_QUOTED))
 	})
 
 	test('tsv with empty column', async () => {
-		await readCsvAndTest(Buffer.from(TSV_WITH_EMPTY_COLUMN), TSV_DELIMITER)!
+		await readCsvAndTest(Buffer.from(TSV_WITH_EMPTY_COLUMN), TSV_DELIMITER)
 	})
 
 	test('csv with empty lines at end', async () => {
-		await readCsvAndTest(Buffer.from(CSV_WITH_EMPTY_LINES_AT_END))!
+		await readCsvAndTest(Buffer.from(CSV_WITH_EMPTY_LINES_AT_END))
 	})
 
 	test('tsv with spaced columns', async () => {

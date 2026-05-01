@@ -205,7 +205,7 @@ export function parseTemporal(input: string, pattern: string): Temporal {
 	for (const { start, end, found, text } of tokens) {
 		if (end > input.length) break
 
-		const i = input.substring(start, end)
+		const i = input.slice(start, end)
 
 		if (found) {
 			switch (text) {
@@ -386,13 +386,13 @@ function tokenizePattern(pattern: string): Readonly<PatternToken>[] {
 		const nextFound = PATTERN_SYMBOLS.includes(c)
 
 		if (nextFound !== found || (nextFound && c !== pattern[i - 1])) {
-			tokens.push({ start, end: i, text: pattern.substring(start, i), found })
+			tokens.push({ start, end: i, text: pattern.slice(start, i), found })
 			start = i
 			found = nextFound
 		}
 	}
 
-	tokens.push({ start, end: pattern.length, text: pattern.substring(start), found })
+	tokens.push({ start, end: pattern.length, text: pattern.slice(start), found })
 	PATTERN_TOKEN_CACHE.set(pattern, tokens)
 	return tokens
 }

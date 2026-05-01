@@ -90,6 +90,7 @@ export function signed16(num: number) {
 
 // Checks whether two numbers are equal within absolute/relative tolerances.
 export function isNearlyEqual(a: number, b: number, relativeTolerance: number = Number.EPSILON, absoluteTolerance: number = Number.EPSILON) {
+	// oxlint-disable-next-line oxc/double-comparisons
 	if (!Number.isFinite(a) || !Number.isFinite(b)) return a <= b && a >= b
 
 	const tolerance = Math.max(absoluteTolerance, Math.max(Math.abs(a), Math.abs(b)) * relativeTolerance)

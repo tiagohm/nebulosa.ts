@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { type Angle, deg } from '../src/angle'
 import { PI } from '../src/constants'
 import type { FitsHeader } from '../src/fits'
-import { cd, cdFromCdelt, cdMatrix, hasCd, isWcsFitsKeyword, pc2cd, tanProject, tanUnproject } from '../src/fits.wcs'
+import { cd, cdFromCdelt, cdMatrix, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, pc2cd, RA_TAN_SIP, tanProject, tanUnproject } from '../src/fits.wcs'
 import { Wcs } from '../src/wcs'
 
 function expectMatrixCloseTo(actual: readonly number[], expected: readonly number[], precision: number = 12) {
@@ -20,8 +20,8 @@ const TAN_SIP_HEADER = {
 	NAXIS: 2,
 	NAXIS1: 256,
 	NAXIS2: 256,
-	CTYPE1: 'RA---TAN-SIP',
-	CTYPE2: 'DEC--TAN-SIP',
+	CTYPE1: RA_TAN_SIP,
+	CTYPE2: DEC_TAN_SIP,
 	CRVAL1: 202.482322805429,
 	CRVAL2: 47.1751189300101,
 	CRPIX1: 128,

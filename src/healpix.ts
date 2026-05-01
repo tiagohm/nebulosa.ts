@@ -4,7 +4,7 @@ import type { EquatorialCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
 import { clamp, pmod } from './math'
 import { type StarCatalog, type StarCatalogQuery, type StarCatalogRaDecBox, splitRaBox, type Vertex } from './star.catalog'
-import { type MutVec3, type Vec3, vecCross, vecDot, vecNegateMut, vecNormalize, vecTripleProduct } from './vec3'
+import { type MutVec3, type Vec3, vecCross, vecDot, vecLength, vecNegateMut, vecNormalize, vecTripleProduct } from './vec3'
 
 const HEALPIX_MAX_NSIDE = 2 ** 24
 const HEALPIX_FACE_COUNT = 12
@@ -55,6 +55,7 @@ interface HealpixCoverState {
 	readonly order: number
 	readonly maxDepth: number
 	readonly pixels: number[]
+	readonly center: MutVec3
 	readonly intersects: (center: Vec3, bound: number) => boolean
 }
 
@@ -63,8 +64,9 @@ export function coordToPixel(nside: number, rightAscension: number, declination:
 	validateNside(nside)
 	const normalizedRA = normalizeLongitude(rightAscension)
 	const normalizedDEC = normalizeLatitude(declination)
-	const nestedPixel = vectorToPixel(nside, eraS2c(normalizedRA, normalizedDEC))
-	return ordering === 'nested' ? nestedPixel : nestedToRing(nside, nestedPixel)
+	const order = nsideToOrder(nside)
+	const nestedPixel = lonLatToPixel(nside, order, normalizedRA, normalizedDEC)
+	return ordering === 'nested' ? nestedPixel : nestedToRingUnchecked(nside, nestedPixel, order)
 }
 
 // Converts a HEALPix pixel to the center spherical coordinates.
@@ -72,7 +74,7 @@ export function pixelToCenter(nside: number, pixel: number, ordering: HealpixOrd
 	validateNside(nside)
 	validatePixelIndex(pixel, nside)
 	if (ordering === 'ring') return ringPixelToLonLat(nside, pixel)
-	const [face, ix, iy] = pixelToFaceXY(pixel, nside)
+	const [face, ix, iy] = pixelToFaceXY(pixel, nside, nsideToOrder(nside))
 	return faceXYToLonLat(face, ix + 0.5, iy + 0.5, nside)
 }
 
@@ -80,7 +82,8 @@ export function pixelToCenter(nside: number, pixel: number, ordering: HealpixOrd
 export function pixelToBoundary(nside: number, pixel: number, ordering: HealpixOrdering = 'nested') {
 	validateNside(nside)
 	validatePixelIndex(pixel, nside)
-	const [face, ix, iy] = pixelToFaceXY(ordering === 'nested' ? pixel : ringToNested(nside, pixel), nside)
+	const order = nsideToOrder(nside)
+	const [face, ix, iy] = ordering === 'nested' ? pixelToFaceXY(pixel, nside, order) : ringToFaceXY(pixel, nside)
 	return [faceXYToLonLat(face, ix, iy, nside), faceXYToLonLat(face, ix + 1, iy, nside), faceXYToLonLat(face, ix + 1, iy + 1, nside), faceXYToLonLat(face, ix, iy + 1, nside)] as const
 }
 
@@ -88,16 +91,14 @@ export function pixelToBoundary(nside: number, pixel: number, ordering: HealpixO
 export function nestedToRing(nside: number, pixel: number) {
 	validateNside(nside)
 	validatePixelIndex(pixel, nside)
-	const [face, ix, iy] = pixelToFaceXY(pixel, nside)
-	return faceXYToRing(face, ix, iy, nside)
+	return nestedToRingUnchecked(nside, pixel, nsideToOrder(nside))
 }
 
 // Converts a ring pixel index to nested ordering.
 export function ringToNested(nside: number, pixel: number) {
 	validateNside(nside)
 	validatePixelIndex(pixel, nside)
-	const [rightAscension, declination] = ringPixelToLonLat(nside, pixel)
-	return coordToPixel(nside, rightAscension, declination, 'nested')
+	return ringToNestedUnchecked(nside, pixel, nsideToOrder(nside))
 }
 
 // Computes a conservative circle cover in nested ordering.
@@ -109,7 +110,8 @@ export function circleToPixels(nside: number, centerLongitude: number, centerLat
 
 	return coverPixels(nside, options, {
 		intersects(centerPoint: Vec3, bound: number) {
-			return angularDistance(centerPoint, center) <= radius + bound + EPSILON
+			const limit = radius + bound + EPSILON
+			return limit >= PI || vecDot(centerPoint, center) >= Math.cos(limit)
 		},
 	})
 }
@@ -145,6 +147,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 
 	readonly #pixelBuckets = new Map<number, HealpixObject<M>[]>()
 	readonly #entries = new Map<HealpixId, HealpixObject<M>>()
+	readonly #order: number
 
 	// Creates a new index instance.
 	constructor(options: HealpixIndexOptions) {
@@ -152,6 +155,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 
 		this.nside = options.nside
 		this.ordering = options.ordering ?? 'nested'
+		this.#order = nsideToOrder(options.nside)
 	}
 
 	// Returns the number of indexed objects.
@@ -159,9 +163,12 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 		return this.#entries.size
 	}
 
-	// Converts coordinates to a nested HEALPix pixel using the index resolution.
+	// Converts coordinates to a HEALPix pixel using the index resolution and ordering.
 	coordToPixel(rightAscension: number, declination: number) {
-		return coordToPixel(this.nside, rightAscension, declination, this.ordering)
+		const normalizedRA = normalizeLongitude(rightAscension)
+		const normalizedDEC = normalizeLatitude(declination)
+		const nestedPixel = lonLatToPixel(this.nside, this.#order, normalizedRA, normalizedDEC)
+		return this.ordering === 'nested' ? nestedPixel : nestedToRingUnchecked(this.nside, nestedPixel, this.#order)
 	}
 
 	// Converts a nested HEALPix pixel to its center.
@@ -176,22 +183,29 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 
 	// Inserts a single object into the index.
 	add(id: HealpixId, rightAscension: number, declination: number, metadata?: M) {
-		const updated = this.update(id, rightAscension, declination, metadata)
+		const normalizedRA = normalizeLongitude(rightAscension)
+		const normalizedDEC = normalizeLatitude(declination)
+		const entry = this.get(id)
 
-		if (updated === undefined) {
-			return this.#insertNormalized(id, normalizeLongitude(rightAscension), normalizeLatitude(declination), metadata)
-		}
-
-		return updated
+		return entry === undefined ? this.#insertNormalized(id, normalizedRA, normalizedDEC, metadata) : this.#updateNormalized(entry, normalizedRA, normalizedDEC, metadata)
 	}
 
 	// Inserts many objects after validating the whole batch first.
 	addMany(objects: readonly Readonly<HealpixInsertObject<M>>[]) {
+		const rightAscensions = new Array<number>(objects.length)
+		const declinations = new Array<number>(objects.length)
 		const inserted = new Array<HealpixObject<M>>(objects.length)
-		let i = 0
 
-		for (const object of objects) {
-			inserted[i++] = this.add(object.id, object.rightAscension, object.declination, object.metadata)
+		for (let i = 0; i < objects.length; i++) {
+			const object = objects[i]
+			rightAscensions[i] = normalizeLongitude(object.rightAscension)
+			declinations[i] = normalizeLatitude(object.declination)
+		}
+
+		for (let i = 0; i < objects.length; i++) {
+			const object = objects[i]
+			const entry = this.get(object.id)
+			inserted[i] = entry === undefined ? this.#insertNormalized(object.id, rightAscensions[i], declinations[i], object.metadata) : this.#updateNormalized(entry, rightAscensions[i], declinations[i], object.metadata)
 		}
 
 		return inserted
@@ -218,19 +232,7 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 
 		const normalizedRA = normalizeLongitude(rightAscension)
 		const normalizedDEC = normalizeLatitude(declination)
-		const nextPixel = coordToPixel(this.nside, normalizedRA, normalizedDEC, this.ordering)
-
-		entry.rightAscension = normalizedRA
-		entry.declination = normalizedDEC
-		lonLatToVecInto(normalizedRA, normalizedDEC, entry.vector)
-
-		if (metadata !== undefined) entry.metadata = metadata
-
-		if (nextPixel !== entry.pixel) {
-			this.#moveEntry(entry, nextPixel)
-		}
-
-		return entry
+		return this.#updateNormalized(entry, normalizedRA, normalizedDEC, metadata)
 	}
 
 	// Removes every object from the index.
@@ -316,13 +318,37 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 
 	// Inserts a validated object into the index.
 	#insertNormalized(id: HealpixId, rightAscension: number, declination: number, metadata?: M): Readonly<HealpixObject<M>> {
-		const pixel = coordToPixel(this.nside, rightAscension, declination, this.ordering)
-		const bucket = this.#pixelBuckets.get(pixel) ?? []
+		const nestedPixel = lonLatToPixel(this.nside, this.#order, rightAscension, declination)
+		const pixel = this.ordering === 'nested' ? nestedPixel : nestedToRingUnchecked(this.nside, nestedPixel, this.#order)
+		let bucket = this.#pixelBuckets.get(pixel)
+
+		if (bucket === undefined) {
+			bucket = []
+			this.#pixelBuckets.set(pixel, bucket)
+		}
+
 		const entry: HealpixObject<M> = { id, rightAscension, declination, metadata, vector: eraS2c(rightAscension, declination), pixel, bucketIndex: bucket.length }
 
 		bucket.push(entry)
-		this.#pixelBuckets.set(pixel, bucket)
 		this.#entries.set(id, entry)
+
+		return entry
+	}
+
+	// Updates a validated existing entry.
+	#updateNormalized(entry: HealpixObject<M>, rightAscension: number, declination: number, metadata?: M) {
+		const nestedPixel = lonLatToPixel(this.nside, this.#order, rightAscension, declination)
+		const nextPixel = this.ordering === 'nested' ? nestedPixel : nestedToRingUnchecked(this.nside, nestedPixel, this.#order)
+
+		entry.rightAscension = rightAscension
+		entry.declination = declination
+		lonLatToVecInto(rightAscension, declination, entry.vector)
+
+		if (metadata !== undefined) entry.metadata = metadata
+
+		if (nextPixel !== entry.pixel) {
+			this.#moveEntry(entry, nextPixel)
+		}
 
 		return entry
 	}
@@ -331,11 +357,16 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	#moveEntry(entry: HealpixObject<M>, nextPixel: number) {
 		this.#detachEntry(entry)
 
-		const bucket = this.#pixelBuckets.get(nextPixel) ?? []
+		let bucket = this.#pixelBuckets.get(nextPixel)
+
+		if (bucket === undefined) {
+			bucket = []
+			this.#pixelBuckets.set(nextPixel, bucket)
+		}
+
 		entry.pixel = nextPixel
 		entry.bucketIndex = bucket.length
 		bucket.push(entry)
-		this.#pixelBuckets.set(nextPixel, bucket)
 	}
 
 	// Removes an existing entry from all internal tables.
@@ -368,7 +399,8 @@ export class HealpixIndex<M = unknown> implements StarCatalog {
 	#collectMatches(pixels: readonly number[], predicate: (entry: HealpixObject<M>) => boolean): readonly Readonly<HealpixObject<M>>[] {
 		const matches: HealpixObject<M>[] = []
 
-		for (const pixel of pixels) {
+		for (let p = 0; p < pixels.length; p++) {
+			const pixel = pixels[p]
 			const bucket = this.#pixelBuckets.get(pixel)
 
 			if (!bucket) continue
@@ -418,7 +450,7 @@ function validatePixelIndex(pixel: number, nside: number) {
 // Normalizes and validates a rightAscension.
 function normalizeLongitude(rightAscension: number) {
 	if (!Number.isFinite(rightAscension)) {
-		throw new Error(`invalid longitude/right ascension: ${rightAscension}`)
+		throw new TypeError(`invalid longitude/right ascension: ${rightAscension}`)
 	}
 
 	return normalizeAngle(rightAscension)
@@ -427,7 +459,7 @@ function normalizeLongitude(rightAscension: number) {
 // Normalizes and validates a declination.
 function normalizeLatitude(declination: number) {
 	if (!Number.isFinite(declination)) {
-		throw new Error(`invalid latitude/declination: ${declination}`)
+		throw new TypeError(`invalid latitude/declination: ${declination}`)
 	}
 
 	if (declination < -PIOVERTWO - EPSILON || declination > PIOVERTWO + EPSILON) {
@@ -450,10 +482,9 @@ function angularDistance(a: Vec3, b: Vec3) {
 	return Math.acos(clamp(vecDot(a, b), -1, 1))
 }
 
-// Converts a unit vector to a nested HEALPix pixel.
-function vectorToPixel(nside: number, vector: Vec3) {
-	const rightAscension = normalizeAngle(Math.atan2(vector[1], vector[0]))
-	const z = clamp(vector[2], -1, 1)
+// Converts normalized spherical coordinates to a nested HEALPix pixel.
+function lonLatToPixel(nside: number, order: number, rightAscension: number, declination: number) {
+	const z = Math.sin(declination)
 	const absZ = Math.abs(z)
 	const tt = rightAscension * (2 / PI)
 
@@ -493,22 +524,33 @@ function vectorToPixel(nside: number, vector: Vec3) {
 		}
 	}
 
-	return faceXYToPixel(face, ix, iy, nside)
+	return faceXYToPixel(face, ix, iy, nside, order)
 }
 
 // Converts a nested pixel to its face-local coordinates.
-function pixelToFaceXY(pixel: number, nside: number) {
+function pixelToFaceXY(pixel: number, nside: number, order = nsideToOrder(nside)) {
 	const pixelsPerFace = nside * nside
 	const face = Math.floor(pixel / pixelsPerFace)
 	const nested = pixel - face * pixelsPerFace
-	const order = nsideToOrder(nside)
 	const [ix, iy] = deinterleaveBits(nested, order)
 	return [face, ix, iy] as const
 }
 
 // Converts face-local coordinates to a nested pixel.
-function faceXYToPixel(face: number, ix: number, iy: number, nside: number) {
-	return face * nside * nside + interleaveBits(ix, iy, nsideToOrder(nside))
+function faceXYToPixel(face: number, ix: number, iy: number, nside: number, order = nsideToOrder(nside)) {
+	return face * nside * nside + interleaveBits(ix, iy, order)
+}
+
+// Converts a valid nested pixel to ring ordering without revalidating inputs.
+function nestedToRingUnchecked(nside: number, pixel: number, order: number) {
+	const [face, ix, iy] = pixelToFaceXY(pixel, nside, order)
+	return faceXYToRing(face, ix, iy, nside)
+}
+
+// Converts a valid ring pixel to nested ordering without a trigonometric round trip.
+function ringToNestedUnchecked(nside: number, pixel: number, order: number) {
+	const [face, ix, iy] = ringToFaceXY(pixel, nside)
+	return faceXYToPixel(face, ix, iy, nside, order)
 }
 
 // Converts face-local coordinates to a ring-ordered pixel.
@@ -569,13 +611,17 @@ function ringToFaceXY(pixel: number, nside: number) {
 
 	for (let face = 0; face < HEALPIX_FACE_COUNT; face++) {
 		const sum = JRLL[face] * nside - jr - 1
-		const diff = 2 * jp - JPLL[face] * nr - 1 - kshift
-		const ix = (sum + diff) / 2
-		const iy = (sum - diff) / 2
 
-		if (!Number.isInteger(ix) || !Number.isInteger(iy)) continue
-		if (ix < 0 || ix >= nside || iy < 0 || iy >= nside) continue
-		if (faceXYToRing(face, ix, iy, nside) === pixel) return [face, ix, iy] as const
+		for (let wrap = -1; wrap <= 1; wrap++) {
+			const wrappedJp = jp + wrap * 4 * nside
+			const diff = 2 * wrappedJp - JPLL[face] * nr - 1 - kshift
+			const ix = (sum + diff) / 2
+			const iy = (sum - diff) / 2
+
+			if (!Number.isInteger(ix) || !Number.isInteger(iy)) continue
+			if (ix < 0 || ix >= nside || iy < 0 || iy >= nside) continue
+			if (faceXYToRing(face, ix, iy, nside) === pixel) return [face, ix, iy] as const
+		}
 	}
 
 	throw new Error(`unable to convert ring pixel ${pixel} to face coordinates`)
@@ -643,10 +689,41 @@ function faceXYToLonLat(face: number, x: number, y: number, nside: number) {
 	return [rightAscension, Math.asin(clamp(z, -1, 1))] as const
 }
 
-// Converts a face-local position to a unit vector.
-function faceXYToVec(face: number, x: number, y: number, nside: number) {
-	const [rightAscension, declination] = faceXYToLonLat(face, x, y, nside)
-	return eraS2c(rightAscension, declination)
+// Writes a face-local position to an existing unit vector.
+function faceXYToVecInto(face: number, x: number, y: number, nside: number, out: MutVec3) {
+	const jr = JRLL[face] * nside - x - y
+
+	let nr = nside
+	let z: number
+	let poleZ = 0
+
+	if (jr < nside) {
+		nr = jr
+		z = 1 - (jr * jr) / (3 * nside * nside)
+		poleZ = 1
+	} else if (jr > 3 * nside) {
+		nr = 4 * nside - jr
+		z = (nr * nr) / (3 * nside * nside) - 1
+		poleZ = -1
+	} else {
+		z = (2 * (2 * nside - jr)) / (3 * nside)
+	}
+
+	if (nr <= EPSILON) {
+		out[0] = 0
+		out[1] = 0
+		out[2] = poleZ
+		return out
+	}
+
+	const rightAscension = normalizeAngle(((JPLL[face] * nr + x - y) * PI) / (4 * nr))
+	const clampedZ = clamp(z, -1, 1)
+	const r = Math.sqrt(Math.max(0, 1 - clampedZ * clampedZ))
+	out[0] = r * Math.cos(rightAscension)
+	out[1] = r * Math.sin(rightAscension)
+	out[2] = clampedZ
+
+	return out
 }
 
 // Interleaves the X and Y nested bits.
@@ -709,13 +786,13 @@ function buildRegion(vertices: readonly Vertex[], label: 'triangle' | 'polygon')
 		centroid[2] += vertex[2]
 	}
 
-	if (Math.hypot(centroid[0], centroid[1], centroid[2]) <= EPSILON) {
+	if (vecLength(centroid) <= EPSILON) {
 		throw new Error(`${label} vertices do not define a stable convex region`)
 	}
 
 	const normalizedCentroid = vecNormalize(centroid)
 
-	const edgeNormals: Vec3[] = []
+	const edgeNormals = new Array<Vec3>(cleaned.length)
 	let orientation = 0
 
 	for (let i = 0; i < cleaned.length; i++) {
@@ -728,7 +805,7 @@ function buildRegion(vertices: readonly Vertex[], label: 'triangle' | 'polygon')
 			throw new Error(`${label} contains repeated or antipodal vertices`)
 		}
 
-		edgeNormals.push([normal[0] / normalLength, normal[1] / normalLength, normal[2] / normalLength])
+		edgeNormals[i] = [normal[0] / normalLength, normal[1] / normalLength, normal[2] / normalLength]
 
 		const side = vecDot(normal, normalizedCentroid)
 		if (Math.abs(side) <= EPSILON) continue
@@ -764,14 +841,14 @@ function normalizeRegionVertices(vertices: readonly Vertex[]) {
 	for (const vertex of vertices) {
 		const vector = normalizeVertexInput(vertex)
 
-		if (normalized.length > 0 && sameUnitVector(vector, normalized[normalized.length - 1])) {
+		if (normalized.length > 0 && sameUnitVector(vector, normalized.at(-1)!)) {
 			continue
 		}
 
 		normalized.push(vector)
 	}
 
-	if (normalized.length > 1 && sameUnitVector(normalized[0], normalized[normalized.length - 1])) {
+	if (normalized.length > 1 && sameUnitVector(normalized[0], normalized.at(-1)!)) {
 		normalized.pop()
 	}
 
@@ -905,7 +982,8 @@ function coverPixels(nside: number, options: HealpixCoverOptions | undefined, te
 	const order = nsideToOrder(targetNside)
 	const maxDepth = options?.maxDepth === undefined ? order : validateMaxDepth(options.maxDepth, order)
 	const pixels: number[] = []
-	const state: HealpixCoverState = { nside: targetNside, order, maxDepth, pixels, intersects: tester.intersects }
+	// oxlint-disable-next-line typescript/unbound-method
+	const state: HealpixCoverState = { nside: targetNside, order, maxDepth, pixels, center: [0, 0, 0], intersects: tester.intersects }
 
 	for (let face = 0; face < HEALPIX_FACE_COUNT; face++) {
 		coverFace(state, face, 0, 0, targetNside, 0)
@@ -913,7 +991,7 @@ function coverPixels(nside: number, options: HealpixCoverOptions | undefined, te
 
 	if (options?.ordering === 'ring') {
 		for (let i = 0; i < pixels.length; i++) {
-			pixels[i] = nestedToRing(targetNside, pixels[i])
+			pixels[i] = nestedToRingUnchecked(targetNside, pixels[i], order)
 		}
 	}
 
@@ -931,7 +1009,7 @@ function validateMaxDepth(maxDepth: number, order: number) {
 
 // Covers a single recursive face cell.
 function coverFace(state: HealpixCoverState, face: number, x0: number, y0: number, span: number, depth: number) {
-	const center = faceXYToVec(face, x0 + span * 0.5, y0 + span * 0.5, state.nside)
+	const center = faceXYToVecInto(face, x0 + span * 0.5, y0 + span * 0.5, state.nside, state.center)
 	const bound = Math.min(PI, (COVER_BOUND_FACTOR * span) / state.nside)
 
 	if (!state.intersects(center, bound)) {
@@ -939,7 +1017,7 @@ function coverFace(state: HealpixCoverState, face: number, x0: number, y0: numbe
 	}
 
 	if (span === 1 || depth >= state.maxDepth) {
-		appendPixels(state.pixels, face, x0, y0, span, state.nside)
+		appendPixels(state.pixels, face, x0, y0, span, state.nside, state.order)
 		return
 	}
 
@@ -952,10 +1030,12 @@ function coverFace(state: HealpixCoverState, face: number, x0: number, y0: numbe
 }
 
 // Appends every nested descendant pixel inside a face-local cell.
-function appendPixels(pixels: number[], face: number, x0: number, y0: number, span: number, nside: number) {
+function appendPixels(pixels: number[], face: number, x0: number, y0: number, span: number, nside: number, order: number) {
+	const faceOffset = face * nside * nside
+
 	for (let iy = y0; iy < y0 + span; iy++) {
 		for (let ix = x0; ix < x0 + span; ix++) {
-			pixels.push(faceXYToPixel(face, ix, iy, nside))
+			pixels.push(faceOffset + interleaveBits(ix, iy, order))
 		}
 	}
 }

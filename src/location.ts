@@ -20,6 +20,7 @@ export enum Ellipsoid {
 export interface EllipsoidParameters {
 	readonly radius: Distance
 	readonly flattening: number
+	readonly oneMinusFlattening: number
 }
 
 export interface GeographicCoordinate<T = Angle, D = Distance> {
@@ -125,8 +126,8 @@ export function gcrs(location: GeographicPosition): Frame {
 
 // The Earth's polar radius.
 export function polarRadius(ellipsoid: Ellipsoid): Distance {
-	const { radius, flattening: inverseFlattening } = ELLIPSOID_PARAMETERS[ellipsoid]
-	return radius * (1 - inverseFlattening)
+	const { radius, oneMinusFlattening } = ELLIPSOID_PARAMETERS[ellipsoid]
+	return radius * oneMinusFlattening
 }
 
 // Term needed for calculation of parallax effect.
@@ -135,8 +136,7 @@ export function rhoCosPhi(location: GeographicPosition) {
 	const cached = location.rhoCosPhi
 	if (cached !== undefined) return cached
 	const { latitude, elevation, ellipsoid } = location
-	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
-	const oneMinusFlattening = 1 - flattening
+	const { radius, oneMinusFlattening } = ELLIPSOID_PARAMETERS[ellipsoid]
 	const u = Math.atan(oneMinusFlattening * Math.tan(latitude))
 	location.rhoCosPhi = Math.cos(u) + (elevation / radius) * Math.cos(latitude)
 	return location.rhoCosPhi
@@ -148,8 +148,7 @@ export function rhoSinPhi(location: GeographicPosition) {
 	const cached = location.rhoSinPhi
 	if (cached !== undefined) return cached
 	const { latitude, elevation, ellipsoid } = location
-	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
-	const oneMinusFlattening = 1 - flattening
+	const { radius, oneMinusFlattening } = ELLIPSOID_PARAMETERS[ellipsoid]
 	const u = Math.atan(oneMinusFlattening * Math.tan(latitude))
 	location.rhoSinPhi = oneMinusFlattening * Math.sin(u) + (elevation / radius) * Math.sin(latitude)
 	return location.rhoSinPhi
@@ -158,10 +157,7 @@ export function rhoSinPhi(location: GeographicPosition) {
 // Computes Earth latitude and longitude beneath a celestial position at time.
 export function subpoint(geocentric: Vec3, time: Time, ellipsoid: Ellipsoid = Ellipsoid.IERS2010): GeographicPosition {
 	const itrs = matMulVec(gcrsToItrsRotationMatrix(time), geocentric)
-	const [x, y, z] = itrs
-
 	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
-	const [longitude, latitude, elevation] = eraGc2Gde(radius, flattening, x, y, z)
-
+	const [longitude, latitude, elevation] = eraGc2Gde(radius, flattening, ...itrs)
 	return { longitude: normalizePI(longitude), latitude, elevation, ellipsoid, itrs }
 }

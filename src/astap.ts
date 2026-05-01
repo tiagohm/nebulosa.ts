@@ -1,12 +1,11 @@
-import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { basename, dirname, extname, join } from 'path'
 import { type Angle, normalizeAngle, toDeg, toHour } from './angle'
 import { readCsv } from './csv'
-import { readFits } from './fits'
-import { fileHandleSource } from './io'
+import type { FitsHeader } from './fits'
 import { type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 import type { DetectedStar } from './star.detector'
+import { isWcsFitsKeyword } from './fits.wcs'
 
 export interface AstapStarDetectionOptions {
 	executable?: string
@@ -25,7 +24,10 @@ export interface AstapPlateSolveOptions extends PlateSolveOptions {
 const DEFAULT_TIMEOUT = 300000 // 5 minutes
 
 export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, outputDirectory, executable, timeout }: Readonly<AstapStarDetectionOptions> = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
-	if (!input || !(await Bun.file(input).exists())) return []
+	if (!input || !(await Bun.file(input).exists())) {
+		console.error('invalid input or input file does not exists')
+		return []
+	}
 
 	const cwd = outputDirectory || dirname(input)
 	executable ||= executableForCurrentPlatform()
@@ -60,6 +62,8 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 				}
 
 				return stars
+			} else {
+				console.warn('no stars')
 			}
 		} catch (e) {
 			console.error('error reading CSV', e)
@@ -73,21 +77,17 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 	return []
 }
 
-const DIMENSIONS_REGEX = /DIMENSIONS=(\d+)\s*x\s*(\d+)/
-
 export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, timeout = 300000, rightAscension = 0, declination = 0, radius = 0, executable, sip = true }: AstapPlateSolveOptions = {}, signal?: AbortSignal) {
 	fov = Math.max(0, Math.min(toDeg(fov), 360)) // Specify 0 for auto
-	const wcs = join(tmpdir(), `${Bun.randomUUIDv7()}.wcs`)
-	const ini = wcs.replace('.wcs', '.ini')
+	const ini = Bun.file(join(tmpdir(), `${Bun.randomUUIDv7()}.ini`))
 	radius = Math.max(0, Math.min(Math.ceil(toDeg(radius)), 180))
 	rightAscension = toHour(normalizeAngle(rightAscension))
 	const spd = declination ? toDeg(declination) + 90 : 90
 	executable ||= executableForCurrentPlatform()
 	timeout ||= DEFAULT_TIMEOUT
 
-	const commands = [executable, '-o', wcs, '-z', downsample.toFixed(0), '-wcs', '-f', input]
+	const commands = [executable, '-o', ini.name!, '-z', downsample.toFixed(0), '-f', input, '-fov', `${fov}`]
 
-	commands.push('-fov', `${fov}`)
 	if (sip) commands.push('-sip')
 	if (radius) commands.push('-ra', `${rightAscension}`, '-spd', `${spd}`, '-r', `${radius}`)
 	else commands.push('-r', '180')
@@ -95,46 +95,31 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	const process = Bun.spawn(commands, { signal, timeout })
 	const exitCode = await process.exited
 
-	if (exitCode === 0 && (await Bun.file(wcs).exists())) {
+	if (exitCode === 0 && (await ini.exists())) {
 		try {
-			const handle = await fs.open(wcs)
-			await using source = fileHandleSource(handle)
-			const fits = await readFits(source)
+			const text = await ini.text()
 
-			if (fits?.hdus.length) {
-				const header = fits.hdus[0].header
+			if (text) {
+				const lines = text.split('\n')
+				const header: FitsHeader = { CRPIX1: 0, CRPIX2: 0, CRVAL1: 0, CRVAL2: 0, CDELT1: 0, CDELT2: 0, CROTA1: 0, CROTA2: 0, CD1_1: 0, CD1_2: 0, CD2_1: 0, CD2_2: 0 }
 
-				if (!header.NAXIS1 || !header.NAXIS2) {
-					const text = (await fs.readFile(ini)).toString('utf-8')
-					const dimensions = DIMENSIONS_REGEX.exec(text)
+				for (const line of lines) {
+					const [key, value] = line.trim().split('=')
 
-					if (dimensions) {
-						header.NAXIS1 = +dimensions[1]
-						header.NAXIS2 = +dimensions[2]
-					}
-				}
-
-				// Why latest ASTAP doesn't more write DIMENSIONS to ini file?
-				if (!header.NAXIS1 || !header.NAXIS2) {
-					const handle = await fs.open(input)
-					await using source = fileHandleSource(handle)
-					const fits = await readFits(source)
-
-					if (fits?.hdus.length) {
-						const hdu = fits.hdus.find((e) => e.header.NAXIS1 && e.header.NAXIS2)
-
-						if (hdu) {
-							header.NAXIS1 = hdu.header.NAXIS1
-							header.NAXIS2 = hdu.header.NAXIS2
-						}
+					if (key in header || isWcsFitsKeyword(key)) {
+						const numericValue = Number.parseFloat(value)
+						header[key] = Number.isFinite(numericValue) ? numericValue : value
+					} else if (key === 'DIMENSIONS') {
+						const [width, height] = value.split('x')
+						header.NAXIS1 = +width
+						header.NAXIS2 = +height
 					}
 				}
 
 				return plateSolutionFrom(header)
 			}
 		} finally {
-			await fs.unlink(wcs)
-			await fs.unlink(ini)
+			await ini.delete()
 		}
 	} else {
 		console.error('astap plate solve failed with exit code', exitCode)

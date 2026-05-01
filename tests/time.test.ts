@@ -3,7 +3,7 @@ import { deg, hour } from '../src/angle'
 import { DAYSEC, J2000 } from '../src/constants'
 import { meter } from '../src/distance'
 import { Ellipsoid, geodeticLocation } from '../src/location'
-// biome-ignore format: too long
+// oxfmt-ignore
 import { dut1, earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToFractionOfYear, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/time'
 import { downloadPerTag } from './download'
 
@@ -396,7 +396,7 @@ test('extra', () => {
 }, 200)
 
 test('polar motion override does not reuse cached default values', () => {
-	const customPolarMotion: PolarMotion = (_time: Time) => [1, 2]
+	const customPolarMotion: PolarMotion = () => [1, 2]
 
 	const a = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	pmAngles(a)
