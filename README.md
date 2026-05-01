@@ -862,6 +862,31 @@ matMulVec(m, v) // Multiply the matrix by a vector
 matMulTransposeVec(m, v) // Multiply the transpose of the matrix by a vector
 matRodriguesRotation(axis, angle) // Create a rotation matrix around an axis
 
+mat2Zero(o)
+mat2Identity(o)
+mat2Fill(m, a, b, c, d)
+mat2Rot(angle, m)
+mat2Clone(m)
+mat2Copy(m, o)
+mat2Determinant(m)
+mat2Trace(m)
+mat2Transpose(m, o)
+mat2FlipX(m, o)
+mat2FlipY(m, o)
+mat2Negate(m, o)
+mat2PlusScalar(m, scalar, o)
+mat2MinusScalar(m, scalar, o)
+mat2MulScalar(m, scalar, o)
+mat2DivScalar(m, scalar, o)
+mat2Plus(a, b, o)
+mat2Minus(a, b, o)
+mat2Mul(a, b, o)
+mat2TransposeMul(a, b, o)
+mat2MulTranspose(a, b, o)
+mat2TransposeMulTranspose(a, b, o)
+mat2MulVec(a, b, o)
+mat2TransposeMulVec(a, b, o)
+
 const A = new Matrix(5, 5, data)
 const LU = new LuDecomposition(A)
 LU.determinant // Determinant of the matrix
