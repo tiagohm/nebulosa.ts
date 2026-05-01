@@ -6,13 +6,6 @@
 version: 2
 
 updates:
-    - package-ecosystem: 'bun'
-      directory: '/'
-      schedule:
-          interval: 'weekly'
-          day: friday
-      target-branch: 'main'
-
     - package-ecosystem: 'github-actions'
       directory: '/'
       schedule:
