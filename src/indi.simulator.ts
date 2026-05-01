@@ -98,7 +98,7 @@ export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
 export class ClientSimulator implements Client {
 	readonly type = 'SIMULATOR'
 
-	#devices = new Map<string, DeviceSimulator>()
+	readonly #devices = new Map<string, DeviceSimulator>()
 
 	constructor(
 		readonly id: string,
@@ -320,8 +320,8 @@ export class MountSimulator extends DeviceSimulator {
 	#pulseWestEast: AxisDirection = 0
 	#pulseNorthSouthUntil = 0
 	#pulseWestEastUntil = 0
-	#homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
-	#parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
+	readonly #homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
+	readonly #parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	#utcTime = Date.now()
 	#utcOffset = TIMEZONE / 60
 

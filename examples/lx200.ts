@@ -22,12 +22,8 @@ const server = new Lx200ProtocolServer({
 		disconnect: (server) => {
 			console.info('disconnected')
 		},
-		rightAscension: (server) => {
-			return state.rightAscension
-		},
-		declination: (server) => {
-			return state.declination
-		},
+		rightAscension: (server) => state.rightAscension,
+		declination: (server) => state.declination,
 		longitude: (server, longitude) => {
 			console.info('longitude', longitude)
 			if (longitude !== undefined) state.longitude = longitude
@@ -56,9 +52,7 @@ const server = new Lx200ProtocolServer({
 			console.info('parked')
 			return false
 		},
-		slewing: (server) => {
-			return false
-		},
+		slewing: (server) => false,
 		slewRate: (server, rate) => {
 			console.info('slew rate', rate)
 		},

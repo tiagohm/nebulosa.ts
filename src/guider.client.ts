@@ -55,7 +55,7 @@ export class GuiderClient {
 	#connected = false
 	#camera?: Camera
 	#guideOutput?: GuideOutput
-	#calibrator = new GuidingCalibrator()
+	readonly #calibrator = new GuidingCalibrator()
 	#calibration?: GuidingCalibrationResult
 	#frame?: GuideFrame
 	#image?: Image
@@ -86,7 +86,7 @@ export class GuiderClient {
 	#lockShiftLimitReached = false
 	#focalLength = 0
 	#pixelSize = 0
-	#searchRegion = DEFAULT_SEARCH_REGION
+	readonly #searchRegion: number
 	readonly #lockShiftParams = { ...DEFAULT_LOCK_SHIFT_PARAMS }
 	readonly #eventHandler?: GuiderClientHandler['event']
 

@@ -532,7 +532,7 @@ const WAITING_FOR_MESSAGE_STATE = new WaitingForMessageState()
 export class FirmataFsm {
 	readonly #handlers = new Set<FirmataClientHandler>()
 
-	#buffer = Buffer.alloc(256)
+	readonly #buffer = Buffer.alloc(256)
 	#offset = 0
 	#state: FirmataFsmState
 

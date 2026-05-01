@@ -9,7 +9,7 @@ export type Mat3 = Readonly<MutMat3>
 
 // Creates or fills a matrix with zeroes.
 export function matZero(o?: MutMat3): MutMat3 {
-	if (o) return matFillWith(o, 0)
+	if (o) return o.fill(0)
 	else return [0, 0, 0, 0, 0, 0, 0, 0, 0]
 }
 
@@ -30,12 +30,6 @@ export function matFill(m: MutMat3, a: number, b: number, c: number, d: number, 
 	m[6] = g
 	m[7] = h
 	m[8] = i
-	return m
-}
-
-// Fills the matrix with a value.
-export function matFillWith(m: MutMat3, v: number) {
-	m.fill(v)
 	return m
 }
 

@@ -540,9 +540,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		cameraManager.addHandler(frameReceiver)
 
-		const catalogProvider: CatalogSource = () => {
-			return [{ snr: 10, hfd: 4, flux: 30, rightAscension: hour(4.97409), declination: deg(19.95913) }]
-		}
+		const catalogProvider: CatalogSource = () => [{ snr: 10, hfd: 4, flux: 30, rightAscension: hour(4.97409), declination: deg(19.95913) }]
 
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
 		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { HNSKY: catalogProvider } })
