@@ -146,7 +146,7 @@ test('bayer', () => {
 	const color: Image = {
 		header: { NAXIS: 3, NAXIS3: 3 },
 		metadata: { width: 4, height: 2, channels: 3, stride: 12, pixelCount: 8, strideInBytes: 16, pixelSizeInBytes: 4, bitpix: Bitpix.FLOAT, bayer: undefined },
-		raw: new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.21, 0.22, 0.23, 0.24]),
+		raw: new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.21, 0.22, 0.23, 0.24]),
 	}
 
 	const image = bayer(color, 'RGGB')

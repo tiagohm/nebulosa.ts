@@ -452,7 +452,7 @@ describe('generate image', () => {
 				exposure: { exposureTime: 180, electronsPerAdu: 0.8 },
 				sky: { enabled: true, baseRate: 0.13, gradientStrength: 0.05, radialGradientStrength: 0.03, lowFrequencyVariationStrength: 0.02, perChannelMultipliers: [1.03, 1, 0.96], colorBias: [1.01, 1, 0.98], filterTransmission: [1, 1, 1] },
 				moon: { enabled: true, illuminationFraction: 0.35, altitude: 0.5, angularDistance: 1.1, positionAngle: -0.4, tint: [0.94, 0.98, 1.05], strength: 0.55 },
-				lightPollution: { enabled: true, strength: 0.16, direction: -1.0, gradientStrength: 0.2, domeSharpness: 1.15, tint: [1.08, 1, 0.9] },
+				lightPollution: { enabled: true, strength: 0.16, direction: -1, gradientStrength: 0.2, domeSharpness: 1.15, tint: [1.08, 1, 0.9] },
 				atmosphere: { airglowStrength: 0.1, transparency: 0.9, airmass: 1.2, haze: 0.08, humidity: 0.16, zodiacalLightFactor: 0.06, milkyWayBackgroundFactor: 0.03 },
 				sensor: { readNoise: 1.5, channelReadNoise: [1.02, 1, 1.05], channelGain: [1.02, 1, 0.98], biasElectrons: 260, darkCurrentAtReferenceTemp: 0.012, temperature: -10, referenceTemperature: -10, channelCorrelation: 0.35 },
 				artifacts: { fixedPatternNoiseStrength: 0.004, rowNoiseStrength: 0.08, columnNoiseStrength: 0.05, bandingStrength: 0.05, hotPixelRate: 0.00003, warmPixelRate: 0.00008, deadPixelRate: 0.00001, hotPixelStrength: 110, warmPixelStrength: 20, deadPixelResidual: 0.02 },
@@ -463,7 +463,7 @@ describe('generate image', () => {
 			channels: 3,
 			hash: 'db18c0dcd4ef2ce0e65afb596bf0278a',
 			config: baseConfig({
-				sky: { enabled: true, baseRate: 0.09, perChannelMultipliers: [0.38, 1.18, 0.42], colorBias: [0.86, 1.08, 0.88], filterTransmission: [0.34, 1.0, 0.36] },
+				sky: { enabled: true, baseRate: 0.09, perChannelMultipliers: [0.38, 1.18, 0.42], colorBias: [0.86, 1.08, 0.88], filterTransmission: [0.34, 1, 0.36] },
 				moon: { enabled: true, illuminationFraction: 0.18, altitude: 0.4, angularDistance: 1.4, positionAngle: 0.2, tint: [0.9, 1, 1.04], strength: 0.25 },
 				lightPollution: { enabled: true, strength: 0.08, gradientStrength: 0.1, tint: [1.04, 1, 0.94] },
 			}),

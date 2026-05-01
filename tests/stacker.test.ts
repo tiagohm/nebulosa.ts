@@ -55,7 +55,7 @@ function makeStars(tx: number = 0, ty: number = 0, qualityBoost: number = 1): re
 		{ x: 3 + tx, y: 3 + ty, flux: 1800 * qualityBoost, snr: 16 * qualityBoost, hfd: 2.2 },
 		{ x: 10 + tx, y: 4 + ty, flux: 2100 * qualityBoost, snr: 18 * qualityBoost, hfd: 2.1 },
 		{ x: 5 + tx, y: 9 + ty, flux: 2200 * qualityBoost, snr: 17 * qualityBoost, hfd: 2.3 },
-		{ x: 12 + tx, y: 8 + ty, flux: 2600 * qualityBoost, snr: 21 * qualityBoost, hfd: 2.0 },
+		{ x: 12 + tx, y: 8 + ty, flux: 2600 * qualityBoost, snr: 21 * qualityBoost, hfd: 2 },
 		{ x: 7 + tx, y: 12 + ty, flux: 2400 * qualityBoost, snr: 19 * qualityBoost, hfd: 2.4 },
 		{ x: 14 + tx, y: 13 + ty, flux: 2800 * qualityBoost, snr: 23 * qualityBoost, hfd: 2.2 },
 	] as const

@@ -43,11 +43,11 @@ const MAX_FOCUS_STEP = 100000
 
 const COLOR_INDEX_LUT = [
 	[-0.4, 0.72, 0.86, 1.42],
-	[0.0, 0.9, 0.98, 1.12],
-	[0.45, 1.0, 1.0, 1.0],
+	[0, 0.9, 0.98, 1.12],
+	[0.45, 1, 1, 1],
 	[0.9, 1.18, 0.97, 0.78],
 	[1.4, 1.34, 0.9, 0.56],
-	[2.0, 1.42, 0.82, 0.42],
+	[2, 1.42, 0.82, 0.42],
 ] as const
 
 // Maps a bounded B-V style color index into normalized RGB channel weights.

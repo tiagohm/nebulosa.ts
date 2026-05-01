@@ -2140,6 +2140,78 @@ export namespace Node {
 	}
 }
 
+// Chapter 40, Correction for Parallax.
+export namespace Parallax {
+	export const HOR_PAR = 8.794 * ASEC2RAD
+
+	// Computes equatorial horizontal parallax of a body.
+	export function horizontal(delta: Distance): Angle {
+		// (40.1) p. 279
+		return Math.asin(Math.sin(HOR_PAR) / delta)
+		// return horPar / delta // with sufficient accuracy
+	}
+
+	// Computes topocentric positions including parallax given the distance to the observed object,
+	// rhosPhi, rhocPhi parallax constants (see package globe), longitude of the observer, and time of observation.
+	export function topocentric(rightAscension: Angle, declination: Angle, distance: Distance, rhosPhi: number, rhocPhi: number, longitude: Angle, jde: number) {
+		const pi = horizontal(distance)
+		const theta0 = secondsOfTime(Sidereal.apparent(jde))
+		const H = normalizeAngle(theta0 - longitude - rightAscension)
+		const sPi = Math.sin(pi)
+		const [sH, cH] = Base.sincos(H)
+		const [sDelta, cDelta] = Base.sincos(declination)
+		const deltaAlpha = Math.atan2(-rhocPhi * sPi * sH, cDelta - rhocPhi * sPi * cH) // (40.2) p. 279
+		const alpha = rightAscension + deltaAlpha
+		const delta = Math.atan2((sDelta - rhosPhi * sPi) * Math.cos(deltaAlpha), cDelta - rhocPhi * sPi * cH) // (40.3) p. 279
+		return [alpha, delta] as const
+	}
+
+	// Computes topocentric corrections including parallax using the "non-rigorous" method.
+	export function topocentric2(rightAscension: Angle, declination: Angle, distance: Distance, rhosPhi: number, rhocPhi: number, longitude: Angle, jde: number) {
+		const pi = horizontal(distance)
+		const theta0 = secondsOfTime(Sidereal.apparent(jde))
+		const H = normalizeAngle(theta0 - longitude - rightAscension)
+		const [sH, cH] = Base.sincos(H)
+		const [sDelta, cDelta] = Base.sincos(declination)
+		const deltaAlpha = (-pi * rhocPhi * sH) / cDelta // (40.4) p. 280
+		const deltaDelta = -pi * (rhosPhi * cDelta - rhocPhi * cH * sDelta) // (40.5) p. 280
+		return [deltaAlpha, deltaDelta] as const // This is the corrections, not corrected coordinates
+	}
+
+	// Computes topocentric hour angle and declination including parallax using the "alternative" method.
+	export function topocentric3(rightAscension: Angle, declination: Angle, distance: Distance, rhosPhi: number, rhocPhi: number, longitude: Angle, jde: number) {
+		const pi = horizontal(distance)
+		const theta0 = secondsOfTime(Sidereal.apparent(jde))
+		const H = normalizeAngle(theta0 - longitude - rightAscension)
+		const sPi = Math.sin(pi)
+		const [sH, cH] = Base.sincos(H)
+		const [sDelta, cDelta] = Base.sincos(declination)
+		const A = cDelta * sH
+		const B = cDelta * cH - rhocPhi * sPi
+		const C = sDelta - rhosPhi * sPi
+		const q = Math.sqrt(A * A + B * B + C * C)
+		return [Math.atan2(A, B), Math.asin(C / q)] as const
+	}
+
+	// Computes topocentric ecliptical coordinates including parallax given geocentric ecliptical longitude and latitude of a body,
+	// the geocentric semidiameter (s), the observer's latitude and and height above the ellipsoid (phi and h),
+	// the obliquity of the ecliptic (epsilon), the local sidereal time (theta), and the equatorial horizontal parallax of the body (pi).
+	export function topocentricEcliptical(longitude: Angle, latitude: Angle, s: Distance, phi: Angle, h: Distance, epsilon: Angle, theta: Angle, pi: Angle) {
+		const [S, C] = Globe.EARTH76.parallaxConstants(phi, h)
+		const [sLambda, cLambda] = Base.sincos(longitude)
+		const [sBeta, cBeta] = Base.sincos(latitude)
+		const [sEpsilon, cEpsilon] = Base.sincos(epsilon)
+		const [sTheta, cTheta] = Base.sincos(theta)
+		const sPi = Math.sin(pi)
+		const N = cLambda * cBeta - C * sPi * cTheta
+		const lambda = normalizeAngle(Math.atan2(sLambda * cBeta - sPi * (S * sEpsilon + C * cEpsilon * sTheta), N))
+		const cLambda_ = Math.cos(lambda)
+		const beta = Math.atan((cLambda_ * (sBeta - sPi * (S * cEpsilon - C * sEpsilon * sTheta))) / N)
+		const s_ = Math.asin((cLambda_ * Math.cos(beta) * Math.sin(s)) / N)
+		return [lambda, beta, s_]
+	}
+}
+
 // Chapter 41, Illuminated Fraction of the Disk and Magnitude of a Planet.
 export namespace Illuminated {
 	// Computes the phase angle of a planet.

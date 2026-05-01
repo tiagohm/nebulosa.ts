@@ -5,7 +5,7 @@ export type HMC5883LSampleAveraging = 1 | 2 | 4 | 8
 
 export type HMC5883LDataRate = 0.75 | 1.5 | 3 | 7.5 | 15 | 30 | 75
 
-export type HMC5883LRange = 0.88 | 1.3 | 1.9 | 2.5 | 4.0 | 4.7 | 5.6 | 8.1 // gauss
+export type HMC5883LRange = 0.88 | 1.3 | 1.9 | 2.5 | 4 | 4.7 | 5.6 | 8.1 // gauss
 
 export interface HMC5883LOptions {
 	readonly sampleAveraging?: HMC5883LSampleAveraging
@@ -57,7 +57,7 @@ export class HMC5883L extends PeripheralBase<HMC5883L> implements Magnetometer {
 
 		const averagingBits = sampleAveraging === 1 ? 0 : sampleAveraging === 2 ? 1 : sampleAveraging === 4 ? 2 : 3
 		const dataRateBits = dataRate === 0.75 ? 0 : dataRate === 1.5 ? 1 : dataRate === 3 ? 2 : dataRate === 7.5 ? 3 : dataRate === 15 ? 4 : dataRate === 30 ? 5 : 6
-		const rangeBits = range === 0.88 ? 0 : range === 1.3 ? 1 : range === 1.9 ? 2 : range === 2.5 ? 3 : range === 4.0 ? 4 : range === 4.7 ? 5 : range === 5.6 ? 6 : 7
+		const rangeBits = range === 0.88 ? 0 : range === 1.3 ? 1 : range === 1.9 ? 2 : range === 2.5 ? 3 : range === 4 ? 4 : range === 4.7 ? 5 : range === 5.6 ? 6 : 7
 		const countsPerGauss = rangeBits === 0 ? 1370 : rangeBits === 1 ? 1090 : rangeBits === 2 ? 820 : rangeBits === 3 ? 660 : rangeBits === 4 ? 440 : rangeBits === 5 ? 390 : rangeBits === 6 ? 330 : 230
 
 		this.#configA = (averagingBits << 5) | (dataRateBits << 2)

@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { deg, formatALT, formatRA, hms, normalizeAngle, secondsOfTime, signedDms, toArcsec, toDeg, toDms, toHms } from '../src/angle'
-import { DAYSEC, DEG2RAD, PI, RAD2DEG } from '../src/constants'
+import { deg, dms, formatALT, formatRA, hms, normalizeAngle, secondsOfTime, signedDms, toArcsec, toDeg, toDms, toHms, toSecondsOfTime } from '../src/angle'
+import { ASEC2RAD, DAYSEC, DEG2RAD, PI, RAD2DEG } from '../src/constants'
 import { meter, toKilometer, toMeter } from '../src/distance'
 import { modf, roundToNthDecimal } from '../src/math'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, ElementEquinox, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Planetary, Precession, Refraction, Sidereal, Stellar } from '../src/meeus'
+import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, ElementEquinox, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, MoonPosition, Node, Nutation, Parallax, Planetary, Precession, Refraction, Sidereal, Stellar } from '../src/meeus'
 import { time, timeToDate, timeYMD } from '../src/time'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
@@ -124,7 +124,7 @@ describe('Interpolation', () => {
 			// Example 3.e, p. 28.0
 			// work in radians to get answer in radians
 			const yTable = [signedDms(false, 0, 54, 36.125), signedDms(false, 0, 54, 24.606), signedDms(false, 0, 54, 15.486), signedDms(false, 0, 54, 8.694), signedDms(false, 0, 54, 4.133)]
-			const x = 28 + (3 + 20.0 / 60) / 24
+			const x = 28 + (3 + 20 / 60) / 24
 			const d5 = new Interpolation.Len5(27, 29, yTable)
 			const y = d5.interpolateX(x)
 			expect(formatALT(y)).toBe('+00 54 13.37')
@@ -325,7 +325,7 @@ describe('Julian', () => {
 			test('sample', () => {
 				// Example 7.b, p. 61.
 				const jd = Julian.calendarJulianToJD(333, 1, 27.5)
-				strictEqual(jd, 1842713.0)
+				strictEqual(jd, 1842713)
 			})
 
 			for (const date of dates) {
@@ -685,7 +685,7 @@ describe('Fit', () => {
 	test('correlationCoefficient', () => {
 		// Example 4.b, p. 40.0
 		const x = [73, 38, 35, 42, 78, 68, 74, 42, 52, 54, 39, 61, 42, 49, 50, 62, 44, 39, 43, 54, 44, 37]
-		const y = [90.4, 125.3, 161.8, 143.4, 52.5, 50.8, 71.5, 152.8, 131.3, 98.5, 144.8, 78.1, 89.5, 63.9, 112.1, 82.0, 119.8, 161.2, 208.4, 111.6, 167.1, 162.1]
+		const y = [90.4, 125.3, 161.8, 143.4, 52.5, 50.8, 71.5, 152.8, 131.3, 98.5, 144.8, 78.1, 89.5, 63.9, 112.1, 82, 119.8, 161.2, 208.4, 111.6, 167.1, 162.1]
 		const [a, b] = Fit.linear(x, y)
 
 		// y = -2.49x + 244.18
@@ -1218,11 +1218,11 @@ describe('Precession', () => {
 		const mr = -7.6 / 977792 // magic conversion factor
 
 		const epochs = [
-			[1000.0, '6 45 47.16', '-16 22 56.03'],
-			[0.0, '6 46 25.09', '-16 3 .77'],
-			[-1000.0, '6 47 2.67', '-15 43 12.27'],
-			[-2000.0, '6 47 39.91', '-15 23 30.57'],
-			[-10000.0, '6 52 25.72', '-12 50 6.7'],
+			[1000, '6 45 47.16', '-16 22 56.03'],
+			[0, '6 46 25.09', '-16 3 .77'],
+			[-1000, '6 47 2.67', '-15 43 12.27'],
+			[-2000, '6 47 39.91', '-15 23 30.57'],
+			[-10000, '6 52 25.72', '-12 50 6.7'],
 		] as const
 
 		for (const [epoch, ra, dec] of epochs) {
@@ -1455,6 +1455,75 @@ describe('Node', () => {
 	// 	strictEqual(d[1], 11)
 	// 	strictEqual(d[2], 27.409, 3)
 	// })
+})
+
+describe('Parallax', () => {
+	test('horizontal', () => {
+		// Example 40.a, p. 280
+		const π = Parallax.horizontal(0.37276)
+		strictEqual(toArcsec(π), 23.592, 3)
+	})
+
+	test('horizontal from moonposition', () => {
+		// example from MoonPosition.parallax, ch 47, p. 342
+		const jd = Julian.calendarGregorianToJD(1992, 4, 12)
+		const range = MoonPosition.position(jd)[2]
+		const πMoon = MoonPosition.parallax(range) * RAD2DEG
+		const π = Parallax.horizontal(range) * RAD2DEG
+		// we don't quite get all the digits here.
+		// for close objects we need that Arcsin that's in MoonPosition.Parallax.
+		expect(Math.abs(π - πMoon) < 0.001).toBeTrue()
+	})
+
+	describe('RA, Dec of Mars', () => {
+		// UT at Palomar Observatory on '2003-08-28T03:17:00Z'
+		const jd = Julian.calendarGregorianToJD(2003, 8, 28 + toSecondsOfTime(hms(3, 17, 0)) / DAYSEC)
+		// lat = 33°.356; lon = 116°.8625; altitude = 1706m
+		const lon = hms(7, 47, 27)
+		// let ρsφʹ = 0.546861
+		// let ρcφʹ = 0.836339
+		const [ps, pc] = Globe.EARTH76.parallaxConstants(dms(33, 21, 22), meter(1706))
+		// Mars geocentric apparent equatorial coordinates at `jd`
+		const marsCoord = [339.530208 * DEG2RAD, -15.771083 * DEG2RAD, 0.37276] as const
+
+		test('topocentric', () => {
+			// Example 40.a, p. 280
+			const [ra, dec] = Parallax.topocentric(...marsCoord, ps, pc, lon, jd)
+			expect(formatRA(ra)).toBe('22 38 08.54')
+			expect(formatALT(dec)).toBe('-15 46 30.04')
+		})
+
+		test('topocentric2', () => {
+			// Example 40.a, p. 280
+			const [ra, dec] = Parallax.topocentric2(...marsCoord, ps, pc, lon, jd)
+			strictEqual(toArcsec(ra) / 15, 1.29, 2)
+			strictEqual(toArcsec(dec), -14.14, 2)
+		})
+
+		test('topocentric3', () => {
+			// same test case as example 40.a, p. 280
+			// reference result
+			const [ra, dec] = Parallax.topocentric(...marsCoord, ps, pc, lon, jd)
+			// result to test
+			const [a, b] = Parallax.topocentric3(...marsCoord, ps, pc, lon, jd)
+			// test
+			const θ0 = secondsOfTime(Sidereal.apparent(jd))
+			const err = Math.abs(normalizeAngle(a - (θ0 - lon - ra) + 1) - 1)
+			expect(err < 1e-15).toBeTrue()
+			expect(Math.abs(b - dec) < 1e-15).toBeTrue()
+		})
+	})
+
+	test('topocentricEcliptical', () => {
+		// exercise, p. 282
+		const [l, b, s] = Parallax.topocentricEcliptical(dms(181, 46, 22.5), dms(2, 17, 26.2), dms(0, 16, 15.5), dms(50, 5, 7.8), 0, dms(23, 28, 0.8), dms(209, 46, 7.9), dms(0, 59, 27.7))
+		let err = Math.abs(l - dms(181, 48, 5))
+		expect(err < 0.1 * ASEC2RAD).toBeTrue()
+		err = Math.abs(b - dms(1, 29, 7.1))
+		expect(err < 0.1 * ASEC2RAD).toBeTrue()
+		err = Math.abs(s - dms(0, 16, 25.5))
+		expect(err < 0.1 * ASEC2RAD).toBeTrue()
+	})
 })
 
 describe('Illuminated', () => {

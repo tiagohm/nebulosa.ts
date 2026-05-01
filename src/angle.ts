@@ -109,7 +109,7 @@ export function toHour(angle: Angle): number {
 }
 
 // Converts the angle to seconds of time.
-export function toTimeSec(angle: Angle): number {
+export function toSecondsOfTime(angle: Angle): number {
 	return angle * (43200 / PI)
 }
 

@@ -297,7 +297,7 @@ describe('plot star', () => {
 		{ name: 'mono elliptical rotated halo', slug: 'mono-elliptical-rotated-halo', channels: 1, flux: 0.32, hfd: 3.4, snr: 18, seeing: 0.8, ellipticity: 0.38, theta: Math.PI / 4, haloStrength: 0.22, haloScale: 3.5, hash: '02f7f008dbb74c5baf1484843a186215' },
 		{ name: 'mono left edge clip', slug: 'mono-left-edge-clip', channels: 1, x: 1.35, y: HEIGHT / 2, flux: 0.3, hfd: 3.2, snr: 16, seeing: 0.9, hash: 'd3fefbf67943e75e3f5c54b70573c24e' },
 		{ name: 'mono corner clip', slug: 'mono-corner-clip', channels: 1, x: 1.25, y: 1.75, flux: 0.26, hfd: 2.7, snr: 14, seeing: 0.7, hash: 'fb024542be6bc7b31f3569fd106a615a' },
-		{ name: 'mono moffat compact', slug: 'mono-moffat-compact', channels: 1, flux: 0.29, hfd: 3.0, snr: 30, seeing: 0.4, psfModel: 'moffat', beta: 2.2, hash: '83b5f299f3ae240e78279efb713bfaa3' },
+		{ name: 'mono moffat compact', slug: 'mono-moffat-compact', channels: 1, flux: 0.29, hfd: 3, snr: 30, seeing: 0.4, psfModel: 'moffat', beta: 2.2, hash: '83b5f299f3ae240e78279efb713bfaa3' },
 		{ name: 'mono moffat with halo', slug: 'mono-moffat-with-halo', channels: 1, flux: 0.33, hfd: 3.4, snr: 24, seeing: 0.5, psfModel: 'moffat', beta: 2.8, haloStrength: 0.16, haloScale: 3.2, hash: '73f46bee2e212e1592c3166e9ab1dca3' },
 		{ name: 'mono jittered soft core', slug: 'mono-jittered-soft-core', channels: 1, flux: 0.31, hfd: 2.4, snr: 12, seeing: 0.2, jitterX: 0.18, jitterY: -0.22, softCore: 1.8, additiveNoiseHint: 1.5, hash: '0a6af80bdc872a86ca81ead515e38092' },
 		{ name: 'mono defocused', slug: 'mono-defocused', channels: 1, flux: 0.34, hfd: 2.8, snr: 22, seeing: 0.5, focusStep: 90000, bestFocus: 48000, hash: '91a71a55376e971b01ecf267df8e12e9' },
@@ -305,11 +305,11 @@ describe('plot star', () => {
 		{ name: 'rgb blue hot star', slug: 'rgb-blue-hot-star', channels: 3, flux: 0.36, hfd: 2.7, snr: 30, seeing: 0.4, colorIndex: -0.3, peakScale: 1.2, hash: '84fe142d37e945145f667b5b1113c8e3' },
 		{ name: 'rgb red cool star', slug: 'rgb-red-cool-star', channels: 3, flux: 0.36, hfd: 3.7, snr: 28, seeing: 0.7, colorIndex: 1.85, hash: 'ac3936cbcd6c4633cdff17bc7a97b3a5' },
 		{ name: 'rgb diffuse low snr', slug: 'rgb-diffuse-low-snr', channels: 3, flux: 0.24, hfd: 6.8, snr: 4, seeing: 3.4, colorIndex: 0.9, softCore: 1.2, maxPlotRadius: 24, hash: '60ffbb2121035a2399663b6bfeb220fc' },
-		{ name: 'rgb elliptical rotated', slug: 'rgb-elliptical-rotated', channels: 3, flux: 0.32, hfd: 3.0, snr: 18, seeing: 0.6, colorIndex: 0.05, ellipticity: 0.34, theta: Math.PI / 6, hash: '0de84b935c5c8b25b6afdbf9ebd5ec54' },
+		{ name: 'rgb elliptical rotated', slug: 'rgb-elliptical-rotated', channels: 3, flux: 0.32, hfd: 3, snr: 18, seeing: 0.6, colorIndex: 0.05, ellipticity: 0.34, theta: Math.PI / 6, hash: '0de84b935c5c8b25b6afdbf9ebd5ec54' },
 		{ name: 'rgb halo and gamma', slug: 'rgb-halo-and-gamma', channels: 3, flux: 0.34, hfd: 3.5, snr: 20, seeing: 0.7, colorIndex: 1.15, haloStrength: 0.24, haloScale: 3.6, gammaCompensation: 2.2, hash: '8195341783cf3e9597c17ed33949d4cc' },
 		{ name: 'rgb moffat halo', slug: 'rgb-moffat-halo', channels: 3, flux: 0.31, hfd: 2.9, snr: 32, seeing: 0.4, colorIndex: -0.15, psfModel: 'moffat', beta: 2.5, haloStrength: 0.12, haloScale: 3.1, hash: '69bd723fd403c7861913b29a9fc3d920' },
 		{ name: 'rgb defocused', slug: 'rgb-defocused', channels: 3, flux: 0.34, hfd: 2.8, snr: 22, seeing: 0.5, colorIndex: 0.8, focusStep: 12000, bestFocus: 64000, hash: '933cc32600298b1d103b97d667c8cb2c' },
-		{ name: 'rgb corner clip', slug: 'rgb-corner-clip', channels: 3, x: 1.4, y: 2.1, flux: 0.28, hfd: 3.0, snr: 15, seeing: 0.8, colorIndex: 0.7, hash: '4609762a435f795f4f4130929f303f50' },
+		{ name: 'rgb corner clip', slug: 'rgb-corner-clip', channels: 3, x: 1.4, y: 2.1, flux: 0.28, hfd: 3, snr: 15, seeing: 0.8, colorIndex: 0.7, hash: '4609762a435f795f4f4130929f303f50' },
 	]
 
 	for (const scenario of scenarios) {

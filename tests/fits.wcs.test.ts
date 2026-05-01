@@ -11,8 +11,8 @@ function expectMatrixCloseTo(actual: readonly number[], expected: readonly numbe
 	}
 }
 
-const TAN_HEADER = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 400.5, CRPIX2: 300.5, CRVAL1: 100.215755, CRVAL2: 9.831592, CD1_1: -7.0e-4, CD1_2: -2.5e-5, CD2_1: 3.0e-5, CD2_2: 6.8e-4 } as const
-const TAN_PC_HEADER = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 512.5, CRPIX2: 512.5, CRVAL1: 187.1252286, CRVAL2: 56.720194049, CDELT1: -8.0e-4, CDELT2: 7.5e-4, PC1_1: Math.cos(deg(27)), PC1_2: -Math.sin(deg(27)), PC2_1: Math.sin(deg(27)), PC2_2: Math.cos(deg(27)) } as const
+const TAN_HEADER = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 400.5, CRPIX2: 300.5, CRVAL1: 100.215755, CRVAL2: 9.831592, CD1_1: -7e-4, CD1_2: -2.5e-5, CD2_1: 3e-5, CD2_2: 6.8e-4 } as const
+const TAN_PC_HEADER = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 512.5, CRPIX2: 512.5, CRVAL1: 187.1252286, CRVAL2: 56.720194049, CDELT1: -8e-4, CDELT2: 7.5e-4, PC1_1: Math.cos(deg(27)), PC1_2: -Math.sin(deg(27)), PC2_1: Math.sin(deg(27)), PC2_2: Math.cos(deg(27)) } as const
 const TAN_CROTA_HEADER = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 6844.54215495, CRPIX2: 2924.71455892, CRVAL1: 211.789996831, CRVAL2: 54.3250783745, CDELT1: -0.000246219, CDELT2: 0.000246219, CROTA2: 11.8 } as const
 const TAN_LONPOLE_HEADER = { ...TAN_HEADER, LONPOLE: 90 } as const
 
