@@ -6,16 +6,15 @@ on:
         paths:
             - 'src/**.ts'
             - 'tests/**.ts'
-            - 'native/**'
             - 'package.json'
             - 'tsconfig.json'
             - 'bunfig.toml'
             - '.github/workflows/**'
+            - 'postinstall.ts'
     pull_request:
         paths:
             - 'src/**.ts'
             - 'tests/**.ts'
-            - 'native/**'
             - 'package.json'
     workflow_dispatch:
 
