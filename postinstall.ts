@@ -12,18 +12,14 @@ function download(name: string) {
 	}
 }
 
-function save(response: Response, file: Bun.BunFile) {
-	return Bun.write(file, response)
-}
-
 async function install(name: string) {
 	const file = Bun.file(`native/${name}.shared`)
 	if (await file.exists()) return true
 	console.info('downloading:', name)
 	const response = await download(name)
-	if (!response || !response.ok) return false
-	console.info('downloaded:', name)
-	return (await save(response, file)) > 0
+	console.info('downloaded:', name, response?.status)
+	if (!response || !response.ok) return Bun.write(file, '')
+	return (await Bun.write(file, response)) > 0
 }
 
 await Promise.all(LIBS.map(install))

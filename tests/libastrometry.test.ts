@@ -11,7 +11,8 @@ import { DEC_TAN_SIP, RA_TAN_SIP } from '../src/fits.wcs'
 
 await downloadPerTag('libastrometry')
 
-const SKIP = !(await Bun.file('native/libastrometry.shared').exists())
+const libastrometryFile = Bun.file('native/libastrometry.shared')
+const SKIP = !(await libastrometryFile.exists()) || libastrometryFile.size <= 0
 
 test('expand index directory and files', async () => {
 	const root = await fs.mkdtemp(join(tmpdir(), 'libastrometry-'))
