@@ -134,6 +134,7 @@ submissionStatus(submission, { session }) // Inspect submission jobs and progres
 wcsFile(jobId, { session }) // Download the solved WCS FITS blob
 novaAstrometryNetPlateSolve(input, options)
 localAstrometryNetPlateSolve(input, options)
+libAstrometryNetPlateSolve(stars, width, height, options)
 ```
 
 ### AutoFocus ![](bun.webp) ![](browser.webp)
