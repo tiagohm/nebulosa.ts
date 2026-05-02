@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { deg, parseAngle } from '../src/angle'
 import type { FitsHeader } from '../src/fits'
 import { cd, DEC_TAN_SIP, RA_TAN_SIP } from '../src/fits.wcs'
-import { Wcs } from '../src/wcs'
+import { Wcs } from '../src/libwcs'
 
 // https://fits.gsfc.nasa.gov/registry/sip/sipsample.txt
 // https://www.atnf.csiro.au/computing/software/wcs/WCS/example_data.html

@@ -3,8 +3,8 @@ import fs, { type FileHandle } from 'fs/promises'
 import { type Bitpix, type Fits, type FitsHdu, FitsImageReader, readFits, writeFits } from './fits'
 import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isRiceCompressedImageHeader, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedWidthKeyword, widthKeyword } from './fits.util'
 import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageRawType, type WriteImageToFormatOptions } from './image.types'
-import { bufferSink, bufferSource, fileHandleSource, type Seekable, type Sink, type Source } from './io'
-import { Jpeg } from './jpeg'
+import { bufferSink, bufferSource, fileHandleSource, readRemaining, readUntil, type Seekable, type Sink, type Source } from './io'
+import { isJpeg, Jpeg, type PixelFormat } from './libturbojpeg'
 import { clamp } from './math'
 import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type XisfWriteFormat } from './xisf'
 
@@ -63,6 +63,25 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer } } satisfies Image as Image
 }
 
+export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | 32 | 64 | 'auto' = 'auto', format?: PixelFormat): Image | undefined {
+	if (!isJpeg(buffer)) return undefined
+
+	const image = new Jpeg().decompress(buffer, format)
+	if (!image) return undefined
+
+	const { data, width, height } = image
+	const pixelCount = width * height
+
+	if (raw === 'auto') raw = 32
+	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount) : new Float64Array(pixelCount)
+	if (raw.length < pixelCount) return undefined
+
+	for (let i = 0; i < pixelCount; i++) raw[i] = data[i] / 255
+
+	const header = { BITPIX: 8, NAXIS: 2, NAXIS1: width, NAXIS2: height }
+	return { header, raw, metadata: { width, height, channels: 1, pixelCount, pixelSizeInBytes: 1, strideInBytes: width, stride: width, bitpix: 8, bayer: undefined } } satisfies Image as Image
+}
+
 export async function readImageFromSource(source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
 	const { position } = source
 
@@ -74,7 +93,14 @@ export async function readImageFromSource(source: Source & Seekable, raw: ImageR
 	const xisf = await readXisf(source)
 	if (xisf) return await readImageFromXisf(xisf, source, raw)
 
-	return undefined
+	source.seek(position)
+
+	const magic = Buffer.allocUnsafe(2)
+	if ((await readUntil(source, magic)) !== magic.byteLength || !isJpeg(magic)) return undefined
+
+	source.seek(position)
+
+	return readImageFromJpeg(await readRemaining(source), raw)
 }
 
 export async function readImageFromBuffer(buffer: Buffer, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {

@@ -1,6 +1,6 @@
 import type { Bitpix, FitsHeader } from './fits'
 import type { Rect, Size } from './geometry'
-import type { ChrominanceSubsampling } from './jpeg'
+import type { ChrominanceSubsampling } from './libturbojpeg'
 import type { NumberArray } from './math'
 
 export type ImageChannel = 'RED' | 'GREEN' | 'BLUE'

@@ -1,9 +1,10 @@
 const GITHUB_URL = 'https://github.com/tiagohm/nebulosa.data/raw/refs/heads/main/'
+const ASTROMETRY_4100_INDEX_URL = 'https://data.astrometry.net/4100'
 
 const FILES = {
 	'finals2000A.txt': [undefined, 'iers'],
 	'eopc04.1962-now.txt': [undefined, 'iers', 'location', 'time'],
-	'apod4.jpg': [undefined, 'astap'],
+	'apod4.jpg': [undefined, 'astap', 'libastrometry'],
 	'IAU-CSN.tsv': [undefined, 'csv'],
 	'de405.bsp': [undefined, 'daf', 'spk'],
 	'de421.bsp': [undefined, 'daf', 'spk'],
@@ -54,12 +55,21 @@ const FILES = {
 	'NGC3372-zlib-16.1.xisf': [undefined, 'xisf'],
 	'NGC3372-zlib+sh-16.1.xisf': [undefined, 'xisf'],
 	'HNSKY_g14.tar': [undefined, 'hnsky'],
+	'index-4119.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4119.fits`],
+	'index-4118.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4118.fits`],
+	'index-4117.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4117.fits`],
+	'index-4116.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4116.fits`, 'libastrometry'],
+	'index-4115.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4115.fits`],
+	'index-4114.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4114.fits`],
+	'index-4113.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4113.fits`],
+	'index-4112.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4112.fits`],
+	'index-4111.fits': [`${ASTROMETRY_4100_INDEX_URL}/index-4111.fits`],
 } as const
 
 const downloading = new Map<string, Promise<Bun.BunFile>>()
 
 type FileName = keyof typeof FILES
-type FileTag = 'alpaca.client' | 'alpaca.server' | 'astap' | 'csv' | 'daf' | 'fits' | 'hnsky' | 'hyg' | 'iers' | 'image' | 'indi' | 'location' | 'sao' | 'spk' | 'stardetector' | 'starmatching' | 'stellarium' | 'time' | 'xisf'
+type FileTag = 'alpaca.client' | 'alpaca.server' | 'astap' | 'csv' | 'daf' | 'fits' | 'hnsky' | 'hyg' | 'iers' | 'image' | 'indi' | 'libastrometry' | 'location' | 'sao' | 'spk' | 'stardetector' | 'starmatching' | 'stellarium' | 'time' | 'xisf'
 
 export async function download(name: FileName) {
 	const task = downloading.get(name)

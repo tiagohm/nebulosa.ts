@@ -563,6 +563,23 @@ export async function readUntil(source: Source, buffer: Buffer, size: number = b
 	return size - remaining
 }
 
+export async function readRemaining(source: Source) {
+	const chunks: Buffer[] = []
+	const buffer = Buffer.allocUnsafe(65536)
+	let total = 0
+
+	while (true) {
+		const n = await readUntil(source, buffer)
+
+		if (!n) break
+
+		chunks.push(Buffer.from(buffer.subarray(0, n)))
+		total += n
+	}
+
+	return Buffer.concat(chunks, total)
+}
+
 export interface ReadLinesOptions {
 	encoding?: 'ascii' | 'utf8' | 'utf-8'
 	emptyLines?: boolean
