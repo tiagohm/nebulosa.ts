@@ -21,7 +21,7 @@ async function install(name: string) {
 	if (await file.exists()) return true
 	console.info('downloading:', name)
 	const response = await download(name)
-	if (!response) return false
+	if (!response || !response.ok) return false
 	console.info('downloaded:', name)
 	return (await save(response, file)) > 0
 }
