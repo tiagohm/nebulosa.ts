@@ -164,11 +164,12 @@ function interpolatingSplineLUT(x: Readonly<NumberArray>, y: Readonly<NumberArra
 function cubicHermiteSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 	const n = interpolatingSplinePointCount(x, y)
 
-	const h = new Float64Array(n - 1)
-	const d = new Float64Array(n - 1)
+	const segmentCount = n - 1
+	const h = new Float64Array(segmentCount)
+	const d = new Float64Array(segmentCount)
 	const slopes = new Float64Array(n)
 
-	for (let i = 0; i < n - 1; i++) {
+	for (let i = 0; i < segmentCount; i++) {
 		const width = x[i + 1] - x[i]
 		h[i] = width
 		d[i] = (y[i + 1] - y[i]) / width
@@ -187,7 +188,7 @@ function cubicHermiteSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) 
 
 	slopes[0] = slope0
 
-	for (let i = 1; i < n - 1; i++) {
+	for (let i = 1; i < segmentCount; i++) {
 		const prev = d[i - 1]
 		const next = d[i]
 
@@ -201,7 +202,7 @@ function cubicHermiteSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) 
 		slopes[i] = (w0 + w1) / (w0 / prev + w1 / next)
 	}
 
-	const last = n - 1
+	const last = segmentCount
 	let slopeN = ((2 * h[last - 1] + h[last - 2]) * d[last - 1] - h[last - 1] * d[last - 2]) / (h[last - 1] + h[last - 2])
 
 	if (slopeN * d[last - 1] <= 0) slopeN = 0
@@ -217,8 +218,9 @@ function akimaSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 	const n = interpolatingSplinePointCount(x, y)
 	const secants = new Float64Array(n + 3)
 	const slopes = new Float64Array(n)
+	const segmentCount = n - 1
 
-	for (let i = 0; i < n - 1; i++) {
+	for (let i = 0; i < segmentCount; i++) {
 		secants[i + 2] = (y[i + 1] - y[i]) / (x[i + 1] - x[i])
 	}
 
@@ -230,7 +232,7 @@ function akimaSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 
 	secants[1] = 2 * secants[2] - secants[3]
 	secants[0] = 2 * secants[1] - secants[2]
-	secants[n + 1] = 2 * secants[n] - secants[n - 1]
+	secants[n + 1] = 2 * secants[n] - secants[segmentCount]
 	secants[n + 2] = 2 * secants[n + 1] - secants[n]
 
 	for (let i = 0; i < n; i++) {
@@ -248,6 +250,7 @@ function akimaSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 function catmullRomSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 	const n = interpolatingSplinePointCount(x, y)
 	const slopes = new Float64Array(n)
+	const segmentCount = n - 1
 	const first = (y[1] - y[0]) / (x[1] - x[0])
 
 	if (n === 2) {
@@ -258,11 +261,11 @@ function catmullRomSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 
 	slopes[0] = first
 
-	for (let i = 1; i < n - 1; i++) {
+	for (let i = 1; i < segmentCount; i++) {
 		slopes[i] = (y[i + 1] - y[i - 1]) / (x[i + 1] - x[i - 1])
 	}
 
-	slopes[n - 1] = (y[n - 1] - y[n - 2]) / (x[n - 1] - x[n - 2])
+	slopes[segmentCount] = (y[segmentCount] - y[n - 2]) / (x[segmentCount] - x[n - 2])
 
 	return slopes
 }
@@ -271,10 +274,11 @@ function catmullRomSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 function naturalCubicSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 	const n = interpolatingSplinePointCount(x, y)
 	const slopes = new Float64Array(n)
-	const h = new Float64Array(n - 1)
-	const d = new Float64Array(n - 1)
+	const segmentCount = n - 1
+	const h = new Float64Array(segmentCount)
+	const d = new Float64Array(segmentCount)
 
-	for (let i = 0; i < n - 1; i++) {
+	for (let i = 0; i < segmentCount; i++) {
 		const width = x[i + 1] - x[i]
 		h[i] = width
 		d[i] = (y[i + 1] - y[i]) / width
@@ -286,7 +290,7 @@ function naturalCubicSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) 
 		return slopes
 	}
 
-	const internal = n - 2
+	const internal = segmentCount - 1
 	const lower = new Float64Array(internal)
 	const diagonal = new Float64Array(internal)
 	const upper = new Float64Array(internal)
@@ -306,7 +310,7 @@ function naturalCubicSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) 
 		rhs[i] -= factor * rhs[i - 1]
 	}
 
-	second[n - 2] = rhs[internal - 1] / diagonal[internal - 1]
+	second[internal] = rhs[internal - 1] / diagonal[internal - 1]
 
 	for (let i = internal - 2; i >= 0; i--) {
 		second[i + 1] = (rhs[i] - upper[i] * second[i + 2]) / diagonal[i]
@@ -314,11 +318,11 @@ function naturalCubicSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) 
 
 	slopes[0] = d[0] - (h[0] * second[1]) / 6
 
-	for (let i = 1; i < n - 1; i++) {
+	for (let i = 1; i < segmentCount; i++) {
 		slopes[i] = d[i - 1] + (h[i - 1] * (second[i - 1] + 2 * second[i])) / 6
 	}
 
-	slopes[n - 1] = d[n - 2] + (h[n - 2] * second[n - 2]) / 6
+	slopes[segmentCount] = d[internal] + (h[internal] * second[internal]) / 6
 
 	return slopes
 }
