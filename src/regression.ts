@@ -55,6 +55,11 @@ export interface TrendLineRegression extends Regression, MinimumPointRegression 
 	readonly intersection: Readonly<Point>
 }
 
+export interface ChebyshevRegression extends Regression {
+	readonly degree: number
+	readonly coefficients: Readonly<NumberArray>
+}
+
 export interface LevenbergMarquardtOptions {
 	maxIterations?: number
 	lambda?: number
@@ -134,6 +139,105 @@ export function linearLeastSquares(design: readonly Readonly<NumberArray>[], tar
 	}
 
 	return { coefficients, fitted, residuals, conditionNumber, rankDeficient }
+}
+
+// Fits Chebyshev-basis coefficients T_0..T_degree with a QR least-squares solve.
+export function chebyshevLeastSquares(x: Readonly<NumberArray>, y: Readonly<NumberArray>, degree: number): ChebyshevRegression {
+	if (x.length !== y.length) throw new Error('chebyshev x and y arrays must have the same length')
+	if (!Number.isInteger(degree) || degree < 0) throw new RangeError('chebyshev degree must be a non-negative integer')
+
+	const rows = x.length
+	const columns = degree + 1
+
+	if (rows < columns) throw new RangeError(`chebyshev fit requires at least ${columns} samples`)
+
+	const q = new Float64Array(rows * columns)
+	const r = new Float64Array(columns * columns)
+	const qty = new Float64Array(columns)
+	const coefficients = new Float64Array(columns)
+
+	// Build T_j(x_i) on the supplied normalized domain before orthogonalizing.
+	for (let row = 0; row < rows; row++) {
+		const xRow = x[row]
+		const yRow = y[row]
+
+		if (!Number.isFinite(xRow)) throw new RangeError(`chebyshev x value at index ${row} must be finite`)
+		if (!Number.isFinite(yRow)) throw new RangeError(`chebyshev y value at index ${row} must be finite`)
+
+		const offset = row * columns
+		q[offset] = 1
+
+		if (columns > 1) q[offset + 1] = xRow
+
+		for (let column = 2; column < columns; column++) {
+			q[offset + column] = 2 * xRow * q[offset + column - 1] - q[offset + column - 2]
+		}
+	}
+
+	for (let column = 0; column < columns; column++) {
+		let norm = 0
+
+		for (let row = 0; row < rows; row++) {
+			const value = q[row * columns + column]
+			norm += value * value
+		}
+
+		norm = Math.sqrt(norm)
+
+		if (!(norm > Number.EPSILON)) {
+			throw new RangeError('chebyshev fit is rank deficient')
+		}
+
+		r[column * columns + column] = norm
+
+		for (let row = 0; row < rows; row++) q[row * columns + column] /= norm
+
+		let projection = 0
+
+		for (let row = 0; row < rows; row++) projection += q[row * columns + column] * y[row]
+
+		qty[column] = projection
+
+		for (let next = column + 1; next < columns; next++) {
+			projection = 0
+
+			for (let row = 0; row < rows; row++) projection += q[row * columns + column] * q[row * columns + next]
+
+			r[column * columns + next] = projection
+
+			for (let row = 0; row < rows; row++) q[row * columns + next] -= projection * q[row * columns + column]
+		}
+	}
+
+	for (let row = columns - 1; row >= 0; row--) {
+		let value = qty[row]
+
+		for (let column = row + 1; column < columns; column++) value -= r[row * columns + column] * coefficients[column]
+
+		coefficients[row] = value / r[row * columns + row]
+	}
+
+	// Clenshaw evaluation is stable for Chebyshev basis coefficients.
+	function predict(x: number) {
+		let b1 = 0
+		let b2 = 0
+
+		for (let i = coefficients.length - 1; i >= 1; i--) {
+			const b0 = 2 * x * b1 - b2 + coefficients[i]
+			b2 = b1
+			b1 = b0
+		}
+
+		return x * b1 - b2 + coefficients[0]
+	}
+
+	return {
+		degree,
+		coefficients,
+		xPoints: x,
+		yPoints: y,
+		predict,
+	}
 }
 
 // Solves a robust linear least-squares problem using iterative reweighted least squares.
