@@ -2,7 +2,7 @@ import { normalizeAngle, type Angle } from './angle'
 import { PI, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { chebyshevLeastSquares, type ChebyshevRegression } from './regression'
-import { type Time, toJulianDay } from './time'
+import { type Time, Timescale, timeConvert } from './time'
 
 export type InterpolationStrategy = 'linear' | 'spline' | 'chebyshev'
 
@@ -461,15 +461,15 @@ function prepareSamples(points: readonly EphemerisPoint[], minimumSampleCount: n
 
 	for (let i = 0; i < points.length; i++) {
 		const point = points[i]
-		const time = numericTime(point.time)
+		const instant = numericTime(point.time)
 
 		if (!Number.isFinite(point.rightAscension)) throw new RangeError('ephemeris RA must be finite')
 		if (!Number.isFinite(point.declination)) throw new RangeError('ephemeris Dec must be finite')
 
 		sorted[i] = {
-			time,
-			day: point.time.day,
-			fraction: point.time.fraction,
+			time: instant.time,
+			day: instant.day,
+			fraction: instant.fraction,
 			rightAscension: point.rightAscension,
 			declination: point.declination,
 			order: i,
@@ -573,11 +573,12 @@ function numericTime(time: Time) {
 		throw new RangeError('ephemeris time must be finite')
 	}
 
-	const value = toJulianDay(time)
+	const instant = timeConvert(time, Timescale.TT)
+	const value = instant.day + instant.fraction
 
 	if (!Number.isFinite(value)) throw new RangeError('ephemeris time must be finite')
 
-	return value
+	return { time: value, day: instant.day, fraction: instant.fraction }
 }
 
 function relativeTime(time: Time, startDay: number, startFraction: number) {
@@ -585,7 +586,8 @@ function relativeTime(time: Time, startDay: number, startFraction: number) {
 		throw new RangeError('ephemeris time must be finite')
 	}
 
-	return time.day - startDay + (time.fraction - startFraction)
+	const instant = timeConvert(time, Timescale.TT)
+	return instant.day - startDay + (instant.fraction - startFraction)
 }
 
 function computeDiagnostics(times: Float64Array, rightAscension: Float64Array, declination: Float64Array, raInterpolator: ScalarInterpolator, decInterpolator: ScalarInterpolator): InterpolationDiagnostics {

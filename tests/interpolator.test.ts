@@ -1,15 +1,15 @@
 import { expect, test, describe } from 'bun:test'
 import { angularDistance } from '../src/coordinate'
-import { TAU } from '../src/constants'
+import { DAYSEC, TAU } from '../src/constants'
 import { type EphemerisPoint, chebyshevInterpolator, linearInterpolator, splineInterpolator } from '../src/interpolator'
-import { Timescale, time, timeYMDHMS } from '../src/time'
+import { Timescale, time, timeConvert, timeYMDHMS } from '../src/time'
 import { earth, mars } from '../src/vsop87e'
 
 const J0 = 2460000
 const PLANET_START_TIME = timeYMDHMS(2025, 9, 28, 0, 0, 0, Timescale.TT)
 
 function jd(offset: number) {
-	return time(J0, offset)
+	return time(J0, offset, Timescale.TT)
 }
 
 function point(offset: number, rightAscension: number, declination: number): EphemerisPoint {
@@ -86,6 +86,21 @@ test('linear lookup handles exact sample times', () => {
 	expect(interpolator.compute(jd(0))).toEqual([1, -0.1])
 	expect(interpolator.compute(jd(1))).toEqual([2, 0.1])
 	expect(interpolator.compute(jd(2))).toEqual([3, 0.3])
+})
+
+test('linear lookup compares mixed timescales as instants', () => {
+	const start = timeYMDHMS(2025, 1, 1, 0, 0, 0, Timescale.TT)
+	const end = timeConvert(time(start.day, start.fraction + 10 / DAYSEC, Timescale.TT), Timescale.UTC)
+	const middle = timeConvert(time(start.day, start.fraction + 5 / DAYSEC, Timescale.TT), Timescale.UTC)
+
+	const interpolator = linearInterpolator([
+		{ time: end, rightAscension: 2, declination: 1 },
+		{ time: start, rightAscension: 1, declination: 0 },
+	])
+	const value = interpolator.compute(middle)
+
+	expect(value[0]).toBeCloseTo(1.5, 12)
+	expect(value[1]).toBeCloseTo(0.5, 12)
 })
 
 test('natural cubic spline keeps first derivative continuous at knots', () => {
@@ -220,8 +235,8 @@ describe('interpolates VSOP87E Mars geocentric coordinates with all strategies',
 	for (let i = 0; i < sampleCount; i++) points[i] = marsGeocentricPoint(i * step)
 
 	const strategies = [
-		{ name: 'linear', interpolator: linearInterpolator(points), maxError: 2e-8 },
-		{ name: 'spline', interpolator: splineInterpolator(points), maxError: 1e-8 },
+		{ name: 'linear', interpolator: linearInterpolator(points), maxError: 1e-8 },
+		{ name: 'spline', interpolator: splineInterpolator(points), maxError: 5e-9 },
 		{ name: 'chebshev', interpolator: chebyshevInterpolator(points, 6), maxError: 1e-11 },
 	] as const
 
