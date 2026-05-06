@@ -11,14 +11,14 @@ import type { DetectStarOptions, DetectedStar } from './star.detector'
 
 export type LibAstrometry = ReturnType<typeof open>
 
-export type AstrometryNetIndexInput = string | readonly string[]
+export type AstrometryNetIndexes = string | readonly string[]
 
 export type AstrometryNetInput = readonly Pick<DetectedStar, 'x' | 'y' | 'flux'>[]
 
 export type AstrometryNetParity = Parity | 'BOTH' | 0 | 1 | 2
 
 export interface AstrometryNetSolveOptions extends Partial<DetectStarOptions> {
-	readonly indexes: AstrometryNetIndexInput
+	readonly indexes: AstrometryNetIndexes
 	readonly rightAscension?: Angle
 	readonly declination?: Angle
 	readonly radius?: Angle
@@ -43,6 +43,7 @@ const INDEX_FILE = /^index-.*\.fit(?:s|s\.fz)?$/i
 const MATCHOBJ_WCSTAN_OFFSET = 432
 const MATCHOBJ_SIP_OFFSET = 640
 
+// https://github.com/tiagohm/astrometry.net. Windows is supported!
 export function open() {
 	return dlopen(path, {
 		index_load: { args: ['cstring', 'int', 'ptr'], returns: 'ptr' },
@@ -250,7 +251,7 @@ export async function libAstrometryNetPlateSolve(input: AstrometryNetInput, widt
 	return await solver.solve(input, width, height, options, signal)
 }
 
-export async function astrometryNetIndexFiles(indexes: AstrometryNetIndexInput): Promise<string[]> {
+export async function astrometryNetIndexFiles(indexes: AstrometryNetIndexes): Promise<string[]> {
 	const input = typeof indexes === 'string' ? [indexes] : indexes
 	const output: string[] = []
 

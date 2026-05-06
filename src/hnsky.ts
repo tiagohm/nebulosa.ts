@@ -1,5 +1,4 @@
-import type { Angle } from './angle'
-import { normalizeAngle, normalizePI } from './angle'
+import { type Angle, normalizeAngle, normalizePI } from './angle'
 import { PIOVERTWO, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type StarCatalogRaDecBox } from './star.catalog'

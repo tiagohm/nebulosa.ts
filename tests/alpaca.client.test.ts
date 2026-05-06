@@ -1,5 +1,4 @@
-import type { TestOptions } from 'bun:test'
-import { describe, expect, test } from 'bun:test'
+import { type TestOptions, describe, expect, test } from 'bun:test'
 import { AlpacaClient, type AlpacaClientHandler, makeFitsFromImageBytes } from '../src/alpaca.client'
 import { makeImageBytesFromFits } from '../src/alpaca.server'
 import { deg, hour } from '../src/angle'
