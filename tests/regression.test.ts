@@ -1,6 +1,23 @@
 import { describe, expect, test } from 'bun:test'
 import type { NumberArray } from '../src/math'
-import { exponentialRegression, hyperbolicRegression, levenbergMarquardt, linearLeastSquares, polynomialRegression, powerRegression, quadraticRegression, regressionScore, robustLinearLeastSquares, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
+import { exponentialRegression, chebyshevLeastSquares, hyperbolicRegression, levenbergMarquardt, linearLeastSquares, polynomialRegression, powerRegression, quadraticRegression, regressionScore, robustLinearLeastSquares, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
+
+function chebyshevSeries(x: number, coefficients: Readonly<NumberArray>) {
+	let previous = 1
+	let current = x
+	let value = coefficients[0]
+
+	if (coefficients.length > 1) value += coefficients[1] * current
+
+	for (let i = 2; i < coefficients.length; i++) {
+		const next = 2 * x * current - previous
+		value += coefficients[i] * next
+		previous = current
+		current = next
+	}
+
+	return value
+}
 
 test('simple linear', () => {
 	const x = [80, 60, 10, 20, 30]
@@ -267,6 +284,24 @@ test('linear least squares rejects invalid weights', () => {
 
 	expect(() => linearLeastSquares(design, target, { weights: new Float64Array([1, -1]) })).toThrow('weight at index 1 must be finite and non-negative')
 	expect(() => linearLeastSquares(design, target, { weights: new Float64Array([1, Number.NaN]) })).toThrow('weight at index 1 must be finite and non-negative')
+})
+
+test('chebyshev least squares fits basis coefficients', () => {
+	const expected = new Float64Array([1.25, -0.5, 0.125, 0.2])
+	const x = new Float64Array([-1, -0.7, -0.2, 0.15, 0.55, 1])
+	const y = new Float64Array(x.length)
+
+	for (let i = 0; i < x.length; i++) y[i] = chebyshevSeries(x[i], expected)
+
+	const regression = chebyshevLeastSquares(x, y, 3)
+
+	expect(regression.coefficients).toHaveLength(expected.length)
+
+	for (let i = 0; i < regression.coefficients.length; i++) {
+		expect(regression.coefficients[i]).toBeCloseTo(expected[i], 12)
+	}
+
+	expect(regression.predict(0.37)).toBeCloseTo(chebyshevSeries(0.37, expected), 12)
 })
 
 // https://github.com/mljs/levenberg-marquardt/blob/main/src/__tests__/curve.test.js
