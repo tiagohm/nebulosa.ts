@@ -2,6 +2,7 @@ import { normalizeAngle, type Angle } from './angle'
 import { PI, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { chebyshevLeastSquares, type ChebyshevRegression } from './regression'
+import { linearSpline, naturalCubicSpline } from './spline'
 import { type Time, Timescale, timeConvert } from './time'
 
 export type InterpolationStrategy = 'linear' | 'spline' | 'chebyshev'
@@ -190,8 +191,8 @@ export class LinearEphemerisInterpolator extends BaseEphemerisInterpolator {
 	}
 
 	protected createScalarInterpolators(times: Float64Array, rightAscension: Float64Array, declination: Float64Array) {
-		this.raInterpolator = new LinearScalarInterpolator(times, rightAscension)
-		this.decInterpolator = new LinearScalarInterpolator(times, declination)
+		this.raInterpolator = linearSpline(times, rightAscension, true)
+		this.decInterpolator = linearSpline(times, declination, true)
 	}
 }
 
@@ -206,8 +207,8 @@ export class SplineEphemerisInterpolator extends BaseEphemerisInterpolator {
 	}
 
 	protected createScalarInterpolators(times: Float64Array, rightAscension: Float64Array, declination: Float64Array) {
-		this.raInterpolator = new NaturalCubicSpline(times, rightAscension)
-		this.decInterpolator = new NaturalCubicSpline(times, declination)
+		this.raInterpolator = naturalCubicSpline(times, rightAscension, true)
+		this.decInterpolator = naturalCubicSpline(times, declination, true)
 	}
 }
 
@@ -249,192 +250,6 @@ export class ChebyshevEphemerisInterpolator extends BaseEphemerisInterpolator {
 
 	protected evaluationTime(time: Time) {
 		return (this.resolveOutOfRangeOffset(relativeTime(time, this.time0Day, this.time0Fraction)) * 2) / this.duration - 1
-	}
-}
-
-class LinearScalarInterpolator implements ScalarInterpolator {
-	private lastIndex = 0
-
-	constructor(
-		private readonly times: Float64Array,
-		private readonly values: Float64Array,
-	) {}
-
-	compute(t: number) {
-		const i = this.segmentIndex(t)
-		const t0 = this.times[i]
-		const width = this.times[i + 1] - t0
-		const u = (t - t0) / width
-
-		return this.values[i] + u * (this.values[i + 1] - this.values[i])
-	}
-
-	reset() {
-		this.lastIndex = 0
-	}
-
-	private segmentIndex(t: number) {
-		const times = this.times
-		const lastSegment = times.length - 2
-		let i = this.lastIndex
-
-		if (t >= times[i] && t <= times[i + 1]) return i
-
-		if (i < lastSegment && t >= times[i + 1] && t <= times[i + 2]) {
-			this.lastIndex = i + 1
-			return this.lastIndex
-		}
-
-		if (i > 0 && t >= times[i - 1] && t <= times[i]) {
-			this.lastIndex = i - 1
-			return this.lastIndex
-		}
-
-		if (t <= times[0]) {
-			this.lastIndex = 0
-			return 0
-		}
-
-		if (t >= times[lastSegment + 1]) {
-			this.lastIndex = lastSegment
-			return lastSegment
-		}
-
-		let low = 0
-		let high = lastSegment
-
-		while (low <= high) {
-			i = (low + high) >> 1
-
-			if (t < times[i]) high = i - 1
-			else if (t > times[i + 1]) low = i + 1
-			else {
-				this.lastIndex = i
-				return i
-			}
-		}
-
-		this.lastIndex = lastSegment
-		return lastSegment
-	}
-}
-
-class NaturalCubicSpline implements ScalarInterpolator {
-	private lastIndex = 0
-	private readonly a: Float64Array
-	private readonly b: Float64Array
-	private readonly c: Float64Array
-	private readonly d: Float64Array
-
-	constructor(
-		private readonly times: Float64Array,
-		values: Float64Array,
-	) {
-		const n = times.length
-		const segmentCount = n - 1
-		const h = new Float64Array(segmentCount)
-		const delta = new Float64Array(segmentCount)
-		const second = new Float64Array(n)
-
-		for (let i = 0; i < segmentCount; i++) {
-			const width = times[i + 1] - times[i]
-			h[i] = width
-			delta[i] = (values[i + 1] - values[i]) / width
-		}
-
-		const internal = n - 2
-		const lower = new Float64Array(internal)
-		const diagonal = new Float64Array(internal)
-		const upper = new Float64Array(internal)
-		const rhs = new Float64Array(internal)
-
-		for (let i = 0; i < internal; i++) {
-			lower[i] = i === 0 ? 0 : h[i]
-			diagonal[i] = 2 * (h[i] + h[i + 1])
-			upper[i] = i === internal - 1 ? 0 : h[i + 1]
-			rhs[i] = 6 * (delta[i + 1] - delta[i])
-		}
-
-		for (let i = 1; i < internal; i++) {
-			const factor = lower[i] / diagonal[i - 1]
-			diagonal[i] -= factor * upper[i - 1]
-			rhs[i] -= factor * rhs[i - 1]
-		}
-
-		second[n - 2] = rhs[internal - 1] / diagonal[internal - 1]
-
-		for (let i = internal - 2; i >= 0; i--) {
-			second[i + 1] = (rhs[i] - upper[i] * second[i + 2]) / diagonal[i]
-		}
-
-		this.a = new Float64Array(segmentCount)
-		this.b = new Float64Array(segmentCount)
-		this.c = new Float64Array(segmentCount)
-		this.d = new Float64Array(segmentCount)
-
-		// Coefficients are stored as a + b * dx + c * dx^2 + d * dx^3 per segment.
-		for (let i = 0; i < segmentCount; i++) {
-			this.a[i] = values[i]
-			this.b[i] = delta[i] - (h[i] * (2 * second[i] + second[i + 1])) / 6
-			this.c[i] = second[i] / 2
-			this.d[i] = (second[i + 1] - second[i]) / (6 * h[i])
-		}
-	}
-
-	compute(t: number) {
-		const i = this.segmentIndex(t)
-		const dx = t - this.times[i]
-
-		return this.a[i] + dx * (this.b[i] + dx * (this.c[i] + dx * this.d[i]))
-	}
-
-	reset() {
-		this.lastIndex = 0
-	}
-
-	private segmentIndex(t: number) {
-		const times = this.times
-		const lastSegment = times.length - 2
-		let i = this.lastIndex
-
-		if (t >= times[i] && t <= times[i + 1]) return i
-
-		if (i < lastSegment && t >= times[i + 1] && t <= times[i + 2]) {
-			this.lastIndex = i + 1
-			return this.lastIndex
-		}
-
-		if (i > 0 && t >= times[i - 1] && t <= times[i]) {
-			this.lastIndex = i - 1
-			return this.lastIndex
-		}
-
-		if (t <= times[0]) {
-			this.lastIndex = 0
-			return 0
-		}
-
-		if (t >= times[lastSegment + 1]) {
-			this.lastIndex = lastSegment
-			return lastSegment
-		}
-
-		let low = 0
-		let high = lastSegment
-
-		while (low <= high) {
-			i = (low + high) >> 1
-
-			if (t < times[i]) high = i - 1
-			else if (t > times[i + 1]) low = i + 1
-			else {
-				this.lastIndex = i
-				return i
-			}
-		}
-
-		this.lastIndex = lastSegment
-		return lastSegment
 	}
 }
 
@@ -591,8 +406,8 @@ function relativeTime(time: Time, startDay: number, startFraction: number) {
 }
 
 function computeDiagnostics(times: Float64Array, rightAscension: Float64Array, declination: Float64Array, raInterpolator: ScalarInterpolator, decInterpolator: ScalarInterpolator): InterpolationDiagnostics {
-	let sumRa = 0
-	let sumDec = 0
+	let sumRA = 0
+	let sumDEC = 0
 	let maxAbsRA = 0
 	let maxAbsDEC = 0
 
@@ -602,15 +417,15 @@ function computeDiagnostics(times: Float64Array, rightAscension: Float64Array, d
 		const absRa = Math.abs(raError)
 		const absDec = Math.abs(decError)
 
-		sumRa += raError * raError
-		sumDec += decError * decError
+		sumRA += raError * raError
+		sumDEC += decError * decError
 		if (absRa > maxAbsRA) maxAbsRA = absRa
 		if (absDec > maxAbsDEC) maxAbsDEC = absDec
 	}
 
 	return {
-		rmsRA: Math.sqrt(sumRa / times.length),
-		rmsDEC: Math.sqrt(sumDec / times.length),
+		rmsRA: Math.sqrt(sumRA / times.length),
+		rmsDEC: Math.sqrt(sumDEC / times.length),
 		maxAbsRA,
 		maxAbsDEC,
 	}

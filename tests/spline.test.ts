@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { akimaSpline, akimaSplineLUT, catmullRomSpline, catmullRomSplineLUT, cubicHermiteSpline, cubicHermiteSplineLUT, naturalCubicSpline, naturalCubicSplineLUT, spline, splineGivenEnds } from '../src/spline'
+import { akimaSpline, akimaSplineLUT, catmullRomSpline, catmullRomSplineLUT, cubicHermiteSpline, cubicHermiteSplineLUT, linearSpline, naturalCubicSpline, naturalCubicSplineLUT, spline, splineGivenEnds } from '../src/spline'
 
 test('constant', () => {
 	const c = Math.random() + 0.5
@@ -69,6 +69,22 @@ test('given ends', () => {
 	expect(s.compute(5)).toBeCloseTo(11, 15)
 	expect(d.compute(2)).toBeCloseTo(-0.5, 15)
 	expect(d.compute(5)).toBeCloseTo(2, 15)
+})
+
+test('linear spline interpolates and clamps by default', () => {
+	const s = linearSpline([0, 1, 2], [0, 10, 20])
+
+	expect(s.compute(-1)).toBeCloseTo(0, 15)
+	expect(s.compute(0.5)).toBeCloseTo(5, 15)
+	expect(s.compute(1.5)).toBeCloseTo(15, 15)
+	expect(s.compute(3)).toBeCloseTo(20, 15)
+})
+
+test('linear spline extrapolates when requested', () => {
+	const s = linearSpline([0, 1, 2], [0, 10, 20], { extrapolate: true })
+
+	expect(s.compute(-1)).toBeCloseTo(-10, 15)
+	expect(s.compute(3)).toBeCloseTo(30, 15)
 })
 
 test('cubic Hermite spline interpolates all control points', () => {
@@ -145,6 +161,16 @@ test('natural cubic spline reproduces a straight line exactly', () => {
 	expect(s.compute(0.9)).toBeCloseTo(0.9, 12)
 })
 
+test('natural cubic spline extrapolates when requested', () => {
+	const clamped = naturalCubicSpline([0, 1, 2], [0, 1, 0])
+	const extrapolated = naturalCubicSpline([0, 1, 2], [0, 1, 0], { extrapolate: true })
+
+	expect(clamped.compute(-1)).toBeCloseTo(0, 15)
+	expect(clamped.compute(3)).toBeCloseTo(0, 15)
+	expect(extrapolated.compute(-1)).toBeCloseTo(-1, 15)
+	expect(extrapolated.compute(3)).toBeCloseTo(-1, 15)
+})
+
 test('natural cubic LUT interpolates exact control-point samples', () => {
 	const lut = naturalCubicSplineLUT([0, 0.5, 1], [0, 1, 0], 65)
 
@@ -156,6 +182,8 @@ test('natural cubic LUT interpolates exact control-point samples', () => {
 test('invalid input', () => {
 	expect(() => spline(1, 1, [2])).toThrow('spline interval must have a finite non-zero width')
 	expect(() => spline(0, 1, [])).toThrow('spline requires at least one coefficient')
+	expect(() => linearSpline([0, 1], [0])).toThrow('spline x and y arrays must have the same length')
+	expect(() => linearSpline([0, 0, 1], [0, 0.5, 1])).toThrow('spline x coordinates must be strictly increasing')
 	expect(() => cubicHermiteSpline([0, 1], [0])).toThrow('spline x and y arrays must have the same length')
 	expect(() => cubicHermiteSpline([0, 0, 1], [0, 0.5, 1])).toThrow('spline x coordinates must be strictly increasing')
 	expect(() => cubicHermiteSplineLUT([0, 1], [0, 1], 1)).toThrow('spline LUT size must be at least two')

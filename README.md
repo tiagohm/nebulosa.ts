@@ -1153,12 +1153,14 @@ s.integral(constant)
 
 splineGivenEnds(x0, y0, slope0, x1, y1, slope1) // Cubic spline constrained by endpoint values and slopes
 
+const linear = linearSpline(x, y) // Piecewise linear interpolation
 const cubic = cubicHermiteSpline(x, y) // Shape-preserving cubic Hermite interpolation
 const akima = akimaSpline(x, y) // Akima interpolation
 const catmull = catmullRomSpline(x, y) // Catmull-Rom interpolation
-const natural = naturalCubicSpline(x, y) // Natural cubic spline interpolation
+const natural = naturalCubicSpline(x, y, extrapolate) // Natural cubic spline interpolation
 
-cubic.compute(xi) // Evaluate an interpolating spline
+linear.compute(xi) // Evaluate a piecewise spline
+
 cubicHermiteSplineLUT(x, y, size) // Dense lookup table sampled from a cubic Hermite spline
 akimaSplineLUT(x, y, size) // Dense lookup table sampled from an Akima spline
 catmullRomSplineLUT(x, y, size) // Dense lookup table sampled from a Catmull-Rom spline

@@ -14,12 +14,25 @@ export interface Spline {
 	readonly integral: (constant?: number) => Spline
 }
 
-export interface InterpolatingSpline {
+export interface PiecewiseSpline {
 	readonly x: Readonly<NumberArray>
 	readonly y: Readonly<NumberArray>
-	readonly slopes: Readonly<NumberArray>
-	// Computes the interpolated value on the piecewise cubic spline.
+	// Computes the interpolated value on the piecewise spline.
 	readonly compute: (value: number) => number
+	// Resets the cached segment lookup used by monotonic query streams.
+	readonly reset: () => void
+}
+
+export interface InterpolatingSpline extends PiecewiseSpline {
+	readonly slopes: Readonly<NumberArray>
+}
+
+interface NaturalCubicCoefficients {
+	readonly slopes: Float64Array
+	readonly a: Float64Array
+	readonly b: Float64Array
+	readonly c: Float64Array
+	readonly d: Float64Array
 }
 
 // Validates the spline interval and coefficient array, then returns the interval width.
@@ -76,6 +89,8 @@ export function splineGivenEnds(x0: number, y0: number, slope0: number, x1: numb
 }
 
 // Evaluates one cubic Hermite segment at normalized parameter t in [0,1].
+// Akima, Catmull-Rom, and monotone Hermite splines differ in how they choose slopes;
+// once endpoint slopes are known, they all use this same cubic segment basis.
 function cubicHermiteSegment(y0: number, m0: number, y1: number, m1: number, h: number, t: number) {
 	const t2 = t * t
 	const t3 = t2 * t
@@ -97,34 +112,109 @@ function interpolatingSplinePointCount(x: Readonly<NumberArray>, y: Readonly<Num
 	return n
 }
 
+// Finds the active segment using a cached index, adjacent checks, then binary search.
+function splineSegmentIndex(x: Readonly<NumberArray>, value: number, lastIndex: number) {
+	const lastSegment = x.length - 2
+	let i = lastIndex
+
+	if (value >= x[i] && value <= x[i + 1]) return i
+
+	if (i < lastSegment && value >= x[i + 1] && value <= x[i + 2]) return i + 1
+
+	if (i > 0 && value >= x[i - 1] && value <= x[i]) return i - 1
+
+	if (value <= x[0]) return 0
+	if (value >= x[lastSegment + 1]) return lastSegment
+
+	let low = 0
+	let high = lastSegment
+
+	while (low <= high) {
+		i = (low + high) >> 1
+
+		if (value < x[i]) high = i - 1
+		else if (value > x[i + 1]) low = i + 1
+		else return i
+	}
+
+	return lastSegment
+}
+
+// Creates a piecewise linear interpolating spline from ordered control points.
+export function linearSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, extrapolate: boolean = false): PiecewiseSpline {
+	const n = interpolatingSplinePointCount(x, y)
+	const last = n - 1
+	let lastIndex = 0
+
+	return {
+		x,
+		y,
+		compute: (value: number) => {
+			if (!extrapolate) {
+				if (value <= x[0]) return y[0]
+				if (value >= x[last]) return y[last]
+			}
+
+			// Use endpoint segments outside the sampled range
+			const i = splineSegmentIndex(x, value, lastIndex)
+			lastIndex = i
+
+			const x0 = x[i]
+			const width = x[i + 1] - x0
+			const t = (value - x0) / width
+
+			return y[i] + t * (y[i + 1] - y[i])
+		},
+		reset: () => {
+			lastIndex = 0
+		},
+	}
+}
+
 // Builds the shared evaluator used by the cubic Hermite-family interpolators.
-function interpolatingSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, slopes: Readonly<NumberArray>): InterpolatingSpline {
+function interpolatingSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, slopes: Readonly<NumberArray>, extrapolate: boolean = false): InterpolatingSpline {
 	const last = x.length - 1
+	let lastIndex = 0
 
 	return {
 		x,
 		y,
 		slopes,
 		compute: (value: number) => {
-			if (value <= x[0]) return y[0]
-			if (value >= x[last]) return y[last]
-
-			let low = 0
-			let high = last - 1
-
-			while (low <= high) {
-				const mid = (low + high) >> 1
-				if (value < x[mid]) high = mid - 1
-				else if (value > x[mid + 1]) low = mid + 1
-				else {
-					const width = x[mid + 1] - x[mid]
-					return cubicHermiteSegment(y[mid], slopes[mid], y[mid + 1], slopes[mid + 1], width, (value - x[mid]) / width)
-				}
+			if (!extrapolate) {
+				if (value <= x[0]) return y[0]
+				if (value >= x[last]) return y[last]
 			}
 
-			return y[last]
+			// Use endpoint segments outside the sampled range
+			const i = splineSegmentIndex(x, value, lastIndex)
+			lastIndex = i
+
+			const width = x[i + 1] - x[i]
+			return cubicHermiteSegment(y[i], slopes[i], y[i + 1], slopes[i + 1], width, (value - x[i]) / width)
+		},
+		reset: () => {
+			lastIndex = 0
 		},
 	}
+}
+
+// Samples a piecewise spline into a dense LUT over its full x-range.
+function piecewiseSplineLUT(spline: PiecewiseSpline, size: number) {
+	if (!Number.isFinite(size) || size < 2) throw new Error('spline LUT size must be at least two')
+
+	const output = new Float32Array(size)
+	const lower = spline.x[0]
+	const upper = spline.x.at(-1)!
+	const scale = (upper - lower) / (size - 1)
+
+	spline.reset()
+
+	for (let i = 0; i < size; i++) output[i] = spline.compute(lower + scale * i)
+
+	spline.reset()
+
+	return output
 }
 
 // Samples a piecewise cubic spline into a dense LUT over its full x-range.
@@ -270,24 +360,30 @@ function catmullRomSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 	return slopes
 }
 
-// Computes natural cubic spline slopes by solving the tridiagonal second-derivative system.
-function naturalCubicSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
+// Computes natural cubic spline coefficients by solving the tridiagonal second-derivative system.
+function naturalCubicCoefficients(x: Readonly<NumberArray>, y: Readonly<NumberArray>): NaturalCubicCoefficients {
 	const n = interpolatingSplinePointCount(x, y)
 	const slopes = new Float64Array(n)
 	const segmentCount = n - 1
 	const h = new Float64Array(segmentCount)
+	const delta = new Float64Array(segmentCount)
+	const a = new Float64Array(segmentCount)
+	const b = new Float64Array(segmentCount)
+	const c = new Float64Array(segmentCount)
 	const d = new Float64Array(segmentCount)
 
 	for (let i = 0; i < segmentCount; i++) {
 		const width = x[i + 1] - x[i]
 		h[i] = width
-		d[i] = (y[i + 1] - y[i]) / width
+		delta[i] = (y[i + 1] - y[i]) / width
 	}
 
 	if (n === 2) {
-		slopes[0] = d[0]
-		slopes[1] = d[0]
-		return slopes
+		slopes[0] = delta[0]
+		slopes[1] = delta[0]
+		a[0] = y[0]
+		b[0] = delta[0]
+		return { slopes, a, b, c, d }
 	}
 
 	const internal = segmentCount - 1
@@ -301,7 +397,7 @@ function naturalCubicSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) 
 		lower[i] = i === 0 ? 0 : h[i]
 		diagonal[i] = 2 * (h[i] + h[i + 1])
 		upper[i] = i === internal - 1 ? 0 : h[i + 1]
-		rhs[i] = 6 * (d[i + 1] - d[i])
+		rhs[i] = 6 * (delta[i + 1] - delta[i])
 	}
 
 	for (let i = 1; i < internal; i++) {
@@ -316,15 +412,23 @@ function naturalCubicSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) 
 		second[i + 1] = (rhs[i] - upper[i] * second[i + 2]) / diagonal[i]
 	}
 
-	slopes[0] = d[0] - (h[0] * second[1]) / 6
+	slopes[0] = delta[0] - (h[0] * second[1]) / 6
 
 	for (let i = 1; i < segmentCount; i++) {
-		slopes[i] = d[i - 1] + (h[i - 1] * (second[i - 1] + 2 * second[i])) / 6
+		slopes[i] = delta[i - 1] + (h[i - 1] * (second[i - 1] + 2 * second[i])) / 6
 	}
 
-	slopes[segmentCount] = d[internal] + (h[internal] * second[internal]) / 6
+	slopes[segmentCount] = delta[internal] + (h[internal] * second[internal]) / 6
 
-	return slopes
+	// Coefficients are stored as a + b * dx + c * dx^2 + d * dx^3 per segment.
+	for (let i = 0; i < segmentCount; i++) {
+		a[i] = y[i]
+		b[i] = delta[i] - (h[i] * (2 * second[i] + second[i + 1])) / 6
+		c[i] = second[i] / 2
+		d[i] = (second[i + 1] - second[i]) / (6 * h[i])
+	}
+
+	return { slopes, a, b, c, d }
 }
 
 // Builds a shape-preserving piecewise cubic Hermite spline from ordered control points.
@@ -346,9 +450,32 @@ export function catmullRomSpline(x: Readonly<NumberArray>, y: Readonly<NumberArr
 }
 
 // Builds a natural cubic spline from ordered control points.
-export function naturalCubicSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>): InterpolatingSpline {
-	const slopes = naturalCubicSlopes(x, y)
-	return interpolatingSpline(x, y, slopes)
+export function naturalCubicSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, extrapolate: boolean = false): InterpolatingSpline {
+	const coefficients = naturalCubicCoefficients(x, y)
+	const last = x.length - 1
+	let lastIndex = 0
+
+	return {
+		x,
+		y,
+		slopes: coefficients.slopes,
+		compute: (value: number) => {
+			if (!extrapolate) {
+				if (value <= x[0]) return y[0]
+				if (value >= x[last]) return y[last]
+			}
+
+			// Use endpoint segments outside the sampled range
+			const i = splineSegmentIndex(x, value, lastIndex)
+			lastIndex = i
+			const dx = value - x[i]
+
+			return coefficients.a[i] + dx * (coefficients.b[i] + dx * (coefficients.c[i] + dx * coefficients.d[i]))
+		},
+		reset: () => {
+			lastIndex = 0
+		},
+	}
 }
 
 // Samples a Hermite spline into a dense LUT over its full x-range.
@@ -372,5 +499,5 @@ export function catmullRomSplineLUT(x: Readonly<NumberArray>, y: Readonly<Number
 // Samples a natural cubic spline into a dense LUT over its full x-range.
 export function naturalCubicSplineLUT(x: Readonly<NumberArray>, y: Readonly<NumberArray>, size: number) {
 	const spline = naturalCubicSpline(x, y)
-	return interpolatingSplineLUT(spline.x, spline.y, spline.slopes, size)
+	return piecewiseSplineLUT(spline, size)
 }
