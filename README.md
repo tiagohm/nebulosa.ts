@@ -1158,6 +1158,7 @@ const cubic = cubicHermiteSpline(x, y) // Shape-preserving cubic Hermite interpo
 const akima = akimaSpline(x, y) // Akima interpolation
 const catmull = catmullRomSpline(x, y) // Catmull-Rom interpolation
 const natural = naturalCubicSpline(x, y, extrapolate) // Natural cubic spline interpolation
+const p = pchip(x, y) // PCHIP interpolator
 
 linear.compute(xi) // Evaluate a piecewise spline
 

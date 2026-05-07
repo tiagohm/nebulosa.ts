@@ -27,6 +27,33 @@ export interface InterpolatingSpline extends PiecewiseSpline {
 	readonly slopes: Readonly<NumberArray>
 }
 
+export interface SplineOptions {
+	readonly extrapolate?: boolean
+}
+
+export type PchipOutOfRange = 'clamp' | 'extrapolate' | 'throw'
+
+export interface PchipOptions extends SplineOptions {
+	readonly outOfRange?: PchipOutOfRange
+}
+
+// Piecewise Cubic Hermite Interpolating Polynomial
+export interface PchipSpline extends InterpolatingSpline {
+	readonly knots: Readonly<NumberArray>
+	readonly values: Readonly<NumberArray>
+	readonly derivatives: Readonly<NumberArray>
+	readonly widths: Readonly<NumberArray>
+	readonly secants: Readonly<NumberArray>
+}
+
+interface PchipData {
+	readonly knots: Float64Array
+	readonly values: Float64Array
+	readonly derivatives: Float64Array
+	readonly widths: Float64Array
+	readonly secants: Float64Array
+}
+
 interface NaturalCubicCoefficients {
 	readonly slopes: Float64Array
 	readonly a: Float64Array
@@ -97,6 +124,22 @@ function cubicHermiteSegment(y0: number, m0: number, y1: number, m1: number, h: 
 	return (2 * t3 - 3 * t2 + 1) * y0 + (t3 - 2 * t2 + t) * h * m0 + (-2 * t3 + 3 * t2) * y1 + (t3 - t2) * h * m1
 }
 
+function pchipOutOfRange(options?: PchipOptions | boolean) {
+	if (typeof options === 'boolean') return options ? 'extrapolate' : 'clamp'
+
+	const outOfRange = options?.outOfRange ?? (options?.extrapolate ? 'extrapolate' : 'clamp')
+
+	if (outOfRange !== 'clamp' && outOfRange !== 'extrapolate' && outOfRange !== 'throw') {
+		throw new Error('pchip outOfRange must be clamp, extrapolate, or throw')
+	}
+
+	return outOfRange
+}
+
+function splineExtrapolate(options: SplineOptions | boolean) {
+	return typeof options === 'boolean' ? options : options.extrapolate === true
+}
+
 // Validates point arrays for a piecewise interpolating spline and returns the point count.
 function interpolatingSplinePointCount(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 	const n = x.length
@@ -141,9 +184,10 @@ function splineSegmentIndex(x: Readonly<NumberArray>, value: number, lastIndex: 
 }
 
 // Creates a piecewise linear interpolating spline from ordered control points.
-export function linearSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, extrapolate: boolean = false): PiecewiseSpline {
+export function linearSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, options: SplineOptions | boolean = false): PiecewiseSpline {
 	const n = interpolatingSplinePointCount(x, y)
 	const last = n - 1
+	const extrapolate = splineExtrapolate(options)
 	let lastIndex = 0
 
 	return {
@@ -172,8 +216,9 @@ export function linearSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>,
 }
 
 // Builds the shared evaluator used by the cubic Hermite-family interpolators.
-function interpolatingSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, slopes: Readonly<NumberArray>, extrapolate: boolean = false): InterpolatingSpline {
+function interpolatingSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, slopes: Readonly<NumberArray>, options: SplineOptions | boolean = false): InterpolatingSpline {
 	const last = x.length - 1
+	const extrapolate = splineExtrapolate(options)
 	let lastIndex = 0
 
 	return {
@@ -250,55 +295,87 @@ function interpolatingSplineLUT(x: Readonly<NumberArray>, y: Readonly<NumberArra
 	return output
 }
 
+// Applies the one-sided PCHIP endpoint limiter.
+function pchipEndpointDerivative(h0: number, h1: number, d0: number, d1: number) {
+	let derivative = ((2 * h0 + h1) * d0 - h0 * d1) / (h0 + h1)
+
+	if (derivative * d0 <= 0) derivative = 0
+	else if (d0 * d1 < 0 && Math.abs(derivative) > Math.abs(3 * d0)) derivative = 3 * d0
+
+	return derivative
+}
+
+// Computes PCHIP nodal derivatives, zeroing extrema and flat joins.
+function pchipDerivatives(widths: Readonly<NumberArray>, secants: Readonly<NumberArray>, derivatives: NumberArray) {
+	const segmentCount = secants.length
+
+	if (segmentCount === 1) {
+		derivatives[0] = secants[0]
+		derivatives[1] = secants[0]
+		return
+	}
+
+	derivatives[0] = pchipEndpointDerivative(widths[0], widths[1], secants[0], secants[1])
+
+	for (let i = 1; i < segmentCount; i++) {
+		const prev = secants[i - 1]
+		const next = secants[i]
+
+		if (prev === 0 || next === 0 || prev * next < 0) {
+			derivatives[i] = 0
+			continue
+		}
+
+		const w0 = 2 * widths[i] + widths[i - 1]
+		const w1 = widths[i] + 2 * widths[i - 1]
+		derivatives[i] = (w0 + w1) / (w0 / prev + w1 / next)
+	}
+
+	const last = segmentCount
+	derivatives[last] = pchipEndpointDerivative(widths[last - 1], widths[last - 2], secants[last - 1], secants[last - 2])
+}
+
+function pchipData(x: Readonly<NumberArray>, y: Readonly<NumberArray>): PchipData {
+	const n = interpolatingSplinePointCount(x, y)
+	const segmentCount = n - 1
+	const knots = new Float64Array(n)
+	const values = new Float64Array(n)
+	const widths = new Float64Array(segmentCount)
+	const secants = new Float64Array(segmentCount)
+	const derivatives = new Float64Array(n)
+
+	for (let i = 0; i < n; i++) {
+		knots[i] = x[i]
+		values[i] = y[i]
+	}
+
+	for (let i = 0; i < segmentCount; i++) {
+		const width = knots[i + 1] - knots[i]
+		widths[i] = width
+		secants[i] = (values[i + 1] - values[i]) / width
+	}
+
+	pchipDerivatives(widths, secants, derivatives)
+
+	return { knots, values, derivatives, widths, secants }
+}
+
 // Computes shape-preserving slopes using the Fritsch-Carlson monotone cubic Hermite recipe.
 function cubicHermiteSlopes(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 	const n = interpolatingSplinePointCount(x, y)
 
 	const segmentCount = n - 1
-	const h = new Float64Array(segmentCount)
-	const d = new Float64Array(segmentCount)
+	const widths = new Float64Array(segmentCount)
+	const secants = new Float64Array(segmentCount)
 	const slopes = new Float64Array(n)
 
 	for (let i = 0; i < segmentCount; i++) {
 		const width = x[i + 1] - x[i]
-		h[i] = width
-		d[i] = (y[i + 1] - y[i]) / width
+		widths[i] = width
+		secants[i] = (y[i + 1] - y[i]) / width
 	}
 
-	if (n === 2) {
-		slopes[0] = d[0]
-		slopes[1] = d[0]
-		return slopes
-	}
-
-	let slope0 = ((2 * h[0] + h[1]) * d[0] - h[0] * d[1]) / (h[0] + h[1])
-
-	if (slope0 * d[0] <= 0) slope0 = 0
-	else if (d[0] * d[1] < 0 && Math.abs(slope0) > Math.abs(3 * d[0])) slope0 = 3 * d[0]
-
-	slopes[0] = slope0
-
-	for (let i = 1; i < segmentCount; i++) {
-		const prev = d[i - 1]
-		const next = d[i]
-
-		if (prev === 0 || next === 0 || prev * next < 0) {
-			slopes[i] = 0
-			continue
-		}
-
-		const w0 = 2 * h[i] + h[i - 1]
-		const w1 = h[i] + 2 * h[i - 1]
-		slopes[i] = (w0 + w1) / (w0 / prev + w1 / next)
-	}
-
-	const last = segmentCount
-	let slopeN = ((2 * h[last - 1] + h[last - 2]) * d[last - 1] - h[last - 1] * d[last - 2]) / (h[last - 1] + h[last - 2])
-
-	if (slopeN * d[last - 1] <= 0) slopeN = 0
-	else if (d[last - 1] * d[last - 2] < 0 && Math.abs(slopeN) > Math.abs(3 * d[last - 1])) slopeN = 3 * d[last - 1]
-
-	slopes[last] = slopeN
+	pchipDerivatives(widths, secants, slopes)
 
 	return slopes
 }
@@ -437,6 +514,44 @@ export function cubicHermiteSpline(x: Readonly<NumberArray>, y: Readonly<NumberA
 	return interpolatingSpline(x, y, slopes)
 }
 
+// Builds a PCHIP interpolator. Values outside the sampled range clamp by default.
+export function pchip(x: Readonly<NumberArray>, y: Readonly<NumberArray>, options?: PchipOptions | boolean): PchipSpline {
+	const outOfRange = pchipOutOfRange(options)
+	const { knots, values, derivatives, widths, secants } = pchipData(x, y)
+	const last = knots.length - 1
+	let lastIndex = 0
+
+	return {
+		x: knots,
+		y: values,
+		slopes: derivatives,
+		knots,
+		values,
+		derivatives,
+		widths,
+		secants,
+		compute: (value: number) => {
+			if (value <= knots[0]) {
+				if (value === knots[0] || outOfRange === 'clamp') return values[0]
+				if (outOfRange === 'throw') throw new Error('pchip value is outside interpolation range')
+			}
+
+			if (value >= knots[last]) {
+				if (value === knots[last] || outOfRange === 'clamp') return values[last]
+				if (outOfRange === 'throw') throw new Error('pchip value is outside interpolation range')
+			}
+
+			const i = splineSegmentIndex(knots, value, lastIndex)
+			lastIndex = i
+
+			return cubicHermiteSegment(values[i], derivatives[i], values[i + 1], derivatives[i + 1], widths[i], (value - knots[i]) / widths[i])
+		},
+		reset: () => {
+			lastIndex = 0
+		},
+	}
+}
+
 // Builds an Akima piecewise cubic spline from ordered control points.
 export function akimaSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>): InterpolatingSpline {
 	const slopes = akimaSlopes(x, y)
@@ -450,9 +565,10 @@ export function catmullRomSpline(x: Readonly<NumberArray>, y: Readonly<NumberArr
 }
 
 // Builds a natural cubic spline from ordered control points.
-export function naturalCubicSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, extrapolate: boolean = false): InterpolatingSpline {
+export function naturalCubicSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, options: SplineOptions | boolean = false): InterpolatingSpline {
 	const coefficients = naturalCubicCoefficients(x, y)
 	const last = x.length - 1
+	const extrapolate = splineExtrapolate(options)
 	let lastIndex = 0
 
 	return {
