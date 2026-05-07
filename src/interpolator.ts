@@ -2,12 +2,14 @@ import { normalizeAngle, type Angle } from './angle'
 import { PI, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { chebyshevLeastSquares, type ChebyshevRegression } from './regression'
-import { linearSpline, naturalCubicSpline } from './spline'
+import { akimaSpline, catmullRomSpline, cubicHermiteSpline, linearSpline, naturalCubicSpline, pchip } from './spline'
 import { type Time, Timescale, timeConvert } from './time'
 
 export type InterpolationStrategy = 'linear' | 'spline' | 'chebyshev'
 
 export type InterpolationOutOfRange = 'clamp' | 'extrapolate' | 'throw'
+
+export type SplineInterpolationType = 'naturalCubic' | 'cubicHermite' | 'pchip' | 'akima' | 'catmullRom'
 
 export interface EphemerisPoint extends Readonly<EquatorialCoordinate> {
 	readonly time: Time
@@ -69,15 +71,16 @@ interface ScalarInterpolator {
 }
 
 const DEFAULT_OUT_OF_RANGE: InterpolationOutOfRange = 'clamp'
+const DEFAULT_SPLINE_INTERPOLATION: SplineInterpolationType = 'naturalCubic'
 
 // Creates a linear ephemeris interpolator for apparent/topocentric RA and Dec samples.
 export function linearInterpolator(points: readonly EphemerisPoint[], options?: InterpolationOptions): EphemerisInterpolator {
 	return new LinearEphemerisInterpolator(points, options)
 }
 
-// Creates a natural cubic spline ephemeris interpolator for apparent/topocentric RA and Dec samples.
-export function splineInterpolator(points: readonly EphemerisPoint[], options?: InterpolationOptions): EphemerisInterpolator {
-	return new SplineEphemerisInterpolator(points, options)
+// Creates a spline ephemeris interpolator for apparent/topocentric RA and Dec samples.
+export function splineInterpolator(points: readonly EphemerisPoint[], type?: SplineInterpolationType, options?: InterpolationOptions): EphemerisInterpolator {
+	return new SplineEphemerisInterpolator(points, type, options)
 }
 
 // Creates a Chebyshev ephemeris interpolator over the bounded sample interval.
@@ -196,19 +199,21 @@ export class LinearEphemerisInterpolator extends BaseEphemerisInterpolator {
 	}
 }
 
-// Natural cubic spline interpolation with precomputed per-segment coefficients.
+// Spline interpolation with selectable cubic segment slope algorithms.
 export class SplineEphemerisInterpolator extends BaseEphemerisInterpolator {
 	readonly strategy = 'spline'
 	protected readonly minimumSampleCount = 3
+	readonly #type: SplineInterpolationType
 
-	constructor(points: readonly EphemerisPoint[], options?: InterpolationOptions) {
+	constructor(points: readonly EphemerisPoint[], type: SplineInterpolationType = 'naturalCubic', options?: InterpolationOptions) {
 		super(options)
+		this.#type = type
 		this.update(points)
 	}
 
 	protected createScalarInterpolators(times: Float64Array, rightAscension: Float64Array, declination: Float64Array) {
-		this.raInterpolator = naturalCubicSpline(times, rightAscension, true)
-		this.decInterpolator = naturalCubicSpline(times, declination, true)
+		this.raInterpolator = splineScalarInterpolator(this.#type, times, rightAscension)
+		this.decInterpolator = splineScalarInterpolator(this.#type, times, declination)
 	}
 }
 
@@ -265,6 +270,23 @@ class ChebyshevPolynomialFit implements ScalarInterpolator {
 	}
 
 	reset() {}
+}
+
+function splineScalarInterpolator(splineInterpolation: SplineInterpolationType, times: Float64Array, values: Float64Array): ScalarInterpolator {
+	switch (splineInterpolation) {
+		case 'naturalCubic':
+			return naturalCubicSpline(times, values, true)
+		case 'cubicHermite':
+			return cubicHermiteSpline(times, values, true)
+		case 'pchip':
+			return pchip(times, values, true)
+		case 'akima':
+			return akimaSpline(times, values, true)
+		case 'catmullRom':
+			return catmullRomSpline(times, values, true)
+		default:
+			throw new RangeError('spline interpolation must be naturalCubic, cubicHermite, pchip, akima, or catmullRom')
+	}
 }
 
 function prepareSamples(points: readonly EphemerisPoint[], minimumSampleCount: number, allowDuplicateTimes: boolean): PreparedEphemerisSamples {

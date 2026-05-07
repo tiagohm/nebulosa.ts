@@ -509,9 +509,9 @@ function naturalCubicCoefficients(x: Readonly<NumberArray>, y: Readonly<NumberAr
 }
 
 // Builds a shape-preserving piecewise cubic Hermite spline from ordered control points.
-export function cubicHermiteSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>): InterpolatingSpline {
+export function cubicHermiteSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, options: SplineOptions | boolean = false): InterpolatingSpline {
 	const slopes = cubicHermiteSlopes(x, y)
-	return interpolatingSpline(x, y, slopes)
+	return interpolatingSpline(x, y, slopes, options)
 }
 
 // Builds a PCHIP interpolator. Values outside the sampled range clamp by default.
@@ -553,15 +553,15 @@ export function pchip(x: Readonly<NumberArray>, y: Readonly<NumberArray>, option
 }
 
 // Builds an Akima piecewise cubic spline from ordered control points.
-export function akimaSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>): InterpolatingSpline {
+export function akimaSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, options: SplineOptions | boolean = false): InterpolatingSpline {
 	const slopes = akimaSlopes(x, y)
-	return interpolatingSpline(x, y, slopes)
+	return interpolatingSpline(x, y, slopes, options)
 }
 
 // Builds a Catmull-Rom piecewise cubic spline from ordered control points.
-export function catmullRomSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>): InterpolatingSpline {
+export function catmullRomSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>, options: SplineOptions | boolean = false): InterpolatingSpline {
 	const slopes = catmullRomSlopes(x, y)
-	return interpolatingSpline(x, y, slopes)
+	return interpolatingSpline(x, y, slopes, options)
 }
 
 // Builds a natural cubic spline from ordered control points.

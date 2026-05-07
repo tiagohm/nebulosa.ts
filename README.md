@@ -745,7 +745,7 @@ client.sendSwitch(vector)
 
 ```ts
 const interpolator = linearInterpolator(points, options)
-const interpolator = splineInterpolator(points, options)
+const interpolator = splineInterpolator(points, 'pchip', options)
 const interpolator = chebyshevInterpolator(points, degree, options)
 
 const [ra, dec] = interpolator.compute(time)

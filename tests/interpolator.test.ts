@@ -114,7 +114,7 @@ test('natural cubic spline keeps first derivative continuous at knots', () => {
 })
 
 test('natural cubic spline has natural endpoint curvature', () => {
-	const interpolator = splineInterpolator([point(0, 1, 0), point(1, 1.4, 0.3), point(2, 1.2, 0.1), point(3, 1.8, 0.5)], { outOfRange: 'extrapolate' })
+	const interpolator = splineInterpolator([point(0, 1, 0), point(1, 1.4, 0.3), point(2, 1.2, 0.1), point(3, 1.8, 0.5)], 'naturalCubic', { outOfRange: 'extrapolate' })
 	const epsilon = 1e-4
 	const fm = interpolator.compute(jd(-epsilon))[0]
 	const f0 = interpolator.compute(jd(0))[0]
@@ -122,6 +122,20 @@ test('natural cubic spline has natural endpoint curvature', () => {
 	const second = (fm - 2 * f0 + fp) / (epsilon * epsilon)
 
 	expect(Math.abs(second)).toBeLessThan(1e-3)
+})
+
+describe('spline interpolator supports all spline algorithms', () => {
+	const points = [point(0, 0, 0), point(1, 0.5, 1), point(2, 1, 2), point(3, 1.5, 3)]
+
+	for (const type of ['naturalCubic', 'cubicHermite', 'pchip', 'akima', 'catmullRom'] as const) {
+		test(type, () => {
+			const interpolator = splineInterpolator(points, type, { outOfRange: 'extrapolate' })
+
+			expect(interpolator.compute(jd(1))).toEqual([0.5, 1])
+			expect(interpolator.compute(jd(-1))[1]).toBeCloseTo(-1, 12)
+			expect(interpolator.compute(jd(4))[1]).toBeCloseTo(4, 12)
+		})
+	}
 })
 
 test('chebyshev approximates a smooth bounded arc', () => {
@@ -282,4 +296,5 @@ test('rejects invalid input', () => {
 	expect(() => linearInterpolator([point(0, Number.NaN, 0), point(1, 2, 1)])).toThrow('ephemeris RA must be finite')
 	expect(() => linearInterpolator([point(0, 1, Number.POSITIVE_INFINITY), point(1, 2, 1)])).toThrow('ephemeris Dec must be finite')
 	expect(() => linearInterpolator([{ time: time(Number.POSITIVE_INFINITY), rightAscension: 1, declination: 0 }, point(1, 2, 1)])).toThrow('ephemeris time must be finite')
+	expect(() => splineInterpolator([point(0, 1, 0), point(1, 2, 1), point(2, 3, 2)], 'invalid' as never)).toThrow('spline interpolation must be naturalCubic, cubicHermite, pchip, akima, or catmullRom')
 })
