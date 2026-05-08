@@ -3,7 +3,7 @@ import { Bitpix } from '../src/fits'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../src/image.generator'
 import type { Image } from '../src/image.types'
 import { mulberry32 } from '../src/random'
-import { detectStars, excludeStarsFitWithinRegion, mergeVeryCloseStars, StarList } from '../src/star.detector'
+import { detectStars, excludeStarsFitWithinRegion, measureStarPhotometry, mergeVeryCloseStars, StarList } from '../src/star.detector'
 import { type PlotStarOptions, plotStar } from '../src/star.generator'
 import { medianOf, NumberComparator } from '../src/util'
 import { downloadPerTag } from './download'
@@ -95,6 +95,29 @@ test('merge stars & exclusion', () => {
 	expect(array.map((e) => e.h)).toEqual([900])
 	expect(array.map((e) => e.x)).toEqual([799])
 	expect(array.map((e) => e.y)).toEqual([803])
+})
+
+test('measure star photometry from image aperture', () => {
+	const width = 32
+	const height = 32
+	const raw = new Float32Array(width * height)
+	raw.fill(0.1)
+
+	const x = 16
+	const y = 16
+	raw[y * width + x] = 0.6
+	raw[y * width + x - 1] = 0.3
+	raw[y * width + x + 1] = 0.3
+	raw[(y - 1) * width + x] = 0.3
+	raw[(y + 1) * width + x] = 0.3
+
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+	const [flux, snr, hfd] = measureStarPhotometry(image, x, y, 1)
+
+	expect(flux).toBeCloseTo(1.3, 6)
+	expect(snr).toBeCloseTo(Math.sqrt(1.3), 6)
+	expect(hfd).toBeCloseTo(1.2307692307692308, 6)
+	expect(measureStarPhotometry(image, x, y, 0)).toEqual([0, 0, 0])
 })
 
 describe('detect stars I', () => {

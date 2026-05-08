@@ -16,12 +16,11 @@ export interface DetectStarOptions {
 }
 
 type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumSq, width
-type StarPhotometry = readonly [number, number, number] // flux, snr, hfd
+export type StarPhotometry = readonly [number, number, number] // flux, snr, hfd
 
-const STAR_SIGNAL_RADIUS_SQ = 16
-const STAR_BACKGROUND_INNER_RADIUS_SQ = 25
-const STAR_BACKGROUND_OUTER_RADIUS_SQ = 49
-const STAR_PHOTOMETRY_RADIUS = 7
+const STAR_SIGNAL_RADIUS = 4
+const STAR_BACKGROUND_INNER_RADIUS = 5
+const STAR_BACKGROUND_OUTER_RADIUS = 7
 const STAR_CONVOLVED_MARGIN = 4
 const STAR_MIN_HFD = 1
 const STAR_SCORE_GAP_RATIO = 4
@@ -138,7 +137,7 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 			if (h < 0.1) continue
 
 			// Validate each candidate against the original image so ranking uses measured photometry instead of only convolution response.
-			const [flux, snr, hfd] = measureStarPhotometry(original, width, height, stride, x, y)
+			const [flux, snr, hfd] = measureStarPhotometryRaw(original, width, height, stride, x, y, STAR_SIGNAL_RADIUS, STAR_BACKGROUND_INNER_RADIUS, STAR_BACKGROUND_OUTER_RADIUS, STAR_CONVOLVED_MARGIN)
 			if (flux <= 0 || snr < minSNR || hfd < STAR_MIN_HFD) continue
 
 			// Ranks detections by measured signal so real stars survive capacity limits better than noise artifacts.
@@ -195,18 +194,32 @@ function trimStarsByScoreGap(stars: StarList) {
 	}
 }
 
+// Computes aperture flux, SNR and HFD for a star centered on an image coordinate.
+export function measureStarPhotometry(image: Image, x: number, y: number, radius: number): StarPhotometry {
+	image = grayscale(image)
+
+	const { raw, metadata } = image
+	const { width, height, stride } = metadata
+	return measureStarPhotometryRaw(raw, width, height, stride, x, y, radius, radius + 1, radius + 3, 0)
+}
+
 // Computes aperture flux, SNR and HFD for a detected star.
-function measureStarPhotometry(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number): StarPhotometry {
-	// Keep photometry inside the PSF-convolved support used during detection.
-	const xMin = STAR_CONVOLVED_MARGIN
-	const yMin = STAR_CONVOLVED_MARGIN
-	const xMax = width - STAR_CONVOLVED_MARGIN - 1
-	const yMax = height - STAR_CONVOLVED_MARGIN - 1
+function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number, signalRadius: number, backgroundInnerRadius: number, backgroundOuterRadius: number, margin: number): StarPhotometry {
+	if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(signalRadius) || signalRadius <= 0) return [0, 0, 0]
+	if (!Number.isFinite(backgroundInnerRadius) || !Number.isFinite(backgroundOuterRadius) || backgroundInnerRadius <= signalRadius || backgroundOuterRadius < backgroundInnerRadius) return [0, 0, 0]
+
+	const xMin = margin
+	const yMin = margin
+	const xMax = width - margin - 1
+	const yMax = height - margin - 1
 	if (x < xMin || x > xMax || y < yMin || y > yMax) return [0, 0, 0]
-	const x0 = Math.max(xMin, x - STAR_PHOTOMETRY_RADIUS)
-	const y0 = Math.max(yMin, y - STAR_PHOTOMETRY_RADIUS)
-	const x1 = Math.min(xMax, x + STAR_PHOTOMETRY_RADIUS)
-	const y1 = Math.min(yMax, y + STAR_PHOTOMETRY_RADIUS)
+	const x0 = Math.max(xMin, Math.ceil(x - backgroundOuterRadius))
+	const y0 = Math.max(yMin, Math.ceil(y - backgroundOuterRadius))
+	const x1 = Math.min(xMax, Math.floor(x + backgroundOuterRadius))
+	const y1 = Math.min(yMax, Math.floor(y + backgroundOuterRadius))
+	const signalRadiusSq = signalRadius * signalRadius
+	const backgroundInnerRadiusSq = backgroundInnerRadius * backgroundInnerRadius
+	const backgroundOuterRadiusSq = backgroundOuterRadius * backgroundOuterRadius
 	let backgroundSum = 0
 	let backgroundSumSq = 0
 	let backgroundCount = 0
@@ -219,7 +232,7 @@ function measureStarPhotometry(raw: Image['raw'], width: number, height: number,
 		for (let px = x0; px <= x1; px++) {
 			const dx = px - x
 			const d2 = dx * dx + dy2
-			if (d2 < STAR_BACKGROUND_INNER_RADIUS_SQ || d2 > STAR_BACKGROUND_OUTER_RADIUS_SQ) continue
+			if (d2 < backgroundInnerRadiusSq || d2 > backgroundOuterRadiusSq) continue
 			const v = raw[row + px]
 			backgroundSum += v
 			backgroundSumSq += v * v
@@ -243,7 +256,7 @@ function measureStarPhotometry(raw: Image['raw'], width: number, height: number,
 		for (let px = x0; px <= x1; px++) {
 			const dx = px - x
 			const d2 = dx * dx + dy2
-			if (d2 > STAR_SIGNAL_RADIUS_SQ) continue
+			if (d2 > signalRadiusSq) continue
 			aperturePixels++
 			const signal = raw[row + px] - backgroundMean
 			if (signal <= 0) continue
