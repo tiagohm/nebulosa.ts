@@ -19,14 +19,7 @@ function sampleTimes(spacingDays: number): readonly [Time, Time, Time] {
 
 function sampleCircular(spacingDays: number = 0.05, radius: number = 1) {
 	const [t1, t2, t3] = sampleTimes(spacingDays)
-	return {
-		r1: circularPosition(-spacingDays, radius),
-		r2: circularPosition(0, radius),
-		r3: circularPosition(spacingDays, radius),
-		t1,
-		t2,
-		t3,
-	}
+	return { r1: circularPosition(-spacingDays, radius), r2: circularPosition(0, radius), r3: circularPosition(spacingDays, radius), t1, t2, t3 }
 }
 
 function expectWarnings(warnings: readonly HerrickGibbsWarning[], ...expected: HerrickGibbsWarning[]) {
@@ -56,11 +49,11 @@ test('keeps AU/day unit consistency with a circular heliocentric sample', () => 
 
 test('reports non-increasing time order and can throw on invalid input', () => {
 	const { r1, r2, r3, t1, t2, t3 } = sampleCircular()
-	const cases: readonly [Time, Time, Time][] = [
+	const cases = [
 		[t2, t1, t3],
 		[t1, t3, t2],
 		[t1, t1, t3],
-	]
+	] as const
 
 	for (const [a, b, c] of cases) {
 		const result = herrickGibbs(r1, r2, r3, a, b, c, MU)
@@ -74,11 +67,11 @@ test('reports non-increasing time order and can throw on invalid input', () => {
 
 test('reports invalid position norms for zero, NaN, and infinite vectors', () => {
 	const { r1, r2, r3, t1, t2, t3 } = sampleCircular()
-	const cases: readonly [Vec3, Vec3, Vec3][] = [
+	const cases = [
 		[[0, 0, 0], r2, r3],
 		[[Number.NaN, 0, 0], r2, r3],
 		[r1, [Number.POSITIVE_INFINITY, 0, 0], r3],
-	]
+	] as const
 
 	for (const [a, b, c] of cases) {
 		const result = herrickGibbs(a, b, c, t1, t2, t3, MU)
