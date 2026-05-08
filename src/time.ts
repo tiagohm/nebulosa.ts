@@ -266,8 +266,14 @@ export function timeToFractionOfYear(time: Time) {
 }
 
 // Clones a nearby sample instant while preserving custom Earth-orientation providers.
-export function timeShift(time: Time, fraction: number): Time {
-	return { day: time.day, fraction: time.fraction + fraction, scale: time.scale, polarMotion: time.polarMotion, dut1: time.dut1, tdbMinusTt: time.tdbMinusTt, ut1MinusTai: time.ut1MinusTai, location: time.location }
+export function timeShift(time: Time, fraction: number, normalize: boolean = true): Time {
+	const normalizedTime = normalize ? timeNormalize(time.day, time.fraction + fraction, undefined, time.scale) : { day: time.day, fraction: time.fraction + fraction, scale: time.scale }
+	normalizedTime.polarMotion = time.polarMotion
+	normalizedTime.dut1 = time.dut1
+	normalizedTime.tdbMinusTt = time.tdbMinusTt
+	normalizedTime.ut1MinusTai = time.ut1MinusTai
+	normalizedTime.location = time.location
+	return normalizedTime
 }
 
 // Caches the timescale for target based on source.
