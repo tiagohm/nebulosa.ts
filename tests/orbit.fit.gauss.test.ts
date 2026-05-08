@@ -6,11 +6,12 @@ import type { EquatorialCoordinate } from '../src/coordinate'
 import { matIdentity } from '../src/mat3'
 import { gauss, type GaussObservation } from '../src/orbit.fit.gauss'
 import { type Time, Timescale, timeShift, timeYMDHMS } from '../src/time'
-import { type MutVec3, type Vec3, vecDistance } from '../src/vec3'
+import { type MutVec3, type Vec3, vecDistance, vecLength } from '../src/vec3'
 
 const EPOCH = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.TT)
 const MU = GM_SUN_PITJEVA_2005
-const ORBIT = KeplerOrbit.trueAnomaly(1.9, 0.18, 0.12, 0.8, 1.1, 0.35, EPOCH, MU, matIdentity())
+const IDENTITY_ROTATION = matIdentity()
+const ORBIT = KeplerOrbit.trueAnomaly(1.9, 0.18, 0.12, 0.8, 1.1, 0.35, EPOCH, MU, IDENTITY_ROTATION)
 
 function observerPositionAt(offsetDays: number): MutVec3 {
 	const angle = (TAU * offsetDays) / 365.25 + 0.4
@@ -36,6 +37,25 @@ function observations(spacingDays: number = 4): readonly [GaussObservation, Gaus
 	return [observationAt(-spacingDays), observationAt(0), observationAt(spacingDays)]
 }
 
+function circularObservations(inclination: number, anomaly: number, observerPhase: number = 0, observerZ: number = 0) {
+	const orbit = KeplerOrbit.trueAnomaly(1.1, 0, inclination, 0.2, 0.5, anomaly, EPOCH, MU, IDENTITY_ROTATION)
+	const observer = (offsetDays: number): MutVec3 => {
+		const angle = (TAU * offsetDays) / 365.25 + observerPhase
+		return [Math.cos(angle), Math.sin(angle), observerZ * Math.sin(2 * angle)]
+	}
+	const observation = (offsetDays: number): GaussObservation => {
+		const time = timeShift(EPOCH, offsetDays)
+		const site = observer(offsetDays)
+		const model = modelRaDec(orbit.at(time)[0], site)
+		return { time, rightAscension: model.rightAscension, declination: model.declination, observer: site }
+	}
+
+	return {
+		orbit,
+		observations: [observation(-1), observation(0), observation(1)] as const,
+	}
+}
+
 function expectFiniteState(result: ReturnType<typeof gauss>) {
 	expect(result.state.r.every(Number.isFinite)).toBeTrue()
 	expect(result.state.v.every(Number.isFinite)).toBeTrue()
@@ -56,9 +76,21 @@ test('returns a plausible initial state for a synthetic two-body orbit', () => {
 	expect(result.ranges.rho2).toBeGreaterThan(0)
 	expect(result.ranges.rho3).toBeGreaterThan(0)
 	expect(result.diagnostics.candidateRoots.length).toBeGreaterThan(1)
-	const lastCandidateRoot = result.diagnostics.candidateRoots.at(-1)
-	if (lastCandidateRoot === undefined) throw new Error('expected at least one candidate root')
-	expect(result.diagnostics.selectedRoot).toBe(lastCandidateRoot)
+	expect(Math.abs(result.diagnostics.selectedRoot - vecLength(truePosition))).toBeLessThan(3e-4)
+})
+
+test('does not select the far branch for multiple-root circular arcs', () => {
+	const cases = [circularObservations(0.1, 0.2), circularObservations(0.7, 0.8, 0.4, 0.04)]
+
+	for (const entry of cases) {
+		const [obs1, obs2, obs3] = entry.observations
+		const result = gauss(obs1, obs2, obs3, { mu: MU })
+		const [truePosition] = entry.orbit.at(EPOCH)
+
+		expect(result.diagnostics.candidateRoots.length).toBeGreaterThan(1)
+		expect(Math.abs(result.diagnostics.selectedRoot - vecLength(truePosition))).toBeLessThan(2e-4)
+		expect(vecDistance(result.state.r, truePosition)).toBeLessThan(2e-4)
+	}
 })
 
 test('rejects degenerate line-of-sight geometry', () => {

@@ -515,8 +515,16 @@ function buildCandidate(root: number, D: Determinants, A: number, B: number, R1:
 
 	const rangeMean = (rho1 + rho2 + rho3) / 3
 	const rangeSpread = Math.max(Math.abs(rho1 - rangeMean), Math.abs(rho2 - rangeMean), Math.abs(rho3 - rangeMean)) / Math.max(config.minPositiveRho, rangeMean)
-	const positionTurn = vecCrossLength(r1, r2) + vecCrossLength(r2, r3)
-	const score = warnings.length * 100 + rootMismatch * 100 + rangeSpread + 1 / Math.max(positionTurn, config.tolerance) + root * 1e-12
+	const lagrangeVelocity = centralVelocityFromFG(r1, r3, f1, f3, denominator)
+	const eccentricity = stateEccentricity(r2, lagrangeVelocity, config.mu)
+
+	if (!Number.isFinite(eccentricity)) {
+		return undefined
+	}
+
+	// Multiple positive Gauss roots can all reproject exactly. Prefer the
+	// smoother two-body branch instead of rewarding the largest position arc.
+	const score = warnings.length * 100 + rootMismatch * 100 + rangeSpread + 10 * eccentricity + root * 1e-9
 
 	return {
 		root,
@@ -533,6 +541,26 @@ function buildCandidate(root: number, D: Determinants, A: number, B: number, R1:
 
 function reconstructPosition(observer: Vec3, rho: number, rhoHat: Vec3): MutVec3 {
 	return [observer[0] + rho * rhoHat[0], observer[1] + rho * rhoHat[1], observer[2] + rho * rhoHat[2]]
+}
+
+function centralVelocityFromFG(r1: Vec3, r3: Vec3, f1: number, f3: number, denominator: number): MutVec3 {
+	return [(f1 * r3[0] - f3 * r1[0]) / denominator, (f1 * r3[1] - f3 * r1[1]) / denominator, (f1 * r3[2] - f3 * r1[2]) / denominator]
+}
+
+function stateEccentricity(r: Vec3, v: Vec3, mu: number) {
+	const rNorm = vecLength(r)
+	const vSquared = vecDot(v, v)
+	const rv = vecDot(r, v)
+
+	if (!(Number.isFinite(rNorm) && rNorm > 0 && Number.isFinite(vSquared) && Number.isFinite(rv))) {
+		return Number.POSITIVE_INFINITY
+	}
+
+	const radialScale = vSquared - mu / rNorm
+	const ex = (r[0] * radialScale - v[0] * rv) / mu
+	const ey = (r[1] * radialScale - v[1] * rv) / mu
+	const ez = (r[2] * radialScale - v[2] * rv) / mu
+	return Math.hypot(ex, ey, ez)
 }
 
 function selectCandidate(candidates: readonly Candidate[]) {
