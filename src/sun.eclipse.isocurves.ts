@@ -87,8 +87,6 @@ export interface EclipseLocalGridOptions {
 	readonly ignoreSunBelowHorizon?: boolean
 	readonly horizonAltitudeRadians?: number
 	readonly numericalTolerance?: number
-	readonly parallel?: boolean
-	readonly cacheLocalCircumstances?: boolean
 }
 
 export interface EclipseIsoCurveOptions extends EclipseLocalGridOptions {
