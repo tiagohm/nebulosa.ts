@@ -66,6 +66,7 @@ function syntheticElements(input: Partial<Record<'x' | 'y' | 'd' | 'mu' | 'l1' |
 		mu: polynomial('mu', 0, 0.5),
 		l1: polynomial('l1', 0.55),
 		l2: polynomial('l2', 0.02),
+		l2SignConvention: 'positiveTotal',
 		tanF1: polynomial('tanF1', 0.0046),
 		tanF2: polynomial('tanF2', 0.0045),
 		eclipseTypeApprox: input.type ?? 'TOTAL',

@@ -26,9 +26,11 @@ import { earth as barycentricEarth, sun as barycentricSun } from './vsop87e'
 // bulletins.
 
 // The fundamental-plane axes are tied to the shadow axis: positive x points
-// east in increasing right ascension, positive y points north, and positive l2
-// means the umbral cone has not closed at the fundamental plane. Negative l2 is
-// antumbral and corresponds to annular geometry.
+// east in increasing right ascension and positive y points north. Generated
+// elements use the repository's internal l2 convention where positive l2 is
+// total/umbral and negative l2 is annular/antumbral. Published NASA/EclipseWise
+// Besselian tables use the opposite l2 sign; callers can pass those tables
+// directly by leaving l2SignConvention unset or setting it to "negativeTotal".
 
 // CONVENTIONS
 // x: Fundamental-plane coordinate in Earth equatorial radii; positive x points east toward increasing right ascension.
@@ -36,7 +38,7 @@ import { earth as barycentricEarth, sun as barycentricSun } from './vsop87e'
 // d: Declination of the lunar shadow axis in the apparent equatorial frame of date, radians.
 // mu: Greenwich hour-angle-like rotation parameter GAST - alpha of the shadow axis, radians, unwrapped before fitting.
 // l1: Penumbral cone radius on the fundamental plane in Earth equatorial radii.
-// l2: Umbra or antumbra cone radius on the fundamental plane in Earth equatorial radii; positive is umbral total, negative is antumbral annular.
+// l2: Umbra or antumbra cone radius on the fundamental plane in Earth equatorial radii; interpreted according to l2SignConvention.
 // tanF1: Tangent of the penumbral cone half-angle from straight-line external tangent geometry.
 // tanF2: Tangent of the umbral or antumbral cone half-angle from straight-line internal tangent geometry.
 // time: Ephemerides are evaluated in TT. Earth rotation uses UT1, or TT - deltaTSeconds when deltaTSeconds is supplied.
@@ -50,6 +52,8 @@ const MIN_VECTOR_LENGTH = 1e-15
 const BESSELIAN_QUANTITIES = ['x', 'y', 'd', 'mu', 'l1', 'l2', 'tanF1', 'tanF2'] as const
 
 type BesselianQuantity = (typeof BESSELIAN_QUANTITIES)[number]
+
+export type BesselianL2SignConvention = 'positiveTotal' | 'negativeTotal'
 
 // Polynomial coefficients in ascending powers of tauHours.
 export interface BesselianPolynomial {
@@ -70,6 +74,8 @@ export interface BesselianElements {
 	readonly mu: BesselianPolynomial
 	readonly l1: BesselianPolynomial
 	readonly l2: BesselianPolynomial
+	// Defaults to the published NASA/EclipseWise convention, where negative l2 is total.
+	readonly l2SignConvention?: BesselianL2SignConvention
 	readonly tanF1: BesselianPolynomial
 	readonly tanF2: BesselianPolynomial
 	readonly eclipseTypeApprox: SolarEclipseType | 'UNKNOWN'
@@ -178,6 +184,7 @@ export function generateBesselianElements(input: SolarEclipseBesselianContext): 
 		mu: fitPolynomial(samples, 'mu', context.polynomialDegree),
 		l1: fitPolynomial(samples, 'l1', context.polynomialDegree),
 		l2: fitPolynomial(samples, 'l2', context.polynomialDegree),
+		l2SignConvention: 'positiveTotal',
 		tanF1: fitPolynomial(samples, 'tanF1', context.polynomialDegree),
 		tanF2: fitPolynomial(samples, 'tanF2', context.polynomialDegree),
 		eclipseTypeApprox: classifyEclipse(samples),
@@ -223,6 +230,7 @@ export function normalizeBesselianTime(elements: BesselianElements, time: Time) 
 // Evaluates fitted Besselian elements at an arbitrary time.
 export function evaluateBesselian(elements: BesselianElements, time: Time): BesselianState {
 	const tauHours = normalizeBesselianTime(elements, time)
+	const l2Scale = besselianL2Scale(elements)
 
 	return {
 		time: timeConvert(time, Timescale.TT),
@@ -232,7 +240,7 @@ export function evaluateBesselian(elements: BesselianElements, time: Time): Bess
 		d: evaluateBesselianPolynomial(elements.d, tauHours),
 		mu: evaluateBesselianPolynomial(elements.mu, tauHours),
 		l1: evaluateBesselianPolynomial(elements.l1, tauHours),
-		l2: evaluateBesselianPolynomial(elements.l2, tauHours),
+		l2: evaluateBesselianPolynomial(elements.l2, tauHours) * l2Scale,
 		tanF1: evaluateBesselianPolynomial(elements.tanF1, tauHours),
 		tanF2: evaluateBesselianPolynomial(elements.tanF2, tauHours),
 	}
@@ -241,6 +249,7 @@ export function evaluateBesselian(elements: BesselianElements, time: Time): Bess
 // Evaluates first derivatives of fitted Besselian elements at an arbitrary time.
 export function derivativeBesselian(elements: BesselianElements, time: Time): BesselianStateDerivative {
 	const tauHours = normalizeBesselianTime(elements, time)
+	const l2Scale = besselianL2Scale(elements)
 
 	return {
 		time: timeConvert(time, Timescale.TT),
@@ -250,7 +259,7 @@ export function derivativeBesselian(elements: BesselianElements, time: Time): Be
 		dd: derivativeBesselianPolynomial(elements.d, tauHours),
 		dmu: derivativeBesselianPolynomial(elements.mu, tauHours),
 		dl1: derivativeBesselianPolynomial(elements.l1, tauHours),
-		dl2: derivativeBesselianPolynomial(elements.l2, tauHours),
+		dl2: derivativeBesselianPolynomial(elements.l2, tauHours) * l2Scale,
 		dtanF1: derivativeBesselianPolynomial(elements.tanF1, tauHours),
 		dtanF2: derivativeBesselianPolynomial(elements.tanF2, tauHours),
 	}
@@ -438,6 +447,14 @@ function fitPolynomial(samples: readonly BesselianSample[], key: BesselianQuanti
 	return { degree, coefficients: regression.coefficients }
 }
 
+function besselianL2Scale(elements: BesselianElements) {
+	return elements.l2SignConvention === 'positiveTotal' ? 1 : -1
+}
+
+function normalizeBesselianL2(l2: number, convention: BesselianL2SignConvention) {
+	return convention === 'positiveTotal' ? l2 : -l2
+}
+
 function classifyEclipse(samples: readonly BesselianSample[]): SolarEclipseType | 'UNKNOWN' {
 	if (samples.length === 0) return 'UNKNOWN'
 
@@ -460,7 +477,7 @@ function classifyEclipse(samples: readonly BesselianSample[]): SolarEclipseType 
 
 	if (closestDistance <= 1 + umbralRadius) {
 		if (Math.abs(closest.l2) <= 0.003) return 'HYBRID'
-		return closest.l2 > 0 ? 'TOTAL' : 'ANNULAR'
+		return normalizeBesselianL2(closest.l2, 'positiveTotal') > 0 ? 'TOTAL' : 'ANNULAR'
 	}
 
 	if (closestDistance <= 1 + Math.max(0, closest.l1)) return 'PARTIAL'

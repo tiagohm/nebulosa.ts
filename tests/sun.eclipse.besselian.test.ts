@@ -1,10 +1,13 @@
 import { describe, expect, test } from 'bun:test'
+import { deg } from '../src/angle'
 import { nearestSolarEclipse } from '../src/sun'
 import { derivativeBesselian, derivativeBesselianPolynomial, evaluateBesselian, evaluateBesselianPolynomial, generateBesselianElements, type BesselianElements, type BesselianSample } from '../src/sun.eclipse.besselian'
+import { computeLocalCircumstances } from '../src/sun.eclipse.circumstances'
 import { Timescale, timeYMD, toJulianDay } from '../src/time'
 
 const QUANTITIES = ['x', 'y', 'd', 'mu', 'l1', 'l2', 'tanF1', 'tanF2'] as const
 const DERIVATIVES = ['dx', 'dy', 'dd', 'dmu', 'dl1', 'dl2', 'dtanF1', 'dtanF2'] as const
+const dallas = { latitude: deg(32.7767), longitude: deg(-96.797) }
 
 function expectFiniteElements(elements: BesselianElements) {
 	expect(elements.t0.scale).toBe(Timescale.TT)
@@ -15,6 +18,7 @@ function expectFiniteElements(elements: BesselianElements) {
 	expect(elements.validTo.scale).toBe(Timescale.TT)
 	expect(toJulianDay(elements.validFrom)).toBeLessThan(toJulianDay(elements.t0))
 	expect(toJulianDay(elements.validTo)).toBeGreaterThan(toJulianDay(elements.t0))
+	expect(elements.l2SignConvention).toBe('positiveTotal')
 	expect(elements.earth.equatorialRadius).toBeGreaterThan(0)
 	expect(elements.earth.flattening).toBeGreaterThan(0)
 
@@ -68,6 +72,16 @@ function expectFiniteStateAndDerivative(elements: BesselianElements) {
 	}
 }
 
+function publishedL2Elements(elements: BesselianElements): BesselianElements {
+	const { l2SignConvention: _l2SignConvention, ...rest } = elements
+
+	return {
+		...rest,
+		l2: { ...elements.l2, coefficients: elements.l2.coefficients.map((coefficient) => -coefficient) },
+		samples: elements.samples?.map((sample) => ({ ...sample, l2: -sample.l2 })),
+	}
+}
+
 describe('solar eclipse Besselian elements', () => {
 	test('2017-08-21 total solar eclipse', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2017, 8, 1), true)
@@ -110,6 +124,21 @@ describe('solar eclipse Besselian elements', () => {
 
 		expect(evaluateBesselianPolynomial(polynomial, 2)).toBe(49)
 		expect(derivativeBesselianPolynomial(polynomial, 2)).toBe(62)
+	})
+
+	test('normalizes published negative-total l2 Besselian elements', () => {
+		const eclipse = nearestSolarEclipse(timeYMD(2024, 3, 1), true)
+		const internal = generateBesselianElements({ maximumApprox: eclipse.maximalTime })
+		const published = publishedL2Elements(internal)
+		const internalState = evaluateBesselian(internal, internal.t0)
+		const publishedState = evaluateBesselian(published, published.t0)
+		const circumstances = computeLocalCircumstances(published, dallas)
+
+		expect(published.l2SignConvention).toBeUndefined()
+		expect(published.l2.coefficients[0]).toBeLessThan(0)
+		expect(publishedState.l2).toBeCloseTo(internalState.l2, 12)
+		expect(circumstances.type).toBe('TOTAL')
+		expect(circumstances.maximumMagnitude).toBeGreaterThan(1)
 	})
 
 	test('rejects insufficient samples for the requested polynomial degree', () => {

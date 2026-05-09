@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { nearestSolarEclipse } from '../src/sun'
-import { generateBesselianElements } from '../src/sun.eclipse.besselian'
+import { generateBesselianElements, type BesselianElements } from '../src/sun.eclipse.besselian'
 import type { ContourPoint } from '../src/sun.eclipse.pcurves'
 import { generateSolarEclipseMap, queryLocalCircumstances, validateSolarEclipseMap, type SolarEclipseGenerationOptions } from '../src/sun.eclipse.map'
 import { timeYMD } from '../src/time'
@@ -40,6 +40,16 @@ function minimalOptions(options: SolarEclipseGenerationOptions = {}): SolarEclip
 		includeGlobalStats: false,
 		includeDiagnostics: true,
 		...options,
+	}
+}
+
+function publishedL2Elements(elements: BesselianElements): BesselianElements {
+	const { l2SignConvention: _l2SignConvention, ...rest } = elements
+
+	return {
+		...rest,
+		l2: { ...elements.l2, coefficients: elements.l2.coefficients.map((coefficient) => -coefficient) },
+		samples: elements.samples?.map((sample) => ({ ...sample, l2: -sample.l2 })),
 	}
 }
 
@@ -97,6 +107,15 @@ describe('solar eclipse map generation', () => {
 		expect(map.p1Curve).toBeUndefined()
 		expect(map.magnitudeContours).toHaveLength(0)
 		expect(map.globalStats).toBeUndefined()
+		expect(circumstances.type).toBe('TOTAL')
+		expect(circumstances.maximumMagnitude).toBeGreaterThan(1)
+	})
+
+	test('accepts published Besselian elements with negative l2 for total eclipses', () => {
+		const map = generateSolarEclipseMap({ besselianElements: publishedL2Elements(TOTAL_2024) }, minimalOptions())
+		const circumstances = queryLocalCircumstances(map, DALLAS)
+
+		expect(map.metadata.eclipseType).toBe('TOTAL')
 		expect(circumstances.type).toBe('TOTAL')
 		expect(circumstances.maximumMagnitude).toBeGreaterThan(1)
 	})
