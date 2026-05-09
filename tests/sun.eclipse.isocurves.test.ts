@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { DEG2RAD } from '../src/constants'
 import { nearestSolarEclipse } from '../src/sun'
-import { generateBesselianElements } from '../src/sun.besselian'
+import { generateBesselianElements } from '../src/sun.eclipse.besselian'
 import { buildEclipseLocalGrid, generateEclipseIsoCurves, generateEclipseIsoCurvesFromGrid, type EclipseGridSample, type EclipseIsoCurveSegment } from '../src/sun.eclipse.isocurves'
 import { timeYMD } from '../src/time'
 
@@ -103,9 +103,9 @@ describe('eclipse iso-curves from Besselian elements', () => {
 		const curves = generateEclipseIsoCurves(
 			total2024,
 			[
-				{ type: 'MAGNITUDE', value: 0.5 },
-				{ type: 'OBSCURATION', value: 0.5 },
-				{ type: 'PARTIAL_DURATION', value: 3600, unit: 'seconds' },
+				{ type: 'magnitude', value: 0.5 },
+				{ type: 'obscuration', value: 0.5 },
+				{ type: 'partialDuration', value: 3600, unit: 'seconds' },
 			],
 			{ gridResolutionDeg: 30 },
 		)
@@ -123,9 +123,9 @@ describe('eclipse iso-curves from Besselian elements', () => {
 		const curves = generateEclipseIsoCurves(
 			partial2025,
 			[
-				{ type: 'MAGNITUDE', value: 0.5 },
-				{ type: 'PARTIAL_DURATION', value: 3600, unit: 'seconds' },
-				{ type: 'TOTAL_OR_ANNULAR_DURATION', value: 60, unit: 'seconds' },
+				{ type: 'magnitude', value: 0.5 },
+				{ type: 'partialDuration', value: 3600, unit: 'seconds' },
+				{ type: 'totalOrAnnularDuration', value: 60, unit: 'seconds' },
 			],
 			{ gridResolutionDeg: 30 },
 		)
@@ -137,9 +137,9 @@ describe('eclipse iso-curves from Besselian elements', () => {
 	})
 
 	test('visible-only contours remove below-horizon geometric regions', () => {
-		const geometric = generateEclipseIsoCurves(total2024, [{ type: 'MAGNITUDE', value: 0.2 }], { gridResolutionDeg: 30, visibleOnly: false })
-		const visible = generateEclipseIsoCurves(total2024, [{ type: 'MAGNITUDE', value: 0.2 }], { gridResolutionDeg: 30, visibleOnly: true })
-		const ignored = generateEclipseIsoCurves(total2024, [{ type: 'MAGNITUDE', value: 0.2 }], { gridResolutionDeg: 30, visibleOnly: true, ignoreSunBelowHorizon: true })
+		const geometric = generateEclipseIsoCurves(total2024, [{ type: 'magnitude', value: 0.2 }], { gridResolutionDeg: 30, visibleOnly: false })
+		const visible = generateEclipseIsoCurves(total2024, [{ type: 'magnitude', value: 0.2 }], { gridResolutionDeg: 30, visibleOnly: true })
+		const ignored = generateEclipseIsoCurves(total2024, [{ type: 'magnitude', value: 0.2 }], { gridResolutionDeg: 30, visibleOnly: true, ignoreSunBelowHorizon: true })
 
 		expect(segmentPointCount(visible[0].segments)).toBeLessThan(segmentPointCount(geometric[0].segments))
 		expect(segmentPointCount(ignored[0].segments)).toBe(segmentPointCount(geometric[0].segments))
@@ -147,9 +147,9 @@ describe('eclipse iso-curves from Besselian elements', () => {
 	})
 
 	test('validates levels and grid options', () => {
-		expect(() => generateEclipseIsoCurves(total2024, [{ type: 'OBSCURATION', value: 2 }], { gridResolutionDeg: 30 })).toThrow('obscuration')
-		expect(() => generateEclipseIsoCurves(total2024, [{ type: 'MAGNITUDE', value: 0.5 }], { gridResolutionDeg: 0 })).toThrow('gridResolutionDeg')
-		expect(() => generateEclipseIsoCurves(total2024, [{ type: 'PARTIAL_DURATION', value: 60, unit: 'fraction' }], { gridResolutionDeg: 30 })).toThrow('PARTIAL_DURATION')
+		expect(() => generateEclipseIsoCurves(total2024, [{ type: 'obscuration', value: 2 }], { gridResolutionDeg: 30 })).toThrow('obscuration')
+		expect(() => generateEclipseIsoCurves(total2024, [{ type: 'magnitude', value: 0.5 }], { gridResolutionDeg: 0 })).toThrow('gridResolutionDeg')
+		expect(() => generateEclipseIsoCurves(total2024, [{ type: 'partialDuration', value: 60, unit: 'fraction' }], { gridResolutionDeg: 30 })).toThrow('partialDuration')
 	})
 })
 
@@ -157,7 +157,7 @@ describe('synthetic iso-curve contouring', () => {
 	test('extracts a closed magnitude loop from a synthetic scalar field', () => {
 		const options = syntheticOptions(-2, 2, -2, 2, 1)
 		const samples = syntheticGrid(-2, 2, -2, 2, 1, (latitude, longitude) => ({ magnitude: 4 - latitude * latitude - longitude * longitude }))
-		const [curve] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'MAGNITUDE', value: 2 }], options)
+		const [curve] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'magnitude', value: 2 }], options)
 
 		expect(curve.segments.length).toBeGreaterThan(0)
 		expect(curve.segments.some((segment) => segment.closed)).toBeTrue()
@@ -170,8 +170,8 @@ describe('synthetic iso-curve contouring', () => {
 		const curves = generateEclipseIsoCurvesFromGrid(
 			samples,
 			[
-				{ type: 'MAGNITUDE', value: 1 },
-				{ type: 'OBSCURATION', value: 0.5 },
+				{ type: 'magnitude', value: 1 },
+				{ type: 'obscuration', value: 0.5 },
 			],
 			options,
 		)
@@ -192,7 +192,7 @@ describe('synthetic iso-curve contouring', () => {
 		const samples = syntheticGrid(0, 3, 0, 3, 1, (latitude, longitude) => ({
 			partialDurationSeconds: latitude >= 1 && longitude >= 1 ? latitude * longitude * 1000 : null,
 		}))
-		const [curve] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'PARTIAL_DURATION', value: 2500, unit: 'seconds' }], options)
+		const [curve] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'partialDuration', value: 2500, unit: 'seconds' }], options)
 
 		expect(curve.segments.length).toBeGreaterThan(0)
 		expectFiniteSegments(curve.segments)
@@ -201,7 +201,7 @@ describe('synthetic iso-curve contouring', () => {
 	test('handles ambiguous marching-squares cells deterministically', () => {
 		const options = syntheticOptions(0, 1, 0, 1, 1)
 		const samples = syntheticGrid(0, 1, 0, 1, 1, (latitude, longitude) => ({ magnitude: latitude === longitude ? 1 : 0 }))
-		const [curve] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'MAGNITUDE', value: 0.5 }], { ...options, minSegmentPoints: 2 })
+		const [curve] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'magnitude', value: 0.5 }], { ...options, minSegmentPoints: 2 })
 
 		expect(curve.segments).toHaveLength(2)
 		expect(curve.segments.every((segment) => segment.points.length === 2)).toBeTrue()
@@ -212,14 +212,14 @@ describe('synthetic iso-curve contouring', () => {
 		const samples = syntheticGrid(-3, 3, -3, 3, 1, (_latitude, longitude) => ({
 			magnitude: Math.max(0, 2 - Math.abs(longitude - 2), 2 - Math.abs(longitude + 2)),
 		}))
-		const [curve] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'MAGNITUDE', value: 1.5 }], options)
+		const [curve] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'magnitude', value: 1.5 }], options)
 
 		expect(curve.segments.length).toBeGreaterThanOrEqual(2)
 	})
 
 	test('splits antimeridian jumps and can preserve unsplit wrapped topology', () => {
-		const split = generateEclipseIsoCurves(total2024, [{ type: 'MAGNITUDE', value: 0.2 }], { gridResolutionDeg: 30, splitAntimeridian: true })
-		const unsplit = generateEclipseIsoCurves(total2024, [{ type: 'MAGNITUDE', value: 0.2 }], { gridResolutionDeg: 30, splitAntimeridian: false })
+		const split = generateEclipseIsoCurves(total2024, [{ type: 'magnitude', value: 0.2 }], { gridResolutionDeg: 30, splitAntimeridian: true })
+		const unsplit = generateEclipseIsoCurves(total2024, [{ type: 'magnitude', value: 0.2 }], { gridResolutionDeg: 30, splitAntimeridian: false })
 
 		expect(maxLongitudeJump(split[0].segments)).toBeLessThan(Math.PI)
 		expect(maxLongitudeJump(unsplit[0].segments)).toBeGreaterThan(Math.PI)
@@ -228,7 +228,7 @@ describe('synthetic iso-curve contouring', () => {
 	test('removes tiny or underpopulated segments when requested', () => {
 		const options = syntheticOptions(0, 1, 0, 1, 1)
 		const samples = syntheticGrid(0, 1, 0, 1, 1, (latitude, longitude) => ({ magnitude: latitude === longitude ? 1 : 0 }))
-		const [curve] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'MAGNITUDE', value: 0.5 }], { ...options, minSegmentPoints: 3, removeTinySegments: true })
+		const [curve] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'magnitude', value: 0.5 }], { ...options, minSegmentPoints: 3, removeTinySegments: true })
 
 		expect(curve.segments).toHaveLength(0)
 	})
@@ -236,8 +236,8 @@ describe('synthetic iso-curve contouring', () => {
 	test('resamples segment geometry without changing the level metadata', () => {
 		const options = syntheticOptions(-2, 2, -2, 2, 1)
 		const samples = syntheticGrid(-2, 2, -2, 2, 1, (latitude, longitude) => ({ magnitude: 4 - latitude * latitude - longitude * longitude }))
-		const [raw] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'MAGNITUDE', value: 2 }], options)
-		const [resampled] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'MAGNITUDE', value: 2 }], { ...options, smoothing: 'resample', resampleMaxStepDegrees: 0.25 })
+		const [raw] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'magnitude', value: 2 }], options)
+		const [resampled] = generateEclipseIsoCurvesFromGrid(samples, [{ type: 'magnitude', value: 2 }], { ...options, smoothing: 'resample', resampleMaxStepDegrees: 0.25 })
 
 		expect(segmentPointCount(resampled.segments)).toBeGreaterThan(segmentPointCount(raw.segments))
 		expect(resampled.level.value).toBe(raw.level.value)

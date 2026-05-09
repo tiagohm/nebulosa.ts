@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { WGS84_FLATTENING, WGS84_RADIUS, AU_KM } from '../src/constants'
 import { angularDistance } from '../src/coordinate'
 import { nearestSolarEclipse, type SolarEclipseType } from '../src/sun'
-import { type BesselianElements, generateBesselianElements } from '../src/sun.besselian'
+import { type BesselianElements, generateBesselianElements } from '../src/sun.eclipse.besselian'
 import { generateCentralPathPolygon, generatePathLimits, type EclipsePathLimitPoint, type EclipsePathLimitsResult } from '../src/sun.eclipse.limits'
 import { Timescale, timeShift, timeYMD } from '../src/time'
 

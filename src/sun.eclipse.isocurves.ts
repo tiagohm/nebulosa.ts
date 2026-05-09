@@ -1,8 +1,8 @@
 import { type Angle, normalizePI } from './angle'
-import { DEG2RAD } from './constants'
+import { DEG2RAD, PI } from './constants'
 import { angularDistance } from './coordinate'
-import { computeLocalCircumstances } from './sun.circumstances'
-import type { BesselianElements } from './sun.besselian'
+import { computeLocalCircumstances } from './sun.eclipse.circumstances'
+import type { BesselianElements } from './sun.eclipse.besselian'
 import type { SolarEclipseType } from './sun'
 import { type Time, Timescale } from './time'
 
@@ -24,9 +24,9 @@ const DEFAULT_NUMERICAL_TOLERANCE = 1e-9
 const DEFAULT_MIN_SEGMENT_POINTS = 3
 const DEFAULT_RESAMPLE_MAX_STEP_DEG = 1
 const MAX_GRID_SAMPLES = 300000
-const ANTIMERIDIAN_SPLIT_THRESHOLD = Math.PI
+const ANTIMERIDIAN_SPLIT_THRESHOLD = PI
 
-export type EclipseIsoCurveType = 'MAGNITUDE' | 'OBSCURATION' | 'PARTIAL_DURATION' | 'TOTAL_OR_ANNULAR_DURATION'
+export type EclipseIsoCurveType = 'magnitude' | 'obscuration' | 'partialDuration' | 'totalOrAnnularDuration'
 export type EclipseVisibilityMode = 'GEOMETRIC' | 'VISIBLE_ONLY'
 
 export interface EclipseGridSample {
@@ -348,13 +348,13 @@ function scalarValue(sample: EclipseGridSample, type: EclipseIsoCurveType, optio
 	if (options.visibleOnly && !options.ignoreSunBelowHorizon && !sample.visible && sample.eclipseType !== 'NONE') return Number.NaN
 
 	switch (type) {
-		case 'MAGNITUDE':
+		case 'magnitude':
 			return sample.magnitude ?? Number.NaN
-		case 'OBSCURATION':
+		case 'obscuration':
 			return sample.obscuration ?? Number.NaN
-		case 'PARTIAL_DURATION':
+		case 'partialDuration':
 			return sample.partialDurationSeconds ?? Number.NaN
-		case 'TOTAL_OR_ANNULAR_DURATION':
+		case 'totalOrAnnularDuration':
 			return sample.totalOrAnnularDurationSeconds ?? Number.NaN
 	}
 }
@@ -617,9 +617,9 @@ function validateContourLevels(levels: readonly EclipseContourLevel[]) {
 	for (const level of levels) {
 		validatePositiveFinite('contour level value', level.value)
 
-		if ((level.type === 'MAGNITUDE' || level.type === 'OBSCURATION') && level.unit === 'seconds') throw new Error(`${level.type} levels must not use seconds`)
-		if ((level.type === 'PARTIAL_DURATION' || level.type === 'TOTAL_OR_ANNULAR_DURATION') && level.unit === 'fraction') throw new Error(`${level.type} levels must not use fraction`)
-		if (level.type === 'OBSCURATION' && level.value > 1) throw new Error('obscuration levels must be in (0, 1]')
+		if ((level.type === 'magnitude' || level.type === 'obscuration') && level.unit === 'seconds') throw new Error(`${level.type} levels must not use seconds`)
+		if ((level.type === 'partialDuration' || level.type === 'totalOrAnnularDuration') && level.unit === 'fraction') throw new Error(`${level.type} levels must not use fraction`)
+		if (level.type === 'obscuration' && level.value > 1) throw new Error('obscuration levels must be in (0, 1]')
 	}
 }
 

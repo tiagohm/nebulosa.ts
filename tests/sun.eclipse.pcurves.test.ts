@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { angularDistance } from '../src/coordinate'
 import { nearestSolarEclipse } from '../src/sun'
-import { generateBesselianElements } from '../src/sun.besselian'
-import { type ContourPoint, generateGlobalPartialContactCurves, generatePenumbraContourAt } from '../src/sun.eclipse.curves.partial'
+import { generateBesselianElements } from '../src/sun.eclipse.besselian'
+import { type ContourPoint, generateGlobalPartialContactCurves, generatePenumbraContourAt } from '../src/sun.eclipse.pcurves'
 import { timeShift, timeYMD } from '../src/time'
 
 const total2024 = generateBesselianElements({ maximumApprox: nearestSolarEclipse(timeYMD(2024, 3, 1), true).maximalTime })

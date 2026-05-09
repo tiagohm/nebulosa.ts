@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { nearestSolarEclipse } from '../src/sun'
-import { generateBesselianElements } from '../src/sun.besselian'
-import { computeLocalCircumstances, computeLocalEclipseAt } from '../src/sun.circumstances'
+import { generateBesselianElements } from '../src/sun.eclipse.besselian'
+import { computeLocalCircumstances, computeLocalEclipseAt } from '../src/sun.eclipse.circumstances'
 import { timeYMD, toJulianDay } from '../src/time'
 
 const total2024 = generateBesselianElements({ maximumApprox: nearestSolarEclipse(timeYMD(2024, 3, 1), true).maximalTime })

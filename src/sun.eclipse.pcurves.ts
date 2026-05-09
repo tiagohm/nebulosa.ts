@@ -2,8 +2,8 @@ import { type Angle, normalizePI } from './angle'
 import { DEG2RAD } from './constants'
 import { angularDistance } from './coordinate'
 import { clamp } from './math'
-import type { BesselianElements } from './sun.besselian'
-import { computeLocalCircumstances, computeLocalEclipseAt, type EclipseContact } from './sun.circumstances'
+import type { BesselianElements } from './sun.eclipse.besselian'
+import { computeLocalCircumstances, computeLocalEclipseAt, type EclipseContact } from './sun.eclipse.circumstances'
 import { type Time, Timescale, timeSubtract, toJulianDay } from './time'
 
 // Global partial-contact curves from Besselian elements.

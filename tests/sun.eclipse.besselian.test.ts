@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { nearestSolarEclipse } from '../src/sun'
-import { derivativeBesselian, derivativeBesselianPolynomial, evaluateBesselian, evaluateBesselianPolynomial, generateBesselianElements, type BesselianElements, type BesselianSample } from '../src/sun.besselian'
+import { derivativeBesselian, derivativeBesselianPolynomial, evaluateBesselian, evaluateBesselianPolynomial, generateBesselianElements, type BesselianElements, type BesselianSample } from '../src/sun.eclipse.besselian'
 import { Timescale, timeYMD, toJulianDay } from '../src/time'
 
 const QUANTITIES = ['x', 'y', 'd', 'mu', 'l1', 'l2', 'tanF1', 'tanF2'] as const
