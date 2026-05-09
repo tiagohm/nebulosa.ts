@@ -67,7 +67,7 @@ describe('global partial solar eclipse contact curves', () => {
 	test('supports partial-only eclipses without requiring a central line', () => {
 		const curves = generateGlobalPartialContactCurves(partial2025, contactOptions(partial2025))
 
-		expect(nearestSolarEclipse(timeYMD(2025, 9, 21), true).type).toBe('PARTIAL')
+		expect(nearestSolarEclipse(timeYMD(2025, 9, 21), true).type).toBe('partial')
 		expect(curves).toHaveLength(2)
 		expect(curves.every((curve) => curve.points.length > 0)).toBeTrue()
 		expect(curves.every((curve) => curve.points.every((point) => point.time))).toBeTrue()

@@ -37,7 +37,7 @@ export interface EclipseGridSample {
 	readonly obscuration: number | null
 	readonly partialDurationSeconds: number | null
 	readonly totalOrAnnularDurationSeconds: number | null
-	readonly eclipseType: SolarEclipseType | 'NONE'
+	readonly eclipseType: SolarEclipseType | 'none'
 	readonly maximumTime: Time | null
 	readonly solarAltitudeAtMaximum: number | null
 	readonly visible: boolean
@@ -301,7 +301,7 @@ function sampleLocalEclipseGrid(elements: BesselianElements, grid: LatitudeLongi
 			const contributes = geometricallyOccurs && (options.ignoreSunBelowHorizon || circumstances.visibleAboveHorizon)
 			const visible = geometricallyOccurs && circumstances.visibleAboveHorizon && !belowHorizonAtMaximum
 			const valid = !options.visibleOnly || !geometricallyOccurs || contributes
-			const eclipseType = geometricallyOccurs ? maximum.phase.type : 'NONE'
+			const eclipseType = geometricallyOccurs ? maximum.phase.type : 'none'
 			const index = sampleIndex(grid, row, column)
 
 			samples[index] = {
@@ -311,7 +311,7 @@ function sampleLocalEclipseGrid(elements: BesselianElements, grid: LatitudeLongi
 				obscuration: geometricallyOccurs ? circumstances.maximumObscuration : 0,
 				partialDurationSeconds: circumstances.partialDurationSeconds ?? null,
 				totalOrAnnularDurationSeconds: circumstances.totalOrAnnularDurationSeconds ?? null,
-				eclipseType: eclipseType === 'NONE' ? 'NONE' : eclipseType,
+				eclipseType: eclipseType === 'none' ? 'none' : eclipseType,
 				maximumTime: maximum?.time ?? null,
 				solarAltitudeAtMaximum: maximum?.sunAltitude ?? null,
 				visible: visible && !belowHorizonAtMaximum,
@@ -345,7 +345,7 @@ function extractScalarField(samples: readonly EclipseGridSample[], type: Eclipse
 
 function scalarValue(sample: EclipseGridSample, type: EclipseIsoCurveType, options: ResolvedIsoOptions) {
 	if (!sample.valid) return Number.NaN
-	if (options.visibleOnly && !options.ignoreSunBelowHorizon && !sample.visible && sample.eclipseType !== 'NONE') return Number.NaN
+	if (options.visibleOnly && !options.ignoreSunBelowHorizon && !sample.visible && sample.eclipseType !== 'none') return Number.NaN
 
 	switch (type) {
 		case 'magnitude':

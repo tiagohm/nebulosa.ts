@@ -78,7 +78,7 @@ export interface BesselianElements {
 	readonly l2SignConvention?: BesselianL2SignConvention
 	readonly tanF1: BesselianPolynomial
 	readonly tanF2: BesselianPolynomial
-	readonly eclipseTypeApprox: SolarEclipseType | 'UNKNOWN'
+	readonly eclipseTypeApprox: SolarEclipseType | 'unknown'
 	readonly geocentricMaximum: Time
 	readonly earth: {
 		readonly equatorialRadius: number
@@ -455,8 +455,8 @@ function normalizeBesselianL2(l2: number, convention: BesselianL2SignConvention)
 	return convention === 'positiveTotal' ? l2 : -l2
 }
 
-function classifyEclipse(samples: readonly BesselianSample[]): SolarEclipseType | 'UNKNOWN' {
-	if (samples.length === 0) return 'UNKNOWN'
+function classifyEclipse(samples: readonly BesselianSample[]): SolarEclipseType | 'unknown' {
+	if (samples.length === 0) return 'unknown'
 
 	let closest = samples[0]
 	let closestDistance = Number.POSITIVE_INFINITY
@@ -471,17 +471,17 @@ function classifyEclipse(samples: readonly BesselianSample[]): SolarEclipseType 
 		}
 	}
 
-	if (!closest) return 'UNKNOWN'
+	if (!closest) return 'unknown'
 
 	const umbralRadius = Math.abs(closest.l2)
 
 	if (closestDistance <= 1 + umbralRadius) {
-		if (Math.abs(closest.l2) <= 0.003) return 'HYBRID'
-		return normalizeBesselianL2(closest.l2, 'positiveTotal') > 0 ? 'TOTAL' : 'ANNULAR'
+		if (Math.abs(closest.l2) <= 0.003) return 'hybrid'
+		return normalizeBesselianL2(closest.l2, 'positiveTotal') > 0 ? 'total' : 'annular'
 	}
 
-	if (closestDistance <= 1 + Math.max(0, closest.l1)) return 'PARTIAL'
-	return 'UNKNOWN'
+	if (closestDistance <= 1 + Math.max(0, closest.l1)) return 'partial'
+	return 'unknown'
 }
 
 function shiftTT(time: Time, tauHours: number) {

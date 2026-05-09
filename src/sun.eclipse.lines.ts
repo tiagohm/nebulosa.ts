@@ -101,7 +101,7 @@ export function generateCentralLine(elements: BesselianElements, options?: Centr
 	const resolved = resolveOptions(elements, options)
 	const warnings: string[] = []
 
-	if (elements.eclipseTypeApprox === 'PARTIAL') return emptyResult(warnings)
+	if (elements.eclipseTypeApprox === 'partial') return emptyResult(warnings)
 
 	const sampledSegments = scanCentralLine(elements, resolved)
 	const centralSegments = resolved.adaptiveSampling ? adaptiveSampleSegments(elements, resolved, sampledSegments) : sampledSegments
@@ -118,11 +118,11 @@ export function generateCentralLine(elements: BesselianElements, options?: Centr
 	const segments = renderSegments.map((segment) => segment.map((evaluation) => evaluation.point))
 	const maxDurationPoint = maxByFinite(points, (point) => point.centralDurationSeconds)
 	const maxWidthPoint = maxByFinite(points, (point) => point.pathWidthKm)
-	const isTotal = points.some((point) => point.eclipseType === 'TOTAL')
-	const isAnnular = points.some((point) => point.eclipseType === 'ANNULAR')
-	const hasHybridPoint = points.some((point) => point.eclipseType === 'HYBRID')
+	const isTotal = points.some((point) => point.eclipseType === 'total')
+	const isAnnular = points.some((point) => point.eclipseType === 'annular')
+	const hasHybridPoint = points.some((point) => point.eclipseType === 'hybrid')
 
-	if (points.length === 0 && elements.eclipseTypeApprox !== 'UNKNOWN') warnings.push('no central axis intersection was found inside the requested interval')
+	if (points.length === 0 && elements.eclipseTypeApprox !== 'unknown') warnings.push('no central axis intersection was found inside the requested interval')
 	if (points.some((point) => Math.abs(Math.sin(point.solarAltitude)) < MIN_WIDTH_INCIDENT_SIN)) warnings.push('some path widths are limited near the horizon')
 
 	return {
@@ -345,8 +345,8 @@ function computeSolarAltitude(state: BesselianState, latitude: Angle, longitude:
 }
 
 function classifyCentralEclipseType(localUmbraRadius: number, tolerance: number): SolarEclipseType {
-	if (Math.abs(localUmbraRadius) <= tolerance) return 'HYBRID'
-	return localUmbraRadius > 0 ? 'TOTAL' : 'ANNULAR'
+	if (Math.abs(localUmbraRadius) <= tolerance) return 'hybrid'
+	return localUmbraRadius > 0 ? 'total' : 'annular'
 }
 
 function computeCentralMagnitude(sunRadius: number, moonRadius: number) {

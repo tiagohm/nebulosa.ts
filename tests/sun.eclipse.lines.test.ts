@@ -69,7 +69,7 @@ function syntheticElements(input: Partial<Record<'x' | 'y' | 'd' | 'mu' | 'l1' |
 		l2SignConvention: 'positiveTotal',
 		tanF1: polynomial('tanF1', 0.0046),
 		tanF2: polynomial('tanF2', 0.0045),
-		eclipseTypeApprox: input.type ?? 'TOTAL',
+		eclipseTypeApprox: input.type ?? 'total',
 		geocentricMaximum: t0,
 		earth: {
 			equatorialRadius: WGS84_RADIUS,
@@ -102,7 +102,7 @@ describe('solar eclipse central line', () => {
 		expect(line.endTime).toBeDefined()
 		expect(line.maxDurationPoint).toBeDefined()
 		expect(line.maxWidthPoint).toBeDefined()
-		expect(line.points.some((point) => point.eclipseType === 'TOTAL')).toBeTrue()
+		expect(line.points.some((point) => point.eclipseType === 'total')).toBeTrue()
 		expect(line.maxDurationPoint!.centralDurationSeconds).toBeGreaterThan(0)
 		expect(line.maxWidthPoint!.pathWidthKm).toBeGreaterThan(0)
 		expectFiniteLine(line)
@@ -114,7 +114,7 @@ describe('solar eclipse central line', () => {
 		expect(line.hasCentralLine).toBeTrue()
 		expect(line.isAnnular).toBeTrue()
 		expect(line.isTotal).toBeFalse()
-		expect(line.points.some((point) => point.eclipseType === 'ANNULAR')).toBeTrue()
+		expect(line.points.some((point) => point.eclipseType === 'annular')).toBeTrue()
 		expect(line.points.some((point) => point.magnitude < 1)).toBeTrue()
 		expectFiniteLine(line)
 	})
@@ -126,8 +126,8 @@ describe('solar eclipse central line', () => {
 		expect(line.isTotal).toBeTrue()
 		expect(line.isAnnular).toBeTrue()
 		expect(line.isHybrid).toBeTrue()
-		expect(line.points.some((point) => point.eclipseType === 'TOTAL')).toBeTrue()
-		expect(line.points.some((point) => point.eclipseType === 'ANNULAR')).toBeTrue()
+		expect(line.points.some((point) => point.eclipseType === 'total')).toBeTrue()
+		expect(line.points.some((point) => point.eclipseType === 'annular')).toBeTrue()
 		expectFiniteLine(line)
 	})
 

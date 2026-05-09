@@ -26,7 +26,6 @@ const DEFAULT_MINIMUM_SOLAR_ALTITUDE = 0
 const MAX_GRID_NODES = 250000
 
 export type PenumbraContactType = 'P1' | 'P4'
-export type EarthModel = 'WGS84' | 'SPHERE'
 
 export interface ContourPoint {
 	readonly lat: Angle
@@ -54,7 +53,6 @@ export interface GlobalPartialContactCurveOptions {
 	readonly temporalTolerance?: number
 	readonly spatialTolerance?: number
 	readonly useEllipsoid?: boolean
-	readonly earthModel?: EarthModel
 	readonly considerSolarHorizon?: boolean
 	readonly minimumSolarAltitude?: number
 	readonly splitAtAntimeridian?: boolean
@@ -69,7 +67,6 @@ export interface PenumbraContourOptions {
 	readonly angularSamplingDeg?: number
 	readonly contourTolerance?: number
 	readonly useEllipsoid?: boolean
-	readonly earthModel?: EarthModel
 	readonly considerSolarHorizon?: boolean
 	readonly minimumSolarAltitude?: number
 	readonly splitAtAntimeridian?: boolean
@@ -87,7 +84,6 @@ export interface NormalizedGlobalPartialContactCurveOptions {
 	readonly temporalTolerance: number
 	readonly spatialTolerance: number
 	readonly useEllipsoid: boolean
-	readonly earthModel: EarthModel
 	readonly considerSolarHorizon: boolean
 	readonly minimumSolarAltitude: Angle
 	readonly splitAtAntimeridian: boolean
@@ -102,7 +98,6 @@ export interface NormalizedPenumbraContourOptions {
 	readonly angularSamplingDeg: number
 	readonly contourTolerance: number
 	readonly useEllipsoid: boolean
-	readonly earthModel: EarthModel
 	readonly considerSolarHorizon: boolean
 	readonly minimumSolarAltitude: Angle
 	readonly splitAtAntimeridian: boolean
@@ -259,7 +254,6 @@ function normalizeGlobalPartialContactOptions(elements: BesselianElements, optio
 	const spatialTolerance = options.spatialTolerance ?? DEFAULT_SPATIAL_TOLERANCE_RAD
 	const maxRefinementIterations = options.maxRefinementIterations ?? DEFAULT_MAX_REFINEMENT_ITERATIONS
 	const minSegmentPoints = options.minSegmentPoints ?? DEFAULT_MIN_SEGMENT_POINTS
-	const earthModel = resolveEarthModel(options.earthModel, options.useEllipsoid)
 	const normalized: NormalizedGlobalPartialContactCurveOptions = {
 		startTime: options.startTime,
 		endTime: options.endTime,
@@ -267,8 +261,7 @@ function normalizeGlobalPartialContactOptions(elements: BesselianElements, optio
 		contourTolerance,
 		temporalTolerance,
 		spatialTolerance,
-		useEllipsoid: earthModel === 'WGS84',
-		earthModel,
+		useEllipsoid: options.useEllipsoid ?? true,
 		considerSolarHorizon: options.considerSolarHorizon ?? false,
 		minimumSolarAltitude: options.minimumSolarAltitude ?? DEFAULT_MINIMUM_SOLAR_ALTITUDE,
 		splitAtAntimeridian: options.splitAtAntimeridian ?? true,
@@ -290,13 +283,11 @@ function normalizePenumbraContourOptions(time: Time, options: PenumbraContourOpt
 	const contourTolerance = options.contourTolerance ?? DEFAULT_CONTOUR_TOLERANCE
 	const maxRefinementIterations = options.maxRefinementIterations ?? DEFAULT_MAX_REFINEMENT_ITERATIONS
 	const minSegmentPoints = options.minSegmentPoints ?? DEFAULT_MIN_SEGMENT_POINTS
-	const earthModel = resolveEarthModel(options.earthModel, options.useEllipsoid)
 	const normalized: NormalizedPenumbraContourOptions = {
 		time,
 		angularSamplingDeg,
 		contourTolerance,
-		useEllipsoid: earthModel === 'WGS84',
-		earthModel,
+		useEllipsoid: options.useEllipsoid ?? true,
 		considerSolarHorizon: options.considerSolarHorizon ?? false,
 		minimumSolarAltitude: options.minimumSolarAltitude ?? DEFAULT_MINIMUM_SOLAR_ALTITUDE,
 		splitAtAntimeridian: options.splitAtAntimeridian ?? true,
@@ -308,11 +299,6 @@ function normalizePenumbraContourOptions(time: Time, options: PenumbraContourOpt
 
 	validateGridOptions(angularSamplingDeg, contourTolerance, DEFAULT_TEMPORAL_TOLERANCE_SECONDS, DEFAULT_SPATIAL_TOLERANCE_RAD, maxRefinementIterations, minSegmentPoints)
 	return normalized
-}
-
-function resolveEarthModel(earthModel?: EarthModel, useEllipsoid?: boolean): EarthModel {
-	if (earthModel && useEllipsoid !== undefined && (earthModel === 'WGS84') !== useEllipsoid) throw new Error('earthModel and useEllipsoid disagree')
-	return earthModel ?? (useEllipsoid === false ? 'SPHERE' : 'WGS84')
 }
 
 function buildGeographicGrid(resolutionDeg: number): GeographicGrid {

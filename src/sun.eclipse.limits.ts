@@ -28,8 +28,9 @@ const DEFAULT_MAX_SEARCH_DISTANCE_KM = 5000
 const MIN_BOUNDARY_DISTANCE_KM = 0.001
 const DUPLICATE_DISTANCE_KM = 1e-5
 
-export type EclipsePathLimitSide = 'NORTH' | 'SOUTH'
-export type EclipsePathLimitType = 'TOTAL' | 'ANNULAR'
+export type EclipsePathLimitSide = 'north' | 'south'
+
+export type EclipsePathLimitType = 'total' | 'annular'
 
 export interface EclipsePathLimitOptions {
 	readonly startTime?: Time
@@ -304,8 +305,8 @@ function evaluatePathLimitSample(elements: BesselianElements, options: ResolvedP
 
 	const northCandidate = northFirst ? first : second
 	const southCandidate = northFirst ? second : first
-	const north = makeLimitPoint(center.time, northCandidate, 'NORTH')
-	const south = makeLimitPoint(center.time, southCandidate, 'SOUTH')
+	const north = makeLimitPoint(center.time, northCandidate, 'north')
+	const south = makeLimitPoint(center.time, southCandidate, 'south')
 	const widthKm = distanceKm(north.lat, north.lon, south.lat, south.lon, elements)
 	const width: EclipsePathWidthProfile = { time: center.time, centerLat: center.lat, centerLon: center.lon, northLat: north.lat, northLon: north.lon, southLat: south.lat, southLon: south.lon, widthKm, eclipseType }
 
@@ -560,7 +561,7 @@ function crossesAntimeridian(a: EclipsePathLimitPoint, b: EclipsePathLimitPoint)
 }
 
 function limitTypeFromDetail(detail: LocalEclipseDetail): EclipsePathLimitType {
-	return detail.L2 >= 0 ? 'TOTAL' : 'ANNULAR'
+	return detail.L2 >= 0 ? 'total' : 'annular'
 }
 
 function distanceKm(aLat: Angle, aLon: Angle, bLat: Angle, bLon: Angle, elements: BesselianElements) {

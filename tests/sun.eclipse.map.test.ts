@@ -57,7 +57,7 @@ describe('solar eclipse map generation', () => {
 	test('generates a complete data package for a known total eclipse', () => {
 		const map = TOTAL_MAP
 
-		expect(map.metadata.eclipseType).toBe('TOTAL')
+		expect(map.metadata.eclipseType).toBe('total')
 		expect(map.centralLine?.hasCentralLine).toBeTrue()
 		expect(map.northLimit.length).toBeGreaterThan(0)
 		expect(map.southLimit.length).toBeGreaterThan(0)
@@ -78,7 +78,7 @@ describe('solar eclipse map generation', () => {
 	test('generates central annular geometry for a known annular eclipse', () => {
 		const map = ANNULAR_MAP
 
-		expect(map.metadata.eclipseType).toBe('ANNULAR')
+		expect(map.metadata.eclipseType).toBe('annular')
 		expect(map.centralLine?.isAnnular).toBeTrue()
 		expect(map.centralLine?.hasCentralLine).toBeTrue()
 		expect(map.northLimit.length).toBeGreaterThan(0)
@@ -89,7 +89,7 @@ describe('solar eclipse map generation', () => {
 	test('handles a partial-only eclipse without central path limits', () => {
 		const map = PARTIAL_MAP
 
-		expect(map.metadata.eclipseType).toBe('PARTIAL')
+		expect(map.metadata.eclipseType).toBe('partial')
 		expect(map.centralLine?.hasCentralLine).toBeFalse()
 		expect(map.northLimit).toHaveLength(0)
 		expect(map.southLimit).toHaveLength(0)
@@ -107,7 +107,7 @@ describe('solar eclipse map generation', () => {
 		expect(map.p1Curve).toBeUndefined()
 		expect(map.magnitudeContours).toHaveLength(0)
 		expect(map.globalStats).toBeUndefined()
-		expect(circumstances.type).toBe('TOTAL')
+		expect(circumstances.type).toBe('total')
 		expect(circumstances.maximumMagnitude).toBeGreaterThan(1)
 	})
 
@@ -115,8 +115,8 @@ describe('solar eclipse map generation', () => {
 		const map = generateSolarEclipseMap({ besselianElements: publishedL2Elements(TOTAL_2024) }, minimalOptions())
 		const circumstances = queryLocalCircumstances(map, DALLAS)
 
-		expect(map.metadata.eclipseType).toBe('TOTAL')
-		expect(circumstances.type).toBe('TOTAL')
+		expect(map.metadata.eclipseType).toBe('total')
+		expect(circumstances.type).toBe('total')
 		expect(circumstances.maximumMagnitude).toBeGreaterThan(1)
 	})
 
@@ -124,13 +124,13 @@ describe('solar eclipse map generation', () => {
 		const map = TOTAL_MAP
 		const local = queryLocalCircumstances(map, DALLAS)
 		const passing = validateSolarEclipseMap(map, {
-			eclipseType: 'TOTAL',
+			eclipseType: 'total',
 			geocentricMaximum: map.besselianElements.geocentricMaximum,
 			maxMagnitude: map.globalStats!.largestMagnitude,
-			localCircumstances: [{ id: 'dallas', location: DALLAS, type: 'TOTAL', maximumMagnitude: local.maximumMagnitude, maximumTime: local.MAX!.time }],
+			localCircumstances: [{ id: 'dallas', location: DALLAS, type: 'total', maximumMagnitude: local.maximumMagnitude, maximumTime: local.MAX!.time }],
 			tolerances: { timeSeconds: 1, magnitude: 1e-12 },
 		})
-		const failing = validateSolarEclipseMap(map, { eclipseType: 'PARTIAL' })
+		const failing = validateSolarEclipseMap(map, { eclipseType: 'partial' })
 
 		expect(passing.passed).toBeTrue()
 		expect(passing.checks.every((check) => check.delta !== undefined)).toBeTrue()

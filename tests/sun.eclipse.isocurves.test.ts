@@ -14,7 +14,7 @@ function syntheticGrid(latitudeMinDeg: number, latitudeMaxDeg: number, longitude
 	for (let latitudeDeg = latitudeMinDeg; latitudeDeg <= latitudeMaxDeg + gridResolutionDeg * 1e-12; latitudeDeg += gridResolutionDeg) {
 		for (let longitudeDeg = longitudeMinDeg; longitudeDeg <= longitudeMaxDeg + gridResolutionDeg * 1e-12; longitudeDeg += gridResolutionDeg) {
 			const fields = value(latitudeDeg, longitudeDeg)
-			const eclipseType = fields.eclipseType ?? ((fields.magnitude ?? 0) > 0 ? 'PARTIAL' : 'NONE')
+			const eclipseType = fields.eclipseType ?? ((fields.magnitude ?? 0) > 0 ? 'partial' : 'none')
 
 			samples.push({
 				latitude: latitudeDeg * DEG2RAD,
@@ -72,7 +72,7 @@ describe('eclipse local grid', () => {
 		const grid = buildEclipseLocalGrid(total2024, { gridResolutionDeg: 30 })
 
 		expect(grid).toHaveLength(84)
-		expect(grid.some((sample) => sample.eclipseType === 'NONE')).toBeTrue()
+		expect(grid.some((sample) => sample.eclipseType === 'none')).toBeTrue()
 		expect(grid.some((sample) => sample.magnitude === 0 && sample.obscuration === 0)).toBeTrue()
 		expect(grid.every((sample) => sample.latitude >= -Math.PI / 2 && sample.latitude <= Math.PI / 2)).toBeTrue()
 		expect(grid.every((sample) => sample.longitude >= -Math.PI && sample.longitude <= Math.PI)).toBeTrue()
@@ -84,7 +84,7 @@ describe('eclipse local grid', () => {
 		const visible = buildEclipseLocalGrid(total2024, { gridResolutionDeg: 30, visibleOnly: true })
 		const ignored = buildEclipseLocalGrid(total2024, { gridResolutionDeg: 30, visibleOnly: true, ignoreSunBelowHorizon: true })
 
-		expect(geometric.some((sample) => sample.eclipseType !== 'NONE' && !sample.visible)).toBeTrue()
+		expect(geometric.some((sample) => sample.eclipseType !== 'none' && !sample.visible)).toBeTrue()
 		expect(visible.some((sample) => !sample.valid)).toBeTrue()
 		expect(ignored.every((sample) => sample.valid)).toBeTrue()
 	})
@@ -94,7 +94,7 @@ describe('eclipse local grid', () => {
 		const central = grid.filter((sample) => (sample.totalOrAnnularDurationSeconds ?? 0) > 0)
 
 		expect(central.length).toBeGreaterThan(0)
-		expect(central.every((sample) => sample.eclipseType === 'TOTAL' || sample.eclipseType === 'ANNULAR' || sample.eclipseType === 'HYBRID')).toBeTrue()
+		expect(central.every((sample) => sample.eclipseType === 'total' || sample.eclipseType === 'annular' || sample.eclipseType === 'hybrid')).toBeTrue()
 	})
 })
 
@@ -130,7 +130,7 @@ describe('eclipse iso-curves from Besselian elements', () => {
 			{ gridResolutionDeg: 30 },
 		)
 
-		expect(nearestSolarEclipse(timeYMD(2025, 9, 21), true).type).toBe('PARTIAL')
+		expect(nearestSolarEclipse(timeYMD(2025, 9, 21), true).type).toBe('partial')
 		expect(curves[0].segments.length).toBeGreaterThan(0)
 		expect(curves[1].segments.length).toBeGreaterThan(0)
 		expect(curves[2].segments).toHaveLength(0)

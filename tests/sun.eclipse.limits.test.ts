@@ -81,7 +81,7 @@ function syntheticElements(input: Partial<Record<'x' | 'y' | 'd' | 'mu' | 'l1' |
 		l2SignConvention: 'positiveTotal',
 		tanF1: polynomial('tanF1', 0.0046),
 		tanF2: polynomial('tanF2', 0.0045),
-		eclipseTypeApprox: input.type ?? 'TOTAL',
+		eclipseTypeApprox: input.type ?? 'total',
 		geocentricMaximum: t0,
 		earth: {
 			equatorialRadius: WGS84_RADIUS,
@@ -108,8 +108,8 @@ describe('solar eclipse path limits', () => {
 		expect(result.southLimit).toHaveLength(result.northLimit.length)
 		expect(result.widthProfile).toHaveLength(result.northLimit.length)
 		expect(result.polygons).toHaveLength(1)
-		expect(result.northLimit.every((point) => point.side === 'NORTH' && point.eclipseType === 'TOTAL')).toBeTrue()
-		expect(result.southLimit.every((point) => point.side === 'SOUTH' && point.eclipseType === 'TOTAL')).toBeTrue()
+		expect(result.northLimit.every((point) => point.side === 'north' && point.eclipseType === 'total')).toBeTrue()
+		expect(result.southLimit.every((point) => point.side === 'south' && point.eclipseType === 'total')).toBeTrue()
 		expect(result.northLimit.every((point, index) => point.lat >= result.southLimit[index].lat)).toBeTrue()
 		expect(result.northLimit.every((point) => point.localDurationSeconds === 0 && Math.abs(point.residual ?? 0) < 1e-4)).toBeTrue()
 		expect(result.diagnostics?.acceptedLimitPairs).toBe(result.widthProfile.length)
@@ -120,9 +120,9 @@ describe('solar eclipse path limits', () => {
 		const result = generatePathLimits(annular2024, { stepSeconds: 300 })
 
 		expect(result.northLimit.length).toBeGreaterThan(0)
-		expect(result.widthProfile.every((profile) => profile.eclipseType === 'ANNULAR')).toBeTrue()
+		expect(result.widthProfile.every((profile) => profile.eclipseType === 'annular')).toBeTrue()
 		expect(result.polygons).toHaveLength(1)
-		expect(result.polygons[0].eclipseType).toBe('ANNULAR')
+		expect(result.polygons[0].eclipseType).toBe('annular')
 		expectFiniteLimits(result)
 	})
 
@@ -130,10 +130,10 @@ describe('solar eclipse path limits', () => {
 		const result = generatePathLimits(hybrid2023, { stepSeconds: 30, splitAntimeridian: true })
 		const types = new Set(result.widthProfile.map((profile) => profile.eclipseType))
 
-		expect(types.has('TOTAL')).toBeTrue()
-		expect(types.has('ANNULAR')).toBeTrue()
-		expect(result.polygons.some((polygon) => polygon.eclipseType === 'TOTAL')).toBeTrue()
-		expect(result.polygons.some((polygon) => polygon.eclipseType === 'ANNULAR')).toBeTrue()
+		expect(types.has('total')).toBeTrue()
+		expect(types.has('annular')).toBeTrue()
+		expect(result.polygons.some((polygon) => polygon.eclipseType === 'total')).toBeTrue()
+		expect(result.polygons.some((polygon) => polygon.eclipseType === 'annular')).toBeTrue()
 		expectFiniteLimits(result)
 	})
 

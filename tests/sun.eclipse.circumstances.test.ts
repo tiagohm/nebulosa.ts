@@ -21,7 +21,7 @@ describe('local solar eclipse circumstances', () => {
 
 		expect(circumstances.geometricallyOccurs).toBeFalse()
 		expect(circumstances.visible).toBeFalse()
-		expect(circumstances.type).toBe('NONE')
+		expect(circumstances.type).toBe('none')
 		expect(circumstances.contacts).toHaveLength(0)
 		expect(circumstances.MAX).toBeUndefined()
 		expect(circumstances.maximumMagnitude).toBe(0)
@@ -32,7 +32,7 @@ describe('local solar eclipse circumstances', () => {
 
 		expect(circumstances.geometricallyOccurs).toBeTrue()
 		expect(circumstances.visible).toBeTrue()
-		expect(circumstances.type).toBe('PARTIAL')
+		expect(circumstances.type).toBe('partial')
 		expect(circumstances.C1).toBeDefined()
 		expect(circumstances.MAX).toBeDefined()
 		expect(circumstances.C4).toBeDefined()
@@ -47,7 +47,7 @@ describe('local solar eclipse circumstances', () => {
 		const circumstances = computeLocalCircumstances(total2024, dallas)
 
 		expect(circumstances.visible).toBeTrue()
-		expect(circumstances.type).toBe('TOTAL')
+		expect(circumstances.type).toBe('total')
 		expect(circumstances.C1).toBeDefined()
 		expect(circumstances.C2).toBeDefined()
 		expect(circumstances.MAX).toBeDefined()
@@ -65,7 +65,7 @@ describe('local solar eclipse circumstances', () => {
 		const circumstances = computeLocalCircumstances(annular2024, rapaNui)
 
 		expect(circumstances.visible).toBeTrue()
-		expect(circumstances.type).toBe('ANNULAR')
+		expect(circumstances.type).toBe('annular')
 		expect(circumstances.C2).toBeDefined()
 		expect(circumstances.C3).toBeDefined()
 		expect(circumstances.MAX!.phase.isAnnular).toBeTrue()
@@ -81,7 +81,7 @@ describe('local solar eclipse circumstances', () => {
 		expect(circumstances.geometricallyOccurs).toBeTrue()
 		expect(circumstances.visibleAboveHorizon).toBeFalse()
 		expect(circumstances.visible).toBeFalse()
-		expect(circumstances.type).toBe('NONE')
+		expect(circumstances.type).toBe('none')
 		expect(circumstances.maximumMagnitude).toBeGreaterThan(0)
 		expect(circumstances.contacts.every((contact) => !contact.visible)).toBeTrue()
 	})
@@ -92,7 +92,7 @@ describe('local solar eclipse circumstances', () => {
 		expect(circumstances.geometricallyOccurs).toBeTrue()
 		expect(circumstances.visibleAboveHorizon).toBeTrue()
 		expect(circumstances.visible).toBeTrue()
-		expect(circumstances.type).toBe('PARTIAL')
+		expect(circumstances.type).toBe('partial')
 		expect(circumstances.contacts.some((contact) => contact.visible)).toBeTrue()
 		expect(circumstances.contacts.some((contact) => !contact.visible)).toBeTrue()
 	})

@@ -4,7 +4,7 @@ import { angularDistance } from './coordinate'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from './sun'
 import { generateBesselianElements, type BesselianElements, type SolarEclipseBesselianContext } from './sun.eclipse.besselian'
 import { computeLocalCircumstances, type EclipseContact, type LocalEclipseCircumstances, type LocalEclipseContactType, type LocalEclipseLocation, type LocalEclipseOptions } from './sun.eclipse.circumstances'
-import { generateGlobalPartialContactCurves, generatePenumbraContourAt, type ContourPoint, type EarthModel, type GlobalContactCurve, type GlobalEclipseContour } from './sun.eclipse.pcurves'
+import { generateGlobalPartialContactCurves, generatePenumbraContourAt, type ContourPoint, type GlobalContactCurve, type GlobalEclipseContour } from './sun.eclipse.pcurves'
 import { buildEclipseLocalGrid, generateEclipseIsoCurvesFromGrid, type EclipseContourLevel, type EclipseGridSample, type EclipseIsoCurve, type EclipseIsoCurveSegment, type EclipseIsoCurveType, type GeoPoint } from './sun.eclipse.isocurves'
 import { generatePathLimits, type EclipsePathLimitPoint, type EclipsePathLimitsResult, type EclipsePathPolygon } from './sun.eclipse.limits'
 import type { CentralLinePoint, CentralLineResult } from './sun.eclipse.lines'
@@ -41,8 +41,6 @@ const PRECISION_DEFAULTS = {
 
 export type SolarEclipsePrecisionProfile = 'LOW' | 'MEDIUM' | 'HIGH'
 
-export type SolarEclipseEarthModel = EarthModel
-
 export type SolarEclipseDataSourceType = 'precomputedBesselianElements' | 'computedBesselianElements'
 
 export type SolarEclipseCurveType = 'centralLine' | 'northLimit' | 'southLimit' | 'centralPathPolygon' | 'partialContact' | 'penumbraInstantContour' | 'magnitudeContour' | 'obscurationContour' | 'totalDurationContour' | 'annularDurationContour' | 'partialDurationContour'
@@ -75,7 +73,7 @@ export interface SolarEclipseGenerationOptions {
 	readonly visibleOnly?: boolean
 	readonly includeSunBelowHorizon?: boolean
 	readonly minimumSolarAltitude?: Angle
-	readonly earthModel?: SolarEclipseEarthModel
+	readonly useEllipsoid?: boolean
 	readonly contourTolerance?: number
 	readonly rootFindingTolerance?: number
 	readonly maxIterations?: number
@@ -102,7 +100,7 @@ export interface NormalizedSolarEclipseGenerationOptions {
 	readonly visibleOnly: boolean
 	readonly includeSunBelowHorizon: boolean
 	readonly minimumSolarAltitude: Angle
-	readonly earthModel: SolarEclipseEarthModel
+	readonly useEllipsoid: boolean
 	readonly contourTolerance: number
 	readonly rootFindingTolerance: number
 	readonly maxIterations: number
@@ -135,19 +133,19 @@ export interface SolarEclipseGlobalMaximum {
 	readonly time?: Time
 	readonly magnitude: number
 	readonly obscuration: number
-	readonly eclipseType: SolarEclipseType | 'NONE'
+	readonly eclipseType: SolarEclipseType | 'none'
 	readonly solarAltitude?: Angle
 }
 
 export interface SolarEclipseMapMetadata {
 	readonly date: Time
-	readonly eclipseType: SolarEclipseType | 'UNKNOWN'
+	readonly eclipseType: SolarEclipseType | 'unknown'
 	readonly geocentricMaximum: Time
 	readonly approximateGlobalMaximum?: SolarEclipseGlobalMaximum
 	readonly deltaT: number
 	readonly validTimeRange: SolarEclipseTimeRange
 	readonly precision: SolarEclipsePrecisionProfile
-	readonly earthModel: SolarEclipseEarthModel
+	readonly useEllipsoid: boolean
 	readonly source: SolarEclipseMapSource
 }
 
@@ -261,7 +259,7 @@ export interface SolarEclipseCentralLineReference {
 
 export interface SolarEclipseMapValidationReferences {
 	readonly tolerances?: SolarEclipseValidationTolerances
-	readonly eclipseType?: SolarEclipseType | 'UNKNOWN'
+	readonly eclipseType?: SolarEclipseType | 'unknown'
 	readonly geocentricMaximum?: Time
 	readonly greatestEclipseLocation?: {
 		readonly latitude: Angle
@@ -332,7 +330,7 @@ export function generateSolarEclipseMap(input: SolarEclipseMapInput, options?: S
 		pathLimits = generateOptional(context, 'centralPath', () =>
 			generatePathLimits(elements, {
 				stepSeconds: normalized.temporalStepSeconds,
-				useEllipsoid: normalized.earthModel === 'WGS84',
+				useEllipsoid: normalized.useEllipsoid,
 				discardBelowHorizon: normalized.visibleOnly && !normalized.includeSunBelowHorizon,
 				solarAltitudeMin: normalized.minimumSolarAltitude,
 				timeToleranceSeconds: normalized.rootFindingTolerance,
@@ -362,7 +360,7 @@ export function generateSolarEclipseMap(input: SolarEclipseMapInput, options?: S
 				contourTolerance: normalized.contourTolerance,
 				temporalTolerance: Math.max(normalized.rootFindingTolerance, normalized.temporalStepSeconds),
 				spatialTolerance: normalized.contourTolerance,
-				earthModel: normalized.earthModel,
+				useEllipsoid: normalized.useEllipsoid,
 				considerSolarHorizon: !normalized.includeSunBelowHorizon,
 				minimumSolarAltitude: normalized.minimumSolarAltitude,
 				splitAtAntimeridian: normalized.splitAtAntimeridian,
@@ -391,7 +389,7 @@ export function generateSolarEclipseMap(input: SolarEclipseMapInput, options?: S
 					...generatePenumbraContourAt(elements, time, {
 						angularSamplingDeg: normalized.spatialResolutionDeg,
 						contourTolerance: normalized.contourTolerance,
-						earthModel: normalized.earthModel,
+						useEllipsoid: normalized.useEllipsoid,
 						considerSolarHorizon: !normalized.includeSunBelowHorizon,
 						minimumSolarAltitude: normalized.minimumSolarAltitude,
 						splitAtAntimeridian: normalized.splitAtAntimeridian,
@@ -444,7 +442,7 @@ export function generateSolarEclipseMap(input: SolarEclipseMapInput, options?: S
 		deltaT: elements.deltaTSeconds,
 		validTimeRange: { start: elements.validFrom, end: elements.validTo },
 		precision: normalized.precision,
-		earthModel: normalized.earthModel,
+		useEllipsoid: normalized.useEllipsoid,
 		source,
 	}
 
@@ -486,7 +484,7 @@ export function generateSolarEclipseMap(input: SolarEclipseMapInput, options?: S
 // Queries local circumstances from the map's existing Besselian elements.
 export function queryLocalCircumstances(map: SolarEclipseMap, location: LocalEclipseLocation, options?: SolarEclipseLocalQueryOptions): LocalEclipseCircumstances {
 	return computeLocalCircumstances(map.besselianElements, location, {
-		useEarthEllipsoid: options?.useEarthEllipsoid ?? map.metadata.earthModel === 'WGS84',
+		useEarthEllipsoid: options?.useEarthEllipsoid ?? map.metadata.useEllipsoid,
 		includeRefraction: options?.includeRefraction,
 		solarHorizonMinAltitude: options?.solarHorizonMinAltitude ?? map.options.minimumSolarAltitude,
 		timeToleranceSeconds: options?.timeToleranceSeconds ?? map.options.rootFindingTolerance,
@@ -605,7 +603,7 @@ function normalizeGenerationOptions(options: SolarEclipseGenerationOptions = {})
 		visibleOnly: options.visibleOnly ?? false,
 		includeSunBelowHorizon: options.includeSunBelowHorizon ?? false,
 		minimumSolarAltitude,
-		earthModel: options.earthModel ?? 'WGS84',
+		useEllipsoid: options.useEllipsoid ?? true,
 		contourTolerance,
 		rootFindingTolerance,
 		maxIterations,
@@ -696,7 +694,7 @@ function buildContourLevels(options: NormalizedSolarEclipseGenerationOptions, el
 }
 
 function centralDurationLabel(elements: BesselianElements) {
-	return elements.eclipseTypeApprox === 'ANNULAR' ? 'annular duration' : 'total duration'
+	return elements.eclipseTypeApprox === 'annular' ? 'annular duration' : 'total duration'
 }
 
 function localGridOptions(options: NormalizedSolarEclipseGenerationOptions) {
@@ -722,7 +720,7 @@ function computeGlobalStats(elements: BesselianElements, samples: readonly Eclip
 	for (const sample of samples) {
 		const magnitude = sample.magnitude ?? 0
 		const obscuration = sample.obscuration ?? 0
-		const geometricallyEclipsed = sample.eclipseType !== 'NONE' && magnitude > 0
+		const geometricallyEclipsed = sample.eclipseType !== 'none' && magnitude > 0
 
 		if (magnitude > largestMagnitude) largestMagnitude = magnitude
 		if (obscuration > largestObscuration) largestObscuration = obscuration
@@ -790,8 +788,8 @@ function maxCentralMagnitudePoint(centralLine?: CentralLineResult) {
 }
 
 function centralObscuration(point: CentralLinePoint) {
-	if (point.eclipseType === 'ANNULAR') return Math.min(1, point.magnitude * point.magnitude)
-	return point.eclipseType === 'TOTAL' || point.eclipseType === 'HYBRID' ? 1 : Math.min(1, point.magnitude)
+	if (point.eclipseType === 'annular') return Math.min(1, point.magnitude * point.magnitude)
+	return point.eclipseType === 'total' || point.eclipseType === 'hybrid' ? 1 : Math.min(1, point.magnitude)
 }
 
 interface MutableExtent {
@@ -826,7 +824,7 @@ function approximateMaximumFromCentralLine(centralLine?: CentralLineResult): Sol
 	const point = centralLine?.maxDurationPoint ?? centralLine?.maxWidthPoint ?? centralLine?.points[0]
 	if (!point) return undefined
 
-	return { latitude: point.lat, longitude: point.lon, time: point.time, magnitude: point.magnitude, obscuration: point.eclipseType === 'ANNULAR' ? Math.min(1, point.magnitude * point.magnitude) : 1, eclipseType: point.eclipseType, solarAltitude: point.solarAltitude }
+	return { latitude: point.lat, longitude: point.lon, time: point.time, magnitude: point.magnitude, obscuration: point.eclipseType === 'annular' ? Math.min(1, point.magnitude * point.magnitude) : 1, eclipseType: point.eclipseType, solarAltitude: point.solarAltitude }
 }
 
 function buildMapCurves(
@@ -966,7 +964,7 @@ function isoCurveType(elements: BesselianElements, curve: EclipseIsoCurve): Sola
 		case 'partialDuration':
 			return 'partialDurationContour'
 		case 'totalOrAnnularDuration':
-			return elements.eclipseTypeApprox === 'ANNULAR' ? 'annularDurationContour' : 'totalDurationContour'
+			return elements.eclipseTypeApprox === 'annular' ? 'annularDurationContour' : 'totalDurationContour'
 	}
 }
 
@@ -1035,10 +1033,10 @@ function largestPolygon(polygons: readonly EclipsePathPolygon[]) {
 	return best
 }
 
-function determineEclipseType(elements: BesselianElements, centralLine?: CentralLineResult): SolarEclipseType | 'UNKNOWN' {
-	if (centralLine?.isHybrid) return 'HYBRID'
-	if (centralLine?.isTotal) return 'TOTAL'
-	if (centralLine?.isAnnular) return 'ANNULAR'
+function determineEclipseType(elements: BesselianElements, centralLine?: CentralLineResult): SolarEclipseType | 'unknown' {
+	if (centralLine?.isHybrid) return 'hybrid'
+	if (centralLine?.isTotal) return 'total'
+	if (centralLine?.isAnnular) return 'annular'
 	return elements.eclipseTypeApprox
 }
 
@@ -1149,7 +1147,7 @@ function buildValidationRecommendations(map: SolarEclipseMap, checks: readonly V
 	const recommendations: string[] = []
 
 	if (checks.some((check) => !check.passed)) recommendations.push('increase precision or tighten temporal and spatial resolution before comparing against high-precision references')
-	if (!map.centralLine?.hasCentralLine && map.metadata.eclipseType !== 'PARTIAL') recommendations.push('inspect central-path options because this non-partial eclipse has no generated central line')
+	if (!map.centralLine?.hasCentralLine && map.metadata.eclipseType !== 'partial') recommendations.push('inspect central-path options because this non-partial eclipse has no generated central line')
 	if (map.warnings.some((warning) => warning.includes('maximum iteration'))) recommendations.push('increase maxIterations or relax contourTolerance for unstable grazing geometry')
 	if (map.warnings.some((warning) => warning.includes('outside the sampled reachable range'))) recommendations.push('remove unreachable contour levels or use a finer spatial grid')
 

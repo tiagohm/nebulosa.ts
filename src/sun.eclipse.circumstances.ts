@@ -33,7 +33,7 @@ const GOLDEN_RATIO_CONJUGATE = 0.3819660112501051
 
 export type LocalEclipseContactType = 'C1' | 'C2' | 'MAX' | 'C3' | 'C4'
 
-export type LocalEclipseVisibilityType = 'NONE' | SolarEclipseType
+export type LocalEclipseVisibilityType = 'none' | SolarEclipseType
 
 export interface LocalEclipseLocation {
 	readonly latitude: Angle
@@ -230,8 +230,8 @@ export function computeLocalCircumstances(elements: BesselianElements, location:
 
 		const centralRoots = findContactRoots(elements, local, resolved, samples, (detail) => detail.m - Math.abs(detail.L2))
 
-		if (centralRoots.length > 0 && maximumDetail.phase.type !== 'PARTIAL') C2 = makeContact('C2', computeAtTau(elements, local, resolved, centralRoots[0]))
-		if (centralRoots.length > 1 && maximumDetail.phase.type !== 'PARTIAL') C3 = makeContact('C3', computeAtTau(elements, local, resolved, centralRoots.at(-1)!))
+		if (centralRoots.length > 0 && maximumDetail.phase.type !== 'partial') C2 = makeContact('C2', computeAtTau(elements, local, resolved, centralRoots[0]))
+		if (centralRoots.length > 1 && maximumDetail.phase.type !== 'partial') C3 = makeContact('C3', computeAtTau(elements, local, resolved, centralRoots.at(-1)!))
 
 		MAX = makeContact('MAX', maximumDetail)
 	}
@@ -244,7 +244,7 @@ export function computeLocalCircumstances(elements: BesselianElements, location:
 	const preliminary: LocalEclipseCircumstances = {
 		location: local,
 		visible,
-		type: 'NONE',
+		type: 'none',
 		C1,
 		C2,
 		MAX,
@@ -266,14 +266,14 @@ export function computeLocalCircumstances(elements: BesselianElements, location:
 
 // Classifies visible local eclipse type from computed circumstances.
 export function classifyLocalEclipse(circumstances: LocalEclipseCircumstances): LocalEclipseVisibilityType {
-	if (!circumstances.visible || !circumstances.MAX) return 'NONE'
+	if (!circumstances.visible || !circumstances.MAX) return 'none'
 
 	const phase = circumstances.MAX.phase
-	if (phase.isHybrid) return 'HYBRID'
-	if (phase.isTotal) return 'TOTAL'
-	if (phase.isAnnular) return 'ANNULAR'
-	if (circumstances.maximumMagnitude > 0) return 'PARTIAL'
-	return 'NONE'
+	if (phase.isHybrid) return 'hybrid'
+	if (phase.isTotal) return 'total'
+	if (phase.isAnnular) return 'annular'
+	if (circumstances.maximumMagnitude > 0) return 'partial'
+	return 'none'
 }
 
 function resolveOptions(options: LocalEclipseOptions = {}): ResolvedLocalEclipseOptions {
@@ -372,10 +372,10 @@ function computeZenithAngle(state: BesselianState, location: Required<LocalEclip
 function computePhase(elements: BesselianElements, magnitude: number, obscuration: number, m: number, L1: number, L2: number, visibleAboveHorizon: boolean): LocalEclipsePhase {
 	const geometricallyEclipsed = magnitude > 0 && m < L1 + CONTACT_VALUE_TOLERANCE
 	const central = geometricallyEclipsed && m <= Math.abs(L2) + CONTACT_VALUE_TOLERANCE
-	const isHybrid = central && elements.eclipseTypeApprox === 'HYBRID'
+	const isHybrid = central && elements.eclipseTypeApprox === 'hybrid'
 	const isTotal = central && L2 > 0 && !isHybrid
 	const isAnnular = central && L2 < 0 && !isHybrid
-	const type: LocalEclipseVisibilityType = !geometricallyEclipsed ? 'NONE' : isHybrid ? 'HYBRID' : isTotal ? 'TOTAL' : isAnnular ? 'ANNULAR' : 'PARTIAL'
+	const type: LocalEclipseVisibilityType = !geometricallyEclipsed ? 'none' : isHybrid ? 'hybrid' : isTotal ? 'total' : isAnnular ? 'annular' : 'partial'
 	return { type, isPartial: geometricallyEclipsed && !isTotal && !isAnnular && !isHybrid && obscuration > 0, isTotal, isAnnular, isHybrid, geometricallyEclipsed, visibleAboveHorizon }
 }
 

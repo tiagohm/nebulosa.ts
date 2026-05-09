@@ -87,8 +87,8 @@ describe('solar eclipse Besselian elements', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2017, 8, 1), true)
 		const elements = generateBesselianElements({ maximumApprox: eclipse.maximalTime })
 
-		expect(eclipse.type).toBe('TOTAL')
-		expect(elements.eclipseTypeApprox).toBe('TOTAL')
+		expect(eclipse.type).toBe('total')
+		expect(elements.eclipseTypeApprox).toBe('total')
 		expect(elements.samples).toHaveLength(37)
 		expectFiniteElements(elements)
 		for (const sample of elements.samples ?? []) expectFiniteSample(sample)
@@ -105,8 +105,8 @@ describe('solar eclipse Besselian elements', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2024, 3, 1), true)
 		const elements = generateBesselianElements({ maximumApprox: eclipse.maximalTime })
 
-		expect(eclipse.type).toBe('TOTAL')
-		expect(elements.eclipseTypeApprox).toBe('TOTAL')
+		expect(eclipse.type).toBe('total')
+		expect(elements.eclipseTypeApprox).toBe('total')
 		expect(elements.samples).toHaveLength(37)
 		expectFiniteElements(elements)
 		for (const sample of elements.samples ?? []) expectFiniteSample(sample)
@@ -137,7 +137,7 @@ describe('solar eclipse Besselian elements', () => {
 		expect(published.l2SignConvention).toBeUndefined()
 		expect(published.l2.coefficients[0]).toBeLessThan(0)
 		expect(publishedState.l2).toBeCloseTo(internalState.l2, 12)
-		expect(circumstances.type).toBe('TOTAL')
+		expect(circumstances.type).toBe('total')
 		expect(circumstances.maximumMagnitude).toBeGreaterThan(1)
 	})
 
