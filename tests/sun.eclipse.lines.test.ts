@@ -145,7 +145,7 @@ describe('solar eclipse central line', () => {
 	})
 
 	test('handles polar passages without longitude or latitude singularities', () => {
-		const line = generateCentralLine(syntheticElements(), { stepSeconds: 120, useSphericalEarth: true })
+		const line = generateCentralLine(syntheticElements(), { stepSeconds: 120, useEllipsoid: false })
 
 		expect(line.hasCentralLine).toBeTrue()
 		expect(line.points.some((point) => Math.abs(point.lat) > deg(80))).toBeTrue()
@@ -164,7 +164,7 @@ describe('solar eclipse central line', () => {
 
 	test('supports ellipsoid and spherical Earth modes', () => {
 		const ellipsoid = generateCentralLine(total2024, { stepSeconds: 600, useEllipsoid: true })
-		const spherical = generateCentralLine(total2024, { stepSeconds: 600, useSphericalEarth: true })
+		const spherical = generateCentralLine(total2024, { stepSeconds: 600, useEllipsoid: false })
 		const index = Math.floor(Math.min(ellipsoid.points.length, spherical.points.length) / 2)
 		const latitudeDifference = Math.abs(ellipsoid.points[index].lat - spherical.points[index].lat)
 

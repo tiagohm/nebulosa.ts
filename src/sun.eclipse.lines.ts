@@ -30,7 +30,6 @@ export interface CentralLineOptions {
 	readonly startTime?: Time
 	readonly endTime?: Time
 	readonly stepSeconds?: number
-	readonly useSphericalEarth?: boolean
 	readonly useEllipsoid?: boolean
 	readonly discardBelowHorizon?: boolean
 	readonly solarAltitudeMin?: Angle
@@ -146,8 +145,6 @@ function emptyResult(warnings: string[]): CentralLineResult {
 }
 
 function resolveOptions(elements: BesselianElements, options: CentralLineOptions = {}): ResolvedCentralLineOptions {
-	if (options.useSphericalEarth && options.useEllipsoid) throw new Error('useSphericalEarth and useEllipsoid cannot both be true')
-
 	const startTime = options.startTime ?? elements.validFrom
 	const endTime = options.endTime ?? elements.validTo
 	const startTauHours = normalizeBesselianTime(elements, startTime)
@@ -172,7 +169,7 @@ function resolveOptions(elements: BesselianElements, options: CentralLineOptions
 		startTauHours,
 		endTauHours,
 		stepSeconds,
-		useEllipsoid: options.useSphericalEarth ? false : (options.useEllipsoid ?? true),
+		useEllipsoid: options.useEllipsoid ?? true,
 		discardBelowHorizon: options.discardBelowHorizon ?? false,
 		solarAltitudeMin,
 		toleranceSeconds,

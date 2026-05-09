@@ -35,7 +35,6 @@ export interface EclipsePathLimitOptions {
 	readonly startTime?: Time
 	readonly endTime?: Time
 	readonly stepSeconds?: number
-	readonly useSphericalEarth?: boolean
 	readonly useEllipsoid?: boolean
 	readonly discardBelowHorizon?: boolean
 	readonly solarAltitudeMin?: Angle
@@ -148,7 +147,6 @@ export function generatePathLimits(elements: BesselianElements, options?: Eclips
 		endTime: resolved.endTime,
 		stepSeconds: resolved.stepSeconds,
 		useEllipsoid: resolved.useEllipsoid,
-		useSphericalEarth: !resolved.useEllipsoid,
 		discardBelowHorizon: resolved.discardBelowHorizon,
 		solarAltitudeMin: resolved.solarAltitudeMin,
 		toleranceSeconds: resolved.timeToleranceSeconds,
@@ -246,8 +244,6 @@ function emptyResult(centerLine: CentralLineResult, warnings: string[]): Eclipse
 }
 
 function resolveOptions(options: EclipsePathLimitOptions = {}): ResolvedPathLimitOptions {
-	if (options.useSphericalEarth && options.useEllipsoid) throw new Error('useSphericalEarth and useEllipsoid cannot both be true')
-
 	const stepSeconds = options.stepSeconds ?? DEFAULT_STEP_SECONDS
 	const timeToleranceSeconds = options.timeToleranceSeconds ?? options.toleranceSeconds ?? DEFAULT_TIME_TOLERANCE_SECONDS
 	const spatialToleranceKm = options.spatialToleranceKm ?? DEFAULT_SPATIAL_TOLERANCE_KM
@@ -269,7 +265,7 @@ function resolveOptions(options: EclipsePathLimitOptions = {}): ResolvedPathLimi
 
 	return {
 		stepSeconds,
-		useEllipsoid: options.useSphericalEarth ? false : (options.useEllipsoid ?? true),
+		useEllipsoid: options.useEllipsoid ?? true,
 		discardBelowHorizon: options.discardBelowHorizon ?? false,
 		solarAltitudeMin,
 		timeToleranceSeconds,

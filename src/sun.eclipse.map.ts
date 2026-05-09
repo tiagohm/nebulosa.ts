@@ -333,7 +333,6 @@ export function generateSolarEclipseMap(input: SolarEclipseMapInput, options?: S
 			generatePathLimits(elements, {
 				stepSeconds: normalized.temporalStepSeconds,
 				useEllipsoid: normalized.earthModel === 'WGS84',
-				useSphericalEarth: normalized.earthModel === 'SPHERE',
 				discardBelowHorizon: normalized.visibleOnly && !normalized.includeSunBelowHorizon,
 				solarAltitudeMin: normalized.minimumSolarAltitude,
 				timeToleranceSeconds: normalized.rootFindingTolerance,

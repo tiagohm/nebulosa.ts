@@ -4,7 +4,7 @@ import type { Distance } from './distance'
 import { moon as geocentricMoon } from './elpmpp02'
 import { eraGst06a } from './erfa'
 import { matMulVec } from './mat3'
-import { clamp } from './math'
+import { clamp, type NumberArray } from './math'
 import { moonSemidiameter } from './moon'
 import { polynomialRegression } from './regression'
 import { type SolarEclipseType, sunSemidiameter } from './sun'
@@ -58,7 +58,7 @@ export type BesselianL2SignConvention = 'positiveTotal' | 'negativeTotal'
 // Polynomial coefficients in ascending powers of tauHours.
 export interface BesselianPolynomial {
 	readonly degree: number
-	readonly coefficients: number[]
+	readonly coefficients: Readonly<NumberArray>
 }
 
 // Sampled Besselian element set and fitted polynomials.

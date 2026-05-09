@@ -187,7 +187,7 @@ describe('solar eclipse path limits', () => {
 
 	test('supports ellipsoid and spherical Earth modes', () => {
 		const ellipsoid = generatePathLimits(total2024, { stepSeconds: 600, useEllipsoid: true })
-		const spherical = generatePathLimits(total2024, { stepSeconds: 600, useSphericalEarth: true })
+		const spherical = generatePathLimits(total2024, { stepSeconds: 600, useEllipsoid: false })
 		const index = Math.floor(Math.min(ellipsoid.northLimit.length, spherical.northLimit.length) / 2)
 		const latitudeDifference = Math.abs(ellipsoid.northLimit[index].lat - spherical.northLimit[index].lat)
 
@@ -210,9 +210,9 @@ describe('solar eclipse path limits', () => {
 	})
 
 	test('handles synthetic narrow, wide, polar, and missing central paths', () => {
-		const narrow = generatePathLimits(syntheticElements({ l2: [0.002, 0] }), { stepSeconds: 300, useSphericalEarth: true })
-		const wide = generatePathLimits(syntheticElements({ l2: [0.06, 0] }), { stepSeconds: 300, useSphericalEarth: true })
-		const miss = generatePathLimits(syntheticElements({ x: [2, 0] }), { stepSeconds: 300, useSphericalEarth: true })
+		const narrow = generatePathLimits(syntheticElements({ l2: [0.002, 0] }), { stepSeconds: 300, useEllipsoid: false })
+		const wide = generatePathLimits(syntheticElements({ l2: [0.06, 0] }), { stepSeconds: 300, useEllipsoid: false })
+		const miss = generatePathLimits(syntheticElements({ x: [2, 0] }), { stepSeconds: 300, useEllipsoid: false })
 
 		expect(narrow.widthProfile.length).toBeGreaterThan(0)
 		expect(wide.widthProfile.length).toBeGreaterThan(0)
@@ -222,9 +222,5 @@ describe('solar eclipse path limits', () => {
 		expect(miss.polygons).toHaveLength(0)
 		expectFiniteLimits(narrow)
 		expectFiniteLimits(wide)
-	})
-
-	test('validates incompatible Earth-model options', () => {
-		expect(() => generatePathLimits(total2024, { useEllipsoid: true, useSphericalEarth: true })).toThrow('useSphericalEarth and useEllipsoid cannot both be true')
 	})
 })
