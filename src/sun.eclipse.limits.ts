@@ -1,5 +1,5 @@
 import { type Angle, normalizePI } from './angle'
-import { AU_KM } from './constants'
+import { AU_KM, PI } from './constants'
 import { angularDistance } from './coordinate'
 import { clamp } from './math'
 import type { BesselianElements } from './sun.eclipse.besselian'
@@ -589,10 +589,10 @@ function isFiniteLimitPoint(point: EclipsePathLimitPoint) {
 		Number.isFinite(point.time.day) &&
 		Number.isFinite(point.time.fraction) &&
 		Number.isFinite(point.lat) &&
-		Math.abs(point.lat) <= Math.PI / 2 &&
+		Math.abs(point.lat) <= PI / 2 &&
 		Number.isFinite(point.lon) &&
-		point.lon >= -Math.PI &&
-		point.lon < Math.PI &&
+		point.lon >= -PI &&
+		point.lon < PI &&
 		Number.isFinite(point.solarAltitude) &&
 		Number.isFinite(point.localDurationSeconds) &&
 		Number.isFinite(point.distanceFromCenterKm)

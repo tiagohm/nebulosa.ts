@@ -361,8 +361,8 @@ function evaluateContactGrid(elements: BesselianElements, grid: GeographicGrid, 
 		for (let column = 0; column < grid.columns; column++) {
 			const lon = grid.longitudes[column]
 			const circumstances = computeLocalCircumstances(elements, { latitude: lat, longitude: lon }, localOptions)
-			const p1 = circumstances.c1 ? contactMetadata(circumstances.c1, options) : undefined
-			const p4 = circumstances.c4 ? contactMetadata(circumstances.c4, options) : undefined
+			const p1 = circumstances.C1 ? contactMetadata(circumstances.C1, options) : undefined
+			const p4 = circumstances.C4 ? contactMetadata(circumstances.C4, options) : undefined
 			nodes[nodeIndex(grid, row, column)] = { lat, lon, p1, p4 }
 			diagnostics.evaluatedNodes++
 			if (p1 || p4) diagnostics.validNodes++
@@ -433,7 +433,7 @@ function refineContactBoundaryPoint(elements: BesselianElements, grid: Geographi
 
 function contactPointAt(elements: BesselianElements, type: PenumbraContactType, options: NormalizedGlobalPartialContactCurveOptions, lat: Angle, lon: Angle): ContourPoint | undefined {
 	const circumstances = computeLocalCircumstances(elements, { latitude: lat, longitude: lon }, localCircumstanceOptions(options))
-	const contact = type === 'P1' ? circumstances.c1 : circumstances.c4
+	const contact = type === 'P1' ? circumstances.C1 : circumstances.C4
 	if (!contact) return undefined
 
 	const belowHorizon = contact.sunAltitude < options.minimumSolarAltitude
@@ -701,12 +701,7 @@ function nodeIndex(grid: GeographicGrid, row: number, column: number) {
 }
 
 function localCircumstanceOptions(options: NormalizedGlobalPartialContactCurveOptions) {
-	return {
-		useEarthEllipsoid: options.useEllipsoid,
-		solarHorizonMinAltitude: options.minimumSolarAltitude,
-		timeToleranceSeconds: Math.max(0.1, options.temporalTolerance),
-		scanStepSeconds: Math.max(1, options.temporalTolerance),
-	}
+	return { useEarthEllipsoid: options.useEllipsoid, solarHorizonMinAltitude: options.minimumSolarAltitude, timeToleranceSeconds: Math.max(0.1, options.temporalTolerance), scanStepSeconds: Math.max(1, options.temporalTolerance) }
 }
 
 function withValidityInterval(elements: BesselianElements, validFrom: Time, validTo: Time): BesselianElements {
@@ -722,16 +717,7 @@ function updateContactTimeRange(points: readonly ContourPoint[], diagnostics: Mu
 }
 
 function makeDiagnostics(grid: GeographicGrid): MutableDiagnostics {
-	return {
-		gridRows: grid.rows,
-		gridColumns: grid.columns,
-		evaluatedNodes: 0,
-		validNodes: 0,
-		refinedEdgeCrossings: 0,
-		discardedSegments: 0,
-		maxRefinementIterationsReached: 0,
-		warnings: [],
-	}
+	return { gridRows: grid.rows, gridColumns: grid.columns, evaluatedNodes: 0, validNodes: 0, refinedEdgeCrossings: 0, discardedSegments: 0, maxRefinementIterationsReached: 0, warnings: [] }
 }
 
 function cloneDiagnostics(diagnostics: MutableDiagnostics): MutableDiagnostics {

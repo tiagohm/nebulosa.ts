@@ -144,15 +144,7 @@ export function generateCentralLine(elements: BesselianElements, options?: Centr
 }
 
 function emptyResult(warnings: string[]): CentralLineResult {
-	return {
-		points: [],
-		segments: [],
-		isTotal: false,
-		isAnnular: false,
-		isHybrid: false,
-		hasCentralLine: false,
-		warnings: warnings.length > 0 ? warnings : undefined,
-	}
+	return { points: [], segments: [], isTotal: false, isAnnular: false, isHybrid: false, hasCentralLine: false, warnings: warnings.length > 0 ? warnings : undefined }
 }
 
 function resolveOptions(elements: BesselianElements, options: CentralLineOptions = {}): ResolvedCentralLineOptions {
@@ -262,16 +254,7 @@ function evaluateCentralLinePoint(elements: BesselianElements, tauHours: number,
 	const eclipseType = classifyCentralEclipseType(localUmbraRadius, options.numericTolerance)
 	const magnitude = computeCentralMagnitude(sunRadius, moonRadius)
 	const pathWidthKm = computePathWidthKm(elements, localUmbraRadius, solarAltitude)
-	const point: CentralLinePoint = {
-		time,
-		lat: intersection.lat,
-		lon: intersection.lon,
-		solarAltitude,
-		eclipseType,
-		magnitude,
-		pathWidthKm,
-		centralDurationSeconds: 0,
-	}
+	const point: CentralLinePoint = { time, lat: intersection.lat, lon: intersection.lon, solarAltitude, eclipseType, magnitude, pathWidthKm, centralDurationSeconds: 0 }
 
 	if (!isFinitePoint(point)) return undefined
 
@@ -288,6 +271,7 @@ function solveCentralAxisIntersection(state: BesselianState, useEllipsoid: boole
 		if (!candidate) continue
 
 		const altitude = computeSolarAltitude(state, candidate.lat, candidate.lon)
+
 		if (altitude > bestAltitude) {
 			bestAltitude = altitude
 			best = candidate

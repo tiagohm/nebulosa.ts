@@ -114,7 +114,7 @@ describe('solar eclipse map generation', () => {
 					location: DALLAS,
 					type: 'TOTAL',
 					maximumMagnitude: local.maximumMagnitude,
-					maximumTime: local.maximum!.time,
+					maximumTime: local.MAX!.time,
 				},
 			],
 			tolerances: { timeSeconds: 1, magnitude: 1e-12 },

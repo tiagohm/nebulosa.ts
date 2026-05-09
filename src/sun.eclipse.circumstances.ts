@@ -32,6 +32,7 @@ const GRAZING_CONTACT_VALUE_TOLERANCE = 1e-5
 const GOLDEN_RATIO_CONJUGATE = 0.3819660112501051
 
 export type LocalEclipseContactType = 'C1' | 'C2' | 'MAX' | 'C3' | 'C4'
+
 export type LocalEclipseVisibilityType = 'NONE' | SolarEclipseType
 
 export interface LocalEclipseLocation {
@@ -102,15 +103,10 @@ export interface LocalEclipseDetail {
 	readonly visible: boolean
 }
 
-export interface LocalEclipseCircumstances {
+export interface LocalEclipseCircumstances extends Partial<Readonly<Record<LocalEclipseContactType, EclipseContact>>> {
 	readonly location: LocalEclipseLocation
 	readonly visible: boolean
 	readonly type: LocalEclipseVisibilityType
-	readonly c1?: EclipseContact
-	readonly c2?: EclipseContact
-	readonly maximum?: EclipseContact
-	readonly c3?: EclipseContact
-	readonly c4?: EclipseContact
 	readonly maximumMagnitude: number
 	readonly maximumObscuration: number
 	readonly moonSunDiameterRatioAtMaximum: number
@@ -222,38 +218,38 @@ export function computeLocalCircumstances(elements: BesselianElements, location:
 	const maximumDetail = refineMaximum(elements, local, resolved, samples, startTau, endTau)
 	const geometricallyOccurs = penumbralRoots.length >= 2 || maximumDetail.phase.geometricallyEclipsed
 
-	let c1: EclipseContact | undefined
-	let c4: EclipseContact | undefined
-	let c2: EclipseContact | undefined
-	let c3: EclipseContact | undefined
-	let maximum: EclipseContact | undefined
+	let C1: EclipseContact | undefined
+	let C4: EclipseContact | undefined
+	let C2: EclipseContact | undefined
+	let C3: EclipseContact | undefined
+	let MAX: EclipseContact | undefined
 
 	if (geometricallyOccurs) {
-		if (penumbralRoots.length > 0) c1 = makeContact('C1', computeAtTau(elements, local, resolved, penumbralRoots[0]))
-		if (penumbralRoots.length > 1) c4 = makeContact('C4', computeAtTau(elements, local, resolved, penumbralRoots.at(-1)!))
+		if (penumbralRoots.length > 0) C1 = makeContact('C1', computeAtTau(elements, local, resolved, penumbralRoots[0]))
+		if (penumbralRoots.length > 1) C4 = makeContact('C4', computeAtTau(elements, local, resolved, penumbralRoots.at(-1)!))
 
 		const centralRoots = findContactRoots(elements, local, resolved, samples, (detail) => detail.m - Math.abs(detail.L2))
 
-		if (centralRoots.length > 0 && maximumDetail.phase.type !== 'PARTIAL') c2 = makeContact('C2', computeAtTau(elements, local, resolved, centralRoots[0]))
-		if (centralRoots.length > 1 && maximumDetail.phase.type !== 'PARTIAL') c3 = makeContact('C3', computeAtTau(elements, local, resolved, centralRoots.at(-1)!))
+		if (centralRoots.length > 0 && maximumDetail.phase.type !== 'PARTIAL') C2 = makeContact('C2', computeAtTau(elements, local, resolved, centralRoots[0]))
+		if (centralRoots.length > 1 && maximumDetail.phase.type !== 'PARTIAL') C3 = makeContact('C3', computeAtTau(elements, local, resolved, centralRoots.at(-1)!))
 
-		maximum = makeContact('MAX', maximumDetail)
+		MAX = makeContact('MAX', maximumDetail)
 	}
 
-	const contacts = [c1, c2, maximum, c3, c4].filter((contact) => contact !== undefined).sort(EclipseContactComparator)
+	const contacts = [C1, C2, MAX, C3, C4].filter((contact) => contact !== undefined).sort(EclipseContactComparator)
 	const visibleAboveHorizon = contacts.some((contact) => contact.visible) || samples.some((sample) => sample.detail.phase.geometricallyEclipsed && sample.detail.phase.visibleAboveHorizon)
 	const visible = geometricallyOccurs && visibleAboveHorizon
-	const partialDurationSeconds = c1 && c4 ? durationInSeconds(c1, c4) : undefined
-	const totalOrAnnularDurationSeconds = c2 && c3 ? durationInSeconds(c2, c3) : undefined
+	const partialDurationSeconds = C1 && C4 ? durationInSeconds(C1, C4) : undefined
+	const totalOrAnnularDurationSeconds = C2 && C3 ? durationInSeconds(C2, C3) : undefined
 	const preliminary: LocalEclipseCircumstances = {
 		location: local,
 		visible,
 		type: 'NONE',
-		c1,
-		c2,
-		maximum,
-		c3,
-		c4,
+		C1,
+		C2,
+		MAX,
+		C3,
+		C4,
 		maximumMagnitude: geometricallyOccurs ? maximumDetail.magnitude : 0,
 		maximumObscuration: geometricallyOccurs ? maximumDetail.obscuration : 0,
 		moonSunDiameterRatioAtMaximum: maximumDetail.moonSunDiameterRatio,
@@ -270,9 +266,9 @@ export function computeLocalCircumstances(elements: BesselianElements, location:
 
 // Classifies visible local eclipse type from computed circumstances.
 export function classifyLocalEclipse(circumstances: LocalEclipseCircumstances): LocalEclipseVisibilityType {
-	if (!circumstances.visible || !circumstances.maximum) return 'NONE'
+	if (!circumstances.visible || !circumstances.MAX) return 'NONE'
 
-	const phase = circumstances.maximum.phase
+	const phase = circumstances.MAX.phase
 	if (phase.isHybrid) return 'HYBRID'
 	if (phase.isTotal) return 'TOTAL'
 	if (phase.isAnnular) return 'ANNULAR'
@@ -289,22 +285,11 @@ function resolveOptions(options: LocalEclipseOptions = {}): ResolvedLocalEclipse
 	validatePositiveFinite('scanStepSeconds', scanStepSeconds)
 	validateFinite('solarHorizonMinAltitude', solarHorizonMinAltitude)
 
-	return {
-		useEarthEllipsoid: options.useEarthEllipsoid ?? true,
-		includeRefraction: options.includeRefraction ?? false,
-		solarHorizonMinAltitude,
-		timeToleranceSeconds,
-		scanStepSeconds,
-		longitudeConvention: options.longitudeConvention ?? 'eastPositive',
-	}
+	return { useEarthEllipsoid: options.useEarthEllipsoid ?? true, includeRefraction: options.includeRefraction ?? false, solarHorizonMinAltitude, timeToleranceSeconds, scanStepSeconds, longitudeConvention: options.longitudeConvention ?? 'eastPositive' }
 }
 
 function normalizeLocation(location: LocalEclipseLocation, longitudeConvention: 'eastPositive' | 'westPositive'): Required<LocalEclipseLocation> {
-	return {
-		latitude: location.latitude,
-		longitude: normalizePI(longitudeConvention === 'westPositive' ? -location.longitude : location.longitude),
-		altitude: location.altitude ?? 0,
-	}
+	return { latitude: location.latitude, longitude: normalizePI(longitudeConvention === 'westPositive' ? -location.longitude : location.longitude), altitude: location.altitude ?? 0 }
 }
 
 function geodeticToFundamentalPlaneObserver(elements: BesselianElements, location: Required<LocalEclipseLocation>, state: BesselianState, useEarthEllipsoid: boolean): ObserverFundamentalCoordinates {
@@ -391,16 +376,7 @@ function computePhase(elements: BesselianElements, magnitude: number, obscuratio
 	const isTotal = central && L2 > 0 && !isHybrid
 	const isAnnular = central && L2 < 0 && !isHybrid
 	const type: LocalEclipseVisibilityType = !geometricallyEclipsed ? 'NONE' : isHybrid ? 'HYBRID' : isTotal ? 'TOTAL' : isAnnular ? 'ANNULAR' : 'PARTIAL'
-
-	return {
-		type,
-		isPartial: geometricallyEclipsed && !isTotal && !isAnnular && !isHybrid && obscuration > 0,
-		isTotal,
-		isAnnular,
-		isHybrid,
-		geometricallyEclipsed,
-		visibleAboveHorizon,
-	}
+	return { type, isPartial: geometricallyEclipsed && !isTotal && !isAnnular && !isHybrid && obscuration > 0, isTotal, isAnnular, isHybrid, geometricallyEclipsed, visibleAboveHorizon }
 }
 
 function scanLocalCircumstances(elements: BesselianElements, location: Required<LocalEclipseLocation>, options: ResolvedLocalEclipseOptions, startTau: number, endTau: number) {

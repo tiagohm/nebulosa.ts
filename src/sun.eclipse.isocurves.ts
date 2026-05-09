@@ -27,7 +27,8 @@ const MAX_GRID_SAMPLES = 300000
 const ANTIMERIDIAN_SPLIT_THRESHOLD = PI
 
 export type EclipseIsoCurveType = 'magnitude' | 'obscuration' | 'partialDuration' | 'totalOrAnnularDuration'
-export type EclipseVisibilityMode = 'GEOMETRIC' | 'VISIBLE_ONLY'
+
+export type EclipseVisibilityMode = 'geometric' | 'visibleOnly'
 
 export interface EclipseGridSample {
 	readonly latitude: number
@@ -186,7 +187,8 @@ function generateEclipseIsoCurvesFromSamples(samples: readonly EclipseGridSample
 			type: level.type,
 			level,
 			segments,
-			visibilityMode: resolved.visibleOnly ? 'VISIBLE_ONLY' : 'GEOMETRIC',
+
+			visibilityMode: resolved.visibleOnly ? 'visibleOnly' : 'geometric',
 			metadata: {
 				sampleCount: samples.length,
 				gridResolutionDegrees: resolved.effectiveGridResolutionDeg,
@@ -295,7 +297,7 @@ function sampleLocalEclipseGrid(elements: BesselianElements, grid: LatitudeLongi
 		for (let column = 0; column < grid.columns; column++) {
 			const longitude = grid.longitudes[column]
 			const circumstances = computeLocalCircumstances(elements, { latitude, longitude }, localOptions)
-			const maximum = circumstances.maximum
+			const maximum = circumstances.MAX
 			const geometricallyOccurs = circumstances.geometricallyOccurs && maximum !== undefined && circumstances.maximumMagnitude > 0
 			const belowHorizonAtMaximum = maximum ? maximum.sunAltitude < options.horizonAltitudeRadians : true
 			const contributes = geometricallyOccurs && (options.ignoreSunBelowHorizon || circumstances.visibleAboveHorizon)

@@ -143,7 +143,7 @@ describe('eclipse iso-curves from Besselian elements', () => {
 
 		expect(segmentPointCount(visible[0].segments)).toBeLessThan(segmentPointCount(geometric[0].segments))
 		expect(segmentPointCount(ignored[0].segments)).toBe(segmentPointCount(geometric[0].segments))
-		expect(visible[0].visibilityMode).toBe('VISIBLE_ONLY')
+		expect(visible[0].visibilityMode).toBe('visibleOnly')
 	})
 
 	test('validates levels and grid options', () => {

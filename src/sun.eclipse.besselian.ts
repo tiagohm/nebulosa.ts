@@ -216,8 +216,8 @@ export function derivativeBesselianPolynomial(poly: BesselianPolynomial, tauHour
 
 // Normalizes a time to hours from the element epoch t0.
 export function normalizeBesselianTime(elements: BesselianElements, time: Time) {
-	const timeTT = timeConvert(time, Timescale.TT)
-	return (timeTT.day - elements.t0.day + timeTT.fraction - elements.t0.fraction) * 24
+	time = timeConvert(time, Timescale.TT)
+	return (time.day - elements.t0.day + time.fraction - elements.t0.fraction) * 24
 }
 
 // Evaluates fitted Besselian elements at an arbitrary time.
@@ -296,19 +296,9 @@ function resolveContext(input: SolarEclipseBesselianContext): ResolvedBesselianC
 function resolveMaximumTT(maximumApprox: Time): Time {
 	validateTime(maximumApprox, 'maximumApprox')
 
-	const timeTT = tt(maximumApprox)
-	const normalized = timeNormalize(timeTT.day, timeTT.fraction, 0, Timescale.TT)
-
-	return {
-		day: normalized.day,
-		fraction: normalized.fraction,
-		scale: Timescale.TT,
-		polarMotion: maximumApprox.polarMotion,
-		dut1: maximumApprox.dut1,
-		tdbMinusTt: maximumApprox.tdbMinusTt,
-		ut1MinusTai: maximumApprox.ut1MinusTai,
-		location: maximumApprox.location,
-	}
+	const time = tt(maximumApprox)
+	const normalized = timeNormalize(time.day, time.fraction, 0, Timescale.TT)
+	return { day: normalized.day, fraction: normalized.fraction, scale: Timescale.TT, polarMotion: maximumApprox.polarMotion, dut1: maximumApprox.dut1, tdbMinusTt: maximumApprox.tdbMinusTt, ut1MinusTai: maximumApprox.ut1MinusTai, location: maximumApprox.location }
 }
 
 function computeDeltaTSeconds(timeTT: Time) {

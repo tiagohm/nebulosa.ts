@@ -3,7 +3,7 @@ import { AU_KM, DAYSEC, DEG2RAD } from './constants'
 import { angularDistance } from './coordinate'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from './sun'
 import { generateBesselianElements, type BesselianElements, type SolarEclipseBesselianContext } from './sun.eclipse.besselian'
-import { computeLocalCircumstances, type EclipseContact, type LocalEclipseCircumstances, type LocalEclipseLocation, type LocalEclipseOptions } from './sun.eclipse.circumstances'
+import { computeLocalCircumstances, type EclipseContact, type LocalEclipseCircumstances, type LocalEclipseContactType, type LocalEclipseLocation, type LocalEclipseOptions } from './sun.eclipse.circumstances'
 import { generateGlobalPartialContactCurves, generatePenumbraContourAt, type ContourPoint, type EarthModel, type GlobalContactCurve, type GlobalEclipseContour } from './sun.eclipse.pcurves'
 import { buildEclipseLocalGrid, generateEclipseIsoCurvesFromGrid, type EclipseContourLevel, type EclipseGridSample, type EclipseIsoCurve, type EclipseIsoCurveSegment, type EclipseIsoCurveType, type GeoPoint } from './sun.eclipse.isocurves'
 import { generatePathLimits, type EclipsePathLimitPoint, type EclipsePathLimitsResult, type EclipsePathPolygon } from './sun.eclipse.limits'
@@ -251,13 +251,7 @@ export interface SolarEclipseValidationLocationReference {
 	readonly maximumObscuration?: number
 	readonly partialDurationSeconds?: number
 	readonly totalOrAnnularDurationSeconds?: number
-	readonly contacts?: {
-		readonly c1?: Time
-		readonly c2?: Time
-		readonly maximum?: Time
-		readonly c3?: Time
-		readonly c4?: Time
-	}
+	readonly contacts?: Partial<Readonly<Record<LocalEclipseContactType, Time>>>
 }
 
 export interface SolarEclipseCentralLineReference {
@@ -712,24 +706,11 @@ function centralDurationLabel(elements: BesselianElements) {
 }
 
 function localGridOptions(options: NormalizedSolarEclipseGenerationOptions) {
-	return {
-		gridResolutionDeg: options.spatialResolutionDeg,
-		visibleOnly: options.visibleOnly,
-		ignoreSunBelowHorizon: options.includeSunBelowHorizon,
-		horizonAltitudeRadians: options.minimumSolarAltitude,
-		numericalTolerance: options.contourTolerance,
-	}
+	return { gridResolutionDeg: options.spatialResolutionDeg, visibleOnly: options.visibleOnly, ignoreSunBelowHorizon: options.includeSunBelowHorizon, horizonAltitudeRadians: options.minimumSolarAltitude, numericalTolerance: options.contourTolerance }
 }
 
 function isoCurveOptions(options: NormalizedSolarEclipseGenerationOptions) {
-	return {
-		...localGridOptions(options),
-		splitAntimeridian: options.splitAtAntimeridian,
-		removeTinySegments: true,
-		minSegmentPoints: 2,
-		smoothing: 'none' as const,
-		resampleMaxStepDegrees: Math.max(options.spatialResolutionDeg, 1),
-	}
+	return { ...localGridOptions(options), splitAntimeridian: options.splitAtAntimeridian, removeTinySegments: true, minSegmentPoints: 2, smoothing: 'none' as const, resampleMaxStepDegrees: Math.max(options.spatialResolutionDeg, 1) }
 }
 
 function computeGlobalStats(elements: BesselianElements, samples: readonly EclipseGridSample[], pathLimits?: EclipsePathLimitsResult): SolarEclipseGlobalStats {
@@ -765,15 +746,7 @@ function computeGlobalStats(elements: BesselianElements, samples: readonly Eclip
 		}
 
 		if (geometricallyEclipsed && (!approximateGlobalMaximum || magnitude > approximateGlobalMaximum.magnitude)) {
-			approximateGlobalMaximum = {
-				latitude: sample.latitude,
-				longitude: sample.longitude,
-				time: sample.maximumTime ?? undefined,
-				magnitude,
-				obscuration,
-				eclipseType: sample.eclipseType,
-				solarAltitude: sample.solarAltitudeAtMaximum ?? undefined,
-			}
+			approximateGlobalMaximum = { latitude: sample.latitude, longitude: sample.longitude, time: sample.maximumTime ?? undefined, magnitude, obscuration, eclipseType: sample.eclipseType, solarAltitude: sample.solarAltitudeAtMaximum ?? undefined }
 		}
 	}
 
@@ -783,15 +756,7 @@ function computeGlobalStats(elements: BesselianElements, samples: readonly Eclip
 		if (centralMaximum.magnitude > largestMagnitude) largestMagnitude = centralMaximum.magnitude
 		if (obscuration > largestObscuration) largestObscuration = obscuration
 		if (!approximateGlobalMaximum || centralMaximum.magnitude > approximateGlobalMaximum.magnitude) {
-			approximateGlobalMaximum = {
-				latitude: centralMaximum.lat,
-				longitude: centralMaximum.lon,
-				time: centralMaximum.time,
-				magnitude: centralMaximum.magnitude,
-				obscuration,
-				eclipseType: centralMaximum.eclipseType,
-				solarAltitude: centralMaximum.solarAltitude,
-			}
+			approximateGlobalMaximum = { latitude: centralMaximum.lat, longitude: centralMaximum.lon, time: centralMaximum.time, magnitude: centralMaximum.magnitude, obscuration, eclipseType: centralMaximum.eclipseType, solarAltitude: centralMaximum.solarAltitude }
 		}
 	}
 
@@ -849,6 +814,7 @@ function extendExtent(extent: MutableExtent | undefined, latitude: Angle, longit
 	extent.maxLatitude = Math.max(extent.maxLatitude, latitude)
 	extent.minLongitude = Math.min(extent.minLongitude, longitude)
 	extent.maxLongitude = Math.max(extent.maxLongitude, longitude)
+
 	return extent
 }
 
@@ -866,15 +832,7 @@ function approximateMaximumFromCentralLine(centralLine?: CentralLineResult): Sol
 	const point = centralLine?.maxDurationPoint ?? centralLine?.maxWidthPoint ?? centralLine?.points[0]
 	if (!point) return undefined
 
-	return {
-		latitude: point.lat,
-		longitude: point.lon,
-		time: point.time,
-		magnitude: point.magnitude,
-		obscuration: point.eclipseType === 'ANNULAR' ? Math.min(1, point.magnitude * point.magnitude) : 1,
-		eclipseType: point.eclipseType,
-		solarAltitude: point.solarAltitude,
-	}
+	return { latitude: point.lat, longitude: point.lon, time: point.time, magnitude: point.magnitude, obscuration: point.eclipseType === 'ANNULAR' ? Math.min(1, point.magnitude * point.magnitude) : 1, eclipseType: point.eclipseType, solarAltitude: point.solarAltitude }
 }
 
 function buildMapCurves(
@@ -918,14 +876,7 @@ function centralLineCurve(centralLine: CentralLineResult, options: NormalizedSol
 		timeRange: timeRangeFromCurvePoints(points),
 		visibleOnly: options.visibleOnly,
 		includesBelowHorizon: points.some((point) => (point.solarAltitude ?? 0) < options.minimumSolarAltitude),
-		metadata: {
-			isTotal: centralLine.isTotal,
-			isAnnular: centralLine.isAnnular,
-			isHybrid: centralLine.isHybrid,
-			hasCentralLine: centralLine.hasCentralLine,
-			maxDurationSeconds: centralLine.maxDurationPoint?.centralDurationSeconds,
-			maxWidthKm: centralLine.maxWidthPoint?.pathWidthKm,
-		},
+		metadata: { isTotal: centralLine.isTotal, isAnnular: centralLine.isAnnular, isHybrid: centralLine.isHybrid, hasCentralLine: centralLine.hasCentralLine, maxDurationSeconds: centralLine.maxDurationPoint?.centralDurationSeconds, maxWidthKm: centralLine.maxWidthPoint?.pathWidthKm },
 		warnings: centralLine.warnings,
 	}
 }
@@ -955,11 +906,7 @@ function pathPolygonCurve(polygon: EclipsePathPolygon, options: NormalizedSolarE
 		timeRange: timeRangeFromCurvePoints(points),
 		visibleOnly: options.visibleOnly,
 		includesBelowHorizon: polygon.points.some((point) => point.solarAltitude < options.minimumSolarAltitude),
-		metadata: {
-			closed: polygon.closed,
-			crossesAntimeridian: polygon.crossesAntimeridian,
-			eclipseType: polygon.eclipseType,
-		},
+		metadata: { closed: polygon.closed, crossesAntimeridian: polygon.crossesAntimeridian, eclipseType: polygon.eclipseType },
 	}
 }
 
@@ -974,11 +921,7 @@ function contactCurve(curve: GlobalContactCurve): SolarEclipseCurve {
 		timeRange: timeRangeFromCurvePoints(points),
 		visibleOnly: curve.visibleOnly,
 		includesBelowHorizon: curve.points.some((point) => point.belowHorizon),
-		metadata: {
-			contactType: curve.type,
-			options: curve.options,
-			diagnostics: curve.diagnostics,
-		},
+		metadata: { contactType: curve.type, options: curve.options, diagnostics: curve.diagnostics },
 		warnings: curve.diagnostics?.warnings,
 	}
 }
@@ -1014,7 +957,7 @@ function isoCurve(elements: BesselianElements, curve: EclipseIsoCurve): SolarEcl
 		unit: curve.level.unit ?? (curve.type === 'magnitude' || curve.type === 'obscuration' ? 'fraction' : 'seconds'),
 		points,
 		segments: curve.segments.map((segment) => isoSegment(segment)),
-		visibleOnly: curve.visibilityMode === 'VISIBLE_ONLY',
+		visibleOnly: curve.visibilityMode === 'visibleOnly',
 		metadata: curve.metadata ? { ...curve.metadata } : undefined,
 		warnings: curve.segments.length === 0 ? [`${curve.type} level ${curve.level.value} produced no contour segments`] : undefined,
 	}
@@ -1134,18 +1077,18 @@ function validateLocalReference(map: SolarEclipseMap, reference: SolarEclipseVal
 	const circumstances = queryLocalCircumstances(map, reference.location)
 
 	if (reference.type !== undefined) addExactCheck(checks, `local ${label} type`, reference.type, circumstances.type)
-	if (reference.maximumTime) addContactTimeCheck(checks, `local ${label} maximum time`, circumstances.maximum, reference.maximumTime, tolerances.timeSeconds)
+	if (reference.maximumTime) addContactTimeCheck(checks, `local ${label} maximum time`, circumstances.MAX, reference.maximumTime, tolerances.timeSeconds)
 	if (reference.maximumMagnitude !== undefined) addNumericCheck(checks, `local ${label} maximum magnitude`, Math.abs(circumstances.maximumMagnitude - reference.maximumMagnitude), tolerances.magnitude, 'magnitude', reference.maximumMagnitude, circumstances.maximumMagnitude)
 	if (reference.maximumObscuration !== undefined) addNumericCheck(checks, `local ${label} maximum obscuration`, Math.abs(circumstances.maximumObscuration - reference.maximumObscuration), tolerances.magnitude, 'fraction', reference.maximumObscuration, circumstances.maximumObscuration)
 	if (reference.partialDurationSeconds !== undefined) addNumericCheck(checks, `local ${label} partial duration`, Math.abs((circumstances.partialDurationSeconds ?? 0) - reference.partialDurationSeconds), tolerances.durationSeconds, 'seconds', reference.partialDurationSeconds, circumstances.partialDurationSeconds)
 	if (reference.totalOrAnnularDurationSeconds !== undefined)
 		addNumericCheck(checks, `local ${label} total or annular duration`, Math.abs((circumstances.totalOrAnnularDurationSeconds ?? 0) - reference.totalOrAnnularDurationSeconds), tolerances.durationSeconds, 'seconds', reference.totalOrAnnularDurationSeconds, circumstances.totalOrAnnularDurationSeconds)
 
-	if (reference.contacts?.c1) addContactTimeCheck(checks, `local ${label} C1`, circumstances.c1, reference.contacts.c1, tolerances.timeSeconds)
-	if (reference.contacts?.c2) addContactTimeCheck(checks, `local ${label} C2`, circumstances.c2, reference.contacts.c2, tolerances.timeSeconds)
-	if (reference.contacts?.maximum) addContactTimeCheck(checks, `local ${label} MAX`, circumstances.maximum, reference.contacts.maximum, tolerances.timeSeconds)
-	if (reference.contacts?.c3) addContactTimeCheck(checks, `local ${label} C3`, circumstances.c3, reference.contacts.c3, tolerances.timeSeconds)
-	if (reference.contacts?.c4) addContactTimeCheck(checks, `local ${label} C4`, circumstances.c4, reference.contacts.c4, tolerances.timeSeconds)
+	if (reference.contacts?.C1) addContactTimeCheck(checks, `local ${label} C1`, circumstances.C1, reference.contacts.C1, tolerances.timeSeconds)
+	if (reference.contacts?.C2) addContactTimeCheck(checks, `local ${label} C2`, circumstances.C2, reference.contacts.C2, tolerances.timeSeconds)
+	if (reference.contacts?.MAX) addContactTimeCheck(checks, `local ${label} MAX`, circumstances.MAX, reference.contacts.MAX, tolerances.timeSeconds)
+	if (reference.contacts?.C3) addContactTimeCheck(checks, `local ${label} C3`, circumstances.C3, reference.contacts.C3, tolerances.timeSeconds)
+	if (reference.contacts?.C4) addContactTimeCheck(checks, `local ${label} C4`, circumstances.C4, reference.contacts.C4, tolerances.timeSeconds)
 }
 
 function validateCentralLineReference(map: SolarEclipseMap, reference: SolarEclipseCentralLineReference, tolerances: ResolvedSolarEclipseValidationTolerances, checks: ValidationCheckResult[]) {
