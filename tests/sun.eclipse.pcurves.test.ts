@@ -103,6 +103,7 @@ describe('global partial solar eclipse contact curves', () => {
 		expect(visible[0].points.length).toBeLessThan(geometric[0].points.length)
 		expect(visible[1].points.length).toBeLessThan(geometric[1].points.length)
 		expect(visible.every((curve) => curve.points.every((point) => point.visible && !point.belowHorizon))).toBeTrue()
+		expect(visible.every((curve) => curve.points.some((point) => (point.solarAltitude ?? Number.POSITIVE_INFINITY) < 1e-3))).toBeTrue()
 	})
 
 	test('splits antimeridian jumps when requested', () => {

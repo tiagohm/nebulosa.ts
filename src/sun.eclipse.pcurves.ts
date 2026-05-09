@@ -240,7 +240,7 @@ function buildGlobalContactCurve(elements: BesselianElements, grid: GeographicGr
 	for (let row = 0; row + 1 < grid.rows; row++) {
 		for (let column = 0; column < grid.columns; column++) {
 			const corners = cellCorners(grid, row, column)
-			const values = corners.map((corner) => contactGridValue(nodes, grid, type, corner[0], corner[1]))
+			const values = corners.map((corner) => contactGridValue(nodes, grid, type, options, corner[0], corner[1]))
 			addCellFragments(corners, values, fragments, (a, b, edge) => refineContactBoundaryPoint(elements, grid, nodes, type, options, a, b, edge, diagnostics))
 		}
 	}
@@ -378,10 +378,12 @@ function contactMetadata(contact: EclipseContact, options: NormalizedGlobalParti
 	return { contact, solarAltitude, belowHorizon, visible: !belowHorizon }
 }
 
-function contactGridValue(nodes: readonly ContactGridNode[], grid: GeographicGrid, type: PenumbraContactType, row: number, column: number): ContourFieldNode {
+function contactGridValue(nodes: readonly ContactGridNode[], grid: GeographicGrid, type: PenumbraContactType, options: NormalizedGlobalPartialContactCurveOptions, row: number, column: number): ContourFieldNode {
 	const node = nodes[nodeIndex(grid, row, column)]
 	const contact = type === 'P1' ? node.p1 : node.p4
-	return { lat: node.lat, lon: node.lon, value: contact ? -1 : 1, valid: !!contact, contact }
+	const visible = !contact || !options.considerSolarHorizon || !options.visibleOnly || contact.visible
+	const valid = !!contact && visible
+	return { lat: node.lat, lon: node.lon, value: valid ? -1 : 1, valid, contact }
 }
 
 interface ContourFieldNode {
@@ -420,8 +422,8 @@ function addCellFragments(corners: readonly (readonly [number, number])[], value
 }
 
 function refineContactBoundaryPoint(elements: BesselianElements, grid: GeographicGrid, nodes: readonly ContactGridNode[], type: PenumbraContactType, options: NormalizedGlobalPartialContactCurveOptions, a: readonly [number, number], b: readonly [number, number], edge: string, diagnostics: MutableDiagnostics) {
-	const aNode = contactGridValue(nodes, grid, type, a[0], a[1])
-	const bNode = contactGridValue(nodes, grid, type, b[0], b[1])
+	const aNode = contactGridValue(nodes, grid, type, options, a[0], a[1])
+	const bNode = contactGridValue(nodes, grid, type, options, b[0], b[1])
 	const result = refineBooleanBoundary(aNode, bNode, options.maxRefinementIterations, options.spatialTolerance, (lat, lon) => contactPointAt(elements, type, options, lat, lon), edge, a[0], a[1])
 
 	if (!result) return undefined
