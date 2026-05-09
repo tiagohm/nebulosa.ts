@@ -626,7 +626,7 @@ function resolveInput(input: SolarEclipseMapInput): ResolvedSolarEclipseInput {
 		return {
 			elements: input.besselianElements,
 			source: {
-				type: 'precomputedBesselianElements', // 'precomputed Besselian elements supplied by caller'
+				type: 'precomputedBesselianElements',
 				approximateTime: input.approximateTime ?? input.maximumApprox,
 				resolvedMaximum: input.besselianElements.geocentricMaximum,
 			},
@@ -639,7 +639,7 @@ function resolveInput(input: SolarEclipseMapInput): ResolvedSolarEclipseInput {
 	return {
 		elements,
 		source: {
-			type: 'computedBesselianElements', //  'Besselian elements generated from the resolved approximate maximum',
+			type: 'computedBesselianElements',
 			approximateTime: input.approximateTime ?? input.maximumApprox,
 			resolvedMaximum: maximumApprox,
 			resolvedApproximation: input.maximumApprox ? undefined : resolveNearestSolarEclipse(input.approximateTime!),

@@ -102,9 +102,7 @@ export function generateCentralLine(elements: BesselianElements, options?: Centr
 	const resolved = resolveOptions(elements, options)
 	const warnings: string[] = []
 
-	if (elements.eclipseTypeApprox === 'PARTIAL') {
-		return emptyResult(warnings)
-	}
+	if (elements.eclipseTypeApprox === 'PARTIAL') return emptyResult(warnings)
 
 	const sampledSegments = scanCentralLine(elements, resolved)
 	const centralSegments = resolved.adaptiveSampling ? adaptiveSampleSegments(elements, resolved, sampledSegments) : sampledSegments
@@ -501,7 +499,7 @@ function flattenPoints(segments: readonly CentralLineEvaluation[][]) {
 
 function removeEmptySegments(segments: readonly CentralLineEvaluation[][]) {
 	const filtered: CentralLineEvaluation[][] = []
-	for (const segment of segments) if (segment.length > 0) filtered.push(segment.slice())
+	for (const segment of segments) if (segment.length > 0) filtered.push(segment)
 	return filtered
 }
 
@@ -516,6 +514,7 @@ function maxByFinite<T>(values: readonly T[], value: (item: T) => number) {
 
 	for (const item of values) {
 		const candidate = value(item)
+
 		if (Number.isFinite(candidate) && candidate > bestValue) {
 			best = item
 			bestValue = candidate

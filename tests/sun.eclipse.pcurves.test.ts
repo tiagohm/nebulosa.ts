@@ -11,13 +11,7 @@ const partial2025 = generateBesselianElements({ maximumApprox: nearestSolarEclip
 const hybrid2023 = generateBesselianElements({ maximumApprox: nearestSolarEclipse(timeYMD(2023, 1, 1), true).maximalTime })
 
 function contactOptions(elements: typeof total2024) {
-	return {
-		startTime: elements.validFrom,
-		endTime: elements.validTo,
-		gridResolutionDeg: 30,
-		temporalTolerance: 600,
-		includeDiagnostics: true,
-	}
+	return { startTime: elements.validFrom, endTime: elements.validTo, gridResolutionDeg: 30, temporalTolerance: 600, includeDiagnostics: true }
 }
 
 function expectFinitePoint(point: ContourPoint) {
@@ -26,11 +20,11 @@ function expectFinitePoint(point: ContourPoint) {
 	expect(point.lon).toBeFinite()
 	expect(point.lon).toBeGreaterThanOrEqual(-Math.PI)
 	expect(point.lon).toBeLessThanOrEqual(Math.PI)
+	if (point.solarAltitude !== undefined) expect(point.solarAltitude).toBeFinite()
 	if (point.time) {
 		expect(point.time.day).toBeFinite()
 		expect(point.time.fraction).toBeFinite()
 	}
-	if (point.solarAltitude !== undefined) expect(point.solarAltitude).toBeFinite()
 }
 
 function maxLongitudeJump(segments?: readonly (readonly ContourPoint[])[]) {
@@ -88,16 +82,8 @@ describe('global partial solar eclipse contact curves', () => {
 	})
 
 	test('visibleOnly false preserves below-horizon geometry and visibleOnly true filters it', () => {
-		const geometric = generateGlobalPartialContactCurves(total2024, {
-			...contactOptions(total2024),
-			considerSolarHorizon: true,
-			visibleOnly: false,
-		})
-		const visible = generateGlobalPartialContactCurves(total2024, {
-			...contactOptions(total2024),
-			considerSolarHorizon: true,
-			visibleOnly: true,
-		})
+		const geometric = generateGlobalPartialContactCurves(total2024, { ...contactOptions(total2024), considerSolarHorizon: true, visibleOnly: false })
+		const visible = generateGlobalPartialContactCurves(total2024, { ...contactOptions(total2024), considerSolarHorizon: true, visibleOnly: true })
 
 		expect(geometric.some((curve) => curve.points.some((point) => point.belowHorizon))).toBeTrue()
 		expect(visible[0].points.length).toBeLessThan(geometric[0].points.length)
@@ -115,12 +101,7 @@ describe('global partial solar eclipse contact curves', () => {
 	})
 
 	test('coarse grid output remains stable and finite', () => {
-		const curves = generateGlobalPartialContactCurves(total2024, {
-			startTime: total2024.validFrom,
-			endTime: total2024.validTo,
-			gridResolutionDeg: 45,
-			temporalTolerance: 900,
-		})
+		const curves = generateGlobalPartialContactCurves(total2024, { startTime: total2024.validFrom, endTime: total2024.validTo, gridResolutionDeg: 45, temporalTolerance: 900 })
 
 		expect(curves).toHaveLength(2)
 		expect(curves.every((curve) => curve.points.length > 0)).toBeTrue()
@@ -160,16 +141,8 @@ describe('instantaneous penumbra contours', () => {
 	})
 
 	test('visibleOnly filters below-horizon instantaneous contour points', () => {
-		const geometric = generatePenumbraContourAt(total2024, total2024.geocentricMaximum, {
-			angularSamplingDeg: 30,
-			considerSolarHorizon: true,
-			visibleOnly: false,
-		})
-		const visible = generatePenumbraContourAt(total2024, total2024.geocentricMaximum, {
-			angularSamplingDeg: 30,
-			considerSolarHorizon: true,
-			visibleOnly: true,
-		})
+		const geometric = generatePenumbraContourAt(total2024, total2024.geocentricMaximum, { angularSamplingDeg: 30, considerSolarHorizon: true, visibleOnly: false })
+		const visible = generatePenumbraContourAt(total2024, total2024.geocentricMaximum, { angularSamplingDeg: 30, considerSolarHorizon: true, visibleOnly: true })
 
 		expect(geometric.some((contour) => contour.points.some((point) => point.belowHorizon))).toBeTrue()
 		expect(visible.every((contour) => contour.points.every((point) => point.visible && !point.belowHorizon))).toBeTrue()

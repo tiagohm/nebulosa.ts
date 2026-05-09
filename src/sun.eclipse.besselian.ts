@@ -98,7 +98,7 @@ export interface SolarEclipseBesselianContext {
 
 // Raw Besselian quantities at a TT sample instant.
 export interface BesselianSample {
-	timeTT: Time
+	time: Time
 	tauHours: number
 	x: number
 	y: number
@@ -149,8 +149,8 @@ interface ResolvedBesselianContext {
 	readonly solarSemidiameter?: number
 	readonly lunarSemidiameter?: number
 	readonly siderealDeltaTSeconds?: number
-	readonly computeApparentGeocentricSun?: (timeTT: Time) => Vec3
-	readonly computeApparentGeocentricMoon?: (timeTT: Time) => Vec3
+	readonly computeApparentGeocentricSun?: (time: Time) => Vec3
+	readonly computeApparentGeocentricMoon?: (time: Time) => Vec3
 }
 
 // Generates fitted Besselian elements around an approximate geocentric maximum.
@@ -301,9 +301,10 @@ function resolveMaximumTT(maximumApprox: Time): Time {
 	return { day: normalized.day, fraction: normalized.fraction, scale: Timescale.TT, polarMotion: maximumApprox.polarMotion, dut1: maximumApprox.dut1, tdbMinusTt: maximumApprox.tdbMinusTt, ut1MinusTai: maximumApprox.ut1MinusTai, location: maximumApprox.location }
 }
 
-function computeDeltaTSeconds(timeTT: Time) {
-	const timeUT1 = ut1(timeTT)
-	return (timeTT.day - timeUT1.day + timeTT.fraction - timeUT1.fraction) * DAYSEC
+function computeDeltaTSeconds(time: Time) {
+	const UT1 = ut1(time)
+	const TT = tt(time)
+	return (TT.day - UT1.day + TT.fraction - UT1.fraction) * DAYSEC
 }
 
 function sampleTauHours(intervalHours: number, stepMinutes: number) {
@@ -335,9 +336,9 @@ function clampTinyTau(tauHours: number) {
 	return Math.abs(tauHours) < 1e-12 ? 0 : tauHours
 }
 
-function computeSample(timeTT: Time, tauHours: number, context: ResolvedBesselianContext): BesselianSample {
-	const sun = apparentSun(timeTT, context.computeApparentGeocentricSun)
-	const moon = apparentMoon(timeTT, context.computeApparentGeocentricMoon)
+function computeSample(time: Time, tauHours: number, context: ResolvedBesselianContext): BesselianSample {
+	const sun = apparentSun(time, context.computeApparentGeocentricSun)
+	const moon = apparentMoon(time, context.computeApparentGeocentricMoon)
 	validateVector('Sun ephemeris vector', sun)
 	validateVector('Moon ephemeris vector', moon)
 
@@ -355,7 +356,7 @@ function computeSample(timeTT: Time, tauHours: number, context: ResolvedBesselia
 	const intersection: MutVec3 = [moon[0] + moonToPlane * axis[0], moon[1] + moonToPlane * axis[1], moon[2] + moonToPlane * axis[2]]
 	const x = vecDot(intersection, east) / context.earthEquatorialRadius
 	const y = vecDot(intersection, north) / context.earthEquatorialRadius
-	const mu = normalizeAngle(greenwichApparentSiderealTimeAt(timeTT, context.siderealDeltaTSeconds) - axisRightAscension)
+	const mu = normalizeAngle(greenwichApparentSiderealTimeAt(time, context.siderealDeltaTSeconds) - axisRightAscension)
 
 	const sunDistance = vecLength(sun)
 	const moonDistance = vecLength(moon)
@@ -370,7 +371,7 @@ function computeSample(timeTT: Time, tauHours: number, context: ResolvedBesselia
 	const l1 = (lunarRadius + moonToPlane * tanF1) / context.earthEquatorialRadius
 	const l2 = (lunarRadius - moonToPlane * tanF2) / context.earthEquatorialRadius
 
-	const sample: BesselianSample = { timeTT, tauHours, x, y, d, mu, l1, l2, tanF1, tanF2 }
+	const sample: BesselianSample = { time, tauHours, x, y, d, mu, l1, l2, tanF1, tanF2 }
 	validateSample(sample)
 	return sample
 }
@@ -384,11 +385,11 @@ function apparentSun(time: Time, computeApparentGeocentricSun?: (time: Time) => 
 	return matMulVec(precessionNutationMatrix(time), geocentric, geocentric)
 }
 
-function apparentMoon(timeTT: Time, computeApparentGeocentricMoon?: (timeTT: Time) => Vec3): Vec3 {
-	if (computeApparentGeocentricMoon) return computeApparentGeocentricMoon(timeTT)
+function apparentMoon(time: Time, computeApparentGeocentricMoon?: (time: Time) => Vec3): Vec3 {
+	if (computeApparentGeocentricMoon) return computeApparentGeocentricMoon(time)
 
-	const [moon] = geocentricMoon(timeTT)
-	return matMulVec(precessionNutationMatrix(timeTT), moon, moon)
+	const [moon] = geocentricMoon(time)
+	return matMulVec(precessionNutationMatrix(time), moon, moon)
 }
 
 function shadowAxis(sun: Vec3, moon: Vec3): MutVec3 {
@@ -403,11 +404,11 @@ function shadowAxis(sun: Vec3, moon: Vec3): MutVec3 {
 	return axis
 }
 
-function greenwichApparentSiderealTimeAt(timeTT: Time, deltaTSeconds?: number) {
-	if (deltaTSeconds === undefined) return greenwichApparentSiderealTime(timeTT)
+function greenwichApparentSiderealTimeAt(time: Time, deltaTSeconds?: number) {
+	if (deltaTSeconds === undefined) return greenwichApparentSiderealTime(time)
 
-	const timeUT1 = timeNormalize(timeTT.day, timeTT.fraction - deltaTSeconds / DAYSEC, 0, Timescale.UT1)
-	return eraGst06a(timeUT1.day, timeUT1.fraction, timeTT.day, timeTT.fraction)
+	const timeUT1 = timeNormalize(time.day, time.fraction - deltaTSeconds / DAYSEC, 0, Timescale.UT1)
+	return eraGst06a(timeUT1.day, timeUT1.fraction, time.day, time.fraction)
 }
 
 function unwrapSamples(samples: BesselianSample[], key: BesselianQuantity) {
@@ -466,8 +467,8 @@ function classifyEclipse(samples: readonly BesselianSample[]): SolarEclipseType 
 	return 'UNKNOWN'
 }
 
-function shiftTT(timeTT: Time, tauHours: number) {
-	return timeShift(timeTT, tauHours / 24)
+function shiftTT(time: Time, tauHours: number) {
+	return timeShift(time, tauHours / 24)
 }
 
 function validateTime(time: Time, name: string) {
@@ -490,7 +491,7 @@ function validateVector(name: string, vector: Vec3) {
 }
 
 function validateSample(sample: BesselianSample) {
-	validateTime(sample.timeTT, 'sample.timeTT')
+	validateTime(sample.time, 'sample.time')
 	validateFinite('sample.tauHours', sample.tauHours)
 
 	for (const key of BESSELIAN_QUANTITIES) {

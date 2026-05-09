@@ -26,7 +26,7 @@ function expectFiniteElements(elements: BesselianElements) {
 }
 
 function expectFiniteSample(sample: BesselianSample) {
-	expect(sample.timeTT.scale).toBe(Timescale.TT)
+	expect(sample.time.scale).toBe(Timescale.TT)
 	expect(sample.tauHours).toBeFinite()
 
 	for (const key of QUANTITIES) {
@@ -36,7 +36,7 @@ function expectFiniteSample(sample: BesselianSample) {
 
 function expectPolynomialFitMatchesSamples(elements: BesselianElements) {
 	for (const sample of elements.samples ?? []) {
-		const state = evaluateBesselian(elements, sample.timeTT)
+		const state = evaluateBesselian(elements, sample.time)
 
 		for (const key of QUANTITIES) {
 			expect(Math.abs(state[key] - sample[key])).toBeLessThan(5e-6)

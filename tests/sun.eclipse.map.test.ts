@@ -108,15 +108,7 @@ describe('solar eclipse map generation', () => {
 			eclipseType: 'TOTAL',
 			geocentricMaximum: map.besselianElements.geocentricMaximum,
 			maxMagnitude: map.globalStats!.largestMagnitude,
-			localCircumstances: [
-				{
-					id: 'dallas',
-					location: DALLAS,
-					type: 'TOTAL',
-					maximumMagnitude: local.maximumMagnitude,
-					maximumTime: local.MAX!.time,
-				},
-			],
+			localCircumstances: [{ id: 'dallas', location: DALLAS, type: 'TOTAL', maximumMagnitude: local.maximumMagnitude, maximumTime: local.MAX!.time }],
 			tolerances: { timeSeconds: 1, magnitude: 1e-12 },
 		})
 		const failing = validateSolarEclipseMap(map, { eclipseType: 'PARTIAL' })

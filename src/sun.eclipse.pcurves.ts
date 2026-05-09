@@ -220,14 +220,7 @@ export function generatePenumbraContourAt(elements: BesselianElements, time: Tim
 
 	for (const segment of segments) {
 		const points = closeContourSegment(segment, resolved.contourTolerance, resolved.splitAtAntimeridian)
-		contours.push({
-			time: resolved.time,
-			points,
-			segments: [points],
-			closed: isClosedSegment(points, resolved.contourTolerance),
-			options: resolved,
-			diagnostics: resolved.includeDiagnostics ? finalizeDiagnostics(diagnostics) : undefined,
-		})
+		contours.push({ time: resolved.time, points, segments: [points], closed: isClosedSegment(points, resolved.contourTolerance), options: resolved, diagnostics: resolved.includeDiagnostics ? finalizeDiagnostics(diagnostics) : undefined })
 	}
 
 	return contours
@@ -251,14 +244,7 @@ function buildGlobalContactCurve(elements: BesselianElements, grid: GeographicGr
 
 	updateContactTimeRange(points, diagnostics)
 
-	return {
-		type,
-		points,
-		segments,
-		visibleOnly: options.visibleOnly,
-		options,
-		diagnostics: options.includeDiagnostics ? finalizeDiagnostics(diagnostics) : undefined,
-	}
+	return { type, points, segments, visibleOnly: options.visibleOnly, options, diagnostics: options.includeDiagnostics ? finalizeDiagnostics(diagnostics) : undefined }
 }
 
 function normalizeGlobalPartialContactOptions(elements: BesselianElements, options: GlobalPartialContactCurveOptions): NormalizedGlobalPartialContactCurveOptions {

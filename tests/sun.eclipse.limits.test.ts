@@ -39,11 +39,7 @@ function expectFiniteLimits(result: EclipsePathLimitsResult) {
 
 function maxRawLongitudeJump(points: readonly EclipsePathLimitPoint[]) {
 	let max = 0
-
-	for (let i = 1; i < points.length; i++) {
-		max = Math.max(max, Math.abs(points[i].lon - points[i - 1].lon))
-	}
-
+	for (let i = 1; i < points.length; i++) max = Math.max(max, Math.abs(points[i].lon - points[i - 1].lon))
 	return max
 }
 
