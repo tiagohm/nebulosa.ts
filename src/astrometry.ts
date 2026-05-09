@@ -150,13 +150,13 @@ export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time,
 
 // https://bitbucket.org/Isbeorn/nina/src/master/NINA.Astrometry/AstroUtil.cs
 // Computes the refracted altitude given the true altitude and refraction parameters
-export function refractedAltitude(altitude: Angle, refraction: RefractionParameters, iterationIncrementInArcsec = 1, maxIterations = 1000) {
+export function refractedAltitude(altitude: Angle, refraction?: RefractionParameters, iterationIncrementInArcsec = 1, maxIterations = 1000) {
 	if (altitude < Number.EPSILON) return altitude
 
-	const pressure = refraction.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure
-	const temperature = refraction.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature
-	const relativeHumidity = refraction.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity
-	const wl = refraction.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl
+	const pressure = refraction?.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure
+	const temperature = refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature
+	const relativeHumidity = refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity
+	const wl = refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl
 	const [refa, refb] = eraRefco(pressure, temperature, relativeHumidity, wl)
 
 	const z = PIOVERTWO - altitude
