@@ -80,7 +80,6 @@ export interface SolarEclipseGenerationOptions {
 	readonly rootFindingTolerance?: number
 	readonly maxIterations?: number
 	readonly splitAtAntimeridian?: boolean
-	readonly simplifyTolerance?: number
 	readonly allowPartialGeneration?: boolean
 }
 
@@ -108,7 +107,6 @@ export interface NormalizedSolarEclipseGenerationOptions {
 	readonly rootFindingTolerance: number
 	readonly maxIterations: number
 	readonly splitAtAntimeridian: boolean
-	readonly simplifyTolerance: number
 	readonly allowPartialGeneration: boolean
 }
 
@@ -566,7 +564,6 @@ function normalizeGenerationOptions(options: SolarEclipseGenerationOptions = {})
 	const rootFindingTolerance = options.rootFindingTolerance ?? DEFAULT_ROOT_FINDING_TOLERANCE_SECONDS
 	const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS
 	const minimumSolarAltitude = options.minimumSolarAltitude ?? DEFAULT_MINIMUM_SOLAR_ALTITUDE
-	const simplifyTolerance = options.simplifyTolerance ?? 0
 	const penumbraContourTimes = options.penumbraContourTimes?.slice()
 	const penumbraContourStepSeconds = options.penumbraContourStepSeconds
 
@@ -575,7 +572,6 @@ function normalizeGenerationOptions(options: SolarEclipseGenerationOptions = {})
 	validatePositiveFinite('contourTolerance', contourTolerance)
 	validatePositiveFinite('rootFindingTolerance', rootFindingTolerance)
 	validateFinite('minimumSolarAltitude', minimumSolarAltitude)
-	validateFinite('simplifyTolerance', simplifyTolerance)
 
 	if (spatialResolutionDeg > 90) throw new Error('spatialResolutionDeg must be <= 90')
 	if (!Number.isInteger(maxIterations) || maxIterations < 0) throw new Error('maxIterations must be a non-negative integer')
@@ -615,7 +611,6 @@ function normalizeGenerationOptions(options: SolarEclipseGenerationOptions = {})
 		rootFindingTolerance,
 		maxIterations,
 		splitAtAntimeridian: options.splitAtAntimeridian ?? true,
-		simplifyTolerance,
 		allowPartialGeneration: options.allowPartialGeneration ?? false,
 	}
 }
