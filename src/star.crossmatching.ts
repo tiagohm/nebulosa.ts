@@ -1,6 +1,6 @@
 import { type Angle, normalizeAngle } from './angle'
 import { ASEC2RAD, PI, PIOVERTWO } from './constants'
-import { type Size, sphericalSeparation } from './geometry'
+import { type Point, type Size, sphericalSeparation } from './geometry'
 import { clamp } from './math'
 import { gnomonicProject, gnomonicUnproject } from './projection'
 import type { StarCatalog, StarCatalogEntry } from './star.catalog'
@@ -261,11 +261,12 @@ function projectCatalogStars<S extends StarCatalogEntry>(catalogStars: readonly 
 	const imageCenterX = options.camera.width * 0.5
 	const imageCenterY = options.camera.height * 0.5
 	const projectedCatalogStars: ProjectedCatalogStar<S>[] = []
+	const p: Point = { x: 0, y: 0 }
 
 	for (let catalogIndex = 0; catalogIndex < catalogStars.length; catalogIndex++) {
 		const catalogStar = catalogStars[catalogIndex]
-		const projected = gnomonicProject(catalogStar.rightAscension, catalogStar.declination, projectionCenterRA, projectionCenterDEC)
-		if (projected === false) continue
+		const projected = gnomonicProject(catalogStar.rightAscension, catalogStar.declination, projectionCenterRA, projectionCenterDEC, p)
+		if (projected === undefined) continue
 
 		const x = imageCenterX + projected.x * options.nominalPixelsPerRadian
 		const y = imageCenterY - projected.y * options.nominalPixelsPerRadian
@@ -307,26 +308,20 @@ function buildStarCrossmatchSolution(transform: SimilarityTransform | AffineTran
 	const planeY = -(projectedCenter.y - imageCenter.y) / options.nominalPixelsPerRadian
 	const skyCenter = gnomonicUnproject(planeX, planeY, projectionCenterRA, projectionCenterDEC)
 
-	if (skyCenter === false) {
+	if (skyCenter === undefined) {
 		throw new Error('failed to unproject the fitted image center')
 	}
 
 	const scale = transformAngularScale(transform, options.nominalPixelsPerRadian)
 	const fieldRadius = 0.5 * Math.hypot(options.camera.width, options.camera.height) * scale
 
-	return {
-		rightAscension: skyCenter[0],
-		declination: skyCenter[1],
-		scale,
-		rotation: transformRotation(transform),
-		mirrored: transformMirrored(transform),
-		fieldRadius,
-	}
+	return { rightAscension: skyCenter.x, declination: skyCenter.y, scale, rotation: transformRotation(transform), mirrored: transformMirrored(transform), fieldRadius }
 }
 
 // Materializes per-detection associations from the best geometric solution.
 function materializeStarCrossmatchRecords<S extends StarCatalogEntry>(detectedStars: readonly DetectedStar[], attempt: MatchAttempt<S>): StarCrossmatchRecord<S>[] {
 	const records = new Array<StarCrossmatchRecord<S>>(detectedStars.length)
+	const p: Point = { x: 0, y: 0 }
 
 	for (let detectedIndex = 0; detectedIndex < detectedStars.length; detectedIndex++) {
 		records[detectedIndex] = { detectedStar: detectedStars[detectedIndex], detectedIndex, status: 'unmatched' }
@@ -337,8 +332,8 @@ function materializeStarCrossmatchRecords<S extends StarCatalogEntry>(detectedSt
 		const projectedCatalogStar = attempt.projectedCatalogStars[match.referenceIndex]
 		if (projectedCatalogStar === undefined) continue
 
-		const skyPosition = approximateDetectedSkyPosition(detectedStars[match.currentIndex], attempt)
-		const skySeparation = skyPosition === undefined ? undefined : sphericalSeparation(skyPosition[0], skyPosition[1], projectedCatalogStar.catalogStar.rightAscension, projectedCatalogStar.catalogStar.declination)
+		const skyPosition = approximateDetectedSkyPosition(detectedStars[match.currentIndex], attempt, p)
+		const skySeparation = skyPosition === undefined ? undefined : sphericalSeparation(skyPosition.x, skyPosition.y, projectedCatalogStar.catalogStar.rightAscension, projectedCatalogStar.catalogStar.declination)
 
 		records[match.currentIndex] = {
 			detectedStar: detectedStars[match.currentIndex],
@@ -355,12 +350,11 @@ function materializeStarCrossmatchRecords<S extends StarCatalogEntry>(detectedSt
 }
 
 // Converts one detected image star into an approximate sky coordinate from the solved transform.
-function approximateDetectedSkyPosition<S extends StarCatalogEntry>(detectedStar: DetectedStar, attempt: MatchAttempt<S>) {
+function approximateDetectedSkyPosition<S extends StarCatalogEntry>(detectedStar: DetectedStar, attempt: MatchAttempt<S>, out: Point) {
 	const projected = applyTransformToPoint(detectedStar.x, detectedStar.y, attempt.transform)
 	const planeX = (projected.x - attempt.imageCenterX) / attempt.nominalPixelsPerRadian
 	const planeY = -(projected.y - attempt.imageCenterY) / attempt.nominalPixelsPerRadian
-	const skyPosition = gnomonicUnproject(planeX, planeY, attempt.projectionCenterRA, attempt.projectionCenterDEC)
-	return skyPosition === false ? undefined : skyPosition
+	return gnomonicUnproject(planeX, planeY, attempt.projectionCenterRA, attempt.projectionCenterDEC, out)
 }
 
 // Builds failure payloads while keeping per-detection status explicit.
@@ -371,13 +365,7 @@ function failureStarCrossmatchResult<S extends StarCatalogEntry>(detectedStars: 
 		matches[detectedIndex] = { detectedStar: detectedStars[detectedIndex], detectedIndex, status: 'unmatched' }
 	}
 
-	return {
-		success: false,
-		catalogStars,
-		matches,
-		summary: summarizeStarCrossmatch(catalogStars.length, projectedCatalogCount, 0, matches),
-		failureReason,
-	}
+	return { success: false, catalogStars, matches, summary: summarizeStarCrossmatch(catalogStars.length, projectedCatalogCount, 0, matches), failureReason }
 }
 
 // Summarizes residual and sky-separation statistics for matched detections.

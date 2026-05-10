@@ -1052,6 +1052,8 @@ toAtm(1) // Convert millibar to atm
 ### Projection ![](bun.webp) ![](browser.webp)
 
 ```ts
+projectLonLat(Gnomonic.default, longitude, latitude, { centralMeridian, latitudeOfOrigin }) // Class-based gnomonic projection
+unprojectLonLat(Gnomonic.default, x, y, { centralMeridian, latitudeOfOrigin }) // Inverse class-based gnomonic projection
 gnomonicProject(longitude, latitude, centerLongitude, centerLatitude) // Tangent-plane projection
 gnomonicUnproject(x, y, centerLongitude, centerLatitude) // Inverse gnomonic projection
 stereographicProject(longitude, latitude, centerLongitude, centerLatitude) // Stereographic projection

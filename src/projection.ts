@@ -1,7 +1,8 @@
 import { normalizeAngle, normalizePI } from './angle'
 import { DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
-import type { Point } from './geometry'
+import { euclideanDistance, type Point } from './geometry'
 import { clamp } from './math'
+import type { PickByValue } from './types'
 
 type RadialDistance = (sinC: number, cosC: number) => number | false
 
@@ -12,26 +13,6 @@ export type LongitudeWrapMode = 'pi' | 'tau' | 'none'
 export type RaAxisDirection = 'east' | 'west'
 
 export type YAxisDirection = 'northUp' | 'southUp'
-
-export type SphericalPoint = readonly [lambda: number, phi: number]
-
-export type ProjectedPoint = readonly [x: number, y: number]
-
-export interface ProjectionEquidistantAxes {
-	readonly meridians?: boolean
-	readonly parallels?: boolean
-	readonly standardParallels?: boolean
-}
-
-export interface ProjectionProperties {
-	readonly conformal: boolean
-	readonly equalArea: boolean
-	readonly equidistant: boolean | ProjectionEquidistantAxes
-	readonly hasInverse: boolean
-	readonly preservesStraightParallels: boolean
-	readonly preservesStraightMeridians: boolean
-	readonly finiteWorldExtent: boolean
-}
 
 export interface ProjectionBounds {
 	readonly minX: number
@@ -69,17 +50,23 @@ export interface ProjectionPolylineOptions extends ProjectionOptions {
 }
 
 export interface Projection {
-	readonly properties: ProjectionProperties
-	readonly forward: (lambda: number, phi: number, options?: ProjectionOptions) => ProjectedPoint | undefined
-	readonly inverse: (x: number, y: number, options?: ProjectionOptions) => SphericalPoint | undefined
+	readonly forward: (lambda: number, phi: number, options?: ProjectionOptions, out?: Point) => Point | undefined
+	readonly inverse: (x: number, y: number, options?: ProjectionOptions, out?: Point) => Point | undefined
 	readonly bounds: (options?: ProjectionOptions) => ProjectionBounds | undefined
-	readonly canProject: (lambda: number, phi: number, options?: ProjectionOptions) => boolean
-	readonly splitPolyline: (points: readonly SphericalPoint[], options?: ProjectionPolylineOptions) => ProjectedPoint[][]
+	readonly splitPolyline: (points: readonly Point[], options?: ProjectionPolylineOptions) => Point[][]
 }
 
-// Projects a spherical point using a radial azimuthal scaling law.
-function azimuthalProject(longitude: number, latitude: number, centerLongitude: number, centerLatitude: number, radialDistance: RadialDistance, out?: Point): Point | false {
-	const dLongitude = normalizePI(longitude - centerLongitude)
+function fillPoint(out: Point | undefined, x: number, y: number) {
+	if (out === undefined) {
+		return { x, y }
+	} else {
+		out.x = x
+		out.y = y
+		return out
+	}
+}
+
+function azimuthalRawProject(dLongitude: number, latitude: number, centerLatitude: number, radialDistance: RadialDistance, out?: Point): Point | undefined {
 	const sinLatitude = Math.sin(latitude)
 	const cosLatitude = Math.cos(latitude)
 	const sinCenterLatitude = Math.sin(centerLatitude)
@@ -92,41 +79,45 @@ function azimuthalProject(longitude: number, latitude: number, centerLongitude: 
 	const cosC = sinCenterLatitude * sinLatitude + cosCenterLatitude * cosLatitude * cosDLongitude
 
 	if (sinC <= Number.EPSILON) {
-		if (cosC < 0) return false
-
-		out ??= { x: 0, y: 0 }
-		out.x = 0
-		out.y = 0
-		return out
+		if (cosC < 0) return undefined
+		return fillPoint(out, 0, 0)
 	}
 
 	const rho = radialDistance(sinC, cosC)
 
-	if (rho === false) return false
+	if (rho === false) return undefined
 
 	const scale = rho / sinC
-	out ??= { x: 0, y: 0 }
-	out.x = x * scale
-	out.y = y * scale
-	return out
+
+	return fillPoint(out, x * scale, y * scale)
 }
 
-// Unprojects azimuthal plane coordinates using the inverse radial law.
-function azimuthalUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number, angularDistance: AngularDistance) {
-	if (x === 0 && y === 0) return [normalizeAngle(centerLongitude), centerLatitude] as const
+// Projects a spherical point using a radial azimuthal scaling law.
+function azimuthalProject(longitude: number, latitude: number, centerLongitude: number, centerLatitude: number, radialDistance: RadialDistance, out?: Point): Point | undefined {
+	return azimuthalRawProject(normalizePI(longitude - centerLongitude), latitude, centerLatitude, radialDistance, out)
+}
+
+function azimuthalRawUnproject(x: number, y: number, centerLatitude: number, angularDistance: AngularDistance, out?: Point) {
+	if (x === 0 && y === 0) return fillPoint(out, 0, centerLatitude)
 
 	const rho = Math.hypot(x, y)
 	const c = angularDistance(rho)
 
-	if (c === false) return false
+	if (c === false) return undefined
 
 	const sinC = Math.sin(c)
 	const cosC = Math.cos(c)
 	const sinCenterLatitude = Math.sin(centerLatitude)
 	const cosCenterLatitude = Math.cos(centerLatitude)
 	const latitude = Math.asin(clamp(cosC * sinCenterLatitude + (y * sinC * cosCenterLatitude) / rho, -1, 1))
-	const longitude = normalizeAngle(centerLongitude + Math.atan2(x * sinC, rho * cosCenterLatitude * cosC - y * sinCenterLatitude * sinC))
-	return [longitude, latitude] as const
+	const dLongitude = Math.atan2(x * sinC, rho * cosCenterLatitude * cosC - y * sinCenterLatitude * sinC)
+	return fillPoint(out, dLongitude, latitude)
+}
+
+// Unprojects azimuthal plane coordinates using the inverse radial law.
+function azimuthalUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number, angularDistance: AngularDistance, out?: Point) {
+	const point = azimuthalRawUnproject(x, y, centerLatitude, angularDistance, out)
+	return point && fillPoint(point, normalizeAngle(centerLongitude + point.x), point.y)
 }
 
 function gnomonicRadialDistance(sinC: number, cosC: number) {
@@ -134,13 +125,13 @@ function gnomonicRadialDistance(sinC: number, cosC: number) {
 }
 
 // Projects a spherical point onto a tangent plane using the gnomonic projection.
-export function gnomonicProject(longitude: number, latitude: number, centerLongitude: number, centerLatitude: number, out?: Point): Point | false {
+export function gnomonicProject(longitude: number, latitude: number, centerLongitude: number, centerLatitude: number, out?: Point): Point | undefined {
 	return azimuthalProject(longitude, latitude, centerLongitude, centerLatitude, gnomonicRadialDistance, out)
 }
 
 // Unprojects tangent-plane coordinates into spherical coordinates using the gnomonic projection.
-export function gnomonicUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number) {
-	return azimuthalUnproject(x, y, centerLongitude, centerLatitude, Math.atan)
+export function gnomonicUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number, out?: Point) {
+	return azimuthalUnproject(x, y, centerLongitude, centerLatitude, Math.atan, out)
 }
 
 function stereographicRadialDistance(sinC: number, cosC: number) {
@@ -158,8 +149,8 @@ export function stereographicProject(longitude: number, latitude: number, center
 }
 
 // Unprojects perspective-plane coordinates into spherical coordinates using the stereographic projection.
-export function stereographicUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number) {
-	return azimuthalUnproject(x, y, centerLongitude, centerLatitude, stereographicAngularDistance)
+export function stereographicUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number, out?: Point) {
+	return azimuthalUnproject(x, y, centerLongitude, centerLatitude, stereographicAngularDistance, out)
 }
 
 function orthographicRadialDistance(sinC: number, cosC: number) {
@@ -176,8 +167,8 @@ export function orthographicProject(longitude: number, latitude: number, centerL
 }
 
 // Unprojects orthographic-plane coordinates into spherical coordinates using the orthographic projection.
-export function orthographicUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number) {
-	return azimuthalUnproject(x, y, centerLongitude, centerLatitude, orthographicAngularDistance)
+export function orthographicUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number, out?: Point) {
+	return azimuthalUnproject(x, y, centerLongitude, centerLatitude, orthographicAngularDistance, out)
 }
 
 function lambertAzimuthalEqualAreaRadialDistance(sinC: number, cosC: number) {
@@ -195,8 +186,8 @@ export function lambertAzimuthalEqualAreaProject(longitude: number, latitude: nu
 }
 
 // Unprojects Lambert azimuthal equal-area plane coordinates into spherical coordinates.
-export function lambertAzimuthalEqualAreaUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number) {
-	return azimuthalUnproject(x, y, centerLongitude, centerLatitude, lambertAzimuthalEqualAreaAngularDistance)
+export function lambertAzimuthalEqualAreaUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number, out?: Point) {
+	return azimuthalUnproject(x, y, centerLongitude, centerLatitude, lambertAzimuthalEqualAreaAngularDistance, out)
 }
 
 function azimuthalEquidistantRadialDistance(sinC: number, cosC: number) {
@@ -208,16 +199,14 @@ function azimuthalEquidistantAngularDistance(rho: number) {
 }
 
 // Projects a spherical point preserving distance from the center with the azimuthal equidistant projection.
-export function azimuthalEquidistantProject(longitude: number, latitude: number, centerLongitude: number, centerLatitude: number, out?: Point): Point | false {
+export function azimuthalEquidistantProject(longitude: number, latitude: number, centerLongitude: number, centerLatitude: number, out?: Point) {
 	return azimuthalProject(longitude, latitude, centerLongitude, centerLatitude, azimuthalEquidistantRadialDistance, out)
 }
 
 // Unprojects azimuthal-equidistant plane coordinates into spherical coordinates.
-export function azimuthalEquidistantUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number) {
-	return azimuthalUnproject(x, y, centerLongitude, centerLatitude, azimuthalEquidistantAngularDistance)
+export function azimuthalEquidistantUnproject(x: number, y: number, centerLongitude: number, centerLatitude: number, out?: Point) {
+	return azimuthalUnproject(x, y, centerLongitude, centerLatitude, azimuthalEquidistantAngularDistance, out)
 }
-
-type NumberProjectionOption = 'centralMeridian' | 'latitudeOfOrigin' | 'standardParallel1' | 'standardParallel2' | 'scale' | 'radius' | 'falseEasting' | 'falseNorthing' | 'eccentricity' | 'flattening' | 'maxLatitude' | 'epsilon' | 'maxIterations'
 
 const DEFAULT_PROJECTION_EPSILON = 1e-12
 const DEFAULT_RADIUS = 1
@@ -230,90 +219,20 @@ export const WEB_MERCATOR_MAX_LATITUDE = Math.atan(Math.sinh(PI))
 
 const TRYSTAN_EDWARDS_STANDARD_PARALLEL = 37.4 * DEG2RAD
 
-const CYLINDRICAL_EQUIDISTANT_PROPERTIES: ProjectionProperties = {
-	conformal: false,
-	equalArea: false,
-	equidistant: { meridians: true, standardParallels: true },
-	hasInverse: true,
-	preservesStraightParallels: true,
-	preservesStraightMeridians: true,
-	finiteWorldExtent: true,
-}
-
-const MERCATOR_PROPERTIES: ProjectionProperties = {
-	conformal: true,
-	equalArea: false,
-	equidistant: false,
-	hasInverse: true,
-	preservesStraightParallels: true,
-	preservesStraightMeridians: true,
-	finiteWorldExtent: false,
-}
-
-const WEB_MERCATOR_PROPERTIES: ProjectionProperties = {
-	conformal: false,
-	equalArea: false,
-	equidistant: false,
-	hasInverse: true,
-	preservesStraightParallels: true,
-	preservesStraightMeridians: true,
-	finiteWorldExtent: true,
-}
-
-const CYLINDRICAL_EQUAL_AREA_PROPERTIES: ProjectionProperties = {
-	conformal: false,
-	equalArea: true,
-	equidistant: false,
-	hasInverse: true,
-	preservesStraightParallels: true,
-	preservesStraightMeridians: true,
-	finiteWorldExtent: true,
-}
-
-const CYLINDRICAL_STEREOGRAPHIC_PROPERTIES: ProjectionProperties = {
-	conformal: false,
-	equalArea: false,
-	equidistant: false,
-	hasInverse: true,
-	preservesStraightParallels: true,
-	preservesStraightMeridians: true,
-	finiteWorldExtent: true,
-}
-
-const MILLER_PROPERTIES: ProjectionProperties = {
-	conformal: false,
-	equalArea: false,
-	equidistant: false,
-	hasInverse: true,
-	preservesStraightParallels: true,
-	preservesStraightMeridians: true,
-	finiteWorldExtent: true,
-}
-
-const CENTRAL_CYLINDRICAL_PROPERTIES: ProjectionProperties = {
-	conformal: false,
-	equalArea: false,
-	equidistant: false,
-	hasInverse: true,
-	preservesStraightParallels: true,
-	preservesStraightMeridians: true,
-	finiteWorldExtent: false,
-}
-
-function optionNumber(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined, key: NumberProjectionOption, fallback: number) {
+function optionNumber(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined, key: keyof PickByValue<ProjectionOptions, number | undefined>, fallback: number) {
 	return options?.[key] ?? defaults?.[key] ?? fallback
 }
 
-function optionBoolean(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined, key: 'clampLatitude' | 'sphericalOnly' | 'allowInvalidOutsideDomain', fallback: boolean) {
+function optionBoolean(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined, key: keyof PickByValue<ProjectionOptions, boolean | undefined>, fallback: boolean) {
 	return options?.[key] ?? defaults?.[key] ?? fallback
 }
 
-function projectionEpsilon(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function projectionEpsilon(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const epsilon = optionNumber(options, defaults, 'epsilon', DEFAULT_PROJECTION_EPSILON)
 	return Number.isFinite(epsilon) && epsilon > 0 ? epsilon : undefined
 }
 
-function projectionScale(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function projectionScale(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const radius = optionNumber(options, defaults, 'radius', DEFAULT_RADIUS)
 	const scale = optionNumber(options, defaults, 'scale', DEFAULT_SCALE)
 
@@ -322,27 +241,27 @@ function projectionScale(options: ProjectionOptions | undefined, defaults: Proje
 	return radius * scale
 }
 
-function projectionFalseEasting(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function projectionFalseEasting(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const falseEasting = optionNumber(options, defaults, 'falseEasting', DEFAULT_FALSE_OFFSET)
 	return Number.isFinite(falseEasting) ? falseEasting : undefined
 }
 
-function projectionFalseNorthing(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function projectionFalseNorthing(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const falseNorthing = optionNumber(options, defaults, 'falseNorthing', DEFAULT_FALSE_OFFSET)
 	return Number.isFinite(falseNorthing) ? falseNorthing : undefined
 }
 
-function projectionLongitudeWrapMode(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function projectionLongitudeWrapMode(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const mode = options?.longitudeWrapMode ?? defaults?.longitudeWrapMode ?? 'pi'
 	return mode === 'pi' || mode === 'tau' || mode === 'none' ? mode : undefined
 }
 
-function projectionRaAxisDirection(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function projectionRaAxisDirection(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const direction = options?.raAxisDirection ?? defaults?.raAxisDirection ?? 'east'
 	return direction === 'east' || direction === 'west' ? direction : undefined
 }
 
-function projectionYAxisDirection(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function projectionYAxisDirection(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const direction = options?.yAxisDirection ?? defaults?.yAxisDirection ?? 'northUp'
 	return direction === 'northUp' || direction === 'southUp' ? direction : undefined
 }
@@ -352,7 +271,7 @@ function normalizeLongitudeByMode(longitude: number, mode: LongitudeWrapMode) {
 	return mode === 'tau' ? normalizeAngle(longitude) : normalizePI(longitude)
 }
 
-function projectionLongitudeDelta(lambda: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function projectionLongitudeDelta(lambda: number, options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const centralMeridian = optionNumber(options, defaults, 'centralMeridian', 0)
 	const mode = projectionLongitudeWrapMode(options, defaults)
 	const direction = projectionRaAxisDirection(options, defaults)
@@ -363,7 +282,7 @@ function projectionLongitudeDelta(lambda: number, options: ProjectionOptions | u
 	return normalizeLongitudeByMode(delta, mode)
 }
 
-function projectionLongitudeFromDelta(delta: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function projectionLongitudeFromDelta(delta: number, options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const centralMeridian = optionNumber(options, defaults, 'centralMeridian', 0)
 	const mode = projectionLongitudeWrapMode(options, defaults)
 	const direction = projectionRaAxisDirection(options, defaults)
@@ -421,7 +340,7 @@ function projectionStandardParallelCos(options: ProjectionOptions | undefined, d
 	return Math.cos(standardParallel)
 }
 
-function projectionEccentricity(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function projectionEccentricity(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	if (optionBoolean(options, defaults, 'sphericalOnly', false)) return 0
 
 	const eccentricity = options?.eccentricity ?? defaults?.eccentricity
@@ -438,12 +357,12 @@ function projectionEccentricity(options: ProjectionOptions | undefined, defaults
 	return Math.sqrt(flattening * (2 - flattening))
 }
 
-function projectionMaxIterations(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function projectionMaxIterations(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const maxIterations = optionNumber(options, defaults, 'maxIterations', 12)
 	return Number.isFinite(maxIterations) && maxIterations >= 1 ? Math.floor(maxIterations) : undefined
 }
 
-function projectRawPoint(x: number, y: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined): ProjectedPoint | undefined {
+function projectRawPoint(x: number, y: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
 	const scale = projectionScale(options, defaults)
 	const falseEasting = projectionFalseEasting(options, defaults)
 	const falseNorthing = projectionFalseNorthing(options, defaults)
@@ -452,10 +371,10 @@ function projectRawPoint(x: number, y: number, options: ProjectionOptions | unde
 	if (scale === undefined || falseEasting === undefined || falseNorthing === undefined || yAxisDirection === undefined || !Number.isFinite(x) || !Number.isFinite(y)) return undefined
 
 	const ySign = yAxisDirection === 'southUp' ? -1 : 1
-	return [falseEasting + x * scale, falseNorthing + y * ySign * scale] as const
+	return fillPoint(out, falseEasting + x * scale, falseNorthing + y * ySign * scale)
 }
 
-function unprojectRawPoint(x: number, y: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined): ProjectedPoint | undefined {
+function unprojectRawPoint(x: number, y: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
 	const scale = projectionScale(options, defaults)
 	const falseEasting = projectionFalseEasting(options, defaults)
 	const falseNorthing = projectionFalseNorthing(options, defaults)
@@ -464,19 +383,19 @@ function unprojectRawPoint(x: number, y: number, options: ProjectionOptions | un
 	if (scale === undefined || falseEasting === undefined || falseNorthing === undefined || yAxisDirection === undefined || !Number.isFinite(x) || !Number.isFinite(y)) return undefined
 
 	const ySign = yAxisDirection === 'southUp' ? -1 : 1
-	return [(x - falseEasting) / scale, ((y - falseNorthing) / scale) * ySign] as const
+	return fillPoint(out, (x - falseEasting) / scale, ((y - falseNorthing) / scale) * ySign)
 }
 
-function rawLongitudeBounds(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined, xFactor: number) {
+function rawLongitudeBounds(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined, xFactor: number, out?: Point) {
 	const mode = projectionLongitudeWrapMode(options, defaults)
 
 	if (mode === undefined || !Number.isFinite(xFactor)) return undefined
-	if (mode === 'tau') return [0, TAU * xFactor] as const
+	if (mode === 'tau') return fillPoint(out, 0, TAU * xFactor)
 
-	return [-PI * xFactor, PI * xFactor] as const
+	return fillPoint(out, -PI * xFactor, PI * xFactor)
 }
 
-function projectRawBounds(minX: number, maxX: number, minY: number, maxY: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined): ProjectionBounds | undefined {
+function projectRawBounds(minX: number, maxX: number, minY: number, maxY: number, options?: ProjectionOptions, defaults?: ProjectionOptions): ProjectionBounds | undefined {
 	const scale = projectionScale(options, defaults)
 	const falseEasting = projectionFalseEasting(options, defaults)
 	const falseNorthing = projectionFalseNorthing(options, defaults)
@@ -497,18 +416,18 @@ function projectRawBounds(minX: number, maxX: number, minY: number, maxY: number
 	}
 }
 
-function cylinderBounds(yMin: number, yMax: number, xFactor: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function cylinderBounds(yMin: number, yMax: number, xFactor: number, options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const longitudeBounds = rawLongitudeBounds(options, defaults, xFactor)
 	if (longitudeBounds === undefined) return undefined
 
-	return projectRawBounds(longitudeBounds[0], longitudeBounds[1], yMin, yMax, options, defaults)
+	return projectRawBounds(longitudeBounds.x, longitudeBounds.y, yMin, yMax, options, defaults)
 }
 
-function centeredCylinderBounds(yMin: number, yMax: number, xFactor: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function centeredCylinderBounds(yMin: number, yMax: number, xFactor: number, options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const longitudeBounds = rawLongitudeBounds(options, defaults, xFactor)
 	if (longitudeBounds === undefined) return undefined
 
-	return projectRawBounds(longitudeBounds[0], longitudeBounds[1], yMin, yMax, options, defaults)
+	return projectRawBounds(longitudeBounds.x, longitudeBounds.y, yMin, yMax, options, defaults)
 }
 
 function unitValue(value: number, epsilon: number) {
@@ -517,7 +436,34 @@ function unitValue(value: number, epsilon: number) {
 	return clamp(value, -1, 1)
 }
 
-function equidistantCylindricalForward(lambda: number, phi: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function azimuthalForward(lambda: number, phi: number, radialDistance: RadialDistance, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
+	const latitude = projectionLatitude(phi, options, defaults, PIOVERTWO, false)
+	const latitudeOfOrigin = projectionLatitudeOfOrigin(options, defaults)
+	const delta = projectionLongitudeDelta(lambda, options, defaults)
+
+	if (latitude === undefined || latitudeOfOrigin === undefined || delta === undefined) return undefined
+
+	const point = azimuthalRawProject(delta, latitude, latitudeOfOrigin, radialDistance, out)
+	return point && projectRawPoint(point.x, point.y, options, defaults, out)
+}
+
+function azimuthalInverse(x: number, y: number, angularDistance: AngularDistance, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
+	const point = unprojectRawPoint(x, y, options, defaults, out)
+	const latitudeOfOrigin = projectionLatitudeOfOrigin(options, defaults)
+
+	if (point === undefined || latitudeOfOrigin === undefined) return undefined
+
+	const spherical = azimuthalRawUnproject(point.x, point.y, latitudeOfOrigin, angularDistance, out)
+	const longitude = spherical && projectionLongitudeFromDelta(spherical.x, options, defaults)
+
+	return spherical === undefined || longitude === undefined ? undefined : fillPoint(out, longitude, spherical.y)
+}
+
+function azimuthalBounds(radius: number, options?: ProjectionOptions, defaults?: ProjectionOptions) {
+	return projectRawBounds(-radius, radius, -radius, radius, options, defaults)
+}
+
+function equidistantCylindricalForward(lambda: number, phi: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
 	const latitude = projectionLatitude(phi, options, defaults, PIOVERTWO, false)
 	const latitudeOfOrigin = projectionLatitudeOfOrigin(options, defaults)
 	const delta = projectionLongitudeDelta(lambda, options, defaults)
@@ -525,23 +471,23 @@ function equidistantCylindricalForward(lambda: number, phi: number, options: Pro
 
 	if (latitude === undefined || latitudeOfOrigin === undefined || delta === undefined || cosStandardParallel === undefined) return undefined
 
-	return projectRawPoint(delta * cosStandardParallel, latitude - latitudeOfOrigin, options, defaults)
+	return projectRawPoint(delta * cosStandardParallel, latitude - latitudeOfOrigin, options, defaults, out)
 }
 
-function equidistantCylindricalInverse(x: number, y: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
-	const point = unprojectRawPoint(x, y, options, defaults)
+function equidistantCylindricalInverse(x: number, y: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
+	const point = unprojectRawPoint(x, y, options, defaults, out)
 	const latitudeOfOrigin = projectionLatitudeOfOrigin(options, defaults)
 	const cosStandardParallel = projectionStandardParallelCos(options, defaults, 0)
 
 	if (point === undefined || latitudeOfOrigin === undefined || cosStandardParallel === undefined) return undefined
 
-	const latitude = inverseLatitudeInRange(point[1] + latitudeOfOrigin, options, defaults, PIOVERTWO)
-	const longitude = projectionLongitudeFromDelta(point[0] / cosStandardParallel, options, defaults)
+	const latitude = inverseLatitudeInRange(point.y + latitudeOfOrigin, options, defaults, PIOVERTWO)
+	const longitude = projectionLongitudeFromDelta(point.x / cosStandardParallel, options, defaults)
 
-	return latitude === undefined || longitude === undefined ? undefined : ([longitude, latitude] as const)
+	return latitude === undefined || longitude === undefined ? undefined : fillPoint(out, longitude, latitude)
 }
 
-function equidistantCylindricalBounds(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function equidistantCylindricalBounds(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const latitudeOfOrigin = projectionLatitudeOfOrigin(options, defaults)
 	const cosStandardParallel = projectionStandardParallelCos(options, defaults, 0)
 
@@ -554,26 +500,26 @@ function mercatorY(latitude: number) {
 	return Math.asinh(Math.tan(latitude))
 }
 
-function mercatorForward(lambda: number, phi: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function mercatorForward(lambda: number, phi: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
 	const latitude = projectionLatitude(phi, options, defaults, DEFAULT_MAX_MERCATOR_LATITUDE, false)
 	const delta = projectionLongitudeDelta(lambda, options, defaults)
 
 	if (latitude === undefined || delta === undefined) return undefined
 
-	return projectRawPoint(delta, mercatorY(latitude), options, defaults)
+	return projectRawPoint(delta, mercatorY(latitude), options, defaults, out)
 }
 
-function mercatorInverse(x: number, y: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
-	const point = unprojectRawPoint(x, y, options, defaults)
+function mercatorInverse(x: number, y: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
+	const point = unprojectRawPoint(x, y, options, defaults, out)
 	if (point === undefined) return undefined
 
-	const latitude = inverseLatitudeInRange(Math.atan(Math.sinh(point[1])), options, defaults, DEFAULT_MAX_MERCATOR_LATITUDE)
-	const longitude = projectionLongitudeFromDelta(point[0], options, defaults)
+	const latitude = inverseLatitudeInRange(Math.atan(Math.sinh(point.y)), options, defaults, DEFAULT_MAX_MERCATOR_LATITUDE)
+	const longitude = projectionLongitudeFromDelta(point.x, options, defaults)
 
-	return latitude === undefined || longitude === undefined ? undefined : ([longitude, latitude] as const)
+	return latitude === undefined || longitude === undefined ? undefined : fillPoint(out, longitude, latitude)
 }
 
-function mercatorBounds(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function mercatorBounds(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const maxLatitude = projectionMaxLatitude(options, defaults, DEFAULT_MAX_MERCATOR_LATITUDE)
 	if (maxLatitude === undefined) return undefined
 
@@ -581,13 +527,13 @@ function mercatorBounds(options: ProjectionOptions | undefined, defaults: Projec
 	return centeredCylinderBounds(-y, y, 1, options, defaults)
 }
 
-function webMercatorForward(lambda: number, phi: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function webMercatorForward(lambda: number, phi: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
 	const latitude = projectionLatitude(phi, options, defaults, WEB_MERCATOR_MAX_LATITUDE, true)
 	const delta = projectionLongitudeDelta(lambda, options, defaults)
 
 	if (latitude === undefined || delta === undefined) return undefined
 
-	return projectRawPoint(delta, mercatorY(latitude), options, defaults)
+	return projectRawPoint(delta, mercatorY(latitude), options, defaults, out)
 }
 
 function ellipsoidalMercatorY(latitude: number, eccentricity: number) {
@@ -595,7 +541,7 @@ function ellipsoidalMercatorY(latitude: number, eccentricity: number) {
 	return Math.atanh(sinLatitude) - eccentricity * Math.atanh(eccentricity * sinLatitude)
 }
 
-function ellipsoidalMercatorInverseLatitude(y: number, eccentricity: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function ellipsoidalMercatorInverseLatitude(y: number, eccentricity: number, options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	if (eccentricity === 0) return Math.atan(Math.sinh(y))
 
 	const epsilon = projectionEpsilon(options, defaults)
@@ -624,30 +570,30 @@ function ellipsoidalMercatorInverseLatitude(y: number, eccentricity: number, opt
 	return undefined
 }
 
-function ellipsoidalMercatorForward(lambda: number, phi: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function ellipsoidalMercatorForward(lambda: number, phi: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
 	const latitude = projectionLatitude(phi, options, defaults, DEFAULT_MAX_MERCATOR_LATITUDE, false)
 	const delta = projectionLongitudeDelta(lambda, options, defaults)
 	const eccentricity = projectionEccentricity(options, defaults)
 
 	if (latitude === undefined || delta === undefined || eccentricity === undefined) return undefined
 
-	return projectRawPoint(delta, ellipsoidalMercatorY(latitude, eccentricity), options, defaults)
+	return projectRawPoint(delta, ellipsoidalMercatorY(latitude, eccentricity), options, defaults, out)
 }
 
-function ellipsoidalMercatorInverse(x: number, y: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
-	const point = unprojectRawPoint(x, y, options, defaults)
+function ellipsoidalMercatorInverse(x: number, y: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
+	const point = unprojectRawPoint(x, y, options, defaults, out)
 	const eccentricity = projectionEccentricity(options, defaults)
 
 	if (point === undefined || eccentricity === undefined) return undefined
 
-	const latitude = ellipsoidalMercatorInverseLatitude(point[1], eccentricity, options, defaults)
+	const latitude = ellipsoidalMercatorInverseLatitude(point.y, eccentricity, options, defaults)
 	const rangedLatitude = latitude === undefined ? undefined : inverseLatitudeInRange(latitude, options, defaults, DEFAULT_MAX_MERCATOR_LATITUDE)
-	const longitude = projectionLongitudeFromDelta(point[0], options, defaults)
+	const longitude = projectionLongitudeFromDelta(point.x, options, defaults)
 
-	return rangedLatitude === undefined || longitude === undefined ? undefined : ([longitude, rangedLatitude] as const)
+	return rangedLatitude === undefined || longitude === undefined ? undefined : fillPoint(out, longitude, rangedLatitude)
 }
 
-function ellipsoidalMercatorBounds(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function ellipsoidalMercatorBounds(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const maxLatitude = projectionMaxLatitude(options, defaults, DEFAULT_MAX_MERCATOR_LATITUDE)
 	const eccentricity = projectionEccentricity(options, defaults)
 
@@ -661,26 +607,26 @@ function millerY(latitude: number) {
 	return 1.25 * Math.log(Math.tan(PI / 4 + 0.4 * latitude))
 }
 
-function millerForward(lambda: number, phi: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function millerForward(lambda: number, phi: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
 	const latitude = projectionLatitude(phi, options, defaults, PIOVERTWO, false)
 	const delta = projectionLongitudeDelta(lambda, options, defaults)
 
 	if (latitude === undefined || delta === undefined) return undefined
 
-	return projectRawPoint(delta, millerY(latitude), options, defaults)
+	return projectRawPoint(delta, millerY(latitude), options, defaults, out)
 }
 
-function millerInverse(x: number, y: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
-	const point = unprojectRawPoint(x, y, options, defaults)
+function millerInverse(x: number, y: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
+	const point = unprojectRawPoint(x, y, options, defaults, out)
 	if (point === undefined) return undefined
 
-	const latitude = inverseLatitudeInRange(2.5 * (Math.atan(Math.exp(0.8 * point[1])) - PI / 4), options, defaults, PIOVERTWO)
-	const longitude = projectionLongitudeFromDelta(point[0], options, defaults)
+	const latitude = inverseLatitudeInRange(2.5 * (Math.atan(Math.exp(0.8 * point.y)) - PI / 4), options, defaults, PIOVERTWO)
+	const longitude = projectionLongitudeFromDelta(point.x, options, defaults)
 
-	return latitude === undefined || longitude === undefined ? undefined : ([longitude, latitude] as const)
+	return latitude === undefined || longitude === undefined ? undefined : fillPoint(out, longitude, latitude)
 }
 
-function millerBounds(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function millerBounds(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const maxLatitude = projectionMaxLatitude(options, defaults, PIOVERTWO)
 	if (maxLatitude === undefined) return undefined
 
@@ -688,26 +634,26 @@ function millerBounds(options: ProjectionOptions | undefined, defaults: Projecti
 	return centeredCylinderBounds(-y, y, 1, options, defaults)
 }
 
-function centralCylindricalForward(lambda: number, phi: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function centralCylindricalForward(lambda: number, phi: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
 	const latitude = projectionLatitude(phi, options, defaults, DEFAULT_MAX_MERCATOR_LATITUDE, false)
 	const delta = projectionLongitudeDelta(lambda, options, defaults)
 
 	if (latitude === undefined || delta === undefined) return undefined
 
-	return projectRawPoint(delta, Math.tan(latitude), options, defaults)
+	return projectRawPoint(delta, Math.tan(latitude), options, defaults, out)
 }
 
-function centralCylindricalInverse(x: number, y: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
-	const point = unprojectRawPoint(x, y, options, defaults)
+function centralCylindricalInverse(x: number, y: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
+	const point = unprojectRawPoint(x, y, options, defaults, out)
 	if (point === undefined) return undefined
 
-	const latitude = inverseLatitudeInRange(Math.atan(point[1]), options, defaults, DEFAULT_MAX_MERCATOR_LATITUDE)
-	const longitude = projectionLongitudeFromDelta(point[0], options, defaults)
+	const latitude = inverseLatitudeInRange(Math.atan(point.y), options, defaults, DEFAULT_MAX_MERCATOR_LATITUDE)
+	const longitude = projectionLongitudeFromDelta(point.x, options, defaults)
 
-	return latitude === undefined || longitude === undefined ? undefined : ([longitude, latitude] as const)
+	return latitude === undefined || longitude === undefined ? undefined : fillPoint(out, longitude, latitude)
 }
 
-function centralCylindricalBounds(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function centralCylindricalBounds(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const maxLatitude = projectionMaxLatitude(options, defaults, DEFAULT_MAX_MERCATOR_LATITUDE)
 	if (maxLatitude === undefined) return undefined
 
@@ -715,7 +661,7 @@ function centralCylindricalBounds(options: ProjectionOptions | undefined, defaul
 	return centeredCylinderBounds(-y, y, 1, options, defaults)
 }
 
-function cylindricalEqualAreaForward(lambda: number, phi: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function cylindricalEqualAreaForward(lambda: number, phi: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
 	const latitude = projectionLatitude(phi, options, defaults, PIOVERTWO, false)
 	const latitudeOfOrigin = projectionLatitudeOfOrigin(options, defaults)
 	const delta = projectionLongitudeDelta(lambda, options, defaults)
@@ -723,24 +669,24 @@ function cylindricalEqualAreaForward(lambda: number, phi: number, options: Proje
 
 	if (latitude === undefined || latitudeOfOrigin === undefined || delta === undefined || cosStandardParallel === undefined) return undefined
 
-	return projectRawPoint(delta * cosStandardParallel, (Math.sin(latitude) - Math.sin(latitudeOfOrigin)) / cosStandardParallel, options, defaults)
+	return projectRawPoint(delta * cosStandardParallel, (Math.sin(latitude) - Math.sin(latitudeOfOrigin)) / cosStandardParallel, options, defaults, out)
 }
 
-function cylindricalEqualAreaInverse(x: number, y: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
-	const point = unprojectRawPoint(x, y, options, defaults)
+function cylindricalEqualAreaInverse(x: number, y: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
+	const point = unprojectRawPoint(x, y, options, defaults, out)
 	const epsilon = projectionEpsilon(options, defaults)
 	const latitudeOfOrigin = projectionLatitudeOfOrigin(options, defaults)
 	const cosStandardParallel = projectionStandardParallelCos(options, defaults, 0)
 
 	if (point === undefined || epsilon === undefined || latitudeOfOrigin === undefined || cosStandardParallel === undefined) return undefined
 
-	const sinLatitude = unitValue(point[1] * cosStandardParallel + Math.sin(latitudeOfOrigin), epsilon)
-	const longitude = projectionLongitudeFromDelta(point[0] / cosStandardParallel, options, defaults)
+	const sinLatitude = unitValue(point.y * cosStandardParallel + Math.sin(latitudeOfOrigin), epsilon)
+	const longitude = projectionLongitudeFromDelta(point.x / cosStandardParallel, options, defaults)
 
-	return sinLatitude === undefined || longitude === undefined ? undefined : ([longitude, Math.asin(sinLatitude)] as const)
+	return sinLatitude === undefined || longitude === undefined ? undefined : fillPoint(out, longitude, Math.asin(sinLatitude))
 }
 
-function cylindricalEqualAreaBounds(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function cylindricalEqualAreaBounds(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const maxLatitude = projectionMaxLatitude(options, defaults, PIOVERTWO)
 	const latitudeOfOrigin = projectionLatitudeOfOrigin(options, defaults)
 	const cosStandardParallel = projectionStandardParallelCos(options, defaults, 0)
@@ -751,33 +697,33 @@ function cylindricalEqualAreaBounds(options: ProjectionOptions | undefined, defa
 	return cylinderBounds((-Math.sin(maxLatitude) - origin) / cosStandardParallel, (Math.sin(maxLatitude) - origin) / cosStandardParallel, cosStandardParallel, options, defaults)
 }
 
-function cylindricalStereographicForward(lambda: number, phi: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function cylindricalStereographicForward(lambda: number, phi: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
 	const latitude = projectionLatitude(phi, options, defaults, PIOVERTWO, false)
 	const delta = projectionLongitudeDelta(lambda, options, defaults)
 	const cosStandardParallel = projectionStandardParallelCos(options, defaults, 0)
 
 	if (latitude === undefined || delta === undefined || cosStandardParallel === undefined) return undefined
 
-	return projectRawPoint(delta * cosStandardParallel, (1 + cosStandardParallel) * Math.tan(latitude / 2), options, defaults)
+	return projectRawPoint(delta * cosStandardParallel, (1 + cosStandardParallel) * Math.tan(latitude / 2), options, defaults, out)
 }
 
-function cylindricalStereographicInverse(x: number, y: number, options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
-	const point = unprojectRawPoint(x, y, options, defaults)
+function cylindricalStereographicInverse(x: number, y: number, options?: ProjectionOptions, defaults?: ProjectionOptions, out?: Point) {
+	const point = unprojectRawPoint(x, y, options, defaults, out)
 	const epsilon = projectionEpsilon(options, defaults)
 	const cosStandardParallel = projectionStandardParallelCos(options, defaults, 0)
 
 	if (point === undefined || epsilon === undefined || cosStandardParallel === undefined) return undefined
 
 	const yLimit = 1 + cosStandardParallel
-	if (point[1] < -yLimit - epsilon || point[1] > yLimit + epsilon) return undefined
+	if (point.y < -yLimit - epsilon || point.y > yLimit + epsilon) return undefined
 
-	const latitude = inverseLatitudeInRange(2 * Math.atan(clamp(point[1], -yLimit, yLimit) / yLimit), options, defaults, PIOVERTWO)
-	const longitude = projectionLongitudeFromDelta(point[0] / cosStandardParallel, options, defaults)
+	const latitude = inverseLatitudeInRange(2 * Math.atan(clamp(point.y, -yLimit, yLimit) / yLimit), options, defaults, PIOVERTWO)
+	const longitude = projectionLongitudeFromDelta(point.x / cosStandardParallel, options, defaults)
 
-	return latitude === undefined || longitude === undefined ? undefined : ([longitude, latitude] as const)
+	return latitude === undefined || longitude === undefined ? undefined : fillPoint(out, longitude, latitude)
 }
 
-function cylindricalStereographicBounds(options: ProjectionOptions | undefined, defaults: ProjectionOptions | undefined) {
+function cylindricalStereographicBounds(options?: ProjectionOptions, defaults?: ProjectionOptions) {
 	const cosStandardParallel = projectionStandardParallelCos(options, defaults, 0)
 	if (cosStandardParallel === undefined) return undefined
 
@@ -785,42 +731,110 @@ function cylindricalStereographicBounds(options: ProjectionOptions | undefined, 
 }
 
 export abstract class ProjectionBase implements Projection {
-	abstract readonly properties: ProjectionProperties
-
 	constructor(protected readonly defaultOptions: ProjectionOptions = {}) {}
 
-	abstract forward(lambda: number, phi: number, options?: ProjectionOptions): ProjectedPoint | undefined
+	abstract forward(lambda: number, phi: number, options?: ProjectionOptions, out?: Point): Point | undefined
 
-	abstract inverse(x: number, y: number, options?: ProjectionOptions): SphericalPoint | undefined
+	abstract inverse(x: number, y: number, options?: ProjectionOptions, out?: Point): Point | undefined
 
 	abstract bounds(options?: ProjectionOptions): ProjectionBounds | undefined
 
-	canProject(lambda: number, phi: number, options?: ProjectionOptions) {
-		return this.forward(lambda, phi, options) !== undefined
-	}
-
-	splitPolyline(points: readonly SphericalPoint[], options?: ProjectionPolylineOptions) {
+	splitPolyline(points: readonly Point[], options?: ProjectionPolylineOptions) {
 		return splitProjectionPolyline(this, points, options)
 	}
 }
 
-export class CylindricalEqualArea extends ProjectionBase {
-	readonly properties = CYLINDRICAL_EQUAL_AREA_PROPERTIES
-
-	constructor(readonly standardParallel1?: number) {
-		super({ standardParallel1 })
+abstract class AzimuthalProjectionBase extends ProjectionBase {
+	constructor(defaultOptions: ProjectionOptions = {}) {
+		super(defaultOptions)
 	}
 
-	forward(lambda: number, phi: number, options?: ProjectionOptions) {
-		return cylindricalEqualAreaForward(lambda, phi, options, this.defaultOptions)
+	protected abstract readonly radialDistance: RadialDistance
+	protected abstract readonly angularDistance: AngularDistance
+	protected abstract readonly boundRadius: number | undefined
+
+	forward(lambda: number, phi: number, options?: ProjectionOptions, out?: Point) {
+		return azimuthalForward(lambda, phi, this.radialDistance, options, this.defaultOptions, out)
 	}
 
-	inverse(x: number, y: number, options?: ProjectionOptions) {
-		return cylindricalEqualAreaInverse(x, y, options, this.defaultOptions)
+	inverse(x: number, y: number, options?: ProjectionOptions, out?: Point) {
+		return azimuthalInverse(x, y, this.angularDistance, options, this.defaultOptions, out)
 	}
 
 	bounds(options?: ProjectionOptions) {
-		return cylindricalEqualAreaBounds(options, this.defaultOptions)
+		return this.boundRadius === undefined ? undefined : azimuthalBounds(this.boundRadius, options, this.defaultOptions)
+	}
+}
+
+export class Gnomonic extends AzimuthalProjectionBase {
+	protected readonly radialDistance = gnomonicRadialDistance
+	protected readonly angularDistance = Math.atan
+	protected readonly boundRadius = undefined
+
+	static readonly default = new Gnomonic()
+}
+
+export class Stereographic extends AzimuthalProjectionBase {
+	protected readonly radialDistance = stereographicRadialDistance
+	protected readonly angularDistance = stereographicAngularDistance
+	protected readonly boundRadius = undefined
+
+	static readonly default = new Stereographic()
+}
+
+export class Orthographic extends AzimuthalProjectionBase {
+	protected readonly radialDistance = orthographicRadialDistance
+	protected readonly angularDistance = orthographicAngularDistance
+	protected readonly boundRadius = 1
+
+	static readonly default = new Orthographic()
+}
+
+export class LambertAzimuthalEqualArea extends AzimuthalProjectionBase {
+	protected readonly radialDistance = lambertAzimuthalEqualAreaRadialDistance
+	protected readonly angularDistance = lambertAzimuthalEqualAreaAngularDistance
+	protected readonly boundRadius = 2
+
+	static readonly default = new LambertAzimuthalEqualArea()
+}
+
+export class AzimuthalEquidistant extends AzimuthalProjectionBase {
+	protected readonly radialDistance = azimuthalEquidistantRadialDistance
+	protected readonly angularDistance = azimuthalEquidistantAngularDistance
+	protected readonly boundRadius = PI
+
+	static readonly default = new AzimuthalEquidistant()
+}
+
+export abstract class CylindricalProjectionBase extends ProjectionBase {
+	constructor(defaultOptions: ProjectionOptions = {}) {
+		super(defaultOptions)
+	}
+
+	protected abstract readonly cylindricalProject: typeof projectRawPoint
+	protected abstract readonly cylindricalUnproject: typeof unprojectRawPoint
+	protected abstract readonly cylindricalBounds: typeof cylindricalEqualAreaBounds
+
+	forward(lambda: number, phi: number, options?: ProjectionOptions, out?: Point) {
+		return this.cylindricalProject(lambda, phi, options, this.defaultOptions, out)
+	}
+
+	inverse(x: number, y: number, options?: ProjectionOptions, out?: Point) {
+		return this.cylindricalUnproject(x, y, options, this.defaultOptions, out)
+	}
+
+	bounds(options?: ProjectionOptions) {
+		return this.cylindricalBounds(options, this.defaultOptions)
+	}
+}
+
+export class CylindricalEqualArea extends CylindricalProjectionBase {
+	protected readonly cylindricalProject = cylindricalEqualAreaForward
+	protected readonly cylindricalUnproject = cylindricalEqualAreaInverse
+	protected readonly cylindricalBounds = cylindricalEqualAreaBounds
+
+	constructor(readonly standardParallel1?: number) {
+		super({ standardParallel1 })
 	}
 
 	static readonly lambertCylindricalEqualArea = new CylindricalEqualArea(0)
@@ -831,208 +845,142 @@ export class CylindricalEqualArea extends ProjectionBase {
 	static readonly trystanEdwards = new CylindricalEqualArea(TRYSTAN_EDWARDS_STANDARD_PARALLEL)
 }
 
-export class CylindricalStereographic extends ProjectionBase {
-	readonly properties = CYLINDRICAL_STEREOGRAPHIC_PROPERTIES
+export class CylindricalStereographic extends CylindricalProjectionBase {
+	protected readonly cylindricalProject = cylindricalStereographicForward
+	protected readonly cylindricalUnproject = cylindricalStereographicInverse
+	protected readonly cylindricalBounds = cylindricalStereographicBounds
 
 	constructor(readonly standardParallel1?: number) {
 		super({ standardParallel1 })
-	}
-
-	forward(lambda: number, phi: number, options?: ProjectionOptions) {
-		return cylindricalStereographicForward(lambda, phi, options, this.defaultOptions)
-	}
-
-	inverse(x: number, y: number, options?: ProjectionOptions) {
-		return cylindricalStereographicInverse(x, y, options, this.defaultOptions)
-	}
-
-	bounds(options?: ProjectionOptions) {
-		return cylindricalStereographicBounds(options, this.defaultOptions)
 	}
 
 	static readonly gall = new CylindricalStereographic(PI / 4)
 	static readonly braun = new CylindricalStereographic(0)
 }
 
-export class CylindricalEquidistant extends ProjectionBase {
-	readonly properties = CYLINDRICAL_EQUIDISTANT_PROPERTIES
+export class CylindricalEquidistant extends CylindricalProjectionBase {
+	protected readonly cylindricalProject = equidistantCylindricalForward
+	protected readonly cylindricalUnproject = equidistantCylindricalInverse
+	protected readonly cylindricalBounds = equidistantCylindricalBounds
 
 	constructor(readonly standardParallel1?: number) {
 		super({ standardParallel1 })
-	}
-
-	forward(lambda: number, phi: number, options?: ProjectionOptions) {
-		return equidistantCylindricalForward(lambda, phi, options, this.defaultOptions)
-	}
-
-	inverse(x: number, y: number, options?: ProjectionOptions) {
-		return equidistantCylindricalInverse(x, y, options, this.defaultOptions)
-	}
-
-	bounds(options?: ProjectionOptions) {
-		return equidistantCylindricalBounds(options, this.defaultOptions)
 	}
 
 	static readonly default = new CylindricalEquidistant()
 	static readonly plateCarree = new CylindricalEquidistant(0) // simpleCylindrical
 }
 
-export class Mercator extends ProjectionBase {
-	readonly properties = MERCATOR_PROPERTIES
-
-	forward(lambda: number, phi: number, options?: ProjectionOptions) {
-		return mercatorForward(lambda, phi, options, this.defaultOptions)
-	}
-
-	inverse(x: number, y: number, options?: ProjectionOptions) {
-		return mercatorInverse(x, y, options, this.defaultOptions)
-	}
-
-	bounds(options?: ProjectionOptions) {
-		return mercatorBounds(options, this.defaultOptions)
-	}
+export class Mercator extends CylindricalProjectionBase {
+	protected readonly cylindricalProject = mercatorForward
+	protected readonly cylindricalUnproject = mercatorInverse
+	protected readonly cylindricalBounds = mercatorBounds
 
 	static readonly default = new Mercator()
 }
 
+const DEFAULT_WEB_MERCATOR_PROJECTION_OPTIONS: ProjectionOptions = { clampLatitude: true, maxLatitude: WEB_MERCATOR_MAX_LATITUDE }
+
 export class WebMercator extends Mercator {
-	readonly properties = WEB_MERCATOR_PROPERTIES
+	protected readonly cylindricalProject = webMercatorForward
+	protected readonly cylindricalUnproject = mercatorInverse
+	protected readonly cylindricalBounds = mercatorBounds
 
 	constructor() {
-		super({ clampLatitude: true, maxLatitude: WEB_MERCATOR_MAX_LATITUDE })
-	}
-
-	forward(lambda: number, phi: number, options?: ProjectionOptions) {
-		return webMercatorForward(lambda, phi, options, this.defaultOptions)
+		super(DEFAULT_WEB_MERCATOR_PROJECTION_OPTIONS)
 	}
 
 	static readonly default = new WebMercator()
 }
 
-export class EllipsoidalMercator extends ProjectionBase {
-	readonly properties = MERCATOR_PROPERTIES
+export class EllipsoidalMercator extends CylindricalProjectionBase {
+	protected readonly cylindricalProject = ellipsoidalMercatorForward
+	protected readonly cylindricalUnproject = ellipsoidalMercatorInverse
+	protected readonly cylindricalBounds = ellipsoidalMercatorBounds
 
 	constructor(eccentricity?: number) {
 		super({ eccentricity })
 	}
 
-	forward(lambda: number, phi: number, options?: ProjectionOptions) {
-		return ellipsoidalMercatorForward(lambda, phi, options, this.defaultOptions)
-	}
-
-	inverse(x: number, y: number, options?: ProjectionOptions) {
-		return ellipsoidalMercatorInverse(x, y, options, this.defaultOptions)
-	}
-
-	bounds(options?: ProjectionOptions) {
-		return ellipsoidalMercatorBounds(options, this.defaultOptions)
-	}
-
 	static readonly default = new EllipsoidalMercator()
 }
 
-export class Miller extends ProjectionBase {
-	readonly properties = MILLER_PROPERTIES
-
-	forward(lambda: number, phi: number, options?: ProjectionOptions) {
-		return millerForward(lambda, phi, options, this.defaultOptions)
-	}
-
-	inverse(x: number, y: number, options?: ProjectionOptions) {
-		return millerInverse(x, y, options, this.defaultOptions)
-	}
-
-	bounds(options?: ProjectionOptions) {
-		return millerBounds(options, this.defaultOptions)
-	}
+export class Miller extends CylindricalProjectionBase {
+	protected readonly cylindricalProject = millerForward
+	protected readonly cylindricalUnproject = millerInverse
+	protected readonly cylindricalBounds = millerBounds
 
 	static readonly default = new Miller()
 }
 
-export class CentralCylindrical extends ProjectionBase {
-	readonly properties = CENTRAL_CYLINDRICAL_PROPERTIES
-
-	forward(lambda: number, phi: number, options?: ProjectionOptions) {
-		return centralCylindricalForward(lambda, phi, options, this.defaultOptions)
-	}
-
-	inverse(x: number, y: number, options?: ProjectionOptions) {
-		return centralCylindricalInverse(x, y, options, this.defaultOptions)
-	}
-
-	bounds(options?: ProjectionOptions) {
-		return centralCylindricalBounds(options, this.defaultOptions)
-	}
+export class CentralCylindrical extends CylindricalProjectionBase {
+	protected readonly cylindricalProject = centralCylindricalForward
+	protected readonly cylindricalUnproject = centralCylindricalInverse
+	protected readonly cylindricalBounds = centralCylindricalBounds
 
 	static readonly default = new CentralCylindrical()
 }
 
 // Projects longitude and latitude with a registered projection.
-export function projectLonLat(projection: Projection, lambda: number, phi: number, options?: ProjectionOptions) {
-	return projection.forward(lambda, phi, options)
+export function projectLonLat(projection: Projection, lambda: number, phi: number, options?: ProjectionOptions, out?: Point) {
+	return projection.forward(lambda, phi, options, out)
 }
 
 // Unprojects plane coordinates into longitude and latitude.
-export function unprojectLonLat(projection: Projection, x: number, y: number, options?: ProjectionOptions) {
-	return projection.inverse(x, y, options)
+export function unprojectLonLat(projection: Projection, x: number, y: number, options?: ProjectionOptions, out?: Point) {
+	return projection.inverse(x, y, options, out)
 }
 
 // Projects an array of spherical points into a flat x/y buffer.
-export function projectLonLatBatch(projection: Projection, points: readonly SphericalPoint[], options?: ProjectionOptions, out: number[] = []) {
-	out.length = points.length * 2
+export function projectLonLatBatch(projection: Projection, points: readonly Point[], options?: ProjectionOptions, out: Point[] = []) {
+	out.length = points.length
 
 	for (let i = 0; i < points.length; i++) {
-		const projected = projection.forward(points[i][0], points[i][1], options)
-
+		const projected = projection.forward(points[i].x, points[i].y, options, out[i])
 		if (projected === undefined) return undefined
-
-		out[i * 2] = projected[0]
-		out[i * 2 + 1] = projected[1]
+		out[i] = projected
 	}
 
 	return out
 }
 
-function shouldSplitLongitude(a: SphericalPoint, b: SphericalPoint, options: ProjectionPolylineOptions | undefined, defaults: ProjectionOptions | undefined) {
+function shouldSplitLongitude(a: Point, b: Point, options?: ProjectionPolylineOptions, defaults?: ProjectionOptions) {
 	const splitLongitudeGap = options?.splitLongitudeGap ?? PI
-	const aDelta = projectionLongitudeDelta(a[0], options, defaults)
-	const bDelta = projectionLongitudeDelta(b[0], options, defaults)
+	const aDelta = projectionLongitudeDelta(a.x, options, defaults)
+	const bDelta = projectionLongitudeDelta(b.x, options, defaults)
 
-	if (!Number.isFinite(splitLongitudeGap) || splitLongitudeGap <= 0 || aDelta === undefined || bDelta === undefined) return false
+	if (!Number.isFinite(splitLongitudeGap) || splitLongitudeGap <= 0 || aDelta === undefined || bDelta === undefined) return undefined
 
 	return Math.abs(bDelta - aDelta) > splitLongitudeGap
 }
 
-function densifiedPoint(a: SphericalPoint, b: SphericalPoint, step: number, steps: number): SphericalPoint {
-	const dLongitude = normalizePI(b[0] - a[0])
+function densifiedPoint(a: Point, b: Point, step: number, steps: number, out?: Point) {
+	const dLongitude = normalizePI(b.x - a.x)
 	const t = step / steps
-	return [a[0] + dLongitude * t, a[1] + (b[1] - a[1]) * t] as const
-}
-
-function projectedDistance(a: ProjectedPoint, b: ProjectedPoint) {
-	return Math.hypot(b[0] - a[0], b[1] - a[1])
+	return fillPoint(out, a.x + dLongitude * t, a.y + (b.y - a.y) * t)
 }
 
 // Splits projected polylines at anti-meridian wraps, singularities, and large jumps.
-export function splitProjectionPolyline(projection: Projection, points: readonly SphericalPoint[], options?: ProjectionPolylineOptions): ProjectedPoint[][] {
+export function splitProjectionPolyline(projection: Projection, points: readonly Point[], options?: ProjectionPolylineOptions): Point[][] {
 	if (points.length === 0) return []
 
-	const lines: ProjectedPoint[][] = []
-	let current: ProjectedPoint[] = []
-	let previousProjected: ProjectedPoint | undefined
-	let previousPoint: SphericalPoint | undefined
+	const lines: Point[][] = []
+	let current: Point[] = []
+	let previousProjected: Point | undefined
+	let previousPoint: Point | undefined
 	const maxSegmentRadians = options?.maxSegmentRadians
 	const discontinuityThreshold = options?.discontinuityThreshold
+	const p: Point = { x: 0, y: 0 }
 
 	for (let i = 0; i < points.length; i++) {
 		const target = points[i]
-		const segmentSteps = previousPoint !== undefined && maxSegmentRadians !== undefined && Number.isFinite(maxSegmentRadians) && maxSegmentRadians > 0 ? Math.max(1, Math.ceil(Math.max(Math.abs(normalizePI(target[0] - previousPoint[0])), Math.abs(target[1] - previousPoint[1])) / maxSegmentRadians)) : 1
+		const segmentSteps = previousPoint !== undefined && maxSegmentRadians !== undefined && Number.isFinite(maxSegmentRadians) && maxSegmentRadians > 0 ? Math.max(1, Math.ceil(Math.max(Math.abs(normalizePI(target.x - previousPoint.x)), Math.abs(target.y - previousPoint.y)) / maxSegmentRadians)) : 1
 
 		for (let step = 1; step <= segmentSteps; step++) {
-			const point = previousPoint === undefined || step === segmentSteps ? target : densifiedPoint(previousPoint, target, step, segmentSteps)
+			const point = previousPoint === undefined || step === segmentSteps ? target : densifiedPoint(previousPoint, target, step, segmentSteps, p)
 			const splitLongitude = previousPoint !== undefined && step === 1 && shouldSplitLongitude(previousPoint, point, options, undefined)
-			const projected = projection.forward(point[0], point[1], options)
-			const splitDiscontinuity = previousProjected !== undefined && projected !== undefined && discontinuityThreshold !== undefined && Number.isFinite(discontinuityThreshold) && discontinuityThreshold > 0 && projectedDistance(previousProjected, projected) > discontinuityThreshold
+			const projected = projection.forward(point.x, point.y, options)
+			const splitDiscontinuity = previousProjected !== undefined && projected !== undefined && discontinuityThreshold !== undefined && Number.isFinite(discontinuityThreshold) && discontinuityThreshold > 0 && euclideanDistance(previousProjected, projected) > discontinuityThreshold
 
 			if (splitLongitude || projected === undefined || splitDiscontinuity) {
 				if (current.length > 0) lines.push(current)
@@ -1055,8 +1003,8 @@ export function splitProjectionPolyline(projection: Projection, points: readonly
 }
 
 // Projects polygon rings, preserving splits caused by longitude wraps or projection domains.
-export function projectPolygon(projection: Projection, rings: readonly (readonly SphericalPoint[])[], options?: ProjectionPolylineOptions) {
-	const projected: ProjectedPoint[][][] = []
+export function projectPolygon(projection: Projection, rings: readonly (readonly Point[])[], options?: ProjectionPolylineOptions) {
+	const projected: Point[][][] = []
 	for (let i = 0; i < rings.length; i++) projected.push(splitProjectionPolyline(projection, rings[i], options))
 	return projected
 }

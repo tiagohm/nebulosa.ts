@@ -2540,7 +2540,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const point: Point = { x: 0, y: 0 }
 
 		return stars.map((s) => {
-			if (gnomonicProject(s.rightAscension, s.declination, centerRightAscension, centerDeclination, point) === false) {
+			if (gnomonicProject(s.rightAscension, s.declination, centerRightAscension, centerDeclination, point) === undefined) {
 				return undefined
 			}
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { type Angle, arcsec, deg, formatAZ, formatDEC, formatRA, normalizeAngle, toArcsec } from '../src/angle'
 import { Bitpix } from '../src/fits'
-import { sphericalDestination, sphericalSeparation } from '../src/geometry'
+import { sphericalDestination, sphericalSeparation, type Point } from '../src/geometry'
 import { HnskyCatalog } from '../src/hnsky'
 import { gnomonicUnproject } from '../src/projection'
 import { mulberry32, type Random } from '../src/random'
@@ -110,6 +110,7 @@ function createScenario(options: ScenarioOptions): Scenario {
 	const catalogStars: SyntheticCatalogStar[] = []
 	const detectedStars: DetectedStar[] = []
 	const truthIds: number[] = []
+	const p: Point = { x: 0, y: 0 }
 	let attempts = 0
 
 	while (detectedStars.length < matchedStars && attempts < matchedStars * 500) {
@@ -123,11 +124,11 @@ function createScenario(options: ScenarioOptions): Scenario {
 		if (imagePoint.x < 24 || imagePoint.x > width - 24 || imagePoint.y < 24 || imagePoint.y > height - 24) continue
 		if (!isSeparated(imagePoint.x, imagePoint.y, detectedStars, 22)) continue
 
-		const sky = gnomonicUnproject(planeX, planeY, options.centerRA, options.centerDEC)
-		if (sky === false) continue
+		const sky = gnomonicUnproject(planeX, planeY, options.centerRA, options.centerDEC, p)
+		if (sky === undefined) continue
 
 		const id = detectedStars.length
-		catalogStars.push({ id, epoch: 2000, rightAscension: sky[0], declination: sky[1], magnitude: 10 + random() * 2 })
+		catalogStars.push({ id, epoch: 2000, rightAscension: sky.x, declination: sky.y, magnitude: 10 + random() * 2 })
 		detectedStars.push({ x: imagePoint.x, y: imagePoint.y, flux: 2000 + detectedStars.length * 100, snr: 20 + detectedStars.length * 0.5, hfd: 2.2 + (detectedStars.length % 3) * 0.1 })
 		truthIds.push(id)
 	}
@@ -135,22 +136,12 @@ function createScenario(options: ScenarioOptions): Scenario {
 	for (let index = 0; index < distractorStars; index++) {
 		const radius = randomRange(random, fieldRadiusRadians * 1.45, Math.min(queryRadius * 0.95, fieldRadiusRadians * 3))
 		const angle = randomRange(random, 0, Math.PI * 2)
-		const sky = gnomonicUnproject(radius * Math.cos(angle), radius * Math.sin(angle), options.centerRA, options.centerDEC)
-		if (sky === false) continue
-		catalogStars.push({ id: index, epoch: 2000, rightAscension: sky[0], declination: sky[1], magnitude: 12 + random() * 2 })
+		const sky = gnomonicUnproject(radius * Math.cos(angle), radius * Math.sin(angle), options.centerRA, options.centerDEC, p)
+		if (sky === undefined) continue
+		catalogStars.push({ id: index, epoch: 2000, rightAscension: sky.x, declination: sky.y, magnitude: 12 + random() * 2 })
 	}
 
-	return {
-		camera: { width, height },
-		trueCenterRA: options.centerRA,
-		trueCenterDEC: options.centerDEC,
-		queryCenterRA: queryCenter[0],
-		queryCenterDEC: queryCenter[1],
-		queryRadius,
-		detectedStars,
-		catalogStars,
-		truthIds,
-	}
+	return { camera: { width, height }, trueCenterRA: options.centerRA, trueCenterDEC: options.centerDEC, queryCenterRA: queryCenter[0], queryCenterDEC: queryCenter[1], queryRadius, detectedStars, catalogStars, truthIds }
 }
 
 // Projects tangent-plane coordinates into synthetic image pixels.
