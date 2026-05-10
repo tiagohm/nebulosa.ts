@@ -4,35 +4,14 @@ import { ASEC2RAD } from '../src/constants'
 import { equatorialToHorizontal } from '../src/coordinate'
 import { localSiderealTime } from '../src/location'
 import { clamp, lerp, type NumberArray } from '../src/math'
-import {
-	buildEmpiricalPointingFeatureNames,
-	computePointingError,
-	correctPointingCoordinate,
-	extractEmpiricalPointingFeatures,
-	extractPointingContext,
-	type FittedPointingModel,
-	fitPointingModel,
-	MountPointing,
-	type PointingFeatureConfiguration,
-	type PointingModelInput,
-	type PointingModelStrategy,
-	type PointingOffset,
-	type PointingSample,
-	pointingTangentBasis,
-	predictPointingModelError,
-	predictSemiPhysicalOffset,
-	projectTangentPlane,
-	type ResolvedPointingFeatureConfiguration,
-	resolveFeatureConfiguration,
-	SEMI_PHYSICAL_PARAMETER_NAMES,
-	type SemiPhysicalParameterName,
-	unprojectTangentPlane,
-} from '../src/mount.pointing'
+// oxfmt-ignore
+import { buildEmpiricalPointingFeatureNames, computePointingError, correctPointingCoordinate, extractEmpiricalPointingFeatures, extractPointingContext, type FittedPointingModel, fitPointingModel, MountPointing, type PointingFeatureConfiguration, type PointingModelInput, type PointingModelStrategy, type PointingOffset, type PointingSample, predictPointingModelError, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_PARAMETER_NAMES, type SemiPhysicalParameterName, } from '../src/mount.pointing'
 import { gaussian, mulberry32 } from '../src/random'
 import { predictLinearLeastSquares } from '../src/regression'
 import { type Time, timeYMDHMS } from '../src/time'
 import { medianOf } from '../src/util'
-import { vecDot } from '../src/vec3'
+import { sphericalUnprojectTangentPlane } from '../src/geometry'
+import { eraC2s, eraS2c } from '../src/erfa'
 
 interface SyntheticPointingOptions {
 	readonly count?: number
@@ -67,34 +46,12 @@ const FEATURE_CONFIGURATION = {
 	includePolynomialTerms: false,
 } as const satisfies PointingFeatureConfiguration
 
-test('tangent basis is orthogonal', () => {
-	const basis = pointingTangentBasis(hour(5.1), deg(41.3))
-
-	expect(vecDot(basis.origin, basis.east)).toBeCloseTo(0, 12)
-	expect(vecDot(basis.origin, basis.north)).toBeCloseTo(0, 12)
-	expect(vecDot(basis.east, basis.north)).toBeCloseTo(0, 12)
-	expect(vecDot(basis.origin, basis.origin)).toBeCloseTo(1, 12)
-})
-
-test('tangent plane remains stable across RA wrap and near the pole', () => {
-	const [wrappedRa, wrappedDec] = unprojectTangentPlane(arcmin(8), arcmin(-5), normalizeAngle(deg(359.95)), deg(12))
-	const wrappedProjection = projectTangentPlane(wrappedRa, wrappedDec, normalizeAngle(deg(359.95)), deg(12))
-	const [poleRa, poleDec] = unprojectTangentPlane(arcmin(4), arcmin(3), hour(2.1), deg(89.2))
-	const poleProjection = projectTangentPlane(poleRa, poleDec, hour(2.1), deg(89.2))
-
-	expect(wrappedProjection).not.toBeFalse()
-	expect(poleProjection).not.toBeFalse()
-	expect(wrappedProjection !== false && wrappedProjection.dx).toBeCloseTo(arcmin(8), 8)
-	expect(wrappedProjection !== false && wrappedProjection.dy).toBeCloseTo(arcmin(-5), 8)
-	expect(poleProjection !== false && poleProjection.dx).toBeCloseTo(arcmin(4), 8)
-	expect(poleProjection !== false && poleProjection.dy).toBeCloseTo(arcmin(3), 8)
-})
-
 test('pointing error uses east-positive and north-positive signs', () => {
 	const targetRightAscension = hour(4.2)
 	const targetDeclination = deg(27)
-	const [eastRA, eastDEC] = unprojectTangentPlane(arcmin(6), 0, targetRightAscension, targetDeclination)
-	const [northRA, northDEC] = unprojectTangentPlane(0, arcmin(7), targetRightAscension, targetDeclination)
+	const target = eraS2c(targetRightAscension, targetDeclination)
+	const [eastRA, eastDEC] = eraC2s(...sphericalUnprojectTangentPlane(arcmin(6), 0, target))
+	const [northRA, northDEC] = eraC2s(...sphericalUnprojectTangentPlane(0, arcmin(7), target))
 	const eastError = computePointingError(targetRightAscension, targetDeclination, eastRA, eastDEC)
 	const northError = computePointingError(targetRightAscension, targetDeclination, northRA, northDEC)
 
@@ -313,7 +270,7 @@ export function generateSyntheticPointingSamples(options: SyntheticPointingOptio
 			dy += outlierStd()
 		}
 
-		const [solvedRightAscension, solvedDeclination] = unprojectTangentPlane(dx, dy, targetRightAscension, targetDeclination)
+		const [solvedRightAscension, solvedDeclination] = eraC2s(...sphericalUnprojectTangentPlane(dx, dy, eraS2c(targetRightAscension, targetDeclination)))
 		samples[i] = { targetRightAscension, targetDeclination, solvedRightAscension, solvedDeclination, time, latitude, longitude, pierSide }
 	}
 

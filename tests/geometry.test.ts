@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { deg } from '../src/angle'
+import { arcmin, deg, hour } from '../src/angle'
 import { eraC2s, eraS2c, eraS2p } from '../src/erfa'
 // oxfmt-ignore
 import { intersectLineAndSphere, midPoint, rectIntersection, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalUnprojectTangentPlane } from '../src/geometry'
@@ -111,6 +111,29 @@ test('spherical coordinate basis is orthonormal and aligned with lon-lat directi
 	expectOrthonormalBasis(basis)
 	expectVectorClose(basis.origin, eraS2c(longitude, latitude), 14)
 	expectVectorClose(basis.east, [-Math.sin(longitude), Math.cos(longitude), 0], 14)
+})
+
+test('spherical coordinate basis is orthogonal', () => {
+	const basis = sphericalCoordinateBasis(hour(5.1), deg(41.3))
+
+	expect(vecDot(basis.origin, basis.east)).toBeCloseTo(0, 12)
+	expect(vecDot(basis.origin, basis.north)).toBeCloseTo(0, 12)
+	expect(vecDot(basis.east, basis.north)).toBeCloseTo(0, 12)
+	expect(vecDot(basis.origin, basis.origin)).toBeCloseTo(1, 12)
+})
+
+test('tangent plane remains stable across RA wrap and near the pole', () => {
+	const wrapped = sphericalUnprojectTangentPlane(arcmin(8), arcmin(-5), eraS2c(deg(359.95), deg(12)))
+	const wrappedProjection = sphericalProjectTangentPlane(wrapped, eraS2c(deg(359.95), deg(12)))
+	const pole = sphericalUnprojectTangentPlane(arcmin(4), arcmin(3), eraS2c(hour(2.1), deg(89.2)))
+	const poleProjection = sphericalProjectTangentPlane(pole, eraS2c(hour(2.1), deg(89.2)))
+
+	expect(wrappedProjection).not.toBeFalse()
+	expect(poleProjection).not.toBeFalse()
+	expect(wrappedProjection !== false && wrappedProjection.x).toBeCloseTo(arcmin(8), 8)
+	expect(wrappedProjection !== false && wrappedProjection.y).toBeCloseTo(arcmin(-5), 8)
+	expect(poleProjection !== false && poleProjection.x).toBeCloseTo(arcmin(4), 8)
+	expect(poleProjection !== false && poleProjection.y).toBeCloseTo(arcmin(3), 8)
 })
 
 test('spherical tangent basis matches coordinate basis away from the pole', () => {

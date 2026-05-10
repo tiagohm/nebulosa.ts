@@ -1,14 +1,15 @@
-import { type Angle, normalizeAngle, normalizePI } from './angle'
+import { type Angle, normalizePI } from './angle'
 import { AMIN2RAD, DEG2RAD, PIOVERTWO, TAU } from './constants'
 import { angularDistance, type EquatorialCoordinate, equatorialToHorizontal } from './coordinate'
 import { eraC2s, eraS2c } from './erfa'
+import { sphericalProjectTangentPlane, sphericalUnprojectTangentPlane } from './geometry'
 import type { PierSide } from './indi.device'
 import { localSiderealTime } from './location'
 import type { NumberArray } from './math'
 import { linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMethod, robustLinearLeastSquares } from './regression'
 import type { Time } from './time'
 import { medianOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE } from './util'
-import { type Vec3, vecAngle, vecDot, vecNormalizeMut } from './vec3'
+import { type Vec3, vecAngle } from './vec3'
 
 export type PointingModelStrategy = 'empirical' | 'semiPhysical' | 'hybrid'
 
@@ -283,44 +284,6 @@ export const SEMI_PHYSICAL_PARAMETER_NAMES = ['IH', 'ID', 'MA', 'ME', 'NPAE', 'C
 
 const TOTAL_SKY_BINS = 24
 
-// Builds the tangent basis used for the robust local error representation.
-export function pointingTangentBasis(ra: Angle, dec: Angle): PointingTangentBasis {
-	const cosRa = Math.cos(ra)
-	const sinRa = Math.sin(ra)
-	const cosDec = Math.cos(dec)
-	const sinDec = Math.sin(dec)
-	return { origin: eraS2c(ra, dec), east: [-sinRa, cosRa, 0], north: [-cosRa * sinDec, -sinRa * sinDec, cosDec] }
-}
-
-// Converts a unit vector into equatorial coordinates.
-export function unitVectorToRaDec(vector: Vec3) {
-	const raDec = eraC2s(...vector)
-	raDec[0] = normalizeAngle(raDec[0])
-	return raDec
-}
-
-// Projects a coordinate into the tangent plane centered on another coordinate.
-export function projectTangentPlane(ra: Angle, dec: Angle, centerRa: Angle, centerDec: Angle): TangentPlaneProjection | false {
-	const basis = pointingTangentBasis(centerRa, centerDec)
-	const vector = eraS2c(ra, dec)
-	const denominator = vecDot(vector, basis.origin)
-
-	if (denominator <= 0) return false
-
-	return {
-		dx: vecDot(vector, basis.east) / denominator,
-		dy: vecDot(vector, basis.north) / denominator,
-		denominator,
-	}
-}
-
-// Unprojects tangent-plane coordinates back into RA and Dec.
-export function unprojectTangentPlane(x: number, y: number, centerRa: Angle, centerDec: Angle) {
-	const basis = pointingTangentBasis(centerRa, centerDec)
-	const vector = vecNormalizeMut([basis.origin[0] + basis.east[0] * x + basis.north[0] * y, basis.origin[1] + basis.east[1] * x + basis.north[1] * y, basis.origin[2] + basis.east[2] * x + basis.north[2] * y])
-	return unitVectorToRaDec(vector)
-}
-
 // Extracts the geometric context needed by the empirical and semi-physical models.
 export function extractPointingContext(input: Readonly<PointingModelInput>): PointingContext {
 	const pierSide = normalizePierSide(input.pierSide)
@@ -341,19 +304,7 @@ export function extractPointingContext(input: Readonly<PointingModelInput>): Poi
 		;[azimuth, altitude] = equatorialToHorizontal(input.rightAscension, input.declination, latitude, lst)
 	}
 
-	return {
-		rightAscension: input.rightAscension,
-		declination: input.declination,
-		time: input.time,
-		pierSide,
-		pierSideValue: pierSide === 'EAST' ? 1 : pierSide === 'WEST' ? -1 : 0,
-		lst,
-		hourAngle,
-		azimuth,
-		altitude,
-		latitude,
-		longitude,
-	}
+	return { rightAscension: input.rightAscension, declination: input.declination, time: input.time, pierSide, pierSideValue: pierSide === 'EAST' ? 1 : pierSide === 'WEST' ? -1 : 0, lst, hourAngle, azimuth, altitude, latitude, longitude }
 }
 
 // Builds the deterministic empirical feature-name list for the configured model.
@@ -444,24 +395,19 @@ export function extractEmpiricalPointingFeatures(input: Readonly<PointingModelIn
 export function computePointingError(targetRa: Angle, targetDec: Angle, solvedRa: Angle, solvedDec: Angle, representation: PointingErrorRepresentation = 'vectorTangent'): PointingError {
 	const simpleDx = normalizePI(solvedRa - targetRa) * Math.cos(targetDec)
 	const simpleDy = solvedDec - targetDec
-	const projection = projectTangentPlane(solvedRa, solvedDec, targetRa, targetDec)
 	const targetVector = eraS2c(targetRa, targetDec)
 	const solvedVector = eraS2c(solvedRa, solvedDec)
+	const projection = sphericalProjectTangentPlane(solvedVector, targetVector)
 	const angularSeparation = vecAngle(targetVector, solvedVector)
-	const vectorDx = projection === false ? simpleDx : projection.dx
-	const vectorDy = projection === false ? simpleDy : projection.dy
+	const vectorDx = projection === false ? simpleDx : projection.x
+	const vectorDy = projection === false ? simpleDy : projection.y
 
 	return {
 		dx: representation === 'smallAngle' ? simpleDx : vectorDx,
 		dy: representation === 'smallAngle' ? simpleDy : vectorDy,
 		angularSeparation,
 		representationUsed: projection === false ? 'smallAngle' : representation,
-		comparison: {
-			smallAngleDx: simpleDx,
-			smallAngleDy: simpleDy,
-			vectorDx,
-			vectorDy,
-		},
+		comparison: { smallAngleDx: simpleDx, smallAngleDy: simpleDy, vectorDx, vectorDy },
 	}
 }
 
@@ -509,7 +455,7 @@ export function predictPointingModelError(model: FittedPointingModel, input: Rea
 // Applies the predicted local correction to a requested coordinate.
 export function correctPointingCoordinate(model: FittedPointingModel, input: Readonly<PointingModelInput>): CorrectionResult {
 	const predictedError = predictPointingModelError(model, input)
-	const [rightAscension, declination] = unprojectTangentPlane(-predictedError.dx, -predictedError.dy, input.rightAscension, input.declination)
+	const [rightAscension, declination] = eraC2s(...sphericalUnprojectTangentPlane(-predictedError.dx, -predictedError.dy, eraS2c(input.rightAscension, input.declination)))
 	return { rightAscension, declination, predictedError }
 }
 
