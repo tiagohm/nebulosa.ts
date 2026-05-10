@@ -112,13 +112,13 @@ test('rejects invalid numeric input', () => {
 	const [obs1, obs2, obs3] = observations()
 	const invalidTime: Time = { ...obs1.time, day: Number.NaN }
 
-	expect(() => gauss({ ...obs1, rightAscension: Number.NaN }, obs2, obs3, { mu: MU })).toThrow('rightAscension must be finite')
-	expect(() => gauss({ ...obs1, declination: Number.POSITIVE_INFINITY }, obs2, obs3, { mu: MU })).toThrow('declination must be finite')
-	expect(() => gauss({ ...obs1, declination: Math.PI }, obs2, obs3, { mu: MU })).toThrow('declination must be within')
-	expect(() => gauss({ ...obs1, observer: [Number.NaN, 0, 0] }, obs2, obs3, { mu: MU })).toThrow('observer must be a finite Vec3')
-	expect(() => gauss({ ...obs1, time: invalidTime }, obs2, obs3, { mu: MU })).toThrow('time must be a finite Time')
-	expect(() => gauss(obs1, obs2, obs3, { mu: 0 })).toThrow('positive finite gravitational parameter')
-	expect(() => gauss(obs1, obs2, obs3, { mu: Number.POSITIVE_INFINITY })).toThrow('positive finite gravitational parameter')
+	expect(() => gauss({ ...obs1, rightAscension: Number.NaN }, obs2, obs3, { mu: MU })).toThrow('value must be finite')
+	expect(() => gauss({ ...obs1, declination: Number.POSITIVE_INFINITY }, obs2, obs3, { mu: MU })).toThrow('value must be finite')
+	expect(() => gauss({ ...obs1, declination: Math.PI }, obs2, obs3, { mu: MU })).toThrow('value must be within')
+	expect(() => gauss({ ...obs1, observer: [Number.NaN, 0, 0] }, obs2, obs3, { mu: MU })).toThrow('value must be finite')
+	expect(() => gauss({ ...obs1, time: invalidTime }, obs2, obs3, { mu: MU })).toThrow('value must be finite')
+	expect(() => gauss(obs1, obs2, obs3, { mu: 0 })).toThrow('value must be positive')
+	expect(() => gauss(obs1, obs2, obs3, { mu: Number.POSITIVE_INFINITY })).toThrow('value must be finite')
 })
 
 test('rejects candidates below the configured positive range floor', () => {

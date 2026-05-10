@@ -1,11 +1,12 @@
 import type { Angle } from './angle'
-import { DEG2RAD, PIOVERTWO } from './constants'
+import { DEG2RAD } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
 import { clamp } from './math'
 import { gibbs, type GibbsWarning } from './orbit.fit.gibbs'
 import { herrickGibbs, type HerrickGibbsWarning } from './orbit.fit.herrickgibbs'
 import { type Time, timeSubtract } from './time'
+import { validateFinite, validateLatitude, validateNonNegativeFinite, validatePositiveFinite, validateTime, validateVector } from './validation'
 import { type MutVec3, type Vec3, vecCross, vecCrossLength, vecDot, vecLength, vecNormalizeMut, vecTripleProduct } from './vec3'
 
 const DEFAULT_MIN_POSITIVE_RHO = 1e-12
@@ -183,70 +184,19 @@ export function gauss(obs1: GaussObservation, obs2: GaussObservation, obs3: Gaus
 }
 
 function resolveOptions(options: GaussOptions): ResolvedGaussOptions {
-	if (options === undefined || options === null) {
-		throw new TypeError('gauss options are required')
-	}
-
-	if (!(Number.isFinite(options.mu) && options.mu > 0)) {
-		throw new RangeError(`gauss requires a positive finite gravitational parameter (mu=${formatMetric(options.mu)})`)
-	}
-
-	if (options.method !== undefined && options.method !== 'gibbs' && options.method !== 'herrick-gibbs') {
-		throw new TypeError(`gauss method must be "gibbs" or "herrick-gibbs" (method=${String(options.method)})`)
-	}
-
-	const minPositiveRho = options.minPositiveRho ?? DEFAULT_MIN_POSITIVE_RHO
-	if (!(Number.isFinite(minPositiveRho) && minPositiveRho >= 0)) {
-		throw new RangeError(`gauss minPositiveRho must be a non-negative finite number (minPositiveRho=${formatMetric(minPositiveRho)})`)
-	}
-
-	const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS
-	if (!(Number.isInteger(maxIterations) && maxIterations > 0)) {
-		throw new RangeError(`gauss maxIterations must be a positive integer (maxIterations=${formatMetric(maxIterations)})`)
-	}
-
-	const tolerance = options.tolerance ?? DEFAULT_TOLERANCE
-	if (!(Number.isFinite(tolerance) && tolerance > 0)) {
-		throw new RangeError(`gauss tolerance must be a positive finite number (tolerance=${formatMetric(tolerance)})`)
-	}
-
-	return {
-		mu: options.mu,
-		method: options.method,
-		minPositiveRho,
-		maxIterations,
-		tolerance,
-	}
+	if (options === undefined || options === null) throw new TypeError('gauss options are required')
+	validatePositiveFinite(options.mu)
+	const minPositiveRho = validateNonNegativeFinite(options.minPositiveRho ?? DEFAULT_MIN_POSITIVE_RHO)
+	const maxIterations = validatePositiveFinite(options.maxIterations ?? DEFAULT_MAX_ITERATIONS)
+	const tolerance = validatePositiveFinite(options.tolerance ?? DEFAULT_TOLERANCE)
+	return { mu: options.mu, method: options.method, minPositiveRho, maxIterations, tolerance }
 }
 
 function validateObservation(observation: GaussObservation, name: string) {
-	validateTime(observation.time, `${name}.time`)
-	validateFinite(observation.rightAscension, `${name}.rightAscension`)
-	validateFinite(observation.declination, `${name}.declination`)
-
-	if (observation.declination < -PIOVERTWO || observation.declination > PIOVERTWO) {
-		throw new RangeError(`${name}.declination must be within [-pi/2, pi/2] radians`)
-	}
-
-	validateVector(observation.observer, `${name}.observer`)
-}
-
-function validateTime(time: Time, name: string) {
-	if (time === undefined || time === null || !Number.isFinite(time.day) || !Number.isFinite(time.fraction)) {
-		throw new TypeError(`${name} must be a finite Time`)
-	}
-}
-
-function validateFinite(value: number, name: string) {
-	if (!Number.isFinite(value)) {
-		throw new TypeError(`${name} must be finite`)
-	}
-}
-
-function validateVector(value: Vec3, name: string) {
-	if (value === undefined || value === null || !Number.isFinite(value[0]) || !Number.isFinite(value[1]) || !Number.isFinite(value[2])) {
-		throw new TypeError(`${name} must be a finite Vec3`)
-	}
+	validateTime(observation.time)
+	validateFinite(observation.rightAscension)
+	validateLatitude(observation.declination)
+	validateVector(observation.observer)
 }
 
 function lineOfSight(rightAscension: Angle, declination: Angle) {

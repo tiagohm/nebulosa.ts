@@ -148,7 +148,7 @@ describe('eclipse iso-curves from Besselian elements', () => {
 
 	test('validates levels and grid options', () => {
 		expect(() => generateEclipseIsoCurves(total2024, [{ type: 'obscuration', value: 2 }], { gridResolutionDeg: 30 })).toThrow('obscuration')
-		expect(() => generateEclipseIsoCurves(total2024, [{ type: 'magnitude', value: 0.5 }], { gridResolutionDeg: 0 })).toThrow('gridResolutionDeg')
+		expect(() => generateEclipseIsoCurves(total2024, [{ type: 'magnitude', value: 0.5 }], { gridResolutionDeg: 0 })).toThrow('value must be positive')
 		expect(() => generateEclipseIsoCurves(total2024, [{ type: 'partialDuration', value: 60, unit: 'fraction' }], { gridResolutionDeg: 30 })).toThrow('partialDuration')
 	})
 })

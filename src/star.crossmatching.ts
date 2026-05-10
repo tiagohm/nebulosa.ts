@@ -7,6 +7,7 @@ import type { StarCatalog, StarCatalogEntry } from './star.catalog'
 import type { DetectedStar } from './star.detector'
 import { type AffineTransform, applyTransformToPoint, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from './star.matching'
 import { medianOf } from './util'
+import { validateInRangeExclusive, validatePositiveFinite } from './validation'
 
 const DEFAULT_CENTER_TOLERANCE = 1 * ASEC2RAD
 const DEFAULT_MAX_CATALOG_STARS = 256
@@ -192,7 +193,7 @@ export async function crossMatchStars<S extends StarCatalogEntry>(detectedStars:
 function resolveStarCrossmatchOptions(options: StarCrossmatchOptions): ResolvedStarCrossmatchOptions {
 	const centerRA = normalizeCoordinateRightAscension(options.centerRA)
 	const centerDEC = validateDeclination(options.centerDEC)
-	const radius = validateQueryRadius(options.radius)
+	const radius = validateInRangeExclusive(options.radius, 0, PIOVERTWO)
 	const camera = validateCameraInfo(options.camera)
 	const maxCatalogStars = Math.max(6, Math.trunc(options.maxCatalogStars ?? DEFAULT_MAX_CATALOG_STARS))
 	const matchingConfig = resolveStarMatchingConfig(options.matchingConfig, maxCatalogStars)
@@ -203,7 +204,7 @@ function resolveStarCrossmatchOptions(options: StarCrossmatchOptions): ResolvedS
 		radius,
 		camera,
 		refinementIterations: Math.max(0, Math.trunc(options.refinementIterations ?? 2)),
-		centerTolerance: options.centerTolerance === undefined ? DEFAULT_CENTER_TOLERANCE : validatePositiveAngle(options.centerTolerance, 'center tolerance'),
+		centerTolerance: options.centerTolerance === undefined ? DEFAULT_CENTER_TOLERANCE : validateInRangeExclusive(options.centerTolerance, 0, PI + GEOMETRY_EPSILON),
 		maxCatalogStars,
 		projectionPadding: Math.max(camera.width, camera.height) * Math.max(0, options.projectionPaddingFactor ?? DEFAULT_PROJECTION_PADDING_FACTOR),
 		nominalPixelsPerRadian: nominalPixelsPerRadian(camera, radius),
@@ -449,8 +450,8 @@ function transformMirrored(transform: SimilarityTransform | AffineTransform) {
 // Computes a nominal tangent-plane scale from optics when available or from the query footprint otherwise.
 function nominalPixelsPerRadian(camera: Readonly<StarCrossmatchCameraInfo>, queryRadius: Angle) {
 	if (camera.pixelSize !== undefined && camera.focalLength !== undefined) {
-		const pixelSize = validatePositiveScalar(camera.pixelSize, 'pixel size')
-		const focalLength = validatePositiveScalar(camera.focalLength, 'focal length')
+		const pixelSize = validatePositiveFinite(camera.pixelSize)
+		const focalLength = validatePositiveFinite(camera.focalLength)
 		return (focalLength * 1000) / pixelSize
 	}
 
@@ -459,38 +460,11 @@ function nominalPixelsPerRadian(camera: Readonly<StarCrossmatchCameraInfo>, quer
 
 // Validates the camera geometry needed to convert the solved transform into a center coordinate.
 function validateCameraInfo(camera: Readonly<StarCrossmatchCameraInfo>): Readonly<StarCrossmatchCameraInfo> {
-	const width = validatePositiveScalar(camera.width, 'camera width')
-	const height = validatePositiveScalar(camera.height, 'camera height')
-	if (camera.pixelSize !== undefined) validatePositiveScalar(camera.pixelSize, 'pixel size')
-	if (camera.focalLength !== undefined) validatePositiveScalar(camera.focalLength, 'focal length')
+	const width = validatePositiveFinite(camera.width)
+	const height = validatePositiveFinite(camera.height)
+	if (camera.pixelSize !== undefined) validatePositiveFinite(camera.pixelSize)
+	if (camera.focalLength !== undefined) validatePositiveFinite(camera.focalLength)
 	return { ...camera, width, height }
-}
-
-// Validates the query radius used for the catalog retrieval and tangent-plane approximation.
-function validateQueryRadius(queryRadius: Angle) {
-	if (!Number.isFinite(queryRadius) || queryRadius <= 0 || queryRadius >= PIOVERTWO) {
-		throw new Error(`invalid query radius: ${queryRadius}`)
-	}
-
-	return queryRadius
-}
-
-// Validates a positive angular input in radians.
-function validatePositiveAngle(value: Angle, label: string) {
-	if (!Number.isFinite(value) || value <= 0 || value > PI) {
-		throw new Error(`invalid ${label}: ${value}`)
-	}
-
-	return value
-}
-
-// Validates a positive scalar input.
-function validatePositiveScalar(value: number, label: string) {
-	if (!Number.isFinite(value) || value <= 0) {
-		throw new TypeError(`invalid ${label}: ${value}`)
-	}
-
-	return value
 }
 
 // Normalizes required right ascension input or throws on invalid values.

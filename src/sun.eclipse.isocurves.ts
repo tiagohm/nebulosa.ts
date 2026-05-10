@@ -4,7 +4,8 @@ import { angularDistance } from './coordinate'
 import { computeLocalCircumstances } from './sun.eclipse.circumstances'
 import type { BesselianElements } from './sun.eclipse.besselian'
 import type { SolarEclipseType } from './sun'
-import { type Time, Timescale } from './time'
+import type { Time } from './time'
+import { validateFinite, validatePositiveFinite, validatePositiveInteger, validateTime } from './validation'
 
 // Solar-eclipse iso-curves from sampled local circumstances.
 //
@@ -210,13 +211,13 @@ function resolveGridOptions(options: EclipseLocalGridOptions = {}): ResolvedGrid
 	const effectiveGridResolutionDeg = adaptiveRefinement ? gridResolutionDeg / 2 ** maxRefinementDepth : gridResolutionDeg
 	const numericalTolerance = options.numericalTolerance ?? DEFAULT_NUMERICAL_TOLERANCE
 
-	validateFinite('latitudeMinDeg', latitudeMinDeg)
-	validateFinite('latitudeMaxDeg', latitudeMaxDeg)
-	validateFinite('longitudeMinDeg', longitudeMinDeg)
-	validateFinite('longitudeMaxDeg', longitudeMaxDeg)
-	validatePositiveFinite('gridResolutionDeg', gridResolutionDeg)
-	validatePositiveFinite('effective grid resolution', effectiveGridResolutionDeg)
-	validatePositiveFinite('numericalTolerance', numericalTolerance)
+	validateFinite(latitudeMinDeg)
+	validateFinite(latitudeMaxDeg)
+	validateFinite(longitudeMinDeg)
+	validateFinite(longitudeMaxDeg)
+	validatePositiveFinite(gridResolutionDeg)
+	validatePositiveFinite(effectiveGridResolutionDeg)
+	validatePositiveFinite(numericalTolerance)
 
 	if (latitudeMinDeg < -90 || latitudeMaxDeg > 90 || !(latitudeMaxDeg > latitudeMinDeg)) throw new Error('latitude range must be within [-90, 90] and increasing')
 	if (!(longitudeMaxDeg > longitudeMinDeg)) throw new Error('longitude range must be increasing')
@@ -243,8 +244,8 @@ function resolveIsoOptions(options: EclipseIsoCurveOptions = {}): ResolvedIsoOpt
 	const minSegmentPoints = options.minSegmentPoints ?? DEFAULT_MIN_SEGMENT_POINTS
 	const resampleMaxStepDegrees = options.resampleMaxStepDegrees ?? DEFAULT_RESAMPLE_MAX_STEP_DEG
 
-	if (!Number.isInteger(minSegmentPoints) || minSegmentPoints < 1) throw new Error('minSegmentPoints must be a positive integer')
-	validatePositiveFinite('resampleMaxStepDegrees', resampleMaxStepDegrees)
+	validatePositiveInteger(minSegmentPoints)
+	validatePositiveFinite(resampleMaxStepDegrees)
 
 	return { ...grid, splitAntimeridian: options.splitAntimeridian ?? true, removeTinySegments: options.removeTinySegments ?? true, minSegmentPoints, smoothing: options.smoothing ?? 'none', resampleMaxStepDegrees }
 }
@@ -615,7 +616,7 @@ function normalizeLongitudeRadians(longitude: number) {
 
 function validateContourLevels(levels: readonly EclipseContourLevel[]) {
 	for (const level of levels) {
-		validatePositiveFinite('contour level value', level.value)
+		validatePositiveFinite(level.value)
 
 		if ((level.type === 'magnitude' || level.type === 'obscuration') && level.unit === 'seconds') throw new Error(`${level.type} levels must not use seconds`)
 		if ((level.type === 'partialDuration' || level.type === 'totalOrAnnularDuration') && level.unit === 'fraction') throw new Error(`${level.type} levels must not use fraction`)
@@ -624,22 +625,9 @@ function validateContourLevels(levels: readonly EclipseContourLevel[]) {
 }
 
 function validateElements(elements: BesselianElements) {
-	validateTime(elements.t0, 'elements.t0')
-	validateTime(elements.validFrom, 'elements.validFrom')
-	validateTime(elements.validTo, 'elements.validTo')
-	validatePositiveFinite('elements.earth.equatorialRadius', elements.earth.equatorialRadius)
-	validateFinite('elements.earth.flattening', elements.earth.flattening)
-}
-
-function validateTime(time: Time, name: string) {
-	if (!Number.isFinite(time.day) || !Number.isFinite(time.fraction)) throw new Error(`${name} must have finite day and fraction`)
-	if (time.scale < Timescale.UT1 || time.scale > Timescale.TCB) throw new Error(`${name} must have a valid timescale`)
-}
-
-function validatePositiveFinite(name: string, value: number) {
-	if (!(value > 0) || !Number.isFinite(value)) throw new Error(`${name} must be a positive finite number`)
-}
-
-function validateFinite(name: string, value: number) {
-	if (!Number.isFinite(value)) throw new Error(`${name} must be finite`)
+	validateTime(elements.t0)
+	validateTime(elements.validFrom)
+	validateTime(elements.validTo)
+	validatePositiveFinite(elements.earth.equatorialRadius)
+	validateFinite(elements.earth.flattening)
 }

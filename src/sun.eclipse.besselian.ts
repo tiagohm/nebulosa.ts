@@ -1,5 +1,5 @@
 import { normalizeAngle, normalizePI, type Angle } from './angle'
-import { DAYSEC, TAU, WGS84_FLATTENING, WGS84_RADIUS } from './constants'
+import { DAYSEC, WGS84_FLATTENING, WGS84_RADIUS } from './constants'
 import type { Distance } from './distance'
 import { moon as geocentricMoon } from './elpmpp02'
 import { eraGst06a } from './erfa'
@@ -10,6 +10,7 @@ import { polynomialRegression } from './regression'
 import { type SolarEclipseType, sunSemidiameter } from './sun'
 import { type Time, Timescale, greenwichApparentSiderealTime, precessionNutationMatrix, timeConvert, timeNormalize, timeShift, tt, ut1 } from './time'
 import { NumberComparator } from './util'
+import { validateFinite, validateInRange, validateLatitude, validatePositiveFinite, validateTime, validateVector } from './validation'
 import { type MutVec3, type Vec3, vecDistance, vecDot, vecLength, vecMinus } from './vec3'
 import { earth as barycentricEarth, sun as barycentricSun } from './vsop87e'
 
@@ -276,15 +277,13 @@ function resolveContext(input: SolarEclipseBesselianContext): ResolvedBesselianC
 	const earthFlattening = input.earthFlattening ?? WGS84_FLATTENING
 	const deltaTSeconds = input.deltaTSeconds ?? computeDeltaTSeconds(maximumTT)
 
-	validatePositiveFinite('intervalHours', intervalHours)
-	validatePositiveFinite('stepMinutes', stepMinutes)
-	validatePositiveFinite('earthEquatorialRadius', earthEquatorialRadius)
-	validateFinite('deltaTSeconds', deltaTSeconds)
-
-	if (polynomialDegree !== 3 && polynomialDegree !== 4) throw new Error('polynomialDegree must be 3 or 4')
-	if (!Number.isFinite(earthFlattening) || earthFlattening < 0 || earthFlattening >= 0.02) throw new Error('earthFlattening must be finite and in the plausible [0, 0.02) range')
-	if (input.solarSemidiameter !== undefined) validatePositiveFinite('solarSemidiameter', input.solarSemidiameter)
-	if (input.lunarSemidiameter !== undefined) validatePositiveFinite('lunarSemidiameter', input.lunarSemidiameter)
+	validatePositiveFinite(intervalHours)
+	validatePositiveFinite(stepMinutes)
+	validatePositiveFinite(earthEquatorialRadius)
+	validateFinite(deltaTSeconds)
+	validateInRange(earthFlattening, 0, 0.02)
+	if (input.solarSemidiameter !== undefined) validatePositiveFinite(input.solarSemidiameter)
+	if (input.lunarSemidiameter !== undefined) validatePositiveFinite(input.lunarSemidiameter)
 
 	return {
 		maximumTT,
@@ -303,7 +302,7 @@ function resolveContext(input: SolarEclipseBesselianContext): ResolvedBesselianC
 }
 
 function resolveMaximumTT(maximumApprox: Time): Time {
-	validateTime(maximumApprox, 'maximumApprox')
+	validateTime(maximumApprox)
 
 	const time = tt(maximumApprox)
 	const normalized = timeNormalize(time.day, time.fraction, 0, Timescale.TT)
@@ -348,8 +347,8 @@ function clampTinyTau(tauHours: number) {
 function computeSample(time: Time, tauHours: number, context: ResolvedBesselianContext): BesselianSample {
 	const sun = apparentSun(time, context.computeApparentGeocentricSun)
 	const moon = apparentMoon(time, context.computeApparentGeocentricMoon)
-	validateVector('Sun ephemeris vector', sun)
-	validateVector('Moon ephemeris vector', moon)
+	validateVector(sun)
+	validateVector(moon)
 
 	const axis = shadowAxis(sun, moon)
 	const axisRightAscension = Math.atan2(axis[1], axis[0])
@@ -488,35 +487,15 @@ function shiftTT(time: Time, tauHours: number) {
 	return timeShift(time, tauHours / 24)
 }
 
-function validateTime(time: Time, name: string) {
-	if (!Number.isFinite(time.day) || !Number.isFinite(time.fraction)) throw new Error(`${name} must have finite day and fraction`)
-	if (time.scale < Timescale.UT1 || time.scale > Timescale.TCB) throw new Error(`${name} must have a valid timescale`)
-}
-
-function validatePositiveFinite(name: string, value: number) {
-	if (!(value > 0) || !Number.isFinite(value)) throw new Error(`${name} must be a positive finite number`)
-}
-
-function validateFinite(name: string, value: number) {
-	if (!Number.isFinite(value)) throw new Error(`${name} must be finite`)
-}
-
-function validateVector(name: string, vector: Vec3) {
-	if (vector.length !== 3) throw new Error(`${name} must have exactly three components`)
-	for (let i = 0; i < 3; i++) validateFinite(`${name}[${i}]`, vector[i])
-	if (!(vecLength(vector) > MIN_VECTOR_LENGTH)) throw new Error(`${name} must be non-zero`)
-}
-
 function validateSample(sample: BesselianSample) {
-	validateTime(sample.time, 'sample.time')
-	validateFinite('sample.tauHours', sample.tauHours)
+	validateTime(sample.time)
+	validateFinite(sample.tauHours)
 
-	for (const key of BESSELIAN_QUANTITIES) {
-		validateFinite(`sample.${key}`, sample[key])
-	}
+	for (const key of BESSELIAN_QUANTITIES) validateFinite(sample[key])
 
-	if (!(sample.tanF1 > 0)) throw new Error('sample.tanF1 must be positive')
-	if (!(sample.tanF2 > 0)) throw new Error('sample.tanF2 must be positive')
-	if (!(sample.l1 > 0)) throw new Error('sample.l1 must be positive')
-	if (Math.abs(sample.d) > TAU / 4) throw new Error('sample.d must be a valid declination')
+	validatePositiveFinite(sample.tanF1)
+	validatePositiveFinite(sample.tanF2)
+	validatePositiveFinite(sample.l1)
+	validatePositiveFinite(sample.tanF1)
+	validateLatitude(sample.d)
 }

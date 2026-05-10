@@ -11,7 +11,7 @@ const ANNULAR_2024 = generateBesselianElements({ maximumApprox: nearestSolarEcli
 const PARTIAL_2025 = generateBesselianElements({ maximumApprox: nearestSolarEclipse(timeYMD(2025, 9, 21), true).maximalTime })
 const HYBRID_2023 = generateBesselianElements({ maximumApprox: nearestSolarEclipse(timeYMD(2023, 1, 1), true).maximalTime })
 
-const DALLAS = { latitude: deg(32.7767), longitude: deg(-96.797) }
+const DALLAS = { latitude: deg(32.7767), longitude: deg(-96.797), elevation: 0 }
 const GENERATION_OPTIONS = { precision: 'LOW', temporalStepSeconds: 300, spatialResolutionDeg: 30, magnitudeLevels: [0.5], obscurationLevels: [0.5], durationLevelsSeconds: [60], partialDurationLevelsSeconds: [3600], includeDiagnostics: true } as const satisfies SolarEclipseGenerationOptions
 
 const TOTAL_MAP = generateSolarEclipseMap({ besselianElements: TOTAL_2024 }, GENERATION_OPTIONS)
@@ -20,7 +20,7 @@ const PARTIAL_MAP = generateSolarEclipseMap({ besselianElements: PARTIAL_2025 },
 
 function maxLongitudeJump(segments?: readonly (readonly ContourPoint[])[]) {
 	let max = 0
-	for (const segment of segments ?? []) for (let i = 1; i < segment.length; i++) max = Math.max(max, Math.abs(segment[i].lon - segment[i - 1].lon))
+	for (const segment of segments ?? []) for (let i = 1; i < segment.length; i++) max = Math.max(max, Math.abs(segment[i].longitude - segment[i - 1].longitude))
 	return max
 }
 

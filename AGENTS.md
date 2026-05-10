@@ -74,6 +74,7 @@ Prefer the MCP graph tools for code discovery:
 
 - Most math-heavy modules use top-level pure functions, not classes.
 - Classes are mainly used for protocol clients, simulators, device managers, and stateful integrations such as Alpaca, INDI, and Firmata.
+- Use the shared validators in `src/validation.ts` for runtime input validation. Before adding inline validation logic, check whether an existing helper fits; if a reusable validation is missing, add it to `src/validation.ts` and cover it with tests.
 - Preserve the mutable-output convention in hot paths: many vector and matrix helpers accept an optional output parameter such as `o?: MutVec3` or `o?: MutMat3`.
 - Reuse existing low-level utilities from `vec2.ts`, `vec3.ts`, `mat3.ts`, `math.ts`, `time.ts`, and related core files before introducing new helpers.
 - Preserve the `MutX` plus `Readonly<MutX>` pattern for numeric tuples.

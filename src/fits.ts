@@ -5,6 +5,7 @@ import type { Image, ImageRawType } from './image.types'
 import { readUntil, type Seekable, type Sink, type Source } from './io'
 import type { NumberArray } from './math'
 import type { Writable } from './types'
+import { validatePositiveInteger } from './validation'
 
 export type FitsHeaderKey = string
 export type FitsHeaderValue = string | number | boolean | undefined
@@ -221,13 +222,6 @@ function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean): 
 	return cards
 }
 
-// Validates RICE tile/table dimensions before allocating buffers.
-function validatePositiveInteger(value: number, label: string) {
-	if (!Number.isInteger(value) || value < 1) {
-		throw new Error(`${label} must be a positive integer`)
-	}
-}
-
 function shouldUseRiceCompression(header: Readonly<FitsHeader>, compression: FitsCompressionOptions['type']) {
 	if (compression === false) return false
 	if (compression === RICE_1_COMPRESSION_TYPE) return true
@@ -259,8 +253,8 @@ async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: Image
 
 	const tileHeightOption = options.tileHeight ?? 1
 	const blockSize = options.blockSize ?? RICE_DEFAULT_BLOCK_SIZE
-	validatePositiveInteger(tileHeightOption, 'tile height')
-	validatePositiveInteger(blockSize, 'block size')
+	validatePositiveInteger(tileHeightOption)
+	validatePositiveInteger(blockSize)
 
 	const tileHeight = Math.min(height, tileHeightOption)
 
@@ -1046,11 +1040,11 @@ export class FitsImageReader {
 		const tileDepth = Math.trunc(numericKeyword(header, 'ZTILE3', 1))
 		const blockSize = riceBlockSizeFromHeader(header)
 
-		validatePositiveInteger(rowSize, 'row size')
-		validatePositiveInteger(rowCount, 'row count')
-		validatePositiveInteger(tileWidth, 'tile width')
-		validatePositiveInteger(tileHeight, 'tile height')
-		validatePositiveInteger(tileDepth, 'tile depth')
+		validatePositiveInteger(rowSize)
+		validatePositiveInteger(rowCount)
+		validatePositiveInteger(tileWidth)
+		validatePositiveInteger(tileHeight)
+		validatePositiveInteger(tileDepth)
 
 		if (rowSize < 8 || heapOffset < rowSize * rowCount || heapOffset > compressed.length) {
 			throw new Error('compressed FITS image has invalid heap offsets')

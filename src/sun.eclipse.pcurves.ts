@@ -1,10 +1,12 @@
 import { type Angle, normalizePI } from './angle'
 import { DEG2RAD } from './constants'
 import { angularDistance } from './coordinate'
+import type { GeographicCoordinate } from './location'
 import { clamp } from './math'
 import type { BesselianElements } from './sun.eclipse.besselian'
 import { computeLocalCircumstances, computeLocalEclipseAt, type EclipseContact } from './sun.eclipse.circumstances'
-import { type Time, Timescale, timeSubtract, toJulianDay } from './time'
+import { type Time, timeConvert, Timescale, timeSubtract, toJulianDay } from './time'
+import { validateFinite, validateInRange, validateNonNegativeInteger, validatePositiveFinite, validatePositiveInteger, validateTime } from './validation'
 
 // Global partial-contact curves from Besselian elements.
 //
@@ -27,9 +29,9 @@ const MAX_GRID_NODES = 250000
 
 export type PenumbraContactType = 'P1' | 'P4'
 
-export interface ContourPoint {
-	readonly lat: Angle
-	readonly lon: Angle
+export interface ContourPoint extends Omit<GeographicCoordinate, 'elevation'> {
+	readonly latitude: Angle
+	readonly longitude: Angle
 	readonly time?: Time
 	readonly solarAltitude?: Angle
 	readonly visible?: boolean
@@ -145,9 +147,7 @@ interface GeographicGrid {
 	readonly columns: number
 }
 
-interface ContactGridNode {
-	readonly lat: Angle
-	readonly lon: Angle
+interface ContactGridNode extends Omit<GeographicCoordinate, 'elevation'> {
 	readonly p1?: ContactMetadata
 	readonly p4?: ContactMetadata
 }
@@ -243,10 +243,9 @@ function buildGlobalContactCurve(elements: BesselianElements, grid: GeographicGr
 }
 
 function normalizeGlobalPartialContactOptions(elements: BesselianElements, options: GlobalPartialContactCurveOptions): NormalizedGlobalPartialContactCurveOptions {
-	if (!options.startTime || !options.endTime) throw new Error('startTime and endTime are required')
-	validateTime(options.startTime, 'startTime')
-	validateTime(options.endTime, 'endTime')
-	if (!(timeSubtract(options.endTime, options.startTime, Timescale.TT) > 0)) throw new Error('endTime must be after startTime')
+	const startTime = timeConvert(validateTime(options.startTime), Timescale.TT)
+	const endTime = timeConvert(validateTime(options.endTime), Timescale.TT)
+	if (timeSubtract(endTime, startTime) <= 0) throw new Error('endTime must be after startTime')
 
 	const gridResolutionDeg = options.gridResolutionDeg ?? DEFAULT_GRID_RESOLUTION_DEG
 	const contourTolerance = options.contourTolerance ?? DEFAULT_CONTOUR_TOLERANCE
@@ -255,8 +254,8 @@ function normalizeGlobalPartialContactOptions(elements: BesselianElements, optio
 	const maxRefinementIterations = options.maxRefinementIterations ?? DEFAULT_MAX_REFINEMENT_ITERATIONS
 	const minSegmentPoints = options.minSegmentPoints ?? DEFAULT_MIN_SEGMENT_POINTS
 	const normalized: NormalizedGlobalPartialContactCurveOptions = {
-		startTime: options.startTime,
-		endTime: options.endTime,
+		startTime,
+		endTime,
 		gridResolutionDeg,
 		contourTolerance,
 		temporalTolerance,
@@ -277,7 +276,7 @@ function normalizeGlobalPartialContactOptions(elements: BesselianElements, optio
 }
 
 function normalizePenumbraContourOptions(time: Time, options: PenumbraContourOptions = {}): NormalizedPenumbraContourOptions {
-	validateTime(time, 'time')
+	validateTime(time)
 
 	const angularSamplingDeg = options.angularSamplingDeg ?? DEFAULT_ANGULAR_SAMPLING_DEG
 	const contourTolerance = options.contourTolerance ?? DEFAULT_CONTOUR_TOLERANCE
@@ -328,14 +327,14 @@ function evaluateContactGrid(elements: BesselianElements, grid: GeographicGrid, 
 	const localOptions = localCircumstanceOptions(options)
 
 	for (let row = 0; row < grid.rows; row++) {
-		const lat = grid.latitudes[row]
+		const latitude = grid.latitudes[row]
 
 		for (let column = 0; column < grid.columns; column++) {
-			const lon = grid.longitudes[column]
-			const circumstances = computeLocalCircumstances(elements, { latitude: lat, longitude: lon }, localOptions)
+			const longitude = grid.longitudes[column]
+			const circumstances = computeLocalCircumstances(elements, { latitude, longitude }, localOptions)
 			const p1 = circumstances.C1 ? contactMetadata(circumstances.C1, options) : undefined
 			const p4 = circumstances.C4 ? contactMetadata(circumstances.C4, options) : undefined
-			nodes[nodeIndex(grid, row, column)] = { lat, lon, p1, p4 }
+			nodes[nodeIndex(grid, row, column)] = { latitude, longitude, p1, p4 }
 			diagnostics.evaluatedNodes++
 			if (p1 || p4) diagnostics.validNodes++
 		}
@@ -355,12 +354,10 @@ function contactGridValue(nodes: readonly ContactGridNode[], grid: GeographicGri
 	const contact = type === 'P1' ? node.p1 : node.p4
 	const visible = !contact || !options.considerSolarHorizon || !options.visibleOnly || contact.visible
 	const valid = !!contact && visible
-	return { lat: node.lat, lon: node.lon, value: valid ? -1 : 1, valid, contact }
+	return { latitude: node.latitude, longitude: node.longitude, value: valid ? -1 : 1, valid, contact }
 }
 
-interface ContourFieldNode {
-	readonly lat: Angle
-	readonly lon: Angle
+interface ContourFieldNode extends Omit<GeographicCoordinate, 'elevation'> {
 	readonly value: number
 	readonly valid: boolean
 	readonly contact?: ContactMetadata
@@ -405,8 +402,8 @@ function refineContactBoundaryPoint(elements: BesselianElements, grid: Geographi
 	return result.point
 }
 
-function contactPointAt(elements: BesselianElements, type: PenumbraContactType, options: NormalizedGlobalPartialContactCurveOptions, lat: Angle, lon: Angle): ContourPoint | undefined {
-	const circumstances = computeLocalCircumstances(elements, { latitude: lat, longitude: lon }, localCircumstanceOptions(options))
+function contactPointAt(elements: BesselianElements, type: PenumbraContactType, options: NormalizedGlobalPartialContactCurveOptions, latitude: Angle, longitude: Angle): ContourPoint | undefined {
+	const circumstances = computeLocalCircumstances(elements, { latitude, longitude }, localCircumstanceOptions(options))
 	const contact = type === 'P1' ? circumstances.C1 : circumstances.C4
 	if (!contact) return undefined
 
@@ -414,29 +411,29 @@ function contactPointAt(elements: BesselianElements, type: PenumbraContactType, 
 	const visible = !belowHorizon
 	if (options.considerSolarHorizon && options.visibleOnly && !visible) return undefined
 
-	return { lat, lon, time: contact.time, solarAltitude: contact.sunAltitude, visible, belowHorizon }
+	return { latitude, longitude, time: contact.time, solarAltitude: contact.sunAltitude, visible, belowHorizon }
 }
 
-function refineBooleanBoundary(a: ContourFieldNode, b: ContourFieldNode, maxIterations: number, spatialTolerance: number, evaluate: (lat: Angle, lon: Angle) => ContourPoint | undefined, edge: string, row: number, column: number): RefinementResult | undefined {
+function refineBooleanBoundary(a: ContourFieldNode, b: ContourFieldNode, maxIterations: number, spatialTolerance: number, evaluate: (latitude: Angle, longitude: Angle) => ContourPoint | undefined, edge: string, row: number, column: number): RefinementResult | undefined {
 	let valid = a.valid ? a : b
 	let invalid = a.valid ? b : a
 	let validPoint = contactNodePoint(valid)
 	let iterations = 0
 	let maxIterationsReached = false
 
-	for (; iterations < maxIterations && angularDistance(valid.lon, valid.lat, invalid.lon, invalid.lat) > spatialTolerance; iterations++) {
-		const [lon, lat] = interpolateGeographic(valid, invalid, 0.5)
-		const point = evaluate(lat, lon)
+	for (; iterations < maxIterations && angularDistance(valid.longitude, valid.latitude, invalid.longitude, invalid.latitude) > spatialTolerance; iterations++) {
+		const [longitude, latitude] = interpolateGeographic(valid, invalid, 0.5)
+		const point = evaluate(latitude, longitude)
 
 		if (point) {
-			valid = { lat, lon, value: -1, valid: true }
+			valid = { latitude, longitude, value: -1, valid: true }
 			validPoint = point
 		} else {
-			invalid = { lat, lon, value: 1, valid: false }
+			invalid = { latitude, longitude, value: 1, valid: false }
 		}
 	}
 
-	if (iterations >= maxIterations && angularDistance(valid.lon, valid.lat, invalid.lon, invalid.lat) > spatialTolerance) maxIterationsReached = true
+	if (iterations >= maxIterations && angularDistance(valid.longitude, valid.latitude, invalid.longitude, invalid.latitude) > spatialTolerance) maxIterationsReached = true
 	if (!validPoint) return undefined
 
 	return {
@@ -448,7 +445,7 @@ function refineBooleanBoundary(a: ContourFieldNode, b: ContourFieldNode, maxIter
 
 function contactNodePoint(node: ContourFieldNode): ContourPoint | undefined {
 	if (!node.contact) return undefined
-	return { lat: node.lat, lon: node.lon, time: node.contact.contact.time, solarAltitude: node.contact.solarAltitude, visible: node.contact.visible, belowHorizon: node.contact.belowHorizon }
+	return { latitude: node.latitude, longitude: node.longitude, time: node.contact.contact.time, solarAltitude: node.contact.solarAltitude, visible: node.contact.visible, belowHorizon: node.contact.belowHorizon }
 }
 
 function evaluatePenumbraNode(elements: BesselianElements, grid: GeographicGrid, options: NormalizedPenumbraContourOptions, cache: (ContourFieldNode | undefined)[], diagnostics: MutableDiagnostics, row: number, column: number): ContourFieldNode {
@@ -456,15 +453,15 @@ function evaluatePenumbraNode(elements: BesselianElements, grid: GeographicGrid,
 	const cached = cache[index]
 	if (cached) return cached
 
-	const lat = grid.latitudes[row]
-	const lon = grid.longitudes[column]
-	const detail = computeLocalEclipseAt(elements, { latitude: lat, longitude: lon }, options.time, {
+	const latitude = grid.latitudes[row]
+	const longitude = grid.longitudes[column]
+	const detail = computeLocalEclipseAt(elements, { latitude, longitude }, options.time, {
 		useEarthEllipsoid: options.useEllipsoid,
 		solarHorizonMinAltitude: options.minimumSolarAltitude,
 	})
 	const value = detail.m - detail.L1
 	const valid = value <= 0
-	const node = { lat, lon, value, valid, solarAltitude: detail.sunAltitude }
+	const node = { latitude, longitude, value, valid, solarAltitude: detail.sunAltitude }
 	cache[index] = node
 	diagnostics.evaluatedNodes++
 	if (valid) diagnostics.validNodes++
@@ -477,7 +474,7 @@ function refinePenumbraBoundaryPoint(elements: BesselianElements, grid: Geograph
 	let best = Math.abs(aNode.value) <= Math.abs(bNode.value) ? aNode : bNode
 	let iterations = 0
 
-	for (; iterations < options.maxRefinementIterations && angularDistance(aNode.lon, aNode.lat, bNode.lon, bNode.lat) > options.contourTolerance; iterations++) {
+	for (; iterations < options.maxRefinementIterations && angularDistance(aNode.longitude, aNode.latitude, bNode.longitude, bNode.latitude) > options.contourTolerance; iterations++) {
 		const [lon, lat] = interpolateGeographic(aNode, bNode, 0.5)
 		const mid = penumbraValueAt(elements, options, lat, lon)
 		if (Math.abs(mid.value) < Math.abs(best.value)) best = mid
@@ -490,7 +487,7 @@ function refinePenumbraBoundaryPoint(elements: BesselianElements, grid: Geograph
 	}
 
 	diagnostics.refinedEdgeCrossings++
-	if (iterations >= options.maxRefinementIterations && angularDistance(aNode.lon, aNode.lat, bNode.lon, bNode.lat) > options.contourTolerance) diagnostics.maxRefinementIterationsReached++
+	if (iterations >= options.maxRefinementIterations && angularDistance(aNode.longitude, aNode.latitude, bNode.longitude, bNode.latitude) > options.contourTolerance) diagnostics.maxRefinementIterationsReached++
 
 	const point = penumbraContourPoint(best, options)
 	if (options.considerSolarHorizon && options.visibleOnly && !point.visible) return undefined
@@ -502,18 +499,18 @@ function penumbraValueAtGrid(elements: BesselianElements, grid: GeographicGrid, 
 	return penumbraValueAt(elements, options, grid.latitudes[row], grid.longitudes[column])
 }
 
-function penumbraValueAt(elements: BesselianElements, options: NormalizedPenumbraContourOptions, lat: Angle, lon: Angle): ContourFieldNode {
-	const detail = computeLocalEclipseAt(elements, { latitude: lat, longitude: lon }, options.time, {
+function penumbraValueAt(elements: BesselianElements, options: NormalizedPenumbraContourOptions, latitude: Angle, longitude: Angle): ContourFieldNode {
+	const detail = computeLocalEclipseAt(elements, { latitude, longitude }, options.time, {
 		useEarthEllipsoid: options.useEllipsoid,
 		solarHorizonMinAltitude: options.minimumSolarAltitude,
 	})
-	return { lat, lon, value: detail.m - detail.L1, valid: detail.m <= detail.L1, solarAltitude: detail.sunAltitude }
+	return { latitude, longitude, value: detail.m - detail.L1, valid: detail.m <= detail.L1, solarAltitude: detail.sunAltitude }
 }
 
 function penumbraContourPoint(node: ContourFieldNode, options: NormalizedPenumbraContourOptions): ContourPoint {
 	const solarAltitude = node.solarAltitude ?? Number.NaN
 	const belowHorizon = solarAltitude < options.minimumSolarAltitude
-	return { lat: node.lat, lon: node.lon, time: options.time, solarAltitude, visible: !belowHorizon, belowHorizon }
+	return { latitude: node.latitude, longitude: node.longitude, time: options.time, solarAltitude, visible: !belowHorizon, belowHorizon }
 }
 
 function orderContourSegments(fragments: readonly MarchingFragment[], tolerance: number) {
@@ -604,7 +601,7 @@ function splitSegmentsAtAntimeridian(segment: readonly ContourPoint[]) {
 		const previous = segment[i - 1]
 		const point = segment[i]
 
-		if (Math.abs(point.lon - previous.lon) > Math.PI) {
+		if (Math.abs(point.longitude - previous.longitude) > Math.PI) {
 			if (current.length > 0) segments.push(current)
 			current = [point]
 		} else {
@@ -625,7 +622,7 @@ function flattenSegments(segments: readonly (readonly ContourPoint[])[]) {
 
 function closeContourSegment(segment: readonly ContourPoint[], tolerance: number, splitAtAntimeridian: boolean) {
 	if (segment.length < 3 || isClosedSegment(segment, tolerance)) return segment.slice()
-	if (splitAtAntimeridian && Math.abs(segment[0].lon - segment.at(-1)!.lon) > Math.PI) return segment.slice()
+	if (splitAtAntimeridian && Math.abs(segment[0].longitude - segment.at(-1)!.longitude) > Math.PI) return segment.slice()
 	return [...segment, segment[0]]
 }
 
@@ -645,18 +642,18 @@ function deduplicateSegment(segment: readonly ContourPoint[], tolerance: number)
 }
 
 function sameContourPoint(a: ContourPoint, b: ContourPoint, tolerance: number) {
-	return angularDistance(a.lon, a.lat, b.lon, b.lat) <= tolerance
+	return angularDistance(a.longitude, a.latitude, b.longitude, b.latitude) <= tolerance
 }
 
 function segmentLength(segment: readonly ContourPoint[]) {
 	let length = 0
-	for (let i = 1; i < segment.length; i++) length += angularDistance(segment[i - 1].lon, segment[i - 1].lat, segment[i].lon, segment[i].lat)
+	for (let i = 1; i < segment.length; i++) length += angularDistance(segment[i - 1].longitude, segment[i - 1].latitude, segment[i].longitude, segment[i].latitude)
 	return length
 }
 
-function interpolateGeographic(a: Pick<ContourFieldNode, 'lat' | 'lon'>, b: Pick<ContourFieldNode, 'lat' | 'lon'>, fraction: number): readonly [Angle, Angle] {
-	const lat = a.lat + (b.lat - a.lat) * fraction
-	const lon = normalizePI(a.lon + normalizePI(b.lon - a.lon) * fraction)
+function interpolateGeographic(a: Pick<ContourFieldNode, 'latitude' | 'longitude'>, b: Pick<ContourFieldNode, 'latitude' | 'longitude'>, fraction: number): readonly [Angle, Angle] {
+	const lat = a.latitude + (b.latitude - a.latitude) * fraction
+	const lon = normalizePI(a.longitude + normalizePI(b.longitude - a.longitude) * fraction)
 	return [lon, lat]
 }
 
@@ -714,33 +711,19 @@ function finalizeDiagnostics(diagnostics: MutableDiagnostics): ContactCurveDiagn
 }
 
 function validateGridOptions(resolutionDeg: number, contourTolerance: number, temporalTolerance: number, spatialTolerance: number, maxRefinementIterations: number, minSegmentPoints: number) {
-	validatePositiveFinite('grid resolution', resolutionDeg)
-	validatePositiveFinite('contourTolerance', contourTolerance)
-	validatePositiveFinite('temporalTolerance', temporalTolerance)
-	validatePositiveFinite('spatialTolerance', spatialTolerance)
-
-	if (resolutionDeg > 90) throw new Error('grid resolution must be <= 90 degrees')
-	if (!Number.isInteger(maxRefinementIterations) || maxRefinementIterations < 0) throw new Error('maxRefinementIterations must be a non-negative integer')
-	if (!Number.isInteger(minSegmentPoints) || minSegmentPoints < 1) throw new Error('minSegmentPoints must be a positive integer')
+	validatePositiveFinite(resolutionDeg)
+	validateInRange(resolutionDeg, 0, 90)
+	validatePositiveFinite(contourTolerance)
+	validatePositiveFinite(temporalTolerance)
+	validatePositiveFinite(spatialTolerance)
+	validateNonNegativeInteger(maxRefinementIterations)
+	validatePositiveInteger(minSegmentPoints)
 }
 
 function validateElements(elements: BesselianElements) {
-	validateTime(elements.t0, 'elements.t0')
-	validateTime(elements.validFrom, 'elements.validFrom')
-	validateTime(elements.validTo, 'elements.validTo')
-	validatePositiveFinite('elements.earth.equatorialRadius', elements.earth.equatorialRadius)
-	validateFinite('elements.earth.flattening', elements.earth.flattening)
-}
-
-function validateTime(time: Time, name: string) {
-	if (!Number.isFinite(time.day) || !Number.isFinite(time.fraction)) throw new Error(`${name} must have finite day and fraction`)
-	if (time.scale < Timescale.UT1 || time.scale > Timescale.TCB) throw new Error(`${name} must have a valid timescale`)
-}
-
-function validatePositiveFinite(name: string, value: number) {
-	if (!(value > 0) || !Number.isFinite(value)) throw new Error(`${name} must be a positive finite number`)
-}
-
-function validateFinite(name: string, value: number) {
-	if (!Number.isFinite(value)) throw new Error(`${name} must be finite`)
+	validateTime(elements.t0)
+	validateTime(elements.validFrom)
+	validateTime(elements.validTo)
+	validatePositiveFinite(elements.earth.equatorialRadius)
+	validateFinite(elements.earth.flattening)
 }

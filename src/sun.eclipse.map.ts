@@ -3,12 +3,14 @@ import { AU_KM, DAYSEC, DEG2RAD } from './constants'
 import { angularDistance } from './coordinate'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from './sun'
 import { generateBesselianElements, type BesselianElements, type SolarEclipseBesselianContext } from './sun.eclipse.besselian'
-import { computeLocalCircumstances, type EclipseContact, type LocalEclipseCircumstances, type LocalEclipseContactType, type LocalEclipseLocation, type LocalEclipseOptions } from './sun.eclipse.circumstances'
+import { computeLocalCircumstances, type EclipseContact, type LocalEclipseCircumstances, type LocalEclipseContactType, type LocalEclipseOptions } from './sun.eclipse.circumstances'
 import { generateGlobalPartialContactCurves, generatePenumbraContourAt, type ContourPoint, type GlobalContactCurve, type GlobalEclipseContour } from './sun.eclipse.pcurves'
 import { buildEclipseLocalGrid, generateEclipseIsoCurvesFromGrid, type EclipseContourLevel, type EclipseGridSample, type EclipseIsoCurve, type EclipseIsoCurveSegment, type EclipseIsoCurveType, type GeoPoint } from './sun.eclipse.isocurves'
 import { generatePathLimits, type EclipsePathLimitPoint, type EclipsePathLimitsResult, type EclipsePathPolygon } from './sun.eclipse.limits'
 import type { CentralLinePoint, CentralLineResult } from './sun.eclipse.lines'
 import { type Time, Timescale, timeShift, timeSubtract } from './time'
+import { validateFinite, validateInRange, validateNonNegativeInteger, validatePositiveFinite, validateTime } from './validation'
+import type { GeographicCoordinate } from './location'
 
 // High-level solar-eclipse map data aggregator.
 //
@@ -240,7 +242,7 @@ export interface SolarEclipseValidationTolerances {
 
 export interface SolarEclipseValidationLocationReference {
 	readonly id?: string
-	readonly location: LocalEclipseLocation
+	readonly location: GeographicCoordinate
 	readonly type?: SolarEclipseType | 'NONE'
 	readonly maximumTime?: Time
 	readonly maximumMagnitude?: number
@@ -463,7 +465,7 @@ export function generateSolarEclipseMap(input: SolarEclipseMapInput, options?: S
 		durationContours,
 		curves,
 		globalStats,
-		warnings: uniqueStrings(warnings),
+		warnings,
 		generationDiagnostics: normalized.includeDiagnostics
 			? {
 					sourceType: source.type,
@@ -482,7 +484,7 @@ export function generateSolarEclipseMap(input: SolarEclipseMapInput, options?: S
 }
 
 // Queries local circumstances from the map's existing Besselian elements.
-export function queryLocalCircumstances(map: SolarEclipseMap, location: LocalEclipseLocation, options?: SolarEclipseLocalQueryOptions): LocalEclipseCircumstances {
+export function queryLocalCircumstances(map: SolarEclipseMap, location: GeographicCoordinate, options?: SolarEclipseLocalQueryOptions): LocalEclipseCircumstances {
 	return computeLocalCircumstances(map.besselianElements, location, {
 		useEarthEllipsoid: options?.useEarthEllipsoid ?? map.metadata.useEllipsoid,
 		includeRefraction: options?.includeRefraction,
@@ -545,7 +547,7 @@ export function validateSolarEclipseMap(map: SolarEclipseMap, references: SolarE
 
 	const recommendations = buildValidationRecommendations(map, checks)
 
-	return { passed: checks.every((check) => check.passed), checks, tolerances, warnings: uniqueStrings(warnings), recommendations }
+	return { passed: checks.every((check) => check.passed), checks, tolerances, warnings, recommendations }
 }
 
 function normalizeGenerationOptions(options: SolarEclipseGenerationOptions = {}): NormalizedSolarEclipseGenerationOptions {
@@ -553,10 +555,10 @@ function normalizeGenerationOptions(options: SolarEclipseGenerationOptions = {})
 	const profile = PRECISION_DEFAULTS[precision]
 	const temporalStepSeconds = options.temporalStepSeconds ?? profile.temporalStepSeconds
 	const spatialResolutionDeg = options.spatialResolutionDeg ?? profile.spatialResolutionDeg
-	const magnitudeLevels = copyLevelArray(options.magnitudeLevels ?? DEFAULT_MAGNITUDE_LEVELS)
-	const obscurationLevels = copyLevelArray(options.obscurationLevels ?? DEFAULT_OBSCURATION_LEVELS)
-	const durationLevelsSeconds = copyLevelArray(options.durationLevelsSeconds ?? DEFAULT_DURATION_LEVELS_SECONDS)
-	const partialDurationLevelsSeconds = copyLevelArray(options.partialDurationLevelsSeconds ?? DEFAULT_PARTIAL_DURATION_LEVELS_SECONDS)
+	const magnitudeLevels = options.magnitudeLevels ?? DEFAULT_MAGNITUDE_LEVELS
+	const obscurationLevels = options.obscurationLevels ?? DEFAULT_OBSCURATION_LEVELS
+	const durationLevelsSeconds = options.durationLevelsSeconds ?? DEFAULT_DURATION_LEVELS_SECONDS
+	const partialDurationLevelsSeconds = options.partialDurationLevelsSeconds ?? DEFAULT_PARTIAL_DURATION_LEVELS_SECONDS
 	const contourTolerance = options.contourTolerance ?? DEFAULT_CONTOUR_TOLERANCE
 	const rootFindingTolerance = options.rootFindingTolerance ?? DEFAULT_ROOT_FINDING_TOLERANCE_SECONDS
 	const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS
@@ -564,24 +566,23 @@ function normalizeGenerationOptions(options: SolarEclipseGenerationOptions = {})
 	const penumbraContourTimes = options.penumbraContourTimes?.slice()
 	const penumbraContourStepSeconds = options.penumbraContourStepSeconds
 
-	validatePositiveFinite('temporalStepSeconds', temporalStepSeconds)
-	validatePositiveFinite('spatialResolutionDeg', spatialResolutionDeg)
-	validatePositiveFinite('contourTolerance', contourTolerance)
-	validatePositiveFinite('rootFindingTolerance', rootFindingTolerance)
-	validateFinite('minimumSolarAltitude', minimumSolarAltitude)
+	validatePositiveFinite(temporalStepSeconds)
+	validateInRange(spatialResolutionDeg, 0, 90)
+	validatePositiveFinite(contourTolerance)
+	validatePositiveFinite(rootFindingTolerance)
+	validateFinite(minimumSolarAltitude)
 
-	if (spatialResolutionDeg > 90) throw new Error('spatialResolutionDeg must be <= 90')
-	if (!Number.isInteger(maxIterations) || maxIterations < 0) throw new Error('maxIterations must be a non-negative integer')
-	if (penumbraContourStepSeconds !== undefined) validatePositiveFinite('penumbraContourStepSeconds', penumbraContourStepSeconds)
+	validateNonNegativeInteger(maxIterations)
+	if (penumbraContourStepSeconds !== undefined) validatePositiveFinite(penumbraContourStepSeconds)
 
-	validateFractionLevels('magnitudeLevels', magnitudeLevels, false)
-	validateFractionLevels('obscurationLevels', obscurationLevels, true)
-	validatePositiveLevels('durationLevelsSeconds', durationLevelsSeconds)
-	validatePositiveLevels('partialDurationLevelsSeconds', partialDurationLevelsSeconds)
+	validateFractionLevels(magnitudeLevels, false)
+	validateFractionLevels(obscurationLevels, true)
+	validatePositiveLevels(durationLevelsSeconds)
+	validatePositiveLevels(partialDurationLevelsSeconds)
 
 	if (penumbraContourTimes) {
 		if (penumbraContourTimes.length > MAX_PENUMBRA_CONTOUR_TIMES) throw new Error(`penumbraContourTimes must contain at most ${MAX_PENUMBRA_CONTOUR_TIMES} times`)
-		for (const time of penumbraContourTimes) validateTime(time, 'penumbraContourTimes')
+		for (const time of penumbraContourTimes) validateTime(time)
 	}
 
 	return {
@@ -645,7 +646,7 @@ function resolveApproximateMaximum(input: SolarEclipseMapInput) {
 }
 
 function resolveNearestSolarEclipse(time: Time) {
-	validateTime(time, 'approximateTime')
+	validateTime(time)
 	const next = nearestSolarEclipse(time, true)
 	const previous = nearestSolarEclipse(time, false)
 	const nextDelta = Math.abs(timeSubtract(next.maximalTime, time, Timescale.TT))
@@ -1003,7 +1004,7 @@ function pathLimitPoint(point: EclipsePathLimitPoint): SolarEclipseCurvePoint {
 }
 
 function contourPoint(point: ContourPoint): SolarEclipseCurvePoint {
-	return { latitude: point.lat, longitude: point.lon, time: point.time, solarAltitude: point.solarAltitude, visible: point.visible, metadata: { belowHorizon: point.belowHorizon, ...point.metadata } }
+	return { latitude: point.latitude, longitude: point.longitude, time: point.time, solarAltitude: point.solarAltitude, visible: point.visible, metadata: { belowHorizon: point.belowHorizon, ...point.metadata } }
 }
 
 function geoPoint(point: GeoPoint): SolarEclipseCurvePoint {
@@ -1151,7 +1152,7 @@ function buildValidationRecommendations(map: SolarEclipseMap, checks: readonly V
 	if (map.warnings.some((warning) => warning.includes('maximum iteration'))) recommendations.push('increase maxIterations or relax contourTolerance for unstable grazing geometry')
 	if (map.warnings.some((warning) => warning.includes('outside the sampled reachable range'))) recommendations.push('remove unreachable contour levels or use a finer spatial grid')
 
-	return uniqueStrings(recommendations)
+	return recommendations
 }
 
 function timeDeltaSeconds(a: Time, b: Time) {
@@ -1166,41 +1167,20 @@ function earthRadiusKm(elements: BesselianElements) {
 	return elements.earth.equatorialRadius * AU_KM
 }
 
-function copyLevelArray(levels: readonly number[]) {
-	return levels.slice()
+function validateFractionLevels(levels: readonly number[], clampToOne: boolean) {
+	validatePositiveLevels(levels)
+	if (clampToOne) for (const level of levels) validateInRange(level, 0, 1)
 }
 
-function validateFractionLevels(name: string, levels: readonly number[], clampToOne: boolean) {
-	validatePositiveLevels(name, levels)
-	if (clampToOne && levels.some((level) => level > 1)) throw new Error(`${name} must be in (0, 1]`)
-}
-
-function validatePositiveLevels(name: string, levels: readonly number[]) {
-	for (const level of levels) validatePositiveFinite(name, level)
+function validatePositiveLevels(levels: readonly number[]) {
+	for (const level of levels) validatePositiveFinite(level)
 }
 
 function validateElements(elements: BesselianElements) {
-	validateTime(elements.t0, 'elements.t0')
-	validateTime(elements.validFrom, 'elements.validFrom')
-	validateTime(elements.validTo, 'elements.validTo')
-	validatePositiveFinite('elements.earth.equatorialRadius', elements.earth.equatorialRadius)
-	validateFinite('elements.earth.flattening', elements.earth.flattening)
+	validateTime(elements.t0)
+	validateTime(elements.validFrom)
+	validateTime(elements.validTo)
+	validatePositiveFinite(elements.earth.equatorialRadius)
+	validateFinite(elements.earth.flattening)
 	if (!(timeSubtract(elements.validTo, elements.validFrom, Timescale.TT) > 0)) throw new Error('Besselian validity interval must have positive duration')
-}
-
-function validateTime(time: Time, name: string) {
-	if (!Number.isFinite(time.day) || !Number.isFinite(time.fraction)) throw new Error(`${name} must have finite day and fraction`)
-	if (time.scale < Timescale.UT1 || time.scale > Timescale.TCB) throw new Error(`${name} must have a valid timescale`)
-}
-
-function validatePositiveFinite(name: string, value: number) {
-	if (!(value > 0) || !Number.isFinite(value)) throw new Error(`${name} must be a positive finite number`)
-}
-
-function validateFinite(name: string, value: number) {
-	if (!Number.isFinite(value)) throw new Error(`${name} must be finite`)
-}
-
-function uniqueStrings(values: readonly string[]) {
-	return [...new Set(values)]
 }

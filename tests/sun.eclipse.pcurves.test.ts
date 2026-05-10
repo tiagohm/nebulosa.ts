@@ -15,11 +15,11 @@ function contactOptions(elements: typeof total2024) {
 }
 
 function expectFinitePoint(point: ContourPoint) {
-	expect(point.lat).toBeFinite()
-	expect(Math.abs(point.lat)).toBeLessThanOrEqual(Math.PI / 2)
-	expect(point.lon).toBeFinite()
-	expect(point.lon).toBeGreaterThanOrEqual(-Math.PI)
-	expect(point.lon).toBeLessThanOrEqual(Math.PI)
+	expect(point.latitude).toBeFinite()
+	expect(Math.abs(point.latitude)).toBeLessThanOrEqual(Math.PI / 2)
+	expect(point.longitude).toBeFinite()
+	expect(point.longitude).toBeGreaterThanOrEqual(-Math.PI)
+	expect(point.longitude).toBeLessThanOrEqual(Math.PI)
 	if (point.solarAltitude !== undefined) expect(point.solarAltitude).toBeFinite()
 	if (point.time) {
 		expect(point.time.day).toBeFinite()
@@ -32,7 +32,7 @@ function maxLongitudeJump(segments?: readonly (readonly ContourPoint[])[]) {
 
 	for (const segment of segments ?? []) {
 		for (let i = 1; i < segment.length; i++) {
-			max = Math.max(max, Math.abs(segment[i].lon - segment[i - 1].lon))
+			max = Math.max(max, Math.abs(segment[i].longitude - segment[i - 1].longitude))
 		}
 	}
 
@@ -44,7 +44,7 @@ function maxAngularGap(segments?: readonly (readonly ContourPoint[])[]) {
 
 	for (const segment of segments ?? []) {
 		for (let i = 1; i < segment.length; i++) {
-			max = Math.max(max, angularDistance(segment[i - 1].lon, segment[i - 1].lat, segment[i].lon, segment[i].lat))
+			max = Math.max(max, angularDistance(segment[i - 1].longitude, segment[i - 1].latitude, segment[i].longitude, segment[i].latitude))
 		}
 	}
 
@@ -77,7 +77,7 @@ describe('global partial solar eclipse contact curves', () => {
 		const curves = generateGlobalPartialContactCurves(annular2024, contactOptions(annular2024))
 		const points = curves.flatMap((curve) => curve.points)
 
-		expect(points.some((point) => Math.abs(point.lat) > 1.4)).toBeTrue()
+		expect(points.some((point) => Math.abs(point.latitude) > 1.4)).toBeTrue()
 		for (const point of points) expectFinitePoint(point)
 	})
 
@@ -111,7 +111,7 @@ describe('global partial solar eclipse contact curves', () => {
 
 	test('validates invalid intervals and grid sizes', () => {
 		expect(() => generateGlobalPartialContactCurves(total2024, { startTime: total2024.validTo, endTime: total2024.validFrom })).toThrow('endTime must be after startTime')
-		expect(() => generateGlobalPartialContactCurves(total2024, { ...contactOptions(total2024), gridResolutionDeg: 0 })).toThrow('grid resolution')
+		expect(() => generateGlobalPartialContactCurves(total2024, { ...contactOptions(total2024), gridResolutionDeg: 0 })).toThrow('value must be positive')
 	})
 })
 

@@ -1,13 +1,14 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
 import { AU_KM, DAYSEC } from './constants'
 import { equatorialToHorizontal } from './coordinate'
-import type { Distance } from './distance'
 import { clamp } from './math'
 import { parallacticAngle, refractedAltitude } from './astrometry'
 import { type BesselianElements, type BesselianState, evaluateBesselian, normalizeBesselianTime } from './sun.eclipse.besselian'
 import type { SolarEclipseType } from './sun'
 import { type Time, Timescale, timeShift, timeSubtract, toJulianDay } from './time'
 import { NumberComparator } from './util'
+import { validatePositiveFinite, validateFinite, validateTime, validateLocation } from './validation'
+import type { GeographicCoordinate } from './location'
 
 // Local solar-eclipse circumstances derived from Besselian elements.
 //
@@ -34,12 +35,6 @@ const GOLDEN_RATIO_CONJUGATE = 0.3819660112501051
 export type LocalEclipseContactType = 'C1' | 'C2' | 'MAX' | 'C3' | 'C4'
 
 export type LocalEclipseVisibilityType = 'none' | SolarEclipseType
-
-export interface LocalEclipseLocation {
-	readonly latitude: Angle
-	readonly longitude: Angle
-	readonly altitude?: Distance
-}
 
 export interface LocalEclipseOptions {
 	readonly useEarthEllipsoid?: boolean
@@ -79,7 +74,7 @@ export interface LocalEclipsePhase {
 
 export interface LocalEclipseDetail {
 	readonly time: Time
-	readonly location: LocalEclipseLocation
+	readonly location: GeographicCoordinate
 	readonly xi: number
 	readonly eta: number
 	readonly zeta: number
@@ -104,7 +99,7 @@ export interface LocalEclipseDetail {
 }
 
 export interface LocalEclipseCircumstances extends Partial<Readonly<Record<LocalEclipseContactType, EclipseContact>>> {
-	readonly location: LocalEclipseLocation
+	readonly location: GeographicCoordinate
 	readonly visible: boolean
 	readonly type: LocalEclipseVisibilityType
 	readonly maximumMagnitude: number
@@ -141,7 +136,7 @@ interface ScanSample {
 }
 
 // Computes local eclipse circumstances at one instant without contact search.
-export function computeLocalEclipseAt(elements: BesselianElements, location: LocalEclipseLocation, time: Time, options?: LocalEclipseOptions): LocalEclipseDetail {
+export function computeLocalEclipseAt(elements: BesselianElements, location: Omit<GeographicCoordinate, 'elevation'>, time: Time, options?: LocalEclipseOptions): LocalEclipseDetail {
 	validateElements(elements)
 	const resolved = resolveOptions(options)
 	const local = normalizeLocation(location, resolved.longitudeConvention)
@@ -202,7 +197,7 @@ function EclipseContactComparator(a: EclipseContact, b: EclipseContact) {
 }
 
 // Computes all local contacts and maximum circumstances inside the element validity interval.
-export function computeLocalCircumstances(elements: BesselianElements, location: LocalEclipseLocation, options?: LocalEclipseOptions): LocalEclipseCircumstances {
+export function computeLocalCircumstances(elements: BesselianElements, location: Omit<GeographicCoordinate, 'elevation'>, options?: LocalEclipseOptions): LocalEclipseCircumstances {
 	validateElements(elements)
 	const resolved = resolveOptions(options)
 	const local = normalizeLocation(location, resolved.longitudeConvention)
@@ -281,18 +276,18 @@ function resolveOptions(options: LocalEclipseOptions = {}): ResolvedLocalEclipse
 	const scanStepSeconds = options.scanStepSeconds ?? DEFAULT_SCAN_STEP_SECONDS
 	const solarHorizonMinAltitude = options.solarHorizonMinAltitude ?? DEFAULT_SOLAR_HORIZON_MIN_ALTITUDE
 
-	validatePositiveFinite('timeToleranceSeconds', timeToleranceSeconds)
-	validatePositiveFinite('scanStepSeconds', scanStepSeconds)
-	validateFinite('solarHorizonMinAltitude', solarHorizonMinAltitude)
+	validatePositiveFinite(timeToleranceSeconds)
+	validatePositiveFinite(scanStepSeconds)
+	validateFinite(solarHorizonMinAltitude)
 
 	return { useEarthEllipsoid: options.useEarthEllipsoid ?? true, includeRefraction: options.includeRefraction ?? false, solarHorizonMinAltitude, timeToleranceSeconds, scanStepSeconds, longitudeConvention: options.longitudeConvention ?? 'eastPositive' }
 }
 
-function normalizeLocation(location: LocalEclipseLocation, longitudeConvention: 'eastPositive' | 'westPositive'): Required<LocalEclipseLocation> {
-	return { latitude: location.latitude, longitude: normalizePI(longitudeConvention === 'westPositive' ? -location.longitude : location.longitude), altitude: location.altitude ?? 0 }
+function normalizeLocation(location: Omit<GeographicCoordinate, 'elevation'> & Partial<Pick<GeographicCoordinate, 'elevation'>>, longitudeConvention: 'eastPositive' | 'westPositive'): GeographicCoordinate {
+	return { latitude: location.latitude, longitude: normalizePI(longitudeConvention === 'westPositive' ? -location.longitude : location.longitude), elevation: location.elevation ?? 0 }
 }
 
-function geodeticToFundamentalPlaneObserver(elements: BesselianElements, location: Required<LocalEclipseLocation>, state: BesselianState, useEarthEllipsoid: boolean): ObserverFundamentalCoordinates {
+function geodeticToFundamentalPlaneObserver(elements: BesselianElements, location: GeographicCoordinate, state: BesselianState, useEarthEllipsoid: boolean): ObserverFundamentalCoordinates {
 	const [rhoCosPhi, rhoSinPhi] = geodeticToGeocentric(elements, location, useEarthEllipsoid)
 	const hourAngle = state.mu + location.longitude
 	const sinH = Math.sin(hourAngle)
@@ -303,8 +298,8 @@ function geodeticToFundamentalPlaneObserver(elements: BesselianElements, locatio
 	return { xi: rhoCosPhi * sinH, eta: rhoSinPhi * cosD - rhoCosPhi * cosH * sinD, zeta: rhoSinPhi * sinD + rhoCosPhi * cosH * cosD }
 }
 
-function geodeticToGeocentric(elements: BesselianElements, location: Required<LocalEclipseLocation>, useEarthEllipsoid: boolean): readonly [number, number] {
-	const altitude = location.altitude / elements.earth.equatorialRadius
+function geodeticToGeocentric(elements: BesselianElements, location: GeographicCoordinate, useEarthEllipsoid: boolean): readonly [number, number] {
+	const altitude = location.elevation / elements.earth.equatorialRadius
 	const sinLat = Math.sin(location.latitude)
 	const cosLat = Math.cos(location.latitude)
 
@@ -350,7 +345,7 @@ function diskOverlapArea(a: number, b: number, distance: number) {
 	return Math.max(0, area)
 }
 
-function computeSolarAltAz(state: BesselianState, location: Required<LocalEclipseLocation>, options: ResolvedLocalEclipseOptions): readonly [Angle, Angle] {
+function computeSolarAltAz(state: BesselianState, location: GeographicCoordinate, options: ResolvedLocalEclipseOptions): readonly [Angle, Angle] {
 	const sunHourAngle = state.mu + location.longitude - Math.PI
 	const [azimuth, geometricAltitude] = equatorialToHorizontal(0, -state.d, location.latitude, sunHourAngle)
 
@@ -365,7 +360,7 @@ function computePositionAngle(u: number, v: number) {
 	return normalizeAngle(Math.atan2(u, v))
 }
 
-function computeZenithAngle(state: BesselianState, location: Required<LocalEclipseLocation>) {
+function computeZenithAngle(state: BesselianState, location: GeographicCoordinate) {
 	return normalizeAngle(parallacticAngle(state.mu + location.longitude - Math.PI, -state.d, location.latitude))
 }
 
@@ -379,7 +374,7 @@ function computePhase(elements: BesselianElements, magnitude: number, obscuratio
 	return { type, isPartial: geometricallyEclipsed && !isTotal && !isAnnular && !isHybrid && obscuration > 0, isTotal, isAnnular, isHybrid, geometricallyEclipsed, visibleAboveHorizon }
 }
 
-function scanLocalCircumstances(elements: BesselianElements, location: Required<LocalEclipseLocation>, options: ResolvedLocalEclipseOptions, startTau: number, endTau: number) {
+function scanLocalCircumstances(elements: BesselianElements, location: GeographicCoordinate, options: ResolvedLocalEclipseOptions, startTau: number, endTau: number) {
 	const samples: ScanSample[] = []
 	const stepHours = options.scanStepSeconds / 3600
 
@@ -394,12 +389,12 @@ function scanLocalCircumstances(elements: BesselianElements, location: Required<
 	return samples
 }
 
-function makeScanSample(elements: BesselianElements, location: Required<LocalEclipseLocation>, options: ResolvedLocalEclipseOptions, tauHours: number): ScanSample {
+function makeScanSample(elements: BesselianElements, location: GeographicCoordinate, options: ResolvedLocalEclipseOptions, tauHours: number): ScanSample {
 	const detail = computeAtTau(elements, location, options, tauHours)
 	return { tauHours, detail, penumbra: detail.m - detail.L1, central: detail.m - Math.abs(detail.L2) }
 }
 
-function findContactRoots(elements: BesselianElements, location: Required<LocalEclipseLocation>, options: ResolvedLocalEclipseOptions, samples: readonly ScanSample[], value: (detail: LocalEclipseDetail) => number) {
+function findContactRoots(elements: BesselianElements, location: GeographicCoordinate, options: ResolvedLocalEclipseOptions, samples: readonly ScanSample[], value: (detail: LocalEclipseDetail) => number) {
 	const roots: number[] = []
 
 	function bisectRootValue(tau: number) {
@@ -466,7 +461,7 @@ function bisectRoot(a: number, b: number, value: (tauHours: number) => number, t
 	return Math.abs(fLeft) < Math.abs(fRight) ? left : right
 }
 
-function refineMaximum(elements: BesselianElements, location: Required<LocalEclipseLocation>, options: ResolvedLocalEclipseOptions, samples: readonly ScanSample[], startTau: number, endTau: number) {
+function refineMaximum(elements: BesselianElements, location: GeographicCoordinate, options: ResolvedLocalEclipseOptions, samples: readonly ScanSample[], startTau: number, endTau: number) {
 	let best = 0
 
 	for (let i = 1; i < samples.length; i++) {
@@ -522,7 +517,7 @@ function goldenSectionMinimum(left: number, right: number, objective: (tauHours:
 	return goldenSectionMaximum(left, right, (tau) => -objective(tau), toleranceHours)
 }
 
-function computeAtTau(elements: BesselianElements, location: Required<LocalEclipseLocation>, options: ResolvedLocalEclipseOptions, tauHours: number) {
+function computeAtTau(elements: BesselianElements, location: GeographicCoordinate, options: ResolvedLocalEclipseOptions, tauHours: number) {
 	return computeLocalEclipseAt(elements, location, timeShift(elements.t0, tauHours / 24), { ...options, longitudeConvention: 'eastPositive' })
 }
 
@@ -555,30 +550,9 @@ function approximateShadowWidthKm(elements: BesselianElements, maximum: LocalEcl
 }
 
 function validateElements(elements: BesselianElements) {
-	validateTime(elements.t0, 'elements.t0')
-	validateTime(elements.validFrom, 'elements.validFrom')
-	validateTime(elements.validTo, 'elements.validTo')
-	validatePositiveFinite('elements.earth.equatorialRadius', elements.earth.equatorialRadius)
-	validateFinite('elements.earth.flattening', elements.earth.flattening)
-}
-
-function validateLocation(location: Required<LocalEclipseLocation>) {
-	validateFinite('location.latitude', location.latitude)
-	validateFinite('location.longitude', location.longitude)
-	validateFinite('location.altitude', location.altitude)
-
-	if (Math.abs(location.latitude) > Math.PI / 2) throw new Error('location.latitude must be in radians within [-pi/2, pi/2]')
-}
-
-function validateTime(time: Time, name: string) {
-	if (!Number.isFinite(time.day) || !Number.isFinite(time.fraction)) throw new Error(`${name} must have finite day and fraction`)
-	if (time.scale < Timescale.UT1 || time.scale > Timescale.TCB) throw new Error(`${name} must have a valid timescale`)
-}
-
-function validatePositiveFinite(name: string, value: number) {
-	if (!(value > 0) || !Number.isFinite(value)) throw new Error(`${name} must be a positive finite number`)
-}
-
-function validateFinite(name: string, value: number) {
-	if (!Number.isFinite(value)) throw new Error(`${name} must be finite`)
+	validateTime(elements.t0)
+	validateTime(elements.validFrom)
+	validateTime(elements.validTo)
+	validatePositiveFinite(elements.earth.equatorialRadius)
+	validateFinite(elements.earth.flattening)
 }

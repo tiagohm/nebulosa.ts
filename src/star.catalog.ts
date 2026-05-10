@@ -3,13 +3,11 @@ import { DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { sphericalSeparation } from './geometry'
 import { clamp } from './math'
+import { GEOMETRY_EPSILON, validateLatitude } from './validation'
 import type { Velocity } from './velocity'
 
-const FULL_CIRCLE = TAU
-const HALF_CIRCLE = PI
 const MIN_DEC = -PIOVERTWO
 const MAX_DEC = PIOVERTWO
-const GEOMETRY_EPSILON = 1e-12
 const TANGENT_POLYGON_RECOMMENDED_SPAN = 20 * DEG2RAD
 
 export type Vertex = readonly [Angle, Angle]
@@ -179,28 +177,19 @@ export function normalizeStarCatalogQuery(query: StarCatalogQuery): NormalizedSt
 	}
 }
 
-// Validates a declination value in radians.
-export function validateDeclination(dec: Angle) {
-	if (!Number.isFinite(dec) || dec < MIN_DEC - GEOMETRY_EPSILON || dec > MAX_DEC + GEOMETRY_EPSILON) {
-		throw new Error(`invalid declination: ${dec}`)
-	}
-
-	return clamp(dec, MIN_DEC, MAX_DEC)
-}
-
 // Normalizes an RA span into one or two non-wrapping boxes.
 export function splitRaBox(minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: Angle): readonly StarCatalogRaDecBox[] {
 	const normalizedMinRA = normalizeAngle(minRA)
 	const normalizedMaxRA = normalizeAngle(maxRA)
-	const normalizedMinDEC = validateDeclination(minDEC)
-	const normalizedMaxDEC = validateDeclination(maxDEC)
+	const normalizedMinDEC = validateLatitude(minDEC)
+	const normalizedMaxDEC = validateLatitude(maxDEC)
 
 	if (normalizedMinDEC > normalizedMaxDEC + GEOMETRY_EPSILON) {
 		throw new Error(`invalid declination range: [${minDEC}, ${maxDEC}]`)
 	}
 
-	if (Math.abs(maxRA - minRA) >= FULL_CIRCLE - GEOMETRY_EPSILON) {
-		return [{ minRA: 0, maxRA: FULL_CIRCLE, minDEC: normalizedMinDEC, maxDEC: normalizedMaxDEC }]
+	if (Math.abs(maxRA - minRA) >= TAU - GEOMETRY_EPSILON) {
+		return [{ minRA: 0, maxRA: TAU, minDEC: normalizedMinDEC, maxDEC: normalizedMaxDEC }]
 	}
 
 	if (normalizedMinRA <= normalizedMaxRA) {
@@ -209,7 +198,7 @@ export function splitRaBox(minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: An
 
 	return [
 		{ minRA: 0, maxRA: normalizedMaxRA, minDEC: normalizedMinDEC, maxDEC: normalizedMaxDEC },
-		{ minRA: normalizedMinRA, maxRA: FULL_CIRCLE, minDEC: normalizedMinDEC, maxDEC: normalizedMaxDEC },
+		{ minRA: normalizedMinRA, maxRA: TAU, minDEC: normalizedMinDEC, maxDEC: normalizedMaxDEC },
 	]
 }
 
@@ -222,9 +211,9 @@ export function projectPolygonVertex(ra: Angle, dec: Angle, centerRA: Angle, cen
 // Normalizes a cone query and computes its coarse preselection box.
 function normalizeConeQuery(query: StarCatalogConeQuery): NormalizedConeQuery {
 	const centerRA = normalizeAngle(query.centerRA)
-	const centerDEC = validateDeclination(query.centerDEC)
+	const centerDEC = validateLatitude(query.centerDEC)
 
-	if (!Number.isFinite(query.radius) || query.radius < 0 || query.radius > HALF_CIRCLE) {
+	if (!Number.isFinite(query.radius) || query.radius < 0 || query.radius > PI) {
 		throw new Error(`invalid cone radius: ${query.radius}. Expected a finite value in [0, pi]`)
 	}
 
@@ -235,8 +224,8 @@ function normalizeConeQuery(query: StarCatalogConeQuery): NormalizedConeQuery {
 	let preselectionBoxes: readonly StarCatalogRaDecBox[]
 	let wrapAround = false
 
-	if (radius >= HALF_CIRCLE || maxDEC >= MAX_DEC - GEOMETRY_EPSILON || minDEC <= MIN_DEC + GEOMETRY_EPSILON) {
-		preselectionBoxes = [{ minRA: 0, maxRA: FULL_CIRCLE, minDEC: minDEC, maxDEC: maxDEC }]
+	if (radius >= PI || maxDEC >= MAX_DEC - GEOMETRY_EPSILON || minDEC <= MIN_DEC + GEOMETRY_EPSILON) {
+		preselectionBoxes = [{ minRA: 0, maxRA: TAU, minDEC: minDEC, maxDEC: maxDEC }]
 	} else {
 		const sinSpan = Math.sin(radius) / Math.max(GEOMETRY_EPSILON, Math.cos(centerDEC))
 		const halfSpan = Math.asin(clamp(sinSpan, -1, 1))
@@ -261,9 +250,9 @@ function normalizeConeQuery(query: StarCatalogConeQuery): NormalizedConeQuery {
 // Normalizes a triangle query and builds its tangent-plane projection.
 function normalizeTriangleQuery(query: StarCatalogTriangleQuery): NormalizedTriangleQuery {
 	const normalizedVertices = [
-		[normalizeAngle(query.a[0]), validateDeclination(query.a[1])],
-		[normalizeAngle(query.b[0]), validateDeclination(query.b[1])],
-		[normalizeAngle(query.c[0]), validateDeclination(query.c[1])],
+		[normalizeAngle(query.a[0]), validateLatitude(query.a[1])],
+		[normalizeAngle(query.b[0]), validateLatitude(query.b[1])],
+		[normalizeAngle(query.c[0]), validateLatitude(query.c[1])],
 	] as const satisfies readonly Vertex[]
 	const tangentCenterRA = meanRightAscension(normalizedVertices)
 	const tangentCenterDEC = (normalizedVertices[0][1] + normalizedVertices[1][1] + normalizedVertices[2][1]) / 3
@@ -310,7 +299,7 @@ function normalizePolygonQuery(query: StarCatalogPolygonQuery): NormalizedPolygo
 	const normalizedVertices: Vertex[] = []
 
 	for (const vertex of query.vertices) {
-		normalizedVertices.push([normalizeAngle(vertex[0]), validateDeclination(vertex[1])] as const)
+		normalizedVertices.push([normalizeAngle(vertex[0]), validateLatitude(vertex[1])] as const)
 	}
 
 	const tangentCenterRA = meanRightAscension(normalizedVertices)
@@ -420,7 +409,7 @@ function pointInProjectedPolygon(point: Vertex, polygon: readonly Vertex[]) {
 // Computes a wrapped signed RA delta relative to a reference longitude.
 function shortestSignedRaDelta(ra: Angle, referenceRa: Angle) {
 	let delta = normalizeAngle(ra) - normalizeAngle(referenceRa)
-	if (delta > HALF_CIRCLE) delta -= FULL_CIRCLE
-	else if (delta <= -HALF_CIRCLE) delta += FULL_CIRCLE
+	if (delta > PI) delta -= TAU
+	else if (delta <= -PI) delta += TAU
 	return delta
 }

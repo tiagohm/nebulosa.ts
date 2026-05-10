@@ -320,7 +320,7 @@ describe('SIP validation', () => {
 		const stars = syntheticStars()
 		stars[0] = { ...stars[0], x: Number.NaN }
 
-		expect(() => fitSipDistortion(stars, WCS, { order: 3, spatialDistribution: 'off' })).toThrow('finite number')
+		expect(() => fitSipDistortion(stars, WCS, { order: 3, spatialDistribution: 'off' })).toThrow('value must be finite')
 	})
 
 	test('rejects invalid weights', () => {

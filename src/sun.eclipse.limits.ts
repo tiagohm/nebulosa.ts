@@ -6,6 +6,7 @@ import type { BesselianElements } from './sun.eclipse.besselian'
 import { computeLocalEclipseAt, type LocalEclipseDetail } from './sun.eclipse.circumstances'
 import { generateCentralLine, type CentralLinePoint, type CentralLineResult } from './sun.eclipse.lines'
 import type { Time } from './time'
+import { validatePositiveFinite, validateFinite } from './validation'
 
 // Central solar-eclipse path limits from Besselian elements.
 //
@@ -254,13 +255,13 @@ function resolveOptions(options: EclipsePathLimitOptions = {}): ResolvedPathLimi
 	const maxSearchDistanceKm = options.maxSearchDistanceKm ?? DEFAULT_MAX_SEARCH_DISTANCE_KM
 	const solarAltitudeMin = options.solarAltitudeMin ?? DEFAULT_SOLAR_ALTITUDE_MIN
 
-	validatePositiveFinite('stepSeconds', stepSeconds)
-	validatePositiveFinite('timeToleranceSeconds', timeToleranceSeconds)
-	validatePositiveFinite('spatialToleranceKm', spatialToleranceKm)
-	validatePositiveFinite('numericTolerance', numericTolerance)
-	validatePositiveFinite('maxSegmentAngularDistance', maxSegmentAngularDistance)
-	validatePositiveFinite('maxSearchDistanceKm', maxSearchDistanceKm)
-	validateFinite('solarAltitudeMin', solarAltitudeMin)
+	validatePositiveFinite(stepSeconds)
+	validatePositiveFinite(timeToleranceSeconds)
+	validatePositiveFinite(spatialToleranceKm)
+	validatePositiveFinite(numericTolerance)
+	validatePositiveFinite(maxSegmentAngularDistance)
+	validatePositiveFinite(maxSearchDistanceKm)
+	validateFinite(solarAltitudeMin)
 
 	if (!Number.isInteger(maxAdaptiveDepth) || maxAdaptiveDepth < 0) throw new Error('maxAdaptiveDepth must be a non-negative integer')
 
@@ -594,12 +595,4 @@ function isFiniteLimitPoint(point: EclipsePathLimitPoint) {
 		Number.isFinite(point.localDurationSeconds) &&
 		Number.isFinite(point.distanceFromCenterKm)
 	)
-}
-
-function validatePositiveFinite(name: string, value: number) {
-	if (!(value > 0) || !Number.isFinite(value)) throw new Error(`${name} must be a positive finite number`)
-}
-
-function validateFinite(name: string, value: number) {
-	if (!Number.isFinite(value)) throw new Error(`${name} must be finite`)
 }

@@ -5,6 +5,7 @@ import { type BesselianElements, type BesselianState, evaluateBesselian, normali
 import type { SolarEclipseType } from './sun'
 import { type Time, Timescale, timeShift, timeSubtract } from './time'
 import { angularDistance } from './coordinate'
+import { validateTime, validatePositiveFinite, validateFinite } from './validation'
 
 // Geographic solar-eclipse central-line generation from Besselian elements.
 //
@@ -155,13 +156,13 @@ function resolveOptions(elements: BesselianElements, options: CentralLineOptions
 	const maxSegmentAngularDistance = options.maxSegmentAngularDistance ?? DEFAULT_MAX_SEGMENT_ANGULAR_DISTANCE
 	const solarAltitudeMin = options.solarAltitudeMin ?? DEFAULT_SOLAR_ALTITUDE_MIN
 
-	validateTime(startTime, 'options.startTime')
-	validateTime(endTime, 'options.endTime')
-	validatePositiveFinite('stepSeconds', stepSeconds)
-	validatePositiveFinite('toleranceSeconds', toleranceSeconds)
-	validatePositiveFinite('numericTolerance', numericTolerance)
-	validatePositiveFinite('maxSegmentAngularDistance', maxSegmentAngularDistance)
-	validateFinite('solarAltitudeMin', solarAltitudeMin)
+	validateTime(startTime)
+	validateTime(endTime)
+	validatePositiveFinite(stepSeconds)
+	validatePositiveFinite(toleranceSeconds)
+	validatePositiveFinite(numericTolerance)
+	validatePositiveFinite(maxSegmentAngularDistance)
+	validateFinite(solarAltitudeMin)
 
 	if (!(endTauHours > startTauHours)) throw new Error('central line end time must be after start time')
 
@@ -530,24 +531,11 @@ function isFinitePoint(point: CentralLinePoint) {
 }
 
 function validateElements(elements: BesselianElements) {
-	validateTime(elements.t0, 'elements.t0')
-	validateTime(elements.validFrom, 'elements.validFrom')
-	validateTime(elements.validTo, 'elements.validTo')
-	validatePositiveFinite('elements.earth.equatorialRadius', elements.earth.equatorialRadius)
-	validateFinite('elements.earth.flattening', elements.earth.flattening)
+	validateTime(elements.t0)
+	validateTime(elements.validFrom)
+	validateTime(elements.validTo)
+	validatePositiveFinite(elements.earth.equatorialRadius)
+	validateFinite(elements.earth.flattening)
 
 	if (elements.earth.flattening < 0 || elements.earth.flattening >= 0.02) throw new Error('elements.earth.flattening must be in the plausible [0, 0.02) range')
-}
-
-function validateTime(time: Time, name: string) {
-	if (!Number.isFinite(time.day) || !Number.isFinite(time.fraction)) throw new Error(`${name} must have finite day and fraction`)
-	if (time.scale < Timescale.UT1 || time.scale > Timescale.TCB) throw new Error(`${name} must have a valid timescale`)
-}
-
-function validatePositiveFinite(name: string, value: number) {
-	if (!(value > 0) || !Number.isFinite(value)) throw new Error(`${name} must be a positive finite number`)
-}
-
-function validateFinite(name: string, value: number) {
-	if (!Number.isFinite(value)) throw new Error(`${name} must be finite`)
 }
