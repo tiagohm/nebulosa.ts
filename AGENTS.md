@@ -60,13 +60,16 @@ Prefer the MCP graph tools for code discovery:
 
 - Follow OXC formatting: tabs, single quotes, no semicolons, trailing commas, long line width.
 - Preserve existing `// oxfmt-ignore` comments when they are there for a reason, especially around very long grouped imports.
-- Follow the current comment style: short single-line comments above exported functions, methods, and numerically important lines.
+- Follow the current comment style: descriptive double-slashed comments above exported functions, methods, and numerically important lines.
+- When commenting a function or method, include the description and document each parameter with its description plus possible values, units, or valid ranges when constrained or domain-specific.
+- Multi-line comments are always double-slashed.
 - Do not add noisy comments for obvious assignments or control flow.
 - Always type method and function parameters.
 - Avoid `any`. Use `unknown` when a type truly cannot be expressed more precisely.
 - Functions should not declare explicit return types for primitives or tuples unless needed for branded primitive types. Prefer inference or `as const` where appropriate.
 - Functions should declare explicit return types for structured objects and public interfaces.
 - Prefer `interface` for structured public shapes.
+- Comment every interface property with its description. For numeric properties, include units and possible range values when the range is bounded or domain-specific. Place the comment next to property.
 - Use `readonly` where it helps preserve API intent without fighting the existing tuple and mutable-output patterns.
 - Use tuple aliases and readonly aliases for low-level numeric structures such as vectors and matrices.
 
@@ -74,7 +77,8 @@ Prefer the MCP graph tools for code discovery:
 
 - Most math-heavy modules use top-level pure functions, not classes.
 - Classes are mainly used for protocol clients, simulators, device managers, and stateful integrations such as Alpaca, INDI, and Firmata.
-- Use the shared validators in `src/validation.ts` for runtime input validation. Before adding inline validation logic, check whether an existing helper fits; if a reusable validation is missing, add it to `src/validation.ts` and cover it with tests.
+- When applied, use the shared validators in `src/validation.ts` for runtime input validation. Before adding inline validation logic, check whether an existing helper fits; if a reusable validation is missing, add it to `src/validation.ts` and cover it with tests.
+- Do not add validation for function parameters, object properties, or interface fields unless it is truly required for the algorithm to work correctly. Prefer interface property comments, including units and valid ranges, as the guidance for callers to pass correct values.
 - Preserve the mutable-output convention in hot paths: many vector and matrix helpers accept an optional output parameter such as `o?: MutVec3` or `o?: MutMat3`.
 - Reuse existing low-level utilities from `vec2.ts`, `vec3.ts`, `mat3.ts`, `math.ts`, `time.ts`, and related core files before introducing new helpers.
 - Preserve the `MutX` plus `Readonly<MutX>` pattern for numeric tuples.
