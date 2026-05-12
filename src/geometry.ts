@@ -44,6 +44,17 @@ export interface SphericalMountBasis {
 
 const SPHERICAL_POLE_AXIS: Vec3 = [0, 0, 1]
 
+// Fills or creates a new point with x and y values
+export function fillPoint(out: Point | undefined, x: number, y: number) {
+	if (out === undefined) {
+		return { x, y }
+	} else {
+		out.x = x
+		out.y = y
+		return out
+	}
+}
+
 // Computes the midpoint between two Cartesian 2D points.
 export function midPoint(a: Point, b: Point): Point {
 	return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }

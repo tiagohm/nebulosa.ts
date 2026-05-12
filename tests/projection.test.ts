@@ -1,103 +1,63 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, normalizePI } from '../src/angle'
-import { sphericalSeparation, type Point } from '../src/geometry'
 // oxfmt-ignore
-import { WEB_MERCATOR_MAX_LATITUDE, azimuthalEquidistantProject, azimuthalEquidistantUnproject, AzimuthalEquidistant, gnomonicProject, Gnomonic, lambertAzimuthalEqualAreaProject, lambertAzimuthalEqualAreaUnproject, LambertAzimuthalEqualArea, orthographicProject, orthographicUnproject, Orthographic, projectLonLat, projectLonLatBatch, stereographicProject, stereographicUnproject, Stereographic, unprojectLonLat, CylindricalStereographic, CylindricalEquidistant, Mercator, WebMercator, EllipsoidalMercator, CylindricalEqualArea, Miller, CentralCylindrical, } from '../src/projection'
+import { AzimuthalEquidistant, Balthasart, Behrmann, Braun, CentralCylindrical, CylindricalEqualArea, CylindricalEquidistant, CylindricalStereographic, EllipsoidalMercator, Gall, GallPeters, Gnomonic, HoboDyer, LambertAzimuthalEqualArea, LambertCylindricalEqualArea, Mercator, Miller, Orthographic, PlateCarree, projectMany, projectPolyline, Stereographic, TrystanEdwards, WEB_MERCATOR_MAX_LATITUDE, WebMercator, } from '../src/projection'
 import { PI, PIOVERTWO } from '../src/constants'
+import { sphericalSeparation, type Point } from '../src/geometry'
 
-const AZIMUTHAL_ROUND_TRIP_CASES = [
-	{ name: 'gnomonic', projection: Gnomonic.default },
-	{ name: 'stereographic', projection: Stereographic.default, project: stereographicProject, unproject: stereographicUnproject },
-	{ name: 'orthographic', projection: Orthographic.default, project: orthographicProject, unproject: orthographicUnproject },
-	{ name: 'lambert azimuthal equal-area', projection: LambertAzimuthalEqualArea.default, project: lambertAzimuthalEqualAreaProject, unproject: lambertAzimuthalEqualAreaUnproject },
-	{ name: 'azimuthal equidistant', projection: AzimuthalEquidistant.default, project: azimuthalEquidistantProject, unproject: azimuthalEquidistantUnproject },
-] as const
-
-describe('azimuthal projections round-trip near the projection center', () => {
+describe('azimuthal projections round-trip', () => {
 	const centerLongitude = deg(10)
 	const centerLatitude = deg(-20)
 	const longitude = deg(11.5)
 	const latitude = deg(-19.25)
-	const options = { centralMeridian: centerLongitude, latitudeOfOrigin: centerLatitude }
 
-	for (const { name, projection } of AZIMUTHAL_ROUND_TRIP_CASES) {
+	const projections = [
+		{ name: 'gnomonic', projection: new Gnomonic(centerLongitude, centerLatitude) },
+		{ name: 'stereographic', projection: new Stereographic(centerLongitude, centerLatitude) },
+		{ name: 'orthographic', projection: new Orthographic(centerLongitude, centerLatitude) },
+		{ name: 'lambert azimuthal equal-area', projection: new LambertAzimuthalEqualArea(centerLongitude, centerLatitude) },
+		{ name: 'azimuthal equidistant', projection: new AzimuthalEquidistant(centerLongitude, centerLatitude) },
+	] as const
+
+	for (const { name, projection } of projections) {
 		test(name, () => {
-			expect(projection.forward(centerLongitude, centerLatitude, options)).toEqual({ x: 0, y: 0 })
-			expect(projectLonLat(projection, centerLongitude, centerLatitude, options)).toEqual({ x: 0, y: 0 })
+			expect(projection.project(centerLongitude, centerLatitude)).toEqual({ x: 0, y: 0 })
 
-			const projected = projection.forward(longitude, latitude, options)
+			const projected = projection.project(longitude, latitude)
 			expect(projected).toBeDefined()
 
 			if (projected === undefined) return
 
-			const classProjected = projectLonLat(projection, longitude, latitude, options)
-			expect(classProjected).toBeDefined()
-
-			if (classProjected !== undefined) {
-				expect(classProjected.x).toBeCloseTo(projected.x, 12)
-				expect(classProjected.y).toBeCloseTo(projected.y, 12)
-			}
-
-			const unprojected = projection.inverse(projected.x, projected.y, options)
+			const unprojected = projection.unproject(projected.x, projected.y)
 			expect(unprojected).toBeDefined()
 
 			if (unprojected === undefined) return
 
 			expect(unprojected.x).toBeCloseTo(longitude, 11)
 			expect(unprojected.y).toBeCloseTo(latitude, 11)
-
-			if (classProjected !== undefined) {
-				const classUnprojected = unprojectLonLat(projection, classProjected.x, classProjected.y, options)
-				expect(classUnprojected).toBeDefined()
-
-				if (classUnprojected !== undefined) {
-					expect(classUnprojected.x).toBeCloseTo(longitude, 11)
-					expect(classUnprojected.y).toBeCloseTo(latitude, 11)
-				}
-			}
 		})
 	}
 })
 
-test('astronomy-oriented azimuthal projections have the expected equatorial radii', () => {
-	const gnomonic = gnomonicProject(deg(45), 0, 0, 0)
-	expect(gnomonic).not.toBeFalse()
+describe('astronomy-oriented azimuthal projections have the expected equatorial radii', () => {
+	const projections = [
+		{ name: 'gnomonic', projection: new Gnomonic(0, 0), longitude: deg(45), latitude: 0, x: 1, y: 0 },
+		{ name: 'stereographic', projection: new Stereographic(0, 0), longitude: deg(90), latitude: 0, x: 2, y: 0 },
+		{ name: 'orthographic', projection: new Orthographic(0, 0), longitude: deg(90), latitude: 0, x: 1, y: 0 },
+		{ name: 'lambert azimuthal equal-area', projection: new LambertAzimuthalEqualArea(0, 0), longitude: deg(90), latitude: 0, x: Math.SQRT2, y: 0 },
+		{ name: 'azimuthal equidistant', projection: new AzimuthalEquidistant(0, 0), longitude: deg(90), latitude: 0, x: PIOVERTWO, y: 0 },
+	] as const
 
-	if (gnomonic !== undefined) {
-		expect(gnomonic.x).toBeCloseTo(1, 12)
-		expect(gnomonic.y).toBeCloseTo(0, 12)
-	}
+	for (const { name, projection, longitude, latitude, x, y } of projections) {
+		test(name, () => {
+			const projected = projection.project(longitude, latitude)
+			expect(projected).toBeDefined()
 
-	const stereographic = stereographicProject(deg(90), 0, 0, 0)
-	expect(stereographic).not.toBeFalse()
+			if (projected === undefined) return
 
-	if (stereographic !== undefined) {
-		expect(stereographic.x).toBeCloseTo(2, 12)
-		expect(stereographic.y).toBeCloseTo(0, 12)
-	}
-
-	const orthographic = orthographicProject(deg(90), 0, 0, 0)
-	expect(orthographic).not.toBeFalse()
-
-	if (orthographic !== undefined) {
-		expect(orthographic.x).toBeCloseTo(1, 12)
-		expect(orthographic.y).toBeCloseTo(0, 12)
-	}
-
-	const lambert = lambertAzimuthalEqualAreaProject(deg(90), 0, 0, 0)
-	expect(lambert).not.toBeFalse()
-
-	if (lambert !== undefined) {
-		expect(lambert.x).toBeCloseTo(Math.SQRT2, 12)
-		expect(lambert.y).toBeCloseTo(0, 12)
-	}
-
-	const equidistant = azimuthalEquidistantProject(deg(90), 0, 0, 0)
-	expect(equidistant).not.toBeFalse()
-
-	if (equidistant !== undefined) {
-		expect(equidistant.x).toBeCloseTo(PIOVERTWO, 12)
-		expect(equidistant.y).toBeCloseTo(0, 12)
+			expect(projected.x).toBeCloseTo(x, 14)
+			expect(projected.y).toBeCloseTo(y, 14)
+		})
 	}
 })
 
@@ -106,81 +66,67 @@ test('azimuthal equidistant preserves the center angular distance as plane radiu
 	const centerLatitude = deg(15)
 	const longitude = deg(-5)
 	const latitude = deg(22)
-	const projected = azimuthalEquidistantProject(longitude, latitude, centerLongitude, centerLatitude)
-	expect(projected).not.toBeFalse()
 
-	if (projected !== undefined) {
-		expect(Math.hypot(projected.x, projected.y)).toBeCloseTo(sphericalSeparation(centerLongitude, centerLatitude, longitude, latitude), 12)
-	}
+	const projected = new AzimuthalEquidistant(centerLongitude, centerLatitude).project(longitude, latitude)
+	expect(projected).toBeDefined()
+
+	if (projected === undefined) return
+
+	expect(Math.hypot(projected.x, projected.y)).toBeCloseTo(sphericalSeparation(centerLongitude, centerLatitude, longitude, latitude), 12)
 })
 
 test('azimuthal projection singularities and inverse domains are rejected', () => {
-	expect(gnomonicProject(PI, 0, 0, 0)).toBeUndefined()
-	expect(orthographicProject(PI, 0, 0, 0)).toBeUndefined()
-	expect(stereographicProject(PI, 0, 0, 0)).toBeUndefined()
-	expect(lambertAzimuthalEqualAreaProject(PI, 0, 0, 0)).toBeUndefined()
-	expect(azimuthalEquidistantProject(PI, 0, 0, 0)).toBeUndefined()
-	expect(projectLonLat(Gnomonic.default, PI, 0)).toBeUndefined()
-	expect(projectLonLat(Orthographic.default, PI, 0)).toBeUndefined()
-	expect(projectLonLat(Stereographic.default, PI, 0)).toBeUndefined()
-	expect(projectLonLat(LambertAzimuthalEqualArea.default, PI, 0)).toBeUndefined()
-	expect(projectLonLat(AzimuthalEquidistant.default, PI, 0)).toBeUndefined()
+	expect(new Gnomonic(0, 0).project(PI, 0)).toBeUndefined()
+	expect(new Orthographic(0, 0).project(PI, 0)).toBeUndefined()
+	expect(new Stereographic(0, 0).project(PI, 0)).toBeUndefined()
+	expect(new LambertAzimuthalEqualArea(0, 0).project(PI, 0)).toBeUndefined()
+	expect(new AzimuthalEquidistant(0, 0).project(PI, 0)).toBeUndefined()
 
-	expect(orthographicUnproject(1.000001, 0, 0, 0)).toBeUndefined()
-	expect(lambertAzimuthalEqualAreaUnproject(2.000001, 0, 0, 0)).toBeUndefined()
-	expect(azimuthalEquidistantUnproject(PI + 0.000001, 0, 0, 0)).toBeUndefined()
-	expect(unprojectLonLat(Orthographic.default, 1.000001, 0)).toBeUndefined()
-	expect(unprojectLonLat(LambertAzimuthalEqualArea.default, 2.000001, 0)).toBeUndefined()
-	expect(unprojectLonLat(AzimuthalEquidistant.default, PI + 0.000001, 0)).toBeUndefined()
+	expect(new Orthographic(0, 0).unproject(1.000001, 0)).toBeUndefined()
+	expect(new LambertAzimuthalEqualArea(0, 0).unproject(2.000001, 0)).toBeUndefined()
+	expect(new AzimuthalEquidistant(0, 0).unproject(PI + 0.000001, 0)).toBeUndefined()
+	expect(new Orthographic(0, 0).unproject(1.000001, 0)).toBeUndefined()
+	expect(new LambertAzimuthalEqualArea(0, 0).unproject(2.000001, 0)).toBeUndefined()
+	expect(new AzimuthalEquidistant(0, 0).unproject(PI + 0.000001, 0)).toBeUndefined()
 })
-
-test('finite azimuthal projections expose projected world bounds', () => {
-	expect(Gnomonic.default.bounds()).toBeUndefined()
-	expect(Stereographic.default.bounds()).toBeUndefined()
-	expect(Orthographic.default.bounds()).toEqual({ minX: -1, maxX: 1, minY: -1, maxY: 1 })
-	expect(LambertAzimuthalEqualArea.default.bounds()).toEqual({ minX: -2, maxX: 2, minY: -2, maxY: 2 })
-	expect(AzimuthalEquidistant.default.bounds()).toEqual({ minX: -PI, maxX: PI, minY: -PI, maxY: PI })
-})
-
-const ROUND_TRIP_POINTS: readonly Point[] = [
-	{ x: 0, y: 0 },
-	{ x: deg(12), y: deg(5) },
-	{ x: deg(-80), y: deg(45) },
-	{ x: deg(170), y: deg(-65) },
-] as const
-
-const CYLINDRICAL_ROUND_TRIP_CASES = [
-	{ name: 'plateCarree', projection: CylindricalEquidistant.plateCarree },
-	{ name: 'cylindricalEquidistant', projection: new CylindricalEquidistant(deg(30)) },
-	{ name: 'mercator', projection: Mercator.default },
-	{ name: 'webMercator', projection: WebMercator.default },
-	{ name: 'ellipsoidalMercator', projection: new EllipsoidalMercator(0.08181919084262149) },
-	{ name: 'miller', projection: Miller.default },
-	{ name: 'centralCylindrical', projection: CentralCylindrical.default },
-	{ name: 'cylindricalEqualArea', projection: new CylindricalEqualArea(deg(30)) },
-	{ name: 'lambertCylindricalEqualArea', projection: CylindricalEqualArea.lambertCylindricalEqualArea },
-	{ name: 'behrmann', projection: CylindricalEqualArea.behrmann },
-	{ name: 'gallPeters', projection: CylindricalEqualArea.gallPeters },
-	{ name: 'hoboDyer', projection: CylindricalEqualArea.hoboDyer },
-	{ name: 'balthasart', projection: CylindricalEqualArea.balthasart },
-	{ name: 'trystanEdwards', projection: CylindricalEqualArea.trystanEdwards },
-	{ name: 'cylindricalStereographic', projection: new CylindricalStereographic(deg(30)) },
-	{ name: 'gallStereographic', projection: CylindricalStereographic.gall },
-	{ name: 'braunStereographic', projection: CylindricalStereographic.braun },
-] as const
 
 describe('cylindrical projections round-trip', () => {
-	for (const { name, projection } of CYLINDRICAL_ROUND_TRIP_CASES) {
-		test(name, () => {
-			const points = name === 'centralCylindrical' ? ROUND_TRIP_POINTS.slice(0, 3) : ROUND_TRIP_POINTS
+	const points: readonly Point[] = [
+		{ x: 0, y: 0 },
+		{ x: deg(12), y: deg(5) },
+		{ x: deg(-80), y: deg(45) },
+		{ x: deg(170), y: deg(-65) },
+	] as const
 
+	const projections = [
+		{ name: 'plateCarree', projection: new PlateCarree(), points },
+		{ name: 'cylindricalEquidistant', projection: new CylindricalEquidistant(deg(30)), points },
+		{ name: 'mercator', projection: new Mercator(), points },
+		{ name: 'webMercator', projection: new WebMercator(), points },
+		{ name: 'ellipsoidalMercator', projection: new EllipsoidalMercator({ eccentricity: 0.08181919084262149 }), points },
+		{ name: 'miller', projection: new Miller(), points },
+		{ name: 'centralCylindrical', projection: new CentralCylindrical(), points: points.slice(0, 3) },
+		{ name: 'cylindricalEqualArea', projection: new CylindricalEqualArea(deg(30)), points },
+		{ name: 'lambertCylindricalEqualArea', projection: new LambertCylindricalEqualArea(), points },
+		{ name: 'behrmann', projection: new Behrmann(), points },
+		{ name: 'gallPeters', projection: new GallPeters(), points },
+		{ name: 'hoboDyer', projection: new HoboDyer(), points },
+		{ name: 'balthasart', projection: new Balthasart(), points },
+		{ name: 'trystanEdwards', projection: new TrystanEdwards(), points },
+		{ name: 'cylindricalStereographic', projection: new CylindricalStereographic(deg(30)), points },
+		{ name: 'gall', projection: new Gall(), points },
+		{ name: 'braun', projection: new Braun(), points },
+	] as const
+
+	for (const { name, projection, points } of projections) {
+		test(name, () => {
 			for (const point of points) {
-				const projected = projectLonLat(projection, point.x, point.y, undefined)
+				const projected = projection.project(point.x, point.y)
 				expect(projected).toBeDefined()
 
 				if (projected === undefined) continue
 
-				const unprojected = unprojectLonLat(projection, projected.x, projected.y, undefined)
+				const unprojected = projection.unproject(projected.x, projected.y)
 				expect(unprojected).toBeDefined()
 
 				if (unprojected === undefined) continue
@@ -192,64 +138,53 @@ describe('cylindrical projections round-trip', () => {
 	}
 })
 
-test('cylindrical projections match expected known values', () => {
-	const plateCarree = projectLonLat(CylindricalEquidistant.plateCarree, deg(20), deg(30), { centralMeridian: deg(10) })
-	expect(plateCarree).toBeDefined()
+describe('cylindrical projections match expected known values', () => {
+	const projections = [
+		{ name: 'plateCarree', projection: new PlateCarree(0, { centralMeridian: deg(10) }), longitude: deg(20), latitude: deg(30), x: deg(10), y: deg(30) },
+		{ name: 'equirectangular', projection: new CylindricalEquidistant(deg(60), 0, { centralMeridian: deg(10) }), longitude: deg(20), latitude: deg(30), x: deg(5), y: deg(30) },
+		{ name: 'lambertCylindricalEqualArea', projection: new LambertCylindricalEqualArea(0), longitude: deg(20), latitude: deg(30), x: deg(20), y: 0.5 },
+		{ name: 'mercatorNorth', projection: new Mercator(), longitude: 0, latitude: deg(45), x: 0, y: 0.8813735870195429 },
+		{ name: 'mercatorSouth', projection: new Mercator(), longitude: 0, latitude: -deg(45), x: 0, y: -0.8813735870195429 },
+		{ name: 'webMercator I', projection: new WebMercator(), longitude: 0, latitude: PIOVERTWO, x: 0, y: PI },
+		{ name: 'webMercator II', projection: new WebMercator(), longitude: 0, latitude: WEB_MERCATOR_MAX_LATITUDE, x: 0, y: PI },
+	] as const
 
-	if (plateCarree !== undefined) {
-		expect(plateCarree.x).toBeCloseTo(deg(10), 12)
-		expect(plateCarree.y).toBeCloseTo(deg(30), 12)
+	for (const { name, projection, longitude, latitude, x, y } of projections) {
+		test(name, () => {
+			const projected = projection.project(longitude, latitude)
+			expect(projected).toBeDefined()
+
+			if (projected === undefined) return
+
+			expect(projected.x).toBeCloseTo(x, 14)
+			expect(projected.y).toBeCloseTo(y, 14)
+		})
 	}
-
-	const equirectangular = projectLonLat(CylindricalEquidistant.default, deg(20), deg(30), { centralMeridian: deg(10), standardParallel1: deg(60) })
-	expect(equirectangular).toBeDefined()
-
-	if (equirectangular !== undefined) {
-		expect(equirectangular.x).toBeCloseTo(deg(5), 12)
-		expect(equirectangular.y).toBeCloseTo(deg(30), 12)
-	}
-
-	const mercatorNorth = projectLonLat(Mercator.default, 0, deg(45))
-	const mercatorSouth = projectLonLat(Mercator.default, 0, deg(-45))
-	expect(mercatorNorth).toBeDefined()
-	expect(mercatorSouth).toBeDefined()
-
-	if (mercatorNorth !== undefined && mercatorSouth !== undefined) {
-		expect(mercatorNorth.x).toBeCloseTo(0, 12)
-		expect(mercatorNorth.y).toBeCloseTo(-mercatorSouth.y, 12)
-	}
-
-	const lambert = projectLonLat(CylindricalEqualArea.lambertCylindricalEqualArea, deg(20), deg(30))
-	expect(lambert).toBeDefined()
-
-	if (lambert !== undefined) {
-		expect(lambert.x).toBeCloseTo(deg(20), 12)
-		expect(lambert.y).toBeCloseTo(0.5, 12)
-	}
-
-	expect(projectLonLat(WebMercator.default, 0, PIOVERTWO)?.y).toBeCloseTo(PI, 12)
-	expect(projectLonLat(WebMercator.default, 0, WEB_MERCATOR_MAX_LATITUDE)?.y).toBeCloseTo(PI, 12)
 })
 
 test('projection options validate domains and parameters', () => {
-	expect(projectLonLat(CylindricalEquidistant.plateCarree, 0, PIOVERTWO + 1e-6)).toBeUndefined()
-	expect(projectLonLat(CylindricalEquidistant.plateCarree, 0, 0, { radius: 0 })).toBeUndefined()
-	expect(projectLonLat(CylindricalEquidistant.default, 0, 0, { standardParallel1: PIOVERTWO })).toBeUndefined()
-	expect(projectLonLat(EllipsoidalMercator.default, 0, 0, { eccentricity: 1 })).toBeUndefined()
-	expect(projectLonLat(Mercator.default, 0, PIOVERTWO)).toBeUndefined()
+	expect(new PlateCarree().project(0, PIOVERTWO + 1e-6)).toBeUndefined()
+	expect(new PlateCarree(0, { radius: 0 }).project(0, 0)).toBeUndefined()
+	expect(() => new CylindricalEquidistant(PIOVERTWO).project(0, 0)).toThrow('invalid standardParallel')
+	expect(() => new EllipsoidalMercator({ eccentricity: 1 }).project(0, 0)).toThrow('invalid eccentricity')
+	expect(new Mercator().project(0, PIOVERTWO)).toBeUndefined()
 })
 
 test('RA axis direction and wrapping are configurable', () => {
-	const east = projectLonLat(CylindricalEquidistant.plateCarree, deg(10), deg(5), { centralMeridian: 0 })
-	const west = projectLonLat(CylindricalEquidistant.plateCarree, deg(10), deg(5), { centralMeridian: 0, raAxisDirection: 'west' })
-	expect(east).toBeDefined()
-	expect(west).toBeDefined()
+	const east = new PlateCarree(0, { centralMeridian: 0 })
+	const west = new PlateCarree(0, { centralMeridian: 0, raAxisDirection: 'west' })
 
-	if (east !== undefined && west !== undefined) {
-		expect(west.x).toBeCloseTo(-east.x, 12)
-		expect(west.y).toBeCloseTo(east.y, 12)
+	const eastProjected = east.project(deg(10), deg(5))
+	const westProjected = west.project(deg(10), deg(5))
 
-		const unprojected = unprojectLonLat(CylindricalEquidistant.plateCarree, west.x, west.y, { centralMeridian: 0, raAxisDirection: 'west' })
+	expect(eastProjected).toBeDefined()
+	expect(westProjected).toBeDefined()
+
+	if (eastProjected !== undefined && westProjected !== undefined) {
+		expect(westProjected.x).toBeCloseTo(-eastProjected.x, 12)
+		expect(westProjected.y).toBeCloseTo(eastProjected.y, 12)
+
+		const unprojected = west.unproject(westProjected.x, westProjected.y)
 		expect(unprojected).toBeDefined()
 
 		if (unprojected !== undefined) {
@@ -258,14 +193,99 @@ test('RA axis direction and wrapping are configurable', () => {
 		}
 	}
 
-	const wrapped = projectLonLat(CylindricalEquidistant.plateCarree, deg(359), 0, { centralMeridian: 0 })
+	const wrapped = east.unproject(deg(359), 0, undefined, { centralMeridian: 0 })
 	expect(wrapped?.x).toBeCloseTo(deg(-1), 12)
+})
+
+test('linear projection options are applied to project and unproject', () => {
+	const projection = new PlateCarree(0, {
+		centralMeridian: deg(30),
+		falseEasting: 5,
+		falseNorthing: -7,
+		radius: 2,
+		scale: 3,
+		yAxisDirection: 'southUp',
+	})
+	const projected = projection.project(deg(45), deg(10))
+	expect(projected).toBeDefined()
+
+	if (projected === undefined) return
+
+	expect(projected.x).toBeCloseTo(5 + deg(15) * 6, 12)
+	expect(projected.y).toBeCloseTo(-7 - deg(10) * 6, 12)
+
+	const unprojected = projection.unproject(projected.x, projected.y)
+	expect(unprojected).toBeDefined()
+
+	if (unprojected === undefined) return
+
+	expect(normalizePI(unprojected.x - deg(45))).toBeCloseTo(0, 12)
+	expect(unprojected.y).toBeCloseTo(deg(10), 12)
+})
+
+test('per-call projection options override constructor defaults', () => {
+	const projection = new PlateCarree(0, { centralMeridian: deg(10), falseEasting: -1, falseNorthing: -2, radius: 8, scale: 9 })
+	const projected = projection.project(deg(15), deg(2), undefined, { centralMeridian: deg(20), falseEasting: 1, falseNorthing: 2, raAxisDirection: 'west', radius: 4, scale: 3, yAxisDirection: 'southUp' })
+	expect(projected).toBeDefined()
+
+	if (projected === undefined) return
+
+	expect(projected.x).toBeCloseTo(1 + deg(5) * 12, 12)
+	expect(projected.y).toBeCloseTo(2 - deg(2) * 12, 12)
+})
+
+test('longitude wrap modes control inverse normalization', () => {
+	const projection = new PlateCarree()
+
+	expect(projection.unproject(deg(359), 0)?.x).toBeCloseTo(deg(-1), 12)
+	expect(projection.unproject(deg(359), 0, undefined, { longitudeWrapMode: 'tau' })?.x).toBeCloseTo(deg(359), 12)
+	expect(projection.unproject(PI * 3, 0, undefined, { longitudeWrapMode: 'none' })?.x).toBeCloseTo(PI * 3, 12)
+})
+
+test('latitude options clamp to the configured maximum latitude', () => {
+	const maxLatitude = deg(60)
+	const clamped = new Mercator({ clampLatitude: true, maxLatitude }).project(0, deg(70))
+
+	expect(new Mercator({ maxLatitude }).project(0, deg(70))).toBeUndefined()
+	expect(clamped).toBeDefined()
+
+	if (clamped === undefined) return
+
+	expect(clamped.y).toBeCloseTo(Math.asinh(Math.tan(maxLatitude)), 12)
+})
+
+test('ellipsoidal projection options select the eccentricity model and inverse tolerance', () => {
+	const latitude = deg(45)
+	const eccentricity = 0.08181919084262149
+	const flattening = 1 - Math.sqrt(1 - eccentricity * eccentricity)
+	const eccentricProjected = new EllipsoidalMercator({ eccentricity }).project(0, latitude)
+	const flatteningProjected = new EllipsoidalMercator({ flattening }).project(0, latitude)
+	const sphericalProjected = new EllipsoidalMercator({ eccentricity, sphericalOnly: true }).project(0, latitude)
+	const mercatorProjected = new Mercator().project(0, latitude)
+
+	expect(eccentricProjected).toBeDefined()
+	expect(flatteningProjected).toBeDefined()
+	expect(sphericalProjected).toBeDefined()
+	expect(mercatorProjected).toBeDefined()
+
+	if (eccentricProjected === undefined || flatteningProjected === undefined || sphericalProjected === undefined || mercatorProjected === undefined) return
+
+	expect(flatteningProjected.y).toBeCloseTo(eccentricProjected.y, 12)
+	expect(sphericalProjected.y).toBeCloseTo(mercatorProjected.y, 12)
+	expect(new EllipsoidalMercator({ eccentricity }).unproject(eccentricProjected.x, eccentricProjected.y, undefined, { maxIterations: 0 })).toBeUndefined()
+
+	const unprojected = new EllipsoidalMercator({ eccentricity }).unproject(eccentricProjected.x, eccentricProjected.y, undefined, { epsilon: 1e-14, maxIterations: 12 })
+	expect(unprojected).toBeDefined()
+
+	if (unprojected === undefined) return
+
+	expect(unprojected.y).toBeCloseTo(latitude, 12)
 })
 
 test('batch projection reuses the provided output buffer', () => {
 	const out: Point[] = []
-	const projected = projectLonLatBatch(
-		CylindricalEquidistant.plateCarree,
+	const projected = projectMany(
+		new PlateCarree(),
 		[
 			{ x: 0, y: 0 },
 			{ x: deg(10), y: deg(5) },
@@ -282,9 +302,9 @@ test('batch projection reuses the provided output buffer', () => {
 })
 
 test('anti-meridian polylines are split before projection', () => {
-	const projection = CylindricalEquidistant.plateCarree
+	const projection = new PlateCarree()
 
-	const lines = projection.splitPolyline([
+	const lines = projectPolyline(projection, [
 		{ x: deg(179), y: 0 },
 		{ x: deg(-179), y: 0 },
 	])

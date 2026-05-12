@@ -1,10 +1,10 @@
 import { type Angle, normalizePI } from './angle'
 import { AU_KM, DAYSEC } from './constants'
-import { clamp } from './math'
-import { type BesselianElements, type BesselianState, evaluateBesselian, normalizeBesselianTime } from './sun.eclipse.besselian'
-import type { SolarEclipseType } from './sun'
-import { type Time, Timescale, timeShift, timeSubtract } from './time'
 import { angularDistance } from './coordinate'
+import { clamp } from './math'
+import type { SolarEclipseType } from './sun'
+import { type BesselianElements, type BesselianState, evaluateBesselian, normalizeBesselianTime } from './sun.eclipse.besselian'
+import { type Time, Timescale, timeShift, timeSubtract } from './time'
 import { validateTime, validatePositiveFinite, validateFinite } from './validation'
 
 // Geographic solar-eclipse central-line generation from Besselian elements.

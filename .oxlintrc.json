@@ -16,7 +16,7 @@
 		"typeCheck": true
 	},
 	"rules": {
-		// Correctness (239)
+		// Correctness (240)
 		"eslint/constructor-super": "error",
 		"eslint/for-direction": "error",
 		"eslint/getter-return": "off",
@@ -365,7 +365,7 @@
 		"unicorn/prefer-top-level-await": "error",
 		"unicorn/prefer-type-error": "error",
 		"unicorn/require-number-to-fixed-digits-argument": "error",
-		// Style (253)
+		// Style (254)
 		"eslint/arrow-body-style": "error",
 		"eslint/capitalized-comments": "off",
 		"eslint/curly": "off",
@@ -408,6 +408,7 @@
 		"eslint/prefer-object-has-own": "off",
 		"eslint/prefer-object-spread": "off",
 		"eslint/prefer-promise-reject-errors": "error",
+		"eslint/prefer-regex-literals": "off",
 		"eslint/prefer-rest-params": "off",
 		"eslint/prefer-spread": "off",
 		"eslint/prefer-template": "off",

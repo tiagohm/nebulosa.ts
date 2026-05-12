@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { nearestSolarEclipse } from '../src/sun'
 import { generateBesselianElements, type BesselianElements } from '../src/sun.eclipse.besselian'
-import type { ContourPoint } from '../src/sun.eclipse.pcurves'
 import { generateSolarEclipseMap, queryLocalCircumstances, validateSolarEclipseMap, type SolarEclipseGenerationOptions } from '../src/sun.eclipse.map'
+import type { ContourPoint } from '../src/sun.eclipse.pcurves'
 import { timeYMD } from '../src/time'
 
 const TOTAL_2024 = generateBesselianElements({ maximumApprox: nearestSolarEclipse(timeYMD(2024, 3, 1), true).maximalTime })

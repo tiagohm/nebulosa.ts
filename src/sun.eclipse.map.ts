@@ -1,16 +1,16 @@
 import type { Angle } from './angle'
 import { AU_KM, DAYSEC, DEG2RAD } from './constants'
 import { angularDistance } from './coordinate'
+import type { GeographicCoordinate } from './location'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from './sun'
 import { generateBesselianElements, type BesselianElements, type SolarEclipseBesselianContext } from './sun.eclipse.besselian'
 import { computeLocalCircumstances, type EclipseContact, type LocalEclipseCircumstances, type LocalEclipseContactType, type LocalEclipseOptions } from './sun.eclipse.circumstances'
-import { generateGlobalPartialContactCurves, generatePenumbraContourAt, type ContourPoint, type GlobalContactCurve, type GlobalEclipseContour } from './sun.eclipse.pcurves'
 import { buildEclipseLocalGrid, generateEclipseIsoCurvesFromGrid, type EclipseContourLevel, type EclipseGridSample, type EclipseIsoCurve, type EclipseIsoCurveSegment, type EclipseIsoCurveType, type GeoPoint } from './sun.eclipse.isocurves'
 import { generatePathLimits, type EclipsePathLimitPoint, type EclipsePathLimitsResult, type EclipsePathPolygon } from './sun.eclipse.limits'
 import type { CentralLinePoint, CentralLineResult } from './sun.eclipse.lines'
+import { generateGlobalPartialContactCurves, generatePenumbraContourAt, type ContourPoint, type GlobalContactCurve, type GlobalEclipseContour } from './sun.eclipse.pcurves'
 import { type Time, Timescale, timeShift, timeSubtract } from './time'
 import { validateFinite, validateInRange, validateNonNegativeInteger, validatePositiveFinite, validateTime } from './validation'
-import type { GeographicCoordinate } from './location'
 
 // High-level solar-eclipse map data aggregator.
 //

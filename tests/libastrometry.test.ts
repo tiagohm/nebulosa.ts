@@ -1,13 +1,13 @@
+import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { expect, test } from 'bun:test'
 import { deg, toArcsec, toDeg, toHour } from '../src/angle'
-import { astrometryNetIndexFiles, libAstrometryNetPlateSolve } from '../src/libastrometry'
-import { downloadPerTag } from './download'
-import { readImageFromJpeg } from '../src/image'
-import { detectStars } from '../src/star.detector'
 import { DEC_TAN_SIP, RA_TAN_SIP } from '../src/fits.wcs'
+import { readImageFromJpeg } from '../src/image'
+import { astrometryNetIndexFiles, libAstrometryNetPlateSolve } from '../src/libastrometry'
+import { detectStars } from '../src/star.detector'
+import { downloadPerTag } from './download'
 
 await downloadPerTag('libastrometry')
 

@@ -1,5 +1,4 @@
 import { expect, test } from 'bun:test'
-
 import { deg, hour, normalizeAngle } from '../src/angle'
 import { PIOVERTWO, TAU } from '../src/constants'
 import { findHnsky290Areas, findHnsky290Region, findHnsky290Stars, type Hnsky290RegionQuery, type HnskyRecordSize, hnsky290AreaFile, openHnskyCatalog, readHnsky290Area, readHnsky290Header } from '../src/hnsky'

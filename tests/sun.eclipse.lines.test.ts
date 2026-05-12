@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { WGS84_FLATTENING, WGS84_RADIUS } from '../src/constants'
+import { angularDistanceHaversine } from '../src/coordinate'
 import { nearestSolarEclipse, type SolarEclipseType } from '../src/sun'
 import { type BesselianElements, generateBesselianElements } from '../src/sun.eclipse.besselian'
 import { generateCentralLine, type CentralLinePoint, type CentralLineResult } from '../src/sun.eclipse.lines'
 import { Timescale, timeShift, timeYMD } from '../src/time'
-import { angularDistanceHaversine } from '../src/coordinate'
 
 const total2024 = generateBesselianElements({ maximumApprox: nearestSolarEclipse(timeYMD(2024, 3, 1), true).maximalTime })
 const annular2024 = generateBesselianElements({ maximumApprox: nearestSolarEclipse(timeYMD(2024, 4, 9), true).maximalTime })

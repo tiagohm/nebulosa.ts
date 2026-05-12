@@ -1052,18 +1052,9 @@ toAtm(1) // Convert millibar to atm
 ### Projection ![](bun.webp) ![](browser.webp)
 
 ```ts
-projectLonLat(Gnomonic.default, longitude, latitude, { centralMeridian, latitudeOfOrigin }) // Class-based gnomonic projection
-unprojectLonLat(Gnomonic.default, x, y, { centralMeridian, latitudeOfOrigin }) // Inverse class-based gnomonic projection
-gnomonicProject(longitude, latitude, centerLongitude, centerLatitude) // Tangent-plane projection
-gnomonicUnproject(x, y, centerLongitude, centerLatitude) // Inverse gnomonic projection
-stereographicProject(longitude, latitude, centerLongitude, centerLatitude) // Stereographic projection
-stereographicUnproject(x, y, centerLongitude, centerLatitude) // Inverse stereographic projection
-orthographicProject(longitude, latitude, centerLongitude, centerLatitude) // Orthographic projection
-orthographicUnproject(x, y, centerLongitude, centerLatitude) // Inverse orthographic projection
-lambertAzimuthalEqualAreaProject(longitude, latitude, centerLongitude, centerLatitude) // Lambert azimuthal equal-area projection
-lambertAzimuthalEqualAreaUnproject(x, y, centerLongitude, centerLatitude) // Inverse Lambert azimuthal equal-area projection
-azimuthalEquidistantProject(longitude, latitude, centerLongitude, centerLatitude) // Azimuthal equidistant projection
-azimuthalEquidistantUnproject(x, y, centerLongitude, centerLatitude) // Inverse azimuthal equidistant projection
+const projection = new Mercator({ centralMeridian, latitudeOfOrigin })
+projection.project(longitude, latitude, { centralMeridian, latitudeOfOrigin }) // Project with custom options
+projection.unproject(x, y, { centralMeridian, latitudeOfOrigin }) // Unproject with custom options
 ```
 
 ### Random ![](bun.webp) ![](browser.webp)
@@ -1075,18 +1066,18 @@ const random = xorshift32(seed)
 const random = splitmix32(seed)
 const random = mt19937(seed)
 
-uniform(random, min, max)
-bernoulli(random, p)
-weibull(random, lambda, k)
-exponential(random, lambda)
-geometric(random, p)
-pareto(random, alpha)
-normal(random, mu, sigma)
-gaussian(random, sigma)
-triangular(random, min, max, mode)
-rayleigh(random, sigma)
-logNormal(random, mu, sigma)
-cauchy(random, x0, gamma)
+random = uniform(random, min, max)
+random = bernoulli(random, p)
+random = weibull(random, lambda, k)
+random = exponential(random, lambda)
+random = geometric(random, p)
+random = pareto(random, alpha)
+random = normal(random, mu, sigma)
+random = gaussian(random, sigma)
+random = triangular(random, min, max, mode)
+random = rayleigh(random, sigma)
+random = logNormal(random, mu, sigma)
+random = cauchy(random, x0, gamma)
 shuffle(items, random)
 ```
 

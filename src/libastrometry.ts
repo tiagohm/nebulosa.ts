@@ -1,7 +1,7 @@
+import { dlopen, type Pointer, read } from 'bun:ffi'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { basename, join } from 'path'
-import { dlopen, type Pointer, read } from 'bun:ffi'
 import path from '../native/libastrometry.shared' with { type: 'file' }
 import { type Angle, normalizeAngle, toArcsec, toDeg } from './angle'
 import { readFits } from './fits'

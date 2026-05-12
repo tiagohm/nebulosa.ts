@@ -1,14 +1,14 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
+import { parallacticAngle, refractedAltitude } from './astrometry'
 import { AU_KM, DAYSEC } from './constants'
 import { equatorialToHorizontal } from './coordinate'
+import type { GeographicCoordinate } from './location'
 import { clamp } from './math'
-import { parallacticAngle, refractedAltitude } from './astrometry'
-import { type BesselianElements, type BesselianState, evaluateBesselian, normalizeBesselianTime } from './sun.eclipse.besselian'
 import type { SolarEclipseType } from './sun'
+import { type BesselianElements, type BesselianState, evaluateBesselian, normalizeBesselianTime } from './sun.eclipse.besselian'
 import { type Time, Timescale, timeShift, timeSubtract, toJulianDay } from './time'
 import { NumberComparator } from './util'
 import { validatePositiveFinite, validateFinite, validateTime, validateLocation } from './validation'
-import type { GeographicCoordinate } from './location'
 
 // Local solar-eclipse circumstances derived from Besselian elements.
 //

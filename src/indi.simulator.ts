@@ -15,7 +15,7 @@ import { bufferSink } from './io'
 import { localSiderealTime } from './location'
 import { clamp } from './math'
 import { polarAlignmentError } from './polaralignment'
-import { gnomonicProject } from './projection'
+import { Gnomonic } from './projection'
 import { mulberry32 } from './random'
 import type { PlotStarOptions } from './star.generator'
 import { formatTemporal, TIMEZONE } from './temporal'
@@ -2538,9 +2538,10 @@ export class CameraSimulator extends DeviceSimulator {
 		const halfWidth = sensorWidth * 0.5
 		const halfHeight = sensorHeight * 0.5
 		const point: Point = { x: 0, y: 0 }
+		const projection = new Gnomonic(centerRightAscension, centerDeclination)
 
 		return stars.map((s) => {
-			if (gnomonicProject(s.rightAscension, s.declination, centerRightAscension, centerDeclination, point) === undefined) {
+			if (projection.project(s.rightAscension, s.declination, point) === undefined) {
 				return undefined
 			}
 

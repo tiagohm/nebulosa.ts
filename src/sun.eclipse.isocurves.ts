@@ -1,9 +1,9 @@
 import { type Angle, normalizePI } from './angle'
 import { DEG2RAD, PI } from './constants'
 import { angularDistance } from './coordinate'
-import { computeLocalCircumstances } from './sun.eclipse.circumstances'
-import type { BesselianElements } from './sun.eclipse.besselian'
 import type { SolarEclipseType } from './sun'
+import type { BesselianElements } from './sun.eclipse.besselian'
+import { computeLocalCircumstances } from './sun.eclipse.circumstances'
 import type { Time } from './time'
 import { validateFinite, validatePositiveFinite, validatePositiveInteger, validateTime } from './validation'
 

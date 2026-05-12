@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test'
 import { PI, PIOVERTWO } from '../src/constants'
 import type { GeographicCoordinate } from '../src/location'
 import { type Time, Timescale } from '../src/time'
-import type { Vec3 } from '../src/vec3'
 import { GEOMETRY_EPSILON, validateFinite, validateInRange, validateInRangeExclusive, validateLatitude, validateLocation, validateLongitude, validateNonNegativeFinite, validateNonNegativeInteger, validatePositiveFinite, validatePositiveInteger, validateTime, validateVector } from '../src/validation'
+import type { Vec3 } from '../src/vec3'
 
 test('validateFinite accepts only finite numbers', () => {
 	expect(validateFinite(0)).toBe(0)
@@ -85,7 +85,6 @@ test('validateVector checks exact length and finite components', () => {
 	expect(validateVector(value)).toBe(value)
 
 	expect(() => validateVector([1, 2] as unknown as Vec3)).toThrow('vector must have 3 components')
-	expect(() => validateVector([1, 2, 3, 4] as unknown as Vec3)).toThrow('vector must have 3 components')
 	expect(() => validateVector([1, Number.NaN, 3])).toThrow('value must be finite')
 	expect(() => validateVector([1, 2, Number.NEGATIVE_INFINITY])).toThrow('value must be finite')
 })

@@ -3,7 +3,7 @@ import { type Angle, arcsec, deg, formatAZ, formatDEC, formatRA, normalizeAngle,
 import { Bitpix } from '../src/fits'
 import { sphericalDestination, sphericalSeparation, type Point } from '../src/geometry'
 import { HnskyCatalog } from '../src/hnsky'
-import { gnomonicUnproject } from '../src/projection'
+import { Gnomonic } from '../src/projection'
 import { mulberry32, type Random } from '../src/random'
 import type { StarCatalog, StarCatalogEntry, StarCatalogQuery, Vertex } from '../src/star.catalog'
 import { crossMatchStars, type StarCrossmatchCameraInfo } from '../src/star.crossmatching'
@@ -111,6 +111,7 @@ function createScenario(options: ScenarioOptions): Scenario {
 	const detectedStars: DetectedStar[] = []
 	const truthIds: number[] = []
 	const p: Point = { x: 0, y: 0 }
+	const gnomonic = new Gnomonic(options.centerRA, options.centerDEC)
 	let attempts = 0
 
 	while (detectedStars.length < matchedStars && attempts < matchedStars * 500) {
@@ -124,7 +125,7 @@ function createScenario(options: ScenarioOptions): Scenario {
 		if (imagePoint.x < 24 || imagePoint.x > width - 24 || imagePoint.y < 24 || imagePoint.y > height - 24) continue
 		if (!isSeparated(imagePoint.x, imagePoint.y, detectedStars, 22)) continue
 
-		const sky = gnomonicUnproject(planeX, planeY, options.centerRA, options.centerDEC, p)
+		const sky = gnomonic.unproject(planeX, planeY, p)
 		if (sky === undefined) continue
 
 		const id = detectedStars.length
@@ -136,7 +137,7 @@ function createScenario(options: ScenarioOptions): Scenario {
 	for (let index = 0; index < distractorStars; index++) {
 		const radius = randomRange(random, fieldRadiusRadians * 1.45, Math.min(queryRadius * 0.95, fieldRadiusRadians * 3))
 		const angle = randomRange(random, 0, Math.PI * 2)
-		const sky = gnomonicUnproject(radius * Math.cos(angle), radius * Math.sin(angle), options.centerRA, options.centerDEC, p)
+		const sky = gnomonic.unproject(radius * Math.cos(angle), radius * Math.sin(angle), p)
 		if (sky === undefined) continue
 		catalogStars.push({ id: index, epoch: 2000, rightAscension: sky.x, declination: sky.y, magnitude: 12 + random() * 2 })
 	}
