@@ -322,6 +322,7 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	#utcTime = Date.now()
 	#utcOffset = TIMEZONE / 60
+	#notifySetCoordinateTime = 0
 
 	constructor(
 		name: string,
@@ -806,7 +807,11 @@ export class MountSimulator extends DeviceSimulator {
 		this.#equatorialCoordinate.elements.DEC.value = toDeg(clampDeclination(declination))
 		const pierSideChanged = this.#updatePierSide()
 
-		if (notify) this.notify(this.#equatorialCoordinate)
+		if (notify && this.#lastTick - this.#notifySetCoordinateTime >= 1000) {
+			this.#notifySetCoordinateTime = this.#lastTick
+			this.notify(this.#equatorialCoordinate)
+		}
+
 		if (notify && pierSideChanged) this.notify(this.#pierSide)
 	}
 
