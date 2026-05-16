@@ -126,13 +126,13 @@ const handler: AlpacaClientHandler = {
 
 const deviceProvider: DeviceProvider<Device> = {
 	get: (client: Client | string | undefined, name: string, type?: DeviceType) => {
-		if (type === 'CAMERA') return cameraManager.get(client, name)
-		else if (type === 'MOUNT') return mountManager.get(client, name)
-		else if (type === 'FOCUSER') return focuserManager.get(client, name)
-		else if (type === 'WHEEL') return wheelManager.get(client, name)
-		else if (type === 'FLAT_PANEL') return flatPanelManager.get(client, name)
-		else if (type === 'COVER') return coverManager.get(client, name)
-		else if (type === 'ROTATOR') return rotatorManager.get(client, name)
+		if (type === 'camera') return cameraManager.get(client, name)
+		else if (type === 'mount') return mountManager.get(client, name)
+		else if (type === 'focuser') return focuserManager.get(client, name)
+		else if (type === 'wheel') return wheelManager.get(client, name)
+		else if (type === 'flatPanel') return flatPanelManager.get(client, name)
+		else if (type === 'cover') return coverManager.get(client, name)
+		else if (type === 'rotator') return rotatorManager.get(client, name)
 		return undefined
 	},
 }

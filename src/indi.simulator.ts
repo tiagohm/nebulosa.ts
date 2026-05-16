@@ -265,7 +265,7 @@ export abstract class DeviceSimulator implements Disposable {
 }
 
 export class MountSimulator extends DeviceSimulator {
-	readonly type = 'MOUNT'
+	readonly type = 'mount'
 	readonly #trackModes = ['SIDEREAL', 'SOLAR', 'LUNAR', 'KING'] as const
 
 	readonly #onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
@@ -322,7 +322,9 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	#utcTime = Date.now()
 	#utcOffset = TIMEZONE / 60
-	#notifySetCoordinateTime = 0
+	#notifyCoordinateLastTime = 0
+
+	minimumNotifyCoordinateInterval = 1000
 
 	constructor(
 		name: string,
@@ -807,8 +809,8 @@ export class MountSimulator extends DeviceSimulator {
 		this.#equatorialCoordinate.elements.DEC.value = toDeg(clampDeclination(declination))
 		const pierSideChanged = this.#updatePierSide()
 
-		if (notify && this.#lastTick - this.#notifySetCoordinateTime >= 1000) {
-			this.#notifySetCoordinateTime = this.#lastTick
+		if (notify && this.#lastTick - this.#notifyCoordinateLastTime >= this.minimumNotifyCoordinateInterval) {
+			this.#notifyCoordinateLastTime = this.#lastTick
 			this.notify(this.#equatorialCoordinate)
 		}
 
@@ -970,7 +972,7 @@ export class MountSimulator extends DeviceSimulator {
 }
 
 export class FocuserSimulator extends DeviceSimulator {
-	readonly type = 'FOCUSER'
+	readonly type = 'focuser'
 
 	readonly #position = makeNumberVector('', 'ABS_FOCUS_POSITION', 'Position', MAIN_CONTROL, 'rw', ['FOCUS_ABSOLUTE_POSITION', 'Position', FOCUSER_INITIAL_POSITION, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
 	readonly #relativePosition = makeNumberVector('', 'REL_FOCUS_POSITION', 'Relative', MAIN_CONTROL, 'rw', ['FOCUS_RELATIVE_POSITION', 'Steps', 0, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
@@ -1237,7 +1239,7 @@ export class FocuserSimulator extends DeviceSimulator {
 }
 
 export class FilterWheelSimulator extends DeviceSimulator {
-	readonly type = 'WHEEL'
+	readonly type = 'wheel'
 
 	readonly #position = makeNumberVector('', 'FILTER_SLOT', 'Slot', MAIN_CONTROL, 'rw', ['FILTER_SLOT_VALUE', 'Slot', 1, 1, FILTER_WHEEL_SLOT_NAMES.length, 1, '%.0f'])
 	readonly #names = makeTextVector('', 'FILTER_NAME', 'Filter', MAIN_CONTROL, 'rw', ...FILTER_WHEEL_SLOT_NAMES.map((e, i) => [`FILTER_SLOT_NAME_${i + 1}`, `Slot ${i + 1}`, e] as never))
@@ -1334,7 +1336,7 @@ export class FilterWheelSimulator extends DeviceSimulator {
 }
 
 export class RotatorSimulator extends DeviceSimulator {
-	readonly type = 'ROTATOR'
+	readonly type = 'rotator'
 
 	readonly #angle = makeNumberVector('', 'ABS_ROTATOR_ANGLE', 'Goto', MAIN_CONTROL, 'rw', ['ANGLE', 'Angle', 0, 0, 360, 0.01, '%.2f'])
 	readonly #sync = makeNumberVector('', 'SYNC_ROTATOR_ANGLE', 'Sync', MAIN_CONTROL, 'rw', ['ANGLE', 'Angle', 0, 0, 360, 0.01, '%.2f'])
@@ -1534,7 +1536,7 @@ export class RotatorSimulator extends DeviceSimulator {
 }
 
 export class FlatPanelSimulator extends DeviceSimulator {
-	readonly type = 'FLAT_PANEL'
+	readonly type = 'flatPanel'
 
 	readonly #light = makeSwitchVector('', 'FLAT_LIGHT_CONTROL', 'Light', MAIN_CONTROL, 'OneOfMany', 'rw', ['FLAT_LIGHT_ON', 'On', false], ['FLAT_LIGHT_OFF', 'Off', true])
 	readonly #intensity = makeNumberVector('', 'FLAT_LIGHT_INTENSITY', 'Brightness', MAIN_CONTROL, 'rw', ['FLAT_LIGHT_INTENSITY_VALUE', 'Brightness', 0, 0, PANEL_MAX_INTENSITY, 1, '%.0f'])
@@ -1584,7 +1586,7 @@ export class FlatPanelSimulator extends DeviceSimulator {
 }
 
 export class CoverSimulator extends DeviceSimulator {
-	readonly type = 'COVER'
+	readonly type = 'cover'
 
 	readonly #park = makeSwitchVector('', 'CAP_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
 	readonly #abort = makeSwitchVector('', 'CAP_ABORT', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
@@ -1692,7 +1694,7 @@ export class CoverSimulator extends DeviceSimulator {
 export { CoverSimulator as DustCapSimulator, FilterWheelSimulator as WheelSimulator, FlatPanelSimulator as LightBoxSimulator }
 
 export class CameraSimulator extends DeviceSimulator {
-	readonly type = 'CAMERA'
+	readonly type = 'camera'
 
 	// oxfmt-ignore
 	readonly #info = makeNumberVector('', 'CCD_INFO', 'CCD Info', GENERAL_INFO, 'ro', ['CCD_MAX_X', 'Max X', CAMERA_SENSOR_WIDTH, 0, 16000, 1, '%.0f'],  ['CCD_MAX_Y', 'Max Y', CAMERA_SENSOR_HEIGHT, 0, 16000, 1, '%.0f'],  ['CCD_PIXEL_SIZE_X', 'Pixel size X', CAMERA_PIXEL_SIZE, 0, 40, 0.01, '%.2f'], ['CCD_PIXEL_SIZE_Y', 'Pixel size Y', CAMERA_PIXEL_SIZE, 0, 40, 0.01, '%.2f'], ['CCD_BITSPERPIXEL', 'Bits per pixel', 16, 8, 64, 1, '%.0f'])

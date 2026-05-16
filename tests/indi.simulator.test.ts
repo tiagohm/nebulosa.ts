@@ -112,6 +112,8 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		const client = new ClientSimulator('mount', handler)
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
 
+		mountSimulator.minimumNotifyCoordinateInterval = 100
+
 		const mount = mountManager.get(client, mountSimulator.name)!
 		mountManager.connect(mount)
 		await waitUntil(() => mount.connected)
@@ -226,6 +228,8 @@ describe.skipIf(SKIP)('mount simulator', () => {
 
 		const client = new ClientSimulator('mount', handler)
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
+
+		mountSimulator.minimumNotifyCoordinateInterval = 100
 
 		const mount = mountManager.get(client, mountSimulator.name)!
 		mountManager.connect(mount)
