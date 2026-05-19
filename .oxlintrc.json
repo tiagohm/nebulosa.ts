@@ -16,7 +16,7 @@
 		"typeCheck": true
 	},
 	"rules": {
-		// Correctness (240)
+		// Correctness (243)
 		"eslint/constructor-super": "error",
 		"eslint/for-direction": "error",
 		"eslint/getter-return": "off",
@@ -132,7 +132,7 @@
 		"unicorn/no-useless-spread": "error",
 		"unicorn/prefer-set-size": "error",
 		"unicorn/prefer-string-starts-ends-with": "off",
-		// Perf (13)
+		// Perf (14)
 		"eslint/no-await-in-loop": "off",
 		"eslint/no-useless-call": "error",
 		"oxc/no-accumulating-spread": "error",
@@ -140,7 +140,7 @@
 		"unicorn/prefer-array-find": "error",
 		"unicorn/prefer-array-flat-map": "error",
 		"unicorn/prefer-set-has": "error",
-		// Restriction (94)
+		// Restriction (95)
 		"eslint/class-methods-use-this": "off",
 		"eslint/complexity": "off",
 		"eslint/default-case": "off",
@@ -151,6 +151,7 @@
 		"eslint/no-empty": "off",
 		"eslint/no-empty-function": "off",
 		"eslint/no-eq-null": "off",
+		"eslint/no-implicit-globals": "off",
 		"eslint/no-param-reassign": "off",
 		"eslint/no-plusplus": "off",
 		"eslint/no-proto": "off",
@@ -212,10 +213,11 @@
 		"unicorn/prefer-module": "off",
 		"unicorn/prefer-node-protocol": "off",
 		"unicorn/prefer-number-properties": "error",
-		// Suspicious (55)
+		// Suspicious (57)
 		"eslint/block-scoped-var": "error",
 		"eslint/no-extend-native": "error",
 		"eslint/no-extra-bind": "error",
+		"eslint/no-implied-eval": "error",
 		"eslint/no-new": "error",
 		"eslint/no-shadow": "off",
 		"eslint/no-underscore-dangle": "off",
@@ -258,7 +260,7 @@
 		"unicorn/prefer-add-event-listener": "error",
 		"unicorn/require-module-specifiers": "error",
 		"unicorn/require-post-message-target-origin": "error",
-		// Pedantic (121)
+		// Pedantic (123)
 		"eslint/accessor-pairs": "error",
 		"eslint/array-callback-return": "error",
 		"eslint/eqeqeq": "error",
@@ -365,7 +367,7 @@
 		"unicorn/prefer-top-level-await": "error",
 		"unicorn/prefer-type-error": "error",
 		"unicorn/require-number-to-fixed-digits-argument": "error",
-		// Style (254)
+		// Style (259)
 		"eslint/arrow-body-style": "error",
 		"eslint/capitalized-comments": "off",
 		"eslint/curly": "off",
@@ -377,6 +379,7 @@
 		"eslint/grouped-accessor-pairs": "off",
 		"eslint/guard-for-in": "off",
 		"eslint/id-length": "off",
+		"eslint/id-match": "off",
 		"eslint/init-declarations": "off",
 		"eslint/logical-assignment-operators": "error",
 		"eslint/max-params": "off",
@@ -401,6 +404,7 @@
 		"eslint/no-useless-computed-key": "off",
 		"eslint/object-shorthand": "off",
 		"eslint/operator-assignment": "off",
+		"eslint/prefer-arrow-callback": "error",
 		"eslint/prefer-const": "error",
 		"eslint/prefer-destructuring": "off",
 		"eslint/prefer-exponentiation-operator": "off",
@@ -420,6 +424,7 @@
 		"import/exports-last": "off",
 		"import/first": "off",
 		"import/group-exports": "off",
+		"import/newline-after-import": "off",
 		"import/no-anonymous-default-export": "off",
 		"import/no-duplicates": "off",
 		"import/no-mutable-exports": "off",

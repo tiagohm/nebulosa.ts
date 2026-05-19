@@ -1,11 +1,13 @@
 import { type Angle, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from './astrometry'
-import { PI } from './constants'
+import { PI, PIOVERTWO } from './constants'
 import type { HorizontalCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
 import type { GeographicPosition } from './location'
 import { matMulVec, matTransposeMulVec } from './mat3'
 import { gcrsToItrsRotationMatrix, precessionNutationMatrix, type Time } from './time'
+import { angularSizeOfPixel } from './util'
+import { validateInRange, validateLatitude, validatePositiveFinite } from './validation'
 import { type Vec3, vecCross, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues } from './vec3'
 
 // Three-Point Polar Alignment Algorithm (ICRF-based)
@@ -185,4 +187,146 @@ export class ThreePointPolarAlignment {
 		this.#referencePoint = false
 		this.#currentError = false
 	}
+}
+
+export const SIDEREAL_ARCSEC_PER_SECOND = 15.041
+export const DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN = 0.004375
+export const MIN_RA_COS_DECLINATION = 1e-3
+export const MIN_DRIFT_RATE_ARCSEC_PER_SECOND = 1e-9
+
+export type DarvExposureMode = 'azimuth' | 'altitude'
+export type DarvExposurePresetType = 'coarse' | 'medium' | 'fine'
+
+// DARV exposure preset values used to estimate the visibility threshold.
+export interface DarvExposurePreset {
+	// Desired RA trail length, in pixels.
+	readonly targetTrail: number
+	// Minimum visually detectable separation between the DARV segments, in pixels.
+	readonly detectableSeparation: number
+	// Smallest polar alignment error the user wants to make visible, in arcminutes.
+	readonly targetPolarError: number
+	// RA guide speed as a multiple of sidereal rate.
+	readonly guideRateSidereal: number
+}
+
+// Coarse DARV preset for making large polar errors visible quickly.
+export const COARSE_DARV_EXPOSURE_PRESET: DarvExposurePreset = {
+	targetTrail: 150,
+	detectableSeparation: 3,
+	targetPolarError: 15,
+	guideRateSidereal: 1,
+}
+
+// Medium DARV preset for typical visual polar-alignment refinement.
+export const MEDIUM_DARV_EXPOSURE_PRESET: DarvExposurePreset = {
+	targetTrail: 200,
+	detectableSeparation: 3,
+	targetPolarError: 5,
+	guideRateSidereal: 1,
+}
+
+// Fine DARV preset for making smaller polar errors visible with a slower RA guide rate.
+export const FINE_DARV_EXPOSURE_PRESET: DarvExposurePreset = {
+	targetTrail: 250,
+	detectableSeparation: 2,
+	targetPolarError: 2,
+	guideRateSidereal: 0.5,
+}
+
+export const DARV_EXPOSURE_PRESETS = {
+	coarse: COARSE_DARV_EXPOSURE_PRESET,
+	medium: MEDIUM_DARV_EXPOSURE_PRESET,
+	fine: FINE_DARV_EXPOSURE_PRESET,
+} as const satisfies Record<DarvExposurePresetType, DarvExposurePreset>
+
+// Input for estimating a recommended DARV exposure time, not the actual polar error.
+export interface DarvExposureInput {
+	// Telescope focal length, in millimeters.
+	readonly focalLength: number
+	// Camera pixel size, in the unit expected by angularSizeOfPixel.
+	readonly pixelSize: number
+	// Star declination, in radians. Stars very close to the celestial pole are not suitable DARV targets.
+	readonly declination: Angle
+	// Observer latitude, in radians.
+	readonly latitude: Angle
+	// Polar-alignment adjustment mode whose geometry controls the expected DEC drift.
+	readonly mode: DarvExposureMode
+	// Built-in preset name or custom values. targetPolarError is the smallest polar error to make visible.
+	readonly preset: DarvExposurePresetType | DarvExposurePreset
+}
+
+// Intermediate and final exposure estimates for a DARV capture.
+export interface DarvExposureEstimate {
+	// Image scale, in arcseconds per pixel.
+	readonly imageScale: number
+	// Usable RA trail speed magnitude, in arcseconds per second.
+	readonly raVelocity: number
+	// Alignment-mode geometry factor applied to the DEC drift estimate.
+	readonly geometryFactor: number
+	// Estimated DEC drift from the target polar-error threshold, in arcseconds per second.
+	readonly driftDec: number
+	// Time needed for the desired RA trail length, in seconds.
+	readonly raTrailTime: number
+	// Time needed for the minimum visible DEC separation, in seconds.
+	readonly driftDetectionTime: number
+	// Recommended time for one DARV leg, in seconds.
+	readonly recommendedLegTime: number
+	// Total recommended exposure for the outbound plus return legs, in seconds.
+	readonly recommendedExposure: number
+}
+
+function resolveDarvExposurePreset(preset: DarvExposureInput['preset']): DarvExposurePreset {
+	if (typeof preset === 'string') {
+		const resolved = DARV_EXPOSURE_PRESETS[preset]
+		if (resolved === undefined) throw new TypeError('DARV exposure preset must be coarse, medium, or fine')
+		return resolved
+	}
+
+	validatePositiveFinite(preset.targetTrail)
+	validatePositiveFinite(preset.detectableSeparation)
+	validatePositiveFinite(preset.targetPolarError)
+	validatePositiveFinite(preset.guideRateSidereal)
+
+	return preset
+}
+
+function computeDarvGeometryFactor(mode: DarvExposureMode, latitude: Angle) {
+	if (mode === 'azimuth') return Math.abs(Math.cos(latitude))
+	if (mode === 'altitude') return 1
+	throw new TypeError('DARV exposure mode must be azimuth or altitude')
+}
+
+function computeDarvRaVelocity(declination: Angle, guideRateSidereal: number) {
+	const cosDeclination = Math.abs(Math.cos(declination))
+
+	if (cosDeclination <= MIN_RA_COS_DECLINATION) throw new RangeError('stars too close to the celestial pole are not recommended for DARV because RA motion becomes too small')
+
+	// DARV reverses RA between legs, so expose the speed magnitude instead of a signed direction.
+	return SIDEREAL_ARCSEC_PER_SECOND * guideRateSidereal * cosDeclination
+}
+
+function computeDarvDriftDec(targetPolarErrorArcmin: number, geometryFactor: number) {
+	const driftDec = DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN * targetPolarErrorArcmin * geometryFactor
+	if (driftDec <= MIN_DRIFT_RATE_ARCSEC_PER_SECOND) throw new RangeError('DARV DEC drift is too small to estimate a visible separation for this alignment geometry')
+	return driftDec
+}
+
+// Estimates the recommended exposure time for DARV, not the actual polar error.
+// recommendedLegTime is one outbound or return leg; recommendedExposure is both legs.
+export function estimateDarvExposure(input: DarvExposureInput): DarvExposureEstimate {
+	validatePositiveFinite(input.focalLength)
+	validatePositiveFinite(input.pixelSize)
+	validateInRange(input.declination, -PIOVERTWO, PIOVERTWO)
+	validateLatitude(input.latitude)
+	const preset = resolveDarvExposurePreset(input.preset)
+	const geometryFactor = computeDarvGeometryFactor(input.mode, input.latitude)
+	const imageScale = angularSizeOfPixel(input.focalLength, input.pixelSize)
+	const raVelocity = computeDarvRaVelocity(input.declination, preset.guideRateSidereal)
+	const driftDec = computeDarvDriftDec(preset.targetPolarError, geometryFactor)
+	const raTrailTime = (preset.targetTrail * imageScale) / raVelocity
+	const driftDetectionTime = (preset.detectableSeparation * imageScale) / (2 * driftDec)
+	const recommendedLegTime = Math.max(raTrailTime, driftDetectionTime)
+	const recommendedExposure = 2 * recommendedLegTime
+
+	return { imageScale, raVelocity, geometryFactor, driftDec, raTrailTime, driftDetectionTime, recommendedLegTime, recommendedExposure }
 }

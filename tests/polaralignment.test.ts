@@ -3,8 +3,67 @@ import { arcmin, deg, hour, parseAngle, toArcmin, toArcsec, toDeg } from '../src
 import { DEFAULT_REFRACTION_PARAMETERS } from '../src/astrometry'
 import { meter } from '../src/distance'
 import { geodeticLocation, localSiderealTime } from '../src/location'
-import { polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentError } from '../src/polaralignment'
+import { DARV_EXPOSURE_PRESETS, estimateDarvExposure, type DarvExposureInput, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentError } from '../src/polaralignment'
 import { type Time, timeYMDHMS } from '../src/time'
+
+function darvInput(input: Partial<DarvExposureInput> = {}): DarvExposureInput {
+	return { focalLength: 1000, pixelSize: 3.75, declination: 0, latitude: deg(45), mode: 'altitude', preset: 'coarse', ...input }
+}
+
+describe('darv exposure estimator', () => {
+	test('computes RA velocity at the celestial equator', () => {
+		const estimate = estimateDarvExposure(darvInput({ declination: 0, preset: { targetTrail: 1, detectableSeparation: 1, targetPolarError: 10, guideRateSidereal: 1 } }))
+
+		expect(estimate.raVelocity).toBeCloseTo(15.041, 12)
+	})
+
+	test('exposure increases for smaller detectable polar error', () => {
+		const common = { targetTrail: 1, detectableSeparation: 3, guideRateSidereal: 1 }
+		const coarse = estimateDarvExposure(darvInput({ preset: { ...common, targetPolarError: 10 } }))
+		const fine = estimateDarvExposure(darvInput({ preset: { ...common, targetPolarError: 2 } }))
+
+		expect(fine.driftDetectionTime).toBeGreaterThan(fine.raTrailTime)
+		expect(fine.recommendedExposure).toBeGreaterThan(coarse.recommendedExposure)
+	})
+
+	test('exposure increases for shorter focal length', () => {
+		const shortFocal = estimateDarvExposure(darvInput({ focalLength: 500 }))
+		const longFocal = estimateDarvExposure(darvInput({ focalLength: 2000 }))
+
+		expect(shortFocal.imageScale).toBeGreaterThan(longFocal.imageScale)
+		expect(shortFocal.recommendedExposure).toBeGreaterThan(longFocal.recommendedExposure)
+	})
+
+	test('computes azimuth mode geometry factor', () => {
+		const estimate = estimateDarvExposure(darvInput({ latitude: deg(60), mode: 'azimuth' }))
+
+		expect(estimate.geometryFactor).toBeCloseTo(Math.abs(Math.cos(deg(60))), 12)
+	})
+
+	test('computes altitude mode geometry factor', () => {
+		const estimate = estimateDarvExposure(darvInput({ latitude: deg(60), mode: 'altitude' }))
+
+		expect(estimate.geometryFactor).toBe(1)
+	})
+
+	test('rejects invalid DARV geometries', () => {
+		expect(() => estimateDarvExposure(darvInput({ declination: deg(90) }))).toThrow('stars too close to the celestial pole')
+		expect(() => estimateDarvExposure(darvInput({ latitude: deg(90), mode: 'azimuth' }))).toThrow('DARV DEC drift is too small')
+	})
+
+	test('resolves built-in and custom presets', () => {
+		expect(DARV_EXPOSURE_PRESETS.coarse).toEqual({ targetTrail: 150, detectableSeparation: 3, targetPolarError: 15, guideRateSidereal: 1 })
+		expect(DARV_EXPOSURE_PRESETS.medium).toEqual({ targetTrail: 200, detectableSeparation: 3, targetPolarError: 5, guideRateSidereal: 1 })
+		expect(DARV_EXPOSURE_PRESETS.fine).toEqual({ targetTrail: 250, detectableSeparation: 2, targetPolarError: 2, guideRateSidereal: 0.5 })
+
+		const preset = { targetTrail: 10, detectableSeparation: 4, targetPolarError: 8, guideRateSidereal: 0.25 }
+		const estimate = estimateDarvExposure(darvInput({ preset }))
+
+		expect(estimate.raVelocity).toBeCloseTo(15.041 * preset.guideRateSidereal, 12)
+		expect(estimate.raTrailTime).toBeCloseTo((preset.targetTrail * estimate.imageScale) / estimate.raVelocity, 12)
+		expect(estimate.driftDec).toBeCloseTo(0.004375 * preset.targetPolarError, 12)
+	})
+})
 
 describe('computed polar alignment error', () => {
 	const time = timeYMDHMS(2000, 1, 1, 12, 0, 0)
