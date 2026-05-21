@@ -4,9 +4,9 @@ import type { Distance } from './distance'
 import { lunation } from './moon'
 import { type Time, Timescale, time, timeNormalize, toJulianDay, tt } from './time'
 
-export type Season = 'SPRING' | 'SUMMER' | 'AUTUMN' | 'WINTER'
+export type Season = 'spring' | 'summer' | 'autumn' | 'winter'
 
-export type SolarEclipseType = 'TOTAL' | 'PARTIAL' | 'ANNULAR' | 'HYBRID'
+export type SolarEclipseType = 'total' | 'partial' | 'annular' | 'hybrid'
 
 export interface SolarEclipse {
 	lunation: number
@@ -51,16 +51,16 @@ export function season(year: number, name: Season) {
 	const Y = (year - 2000) / 1000
 
 	switch (name) {
-		case 'SPRING':
+		case 'spring':
 			jd0 = 2451623.80984 + (((-0.00057 * Y - 0.00411) * Y + 0.05169) * Y + 365242.37404) * Y
 			break
-		case 'SUMMER':
+		case 'summer':
 			jd0 = 2451716.56767 + (((-0.0003 * Y + 0.00888) * Y + 0.00325) * Y + 365241.62603) * Y
 			break
-		case 'AUTUMN':
+		case 'autumn':
 			jd0 = 2451810.21715 + (((0.00078 * Y + 0.00337) * Y - 0.11575) * Y + 365242.01767) * Y
 			break
-		case 'WINTER':
+		case 'winter':
 			jd0 = 2451900.05952 + (((0.00032 * Y - 0.00823) * Y - 0.06223) * Y + 365242.74049) * Y
 			break
 	}
@@ -124,7 +124,7 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 		gamma: 0,
 		u: 0,
 		p: 0,
-		type: 'TOTAL',
+		type: 'total',
 		central: true,
 	}
 
@@ -236,17 +236,17 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 			if (absG >= SOLAR_ECLIPSE_CENTRAL_LIMIT) {
 				eclipse.central = false
 				eclipse.magnitude = (SOLAR_ECLIPSE_SURFACE_LIMIT + u - absG) / (SOLAR_ECLIPSE_PARTIAL_DENOMINATOR + 2 * u)
-				eclipse.type = absG < SOLAR_ECLIPSE_CENTRAL_LIMIT + Math.abs(u) ? (u < 0 ? 'TOTAL' : 'ANNULAR') : 'PARTIAL'
+				eclipse.type = absG < SOLAR_ECLIPSE_CENTRAL_LIMIT + Math.abs(u) ? (u < 0 ? 'total' : 'annular') : 'partial'
 			}
 			// central eclipse
 			else if (u < 0) {
-				eclipse.type = 'TOTAL'
+				eclipse.type = 'total'
 			} else if (u > 0.0047) {
-				eclipse.type = 'ANNULAR'
+				eclipse.type = 'annular'
 			} else if (u < SOLAR_ECLIPSE_HYBRID_LIMIT * Math.sqrt(1 - gamma * gamma)) {
-				eclipse.type = 'HYBRID'
+				eclipse.type = 'hybrid'
 			} else {
-				eclipse.type = 'ANNULAR'
+				eclipse.type = 'annular'
 			}
 		} else if (next) {
 			k++

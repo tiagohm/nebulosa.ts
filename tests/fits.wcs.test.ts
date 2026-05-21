@@ -3,7 +3,7 @@ import { type Angle, deg } from '../src/angle'
 import { PI } from '../src/constants'
 import type { FitsHeader } from '../src/fits'
 import { cd, cdFromCdelt, cdMatrix, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, pc2cd, RA_TAN_SIP, tanProject, tanUnproject } from '../src/fits.wcs'
-import { Wcs } from '../src/wcs'
+import { Wcs } from '../src/libwcs'
 
 function expectMatrixCloseTo(actual: readonly number[], expected: readonly number[], precision: number = 12) {
 	for (let i = 0; i < actual.length; i++) {

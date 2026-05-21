@@ -6,6 +6,7 @@ import { matIdentity } from './mat3'
 import { clamp } from './math'
 import { Matrix } from './matrix'
 import type { Time } from './time'
+import { validateFinite, validateNonNegativeFinite, validatePositiveFinite, validateTime, validateVector } from './validation'
 import { type MutVec3, type Vec3, vecLength } from './vec3'
 
 const PARAMETER_COUNT = 6
@@ -247,65 +248,35 @@ function resolveFitOptions(options: OrbitFitOptions | undefined): ResolvedOrbitF
 }
 
 function validateInput(observations: readonly OrbitFitObservation[], epoch: Time, p: Vec3, v: Vec3, options: ResolvedOrbitFitOptions) {
-	if (observations.length < 3) {
-		throw new Error('at least 3 observations are required to fit 6 Cartesian parameters')
-	}
+	if (observations.length < 3) throw new Error('at least 3 observations are required to fit 6 Cartesian parameters')
 
-	validateTime(epoch, 'epoch')
-	validateVector(p, 'initial position')
-	validateVector(v, 'initial velocity')
-	validatePositiveFinite(options.mu, 'mu')
-	validatePositiveFinite(options.defaultRaErr, 'defaultRaErr')
-	validatePositiveFinite(options.defaultDecErr, 'defaultDecErr')
-	validateNonNegativeFinite(options.maxIterations, 'maxIterations')
-	validatePositiveFinite(options.tolerance, 'tolerance')
-	validatePositiveFinite(options.parameterTolerance, 'parameterTolerance')
-	validatePositiveFinite(options.gradientTolerance, 'gradientTolerance')
-	validatePositiveFinite(options.initialDamping, 'initialDamping')
-	validatePositiveFinite(options.minTopocentricDistance, 'minTopocentricDistance')
-	validatePositiveFinite(options.finiteDifferencePositionStep, 'finiteDifferencePositionStep')
-	validatePositiveFinite(options.finiteDifferenceVelocityStep, 'finiteDifferenceVelocityStep')
-	validatePositiveFinite(options.relativeFiniteDifferenceStep, 'relativeFiniteDifferenceStep')
-	validatePositiveFinite(options.maxFiniteDifferenceStep, 'maxFiniteDifferenceStep')
+	validateTime(epoch)
+	validateVector(p)
+	validateVector(v)
+	validatePositiveFinite(options.mu)
+	validatePositiveFinite(options.defaultRaErr)
+	validatePositiveFinite(options.defaultDecErr)
+	validateNonNegativeFinite(options.maxIterations)
+	validatePositiveFinite(options.tolerance)
+	validatePositiveFinite(options.parameterTolerance)
+	validatePositiveFinite(options.gradientTolerance)
+	validatePositiveFinite(options.initialDamping)
+	validatePositiveFinite(options.minTopocentricDistance)
+	validatePositiveFinite(options.finiteDifferencePositionStep)
+	validatePositiveFinite(options.finiteDifferenceVelocityStep)
+	validatePositiveFinite(options.relativeFiniteDifferenceStep)
+	validatePositiveFinite(options.maxFiniteDifferenceStep)
 
 	for (let i = 0; i < observations.length; i++) {
 		const observation = observations[i]
-		validateTime(observation.time, `observations[${i}].time`)
-		validateFinite(observation.rightAscension, `observations[${i}].ra`)
-		validateFinite(observation.declination, `observations[${i}].dec`)
-		validateVector(observation.observerPosition, `observations[${i}].observerPosition`)
+		validateTime(observation.time)
+		validateFinite(observation.rightAscension)
+		validateFinite(observation.declination)
+		validateVector(observation.observerPosition)
 
-		if (observation.raErr !== undefined) validatePositiveFinite(observation.raErr, `observations[${i}].raErr`)
-		if (observation.decErr !== undefined) validatePositiveFinite(observation.decErr, `observations[${i}].decErr`)
+		if (observation.raErr !== undefined) validatePositiveFinite(observation.raErr)
+		if (observation.decErr !== undefined) validatePositiveFinite(observation.decErr)
 	}
-}
-
-function validateTime(time: Time, name: string) {
-	validateFinite(time.day, `${name}.day`)
-	validateFinite(time.fraction, `${name}.fraction`)
-	validateFinite(time.scale, `${name}.scale`)
-}
-
-function validateVector(vector: Vec3, name: string) {
-	if (vector.length !== 3) throw new TypeError(`${name} must have 3 components`)
-
-	validateFinite(vector[0], `${name}[0]`)
-	validateFinite(vector[1], `${name}[1]`)
-	validateFinite(vector[2], `${name}[2]`)
-}
-
-function validateFinite(value: number, name: string) {
-	if (!Number.isFinite(value)) throw new TypeError(`${name} must be finite`)
-}
-
-function validatePositiveFinite(value: number, name: string) {
-	validateFinite(value, name)
-	if (value <= 0) throw new Error(`${name} must be positive`)
-}
-
-function validateNonNegativeFinite(value: number, name: string) {
-	validateFinite(value, name)
-	if (value < 0) throw new Error(`${name} must be non-negative`)
 }
 
 function stateToParams(position: CartesianCoordinate, velocity: CartesianCoordinate): Float64Array {

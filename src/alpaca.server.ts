@@ -495,11 +495,11 @@ export class AlpacaServer {
 	}
 
 	#cover(key: Device | number) {
-		return this.#device<Cover>(key, 'covercalibrator', 'COVER')
+		return this.#device<Cover>(key, 'covercalibrator', 'cover')
 	}
 
 	#flatPanel(key: Device | number) {
-		return this.#device<FlatPanel>(key, 'covercalibrator', 'FLAT_PANEL')
+		return this.#device<FlatPanel>(key, 'covercalibrator', 'flatPanel')
 	}
 
 	#guideOutput(key: Device | number, type: 'camera' | 'telescope') {

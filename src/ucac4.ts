@@ -3,7 +3,7 @@ import fs, { type FileHandle } from 'fs/promises'
 import { join } from 'path'
 import { type Angle, mas } from './angle'
 import { DEG2RAD, PIOVERTWO } from './constants'
-import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type Vertex, validateDeclination } from './star.catalog'
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type Vertex } from './star.catalog'
 import { NumberComparator } from './util'
 
 // https://cdsarc.cds.unistra.fr/ftp/I/322A/UCAC4/
@@ -74,9 +74,8 @@ interface Ucac4Index {
 
 // Converts a declination to its native UCAC4 zone number.
 export function ucac4ZoneForDec(dec: Angle) {
-	const normalizedDec = validateDeclination(dec)
-	if (normalizedDec >= PIOVERTWO) return UCAC4_ZONE_COUNT
-	return Math.floor((normalizedDec + PIOVERTWO) / UCAC4_ZONE_HEIGHT) + 1
+	if (dec >= PIOVERTWO) return UCAC4_ZONE_COUNT
+	return Math.floor((dec + PIOVERTWO) / UCAC4_ZONE_HEIGHT) + 1
 }
 
 // Creates and opens a UCAC4 catalog in one step.

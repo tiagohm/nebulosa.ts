@@ -6,16 +6,15 @@ on:
         paths:
             - 'src/**.ts'
             - 'tests/**.ts'
-            - 'native/**'
             - 'package.json'
             - 'tsconfig.json'
             - 'bunfig.toml'
             - '.github/workflows/**'
+            - 'postinstall.ts'
     pull_request:
         paths:
             - 'src/**.ts'
             - 'tests/**.ts'
-            - 'native/**'
             - 'package.json'
     workflow_dispatch:
 
@@ -59,8 +58,8 @@ jobs:
 
             - name: Run Tests
               if: ${{ matrix.os == 'ubuntu-24.04' }}
-              run: RUN_SKIPPED_TESTS=false bun test --timeout 1000 --parallel
+              run: RUN_SKIPPED_TESTS=false bun test --timeout 1000
 
             - name: Run Tests
               if: ${{ matrix.os != 'ubuntu-24.04' }}
-              run: bun test --timeout 1000 wcs.test.ts jpeg.test.ts
+              run: bun test --timeout 1000 libwcs.test.ts jpeg.test.ts libastrometry.test.ts

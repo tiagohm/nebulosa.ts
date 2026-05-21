@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
+import type { CsvRow } from '../src/csv'
 import { readDaf } from '../src/daf'
 import { meter } from '../src/distance'
 import { elements, type ObserverWithOsculatingElements, type ObserverWithTLE, observer, Quantity, spkFile, vector } from '../src/horizons'
@@ -8,7 +9,6 @@ import { extendedPermanentAsteroidNumber } from '../src/naif'
 import { readSpk } from '../src/spk'
 import { temporalAdd, temporalFromDate } from '../src/temporal'
 import { Timescale, timeYMDHMS } from '../src/time'
-import type { CsvRow } from '../src/csv'
 
 const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
 

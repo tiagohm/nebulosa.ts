@@ -464,7 +464,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 		switch (message.name) {
 			case 'CCD_TEMPERATURE':
 			case 'FOCUS_TEMPERATURE': {
-				const device = this.provider.get(client, message.device, message.name[0] === 'C' ? 'CAMERA' : 'FOCUSER')
+				const device = this.provider.get(client, message.device, message.name[0] === 'C' ? 'camera' : 'focuser')
 
 				if (device) {
 					if (tag[0] === 'd') {

@@ -4,6 +4,7 @@ import { NumberComparator, percentileOf } from './util'
 import type { FitsHeader } from './fits'
 import { heightKeyword, numericKeyword, widthKeyword } from './fits.util'
 import { DEC_TAN, DEC_TAN_SIP, RA_TAN, RA_TAN_SIP } from './fits.wcs'
+import { validateFinite } from './validation'
 
 const MIN_SIP_ORDER = 2
 const MAX_SIP_ORDER = 5
@@ -394,8 +395,8 @@ function setSipAxisType(header: FitsHeader, key: 'CTYPE1' | 'CTYPE2', tan: strin
 
 // Evaluates the SIP pixel correction at a measured pixel coordinate.
 export function evaluateSipCorrection(x: number, y: number, sipModel: SipModel, wcs: SipFitsHeader | FitsHeader) {
-	validateFinite('x', x)
-	validateFinite('y', y)
+	validateFinite(x)
+	validateFinite(y)
 	wcs = extractSipInputWcsFromFitsHeader(wcs)
 	validateSipFitsHeader(wcs)
 	const order = validateSipOrder(sipModel.order)
@@ -482,14 +483,10 @@ function validateSipOrder(order: number) {
 function validateSipFitsHeader(wcs: SipFitsHeader) {
 	if (!wcs) throw new SipFitError('invalidCoordinate', 'basic WCS is required')
 
-	validateFinite('crpix1', wcs.crpix1)
-	validateFinite('crpix2', wcs.crpix2)
+	validateFinite(wcs.crpix1)
+	validateFinite(wcs.crpix2)
 	optionalImageSize('width', wcs.width)
 	optionalImageSize('height', wcs.height)
-}
-
-function validateFinite(name: string, value: number) {
-	if (!Number.isFinite(value)) throw new SipFitError('invalidCoordinate', `${name} must be a finite number`)
 }
 
 function optionalImageSize(name: string, value: number | undefined) {
@@ -518,10 +515,10 @@ function prepareStars(stars: readonly MatchedStar[], wcs: SipFitsHeader, weighte
 	for (let i = 0; i < stars.length; i++) {
 		const star = stars[i]
 
-		validateFinite(`stars[${i}].x`, star.x)
-		validateFinite(`stars[${i}].y`, star.y)
-		validateFinite(`stars[${i}].xRef`, star.xRef)
-		validateFinite(`stars[${i}].yRef`, star.yRef)
+		validateFinite(star.x)
+		validateFinite(star.y)
+		validateFinite(star.xRef)
+		validateFinite(star.yRef)
 
 		if (star.weight !== undefined && (!Number.isFinite(star.weight) || !(star.weight > 0))) {
 			throw new SipFitError('invalidWeight', `stars[${i}].weight must be a positive finite number`)

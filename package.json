@@ -5,12 +5,12 @@
 	"sideEffects": false,
 	"module": "main.ts",
 	"scripts": {
-		"postinstall": "bun run native/copy.ts",
+		"postinstall": "bun run postinstall.ts",
 		"lint": "oxlint",
 		"lint:fix": "oxlint --fix",
-		"tsc": "tsgo --noEmit",
 		"fmt": "oxfmt",
-		"fmt:check": "oxfmt --check"
+		"fmt:check": "oxfmt --check",
+		"index": "bun run scripts/codebase.index.ts"
 	},
 	"devDependencies": {
 		"oxfmt": "latest",
@@ -20,12 +20,6 @@
 	"peerDependencies": {
 		"@types/bun": "latest",
 		"fast-xml-parser": "latest",
-		"typescript": "6"
-	},
-	"optionalDependencies": {
-		"@typescript/native-preview": "beta"
-	},
-	"overrides": {
-		"@typescript/native-preview": "beta"
+		"typescript": "6.0.3"
 	}
 }

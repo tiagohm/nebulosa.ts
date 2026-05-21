@@ -3,9 +3,9 @@ import { basename, dirname, extname, join } from 'path'
 import { type Angle, normalizeAngle, toDeg, toHour } from './angle'
 import { readCsv } from './csv'
 import type { FitsHeader } from './fits'
+import { isWcsFitsKeyword } from './fits.wcs'
 import { type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 import type { DetectedStar } from './star.detector'
-import { isWcsFitsKeyword } from './fits.wcs'
 
 export interface AstapStarDetectionOptions {
 	executable?: string

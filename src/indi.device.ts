@@ -6,7 +6,7 @@ import type { CfaPattern } from './image.types'
 import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyState } from './indi.types'
 import type { GeographicCoordinate } from './location'
 
-export type DeviceType = 'CAMERA' | 'MOUNT' | 'WHEEL' | 'FOCUSER' | 'ROTATOR' | 'GPS' | 'DOME' | 'GUIDE_OUTPUT' | 'FLAT_PANEL' | 'COVER' | 'POWER' | 'THERMOMETER' | 'DEW_HEATER'
+export type DeviceType = 'camera' | 'mount' | 'wheel' | 'focuser' | 'rotator' | 'gps' | 'dome' | 'guideOutput' | 'flatPanel' | 'cover' | 'power' | 'thermometer' | 'dewHeater'
 
 export type DeviceProperty = (DefTextVector & { type: 'TEXT' }) | (DefNumberVector & { type: 'NUMBER' }) | (DefSwitchVector & { type: 'SWITCH' }) | (DefLightVector & { type: 'LIGHT' }) | (DefBlobVector & { type: 'BLOB' })
 
@@ -99,7 +99,7 @@ export interface NameAndLabel {
 }
 
 export interface GuideOutput extends Device {
-	readonly type: 'GUIDE_OUTPUT' | 'MOUNT' | 'CAMERA'
+	readonly type: 'guideOutput' | 'mount' | 'camera'
 	canPulseGuide: boolean
 	pulsing: boolean
 	hasGuideRate: boolean
@@ -108,13 +108,13 @@ export interface GuideOutput extends Device {
 }
 
 export interface Thermometer extends Device {
-	readonly type: 'THERMOMETER' | 'CAMERA' | 'FOCUSER'
+	readonly type: 'thermometer' | 'camera' | 'focuser'
 	hasThermometer: boolean
 	temperature: number
 }
 
 export interface Camera extends GuideOutput, Thermometer {
-	readonly type: 'CAMERA'
+	readonly type: 'camera'
 	hasCoolerControl: boolean
 	coolerPower: number
 	cooler: boolean
@@ -154,7 +154,7 @@ export interface Camera extends GuideOutput, Thermometer {
 }
 
 export interface GPS extends Device {
-	readonly type: 'GPS' | 'MOUNT'
+	readonly type: 'gps' | 'mount'
 	hasGPS: boolean
 	readonly geographicCoordinate: GeographicCoordinate
 	readonly time: UTCTime
@@ -168,7 +168,7 @@ export interface Parkable {
 }
 
 export interface Mount extends GuideOutput, GPS, Parkable {
-	readonly type: 'MOUNT'
+	readonly type: 'mount'
 	slewing: boolean
 	tracking: boolean
 	homing: boolean
@@ -193,7 +193,7 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 }
 
 export interface Wheel extends Device {
-	readonly type: 'WHEEL'
+	readonly type: 'wheel'
 	count: number
 	names: readonly string[]
 	canSetNames: boolean
@@ -202,7 +202,7 @@ export interface Wheel extends Device {
 }
 
 export interface Focuser extends Device, Thermometer {
-	readonly type: 'FOCUSER'
+	readonly type: 'focuser'
 	moving: boolean
 	readonly position: MinMaxValueProperty
 	canAbsoluteMove: boolean
@@ -215,23 +215,24 @@ export interface Focuser extends Device, Thermometer {
 }
 
 export interface DewHeater extends Device {
-	readonly type: 'DEW_HEATER' | 'CAMERA' | 'COVER'
+	readonly type: 'dewHeater' | 'camera' | 'cover'
 	hasDewHeater: boolean
 	readonly dutyCycle: MinMaxValueProperty
 }
 
 export interface Cover extends Device, Parkable, DewHeater {
-	readonly type: 'COVER'
+	readonly type: 'cover'
 	canAbort: boolean
 }
 
 export interface FlatPanel extends Device {
-	readonly type: 'FLAT_PANEL'
+	readonly type: 'flatPanel'
 	enabled: boolean
 	readonly intensity: MinMaxValueProperty
 }
 
 export interface Rotator extends Device {
+	readonly type: 'rotator'
 	moving: boolean
 	angle: MinMaxValueProperty
 	canAbort: boolean
@@ -252,7 +253,7 @@ export interface PowerChannel extends MinMaxValueProperty {
 }
 
 export interface Power extends Device, Record<PowerChannelType, PowerChannel[]> {
-	readonly type: 'POWER'
+	readonly type: 'power'
 	readonly voltage: MinMaxValueProperty
 	readonly current: MinMaxValueProperty
 	readonly power: MinMaxValueProperty
@@ -327,7 +328,7 @@ export const DEFAULT_CAMERA: Camera = {
 		rightAscension: 0,
 		declination: 0,
 	},
-	type: 'CAMERA',
+	type: 'camera',
 	id: '',
 	name: '',
 	connected: false,
@@ -371,7 +372,7 @@ export const DEFAULT_MOUNT: Mount = {
 	},
 	canPulseGuide: false,
 	pulsing: false,
-	type: 'MOUNT',
+	type: 'mount',
 	id: '',
 	name: '',
 	connected: false,
@@ -392,7 +393,7 @@ export const DEFAULT_MOUNT: Mount = {
 }
 
 export const DEFAULT_WHEEL: Wheel = {
-	type: 'WHEEL',
+	type: 'wheel',
 	id: '',
 	name: '',
 	connected: false,
@@ -406,7 +407,7 @@ export const DEFAULT_WHEEL: Wheel = {
 }
 
 export const DEFAULT_FOCUSER: Focuser = {
-	type: 'FOCUSER',
+	type: 'focuser',
 	id: '',
 	name: '',
 	connected: false,
@@ -433,7 +434,7 @@ export const DEFAULT_COVER: Cover = {
 	parked: false,
 	hasDewHeater: false,
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
-	type: 'COVER',
+	type: 'cover',
 	id: '',
 	name: '',
 	connected: false,
@@ -444,7 +445,7 @@ export const DEFAULT_COVER: Cover = {
 export const DEFAULT_FLAT_PANEL: FlatPanel = {
 	enabled: false,
 	intensity: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
-	type: 'FLAT_PANEL',
+	type: 'flatPanel',
 	id: '',
 	name: '',
 	connected: false,
@@ -461,7 +462,7 @@ export const DEFAULT_ROTATOR: Rotator = {
 	canSync: false,
 	canHome: false,
 	hasBacklashCompensation: false,
-	type: 'ROTATOR',
+	type: 'rotator',
 	id: '',
 	name: '',
 	connected: false,
@@ -479,7 +480,7 @@ export const DEFAULT_POWER: Power = {
 	variableVoltage: [],
 	usb: [],
 	hasPowerCycle: false,
-	type: 'POWER',
+	type: 'power',
 	id: '',
 	name: '',
 	connected: false,
@@ -490,7 +491,7 @@ export const DEFAULT_POWER: Power = {
 export const DEFAULT_THERMOMETER: Thermometer = {
 	hasThermometer: true,
 	temperature: 0,
-	type: 'THERMOMETER',
+	type: 'thermometer',
 	id: '',
 	name: '',
 	connected: false,
@@ -501,7 +502,7 @@ export const DEFAULT_THERMOMETER: Thermometer = {
 export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	canPulseGuide: false,
 	pulsing: false,
-	type: 'GUIDE_OUTPUT',
+	type: 'guideOutput',
 	id: '',
 	name: '',
 	connected: false,
@@ -518,7 +519,7 @@ export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 export const DEFAULT_DEW_HEATER: DewHeater = {
 	hasDewHeater: false,
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
-	type: 'DEW_HEATER',
+	type: 'dewHeater',
 	id: '',
 	name: '',
 	connected: false,
@@ -527,35 +528,35 @@ export const DEFAULT_DEW_HEATER: DewHeater = {
 }
 
 export function isCamera(device: Device): device is Camera {
-	return device.type === 'CAMERA'
+	return device.type === 'camera'
 }
 
 export function isMount(device: Device): device is Mount {
-	return device.type === 'MOUNT'
+	return device.type === 'mount'
 }
 
 export function isFocuser(device: Device): device is Focuser {
-	return device.type === 'FOCUSER'
+	return device.type === 'focuser'
 }
 
 export function isWheel(device: Device): device is Wheel {
-	return device.type === 'WHEEL'
+	return device.type === 'wheel'
 }
 
 export function isCover(device: Device): device is Cover {
-	return device.type === 'COVER'
+	return device.type === 'cover'
 }
 
 export function isFlatPanel(device: Device): device is FlatPanel {
-	return device.type === 'FLAT_PANEL'
+	return device.type === 'flatPanel'
 }
 
 export function isRotator(device: Device): device is Rotator {
-	return device.type === 'ROTATOR'
+	return device.type === 'rotator'
 }
 
 export function isPower(device: Device): device is Power {
-	return device.type === 'POWER'
+	return device.type === 'power'
 }
 
 export function isThermometer(device: Device): device is Thermometer {
@@ -571,7 +572,7 @@ export function isDewHeater(device: Device): device is DewHeater {
 }
 
 export function isGPS(device: Device): device is GPS {
-	return device.type === 'GPS' || ('hasGPS' in device && device.hasGPS !== undefined)
+	return device.type === 'gps' || ('hasGPS' in device && device.hasGPS !== undefined)
 }
 
 export function expectedPierSide(rightAscension: Angle, declination: Angle, lst: Angle): PierSide {

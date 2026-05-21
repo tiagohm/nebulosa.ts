@@ -1,4 +1,4 @@
-import type { Angle } from './angle'
+import { normalizePI, type Angle } from './angle'
 import { ECLIPTIC_J2000_MATRIX, GALACTIC_MATRIX, PI, PIOVERTWO, TAU } from './constants'
 import { eraC2s, eraS2c } from './erfa'
 import { localSiderealTime } from './location'
@@ -57,6 +57,14 @@ export function angularDistance(ra0: Angle, dec0: Angle, ra1: Angle, dec1: Angle
 	const y = cosDec0 * sinDec1 - sinDec0 * cosDec1 * cosDeltaRightAscension
 	const z = sinDec0 * sinDec1 + cosDec0 * cosDec1 * cosDeltaRightAscension
 	return Math.atan2(Math.sqrt(x * x + y * y), z)
+}
+
+// Computes the angular separation between two equatorial coordinates using Haversine formula. Less stable.
+export function angularDistanceHaversine(ra0: Angle, dec0: Angle, ra1: Angle, dec1: Angle) {
+	const sinHalfLat = Math.sin((dec1 - dec0) * 0.5)
+	const sinHalfLon = Math.sin(normalizePI(ra1 - ra0) * 0.5)
+	const h = sinHalfLat * sinHalfLat + Math.cos(dec0) * Math.cos(dec1) * sinHalfLon * sinHalfLon
+	return 2 * Math.asin(Math.sqrt(clamp(h, 0, 1)))
 }
 
 // Converts J2000 equatorial coordinates to current equatorial coordinates.

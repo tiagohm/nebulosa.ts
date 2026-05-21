@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { makeImageBytesFromFits } from '../src/alpaca.server'
 import { bitpixInBytes } from '../src/fits.util'
-import { Jpeg } from '../src/jpeg'
+import { Jpeg } from '../src/libturbojpeg'
 import { downloadPerTag } from './download'
 import { saveAndCompareHash } from './image.util'
 

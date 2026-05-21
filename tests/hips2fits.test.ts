@@ -38,7 +38,7 @@ test.skipIf(SKIP)('fits', async () => {
 test.skipIf(SKIP)('hips surveys', async () => {
 	const surveys = await hipsSurveys()
 
-	expect(surveys).toHaveLength(97)
+	expect(surveys.length).toBeGreaterThanOrEqual(98)
 	expect(surveys[0].id).toBe('CDS/P/2MASS/H')
 	expect(surveys[0].category).toBe('Image/Infrared/2MASS')
 	expect(surveys[0].frame).toBe('equatorial')

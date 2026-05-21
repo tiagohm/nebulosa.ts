@@ -196,22 +196,22 @@ abstract class AlpacaDevice {
 
 	get activeMount() {
 		if (!this.snoopDevices.elements.ACTIVE_TELESCOPE.value) return undefined
-		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value, 'MOUNT') as Mount | undefined
+		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value, 'mount') as Mount | undefined
 	}
 
 	get activeWheel() {
 		if (!this.snoopDevices.elements.ACTIVE_FILTER.value) return undefined
-		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_FILTER.value, 'WHEEL') as Wheel | undefined
+		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_FILTER.value, 'wheel') as Wheel | undefined
 	}
 
 	get activeFocuser() {
 		if (!this.snoopDevices.elements.ACTIVE_FOCUSER.value) return undefined
-		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_FOCUSER.value, 'FOCUSER') as Focuser | undefined
+		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_FOCUSER.value, 'focuser') as Focuser | undefined
 	}
 
 	get activeRotator() {
 		if (!this.snoopDevices.elements.ACTIVE_ROTATOR.value) return undefined
-		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_ROTATOR.value, 'ROTATOR') as Rotator | undefined
+		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_ROTATOR.value, 'rotator') as Rotator | undefined
 	}
 
 	protected sendDefProperty(message: DefVector & { type: Uppercase<VectorType> }) {
@@ -905,7 +905,7 @@ class AlpacaCamera extends AlpacaDevice {
 
 		if (buffer) {
 			this.#image.state = 'Ok'
-			const camera = this.client.provider.get(this.client, this.device.DeviceName, 'CAMERA') as Camera
+			const camera = this.client.provider.get(this.client, this.device.DeviceName, 'camera') as Camera
 			const lastExposureDuration = this.state.ExposureDuration // await this.api.getLastExposureDuration(this.id)
 			const fits = makeFitsFromImageBytes(buffer, this.#now, camera, this.activeMount, this.activeWheel, this.activeFocuser, this.activeRotator, lastExposureDuration)
 			this.#image.elements.CCD1.value = fits
