@@ -195,7 +195,8 @@ export const MIN_RA_COS_DECLINATION = 1e-3
 export const MIN_DRIFT_RATE_ARCSEC_PER_SECOND = 1e-9
 
 export type DarvExposureMode = 'azimuth' | 'altitude'
-export type DarvExposurePresetType = 'coarse' | 'medium' | 'fine'
+
+export type DarvExposurePresetMode = 'coarse' | 'medium' | 'fine'
 
 // DARV exposure preset values used to estimate the visibility threshold.
 export interface DarvExposurePreset {
@@ -233,11 +234,11 @@ export const FINE_DARV_EXPOSURE_PRESET: Readonly<DarvExposurePreset> = {
 	guideRateSidereal: 0.5,
 }
 
-const DARV_EXPOSURE_PRESETS = {
+export const DARV_EXPOSURE_PRESETS = {
 	coarse: COARSE_DARV_EXPOSURE_PRESET,
 	medium: MEDIUM_DARV_EXPOSURE_PRESET,
 	fine: FINE_DARV_EXPOSURE_PRESET,
-} as const satisfies Record<DarvExposurePresetType, DarvExposurePreset>
+} as const satisfies Record<DarvExposurePresetMode, DarvExposurePreset>
 
 // Input for estimating a recommended DARV exposure time, not the actual polar error.
 export interface DarvExposureInput {
@@ -252,7 +253,7 @@ export interface DarvExposureInput {
 	// Polar-alignment adjustment mode whose geometry controls the expected DEC drift.
 	mode: DarvExposureMode
 	// Built-in preset name or custom values. targetPolarError is the smallest polar error to make visible.
-	preset: DarvExposurePresetType | DarvExposurePreset
+	preset: DarvExposurePreset
 }
 
 // Intermediate and final exposure estimates for a DARV capture.
@@ -275,18 +276,11 @@ export interface DarvExposureEstimate {
 	readonly recommendedExposure: number
 }
 
-function resolveDarvExposurePreset(preset: DarvExposureInput['preset']): DarvExposurePreset {
-	if (typeof preset === 'string') {
-		const resolved = DARV_EXPOSURE_PRESETS[preset]
-		if (resolved === undefined) throw new TypeError('DARV exposure preset must be coarse, medium, or fine')
-		return resolved
-	}
-
+function validateDarvExposurePreset(preset: DarvExposureInput['preset']): DarvExposurePreset {
 	validatePositiveFinite(preset.targetTrail)
 	validatePositiveFinite(preset.detectableSeparation)
 	validatePositiveFinite(preset.targetPolarError)
 	validatePositiveFinite(preset.guideRateSidereal)
-
 	return preset
 }
 
@@ -318,7 +312,7 @@ export function estimateDarvExposure(input: Readonly<DarvExposureInput>): DarvEx
 	validatePositiveFinite(input.pixelSize)
 	validateInRange(input.declination, -PIOVERTWO, PIOVERTWO)
 	validateLatitude(input.latitude)
-	const preset = resolveDarvExposurePreset(input.preset)
+	const preset = validateDarvExposurePreset(input.preset)
 	const geometryFactor = computeDarvGeometryFactor(input.mode, input.latitude)
 	const imageScale = angularSizeOfPixel(input.focalLength, input.pixelSize)
 	const raVelocity = computeDarvRaVelocity(input.declination, preset.guideRateSidereal)

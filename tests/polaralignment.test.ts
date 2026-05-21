@@ -3,11 +3,11 @@ import { arcmin, deg, hour, parseAngle, toArcmin, toArcsec, toDeg } from '../src
 import { DEFAULT_REFRACTION_PARAMETERS } from '../src/astrometry'
 import { meter } from '../src/distance'
 import { geodeticLocation, localSiderealTime } from '../src/location'
-import { estimateDarvExposure, type DarvExposureInput, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentError } from '../src/polaralignment'
+import { estimateDarvExposure, type DarvExposureInput, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentError, COARSE_DARV_EXPOSURE_PRESET } from '../src/polaralignment'
 import { type Time, timeYMDHMS } from '../src/time'
 
 function darvInput(input: Partial<DarvExposureInput> = {}): DarvExposureInput {
-	return { focalLength: 1000, pixelSize: 3.75, declination: 0, latitude: deg(45), mode: 'altitude', preset: 'coarse', ...input }
+	return { focalLength: 1000, pixelSize: 3.75, declination: 0, latitude: deg(45), mode: 'altitude', preset: COARSE_DARV_EXPOSURE_PRESET, ...input }
 }
 
 describe('darv exposure estimator', () => {
