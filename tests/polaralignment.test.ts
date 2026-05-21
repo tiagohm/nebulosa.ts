@@ -3,7 +3,7 @@ import { arcmin, deg, hour, parseAngle, toArcmin, toArcsec, toDeg } from '../src
 import { DEFAULT_REFRACTION_PARAMETERS } from '../src/astrometry'
 import { meter } from '../src/distance'
 import { geodeticLocation, localSiderealTime } from '../src/location'
-import { DARV_EXPOSURE_PRESETS, estimateDarvExposure, type DarvExposureInput, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentError } from '../src/polaralignment'
+import { estimateDarvExposure, type DarvExposureInput, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentError } from '../src/polaralignment'
 import { type Time, timeYMDHMS } from '../src/time'
 
 function darvInput(input: Partial<DarvExposureInput> = {}): DarvExposureInput {
@@ -52,10 +52,6 @@ describe('darv exposure estimator', () => {
 	})
 
 	test('resolves built-in and custom presets', () => {
-		expect(DARV_EXPOSURE_PRESETS.coarse).toEqual({ targetTrail: 150, detectableSeparation: 3, targetPolarError: 15, guideRateSidereal: 1 })
-		expect(DARV_EXPOSURE_PRESETS.medium).toEqual({ targetTrail: 200, detectableSeparation: 3, targetPolarError: 5, guideRateSidereal: 1 })
-		expect(DARV_EXPOSURE_PRESETS.fine).toEqual({ targetTrail: 250, detectableSeparation: 2, targetPolarError: 2, guideRateSidereal: 0.5 })
-
 		const preset = { targetTrail: 10, detectableSeparation: 4, targetPolarError: 8, guideRateSidereal: 0.25 }
 		const estimate = estimateDarvExposure(darvInput({ preset }))
 

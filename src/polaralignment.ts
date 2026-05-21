@@ -200,17 +200,17 @@ export type DarvExposurePresetType = 'coarse' | 'medium' | 'fine'
 // DARV exposure preset values used to estimate the visibility threshold.
 export interface DarvExposurePreset {
 	// Desired RA trail length, in pixels.
-	readonly targetTrail: number
+	targetTrail: number
 	// Minimum visually detectable separation between the DARV segments, in pixels.
-	readonly detectableSeparation: number
+	detectableSeparation: number
 	// Smallest polar alignment error the user wants to make visible, in arcminutes.
-	readonly targetPolarError: number
+	targetPolarError: number
 	// RA guide speed as a multiple of sidereal rate.
-	readonly guideRateSidereal: number
+	guideRateSidereal: number
 }
 
 // Coarse DARV preset for making large polar errors visible quickly.
-export const COARSE_DARV_EXPOSURE_PRESET: DarvExposurePreset = {
+export const COARSE_DARV_EXPOSURE_PRESET: Readonly<DarvExposurePreset> = {
 	targetTrail: 150,
 	detectableSeparation: 3,
 	targetPolarError: 15,
@@ -218,7 +218,7 @@ export const COARSE_DARV_EXPOSURE_PRESET: DarvExposurePreset = {
 }
 
 // Medium DARV preset for typical visual polar-alignment refinement.
-export const MEDIUM_DARV_EXPOSURE_PRESET: DarvExposurePreset = {
+export const MEDIUM_DARV_EXPOSURE_PRESET: Readonly<DarvExposurePreset> = {
 	targetTrail: 200,
 	detectableSeparation: 3,
 	targetPolarError: 5,
@@ -226,14 +226,14 @@ export const MEDIUM_DARV_EXPOSURE_PRESET: DarvExposurePreset = {
 }
 
 // Fine DARV preset for making smaller polar errors visible with a slower RA guide rate.
-export const FINE_DARV_EXPOSURE_PRESET: DarvExposurePreset = {
+export const FINE_DARV_EXPOSURE_PRESET: Readonly<DarvExposurePreset> = {
 	targetTrail: 250,
 	detectableSeparation: 2,
 	targetPolarError: 2,
 	guideRateSidereal: 0.5,
 }
 
-export const DARV_EXPOSURE_PRESETS = {
+const DARV_EXPOSURE_PRESETS = {
 	coarse: COARSE_DARV_EXPOSURE_PRESET,
 	medium: MEDIUM_DARV_EXPOSURE_PRESET,
 	fine: FINE_DARV_EXPOSURE_PRESET,
@@ -242,17 +242,17 @@ export const DARV_EXPOSURE_PRESETS = {
 // Input for estimating a recommended DARV exposure time, not the actual polar error.
 export interface DarvExposureInput {
 	// Telescope focal length, in millimeters.
-	readonly focalLength: number
+	focalLength: number
 	// Camera pixel size, in the unit expected by angularSizeOfPixel.
-	readonly pixelSize: number
+	pixelSize: number
 	// Star declination, in radians. Stars very close to the celestial pole are not suitable DARV targets.
-	readonly declination: Angle
+	declination: Angle
 	// Observer latitude, in radians.
-	readonly latitude: Angle
+	latitude: Angle
 	// Polar-alignment adjustment mode whose geometry controls the expected DEC drift.
-	readonly mode: DarvExposureMode
+	mode: DarvExposureMode
 	// Built-in preset name or custom values. targetPolarError is the smallest polar error to make visible.
-	readonly preset: DarvExposurePresetType | DarvExposurePreset
+	preset: DarvExposurePresetType | DarvExposurePreset
 }
 
 // Intermediate and final exposure estimates for a DARV capture.
@@ -313,7 +313,7 @@ function computeDarvDriftDec(targetPolarErrorArcmin: number, geometryFactor: num
 
 // Estimates the recommended exposure time for DARV, not the actual polar error.
 // recommendedLegTime is one outbound or return leg; recommendedExposure is both legs.
-export function estimateDarvExposure(input: DarvExposureInput): DarvExposureEstimate {
+export function estimateDarvExposure(input: Readonly<DarvExposureInput>): DarvExposureEstimate {
 	validatePositiveFinite(input.focalLength)
 	validatePositiveFinite(input.pixelSize)
 	validateInRange(input.declination, -PIOVERTWO, PIOVERTWO)
