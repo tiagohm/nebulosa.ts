@@ -92,7 +92,7 @@ describe('nearest solar eclipse', () => {
 	test('1993', () => {
 		const eclipse = nearestSolarEclipse(timeYMDHMS(1993, 1, 1), true)
 
-		expect(eclipse.type).toBe('PARTIAL')
+		expect(eclipse.type).toBe('partial')
 		expect(eclipse.maximalTime.day).toBe(2449129)
 		expect(eclipse.maximalTime.fraction).toBeCloseTo(0.0978, 4)
 		expect(eclipse.central).toBeFalse()
@@ -105,7 +105,7 @@ describe('nearest solar eclipse', () => {
 	test('2009', () => {
 		const eclipse = nearestSolarEclipse(timeYMDHMS(2009, 6, 1), true)
 
-		expect(eclipse.type).toBe('TOTAL')
+		expect(eclipse.type).toBe('total')
 		expect(eclipse.maximalTime.day).toBe(2455035)
 		expect(eclipse.maximalTime.fraction).toBeCloseTo(-0.3912, 4)
 		expect(eclipse.central).toBeTrue()
