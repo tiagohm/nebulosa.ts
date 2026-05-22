@@ -3,7 +3,7 @@ import { ASEC2RAD, AU_KM, AU_M, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { Distance } from './distance'
 import { floorDiv, modf, type NumberArray, pmod } from './math'
 
-const { sin, cos, tan, asin, acos, atan, atan2, sqrt, hypot, log10, abs, trunc, floor, min } = Math
+const { sin, cos, tan, asin, acos, atan, atan2, sqrt, cbrt, hypot, log10, abs, trunc, floor, min, SQRT2 } = Math
 
 // https://github.com/commenthol/astronomia/blob/master/src/
 
@@ -1062,6 +1062,54 @@ export namespace Coords {
 	export const GALACTIC_LON_0 = 33 * DEG2RAD
 }
 
+// Chapter 14, The Parallactic Angle, and three other Topics.
+export namespace Parallactic {
+	// Returns parallactic angle of a celestial object given latitude of the observer, declination and hour angle of the observed object.
+	export function parallacticAngle(phi: Angle, delta: Angle, H: Angle) {
+		const [sDelta, cDelta] = Base.sincos(delta)
+		const [sH, cH] = Base.sincos(H)
+		return atan2(sH, tan(phi) * cDelta - sDelta * cH) // (14.1) p. 98
+	}
+
+	// Returns parallactic angle given latitude of the observer and declination of the observed object.
+	// The hour angle is not needed as an input and the math inside simplifies.
+	export function parallacticAngleOnHorizon(phi: Angle, delta: Angle) {
+		return acos(sin(phi) / cos(delta))
+	}
+
+	// Computes how the plane of the ecliptic intersects
+	// the horizon at a given obliquity of the ecliptic, geographic latitude of observer and local sidereal time expressed as an hour angle.
+	export function eclipticAtHorizon(epsilon: Angle, phi: Angle, theta: Angle) {
+		const [sEpsilon, cEpsilon] = Base.sincos(epsilon)
+		const [sPhi, cPhi] = Base.sincos(phi)
+		const [sTheta, cTheta] = Base.sincos(theta)
+		let lambda = atan2(-cTheta, sEpsilon * (sPhi / cPhi) + cEpsilon * sTheta) // (14.2) p. 99
+
+		if (lambda < 0) {
+			lambda += PI
+		}
+
+		// The lambdas are ecliptic longitudes where the ecliptic intersects the horizon.
+		// I is the angle at which the ecliptic intersects the horizon.
+		return [lambda, lambda + PI, acos(cEpsilon * sPhi - sEpsilon * cPhi * sTheta)] // (14.3) p. 99
+	}
+
+	// Computes the angle between the ecliptic and the parallels
+	// of ecliptic latitude at a given ecliptic longitude (lambda) and obliquity of the ecliptic (epsilon).
+	export function eclipticAtEquator(lambda: Angle, epsilon: Angle) {
+		return atan(-cos(lambda) * tan(epsilon))
+	}
+
+	// Computes the angle of the path a celestial object
+	// relative to the horizon at the time of its rising or setting.
+	export function diurnalPathAtHorizon(phi: Angle, delta: Angle) {
+		const tPhi = tan(phi)
+		const b = tan(delta) * tPhi
+		const c = sqrt(1 - b * b)
+		return atan((c * cos(delta)) / tPhi)
+	}
+}
+
 // Rise: Chapter 15, Rising, Transit, and Setting.
 export namespace Rise {}
 
@@ -1863,7 +1911,7 @@ export namespace Kepler {
 
 		if (m > PI) {
 			f = -1
-			m = 2 * PI - m
+			m = TAU - m
 		}
 
 		let E0 = PI * 0.5
@@ -1887,6 +1935,218 @@ export namespace Kepler {
 	// Computes an approximate solution to Kepler's equation. It is valid only for small values of e.
 	export function kepler4(e: number, m: number) {
 		return atan2(sin(m), cos(m) - e) // (30.8) p. 206
+	}
+}
+
+// Chapter 31, Elements of Planetary Orbits.
+// Partial: Only implemented for mean equinox of date.
+export namespace PlanetElements {
+	export interface Elements {
+		L: Angle // mean longitude
+		a: Distance // semimajor axis
+		e: Angle // eccentricity
+		i: Angle // inclination
+		omega: Angle // longitude of ascending node
+		w: Angle // longitude of perihelion (Meeus likes pi better)
+	}
+
+	// Table 31.A, p. 212
+	const CMEAN = {
+		mercury: {
+			L: [252.250906, 149474.0722491, 0.0003035, 0.000000018],
+			a: [0.38709831],
+			e: [0.20563175, 0.000020407, -0.0000000283, -0.00000000018],
+			i: [7.004986, 0.0018215, -0.0000181, 0.000000056],
+			omega: [48.330893, 1.1861883, 0.00017542, 0.000000215],
+			w: [77.456119, 1.5564776, 0.00029544, 0.000000009],
+		},
+		venus: {
+			L: [181.979801, 58519.2130302, 0.00031014, 0.000000015],
+			a: [0.72332982],
+			e: [0.00677192, -0.000047765, 0.0000000981, 0.00000000046],
+			i: [3.394662, 0.0010037, -0.00000088, -0.000000007],
+			omega: [76.67992, 0.9011206, 0.00040618, -0.000000093],
+			w: [131.563703, 1.4022288, -0.00107618, -0.000005678],
+		},
+		earth: {
+			L: [100.466457, 36000.7698278, 0.00030322, 0.00000002],
+			a: [1.000001018],
+			e: [0.01670863, -0.000042037, -0.0000001267, 0.00000000014],
+			i: [0],
+			omega: undefined,
+			w: [102.937348, 1.7195366, 0.00045688, -0.000000018],
+		},
+		mars: {
+			L: [355.433, 19141.6964471, 0.00031052, 0.000000016],
+			a: [1.523679342],
+			e: [0.09340065, 0.000090484, -0.0000000806, -0.00000000025],
+			i: [1.849726, -0.0006011, 0.00001276, -0.000000007],
+			omega: [49.558093, 0.7720959, 0.00001557, 0.000002267],
+			w: [336.060234, 1.8410449, 0.00013477, 0.000000536],
+		},
+		jupiter: {
+			L: [34.351519, 3036.3027748, 0.0002233, 0.000000037],
+			a: [5.202603209, 0.0000001913],
+			e: [0.04849793, 0.000163225, -0.0000004714, -0.00000000201],
+			i: [1.303267, -0.0054965, 0.00000466, -0.000000002],
+			omega: [100.464407, 1.0209774, 0.00040315, 0.000000404],
+			w: [14.331207, 1.6126352, 0.00103042, -0.000004464],
+		},
+		saturn: {
+			L: [50.077444, 1223.5110686, 0.00051908, -0.00000003],
+			a: [9.554909192, -0.000002139, 0.000000004],
+			e: [0.05554814, -0.000346641, -0.0000006436, 0.0000000034],
+			i: [2.488879, -0.0037362, -0.00001519, 0.000000087],
+			omega: [113.665503, 0.877088, -0.00012176, -0.000002249],
+			w: [93.057237, 1.9637613, 0.00083753, 0.000004928],
+		},
+		uranus: {
+			L: [314.055005, 429.8640561, 0.0003039, 0.000000026],
+			a: [19.218446062, -0.0000000372, 0.00000000098],
+			e: [0.04638122, -0.000027293, 0.0000000789, 0.00000000024],
+			i: [0.773197, 0.0007744, 0.00003749, -0.000000092],
+			omega: [74.005957, 0.5211278, 0.00133947, 0.000018484],
+			w: [173.005291, 1.486379, 0.00021406, 0.000000434],
+		},
+		neptune: {
+			L: [304.348665, 219.8833092, 0.00030882, 0.000000018],
+			a: [30.110386869, -0.0000001663, 0.00000000069],
+			e: [0.00945575, 0.000006033, 0, -0.00000000005],
+			i: [1.769953, -0.0093082, -0.00000708, 0.000000027],
+			omega: [131.784057, 1.1022039, 0.00025952, -0.000000637],
+			w: [48.120276, 1.4262957, 0.00038434, 0.00000002],
+		},
+	} as const
+
+	// Returns mean orbital elements for a planet
+	// Results are referenced to mean dynamical ecliptic and equinox of date.
+	export function mean(p: keyof typeof CMEAN, jde: number, o?: Elements): Elements {
+		const T = Base.j2000Century(jde)
+		const c = CMEAN[p]
+		o ??= {} as Elements
+		o.L = normalizeAngle(Base.horner(T, c.L) * DEG2RAD)
+		o.a = Base.horner(T, c.a)
+		o.e = Base.horner(T, c.e)
+		o.i = Base.horner(T, c.i) * DEG2RAD
+		o.omega = c.omega !== undefined ? Base.horner(T, c.omega) * DEG2RAD : 0
+		o.w = Base.horner(T, c.w) * DEG2RAD
+		return o
+	}
+
+	// Returns mean inclination for a planet at a date.
+	export function inc(p: keyof typeof CMEAN, jde: number) {
+		return Base.horner(Base.j2000Century(jde), CMEAN[p].i) * DEG2RAD
+	}
+
+	// Returns mean longitude of ascending node for a planet at a date.
+	export function node(p: keyof typeof CMEAN, jde: number) {
+		return p === 'earth' ? 0 : Base.horner(Base.j2000Century(jde), CMEAN[p].omega) * DEG2RAD
+	}
+}
+
+// Chapter 34, Parabolic Motion.
+export namespace Parabolic {
+	// Elements holds parabolic elements needed for computing true anomaly and distance.
+	export class Elements {
+		constructor(
+			readonly T: number,
+			readonly q: Distance,
+		) {}
+
+		// Returns true anomaly (nu) and distance of a body in a parabolic orbit of the Sun.
+		anomalyDistance(jde: number): readonly [Angle, Distance] {
+			const W = (((3 * Base.K) / SQRT2) * (jde - this.T)) / this.q / sqrt(this.q)
+			const G = W * 0.5
+			const Y = cbrt(G + sqrt(G * G + 1))
+			const s = Y - 1 / Y
+			const nu = 2 * atan(s)
+			const r = this.q * (1 + s * s)
+			return [nu, r]
+		}
+	}
+}
+
+// Chapter 35, Near-parabolic Motion.
+export namespace NearParabolic {
+	// Holds orbital elements for near-parabolic orbits: time of Perihelion [T], Perihelion distance, [q] and eccentricity [e].
+	export class Elements {
+		constructor(
+			readonly T: number,
+			readonly q: Distance,
+			readonly e: number,
+		) {}
+
+		// Returns true anomaly (nu) and distance for near-parabolic orbits.
+		// An error is returned if the algorithm fails to converge.
+		anomalyDistance(jde: number): readonly [Angle, Distance, string?] {
+			// Fairly literal translation of code on p. 246
+			const q1 = (Base.K * sqrt((1 + this.e) / this.q)) / (2 * this.q)
+			const g = (1 - this.e) / (1 + this.e)
+			const t = jde - this.T
+
+			if (t === 0) return [0, this.q]
+
+			const d1 = 1e4
+			const d = 1e-9
+			const q2 = q1 * t
+			let s = 2 / (3 * abs(q2))
+			s = 2 / tan(2 * atan(cbrt(tan(atan(s) / 2))))
+
+			if (t < 0) {
+				s = -s
+			}
+
+			if (this.e !== 1) {
+				let l = 0
+
+				while (true) {
+					const s0 = s
+					let z = 1
+					const y = s * s
+					let g1 = -y * s
+					let q3 = q2 + (2 * g * s * y) / 3
+
+					while (true) {
+						z += 1
+						g1 = -g1 * g * y
+						const z1 = (z - (z + 1) * g) / (2 * z + 1)
+						const f = z1 * g1
+						q3 += f
+
+						if (z > 50 || abs(f) > d1) {
+							return [0, 0, 'no convergence']
+						}
+
+						if (abs(f) <= d) break
+					}
+
+					l++
+
+					if (l > 50) {
+						return [0, 0, 'no convergence']
+					}
+
+					while (true) {
+						const s1 = s
+
+						s = ((2 * s * s * s) / 3 + q3) / (s * s + 1)
+
+						if (abs(s - s1) <= d) break
+					}
+
+					if (abs(s - s0) <= d) break
+				}
+			}
+
+			let nu = 2 * atan(s)
+			const r = (this.q * (1 + this.e)) / (1 + this.e * cos(nu))
+
+			if (nu < 0) {
+				nu += TAU
+			}
+
+			return [nu, r]
+		}
 	}
 }
 
@@ -3037,7 +3297,7 @@ export namespace BinaryStars {
 		const cosi = cos(i)
 		const num = sinNuOmega * cosi
 		let theta = atan2(num, cosNuOmega) + ascendingNode
-		if (theta < 0) theta += 2 * PI
+		if (theta < 0) theta += TAU
 		const rho = r * sqrt(num * num + cosNuOmega * cosNuOmega)
 		return [theta, rho] as const
 	}

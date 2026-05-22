@@ -1,9 +1,40 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, dms, formatALT, formatRA, hms, normalizeAngle, secondsOfTime, signedDms, toArcsec, toDeg, toDms, toHms, toSecondsOfTime } from '../src/angle'
-import { ASEC2RAD, DAYSEC, DEG2RAD, PI, RAD2DEG } from '../src/constants'
+import { ASEC2RAD, DAYSEC, DEG2RAD, PI, PIOVERTWO, RAD2DEG } from '../src/constants'
 import { meter, toKilometer, toMeter } from '../src/distance'
 import { modf, roundToNthDecimal } from '../src/math'
-import { AngularSeparation, Apsis, Base, BinaryStars, Circle, Conjunction, Coords, ElementEquinox, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, Line, MoonPosition, Node, Nutation, Parallax, Planetary, Precession, Refraction, Semidiameter, Sidereal, Stellar } from '../src/meeus'
+import {
+	AngularSeparation,
+	Apsis,
+	Base,
+	BinaryStars,
+	Circle,
+	Conjunction,
+	Coords,
+	ElementEquinox,
+	Fit,
+	Globe,
+	Illuminated,
+	Interpolation,
+	Iteration,
+	Julian,
+	Kepler,
+	Line,
+	MoonPosition,
+	NearParabolic,
+	Node,
+	Nutation,
+	Parabolic,
+	Parallactic,
+	Parallax,
+	Planetary,
+	PlanetElements,
+	Precession,
+	Refraction,
+	Semidiameter,
+	Sidereal,
+	Stellar,
+} from '../src/meeus'
 import { time, timeToDate, timeYMD } from '../src/time'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
@@ -1093,6 +1124,26 @@ describe('Line', () => {
 	})
 })
 
+describe('Parallactic', () => {
+	test('eclipticAtHorizon', () => {
+		const [L1, L2, I] = Parallactic.eclipticAtHorizon(deg(23.44), deg(51), deg(75))
+
+		expect(formatALT(L1, false)).toBe('+169 21 30')
+		expect(formatALT(L2, false)).toBe('+349 21 30')
+		expect(formatALT(I, false)).toBe('+61 53 14')
+	})
+
+	test('diurnalPathAtHorizon', () => {
+		const phi = deg(40)
+		let J = Parallactic.diurnalPathAtHorizon(phi, 0) // 0.8726646259971648
+		let Jexp = PIOVERTWO - phi
+		expect(Math.abs((J - Jexp) / Jexp) < 1e-15).toBeTrue()
+		J = Parallactic.diurnalPathAtHorizon(phi, deg(23.44)) // 0.794553542331993
+		Jexp = dms(45, 31, 0)
+		expect(Math.abs((J - Jexp) / Jexp) < 1e-3).toBeTrue()
+	})
+})
+
 describe('Refraction', () => {
 	test('bennett', () => {
 		// Example 16.a, p. 107.0
@@ -1402,6 +1453,109 @@ describe('Kepler', () => {
 		// result from p. 207
 		const E = Kepler.kepler4(0.1, deg(5))
 		strictEqual(toDeg(E), 5.554599, 6)
+	})
+})
+
+describe('PlanetElements', () => {
+	test('mean', () => {
+		// Example 31.a, p. 211
+		const j = Julian.calendarGregorianToJD(2065, 6, 24)
+		const e = PlanetElements.mean('mercury', j)
+		strictEqual(toDeg(e.L), 203.494701, 6)
+		strictEqual(e.a, 0.38709831, 9)
+		strictEqual(e.e, 0.2056451, 8)
+		strictEqual(toDeg(e.i), 7.006171, 6)
+		strictEqual(toDeg(e.omega), 49.10765, 6)
+		strictEqual(toDeg(e.w), 78.475382, 6)
+	})
+
+	test('inc', () => {
+		const j = Julian.calendarGregorianToJD(2065, 6, 24)
+		const e = PlanetElements.mean('mercury', j)
+		strictEqual(PlanetElements.inc('mercury', j), e.i)
+	})
+
+	test('node', () => {
+		const j = Julian.calendarGregorianToJD(2065, 6, 24)
+		const e = PlanetElements.mean('mercury', j)
+		strictEqual(PlanetElements.node('mercury', j), e.omega)
+	})
+})
+
+describe('Parabolic', () => {
+	test('anomaly distance', () => {
+		// Example 34.a, p. 243
+		const e = new Parabolic.Elements(Julian.calendarGregorianToJD(1998, 4, 14.4358), 1.487469)
+		const j = Julian.calendarGregorianToJD(1998, 8, 5)
+		const [ano, dist] = e.anomalyDistance(j)
+		strictEqual(toDeg(ano), 66.78862, 5)
+		strictEqual(dist, 2.133911, 6)
+	})
+})
+
+describe('NearParabolic', () => {
+	describe('anomaly distance', () => {
+		const data = [
+			// test data p. 247
+			{ q: 0.921326, e: 1, t: 138.4783, v: 102.74426, r: 2.364192 },
+			{ q: 0.1, e: 0.987, t: 254.9, v: 164.50029, r: 4.063777 },
+			{ q: 0.123456, e: 0.99997, t: -30.47, v: 221.9119, r: 0.965053 },
+			{ q: 3.363943, e: 1.05731, t: 1237.1, v: 109.40598, r: 10.668551 },
+			{ q: 0.5871018, e: 0.9672746, t: 20, v: 52.85331, r: 0.729116 },
+			{ q: 0.5871018, e: 0.9672746, t: 0, v: 0, r: 0.5871018 },
+		] as const
+
+		for (const { q, e, t, v, r } of data) {
+			test(t.toString(), () => {
+				const elements = new NearParabolic.Elements(Base.J2000 + Math.random() * Base.JULIAN_CENTURY, q, e)
+				const [ano, dist, err] = elements.anomalyDistance(elements.T + t)
+
+				if (!err) {
+					expect(Math.abs(toDeg(ano) - v) < 1e-5).toBeTrue()
+					expect(Math.abs(dist - r) < 1e-6).toBeTrue()
+				}
+			})
+		}
+	})
+
+	describe('anomaly distance II', () => {
+		const data = [
+			// test data p. 248
+			{ q: 0.1, e: 0.9, t: 10, v: 126, p: 0, c: true },
+			{ q: 0.1, e: 0.9, t: 20, v: 142, p: 0, c: true },
+			{ q: 0.1, e: 0.9, t: 30, v: 0, p: 0, c: false },
+			{ q: 0.1, e: 0.987, t: 10, v: 123, p: 0, c: true },
+			{ q: 0.1, e: 0.987, t: 20, v: 137, p: 0, c: true },
+			{ q: 0.1, e: 0.987, t: 30, v: 143, p: 0, c: true },
+			{ q: 0.1, e: 0.987, t: 60, v: 152, p: 0, c: true },
+			{ q: 0.1, e: 0.987, t: 100, v: 157, p: 0, c: true },
+			{ q: 0.1, e: 0.987, t: 200, v: 163, p: 0, c: true },
+			{ q: 0.1, e: 0.987, t: 400, v: 167, p: 0, c: true },
+			{ q: 0.1, e: 0.987, t: 500, v: 0, p: 0, c: false },
+			{ q: 0.1, e: 0.999, t: 100, v: 156, p: 0, c: true },
+			{ q: 0.1, e: 0.999, t: 200, v: 161, p: 0, c: true },
+			{ q: 0.1, e: 0.999, t: 500, v: 166, p: 0, c: true },
+			{ q: 0.1, e: 0.999, t: 1000, v: 169, p: 0, c: true },
+			{ q: 0.1, e: 0.999, t: 5000, v: 174, p: 0, c: true },
+			{ q: 1, e: 0.99999, t: 100000, v: 172.5, p: 1, c: true },
+			{ q: 1, e: 0.99999, t: 10000000, v: 178.41, p: 2, c: true },
+			{ q: 1, e: 0.99999, t: 14000000, v: 178.58, p: 2, c: true },
+			{ q: 1, e: 0.99999, t: 17000000, v: 178.68, p: 2, c: true },
+			{ q: 1, e: 0.99999, t: 18000000, v: 0, p: 2, c: false },
+		] as const
+
+		for (const { q, e, t, v, p, c } of data) {
+			test(t.toString(), () => {
+				const elements = new NearParabolic.Elements(Base.J2000 + Math.random() * Base.JULIAN_CENTURY, q, e)
+				const [ano, , err] = elements.anomalyDistance(elements.T + t)
+
+				expect(!err).toBe(c)
+
+				if (!err) {
+					expect(Math.abs(toDeg(ano) - v) < 10 ** -p).toBeTrue()
+				}
+			})
+		}
 	})
 })
 

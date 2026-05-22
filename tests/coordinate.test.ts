@@ -59,22 +59,22 @@ test('galatic to equatorial', () => {
 test('zenith', () => {
 	const [rightAscension, declination] = zenith(deg(-45), deg(-22), TIME)
 
-	expect(formatRA(rightAscension, true)).toBe('03 28 20')
-	expect(formatDEC(declination, true)).toBe('-22 00 00')
+	expect(formatRA(rightAscension, false)).toBe('03 28 20')
+	expect(formatDEC(declination, false)).toBe('-22 00 00')
 })
 
 test('meridian - equator', () => {
 	const [rightAscension, declination] = meridianEquator(deg(-45), TIME)
 
-	expect(formatRA(rightAscension, true)).toBe('03 28 20')
-	expect(formatDEC(declination, true)).toBe('+00 00 00')
+	expect(formatRA(rightAscension, false)).toBe('03 28 20')
+	expect(formatDEC(declination, false)).toBe('+00 00 00')
 })
 
 test('meridian - ecliptic', () => {
 	const [rightAscension, declination] = meridianEcliptic(deg(-45), TIME)
 
-	expect(formatRA(rightAscension, true)).toBe('03 28 20')
-	expect(formatDEC(declination, true)).toBe('+18 52 53')
+	expect(formatRA(rightAscension, false)).toBe('03 28 20')
+	expect(formatDEC(declination, false)).toBe('+18 52 53')
 })
 
 test('equator - ecliptic', () => {
