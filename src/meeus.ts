@@ -1,13 +1,14 @@
 import { type Angle, normalizeAngle, secondsOfTime, toDeg } from './angle'
 import { ASEC2RAD, AU_KM, AU_M, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { Distance } from './distance'
+import type { Point } from './geometry'
 import { floorDiv, modf, type NumberArray, pmod } from './math'
 
 const { sin, cos, tan, asin, acos, atan, atan2, sqrt, cbrt, hypot, log10, abs, trunc, floor, min, SQRT2 } = Math
 
 // https://github.com/commenthol/astronomia/blob/master/src/
 
-export type Coord = readonly [Angle, Angle]
+export type Coord = readonly [Angle, Angle, Distance?]
 
 export const EARTH_RADIUS_KM = 6378.137 // km
 export const EARTH_RADIUS = EARTH_RADIUS_KM / AU_KM // au
@@ -2947,12 +2948,68 @@ export namespace MoonPosition {
 	// Computes the longitude of the true ascending node. That is, the node of the instantaneous lunar orbit.
 	export function trueNode(jde: number) {
 		const [d, m, m_, f] = dmf(Base.j2000Century(jde))
-		return node(jde) + -1.4979 * DEG2RAD * sin(2 * (d - f)) + -0.15 * DEG2RAD * sin(m) + -0.1226 * DEG2RAD * sin(2 * d) + 0.1176 * DEG2RAD * sin(2 * f) + -0.0801 * DEG2RAD * sin(2 * (m_ - f))
+		return node(jde) - 1.4979 * DEG2RAD * sin(2 * (d - f)) - 0.15 * DEG2RAD * sin(m) - 0.1226 * DEG2RAD * sin(2 * d) + 0.1176 * DEG2RAD * sin(2 * f) - 0.0801 * DEG2RAD * sin(2 * (m_ - f))
+	}
+}
+
+// Chapter 48, Illuminated Fraction of the Moon's Disk
+export namespace MoonIlluminated {
+	// Computes the phase angle of the Moon given geocentric equatorial coordinates.
+	export function phaseAngleEquatorial(cMoon: Coord, cSun: Coord) {
+		return pa(cMoon[2]!, cSun[2]!, cosEq(cMoon[0], cMoon[1], cSun[0], cSun[1]))
+	}
+
+	// Computes the cosine of the elongation from equatorial coordinates.
+	function cosEq(alpha0: Angle, delta0: Angle, alpha1: Angle, delta1: Angle) {
+		const [sDelta0, cDelta0] = Base.sincos(delta0)
+		const [sDelta1, cDelta1] = Base.sincos(delta1)
+		return sDelta1 * sDelta0 + cDelta1 * cDelta0 * cos(alpha1 - alpha0)
+	}
+
+	// Computes the phase angle from cos elongation and distances
+	function pa(delta: Distance, R: Distance, cPsi: Angle) {
+		const sPsi = sin(acos(cPsi))
+		let i = atan((R * sPsi) / (delta - R * cPsi))
+		if (i < 0) i += PI
+		return i
+	}
+
+	// Computes the phase angle of the Moon given equatorial coordinates. Less accurate than phaseAngleEquatorial.
+	export function phaseAngleEquatorial2(cMoon: Coord, cSun: Coord) {
+		return acos(-cosEq(cMoon[0], cMoon[1], cSun[0], cSun[1]))
+	}
+
+	// Computes the phase angle of the Moon given ecliptic coordinates.
+	export function phaseAngleEcliptic(cMoon: Coord, cSun: Coord) {
+		return pa(cMoon[2]!, cSun[2]!, cosEcl(cMoon[0], cMoon[1], cSun[0]))
+	}
+
+	// Computes the cosine of the elongation from ecliptic coordinates
+	function cosEcl(lambda: Angle, beta: Angle, lambda0: Angle) {
+		return cos(beta) * cos(lambda - lambda0)
+	}
+
+	// Computes the phase angle of the Moon given ecliptic coordinates. Less accurate than phaseAngleEcliptic.
+	export function phaseAngleEcliptic2(cMoon: Coord, cSun: Coord) {
+		return acos(-cosEcl(cMoon[0], cMoon[1], cSun[0]))
+	}
+
+	const PA3_D = [297.8501921 * DEG2RAD, 445267.1114034 * DEG2RAD, -0.0018819 * DEG2RAD, DEG2RAD / 545868, -DEG2RAD / 113065000] as const
+	const PA3_m = [357.5291092 * DEG2RAD, 35999.0502909 * DEG2RAD, -0.0001536 * DEG2RAD, DEG2RAD / 24490000] as const
+	const PA3_M = [134.9633964 * DEG2RAD, 477198.8675055 * DEG2RAD, 0.0087414 * DEG2RAD, DEG2RAD / 69699, -DEG2RAD / 14712000] as const
+
+	// Computes the phase angle of the Moon given a julian day. Less accurate than phaseAngle functions taking coordinates.
+	export function phaseAngle3(jde: number) {
+		const T = Base.j2000Century(jde)
+		const D = Base.horner(T, PA3_D)
+		const m = Base.horner(T, PA3_m)
+		const M = Base.horner(T, PA3_M)
+		return PI - normalizeAngle(D) - 6.289 * DEG2RAD * sin(M) + 2.1 * DEG2RAD * sin(m) - 1.274 * DEG2RAD * sin(2 * D - M) - 0.658 * DEG2RAD * sin(2 * D) - 0.214 * DEG2RAD * sin(2 * M) - 0.11 * DEG2RAD * sin(D)
 	}
 }
 
 // Chapter 50, Perigee and apogee of the Moon
-export namespace Apsis {
+export namespace MoonApsis {
 	// Conversion factor from k to T, given in (50.3) p. 356
 	const CK = 1 / 1325.55
 
@@ -3183,6 +3240,277 @@ export namespace Apsis {
 	}
 }
 
+// Chapter 51, Passages of the Moon through the Nodes.
+export namespace MoonNode {
+	// Ascending returns the date of passage of the Moon through an ascending node.
+	export function ascending(year: number) {
+		return node(year, 0)
+	}
+
+	// Descending returns the date of passage of the Moon through a descending node.
+	export function descending(year: number) {
+		return node(year, 0.5)
+	}
+
+	const CK = 1 / 1336.86
+
+	function node(y: number, h: number) {
+		let k = (y - 2000.05) * 13.4223 // (50.1) p. 355
+		k = Math.floor(k - h + 0.5) + h // snap to half orbit
+		const T = k * CK
+		const D = Base.horner(T, [183.638 * DEG2RAD, (331.73735682 * DEG2RAD) / CK, 0.0014852 * DEG2RAD, 0.00000209 * DEG2RAD, -0.00000001 * DEG2RAD])
+		const M = Base.horner(T, [17.4006 * DEG2RAD, (26.8203725 * DEG2RAD) / CK, 0.0001186 * DEG2RAD, 0.00000006 * DEG2RAD])
+		const m = Base.horner(T, [38.3776 * DEG2RAD, (355.52747313 * DEG2RAD) / CK, 0.0123499 * DEG2RAD, 0.000014627 * DEG2RAD, -0.000000069 * DEG2RAD])
+		const omega = Base.horner(T, [123.9767 * DEG2RAD, (-1.44098956 * DEG2RAD) / CK, 0.0020608 * DEG2RAD, 0.00000214 * DEG2RAD, -0.000000016 * DEG2RAD])
+		const V = Base.horner(T, [299.75 * DEG2RAD, 132.85 * DEG2RAD, -0.009173 * DEG2RAD])
+		const P = omega + 272.75 * DEG2RAD - 2.3 * DEG2RAD * T
+		const E = Base.horner(T, [1, -0.002516, -0.0000074])
+
+		return (
+			Base.horner(T, [2451565.1619, 27.212220817 / CK, 0.0002762, 0.000000021, -0.000000000088]) +
+			-0.4721 * Math.sin(m) +
+			-0.1649 * Math.sin(2 * D) +
+			-0.0868 * Math.sin(2 * D - m) +
+			0.0084 * Math.sin(2 * D + m) +
+			-0.0083 * Math.sin(2 * D - M) * E +
+			-0.0039 * Math.sin(2 * D - M - m) * E +
+			0.0034 * Math.sin(2 * m) +
+			-0.0031 * Math.sin(2 * (D - m)) +
+			0.003 * Math.sin(2 * D + M) * E +
+			0.0028 * Math.sin(M - m) * E +
+			0.0026 * Math.sin(M) * E +
+			0.0025 * Math.sin(4 * D) +
+			0.0024 * Math.sin(D) +
+			0.0022 * Math.sin(M + m) * E +
+			0.0017 * Math.sin(omega) +
+			0.0014 * Math.sin(4 * D - m) +
+			0.0005 * Math.sin(2 * D + M - m) * E +
+			0.0004 * Math.sin(2 * D - M + m) * E +
+			-0.0003 * Math.sin(2 * (D - M)) * E +
+			0.0003 * Math.sin(4 * D - M) * E +
+			0.0003 * Math.sin(V) +
+			0.0003 * Math.sin(P)
+		)
+	}
+}
+
+// Chapter 52, Maximum Declinations of the Moon
+export namespace MoonMaxDeclination {
+	// Computes the maximum northern declination of the Moon near a given date.
+	export function north(y: number) {
+		return max(y, NC)
+	}
+
+	// South computes the maximum southern declination of the Moon near a given date.
+	export function south(y: number) {
+		return max(y, SC)
+	}
+
+	const CK = 1 / 1336.86
+
+	function max(y: number, c: typeof NC | typeof SC) {
+		let k = (y - 2000.03) * 13.3686 // (52.1) p. 367
+		k = Math.floor(k + 0.5)
+		const T = k * CK
+		const D = Base.horner(T, [c.D, (333.0705546 * DEG2RAD) / CK, -0.0004214 * DEG2RAD, 0.00000011 * DEG2RAD])
+		const m = Base.horner(T, [c.m, (26.9281592 * DEG2RAD) / CK, -0.0000355 * DEG2RAD, -0.0000001 * DEG2RAD])
+		const M = Base.horner(T, [c.M, (356.9562794 * DEG2RAD) / CK, 0.0103066 * DEG2RAD, 0.00001251 * DEG2RAD])
+		const f = Base.horner(T, [c.f, (1.4467807 * DEG2RAD) / CK, -0.002069 * DEG2RAD, -0.00000215 * DEG2RAD])
+		const E = Base.horner(T, [1, -0.002516, -0.0000074])
+		const jde =
+			Base.horner(T, [c.JDE, 27.321582247 / CK, 0.000119804, -0.000000141]) +
+			c.tc[0] * Math.cos(f) +
+			c.tc[1] * Math.sin(M) +
+			c.tc[2] * Math.sin(2 * f) +
+			c.tc[3] * Math.sin(2 * D - M) +
+			c.tc[4] * Math.cos(M - f) +
+			c.tc[5] * Math.cos(M + f) +
+			c.tc[6] * Math.sin(2 * D) +
+			c.tc[7] * Math.sin(m) * E +
+			c.tc[8] * Math.cos(3 * f) +
+			c.tc[9] * Math.sin(M + 2 * f) +
+			c.tc[10] * Math.cos(2 * D - f) +
+			c.tc[11] * Math.cos(2 * D - M - f) +
+			c.tc[12] * Math.cos(2 * D - M + f) +
+			c.tc[13] * Math.cos(2 * D + f) +
+			c.tc[14] * Math.sin(2 * M) +
+			c.tc[15] * Math.sin(M - 2 * f) +
+			c.tc[16] * Math.cos(2 * M - f) +
+			c.tc[17] * Math.sin(M + 3 * f) +
+			c.tc[18] * Math.sin(2 * D - m - M) * E +
+			c.tc[19] * Math.cos(M - 2 * f) +
+			c.tc[20] * Math.sin(2 * (D - M)) +
+			c.tc[21] * Math.sin(f) +
+			c.tc[22] * Math.sin(2 * D + M) +
+			c.tc[23] * Math.cos(M + 2 * f) +
+			c.tc[24] * Math.sin(2 * D - m) * E +
+			c.tc[25] * Math.sin(M + f) +
+			c.tc[26] * Math.sin(m - M) * E +
+			c.tc[27] * Math.sin(M - 3 * f) +
+			c.tc[28] * Math.sin(2 * M + f) +
+			c.tc[29] * Math.cos(2 * (D - M) - f) +
+			c.tc[30] * Math.sin(3 * f) +
+			c.tc[31] * Math.cos(M + 3 * f) +
+			c.tc[32] * Math.cos(2 * M) +
+			c.tc[33] * Math.cos(2 * D - M) +
+			c.tc[34] * Math.cos(2 * D + M + f) +
+			c.tc[35] * Math.cos(M) +
+			c.tc[36] * Math.sin(3 * M + f) +
+			c.tc[37] * Math.sin(2 * D - M + f) +
+			c.tc[38] * Math.cos(2 * (D - M)) +
+			c.tc[39] * Math.cos(D + f) +
+			c.tc[40] * Math.sin(m + M) * E +
+			c.tc[41] * Math.sin(2 * (D - f)) +
+			c.tc[42] * Math.cos(2 * M + f) +
+			c.tc[43] * Math.cos(3 * M + f)
+		const delta =
+			23.6961 * DEG2RAD -
+			0.013004 * DEG2RAD * T +
+			c.dc[0] * Math.sin(f) +
+			c.dc[1] * Math.cos(2 * f) +
+			c.dc[2] * Math.sin(2 * D - f) +
+			c.dc[3] * Math.sin(3 * f) +
+			c.dc[4] * Math.cos(2 * (D - f)) +
+			c.dc[5] * Math.cos(2 * D) +
+			c.dc[6] * Math.sin(M - f) +
+			c.dc[7] * Math.sin(M + 2 * f) +
+			c.dc[8] * Math.cos(f) +
+			c.dc[9] * Math.sin(2 * D + m - f) * E +
+			c.dc[10] * Math.sin(M + 3 * f) +
+			c.dc[11] * Math.sin(D + f) +
+			c.dc[12] * Math.sin(M - 2 * f) +
+			c.dc[13] * Math.sin(2 * D - m - f) * E +
+			c.dc[14] * Math.sin(2 * D - M - f) +
+			c.dc[15] * Math.cos(M + f) +
+			c.dc[16] * Math.cos(M + 2 * f) +
+			c.dc[17] * Math.cos(2 * M + f) +
+			c.dc[18] * Math.cos(M - 3 * f) +
+			c.dc[19] * Math.cos(2 * M - f) +
+			c.dc[20] * Math.cos(M - 2 * f) +
+			c.dc[21] * Math.sin(2 * M) +
+			c.dc[22] * Math.sin(3 * M + f) +
+			c.dc[23] * Math.cos(2 * D + m - f) * E +
+			c.dc[24] * Math.cos(M - f) +
+			c.dc[25] * Math.cos(3 * f) +
+			c.dc[26] * Math.sin(2 * D + f) +
+			c.dc[27] * Math.cos(M + 3 * f) +
+			c.dc[28] * Math.cos(D + f) +
+			c.dc[29] * Math.sin(2 * M - f) +
+			c.dc[30] * Math.cos(3 * M + f) +
+			c.dc[31] * Math.cos(2 * (D + M) + f) +
+			c.dc[32] * Math.sin(2 * (D - M) - f) +
+			c.dc[33] * Math.cos(2 * M) +
+			c.dc[34] * Math.cos(M) +
+			c.dc[35] * Math.sin(2 * f) +
+			c.dc[36] * Math.sin(M + f)
+		return [jde, c.s * delta] as const
+	}
+
+	const NC = {
+		D: 152.2029 * DEG2RAD,
+		m: 14.8591 * DEG2RAD,
+		M: 4.6881 * DEG2RAD,
+		f: 325.8867 * DEG2RAD,
+		JDE: 2451562.5897,
+		s: 1,
+		tc: [
+			0.8975, -0.4726, -0.103, -0.0976, -0.0462, -0.0461, -0.0438, 0.0162, -0.0157, 0.0145, 0.0136, -0.0095, -0.0091, -0.0089, 0.0075, -0.0068, 0.0061, -0.0047, -0.0043, -0.004, -0.0037, 0.0031, 0.003, -0.0029, -0.0029, -0.0027, 0.0024, -0.0021, 0.0019, 0.0018, 0.0018, 0.0017, 0.0017, -0.0014, 0.0013, 0.0013,
+			0.0012, 0.0011, -0.0011, 0.001, 0.001, -0.0009, 0.0007, -0.0007,
+		],
+		dc: [
+			5.1093 * DEG2RAD,
+			0.2658 * DEG2RAD,
+			0.1448 * DEG2RAD,
+			-0.0322 * DEG2RAD,
+			0.0133 * DEG2RAD,
+			0.0125 * DEG2RAD,
+			-0.0124 * DEG2RAD,
+			-0.0101 * DEG2RAD,
+			0.0097 * DEG2RAD,
+			-0.0087 * DEG2RAD,
+			0.0074 * DEG2RAD,
+			0.0067 * DEG2RAD,
+			0.0063 * DEG2RAD,
+			0.006 * DEG2RAD,
+			-0.0057 * DEG2RAD,
+			-0.0056 * DEG2RAD,
+			0.0052 * DEG2RAD,
+			0.0041 * DEG2RAD,
+			-0.004 * DEG2RAD,
+			0.0038 * DEG2RAD,
+			-0.0034 * DEG2RAD,
+			-0.0029 * DEG2RAD,
+			0.0029 * DEG2RAD,
+			-0.0028 * DEG2RAD,
+			-0.0028 * DEG2RAD,
+			-0.0023 * DEG2RAD,
+			-0.0021 * DEG2RAD,
+			0.0019 * DEG2RAD,
+			0.0018 * DEG2RAD,
+			0.0017 * DEG2RAD,
+			0.0015 * DEG2RAD,
+			0.0014 * DEG2RAD,
+			-0.0012 * DEG2RAD,
+			-0.0012 * DEG2RAD,
+			-0.001 * DEG2RAD,
+			-0.001 * DEG2RAD,
+			0.0006 * DEG2RAD,
+		],
+	} as const
+
+	const SC = {
+		D: 345.6676 * DEG2RAD,
+		m: 1.3951 * DEG2RAD,
+		M: 186.21 * DEG2RAD,
+		f: 145.1633 * DEG2RAD,
+		JDE: 2451548.9289,
+		s: -1,
+		tc: [
+			-0.8975, -0.4726, -0.103, -0.0976, 0.0541, 0.0516, -0.0438, 0.0112, 0.0157, 0.0023, -0.0136, 0.011, 0.0091, 0.0089, 0.0075, -0.003, -0.0061, -0.0047, -0.0043, 0.004, -0.0037, -0.0031, 0.003, 0.0029, -0.0029, -0.0027, 0.0024, -0.0021, -0.0019, -0.0006, -0.0018, -0.0017, 0.0017, 0.0014, -0.0013, -0.0013,
+			0.0012, 0.0011, 0.0011, 0.001, 0.001, -0.0009, -0.0007, -0.0007,
+		],
+		dc: [
+			-5.1093 * DEG2RAD,
+			0.2658 * DEG2RAD,
+			-0.1448 * DEG2RAD,
+			0.0322 * DEG2RAD,
+			0.0133 * DEG2RAD,
+			0.0125 * DEG2RAD,
+			-0.0015 * DEG2RAD,
+			0.0101 * DEG2RAD,
+			-0.0097 * DEG2RAD,
+			0.0087 * DEG2RAD,
+			0.0074 * DEG2RAD,
+			0.0067 * DEG2RAD,
+			-0.0063 * DEG2RAD,
+			-0.006 * DEG2RAD,
+			0.0057 * DEG2RAD,
+			-0.0056 * DEG2RAD,
+			-0.0052 * DEG2RAD,
+			-0.0041 * DEG2RAD,
+			-0.004 * DEG2RAD,
+			-0.0038 * DEG2RAD,
+			0.0034 * DEG2RAD,
+			-0.0029 * DEG2RAD,
+			0.0029 * DEG2RAD,
+			0.0028 * DEG2RAD,
+			-0.0028 * DEG2RAD,
+			0.0023 * DEG2RAD,
+			0.0021 * DEG2RAD,
+			0.0019 * DEG2RAD,
+			0.0018 * DEG2RAD,
+			-0.0017 * DEG2RAD,
+			0.0015 * DEG2RAD,
+			0.0014 * DEG2RAD,
+			0.0012 * DEG2RAD,
+			-0.0012 * DEG2RAD,
+			0.001 * DEG2RAD,
+			-0.001 * DEG2RAD,
+			0.0037 * DEG2RAD,
+		],
+	} as const
+}
+
 // Chapter 55, Semidiameters of the Sun, Moon, and Planets.
 export namespace Semidiameter {
 	// Standard semidiameters at unit distance of 1 AU, scaled to radians.
@@ -3312,5 +3640,193 @@ export namespace BinaryStars {
 		const d = A - C
 		const sqrtD = sqrt(d * d + 4 * B * B)
 		return sqrt((2 * sqrtD) / (A + C + sqrtD))
+	}
+}
+
+// Chapter 58, Calculation of a Planar Sundial.
+export namespace Sundial {
+	// holds data to draw an hour line on the sundial.
+	export interface Line {
+		readonly hour: number // 0 to 24
+		// One or more points corresponding to the hour.
+		readonly points: readonly Point[]
+	}
+
+	const m = [-23.44 * DEG2RAD, -20.15 * DEG2RAD, -11.47 * DEG2RAD, 0, 11.47 * DEG2RAD, 20.15 * DEG2RAD, 23.44 * DEG2RAD] as const
+
+	// Computes data for the general case of a planar sundial.
+	// "phi" is geographic latitude at which the sundial will be located.
+	// "D" is gnomonic declination, the azimuth of the perpendicular to the plane
+	// of the sundial, measured from the southern meridian towards the west.
+	// "a" is the length of a straight stylus perpendicular to the plane
+	// of the sundial, "z" is zenithal distance of the direction defined by the stylus.
+	// Results consist of a set of lines, a center point, u, the length of a
+	// polar stylus, and psi, the angle which the polar stylus makes with the plane
+	// of the sundial. The center point, the points defining the hour lines, and
+	// u are in units of "a", the stylus length.
+	export function general(phi: Angle, D: Angle, a: number, z: Angle) {
+		const [sPhi, cPhi] = Base.sincos(phi)
+		const tPhi = sPhi / cPhi
+		const [sD, cD] = Base.sincos(D)
+		const [sz, cz] = Base.sincos(z)
+		const P = sPhi * cz - cPhi * sz * cD
+		const lines: Line[] = []
+
+		for (let hour = 0; hour < 24; hour++) {
+			const H = (hour - 12) * 15 * DEG2RAD
+			const aH = Math.abs(H)
+			const [sH, cH] = Base.sincos(H)
+			const points: Point[] = []
+
+			for (const d of m) {
+				const tDelta = Math.tan(d)
+				const H0 = Math.acos(-tPhi * tDelta)
+
+				if (aH > H0) continue // sun below horizon
+
+				const Q = sD * sz * sH + (cPhi * cz + sPhi * sz * cD) * cH + P * tDelta
+				if (Q < 0) continue // sun below plane of sundial
+
+				const Nx = cD * sH - sD * (sPhi * cH - cPhi * tDelta)
+				const Ny = cz * sD * sH - (cPhi * sz - sPhi * cz * cD) * cH - (sPhi * sz + cPhi * cz * cD) * tDelta
+				points.push({ x: (a * Nx) / Q, y: (a * Ny) / Q })
+			}
+
+			if (points.length > 0) {
+				lines.push({ hour, points })
+			}
+		}
+
+		const x = (a / P) * cPhi * sD
+		const y = (-a / P) * (sPhi * sz + cPhi * cz * cD)
+		const center: Point = { x, y }
+
+		const aP = Math.abs(P)
+		const length = a / aP // u
+		const angle = Math.asin(aP) // psi
+
+		return { lines, center, length, angle } as const
+	}
+
+	// Computes data for a sundial level with the equator.
+	// "phi" is geographic latitude at which the sundial will be located;
+	// "a" is the length of a straight stylus perpendicular to the plane of the sundial.
+	// The sundial will have two sides, north and south. Results define/ lines on the
+	// north and south sides of the sundial. Result coordinates are in units of a, the stylus length.
+	export function equatorial(phi: Angle, a: number) {
+		const tPhi = Math.tan(phi)
+		const north: Line[] = []
+		const south: Line[] = []
+
+		for (let hour = 0; hour < 24; hour++) {
+			const H = (hour - 12) * 15 * DEG2RAD
+			const aH = Math.abs(H)
+			const [sH, cH] = Base.sincos(H)
+			const sl: Point[] = []
+			const nl: Point[] = []
+
+			for (const d of m) {
+				const tDelta = Math.tan(d)
+				const H0 = Math.acos(-tPhi * tDelta)
+
+				if (aH > H0 || tDelta === 0) continue
+
+				const x = (-a * sH) / tDelta
+				const yy = (a * cH) / tDelta
+
+				if (tDelta < 0) {
+					sl.push({ x, y: yy })
+				} else {
+					nl.push({ x, y: -yy })
+				}
+			}
+
+			if (nl.length > 0) north.push({ hour, points: nl })
+			if (sl.length > 0) south.push({ hour, points: sl })
+		}
+
+		return { north, south } as const
+	}
+
+	// Computes data for a horizontal sundial.
+	// Argument phi is geographic latitude at which the sundial will be located,
+	// a is the length of a straight stylus perpendicular to the plane of the sundial.
+	// Results consist of a set of lines, a center point, and u, the length of a
+	// polar stylus. They are in units of a, the stylus length.
+	export function horizontal(phi: Angle, a: number) {
+		const [sPhi, cPhi] = Base.sincos(phi)
+		const tPhi = sPhi / cPhi
+		const lines: Line[] = []
+
+		for (let hour = 0; hour < 24; hour++) {
+			const H = (hour - 12) * 15 * DEG2RAD
+			const aH = Math.abs(H)
+			const [sH, cH] = Base.sincos(H)
+			const points: Point[] = []
+
+			for (const d of m) {
+				const tDelta = Math.tan(d)
+				const H0 = Math.acos(-tPhi * tDelta)
+				if (aH > H0) {
+					continue // sun below horizon
+				}
+				const Q = cPhi * cH + sPhi * tDelta
+				const x = (a * sH) / Q
+				const y = (a * (sPhi * cH - cPhi * tDelta)) / Q
+				points.push({ x, y })
+			}
+
+			if (points.length > 0) lines.push({ hour, points })
+		}
+
+		const center: Point = { x: 0, y: -a / tPhi }
+		const length = a / Math.abs(sPhi) // u
+
+		return { lines, center, length } as const
+	}
+
+	// Computes data for a vertical sundial.
+	// "phi" is geographic latitude at which the sundial will be located.
+	// "D" is gnomonic declination, the azimuth of the perpendicular to the plane
+	// of the sundial, measured from the southern meridian towards the west.
+	// "a" is the length of a straight stylus perpendicular to the plane of the sundial.
+	// Results consist of a set of lines, a center point, and u, the length of a
+	// polar stylus. They are in units of a, the stylus length.
+	export function vertical(phi: Angle, D: Angle, a: number) {
+		const [sPhi, cPhi] = Base.sincos(phi)
+		const tPhi = sPhi / cPhi
+		const [sD, cD] = Base.sincos(D)
+		const lines = []
+
+		for (let hour = 0; hour < 24; hour++) {
+			const H = (hour - 12) * 15 * DEG2RAD
+			const aH = Math.abs(H)
+			const [sH, cH] = Base.sincos(H)
+			const points: Point[] = []
+
+			for (const d of m) {
+				const tDelta = Math.tan(d)
+				const H0 = Math.acos(-tPhi * tDelta)
+
+				if (aH > H0) continue // sun below horizon
+
+				const Q = sD * sH + sPhi * cD * cH - cPhi * cD * tDelta
+
+				if (Q < 0) continue // sun below plane of sundial
+
+				const x = (a * (cD * sH - sPhi * sD * cH + cPhi * sD * tDelta)) / Q
+				const y = (-a * (cPhi * cH + sPhi * tDelta)) / Q
+				points.push({ x, y })
+			}
+
+			if (points.length > 0) lines.push({ hour, points })
+		}
+
+		const x = (-a * sD) / cD
+		const y = (a * tPhi) / cD
+		const center: Point = { x, y }
+		const length = a / Math.abs(cPhi * cD) // u
+
+		return { lines, center, length } as const
 	}
 }

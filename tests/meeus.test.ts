@@ -3,38 +3,8 @@ import { deg, dms, formatALT, formatRA, hms, normalizeAngle, secondsOfTime, sign
 import { ASEC2RAD, DAYSEC, DEG2RAD, PI, PIOVERTWO, RAD2DEG } from '../src/constants'
 import { meter, toKilometer, toMeter } from '../src/distance'
 import { modf, roundToNthDecimal } from '../src/math'
-import {
-	AngularSeparation,
-	Apsis,
-	Base,
-	BinaryStars,
-	Circle,
-	Conjunction,
-	Coords,
-	ElementEquinox,
-	Fit,
-	Globe,
-	Illuminated,
-	Interpolation,
-	Iteration,
-	Julian,
-	Kepler,
-	Line,
-	MoonPosition,
-	NearParabolic,
-	Node,
-	Nutation,
-	Parabolic,
-	Parallactic,
-	Parallax,
-	Planetary,
-	PlanetElements,
-	Precession,
-	Refraction,
-	Semidiameter,
-	Sidereal,
-	Stellar,
-} from '../src/meeus'
+// oxfmt-ignore
+import { AngularSeparation, MoonApsis, Base, BinaryStars, Circle, Conjunction, Coords, ElementEquinox, Fit, Globe, Illuminated, Interpolation, Iteration, Julian, Kepler, Line, MoonIlluminated, MoonPosition, NearParabolic, Node, Nutation, Parabolic, Parallactic, Parallax, Planetary, PlanetElements, Precession, Refraction, Semidiameter, Sidereal, Stellar, MoonMaxDeclination, MoonNode, Sundial, } from '../src/meeus'
 import { time, timeToDate, timeYMD } from '../src/time'
 
 function strictEqual(actual: number, expected: number, numDigits: number = 12) {
@@ -1868,22 +1838,64 @@ describe('Moon Position', () => {
 	})
 })
 
-describe('Apsis', () => {
+describe('MoonIlluminated', () => {
+	const j = Julian.calendarGregorianToJD(1992, 4, 12)
+
+	test('phaseAngleEquatorial', () => {
+		const i = MoonIlluminated.phaseAngleEquatorial([134.6885 * DEG2RAD, 13.7684 * DEG2RAD, 368410], [20.6579 * DEG2RAD, 8.6964 * DEG2RAD, 149971520])
+		strictEqual(toDeg(i), 69.0756, 4)
+	})
+
+	test('phaseAngleEquatorial2', () => {
+		const i = MoonIlluminated.phaseAngleEquatorial2([134.6885 * DEG2RAD, 13.7684 * DEG2RAD], [20.6579 * DEG2RAD, 8.6964 * DEG2RAD])
+		const k = Base.illuminated(i)
+		strictEqual(k, 0.6775, 4)
+	})
+
+	test('phaseAngleEcliptic', () => {
+		const pos = MoonPosition.position(j)
+		// const T = Base.j2000Century(j)
+		const λ0 = 0.3898991881696717 // Solar.apparentLongitude(T)
+		const R = 1.0024972371630392 // Solar.radius(T)
+		const i = MoonIlluminated.phaseAngleEcliptic(pos, [λ0, 0, R])
+		const ref = deg(69.0756)
+		const err = Math.abs((i - ref) / ref)
+		expect(err < 1e-4).toBeTrue()
+	})
+
+	test('phaseAngleEcliptic2', () => {
+		const pos = MoonPosition.position(j)
+		const λ0 = 0.3898991881696717 // Solar.apparentLongitude(Base.j2000Century(j))
+		const i = MoonIlluminated.phaseAngleEcliptic2(pos, [λ0, 0])
+		const k = Base.illuminated(i)
+		const err = Math.abs(k - 0.6775)
+		expect(err < 1e-4).toBeTrue()
+	})
+
+	test('phaseAngle3', () => {
+		const i = MoonIlluminated.phaseAngle3(j)
+		const k = Base.illuminated(i)
+		strictEqual(toDeg(i), 68.88, 2)
+		strictEqual(k, 0.6801, 4)
+	})
+})
+
+describe('MoonApsis', () => {
 	test('meanApogee', () => {
 		// Example 50.a, p. 357.0
-		const res = Apsis.meanApogee(1988.75)
+		const res = MoonApsis.meanApogee(1988.75)
 		strictEqual(res, 2447442.8191, 4)
 	})
 
 	test('apogee', () => {
 		// Example 50.a, p. 357.0
-		const j = Apsis.apogee(1988.75)
+		const j = MoonApsis.apogee(1988.75)
 		strictEqual(j, 2447442.3543, 4)
 	})
 
 	test('apogeeParallax', () => {
 		// Example 50.a, p. 357.0
-		const p = Apsis.apogeeParallax(1988.75)
+		const p = MoonApsis.apogeeParallax(1988.75)
 		strictEqual(toArcsec(p), 3240.679, 3)
 	})
 
@@ -1899,31 +1911,31 @@ describe('Apsis', () => {
 		for (const [y, m, d, dy] of dates) {
 			test(dy.toString(), () => {
 				const ref = Julian.calendarGregorianToJD(y, m, d)
-				const j = Apsis.perigee(dy)
+				const j = MoonApsis.perigee(dy)
 				expect(Math.abs(j - ref) < 0.1).toBeTrue()
 			})
 		}
 	})
 
 	test('perigeeParallax', () => {
-		const p = Apsis.perigeeParallax(1997.93)
+		const p = MoonApsis.perigeeParallax(1997.93)
 		strictEqual(toArcsec(p), 3566.637, 3)
 	})
 
 	test('perigeeDistance', () => {
 		const y = 1997.93
-		const p = Apsis.perigeeParallax(y)
-		const d = Apsis.distance(p)
+		const p = MoonApsis.perigeeParallax(y)
+		const d = MoonApsis.distance(p)
 		strictEqual(toKilometer(d), 368877, 0)
-		const per = Apsis.perigee(y)
+		const per = MoonApsis.perigee(y)
 		const dist = MoonPosition.position(per)
 		strictEqual(toKilometer(dist[2]), 368881, 0)
 	})
 
 	test('comparing perigeeParallax with parallax from position', () => {
 		const y = 1997.93
-		const perPar = Apsis.perigeeParallax(y)
-		const per = Apsis.perigee(y)
+		const perPar = MoonApsis.perigeeParallax(y)
+		const per = MoonApsis.perigee(y)
 		const dist = MoonPosition.position(per)
 		const par = MoonPosition.parallax(dist[2])
 		expect(toArcsec(Math.abs(perPar - par)) < 0.1).toBeTrue()
@@ -1931,21 +1943,55 @@ describe('Apsis', () => {
 
 	test('apogeeDistance', () => {
 		const y = 1997.9
-		const p = Apsis.apogeeParallax(y)
-		const d = Apsis.distance(p)
+		const p = MoonApsis.apogeeParallax(y)
+		const d = MoonApsis.distance(p)
 		strictEqual(toKilometer(d), 404695, 0)
-		const apo = Apsis.apogee(y)
+		const apo = MoonApsis.apogee(y)
 		const dist = MoonPosition.position(apo)
 		strictEqual(toKilometer(dist[2]), 404697, 0)
 	})
 
 	test('comparing apogeeParallax with parallax from position', () => {
 		const y = 1997.9
-		const apoPar = Apsis.apogeeParallax(y)
-		const apo = Apsis.apogee(y)
+		const apoPar = MoonApsis.apogeeParallax(y)
+		const apo = MoonApsis.apogee(y)
 		const dist = MoonPosition.position(apo)
 		const par = MoonPosition.parallax(dist[2])
 		expect(toArcsec(Math.abs(apoPar - par)) < 0.1).toBeTrue()
+	})
+})
+
+describe('MoonNode', () => {
+	test('ascending', () => {
+		// Example 51.a, p. 365.0
+		const j = MoonNode.ascending(1987.37)
+		strictEqual(j, 2446938.76803, 5)
+	})
+})
+
+describe('MoonMaxDeclination', () => {
+	test('north AD', () => {
+		// Example 52.a, p. 370.0
+		const [jde, dec] = MoonMaxDeclination.north(1988.95)
+
+		strictEqual(jde, 2447518.3346, 4)
+		strictEqual(toDeg(dec), 28.1562, 4)
+	})
+
+	test('south', () => {
+		// Example 52.b, p. 370.0
+		const [jde, dec] = MoonMaxDeclination.south(2049.3)
+
+		strictEqual(jde, 2469553.0834, 4)
+		strictEqual(toDeg(dec), -22.1384, 4)
+	})
+
+	test('north BC', () => {
+		// Example 52.c, p. 370.0
+		const [jde, dec] = MoonMaxDeclination.north(-3.8)
+
+		strictEqual(jde, 1719672.1412, 4)
+		strictEqual(toDeg(dec), 28.9739, 4)
 	})
 })
 
@@ -2009,5 +2055,118 @@ describe('BinaryStars', () => {
 		// Example 57.b, p. 400
 		const res = BinaryStars.apparentEccentricity(0.2763, deg(59.025), deg(219.907))
 		strictEqual(res, 0.86, 3)
+	})
+})
+
+describe('Sundial', () => {
+	test('general a', () => {
+		// Example 58.a, p. 404.0
+		const res = Sundial.general(40 * DEG2RAD, 70 * DEG2RAD, 1, 50 * DEG2RAD)
+
+		const hours = res.lines.map(mapHour)
+		expect(hours).toEqual([9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+
+		for (const l of res.lines) {
+			if (l.hour === 11) {
+				strictEqual(l.points[2].x, -2.0007, 4)
+				strictEqual(l.points[2].y, -1.1069, 4)
+			} else if (l.hour === 14) {
+				strictEqual(l.points[6].x, -0.039, 4)
+				strictEqual(l.points[6].y, -0.3615, 4)
+			}
+		}
+
+		strictEqual(res.center.x, 3.388, 4)
+		strictEqual(res.center.y, -3.1102, 4)
+		strictEqual(toDeg(res.angle), 12.2672, 4)
+	})
+
+	test('general b', () => {
+		// Example 58.b, p. 404.0
+		const res = Sundial.general(-35 * DEG2RAD, 160 * DEG2RAD, 1, 90 * DEG2RAD)
+
+		const hours = res.lines.map(mapHour)
+		expect(hours).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])
+
+		for (const l of res.lines) {
+			if (l.hour === 12) {
+				strictEqual(l.points[5].x, 0.364, 4)
+				strictEqual(l.points[5].y, -0.741, 4)
+			} else if (l.hour === 15) {
+				strictEqual(l.points[3].x, -0.8439, 4)
+				strictEqual(l.points[3].y, -0.9298, 4)
+			}
+		}
+
+		strictEqual(res.center.x, 0.364, 4)
+		strictEqual(res.center.y, 0.7451, 4)
+		strictEqual(res.length, 1.2991, 4)
+		strictEqual(toDeg(res.angle), 50.3315, 4)
+	})
+
+	test('general c', () => {
+		// Example 58.c, p. 405.0
+		const res = Sundial.general(40 * DEG2RAD, 160 * DEG2RAD, 1, 75 * DEG2RAD)
+		const hours = res.lines.map(mapHour)
+		expect(hours).toEqual([5, 6, 13, 14, 15, 16, 17, 18, 19])
+		strictEqual(res.center.x, 0.3041, 4)
+		strictEqual(res.center.y, -0.5043, 4)
+		strictEqual(toDeg(res.angle), 59.5062, 4)
+	})
+
+	function mapHour(line: Sundial.Line) {
+		return line.hour
+	}
+
+	function mapPoints(hour: number, lines: readonly Sundial.Line[]) {
+		for (const line of lines) {
+			if (line.hour === hour) {
+				return line.points.flatMap((point) => [roundToNthDecimal(point.x, 4), roundToNthDecimal(point.y, 4)])
+			}
+		}
+
+		return []
+	}
+
+	test('equatorial', () => {
+		const res = Sundial.equatorial(40 * DEG2RAD, 1)
+
+		let hours = res.north.map(mapHour)
+		expect(hours).toEqual([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+		expect(mapPoints(5, res.north)).toEqual([2.6324, 0.7053, 2.2279, 0.597])
+		expect(mapPoints(12, res.north)).toEqual([0, -4.9284, 0, -2.7253, 0, -2.3064])
+		expect(mapPoints(19, res.north)).toEqual([-2.6324, 0.7053, -2.2279, 0.597])
+
+		hours = res.south.map(mapHour)
+		expect(hours).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+		expect(mapPoints(7, res.south)).toEqual([-4.7604, -1.2756])
+		expect(mapPoints(12, res.south)).toEqual([0, -2.3064, 0, -2.7253, 0, -4.9284])
+		expect(mapPoints(17, res.south)).toEqual([4.7604, -1.2756])
+	})
+
+	test('horizontal', () => {
+		const res = Sundial.horizontal(40 * DEG2RAD, 1)
+
+		const hours = res.lines.map(mapHour)
+		expect(hours).toEqual([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+		expect(mapPoints(5, res.lines)).toEqual([-25.6921, -11.9016, -12.0103, -6.1983])
+		expect(mapPoints(12, res.lines)).toEqual([0, 2.0004, 0, 1.7426, 0, 1.2558, 0, 0.8391, 0, 0.5436, 0, 0.361, 0, 0.2974])
+		expect(mapPoints(19, res.lines)).toEqual([25.6921, -11.9016, 12.0103, -6.1983])
+		strictEqual(res.center.x, 0, 4)
+		strictEqual(res.center.y, -1.1918, 4)
+		strictEqual(res.length, 1.5557, 4)
+	})
+
+	test('vertical', () => {
+		const res = Sundial.vertical(40 * DEG2RAD, 70 * DEG2RAD, 1)
+
+		const hours = res.lines.map(mapHour)
+		expect(hours).toEqual([11, 12, 13, 14, 15, 16, 17, 18, 19])
+		expect(mapPoints(11, res.lines)).toEqual([-11.8933, -5.5746, -14.339, -7.7214, -36.6711, -27.3239])
+		expect(mapPoints(15, res.lines)).toEqual([-0.5328, -0.2817, -0.4906, -0.3338, -0.3795, -0.471, -0.226, -0.6606, -0.0511, -0.8766, 0.109, -1.0743, 0.1796, -1.1615])
+		expect(mapPoints(19, res.lines)).toEqual([0.995, -0.0498, 1.0836, -0.1091])
+		strictEqual(res.center.x, -2.7475, 4)
+		strictEqual(res.center.y, 2.4534, 4)
+		strictEqual(res.length, 3.8168, 4)
 	})
 })
