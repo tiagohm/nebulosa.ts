@@ -306,7 +306,7 @@ function resolveMaximumTT(maximumApprox: Time): Time {
 
 	const time = tt(maximumApprox)
 	const normalized = timeNormalize(time.day, time.fraction, 0, Timescale.TT)
-	return { day: normalized.day, fraction: normalized.fraction, scale: Timescale.TT, polarMotion: maximumApprox.polarMotion, dut1: maximumApprox.dut1, tdbMinusTt: maximumApprox.tdbMinusTt, ut1MinusTai: maximumApprox.ut1MinusTai, location: maximumApprox.location }
+	return { day: normalized.day, fraction: normalized.fraction, scale: Timescale.TT, providers: maximumApprox.providers, location: maximumApprox.location }
 }
 
 function computeDeltaTSeconds(time: Time) {

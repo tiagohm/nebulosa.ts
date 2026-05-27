@@ -25,8 +25,10 @@ const EARTH_HELIOCENTRIC_POSITION = [0.895306712606649513, -0.430362177777382893
 
 const TIME = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
 TIME.location = geodeticLocation(deg(9.712156), deg(52.385639), meter(200), Ellipsoid.WGS84)
-TIME.polarMotion = () => [0.0000012573132091648417, 0.0000020158008827406455]
-TIME.dut1 = () => -0.3495186114062241
+TIME.providers = {
+	pm: () => [0.0000012573132091648417, 0.0000020158008827406455],
+	dut1: () => -0.3495186114062241,
+}
 
 test('icrs', () => {
 	const i = star(STAR.rightAscension, STAR.declination, STAR.pmRA, STAR.pmDEC, STAR.parallax, STAR.rv)

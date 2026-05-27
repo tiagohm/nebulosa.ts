@@ -230,7 +230,7 @@ async function waitUntil(predicate: () => boolean, timeout: number, step: number
 
 async function isIndiRunning(port: number = 7624) {
 	if (process.platform === 'win32') {
-		return (await Bun.$`netstat -ano | findstr :${port}`.quiet().text()).includes('LISTENING')
+		return (await Array.fromAsync(Bun.$`netstat -ano`.lines())).some((line) => line.includes(`:${port}`) && line.includes('LISTENING'))
 	} else if (process.platform === 'linux') {
 		return (await Bun.$`lsof -i :${port}`.quiet().text()).includes('LISTEN')
 	} else {

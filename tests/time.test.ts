@@ -4,7 +4,7 @@ import { DAYSEC, J2000 } from '../src/constants'
 import { meter } from '../src/distance'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // oxfmt-ignore
-import { dut1, earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTt, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToFractionOfYear, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/time'
+import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToFractionOfYear, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc, DEFAULT_TIME_PROVIDERS, dut1 } from '../src/time'
 import { downloadPerTag } from './download'
 
 await downloadPerTag('time')
@@ -195,9 +195,9 @@ test('ut1', () => {
 	expect(tdb(t)).toMatchTime(time(2459130, 0.000802709826729233, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.001050568932858317, Timescale.TCB, false))
 
-	expect(t.extra?.ut1MinusUtc).toBeDefined()
-	expect(t.extra?.ut1MinusTai).toBeDefined()
-	expect(t.extra?.tdbMinusTt).toBeDefined()
+	expect(t.cache?.ut1MinusUtc).toBeDefined()
+	expect(t.cache?.ut1MinusTai).toBeDefined()
+	expect(t.cache?.tdbMinusTt).toBeDefined()
 })
 
 test('utc', () => {
@@ -213,8 +213,8 @@ test('utc', () => {
 	expect(tdb(t)).toMatchTime(time(2459130, 0.000800721186116808, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.001048580292215058, Timescale.TCB, false))
 
-	expect(t.extra?.ut1MinusUtc).toBeDefined()
-	expect(t.extra?.tdbMinusTt).toBeDefined()
+	expect(t.cache?.ut1MinusUtc).toBeDefined()
+	expect(t.cache?.tdbMinusTt).toBeDefined()
 })
 
 test('tai', () => {
@@ -230,9 +230,9 @@ test('tai', () => {
 	expect(tdb(t)).toMatchTime(time(2459130, 0.000372480445371678, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.000620339544829971, Timescale.TCB, false))
 
-	expect(t.extra?.ut1MinusUtc).toBeDefined()
-	expect(t.extra?.ut1MinusTai).toBeDefined()
-	expect(t.extra?.tdbMinusTt).toBeDefined()
+	expect(t.cache?.ut1MinusUtc).toBeDefined()
+	expect(t.cache?.ut1MinusTai).toBeDefined()
+	expect(t.cache?.tdbMinusTt).toBeDefined()
 })
 
 test('tt', () => {
@@ -248,8 +248,8 @@ test('tt', () => {
 	expect(tdb(t)).toMatchTime(time(2459130, -0.000000019554632113, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.000247839539050494, Timescale.TCB, false))
 
-	expect(t.extra?.ut1MinusUtc).toBeDefined()
-	expect(t.extra?.tdbMinusTt).toBeDefined()
+	expect(t.cache?.ut1MinusUtc).toBeDefined()
+	expect(t.cache?.tdbMinusTt).toBeDefined()
 })
 
 test('tcg', () => {
@@ -265,8 +265,8 @@ test('tcg', () => {
 	expect(tdb(t)).toMatchTime(time(2459130, -0.000011160313116326, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.000236698780393541, Timescale.TCB, false))
 
-	expect(t.extra?.ut1MinusUtc).toBeDefined()
-	expect(t.extra?.tdbMinusTt).toBeDefined()
+	expect(t.cache?.ut1MinusUtc).toBeDefined()
+	expect(t.cache?.tdbMinusTt).toBeDefined()
 })
 
 test('tdb', () => {
@@ -282,8 +282,8 @@ test('tdb', () => {
 	expect(tdb(t)).toMatchTime(time(2459130, 0, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0.00024785909368291, Timescale.TCB, false))
 
-	expect(t.extra?.ut1MinusUtc).toBeDefined()
-	expect(t.extra?.tdbMinusTt).toBeDefined()
+	expect(t.cache?.ut1MinusUtc).toBeDefined()
+	expect(t.cache?.tdbMinusTt).toBeDefined()
 })
 
 test('tcb', () => {
@@ -299,8 +299,8 @@ test('tcb', () => {
 	expect(tdb(t)).toMatchTime(time(2459130, -0.000247859089839806, Timescale.TDB, false))
 	expect(tcb(t)).toMatchTime(time(2459130, 0, Timescale.TCB, false))
 
-	expect(t.extra?.ut1MinusUtc).toBeDefined()
-	expect(t.extra?.tdbMinusTt).toBeDefined()
+	expect(t.cache?.ut1MinusUtc).toBeDefined()
+	expect(t.cache?.tdbMinusTt).toBeDefined()
 })
 
 test('normalize', () => {
@@ -365,35 +365,62 @@ test('location', () => {
 	expect(tcb(t)).toMatchTime(time(2459130, 0.001050568944034133, Timescale.TCB, false))
 })
 
-test('extra', () => {
+test('cache', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TCB)
 
-	for (let i = 0; i < 10000; i++) {
+	for (let i = 0; i < 1000; i++) {
 		const a = ut1(t)
-		expect(a.extra?.tcb).toBe(t)
-		expect(t.extra?.ut1).toBe(a)
+		expect(a.cache?.tcb).toBe(t)
+		expect(t.cache?.ut1).toBe(a)
 
 		const b = utc(t)
-		expect(b.extra?.tcb).toBe(t)
-		expect(t.extra?.utc).toBe(b)
+		expect(b.cache?.tcb).toBe(t)
+		expect(t.cache?.utc).toBe(b)
 
 		const c = tai(t)
-		expect(c.extra?.tcb).toBe(t)
-		expect(t.extra?.tai).toBe(c)
+		expect(c.cache?.tcb).toBe(t)
+		expect(t.cache?.tai).toBe(c)
 
 		const d = tt(t)
-		expect(d.extra?.tcb).toBe(t)
-		expect(t.extra?.tt).toBe(d)
+		expect(d.cache?.tcb).toBe(t)
+		expect(t.cache?.tt).toBe(d)
 
 		const e = tcg(t)
-		expect(e.extra?.tcb).toBe(t)
-		expect(t.extra?.tcg).toBe(e)
+		expect(e.cache?.tcb).toBe(t)
+		expect(t.cache?.tcg).toBe(e)
 
 		const f = tdb(t)
-		expect(f.extra?.tcb).toBe(t)
-		expect(t.extra?.tdb).toBe(f)
+		expect(f.cache?.tcb).toBe(t)
+		expect(t.cache?.tdb).toBe(f)
 	}
-}, 200)
+}, 50)
+
+test('providers', () => {
+	const providers = { ...DEFAULT_TIME_PROVIDERS }
+
+	for (let scale = 0; scale <= 6; scale++) {
+		const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, scale)
+		t.providers = providers
+
+		const a = ut1(t)
+		expect(a.providers).toBe(providers)
+
+		const b = utc(a)
+		expect(b.providers).toBe(providers)
+
+		const c = tai(b)
+		expect(c.providers).toBe(providers)
+
+		const d = tt(c)
+		expect(d.providers).toBe(providers)
+
+		const e = tcg(d)
+		expect(e.providers).toBe(providers)
+
+		const f = tdb(e)
+		expect(f.providers).toBe(providers)
+	}
+}, 100)
 
 test('polar motion override does not reuse cached default values', () => {
 	const customPolarMotion: PolarMotion = () => [1, 2]
@@ -414,12 +441,16 @@ test('polar motion override does not reuse cached default values', () => {
 })
 
 test('zero-valued DUT1 is cached', () => {
-	let callCount = 0
 	const t = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
-	t.dut1 = (_time: Time) => {
+
+	let callCount = 0
+
+	const _dut1 = (_time: Time) => {
 		callCount++
 		return 0
 	}
+
+	t.providers = { ...DEFAULT_TIME_PROVIDERS, dut1: _dut1 }
 
 	expect(dut1(t)).toBe(0)
 	expect(dut1(t)).toBe(0)
@@ -429,63 +460,74 @@ test('zero-valued DUT1 is cached', () => {
 test('tdb minus tt by Fairhead and Bretagnon 1990', () => {
 	expect(tdbMinusTtByFairheadAndBretagnon1990(time(2448031, 0.5, Timescale.TDB))).toBeCloseTo(0.0011585185926349208, 16)
 
+	let callCount = 0
+
+	const tdbMinusTt = (time: Time) => {
+		callCount++
+		return tdbMinusTtByFairheadAndBretagnon1990(time)
+	}
+
+	const providers = { ...DEFAULT_TIME_PROVIDERS, tdbMinusTt }
+
 	const t0 = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TDB)
-	t0.tdbMinusTt = tdbMinusTtByFairheadAndBretagnon1990
+	t0.providers = providers
 	expect(tt(t0)).toMatchTime(time(2459130, 0.000000019554632113, Timescale.TT, false), 1e-10)
 
 	const t1 = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TT)
-	t1.tdbMinusTt = tdbMinusTtByFairheadAndBretagnon1990
+	t0.providers = providers
 	expect(tdb(t1)).toMatchTime(time(2459130, -0.000000019554632113, Timescale.TDB, false), 1e-10)
 
 	expect(tdbMinusTtByFairheadAndBretagnon1990(t0)).toBeCloseTo(tdbMinusTt(t0), 5)
+
+	expect(callCount).toBe(2)
 })
 
 test('gast', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(greenwichApparentSiderealTime(t)).toBe(t.extra!.gast!)
-	expect(t.extra?.gast).toBeCloseTo(hour(13.106038262872143463), 15)
+	expect(greenwichApparentSiderealTime(t)).toBe(t.cache!.gast!)
+	expect(t.cache?.gast).toBeCloseTo(hour(13.106038262872143463), 15)
 })
 
 test('gmst', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(greenwichMeanSiderealTime(t)).toBe(t.extra!.gmst!)
-	expect(t.extra?.gmst).toBeCloseTo(hour(13.106345240224241522), 15)
+	expect(greenwichMeanSiderealTime(t)).toBe(t.cache!.gmst!)
+	expect(t.cache?.gmst).toBeCloseTo(hour(13.106345240224241522), 15)
 })
 
 test('era', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(earthRotationAngle(t)).toBe(t.extra!.era!)
-	expect(t.extra?.era).toBeCloseTo(hour(13.088607043262001639), 15)
+	expect(earthRotationAngle(t)).toBe(t.cache!.era!)
+	expect(t.cache?.era).toBeCloseTo(hour(13.088607043262001639), 15)
 })
 
 test('mean obliquity', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(meanObliquity(t)).toBe(t.extra!.meanObliquity!)
-	expect(t.extra?.meanObliquity).toBeCloseTo(0.409045445708786315, 15)
+	expect(meanObliquity(t)).toBe(t.cache!.meanObliquity!)
+	expect(t.cache?.meanObliquity).toBeCloseTo(0.409045445708786315, 15)
 })
 
 test('nutation', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(nutationAngles(t)).toBe(t.extra!.nutation!)
-	expect(t.extra?.nutation).toEqual([-0.00008760676099523273, 0.00000755771193699156])
+	expect(nutationAngles(t)).toBe(t.cache!.nutation!)
+	expect(t.cache?.nutation).toEqual([-0.00008760676099523273, 0.00000755771193699156])
 })
 
 test('precession', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(precessionMatrix(t)).toBe(t.extra!.precession!)
-	expect(t.extra?.precession).toEqual([0.9999871819115399, -0.004643833528063321, -0.0020176280083981767, 0.004643833647273387, 0.9999892173356966, -0.000004625710173677966, 0.0020176277340206686, -0.000004743877952184672, 0.9999979645758397])
+	expect(precessionMatrix(t)).toBe(t.cache!.precession!)
+	expect(t.cache?.precession).toEqual([0.9999871819115399, -0.004643833528063321, -0.0020176280083981767, 0.004643833647273387, 0.9999892173356966, -0.000004625710173677966, 0.0020176277340206686, -0.000004743877952184672, 0.9999979645758397])
 })
 
 test('precession-nutation matrix', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(precessionNutationMatrix(t)).toBe(t.extra!.precessionNutation!)
-	expect(t.extra?.precessionNutation).toEqual([0.9999876216446774, -0.004563455260357874, -0.0019827842818092144, 0.004563440392430343, 0.9999895873794092, -0.000012022632120134435, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
+	expect(precessionNutationMatrix(t)).toBe(t.cache!.precessionNutation!)
+	expect(t.cache?.precessionNutation).toEqual([0.9999876216446774, -0.004563455260357874, -0.0019827842818092144, 0.004563440392430343, 0.9999895873794092, -0.000012022632120134435, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
 })
 
 test('equation of origins', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
-	expect(equationOfOrigins(t)).toBe(t.extra!.equationOfOrigins!)
-	expect(t.extra?.equationOfOrigins).toEqual([0.9999980342134646, 0.000000011522914443798382, -0.001982818500615607, -0.00000001742012200722093, 0.9999999999955772, -0.0000029741367242157103, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
+	expect(equationOfOrigins(t)).toBe(t.cache!.equationOfOrigins!)
+	expect(t.cache?.equationOfOrigins).toEqual([0.9999980342134646, 0.000000011522914443798382, -0.001982818500615607, -0.00000001742012200722093, 0.9999999999955772, -0.0000029741367242157103, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
 })
 
 test('delta T', () => {

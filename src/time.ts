@@ -18,7 +18,7 @@ export enum Timescale {
 	TCB,
 }
 
-export interface TimeExtra {
+export interface TimeCache {
 	ut1?: Time
 	utc?: Time
 	tai?: Time
@@ -46,22 +46,36 @@ export interface TimeExtra {
 	equationOfOrigins?: Mat3
 }
 
-// Represents and manipulates an instant of time for astronomy.
-export interface Time {
-	readonly day: number
-	readonly fraction: number
-	readonly scale: Timescale
-
-	polarMotion?: PolarMotion
+export interface TimeProviders {
+	pm?: PolarMotion
 	dut1?: TimeDelta // UT1 - UTC
 
 	tdbMinusTt?: TimeDelta
 	// taiMinusUtc?: TimeDelta
 	ut1MinusTai?: TimeDelta
 
+	gast?: (ut1: Time, tt: Time) => Angle
+	gmst?: (ut1: Time, tt: Time) => Angle
+	era?: (ut1: Time) => Angle
+	obl?: (tt: Time) => Angle
+	nut?: (tt: Time) => [Angle, Angle]
+	pmat?: (tt: Time) => Mat3
+	pnm?: (tt: Time) => Mat3
+	sp?: (tt: Time) => Angle
+	pom?: (x: Angle, y: Angle, s: Angle) => Mat3
+}
+
+// Represents and manipulates an instant of time for astronomy.
+export interface Time {
+	readonly day: number
+	readonly fraction: number
+	readonly scale: Timescale
+
+	providers?: TimeProviders
+
 	location?: GeographicPosition
 	gcrsToItrsRotationMatrix?: Mat3
-	extra?: TimeExtra
+	cache?: TimeCache
 }
 
 export enum JulianCalendarCutOff {
@@ -84,32 +98,32 @@ const DAYSEC_MS = DAYSEC * 1000
 
 // Returns the polar motion provider used for this computation.
 function polarMotionProvider(time: Time, pm?: PolarMotion): PolarMotion {
-	return pm ?? time.polarMotion ?? iers.xy
+	return pm ?? time.providers?.pm ?? iers.xy
 }
 
 // Computes the motion angles (sprime, x, y) from the given time.
 export function pmAngles(time: Time, pm?: PolarMotion): readonly [Angle, Angle, Angle] {
 	const polarMotion = polarMotionProvider(time, pm)
-	if (time.extra?.pmAngles && time.extra.pmAnglesPolarMotion === polarMotion) return time.extra.pmAngles
+	if (time.cache?.pmAngles && time.cache.pmAnglesPolarMotion === polarMotion) return time.cache.pmAngles
 	const t = tt(time)
-	const sprime = eraSp00(t.day, t.fraction)
+	const sprime = time.providers?.sp?.(t) ?? eraSp00(t.day, t.fraction)
 	const [x, y] = polarMotion(time)
 	const a: [Angle, Angle, Angle] = [sprime, x, y]
-	const e = extra(time)
-	e.pmAngles = a
-	e.pmAnglesPolarMotion = polarMotion
+	const c = cache(time)
+	c.pmAngles = a
+	c.pmAnglesPolarMotion = polarMotion
 	return a
 }
 
 // Computes the polar motion matrix from the given time.
 export function pmMatrix(time: Time, pm?: PolarMotion): Mat3 {
 	const polarMotion = polarMotionProvider(time, pm)
-	if (time.extra?.pmMatrix && time.extra.pmMatrixPolarMotion === polarMotion) return time.extra.pmMatrix
+	if (time.cache?.pmMatrix && time.cache.pmMatrixPolarMotion === polarMotion) return time.cache.pmMatrix
 	const [sprime, x, y] = pmAngles(time, polarMotion)
-	const m = eraPom00(x, y, sprime)
-	const e = extra(time)
-	e.pmMatrix = m
-	e.pmMatrixPolarMotion = polarMotion
+	const m = time.providers?.pom?.(x, y, sprime) ?? eraPom00(x, y, sprime)
+	const c = cache(time)
+	c.pmMatrix = m
+	c.pmMatrixPolarMotion = polarMotion
 	return m
 }
 
@@ -268,32 +282,29 @@ export function timeToFractionOfYear(time: Time) {
 // Clones a nearby sample instant while preserving custom Earth-orientation providers.
 export function timeShift(time: Time, fraction: number, normalize: boolean = true): Time {
 	const normalizedTime = normalize ? timeNormalize(time.day, time.fraction + fraction, undefined, time.scale) : { day: time.day, fraction: time.fraction + fraction, scale: time.scale }
-	normalizedTime.polarMotion = time.polarMotion
-	normalizedTime.dut1 = time.dut1
-	normalizedTime.tdbMinusTt = time.tdbMinusTt
-	normalizedTime.ut1MinusTai = time.ut1MinusTai
+	normalizedTime.providers = time.providers
 	normalizedTime.location = time.location
 	return normalizedTime
 }
 
 // Caches the timescale for target based on source.
 function timescale(target: Time, source: Time) {
-	const e = extra(target, source.extra)
+	const c = cache(target, source.cache)
 
-	if (source.scale === Timescale.UT1) e.ut1 = source
-	else if (source.scale === Timescale.UTC) e.utc = source
-	else if (source.scale === Timescale.TAI) e.tai = source
-	else if (source.scale === Timescale.TT) e.tt = source
-	else if (source.scale === Timescale.TCG) e.tcg = source
-	else if (source.scale === Timescale.TDB) e.tdb = source
-	else if (source.scale === Timescale.TCB) e.tcb = source
+	if (source.scale === Timescale.UT1) c.ut1 = source
+	else if (source.scale === Timescale.UTC) c.utc = source
+	else if (source.scale === Timescale.TAI) c.tai = source
+	else if (source.scale === Timescale.TT) c.tt = source
+	else if (source.scale === Timescale.TCG) c.tcg = source
+	else if (source.scale === Timescale.TDB) c.tdb = source
+	else if (source.scale === Timescale.TCB) c.tcb = source
 
 	if (source.location) target.location = source.location
 }
 
-// Returns the extra object, creating it if necessary.
-function extra(target: Time, extra?: TimeExtra) {
-	return (target.extra ??= extra ?? {})
+// Returns the cache object, creating it if necessary.
+export function cache(target: Time, cache?: TimeCache) {
+	return (target.cache ??= cache ?? {})
 }
 
 // Copies the day and fraction from source to a new Time.
@@ -325,16 +336,18 @@ export function timeConvert(time: Time, scale: Timescale) {
 export function ut1(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UT1) return time
-	if (time.extra?.ut1) return time.extra.ut1
+	if (time.cache?.ut1) return time.cache.ut1
 
 	let ret: Time
 
-	if (scale === Timescale.TAI) ret = newTime(eraTaiUt1(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.UT1, normalize)
-	else if (scale === Timescale.UTC) ret = newTime(eraUtcUt1(day, fraction, (time.dut1 ?? dut1)(time)), time, Timescale.UT1, normalize)
+	if (scale === Timescale.TAI) ret = newTime(eraTaiUt1(day, fraction, (time.providers?.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.UT1, normalize)
+	else if (scale === Timescale.UTC) ret = newTime(eraUtcUt1(day, fraction, (time.providers?.dut1 ?? dut1)(time)), time, Timescale.UT1, normalize)
 	else ret = ut1(utc(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)
+
+	ret.providers = time.providers
 
 	return ret
 }
@@ -343,16 +356,18 @@ export function ut1(time: Time, normalize: boolean = false): Time {
 export function utc(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UTC) return time
-	if (time.extra?.utc) return time.extra.utc
+	if (time.cache?.utc) return time.cache.utc
 
 	let ret: Time
 
-	if (scale === Timescale.UT1) ret = newTime(eraUt1Utc(day, fraction, (time.dut1 ?? dut1)(time)), time, Timescale.UTC, normalize)
+	if (scale === Timescale.UT1) ret = newTime(eraUt1Utc(day, fraction, (time.providers?.dut1 ?? dut1)(time)), time, Timescale.UTC, normalize)
 	else if (scale === Timescale.TAI) ret = newTime(eraTaiUtc(day, fraction), time, Timescale.UTC, normalize)
 	else ret = utc(tai(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)
+
+	ret.providers = time.providers
 
 	return ret
 }
@@ -361,17 +376,19 @@ export function utc(time: Time, normalize: boolean = false): Time {
 export function tai(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TAI) return time
-	if (time.extra?.tai) return time.extra.tai
+	if (time.cache?.tai) return time.cache.tai
 
 	let ret: Time
 
-	if (scale === Timescale.UT1) ret = newTime(eraUt1Tai(day, fraction, (time.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.TAI, normalize)
+	if (scale === Timescale.UT1) ret = newTime(eraUt1Tai(day, fraction, (time.providers?.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.TAI, normalize)
 	else if (scale === Timescale.UTC) ret = newTime(eraUtcTai(day, fraction), time, Timescale.TAI, normalize)
 	else if (scale === Timescale.TT) ret = newTime(eraTtTai(day, fraction), time, Timescale.TAI, normalize)
 	else ret = tai(tt(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)
+
+	ret.providers = time.providers
 
 	return ret
 }
@@ -380,18 +397,20 @@ export function tai(time: Time, normalize: boolean = false): Time {
 export function tt(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TT) return time
-	if (time.extra?.tt) return time.extra.tt
+	if (time.cache?.tt) return time.cache.tt
 
 	let ret: Time
 
 	if (scale === Timescale.TAI) ret = newTime(eraTaiTt(day, fraction), time, Timescale.TT, normalize)
 	else if (scale === Timescale.TCG) ret = newTime(eraTcgTt(day, fraction), time, Timescale.TT, normalize)
-	else if (scale === Timescale.TDB) ret = newTime(eraTdbTt(day, fraction, (time.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TT, normalize)
+	else if (scale === Timescale.TDB) ret = newTime(eraTdbTt(day, fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TT, normalize)
 	else if (scale < Timescale.TAI) return tt(tai(time, normalize), normalize)
 	else ret = tt(tdb(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)
+
+	ret.providers = time.providers
 
 	return ret
 }
@@ -400,7 +419,7 @@ export function tt(time: Time, normalize: boolean = false): Time {
 export function tcg(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCG) return time
-	if (time.extra?.tcg) return time.extra.tcg
+	if (time.cache?.tcg) return time.cache.tcg
 
 	let ret: Time
 
@@ -410,6 +429,8 @@ export function tcg(time: Time, normalize: boolean = false): Time {
 	timescale(ret, time)
 	timescale(time, ret)
 
+	ret.providers = time.providers
+
 	return ret
 }
 
@@ -417,16 +438,18 @@ export function tcg(time: Time, normalize: boolean = false): Time {
 export function tdb(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TDB) return time
-	if (time.extra?.tdb) return time.extra.tdb
+	if (time.cache?.tdb) return time.cache.tdb
 
 	let ret: Time
 
-	if (scale === Timescale.TT) ret = newTime(eraTtTdb(day, fraction, (time.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TDB, normalize)
+	if (scale === Timescale.TT) ret = newTime(eraTtTdb(day, fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TDB, normalize)
 	else if (scale === Timescale.TCB) ret = newTime(eraTcbTdb(day, fraction), time, Timescale.TDB, normalize)
 	else ret = tdb(tt(time, normalize), normalize)
 
 	timescale(ret, time)
 	timescale(time, ret)
+
+	ret.providers = time.providers
 
 	return ret
 }
@@ -435,7 +458,7 @@ export function tdb(time: Time, normalize: boolean = false): Time {
 export function tcb(time: Time, normalize: boolean = false): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCB) return time
-	if (time.extra?.tcb) return time.extra.tcb
+	if (time.cache?.tcb) return time.cache.tcb
 
 	let ret: Time
 
@@ -445,48 +468,50 @@ export function tcb(time: Time, normalize: boolean = false): Time {
 	timescale(ret, time)
 	timescale(time, ret)
 
+	ret.providers = time.providers
+
 	return ret
 }
 
 // Computes the Greenwich Apparent Sidereal Time (GAST) at given time.
 export function greenwichApparentSiderealTime(time: Time): Angle {
-	const cached = time.extra?.gast
+	const cached = time.cache?.gast
 	if (cached !== undefined) return cached
 	const u = ut1(time)
 	const t = tt(time)
-	const gast = eraGst06a(u.day, u.fraction, t.day, t.fraction)
-	extra(time).gast = gast
+	const gast = time.providers?.gast?.(u, t) ?? eraGst06a(u.day, u.fraction, t.day, t.fraction)
+	cache(time).gast = gast
 	return gast
 }
 
 // Computes the Greenwich Mean Sidereal Time (GMST) at given time.
 export function greenwichMeanSiderealTime(time: Time): Angle {
-	const cached = time.extra?.gmst
+	const cached = time.cache?.gmst
 	if (cached !== undefined) return cached
 	const u = ut1(time)
 	const t = tt(time)
-	const gmst = eraGmst06(u.day, u.fraction, t.day, t.fraction)
-	extra(time).gmst = gmst
+	const gmst = time.providers?.gmst?.(u, t) ?? eraGmst06(u.day, u.fraction, t.day, t.fraction)
+	cache(time).gmst = gmst
 	return gmst
 }
 
 // Computes the Earth rotation angle (IAU 2000 model) at given time.
 export function earthRotationAngle(time: Time): Angle {
-	const cached = time.extra?.era
+	const cached = time.cache?.era
 	if (cached !== undefined) return cached
 	const u = ut1(time)
-	const era = eraEra00(u.day, u.fraction)
-	extra(time).era = era
+	const era = time.providers?.era?.(u) ?? eraEra00(u.day, u.fraction)
+	cache(time).era = era
 	return era
 }
 
 // Computes the mean obliquity of the ecliptic.
 export function meanObliquity(time: Time): Angle {
-	const cached = time.extra?.meanObliquity
+	const cached = time.cache?.meanObliquity
 	if (cached !== undefined) return cached
 	const t = tt(time)
-	const meanObliquity = eraObl06(t.day, t.fraction)
-	extra(time).meanObliquity = meanObliquity
+	const meanObliquity = time.providers?.obl?.(t) ?? eraObl06(t.day, t.fraction)
+	cache(time).meanObliquity = meanObliquity
 	return meanObliquity
 }
 
@@ -502,37 +527,37 @@ export function trueEclipticRotation(time: Time) {
 
 // Computes the nutation angles.
 export function nutationAngles(time: Time): readonly [Angle, Angle] {
-	if (time.extra?.nutation) return time.extra.nutation
+	if (time.cache?.nutation) return time.cache.nutation
 	const t = tt(time)
-	const nutation = eraNut06a(t.day, t.fraction)
-	extra(time).nutation = nutation
+	const nutation = time.providers?.nut?.(t) ?? eraNut06a(t.day, t.fraction)
+	cache(time).nutation = nutation
 	return nutation
 }
 
 // Computes the 3x3 precession matrix.
 export function precessionMatrix(time: Time): Mat3 {
-	if (time.extra?.precession) return time.extra.precession
+	if (time.cache?.precession) return time.cache.precession
 	const t = tt(time)
-	const precession = eraPmat06(t.day, t.fraction)
-	extra(time).precession = precession
+	const precession = time.providers?.pmat?.(t) ?? eraPmat06(t.day, t.fraction)
+	cache(time).precession = precession
 	return precession
 }
 
 // Computes the 3x3 precession-nutation matrix (including frame bias).
 export function precessionNutationMatrix(time: Time): Mat3 {
-	if (time.extra?.precessionNutation) return time.extra.precessionNutation
+	if (time.cache?.precessionNutation) return time.cache.precessionNutation
 	const t = tt(time)
-	const precessionNutation = eraPnm06a(t.day, t.fraction)
-	extra(time).precessionNutation = precessionNutation
+	const precessionNutation = time.providers?.pnm?.(t) ?? eraPnm06a(t.day, t.fraction)
+	cache(time).precessionNutation = precessionNutation
 	return precessionNutation
 }
 
 // Computes the 3x3 matrix of Equation of Origins in cycles.
 export function equationOfOrigins(time: Time): Mat3 {
-	if (time.extra?.equationOfOrigins) return time.extra.equationOfOrigins
+	if (time.cache?.equationOfOrigins) return time.cache.equationOfOrigins
 	const equationOfOrigins = matIdentity()
 	matMul(matRotZ(greenwichApparentSiderealTime(time) - earthRotationAngle(time), equationOfOrigins), precessionNutationMatrix(time), equationOfOrigins)
-	extra(time).equationOfOrigins = equationOfOrigins
+	cache(time).equationOfOrigins = equationOfOrigins
 	return equationOfOrigins
 }
 
@@ -545,10 +570,10 @@ export function gcrsToItrsRotationMatrix(time: Time) {
 
 // Computes UT1 - UTC in seconds at time.
 export const dut1: TimeDelta = (time) => {
-	const cached = time.extra?.ut1MinusUtc
+	const cached = time.cache?.ut1MinusUtc
 	if (cached !== undefined) return cached
 
-	const ut1MinusUtc = time.dut1 ?? iers.dut1
+	const ut1MinusUtc = time.providers?.dut1 ?? iers.dut1
 
 	// https://github.com/astropy/astropy/blob/71a2eafd6c09f1992f8b4132e6e40ba68a675bde/astropy/time/core.py#L2554
 	// Interpolate UT1-UTC in IERS table
@@ -562,7 +587,7 @@ export const dut1: TimeDelta = (time) => {
 		dt = ut1MinusUtc({ day: a[0], fraction: a[1], scale: Timescale.UTC })
 	}
 
-	extra(time).ut1MinusUtc = dt
+	cache(time).ut1MinusUtc = dt
 
 	return dt
 }
@@ -572,7 +597,7 @@ export const tdbMinusTt: TimeDelta = (time) => {
 	const { day, fraction, scale } = time
 
 	if (scale === Timescale.TDB || scale === Timescale.TT) {
-		const cached = time.extra?.tdbMinusTt
+		const cached = time.cache?.tdbMinusTt
 		if (cached !== undefined) return cached
 
 		// First go from the current input time (which is either
@@ -594,7 +619,7 @@ export const tdbMinusTt: TimeDelta = (time) => {
 			dt = eraDtDb(day, fraction, ut)
 		}
 
-		extra(time).tdbMinusTt = dt
+		cache(time).tdbMinusTt = dt
 
 		return dt
 	}
@@ -627,22 +652,39 @@ export const tdbMinusTtByFairheadAndBretagnon1990: TimeDelta = (time) => {
 
 // Computes TAI - UTC in seconds at time.
 export const taiMinusUtc: TimeDelta = (time) => {
-	const cached = time.extra?.taiMinusUtc
+	const cached = time.cache?.taiMinusUtc
 	if (cached !== undefined) return cached
 	const cal = eraJdToCal(time.day, time.fraction)
 	const dt = eraDat(cal[0], cal[1], cal[2], cal[3])
-	extra(time).taiMinusUtc = dt
+	cache(time).taiMinusUtc = dt
 	return dt
 }
 
 // Computes UT1 - TAI in seconds at time.
 export const ut1MinusTai: TimeDelta = (time) => {
-	const cached = time.extra?.ut1MinusTai
+	const cached = time.cache?.ut1MinusTai
 	if (cached !== undefined) return cached
 	const cal = eraJdToCal(time.day, time.fraction)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
-	const ut1MinusUtc = (time.dut1 ?? dut1)(time)
+	const ut1MinusUtc = (time.providers?.dut1 ?? dut1)(time)
 	const dt = ut1MinusUtc - dat
-	extra(time).ut1MinusTai = dt
+	cache(time).ut1MinusTai = dt
 	return dt
+}
+
+export const DEFAULT_TIME_PROVIDERS: Required<Readonly<TimeProviders>> = {
+	pm: iers.xy,
+	dut1: iers.dut1,
+	tdbMinusTt: tdbMinusTt,
+	// taiMinusUtc: taiMinusUtc,
+	ut1MinusTai: ut1MinusTai,
+	era: (u) => eraEra00(u.day, u.fraction),
+	gast: (u, t) => eraGst06a(u.day, u.fraction, t.day, t.fraction),
+	gmst: (u, t) => eraGmst06(u.day, u.fraction, t.day, t.fraction),
+	obl: (t) => eraObl06(t.day, t.fraction),
+	nut: (t) => eraNut06a(t.day, t.fraction),
+	pmat: (t) => eraPmat06(t.day, t.fraction),
+	pnm: (t) => eraPnm06a(t.day, t.fraction),
+	sp: (t) => eraSp00(t.day, t.fraction),
+	pom: (x, y, s) => eraPom00(x, y, s),
 }
