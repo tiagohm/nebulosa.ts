@@ -1,6 +1,6 @@
 import { type Angle, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from './astrometry'
-import { PI, PIOVERTWO } from './constants'
+import { PI, PIOVERTWO, SIDEREAL_ARCSEC_PER_SECOND } from './constants'
 import type { HorizontalCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
 import type { GeographicPosition } from './location'
@@ -189,7 +189,6 @@ export class ThreePointPolarAlignment {
 	}
 }
 
-export const SIDEREAL_ARCSEC_PER_SECOND = 15.041
 export const DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN = 0.004375
 export const MIN_RA_COS_DECLINATION = 1e-3
 export const MIN_DRIFT_RATE_ARCSEC_PER_SECOND = 1e-9

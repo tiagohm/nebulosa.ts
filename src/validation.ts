@@ -68,6 +68,16 @@ export function validateLongitude(value: Angle) {
 	return validateInRange(value, -PI - GEOMETRY_EPSILON, PI + GEOMETRY_EPSILON)
 }
 
+export function validateDeclination(value: number) {
+	return validateInRange(value, -PIOVERTWO, PIOVERTWO)
+}
+
+export function validatePositiveAltitude(value: number) {
+	validateFinite(value)
+	if (value <= 0 || value > PIOVERTWO) throw new RangeError(`value must be within (0, ${PIOVERTWO}]`)
+	return value
+}
+
 export function validateLocation(location: Required<GeographicCoordinate>) {
 	validateLatitude(location.latitude)
 	validateLongitude(location.longitude)

@@ -42,8 +42,13 @@ Prefer the MCP graph tools for code discovery:
 ## Tooling
 
 - Use **Bun** for install, scripts, and tests.
-- Treat `bun run lint` as the authoritative type-check command. It runs `oxlint` with `tsgo`, not stock `tsc`.
-- `bun run lint:fix` and `bun run fmt` both write changes.
+- Format: use the `nebulosa-oxc` MCP server's `oxfmt` tool with no args instead of running `bun run fmt` locally.
+- Format check: use the `nebulosa-oxc` MCP server's `oxfmt` tool with `["--check"]` instead of running `bun run fmt:check` locally.
+- Lint and Type-check: use the `nebulosa-oxc` MCP server's `oxlint` tool with no args instead of running `bun run lint` locally.
+- Lint with fixes: use the `nebulosa-oxc` MCP server's `oxlint` tool with `["--fix"]` instead of running `bun run lint:fix` locally.
+- Refresh codebase graph: `bun run index`
+- If tests are added, prefer `bun test` before introducing another test runner.
+- Do not try local `oxlint`, `oxfmt`, or Bun wrapper commands from the Codex sandbox first; this checkout provides the `nebulosa-oxc` MCP server specifically to avoid local bin remapping and sandbox spawn failures.
 - Tests run through Bun with `bunfig.toml` configured to use `tests/` as the test root and `tests/setup.ts` as preload.
 - Some tests depend on large fixtures in `data/`, and missing fixtures may trigger downloads through `tests/download.ts`.
 
