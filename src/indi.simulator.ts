@@ -9,7 +9,7 @@ import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_
 import type { CfaPattern, Image, ImageRawType } from './image.types'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from './indi.client'
 import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, type FrameType, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from './indi.device'
-import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager } from './indi.manager'
+import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from './indi.manager'
 import { type DefNumberVector, type DefSwitchVector, type DefTextVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from './indi.types'
 import { bufferSink } from './io'
 import { localSiderealTime } from './location'
@@ -90,6 +90,7 @@ export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
 	readonly guideOutputManager?: GuideOutputManager
 	readonly focuserManager?: FocuserManager
 	readonly rotatorManager?: RotatorManager
+	readonly wheelManager?: WheelManager
 }
 
 // Routes MountManager commands back into the simulator.
@@ -1820,6 +1821,7 @@ export class CameraSimulator extends DeviceSimulator {
 	readonly #focuserManager?: FocuserManager
 	readonly #rotatorManager?: RotatorManager
 	readonly #guideOutputManager?: GuideOutputManager
+	readonly #wheelManager?: WheelManager
 
 	constructor(
 		name: string,
@@ -1847,6 +1849,7 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#focuserManager = options?.focuserManager
 		this.#rotatorManager = options?.rotatorManager
 		this.#guideOutputManager = options?.guideOutputManager
+		this.#wheelManager = options?.wheelManager
 	}
 
 	get activeMount() {
@@ -1862,6 +1865,11 @@ export class CameraSimulator extends DeviceSimulator {
 	get activeRotator() {
 		const rotator = this.#rotatorManager?.get(this.client, this.snoopDevices.elements.ACTIVE_ROTATOR.value)
 		return rotator?.connected ? rotator : undefined
+	}
+
+	get activeFilter() {
+		const wheel = this.#wheelManager?.get(this.client, this.snoopDevices.elements.ACTIVE_ROTATOR.value)
+		return wheel?.connected ? wheel : undefined
 	}
 
 	// Returns the selected catalog backend for light-frame stars.
@@ -2283,6 +2291,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const mount = this.activeMount
 		const focuser = this.activeFocuser
 		const rotator = this.activeRotator
+		const filter = this.activeFilter ? this.activeFilter.names[this.activeFilter.position] : undefined
 		const start = now - Math.trunc(exposureTime * 1000)
 		let rightAscension: Angle | undefined
 		let declination: Angle | undefined
@@ -2320,13 +2329,14 @@ export class CameraSimulator extends DeviceSimulator {
 			DEC: declination !== undefined ? toDeg(declination) : undefined,
 			EQUINOX: mount ? 2000 : undefined,
 			PIERSIDE: mount && mount.pierSide !== 'NEITHER' ? mount.pierSide : undefined,
-			DATEOBS: formatTemporal(start, 'YYYY-MM-DDTHH:mm:ss.SSS'),
-			DATEEND: formatTemporal(now, 'YYYY-MM-DDTHH:mm:ss.SSS'),
+			'DATE-OBS': formatTemporal(start, 'YYYY-MM-DDTHH:mm:ss.SSS'),
+			'DATE-END': formatTemporal(now, 'YYYY-MM-DDTHH:mm:ss.SSS'),
 			XORGSUBF: this.#frame.elements.X.value,
 			YORGSUBF: this.#frame.elements.Y.value,
 			FOCUSPOS: focuser?.position.value,
 			FOCUSTEM: focuser?.hasThermometer ? focuser.temperature : undefined,
 			ROTATANG: rotator ? rotator.angle.value : undefined,
+			FILTER: filter,
 			// BAYERPAT: channels === 1 ? this.#cfa.elements.CFA_TYPE.value : undefined,
 		}
 	}
