@@ -4,7 +4,7 @@ import { readImageFromBuffer } from '../src/image'
 import type { ImageRawType } from '../src/image.types'
 import { IndiClientHandlerSet } from '../src/indi.client'
 import type { Camera, GuideOutput, Thermometer } from '../src/indi.device'
-import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import { CameraManager, CoverManager, type DeviceHandler, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import { CameraSimulator, type CatalogSource, ClientSimulator, DustCapSimulator, FilterWheelSimulator, FocuserSimulator, LightBoxSimulator, MountSimulator, RotatorSimulator } from '../src/indi.simulator'
 import type { PropertyState } from '../src/indi.types'
 
@@ -35,11 +35,9 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
 		const guideOutputManager = new GuideOutputManager(mountManager)
-		const propertyManager = new DevicePropertyManager()
 
 		handler.add(mountManager)
 		handler.add(guideOutputManager)
-		handler.add(propertyManager)
 
 		const client = new ClientSimulator('mount', handler)
 		const mountSimulator = new MountSimulator('Mount Simulator', client)
@@ -103,14 +101,12 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
 		const guideOutputManager = new GuideOutputManager(mountManager)
-		const propertyManager = new DevicePropertyManager()
 
 		handler.add(mountManager)
 		handler.add(guideOutputManager)
-		handler.add(propertyManager)
 
-		const client = new ClientSimulator('mount', handler)
-		const mountSimulator = new MountSimulator('Mount Simulator', client)
+		using client = new ClientSimulator('mount', handler)
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		mountSimulator.minimumNotifyCoordinateInterval = 100
 
@@ -163,14 +159,12 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
 		const guideOutputManager = new GuideOutputManager(mountManager)
-		const propertyManager = new DevicePropertyManager()
 
 		handler.add(mountManager)
 		handler.add(guideOutputManager)
-		handler.add(propertyManager)
 
-		const client = new ClientSimulator('mount', handler)
-		const mountSimulator = new MountSimulator('Mount Simulator', client)
+		using client = new ClientSimulator('mount', handler)
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		const mount = mountManager.get(client, mountSimulator.name)!
 		mountManager.connect(mount)
@@ -220,14 +214,12 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
 		const guideOutputManager = new GuideOutputManager(mountManager)
-		const propertyManager = new DevicePropertyManager()
 
 		handler.add(mountManager)
 		handler.add(guideOutputManager)
-		handler.add(propertyManager)
 
-		const client = new ClientSimulator('mount', handler)
-		const mountSimulator = new MountSimulator('Mount Simulator', client)
+		using client = new ClientSimulator('mount', handler)
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		mountSimulator.minimumNotifyCoordinateInterval = 100
 
@@ -287,19 +279,17 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const cameraManager = new CameraManager()
 		const guideOutputManager = new GuideOutputManager(cameraManager)
 		const thermometerManager = new ThermometerManager(cameraManager)
-		const propertyManager = new DevicePropertyManager()
-		const client = new ClientSimulator('camera', handler)
+		using client = new ClientSimulator('camera', handler)
 		const frameReceiver = new CameraFrameReceiver()
 
 		handler.add(mountManager)
 		handler.add(cameraManager)
 		handler.add(guideOutputManager)
 		handler.add(thermometerManager)
-		handler.add(propertyManager)
 
 		cameraManager.addHandler(frameReceiver)
 
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
 		expect(camera).toBeDefined()
@@ -318,12 +308,12 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(camera.frameFormats.map((e) => e.name)).toEqual(['MONO', 'RGB'])
 		expect(camera.pixelSize.x).toBeCloseTo(5.2, 6)
 		expect(camera.pixelSize.y).toBeCloseTo(5.2, 6)
-		expect(propertyManager.get(client, camera.name)?.SIMULATOR_NOISE_EXPOSURE).toBeDefined()
-		expect(propertyManager.get(client, camera.name)?.SIMULATOR_CATALOG_SOURCE).toBeDefined()
-		expect(propertyManager.get(client, camera.name)?.SIMULATOR_STAR_PLOT_OPTIONS).toBeDefined()
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE).toBeDefined()
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE).toBeDefined()
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_OPTIONS).toBeDefined()
 
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_FLAGS', elements: { GAMMA_ENABLED: true } })
-		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_STAR_PLOT_FLAGS?.elements.GAMMA_ENABLED.value === true)
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_FLAGS?.elements.GAMMA_ENABLED.value === true)
 
 		cameraManager.frame(camera, 32, 16, 160, 120)
 		await waitUntil(() => camera.frame.x.value === 32 && camera.frame.y.value === 16 && camera.frame.width.value === 160 && camera.frame.height.value === 120)
@@ -361,18 +351,16 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
 		const cameraManager = new CameraManager()
-		const propertyManager = new DevicePropertyManager()
-		const client = new ClientSimulator('camera.header.simulator', handler)
+		using client = new ClientSimulator('camera.header.simulator', handler)
 		const frameReceiver = new CameraFrameReceiver()
 
 		handler.add(mountManager)
 		handler.add(cameraManager)
-		handler.add(propertyManager)
 
 		cameraManager.addHandler(frameReceiver)
 
-		const mountSimulator = new MountSimulator('Mount Simulator', client)
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
 		const mount = mountManager.get(client, mountSimulator.name)!
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
@@ -389,7 +377,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(-60), 1e-9))
 
 		cameraManager.snoop(camera, mount)
-		await waitUntil(() => propertyManager.get(client, camera.name)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
 
 		cameraManager.startExposure(camera, 0.05)
 		await waitUntil(() => frameReceiver.length > 0, 5000, 50)
@@ -416,18 +404,16 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const handler = new IndiClientHandlerSet()
 		const cameraManager = new CameraManager()
 		const rotatorManager = new RotatorManager()
-		const propertyManager = new DevicePropertyManager()
-		const client = new ClientSimulator('camera.rotator.simulator', handler)
+		using client = new ClientSimulator('camera.rotator.simulator', handler)
 		const frameReceiver = new CameraFrameReceiver()
 
 		handler.add(cameraManager)
 		handler.add(rotatorManager)
-		handler.add(propertyManager)
 
 		cameraManager.addHandler(frameReceiver)
 
-		const rotatorSimulator = new RotatorSimulator('Rotator Simulator', client)
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { rotatorManager })
+		using rotatorSimulator = new RotatorSimulator('Rotator Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { rotatorManager })
 		const rotator = rotatorManager.get(client, rotatorSimulator.name)!
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
@@ -436,7 +422,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		await waitUntil(() => rotator.connected && camera.connected)
 
 		cameraManager.snoop(camera, undefined, undefined, undefined, rotator)
-		await waitUntil(() => propertyManager.get(client, camera.name)?.ACTIVE_DEVICES?.elements.ACTIVE_ROTATOR.value === rotator.name)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_ROTATOR.value === rotator.name)
 
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, MOON_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, AMP_GLOW_ENABLED: false } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 1 } })
@@ -490,17 +476,15 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
 		const cameraManager = new CameraManager()
-		const propertyManager = new DevicePropertyManager()
-		const client = new ClientSimulator('camera.flat.simulator', handler)
+		using client = new ClientSimulator('camera.flat.simulator', handler)
 		const frameReceiver = new CameraFrameReceiver()
 
 		handler.add(mountManager)
 		handler.add(cameraManager)
-		handler.add(propertyManager)
 
 		cameraManager.addHandler(frameReceiver)
 
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
 		cameraManager.connect(camera)
@@ -520,7 +504,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0, HOT_PIXEL_STRENGTH: 0, WARM_PIXEL_STRENGTH: 0, DEAD_PIXEL_RESIDUAL: 0 },
 		})
 
-		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === 1)
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === 1)
 
 		cameraManager.startExposure(camera, 0.1)
 		await waitUntil(() => frameReceiver.length > 0, 5000, 50)
@@ -542,20 +526,18 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
 		const cameraManager = new CameraManager()
-		const propertyManager = new DevicePropertyManager()
-		const client = new ClientSimulator('camera.catalog.provider.simulator', handler)
+		using client = new ClientSimulator('camera.catalog.provider.simulator', handler)
 		const frameReceiver = new CameraFrameReceiver()
 
 		handler.add(mountManager)
 		handler.add(cameraManager)
-		handler.add(propertyManager)
 
 		cameraManager.addHandler(frameReceiver)
 
 		const catalogProvider: CatalogSource = () => [{ snr: 10, hfd: 4, flux: 30, rightAscension: hour(4.97409), declination: deg(19.95913) }]
 
-		const mountSimulator = new MountSimulator('Mount Simulator', client)
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { HNSKY: catalogProvider } })
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { HNSKY: catalogProvider } })
 		const mount = mountManager.get(client, mountSimulator.name)!
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
@@ -568,12 +550,12 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
 
 		cameraManager.snoop(camera, mount)
-		await waitUntil(() => propertyManager.get(client, camera.name)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
 
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { FLUX_MIN: 12, FLUX_MAX: 48 } })
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { HNSKY: true } })
-		await waitUntil(() => propertyManager.get(client, camera.name)?.SIMULATOR_CATALOG_SOURCE?.elements.HNSKY.value === true)
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.HNSKY.value === true)
 
 		try {
 			cameraSimulator.startExposure(0.05)
@@ -601,9 +583,9 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		handler.add(guideOutputManager)
 		handler.add(thermometerManager)
 
-		const client = new ClientSimulator('mount', handler)
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, guideOutputManager })
-		const mountSimulator = new MountSimulator('Mount Simulator', client)
+		using client = new ClientSimulator('mount', handler)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, guideOutputManager })
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
 
 		const mount = mountManager.get(client, mountSimulator.name)!
 		mountManager.connect(mount)
@@ -649,7 +631,6 @@ describe.skipIf(SKIP)('accessory simulators', () => {
 		const flatPanelManager = new FlatPanelManager()
 		const coverManager = new CoverManager()
 		const thermometerManager = new ThermometerManager(focuserManager)
-		const propertyManager = new DevicePropertyManager()
 
 		handler.add(focuserManager)
 		handler.add(wheelManager)
@@ -657,14 +638,13 @@ describe.skipIf(SKIP)('accessory simulators', () => {
 		handler.add(flatPanelManager)
 		handler.add(coverManager)
 		handler.add(thermometerManager)
-		handler.add(propertyManager)
 
-		const client = new ClientSimulator('accessories', handler)
-		const focuserSimulator = new FocuserSimulator('Focuser Simulator', client)
-		const wheelSimulator = new FilterWheelSimulator('Filter Wheel Simulator', client)
-		const rotatorSimulator = new RotatorSimulator('Rotator Simulator', client)
-		const lightBoxSimulator = new LightBoxSimulator('Light Box Simulator', client)
-		const dustCapSimulator = new DustCapSimulator('Dust Cap Simulator', client)
+		using client = new ClientSimulator('accessories', handler)
+		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client)
+		using wheelSimulator = new FilterWheelSimulator('Filter Wheel Simulator', client)
+		using rotatorSimulator = new RotatorSimulator('Rotator Simulator', client)
+		using lightBoxSimulator = new LightBoxSimulator('Light Box Simulator', client)
+		using dustCapSimulator = new DustCapSimulator('Dust Cap Simulator', client)
 
 		const focuser = focuserManager.get(client, focuserSimulator.name)!
 		const wheel = wheelManager.get(client, wheelSimulator.name)!
@@ -680,6 +660,13 @@ describe.skipIf(SKIP)('accessory simulators', () => {
 
 		await waitUntil(() => focuser.connected && wheel.connected && rotator.connected && flatPanel.connected && cover.connected)
 
+		expect(focuserManager.properties.length).toBe(1)
+		expect(wheelManager.properties.length).toBe(1)
+		expect(rotatorManager.properties.length).toBe(1)
+		expect(flatPanelManager.properties.length).toBe(1)
+		expect(coverManager.properties.length).toBe(1)
+		expect(thermometerManager.properties.length).toBe(1)
+
 		expect(focuser.hasThermometer).toBeTrue()
 		expect(focuser.canAbsoluteMove).toBeTrue()
 		expect(focuser.canRelativeMove).toBeTrue()
@@ -687,20 +674,20 @@ describe.skipIf(SKIP)('accessory simulators', () => {
 		expect(focuser.canReverse).toBeTrue()
 		expect(focuser.canSync).toBeTrue()
 		expect(focuser.position.value).toBe(50000)
-		expect(propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE).toBeDefined()
-		expect(propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE_COMPENSATION).toBeDefined()
+		expect(focuserManager.properties.get(focuser)?.FOCUS_TEMPERATURE).toBeDefined()
+		expect(focuserManager.properties.get(focuser)?.FOCUS_TEMPERATURE_COMPENSATION).toBeDefined()
 
-		const initialFocuserTemperature = Number(propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE?.elements.TEMPERATURE.value ?? 0)
-		await waitUntil(() => Math.abs(Number(propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE?.elements.TEMPERATURE.value ?? initialFocuserTemperature) - initialFocuserTemperature) >= 0.05, 3000)
+		const initialFocuserTemperature = Number(focuserManager.properties.get(focuser)?.FOCUS_TEMPERATURE?.elements.TEMPERATURE.value ?? 0)
+		await waitUntil(() => Math.abs(Number(focuserManager.properties.get(focuser)?.FOCUS_TEMPERATURE?.elements.TEMPERATURE.value ?? initialFocuserTemperature) - initialFocuserTemperature) >= 0.05, 3000)
 
 		const compensatedStart = focuser.position.value
 		client.sendSwitch({ device: focuser.name, name: 'FOCUS_TEMPERATURE_COMPENSATION', elements: { INDI_ENABLED: true } })
-		await waitUntil(() => propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE_COMPENSATION?.elements.INDI_ENABLED.value === true)
+		await waitUntil(() => focuserManager.properties.get(focuser)?.FOCUS_TEMPERATURE_COMPENSATION?.elements.INDI_ENABLED.value === true)
 		await waitUntil(() => focuser.position.value !== compensatedStart, 4000)
 		await waitUntil(() => !focuser.moving, 3000)
 
 		client.sendSwitch({ device: focuser.name, name: 'FOCUS_TEMPERATURE_COMPENSATION', elements: { INDI_DISABLED: true } })
-		await waitUntil(() => propertyManager.get(client, focuser.name)?.FOCUS_TEMPERATURE_COMPENSATION?.elements.INDI_DISABLED.value === true)
+		await waitUntil(() => focuserManager.properties.get(focuser)?.FOCUS_TEMPERATURE_COMPENSATION?.elements.INDI_DISABLED.value === true)
 
 		focuserManager.moveTo(focuser, 62000)
 		await waitUntil(() => focuser.moving)
@@ -797,6 +784,12 @@ describe.skipIf(SKIP)('accessory simulators', () => {
 		expect(flatPanelManager.has(client, flatPanel.name)).toBeFalse()
 		expect(coverManager.has(client, cover.name)).toBeFalse()
 		expect(thermometerManager.has(client, focuser.name)).toBeFalse()
+		expect(focuserManager.properties.length).toBe(0)
+		expect(wheelManager.properties.length).toBe(0)
+		expect(rotatorManager.properties.length).toBe(0)
+		expect(flatPanelManager.properties.length).toBe(0)
+		expect(coverManager.properties.length).toBe(0)
+		expect(thermometerManager.properties.length).toBe(0)
 	}, 7000)
 
 	test('camera uses focuser position', async () => {
@@ -810,9 +803,9 @@ describe.skipIf(SKIP)('accessory simulators', () => {
 
 		cameraManager.addHandler(frameReceiver)
 
-		const client = new ClientSimulator('mount', handler)
-		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { focuserManager })
-		const focuserSimulator = new FocuserSimulator('Focuser Simulator', client)
+		using client = new ClientSimulator('mount', handler)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { focuserManager })
+		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client)
 
 		const focuser = focuserManager.get(client, focuserSimulator.name)!
 		focuserManager.connect(focuser)

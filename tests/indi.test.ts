@@ -1,7 +1,7 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { IndiClient, type IndiClientHandler } from '../src/indi.client'
 import type { Camera, Cover, FlatPanel, Focuser, GuideOutput, Mount, Power, Rotator, Thermometer, Wheel } from '../src/indi.device'
-import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
+import { CameraManager, CoverManager, type DeviceHandler, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import type { DefSwitchVector, DefTextVector, PropertyState } from '../src/indi.types'
 // oxfmt-ignore
 import { SimpleXmlParser } from '../src/xml'
@@ -291,7 +291,6 @@ describe.skipIf(SKIP)('manager', () => {
 			},
 		}
 
-		const deviceProperty = new DevicePropertyManager()
 		const camera = new CameraManager()
 		camera.addHandler(cameraDeviceHandler)
 		const guideOutput = new GuideOutputManager(camera)
@@ -314,11 +313,7 @@ describe.skipIf(SKIP)('manager', () => {
 			blobVector: (client, message, tag) => {
 				camera.blobVector(client, message, tag)
 			},
-			vector: (client, message, tag) => {
-				deviceProperty.vector(client, message, tag)
-			},
 			delProperty: (client, message) => {
-				deviceProperty.delProperty(client, message)
 				camera.delProperty(client, message)
 				guideOutput.delProperty(client, message)
 				thermometer.delProperty(client, message)
@@ -380,7 +375,7 @@ describe.skipIf(SKIP)('manager', () => {
 		expect(thermometer).toHaveLength(1)
 		expect(thermometerAdded).toBeTrue()
 		expect(guideOutputAdded).toBeTrue()
-		expect(deviceProperty).not.toBeEmpty()
+		expect(camera.properties).not.toBeEmpty()
 
 		camera.enableBlob(device)
 		camera.gain(device, 60)
@@ -440,7 +435,6 @@ describe.skipIf(SKIP)('manager', () => {
 			},
 		}
 
-		const deviceProperty = new DevicePropertyManager()
 		const mount = new MountManager()
 		mount.addHandler(mountDeviceHandler)
 		const guideOutput = new GuideOutputManager(mount)
@@ -457,11 +451,7 @@ describe.skipIf(SKIP)('manager', () => {
 			switchVector: (client, message, tag) => {
 				mount.switchVector(client, message, tag)
 			},
-			vector: (client, message, tag) => {
-				deviceProperty.vector(client, message, tag)
-			},
 			delProperty: (client, message) => {
-				deviceProperty.delProperty(client, message)
 				mount.delProperty(client, message)
 				guideOutput.delProperty(client, message)
 			},
@@ -509,7 +499,7 @@ describe.skipIf(SKIP)('manager', () => {
 		// expect(device.equatorialCoordinate.declination).not.toBe(0)
 		expect(guideOutput).toHaveLength(1)
 		expect(guideOutputAdded).toBeTrue()
-		expect(deviceProperty).not.toBeEmpty()
+		expect(guideOutput.properties).not.toBeEmpty()
 
 		client.close()
 
@@ -537,7 +527,6 @@ describe.skipIf(SKIP)('manager', () => {
 			},
 		}
 
-		const deviceProperty = new DevicePropertyManager()
 		const wheel = new WheelManager()
 		wheel.addHandler(wheelDeviceHandler)
 
@@ -551,11 +540,7 @@ describe.skipIf(SKIP)('manager', () => {
 			switchVector: (client, message, tag) => {
 				wheel.switchVector(client, message, tag)
 			},
-			vector: (client, message, tag) => {
-				deviceProperty.vector(client, message, tag)
-			},
 			delProperty: (client, message) => {
-				deviceProperty.delProperty(client, message)
 				wheel.delProperty(client, message)
 			},
 			close: (client, server) => {
@@ -585,7 +570,7 @@ describe.skipIf(SKIP)('manager', () => {
 		expect(device.connected).toBeTrue()
 		expect(device.count).toBe(8)
 		expect(device.position).toBe(0)
-		expect(deviceProperty).not.toBeEmpty()
+		expect(wheel.properties).not.toBeEmpty()
 
 		wheel.moveTo(device, 7)
 
@@ -631,7 +616,6 @@ describe.skipIf(SKIP)('manager', () => {
 			},
 		}
 
-		const deviceProperty = new DevicePropertyManager()
 		const focuser = new FocuserManager()
 		focuser.addHandler(focuserDeviceHandler)
 		const thermometer = new ThermometerManager(focuser)
@@ -648,11 +632,7 @@ describe.skipIf(SKIP)('manager', () => {
 			switchVector: (client, message, tag) => {
 				focuser.switchVector(client, message, tag)
 			},
-			vector: (client, message, tag) => {
-				deviceProperty.vector(client, message, tag)
-			},
 			delProperty: (client, message) => {
-				deviceProperty.delProperty(client, message)
 				focuser.delProperty(client, message)
 				thermometer.delProperty(client, message)
 			},
@@ -691,7 +671,7 @@ describe.skipIf(SKIP)('manager', () => {
 		expect(device.position.value).toEqual(50000)
 		expect(thermometer).toHaveLength(1)
 		expect(thermometerAdded).toBeTrue()
-		expect(deviceProperty).not.toBeEmpty()
+		expect(focuser.properties).not.toBeEmpty()
 
 		focuser.moveTo(device, 60000)
 
@@ -725,7 +705,6 @@ describe.skipIf(SKIP)('manager', () => {
 			},
 		}
 
-		const deviceProperty = new DevicePropertyManager()
 		const cover = new CoverManager()
 		cover.addHandler(coverDeviceHandler)
 
@@ -736,11 +715,7 @@ describe.skipIf(SKIP)('manager', () => {
 			switchVector: (client, message, tag) => {
 				cover.switchVector(client, message, tag)
 			},
-			vector: (client, message, tag) => {
-				deviceProperty.vector(client, message, tag)
-			},
 			delProperty: (client, message) => {
-				deviceProperty.delProperty(client, message)
 				cover.delProperty(client, message)
 			},
 			close: (client, server) => {
@@ -771,7 +746,7 @@ describe.skipIf(SKIP)('manager', () => {
 
 		expect(device.connected).toBeTrue()
 		expect(device.hasDewHeater).toBeFalse()
-		expect(deviceProperty).not.toBeEmpty()
+		expect(cover.properties).not.toBeEmpty()
 
 		isParked ? cover.unpark(device) : cover.park(device)
 
@@ -809,7 +784,6 @@ describe.skipIf(SKIP)('manager', () => {
 			},
 		}
 
-		const deviceProperty = new DevicePropertyManager()
 		const flatPanel = new FlatPanelManager()
 		flatPanel.addHandler(flatPanelDeviceHandler)
 
@@ -823,11 +797,7 @@ describe.skipIf(SKIP)('manager', () => {
 			numberVector: (client, message, tag) => {
 				flatPanel.numberVector(client, message, tag)
 			},
-			vector: (client, message, tag) => {
-				deviceProperty.vector(client, message, tag)
-			},
 			delProperty: (client, message) => {
-				deviceProperty.delProperty(client, message)
 				flatPanel.delProperty(client, message)
 			},
 			close: (client, server) => {
@@ -857,7 +827,7 @@ describe.skipIf(SKIP)('manager', () => {
 		expect(device.connected).toBeTrue()
 		expect(device.intensity.max).toBe(255)
 		expect(device.intensity.value).toBe(0)
-		expect(deviceProperty).not.toBeEmpty()
+		expect(flatPanel.properties).not.toBeEmpty()
 
 		flatPanel.enable(device)
 
@@ -897,7 +867,6 @@ describe.skipIf(SKIP)('manager', () => {
 			},
 		}
 
-		const deviceProperty = new DevicePropertyManager()
 		const power = new PowerManager()
 		power.addHandler(powerDeviceHandler)
 
@@ -911,11 +880,7 @@ describe.skipIf(SKIP)('manager', () => {
 			numberVector: (client, message, tag) => {
 				power.numberVector(client, message, tag)
 			},
-			vector: (client, message, tag) => {
-				deviceProperty.vector(client, message, tag)
-			},
 			delProperty: (client, message) => {
-				deviceProperty.delProperty(client, message)
 				power.delProperty(client, message)
 			},
 			close: (client, server) => {
@@ -944,7 +909,7 @@ describe.skipIf(SKIP)('manager', () => {
 		await Bun.sleep(1000)
 
 		expect(device.connected).toBeTrue()
-		expect(deviceProperty).not.toBeEmpty()
+		expect(power.properties).not.toBeEmpty()
 
 		// device.dc.forEach((e) => power.toggle(client, device, e, true))
 		// device.dew.forEach((e) => power.toggle(client, device, e, true))
@@ -998,7 +963,6 @@ describe.skipIf(SKIP)('manager', () => {
 			},
 		}
 
-		const deviceProperty = new DevicePropertyManager()
 		const rotator = new RotatorManager()
 		rotator.addHandler(rotatorDeviceHandler)
 
@@ -1012,11 +976,7 @@ describe.skipIf(SKIP)('manager', () => {
 			switchVector: (client, message, tag) => {
 				rotator.switchVector(client, message, tag)
 			},
-			vector: (client, message, tag) => {
-				deviceProperty.vector(client, message, tag)
-			},
 			delProperty: (client, message) => {
-				deviceProperty.delProperty(client, message)
 				rotator.delProperty(client, message)
 			},
 			close: (client, server) => {
@@ -1051,7 +1011,7 @@ describe.skipIf(SKIP)('manager', () => {
 		expect(device.angle.value).toBe(0)
 		expect(device.angle.min).toBe(0)
 		expect(device.angle.max).toBe(360)
-		expect(deviceProperty).not.toBeEmpty()
+		expect(rotator.properties).not.toBeEmpty()
 
 		rotator.moveTo(device, 5)
 
