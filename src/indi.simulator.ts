@@ -2317,7 +2317,7 @@ export class CameraSimulator extends DeviceSimulator {
 			GAIN: this.#gain.elements.GAIN.value,
 			OFFSET: this.#offset.elements.OFFSET.value,
 			FRAME: this.frameType,
-			IMAGETYP: `${this.frameType} Frame`,
+			IMAGETYP: `${this.frameType === 'LIGHT' ? 'Light' : this.frameType === 'DARK' ? 'Dark' : this.frameType === 'FLAT' ? 'Flat' : 'Bias'} Frame`,
 			'CCD-TEMP': this.#temperature.elements.CCD_TEMPERATURE_VALUE.value,
 			SITELAT: mount ? toDeg(mount.geographicCoordinate.latitude) : undefined,
 			SITELONG: mount ? toDeg(mount.geographicCoordinate.longitude) : undefined,
