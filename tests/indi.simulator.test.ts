@@ -5,7 +5,7 @@ import type { ImageRawType } from '../src/image.types'
 import { IndiClientHandlerSet } from '../src/indi.client'
 import type { Camera, GuideOutput, Thermometer } from '../src/indi.device'
 import { CameraManager, CoverManager, type DeviceHandler, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
-import { CameraSimulator, type CatalogSource, ClientSimulator, DustCapSimulator, FilterWheelSimulator, FocuserSimulator, LightBoxSimulator, MountSimulator, RotatorSimulator } from '../src/indi.simulator'
+import { CameraSimulator, type CatalogSource, ClientSimulator, CoverSimulator, FilterWheelSimulator, FlatPanelSimulator, FocuserSimulator, MountSimulator, RotatorSimulator } from '../src/indi.simulator'
 import type { PropertyState } from '../src/indi.types'
 
 const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
@@ -643,8 +643,8 @@ describe.skipIf(SKIP)('accessory simulators', () => {
 		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client)
 		using wheelSimulator = new FilterWheelSimulator('Filter Wheel Simulator', client)
 		using rotatorSimulator = new RotatorSimulator('Rotator Simulator', client)
-		using lightBoxSimulator = new LightBoxSimulator('Light Box Simulator', client)
-		using dustCapSimulator = new DustCapSimulator('Dust Cap Simulator', client)
+		using lightBoxSimulator = new FlatPanelSimulator('Light Box Simulator', client)
+		using dustCapSimulator = new CoverSimulator('Dust Cap Simulator', client)
 
 		const focuser = focuserManager.get(client, focuserSimulator.name)!
 		const wheel = wheelManager.get(client, wheelSimulator.name)!

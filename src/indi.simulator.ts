@@ -1692,8 +1692,6 @@ export class CoverSimulator extends DeviceSimulator {
 	}
 }
 
-export { CoverSimulator as DustCapSimulator, FilterWheelSimulator as WheelSimulator, FlatPanelSimulator as LightBoxSimulator }
-
 export class CameraSimulator extends DeviceSimulator {
 	readonly type = 'camera'
 
@@ -1868,7 +1866,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	get activeFilter() {
-		const wheel = this.#wheelManager?.get(this.client, this.snoopDevices.elements.ACTIVE_ROTATOR.value)
+		const wheel = this.#wheelManager?.get(this.client, this.snoopDevices.elements.ACTIVE_FILTER.value)
 		return wheel?.connected ? wheel : undefined
 	}
 
