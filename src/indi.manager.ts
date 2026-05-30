@@ -86,19 +86,19 @@ export class DevicePropertyManager implements IndiClientHandler, DevicePropertyH
 	}
 
 	vector(client: Client, message: DefVector | SetVector, tag: string) {
-		const { device } = message
 		let map = this.#properties.get(client)
 
-		if (!map) {
+		if (map === undefined) {
 			map = new Map()
 			this.#properties.set(client, map)
 			this.#clients.set(client.id, client)
 		}
 
+		const { device } = message
 		let properties = map.get(device)
 
-		if (!properties) {
-			properties = {}
+		if (properties === undefined) {
+			properties = Object.create(null) as DeviceProperties
 			map.set(device, properties)
 		}
 
@@ -273,7 +273,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'CONNECTION':
@@ -287,7 +287,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		if (!message.name) {
 			const device = this.get(client, message.device)
 
-			if (device) {
+			if (device !== undefined) {
 				this.remove(device)
 			}
 		}
@@ -311,7 +311,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		let device = this.get(client, name)
 
 		if (isInterfaceType(type, interfaceType)) {
-			if (!device) {
+			if (device === undefined) {
 				device = structuredClone<D>(DEVICES[interfaceType as never])
 				const id = Bun.MD5.hash(`${client.id}:${device.type}:${name}`, 'hex')
 				device = { ...device, id, name, [CLIENT]: client, driver: { executable: elements.DRIVER_EXEC.value, version: elements.DRIVER_VERSION.value }, client: { type: client.type, id: client.id } }
@@ -319,7 +319,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 				this.add(device)
 				this.ask(device)
 			}
-		} else if (device) {
+		} else if (device !== undefined) {
 			this.remove(device)
 		}
 	}
@@ -393,21 +393,33 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		}
 	}
 
+	#addProxy(client: Client, parent: GuideOutput) {
+		const id = Bun.MD5.hash(`${client.id}:guideOutput:${parent.name}`, 'hex')
+
+		const device = proxyDevice(parent, id, 'guideOutput')
+
+		if (this.add(device)) {
+			this.updated(device, 'canPulseGuide')
+		}
+
+		return device
+	}
+
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		switch (message.name) {
 			case 'TELESCOPE_TIMED_GUIDE_NS':
 			case 'TELESCOPE_TIMED_GUIDE_WE': {
-				const device = this.provider.get(client, message.device)
+				let device = this.get(client, message.device)
 
-				if (device) {
-					if (tag[0] === 'd') {
-						if (handleSwitchValue(device, 'canPulseGuide', true)) {
-							if (this.add(device)) {
-								this.updated(device, 'canPulseGuide', message.state)
-							}
-						}
+				if (device === undefined && tag[0] === 'd') {
+					const parent = this.provider.get(client, message.device, 'mount') ?? this.provider.get(client, message.device, 'camera')
+
+					if (parent !== undefined && handleSwitchValue(parent, 'canPulseGuide', true)) {
+						device = this.#addProxy(client, parent)
 					}
+				}
 
+				if (device !== undefined) {
 					if (handleSwitchValue(device, 'pulsing', message.state === 'Busy')) {
 						this.updated(device, 'pulsing', message.state)
 					}
@@ -416,9 +428,9 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 				return
 			}
 			case 'GUIDE_RATE': {
-				const device = this.provider.get(client, message.device)
+				const device = this.get(client, message.device)
 
-				if (device) {
+				if (device !== undefined) {
 					if (tag[0] === 'd') {
 						if (handleSwitchValue(device, 'hasGuideRate', true)) {
 							this.updated(device, 'hasGuideRate', message.state)
@@ -444,7 +456,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		if (message.name === 'TELESCOPE_TIMED_GUIDE_NS' || message.name === 'TELESCOPE_TIMED_GUIDE_WE') {
 			const device = this.get(client, message.device)
 
-			if (device) {
+			if (device !== undefined) {
 				if (handleSwitchValue(device, 'canPulseGuide', false)) {
 					this.updated(device, 'canPulseGuide')
 				}
@@ -460,24 +472,36 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 		super()
 	}
 
+	#addProxy(client: Client, parent: Thermometer) {
+		const id = Bun.MD5.hash(`${client.id}:thermometer:${parent.name}`, 'hex')
+
+		const device = proxyDevice(parent, id, 'thermometer')
+
+		if (this.add(device)) {
+			this.updated(device, 'hasThermometer')
+		}
+
+		return device
+	}
+
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		switch (message.name) {
 			case 'CCD_TEMPERATURE':
 			case 'FOCUS_TEMPERATURE': {
-				const device = this.provider.get(client, message.device, message.name[0] === 'C' ? 'camera' : 'focuser')
+				let device = this.get(client, message.device)
 
-				if (device) {
-					if (tag[0] === 'd') {
-						if (handleSwitchValue(device, 'hasThermometer', true)) {
-							if (this.add(device)) {
-								this.updated(device, 'hasThermometer', message.state)
-							}
-						}
+				if (device === undefined && tag[0] === 'd') {
+					const parent = this.provider.get(client, message.device, message.name[0] === 'C' ? 'camera' : 'focuser')
+
+					if (parent !== undefined && handleSwitchValue(parent, 'hasThermometer', true)) {
+						device = this.#addProxy(client, parent)
 					}
+				}
 
+				if (device !== undefined) {
 					const { elements } = message
 
-					if (handleNumberValue(device, 'temperature', elements.TEMPERATURE?.value ?? elements.CCD_TEMPERATURE_VALUE?.value, undefined, Math.trunc)) {
+					if (handleNumberValue(device, 'temperature', elements.TEMPERATURE?.value ?? elements.CCD_TEMPERATURE_VALUE?.value, undefined, Math.round)) {
 						this.updated(device, 'temperature', message.state)
 					}
 				}
@@ -489,7 +513,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 		if (message.name === 'CCD_TEMPERATURE' || message.name === 'FOCUS_TEMPERATURE') {
 			const device = this.get(client, message.device)
 
-			if (device) {
+			if (device !== undefined) {
 				if (handleSwitchValue(device, 'hasThermometer', false)) {
 					this.updated(device, 'hasThermometer')
 				}
@@ -582,7 +606,7 @@ export class CameraManager extends DeviceManager<Camera> {
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		super.switchVector(client, message, tag)
 
@@ -637,7 +661,7 @@ export class CameraManager extends DeviceManager<Camera> {
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'CCD_INFO': {
@@ -763,7 +787,7 @@ export class CameraManager extends DeviceManager<Camera> {
 
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'CCD_CFA':
@@ -777,7 +801,7 @@ export class CameraManager extends DeviceManager<Camera> {
 	blobVector(client: Client, message: DefBlobVector | SetBlobVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'CCD1':
@@ -940,7 +964,7 @@ export class MountManager extends DeviceManager<Mount> {
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		super.switchVector(client, message, tag)
 
@@ -1105,7 +1129,7 @@ export class MountManager extends DeviceManager<Mount> {
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'EQUATORIAL_EOD_COORD': {
@@ -1145,7 +1169,7 @@ export class MountManager extends DeviceManager<Mount> {
 
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'TIME_UTC': {
@@ -1181,7 +1205,7 @@ export class WheelManager extends DeviceManager<Wheel> {
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'FILTER_SLOT':
@@ -1208,7 +1232,7 @@ export class WheelManager extends DeviceManager<Wheel> {
 
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'FILTER_NAME': {
@@ -1273,7 +1297,7 @@ export class FocuserManager extends DeviceManager<Focuser> {
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		super.switchVector(client, message, tag)
 
@@ -1302,7 +1326,7 @@ export class FocuserManager extends DeviceManager<Focuser> {
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'FOCUS_SYNC':
@@ -1373,7 +1397,7 @@ export class CoverManager extends DeviceManager<Cover> {
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		super.switchVector(client, message, tag)
 
@@ -1429,7 +1453,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		super.switchVector(client, message, tag)
 
@@ -1472,7 +1496,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'ABS_ROTATOR_ANGLE':
@@ -1517,22 +1541,34 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 		}
 	}
 
+	#addProxy(client: Client, parent: DewHeater, message: DefSwitchVector | SetNumberVector) {
+		const id = Bun.MD5.hash(`${client.id}:dewHeater:${parent.name}`, 'hex')
+
+		const device = proxyDevice(parent, id, 'dewHeater')
+
+		if (this.add(device)) {
+			this.updated(device, 'hasDewHeater', message.state)
+			this.#pwmProperties.set(device.name, [message.name, 'Heater'])
+		}
+
+		return device
+	}
+
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		switch (message.name) {
 			// WandererCover V4 EC
 			case 'Heater': {
-				const device = this.provider.get(client, message.device)
+				let device = this.get(client, message.device)
 
-				if (device) {
-					if (tag[0] === 'd') {
-						if (handleSwitchValue(device, 'hasDewHeater', true)) {
-							if (this.add(device)) {
-								this.updated(device, 'hasDewHeater', message.state)
-								this.#pwmProperties.set(device.name, [message.name, 'Heater'])
-							}
-						}
+				if (device === undefined && tag[0] === 'd') {
+					const parent = this.provider.get(client, message.device)
+
+					if (parent !== undefined && handleSwitchValue(parent, 'hasDewHeater', true)) {
+						device = this.#addProxy(client, parent, message)
 					}
+				}
 
+				if (device !== undefined) {
 					if (handleMinMaxValue(device.dutyCycle, message.elements.Heater, tag)) {
 						this.updated(device, 'dutyCycle', message.state)
 					}
@@ -1545,7 +1581,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 		if (message.name === 'Heater') {
 			const device = this.get(client, message.device)
 
-			if (device) {
+			if (device !== undefined) {
 				if (handleSwitchValue(device, 'hasDewHeater', false)) {
 					this.updated(device, 'hasDewHeater')
 				}
@@ -1578,7 +1614,7 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		super.switchVector(client, message, tag)
 
@@ -1593,7 +1629,7 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'FLAT_LIGHT_INTENSITY':
@@ -1631,7 +1667,7 @@ export class PowerManager extends DeviceManager<Power> {
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		super.switchVector(client, message, tag)
 
@@ -1663,7 +1699,7 @@ export class PowerManager extends DeviceManager<Power> {
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'POWER_SENSORS':
@@ -1702,7 +1738,7 @@ export class PowerManager extends DeviceManager<Power> {
 
 		const device = this.get(client, message.device)
 
-		if (!device) return
+		if (device === undefined) return
 
 		switch (message.name) {
 			case 'POWER_LABELS':
@@ -1824,4 +1860,27 @@ function parseUTCOffset(text: string) {
 	const hour = +parts[0] * 60
 	const minute = parts.length >= 2 ? +parts[1] : 0
 	return hour + minute
+}
+
+function proxyDevice<D extends Device>(parent: D, id: string, type: DeviceType) {
+	return new Proxy(parent, {
+		get(target, prop) {
+			if (prop === 'id') return id
+			if (prop === 'parentId') return parent.id
+			if (prop === 'type') return type
+			return Reflect.get(target, prop)
+		},
+		// Used to make parentId show up in Object.keys() and similar functions, which is useful for debugging and serialization
+		// JSON.stringify ignores properties that don't show up in Object.keys()
+		ownKeys(target) {
+			return [...Reflect.ownKeys(target), 'parentId']
+		},
+		getOwnPropertyDescriptor(target, prop) {
+			if (prop === 'parentId') {
+				return { enumerable: true, configurable: true }
+			}
+
+			return Reflect.getOwnPropertyDescriptor(target, prop)
+		},
+	})
 }

@@ -3,7 +3,7 @@ import { deg, formatDEC, formatRA, hour, normalizePI } from '../src/angle'
 import { readImageFromBuffer } from '../src/image'
 import type { ImageRawType } from '../src/image.types'
 import { IndiClientHandlerSet } from '../src/indi.client'
-import type { Camera, GuideOutput } from '../src/indi.device'
+import type { Camera, GuideOutput, Thermometer } from '../src/indi.device'
 import { CameraManager, CoverManager, type DeviceHandler, DevicePropertyManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import { CameraSimulator, type CatalogSource, ClientSimulator, DustCapSimulator, FilterWheelSimulator, FocuserSimulator, LightBoxSimulator, MountSimulator, RotatorSimulator } from '../src/indi.simulator'
 import type { PropertyState } from '../src/indi.types'
@@ -269,6 +269,14 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		pulseDrift = mount.equatorialCoordinate.rightAscension - pulseRightAscension
 		expect(pulseDrift).toBeLessThan(5e-6)
 		expect(pulseDrift).toBeGreaterThan(-1e-4)
+
+		const guideOutput = guideOutputManager.get(client, mount.name)
+		expect(guideOutput).toBeDefined()
+		expect(guideOutput!.type).toBe('guideOutput')
+		expect(guideOutput!.id).not.toBe(mount.id)
+		expect(guideOutput!.parentId).toBe(mount.id)
+		expect(mount.parentId).toBeUndefined()
+		expect(JSON.stringify(guideOutput)).toContain('parentId')
 	}, 3000)
 })
 
@@ -584,11 +592,14 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const cameraManager = new CameraManager()
 		const mountManager = new MountManager()
 		const guideOutputProvider: DeviceProvider<GuideOutput> = { get: (client, name) => mountManager.get(client, name) ?? cameraManager.get(client, name) }
+		const thermometerProvider: DeviceProvider<Thermometer> = { get: (client, name) => cameraManager.get(client, name) }
 		const guideOutputManager = new GuideOutputManager(guideOutputProvider)
+		const thermometerManager = new ThermometerManager(thermometerProvider)
 
 		handler.add(cameraManager)
 		handler.add(mountManager)
 		handler.add(guideOutputManager)
+		handler.add(thermometerManager)
 
 		const client = new ClientSimulator('mount', handler)
 		const cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, guideOutputManager })
@@ -611,6 +622,21 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		await waitUntil(() => mount.pulsing)
 		await waitUntil(() => !mount.pulsing, 1000)
 		await waitUntil(() => !camera.pulsing, 1000)
+
+		const guideOutput = guideOutputManager.get(client, camera.name)
+		expect(guideOutput).toBeDefined()
+		expect(guideOutput!.type).toBe('guideOutput')
+		expect(guideOutput!.id).not.toBe(camera.id)
+		expect(guideOutput!.parentId).toBe(camera.id)
+		expect(mount.parentId).toBeUndefined()
+		expect(JSON.stringify(guideOutput)).toContain('parentId')
+
+		const thermometer = thermometerManager.get(client, camera.name)
+		expect(thermometer).toBeDefined()
+		expect(thermometer!.type).toBe('thermometer')
+		expect(thermometer!.id).not.toBe(camera.id)
+		expect(thermometer!.parentId).toBe(camera.id)
+		expect(JSON.stringify(thermometer)).toContain('parentId')
 	}, 1000)
 })
 
@@ -752,6 +778,13 @@ describe.skipIf(SKIP)('accessory simulators', () => {
 		await waitUntil(() => cover.parking)
 		await waitUntil(() => !cover.parked, 3000)
 
+		const thermometer = thermometerManager.get(client, focuser.name)
+		expect(thermometer).toBeDefined()
+		expect(thermometer!.type).toBe('thermometer')
+		expect(thermometer!.id).not.toBe(focuser.id)
+		expect(thermometer!.parentId).toBe(focuser.id)
+		expect(JSON.stringify(thermometer)).toContain('parentId')
+
 		focuserSimulator.dispose()
 		wheelSimulator.dispose()
 		rotatorSimulator.dispose()
@@ -763,6 +796,7 @@ describe.skipIf(SKIP)('accessory simulators', () => {
 		expect(rotatorManager.has(client, rotator.name)).toBeFalse()
 		expect(flatPanelManager.has(client, flatPanel.name)).toBeFalse()
 		expect(coverManager.has(client, cover.name)).toBeFalse()
+		expect(thermometerManager.has(client, focuser.name)).toBeFalse()
 	}, 7000)
 
 	test('camera uses focuser position', async () => {

@@ -80,6 +80,7 @@ export const CLIENT = Symbol('CLIENT')
 
 export interface Device {
 	id: string // MD5(client ip address + client port + type + name)
+	parentId?: string
 	type: DeviceType
 	name: string
 	connected: boolean
