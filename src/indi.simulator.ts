@@ -1239,7 +1239,7 @@ export class FocuserSimulator extends DeviceSimulator {
 	}
 }
 
-export class FilterWheelSimulator extends DeviceSimulator {
+export class WheelSimulator extends DeviceSimulator {
 	readonly type = 'wheel'
 
 	readonly #position = makeNumberVector('', 'FILTER_SLOT', 'Slot', MAIN_CONTROL, 'rw', ['FILTER_SLOT_VALUE', 'Slot', 1, 1, FILTER_WHEEL_SLOT_NAMES.length, 1, '%.0f'])

@@ -6,7 +6,7 @@ import { meter, toMeter } from './distance'
 import type { CfaPattern } from './image.types'
 import type { IndiClientHandler } from './indi.client'
 // oxfmt-ignore
-import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type NameAndLabel, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type Thermometer, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DEW_HEATER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_THERMOMETER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type NameAndLabel, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type Thermometer, type TrackMode, type Wheel } from './indi.device'
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, ValueType } from './indi.types'
 import type { GeographicCoordinate } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
@@ -470,17 +470,24 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 	}
 
 	delProperty(client: Client, message: DelProperty) {
-		if (!message.name || message.name === 'TELESCOPE_TIMED_GUIDE_NS' || message.name === 'TELESCOPE_TIMED_GUIDE_WE') {
-			const device = this.get(client, message.device)
+		const device = this.get(client, message.device)
 
-			if (device !== undefined) {
-				if (handleSwitchValue(device, 'canPulseGuide', false)) {
-					this.updated(device, 'canPulseGuide')
-				}
+		if (device === undefined) return
 
-				super.delProperty(client, message)
-			}
+		const name = message.name
+		const full = !name
+
+		if (full || name === 'TELESCOPE_TIMED_GUIDE_NS' || name === 'TELESCOPE_TIMED_GUIDE_WE') {
+			resetDeviceValue(this, device, 'canPulseGuide', DEFAULT_GUIDE_OUTPUT.canPulseGuide)
+			resetDeviceValue(this, device, 'pulsing', DEFAULT_GUIDE_OUTPUT.pulsing)
 		}
+		if (full || name === 'GUIDE_RATE') {
+			resetDeviceValue(this, device, 'hasGuideRate', DEFAULT_GUIDE_OUTPUT.hasGuideRate)
+			resetDeviceValue(this, device, 'canSetGuideRate', DEFAULT_GUIDE_OUTPUT.canSetGuideRate)
+			resetDeviceValue(this, device, 'guideRate', DEFAULT_GUIDE_OUTPUT.guideRate)
+		}
+
+		super.delProperty(client, message)
 	}
 }
 
@@ -537,17 +544,19 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 	}
 
 	delProperty(client: Client, message: DelProperty) {
-		if (!message.name || message.name === 'CCD_TEMPERATURE' || message.name === 'FOCUS_TEMPERATURE') {
-			const device = this.get(client, message.device)
+		const device = this.get(client, message.device)
 
-			if (device !== undefined) {
-				if (handleSwitchValue(device, 'hasThermometer', false)) {
-					this.updated(device, 'hasThermometer')
-				}
+		if (device === undefined) return
 
-				super.delProperty(client, message)
-			}
+		const name = message.name
+		const full = !name
+
+		if (full || name === 'CCD_TEMPERATURE' || name === 'FOCUS_TEMPERATURE') {
+			resetDeviceValue(this, device, 'hasThermometer', DEFAULT_THERMOMETER.hasThermometer)
+			resetDeviceValue(this, device, 'temperature', DEFAULT_THERMOMETER.temperature)
 		}
+
+		super.delProperty(client, message)
 	}
 }
 
@@ -842,6 +851,73 @@ export class CameraManager extends DeviceManager<Camera> {
 					}
 				}
 		}
+	}
+
+	delProperty(client: Client, message: DelProperty) {
+		const device = this.get(client, message.device)
+
+		if (device === undefined) return
+
+		const name = message.name
+		const full = !name
+
+		if (full || name === 'CCD_COOLER') {
+			resetDeviceValue(this, device, 'hasCoolerControl', DEFAULT_CAMERA.hasCoolerControl)
+			resetDeviceValue(this, device, 'cooler', DEFAULT_CAMERA.cooler)
+		}
+		if (full || name === 'CCD_CAPTURE_FORMAT') {
+			resetDeviceValue(this, device, 'frameFormats', DEFAULT_CAMERA.frameFormats)
+			resetDeviceValue(this, device, 'frameFormat', DEFAULT_CAMERA.frameFormat)
+		}
+		if (full || name === 'CCD_ABORT_EXPOSURE') {
+			resetDeviceValue(this, device, 'canAbort', DEFAULT_CAMERA.canAbort)
+		}
+		if (full || name === 'CCD_FRAME_TYPE') {
+			resetDeviceValue(this, device, 'frameType', DEFAULT_CAMERA.frameType)
+		}
+		if (full || name === 'CCD_INFO') {
+			resetDeviceValue(this, device, 'pixelSize', DEFAULT_CAMERA.pixelSize)
+		}
+		if (full || name === 'CCD_EXPOSURE') {
+			resetDeviceValue(this, device, 'exposure', DEFAULT_CAMERA.exposure)
+			resetDeviceValue(this, device, 'exposuring', DEFAULT_CAMERA.exposuring)
+		}
+		if (full || name === 'CCD_COOLER_POWER') {
+			resetDeviceValue(this, device, 'coolerPower', DEFAULT_CAMERA.coolerPower)
+		}
+		if (full || name === 'CCD_TEMPERATURE') {
+			resetDeviceValue(this, device, 'hasCooler', DEFAULT_CAMERA.hasCooler)
+			resetDeviceValue(this, device, 'canSetTemperature', DEFAULT_CAMERA.canSetTemperature)
+		}
+		if (full || name === 'CCD_FRAME') {
+			resetDeviceValue(this, device, 'canSubFrame', DEFAULT_CAMERA.canSubFrame)
+			resetDeviceValue(this, device, 'frame', DEFAULT_CAMERA.frame)
+		}
+		if (full || name === 'CCD_BINNING') {
+			resetDeviceValue(this, device, 'canBin', DEFAULT_CAMERA.canBin)
+			resetDeviceValue(this, device, 'bin', DEFAULT_CAMERA.bin)
+		}
+		// ZWO ASI, SVBony, etc
+		if (full || name === 'CCD_CONTROLS') {
+			resetDeviceValue(this, device, 'gain', DEFAULT_CAMERA.gain)
+			resetDeviceValue(this, device, 'offset', DEFAULT_CAMERA.offset)
+			this.#gain.delete(device)
+			this.#offset.delete(device)
+		}
+		// CCD Simulator & Alpaca
+		if (full || name === 'CCD_GAIN') {
+			resetDeviceValue(this, device, 'gain', DEFAULT_CAMERA.gain)
+			this.#gain.delete(device)
+		}
+		if (full || name === 'CCD_OFFSET') {
+			resetDeviceValue(this, device, 'offset', DEFAULT_CAMERA.offset)
+			this.#offset.delete(device)
+		}
+		if (full || name === 'CCD_CFA') {
+			resetDeviceValue(this, device, 'cfa', DEFAULT_CAMERA.cfa)
+		}
+
+		super.delProperty(client, message)
 	}
 }
 
@@ -1214,6 +1290,70 @@ export class MountManager extends DeviceManager<Mount> {
 			}
 		}
 	}
+
+	delProperty(client: Client, message: DelProperty) {
+		const device = this.get(client, message.device)
+
+		if (device === undefined) return
+
+		const name = message.name
+		const full = !name
+
+		if (full || name === 'TELESCOPE_SLEW_RATE') {
+			resetDeviceValue(this, device, 'slewRates', DEFAULT_MOUNT.slewRates)
+			resetDeviceValue(this, device, 'slewRate', undefined)
+		}
+		if (full || name === 'TELESCOPE_TRACK_MODE') {
+			resetDeviceValue(this, device, 'trackModes', DEFAULT_MOUNT.trackModes)
+			resetDeviceValue(this, device, 'trackMode', DEFAULT_MOUNT.trackMode)
+		}
+		if (full || name === 'TELESCOPE_TRACK_STATE') {
+			resetDeviceValue(this, device, 'canTracking', DEFAULT_MOUNT.canTracking)
+			resetDeviceValue(this, device, 'tracking', DEFAULT_MOUNT.tracking)
+		}
+		if (full || name === 'TELESCOPE_PIER_SIDE') {
+			resetDeviceValue(this, device, 'hasPierSide', DEFAULT_MOUNT.hasPierSide)
+			resetDeviceValue(this, device, 'canSetPierSide', DEFAULT_MOUNT.canSetPierSide)
+			resetDeviceValue(this, device, 'pierSide', DEFAULT_MOUNT.pierSide)
+		}
+		if (full || name === 'TELESCOPE_PARK') {
+			resetDeviceValue(this, device, 'canPark', DEFAULT_MOUNT.canPark)
+			resetDeviceValue(this, device, 'parking', DEFAULT_MOUNT.parking)
+			resetDeviceValue(this, device, 'parked', DEFAULT_MOUNT.parked)
+		}
+		if (full || name === 'TELESCOPE_PARK_OPTION') {
+			resetDeviceValue(this, device, 'canSetPark', DEFAULT_MOUNT.canSetPark)
+		}
+		if (full || name === 'TELESCOPE_ABORT_MOTION') {
+			resetDeviceValue(this, device, 'canAbort', DEFAULT_MOUNT.canAbort)
+		}
+		if (full || name === 'TELESCOPE_HOME') {
+			resetDeviceValue(this, device, 'canHome', DEFAULT_MOUNT.canHome)
+			resetDeviceValue(this, device, 'canFindHome', DEFAULT_MOUNT.canFindHome)
+			resetDeviceValue(this, device, 'canSetHome', DEFAULT_MOUNT.canSetHome)
+			resetDeviceValue(this, device, 'homing', DEFAULT_MOUNT.homing)
+		}
+		if (full || name === 'ON_COORD_SET') {
+			resetDeviceValue(this, device, 'canSync', DEFAULT_MOUNT.canSync)
+			resetDeviceValue(this, device, 'canGoTo', DEFAULT_MOUNT.canGoTo)
+			resetDeviceValue(this, device, 'canFlip', DEFAULT_MOUNT.canFlip)
+		}
+		if (full || name === 'TELESCOPE_MOTION_NS' || name === 'TELESCOPE_MOTION_WE') {
+			resetDeviceValue(this, device, 'canMove', DEFAULT_MOUNT.canMove)
+		}
+		if (full || name === 'EQUATORIAL_EOD_COORD') {
+			resetDeviceValue(this, device, 'slewing', DEFAULT_MOUNT.slewing)
+			resetDeviceValue(this, device, 'equatorialCoordinate', DEFAULT_MOUNT.equatorialCoordinate)
+		}
+		if (full || name === 'GEOGRAPHIC_COORD') {
+			resetDeviceValue(this, device, 'geographicCoordinate', DEFAULT_MOUNT.geographicCoordinate)
+		}
+		if (full || name === 'TIME_UTC') {
+			resetDeviceValue(this, device, 'time', DEFAULT_MOUNT.time)
+		}
+
+		super.delProperty(client, message)
+	}
 }
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indifilterwheel.cpp
@@ -1277,6 +1417,27 @@ export class WheelManager extends DeviceManager<Wheel> {
 				}
 			}
 		}
+	}
+
+	delProperty(client: Client, message: DelProperty) {
+		const device = this.get(client, message.device)
+
+		if (device === undefined) return
+
+		const name = message.name
+		const full = !name
+
+		if (full || name === 'FILTER_SLOT') {
+			resetDeviceValue(this, device, 'count', DEFAULT_WHEEL.count)
+			resetDeviceValue(this, device, 'position', DEFAULT_WHEEL.position)
+			resetDeviceValue(this, device, 'moving', DEFAULT_WHEEL.moving)
+		}
+		if (full || name === 'FILTER_NAME') {
+			resetDeviceValue(this, device, 'canSetNames', DEFAULT_WHEEL.canSetNames)
+			resetDeviceValue(this, device, 'names', DEFAULT_WHEEL.names)
+		}
+
+		super.delProperty(client, message)
 	}
 }
 
@@ -1398,6 +1559,37 @@ export class FocuserManager extends DeviceManager<Focuser> {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.FOCUSER)
 		}
 	}
+
+	delProperty(client: Client, message: DelProperty) {
+		const device = this.get(client, message.device)
+
+		if (device === undefined) return
+
+		const name = message.name
+		const full = !name
+
+		if (full || name === 'FOCUS_ABORT_MOTION') {
+			resetDeviceValue(this, device, 'canAbort', DEFAULT_FOCUSER.canAbort)
+		}
+		if (full || name === 'FOCUS_REVERSE_MOTION') {
+			resetDeviceValue(this, device, 'canReverse', DEFAULT_FOCUSER.canReverse)
+			resetDeviceValue(this, device, 'reversed', DEFAULT_FOCUSER.reversed)
+		}
+		if (full || name === 'FOCUS_SYNC') {
+			resetDeviceValue(this, device, 'canSync', DEFAULT_FOCUSER.canSync)
+		}
+		if (full || name === 'REL_FOCUS_POSITION') {
+			resetDeviceValue(this, device, 'canRelativeMove', DEFAULT_FOCUSER.canRelativeMove)
+			resetDeviceValue(this, device, 'moving', DEFAULT_FOCUSER.moving)
+		}
+		if (full || name === 'ABS_FOCUS_POSITION') {
+			resetDeviceValue(this, device, 'canAbsoluteMove', DEFAULT_FOCUSER.canAbsoluteMove)
+			resetDeviceValue(this, device, 'position', DEFAULT_FOCUSER.position)
+			resetDeviceValue(this, device, 'moving', DEFAULT_FOCUSER.moving)
+		}
+
+		super.delProperty(client, message)
+	}
 }
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indidustcapinterface.cpp
@@ -1443,6 +1635,26 @@ export class CoverManager extends DeviceManager<Cover> {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.DUSTCAP)
 		}
+	}
+
+	delProperty(client: Client, message: DelProperty) {
+		const device = this.get(client, message.device)
+
+		if (device === undefined) return
+
+		const name = message.name
+		const full = !name
+
+		if (full || name === 'CAP_PARK') {
+			resetDeviceValue(this, device, 'canPark', DEFAULT_COVER.canPark)
+			resetDeviceValue(this, device, 'parking', DEFAULT_COVER.parking)
+			resetDeviceValue(this, device, 'parked', DEFAULT_COVER.parked)
+		}
+		if (full || name === 'CAP_ABORT') {
+			resetDeviceValue(this, device, 'canAbort', DEFAULT_COVER.canAbort)
+		}
+
+		super.delProperty(client, message)
 	}
 }
 
@@ -1550,6 +1762,38 @@ export class RotatorManager extends DeviceManager<Rotator> {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.ROTATOR)
 		}
 	}
+
+	delProperty(client: Client, message: DelProperty) {
+		const device = this.get(client, message.device)
+
+		if (device === undefined) return
+
+		const name = message.name
+		const full = !name
+
+		if (full || name === 'ROTATOR_ABORT_MOTION') {
+			resetDeviceValue(this, device, 'canAbort', DEFAULT_ROTATOR.canAbort)
+		}
+		if (full || name === 'ROTATOR_HOME') {
+			resetDeviceValue(this, device, 'canHome', DEFAULT_ROTATOR.canHome)
+		}
+		if (full || name === 'ROTATOR_REVERSE') {
+			resetDeviceValue(this, device, 'canReverse', DEFAULT_ROTATOR.canReverse)
+			resetDeviceValue(this, device, 'reversed', DEFAULT_ROTATOR.reversed)
+		}
+		if (full || name === 'ROTATOR_BACKLASH_TOGGLE') {
+			resetDeviceValue(this, device, 'hasBacklashCompensation', DEFAULT_ROTATOR.hasBacklashCompensation)
+		}
+		if (full || name === 'ABS_ROTATOR_ANGLE') {
+			resetDeviceValue(this, device, 'angle', DEFAULT_ROTATOR.angle)
+			resetDeviceValue(this, device, 'moving', DEFAULT_ROTATOR.moving)
+		}
+		if (full || name === 'SYNC_ROTATOR_ANGLE') {
+			resetDeviceValue(this, device, 'canSync', DEFAULT_ROTATOR.canSync)
+		}
+
+		super.delProperty(client, message)
+	}
 }
 
 export class DewHeaterManager extends DeviceManager<DewHeater> {
@@ -1614,18 +1858,20 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 	}
 
 	delProperty(client: Client, message: DelProperty) {
-		if (!message.name || message.name === 'Heater') {
-			const device = this.get(client, message.device)
+		const device = this.get(client, message.device)
 
-			if (device !== undefined) {
-				if (handleSwitchValue(device, 'hasDewHeater', false)) {
-					this.updated(device, 'hasDewHeater')
-				}
+		if (device === undefined) return
 
-				super.delProperty(client, message)
-				this.#pwm.delete(device)
-			}
+		const name = message.name
+		const full = !name
+
+		if (full || name === 'Heater') {
+			resetDeviceValue(this, device, 'hasDewHeater', DEFAULT_DEW_HEATER.hasDewHeater)
+			resetDeviceValue(this, device, 'dutyCycle', DEFAULT_DEW_HEATER.dutyCycle)
+			this.#pwm.delete(device)
 		}
+
+		super.delProperty(client, message)
 	}
 }
 
@@ -1680,6 +1926,24 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.LIGHTBOX)
 		}
+	}
+
+	delProperty(client: Client, message: DelProperty) {
+		const device = this.get(client, message.device)
+
+		if (device === undefined) return
+
+		const name = message.name
+		const full = !name
+
+		if (full || name === 'FLAT_LIGHT_CONTROL') {
+			resetDeviceValue(this, device, 'enabled', DEFAULT_FLAT_PANEL.enabled)
+		}
+		if (full || name === 'FLAT_LIGHT_INTENSITY') {
+			resetDeviceValue(this, device, 'intensity', DEFAULT_FLAT_PANEL.intensity)
+		}
+
+		super.delProperty(client, message)
 	}
 }
 
@@ -1791,6 +2055,54 @@ export class PowerManager extends DeviceManager<Power> {
 				handlePowerChannel(this, device, message, tag, 'variableVoltage', 'label')
 		}
 	}
+
+	delProperty(client: Client, message: DelProperty) {
+		const device = this.get(client, message.device)
+
+		if (device === undefined) return
+
+		const name = message.name
+		const full = !name
+
+		if (full || name === 'POWER_CHANNELS' || name === 'POWER_CURRENTS' || name === 'POWER_LABELS') {
+			resetDeviceValue(this, device, 'dc', DEFAULT_POWER.dc)
+		}
+		if (full || name === 'DEW_CHANNELS' || name === 'DEW_DUTY_CYCLES' || name === 'DEW_LABELS') {
+			resetDeviceValue(this, device, 'dew', DEFAULT_POWER.dew)
+		}
+		if (full || name === 'AUTO_DEW_CONTROL' || name === 'DEW_CURRENTS') {
+			resetDeviceValue(this, device, 'autoDew', DEFAULT_POWER.autoDew)
+		}
+		if (full || name === 'VARIABLE_CHANNELS' || name === 'VARIABLE_VOLTAGES' || name === 'VARIABLE_LABELS') {
+			resetDeviceValue(this, device, 'variableVoltage', DEFAULT_POWER.variableVoltage)
+		}
+		if (full || name === 'USB_PORTS' || name === 'USB_LABELS') {
+			resetDeviceValue(this, device, 'usb', DEFAULT_POWER.usb)
+		}
+		if (full || name === 'POWER_CYCLE_Toggle') {
+			resetDeviceValue(this, device, 'hasPowerCycle', DEFAULT_POWER.hasPowerCycle)
+		}
+		if (full || name === 'POWER_SENSORS') {
+			resetDeviceValue(this, device, 'voltage', DEFAULT_POWER.voltage)
+			resetDeviceValue(this, device, 'current', DEFAULT_POWER.current)
+			resetDeviceValue(this, device, 'power', DEFAULT_POWER.power)
+		}
+
+		super.delProperty(client, message)
+	}
+}
+
+function resetDeviceValue<D extends Device, K extends keyof D & string>(manager: DeviceManager<D>, device: D, property: K, value: D[K]) {
+	if (!isSamePropertyValue(device[property], value)) {
+		device[property] = structuredClone(value)
+		manager.updated(device, property)
+	}
+}
+
+function isSamePropertyValue(left: unknown, right: unknown): boolean {
+	if (Object.is(left, right)) return true
+	// Don't look deeper if the value is an object, since in most cases the driver will send a new object, and we want to avoid expensive deep comparisons
+	return false
 }
 
 function handlePowerChannel(manager: DeviceManager<Power>, device: Power, message: DefVector | SetVector, tag: string, type: PowerChannelType, property: keyof Omit<PowerChannel, 'type'>, client = device[CLIENT]!) {
@@ -1831,7 +2143,7 @@ function handlePowerChannel(manager: DeviceManager<Power>, device: Power, messag
 	return updated
 }
 
-function handleParkable<D extends Device & Parkable>(manager: DeviceManager<D>, device: D, message: DefSwitchVector | SetSwitchVector, tag: string, client = device[CLIENT]!) {
+function handleParkable<D extends Device & Parkable>(manager: DeviceManager<D>, device: D, message: DefSwitchVector | SetSwitchVector, tag: string) {
 	if (tag[0] === 'd') {
 		if (handleSwitchValue<Device & Parkable>(device, 'canPark', (message as DefSwitchVector).permission !== 'ro')) {
 			manager.updated(device, 'canPark', message.state)
