@@ -302,9 +302,9 @@ export class MountSimulator extends DeviceSimulator {
 		this.#park,
 		this.#parkOptions,
 		this.#pierSide,
-		this.#guideRate,
 		this.#guideNS,
 		this.#guideWE,
+		this.#guideRate,
 	]
 	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate)
 

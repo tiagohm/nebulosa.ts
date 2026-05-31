@@ -487,7 +487,12 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 			resetDeviceValue(this, device, 'guideRate', DEFAULT_GUIDE_OUTPUT.guideRate)
 		}
 
-		super.delProperty(client, message)
+		// When both properties are removed, remove the device too passing name as undefined.
+		if (!device.canPulseGuide && !device.hasGuideRate) {
+			super.delProperty(client, { ...message, name: undefined })
+		} else {
+			super.delProperty(client, message)
+		}
 	}
 }
 
@@ -554,6 +559,9 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 		if (full || name === 'CCD_TEMPERATURE' || name === 'FOCUS_TEMPERATURE') {
 			resetDeviceValue(this, device, 'hasThermometer', DEFAULT_THERMOMETER.hasThermometer)
 			resetDeviceValue(this, device, 'temperature', DEFAULT_THERMOMETER.temperature)
+			// Force remove the device passing name as undefined.
+			super.delProperty(client, { ...message, name: undefined })
+			return
 		}
 
 		super.delProperty(client, message)
@@ -1869,6 +1877,9 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 			resetDeviceValue(this, device, 'hasDewHeater', DEFAULT_DEW_HEATER.hasDewHeater)
 			resetDeviceValue(this, device, 'dutyCycle', DEFAULT_DEW_HEATER.dutyCycle)
 			this.#pwm.delete(device)
+			// Force remove the device passing name as undefined.
+			super.delProperty(client, { ...message, name: undefined })
+			return
 		}
 
 		super.delProperty(client, message)
