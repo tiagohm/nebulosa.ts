@@ -6,7 +6,7 @@ import { meter, toMeter } from './distance'
 import type { CfaPattern } from './image.types'
 import type { IndiClientHandler } from './indi.client'
 // oxfmt-ignore
-import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DEW_HEATER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_THERMOMETER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type NameAndLabel, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type Thermometer, type TrackMode, type Wheel } from './indi.device'
+import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DEW_HEATER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_THERMOMETER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type NameAndLabel, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SubDevice, type Thermometer, type TrackMode, type Wheel } from './indi.device'
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, ValueType } from './indi.types'
 import type { GeographicCoordinate } from './location'
 import { formatTemporal, parseTemporal } from './temporal'
@@ -406,6 +406,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 
 		if (this.add(device)) {
 			this.updated(device, 'canPulseGuide')
+			this.updated(parent, 'canPulseGuide')
 		}
 
 		return device
@@ -439,6 +440,9 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 				if (device !== undefined) {
 					if (handleSwitchValue(device, 'pulsing', message.state === 'Busy')) {
 						this.updated(device, 'pulsing', message.state)
+
+						const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
+						this.updated(parent, 'pulsing', message.state)
 					}
 				}
 
@@ -452,8 +456,12 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 						if (handleSwitchValue(device, 'hasGuideRate', true)) {
 							this.updated(device, 'hasGuideRate', message.state)
 
+							const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
+							this.updated(parent, 'hasGuideRate', message.state)
+
 							if (handleSwitchValue(device, 'canSetGuideRate', (message as DefNumberVector).permission !== 'ro')) {
 								this.updated(device, 'canSetGuideRate', message.state)
+								this.updated(parent, 'canSetGuideRate', message.state)
 							}
 						}
 					}
@@ -463,6 +471,9 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 
 					if (updated) {
 						this.updated(device, 'guideRate', message.state)
+
+						const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
+						this.updated(parent, 'guideRate', message.state)
 					}
 				}
 			}
@@ -480,16 +491,25 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		if (full || name === 'TELESCOPE_TIMED_GUIDE_NS' || name === 'TELESCOPE_TIMED_GUIDE_WE') {
 			resetDeviceValue(this, device, 'canPulseGuide', DEFAULT_GUIDE_OUTPUT.canPulseGuide)
 			resetDeviceValue(this, device, 'pulsing', DEFAULT_GUIDE_OUTPUT.pulsing)
+
+			const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
+			this.updated(parent, 'canPulseGuide')
+			this.updated(parent, 'pulsing')
 		}
 		if (full || name === 'GUIDE_RATE') {
 			resetDeviceValue(this, device, 'hasGuideRate', DEFAULT_GUIDE_OUTPUT.hasGuideRate)
 			resetDeviceValue(this, device, 'canSetGuideRate', DEFAULT_GUIDE_OUTPUT.canSetGuideRate)
 			resetDeviceValue(this, device, 'guideRate', DEFAULT_GUIDE_OUTPUT.guideRate)
+
+			const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
+			this.updated(parent, 'hasGuideRate')
+			this.updated(parent, 'canSetGuideRate')
+			this.updated(parent, 'guideRate')
 		}
 
 		// When both properties are removed, remove the device too passing name as undefined.
 		if (!device.canPulseGuide && !device.hasGuideRate) {
-			super.delProperty(client, { ...message, name: undefined })
+			super.delProperty(client, full ? message : { ...message, name: undefined })
 		} else {
 			super.delProperty(client, message)
 		}
@@ -508,6 +528,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 
 		if (this.add(device)) {
 			this.updated(device, 'hasThermometer')
+			this.updated(parent, 'hasThermometer')
 		}
 
 		return device
@@ -542,6 +563,9 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 
 					if (handleNumberValue(device, 'temperature', elements.TEMPERATURE?.value ?? elements.CCD_TEMPERATURE_VALUE?.value, undefined, Math.round)) {
 						this.updated(device, 'temperature', message.state)
+
+						const parent = (device as SubDevice<Thermometer, Thermometer>).parent
+						this.updated(parent, 'temperature', message.state)
 					}
 				}
 			}
@@ -559,8 +583,13 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 		if (full || name === 'CCD_TEMPERATURE' || name === 'FOCUS_TEMPERATURE') {
 			resetDeviceValue(this, device, 'hasThermometer', DEFAULT_THERMOMETER.hasThermometer)
 			resetDeviceValue(this, device, 'temperature', DEFAULT_THERMOMETER.temperature)
+
+			const parent = (device as SubDevice<Thermometer, Thermometer>).parent
+			this.updated(parent, 'hasThermometer')
+			this.updated(parent, 'temperature')
+
 			// Force remove the device passing name as undefined.
-			super.delProperty(client, { ...message, name: undefined })
+			super.delProperty(client, full ? message : { ...message, name: undefined })
 			return
 		}
 
@@ -1827,6 +1856,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 
 		if (this.add(device)) {
 			this.updated(device, 'hasDewHeater', message.state)
+			this.updated(parent, 'hasDewHeater', message.state)
 			this.#pwm.set(device, [message.name, 'Heater'])
 		}
 
@@ -1859,6 +1889,9 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 				if (device !== undefined) {
 					if (handleMinMaxValue(device.dutyCycle, message.elements.Heater, tag)) {
 						this.updated(device, 'dutyCycle', message.state)
+
+						const parent = (device as SubDevice<DewHeater, DewHeater>).parent
+						this.updated(parent, 'dutyCycle', message.state)
 					}
 				}
 			}
@@ -1876,9 +1909,15 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 		if (full || name === 'Heater') {
 			resetDeviceValue(this, device, 'hasDewHeater', DEFAULT_DEW_HEATER.hasDewHeater)
 			resetDeviceValue(this, device, 'dutyCycle', DEFAULT_DEW_HEATER.dutyCycle)
+
+			const parent = (device as SubDevice<DewHeater, DewHeater>).parent
+			this.updated(parent, 'hasDewHeater')
+			this.updated(parent, 'dutyCycle')
+
 			this.#pwm.delete(device)
+
 			// Force remove the device passing name as undefined.
-			super.delProperty(client, { ...message, name: undefined })
+			super.delProperty(client, full ? message : { ...message, name: undefined })
 			return
 		}
 
@@ -2228,6 +2267,7 @@ function proxyDevice<D extends Device>(parent: D, id: string, type: DeviceType) 
 			if (prop === 'id') return id
 			if (prop === 'parentId') return parent.id
 			if (prop === 'type') return type
+			if (prop === 'parent') return parent
 			return Reflect.get(target, prop)
 		},
 		// Used to make parentId show up in Object.keys() and similar functions, which is useful for debugging and serialization
