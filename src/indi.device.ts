@@ -490,7 +490,7 @@ export const DEFAULT_POWER: Power = {
 }
 
 export const DEFAULT_THERMOMETER: Thermometer = {
-	hasThermometer: true,
+	hasThermometer: false,
 	temperature: 0,
 	type: 'thermometer',
 	id: '',
