@@ -1,5 +1,5 @@
 // oxfmt-ignore
-import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerOptions, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './alpaca.types'
+import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './alpaca.types'
 import { type Angle, deg, hour, toDeg, toHour } from './angle'
 import { observedToCirs } from './astrometry'
 import { type EquatorialCoordinate, equatorialToHorizontal } from './coordinate'
@@ -8,9 +8,30 @@ import { Bitpix, computeRemainingBytes, FitsKeywordReader } from './fits'
 import { bitpixInBytes } from './fits.util'
 // oxfmt-ignore
 import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type TrackMode, type Wheel } from './indi.device'
-import type { DeviceHandler, DeviceManager } from './indi.manager'
+import type { CameraManager, CoverManager, DeviceHandler, DeviceManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from './indi.manager'
 import { type GeographicCoordinate, localSiderealTime } from './location'
 import { type Time, timeNow } from './time'
+
+export interface AlpacaServerHandler {
+	readonly deviceAdded?: (server: AlpacaServer, device: Device, configuredDevice: AlpacaConfiguredDevice) => void
+	readonly deviceRemoved?: (server: AlpacaServer, device: Device, configuredDevice: AlpacaConfiguredDevice) => void
+}
+
+export interface AlpacaServerOptions {
+	name?: string
+	version?: string
+	manufacturer?: string
+	camera?: CameraManager
+	mount?: MountManager
+	focuser?: FocuserManager
+	wheel?: WheelManager
+	rotator?: RotatorManager
+	flatPanel?: FlatPanelManager
+	cover?: CoverManager
+	guideOutput?: GuideOutputManager
+	deviceNumberProvider?: AlpacaDeviceNumberProvider
+	handler?: AlpacaServerHandler
+}
 
 interface AlpacaDeviceState extends GeographicCoordinate, EquatorialCoordinate {
 	// Device
@@ -76,7 +97,6 @@ export class AlpacaServer {
 
 	readonly #cameraHandler: DeviceHandler<Camera> = {
 		added: (device: Camera) => {
-			console.info('camera added:', device.name)
 			this.#makeConfiguredDeviceFromDevice(device, 'camera')
 		},
 		updated: (device, property) => {
@@ -91,8 +111,7 @@ export class AlpacaServer {
 			}
 		},
 		removed: (device: Camera) => {
-			console.info('camera removed:', device.name)
-			this.#equipment.camera.delete(device)
+			this.#removeConfiguredDevice(device, 'camera')
 		},
 		blobReceived: (device, data) => {
 			const { state } = this.#camera(device)
@@ -107,7 +126,6 @@ export class AlpacaServer {
 
 	readonly #wheelHandler: DeviceHandler<Wheel> = {
 		added: (device: Wheel) => {
-			console.info('wheel added:', device.name)
 			this.#makeConfiguredDeviceFromDevice(device, 'filterwheel')
 		},
 		updated: (device, property) => {
@@ -122,14 +140,12 @@ export class AlpacaServer {
 			}
 		},
 		removed: (device: Wheel) => {
-			console.info('wheel removed:', device.name)
-			this.#equipment.filterwheel.delete(device)
+			this.#removeConfiguredDevice(device, 'filterwheel')
 		},
 	}
 
 	readonly #mountHandler: DeviceHandler<Mount> = {
 		added: (device: Mount) => {
-			console.info('mount added:', device.name)
 			this.#makeConfiguredDeviceFromDevice(device, 'telescope')
 		},
 		updated: (device, property) => {
@@ -140,14 +156,12 @@ export class AlpacaServer {
 			}
 		},
 		removed: (device: Mount) => {
-			console.info('mount removed:', device.name)
-			this.#equipment.telescope.delete(device)
+			this.#removeConfiguredDevice(device, 'telescope')
 		},
 	}
 
 	readonly #focuserHandler: DeviceHandler<Focuser> = {
 		added: (device: Focuser) => {
-			console.info('focuser added:', device.name)
 			this.#makeConfiguredDeviceFromDevice(device, 'focuser')
 		},
 		updated: (device, property) => {
@@ -156,14 +170,12 @@ export class AlpacaServer {
 			}
 		},
 		removed: (device: Focuser) => {
-			console.info('focuser removed:', device.name)
-			this.#equipment.focuser.delete(device)
+			this.#removeConfiguredDevice(device, 'focuser')
 		},
 	}
 
 	readonly #coverHandler: DeviceHandler<Cover> = {
 		added: (device: Cover) => {
-			console.info('cover added:', device.name)
 			this.#makeConfiguredDeviceFromDevice(device, 'covercalibrator')
 		},
 		updated: (device, property) => {
@@ -172,14 +184,12 @@ export class AlpacaServer {
 			}
 		},
 		removed: (device: Cover) => {
-			console.info('cover removed:', device.name)
-			this.#equipment.covercalibrator.delete(device)
+			this.#removeConfiguredDevice(device, 'covercalibrator')
 		},
 	}
 
 	readonly #flatPanelHandler: DeviceHandler<FlatPanel> = {
 		added: (device: FlatPanel) => {
-			console.info('flat panel added:', device.name)
 			this.#makeConfiguredDeviceFromDevice(device, 'covercalibrator')
 		},
 		updated: (device, property) => {
@@ -188,8 +198,7 @@ export class AlpacaServer {
 			}
 		},
 		removed: (device: FlatPanel) => {
-			console.info('flat panel removed:', device.name)
-			this.#equipment.covercalibrator.delete(device)
+			this.#removeConfiguredDevice(device, 'covercalibrator')
 		},
 	}
 
@@ -1574,7 +1583,6 @@ export class AlpacaServer {
 
 		const DeviceNumber = this.#deviceNumberProvider(device, DeviceType)
 		const configuredDevice: AlpacaConfiguredDevice = { DeviceName: device.name, DeviceNumber, UniqueID: device.id, DeviceType }
-		console.info('device configured:', JSON.stringify(configuredDevice))
 
 		const state = structuredClone(DEFAULT_ALPACA_DEVICE_STATE)
 
@@ -1589,7 +1597,20 @@ export class AlpacaServer {
 		registeredDevice = { device, configuredDevice, state }
 		this.#equipment[type].set(device, registeredDevice as never)
 
+		console.info(device.type, 'added:', JSON.stringify(configuredDevice))
+		this.options.handler?.deviceAdded?.(this, device, configuredDevice)
+
 		return registeredDevice
+	}
+
+	#removeConfiguredDevice(device: Device, DeviceType: AlpacaDeviceType) {
+		const type = DeviceType.toLowerCase() as AlpacaDeviceType
+		const registeredDevice = this.#equipment[type].get(device)
+
+		if (registeredDevice !== undefined && this.#equipment[type].delete(device)) {
+			console.info(device.type, 'removed:', JSON.stringify(registeredDevice.configuredDevice))
+			this.options.handler?.deviceRemoved?.(this, device, registeredDevice.configuredDevice)
+		}
 	}
 }
 

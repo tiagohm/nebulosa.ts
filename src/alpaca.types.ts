@@ -1,6 +1,5 @@
 import type { BitpixOrZero } from './fits'
 import type { Cover, Device, FlatPanel } from './indi.device'
-import type { CameraManager, CoverManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from './indi.manager'
 
 export type AlpacaDeviceType = 'camera' | 'telescope' | 'focuser' | 'filterwheel' | 'rotator' | 'dome' | 'switch' | 'covercalibrator' | 'observingconditions' | 'safetymonitor' | 'video'
 
@@ -153,21 +152,6 @@ export interface AlpacaImageBytes {
 	Type: 2
 	Rank: 2 | 3
 	Value: Readonly<Readonly<number[]>[]> | Readonly<Readonly<Readonly<number[]>[]>[]>
-}
-
-export interface AlpacaServerOptions {
-	name?: string
-	version?: string
-	manufacturer?: string
-	camera?: CameraManager
-	mount?: MountManager
-	focuser?: FocuserManager
-	wheel?: WheelManager
-	rotator?: RotatorManager
-	flatPanel?: FlatPanelManager
-	cover?: CoverManager
-	guideOutput?: GuideOutputManager
-	deviceNumberProvider?: AlpacaDeviceNumberProvider
 }
 
 export const SUPPORTED_FOCUSER_ACTIONS = ['ToggleReverse'] as const
