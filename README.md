@@ -749,6 +749,9 @@ const interpolator = splineInterpolator(points, 'pchip', options)
 const interpolator = chebyshevInterpolator(points, degree, options)
 
 const [ra, dec] = interpolator.compute(time)
+
+const interpolator = new AstrometricInterpolator(ra, dec, width, height, stepX, stepY, options)
+const [ra, dec] = interpolator.pixelToSky(x, y)
 ```
 
 ### IO ![](bun.webp)

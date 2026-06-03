@@ -10,7 +10,7 @@ import { polynomialRegression } from './regression'
 import { type SolarEclipseType, sunSemidiameter } from './sun'
 import { type Time, Timescale, greenwichApparentSiderealTime, precessionNutationMatrix, timeConvert, timeNormalize, timeShift, tt, ut1 } from './time'
 import { NumberComparator } from './util'
-import { validateFinite, validateInRange, validateLatitude, validatePositiveFinite, validateTime, validateVector } from './validation'
+import { validateFinite, validateInRange, validateLatitude, validatePositiveFinite, validateTime } from './validation'
 import { type MutVec3, type Vec3, vecDistance, vecDot, vecLength, vecMinus } from './vec3'
 import { earth as barycentricEarth, sun as barycentricSun } from './vsop87e'
 
@@ -156,8 +156,8 @@ interface ResolvedBesselianContext {
 	readonly solarSemidiameter?: number
 	readonly lunarSemidiameter?: number
 	readonly siderealDeltaTSeconds?: number
-	readonly computeApparentGeocentricSun?: (time: Time) => Vec3
-	readonly computeApparentGeocentricMoon?: (time: Time) => Vec3
+	readonly computeApparentGeocentricSun: (time: Time) => Vec3
+	readonly computeApparentGeocentricMoon: (time: Time) => Vec3
 }
 
 // Generates fitted Besselian elements around an approximate geocentric maximum.
@@ -296,8 +296,8 @@ function resolveContext(input: SolarEclipseBesselianContext): ResolvedBesselianC
 		solarSemidiameter: input.solarSemidiameter,
 		lunarSemidiameter: input.lunarSemidiameter,
 		siderealDeltaTSeconds: input.deltaTSeconds,
-		computeApparentGeocentricSun: input.computeApparentGeocentricSun,
-		computeApparentGeocentricMoon: input.computeApparentGeocentricMoon,
+		computeApparentGeocentricSun: input.computeApparentGeocentricSun ?? computeApparentGeocentricSun,
+		computeApparentGeocentricMoon: input.computeApparentGeocentricMoon ?? computeApparentGeocentricMoon,
 	}
 }
 
@@ -345,10 +345,8 @@ function clampTinyTau(tauHours: number) {
 }
 
 function computeSample(time: Time, tauHours: number, context: ResolvedBesselianContext): BesselianSample {
-	const sun = apparentSun(time, context.computeApparentGeocentricSun)
-	const moon = apparentMoon(time, context.computeApparentGeocentricMoon)
-	validateVector(sun)
-	validateVector(moon)
+	const sun = context.computeApparentGeocentricSun(time)
+	const moon = context.computeApparentGeocentricMoon(time)
 
 	const axis = shadowAxis(sun, moon)
 	const axisRightAscension = Math.atan2(axis[1], axis[0])
@@ -384,18 +382,14 @@ function computeSample(time: Time, tauHours: number, context: ResolvedBesselianC
 	return sample
 }
 
-function apparentSun(time: Time, computeApparentGeocentricSun?: (time: Time) => Vec3): Vec3 {
-	if (computeApparentGeocentricSun) return computeApparentGeocentricSun(time)
-
+function computeApparentGeocentricSun(time: Time): Vec3 {
 	const [sun] = barycentricSun(time)
 	const [earth] = barycentricEarth(time)
 	const geocentric = vecMinus(sun, earth, sun)
 	return matMulVec(precessionNutationMatrix(time), geocentric, geocentric)
 }
 
-function apparentMoon(time: Time, computeApparentGeocentricMoon?: (time: Time) => Vec3): Vec3 {
-	if (computeApparentGeocentricMoon) return computeApparentGeocentricMoon(time)
-
+function computeApparentGeocentricMoon(time: Time): Vec3 {
 	const [moon] = geocentricMoon(time)
 	return matMulVec(precessionNutationMatrix(time), moon, moon)
 }

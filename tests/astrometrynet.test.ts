@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { dirname, join } from 'path/posix'
+import { dirname, join } from 'path'
 import { toArcsec, toDeg, toHour } from '../src/angle'
 import { localAstrometryNetPlateSolve, login, novaAstrometryNetPlateSolve, submissionStatus, upload, wcsFile } from '../src/astrometrynet'
 import { readFits } from '../src/fits'

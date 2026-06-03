@@ -5,23 +5,23 @@ import { chebyshevLeastSquares, type ChebyshevRegression } from './regression'
 import { akimaSpline, catmullRomSpline, cubicHermiteSpline, linearSpline, naturalCubicSpline, pchip } from './spline'
 import { type Time, Timescale, timeConvert } from './time'
 
-export type InterpolationStrategy = 'linear' | 'spline' | 'chebyshev'
+export type EphemerisInterpolationStrategy = 'linear' | 'spline' | 'chebyshev'
 
-export type InterpolationOutOfRange = 'clamp' | 'extrapolate' | 'throw'
+export type EphemerisInterpolationOutOfRange = 'clamp' | 'extrapolate' | 'throw'
 
-export type SplineInterpolationType = 'naturalCubic' | 'cubicHermite' | 'pchip' | 'akima' | 'catmullRom'
+export type SplineEphemerisInterpolationType = 'naturalCubic' | 'cubicHermite' | 'pchip' | 'akima' | 'catmullRom'
 
 export interface EphemerisPoint extends Readonly<EquatorialCoordinate> {
 	readonly time: Time
 }
 
-export interface InterpolationOptions {
-	outOfRange?: InterpolationOutOfRange
+export interface EphemerisInterpolationOptions {
+	outOfRange?: EphemerisInterpolationOutOfRange
 	computeRmsError?: boolean
 	allowDuplicateTimes?: boolean
 }
 
-export interface InterpolationDiagnostics {
+export interface EphemerisInterpolationDiagnostics {
 	rmsRA: number
 	rmsDEC: number
 	maxAbsRA: number
@@ -29,12 +29,11 @@ export interface InterpolationDiagnostics {
 }
 
 export interface EphemerisInterpolator {
-	readonly strategy: InterpolationStrategy
+	readonly strategy: EphemerisInterpolationStrategy
 	readonly startTime: number
 	readonly endTime: number
 	readonly sampleCount: number
-	readonly diagnostics?: InterpolationDiagnostics
-
+	readonly diagnostics?: EphemerisInterpolationDiagnostics
 	readonly compute: (time: Time) => [Angle, Angle]
 	readonly computeInto: (time: Time, out: [Angle, Angle]) => [Angle, Angle]
 	readonly resample: (times: readonly Time[]) => EphemerisPoint[]
@@ -70,33 +69,32 @@ interface ScalarInterpolator {
 	readonly reset: () => void
 }
 
-const DEFAULT_OUT_OF_RANGE: InterpolationOutOfRange = 'clamp'
-const DEFAULT_SPLINE_INTERPOLATION: SplineInterpolationType = 'naturalCubic'
+const DEFAULT_OUT_OF_RANGE: EphemerisInterpolationOutOfRange = 'clamp'
 
 // Creates a linear ephemeris interpolator for apparent/topocentric RA and Dec samples.
-export function linearInterpolator(points: readonly EphemerisPoint[], options?: InterpolationOptions): EphemerisInterpolator {
+export function linearInterpolator(points: readonly EphemerisPoint[], options?: EphemerisInterpolationOptions): EphemerisInterpolator {
 	return new LinearEphemerisInterpolator(points, options)
 }
 
 // Creates a spline ephemeris interpolator for apparent/topocentric RA and Dec samples.
-export function splineInterpolator(points: readonly EphemerisPoint[], type?: SplineInterpolationType, options?: InterpolationOptions): EphemerisInterpolator {
+export function splineInterpolator(points: readonly EphemerisPoint[], type?: SplineEphemerisInterpolationType, options?: EphemerisInterpolationOptions): EphemerisInterpolator {
 	return new SplineEphemerisInterpolator(points, type, options)
 }
 
 // Creates a Chebyshev ephemeris interpolator over the bounded sample interval.
-export function chebyshevInterpolator(points: readonly EphemerisPoint[], degree?: number, options?: InterpolationOptions): EphemerisInterpolator {
+export function chebyshevInterpolator(points: readonly EphemerisPoint[], degree?: number, options?: EphemerisInterpolationOptions): EphemerisInterpolator {
 	return new ChebyshevEphemerisInterpolator(points, degree, options)
 }
 
 abstract class BaseEphemerisInterpolator implements UpdatableEphemerisInterpolator {
-	abstract readonly strategy: InterpolationStrategy
+	abstract readonly strategy: EphemerisInterpolationStrategy
 
 	startTime = 0
 	endTime = 0
 	sampleCount = 0
-	diagnostics?: InterpolationDiagnostics
+	diagnostics?: EphemerisInterpolationDiagnostics
 
-	protected readonly outOfRange: InterpolationOutOfRange
+	protected readonly outOfRange: EphemerisInterpolationOutOfRange
 	protected readonly computeRmsError: boolean
 	protected readonly allowDuplicateTimes: boolean
 	protected time0Day = 0
@@ -108,7 +106,7 @@ abstract class BaseEphemerisInterpolator implements UpdatableEphemerisInterpolat
 	protected raInterpolator!: ScalarInterpolator
 	protected decInterpolator!: ScalarInterpolator
 
-	constructor(options?: InterpolationOptions) {
+	constructor(options?: EphemerisInterpolationOptions) {
 		this.outOfRange = options?.outOfRange ?? DEFAULT_OUT_OF_RANGE
 		this.computeRmsError = options?.computeRmsError === true
 		this.allowDuplicateTimes = options?.allowDuplicateTimes === true
@@ -188,7 +186,7 @@ export class LinearEphemerisInterpolator extends BaseEphemerisInterpolator {
 	readonly strategy = 'linear'
 	protected readonly minimumSampleCount = 2
 
-	constructor(points: readonly EphemerisPoint[], options?: InterpolationOptions) {
+	constructor(points: readonly EphemerisPoint[], options?: EphemerisInterpolationOptions) {
 		super(options)
 		this.update(points)
 	}
@@ -203,9 +201,9 @@ export class LinearEphemerisInterpolator extends BaseEphemerisInterpolator {
 export class SplineEphemerisInterpolator extends BaseEphemerisInterpolator {
 	readonly strategy = 'spline'
 	protected readonly minimumSampleCount = 3
-	readonly #type: SplineInterpolationType
+	readonly #type: SplineEphemerisInterpolationType
 
-	constructor(points: readonly EphemerisPoint[], type: SplineInterpolationType = 'naturalCubic', options?: InterpolationOptions) {
+	constructor(points: readonly EphemerisPoint[], type: SplineEphemerisInterpolationType = 'naturalCubic', options?: EphemerisInterpolationOptions) {
 		super(options)
 		this.#type = type
 		this.update(points)
@@ -223,7 +221,7 @@ export class ChebyshevEphemerisInterpolator extends BaseEphemerisInterpolator {
 	readonly degree: number
 	protected readonly minimumSampleCount: number
 
-	constructor(points: readonly EphemerisPoint[], degree?: number, options?: InterpolationOptions) {
+	constructor(points: readonly EphemerisPoint[], degree?: number, options?: EphemerisInterpolationOptions) {
 		super(options)
 		this.degree = degree ?? Math.min(12, Math.max(0, points.length - 1))
 
@@ -272,7 +270,7 @@ class ChebyshevPolynomialFit implements ScalarInterpolator {
 	reset() {}
 }
 
-function splineScalarInterpolator(splineInterpolation: SplineInterpolationType, times: Float64Array, values: Float64Array): ScalarInterpolator {
+function splineScalarInterpolator(splineInterpolation: SplineEphemerisInterpolationType, times: Float64Array, values: Float64Array): ScalarInterpolator {
 	switch (splineInterpolation) {
 		case 'naturalCubic':
 			return naturalCubicSpline(times, values, true)
@@ -427,7 +425,7 @@ function relativeTime(time: Time, startDay: number, startFraction: number) {
 	return instant.day - startDay + (instant.fraction - startFraction)
 }
 
-function computeDiagnostics(times: Float64Array, rightAscension: Float64Array, declination: Float64Array, raInterpolator: ScalarInterpolator, decInterpolator: ScalarInterpolator): InterpolationDiagnostics {
+function computeDiagnostics(times: Float64Array, rightAscension: Float64Array, declination: Float64Array, raInterpolator: ScalarInterpolator, decInterpolator: ScalarInterpolator): EphemerisInterpolationDiagnostics {
 	let sumRA = 0
 	let sumDEC = 0
 	let maxAbsRA = 0

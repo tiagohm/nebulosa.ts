@@ -1,7 +1,7 @@
 import { expect, test, describe } from 'bun:test'
 import { DAYSEC, TAU } from '../src/constants'
 import { angularDistance } from '../src/coordinate'
-import { type EphemerisPoint, chebyshevInterpolator, linearInterpolator, splineInterpolator } from '../src/interpolator'
+import { type EphemerisPoint, chebyshevInterpolator, linearInterpolator, splineInterpolator } from '../src/interpolator.ephemeris'
 import { Timescale, time, timeConvert, timeYMDHMS } from '../src/time'
 import { earth, mars } from '../src/vsop87e'
 
