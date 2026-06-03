@@ -809,6 +809,14 @@ ganymede(time) // Compute position and velocity of Ganymede at given time
 callisto(time) // Compute position and velocity of Calisto at given time
 ```
 
+### Least Squares ![](bun.webp) ![](browser.webp)
+
+```ts
+const fit = linearLeastSquares(design, target, { weights, ridge }) // Solve weighted linear least squares
+const fit = robustLinearLeastSquares(design, target, { method, tuning }) // Solve robust IRLS least squares
+const value = predictLinearLeastSquares(fit.coefficients, features) // Evaluate a fitted linear model
+```
+
 ### Location ![](bun.webp) ![](browser.webp)
 
 ```ts
@@ -966,6 +974,12 @@ packDate(year, month, day) // year-month-day to packed date format
 const result = fitOrbit(observations, epoch, position, velocity, options)
 ```
 
+### Optimization ![](bun.webp) ![](browser.webp)
+
+```ts
+const [a, b, c] = levenbergMarquardt(x, y, model, [a0, b0, c0]) // Compute Levenberg-Marquardt parameters
+```
+
 ### PHD2 ![](bun.webp)
 
 ```ts
@@ -1098,8 +1112,6 @@ const regression = hyperbolicRegression(x, y) // Compute hyperbolic regression f
 const y = regression.predict(x) // Compute y at x
 
 const { r, r2, chi2, rmsd } = regressionScore(regression, x, y)
-
-const [a, b, c] = levenbergMarquardt(x, y, model, [a0, b0, c0]) // Compute Levenberg-Marquardt regression coefficents
 ```
 
 ### SAO ![](bun.webp) ![](browser.webp)
