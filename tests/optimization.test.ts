@@ -1,6 +1,99 @@
 import { describe, expect, test } from 'bun:test'
 import type { NumberArray } from '../src/math'
-import { levenbergMarquardt } from '../src/optimization'
+import { bisection, brentMinimize, brentRoot, coordinateDescent, falsePositionRoot, goldenSectionSearch, levenbergMarquardt, nelderMead, powell, secantRoot } from '../src/optimization'
+
+describe('root finding', () => {
+	test('finds a bracketed root with bisection', () => {
+		const result = bisection((x) => x * x - 2, 0, 2)
+
+		expect(result.converged).toBe(true)
+		expect(result.root).toBeCloseTo(Math.SQRT2, 10)
+		expect(result.value).toBeCloseTo(0, 10)
+	})
+
+	test('finds a bracketed root with Brent method', () => {
+		const result = brentRoot((x) => Math.cos(x) - x, 0, 1)
+
+		expect(result.converged).toBe(true)
+		expect(result.root).toBeCloseTo(0.7390851332151607, 10)
+		expect(result.value).toBeCloseTo(0, 10)
+	})
+
+	test('finds an unbracketed root with secant method', () => {
+		const result = secantRoot((x) => x * x * x - 8, 1, 3)
+
+		expect(result.converged).toBe(true)
+		expect(result.root).toBeCloseTo(2, 10)
+		expect(result.value).toBeCloseTo(0, 10)
+	})
+
+	test('finds a bracketed root with false-position method', () => {
+		const result = falsePositionRoot((x) => Math.exp(x) - 3, 0, 2)
+
+		expect(result.converged).toBe(true)
+		expect(result.root).toBeCloseTo(Math.log(3), 10)
+		expect(result.value).toBeCloseTo(0, 10)
+	})
+
+	test('accepts a root at a bracket endpoint', () => {
+		const result = brentRoot((x) => x * x - 4, 2, 5)
+
+		expect(result.converged).toBe(true)
+		expect(result.root).toBe(2)
+		expect(result.value).toBe(0)
+	})
+
+	test('rejects root brackets without a sign change', () => {
+		expect(() => brentRoot((x) => x * x + 1, -1, 1)).toThrow('root bracket endpoints must have opposite signs')
+	})
+})
+
+describe('scalar minimization', () => {
+	test('minimizes a scalar function with golden-section search', () => {
+		const result = goldenSectionSearch((x) => (x - 3) ** 2 + 2, -4, 8)
+
+		expect(result.converged).toBe(true)
+		expect(result.minimum).toBeCloseTo(3, 7)
+		expect(result.value).toBeCloseTo(2, 8)
+	})
+
+	test('minimizes a scalar function with Brent method', () => {
+		const result = brentMinimize((x) => (x + 1.5) ** 2 - 4, -5, 2)
+
+		expect(result.converged).toBe(true)
+		expect(result.minimum).toBeCloseTo(-1.5, 7)
+		expect(result.value).toBeCloseTo(-4, 8)
+	})
+})
+
+describe('multivariate minimization', () => {
+	test('minimizes a quadratic function with Nelder-Mead', () => {
+		const result = nelderMead(([x, y]) => (x - 2) ** 2 + (y + 3) ** 2, [0, 0])
+
+		expect(result.converged).toBe(true)
+		expect(result.minimum[0]).toBeCloseTo(2, 6)
+		expect(result.minimum[1]).toBeCloseTo(-3, 6)
+		expect(result.value).toBeCloseTo(0, 8)
+	})
+
+	test('minimizes a separable function with coordinate descent', () => {
+		const result = coordinateDescent(([x, y]) => (x - 4) ** 2 + (y + 2) ** 2, [0, 0])
+
+		expect(result.converged).toBe(true)
+		expect(result.minimum[0]).toBeCloseTo(4, 6)
+		expect(result.minimum[1]).toBeCloseTo(-2, 6)
+		expect(result.value).toBeCloseTo(0, 8)
+	})
+
+	test('minimizes a coupled function with Powell method', () => {
+		const result = powell(([x, y]) => (1 - x) ** 2 + 100 * (y - x * x) ** 2, [-1.2, 1], { maxIterations: 1000, tolerance: 1e-8, initialStep: 0.5 })
+
+		expect(result.converged).toBe(true)
+		expect(result.minimum[0]).toBeCloseTo(1, 5)
+		expect(result.minimum[1]).toBeCloseTo(1, 5)
+		expect(result.value).toBeCloseTo(0, 8)
+	})
+})
 
 // https://github.com/mljs/levenberg-marquardt/blob/main/src/__tests__/curve.test.js
 describe('Levenberg-Marquardt optimization', () => {

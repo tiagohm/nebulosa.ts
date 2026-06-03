@@ -977,6 +977,15 @@ const result = fitOrbit(observations, epoch, position, velocity, options)
 ### Optimization ![](bun.webp) ![](browser.webp)
 
 ```ts
+const root = brentRoot((x) => Math.cos(x) - x, 0, 1) // Find a bracketed scalar root
+const root = bisection((x) => x * x - 2, 0, 2) // Find a bracketed scalar root by bisection
+const root = secantRoot((x) => x * x * x - 8, 1, 3) // Find a scalar root without a bracket
+const root = falsePositionRoot((x) => Math.exp(x) - 3, 0, 2) // Find a bracketed scalar root by false position
+const min = brentMinimize((x) => (x - 3) ** 2, -4, 8) // Minimize a scalar function
+const min = goldenSectionSearch((x) => (x - 3) ** 2, -4, 8) // Minimize a scalar function by golden-section search
+const min = nelderMead((params) => loss(params), [a0, b0]) // Minimize a multivariate function without derivatives
+const min = coordinateDescent((params) => loss(params), [a0, b0]) // Minimize a multivariate function by coordinate passes
+const min = powell((params) => loss(params), [a0, b0]) // Minimize a multivariate function by Powell direction-set search
 const [a, b, c] = levenbergMarquardt(x, y, model, [a0, b0, c0]) // Compute Levenberg-Marquardt parameters
 ```
 
