@@ -624,8 +624,8 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 			const point = findEclipseCurvePoint(pbe, lon, seed, i, G)
 			const previous = previousBySeed[seedIndex]
 
-			if (previous && !point) pushDistinct(points, refineCurveBoundary(pbe, previous.longitude, lon, previous.latitude, i, G))
-			else if (!previous && point && lon > -PI) pushDistinct(points, refineCurveBoundary(pbe, lon - longitudeStep, lon, point.latitude, i, G))
+			if (previous && !point) pushDistinct(points, refineCurveBoundary(pbe, previous.longitude, lon, previous.latitude, true, i, G))
+			else if (!previous && point && lon > -PI) pushDistinct(points, refineCurveBoundary(pbe, lon - longitudeStep, lon, point.latitude, false, i, G))
 
 			if (previous && point) appendRefinedSegment(points, pbe, previous, point, seed, i, G, maxAngularStep)
 			pushDistinct(points, point)
@@ -636,7 +636,7 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 	return orderCurvePoints(deduplicatePoints(points))
 }
 
-function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, seed: Angle, i: -1 | 0 | 1, G: number) {
+function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, seed: Angle, validLow: boolean, i: -1 | 0 | 1, G: number) {
 	let low = aLon
 	let high = bLon
 	let best: GeoPoint | null = null
@@ -645,8 +645,13 @@ function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon
 		const mid = (low + high) * 0.5
 		const point = findEclipseCurvePoint(pbe, mid, seed, i, G)
 
-		if (point) {
+		if (point && validLow) {
 			best = point
+			low = mid
+		} else if (point) {
+			best = point
+			high = mid
+		} else if (validLow) {
 			high = mid
 		} else {
 			low = mid

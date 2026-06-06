@@ -467,6 +467,16 @@ test('findCurvePoints returns bounded finite points for a synthetic partial limi
 	}
 })
 
+test('findCurvePoints refines exit boundaries away from the last valid longitude sample', () => {
+	const points = findCurvePoints(pbe({ x: [-1, -1], y: [-0.5, -1], l1: [0.5], d: [deg(-45)], mu: [deg(-90), deg(10)] }), -1, 0, { longitudeStep: deg(30), maxAngularStep: deg(60) })
+
+	expect(points).toHaveLength(3)
+	expectGeoPointClose(points[0], 0.536585680654, -0.00006518645, 2460409.1908916915)
+	expectGeoPointClose(points[1], deg(30), 0.000009942027, 2460409.191535119)
+	expectGeoPointClose(points[2], 0.498014452796, 0.000115850299, 2460409.19275367)
+	expect(points[0].longitude).toBeGreaterThan(deg(30.7))
+})
+
 test('split helpers avoid direct antimeridian joins', () => {
 	const line: GeoPoint[] = [
 		{ longitude: deg(170), latitude: deg(10) },
