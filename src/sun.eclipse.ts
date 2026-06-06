@@ -662,14 +662,34 @@ function findCentralSeededCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 
 	for (const center of centerLine) {
 		if (center.jd === undefined) continue
 		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, center.jd))
-		const point = projectCentralLimitPoint(be, i)
+		const point = projectShadowLimitPoint(be, i)
 		pushDistinct(points, point)
 	}
 
 	return points
 }
 
-function projectCentralLimitPoint(be: InstantBesselianElements, i: -1 | 1) {
+function findTimeSeededShadowLimitPoints(pbe: PolynomialBesselianElements, contacts: Pick<EclipseContactPoints, 'P1' | 'P4'>, i: -1 | 1, options: EclipseCurveOptions) {
+	if (contacts.P1?.jd === undefined || contacts.P4?.jd === undefined || contacts.P4.jd < contacts.P1.jd) return []
+
+	const points: GeoPoint[] = []
+	const stepDays = pbe.stepDays / 24
+	const maximumJulianDay = toJulianDay(pbe.maximumTime)
+
+	for (let jd = contacts.P1.jd; jd <= contacts.P4.jd + stepDays * 0.5; jd += stepDays) {
+		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, Math.min(jd, contacts.P4.jd)))
+		pushDistinct(points, projectShadowLimitPoint(be, i))
+	}
+
+	if (maximumJulianDay >= contacts.P1.jd && maximumJulianDay <= contacts.P4.jd) {
+		const be = evaluateBesselian(pbe, pbe.maximumTime)
+		pushDistinct(points, projectShadowLimitPoint(be, i))
+	}
+
+	return orderCurvePoints(deduplicatePoints(points))
+}
+
+function projectShadowLimitPoint(be: InstantBesselianElements, i: -1 | 1) {
 	const radius = Math.abs(be.l2)
 	if (!(radius > 0) || !Number.isFinite(radius)) return null
 
@@ -677,7 +697,11 @@ function projectCentralLimitPoint(be: InstantBesselianElements, i: -1 | 1) {
 
 	for (let index = 0; index < 32; index++) {
 		const angle = (TAU * index) / 32
-		const point = projectFundamentalPoint(be, be.x + radius * Math.cos(angle), be.y + radius * Math.sin(angle))
+		const x = be.x + radius * Math.cos(angle)
+		const y = be.y + radius * Math.sin(angle)
+		if (x * x + y * y > 1 + 1e-12) continue
+
+		const point = projectFundamentalPoint(be, x, y)
 		if (!finitePoint(point)) continue
 		if (!best || (i > 0 ? point.latitude > best.latitude : point.latitude < best.latitude)) best = point
 	}
@@ -815,6 +839,10 @@ function isCentralEclipse(eclipse: SolarEclipse) {
 	return eclipse.type !== 'partial' && Math.abs(eclipse.gamma) < CENTRAL_ECLIPSE_GAMMA_LIMIT
 }
 
+function hasUmbralPath(eclipse: SolarEclipse) {
+	return eclipse.type !== 'partial'
+}
+
 // Computes serializable geographic geometry for a solar eclipse map.
 export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, options: SolarEclipseMapGeometryOptions = {}): EclipseMapGeometry {
 	const contacts = findPenumbraContactPoints(pbe, options)
@@ -834,8 +862,13 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		if (U2) points.U2 = U2
 
 		centerLine = findCurvePoints(pbe, 0, 0, curveOptions)
-		umbraNorth = splitAtMaxAbsLatitude(findCurvePoints(pbe, 1, 1, curveOptions))
-		umbraSouth = splitAtMaxAbsLatitude(findCurvePoints(pbe, -1, 1, curveOptions))
+	}
+
+	if (hasUmbralPath(eclipse)) {
+		const north = findCurvePoints(pbe, 1, 1, curveOptions)
+		const south = findCurvePoints(pbe, -1, 1, curveOptions)
+		umbraNorth = splitAtMaxAbsLatitude(north.length > 0 ? north : findTimeSeededShadowLimitPoints(pbe, contacts, 1, curveOptions))
+		umbraSouth = splitAtMaxAbsLatitude(south.length > 0 ? south : findTimeSeededShadowLimitPoints(pbe, contacts, -1, curveOptions))
 		if (options.includePolygons ?? true) totalityPath = buildTotalityPathPolygons(umbraNorth, umbraSouth, points.U1, points.U2)
 	}
 

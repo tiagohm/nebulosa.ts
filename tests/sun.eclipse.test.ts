@@ -245,6 +245,16 @@ test('NASA Besselian fixtures cover eclipse classes and rare central gating', ()
 		for (const point of geometry.lines.penumbraNorth) expectGeoPoint(point)
 		for (const point of geometry.lines.penumbraSouth) expectGeoPoint(point)
 
+		if (fixture.type === 'partial') {
+			expect(geometry.points.U1).toBeUndefined()
+			expect(geometry.points.U2).toBeUndefined()
+			expect(geometry.lines.centerLine).toHaveLength(0)
+			expect(geometry.lines.umbraNorth).toHaveLength(0)
+			expect(geometry.lines.umbraSouth).toHaveLength(0)
+			expect(geometry.polygons.totalityPath).toHaveLength(0)
+			continue
+		}
+
 		if (fixture.central) {
 			expect(Array.isArray(geometry.lines.centerLine)).toBe(true)
 			expect(Array.isArray(geometry.lines.umbraNorth)).toBe(true)
@@ -255,9 +265,10 @@ test('NASA Besselian fixtures cover eclipse classes and rare central gating', ()
 		expect(geometry.points.U1).toBeUndefined()
 		expect(geometry.points.U2).toBeUndefined()
 		expect(geometry.lines.centerLine).toHaveLength(0)
-		expect(geometry.lines.umbraNorth).toHaveLength(0)
-		expect(geometry.lines.umbraSouth).toHaveLength(0)
-		expect(geometry.polygons.totalityPath).toHaveLength(0)
+		expect(geometry.lines.umbraNorth.length).toBeGreaterThan(0)
+		expect(geometry.lines.umbraSouth.length).toBeGreaterThan(0)
+		expect(geometry.polygons.totalityPath.length).toBeGreaterThan(0)
+		for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 	}
 })
 
@@ -307,7 +318,7 @@ test('computeSolarEclipseMapGeometry anchors NASA total central endpoints', () =
 	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([34, 8])
 	expectGeoPointClose(lines.umbraNorth[0][0], -2.639953819183, -0.112157165129, 2460409.195235807)
 	expectGeoPointClose(lines.umbraNorth[0][8], -1.932358763632, 0.329501095341, 2460409.245936439)
-	expectGeoPointClose(lines.umbraSouth[0][0], -2.765475544768, -0.146829996426, 2460409.195235807)
+	expectGeoPointClose(lines.umbraSouth[0][0], -2.734070637625, -0.142657836621, 2460409.195235807)
 	expectGeoPointClose(lines.umbraSouth[0][8], -1.929464748795, 0.308531778765, 2460409.245936439)
 	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([87, 87])
 	expectGeoPointClose(lines.riseSetCurves[0][0], -2.69253823562, 0.212737561367, 2460409.1759426533)
@@ -328,9 +339,38 @@ test('computeSolarEclipseMapGeometry keeps central path gated by eclipse gamma',
 	expect(geometry.points.U1).toBeUndefined()
 	expect(geometry.points.U2).toBeUndefined()
 	expect(geometry.lines.centerLine).toHaveLength(0)
-	expect(geometry.lines.umbraNorth).toHaveLength(0)
-	expect(geometry.lines.umbraSouth).toHaveLength(0)
-	expect(geometry.polygons.totalityPath).toHaveLength(0)
+	expect(geometry.lines.umbraNorth.map((line) => line.length)).toEqual([17, 4])
+	expect(geometry.lines.umbraSouth.map((line) => line.length)).toEqual([17, 4])
+	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([34, 8])
+	for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
+})
+
+test('computeSolarEclipseMapGeometry keeps umbral visibility for non-central total and annular eclipses', () => {
+	const annular = computeSolarEclipseMapGeometry(nasaEclipse(NASA_ECLIPSES[4]), nasaPbe(NASA_ECLIPSES[4]), { longitudeStep: deg(30), maxAngularStep: deg(12), includeRiseSetCurves: false, includePolygons: true })
+	const total = computeSolarEclipseMapGeometry(nasaEclipse(NASA_ECLIPSES[5]), nasaPbe(NASA_ECLIPSES[5]), { longitudeStep: deg(30), maxAngularStep: deg(12), includeRiseSetCurves: false, includePolygons: true })
+
+	expect(annular.points.U1).toBeUndefined()
+	expect(annular.points.U2).toBeUndefined()
+	expect(annular.lines.centerLine).toHaveLength(0)
+	expect(annular.lines.umbraNorth.map((line) => line.length)).toEqual([1, 9])
+	expect(annular.lines.umbraSouth.map((line) => line.length)).toEqual([1, 9])
+	expect(annular.polygons.totalityPath.map((ring) => ring.length)).toEqual([18])
+	expectGeoPointClose(annular.lines.umbraNorth[0][0], 2.131898733087, -1.277273154326, 2456776.747204113)
+	expectGeoPointClose(annular.lines.umbraSouth[0][0], 2.115338461434, -1.280022225509, 2456776.747204113)
+	expectGeoPointClose(annular.polygons.totalityPath[0][0], 2.131898733087, -1.277273154326, 2456776.747204113)
+
+	expect(total.points.U1).toBeUndefined()
+	expect(total.points.U2).toBeUndefined()
+	expect(total.lines.centerLine).toHaveLength(0)
+	expect(total.lines.umbraNorth.map((line) => line.length)).toEqual([12, 2])
+	expect(total.lines.umbraSouth.map((line) => line.length)).toEqual([12, 2])
+	expect(total.polygons.totalityPath.map((ring) => ring.length)).toEqual([24, 4])
+	expectGeoPointClose(total.lines.umbraNorth[0][0], 2.76489301012, 0.95447462732, 2467349.281275767)
+	expectGeoPointClose(total.lines.umbraNorth[0].at(-1), 2.506559461036, 1.185632223086, 2467349.298636877)
+	expectGeoPointClose(total.lines.umbraSouth[0][0], 2.76489301012, 0.95447462732, 2467349.281275767)
+	expectGeoPointClose(total.lines.umbraSouth[0].at(-1), 2.510510997566, 1.181732918119, 2467349.298636877)
+	expectGeoPointClose(total.polygons.totalityPath[0][0], 2.76489301012, 0.95447462732, 2467349.281275767)
+	for (const geometry of [annular, total]) for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
 test('computeSolarEclipseMapGeometry contact search span is independent from polynomial step', () => {
