@@ -409,7 +409,7 @@ export function projectFundamentalPoint(be: InstantBesselianElements, x: number,
 	const H = normalizeAngle(Math.atan2(px, B * b2 - y1 * b1))
 	const phi1 = Math.asin(clamp(B * b1 + y1 * b2, -1, 1))
 	const lat = Math.atan(INV_F_CONST_APPROX * Math.tan(phi1))
-	const lon = be.mu - H - DELTA_T_LONGITUDE_FACTOR * be.deltaT
+	const lon = H - be.mu + DELTA_T_LONGITUDE_FACTOR * be.deltaT
 
 	if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null
 
@@ -502,7 +502,7 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
 		jd = julianDay0 + t * pbe.stepDays
 		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
-		const H = be.mu - longitude - DELTA_T_LONGITUDE_FACTOR * pbe.deltaT
+		const H = longitude + be.mu - DELTA_T_LONGITUDE_FACTOR * pbe.deltaT
 		const sinD = Math.sin(be.d)
 		const cosD = Math.cos(be.d)
 		const sinH = Math.sin(H)
