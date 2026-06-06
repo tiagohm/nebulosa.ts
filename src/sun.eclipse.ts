@@ -160,7 +160,7 @@ export interface SolarEclipseMapGeometryOptions {
 	readonly longitudeStep?: Angle
 	// Maximum angular spacing between neighboring curve points in radians.
 	readonly maxAngularStep?: Angle
-	// Half-width of the contact root search window around time0, in seconds.
+	// Half-width of the contact root search window around maximumTime, in seconds.
 	readonly contactSearchSpan?: number
 	// Rise/set curve sampling step in seconds.
 	readonly riseSetStep?: number
@@ -176,13 +176,13 @@ export interface EclipseCurveOptions {
 	readonly longitudeStep?: Angle
 	// Maximum angular spacing between neighboring curve points in radians.
 	readonly maxAngularStep?: Angle
-	// Half-width of the contact root search window around time0, in seconds.
+	// Half-width of the contact root search window around maximumTime, in seconds.
 	readonly contactSearchSpan?: number
 }
 
 // Options for finding eclipse contact roots.
 export interface EclipseContactOptions {
-	// Half-width of the root search window around time0, in seconds.
+	// Half-width of the root search window around maximumTime, in seconds.
 	readonly contactSearchSpan?: number
 }
 
@@ -446,11 +446,10 @@ function bisectRoot(f: (x: number) => number, min: number, max: number) {
 
 // Finds P1/P2/P3/P4 penumbral contact points.
 export function findPenumbraContactPoints(pbe: PolynomialBesselianElements, options?: EclipseContactOptions): Pick<EclipseContactPoints, 'P1' | 'P2' | 'P3' | 'P4'> {
-	const julianDay0 = toJulianDay(pbe.time0)
+	const maximumJulianDay = toJulianDay(pbe.maximumTime)
 	const searchSpanDays = contactSearchSpanDays(options)
-	const from = julianDay0 - searchSpanDays
-	const to = julianDay0 + searchSpanDays
-	const mid = (from + to) * 0.5
+	const from = maximumJulianDay - searchSpanDays
+	const to = maximumJulianDay + searchSpanDays
 
 	function external(jd: number) {
 		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
@@ -463,10 +462,10 @@ export function findPenumbraContactPoints(pbe: PolynomialBesselianElements, opti
 	}
 
 	return {
-		P1: projectContactRoot(pbe, bisectRoot(external, from, mid)),
-		P2: projectContactRoot(pbe, bisectRoot(internal, from, mid)),
-		P3: projectContactRoot(pbe, bisectRoot(internal, mid, to)),
-		P4: projectContactRoot(pbe, bisectRoot(external, mid, to)),
+		P1: projectContactRoot(pbe, bisectRoot(external, from, maximumJulianDay)),
+		P2: projectContactRoot(pbe, bisectRoot(internal, from, maximumJulianDay)),
+		P3: projectContactRoot(pbe, bisectRoot(internal, maximumJulianDay, to)),
+		P4: projectContactRoot(pbe, bisectRoot(external, maximumJulianDay, to)),
 	}
 }
 
@@ -486,10 +485,10 @@ export function findMaximumPoint(pbe: PolynomialBesselianElements): GeoPoint | u
 
 // Finds one extreme endpoint of the central line.
 export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, begin: boolean, options?: EclipseContactOptions): GeoPoint | null {
-	const julianDay0 = toJulianDay(pbe.time0)
+	const maximumJulianDay = toJulianDay(pbe.maximumTime)
 	const searchSpanDays = contactSearchSpanDays(options)
-	const from = begin ? julianDay0 - searchSpanDays : julianDay0
-	const to = begin ? julianDay0 : julianDay0 + searchSpanDays
+	const from = begin ? maximumJulianDay - searchSpanDays : maximumJulianDay
+	const to = begin ? maximumJulianDay : maximumJulianDay + searchSpanDays
 
 	function fn(jd: number) {
 		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))

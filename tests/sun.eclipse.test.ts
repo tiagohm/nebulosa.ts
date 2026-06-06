@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import type { SolarEclipse, SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCurvePoints, intermediateGreatCircle, projectFundamentalPoint, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SunMoonPosition } from '../src/sun.eclipse'
+import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCurvePoints, findExtremeLimitOfCentralLine, findPenumbraContactPoints, intermediateGreatCircle, projectFundamentalPoint, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SunMoonPosition } from '../src/sun.eclipse'
 import { time, Timescale, timeSubtract, toJulianDay } from '../src/time'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
@@ -312,35 +312,60 @@ test('computeSolarEclipseMapGeometry anchors synthetic partial contacts and rise
 	for (const curve of lines.riseSetCurves) for (const point of curve) expectGeoPoint(point)
 })
 
+test('contact and central endpoint searches are centered on maximumTime', () => {
+	const elements = pbe({
+		maximumTime: time(JD0 + 0.3 * 0.125),
+		x: [-6, 20],
+		l1: [0.1],
+		l2: [-0.1],
+	})
+	const contacts = findPenumbraContactPoints(elements)
+	const U1 = findExtremeLimitOfCentralLine(elements, true)
+	const U2 = findExtremeLimitOfCentralLine(elements, false)
+
+	expectGeoPoint(contacts.P1!)
+	expectGeoPoint(contacts.P2!)
+	expectGeoPoint(contacts.P3!)
+	expectGeoPoint(contacts.P4!)
+	expectGeoPoint(U1!)
+	expectGeoPoint(U2!)
+	expect(contacts.P1!.jd).toBeCloseTo(JD0 + 0.245 * 0.125, 8)
+	expect(contacts.P2!.jd).toBeCloseTo(JD0 + 0.255 * 0.125, 8)
+	expect(U1!.jd).toBeCloseTo(JD0 + 0.25 * 0.125, 8)
+	expect(U2!.jd).toBeCloseTo(JD0 + 0.35 * 0.125, 8)
+	expect(contacts.P3!.jd).toBeCloseTo(JD0 + 0.345 * 0.125, 8)
+	expect(contacts.P4!.jd).toBeCloseTo(JD0 + 0.355 * 0.125, 8)
+})
+
 test('computeSolarEclipseMapGeometry anchors NASA total central endpoints', () => {
 	const fixture = NASA_ECLIPSES[0]
 	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(30), maxAngularStep: deg(12), includeRiseSetCurves: true, includePolygons: true, riseSetStep: 1800 })
 	const { points, lines } = geometry
 
-	expectGeoPointClose(points.P1, -2.49748316862, -0.261206638771, 2460409.15510932)
-	expectGeoPointClose(points.P2, -3.116203750495, 0.343668444254, 2460409.2403316535)
+	expectGeoPointClose(points.P1, -2.497483196155, -0.261206630319, 2460409.155109324)
+	expectGeoPointClose(points.P2, -3.11620371921, 0.343668372479, 2460409.2403316502)
 	expectGeoPointClose(points.Max, -1.817554029752, 0.441332038787, 2460409.262835)
-	expectGeoPointClose(points.P3, 0.267164255416, 1.287980980133, 2460409.285332706)
-	expectGeoPointClose(points.P4, -0.63081096497, 0.707481511923, 2460409.370589275)
-	expectGeoPointClose(points.U1, -2.766863499103, -0.136591786632, 2460409.1952358074)
-	expectGeoPointClose(points.U2, -0.34642990693, 0.830401995104, 2460409.3304374926)
+	expectGeoPointClose(points.P3, 0.267164072568, 1.287980898916, 2460409.28533271)
+	expectGeoPointClose(points.P4, -0.630810942984, 0.707481518424, 2460409.3705892717)
+	expectGeoPointClose(points.U1, -2.766863528138, -0.136591766693, 2460409.1952358116)
+	expectGeoPointClose(points.U2, -0.346429881942, 0.83040201034, 2460409.3304374893)
 	expectIncreasingJd([points.P1!, points.U1!, points.P2!, points.Max!, points.P3!, points.U2!, points.P4!])
 	expect(lines.centerLine).toHaveLength(19)
 	expectGeoPointClose(lines.centerLine[0], points.U1!.longitude, points.U1!.latitude, points.U1!.jd)
-	expectGeoPointClose(lines.centerLine[8], -1.930882045041, 0.319007161108, 2460409.2459364394)
+	expectGeoPointClose(lines.centerLine[8], -1.930882035642, 0.319007171353, 2460409.245936441)
 	expectGeoPointClose(lines.centerLine.at(-1), points.U2!.longitude, points.U2!.latitude, points.U2!.jd)
 	expectMaxAngularStep(lines.centerLine, deg(12))
 	expectIncreasingJd(lines.centerLine)
 	expect(lines.umbraNorth.map((line) => line.length)).toEqual([17, 4])
 	expect(lines.umbraSouth.map((line) => line.length)).toEqual([17, 4])
 	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([34, 8])
-	expectGeoPointClose(lines.umbraNorth[0][0], -2.639953819183, -0.112157165129, 2460409.195235807)
-	expectGeoPointClose(lines.umbraNorth[0][8], -1.932358763632, 0.329501095341, 2460409.245936439)
-	expectGeoPointClose(lines.umbraSouth[0][0], -2.734070637625, -0.142657836621, 2460409.195235807)
-	expectGeoPointClose(lines.umbraSouth[0][8], -1.929464748795, 0.308531778765, 2460409.245936439)
-	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([87, 87])
-	expectGeoPointClose(lines.riseSetCurves[0][0], -2.69253823562, 0.212737561367, 2460409.1759426533)
-	expectGeoPointClose(lines.riseSetCurves[1].at(-1), -0.632803526213, 0.468928960259, 2460409.3634426547)
+	expectGeoPointClose(lines.umbraNorth[0][0], -2.639953423428, -0.112157081238, 2460409.1952358116)
+	expectGeoPointClose(lines.umbraNorth[0][8], -1.932358754211, 0.329501105606, 2460409.2459364408)
+	expectGeoPointClose(lines.umbraSouth[0][0], -2.734068913911, -0.142657574683, 2460409.1952358116)
+	expectGeoPointClose(lines.umbraSouth[0][8], -1.929464739416, 0.30853178899, 2460409.2459364408)
+	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([103, 103])
+	expectGeoPointClose(lines.riseSetCurves[0][0], -2.497500372105, -0.261085793191, 2460409.155109324)
+	expectGeoPointClose(lines.riseSetCurves[1].at(-1), -0.632803541921, 0.46892902322, 2460409.363442659)
 	for (const segment of [...lines.umbraNorth, ...lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
@@ -349,11 +374,11 @@ test('computeSolarEclipseMapGeometry keeps central path gated by eclipse gamma',
 	const nonCentral = { ...nasaEclipse(fixture), gamma: 1.01 }
 	const geometry = computeSolarEclipseMapGeometry(nonCentral, nasaPbe(fixture), { longitudeStep: deg(30), maxAngularStep: deg(12), includeRiseSetCurves: false, includePolygons: true })
 
-	expectGeoPointClose(geometry.points.P1, -2.49748316862, -0.261206638771, 2460409.15510932)
-	expectGeoPointClose(geometry.points.P2, -3.116203750495, 0.343668444254, 2460409.2403316535)
+	expectGeoPointClose(geometry.points.P1, -2.497483196155, -0.261206630319, 2460409.155109324)
+	expectGeoPointClose(geometry.points.P2, -3.11620371921, 0.343668372479, 2460409.2403316502)
 	expectGeoPointClose(geometry.points.Max, -1.817554029752, 0.441332038787, 2460409.262835)
-	expectGeoPointClose(geometry.points.P3, 0.267164255416, 1.287980980133, 2460409.285332706)
-	expectGeoPointClose(geometry.points.P4, -0.63081096497, 0.707481511923, 2460409.370589275)
+	expectGeoPointClose(geometry.points.P3, 0.267164072568, 1.287980898916, 2460409.28533271)
+	expectGeoPointClose(geometry.points.P4, -0.630810942984, 0.707481518424, 2460409.3705892717)
 	expect(geometry.points.U1).toBeUndefined()
 	expect(geometry.points.U2).toBeUndefined()
 	expect(geometry.lines.centerLine).toHaveLength(0)
@@ -370,12 +395,12 @@ test('computeSolarEclipseMapGeometry keeps umbral visibility for non-central tot
 	expect(annular.points.U1).toBeUndefined()
 	expect(annular.points.U2).toBeUndefined()
 	expect(annular.lines.centerLine).toHaveLength(0)
-	expect(annular.lines.umbraNorth.map((line) => line.length)).toEqual([1, 9])
-	expect(annular.lines.umbraSouth.map((line) => line.length)).toEqual([1, 9])
-	expect(annular.polygons.totalityPath.map((ring) => ring.length)).toEqual([18])
-	expectGeoPointClose(annular.lines.umbraNorth[0][0], 2.131898733087, -1.277273154326, 2456776.747204113)
-	expectGeoPointClose(annular.lines.umbraSouth[0][0], 2.115338461434, -1.280022225509, 2456776.747204113)
-	expectGeoPointClose(annular.polygons.totalityPath[0][0], 2.131898733087, -1.277273154326, 2456776.747204113)
+	expect(annular.lines.umbraNorth.map((line) => line.length)).toEqual([2])
+	expect(annular.lines.umbraSouth.map((line) => line.length)).toEqual([2])
+	expect(annular.polygons.totalityPath.map((ring) => ring.length)).toEqual([4])
+	expectGeoPointClose(annular.lines.umbraNorth[0][0], 2.179317115763, -1.197909741643, 2456776.7524523144)
+	expectGeoPointClose(annular.lines.umbraSouth[0][0], 2.261245532457, -1.242599712523, 2456776.7524523144)
+	expectGeoPointClose(annular.polygons.totalityPath[0][0], 2.179317115763, -1.197909741643, 2456776.7524523144)
 
 	expect(total.points.U1).toBeUndefined()
 	expect(total.points.U2).toBeUndefined()
@@ -383,11 +408,11 @@ test('computeSolarEclipseMapGeometry keeps umbral visibility for non-central tot
 	expect(total.lines.umbraNorth.map((line) => line.length)).toEqual([12, 2])
 	expect(total.lines.umbraSouth.map((line) => line.length)).toEqual([12, 2])
 	expect(total.polygons.totalityPath.map((ring) => ring.length)).toEqual([24, 4])
-	expectGeoPointClose(total.lines.umbraNorth[0][0], 2.76489301012, 0.95447462732, 2467349.281275767)
-	expectGeoPointClose(total.lines.umbraNorth[0].at(-1), 2.506559461036, 1.185632223086, 2467349.298636877)
-	expectGeoPointClose(total.lines.umbraSouth[0][0], 2.76489301012, 0.95447462732, 2467349.281275767)
-	expectGeoPointClose(total.lines.umbraSouth[0].at(-1), 2.510510997566, 1.181732918119, 2467349.298636877)
-	expectGeoPointClose(total.polygons.totalityPath[0][0], 2.76489301012, 0.95447462732, 2467349.281275767)
+	expectGeoPointClose(total.lines.umbraNorth[0][0], 2.764893026681, 0.954474608593, 2467349.281275766)
+	expectGeoPointClose(total.lines.umbraNorth[0].at(-1), 2.506559488207, 1.185632205147, 2467349.298636876)
+	expectGeoPointClose(total.lines.umbraSouth[0][0], 2.764893026681, 0.954474608593, 2467349.281275766)
+	expectGeoPointClose(total.lines.umbraSouth[0].at(-1), 2.510511024399, 1.181732900143, 2467349.298636876)
+	expectGeoPointClose(total.polygons.totalityPath[0][0], 2.764893026681, 0.954474608593, 2467349.281275766)
 	for (const geometry of [annular, total]) for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
@@ -399,8 +424,8 @@ test('computeSolarEclipseMapGeometry contact search span is independent from pol
 	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { contactSearchSpan: 2 * 3600, longitudeStep: deg(30), maxAngularStep: deg(12), includeRiseSetCurves: true })
 
 	expect(geometry.points.P1).toBeUndefined()
-	expectGeoPointClose(geometry.points.P2, -3.116203759433, 0.343668464761, 2460409.2403316544)
-	expectGeoPointClose(geometry.points.P3, 0.267164296049, 1.287980998182, 2460409.285332705)
+	expectGeoPointClose(geometry.points.P2, -3.116203705802, 0.343668341719, 2460409.240331649)
+	expectGeoPointClose(geometry.points.P3, 0.267164133517, 1.287980925988, 2460409.2853327086)
 	expect(geometry.points.P4).toBeUndefined()
 	expect(geometry.lines.riseSetCurves).toHaveLength(0)
 })
