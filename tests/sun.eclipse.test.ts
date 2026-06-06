@@ -5,6 +5,7 @@ import type { SolarEclipse, SolarEclipseType } from '../src/sun'
 import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCurvePoints, intermediateGreatCircle, projectFundamentalPoint, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SunMoonPosition } from '../src/sun.eclipse'
 import { time, Timescale, timeSubtract, toJulianDay } from '../src/time'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
+import { sphericalSeparation } from '../src/geometry'
 
 const JD0 = 2460409.25
 const TIME0 = time(JD0)
@@ -169,6 +170,10 @@ function expectIncreasingJd(points: readonly GeoPoint[]) {
 	for (let i = 1; i < points.length; i++) expect(points[i].jd!).toBeGreaterThan(points[i - 1].jd!)
 }
 
+function expectMaxAngularStep(points: readonly GeoPoint[], maxStep: number) {
+	for (let i = 1; i < points.length; i++) expect(sphericalSeparation(points[i - 1].longitude, points[i - 1].latitude, points[i].longitude, points[i].latitude)).toBeLessThanOrEqual(maxStep)
+}
+
 test('geographic angular helpers handle antimeridian and great-circle interpolation', () => {
 	const a: GeoPoint = { longitude: deg(179.5), latitude: 0 }
 	const b: GeoPoint = { longitude: deg(-179.5), latitude: 0 }
@@ -320,9 +325,12 @@ test('computeSolarEclipseMapGeometry anchors NASA total central endpoints', () =
 	expectGeoPointClose(points.U1, -2.766863499103, -0.136591786632, 2460409.1952358074)
 	expectGeoPointClose(points.U2, -0.34642990693, 0.830401995104, 2460409.3304374926)
 	expectIncreasingJd([points.P1!, points.U1!, points.P2!, points.Max!, points.P3!, points.U2!, points.P4!])
-	expect(lines.centerLine).toHaveLength(2)
+	expect(lines.centerLine).toHaveLength(19)
 	expectGeoPointClose(lines.centerLine[0], points.U1!.longitude, points.U1!.latitude, points.U1!.jd)
-	expectGeoPointClose(lines.centerLine[1], points.U2!.longitude, points.U2!.latitude, points.U2!.jd)
+	expectGeoPointClose(lines.centerLine[8], -1.930882045041, 0.319007161108, 2460409.2459364394)
+	expectGeoPointClose(lines.centerLine.at(-1), points.U2!.longitude, points.U2!.latitude, points.U2!.jd)
+	expectMaxAngularStep(lines.centerLine, deg(12))
+	expectIncreasingJd(lines.centerLine)
 	expect(lines.umbraNorth.map((line) => line.length)).toEqual([17, 4])
 	expect(lines.umbraSouth.map((line) => line.length)).toEqual([17, 4])
 	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([34, 8])

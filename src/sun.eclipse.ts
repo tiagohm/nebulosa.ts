@@ -587,7 +587,7 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const seeds = [0, Math.sign(pbe.y[0] || 1) * (89.9 * DEG2RAD)] as const
-	const points: GeoPoint[] = findCentralSeededCurvePoints(pbe, i, G, options)
+	const points: GeoPoint[] = i === 0 ? sampleCentralLineByTime(pbe, options) : findCentralSeededCurvePoints(pbe, i, G, options)
 	const previousBySeed: (GeoPoint | null)[] = [null, null]
 
 	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
@@ -606,13 +606,6 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 			pushDistinct(points, point)
 			previousBySeed[seedIndex] = point
 		}
-	}
-
-	if (i === 0) {
-		const begin = findExtremeLimitOfCentralLine(pbe, true)
-		const end = findExtremeLimitOfCentralLine(pbe, false)
-		if (begin) points.unshift(begin)
-		if (end) points.push(end)
 	}
 
 	return orderCurvePoints(deduplicatePoints(points))
