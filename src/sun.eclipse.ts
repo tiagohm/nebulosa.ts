@@ -1,5 +1,5 @@
 import { type Angle, deg, normalizeAngle, normalizePI } from './angle'
-import { DEG2RAD, J2000, PI, PIOVERTWO, TAU } from './constants'
+import { DAYSEC, DEG2RAD, J2000, PI, PIOVERTWO, TAU } from './constants'
 import { sphericalInterpolate, sphericalSeparation, type Point } from './geometry'
 import { clamp, type NumberArray } from './math'
 import { bisection, type RootFindingOptions } from './optimization'
@@ -8,6 +8,8 @@ import type { SolarEclipse } from './sun'
 import { timeShift, timeSubtract, toJulianDay, type Time } from './time'
 import type { Writable } from './types'
 
+// That code planned and implemented by Codex, using https://github.com/Astrarium/Astrarium as inspiration.
+
 const EARTH_E2 = 0.006694385
 const F_CONST = 0.99664719
 const INV_F_CONST_APPROX = 1.00336409
@@ -15,6 +17,7 @@ const DELTA_T_LONGITUDE_FACTOR = 0.00417807 * DEG2RAD
 const DEFAULT_LONGITUDE_STEP = 1 * DEG2RAD
 const DEFAULT_MAX_ANGULAR_STEP = 1 * DEG2RAD
 const DEFAULT_RISE_SET_STEP_SECONDS = 30
+const DEFAULT_CONTACT_SEARCH_SPAN_SECONDS = 6 * 3600
 const CONTACT_TOLERANCE_DAYS = 1e-8
 const SOLVER_MAX_ITERATIONS = 50
 const SOLVER_TOLERANCE = 1e-4
@@ -157,6 +160,8 @@ export interface SolarEclipseMapGeometryOptions {
 	readonly longitudeStep?: Angle
 	// Maximum angular spacing between neighboring curve points in radians.
 	readonly maxAngularStep?: Angle
+	// Half-width of the contact root search window around time0, in seconds.
+	readonly contactSearchSpan?: number
 	// Rise/set curve sampling step in seconds.
 	readonly riseSetStep?: number
 	// Whether to include sunrise and sunset curves.
@@ -171,6 +176,12 @@ export interface EclipseCurveOptions {
 	readonly longitudeStep?: Angle
 	// Maximum angular spacing between neighboring curve points in radians.
 	readonly maxAngularStep?: Angle
+}
+
+// Options for finding eclipse contact roots.
+export interface EclipseContactOptions {
+	// Half-width of the root search window around time0, in seconds.
+	readonly contactSearchSpan?: number
 }
 
 // Options for computing rise and set curves.
@@ -253,6 +264,10 @@ function interpolateGreatCirclePoint(a: GeoPoint, b: GeoPoint, fraction: number)
 
 function validStep(value: number | undefined, fallback: number) {
 	return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function contactSearchSpanDays(options?: EclipseContactOptions) {
+	return validStep(options?.contactSearchSpan, DEFAULT_CONTACT_SEARCH_SPAN_SECONDS) / DAYSEC
 }
 
 function timeAtJulianDay(reference: Time, julianDay: number) {
@@ -412,10 +427,11 @@ function bisectRoot(f: (x: number) => number, min: number, max: number) {
 }
 
 // Finds P1/P2/P3/P4 penumbral contact points.
-export function findPenumbraContactPoints(pbe: PolynomialBesselianElements): Pick<EclipseContactPoints, 'P1' | 'P2' | 'P3' | 'P4'> {
+export function findPenumbraContactPoints(pbe: PolynomialBesselianElements, options?: EclipseContactOptions): Pick<EclipseContactPoints, 'P1' | 'P2' | 'P3' | 'P4'> {
 	const julianDay0 = toJulianDay(pbe.time0)
-	const from = julianDay0 - 2 * pbe.stepDays
-	const to = julianDay0 + 2 * pbe.stepDays
+	const searchSpanDays = contactSearchSpanDays(options)
+	const from = julianDay0 - searchSpanDays
+	const to = julianDay0 + searchSpanDays
 	const mid = (from + to) * 0.5
 
 	function external(jd: number) {
@@ -451,10 +467,11 @@ export function findMaximumPoint(pbe: PolynomialBesselianElements): GeoPoint | u
 }
 
 // Finds one extreme endpoint of the central line.
-export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, begin: boolean): GeoPoint | null {
+export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, begin: boolean, options?: EclipseContactOptions): GeoPoint | null {
 	const julianDay0 = toJulianDay(pbe.time0)
-	const from = begin ? julianDay0 - 2 * pbe.stepDays : julianDay0
-	const to = begin ? julianDay0 : julianDay0 + 2 * pbe.stepDays
+	const searchSpanDays = contactSearchSpanDays(options)
+	const from = begin ? julianDay0 - searchSpanDays : julianDay0
+	const to = begin ? julianDay0 : julianDay0 + searchSpanDays
 
 	function fn(jd: number) {
 		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
@@ -470,6 +487,12 @@ export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, 
 }
 
 // Solves one eclipse curve point at fixed longitude.
+// i = 0, G ignored -> central line
+// i = +1, G = 1 -> northern limit of total/annular path
+// i = -1, G = 1 -> southern limit of total/annular path
+// i = +1, G = 0 -> northern limit of partial eclipse
+// i = -1, G = 0 -> southern limit of partial eclipse
+// i = ±1, 0<G<1 -> equal-magnitude curve
 export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number): GeoPoint | null {
 	let t = 0
 	let phi = initialLatitude
@@ -729,7 +752,7 @@ function isCentralEclipse(eclipse: SolarEclipse) {
 
 // Computes serializable geographic geometry for a solar eclipse map.
 export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, options: SolarEclipseMapGeometryOptions = {}): EclipseMapGeometry {
-	const contacts = findPenumbraContactPoints(pbe)
+	const contacts = findPenumbraContactPoints(pbe, options)
 	const points: Writable<EclipseContactPoints> = { ...contacts, Max: findMaximumPoint(pbe) }
 	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
@@ -740,8 +763,8 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	let totalityPath: GeoPoint[][] = []
 
 	if (isCentralEclipse(eclipse)) {
-		const U1 = findExtremeLimitOfCentralLine(pbe, true)
-		const U2 = findExtremeLimitOfCentralLine(pbe, false)
+		const U1 = findExtremeLimitOfCentralLine(pbe, true, options)
+		const U2 = findExtremeLimitOfCentralLine(pbe, false, options)
 		if (U1) points.U1 = U1
 		if (U2) points.U2 = U2
 
