@@ -209,6 +209,16 @@ test('computePolynomialBesselianElements fits cubic samples and unwraps mu', () 
 	expect(be.mu).toBeGreaterThanOrEqual(0)
 	expect(be.mu).toBeLessThan(TAU)
 	expect(be.deltaT).toBeCloseTo(70, 12)
+	expect(generated.tanF1).toBeCloseTo(0.0046740276377206565, 12)
+	expect(generated.tanF2).toBeCloseTo(0.004650731412398169, 12)
+})
+
+test('computePolynomialBesselianElements derives cone tangents from physical Sun-Moon distance', () => {
+	const generated = computePolynomialBesselianElements(TIME0, (): SunMoonPosition => ({ sunRightAscension: deg(15), sunDeclination: deg(7), sunDistance: 23484, moonRightAscension: deg(15.2), moonDeclination: deg(7.01), moonDistance: 56.28, deltaT: 69 }))
+
+	expect(generated.tanF1).toBeCloseTo(0.004667499727742458, 12)
+	expect(generated.tanF2).toBeCloseTo(0.004644236038740575, 12)
+	expect(generated.tanF2).toBeGreaterThan(0)
 })
 
 test('NASA Besselian fixtures preserve polynomial values and units', () => {

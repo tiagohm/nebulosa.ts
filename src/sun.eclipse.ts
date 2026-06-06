@@ -370,6 +370,8 @@ function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): Insta
 	const moonSemidiameter = Math.asin(clamp(MOON_RADIUS_EARTH_RADII / sample.moonDistance, -1, 1))
 	const moonParallax = Math.asin(clamp(1 / sample.moonDistance, -1, 1))
 	const invParallax = moonParallax === 0 ? 0 : 1 / moonParallax
+	const sunMoonDistance = physicalSunMoonDistance(sample)
+	const invSunMoonDistance = sunMoonDistance > 0 ? 1 / sunMoonDistance : 0
 	const l1 = (sunSemidiameter + moonSemidiameter) * invParallax
 	const l2 = (sunSemidiameter - moonSemidiameter) * invParallax
 	// const gmst = greenwichMeanSiderealTime(time)
@@ -387,9 +389,18 @@ function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): Insta
 		mu,
 		dx: 0,
 		dy: 0,
-		tanF1: Math.tan(sunSemidiameter + moonSemidiameter),
-		tanF2: Math.tan(sunSemidiameter - moonSemidiameter),
+		tanF1: (SUN_RADIUS_EARTH_RADII + MOON_RADIUS_EARTH_RADII) * invSunMoonDistance,
+		tanF2: (SUN_RADIUS_EARTH_RADII - MOON_RADIUS_EARTH_RADII) * invSunMoonDistance,
 	}
+}
+
+function physicalSunMoonDistance(sample: SunMoonPosition) {
+	if (!(sample.sunDistance > 0) || !(sample.moonDistance > 0)) return 0
+
+	const separation = sphericalSeparation(sample.sunRightAscension, sample.sunDeclination, sample.moonRightAscension, sample.moonDeclination)
+	const chord = 2 * Math.sin(0.5 * separation)
+	const distance = Math.sqrt((sample.sunDistance - sample.moonDistance) ** 2 + sample.sunDistance * sample.moonDistance * chord * chord)
+	return Number.isFinite(distance) ? distance : 0
 }
 
 // Projects one fundamental-plane point to geographic longitude and latitude.
