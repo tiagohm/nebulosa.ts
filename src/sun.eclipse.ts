@@ -1,5 +1,6 @@
 import { type Angle, deg, normalizeAngle, normalizePI } from './angle'
 import { DAYSEC, DEG2RAD, J2000, PI, PIOVERTWO, RAD2DEG, TAU } from './constants'
+import { eraS2p } from './erfa'
 import { sphericalInterpolate, sphericalSeparation, type Point } from './geometry'
 import { clamp, type NumberArray } from './math'
 import { bisection, type RootFindingOptions } from './optimization'
@@ -7,6 +8,7 @@ import { polynomialRegression } from './regression'
 import type { SolarEclipse } from './sun'
 import { timeShift, timeSubtract, toJulianDay, type Time } from './time'
 import type { Writable } from './types'
+import { vecDot, vecLength, vecMinus, vecNormalize } from './vec3'
 
 // That code planned and implemented by Codex, using https://github.com/Astrarium/Astrarium as inspiration.
 
@@ -363,29 +365,27 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 }
 
 function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): InstantBesselianElements {
-	const deltaRA = normalizePI(sample.moonRightAscension - sample.sunRightAscension)
-	const x = sample.moonDistance * Math.cos(sample.sunDeclination) * deltaRA
-	const y = sample.moonDistance * (sample.moonDeclination - sample.sunDeclination)
+	const projection = besselianShadowProjection(sample)
 	const sunSemidiameter = Math.asin(clamp(SUN_RADIUS_EARTH_RADII / sample.sunDistance, -1, 1))
 	const moonSemidiameter = Math.asin(clamp(MOON_RADIUS_EARTH_RADII / sample.moonDistance, -1, 1))
 	const moonParallax = Math.asin(clamp(1 / sample.moonDistance, -1, 1))
 	const invParallax = moonParallax === 0 ? 0 : 1 / moonParallax
-	const sunMoonDistance = physicalSunMoonDistance(sample)
+	const sunMoonDistance = projection.sunMoonDistance
 	const invSunMoonDistance = sunMoonDistance > 0 ? 1 / sunMoonDistance : 0
 	const l1 = (sunSemidiameter + moonSemidiameter) * invParallax
 	const l2 = (sunSemidiameter - moonSemidiameter) * invParallax
 	// const gmst = greenwichMeanSiderealTime(time)
 	const gmst = normalizeAngle(280.46061837 * DEG2RAD + 360.98564736629 * DEG2RAD * (time.day - J2000 + time.fraction))
-	const mu = normalizeAngle(gmst - sample.sunRightAscension)
+	const mu = normalizeAngle(gmst - projection.rightAscension)
 
 	return {
 		time,
 		deltaT: sample.deltaT ?? 0,
-		x,
-		y,
+		x: projection.x,
+		y: projection.y,
 		l1,
 		l2,
-		d: sample.sunDeclination,
+		d: projection.declination,
 		mu,
 		dx: 0,
 		dy: 0,
@@ -394,13 +394,39 @@ function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): Insta
 	}
 }
 
-function physicalSunMoonDistance(sample: SunMoonPosition) {
-	if (!(sample.sunDistance > 0) || !(sample.moonDistance > 0)) return 0
+function besselianShadowProjection(sample: SunMoonPosition) {
+	if (!(sample.sunDistance > 0) || !(sample.moonDistance > 0)) {
+		return { x: 0, y: 0, rightAscension: sample.sunRightAscension, declination: sample.sunDeclination, sunMoonDistance: 0 }
+	}
 
-	const separation = sphericalSeparation(sample.sunRightAscension, sample.sunDeclination, sample.moonRightAscension, sample.moonDeclination)
-	const chord = 2 * Math.sin(0.5 * separation)
-	const distance = Math.sqrt((sample.sunDistance - sample.moonDistance) ** 2 + sample.sunDistance * sample.moonDistance * chord * chord)
-	return Number.isFinite(distance) ? distance : 0
+	const sun = eraS2p(sample.sunRightAscension, sample.sunDeclination, sample.sunDistance)
+	const moon = eraS2p(sample.moonRightAscension, sample.moonDeclination, sample.moonDistance)
+	const sunMinusMoon = vecMinus(sun, moon)
+	const sunMoonDistance = vecLength(sunMinusMoon)
+
+	if (!(sunMoonDistance > 0) || !Number.isFinite(sunMoonDistance)) {
+		return { x: 0, y: 0, rightAscension: sample.sunRightAscension, declination: sample.sunDeclination, sunMoonDistance: 0 }
+	}
+
+	const axis = vecNormalize(sunMinusMoon)
+	const rightAscension = normalizeAngle(Math.atan2(axis[1], axis[0]))
+	const declination = Math.asin(clamp(axis[2], -1, 1))
+	const sinA = Math.sin(rightAscension)
+	const cosA = Math.cos(rightAscension)
+	const sinD = Math.sin(declination)
+	const cosD = Math.cos(declination)
+	const east = [-sinA, cosA, 0] as const
+	const north = [-cosA * sinD, -sinA * sinD, cosD] as const
+	const zeta = vecDot(moon, axis)
+	const foot = [moon[0] - zeta * axis[0], moon[1] - zeta * axis[1], moon[2] - zeta * axis[2]] as const
+
+	return {
+		x: vecDot(foot, east),
+		y: vecDot(foot, north),
+		rightAscension,
+		declination,
+		sunMoonDistance,
+	}
 }
 
 // Projects one fundamental-plane point to geographic longitude and latitude.

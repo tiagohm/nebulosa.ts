@@ -226,6 +226,21 @@ test('computePolynomialBesselianElements derives cone tangents from physical Sun
 	expect(generated.tanF2).toBeGreaterThan(0)
 })
 
+test('computePolynomialBesselianElements projects the shadow axis onto the fundamental plane', () => {
+	const sample: SunMoonPosition = { sunRightAscension: deg(40), sunDeclination: deg(65), sunDistance: 23000, moonRightAscension: deg(42), moonDeclination: deg(64.5), moonDistance: 60, deltaT: 70 }
+	const generated = computePolynomialBesselianElements(TIME0, () => sample)
+	const be = evaluateBesselian(generated, TIME0)
+	const tangentPlaneX = sample.moonDistance * Math.cos(sample.sunDeclination) * (sample.moonRightAscension - sample.sunRightAscension)
+	const tangentPlaneY = sample.moonDistance * (sample.moonDeclination - sample.sunDeclination)
+
+	expect(be.x).toBeCloseTo(0.903877748055732, 12)
+	expect(be.y).toBeCloseTo(-0.5105868561921576, 12)
+	expect(be.d).toBeCloseTo(1.1344862148808663, 12)
+	expect(be.mu).toBeCloseTo(1.1779334094310219, 12)
+	expect(Math.abs(be.x - tangentPlaneX)).toBeGreaterThan(0.01)
+	expect(Math.abs(be.y - tangentPlaneY)).toBeGreaterThan(0.01)
+})
+
 test('NASA Besselian fixtures preserve polynomial values and units', () => {
 	for (const fixture of NASA_ECLIPSES) {
 		const elements = nasaPbe(fixture)
