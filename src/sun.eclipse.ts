@@ -176,6 +176,8 @@ export interface EclipseCurveOptions {
 	readonly longitudeStep?: Angle
 	// Maximum angular spacing between neighboring curve points in radians.
 	readonly maxAngularStep?: Angle
+	// Half-width of the contact root search window around time0, in seconds.
+	readonly contactSearchSpan?: number
 }
 
 // Options for finding eclipse contact roots.
@@ -277,6 +279,11 @@ function timeAtJulianDay(reference: Time, julianDay: number) {
 // Interpolates between two geographic points along the great-circle arc.
 export function intermediateGreatCircle(a: GeoPoint, b: GeoPoint, fraction: number): GeoPoint {
 	return interpolateGreatCirclePoint(a, b, clamp(fraction, 0, 1))
+}
+
+function centralLinePointAtJulianDay(pbe: PolynomialBesselianElements, jd: number) {
+	const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
+	return projectFundamentalPoint(be, be.x, be.y)
 }
 
 // Evaluates polynomial Besselian elements at one time.
@@ -569,7 +576,7 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const seeds = [0, Math.sign(pbe.y[0] || 1) * (89.9 * DEG2RAD)] as const
-	const points: GeoPoint[] = []
+	const points: GeoPoint[] = findCentralSeededCurvePoints(pbe, i, G, options)
 	const previousBySeed: (GeoPoint | null)[] = [null, null]
 
 	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
@@ -615,6 +622,64 @@ function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon
 		} else {
 			low = mid
 		}
+	}
+
+	return best
+}
+
+function appendCentralLineTimeSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, maxAngularStep: Angle, depth = 0) {
+	if (a.jd === undefined || b.jd === undefined || depth >= 12 || angularDistance(a, b) <= maxAngularStep) return
+
+	const mid = centralLinePointAtJulianDay(pbe, (a.jd + b.jd) * 0.5)
+	if (!mid) return
+
+	appendCentralLineTimeSegment(points, pbe, a, mid, maxAngularStep, depth + 1)
+	pushDistinct(points, mid)
+	appendCentralLineTimeSegment(points, pbe, mid, b, maxAngularStep, depth + 1)
+}
+
+function sampleCentralLineByTime(pbe: PolynomialBesselianElements, options: EclipseCurveOptions) {
+	const begin = findExtremeLimitOfCentralLine(pbe, true, options)
+	const end = findExtremeLimitOfCentralLine(pbe, false, options)
+	if (!begin || !end) return []
+
+	const points: GeoPoint[] = []
+	pushDistinct(points, begin)
+	appendCentralLineTimeSegment(points, pbe, begin, end, validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP))
+	pushDistinct(points, end)
+
+	return orderCurvePoints(deduplicatePoints(points))
+}
+
+function findCentralSeededCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: EclipseCurveOptions) {
+	if (i === 0 || G !== 1) return []
+
+	// Narrow central paths can fall between coarse longitude samples, so seed umbral
+	// limits from the time-parametrized central path before the meridian scan.
+	const centerLine = sampleCentralLineByTime(pbe, options)
+	const points: GeoPoint[] = []
+
+	for (const center of centerLine) {
+		if (center.jd === undefined) continue
+		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, center.jd))
+		const point = projectCentralLimitPoint(be, i)
+		pushDistinct(points, point)
+	}
+
+	return points
+}
+
+function projectCentralLimitPoint(be: InstantBesselianElements, i: -1 | 1) {
+	const radius = Math.abs(be.l2)
+	if (!(radius > 0) || !Number.isFinite(radius)) return null
+
+	let best: GeoPoint | null = null
+
+	for (let index = 0; index < 32; index++) {
+		const angle = (TAU * index) / 32
+		const point = projectFundamentalPoint(be, be.x + radius * Math.cos(angle), be.y + radius * Math.sin(angle))
+		if (!finitePoint(point)) continue
+		if (!best || (i > 0 ? point.latitude > best.latitude : point.latitude < best.latitude)) best = point
 	}
 
 	return best
@@ -756,7 +821,7 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	const points: Writable<EclipseContactPoints> = { ...contacts, Max: findMaximumPoint(pbe) }
 	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
-	const curveOptions = { longitudeStep, maxAngularStep }
+	const curveOptions = { longitudeStep, maxAngularStep, contactSearchSpan: options.contactSearchSpan }
 	let centerLine: GeoPoint[] = []
 	let umbraNorth: GeoPoint[][] = []
 	let umbraSouth: GeoPoint[][] = []
