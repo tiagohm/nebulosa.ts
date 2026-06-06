@@ -1,5 +1,5 @@
 import { type Angle, deg, normalizeAngle, normalizePI } from './angle'
-import { DAYSEC, DEG2RAD, J2000, PI, PIOVERTWO, TAU } from './constants'
+import { DAYSEC, DEG2RAD, J2000, PI, PIOVERTWO, RAD2DEG, TAU } from './constants'
 import { sphericalInterpolate, sphericalSeparation, type Point } from './geometry'
 import { clamp, type NumberArray } from './math'
 import { bisection, type RootFindingOptions } from './optimization'
@@ -520,7 +520,7 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 
 		if (!Number.isFinite(h) || h < 0) return null
 
-		const hD = h * DEG2RAD
+		const hD = h * RAD2DEG
 
 		if (G !== 0 && hD <= 10) {
 			const sigma = 1.000012 + 0.0002282559 * Math.exp(-0.5035747 * hD)
