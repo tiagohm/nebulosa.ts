@@ -1,4 +1,4 @@
-import { type Angle, deg, normalizeAngle, normalizePI } from './angle'
+import { type Angle, normalizeAngle, normalizePI } from './angle'
 import { DAYSEC, DEG2RAD, J2000, PI, PIOVERTWO, RAD2DEG, TAU } from './constants'
 import { eraS2p } from './erfa'
 import { sphericalInterpolate, sphericalSeparation, type Point } from './geometry'
@@ -33,10 +33,14 @@ const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272488
 // Lunar radius k2 used for umbral contacts (total/annular path), per NASA/Espenak convention.
 const MOON_RADIUS_UMBRA_EARTH_RADII = 0.272281
 const BOUNDARY_REFINEMENT_STEPS = 18
+// Minimum Julian Day separation between distinct points on a time-parametrized curve; points closer
+// than this in time (~0.1 s, far below the minutes-apart sampling of any curve) are the same instant
+// reached from different seeds or seeding stages, and are collapsed to one.
+const CURVE_TIME_EPSILON_DAYS = 1e-6
 // Latitude seeds used to acquire the partial-eclipse (penumbra) limit during the meridian scan.
 // Unlike the umbral limits, which hug the central line and are seeded from it, the partial limit can
 // sit at any mid-latitude, so a spread of starting guesses is tried before continuation takes over.
-const PARTIAL_LIMIT_LATITUDE_SEEDS: readonly number[] = [0, 20, -20, 40, -40, 60, -60, 80, -80].map((value) => value * DEG2RAD)
+const PARTIAL_LIMIT_LATITUDE_SEEDS = [0, 20 * DEG2RAD, -20 * DEG2RAD, 40 * DEG2RAD, -40 * DEG2RAD, 60 * DEG2RAD, -60 * DEG2RAD, 80 * DEG2RAD, -80 * DEG2RAD] as const
 
 // Polynomial Besselian elements fitted around the eclipse maximum.
 export interface PolynomialBesselianElements {
@@ -666,12 +670,6 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 	return solveEclipseCurvePoint(pbe, longitude, initialLatitude, i, G, 0)
 }
 
-//
-// correctLatitudeScaling selects the Newton latitude-step scaling. The default (false) keeps the
-// historical, under-scaled step relied upon by the umbral and equal-magnitude meridian scan, which
-// only refines points already seeded extremely close to the curve. The wide partial-eclipse
-// (penumbra, G = 0) limit lies far from any such seed, so it needs the exact per-radian derivative
-// (true) to actually converge from a coarse latitude guess.
 function solveEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number, initialT: number) {
 	let t = initialT
 	let phi = initialLatitude
@@ -735,8 +733,7 @@ function solveEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Ang
 		const dRhoSin = (F_CONST * F_CONST * rhoCosPhi) / latDenom
 		const Q1 = b * sinH * dRhoCos
 		const Q2 = a * (cosH * sinD * dRhoCos + cosD * dRhoSin)
-		// dW/dphi = -(Q1 + Q2) / n in radians; the corrected branch uses that exact derivative so the
-		// Newton step is residual / (dW/dphi). The legacy branch keeps the spurious DEG2RAD factors.
+		// dW/dphi = -(Q1 + Q2) / n in radians, so the Newton latitude step is residual / (dW/dphi).
 		const Q = (Q1 + Q2) / n
 		const dL1 = be.l1 - zeta * be.tanF1
 		const dL2 = be.l2 - zeta * be.tanF2
@@ -765,27 +762,34 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 	// already enforces maxAngularStep, so the meridian scan below is only needed for the limits.
 	if (i === 0) return centerLineSamples ?? sampleCentralLineByTime(pbe, options)
 
-	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
-	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
-	const seeds = [0, Math.sign(pbe.y[0] || 1) * (89.9 * DEG2RAD)] as const
 	const points: GeoPoint[] = findCentralSeededCurvePoints(pbe, i, G, options, centerLineSamples)
-	const previousBySeed: (GeoPoint | undefined)[] = [undefined, undefined]
 
-	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
-		const lon = Math.min(longitude, PI)
+	// The umbral limits (G = 1) are traced robustly by the geometric central-line seeding above and,
+	// for non-central eclipses, by the time-seeded fallback in computeSolarEclipseMapGeometry. The
+	// meridian Newton scan below is reserved for the other magnitude curves; running it for the umbra
+	// only sprinkles sparse, partially converged points over a tiny path and pre-empts that fallback.
+	if (G !== 1) {
+		const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
+		const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
+		const seeds = [0, Math.sign(pbe.y[0] || 1) * (89.9 * DEG2RAD)] as const
+		const previousBySeed: (GeoPoint | undefined)[] = [undefined, undefined]
 
-		for (let seedIndex = 0; seedIndex < seeds.length; seedIndex++) {
-			const previousSeed = previousBySeed[seedIndex]
-			const seed = previousSeed ? previousSeed.latitude : seeds[seedIndex]
-			const point = findEclipseCurvePoint(pbe, lon, seed, i, G)
-			const previous = previousBySeed[seedIndex]
+		for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
+			const lon = Math.min(longitude, PI)
 
-			if (previous && !point) pushDistinct(points, refineCurveBoundary(pbe, previous.longitude, lon, previous.latitude, true, i, G))
-			else if (!previous && point && lon > -PI) pushDistinct(points, refineCurveBoundary(pbe, lon - longitudeStep, lon, point.latitude, false, i, G))
+			for (let seedIndex = 0; seedIndex < seeds.length; seedIndex++) {
+				const previousSeed = previousBySeed[seedIndex]
+				const seed = previousSeed ? previousSeed.latitude : seeds[seedIndex]
+				const point = findEclipseCurvePoint(pbe, lon, seed, i, G)
+				const previous = previousBySeed[seedIndex]
 
-			if (previous && point) appendRefinedSegment(points, pbe, previous, point, i, G, maxAngularStep)
-			pushDistinct(points, point)
-			previousBySeed[seedIndex] = point
+				if (previous && !point) pushDistinct(points, refineCurveBoundary(pbe, previous.longitude, lon, previous.latitude, true, i, G))
+				else if (!previous && point && lon > -PI) pushDistinct(points, refineCurveBoundary(pbe, lon - longitudeStep, lon, point.latitude, false, i, G))
+
+				if (previous && point) appendRefinedSegment(points, pbe, previous, point, i, G, maxAngularStep)
+				pushDistinct(points, point)
+				previousBySeed[seedIndex] = point
+			}
 		}
 	}
 
@@ -1038,11 +1042,18 @@ function orderCurvePoints(points: GeoPoint[]): readonly GeoPoint[] {
 
 	if (points.every((point) => point.jd !== undefined)) {
 		points.sort((a, b) => a.jd! - b.jd!)
-	} else {
-		points.sort((a, b) => a.longitude - b.longitude || a.latitude - b.latitude)
+
+		// Each instant maps to a single location on these time-parametrized curves, so points sharing a
+		// Julian Day are the same place reached twice (e.g. by the geometric central-line seeding and
+		// the meridian scan, which can land microscopically apart). Keep one per instant so the curve
+		// stays strictly increasing in time with no zero-length steps.
+		const ordered: GeoPoint[] = []
+		for (const point of points) if (ordered.length === 0 || point.jd! - ordered.at(-1)!.jd! > CURVE_TIME_EPSILON_DAYS) ordered.push(point)
+		return ordered
 	}
 
-	return points
+	points.sort((a, b) => a.longitude - b.longitude || a.latitude - b.latitude)
+	return deduplicatePoints(points)
 }
 
 // Greedy nearest-neighbor walk over the remaining points, starting at startIndex.
