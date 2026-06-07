@@ -202,7 +202,7 @@ export interface ProjectedGeoPoint extends Point {
 	jd?: number
 }
 
-function finitePoint(point: GeoPoint | null | undefined): point is GeoPoint {
+function finitePoint(point: GeoPoint | undefined): point is GeoPoint {
 	return !!point && Number.isFinite(point.longitude) && Number.isFinite(point.latitude) && point.latitude >= -PIOVERTWO && point.latitude <= PIOVERTWO && point.longitude >= -PI && point.longitude <= PI
 }
 
@@ -210,7 +210,7 @@ function samePoint(a: GeoPoint, b: GeoPoint) {
 	return Math.abs(a.longitude - b.longitude) < 1e-9 && Math.abs(a.latitude - b.latitude) < 1e-9 && Math.abs((a.jd ?? 0) - (b.jd ?? 0)) < 1e-10
 }
 
-function pushDistinct(points: GeoPoint[], point: GeoPoint | null | undefined) {
+function pushDistinct(points: GeoPoint[], point: GeoPoint | undefined) {
 	if (!finitePoint(point)) return
 	if (points.length === 0 || !samePoint(points.at(-1)!, point)) points.push(point)
 }
@@ -401,14 +401,14 @@ function besselianShadowProjection(sample: SunMoonPosition) {
 
 	const sun = eraS2p(sample.sunRightAscension, sample.sunDeclination, sample.sunDistance)
 	const moon = eraS2p(sample.moonRightAscension, sample.moonDeclination, sample.moonDistance)
-	const sunMinusMoon = vecMinus(sun, moon)
-	const sunMoonDistance = vecLength(sunMinusMoon)
+	const moonMinusSun = vecMinus(moon, sun)
+	const sunMoonDistance = vecLength(moonMinusSun)
 
 	if (!(sunMoonDistance > 0) || !Number.isFinite(sunMoonDistance)) {
 		return { x: 0, y: 0, rightAscension: sample.sunRightAscension, declination: sample.sunDeclination, sunMoonDistance: 0 }
 	}
 
-	const axis = vecNormalize(sunMinusMoon)
+	const axis = vecNormalize(moonMinusSun)
 	const rightAscension = normalizeAngle(Math.atan2(axis[1], axis[0]))
 	const declination = Math.asin(clamp(axis[2], -1, 1))
 	const sinA = Math.sin(rightAscension)
@@ -430,8 +430,8 @@ function besselianShadowProjection(sample: SunMoonPosition) {
 }
 
 // Projects one fundamental-plane point to geographic longitude and latitude.
-export function projectFundamentalPoint(be: InstantBesselianElements, x: number, y: number): GeoPoint | null {
-	if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+export function projectFundamentalPoint(be: InstantBesselianElements, x: number, y: number) {
+	if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined
 
 	const sinD = Math.sin(be.d)
 	const cosD = Math.cos(be.d)
@@ -455,7 +455,7 @@ export function projectFundamentalPoint(be: InstantBesselianElements, x: number,
 	const lat = Math.atan(INV_F_CONST_APPROX * Math.tan(phi1))
 	const lon = H - be.mu + DELTA_T_LONGITUDE_FACTOR * be.deltaT
 
-	if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null
+	if (!Number.isFinite(lon) || !Number.isFinite(lat)) return undefined
 
 	return { longitude: normalizePI(lon), latitude: lat, jd: toJulianDay(be.time) }
 }
@@ -510,7 +510,7 @@ export function findMaximumPoint(pbe: PolynomialBesselianElements): GeoPoint | u
 }
 
 // Finds one extreme endpoint of the central line.
-export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, begin: boolean, options?: EclipseContactOptions): GeoPoint | null {
+export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, begin: boolean, options?: EclipseContactOptions) {
 	const maximumJulianDay = toJulianDay(pbe.maximumTime)
 	const searchSpanDays = contactSearchSpanDays(options)
 	const from = begin ? maximumJulianDay - searchSpanDays : maximumJulianDay
@@ -523,7 +523,7 @@ export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, 
 
 	const jd = bisectRoot(fn, from, to)
 
-	if (jd === undefined) return null
+	if (jd === undefined) return undefined
 
 	const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
 	return projectFundamentalPoint(be, be.x, be.y)
@@ -536,7 +536,7 @@ export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, 
 // i = +1, G = 0 -> northern limit of partial eclipse
 // i = -1, G = 0 -> southern limit of partial eclipse
 // i = ±1, 0<G<1 -> equal-magnitude curve
-export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number): GeoPoint | null {
+export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number) {
 	let t = 0
 	let phi = initialLatitude
 	const julianDay0 = toJulianDay(pbe.time0)
@@ -561,7 +561,7 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 		const sinh = sinD * sinPhi + cosD * cosPhi * cosH
 		const h = Math.asin(clamp(sinh, -1, 1))
 
-		if (!Number.isFinite(h) || h < 0) return null
+		if (!Number.isFinite(h) || h < 0) return undefined
 
 		const hD = h * RAD2DEG
 
@@ -580,7 +580,7 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 		const b = be.dy - etaPrime
 		const nSquared = a * a + b * b
 
-		if (!(nSquared > 0) || !Number.isFinite(nSquared)) return null
+		if (!(nSquared > 0) || !Number.isFinite(nSquared)) return undefined
 
 		const n = Math.sqrt(nSquared)
 		const tau = -(u * a + v * b) / nSquared
@@ -593,18 +593,18 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 		const E = dL1 - G * (dL1 + dL2)
 		const deltaPhi = Q === 0 ? Number.NaN : deg((W + i * Math.abs(E)) / Q)
 
-		if (!Number.isFinite(tau) || !Number.isFinite(deltaPhi)) return null
+		if (!Number.isFinite(tau) || !Number.isFinite(deltaPhi)) return undefined
 
 		t += tau
 		phi += deltaPhi
 
-		if (!Number.isFinite(t) || !Number.isFinite(phi) || Math.abs(phi) > PIOVERTWO) return null
+		if (!Number.isFinite(t) || !Number.isFinite(phi) || Math.abs(phi) > PIOVERTWO) return undefined
 		if (Math.abs(tau) < SOLVER_TOLERANCE && Math.abs(deltaPhi) < SOLVER_TOLERANCE * DEG2RAD) {
 			return { longitude: normalizePI(longitude), latitude: phi, jd }
 		}
 	}
 
-	return null
+	return undefined
 }
 
 // Finds a drawable eclipse curve for the selected limit family.
@@ -613,7 +613,7 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const seeds = [0, Math.sign(pbe.y[0] || 1) * (89.9 * DEG2RAD)] as const
 	const points: GeoPoint[] = i === 0 ? sampleCentralLineByTime(pbe, options) : findCentralSeededCurvePoints(pbe, i, G, options)
-	const previousBySeed: (GeoPoint | null)[] = [null, null]
+	const previousBySeed: (GeoPoint | undefined)[] = [undefined, undefined]
 
 	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
 		const lon = Math.min(longitude, PI)
@@ -639,7 +639,7 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, seed: Angle, validLow: boolean, i: -1 | 0 | 1, G: number) {
 	let low = aLon
 	let high = bLon
-	let best: GeoPoint | null = null
+	let best: GeoPoint | undefined = undefined
 
 	for (let step = 0; step < BOUNDARY_REFINEMENT_STEPS; step++) {
 		const mid = (low + high) * 0.5
@@ -725,9 +725,9 @@ function findTimeSeededShadowLimitPoints(pbe: PolynomialBesselianElements, conta
 
 function projectShadowLimitPoint(be: InstantBesselianElements, i: -1 | 1) {
 	const radius = Math.abs(be.l2)
-	if (!(radius > 0) || !Number.isFinite(radius)) return null
+	if (!(radius > 0) || !Number.isFinite(radius)) return undefined
 
-	let best: GeoPoint | null = null
+	let best: GeoPoint | undefined = undefined
 
 	for (let index = 0; index < 32; index++) {
 		const angle = (TAU * index) / 32

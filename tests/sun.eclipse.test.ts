@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { deg } from '../src/angle'
+import { deg, normalizePI } from '../src/angle'
 import type { SolarEclipse, SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
 import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCurvePoints, findExtremeLimitOfCentralLine, findPenumbraContactPoints, intermediateGreatCircle, projectFundamentalPoint, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SunMoonPosition } from '../src/sun.eclipse'
@@ -233,12 +233,26 @@ test('computePolynomialBesselianElements projects the shadow axis onto the funda
 	const tangentPlaneX = sample.moonDistance * Math.cos(sample.sunDeclination) * (sample.moonRightAscension - sample.sunRightAscension)
 	const tangentPlaneY = sample.moonDistance * (sample.moonDeclination - sample.sunDeclination)
 
-	expect(be.x).toBeCloseTo(0.903877748055732, 12)
+	expect(be.x).toBeCloseTo(-0.903877748055732, 12)
 	expect(be.y).toBeCloseTo(-0.5105868561921576, 12)
-	expect(be.d).toBeCloseTo(1.1344862148808663, 12)
-	expect(be.mu).toBeCloseTo(1.1779334094310219, 12)
+	expect(be.d).toBeCloseTo(-1.1344862148808663, 12)
+	expect(be.mu).toBeCloseTo(4.319526063020815, 12)
 	expect(Math.abs(be.x - tangentPlaneX)).toBeGreaterThan(0.01)
 	expect(Math.abs(be.y - tangentPlaneY)).toBeGreaterThan(0.01)
+})
+
+test('computePolynomialBesselianElements points the shadow axis toward the night side', () => {
+	const generated = computePolynomialBesselianElements(TIME0, (): SunMoonPosition => ({ sunRightAscension: 0, sunDeclination: 0, sunDistance: 23000, moonRightAscension: 0, moonDeclination: 0, moonDistance: 60, deltaT: 70 }))
+	const be = evaluateBesselian(generated, TIME0)
+	const point = projectFundamentalPoint(be, be.x, be.y)
+	const subsolarLongitude = -1.870867645344
+
+	expect(be.x).toBeCloseTo(0, 12)
+	expect(be.y).toBeCloseTo(0, 12)
+	expect(be.d).toBeCloseTo(0, 12)
+	expect(be.mu).toBeCloseTo(5.017564774385438, 12)
+	expectGeoPointClose(point, 1.270725008246, 0, 2460409.25)
+	expect(Math.abs(Math.abs(normalizePI(point!.longitude - subsolarLongitude)) - PI)).toBeLessThan(1e-10)
 })
 
 test('NASA Besselian fixtures preserve polynomial values and units', () => {
