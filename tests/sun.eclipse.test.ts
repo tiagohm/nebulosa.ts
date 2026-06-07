@@ -174,6 +174,32 @@ function expectMaxAngularStep(points: readonly GeoPoint[], maxStep: number) {
 	for (let i = 1; i < points.length; i++) expect(sphericalSeparation(points[i - 1].longitude, points[i - 1].latitude, points[i].longitude, points[i].latitude)).toBeLessThanOrEqual(maxStep)
 }
 
+// Earth flattening squared eccentricity, matching the constant used by the geometry engine.
+const EARTH_FLATTENING_E2 = 0.006694385
+
+// Residual of the shadow-axis tangency condition x^2 + (omega*y)^2 = 1 that defines the central
+// line endpoints on the flattened Earth limb. Near zero means the axis grazes the ellipsoid.
+function axisLimbResidual(elements: PolynomialBesselianElements, jd: number) {
+	const be = evaluateBesselian(elements, time(jd, 0, Timescale.TT))
+	const cosD = Math.cos(be.d)
+	const omega = 1 / Math.sqrt(1 - EARTH_FLATTENING_E2 * cosD * cosD)
+	return be.x * be.x + (omega * be.y) ** 2 - 1
+}
+
+// Great-circle interpolation of a time-parametrized curve at an arbitrary Julian Day.
+function interpolateAtJulianDay(line: readonly GeoPoint[], jd: number) {
+	for (let i = 1; i < line.length; i++) {
+		if (line[i - 1].jd! <= jd && jd <= line[i].jd!) {
+			const fraction = (jd - line[i - 1].jd!) / (line[i].jd! - line[i - 1].jd!)
+			return intermediateGreatCircle(line[i - 1], line[i], fraction)
+		}
+	}
+
+	return undefined
+}
+
+const CENTRAL_FIXTURES = NASA_ECLIPSES.filter((fixture) => fixture.central)
+
 test('geographic angular helpers handle antimeridian and great-circle interpolation', () => {
 	const a: GeoPoint = { longitude: deg(179.5), latitude: 0 }
 	const b: GeoPoint = { longitude: deg(-179.5), latitude: 0 }
@@ -485,6 +511,7 @@ test('findCurvePoints returns bounded finite points for a synthetic partial limi
 	const points = findCurvePoints(pbe({ x: [0, 0.25], y: [0.05], mu: [0, deg(8)] }), 1, 0, { longitudeStep: deg(30), maxAngularStep: deg(20) })
 
 	for (const point of points) expectGeoPoint(point)
+	if (points.length > 0) expectIncreasingJd(points)
 
 	for (let i = 1; i < points.length; i++) {
 		expect(Math.abs(points[i].longitude - points[i - 1].longitude)).toBeLessThanOrEqual(TAU)
@@ -529,14 +556,22 @@ test('partial eclipse geometry omits central and umbral path data', () => {
 	expect(geometry.polygons.totalityPath).toHaveLength(0)
 })
 
-test('central total eclipse geometry exposes central and umbral containers when enabled', () => {
-	const geometry = computeSolarEclipseMapGeometry(eclipse('total'), pbe({ x: [0, 0.25], y: [0.05], mu: [0, deg(8)] }), { longitudeStep: deg(60), maxAngularStep: deg(30), includeRiseSetCurves: true, includePolygons: true, riseSetStep: 1800 })
+test('central total eclipse geometry exposes a populated central and umbral path when enabled', () => {
+	// The synthetic central line spans ~+-12h, so widen the contact search window past the 6h default.
+	const geometry = computeSolarEclipseMapGeometry(eclipse('total'), pbe({ x: [0, 0.25], y: [0.05], mu: [0, deg(8)] }), { longitudeStep: deg(60), maxAngularStep: deg(30), contactSearchSpan: 18 * 3600, includeRiseSetCurves: true, includePolygons: true, riseSetStep: 1800 })
 
 	expect(geometry.points.Max).toBeDefined()
-	expect(Array.isArray(geometry.lines.centerLine)).toBe(true)
-	expect(Array.isArray(geometry.lines.umbraNorth)).toBe(true)
-	expect(Array.isArray(geometry.lines.umbraSouth)).toBe(true)
-	expect(Array.isArray(geometry.polygons.totalityPath)).toBe(true)
+	expectGeoPoint(geometry.points.Max!)
+
+	expect(geometry.lines.centerLine.length).toBeGreaterThan(1)
+	expectIncreasingJd(geometry.lines.centerLine)
+	expectMaxAngularStep(geometry.lines.centerLine, deg(30))
+	for (const point of geometry.lines.centerLine) expectGeoPoint(point)
+
+	expect(geometry.lines.umbraNorth.length).toBeGreaterThan(0)
+	expect(geometry.lines.umbraSouth.length).toBeGreaterThan(0)
+	for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth]) for (const point of segment) expectGeoPoint(point)
+
 	for (const point of geometry.lines.penumbraNorth) expectGeoPoint(point)
 	for (const point of geometry.lines.penumbraSouth) expectGeoPoint(point)
 })
@@ -584,4 +619,139 @@ test('splitAtMaxAbsLatitude keeps non-folding limits whole instead of emitting d
 
 	expect(split).toHaveLength(1)
 	expect(split[0]).toHaveLength(3)
+})
+
+test('map geometry exposes the NASA greatest-eclipse point for every eclipse class', () => {
+	for (const fixture of NASA_ECLIPSES) {
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(90), maxAngularStep: deg(45), includePolygons: false })
+
+		expect(geometry.points.Max).toBeDefined()
+		expect(formatAZ(geometry.points.Max!.longitude, true)).toBe(fixture.greatestEclipse[0])
+		expect(formatAZ(geometry.points.Max!.latitude, true)).toBe(fixture.greatestEclipse[1])
+		expect(geometry.points.Max!.jd).toBe(fixture.greatestEclipse[2])
+	}
+})
+
+test('central-line endpoints graze the flattened Earth limb and bound the central time span', () => {
+	for (const fixture of CENTRAL_FIXTURES) {
+		const elements = nasaPbe(fixture)
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { longitudeStep: deg(30), maxAngularStep: deg(12), includePolygons: false })
+		const { U1, U2 } = geometry.points
+
+		expect(U1).toBeDefined()
+		expect(U2).toBeDefined()
+		// The shadow axis is tangent to the ellipsoid (x^2 + (omega*y)^2 = 1) at both endpoints.
+		expect(Math.abs(axisLimbResidual(elements, U1!.jd!))).toBeLessThan(1e-6)
+		expect(Math.abs(axisLimbResidual(elements, U2!.jd!))).toBeLessThan(1e-6)
+		// U1 precedes U2 and both bracket the greatest eclipse instant.
+		expect(U1!.jd!).toBeLessThan(geometry.points.Max!.jd!)
+		expect(geometry.points.Max!.jd!).toBeLessThan(U2!.jd!)
+		// Endpoints anchor the drawn central line.
+		expectGeoPointClose(geometry.lines.centerLine[0], U1!.longitude, U1!.latitude, U1!.jd)
+		expectGeoPointClose(geometry.lines.centerLine.at(-1), U2!.longitude, U2!.latitude, U2!.jd)
+	}
+})
+
+test('greatest eclipse lies on the central line for central eclipses', () => {
+	for (const fixture of CENTRAL_FIXTURES) {
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(30), maxAngularStep: deg(12), includePolygons: false })
+		const centerLine = geometry.lines.centerLine
+		const max = geometry.points.Max!
+
+		expect(centerLine.length).toBeGreaterThan(1)
+		expect(max.jd!).toBeGreaterThanOrEqual(centerLine[0].jd!)
+		expect(max.jd!).toBeLessThanOrEqual(centerLine.at(-1)!.jd!)
+
+		const onCentralLine = interpolateAtJulianDay(centerLine, max.jd!)
+		expect(onCentralLine).toBeDefined()
+		expect(sphericalSeparation(onCentralLine!.longitude, onCentralLine!.latitude, max.longitude, max.latitude)).toBeLessThan(deg(0.1))
+	}
+})
+
+test('central eclipse map curves are time-ordered and respect the angular step', () => {
+	const fixture = NASA_ECLIPSES[0]
+	const maxStep = deg(12)
+	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(30), maxAngularStep: maxStep, includeRiseSetCurves: true, includePolygons: true, riseSetStep: 1800 })
+	const { lines, polygons } = geometry
+
+	expectIncreasingJd(lines.centerLine)
+	expectMaxAngularStep(lines.centerLine, maxStep)
+
+	for (const segment of [...lines.umbraNorth, ...lines.umbraSouth]) {
+		expect(segment.length).toBeGreaterThan(1)
+		expectIncreasingJd(segment)
+		expectMaxAngularStep(segment, maxStep)
+		for (const point of segment) expectGeoPoint(point)
+	}
+
+	for (const ring of polygons.totalityPath) {
+		expect(ring.length).toBeGreaterThan(2)
+		for (const point of ring) expectGeoPoint(point)
+	}
+
+	// Sunrise/sunset curves progress in time even though they may jump spatially at the terminator.
+	for (const curve of lines.riseSetCurves) {
+		expect(curve.length).toBeGreaterThan(1)
+		expectIncreasingJd(curve)
+		for (const point of curve) expectGeoPoint(point)
+	}
+})
+
+test('hybrid eclipse produces a central path anchored at the NASA greatest eclipse', () => {
+	const fixture = NASA_ECLIPSES[3]
+	expect(fixture.type).toBe('hybrid')
+
+	const elements = nasaPbe(fixture)
+	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { longitudeStep: deg(30), maxAngularStep: deg(12), includePolygons: true })
+	const { points, lines, polygons } = geometry
+
+	expect(formatAZ(points.Max!.longitude, true)).toBe(fixture.greatestEclipse[0])
+	expect(formatAZ(points.Max!.latitude, true)).toBe(fixture.greatestEclipse[1])
+	expect(points.U1).toBeDefined()
+	expect(points.U2).toBeDefined()
+	expect(Math.abs(axisLimbResidual(elements, points.U1!.jd!))).toBeLessThan(1e-6)
+	expect(Math.abs(axisLimbResidual(elements, points.U2!.jd!))).toBeLessThan(1e-6)
+	expectIncreasingJd([points.U1!, points.Max!, points.U2!])
+
+	expect(lines.centerLine.length).toBeGreaterThan(1)
+	expectIncreasingJd(lines.centerLine)
+	expectMaxAngularStep(lines.centerLine, deg(12))
+	expect(lines.umbraNorth.length).toBeGreaterThan(0)
+	expect(lines.umbraSouth.length).toBeGreaterThan(0)
+	expect(polygons.totalityPath.length).toBeGreaterThan(0)
+	for (const segment of [...lines.umbraNorth, ...lines.umbraSouth]) {
+		expectIncreasingJd(segment)
+		for (const point of segment) expectGeoPoint(point)
+	}
+})
+
+test('computeSolarEclipseMapGeometry is deterministic for identical inputs', () => {
+	const fixture = NASA_ECLIPSES[0]
+	const options = { longitudeStep: deg(30), maxAngularStep: deg(12), includeRiseSetCurves: true, includePolygons: true, riseSetStep: 1800 }
+	const first = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), options)
+	const second = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), options)
+
+	expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+})
+
+test('antimeridian splitting keeps segments within a hemisphere and continuous across the seam', () => {
+	const line: GeoPoint[] = [
+		{ longitude: deg(150), latitude: deg(5) },
+		{ longitude: deg(178), latitude: deg(8) },
+		{ longitude: deg(-176), latitude: deg(11) },
+		{ longitude: deg(-150), latitude: deg(14) },
+	]
+
+	const segments = splitPolylineAtAntimeridian(line)
+	expect(segments).toHaveLength(2)
+
+	for (const segment of segments) for (let i = 1; i < segment.length; i++) expect(Math.abs(segment[i].longitude - segment[i - 1].longitude)).toBeLessThanOrEqual(PI)
+
+	const seamEnd = segments[0].at(-1)!
+	const seamStart = segments[1][0]
+	expect(Math.abs(seamEnd.longitude)).toBeCloseTo(PI, 10)
+	expect(Math.abs(seamStart.longitude)).toBeCloseTo(PI, 10)
+	expect(seamEnd.longitude).toBe(-seamStart.longitude)
+	// Latitude is continuous across the inserted seam point.
+	expect(seamEnd.latitude).toBeCloseTo(seamStart.latitude, 10)
 })
