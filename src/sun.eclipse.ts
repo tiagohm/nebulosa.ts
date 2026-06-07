@@ -724,23 +724,59 @@ function findTimeSeededShadowLimitPoints(pbe: PolynomialBesselianElements, conta
 }
 
 function projectShadowLimitPoint(be: InstantBesselianElements, i: -1 | 1) {
-	const radius = Math.abs(be.l2)
+	const radius = shadowLimitRadius(be, undefined)
 	if (!(radius > 0) || !Number.isFinite(radius)) return undefined
 
 	let best: GeoPoint | undefined = undefined
 
 	for (let index = 0; index < 32; index++) {
 		const angle = (TAU * index) / 32
-		const x = be.x + radius * Math.cos(angle)
-		const y = be.y + radius * Math.sin(angle)
-		if (x * x + y * y > 1 + 1e-12) continue
+		const cosAngle = Math.cos(angle)
+		const sinAngle = Math.sin(angle)
+		let currentRadius = radius
+		let point: GeoPoint | undefined = undefined
 
-		const point = projectFundamentalPoint(be, x, y)
+		for (let iteration = 0; iteration < 8; iteration++) {
+			const x = be.x + currentRadius * cosAngle
+			const y = be.y + currentRadius * sinAngle
+			if (x * x + y * y > 1 + 1e-12) {
+				point = undefined
+				break
+			}
+
+			point = projectFundamentalPoint(be, x, y) ?? undefined
+			if (!finitePoint(point)) break
+
+			const nextRadius = shadowLimitRadius(be, point)
+			if (!Number.isFinite(nextRadius) || nextRadius <= 0) {
+				point = undefined
+				break
+			}
+			if (Math.abs(nextRadius - currentRadius) < 1e-9) break
+			currentRadius = nextRadius
+		}
+
 		if (!finitePoint(point)) continue
 		if (!best || (i > 0 ? point.latitude > best.latitude : point.latitude < best.latitude)) best = point
 	}
 
 	return best
+}
+
+function shadowLimitRadius(be: InstantBesselianElements, point: GeoPoint | undefined) {
+	return Math.abs(be.l2 - (point ? surfaceZeta(be, point) : 0) * be.tanF2)
+}
+
+function surfaceZeta(be: InstantBesselianElements, point: GeoPoint) {
+	const H = point.longitude + be.mu - DELTA_T_LONGITUDE_FACTOR * be.deltaT
+	const U = Math.atan(F_CONST * Math.tan(point.latitude))
+	const rhoSinPhi = F_CONST * Math.sin(U)
+	const rhoCosPhi = Math.cos(U)
+	const sinD = Math.sin(be.d)
+	const cosD = Math.cos(be.d)
+	const cosH = Math.cos(H)
+
+	return rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
 }
 
 function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, seed: Angle, i: -1 | 0 | 1, G: number, maxAngularStep: Angle) {
