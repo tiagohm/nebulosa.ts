@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { deg, formatAZ } from '../src/angle'
 import type { SolarEclipse, SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCurvePoints, findExtremeLimitOfCentralLine, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, projectFundamentalPoint, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SunMoonPosition } from '../src/sun.eclipse'
+import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCurvePoints, findEclipseCurvePoint, findExtremeLimitOfCentralLine, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, projectFundamentalPoint, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SunMoonPosition } from '../src/sun.eclipse'
 import { time, Timescale, timeSubtract, toJulianDay } from '../src/time'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
@@ -199,6 +199,13 @@ function interpolateAtJulianDay(line: readonly GeoPoint[], jd: number) {
 }
 
 const CENTRAL_FIXTURES = NASA_ECLIPSES.filter((fixture) => fixture.central)
+
+// Asserts a geographic point is within toleranceArcmin arcminutes of a NASA reference coordinate.
+function expectNearNasa(point: GeoPoint | undefined, latitudeDeg: number, longitudeDeg: number, toleranceArcmin: number) {
+	expect(point).toBeDefined()
+	expectGeoPoint(point!)
+	expect(sphericalSeparation(point!.longitude, point!.latitude, deg(longitudeDeg), deg(latitudeDeg))).toBeLessThan(deg(toleranceArcmin / 60))
+}
 
 test('geographic angular helpers handle antimeridian and great-circle interpolation', () => {
 	const a: GeoPoint = { longitude: deg(179.5), latitude: 0 }
@@ -794,4 +801,58 @@ test('antimeridian splitting keeps segments within a hemisphere and continuous a
 	expect(seamEnd.longitude).toBe(-seamStart.longitude)
 	// Latitude is continuous across the inserted seam point.
 	expect(seamEnd.latitude).toBeCloseTo(seamStart.latitude, 10)
+})
+
+// NASA/GSFC umbral path table for the 2024 Apr 08 total eclipse (delta T = 70.6 s).
+// https://eclipse.gsfc.nasa.gov/SEpath/SEpath2001/SE2024Apr08Tpath.html
+const APR8_2024_UT_MIDNIGHT = 2460408.5 // 2024 Apr 08 00:00 UT
+const APR8_2024_DELTA_T_DAYS = 70.6 / 86400
+
+// Universal Time rows with central/north/south coordinates in decimal degrees (east/north positive).
+const NASA_2024_PATH = [
+	{ ut: [16, 42], central: [-5.836667, -148.13], north: [-5.51, -149.793333], south: [-6.195, -146.633333] }, // 05 50.2S 148 07.8W
+	{ ut: [17, 0], central: [1.711667, -129.686667], north: [2.196667, -130.545], south: [1.22, -128.841667] }, // 01 42.7N 129 41.2W
+	{ ut: [18, 0], central: [20.32, -108.763333], north: [20.896667, -109.51], south: [19.743333, -108.025] }, // 20 19.2N 108 45.8W
+	{ ut: [19, 0], central: [37.328333, -89.776667], north: [38.063333, -90.311667], south: [36.6, -89.241667] }, // 37 19.7N 089 46.6W
+] as const
+
+function nasaPathCentralLineAtUT(elements: PolynomialBesselianElements, hours: number, minutes: number) {
+	// The Besselian polynomials are argued in Terrestrial Dynamical Time, so TD = UT + delta T.
+	const jdTd = APR8_2024_UT_MIDNIGHT + (hours + minutes / 60) / 24 + APR8_2024_DELTA_T_DAYS
+	const be = evaluateBesselian(elements, time(jdTd, 0, Timescale.TT))
+	return projectFundamentalPoint(be, be.x, be.y)
+}
+
+test('central line tracks the NASA 2024-04-08 umbral path table over time', () => {
+	const elements = nasaPbe(NASA_ECLIPSES[0])
+
+	for (const row of NASA_2024_PATH) {
+		const point = nasaPathCentralLineAtUT(elements, row.ut[0], row.ut[1])
+		expectNearNasa(point, row.central[0], row.central[1], 0.5)
+	}
+})
+
+test('umbral north and south limits match the NASA 2024-04-08 path table', () => {
+	const elements = nasaPbe(NASA_ECLIPSES[0])
+
+	// Rows from 17:00 UT onward sit well inside the path, away from the U1 contact transient.
+	for (const row of NASA_2024_PATH.filter((entry) => entry.ut[0] >= 17)) {
+		const expectedUt = APR8_2024_UT_MIDNIGHT + (row.ut[0] + row.ut[1] / 60) / 24
+		const north = findEclipseCurvePoint(elements, deg(row.north[1]), deg(row.north[0]), 1, 1)
+		const south = findEclipseCurvePoint(elements, deg(row.south[1]), deg(row.south[0]), -1, 1)
+
+		expectNearNasa(north, row.north[0], row.north[1], 0.5)
+		expectNearNasa(south, row.south[0], row.south[1], 0.5)
+		// The solved limit instant (UT = TD - delta T) matches the table time within a minute.
+		expect(Math.abs((north!.jd - APR8_2024_DELTA_T_DAYS - expectedUt) * 86400)).toBeLessThan(60)
+		expect(Math.abs((south!.jd - APR8_2024_DELTA_T_DAYS - expectedUt) * 86400)).toBeLessThan(60)
+	}
+})
+
+test('central-line endpoints match the NASA 2024-04-08 path-table limit rows', () => {
+	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(NASA_ECLIPSES[0]), nasaPbe(NASA_ECLIPSES[0]), { longitudeStep: deg(30), maxAngularStep: deg(12) })
+
+	// Limits (Start): central 07 49.5S 158 31.9W; Limits (End): central 47 37.0N 019 47.2W.
+	expectNearNasa(geometry.points.U1, -7.825, -158.531667, 2)
+	expectNearNasa(geometry.points.U2, 47.616667, -19.786667, 2)
 })
