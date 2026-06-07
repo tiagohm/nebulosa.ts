@@ -656,7 +656,11 @@ export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, 
 // i = -1, G = 0 -> southern limit of partial eclipse
 // i = ±1, 0<G<1 -> equal-magnitude curve
 export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number) {
-	let t = 0
+	return solveEclipseCurvePoint(pbe, longitude, initialLatitude, i, G, 0)
+}
+
+function solveEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number, initialT: number) {
+	let t = initialT
 	let phi = initialLatitude
 	const julianDay0 = toJulianDay(pbe.time0)
 	const longitudeCorrection = deltaTLongitudeCorrection(pbe)
@@ -824,19 +828,39 @@ function sampleCentralLineByTime(pbe: PolynomialBesselianElements, options: Ecli
 function findCentralSeededCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: EclipseCurveOptions, centerLineSamples?: readonly GeoPoint[]) {
 	if (i === 0 || G !== 1) return []
 
-	// Narrow central paths can fall between coarse longitude samples, so seed umbral
-	// limits from the time-parametrized central path before the meridian scan.
+	// Narrow central paths can fall between coarse longitude samples. Use cross-track
+	// shadow-footprint edges only as convergence seeds, then keep the solved limit points.
 	const centerLine = centerLineSamples ?? sampleCentralLineByTime(pbe, options)
 	const points: GeoPoint[] = []
+	const julianDay0 = toJulianDay(pbe.time0)
 
-	for (const center of centerLine) {
+	for (let index = 0; index < centerLine.length; index++) {
+		const center = centerLine[index]
 		if (center.jd === undefined) continue
+
 		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, center.jd))
-		const point = projectShadowLimitPoint(be, i)
-		pushDistinct(points, point)
+		const seed = projectShadowLimitPoint(be, i, centralLineDirection(centerLine, index), center)
+		if (!seed) continue
+
+		const t = (center.jd - julianDay0) / pbe.stepDays
+		pushDistinct(points, solveEclipseCurvePoint(pbe, seed.longitude, seed.latitude, i, G, t))
 	}
 
 	return points
+}
+
+function centralLineDirection(points: readonly GeoPoint[], index: number) {
+	const center = points[index]
+	const a = points[Math.max(0, index - 1)]
+	const b = points[Math.min(points.length - 1, index + 1)]
+	if (a === b) return undefined
+
+	const east = normalizePI(b.longitude - a.longitude) * Math.cos(center.latitude)
+	const north = b.latitude - a.latitude
+	const length = Math.hypot(east, north)
+	if (!(length > 0) || !Number.isFinite(length)) return undefined
+
+	return [east / length, north / length] as const
 }
 
 function findTimeSeededShadowLimitPoints(pbe: PolynomialBesselianElements, contacts: Pick<EclipseContactPoints, 'P1' | 'P4'>, i: -1 | 1, options: EclipseCurveOptions) {
@@ -859,11 +883,13 @@ function findTimeSeededShadowLimitPoints(pbe: PolynomialBesselianElements, conta
 	return orderCurvePoints(deduplicatePoints(points))
 }
 
-function projectShadowLimitPoint(be: BesselianSample, i: -1 | 1) {
+function projectShadowLimitPoint(be: BesselianSample, i: -1 | 1, direction?: readonly [number, number], center?: GeoPoint) {
 	const radius = shadowLimitRadius(be, undefined)
 	if (!(radius > 0) || !Number.isFinite(radius)) return undefined
 
 	let best: GeoPoint | undefined = undefined
+	let bestScore = i > 0 ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY
+	const directionalCenter = direction ? (center ?? projectFundamentalPoint(be, be.x, be.y)) : undefined
 
 	for (let index = 0; index < 32; index++) {
 		const angle = (TAU * index) / 32
@@ -893,7 +919,19 @@ function projectShadowLimitPoint(be: BesselianSample, i: -1 | 1) {
 		}
 
 		if (!finitePoint(point)) continue
-		if (!best || (i > 0 ? point.latitude > best.latitude : point.latitude < best.latitude)) best = point
+
+		if (direction && directionalCenter) {
+			const east = normalizePI(point.longitude - directionalCenter.longitude) * Math.cos(directionalCenter.latitude)
+			const north = point.latitude - directionalCenter.latitude
+			const score = -east * direction[1] + north * direction[0]
+
+			if (i > 0 ? score > bestScore : score < bestScore) {
+				best = point
+				bestScore = score
+			}
+		} else if (!best || (i > 0 ? point.latitude > best.latitude : point.latitude < best.latitude)) {
+			best = point
+		}
 	}
 
 	return best
