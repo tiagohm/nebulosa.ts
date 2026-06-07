@@ -834,17 +834,30 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 	const adaptive = options.adaptive ?? true
 	const north: GeoPoint[] = []
 	const south: GeoPoint[] = []
+	let lastJulianDay = P1.jd
 
 	for (let jd = P1.jd; jd <= P4.jd + stepDays * 0.5; jd += stepDays) {
-		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, Math.min(jd, P4.jd)))
-		const intersections = intersectUnitCircleWithCircle(be.x, be.y, Math.abs(be.l1))
-		const projected = intersections.map(([x, y]) => projectFundamentalPoint(be, x, y)).filter(finitePoint)
+		lastJulianDay = Math.min(jd, P4.jd)
+		appendRiseSetIntersections(pbe, lastJulianDay, north, south, adaptive)
+	}
 
+	if (lastJulianDay < P4.jd) appendRiseSetIntersections(pbe, P4.jd, north, south, adaptive)
+
+	return [north, south].filter((line) => line.length > 0)
+}
+
+function appendRiseSetIntersections(pbe: PolynomialBesselianElements, jd: number, north: GeoPoint[], south: GeoPoint[], adaptive: boolean) {
+	const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
+	const intersections = intersectUnitCircleWithCircle(be.x, be.y, Math.abs(be.l1))
+	const projected = intersections.map(([x, y]) => projectFundamentalPoint(be, x, y)).filter(finitePoint)
+
+	if (projected.length === 1) {
+		appendRiseSetPoint(north, projected[0]!, adaptive)
+		appendRiseSetPoint(south, projected[0]!, adaptive)
+	} else {
 		if (projected[0]) appendRiseSetPoint(north, projected[0], adaptive)
 		if (projected[1]) appendRiseSetPoint(south, projected[1], adaptive)
 	}
-
-	return [north, south].filter((line) => line.length > 0)
 }
 
 function appendRiseSetPoint(line: GeoPoint[], point: GeoPoint, adaptive: boolean) {

@@ -345,6 +345,8 @@ test('computeSolarEclipseMapGeometry anchors synthetic partial contacts and rise
 	expect(polygons.totalityPath).toHaveLength(0)
 	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([85, 85])
 	expectGeoPointClose(lines.riseSetCurves[0][0], -1.565764772421259, 0.00004154541673005197, 2460409.055555556)
+	expectGeoPointClose(lines.riseSetCurves[0].at(-1), 1.5758278811685338, 0.00004154541673005197, 2460409.444444444)
+	expectGeoPointClose(lines.riseSetCurves[1][0], -1.565764772421259, -0.00004154541673005197, 2460409.055555556)
 	expectGeoPointClose(lines.riseSetCurves[1].at(-1), 1.5758278811685338, -0.00004154541673005197, 2460409.444444444)
 	for (const curve of lines.riseSetCurves) for (const point of curve) expectGeoPoint(point)
 })
@@ -548,7 +550,11 @@ test('rise set curves are separate drawable arrays', () => {
 
 	const curves = computeRiseSetCurves(elements, contacts.P1!, contacts.P4!, {}, { step: 3600 })
 
-	expect(curves.length).toBeGreaterThan(0)
+	expect(curves).toHaveLength(2)
+	expectGeoPointClose(curves[0][0], -1.565764772421259, 0.00004154541673005197, 2460409.055555556)
+	expectGeoPointClose(curves[0].at(-1), 1.5758278811685338, 0.00004154541673005197, 2460409.444444444)
+	expectGeoPointClose(curves[1][0], -1.565764772421259, -0.00004154541673005197, 2460409.055555556)
+	expectGeoPointClose(curves[1].at(-1), 1.5758278811685338, -0.00004154541673005197, 2460409.444444444)
 
 	for (const curve of curves) {
 		expect(curve.length).toBeGreaterThan(0)
