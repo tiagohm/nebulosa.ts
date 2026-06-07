@@ -489,13 +489,52 @@ function besselianShadowProjection(sample: SunMoonPosition) {
 	}
 }
 
+// Computes the flattening scale for the Earth-limb ellipse in the fundamental plane.
+function earthLimbOmega(be: Pick<BesselianSample, 'd'>) {
+	const cosD = Math.cos(be.d)
+	return 1 / Math.sqrt(1 - EARTH_E2 * cosD * cosD)
+}
+
+// Finds the closest point on the oblate Earth limb x² + (omega*y)² = 1 and returns
+// its signed Euclidean distance from the supplied fundamental-plane point.
+function closestEarthLimbPoint(be: Pick<BesselianSample, 'd'>, x: number, y: number) {
+	const omega = earthLimbOmega(be)
+	const a = 1
+	const b = 1 / omega
+	let theta = Math.atan2(y / b, x / a)
+
+	if (!Number.isFinite(theta)) theta = PIOVERTWO
+	else if (Math.hypot(x / a, y / b) < 1e-15) theta = PIOVERTWO
+
+	for (let iteration = 0; iteration < 12; iteration++) {
+		const sinTheta = Math.sin(theta)
+		const cosTheta = Math.cos(theta)
+		// Newton solve of d/dθ[(a*cosθ-x)² + (b*sinθ-y)²] = 0.
+		const f = (b * b - a * a) * sinTheta * cosTheta + a * x * sinTheta - b * y * cosTheta
+		const df = (b * b - a * a) * (cosTheta * cosTheta - sinTheta * sinTheta) + a * x * cosTheta + b * y * sinTheta
+
+		if (df === 0) break
+
+		const delta = f / df
+		theta -= delta
+		if (Math.abs(delta) < 1e-14) break
+	}
+
+	const limbX = a * Math.cos(theta)
+	const limbY = b * Math.sin(theta)
+	const distance = Math.hypot(x - limbX, y - limbY)
+	const outside = x * x + y * y * omega * omega >= 1
+
+	return { x: limbX, y: limbY, signedDistance: outside ? distance : -distance }
+}
+
 // Projects one fundamental-plane point to geographic longitude and latitude.
 export function projectFundamentalPoint(be: BesselianSample, x: number, y: number) {
 	if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined
 
 	const sinD = Math.sin(be.d)
 	const cosD = Math.cos(be.d)
-	const omega = 1 / Math.sqrt(1 - EARTH_E2 * cosD * cosD)
+	const omega = earthLimbOmega(be)
 	let px = x
 	let y1 = omega * y
 	const b1 = omega * sinD
@@ -537,14 +576,16 @@ export function findPenumbraContactPoints(pbe: PolynomialBesselianElements, opti
 	const from = maximumJulianDay - searchSpanDays
 	const to = maximumJulianDay + searchSpanDays
 
+	// Penumbral contacts occur when the penumbral shadow circle is tangent to the
+	// flattened Earth limb, not to a unit circle centered at the geocenter.
 	function external(jd: number) {
 		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-		return Math.hypot(be.x, be.y) - 1 - be.l1
+		return closestEarthLimbPoint(be, be.x, be.y).signedDistance - be.l1
 	}
 
 	function internal(jd: number) {
 		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-		return Math.hypot(be.x, be.y) - 1 + be.l1
+		return closestEarthLimbPoint(be, be.x, be.y).signedDistance + be.l1
 	}
 
 	return {
@@ -559,8 +600,8 @@ function projectContactRoot(pbe: PolynomialBesselianElements, jd: number | undef
 	if (jd === undefined) return undefined
 
 	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-	const angle = Math.atan2(be.y, be.x)
-	return projectFundamentalPoint(be, Math.cos(angle), Math.sin(angle))
+	const limb = closestEarthLimbPoint(be, be.x, be.y)
+	return projectFundamentalPoint(be, limb.x, limb.y)
 }
 
 // Finds the greatest eclipse point.
