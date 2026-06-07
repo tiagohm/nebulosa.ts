@@ -25,10 +25,10 @@ const SOLVER_MAX_ITERATIONS = 50
 const SOLVER_TOLERANCE = 1e-4
 const CENTRAL_ECLIPSE_GAMMA_LIMIT = 0.9972
 const SUN_RADIUS_EARTH_RADII = 109.076370706
-// Mean lunar radius (includes valleys) used for penumbral contacts, per NASA/Espenak convention.
-const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272281
-// Lunar radius used for umbral contacts (total/annular path), per NASA/Espenak convention.
-const MOON_RADIUS_UMBRA_EARTH_RADII = 0.2725076
+// Lunar radius k1 used for penumbral contacts, per NASA/Espenak convention.
+const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272488
+// Lunar radius k2 used for umbral contacts (total/annular path), per NASA/Espenak convention.
+const MOON_RADIUS_UMBRA_EARTH_RADII = 0.272281
 const BOUNDARY_REFINEMENT_STEPS = 18
 
 // Polynomial Besselian elements fitted around the eclipse maximum.

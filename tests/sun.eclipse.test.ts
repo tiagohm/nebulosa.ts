@@ -240,15 +240,17 @@ test('computePolynomialBesselianElements fits cubic samples and unwraps mu', () 
 	expect(be.mu).toBeGreaterThanOrEqual(0)
 	expect(be.mu).toBeLessThan(TAU)
 	expect(be.deltaT).toBeCloseTo(70, 12)
-	expect(generated.tanF1).toBeCloseTo(0.004674017951890503, 12)
-	expect(generated.tanF2).toBeCloseTo(0.004650731412398169, 12)
+	expect(be.l1).toBeCloseTo(0.551491575944278, 12)
+	expect(be.l2).toBeCloseTo(0.006745927571222659, 12)
+	expect(generated.tanF1).toBeCloseTo(0.004674026799934817, 12)
+	expect(generated.tanF2).toBeCloseTo(0.004650741098228321, 12)
 })
 
 test('computePolynomialBesselianElements derives cone tangents from physical Sun-Moon distance', () => {
 	const generated = computePolynomialBesselianElements(TIME0, (): SunMoonPosition => ({ sunRightAscension: deg(15), sunDeclination: deg(7), sunDistance: 23484, moonRightAscension: deg(15.2), moonDeclination: deg(7.01), moonDistance: 56.28, deltaT: 69 }))
 
-	expect(generated.tanF1).toBeCloseTo(0.004667490055439874, 12)
-	expect(generated.tanF2).toBeCloseTo(0.004644236038740575, 12)
+	expect(generated.tanF1).toBeCloseTo(0.004667498891126701, 12)
+	expect(generated.tanF2).toBeCloseTo(0.004644245711043161, 12)
 	expect(generated.tanF2).toBeGreaterThan(0)
 })
 
