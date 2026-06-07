@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
-import { deg, normalizePI } from '../src/angle'
+import { deg, formatAZ, normalizePI } from '../src/angle'
 import type { SolarEclipse, SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCurvePoints, findExtremeLimitOfCentralLine, findPenumbraContactPoints, intermediateGreatCircle, projectFundamentalPoint, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SunMoonPosition } from '../src/sun.eclipse'
+import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCurvePoints, findExtremeLimitOfCentralLine, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, projectFundamentalPoint, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SunMoonPosition } from '../src/sun.eclipse'
 import { time, Timescale, timeSubtract, toJulianDay } from '../src/time'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
@@ -22,7 +22,7 @@ const NASA_ECLIPSES = [
 		gamma: 0.3431,
 		magnitude: 1.0566,
 		t0: 2460409.25,
-		greatestEclipse: 2460409.262835,
+		greatestEclipse: ['-104 08 17', '025 17 11', 2460409.262835],
 		deltaT: 70.6,
 		x: [-0.318157, 0.5117105, 0.0000326, -0.0000085],
 		y: [0.219747, 0.2709586, -0.0000594, -0.0000047],
@@ -41,7 +41,7 @@ const NASA_ECLIPSES = [
 		gamma: 0.3754,
 		magnitude: 0.952,
 		t0: 2460232.25,
-		greatestEclipse: 2460232.250462,
+		greatestEclipse: ['-083 06 07', '011 22 10', 2460232.250462],
 		deltaT: 70.5,
 		x: [0.169751, 0.458548, 0.0000273, -0.0000049],
 		y: [0.334837, -0.2413668, 0.000024, 0.000003],
@@ -60,7 +60,7 @@ const NASA_ECLIPSES = [
 		gamma: -1.065,
 		magnitude: 0.8551,
 		t0: 2460940.3333333335,
-		greatestEclipse: 2460940.321573,
+		greatestEclipse: ['153 25 05', '-061 03 54', 2460940.321573], // NASA doesn't provide lat/lon?
 		deltaT: 71.1,
 		x: [-0.390002, 0.4531641, 0.0000024, -0.0000064],
 		y: [-1.001816, -0.2521622, 0.0000456, 0.0000032],
@@ -79,7 +79,7 @@ const NASA_ECLIPSES = [
 		gamma: 0.3077,
 		magnitude: 1.0106,
 		t0: 2463185.375,
-		greatestEclipse: 2463185.38021,
+		greatestEclipse: ['-137 37 48', '-000 38 00', 2463185.38021],
 		deltaT: 77.9,
 		x: [-0.0198, 0.5509453, 0.0000338, -0.0000087],
 		y: [0.314937, -0.0890646, 0.0001047, 0.0000012],
@@ -98,7 +98,7 @@ const NASA_ECLIPSES = [
 		gamma: -1,
 		magnitude: 0.9868,
 		t0: 2456776.75,
-		greatestEclipse: 2456776.753158,
+		greatestEclipse: ['131 06 56', '-070 41 51', 2456776.753158], // NASA doesn't provide lat/lon?
 		deltaT: 67.3,
 		x: [0.185158, 0.5282668, -0.000005, -0.0000072],
 		y: [-0.983525, 0.1221127, -0.0000473, -0.0000016],
@@ -117,7 +117,7 @@ const NASA_ECLIPSES = [
 		gamma: 1.0031,
 		magnitude: 1.0096,
 		t0: 2467349.2916666665,
-		greatestEclipse: 2467349.290147,
+		greatestEclipse: ['151 48 09', '061 27 39', 2467349.290147], // NASA doesn't provide lat/lon?
 		deltaT: 86.4,
 		x: [-0.447687, 0.5135981, 0.0000564, -0.0000084],
 		y: [0.897944, 0.2697277, -0.0000927, -0.0000046],
@@ -132,11 +132,11 @@ const NASA_ECLIPSES = [
 ] as const
 
 function nasaPbe(fixture: (typeof NASA_ECLIPSES)[number]): PolynomialBesselianElements {
-	return { time0: time(fixture.t0, 0, Timescale.TT), maximumTime: time(fixture.greatestEclipse, 0, Timescale.TT), deltaT: fixture.deltaT, stepDays: 1 / 24, x: fixture.x, y: fixture.y, l1: fixture.l1, l2: fixture.l2, d: fixture.d.map(deg), mu: fixture.mu.map(deg), tanF1: fixture.tanF1, tanF2: fixture.tanF2 }
+	return { time0: time(fixture.t0, 0, Timescale.TT), maximumTime: time(fixture.greatestEclipse[2], 0, Timescale.TT), deltaT: fixture.deltaT, stepDays: 1 / 24, x: fixture.x, y: fixture.y, l1: fixture.l1, l2: fixture.l2, d: fixture.d.map(deg), mu: fixture.mu.map(deg), tanF1: fixture.tanF1, tanF2: fixture.tanF2 }
 }
 
 function nasaEclipse(fixture: (typeof NASA_ECLIPSES)[number]): SolarEclipse {
-	return { lunation: 0, maximalTime: time(fixture.greatestEclipse, 0, Timescale.TT), magnitude: fixture.magnitude, gamma: fixture.gamma, u: fixture.l2[0], type: fixture.type }
+	return { lunation: 0, maximalTime: time(fixture.greatestEclipse[2], 0, Timescale.TT), magnitude: fixture.magnitude, gamma: fixture.gamma, u: fixture.l2[0], type: fixture.type }
 }
 
 function evaluateNasaPolynomial(coefficients: readonly number[], t: number) {
@@ -253,6 +253,15 @@ test('computePolynomialBesselianElements points the shadow axis toward the night
 	expect(be.mu).toBeCloseTo(5.017564774385438, 12)
 	expectGeoPointClose(point, 1.270725008246, 0, 2460409.25)
 	expect(Math.abs(Math.abs(normalizePI(point!.longitude - subsolarLongitude)) - PI)).toBeLessThan(1e-10)
+})
+
+test('findMaximumPoint matches NASA Besselian fixture at greatest eclipse instant', () => {
+	for (const fixture of NASA_ECLIPSES) {
+		const point = findMaximumPoint(nasaPbe(fixture))
+		expect(formatAZ(point!.longitude, true)).toBe(fixture.greatestEclipse[0])
+		expect(formatAZ(point!.latitude, true)).toBe(fixture.greatestEclipse[1])
+		expect(point!.jd).toBe(fixture.greatestEclipse[2])
+	}
 })
 
 test('NASA Besselian fixtures preserve polynomial values and units', () => {

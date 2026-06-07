@@ -8,7 +8,7 @@ import { polynomialRegression } from './regression'
 import type { SolarEclipse } from './sun'
 import { timeShift, timeSubtract, toJulianDay, type Time } from './time'
 import type { Writable } from './types'
-import { vecDot, vecLength, vecMinus, vecNormalize } from './vec3'
+import { vecDot, vecLength, vecMinus, vecNormalizeMut } from './vec3'
 
 // That code planned and implemented by Codex, using https://github.com/Astrarium/Astrarium as inspiration.
 
@@ -408,7 +408,7 @@ function besselianShadowProjection(sample: SunMoonPosition) {
 		return { x: 0, y: 0, rightAscension: sample.sunRightAscension, declination: sample.sunDeclination, sunMoonDistance: 0 }
 	}
 
-	const axis = vecNormalize(moonMinusSun)
+	const axis = vecNormalizeMut(moonMinusSun)
 	const rightAscension = normalizeAngle(Math.atan2(axis[1], axis[0]))
 	const declination = Math.asin(clamp(axis[2], -1, 1))
 	const sinA = Math.sin(rightAscension)
