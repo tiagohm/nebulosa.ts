@@ -30,6 +30,10 @@ const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272281
 // Lunar radius used for umbral contacts (total/annular path), per NASA/Espenak convention.
 const MOON_RADIUS_UMBRA_EARTH_RADII = 0.2725076
 const BOUNDARY_REFINEMENT_STEPS = 18
+// Latitude seeds used to acquire the partial-eclipse (penumbra) limit during the meridian scan.
+// Unlike the umbral limits, which hug the central line and are seeded from it, the partial limit can
+// sit at any mid-latitude, so a spread of starting guesses is tried before continuation takes over.
+const PARTIAL_LIMIT_LATITUDE_SEEDS: readonly number[] = [0, 20, -20, 40, -40, 60, -60, 80, -80].map((value) => value * DEG2RAD)
 
 // Polynomial Besselian elements fitted around the eclipse maximum.
 export interface PolynomialBesselianElements {
@@ -642,7 +646,13 @@ export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, 
 // i = +1, G = 0 -> northern limit of partial eclipse
 // i = -1, G = 0 -> southern limit of partial eclipse
 // i = ±1, 0<G<1 -> equal-magnitude curve
-export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number) {
+//
+// correctLatitudeScaling selects the Newton latitude-step scaling. The default (false) keeps the
+// historical, under-scaled step relied upon by the umbral and equal-magnitude meridian scan, which
+// only refines points already seeded extremely close to the curve. The wide partial-eclipse
+// (penumbra, G = 0) limit lies far from any such seed, so it needs the exact per-radian derivative
+// (true) to actually converge from a coarse latitude guess.
+export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number, correctLatitudeScaling = false) {
 	let t = 0
 	let phi = initialLatitude
 	const julianDay0 = toJulianDay(pbe.time0)
@@ -704,11 +714,14 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 		const dRhoSin = (F_CONST * F_CONST * rhoCosPhi) / latDenom
 		const Q1 = b * sinH * dRhoCos
 		const Q2 = a * (cosH * sinD * dRhoCos + cosD * dRhoSin)
-		const Q = (Q1 + Q2) / (n * DEG2RAD)
+		// dW/dphi = -(Q1 + Q2) / n in radians; the corrected branch uses that exact derivative so the
+		// Newton step is residual / (dW/dphi). The legacy branch keeps the spurious DEG2RAD factors.
+		const Q = (Q1 + Q2) / (n * (correctLatitudeScaling ? 1 : DEG2RAD))
 		const dL1 = be.l1 - zeta * be.tanF1
 		const dL2 = be.l2 - zeta * be.tanF2
 		const E = dL1 - G * (dL1 + dL2)
-		const deltaPhi = Q === 0 ? Number.NaN : deg((W + i * Math.abs(E)) / Q)
+		const residual = W + i * Math.abs(E)
+		const deltaPhi = Q === 0 ? Number.NaN : correctLatitudeScaling ? residual / Q : deg(residual / Q)
 
 		if (!Number.isFinite(tau) || !Number.isFinite(deltaPhi)) return undefined
 
@@ -758,14 +771,59 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 	return orderCurvePoints(deduplicatePoints(points))
 }
 
-function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, seed: Angle, validLow: boolean, i: -1 | 0 | 1, G: number) {
+// Solves the partial-eclipse (penumbra, G = 0) limit point at one longitude, preferring continuation
+// from the previously found latitude and otherwise sweeping the mid-latitude acquisition seeds.
+function solvePartialLimitAtLongitude(pbe: PolynomialBesselianElements, longitude: Angle, previous: GeoPoint | undefined, i: -1 | 1) {
+	if (previous) {
+		const continued = findEclipseCurvePoint(pbe, longitude, previous.latitude, i, 0, true)
+		if (continued) return continued
+	}
+
+	for (const seed of PARTIAL_LIMIT_LATITUDE_SEEDS) {
+		const point = findEclipseCurvePoint(pbe, longitude, seed, i, 0, true)
+		if (point) return point
+	}
+
+	return undefined
+}
+
+// Finds the northern (i = +1) or southern (i = -1) limit of the partial eclipse, the curve where the
+// penumbral cone edge is tangent to the surface with the Sun above the horizon (magnitude 0). It uses
+// the correctly-scaled Newton solver and a meridian scan with continuation, mirroring findCurvePoints
+// but with partial-limit seeding. The collected points are chained by proximity so the curve stays
+// continuous across folds at its turning points and across the antimeridian, where neither longitude
+// nor time ordering stays monotonic.
+export function findPartialEclipseLimit(pbe: PolynomialBesselianElements, i: -1 | 1, options: EclipseCurveOptions = {}): readonly GeoPoint[] {
+	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
+	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
+	const points: GeoPoint[] = []
+	let previous: GeoPoint | undefined = undefined
+
+	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
+		const lon = Math.min(longitude, PI)
+		const point = solvePartialLimitAtLongitude(pbe, lon, previous, i)
+
+		// Refine the longitudes where the limit appears or disappears so the arc ends on Earth rather
+		// than at the last coarse sample that happened to converge.
+		if (previous && !point) pushDistinct(points, refineCurveBoundary(pbe, previous.longitude, lon, previous.latitude, true, i, 0, true))
+		else if (!previous && point && lon > -PI) pushDistinct(points, refineCurveBoundary(pbe, lon - longitudeStep, lon, point.latitude, false, i, 0, true))
+
+		if (previous && point) appendRefinedSegment(points, pbe, previous, point, i, 0, maxAngularStep, true)
+		pushDistinct(points, point)
+		previous = point
+	}
+
+	return chainCurvePointsByProximity(deduplicatePoints(points))
+}
+
+function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, seed: Angle, validLow: boolean, i: -1 | 0 | 1, G: number, correctLatitudeScaling = false) {
 	let low = aLon
 	let high = bLon
 	let best: GeoPoint | undefined = undefined
 
 	for (let step = 0; step < BOUNDARY_REFINEMENT_STEPS; step++) {
 		const mid = (low + high) * 0.5
-		const point = findEclipseCurvePoint(pbe, mid, seed, i, G)
+		const point = findEclipseCurvePoint(pbe, mid, seed, i, G, correctLatitudeScaling)
 
 		if (point && validLow) {
 			best = point
@@ -901,7 +959,7 @@ function surfaceZeta(be: BesselianSample, point: GeoPoint) {
 	return rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
 }
 
-function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle) {
+function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, correctLatitudeScaling = false) {
 	const distance = angularDistance(a, b)
 	if (!(distance > maxAngularStep)) return
 
@@ -910,7 +968,7 @@ function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElemen
 		const intermediate = interpolateGreatCirclePoint(a, b, step / steps)
 		// Seed from the great-circle-interpolated latitude (closer to the true curve point than
 		// the segment's start latitude) to keep convergence stable across steep latitude changes.
-		pushDistinct(points, findEclipseCurvePoint(pbe, intermediate.longitude, intermediate.latitude, i, G))
+		pushDistinct(points, findEclipseCurvePoint(pbe, intermediate.longitude, intermediate.latitude, i, G, correctLatitudeScaling))
 	}
 }
 
@@ -930,6 +988,42 @@ function orderCurvePoints(points: GeoPoint[]): readonly GeoPoint[] {
 	}
 
 	return points
+}
+
+// Greedy nearest-neighbor walk over the remaining points, starting at startIndex.
+function greedyNearestNeighborChain(points: readonly GeoPoint[], startIndex: number): GeoPoint[] {
+	const remaining = points.slice()
+	const ordered: GeoPoint[] = [remaining.splice(startIndex, 1)[0]]
+
+	while (remaining.length > 0) {
+		const last = ordered.at(-1)!
+		let bestIndex = 0
+		let bestDistance = Number.POSITIVE_INFINITY
+
+		for (let i = 0; i < remaining.length; i++) {
+			const distance = angularDistance(last, remaining[i])
+			if (distance < bestDistance) {
+				bestDistance = distance
+				bestIndex = i
+			}
+		}
+
+		ordered.push(remaining.splice(bestIndex, 1)[0])
+	}
+
+	return ordered
+}
+
+// Orders scattered points along an open curve by proximity, robust to folds and antimeridian
+// crossings where neither longitude nor time ordering stays monotonic. A first greedy walk from an
+// arbitrary point ends at a genuine endpoint of the curve; walking again from that endpoint then
+// traces the curve cleanly end to end.
+function chainCurvePointsByProximity(points: readonly GeoPoint[]): readonly GeoPoint[] {
+	if (points.length <= 2) return points
+
+	const endpoint = greedyNearestNeighborChain(points, 0).at(-1)!
+	const startIndex = points.indexOf(endpoint)
+	return greedyNearestNeighborChain(points, Math.max(0, startIndex))
 }
 
 // Angular gap between consecutive points that signals two interleaved, spatially disjoint branches
@@ -1137,8 +1231,15 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		if (options.includePolygons ?? true) totalityPath = buildTotalityPathPolygons(umbraNorth, umbraSouth, points.U1, points.U2)
 	}
 
-	const penumbraNorth = stitchDiscontinuousCurve(findCurvePoints(pbe, 1, 0, curveOptions))
-	const penumbraSouth = stitchDiscontinuousCurve(findCurvePoints(pbe, -1, 0, curveOptions))
+	// Partial-eclipse (penumbra) north/south limits are produced for eclipses with an umbral path,
+	// where the penumbra sweeps a well-defined day-side tangency curve. Pure partial eclipses leave
+	// these empty, their boundary being described by the sunrise/sunset curves instead.
+	let penumbraNorth: readonly GeoPoint[] = []
+	let penumbraSouth: readonly GeoPoint[] = []
+	if (hasUmbralPath(eclipse)) {
+		penumbraNorth = stitchDiscontinuousCurve(findPartialEclipseLimit(pbe, 1, curveOptions))
+		penumbraSouth = stitchDiscontinuousCurve(findPartialEclipseLimit(pbe, -1, curveOptions))
+	}
 	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, contacts, { step: options.riseSetStep }) : []
 
 	return {

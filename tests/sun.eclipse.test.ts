@@ -434,6 +434,35 @@ test('computeSolarEclipseMapGeometry anchors NASA total central endpoints', () =
 	for (const segment of [...lines.umbraNorth, ...lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
+test('computeSolarEclipseMapGeometry traces NASA total partial-eclipse limits north and south of the path', () => {
+	const fixture = NASA_ECLIPSES[0]
+	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(10), maxAngularStep: deg(5), includeRiseSetCurves: false, includePolygons: false })
+	const { points, lines } = geometry
+	const { penumbraNorth, penumbraSouth } = lines
+
+	// Both partial-eclipse limits exist on the day side for this central eclipse, unlike the empty
+	// curves the solver produced before the latitude-step scaling fix.
+	expect(penumbraNorth.length).toBeGreaterThan(0)
+	expect(penumbraSouth.length).toBeGreaterThan(0)
+
+	for (const point of penumbraNorth) expectGeoPoint(point)
+	for (const point of penumbraSouth) expectGeoPoint(point)
+
+	// Every limit point is sampled within the penumbral contact window P1..P4.
+	for (const point of [...penumbraNorth, ...penumbraSouth]) {
+		expect(point.jd!).toBeGreaterThanOrEqual(points.P1!.jd! - 1e-6)
+		expect(point.jd!).toBeLessThanOrEqual(points.P4!.jd! + 1e-6)
+	}
+
+	// The northern limit lies wholly north of the greatest-eclipse point and reaches the high Arctic;
+	// the southern limit lies wholly south of it and crosses into the southern hemisphere.
+	expect(penumbraNorth.every((point) => point.latitude > points.Max!.latitude)).toBe(true)
+	expect(penumbraSouth.every((point) => point.latitude < points.Max!.latitude)).toBe(true)
+	expect(Math.min(...penumbraNorth.map((point) => point.latitude))).toBeGreaterThan(deg(28))
+	expect(Math.max(...penumbraNorth.map((point) => point.latitude))).toBeGreaterThan(deg(70))
+	expect(Math.min(...penumbraSouth.map((point) => point.latitude))).toBeLessThan(deg(-30))
+})
+
 test('computeSolarEclipseMapGeometry keeps central path gated by eclipse gamma', () => {
 	const fixture = NASA_ECLIPSES[0]
 	const nonCentral = { ...nasaEclipse(fixture), gamma: 1.01 }
@@ -572,6 +601,9 @@ test('central total eclipse geometry exposes a populated central and umbral path
 	expect(geometry.lines.umbraSouth.length).toBeGreaterThan(0)
 	for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth]) for (const point of segment) expectGeoPoint(point)
 
+	// A central total eclipse exposes both partial-eclipse (penumbra) limits.
+	expect(geometry.lines.penumbraNorth.length).toBeGreaterThan(0)
+	expect(geometry.lines.penumbraSouth.length).toBeGreaterThan(0)
 	for (const point of geometry.lines.penumbraNorth) expectGeoPoint(point)
 	for (const point of geometry.lines.penumbraSouth) expectGeoPoint(point)
 })
