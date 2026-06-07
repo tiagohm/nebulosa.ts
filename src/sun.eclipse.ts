@@ -24,6 +24,9 @@ const CONTACT_TOLERANCE_DAYS = 1e-8
 const SOLVER_MAX_ITERATIONS = 50
 const SOLVER_TOLERANCE = 1e-4
 const CENTRAL_ECLIPSE_GAMMA_LIMIT = 0.9972
+const LIMB_INTERSECTION_STEPS = 128
+const LIMB_INTERSECTION_TOLERANCE = 1e-12
+const LIMB_TANGENCY_TOLERANCE = 1e-9
 const SUN_RADIUS_EARTH_RADII = 109.076370706
 // Lunar radius k1 used for penumbral contacts, per NASA/Espenak convention.
 const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272488
@@ -1065,19 +1068,25 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 	const south: GeoPoint[] = []
 	let lastJulianDay = P1.jd
 
-	for (let jd = P1.jd; jd <= P4.jd + stepDays * 0.5; jd += stepDays) {
-		lastJulianDay = Math.min(jd, P4.jd)
-		appendRiseSetIntersections(pbe, lastJulianDay, north, south, adaptive)
+	appendRiseSetPoint(north, P1, false)
+	appendRiseSetPoint(south, P1, false)
+
+	for (let jd = P1.jd + stepDays; jd < P4.jd - stepDays * 0.5; jd += stepDays) {
+		lastJulianDay = jd
+		appendRiseSetIntersections(pbe, jd, north, south, adaptive)
 	}
 
-	if (lastJulianDay < P4.jd) appendRiseSetIntersections(pbe, P4.jd, north, south, adaptive)
+	if (lastJulianDay < P4.jd) {
+		appendRiseSetPoint(north, P4, adaptive)
+		appendRiseSetPoint(south, P4, adaptive)
+	}
 
 	return [north, south].filter((line) => line.length > 0)
 }
 
 function appendRiseSetIntersections(pbe: PolynomialBesselianElements, jd: number, north: GeoPoint[], south: GeoPoint[], adaptive: boolean) {
 	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-	const intersections = intersectUnitCircleWithCircle(be.x, be.y, Math.abs(be.l1))
+	const intersections = intersectEarthLimbWithCircle(be, be.x, be.y, Math.abs(be.l1))
 	const projected = intersections.map(([x, y]) => projectFundamentalPoint(be, x, y)).filter(finitePoint)
 
 	if (projected.length === 1) {
@@ -1103,29 +1112,132 @@ function appendRiseSetPoint(line: GeoPoint[], point: GeoPoint, adaptive: boolean
 	pushDistinct(line, point)
 }
 
-function intersectUnitCircleWithCircle(cx: number, cy: number, radius: number): [number, number][] {
-	const d = Math.hypot(cx, cy)
-	if (!(d > 0) || !Number.isFinite(d) || !Number.isFinite(radius) || radius < 0) return []
-	if (d > 1 + radius || d < Math.abs(1 - radius)) return []
+function intersectEarthLimbWithCircle(be: Pick<BesselianSample, 'd'>, cx: number, cy: number, radius: number): [number, number][] {
+	if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(radius) || radius < 0) return []
 
-	const a = (1 - radius * radius + d * d) / (2 * d)
-	const hSquared = 1 - a * a
-	if (hSquared < -1e-12) return []
+	const omega = earthLimbOmega(be)
+	const invOmega = 1 / omega
+	const radiusSquared = radius * radius
+	const values = new Float64Array(LIMB_INTERSECTION_STEPS)
+	const step = TAU / LIMB_INTERSECTION_STEPS
+	const roots: number[] = []
 
-	const h = Math.sqrt(Math.max(0, hSquared))
-	const x2 = (a * cx) / d
-	const y2 = (a * cy) / d
-	const rx = -cy * (h / d)
-	const ry = cx * (h / d)
-	const points: [number, number][] =
-		h === 0
-			? [[x2, y2]]
-			: [
-					[x2 + rx, y2 + ry],
-					[x2 - rx, y2 - ry],
-				]
-	points.sort((a, b) => b[1] - a[1])
+	function residual(theta: number) {
+		const dx = Math.cos(theta) - cx
+		const dy = Math.sin(theta) * invOmega - cy
+		return dx * dx + dy * dy - radiusSquared
+	}
+
+	function pushRoot(theta: number) {
+		const root = normalizeAngle(theta)
+		for (const existing of roots) {
+			if (Math.abs(normalizePI(root - existing)) < 1e-7) return
+		}
+		roots.push(root)
+	}
+
+	for (let i = 0; i < LIMB_INTERSECTION_STEPS; i++) values[i] = residual(i * step)
+
+	for (let i = 0; i < LIMB_INTERSECTION_STEPS; i++) {
+		const next = (i + 1) % LIMB_INTERSECTION_STEPS
+		const theta = i * step
+		const nextTheta = (i + 1) * step
+		const value = values[i]
+		const nextValue = values[next]
+
+		if (Math.abs(value) <= LIMB_INTERSECTION_TOLERANCE) pushRoot(theta)
+		if (value * nextValue < 0) pushRoot(bisectLimbIntersection(residual, theta, nextTheta, value, nextValue))
+	}
+
+	for (let i = 0; i < LIMB_INTERSECTION_STEPS; i++) {
+		const previousValue = values[(i + LIMB_INTERSECTION_STEPS - 1) % LIMB_INTERSECTION_STEPS]
+		const value = values[i]
+		const nextValue = values[(i + 1) % LIMB_INTERSECTION_STEPS]
+
+		if (value > previousValue || value > nextValue) continue
+
+		const theta = i * step
+		const minimum = minimizeLimbIntersectionResidual(residual, theta - step, theta + step)
+
+		if (minimum.value < -LIMB_INTERSECTION_TOLERANCE) {
+			const leftTheta = theta - step
+			const rightTheta = theta + step
+			const leftValue = residual(leftTheta)
+			const rightValue = residual(rightTheta)
+
+			if (leftValue * minimum.value <= 0) pushRoot(bisectLimbIntersection(residual, leftTheta, minimum.theta, leftValue, minimum.value))
+			if (minimum.value * rightValue <= 0) pushRoot(bisectLimbIntersection(residual, minimum.theta, rightTheta, minimum.value, rightValue))
+		} else if (Math.abs(minimum.value) <= LIMB_TANGENCY_TOLERANCE) {
+			pushRoot(minimum.theta)
+		}
+
+		if (value < previousValue || value < nextValue) continue
+
+		const maximum = maximizeLimbIntersectionResidual(residual, theta - step, theta + step)
+		if (Math.abs(maximum.value) <= LIMB_TANGENCY_TOLERANCE) pushRoot(maximum.theta)
+	}
+
+	const points = roots.map((theta) => [Math.cos(theta), Math.sin(theta) * invOmega] as [number, number])
+	points.sort((a, b) => b[1] - a[1] || a[0] - b[0])
 	return points
+}
+
+function bisectLimbIntersection(f: (theta: number) => number, min: number, max: number, minValue: number, maxValue: number) {
+	let a = min
+	let b = max
+	let fa = minValue
+	let fb = maxValue
+
+	if (Math.abs(fa) <= LIMB_INTERSECTION_TOLERANCE) return a
+	if (Math.abs(fb) <= LIMB_INTERSECTION_TOLERANCE) return b
+
+	for (let iteration = 0; iteration < 48; iteration++) {
+		const mid = (a + b) * 0.5
+		const fm = f(mid)
+
+		if (Math.abs(fm) <= LIMB_INTERSECTION_TOLERANCE) return mid
+		if (fa * fm <= 0) {
+			b = mid
+			fb = fm
+		} else {
+			a = mid
+			fa = fm
+		}
+	}
+
+	return Math.abs(fa) < Math.abs(fb) ? a : b
+}
+
+function minimizeLimbIntersectionResidual(f: (theta: number) => number, min: number, max: number) {
+	let a = min
+	let b = max
+
+	for (let iteration = 0; iteration < 40; iteration++) {
+		const left = a + (b - a) / 3
+		const right = b - (b - a) / 3
+
+		if (f(left) < f(right)) b = right
+		else a = left
+	}
+
+	const theta = (a + b) * 0.5
+	return { theta, value: f(theta) }
+}
+
+function maximizeLimbIntersectionResidual(f: (theta: number) => number, min: number, max: number) {
+	let a = min
+	let b = max
+
+	for (let iteration = 0; iteration < 40; iteration++) {
+		const left = a + (b - a) / 3
+		const right = b - (b - a) / 3
+
+		if (f(left) > f(right)) b = right
+		else a = left
+	}
+
+	const theta = (a + b) * 0.5
+	return { theta, value: f(theta) }
 }
 
 function buildTotalityPathPolygons(northSegments: readonly GeoPoint[][], southSegments: readonly GeoPoint[][], U1?: GeoPoint, U2?: GeoPoint) {

@@ -374,10 +374,10 @@ test('computeSolarEclipseMapGeometry anchors synthetic partial contacts and rise
 	expect(lines.penumbraSouth).toHaveLength(0)
 	expect(polygons.totalityPath).toHaveLength(0)
 	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([85, 85])
-	expectGeoPointClose(lines.riseSetCurves[0][0], -1.565764772421259, 0.00004154541673005197, 2460409.055555556)
-	expectGeoPointClose(lines.riseSetCurves[0].at(-1), 1.5758278811685338, 0.00004154541673005197, 2460409.444444444)
-	expectGeoPointClose(lines.riseSetCurves[1][0], -1.565764772421259, -0.00004154541673005197, 2460409.055555556)
-	expectGeoPointClose(lines.riseSetCurves[1].at(-1), 1.5758278811685338, -0.00004154541673005197, 2460409.444444444)
+	expectGeoPointClose(lines.riseSetCurves[0][0], points.P1!.longitude, points.P1!.latitude, points.P1!.jd)
+	expectGeoPointClose(lines.riseSetCurves[0].at(-1), points.P4!.longitude, points.P4!.latitude, points.P4!.jd)
+	expectGeoPointClose(lines.riseSetCurves[1][0], points.P1!.longitude, points.P1!.latitude, points.P1!.jd)
+	expectGeoPointClose(lines.riseSetCurves[1].at(-1), points.P4!.longitude, points.P4!.latitude, points.P4!.jd)
 	for (const curve of lines.riseSetCurves) for (const point of curve) expectGeoPoint(point)
 })
 
@@ -434,9 +434,9 @@ test('computeSolarEclipseMapGeometry anchors NASA total central endpoints', () =
 	expectGeoPointClose(lines.umbraSouth[0][8], -1.918209226439, 0.308744979676, 2460409.245879204)
 	const northAt1800Ut = interpolateAtJulianDay(lines.umbraNorth[0], 2460409.2508171294)
 	expectGeoPointClose(northAt1800Ut, -1.912276987635, 0.364888272922, 2460409.2508171294)
-	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([118, 115])
-	expectGeoPointClose(lines.riseSetCurves[0][0], -2.499344598349, -0.248793062375, 2460409.155125663)
-	expectGeoPointClose(lines.riseSetCurves[1].at(-1), -0.637140837346, 0.676778922009, 2460409.3704852466)
+	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([103, 108])
+	expectGeoPointClose(lines.riseSetCurves[0][0], points.P1!.longitude, points.P1!.latitude, points.P1!.jd)
+	expectGeoPointClose(lines.riseSetCurves[1].at(-1), points.P4!.longitude, points.P4!.latitude, points.P4!.jd)
 	for (const segment of [...lines.umbraNorth, ...lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
@@ -592,10 +592,10 @@ test('rise set curves are separate drawable arrays', () => {
 	const curves = computeRiseSetCurves(elements, contacts.P1!, contacts.P4!, {}, { step: 3600 })
 
 	expect(curves).toHaveLength(2)
-	expectGeoPointClose(curves[0][0], -1.565764772421259, 0.00004154541673005197, 2460409.055555556)
-	expectGeoPointClose(curves[0].at(-1), 1.5758278811685338, 0.00004154541673005197, 2460409.444444444)
-	expectGeoPointClose(curves[1][0], -1.565764772421259, -0.00004154541673005197, 2460409.055555556)
-	expectGeoPointClose(curves[1].at(-1), 1.5758278811685338, -0.00004154541673005197, 2460409.444444444)
+	expectGeoPointClose(curves[0][0], contacts.P1!.longitude, contacts.P1!.latitude, contacts.P1!.jd)
+	expectGeoPointClose(curves[0].at(-1), contacts.P4!.longitude, contacts.P4!.latitude, contacts.P4!.jd)
+	expectGeoPointClose(curves[1][0], contacts.P1!.longitude, contacts.P1!.latitude, contacts.P1!.jd)
+	expectGeoPointClose(curves[1].at(-1), contacts.P4!.longitude, contacts.P4!.latitude, contacts.P4!.jd)
 
 	for (const curve of curves) {
 		expect(curve.length).toBeGreaterThan(0)
