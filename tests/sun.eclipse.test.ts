@@ -264,7 +264,7 @@ test('computePolynomialBesselianElements projects the shadow axis onto the funda
 	expect(be.x).toBeCloseTo(0.903877748055732, 12)
 	expect(be.y).toBeCloseTo(-0.5105868561921576, 12)
 	expect(be.d).toBeCloseTo(1.1344862148808663, 12)
-	expect(be.mu).toBeCloseTo(1.1779334094310219, 12)
+	expect(be.mu).toBeCloseTo(1.172828928333944, 12)
 	expect(Math.abs(be.x - tangentPlaneX)).toBeGreaterThan(0.01)
 	expect(Math.abs(be.y - tangentPlaneY)).toBeGreaterThan(0.01)
 })
@@ -273,12 +273,13 @@ test('computePolynomialBesselianElements follows the projection convention towar
 	const generated = computePolynomialBesselianElements(TIME0, (): SunMoonPosition => ({ sunRightAscension: 0, sunDeclination: 0, sunDistance: 23000, moonRightAscension: 0, moonDeclination: 0, moonDistance: 60, deltaT: 70 }))
 	const be = evaluateBesselian(generated, TIME0)
 	const point = projectFundamentalPoint(be, be.x, be.y)
-	const subsolarLongitude = -1.870867645344
+	const subsolarLongitude = -1.8708676396985666
 
 	expect(be.x).toBeCloseTo(0, 12)
 	expect(be.y).toBeCloseTo(0, 12)
 	expect(be.d).toBeCloseTo(0, 12)
-	expect(be.mu).toBeCloseTo(1.8759721207956446, 12)
+	expect(be.mu).toBeCloseTo(1.8708676396985666, 12)
+	expect(be.deltaTLongitudeCorrection).toBe(0)
 	expectGeoPointClose(point, subsolarLongitude, 0, 2460409.25)
 })
 
@@ -304,6 +305,7 @@ test('NASA Besselian fixtures preserve polynomial values and units', () => {
 		expect(origin.l2).toBeCloseTo(fixture.l2[0], 12)
 		expect(origin.d).toBeCloseTo(deg(fixture.d[0]), 12)
 		expect(origin.mu).toBeCloseTo(deg(fixture.mu[0]), 12)
+		expect(origin.deltaTLongitudeCorrection).toBeCloseTo(deg(0.00417807 * fixture.deltaT), 12)
 		expect(origin.dx).toBeCloseTo(fixture.x[1], 12)
 		expect(origin.dy).toBeCloseTo(fixture.y[1], 12)
 		expect(origin.tanF1).toBeCloseTo(fixture.tanF1, 12)

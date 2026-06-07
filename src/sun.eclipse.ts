@@ -39,6 +39,8 @@ export interface PolynomialBesselianElements {
 	readonly maximumTime: Time
 	// Delta T in seconds.
 	readonly deltaT: number
+	// Optional Delta T longitude correction in radians for geographic projection.
+	readonly deltaTLongitudeCorrection?: Angle
 	// Polynomial time unit in days.
 	readonly stepDays: number
 	// X coordinate of the shadow axis in Earth equatorial radii.
@@ -65,6 +67,8 @@ export interface InstantBesselianElements {
 	readonly time: Time
 	// Delta T in seconds.
 	readonly deltaT: number
+	// Optional Delta T longitude correction in radians for geographic projection.
+	readonly deltaTLongitudeCorrection?: Angle
 	// X coordinate of the shadow axis in Earth equatorial radii.
 	readonly x: number
 	// Y coordinate of the shadow axis in Earth equatorial radii.
@@ -296,6 +300,7 @@ function centralLinePointAtJulianDay(pbe: PolynomialBesselianElements, jd: numbe
 interface BesselianSample {
 	readonly time: Time
 	readonly deltaT: number
+	readonly deltaTLongitudeCorrection?: Angle
 	readonly x: number
 	readonly y: number
 	readonly l1: number
@@ -347,6 +352,7 @@ function evaluateBesselianSample(pbe: PolynomialBesselianElements, time: Time): 
 	return {
 		time,
 		deltaT: pbe.deltaT,
+		deltaTLongitudeCorrection: deltaTLongitudeCorrection(pbe),
 		x: evaluatePolynomial(pbe.x, t),
 		y: evaluatePolynomial(pbe.y, t),
 		l1: evaluatePolynomial(pbe.l1, t),
@@ -411,6 +417,7 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 		time0,
 		maximumTime,
 		deltaT: deltaT / offsets.length,
+		deltaTLongitudeCorrection: 0,
 		stepDays,
 		x: fitCubic(t, x),
 		y: fitCubic(t, y),
@@ -425,6 +432,7 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 
 function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): InstantBesselianElements {
 	const projection = besselianShadowProjection(sample)
+	const deltaT = sample.deltaT ?? 0
 	const sunSemidiameter = Math.asin(clamp(SUN_RADIUS_EARTH_RADII / sample.sunDistance, -1, 1))
 	const moonPenumbraSemidiameter = Math.asin(clamp(MOON_RADIUS_PENUMBRA_EARTH_RADII / sample.moonDistance, -1, 1))
 	const moonUmbraSemidiameter = Math.asin(clamp(MOON_RADIUS_UMBRA_EARTH_RADII / sample.moonDistance, -1, 1))
@@ -434,13 +442,14 @@ function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): Insta
 	const invSunMoonDistance = sunMoonDistance > 0 ? 1 / sunMoonDistance : 0
 	const l1 = (sunSemidiameter + moonPenumbraSemidiameter) * invParallax
 	const l2 = (sunSemidiameter - moonUmbraSemidiameter) * invParallax
-	// const gmst = greenwichMeanSiderealTime(time)
-	const gmst = normalizeAngle(280.46061837 * DEG2RAD + 360.98564736629 * DEG2RAD * (time.day - J2000 + time.fraction))
+	const siderealTime = timeShift(time, -deltaT / DAYSEC)
+	const gmst = normalizeAngle(280.46061837 * DEG2RAD + 360.98564736629 * DEG2RAD * (siderealTime.day - J2000 + siderealTime.fraction))
 	const mu = normalizeAngle(gmst - projection.rightAscension)
 
 	return {
 		time,
-		deltaT: sample.deltaT ?? 0,
+		deltaT,
+		deltaTLongitudeCorrection: 0,
 		x: projection.x,
 		y: projection.y,
 		l1,
@@ -493,6 +502,10 @@ function besselianShadowProjection(sample: SunMoonPosition) {
 function earthLimbOmega(be: Pick<BesselianSample, 'd'>) {
 	const cosD = Math.cos(be.d)
 	return 1 / Math.sqrt(1 - EARTH_E2 * cosD * cosD)
+}
+
+function deltaTLongitudeCorrection(elements: { readonly deltaT: number; readonly deltaTLongitudeCorrection?: Angle }) {
+	return elements.deltaTLongitudeCorrection ?? DELTA_T_LONGITUDE_FACTOR * elements.deltaT
 }
 
 // Finds the closest point on the oblate Earth limb x² + (omega*y)² = 1 and returns
@@ -552,7 +565,7 @@ export function projectFundamentalPoint(be: BesselianSample, x: number, y: numbe
 	const H = normalizeAngle(Math.atan2(px, B * b2 - y1 * b1))
 	const phi1 = Math.asin(clamp(B * b1 + y1 * b2, -1, 1))
 	const lat = Math.atan(INV_F_CONST_APPROX * Math.tan(phi1))
-	const lon = H - be.mu + DELTA_T_LONGITUDE_FACTOR * be.deltaT
+	const lon = H - be.mu + deltaTLongitudeCorrection(be)
 
 	if (!Number.isFinite(lon) || !Number.isFinite(lat)) return undefined
 
@@ -646,12 +659,13 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 	let t = 0
 	let phi = initialLatitude
 	const julianDay0 = toJulianDay(pbe.time0)
+	const longitudeCorrection = deltaTLongitudeCorrection(pbe)
 	let jd = julianDay0
 
 	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
 		jd = julianDay0 + t * pbe.stepDays
 		const be = evaluateBesselianAtT(pbe, t)
-		const H = longitude + be.mu - DELTA_T_LONGITUDE_FACTOR * pbe.deltaT
+		const H = longitude + be.mu - longitudeCorrection
 		const sinD = Math.sin(be.d)
 		const cosD = Math.cos(be.d)
 		const sinH = Math.sin(H)
@@ -890,7 +904,7 @@ function shadowLimitRadius(be: BesselianSample, point: GeoPoint | undefined) {
 }
 
 function surfaceZeta(be: BesselianSample, point: GeoPoint) {
-	const H = point.longitude + be.mu - DELTA_T_LONGITUDE_FACTOR * be.deltaT
+	const H = point.longitude + be.mu - deltaTLongitudeCorrection(be)
 	const U = Math.atan(F_CONST * Math.tan(point.latitude))
 	const rhoSinPhi = F_CONST * Math.sin(U)
 	const rhoCosPhi = Math.cos(U)
