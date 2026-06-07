@@ -401,14 +401,14 @@ function besselianShadowProjection(sample: SunMoonPosition) {
 
 	const sun = eraS2p(sample.sunRightAscension, sample.sunDeclination, sample.sunDistance)
 	const moon = eraS2p(sample.moonRightAscension, sample.moonDeclination, sample.moonDistance)
-	const moonMinusSun = vecMinus(moon, sun)
-	const sunMoonDistance = vecLength(moonMinusSun)
+	const sunMinusMoon = vecMinus(sun, moon)
+	const sunMoonDistance = vecLength(sunMinusMoon)
 
 	if (!(sunMoonDistance > 0) || !Number.isFinite(sunMoonDistance)) {
 		return { x: 0, y: 0, rightAscension: sample.sunRightAscension, declination: sample.sunDeclination, sunMoonDistance: 0 }
 	}
 
-	const axis = vecNormalizeMut(moonMinusSun)
+	const axis = vecNormalizeMut(sunMinusMoon)
 	const rightAscension = normalizeAngle(Math.atan2(axis[1], axis[0]))
 	const declination = Math.asin(clamp(axis[2], -1, 1))
 	const sinA = Math.sin(rightAscension)
