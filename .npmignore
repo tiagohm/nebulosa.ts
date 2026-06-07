@@ -1,5 +1,7 @@
 .github/
 .vscode/
+.claude/
+.mcp.json
 data/
 out/
 scripts/
