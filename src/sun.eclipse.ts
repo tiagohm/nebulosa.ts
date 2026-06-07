@@ -500,13 +500,13 @@ function projectContactRoot(pbe: PolynomialBesselianElements, jd: number | undef
 
 	const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
 	const angle = Math.atan2(be.y, be.x)
-	return projectFundamentalPoint(be, Math.cos(angle), Math.sin(angle)) ?? undefined
+	return projectFundamentalPoint(be, Math.cos(angle), Math.sin(angle))
 }
 
 // Finds the greatest eclipse point.
 export function findMaximumPoint(pbe: PolynomialBesselianElements): GeoPoint | undefined {
 	const be = evaluateBesselian(pbe, pbe.maximumTime)
-	return projectFundamentalPoint(be, be.x, be.y) ?? undefined
+	return projectFundamentalPoint(be, be.x, be.y)
 }
 
 // Finds one extreme endpoint of the central line.
