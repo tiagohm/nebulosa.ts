@@ -287,29 +287,85 @@ export function intermediateGreatCircle(a: GeoPoint, b: GeoPoint, fraction: numb
 }
 
 function centralLinePointAtJulianDay(pbe: PolynomialBesselianElements, jd: number) {
-	const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
+	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
 	return projectFundamentalPoint(be, be.x, be.y)
 }
 
-// Evaluates polynomial Besselian elements at one time.
-export function evaluateBesselian(pbe: PolynomialBesselianElements, time: Time): InstantBesselianElements {
-	const t = timeSubtract(time, pbe.time0) / pbe.stepDays
-	const x = evaluatePolynomial(pbe.x, t)
-	const y = evaluatePolynomial(pbe.y, t)
+// Besselian element positions at one time, without the velocity derivatives that only the curve
+// solver needs. Projection, contact and rise/set paths read only these fields.
+interface BesselianSample {
+	readonly time: Time
+	readonly deltaT: number
+	readonly x: number
+	readonly y: number
+	readonly l1: number
+	readonly l2: number
+	readonly d: Angle
+	readonly mu: Angle
+	readonly tanF1: number
+	readonly tanF2: number
+}
 
+// Besselian element values at one normalized polynomial time, with velocity derivatives.
+interface BesselianValues {
+	x: number
+	y: number
+	l1: number
+	l2: number
+	d: Angle
+	mu: Angle
+	dx: number
+	dy: number
+	// Derivative of mu with respect to normalized polynomial time.
+	dmu: number
+	tanF1: number
+	tanF2: number
+}
+
+// Evaluates Besselian positions and velocity derivatives directly from the normalized polynomial
+// time, avoiding Time allocation in hot solver loops where the normalized time is already known.
+function evaluateBesselianAtT(pbe: PolynomialBesselianElements, t: number): BesselianValues {
 	return {
-		time,
-		deltaT: pbe.deltaT,
-		x,
-		y,
+		x: evaluatePolynomial(pbe.x, t),
+		y: evaluatePolynomial(pbe.y, t),
 		l1: evaluatePolynomial(pbe.l1, t),
 		l2: evaluatePolynomial(pbe.l2, t),
 		d: evaluatePolynomial(pbe.d, t),
 		mu: normalizeAngle(evaluatePolynomial(pbe.mu, t)),
 		dx: evaluatePolynomialDerivative(pbe.x, t),
 		dy: evaluatePolynomialDerivative(pbe.y, t),
+		dmu: evaluatePolynomialDerivative(pbe.mu, t),
 		tanF1: pbe.tanF1,
 		tanF2: pbe.tanF2,
+	}
+}
+
+// Evaluates Besselian element positions at one time, skipping the velocity derivatives.
+function evaluateBesselianSample(pbe: PolynomialBesselianElements, time: Time): BesselianSample {
+	const t = timeSubtract(time, pbe.time0) / pbe.stepDays
+
+	return {
+		time,
+		deltaT: pbe.deltaT,
+		x: evaluatePolynomial(pbe.x, t),
+		y: evaluatePolynomial(pbe.y, t),
+		l1: evaluatePolynomial(pbe.l1, t),
+		l2: evaluatePolynomial(pbe.l2, t),
+		d: evaluatePolynomial(pbe.d, t),
+		mu: normalizeAngle(evaluatePolynomial(pbe.mu, t)),
+		tanF1: pbe.tanF1,
+		tanF2: pbe.tanF2,
+	}
+}
+
+// Evaluates polynomial Besselian elements at one time, including velocity derivatives.
+export function evaluateBesselian(pbe: PolynomialBesselianElements, time: Time): InstantBesselianElements {
+	const t = timeSubtract(time, pbe.time0) / pbe.stepDays
+
+	return {
+		...evaluateBesselianSample(pbe, time),
+		dx: evaluatePolynomialDerivative(pbe.x, t),
+		dy: evaluatePolynomialDerivative(pbe.y, t),
 	}
 }
 
@@ -434,7 +490,7 @@ function besselianShadowProjection(sample: SunMoonPosition) {
 }
 
 // Projects one fundamental-plane point to geographic longitude and latitude.
-export function projectFundamentalPoint(be: InstantBesselianElements, x: number, y: number) {
+export function projectFundamentalPoint(be: BesselianSample, x: number, y: number) {
 	if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined
 
 	const sinD = Math.sin(be.d)
@@ -482,12 +538,12 @@ export function findPenumbraContactPoints(pbe: PolynomialBesselianElements, opti
 	const to = maximumJulianDay + searchSpanDays
 
 	function external(jd: number) {
-		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
+		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
 		return Math.hypot(be.x, be.y) - 1 - be.l1
 	}
 
 	function internal(jd: number) {
-		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
+		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
 		return Math.hypot(be.x, be.y) - 1 + be.l1
 	}
 
@@ -502,14 +558,14 @@ export function findPenumbraContactPoints(pbe: PolynomialBesselianElements, opti
 function projectContactRoot(pbe: PolynomialBesselianElements, jd: number | undefined) {
 	if (jd === undefined) return undefined
 
-	const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
+	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
 	const angle = Math.atan2(be.y, be.x)
 	return projectFundamentalPoint(be, Math.cos(angle), Math.sin(angle))
 }
 
 // Finds the greatest eclipse point.
 export function findMaximumPoint(pbe: PolynomialBesselianElements): GeoPoint | undefined {
-	const be = evaluateBesselian(pbe, pbe.maximumTime)
+	const be = evaluateBesselianSample(pbe, pbe.maximumTime)
 	return projectFundamentalPoint(be, be.x, be.y)
 }
 
@@ -521,7 +577,7 @@ export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, 
 	const to = begin ? maximumJulianDay : maximumJulianDay + searchSpanDays
 
 	function fn(jd: number) {
-		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
+		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
 		// Earth's limb in the fundamental plane is the flattened ellipse x^2 + (omega*y)^2 = 1,
 		// matching the on-Earth test used in projectFundamentalPoint.
 		const cosD = Math.cos(be.d)
@@ -534,7 +590,7 @@ export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, 
 
 	if (jd === undefined) return undefined
 
-	const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
+	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
 	return projectFundamentalPoint(be, be.x, be.y)
 }
 
@@ -553,7 +609,7 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 
 	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
 		jd = julianDay0 + t * pbe.stepDays
-		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
+		const be = evaluateBesselianAtT(pbe, t)
 		const H = longitude + be.mu - DELTA_T_LONGITUDE_FACTOR * pbe.deltaT
 		const sinD = Math.sin(be.d)
 		const cosD = Math.cos(be.d)
@@ -585,9 +641,8 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 
 		// Diurnal rate of the observer's hour angle dmu/dt, in radians per normalized time unit,
 		// taken from the fitted mu polynomial instead of the 2*pi/day approximation.
-		const dmu = evaluatePolynomialDerivative(pbe.mu, t)
-		const ksiPrime = rhoCosPhi * cosH * dmu
-		const etaPrime = rhoCosPhi * sinH * sinD * dmu
+		const ksiPrime = rhoCosPhi * cosH * be.dmu
+		const etaPrime = rhoCosPhi * sinH * sinD * be.dmu
 		const u = be.x - ksi
 		const v = be.y - eta
 		const a = be.dx - ksiPrime
@@ -628,12 +683,17 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 	return undefined
 }
 
-// Finds a drawable eclipse curve for the selected limit family.
-export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: EclipseCurveOptions = {}): GeoPoint[] {
+// Finds a drawable eclipse curve for the selected limit family. When the time-sampled central
+// line is already available it can be supplied to avoid recomputing it for umbral seeding.
+export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: EclipseCurveOptions = {}, centerLineSamples?: readonly GeoPoint[]): readonly GeoPoint[] {
+	// The central line is fully described by its time parametrization, whose adaptive subdivision
+	// already enforces maxAngularStep, so the meridian scan below is only needed for the limits.
+	if (i === 0) return centerLineSamples ?? sampleCentralLineByTime(pbe, options)
+
 	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const seeds = [0, Math.sign(pbe.y[0] || 1) * (89.9 * DEG2RAD)] as const
-	const points: GeoPoint[] = i === 0 ? sampleCentralLineByTime(pbe, options) : findCentralSeededCurvePoints(pbe, i, G, options)
+	const points: GeoPoint[] = findCentralSeededCurvePoints(pbe, i, G, options, centerLineSamples)
 	const previousBySeed: (GeoPoint | undefined)[] = [undefined, undefined]
 
 	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
@@ -648,7 +708,7 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 			if (previous && !point) pushDistinct(points, refineCurveBoundary(pbe, previous.longitude, lon, previous.latitude, true, i, G))
 			else if (!previous && point && lon > -PI) pushDistinct(points, refineCurveBoundary(pbe, lon - longitudeStep, lon, point.latitude, false, i, G))
 
-			if (previous && point) appendRefinedSegment(points, pbe, previous, point, seed, i, G, maxAngularStep)
+			if (previous && point) appendRefinedSegment(points, pbe, previous, point, i, G, maxAngularStep)
 			pushDistinct(points, point)
 			previousBySeed[seedIndex] = point
 		}
@@ -706,17 +766,17 @@ function sampleCentralLineByTime(pbe: PolynomialBesselianElements, options: Ecli
 	return orderCurvePoints(deduplicatePoints(points))
 }
 
-function findCentralSeededCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: EclipseCurveOptions) {
+function findCentralSeededCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: EclipseCurveOptions, centerLineSamples?: readonly GeoPoint[]) {
 	if (i === 0 || G !== 1) return []
 
 	// Narrow central paths can fall between coarse longitude samples, so seed umbral
 	// limits from the time-parametrized central path before the meridian scan.
-	const centerLine = sampleCentralLineByTime(pbe, options)
+	const centerLine = centerLineSamples ?? sampleCentralLineByTime(pbe, options)
 	const points: GeoPoint[] = []
 
 	for (const center of centerLine) {
 		if (center.jd === undefined) continue
-		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, center.jd))
+		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, center.jd))
 		const point = projectShadowLimitPoint(be, i)
 		pushDistinct(points, point)
 	}
@@ -732,19 +792,19 @@ function findTimeSeededShadowLimitPoints(pbe: PolynomialBesselianElements, conta
 	const maximumJulianDay = toJulianDay(pbe.maximumTime)
 
 	for (let jd = contacts.P1.jd; jd <= contacts.P4.jd + stepDays * 0.5; jd += stepDays) {
-		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, Math.min(jd, contacts.P4.jd)))
+		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, Math.min(jd, contacts.P4.jd)))
 		pushDistinct(points, projectShadowLimitPoint(be, i))
 	}
 
 	if (maximumJulianDay >= contacts.P1.jd && maximumJulianDay <= contacts.P4.jd) {
-		const be = evaluateBesselian(pbe, pbe.maximumTime)
+		const be = evaluateBesselianSample(pbe, pbe.maximumTime)
 		pushDistinct(points, projectShadowLimitPoint(be, i))
 	}
 
 	return orderCurvePoints(deduplicatePoints(points))
 }
 
-function projectShadowLimitPoint(be: InstantBesselianElements, i: -1 | 1) {
+function projectShadowLimitPoint(be: BesselianSample, i: -1 | 1) {
 	const radius = shadowLimitRadius(be, undefined)
 	if (!(radius > 0) || !Number.isFinite(radius)) return undefined
 
@@ -784,11 +844,11 @@ function projectShadowLimitPoint(be: InstantBesselianElements, i: -1 | 1) {
 	return best
 }
 
-function shadowLimitRadius(be: InstantBesselianElements, point: GeoPoint | undefined) {
+function shadowLimitRadius(be: BesselianSample, point: GeoPoint | undefined) {
 	return Math.abs(be.l2 - (point ? surfaceZeta(be, point) : 0) * be.tanF2)
 }
 
-function surfaceZeta(be: InstantBesselianElements, point: GeoPoint) {
+function surfaceZeta(be: BesselianSample, point: GeoPoint) {
 	const H = point.longitude + be.mu - DELTA_T_LONGITUDE_FACTOR * be.deltaT
 	const U = Math.atan(F_CONST * Math.tan(point.latitude))
 	const rhoSinPhi = F_CONST * Math.sin(U)
@@ -800,14 +860,16 @@ function surfaceZeta(be: InstantBesselianElements, point: GeoPoint) {
 	return rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
 }
 
-function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, seed: Angle, i: -1 | 0 | 1, G: number, maxAngularStep: Angle) {
+function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle) {
 	const distance = angularDistance(a, b)
 	if (!(distance > maxAngularStep)) return
 
 	const steps = Math.min(16, Math.ceil(distance / maxAngularStep))
 	for (let step = 1; step < steps; step++) {
 		const intermediate = interpolateGreatCirclePoint(a, b, step / steps)
-		pushDistinct(points, findEclipseCurvePoint(pbe, intermediate.longitude, seed, i, G))
+		// Seed from the great-circle-interpolated latitude (closer to the true curve point than
+		// the segment's start latitude) to keep convergence stable across steep latitude changes.
+		pushDistinct(points, findEclipseCurvePoint(pbe, intermediate.longitude, intermediate.latitude, i, G))
 	}
 }
 
@@ -817,7 +879,7 @@ function deduplicatePoints(points: readonly GeoPoint[]) {
 	return out
 }
 
-function orderCurvePoints(points: GeoPoint[]) {
+function orderCurvePoints(points: GeoPoint[]): readonly GeoPoint[] {
 	if (points.length <= 2) return points
 
 	if (points.every((point) => point.jd !== undefined)) {
@@ -827,6 +889,54 @@ function orderCurvePoints(points: GeoPoint[]) {
 	}
 
 	return points
+}
+
+// Angular gap between consecutive points that signals two interleaved, spatially disjoint branches
+// (e.g. a partial-eclipse limit split into separate regions) rather than a continuous sweep.
+const CURVE_DISCONTINUITY = 60 * DEG2RAD
+
+// Re-chains a curve that the time/longitude ordering left with a large spatial discontinuity.
+// Well-behaved (continuous) curves contain no such gap and are returned unchanged; only the
+// pathological interleaved-branch case is reordered, via a greedy nearest-neighbor walk that
+// keeps each disjoint branch contiguous instead of bridging back and forth between them.
+function stitchDiscontinuousCurve(points: readonly GeoPoint[]): readonly GeoPoint[] {
+	if (points.length <= 2) return points
+
+	let discontinuous = false
+	for (let i = 1; i < points.length; i++) {
+		if (angularDistance(points[i - 1], points[i]) > CURVE_DISCONTINUITY) {
+			discontinuous = true
+			break
+		}
+	}
+
+	if (!discontinuous) return points
+
+	const remaining = points.slice()
+	let startIndex = 0
+	for (let i = 1; i < remaining.length; i++) if (remaining[i].longitude < remaining[startIndex].longitude) startIndex = i
+
+	const ordered: GeoPoint[] = [remaining.splice(startIndex, 1)[0]]
+
+	while (remaining.length > 0) {
+		const last = ordered.at(-1)!
+
+		let bestIndex = 0
+		let bestDistance = Number.POSITIVE_INFINITY
+
+		for (let i = 0; i < remaining.length; i++) {
+			const distance = angularDistance(last, remaining[i])
+
+			if (distance < bestDistance) {
+				bestDistance = distance
+				bestIndex = i
+			}
+		}
+
+		ordered.push(remaining.splice(bestIndex, 1)[0])
+	}
+
+	return ordered
 }
 
 // Splits a polar/circumpolar limit at its largest absolute latitude.
@@ -844,7 +954,12 @@ export function splitAtMaxAbsLatitude(points: readonly GeoPoint[]): GeoPoint[][]
 		}
 	}
 
-	return [points.slice(0, index + 1), points.slice(Math.max(0, index - 1))].filter((segment) => segment.length > 0)
+	// The extreme latitude sits at an endpoint, so the limit does not fold back: keep it whole
+	// instead of emitting a degenerate single-point segment.
+	if (index <= 0 || index >= points.length - 1) return [Array.from(points)]
+
+	// Share the apex point between both branches so they meet without a visible gap.
+	return [points.slice(0, index + 1), points.slice(index)]
 }
 
 // Computes sunrise and sunset eclipse curves from penumbra/Earth intersections.
@@ -868,7 +983,7 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 }
 
 function appendRiseSetIntersections(pbe: PolynomialBesselianElements, jd: number, north: GeoPoint[], south: GeoPoint[], adaptive: boolean) {
-	const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
+	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
 	const intersections = intersectUnitCircleWithCircle(be.x, be.y, Math.abs(be.l1))
 	const projected = intersections.map(([x, y]) => projectFundamentalPoint(be, x, y)).filter(finitePoint)
 
@@ -954,30 +1069,35 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const curveOptions = { longitudeStep, maxAngularStep, contactSearchSpan: options.contactSearchSpan }
-	let centerLine: GeoPoint[] = []
+
+	let centerLine: readonly GeoPoint[] = []
 	let umbraNorth: GeoPoint[][] = []
 	let umbraSouth: GeoPoint[][] = []
 	let totalityPath: GeoPoint[][] = []
 
+	// The time-sampled central line (and thus its U1/U2 endpoints) is shared across the central
+	// line and both umbral limits, so compute it once for any non-partial eclipse.
+	const centerLineSamples = hasUmbralPath(eclipse) ? sampleCentralLineByTime(pbe, curveOptions) : []
+
 	if (isCentralEclipse(eclipse)) {
-		const U1 = findExtremeLimitOfCentralLine(pbe, true, options)
-		const U2 = findExtremeLimitOfCentralLine(pbe, false, options)
+		const U1 = centerLineSamples[0]
+		const U2 = centerLineSamples.at(-1)
 		if (U1) points.U1 = U1
 		if (U2) points.U2 = U2
 
-		centerLine = findCurvePoints(pbe, 0, 0, curveOptions)
+		centerLine = findCurvePoints(pbe, 0, 0, curveOptions, centerLineSamples)
 	}
 
 	if (hasUmbralPath(eclipse)) {
-		const north = findCurvePoints(pbe, 1, 1, curveOptions)
-		const south = findCurvePoints(pbe, -1, 1, curveOptions)
+		const north = findCurvePoints(pbe, 1, 1, curveOptions, centerLineSamples)
+		const south = findCurvePoints(pbe, -1, 1, curveOptions, centerLineSamples)
 		umbraNorth = splitAtMaxAbsLatitude(north.length > 0 ? north : findTimeSeededShadowLimitPoints(pbe, contacts, 1, curveOptions))
 		umbraSouth = splitAtMaxAbsLatitude(south.length > 0 ? south : findTimeSeededShadowLimitPoints(pbe, contacts, -1, curveOptions))
 		if (options.includePolygons ?? true) totalityPath = buildTotalityPathPolygons(umbraNorth, umbraSouth, points.U1, points.U2)
 	}
 
-	const penumbraNorth = findCurvePoints(pbe, 1, 0, curveOptions)
-	const penumbraSouth = findCurvePoints(pbe, -1, 0, curveOptions)
+	const penumbraNorth = stitchDiscontinuousCurve(findCurvePoints(pbe, 1, 0, curveOptions))
+	const penumbraSouth = stitchDiscontinuousCurve(findCurvePoints(pbe, -1, 0, curveOptions))
 	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, contacts, { step: options.riseSetStep }) : []
 
 	return {
