@@ -25,7 +25,10 @@ const SOLVER_MAX_ITERATIONS = 50
 const SOLVER_TOLERANCE = 1e-4
 const CENTRAL_ECLIPSE_GAMMA_LIMIT = 0.9972
 const SUN_RADIUS_EARTH_RADII = 109.076370706
-const MOON_RADIUS_EARTH_RADII = 0.2725076
+// Mean lunar radius (includes valleys) used for penumbral contacts, per NASA/Espenak convention.
+const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272281
+// Lunar radius used for umbral contacts (total/annular path), per NASA/Espenak convention.
+const MOON_RADIUS_UMBRA_EARTH_RADII = 0.2725076
 const BOUNDARY_REFINEMENT_STEPS = 18
 
 // Polynomial Besselian elements fitted around the eclipse maximum.
@@ -367,13 +370,14 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): InstantBesselianElements {
 	const projection = besselianShadowProjection(sample)
 	const sunSemidiameter = Math.asin(clamp(SUN_RADIUS_EARTH_RADII / sample.sunDistance, -1, 1))
-	const moonSemidiameter = Math.asin(clamp(MOON_RADIUS_EARTH_RADII / sample.moonDistance, -1, 1))
+	const moonPenumbraSemidiameter = Math.asin(clamp(MOON_RADIUS_PENUMBRA_EARTH_RADII / sample.moonDistance, -1, 1))
+	const moonUmbraSemidiameter = Math.asin(clamp(MOON_RADIUS_UMBRA_EARTH_RADII / sample.moonDistance, -1, 1))
 	const moonParallax = Math.asin(clamp(1 / sample.moonDistance, -1, 1))
 	const invParallax = moonParallax === 0 ? 0 : 1 / moonParallax
 	const sunMoonDistance = projection.sunMoonDistance
 	const invSunMoonDistance = sunMoonDistance > 0 ? 1 / sunMoonDistance : 0
-	const l1 = (sunSemidiameter + moonSemidiameter) * invParallax
-	const l2 = (sunSemidiameter - moonSemidiameter) * invParallax
+	const l1 = (sunSemidiameter + moonPenumbraSemidiameter) * invParallax
+	const l2 = (sunSemidiameter - moonUmbraSemidiameter) * invParallax
 	// const gmst = greenwichMeanSiderealTime(time)
 	const gmst = normalizeAngle(280.46061837 * DEG2RAD + 360.98564736629 * DEG2RAD * (time.day - J2000 + time.fraction))
 	const mu = normalizeAngle(gmst - projection.rightAscension)
@@ -389,8 +393,8 @@ function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): Insta
 		mu,
 		dx: 0,
 		dy: 0,
-		tanF1: (SUN_RADIUS_EARTH_RADII + MOON_RADIUS_EARTH_RADII) * invSunMoonDistance,
-		tanF2: (SUN_RADIUS_EARTH_RADII - MOON_RADIUS_EARTH_RADII) * invSunMoonDistance,
+		tanF1: (SUN_RADIUS_EARTH_RADII + MOON_RADIUS_PENUMBRA_EARTH_RADII) * invSunMoonDistance,
+		tanF2: (SUN_RADIUS_EARTH_RADII - MOON_RADIUS_UMBRA_EARTH_RADII) * invSunMoonDistance,
 	}
 }
 
@@ -518,7 +522,12 @@ export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, 
 
 	function fn(jd: number) {
 		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.time0, jd))
-		return be.x * be.x + be.y * be.y - 1
+		// Earth's limb in the fundamental plane is the flattened ellipse x^2 + (omega*y)^2 = 1,
+		// matching the on-Earth test used in projectFundamentalPoint.
+		const cosD = Math.cos(be.d)
+		const omega = 1 / Math.sqrt(1 - EARTH_E2 * cosD * cosD)
+		const y1 = omega * be.y
+		return be.x * be.x + y1 * y1 - 1
 	}
 
 	const jd = bisectRoot(fn, from, to)
@@ -565,15 +574,20 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 
 		const hD = h * RAD2DEG
 
-		if (G !== 0 && hD <= 10) {
+		// Empirical horizon-refraction correction that lifts the observer; it applies to any
+		// curve whose point lies near the horizon, regardless of the limit family.
+		if (hD <= 10) {
 			const sigma = 1.000012 + 0.0002282559 * Math.exp(-0.5035747 * hD)
 			ksi *= sigma
 			eta *= sigma
 			zeta *= sigma
 		}
 
-		const ksiPrime = rhoCosPhi * cosH * TAU * pbe.stepDays
-		const etaPrime = rhoCosPhi * sinH * sinD * TAU * pbe.stepDays
+		// Diurnal rate of the observer's hour angle dmu/dt, in radians per normalized time unit,
+		// taken from the fitted mu polynomial instead of the 2*pi/day approximation.
+		const dmu = evaluatePolynomialDerivative(pbe.mu, t)
+		const ksiPrime = rhoCosPhi * cosH * dmu
+		const etaPrime = rhoCosPhi * sinH * sinD * dmu
 		const u = be.x - ksi
 		const v = be.y - eta
 		const a = be.dx - ksiPrime
@@ -585,8 +599,15 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 		const n = Math.sqrt(nSquared)
 		const tau = -(u * a + v * b) / nSquared
 		const W = (v * a - u * b) / n
-		const Q1 = b * sinH * rhoSinPhi
-		const Q2 = a * (cosH * sinD * rhoSinPhi + cosD * rhoCosPhi)
+		// Exact d/dphi of the reduced-latitude functions including flattening, replacing the
+		// spherical approximation -d(rhoCosPhi)/dphi ~ rhoSinPhi and d(rhoSinPhi)/dphi ~ rhoCosPhi:
+		//   -d(rhoCosPhi)/dphi = rhoSinPhi / (cos^2 phi + F^2 sin^2 phi)
+		//    d(rhoSinPhi)/dphi = F^2 rhoCosPhi / (cos^2 phi + F^2 sin^2 phi)
+		const latDenom = cosPhi * cosPhi + F_CONST * F_CONST * sinPhi * sinPhi
+		const dRhoCos = rhoSinPhi / latDenom
+		const dRhoSin = (F_CONST * F_CONST * rhoCosPhi) / latDenom
+		const Q1 = b * sinH * dRhoCos
+		const Q2 = a * (cosH * sinD * dRhoCos + cosD * dRhoSin)
 		const Q = (Q1 + Q2) / (n * DEG2RAD)
 		const dL1 = be.l1 - zeta * be.tanF1
 		const dL2 = be.l2 - zeta * be.tanF2
