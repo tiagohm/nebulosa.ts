@@ -856,3 +856,14 @@ test('central-line endpoints match the NASA 2024-04-08 path-table limit rows', (
 	expectNearNasa(geometry.points.U1, -7.825, -158.531667, 2)
 	expectNearNasa(geometry.points.U2, 47.616667, -19.786667, 2)
 })
+
+test('partial-eclipse limits populate at a fine longitude step for a central eclipse', () => {
+	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(NASA_ECLIPSES[0]), nasaPbe(NASA_ECLIPSES[0]), { longitudeStep: deg(2), maxAngularStep: deg(6), includeRiseSetCurves: false, includePolygons: false })
+
+	// The partial-eclipse north/south limits are step-sensitive: they must be populated, not empty,
+	// once the meridian scan is fine enough to land on the day-side tangency curve.
+	expect(geometry.lines.penumbraNorth.length).toBeGreaterThan(5)
+	expect(geometry.lines.penumbraSouth.length).toBeGreaterThan(5)
+	for (const point of geometry.lines.penumbraNorth) expectGeoPoint(point)
+	for (const point of geometry.lines.penumbraSouth) expectGeoPoint(point)
+})

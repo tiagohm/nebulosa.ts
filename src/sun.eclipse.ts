@@ -1092,54 +1092,6 @@ function chainCurvePointsByProximity(points: readonly GeoPoint[]): readonly GeoP
 	return greedyNearestNeighborChain(points, Math.max(0, startIndex))
 }
 
-// Angular gap between consecutive points that signals two interleaved, spatially disjoint branches
-// (e.g. a partial-eclipse limit split into separate regions) rather than a continuous sweep.
-const CURVE_DISCONTINUITY = 60 * DEG2RAD
-
-// Re-chains a curve that the time/longitude ordering left with a large spatial discontinuity.
-// Well-behaved (continuous) curves contain no such gap and are returned unchanged; only the
-// pathological interleaved-branch case is reordered, via a greedy nearest-neighbor walk that
-// keeps each disjoint branch contiguous instead of bridging back and forth between them.
-function stitchDiscontinuousCurve(points: readonly GeoPoint[]): readonly GeoPoint[] {
-	if (points.length <= 2) return points
-
-	let discontinuous = false
-	for (let i = 1; i < points.length; i++) {
-		if (angularDistance(points[i - 1], points[i]) > CURVE_DISCONTINUITY) {
-			discontinuous = true
-			break
-		}
-	}
-
-	if (!discontinuous) return points
-
-	const remaining = points.slice()
-	let startIndex = 0
-	for (let i = 1; i < remaining.length; i++) if (remaining[i].longitude < remaining[startIndex].longitude) startIndex = i
-
-	const ordered: GeoPoint[] = [remaining.splice(startIndex, 1)[0]]
-
-	while (remaining.length > 0) {
-		const last = ordered.at(-1)!
-
-		let bestIndex = 0
-		let bestDistance = Number.POSITIVE_INFINITY
-
-		for (let i = 0; i < remaining.length; i++) {
-			const distance = angularDistance(last, remaining[i])
-
-			if (distance < bestDistance) {
-				bestDistance = distance
-				bestIndex = i
-			}
-		}
-
-		ordered.push(remaining.splice(bestIndex, 1)[0])
-	}
-
-	return ordered
-}
-
 // Splits a polar/circumpolar limit at its largest absolute latitude.
 export function splitAtMaxAbsLatitude(points: readonly GeoPoint[]): GeoPoint[][] {
 	if (points.length <= 2) return [Array.from(points)]
@@ -1412,8 +1364,8 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	let penumbraNorth: readonly GeoPoint[] = []
 	let penumbraSouth: readonly GeoPoint[] = []
 	if (hasUmbralPath(eclipse)) {
-		penumbraNorth = stitchDiscontinuousCurve(findPartialEclipseLimit(pbe, 1, curveOptions))
-		penumbraSouth = stitchDiscontinuousCurve(findPartialEclipseLimit(pbe, -1, curveOptions))
+		penumbraNorth = findPartialEclipseLimit(pbe, 1, curveOptions)
+		penumbraSouth = findPartialEclipseLimit(pbe, -1, curveOptions)
 	}
 	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, contacts, { step: options.riseSetStep }) : []
 
