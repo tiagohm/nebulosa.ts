@@ -24,11 +24,14 @@ const CONTACT_TOLERANCE_DAYS = 1e-8
 const SOLVER_MAX_ITERATIONS = 50
 const SOLVER_TOLERANCE = 1e-4
 const CENTRAL_ECLIPSE_GAMMA_LIMIT = 0.9972
+const LIMB_INTERSECTION_STEPS = 128
+const LIMB_INTERSECTION_TOLERANCE = 1e-12
+const LIMB_TANGENCY_TOLERANCE = 1e-9
 const SUN_RADIUS_EARTH_RADII = 109.076370706
-// Mean lunar radius (includes valleys) used for penumbral contacts, per NASA/Espenak convention.
-const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272281
-// Lunar radius used for umbral contacts (total/annular path), per NASA/Espenak convention.
-const MOON_RADIUS_UMBRA_EARTH_RADII = 0.2725076
+// Lunar radius k1 used for penumbral contacts, per NASA/Espenak convention.
+const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272488
+// Lunar radius k2 used for umbral contacts (total/annular path), per NASA/Espenak convention.
+const MOON_RADIUS_UMBRA_EARTH_RADII = 0.272281
 const BOUNDARY_REFINEMENT_STEPS = 18
 // Latitude seeds used to acquire the partial-eclipse (penumbra) limit during the meridian scan.
 // Unlike the umbral limits, which hug the central line and are seeded from it, the partial limit can
@@ -43,6 +46,8 @@ export interface PolynomialBesselianElements {
 	readonly maximumTime: Time
 	// Delta T in seconds.
 	readonly deltaT: number
+	// Optional Delta T longitude correction in radians for geographic projection.
+	readonly deltaTLongitudeCorrection?: Angle
 	// Polynomial time unit in days.
 	readonly stepDays: number
 	// X coordinate of the shadow axis in Earth equatorial radii.
@@ -69,6 +74,8 @@ export interface InstantBesselianElements {
 	readonly time: Time
 	// Delta T in seconds.
 	readonly deltaT: number
+	// Optional Delta T longitude correction in radians for geographic projection.
+	readonly deltaTLongitudeCorrection?: Angle
 	// X coordinate of the shadow axis in Earth equatorial radii.
 	readonly x: number
 	// Y coordinate of the shadow axis in Earth equatorial radii.
@@ -300,6 +307,7 @@ function centralLinePointAtJulianDay(pbe: PolynomialBesselianElements, jd: numbe
 interface BesselianSample {
 	readonly time: Time
 	readonly deltaT: number
+	readonly deltaTLongitudeCorrection?: Angle
 	readonly x: number
 	readonly y: number
 	readonly l1: number
@@ -351,6 +359,7 @@ function evaluateBesselianSample(pbe: PolynomialBesselianElements, time: Time): 
 	return {
 		time,
 		deltaT: pbe.deltaT,
+		deltaTLongitudeCorrection: deltaTLongitudeCorrection(pbe),
 		x: evaluatePolynomial(pbe.x, t),
 		y: evaluatePolynomial(pbe.y, t),
 		l1: evaluatePolynomial(pbe.l1, t),
@@ -415,6 +424,7 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 		time0,
 		maximumTime,
 		deltaT: deltaT / offsets.length,
+		deltaTLongitudeCorrection: 0,
 		stepDays,
 		x: fitCubic(t, x),
 		y: fitCubic(t, y),
@@ -429,6 +439,7 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 
 function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): InstantBesselianElements {
 	const projection = besselianShadowProjection(sample)
+	const deltaT = sample.deltaT ?? 0
 	const sunSemidiameter = Math.asin(clamp(SUN_RADIUS_EARTH_RADII / sample.sunDistance, -1, 1))
 	const moonPenumbraSemidiameter = Math.asin(clamp(MOON_RADIUS_PENUMBRA_EARTH_RADII / sample.moonDistance, -1, 1))
 	const moonUmbraSemidiameter = Math.asin(clamp(MOON_RADIUS_UMBRA_EARTH_RADII / sample.moonDistance, -1, 1))
@@ -438,13 +449,14 @@ function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): Insta
 	const invSunMoonDistance = sunMoonDistance > 0 ? 1 / sunMoonDistance : 0
 	const l1 = (sunSemidiameter + moonPenumbraSemidiameter) * invParallax
 	const l2 = (sunSemidiameter - moonUmbraSemidiameter) * invParallax
-	// const gmst = greenwichMeanSiderealTime(time)
-	const gmst = normalizeAngle(280.46061837 * DEG2RAD + 360.98564736629 * DEG2RAD * (time.day - J2000 + time.fraction))
+	const siderealTime = timeShift(time, -deltaT / DAYSEC)
+	const gmst = normalizeAngle(280.46061837 * DEG2RAD + 360.98564736629 * DEG2RAD * (siderealTime.day - J2000 + siderealTime.fraction))
 	const mu = normalizeAngle(gmst - projection.rightAscension)
 
 	return {
 		time,
-		deltaT: sample.deltaT ?? 0,
+		deltaT,
+		deltaTLongitudeCorrection: 0,
 		x: projection.x,
 		y: projection.y,
 		l1,
@@ -497,6 +509,10 @@ function besselianShadowProjection(sample: SunMoonPosition) {
 function earthLimbOmega(be: Pick<BesselianSample, 'd'>) {
 	const cosD = Math.cos(be.d)
 	return 1 / Math.sqrt(1 - EARTH_E2 * cosD * cosD)
+}
+
+function deltaTLongitudeCorrection(elements: { readonly deltaT: number; readonly deltaTLongitudeCorrection?: Angle }) {
+	return elements.deltaTLongitudeCorrection ?? DELTA_T_LONGITUDE_FACTOR * elements.deltaT
 }
 
 // Finds the closest point on the oblate Earth limb x² + (omega*y)² = 1 and returns
@@ -556,7 +572,7 @@ export function projectFundamentalPoint(be: BesselianSample, x: number, y: numbe
 	const H = normalizeAngle(Math.atan2(px, B * b2 - y1 * b1))
 	const phi1 = Math.asin(clamp(B * b1 + y1 * b2, -1, 1))
 	const lat = Math.atan(INV_F_CONST_APPROX * Math.tan(phi1))
-	const lon = H - be.mu + DELTA_T_LONGITUDE_FACTOR * be.deltaT
+	const lon = H - be.mu + deltaTLongitudeCorrection(be)
 
 	if (!Number.isFinite(lon) || !Number.isFinite(lat)) return undefined
 
@@ -646,22 +662,27 @@ export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, 
 // i = +1, G = 0 -> northern limit of partial eclipse
 // i = -1, G = 0 -> southern limit of partial eclipse
 // i = ±1, 0<G<1 -> equal-magnitude curve
+export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number) {
+	return solveEclipseCurvePoint(pbe, longitude, initialLatitude, i, G, 0)
+}
+
 //
 // correctLatitudeScaling selects the Newton latitude-step scaling. The default (false) keeps the
 // historical, under-scaled step relied upon by the umbral and equal-magnitude meridian scan, which
 // only refines points already seeded extremely close to the curve. The wide partial-eclipse
 // (penumbra, G = 0) limit lies far from any such seed, so it needs the exact per-radian derivative
 // (true) to actually converge from a coarse latitude guess.
-export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number, correctLatitudeScaling = false) {
-	let t = 0
+function solveEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number, initialT: number) {
+	let t = initialT
 	let phi = initialLatitude
 	const julianDay0 = toJulianDay(pbe.time0)
+	const longitudeCorrection = deltaTLongitudeCorrection(pbe)
 	let jd = julianDay0
 
 	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
 		jd = julianDay0 + t * pbe.stepDays
 		const be = evaluateBesselianAtT(pbe, t)
-		const H = longitude + be.mu - DELTA_T_LONGITUDE_FACTOR * pbe.deltaT
+		const H = longitude + be.mu - longitudeCorrection
 		const sinD = Math.sin(be.d)
 		const cosD = Math.cos(be.d)
 		const sinH = Math.sin(H)
@@ -716,12 +737,12 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 		const Q2 = a * (cosH * sinD * dRhoCos + cosD * dRhoSin)
 		// dW/dphi = -(Q1 + Q2) / n in radians; the corrected branch uses that exact derivative so the
 		// Newton step is residual / (dW/dphi). The legacy branch keeps the spurious DEG2RAD factors.
-		const Q = (Q1 + Q2) / (n * (correctLatitudeScaling ? 1 : DEG2RAD))
+		const Q = (Q1 + Q2) / n
 		const dL1 = be.l1 - zeta * be.tanF1
 		const dL2 = be.l2 - zeta * be.tanF2
 		const E = dL1 - G * (dL1 + dL2)
 		const residual = W + i * Math.abs(E)
-		const deltaPhi = Q === 0 ? Number.NaN : correctLatitudeScaling ? residual / Q : deg(residual / Q)
+		const deltaPhi = Q === 0 ? Number.NaN : residual / Q
 
 		if (!Number.isFinite(tau) || !Number.isFinite(deltaPhi)) return undefined
 
@@ -775,12 +796,12 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 // from the previously found latitude and otherwise sweeping the mid-latitude acquisition seeds.
 function solvePartialLimitAtLongitude(pbe: PolynomialBesselianElements, longitude: Angle, previous: GeoPoint | undefined, i: -1 | 1) {
 	if (previous) {
-		const continued = findEclipseCurvePoint(pbe, longitude, previous.latitude, i, 0, true)
+		const continued = findEclipseCurvePoint(pbe, longitude, previous.latitude, i, 0)
 		if (continued) return continued
 	}
 
 	for (const seed of PARTIAL_LIMIT_LATITUDE_SEEDS) {
-		const point = findEclipseCurvePoint(pbe, longitude, seed, i, 0, true)
+		const point = findEclipseCurvePoint(pbe, longitude, seed, i, 0)
 		if (point) return point
 	}
 
@@ -805,10 +826,10 @@ export function findPartialEclipseLimit(pbe: PolynomialBesselianElements, i: -1 
 
 		// Refine the longitudes where the limit appears or disappears so the arc ends on Earth rather
 		// than at the last coarse sample that happened to converge.
-		if (previous && !point) pushDistinct(points, refineCurveBoundary(pbe, previous.longitude, lon, previous.latitude, true, i, 0, true))
-		else if (!previous && point && lon > -PI) pushDistinct(points, refineCurveBoundary(pbe, lon - longitudeStep, lon, point.latitude, false, i, 0, true))
+		if (previous && !point) pushDistinct(points, refineCurveBoundary(pbe, previous.longitude, lon, previous.latitude, true, i, 0))
+		else if (!previous && point && lon > -PI) pushDistinct(points, refineCurveBoundary(pbe, lon - longitudeStep, lon, point.latitude, false, i, 0))
 
-		if (previous && point) appendRefinedSegment(points, pbe, previous, point, i, 0, maxAngularStep, true)
+		if (previous && point) appendRefinedSegment(points, pbe, previous, point, i, 0, maxAngularStep)
 		pushDistinct(points, point)
 		previous = point
 	}
@@ -816,14 +837,14 @@ export function findPartialEclipseLimit(pbe: PolynomialBesselianElements, i: -1 
 	return chainCurvePointsByProximity(deduplicatePoints(points))
 }
 
-function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, seed: Angle, validLow: boolean, i: -1 | 0 | 1, G: number, correctLatitudeScaling = false) {
+function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, seed: Angle, validLow: boolean, i: -1 | 0 | 1, G: number) {
 	let low = aLon
 	let high = bLon
 	let best: GeoPoint | undefined = undefined
 
 	for (let step = 0; step < BOUNDARY_REFINEMENT_STEPS; step++) {
 		const mid = (low + high) * 0.5
-		const point = findEclipseCurvePoint(pbe, mid, seed, i, G, correctLatitudeScaling)
+		const point = findEclipseCurvePoint(pbe, mid, seed, i, G)
 
 		if (point && validLow) {
 			best = point
@@ -868,19 +889,39 @@ function sampleCentralLineByTime(pbe: PolynomialBesselianElements, options: Ecli
 function findCentralSeededCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: EclipseCurveOptions, centerLineSamples?: readonly GeoPoint[]) {
 	if (i === 0 || G !== 1) return []
 
-	// Narrow central paths can fall between coarse longitude samples, so seed umbral
-	// limits from the time-parametrized central path before the meridian scan.
+	// Narrow central paths can fall between coarse longitude samples. Use cross-track
+	// shadow-footprint edges only as convergence seeds, then keep the solved limit points.
 	const centerLine = centerLineSamples ?? sampleCentralLineByTime(pbe, options)
 	const points: GeoPoint[] = []
+	const julianDay0 = toJulianDay(pbe.time0)
 
-	for (const center of centerLine) {
+	for (let index = 0; index < centerLine.length; index++) {
+		const center = centerLine[index]
 		if (center.jd === undefined) continue
+
 		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, center.jd))
-		const point = projectShadowLimitPoint(be, i)
-		pushDistinct(points, point)
+		const seed = projectShadowLimitPoint(be, i, centralLineDirection(centerLine, index), center)
+		if (!seed) continue
+
+		const t = (center.jd - julianDay0) / pbe.stepDays
+		pushDistinct(points, solveEclipseCurvePoint(pbe, seed.longitude, seed.latitude, i, G, t))
 	}
 
 	return points
+}
+
+function centralLineDirection(points: readonly GeoPoint[], index: number) {
+	const center = points[index]
+	const a = points[Math.max(0, index - 1)]
+	const b = points[Math.min(points.length - 1, index + 1)]
+	if (a === b) return undefined
+
+	const east = normalizePI(b.longitude - a.longitude) * Math.cos(center.latitude)
+	const north = b.latitude - a.latitude
+	const length = Math.hypot(east, north)
+	if (!(length > 0) || !Number.isFinite(length)) return undefined
+
+	return [east / length, north / length] as const
 }
 
 function findTimeSeededShadowLimitPoints(pbe: PolynomialBesselianElements, contacts: Pick<EclipseContactPoints, 'P1' | 'P4'>, i: -1 | 1, options: EclipseCurveOptions) {
@@ -903,11 +944,13 @@ function findTimeSeededShadowLimitPoints(pbe: PolynomialBesselianElements, conta
 	return orderCurvePoints(deduplicatePoints(points))
 }
 
-function projectShadowLimitPoint(be: BesselianSample, i: -1 | 1) {
+function projectShadowLimitPoint(be: BesselianSample, i: -1 | 1, direction?: readonly [number, number], center?: GeoPoint) {
 	const radius = shadowLimitRadius(be, undefined)
 	if (!(radius > 0) || !Number.isFinite(radius)) return undefined
 
 	let best: GeoPoint | undefined = undefined
+	let bestScore = i > 0 ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY
+	const directionalCenter = direction ? (center ?? projectFundamentalPoint(be, be.x, be.y)) : undefined
 
 	for (let index = 0; index < 32; index++) {
 		const angle = (TAU * index) / 32
@@ -937,7 +980,19 @@ function projectShadowLimitPoint(be: BesselianSample, i: -1 | 1) {
 		}
 
 		if (!finitePoint(point)) continue
-		if (!best || (i > 0 ? point.latitude > best.latitude : point.latitude < best.latitude)) best = point
+
+		if (direction && directionalCenter) {
+			const east = normalizePI(point.longitude - directionalCenter.longitude) * Math.cos(directionalCenter.latitude)
+			const north = point.latitude - directionalCenter.latitude
+			const score = -east * direction[1] + north * direction[0]
+
+			if (i > 0 ? score > bestScore : score < bestScore) {
+				best = point
+				bestScore = score
+			}
+		} else if (!best || (i > 0 ? point.latitude > best.latitude : point.latitude < best.latitude)) {
+			best = point
+		}
 	}
 
 	return best
@@ -948,7 +1003,7 @@ function shadowLimitRadius(be: BesselianSample, point: GeoPoint | undefined) {
 }
 
 function surfaceZeta(be: BesselianSample, point: GeoPoint) {
-	const H = point.longitude + be.mu - DELTA_T_LONGITUDE_FACTOR * be.deltaT
+	const H = point.longitude + be.mu - deltaTLongitudeCorrection(be)
 	const U = Math.atan(F_CONST * Math.tan(point.latitude))
 	const rhoSinPhi = F_CONST * Math.sin(U)
 	const rhoCosPhi = Math.cos(U)
@@ -959,7 +1014,7 @@ function surfaceZeta(be: BesselianSample, point: GeoPoint) {
 	return rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
 }
 
-function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, correctLatitudeScaling = false) {
+function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle) {
 	const distance = angularDistance(a, b)
 	if (!(distance > maxAngularStep)) return
 
@@ -968,7 +1023,7 @@ function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElemen
 		const intermediate = interpolateGreatCirclePoint(a, b, step / steps)
 		// Seed from the great-circle-interpolated latitude (closer to the true curve point than
 		// the segment's start latitude) to keep convergence stable across steep latitude changes.
-		pushDistinct(points, findEclipseCurvePoint(pbe, intermediate.longitude, intermediate.latitude, i, G, correctLatitudeScaling))
+		pushDistinct(points, findEclipseCurvePoint(pbe, intermediate.longitude, intermediate.latitude, i, G))
 	}
 }
 
@@ -1107,19 +1162,25 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 	const south: GeoPoint[] = []
 	let lastJulianDay = P1.jd
 
-	for (let jd = P1.jd; jd <= P4.jd + stepDays * 0.5; jd += stepDays) {
-		lastJulianDay = Math.min(jd, P4.jd)
-		appendRiseSetIntersections(pbe, lastJulianDay, north, south, adaptive)
+	appendRiseSetPoint(north, P1, false)
+	appendRiseSetPoint(south, P1, false)
+
+	for (let jd = P1.jd + stepDays; jd < P4.jd - stepDays * 0.5; jd += stepDays) {
+		lastJulianDay = jd
+		appendRiseSetIntersections(pbe, jd, north, south, adaptive)
 	}
 
-	if (lastJulianDay < P4.jd) appendRiseSetIntersections(pbe, P4.jd, north, south, adaptive)
+	if (lastJulianDay < P4.jd) {
+		appendRiseSetPoint(north, P4, adaptive)
+		appendRiseSetPoint(south, P4, adaptive)
+	}
 
 	return [north, south].filter((line) => line.length > 0)
 }
 
 function appendRiseSetIntersections(pbe: PolynomialBesselianElements, jd: number, north: GeoPoint[], south: GeoPoint[], adaptive: boolean) {
 	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-	const intersections = intersectUnitCircleWithCircle(be.x, be.y, Math.abs(be.l1))
+	const intersections = intersectEarthLimbWithCircle(be, be.x, be.y, Math.abs(be.l1))
 	const projected = intersections.map(([x, y]) => projectFundamentalPoint(be, x, y)).filter(finitePoint)
 
 	if (projected.length === 1) {
@@ -1145,29 +1206,132 @@ function appendRiseSetPoint(line: GeoPoint[], point: GeoPoint, adaptive: boolean
 	pushDistinct(line, point)
 }
 
-function intersectUnitCircleWithCircle(cx: number, cy: number, radius: number): [number, number][] {
-	const d = Math.hypot(cx, cy)
-	if (!(d > 0) || !Number.isFinite(d) || !Number.isFinite(radius) || radius < 0) return []
-	if (d > 1 + radius || d < Math.abs(1 - radius)) return []
+function intersectEarthLimbWithCircle(be: Pick<BesselianSample, 'd'>, cx: number, cy: number, radius: number): [number, number][] {
+	if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(radius) || radius < 0) return []
 
-	const a = (1 - radius * radius + d * d) / (2 * d)
-	const hSquared = 1 - a * a
-	if (hSquared < -1e-12) return []
+	const omega = earthLimbOmega(be)
+	const invOmega = 1 / omega
+	const radiusSquared = radius * radius
+	const values = new Float64Array(LIMB_INTERSECTION_STEPS)
+	const step = TAU / LIMB_INTERSECTION_STEPS
+	const roots: number[] = []
 
-	const h = Math.sqrt(Math.max(0, hSquared))
-	const x2 = (a * cx) / d
-	const y2 = (a * cy) / d
-	const rx = -cy * (h / d)
-	const ry = cx * (h / d)
-	const points: [number, number][] =
-		h === 0
-			? [[x2, y2]]
-			: [
-					[x2 + rx, y2 + ry],
-					[x2 - rx, y2 - ry],
-				]
-	points.sort((a, b) => b[1] - a[1])
+	function residual(theta: number) {
+		const dx = Math.cos(theta) - cx
+		const dy = Math.sin(theta) * invOmega - cy
+		return dx * dx + dy * dy - radiusSquared
+	}
+
+	function pushRoot(theta: number) {
+		const root = normalizeAngle(theta)
+		for (const existing of roots) {
+			if (Math.abs(normalizePI(root - existing)) < 1e-7) return
+		}
+		roots.push(root)
+	}
+
+	for (let i = 0; i < LIMB_INTERSECTION_STEPS; i++) values[i] = residual(i * step)
+
+	for (let i = 0; i < LIMB_INTERSECTION_STEPS; i++) {
+		const next = (i + 1) % LIMB_INTERSECTION_STEPS
+		const theta = i * step
+		const nextTheta = (i + 1) * step
+		const value = values[i]
+		const nextValue = values[next]
+
+		if (Math.abs(value) <= LIMB_INTERSECTION_TOLERANCE) pushRoot(theta)
+		if (value * nextValue < 0) pushRoot(bisectLimbIntersection(residual, theta, nextTheta, value, nextValue))
+	}
+
+	for (let i = 0; i < LIMB_INTERSECTION_STEPS; i++) {
+		const previousValue = values[(i + LIMB_INTERSECTION_STEPS - 1) % LIMB_INTERSECTION_STEPS]
+		const value = values[i]
+		const nextValue = values[(i + 1) % LIMB_INTERSECTION_STEPS]
+
+		if (value > previousValue || value > nextValue) continue
+
+		const theta = i * step
+		const minimum = minimizeLimbIntersectionResidual(residual, theta - step, theta + step)
+
+		if (minimum.value < -LIMB_INTERSECTION_TOLERANCE) {
+			const leftTheta = theta - step
+			const rightTheta = theta + step
+			const leftValue = residual(leftTheta)
+			const rightValue = residual(rightTheta)
+
+			if (leftValue * minimum.value <= 0) pushRoot(bisectLimbIntersection(residual, leftTheta, minimum.theta, leftValue, minimum.value))
+			if (minimum.value * rightValue <= 0) pushRoot(bisectLimbIntersection(residual, minimum.theta, rightTheta, minimum.value, rightValue))
+		} else if (Math.abs(minimum.value) <= LIMB_TANGENCY_TOLERANCE) {
+			pushRoot(minimum.theta)
+		}
+
+		if (value < previousValue || value < nextValue) continue
+
+		const maximum = maximizeLimbIntersectionResidual(residual, theta - step, theta + step)
+		if (Math.abs(maximum.value) <= LIMB_TANGENCY_TOLERANCE) pushRoot(maximum.theta)
+	}
+
+	const points = roots.map((theta) => [Math.cos(theta), Math.sin(theta) * invOmega] as [number, number])
+	points.sort((a, b) => b[1] - a[1] || a[0] - b[0])
 	return points
+}
+
+function bisectLimbIntersection(f: (theta: number) => number, min: number, max: number, minValue: number, maxValue: number) {
+	let a = min
+	let b = max
+	let fa = minValue
+	let fb = maxValue
+
+	if (Math.abs(fa) <= LIMB_INTERSECTION_TOLERANCE) return a
+	if (Math.abs(fb) <= LIMB_INTERSECTION_TOLERANCE) return b
+
+	for (let iteration = 0; iteration < 48; iteration++) {
+		const mid = (a + b) * 0.5
+		const fm = f(mid)
+
+		if (Math.abs(fm) <= LIMB_INTERSECTION_TOLERANCE) return mid
+		if (fa * fm <= 0) {
+			b = mid
+			fb = fm
+		} else {
+			a = mid
+			fa = fm
+		}
+	}
+
+	return Math.abs(fa) < Math.abs(fb) ? a : b
+}
+
+function minimizeLimbIntersectionResidual(f: (theta: number) => number, min: number, max: number) {
+	let a = min
+	let b = max
+
+	for (let iteration = 0; iteration < 40; iteration++) {
+		const left = a + (b - a) / 3
+		const right = b - (b - a) / 3
+
+		if (f(left) < f(right)) b = right
+		else a = left
+	}
+
+	const theta = (a + b) * 0.5
+	return { theta, value: f(theta) }
+}
+
+function maximizeLimbIntersectionResidual(f: (theta: number) => number, min: number, max: number) {
+	let a = min
+	let b = max
+
+	for (let iteration = 0; iteration < 40; iteration++) {
+		const left = a + (b - a) / 3
+		const right = b - (b - a) / 3
+
+		if (f(left) > f(right)) b = right
+		else a = left
+	}
+
+	const theta = (a + b) * 0.5
+	return { theta, value: f(theta) }
 }
 
 function buildTotalityPathPolygons(northSegments: readonly GeoPoint[][], southSegments: readonly GeoPoint[][], U1?: GeoPoint, U2?: GeoPoint) {
