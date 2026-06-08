@@ -1231,3 +1231,64 @@ test('circumpolar umbral limits stay continuous across pole-side solver gaps', (
 		for (const point of ring) expectGeoPoint(point)
 	}
 })
+
+test('circumpolar totality fill grows physical caps containing the central line', () => {
+	// The 2003-11-23 path grazes the southern limb: near U1/U4 one band edge runs off beyond the terminator,
+	// so the fill must cap those ends along the swept Earth limb instead of tapering with a straight chord to
+	// a single U1/U4 vertex. Otherwise the central line, which starts at C1 on the limb (between U1 and U2),
+	// pokes outside the fill. The path stays in the eastern hemisphere here, so flat lon/lat point-in-polygon
+	// and segment-crossing tests are valid (no antimeridian wrap to confound them).
+	const eclipse = nearestSolarEclipse(timeYMD(2003, 11, 1), true)
+	const pbe = computePolynomialBesselianElements(eclipse.maximalTime, (t) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon))
+	const geometry = computeSolarEclipseMapGeometry(eclipse, pbe, { longitudeStep: deg(0.5), maxAngularStep: deg(0.5), includePolygons: true })
+
+	expect(geometry.polygons.totalityPath).toHaveLength(1)
+	const ring = geometry.polygons.totalityPath[0]
+
+	function inside(point: GeoPoint) {
+		let within = false
+		for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+			if (Math.abs(ring[i].x - ring[j].x) > PI) continue
+			if (ring[i].y > point.y !== ring[j].y > point.y && point.x < ((ring[j].x - ring[i].x) * (point.y - ring[i].y)) / (ring[j].y - ring[i].y) + ring[i].x) within = !within
+		}
+		return within
+	}
+
+	function distanceToRing(point: GeoPoint) {
+		let best = Number.POSITIVE_INFINITY
+		for (let i = 0; i < ring.length; i++) best = Math.min(best, sphericalSeparation(point.x, point.y, ring[i].x, ring[i].y))
+		return best
+	}
+
+	const { centerLine } = geometry.lines
+	const { C1, C2, U1, U4 } = geometry.points
+
+	// 1: every interior central-line point lies strictly within the fill.
+	for (let i = 1; i < centerLine.length - 1; i++) expect(inside(centerLine[i])).toBe(true)
+	// 2: the C1/C2 endpoints lie on the boundary within a small tolerance (they sit on the swept limb cap).
+	expect(distanceToRing(C1!)).toBeLessThan(deg(0.3))
+	expect(distanceToRing(C2!)).toBeLessThan(deg(0.3))
+	// 3: the external contacts U1/U4 are real vertices of the ring (cusps of the caps), not absent.
+	expect(ring.some((point) => sphericalSeparation(point.x, point.y, U1!.x, U1!.y) < deg(1e-6))).toBe(true)
+	expect(ring.some((point) => sphericalSeparation(point.x, point.y, U4!.x, U4!.y) < deg(1e-6))).toBe(true)
+
+	// 8: the ring is simple — no two non-adjacent edges cross.
+	function crosses(a: GeoPoint, b: GeoPoint, c: GeoPoint, d: GeoPoint) {
+		const orient = (p: GeoPoint, q: GeoPoint, r: GeoPoint) => Math.sign((r.y - p.y) * (q.x - p.x) - (q.y - p.y) * (r.x - p.x))
+		return orient(a, c, d) !== orient(b, c, d) && orient(a, b, c) !== orient(a, b, d)
+	}
+	let intersections = 0
+	for (let i = 0; i < ring.length; i++) {
+		const a = ring[i]
+		const b = ring[(i + 1) % ring.length]
+		if (Math.abs(a.x - b.x) > PI) continue
+		for (let j = i + 2; j < ring.length; j++) {
+			if (i === 0 && j === ring.length - 1) continue
+			const c = ring[j]
+			const d = ring[(j + 1) % ring.length]
+			if (Math.abs(c.x - d.x) > PI) continue
+			if (crosses(a, b, c, d)) intersections++
+		}
+	}
+	expect(intersections).toBe(0)
+})

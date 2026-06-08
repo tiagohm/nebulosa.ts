@@ -1697,10 +1697,105 @@ function bridgeUmbraLimit(pbe: PolynomialBesselianElements, limit: readonly GeoP
 	return out
 }
 
+// Adaptively time-marches one umbral path edge (i = +1 north, -1 south) from fromJd to toJd, solving each
+// point with the time-parametrized limit solver seeded by continuity from the previous one. Where the
+// perpendicular edge lies on Earth this is the totality limit; where it lies beyond the terminator the
+// solver's projection clamps it to the Earth limb, so the same march yields the physical limb cap near the
+// tangential contacts without any artificial chord. The step halves whenever the edge moved more than
+// maxAngularStep, keeping the cap as smooth as the rest of the band after densification.
+function marchUmbraEdge(pbe: PolynomialBesselianElements, fromJd: number, toJd: number, i: -1 | 1, start: GeoPoint, maxAngularStep: Angle): GeoPoint[] {
+	const out: GeoPoint[] = [start]
+	const span = toJd - fromJd
+	if (!(span > 0)) return out
+
+	const minStep = span / UMBRA_GAP_BRIDGE_MIN_STEPS
+	let previous = start
+	let jd = fromJd
+	let dt = span / 8
+
+	while (jd + minStep < toJd) {
+		const nextJd = Math.min(jd + dt, toJd)
+		const edge = solveTimeFixedLimitPoint(pbe, nextJd, i, previous.x, previous.y)
+		const stepSize = edge ? angularDistance(previous, edge) : 0
+
+		// Halve while the edge moved too far in one step; otherwise accept it and ease the step back up.
+		if (edge && stepSize > maxAngularStep && dt > minStep) {
+			dt = Math.max(dt / 2, minStep)
+			continue
+		}
+
+		jd = nextJd
+		if (edge) {
+			pushDistinct(out, edge)
+			previous = edge
+			if (stepSize < maxAngularStep * 0.5) dt = Math.min(dt * 2, span / 8)
+		}
+	}
+
+	return out
+}
+
+// Builds the totality/annularity path as a single closed ring from the gap-bridged north and south limit
+// curves plus four physical end caps. The limits trace the band's body where both perpendicular edges lie
+// on Earth; near each external contact U1/U4 one edge runs off beyond the terminator, so the cap there is
+// the Earth-limb arc the umbra sweeps, traced by marching that edge in time between the contact and the
+// limit's endpoint (the same edge, so cap and limit join continuously). A normal eclipse's contacts sit at
+// the limit endpoints, collapsing every cap to that single tangential point, so its band keeps its old
+// taper; a grazing/circumpolar eclipse grows real caps that keep the central line (the shadow-axis foot,
+// always inside the umbra) within the fill all the way to C1/C2. The only sharp turns are the tangential
+// cusps at U1/U4. The whole contour is physical: there is no artificial closure to keep out of limit
+// tests. Antimeridian wraps are split later at projection time.
+function buildCappedTotalityRing(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], u1: GeoPoint, u4: GeoPoint, maxAngularStep: Angle): GeoPoint[][] {
+	if (north.length < 2 || south.length < 2) return []
+
+	const northStart = north[0]
+	const northEnd = north.at(-1)!
+	const southStart = south[0]
+	const southEnd = south.at(-1)!
+
+	if ([northStart, northEnd, southStart, southEnd, u1, u4].some((point) => point.jd === undefined)) {
+		return buildSingleTotalityRing(north, south, u1, u4)
+	}
+
+	// Cap arcs from each contact to the abutting limit endpoint, marched along the same edge so they meet the
+	// limit without a seam. A cap is built only where the limit endpoint sits more than one step from the
+	// contact (the umbra grazed the terminator there): otherwise the contact already caps the band as a
+	// single tangential vertex, and marching the near-degenerate interval would only jitter near the cusp.
+	const startCapNorth = umbraCapArc(pbe, u1, northStart, 1, maxAngularStep)
+	const endCapNorth = umbraCapArc(pbe, northEnd, u4, 1, maxAngularStep)
+	const startCapSouth = umbraCapArc(pbe, u1, southStart, -1, maxAngularStep)
+	const endCapSouth = umbraCapArc(pbe, southEnd, u4, -1, maxAngularStep)
+
+	const ring: GeoPoint[] = []
+	// U1 cusp -> north start cap -> north limit -> north end cap -> U4 cusp -> south end cap -> south limit
+	// -> south start cap -> back to U1 cusp. The U1/U4 cusps are pushed explicitly so they anchor the band
+	// even where a cap is degenerate (empty).
+	pushDistinct(ring, u1)
+	for (const point of startCapNorth) pushDistinct(ring, point)
+	for (const point of north) pushDistinct(ring, point)
+	for (const point of endCapNorth) pushDistinct(ring, point)
+	pushDistinct(ring, u4)
+	for (let k = endCapSouth.length - 1; k >= 0; k--) pushDistinct(ring, endCapSouth[k])
+	for (let k = south.length - 1; k >= 0; k--) pushDistinct(ring, south[k])
+	for (let k = startCapSouth.length - 1; k >= 0; k--) pushDistinct(ring, startCapSouth[k])
+	closeRing(ring)
+
+	return ring.length >= 3 ? [ring] : []
+}
+
+// Marches the cap arc along umbral edge i between a tangential contact and the abutting limit endpoint, in
+// whichever time order runs forward. Returns an empty arc when the endpoint is within one step of the
+// contact, so a band whose limit already reaches the contact keeps its single-vertex taper there.
+function umbraCapArc(pbe: PolynomialBesselianElements, contact: GeoPoint, limitEnd: GeoPoint, i: -1 | 1, maxAngularStep: Angle): GeoPoint[] {
+	if (contact.jd === undefined || limitEnd.jd === undefined || angularDistance(contact, limitEnd) <= maxAngularStep) return []
+	const [from, to] = contact.jd < limitEnd.jd ? [contact, limitEnd] : [limitEnd, contact]
+	return marchUmbraEdge(pbe, from.jd!, to.jd!, i, from, maxAngularStep)
+}
+
 // Builds one closed ring tracing the north limit forward, through the end tip, back along the south
 // limit and through the start tip. The tip points (the path endpoints U1/U4, or the central-line
-// endpoints C1/C2 when the umbral contacts are unavailable) taper the band to a point at each end. This
-// is the simple band of a non-circumpolar eclipse.
+// endpoints C1/C2 when the umbral contacts are unavailable) taper the band to a point at each end. Used as
+// a fallback when the umbral external contacts U1/U4 are unavailable to drive the time-marched ring.
 function buildSingleTotalityRing(north: readonly GeoPoint[], south: readonly GeoPoint[], startTip?: GeoPoint, endTip?: GeoPoint): GeoPoint[][] {
 	const ring: GeoPoint[] = []
 	pushDistinct(ring, startTip)
@@ -1769,9 +1864,12 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		const fullSouth = bridgeUmbraLimit(pbe, south.length > 0 ? south : findTimeSeededShadowLimitPoints(pbe, contacts, -1, curveOptions), maxAngularStep, -1)
 		umbraNorth = splitUmbraLimit(fullNorth, maxAngularStep)
 		umbraSouth = splitUmbraLimit(fullSouth, maxAngularStep)
-		// The band tapers to the zero-width path endpoints U1/U4 (the umbral external contacts), falling
-		// back to the central-line endpoints C1/C2 when the umbral contacts are unavailable.
-		if (options.includePolygons ?? true) totalityPath = buildTotalityPathPolygon(fullNorth, fullSouth, points.U1 ?? points.C1, points.U4 ?? points.C2)
+		// Trace the fill by marching both umbral edges between the external contacts U1/U4, so it grows true
+		// physical caps at grazing ends and contains the central line up to C1/C2. When the umbral contacts
+		// are unavailable, fall back to the simple chord taper toward the central-line endpoints C1/C2.
+		if (options.includePolygons ?? true) {
+			totalityPath = points.U1 && points.U4 ? buildCappedTotalityRing(pbe, fullNorth, fullSouth, points.U1, points.U4, maxAngularStep) : buildTotalityPathPolygon(fullNorth, fullSouth, points.C1, points.C2)
+		}
 	}
 
 	// Partial-eclipse (penumbra) north/south limits are produced for eclipses with an umbral path,
