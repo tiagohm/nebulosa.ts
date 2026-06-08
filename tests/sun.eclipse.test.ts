@@ -2,8 +2,8 @@ import { expect, test, describe } from 'bun:test'
 import { deg, formatAZ } from '../src/angle'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, evaluateBesselian, findCurvePoints, findEclipseCurvePoint, findExtremeLimitOfCentralLine, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, pointsToSvgPathData, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SolarEclipseMapGeometryOptions, type SolarEclipseMapPoints, type SolarEclipseMapSvgPaths, type SunMoonPosition } from '../src/sun.eclipse'
-import { time, Timescale, timeSubtract, timeToDate, timeYMD, toJulianDay, type Time } from '../src/time'
+import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, evaluateBesselian, findCurvePoints, findEclipseCurvePoint, findExtremeLimitOfCentralLine, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, pointsToSvgPathData, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse'
+import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../src/time'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
 import { PlateCarree, type ProjectionOptions } from '../src/projection'
@@ -211,6 +211,114 @@ function axisLimbResidual(elements: PolynomialBesselianElements, jd: number) {
 	const cosD = Math.cos(be.d)
 	const omega = 1 / Math.sqrt(1 - EARTH_FLATTENING_E2 * cosD * cosD)
 	return be.x * be.x + (omega * be.y) ** 2 - 1
+}
+
+// Earth flattening factor (polar/equatorial radius ratio), matching the geometry engine's F_CONST.
+const EARTH_FLATTENING_F = Math.sqrt(1 - EARTH_FLATTENING_E2)
+
+// Finite-difference d(mu)/d(normalized time); InstantBesselianElements omits the mu derivative.
+function muRate(elements: PolynomialBesselianElements, jd: number) {
+	const a = evaluateBesselian(elements, time(jd, 0, Timescale.TT))
+	const b = evaluateBesselian(elements, time(jd + 1e-4, 0, Timescale.TT))
+	return (((b.mu - a.mu + 3 * PI) % TAU) - PI) / (1e-4 / elements.stepDays)
+}
+
+// Tangency residual of a limit point in Earth radii: |W + i*|E||, the eclipse-condition residual the
+// curve solver drives to zero (W is the cross-track offset of the observer from the shadow axis, |E| the
+// shadow-edge radius). Near zero means the point lies exactly on the requested magnitude curve: the umbra
+// edge for G = 1, the penumbra edge for G = 0. Detects points that did not converge onto the physical limit.
+function limitTangencyResidual(elements: PolynomialBesselianElements, point: GeoPoint, i: -1 | 1, G: number) {
+	const be = evaluateBesselian(elements, time(point.jd!, 0, Timescale.TT))
+	const dmu = muRate(elements, point.jd!)
+	const sinD = Math.sin(be.d)
+	const cosD = Math.cos(be.d)
+	const H = point.x + be.mu - (be.deltaTLongitudeCorrection ?? 0)
+	const sinH = Math.sin(H)
+	const cosH = Math.cos(H)
+	const U = Math.atan(EARTH_FLATTENING_F * Math.tan(point.y))
+	const rhoSinPhi = EARTH_FLATTENING_F * Math.sin(U)
+	const rhoCosPhi = Math.cos(U)
+	const ksi = rhoCosPhi * sinH
+	const eta = rhoSinPhi * cosD - rhoCosPhi * cosH * sinD
+	const zeta = rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
+	const a = be.dx - rhoCosPhi * cosH * dmu
+	const b = be.dy - rhoCosPhi * sinH * sinD * dmu
+	const n = Math.hypot(a, b)
+	const W = ((be.y - eta) * a - (be.x - ksi) * b) / n
+	const dL1 = be.l1 - zeta * be.tanF1
+	const dL2 = be.l2 - zeta * be.tanF2
+	const E = dL1 - G * (dL1 + dL2)
+	return Math.abs(W + i * Math.abs(E))
+}
+
+// Geometric solar altitude (radians) at a curve point's instant. Curve points must lie on the sunlit side,
+// where the Sun is above the horizon (a small negative tolerance absorbs refraction near the contacts).
+function solarAltitude(elements: PolynomialBesselianElements, point: GeoPoint) {
+	const be = evaluateBesselian(elements, time(point.jd!, 0, Timescale.TT))
+	const H = point.x + be.mu - (be.deltaTLongitudeCorrection ?? 0)
+	const sinh = Math.sin(be.d) * Math.sin(point.y) + Math.cos(be.d) * Math.cos(point.y) * Math.cos(H)
+	return Math.asin(Math.max(-1, Math.min(1, sinh)))
+}
+
+// Counts interior vertices whose direction turns by more than threshold radians: the serrilhado detector.
+// Antimeridian-wrapping and zero-length steps are skipped. Zero means a smooth physical curve.
+function countKinks(points: readonly GeoPoint[], threshold: number) {
+	let count = 0
+
+	for (let i = 1; i < points.length - 1; i++) {
+		const v1x = points[i].x - points[i - 1].x
+		const v1y = points[i].y - points[i - 1].y
+		const v2x = points[i + 1].x - points[i].x
+		const v2y = points[i + 1].y - points[i].y
+		if (Math.abs(v1x) > PI || Math.abs(v2x) > PI) continue
+		const d1 = Math.hypot(v1x, v1y)
+		const d2 = Math.hypot(v2x, v2y)
+		if (d1 < 1e-9 || d2 < 1e-9) continue
+		if (Math.acos(Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / (d1 * d2)))) > threshold) count++
+	}
+
+	return count
+}
+
+// Counts crossings between non-adjacent ring edges (antimeridian-wrapping edges skipped). Zero means a
+// simple polygon. Valid in flat lon/lat for rings that do not wrap the antimeridian.
+function countSelfIntersections(ring: readonly GeoPoint[]) {
+	const orient = (p: GeoPoint, q: GeoPoint, r: GeoPoint) => Math.sign((r.y - p.y) * (q.x - p.x) - (q.y - p.y) * (r.x - p.x))
+	let count = 0
+
+	for (let i = 0; i < ring.length; i++) {
+		const a = ring[i]
+		const b = ring[(i + 1) % ring.length]
+		if (Math.abs(a.x - b.x) > PI) continue
+
+		for (let j = i + 2; j < ring.length; j++) {
+			if (i === 0 && j === ring.length - 1) continue
+			const c = ring[j]
+			const d = ring[(j + 1) % ring.length]
+			if (Math.abs(c.x - d.x) > PI) continue
+			if (orient(a, c, d) !== orient(b, c, d) && orient(a, b, c) !== orient(a, b, d)) count++
+		}
+	}
+
+	return count
+}
+
+// Ray-cast point-in-polygon, skipping antimeridian-wrapping edges. Valid for rings that do not wrap.
+function isInsidePolygon(point: GeoPoint, ring: readonly GeoPoint[]) {
+	let inside = false
+
+	for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+		if (Math.abs(ring[i].x - ring[j].x) > PI) continue
+		if (ring[i].y > point.y !== ring[j].y > point.y && point.x < ((ring[j].x - ring[i].x) * (point.y - ring[i].y)) / (ring[j].y - ring[i].y) + ring[i].x) inside = !inside
+	}
+
+	return inside
+}
+
+// True when a closed ring wraps the antimeridian, so flat lon/lat point/segment tests do not apply to it.
+function wrapsAntimeridian(ring: readonly GeoPoint[]) {
+	for (let i = 0; i < ring.length; i++) if (Math.abs(ring[i].x - ring[(i + 1) % ring.length].x) > PI) return true
+	return false
 }
 
 // Great-circle interpolation of a time-parametrized curve at an arbitrary Julian Day.
@@ -1094,83 +1202,6 @@ test('solarEclipseMapToSvgPaths places the 2024-04-08 totality over North Americ
 	for (const value of paths.centerLine.match(/-?\d+(?:\.\d+)?/g)!.map(Number)) expect(Number.isFinite(value)).toBe(true)
 })
 
-function makeSvg(paths: SolarEclipseMapSvgPaths, width: number, height: number) {
-	function marker(point: SolarEclipseMapPoints[keyof SolarEclipseMapPoints], label: string, color: string) {
-		return point ? `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="3" fill="${color}" /><text x="${(point.x + 5).toFixed(2)}" y="${(point.y - 5).toFixed(2)}">${label}</text>` : ''
-	}
-
-	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
-<style>
-.ocean { fill: #103099; }
-.totality { fill: rgba(250, 250, 250, 0.3); stroke: none; }
-.umbra { fill: none; stroke: #CCC; stroke-width: 1; }
-.center { fill: none; stroke: #000; stroke-width: 1; }
-.penumbra { fill: none; stroke: #11c0cc; stroke-width: 0.8; }
-.riseset { fill: none; stroke: orange; stroke-width: 0.8; }
-text { font: 14px sans-serif; fill: #fff; }
-</style>
-<rect class="ocean" x="0" y="0" width="${width}" height="${height}" />
-<path class="penumbra" d="${paths.penumbraNorth}" />
-<path class="penumbra" d="${paths.penumbraSouth}" />
-<path class="riseset" d="${paths.riseSetCurves}" />
-<path class="totality" d="${paths.totalityPath}" />
-<path class="umbra" d="${paths.umbraNorth}" />
-<path class="umbra" d="${paths.umbraSouth}" />
-<path class="center" d="${paths.centerLine}" />
-${marker(paths.points.P1, 'P1', '#11c0cc')}
-${marker(paths.points.P4, 'P4', '#11c0cc')}
-${marker(paths.points.P2, 'P2', '#11c0cc')}
-${marker(paths.points.P3, 'P3', '#11c0cc')}
-${marker(paths.points.U1, 'U1', '#11cc9d')}
-${marker(paths.points.U4, 'U4', '#11cc9d')}
-${marker(paths.points.U2, 'U2', '#11cc9d')}
-${marker(paths.points.U3, 'U3', '#11cc9d')}
-${marker(paths.points.C1, 'C1', '#cc0000')}
-${marker(paths.points.C2, 'C2', '#cc0000')}
-${marker(paths.points.Max, 'Max', '#e8a000')}
-</svg>`
-}
-
-describe('generate solar eclipse maps', () => {
-	let solarEclipse = nearestSolarEclipse(timeYMD(2000, 1, 1), true)
-	let date = timeToDate(solarEclipse.maximalTime)
-
-	const getSunMoonPosition = (time: Time) => computeSunMoonPositionAt(time, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
-	const options: SolarEclipseMapGeometryOptions = { longitudeStep: deg(0.5), maxAngularStep: deg(0.5), includeRiseSetCurves: true, includePolygons: true, riseSetStep: 600 }
-
-	const WIDTH = 2520.631
-	const HEIGHT = 1260.315
-
-	const projection = new PlateCarree(0, {
-		// Longitude spans 2*PI across the full width, so one radian maps to width / TAU pixels.
-		scale: WIDTH / TAU,
-		falseEasting: WIDTH / 2,
-		falseNorthing: HEIGHT / 2,
-		yAxisDirection: 'southUp',
-		centralMeridian: 0,
-		longitudeWrapMode: 'pi',
-		// Allow the full latitude range up to the poles; the default caps at the Web Mercator limit.
-		maxLatitude: PIOVERTWO,
-	})
-
-	while (date[0] <= 2020) {
-		const eclipse = solarEclipse
-		const { maximalTime } = eclipse
-		const id = `${date[0]}-${date[1]}-${date[2]}`
-
-		test(id, async () => {
-			const pbe = computePolynomialBesselianElements(maximalTime, getSunMoonPosition)
-			const geo = computeSolarEclipseMapGeometry(eclipse, pbe, options)
-			const paths = solarEclipseMapToSvgPaths(geo, projection)
-			const svg = makeSvg(paths, WIDTH, HEIGHT)
-			await Bun.write(`data/solar-eclipse-${id}.svg`, svg)
-		})
-
-		solarEclipse = nearestSolarEclipse(maximalTime, true)
-		date = timeToDate(solarEclipse.maximalTime)
-	}
-})
-
 test('circumpolar umbral limits stay continuous across pole-side solver gaps', () => {
 	// The 2003-11-23 totality is circumpolar over Antarctica: the latitude-based limit solver fails near
 	// the pole (the umbra stays fully on the sunlit disk), leaving multi-degree gaps in each limit. Those
@@ -1197,17 +1228,7 @@ test('circumpolar umbral limits stay continuous across pole-side solver gaps', (
 			// only at its latitude apex (a separate piece), so no interior vertex turns sharply. A sharp turn
 			// here would be the serrilhado of the old footprint bridge, whose latitude-extreme sat off the
 			// true perpendicular limit; the time-parametrized limit solver places the bridge on that curve.
-			for (let i = 1; i < segment.length - 1; i++) {
-				const v1x = segment[i].x - segment[i - 1].x
-				const v1y = segment[i].y - segment[i - 1].y
-				const v2x = segment[i + 1].x - segment[i].x
-				const v2y = segment[i + 1].y - segment[i].y
-				const d1 = Math.hypot(v1x, v1y)
-				const d2 = Math.hypot(v2x, v2y)
-				if (d1 < 1e-9 || d2 < 1e-9) continue
-				const turn = Math.acos(Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / (d1 * d2))))
-				expect(turn).toBeLessThan(deg(30))
-			}
+			expect(countKinks(segment, deg(30))).toBe(0)
 		}
 	}
 
@@ -1244,15 +1265,7 @@ test('circumpolar totality fill grows physical caps containing the central line'
 
 	expect(geometry.polygons.totalityPath).toHaveLength(1)
 	const ring = geometry.polygons.totalityPath[0]
-
-	function inside(point: GeoPoint) {
-		let within = false
-		for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-			if (Math.abs(ring[i].x - ring[j].x) > PI) continue
-			if (ring[i].y > point.y !== ring[j].y > point.y && point.x < ((ring[j].x - ring[i].x) * (point.y - ring[i].y)) / (ring[j].y - ring[i].y) + ring[i].x) within = !within
-		}
-		return within
-	}
+	expect(wrapsAntimeridian(ring)).toBe(false)
 
 	function distanceToRing(point: GeoPoint) {
 		let best = Number.POSITIVE_INFINITY
@@ -1264,7 +1277,7 @@ test('circumpolar totality fill grows physical caps containing the central line'
 	const { C1, C2, U1, U4 } = geometry.points
 
 	// 1: every interior central-line point lies strictly within the fill.
-	for (let i = 1; i < centerLine.length - 1; i++) expect(inside(centerLine[i])).toBe(true)
+	for (let i = 1; i < centerLine.length - 1; i++) expect(isInsidePolygon(centerLine[i], ring)).toBe(true)
 	// 2: the C1/C2 endpoints lie on the boundary within a small tolerance (they sit on the swept limb cap).
 	expect(distanceToRing(C1!)).toBeLessThan(deg(0.3))
 	expect(distanceToRing(C2!)).toBeLessThan(deg(0.3))
@@ -1273,22 +1286,47 @@ test('circumpolar totality fill grows physical caps containing the central line'
 	expect(ring.some((point) => sphericalSeparation(point.x, point.y, U4!.x, U4!.y) < deg(1e-6))).toBe(true)
 
 	// 8: the ring is simple — no two non-adjacent edges cross.
-	function crosses(a: GeoPoint, b: GeoPoint, c: GeoPoint, d: GeoPoint) {
-		const orient = (p: GeoPoint, q: GeoPoint, r: GeoPoint) => Math.sign((r.y - p.y) * (q.x - p.x) - (q.y - p.y) * (r.x - p.x))
-		return orient(a, c, d) !== orient(b, c, d) && orient(a, b, c) !== orient(a, b, d)
+	expect(countSelfIntersections(ring)).toBe(0)
+})
+
+describe('eclipse geometry physical and topological invariants', () => {
+	for (const fixture of CENTRAL_FIXTURES) {
+		test(`${fixture.name} curve points satisfy tangency, sun-altitude and smoothness invariants`, () => {
+			const elements = nasaPbe(fixture)
+			const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { longitudeStep: deg(1), maxAngularStep: deg(3), includePolygons: true })
+			const { umbraNorth, umbraSouth, penumbraNorth, penumbraSouth, centerLine } = geometry.lines
+
+			// Tangency residual: every umbra/penumbra limit point lies on its magnitude curve (umbra edge for
+			// G = 1, penumbra edge for G = 0), proving each is a converged physical solution, not an artifact.
+			for (const point of umbraNorth.flat()) expect(limitTangencyResidual(elements, point, 1, 1)).toBeLessThan(1e-3)
+			for (const point of umbraSouth.flat()) expect(limitTangencyResidual(elements, point, -1, 1)).toBeLessThan(1e-3)
+			for (const point of penumbraNorth) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
+			for (const point of penumbraSouth) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
+
+			// Sun altitude: every drawn curve point lies on the sunlit side, with the Sun above the horizon
+			// (a small negative tolerance absorbs refraction at the contacts, where the Sun grazes the horizon).
+			for (const point of [...umbraNorth.flat(), ...umbraSouth.flat(), ...penumbraNorth, ...penumbraSouth, ...centerLine]) {
+				expect(solarAltitude(elements, point)).toBeGreaterThan(deg(-1))
+			}
+
+			// Smoothness: each physical limit piece (split at its latitude apex) bends without sharp kinks.
+			for (const piece of [...umbraNorth, ...umbraSouth]) expect(countKinks(piece, deg(30))).toBe(0)
+		})
 	}
-	let intersections = 0
-	for (let i = 0; i < ring.length; i++) {
-		const a = ring[i]
-		const b = ring[(i + 1) % ring.length]
-		if (Math.abs(a.x - b.x) > PI) continue
-		for (let j = i + 2; j < ring.length; j++) {
-			if (i === 0 && j === ring.length - 1) continue
-			const c = ring[j]
-			const d = ring[(j + 1) % ring.length]
-			if (Math.abs(c.x - d.x) > PI) continue
-			if (crosses(a, b, c, d)) intersections++
-		}
-	}
-	expect(intersections).toBe(0)
+
+	test('non-wrapping totality fill is a simple ring containing the central line', () => {
+		// 2024-04-08 stays over the Americas without crossing the antimeridian, so flat point-in-polygon and
+		// segment-crossing tests apply directly to its single fill ring.
+		const fixture = NASA_ECLIPSES[0]
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(1), maxAngularStep: deg(3), includePolygons: true })
+
+		expect(geometry.polygons.totalityPath).toHaveLength(1)
+		const ring = geometry.polygons.totalityPath[0]
+		expect(wrapsAntimeridian(ring)).toBe(false)
+
+		// The fill is a simple polygon and the interior central line lies within it.
+		expect(countSelfIntersections(ring)).toBe(0)
+		const centerLine = geometry.lines.centerLine
+		for (let i = 1; i < centerLine.length - 1; i++) expect(isInsidePolygon(centerLine[i], ring)).toBe(true)
+	})
 })
