@@ -1153,6 +1153,13 @@ const pv = sgp4(time, source)
 const [header, ...data] = simbadQuery(query, options) // Search on Simbad TAP service
 ```
 
+### Solar Eclipse Map ![](bun.webp) ![](browser.webp)
+
+```ts
+const geometry = computeSolarEclipseMapGeometry(eclipse, pbe, options)
+const paths = solarEclipseMapToSvgPaths(geometry, projection, options)
+```
+
 ### Spk ![](bun.webp) ![](browser.webp)
 
 ```ts

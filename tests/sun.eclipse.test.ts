@@ -1,17 +1,44 @@
-import { expect, test } from 'bun:test'
+import { expect, test, describe } from 'bun:test'
 import { deg, formatAZ } from '../src/angle'
-import type { SolarEclipse, SolarEclipseType } from '../src/sun'
+import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCurvePoints, findEclipseCurvePoint, findExtremeLimitOfCentralLine, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, projectFundamentalPoint, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SunMoonPosition } from '../src/sun.eclipse'
-import { time, Timescale, timeSubtract, toJulianDay } from '../src/time'
+import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, evaluateBesselian, findCurvePoints, findEclipseCurvePoint, findExtremeLimitOfCentralLine, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, pointsToSvgPathData, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SolarEclipseMapGeometryOptions, type SolarEclipseMapPoints, type SolarEclipseMapSvgPaths, type SunMoonPosition } from '../src/sun.eclipse'
+import { time, Timescale, timeSubtract, timeToDate, timeYMD, toJulianDay, type Time } from '../src/time'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
+import { PlateCarree, type ProjectionOptions } from '../src/projection'
+import * as vsop87e from '../src/vsop87e'
+import * as elpmpp02 from '../src/elpmpp02'
 
 const JD0 = 2460409.25
 const TIME0 = time(JD0)
 
 function pbe(overrides?: Partial<PolynomialBesselianElements>): PolynomialBesselianElements {
 	return { time0: TIME0, maximumTime: TIME0, deltaT: 69, stepDays: 0.125, x: [0, 0.9], y: [0], l1: [0.4], l2: [-0.2], d: [0], mu: [0], tanF1: 0.0047, tanF2: -0.004, ...overrides }
+}
+
+// Minimal geometry literal with only the fields a test exercises; the rest are empty.
+function geometry(overrides: Partial<SolarEclipseMapGeometry['lines']> = {}, totalityPath: SolarEclipseMapGeometry['polygons']['totalityPath'] = [], points: SolarEclipseMapGeometry['points'] = {}): SolarEclipseMapGeometry {
+	return {
+		points,
+		lines: { centerLine: [], umbraNorth: [], umbraSouth: [], penumbraNorth: [], penumbraSouth: [], riseSetCurves: [], ...overrides },
+		polygons: { totalityPath },
+	}
+}
+
+function equirectangularProjection(width: number, height: number, options?: ProjectionOptions) {
+	return new PlateCarree(undefined, {
+		// Longitude spans 2*PI across the full width, so one radian maps to width / TAU pixels.
+		scale: width / TAU,
+		falseEasting: width / 2,
+		falseNorthing: height / 2,
+		yAxisDirection: 'southUp',
+		centralMeridian: 0,
+		longitudeWrapMode: 'pi',
+		// Allow the full latitude range up to the poles; the default caps at the Web Mercator limit.
+		maxLatitude: PIOVERTWO,
+		...options,
+	})
 }
 
 const NASA_ECLIPSES = [
@@ -150,19 +177,19 @@ function eclipse(type: SolarEclipseType, gamma: number = 0): SolarEclipse {
 }
 
 function expectGeoPoint(point: GeoPoint) {
-	expect(Number.isFinite(point.longitude)).toBe(true)
-	expect(Number.isFinite(point.latitude)).toBe(true)
-	expect(point.longitude).toBeGreaterThanOrEqual(-PI)
-	expect(point.longitude).toBeLessThanOrEqual(PI)
-	expect(point.latitude).toBeGreaterThanOrEqual(-PIOVERTWO)
-	expect(point.latitude).toBeLessThanOrEqual(PIOVERTWO)
+	expect(Number.isFinite(point.x)).toBe(true)
+	expect(Number.isFinite(point.y)).toBe(true)
+	expect(point.x).toBeGreaterThanOrEqual(-PI)
+	expect(point.x).toBeLessThanOrEqual(PI)
+	expect(point.y).toBeGreaterThanOrEqual(-PIOVERTWO)
+	expect(point.y).toBeLessThanOrEqual(PIOVERTWO)
 }
 
 function expectGeoPointClose(point: GeoPoint | undefined, longitude: number, latitude: number, jd?: number) {
 	expect(point).toBeDefined()
 	expectGeoPoint(point!)
-	expect(point!.longitude).toBeCloseTo(longitude, 10)
-	expect(point!.latitude).toBeCloseTo(latitude, 10)
+	expect(point!.x).toBeCloseTo(longitude, 10)
+	expect(point!.y).toBeCloseTo(latitude, 10)
 	if (jd !== undefined) expect(Math.abs(point!.jd! - jd)).toBeLessThan(1e-8)
 }
 
@@ -171,7 +198,7 @@ function expectIncreasingJd(points: readonly GeoPoint[]) {
 }
 
 function expectMaxAngularStep(points: readonly GeoPoint[], maxStep: number) {
-	for (let i = 1; i < points.length; i++) expect(sphericalSeparation(points[i - 1].longitude, points[i - 1].latitude, points[i].longitude, points[i].latitude)).toBeLessThanOrEqual(maxStep)
+	for (let i = 1; i < points.length; i++) expect(sphericalSeparation(points[i - 1].x, points[i - 1].y, points[i].x, points[i].y)).toBeLessThanOrEqual(maxStep)
 }
 
 // Earth flattening squared eccentricity, matching the constant used by the geometry engine.
@@ -204,16 +231,16 @@ const CENTRAL_FIXTURES = NASA_ECLIPSES.filter((fixture) => fixture.central)
 function expectNearNasa(point: GeoPoint | undefined, latitudeDeg: number, longitudeDeg: number, toleranceArcmin: number) {
 	expect(point).toBeDefined()
 	expectGeoPoint(point!)
-	expect(sphericalSeparation(point!.longitude, point!.latitude, deg(longitudeDeg), deg(latitudeDeg))).toBeLessThan(deg(toleranceArcmin / 60))
+	expect(sphericalSeparation(point!.x, point!.y, deg(longitudeDeg), deg(latitudeDeg))).toBeLessThan(deg(toleranceArcmin / 60))
 }
 
 test('geographic angular helpers handle antimeridian and great-circle interpolation', () => {
-	const a: GeoPoint = { longitude: deg(179.5), latitude: 0 }
-	const b: GeoPoint = { longitude: deg(-179.5), latitude: 0 }
+	const a: GeoPoint = { x: deg(179.5), y: 0 }
+	const b: GeoPoint = { x: deg(-179.5), y: 0 }
 	const mid = intermediateGreatCircle(a, b, 0.5)
 
-	expect(Math.abs(Math.abs(mid.longitude) - PI)).toBeLessThan(1e-10)
-	expect(mid.latitude).toBeCloseTo(0, 12)
+	expect(Math.abs(Math.abs(mid.x) - PI)).toBeLessThan(1e-10)
+	expect(mid.y).toBeCloseTo(0, 12)
 })
 
 test('evalBesselian uses Horner coefficients, derivatives, and mu wrapping', () => {
@@ -293,8 +320,8 @@ test('computePolynomialBesselianElements follows the projection convention towar
 test('findMaximumPoint matches NASA Besselian fixture at greatest eclipse instant', () => {
 	for (const fixture of NASA_ECLIPSES) {
 		const point = findMaximumPoint(nasaPbe(fixture))
-		expect(formatAZ(point!.longitude, true)).toBe(fixture.greatestEclipse[0])
-		expect(formatAZ(point!.latitude, true)).toBe(fixture.greatestEclipse[1])
+		expect(formatAZ(point!.x, true)).toBe(fixture.greatestEclipse[0])
+		expect(formatAZ(point!.y, true)).toBe(fixture.greatestEclipse[1])
 		expect(point!.jd).toBe(fixture.greatestEclipse[2])
 	}
 })
@@ -380,11 +407,16 @@ test('computeSolarEclipseMapGeometry anchors synthetic partial contacts and rise
 	expect(lines.penumbraNorth).toHaveLength(0)
 	expect(lines.penumbraSouth).toHaveLength(0)
 	expect(polygons.totalityPath).toHaveLength(0)
-	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([85, 85])
-	expectGeoPointClose(lines.riseSetCurves[0][0], points.P1!.longitude, points.P1!.latitude, points.P1!.jd)
-	expectGeoPointClose(lines.riseSetCurves[0].at(-1), points.P4!.longitude, points.P4!.latitude, points.P4!.jd)
-	expectGeoPointClose(lines.riseSetCurves[1][0], points.P1!.longitude, points.P1!.latitude, points.P1!.jd)
-	expectGeoPointClose(lines.riseSetCurves[1].at(-1), points.P4!.longitude, points.P4!.latitude, points.P4!.jd)
+	// Two sunrise branches (P1->P2) and two sunset branches (P3->P4), each meeting exactly at its cusps.
+	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([73, 73, 72, 72])
+	expectGeoPointClose(lines.riseSetCurves[0][0], points.P1!.x, points.P1!.y, points.P1!.jd)
+	expectGeoPointClose(lines.riseSetCurves[0].at(-1), points.P2!.x, points.P2!.y, points.P2!.jd)
+	expectGeoPointClose(lines.riseSetCurves[1][0], points.P1!.x, points.P1!.y, points.P1!.jd)
+	expectGeoPointClose(lines.riseSetCurves[1].at(-1), points.P2!.x, points.P2!.y, points.P2!.jd)
+	expectGeoPointClose(lines.riseSetCurves[2][0], points.P3!.x, points.P3!.y, points.P3!.jd)
+	expectGeoPointClose(lines.riseSetCurves[2].at(-1), points.P4!.x, points.P4!.y, points.P4!.jd)
+	expectGeoPointClose(lines.riseSetCurves[3][0], points.P3!.x, points.P3!.y, points.P3!.jd)
+	expectGeoPointClose(lines.riseSetCurves[3].at(-1), points.P4!.x, points.P4!.y, points.P4!.jd)
 	for (const curve of lines.riseSetCurves) for (const point of curve) expectGeoPoint(point)
 })
 
@@ -427,23 +459,27 @@ test('computeSolarEclipseMapGeometry anchors NASA total central endpoints', () =
 	expectGeoPointClose(points.U2, -0.34570440307, 0.831102873293, 2460409.330297813)
 	expectIncreasingJd([points.P1!, points.U1!, points.P2!, points.Max!, points.P3!, points.U2!, points.P4!])
 	expect(lines.centerLine).toHaveLength(19)
-	expectGeoPointClose(lines.centerLine[0], points.U1!.longitude, points.U1!.latitude, points.U1!.jd)
+	expectGeoPointClose(lines.centerLine[0], points.U1!.x, points.U1!.y, points.U1!.jd)
 	expectGeoPointClose(lines.centerLine[8], -1.931214613682, 0.318644701329, 2460409.245887015)
-	expectGeoPointClose(lines.centerLine.at(-1), points.U2!.longitude, points.U2!.latitude, points.U2!.jd)
+	expectGeoPointClose(lines.centerLine.at(-1), points.U2!.x, points.U2!.y, points.U2!.jd)
 	expectMaxAngularStep(lines.centerLine, deg(12))
 	expectIncreasingJd(lines.centerLine)
-	expect(lines.umbraNorth.map((line) => line.length)).toEqual([17, 3])
-	expect(lines.umbraSouth.map((line) => line.length)).toEqual([17, 2])
-	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([34, 5])
-	expectGeoPointClose(lines.umbraNorth[0][0], -2.715434968822, -0.117035166155, 2460409.1956915525)
-	expectGeoPointClose(lines.umbraNorth[0][8], -1.944363379336, 0.328497150303, 2460409.2458870145)
-	expectGeoPointClose(lines.umbraSouth[0][0], -2.668875495787, -0.132731923348, 2460409.195258044)
-	expectGeoPointClose(lines.umbraSouth[0][8], -1.918209226439, 0.308744724128, 2460409.245879204)
+	expect(lines.umbraNorth.map((line) => line.length)).toEqual([24, 10])
+	expect(lines.umbraSouth.map((line) => line.length)).toEqual([23, 9])
+	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([66])
+	// The limits end at their true positions near the path tips (the path keeps a finite width at U1/U2,
+	// which are central-line endpoints), so the south limit terminates short of U2, matching NASA.
+	expectGeoPointClose(lines.umbraNorth[0][0], -2.766608740863, -0.125116379276, 2460409.1955421991)
+	expectGeoPointClose(lines.umbraNorth[0][8], -2.608650623609, -0.094776624573, 2460409.1967315269)
+	expectGeoPointClose(lines.umbraSouth[0][0], -2.70916777495, -0.139730034533, 2460409.1950255572)
+	expectGeoPointClose(lines.umbraSouth[0][8], -2.54763266911, -0.104984965052, 2460409.1968684928)
 	const northAt1800Ut = interpolateAtJulianDay(lines.umbraNorth[0], 2460409.2508171294)
-	expectGeoPointClose(northAt1800Ut, -1.912276991073, 0.364888370771, 2460409.2508171294)
-	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([103, 108])
-	expectGeoPointClose(lines.riseSetCurves[0][0], points.P1!.longitude, points.P1!.latitude, points.P1!.jd)
-	expectGeoPointClose(lines.riseSetCurves[1].at(-1), points.P4!.longitude, points.P4!.latitude, points.P4!.jd)
+	expectGeoPointClose(northAt1800Ut, -1.911871717433, 0.364859949383, 2460409.2508171294)
+	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([161, 161, 154, 154])
+	expectGeoPointClose(lines.riseSetCurves[0][0], points.P1!.x, points.P1!.y, points.P1!.jd)
+	expectGeoPointClose(lines.riseSetCurves[0].at(-1), points.P2!.x, points.P2!.y, points.P2!.jd)
+	expectGeoPointClose(lines.riseSetCurves[2][0], points.P3!.x, points.P3!.y, points.P3!.jd)
+	expectGeoPointClose(lines.riseSetCurves[3].at(-1), points.P4!.x, points.P4!.y, points.P4!.jd)
 	for (const segment of [...lines.umbraNorth, ...lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
@@ -469,11 +505,11 @@ test('computeSolarEclipseMapGeometry traces NASA total partial-eclipse limits no
 
 	// The northern limit lies wholly north of the greatest-eclipse point and reaches the high Arctic;
 	// the southern limit lies wholly south of it and crosses into the southern hemisphere.
-	expect(penumbraNorth.every((point) => point.latitude > points.Max!.latitude)).toBe(true)
-	expect(penumbraSouth.every((point) => point.latitude < points.Max!.latitude)).toBe(true)
-	expect(Math.min(...penumbraNorth.map((point) => point.latitude))).toBeGreaterThan(deg(28))
-	expect(Math.max(...penumbraNorth.map((point) => point.latitude))).toBeGreaterThan(deg(70))
-	expect(Math.min(...penumbraSouth.map((point) => point.latitude))).toBeLessThan(deg(-30))
+	expect(penumbraNorth.every((point) => point.y > points.Max!.y)).toBe(true)
+	expect(penumbraSouth.every((point) => point.y < points.Max!.y)).toBe(true)
+	expect(Math.min(...penumbraNorth.map((point) => point.y))).toBeGreaterThan(deg(28))
+	expect(Math.max(...penumbraNorth.map((point) => point.y))).toBeGreaterThan(deg(70))
+	expect(Math.min(...penumbraSouth.map((point) => point.y))).toBeLessThan(deg(-30))
 })
 
 test('computeSolarEclipseMapGeometry keeps central path gated by eclipse gamma', () => {
@@ -489,9 +525,9 @@ test('computeSolarEclipseMapGeometry keeps central path gated by eclipse gamma',
 	expect(geometry.points.U1).toBeUndefined()
 	expect(geometry.points.U2).toBeUndefined()
 	expect(geometry.lines.centerLine).toHaveLength(0)
-	expect(geometry.lines.umbraNorth.map((line) => line.length)).toEqual([17, 3])
-	expect(geometry.lines.umbraSouth.map((line) => line.length)).toEqual([17, 2])
-	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([34, 5])
+	expect(geometry.lines.umbraNorth.map((line) => line.length)).toEqual([24, 10])
+	expect(geometry.lines.umbraSouth.map((line) => line.length)).toEqual([23, 9])
+	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([64])
 	for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
@@ -556,7 +592,7 @@ test('findCurvePoints returns bounded finite points for a synthetic partial limi
 	if (points.length > 0) expectIncreasingJd(points)
 
 	for (let i = 1; i < points.length; i++) {
-		expect(Math.abs(points[i].longitude - points[i - 1].longitude)).toBeLessThanOrEqual(TAU)
+		expect(Math.abs(points[i].x - points[i - 1].x)).toBeLessThanOrEqual(TAU)
 	}
 })
 
@@ -569,14 +605,14 @@ test('findCurvePoints refines exit boundaries away from the last valid longitude
 	expectGeoPointClose(points[2], deg(30), -0.001154236503, 2460409.193308248)
 	expectGeoPointClose(points[3], 0.243297741916, 0.166809662687, 2460409.2005219636)
 	// Boundary refinement extends the curve to a point between coarse longitude samples.
-	expect(points[0].longitude).toBeGreaterThan(deg(30.7))
+	expect(points[0].x).toBeGreaterThan(deg(30.7))
 })
 
 test('split helpers avoid direct antimeridian joins', () => {
 	const line: GeoPoint[] = [
-		{ longitude: deg(170), latitude: deg(10) },
-		{ longitude: deg(-170), latitude: deg(12) },
-		{ longitude: deg(-160), latitude: deg(15) },
+		{ x: deg(170), y: deg(10) },
+		{ x: deg(-170), y: deg(12) },
+		{ x: deg(-160), y: deg(15) },
 	]
 
 	const segments = splitPolylineAtAntimeridian(line)
@@ -584,8 +620,8 @@ test('split helpers avoid direct antimeridian joins', () => {
 
 	expect(segments.length).toBeGreaterThan(1)
 	expect(rings.length).toBeGreaterThan(1)
-	expect(segments[0].at(-1)!.longitude).toBe(PI)
-	expect(segments[1][0].longitude).toBe(-PI)
+	expect(segments[0].at(-1)!.x).toBe(PI)
+	expect(segments[1][0].x).toBe(-PI)
 })
 
 test('partial eclipse geometry omits central and umbral path data', () => {
@@ -630,38 +666,39 @@ test('rise set curves are separate drawable arrays', () => {
 	expect(contacts.P1).toBeDefined()
 	expect(contacts.P4).toBeDefined()
 
-	const curves = computeRiseSetCurves(elements, contacts.P1!, contacts.P4!, {}, { step: 3600 })
+	const curves = computeRiseSetCurves(elements, contacts.P1!, contacts.P4!, { P2: contacts.P2, P3: contacts.P3 }, { step: 3600 })
 
-	expect(curves).toHaveLength(2)
-	expectGeoPointClose(curves[0][0], contacts.P1!.longitude, contacts.P1!.latitude, contacts.P1!.jd)
-	expectGeoPointClose(curves[0].at(-1), contacts.P4!.longitude, contacts.P4!.latitude, contacts.P4!.jd)
-	expectGeoPointClose(curves[1][0], contacts.P1!.longitude, contacts.P1!.latitude, contacts.P1!.jd)
-	expectGeoPointClose(curves[1].at(-1), contacts.P4!.longitude, contacts.P4!.latitude, contacts.P4!.jd)
+	// Sunrise (P1->P2) and sunset (P3->P4) phases, two branches each, meeting at their cusps.
+	expect(curves).toHaveLength(4)
+	expectGeoPointClose(curves[0][0], contacts.P1!.x, contacts.P1!.y, contacts.P1!.jd)
+	expectGeoPointClose(curves[0].at(-1), contacts.P2!.x, contacts.P2!.y, contacts.P2!.jd)
+	expectGeoPointClose(curves[2][0], contacts.P3!.x, contacts.P3!.y, contacts.P3!.jd)
+	expectGeoPointClose(curves[3].at(-1), contacts.P4!.x, contacts.P4!.y, contacts.P4!.jd)
 
 	for (const curve of curves) {
-		expect(curve.length).toBeGreaterThan(0)
+		expect(curve.length).toBeGreaterThan(1)
 		for (const point of curve) expectGeoPoint(point)
 	}
 })
 
 test('splitAtMaxAbsLatitude splits circumpolar-like limit arrays', () => {
 	const split = splitAtMaxAbsLatitude([
-		{ longitude: 0, latitude: deg(10) },
-		{ longitude: deg(1), latitude: deg(80) },
-		{ longitude: deg(2), latitude: deg(20) },
+		{ x: 0, y: deg(10) },
+		{ x: deg(1), y: deg(80) },
+		{ x: deg(2), y: deg(20) },
 	])
 
 	expect(split).toHaveLength(2)
 	// The fold apex is shared between both branches so they meet without a gap.
-	expect(split[0].map((point) => point.latitude)).toEqual([deg(10), deg(80)])
-	expect(split[1].map((point) => point.latitude)).toEqual([deg(80), deg(20)])
+	expect(split[0].map((point) => point.y)).toEqual([deg(10), deg(80)])
+	expect(split[1].map((point) => point.y)).toEqual([deg(80), deg(20)])
 })
 
 test('splitAtMaxAbsLatitude keeps non-folding limits whole instead of emitting degenerate segments', () => {
 	const split = splitAtMaxAbsLatitude([
-		{ longitude: 0, latitude: deg(80) },
-		{ longitude: deg(1), latitude: deg(40) },
-		{ longitude: deg(2), latitude: deg(10) },
+		{ x: 0, y: deg(80) },
+		{ x: deg(1), y: deg(40) },
+		{ x: deg(2), y: deg(10) },
 	])
 
 	expect(split).toHaveLength(1)
@@ -673,8 +710,8 @@ test('map geometry exposes the NASA greatest-eclipse point for every eclipse cla
 		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(90), maxAngularStep: deg(45), includePolygons: false })
 
 		expect(geometry.points.Max).toBeDefined()
-		expect(formatAZ(geometry.points.Max!.longitude, true)).toBe(fixture.greatestEclipse[0])
-		expect(formatAZ(geometry.points.Max!.latitude, true)).toBe(fixture.greatestEclipse[1])
+		expect(formatAZ(geometry.points.Max!.x, true)).toBe(fixture.greatestEclipse[0])
+		expect(formatAZ(geometry.points.Max!.y, true)).toBe(fixture.greatestEclipse[1])
 		expect(geometry.points.Max!.jd).toBe(fixture.greatestEclipse[2])
 	}
 })
@@ -694,8 +731,8 @@ test('central-line endpoints graze the flattened Earth limb and bound the centra
 		expect(U1!.jd!).toBeLessThan(geometry.points.Max!.jd!)
 		expect(geometry.points.Max!.jd!).toBeLessThan(U2!.jd!)
 		// Endpoints anchor the drawn central line.
-		expectGeoPointClose(geometry.lines.centerLine[0], U1!.longitude, U1!.latitude, U1!.jd)
-		expectGeoPointClose(geometry.lines.centerLine.at(-1), U2!.longitude, U2!.latitude, U2!.jd)
+		expectGeoPointClose(geometry.lines.centerLine[0], U1!.x, U1!.y, U1!.jd)
+		expectGeoPointClose(geometry.lines.centerLine.at(-1), U2!.x, U2!.y, U2!.jd)
 	}
 })
 
@@ -711,7 +748,7 @@ test('greatest eclipse lies on the central line for central eclipses', () => {
 
 		const onCentralLine = interpolateAtJulianDay(centerLine, max.jd!)
 		expect(onCentralLine).toBeDefined()
-		expect(sphericalSeparation(onCentralLine!.longitude, onCentralLine!.latitude, max.longitude, max.latitude)).toBeLessThan(deg(0.1))
+		expect(sphericalSeparation(onCentralLine!.x, onCentralLine!.y, max.x, max.y)).toBeLessThan(deg(0.1))
 	}
 })
 
@@ -752,8 +789,8 @@ test('hybrid eclipse produces a central path anchored at the NASA greatest eclip
 	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { longitudeStep: deg(30), maxAngularStep: deg(12), includePolygons: true })
 	const { points, lines, polygons } = geometry
 
-	expect(formatAZ(points.Max!.longitude, true)).toBe(fixture.greatestEclipse[0])
-	expect(formatAZ(points.Max!.latitude, true)).toBe(fixture.greatestEclipse[1])
+	expect(formatAZ(points.Max!.x, true)).toBe(fixture.greatestEclipse[0])
+	expect(formatAZ(points.Max!.y, true)).toBe(fixture.greatestEclipse[1])
 	expect(points.U1).toBeDefined()
 	expect(points.U2).toBeDefined()
 	expect(Math.abs(axisLimbResidual(elements, points.U1!.jd!))).toBeLessThan(1e-6)
@@ -783,24 +820,24 @@ test('computeSolarEclipseMapGeometry is deterministic for identical inputs', () 
 
 test('antimeridian splitting keeps segments within a hemisphere and continuous across the seam', () => {
 	const line: GeoPoint[] = [
-		{ longitude: deg(150), latitude: deg(5) },
-		{ longitude: deg(178), latitude: deg(8) },
-		{ longitude: deg(-176), latitude: deg(11) },
-		{ longitude: deg(-150), latitude: deg(14) },
+		{ x: deg(150), y: deg(5) },
+		{ x: deg(178), y: deg(8) },
+		{ x: deg(-176), y: deg(11) },
+		{ x: deg(-150), y: deg(14) },
 	]
 
 	const segments = splitPolylineAtAntimeridian(line)
 	expect(segments).toHaveLength(2)
 
-	for (const segment of segments) for (let i = 1; i < segment.length; i++) expect(Math.abs(segment[i].longitude - segment[i - 1].longitude)).toBeLessThanOrEqual(PI)
+	for (const segment of segments) for (let i = 1; i < segment.length; i++) expect(Math.abs(segment[i].x - segment[i - 1].x)).toBeLessThanOrEqual(PI)
 
 	const seamEnd = segments[0].at(-1)!
 	const seamStart = segments[1][0]
-	expect(Math.abs(seamEnd.longitude)).toBeCloseTo(PI, 10)
-	expect(Math.abs(seamStart.longitude)).toBeCloseTo(PI, 10)
-	expect(seamEnd.longitude).toBe(-seamStart.longitude)
+	expect(Math.abs(seamEnd.x)).toBeCloseTo(PI, 10)
+	expect(Math.abs(seamStart.x)).toBeCloseTo(PI, 10)
+	expect(seamEnd.x).toBe(-seamStart.x)
 	// Latitude is continuous across the inserted seam point.
-	expect(seamEnd.latitude).toBeCloseTo(seamStart.latitude, 10)
+	expect(seamEnd.y).toBeCloseTo(seamStart.y, 10)
 })
 
 // NASA/GSFC umbral path table for the 2024 Apr 08 total eclipse (delta T = 70.6 s).
@@ -844,8 +881,8 @@ test('umbral north and south limits match the NASA 2024-04-08 path table', () =>
 		expectNearNasa(north, row.north[0], row.north[1], 0.5)
 		expectNearNasa(south, row.south[0], row.south[1], 0.5)
 		// The solved limit instant (UT = TD - delta T) matches the table time within a minute.
-		expect(Math.abs((north!.jd - APR8_2024_DELTA_T_DAYS - expectedUt) * 86400)).toBeLessThan(60)
-		expect(Math.abs((south!.jd - APR8_2024_DELTA_T_DAYS - expectedUt) * 86400)).toBeLessThan(60)
+		expect(Math.abs((north!.jd! - APR8_2024_DELTA_T_DAYS - expectedUt) * 86400)).toBeLessThan(60)
+		expect(Math.abs((south!.jd! - APR8_2024_DELTA_T_DAYS - expectedUt) * 86400)).toBeLessThan(60)
 	}
 })
 
@@ -866,4 +903,245 @@ test('partial-eclipse limits populate at a fine longitude step for a central ecl
 	expect(geometry.lines.penumbraSouth.length).toBeGreaterThan(5)
 	for (const point of geometry.lines.penumbraNorth) expectGeoPoint(point)
 	for (const point of geometry.lines.penumbraSouth) expectGeoPoint(point)
+})
+
+test('equirectangular projection maps the world onto the SVG viewport corners', () => {
+	const projection = equirectangularProjection(360, 180)
+
+	expect(projection.project(0, 0)).toEqual({ x: 180, y: 90 })
+	expect(projection.project(deg(90), 0)!.x).toBeCloseTo(270, 9)
+	expect(projection.project(deg(-90), 0)!.x).toBeCloseTo(90, 9)
+	// Longitudes just inside the seam approach the left/right viewport edges.
+	expect(projection.project(deg(-179), 0)!.x).toBeCloseTo(1, 6)
+	expect(projection.project(deg(179), 0)!.x).toBeCloseTo(359, 6)
+	expect(projection.project(0, PIOVERTWO)!.y).toBeCloseTo(0, 9)
+	expect(projection.project(0, -PIOVERTWO)!.y).toBeCloseTo(180, 9)
+})
+
+test('central meridian shifts the projected longitudes', () => {
+	const projection = equirectangularProjection(360, 180, { centralMeridian: deg(90) })
+
+	// With the central meridian at 90E, that meridian lands at the horizontal centre.
+	expect(projection.project(deg(90), 0)!.x).toBeCloseTo(180, 9)
+})
+
+test('pointsToSvgPathData emits one M..L.. subpath per piece and closes polygons', () => {
+	const open = pointsToSvgPathData([
+		[
+			{ x: 1, y: 2 },
+			{ x: 3, y: 4 },
+			{ x: 5, y: 6 },
+		],
+	])
+
+	expect(open).toBe('M1 2L3 4L5 6')
+
+	const closed = pointsToSvgPathData(
+		[
+			[
+				{ x: 0, y: 0 },
+				{ x: 10, y: 0 },
+				{ x: 10, y: 10 },
+			],
+		],
+		true,
+	)
+
+	expect(closed.startsWith('M0 0')).toBe(true)
+	expect(closed.endsWith('Z')).toBe(true)
+
+	// Two pieces produce two subpaths; degenerate pieces are dropped; empty input yields an empty string.
+	expect(
+		pointsToSvgPathData([
+			[
+				{ x: 0, y: 0 },
+				{ x: 1, y: 1 },
+			],
+			[
+				{ x: 2, y: 2 },
+				{ x: 3, y: 3 },
+			],
+		]).match(/M/g),
+	).toHaveLength(2)
+
+	expect(pointsToSvgPathData([[{ x: 0, y: 0 }]])).toBe('')
+	expect(pointsToSvgPathData([])).toBe('')
+})
+
+test('pointsToSvgPathData rounds coordinates to the requested precision', () => {
+	expect(
+		pointsToSvgPathData(
+			[
+				[
+					{ x: 1.23456, y: 2.98765 },
+					{ x: 3.1, y: 4 },
+				],
+			],
+			false,
+			3,
+		),
+	).toBe('M1.235 2.988L3.1 4')
+})
+
+test('solarEclipseMapToSvgPaths serializes lines and closed polygons, and skips empty features', () => {
+	const map = geometry(
+		{
+			centerLine: [
+				{ x: deg(-10), y: 0 },
+				{ x: deg(10), y: deg(5) },
+			],
+		},
+		[
+			[
+				{ x: deg(-5), y: deg(-2) },
+				{ x: deg(5), y: deg(-2) },
+				{ x: deg(5), y: deg(2) },
+			],
+		],
+		{ Max: { x: 0, y: 0 } },
+	)
+
+	const paths = solarEclipseMapToSvgPaths(map, equirectangularProjection(360, 180))
+
+	expect(paths.centerLine.startsWith('M')).toBe(true)
+	expect(paths.centerLine).toContain('L')
+	expect(paths.totalityPath.startsWith('M')).toBe(true)
+	expect(paths.totalityPath.endsWith('Z')).toBe(true)
+	expect(paths.penumbraNorth).toBe('')
+	expect(paths.umbraSouth).toBe('')
+	expect(paths.points.Max).toEqual({ x: 180, y: 90 })
+	expect(paths.points.U1).toBeUndefined()
+})
+
+test('antimeridian-crossing lines split into multiple subpaths', () => {
+	const map = geometry({
+		centerLine: [
+			{ x: deg(160), y: 0 },
+			{ x: deg(175), y: deg(1) },
+			{ x: deg(-175), y: deg(2) },
+			{ x: deg(-160), y: deg(3) },
+		],
+	})
+
+	const paths = solarEclipseMapToSvgPaths(map, equirectangularProjection(360, 180))
+	expect((paths.centerLine.match(/M/g) ?? []).length).toBeGreaterThanOrEqual(2)
+})
+
+// NASA/GSFC Besselian elements for the 2024 Apr 08 total eclipse.
+// https://eclipse.gsfc.nasa.gov/SEbeselm/SEbeselm2001/SE2024Apr08Tbeselm.html
+const NASA_2024: PolynomialBesselianElements = {
+	time0: time(2460409.25, 0, Timescale.TT),
+	maximumTime: time(2460409.262835, 0, Timescale.TT),
+	deltaT: 70.6,
+	stepDays: 1 / 24,
+	x: [-0.318157, 0.5117105, 0.0000326, -0.0000085],
+	y: [0.219747, 0.2709586, -0.0000594, -0.0000047],
+	l1: [0.535813, 0.0000618, -0.0000128],
+	l2: [-0.010274, 0.0000615, -0.0000127],
+	d: [7.5862, 0.014844, -0.000002].map(deg),
+	mu: [89.59122, 15.004084].map(deg),
+	tanF1: 0.0046683,
+	tanF2: 0.004645,
+}
+
+const NASA_2024_ECLIPSE: SolarEclipse = { lunation: 0, maximalTime: NASA_2024.maximumTime, magnitude: 1.0566, gamma: 0.3431, u: -0.010274, type: 'total' }
+
+test('solarEclipseMapToSvgPaths places the 2024-04-08 totality over North America', () => {
+	const map = computeSolarEclipseMapGeometry(NASA_2024_ECLIPSE, NASA_2024, { longitudeStep: deg(2), maxAngularStep: deg(4), includeRiseSetCurves: true, includePolygons: true, riseSetStep: 600 })
+	const width = 720
+	const height = 360
+	const projection = equirectangularProjection(width, height)
+	const paths = solarEclipseMapToSvgPaths(map, projection)
+
+	for (const feature of [paths.centerLine, paths.umbraNorth, paths.umbraSouth, paths.totalityPath]) {
+		expect(feature.length).toBeGreaterThan(0)
+		expect(feature.startsWith('M')).toBe(true)
+	}
+
+	// The Max marker matches a direct projection and lands over Mexico (lon ~ -104, lat ~ +25).
+	const expectedMax = projection.project(map.points.Max!.x, map.points.Max!.y)!
+	expect(paths.points.Max!.x).toBeCloseTo(expectedMax.x, 9)
+	expect(paths.points.Max!.y).toBeCloseTo(expectedMax.y, 9)
+	expect(paths.points.Max!.x).toBeGreaterThan(140)
+	expect(paths.points.Max!.x).toBeLessThan(165)
+	expect(paths.points.Max!.y).toBeGreaterThan(120)
+	expect(paths.points.Max!.y).toBeLessThan(140)
+
+	// All projected coordinates stay inside the viewport.
+	for (const value of paths.centerLine.match(/-?\d+(?:\.\d+)?/g)!.map(Number)) expect(Number.isFinite(value)).toBe(true)
+})
+
+function makeSvg(paths: SolarEclipseMapSvgPaths, width: number, height: number) {
+	function marker(point: SolarEclipseMapPoints[keyof SolarEclipseMapPoints], label: string, color: string) {
+		return point ? `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="3" fill="${color}" /><text x="${(point.x + 5).toFixed(2)}" y="${(point.y - 5).toFixed(2)}">${label}</text>` : ''
+	}
+
+	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
+<style>
+.ocean { fill: #103099; }
+.totality { fill: rgba(250, 250, 250, 0.3); stroke: none; }
+.umbra { fill: none; stroke: #CCC; stroke-width: 1; }
+.center { fill: none; stroke: #000; stroke-width: 1; }
+.penumbra { fill: none; stroke: #11c0cc; stroke-width: 0.8; }
+.riseset { fill: none; stroke: orange; stroke-width: 0.8; }
+text { font: 14px sans-serif; fill: #fff; }
+</style>
+<rect class="ocean" x="0" y="0" width="${width}" height="${height}" />
+<path class="penumbra" d="${paths.penumbraNorth}" />
+<path class="penumbra" d="${paths.penumbraSouth}" />
+<path class="riseset" d="${paths.riseSetCurves}" />
+<path class="totality" d="${paths.totalityPath}" />
+<path class="umbra" d="${paths.umbraNorth}" />
+<path class="umbra" d="${paths.umbraSouth}" />
+<path class="center" d="${paths.centerLine}" />
+<g class="markers">
+${marker(paths.points.P1, 'P1', '#11c0cc')}
+${marker(paths.points.P4, 'P4', '#11c0cc')}
+${marker(paths.points.P2, 'P2', '#11c0cc')}
+${marker(paths.points.P3, 'P3', '#11c0cc')}
+${marker(paths.points.U1, 'U1', '#cc0000')}
+${marker(paths.points.U2, 'U2', '#cc0000')}
+${marker(paths.points.Max, 'Max', '#e8a000')}
+</g>
+</svg>`
+}
+
+describe('generate solar eclipse maps', () => {
+	let solarEclipse = nearestSolarEclipse(timeYMD(2000, 1, 1), true)
+	let date = timeToDate(solarEclipse.maximalTime)
+
+	const getSunMoonPosition = (time: Time) => computeSunMoonPositionAt(time, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
+	const options: SolarEclipseMapGeometryOptions = { longitudeStep: deg(0.5), maxAngularStep: deg(0.5), includeRiseSetCurves: true, includePolygons: true, riseSetStep: 600 }
+
+	const WIDTH = 2520.631
+	const HEIGHT = 1260.315
+
+	const projection = new PlateCarree(0, {
+		// Longitude spans 2*PI across the full width, so one radian maps to width / TAU pixels.
+		scale: WIDTH / TAU,
+		falseEasting: WIDTH / 2,
+		falseNorthing: HEIGHT / 2,
+		yAxisDirection: 'southUp',
+		centralMeridian: 0,
+		longitudeWrapMode: 'pi',
+		// Allow the full latitude range up to the poles; the default caps at the Web Mercator limit.
+		maxLatitude: PIOVERTWO,
+	})
+
+	while (date[0] <= 2020) {
+		const eclipse = solarEclipse
+		const { maximalTime } = eclipse
+		const id = `${date[0]}-${date[1]}-${date[2]}`
+
+		test(id, async () => {
+			const pbe = computePolynomialBesselianElements(maximalTime, getSunMoonPosition)
+			const geo = computeSolarEclipseMapGeometry(eclipse, pbe, options)
+			const paths = solarEclipseMapToSvgPaths(geo, projection)
+			const svg = makeSvg(paths, WIDTH, HEIGHT)
+			await Bun.write(`data/solar-eclipse-${id}.svg`, svg)
+		})
+
+		solarEclipse = nearestSolarEclipse(maximalTime, true)
+		date = timeToDate(solarEclipse.maximalTime)
+	}
 })

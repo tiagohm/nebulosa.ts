@@ -1,5 +1,5 @@
 import { type Angle, arcsec, deg } from './angle'
-import { ASEC2RAD, AU_KM, DEG2RAD, MOON_SYNODIC_DAYS } from './constants'
+import { ASEC2RAD, AU_KM, DEG2RAD, EARTH_RADIUS_KM, MOON_SYNODIC_DAYS } from './constants'
 import { type Distance, kilometer } from './distance'
 import { type Time, Timescale, time, timeNormalize, timeToFractionOfYear, toJulianDay, tt } from './time'
 
@@ -35,7 +35,7 @@ const LUNAR_ECLIPSE_MAGNITUDE_DENOMINATOR = 0.545
 
 // Computes the parallax of the Moon at a given distance
 export function moonParallax(distance: Distance) {
-	return Math.asin(6378.14 / AU_KM / distance)
+	return Math.asin(EARTH_RADIUS_KM / AU_KM / distance)
 }
 
 // Computes the semi-diameter of the Moon at a given distance
@@ -644,7 +644,7 @@ export function nearestLunarApsis(time: Time, apsis: LunarApsis, next: boolean):
 		}
 	}
 
-	const distance = kilometer(6378.14 / Math.sin(arcsec(parallax)))
+	const distance = kilometer(EARTH_RADIUS_KM / Math.sin(arcsec(parallax)))
 	const diameter = 2 * moonSemidiameter(distance)
 
 	return [timeNormalize(jdDay, jdFraction, 0, Timescale.TT), distance, diameter]
