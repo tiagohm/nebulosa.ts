@@ -1567,14 +1567,76 @@ function nearestPoint(points: readonly GeoPoint[], reference: GeoPoint): GeoPoin
 	return best
 }
 
-// Traces one band edge across a limit gap by marching the umbral footprint forward in time and, at each
-// step, taking the footprint extreme nearest the previous point. Tracking the nearest extreme keeps it
-// locked onto the same physical edge even near a pole, where the footprint's north/south latitude
-// extremes swap roles relative to the limit's i index. The step is halved whenever the footprint moved
-// more than maxAngularStep between samples, so the traced edge stays as dense as the rest of the limit.
-// The gap is a Newton-solver artifact (the umbra stays fully on the sunlit disk), so the footprint
-// reconstructs the limit's true position there.
-function bridgeUmbraFootprint(out: GeoPoint[], pbe: PolynomialBesselianElements, from: GeoPoint, to: GeoPoint, maxAngularStep: Angle) {
+// Solves the umbral path limit point for branch i (+1 north, -1 south) at the fixed instant jd,
+// parametrized by time instead of longitude. It places the observer where the shadow axis is at closest
+// approach (the along-track offset vanishes) and exactly on the umbra edge (the cross-track offset equals
+// the umbra radius), the same two conditions the longitude-fixed solver enforces, so both trace the
+// identical curve and join without a kink. Being argued by time it stays single-valued and well
+// -conditioned through the curve's longitude fold near a pole, where the longitude-fixed solver is
+// degenerate and leaves the gap this fills. The seed (seedLon, seedLat) carries continuity from the
+// previous point. Refraction is omitted here (sub-0.05 deg at these solar altitudes, far below the
+// sampling step), so the bridged stretch can differ from the refraction-corrected solved stretch by that
+// negligible amount at the junctions.
+function solveTimeFixedLimitPoint(pbe: PolynomialBesselianElements, jd: number, i: -1 | 1, seedLon: Angle, seedLat: Angle): GeoPoint | undefined {
+	const t = (jd - toJulianDay(pbe.time0)) / pbe.stepDays
+	const be = evaluateBesselianAtT(pbe, t)
+	const sample = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
+	const longitudeCorrection = deltaTLongitudeCorrection(pbe)
+	const sinD = Math.sin(be.d)
+	const cosD = Math.cos(be.d)
+	let phi = seedLat
+	let lon = seedLon
+	let result: GeoPoint | undefined
+
+	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
+		const H = lon + be.mu - longitudeCorrection
+		const sinH = Math.sin(H)
+		const cosH = Math.cos(H)
+		const U = Math.atan(F_CONST * Math.tan(phi))
+		const rhoSinPhi = F_CONST * Math.sin(U)
+		const rhoCosPhi = Math.cos(U)
+		const zeta = rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
+		// Diurnal rate of the observer's hour angle, matching the longitude-fixed solver's relative velocity.
+		const ksiPrime = rhoCosPhi * cosH * be.dmu
+		const etaPrime = rhoCosPhi * sinH * sinD * be.dmu
+		const a = be.dx - ksiPrime
+		const b = be.dy - etaPrime
+		const nSquared = a * a + b * b
+
+		if (!(nSquared > 0) || !Number.isFinite(nSquared)) return undefined
+
+		const n = Math.sqrt(nSquared)
+		// Umbra radius on the fundamental plane at this surface height; |l2| as l2 flips sign total/annular.
+		const radius = Math.abs(be.l2 - zeta * be.tanF2)
+		// Observer offset perpendicular to the relative motion, of one umbra radius on side i: this places
+		// the point on the umbra edge (cross-track residual zero) at the instant of closest approach
+		// (along-track residual zero), i.e. exactly on the path limit for branch i at this instant.
+		const ksi = be.x - (i * radius * b) / n
+		const eta = be.y + (i * radius * a) / n
+		const next = projectFundamentalPoint(sample, ksi, eta)
+
+		if (!next) return undefined
+
+		const move = Math.hypot(normalizePI(next.x - lon), next.y - phi)
+		lon = next.x
+		phi = next.y
+		result = next
+
+		if (move < SOLVER_TOLERANCE * DEG2RAD) break
+	}
+
+	return result
+}
+
+// Traces one band edge across a limit gap by marching forward in time and solving the path limit at each
+// instant with the time-parametrized solver, seeded by continuity from the previous point. The gap is a
+// longitude-fold region where the longitude-fixed solver is degenerate (which is what leaves the gap), so
+// the time-parametrized solve traces it cleanly and joins the solved stretches without a kink. The
+// geometric footprint extreme is kept only as a fallback seed for the rare instant the continuity solve
+// fails. The step is halved whenever the edge moved more than maxAngularStep between samples, so the
+// traced edge stays as dense as the rest of the limit. The gap is a solver artifact (the umbra stays fully
+// on the sunlit disk), so the limit has a true position throughout it.
+function bridgeUmbraFootprint(out: GeoPoint[], pbe: PolynomialBesselianElements, from: GeoPoint, to: GeoPoint, maxAngularStep: Angle, i: -1 | 1) {
 	if (from.jd === undefined || to.jd === undefined || to.jd <= from.jd) return
 
 	const span = to.jd - from.jd
@@ -1585,10 +1647,10 @@ function bridgeUmbraFootprint(out: GeoPoint[], pbe: PolynomialBesselianElements,
 
 	while (jd + minStep < to.jd) {
 		const nextJd = Math.min(jd + dt, to.jd)
-		const edge = nearestPoint(umbraFootprintExtremes(pbe, nextJd), previous)
+		const edge = solveTimeFixedLimitPoint(pbe, nextJd, i, previous.x, previous.y) ?? nearestPoint(umbraFootprintExtremes(pbe, nextJd), previous)
 		const stepSize = edge ? angularDistance(previous, edge) : 0
 
-		// Refine while the footprint moved too far in one step; otherwise accept it and ease the step back up.
+		// Refine while the edge moved too far in one step; otherwise accept it and ease the step back up.
 		if (edge && nextJd < to.jd && stepSize > maxAngularStep && dt > minStep) {
 			dt = Math.max(dt / 2, minStep)
 			continue
@@ -1608,7 +1670,7 @@ function bridgeUmbraFootprint(out: GeoPoint[], pbe: PolynomialBesselianElements,
 // switches source, from solved limit to footprint edge, but stays continuous and on the same physical
 // edge. Used for both the drawn limit lines and the totality fill, so they stay consistent. A non-polar
 // limit has no gaps and is returned unchanged.
-function bridgeUmbraLimit(pbe: PolynomialBesselianElements, limit: readonly GeoPoint[], maxAngularStep: Angle): readonly GeoPoint[] {
+function bridgeUmbraLimit(pbe: PolynomialBesselianElements, limit: readonly GeoPoint[], maxAngularStep: Angle, i: -1 | 1): readonly GeoPoint[] {
 	if (limit.length < 2) return limit
 
 	const gaps = limitGaps(limit, maxAngularStep * UMBRA_LIMIT_GAP_SPLIT_FACTOR)
@@ -1617,14 +1679,17 @@ function bridgeUmbraLimit(pbe: PolynomialBesselianElements, limit: readonly GeoP
 	const out: GeoPoint[] = []
 	let g = 0
 
-	for (let i = 0; i < limit.length; i++) {
-		const point = limit[i]
-		pushDistinct(out, point)
+	for (let index = 0; index < limit.length; index++) {
+		const point = limit[index]
+		// Collapse a bridge endpoint that lands within an instant of the solved point it abuts: both name the
+		// same place on this time-parametrized curve, and the duplicate would leave a zero-length step that
+		// reads as a 180-degree spike and degenerate self-intersection downstream.
+		if (out.length === 0 || point.jd === undefined || out.at(-1)!.jd === undefined || point.jd - out.at(-1)!.jd! > CURVE_TIME_EPSILON_DAYS) pushDistinct(out, point)
 		// On reaching the last present point before a gap, trace the footprint across to the limit's next
 		// present point; the two bracket the gap in time.
 		if (g < gaps.length && point.jd !== undefined && Math.abs(point.jd - gaps[g][0]) <= CURVE_TIME_EPSILON_DAYS) {
-			const next = limit[i + 1]
-			if (next) bridgeUmbraFootprint(out, pbe, point, next, maxAngularStep)
+			const next = limit[index + 1]
+			if (next) bridgeUmbraFootprint(out, pbe, point, next, maxAngularStep, i)
 			g++
 		}
 	}
@@ -1700,8 +1765,8 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		const south = findCurvePoints(pbe, -1, 1, curveOptions, centerLineSamples)
 		// Fill each limit's pole-side solver gaps with the umbral footprint, then use the continuous curves
 		// for both the drawn limit lines and the totality fill so they stay consistent.
-		const fullNorth = bridgeUmbraLimit(pbe, north.length > 0 ? north : findTimeSeededShadowLimitPoints(pbe, contacts, 1, curveOptions), maxAngularStep)
-		const fullSouth = bridgeUmbraLimit(pbe, south.length > 0 ? south : findTimeSeededShadowLimitPoints(pbe, contacts, -1, curveOptions), maxAngularStep)
+		const fullNorth = bridgeUmbraLimit(pbe, north.length > 0 ? north : findTimeSeededShadowLimitPoints(pbe, contacts, 1, curveOptions), maxAngularStep, 1)
+		const fullSouth = bridgeUmbraLimit(pbe, south.length > 0 ? south : findTimeSeededShadowLimitPoints(pbe, contacts, -1, curveOptions), maxAngularStep, -1)
 		umbraNorth = splitUmbraLimit(fullNorth, maxAngularStep)
 		umbraSouth = splitUmbraLimit(fullSouth, maxAngularStep)
 		// The band tapers to the zero-width path endpoints U1/U4 (the umbral external contacts), falling

@@ -1192,6 +1192,22 @@ test('circumpolar umbral limits stay continuous across pole-side solver gaps', (
 			for (let i = 1; i < segment.length; i++) {
 				expect(sphericalSeparation(segment[i - 1].x, segment[i - 1].y, segment[i].x, segment[i].y)).toBeLessThan(maxAngularStep * 2)
 			}
+
+			// The bridged stretches join the solved stretches smoothly: each piece is a physical limit folded
+			// only at its latitude apex (a separate piece), so no interior vertex turns sharply. A sharp turn
+			// here would be the serrilhado of the old footprint bridge, whose latitude-extreme sat off the
+			// true perpendicular limit; the time-parametrized limit solver places the bridge on that curve.
+			for (let i = 1; i < segment.length - 1; i++) {
+				const v1x = segment[i].x - segment[i - 1].x
+				const v1y = segment[i].y - segment[i - 1].y
+				const v2x = segment[i + 1].x - segment[i].x
+				const v2y = segment[i + 1].y - segment[i].y
+				const d1 = Math.hypot(v1x, v1y)
+				const d2 = Math.hypot(v2x, v2y)
+				if (d1 < 1e-9 || d2 < 1e-9) continue
+				const turn = Math.acos(Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / (d1 * d2))))
+				expect(turn).toBeLessThan(deg(30))
+			}
 		}
 	}
 
