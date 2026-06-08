@@ -543,7 +543,9 @@ test('computeSolarEclipseMapGeometry keeps central path gated by eclipse gamma',
 	expect(geometry.lines.centerLine).toHaveLength(0)
 	expect(geometry.lines.umbraNorth.map((line) => line.length)).toEqual([24, 10])
 	expect(geometry.lines.umbraSouth.map((line) => line.length)).toEqual([23, 9])
-	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([64])
+	// The band tapers to the umbral external contacts U1/U4 (present here from the Besselian elements),
+	// adding the two tip points to the ring.
+	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([66])
 	for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
@@ -559,10 +561,11 @@ test('computeSolarEclipseMapGeometry keeps umbral visibility for non-central tot
 	expect(annular.lines.centerLine).toHaveLength(0)
 	expect(annular.lines.umbraNorth.map((line) => line.length)).toEqual([9])
 	expect(annular.lines.umbraSouth.map((line) => line.length)).toEqual([9])
-	expect(annular.polygons.totalityPath.map((ring) => ring.length)).toEqual([18])
+	expect(annular.polygons.totalityPath.map((ring) => ring.length)).toEqual([20])
 	expectGeoPointClose(annular.lines.umbraNorth[0][0], 2.138389244988, -1.275938543713, 2456776.747407339)
 	expectGeoPointClose(annular.lines.umbraSouth[0][0], 2.120095514679, -1.279033850419, 2456776.747407339)
-	expectGeoPointClose(annular.polygons.totalityPath[0][0], 2.138389244988, -1.275938543713, 2456776.747407339)
+	// The band tapers to the start tip U1 (the umbral external contact), not to the limit's first point.
+	expectGeoPointClose(annular.polygons.totalityPath[0][0], annular.points.U1!.x, annular.points.U1!.y, annular.points.U1!.jd)
 
 	expectGeoPoint(total.points.U1!)
 	expectGeoPoint(total.points.U4!)
@@ -570,12 +573,13 @@ test('computeSolarEclipseMapGeometry keeps umbral visibility for non-central tot
 	expect(total.lines.centerLine).toHaveLength(0)
 	expect(total.lines.umbraNorth.map((line) => line.length)).toEqual([12])
 	expect(total.lines.umbraSouth.map((line) => line.length)).toEqual([12])
-	expect(total.polygons.totalityPath.map((ring) => ring.length)).toEqual([24])
+	expect(total.polygons.totalityPath.map((ring) => ring.length)).toEqual([26])
 	expectGeoPointClose(total.lines.umbraNorth[0][0], 2.764703075844, 0.95468940146, 2467349.2812917847)
 	expectGeoPointClose(total.lines.umbraNorth[0].at(-1), 2.506248659316, 1.185837091379, 2467349.298652895)
 	expectGeoPointClose(total.lines.umbraSouth[0][0], 2.764703075844, 0.95468940146, 2467349.2812917847)
 	expectGeoPointClose(total.lines.umbraSouth[0].at(-1), 2.510202616527, 1.181939627337, 2467349.298652895)
-	expectGeoPointClose(total.polygons.totalityPath[0][0], 2.764703075844, 0.95468940146, 2467349.2812917847)
+	// The band tapers to the start tip U1 (the umbral external contact), not to the limit's first point.
+	expectGeoPointClose(total.polygons.totalityPath[0][0], total.points.U1!.x, total.points.U1!.y, total.points.U1!.jd)
 	for (const geometry of [annular, total]) for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
@@ -1167,18 +1171,18 @@ describe('generate solar eclipse maps', () => {
 	}
 })
 
-test('circumpolar umbral limits trace smooth pieces instead of straight chords across discontinuities', () => {
-	// The 2003-11-23 totality is circumpolar over Antarctica: each umbral limit leaves the sunlit
-	// hemisphere and reappears, so its time-parametrization has genuine gaps. The limit must be densified
-	// along each continuous stretch and broken at the gaps, never drawn as a straight chord bridging them.
+test('circumpolar umbral limits stay continuous across pole-side solver gaps', () => {
+	// The 2003-11-23 totality is circumpolar over Antarctica: the latitude-based limit solver fails near
+	// the pole (the umbra stays fully on the sunlit disk), leaving multi-degree gaps in each limit. Those
+	// gaps are filled by tracing the umbral footprint, so each limit stays a continuous, densely sampled
+	// curve, split only at its latitude apex rather than broken or chorded across the gaps.
 	const eclipse = nearestSolarEclipse(timeYMD(2003, 11, 1), true)
 	const maxAngularStep = deg(0.5)
 	const pbe = computePolynomialBesselianElements(eclipse.maximalTime, (t) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon))
 	const geometry = computeSolarEclipseMapGeometry(eclipse, pbe, { longitudeStep: deg(0.5), maxAngularStep, includePolygons: true })
 
-	// Each limit splits into several pieces (continuous stretches between discontinuities and the
-	// latitude apex), and every drawn step within a piece stays close to the densification target,
-	// proving no piece jumps straight across a multi-degree gap.
+	// Each limit folds at its latitude apex into pieces, and every drawn step within a piece stays close
+	// to the densification target, proving the filled gaps never jump straight across a multi-degree gap.
 	for (const family of [geometry.lines.umbraNorth, geometry.lines.umbraSouth]) {
 		expect(family.length).toBeGreaterThan(1)
 
@@ -1191,18 +1195,23 @@ test('circumpolar umbral limits trace smooth pieces instead of straight chords a
 		}
 	}
 
-	// The totality fill is built as several half-bands hinged on the continuous central line, so it never
-	// bridges a limit discontinuity with a chord (which would tear holes under the fill rule): it splits
-	// into more than one ring, and no ring edge spans anywhere near the multi-degree limit gaps.
-	expect(geometry.polygons.totalityPath.length).toBeGreaterThan(1)
+	// The totality fill stays a single connected ring at its true finite width: each limit's gaps are
+	// bridged along the umbral footprint (the gap is a pole-side solver artifact, not the umbra leaving
+	// Earth), so the region never splits into disconnected blocks and no edge bridges a discontinuity
+	// with a chord (which would tear holes or jump across the multi-degree gap). The ring is also simple
+	// (no self-intersection), which a positive enclosed area confirms.
+	expect(geometry.polygons.totalityPath).toHaveLength(1)
 	for (const ring of geometry.polygons.totalityPath) {
 		expect(ring.length).toBeGreaterThanOrEqual(3)
 
+		let signedArea = 0
 		for (let i = 0; i < ring.length; i++) {
 			const next = ring[(i + 1) % ring.length]
 			expect(sphericalSeparation(ring[i].x, ring[i].y, next.x, next.y)).toBeLessThan(deg(10))
+			signedArea += ring[i].x * next.y - next.x * ring[i].y
 		}
 
+		expect(Math.abs(signedArea)).toBeGreaterThan(0)
 		for (const point of ring) expectGeoPoint(point)
 	}
 })
