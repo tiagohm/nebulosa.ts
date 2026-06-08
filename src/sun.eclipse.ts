@@ -37,8 +37,17 @@ const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272488
 const MOON_RADIUS_UMBRA_EARTH_RADII = 0.272281
 const BOUNDARY_REFINEMENT_STEPS = 18
 // Sub-divisions of the first and last central-line interval used to extend the umbral limits toward
-// the U1/U2 endpoints, where one edge stays above the horizon after the last coarse central sample.
+// the C1/C2 endpoints, where one edge stays above the horizon after the last coarse central sample.
 const UMBRA_LIMIT_END_REFINEMENT_STEPS = 8
+// Maximum recursion depth when subdividing the central-line time interval to densify an umbral limit.
+// The limit can move far faster than the central line per time step (e.g. circumpolar eclipses), so
+// the angular spacing of the central samples does not bound the limit's, and it is refined separately.
+const UMBRA_LIMIT_REFINE_MAX_DEPTH = 12
+// A circumpolar umbral limit can leave the sunlit hemisphere and reappear, leaving genuine gaps in its
+// time-parametrization. After densification, continuous stretches stay within maxAngularStep, so any
+// consecutive gap beyond this multiple of it is a real discontinuity at which the limit must be broken
+// into separate polylines instead of bridged by a straight chord.
+const UMBRA_LIMIT_GAP_SPLIT_FACTOR = 2
 // Minimum Julian Day separation between distinct points on a time-parametrized curve; points closer
 // than this in time (~0.1 s, far below the minutes-apart sampling of any curve) are the same instant
 // reached from different seeds or seeding stages, and are collapsed to one.
@@ -138,18 +147,26 @@ export interface GeoPoint {
 
 // Named eclipse contact and central-path endpoints.
 export interface SolarEclipseContactPoints {
-	// First external penumbral contact.
+	// First external penumbral contact (partial eclipse begins on Earth).
 	readonly P1?: GeoPoint
-	// First internal penumbral contact.
+	// First internal penumbral contact (penumbra wholly on Earth).
 	readonly P2?: GeoPoint
-	// Last internal penumbral contact.
+	// Last internal penumbral contact (penumbra wholly on Earth).
 	readonly P3?: GeoPoint
-	// Last external penumbral contact.
+	// Last external penumbral contact (partial eclipse ends on Earth).
 	readonly P4?: GeoPoint
-	// First central-line contact with Earth.
+	// First external umbral contact: the umbra first touches Earth (total or annular eclipse begins).
 	readonly U1?: GeoPoint
-	// Last central-line contact with Earth.
+	// First internal umbral contact: the umbra lies wholly on Earth.
 	readonly U2?: GeoPoint
+	// Last internal umbral contact: the umbra lies wholly on Earth.
+	readonly U3?: GeoPoint
+	// Last external umbral contact: the umbra last touches Earth (total or annular eclipse ends).
+	readonly U4?: GeoPoint
+	// First central-line contact with Earth (the shadow axis grazes the limb where the central line begins).
+	readonly C1?: GeoPoint
+	// Last central-line contact with Earth (the shadow axis grazes the limb where the central line ends).
+	readonly C2?: GeoPoint
 	// Greatest eclipse point.
 	readonly Max?: GeoPoint
 }
@@ -233,6 +250,10 @@ export interface SolarEclipseMapPoints {
 	readonly P4?: Point
 	readonly U1?: Point
 	readonly U2?: Point
+	readonly U3?: Point
+	readonly U4?: Point
+	readonly C1?: Point
+	readonly C2?: Point
 	readonly Max?: Point
 }
 
@@ -656,6 +677,37 @@ export function findPenumbraContactPoints(pbe: PolynomialBesselianElements, opti
 	}
 }
 
+// Finds U1/U2/U3/U4 umbral contact points: the instants the umbral shadow cone is tangent to the
+// flattened Earth limb. U1 and U4 are the first and last external tangencies, where the umbra just
+// touches Earth and the total or annular eclipse begins and ends; U2 and U3 are the first and last
+// internal tangencies, where the umbra lies wholly on Earth. They are left undefined when the umbra
+// never reaches Earth (a partial eclipse), as the tangency roots then do not exist.
+export function findUmbraContactPoints(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions): Pick<SolarEclipseContactPoints, 'U1' | 'U2' | 'U3' | 'U4'> {
+	const maximumJulianDay = toJulianDay(pbe.maximumTime)
+	const searchSpanDays = contactSearchSpanDays(options)
+	const from = maximumJulianDay - searchSpanDays
+	const to = maximumJulianDay + searchSpanDays
+
+	// The umbral shadow radius on the fundamental plane is |l2| (l2 is negative for a total eclipse and
+	// positive for an annular one), tangent to the flattened Earth limb just like the penumbra's l1.
+	function external(jd: number) {
+		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
+		return closestEarthLimbPoint(be, be.x, be.y).signedDistance - Math.abs(be.l2)
+	}
+
+	function internal(jd: number) {
+		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
+		return closestEarthLimbPoint(be, be.x, be.y).signedDistance + Math.abs(be.l2)
+	}
+
+	return {
+		U1: projectContactRoot(pbe, bisectRoot(external, from, maximumJulianDay)),
+		U2: projectContactRoot(pbe, bisectRoot(internal, from, maximumJulianDay)),
+		U3: projectContactRoot(pbe, bisectRoot(internal, maximumJulianDay, to)),
+		U4: projectContactRoot(pbe, bisectRoot(external, maximumJulianDay, to)),
+	}
+}
+
 function projectContactRoot(pbe: PolynomialBesselianElements, jd: number | undefined) {
 	if (jd === undefined) return undefined
 
@@ -934,17 +986,43 @@ function findCentralSeededCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 
 	// edge diverges near the path ends, where the grazing footprint elongates far from the
 	// perpendicular path limit and the solver locks onto that distant, wrong-side tip.
 	const centerLine = centerLineSamples ?? sampleCentralLineByTime(pbe, options)
+	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const points: GeoPoint[] = []
 	const julianDay0 = toJulianDay(pbe.time0)
 
 	function solveAtCenter(center: GeoPoint) {
-		if (center.jd === undefined) return
-		pushDistinct(points, solveEclipseCurvePoint(pbe, center.x, center.y, i, G, (center.jd - julianDay0) / pbe.stepDays))
+		if (center.jd === undefined) return undefined
+		const point = solveEclipseCurvePoint(pbe, center.x, center.y, i, G, (center.jd - julianDay0) / pbe.stepDays)
+		pushDistinct(points, point)
+		return point
 	}
 
-	for (const center of centerLine) solveAtCenter(center)
+	// Recursively subdivide the central-line time interval while the limit points solved at its ends are
+	// farther apart than maxAngularStep, so a fast-moving limit (e.g. a circumpolar path whose limit
+	// swings tens of degrees between two adjacent central samples) is traced as a smooth curve instead
+	// of a straight chord. The central samples bound only the central line's spacing, not the limit's.
+	function densify(aJd: number, a: GeoPoint, bJd: number, b: GeoPoint, depth: number) {
+		if (depth >= UMBRA_LIMIT_REFINE_MAX_DEPTH || angularDistance(a, b) <= maxAngularStep) return
+		const midJd = (aJd + bJd) * 0.5
+		const center = centralLinePointAtJulianDay(pbe, midJd)
+		const mid = center && solveAtCenter(center)
+		if (!mid) return
+		densify(aJd, a, midJd, mid, depth + 1)
+		densify(midJd, mid, bJd, b, depth + 1)
+	}
 
-	// One edge of the path stays above the horizon past the last coarse central sample near U1/U2, so
+	let previous: GeoPoint | undefined
+	let previousJd: number | undefined
+	for (const center of centerLine) {
+		if (center.jd === undefined) continue
+		const point = solveAtCenter(center)
+		if (!point) continue
+		if (previous && previousJd !== undefined) densify(previousJd, previous, center.jd, point, 0)
+		previous = point
+		previousJd = center.jd
+	}
+
+	// One edge of the path stays above the horizon past the last coarse central sample near C1/C2, so
 	// subdivide the first and last central intervals in time and solve there, extending the limit as
 	// close to the endpoints as it remains visible instead of stopping at the last coarse sample.
 	if (centerLine.length >= 2) {
@@ -1115,6 +1193,29 @@ function chainCurvePointsByProximity(points: readonly GeoPoint[]): readonly GeoP
 	const endpoint = greedyNearestNeighborChain(points, 0).at(-1)!
 	const startIndex = points.indexOf(endpoint)
 	return greedyNearestNeighborChain(points, Math.max(0, startIndex))
+}
+
+// Breaks a time-ordered umbral limit into drawable polylines, first at genuine discontinuities (where
+// the limit leaves the sunlit hemisphere and reappears, leaving a gap far wider than the densified
+// continuous spacing) and then folding each resulting piece at its latitude apex. Without the gap split
+// a circumpolar limit would be drawn as a straight chord jumping across the discontinuity.
+function splitUmbraLimit(points: readonly GeoPoint[], maxAngularStep: Angle): GeoPoint[][] {
+	if (points.length <= 2) return splitAtMaxAbsLatitude(points)
+
+	const threshold = maxAngularStep * UMBRA_LIMIT_GAP_SPLIT_FACTOR
+	const pieces: GeoPoint[][] = []
+	let current: GeoPoint[] = [points[0]]
+
+	for (let i = 1; i < points.length; i++) {
+		if (angularDistance(points[i - 1], points[i]) > threshold) {
+			pieces.push(current)
+			current = []
+		}
+		current.push(points[i])
+	}
+	pieces.push(current)
+
+	return pieces.flatMap((piece) => splitAtMaxAbsLatitude(piece))
 }
 
 // Splits a polar/circumpolar limit at its largest absolute latitude.
@@ -1418,21 +1519,86 @@ function maximizeLimbIntersectionResidual(f: (theta: number) => number, min: num
 	return { theta, value: f(theta) }
 }
 
-// Builds the totality/annularity path as a single closed ring from the full, time-ordered north and
-// south limit curves: trace the north limit (U1 side -> U2 side), bridge through U2, return along the
-// south limit (U2 side -> U1 side) and bridge through U1. The U1/U2 endpoints close the small gap
-// where the limit solves stop just short of the grazing contacts, regardless of whether the limits
-// were split into multiple drawable segments. Antimeridian wraps are split later at projection time.
-function buildTotalityPathPolygon(north: readonly GeoPoint[], south: readonly GeoPoint[], U1?: GeoPoint, U2?: GeoPoint): GeoPoint[][] {
-	if (north.length < 2 || south.length < 2) return []
+// Collects the Julian Day spans a time-ordered limit curve is missing from: consecutive samples more
+// than the threshold apart bracket a gap where the limit has left the sunlit hemisphere (circumpolar
+// paths). Each gap is returned as [last present instant before it, first present instant after it].
+function limitGaps(points: readonly GeoPoint[], threshold: Angle): [number, number][] {
+	const gaps: [number, number][] = []
+	let previous: GeoPoint | undefined
 
+	for (const point of points) {
+		if (point.jd === undefined) continue
+		if (previous?.jd !== undefined && angularDistance(previous, point) > threshold) gaps.push([previous.jd, point.jd])
+		previous = point
+	}
+
+	return gaps
+}
+
+// Builds one closed ring tracing the north limit forward, through C2, back along the south limit and
+// through C1. The C1/C2 central-line endpoints close the small gap where the limit solves stop just
+// short of the grazing contacts. This is the simple band of a non-circumpolar eclipse.
+function buildSingleTotalityRing(north: readonly GeoPoint[], south: readonly GeoPoint[], C1?: GeoPoint, C2?: GeoPoint): GeoPoint[][] {
 	const ring: GeoPoint[] = []
-	pushDistinct(ring, U1)
+	pushDistinct(ring, C1)
 	for (const point of north) pushDistinct(ring, point)
-	pushDistinct(ring, U2)
+	pushDistinct(ring, C2)
 	for (let i = south.length - 1; i >= 0; i--) pushDistinct(ring, south[i])
 
 	return ring.length >= 3 ? [ring] : []
+}
+
+// Builds the half of the band between the continuous central line and one limit, split at that limit's
+// gaps. Over each Julian Day span where the limit is present, it traces the central line forward and
+// the limit back into a closed sliver. Because the spine is the gap-free central line, no edge ever
+// bridges a gap, so the fill keeps every present sliver without the chords that tear holes in a single
+// ring spanning the discontinuity.
+function buildHalfBandRings(center: readonly GeoPoint[], limit: readonly GeoPoint[], gaps: readonly [number, number][]): GeoPoint[][] {
+	const startJd = limit[0].jd
+	const endJd = limit.at(-1)!.jd
+	if (startJd === undefined || endJd === undefined) return []
+
+	// Span boundaries: the limit start, each gap's bracketing instants, then the limit end. Consecutive
+	// pairs (start..gap0Start), (gap0End..gap1Start), ..., (gapNEnd..end) are the present spans.
+	const cuts = [startJd, ...gaps.flatMap(([before, after]) => [before, after]), endJd]
+	const rings: GeoPoint[][] = []
+
+	for (let k = 0; k + 1 < cuts.length; k += 2) {
+		const t0 = cuts[k]
+		const t1 = cuts[k + 1]
+		const inRange = (point: GeoPoint) => point.jd !== undefined && point.jd >= t0 - CURVE_TIME_EPSILON_DAYS && point.jd <= t1 + CURVE_TIME_EPSILON_DAYS
+		const limitSpan = limit.filter(inRange)
+		const centerSpan = center.filter(inRange)
+		if (limitSpan.length < 2 || centerSpan.length < 2) continue
+
+		const ring: GeoPoint[] = []
+		for (const point of centerSpan) pushDistinct(ring, point)
+		for (let i = limitSpan.length - 1; i >= 0; i--) pushDistinct(ring, limitSpan[i])
+
+		if (ring.length >= 3) rings.push(ring)
+	}
+
+	return rings
+}
+
+// Builds the totality/annularity path from the full, time-ordered limit curves. Most eclipses give a
+// single simple ring. A circumpolar path, whose umbral limits leave and re-enter the sunlit hemisphere
+// (so their time-parametrization has genuine gaps), is instead built as two half-bands hinged on the
+// continuous central line and split at each limit's gaps: every present sliver of the band stays filled
+// without a chord bridging a discontinuity, which would otherwise tear holes in the fill. Antimeridian
+// wraps are split later at projection time.
+function buildTotalityPathPolygon(center: readonly GeoPoint[], north: readonly GeoPoint[], south: readonly GeoPoint[], maxAngularStep: Angle, C1?: GeoPoint, C2?: GeoPoint): GeoPoint[][] {
+	if (north.length < 2 || south.length < 2) return []
+
+	const threshold = maxAngularStep * UMBRA_LIMIT_GAP_SPLIT_FACTOR
+	const northGaps = limitGaps(north, threshold)
+	const southGaps = limitGaps(south, threshold)
+
+	// The band is a single simple ring unless a limit is discontinuous, and the half-band split needs the
+	// central line as its spine, so fall back to the single ring when there is no usable central line.
+	if ((northGaps.length === 0 && southGaps.length === 0) || center.length < 2) return buildSingleTotalityRing(north, south, C1, C2)
+
+	return [...buildHalfBandRings(center, north, northGaps), ...buildHalfBandRings(center, south, southGaps)]
 }
 
 // TODO: Quando mesclar o codex/meeus, remover isso e usar eclipse.central
@@ -1457,27 +1623,30 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	let umbraSouth: GeoPoint[][] = []
 	let totalityPath: GeoPoint[][] = []
 
-	// The time-sampled central line (and thus its U1/U2 endpoints) is shared across the central
+	// The time-sampled central line (and thus its C1/C2 endpoints) is shared across the central
 	// line and both umbral limits, so compute it once for any non-partial eclipse.
 	const centerLineSamples = hasUmbralPath(eclipse) ? sampleCentralLineByTime(pbe, curveOptions) : []
 
 	if (isCentralEclipse(eclipse)) {
-		const U1 = centerLineSamples[0]
-		const U2 = centerLineSamples.at(-1)
-		if (U1) points.U1 = U1
-		if (U2) points.U2 = U2
+		const C1 = centerLineSamples[0]
+		const C2 = centerLineSamples.at(-1)
+		if (C1) points.C1 = C1
+		if (C2) points.C2 = C2
 
 		centerLine = findCurvePoints(pbe, 0, 0, curveOptions, centerLineSamples)
 	}
 
 	if (hasUmbralPath(eclipse)) {
+		Object.assign(points, findUmbraContactPoints(pbe, options))
+
 		const north = findCurvePoints(pbe, 1, 1, curveOptions, centerLineSamples)
 		const south = findCurvePoints(pbe, -1, 1, curveOptions, centerLineSamples)
 		const fullNorth = north.length > 0 ? north : findTimeSeededShadowLimitPoints(pbe, contacts, 1, curveOptions)
 		const fullSouth = south.length > 0 ? south : findTimeSeededShadowLimitPoints(pbe, contacts, -1, curveOptions)
-		umbraNorth = splitAtMaxAbsLatitude(fullNorth)
-		umbraSouth = splitAtMaxAbsLatitude(fullSouth)
-		if (options.includePolygons ?? true) totalityPath = buildTotalityPathPolygon(fullNorth, fullSouth, points.U1, points.U2)
+		umbraNorth = splitUmbraLimit(fullNorth, maxAngularStep)
+		umbraSouth = splitUmbraLimit(fullSouth, maxAngularStep)
+		// The band is capped at the central-line endpoints C1/C2, where it keeps a finite width.
+		if (options.includePolygons ?? true) totalityPath = buildTotalityPathPolygon(centerLine, fullNorth, fullSouth, maxAngularStep, points.C1, points.C2)
 	}
 
 	// Partial-eclipse (penumbra) north/south limits are produced for eclipses with an umbral path,
@@ -1636,6 +1805,10 @@ export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, pro
 			P4: projectPoint(points.P4),
 			U1: projectPoint(points.U1),
 			U2: projectPoint(points.U2),
+			U3: projectPoint(points.U3),
+			U4: projectPoint(points.U4),
+			C1: projectPoint(points.C1),
+			C2: projectPoint(points.C2),
 			Max: projectPoint(points.Max),
 		},
 	}
