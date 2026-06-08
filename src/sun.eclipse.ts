@@ -1543,30 +1543,6 @@ function closeRing(ring: GeoPoint[]) {
 // Finest time subdivision (as a fraction of the gap) when tracing the umbral footprint across a gap.
 const UMBRA_GAP_BRIDGE_MIN_STEPS = 1024
 
-// The two latitude extremes of the umbral shadow footprint at one instant: the geometric north and
-// south edges of the umbra on the ground, computed directly from the shadow circle. They stay defined
-// where the latitude-based Newton limit solver fails near a pole, which is what leaves a limit gap.
-function umbraFootprintExtremes(pbe: PolynomialBesselianElements, jd: number): GeoPoint[] {
-	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-	return [projectShadowLimitPoint(be, 1), projectShadowLimitPoint(be, -1)].filter(finitePoint)
-}
-
-// Returns the point nearest a reference point, used to follow one footprint edge by continuity.
-function nearestPoint(points: readonly GeoPoint[], reference: GeoPoint): GeoPoint | undefined {
-	let best: GeoPoint | undefined
-	let bestDistance = Number.POSITIVE_INFINITY
-
-	for (const point of points) {
-		const distance = angularDistance(reference, point)
-		if (distance < bestDistance) {
-			bestDistance = distance
-			best = point
-		}
-	}
-
-	return best
-}
-
 // Solves the umbral path limit point for branch i (+1 north, -1 south) at the fixed instant jd,
 // parametrized by time instead of longitude. It places the observer where the shadow axis is at closest
 // approach (the along-track offset vanishes) and exactly on the umbra edge (the cross-track offset equals
@@ -1631,11 +1607,12 @@ function solveTimeFixedLimitPoint(pbe: PolynomialBesselianElements, jd: number, 
 // Traces one band edge across a limit gap by marching forward in time and solving the path limit at each
 // instant with the time-parametrized solver, seeded by continuity from the previous point. The gap is a
 // longitude-fold region where the longitude-fixed solver is degenerate (which is what leaves the gap), so
-// the time-parametrized solve traces it cleanly and joins the solved stretches without a kink. The
-// geometric footprint extreme is kept only as a fallback seed for the rare instant the continuity solve
-// fails. The step is halved whenever the edge moved more than maxAngularStep between samples, so the
-// traced edge stays as dense as the rest of the limit. The gap is a solver artifact (the umbra stays fully
-// on the sunlit disk), so the limit has a true position throughout it.
+// the time-parametrized solve traces it cleanly and joins the solved stretches without a kink. Only solved
+// (physical) points are emitted: an instant the solver cannot resolve is skipped, leaving the gap there for
+// splitUmbraLimit to break, rather than filled with a non-physical nearest footprint point. The step is
+// halved whenever the edge moved more than maxAngularStep between samples, so the traced edge stays as
+// dense as the rest of the limit. The gap is normally a solver artifact (the umbra stays fully on the
+// sunlit disk), so the limit has a true position throughout it.
 function bridgeUmbraFootprint(out: GeoPoint[], pbe: PolynomialBesselianElements, from: GeoPoint, to: GeoPoint, maxAngularStep: Angle, i: -1 | 1) {
 	if (from.jd === undefined || to.jd === undefined || to.jd <= from.jd) return
 
@@ -1647,7 +1624,7 @@ function bridgeUmbraFootprint(out: GeoPoint[], pbe: PolynomialBesselianElements,
 
 	while (jd + minStep < to.jd) {
 		const nextJd = Math.min(jd + dt, to.jd)
-		const edge = solveTimeFixedLimitPoint(pbe, nextJd, i, previous.x, previous.y) ?? nearestPoint(umbraFootprintExtremes(pbe, nextJd), previous)
+		const edge = solveTimeFixedLimitPoint(pbe, nextJd, i, previous.x, previous.y)
 		const stepSize = edge ? angularDistance(previous, edge) : 0
 
 		// Refine while the edge moved too far in one step; otherwise accept it and ease the step back up.

@@ -40,6 +40,8 @@ describe('nearest solar eclipse', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2024, 3, 1), true)
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 4, 8, 18, 17])
 		expect(eclipse.type).toBe('total')
+		// Central eclipse: magnitude is the topocentric Moon/Sun diameter ratio (> 1 for total).
+		expect(eclipse.magnitude).toBeCloseTo(1.0566, 2)
 	})
 
 	test('annular', () => {
@@ -47,6 +49,8 @@ describe('nearest solar eclipse', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2024, 4, 9), true)
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
 		expect(eclipse.type).toBe('annular')
+		// Central eclipse: magnitude is the topocentric Moon/Sun diameter ratio (< 1 for annular).
+		expect(eclipse.magnitude).toBeCloseTo(0.9326, 2)
 	})
 
 	test('partial', () => {
