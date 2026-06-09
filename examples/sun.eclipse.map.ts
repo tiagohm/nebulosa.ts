@@ -44,6 +44,8 @@ ${marker(paths.points.C1, 'C1', '#cc0000')}
 ${marker(paths.points.C2, 'C2', '#cc0000')}
 ${marker(paths.points.N1, 'N1', '#11c0cc')}
 ${marker(paths.points.N2, 'N2', '#11c0cc')}
+${marker(paths.points.S1, 'S1', '#11c0cc')}
+${marker(paths.points.S2, 'S2', '#11c0cc')}
 ${marker(paths.points.Max, 'Max', '#e8a000')}
 </svg>`
 }

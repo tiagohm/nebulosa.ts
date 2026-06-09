@@ -1538,7 +1538,7 @@ describe('solar eclipse map acceptance criteria', () => {
 			test('all entity points are finite and in range', () => {
 				const families = [lines.centerLine, ...lines.umbraNorth, ...lines.umbraSouth, lines.penumbraNorth, lines.penumbraSouth, ...lines.riseSetCurves, ...fillRings]
 				for (const family of families) for (const point of family) expectGeoPoint(point)
-				for (const key of ['P1', 'P2', 'P3', 'P4', 'U1', 'U2', 'U3', 'U4', 'C1', 'C2', 'Max', 'N1', 'N2'] as const) {
+				for (const key of ['P1', 'P2', 'P3', 'P4', 'U1', 'U2', 'U3', 'U4', 'C1', 'C2', 'Max', 'N1', 'N2', 'S1', 'S2'] as const) {
 					const point = points[key]
 					if (point) expectGeoPoint(point)
 				}
@@ -1614,6 +1614,19 @@ describe('solar eclipse map acceptance criteria', () => {
 			// Sections 14 + 15: rise/set curves are horizon-contact curves, so the Sun is near the horizon along them.
 			test('rise/set curves sit near the solar horizon', () => {
 				for (const curve of lines.riseSetCurves) for (const point of curve) expect(Math.abs(solarAltitude(elements, point))).toBeLessThan(deg(2))
+			})
+
+			// Section 12: the named penumbral-limit extremes N1/N2 (northern) and S1/S2 (southern), when present,
+			// are the endpoints of their magnitude-0 limit branch and are ordered by ascending latitude.
+			test('penumbral limit extremes lie on the magnitude-0 locus', () => {
+				if (points.N1 && points.N2) {
+					expect(points.N1.y).toBeLessThanOrEqual(points.N2.y)
+					for (const point of [points.N1, points.N2]) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
+				}
+				if (points.S1 && points.S2) {
+					expect(points.S1.y).toBeLessThanOrEqual(points.S2.y)
+					for (const point of [points.S1, points.S2]) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
+				}
 			})
 		})
 	}

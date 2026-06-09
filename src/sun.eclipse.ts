@@ -175,6 +175,11 @@ export interface SolarEclipseContactPoints {
 	readonly N1?: GeoPoint
 	// Last extreme of the northern penumbral limit (higher latitude than N1).
 	readonly N2?: GeoPoint
+	// First extreme of the southern penumbral limit, where that magnitude-0 curve meets the terminator. Lower
+	// latitude than S2. Present only when the southern penumbral limit reaches Earth.
+	readonly S1?: GeoPoint
+	// Last extreme of the southern penumbral limit (higher latitude than S1).
+	readonly S2?: GeoPoint
 }
 
 // Geometric role of a totality/annularity ring segment.
@@ -302,6 +307,8 @@ export interface SolarEclipseMapPoints {
 	readonly Max?: Point
 	readonly N1?: Point
 	readonly N2?: Point
+	readonly S1?: Point
+	readonly S2?: Point
 }
 
 // SVG path data strings per eclipse map feature, plus projected pixel coordinates of named points.
@@ -2244,14 +2251,20 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	// umbral ones. A grazing partial may yield only one of the two limits, the other side being the terminator.
 	const penumbraNorth = findPartialEclipseLimit(pbe, 1, curveOptions)
 	const penumbraSouth = findPartialEclipseLimit(pbe, -1, curveOptions)
-	// The northern penumbral limit terminates at two extremes where it meets the terminator: expose them as the
-	// named, plottable points N1 (lower latitude) and N2 (higher latitude). For a pure partial eclipse these
-	// are the extremes of its main visible-region boundary.
+	// Each penumbral limit branch terminates at two extremes where it meets the terminator: expose them as the
+	// named, plottable points N1/N2 (northern limit) and S1/S2 (southern limit), each ordered by ascending
+	// latitude. For a pure partial eclipse the single existing branch carries its visible-region extremes.
 	if (penumbraNorth.length >= 2) {
 		const first = penumbraNorth[0]
 		const last = penumbraNorth.at(-1)!
 		points.N1 = first.y <= last.y ? first : last
 		points.N2 = first.y <= last.y ? last : first
+	}
+	if (penumbraSouth.length >= 2) {
+		const first = penumbraSouth[0]
+		const last = penumbraSouth.at(-1)!
+		points.S1 = first.y <= last.y ? first : last
+		points.S2 = first.y <= last.y ? last : first
 	}
 	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, contacts, { step: options.riseSetStep }) : []
 
@@ -2460,6 +2473,8 @@ export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, pro
 			Max: projectPoint(points.Max),
 			N1: projectPoint(points.N1),
 			N2: projectPoint(points.N2),
+			S1: projectPoint(points.S1),
+			S2: projectPoint(points.S2),
 		},
 	}
 }
