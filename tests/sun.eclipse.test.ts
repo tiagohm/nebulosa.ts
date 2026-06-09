@@ -1538,7 +1538,7 @@ describe('solar eclipse map acceptance criteria', () => {
 			test('all entity points are finite and in range', () => {
 				const families = [lines.centerLine, ...lines.umbraNorth, ...lines.umbraSouth, lines.penumbraNorth, lines.penumbraSouth, ...lines.riseSetCurves, ...fillRings]
 				for (const family of families) for (const point of family) expectGeoPoint(point)
-				for (const key of ['P1', 'P2', 'P3', 'P4', 'U1', 'U2', 'U3', 'U4', 'C1', 'C2', 'Max'] as const) {
+				for (const key of ['P1', 'P2', 'P3', 'P4', 'U1', 'U2', 'U3', 'U4', 'C1', 'C2', 'Max', 'N1', 'N2'] as const) {
 					const point = points[key]
 					if (point) expectGeoPoint(point)
 				}
@@ -1707,13 +1707,15 @@ describe('solar eclipse map acceptance criteria', () => {
 			expect(solarAltitude(elements, point)).toBeGreaterThan(deg(-1))
 		}
 
-		// The two endpoints of the limit reach the published extremes N1 and S1 within a degree or two.
-		const N1 = { x: deg(-95.645), y: deg(-50.23) }
-		const S1 = { x: deg(66.562), y: deg(-28.305) }
-		const endpoints = [limit[0], limit.at(-1)!]
-		for (const target of [N1, S1]) {
-			const nearest = Math.min(...endpoints.map((point) => sphericalSeparation(point.x, point.y, target.x, target.y)))
-			expect(nearest).toBeLessThan(deg(2))
-		}
+		// The named, plottable extremes N1/N2 reach the published penumbral limit extremes within a degree or
+		// two. N1 is the lower-latitude extreme (EclipseWise N1 ~ 50.23 deg S, 95.645 deg W), N2 the higher one
+		// (EclipseWise S1 ~ 28.305 deg S, 66.562 deg E).
+		expect(geometry.points.N1).toBeDefined()
+		expect(geometry.points.N2).toBeDefined()
+		expect(geometry.points.N1!.y).toBeLessThan(geometry.points.N2!.y)
+		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(-95.645), deg(-50.23))).toBeLessThan(deg(2))
+		expect(sphericalSeparation(geometry.points.N2!.x, geometry.points.N2!.y, deg(66.562), deg(-28.305))).toBeLessThan(deg(2))
+		// They are the endpoints of the penumbral limit curve, so they lie on it.
+		for (const point of [geometry.points.N1!, geometry.points.N2!]) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
 	})
 })
