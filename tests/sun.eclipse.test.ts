@@ -587,7 +587,9 @@ test('computeSolarEclipseMapGeometry anchors NASA total central endpoints', () =
 	expectIncreasingJd(lines.centerLine)
 	expect(lines.umbraNorth.map((line) => line.length)).toEqual([24, 10])
 	expect(lines.umbraSouth.map((line) => line.length)).toEqual([23, 9])
-	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([66])
+	// The fill is the contact-anchored capped ring (U1 cusp, north edge, U4 cusp, south edge, with the
+	// U1<->U2 and U3<->U4 caps), traced by the dual-edge march rather than the drawn limit lines.
+	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([36])
 	// The limits end at their true positions near the path tips (the path keeps a finite width at C1/C2,
 	// which are central-line endpoints), so the south limit terminates short of C2, matching NASA.
 	expectGeoPointClose(lines.umbraNorth[0][0], -2.766608740863, -0.125116379276, 2460409.1955421991)
@@ -651,9 +653,9 @@ test('computeSolarEclipseMapGeometry keeps central path gated by eclipse gamma',
 	expect(geometry.lines.centerLine).toHaveLength(0)
 	expect(geometry.lines.umbraNorth.map((line) => line.length)).toEqual([24, 10])
 	expect(geometry.lines.umbraSouth.map((line) => line.length)).toEqual([23, 9])
-	// The band tapers to the umbral external contacts U1/U4 (present here from the Besselian elements),
-	// adding the two tip points to the ring.
-	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([66])
+	// All four umbral contacts are present from the Besselian elements, so the fill is the contact-anchored
+	// capped ring (U1/U4 cusps plus the U1<->U2 and U3<->U4 caps), not a single-vertex taper.
+	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([36])
 	for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
@@ -1356,14 +1358,53 @@ describe('totality ring typed-entity layer', () => {
 		expect(segments[0].kind).toBe('cusp')
 	})
 
-	test('a normal eclipse collapses every cap to a single cusp', () => {
-		// 2024-04-08 contacts sit at the limit endpoints, so no startCap/endCap arc grows: the ring is just the
-		// two limits joined by the U1/U4 cusps.
+	test('capped ring anchors all four umbral contacts on a simple boundary', () => {
+		// 2003-11-23: with all four contacts present, U1/U4 are exact ring cusps and U2/U3 are anchored onto the
+		// contour (exactly where the contact sits within a step of it, within the tip tolerance otherwise). The
+		// ring stays a simple polygon and the caps connect U1<->U2 (start) and U3<->U4 (end).
+		const eclipse = nearestSolarEclipse(timeYMD(2003, 11, 1), true)
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, (t) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon))
+		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: deg(0.5), maxAngularStep: deg(0.5), includePolygons: true })
+
+		const ring = geometry.polygons.totalityPath[0]
+		const { U1, U2, U3, U4 } = geometry.points
+
+		function distanceToRing(point: GeoPoint) {
+			let best = Number.POSITIVE_INFINITY
+			for (const vertex of ring) best = Math.min(best, sphericalSeparation(point.x, point.y, vertex.x, vertex.y))
+			return best
+		}
+
+		// Criterion 1: every umbral contact lies on the boundary. The external contacts are exact cusps; the
+		// internal contacts lie within the tip tolerance (limb-tangency vs perpendicular-edge offset near tips).
+		expect(distanceToRing(U1!)).toBeLessThan(deg(0.01))
+		expect(distanceToRing(U4!)).toBeLessThan(deg(0.01))
+		expect(distanceToRing(U2!)).toBeLessThan(deg(1))
+		expect(distanceToRing(U3!)).toBeLessThan(deg(1))
+
+		// Criteria 7/10: the ring carries two start caps and two end caps (one per edge) connecting the
+		// contacts, plus the two external cusps and the two lateral limits.
+		const segments = geometry.polygons.totalitySegments[0]
+		expect(segments.filter((segment) => segment.kind === 'startCap')).toHaveLength(2)
+		expect(segments.filter((segment) => segment.kind === 'endCap')).toHaveLength(2)
+		expect(segments.filter((segment) => segment.kind === 'cusp')).toHaveLength(2)
+
+		// Criteria 9/11/12: the boundary is a simple polygon.
+		expect(countSelfIntersections(ring)).toBe(0)
+	})
+
+	test('a central eclipse with all four contacts builds the anchored capped ring', () => {
+		// 2024-04-08 has all four umbral contacts, so the fill is the contact-anchored capped ring: U1 cusp,
+		// north edge (start cap, limit, end cap), U4 cusp, south edge (end cap, limit, start cap).
 		const fixture = NASA_ECLIPSES[0]
 		const segments = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(1), maxAngularStep: deg(3), includePolygons: true }).polygons.totalitySegments[0]
 
-		expect(segments.map((segment) => segment.kind)).toEqual(['cusp', 'northLimit', 'cusp', 'southLimit'])
+		expect(segments.map((segment) => segment.kind)).toEqual(['cusp', 'startCap', 'northLimit', 'endCap', 'cusp', 'endCap', 'southLimit', 'startCap'])
 		expect(segments.every((segment) => segment.physical && !segment.artificial)).toBe(true)
+		// The lateral limits are converged onto the umbral edge; the start/end caps connect U1<->U2 and U3<->U4.
+		for (const segment of segments) {
+			if (segment.kind === 'northLimit' || segment.kind === 'southLimit') expect(segment.residual).toBeLessThan(1e-3)
+		}
 	})
 
 	test('partial eclipse exposes no totality segments', () => {

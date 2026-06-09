@@ -1706,43 +1706,57 @@ function bridgeUmbraLimit(pbe: PolynomialBesselianElements, limit: readonly GeoP
 	return out
 }
 
-// Adaptively time-marches one umbral path edge (i = +1 north, -1 south) from fromJd to toJd, solving each
-// point with the time-parametrized limit solver seeded by continuity from the previous one. Where the
-// perpendicular edge lies on Earth this is the totality limit; where it lies beyond the terminator the
-// solver's projection clamps it to the Earth limb, so the same march yields the physical limb cap near the
-// tangential contacts without any artificial chord. The step halves whenever the edge moved more than
-// maxAngularStep, keeping the cap as smooth as the rest of the band after densification.
-function marchUmbraEdge(pbe: PolynomialBesselianElements, fromJd: number, toJd: number, i: -1 | 1, start: GeoPoint, maxAngularStep: Angle): GeoPoint[] {
-	const out: GeoPoint[] = [start]
-	const span = toJd - fromJd
-	if (!(span > 0)) return out
+// Densifies one umbral edge (i = +1 north, -1 south) between two solved anchors by recursive time
+// bisection: while the chord from a to b exceeds maxAngularStep (and the recursion depth is not spent), it
+// solves the edge at the midpoint instant (seeded by continuity from a) and recurses into both halves,
+// appending interior points to out in time order. The terminal point b is appended by the caller, so this
+// emits only the points strictly between a and b. Where the perpendicular edge lies on Earth the solved
+// point is the totality limit; where it runs beyond the terminator the solver's projection clamps it to the
+// Earth limb, so the same recursion yields the physical limb cap near the contacts without an artificial
+// chord. Bisection guarantees every emitted step (including the final one into b) stays within
+// maxAngularStep until the depth cap, satisfying the densification requirement around fast cap sweeps.
+function refineEdgeArc(pbe: PolynomialBesselianElements, i: -1 | 1, a: GeoPoint, b: GeoPoint, maxAngularStep: Angle, out: GeoPoint[], depth: number) {
+	if (depth >= UMBRA_LIMIT_REFINE_MAX_DEPTH || a.jd === undefined || b.jd === undefined || angularDistance(a, b) <= maxAngularStep) return
 
-	const minStep = span / UMBRA_GAP_BRIDGE_MIN_STEPS
-	let previous = start
-	let jd = fromJd
-	let dt = span / 8
+	const midJd = (a.jd + b.jd) * 0.5
+	const mid = solveTimeFixedLimitPoint(pbe, midJd, i, a.x, a.y) ?? solveTimeFixedLimitPoint(pbe, midJd, i, b.x, b.y)
+	if (!mid) return
 
-	while (jd + minStep < toJd) {
-		const nextJd = Math.min(jd + dt, toJd)
-		const edge = solveTimeFixedLimitPoint(pbe, nextJd, i, previous.x, previous.y)
-		const stepSize = edge ? angularDistance(previous, edge) : 0
+	refineEdgeArc(pbe, i, a, mid, maxAngularStep, out, depth + 1)
+	pushDistinct(out, mid)
+	refineEdgeArc(pbe, i, mid, b, maxAngularStep, out, depth + 1)
+}
 
-		// Halve while the edge moved too far in one step; otherwise accept it and ease the step back up.
-		if (edge && stepSize > maxAngularStep && dt > minStep) {
-			dt = Math.max(dt / 2, minStep)
+// Traces one umbral edge (i = +1 north, -1 south) across the eclipse, anchored exactly at the ordered
+// contact instants in anchorJds (U1, U2, U3, U4). It solves the edge at each anchor instant seeded by
+// continuity from the previous one, then densifies each interval to maxAngularStep, returning one sub-arc
+// per interval (sharing endpoints). The first anchor is supplied as start (the U1 contact, where both edges
+// meet), so the sub-arcs run U1->U2, U2->U3, U3->U4. The U2/U3 anchors become explicit boundary vertices,
+// and the U2->U3 interval is the body limit while the U1->U2 and U3->U4 intervals are the end caps.
+function traceEdgeSubArcs(pbe: PolynomialBesselianElements, i: -1 | 1, start: GeoPoint, anchorJds: readonly number[], maxAngularStep: Angle): GeoPoint[][] {
+	const subArcs: GeoPoint[][] = []
+	let from = start
+
+	for (const toJd of anchorJds) {
+		const to = solveTimeFixedLimitPoint(pbe, toJd, i, from.x, from.y)
+		if (!to || to.jd === undefined || from.jd === undefined) {
+			from = to ?? from
 			continue
 		}
 
-		jd = nextJd
-		if (edge) {
-			pushDistinct(out, edge)
-			previous = edge
-			if (stepSize < maxAngularStep * 0.5) dt = Math.min(dt * 2, span / 8)
-		}
+		const arc: GeoPoint[] = [from]
+		refineEdgeArc(pbe, i, from, to, maxAngularStep, arc, 0)
+		pushDistinct(arc, to)
+		subArcs.push(arc)
+		from = to
 	}
 
-	return out
+	return subArcs
 }
+
+// Maximum distance at which an internal contact U2/U3 is snapped onto the fill contour. Kept tight so the
+// snap only anchors contacts already essentially on the boundary, never moving a vertex far enough to kink.
+const CONTACT_SNAP_TOLERANCE = 0.3 * DEG2RAD
 
 // Branch identifiers carried by totality ring segments: north edge, south edge, and shared cusp vertices.
 const TOTALITY_BRANCH_NORTH = 0
@@ -1807,49 +1821,141 @@ function reversedPoints(points: readonly GeoPoint[]): GeoPoint[] {
 	return out
 }
 
-// Decomposes the totality/annularity path into typed segments. The limits trace the band's body where both
-// perpendicular edges lie on Earth; near each external contact U1/U4 one edge runs off beyond the
-// terminator, so the cap there is the Earth-limb arc the umbra sweeps, marched along the same edge between
-// the contact and the limit's endpoint (so cap and limit join continuously). A normal eclipse's contacts
-// sit at the limit endpoints, collapsing every cap so its band keeps its single-vertex taper; a
-// grazing/circumpolar eclipse grows real caps that keep the central line within the fill all the way to
-// C1/C2. The only sharp turns are the tangential cusps at U1/U4. Every segment is physical, so the whole
-// contour is physical with no artificial closure. Segments are emitted in ring traversal order:
-//   U1 cusp -> north start cap -> north limit -> north end cap -> U4 cusp -> south end cap (reversed) ->
-//   south limit (reversed) -> south start cap (reversed) -> back to U1.
-function buildCappedTotalityRingSegments(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], u1: GeoPoint, u4: GeoPoint, maxAngularStep: Angle): TotalityRingSegment[] | undefined {
-	const northStart = north[0]
-	const northEnd = north.at(-1)!
-	const southStart = south[0]
-	const southEnd = south.at(-1)!
+// Drops backtracking points from a cap arc, keeping only those whose projection onto the start->end chord is
+// strictly increasing within (0, 1). Near the degenerate external contacts the time-parametrized edge can
+// briefly overshoot the contact and return, leaving a small hook that would self-intersect the ring; this
+// removes the hook while preserving the cap's overall sweep. The two endpoints are always kept.
+function filterChordMonotone(points: readonly GeoPoint[]): GeoPoint[] {
+	if (points.length <= 2) return points.slice()
 
-	if ([northStart, northEnd, southStart, southEnd, u1, u4].some((point) => point.jd === undefined)) return undefined
+	const start = points[0]
+	const end = points.at(-1)!
+	const cx = end.x - start.x
+	const cy = end.y - start.y
+	const len2 = cx * cx + cy * cy
+	if (!(len2 > 0)) return points.slice()
 
-	// A cap is built only where the limit endpoint sits more than one step from the contact (the umbra grazed
-	// the terminator there): otherwise the contact already caps the band as a single tangential vertex.
-	const startCapNorth = umbraCapArc(pbe, u1, northStart, 1, maxAngularStep)
-	const endCapNorth = umbraCapArc(pbe, northEnd, u4, 1, maxAngularStep)
-	const startCapSouth = umbraCapArc(pbe, u1, southStart, -1, maxAngularStep)
-	const endCapSouth = umbraCapArc(pbe, southEnd, u4, -1, maxAngularStep)
+	const out: GeoPoint[] = [start]
+	let lastProjection = 0
 
-	const segments: TotalityRingSegment[] = [physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [u1], pbe, 1)]
-	if (startCapNorth.length > 0) segments.push(physicalRingSegment('startCap', TOTALITY_BRANCH_NORTH, startCapNorth, pbe, 1))
-	segments.push(physicalRingSegment('northLimit', TOTALITY_BRANCH_NORTH, north, pbe, 1))
-	if (endCapNorth.length > 0) segments.push(physicalRingSegment('endCap', TOTALITY_BRANCH_NORTH, endCapNorth, pbe, 1))
-	segments.push(physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [u4], pbe, -1))
-	if (endCapSouth.length > 0) segments.push(physicalRingSegment('endCap', TOTALITY_BRANCH_SOUTH, reversedPoints(endCapSouth), pbe, -1))
-	segments.push(physicalRingSegment('southLimit', TOTALITY_BRANCH_SOUTH, reversedPoints(south), pbe, -1))
-	if (startCapSouth.length > 0) segments.push(physicalRingSegment('startCap', TOTALITY_BRANCH_SOUTH, reversedPoints(startCapSouth), pbe, -1))
-	return segments
+	for (let k = 1; k < points.length - 1; k++) {
+		const projection = ((points[k].x - start.x) * cx + (points[k].y - start.y) * cy) / len2
+		if (projection > lastProjection && projection < 1) {
+			out.push(points[k])
+			lastProjection = projection
+		}
+	}
+
+	out.push(end)
+	return out
 }
 
-// Marches the cap arc along umbral edge i between a tangential contact and the abutting limit endpoint, in
-// whichever time order runs forward. Returns an empty arc when the endpoint is within one step of the
-// contact, so a band whose limit already reaches the contact keeps its single-vertex taper there.
-function umbraCapArc(pbe: PolynomialBesselianElements, contact: GeoPoint, limitEnd: GeoPoint, i: -1 | 1, maxAngularStep: Angle): GeoPoint[] {
-	if (contact.jd === undefined || limitEnd.jd === undefined || angularDistance(contact, limitEnd) <= maxAngularStep) return []
-	const [from, to] = contact.jd < limitEnd.jd ? [contact, limitEnd] : [limitEnd, contact]
-	return marchUmbraEdge(pbe, from.jd!, to.jd!, i, from, maxAngularStep)
+// Tests whether two planar segments AB and CD properly cross, using orientation signs.
+function segmentsCross(a: GeoPoint, b: GeoPoint, c: GeoPoint, d: GeoPoint) {
+	const orient = (p: GeoPoint, q: GeoPoint, r: GeoPoint) => Math.sign((r.y - p.y) * (q.x - p.x) - (q.y - p.y) * (r.x - p.x))
+	return orient(a, c, d) !== orient(b, c, d) && orient(a, b, c) !== orient(a, b, d)
+}
+
+// Snaps an internal contact (U2/U3) onto the nearest ring vertex when it lies within maxAngularStep of it,
+// replacing that vertex so the contact becomes an exact boundary point. The limb-tangency contacts and the
+// perpendicular-edge limits differ by up to a sampling step near the degenerate tips, so this nudge anchors
+// the contact on the contour without moving any vertex by more than one step (keeping turns bounded). The
+// owning segment is updated in place so the typed layer and the drawn ring stay consistent.
+function snapContactOntoSegments(segments: readonly TotalityRingSegment[], contact: GeoPoint, maxAngularStep: Angle) {
+	let bestSegment: TotalityRingSegment | undefined
+	let bestIndex = -1
+	let best = maxAngularStep
+
+	for (const segment of segments) {
+		if (segment.kind === 'cusp') continue
+		for (let k = 0; k < segment.points.length; k++) {
+			const distance = angularDistance(segment.points[k], contact)
+			if (distance < best) {
+				best = distance
+				bestSegment = segment
+				bestIndex = k
+			}
+		}
+	}
+
+	if (bestSegment) (bestSegment.points as GeoPoint[])[bestIndex] = contact
+}
+
+// Detects whether a ring has any crossing between non-adjacent edges, in flat lon/lat. Antimeridian-spanning
+// edges are skipped, so the test is valid for rings that do not wrap the antimeridian (split later anyway).
+function ringSelfIntersects(ring: readonly GeoPoint[]): boolean {
+	const n = ring.length
+
+	for (let i = 0; i < n; i++) {
+		const a = ring[i]
+		const b = ring[(i + 1) % n]
+		if (Math.abs(a.x - b.x) > PI) continue
+
+		for (let j = i + 2; j < n; j++) {
+			if (i === 0 && j === n - 1) continue
+			const c = ring[j]
+			const d = ring[(j + 1) % n]
+			if (Math.abs(c.x - d.x) > PI) continue
+			if (segmentsCross(a, b, c, d)) return true
+		}
+	}
+
+	return false
+}
+
+// Decomposes the totality/annularity path into typed segments anchored at the four umbral contacts. Both
+// edges are marched across the eclipse, anchored exactly at U1, U2, U3, U4 (sorted by instant: the extreme
+// instants U1/U4 are the external tangential cusps where the two edges meet, the middle two U2/U3 the
+// internal contacts). Each edge yields three sub-arcs: U1->U2 (start cap, where that edge straddles the
+// terminator and runs along the Earth limb), U2->U3 (the body limit, fully on Earth), and U3->U4 (end cap).
+// So the internal contacts U2/U3 become explicit boundary vertices, the caps are the physical U1<->U2 and
+// U3<->U4 limb arcs, and the lateral limits are the U2<->U3 bodies. Every segment is physical; there is no
+// artificial closure. Segments are emitted in ring traversal order:
+//   U1 cusp -> north start cap -> north limit -> north end cap -> U4 cusp -> south end cap (reversed) ->
+//   south limit (reversed) -> south start cap (reversed) -> back to U1.
+function buildCappedTotalityRingSegments(pbe: PolynomialBesselianElements, contacts: readonly GeoPoint[], maxAngularStep: Angle): TotalityRingSegment[] | undefined {
+	if (contacts.length !== 4 || contacts.some((point) => point.jd === undefined)) return undefined
+
+	// Sort the contacts by instant: the first and last are the external cusps U1/U4, the middle two the
+	// internal contacts U2/U3 that anchor the cap-to-limit joins.
+	const ordered = contacts.slice().sort((a, b) => a.jd! - b.jd!)
+	const u1 = ordered[0]
+	const u4 = ordered[3]
+	const anchorJds = [ordered[1].jd!, ordered[2].jd!, u4.jd!]
+
+	const northSubArcs = traceEdgeSubArcs(pbe, 1, u1, anchorJds, maxAngularStep)
+	const southSubArcs = traceEdgeSubArcs(pbe, -1, u1, anchorJds, maxAngularStep)
+	if (northSubArcs.length !== 3 || southSubArcs.length !== 3) return undefined
+
+	// Bodies (U2->U3) are kept as solved; cap arcs (U1->U2, U3->U4) are de-hooked so a brief overshoot near
+	// the degenerate external contacts does not self-intersect the ring.
+	const northStartCap = filterChordMonotone(northSubArcs[0])
+	const northLimit = northSubArcs[1]
+	const northEndCap = filterChordMonotone(northSubArcs[2])
+	const southStartCap = filterChordMonotone(southSubArcs[0])
+	const southLimit = southSubArcs[1]
+	const southEndCap = filterChordMonotone(southSubArcs[2])
+
+	const segments = [
+		physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [u1], pbe, 1),
+		physicalRingSegment('startCap', TOTALITY_BRANCH_NORTH, northStartCap, pbe, 1),
+		physicalRingSegment('northLimit', TOTALITY_BRANCH_NORTH, northLimit, pbe, 1),
+		physicalRingSegment('endCap', TOTALITY_BRANCH_NORTH, northEndCap, pbe, 1),
+		physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [u4], pbe, -1),
+		physicalRingSegment('endCap', TOTALITY_BRANCH_SOUTH, reversedPoints(southEndCap), pbe, -1),
+		physicalRingSegment('southLimit', TOTALITY_BRANCH_SOUTH, reversedPoints(southLimit), pbe, -1),
+		physicalRingSegment('startCap', TOTALITY_BRANCH_SOUTH, reversedPoints(southStartCap), pbe, -1),
+	]
+
+	// Anchor the internal contacts U2/U3 (ordered[1], ordered[2]) onto the contour where they already fall
+	// within a tight tolerance of it, so the caps carry the actual contacts as exact boundary vertices. The
+	// tolerance is kept small (not the full step) so the nudge never moves a vertex far enough to spike a
+	// turn; the limb-tangency contacts can sit up to a sampling step off the perpendicular-edge contour near
+	// the degenerate tips, and those are left in place rather than distorting the contour.
+	const snapTolerance = Math.min(maxAngularStep, CONTACT_SNAP_TOLERANCE)
+	snapContactOntoSegments(segments, ordered[1], snapTolerance)
+	snapContactOntoSegments(segments, ordered[2], snapTolerance)
+	return segments
 }
 
 // Decomposes the band into typed segments tracing the north limit forward, then the south limit back,
@@ -1865,16 +1971,19 @@ function buildTaperRingSegments(pbe: PolynomialBesselianElements, north: readonl
 	return segments
 }
 
-// Selects the totality ring segmentation: the capped ring driven by the external contacts U1/U4 when
-// available (and resolvable to a marched ring), otherwise the simple taper toward U1/U4 or C1/C2.
+// Selects the totality ring segmentation: the capped ring anchored at all four umbral contacts U1..U4 when
+// they are available (and the dual-edge march resolves), otherwise the simple taper toward U1/U4 or C1/C2.
 function buildTotalityRingSegments(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], points: SolarEclipseContactPoints, maxAngularStep: Angle): TotalityRingSegment[] {
 	if (north.length < 2 || south.length < 2) return []
 
-	if (points.U1 && points.U4) {
-		const capped = buildCappedTotalityRingSegments(pbe, north, south, points.U1, points.U4, maxAngularStep)
-		if (capped) return capped
-		return buildTaperRingSegments(pbe, north, south, points.U1, points.U4)
+	if (points.U1 && points.U2 && points.U3 && points.U4) {
+		const capped = buildCappedTotalityRingSegments(pbe, [points.U1, points.U2, points.U3, points.U4], maxAngularStep)
+		// Use the anchored ring only when it is a simple polygon; otherwise fall back to the taper, never
+		// emitting a self-intersecting fill.
+		if (capped && !ringSelfIntersects(totalityRingPoints(capped))) return capped
 	}
+
+	if (points.U1 && points.U4) return buildTaperRingSegments(pbe, north, south, points.U1, points.U4)
 
 	return buildTaperRingSegments(pbe, north, south, points.C1, points.C2)
 }
