@@ -2231,15 +2231,12 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		}
 	}
 
-	// Partial-eclipse (penumbra) north/south limits are produced for eclipses with an umbral path,
-	// where the penumbra sweeps a well-defined day-side tangency curve. Pure partial eclipses leave
-	// these empty, their boundary being described by the sunrise/sunset curves instead.
-	let penumbraNorth: readonly GeoPoint[] = []
-	let penumbraSouth: readonly GeoPoint[] = []
-	if (hasUmbralPath(eclipse)) {
-		penumbraNorth = findPartialEclipseLimit(pbe, 1, curveOptions)
-		penumbraSouth = findPartialEclipseLimit(pbe, -1, curveOptions)
-	}
+	// Partial-eclipse (penumbra) north/south limits: the day-side curves where the penumbral cone grazes the
+	// surface (magnitude 0), bounding the region where any partial eclipse is seen. For a pure partial eclipse
+	// (no central path) this is the main physical boundary, so it is produced for every eclipse, not only
+	// umbral ones. A grazing partial may yield only one of the two limits, the other side being the terminator.
+	const penumbraNorth = findPartialEclipseLimit(pbe, 1, curveOptions)
+	const penumbraSouth = findPartialEclipseLimit(pbe, -1, curveOptions)
 	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, contacts, { step: options.riseSetStep }) : []
 
 	return {

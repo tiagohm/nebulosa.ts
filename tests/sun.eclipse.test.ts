@@ -521,8 +521,10 @@ test('computeSolarEclipseMapGeometry anchors synthetic partial contacts and rise
 	expect(lines.centerLine).toHaveLength(0)
 	expect(lines.umbraNorth).toHaveLength(0)
 	expect(lines.umbraSouth).toHaveLength(0)
-	expect(lines.penumbraNorth).toHaveLength(0)
-	expect(lines.penumbraSouth).toHaveLength(0)
+	// A pure partial eclipse has no umbral path, so its main physical contour is the penumbral limit (the
+	// magnitude-0 boundary). It is now produced rather than left empty; every point is a valid coordinate.
+	for (const point of lines.penumbraNorth) expectGeoPoint(point)
+	for (const point of lines.penumbraSouth) expectGeoPoint(point)
 	expect(polygons.totalityPath).toHaveLength(0)
 	// Two sunrise branches (P1->P2) and two sunset branches (P3->P4), each meeting exactly at its cusps.
 	expect(lines.riseSetCurves.map((line) => line.length)).toEqual([73, 73, 72, 72])
@@ -1616,11 +1618,13 @@ describe('solar eclipse map acceptance criteria', () => {
 		})
 	}
 
-	// Section 11: a purely partial eclipse has no central line, no umbral path and no totality polygon, but it
-	// still produces the partial-eclipse boundary via its rise/set curves.
-	test('a purely partial eclipse exposes no central/umbral entities', () => {
+	// Section 11: a purely partial eclipse has no central line, no umbral path and no totality/annularity
+	// polygon, but it does draw the penumbral limit (its main physical contour, magnitude 0) on the sunlit
+	// side, not just the rise/set curves.
+	test('a purely partial eclipse draws the penumbral limit but no central/umbral entities', () => {
 		const fixture = NASA_ECLIPSES[2]
-		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { includeRiseSetCurves: true, includePolygons: true })
+		const elements = nasaPbe(fixture)
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { longitudeStep: deg(1), maxAngularStep: deg(3), includeRiseSetCurves: true, includePolygons: true })
 		expect(geometry.lines.centerLine).toHaveLength(0)
 		expect(geometry.lines.umbraNorth).toHaveLength(0)
 		expect(geometry.lines.umbraSouth).toHaveLength(0)
@@ -1628,6 +1632,13 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(geometry.polygons.totalitySegments).toHaveLength(0)
 		expect(geometry.polygons.annularityPath).toHaveLength(0)
 		expect(geometry.polygons.annularitySegments).toHaveLength(0)
+
+		// The penumbral limit is produced (at least one of the two tangent branches) on the magnitude-0 locus.
+		const penumbra = [...geometry.lines.penumbraNorth, ...geometry.lines.penumbraSouth]
+		expect(penumbra.length).toBeGreaterThan(0)
+		for (const point of geometry.lines.penumbraNorth) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
+		for (const point of geometry.lines.penumbraSouth) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
+		for (const point of penumbra) expect(solarAltitude(elements, point)).toBeGreaterThan(deg(-1))
 	})
 
 	// Section 5 reject + section 26: lateral limits never cross each other and never cross the central line
@@ -1677,5 +1688,32 @@ describe('solar eclipse map acceptance criteria', () => {
 
 		// Greatest eclipse (the deepest point) lies in the total region for this total-in-the-middle hybrid.
 		if (!totalityPath.some((ring) => wrapsAntimeridian(ring))) expect(totalityPath.some((ring) => isInsidePolygon(geometry.points.Max!, ring))).toBe(true)
+	})
+
+	// Sections 11 + 12: a pure partial eclipse draws the penumbral limit (magnitude 0), and that limit spans the
+	// published northern/southern penumbral extremes N1/S1. Verified against the 2000-02-05 partial over the
+	// southern hemisphere (EclipseWise: N1 ~ 50.23 deg S, 95.645 deg W; S1 ~ 28.305 deg S, 66.562 deg E).
+	test('2000-02-05 partial eclipse penumbral limit matches the published N1/S1 extremes', () => {
+		const eclipse = nearestSolarEclipse(timeYMD(2000, 2, 1), true)
+		expect(eclipse.type).toBe('partial')
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, (t) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon))
+		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: deg(1), maxAngularStep: deg(3) })
+		const limit = geometry.lines.penumbraNorth
+		expect(limit.length).toBeGreaterThan(0)
+
+		// Every point is on the magnitude-0 locus with the Sun above the horizon.
+		for (const point of limit) {
+			expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
+			expect(solarAltitude(elements, point)).toBeGreaterThan(deg(-1))
+		}
+
+		// The two endpoints of the limit reach the published extremes N1 and S1 within a degree or two.
+		const N1 = { x: deg(-95.645), y: deg(-50.23) }
+		const S1 = { x: deg(66.562), y: deg(-28.305) }
+		const endpoints = [limit[0], limit.at(-1)!]
+		for (const target of [N1, S1]) {
+			const nearest = Math.min(...endpoints.map((point) => sphericalSeparation(point.x, point.y, target.x, target.y)))
+			expect(nearest).toBeLessThan(deg(2))
+		}
 	})
 })
