@@ -65,7 +65,7 @@ const projection = new PlateCarree(0, {
 	maxLatitude: PIOVERTWO,
 })
 
-while (date[0] <= 2020) {
+while (date[0] <= 2025) {
 	const eclipse = solarEclipse
 	const { maximalTime } = eclipse
 	const id = `${date[0]}-${date[1]}-${date[2]}`
