@@ -172,6 +172,34 @@ export interface SolarEclipseContactPoints {
 	readonly Max?: GeoPoint
 }
 
+// Geometric role of a totality/annularity ring segment.
+//   northLimit / southLimit: the umbral path limit traced on the umbra edge.
+//   startCap / endCap: the Earth-limb arc the umbra sweeps near the external contacts U1/U4, where one
+//     limit edge runs off the terminator (grows only for grazing/circumpolar ends; empty otherwise).
+//   cusp: a single tangential external-contact vertex (U1/U4) or central-line endpoint (C1/C2).
+export type TotalityRingSegmentKind = 'northLimit' | 'southLimit' | 'startCap' | 'endCap' | 'cusp'
+
+// One contiguous, typed piece of a totality/annularity path ring. The ring is the ordered concatenation
+// of its segments' points, so the layer documents which physical boundary each stretch came from and lets
+// consumers verify the contour is entirely physical (no synthetic closure).
+export interface TotalityRingSegment {
+	// Geometric role of the segment within the ring.
+	readonly kind: TotalityRingSegmentKind
+	// Branch the segment belongs to: 0 north edge, 1 south edge, -1 a shared cusp vertex.
+	readonly branchId: number
+	// Whether every point lies on a real solved umbral boundary (limit edge or swept Earth-limb arc).
+	readonly physical: boolean
+	// Whether the segment is a synthetic closure not traced on any boundary. Always false for the geometry
+	// this engine produces; the flag exists so future artificial closures stay distinguishable.
+	readonly artificial: boolean
+	// Maximum umbral-limit tangency residual over the segment's points, in Earth radii (NaN when not
+	// measurable). Near zero on limit segments; it grows on cap segments where they follow the Earth limb
+	// rather than the umbral limit, which is expected.
+	readonly residual: number
+	// Ordered geographic points of the segment, already in ring traversal order.
+	readonly points: readonly GeoPoint[]
+}
+
 // Projection-agnostic solar eclipse map geometry.
 export interface SolarEclipseMapGeometry {
 	// Named contact points and greatest-eclipse point.
@@ -195,6 +223,9 @@ export interface SolarEclipseMapGeometry {
 	readonly polygons: {
 		// Totality or annularity path rings.
 		readonly totalityPath: readonly GeoPoint[][]
+		// Typed-entity decomposition of each totality/annularity ring, parallel to totalityPath: one segment
+		// list per ring, whose concatenated points reproduce that ring.
+		readonly totalitySegments: readonly (readonly TotalityRingSegment[])[]
 	}
 }
 
@@ -1713,52 +1744,103 @@ function marchUmbraEdge(pbe: PolynomialBesselianElements, fromJd: number, toJd: 
 	return out
 }
 
-// Builds the totality/annularity path as a single closed ring from the gap-bridged north and south limit
-// curves plus four physical end caps. The limits trace the band's body where both perpendicular edges lie
-// on Earth; near each external contact U1/U4 one edge runs off beyond the terminator, so the cap there is
-// the Earth-limb arc the umbra sweeps, traced by marching that edge in time between the contact and the
-// limit's endpoint (the same edge, so cap and limit join continuously). A normal eclipse's contacts sit at
-// the limit endpoints, collapsing every cap to that single tangential point, so its band keeps its old
-// taper; a grazing/circumpolar eclipse grows real caps that keep the central line (the shadow-axis foot,
-// always inside the umbra) within the fill all the way to C1/C2. The only sharp turns are the tangential
-// cusps at U1/U4. The whole contour is physical: there is no artificial closure to keep out of limit
-// tests. Antimeridian wraps are split later at projection time.
-function buildCappedTotalityRing(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], u1: GeoPoint, u4: GeoPoint, maxAngularStep: Angle): GeoPoint[][] {
-	if (north.length < 2 || south.length < 2) return []
+// Branch identifiers carried by totality ring segments: north edge, south edge, and shared cusp vertices.
+const TOTALITY_BRANCH_NORTH = 0
+const TOTALITY_BRANCH_SOUTH = 1
+const TOTALITY_BRANCH_CUSP = -1
 
+// Umbral-limit tangency residual of a point in Earth radii: |W + i*|E||, the eclipse condition the curve
+// solver drives to zero (W is the cross-track offset of the observer from the shadow axis, |E| the
+// shadow-edge radius). Near zero means the point lies on the requested magnitude curve: the umbra edge for
+// g = 1, the penumbra edge for g = 0. Mirrors the detector used by the geometry invariant tests.
+//   point: geographic point carrying the instant jd it was solved at.
+//   i: edge sign, +1 north, -1 south.
+//   g: magnitude target, 1 for the umbral limit, 0 for the penumbral limit.
+function limitTangencyResidual(pbe: PolynomialBesselianElements, point: GeoPoint, i: -1 | 1, g: number) {
+	if (point.jd === undefined) return Number.NaN
+
+	const t = (point.jd - toJulianDay(pbe.time0)) / pbe.stepDays
+	const be = evaluateBesselianAtT(pbe, t)
+	const sinD = Math.sin(be.d)
+	const cosD = Math.cos(be.d)
+	const H = point.x + be.mu - deltaTLongitudeCorrection(pbe)
+	const sinH = Math.sin(H)
+	const cosH = Math.cos(H)
+	const U = Math.atan(F_CONST * Math.tan(point.y))
+	const rhoSinPhi = F_CONST * Math.sin(U)
+	const rhoCosPhi = Math.cos(U)
+	const ksi = rhoCosPhi * sinH
+	const eta = rhoSinPhi * cosD - rhoCosPhi * cosH * sinD
+	const zeta = rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
+	const a = be.dx - rhoCosPhi * cosH * be.dmu
+	const b = be.dy - rhoCosPhi * sinH * sinD * be.dmu
+	const n = Math.hypot(a, b)
+
+	if (!(n > 0)) return Number.NaN
+
+	const W = ((be.y - eta) * a - (be.x - ksi) * b) / n
+	const dL1 = be.l1 - zeta * be.tanF1
+	const dL2 = be.l2 - zeta * be.tanF2
+	const E = dL1 - g * (dL1 + dL2)
+	return Math.abs(W + i * Math.abs(E))
+}
+
+// Maximum umbral-limit (g = 1) tangency residual over a segment's points; 0 for an empty segment.
+function maxUmbraLimitResidual(pbe: PolynomialBesselianElements, points: readonly GeoPoint[], i: -1 | 1) {
+	let max = 0
+	for (const point of points) {
+		const residual = limitTangencyResidual(pbe, point, i, 1)
+		if (Number.isFinite(residual) && residual > max) max = residual
+	}
+	return max
+}
+
+// Builds one physical totality ring segment, measuring its tangency residual against umbral edge i.
+function physicalRingSegment(kind: TotalityRingSegmentKind, branchId: number, points: readonly GeoPoint[], pbe: PolynomialBesselianElements, i: -1 | 1): TotalityRingSegment {
+	return { kind, branchId, physical: true, artificial: false, residual: maxUmbraLimitResidual(pbe, points, i), points }
+}
+
+// Returns a reversed copy of a point list, used to traverse the south edge from U4 back to U1.
+function reversedPoints(points: readonly GeoPoint[]): GeoPoint[] {
+	const out = points.slice()
+	out.reverse()
+	return out
+}
+
+// Decomposes the totality/annularity path into typed segments. The limits trace the band's body where both
+// perpendicular edges lie on Earth; near each external contact U1/U4 one edge runs off beyond the
+// terminator, so the cap there is the Earth-limb arc the umbra sweeps, marched along the same edge between
+// the contact and the limit's endpoint (so cap and limit join continuously). A normal eclipse's contacts
+// sit at the limit endpoints, collapsing every cap so its band keeps its single-vertex taper; a
+// grazing/circumpolar eclipse grows real caps that keep the central line within the fill all the way to
+// C1/C2. The only sharp turns are the tangential cusps at U1/U4. Every segment is physical, so the whole
+// contour is physical with no artificial closure. Segments are emitted in ring traversal order:
+//   U1 cusp -> north start cap -> north limit -> north end cap -> U4 cusp -> south end cap (reversed) ->
+//   south limit (reversed) -> south start cap (reversed) -> back to U1.
+function buildCappedTotalityRingSegments(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], u1: GeoPoint, u4: GeoPoint, maxAngularStep: Angle): TotalityRingSegment[] | undefined {
 	const northStart = north[0]
 	const northEnd = north.at(-1)!
 	const southStart = south[0]
 	const southEnd = south.at(-1)!
 
-	if ([northStart, northEnd, southStart, southEnd, u1, u4].some((point) => point.jd === undefined)) {
-		return buildSingleTotalityRing(north, south, u1, u4)
-	}
+	if ([northStart, northEnd, southStart, southEnd, u1, u4].some((point) => point.jd === undefined)) return undefined
 
-	// Cap arcs from each contact to the abutting limit endpoint, marched along the same edge so they meet the
-	// limit without a seam. A cap is built only where the limit endpoint sits more than one step from the
-	// contact (the umbra grazed the terminator there): otherwise the contact already caps the band as a
-	// single tangential vertex, and marching the near-degenerate interval would only jitter near the cusp.
+	// A cap is built only where the limit endpoint sits more than one step from the contact (the umbra grazed
+	// the terminator there): otherwise the contact already caps the band as a single tangential vertex.
 	const startCapNorth = umbraCapArc(pbe, u1, northStart, 1, maxAngularStep)
 	const endCapNorth = umbraCapArc(pbe, northEnd, u4, 1, maxAngularStep)
 	const startCapSouth = umbraCapArc(pbe, u1, southStart, -1, maxAngularStep)
 	const endCapSouth = umbraCapArc(pbe, southEnd, u4, -1, maxAngularStep)
 
-	const ring: GeoPoint[] = []
-	// U1 cusp -> north start cap -> north limit -> north end cap -> U4 cusp -> south end cap -> south limit
-	// -> south start cap -> back to U1 cusp. The U1/U4 cusps are pushed explicitly so they anchor the band
-	// even where a cap is degenerate (empty).
-	pushDistinct(ring, u1)
-	for (const point of startCapNorth) pushDistinct(ring, point)
-	for (const point of north) pushDistinct(ring, point)
-	for (const point of endCapNorth) pushDistinct(ring, point)
-	pushDistinct(ring, u4)
-	for (let k = endCapSouth.length - 1; k >= 0; k--) pushDistinct(ring, endCapSouth[k])
-	for (let k = south.length - 1; k >= 0; k--) pushDistinct(ring, south[k])
-	for (let k = startCapSouth.length - 1; k >= 0; k--) pushDistinct(ring, startCapSouth[k])
-	closeRing(ring)
-
-	return ring.length >= 3 ? [ring] : []
+	const segments: TotalityRingSegment[] = [physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [u1], pbe, 1)]
+	if (startCapNorth.length > 0) segments.push(physicalRingSegment('startCap', TOTALITY_BRANCH_NORTH, startCapNorth, pbe, 1))
+	segments.push(physicalRingSegment('northLimit', TOTALITY_BRANCH_NORTH, north, pbe, 1))
+	if (endCapNorth.length > 0) segments.push(physicalRingSegment('endCap', TOTALITY_BRANCH_NORTH, endCapNorth, pbe, 1))
+	segments.push(physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [u4], pbe, -1))
+	if (endCapSouth.length > 0) segments.push(physicalRingSegment('endCap', TOTALITY_BRANCH_SOUTH, reversedPoints(endCapSouth), pbe, -1))
+	segments.push(physicalRingSegment('southLimit', TOTALITY_BRANCH_SOUTH, reversedPoints(south), pbe, -1))
+	if (startCapSouth.length > 0) segments.push(physicalRingSegment('startCap', TOTALITY_BRANCH_SOUTH, reversedPoints(startCapSouth), pbe, -1))
+	return segments
 }
 
 // Marches the cap arc along umbral edge i between a tangential contact and the abutting limit endpoint, in
@@ -1770,30 +1852,41 @@ function umbraCapArc(pbe: PolynomialBesselianElements, contact: GeoPoint, limitE
 	return marchUmbraEdge(pbe, from.jd!, to.jd!, i, from, maxAngularStep)
 }
 
-// Builds one closed ring tracing the north limit forward, through the end tip, back along the south
-// limit and through the start tip. The tip points (the path endpoints U1/U4, or the central-line
-// endpoints C1/C2 when the umbral contacts are unavailable) taper the band to a point at each end. Used as
-// a fallback when the umbral external contacts U1/U4 are unavailable to drive the time-marched ring.
-function buildSingleTotalityRing(north: readonly GeoPoint[], south: readonly GeoPoint[], startTip?: GeoPoint, endTip?: GeoPoint): GeoPoint[][] {
-	const ring: GeoPoint[] = []
-	pushDistinct(ring, startTip)
-	for (const point of north) pushDistinct(ring, point)
-	pushDistinct(ring, endTip)
-	for (let i = south.length - 1; i >= 0; i--) pushDistinct(ring, south[i])
-	closeRing(ring)
-
-	return ring.length >= 3 ? [ring] : []
+// Decomposes the band into typed segments tracing the north limit forward, then the south limit back,
+// tapering through the start and end tips (the path endpoints U1/U4, or the central-line endpoints C1/C2
+// when the umbral contacts are unavailable). Used as a fallback when the capped ring cannot be marched.
+// The tips are physical cusp vertices; the limits keep their own edge branch.
+function buildTaperRingSegments(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], startTip?: GeoPoint, endTip?: GeoPoint): TotalityRingSegment[] {
+	const segments: TotalityRingSegment[] = []
+	if (finitePoint(startTip)) segments.push(physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [startTip], pbe, 1))
+	segments.push(physicalRingSegment('northLimit', TOTALITY_BRANCH_NORTH, north, pbe, 1))
+	if (finitePoint(endTip)) segments.push(physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [endTip], pbe, -1))
+	segments.push(physicalRingSegment('southLimit', TOTALITY_BRANCH_SOUTH, reversedPoints(south), pbe, -1))
+	return segments
 }
 
-// Builds the totality/annularity path from the gap-bridged, time-ordered north and south limit curves
-// as a single closed ring, tapering it to the start and end tips (the umbral external contacts U1/U4
-// where totality begins and ends as a point). Because the limits are already continuous (their pole-side
-// gaps filled by the umbral footprint), the band is one simple ring of the path's true finite width, not
-// split into disconnected blocks. Antimeridian wraps are split later at projection time.
-function buildTotalityPathPolygon(north: readonly GeoPoint[], south: readonly GeoPoint[], startTip?: GeoPoint, endTip?: GeoPoint): GeoPoint[][] {
+// Selects the totality ring segmentation: the capped ring driven by the external contacts U1/U4 when
+// available (and resolvable to a marched ring), otherwise the simple taper toward U1/U4 or C1/C2.
+function buildTotalityRingSegments(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], points: SolarEclipseContactPoints, maxAngularStep: Angle): TotalityRingSegment[] {
 	if (north.length < 2 || south.length < 2) return []
 
-	return buildSingleTotalityRing(north, south, startTip, endTip)
+	if (points.U1 && points.U4) {
+		const capped = buildCappedTotalityRingSegments(pbe, north, south, points.U1, points.U4, maxAngularStep)
+		if (capped) return capped
+		return buildTaperRingSegments(pbe, north, south, points.U1, points.U4)
+	}
+
+	return buildTaperRingSegments(pbe, north, south, points.C1, points.C2)
+}
+
+// Concatenates a ring's typed segments into its closed point list, dropping duplicate joins and the closing
+// duplicate. Returns an empty list when fewer than three distinct points remain. Antimeridian wraps are
+// split later at projection time.
+function totalityRingPoints(segments: readonly TotalityRingSegment[]): GeoPoint[] {
+	const ring: GeoPoint[] = []
+	for (const segment of segments) for (const point of segment.points) pushDistinct(ring, point)
+	closeRing(ring)
+	return ring.length >= 3 ? ring : []
 }
 
 // TODO: Quando mesclar o codex/meeus, remover isso e usar eclipse.central
@@ -1817,6 +1910,7 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	let umbraNorth: GeoPoint[][] = []
 	let umbraSouth: GeoPoint[][] = []
 	let totalityPath: GeoPoint[][] = []
+	let totalitySegments: TotalityRingSegment[][] = []
 
 	// The time-sampled central line (and thus its C1/C2 endpoints) is shared across the central
 	// line and both umbral limits, so compute it once for any non-partial eclipse.
@@ -1844,9 +1938,15 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		umbraSouth = splitUmbraLimit(fullSouth, maxAngularStep)
 		// Trace the fill by marching both umbral edges between the external contacts U1/U4, so it grows true
 		// physical caps at grazing ends and contains the central line up to C1/C2. When the umbral contacts
-		// are unavailable, fall back to the simple chord taper toward the central-line endpoints C1/C2.
+		// are unavailable, fall back to the simple taper toward the central-line endpoints C1/C2. The ring is
+		// kept as a typed-segment decomposition and the drawable point ring is concatenated from it.
 		if (options.includePolygons ?? true) {
-			totalityPath = points.U1 && points.U4 ? buildCappedTotalityRing(pbe, fullNorth, fullSouth, points.U1, points.U4, maxAngularStep) : buildTotalityPathPolygon(fullNorth, fullSouth, points.C1, points.C2)
+			const segments = buildTotalityRingSegments(pbe, fullNorth, fullSouth, points, maxAngularStep)
+			const ring = totalityRingPoints(segments)
+			if (ring.length >= 3) {
+				totalitySegments = [segments]
+				totalityPath = [ring]
+			}
 		}
 	}
 
@@ -1873,6 +1973,7 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		},
 		polygons: {
 			totalityPath,
+			totalitySegments,
 		},
 	}
 }

@@ -2,7 +2,7 @@ import { expect, test, describe } from 'bun:test'
 import { deg, formatAZ } from '../src/angle'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, evaluateBesselian, findCurvePoints, findEclipseCurvePoint, findExtremeLimitOfCentralLine, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, pointsToSvgPathData, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse'
+import { computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, evaluateBesselian, findCurvePoints, findEclipseCurvePoint, findExtremeLimitOfCentralLine, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, pointsToSvgPathData, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition, type TotalityRingSegment } from '../src/sun.eclipse'
 import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../src/time'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
@@ -22,7 +22,7 @@ function geometry(overrides: Partial<SolarEclipseMapGeometry['lines']> = {}, tot
 	return {
 		points,
 		lines: { centerLine: [], umbraNorth: [], umbraSouth: [], penumbraNorth: [], penumbraSouth: [], riseSetCurves: [], ...overrides },
-		polygons: { totalityPath },
+		polygons: { totalityPath, totalitySegments: [] },
 	}
 }
 
@@ -1287,6 +1287,93 @@ test('circumpolar totality fill grows physical caps containing the central line'
 
 	// 8: the ring is simple — no two non-adjacent edges cross.
 	expect(countSelfIntersections(ring)).toBe(0)
+})
+
+// Rebuilds a ring's point list from its typed segments, mirroring the engine's pushDistinct + closeRing
+// concatenation, so a test can prove the segment layer reproduces the drawn ring exactly.
+function ringFromSegments(segments: readonly TotalityRingSegment[]) {
+	const ring: GeoPoint[] = []
+
+	for (const segment of segments) {
+		for (const point of segment.points) {
+			if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue
+			const last = ring.at(-1)
+			if (!last || Math.abs(last.x - point.x) >= 1e-9 || Math.abs(last.y - point.y) >= 1e-9 || Math.abs((last.jd ?? 0) - (point.jd ?? 0)) >= 1e-10) ring.push(point)
+		}
+	}
+
+	if (ring.length > 1 && Math.abs(ring[0].x - ring.at(-1)!.x) < 1e-9 && Math.abs(ring[0].y - ring.at(-1)!.y) < 1e-9) ring.pop()
+
+	return ring
+}
+
+describe('totality ring typed-entity layer', () => {
+	const VALID_KINDS = new Set(['northLimit', 'southLimit', 'startCap', 'endCap', 'cusp'])
+
+	test('segments are parallel to the ring, fully physical, and reproduce it', () => {
+		// 2003-11-23 grazes the southern limb, so it grows real startCap/endCap arcs near U1/U4.
+		const eclipse = nearestSolarEclipse(timeYMD(2003, 11, 1), true)
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, (t) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon))
+		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: deg(0.5), maxAngularStep: deg(0.5), includePolygons: true })
+		const { totalityPath, totalitySegments } = geometry.polygons
+
+		// One segment list per ring, in lock-step with totalityPath.
+		expect(totalitySegments).toHaveLength(totalityPath.length)
+		expect(totalityPath).toHaveLength(1)
+
+		const segments = totalitySegments[0]
+		expect(segments.length).toBeGreaterThan(0)
+
+		// The concatenated segments reproduce the drawn ring exactly.
+		const rebuilt = ringFromSegments(segments)
+		expect(rebuilt).toHaveLength(totalityPath[0].length)
+		for (let i = 0; i < rebuilt.length; i++) {
+			expect(rebuilt[i].x).toBeCloseTo(totalityPath[0][i].x, 9)
+			expect(rebuilt[i].y).toBeCloseTo(totalityPath[0][i].y, 9)
+		}
+
+		for (const segment of segments) {
+			expect(VALID_KINDS.has(segment.kind)).toBe(true)
+			// Every segment is a real boundary; none is a synthetic closure.
+			expect(segment.physical).toBe(true)
+			expect(segment.artificial).toBe(false)
+			expect(segment.points.length).toBeGreaterThan(0)
+			// Branch ids: north edge 0, south edge 1, shared cusp -1.
+			if (segment.kind === 'cusp') expect(segment.branchId).toBe(-1)
+			else if (segment.kind === 'northLimit') expect(segment.branchId).toBe(0)
+			else if (segment.kind === 'southLimit') expect(segment.branchId).toBe(1)
+			else expect([0, 1]).toContain(segment.branchId)
+		}
+
+		// The grazing path grows at least one physical cap along the swept Earth limb.
+		expect(segments.some((segment) => segment.kind === 'startCap' || segment.kind === 'endCap')).toBe(true)
+
+		// The limit segments are converged onto the umbral edge (small tangency residual); the ring opens and
+		// closes on tangential cusps at U1/U4.
+		for (const segment of segments) {
+			if (segment.kind === 'northLimit' || segment.kind === 'southLimit') expect(segment.residual).toBeLessThan(1e-3)
+		}
+		expect(segments[0].kind).toBe('cusp')
+	})
+
+	test('a normal eclipse collapses every cap to a single cusp', () => {
+		// 2024-04-08 contacts sit at the limit endpoints, so no startCap/endCap arc grows: the ring is just the
+		// two limits joined by the U1/U4 cusps.
+		const fixture = NASA_ECLIPSES[0]
+		const segments = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(1), maxAngularStep: deg(3), includePolygons: true }).polygons.totalitySegments[0]
+
+		expect(segments.map((segment) => segment.kind)).toEqual(['cusp', 'northLimit', 'cusp', 'southLimit'])
+		expect(segments.every((segment) => segment.physical && !segment.artificial)).toBe(true)
+	})
+
+	test('partial eclipse exposes no totality segments', () => {
+		const eclipse = nearestSolarEclipse(timeYMD(2025, 9, 21), true)
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, (t) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon))
+		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { includePolygons: true })
+
+		expect(geometry.polygons.totalityPath).toHaveLength(0)
+		expect(geometry.polygons.totalitySegments).toHaveLength(0)
+	})
 })
 
 describe('eclipse geometry physical and topological invariants', () => {
