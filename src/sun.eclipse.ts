@@ -959,10 +959,13 @@ function solvePartialLimitAtLongitude(pbe: PolynomialBesselianElements, longitud
 	return undefined
 }
 
-// Returns a curve's two endpoints ordered by ascending latitude (lower latitude first).
-function endpointsByAscendingLatitude(curve: readonly GeoPoint[]): [GeoPoint, GeoPoint] {
+// Returns a curve's two endpoints ordered by ascending time (earliest first), falling back to
+// ascending latitude when either endpoint lacks a Julian Day. The penumbral-limit extremes are named
+// by the eclipse chronology (N1/S1 begin, N2/S2 end), matching the EclipseWise/Espenak convention.
+function endpointsByAscendingTime(curve: readonly GeoPoint[]): [GeoPoint, GeoPoint] {
 	const first = curve[0]
 	const last = curve.at(-1)!
+	if (first.jd !== undefined && last.jd !== undefined) return first.jd <= last.jd ? [first, last] : [last, first]
 	return first.y <= last.y ? [first, last] : [last, first]
 }
 
@@ -2263,14 +2266,15 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	const penumbraSouth = findPartialEclipseLimit(pbe, -1, curveOptions)
 	// Expose the penumbral-limit extremes as named, plottable points. When both penumbral limits reach Earth
 	// (umbral/central eclipse), each branch contributes its two endpoints: northern limit -> N1/N2, southern
-	// limit -> S1/S2, ordered by ascending latitude. When only one limit reaches Earth (a grazing partial
-	// eclipse), that single curve carries the eclipse's two extremes: the poleward one is N1, the equatorward
-	// one is S1 (matching the EclipseWise N1/S1 convention for partial eclipses).
+	// limit -> S1/S2, ordered chronologically so N1/S1 mark where each limit begins and N2/S2 where it ends.
+	// When only one limit reaches Earth (a grazing partial eclipse), that single curve carries the eclipse's
+	// two extremes: the poleward one is N1, the equatorward one is S1 (matching the EclipseWise N1/S1
+	// convention for partial eclipses).
 	const hasNorthPenumbraLimit = penumbraNorth.length >= 2
 	const hasSouthPenumbraLimit = penumbraSouth.length >= 2
 	if (hasNorthPenumbraLimit && hasSouthPenumbraLimit) {
-		;[points.N1, points.N2] = endpointsByAscendingLatitude(penumbraNorth)
-		;[points.S1, points.S2] = endpointsByAscendingLatitude(penumbraSouth)
+		;[points.N1, points.N2] = endpointsByAscendingTime(penumbraNorth)
+		;[points.S1, points.S2] = endpointsByAscendingTime(penumbraSouth)
 	} else if (hasNorthPenumbraLimit || hasSouthPenumbraLimit) {
 		const branch = hasNorthPenumbraLimit ? penumbraNorth : penumbraSouth
 		const a = branch[0]

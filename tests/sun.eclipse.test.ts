@@ -1618,15 +1618,15 @@ describe('solar eclipse map acceptance criteria', () => {
 
 			// Section 12: the named penumbral-limit extremes, when present, lie on a magnitude-0 limit branch
 			// (either the northern i = +1 or southern i = -1 one). With both limits present N1/N2 and S1/S2 are
-			// each ordered by ascending latitude.
+			// each ordered chronologically: N1/S1 mark where a limit begins, N2/S2 where it ends.
 			test('penumbral limit extremes lie on the magnitude-0 locus', () => {
 				for (const point of [points.N1, points.N2, points.S1, points.S2]) {
 					if (!point) continue
 					const onLocus = Math.min(limitTangencyResidual(elements, point, 1, 0), limitTangencyResidual(elements, point, -1, 0))
 					expect(onLocus).toBeLessThan(1e-3)
 				}
-				if (points.N1 && points.N2) expect(points.N1.y).toBeLessThanOrEqual(points.N2.y)
-				if (points.S1 && points.S2) expect(points.S1.y).toBeLessThanOrEqual(points.S2.y)
+				if (points.N1?.jd !== undefined && points.N2?.jd !== undefined) expect(points.N1.jd).toBeLessThanOrEqual(points.N2.jd)
+				if (points.S1?.jd !== undefined && points.S2?.jd !== undefined) expect(points.S1.jd).toBeLessThanOrEqual(points.S2.jd)
 			})
 		})
 	}
@@ -1753,5 +1753,27 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(-129.738), deg(32.185))).toBeLessThan(deg(2))
 		// Both lie on the magnitude-0 locus (this eclipse's limit is the southern branch, i = -1).
 		for (const point of [geometry.points.N1!, geometry.points.S1!]) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
+	})
+
+	// Section 12: an annular (both-limit) eclipse names the penumbral extremes chronologically -- N1/S1 where
+	// each limit begins, N2/S2 where it ends -- not by latitude. Regression for the 2001-12-14 annular, where
+	// the latitude ordering swapped N1<->N2 and S1<->S2. EclipseWise: N1 ~ 66.19 deg N, 139.72 deg W;
+	// N2 ~ 57.93 deg N, 95.30 deg W; S1 ~ 0.60 deg N, 160.89 deg E; S2 ~ 15.54 deg S, 62.29 deg W.
+	test('2001-12-14 annular eclipse labels penumbral extremes chronologically (N1/N2, S1/S2)', () => {
+		const eclipse = nearestSolarEclipse(timeYMD(2001, 12, 1), true)
+		expect(eclipse.type).toBe('annular')
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, (t) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon))
+		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: deg(0.5), maxAngularStep: deg(1) })
+
+		for (const point of [geometry.points.N1, geometry.points.N2, geometry.points.S1, geometry.points.S2]) expect(point).toBeDefined()
+
+		// N1/S1 begin each limit, N2/S2 end it, so the named extremes are ordered by time, not latitude.
+		expect(geometry.points.N1!.jd!).toBeLessThanOrEqual(geometry.points.N2!.jd!)
+		expect(geometry.points.S1!.jd!).toBeLessThanOrEqual(geometry.points.S2!.jd!)
+
+		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(-139.72), deg(66.19))).toBeLessThan(deg(2))
+		expect(sphericalSeparation(geometry.points.N2!.x, geometry.points.N2!.y, deg(-95.3), deg(57.93))).toBeLessThan(deg(2))
+		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(160.89), deg(0.6))).toBeLessThan(deg(2))
+		expect(sphericalSeparation(geometry.points.S2!.x, geometry.points.S2!.y, deg(-62.29), deg(-15.54))).toBeLessThan(deg(2))
 	})
 })
