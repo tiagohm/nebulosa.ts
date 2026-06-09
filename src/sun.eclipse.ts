@@ -177,7 +177,9 @@ export interface SolarEclipseContactPoints {
 //   startCap / endCap: the Earth-limb arc the umbra sweeps near the external contacts U1/U4, where one
 //     limit edge runs off the terminator (grows only for grazing/circumpolar ends; empty otherwise).
 //   cusp: a single tangential external-contact vertex (U1/U4) or central-line endpoint (C1/C2).
-export type TotalityRingSegmentKind = 'northLimit' | 'southLimit' | 'startCap' | 'endCap' | 'cusp'
+//   transition: the cross-band cut where a hybrid eclipse changes between total and annular (the locus where
+//     the surface shadow radius vanishes), separating a total ring from an annular ring.
+export type TotalityRingSegmentKind = 'northLimit' | 'southLimit' | 'startCap' | 'endCap' | 'cusp' | 'transition'
 
 // One contiguous, typed piece of a totality/annularity path ring. The ring is the ordered concatenation
 // of its segments' points, so the layer documents which physical boundary each stretch came from and lets
@@ -221,11 +223,17 @@ export interface SolarEclipseMapGeometry {
 	}
 	// Geographic polygon rings, still unprojected.
 	readonly polygons: {
-		// Totality or annularity path rings.
+		// Totality path rings (the surface where the eclipse is total). For a hybrid eclipse this holds only
+		// the total portion of the central band, split from the annular portion at the transition.
 		readonly totalityPath: readonly GeoPoint[][]
-		// Typed-entity decomposition of each totality/annularity ring, parallel to totalityPath: one segment
-		// list per ring, whose concatenated points reproduce that ring.
+		// Typed-entity decomposition of each totality ring, parallel to totalityPath: one segment list per ring,
+		// whose concatenated points reproduce that ring.
 		readonly totalitySegments: readonly (readonly TotalityRingSegment[])[]
+		// Annularity path rings (the surface where the eclipse is annular). Empty for a pure total eclipse; for
+		// a hybrid it holds the annular portions split from the total portion at the transition.
+		readonly annularityPath: readonly GeoPoint[][]
+		// Typed-entity decomposition of each annularity ring, parallel to annularityPath.
+		readonly annularitySegments: readonly (readonly TotalityRingSegment[])[]
 	}
 }
 
@@ -303,8 +311,10 @@ export interface SolarEclipseMapSvgPaths {
 	readonly penumbraSouth: string
 	// Sunrise and sunset eclipse curves.
 	readonly riseSetCurves: string
-	// Totality or annularity path, as closed polygon rings.
+	// Totality path, as closed polygon rings.
 	readonly totalityPath: string
+	// Annularity path, as closed polygon rings (empty string for a pure total eclipse).
+	readonly annularityPath: string
 	// Projected pixel coordinates of the named contact and greatest-eclipse points, when present.
 	readonly points: SolarEclipseMapPoints
 }
@@ -1726,17 +1736,19 @@ function refineEdgeArc(pbe: PolynomialBesselianElements, i: -1 | 1, a: GeoPoint,
 	refineEdgeArc(pbe, i, mid, b, maxAngularStep, out, depth + 1)
 }
 
-// Traces one umbral edge (i = +1 north, -1 south) across the eclipse, anchored at the ordered contact
-// instants in anchorJds (U2, U3, U4). It solves the edge at each anchor instant seeded by continuity from the
-// previous one, then densifies each interval, returning one sub-arc per interval (sharing endpoints). The
-// first anchor is supplied as start (the U1 contact, where both edges meet), so the sub-arcs run U1->U2 (the
-// start cap), U2->U3 (the body limit), U3->U4 (the end cap), making U2/U3 explicit boundary vertices.
-function traceEdgeSubArcs(pbe: PolynomialBesselianElements, i: -1 | 1, start: GeoPoint, anchorJds: readonly number[], maxAngularStep: Angle): GeoPoint[][] {
+// Traces one umbral edge (i = +1 north, -1 south) across the eclipse, anchored at the ordered contacts U2,
+// U3, U4. It solves the edge at each anchor instant, seeded by continuity from the previous point and, if
+// that fails to converge (the edge is degenerate near a terminator tip), re-seeded from the contact point
+// itself; then it densifies each interval, returning one sub-arc per interval (sharing endpoints). The first
+// anchor is supplied as start (the U1 contact, where both edges meet), so the sub-arcs run U1->U2 (start cap),
+// U2->U3 (body limit), U3->U4 (end cap), making U2/U3 explicit boundary vertices.
+function traceEdgeSubArcs(pbe: PolynomialBesselianElements, i: -1 | 1, start: GeoPoint, anchors: readonly GeoPoint[], maxAngularStep: Angle): GeoPoint[][] {
 	const subArcs: GeoPoint[][] = []
 	let from = start
 
-	for (const toJd of anchorJds) {
-		const to = solveTimeFixedLimitPoint(pbe, toJd, i, from.x, from.y)
+	for (const anchor of anchors) {
+		if (anchor.jd === undefined) continue
+		const to = solveTimeFixedLimitPoint(pbe, anchor.jd, i, from.x, from.y) ?? solveTimeFixedLimitPoint(pbe, anchor.jd, i, anchor.x, anchor.y)
 		if (!to || to.jd === undefined || from.jd === undefined) {
 			from = to ?? from
 			continue
@@ -1900,8 +1912,8 @@ function buildCappedTotalityRingSegments(pbe: PolynomialBesselianElements, conta
 	const u3 = ordered[2]
 	const u4 = ordered[3]
 
-	const northSubArcs = traceEdgeSubArcs(pbe, 1, u1, [u2.jd!, u3.jd!, u4.jd!], maxAngularStep)
-	const southSubArcs = traceEdgeSubArcs(pbe, -1, u1, [u2.jd!, u3.jd!, u4.jd!], maxAngularStep)
+	const northSubArcs = traceEdgeSubArcs(pbe, 1, u1, [u2, u3, u4], maxAngularStep)
+	const southSubArcs = traceEdgeSubArcs(pbe, -1, u1, [u2, u3, u4], maxAngularStep)
 	if (northSubArcs.length !== 3 || southSubArcs.length !== 3) return undefined
 
 	// The clipped edge is the one whose internal-contact-time junctions actually fall on U2/U3 (it straddles
@@ -1943,27 +1955,41 @@ function buildCappedTotalityRingSegments(pbe: PolynomialBesselianElements, conta
 
 // Decomposes the band into typed segments tracing the north limit forward, then the south limit back,
 // tapering through the start and end tips (the path endpoints U1/U4, or the central-line endpoints C1/C2
-// when the umbral contacts are unavailable). Used as a fallback when the capped ring cannot be marched.
+// when the umbral contacts are unavailable). When the internal contacts U2/U3 are supplied they are welded
+// onto the boundary as single-vertex start/end caps on the side they fall on, so all four contacts lie on
+// the boundary even in the lens case (they sit just outside the tapered tip, a small terminator straddle).
 // The tips are physical cusp vertices; the limits keep their own edge branch.
-function buildTaperRingSegments(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], startTip?: GeoPoint, endTip?: GeoPoint): TotalityRingSegment[] {
+function buildTaperRingSegments(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], startTip?: GeoPoint, endTip?: GeoPoint, weldStart?: GeoPoint, weldEnd?: GeoPoint): TotalityRingSegment[] {
+	const startNorth = finitePoint(weldStart) && angularDistance(weldStart, north[0]) <= angularDistance(weldStart, south[0])
+	const endNorth = finitePoint(weldEnd) && angularDistance(weldEnd, north.at(-1)!) <= angularDistance(weldEnd, south.at(-1)!)
+
 	const segments: TotalityRingSegment[] = []
 	if (finitePoint(startTip)) segments.push(physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [startTip], pbe, 1))
+	if (finitePoint(weldStart) && startNorth) segments.push(physicalRingSegment('startCap', TOTALITY_BRANCH_NORTH, [weldStart], pbe, 1))
 	segments.push(physicalRingSegment('northLimit', TOTALITY_BRANCH_NORTH, north, pbe, 1))
+	if (finitePoint(weldEnd) && endNorth) segments.push(physicalRingSegment('endCap', TOTALITY_BRANCH_NORTH, [weldEnd], pbe, 1))
 	if (finitePoint(endTip)) segments.push(physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [endTip], pbe, -1))
+	if (finitePoint(weldEnd) && !endNorth) segments.push(physicalRingSegment('endCap', TOTALITY_BRANCH_SOUTH, [weldEnd], pbe, -1))
 	segments.push(physicalRingSegment('southLimit', TOTALITY_BRANCH_SOUTH, reversedPoints(south), pbe, -1))
+	if (finitePoint(weldStart) && !startNorth) segments.push(physicalRingSegment('startCap', TOTALITY_BRANCH_SOUTH, [weldStart], pbe, -1))
 	return segments
 }
 
-// Selects the totality ring segmentation: the capped ring anchored at all four umbral contacts U1..U4 when
-// they are available (and the dual-edge march resolves), otherwise the simple taper toward U1/U4 or C1/C2.
+// Selects the totality ring segmentation: the contact-anchored capped ring when all four umbral contacts are
+// available and the dual-edge march resolves to a simple polygon, otherwise the taper toward U1/U4 (with the
+// internal contacts U2/U3 welded onto the boundary) or, lacking umbral contacts, toward C1/C2. The taper is
+// also used if a welded contact would self-intersect the ring, in which case the unwelded taper is returned.
 function buildTotalityRingSegments(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], points: SolarEclipseContactPoints, maxAngularStep: Angle): TotalityRingSegment[] {
 	if (north.length < 2 || south.length < 2) return []
 
 	if (points.U1 && points.U2 && points.U3 && points.U4) {
 		const capped = buildCappedTotalityRingSegments(pbe, [points.U1, points.U2, points.U3, points.U4], maxAngularStep)
-		// Use the anchored ring only when it is a simple polygon; otherwise fall back to the taper, never
+		// Use the anchored ring only when it is a simple polygon; otherwise fall back to the welded taper, never
 		// emitting a self-intersecting fill.
 		if (capped && !ringSelfIntersects(totalityRingPoints(capped))) return capped
+
+		const welded = buildTaperRingSegments(pbe, north, south, points.U1, points.U4, points.U2, points.U3)
+		if (!ringSelfIntersects(totalityRingPoints(welded))) return welded
 	}
 
 	if (points.U1 && points.U4) return buildTaperRingSegments(pbe, north, south, points.U1, points.U4)
@@ -1979,6 +2005,149 @@ function totalityRingPoints(segments: readonly TotalityRingSegment[]): GeoPoint[
 	for (const segment of segments) for (const point of segment.points) pushDistinct(ring, point)
 	closeRing(ring)
 	return ring.length >= 3 ? ring : []
+}
+
+// Branch id for the hybrid total<->annular transition cut, distinct from the lateral edge branches.
+const TOTALITY_BRANCH_TRANSITION = -2
+
+// Surface shadow radius (Earth radii) at a central-line axis foot: l2 minus the cone taper over the
+// observer's height above the fundamental plane. Negative means the umbra reaches the surface (the eclipse is
+// total there), positive means only the antumbra does (annular). The sign flips along a hybrid central line.
+function centralEclipseSurfaceL2(be: BesselianSample): number {
+	const omega = earthLimbOmega(be)
+	const y1 = omega * be.y
+	const inside = 1 - be.x * be.x - y1 * y1
+	const zeta = inside > 0 ? Math.sqrt(inside) : 0
+	return be.l2 - zeta * be.tanF2
+}
+
+// Surface shadow radius at a Julian Day on the central line.
+function surfaceL2AtJulianDay(pbe: PolynomialBesselianElements, jd: number) {
+	return centralEclipseSurfaceL2(evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd)))
+}
+
+// Refines the instant where the surface shadow radius vanishes (a total<->annular transition) between two
+// bracketing central-line instants by sign bisection.
+function refineTypeTransition(pbe: PolynomialBesselianElements, loJd: number, hiJd: number) {
+	let lo = loJd
+	let hi = hiJd
+	const loTotal = surfaceL2AtJulianDay(pbe, lo) <= 0
+
+	for (let iteration = 0; iteration < 40; iteration++) {
+		const mid = (lo + hi) * 0.5
+		if (surfaceL2AtJulianDay(pbe, mid) <= 0 === loTotal) lo = mid
+		else hi = mid
+	}
+
+	return (lo + hi) * 0.5
+}
+
+// Finds the total<->annular transition instants along the central line: empty for a pure total or pure
+// annular eclipse, typically two for a hybrid (annular ends bracketing a total middle).
+function findCentralTypeTransitions(pbe: PolynomialBesselianElements, centerLine: readonly GeoPoint[]): number[] {
+	const transitions: number[] = []
+	let previousJd: number | undefined
+	let previousTotal: boolean | undefined
+
+	for (const point of centerLine) {
+		if (point.jd === undefined) continue
+		const total = surfaceL2AtJulianDay(pbe, point.jd) <= 0
+		if (previousJd !== undefined && previousTotal !== undefined && total !== previousTotal) transitions.push(refineTypeTransition(pbe, previousJd, point.jd))
+		previousJd = point.jd
+		previousTotal = total
+	}
+
+	return transitions
+}
+
+// A totality or annularity ring with its eclipse type.
+interface TypedTotalityRing {
+	readonly type: 'total' | 'annular'
+	readonly segments: TotalityRingSegment[]
+}
+
+// Builds the typed segments of one hybrid sub-band from its ordered boundary vertices, classifying each edge
+// run: a run between two transition crossings is the transition cut, the rest are lateral limits (north where
+// the instant rises along the run, south where it falls). Consecutive same-kind edges form one segment.
+function hybridBandSegments(pbe: PolynomialBesselianElements, verts: readonly { readonly point: GeoPoint; readonly crossing: boolean }[]): TotalityRingSegment[] {
+	const n = verts.length
+	if (n < 3) return []
+
+	const edgeKind: TotalityRingSegmentKind[] = []
+	for (let i = 0; i < n; i++) {
+		const a = verts[i]
+		const b = verts[(i + 1) % n]
+		if (a.crossing && b.crossing) edgeKind.push('transition')
+		else edgeKind.push((b.point.jd ?? 0) >= (a.point.jd ?? 0) ? 'northLimit' : 'southLimit')
+	}
+
+	// Rotate to begin at a kind boundary so each run forms one segment without wrapping.
+	let start = 0
+	for (let i = 0; i < n; i++) {
+		if (edgeKind[i] !== edgeKind[(i - 1 + n) % n]) {
+			start = i
+			break
+		}
+	}
+
+	const segments: TotalityRingSegment[] = []
+	let i = 0
+	while (i < n) {
+		const kind = edgeKind[(start + i) % n]
+		const points: GeoPoint[] = [verts[(start + i) % n].point]
+		let j = i
+		while (j < n && edgeKind[(start + j) % n] === kind) {
+			points.push(verts[(start + j + 1) % n].point)
+			j++
+		}
+		if (kind === 'transition') segments.push({ kind, branchId: TOTALITY_BRANCH_TRANSITION, physical: true, artificial: false, residual: Number.NaN, points })
+		else segments.push(physicalRingSegment(kind, kind === 'northLimit' ? TOTALITY_BRANCH_NORTH : TOTALITY_BRANCH_SOUTH, points, pbe, kind === 'northLimit' ? 1 : -1))
+		i = j
+	}
+
+	return segments
+}
+
+// Splits a hybrid central band's fill ring into typed total and annular sub-rings at the transition instants.
+// It inserts the transition crossing points where the boundary crosses each transition instant (the cross-band
+// cut connects the north and south crossings), then groups the boundary vertices into sub-bands by instant.
+function splitHybridFillRing(pbe: PolynomialBesselianElements, ring: readonly GeoPoint[], transitions: readonly number[]): TypedTotalityRing[] {
+	const verts: { point: GeoPoint; crossing: boolean }[] = []
+	const n = ring.length
+
+	for (let i = 0; i < n; i++) {
+		const a = ring[i]
+		const b = ring[(i + 1) % n]
+		verts.push({ point: a, crossing: false })
+		if (a.jd === undefined || b.jd === undefined) continue
+
+		const fractions: number[] = []
+		for (const t of transitions) if ((a.jd - t) * (b.jd - t) < 0) fractions.push((t - a.jd) / (b.jd - a.jd))
+		fractions.sort((x, y) => x - y)
+		for (const fraction of fractions) verts.push({ point: interpolateGreatCirclePoint(a, b, fraction), crossing: true })
+	}
+
+	const levels = [Number.NEGATIVE_INFINITY, ...transitions, Number.POSITIVE_INFINITY]
+	const rings: TypedTotalityRing[] = []
+
+	for (let band = 0; band < levels.length - 1; band++) {
+		const lo = levels[band]
+		const hi = levels[band + 1]
+		const bandVerts = verts.filter((vertex) => vertex.point.jd !== undefined && vertex.point.jd >= lo && vertex.point.jd <= hi)
+		if (bandVerts.length < 3) continue
+
+		let minJd = Number.POSITIVE_INFINITY
+		let maxJd = Number.NEGATIVE_INFINITY
+		for (const vertex of bandVerts) {
+			minJd = Math.min(minJd, vertex.point.jd!)
+			maxJd = Math.max(maxJd, vertex.point.jd!)
+		}
+
+		const type = surfaceL2AtJulianDay(pbe, (minJd + maxJd) * 0.5) <= 0 ? 'total' : 'annular'
+		rings.push({ type, segments: hybridBandSegments(pbe, bandVerts) })
+	}
+
+	return rings
 }
 
 // TODO: Quando mesclar o codex/meeus, remover isso e usar eclipse.central
@@ -2001,8 +2170,10 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	let centerLine: readonly GeoPoint[] = []
 	let umbraNorth: GeoPoint[][] = []
 	let umbraSouth: GeoPoint[][] = []
-	let totalityPath: GeoPoint[][] = []
-	let totalitySegments: TotalityRingSegment[][] = []
+	const totalityPath: GeoPoint[][] = []
+	const totalitySegments: TotalityRingSegment[][] = []
+	const annularityPath: GeoPoint[][] = []
+	const annularitySegments: TotalityRingSegment[][] = []
 
 	// The time-sampled central line (and thus its C1/C2 endpoints) is shared across the central
 	// line and both umbral limits, so compute it once for any non-partial eclipse.
@@ -2039,8 +2210,23 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 			const segments = buildTotalityRingSegments(pbe, fullNorth, fullSouth, points, maxAngularStep)
 			const ring = totalityRingPoints(segments)
 			if (ring.length >= 3) {
-				totalitySegments = [segments]
-				totalityPath = [ring]
+				// A hybrid eclipse changes between total and annular along the central line, so split the central
+				// band at the transition instants into separate total and annular rings. A pure total or annular
+				// eclipse routes the whole band to its single type.
+				const transitions = eclipse.type === 'hybrid' ? findCentralTypeTransitions(pbe, centerLineSamples) : []
+				const typedRings: TypedTotalityRing[] = transitions.length > 0 ? splitHybridFillRing(pbe, ring, transitions) : [{ type: eclipse.type === 'annular' ? 'annular' : 'total', segments }]
+
+				for (const typed of typedRings) {
+					const typedRing = totalityRingPoints(typed.segments)
+					if (typedRing.length < 3) continue
+					if (typed.type === 'annular') {
+						annularityPath.push(typedRing)
+						annularitySegments.push(typed.segments)
+					} else {
+						totalityPath.push(typedRing)
+						totalitySegments.push(typed.segments)
+					}
+				}
 			}
 		}
 	}
@@ -2069,6 +2255,8 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		polygons: {
 			totalityPath,
 			totalitySegments,
+			annularityPath,
+			annularitySegments,
 		},
 	}
 }
@@ -2244,6 +2432,7 @@ export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, pro
 		penumbraSouth: polylinePath(lines.penumbraSouth),
 		riseSetCurves: segmentedPath(lines.riseSetCurves),
 		totalityPath: polygonsPath(polygons.totalityPath),
+		annularityPath: polygonsPath(polygons.annularityPath),
 		points: {
 			P1: projectPoint(points.P1),
 			P2: projectPoint(points.P2),

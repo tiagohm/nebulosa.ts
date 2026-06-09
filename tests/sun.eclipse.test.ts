@@ -22,7 +22,7 @@ function geometry(overrides: Partial<SolarEclipseMapGeometry['lines']> = {}, tot
 	return {
 		points,
 		lines: { centerLine: [], umbraNorth: [], umbraSouth: [], penumbraNorth: [], penumbraSouth: [], riseSetCurves: [], ...overrides },
-		polygons: { totalityPath, totalitySegments: [] },
+		polygons: { totalityPath, totalitySegments: [], annularityPath: [], annularitySegments: [] },
 	}
 }
 
@@ -478,6 +478,7 @@ test('NASA Besselian fixtures cover eclipse classes and rare central gating', ()
 			expect(geometry.lines.umbraNorth).toHaveLength(0)
 			expect(geometry.lines.umbraSouth).toHaveLength(0)
 			expect(geometry.polygons.totalityPath).toHaveLength(0)
+			expect(geometry.polygons.annularityPath).toHaveLength(0)
 			continue
 		}
 
@@ -498,8 +499,10 @@ test('NASA Besselian fixtures cover eclipse classes and rare central gating', ()
 		expect(geometry.lines.centerLine).toHaveLength(0)
 		expect(geometry.lines.umbraNorth.length).toBeGreaterThan(0)
 		expect(geometry.lines.umbraSouth.length).toBeGreaterThan(0)
-		expect(geometry.polygons.totalityPath.length).toBeGreaterThan(0)
-		for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
+		// The fill goes to totalityPath for a total eclipse and annularityPath for an annular one.
+		const fill = [...geometry.polygons.totalityPath, ...geometry.polygons.annularityPath]
+		expect(fill.length).toBeGreaterThan(0)
+		for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...fill]) for (const point of segment) expectGeoPoint(point)
 	}
 })
 
@@ -587,9 +590,9 @@ test('computeSolarEclipseMapGeometry anchors NASA total central endpoints', () =
 	expectIncreasingJd(lines.centerLine)
 	expect(lines.umbraNorth.map((line) => line.length)).toEqual([24, 10])
 	expect(lines.umbraSouth.map((line) => line.length)).toEqual([23, 9])
-	// 2024 keeps the umbra on Earth (non-grazing), so the fill is the simple lens of the two lateral limits
-	// joined at the external cusps U1/U4.
-	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([66])
+	// 2024 is non-grazing: the fill is the two lateral limits joined at the cusps U1/U4, with the internal
+	// contacts U2/U3 welded onto the boundary as small start/end caps near the path tips.
+	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([68])
 	// The limits end at their true positions near the path tips (the path keeps a finite width at C1/C2,
 	// which are central-line endpoints), so the south limit terminates short of C2, matching NASA.
 	expectGeoPointClose(lines.umbraNorth[0][0], -2.766608740863, -0.125116379276, 2460409.1955421991)
@@ -653,8 +656,8 @@ test('computeSolarEclipseMapGeometry keeps central path gated by eclipse gamma',
 	expect(geometry.lines.centerLine).toHaveLength(0)
 	expect(geometry.lines.umbraNorth.map((line) => line.length)).toEqual([24, 10])
 	expect(geometry.lines.umbraSouth.map((line) => line.length)).toEqual([23, 9])
-	// 2024 is non-grazing, so the fill is the simple lens of the two lateral limits joined at the cusps U1/U4.
-	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([66])
+	// 2024 is non-grazing: two lateral limits joined at U1/U4, with U2/U3 welded onto the boundary as caps.
+	expect(geometry.polygons.totalityPath.map((ring) => ring.length)).toEqual([68])
 	for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
@@ -670,11 +673,13 @@ test('computeSolarEclipseMapGeometry keeps umbral visibility for non-central tot
 	expect(annular.lines.centerLine).toHaveLength(0)
 	expect(annular.lines.umbraNorth.map((line) => line.length)).toEqual([9])
 	expect(annular.lines.umbraSouth.map((line) => line.length)).toEqual([9])
-	expect(annular.polygons.totalityPath.map((ring) => ring.length)).toEqual([20])
+	// An annular eclipse routes its fill to the annularity path, leaving the totality path empty.
+	expect(annular.polygons.totalityPath).toHaveLength(0)
+	expect(annular.polygons.annularityPath.map((ring) => ring.length)).toEqual([20])
 	expectGeoPointClose(annular.lines.umbraNorth[0][0], 2.138389244988, -1.275938543713, 2456776.747407339)
 	expectGeoPointClose(annular.lines.umbraSouth[0][0], 2.120095514679, -1.279033850419, 2456776.747407339)
 	// The band tapers to the start tip U1 (the umbral external contact), not to the limit's first point.
-	expectGeoPointClose(annular.polygons.totalityPath[0][0], annular.points.U1!.x, annular.points.U1!.y, annular.points.U1!.jd)
+	expectGeoPointClose(annular.polygons.annularityPath[0][0], annular.points.U1!.x, annular.points.U1!.y, annular.points.U1!.jd)
 
 	expectGeoPoint(total.points.U1!)
 	expectGeoPoint(total.points.U4!)
@@ -689,7 +694,7 @@ test('computeSolarEclipseMapGeometry keeps umbral visibility for non-central tot
 	expectGeoPointClose(total.lines.umbraSouth[0].at(-1), 2.510202616527, 1.181939627337, 2467349.298652895)
 	// The band tapers to the start tip U1 (the umbral external contact), not to the limit's first point.
 	expectGeoPointClose(total.polygons.totalityPath[0][0], total.points.U1!.x, total.points.U1!.y, total.points.U1!.jd)
-	for (const geometry of [annular, total]) for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath]) for (const point of segment) expectGeoPoint(point)
+	for (const geometry of [annular, total]) for (const segment of [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth, ...geometry.polygons.totalityPath, ...geometry.polygons.annularityPath]) for (const point of segment) expectGeoPoint(point)
 })
 
 test('computeSolarEclipseMapGeometry contact search span is independent from polynomial step', () => {
@@ -1399,16 +1404,38 @@ describe('totality ring typed-entity layer', () => {
 		expect(countSelfIntersections(ring)).toBe(0)
 	})
 
-	test('a non-grazing central eclipse builds a simple lens', () => {
-		// 2024-04-08 keeps the whole umbra on Earth except a tiny terminator straddle near the tips, so both
-		// lateral limits span the path and the band is a simple lens tapering to the external cusps U1/U4.
+	test('a non-grazing central eclipse welds the internal contacts onto the boundary', () => {
+		// 2024-04-08 keeps the whole umbra on Earth except a tiny terminator straddle near the tips, so the two
+		// lateral limits span the path joined at the cusps U1/U4, and the internal contacts U2/U3 (just outside
+		// the tapered tip) are welded onto the boundary as small start/end caps.
 		const fixture = NASA_ECLIPSES[0]
 		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(1), maxAngularStep: deg(3), includePolygons: true })
 		const segments = geometry.polygons.totalitySegments[0]
+		const ring = geometry.polygons.totalityPath[0]
+		const { U1, U2, U3, U4 } = geometry.points
 
-		expect(segments.map((segment) => segment.kind)).toEqual(['cusp', 'northLimit', 'cusp', 'southLimit'])
+		function distanceToBoundary(point: GeoPoint) {
+			let best = Number.POSITIVE_INFINITY
+			for (let i = 0; i < ring.length; i++) {
+				const a = ring[i]
+				const b = ring[(i + 1) % ring.length]
+				if (Math.abs(a.x - b.x) > PI) continue
+				const abx = b.x - a.x
+				const aby = b.y - a.y
+				const len2 = abx * abx + aby * aby
+				const t = len2 > 0 ? Math.max(0, Math.min(1, ((point.x - a.x) * abx + (point.y - a.y) * aby) / len2)) : 0
+				best = Math.min(best, sphericalSeparation(point.x, point.y, a.x + t * abx, a.y + t * aby))
+			}
+			return best
+		}
+
+		// All four contacts lie on the boundary; the band has both lateral limits, two cusps and the two caps.
+		for (const contact of [U1!, U2!, U3!, U4!]) expect(distanceToBoundary(contact)).toBeLessThan(deg(0.01))
+		expect(segments.filter((segment) => segment.kind === 'northLimit' || segment.kind === 'southLimit')).toHaveLength(2)
+		expect(segments.filter((segment) => segment.kind === 'startCap')).toHaveLength(1)
+		expect(segments.filter((segment) => segment.kind === 'endCap')).toHaveLength(1)
 		expect(segments.every((segment) => segment.physical && !segment.artificial)).toBe(true)
-		expect(countSelfIntersections(geometry.polygons.totalityPath[0])).toBe(0)
+		expect(countSelfIntersections(ring)).toBe(0)
 	})
 
 	test('partial eclipse exposes no totality segments', () => {
@@ -1460,5 +1487,195 @@ describe('eclipse geometry physical and topological invariants', () => {
 		expect(countSelfIntersections(ring)).toBe(0)
 		const centerLine = geometry.lines.centerLine
 		for (let i = 1; i < centerLine.length - 1; i++) expect(isInsidePolygon(centerLine[i], ring)).toBe(true)
+	})
+})
+
+// Minimum angular distance (radians) from a point to the polygon boundary, measured to the nearest edge (not
+// just the nearest vertex), skipping antimeridian-spanning edges. Zero means the point lies on the boundary.
+function distanceToBoundary(point: GeoPoint, ring: readonly GeoPoint[]) {
+	let best = Number.POSITIVE_INFINITY
+	for (let i = 0; i < ring.length; i++) {
+		const a = ring[i]
+		const b = ring[(i + 1) % ring.length]
+		if (Math.abs(a.x - b.x) > PI) continue
+		const abx = b.x - a.x
+		const aby = b.y - a.y
+		const len2 = abx * abx + aby * aby
+		const t = len2 > 0 ? Math.max(0, Math.min(1, ((point.x - a.x) * abx + (point.y - a.y) * aby) / len2)) : 0
+		best = Math.min(best, sphericalSeparation(point.x, point.y, a.x + t * abx, a.y + t * aby))
+	}
+	return best
+}
+
+// Acceptance/rejection criteria from the solar-eclipse map validation checklist, applied to the entities this
+// engine produces (points, central line, lateral limits, caps, totality polygon, rise/set curves). Sections
+// covering entities the engine does not emit (annularity/hybrid polygons, magnitude/obscuration/duration
+// isolines, P-contact curves) are out of scope and not asserted here.
+describe('solar eclipse map acceptance criteria', () => {
+	for (const fixture of CENTRAL_FIXTURES) {
+		const elements = nasaPbe(fixture)
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { longitudeStep: deg(1), maxAngularStep: deg(3), includeRiseSetCurves: true, includePolygons: true, riseSetStep: 600 })
+		const { points, lines, polygons } = geometry
+		// The fill of a central eclipse is its totality and/or annularity rings (a hybrid has both).
+		const fillRings = [...polygons.totalityPath, ...polygons.annularityPath]
+		const fillSegments = [...polygons.totalitySegments, ...polygons.annularitySegments]
+		const anyRingWraps = fillRings.some((ring) => wrapsAntimeridian(ring))
+
+		function distanceToAnyBoundary(point: GeoPoint) {
+			let best = Number.POSITIVE_INFINITY
+			for (const ring of fillRings) best = Math.min(best, distanceToBoundary(point, ring))
+			return best
+		}
+
+		function insideAnyRing(point: GeoPoint) {
+			return fillRings.some((ring) => isInsidePolygon(point, ring))
+		}
+
+		describe(fixture.name, () => {
+			// Section 0: every plotted point is finite and within the documented coordinate ranges.
+			test('all entity points are finite and in range', () => {
+				const families = [lines.centerLine, ...lines.umbraNorth, ...lines.umbraSouth, lines.penumbraNorth, lines.penumbraSouth, ...lines.riseSetCurves, ...fillRings]
+				for (const family of families) for (const point of family) expectGeoPoint(point)
+				for (const key of ['P1', 'P2', 'P3', 'P4', 'U1', 'U2', 'U3', 'U4', 'C1', 'C2', 'Max'] as const) {
+					const point = points[key]
+					if (point) expectGeoPoint(point)
+				}
+			})
+
+			// Section 4: the four umbral contacts are time-ordered U1 < U2 < U3 < U4 and lie on the full boundary.
+			test('U1..U4 are time-ordered and lie on the full boundary', () => {
+				expectIncreasingJd([points.U1!, points.U2!, points.U3!, points.U4!])
+				for (const key of ['U1', 'U2', 'U3', 'U4'] as const) expect(distanceToAnyBoundary(points[key]!)).toBeLessThan(deg(0.05))
+			})
+
+			// Sections 3 + 2: C1/C2 are the central-line endpoints, ordered U1 < C1 and C2 < U4, and the central
+			// line is time-ordered, low-residual on the shadow axis, and lies inside the fill.
+			test('C1/C2 bound a valid central line inside the fill', () => {
+				expectGeoPointClose(lines.centerLine[0], points.C1!.x, points.C1!.y, points.C1!.jd)
+				expectGeoPointClose(lines.centerLine.at(-1), points.C2!.x, points.C2!.y, points.C2!.jd)
+				expect(points.C1!.jd!).toBeGreaterThan(points.U1!.jd!)
+				expect(points.C2!.jd!).toBeLessThan(points.U4!.jd!)
+				expectIncreasingJd(lines.centerLine)
+				for (const point of lines.centerLine) expect(axisLimbResidual(elements, point.jd!)).toBeLessThan(1)
+				// Flat point-in-polygon is only valid when no fill ring wraps the antimeridian.
+				if (!anyRingWraps) for (let i = 1; i < lines.centerLine.length - 1; i++) expect(insideAnyRing(lines.centerLine[i])).toBe(true)
+			})
+
+			// Section 1: greatest eclipse is on the sunlit side, inside the fill, and near the central line.
+			test('greatest eclipse is inside the fill near the central line', () => {
+				expect(solarAltitude(elements, points.Max!)).toBeGreaterThan(deg(-1))
+				if (!anyRingWraps) expect(insideAnyRing(points.Max!)).toBe(true)
+				let nearest = Number.POSITIVE_INFINITY
+				for (const point of lines.centerLine) nearest = Math.min(nearest, sphericalSeparation(points.Max!.x, points.Max!.y, point.x, point.y))
+				expect(nearest).toBeLessThan(deg(2))
+			})
+
+			// Sections 6 + 7 + 8 + 10: every fill ring is built from classified physical entities (none
+			// artificial) whose concatenation reproduces the ring. A pure total/annular eclipse is a single ring
+			// with two lateral limits, two cusps and the two caps; a hybrid is split into total and annular rings
+			// joined by transition cuts (kind 'transition'), with both polygon families non-empty.
+			test('fill polygons are assembled from classified physical entities', () => {
+				expect(fillRings.length).toBeGreaterThan(0)
+				for (let r = 0; r < fillSegments.length; r++) {
+					const segments = fillSegments[r]
+					for (const segment of segments) {
+						expect(segment.physical).toBe(true)
+						expect(segment.artificial).toBe(false)
+					}
+					const rebuilt: GeoPoint[] = []
+					for (const segment of segments) {
+						for (const point of segment.points) {
+							const last = rebuilt.at(-1)
+							if (!last || Math.abs(last.x - point.x) >= 1e-9 || Math.abs(last.y - point.y) >= 1e-9 || Math.abs((last.jd ?? 0) - (point.jd ?? 0)) >= 1e-10) rebuilt.push(point)
+						}
+					}
+					if (rebuilt.length > 1 && Math.abs(rebuilt[0].x - rebuilt.at(-1)!.x) < 1e-9 && Math.abs(rebuilt[0].y - rebuilt.at(-1)!.y) < 1e-9) rebuilt.pop()
+					expect(rebuilt).toHaveLength(fillRings[r].length)
+				}
+
+				if (fixture.type === 'hybrid') {
+					// Section 10: total and annular regions are separated, joined by transition cuts.
+					expect(polygons.totalityPath.length).toBeGreaterThan(0)
+					expect(polygons.annularityPath.length).toBeGreaterThan(0)
+					expect(fillSegments.some((segments) => segments.some((segment) => segment.kind === 'transition'))).toBe(true)
+				} else {
+					// A single fill ring with the two lateral limits, two cusps and the two caps.
+					const segments = fillSegments[0]
+					expect(segments.filter((segment) => segment.kind === 'northLimit' || segment.kind === 'southLimit')).toHaveLength(2)
+					expect(segments.filter((segment) => segment.kind === 'cusp')).toHaveLength(2)
+					expect(segments.filter((segment) => segment.kind === 'startCap')).toHaveLength(1)
+					expect(segments.filter((segment) => segment.kind === 'endCap')).toHaveLength(1)
+					expect(segments.some((segment) => segment.kind === 'transition')).toBe(false)
+				}
+			})
+
+			// Sections 14 + 15: rise/set curves are horizon-contact curves, so the Sun is near the horizon along them.
+			test('rise/set curves sit near the solar horizon', () => {
+				for (const curve of lines.riseSetCurves) for (const point of curve) expect(Math.abs(solarAltitude(elements, point))).toBeLessThan(deg(2))
+			})
+		})
+	}
+
+	// Section 11: a purely partial eclipse has no central line, no umbral path and no totality polygon, but it
+	// still produces the partial-eclipse boundary via its rise/set curves.
+	test('a purely partial eclipse exposes no central/umbral entities', () => {
+		const fixture = NASA_ECLIPSES[2]
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { includeRiseSetCurves: true, includePolygons: true })
+		expect(geometry.lines.centerLine).toHaveLength(0)
+		expect(geometry.lines.umbraNorth).toHaveLength(0)
+		expect(geometry.lines.umbraSouth).toHaveLength(0)
+		expect(geometry.polygons.totalityPath).toHaveLength(0)
+		expect(geometry.polygons.totalitySegments).toHaveLength(0)
+		expect(geometry.polygons.annularityPath).toHaveLength(0)
+		expect(geometry.polygons.annularitySegments).toHaveLength(0)
+	})
+
+	// Section 5 reject + section 26: lateral limits never cross each other and never cross the central line
+	// (the central line stays strictly inside the band), verified on the non-wrapping 2024 path.
+	test('lateral limits do not cross each other or the central line', () => {
+		const fixture = NASA_ECLIPSES[0]
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(1), maxAngularStep: deg(3), includePolygons: true })
+		const ring = geometry.polygons.totalityPath[0]
+		// A simple fill ring already implies the two lateral edges do not cross; the central line interior lies
+		// strictly inside, so it crosses neither edge.
+		expect(countSelfIntersections(ring)).toBe(0)
+		for (let i = 1; i < geometry.lines.centerLine.length - 1; i++) expect(isInsidePolygon(geometry.lines.centerLine[i], ring)).toBe(true)
+	})
+
+	// Section 9: an annular eclipse uses the antumbra, so its whole fill is the annularity polygon and the
+	// totality polygon is empty. The central line lies inside the annularity fill.
+	test('an annular eclipse routes the fill to the annularity polygon', () => {
+		const fixture = NASA_ECLIPSES[1]
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(1), maxAngularStep: deg(3), includePolygons: true })
+
+		expect(geometry.polygons.totalityPath).toHaveLength(0)
+		expect(geometry.polygons.totalitySegments).toHaveLength(0)
+		expect(geometry.polygons.annularityPath.length).toBeGreaterThan(0)
+		// No transition cut on a pure annular fill.
+		for (const segments of geometry.polygons.annularitySegments) expect(segments.some((segment) => segment.kind === 'transition')).toBe(false)
+
+		const ring = geometry.polygons.annularityPath[0]
+		if (!wrapsAntimeridian(ring)) for (let i = 1; i < geometry.lines.centerLine.length - 1; i++) expect(isInsidePolygon(geometry.lines.centerLine[i], ring)).toBe(true)
+	})
+
+	// Section 10: a hybrid eclipse is split into total and annular rings at the transition cuts, each a simple
+	// polygon, with the deepest point (greatest eclipse) falling in the total region.
+	test('a hybrid eclipse splits into total and annular regions joined by transitions', () => {
+		const fixture = NASA_ECLIPSES[3]
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(1), maxAngularStep: deg(3), includePolygons: true })
+		const { totalityPath, annularityPath, totalitySegments, annularitySegments } = geometry.polygons
+
+		expect(totalityPath.length).toBeGreaterThan(0)
+		expect(annularityPath.length).toBeGreaterThan(0)
+
+		// Every ring is a simple polygon (antimeridian-spanning edges are skipped by the detector).
+		for (const ring of [...totalityPath, ...annularityPath]) expect(countSelfIntersections(ring)).toBe(0)
+
+		// The split is geometric, not cosmetic: total and annular rings carry transition cuts as their own kind.
+		const allSegments = [...totalitySegments, ...annularitySegments]
+		expect(allSegments.some((segments) => segments.some((segment) => segment.kind === 'transition'))).toBe(true)
+
+		// Greatest eclipse (the deepest point) lies in the total region for this total-in-the-middle hybrid.
+		if (!totalityPath.some((ring) => wrapsAntimeridian(ring))) expect(totalityPath.some((ring) => isInsidePolygon(geometry.points.Max!, ring))).toBe(true)
 	})
 })
