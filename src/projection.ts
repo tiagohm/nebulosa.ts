@@ -436,7 +436,12 @@ function raAxisDirectionFrom(a?: ProjectionOptions, b?: ProjectionOptions, fallb
 }
 
 function normalizeLongitudeByMode(longitude: number, mode: LongitudeWrapMode) {
-	return mode === 'tau' ? normalizeAngle(longitude) : mode === 'pi' ? normalizePI(longitude) : longitude
+	if (mode === 'tau') return normalizeAngle(longitude)
+	// In 'pi' mode keep a value that already sits exactly on the +-PI seam as given, so the left (-PI) and
+	// right (+PI) map edges stay distinguishable. normalizePI maps to (-PI, PI], folding -PI onto +PI, which
+	// would push an antimeridian crossing deliberately placed on the left edge over to the right one.
+	if (mode === 'pi') return longitude === PI || longitude === -PI ? longitude : normalizePI(longitude)
+	return longitude
 }
 
 function longitudeFromLambda(lambda: number, a?: ProjectionOptions, b?: ProjectionOptions) {

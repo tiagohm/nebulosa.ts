@@ -1164,6 +1164,14 @@ test('antimeridian-crossing lines split into multiple subpaths', () => {
 
 	const paths = solarEclipseMapToSvgPaths(map, equirectangularProjection(360, 180))
 	expect((paths.centerLine.match(/M/g) ?? []).length).toBeGreaterThanOrEqual(2)
+
+	// The exact +-180 crossing must be inserted so the first subpath reaches the right edge (x = width) and
+	// the second resumes at the left edge (x ~ 0), rather than stopping at the last samples before the wrap.
+	const subpaths = paths.centerLine.split('M').filter((part) => part.length > 0)
+	const firstEndX = Number(subpaths[0].trim().split('L').at(-1)!.split(' ')[0])
+	const secondStartX = Number(subpaths[1].trim().split('L')[0].split(' ')[0])
+	expect(firstEndX).toBeCloseTo(360, 3)
+	expect(secondStartX).toBeCloseTo(0, 3)
 })
 
 // NASA/GSFC Besselian elements for the 2024 Apr 08 total eclipse.

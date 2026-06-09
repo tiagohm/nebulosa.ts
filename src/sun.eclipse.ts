@@ -7,7 +7,7 @@ import { sphericalInterpolate, sphericalSeparation, type Point } from './geometr
 import { matMulVec } from './mat3'
 import { clamp, type NumberArray } from './math'
 import { bisection, type RootFindingOptions } from './optimization'
-import { projectPolygon, projectPolyline, type Projection, type ProjectionPolylineOptions } from './projection'
+import type { Projection, ProjectionPolylineOptions } from './projection'
 import { polynomialRegression } from './regression'
 import type { SolarEclipse } from './sun'
 import { precessionNutationMatrix, timeShift, timeSubtract, toJulianDay, type Time } from './time'
@@ -2444,19 +2444,41 @@ export function pointsToSvgPathData(pieces: readonly (readonly Point[])[], close
 // to an equirectangular world map of the given width and height. Antimeridian wraps are split into
 // separate subpaths by the underlying projection.
 export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, projection: Projection, { precision = 2, ...options }: SolarEclipseMapSvgProjectionOptions = {}): SolarEclipseMapSvgPaths {
+	// Splits one geographic line (or ring when close is true) at the antimeridian with the exact +-180
+	// crossing inserted, then projects each piece. Inserting the crossing keeps every piece reaching the map
+	// edge instead of stopping at the last sample before the wrap, which otherwise leaves a visible gap or
+	// angular "beak" near +-180. The 'pi'-mode projection preserves an exact +-PI seam vertex, so the post-wrap
+	// piece resumes on the left edge (-PI) rather than being folded back onto the right one (+PI).
+	function projectSplitPieces(geo: readonly GeoPoint[], close: boolean) {
+		const pieces: Point[][] = []
+
+		for (const segment of splitGeoLineAtAntimeridian(geo, close)) {
+			const piece: Point[] = []
+
+			for (const point of segment) {
+				const projected = projection.project(point.x, point.y, undefined, options)
+				if (projected !== undefined) piece.push({ x: projected.x, y: projected.y })
+			}
+
+			if (piece.length >= 2) pieces.push(piece)
+		}
+
+		return pieces
+	}
+
 	function polylinePath(geo: readonly GeoPoint[]) {
-		return pointsToSvgPathData(projectPolyline(projection, geo), false, precision)
+		return pointsToSvgPathData(projectSplitPieces(geo, false), false, precision)
 	}
 
 	function segmentedPath(segments: readonly (readonly GeoPoint[])[]) {
 		const pieces: Point[][] = []
-		for (const segment of segments) for (const piece of projectPolyline(projection, segment, options)) pieces.push(piece)
+		for (const segment of segments) for (const piece of projectSplitPieces(segment, false)) pieces.push(piece)
 		return pointsToSvgPathData(pieces, false, precision)
 	}
 
 	function polygonsPath(rings: readonly (readonly GeoPoint[])[]) {
 		const pieces: Point[][] = []
-		for (const ringPieces of projectPolygon(projection, rings)) for (const piece of ringPieces) pieces.push(piece)
+		for (const ring of rings) for (const piece of projectSplitPieces(ring, true)) pieces.push(piece)
 		return pointsToSvgPathData(pieces, true, precision)
 	}
 
