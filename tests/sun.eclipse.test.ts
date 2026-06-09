@@ -1616,17 +1616,17 @@ describe('solar eclipse map acceptance criteria', () => {
 				for (const curve of lines.riseSetCurves) for (const point of curve) expect(Math.abs(solarAltitude(elements, point))).toBeLessThan(deg(2))
 			})
 
-			// Section 12: the named penumbral-limit extremes N1/N2 (northern) and S1/S2 (southern), when present,
-			// are the endpoints of their magnitude-0 limit branch and are ordered by ascending latitude.
+			// Section 12: the named penumbral-limit extremes, when present, lie on a magnitude-0 limit branch
+			// (either the northern i = +1 or southern i = -1 one). With both limits present N1/N2 and S1/S2 are
+			// each ordered by ascending latitude.
 			test('penumbral limit extremes lie on the magnitude-0 locus', () => {
-				if (points.N1 && points.N2) {
-					expect(points.N1.y).toBeLessThanOrEqual(points.N2.y)
-					for (const point of [points.N1, points.N2]) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
+				for (const point of [points.N1, points.N2, points.S1, points.S2]) {
+					if (!point) continue
+					const onLocus = Math.min(limitTangencyResidual(elements, point, 1, 0), limitTangencyResidual(elements, point, -1, 0))
+					expect(onLocus).toBeLessThan(1e-3)
 				}
-				if (points.S1 && points.S2) {
-					expect(points.S1.y).toBeLessThanOrEqual(points.S2.y)
-					for (const point of [points.S1, points.S2]) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
-				}
+				if (points.N1 && points.N2) expect(points.N1.y).toBeLessThanOrEqual(points.N2.y)
+				if (points.S1 && points.S2) expect(points.S1.y).toBeLessThanOrEqual(points.S2.y)
 			})
 		})
 	}
@@ -1720,15 +1720,38 @@ describe('solar eclipse map acceptance criteria', () => {
 			expect(solarAltitude(elements, point)).toBeGreaterThan(deg(-1))
 		}
 
-		// The named, plottable extremes N1/N2 reach the published penumbral limit extremes within a degree or
-		// two. N1 is the lower-latitude extreme (EclipseWise N1 ~ 50.23 deg S, 95.645 deg W), N2 the higher one
-		// (EclipseWise S1 ~ 28.305 deg S, 66.562 deg E).
+		// A grazing partial has a single penumbral limit, so its named extremes are N1 (poleward) and S1
+		// (equatorward), not N2/S2. They match EclipseWise within a degree or two: N1 ~ 50.23 deg S, 95.645 deg W
+		// (poleward); S1 ~ 28.305 deg S, 66.562 deg E (equatorward).
 		expect(geometry.points.N1).toBeDefined()
-		expect(geometry.points.N2).toBeDefined()
-		expect(geometry.points.N1!.y).toBeLessThan(geometry.points.N2!.y)
+		expect(geometry.points.S1).toBeDefined()
+		expect(geometry.points.N2).toBeUndefined()
+		expect(geometry.points.S2).toBeUndefined()
+		expect(Math.abs(geometry.points.N1!.y)).toBeGreaterThan(Math.abs(geometry.points.S1!.y))
 		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(-95.645), deg(-50.23))).toBeLessThan(deg(2))
-		expect(sphericalSeparation(geometry.points.N2!.x, geometry.points.N2!.y, deg(66.562), deg(-28.305))).toBeLessThan(deg(2))
-		// They are the endpoints of the penumbral limit curve, so they lie on it.
-		for (const point of [geometry.points.N1!, geometry.points.N2!]) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
+		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(66.562), deg(-28.305))).toBeLessThan(deg(2))
+		// They are endpoints of the penumbral limit curve, so they lie on it.
+		for (const point of [geometry.points.N1!, geometry.points.S1!]) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
+	})
+
+	// Same convention checked on a northern-hemisphere grazing partial: 2000-07-31 (EclipseWise N1 ~ 49.49 deg N,
+	// 55.6 deg E poleward; S1 ~ 32.19 deg N, 129.74 deg W equatorward). Regression for the point that was
+	// mislabeled S2 instead of N1.
+	test('2000-07-31 partial eclipse labels its poleward extreme N1, not S2', () => {
+		const eclipse = nearestSolarEclipse(timeYMD(2000, 7, 15), true)
+		expect(eclipse.type).toBe('partial')
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, (t) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon))
+		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: deg(1), maxAngularStep: deg(3) })
+
+		expect(geometry.points.N1).toBeDefined()
+		expect(geometry.points.S1).toBeDefined()
+		expect(geometry.points.N2).toBeUndefined()
+		expect(geometry.points.S2).toBeUndefined()
+		// N1 is the poleward (here northern) extreme near 49.5 deg N, 55.6 deg E; S1 the equatorward one.
+		expect(geometry.points.N1!.y).toBeGreaterThan(geometry.points.S1!.y)
+		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(55.608), deg(49.492))).toBeLessThan(deg(2))
+		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(-129.738), deg(32.185))).toBeLessThan(deg(2))
+		// Both lie on the magnitude-0 locus (this eclipse's limit is the southern branch, i = -1).
+		for (const point of [geometry.points.N1!, geometry.points.S1!]) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
 	})
 })

@@ -170,15 +170,18 @@ export interface SolarEclipseContactPoints {
 	readonly C2?: GeoPoint
 	// Greatest eclipse point.
 	readonly Max?: GeoPoint
-	// First extreme of the northern penumbral limit, where that magnitude-0 curve meets the terminator. For a
-	// pure partial eclipse this is one end of its main visible-region boundary. Lower latitude than N2.
+	// Northern penumbral-limit extreme, where a magnitude-0 limit meets the terminator. When both penumbral
+	// limits reach Earth (umbral/central eclipse) N1/N2 are the two endpoints of the northern limit, ordered by
+	// ascending latitude. When only one limit reaches Earth (a grazing partial eclipse) N1 is that single
+	// curve's poleward extreme (the EclipseWise N1) and N2 is absent.
 	readonly N1?: GeoPoint
-	// Last extreme of the northern penumbral limit (higher latitude than N1).
+	// Second endpoint of the northern penumbral limit (higher latitude than N1). Absent for a grazing partial.
 	readonly N2?: GeoPoint
-	// First extreme of the southern penumbral limit, where that magnitude-0 curve meets the terminator. Lower
-	// latitude than S2. Present only when the southern penumbral limit reaches Earth.
+	// Southern penumbral-limit extreme. With both limits present S1/S2 are the southern limit's two endpoints
+	// (ascending latitude); for a grazing partial S1 is the single curve's equatorward extreme (EclipseWise S1)
+	// and S2 is absent.
 	readonly S1?: GeoPoint
-	// Last extreme of the southern penumbral limit (higher latitude than S1).
+	// Second endpoint of the southern penumbral limit (higher latitude than S1). Absent for a grazing partial.
 	readonly S2?: GeoPoint
 }
 
@@ -954,6 +957,13 @@ function solvePartialLimitAtLongitude(pbe: PolynomialBesselianElements, longitud
 	}
 
 	return undefined
+}
+
+// Returns a curve's two endpoints ordered by ascending latitude (lower latitude first).
+function endpointsByAscendingLatitude(curve: readonly GeoPoint[]): [GeoPoint, GeoPoint] {
+	const first = curve[0]
+	const last = curve.at(-1)!
+	return first.y <= last.y ? [first, last] : [last, first]
 }
 
 // Finds the northern (i = +1) or southern (i = -1) limit of the partial eclipse, the curve where the
@@ -2251,20 +2261,22 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	// umbral ones. A grazing partial may yield only one of the two limits, the other side being the terminator.
 	const penumbraNorth = findPartialEclipseLimit(pbe, 1, curveOptions)
 	const penumbraSouth = findPartialEclipseLimit(pbe, -1, curveOptions)
-	// Each penumbral limit branch terminates at two extremes where it meets the terminator: expose them as the
-	// named, plottable points N1/N2 (northern limit) and S1/S2 (southern limit), each ordered by ascending
-	// latitude. For a pure partial eclipse the single existing branch carries its visible-region extremes.
-	if (penumbraNorth.length >= 2) {
-		const first = penumbraNorth[0]
-		const last = penumbraNorth.at(-1)!
-		points.N1 = first.y <= last.y ? first : last
-		points.N2 = first.y <= last.y ? last : first
-	}
-	if (penumbraSouth.length >= 2) {
-		const first = penumbraSouth[0]
-		const last = penumbraSouth.at(-1)!
-		points.S1 = first.y <= last.y ? first : last
-		points.S2 = first.y <= last.y ? last : first
+	// Expose the penumbral-limit extremes as named, plottable points. When both penumbral limits reach Earth
+	// (umbral/central eclipse), each branch contributes its two endpoints: northern limit -> N1/N2, southern
+	// limit -> S1/S2, ordered by ascending latitude. When only one limit reaches Earth (a grazing partial
+	// eclipse), that single curve carries the eclipse's two extremes: the poleward one is N1, the equatorward
+	// one is S1 (matching the EclipseWise N1/S1 convention for partial eclipses).
+	const hasNorthPenumbraLimit = penumbraNorth.length >= 2
+	const hasSouthPenumbraLimit = penumbraSouth.length >= 2
+	if (hasNorthPenumbraLimit && hasSouthPenumbraLimit) {
+		;[points.N1, points.N2] = endpointsByAscendingLatitude(penumbraNorth)
+		;[points.S1, points.S2] = endpointsByAscendingLatitude(penumbraSouth)
+	} else if (hasNorthPenumbraLimit || hasSouthPenumbraLimit) {
+		const branch = hasNorthPenumbraLimit ? penumbraNorth : penumbraSouth
+		const a = branch[0]
+		const b = branch.at(-1)!
+		points.N1 = Math.abs(a.y) >= Math.abs(b.y) ? a : b
+		points.S1 = Math.abs(a.y) >= Math.abs(b.y) ? b : a
 	}
 	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, contacts, { step: options.riseSetStep }) : []
 
