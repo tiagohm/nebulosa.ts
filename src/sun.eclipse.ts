@@ -1,7 +1,8 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
 import type { PositionAndVelocityOverTime } from './astrometry'
-import { AU_KM, DAYSEC, DEG2RAD, EARTH_RADIUS_KM, J2000, PI, PIOVERTWO, RAD2DEG, TAU } from './constants'
-import { eraP2s, eraS2p } from './erfa'
+import { AU_KM, DAYSEC, DAYSPERJY, DEG2RAD, EARTH_RADIUS_KM, J2000, LIGHT_TIME_AU, PI, PIOVERTWO, RAD2DEG, SPEED_OF_LIGHT_AU_DAY, TAU } from './constants'
+import { deltaTByEspenakMeeus2006 } from './deltat'
+import { eraAb, eraP2s, eraS2p } from './erfa'
 import { sphericalInterpolate, sphericalSeparation, type Point } from './geometry'
 import { matMulVec } from './mat3'
 import { clamp, type NumberArray } from './math'
@@ -11,7 +12,7 @@ import { polynomialRegression } from './regression'
 import type { SolarEclipse } from './sun'
 import { precessionNutationMatrix, timeShift, timeSubtract, toJulianDay, type Time } from './time'
 import type { Writable } from './types'
-import { vecDot, vecLength, vecMinus, vecNormalizeMut } from './vec3'
+import { vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMut } from './vec3'
 
 // That code planned and implemented by Codex, using https://github.com/Astrarium/Astrarium as inspiration.
 
@@ -1918,17 +1919,66 @@ function splitGeoLineAtAntimeridian(line: readonly GeoPoint[], close: boolean) {
 }
 
 const AU_IN_EARTH_RADII = AU_KM / EARTH_RADIUS_KM
+// Light travel time per AU in days, used to retard body positions to their emission epoch.
+const LIGHT_TIME_DAYS_PER_AU = LIGHT_TIME_AU / DAYSEC
+// Light-time iterations. Two passes converge the retarded geocentric position well below the map's
+// angular resolution for the Sun (~8.3 min one-way) and the Moon (~1.3 s one-way).
+const LIGHT_TIME_ITERATIONS = 2
 
+// Computes the apparent geocentric Sun and Moon positions used to derive Besselian elements. Both bodies
+// are corrected for light-time (retarded emission position) and annual aberration (the geocenter's
+// barycentric velocity), then rotated from ICRF/J2000 into the true equator and equinox of date. Delta T
+// is taken from the Espenak and Meeus 2006 polynomials for the sample epoch.
+//   time: instant of evaluation, any time scale (ephemerides convert internally).
+//   sun: barycentric Sun position and velocity provider, in AU and AU/day, equatorial ICRF/J2000.
+//   earth: barycentric Earth position and velocity provider, in AU and AU/day, equatorial ICRF/J2000.
+//   moon: geocentric Moon position and velocity provider, in AU and AU/day, equatorial ICRF/J2000.
 export function computeSunMoonPositionAt(time: Time, sun: PositionAndVelocityOverTime, earth: PositionAndVelocityOverTime, moon: PositionAndVelocityOverTime): SunMoonPosition {
-	const sJ2000 = sun(time)
-	const eJ2000 = earth(time)
-	const mGeoJ2000 = moon(time)
-	const sunGeoJ2000 = vecMinus(sJ2000[0], eJ2000[0])
-	matMulVec(precessionNutationMatrix(time), sunGeoJ2000, sunGeoJ2000)
-	matMulVec(precessionNutationMatrix(time), mGeoJ2000[0], mGeoJ2000[0])
+	const earthBarycentric = earth(time)
+	const earthPosition = earthBarycentric[0]
 
-	const [sRA, sDEC, sD] = eraP2s(...sunGeoJ2000)
-	const [mRA, mDEC, mD] = eraP2s(...mGeoJ2000[0])
+	// Observer (geocenter) barycentric velocity in units of the speed of light, plus the reciprocal Lorentz
+	// factor, both consumed by eraAb for annual aberration.
+	const aberrationVelocity = vecDivScalar(earthBarycentric[1], SPEED_OF_LIGHT_AU_DAY)
+	const reciprocalLorentz = Math.sqrt(1 - vecDot(aberrationVelocity, aberrationVelocity))
+
+	// Light-time corrected geocentric Sun position: seen where it was when its light departed.
+	let sunGeometric = vecMinus(sun(time)[0], earthPosition)
+	for (let i = 0; i < LIGHT_TIME_ITERATIONS; i++) {
+		const tau = vecLength(sunGeometric) * LIGHT_TIME_DAYS_PER_AU
+		sunGeometric = vecMinus(sun(timeShift(time, -tau))[0], earthPosition)
+	}
+	const sunDistance = vecLength(sunGeometric)
+
+	// Light-time corrected geocentric Moon position. The Moon provider is already geocentric, so retarding
+	// its time directly yields the emission-epoch geocentric vector.
+	let moonGeometric = moon(time)[0]
+	for (let i = 0; i < LIGHT_TIME_ITERATIONS; i++) {
+		const tau = vecLength(moonGeometric) * LIGHT_TIME_DAYS_PER_AU
+		moonGeometric = moon(timeShift(time, -tau))[0]
+	}
+	const moonDistance = vecLength(moonGeometric)
+
+	const pnm = precessionNutationMatrix(time)
+
+	// Apply annual aberration to the unit direction (the Sun-observer distance drives the relativistic
+	// deflection term), restore the body distance, then rotate ICRF/J2000 into the true equator of date.
+	const sunApparent = vecDivScalar(sunGeometric, sunDistance)
+	eraAb(sunApparent, aberrationVelocity, sunDistance, reciprocalLorentz, sunApparent)
+	vecMulScalar(sunApparent, sunDistance, sunApparent)
+	matMulVec(pnm, sunApparent, sunApparent)
+
+	const moonApparent = vecDivScalar(moonGeometric, moonDistance)
+	eraAb(moonApparent, aberrationVelocity, sunDistance, reciprocalLorentz, moonApparent)
+	vecMulScalar(moonApparent, moonDistance, moonApparent)
+	matMulVec(pnm, moonApparent, moonApparent)
+
+	const [sRA, sDEC, sD] = eraP2s(...sunApparent)
+	const [mRA, mDEC, mD] = eraP2s(...moonApparent)
+
+	// Decimal year for the Delta T model. The sub-minute scale difference between time scales is irrelevant
+	// for Delta T, which varies on the order of a second per year.
+	const year = 2000 + (toJulianDay(time) - J2000) / DAYSPERJY
 
 	return {
 		sunRightAscension: sRA,
@@ -1937,7 +1987,7 @@ export function computeSunMoonPositionAt(time: Time, sun: PositionAndVelocityOve
 		moonRightAscension: mRA,
 		moonDeclination: mDEC,
 		moonDistance: mD * AU_IN_EARTH_RADII,
-		deltaT: 61, // TODO
+		deltaT: deltaTByEspenakMeeus2006(year),
 	}
 }
 
