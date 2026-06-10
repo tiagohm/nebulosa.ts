@@ -1646,16 +1646,15 @@ describe('solar eclipse map acceptance criteria', () => {
 			expect(solarAltitude(elements, point)).toBeGreaterThan(deg(-1))
 		}
 
-		// A grazing partial has a single penumbral limit, so its named extremes are N1 (poleward) and S1
-		// (equatorward), not N2/S2. They match EclipseWise within a degree or two: N1 ~ 50.23 deg S, 95.645 deg W
-		// (poleward); S1 ~ 28.305 deg S, 66.562 deg E (equatorward).
+		// A grazing partial has a single penumbral limit, so its named extremes are its two terminator
+		// cusps, N1/S1 (not N2/S2), named chronologically: N1 ~ 50.23 deg S, 95.645 deg W (the earlier
+		// cusp); S1 ~ 28.305 deg S, 66.562 deg E (the later cusp). EclipseWise match within a fraction of a degree.
 		expect(geometry.points.N1).toBeDefined()
 		expect(geometry.points.S1).toBeDefined()
 		expect(geometry.points.N2).toBeUndefined()
 		expect(geometry.points.S2).toBeUndefined()
-		expect(Math.abs(geometry.points.N1!.y)).toBeGreaterThan(Math.abs(geometry.points.S1!.y))
-		// N1/S1 are the limit's terminator cusps (minimum solar altitude), so they match the EclipseWise
-		// extremes closely; the residual is ephemeris/Delta T, not the cusp identification.
+		// N1 is the earlier cusp, S1 the later one (chronological, not by latitude).
+		expect(geometry.points.N1!.jd!).toBeLessThanOrEqual(geometry.points.S1!.jd!)
 		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(-95.645), deg(-50.23))).toBeLessThan(deg(0.5))
 		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(66.562), deg(-28.305))).toBeLessThan(deg(0.5))
 		// They are endpoints of the penumbral limit curve, so they lie on it.
@@ -1663,9 +1662,9 @@ describe('solar eclipse map acceptance criteria', () => {
 	})
 
 	// Same convention checked on a northern-hemisphere grazing partial: 2000-07-31 (EclipseWise N1 ~ 49.49 deg N,
-	// 55.6 deg E poleward; S1 ~ 32.19 deg N, 129.74 deg W equatorward). Regression for the point that was
-	// mislabeled S2 instead of N1.
-	test('2000-07-31 partial eclipse labels its poleward extreme N1, not S2', () => {
+	// 55.6 deg E, the earlier cusp; S1 ~ 32.19 deg N, 129.74 deg W, the later cusp). Here the earlier cusp
+	// also happens to be poleward, but the label is chronological.
+	test('2000-07-31 partial eclipse names its single-limit cusps chronologically (N1 first, S1 last)', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2000, 7, 15), true)
 		expect(eclipse.type).toBe('partial')
 		const elements = computePolynomialBesselianElements(eclipse.maximalTime, (t) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon))
@@ -1675,13 +1674,34 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(geometry.points.S1).toBeDefined()
 		expect(geometry.points.N2).toBeUndefined()
 		expect(geometry.points.S2).toBeUndefined()
-		// N1 is the poleward (here northern) extreme near 49.5 deg N, 55.6 deg E; S1 the equatorward one.
-		// Both are terminator cusps (minimum solar altitude), so they match EclipseWise closely.
-		expect(geometry.points.N1!.y).toBeGreaterThan(geometry.points.S1!.y)
+		expect(geometry.points.N1!.jd!).toBeLessThanOrEqual(geometry.points.S1!.jd!)
 		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(55.608), deg(49.492))).toBeLessThan(deg(0.5))
 		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(-129.738), deg(32.185))).toBeLessThan(deg(0.5))
 		// Both lie on the magnitude-0 locus (this eclipse's limit is the southern branch, i = -1).
 		for (const point of [geometry.points.N1!, geometry.points.S1!]) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
+	})
+
+	// Regression for 2003-05-31 (annular grazing): BOTH terminator cusps are in the northern hemisphere
+	// (N1 ~ 10.86 deg N, 52.00 deg E; S1 ~ 37.09 deg N, 164.07 deg W), so a poleward/equatorward label
+	// would swap them. EclipseWise names them chronologically, and N1 (the earlier cusp) is the more
+	// equatorward one here.
+	test('2003-05-31 grazing eclipse names same-hemisphere cusps chronologically, not by latitude', () => {
+		const eclipse = nearestSolarEclipse(timeYMD(2003, 5, 15), true)
+		expect(eclipse.type).toBe('annular')
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, (t) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon))
+		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: deg(0.5), maxAngularStep: deg(1) })
+
+		expect(geometry.points.N1).toBeDefined()
+		expect(geometry.points.S1).toBeDefined()
+		expect(geometry.points.N2).toBeUndefined()
+		expect(geometry.points.S2).toBeUndefined()
+		// Both cusps are northern, and N1 is the more equatorward one: the label is purely chronological.
+		expect(geometry.points.N1!.y).toBeGreaterThan(0)
+		expect(geometry.points.S1!.y).toBeGreaterThan(0)
+		expect(geometry.points.N1!.jd!).toBeLessThanOrEqual(geometry.points.S1!.jd!)
+		expect(geometry.points.N1!.y).toBeLessThan(geometry.points.S1!.y)
+		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(52.005), deg(10.858))).toBeLessThan(deg(0.5))
+		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(-164.075), deg(37.093))).toBeLessThan(deg(0.5))
 	})
 
 	// An annular (both-limit) eclipse names the penumbral extremes chronologically -- N1/S1 where

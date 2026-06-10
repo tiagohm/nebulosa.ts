@@ -214,12 +214,14 @@ export interface SolarEclipseContactPoints {
 	// Greatest eclipse point.
 	readonly Max?: GeoPoint
 	// Northern penumbral-limit extreme. Informational only: it never controls the penumbra-limit
-	// polylines. When both penumbral limits reach Earth, N1/N2 are the northern limit's two endpoints
-	// ordered chronologically; for a grazing partial N1 is the single curve's poleward extreme.
+	// polylines. When both penumbral limits reach Earth, N1/N2 are the northern limit's two terminator
+	// cusps ordered chronologically; for a grazing partial, N1 is the earlier cusp of the single limit
+	// (chronological, not poleward — both cusps may share a hemisphere).
 	readonly N1?: GeoPoint
 	// Second endpoint of the northern penumbral limit. Absent for a grazing partial. Informational only.
 	readonly N2?: GeoPoint
-	// Southern penumbral-limit extreme; S1/S2 mirror N1/N2 for the southern limit. Informational only.
+	// Southern penumbral-limit extreme; for a grazing partial, S1 is the later cusp of the single limit.
+	// S1/S2 otherwise mirror N1/N2 for the southern limit. Informational only.
 	readonly S1?: GeoPoint
 	// Second endpoint of the southern penumbral limit. Absent for a grazing partial. Informational only.
 	readonly S2?: GeoPoint
@@ -1586,21 +1588,24 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	const penumbraNorth = findCurvePoints(pbe, 1, 0, curveOptions)
 	const penumbraSouth = findCurvePoints(pbe, -1, 0, curveOptions)
 
-	// Expose the penumbral-limit extremes as named, informational points. When both penumbral limits
-	// reach Earth, each branch contributes its two endpoints ordered chronologically (N1/S1 begin,
-	// N2/S2 end). When only one limit reaches Earth (a grazing partial eclipse), that single curve
-	// carries the eclipse's two extremes: the poleward one is N1, the equatorward one is S1, matching
-	// the EclipseWise convention. They never control the curve geometry.
+	// Expose the penumbral-limit extremes as named, informational points, always the limits' terminator
+	// cusps ordered chronologically. When both penumbral limits reach Earth, each branch contributes its
+	// two cusps (N1/S1 begin, N2/S2 end). When only one limit reaches Earth (a grazing partial), that
+	// single curve carries the eclipse's two extremes, again chronological: N1 is the earlier cusp, S1
+	// the later one, matching the EclipseWise convention (not a poleward/equatorward rule). They never
+	// control the curve geometry.
 	const hasNorthPenumbraLimit = penumbraNorth.length >= 2
 	const hasSouthPenumbraLimit = penumbraSouth.length >= 2
 	if (hasNorthPenumbraLimit && hasSouthPenumbraLimit) {
 		;[points.N1, points.N2] = penumbralLimitEndpointsByTime(pbe, penumbraNorth)
 		;[points.S1, points.S2] = penumbralLimitEndpointsByTime(pbe, penumbraSouth)
 	} else if (hasNorthPenumbraLimit || hasSouthPenumbraLimit) {
+		// A grazing partial with a single penumbral limit: its two terminator cusps are named
+		// chronologically (N1 begins, S1 ends), matching EclipseWise. This is NOT a poleward/equatorward
+		// rule: for 2003-05-31 both cusps are in the northern hemisphere and the equatorward one (N1)
+		// comes first in time, so a latitude-based label would swap them.
 		const branch = hasNorthPenumbraLimit ? penumbraNorth : penumbraSouth
-		const [a, b] = penumbralLimitCusps(pbe, branch)
-		points.N1 = Math.abs(a.y) >= Math.abs(b.y) ? a : b
-		points.S1 = Math.abs(a.y) >= Math.abs(b.y) ? b : a
+		;[points.N1, points.S1] = penumbralLimitEndpointsByTime(pbe, branch)
 	}
 
 	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, contacts, { step: options.riseSetStep }) : []
