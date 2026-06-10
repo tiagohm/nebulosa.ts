@@ -1598,8 +1598,7 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		;[points.S1, points.S2] = endpointsByAscendingTime(penumbraSouth)
 	} else if (hasNorthPenumbraLimit || hasSouthPenumbraLimit) {
 		const branch = hasNorthPenumbraLimit ? penumbraNorth : penumbraSouth
-		const a = branch[0]
-		const b = branch.at(-1)!
+		const [a, b] = penumbralLimitCusps(pbe, branch)
 		points.N1 = Math.abs(a.y) >= Math.abs(b.y) ? a : b
 		points.S1 = Math.abs(a.y) >= Math.abs(b.y) ? b : a
 	}
@@ -1648,6 +1647,34 @@ function assembleCenterLine(pbe: PolynomialBesselianElements, C1: GeoPoint | und
 	if (C2) interior.push(C2)
 
 	return deduplicatePoints(interior)
+}
+
+// Geometric solar altitude (radians) of an observer at a limit point at its own instant. The two named
+// extremes of a grazing penumbral limit are its terminator cusps, where this drops to ~0.
+function solarAltitudeAtPoint(pbe: PolynomialBesselianElements, point: GeoPoint) {
+	const be = besselianSampleAtJulianDay(pbe, point.jd!)
+	const H = hourAngleFromLongitude(point.x, be.mu, deltaTLongitudeCorrection(be))
+	const sinh = Math.sin(be.d) * Math.sin(point.y) + Math.cos(be.d) * Math.cos(point.y) * Math.cos(H)
+	return Math.asin(clamp(sinh, -1, 1))
+}
+
+// Minimum spatial separation (radians) required between the two named cusps of a single penumbral
+// limit, so both end up on different terminator cusps rather than two samples of the same one.
+const PENUMBRAL_CUSP_MIN_SEPARATION = 5 * DEG2RAD
+
+// The two terminator cusps of a single grazing penumbral limit: the points where the limit meets the
+// horizon (lowest solar altitude). This is robust against the curve solver returning the points in
+// Julian-Day order, which can interleave two spatial branches near a fold and bury a cusp in the middle
+// of the array (so the raw first/last endpoints are not the cusps; see report section 2.2).
+function penumbralLimitCusps(pbe: PolynomialBesselianElements, curve: readonly GeoPoint[]): [GeoPoint, GeoPoint] {
+	if (curve.length <= 2) return [curve[0], curve.at(-1)!]
+
+	const byAltitude = Array.from(curve, (point) => ({ point, altitude: solarAltitudeAtPoint(pbe, point) })).sort((p, q) => p.altitude - q.altitude)
+	const first = byAltitude[0].point
+	// The second cusp is the lowest-altitude point that is also far enough from the first; falling back to
+	// the chronological endpoints if the curve never folds into two separated cusps.
+	const second = byAltitude.find((entry) => sphericalSeparation(first.x, first.y, entry.point.x, entry.point.y) > PENUMBRAL_CUSP_MIN_SEPARATION)?.point
+	return second ? [first, second] : [curve[0], curve.at(-1)!]
 }
 
 // Returns a curve's two endpoints ordered by ascending time (earliest first), falling back to
