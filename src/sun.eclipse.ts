@@ -481,6 +481,9 @@ function createBesselianElements(): BesselianElements {
 	return { x: 0, y: 0, l1: 0, l2: 0, d: 0, mu: 0, dx: 0, dy: 0, dmu: 0, dd: 0, dl1: 0, dl2: 0, tanF1: 0, tanF2: 0 }
 }
 
+// Reused buffer. Safe as a single module scratch: those scans are sequential and never re-enter each other.
+const BESSELIAN_ELEMENTS_SCRATCH = createBesselianElements()
+
 // Evaluates Besselian positions and velocity derivatives directly from the normalized polynomial time into
 // a caller-owned output buffer, avoiding per-iteration allocation in hot solver loops.
 function evaluateBesselianAtTInto(out: BesselianElements, pbe: PolynomialBesselianElements, t: number): BesselianElements {
@@ -1109,14 +1112,10 @@ export function findUmbraContactPoints(pbe: PolynomialBesselianElements, options
 	return { U1: contacts.first, U2: contacts.firstInternal, U3: contacts.lastInternal, U4: contacts.last } as const
 }
 
-// Reused buffer for the scalar axis-distance scans (centralAxisIntersectsEarth, findGreatestEclipseT).
-// Safe as a single module scratch: those scans are sequential and never re-enter each other.
-const AXIS_DISTANCE_SCRATCH = createBesselianElements()
-
 // Squared distance from the shadow axis to the Earth-limb ellipse center at normalized time t, i.e.
 // x(t)^2 + (omega(d(t)) y(t))^2. It is <= 1 exactly when the axis pierces the ellipsoid at t.
 function centralAxisDistanceSquaredAtT(pbe: PolynomialBesselianElements, t: number) {
-	const be = evaluateBesselianAtTInto(AXIS_DISTANCE_SCRATCH, pbe, t)
+	const be = evaluateBesselianAtTInto(BESSELIAN_ELEMENTS_SCRATCH, pbe, t)
 	const y1 = earthLimbOmega(be.d) * be.y
 	return be.x * be.x + y1 * y1
 }
@@ -1225,11 +1224,11 @@ export function findMaximumPoint(pbe: PolynomialBesselianElements) {
 // converging when |tau| is below CONTACT_TOLERANCE_DAYS. A sign-bisection on the limb residual is
 // kept as fallback for when the iteration leaves the fitted span or S^2 exceeds 1 near tangency.
 export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, begin: boolean, options?: SolarEclipseContactOptions) {
+	const be = BESSELIAN_ELEMENTS_SCRATCH
 	const julianDay0 = toJulianDay(pbe.time0)
 	const maximumJulianDay = toJulianDay(pbe.maximumTime)
 	const searchSpanDays = contactSearchSpanDays(options)
 	let t = (maximumJulianDay - julianDay0) / pbe.stepDays
-	const be = createBesselianElements()
 
 	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
 		evaluateBesselianAtTInto(be, pbe, t)
@@ -1299,8 +1298,7 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 	let phi = initialLatitude
 	const julianDay0 = toJulianDay(pbe.time0)
 	const longitudeCorrection = pbe.deltaTLongitudeCorrection
-	// One reused buffer for the whole Newton loop instead of a fresh object every iteration.
-	const be = createBesselianElements()
+	const be = BESSELIAN_ELEMENTS_SCRATCH
 
 	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
 		evaluateBesselianAtTInto(be, pbe, t)
