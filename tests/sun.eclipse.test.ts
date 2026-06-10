@@ -1700,10 +1700,11 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(geometry.points.N1!.jd!).toBeLessThanOrEqual(geometry.points.N2!.jd!)
 		expect(geometry.points.S1!.jd!).toBeLessThanOrEqual(geometry.points.S2!.jd!)
 
-		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(-139.72), deg(66.19))).toBeLessThan(deg(2))
-		expect(sphericalSeparation(geometry.points.N2!.x, geometry.points.N2!.y, deg(-95.3), deg(57.93))).toBeLessThan(deg(2))
-		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(160.89), deg(0.6))).toBeLessThan(deg(2))
-		expect(sphericalSeparation(geometry.points.S2!.x, geometry.points.S2!.y, deg(-62.29), deg(-15.54))).toBeLessThan(deg(2))
+		// Each named extreme is a terminator cusp of its limit, so it matches EclipseWise closely.
+		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(-139.72), deg(66.19))).toBeLessThan(deg(0.5))
+		expect(sphericalSeparation(geometry.points.N2!.x, geometry.points.N2!.y, deg(-95.3), deg(57.93))).toBeLessThan(deg(0.5))
+		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(160.89), deg(0.6))).toBeLessThan(deg(0.5))
+		expect(sphericalSeparation(geometry.points.S2!.x, geometry.points.S2!.y, deg(-62.29), deg(-15.54))).toBeLessThan(deg(0.5))
 	})
 })
 

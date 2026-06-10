@@ -1594,8 +1594,8 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	const hasNorthPenumbraLimit = penumbraNorth.length >= 2
 	const hasSouthPenumbraLimit = penumbraSouth.length >= 2
 	if (hasNorthPenumbraLimit && hasSouthPenumbraLimit) {
-		;[points.N1, points.N2] = endpointsByAscendingTime(penumbraNorth)
-		;[points.S1, points.S2] = endpointsByAscendingTime(penumbraSouth)
+		;[points.N1, points.N2] = penumbralLimitEndpointsByTime(pbe, penumbraNorth)
+		;[points.S1, points.S2] = penumbralLimitEndpointsByTime(pbe, penumbraSouth)
 	} else if (hasNorthPenumbraLimit || hasSouthPenumbraLimit) {
 		const branch = hasNorthPenumbraLimit ? penumbraNorth : penumbraSouth
 		const [a, b] = penumbralLimitCusps(pbe, branch)
@@ -1677,14 +1677,15 @@ function penumbralLimitCusps(pbe: PolynomialBesselianElements, curve: readonly G
 	return second ? [first, second] : [curve[0], curve.at(-1)!]
 }
 
-// Returns a curve's two endpoints ordered by ascending time (earliest first), falling back to
-// ascending latitude when either endpoint lacks a Julian Day. The penumbral-limit extremes are named
-// by the eclipse chronology (N1/S1 begin, N2/S2 end), matching the EclipseWise/Espenak convention.
-function endpointsByAscendingTime(curve: readonly GeoPoint[]): [GeoPoint, GeoPoint] {
-	const first = curve[0]
-	const last = curve.at(-1)!
-	if (first.jd !== undefined && last.jd !== undefined) return first.jd <= last.jd ? [first, last] : [last, first]
-	return first.y <= last.y ? [first, last] : [last, first]
+// The two terminator cusps of a penumbral limit ordered by ascending time (earliest first), falling
+// back to ascending latitude when either lacks a Julian Day. The penumbral-limit extremes are named by
+// the eclipse chronology (N1/S1 begin, N2/S2 end), matching the EclipseWise/Espenak convention. Using
+// the cusps rather than the raw array endpoints keeps the markers on the horizon even when the curve
+// solver returns the limit's points jd-interleaved across a fold (report section 2.2).
+function penumbralLimitEndpointsByTime(pbe: PolynomialBesselianElements, curve: readonly GeoPoint[]): [GeoPoint, GeoPoint] {
+	const [a, b] = penumbralLimitCusps(pbe, curve)
+	if (a.jd !== undefined && b.jd !== undefined) return a.jd <= b.jd ? [a, b] : [b, a]
+	return a.y <= b.y ? [a, b] : [b, a]
 }
 
 // Julian Day span of a branch, or undefined when its points carry no time.
