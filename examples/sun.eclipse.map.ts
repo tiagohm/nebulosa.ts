@@ -15,11 +15,11 @@ function makeSvg(paths: SolarEclipseMapSvgPaths, fill: string, width: number, he
 	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
 <style>
 .ocean { fill: #103099; }
-.umbrafill { fill: rgba(250, 250, 250, 0.3); stroke: none; }
-.umbra { fill: none; stroke: #CCC; stroke-width: 1; }
-.center { fill: none; stroke: #000; stroke-width: 1; }
-.penumbra { fill: none; stroke: #11c0cc; stroke-width: 0.8; }
-.riseset { fill: none; stroke: orange; stroke-width: 0.8; }
+.umbrafill { fill: gray; stroke: none; }
+.umbra { fill: none; stroke: #FFE66D; stroke-width: 2; stroke-linecap: round; }
+.center { fill: none; stroke: #FF2ED1; stroke-width: 2; stroke-linecap: round; }
+.penumbra { fill: none; stroke: #FF9F1C; stroke-width: 2; stroke-linecap: round; }
+.riseset { fill: none; stroke: #00E5FF; stroke-width: 2; }
 text { font: 14px sans-serif; fill: #fff; }
 </style>
 <rect class="ocean" x="0" y="0" width="${width}" height="${height}" />
@@ -30,21 +30,21 @@ text { font: 14px sans-serif; fill: #fff; }
 <path class="umbra" d="${paths.umbraNorth}" />
 <path class="umbra" d="${paths.umbraSouth}" />
 <path class="center" d="${paths.centerLine}" />
-${marker(paths.points.P1, 'P1', '#11c0cc')}
-${marker(paths.points.P4, 'P4', '#11c0cc')}
-${marker(paths.points.P2, 'P2', '#11c0cc')}
-${marker(paths.points.P3, 'P3', '#11c0cc')}
-${marker(paths.points.U1, 'U1', '#11cc9d')}
-${marker(paths.points.U4, 'U4', '#11cc9d')}
-${marker(paths.points.U2, 'U2', '#11cc9d')}
-${marker(paths.points.U3, 'U3', '#11cc9d')}
-${marker(paths.points.C1, 'C1', '#cc0000')}
-${marker(paths.points.C2, 'C2', '#cc0000')}
-${marker(paths.points.N1, 'N1', '#11c0cc')}
-${marker(paths.points.N2, 'N2', '#11c0cc')}
-${marker(paths.points.S1, 'S1', '#11c0cc')}
-${marker(paths.points.S2, 'S2', '#11c0cc')}
-${marker(paths.points.Max, 'Max', '#e8a000')}
+${marker(paths.points.P1, 'P1', '#FF9F1C')}
+${marker(paths.points.P4, 'P4', '#FF9F1C')}
+${marker(paths.points.P2, 'P2', '#FF9F1C')}
+${marker(paths.points.P3, 'P3', '#FF9F1C')}
+${marker(paths.points.U1, 'U1', '#FFE66D')}
+${marker(paths.points.U4, 'U4', '#FFE66D')}
+${marker(paths.points.U2, 'U2', '#FFE66D')}
+${marker(paths.points.U3, 'U3', '#FFE66D')}
+${marker(paths.points.C1, 'C1', '#FF7BEA')}
+${marker(paths.points.C2, 'C2', '#FF7BEA')}
+${marker(paths.points.N1, 'N1', '#35FF7A')}
+${marker(paths.points.N2, 'N2', '#35FF7A')}
+${marker(paths.points.S1, 'S1', '#FF4D4D')}
+${marker(paths.points.S2, 'S2', '#FF4D4D')}
+${marker(paths.points.Max, 'Max', '#FFFFFF')}
 </svg>`
 }
 

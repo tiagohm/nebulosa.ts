@@ -799,9 +799,11 @@ function projectCentralAxisPoint(pbe: PolynomialBesselianElements, jd: number) {
 //   initialLatitude: latitude seed in radians.
 //   i = 0 -> central line (G ignored); i = +1/-1 -> northern/southern limit.
 //   G = 1 -> totality/annularity limit; G = 0 -> partiality limit; 0 < G < 1 -> equal-magnitude curve.
-// Atmospheric refraction (an empirical observer-lifting factor) applies only to G != 0 curves with
-// solar altitude between 0 and 10 deg, matching Astrarium. A negative solar altitude is rejected only
-// after convergence, so intermediate night-side iterates can still converge to a day-side solution.
+// Atmospheric refraction (an empirical observer-lifting factor) applies to every family near the
+// horizon (solar altitude between 0 and 10 deg), including the G = 0 partial limit, so its extremes
+// match the refracted EclipseWise/Espenak references (a documented divergence from bare Astrarium,
+// which skips it on G = 0). A negative solar altitude is rejected only after convergence, so
+// intermediate night-side iterates can still converge to a day-side solution.
 export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number): GeoPoint | undefined {
 	let t = 0
 	let phi = initialLatitude
@@ -827,9 +829,12 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 		const h = Math.asin(clamp(sinh, -1, 1))
 		const hD = h * RAD2DEG
 
-		// Empirical horizon-refraction correction that lifts the observer, applied only to
-		// totality/annularity and equal-magnitude curves near the horizon (not to G = 0 curves).
-		if (G !== 0 && hD >= 0 && hD <= 10) {
+		// Empirical horizon-refraction correction that lifts the observer near the horizon. It is
+		// applied to every limit family, including the partial limit (G = 0): the published
+		// EclipseWise/Espenak penumbral-limit extremes N1/S1 are refracted positions, so omitting it on
+		// the G = 0 curves (as bare Astrarium does) drifts those extremes by a degree or more. This is a
+		// documented divergence from Astrarium, kept because the reference extremes assume refraction.
+		if (hD >= 0 && hD <= 10) {
 			const sigma = 1.000012 + 0.0002282559 * Math.exp(-0.5035747 * hD)
 			ksi *= sigma
 			eta *= sigma

@@ -1475,15 +1475,15 @@ describe('solar eclipse map acceptance criteria', () => {
 		}
 
 		// A grazing partial has a single penumbral limit, so its named extremes are N1 (poleward) and S1
-		// (equatorward), not N2/S2. They match EclipseWise within a few degrees (the G = 0 curves carry no refraction here): N1 ~ 50.23 deg S, 95.645 deg W
+		// (equatorward), not N2/S2. They match EclipseWise within a degree or two: N1 ~ 50.23 deg S, 95.645 deg W
 		// (poleward); S1 ~ 28.305 deg S, 66.562 deg E (equatorward).
 		expect(geometry.points.N1).toBeDefined()
 		expect(geometry.points.S1).toBeDefined()
 		expect(geometry.points.N2).toBeUndefined()
 		expect(geometry.points.S2).toBeUndefined()
 		expect(Math.abs(geometry.points.N1!.y)).toBeGreaterThan(Math.abs(geometry.points.S1!.y))
-		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(-95.645), deg(-50.23))).toBeLessThan(deg(3))
-		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(66.562), deg(-28.305))).toBeLessThan(deg(3))
+		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(-95.645), deg(-50.23))).toBeLessThan(deg(2))
+		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(66.562), deg(-28.305))).toBeLessThan(deg(2))
 		// They are endpoints of the penumbral limit curve, so they lie on it.
 		for (const point of [geometry.points.N1!, geometry.points.S1!]) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
 	})
@@ -1503,8 +1503,8 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(geometry.points.S2).toBeUndefined()
 		// N1 is the poleward (here northern) extreme near 49.5 deg N, 55.6 deg E; S1 the equatorward one.
 		expect(geometry.points.N1!.y).toBeGreaterThan(geometry.points.S1!.y)
-		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(55.608), deg(49.492))).toBeLessThan(deg(3))
-		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(-129.738), deg(32.185))).toBeLessThan(deg(3))
+		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(55.608), deg(49.492))).toBeLessThan(deg(2))
+		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(-129.738), deg(32.185))).toBeLessThan(deg(2))
 		// Both lie on the magnitude-0 locus (this eclipse's limit is the southern branch, i = -1).
 		for (const point of [geometry.points.N1!, geometry.points.S1!]) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
 	})
