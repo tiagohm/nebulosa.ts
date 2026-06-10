@@ -1073,7 +1073,9 @@ export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, be
 
 function projectCentralAxisPoint(pbe: PolynomialBesselianElements, jd: number) {
 	const be = besselianSampleAtJulianDay(pbe, jd)
-	return projectFundamentalPoint(be, be.x, be.y)
+	// At the C1/C2 endpoints the axis is tangent to the limb and converges a hair (~1e-7) outside it, so
+	// the strict projector rejects it; fall back to the nearest limb point, which is that same tangency.
+	return projectFundamentalPoint(be, be.x, be.y) ?? projectClosestEarthLimbPoint(be, be.x, be.y)
 }
 
 // D. CURVE SOLVER
