@@ -2,7 +2,7 @@ import { expect, test, describe } from 'bun:test'
 import { deg } from '../src/angle'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseFillGeometry, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolygonsToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse'
+import { centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseFillGeometry, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolygonsToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse'
 import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../src/time'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
@@ -1175,8 +1175,8 @@ test('umbral north and south limits match the NASA 2024-04-08 path table', () =>
 		expectNearNasa(north, row.north[0], row.north[1], 0.5)
 		expectNearNasa(south, row.south[0], row.south[1], 0.5)
 		// The solved limit instant (UT = TD - delta T) matches the table time within a minute.
-		expect(Math.abs((north!.jd! - APR8_2024_DELTA_T_DAYS - expectedUt) * 86400)).toBeLessThan(60)
-		expect(Math.abs((south!.jd! - APR8_2024_DELTA_T_DAYS - expectedUt) * 86400)).toBeLessThan(60)
+		expect(Math.abs((north!.jd - APR8_2024_DELTA_T_DAYS - expectedUt) * 86400)).toBeLessThan(60)
+		expect(Math.abs((south!.jd - APR8_2024_DELTA_T_DAYS - expectedUt) * 86400)).toBeLessThan(60)
 	}
 })
 
@@ -1847,5 +1847,127 @@ describe('fill geometry pairs disconnected branches', () => {
 		// The physical limit polylines are untouched.
 		expect(map.lines.umbraNorth).toHaveLength(2)
 		expect(map.lines.umbraSouth).toHaveLength(2)
+	})
+})
+
+describe('circle-ellipse intersection multiplicity and tangency', () => {
+	// A circle and an ellipse can meet in four points; the solver must return all of them (report 7.2).
+	// Synthetic flattened limb x^2 + (2y)^2 = 1 (omega = 2) and a concentric circle of radius 0.7 cut at
+	// the four points (+-0.566, +-0.412).
+	test('earthLimbCircleIntersections returns four crossings when the geometry has four', () => {
+		const omega = 2
+		const radius = 0.7
+		const crossings = earthLimbCircleIntersections(0, 0, omega, radius)
+
+		expect(crossings).toHaveLength(4)
+		// Ordered by descending y, and each crossing lies on BOTH the ellipse and the circle.
+		for (let i = 1; i < crossings.length; i++) expect(crossings[i - 1][1]).toBeGreaterThanOrEqual(crossings[i][1])
+		for (const [x, y] of crossings) {
+			expect(x * x + (omega * y) ** 2).toBeCloseTo(1, 6)
+			expect(Math.hypot(x, y)).toBeCloseTo(radius, 6)
+		}
+	})
+
+	// A grazing (tangential) contact is a double root that never changes sign; placed off the 2-degree scan
+	// grid it would be missed without explicit tangency detection (report sections 1.3 and 7.3).
+	test('earthLimbCircleIntersections detects an off-grid tangency with no sign change', () => {
+		const omega = 2
+		const theta0 = 0.05
+		const px = Math.cos(theta0)
+		const py = Math.sin(theta0) / omega
+		// Outward ellipse normal at P = grad(x^2 + (omega y)^2) = (2x, 2 omega^2 y), normalized.
+		const gradientX = 2 * px
+		const gradientY = 2 * omega * omega * py
+		const gradientLength = Math.hypot(gradientX, gradientY)
+		// Radius below the local radius of curvature (~0.25 near the vertex) so the circle is tangent from
+		// outside at exactly one point rather than cutting the ellipse twice.
+		const radius = 0.15
+		const cx = px + (radius * gradientX) / gradientLength
+		const cy = py + (radius * gradientY) / gradientLength
+
+		const crossings = earthLimbCircleIntersections(cx, cy, omega, radius)
+		expect(crossings).toHaveLength(1)
+		expect(Math.hypot(crossings[0][0] - px, crossings[0][1] - py)).toBeLessThan(0.02)
+	})
+})
+
+describe('greatest eclipse uses closest-approach minimization for an inconsistent maximumTime', () => {
+	// When the supplied maximumTime is materially off the fitted closest shadow-axis approach, the
+	// partial/non-central greatest-eclipse location is recomputed at the minimized instant rather than
+	// trusting maximumTime (report section 2.2). Synthetic axis x(t) = 2 - t stays off the Earth at t0 (x =
+	// 2) and grazes the limb near t = +1 step; maximumTime is deliberately pinned to t0.
+	test('findMaximumPoint recomputes at the minimized instant', () => {
+		const elements = pbe({ x: [2, -1], y: [0], d: [0], maximumTime: time(JD0) })
+		const max = findMaximumPoint(elements)
+
+		expect(max).toBeDefined()
+		expectGeoPoint(max!)
+		// The returned instant is the closest approach near t0 + one step, not the inconsistent maximumTime.
+		expect(Math.abs(max!.jd! - (JD0 + elements.stepDays))).toBeLessThan(0.02)
+	})
+
+	// A consistent maximumTime (the published greatest-eclipse epoch) is kept verbatim, so the jd is exact.
+	test('findMaximumPoint keeps a consistent published maximumTime', () => {
+		for (const fixture of NASA_ECLIPSES) {
+			expect(findMaximumPoint(nasaPbe(fixture))!.jd).toBe(fixture.greatestEclipse[2])
+		}
+	})
+})
+
+describe('refraction mode is an explicit solver option', () => {
+	const fixture = NASA_ECLIPSES[0]
+	const elements = nasaPbe(fixture)
+
+	test("'none' solves pure geometry and 'empirical' stays the default refracted behavior", () => {
+		const geometric = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { longitudeStep: deg(2), maxAngularStep: deg(6), refractionMode: 'none' })
+		const refracted = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { longitudeStep: deg(2), maxAngularStep: deg(6), refractionMode: 'empirical' })
+
+		expect(geometric.lines.penumbraNorth.length).toBeGreaterThan(0)
+		expect(refracted.lines.penumbraNorth.length).toBeGreaterThan(0)
+
+		// In the geometric mode every penumbra-limit point is an unrefracted magnitude-0 solution.
+		for (const point of geometric.lines.penumbraNorth) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-4)
+
+		// Both modes name the same cusp family (N1); they agree to within a fraction of a degree because the
+		// horizon lift is small, proving the option threads through without diverging the geometry.
+		expect(geometric.points.N1).toBeDefined()
+		expect(refracted.points.N1).toBeDefined()
+		expect(sphericalSeparation(geometric.points.N1!.x, geometric.points.N1!.y, refracted.points.N1!.x, refracted.points.N1!.y)).toBeLessThan(deg(2))
+	})
+
+	test('the empirical default matches an explicit empirical request', () => {
+		const def = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { longitudeStep: deg(4), maxAngularStep: deg(6) })
+		const empirical = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { longitudeStep: deg(4), maxAngularStep: deg(6), refractionMode: 'empirical' })
+		expect(JSON.stringify(def.lines.penumbraNorth)).toBe(JSON.stringify(empirical.lines.penumbraNorth))
+	})
+})
+
+describe('splitCentralLineByKind segments a hybrid central line', () => {
+	test('a hybrid central line yields both total and annular sub-polylines', () => {
+		const fixture = NASA_ECLIPSES[3]
+		expect(fixture.type).toBe('hybrid')
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(2), maxAngularStep: deg(4) })
+		const { total, annular } = splitCentralLineByKind(geometry.lines.centerLine)
+
+		expect(total.length).toBeGreaterThan(0)
+		expect(annular.length).toBeGreaterThan(0)
+		// Each sub-polyline is drawable and homogeneous in kind.
+		for (const segment of total) {
+			expect(segment.length).toBeGreaterThanOrEqual(2)
+			for (const point of segment) expect(point.kind).toBe('total')
+		}
+		for (const segment of annular) {
+			expect(segment.length).toBeGreaterThanOrEqual(2)
+			for (const point of segment) expect(point.kind).toBe('annular')
+		}
+	})
+
+	test('a pure total central line has no annular sub-polyline', () => {
+		const fixture = NASA_ECLIPSES[0]
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(4), maxAngularStep: deg(6) })
+		const { total, annular } = splitCentralLineByKind(geometry.lines.centerLine)
+
+		expect(annular).toHaveLength(0)
+		expect(total.length).toBeGreaterThan(0)
 	})
 })
