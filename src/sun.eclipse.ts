@@ -14,49 +14,62 @@ import { precessionNutationMatrix, timeShift, timeSubtract, toJulianDay, type Ti
 import type { Writable } from './types'
 import { vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMut } from './vec3'
 
-// That code planned and implemented by Codex, using https://github.com/Astrarium/Astrarium as inspiration.
+// Solar eclipse map geometry engine, structured after Astrarium's SolarEclipses.cs
+// (https://github.com/Astrarium/Astrarium). The module is layered as:
+//   A. Besselian elements (polynomial fit, instant elements, evaluation).
+//   B. Projection and Earth geometry (fundamental plane -> geographic).
+//   C. Contacts and central endpoints (P1..P4, U1..U4, C1/C2, Max).
+//   D. Curve solver (findEclipseCurvePoint / findCurvePoints and splitters).
+//   E. Rise/set curves (Earth limb x penumbral circle intersections).
+//   F. Public assembly and optional SVG serialization.
+// Every physical curve family comes only from the curve solver (D); the umbra and penumbra limits are
+// never capped, bridged, or welded. Visual fill geometry is isolated in computeSolarEclipseFillGeometry.
+//
+// Unit conventions (audited):
+//   - angles (right ascension, declination, d, mu, longitude, latitude) in radians;
+//   - x, y, l1, l2 and their derivatives in Earth equatorial radii (derivatives per normalized step);
+//   - Delta T in seconds; times as Time or Julian Day; distances in Earth equatorial radii;
+//   - longitude is east-positive in [-PI, PI] (Astrarium uses the west-positive mirror).
 
+// Squared eccentricity of the WGS-like Earth ellipsoid used for limb flattening.
 const EARTH_E2 = 0.006694385
+// Earth polar/equatorial radius ratio (1 - flattening).
 const F_CONST = 0.99664719
+// Reciprocal of F_CONST, kept explicit to match the classical formulation.
 const INV_F_CONST_APPROX = 1.00336409
+// Astrarium's 0.00417807 deg of longitude per second of Delta T, converted to radians.
 const DELTA_T_LONGITUDE_FACTOR = 0.00417807 * DEG2RAD
 const DEFAULT_LONGITUDE_STEP = 1 * DEG2RAD
 const DEFAULT_MAX_ANGULAR_STEP = 1 * DEG2RAD
 const DEFAULT_RISE_SET_STEP_SECONDS = 30
 const DEFAULT_CONTACT_SEARCH_SPAN_SECONDS = 6 * 3600
+// Root tolerance for contact and central-endpoint instants, in days (~1 ms; stricter than
+// Astrarium's 0.0001 day, affordable because the iterations converge quadratically).
 const CONTACT_TOLERANCE_DAYS = 1e-8
 const SOLVER_MAX_ITERATIONS = 50
+// Curve solver convergence: |tau| < 1e-4 normalized step units (~0.36 s for hourly steps) and
+// |deltaPhi| < 1e-4 deg expressed in radians (Astrarium converges on the same 1e-4 deg threshold).
 const SOLVER_TOLERANCE = 1e-4
 const CENTRAL_ECLIPSE_GAMMA_LIMIT = 0.9972
-const LIMB_INTERSECTION_STEPS = 128
-const LIMB_INTERSECTION_TOLERANCE = 1e-12
-const LIMB_TANGENCY_TOLERANCE = 1e-9
 const SUN_RADIUS_EARTH_RADII = 109.076370706
-// Lunar radius k1 used for penumbral contacts, per NASA/Espenak convention.
+// Lunar radius k1 used for penumbral contacts and the penumbral cone, per NASA/Espenak convention.
 const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272488
-// Lunar radius k2 used for umbral contacts (total/annular path), per NASA/Espenak convention.
+// Lunar radius k2 used for umbral contacts and the umbral cone, per NASA/Espenak convention.
 const MOON_RADIUS_UMBRA_EARTH_RADII = 0.272281
+// Bisection steps used to refine the longitude where a curve family appears or disappears
+// (the equivalent of Astrarium's FindFunctionEnd).
 const BOUNDARY_REFINEMENT_STEPS = 18
-// Sub-divisions of the first and last central-line interval used to extend the umbral limits toward
-// the C1/C2 endpoints, where one edge stays above the horizon after the last coarse central sample.
-const UMBRA_LIMIT_END_REFINEMENT_STEPS = 8
-// Maximum recursion depth when subdividing the central-line time interval to densify an umbral limit.
-// The limit can move far faster than the central line per time step (e.g. circumpolar eclipses), so
-// the angular spacing of the central samples does not bound the limit's, and it is refined separately.
-const UMBRA_LIMIT_REFINE_MAX_DEPTH = 12
-// A circumpolar umbral limit can leave the sunlit hemisphere and reappear, leaving genuine gaps in its
-// time-parametrization. After densification, continuous stretches stay within maxAngularStep, so any
-// consecutive gap beyond this multiple of it is a real discontinuity at which the limit must be broken
-// into separate polylines instead of bridged by a straight chord.
-const UMBRA_LIMIT_GAP_SPLIT_FACTOR = 2
+// A solved curve is split into separate polylines wherever two consecutive points (in time order) are
+// farther apart than this multiple of maxAngularStep: densification keeps continuous stretches within
+// maxAngularStep, so a wider gap is a genuine discontinuity (the curve left the sunlit hemisphere)
+// that must not be bridged by a straight chord.
+const CURVE_GAP_SPLIT_FACTOR = 4
 // Minimum Julian Day separation between distinct points on a time-parametrized curve; points closer
 // than this in time (~0.1 s, far below the minutes-apart sampling of any curve) are the same instant
-// reached from different seeds or seeding stages, and are collapsed to one.
+// reached from different seeds and are collapsed to one.
 const CURVE_TIME_EPSILON_DAYS = 1e-6
-// Latitude seeds used to acquire the partial-eclipse (penumbra) limit during the meridian scan.
-// Unlike the umbral limits, which hug the central line and are seeded from it, the partial limit can
-// sit at any mid-latitude, so a spread of starting guesses is tried before continuation takes over.
-const PARTIAL_LIMIT_LATITUDE_SEEDS = [0, 20 * DEG2RAD, -20 * DEG2RAD, 40 * DEG2RAD, -40 * DEG2RAD, 60 * DEG2RAD, -60 * DEG2RAD, 80 * DEG2RAD, -80 * DEG2RAD] as const
+// Polar seed latitude for the meridian scan, just short of the pole to keep tan(phi) finite.
+const SEED_POLE_LATITUDE = 89.9 * DEG2RAD
 
 // Polynomial Besselian elements fitted around the eclipse maximum.
 export interface PolynomialBesselianElements {
@@ -156,13 +169,14 @@ export interface SolarEclipseContactPoints {
 	readonly P3?: GeoPoint
 	// Last external penumbral contact (partial eclipse ends on Earth).
 	readonly P4?: GeoPoint
-	// First external umbral contact: the umbra first touches Earth (total or annular eclipse begins).
+	// First external umbral/antumbral cone tangency with the limb. Informational only: it never
+	// controls the umbra-limit polylines.
 	readonly U1?: GeoPoint
-	// First internal umbral contact: the umbra lies wholly on Earth.
+	// First internal umbral/antumbral cone tangency with the limb (umbra wholly on Earth). Informational only.
 	readonly U2?: GeoPoint
-	// Last internal umbral contact: the umbra lies wholly on Earth.
+	// Last internal umbral/antumbral cone tangency with the limb. Informational only.
 	readonly U3?: GeoPoint
-	// Last external umbral contact: the umbra last touches Earth (total or annular eclipse ends).
+	// Last external umbral/antumbral cone tangency with the limb. Informational only.
 	readonly U4?: GeoPoint
 	// First central-line contact with Earth (the shadow axis grazes the limb where the central line begins).
 	readonly C1?: GeoPoint
@@ -170,83 +184,37 @@ export interface SolarEclipseContactPoints {
 	readonly C2?: GeoPoint
 	// Greatest eclipse point.
 	readonly Max?: GeoPoint
-	// Northern penumbral-limit extreme, where a magnitude-0 limit meets the terminator. When both penumbral
-	// limits reach Earth (umbral/central eclipse) N1/N2 are the two endpoints of the northern limit, ordered by
-	// ascending latitude. When only one limit reaches Earth (a grazing partial eclipse) N1 is that single
-	// curve's poleward extreme (the EclipseWise N1) and N2 is absent.
+	// Northern penumbral-limit extreme. Informational only: it never controls the penumbra-limit
+	// polylines. When both penumbral limits reach Earth, N1/N2 are the northern limit's two endpoints
+	// ordered chronologically; for a grazing partial N1 is the single curve's poleward extreme.
 	readonly N1?: GeoPoint
-	// Second endpoint of the northern penumbral limit (higher latitude than N1). Absent for a grazing partial.
+	// Second endpoint of the northern penumbral limit. Absent for a grazing partial. Informational only.
 	readonly N2?: GeoPoint
-	// Southern penumbral-limit extreme. With both limits present S1/S2 are the southern limit's two endpoints
-	// (ascending latitude); for a grazing partial S1 is the single curve's equatorward extreme (EclipseWise S1)
-	// and S2 is absent.
+	// Southern penumbral-limit extreme; S1/S2 mirror N1/N2 for the southern limit. Informational only.
 	readonly S1?: GeoPoint
-	// Second endpoint of the southern penumbral limit (higher latitude than S1). Absent for a grazing partial.
+	// Second endpoint of the southern penumbral limit. Absent for a grazing partial. Informational only.
 	readonly S2?: GeoPoint
 }
 
-// Geometric role of a totality/annularity ring segment.
-//   northLimit / southLimit: the umbral path limit traced on the umbra edge.
-//   startCap / endCap: the Earth-limb arc the umbra sweeps near the external contacts U1/U4, where one
-//     limit edge runs off the terminator (grows only for grazing/circumpolar ends; empty otherwise).
-//   cusp: a single tangential external-contact vertex (U1/U4) or central-line endpoint (C1/C2).
-//   transition: the cross-band cut where a hybrid eclipse changes between total and annular (the locus where
-//     the surface shadow radius vanishes), separating a total ring from an annular ring.
-export type TotalityRingSegmentKind = 'northLimit' | 'southLimit' | 'startCap' | 'endCap' | 'cusp' | 'transition'
-
-// One contiguous, typed piece of a totality/annularity path ring. The ring is the ordered concatenation
-// of its segments' points, so the layer documents which physical boundary each stretch came from and lets
-// consumers verify the contour is entirely physical (no synthetic closure).
-export interface TotalityRingSegment {
-	// Geometric role of the segment within the ring.
-	readonly kind: TotalityRingSegmentKind
-	// Branch the segment belongs to: 0 north edge, 1 south edge, -1 a shared cusp vertex.
-	readonly branchId: number
-	// Whether every point lies on a real solved umbral boundary (limit edge or swept Earth-limb arc).
-	readonly physical: boolean
-	// Whether the segment is a synthetic closure not traced on any boundary. Always false for the geometry
-	// this engine produces; the flag exists so future artificial closures stay distinguishable.
-	readonly artificial: boolean
-	// Maximum umbral-limit tangency residual over the segment's points, in Earth radii (NaN when not
-	// measurable). Near zero on limit segments; it grows on cap segments where they follow the Earth limb
-	// rather than the umbral limit, which is expected.
-	readonly residual: number
-	// Ordered geographic points of the segment, already in ring traversal order.
-	readonly points: readonly GeoPoint[]
-}
-
-// Projection-agnostic solar eclipse map geometry.
+// Projection-agnostic solar eclipse map geometry: the physically meaningful points and polylines only.
 export interface SolarEclipseMapGeometry {
 	// Named contact points and greatest-eclipse point.
 	readonly points: SolarEclipseContactPoints
 	// Drawable geographic polylines, still unprojected.
 	readonly lines: {
-		// Central line of totality or annularity.
+		// Central line of totality or annularity. Empty for partial and non-central eclipses.
 		readonly centerLine: readonly GeoPoint[]
-		// Northern totality or annularity limits, split at polar/circumpolar breaks.
+		// Northern totality or annularity limit (G = 1), split at discontinuities and at its latitude
+		// apex. Empty for partial and non-central eclipses.
 		readonly umbraNorth: readonly GeoPoint[][]
-		// Southern totality or annularity limits, split at polar/circumpolar breaks.
+		// Southern totality or annularity limit (G = 1), split like umbraNorth.
 		readonly umbraSouth: readonly GeoPoint[][]
-		// Northern partial eclipse limit.
+		// Northern partial eclipse limit (G = 0).
 		readonly penumbraNorth: readonly GeoPoint[]
-		// Southern partial eclipse limit.
+		// Southern partial eclipse limit (G = 0).
 		readonly penumbraSouth: readonly GeoPoint[]
 		// Sunrise and sunset eclipse curves.
 		readonly riseSetCurves: readonly GeoPoint[][]
-	}
-	// Geographic polygon rings, still unprojected.
-	readonly polygons: {
-		// Totality path rings (the surface where the eclipse is total). For a hybrid eclipse this holds only
-		// the total portion of the central band, split from the annular portion at the transition.
-		readonly totalityPath: readonly GeoPoint[][]
-		// Typed-entity decomposition of each totality ring, parallel to totalityPath: one segment list per ring,
-		// whose concatenated points reproduce that ring.
-		readonly totalitySegments: readonly (readonly TotalityRingSegment[])[]
-		// Annularity path rings (the surface where the eclipse is annular). Empty for a pure total eclipse; for
-		// a hybrid it holds the annular portions split from the total portion at the transition.
-		readonly annularityPath: readonly GeoPoint[][]
-		// Typed-entity decomposition of each annularity ring, parallel to annularityPath.
-		readonly annularitySegments: readonly (readonly TotalityRingSegment[])[]
 	}
 }
 
@@ -262,8 +230,6 @@ export interface SolarEclipseMapGeometryOptions {
 	readonly riseSetStep?: number
 	// Whether to include sunrise and sunset curves.
 	readonly includeRiseSetCurves?: boolean
-	// Whether to include totality or annularity path polygons.
-	readonly includePolygons?: boolean
 }
 
 // Options for generating one family of eclipse curve points.
@@ -272,8 +238,6 @@ export interface SolarEclipseCurveOptions {
 	readonly longitudeStep?: Angle
 	// Maximum angular spacing between neighboring curve points in radians.
 	readonly maxAngularStep?: Angle
-	// Half-width of the contact root search window around maximumTime, in seconds.
-	readonly contactSearchSpan?: number
 }
 
 // Options for finding eclipse contact roots.
@@ -328,10 +292,6 @@ export interface SolarEclipseMapSvgPaths {
 	readonly penumbraSouth: string
 	// Sunrise and sunset eclipse curves.
 	readonly riseSetCurves: string
-	// Totality path, as closed polygon rings.
-	readonly totalityPath: string
-	// Annularity path, as closed polygon rings (empty string for a pure total eclipse).
-	readonly annularityPath: string
 	// Projected pixel coordinates of the named contact and greatest-eclipse points, when present.
 	readonly points: SolarEclipseMapPoints
 }
@@ -417,10 +377,7 @@ export function intermediateGreatCircle(a: GeoPoint, b: GeoPoint, fraction: numb
 	return interpolateGreatCirclePoint(a, b, clamp(fraction, 0, 1))
 }
 
-function centralLinePointAtJulianDay(pbe: PolynomialBesselianElements, jd: number) {
-	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-	return projectFundamentalPoint(be, be.x, be.y)
-}
+// A. BESSELIAN ELEMENTS
 
 // Besselian element positions at one time, without the velocity derivatives that only the curve
 // solver needs. Projection, contact and rise/set paths read only these fields.
@@ -491,6 +448,10 @@ function evaluateBesselianSample(pbe: PolynomialBesselianElements, time: Time): 
 	}
 }
 
+function besselianSampleAtJulianDay(pbe: PolynomialBesselianElements, jd: number) {
+	return evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
+}
+
 // Evaluates polynomial Besselian elements at one time, including velocity derivatives.
 export function evaluateBesselian(pbe: PolynomialBesselianElements, time: Time): InstantBesselianElements {
 	const t = timeSubtract(time, pbe.time0) / pbe.stepDays
@@ -557,18 +518,32 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 	}
 }
 
-function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): InstantBesselianElements {
+// Computes instantaneous Besselian elements from one Sun and Moon position sample, following the
+// Astrarium cone geometry: the shadow axis is the Sun-Moon direction, the cone half-angles come from
+// sinF1 = (rSun + rMoon) / |Sun - Moon| and sinF2 = (rSun - rMoon) / |Sun - Moon|, the cone vertices
+// sit at zv1 = zm + rMoon / sinF1 and zv2 = zm - rMoon / sinF2 along the axis, and the fundamental
+// plane radii are l1 = zv1 * tanF1 and l2 = zv2 * tanF2. The NASA k1/k2 lunar radii are kept for the
+// penumbral/umbral cones respectively (an intentional refinement over Astrarium's single radius).
+export function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): InstantBesselianElements {
 	const projection = besselianShadowProjection(sample)
 	const deltaT = sample.deltaT ?? 0
-	const sunSemidiameter = Math.asin(clamp(SUN_RADIUS_EARTH_RADII / sample.sunDistance, -1, 1))
-	const moonPenumbraSemidiameter = Math.asin(clamp(MOON_RADIUS_PENUMBRA_EARTH_RADII / sample.moonDistance, -1, 1))
-	const moonUmbraSemidiameter = Math.asin(clamp(MOON_RADIUS_UMBRA_EARTH_RADII / sample.moonDistance, -1, 1))
-	const moonParallax = Math.asin(clamp(1 / sample.moonDistance, -1, 1))
-	const invParallax = moonParallax === 0 ? 0 : 1 / moonParallax
 	const sunMoonDistance = projection.sunMoonDistance
-	const invSunMoonDistance = sunMoonDistance > 0 ? 1 / sunMoonDistance : 0
-	const l1 = (sunSemidiameter + moonPenumbraSemidiameter) * invParallax
-	const l2 = (sunSemidiameter - moonUmbraSemidiameter) * invParallax
+	let tanF1 = 0
+	let tanF2 = 0
+	let l1 = 0
+	let l2 = 0
+
+	if (sunMoonDistance > 0) {
+		const sinF1 = (SUN_RADIUS_EARTH_RADII + MOON_RADIUS_PENUMBRA_EARTH_RADII) / sunMoonDistance
+		const sinF2 = (SUN_RADIUS_EARTH_RADII - MOON_RADIUS_UMBRA_EARTH_RADII) / sunMoonDistance
+		tanF1 = Math.tan(Math.asin(clamp(sinF1, -1, 1)))
+		tanF2 = Math.tan(Math.asin(clamp(sinF2, -1, 1)))
+		const zv1 = projection.zm + MOON_RADIUS_PENUMBRA_EARTH_RADII / sinF1
+		const zv2 = projection.zm - MOON_RADIUS_UMBRA_EARTH_RADII / sinF2
+		l1 = zv1 * tanF1
+		l2 = zv2 * tanF2
+	}
+
 	const siderealTime = timeShift(time, -deltaT / DAYSEC)
 	const gmst = normalizeAngle(280.46061837 * DEG2RAD + 360.98564736629 * DEG2RAD * (siderealTime.day - J2000 + siderealTime.fraction))
 	const mu = normalizeAngle(gmst - projection.rightAscension)
@@ -585,14 +560,16 @@ function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): Insta
 		mu,
 		dx: 0,
 		dy: 0,
-		tanF1: (SUN_RADIUS_EARTH_RADII + MOON_RADIUS_PENUMBRA_EARTH_RADII) * invSunMoonDistance,
-		tanF2: (SUN_RADIUS_EARTH_RADII - MOON_RADIUS_UMBRA_EARTH_RADII) * invSunMoonDistance,
+		tanF1,
+		tanF2,
 	}
 }
 
+// Projects the Moon onto the fundamental plane of the Sun-Moon shadow axis, returning the axis
+// right ascension/declination, the Moon's (x, y) in the plane and its zm coordinate along the axis.
 function besselianShadowProjection(sample: SunMoonPosition) {
 	if (!(sample.sunDistance > 0) || !(sample.moonDistance > 0)) {
-		return { x: 0, y: 0, rightAscension: sample.sunRightAscension, declination: sample.sunDeclination, sunMoonDistance: 0 }
+		return { x: 0, y: 0, zm: 0, rightAscension: sample.sunRightAscension, declination: sample.sunDeclination, sunMoonDistance: 0 }
 	}
 
 	const sun = eraS2p(sample.sunRightAscension, sample.sunDeclination, sample.sunDistance)
@@ -601,7 +578,7 @@ function besselianShadowProjection(sample: SunMoonPosition) {
 	const sunMoonDistance = vecLength(sunMinusMoon)
 
 	if (!(sunMoonDistance > 0) || !Number.isFinite(sunMoonDistance)) {
-		return { x: 0, y: 0, rightAscension: sample.sunRightAscension, declination: sample.sunDeclination, sunMoonDistance: 0 }
+		return { x: 0, y: 0, zm: 0, rightAscension: sample.sunRightAscension, declination: sample.sunDeclination, sunMoonDistance: 0 }
 	}
 
 	const axis = vecNormalizeMut(sunMinusMoon)
@@ -613,21 +590,25 @@ function besselianShadowProjection(sample: SunMoonPosition) {
 	const cosD = Math.cos(declination)
 	const east = [-sinA, cosA, 0] as const
 	const north = [-cosA * sinD, -sinA * sinD, cosD] as const
-	const zeta = vecDot(moon, axis)
-	const foot = [moon[0] - zeta * axis[0], moon[1] - zeta * axis[1], moon[2] - zeta * axis[2]] as const
+	const zm = vecDot(moon, axis)
+	const foot = [moon[0] - zm * axis[0], moon[1] - zm * axis[1], moon[2] - zm * axis[2]] as const
 
 	return {
 		x: vecDot(foot, east),
 		y: vecDot(foot, north),
+		zm,
 		rightAscension,
 		declination,
 		sunMoonDistance,
 	}
 }
 
-// Computes the flattening scale for the Earth-limb ellipse in the fundamental plane.
-function earthLimbOmega(be: Pick<BesselianSample, 'd'>) {
-	const cosD = Math.cos(be.d)
+// B. PROJECTION AND EARTH GEOMETRY
+
+// Computes the flattening scale for the Earth-limb ellipse in the fundamental plane:
+// the limb is x^2 + (omega*y)^2 = 1 with omega = 1 / sqrt(1 - e^2 cos^2 d).
+export function earthLimbOmega(d: Angle) {
+	const cosD = Math.cos(d)
 	return 1 / Math.sqrt(1 - EARTH_E2 * cosD * cosD)
 }
 
@@ -635,46 +616,28 @@ function deltaTLongitudeCorrection(elements: { readonly deltaT: number; readonly
 	return elements.deltaTLongitudeCorrection ?? DELTA_T_LONGITUDE_FACTOR * elements.deltaT
 }
 
-// Finds the closest point on the oblate Earth limb x² + (omega*y)² = 1 and returns
-// its signed Euclidean distance from the supplied fundamental-plane point.
-function closestEarthLimbPoint(be: Pick<BesselianSample, 'd'>, x: number, y: number) {
-	const omega = earthLimbOmega(be)
-	const a = 1
-	const b = 1 / omega
-	let theta = Math.atan2(y / b, x / a)
-
-	if (!Number.isFinite(theta)) theta = PIOVERTWO
-	else if (Math.hypot(x / a, y / b) < 1e-15) theta = PIOVERTWO
-
-	for (let iteration = 0; iteration < 12; iteration++) {
-		const sinTheta = Math.sin(theta)
-		const cosTheta = Math.cos(theta)
-		// Newton solve of d/dθ[(a*cosθ-x)² + (b*sinθ-y)²] = 0.
-		const f = (b * b - a * a) * sinTheta * cosTheta + a * x * sinTheta - b * y * cosTheta
-		const df = (b * b - a * a) * (cosTheta * cosTheta - sinTheta * sinTheta) + a * x * cosTheta + b * y * sinTheta
-
-		if (df === 0) break
-
-		const delta = f / df
-		theta -= delta
-		if (Math.abs(delta) < 1e-14) break
-	}
-
-	const limbX = a * Math.cos(theta)
-	const limbY = b * Math.sin(theta)
-	const distance = Math.hypot(x - limbX, y - limbY)
-	const outside = x * x + y * y * omega * omega >= 1
-
-	return { x: limbX, y: limbY, signedDistance: outside ? distance : -distance }
+// Single source of truth for the hour-angle -> longitude conversion. The project uses east-positive
+// longitude, so lambda = H - mu + correction, where the correction is 0.00417807 deg per second of
+// Delta T in radians (Astrarium's west-positive form is lambda = mu - H - correction). The sign is
+// pinned by tests against NASA eclipse path tables and the subsolar point.
+export function longitudeFromHourAngle(hourAngle: Angle, mu: Angle, correction: Angle): Angle {
+	return normalizePI(hourAngle - mu + correction)
 }
 
-// Projects one fundamental-plane point to geographic longitude and latitude.
+// Inverse of longitudeFromHourAngle: local hour angle of the shadow axis at an east-positive longitude.
+export function hourAngleFromLongitude(longitude: Angle, mu: Angle, correction: Angle): Angle {
+	return longitude + mu - correction
+}
+
+// Projects one fundamental-plane point to geographic longitude and latitude. This is the single
+// source of truth for the fundamental plane -> geographic conversion: every contact, curve and
+// rise/set point goes through it. Points outside the Earth limb are clamped onto it.
 export function projectFundamentalPoint(be: BesselianSample, x: number, y: number): GeoPoint | undefined {
 	if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined
 
 	const sinD = Math.sin(be.d)
 	const cosD = Math.cos(be.d)
-	const omega = earthLimbOmega(be)
+	const omega = earthLimbOmega(be.d)
 	let px = x
 	let y1 = omega * y
 	const b1 = omega * sinD
@@ -689,15 +652,17 @@ export function projectFundamentalPoint(be: BesselianSample, x: number, y: numbe
 	}
 
 	const B = Math.sqrt(bSquared)
-	const H = normalizeAngle(Math.atan2(px, B * b2 - y1 * b1))
+	const H = Math.atan2(px, B * b2 - y1 * b1)
 	const phi1 = Math.asin(clamp(B * b1 + y1 * b2, -1, 1))
 	const lat = Math.atan(INV_F_CONST_APPROX * Math.tan(phi1))
-	const lon = H - be.mu + deltaTLongitudeCorrection(be)
+	const lon = longitudeFromHourAngle(H, be.mu, deltaTLongitudeCorrection(be))
 
 	if (!Number.isFinite(lon) || !Number.isFinite(lat)) return undefined
 
-	return { x: normalizePI(lon), y: lat, jd: toJulianDay(be.time) }
+	return { x: lon, y: lat, jd: toJulianDay(be.time) }
 }
+
+// C. CONTACTS AND CENTRAL ENDPOINTS
 
 const BISECT_ROOT_OPTIONS: RootFindingOptions = { tolerance: CONTACT_TOLERANCE_DAYS }
 
@@ -709,125 +674,143 @@ function bisectRoot(f: (x: number) => number, min: number, max: number) {
 	}
 }
 
-// Finds P1/P2/P3/P4 penumbral contact points.
-export function findPenumbraContactPoints(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions): Pick<SolarEclipseContactPoints, 'P1' | 'P2' | 'P3' | 'P4'> {
-	const maximumJulianDay = toJulianDay(pbe.maximumTime)
-	const searchSpanDays = contactSearchSpanDays(options)
-	const from = maximumJulianDay - searchSpanDays
-	const to = maximumJulianDay + searchSpanDays
-
-	// Penumbral contacts occur when the penumbral shadow circle is tangent to the
-	// flattened Earth limb, not to a unit circle centered at the geocenter.
-	function external(jd: number) {
-		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-		return closestEarthLimbPoint(be, be.x, be.y).signedDistance - be.l1
-	}
-
-	function internal(jd: number) {
-		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-		return closestEarthLimbPoint(be, be.x, be.y).signedDistance + be.l1
-	}
-
-	return {
-		P1: projectContactRoot(pbe, bisectRoot(external, from, maximumJulianDay)),
-		P2: projectContactRoot(pbe, bisectRoot(internal, from, maximumJulianDay)),
-		P3: projectContactRoot(pbe, bisectRoot(internal, maximumJulianDay, to)),
-		P4: projectContactRoot(pbe, bisectRoot(external, maximumJulianDay, to)),
-	}
-}
-
-// Finds U1/U2/U3/U4 umbral contact points: the instants the umbral shadow cone is tangent to the
-// flattened Earth limb. U1 and U4 are the first and last external tangencies, where the umbra just
-// touches Earth and the total or annular eclipse begins and ends; U2 and U3 are the first and last
-// internal tangencies, where the umbra lies wholly on Earth. They are left undefined when the umbra
-// never reaches Earth (a partial eclipse), as the tangency roots then do not exist.
-export function findUmbraContactPoints(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions): Pick<SolarEclipseContactPoints, 'U1' | 'U2' | 'U3' | 'U4'> {
-	const maximumJulianDay = toJulianDay(pbe.maximumTime)
-	const searchSpanDays = contactSearchSpanDays(options)
-	const from = maximumJulianDay - searchSpanDays
-	const to = maximumJulianDay + searchSpanDays
-
-	// The umbral shadow radius on the fundamental plane is |l2| (l2 is negative for a total eclipse and
-	// positive for an annular one), tangent to the flattened Earth limb just like the penumbra's l1.
-	function external(jd: number) {
-		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-		return closestEarthLimbPoint(be, be.x, be.y).signedDistance - Math.abs(be.l2)
-	}
-
-	function internal(jd: number) {
-		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-		return closestEarthLimbPoint(be, be.x, be.y).signedDistance + Math.abs(be.l2)
-	}
-
-	return {
-		U1: projectContactRoot(pbe, bisectRoot(external, from, maximumJulianDay)),
-		U2: projectContactRoot(pbe, bisectRoot(internal, from, maximumJulianDay)),
-		U3: projectContactRoot(pbe, bisectRoot(internal, maximumJulianDay, to)),
-		U4: projectContactRoot(pbe, bisectRoot(external, maximumJulianDay, to)),
-	}
-}
-
+// Projects a shadow contact instant: the contact happens on the unit Earth limb along the direction
+// of the shadow axis, so the projected point is (cos theta, sin theta) with theta = atan2(y, x).
+// Earth flattening enters only through the geographic projection, not the contact-root equation.
 function projectContactRoot(pbe: PolynomialBesselianElements, jd: number | undefined) {
 	if (jd === undefined) return undefined
 
-	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-	const limb = closestEarthLimbPoint(be, be.x, be.y)
-	return projectFundamentalPoint(be, limb.x, limb.y)
+	const be = besselianSampleAtJulianDay(pbe, jd)
+	const theta = Math.atan2(be.y, be.x)
+	return projectFundamentalPoint(be, Math.cos(theta), Math.sin(theta))
 }
 
-// Finds the greatest eclipse point.
+// Finds the four contact instants of a shadow circle of the given radius with the unit Earth limb:
+// the external roots of sqrt(x^2 + y^2) - 1 - r = 0 (first/last touch) and the internal roots of
+// sqrt(x^2 + y^2) - 1 + r = 0 (shadow wholly on Earth), bracketed around the eclipse maximum.
+function findShadowContactPoints(pbe: PolynomialBesselianElements, radius: (be: BesselianSample) => number, options?: SolarEclipseContactOptions) {
+	const maximumJulianDay = toJulianDay(pbe.maximumTime)
+	const searchSpanDays = contactSearchSpanDays(options)
+	const from = maximumJulianDay - searchSpanDays
+	const to = maximumJulianDay + searchSpanDays
+
+	function external(jd: number) {
+		const be = besselianSampleAtJulianDay(pbe, jd)
+		return Math.hypot(be.x, be.y) - 1 - radius(be)
+	}
+
+	function internal(jd: number) {
+		const be = besselianSampleAtJulianDay(pbe, jd)
+		return Math.hypot(be.x, be.y) - 1 + radius(be)
+	}
+
+	return {
+		first: projectContactRoot(pbe, bisectRoot(external, from, maximumJulianDay)),
+		firstInternal: projectContactRoot(pbe, bisectRoot(internal, from, maximumJulianDay)),
+		lastInternal: projectContactRoot(pbe, bisectRoot(internal, maximumJulianDay, to)),
+		last: projectContactRoot(pbe, bisectRoot(external, maximumJulianDay, to)),
+	}
+}
+
+// Finds the P1/P2/P3/P4 penumbral contact points: the roots of sqrt(x^2 + y^2) - 1 -+ l1 = 0,
+// external (P1/P4) and internal (P2/P3), before and after the eclipse maximum.
+export function findPenumbraContactPoints(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions): Pick<SolarEclipseContactPoints, 'P1' | 'P2' | 'P3' | 'P4'> {
+	const contacts = findShadowContactPoints(pbe, (be) => be.l1, options)
+	return { P1: contacts.first, P2: contacts.firstInternal, P3: contacts.lastInternal, P4: contacts.last }
+}
+
+// Finds the U1/U2/U3/U4 umbral/antumbral cone tangency contacts with the limb: the roots of
+// sqrt(x^2 + y^2) - 1 -+ |l2| = 0 (l2 is negative for a total eclipse, positive for an annular one).
+// They are informational markers only and never control the umbra-limit polylines.
+export function findUmbraContactPoints(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions): Pick<SolarEclipseContactPoints, 'U1' | 'U2' | 'U3' | 'U4'> {
+	const contacts = findShadowContactPoints(pbe, (be) => Math.abs(be.l2), options)
+	return { U1: contacts.first, U2: contacts.firstInternal, U3: contacts.lastInternal, U4: contacts.last }
+}
+
+// Finds the greatest eclipse point: the geographic projection of the shadow axis at maximum time.
 export function findMaximumPoint(pbe: PolynomialBesselianElements): GeoPoint | undefined {
 	const be = evaluateBesselianSample(pbe, pbe.maximumTime)
 	return projectFundamentalPoint(be, be.x, be.y)
 }
 
-// Finds one extreme endpoint of the central line.
-export function findExtremeLimitOfCentralLine(pbe: PolynomialBesselianElements, begin: boolean, options?: SolarEclipseContactOptions) {
+// Finds one extreme endpoint of the central line (C1 when begin is true, C2 otherwise): the instant
+// the shadow axis grazes the flattened Earth limb x^2 + (omega*y)^2 = 1. Primary method is the
+// Astrarium iteration on the axis position (u, v) and velocity (a, b):
+//   S = (a*v - u*b) / n, t1 = -(u*a + v*b) / n^2, t2 = sqrt(1 - S^2) / n, tau = t1 -+ t2,
+// converging when |tau| is below CONTACT_TOLERANCE_DAYS. A sign-bisection on the limb residual is
+// kept as fallback for when the iteration leaves the fitted span or S^2 exceeds 1 near tangency.
+export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, begin: boolean, options?: SolarEclipseContactOptions): GeoPoint | undefined {
+	const julianDay0 = toJulianDay(pbe.time0)
 	const maximumJulianDay = toJulianDay(pbe.maximumTime)
 	const searchSpanDays = contactSearchSpanDays(options)
-	const from = begin ? maximumJulianDay - searchSpanDays : maximumJulianDay
-	const to = begin ? maximumJulianDay : maximumJulianDay + searchSpanDays
+	let t = (maximumJulianDay - julianDay0) / pbe.stepDays
 
-	function fn(jd: number) {
-		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-		// Earth's limb in the fundamental plane is the flattened ellipse x^2 + (omega*y)^2 = 1,
-		// matching the on-Earth test used in projectFundamentalPoint.
-		const cosD = Math.cos(be.d)
-		const omega = 1 / Math.sqrt(1 - EARTH_E2 * cosD * cosD)
-		const y1 = omega * be.y
+	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
+		const be = evaluateBesselianAtT(pbe, t)
+		const omega = earthLimbOmega(be.d)
+		const u = be.x
+		const v = omega * be.y
+		const a = be.dx
+		const b = omega * be.dy
+		const nSquared = a * a + b * b
+
+		if (!(nSquared > 0) || !Number.isFinite(nSquared)) break
+
+		const n = Math.sqrt(nSquared)
+		const S = (a * v - u * b) / n
+
+		// The axis never crosses the limb (non-central eclipse) or the iteration degenerated.
+		if (!(S * S <= 1)) break
+
+		const t1 = -(u * a + v * b) / nSquared
+		const t2 = Math.sqrt(1 - S * S) / n
+		const tau = begin ? t1 - t2 : t1 + t2
+		t += tau
+
+		if (!Number.isFinite(t)) break
+		if (Math.abs(tau) * pbe.stepDays <= CONTACT_TOLERANCE_DAYS) return projectCentralAxisPoint(pbe, julianDay0 + t * pbe.stepDays)
+	}
+
+	// Fallback: bisection of the limb residual between the maximum and the search window edge.
+	function residual(jd: number) {
+		const be = besselianSampleAtJulianDay(pbe, jd)
+		const y1 = earthLimbOmega(be.d) * be.y
 		return be.x * be.x + y1 * y1 - 1
 	}
 
-	const jd = bisectRoot(fn, from, to)
+	const from = begin ? maximumJulianDay - searchSpanDays : maximumJulianDay
+	const to = begin ? maximumJulianDay : maximumJulianDay + searchSpanDays
+	const jd = bisectRoot(residual, from, to)
 
-	if (jd === undefined) return undefined
+	return jd === undefined ? undefined : projectCentralAxisPoint(pbe, jd)
+}
 
-	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
+function projectCentralAxisPoint(pbe: PolynomialBesselianElements, jd: number) {
+	const be = besselianSampleAtJulianDay(pbe, jd)
 	return projectFundamentalPoint(be, be.x, be.y)
 }
 
-// Solves one eclipse curve point at fixed longitude.
-// i = 0, G ignored -> central line
-// i = +1, G = 1 -> northern limit of total/annular path
-// i = -1, G = 1 -> southern limit of total/annular path
-// i = +1, G = 0 -> northern limit of partial eclipse
-// i = -1, G = 0 -> southern limit of partial eclipse
-// i = ±1, 0<G<1 -> equal-magnitude curve
-export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number) {
-	return solveEclipseCurvePoint(pbe, longitude, initialLatitude, i, G, 0)
-}
+// D. CURVE SOLVER
 
-function solveEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number, initialT: number): GeoPoint | undefined {
-	let t = initialT
+// Solves one eclipse curve point at fixed longitude, following Astrarium's FindEclipseCurvePoint:
+// a coupled Newton iteration on the normalized time t and the latitude phi that drives the observer
+// onto the requested magnitude curve at the instant of closest approach.
+//   longitude: east-positive longitude of the meridian to solve on, in radians.
+//   initialLatitude: latitude seed in radians.
+//   i = 0 -> central line (G ignored); i = +1/-1 -> northern/southern limit.
+//   G = 1 -> totality/annularity limit; G = 0 -> partiality limit; 0 < G < 1 -> equal-magnitude curve.
+// Atmospheric refraction (an empirical observer-lifting factor) applies only to G != 0 curves with
+// solar altitude between 0 and 10 deg, matching Astrarium. A negative solar altitude is rejected only
+// after convergence, so intermediate night-side iterates can still converge to a day-side solution.
+export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number): GeoPoint | undefined {
+	let t = 0
 	let phi = initialLatitude
 	const julianDay0 = toJulianDay(pbe.time0)
 	const longitudeCorrection = deltaTLongitudeCorrection(pbe)
-	let jd = julianDay0
 
 	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
-		jd = julianDay0 + t * pbe.stepDays
 		const be = evaluateBesselianAtT(pbe, t)
-		const H = longitude + be.mu - longitudeCorrection
+		const H = hourAngleFromLongitude(longitude, be.mu, longitudeCorrection)
 		const sinD = Math.sin(be.d)
 		const cosD = Math.cos(be.d)
 		const sinH = Math.sin(H)
@@ -842,14 +825,11 @@ function solveEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Ang
 		let zeta = rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
 		const sinh = sinD * sinPhi + cosD * cosPhi * cosH
 		const h = Math.asin(clamp(sinh, -1, 1))
-
-		if (!Number.isFinite(h) || h < 0) return undefined
-
 		const hD = h * RAD2DEG
 
-		// Empirical horizon-refraction correction that lifts the observer; it applies to any
-		// curve whose point lies near the horizon, regardless of the limit family.
-		if (hD <= 10) {
+		// Empirical horizon-refraction correction that lifts the observer, applied only to
+		// totality/annularity and equal-magnitude curves near the horizon (not to G = 0 curves).
+		if (G !== 0 && hD >= 0 && hD <= 10) {
 			const sigma = 1.000012 + 0.0002282559 * Math.exp(-0.5035747 * hD)
 			ksi *= sigma
 			eta *= sigma
@@ -895,113 +875,59 @@ function solveEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Ang
 
 		if (!Number.isFinite(t) || !Number.isFinite(phi) || Math.abs(phi) > PIOVERTWO) return undefined
 		if (Math.abs(tau) < SOLVER_TOLERANCE && Math.abs(deltaPhi) < SOLVER_TOLERANCE * DEG2RAD) {
-			return { x: normalizePI(longitude), y: phi, jd }
+			// Reject only after convergence: the curve point must lie on the sunlit hemisphere.
+			if (h < 0) return undefined
+			return { x: normalizePI(longitude), y: phi, jd: julianDay0 + t * pbe.stepDays }
 		}
 	}
 
 	return undefined
 }
 
-// Finds a drawable eclipse curve for the selected limit family. When the time-sampled central
-// line is already available it can be supplied to avoid recomputing it for umbral seeding.
-export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: SolarEclipseCurveOptions = {}, centerLineSamples?: readonly GeoPoint[]): readonly GeoPoint[] {
-	// The central line is fully described by its time parametrization, whose adaptive subdivision
-	// already enforces maxAngularStep, so the meridian scan below is only needed for the limits.
-	if (i === 0) return centerLineSamples ?? sampleCentralLineByTime(pbe, options)
+// Traces one eclipse curve family across longitude, following Astrarium's tracing model: the scan
+// runs from -PI to +PI with two latitude seeds (the equator and the near-pole on the shadow's side),
+// preferring continuation from the previous solution on each seed track. Existence transitions are
+// refined by longitude bisection and gaps wider than maxAngularStep are densified by solving at
+// intermediate longitudes. The collected points are deduplicated and ordered by Julian Day (each
+// instant maps to a single point on these time-parametrized curves); disconnected stretches are NOT
+// joined here, so callers can split them with splitDisconnectedPolylines.
+//   i = 0 -> central line; i = +1/-1 -> northern/southern limit.
+//   G = 1 -> totality/annularity limit; G = 0 -> partiality limit.
+export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: SolarEclipseCurveOptions = {}): readonly GeoPoint[] {
+	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
+	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
+	const seeds = [0, Math.sign(pbe.y[0] || 1) * SEED_POLE_LATITUDE] as const
+	const points: GeoPoint[] = []
+	const previousBySeed: (GeoPoint | undefined)[] = [undefined, undefined]
 
-	const points: GeoPoint[] = findCentralSeededCurvePoints(pbe, i, G, options, centerLineSamples)
+	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
+		const lon = Math.min(longitude, PI)
 
-	// The umbral limits (G = 1) are traced robustly by the geometric central-line seeding above and,
-	// for non-central eclipses, by the time-seeded fallback in computeSolarEclipseMapGeometry. The
-	// meridian Newton scan below is reserved for the other magnitude curves; running it for the umbra
-	// only sprinkles sparse, partially converged points over a tiny path and pre-empts that fallback.
-	if (G !== 1) {
-		const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
-		const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
-		const seeds = [0, Math.sign(pbe.y[0] || 1) * (89.9 * DEG2RAD)] as const
-		const previousBySeed: (GeoPoint | undefined)[] = [undefined, undefined]
+		for (let seedIndex = 0; seedIndex < seeds.length; seedIndex++) {
+			const previous = previousBySeed[seedIndex]
+			// Continuation from the previous latitude keeps the Newton iteration on the same branch;
+			// when it fails (or there is no previous point) retry from the fixed seed.
+			let point = previous && findEclipseCurvePoint(pbe, lon, previous.y, i, G)
+			point ??= findEclipseCurvePoint(pbe, lon, seeds[seedIndex], i, G)
 
-		for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
-			const lon = Math.min(longitude, PI)
+			if (previous && !point) pushDistinct(points, refineCurveBoundary(pbe, previous.x, lon, previous.y, true, i, G))
+			else if (!previous && point && lon > -PI) pushDistinct(points, refineCurveBoundary(pbe, lon - longitudeStep, lon, point.y, false, i, G))
 
-			for (let seedIndex = 0; seedIndex < seeds.length; seedIndex++) {
-				const previousSeed = previousBySeed[seedIndex]
-				const seed = previousSeed ? previousSeed.y : seeds[seedIndex]
-				const point = findEclipseCurvePoint(pbe, lon, seed, i, G)
-				const previous = previousBySeed[seedIndex]
-
-				if (previous && !point) pushDistinct(points, refineCurveBoundary(pbe, previous.x, lon, previous.y, true, i, G))
-				else if (!previous && point && lon > -PI) pushDistinct(points, refineCurveBoundary(pbe, lon - longitudeStep, lon, point.y, false, i, G))
-
-				if (previous && point) appendRefinedSegment(points, pbe, previous, point, i, G, maxAngularStep)
-				pushDistinct(points, point)
-				previousBySeed[seedIndex] = point
-			}
+			if (previous && point) appendRefinedSegment(points, pbe, previous, point, i, G, maxAngularStep)
+			pushDistinct(points, point)
+			previousBySeed[seedIndex] = point
 		}
 	}
 
 	return orderCurvePoints(deduplicatePoints(points))
 }
 
-// Solves the partial-eclipse (penumbra, G = 0) limit point at one longitude, preferring continuation
-// from the previously found latitude and otherwise sweeping the mid-latitude acquisition seeds.
-function solvePartialLimitAtLongitude(pbe: PolynomialBesselianElements, longitude: Angle, previous: GeoPoint | undefined, i: -1 | 1) {
-	if (previous) {
-		const continued = findEclipseCurvePoint(pbe, longitude, previous.y, i, 0)
-		if (continued) return continued
-	}
-
-	for (const seed of PARTIAL_LIMIT_LATITUDE_SEEDS) {
-		const point = findEclipseCurvePoint(pbe, longitude, seed, i, 0)
-		if (point) return point
-	}
-
-	return undefined
-}
-
-// Returns a curve's two endpoints ordered by ascending time (earliest first), falling back to
-// ascending latitude when either endpoint lacks a Julian Day. The penumbral-limit extremes are named
-// by the eclipse chronology (N1/S1 begin, N2/S2 end), matching the EclipseWise/Espenak convention.
-function endpointsByAscendingTime(curve: readonly GeoPoint[]): [GeoPoint, GeoPoint] {
-	const first = curve[0]
-	const last = curve.at(-1)!
-	if (first.jd !== undefined && last.jd !== undefined) return first.jd <= last.jd ? [first, last] : [last, first]
-	return first.y <= last.y ? [first, last] : [last, first]
-}
-
-// Finds the northern (i = +1) or southern (i = -1) limit of the partial eclipse, the curve where the
-// penumbral cone edge is tangent to the surface with the Sun above the horizon (magnitude 0). It uses
-// the correctly-scaled Newton solver and a meridian scan with continuation, mirroring findCurvePoints
-// but with partial-limit seeding. The collected points are chained by proximity so the curve stays
-// continuous across folds at its turning points and across the antimeridian, where neither longitude
-// nor time ordering stays monotonic.
-export function findPartialEclipseLimit(pbe: PolynomialBesselianElements, i: -1 | 1, options: SolarEclipseCurveOptions = {}): readonly GeoPoint[] {
-	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
-	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
-	const points: GeoPoint[] = []
-	let previous: GeoPoint | undefined = undefined
-
-	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
-		const lon = Math.min(longitude, PI)
-		const point = solvePartialLimitAtLongitude(pbe, lon, previous, i)
-
-		// Refine the longitudes where the limit appears or disappears so the arc ends on Earth rather
-		// than at the last coarse sample that happened to converge.
-		if (previous && !point) pushDistinct(points, refineCurveBoundary(pbe, previous.x, lon, previous.y, true, i, 0))
-		else if (!previous && point && lon > -PI) pushDistinct(points, refineCurveBoundary(pbe, lon - longitudeStep, lon, point.y, false, i, 0))
-
-		if (previous && point) appendRefinedSegment(points, pbe, previous, point, i, 0, maxAngularStep)
-		pushDistinct(points, point)
-		previous = point
-	}
-
-	return chainCurvePointsByProximity(deduplicatePoints(points))
-}
-
+// Refines the longitude where a curve family appears or disappears by bisection between the last
+// longitude where the solver converged and the first where it did not (Astrarium's FindFunctionEnd).
 function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, seed: Angle, validLow: boolean, i: -1 | 0 | 1, G: number) {
 	let low = aLon
 	let high = bLon
-	let best: GeoPoint | undefined = undefined
+	let best: GeoPoint | undefined
 
 	for (let step = 0; step < BOUNDARY_REFINEMENT_STEPS; step++) {
 		const mid = (low + high) * 0.5
@@ -1023,184 +949,23 @@ function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon
 	return best
 }
 
-function appendCentralLineTimeSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, maxAngularStep: Angle, depth = 0) {
-	if (a.jd === undefined || b.jd === undefined || depth >= 12 || angularDistance(a, b) <= maxAngularStep) return
+// Maximum recursion depth when densifying a curve gap: 2^8 interior points per scan interval.
+const SEGMENT_REFINEMENT_MAX_DEPTH = 8
 
-	const mid = centralLinePointAtJulianDay(pbe, (a.jd + b.jd) * 0.5)
+// Inserts solved points at intermediate longitudes while two consecutive curve points are farther
+// apart than maxAngularStep, by recursive bisection: each midpoint is seeded from the
+// great-circle-interpolated coordinates and solved, so the inserted points are physical solutions
+// (never interpolated artifacts) and every emitted step honors maxAngularStep up to the depth limit.
+function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, depth = 0) {
+	if (depth >= SEGMENT_REFINEMENT_MAX_DEPTH || !(angularDistance(a, b) > maxAngularStep)) return
+
+	const intermediate = interpolateGreatCirclePoint(a, b, 0.5)
+	const mid = findEclipseCurvePoint(pbe, intermediate.x, intermediate.y, i, G)
 	if (!mid) return
 
-	appendCentralLineTimeSegment(points, pbe, a, mid, maxAngularStep, depth + 1)
+	appendRefinedSegment(points, pbe, a, mid, i, G, maxAngularStep, depth + 1)
 	pushDistinct(points, mid)
-	appendCentralLineTimeSegment(points, pbe, mid, b, maxAngularStep, depth + 1)
-}
-
-function sampleCentralLineByTime(pbe: PolynomialBesselianElements, options: SolarEclipseCurveOptions) {
-	const begin = findExtremeLimitOfCentralLine(pbe, true, options)
-	const end = findExtremeLimitOfCentralLine(pbe, false, options)
-	if (!begin || !end) return []
-
-	const points: GeoPoint[] = []
-	pushDistinct(points, begin)
-	appendCentralLineTimeSegment(points, pbe, begin, end, validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP))
-	pushDistinct(points, end)
-
-	return orderCurvePoints(deduplicatePoints(points))
-}
-
-function findCentralSeededCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: SolarEclipseCurveOptions, centerLineSamples?: readonly GeoPoint[]) {
-	if (i === 0 || G !== 1) return []
-
-	// Solve the umbral limit at each central-line time sample, seeding the Newton iteration from the
-	// central point itself (fixed at its meridian). Seeding from the instantaneous shadow-footprint
-	// edge diverges near the path ends, where the grazing footprint elongates far from the
-	// perpendicular path limit and the solver locks onto that distant, wrong-side tip.
-	const centerLine = centerLineSamples ?? sampleCentralLineByTime(pbe, options)
-	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
-	const points: GeoPoint[] = []
-	const julianDay0 = toJulianDay(pbe.time0)
-
-	function solveAtCenter(center: GeoPoint) {
-		if (center.jd === undefined) return undefined
-		const point = solveEclipseCurvePoint(pbe, center.x, center.y, i, G, (center.jd - julianDay0) / pbe.stepDays)
-		pushDistinct(points, point)
-		return point
-	}
-
-	// Recursively subdivide the central-line time interval while the limit points solved at its ends are
-	// farther apart than maxAngularStep, so a fast-moving limit (e.g. a circumpolar path whose limit
-	// swings tens of degrees between two adjacent central samples) is traced as a smooth curve instead
-	// of a straight chord. The central samples bound only the central line's spacing, not the limit's.
-	function densify(aJd: number, a: GeoPoint, bJd: number, b: GeoPoint, depth: number) {
-		if (depth >= UMBRA_LIMIT_REFINE_MAX_DEPTH || angularDistance(a, b) <= maxAngularStep) return
-		const midJd = (aJd + bJd) * 0.5
-		const center = centralLinePointAtJulianDay(pbe, midJd)
-		const mid = center && solveAtCenter(center)
-		if (!mid) return
-		densify(aJd, a, midJd, mid, depth + 1)
-		densify(midJd, mid, bJd, b, depth + 1)
-	}
-
-	let previous: GeoPoint | undefined
-	let previousJd: number | undefined
-	for (const center of centerLine) {
-		if (center.jd === undefined) continue
-		const point = solveAtCenter(center)
-		if (!point) continue
-		if (previous && previousJd !== undefined) densify(previousJd, previous, center.jd, point, 0)
-		previous = point
-		previousJd = center.jd
-	}
-
-	// One edge of the path stays above the horizon past the last coarse central sample near C1/C2, so
-	// subdivide the first and last central intervals in time and solve there, extending the limit as
-	// close to the endpoints as it remains visible instead of stopping at the last coarse sample.
-	if (centerLine.length >= 2) {
-		for (const [endIndex, neighborIndex] of [
-			[0, 1],
-			[centerLine.length - 1, centerLine.length - 2],
-		] as const) {
-			const endpoint = centerLine[endIndex]
-			const neighbor = centerLine[neighborIndex]
-			if (endpoint.jd === undefined || neighbor.jd === undefined) continue
-
-			for (let step = 1; step < UMBRA_LIMIT_END_REFINEMENT_STEPS; step++) {
-				const jd = endpoint.jd + (neighbor.jd - endpoint.jd) * (step / UMBRA_LIMIT_END_REFINEMENT_STEPS)
-				const center = centralLinePointAtJulianDay(pbe, jd)
-				if (center) solveAtCenter(center)
-			}
-		}
-	}
-
-	return points
-}
-
-function findTimeSeededShadowLimitPoints(pbe: PolynomialBesselianElements, contacts: Pick<SolarEclipseContactPoints, 'P1' | 'P4'>, i: -1 | 1, options: SolarEclipseCurveOptions) {
-	if (contacts.P1?.jd === undefined || contacts.P4?.jd === undefined || contacts.P4.jd < contacts.P1.jd) return []
-
-	const points: GeoPoint[] = []
-	const stepDays = pbe.stepDays / 24
-	const maximumJulianDay = toJulianDay(pbe.maximumTime)
-
-	for (let jd = contacts.P1.jd; jd <= contacts.P4.jd + stepDays * 0.5; jd += stepDays) {
-		const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, Math.min(jd, contacts.P4.jd)))
-		pushDistinct(points, projectShadowLimitPoint(be, i))
-	}
-
-	if (maximumJulianDay >= contacts.P1.jd && maximumJulianDay <= contacts.P4.jd) {
-		const be = evaluateBesselianSample(pbe, pbe.maximumTime)
-		pushDistinct(points, projectShadowLimitPoint(be, i))
-	}
-
-	return orderCurvePoints(deduplicatePoints(points))
-}
-
-function projectShadowLimitPoint(be: BesselianSample, i: -1 | 1) {
-	const radius = shadowLimitRadius(be, undefined)
-	if (!(radius > 0) || !Number.isFinite(radius)) return undefined
-
-	let best: GeoPoint | undefined = undefined
-
-	for (let index = 0; index < 32; index++) {
-		const angle = (TAU * index) / 32
-		const cosAngle = Math.cos(angle)
-		const sinAngle = Math.sin(angle)
-		let currentRadius = radius
-		let point: GeoPoint | undefined = undefined
-
-		for (let iteration = 0; iteration < 8; iteration++) {
-			const x = be.x + currentRadius * cosAngle
-			const y = be.y + currentRadius * sinAngle
-			if (x * x + y * y > 1 + 1e-12) {
-				point = undefined
-				break
-			}
-
-			point = projectFundamentalPoint(be, x, y) ?? undefined
-			if (!finitePoint(point)) break
-
-			const nextRadius = shadowLimitRadius(be, point)
-			if (!Number.isFinite(nextRadius) || nextRadius <= 0) {
-				point = undefined
-				break
-			}
-			if (Math.abs(nextRadius - currentRadius) < 1e-9) break
-			currentRadius = nextRadius
-		}
-
-		if (!finitePoint(point)) continue
-		if (!best || (i > 0 ? point.y > best.y : point.y < best.y)) best = point
-	}
-
-	return best
-}
-
-function shadowLimitRadius(be: BesselianSample, point: GeoPoint | undefined) {
-	return Math.abs(be.l2 - (point ? surfaceZeta(be, point) : 0) * be.tanF2)
-}
-
-function surfaceZeta(be: BesselianSample, point: GeoPoint) {
-	const H = point.x + be.mu - deltaTLongitudeCorrection(be)
-	const U = Math.atan(F_CONST * Math.tan(point.y))
-	const rhoSinPhi = F_CONST * Math.sin(U)
-	const rhoCosPhi = Math.cos(U)
-	const sinD = Math.sin(be.d)
-	const cosD = Math.cos(be.d)
-	const cosH = Math.cos(H)
-
-	return rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
-}
-
-function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle) {
-	const distance = angularDistance(a, b)
-	if (!(distance > maxAngularStep)) return
-
-	const steps = Math.min(16, Math.ceil(distance / maxAngularStep))
-	for (let step = 1; step < steps; step++) {
-		const intermediate = interpolateGreatCirclePoint(a, b, step / steps)
-		// Seed from the great-circle-interpolated latitude (closer to the true curve point than
-		// the segment's start latitude) to keep convergence stable across steep latitude changes.
-		pushDistinct(points, findEclipseCurvePoint(pbe, intermediate.x, intermediate.y, i, G))
-	}
+	appendRefinedSegment(points, pbe, mid, b, i, G, maxAngularStep, depth + 1)
 }
 
 function deduplicatePoints(points: readonly GeoPoint[]) {
@@ -1215,10 +980,8 @@ function orderCurvePoints(points: GeoPoint[]): readonly GeoPoint[] {
 	if (points.every((point) => point.jd !== undefined)) {
 		points.sort((a, b) => a.jd! - b.jd!)
 
-		// Each instant maps to a single location on these time-parametrized curves, so points sharing a
-		// Julian Day are the same place reached twice (e.g. by the geometric central-line seeding and
-		// the meridian scan, which can land microscopically apart). Keep one per instant so the curve
-		// stays strictly increasing in time with no zero-length steps.
+		// Each instant maps to a single location on these time-parametrized curves, so points sharing
+		// a Julian Day are the same place reached from different seeds and are collapsed to one.
 		const ordered: GeoPoint[] = []
 		for (const point of points) if (ordered.length === 0 || point.jd! - ordered.at(-1)!.jd! > CURVE_TIME_EPSILON_DAYS) ordered.push(point)
 		return ordered
@@ -1228,66 +991,31 @@ function orderCurvePoints(points: GeoPoint[]): readonly GeoPoint[] {
 	return deduplicatePoints(points)
 }
 
-// Greedy nearest-neighbor walk over the remaining points, starting at startIndex.
-function greedyNearestNeighborChain(points: readonly GeoPoint[], startIndex: number): GeoPoint[] {
-	const remaining = points.slice()
-	const ordered: GeoPoint[] = [remaining.splice(startIndex, 1)[0]]
+// Splits a curve into separate polylines at genuine discontinuities: wherever two consecutive points
+// are farther apart than maxGap the curve has left the sunlit hemisphere (or the solver family is
+// physically disconnected there), so the pieces must not be joined by a straight chord. Pieces with
+// fewer than two points are dropped as undrawable.
+export function splitDisconnectedPolylines(points: readonly GeoPoint[], maxGap: Angle): GeoPoint[][] {
+	if (points.length === 0) return []
 
-	while (remaining.length > 0) {
-		const last = ordered.at(-1)!
-		let bestIndex = 0
-		let bestDistance = Number.POSITIVE_INFINITY
-
-		for (let i = 0; i < remaining.length; i++) {
-			const distance = angularDistance(last, remaining[i])
-			if (distance < bestDistance) {
-				bestDistance = distance
-				bestIndex = i
-			}
-		}
-
-		ordered.push(remaining.splice(bestIndex, 1)[0])
-	}
-
-	return ordered
-}
-
-// Orders scattered points along an open curve by proximity, robust to folds and antimeridian
-// crossings where neither longitude nor time ordering stays monotonic. A first greedy walk from an
-// arbitrary point ends at a genuine endpoint of the curve; walking again from that endpoint then
-// traces the curve cleanly end to end.
-function chainCurvePointsByProximity(points: readonly GeoPoint[]): readonly GeoPoint[] {
-	if (points.length <= 2) return points
-
-	const endpoint = greedyNearestNeighborChain(points, 0).at(-1)!
-	const startIndex = points.indexOf(endpoint)
-	return greedyNearestNeighborChain(points, Math.max(0, startIndex))
-}
-
-// Breaks a time-ordered umbral limit into drawable polylines, first at genuine discontinuities (where
-// the limit leaves the sunlit hemisphere and reappears, leaving a gap far wider than the densified
-// continuous spacing) and then folding each resulting piece at its latitude apex. Without the gap split
-// a circumpolar limit would be drawn as a straight chord jumping across the discontinuity.
-function splitUmbraLimit(points: readonly GeoPoint[], maxAngularStep: Angle): GeoPoint[][] {
-	if (points.length <= 2) return splitAtMaxAbsLatitude(points)
-
-	const threshold = maxAngularStep * UMBRA_LIMIT_GAP_SPLIT_FACTOR
 	const pieces: GeoPoint[][] = []
 	let current: GeoPoint[] = [points[0]]
 
 	for (let i = 1; i < points.length; i++) {
-		if (angularDistance(points[i - 1], points[i]) > threshold) {
-			pieces.push(current)
+		if (angularDistance(points[i - 1], points[i]) > maxGap) {
+			if (current.length > 1) pieces.push(current)
 			current = []
 		}
 		current.push(points[i])
 	}
-	pieces.push(current)
 
-	return pieces.flatMap((piece) => splitAtMaxAbsLatitude(piece))
+	if (current.length > 1) pieces.push(current)
+
+	return pieces
 }
 
-// Splits a polar/circumpolar limit at its largest absolute latitude.
+// Splits a polar/circumpolar limit at its largest absolute latitude, matching Astrarium's two-piece
+// rendering of a limit that folds back over itself near a pole.
 export function splitAtMaxAbsLatitude(points: readonly GeoPoint[]): GeoPoint[][] {
 	if (points.length <= 2) return [Array.from(points)]
 
@@ -1310,6 +1038,14 @@ export function splitAtMaxAbsLatitude(points: readonly GeoPoint[]): GeoPoint[][]
 	return [points.slice(0, index + 1), points.slice(index)]
 }
 
+// Splits a raw umbra/antumbra limit into drawable polylines: first at genuine discontinuities, then
+// each piece at its latitude apex when it folds back (more than two points).
+function splitUmbraLimit(points: readonly GeoPoint[], maxAngularStep: Angle): GeoPoint[][] {
+	return splitDisconnectedPolylines(points, maxAngularStep * CURVE_GAP_SPLIT_FACTOR).flatMap((piece) => splitAtMaxAbsLatitude(piece))
+}
+
+// E. RISE/SET CURVES
+
 // Maximum recursion depth when subdividing a rise/set step in time to trace the true curve.
 const RISE_SET_REFINE_MAX_DEPTH = 10
 
@@ -1318,6 +1054,41 @@ interface RiseSetSample {
 	jd: number
 	upper: GeoPoint
 	lower: GeoPoint
+}
+
+// Finds the intersections of the Earth unit circle with a circle of the given radius centered at
+// (cx, cy) in the fundamental plane, ordered by descending y. Returns two points, one tangency
+// point, or none. All outputs lie on the unit circle, ready for projectFundamentalPoint.
+export function findCircleIntersections(cx: number, cy: number, radius: number): [number, number][] {
+	const dSquared = cx * cx + cy * cy
+
+	if (!Number.isFinite(dSquared) || !(dSquared > 0) || !Number.isFinite(radius) || radius < 0) return []
+
+	const d = Math.sqrt(dSquared)
+	// Distance from the origin to the chord of intersection, along the center direction.
+	const a = (dSquared + 1 - radius * radius) / (2 * d)
+	const hSquared = 1 - a * a
+
+	if (hSquared < 0) return []
+
+	const h = Math.sqrt(hSquared)
+	const ux = cx / d
+	const uy = cy / d
+	const first: [number, number] = [a * ux - h * uy, a * uy + h * ux]
+
+	if (h === 0) return [first]
+
+	const second: [number, number] = [a * ux + h * uy, a * uy - h * ux]
+	return first[1] >= second[1] ? [first, second] : [second, first]
+}
+
+// Projects the (up to two) points where the penumbra edge crosses the Earth's limb at one instant,
+// ordered by descending fundamental-plane y.
+function riseSetCrossings(pbe: PolynomialBesselianElements, jd: number): GeoPoint[] {
+	const be = besselianSampleAtJulianDay(pbe, jd)
+	return findCircleIntersections(be.x, be.y, Math.abs(be.l1))
+		.map(([x, y]): GeoPoint | undefined => projectFundamentalPoint(be, x, y))
+		.filter(finitePoint)
 }
 
 // Computes sunrise and sunset eclipse curves from where the penumbra edge crosses the Earth's limb.
@@ -1330,7 +1101,7 @@ interface RiseSetSample {
 export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPoint, P4: GeoPoint, optionalContacts: { P2?: GeoPoint; P3?: GeoPoint } = {}, options: SolarEclipseRiseSetCurveOptions = {}): GeoPoint[][] {
 	if (P1.jd === undefined || P4.jd === undefined || P4.jd < P1.jd) return []
 
-	const stepDays = validStep(options.step, DEFAULT_RISE_SET_STEP_SECONDS) / 86400
+	const stepDays = validStep(options.step, DEFAULT_RISE_SET_STEP_SECONDS) / DAYSEC
 	const adaptive = options.adaptive ?? true
 	const contacts = [P1, optionalContacts.P2, optionalContacts.P3, P4].filter((contact): contact is GeoPoint => finitePoint(contact) && contact.jd !== undefined)
 
@@ -1384,15 +1155,6 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 	}
 
 	return curves
-}
-
-// Projects the (up to two) points where the penumbra edge crosses the Earth's limb at one instant,
-// ordered by descending fundamental-plane y.
-function riseSetCrossings(pbe: PolynomialBesselianElements, jd: number): GeoPoint[] {
-	const be = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-	return intersectEarthLimbWithCircle(be, be.x, be.y, Math.abs(be.l1))
-		.map(([x, y]): GeoPoint | undefined => projectFundamentalPoint(be, x, y))
-		.filter(finitePoint)
 }
 
 // Builds the two branches of one phase, anchoring the cusps to the tangency contacts and densifying
@@ -1460,816 +1222,52 @@ function nearestContactByJd(jd: number | undefined, contacts: readonly GeoPoint[
 	return best
 }
 
-function intersectEarthLimbWithCircle(be: Pick<BesselianSample, 'd'>, cx: number, cy: number, radius: number): [number, number][] {
-	if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(radius) || radius < 0) return []
-
-	const omega = earthLimbOmega(be)
-	const invOmega = 1 / omega
-	const radiusSquared = radius * radius
-	const values = new Float64Array(LIMB_INTERSECTION_STEPS)
-	const step = TAU / LIMB_INTERSECTION_STEPS
-	const roots: number[] = []
-
-	function residual(theta: number) {
-		const dx = Math.cos(theta) - cx
-		const dy = Math.sin(theta) * invOmega - cy
-		return dx * dx + dy * dy - radiusSquared
-	}
-
-	function pushRoot(theta: number) {
-		const root = normalizeAngle(theta)
-		for (const existing of roots) {
-			if (Math.abs(normalizePI(root - existing)) < 1e-7) return
-		}
-		roots.push(root)
-	}
-
-	for (let i = 0; i < LIMB_INTERSECTION_STEPS; i++) values[i] = residual(i * step)
-
-	for (let i = 0; i < LIMB_INTERSECTION_STEPS; i++) {
-		const next = (i + 1) % LIMB_INTERSECTION_STEPS
-		const theta = i * step
-		const nextTheta = (i + 1) * step
-		const value = values[i]
-		const nextValue = values[next]
-
-		if (Math.abs(value) <= LIMB_INTERSECTION_TOLERANCE) pushRoot(theta)
-		if (value * nextValue < 0) pushRoot(bisectLimbIntersection(residual, theta, nextTheta, value, nextValue))
-	}
-
-	for (let i = 0; i < LIMB_INTERSECTION_STEPS; i++) {
-		const previousValue = values[(i + LIMB_INTERSECTION_STEPS - 1) % LIMB_INTERSECTION_STEPS]
-		const value = values[i]
-		const nextValue = values[(i + 1) % LIMB_INTERSECTION_STEPS]
-
-		if (value > previousValue || value > nextValue) continue
-
-		const theta = i * step
-		const minimum = minimizeLimbIntersectionResidual(residual, theta - step, theta + step)
-
-		if (minimum.value < -LIMB_INTERSECTION_TOLERANCE) {
-			const leftTheta = theta - step
-			const rightTheta = theta + step
-			const leftValue = residual(leftTheta)
-			const rightValue = residual(rightTheta)
-
-			if (leftValue * minimum.value <= 0) pushRoot(bisectLimbIntersection(residual, leftTheta, minimum.theta, leftValue, minimum.value))
-			if (minimum.value * rightValue <= 0) pushRoot(bisectLimbIntersection(residual, minimum.theta, rightTheta, minimum.value, rightValue))
-		} else if (Math.abs(minimum.value) <= LIMB_TANGENCY_TOLERANCE) {
-			pushRoot(minimum.theta)
-		}
-
-		if (value < previousValue || value < nextValue) continue
-
-		const maximum = maximizeLimbIntersectionResidual(residual, theta - step, theta + step)
-		if (Math.abs(maximum.value) <= LIMB_TANGENCY_TOLERANCE) pushRoot(maximum.theta)
-	}
-
-	const points = roots.map((theta) => [Math.cos(theta), Math.sin(theta) * invOmega] as [number, number])
-	points.sort((a, b) => b[1] - a[1] || a[0] - b[0])
-	return points
-}
-
-function bisectLimbIntersection(f: (theta: number) => number, min: number, max: number, minValue: number, maxValue: number) {
-	let a = min
-	let b = max
-	let fa = minValue
-	let fb = maxValue
-
-	if (Math.abs(fa) <= LIMB_INTERSECTION_TOLERANCE) return a
-	if (Math.abs(fb) <= LIMB_INTERSECTION_TOLERANCE) return b
-
-	for (let iteration = 0; iteration < 48; iteration++) {
-		const mid = (a + b) * 0.5
-		const fm = f(mid)
-
-		if (Math.abs(fm) <= LIMB_INTERSECTION_TOLERANCE) return mid
-		if (fa * fm <= 0) {
-			b = mid
-			fb = fm
-		} else {
-			a = mid
-			fa = fm
-		}
-	}
-
-	return Math.abs(fa) < Math.abs(fb) ? a : b
-}
-
-function minimizeLimbIntersectionResidual(f: (theta: number) => number, min: number, max: number) {
-	let a = min
-	let b = max
-
-	for (let iteration = 0; iteration < 40; iteration++) {
-		const left = a + (b - a) / 3
-		const right = b - (b - a) / 3
-
-		if (f(left) < f(right)) b = right
-		else a = left
-	}
-
-	const theta = (a + b) * 0.5
-	return { theta, value: f(theta) }
-}
-
-function maximizeLimbIntersectionResidual(f: (theta: number) => number, min: number, max: number) {
-	let a = min
-	let b = max
-
-	for (let iteration = 0; iteration < 40; iteration++) {
-		const left = a + (b - a) / 3
-		const right = b - (b - a) / 3
-
-		if (f(left) > f(right)) b = right
-		else a = left
-	}
-
-	const theta = (a + b) * 0.5
-	return { theta, value: f(theta) }
-}
-
-// Collects the Julian Day spans a time-ordered limit curve is missing from: consecutive samples more
-// than the threshold apart bracket a gap where the limit has left the sunlit hemisphere (circumpolar
-// paths). Each gap is returned as [last present instant before it, first present instant after it].
-function limitGaps(points: readonly GeoPoint[], threshold: Angle): [number, number][] {
-	const gaps: [number, number][] = []
-	let previous: GeoPoint | undefined
-
-	for (const point of points) {
-		if (point.jd === undefined) continue
-		if (previous?.jd !== undefined && angularDistance(previous, point) > threshold) gaps.push([previous.jd, point.jd])
-		previous = point
-	}
-
-	return gaps
-}
-
-// Drops a ring's trailing point when it duplicates the first; the polygon is closed at serialization time.
-function closeRing(ring: GeoPoint[]) {
-	if (ring.length > 1 && samePoint(ring[0], ring.at(-1)!)) ring.pop()
-}
-
-// Finest time subdivision (as a fraction of the gap) when tracing the umbral footprint across a gap.
-const UMBRA_GAP_BRIDGE_MIN_STEPS = 1024
-
-// Solves the umbral path limit point for branch i (+1 north, -1 south) at the fixed instant jd,
-// parametrized by time instead of longitude. It places the observer where the shadow axis is at closest
-// approach (the along-track offset vanishes) and exactly on the umbra edge (the cross-track offset equals
-// the umbra radius), the same two conditions the longitude-fixed solver enforces, so both trace the
-// identical curve and join without a kink. Being argued by time it stays single-valued and well
-// -conditioned through the curve's longitude fold near a pole, where the longitude-fixed solver is
-// degenerate and leaves the gap this fills. The seed (seedLon, seedLat) carries continuity from the
-// previous point. Refraction is omitted here (sub-0.05 deg at these solar altitudes, far below the
-// sampling step), so the bridged stretch can differ from the refraction-corrected solved stretch by that
-// negligible amount at the junctions.
-function solveTimeFixedLimitPoint(pbe: PolynomialBesselianElements, jd: number, i: -1 | 1, seedLon: Angle, seedLat: Angle): GeoPoint | undefined {
-	const t = (jd - toJulianDay(pbe.time0)) / pbe.stepDays
-	const be = evaluateBesselianAtT(pbe, t)
-	const sample = evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
-	const longitudeCorrection = deltaTLongitudeCorrection(pbe)
-	const sinD = Math.sin(be.d)
-	const cosD = Math.cos(be.d)
-	let phi = seedLat
-	let lon = seedLon
-	let result: GeoPoint | undefined
-
-	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
-		const H = lon + be.mu - longitudeCorrection
-		const sinH = Math.sin(H)
-		const cosH = Math.cos(H)
-		const U = Math.atan(F_CONST * Math.tan(phi))
-		const rhoSinPhi = F_CONST * Math.sin(U)
-		const rhoCosPhi = Math.cos(U)
-		const zeta = rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
-		// Diurnal rate of the observer's hour angle, matching the longitude-fixed solver's relative velocity.
-		const ksiPrime = rhoCosPhi * cosH * be.dmu
-		const etaPrime = rhoCosPhi * sinH * sinD * be.dmu
-		const a = be.dx - ksiPrime
-		const b = be.dy - etaPrime
-		const nSquared = a * a + b * b
-
-		if (!(nSquared > 0) || !Number.isFinite(nSquared)) return undefined
-
-		const n = Math.sqrt(nSquared)
-		// Umbra radius on the fundamental plane at this surface height; |l2| as l2 flips sign total/annular.
-		const radius = Math.abs(be.l2 - zeta * be.tanF2)
-		// Observer offset perpendicular to the relative motion, of one umbra radius on side i: this places
-		// the point on the umbra edge (cross-track residual zero) at the instant of closest approach
-		// (along-track residual zero), i.e. exactly on the path limit for branch i at this instant.
-		const ksi = be.x - (i * radius * b) / n
-		const eta = be.y + (i * radius * a) / n
-		const next = projectFundamentalPoint(sample, ksi, eta)
-
-		if (!next) return undefined
-
-		const move = Math.hypot(normalizePI(next.x - lon), next.y - phi)
-		lon = next.x
-		phi = next.y
-		result = next
-
-		if (move < SOLVER_TOLERANCE * DEG2RAD) break
-	}
-
-	return result
-}
-
-// Traces one band edge across a limit gap by marching forward in time and solving the path limit at each
-// instant with the time-parametrized solver, seeded by continuity from the previous point. The gap is a
-// longitude-fold region where the longitude-fixed solver is degenerate (which is what leaves the gap), so
-// the time-parametrized solve traces it cleanly and joins the solved stretches without a kink. Only solved
-// (physical) points are emitted: an instant the solver cannot resolve is skipped, leaving the gap there for
-// splitUmbraLimit to break, rather than filled with a non-physical nearest footprint point. The step is
-// halved whenever the edge moved more than maxAngularStep between samples, so the traced edge stays as
-// dense as the rest of the limit. The gap is normally a solver artifact (the umbra stays fully on the
-// sunlit disk), so the limit has a true position throughout it.
-function bridgeUmbraFootprint(out: GeoPoint[], pbe: PolynomialBesselianElements, from: GeoPoint, to: GeoPoint, maxAngularStep: Angle, i: -1 | 1) {
-	if (from.jd === undefined || to.jd === undefined || to.jd <= from.jd) return
-
-	const span = to.jd - from.jd
-	const minStep = span / UMBRA_GAP_BRIDGE_MIN_STEPS
-	let previous = from
-	let jd = from.jd
-	let dt = span / 8
-
-	while (jd + minStep < to.jd) {
-		const nextJd = Math.min(jd + dt, to.jd)
-		const edge = solveTimeFixedLimitPoint(pbe, nextJd, i, previous.x, previous.y)
-		const stepSize = edge ? angularDistance(previous, edge) : 0
-
-		// Refine while the edge moved too far in one step; otherwise accept it and ease the step back up.
-		if (edge && nextJd < to.jd && stepSize > maxAngularStep && dt > minStep) {
-			dt = Math.max(dt / 2, minStep)
-			continue
-		}
-
-		jd = nextJd
-		if (edge && nextJd < to.jd) {
-			pushDistinct(out, edge)
-			previous = edge
-			if (stepSize < maxAngularStep * 0.5) dt = Math.min(dt * 2, span / 8)
-		}
-	}
-}
-
-// Fills an umbral limit's pole-side gaps in place by tracing the umbral footprint across each of them,
-// returning a continuous curve. Where the latitude-based limit solver fails (near a pole) the curve
-// switches source, from solved limit to footprint edge, but stays continuous and on the same physical
-// edge. Used for both the drawn limit lines and the totality fill, so they stay consistent. A non-polar
-// limit has no gaps and is returned unchanged.
-function bridgeUmbraLimit(pbe: PolynomialBesselianElements, limit: readonly GeoPoint[], maxAngularStep: Angle, i: -1 | 1): readonly GeoPoint[] {
-	if (limit.length < 2) return limit
-
-	const gaps = limitGaps(limit, maxAngularStep * UMBRA_LIMIT_GAP_SPLIT_FACTOR)
-	if (gaps.length === 0) return limit
-
-	const out: GeoPoint[] = []
-	let g = 0
-
-	for (let index = 0; index < limit.length; index++) {
-		const point = limit[index]
-		// Collapse a bridge endpoint that lands within an instant of the solved point it abuts: both name the
-		// same place on this time-parametrized curve, and the duplicate would leave a zero-length step that
-		// reads as a 180-degree spike and degenerate self-intersection downstream.
-		if (out.length === 0 || point.jd === undefined || out.at(-1)!.jd === undefined || point.jd - out.at(-1)!.jd! > CURVE_TIME_EPSILON_DAYS) pushDistinct(out, point)
-		// On reaching the last present point before a gap, trace the footprint across to the limit's next
-		// present point; the two bracket the gap in time.
-		if (g < gaps.length && point.jd !== undefined && Math.abs(point.jd - gaps[g][0]) <= CURVE_TIME_EPSILON_DAYS) {
-			const next = limit[index + 1]
-			if (next) bridgeUmbraFootprint(out, pbe, point, next, maxAngularStep, i)
-			g++
-		}
-	}
-
-	return out
-}
-
-// Densifies one umbral edge (i = +1 north, -1 south) between two solved anchors by recursive time bisection:
-// while the chord from a to b exceeds maxAngularStep (and the recursion depth is not spent), it solves the
-// edge at the midpoint instant (seeded by continuity from a) and recurses into both halves, appending
-// interior points to out in time order. The terminal point b is appended by the caller, so this emits only
-// the points strictly between a and b. Where the perpendicular edge lies on Earth the solved point is the
-// totality limit; where it runs beyond the terminator the projection clamps it to the Earth limb, so the same
-// recursion yields the physical limb cap with no artificial chord. Bisection bounds every emitted step,
-// including the final one into b, satisfying the densification requirement around fast cap sweeps.
-function refineEdgeArc(pbe: PolynomialBesselianElements, i: -1 | 1, a: GeoPoint, b: GeoPoint, maxAngularStep: Angle, out: GeoPoint[], depth: number) {
-	if (depth >= UMBRA_LIMIT_REFINE_MAX_DEPTH || a.jd === undefined || b.jd === undefined || angularDistance(a, b) <= maxAngularStep) return
-
-	const midJd = (a.jd + b.jd) * 0.5
-	const mid = solveTimeFixedLimitPoint(pbe, midJd, i, a.x, a.y) ?? solveTimeFixedLimitPoint(pbe, midJd, i, b.x, b.y)
-	if (!mid) return
-
-	refineEdgeArc(pbe, i, a, mid, maxAngularStep, out, depth + 1)
-	pushDistinct(out, mid)
-	refineEdgeArc(pbe, i, mid, b, maxAngularStep, out, depth + 1)
-}
-
-// Traces one umbral edge (i = +1 north, -1 south) across the eclipse, anchored at the ordered contacts U2,
-// U3, U4. It solves the edge at each anchor instant, seeded by continuity from the previous point and, if
-// that fails to converge (the edge is degenerate near a terminator tip), re-seeded from the contact point
-// itself; then it densifies each interval, returning one sub-arc per interval (sharing endpoints). The first
-// anchor is supplied as start (the U1 contact, where both edges meet), so the sub-arcs run U1->U2 (start cap),
-// U2->U3 (body limit), U3->U4 (end cap), making U2/U3 explicit boundary vertices.
-function traceEdgeSubArcs(pbe: PolynomialBesselianElements, i: -1 | 1, start: GeoPoint, anchors: readonly GeoPoint[], maxAngularStep: Angle): GeoPoint[][] {
-	const subArcs: GeoPoint[][] = []
-	let from = start
-
-	for (const anchor of anchors) {
-		if (anchor.jd === undefined) continue
-		const to = solveTimeFixedLimitPoint(pbe, anchor.jd, i, from.x, from.y) ?? solveTimeFixedLimitPoint(pbe, anchor.jd, i, anchor.x, anchor.y)
-		if (!to || to.jd === undefined || from.jd === undefined) {
-			from = to ?? from
-			continue
-		}
-
-		const arc: GeoPoint[] = [from]
-		refineEdgeArc(pbe, i, from, to, maxAngularStep, arc, 0)
-		pushDistinct(arc, to)
-		subArcs.push(arc)
-		from = to
-	}
-
-	return subArcs
-}
-
-// Branch identifiers carried by totality ring segments: north edge, south edge, and shared cusp vertices.
-const TOTALITY_BRANCH_NORTH = 0
-const TOTALITY_BRANCH_SOUTH = 1
-const TOTALITY_BRANCH_CUSP = -1
-
-// Umbral-limit tangency residual of a point in Earth radii: |W + i*|E||, the eclipse condition the curve
-// solver drives to zero (W is the cross-track offset of the observer from the shadow axis, |E| the
-// shadow-edge radius). Near zero means the point lies on the requested magnitude curve: the umbra edge for
-// g = 1, the penumbra edge for g = 0. Mirrors the detector used by the geometry invariant tests.
-//   point: geographic point carrying the instant jd it was solved at.
-//   i: edge sign, +1 north, -1 south.
-//   g: magnitude target, 1 for the umbral limit, 0 for the penumbral limit.
-function limitTangencyResidual(pbe: PolynomialBesselianElements, point: GeoPoint, i: -1 | 1, g: number) {
-	if (point.jd === undefined) return Number.NaN
-
-	const t = (point.jd - toJulianDay(pbe.time0)) / pbe.stepDays
-	const be = evaluateBesselianAtT(pbe, t)
-	const sinD = Math.sin(be.d)
-	const cosD = Math.cos(be.d)
-	const H = point.x + be.mu - deltaTLongitudeCorrection(pbe)
-	const sinH = Math.sin(H)
-	const cosH = Math.cos(H)
-	const U = Math.atan(F_CONST * Math.tan(point.y))
-	const rhoSinPhi = F_CONST * Math.sin(U)
-	const rhoCosPhi = Math.cos(U)
-	const ksi = rhoCosPhi * sinH
-	const eta = rhoSinPhi * cosD - rhoCosPhi * cosH * sinD
-	const zeta = rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
-	const a = be.dx - rhoCosPhi * cosH * be.dmu
-	const b = be.dy - rhoCosPhi * sinH * sinD * be.dmu
-	const n = Math.hypot(a, b)
-
-	if (!(n > 0)) return Number.NaN
-
-	const W = ((be.y - eta) * a - (be.x - ksi) * b) / n
-	const dL1 = be.l1 - zeta * be.tanF1
-	const dL2 = be.l2 - zeta * be.tanF2
-	const E = dL1 - g * (dL1 + dL2)
-	return Math.abs(W + i * Math.abs(E))
-}
-
-// Maximum umbral-limit (g = 1) tangency residual over a segment's points; 0 for an empty segment.
-function maxUmbraLimitResidual(pbe: PolynomialBesselianElements, points: readonly GeoPoint[], i: -1 | 1) {
-	let max = 0
-	for (const point of points) {
-		const residual = limitTangencyResidual(pbe, point, i, 1)
-		if (Number.isFinite(residual) && residual > max) max = residual
-	}
-	return max
-}
-
-// Builds one physical totality ring segment, measuring its tangency residual against umbral edge i.
-function physicalRingSegment(kind: TotalityRingSegmentKind, branchId: number, points: readonly GeoPoint[], pbe: PolynomialBesselianElements, i: -1 | 1): TotalityRingSegment {
-	return { kind, branchId, physical: true, artificial: false, residual: maxUmbraLimitResidual(pbe, points, i), points }
-}
-
-// Returns a reversed copy of a point list, used to traverse the south edge from U4 back to U1.
-function reversedPoints(points: readonly GeoPoint[]): GeoPoint[] {
-	const out = points.slice()
-	out.reverse()
-	return out
-}
-
-// Drops backtracking points from a cap arc, keeping only those whose projection onto the start->end chord is
-// strictly increasing within (0, 1). Near the degenerate external contacts the time-parametrized edge can
-// briefly overshoot the contact and return, leaving a small hook that would self-intersect the ring; this
-// removes the hook while preserving the cap's overall sweep. The two endpoints are always kept.
-function filterChordMonotone(points: readonly GeoPoint[]): GeoPoint[] {
-	if (points.length <= 2) return points.slice()
-
-	const start = points[0]
-	const end = points.at(-1)!
-	const cx = end.x - start.x
-	const cy = end.y - start.y
-	const len2 = cx * cx + cy * cy
-	if (!(len2 > 0)) return points.slice()
-
-	const out: GeoPoint[] = [start]
-	let lastProjection = 0
-
-	for (let k = 1; k < points.length - 1; k++) {
-		const projection = ((points[k].x - start.x) * cx + (points[k].y - start.y) * cy) / len2
-		if (projection > lastProjection && projection < 1) {
-			out.push(points[k])
-			lastProjection = projection
-		}
-	}
-
-	out.push(end)
-	return out
-}
-
-// Tests whether two planar segments AB and CD properly cross, using orientation signs.
-function segmentsCross(a: GeoPoint, b: GeoPoint, c: GeoPoint, d: GeoPoint) {
-	const orient = (p: GeoPoint, q: GeoPoint, r: GeoPoint) => Math.sign((r.y - p.y) * (q.x - p.x) - (q.y - p.y) * (r.x - p.x))
-	return orient(a, c, d) !== orient(b, c, d) && orient(a, b, c) !== orient(a, b, d)
-}
-
-// Detects whether a ring has any crossing between non-adjacent edges, in flat lon/lat. Antimeridian-spanning
-// edges are skipped, so the test is valid for rings that do not wrap the antimeridian (split later anyway).
-function ringSelfIntersects(ring: readonly GeoPoint[]): boolean {
-	const n = ring.length
-
-	for (let i = 0; i < n; i++) {
-		const a = ring[i]
-		const b = ring[(i + 1) % n]
-		if (Math.abs(a.x - b.x) > PI) continue
-
-		for (let j = i + 2; j < n; j++) {
-			if (i === 0 && j === n - 1) continue
-			const c = ring[j]
-			const d = ring[(j + 1) % n]
-			if (Math.abs(c.x - d.x) > PI) continue
-			if (segmentsCross(a, b, c, d)) return true
-		}
-	}
-
-	return false
-}
-
-// Returns a copy of an arc with its first and/or last point replaced by the given contact, so the contact
-// becomes an exact shared vertex at a cap<->limit transition.
-function withEndpoints(arc: readonly GeoPoint[], first?: GeoPoint, last?: GeoPoint): GeoPoint[] {
-	const out = arc.slice()
-	if (first && out.length > 0) out[0] = first
-	if (last && out.length > 0) out[out.length - 1] = last
-	return out
-}
-
-// Decomposes the totality/annularity path into the three distinct entity kinds the full umbral boundary is
-// made of, anchored at the four umbral contacts (sorted by instant: U1/U4 the external tangential cusps where
-// both edges meet, U2/U3 the internal contacts). Both edges are traced from U1 anchored at U2/U3/U4. One edge
-// is the full lateral limit spanning U1..U4 (it never straddles the terminator); the other is clipped, its
-// U1->U2 and U3->U4 portions running along the Earth limb (the start/end caps) and only its U2->U3 portion
-// being a lateral limit. The internal contacts U2/U3 are substituted as the exact cap<->limit transition
-// vertices, so they lie on the full boundary; the caps are kind 'startCap'/'endCap', never a lateral limit.
-// Cap arcs are de-hooked against a brief overshoot near the degenerate contacts. Ring traversal order:
-//   U1 cusp -> full lateral limit -> U4 cusp -> clipped end cap (reversed) -> clipped lateral limit
-//   (reversed) -> clipped start cap (reversed) -> back to U1.
-function buildCappedTotalityRingSegments(pbe: PolynomialBesselianElements, contacts: readonly GeoPoint[], maxAngularStep: Angle): TotalityRingSegment[] | undefined {
-	if (contacts.length !== 4 || contacts.some((point) => point.jd === undefined)) return undefined
-
-	const ordered = contacts.slice().sort((a, b) => a.jd! - b.jd!)
-	const u1 = ordered[0]
-	const u2 = ordered[1]
-	const u3 = ordered[2]
-	const u4 = ordered[3]
-
-	const northSubArcs = traceEdgeSubArcs(pbe, 1, u1, [u2, u3, u4], maxAngularStep)
-	const southSubArcs = traceEdgeSubArcs(pbe, -1, u1, [u2, u3, u4], maxAngularStep)
-	if (northSubArcs.length !== 3 || southSubArcs.length !== 3) return undefined
-
-	// The clipped edge is the one whose internal-contact-time junctions actually fall on U2/U3 (it straddles
-	// the terminator there and clamps to the limb); the other edge is the full lateral limit U1..U4.
-	const northMiss = angularDistance(northSubArcs[0].at(-1)!, u2) + angularDistance(northSubArcs[1].at(-1)!, u3)
-	const southMiss = angularDistance(southSubArcs[0].at(-1)!, u2) + angularDistance(southSubArcs[1].at(-1)!, u3)
-	const southClipped = southMiss <= northMiss
-	const fullArcs = southClipped ? northSubArcs : southSubArcs
-	const clippedArcs = southClipped ? southSubArcs : northSubArcs
-	const fullBranch = southClipped ? TOTALITY_BRANCH_NORTH : TOTALITY_BRANCH_SOUTH
-	const clippedBranch = southClipped ? TOTALITY_BRANCH_SOUTH : TOTALITY_BRANCH_NORTH
-	const fullKind: TotalityRingSegmentKind = southClipped ? 'northLimit' : 'southLimit'
-	const clippedKind: TotalityRingSegmentKind = southClipped ? 'southLimit' : 'northLimit'
-	const fullI: -1 | 1 = southClipped ? 1 : -1
-	const clippedI: -1 | 1 = southClipped ? -1 : 1
-
-	// Full lateral limit: one continuous edge U1..U4, with its tip portions (near the degenerate external
-	// contacts) de-hooked against a brief overshoot, while the body keeps its solved limit points.
-	const fullLimit: GeoPoint[] = []
-	for (const point of filterChordMonotone(fullArcs[0])) pushDistinct(fullLimit, point)
-	for (const point of fullArcs[1]) pushDistinct(fullLimit, point)
-	for (const point of filterChordMonotone(fullArcs[2])) pushDistinct(fullLimit, point)
-
-	// Clipped edge split into start cap (U1->U2), lateral limit (U2->U3) and end cap (U3->U4), with U2/U3
-	// substituted as the exact transition vertices so they lie on the boundary.
-	const startCap = filterChordMonotone(withEndpoints(clippedArcs[0], undefined, u2))
-	const body = withEndpoints(clippedArcs[1], u2, u3)
-	const endCap = filterChordMonotone(withEndpoints(clippedArcs[2], u3, undefined))
-
-	return [
-		physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [u1], pbe, 1),
-		physicalRingSegment(fullKind, fullBranch, fullLimit, pbe, fullI),
-		physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [u4], pbe, -1),
-		physicalRingSegment('endCap', clippedBranch, reversedPoints(endCap), pbe, clippedI),
-		physicalRingSegment(clippedKind, clippedBranch, reversedPoints(body), pbe, clippedI),
-		physicalRingSegment('startCap', clippedBranch, reversedPoints(startCap), pbe, clippedI),
-	]
-}
-
-// Decomposes the band into typed segments tracing the north limit forward, then the south limit back,
-// tapering through the start and end tips (the path endpoints U1/U4, or the central-line endpoints C1/C2
-// when the umbral contacts are unavailable). When the internal contacts U2/U3 are supplied they are welded
-// onto the boundary as single-vertex start/end caps on the side they fall on, so all four contacts lie on
-// the boundary even in the lens case (they sit just outside the tapered tip, a small terminator straddle).
-// The tips are physical cusp vertices; the limits keep their own edge branch.
-function buildTaperRingSegments(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], startTip?: GeoPoint, endTip?: GeoPoint, weldStart?: GeoPoint, weldEnd?: GeoPoint): TotalityRingSegment[] {
-	const startNorth = finitePoint(weldStart) && angularDistance(weldStart, north[0]) <= angularDistance(weldStart, south[0])
-	const endNorth = finitePoint(weldEnd) && angularDistance(weldEnd, north.at(-1)!) <= angularDistance(weldEnd, south.at(-1)!)
-
-	const segments: TotalityRingSegment[] = []
-	if (finitePoint(startTip)) segments.push(physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [startTip], pbe, 1))
-	if (finitePoint(weldStart) && startNorth) segments.push(physicalRingSegment('startCap', TOTALITY_BRANCH_NORTH, [weldStart], pbe, 1))
-	segments.push(physicalRingSegment('northLimit', TOTALITY_BRANCH_NORTH, north, pbe, 1))
-	if (finitePoint(weldEnd) && endNorth) segments.push(physicalRingSegment('endCap', TOTALITY_BRANCH_NORTH, [weldEnd], pbe, 1))
-	if (finitePoint(endTip)) segments.push(physicalRingSegment('cusp', TOTALITY_BRANCH_CUSP, [endTip], pbe, -1))
-	if (finitePoint(weldEnd) && !endNorth) segments.push(physicalRingSegment('endCap', TOTALITY_BRANCH_SOUTH, [weldEnd], pbe, -1))
-	segments.push(physicalRingSegment('southLimit', TOTALITY_BRANCH_SOUTH, reversedPoints(south), pbe, -1))
-	if (finitePoint(weldStart) && !startNorth) segments.push(physicalRingSegment('startCap', TOTALITY_BRANCH_SOUTH, [weldStart], pbe, -1))
-	return segments
-}
-
-// Selects the totality ring segmentation: the contact-anchored capped ring when all four umbral contacts are
-// available and the dual-edge march resolves to a simple polygon, otherwise the taper toward U1/U4 (with the
-// internal contacts U2/U3 welded onto the boundary) or, lacking umbral contacts, toward C1/C2. The taper is
-// also used if a welded contact would self-intersect the ring, in which case the unwelded taper is returned.
-function buildTotalityRingSegments(pbe: PolynomialBesselianElements, north: readonly GeoPoint[], south: readonly GeoPoint[], points: SolarEclipseContactPoints, maxAngularStep: Angle): TotalityRingSegment[] {
-	if (north.length < 2 || south.length < 2) return []
-
-	if (points.U1 && points.U2 && points.U3 && points.U4) {
-		const capped = buildCappedTotalityRingSegments(pbe, [points.U1, points.U2, points.U3, points.U4], maxAngularStep)
-		// Use the anchored ring only when it is a simple polygon; otherwise fall back to the welded taper, never
-		// emitting a self-intersecting fill.
-		if (capped && !ringSelfIntersects(totalityRingPoints(capped))) return capped
-
-		const welded = buildTaperRingSegments(pbe, north, south, points.U1, points.U4, points.U2, points.U3)
-		if (!ringSelfIntersects(totalityRingPoints(welded))) return welded
-	}
-
-	if (points.U1 && points.U4) return buildTaperRingSegments(pbe, north, south, points.U1, points.U4)
-
-	return buildTaperRingSegments(pbe, north, south, points.C1, points.C2)
-}
-
-// Concatenates a ring's typed segments into its closed point list, dropping duplicate joins and the closing
-// duplicate. Returns an empty list when fewer than three distinct points remain. Antimeridian wraps are
-// split later at projection time.
-function totalityRingPoints(segments: readonly TotalityRingSegment[]): GeoPoint[] {
-	const ring: GeoPoint[] = []
-	for (const segment of segments) for (const point of segment.points) pushDistinct(ring, point)
-	closeRing(ring)
-	return ring.length >= 3 ? ring : []
-}
-
-// Branch id for the hybrid total<->annular transition cut, distinct from the lateral edge branches.
-const TOTALITY_BRANCH_TRANSITION = -2
-
-// Surface shadow radius (Earth radii) at a central-line axis foot: l2 minus the cone taper over the
-// observer's height above the fundamental plane. Negative means the umbra reaches the surface (the eclipse is
-// total there), positive means only the antumbra does (annular). The sign flips along a hybrid central line.
-function centralEclipseSurfaceL2(be: BesselianSample): number {
-	const omega = earthLimbOmega(be)
-	const y1 = omega * be.y
-	const inside = 1 - be.x * be.x - y1 * y1
-	const zeta = inside > 0 ? Math.sqrt(inside) : 0
-	return be.l2 - zeta * be.tanF2
-}
-
-// Surface shadow radius at a Julian Day on the central line.
-function surfaceL2AtJulianDay(pbe: PolynomialBesselianElements, jd: number) {
-	return centralEclipseSurfaceL2(evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd)))
-}
-
-// Refines the instant where the surface shadow radius vanishes (a total<->annular transition) between two
-// bracketing central-line instants by sign bisection.
-function refineTypeTransition(pbe: PolynomialBesselianElements, loJd: number, hiJd: number) {
-	let lo = loJd
-	let hi = hiJd
-	const loTotal = surfaceL2AtJulianDay(pbe, lo) <= 0
-
-	for (let iteration = 0; iteration < 40; iteration++) {
-		const mid = (lo + hi) * 0.5
-		if (surfaceL2AtJulianDay(pbe, mid) <= 0 === loTotal) lo = mid
-		else hi = mid
-	}
-
-	return (lo + hi) * 0.5
-}
-
-// Finds the total<->annular transition instants along the central line: empty for a pure total or pure
-// annular eclipse, typically two for a hybrid (annular ends bracketing a total middle).
-function findCentralTypeTransitions(pbe: PolynomialBesselianElements, centerLine: readonly GeoPoint[]): number[] {
-	const transitions: number[] = []
-	let previousJd: number | undefined
-	let previousTotal: boolean | undefined
-
-	for (const point of centerLine) {
-		if (point.jd === undefined) continue
-		const total = surfaceL2AtJulianDay(pbe, point.jd) <= 0
-		if (previousJd !== undefined && previousTotal !== undefined && total !== previousTotal) transitions.push(refineTypeTransition(pbe, previousJd, point.jd))
-		previousJd = point.jd
-		previousTotal = total
-	}
-
-	return transitions
-}
-
-// A totality or annularity ring with its eclipse type.
-interface TypedTotalityRing {
-	readonly type: 'total' | 'annular'
-	readonly segments: TotalityRingSegment[]
-}
-
-// Builds the typed segments of one hybrid sub-band from its ordered boundary vertices, classifying each edge
-// run: a run between two transition crossings is the transition cut, the rest are lateral limits (north where
-// the instant rises along the run, south where it falls). Consecutive same-kind edges form one segment.
-function hybridBandSegments(pbe: PolynomialBesselianElements, verts: readonly { readonly point: GeoPoint; readonly crossing: boolean }[]): TotalityRingSegment[] {
-	const n = verts.length
-	if (n < 3) return []
-
-	const edgeKind: TotalityRingSegmentKind[] = []
-	for (let i = 0; i < n; i++) {
-		const a = verts[i]
-		const b = verts[(i + 1) % n]
-		if (a.crossing && b.crossing) edgeKind.push('transition')
-		else edgeKind.push((b.point.jd ?? 0) >= (a.point.jd ?? 0) ? 'northLimit' : 'southLimit')
-	}
-
-	// Rotate to begin at a kind boundary so each run forms one segment without wrapping.
-	let start = 0
-	for (let i = 0; i < n; i++) {
-		if (edgeKind[i] !== edgeKind[(i - 1 + n) % n]) {
-			start = i
-			break
-		}
-	}
-
-	const segments: TotalityRingSegment[] = []
-	let i = 0
-	while (i < n) {
-		const kind = edgeKind[(start + i) % n]
-		const points: GeoPoint[] = [verts[(start + i) % n].point]
-		let j = i
-		while (j < n && edgeKind[(start + j) % n] === kind) {
-			points.push(verts[(start + j + 1) % n].point)
-			j++
-		}
-		if (kind === 'transition') segments.push({ kind, branchId: TOTALITY_BRANCH_TRANSITION, physical: true, artificial: false, residual: Number.NaN, points })
-		else segments.push(physicalRingSegment(kind, kind === 'northLimit' ? TOTALITY_BRANCH_NORTH : TOTALITY_BRANCH_SOUTH, points, pbe, kind === 'northLimit' ? 1 : -1))
-		i = j
-	}
-
-	return segments
-}
-
-// Splits a hybrid central band's fill ring into typed total and annular sub-rings at the transition instants.
-// It inserts the transition crossing points where the boundary crosses each transition instant (the cross-band
-// cut connects the north and south crossings), then groups the boundary vertices into sub-bands by instant.
-function splitHybridFillRing(pbe: PolynomialBesselianElements, ring: readonly GeoPoint[], transitions: readonly number[]): TypedTotalityRing[] {
-	const verts: { point: GeoPoint; crossing: boolean }[] = []
-	const n = ring.length
-
-	for (let i = 0; i < n; i++) {
-		const a = ring[i]
-		const b = ring[(i + 1) % n]
-		verts.push({ point: a, crossing: false })
-		if (a.jd === undefined || b.jd === undefined) continue
-
-		const fractions: number[] = []
-		for (const t of transitions) if ((a.jd - t) * (b.jd - t) < 0) fractions.push((t - a.jd) / (b.jd - a.jd))
-		fractions.sort((x, y) => x - y)
-		for (const fraction of fractions) verts.push({ point: interpolateGreatCirclePoint(a, b, fraction), crossing: true })
-	}
-
-	const levels = [Number.NEGATIVE_INFINITY, ...transitions, Number.POSITIVE_INFINITY]
-	const rings: TypedTotalityRing[] = []
-
-	for (let band = 0; band < levels.length - 1; band++) {
-		const lo = levels[band]
-		const hi = levels[band + 1]
-		const bandVerts = verts.filter((vertex) => vertex.point.jd !== undefined && vertex.point.jd >= lo && vertex.point.jd <= hi)
-		if (bandVerts.length < 3) continue
-
-		let minJd = Number.POSITIVE_INFINITY
-		let maxJd = Number.NEGATIVE_INFINITY
-		for (const vertex of bandVerts) {
-			minJd = Math.min(minJd, vertex.point.jd!)
-			maxJd = Math.max(maxJd, vertex.point.jd!)
-		}
-
-		const type = surfaceL2AtJulianDay(pbe, (minJd + maxJd) * 0.5) <= 0 ? 'total' : 'annular'
-		rings.push({ type, segments: hybridBandSegments(pbe, bandVerts) })
-	}
-
-	return rings
-}
+// F. PUBLIC ASSEMBLY
 
 // TODO: Quando mesclar o codex/meeus, remover isso e usar eclipse.central
 function isCentralEclipse(eclipse: SolarEclipse) {
 	return eclipse.type !== 'partial' && Math.abs(eclipse.gamma) < CENTRAL_ECLIPSE_GAMMA_LIMIT
 }
 
-function hasUmbralPath(eclipse: SolarEclipse) {
-	return eclipse.type !== 'partial'
-}
-
-// Computes serializable geographic geometry for a solar eclipse map.
+// Computes serializable geographic geometry for a solar eclipse map. Every curve family comes from
+// findEclipseCurvePoint via findCurvePoints; the central line and the umbra limits exist only for
+// central total, annular and hybrid eclipses, while the penumbra limits exist for every eclipse.
 export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, options: SolarEclipseMapGeometryOptions = {}): SolarEclipseMapGeometry {
 	const contacts = findPenumbraContactPoints(pbe, options)
 	const points: Writable<SolarEclipseContactPoints> = { ...contacts, Max: findMaximumPoint(pbe) }
 	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
-	const curveOptions = { longitudeStep, maxAngularStep, contactSearchSpan: options.contactSearchSpan }
+	const curveOptions: SolarEclipseCurveOptions = { longitudeStep, maxAngularStep }
 
 	let centerLine: readonly GeoPoint[] = []
 	let umbraNorth: GeoPoint[][] = []
 	let umbraSouth: GeoPoint[][] = []
-	const totalityPath: GeoPoint[][] = []
-	const totalitySegments: TotalityRingSegment[][] = []
-	const annularityPath: GeoPoint[][] = []
-	const annularitySegments: TotalityRingSegment[][] = []
 
-	// The time-sampled central line (and thus its C1/C2 endpoints) is shared across the central
-	// line and both umbral limits, so compute it once for any non-partial eclipse.
-	const centerLineSamples = hasUmbralPath(eclipse) ? sampleCentralLineByTime(pbe, curveOptions) : []
+	// The umbral/antumbral cone tangency contacts exist whenever the umbra reaches Earth; they are
+	// informational markers and never control the umbra-limit polylines.
+	if (eclipse.type !== 'partial') Object.assign(points, findUmbraContactPoints(pbe, options))
 
 	if (isCentralEclipse(eclipse)) {
-		const C1 = centerLineSamples[0]
-		const C2 = centerLineSamples.at(-1)
+		const C1 = findCentralLineExtremePoint(pbe, true, options)
+		const C2 = findCentralLineExtremePoint(pbe, false, options)
 		if (C1) points.C1 = C1
 		if (C2) points.C2 = C2
 
-		centerLine = findCurvePoints(pbe, 0, 0, curveOptions, centerLineSamples)
+		centerLine = assembleCenterLine(pbe, C1, C2, findCurvePoints(pbe, 0, 0, curveOptions), maxAngularStep)
+		umbraNorth = splitUmbraLimit(findCurvePoints(pbe, 1, 1, curveOptions), maxAngularStep)
+		umbraSouth = splitUmbraLimit(findCurvePoints(pbe, -1, 1, curveOptions), maxAngularStep)
 	}
 
-	if (hasUmbralPath(eclipse)) {
-		Object.assign(points, findUmbraContactPoints(pbe, options))
+	// Partial-eclipse (penumbra) north/south limits: the day-side curves where the penumbral cone
+	// grazes the surface (magnitude 0), bounding the region where any partial eclipse is seen.
+	const penumbraNorth = findCurvePoints(pbe, 1, 0, curveOptions)
+	const penumbraSouth = findCurvePoints(pbe, -1, 0, curveOptions)
 
-		const north = findCurvePoints(pbe, 1, 1, curveOptions, centerLineSamples)
-		const south = findCurvePoints(pbe, -1, 1, curveOptions, centerLineSamples)
-		// Fill each limit's pole-side solver gaps with the umbral footprint, then use the continuous curves
-		// for both the drawn limit lines and the totality fill so they stay consistent.
-		const fullNorth = bridgeUmbraLimit(pbe, north.length > 0 ? north : findTimeSeededShadowLimitPoints(pbe, contacts, 1, curveOptions), maxAngularStep, 1)
-		const fullSouth = bridgeUmbraLimit(pbe, south.length > 0 ? south : findTimeSeededShadowLimitPoints(pbe, contacts, -1, curveOptions), maxAngularStep, -1)
-		// The drawn limit lines are the pure magnitude-1 limit curves (low tangency residual), ending at the
-		// internal contacts where the umbra starts straddling the terminator; the U1<->U2 and U3<->U4 limb caps
-		// belong to the fill, not the limit lines.
-		umbraNorth = splitUmbraLimit(fullNorth, maxAngularStep)
-		umbraSouth = splitUmbraLimit(fullSouth, maxAngularStep)
-		// Build the fill from the typed segments. The anchored capped ring traces both umbral edges from U1 to
-		// U4 (start cap, body limit, end cap), so the filled region reaches the path tips and the internal
-		// contacts U2/U3 land on the boundary. When the umbral contacts are unavailable, fall back to the simple
-		// taper toward C1/C2. The drawable ring concatenates the segments.
-		if (options.includePolygons ?? true) {
-			const segments = buildTotalityRingSegments(pbe, fullNorth, fullSouth, points, maxAngularStep)
-			const ring = totalityRingPoints(segments)
-			if (ring.length >= 3) {
-				// A hybrid eclipse changes between total and annular along the central line, so split the central
-				// band at the transition instants into separate total and annular rings. A pure total or annular
-				// eclipse routes the whole band to its single type.
-				const transitions = eclipse.type === 'hybrid' ? findCentralTypeTransitions(pbe, centerLineSamples) : []
-				const typedRings: TypedTotalityRing[] = transitions.length > 0 ? splitHybridFillRing(pbe, ring, transitions) : [{ type: eclipse.type === 'annular' ? 'annular' : 'total', segments }]
-
-				for (const typed of typedRings) {
-					const typedRing = totalityRingPoints(typed.segments)
-					if (typedRing.length < 3) continue
-					if (typed.type === 'annular') {
-						annularityPath.push(typedRing)
-						annularitySegments.push(typed.segments)
-					} else {
-						totalityPath.push(typedRing)
-						totalitySegments.push(typed.segments)
-					}
-				}
-			}
-		}
-	}
-
-	// Partial-eclipse (penumbra) north/south limits: the day-side curves where the penumbral cone grazes the
-	// surface (magnitude 0), bounding the region where any partial eclipse is seen. For a pure partial eclipse
-	// (no central path) this is the main physical boundary, so it is produced for every eclipse, not only
-	// umbral ones. A grazing partial may yield only one of the two limits, the other side being the terminator.
-	const penumbraNorth = findPartialEclipseLimit(pbe, 1, curveOptions)
-	const penumbraSouth = findPartialEclipseLimit(pbe, -1, curveOptions)
-	// Expose the penumbral-limit extremes as named, plottable points. When both penumbral limits reach Earth
-	// (umbral/central eclipse), each branch contributes its two endpoints: northern limit -> N1/N2, southern
-	// limit -> S1/S2, ordered chronologically so N1/S1 mark where each limit begins and N2/S2 where it ends.
-	// When only one limit reaches Earth (a grazing partial eclipse), that single curve carries the eclipse's
-	// two extremes: the poleward one is N1, the equatorward one is S1 (matching the EclipseWise N1/S1
-	// convention for partial eclipses).
+	// Expose the penumbral-limit extremes as named, informational points. When both penumbral limits
+	// reach Earth, each branch contributes its two endpoints ordered chronologically (N1/S1 begin,
+	// N2/S2 end). When only one limit reaches Earth (a grazing partial eclipse), that single curve
+	// carries the eclipse's two extremes: the poleward one is N1, the equatorward one is S1, matching
+	// the EclipseWise convention. They never control the curve geometry.
 	const hasNorthPenumbraLimit = penumbraNorth.length >= 2
 	const hasSouthPenumbraLimit = penumbraSouth.length >= 2
 	if (hasNorthPenumbraLimit && hasSouthPenumbraLimit) {
@@ -2282,6 +1280,7 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		points.N1 = Math.abs(a.y) >= Math.abs(b.y) ? a : b
 		points.S1 = Math.abs(a.y) >= Math.abs(b.y) ? b : a
 	}
+
 	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, contacts, { step: options.riseSetStep }) : []
 
 	return {
@@ -2294,13 +1293,68 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 			penumbraSouth,
 			riseSetCurves,
 		},
-		polygons: {
-			totalityPath,
-			totalitySegments,
-			annularityPath,
-			annularitySegments,
-		},
 	}
+}
+
+// Assembles the drawn central line: the time-ordered scanned points strictly between the C1/C2
+// instants, with the C1/C2 endpoints added explicitly and the end intervals densified with solved
+// points (never artificial connectors). Near the limb the projected line moves arbitrarily fast, so
+// scan points within the time-collapse epsilon of an endpoint are dropped in favor of the exact
+// C1/C2 contact, keeping them as the true endpoints of the polyline.
+function assembleCenterLine(pbe: PolynomialBesselianElements, C1: GeoPoint | undefined, C2: GeoPoint | undefined, scan: readonly GeoPoint[], maxAngularStep: Angle): readonly GeoPoint[] {
+	function insideWindow(point: GeoPoint) {
+		return point.jd !== undefined && (C1?.jd === undefined || point.jd > C1.jd + CURVE_TIME_EPSILON_DAYS) && (C2?.jd === undefined || point.jd < C2.jd - CURVE_TIME_EPSILON_DAYS)
+	}
+
+	let interior = scan.filter(insideWindow)
+
+	if (C1 && interior.length > 0) {
+		const head: GeoPoint[] = []
+		appendRefinedSegment(head, pbe, C1, interior[0], 0, 0, maxAngularStep)
+		interior = [...head.filter(insideWindow), ...interior]
+	}
+
+	if (C2 && interior.length > 0) {
+		const tail: GeoPoint[] = []
+		appendRefinedSegment(tail, pbe, interior.at(-1)!, C2, 0, 0, maxAngularStep)
+		interior = [...interior, ...tail.filter(insideWindow)]
+	}
+
+	interior = Array.from(orderCurvePoints(deduplicatePoints(interior)))
+	if (C1) interior.unshift(C1)
+	if (C2) interior.push(C2)
+
+	return deduplicatePoints(interior)
+}
+
+// Returns a curve's two endpoints ordered by ascending time (earliest first), falling back to
+// ascending latitude when either endpoint lacks a Julian Day. The penumbral-limit extremes are named
+// by the eclipse chronology (N1/S1 begin, N2/S2 end), matching the EclipseWise/Espenak convention.
+function endpointsByAscendingTime(curve: readonly GeoPoint[]): [GeoPoint, GeoPoint] {
+	const first = curve[0]
+	const last = curve.at(-1)!
+	if (first.jd !== undefined && last.jd !== undefined) return first.jd <= last.jd ? [first, last] : [last, first]
+	return first.y <= last.y ? [first, last] : [last, first]
+}
+
+// Derives visual-only fill rings for the totality/annularity band: each ring concatenates a northern
+// limit polyline traversed forward with the matching southern one traversed backward. It is a
+// secondary, presentational artifact: the physical boundary polylines are never mutated, and a closed
+// ring only exists when both limits were solved. Returns an empty list for partial eclipses.
+export function computeSolarEclipseFillGeometry(geometry: SolarEclipseMapGeometry): GeoPoint[][] {
+	const north = geometry.lines.umbraNorth.flat()
+	const south = geometry.lines.umbraSouth.flat()
+
+	if (north.length < 2 || south.length < 2) return []
+
+	const ring: GeoPoint[] = []
+	for (const point of north) pushDistinct(ring, point)
+	for (let i = south.length - 1; i >= 0; i--) pushDistinct(ring, south[i])
+
+	// Drop a trailing point duplicating the first; the ring is closed at serialization time.
+	if (ring.length > 1 && samePoint(ring[0], ring.at(-1)!)) ring.pop()
+
+	return ring.length >= 3 ? [ring] : []
 }
 
 // Splits a geographic polyline into drawable antimeridian-safe segments.
@@ -2440,63 +1494,63 @@ export function pointsToSvgPathData(pieces: readonly (readonly Point[])[], close
 	return subpaths.join('')
 }
 
-// Projects solar eclipse map geometry and serializes each feature into SVG path data strings, aligned
-// to an equirectangular world map of the given width and height. Antimeridian wraps are split into
-// separate subpaths by the underlying projection.
-export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, projection: Projection, { precision = 2, ...options }: SolarEclipseMapSvgProjectionOptions = {}): SolarEclipseMapSvgPaths {
-	// Splits one geographic line (or ring when close is true) at the antimeridian with the exact +-180
-	// crossing inserted, then projects each piece. Inserting the crossing keeps every piece reaching the map
-	// edge instead of stopping at the last sample before the wrap, which otherwise leaves a visible gap or
-	// angular "beak" near +-180. The 'pi'-mode projection preserves an exact +-PI seam vertex, so the post-wrap
-	// piece resumes on the left edge (-PI) rather than being folded back onto the right one (+PI).
-	function projectSplitPieces(geo: readonly GeoPoint[], close: boolean) {
-		const pieces: Point[][] = []
+// Splits one geographic line (or ring when close is true) at the antimeridian with the exact +-180
+// crossing inserted, then projects each piece. Inserting the crossing keeps every piece reaching the map
+// edge instead of stopping at the last sample before the wrap, which otherwise leaves a visible gap or
+// angular "beak" near +-180. The 'pi'-mode projection preserves an exact +-PI seam vertex, so the post-wrap
+// piece resumes on the left edge (-PI) rather than being folded back onto the right one (+PI). The split
+// happens only here, at serialization time: the geographic geometry itself is never mutated.
+function projectSplitPieces(geo: readonly GeoPoint[], close: boolean, projection: Projection, options: ProjectionPolylineOptions) {
+	const pieces: Point[][] = []
 
-		for (const segment of splitGeoLineAtAntimeridian(geo, close)) {
-			const piece: Point[] = []
+	for (const segment of splitGeoLineAtAntimeridian(geo, close)) {
+		const piece: Point[] = []
 
-			for (const point of segment) {
-				const projected = projection.project(point.x, point.y, undefined, options)
-				if (projected !== undefined) piece.push({ x: projected.x, y: projected.y })
-			}
-
-			if (piece.length >= 2) pieces.push(piece)
+		for (const point of segment) {
+			const projected = projection.project(point.x, point.y, undefined, options)
+			if (projected !== undefined) piece.push({ x: projected.x, y: projected.y })
 		}
 
-		return pieces
+		if (piece.length >= 2) pieces.push(piece)
 	}
 
-	function polylinePath(geo: readonly GeoPoint[]) {
-		return pointsToSvgPathData(projectSplitPieces(geo, false), false, precision)
-	}
+	return pieces
+}
 
-	function segmentedPath(segments: readonly (readonly GeoPoint[])[]) {
-		const pieces: Point[][] = []
-		for (const segment of segments) for (const piece of projectSplitPieces(segment, false)) pieces.push(piece)
-		return pointsToSvgPathData(pieces, false, precision)
-	}
+// Projects geographic polylines and serializes them into one SVG path data string of open subpaths,
+// split at the antimeridian during projection only.
+export function geoPolylinesToSvgPathData(lines: readonly (readonly GeoPoint[])[], projection: Projection, { precision = 2, ...options }: SolarEclipseMapSvgProjectionOptions = {}): string {
+	const pieces: Point[][] = []
+	for (const line of lines) for (const piece of projectSplitPieces(line, false, projection, options)) pieces.push(piece)
+	return pointsToSvgPathData(pieces, false, precision)
+}
 
-	function polygonsPath(rings: readonly (readonly GeoPoint[])[]) {
-		const pieces: Point[][] = []
-		for (const ring of rings) for (const piece of projectSplitPieces(ring, true)) pieces.push(piece)
-		return pointsToSvgPathData(pieces, true, precision)
-	}
+// Projects geographic polygon rings and serializes them into one SVG path data string of closed
+// subpaths, split at the antimeridian during projection only.
+export function geoPolygonsToSvgPathData(rings: readonly (readonly GeoPoint[])[], projection: Projection, { precision = 2, ...options }: SolarEclipseMapSvgProjectionOptions = {}): string {
+	const pieces: Point[][] = []
+	for (const ring of rings) for (const piece of projectSplitPieces(ring, true, projection, options)) pieces.push(piece)
+	return pointsToSvgPathData(pieces, true, precision)
+}
 
+// Projects solar eclipse map geometry and serializes each polyline feature into SVG path data strings,
+// aligned to the given projection. Antimeridian wraps are split into separate subpaths at projection
+// time only; no synthetic connector is ever added. Fill rings (computeSolarEclipseFillGeometry) are
+// serialized separately with geoPolygonsToSvgPathData.
+export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, projection: Projection, options: SolarEclipseMapSvgProjectionOptions = {}): SolarEclipseMapSvgPaths {
 	function projectPoint(point: GeoPoint | undefined) {
 		return point ? projection.project(point.x, point.y, undefined) : undefined
 	}
 
-	const { points, lines, polygons } = geometry
+	const { points, lines } = geometry
 
 	return {
-		centerLine: polylinePath(lines.centerLine),
-		umbraNorth: segmentedPath(lines.umbraNorth),
-		umbraSouth: segmentedPath(lines.umbraSouth),
-		penumbraNorth: polylinePath(lines.penumbraNorth),
-		penumbraSouth: polylinePath(lines.penumbraSouth),
-		riseSetCurves: segmentedPath(lines.riseSetCurves),
-		totalityPath: polygonsPath(polygons.totalityPath),
-		annularityPath: polygonsPath(polygons.annularityPath),
+		centerLine: geoPolylinesToSvgPathData([lines.centerLine], projection, options),
+		umbraNorth: geoPolylinesToSvgPathData(lines.umbraNorth, projection, options),
+		umbraSouth: geoPolylinesToSvgPathData(lines.umbraSouth, projection, options),
+		penumbraNorth: geoPolylinesToSvgPathData([lines.penumbraNorth], projection, options),
+		penumbraSouth: geoPolylinesToSvgPathData([lines.penumbraSouth], projection, options),
+		riseSetCurves: geoPolylinesToSvgPathData(lines.riseSetCurves, projection, options),
 		points: {
 			P1: projectPoint(points.P1),
 			P2: projectPoint(points.P2),

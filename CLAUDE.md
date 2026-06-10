@@ -26,15 +26,15 @@ hook from `.claude/settings.json`.
 
 ### Common commands
 
-| Task                | Command                          |
-| ------------------- | -------------------------------- |
-| Install deps        | `bun i`                          |
-| Lint + type-check   | `bun run lint`                   |
-| Lint with fixes     | `bun run lint:fix`               |
-| Format              | `bun run fmt`                    |
-| Format check        | `bun run fmt:check`              |
-| Run a targeted test | `bun test tests/FILENAME.test.ts`|
-| Refresh code graph  | `bun run index`                  |
+| Task                | Command                           |
+| ------------------- | --------------------------------- |
+| Install deps        | `bun i`                           |
+| Lint + type-check   | `bun run lint`                    |
+| Lint with fixes     | `bun run lint:fix`                |
+| Format              | `bun run fmt`                     |
+| Format check        | `bun run fmt:check`               |
+| Run a targeted test | `bun test tests/FILENAME.test.ts` |
+| Refresh code graph  | `bun run index`                   |
 
 Use **Bun** for everything. Do not introduce npm/pnpm/yarn or a second test
 runner. Do not use `bun run compile` as a substitute for linting.

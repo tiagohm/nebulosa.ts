@@ -8,6 +8,7 @@ formatting, documentation, test organization, or anything outside this list.
 ## Review Scope
 
 ### 1. Mathematical correctness
+
 - Verify that every formula, equation, and numeric expression is correct.
 - Check unit consistency: angles in radians, distances in AU, velocities in
   AU/day, temperature in Celsius, pressure in hPa, unless explicitly documented
@@ -18,6 +19,7 @@ formatting, documentation, test organization, or anything outside this list.
   `RAD2DEG`, squared factors) and off-by-constant errors.
 
 ### 2. Algorithmic correctness
+
 - Verify the algorithm actually solves the intended problem and produces correct
   results across the full input domain.
 - Check edge cases: zero vectors, poles, zenith, wrap-around at `0` and `TAU`,
@@ -27,12 +29,14 @@ formatting, documentation, test organization, or anything outside this list.
   Newton/root-finding or iterative steps.
 
 ### 3. Best approach for the problem
+
 - Assess whether the chosen approach is the most appropriate and robust for the
   problem, or whether a better-known, more stable, or simpler algorithm exists.
 - Flag approaches that are unnecessarily fragile, indirect, or that ignore a
   standard astronomical/geometric technique that would fit better.
 
 ### 4. Performance and memory allocation
+
 - Identify unnecessary allocations in hot paths and tight loops.
 - Check that mutable vector/matrix output parameters (`o?: MutVec3`, etc.) are
   used where the codebase favors them, and that object churn is avoided.
@@ -42,6 +46,7 @@ formatting, documentation, test organization, or anything outside this list.
   clearly justified.
 
 ### 5. Numerical precision
+
 - Verify the precision is acceptable for an astronomy library.
 - Flag subtraction of nearly-equal floating-point values where a more stable
   formulation exists.
@@ -51,6 +56,7 @@ formatting, documentation, test organization, or anything outside this list.
 - Flag any precision trade-off that is undocumented or unacceptably lossy.
 
 ### 6. Possible bugs
+
 - Find logic errors, incorrect conditionals, wrong indices/bounds, swapped
   arguments, uninitialized or stale state, and incorrect handling of optional
   output parameters.

@@ -1158,6 +1158,8 @@ const [header, ...data] = simbadQuery(query, options) // Search on Simbad TAP se
 ```ts
 const geometry = computeSolarEclipseMapGeometry(eclipse, pbe, options)
 const paths = solarEclipseMapToSvgPaths(geometry, projection, options)
+const fill = computeSolarEclipseFillGeometry(geometry) // Visual-only totality/annularity fill rings
+const fillPath = geoPolygonsToSvgPathData(fill, projection, options)
 ```
 
 ### Spk ![](bun.webp) ![](browser.webp)

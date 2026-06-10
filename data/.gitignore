@@ -11,3 +11,5 @@
 *.gz
 *.tar
 *.fits
+*.png
+*.svg
