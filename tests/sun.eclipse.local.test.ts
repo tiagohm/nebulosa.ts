@@ -299,6 +299,24 @@ describe('local view horizon geometry', () => {
 		expect(verticalLine.x1).toBeCloseTo(verticalLine.x2, 9)
 	})
 
+	test('the ground band covers the whole viewport when the Sun is well below the horizon', () => {
+		const shapes = buildLocalViewHorizonGeometry(horizonEvent(deg(-10), 0), viewOptions({ solarRadiusPx, height, orientationMode: 'zenith' }))
+		const band = shapes.find((s): s is Extract<(typeof shapes)[number], { kind: 'polygon' }> => s.kind === 'polygon')!
+		const ys = band.points.map((p) => p.y)
+		// The band spans past both edges of the viewport, so nothing below the horizon is left uncovered.
+		expect(Math.min(...ys)).toBeLessThanOrEqual(0)
+		expect(Math.max(...ys)).toBeGreaterThanOrEqual(height)
+	})
+
+	test('the ground band meets the horizon line with no padding gap', () => {
+		const padding = 4
+		const shapes = buildLocalViewHorizonGeometry(horizonEvent(0, 0), viewOptions({ solarRadiusPx, height, orientationMode: 'zenith', horizonBandPaddingPx: padding }))
+		const line = shapes.find((s) => s.role === 'horizonLine') as Extract<(typeof shapes)[number], { kind: 'line' }>
+		const band = shapes.find((s): s is Extract<(typeof shapes)[number], { kind: 'polygon' }> => s.kind === 'polygon')!
+		// The band starts the padding ABOVE the line (toward the zenith), not below it, so there is no gap.
+		expect(Math.min(...band.points.map((p) => p.y))).toBeCloseTo(line.y1 - padding, 6)
+	})
+
 	test('handedness mirrors the tilted north horizon horizontally', () => {
 		const width = 450
 		const slope = (line: { x1: number; y1: number; x2: number; y2: number }) => (line.y2 - line.y1) / (line.x2 - line.x1)

@@ -520,6 +520,15 @@ function computeSolarAngularRadius(sample: SunMoonPosition | undefined): Angle {
 	return SUN_MEAN_ANGULAR_RADIUS
 }
 
+// Sun-Moon center separation in local solar radii, guarded so degraded Besselian values never leak a
+// non-finite or negative separation into the Local View geometry (cx/cy). Returns 0 when undefined.
+function computeSeparationSolarRadii(state: LocalFundamentalState) {
+	const solarRadius = (state.L1 + state.L2) * 0.5
+	if (!(solarRadius > 0) || !Number.isFinite(solarRadius)) return 0
+	if (!(state.distance >= 0) || !Number.isFinite(state.distance)) return 0
+	return state.distance / solarRadius
+}
+
 // Central-phase character implied by a contact, used for descriptions. For C2/C3 the umbral radius sign
 // decides total vs annular; other contacts carry the state's own classification.
 function eventCentralKind(kind: LocalEclipseContactKind, state: LocalFundamentalState): LocalCentralPhaseKind {
@@ -557,8 +566,7 @@ function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: Polynom
 	const horizonAltitude = options.horizonAltitude ?? 0
 	const observable = sunAltitude >= horizonAltitude
 
-	const solarRadiusFundamental = (state.L1 + state.L2) * 0.5
-	const separationSolarRadii = solarRadiusFundamental > 0 ? state.distance / solarRadiusFundamental : 0
+	const separationSolarRadii = computeSeparationSolarRadii(state)
 	const centralKind = eventCentralKind(kind, state)
 
 	return {
@@ -869,21 +877,41 @@ function findCentralShadowEdgeKm(centralValueAt: (longitude: Angle, latitude: An
 // Number of bearings (over a half turn) probed for the narrowest central-shadow chord.
 const SHADOW_CHORD_BEARING_COUNT = 24
 
-// Narrowest bidirectional central-shadow chord (km) through the observer, scanned over several bearings.
-// Unlike a single gradient direction this is well defined even at the exact center of the shadow, where the
-// central-contact function distance - |L2| has a non-differentiable cone point and the gradient vanishes by
-// symmetry. For each bearing the two opposite edges are summed; the minimum over all bearings is the across-
-// path width. Returns null when no opposite pair of edges is found.
+// Narrowest bidirectional central-shadow chord (km) through the observer, scanned over several bearings and
+// then refined around the best one. Unlike a single gradient direction this is well defined even at the exact
+// center of the shadow, where the central-contact function distance - |L2| has a non-differentiable cone
+// point and the gradient vanishes by symmetry. For each bearing the two opposite edges are summed; the
+// discrete minimum over all bearings is refined by a 1-D minimization within one angular step, so the result
+// is not capped at the PI / count grid resolution. Returns null when no opposite pair of edges is found.
 function computeCentralShadowChordWidthByBearingsKm(centralValueAt: (longitude: Angle, latitude: Angle) => number, longitude: Angle, latitude: Angle): number | null {
-	let best: number | null = null
-
-	for (let i = 0; i < SHADOW_CHORD_BEARING_COUNT; i++) {
-		const bearing = (i / SHADOW_CHORD_BEARING_COUNT) * PI
+	const chordWidthAtBearing = (bearing: Angle) => {
 		const forward = findCentralShadowEdgeKm(centralValueAt, longitude, latitude, bearing)
 		const backward = findCentralShadowEdgeKm(centralValueAt, longitude, latitude, bearing + PI)
-		if (forward === undefined || backward === undefined) continue
-		const width = forward + backward
-		if (best === null || width < best) best = width
+		return forward === undefined || backward === undefined ? undefined : forward + backward
+	}
+
+	const step = PI / SHADOW_CHORD_BEARING_COUNT
+	let best: number | null = null
+	let bestBearing = 0
+
+	for (let i = 0; i < SHADOW_CHORD_BEARING_COUNT; i++) {
+		const bearing = i * step
+		const width = chordWidthAtBearing(bearing)
+		if (width === undefined) continue
+		if (best === null || width < best) {
+			best = width
+			bestBearing = bearing
+		}
+	}
+
+	if (best === null) return null
+
+	// Refine the bearing within one grid step; the true minimum chord usually lies between two samples.
+	try {
+		const refined = brentMinimize((bearing) => chordWidthAtBearing(normalizeAngle(bearing)) ?? Infinity, bestBearing - step, bestBearing + step, { tolerance: 1e-4 })
+		if (Number.isFinite(refined.value) && refined.value < best) best = refined.value
+	} catch {
+		// Keep the discrete minimum.
 	}
 
 	return best
@@ -903,8 +931,9 @@ export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, 
 	const time = timeAtJulianDay(pbe.maximumTime, maxEvent.jd)
 	const centralValueAt = (lon: Angle, lat: Angle) => centralContactFunction(computeLocalFundamentalState(pbe, lon, lat, time))
 
-	// The observer must be inside the central shadow (function < 0) for a width to be defined.
-	if (!(centralValueAt(longitude, latitude) < 0)) return null
+	// The observer must be strictly inside the central shadow, using the same margin as the central-phase
+	// classification so a tangential (zero-duration) edge is treated consistently as not central.
+	if (!(centralValueAt(longitude, latitude) < -CENTRAL_CONE_TOLERANCE)) return null
 
 	return computeCentralShadowChordWidthByBearingsKm(centralValueAt, longitude, latitude)
 }
@@ -1005,13 +1034,16 @@ export function buildLocalViewHorizonGeometry(event: LocalSolarEclipseEvent, opt
 		y2: horizonY + tangentY * half,
 	}
 
-	// The band fills the half-plane away from the zenith (below the horizon), offset by the padding. It is
-	// intentionally oversized and left to be clipped by the SVG viewport.
+	// The band fills the half-plane away from the zenith (below the horizon), left to be clipped by the SVG
+	// viewport. Its near edge starts the padding ABOVE the line (toward the zenith) so the fill meets the line
+	// with no antialiasing gap, and its far edge is oversized enough to cover the whole viewport even when the
+	// altitude offset is clamped far outside it (the offset reaches up to 2 * half, so 4 * half always reaches
+	// across the diagram from a clamped horizon).
 	const padding = options.horizonBandPaddingPx ?? 0
 	const awayX = -zenithX
 	const awayY = -zenithY
-	const near = padding
-	const far = padding + 2 * half
+	const near = -padding
+	const far = padding + 4 * half
 	const band: LocalSolarEclipseSvgPolygon = {
 		kind: 'polygon',
 		role: 'horizonBand',
