@@ -267,10 +267,13 @@ export interface SolarEclipseMapGeometry {
 		readonly umbraNorth: readonly GeoPoint[][]
 		// Southern totality or annularity limit (G = 1), split like umbraNorth.
 		readonly umbraSouth: readonly GeoPoint[][]
-		// Northern partial eclipse limit (G = 0).
-		readonly penumbraNorth: readonly GeoPoint[]
-		// Southern partial eclipse limit (G = 0).
-		readonly penumbraSouth: readonly GeoPoint[]
+		// Northern partial eclipse limit (G = 0), as continuity branches. Points within a branch may be
+		// connected; separate branches (e.g. the two arcs meeting at a longitude-fold cusp the solver could
+		// not trace through) must never be joined, so a near-pole fold is drawn as distinct arcs rather than a
+		// straight spike across the map.
+		readonly penumbraNorth: readonly GeoPoint[][]
+		// Southern partial eclipse limit (G = 0), as continuity branches like penumbraNorth.
+		readonly penumbraSouth: readonly GeoPoint[][]
 		// Sunrise and sunset eclipse curves.
 		readonly riseSetCurves: readonly GeoPoint[][]
 	}
@@ -364,6 +367,13 @@ function finitePoint(point: GeoPoint | undefined): point is GeoPoint {
 
 function samePoint(a: GeoPoint, b: GeoPoint) {
 	return Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9 && Math.abs((a.jd ?? 0) - (b.jd ?? 0)) < 1e-10
+}
+
+// Geographic-only point equality (ignores jd and uses spherical separation, so +PI and -PI on the
+// antimeridian and points coincident only in space are treated as one). Used when chaining curve branches
+// by spatial continuity, where two branches can meet at the same location carrying slightly different times.
+function sameGeoPoint(a: GeoPoint, b: GeoPoint) {
+	return angularDistance(a, b) < 1e-9
 }
 
 function pushDistinct(points: GeoPoint[], point: GeoPoint | undefined) {
@@ -1484,14 +1494,11 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 	return mendCurveCusps(orderCurvePoints(deduplicatePoints(points)), pbe, i, G, maxAngularStep, refractionMode)
 }
 
-// Densifies the gaps between arc-adjacent points of the time-ordered curve, so a longitude-fold cusp is not
-// left as a sparse straight chord. The per-branch densification in findCurveBranches only fills gaps within
-// one seed track; where the curve folds back in longitude (a vertical tangent, e.g. the rightmost turn of a
-// polar hook) its two arcs are reached from different seeds, so the cusp falls on a branch boundary and was
-// never densified. Ordering by Julian Day is the true arc order, so consecutive points here are physically
-// adjacent and a wide gap between them is either such a cusp (continuous, re-solvable) or a genuine
-// discontinuity (the family left the sunlit hemisphere, not re-solvable). bridgeCurveGap inserts solved
-// points only for the former, leaving real discontinuities for splitUmbraLimit to cut.
+// Densifies the gaps between arc-adjacent points of a time-ordered curve, so a longitude-fold cusp is not
+// left as a sparse straight chord. Used for the central line (findCurvePoints), whose points are ordered by
+// Julian Day; consecutive points are physically adjacent and a wide gap between them is either a re-solvable
+// cusp (continuous) or a genuine discontinuity (not re-solvable). bridgeCurveGap inserts solved points only
+// for the former, leaving real discontinuities as gaps.
 function mendCurveCusps(points: GeoPoint[], pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode) {
 	if (points.length < 2) return points
 
@@ -1516,25 +1523,114 @@ function mendCurveCusps(points: GeoPoint[], pbe: PolynomialBesselianElements, i:
 // then each endpoint) and the first one that satisfies betweenness is kept, preventing a seed from
 // snapping onto the other arc and dropping the bridge.
 function bridgeCurveGap(out: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode, depth: number) {
-	const ab = angularDistance(a, b)
-	if (depth >= SEGMENT_REFINEMENT_MAX_DEPTH || !(ab > maxAngularStep)) return
+	if (depth >= SEGMENT_REFINEMENT_MAX_DEPTH || !(angularDistance(a, b) > maxAngularStep)) return
 
-	const intermediate = interpolateGreatCirclePoint(a, b, 0.5)
-	let mid: GeoPoint | undefined
-
-	for (const seedLatitude of [intermediate.y, b.y, a.y]) {
-		const candidate = findEclipseCurvePoint(pbe, intermediate.x, seedLatitude, i, G, refractionMode)
-		if (candidate && angularDistance(a, candidate) < ab && angularDistance(candidate, b) < ab) {
-			mid = candidate
-			break
-		}
-	}
-
+	const mid = solveCurveMidpointBetween(pbe, a, b, i, G, refractionMode)
 	if (!mid) return
 
 	bridgeCurveGap(out, pbe, a, mid, i, G, maxAngularStep, refractionMode, depth + 1)
 	pushDistinct(out, mid)
 	bridgeCurveGap(out, pbe, mid, b, i, G, maxAngularStep, refractionMode, depth + 1)
+}
+
+// Solves a curve point on the great-circle meridian halfway between a and b and returns it only when it
+// lies strictly between them (both sub-distances shrink). A longitude fold places two arcs at the same
+// intermediate longitude, so several latitude seeds are tried (the interpolated latitude, then each
+// endpoint) and the first in-between solution is returned; undefined means no curve point connects a and b
+// there, i.e. they belong to disconnected arcs. Shared by the cusp-mend densifier and the silent-arc-switch
+// detector, so both decide continuity the same way.
+// Fraction of the endpoint gap that the larger sub-distance of an accepted midpoint may reach. A real
+// in-between point roughly bisects (both sub-distances near half the gap); a midpoint hugging one endpoint
+// (the solver landed on the far endpoint's own arc) is rejected, so a silent arc switch is not mistaken for
+// a bridgeable cusp.
+const MIDPOINT_BALANCE = 0.75
+
+function solveCurveMidpointBetween(pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode) {
+	const ab = angularDistance(a, b)
+	const limit = MIDPOINT_BALANCE * ab
+	const intermediate = interpolateGreatCirclePoint(a, b, 0.5)
+
+	for (const seedLatitude of [intermediate.y, b.y, a.y]) {
+		const candidate = findEclipseCurvePoint(pbe, intermediate.x, seedLatitude, i, G, refractionMode)
+		if (candidate && angularDistance(a, candidate) <= limit && angularDistance(candidate, b) <= limit) return candidate
+	}
+
+	return undefined
+}
+
+// Floor on the angular gap (radians, ~5 deg) above which a residual jump inside a single branch is treated
+// as a drawable discontinuity and split. Normal cusp sparsity stays around the angular step (~2 deg at the
+// default resolution), well below this, so clean eclipses are never split; only a solver jump or an
+// unsampled fold cusp (e.g. the 2005-04-08 southern penumbral spike) exceeds it.
+const BRANCH_MAX_DRAWABLE_GAP = 5 * DEG2RAD
+
+// Traces one drawable eclipse curve family as branches, preserving the solver's continuity arcs instead of
+// flattening them into a single polyline. Each branch from findCurveBranches is already a densified,
+// spatially continuous stretch where the seed stayed on one solution. Flattening and ordering by Julian Day
+// is correct only while jd is monotonic along the arc; a near-pole terminator cusp folds jd (the 2005-04-08
+// southern penumbral limit dips to a jd minimum at a longitude cusp), so a flat jd-ordered array places a
+// polar endpoint next to a far point and draws a long straight spike. Globally chaining branches by nearest
+// endpoint removes that spike but invents false connections elsewhere (a north-pole spike on 2024-04-08).
+// Keeping the physical branches and never connecting across them avoids both. Redundant sub-arcs from
+// overlapping seeds are dropped, then each branch is defensively split where a residual angular gap is too
+// large to be a continuous step (a solver jump or an unsampled fold). Named endpoints (N1/N2/S1/S2) are
+// derived from the flattened points downstream, so chronological naming is unaffected by the branch order.
+function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: SolarEclipseCurveOptions = {}): GeoPoint[][] {
+	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
+	const maxDrawableGap = Math.max(BRANCH_MAX_DRAWABLE_GAP, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
+	const branches: GeoPoint[][] = []
+
+	for (const branch of findCurveBranches(pbe, i, G, options)) {
+		const cleaned = cleanCurveBranch(branch)
+		if (cleaned.length >= 2) branches.push(cleaned)
+	}
+
+	return deduplicateBranches(branches, maxAngularStep).flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+}
+
+// Removes consecutive points that coincide geographically (ignoring jd), preserving the branch's order.
+// Where two seed tracks meet they can deposit the same vertex with slightly different times; collapsing the
+// duplicate keeps the branch a clean polyline without moving any point. Never sorts and never reverses, so
+// the solver's continuity order is preserved.
+function cleanCurveBranch(branch: readonly GeoPoint[]): GeoPoint[] {
+	const out: GeoPoint[] = []
+	for (const point of branch) if (out.length === 0 || !sameGeoPoint(out.at(-1)!, point)) out.push(point)
+	return out
+}
+
+// A branch point counts as lying on another branch when within this multiple of the angular step of one of
+// that branch's samples; one step is the in-branch sample spacing, so 1.5 absorbs the half-step offset
+// between two seeds sampling the same arc at shifted longitudes.
+const BRANCH_CONTAINMENT_STEPS = 1.5
+
+// Whether a point lies on a branch, i.e. within tolerance of any of its samples.
+function pointOnBranch(point: GeoPoint, branch: readonly GeoPoint[], tolerance: Angle) {
+	for (const sample of branch) if (angularDistance(point, sample) <= tolerance) return true
+	return false
+}
+
+// Whether every point of branch already lies on host: branch is a sub-arc host fully covers. Independent of
+// orientation, since proximity ignores order.
+function branchCoveredBy(branch: readonly GeoPoint[], host: readonly GeoPoint[], tolerance: Angle) {
+	for (const point of branch) if (!pointOnBranch(point, host, tolerance)) return false
+	return true
+}
+
+// Drops redundant branches that another kept branch already covers. Several latitude seeds converge to one
+// limit, emitting the same arc as a full copy and as shorter sub-arcs that start where each seed first
+// acquired the solution; left in, the continuity chainer would retrace those overlaps and fold the arc back
+// on itself (sharp 180-degree kinks). Considering branches longest first keeps the densest, most complete
+// copy and discards every sub-arc covered by it.
+function deduplicateBranches(branches: readonly GeoPoint[][], maxAngularStep: Angle) {
+	const tolerance = maxAngularStep * BRANCH_CONTAINMENT_STEPS
+	const byLength = branches.slice().sort((a, b) => b.length - a.length)
+	const kept: GeoPoint[][] = []
+
+	for (const branch of byLength) {
+		if (!kept.some((host) => branchCoveredBy(branch, host, tolerance))) kept.push(branch)
+	}
+
+	return kept
 }
 
 // Traces one eclipse curve family as separate continuity branches, one per uninterrupted stretch a seed
@@ -1570,11 +1666,22 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 		const lon = Math.min(longitude, PI)
 
 		for (let seedIndex = 0; seedIndex < seeds.length; seedIndex++) {
-			const previous = previousBySeed[seedIndex]
+			let previous = previousBySeed[seedIndex]
 			// Continuation from the previous latitude keeps the Newton iteration on the same branch;
 			// when it fails (or there is no previous point) retry from the fixed seed.
 			let point = previous && findEclipseCurvePoint(pbe, lon, previous.y, i, G, refractionMode)
 			point ??= findEclipseCurvePoint(pbe, lon, seeds[seedIndex], i, G, refractionMode)
+
+			// Silent arc switch: at a longitude fold the seed's arc terminates while the other arc still
+			// exists, and the Newton continuation snaps onto that far arc. Detect the jump (a large step with
+			// no curve point in between) and treat it as the old arc disappearing here, closing the branch so
+			// the two arcs are never welded by an internal chord; the block below then opens a fresh branch for
+			// the new arc, and the missing fold segment is recovered later by the continuity assembler/mend.
+			if (previous && point && angularDistance(previous, point) > maxAngularStep * CURVE_GAP_SPLIT_FACTOR && !solveCurveMidpointBetween(pbe, previous, point, i, G, refractionMode)) {
+				if (activeBySeed[seedIndex]) pushDistinct(activeBySeed[seedIndex]!, refineCurveBoundary(pbe, previous.x, lon, previous.y, true, i, G, refractionMode))
+				activeBySeed[seedIndex] = undefined
+				previous = undefined
+			}
 
 			if (previous && !point) {
 				// The family just disappeared: refine the exit longitude into the open branch, then close it.
@@ -1732,12 +1839,6 @@ export function splitAtMaxAbsLatitude(points: readonly GeoPoint[]) {
 
 	// Share the apex point between both branches so they meet without a visible gap.
 	return [points.slice(0, index + 1), points.slice(index)]
-}
-
-// Splits a raw umbra/antumbra limit into drawable polylines: first at genuine discontinuities, then
-// each piece at its latitude apex when it folds back (more than two points).
-function splitUmbraLimit(points: readonly GeoPoint[], maxAngularStep: Angle) {
-	return splitDisconnectedPolylines(points, maxAngularStep * CURVE_GAP_SPLIT_FACTOR).flatMap(splitAtMaxAbsLatitude)
 }
 
 // E. RISE/SET CURVES
@@ -2099,8 +2200,10 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		// informational markers and never control the umbra-limit polylines. The G = 1 limits are traced
 		// for every non-partial eclipse, even non-central ones with no central line.
 		Object.assign(points, findUmbraContactPoints(pbe, options))
-		umbraNorth = splitUmbraLimit(findCurvePoints(pbe, 1, 1, curveOptions), maxAngularStep)
-		umbraSouth = splitUmbraLimit(findCurvePoints(pbe, -1, 1, curveOptions), maxAngularStep)
+		// Each G = 1 branch is a continuity arc; split only at its latitude apex so a polar fold renders as
+		// two sub-polylines that meet at the apex. Branches are never joined across a discontinuity.
+		umbraNorth = findCurveBranchPoints(pbe, 1, 1, curveOptions).flatMap(splitAtMaxAbsLatitude)
+		umbraSouth = findCurveBranchPoints(pbe, -1, 1, curveOptions).flatMap(splitAtMaxAbsLatitude)
 	}
 
 	if (hasCentralLine) {
@@ -2116,28 +2219,30 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	}
 
 	// Partial-eclipse (penumbra) north/south limits: the day-side curves where the penumbral cone
-	// grazes the surface (magnitude 0), bounding the region where any partial eclipse is seen.
-	const penumbraNorth = findCurvePoints(pbe, 1, 0, curveOptions)
-	const penumbraSouth = findCurvePoints(pbe, -1, 0, curveOptions)
+	// grazes the surface (magnitude 0), bounding the region where any partial eclipse is seen. Kept as
+	// continuity branches so a near-pole fold is never bridged by a spike.
+	const penumbraNorth = findCurveBranchPoints(pbe, 1, 0, curveOptions)
+	const penumbraSouth = findCurveBranchPoints(pbe, -1, 0, curveOptions)
 
 	// Expose the penumbral-limit extremes as named, informational points, always the limits' terminator
-	// cusps ordered chronologically. When both penumbral limits reach Earth, each branch contributes its
-	// two cusps (N1/S1 begin, N2/S2 end). When only one limit reaches Earth (a grazing partial), that
-	// single curve carries the eclipse's two extremes, again chronological: N1 is the earlier cusp, S1
-	// the later one, matching the EclipseWise convention (not a poleward/equatorward rule). They never
-	// control the curve geometry.
-	const hasNorthPenumbraLimit = penumbraNorth.length >= 2
-	const hasSouthPenumbraLimit = penumbraSouth.length >= 2
+	// cusps ordered chronologically. The cusps are found over all branch points flattened (label naming is
+	// chronological and independent of the branch draw order). When both penumbral limits reach Earth, each
+	// contributes its two cusps (N1/S1 begin, N2/S2 end). When only one limit reaches Earth (a grazing
+	// partial), that single limit carries the eclipse's two extremes, again chronological: N1 is the earlier
+	// cusp, S1 the later one, matching the EclipseWise convention (not a poleward/equatorward rule). They
+	// never control the curve geometry.
+	const hasNorthPenumbraLimit = penumbraNorth.length > 0
+	const hasSouthPenumbraLimit = penumbraSouth.length > 0
 	if (hasNorthPenumbraLimit && hasSouthPenumbraLimit) {
-		;[points.N1, points.N2] = penumbralLimitEndpointsByTime(pbe, penumbraNorth)
-		;[points.S1, points.S2] = penumbralLimitEndpointsByTime(pbe, penumbraSouth)
+		;[points.N1, points.N2] = penumbralLimitEndpointsByTime(pbe, penumbraNorth.flat())
+		;[points.S1, points.S2] = penumbralLimitEndpointsByTime(pbe, penumbraSouth.flat())
 	} else if (hasNorthPenumbraLimit || hasSouthPenumbraLimit) {
 		// A grazing partial with a single penumbral limit: its two terminator cusps are named
 		// chronologically (N1 begins, S1 ends), matching EclipseWise. This is NOT a poleward/equatorward
 		// rule: for 2003-05-31 both cusps are in the northern hemisphere and the equatorward one (N1)
 		// comes first in time, so a latitude-based label would swap them.
-		const branch = hasNorthPenumbraLimit ? penumbraNorth : penumbraSouth
-		;[points.N1, points.S1] = penumbralLimitEndpointsByTime(pbe, branch)
+		const limit = (hasNorthPenumbraLimit ? penumbraNorth : penumbraSouth).flat()
+		;[points.N1, points.S1] = penumbralLimitEndpointsByTime(pbe, limit)
 	}
 
 	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, contacts, { step: options.riseSetStep }) : []
@@ -2271,6 +2376,16 @@ function fillBranchInfo(branch: readonly GeoPoint[]): FillBranchInfo {
 	return { branch, range: branchTimeRange(branch), start: branch[0], end: branch.at(-1)! }
 }
 
+// Maximum accepted north/south branch pairing cost (radians, sum of the two end gaps). Compatible band
+// edges meet near the contacts where the band narrows, so the cost is small; a pair this far apart is not the
+// two sides of one band and must not be filled between.
+const MAX_FILL_PAIR_COST = 30 * DEG2RAD
+
+// Maximum accepted angular edge (radians) inside a fill ring. The band is narrow, so every ring edge — the
+// along-limit steps and the two end connectors — stays small; an edge this large would be a connector welding
+// the ring across a gap or the whole map, so such a ring is dropped rather than drawn.
+const MAX_FILL_RING_EDGE = 20 * DEG2RAD
+
 // Pairing cost between a north and a south umbra-limit branch: Infinity when their time spans do not
 // overlap (so unrelated polar/antimeridian pieces are never welded), otherwise the smaller of the two
 // endpoint-to-endpoint matchings.
@@ -2280,6 +2395,22 @@ function branchPairScore(north: FillBranchInfo, south: FillBranchInfo) {
 	const aligned = angularDistance(north.start, south.start) + angularDistance(north.end, south.end)
 	const reversed = angularDistance(north.start, south.end) + angularDistance(north.end, south.start)
 	return Math.min(aligned, reversed)
+}
+
+// Largest spherical edge between consecutive ring vertices, skipping antimeridian wraps (handled at
+// serialization). Used to reject a fill ring that would close across a gap rather than hug the band.
+function maxRingAngularEdge(ring: readonly GeoPoint[]) {
+	let max = 0
+
+	for (let i = 0; i < ring.length; i++) {
+		const a = ring[i]
+		const b = ring[(i + 1) % ring.length]
+		if (Math.abs(a.x - b.x) > PI) continue
+		const edge = angularDistance(a, b)
+		if (edge > max) max = edge
+	}
+
+	return max
 }
 
 // Builds one fill ring from a north branch and its paired south branch: the north traversed forward,
@@ -2335,11 +2466,14 @@ export function computeSolarEclipseFillGeometry(geometry: SolarEclipseMapGeometr
 			}
 		}
 
-		if (bestIndex < 0 || !Number.isFinite(bestScore)) continue
+		// Reject an incompatible pairing: no temporal overlap (Infinity) or too far apart to be one band.
+		if (bestIndex < 0 || !Number.isFinite(bestScore) || bestScore > MAX_FILL_PAIR_COST) continue
 		usedSouth.add(bestIndex)
 
 		const ring = buildFillRing(north.branch, souths[bestIndex].branch)
-		if (ring.length >= 3) rings.push(ring)
+		// Drop a ring that would close across a large gap (a connector edge welding the band across the map),
+		// keeping only rings that hug the narrow totality band.
+		if (ring.length >= 3 && maxRingAngularEdge(ring) <= MAX_FILL_RING_EDGE) rings.push(ring)
 	}
 
 	return rings
@@ -2552,11 +2686,11 @@ export function geoPolygonsToSvgPathData(rings: readonly (readonly GeoPoint[])[]
 
 // Projects solar eclipse map geometry and serializes each polyline feature into SVG path data strings,
 // aligned to the given projection. Antimeridian wraps are split into separate subpaths at projection time
-// only; no synthetic connector is ever added. Each penumbra limit is a single continuous physical curve
-// and is drawn as one polyline (only the antimeridian split applies). It must NOT be broken by a
-// spatial-gap heuristic: the penumbra is legitimately sparser as it approaches its terminator cusp, so any
-// gap-size split leaves visible holes. The geometry itself is never mutated. Fill rings
-// (computeSolarEclipseFillGeometry) are serialized separately with geoPolygonsToSvgPathData.
+// only; no synthetic connector is ever added. Each penumbra limit is a set of continuity branches, and every
+// branch is serialized as its own subpath (M ... L ...): the end of one branch is never connected to the
+// start of another, so a near-pole fold the solver could not trace through is drawn as separate arcs rather
+// than a straight spike. The geometry itself is never mutated. Fill rings (computeSolarEclipseFillGeometry)
+// are serialized separately with geoPolygonsToSvgPathData.
 export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, projection: Projection, options: SolarEclipseMapSvgProjectionOptions = {}): SolarEclipseMapSvgPaths {
 	// Project named points with the same options as the curves, so points and lines stay aligned (P0.3).
 	function projectPoint(point: GeoPoint | undefined) {
@@ -2569,8 +2703,8 @@ export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, pro
 		centerLine: geoPolylinesToSvgPathData([lines.centerLine], projection, options),
 		umbraNorth: geoPolylinesToSvgPathData(lines.umbraNorth, projection, options),
 		umbraSouth: geoPolylinesToSvgPathData(lines.umbraSouth, projection, options),
-		penumbraNorth: geoPolylinesToSvgPathData([lines.penumbraNorth], projection, options),
-		penumbraSouth: geoPolylinesToSvgPathData([lines.penumbraSouth], projection, options),
+		penumbraNorth: geoPolylinesToSvgPathData(lines.penumbraNorth, projection, options),
+		penumbraSouth: geoPolylinesToSvgPathData(lines.penumbraSouth, projection, options),
 		riseSetCurves: geoPolylinesToSvgPathData(lines.riseSetCurves, projection, options),
 		points: {
 			P1: projectPoint(points.P1),

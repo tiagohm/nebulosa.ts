@@ -517,8 +517,8 @@ test('NASA Besselian fixtures cover eclipse classes and central gating', () => {
 
 		expect(geometry.points.Max).toBeDefined()
 		expectGeoPoint(geometry.points.Max!)
-		for (const point of geometry.lines.penumbraNorth) expectGeoPoint(point)
-		for (const point of geometry.lines.penumbraSouth) expectGeoPoint(point)
+		for (const point of geometry.lines.penumbraNorth.flat()) expectGeoPoint(point)
+		for (const point of geometry.lines.penumbraSouth.flat()) expectGeoPoint(point)
 
 		const { U1, U2, U3, U4, C1, C2 } = geometry.points
 
@@ -565,7 +565,7 @@ test('computeSolarEclipseMapGeometry produces ordered partial contacts and ancho
 	expect(lines.centerLine).toHaveLength(0)
 	expect(lines.umbraNorth).toHaveLength(0)
 	expect(lines.umbraSouth).toHaveLength(0)
-	for (const point of [...lines.penumbraNorth, ...lines.penumbraSouth]) expectGeoPoint(point)
+	for (const point of [...lines.penumbraNorth.flat(), ...lines.penumbraSouth.flat()]) expectGeoPoint(point)
 
 	// Two sunrise branches (P1->P2) and two sunset branches (P3->P4), each anchored at its cusp contacts.
 	expect(lines.riseSetCurves).toHaveLength(4)
@@ -630,7 +630,8 @@ test('computeSolarEclipseMapGeometry traces NASA total partial-eclipse limits no
 	const fixture = NASA_ECLIPSES[0]
 	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(10), maxAngularStep: deg(5), includeRiseSetCurves: false })
 	const { points, lines } = geometry
-	const { penumbraNorth, penumbraSouth } = lines
+	const penumbraNorth = lines.penumbraNorth.flat()
+	const penumbraSouth = lines.penumbraSouth.flat()
 
 	expect(penumbraNorth.length).toBeGreaterThan(0)
 	expect(penumbraSouth.length).toBeGreaterThan(0)
@@ -955,8 +956,8 @@ test('central total eclipse geometry exposes a populated central and umbral path
 	// A central total eclipse exposes both partial-eclipse (penumbra) limits.
 	expect(geometry.lines.penumbraNorth.length).toBeGreaterThan(0)
 	expect(geometry.lines.penumbraSouth.length).toBeGreaterThan(0)
-	for (const point of geometry.lines.penumbraNorth) expectGeoPoint(point)
-	for (const point of geometry.lines.penumbraSouth) expectGeoPoint(point)
+	for (const point of geometry.lines.penumbraNorth.flat()) expectGeoPoint(point)
+	for (const point of geometry.lines.penumbraSouth.flat()) expectGeoPoint(point)
 })
 
 test('rise set curves are separate drawable arrays', () => {
@@ -1061,11 +1062,10 @@ test('central eclipse map curves are time-ordered and respect the angular step',
 	expectIncreasingJd(lines.centerLine)
 	expectMaxAngularStep(lines.centerLine, maxStep)
 
-	// Umbra limit pieces are time-ordered and never bridge a discontinuity: edges within a piece stay
-	// below the split threshold (CURVE_GAP_SPLIT_FACTOR times the angular step).
+	// Umbra limit branches never bridge a discontinuity: edges within a branch stay below the drawable-gap
+	// threshold. Branches follow solver continuity, not a global time order, so jd monotonicity is not asserted.
 	for (const segment of [...lines.umbraNorth, ...lines.umbraSouth]) {
 		expect(segment.length).toBeGreaterThan(1)
-		expectIncreasingJd(segment)
 		expectMaxAngularStep(segment, maxStep * 4)
 		for (const point of segment) expectGeoPoint(point)
 	}
@@ -1098,7 +1098,6 @@ test('hybrid eclipse produces a central path anchored at the NASA greatest eclip
 	expect(lines.umbraNorth.length).toBeGreaterThan(0)
 	expect(lines.umbraSouth.length).toBeGreaterThan(0)
 	for (const segment of [...lines.umbraNorth, ...lines.umbraSouth]) {
-		expectIncreasingJd(segment)
 		for (const point of segment) expectGeoPoint(point)
 	}
 })
@@ -1191,10 +1190,10 @@ test('central-line endpoints match the NASA 2024-04-08 path-table limit rows', (
 test('partial-eclipse limits populate at a fine longitude step for a central eclipse', () => {
 	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(NASA_ECLIPSES[0]), nasaPbe(NASA_ECLIPSES[0]), { longitudeStep: deg(2), maxAngularStep: deg(6), includeRiseSetCurves: false })
 
-	expect(geometry.lines.penumbraNorth.length).toBeGreaterThan(5)
-	expect(geometry.lines.penumbraSouth.length).toBeGreaterThan(5)
-	for (const point of geometry.lines.penumbraNorth) expectGeoPoint(point)
-	for (const point of geometry.lines.penumbraSouth) expectGeoPoint(point)
+	expect(geometry.lines.penumbraNorth.flat().length).toBeGreaterThan(5)
+	expect(geometry.lines.penumbraSouth.flat().length).toBeGreaterThan(5)
+	for (const point of geometry.lines.penumbraNorth.flat()) expectGeoPoint(point)
+	for (const point of geometry.lines.penumbraSouth.flat()) expectGeoPoint(point)
 })
 
 test('equirectangular projection maps the world onto the SVG viewport corners', () => {
@@ -1409,17 +1408,17 @@ describe('eclipse geometry physical and topological invariants', () => {
 			// G = 1, penumbra edge for G = 0), proving each is a converged physical solution, not an artifact.
 			for (const point of umbraNorth.flat()) expect(limitTangencyResidual(elements, point, 1, 1)).toBeLessThan(1e-3)
 			for (const point of umbraSouth.flat()) expect(limitTangencyResidual(elements, point, -1, 1)).toBeLessThan(1e-3)
-			for (const point of penumbraNorth) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
-			for (const point of penumbraSouth) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
+			for (const point of penumbraNorth.flat()) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
+			for (const point of penumbraSouth.flat()) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
 
 			// Sun altitude: every drawn curve point lies on the sunlit side, with the Sun above the horizon
 			// (a small negative tolerance absorbs refraction at the contacts, where the Sun grazes the horizon).
-			for (const point of [...umbraNorth.flat(), ...umbraSouth.flat(), ...penumbraNorth, ...penumbraSouth, ...centerLine]) {
+			for (const point of [...umbraNorth.flat(), ...umbraSouth.flat(), ...penumbraNorth.flat(), ...penumbraSouth.flat(), ...centerLine]) {
 				expect(solarAltitude(elements, point)).toBeGreaterThan(deg(-1))
 			}
 
-			// Smoothness: each physical limit piece bends without sharp kinks.
-			for (const piece of [...umbraNorth, ...umbraSouth]) expect(countKinks(piece, deg(30))).toBe(0)
+			// Smoothness: each physical limit branch bends without sharp kinks.
+			for (const piece of [...umbraNorth, ...umbraSouth, ...penumbraNorth, ...penumbraSouth]) expect(countKinks(piece, deg(30))).toBe(0)
 		})
 	}
 })
@@ -1494,18 +1493,18 @@ describe('solar eclipse map validation cases', () => {
 				}
 				for (const point of lines.umbraNorth.flat()) expect(limitTangencyResidual(elements, point, 1, 1)).toBeLessThan(1e-3)
 				for (const point of lines.umbraSouth.flat()) expect(limitTangencyResidual(elements, point, -1, 1)).toBeLessThan(1e-3)
-				for (const point of lines.penumbraNorth) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
-				for (const point of lines.penumbraSouth) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
+				for (const point of lines.penumbraNorth.flat()) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
+				for (const point of lines.penumbraSouth.flat()) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
 			})
 
 			test('polylines contain only finite coordinates and never bridge a discontinuity', () => {
-				const families = [lines.centerLine, ...lines.umbraNorth, ...lines.umbraSouth, lines.penumbraNorth, lines.penumbraSouth, ...lines.riseSetCurves]
+				const families = [lines.centerLine, ...lines.umbraNorth, ...lines.umbraSouth, ...lines.penumbraNorth, ...lines.penumbraSouth, ...lines.riseSetCurves]
 				for (const family of families) for (const point of family) expectGeoPoint(point)
-				// Umbra limit pieces have been split at discontinuities, so no intra-piece edge exceeds the
-				// split threshold (CURVE_GAP_SPLIT_FACTOR times the angular step): no chord jumps a gap.
-				for (const piece of [...lines.umbraNorth, ...lines.umbraSouth]) {
+				// Every drawable branch (umbra and penumbra) is split at discontinuities, so no intra-branch
+				// edge exceeds the drawable-gap threshold: a branch never chords across a gap. Branches are
+				// ordered by solver continuity, not globally by time, so chronological order is not asserted.
+				for (const piece of [...lines.umbraNorth, ...lines.umbraSouth, ...lines.penumbraNorth, ...lines.penumbraSouth]) {
 					expect(piece.length).toBeGreaterThan(1)
-					expectIncreasingJd(piece)
 					expectMaxAngularStep(piece, MAX_STEP * 4)
 				}
 			})
@@ -1543,6 +1542,125 @@ describe('solar eclipse map validation cases', () => {
 	}
 })
 
+// Branch-aware topology: penumbra and umbra limits are GeoPoint[][] continuity branches. Points inside a
+// branch may connect; separate branches never do. These cases (computed from the VSOP87E/ELPMPP02
+// ephemerides) cover the eclipses that previously produced topology defects: the 2005-04-08 jd-order spike,
+// the 2024-04-08 north-pole spike from global endpoint chaining, and assorted normal eclipses that must stay
+// stable.
+describe('branch-aware curve topology', () => {
+	const getSunMoonPosition = (t: Parameters<typeof computeSunMoonPositionAt>[0]) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
+	const STEP = deg(0.5)
+	// Matches the engine's BRANCH_MAX_DRAWABLE_GAP floor (5 deg) at this resolution: no intra-branch segment
+	// may exceed it. A pre-fix spike was 16-17 deg, far above this.
+	const MAX_DRAWABLE_GAP = deg(5)
+	// Cylindrical projection spanning the full globe across MAP_WIDTH px, so a branch-to-branch connector
+	// (a spike) would project to a segment a large fraction of the width.
+	const MAP_WIDTH = 2400
+	const MAP_HEIGHT = 1200
+	const projection = new PlateCarree(0, { scale: MAP_WIDTH / TAU, falseEasting: MAP_WIDTH / 2, falseNorthing: MAP_HEIGHT / 2, yAxisDirection: 'southUp', centralMeridian: 0, longitudeWrapMode: 'pi', maxLatitude: PIOVERTWO })
+
+	// Largest spherical edge between consecutive points within any branch, skipping antimeridian wraps.
+	function maxBranchSegment(branches: readonly (readonly GeoPoint[])[]) {
+		let max = 0
+		for (const branch of branches) {
+			for (let i = 1; i < branch.length; i++) {
+				if (Math.abs(branch[i - 1].x - branch[i].x) > PI) continue
+				max = Math.max(max, sphericalSeparation(branch[i - 1].x, branch[i - 1].y, branch[i].x, branch[i].y))
+			}
+		}
+		return max
+	}
+
+	// Longest straight projected segment (px) across every subpath of an SVG path string. A subpath starts at
+	// M and continues with L; antimeridian wraps are emitted as separate subpaths, so a long segment here can
+	// only come from a real geometry jump (a spike).
+	function longestProjectedSegment(pathData: string) {
+		let max = 0
+		for (const sub of pathData.split('M').filter((s) => s.length > 0)) {
+			const numbers = `M${sub}`.match(/-?\d+(?:\.\d+)?/g)
+			if (!numbers) continue
+			const coordinates = numbers.map(Number)
+			for (let i = 2; i + 1 < coordinates.length; i += 2) {
+				max = Math.max(max, Math.hypot(coordinates[i] - coordinates[i - 2], coordinates[i + 1] - coordinates[i - 1]))
+			}
+		}
+		return max
+	}
+
+	function geometryFor(year: number, month: number, day: number) {
+		const eclipse = nearestSolarEclipse(timeYMD(year, month, day), true)
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, getSunMoonPosition)
+		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: STEP, maxAngularStep: STEP, includeRiseSetCurves: false })
+		return { eclipse, elements, geometry }
+	}
+
+	const CASES = [
+		{ name: '2005-04-08', date: [2005, 4, 1] },
+		{ name: '2024-04-08', date: [2024, 4, 1] },
+		{ name: '2000-07-01', date: [2000, 7, 1] },
+		{ name: '2001-12-14', date: [2001, 12, 1] },
+		{ name: '2003-05-31', date: [2003, 5, 15] },
+		{ name: '2003-11-23', date: [2003, 11, 1] },
+		{ name: '2009-01-26', date: [2009, 1, 1] },
+	] as const
+
+	for (const fixture of CASES) {
+		describe(fixture.name, () => {
+			const { elements, geometry } = geometryFor(fixture.date[0], fixture.date[1], fixture.date[2])
+			const { penumbraNorth, penumbraSouth, umbraNorth, umbraSouth } = geometry.lines
+
+			// Invariant 1: no consecutive segment inside any drawable branch exceeds the drawable gap. This is
+			// the spike test at the geometry level: the 2005-04-08 and 2024-04-08 spikes were single segments
+			// of ~16 deg, which this rejects.
+			test('drawable branches contain no large angular segment', () => {
+				expect(maxBranchSegment(penumbraNorth)).toBeLessThanOrEqual(MAX_DRAWABLE_GAP)
+				expect(maxBranchSegment(penumbraSouth)).toBeLessThanOrEqual(MAX_DRAWABLE_GAP)
+				expect(maxBranchSegment(umbraNorth)).toBeLessThanOrEqual(MAX_DRAWABLE_GAP)
+				expect(maxBranchSegment(umbraSouth)).toBeLessThanOrEqual(MAX_DRAWABLE_GAP)
+			})
+
+			// Invariant 4/5: each branch serializes as its own M-subpath and the antimeridian split keeps
+			// wraps as separate subpaths, so no projected segment connects the end of one branch to the start
+			// of another (a spike) nor draws a giant horizontal line across the seam.
+			test('no projected SVG path connects separate branches', () => {
+				const paths = solarEclipseMapToSvgPaths(geometry, projection)
+				for (const path of [paths.penumbraNorth, paths.penumbraSouth, paths.umbraNorth, paths.umbraSouth]) {
+					expect(longestProjectedSegment(path)).toBeLessThan(MAP_WIDTH / 2)
+				}
+			})
+
+			// Invariant 7/8: every sampled branch point still satisfies its magnitude residual (G = 0 for
+			// penumbra, G = 1 for umbra), proving branch preservation did not move points off their loci.
+			test('branch points satisfy their magnitude residual', () => {
+				for (const point of penumbraNorth.flat()) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
+				for (const point of penumbraSouth.flat()) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
+				for (const point of umbraNorth.flat()) expect(limitTangencyResidual(elements, point, 1, 1)).toBeLessThan(1e-3)
+				for (const point of umbraSouth.flat()) expect(limitTangencyResidual(elements, point, -1, 1)).toBeLessThan(1e-3)
+			})
+
+			// Invariant 9: N1/N2/S1/S2 stay chronological even though the drawable branches are ordered by
+			// solver continuity, not globally by time.
+			test('named penumbral extremes remain chronological', () => {
+				const { N1, N2, S1, S2 } = geometry.points
+				if (N1?.jd !== undefined && N2?.jd !== undefined) expect(N1.jd).toBeLessThanOrEqual(N2.jd)
+				if (S1?.jd !== undefined && S2?.jd !== undefined) expect(S1.jd).toBeLessThanOrEqual(S2.jd)
+			})
+
+			// Fill rings hug the band: no ring edge welds the fill across a gap or the map.
+			test('fill rings contain no giant connector edge', () => {
+				for (const ring of computeSolarEclipseFillGeometry(geometry)) {
+					for (let i = 0; i < ring.length; i++) {
+						const a = ring[i]
+						const b = ring[(i + 1) % ring.length]
+						if (Math.abs(a.x - b.x) > PI) continue
+						expect(sphericalSeparation(a.x, a.y, b.x, b.y)).toBeLessThanOrEqual(deg(20))
+					}
+				}
+			})
+		})
+	}
+})
+
 describe('solar eclipse map acceptance criteria', () => {
 	for (const fixture of CENTRAL_FIXTURES) {
 		const elements = nasaPbe(fixture)
@@ -1552,7 +1670,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		describe(fixture.name, () => {
 			// Every plotted point is finite and within the documented coordinate ranges.
 			test('all entity points are finite and in range', () => {
-				const families = [lines.centerLine, ...lines.umbraNorth, ...lines.umbraSouth, lines.penumbraNorth, lines.penumbraSouth, ...lines.riseSetCurves]
+				const families = [lines.centerLine, ...lines.umbraNorth, ...lines.umbraSouth, ...lines.penumbraNorth, ...lines.penumbraSouth, ...lines.riseSetCurves]
 				for (const family of families) for (const point of family) expectGeoPoint(point)
 				for (const key of ['P1', 'P2', 'P3', 'P4', 'U1', 'U2', 'U3', 'U4', 'C1', 'C2', 'Max', 'N1', 'N2', 'S1', 'S2'] as const) {
 					const point = points[key]
@@ -1622,10 +1740,10 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(0)
 
 		// The penumbral limit is produced (at least one of the two tangent branches) on the magnitude-0 locus.
-		const penumbra = [...geometry.lines.penumbraNorth, ...geometry.lines.penumbraSouth]
+		const penumbra = [...geometry.lines.penumbraNorth.flat(), ...geometry.lines.penumbraSouth.flat()]
 		expect(penumbra.length).toBeGreaterThan(0)
-		for (const point of geometry.lines.penumbraNorth) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
-		for (const point of geometry.lines.penumbraSouth) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
+		for (const point of geometry.lines.penumbraNorth.flat()) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
+		for (const point of geometry.lines.penumbraSouth.flat()) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
 		for (const point of penumbra) expect(solarAltitude(elements, point)).toBeGreaterThan(deg(-1))
 	})
 
@@ -1637,7 +1755,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(eclipse.type).toBe('partial')
 		const elements = computePolynomialBesselianElements(eclipse.maximalTime, (t) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon))
 		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: deg(1), maxAngularStep: deg(3) })
-		const limit = geometry.lines.penumbraNorth
+		const limit = geometry.lines.penumbraNorth.flat()
 		expect(limit.length).toBeGreaterThan(0)
 
 		// Every point is on the magnitude-0 locus with the Sun above the horizon.
@@ -1927,7 +2045,7 @@ describe('refraction mode is an explicit solver option', () => {
 		expect(refracted.lines.penumbraNorth.length).toBeGreaterThan(0)
 
 		// In the geometric mode every penumbra-limit point is an unrefracted magnitude-0 solution.
-		for (const point of geometric.lines.penumbraNorth) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-4)
+		for (const point of geometric.lines.penumbraNorth.flat()) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-4)
 
 		// Both modes name the same cusp family (N1); they agree to within a fraction of a degree because the
 		// horizon lift is small, proving the option threads through without diverging the geometry.
