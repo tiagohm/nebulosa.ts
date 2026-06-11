@@ -450,7 +450,7 @@ function localStateAtJulianDay(pbe: PolynomialBesselianElements, longitude: Angl
 // right ascension/declination and Greenwich apparent sidereal time; without it, it falls back to the
 // Besselian shadow-axis altitude (an approximation: the axis is treated as the Sun direction and the
 // geodetic latitude is used directly, matching solarAltitudeAtPoint in sun.eclipse.ts).
-function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, sample: SunMoonPosition | undefined, fallbackBesselian: InstantBesselianElements): Angle {
+function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, sample: SunMoonPosition | undefined, fallbackBesselian: InstantBesselianElements) {
 	if (sample) {
 		const deltaT = sample.deltaT ?? 0
 		const ttTime = tt(time)
@@ -501,7 +501,7 @@ function contactAngleFromCenter(kind: LocalEclipseContactKind, centralKind: Loca
 // Solar parallactic angle (radians, [-PI, PI]). Uses the apparent Sun right ascension/declination and
 // Greenwich apparent sidereal time when a SunMoonPosition sample is available, so it shares the exact source
 // the Sun altitude uses; otherwise it falls back to the Besselian shadow-axis declination and hour angle.
-function computeSolarParallacticAngle(time: Time, longitude: Angle, latitude: Angle, state: LocalFundamentalState, sample: SunMoonPosition | undefined): Angle {
+function computeSolarParallacticAngle(time: Time, longitude: Angle, latitude: Angle, state: LocalFundamentalState, sample: SunMoonPosition | undefined) {
 	if (sample) {
 		const deltaT = sample.deltaT ?? 0
 		const ttTime = tt(time)
@@ -548,7 +548,7 @@ function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: Loc
 
 // Apparent solar angular radius (radians) from the Sun distance, falling back to the mean value. The distance
 // must be finite and positive: an infinite distance would yield 0 instead of the mean fallback.
-function computeSolarAngularRadius(sample: SunMoonPosition | undefined): Angle {
+function computeSolarAngularRadius(sample: SunMoonPosition | undefined) {
 	if (sample && Number.isFinite(sample.sunDistance) && sample.sunDistance > 0) return Math.asin(clamp(SUN_RADIUS_EARTH_RADII / sample.sunDistance, -1, 1))
 	return SUN_MEAN_ANGULAR_RADIUS
 }
@@ -564,7 +564,7 @@ function computeSeparationSolarRadii(state: LocalFundamentalState) {
 
 // Central-phase character implied by a contact, used for descriptions. For C2/C3 the umbral radius sign
 // decides total vs annular; other contacts carry the state's own classification.
-function eventCentralKind(kind: LocalEclipseContactKind, state: LocalFundamentalState): LocalCentralPhaseKind {
+function eventCentralKind(kind: LocalEclipseContactKind, state: LocalFundamentalState) {
 	if (kind === 'C2' || kind === 'C3') return state.L2 < 0 ? 'total' : 'annular'
 	return state.centralPhaseKind
 }
@@ -657,7 +657,7 @@ function buildSampleJds(fromJd: number, toJd: number, stepDays: number) {
 // spike) is much narrower than the step, and a single minimization over the wide bracket can settle off the
 // true peak — which would place the maximum just outside the central cone and suppress the C2/C3 search.
 // Returns the best found, or undefined when nothing finite is found.
-export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number): number | undefined {
+export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number) {
 	if (!Number.isFinite(fromJd) || !Number.isFinite(toJd) || toJd < fromJd) {
 		return undefined
 	}
@@ -792,7 +792,7 @@ function refineMissedContactInterval(evaluate: (jd: number) => number, lo: numbe
 // scan plus refinement. Transversal roots (sign changes) are bracketed directly; grazing roots and short
 // phases whose two contacts fall entirely between two samples (no sign change, a sub-sample negative dip)
 // are recovered from interior local minima. Roots are deduplicated and returned sorted ascending.
-export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number, fn: (state: LocalFundamentalState) => number): readonly number[] {
+export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number, fn: (state: LocalFundamentalState) => number) {
 	const evaluate = (jd: number) => fn(localStateAtJulianDay(pbe, longitude, latitude, jd))
 	const roots: number[] = []
 
@@ -971,7 +971,7 @@ const SUN_MOTION_ALTITUDE_EPSILON = 1e-3
 // Vertical trend of the Sun across the present contacts, by comparing the earliest and latest event altitudes
 // (the events are already time-ordered). Lets the UI compose an "on sunset"/"on sunrise" qualifier.
 function computeSunMotion(events: LocalSolarEclipseCircumstances['events']): LocalSunMotion {
-	const ordered = [events.C1, events.C2, events.MAX, events.C3, events.C4].filter((event): event is LocalSolarEclipseEvent => event !== null)
+	const ordered = [events.C1, events.C2, events.MAX, events.C3, events.C4].filter((event) => event !== null)
 	if (ordered.length < 2) return 'none'
 	const delta = ordered.at(-1)!.sunAltitude - ordered[0].sunAltitude
 	if (delta < -SUN_MOTION_ALTITUDE_EPSILON) return 'setting'
@@ -984,7 +984,7 @@ function computeSunMotion(events: LocalSolarEclipseCircumstances['events']): Loc
 // it before a tight Brent refinement (a single Brent pass over the whole, near-flat interval can stop short
 // of the true peak). Used to detect an observable instant between contacts even when every contact itself is
 // below the horizon.
-function extremeSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions, minimize: boolean): Angle {
+function extremeSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions, minimize: boolean) {
 	const altitudeAt = (jd: number) => {
 		const time = timeAtJulianDay(pbe.maximumTime, jd)
 		return computeSolarAltitude(time, longitude, latitude, options.sunMoonPosition?.(time), evaluateBesselian(pbe, time))
@@ -1016,27 +1016,44 @@ function extremeSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longit
 }
 
 // Maximum Sun altitude (radians) over [fromJd, toJd]. See extremeSunAltitudeOverInterval.
-function maxSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions): Angle {
+function maxSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions) {
 	return extremeSunAltitudeOverInterval(pbe, longitude, latitude, fromJd, toJd, options, false)
 }
 
 // Minimum Sun altitude (radians) over [fromJd, toJd]. Used to confirm a fully-visible eclipse never dips
 // below the horizon at an interior altitude valley (the interval straddling lower culmination).
-function minSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions): Angle {
+function minSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions) {
 	return extremeSunAltitudeOverInterval(pbe, longitude, latitude, fromJd, toJd, options, true)
+}
+
+// Local hour angle of the Sun (radians, [-PI, PI]). Uses the apparent Sun right ascension and Greenwich
+// apparent sidereal time when a SunMoonPosition sample is available, matching computeSolarAltitude exactly;
+// otherwise falls back to the Besselian shadow-axis hour angle. Keeping the same source as the altitude is
+// what makes the valley detector consistent with the continuous altitude it gates.
+function solarHourAngleAt(pbe: PolynomialBesselianElements, longitude: Angle, jd: number, options: LocalSolarEclipseCircumstancesOptions) {
+	const time = timeAtJulianDay(pbe.maximumTime, jd)
+	const sample = options.sunMoonPosition?.(time)
+
+	if (sample) {
+		const deltaT = sample.deltaT ?? 0
+		const ttTime = tt(time)
+		const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
+		const gast = eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
+		return normalizePI(gast + longitude - sample.sunRightAscension)
+	}
+
+	const be = evaluateBesselian(pbe, time)
+	return normalizePI(hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection))
 }
 
 // Whether the Sun altitude has an interior minimum (a valley at lower culmination) somewhere in [fromJd, toJd]
 // rather than its minimum at an endpoint. d(altitude)/dt has the sign of -sin(H), so a valley exists only when
 // the Sun is setting at the start (sin H > 0) and rising at the end (sin H < 0): the interval crosses local
-// midnight. Cheap (two Besselian polynomial evaluations), so the continuous minimum is only computed in that
-// rare case; otherwise the interval minimum is at a contact and the event check already covers it.
-function intervalHasAltitudeValley(pbe: PolynomialBesselianElements, longitude: Angle, fromJd: number, toJd: number): boolean {
-	const sinHourAngleAt = (jd: number) => {
-		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.maximumTime, jd))
-		return Math.sin(hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection))
-	}
-	return sinHourAngleAt(fromJd) > 0 && sinHourAngleAt(toJd) < 0
+// midnight. Cheap (two hour-angle evaluations from the same source the altitude uses), so the continuous
+// minimum is only computed in that rare case; otherwise the interval minimum is at a contact and the event
+// check already covers it.
+function intervalHasAltitudeValley(pbe: PolynomialBesselianElements, longitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions) {
+	return Math.sin(solarHourAngleAt(pbe, longitude, fromJd, options)) > 0 && Math.sin(solarHourAngleAt(pbe, longitude, toJd, options)) < 0
 }
 
 // Classifies local visibility from the resolved events, refined with continuous Sun-altitude analysis at the
@@ -1077,7 +1094,7 @@ function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']
 	// The dip is only possible when the interval straddles lower culmination (a valley), detected cheaply, so
 	// the continuous minimum is computed only in that rare case.
 	let completelyVisible = completeEventSet && allExpectedAbove
-	if (completelyVisible && C1 !== null && C4 !== null && intervalHasAltitudeValley(pbe, longitude, C1.jd, C4.jd)) {
+	if (completelyVisible && C1 !== null && C4 !== null && intervalHasAltitudeValley(pbe, longitude, C1.jd, C4.jd, options)) {
 		completelyVisible = minSunAltitudeOverInterval(pbe, longitude, latitude, C1.jd, C4.jd, options) >= horizonAltitude
 	}
 
@@ -1111,7 +1128,7 @@ const SHADOW_EDGE_STEP_KM = 5
 
 // Destination geographic point reached from (lon, lat) along a great-circle bearing (from north toward
 // east) after a surface distance, on a sphere of radius EARTH_RADIUS_KM.
-function destinationPoint(longitude: Angle, latitude: Angle, bearing: Angle, distanceKm: number): readonly [Angle, Angle] {
+function destinationPoint(longitude: Angle, latitude: Angle, bearing: Angle, distanceKm: number) {
 	const angular = distanceKm / EARTH_RADIUS_KM
 	const sinLat = Math.sin(latitude)
 	const cosLat = Math.cos(latitude)
@@ -1119,13 +1136,13 @@ function destinationPoint(longitude: Angle, latitude: Angle, bearing: Angle, dis
 	const cosAng = Math.cos(angular)
 	const lat2 = Math.asin(clamp(sinLat * cosAng + cosLat * sinAng * Math.cos(bearing), -1, 1))
 	const lon2 = longitude + Math.atan2(Math.sin(bearing) * sinAng * cosLat, cosAng - sinLat * Math.sin(lat2))
-	return [lon2, lat2]
+	return [lon2, lat2] as const
 }
 
 // Distance (km) from the observer to the central-shadow edge along a bearing at a fixed instant: marches
 // outward until the central-contact function turns non-negative (leaves the umbra/antumbra), then bisects.
 // Returns undefined when no edge is found within MAX_SHADOW_HALF_WIDTH_KM.
-function findCentralShadowEdgeKm(centralValueAt: (longitude: Angle, latitude: Angle) => number, longitude: Angle, latitude: Angle, bearing: Angle): number | undefined {
+function findCentralShadowEdgeKm(centralValueAt: (longitude: Angle, latitude: Angle) => number, longitude: Angle, latitude: Angle, bearing: Angle) {
 	let previousKm = 0
 	let previousValue = centralValueAt(longitude, latitude)
 
@@ -1165,7 +1182,7 @@ const INVALID_CHORD_WIDTH_PENALTY_KM = MAX_SHADOW_HALF_WIDTH_KM * 4
 // point and the gradient vanishes by symmetry. For each bearing the two opposite edges are summed; the
 // discrete minimum over all bearings is refined by a 1-D minimization within one angular step, so the result
 // is not capped at the PI / count grid resolution. Returns null when no opposite pair of edges is found.
-function computeCentralShadowChordWidthByBearingsKm(centralValueAt: (longitude: Angle, latitude: Angle) => number, longitude: Angle, latitude: Angle): number | null {
+function computeCentralShadowChordWidthByBearingsKm(centralValueAt: (longitude: Angle, latitude: Angle) => number, longitude: Angle, latitude: Angle) {
 	const chordWidthAtBearing = (bearing: Angle) => {
 		const forward = findCentralShadowEdgeKm(centralValueAt, longitude, latitude, bearing)
 		const backward = findCentralShadowEdgeKm(centralValueAt, longitude, latitude, bearing + PI)
@@ -1207,7 +1224,7 @@ function computeCentralShadowChordWidthByBearingsKm(centralValueAt: (longitude: 
 // estimate, and the multi-bearing scan stays well defined even at the exact center of the shadow. Returns
 // null when the maximum is not central, the observer is not inside the central shadow, or no edge is found
 // within MAX_SHADOW_HALF_WIDTH_KM.
-export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, maxEvent: LocalSolarEclipseEvent): number | null {
+export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, maxEvent: LocalSolarEclipseEvent) {
 	if (maxEvent.centralPhaseKind === 'none') return null
 
 	const time = timeAtJulianDay(pbe.maximumTime, maxEvent.jd)
@@ -1236,7 +1253,7 @@ function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], s
 // Returns the event's Local View state or throws: drawing without it would silently place the Moon
 // concentric with the Sun, which looks valid but is physically wrong. Events from buildLocalEvent always
 // carry it; this guards against externally constructed events.
-function requireLocalViewState(event: LocalSolarEclipseEvent): LocalViewEventState {
+function requireLocalViewState(event: LocalSolarEclipseEvent) {
 	if (!event.localViewState) throw new Error(`Local View requires localViewState for ${event.kind}`)
 	return event.localViewState
 }
@@ -1247,7 +1264,7 @@ function requireLocalViewState(event: LocalSolarEclipseEvent): LocalViewEventSta
 // the diagram, so the frame event's parallactic angle q is subtracted (not the event's own q): otherwise each
 // ghost would sit in its own instantaneous vertical, inconsistent with the single horizon drawn for the
 // primary event.
-function localViewAngleForEvent(eventState: LocalViewEventState, options: LocalSolarEclipseViewOptions, frameState: LocalViewEventState): Angle | null {
+function localViewAngleForEvent(eventState: LocalViewEventState, options: LocalSolarEclipseViewOptions, frameState: LocalViewEventState) {
 	if (options.orientationMode === 'north') return eventState.centerPositionAngleP
 	const centerP = eventState.centerPositionAngleP
 	if (centerP === null) return null
@@ -1258,7 +1275,7 @@ function localViewAngleForEvent(eventState: LocalViewEventState, options: LocalS
 // the diagram; the Moon is offset by the local separation along the lunar-CENTER position angle (never the
 // limb-contact angle), measured from the top of the diagram clockwise. All disks of one diagram share the
 // frame of `frameEvent` (the primary event), so ghost disks and the primary disk use a single zenith.
-export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options: LocalSolarEclipseViewOptions, frameEvent: LocalSolarEclipseEvent = event): { sun: LocalSolarEclipseSvgCircle; moon: LocalSolarEclipseSvgCircle } {
+export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options: LocalSolarEclipseViewOptions, frameEvent: LocalSolarEclipseEvent = event) {
 	const viewState = requireLocalViewState(event)
 	const frameState = requireLocalViewState(frameEvent)
 	const sunCx = options.width * 0.5
@@ -1280,7 +1297,7 @@ export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options:
 	return {
 		sun: { kind: 'circle', role: 'sunDisk', event: event.kind, cx: sunCx, cy: sunCy, r: sunR },
 		moon: { kind: 'circle', role: 'moonDisk', event: event.kind, cx: sunCx + dx, cy: sunCy + dy, r: moonR },
-	}
+	} as const
 }
 
 // Converts a solar altitude to its signed Local View offset (px) from the Sun center along the zenith
@@ -1300,7 +1317,7 @@ function altitudeToLocalViewOffsetPx(sunAltitude: Angle, solarAngularRadius: Ang
 // pushes it below the Sun center. In the `north` frame the top is celestial north, so the zenith is rotated
 // from "up" by the solar parallactic angle q; the horizon is rotated with it. At q = 0 the north frame
 // reduces exactly to the zenith frame.
-export function buildLocalViewHorizonGeometry(event: LocalSolarEclipseEvent, options: LocalSolarEclipseViewOptions): readonly LocalSolarEclipseSvgShape[] {
+export function buildLocalViewHorizonGeometry(event: LocalSolarEclipseEvent, options: LocalSolarEclipseViewOptions) {
 	const viewState = requireLocalViewState(event)
 	const sunCx = options.width * 0.5
 	const sunCy = options.height * 0.5
@@ -1353,7 +1370,7 @@ export function buildLocalViewHorizonGeometry(event: LocalSolarEclipseEvent, opt
 	}
 
 	// Band first (filled ground), then the line on top of it, in painter's order.
-	return [band, line]
+	return [band, line] as const
 }
 
 // Picks the event to draw as primary: the requested one, else MAX, else the first available contact.
@@ -1403,7 +1420,7 @@ export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSola
 // Computes the full local circumstances for a geographic point: resolves contacts, summarizes details,
 // classifies visibility, and optionally builds the Local View. The result is immutable and serializable;
 // times are returned as Time/Julian Day and durations in seconds (the UI formats them).
-export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions = {}): LocalSolarEclipseCircumstances {
+export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions = {}) {
 	const events = computeLocalEclipseEvents(pbe, longitude, latitude, options)
 	const visibility = computeLocalVisibility(events, pbe, longitude, latitude, options)
 	const shadowPathWidthKm = events.MAX ? computeLocalShadowPathWidthKm(pbe, longitude, latitude, events.MAX) : null
