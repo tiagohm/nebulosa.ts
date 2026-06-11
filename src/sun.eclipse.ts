@@ -1477,9 +1477,64 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 //   i = 0 -> central line; i = +1/-1 -> northern/southern limit.
 //   G = 1 -> totality/annularity limit; G = 0 -> partiality limit.
 export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: SolarEclipseCurveOptions = {}) {
+	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
+	const refractionMode = options.refractionMode ?? DEFAULT_REFRACTION_MODE
 	const points: GeoPoint[] = []
 	for (const branch of findCurveBranches(pbe, i, G, options)) for (const point of branch) points.push(point)
-	return orderCurvePoints(deduplicatePoints(points))
+	return mendCurveCusps(orderCurvePoints(deduplicatePoints(points)), pbe, i, G, maxAngularStep, refractionMode)
+}
+
+// Densifies the gaps between arc-adjacent points of the time-ordered curve, so a longitude-fold cusp is not
+// left as a sparse straight chord. The per-branch densification in findCurveBranches only fills gaps within
+// one seed track; where the curve folds back in longitude (a vertical tangent, e.g. the rightmost turn of a
+// polar hook) its two arcs are reached from different seeds, so the cusp falls on a branch boundary and was
+// never densified. Ordering by Julian Day is the true arc order, so consecutive points here are physically
+// adjacent and a wide gap between them is either such a cusp (continuous, re-solvable) or a genuine
+// discontinuity (the family left the sunlit hemisphere, not re-solvable). bridgeCurveGap inserts solved
+// points only for the former, leaving real discontinuities for splitUmbraLimit to cut.
+function mendCurveCusps(points: GeoPoint[], pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode) {
+	if (points.length < 2) return points
+
+	const out: GeoPoint[] = [points[0]]
+
+	for (let k = 1; k < points.length; k++) {
+		bridgeCurveGap(out, pbe, points[k - 1], points[k], i, G, maxAngularStep, refractionMode, 0)
+		pushDistinct(out, points[k])
+	}
+
+	return out
+}
+
+// Recursively inserts solved curve points between two arc-adjacent points while their separation exceeds
+// maxAngularStep, like appendRefinedSegment, but with a betweenness guard: a re-solved midpoint is accepted
+// only when it lies strictly between the endpoints (both sub-distances shrink). A midpoint that does not
+// (the solver landed on an unrelated arc that merely exists at the interpolated longitude) means the two
+// endpoints belong to disconnected components, so the gap is left unbridged. This makes the pass safe to
+// run across seed-branch boundaries, where appendRefinedSegment (used inside a single, already continuous
+// branch) cannot tell a cusp from a discontinuity. At a longitude-fold cusp the two arcs share the
+// intermediate longitude, so the midpoint is sought from several latitude seeds (the interpolated latitude,
+// then each endpoint) and the first one that satisfies betweenness is kept, preventing a seed from
+// snapping onto the other arc and dropping the bridge.
+function bridgeCurveGap(out: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode, depth: number) {
+	const ab = angularDistance(a, b)
+	if (depth >= SEGMENT_REFINEMENT_MAX_DEPTH || !(ab > maxAngularStep)) return
+
+	const intermediate = interpolateGreatCirclePoint(a, b, 0.5)
+	let mid: GeoPoint | undefined
+
+	for (const seedLatitude of [intermediate.y, b.y, a.y]) {
+		const candidate = findEclipseCurvePoint(pbe, intermediate.x, seedLatitude, i, G, refractionMode)
+		if (candidate && angularDistance(a, candidate) < ab && angularDistance(candidate, b) < ab) {
+			mid = candidate
+			break
+		}
+	}
+
+	if (!mid) return
+
+	bridgeCurveGap(out, pbe, a, mid, i, G, maxAngularStep, refractionMode, depth + 1)
+	pushDistinct(out, mid)
+	bridgeCurveGap(out, pbe, mid, b, i, G, maxAngularStep, refractionMode, depth + 1)
 }
 
 // Traces one eclipse curve family as separate continuity branches, one per uninterrupted stretch a seed
