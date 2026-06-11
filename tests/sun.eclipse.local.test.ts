@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, normalizeAngle } from '../src/angle'
-import { PI, TAU } from '../src/constants'
+import { ASEC2RAD, PI, TAU } from '../src/constants'
 import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
 import { computePolynomialBesselianElements, computeSunMoonPositionAt, type PolynomialBesselianElements } from '../src/sun.eclipse'
 import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeLocalSolarEclipseCircumstances, findLocalContactRoots, type LocalFundamentalState, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions } from '../src/sun.eclipse.local'
@@ -429,5 +429,23 @@ describe('local view robustness', () => {
 		expect(lastRoots).toHaveLength(2)
 		expect(lastRoots[0]).toBeCloseTo(lastCenter - halfWidth, 8)
 		expect(lastRoots[1]).toBeCloseTo(lastCenter + halfWidth, 8)
+	})
+
+	test('does not plant a phantom contact when the only root is just outside the window', () => {
+		// A monotone contact function whose single zero lies just past toJd: inside the window it stays
+		// positive (no eclipse), but its value at toJd is within CONTACT_FUNCTION_TOLERANCE. The boundary refine
+		// must not accept that endpoint-pinned near-zero as a grazing root.
+		const fromJd = toJulianDay(total2024.pbe.maximumTime)
+		const toJd = fromJd + 0.1
+		const root = toJd + 0.25e-8 // ~0.25 * CONTACT_TOLERANCE_DAYS past the window
+		const roots = findLocalContactRoots(total2024.pbe, deg(-74), deg(40.71), fromJd, toJd, 0.03, (state: LocalFundamentalState) => root - state.jd)
+		expect(roots).toHaveLength(0)
+	})
+
+	test('falls back to the mean solar angular radius for a non-finite Sun distance', () => {
+		// A degraded ephemeris reporting an infinite Sun distance must not yield a zero angular radius.
+		const infiniteSunDistance = (t: Parameters<typeof sunMoonPosition>[0]) => ({ ...sunMoonPosition(t), sunDistance: Infinity })
+		const c = computeLocalSolarEclipseCircumstances(total2024.pbe, deg(-106.4), deg(23.25), { sunMoonPosition: infiniteSunDistance })
+		expect(c.events.MAX!.localViewState!.solarAngularRadius).toBeCloseTo(959.63 * ASEC2RAD, 9)
 	})
 })

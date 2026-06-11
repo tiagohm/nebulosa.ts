@@ -532,9 +532,10 @@ function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: Loc
 	}
 }
 
-// Apparent solar angular radius (radians) from the Sun distance, falling back to the mean value.
+// Apparent solar angular radius (radians) from the Sun distance, falling back to the mean value. The distance
+// must be finite and positive: an infinite distance would yield 0 instead of the mean fallback.
 function computeSolarAngularRadius(sample: SunMoonPosition | undefined): Angle {
-	if (sample && sample.sunDistance > 0) return Math.asin(clamp(SUN_RADIUS_EARTH_RADII / sample.sunDistance, -1, 1))
+	if (sample && Number.isFinite(sample.sunDistance) && sample.sunDistance > 0) return Math.asin(clamp(SUN_RADIUS_EARTH_RADII / sample.sunDistance, -1, 1))
 	return SUN_MEAN_ANGULAR_RADIUS
 }
 
@@ -618,8 +619,16 @@ function bisectRoot(f: (jd: number) => number, lo: number, hi: number) {
 // divide the window. Without the guaranteed endpoint, a root or peak in the final partial sub-interval (right
 // at toJd) could fall past the last sample and be missed.
 function buildSampleJds(fromJd: number, toJd: number, stepDays: number) {
+	if (!Number.isFinite(fromJd) || !Number.isFinite(toJd)) {
+		return []
+	}
+
+	if (toJd < fromJd) {
+		return []
+	}
+
 	if (!(stepDays > 0) || !Number.isFinite(stepDays)) {
-		return [fromJd, toJd]
+		return fromJd === toJd ? [fromJd] : [fromJd, toJd]
 	}
 
 	const jds: number[] = []
@@ -735,9 +744,13 @@ function refineMissedContactInterval(evaluate: (jd: number) => number, lo: numbe
 	const midValue = evaluate(mid)
 	if (!Number.isFinite(mid) || !Number.isFinite(midValue)) return
 
-	// Grazing contact: the minimum touches zero, a single double root.
+	// Grazing contact: the minimum touches zero, a single double root. Only accept it strictly inside the
+	// bracket: a "minimum" pinned to lo or hi is the monotone case where the real contact lies just outside
+	// the window (common on the boundary intervals), and a small positive endpoint value within tolerance
+	// would otherwise plant a phantom root on the window edge. Exact endpoint zeros are still caught by the
+	// sub-scan above (value === 0).
 	if (Math.abs(midValue) <= CONTACT_FUNCTION_TOLERANCE) {
-		pushUniqueRoot(roots, mid)
+		if (mid > lo + CONTACT_TOLERANCE_DAYS && mid < hi - CONTACT_TOLERANCE_DAYS) pushUniqueRoot(roots, mid)
 		return
 	}
 
@@ -764,6 +777,7 @@ export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitud
 
 	// Sample the whole window once (toJd always included) so neighboring triplets can be inspected for extrema.
 	const jds = buildSampleJds(fromJd, toJd, stepDays)
+	if (jds.length === 0) return []
 	const values = jds.map(evaluate)
 
 	// Transversal roots: exact zeros on a sample and sign changes between neighbors.
@@ -862,6 +876,7 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 
 		while (true) {
 			const roots = findLocalContactRoots(pbe, longitude, latitude, centerJd - currentSpan, centerJd + currentSpan, stepDays, fn)
+			if (roots.length === 0) break
 			before = rootBefore(roots, maximumJd)
 			after = rootAfter(roots, maximumJd)
 			if ((before !== undefined && after !== undefined) || currentSpan >= maxSpan) break
