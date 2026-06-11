@@ -111,6 +111,13 @@ describe('local circumstances', () => {
 		expect(c.visibility.hasObservableEclipse).toBe(false)
 	})
 
+	test('a fully visible total eclipse reports complete contacts', () => {
+		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
+		expect(c.visibility.kind).toBe('completelyVisible')
+		expect(c.visibility.completeness.partialContactsComplete).toBe(true)
+		expect(c.visibility.completeness.centralContactsComplete).toBe(true)
+	})
+
 	test('observability of every event matches its solar altitude against the horizon', () => {
 		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
 		for (const kind of ['C1', 'C2', 'MAX', 'C3', 'C4'] as const) {
@@ -172,6 +179,27 @@ describe('local view geometry', () => {
 		const view = buildLocalSolarEclipseViewGeometry(partial, viewOptions({ selectedEvent: 'C2' }))
 		expect(view.requestedEvent).toBe('C2')
 		expect(view.selectedEvent).toBe('MAX')
+	})
+
+	test('draws the horizon as foreground over the primary disks', () => {
+		const view = buildLocalSolarEclipseViewGeometry(base, viewOptions())
+		const roles = view.shapes.map((s) => s.role)
+		// The ground band and horizon line are painted after the Sun/Moon disks so they can occlude them.
+		expect(roles.indexOf('horizonBand')).toBeGreaterThan(roles.indexOf('moonDisk'))
+		expect(roles.indexOf('horizonBand')).toBeGreaterThan(roles.indexOf('sunDisk'))
+		// The line is drawn on top of its own band.
+		expect(roles.indexOf('horizonLine')).toBeGreaterThan(roles.indexOf('horizonBand'))
+	})
+
+	test('handedness mirrors only the horizontal axis', () => {
+		const right = buildLocalSolarEclipseViewGeometry(base, viewOptions({ handedness: 'eastRight', includeGhostDisks: false, includeHorizon: false }))
+		const left = buildLocalSolarEclipseViewGeometry(base, viewOptions({ handedness: 'eastLeft', includeGhostDisks: false, includeHorizon: false }))
+		const rightMoon = right.shapes.find((s) => s.role === 'moonDisk') as Extract<(typeof right.shapes)[number], { kind: 'circle' }>
+		const leftMoon = left.shapes.find((s) => s.role === 'moonDisk') as Extract<(typeof left.shapes)[number], { kind: 'circle' }>
+		const sunCx = 450 / 2
+		// The Moon's horizontal offset from the Sun flips sign; its vertical offset is unchanged.
+		expect(leftMoon.cx - sunCx).toBeCloseTo(-(rightMoon.cx - sunCx), 9)
+		expect(leftMoon.cy).toBeCloseTo(rightMoon.cy, 9)
 	})
 })
 

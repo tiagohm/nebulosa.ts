@@ -54,6 +54,12 @@ export type LocalEventVisibility = 'aboveHorizon' | 'belowHorizon'
 // Orientation frame for the Local View geometry.
 export type LocalViewOrientationMode = 'zenith' | 'north'
 
+// Horizontal handedness of the Local View. With north up, `eastRight` puts celestial east to the right of
+// the diagram (image/map-like, the default), while `eastLeft` puts east to the left (the conventional
+// naked-eye / sky-chart orientation, e.g. Astrarium). Only the sign of the horizontal axis changes; the
+// physics of the contacts is untouched.
+export type LocalViewHandedness = 'eastRight' | 'eastLeft'
+
 // Options controlling the local circumstances computation.
 export interface LocalSolarEclipseCircumstancesOptions {
 	// Half-width of the contact search window around maximumTime, in seconds.
@@ -96,6 +102,15 @@ export interface LocalSolarEclipseCircumstances {
 		readonly hasCentralPhase: boolean
 		// Character of the central phase, or 'none' for a partial-only local eclipse.
 		readonly centralPhaseKind: LocalCentralPhaseKind
+		// Whether the expected contacts were all resolved. When false, the classification is based on a
+		// partial set of events (e.g. a contact fell outside the search window or failed to converge), so
+		// `completelyVisible` is never asserted.
+		readonly completeness: {
+			// Whether both partial contacts (C1 and C4) were resolved.
+			readonly partialContactsComplete: boolean
+			// Whether both central contacts (C2 and C3) were resolved, or there is no central phase.
+			readonly centralContactsComplete: boolean
+		}
 	}
 
 	readonly details: {
@@ -107,7 +122,11 @@ export interface LocalSolarEclipseCircumstances {
 		readonly partialPhaseDurationSeconds: number | null
 		// Central-phase duration in seconds (C3 - C2), or null.
 		readonly centralPhaseDurationSeconds: number | null
-		// First-order local shadow-path width in km, or null when not central or not estimable.
+		// Width (km) of the local central-shadow chord through the observer at maximum, measured across the
+		// path on a spherical Earth. This is NOT necessarily the canonical path width reported on the central
+		// line (Astrarium/EclipseWise): for an off-center observer it is the chord through their own location.
+		// Null when the maximum is not central, the observer is outside the central shadow, or no edge is
+		// found within MAX_SHADOW_HALF_WIDTH_KM.
 		readonly shadowPathWidthKm: number | null
 	}
 
@@ -236,6 +255,10 @@ export interface LocalSolarEclipseViewOptions {
 	// This only controls geometry. Do not create UI buttons.
 	readonly orientationMode: LocalViewOrientationMode
 
+	// Horizontal handedness of the diagram. Defaults to `eastRight`. Set `eastLeft` to match the
+	// conventional naked-eye / sky-chart orientation (east to the left when north is up).
+	readonly handedness?: LocalViewHandedness
+
 	// Radius of the solar disk in SVG pixels.
 	readonly solarRadiusPx: number
 
@@ -314,6 +337,7 @@ const DEFAULT_LOCAL_VIEW_OPTIONS: LocalSolarEclipseViewOptions = {
 	height: 160,
 	selectedEvent: 'MAX',
 	orientationMode: 'zenith',
+	handedness: 'eastRight',
 	solarRadiusPx: 34,
 	includeGhostDisks: true,
 	includeHorizon: true,
@@ -352,6 +376,10 @@ export function computeLocalFundamentalState(pbe: PolynomialBesselianElements, l
 	const L2 = be.l2 - zeta * be.tanF2
 
 	const magnitude = (L1 - distance) / (L1 + L2)
+	// Ratio from the local Besselian radii: solar = (L1 + L2) / 2, lunar = (L1 - L2) / 2. This is kept as the
+	// source so the C1..C4 tangency separations stay exactly consistent (sep = 1 +- ratio). It is not exactly
+	// the ephemeris apparent diameter ratio, since l1/l2 use the slightly different NASA k1/k2 lunar radii
+	// (~0.08% apart); that difference is negligible for the Local View.
 	const solarRadius = (L1 + L2) * 0.5
 	const lunarRadius = (L1 - L2) * 0.5
 	const moonSunDiameterRatio = solarRadius > 0 ? lunarRadius / solarRadius : null
@@ -430,12 +458,26 @@ function contactAngleFromCenter(kind: LocalEclipseContactKind, centralKind: Loca
 	return normalizeAngle(centerAngle)
 }
 
-function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: LocalFundamentalState, latitude: Angle): LocalTopocentricAspect {
-	const centerP = normalizeAngle(Math.atan2(state.u, state.v))
-	const be = state.be
+// Solar parallactic angle (radians, [-PI, PI]). Uses the apparent Sun right ascension/declination and
+// Greenwich apparent sidereal time when a SunMoonPosition sample is available, so it shares the exact source
+// the Sun altitude uses; otherwise it falls back to the Besselian shadow-axis declination and hour angle.
+function computeSolarParallacticAngle(time: Time, longitude: Angle, latitude: Angle, state: LocalFundamentalState, sample: SunMoonPosition | undefined): Angle {
+	if (sample) {
+		const deltaT = sample.deltaT ?? 0
+		const ttTime = tt(time)
+		const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
+		const gast = eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
+		const H = normalizePI(gast + longitude - sample.sunRightAscension)
+		return normalizePI(Math.atan2(Math.sin(H), Math.tan(latitude) * Math.cos(sample.sunDeclination) - Math.sin(sample.sunDeclination) * Math.cos(H)))
+	}
+
 	const H = state.hourAngle
-	// Solar parallactic angle from the Besselian shadow-axis declination and local hour angle.
-	const q = Math.atan2(Math.sin(H), Math.tan(latitude) * Math.cos(be.d) - Math.sin(be.d) * Math.cos(H))
+	return normalizePI(Math.atan2(Math.sin(H), Math.tan(latitude) * Math.cos(state.be.d) - Math.sin(state.be.d) * Math.cos(H)))
+}
+
+function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: LocalFundamentalState, time: Time, longitude: Angle, latitude: Angle, sample: SunMoonPosition | undefined): LocalTopocentricAspect {
+	const centerP = normalizeAngle(Math.atan2(state.u, state.v))
+	const q = computeSolarParallacticAngle(time, longitude, latitude, state, sample)
 	const centerZ = normalizeAngle(centerP - q)
 	const centralKind = eventCentralKind(kind, state)
 
@@ -444,7 +486,7 @@ function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: Loc
 		centerZenithAngleZ: centerZ,
 		contactPositionAngleP: contactAngleFromCenter(kind, centralKind, centerP),
 		contactZenithAngleZ: contactAngleFromCenter(kind, centralKind, centerZ),
-		parallacticAngle: normalizePI(q),
+		parallacticAngle: q,
 	}
 }
 
@@ -486,7 +528,7 @@ function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: Polynom
 
 	const sunAltitude = computeSolarAltitude(time, longitude, latitude, sample, state.be)
 	const solarAngularRadius = computeSolarAngularRadius(sample)
-	const aspect = computeLocalTopocentricAspect(kind, state, latitude)
+	const aspect = computeLocalTopocentricAspect(kind, state, time, longitude, latitude, sample)
 
 	const horizonAltitude = options.horizonAltitude ?? 0
 	const observable = sunAltitude >= horizonAltitude
@@ -557,6 +599,10 @@ function pushUniqueRoot(roots: number[], root: number) {
 	if (!roots.some((existing) => Math.abs(existing - root) < CONTACT_TOLERANCE_DAYS * 10)) roots.push(root)
 }
 
+function NumberComparator(a: number, b: number) {
+	return a - b
+}
+
 // Finds every Julian Day in [fromJd, toJd] where the scalar contact function fn reaches zero, by uniform
 // scan plus refinement. Both transversal roots (sign changes) and grazing/tangential roots (a strict local
 // extremum whose refined |fn| stays within CONTACT_FUNCTION_TOLERANCE, which a sign-change scan cannot see)
@@ -599,8 +645,7 @@ export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitud
 		}
 	}
 
-	roots.sort((a, b) => a - b)
-	return roots
+	return roots.sort(NumberComparator)
 }
 
 // Closest root strictly before a reference Julian Day, or undefined.
@@ -628,8 +673,22 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 	const maxSpan = Math.max(span, MAX_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC)
 	const centerJd = toJulianDay(pbe.maximumTime)
 
-	const maximumJd = findLocalMaximumTime(pbe, longitude, latitude, centerJd - span, centerJd + span, stepDays)
+	// The maximum search is adaptive too: if the sampled maximum lands on the window edge the true maximum may
+	// lie just outside, which would also misplace the contacts around it. Widen (bounded by maxSpan) until the
+	// maximum sits clear of the boundary.
+	let maximumSpan = span
+	let maximumJd = findLocalMaximumTime(pbe, longitude, latitude, centerJd - maximumSpan, centerJd + maximumSpan, stepDays)
 	if (maximumJd === undefined) return empty
+
+	while (maximumSpan < maxSpan) {
+		const margin = stepDays * 2
+		const nearBoundary = maximumJd <= centerJd - maximumSpan + margin || maximumJd >= centerJd + maximumSpan - margin
+		if (!nearBoundary) break
+		maximumSpan = Math.min(maximumSpan * 1.5, maxSpan)
+		const widened = findLocalMaximumTime(pbe, longitude, latitude, centerJd - maximumSpan, centerJd + maximumSpan, stepDays)
+		if (widened === undefined) break
+		maximumJd = widened
+	}
 
 	const maximumState = localStateAtJulianDay(pbe, longitude, latitude, maximumJd)
 	// No local eclipse: even at closest approach the disks do not touch (magnitude <= 0).
@@ -699,31 +758,36 @@ function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']
 	const { C1, C2, MAX, C3, C4 } = events
 
 	if (!MAX) {
-		return { kind: 'notVisible', text: localVisibilityText('notVisible'), hasGeometricEclipse: false, hasObservableEclipse: false, hasCentralPhase: false, centralPhaseKind: 'none' }
+		return { kind: 'notVisible', text: localVisibilityText('notVisible'), hasGeometricEclipse: false, hasObservableEclipse: false, hasCentralPhase: false, centralPhaseKind: 'none', completeness: { partialContactsComplete: false, centralContactsComplete: false } }
 	}
 
-	const present = [C1, C2, MAX, C3, C4].filter((event): event is LocalSolarEclipseEvent => event !== null)
-	const anyAbove = present.some((event) => event.observable)
-	const allAbove = present.every((event) => event.observable)
 	// Central phase is decided by the local maximum, not by C2/C3 existing: a narrow window or a grazing
 	// (tangential) central contact may fail to yield both endpoints even though the maximum is central.
 	const hasCentralPhase = MAX.centralPhaseKind !== 'none'
 	const centralPhaseKind: LocalCentralPhaseKind = MAX.centralPhaseKind
 
+	// The events expected for this eclipse character. `completelyVisible` requires this full set to exist and
+	// be above the horizon, so a missing contact never masquerades as a fully visible eclipse.
+	const expected = hasCentralPhase ? [C1, C2, MAX, C3, C4] : [C1, MAX, C4]
+	const completeEventSet = expected.every((event) => event !== null)
+	const allExpectedAbove = expected.every((event) => event?.observable === true)
+	const anyAbove = [C1, C2, MAX, C3, C4].some((event) => event?.observable === true)
+
 	let kind: LocalVisibilityKind
 	if (!anyAbove) {
 		kind = 'geometricOnlyBelowHorizon'
-	} else if (hasCentralPhase) {
-		if (allAbove) kind = 'completelyVisible'
-		else if ((C2?.observable ?? false) || (C3?.observable ?? false) || MAX.observable) kind = 'centralPhaseVisible'
-		else kind = 'partiallyVisible'
-	} else if (allAbove && C1 !== null && C4 !== null) {
+	} else if (completeEventSet && allExpectedAbove) {
 		kind = 'completelyVisible'
-	} else {
+	} else if (hasCentralPhase && ((C2?.observable ?? false) || (C3?.observable ?? false) || MAX.observable)) {
+		kind = 'centralPhaseVisible'
+	} else if (!hasCentralPhase) {
 		kind = 'partialOnlyVisible'
+	} else {
+		kind = 'partiallyVisible'
 	}
 
-	return { kind, text: localVisibilityText(kind), hasGeometricEclipse: true, hasObservableEclipse: anyAbove, hasCentralPhase, centralPhaseKind }
+	const completeness = { partialContactsComplete: C1 !== null && C4 !== null, centralContactsComplete: !hasCentralPhase || (C2 !== null && C3 !== null) }
+	return { kind, text: localVisibilityText(kind), hasGeometricEclipse: true, hasObservableEclipse: anyAbove, hasCentralPhase, centralPhaseKind, completeness }
 }
 
 // Maximum geodesic half-width (km) probed when measuring the central shadow path on the ground. A genuine
@@ -844,7 +908,10 @@ export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options:
 	const separationPx = viewState.separationSolarRadii * sunR
 	const angle = (options.orientationMode === 'zenith' ? viewState.centerZenithAngleZ : viewState.centerPositionAngleP) ?? 0
 
-	const dx = separationPx * Math.sin(angle)
+	// Position angle grows from up (north/zenith) clockwise toward east. `eastRight` (default) keeps east on
+	// the right; `eastLeft` mirrors the horizontal axis for the sky-chart convention.
+	const eastSign = options.handedness === 'eastLeft' ? -1 : 1
+	const dx = eastSign * separationPx * Math.sin(angle)
 	const dy = -separationPx * Math.cos(angle)
 
 	return {
@@ -917,7 +984,8 @@ export function buildLocalViewHorizonGeometry(event: LocalSolarEclipseEvent, opt
 		],
 	}
 
-	return [line, band]
+	// Band first (filled ground), then the line on top of it, in painter's order.
+	return [band, line]
 }
 
 // Picks the event to draw as primary: the requested one, else MAX, else the first available contact.
@@ -951,12 +1019,14 @@ export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSola
 		}
 	}
 
-	if (primary && options.includeHorizon) shapes.push(...buildLocalViewHorizonGeometry(primary, options))
-
+	// Primary Sun and Moon disks first, then the horizon on top, so the ground band occludes the part of the
+	// disks below the horizon (e.g. a sunrise/sunset eclipse), matching the Astrarium foreground convention.
 	if (primary) {
 		const pair = computeLocalViewDiskPair(primary, options)
 		shapes.push(pair.sun, pair.moon)
 	}
+
+	if (primary && options.includeHorizon) shapes.push(...buildLocalViewHorizonGeometry(primary, options))
 
 	return { width: options.width, height: options.height, orientationMode: options.orientationMode, requestedEvent: options.selectedEvent, selectedEvent: primary?.kind ?? null, solarRadiusPx: options.solarRadiusPx, shapes }
 }
