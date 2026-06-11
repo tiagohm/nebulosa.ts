@@ -36,7 +36,7 @@ import { vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMu
 export const EARTH_FLATTENING = 1 / 298.257223563
 // Earth polar/equatorial radius ratio (1 - flattening).
 export const F = 1 - EARTH_FLATTENING
-// Reciprocal of F_CONST, used by the geographic-latitude conversion.
+// Reciprocal of F, used by the geographic-latitude conversion.
 const INV_F = 1 / F
 // Squared eccentricity of the Earth ellipsoid used for limb flattening, e^2 = 1 - (b/a)^2.
 const EARTH_E2 = 1 - F * F

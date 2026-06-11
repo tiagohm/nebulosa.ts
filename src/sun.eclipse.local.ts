@@ -1,10 +1,9 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
-import { ASEC2RAD, DAYSEC, EARTH_RADIUS_KM } from './constants'
+import { ASEC2RAD, DAYSEC, EARTH_RADIUS_KM, PI } from './constants'
 import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
 import { clamp } from './math'
 import { bisection, brentMinimize } from './optimization'
-import type { SolarEclipse } from './sun'
 import { evaluateBesselian, F, hourAngleFromLongitude, SUN_RADIUS_EARTH_RADII, type InstantBesselianElements, type PolynomialBesselianElements, type SunMoonPosition } from './sun.eclipse'
 import { type Time, timeShift, toJulianDay, tt } from './time'
 
@@ -20,13 +19,23 @@ import { type Time, timeShift, toJulianDay, tt } from './time'
 
 // Mean apparent solar angular radius (959.63 arcsec) used as a fallback when no SunMoonPosition is supplied.
 const SUN_MEAN_ANGULAR_RADIUS = 959.63 * ASEC2RAD
-// Default half-width of the local contact search window, in seconds. Mirrors the global engine's default so
-// the local contacts are searched over the same span around maximumTime.
+// Default half-width of the local contact search window, in seconds. Mirrors the global engine's default
+// (sun.eclipse.ts) so the local contacts are searched over the same span around maximumTime. NOT widened to
+// 6 h: the Besselian polynomial is fit over only +-3 h (t0 +- 3 h), so a wider window would evaluate heavily
+// extrapolated, unreliable elements. When a central/partial contact is missed at this span, the window is
+// instead expanded adaptively up to MAX_CONTACT_SEARCH_SPAN_SECONDS, which stays near the fit edge.
 const DEFAULT_CONTACT_SEARCH_SPAN_SECONDS = 3.5 * 3600
+// Hard cap for the adaptive contact-window expansion, in seconds. Kept close to the +-3 h polynomial fit so
+// the search never relies on far extrapolation.
+const MAX_CONTACT_SEARCH_SPAN_SECONDS = 5 * 3600
 // Default sampling step for the local contact/maximum search, in seconds.
 const DEFAULT_LOCAL_SEARCH_STEP_SECONDS = 60
 // Root tolerance for local contact instants, in days (~1 ms).
 const CONTACT_TOLERANCE_DAYS = 1e-8
+// Physical tolerance (Earth equatorial radii) for a grazing (tangential) contact: a local extremum of the
+// contact function whose refined |value| stays within this is accepted as a double root even without a sign
+// change. ~6e-3 km at the Earth's surface; tight enough not to invent contacts on a clearly partial location.
+const CONTACT_FUNCTION_TOLERANCE = 1e-6
 // Order in which contacts are scanned and drawn, earliest to latest.
 const CONTACT_ORDER = ['C1', 'C2', 'MAX', 'C3', 'C4'] as const
 
@@ -114,14 +123,18 @@ export interface LocalSolarEclipseCircumstances {
 	readonly localView?: LocalSolarEclipseViewGeometry
 }
 
-// Internal per-event state needed to draw the Local View without recomputing the fundamental geometry.
+// Internal per-event state needed to draw the Local View without recomputing the fundamental geometry. The
+// Local View draws the lunar CENTER, so these are the center position angles, not the limb-contact angles
+// reported on the event (positionAngleP/zenithAngleZ).
 export interface LocalViewEventState {
 	// Sun-Moon center separation in solar radii at the event.
 	readonly separationSolarRadii: number
-	// Position angle P (from celestial north toward east), or null.
-	readonly P: Angle | null
-	// Zenith-oriented position angle Z, or null.
-	readonly Z: Angle | null
+	// Position angle of the lunar center from celestial north toward east, or null.
+	readonly centerPositionAngleP: Angle | null
+	// Zenith-oriented position angle of the lunar center, or null.
+	readonly centerZenithAngleZ: Angle | null
+	// Solar parallactic angle (radians) at the event, used to rotate the horizon in the north frame, or null.
+	readonly parallacticAngle: Angle | null
 	// Solar altitude (radians) at the event.
 	readonly sunAltitude: Angle
 	// Apparent solar angular radius (radians), or null when unavailable.
@@ -143,10 +156,12 @@ export interface LocalSolarEclipseEvent {
 	// Uses apparent Sun center altitude if sunMoonPosition is available, otherwise a Besselian approximation.
 	readonly sunAltitude: Angle
 
-	// Position angle measured from celestial north toward east, normalized to [0, TAU).
+	// Position angle of the contact point on the solar limb, from celestial north toward east, normalized to
+	// [0, TAU). This is the table/circumstances angle: it coincides with the lunar-center angle at C1/MAX/C4
+	// and at annular C2/C3, but is opposite (center + PI) at total C2/C3 (internal tangency on the far limb).
 	readonly positionAngleP: Angle | null
 
-	// Position angle in the local zenith-oriented frame, normalized to [0, TAU).
+	// Same contact-point angle in the local zenith-oriented frame, normalized to [0, TAU).
 	readonly zenithAngleZ: Angle | null
 
 	// Whether the Sun is above or below the horizon at the event.
@@ -282,8 +297,11 @@ export interface LocalSolarEclipseViewGeometry {
 	readonly height: number
 	// Orientation frame the geometry was built in.
 	readonly orientationMode: LocalViewOrientationMode
-	// Which contact was drawn as the primary state.
-	readonly selectedEvent: LocalEclipseContactKind
+	// The contact the caller requested as the primary state.
+	readonly requestedEvent: LocalEclipseContactKind
+	// The contact actually drawn as the primary state: the requested one when available, otherwise the
+	// fallback chosen by the builder, or null when no event exists at all.
+	readonly selectedEvent: LocalEclipseContactKind | null
 	// Solar disk radius in SVG pixels.
 	readonly solarRadiusPx: number
 	// All drawable shapes.
@@ -361,13 +379,12 @@ function localStateAtJulianDay(pbe: PolynomialBesselianElements, longitude: Angl
 	return computeLocalFundamentalState(pbe, longitude, latitude, timeAtJulianDay(pbe.maximumTime, jd))
 }
 
-// Solar altitude (radians) at one instant. With a SunMoonPosition source it uses the apparent Sun
+// Solar altitude (radians) at one instant. With a SunMoonPosition sample it uses the apparent Sun
 // right ascension/declination and Greenwich apparent sidereal time; without it, it falls back to the
 // Besselian shadow-axis altitude (an approximation: the axis is treated as the Sun direction and the
 // geodetic latitude is used directly, matching solarAltitudeAtPoint in sun.eclipse.ts).
-function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, sunMoonPosition: ((time: Time) => SunMoonPosition) | undefined, fallbackBesselian: InstantBesselianElements): Angle {
-	if (sunMoonPosition) {
-		const sample = sunMoonPosition(time)
+function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, sample: SunMoonPosition | undefined, fallbackBesselian: InstantBesselianElements): Angle {
+	if (sample) {
 		const deltaT = sample.deltaT ?? 0
 		const ttTime = tt(time)
 		const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
@@ -383,52 +400,57 @@ function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, sun
 	return Math.asin(clamp(sinAltitude, -1, 1))
 }
 
-// Position angles of the lunar center relative to the solar center.
+// Topocentric local aspect of one contact, derived entirely from the local Besselian fundamental-plane
+// state so it stays consistent with the local separation and contacts. The geocentric Moon RA/Dec is NOT
+// used to orient the Local View: the lunar position the observer sees is dominated by topocentric parallax,
+// which the fundamental-plane offset (u, v) already encodes.
 //
-// With a SunMoonPosition source, P is the tangent-plane bearing of the Moon from the Sun measured from
-// celestial north toward east, q is the solar parallactic angle, and Z = P - q is the zenith-oriented
-// angle. Without the source, both are approximated from the fundamental-plane offset (u, v); the single
-// helper keeps the sign in one place so it can be validated/flipped if the Local View appears mirrored.
-function computePositionAngles(time: Time, longitude: Angle, latitude: Angle, state: LocalFundamentalState, sunMoonPosition?: (time: Time) => SunMoonPosition): { P: Angle | null; Z: Angle | null; parallacticAngle: Angle | null } {
-	if (sunMoonPosition) {
-		const position = sunMoonPosition(time)
-		const dRA = normalizePI(position.moonRightAscension - position.sunRightAscension)
-		const cosMoonDec = Math.cos(position.moonDeclination)
-		const sinMoonDec = Math.sin(position.moonDeclination)
-		const cosSunDec = Math.cos(position.sunDeclination)
-		const sinSunDec = Math.sin(position.sunDeclination)
-		const cosDRA = Math.cos(dRA)
-		const east = cosMoonDec * Math.sin(dRA)
-		const north = sinMoonDec * cosSunDec - cosMoonDec * sinSunDec * cosDRA
-		const P = normalizeAngle(Math.atan2(east, north))
+// Geometry: with the shadow axis ~ the Sun direction (+z), the observer-to-Moon transverse offset in the
+// fundamental plane is exactly (u, v) = (be.x - ksi, be.y - eta), whose axes are celestial (east, north).
+// So the lunar CENTER position angle from north toward east is atan2(u, v). The solar parallactic angle q
+// rotates that into the zenith frame (Z = P - q). The limb-CONTACT angle equals the center angle except at
+// a total internal tangency (C2/C3 total), where the last solar sliver is on the far limb (center + PI).
+interface LocalTopocentricAspect {
+	// Position angle of the lunar center, from celestial north toward east, in [0, TAU).
+	readonly centerPositionAngleP: Angle
+	// Position angle of the lunar center in the zenith frame, in [0, TAU).
+	readonly centerZenithAngleZ: Angle
+	// Position angle of the limb-contact point, from celestial north toward east, in [0, TAU).
+	readonly contactPositionAngleP: Angle
+	// Position angle of the limb-contact point in the zenith frame, in [0, TAU).
+	readonly contactZenithAngleZ: Angle
+	// Solar parallactic angle, in [-PI, PI].
+	readonly parallacticAngle: Angle
+}
 
-		const deltaT = position.deltaT ?? 0
-		const ttTime = tt(time)
-		const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
-		const gast = eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
-		const H = gast + longitude - position.sunRightAscension
-		const q = Math.atan2(Math.sin(H), Math.tan(latitude) * cosSunDec - sinSunDec * Math.cos(H))
-		const Z = normalizeAngle(P - q)
-		return { P, Z, parallacticAngle: normalizePI(q) }
-	}
+// Rotates a center position angle to the corresponding limb-contact angle: identical except at a total
+// internal tangency (C2/C3), where the contact point sits on the opposite limb.
+function contactAngleFromCenter(kind: LocalEclipseContactKind, centralKind: LocalCentralPhaseKind, centerAngle: Angle) {
+	if ((kind === 'C2' || kind === 'C3') && centralKind === 'total') return normalizeAngle(centerAngle + PI)
+	return normalizeAngle(centerAngle)
+}
 
-	// Fallback approximation: the Moon-relative-to-Sun direction is opposite the observer-to-axis offset
-	// (u, v) in the fundamental plane, whose x/y axes are celestial east/north.
-	const P = normalizeAngle(Math.atan2(-state.u, -state.v))
+function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: LocalFundamentalState, latitude: Angle): LocalTopocentricAspect {
+	const centerP = normalizeAngle(Math.atan2(state.u, state.v))
 	const be = state.be
 	const H = state.hourAngle
+	// Solar parallactic angle from the Besselian shadow-axis declination and local hour angle.
 	const q = Math.atan2(Math.sin(H), Math.tan(latitude) * Math.cos(be.d) - Math.sin(be.d) * Math.cos(H))
-	const Z = normalizeAngle(P - q)
-	return { P, Z, parallacticAngle: normalizePI(q) }
+	const centerZ = normalizeAngle(centerP - q)
+	const centralKind = eventCentralKind(kind, state)
+
+	return {
+		centerPositionAngleP: centerP,
+		centerZenithAngleZ: centerZ,
+		contactPositionAngleP: contactAngleFromCenter(kind, centralKind, centerP),
+		contactZenithAngleZ: contactAngleFromCenter(kind, centralKind, centerZ),
+		parallacticAngle: normalizePI(q),
+	}
 }
 
 // Apparent solar angular radius (radians) from the Sun distance, falling back to the mean value.
-function computeSolarAngularRadius(time: Time, sunMoonPosition?: (time: Time) => SunMoonPosition): Angle {
-	if (sunMoonPosition) {
-		const sample = sunMoonPosition(time)
-		if (sample.sunDistance > 0) return Math.asin(clamp(SUN_RADIUS_EARTH_RADII / sample.sunDistance, -1, 1))
-	}
-
+function computeSolarAngularRadius(sample: SunMoonPosition | undefined): Angle {
+	if (sample && sample.sunDistance > 0) return Math.asin(clamp(SUN_RADIUS_EARTH_RADII / sample.sunDistance, -1, 1))
 	return SUN_MEAN_ANGULAR_RADIUS
 }
 
@@ -459,11 +481,12 @@ function describeEvent(kind: LocalEclipseContactKind, centralKind: LocalCentralP
 function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions): LocalSolarEclipseEvent {
 	const time = timeAtJulianDay(pbe.maximumTime, jd)
 	const state = computeLocalFundamentalState(pbe, longitude, latitude, time)
-	const sunMoonPosition = options.sunMoonPosition
+	// One ephemeris sample per event, shared by altitude and angular-radius (was up to three calls).
+	const sample = options.sunMoonPosition?.(time)
 
-	const sunAltitude = computeSolarAltitude(time, longitude, latitude, sunMoonPosition, state.be)
-	const { P, Z } = computePositionAngles(time, longitude, latitude, state, sunMoonPosition)
-	const solarAngularRadius = computeSolarAngularRadius(time, sunMoonPosition)
+	const sunAltitude = computeSolarAltitude(time, longitude, latitude, sample, state.be)
+	const solarAngularRadius = computeSolarAngularRadius(sample)
+	const aspect = computeLocalTopocentricAspect(kind, state, latitude)
 
 	const horizonAltitude = options.horizonAltitude ?? 0
 	const observable = sunAltitude >= horizonAltitude
@@ -478,14 +501,15 @@ function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: Polynom
 		time,
 		jd,
 		sunAltitude,
-		positionAngleP: P,
-		zenithAngleZ: Z,
+		// The table angles are the limb-contact angles; the Local View uses the center angles below.
+		positionAngleP: aspect.contactPositionAngleP,
+		zenithAngleZ: aspect.contactZenithAngleZ,
 		visibility: observable ? 'aboveHorizon' : 'belowHorizon',
 		observable,
 		magnitude: state.magnitude,
 		moonSunDiameterRatio: state.moonSunDiameterRatio,
 		centralPhaseKind: kind === 'C2' || kind === 'C3' ? centralKind : state.centralPhaseKind,
-		localViewState: { separationSolarRadii, P, Z, sunAltitude, solarAngularRadius },
+		localViewState: { separationSolarRadii, centerPositionAngleP: aspect.centerPositionAngleP, centerZenithAngleZ: aspect.centerZenithAngleZ, parallacticAngle: aspect.parallacticAngle, sunAltitude, solarAngularRadius },
 	}
 }
 
@@ -528,28 +552,51 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 	return bestJd
 }
 
-// Finds every Julian Day in [fromJd, toJd] where the scalar contact function fn changes sign, by uniform
-// scan plus bisection refinement. Roots are returned sorted ascending.
+// Inserts a root unless an equal one (within ~10x the time tolerance) is already present.
+function pushUniqueRoot(roots: number[], root: number) {
+	if (!roots.some((existing) => Math.abs(existing - root) < CONTACT_TOLERANCE_DAYS * 10)) roots.push(root)
+}
+
+// Finds every Julian Day in [fromJd, toJd] where the scalar contact function fn reaches zero, by uniform
+// scan plus refinement. Both transversal roots (sign changes) and grazing/tangential roots (a strict local
+// extremum whose refined |fn| stays within CONTACT_FUNCTION_TOLERANCE, which a sign-change scan cannot see)
+// are captured. Roots are deduplicated and returned sorted ascending.
 export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number, fn: (state: LocalFundamentalState) => number): readonly number[] {
 	const evaluate = (jd: number) => fn(localStateAtJulianDay(pbe, longitude, latitude, jd))
 	const roots: number[] = []
 
-	let previousJd = fromJd
-	let previousValue = evaluate(fromJd)
-	if (previousValue === 0) roots.push(fromJd)
+	// Sample the whole window once so neighboring triplets can be inspected for grazing extrema.
+	const jds: number[] = []
+	const values: number[] = []
+	for (let jd = fromJd; jd <= toJd + 1e-12; jd += stepDays) {
+		jds.push(jd)
+		values.push(evaluate(jd))
+	}
 
-	for (let jd = fromJd + stepDays; jd <= toJd + 1e-12; jd += stepDays) {
-		const value = evaluate(jd)
-
-		if (value === 0) {
-			roots.push(jd)
-		} else if (previousValue * value < 0) {
-			const root = bisectRoot(evaluate, previousJd, jd)
-			if (root !== undefined) roots.push(root)
+	// Transversal roots: exact zeros on a sample and sign changes between neighbors.
+	for (let k = 0; k < jds.length; k++) {
+		if (values[k] === 0) {
+			pushUniqueRoot(roots, jds[k])
+		} else if (k + 1 < jds.length && values[k] * values[k + 1] < 0) {
+			const root = bisectRoot(evaluate, jds[k], jds[k + 1])
+			if (root !== undefined) pushUniqueRoot(roots, root)
 		}
+	}
 
-		previousJd = jd
-		previousValue = value
+	// Grazing roots: a strict interior local extremum (min or max) whose refined |fn| touches zero.
+	for (let k = 1; k + 1 < jds.length; k++) {
+		const isMinimum = values[k] < values[k - 1] && values[k] < values[k + 1]
+		const isMaximum = values[k] > values[k - 1] && values[k] > values[k + 1]
+		if (!isMinimum && !isMaximum) continue
+
+		try {
+			// Minimize fn for a minimum, or -fn for a maximum, within the one-step bracket.
+			const sign = isMinimum ? 1 : -1
+			const result = brentMinimize((jd) => sign * evaluate(jd), jds[k - 1], jds[k + 1], { tolerance: CONTACT_TOLERANCE_DAYS })
+			if (Number.isFinite(result.minimum) && Math.abs(evaluate(result.minimum)) <= CONTACT_FUNCTION_TOLERANCE) pushUniqueRoot(roots, result.minimum)
+		} catch {
+			// No reliable grazing root in this bracket.
+		}
 	}
 
 	roots.sort((a, b) => a - b)
@@ -578,11 +625,10 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 
 	const span = validPositive(options.contactSearchSpan, DEFAULT_CONTACT_SEARCH_SPAN_SECONDS) / DAYSEC
 	const stepDays = validPositive(options.localSearchStepSeconds, DEFAULT_LOCAL_SEARCH_STEP_SECONDS) / DAYSEC
+	const maxSpan = Math.max(span, MAX_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC)
 	const centerJd = toJulianDay(pbe.maximumTime)
-	const fromJd = centerJd - span
-	const toJd = centerJd + span
 
-	const maximumJd = findLocalMaximumTime(pbe, longitude, latitude, fromJd, toJd, stepDays)
+	const maximumJd = findLocalMaximumTime(pbe, longitude, latitude, centerJd - span, centerJd + span, stepDays)
 	if (maximumJd === undefined) return empty
 
 	const maximumState = localStateAtJulianDay(pbe, longitude, latitude, maximumJd)
@@ -591,21 +637,36 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 
 	const MAX = buildLocalEvent('MAX', maximumJd, pbe, longitude, latitude, options)
 
-	const partialRoots = findLocalContactRoots(pbe, longitude, latitude, fromJd, toJd, stepDays, partialContactFunction)
-	const c1Jd = rootBefore(partialRoots, maximumJd)
-	const c4Jd = rootAfter(partialRoots, maximumJd)
-	const C1 = c1Jd !== undefined ? buildLocalEvent('C1', c1Jd, pbe, longitude, latitude, options) : null
-	const C4 = c4Jd !== undefined ? buildLocalEvent('C4', c4Jd, pbe, longitude, latitude, options) : null
+	// Resolves the two contacts (ingress before / egress after the maximum) bracketing the maximum for a
+	// contact function, expanding the search window from `span` toward `maxSpan` while either is still
+	// missing. Expansion is bounded so the Besselian polynomial is never evaluated far past its +-3 h fit.
+	const resolveContacts = (fn: (state: LocalFundamentalState) => number) => {
+		let currentSpan = span
+		let before: number | undefined
+		let after: number | undefined
+
+		while (true) {
+			const roots = findLocalContactRoots(pbe, longitude, latitude, centerJd - currentSpan, centerJd + currentSpan, stepDays, fn)
+			before = rootBefore(roots, maximumJd)
+			after = rootAfter(roots, maximumJd)
+			if ((before !== undefined && after !== undefined) || currentSpan >= maxSpan) break
+			currentSpan = Math.min(currentSpan * 1.5, maxSpan)
+		}
+
+		return { before, after }
+	}
+
+	const partial = resolveContacts(partialContactFunction)
+	const C1 = partial.before !== undefined ? buildLocalEvent('C1', partial.before, pbe, longitude, latitude, options) : null
+	const C4 = partial.after !== undefined ? buildLocalEvent('C4', partial.after, pbe, longitude, latitude, options) : null
 
 	let C2: LocalSolarEclipseEvent | null = null
 	let C3: LocalSolarEclipseEvent | null = null
 
 	if (maximumState.centralPhaseKind !== 'none') {
-		const centralRoots = findLocalContactRoots(pbe, longitude, latitude, fromJd, toJd, stepDays, centralContactFunction)
-		const c2Jd = rootBefore(centralRoots, maximumJd)
-		const c3Jd = rootAfter(centralRoots, maximumJd)
-		C2 = c2Jd !== undefined ? buildLocalEvent('C2', c2Jd, pbe, longitude, latitude, options) : null
-		C3 = c3Jd !== undefined ? buildLocalEvent('C3', c3Jd, pbe, longitude, latitude, options) : null
+		const central = resolveContacts(centralContactFunction)
+		C2 = central.before !== undefined ? buildLocalEvent('C2', central.before, pbe, longitude, latitude, options) : null
+		C3 = central.after !== undefined ? buildLocalEvent('C3', central.after, pbe, longitude, latitude, options) : null
 	}
 
 	return { C1, C2, MAX, C3, C4 }
@@ -644,15 +705,17 @@ function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']
 	const present = [C1, C2, MAX, C3, C4].filter((event): event is LocalSolarEclipseEvent => event !== null)
 	const anyAbove = present.some((event) => event.observable)
 	const allAbove = present.every((event) => event.observable)
-	const hasCentral = C2 !== null && C3 !== null
+	// Central phase is decided by the local maximum, not by C2/C3 existing: a narrow window or a grazing
+	// (tangential) central contact may fail to yield both endpoints even though the maximum is central.
+	const hasCentralPhase = MAX.centralPhaseKind !== 'none'
 	const centralPhaseKind: LocalCentralPhaseKind = MAX.centralPhaseKind
 
 	let kind: LocalVisibilityKind
 	if (!anyAbove) {
 		kind = 'geometricOnlyBelowHorizon'
-	} else if (hasCentral) {
+	} else if (hasCentralPhase) {
 		if (allAbove) kind = 'completelyVisible'
-		else if (C2.observable || C3.observable || MAX.observable) kind = 'centralPhaseVisible'
+		else if ((C2?.observable ?? false) || (C3?.observable ?? false) || MAX.observable) kind = 'centralPhaseVisible'
 		else kind = 'partiallyVisible'
 	} else if (allAbove && C1 !== null && C4 !== null) {
 		kind = 'completelyVisible'
@@ -660,21 +723,91 @@ function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']
 		kind = 'partialOnlyVisible'
 	}
 
-	return { kind, text: localVisibilityText(kind), hasGeometricEclipse: true, hasObservableEclipse: anyAbove, hasCentralPhase: hasCentral, centralPhaseKind }
+	return { kind, text: localVisibilityText(kind), hasGeometricEclipse: true, hasObservableEclipse: anyAbove, hasCentralPhase, centralPhaseKind }
 }
 
-// First-order local shadow-path width in km, computed only for a central local maximum with the Sun above
-// the horizon: the umbral cone radius |L2| (Earth equatorial radii) is scaled to km and foreshortened by
-// the solar altitude. This is an explicit approximation, not the global path width; null otherwise.
-export function computeLocalShadowPathWidthKm(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, maxEvent: LocalSolarEclipseEvent): number | null {
+// Maximum geodesic half-width (km) probed when measuring the central shadow path on the ground. A genuine
+// local path width stays well under this; a probe that runs past it (e.g. a grazing umbra near the
+// terminator, whose ground footprint stretches enormously) is reported as null instead of an absurd value.
+const MAX_SHADOW_HALF_WIDTH_KM = 600
+// March step (km) for the central-edge search across the path.
+const SHADOW_EDGE_STEP_KM = 5
+
+// Destination geographic point reached from (lon, lat) along a great-circle bearing (from north toward
+// east) after a surface distance, on a sphere of radius EARTH_RADIUS_KM.
+function destinationPoint(longitude: Angle, latitude: Angle, bearing: Angle, distanceKm: number): readonly [Angle, Angle] {
+	const angular = distanceKm / EARTH_RADIUS_KM
+	const sinLat = Math.sin(latitude)
+	const cosLat = Math.cos(latitude)
+	const sinAng = Math.sin(angular)
+	const cosAng = Math.cos(angular)
+	const lat2 = Math.asin(clamp(sinLat * cosAng + cosLat * sinAng * Math.cos(bearing), -1, 1))
+	const lon2 = longitude + Math.atan2(Math.sin(bearing) * sinAng * cosLat, cosAng - sinLat * Math.sin(lat2))
+	return [lon2, lat2]
+}
+
+// Distance (km) from the observer to the central-shadow edge along a bearing at a fixed instant: marches
+// outward until the central-contact function turns non-negative (leaves the umbra/antumbra), then bisects.
+// Returns undefined when no edge is found within MAX_SHADOW_HALF_WIDTH_KM.
+function findCentralShadowEdgeKm(centralValueAt: (longitude: Angle, latitude: Angle) => number, longitude: Angle, latitude: Angle, bearing: Angle): number | undefined {
+	let previousKm = 0
+	let previousValue = centralValueAt(longitude, latitude)
+
+	for (let distanceKm = SHADOW_EDGE_STEP_KM; distanceKm <= MAX_SHADOW_HALF_WIDTH_KM; distanceKm += SHADOW_EDGE_STEP_KM) {
+		const [lon, lat] = destinationPoint(longitude, latitude, bearing, distanceKm)
+		const value = centralValueAt(lon, lat)
+
+		if (previousValue < 0 && value >= 0) {
+			let lo = previousKm
+			let hi = distanceKm
+			for (let i = 0; i < 40 && hi - lo > 1e-3; i++) {
+				const mid = (lo + hi) * 0.5
+				const [midLon, midLat] = destinationPoint(longitude, latitude, bearing, mid)
+				if (centralValueAt(midLon, midLat) < 0) lo = mid
+				else hi = mid
+			}
+			return (lo + hi) * 0.5
+		}
+
+		previousKm = distanceKm
+		previousValue = value
+	}
+
+	return undefined
+}
+
+// Robust local width (km) of the central (total/annular) shadow path, measured on the Earth's surface at
+// the instant of the local maximum. The umbra/antumbra footprint is found directly in geographic
+// coordinates: the across-path direction is the gradient of the central-contact function at the observer,
+// and the path edges are where that function vanishes on either side; the geodesic distance between them is
+// the width. Working on the ground makes the foreshortening near the horizon implicit, avoiding the
+// 1 / sin(altitude) blow-up of a fundamental-plane estimate. Returns null when the maximum is not central,
+// the observer is not inside the central shadow, or an edge is not found within MAX_SHADOW_HALF_WIDTH_KM.
+export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, maxEvent: LocalSolarEclipseEvent): number | null {
 	if (maxEvent.centralPhaseKind === 'none') return null
 
-	const sinAltitude = Math.sin(maxEvent.sunAltitude)
-	if (!(sinAltitude > 0)) return null
+	const time = timeAtJulianDay(pbe.maximumTime, maxEvent.jd)
+	const centralValueAt = (lon: Angle, lat: Angle) => centralContactFunction(computeLocalFundamentalState(pbe, lon, lat, time))
 
-	const state = localStateAtJulianDay(pbe, longitude, latitude, maxEvent.jd)
-	const width = (2 * Math.abs(state.L2) * EARTH_RADIUS_KM) / sinAltitude
-	return Number.isFinite(width) ? width : null
+	// The observer must be inside the central shadow (function < 0) for a width to be defined.
+	if (!(centralValueAt(longitude, latitude) < 0)) return null
+
+	const cosLat = Math.cos(latitude)
+	if (!(Math.abs(cosLat) > 1e-6)) return null
+
+	// Across-path direction from the geographic gradient of the central-contact function (local east/north).
+	const delta = 1e-4
+	const eastGradient = (centralValueAt(longitude + delta / cosLat, latitude) - centralValueAt(longitude - delta / cosLat, latitude)) / (2 * delta)
+	const northGradient = (centralValueAt(longitude, latitude + delta) - centralValueAt(longitude, latitude - delta)) / (2 * delta)
+	const gradientLength = Math.hypot(eastGradient, northGradient)
+	if (!(gradientLength > 0)) return null
+
+	const bearing = Math.atan2(eastGradient / gradientLength, northGradient / gradientLength)
+	const forward = findCentralShadowEdgeKm(centralValueAt, longitude, latitude, bearing)
+	const backward = findCentralShadowEdgeKm(centralValueAt, longitude, latitude, bearing + PI)
+	if (forward === undefined || backward === undefined) return null
+
+	return forward + backward
 }
 
 // Computes the local detail summary (magnitude, ratios and durations) from the resolved events.
@@ -690,18 +823,26 @@ function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], s
 	}
 }
 
+// Returns the event's Local View state or throws: drawing without it would silently place the Moon
+// concentric with the Sun, which looks valid but is physically wrong. Events from buildLocalEvent always
+// carry it; this guards against externally constructed events.
+function requireLocalViewState(event: LocalSolarEclipseEvent): LocalViewEventState {
+	if (!event.localViewState) throw new Error(`Local View requires localViewState for ${event.kind}`)
+	return event.localViewState
+}
+
 // Computes the solar and lunar disk circles for one event in the Local View frame. The Sun is centered in
-// the diagram; the Moon is offset by the local separation along the orientation-selected position angle,
-// measured from the top of the diagram clockwise.
+// the diagram; the Moon is offset by the local separation along the lunar-CENTER position angle (never the
+// limb-contact angle), measured from the top of the diagram clockwise.
 export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options: LocalSolarEclipseViewOptions): { sun: LocalSolarEclipseSvgCircle; moon: LocalSolarEclipseSvgCircle } {
+	const viewState = requireLocalViewState(event)
 	const sunCx = options.width * 0.5
 	const sunCy = options.height * 0.5
 	const sunR = options.solarRadiusPx
 	const moonR = sunR * (event.moonSunDiameterRatio ?? 1)
 
-	const separationSolarRadii = event.localViewState?.separationSolarRadii ?? 0
-	const separationPx = separationSolarRadii * sunR
-	const angle = (options.orientationMode === 'zenith' ? event.zenithAngleZ : event.positionAngleP) ?? 0
+	const separationPx = viewState.separationSolarRadii * sunR
+	const angle = (options.orientationMode === 'zenith' ? viewState.centerZenithAngleZ : viewState.centerPositionAngleP) ?? 0
 
 	const dx = separationPx * Math.sin(angle)
 	const dy = -separationPx * Math.cos(angle)
@@ -712,30 +853,67 @@ export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options:
 	}
 }
 
-// Builds the apparent-horizon geometry for one event: a horizontal line whose vertical offset reflects the
-// solar altitude (zenith up), plus a band polygon below it. The north orientation keeps the horizon
-// horizontal as well: the parallactic rotation is intentionally not applied until validated visually.
-export function buildLocalViewHorizonGeometry(event: LocalSolarEclipseEvent, options: LocalSolarEclipseViewOptions): readonly LocalSolarEclipseSvgShape[] {
-	const sunCy = options.height * 0.5
-	const solarAngularRadius = event.localViewState?.solarAngularRadius ?? null
+// Converts a solar altitude to its signed Local View offset (px) from the Sun center along the zenith
+// direction. Guarded against non-finite inputs and clamped only for numerical stability (not physics).
+function altitudeToLocalViewOffsetPx(sunAltitude: Angle, solarAngularRadius: Angle | null, solarRadiusPx: number, width: number, height: number) {
+	if (!solarAngularRadius || !(solarAngularRadius > 0)) return 0
+	const offset = (sunAltitude / solarAngularRadius) * solarRadiusPx
+	if (!Number.isFinite(offset)) return 0
+	const maxOffset = Math.hypot(width, height) * 2
+	return clamp(offset, -maxOffset, maxOffset)
+}
 
-	let horizonY = sunCy
-	if (solarAngularRadius && solarAngularRadius > 0) {
-		const altitudeInSolarRadii = event.sunAltitude / solarAngularRadius
-		horizonY = sunCy + altitudeInSolarRadii * options.solarRadiusPx
+// Builds the apparent-horizon geometry for one event: a horizon line whose distance from the Sun center
+// reflects the solar altitude, plus a band polygon on the below-horizon side.
+//
+// In the `zenith` frame the zenith is straight up, so the horizon is horizontal and a positive altitude
+// pushes it below the Sun center. In the `north` frame the top is celestial north, so the zenith is rotated
+// from "up" by the solar parallactic angle q; the horizon is rotated with it. At q = 0 the north frame
+// reduces exactly to the zenith frame.
+export function buildLocalViewHorizonGeometry(event: LocalSolarEclipseEvent, options: LocalSolarEclipseViewOptions): readonly LocalSolarEclipseSvgShape[] {
+	const viewState = requireLocalViewState(event)
+	const sunCx = options.width * 0.5
+	const sunCy = options.height * 0.5
+
+	// Zenith direction (unit) in SVG pixels (y grows downward): straight up in zenith mode, rotated by the
+	// parallactic angle in north mode.
+	const q = options.orientationMode === 'north' ? (viewState.parallacticAngle ?? 0) : 0
+	const zenithX = Math.sin(q)
+	const zenithY = -Math.cos(q)
+
+	const offsetPx = altitudeToLocalViewOffsetPx(event.sunAltitude, viewState.solarAngularRadius, options.solarRadiusPx, options.width, options.height)
+	// A point on the horizon: from the Sun center, move away from the zenith by the altitude offset.
+	const horizonX = sunCx - offsetPx * zenithX
+	const horizonY = sunCy - offsetPx * zenithY
+
+	// The horizon line runs perpendicular to the zenith direction; make it long enough to span the diagram.
+	const tangentX = -zenithY
+	const tangentY = zenithX
+	const half = Math.hypot(options.width, options.height)
+	const line: LocalSolarEclipseSvgLine = {
+		kind: 'line',
+		role: 'horizonLine',
+		x1: horizonX - tangentX * half,
+		y1: horizonY - tangentY * half,
+		x2: horizonX + tangentX * half,
+		y2: horizonY + tangentY * half,
 	}
 
-	const line: LocalSolarEclipseSvgLine = { kind: 'line', role: 'horizonLine', x1: 0, y1: horizonY, x2: options.width, y2: horizonY }
+	// The band fills the half-plane away from the zenith (below the horizon), offset by the padding. It is
+	// intentionally oversized and left to be clipped by the SVG viewport.
 	const padding = options.horizonBandPaddingPx ?? 0
-	const bandTop = horizonY + padding
+	const awayX = -zenithX
+	const awayY = -zenithY
+	const near = padding
+	const far = padding + 2 * half
 	const band: LocalSolarEclipseSvgPolygon = {
 		kind: 'polygon',
 		role: 'horizonBand',
 		points: [
-			{ x: 0, y: bandTop },
-			{ x: options.width, y: bandTop },
-			{ x: options.width, y: options.height },
-			{ x: 0, y: options.height },
+			{ x: horizonX - tangentX * half + awayX * near, y: horizonY - tangentY * half + awayY * near },
+			{ x: horizonX + tangentX * half + awayX * near, y: horizonY + tangentY * half + awayY * near },
+			{ x: horizonX + tangentX * half + awayX * far, y: horizonY + tangentY * half + awayY * far },
+			{ x: horizonX - tangentX * half + awayX * far, y: horizonY - tangentY * half + awayY * far },
 		],
 	}
 
@@ -746,6 +924,7 @@ export function buildLocalViewHorizonGeometry(event: LocalSolarEclipseEvent, opt
 function selectPrimaryEvent(events: LocalSolarEclipseCircumstances['events'], selectedEvent: LocalEclipseContactKind) {
 	const requested = events[selectedEvent]
 	if (requested) return requested
+	if (events.MAX) return events.MAX
 	for (const kind of CONTACT_ORDER) {
 		const event = events[kind]
 		if (event) return event
@@ -760,13 +939,15 @@ export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSola
 	const shapes: LocalSolarEclipseSvgShape[] = []
 	const primary = selectPrimaryEvent(events, options.selectedEvent)
 
-	// Ghost disks for every other available contact, drawn behind the primary state.
+	// Ghost MOON disks for every other available contact, drawn behind the primary state. The Sun is fixed
+	// at the diagram center, so a per-contact ghost Sun would only stack redundant circles; what differs
+	// between contacts is the lunar position, so only the Moon is ghosted.
 	if (options.includeGhostDisks) {
 		for (const kind of CONTACT_ORDER) {
 			const event = events[kind]
 			if (!event || event === primary) continue
-			const pair = computeLocalViewDiskPair(event, options)
-			shapes.push({ ...pair.sun, role: 'ghostSunDisk' }, { ...pair.moon, role: 'ghostMoonDisk' })
+			const { moon } = computeLocalViewDiskPair(event, options)
+			shapes.push({ ...moon, role: 'ghostMoonDisk' })
 		}
 	}
 
@@ -777,16 +958,16 @@ export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSola
 		shapes.push(pair.sun, pair.moon)
 	}
 
-	return { width: options.width, height: options.height, orientationMode: options.orientationMode, selectedEvent: options.selectedEvent, solarRadiusPx: options.solarRadiusPx, shapes }
+	return { width: options.width, height: options.height, orientationMode: options.orientationMode, requestedEvent: options.selectedEvent, selectedEvent: primary?.kind ?? null, solarRadiusPx: options.solarRadiusPx, shapes }
 }
 
 // Computes the full local circumstances for a geographic point: resolves contacts, summarizes details,
 // classifies visibility, and optionally builds the Local View. The result is immutable and serializable;
 // times are returned as Time/Julian Day and durations in seconds (the UI formats them).
-export function computeLocalSolarEclipseCircumstances(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions = {}): LocalSolarEclipseCircumstances {
+export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions = {}): LocalSolarEclipseCircumstances {
 	const events = computeLocalEclipseEvents(pbe, longitude, latitude, options)
 	const visibility = computeLocalVisibility(events)
-	const shadowPathWidthKm = events.MAX ? computeLocalShadowPathWidthKm(eclipse, pbe, longitude, latitude, events.MAX) : null
+	const shadowPathWidthKm = events.MAX ? computeLocalShadowPathWidthKm(pbe, longitude, latitude, events.MAX) : null
 	const details = computeLocalDetails(events, shadowPathWidthKm)
 
 	const result: LocalSolarEclipseCircumstances = {

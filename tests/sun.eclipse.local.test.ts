@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
-import { TAU } from '../src/constants'
+import { PI, TAU } from '../src/constants'
 import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
 import { computePolynomialBesselianElements, computeSunMoonPositionAt, type PolynomialBesselianElements } from '../src/sun.eclipse'
-import { buildLocalSolarEclipseViewGeometry, computeLocalSolarEclipseCircumstances, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions } from '../src/sun.eclipse.local'
+import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeLocalSolarEclipseCircumstances, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions } from '../src/sun.eclipse.local'
 import { timeYMD } from '../src/time'
 import * as elpmpp02 from '../src/elpmpp02'
 import * as vsop87e from '../src/vsop87e'
@@ -32,7 +32,7 @@ const annular2023 = (() => {
 })()
 
 function local(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, lon: number, lat: number, options = {}) {
-	return computeLocalSolarEclipseCircumstances(eclipse, pbe, deg(lon), deg(lat), { sunMoonPosition, ...options })
+	return computeLocalSolarEclipseCircumstances(pbe, deg(lon), deg(lat), { sunMoonPosition, ...options })
 }
 
 function expectContactKind(event: LocalSolarEclipseEvent | null, kind: string) {
@@ -138,9 +138,11 @@ describe('local view geometry', () => {
 		const roles = view.shapes.map((s) => s.role)
 		expect(roles).toContain('sunDisk')
 		expect(roles).toContain('moonDisk')
-		// Ghost disks for the other contacts are present, again without any label.
-		expect(roles).toContain('ghostSunDisk')
+		// Ghost MOON disks for the other contacts are present (the Sun is fixed at center, so it is never ghosted), again without any label.
 		expect(roles).toContain('ghostMoonDisk')
+		expect(roles).not.toContain('ghostSunDisk')
+		// Exactly one Sun disk is drawn.
+		expect(roles.filter((r) => r === 'sunDisk')).toHaveLength(1)
 	})
 
 	test('includes horizon geometry only when requested', () => {
@@ -162,5 +164,110 @@ describe('local view geometry', () => {
 		expect(moved).toBe(true)
 		// No button geometry is ever generated; only the four primitive kinds appear.
 		for (const view of [zenith, north]) for (const shape of view.shapes) expect(['circle', 'line', 'path', 'polygon']).toContain(shape.kind)
+	})
+
+	test('reports the actually-drawn event, falling back when the requested one is absent', () => {
+		// A partial-only location has no C2; the builder falls back to MAX and reports it honestly.
+		const partial = local(total2024.eclipse, total2024.pbe, -74, 40.71)
+		const view = buildLocalSolarEclipseViewGeometry(partial, viewOptions({ selectedEvent: 'C2' }))
+		expect(view.requestedEvent).toBe('C2')
+		expect(view.selectedEvent).toBe('MAX')
+	})
+})
+
+describe('local view topocentric invariants', () => {
+	const total = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
+	const annular = local(annular2023.eclipse, annular2023.pbe, -123, 43)
+
+	test('separations match the tangency geometry at every contact', () => {
+		for (const c of [total, annular]) {
+			// External tangency at C1/C4: centers separated by the sum of the radii (1 + ratio solar radii).
+			for (const k of ['C1', 'C4'] as const) {
+				const e = c.events[k]!
+				expect(e.localViewState!.separationSolarRadii).toBeCloseTo(1 + e.moonSunDiameterRatio!, 3)
+			}
+			// Internal tangency at C2/C3: centers separated by the difference of the radii.
+			for (const k of ['C2', 'C3'] as const) {
+				const e = c.events[k]!
+				expect(e.localViewState!.separationSolarRadii).toBeCloseTo(Math.abs(1 - e.moonSunDiameterRatio!), 3)
+			}
+			// The maximum is the closest approach: its separation is the smallest of all contacts.
+			const maxSep = c.events.MAX!.localViewState!.separationSolarRadii
+			for (const k of ['C1', 'C2', 'C3', 'C4'] as const) expect(maxSep).toBeLessThanOrEqual(c.events[k]!.localViewState!.separationSolarRadii + 1e-9)
+		}
+	})
+
+	test('the limb-contact angle is opposite the center only at a total internal tangency', () => {
+		const wrap = (a: number) => ((a % TAU) + TAU) % TAU
+		// Total C2/C3: the last solar sliver is on the far limb, so contact = center + PI.
+		for (const k of ['C2', 'C3'] as const) {
+			const e = total.events[k]!
+			expect(wrap(e.positionAngleP! - e.localViewState!.centerPositionAngleP!)).toBeCloseTo(PI, 6)
+		}
+		// Annular C2/C3 and all C1/MAX/C4: contact coincides with the lunar center.
+		for (const k of ['C2', 'C3'] as const) {
+			const e = annular.events[k]!
+			expect(wrap(e.positionAngleP! - e.localViewState!.centerPositionAngleP!)).toBeCloseTo(0, 6)
+		}
+		for (const k of ['C1', 'MAX', 'C4'] as const) {
+			const e = total.events[k]!
+			expect(wrap(e.positionAngleP! - e.localViewState!.centerPositionAngleP!)).toBeCloseTo(0, 6)
+		}
+	})
+})
+
+describe('local view horizon geometry', () => {
+	const solarRadiusPx = 34
+	const solarAngularRadius = deg(0.26)
+	const height = 160
+	const sunCy = height / 2
+
+	// Minimal renderable event with a hand-set altitude/parallactic angle for horizon geometry checks.
+	function horizonEvent(sunAltitude: number, parallacticAngle: number): LocalSolarEclipseEvent {
+		return {
+			kind: 'MAX',
+			description: '',
+			time: total2024.eclipse.maximalTime,
+			jd: 0,
+			sunAltitude,
+			positionAngleP: 0,
+			zenithAngleZ: 0,
+			visibility: 'aboveHorizon',
+			observable: true,
+			magnitude: 1,
+			moonSunDiameterRatio: 1,
+			centralPhaseKind: 'total',
+			localViewState: { separationSolarRadii: 0, centerPositionAngleP: 0, centerZenithAngleZ: 0, parallacticAngle, sunAltitude, solarAngularRadius },
+		}
+	}
+
+	// Horizon line of a zenith-frame view at a given solar altitude.
+	function zenithHorizonLine(sunAltitude: number) {
+		const shapes = buildLocalViewHorizonGeometry(horizonEvent(sunAltitude, 0), viewOptions({ solarRadiusPx, height, orientationMode: 'zenith' }))
+		return shapes.find((s) => s.role === 'horizonLine') as Extract<(typeof shapes)[number], { kind: 'line' }>
+	}
+
+	test('zenith horizon is horizontal and tracks the solar altitude', () => {
+		// Altitude 0: the horizon passes through the Sun center.
+		const atZero = zenithHorizonLine(0)
+		expect(atZero.y1).toBeCloseTo(atZero.y2, 9)
+		expect(atZero.y1).toBeCloseTo(sunCy, 9)
+		// Altitude = one solar angular radius: the horizon drops by one solar pixel radius below the center.
+		const atOne = zenithHorizonLine(solarAngularRadius)
+		expect(atOne.y1).toBeCloseTo(sunCy + solarRadiusPx, 6)
+		// Altitude = minus one solar angular radius: the horizon rises one solar pixel radius above the center.
+		const atMinusOne = zenithHorizonLine(-solarAngularRadius)
+		expect(atMinusOne.y1).toBeCloseTo(sunCy - solarRadiusPx, 6)
+	})
+
+	test('north horizon rotates with the parallactic angle', () => {
+		// q = 0: the north frame reduces to the zenith frame, so the horizon is horizontal.
+		const flat = buildLocalViewHorizonGeometry(horizonEvent(0, 0), viewOptions({ solarRadiusPx, height, orientationMode: 'north' }))
+		const flatLine = flat.find((s) => s.role === 'horizonLine') as Extract<(typeof flat)[number], { kind: 'line' }>
+		expect(flatLine.y1).toBeCloseTo(flatLine.y2, 9)
+		// q = PI/2: the zenith points sideways, so the horizon is vertical.
+		const vertical = buildLocalViewHorizonGeometry(horizonEvent(0, PI / 2), viewOptions({ solarRadiusPx, height, orientationMode: 'north' }))
+		const verticalLine = vertical.find((s) => s.role === 'horizonLine') as Extract<(typeof vertical)[number], { kind: 'line' }>
+		expect(verticalLine.x1).toBeCloseTo(verticalLine.x2, 9)
 	})
 })
