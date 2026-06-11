@@ -883,11 +883,17 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 
 	const MAX = buildLocalEvent('MAX', maximumJd, pbe, longitude, latitude, options)
 
+	// The contact search must start with a window that already contains the maximum: the adaptive maximum
+	// search above can find a maximum beyond `span`, and if the contact search restarted at `span` the whole
+	// phase (and both window edges) would lie outside it, so the edge-based expansion would never trigger. The
+	// floor is the smallest window enclosing the maximum (plus a step margin), bounded by `maxSpan`.
+	const minimumContactSearchSpan = Math.min(maxSpan, Math.max(span, Math.abs(maximumJd - centerJd) + 2 * stepDays))
+
 	// Resolves the two contacts (ingress before / egress after the maximum) bracketing the maximum for a
-	// contact function, expanding the search window from `span` toward `maxSpan` while either is still
-	// missing. Expansion is bounded so the Besselian polynomial is never evaluated far past its +-3 h fit.
+	// contact function, expanding the search window toward `maxSpan` while either is still missing. Expansion
+	// is bounded so the Besselian polynomial is never evaluated far past its +-3 h fit.
 	const resolveContacts = (fn: (state: LocalFundamentalState) => number) => {
-		let currentSpan = span
+		let currentSpan = minimumContactSearchSpan
 		let before: number | undefined
 		let after: number | undefined
 

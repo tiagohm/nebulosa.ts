@@ -169,6 +169,24 @@ describe('local circumstances', () => {
 		}
 	})
 
+	describe('recovers contacts when the local maximum lies far outside the initial search window', () => {
+		// Honolulu's 2024 local maximum is ~65 min before the global maximum (the eclipse is seen in the
+		// morning, far from the central path). With a small contactSearchSpan the initial window around the
+		// global maximum is entirely outside the phase, so the contact search must seed its window from the
+		// (adaptively found) local maximum rather than from the small initial span.
+		const reference = local(total2024.eclipse, total2024.pbe, -157.86, 21.3)
+		for (const contactSearchSpan of [1800, 600]) {
+			test(contactSearchSpan.toFixed(0), () => {
+				const c = local(total2024.eclipse, total2024.pbe, -157.86, 21.3, { contactSearchSpan })
+				expect(c.events.C1).not.toBeNull()
+				expect(c.events.C4).not.toBeNull()
+				expect(c.events.C1!.jd).toBeLessThan(c.events.MAX!.jd)
+				expect(c.events.C4!.jd).toBeGreaterThan(c.events.MAX!.jd)
+				expect(c.details.partialPhaseDurationSeconds!).toBeCloseTo(reference.details.partialPhaseDurationSeconds!, 0)
+			})
+		}
+	})
+
 	test('observability of every event matches its solar altitude against the horizon', () => {
 		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
 		for (const kind of ['C1', 'C2', 'MAX', 'C3', 'C4'] as const) {
