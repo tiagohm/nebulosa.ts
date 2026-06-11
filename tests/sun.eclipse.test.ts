@@ -1601,8 +1601,21 @@ describe('branch-aware curve topology', () => {
 		{ name: '2001-12-14', date: [2001, 12, 1] },
 		{ name: '2003-05-31', date: [2003, 5, 15] },
 		{ name: '2003-11-23', date: [2003, 11, 1] },
+		{ name: '2008-02-07', date: [2008, 2, 1] },
 		{ name: '2009-01-26', date: [2009, 1, 1] },
 	] as const
+
+	// A forked/folded totality band (the 2008-02-07 annular over Antarctica) splits each limit into matching
+	// north and south branches. The fill must pair every band segment: the north and south edge of one
+	// cross-section are reached at slightly different instants, so a strict temporal-overlap gate used to drop
+	// the middle segment and leave an unfilled wedge. Each length>=2 north branch must therefore be paired.
+	test('2008-02-07 forked band is fully filled (no unpaired segment)', () => {
+		const { geometry } = geometryFor(2008, 2, 1)
+		const norths = geometry.lines.umbraNorth.filter((branch) => branch.length >= 2).length
+		const souths = geometry.lines.umbraSouth.filter((branch) => branch.length >= 2).length
+		expect(norths).toBeGreaterThan(2)
+		expect(computeSolarEclipseFillGeometry(geometry).length).toBe(Math.min(norths, souths))
+	})
 
 	for (const fixture of CASES) {
 		describe(fixture.name, () => {

@@ -2516,11 +2516,18 @@ const MAX_FILL_PAIR_COST = 30 * DEG2RAD
 // the ring across a gap or the whole map, so such a ring is dropped rather than drawn.
 const MAX_FILL_RING_EDGE = 20 * DEG2RAD
 
-// Pairing cost between a north and a south umbra-limit branch: Infinity when their time spans do not
-// overlap (so unrelated polar/antimeridian pieces are never welded), otherwise the smaller of the two
-// endpoint-to-endpoint matchings.
+// Pairing cost between a north and a south umbra-limit branch: the smaller of the two endpoint-to-endpoint
+// matchings, or Infinity when the two branches are separated in time by more than their own extent. The
+// moving shadow reaches the north and south edge of one band cross-section at slightly different instants,
+// and the latitude-apex split offsets the two sides further, so the time spans of a genuine pair overlap OR
+// merely abut; only an unrelated polar/antimeridian piece is far apart in time. The spatial separation is
+// gated separately by MAX_FILL_PAIR_COST.
 function branchPairScore(north: FillBranchInfo, south: FillBranchInfo) {
-	if (north.range && south.range && Math.min(north.range.end, south.range.end) - Math.max(north.range.start, south.range.start) <= 0) return Infinity
+	if (north.range && south.range) {
+		const gap = Math.max(north.range.start, south.range.start) - Math.min(north.range.end, south.range.end)
+		const maxDuration = Math.max(north.range.end - north.range.start, south.range.end - south.range.start)
+		if (gap > maxDuration) return Infinity
+	}
 
 	const aligned = angularDistance(north.start, south.start) + angularDistance(north.end, south.end)
 	const reversed = angularDistance(north.start, south.end) + angularDistance(north.end, south.start)
