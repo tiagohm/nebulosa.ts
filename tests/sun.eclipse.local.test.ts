@@ -111,6 +111,21 @@ describe('local circumstances', () => {
 		expect(c.visibility.hasObservableEclipse).toBe(false)
 	})
 
+	test('detects an observable culmination sliver between below-horizon contacts', () => {
+		// Mazatlan's eclipse straddles local noon: every contact is below ~73.5 deg, but the Sun climbs to a
+		// ~74.35 deg culmination BETWEEN C3 and C4. With a raised horizon between those values the eclipse is
+		// still observable at culmination even though every contact is below the (raised) horizon -- a case the
+		// event-only check would miss. A higher horizon than the culmination leaves nothing observable.
+		const justBelowCulmination = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { horizonAltitude: deg(73.8) })
+		for (const kind of ['C1', 'C2', 'MAX', 'C3', 'C4'] as const) expect(justBelowCulmination.events[kind]!.observable).toBe(false)
+		expect(justBelowCulmination.visibility.hasObservableEclipse).toBe(true)
+		expect(justBelowCulmination.visibility.kind).not.toBe('geometricOnlyBelowHorizon')
+
+		const aboveCulmination = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { horizonAltitude: deg(75) })
+		expect(aboveCulmination.visibility.hasObservableEclipse).toBe(false)
+		expect(aboveCulmination.visibility.kind).toBe('geometricOnlyBelowHorizon')
+	}, 8000)
+
 	test('reports the Sun vertical trend across the eclipse', () => {
 		// New York saw the 2024 eclipse in the afternoon (Sun descending) -> setting.
 		const afternoon = local(total2024.eclipse, total2024.pbe, -74, 40.71)

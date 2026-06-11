@@ -30,6 +30,9 @@ const DEFAULT_CONTACT_SEARCH_SPAN_SECONDS = 3.5 * 3600
 const MAX_CONTACT_SEARCH_SPAN_SECONDS = 5 * 3600
 // Default sampling step for the local contact/maximum search, in seconds.
 const DEFAULT_LOCAL_SEARCH_STEP_SECONDS = 60
+// Minimum scan step (seconds) for the eclipse-interval Sun-altitude maximum. The altitude peak is broad, so a
+// coarse scan brackets it and Brent refines; this bounds the ephemeris cost of the observable-interval check.
+const ALTITUDE_SCAN_MIN_STEP_SECONDS = 300
 // Root tolerance for local contact instants, in days (~1 ms).
 const CONTACT_TOLERANCE_DAYS = 1e-8
 // Absolute resolution (days, ~30 s) used to densify a candidate contact bracket before refining it, so a
@@ -957,7 +960,6 @@ export function localVisibilityText(kind: LocalVisibilityKind) {
 	}
 }
 
-// Classifies local visibility from the resolved events.
 // Minimum Sun-altitude change (radians, ~0.06°) across the eclipse to call the Sun rising or setting rather
 // than flat (near culmination, where the earliest and latest contacts can sit at nearly the same altitude).
 const SUN_MOTION_ALTITUDE_EPSILON = 1e-3
@@ -973,7 +975,46 @@ function computeSunMotion(events: LocalSolarEclipseCircumstances['events']): Loc
 	return 'none'
 }
 
-function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']): LocalSolarEclipseCircumstances['visibility'] {
+// Maximum Sun altitude (radians) over [fromJd, toJd]. The Sun's altitude is unimodal over a sub-day interval
+// (a single peak at culmination), but the peak is broad and can sit near one end, so a uniform scan brackets
+// it before a tight Brent refinement (a single Brent pass over the whole, near-flat interval can stop short
+// of the true peak). Used to detect an observable instant between contacts even when every contact itself is
+// below the horizon.
+function maxSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions): Angle {
+	const altitudeAt = (jd: number) => {
+		const time = timeAtJulianDay(pbe.maximumTime, jd)
+		return computeSolarAltitude(time, longitude, latitude, options.sunMoonPosition?.(time), evaluateBesselian(pbe, time))
+	}
+
+	// The peak is broad, so a coarse scan (>= 5 min) brackets it cheaply; Brent then refines to the exact
+	// maximum. This caps the ephemeris cost of the check, which only runs for an all-contacts-below location.
+	const stepDays = Math.max(validPositive(options.localSearchStepSeconds, DEFAULT_LOCAL_SEARCH_STEP_SECONDS), ALTITUDE_SCAN_MIN_STEP_SECONDS) / DAYSEC
+	let best = -Infinity
+	let bestJd = fromJd
+	for (const jd of buildSampleJds(fromJd, toJd, stepDays)) {
+		const altitude = altitudeAt(jd)
+		if (altitude > best) {
+			best = altitude
+			bestJd = jd
+		}
+	}
+
+	try {
+		const result = brentMinimize((jd) => -altitudeAt(jd), Math.max(fromJd, bestJd - stepDays), Math.min(toJd, bestJd + stepDays), { tolerance: CONTACT_TOLERANCE_DAYS })
+		const refined = altitudeAt(result.minimum)
+		if (Number.isFinite(refined) && refined > best) best = refined
+	} catch {
+		// Keep the sampled maximum.
+	}
+	return best
+}
+
+// Classifies local visibility from the resolved events. Observability is event-based in the common case, but
+// uses the continuous Sun-altitude maximum over the partial interval when every contact is below the horizon
+// (a high-latitude or raised-horizon eclipse can still poke above the horizon at culmination, between two
+// below-horizon contacts). `completelyVisible` stays event-based: the daytime altitude is unimodal, so the
+// interval minimum is always at an endpoint contact, which the event check already covers.
+function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events'], pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions): LocalSolarEclipseCircumstances['visibility'] {
 	const { C1, C2, MAX, C3, C4 } = events
 
 	if (!MAX) {
@@ -990,7 +1031,14 @@ function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']
 	const expected = hasCentralPhase ? [C1, C2, MAX, C3, C4] : [C1, MAX, C4]
 	const completeEventSet = expected.every((event) => event !== null)
 	const allExpectedAbove = expected.every((event) => event?.observable === true)
-	const anyAbove = [C1, C2, MAX, C3, C4].some((event) => event?.observable === true)
+
+	// Common case: any contact above the horizon means the eclipse is observable. Only when every contact is
+	// below the horizon, and the partial interval is known, do we pay for a continuous check of the altitude
+	// maximum between contacts (a culmination sliver above the horizon). The interval [C1, C4] contains every
+	// contact, so this never lowers observability below the event-based answer.
+	const horizonAltitude = options.horizonAltitude ?? 0
+	const eventAnyAbove = [C1, C2, MAX, C3, C4].some((event) => event?.observable === true)
+	const anyAbove = eventAnyAbove || (C1 !== null && C4 !== null && maxSunAltitudeOverInterval(pbe, longitude, latitude, C1.jd, C4.jd, options) >= horizonAltitude)
 
 	let kind: LocalVisibilityKind
 	if (!anyAbove) {
@@ -1312,7 +1360,7 @@ export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSola
 // times are returned as Time/Julian Day and durations in seconds (the UI formats them).
 export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions = {}): LocalSolarEclipseCircumstances {
 	const events = computeLocalEclipseEvents(pbe, longitude, latitude, options)
-	const visibility = computeLocalVisibility(events)
+	const visibility = computeLocalVisibility(events, pbe, longitude, latitude, options)
 	const shadowPathWidthKm = events.MAX ? computeLocalShadowPathWidthKm(pbe, longitude, latitude, events.MAX) : null
 	const details = computeLocalDetails(events, shadowPathWidthKm)
 
