@@ -610,6 +610,16 @@ function bisectRoot(f: (jd: number) => number, lo: number, hi: number) {
 	}
 }
 
+// Uniform sample Julian Days over [fromJd, toJd], always including toJd exactly even when stepDays does not
+// divide the window. Without the guaranteed endpoint, a root or peak in the final partial sub-interval (right
+// at toJd) could fall past the last sample and be missed.
+function buildSampleJds(fromJd: number, toJd: number, stepDays: number) {
+	const jds: number[] = []
+	for (let jd = fromJd; jd < toJd; jd += stepDays) jds.push(jd)
+	if (jds.length === 0 || Math.abs(jds.at(-1)! - toJd) > CONTACT_TOLERANCE_DAYS) jds.push(toJd)
+	return jds
+}
+
 // Finds the Julian Day of the local magnitude maximum within [fromJd, toJd]. A uniform coarse scan brackets
 // the best sample, then the one-step bracket around it is densified at a bounded absolute resolution before
 // Brent refinement: with a coarse localSearchStepSeconds the magnitude peak (especially the narrow central
@@ -621,7 +631,7 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 	let bestJd: number | undefined
 	let bestMagnitude = -Infinity
 
-	for (let jd = fromJd; jd <= toJd + 1e-12; jd += stepDays) {
+	for (const jd of buildSampleJds(fromJd, toJd, stepDays)) {
 		const magnitude = magnitudeAt(jd)
 		if (Number.isFinite(magnitude) && magnitude > bestMagnitude) {
 			bestMagnitude = magnitude
@@ -739,13 +749,9 @@ export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitud
 	const evaluate = (jd: number) => fn(localStateAtJulianDay(pbe, longitude, latitude, jd))
 	const roots: number[] = []
 
-	// Sample the whole window once so neighboring triplets can be inspected for grazing extrema.
-	const jds: number[] = []
-	const values: number[] = []
-	for (let jd = fromJd; jd <= toJd + 1e-12; jd += stepDays) {
-		jds.push(jd)
-		values.push(evaluate(jd))
-	}
+	// Sample the whole window once (toJd always included) so neighboring triplets can be inspected for extrema.
+	const jds = buildSampleJds(fromJd, toJd, stepDays)
+	const values = jds.map(evaluate)
 
 	// Transversal roots: exact zeros on a sample and sign changes between neighbors.
 	for (let k = 0; k < jds.length; k++) {
@@ -1053,11 +1059,26 @@ function requireLocalViewState(event: LocalSolarEclipseEvent): LocalViewEventSta
 	return event.localViewState
 }
 
+// Position angle (from the top of the diagram, clockwise) at which an event's lunar center is drawn, in the
+// frame of `frameState`. In the north frame the angle is the celestial-north position angle, which is
+// frame-independent. In the zenith frame the lunar center must be expressed in the SAME zenith as the rest of
+// the diagram, so the frame event's parallactic angle q is subtracted (not the event's own q): otherwise each
+// ghost would sit in its own instantaneous vertical, inconsistent with the single horizon drawn for the
+// primary event.
+function localViewAngleForEvent(eventState: LocalViewEventState, options: LocalSolarEclipseViewOptions, frameState: LocalViewEventState): Angle | null {
+	if (options.orientationMode === 'north') return eventState.centerPositionAngleP
+	const centerP = eventState.centerPositionAngleP
+	if (centerP === null) return null
+	return normalizeAngle(centerP - (frameState.parallacticAngle ?? 0))
+}
+
 // Computes the solar and lunar disk circles for one event in the Local View frame. The Sun is centered in
 // the diagram; the Moon is offset by the local separation along the lunar-CENTER position angle (never the
-// limb-contact angle), measured from the top of the diagram clockwise.
-export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options: LocalSolarEclipseViewOptions): { sun: LocalSolarEclipseSvgCircle; moon: LocalSolarEclipseSvgCircle } {
+// limb-contact angle), measured from the top of the diagram clockwise. All disks of one diagram share the
+// frame of `frameEvent` (the primary event), so ghost disks and the primary disk use a single zenith.
+export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options: LocalSolarEclipseViewOptions, frameEvent: LocalSolarEclipseEvent = event): { sun: LocalSolarEclipseSvgCircle; moon: LocalSolarEclipseSvgCircle } {
 	const viewState = requireLocalViewState(event)
+	const frameState = requireLocalViewState(frameEvent)
 	const sunCx = options.width * 0.5
 	const sunCy = options.height * 0.5
 	const sunR = options.solarRadiusPx
@@ -1066,7 +1087,7 @@ export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options:
 	const moonR = sunR * ratio
 
 	const separationPx = viewState.separationSolarRadii * sunR
-	const angle = (options.orientationMode === 'zenith' ? viewState.centerZenithAngleZ : viewState.centerPositionAngleP) ?? 0
+	const angle = localViewAngleForEvent(viewState, options, frameState) ?? 0
 
 	// Position angle grows from up (north/zenith) clockwise toward east. `eastRight` (default) keeps east on
 	// the right; `eastLeft` mirrors the horizontal axis for the sky-chart convention.
@@ -1175,11 +1196,12 @@ export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSola
 	// Ghost MOON disks for every other available contact, drawn behind the primary state. The Sun is fixed
 	// at the diagram center, so a per-contact ghost Sun would only stack redundant circles; what differs
 	// between contacts is the lunar position, so only the Moon is ghosted.
-	if (options.includeGhostDisks) {
+	// Ghost disks are projected into the PRIMARY event's frame, so the whole diagram shares one zenith.
+	if (options.includeGhostDisks && primary) {
 		for (const kind of CONTACT_ORDER) {
 			const event = events[kind]
 			if (!event || event === primary) continue
-			const { moon } = computeLocalViewDiskPair(event, options)
+			const { moon } = computeLocalViewDiskPair(event, options, primary)
 			shapes.push({ ...moon, role: 'ghostMoonDisk' })
 		}
 	}
@@ -1187,7 +1209,7 @@ export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSola
 	// Primary Sun and Moon disks first, then the horizon on top, so the ground band occludes the part of the
 	// disks below the horizon (e.g. a sunrise/sunset eclipse), matching the Astrarium foreground convention.
 	if (primary) {
-		const pair = computeLocalViewDiskPair(primary, options)
+		const pair = computeLocalViewDiskPair(primary, options, primary)
 		shapes.push(pair.sun, pair.moon)
 	}
 

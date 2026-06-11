@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { deg } from '../src/angle'
+import { deg, normalizeAngle } from '../src/angle'
 import { PI, TAU } from '../src/constants'
 import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
 import { computePolynomialBesselianElements, computeSunMoonPositionAt, type PolynomialBesselianElements } from '../src/sun.eclipse'
-import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeLocalSolarEclipseCircumstances, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions } from '../src/sun.eclipse.local'
-import { timeYMD } from '../src/time'
+import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeLocalSolarEclipseCircumstances, findLocalContactRoots, type LocalFundamentalState, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions } from '../src/sun.eclipse.local'
+import { timeYMD, toJulianDay } from '../src/time'
 import * as elpmpp02 from '../src/elpmpp02'
 import * as vsop87e from '../src/vsop87e'
 
@@ -133,7 +133,7 @@ describe('local circumstances', () => {
 			// The coarse-step central duration matches the fine-step one to within a second.
 			expect(coarse.details.centralPhaseDurationSeconds!).toBeCloseTo(fine.details.centralPhaseDurationSeconds!, 0)
 		}
-	})
+	}, 3000)
 
 	test('observability of every event matches its solar altitude against the horizon', () => {
 		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
@@ -188,6 +188,30 @@ describe('local view geometry', () => {
 		expect(moved).toBe(true)
 		// No button geometry is ever generated; only the four primitive kinds appear.
 		for (const view of [zenith, north]) for (const shape of view.shapes) expect(['circle', 'line', 'path', 'polygon']).toContain(shape.kind)
+	})
+
+	test('projects ghost disks in the primary event frame in zenith mode', () => {
+		// New York sees a partial: ghosts are C1 and C4 with MAX as primary. The parallactic angle drifts over
+		// the eclipse, so a ghost must use the PRIMARY (MAX) zenith, not its own instantaneous vertical.
+		const c = local(total2024.eclipse, total2024.pbe, -74, 40.71, { includeLocalView: true, localView: { selectedEvent: 'MAX', orientationMode: 'zenith', includeHorizon: false } })
+		const view = c.localView!
+		const c1 = c.events.C1!
+		const max = c.events.MAX!
+		// The choice of frame is observable only because q differs between C1 and MAX.
+		expect(Math.abs(c1.localViewState!.parallacticAngle! - max.localViewState!.parallacticAngle!)).toBeGreaterThan(0.05)
+
+		const sunCx = view.width / 2
+		const sunCy = view.height / 2
+		const sep = c1.localViewState!.separationSolarRadii * view.solarRadiusPx
+		const firstGhost = view.shapes.find((s): s is Extract<(typeof view.shapes)[number], { kind: 'circle' }> => s.role === 'ghostMoonDisk')!
+
+		// C1 ghost drawn in the MAX zenith frame: angle = centerP(C1) - q(MAX).
+		const primaryFrameAngle = normalizeAngle(c1.localViewState!.centerPositionAngleP! - max.localViewState!.parallacticAngle!)
+		expect(firstGhost.cx).toBeCloseTo(sunCx + sep * Math.sin(primaryFrameAngle), 6)
+		expect(firstGhost.cy).toBeCloseTo(sunCy - sep * Math.cos(primaryFrameAngle), 6)
+		// It is NOT the C1 own-frame position (centerZenithAngleZ = centerP(C1) - q(C1)).
+		const ownFrameAngle = c1.localViewState!.centerZenithAngleZ!
+		expect(Math.abs(firstGhost.cx - (sunCx + sep * Math.sin(ownFrameAngle)))).toBeGreaterThan(1)
 	})
 
 	test('reports the actually-drawn event, falling back when the requested one is absent', () => {
@@ -361,5 +385,17 @@ describe('local view robustness', () => {
 		expect(c.events.MAX!.localViewState!.separationSolarRadii).toBeLessThan(0.05)
 		expect(c.details.shadowPathWidthKm).not.toBeNull()
 		expect(c.details.shadowPathWidthKm!).toBeGreaterThan(0)
+	})
+
+	test('contact search samples toJd exactly even when the step does not divide the window', () => {
+		// A monotone synthetic contact function with its single root in the final partial sub-interval: the
+		// step (0.03 d) does not divide the 0.1 d window, so without a guaranteed toJd sample the root past the
+		// last interior sample (at 0.09 d) would be missed.
+		const fromJd = toJulianDay(total2024.pbe.maximumTime)
+		const toJd = fromJd + 0.1
+		const target = toJd - 0.005
+		const roots = findLocalContactRoots(total2024.pbe, deg(-74), deg(40.71), fromJd, toJd, 0.03, (state: LocalFundamentalState) => state.jd - target)
+		expect(roots).toHaveLength(1)
+		expect(roots[0]).toBeCloseTo(target, 6)
 	})
 })
