@@ -1894,16 +1894,17 @@ describe('circle-ellipse intersection multiplicity and tangency', () => {
 describe('greatest eclipse uses closest-approach minimization for an inconsistent maximumTime', () => {
 	// When the supplied maximumTime is materially off the fitted closest shadow-axis approach, the
 	// partial/non-central greatest-eclipse location is recomputed at the minimized instant rather than
-	// trusting maximumTime (report section 2.2). Synthetic axis x(t) = 2 - t stays off the Earth at t0 (x =
-	// 2) and grazes the limb near t = +1 step; maximumTime is deliberately pinned to t0.
+	// trusting maximumTime (report section 2.2). Synthetic axis x(t) = (t-1)^2 + 1 stays off the Earth at t0
+	// (x = 2) and reaches its closest approach (x = 1, grazing the limb) at a fixed interior t = +1 step,
+	// independent of the search-span width; maximumTime is deliberately pinned to t0.
 	test('findMaximumPoint recomputes at the minimized instant', () => {
-		const elements = pbe({ x: [2, -1], y: [0], d: [0], maximumTime: time(JD0) })
+		const elements = pbe({ x: [2, -2, 1], y: [0], d: [0], maximumTime: time(JD0) })
 		const max = findMaximumPoint(elements)
 
 		expect(max).toBeDefined()
 		expectGeoPoint(max!)
-		// The returned instant is the closest approach near t0 + one step, not the inconsistent maximumTime.
-		expect(Math.abs(max!.jd! - (JD0 + elements.stepDays))).toBeLessThan(0.02)
+		// The returned instant is the closest approach at t0 + one step, not the inconsistent maximumTime.
+		expect(Math.abs(max!.jd! - (JD0 + elements.stepDays))).toBeLessThan(0.01)
 	})
 
 	// A consistent maximumTime (the published greatest-eclipse epoch) is kept verbatim, so the jd is exact.

@@ -46,11 +46,14 @@ export const DELTA_T_LONGITUDE_FACTOR = 0.00417807 * DEG2RAD
 const DEFAULT_LONGITUDE_STEP = 1 * DEG2RAD
 const DEFAULT_MAX_ANGULAR_STEP = 1 * DEG2RAD
 const DEFAULT_RISE_SET_STEP_SECONDS = 30
-// Default half-width of the contact/endpoint root search window, in seconds. Set to 3 h so that, with the
-// 6 h (t0 +- 3 h) NASA hourly fit, contact and central-axis searches stay inside the fitted span. This is a
-// default, NOT a hard cap: a caller may pass a wider contactSearchSpan (synthetic fixtures fit over a much
-// wider range and do), in which case the search follows the supplied span and may extrapolate the cubic.
-const DEFAULT_CONTACT_SEARCH_SPAN_SECONDS = 3 * 3600
+// Default half-width of the contact/endpoint root search window, in seconds. The external penumbral
+// contacts P1/P4 (the global start/end of the partial eclipse) sit near the edge of the 6 h (t0 +- 3 h)
+// fit and, because the search is centered on maximumTime while the fit is centered on the rounded t0, can
+// land just past +-3 h of the maximum (e.g. the 2009-01-26 annular at +-3.04 h). 3.5 h covers them with
+// only a mild cubic extrapolation past the fit edge, so rise/set curves (which need P1 and P4) are drawn.
+// This is a default, NOT a hard cap: a caller may pass any contactSearchSpan (synthetic fixtures fit over a
+// much wider range and do), in which case the search follows the supplied span.
+const DEFAULT_CONTACT_SEARCH_SPAN_SECONDS = 3.5 * 3600
 // Root tolerance for contact and central-endpoint instants, in days (~1 ms, affordable because the iterations converge quadratically).
 const CONTACT_TOLERANCE_DAYS = 1e-8
 const SOLVER_MAX_ITERATIONS = 50
