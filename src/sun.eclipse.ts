@@ -1577,6 +1577,7 @@ const BRANCH_MAX_DRAWABLE_GAP = 5 * DEG2RAD
 // derived from the flattened points downstream, so chronological naming is unaffected by the branch order.
 function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: SolarEclipseCurveOptions = {}): GeoPoint[][] {
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
+	const refractionMode = options.refractionMode ?? DEFAULT_REFRACTION_MODE
 	const maxDrawableGap = Math.max(BRANCH_MAX_DRAWABLE_GAP, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
 	const branches: GeoPoint[][] = []
 
@@ -1585,7 +1586,9 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 		if (cleaned.length >= 2) branches.push(cleaned)
 	}
 
-	return deduplicateBranches(branches, maxAngularStep).flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	const deduped = deduplicateBranches(branches, maxAngularStep)
+	const reconnected = reconnectBranchCusps(deduped, pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
+	return reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
 }
 
 // Removes consecutive points that coincide geographically (ignoring jd), preserving the branch's order.
@@ -1596,6 +1599,133 @@ function cleanCurveBranch(branch: readonly GeoPoint[]): GeoPoint[] {
 	const out: GeoPoint[] = []
 	for (const point of branch) if (out.length === 0 || !sameGeoPoint(out.at(-1)!, point)) out.push(point)
 	return out
+}
+
+// Maximum endpoint gap (radians) a cusp reconnection will attempt to bridge. The fully continuous re-solve
+// below is the real gate; this only bounds the work so obviously unrelated far branches are not probed.
+const CUSP_RECONNECT_LIMIT = 20 * DEG2RAD
+
+// Minimum along-curve arc length (radians) separating two points before a spatial coincidence counts as the
+// branch retracing itself. A tight cusp brings points close in space but also close in arc length (the curve
+// just turned around), so it is not flagged; a merge that doubles an arc back over itself revisits a location
+// far away in arc length and is.
+const CUSP_RECONNECT_OVERLAP_ARC = 10 * DEG2RAD
+
+// Latitude (radians) beyond which a branch is not reconnected. Near a pole the longitude/latitude
+// representation degenerates (meridians converge), so a limit merely passing close to the pole fragments and
+// a merged crossing zigzags across the seam; any branch reaching past this is kept as separate render pieces.
+// A genuine longitude-fold cusp sits well away from the pole (the 2005-04-08 penumbra-south reaches only
+// ~82 deg at S1), so it is unaffected.
+const CUSP_RECONNECT_POLE_LATITUDE = 85 * DEG2RAD
+
+// Whether a branch reaches into the polar cap where reconnection is unsafe.
+function branchReachesPole(branch: readonly GeoPoint[]) {
+	for (const point of branch) if (Math.abs(point.y) > CUSP_RECONNECT_POLE_LATITUDE) return true
+	return false
+}
+
+// Re-solves the densified arc strictly between a and b, returning it only when the whole chain a -> arc -> b
+// is continuous: every consecutive step is within continuityGap. The arc is densified to maxAngularStep, but
+// a vertical-tangent fold cusp leaves one irreducible step near the tip, so continuityGap is the looser
+// drawable-gap threshold; a true discontinuity inserts no points and leaves the full (larger) gap, so it is
+// still rejected.
+function solveContinuousBridge(pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, continuityGap: Angle, refractionMode: RefractionMode) {
+	const bridge: GeoPoint[] = []
+	bridgeCurveGap(bridge, pbe, a, b, i, G, maxAngularStep, refractionMode, 0)
+
+	let previous = a
+	for (const point of bridge) {
+		if (angularDistance(previous, point) > continuityGap) return undefined
+		previous = point
+	}
+
+	return angularDistance(previous, b) > continuityGap ? undefined : bridge
+}
+
+// Whether two branches already touch (some endpoint pair within one angular step), i.e. they are adjacent
+// pieces of one curve the renderer already draws continuously (an antimeridian seam split, say). Such a pair
+// must not be reconnected through its far endpoints, which would retrace one of the branches.
+function branchesAlreadyTouch(a: readonly GeoPoint[], b: readonly GeoPoint[], maxAngularStep: Angle) {
+	const endsA = [a[0], a.at(-1)!]
+	const endsB = [b[0], b.at(-1)!]
+	for (const ea of endsA) for (const eb of endsB) if (angularDistance(ea, eb) <= maxAngularStep) return true
+	return false
+}
+
+// Whether a branch doubles back over itself: two points close in space but far apart in arc length. Near the
+// degenerate poles a re-solved bridge can fold an arc back onto an existing one; such a merge is rejected.
+function branchRetraces(branch: readonly GeoPoint[], tolerance: Angle, minArcSeparation: Angle) {
+	const arc = new Float64Array(branch.length)
+	for (let k = 1; k < branch.length; k++) arc[k] = arc[k - 1] + angularDistance(branch[k - 1], branch[k])
+
+	for (let a = 0; a < branch.length; a++) {
+		for (let b = a + 1; b < branch.length; b++) {
+			if (arc[b] - arc[a] < minArcSeparation) continue
+			if (angularDistance(branch[a], branch[b]) < tolerance) return true
+		}
+	}
+
+	return false
+}
+
+// Merges branches that are one physical limit the solver under-sampled across a fold cusp. At a longitude
+// fold every latitude seed can leave the cusp on the same arc, so the other arc out of the cusp is never
+// traced and the limit arrives as two branches with an unsampled gap between their cusp endpoints (e.g. the
+// 2005-04-08 penumbra-south, S1 -> cusp ... cusp -> S2). For the closest eligible endpoint pair the missing
+// arc is re-solved, and the branches are merged only when that arc is continuous (solveContinuousBridge
+// succeeds) and the merged branch does not retrace itself: a true discontinuity has no connecting curve, and
+// a pole-degenerate bridge folds back, so both are left as separate branches and no spike is ever drawn.
+// Pairs that already touch are skipped so nothing is retraced.
+function reconnectBranchCusps(branches: readonly GeoPoint[][], pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, maxDrawableGap: Angle, refractionMode: RefractionMode): GeoPoint[][] {
+	const result = branches.map((branch) => branch.slice())
+
+	for (;;) {
+		let bestGap = Infinity
+		let bestA = -1
+		let bestB = -1
+		let bestMerged: GeoPoint[] | undefined
+
+		for (let a = 0; a < result.length; a++) {
+			for (let b = a + 1; b < result.length; b++) {
+				if (branchesAlreadyTouch(result[a], result[b], maxAngularStep)) continue
+				// Keep pole-reaching pieces separate: near a pole the lon/lat geometry degenerates and a merge zigzags.
+				if (branchReachesPole(result[a]) || branchReachesPole(result[b])) continue
+
+				const endsA = [result[a][0], result[a].at(-1)!]
+				const endsB = [result[b][0], result[b].at(-1)!]
+				for (let ea = 0; ea < 2; ea++) {
+					for (let eb = 0; eb < 2; eb++) {
+						const gap = angularDistance(endsA[ea], endsB[eb])
+						if (gap <= maxAngularStep || gap > CUSP_RECONNECT_LIMIT || gap >= bestGap) continue
+
+						const bridge = solveContinuousBridge(pbe, endsA[ea], endsB[eb], i, G, maxAngularStep, maxDrawableGap, refractionMode)
+						if (!bridge) continue
+
+						// Orient A so endpoint ea is the joint (reverse when it is the start) and B so endpoint eb
+						// is the joint (reverse when it is the end), then splice the bridge between them.
+						const aOriented = ea === 0 ? result[a].toReversed() : result[a]
+						const bOriented = eb === 1 ? result[b].toReversed() : result[b]
+						const merged = cleanCurveBranch([...aOriented, ...bridge, ...bOriented])
+						// Reject a merge whose re-solved bridge bulges into the degenerate polar cap (even when
+						// the source branches did not), or that folds the arc back over itself.
+						if (branchReachesPole(merged) || branchRetraces(merged, maxAngularStep, CUSP_RECONNECT_OVERLAP_ARC)) continue
+
+						bestGap = gap
+						bestA = a
+						bestB = b
+						bestMerged = merged
+					}
+				}
+			}
+		}
+
+		if (bestA < 0 || !bestMerged) break
+
+		result.splice(bestB, 1)
+		result.splice(bestA, 1, bestMerged)
+	}
+
+	return result
 }
 
 // A branch point counts as lying on another branch when within this multiple of the angular step of one of
