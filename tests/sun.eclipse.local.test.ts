@@ -3,7 +3,8 @@ import { deg, normalizeAngle } from '../src/angle'
 import { ASEC2RAD, PI, TAU } from '../src/constants'
 import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
 import { computePolynomialBesselianElements, computeSunMoonPositionAt, type PolynomialBesselianElements } from '../src/sun.eclipse'
-import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeLocalSolarEclipseCircumstances, findLocalContactRoots, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions } from '../src/sun.eclipse.local'
+// oxfmt-ignore
+import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, } from '../src/sun.eclipse.local'
 import { timeYMD, toJulianDay } from '../src/time'
 import * as elpmpp02 from '../src/elpmpp02'
 import * as vsop87e from '../src/vsop87e'
@@ -155,6 +156,23 @@ describe('local circumstances', () => {
 		expect(c.visibility.kind).toBe('completelyVisible')
 		expect(c.visibility.completeness.partialContactsComplete).toBe(true)
 		expect(c.visibility.completeness.centralContactsComplete).toBe(true)
+	})
+
+	test('event observability honors a configured horizon altitude', () => {
+		// Raising the horizon just above the maximum's altitude makes the maximum unobservable, even though it
+		// is geometrically far above the true (zero) horizon.
+		const base = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
+		const raisedHorizon = base.events.MAX!.sunAltitude + deg(0.1)
+		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { horizonAltitude: raisedHorizon })
+		expect(c.events.MAX!.observable).toBe(false)
+		expect(c.events.MAX!.visibility).toBe('belowHorizon')
+	})
+
+	test('a partial-only eclipse has no central shadow-path width', () => {
+		const c = local(total2024.eclipse, total2024.pbe, -74, 40.71) // New York: partial only.
+		expect(c.events.MAX).not.toBeNull()
+		expect(c.events.MAX!.centralPhaseKind).toBe('none')
+		expect(c.details.shadowPathWidthKm).toBeNull()
 	})
 
 	describe('recovers C2/C3 for any search step, even far coarser than the central phase', () => {
@@ -334,6 +352,13 @@ describe('local view geometry', () => {
 		expect(leftMoon.cx - sunCx).toBeCloseTo(-(rightMoon.cx - sunCx), 9)
 		expect(leftMoon.cy).toBeCloseTo(rightMoon.cy, 9)
 	})
+
+	test('a location with no eclipse produces an empty Local View', () => {
+		const c = local(total2024.eclipse, total2024.pbe, 115, -32) // Perth: no eclipse.
+		const view = buildLocalSolarEclipseViewGeometry(c, viewOptions())
+		expect(view.selectedEvent).toBeNull()
+		expect(view.shapes).toHaveLength(0)
+	})
 })
 
 describe('local view topocentric invariants', () => {
@@ -468,6 +493,22 @@ describe('local view horizon geometry', () => {
 		expect((right.x1 + right.x2) / 2).toBeCloseTo(width / 2, 6)
 		expect((left.x1 + left.x2) / 2).toBeCloseTo(width / 2, 6)
 	})
+
+	test('north horizon offset follows the rotated zenith normal for a non-zero altitude', () => {
+		const width = 450
+		const q = PI / 4
+		// Altitude of exactly one solar angular radius should push the horizon one solar pixel radius away from
+		// the zenith, measured along the rotated zenith normal (not just vertically as in the zenith frame).
+		const shapes = buildLocalViewHorizonGeometry(horizonEvent(solarAngularRadius, q), viewOptions({ width, height, solarRadiusPx, orientationMode: 'north' }))
+		const line = shapes.find((s) => s.role === 'horizonLine') as Extract<(typeof shapes)[number], { kind: 'line' }>
+		const sunCx = width / 2
+		const sunCy = height / 2
+		const midX = (line.x1 + line.x2) / 2
+		const midY = (line.y1 + line.y2) / 2
+		// Project the line midpoint's displacement from the Sun onto the away-from-zenith direction (-zenith).
+		const awayDotDisplacement = (midX - sunCx) * -Math.sin(q) + (midY - sunCy) * Math.cos(q)
+		expect(awayDotDisplacement).toBeCloseTo(solarRadiusPx, 6)
+	})
 })
 
 describe('local view robustness', () => {
@@ -535,5 +576,43 @@ describe('local view robustness', () => {
 		const infiniteSunDistance = (t: Parameters<typeof sunMoonPosition>[0]) => ({ ...sunMoonPosition(t), sunDistance: Infinity })
 		const c = computeLocalSolarEclipseCircumstances(total2024.pbe, deg(-106.4), deg(23.25), { sunMoonPosition: infiniteSunDistance })
 		expect(c.events.MAX!.localViewState!.solarAngularRadius).toBeCloseTo(959.63 * ASEC2RAD, 9)
+	})
+
+	test('contact search finds a root that lands exactly on an interior sample', () => {
+		// A root coinciding with a sampled instant must still be captured (it has a neighbor on each side, so it
+		// is not the endpoint-grazing case the phantom guard rejects).
+		const fromJd = toJulianDay(total2024.pbe.maximumTime)
+		const stepDays = 0.03
+		const toJd = fromJd + 3 * stepDays
+		for (const target of [fromJd + stepDays, fromJd + 2 * stepDays]) {
+			const roots = findLocalContactRoots(total2024.pbe, deg(-74), deg(40.71), fromJd, toJd, stepDays, (state: LocalFundamentalState) => state.jd - target)
+			expect(roots.some((r) => Math.abs(r - target) < 1e-8)).toBe(true)
+		}
+	})
+
+	test('contact search returns an array without hanging for an invalid step', () => {
+		// findLocalContactRoots is exported; a caller passing a degenerate stepDays must not loop forever.
+		const fromJd = toJulianDay(total2024.pbe.maximumTime)
+		const toJd = fromJd + 0.1
+		for (const stepDays of [0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
+			const roots = findLocalContactRoots(total2024.pbe, deg(-74), deg(40.71), fromJd, toJd, stepDays, (state: LocalFundamentalState) => state.jd - (fromJd + 0.05))
+			expect(Array.isArray(roots)).toBe(true)
+		}
+	})
+
+	test('maximum search is robust to degenerate inputs and resolves a normal maximum', () => {
+		const fromJd = toJulianDay(total2024.pbe.maximumTime)
+		// Inverted interval -> no samples -> undefined.
+		expect(findLocalMaximumTime(total2024.pbe, deg(-106.4), deg(23.25), fromJd + 0.1, fromJd, 0.001)).toBeUndefined()
+		// Degenerate steps must not hang; they fall back to the endpoint samples and return a finite instant.
+		for (const stepDays of [0, Number.NaN]) {
+			const jd = findLocalMaximumTime(total2024.pbe, deg(-106.4), deg(23.25), fromJd - 0.1, fromJd + 0.1, stepDays)
+			expect(jd === undefined || Number.isFinite(jd)).toBe(true)
+		}
+		// A normal search resolves the local magnitude maximum inside the window.
+		const max = findLocalMaximumTime(total2024.pbe, deg(-106.4), deg(23.25), fromJd - 0.15, fromJd + 0.15, 0.001)
+		expect(max).toBeDefined()
+		expect(max!).toBeGreaterThan(fromJd - 0.15)
+		expect(max!).toBeLessThan(fromJd + 0.15)
 	})
 })
