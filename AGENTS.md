@@ -139,6 +139,227 @@ Prefer the MCP graph tools for code discovery:
 - The commit message must be in English and entirely in lowercase letters, except for acronyms and file names.
 - The commit message should begin with a present-tense verb such as `implement`, `fix`, `improve`, `update`, or `use`.
 
+# Code Review Instructions
+
+This is a Bun-first, ESM-only TypeScript astronomy library. Review the changes on the current branch with a **strictly limited correctness scope**.
+
+Only report findings that fall into the categories below. Do **not** comment on style, naming, formatting, documentation wording, test organization, dependency choices, API design, or any concern outside this list.
+
+A finding must be:
+
+- actionable;
+- tied to a concrete correctness, numerical, algorithmic, performance, or memory issue;
+- supported by code evidence;
+- relevant to the changed code or to code directly affected by the change.
+
+Do not report speculative preferences, cosmetic improvements, or alternative designs unless the current implementation is demonstrably incorrect, fragile over the valid input domain, or materially less robust than a standard approach for the same astronomical/geometric problem.
+
+## Review Scope
+
+### 1. Mathematical correctness
+
+Verify that formulas, equations, numeric expressions, and geometric constructions are correct for the intended astronomical model.
+
+Check specifically for:
+
+- unit consistency:
+    - angles in radians;
+    - distances in AU unless explicitly documented otherwise;
+    - velocities in AU/day;
+    - temperature in Celsius;
+    - pressure in hPa;
+    - time intervals in days or seconds according to the local convention;
+
+- incorrect or leftover conversion factors:
+    - spurious `DEG2RAD`;
+    - spurious `RAD2DEG`;
+    - missing radians conversion;
+    - squared factors used where linear factors are required;
+    - off-by-constant errors;
+
+- sign conventions:
+    - longitude east/west convention;
+    - hour angle sign;
+    - right-handed vs left-handed frames;
+    - screen/SVG y-axis direction;
+    - east-left vs east-right visual conventions;
+
+- coordinate frames and reference systems:
+    - geocentric vs topocentric;
+    - apparent vs geometric;
+    - equatorial vs horizontal;
+    - celestial-north frame vs zenith-oriented frame;
+    - local tangent frame vs global frame;
+
+- formulas that mix incompatible frames, such as using a topocentric separation with a geocentric position angle;
+- incorrect use of contact geometry:
+    - center-to-center angle vs limb contact angle;
+    - external vs internal tangency;
+    - total vs annular C2/C3 contact direction;
+
+- physical interpretation of quantities:
+    - magnitude;
+    - apparent diameter ratio;
+    - umbra/antumbra/penumbra limits;
+    - local chord width vs canonical path width;
+    - horizon visibility vs geometric existence.
+
+If a value is intentionally approximate, report it only if the approximation is undocumented, violates the stated precision target, or can produce materially wrong results in valid cases.
+
+### 2. Algorithmic correctness
+
+Verify that the algorithm actually solves the intended problem across the full supported input domain.
+
+Check specifically for:
+
+- wrong objective functions;
+- wrong search interval;
+- missing expansion of adaptive search windows;
+- using a global time/window when a local event can fall outside it;
+- assuming an event is absent only because the initial search window has no roots;
+- incorrect handling when the current window is entirely inside or entirely outside a phase;
+- root-finding failures:
+    - missed sign changes;
+    - missed roots exactly at sample points;
+    - missed roots at endpoints;
+    - missed double/tangential roots;
+    - missed two-root intervals entirely between coarse samples;
+    - false roots produced by endpoint grazing outside the search window;
+
+- convergence and termination issues:
+    - infinite loops;
+    - non-finite bounds;
+    - inverted intervals;
+    - insufficient iteration limits;
+    - stale best candidate after adaptive expansion;
+
+- degenerate and boundary cases:
+    - zero vectors;
+    - near-zero separations;
+    - poles;
+    - zenith/nadir;
+    - antimeridian and `0`/`TAU` wrap;
+    - grazing eclipse limits;
+    - near-limb geometry;
+    - horizon crossings;
+    - very short event durations;
+    - endpoints of validity windows;
+    - identity or degenerate transforms;
+
+- classification based only on discrete event samples when the physical property is continuous over an interval, such as horizon visibility during an eclipse interval.
+
+When reviewing local eclipse circumstances or similar geometry, verify that geometric events are still computed even when they are below the horizon. Horizon visibility should affect observability/classification, not erase the geometric event.
+
+### 3. Best approach for the problem
+
+Assess whether the chosen method is appropriate and robust for the astronomical/geometric problem.
+
+Report cases where the implementation:
+
+- uses a fundamentally wrong frame or reference system;
+- uses a geocentric shortcut where topocentric geometry is required;
+- uses event-sample-only logic where continuous interval analysis is required for correctness;
+- uses a fragile root-finding strategy where a standard bracketing/minimization hybrid is needed;
+- treats a numerically unresolved grazing case as a finite-duration phase;
+- uses a planar, spherical, or linear approximation where the surrounding algorithm clearly assumes ellipsoidal/topocentric/curved geometry and the mismatch produces material error;
+- computes a metric with a name or downstream use implying a different physical quantity, unless the code contract explicitly documents the intended semantics.
+
+Do not report a different algorithm merely because it is more sophisticated. Report it only when the current algorithm fails valid cases, is numerically unstable, or contradicts the stated precision requirements.
+
+### 4. Performance and memory allocation
+
+Identify performance or allocation problems that matter for the library’s expected usage.
+
+Report:
+
+- unnecessary allocations in hot paths and tight loops;
+- repeated construction of arrays/objects where scalar variables or reusable buffers are sufficient;
+- closures allocated inside high-frequency loops when avoidable;
+- repeated trig calls where `sin`/`cos` can be cached;
+- repeated ephemeris evaluations for the same time/sample;
+- repeated recomputation of local state during scans when one sampled table could feed multiple phases of the algorithm;
+- avoidable conversions between object and numeric representations;
+- inefficient data structures where a flat numeric array or `TypedArray` is clearly justified;
+- failure to use mutable output parameters where the codebase convention favors them, such as `o?: MutVec3`.
+
+Do not report performance issues for code that is clearly not on a hot path unless the cost is substantial or scales poorly with realistic inputs.
+
+### 5. Numerical precision
+
+Verify that numerical precision is appropriate for an astronomy library.
+
+Report:
+
+- subtraction of nearly equal values where a stable formulation exists;
+- use of `acos` where an `atan2` formulation is more stable near `0` or `PI`;
+- missing clamping before inverse trig functions;
+- unguarded division by small values;
+- tolerances that are inconsistent across related decisions;
+- tolerances that classify a finite event in one part of the algorithm but a grazing/unresolved event in another;
+- absolute tolerances used where relative tolerances are required;
+- `NaN`/`Infinity` propagation into public results or SVG/geometry outputs;
+- non-finite distances, angles, radii, times, or iteration steps;
+- use of `value === 0` as the only way to detect a root;
+- excessive precision loss near poles, horizon, limb contact, or near-perfect alignment.
+
+When reviewing angle outputs, ensure that:
+
+- undefined directions are represented as `null` or otherwise clearly handled when the separation is too small;
+- angle normalization is consistent;
+- wrap-around at `0`, `PI`, and `TAU` is handled correctly;
+- `atan2` argument order matches the documented convention.
+
+### 6. Possible bugs
+
+Find concrete logic and implementation bugs, including:
+
+- incorrect conditionals;
+- wrong comparison direction;
+- wrong inclusive/exclusive boundary;
+- wrong index or off-by-one error;
+- skipped endpoint;
+- duplicated or missing sample;
+- stale state after loop expansion;
+- swapped arguments;
+- incorrect fallback path;
+- incorrect handling of optional output parameters;
+- uninitialized state;
+- mutation of values expected to be immutable;
+- public/exported helpers that can hang or return invalid results for invalid but possible arguments;
+- silently returning plausible-looking geometry from missing internal state;
+- creating inconsistent output metadata, such as reporting one selected event while drawing another.
+
+If a helper is exported, review it as part of the public correctness surface, even if the main call path passes safe arguments.
+
+## Reporting Rules
+
+For each finding, include:
+
+1. severity:
+    - `P0` correctness blocker;
+    - `P1` likely correctness bug;
+    - `P2` edge-case correctness issue or numerical robustness issue;
+    - `P3` minor robustness/performance issue;
+
+2. exact file/function/line or the smallest identifiable code location;
+3. explanation of the bug;
+4. why it matters physically, mathematically, numerically, or algorithmically;
+5. a concrete fix;
+6. a minimal test or scenario that would fail before the fix.
+
+Do not report:
+
+- style-only issues;
+- naming-only issues;
+- formatting;
+- comments or documentation wording unless it directly causes incorrect interpretation of a public result;
+- test organization;
+- dependency choices;
+- API design preferences;
+- harmless micro-optimizations;
+- known deliberate trade-offs already documented by the project;
+- issues that require changing the documented contract without a correctness bug.
+
 ## Environment
 
 ### Install dependencies
