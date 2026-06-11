@@ -298,4 +298,33 @@ describe('local view horizon geometry', () => {
 		const verticalLine = vertical.find((s) => s.role === 'horizonLine') as Extract<(typeof vertical)[number], { kind: 'line' }>
 		expect(verticalLine.x1).toBeCloseTo(verticalLine.x2, 9)
 	})
+
+	test('handedness mirrors the tilted north horizon horizontally', () => {
+		const width = 450
+		const slope = (line: { x1: number; y1: number; x2: number; y2: number }) => (line.y2 - line.y1) / (line.x2 - line.x1)
+		const lineFor = (handedness: 'eastRight' | 'eastLeft') => {
+			const shapes = buildLocalViewHorizonGeometry(horizonEvent(0, PI / 4), viewOptions({ width, solarRadiusPx, height, orientationMode: 'north', handedness }))
+			return shapes.find((s) => s.role === 'horizonLine') as Extract<(typeof shapes)[number], { kind: 'line' }>
+		}
+		const right = lineFor('eastRight')
+		const left = lineFor('eastLeft')
+		// At q = PI/4 the horizon is tilted; mirroring east-left negates the slope (horizontal reflection).
+		expect(Math.abs(slope(right))).toBeGreaterThan(0.1)
+		expect(slope(left)).toBeCloseTo(-slope(right), 9)
+		// Both still pass through the diagram center horizontally (altitude 0).
+		expect((right.x1 + right.x2) / 2).toBeCloseTo(width / 2, 6)
+		expect((left.x1 + left.x2) / 2).toBeCloseTo(width / 2, 6)
+	})
+})
+
+describe('local view robustness', () => {
+	test('the central-shadow width is defined on the central line', () => {
+		// A point essentially on the 2024 central line: the separation is tiny but the width is still resolved
+		// (the multi-bearing chord is defined even where the gradient direction would vanish).
+		const c = local(total2024.eclipse, total2024.pbe, -104.13, 25.28)
+		expect(c.events.MAX!.centralPhaseKind).toBe('total')
+		expect(c.events.MAX!.localViewState!.separationSolarRadii).toBeLessThan(0.05)
+		expect(c.details.shadowPathWidthKm).not.toBeNull()
+		expect(c.details.shadowPathWidthKm!).toBeGreaterThan(0)
+	})
 })

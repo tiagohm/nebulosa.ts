@@ -36,6 +36,19 @@ const CONTACT_TOLERANCE_DAYS = 1e-8
 // contact function whose refined |value| stays within this is accepted as a double root even without a sign
 // change. ~6e-3 km at the Earth's surface; tight enough not to invent contacts on a clearly partial location.
 const CONTACT_FUNCTION_TOLERANCE = 1e-6
+// Tie tolerance for detecting a sampled local extremum of a contact function, so a flat/tied valley bottom
+// (e.g. two equal samples straddling the true grazing instant) is still recognized.
+const CONTACT_SAMPLE_EXTREMUM_EPS = 1e-12
+// A sampled triple is only refined for a grazing root when its smallest |value| is already this close to
+// zero (Earth equatorial radii). Keeps the |fn| minimization off deep valleys that are far from a contact.
+const GRAZING_SCAN_PREFILTER = 0.05
+// Minimum margin (Earth equatorial radii) by which the observer must be inside the umbral/antumbral cone to
+// count as a central phase. A point exactly on the central limit (distance ~ |L2|) has zero central duration
+// and must not be reported as total/annular.
+const CENTRAL_CONE_TOLERANCE = 1e-7
+// Below this fundamental-plane separation (Earth equatorial radii) the lunar-center direction is undefined
+// (atan2(0, 0) is meaningless), so the position angles are reported as null instead of a spurious 0.
+const ANGLE_UNDEFINED_DISTANCE = 1e-10
 // Order in which contacts are scanned and drawn, earliest to latest.
 const CONTACT_ORDER = ['C1', 'C2', 'MAX', 'C3', 'C4'] as const
 
@@ -382,11 +395,14 @@ export function computeLocalFundamentalState(pbe: PolynomialBesselianElements, l
 	// (~0.08% apart); that difference is negligible for the Local View.
 	const solarRadius = (L1 + L2) * 0.5
 	const lunarRadius = (L1 - L2) * 0.5
-	const moonSunDiameterRatio = solarRadius > 0 ? lunarRadius / solarRadius : null
-	// Central phase = observer inside the umbral/antumbral cone (distance <= |L2|). This is the robust test
-	// for both total and annular: the diameter-ratio magnitude exceeds 1 only for total eclipses (the Moon
-	// is larger than the Sun), so a magnitude > 1 test would never flag an annular central phase.
-	const inCentralCone = distance <= Math.abs(L2)
+	// Guarded against degraded Besselian values (e.g. far extrapolation): a non-positive or non-finite radius
+	// yields a null ratio rather than a meaningless or negative one.
+	const moonSunDiameterRatio = solarRadius > 0 && lunarRadius > 0 && Number.isFinite(solarRadius) && Number.isFinite(lunarRadius) ? lunarRadius / solarRadius : null
+	// Central phase = observer strictly inside the umbral/antumbral cone (|L2| - distance > tolerance). This is
+	// the robust test for both total and annular: the diameter-ratio magnitude exceeds 1 only for total
+	// eclipses (the Moon is larger than the Sun), so a magnitude > 1 test would never flag an annular central
+	// phase. The tolerance keeps a point exactly on the central limit (zero central duration) out of it.
+	const inCentralCone = Math.abs(L2) - distance > CENTRAL_CONE_TOLERANCE
 	const centralPhaseKind: LocalCentralPhaseKind = inCentralCone ? (L2 < 0 ? 'total' : 'annular') : 'none'
 
 	return { time, jd: toJulianDay(time), be, longitude, latitude, hourAngle: normalizeAngle(H), ksi, eta, zeta, u, v, distance, L1, L2, magnitude, moonSunDiameterRatio, centralPhaseKind }
@@ -439,15 +455,16 @@ function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, sam
 // rotates that into the zenith frame (Z = P - q). The limb-CONTACT angle equals the center angle except at
 // a total internal tangency (C2/C3 total), where the last solar sliver is on the far limb (center + PI).
 interface LocalTopocentricAspect {
-	// Position angle of the lunar center, from celestial north toward east, in [0, TAU).
-	readonly centerPositionAngleP: Angle
-	// Position angle of the lunar center in the zenith frame, in [0, TAU).
-	readonly centerZenithAngleZ: Angle
-	// Position angle of the limb-contact point, from celestial north toward east, in [0, TAU).
-	readonly contactPositionAngleP: Angle
-	// Position angle of the limb-contact point in the zenith frame, in [0, TAU).
-	readonly contactZenithAngleZ: Angle
-	// Solar parallactic angle, in [-PI, PI].
+	// Position angle of the lunar center, from celestial north toward east, in [0, TAU), or null when the
+	// Sun-Moon separation is too small for the direction to be defined.
+	readonly centerPositionAngleP: Angle | null
+	// Position angle of the lunar center in the zenith frame, in [0, TAU), or null.
+	readonly centerZenithAngleZ: Angle | null
+	// Position angle of the limb-contact point, from celestial north toward east, in [0, TAU), or null.
+	readonly contactPositionAngleP: Angle | null
+	// Position angle of the limb-contact point in the zenith frame, in [0, TAU), or null.
+	readonly contactZenithAngleZ: Angle | null
+	// Solar parallactic angle, in [-PI, PI] (always defined, it does not depend on the separation).
 	readonly parallacticAngle: Angle
 }
 
@@ -476,8 +493,15 @@ function computeSolarParallacticAngle(time: Time, longitude: Angle, latitude: An
 }
 
 function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: LocalFundamentalState, time: Time, longitude: Angle, latitude: Angle, sample: SunMoonPosition | undefined): LocalTopocentricAspect {
-	const centerP = normalizeAngle(Math.atan2(state.u, state.v))
 	const q = computeSolarParallacticAngle(time, longitude, latitude, state, sample)
+
+	// At a near-exact central alignment the lunar-center direction is undefined (atan2(0, 0)); report null
+	// rather than a spurious 0. The Local View is unaffected because the separation is ~0 there anyway.
+	if (state.distance <= ANGLE_UNDEFINED_DISTANCE) {
+		return { centerPositionAngleP: null, centerZenithAngleZ: null, contactPositionAngleP: null, contactZenithAngleZ: null, parallacticAngle: q }
+	}
+
+	const centerP = normalizeAngle(Math.atan2(state.u, state.v))
 	const centerZ = normalizeAngle(centerP - q)
 	const centralKind = eventCentralKind(kind, state)
 
@@ -629,16 +653,18 @@ export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitud
 		}
 	}
 
-	// Grazing roots: a strict interior local extremum (min or max) whose refined |fn| touches zero.
+	// Grazing roots: an interior local extremum that comes near zero without changing sign (invisible to the
+	// transversal pass). The extremum test is tie-tolerant, so a tied valley bottom straddling the true
+	// instant is still caught; only brackets whose samples already approach zero are refined by minimizing
+	// |fn|, which is robust to the discrete shape of the extremum. Overlaps with transversal roots dedup away.
 	for (let k = 1; k + 1 < jds.length; k++) {
-		const isMinimum = values[k] < values[k - 1] && values[k] < values[k + 1]
-		const isMaximum = values[k] > values[k - 1] && values[k] > values[k + 1]
-		if (!isMinimum && !isMaximum) continue
+		const nearMinimum = values[k] <= values[k - 1] + CONTACT_SAMPLE_EXTREMUM_EPS && values[k] <= values[k + 1] + CONTACT_SAMPLE_EXTREMUM_EPS
+		const nearMaximum = values[k] >= values[k - 1] - CONTACT_SAMPLE_EXTREMUM_EPS && values[k] >= values[k + 1] - CONTACT_SAMPLE_EXTREMUM_EPS
+		if (!nearMinimum && !nearMaximum) continue
+		if (Math.min(Math.abs(values[k - 1]), Math.abs(values[k]), Math.abs(values[k + 1])) > GRAZING_SCAN_PREFILTER) continue
 
 		try {
-			// Minimize fn for a minimum, or -fn for a maximum, within the one-step bracket.
-			const sign = isMinimum ? 1 : -1
-			const result = brentMinimize((jd) => sign * evaluate(jd), jds[k - 1], jds[k + 1], { tolerance: CONTACT_TOLERANCE_DAYS })
+			const result = brentMinimize((jd) => Math.abs(evaluate(jd)), jds[k - 1], jds[k + 1], { tolerance: CONTACT_TOLERANCE_DAYS })
 			if (Number.isFinite(result.minimum) && Math.abs(evaluate(result.minimum)) <= CONTACT_FUNCTION_TOLERANCE) pushUniqueRoot(roots, result.minimum)
 		} catch {
 			// No reliable grazing root in this bracket.
@@ -840,13 +866,37 @@ function findCentralShadowEdgeKm(centralValueAt: (longitude: Angle, latitude: An
 	return undefined
 }
 
-// Robust local width (km) of the central (total/annular) shadow path, measured on the Earth's surface at
-// the instant of the local maximum. The umbra/antumbra footprint is found directly in geographic
-// coordinates: the across-path direction is the gradient of the central-contact function at the observer,
-// and the path edges are where that function vanishes on either side; the geodesic distance between them is
-// the width. Working on the ground makes the foreshortening near the horizon implicit, avoiding the
-// 1 / sin(altitude) blow-up of a fundamental-plane estimate. Returns null when the maximum is not central,
-// the observer is not inside the central shadow, or an edge is not found within MAX_SHADOW_HALF_WIDTH_KM.
+// Number of bearings (over a half turn) probed for the narrowest central-shadow chord.
+const SHADOW_CHORD_BEARING_COUNT = 24
+
+// Narrowest bidirectional central-shadow chord (km) through the observer, scanned over several bearings.
+// Unlike a single gradient direction this is well defined even at the exact center of the shadow, where the
+// central-contact function distance - |L2| has a non-differentiable cone point and the gradient vanishes by
+// symmetry. For each bearing the two opposite edges are summed; the minimum over all bearings is the across-
+// path width. Returns null when no opposite pair of edges is found.
+function computeCentralShadowChordWidthByBearingsKm(centralValueAt: (longitude: Angle, latitude: Angle) => number, longitude: Angle, latitude: Angle): number | null {
+	let best: number | null = null
+
+	for (let i = 0; i < SHADOW_CHORD_BEARING_COUNT; i++) {
+		const bearing = (i / SHADOW_CHORD_BEARING_COUNT) * PI
+		const forward = findCentralShadowEdgeKm(centralValueAt, longitude, latitude, bearing)
+		const backward = findCentralShadowEdgeKm(centralValueAt, longitude, latitude, bearing + PI)
+		if (forward === undefined || backward === undefined) continue
+		const width = forward + backward
+		if (best === null || width < best) best = width
+	}
+
+	return best
+}
+
+// Robust local width (km) of the central (total/annular) shadow path, measured on the Earth's surface at the
+// instant of the local maximum. The umbra/antumbra footprint is found directly in geographic coordinates: the
+// narrowest chord through the observer (scanned over several bearings) is the across-path width, with the path
+// edges being where the central-contact function vanishes on either side. Working on the ground makes the
+// foreshortening near the horizon implicit, avoiding the 1 / sin(altitude) blow-up of a fundamental-plane
+// estimate, and the multi-bearing scan stays well defined even at the exact center of the shadow. Returns
+// null when the maximum is not central, the observer is not inside the central shadow, or no edge is found
+// within MAX_SHADOW_HALF_WIDTH_KM.
 export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, maxEvent: LocalSolarEclipseEvent): number | null {
 	if (maxEvent.centralPhaseKind === 'none') return null
 
@@ -856,22 +906,7 @@ export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, 
 	// The observer must be inside the central shadow (function < 0) for a width to be defined.
 	if (!(centralValueAt(longitude, latitude) < 0)) return null
 
-	const cosLat = Math.cos(latitude)
-	if (!(Math.abs(cosLat) > 1e-6)) return null
-
-	// Across-path direction from the geographic gradient of the central-contact function (local east/north).
-	const delta = 1e-4
-	const eastGradient = (centralValueAt(longitude + delta / cosLat, latitude) - centralValueAt(longitude - delta / cosLat, latitude)) / (2 * delta)
-	const northGradient = (centralValueAt(longitude, latitude + delta) - centralValueAt(longitude, latitude - delta)) / (2 * delta)
-	const gradientLength = Math.hypot(eastGradient, northGradient)
-	if (!(gradientLength > 0)) return null
-
-	const bearing = Math.atan2(eastGradient / gradientLength, northGradient / gradientLength)
-	const forward = findCentralShadowEdgeKm(centralValueAt, longitude, latitude, bearing)
-	const backward = findCentralShadowEdgeKm(centralValueAt, longitude, latitude, bearing + PI)
-	if (forward === undefined || backward === undefined) return null
-
-	return forward + backward
+	return computeCentralShadowChordWidthByBearingsKm(centralValueAt, longitude, latitude)
 }
 
 // Computes the local detail summary (magnitude, ratios and durations) from the resolved events.
@@ -903,7 +938,9 @@ export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options:
 	const sunCx = options.width * 0.5
 	const sunCy = options.height * 0.5
 	const sunR = options.solarRadiusPx
-	const moonR = sunR * (event.moonSunDiameterRatio ?? 1)
+	// Fall back to a unit ratio for a missing or degraded value, so the Moon disk is never zero/negative.
+	const ratio = event.moonSunDiameterRatio !== null && event.moonSunDiameterRatio > 0 && Number.isFinite(event.moonSunDiameterRatio) ? event.moonSunDiameterRatio : 1
+	const moonR = sunR * ratio
 
 	const separationPx = viewState.separationSolarRadii * sunR
 	const angle = (options.orientationMode === 'zenith' ? viewState.centerZenithAngleZ : viewState.centerPositionAngleP) ?? 0
@@ -943,9 +980,11 @@ export function buildLocalViewHorizonGeometry(event: LocalSolarEclipseEvent, opt
 	const sunCy = options.height * 0.5
 
 	// Zenith direction (unit) in SVG pixels (y grows downward): straight up in zenith mode, rotated by the
-	// parallactic angle in north mode.
+	// parallactic angle in north mode. The horizontal component carries the same handedness sign as the Moon
+	// offset, so a mirrored (`eastLeft`) diagram keeps the horizon consistent with the lunar position.
+	const eastSign = options.handedness === 'eastLeft' ? -1 : 1
 	const q = options.orientationMode === 'north' ? (viewState.parallacticAngle ?? 0) : 0
-	const zenithX = Math.sin(q)
+	const zenithX = eastSign * Math.sin(q)
 	const zenithY = -Math.cos(q)
 
 	const offsetPx = altitudeToLocalViewOffsetPx(event.sunAltitude, viewState.solarAngularRadius, options.solarRadiusPx, options.width, options.height)
