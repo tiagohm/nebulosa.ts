@@ -33,13 +33,13 @@ import { vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMu
 
 // All Earth-ellipsoid constants derive from a single flattening definition (WGS84) so the limb,
 // projection and contact geometry stay mutually consistent.
-const EARTH_FLATTENING = 1 / 298.257223563
+export const EARTH_FLATTENING = 1 / 298.257223563
 // Earth polar/equatorial radius ratio (1 - flattening).
-const F_CONST = 1 - EARTH_FLATTENING
+export const F = 1 - EARTH_FLATTENING
 // Reciprocal of F_CONST, used by the geographic-latitude conversion.
-const INV_F_CONST = 1 / F_CONST
+const INV_F = 1 / F
 // Squared eccentricity of the Earth ellipsoid used for limb flattening, e^2 = 1 - (b/a)^2.
-const EARTH_E2 = 1 - F_CONST * F_CONST
+const EARTH_E2 = 1 - F * F
 // Callers building PolynomialBesselianElements from a dynamical-time (TDT) tabulation set deltaTLongitudeCorrection to
 // DELTA_T_LONGITUDE_FACTOR * deltaT; elements with UT-based mu (this module's own) use 0.
 export const DELTA_T_LONGITUDE_FACTOR = 0.00417807 * DEG2RAD
@@ -79,7 +79,8 @@ const LIMB_TANGENCY_RESIDUAL = 1e-9
 // sign change. Kept tight so a non-central eclipse, whose internal residual stays well above zero, never
 // gains spurious internal contacts.
 const CONTACT_RESIDUAL_TOLERANCE = 1e-8
-const SUN_RADIUS_EARTH_RADII = 109.076370706
+// Sun radius in Earth equatorial radii (NASA/Espenak convention), used for the apparent solar angular radius.
+export const SUN_RADIUS_EARTH_RADII = 109.076370706
 // Lunar radius k1 used for penumbral contacts and the penumbral cone, per NASA/Espenak convention.
 const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272488
 // Lunar radius k2 used for umbral contacts and the umbral cone, per NASA/Espenak convention.
@@ -959,7 +960,7 @@ export function projectFundamentalPoint(be: BesselianSample, x: number, y: numbe
 	const px = x
 	const y1 = omega * y
 	const b1 = omega * sinD
-	const b2 = F_CONST * omega * cosD
+	const b2 = F * omega * cosD
 	let bSquared = 1 - px * px - y1 * y1
 
 	if (bSquared < 0) {
@@ -970,7 +971,7 @@ export function projectFundamentalPoint(be: BesselianSample, x: number, y: numbe
 	const B = Math.sqrt(bSquared)
 	const H = Math.atan2(px, B * b2 - y1 * b1)
 	const phi1 = Math.asin(clamp(B * b1 + y1 * b2, -1, 1))
-	const lat = Math.atan(INV_F_CONST * Math.tan(phi1))
+	const lat = Math.atan(INV_F * Math.tan(phi1))
 	const lon = longitudeFromHourAngle(H, be.mu, be.deltaTLongitudeCorrection)
 
 	if (!Number.isFinite(lon) || !Number.isFinite(lat)) return undefined
@@ -1334,8 +1335,8 @@ function evaluateCurveIterationState(state: CurveIterationState, be: BesselianEl
 	const cosH = Math.cos(H)
 	const sinPhi = Math.sin(phi)
 	const cosPhi = Math.cos(phi)
-	const U = Math.atan(F_CONST * Math.tan(phi))
-	const rhoSinPhi = F_CONST * Math.sin(U)
+	const U = Math.atan(F * Math.tan(phi))
+	const rhoSinPhi = F * Math.sin(U)
 	const rhoCosPhi = Math.cos(U)
 	let ksi = rhoCosPhi * sinH
 	let eta = rhoSinPhi * cosD - rhoCosPhi * cosH * sinD
@@ -1376,9 +1377,9 @@ function evaluateCurveIterationState(state: CurveIterationState, be: BesselianEl
 	// spherical approximation -d(rhoCosPhi)/dphi ~ rhoSinPhi and d(rhoSinPhi)/dphi ~ rhoCosPhi:
 	//   -d(rhoCosPhi)/dphi = rhoSinPhi / (cos^2 phi + F^2 sin^2 phi)
 	//    d(rhoSinPhi)/dphi = F^2 rhoCosPhi / (cos^2 phi + F^2 sin^2 phi)
-	const latDenom = cosPhi * cosPhi + F_CONST * F_CONST * sinPhi * sinPhi
+	const latDenom = cosPhi * cosPhi + F * F * sinPhi * sinPhi
 	const dRhoCos = rhoSinPhi / latDenom
-	const dRhoSin = (F_CONST * F_CONST * rhoCosPhi) / latDenom
+	const dRhoSin = (F * F * rhoCosPhi) / latDenom
 	const Q1 = b * sinH * dRhoCos
 	const Q2 = a * (cosH * sinD * dRhoCos + cosD * dRhoSin)
 	// dW/dphi = -(Q1 + Q2) / n in radians, so the Newton latitude step is residual / (dW/dphi).

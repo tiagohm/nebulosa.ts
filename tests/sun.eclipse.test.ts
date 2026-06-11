@@ -2006,4 +2006,3 @@ describe('splitCentralLineByKind segments a hybrid central line', () => {
 		for (const segment of withPbe.annular) for (const point of segment) expect(point.kind).toBe('annular')
 	})
 })
-
