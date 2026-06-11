@@ -73,6 +73,11 @@ export type LocalVisibilityKind = 'notVisible' | 'geometricOnlyBelowHorizon' | '
 // Whether a given event happens with the Sun above or below the local horizon.
 export type LocalEventVisibility = 'aboveHorizon' | 'belowHorizon'
 
+// Vertical trend of the Sun over the eclipse, for composing "on sunrise/sunset" qualifiers: `setting` when
+// the Sun is descending across the contacts, `rising` when ascending, `none` when flat (near culmination) or
+// undetermined.
+export type LocalSunMotion = 'rising' | 'setting' | 'none'
+
 // Orientation frame for the Local View geometry.
 export type LocalViewOrientationMode = 'zenith' | 'north'
 
@@ -124,6 +129,8 @@ export interface LocalSolarEclipseCircumstances {
 		readonly hasCentralPhase: boolean
 		// Character of the central phase, or 'none' for a partial-only local eclipse.
 		readonly centralPhaseKind: LocalCentralPhaseKind
+		// Vertical trend of the Sun across the eclipse (so the UI can say "on sunset"/"on sunrise"), or 'none'.
+		readonly sunMotion: LocalSunMotion
 		// Whether the expected contacts were all resolved. When false, the classification is based on a
 		// partial set of events (e.g. a contact fell outside the search window or failed to converge), so
 		// `completelyVisible` is never asserted.
@@ -300,6 +307,9 @@ export interface LocalSolarEclipseSvgCircle {
 	readonly kind: 'circle'
 	// Semantic role of this circle.
 	readonly role: 'sunDisk' | 'moonDisk' | 'ghostSunDisk' | 'ghostMoonDisk' | 'solarLimb' | 'lunarLimb'
+	// Contact this circle was drawn for, so the UI can label it (e.g. the ghost disks "C1"/"Max"/"C4"). This
+	// is a semantic tag, not rendered text.
+	readonly event?: LocalEclipseContactKind
 	// Center x in SVG pixels.
 	readonly cx: number
 	// Center y in SVG pixels.
@@ -644,11 +654,18 @@ function buildSampleJds(fromJd: number, toJd: number, stepDays: number) {
 // true peak — which would place the maximum just outside the central cone and suppress the C2/C3 search.
 // Returns the best found, or undefined when nothing finite is found.
 export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number): number | undefined {
+	if (!Number.isFinite(fromJd) || !Number.isFinite(toJd) || toJd < fromJd) {
+		return undefined
+	}
+
+	const effectiveStepDays = stepDays > 0 && Number.isFinite(stepDays) ? stepDays : Math.max((toJd - fromJd) * 0.5, CONTACT_REFINE_SUBSTEP_DAYS)
+
 	const magnitudeAt = (jd: number) => localStateAtJulianDay(pbe, longitude, latitude, jd).magnitude
+
 	let bestJd: number | undefined
 	let bestMagnitude = -Infinity
 
-	for (const jd of buildSampleJds(fromJd, toJd, stepDays)) {
+	for (const jd of buildSampleJds(fromJd, toJd, effectiveStepDays)) {
 		const magnitude = magnitudeAt(jd)
 		if (Number.isFinite(magnitude) && magnitude > bestMagnitude) {
 			bestMagnitude = magnitude
@@ -659,8 +676,8 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 	if (bestJd === undefined) return undefined
 
 	// Densify the one-step bracket around the coarse best to relocate a peak narrower than the step.
-	const lo = Math.max(fromJd, bestJd - stepDays)
-	const hi = Math.min(toJd, bestJd + stepDays)
+	const lo = Math.max(fromJd, bestJd - effectiveStepDays)
+	const hi = Math.min(toJd, bestJd + effectiveStepDays)
 	const subSteps = Math.max(2, Math.ceil((hi - lo) / CONTACT_REFINE_SUBSTEP_DAYS))
 	const subStep = (hi - lo) / subSteps
 	for (let i = 0; i <= subSteps; i++) {
@@ -925,11 +942,26 @@ export function localVisibilityText(kind: LocalVisibilityKind) {
 }
 
 // Classifies local visibility from the resolved events.
+// Minimum Sun-altitude change (radians, ~0.06°) across the eclipse to call the Sun rising or setting rather
+// than flat (near culmination, where the earliest and latest contacts can sit at nearly the same altitude).
+const SUN_MOTION_ALTITUDE_EPSILON = 1e-3
+
+// Vertical trend of the Sun across the present contacts, by comparing the earliest and latest event altitudes
+// (the events are already time-ordered). Lets the UI compose an "on sunset"/"on sunrise" qualifier.
+function computeSunMotion(events: LocalSolarEclipseCircumstances['events']): LocalSunMotion {
+	const ordered = [events.C1, events.C2, events.MAX, events.C3, events.C4].filter((event): event is LocalSolarEclipseEvent => event !== null)
+	if (ordered.length < 2) return 'none'
+	const delta = ordered.at(-1)!.sunAltitude - ordered[0].sunAltitude
+	if (delta < -SUN_MOTION_ALTITUDE_EPSILON) return 'setting'
+	if (delta > SUN_MOTION_ALTITUDE_EPSILON) return 'rising'
+	return 'none'
+}
+
 function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']): LocalSolarEclipseCircumstances['visibility'] {
 	const { C1, C2, MAX, C3, C4 } = events
 
 	if (!MAX) {
-		return { kind: 'notVisible', text: localVisibilityText('notVisible'), hasGeometricEclipse: false, hasObservableEclipse: false, hasCentralPhase: false, centralPhaseKind: 'none', completeness: { partialContactsComplete: false, centralContactsComplete: false } }
+		return { kind: 'notVisible', text: localVisibilityText('notVisible'), hasGeometricEclipse: false, hasObservableEclipse: false, hasCentralPhase: false, centralPhaseKind: 'none', sunMotion: 'none', completeness: { partialContactsComplete: false, centralContactsComplete: false } }
 	}
 
 	// Central phase is decided by the local maximum, not by C2/C3 existing: a narrow window or a grazing
@@ -958,7 +990,7 @@ function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']
 	}
 
 	const completeness = { partialContactsComplete: C1 !== null && C4 !== null, centralContactsComplete: !hasCentralPhase || (C2 !== null && C3 !== null) }
-	return { kind, text: localVisibilityText(kind), hasGeometricEclipse: true, hasObservableEclipse: anyAbove, hasCentralPhase, centralPhaseKind, completeness }
+	return { kind, text: localVisibilityText(kind), hasGeometricEclipse: true, hasObservableEclipse: anyAbove, hasCentralPhase, centralPhaseKind, sunMotion: computeSunMotion(events), completeness }
 }
 
 // Maximum geodesic half-width (km) probed when measuring the central shadow path on the ground. A genuine
@@ -1137,8 +1169,8 @@ export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options:
 	const dy = -separationPx * Math.cos(angle)
 
 	return {
-		sun: { kind: 'circle', role: 'sunDisk', cx: sunCx, cy: sunCy, r: sunR },
-		moon: { kind: 'circle', role: 'moonDisk', cx: sunCx + dx, cy: sunCy + dy, r: moonR },
+		sun: { kind: 'circle', role: 'sunDisk', event: event.kind, cx: sunCx, cy: sunCy, r: sunR },
+		moon: { kind: 'circle', role: 'moonDisk', event: event.kind, cx: sunCx + dx, cy: sunCy + dy, r: moonR },
 	}
 }
 

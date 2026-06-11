@@ -111,6 +111,20 @@ describe('local circumstances', () => {
 		expect(c.visibility.hasObservableEclipse).toBe(false)
 	})
 
+	test('reports the Sun vertical trend across the eclipse', () => {
+		// New York saw the 2024 eclipse in the afternoon (Sun descending) -> setting.
+		const afternoon = local(total2024.eclipse, total2024.pbe, -74, 40.71)
+		expect(afternoon.visibility.sunMotion).toBe('setting')
+		expect(afternoon.events.C4!.sunAltitude).toBeLessThan(afternoon.events.C1!.sunAltitude)
+		// Honolulu saw it in the morning (Sun ascending) -> rising.
+		const morning = local(total2024.eclipse, total2024.pbe, -157.86, 21.3)
+		expect(morning.visibility.sunMotion).toBe('rising')
+		expect(morning.events.C4!.sunAltitude).toBeGreaterThan(morning.events.C1!.sunAltitude)
+		// No eclipse -> no defined motion.
+		const none = local(total2024.eclipse, total2024.pbe, 115, -32)
+		expect(none.visibility.sunMotion).toBe('none')
+	})
+
 	test('a fully visible total eclipse reports complete contacts', () => {
 		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
 		expect(c.visibility.kind).toBe('completelyVisible')
@@ -223,6 +237,21 @@ describe('local view geometry', () => {
 		const view = buildLocalSolarEclipseViewGeometry(partial, viewOptions({ selectedEvent: 'C2' }))
 		expect(view.requestedEvent).toBe('C2')
 		expect(view.selectedEvent).toBe('MAX')
+	})
+
+	test('tags every disk with its contact so the UI can label them', () => {
+		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { includeLocalView: true, localView: { selectedEvent: 'MAX' } })
+		const shapes = c.localView!.shapes
+		const circles = shapes.filter((s): s is Extract<(typeof shapes)[number], { kind: 'circle' }> => s.kind === 'circle')
+		// Primary Sun and Moon are tagged with the selected event.
+		const sun = circles.find((s) => s.role === 'sunDisk')!
+		const moon = circles.find((s) => s.role === 'moonDisk')!
+		expect(sun.event).toBe('MAX')
+		expect(moon.event).toBe('MAX')
+		// Each ghost Moon carries its own contact (so it can be labelled C1/C2/C3/C4 like Astrarium): a total
+		// eclipse at Mazatlan has all five contacts, so the ghosts are every contact except the primary MAX.
+		const ghostEvents = circles.filter((s) => s.role === 'ghostMoonDisk').map((s) => s.event)
+		expect(ghostEvents).toEqual(['C1', 'C2', 'C3', 'C4'])
 	})
 
 	test('draws the horizon as foreground over the primary disks', () => {
