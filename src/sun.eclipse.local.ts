@@ -46,9 +46,14 @@ const GRAZING_SCAN_PREFILTER = 0.05
 // count as a central phase. A point exactly on the central limit (distance ~ |L2|) has zero central duration
 // and must not be reported as total/annular.
 const CENTRAL_CONE_TOLERANCE = 1e-7
-// Below this fundamental-plane separation (Earth equatorial radii) the lunar-center direction is undefined
-// (atan2(0, 0) is meaningless), so the position angles are reported as null instead of a spurious 0.
+// Absolute floor (Earth equatorial radii) below which the lunar-center direction is undefined (atan2(0, 0)
+// is meaningless). Used only when the local solar radius is non-positive/degraded; otherwise the relative
+// threshold below applies.
 const ANGLE_UNDEFINED_DISTANCE = 1e-10
+// The lunar-center direction is treated as undefined once the Sun-Moon separation drops below this fraction
+// of the local solar radius. A relative threshold avoids reporting numerically unstable, physically
+// meaningless P/Z at a near-perfect central alignment (where the separation in pixels is ~0 anyway).
+const ANGLE_UNDEFINED_SEPARATION_SOLAR_RADII = 1e-7
 // Order in which contacts are scanned and drawn, earliest to latest.
 const CONTACT_ORDER = ['C1', 'C2', 'MAX', 'C3', 'C4'] as const
 
@@ -492,12 +497,21 @@ function computeSolarParallacticAngle(time: Time, longitude: Angle, latitude: An
 	return normalizePI(Math.atan2(Math.sin(H), Math.tan(latitude) * Math.cos(state.be.d) - Math.sin(state.be.d) * Math.cos(H)))
 }
 
+// Whether the Sun-Moon separation is too small for the lunar-center direction to be physically meaningful.
+// Relative to the local solar radius so it scales with the geometry, falling back to an absolute floor when
+// the solar radius is degraded/non-positive.
+function isLocalViewAngleUndefined(state: LocalFundamentalState) {
+	const solarRadius = (state.L1 + state.L2) * 0.5
+	if (!(solarRadius > 0) || !Number.isFinite(solarRadius)) return state.distance <= ANGLE_UNDEFINED_DISTANCE
+	return state.distance / solarRadius < ANGLE_UNDEFINED_SEPARATION_SOLAR_RADII
+}
+
 function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: LocalFundamentalState, time: Time, longitude: Angle, latitude: Angle, sample: SunMoonPosition | undefined): LocalTopocentricAspect {
 	const q = computeSolarParallacticAngle(time, longitude, latitude, state, sample)
 
 	// At a near-exact central alignment the lunar-center direction is undefined (atan2(0, 0)); report null
 	// rather than a spurious 0. The Local View is unaffected because the separation is ~0 there anyway.
-	if (state.distance <= ANGLE_UNDEFINED_DISTANCE) {
+	if (isLocalViewAngleUndefined(state)) {
 		return { centerPositionAngleP: null, centerZenithAngleZ: null, contactPositionAngleP: null, contactZenithAngleZ: null, parallacticAngle: q }
 	}
 
@@ -635,10 +649,45 @@ function NumberComparator(a: number, b: number) {
 	return a - b
 }
 
+// Refines a sampled local minimum of a contact function (fn <= 0 inside the phase) within a one-step bracket.
+// Two outcomes are distinguished. A true grazing contact, where the minimum just touches zero, yields one
+// double root. A finite phase so short that BOTH its contacts fell between two samples, where the minimum
+// dips below zero while both bracket ends stay positive, yields two roots recovered by bisection on each side
+// of the minimum (a single |fn| minimization would return only one of them).
+function refineMissedContactInterval(evaluate: (jd: number) => number, lo: number, hi: number, roots: number[]) {
+	let mid: number
+	try {
+		mid = brentMinimize(evaluate, lo, hi, { tolerance: CONTACT_TOLERANCE_DAYS }).minimum
+	} catch {
+		return
+	}
+
+	const midValue = evaluate(mid)
+	if (!Number.isFinite(mid) || !Number.isFinite(midValue)) return
+
+	// Grazing contact: the minimum touches zero, a single double root.
+	if (Math.abs(midValue) <= CONTACT_FUNCTION_TOLERANCE) {
+		pushUniqueRoot(roots, mid)
+		return
+	}
+
+	// Missed finite interval: a negative minimum with a contact on each side that is still outside the phase.
+	if (midValue < -CONTACT_FUNCTION_TOLERANCE) {
+		if (evaluate(lo) > 0) {
+			const left = bisectRoot(evaluate, lo, mid)
+			if (left !== undefined) pushUniqueRoot(roots, left)
+		}
+		if (evaluate(hi) > 0) {
+			const right = bisectRoot(evaluate, mid, hi)
+			if (right !== undefined) pushUniqueRoot(roots, right)
+		}
+	}
+}
+
 // Finds every Julian Day in [fromJd, toJd] where the scalar contact function fn reaches zero, by uniform
-// scan plus refinement. Both transversal roots (sign changes) and grazing/tangential roots (a strict local
-// extremum whose refined |fn| stays within CONTACT_FUNCTION_TOLERANCE, which a sign-change scan cannot see)
-// are captured. Roots are deduplicated and returned sorted ascending.
+// scan plus refinement. Transversal roots (sign changes) are bracketed directly; grazing roots and short
+// phases whose two contacts fall entirely between two samples (no sign change, a sub-sample negative dip)
+// are recovered from interior local minima. Roots are deduplicated and returned sorted ascending.
 export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number, fn: (state: LocalFundamentalState) => number): readonly number[] {
 	const evaluate = (jd: number) => fn(localStateAtJulianDay(pbe, longitude, latitude, jd))
 	const roots: number[] = []
@@ -661,22 +710,18 @@ export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitud
 		}
 	}
 
-	// Grazing roots: an interior local extremum that comes near zero without changing sign (invisible to the
-	// transversal pass). The extremum test is tie-tolerant, so a tied valley bottom straddling the true
-	// instant is still caught; only brackets whose samples already approach zero are refined by minimizing
-	// |fn|, which is robust to the discrete shape of the extremum. Overlaps with transversal roots dedup away.
+	// Grazing/sub-sample roots: an interior local MINIMUM that comes near zero without changing sign. These
+	// contact functions are negative inside the phase, so a contact is always a minimum touching/dipping below
+	// zero from positive values; only minima are inspected (a near-maximum near zero has no root and could
+	// invent one). The test is tie-tolerant so a tied valley bottom straddling the true instant is still
+	// caught, and only brackets whose samples already approach zero are refined. Overlaps with transversal
+	// roots dedup away.
 	for (let k = 1; k + 1 < jds.length; k++) {
 		const nearMinimum = values[k] <= values[k - 1] + CONTACT_SAMPLE_EXTREMUM_EPS && values[k] <= values[k + 1] + CONTACT_SAMPLE_EXTREMUM_EPS
-		const nearMaximum = values[k] >= values[k - 1] - CONTACT_SAMPLE_EXTREMUM_EPS && values[k] >= values[k + 1] - CONTACT_SAMPLE_EXTREMUM_EPS
-		if (!nearMinimum && !nearMaximum) continue
+		if (!nearMinimum) continue
 		if (Math.min(Math.abs(values[k - 1]), Math.abs(values[k]), Math.abs(values[k + 1])) > GRAZING_SCAN_PREFILTER) continue
 
-		try {
-			const result = brentMinimize((jd) => Math.abs(evaluate(jd)), jds[k - 1], jds[k + 1], { tolerance: CONTACT_TOLERANCE_DAYS })
-			if (Number.isFinite(result.minimum) && Math.abs(evaluate(result.minimum)) <= CONTACT_FUNCTION_TOLERANCE) pushUniqueRoot(roots, result.minimum)
-		} catch {
-			// No reliable grazing root in this bracket.
-		}
+		refineMissedContactInterval(evaluate, jds[k - 1], jds[k + 1], roots)
 	}
 
 	return roots.sort(NumberComparator)
