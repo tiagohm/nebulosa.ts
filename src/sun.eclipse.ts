@@ -1152,12 +1152,19 @@ function centralAxisDistanceSquaredAtT(pbe: PolynomialBesselianElements, t: numb
 export function centralAxisIntersectsEarth(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions) {
 	const f = (t: number) => centralAxisDistanceSquaredAtT(pbe, t)
 	const span = contactSearchSpanDays(options) / pbe.stepDays
+	// Center the scan on maximumTime, exactly like the contact/endpoint searches, so the central
+	// classification and the central-line endpoints share one window (P3.3). t = 0 is time0 (the rounded
+	// hour), which can sit up to half an hour from maximumTime; scanning around tMaximum keeps the closest
+	// approach symmetric in the window even for callers passing a tight custom span.
+	const tMaximum = (toJulianDay(pbe.maximumTime) - toJulianDay(pbe.time0)) / pbe.stepDays
+	const from = tMaximum - span
+	const to = tMaximum + span
 	const steps = 64
-	let bestT = 0
+	let bestT = tMaximum
 	let best = Infinity
 
 	for (let k = 0; k <= steps; k++) {
-		const t = -span + (2 * span * k) / steps
+		const t = from + ((to - from) * k) / steps
 		const value = f(t)
 		if (value < best) {
 			best = value
@@ -1167,11 +1174,11 @@ export function centralAxisIntersectsEarth(pbe: PolynomialBesselianElements, opt
 
 	if (best <= 1) return true
 
-	const half = (2 * span) / steps
+	const half = (to - from) / steps
 	// Clamp the refinement bracket to the fitted span so a minimum found at the scan edge never
-	// extrapolates the cubic beyond [-span, +span].
-	const lo = Math.max(-span, bestT - half)
-	const hi = Math.min(span, bestT + half)
+	// extrapolates the cubic beyond [from, to].
+	const lo = Math.max(from, bestT - half)
+	const hi = Math.min(to, bestT + half)
 
 	try {
 		const minimum = brentMinimize(f, lo, hi)
@@ -1195,12 +1202,17 @@ const MAXIMUM_TIME_CONSISTENCY_DAYS = 60 / DAYSEC
 function findGreatestEclipseT(pbe: PolynomialBesselianElements) {
 	const f = (t: number) => centralAxisDistanceSquaredAtT(pbe, t)
 	const span = contactSearchSpanDays() / pbe.stepDays
+	// Search the closest approach in the window centered on maximumTime, matching centralAxisIntersectsEarth
+	// and the contact searches, rather than around time0 (t = 0).
+	const tMaximum = (toJulianDay(pbe.maximumTime) - toJulianDay(pbe.time0)) / pbe.stepDays
+	const from = tMaximum - span
+	const to = tMaximum + span
 	const steps = 64
-	let bestT = 0
+	let bestT = tMaximum
 	let best = Infinity
 
 	for (let k = 0; k <= steps; k++) {
-		const t = -span + (2 * span * k) / steps
+		const t = from + ((to - from) * k) / steps
 		const value = f(t)
 		if (value < best) {
 			best = value
@@ -1208,10 +1220,10 @@ function findGreatestEclipseT(pbe: PolynomialBesselianElements) {
 		}
 	}
 
-	const half = (2 * span) / steps
+	const half = (to - from) / steps
 
 	try {
-		const minimum = brentMinimize(f, Math.max(-span, bestT - half), Math.min(span, bestT + half))
+		const minimum = brentMinimize(f, Math.max(from, bestT - half), Math.min(to, bestT + half))
 		if (minimum.value < best) bestT = minimum.minimum
 	} catch {
 		// Keep the coarse-scan argmin if the refinement bracket is rejected.
@@ -1254,7 +1266,11 @@ export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, be
 	const julianDay0 = toJulianDay(pbe.time0)
 	const maximumJulianDay = toJulianDay(pbe.maximumTime)
 	const searchSpanDays = contactSearchSpanDays(options)
-	let t = (maximumJulianDay - julianDay0) / pbe.stepDays
+	const tMaximum = (maximumJulianDay - julianDay0) / pbe.stepDays
+	// Normalized half-width of the fitted contact window: the same span the bisection fallback below
+	// brackets. The endpoint must lie inside it.
+	const spanNormalized = searchSpanDays / pbe.stepDays
+	let t = tMaximum
 
 	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
 		evaluateBesselianAtTInto(be, pbe, t)
@@ -1280,7 +1296,11 @@ export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, be
 		const tau = begin ? t1 - t2 : t1 + t2
 		t += tau
 
-		if (!Number.isFinite(t)) break
+		// The Newton step can converge onto a spurious tangency produced by the cubic extrapolation
+		// outside the fitted window. The documented contract is to fall back to the bracketed bisection
+		// when the iteration leaves the fitted span, so detect that here instead of returning the stray
+		// root.
+		if (!Number.isFinite(t) || Math.abs(t - tMaximum) > spanNormalized) break
 		if (Math.abs(tau) * pbe.stepDays <= CONTACT_TOLERANCE_DAYS) return projectCentralAxisPoint(pbe, julianDay0 + t * pbe.stepDays)
 	}
 
