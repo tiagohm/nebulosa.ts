@@ -1970,4 +1970,39 @@ describe('splitCentralLineByKind segments a hybrid central line', () => {
 		expect(annular).toHaveLength(0)
 		expect(total.length).toBeGreaterThan(0)
 	})
+
+	// With pbe, splitCentralLineByKind root-solves the exact total<->annular crossover and shares it, so the
+	// total and annular segments touch instead of leaving a sampling-resolution gap (report P1.3).
+	test('passing pbe closes the total/annular seam with a resolved transition point', () => {
+		const fixture = NASA_ECLIPSES[3]
+		const pbe = nasaPbe(fixture)
+		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), pbe, { longitudeStep: deg(2), maxAngularStep: deg(4) })
+
+		function nearestCrossKindEndpointGap({ total, annular }: ReturnType<typeof splitCentralLineByKind>) {
+			let best = Infinity
+			for (const t of total) {
+				for (const a of annular) {
+					for (const tp of [t[0], t.at(-1)!]) {
+						for (const ap of [a[0], a.at(-1)!]) {
+							best = Math.min(best, sphericalSeparation(tp.x, tp.y, ap.x, ap.y))
+						}
+					}
+				}
+			}
+			return best
+		}
+
+		const withoutPbe = splitCentralLineByKind(geometry.lines.centerLine)
+		const withPbe = splitCentralLineByKind(geometry.lines.centerLine, pbe)
+
+		// The shared seam makes a total and an annular segment meet within a hair, much closer than the
+		// unresolved sampling gap.
+		const seamGap = nearestCrossKindEndpointGap(withPbe)
+		expect(seamGap).toBeLessThan(deg(0.01))
+		expect(seamGap).toBeLessThan(nearestCrossKindEndpointGap(withoutPbe))
+		// Each segment stays homogeneous in kind, seam copies included.
+		for (const segment of withPbe.total) for (const point of segment) expect(point.kind).toBe('total')
+		for (const segment of withPbe.annular) for (const point of segment) expect(point.kind).toBe('annular')
+	})
 })
+

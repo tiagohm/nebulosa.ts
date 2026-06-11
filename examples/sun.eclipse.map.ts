@@ -136,9 +136,6 @@ const HASHES: Readonly<Record<string, string>> = {
 	'2025-09-21': '2ffb311cb6d1bb1bbfe460b08d9242ced39b07fe4cd0c33eac174b42a4895b6b',
 }
 
-const TASKS: Promise<unknown>[] = []
-const messages: string[] = []
-
 console.time('solar eclipses')
 
 while (date[0] <= 2025) {
@@ -148,33 +145,21 @@ while (date[0] <= 2025) {
 	const name = `solar-eclipse-${id}`
 
 	if (!process.argv[2] || process.argv[2] === id) {
-		console.time(id)
 		const pbe = computePolynomialBesselianElements(maximalTime, getSunMoonPosition)
 		const geo = computeSolarEclipseMapGeometry(eclipse, pbe, options)
 		const paths = solarEclipseMapToSvgPaths(geo, projection)
 		// The visual-only totality/annularity fill is derived from the umbra limits, isolated from the physical lines.
 		const fill = geoPolygonsToSvgPathData(computeSolarEclipseFillGeometry(geo), projection)
 		const svg = makeSvg(paths, fill, WIDTH, HEIGHT)
-		console.timeEnd(id)
 
-		async function execute() {
-			await Bun.write(`data/${name}.svg`, svg)
-			await Bun.$`${IMAGEMAGICK_PATH} data/${name}.svg -strip data/${name}.png`
-			const hash = Bun.SHA256.hash(await Bun.file(`data/${name}.png`).arrayBuffer(), 'hex')
-			messages.push(`'${id}': '${hash}', // ` + (HASHES[id] === hash ? '✅ ' : '❌ '))
-		}
-
-		TASKS.push(Promise.try(execute))
+		await Bun.write(`data/${name}.svg`, svg)
+		await Bun.$`${IMAGEMAGICK_PATH} data/${name}.svg -strip data/${name}.png`
+		const hash = Bun.SHA256.hash(await Bun.file(`data/${name}.png`).arrayBuffer(), 'hex')
+		console.info(`'${id}': '${hash}', // ` + (HASHES[id] === hash ? '✅ ' : '❌ '))
 	}
 
 	solarEclipse = nearestSolarEclipse(maximalTime, true)
 	date = timeToDate(solarEclipse.maximalTime)
 }
 
-await Promise.all(TASKS)
-
 console.timeEnd('solar eclipses')
-
-for (const message of messages.sort((a, b) => a.localeCompare(b))) {
-	console.info(message)
-}
