@@ -118,18 +118,21 @@ describe('local circumstances', () => {
 		expect(c.visibility.completeness.centralContactsComplete).toBe(true)
 	})
 
-	test('recovers C2/C3 when the central phase falls entirely between two samples', () => {
-		// The 2024 totality at Mazatlan lasts ~259 s. A 400 s search step (with the 3.5 h window) places the
-		// nearest samples ~200 s from the maximum, so the whole central phase sits between two positive samples
-		// with no sign change. The sub-sample minimum recovery must still resolve both central contacts.
+	test('recovers C2/C3 for any search step, even far coarser than the central phase', () => {
+		// The 2024 totality at Mazatlan lasts ~259 s. For a search step much larger than that, the whole
+		// central phase sits between two positive samples with no sign change, and the magnitude peak is much
+		// narrower than the step. Both the maximum search and the contact search must stay robust regardless of
+		// localSearchStepSeconds, so every step recovers the same central contacts and duration.
 		const fine = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { localSearchStepSeconds: 30 })
-		const coarse = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { localSearchStepSeconds: 400 })
-		expect(coarse.events.C2).not.toBeNull()
-		expect(coarse.events.C3).not.toBeNull()
-		expect(coarse.events.C3!.jd).toBeGreaterThan(coarse.events.C2!.jd)
-		expect(coarse.details.centralPhaseDurationSeconds!).toBeGreaterThan(0)
-		// The coarse-step central duration matches the fine-step one to within a second.
-		expect(coarse.details.centralPhaseDurationSeconds!).toBeCloseTo(fine.details.centralPhaseDurationSeconds!, 0)
+		for (const localSearchStepSeconds of [400, 700, 900, 1300, 1800, 3000]) {
+			const coarse = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { localSearchStepSeconds })
+			expect(coarse.events.C2).not.toBeNull()
+			expect(coarse.events.C3).not.toBeNull()
+			expect(coarse.events.C3!.jd).toBeGreaterThan(coarse.events.C2!.jd)
+			expect(coarse.events.MAX!.centralPhaseKind).toBe('total')
+			// The coarse-step central duration matches the fine-step one to within a second.
+			expect(coarse.details.centralPhaseDurationSeconds!).toBeCloseTo(fine.details.centralPhaseDurationSeconds!, 0)
+		}
 	})
 
 	test('observability of every event matches its solar altitude against the horizon', () => {

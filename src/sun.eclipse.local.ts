@@ -32,6 +32,9 @@ const MAX_CONTACT_SEARCH_SPAN_SECONDS = 5 * 3600
 const DEFAULT_LOCAL_SEARCH_STEP_SECONDS = 60
 // Root tolerance for local contact instants, in days (~1 ms).
 const CONTACT_TOLERANCE_DAYS = 1e-8
+// Absolute resolution (days, ~30 s) used to densify a candidate contact bracket before refining it, so a
+// phase much shorter than localSearchStepSeconds is still bracketed regardless of the configured step.
+const CONTACT_REFINE_SUBSTEP_DAYS = 30 / DAYSEC
 // Physical tolerance (Earth equatorial radii) for a grazing (tangential) contact: a local extremum of the
 // contact function whose refined |value| stays within this is accepted as a double root even without a sign
 // change. ~6e-3 km at the Earth's surface; tight enough not to invent contacts on a clearly partial location.
@@ -39,9 +42,6 @@ const CONTACT_FUNCTION_TOLERANCE = 1e-6
 // Tie tolerance for detecting a sampled local extremum of a contact function, so a flat/tied valley bottom
 // (e.g. two equal samples straddling the true grazing instant) is still recognized.
 const CONTACT_SAMPLE_EXTREMUM_EPS = 1e-12
-// A sampled triple is only refined for a grazing root when its smallest |value| is already this close to
-// zero (Earth equatorial radii). Keeps the |fn| minimization off deep valleys that are far from a contact.
-const GRAZING_SCAN_PREFILTER = 0.05
 // Minimum margin (Earth equatorial radii) by which the observer must be inside the umbral/antumbral cone to
 // count as a central phase. A point exactly on the central limit (distance ~ |L2|) has zero central duration
 // and must not be reported as total/annular.
@@ -610,15 +610,19 @@ function bisectRoot(f: (jd: number) => number, lo: number, hi: number) {
 	}
 }
 
-// Finds the Julian Day of the local magnitude maximum within [fromJd, toJd]: a uniform scan brackets the
-// best sample, then Brent minimization of the negated magnitude refines it. Returns the sampled best when
-// the refinement does not improve, or undefined when nothing finite is found.
+// Finds the Julian Day of the local magnitude maximum within [fromJd, toJd]. A uniform coarse scan brackets
+// the best sample, then the one-step bracket around it is densified at a bounded absolute resolution before
+// Brent refinement: with a coarse localSearchStepSeconds the magnitude peak (especially the narrow central
+// spike) is much narrower than the step, and a single minimization over the wide bracket can settle off the
+// true peak — which would place the maximum just outside the central cone and suppress the C2/C3 search.
+// Returns the best found, or undefined when nothing finite is found.
 export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number): number | undefined {
+	const magnitudeAt = (jd: number) => localStateAtJulianDay(pbe, longitude, latitude, jd).magnitude
 	let bestJd: number | undefined
 	let bestMagnitude = -Infinity
 
 	for (let jd = fromJd; jd <= toJd + 1e-12; jd += stepDays) {
-		const magnitude = localStateAtJulianDay(pbe, longitude, latitude, jd).magnitude
+		const magnitude = magnitudeAt(jd)
 		if (Number.isFinite(magnitude) && magnitude > bestMagnitude) {
 			bestMagnitude = magnitude
 			bestJd = jd
@@ -627,14 +631,28 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 
 	if (bestJd === undefined) return undefined
 
+	// Densify the one-step bracket around the coarse best to relocate a peak narrower than the step.
 	const lo = Math.max(fromJd, bestJd - stepDays)
 	const hi = Math.min(toJd, bestJd + stepDays)
+	const subSteps = Math.max(2, Math.ceil((hi - lo) / CONTACT_REFINE_SUBSTEP_DAYS))
+	const subStep = (hi - lo) / subSteps
+	for (let i = 0; i <= subSteps; i++) {
+		const jd = i === subSteps ? hi : lo + i * subStep
+		const magnitude = magnitudeAt(jd)
+		if (Number.isFinite(magnitude) && magnitude > bestMagnitude) {
+			bestMagnitude = magnitude
+			bestJd = jd
+		}
+	}
 
+	// Final Brent refinement within the tight sub-bracket around the densified best.
+	const refineLo = Math.max(fromJd, bestJd - subStep)
+	const refineHi = Math.min(toJd, bestJd + subStep)
 	try {
-		const result = brentMinimize((jd) => -localStateAtJulianDay(pbe, longitude, latitude, jd).magnitude, lo, hi, { tolerance: CONTACT_TOLERANCE_DAYS })
-		if (Number.isFinite(result.minimum) && localStateAtJulianDay(pbe, longitude, latitude, result.minimum).magnitude >= bestMagnitude) return result.minimum
+		const result = brentMinimize((jd) => -magnitudeAt(jd), refineLo, refineHi, { tolerance: CONTACT_TOLERANCE_DAYS })
+		if (Number.isFinite(result.minimum) && magnitudeAt(result.minimum) >= bestMagnitude) return result.minimum
 	} catch {
-		// Fall back to the sampled maximum.
+		// Fall back to the densified best.
 	}
 
 	return bestJd
@@ -649,15 +667,44 @@ function NumberComparator(a: number, b: number) {
 	return a - b
 }
 
-// Refines a sampled local minimum of a contact function (fn <= 0 inside the phase) within a one-step bracket.
-// Two outcomes are distinguished. A true grazing contact, where the minimum just touches zero, yields one
-// double root. A finite phase so short that BOTH its contacts fell between two samples, where the minimum
-// dips below zero while both bracket ends stay positive, yields two roots recovered by bisection on each side
-// of the minimum (a single |fn| minimization would return only one of them).
+// Refines a candidate contact bracket [lo, hi] around a sampled local minimum of a contact function
+// (fn <= 0 inside the phase). The bracket is first densified at a bounded absolute resolution
+// (CONTACT_REFINE_SUBSTEP_DAYS): a single minimization over the whole bracket can step over a dip much
+// narrower than the bracket, so the fine sub-scan both catches transversal crossings of a short finite phase
+// directly and locates a tight sub-bracket for the minimum. The refined minimum then yields either a grazing
+// double root (it just touches zero) or, for a sub-resolution finite dip, two roots straddling a negative
+// minimum (a single |fn| minimization would return only one of them).
 function refineMissedContactInterval(evaluate: (jd: number) => number, lo: number, hi: number, roots: number[]) {
+	const subSteps = Math.max(2, Math.ceil((hi - lo) / CONTACT_REFINE_SUBSTEP_DAYS))
+	const subStep = (hi - lo) / subSteps
+
+	let previousJd = lo
+	let previousValue = evaluate(lo)
+	let minJd = lo
+	let minValue = previousValue
+
+	for (let i = 1; i <= subSteps; i++) {
+		const jd = i === subSteps ? hi : lo + i * subStep
+		const value = evaluate(jd)
+		// A finite phase wider than the sub-step shows up as transversal crossings here.
+		if (previousValue * value < 0) {
+			const root = bisectRoot(evaluate, previousJd, jd)
+			if (root !== undefined) pushUniqueRoot(roots, root)
+		}
+		if (value < minValue) {
+			minValue = value
+			minJd = jd
+		}
+		previousJd = jd
+		previousValue = value
+	}
+
+	// Refine the densified minimum within its own sub-bracket.
+	const refineLo = Math.max(lo, minJd - subStep)
+	const refineHi = Math.min(hi, minJd + subStep)
 	let mid: number
 	try {
-		mid = brentMinimize(evaluate, lo, hi, { tolerance: CONTACT_TOLERANCE_DAYS }).minimum
+		mid = brentMinimize(evaluate, refineLo, refineHi, { tolerance: CONTACT_TOLERANCE_DAYS }).minimum
 	} catch {
 		return
 	}
@@ -671,14 +718,14 @@ function refineMissedContactInterval(evaluate: (jd: number) => number, lo: numbe
 		return
 	}
 
-	// Missed finite interval: a negative minimum with a contact on each side that is still outside the phase.
+	// Sub-resolution finite dip: a negative minimum with a contact on each side still outside the phase.
 	if (midValue < -CONTACT_FUNCTION_TOLERANCE) {
-		if (evaluate(lo) > 0) {
-			const left = bisectRoot(evaluate, lo, mid)
+		if (evaluate(refineLo) > 0) {
+			const left = bisectRoot(evaluate, refineLo, mid)
 			if (left !== undefined) pushUniqueRoot(roots, left)
 		}
-		if (evaluate(hi) > 0) {
-			const right = bisectRoot(evaluate, mid, hi)
+		if (evaluate(refineHi) > 0) {
+			const right = bisectRoot(evaluate, mid, refineHi)
 			if (right !== undefined) pushUniqueRoot(roots, right)
 		}
 	}
@@ -710,16 +757,18 @@ export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitud
 		}
 	}
 
-	// Grazing/sub-sample roots: an interior local MINIMUM that comes near zero without changing sign. These
-	// contact functions are negative inside the phase, so a contact is always a minimum touching/dipping below
-	// zero from positive values; only minima are inspected (a near-maximum near zero has no root and could
-	// invent one). The test is tie-tolerant so a tied valley bottom straddling the true instant is still
-	// caught, and only brackets whose samples already approach zero are refined. Overlaps with transversal
-	// roots dedup away.
+	// Grazing/sub-sample roots: every interior local MINIMUM is refined. These contact functions are negative
+	// inside the phase, so a contact is always a minimum touching/dipping below zero from positive values;
+	// only minima are inspected (a near-maximum near zero has no root and could invent one). The test is
+	// tie-tolerant so a tied valley bottom straddling the true instant is still caught. No absolute pre-filter
+	// is applied: a short phase whose negative dip lies between two samples that are both far from zero (likely
+	// with a coarse localSearchStepSeconds or a fast shadow) would otherwise be skipped and its contacts lost.
+	// The functions are smooth with essentially one minimum per window, so this is at most a few refinements,
+	// and refineMissedContactInterval adds nothing for a deep minimum whose bracket ends are already inside the
+	// phase. Overlaps with transversal roots dedup away.
 	for (let k = 1; k + 1 < jds.length; k++) {
 		const nearMinimum = values[k] <= values[k - 1] + CONTACT_SAMPLE_EXTREMUM_EPS && values[k] <= values[k + 1] + CONTACT_SAMPLE_EXTREMUM_EPS
 		if (!nearMinimum) continue
-		if (Math.min(Math.abs(values[k - 1]), Math.abs(values[k]), Math.abs(values[k + 1])) > GRAZING_SCAN_PREFILTER) continue
 
 		refineMissedContactInterval(evaluate, jds[k - 1], jds[k + 1], roots)
 	}
