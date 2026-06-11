@@ -118,22 +118,25 @@ describe('local circumstances', () => {
 		expect(c.visibility.completeness.centralContactsComplete).toBe(true)
 	})
 
-	test('recovers C2/C3 for any search step, even far coarser than the central phase', () => {
+	describe('recovers C2/C3 for any search step, even far coarser than the central phase', () => {
 		// The 2024 totality at Mazatlan lasts ~259 s. For a search step much larger than that, the whole
 		// central phase sits between two positive samples with no sign change, and the magnitude peak is much
 		// narrower than the step. Both the maximum search and the contact search must stay robust regardless of
 		// localSearchStepSeconds, so every step recovers the same central contacts and duration.
 		const fine = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { localSearchStepSeconds: 30 })
-		for (const localSearchStepSeconds of [400, 700, 900, 1300, 1800, 3000]) {
-			const coarse = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { localSearchStepSeconds })
-			expect(coarse.events.C2).not.toBeNull()
-			expect(coarse.events.C3).not.toBeNull()
-			expect(coarse.events.C3!.jd).toBeGreaterThan(coarse.events.C2!.jd)
-			expect(coarse.events.MAX!.centralPhaseKind).toBe('total')
-			// The coarse-step central duration matches the fine-step one to within a second.
-			expect(coarse.details.centralPhaseDurationSeconds!).toBeCloseTo(fine.details.centralPhaseDurationSeconds!, 0)
+		const steps = [400, 700, 900, 1300, 1800, 3000] as const
+		for (const localSearchStepSeconds of steps) {
+			test(localSearchStepSeconds.toFixed(0), () => {
+				const coarse = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { localSearchStepSeconds })
+				expect(coarse.events.C2).not.toBeNull()
+				expect(coarse.events.C3).not.toBeNull()
+				expect(coarse.events.C3!.jd).toBeGreaterThan(coarse.events.C2!.jd)
+				expect(coarse.events.MAX!.centralPhaseKind).toBe('total')
+				// The coarse-step central duration matches the fine-step one to within a second.
+				expect(coarse.details.centralPhaseDurationSeconds!).toBeCloseTo(fine.details.centralPhaseDurationSeconds!, 0)
+			})
 		}
-	}, 3000)
+	})
 
 	test('observability of every event matches its solar altitude against the horizon', () => {
 		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
@@ -248,21 +251,24 @@ describe('local view topocentric invariants', () => {
 	const total = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
 	const annular = local(annular2023.eclipse, annular2023.pbe, -123, 43)
 
-	test('separations match the tangency geometry at every contact', () => {
-		for (const c of [total, annular]) {
-			// External tangency at C1/C4: centers separated by the sum of the radii (1 + ratio solar radii).
-			for (const k of ['C1', 'C4'] as const) {
-				const e = c.events[k]!
-				expect(e.localViewState!.separationSolarRadii).toBeCloseTo(1 + e.moonSunDiameterRatio!, 3)
-			}
-			// Internal tangency at C2/C3: centers separated by the difference of the radii.
-			for (const k of ['C2', 'C3'] as const) {
-				const e = c.events[k]!
-				expect(e.localViewState!.separationSolarRadii).toBeCloseTo(Math.abs(1 - e.moonSunDiameterRatio!), 3)
-			}
-			// The maximum is the closest approach: its separation is the smallest of all contacts.
-			const maxSep = c.events.MAX!.localViewState!.separationSolarRadii
-			for (const k of ['C1', 'C2', 'C3', 'C4'] as const) expect(maxSep).toBeLessThanOrEqual(c.events[k]!.localViewState!.separationSolarRadii + 1e-9)
+	describe('separations match the tangency geometry at every contact', () => {
+		const circumstances = [total, annular] as const
+		for (const c of circumstances) {
+			test(c.visibility.centralPhaseKind, () => {
+				// External tangency at C1/C4: centers separated by the sum of the radii (1 + ratio solar radii).
+				for (const k of ['C1', 'C4'] as const) {
+					const e = c.events[k]!
+					expect(e.localViewState!.separationSolarRadii).toBeCloseTo(1 + e.moonSunDiameterRatio!, 3)
+				}
+				// Internal tangency at C2/C3: centers separated by the difference of the radii.
+				for (const k of ['C2', 'C3'] as const) {
+					const e = c.events[k]!
+					expect(e.localViewState!.separationSolarRadii).toBeCloseTo(Math.abs(1 - e.moonSunDiameterRatio!), 3)
+				}
+				// The maximum is the closest approach: its separation is the smallest of all contacts.
+				const maxSep = c.events.MAX!.localViewState!.separationSolarRadii
+				for (const k of ['C1', 'C2', 'C3', 'C4'] as const) expect(maxSep).toBeLessThanOrEqual(c.events[k]!.localViewState!.separationSolarRadii + 1e-9)
+			})
 		}
 	})
 

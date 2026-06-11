@@ -44,8 +44,12 @@ const CONTACT_FUNCTION_TOLERANCE = 1e-6
 const CONTACT_SAMPLE_EXTREMUM_EPS = 1e-12
 // Minimum margin (Earth equatorial radii) by which the observer must be inside the umbral/antumbral cone to
 // count as a central phase. A point exactly on the central limit (distance ~ |L2|) has zero central duration
-// and must not be reported as total/annular.
-const CENTRAL_CONE_TOLERANCE = 1e-7
+// and must not be reported as total/annular. Deliberately equal to CONTACT_FUNCTION_TOLERANCE: a central
+// phase shallower than that is treated by the root finder as a single grazing tangency rather than two
+// distinct C2/C3 contacts, so classifying it as a finite central phase would be self-contradictory (central
+// kind set but no resolvable central duration). Keeping them aligned keeps centralPhaseKind, C2/C3 and the
+// central duration mutually consistent.
+const CENTRAL_CONE_TOLERANCE = CONTACT_FUNCTION_TOLERANCE
 // Absolute floor (Earth equatorial radii) below which the lunar-center direction is undefined (atan2(0, 0)
 // is meaningless). Used only when the local solar radius is non-positive/degraded; otherwise the relative
 // threshold below applies.
@@ -614,6 +618,10 @@ function bisectRoot(f: (jd: number) => number, lo: number, hi: number) {
 // divide the window. Without the guaranteed endpoint, a root or peak in the final partial sub-interval (right
 // at toJd) could fall past the last sample and be missed.
 function buildSampleJds(fromJd: number, toJd: number, stepDays: number) {
+	if (!(stepDays > 0) || !Number.isFinite(stepDays)) {
+		return [fromJd, toJd]
+	}
+
 	const jds: number[] = []
 	for (let jd = fromJd; jd < toJd; jd += stepDays) jds.push(jd)
 	if (jds.length === 0 || Math.abs(jds.at(-1)! - toJd) > CONTACT_TOLERANCE_DAYS) jds.push(toJd)
@@ -990,6 +998,10 @@ function findCentralShadowEdgeKm(centralValueAt: (longitude: Angle, latitude: An
 
 // Number of bearings (over a half turn) probed for the narrowest central-shadow chord.
 const SHADOW_CHORD_BEARING_COUNT = 24
+// Finite penalty (km) returned to the bearing minimizer for a bearing with no opposite edge pair. It exceeds
+// any valid chord (at most 2 * MAX_SHADOW_HALF_WIDTH_KM), so the minimizer steers away from it without the
+// NaN/parabola degradation a non-finite penalty could cause inside brentMinimize.
+const INVALID_CHORD_WIDTH_PENALTY_KM = MAX_SHADOW_HALF_WIDTH_KM * 4
 
 // Narrowest bidirectional central-shadow chord (km) through the observer, scanned over several bearings and
 // then refined around the best one. Unlike a single gradient direction this is well defined even at the exact
@@ -1022,7 +1034,7 @@ function computeCentralShadowChordWidthByBearingsKm(centralValueAt: (longitude: 
 
 	// Refine the bearing within one grid step; the true minimum chord usually lies between two samples.
 	try {
-		const refined = brentMinimize((bearing) => chordWidthAtBearing(normalizeAngle(bearing)) ?? Infinity, bestBearing - step, bestBearing + step, { tolerance: 1e-4 })
+		const refined = brentMinimize((bearing) => chordWidthAtBearing(normalizeAngle(bearing)) ?? INVALID_CHORD_WIDTH_PENALTY_KM, bestBearing - step, bestBearing + step, { tolerance: 1e-4 })
 		if (Number.isFinite(refined.value) && refined.value < best) best = refined.value
 	} catch {
 		// Keep the discrete minimum.
