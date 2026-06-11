@@ -892,11 +892,21 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 		let after: number | undefined
 
 		while (true) {
-			const roots = findLocalContactRoots(pbe, longitude, latitude, centerJd - currentSpan, centerJd + currentSpan, stepDays, fn)
-			if (roots.length === 0) break
+			const fromJd = centerJd - currentSpan
+			const toJd = centerJd + currentSpan
+			const roots = findLocalContactRoots(pbe, longitude, latitude, fromJd, toJd, stepDays, fn)
 			before = rootBefore(roots, maximumJd)
 			after = rootAfter(roots, maximumJd)
 			if ((before !== undefined && after !== undefined) || currentSpan >= maxSpan) break
+
+			// A still-missing contact may simply lie outside the current window: that is the case exactly when
+			// the corresponding window edge is still inside the phase (fn <= 0), so the contact is beyond it. If
+			// neither missing edge is inside the phase, expanding cannot reveal a contact, so stop. This keeps a
+			// window lying entirely inside a long phase (no roots, no sign change) from stopping the expansion.
+			const expandForBefore = before === undefined && fn(localStateAtJulianDay(pbe, longitude, latitude, fromJd)) <= 0
+			const expandForAfter = after === undefined && fn(localStateAtJulianDay(pbe, longitude, latitude, toJd)) <= 0
+			if (!expandForBefore && !expandForAfter) break
+
 			currentSpan = Math.min(currentSpan * 1.5, maxSpan)
 		}
 

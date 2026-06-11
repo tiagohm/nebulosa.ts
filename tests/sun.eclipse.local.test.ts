@@ -138,8 +138,7 @@ describe('local circumstances', () => {
 		// narrower than the step. Both the maximum search and the contact search must stay robust regardless of
 		// localSearchStepSeconds, so every step recovers the same central contacts and duration.
 		const fine = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { localSearchStepSeconds: 30 })
-		const steps = [400, 700, 900, 1300, 1800, 3000] as const
-		for (const localSearchStepSeconds of steps) {
+		for (const localSearchStepSeconds of [400, 700, 900, 1300, 1800, 3000]) {
 			test(localSearchStepSeconds.toFixed(0), () => {
 				const coarse = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { localSearchStepSeconds })
 				expect(coarse.events.C2).not.toBeNull()
@@ -148,6 +147,24 @@ describe('local circumstances', () => {
 				expect(coarse.events.MAX!.centralPhaseKind).toBe('total')
 				// The coarse-step central duration matches the fine-step one to within a second.
 				expect(coarse.details.centralPhaseDurationSeconds!).toBeCloseTo(fine.details.centralPhaseDurationSeconds!, 0)
+			})
+		}
+	})
+
+	describe('recovers contacts even when the search window starts entirely inside the phase', () => {
+		// The 2024 partial at Mazatlan lasts ~9641 s (half ~4820 s). A small contactSearchSpan puts the whole
+		// initial window inside the partial phase, where the contact function never changes sign (no roots), so
+		// the window must keep expanding instead of stopping early. Every span recovers the same contacts.
+		const reference = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
+		for (const contactSearchSpan of [3600, 1800, 600]) {
+			test(contactSearchSpan.toFixed(0), () => {
+				const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { contactSearchSpan })
+				expect(c.events.C1).not.toBeNull()
+				expect(c.events.C4).not.toBeNull()
+				expect(c.events.C2).not.toBeNull()
+				expect(c.events.C3).not.toBeNull()
+				expect(c.details.partialPhaseDurationSeconds!).toBeCloseTo(reference.details.partialPhaseDurationSeconds!, 0)
+				expect(c.details.centralPhaseDurationSeconds!).toBeCloseTo(reference.details.centralPhaseDurationSeconds!, 0)
 			})
 		}
 	})
@@ -281,8 +298,7 @@ describe('local view topocentric invariants', () => {
 	const annular = local(annular2023.eclipse, annular2023.pbe, -123, 43)
 
 	describe('separations match the tangency geometry at every contact', () => {
-		const circumstances = [total, annular] as const
-		for (const c of circumstances) {
+		for (const c of [total, annular]) {
 			test(c.visibility.centralPhaseKind, () => {
 				// External tangency at C1/C4: centers separated by the sum of the radii (1 + ratio solar radii).
 				for (const k of ['C1', 'C4'] as const) {
