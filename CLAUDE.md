@@ -46,3 +46,4 @@ runner. Do not use `bun run compile` as a substitute for linting.
 - Commit messages: English, all lowercase except acronyms and file names, and
   starting with a present-tense verb such as `implement`, `fix`, `improve`,
   `update`, or `use`.
+- After all green, commit the changes.

@@ -882,8 +882,11 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 	}
 
 	const maximumState = localStateAtJulianDay(pbe, longitude, latitude, maximumJd)
-	// No local eclipse: even at closest approach the disks do not touch (magnitude <= 0).
-	if (!(maximumState.magnitude > 0)) return empty
+	// No resolvable local eclipse unless the partial depth at closest approach (L1 - distance) exceeds the
+	// root finder's tolerance. A shallower grazing touch is treated by the contact search as a single
+	// tangency rather than two distinct C1/C4, so reporting a MAX without partial contacts would be
+	// inconsistent. This mirrors CENTRAL_CONE_TOLERANCE = CONTACT_FUNCTION_TOLERANCE for the central phase.
+	if (!(maximumState.L1 - maximumState.distance > CONTACT_FUNCTION_TOLERANCE)) return empty
 
 	const MAX = buildLocalEvent('MAX', maximumJd, pbe, longitude, latitude, options)
 
