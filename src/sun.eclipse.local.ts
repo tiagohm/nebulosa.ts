@@ -126,7 +126,8 @@ export interface LocalSolarEclipseCircumstances {
 		readonly text: string
 		// Whether the eclipse touches this location geometrically (regardless of the horizon).
 		readonly hasGeometricEclipse: boolean
-		// Whether at least one contact happens with the Sun above the horizon.
+		// Whether any part of the local eclipse is observable with the Sun at or above the configured horizon
+		// (true even when every contact is below the horizon but the Sun rises above it between contacts).
 		readonly hasObservableEclipse: boolean
 		// Whether a central (total/annular) phase reaches this location.
 		readonly hasCentralPhase: boolean
@@ -980,40 +981,69 @@ function computeSunMotion(events: LocalSolarEclipseCircumstances['events']): Loc
 // it before a tight Brent refinement (a single Brent pass over the whole, near-flat interval can stop short
 // of the true peak). Used to detect an observable instant between contacts even when every contact itself is
 // below the horizon.
-function maxSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions): Angle {
+function extremeSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions, minimize: boolean): Angle {
 	const altitudeAt = (jd: number) => {
 		const time = timeAtJulianDay(pbe.maximumTime, jd)
 		return computeSolarAltitude(time, longitude, latitude, options.sunMoonPosition?.(time), evaluateBesselian(pbe, time))
 	}
+	// Orient so the wanted extremum is always a maximum of `oriented`.
+	const oriented = (jd: number) => (minimize ? -altitudeAt(jd) : altitudeAt(jd))
 
-	// The peak is broad, so a coarse scan (>= 5 min) brackets it cheaply; Brent then refines to the exact
-	// maximum. This caps the ephemeris cost of the check, which only runs for an all-contacts-below location.
+	// The extremum is broad, so a coarse scan (>= 5 min) brackets it cheaply; Brent then refines to the exact
+	// value. This caps the ephemeris cost of the check.
 	const stepDays = Math.max(validPositive(options.localSearchStepSeconds, DEFAULT_LOCAL_SEARCH_STEP_SECONDS), ALTITUDE_SCAN_MIN_STEP_SECONDS) / DAYSEC
 	let best = -Infinity
 	let bestJd = fromJd
 	for (const jd of buildSampleJds(fromJd, toJd, stepDays)) {
-		const altitude = altitudeAt(jd)
-		if (altitude > best) {
-			best = altitude
+		const value = oriented(jd)
+		if (value > best) {
+			best = value
 			bestJd = jd
 		}
 	}
 
 	try {
-		const result = brentMinimize((jd) => -altitudeAt(jd), Math.max(fromJd, bestJd - stepDays), Math.min(toJd, bestJd + stepDays), { tolerance: CONTACT_TOLERANCE_DAYS })
-		const refined = altitudeAt(result.minimum)
+		const result = brentMinimize((jd) => -oriented(jd), Math.max(fromJd, bestJd - stepDays), Math.min(toJd, bestJd + stepDays), { tolerance: CONTACT_TOLERANCE_DAYS })
+		const refined = oriented(result.minimum)
 		if (Number.isFinite(refined) && refined > best) best = refined
 	} catch {
-		// Keep the sampled maximum.
+		// Keep the sampled extremum.
 	}
-	return best
+	return minimize ? -best : best
 }
 
-// Classifies local visibility from the resolved events. Observability is event-based in the common case, but
-// uses the continuous Sun-altitude maximum over the partial interval when every contact is below the horizon
-// (a high-latitude or raised-horizon eclipse can still poke above the horizon at culmination, between two
-// below-horizon contacts). `completelyVisible` stays event-based: the daytime altitude is unimodal, so the
-// interval minimum is always at an endpoint contact, which the event check already covers.
+// Maximum Sun altitude (radians) over [fromJd, toJd]. See extremeSunAltitudeOverInterval.
+function maxSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions): Angle {
+	return extremeSunAltitudeOverInterval(pbe, longitude, latitude, fromJd, toJd, options, false)
+}
+
+// Minimum Sun altitude (radians) over [fromJd, toJd]. Used to confirm a fully-visible eclipse never dips
+// below the horizon at an interior altitude valley (the interval straddling lower culmination).
+function minSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions): Angle {
+	return extremeSunAltitudeOverInterval(pbe, longitude, latitude, fromJd, toJd, options, true)
+}
+
+// Whether the Sun altitude has an interior minimum (a valley at lower culmination) somewhere in [fromJd, toJd]
+// rather than its minimum at an endpoint. d(altitude)/dt has the sign of -sin(H), so a valley exists only when
+// the Sun is setting at the start (sin H > 0) and rising at the end (sin H < 0): the interval crosses local
+// midnight. Cheap (two Besselian polynomial evaluations), so the continuous minimum is only computed in that
+// rare case; otherwise the interval minimum is at a contact and the event check already covers it.
+function intervalHasAltitudeValley(pbe: PolynomialBesselianElements, longitude: Angle, fromJd: number, toJd: number): boolean {
+	const sinHourAngleAt = (jd: number) => {
+		const be = evaluateBesselian(pbe, timeAtJulianDay(pbe.maximumTime, jd))
+		return Math.sin(hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection))
+	}
+	return sinHourAngleAt(fromJd) > 0 && sinHourAngleAt(toJd) < 0
+}
+
+// Classifies local visibility from the resolved events, refined with continuous Sun-altitude analysis at the
+// horizon edges. Observability is event-based in the common case, but uses the altitude maximum over the
+// interval when every contact is below the horizon (an eclipse can poke above the horizon at culmination
+// between two below-horizon contacts). Symmetrically, `completelyVisible` is downgraded if the altitude dips
+// below the horizon at an interior valley (the interval straddling lower culmination), and `centralPhaseVisible`
+// is granted if the central interval pokes above the horizon between below-horizon central events. The
+// continuous checks are guarded so the common case (a daytime eclipse with all contacts on one horizon side)
+// pays nothing.
 function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events'], pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions): LocalSolarEclipseCircumstances['visibility'] {
 	const { C1, C2, MAX, C3, C4 } = events
 
@@ -1040,12 +1070,24 @@ function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']
 	const eventAnyAbove = [C1, C2, MAX, C3, C4].some((event) => event?.observable === true)
 	const anyAbove = eventAnyAbove || (C1 !== null && C4 !== null && maxSunAltitudeOverInterval(pbe, longitude, latitude, C1.jd, C4.jd, options) >= horizonAltitude)
 
+	// `completelyVisible` requires the full expected event set above the horizon AND no interior dip below it.
+	// The dip is only possible when the interval straddles lower culmination (a valley), detected cheaply, so
+	// the continuous minimum is computed only in that rare case.
+	let completelyVisible = completeEventSet && allExpectedAbove
+	if (completelyVisible && C1 !== null && C4 !== null && intervalHasAltitudeValley(pbe, longitude, C1.jd, C4.jd)) {
+		completelyVisible = minSunAltitudeOverInterval(pbe, longitude, latitude, C1.jd, C4.jd, options) >= horizonAltitude
+	}
+
+	// The central phase is visible if any central event is above the horizon, or (rare) the central interval
+	// pokes above between below-horizon central events. The interval scan short-circuits after the event checks.
+	const centralPhaseVisible = hasCentralPhase && ((C2?.observable ?? false) || (C3?.observable ?? false) || MAX.observable || (C2 !== null && C3 !== null && maxSunAltitudeOverInterval(pbe, longitude, latitude, C2.jd, C3.jd, options) >= horizonAltitude))
+
 	let kind: LocalVisibilityKind
 	if (!anyAbove) {
 		kind = 'geometricOnlyBelowHorizon'
-	} else if (completeEventSet && allExpectedAbove) {
+	} else if (completelyVisible) {
 		kind = 'completelyVisible'
-	} else if (hasCentralPhase && ((C2?.observable ?? false) || (C3?.observable ?? false) || MAX.observable)) {
+	} else if (centralPhaseVisible) {
 		kind = 'centralPhaseVisible'
 	} else if (!hasCentralPhase) {
 		kind = 'partialOnlyVisible'

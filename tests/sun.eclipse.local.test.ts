@@ -3,7 +3,7 @@ import { deg, normalizeAngle } from '../src/angle'
 import { ASEC2RAD, PI, TAU } from '../src/constants'
 import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
 import { computePolynomialBesselianElements, computeSunMoonPositionAt, type PolynomialBesselianElements } from '../src/sun.eclipse'
-import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeLocalSolarEclipseCircumstances, findLocalContactRoots, type LocalFundamentalState, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions } from '../src/sun.eclipse.local'
+import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeLocalSolarEclipseCircumstances, findLocalContactRoots, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions } from '../src/sun.eclipse.local'
 import { timeYMD, toJulianDay } from '../src/time'
 import * as elpmpp02 from '../src/elpmpp02'
 import * as vsop87e from '../src/vsop87e'
@@ -31,7 +31,7 @@ const annular2023 = (() => {
 	return { eclipse, pbe }
 })()
 
-function local(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, lon: number, lat: number, options = {}) {
+function local(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, lon: number, lat: number, options: LocalSolarEclipseCircumstancesOptions = {}) {
 	return computeLocalSolarEclipseCircumstances(pbe, deg(lon), deg(lat), { sunMoonPosition, ...options })
 }
 
@@ -125,6 +125,16 @@ describe('local circumstances', () => {
 		expect(aboveCulmination.visibility.hasObservableEclipse).toBe(false)
 		expect(aboveCulmination.visibility.kind).toBe('geometricOnlyBelowHorizon')
 	}, 8000)
+
+	test('the continuous valley check never downgrades a daytime fully-visible eclipse', () => {
+		// Mazatlan's eclipse is a daytime hump (no lower-culmination valley), so the interior-minimum check must
+		// not run / must not spuriously break completelyVisible. Raising the horizon to just below the lowest
+		// contact keeps every contact above it, so the eclipse stays completely visible.
+		const c1Altitude = local(total2024.eclipse, total2024.pbe, -106.4, 23.25).events.C1!.sunAltitude
+		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { horizonAltitude: c1Altitude - deg(1) })
+		expect(c.visibility.kind).toBe('completelyVisible')
+		expect(c.visibility.hasObservableEclipse).toBe(true)
+	})
 
 	test('reports the Sun vertical trend across the eclipse', () => {
 		// New York saw the 2024 eclipse in the afternoon (Sun descending) -> setting.
