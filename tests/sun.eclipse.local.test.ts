@@ -398,4 +398,30 @@ describe('local view robustness', () => {
 		expect(roots).toHaveLength(1)
 		expect(roots[0]).toBeCloseTo(target, 6)
 	})
+
+	test('contact search recovers a short phase wholly inside the first or last window interval', () => {
+		const DAYSEC = 86400
+		const fromJd = toJulianDay(total2024.pbe.maximumTime)
+		const stepDays = 1200 / DAYSEC
+		const toJd = fromJd + 3 * stepDays
+		const halfWidth = 0.05 * stepDays
+		// A V-shaped contact function (fn <= 0 inside the phase) with amplitude 0.01 so the minimum (-0.01) is a
+		// genuine finite interval, not a grazing tangency. The interior-minimum pass needs a triple, so a dip
+		// wholly inside a boundary interval (both endpoints positive) is only caught by the explicit edge refine.
+		const vShaped = (center: number) => (state: LocalFundamentalState) => 0.01 * (((state.jd - center) / halfWidth) ** 2 - 1)
+
+		// Dip inside the FIRST interval [fromJd, fromJd + stepDays].
+		const firstCenter = fromJd + 0.25 * stepDays
+		const firstRoots = findLocalContactRoots(total2024.pbe, deg(-74), deg(40.71), fromJd, toJd, stepDays, vShaped(firstCenter))
+		expect(firstRoots).toHaveLength(2)
+		expect(firstRoots[0]).toBeCloseTo(firstCenter - halfWidth, 8)
+		expect(firstRoots[1]).toBeCloseTo(firstCenter + halfWidth, 8)
+
+		// Dip inside the LAST interval [toJd - stepDays, toJd].
+		const lastCenter = toJd - 0.25 * stepDays
+		const lastRoots = findLocalContactRoots(total2024.pbe, deg(-74), deg(40.71), fromJd, toJd, stepDays, vShaped(lastCenter))
+		expect(lastRoots).toHaveLength(2)
+		expect(lastRoots[0]).toBeCloseTo(lastCenter - halfWidth, 8)
+		expect(lastRoots[1]).toBeCloseTo(lastCenter + halfWidth, 8)
+	})
 })

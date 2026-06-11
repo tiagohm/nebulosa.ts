@@ -696,8 +696,13 @@ function refineMissedContactInterval(evaluate: (jd: number) => number, lo: numbe
 	for (let i = 1; i <= subSteps; i++) {
 		const jd = i === subSteps ? hi : lo + i * subStep
 		const value = evaluate(jd)
-		// A finite phase wider than the sub-step shows up as transversal crossings here.
-		if (previousValue * value < 0) {
+		// A finite phase wider than the sub-step shows up as transversal crossings here. Exact zeros landing on
+		// a sub-sample are captured directly (a sign-change test would miss them).
+		if (value === 0) {
+			pushUniqueRoot(roots, jd)
+		} else if (previousValue === 0) {
+			pushUniqueRoot(roots, previousJd)
+		} else if (previousValue * value < 0) {
 			const root = bisectRoot(evaluate, previousJd, jd)
 			if (root !== undefined) pushUniqueRoot(roots, root)
 		}
@@ -777,6 +782,15 @@ export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitud
 		if (!nearMinimum) continue
 
 		refineMissedContactInterval(evaluate, jds[k - 1], jds[k + 1], roots)
+	}
+
+	// The interior-minimum pass needs a triple, so a very short dip wholly inside the first or last interval
+	// (both endpoints positive, no interior sample) would be missed. Refine those two boundary intervals
+	// explicitly so the detector is symmetric at the window edges (e.g. a contact right at fromJd/toJd at the
+	// adaptive expansion limit). Overlaps with the interior pass dedup away.
+	if (jds.length >= 2) {
+		refineMissedContactInterval(evaluate, jds[0], jds[1], roots)
+		refineMissedContactInterval(evaluate, jds.at(-2)!, jds.at(-1)!, roots)
 	}
 
 	return roots.sort(NumberComparator)
