@@ -1694,9 +1694,9 @@ describe('branch-aware curve topology', () => {
 	test('2026-02-17 fills both tip and main segments of the south-polar annular path', () => {
 		const { geometry } = geometryFor(2026, 2, 1)
 		const norths = geometry.lines.umbraNorth.filter((branch) => branch.length >= 2).length
-		const souths = geometry.lines.umbraSouth.filter((branch) => branch.length >= 2).length
 		expect(norths).toBeGreaterThan(1)
-		expect(computeSolarEclipseFillGeometry(geometry).length).toBe(Math.min(norths, souths))
+		expect(geometry.lines.umbraSouth.filter((branch) => branch.length >= 2)).toHaveLength(1)
+		expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(2)
 	})
 
 	test('2021-12-04 keeps the south-polar umbra fold connected without clipped fill', () => {

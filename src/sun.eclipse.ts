@@ -2627,6 +2627,45 @@ function fillBranchInfo(branch: readonly GeoPoint[]): FillBranchInfo {
 	return { branch, start: branch[0], end: branch.at(-1)! }
 }
 
+function splitFillBranchAtContacts(branch: readonly GeoPoint[], contacts: readonly (GeoPoint | undefined)[]) {
+	const indices: number[] = []
+
+	for (const contact of contacts) {
+		if (!contact) continue
+
+		for (let i = 1; i < branch.length - 1; i++) {
+			if (angularDistance(contact, branch[i]) <= CURVE_SPATIAL_EPSILON) {
+				if (!indices.includes(i)) indices.push(i)
+				break
+			}
+		}
+	}
+
+	if (indices.length === 0) return [branch]
+
+	indices.sort(NumberComparator)
+	const pieces: GeoPoint[][] = []
+	let start = 0
+
+	for (const index of indices) {
+		const piece = branch.slice(start, index + 1)
+		if (piece.length >= 2) pieces.push(piece)
+		start = index
+	}
+
+	const tail = branch.slice(start)
+	if (tail.length >= 2) pieces.push(tail)
+
+	return pieces
+}
+
+function fillBranches(branches: readonly (readonly GeoPoint[])[], contacts: SolarEclipseContactPoints) {
+	return branches
+		.filter(SegmentLengthGreaterThanOneFilter)
+		.flatMap((branch) => splitFillBranchAtContacts(branch, [contacts.U1, contacts.U2, contacts.U3, contacts.U4]))
+		.map(fillBranchInfo)
+}
+
 // Maximum accepted north/south branch pairing cost (radians, sum of the two end gaps). Compatible band
 // edges meet near the contacts where the band narrows, so the cost is small; a pair this far apart is not the
 // two sides of one band and must not be filled between.
@@ -2773,8 +2812,8 @@ function selectFillPairs(norths: readonly FillBranchInfo[], souths: readonly Fil
 // the map; pairing keeps each disconnected band closed on its own. It is a
 // secondary, presentational artifact: the physical boundary polylines are never mutated.
 export function computeSolarEclipseFillGeometry(geometry: SolarEclipseMapGeometry) {
-	const norths = geometry.lines.umbraNorth.filter(SegmentLengthGreaterThanOneFilter).map(fillBranchInfo)
-	const souths = geometry.lines.umbraSouth.filter(SegmentLengthGreaterThanOneFilter).map(fillBranchInfo)
+	const norths = fillBranches(geometry.lines.umbraNorth, geometry.points)
+	const souths = fillBranches(geometry.lines.umbraSouth, geometry.points)
 
 	if (norths.length === 0 || souths.length === 0) return []
 
