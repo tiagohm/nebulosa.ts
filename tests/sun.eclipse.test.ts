@@ -1699,6 +1699,31 @@ describe('branch-aware curve topology', () => {
 		expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(2)
 	})
 
+	test('2026-08-12 fills the north-polar totality cap and keeps the partial boundary anchored', () => {
+		const { eclipse, elements } = geometryFor(2026, 8, 1)
+		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: STEP, maxAngularStep: STEP, includeRiseSetCurves: true, riseSetStep: 600 })
+		const { N1, S1 } = geometry.points
+
+		expect(geometry.lines.umbraNorth.filter((branch) => branch.length >= 2)).toHaveLength(2)
+		expect(geometry.lines.umbraSouth.filter((branch) => branch.length >= 2)).toHaveLength(2)
+		expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(2)
+		expect(geometry.lines.penumbraNorth).toHaveLength(0)
+		expect(geometry.lines.penumbraSouth).toHaveLength(1)
+		expect(N1).toBeDefined()
+		expect(S1).toBeDefined()
+		expect(Math.min(sphericalSeparation(N1!.x, N1!.y, geometry.lines.penumbraSouth[0][0].x, geometry.lines.penumbraSouth[0][0].y), sphericalSeparation(N1!.x, N1!.y, geometry.lines.penumbraSouth[0].at(-1)!.x, geometry.lines.penumbraSouth[0].at(-1)!.y))).toBeLessThan(1e-9)
+		expect(Math.min(sphericalSeparation(S1!.x, S1!.y, geometry.lines.penumbraSouth[0][0].x, geometry.lines.penumbraSouth[0][0].y), sphericalSeparation(S1!.x, S1!.y, geometry.lines.penumbraSouth[0].at(-1)!.x, geometry.lines.penumbraSouth[0].at(-1)!.y))).toBeLessThan(1e-9)
+
+		for (const cusp of [N1!, S1!]) {
+			let nearest = Infinity
+			for (const point of geometry.lines.riseSetCurves.flat()) nearest = Math.min(nearest, sphericalSeparation(cusp.x, cusp.y, point.x, point.y))
+			expect(nearest).toBeLessThan(1e-9)
+		}
+
+		const paths = solarEclipseMapToSvgPaths(geometry, projection)
+		expect(longestProjectedSegment(paths.riseSetCurves)).toBeLessThan(MAP_WIDTH / 2)
+	})
+
 	test('2021-12-04 keeps the south-polar umbra fold connected without clipped fill', () => {
 		const { geometry } = geometryFor(2021, 12, 1)
 		const rings = computeSolarEclipseFillGeometry(geometry)

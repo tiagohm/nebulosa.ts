@@ -2719,6 +2719,7 @@ const MAX_FILL_RING_EDGE = 20 * DEG2RAD
 // horizontal edge across the top/bottom of a cylindrical map. Such a ring is visual-only and unreliable, so
 // it is dropped rather than filling a polar cap that is not bounded by the physical curves.
 const MAX_FILL_POLAR_CONNECTOR_LONGITUDE = 30 * DEG2RAD
+const MAX_FILL_POLAR_CAP_CONNECTOR_LONGITUDE = 120 * DEG2RAD
 const FILL_POLAR_CONNECTOR_LATITUDE = 80 * DEG2RAD
 const MAX_FILL_EXTREME_POLAR_EDGE = 10 * DEG2RAD
 const FILL_EXTREME_POLAR_EDGE_LATITUDE = 85 * DEG2RAD
@@ -2743,12 +2744,11 @@ function validFillRing(ring: readonly GeoPoint[]) {
 		const minAbsLatitude = Math.min(Math.abs(a.y), Math.abs(b.y))
 		const maxAbsLatitude = Math.max(Math.abs(a.y), Math.abs(b.y))
 
-		if (longitudeGap > MAX_FILL_POLAR_CONNECTOR_LONGITUDE && minAbsLatitude > FILL_POLAR_CONNECTOR_LATITUDE) return false
-
 		if (crossesAntimeridian) continue
 
 		const edge = angularDistance(a, b)
 		if (edge > MAX_FILL_RING_EDGE) return false
+		if (longitudeGap > MAX_FILL_POLAR_CONNECTOR_LONGITUDE && minAbsLatitude > FILL_POLAR_CONNECTOR_LATITUDE && (longitudeGap > MAX_FILL_POLAR_CAP_CONNECTOR_LONGITUDE || edge > MAX_FILL_EXTREME_POLAR_EDGE)) return false
 		if (maxAbsLatitude > FILL_EXTREME_POLAR_EDGE_LATITUDE && edge > MAX_FILL_EXTREME_POLAR_EDGE) return false
 	}
 
