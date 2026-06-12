@@ -38,12 +38,3 @@ hook from `.claude/settings.json`.
 
 Use **Bun** for everything. Do not introduce npm/pnpm/yarn or a second test
 runner. Do not use `bun run compile` as a substitute for linting.
-
-### Before finishing a change
-
-- Leave the touched area with zero TypeScript errors and passing related tests.
-- Run the closest targeted tests, then `bun run lint`.
-- Commit messages: English, all lowercase except acronyms and file names, and
-  starting with a present-tense verb such as `implement`, `fix`, `improve`,
-  `update`, or `use`.
-- After all green, commit the changes.

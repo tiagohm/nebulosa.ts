@@ -360,28 +360,9 @@ Do not report:
 - known deliberate trade-offs already documented by the project;
 - issues that require changing the documented contract without a correctness bug.
 
-## Environment
+# Before finishing a change
 
-### Install dependencies
-
-```bash
-bun i
-```
-
-### Lint and type check
-
-```bash
-bun run lint
-```
-
-### Format code
-
-```bash
-bun run fmt
-```
-
-### Run a targeted test
-
-```bash
-bun test tests/FILENAME.test.ts
-```
+- Leave the touched area with zero TypeScript errors and passing related tests.
+- Run the closest targeted tests, then `bun run lint`.
+- Commit messages: English, all lowercase except acronyms and file names, and starting with a present-tense verb such as `implement`, `fix`, `improve`, `update`, or `use`.
+- After all green, commit only the touched changes.
