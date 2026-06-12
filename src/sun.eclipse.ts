@@ -2641,6 +2641,8 @@ const MAX_FILL_RING_EDGE = 20 * DEG2RAD
 // it is dropped rather than filling a polar cap that is not bounded by the physical curves.
 const MAX_FILL_POLAR_CONNECTOR_LONGITUDE = 30 * DEG2RAD
 const FILL_POLAR_CONNECTOR_LATITUDE = 80 * DEG2RAD
+const MAX_FILL_EXTREME_POLAR_EDGE = 10 * DEG2RAD
+const FILL_EXTREME_POLAR_EDGE_LATITUDE = 85 * DEG2RAD
 
 // Pairing cost between a north and a south umbra-limit branch: the smaller of the two endpoint-to-endpoint
 // matchings. A pair this far apart spatially is not the two sides of one band and is gated by MAX_FILL_PAIR_COST.
@@ -2673,6 +2675,8 @@ function hasPolarFillConnector(ring: readonly GeoPoint[]) {
 		let longitudeGap = Math.abs(a.x - b.x)
 		if (longitudeGap > PI) longitudeGap = TAU - longitudeGap
 		if (longitudeGap > MAX_FILL_POLAR_CONNECTOR_LONGITUDE && Math.min(Math.abs(a.y), Math.abs(b.y)) > FILL_POLAR_CONNECTOR_LATITUDE) return true
+
+		if (Math.abs(a.x - b.x) <= PI && Math.max(Math.abs(a.y), Math.abs(b.y)) > FILL_EXTREME_POLAR_EDGE_LATITUDE && angularDistance(a, b) > MAX_FILL_EXTREME_POLAR_EDGE) return true
 	}
 
 	return false
@@ -2703,6 +2707,65 @@ function buildFillRing(north: readonly GeoPoint[], south: readonly GeoPoint[]) {
 	return ring
 }
 
+interface FillPair {
+	readonly northIndex: number
+	readonly southIndex: number
+	readonly score: number
+	readonly ring: readonly GeoPoint[]
+}
+
+interface FillPairSelection {
+	readonly pairs: readonly FillPair[]
+	readonly score: number
+}
+
+function betterFillPairSelection(a: FillPairSelection, b: FillPairSelection) {
+	if (a.pairs.length !== b.pairs.length) return a.pairs.length > b.pairs.length ? a : b
+	return a.score <= b.score ? a : b
+}
+
+function viableFillPair(north: FillBranchInfo, south: FillBranchInfo, northIndex: number, southIndex: number): FillPair | undefined {
+	const score = branchPairScore(north, south)
+	if (!Number.isFinite(score) || score > MAX_FILL_PAIR_COST) return undefined
+
+	const ring = buildFillRing(north.branch, south.branch)
+	if (ring.length < 3 || maxRingAngularEdge(ring) > MAX_FILL_RING_EDGE || hasPolarFillConnector(ring)) return undefined
+
+	return { northIndex, southIndex, score, ring }
+}
+
+function selectFillPairs(norths: readonly FillBranchInfo[], souths: readonly FillBranchInfo[]) {
+	const candidatesByNorth: FillPair[][] = []
+
+	for (let n = 0; n < norths.length; n++) {
+		const candidates: FillPair[] = []
+		for (let s = 0; s < souths.length; s++) {
+			const pair = viableFillPair(norths[n], souths[s], n, s)
+			if (pair) candidates.push(pair)
+		}
+		candidates.sort((a, b) => a.score - b.score)
+		candidatesByNorth.push(candidates)
+	}
+
+	function choose(northIndex: number, usedSouth: Set<number>): FillPairSelection {
+		if (northIndex >= norths.length) return { pairs: [], score: 0 }
+
+		let best = choose(northIndex + 1, usedSouth)
+
+		for (const pair of candidatesByNorth[northIndex]) {
+			if (usedSouth.has(pair.southIndex)) continue
+			usedSouth.add(pair.southIndex)
+			const tail = choose(northIndex + 1, usedSouth)
+			usedSouth.delete(pair.southIndex)
+			best = betterFillPairSelection({ pairs: [pair, ...tail.pairs], score: pair.score + tail.score }, best)
+		}
+
+		return best
+	}
+
+	return choose(0, new Set()).pairs
+}
+
 // Derives visual-only fill rings for the totality/annularity band by pairing each northern umbra-limit
 // branch with the southern branch it overlaps in time and space, instead of flattening all branches
 // into one ring. Flattening (the previous approach) reconnected pieces that the curve solver had
@@ -2716,30 +2779,7 @@ export function computeSolarEclipseFillGeometry(geometry: SolarEclipseMapGeometr
 	if (norths.length === 0 || souths.length === 0) return []
 
 	const rings: GeoPoint[][] = []
-	const usedSouth = new Set<number>()
-
-	for (const north of norths) {
-		let bestIndex = -1
-		let bestScore = Infinity
-
-		for (let s = 0; s < souths.length; s++) {
-			if (usedSouth.has(s)) continue
-			const score = branchPairScore(north, souths[s])
-			if (score < bestScore) {
-				bestScore = score
-				bestIndex = s
-			}
-		}
-
-		// Reject an incompatible pairing: no temporal overlap (Infinity) or too far apart to be one band.
-		if (bestIndex < 0 || !Number.isFinite(bestScore) || bestScore > MAX_FILL_PAIR_COST) continue
-		usedSouth.add(bestIndex)
-
-		const ring = buildFillRing(north.branch, souths[bestIndex].branch)
-		// Drop a ring that would close across a large gap (a connector edge welding the band across the map),
-		// keeping only rings that hug the narrow totality band.
-		if (ring.length >= 3 && maxRingAngularEdge(ring) <= MAX_FILL_RING_EDGE && !hasPolarFillConnector(ring)) rings.push(ring)
-	}
+	for (const pair of selectFillPairs(norths, souths)) rings.push(pair.ring.slice())
 
 	return rings
 }
@@ -2920,11 +2960,16 @@ function projectSplitPieces(geo: readonly GeoPoint[], close: boolean, projection
 	const pieces: Point[][] = []
 
 	for (const segment of splitGeoLineAtAntimeridian(geo, close)) {
-		const piece: Point[] = []
+		let piece: Point[] = []
 
 		for (const point of segment) {
 			const projected = projection.project(point.x, point.y, undefined, options)
-			if (projected !== undefined) piece.push({ x: projected.x, y: projected.y })
+			if (projected === undefined) {
+				if (piece.length >= 2) pieces.push(piece)
+				piece = []
+			} else {
+				piece.push({ x: projected.x, y: projected.y })
+			}
 		}
 
 		if (piece.length >= 2) pieces.push(piece)

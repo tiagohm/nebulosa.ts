@@ -2,11 +2,11 @@ import { expect, test, describe } from 'bun:test'
 import { deg } from '../src/angle'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseFillGeometry, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolygonsToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse'
+import { centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseFillGeometry, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolygonsToSvgPathData, geoPolylinesToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse'
 import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../src/time'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
-import { PlateCarree, type ProjectionOptions } from '../src/projection'
+import { PlateCarree, type Projection, type ProjectionOptions } from '../src/projection'
 import * as vsop87e from '../src/vsop87e'
 import * as elpmpp02 from '../src/elpmpp02'
 
@@ -1350,6 +1350,29 @@ test('antimeridian-crossing lines split into multiple subpaths', () => {
 	expect(secondStartX).toBeCloseTo(0, 3)
 })
 
+test('projected path serialization breaks at projection gaps', () => {
+	const clippedProjection: Projection = {
+		project(longitude, latitude) {
+			return Math.abs(latitude) > deg(80) ? undefined : { x: longitude / deg(1), y: latitude / deg(1) }
+		},
+		unproject() {
+			return undefined
+		},
+	}
+	const path = geoPolylinesToSvgPathData(
+		[
+			[
+				{ x: deg(-10), y: deg(70) },
+				{ x: 0, y: deg(85) },
+				{ x: deg(10), y: deg(70) },
+			],
+		],
+		clippedProjection,
+	)
+
+	expect(path).toBe('')
+})
+
 // NASA/GSFC Besselian elements for the 2024 Apr 08 total eclipse.
 // https://eclipse.gsfc.nasa.gov/SEbeselm/SEbeselm2001/SE2024Apr08Tbeselm.html
 const NASA_2024: PolynomialBesselianElements = {
@@ -2033,6 +2056,30 @@ describe('hybrid central line classification', () => {
 })
 
 describe('fill geometry pairs disconnected branches', () => {
+	test('global branch matching fills every compatible band', () => {
+		// A greedy north-by-north match pairs the first north branch with the nearby middle south branch,
+		// leaving the second north branch unpaired. The global optimum fills both rings.
+		const northA: GeoPoint[] = [
+			{ x: deg(5), y: deg(1), jd: 1 },
+			{ x: deg(15), y: deg(1), jd: 2 },
+		]
+		const northB: GeoPoint[] = [
+			{ x: deg(12), y: deg(1), jd: 1 },
+			{ x: deg(22), y: deg(1), jd: 2 },
+		]
+		const southA: GeoPoint[] = [
+			{ x: deg(10), y: deg(-1), jd: 1 },
+			{ x: deg(20), y: deg(-1), jd: 2 },
+		]
+		const southB: GeoPoint[] = [
+			{ x: deg(-5), y: deg(-1), jd: 1 },
+			{ x: deg(5), y: deg(-1), jd: 2 },
+		]
+		const map = geometry({ umbraNorth: [northA, northB], umbraSouth: [southA, southB] })
+
+		expect(computeSolarEclipseFillGeometry(map)).toHaveLength(2)
+	})
+
 	test('two separated north/south branch pairs produce two rings, never one welded ring', () => {
 		// Two disconnected totality bands (e.g. split by a discontinuity): each north branch must pair with
 		// its own south branch, so the fill yields two rings rather than flattening into one that crosses
