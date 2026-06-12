@@ -1706,6 +1706,15 @@ describe('branch-aware curve topology', () => {
 
 		expect(geometry.lines.umbraNorth.filter((branch) => branch.length >= 2)).toHaveLength(2)
 		expect(geometry.lines.umbraSouth.filter((branch) => branch.length >= 2)).toHaveLength(2)
+		const [southA, southB] = geometry.lines.umbraSouth
+		expect(
+			Math.min(
+				sphericalSeparation(southA[0].x, southA[0].y, southB[0].x, southB[0].y),
+				sphericalSeparation(southA[0].x, southA[0].y, southB.at(-1)!.x, southB.at(-1)!.y),
+				sphericalSeparation(southA.at(-1)!.x, southA.at(-1)!.y, southB[0].x, southB[0].y),
+				sphericalSeparation(southA.at(-1)!.x, southA.at(-1)!.y, southB.at(-1)!.x, southB.at(-1)!.y),
+			),
+		).toBeLessThan(1e-9)
 		expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(2)
 		expect(geometry.lines.penumbraNorth).toHaveLength(0)
 		expect(geometry.lines.penumbraSouth).toHaveLength(1)
