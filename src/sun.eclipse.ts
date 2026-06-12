@@ -1621,7 +1621,30 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 // the solver's continuity order is preserved.
 function cleanCurveBranch(branch: readonly GeoPoint[]): GeoPoint[] {
 	const out: GeoPoint[] = []
-	for (const point of branch) if (out.length === 0 || !sameGeoPoint(out.at(-1)!, point)) out.push(point)
+	for (const point of branch) pushCleanCurvePoint(out, point)
+	return out
+}
+
+const EMPTY_GEO_POINTS: readonly GeoPoint[] = []
+const BRANCH_ENDPOINTS = [0, 1] as const
+
+function pushCleanCurvePoint(out: GeoPoint[], point: GeoPoint) {
+	if (out.length === 0 || !sameGeoPoint(out.at(-1)!, point)) out.push(point)
+}
+
+function appendBranchPoints(out: GeoPoint[], branch: readonly GeoPoint[], reverse: boolean) {
+	if (reverse) {
+		for (let k = branch.length - 1; k >= 0; k--) pushCleanCurvePoint(out, branch[k])
+	} else {
+		for (let k = 0; k < branch.length; k++) pushCleanCurvePoint(out, branch[k])
+	}
+}
+
+function mergeBranchesAtCusp(a: readonly GeoPoint[], b: readonly GeoPoint[], bridge: readonly GeoPoint[], endpointA: 0 | 1, endpointB: 0 | 1) {
+	const out: GeoPoint[] = []
+	appendBranchPoints(out, a, endpointA === 0)
+	for (const point of bridge) pushCleanCurvePoint(out, point)
+	appendBranchPoints(out, b, endpointB === 1)
 	return out
 }
 
@@ -1719,23 +1742,27 @@ function reconnectBranchCusps(branches: readonly GeoPoint[][], pbe: PolynomialBe
 		let bestMerged: GeoPoint[] | undefined
 
 		for (let a = 0; a < result.length; a++) {
+			const branchA = result[a]
+			const aStart = branchA[0]
+			const aEnd = branchA.at(-1)!
 			for (let b = a + 1; b < result.length; b++) {
-				const endsA = [result[a][0], result[a].at(-1)!]
-				const endsB = [result[b][0], result[b].at(-1)!]
-				for (let ea = 0; ea < 2; ea++) {
-					for (let eb = 0; eb < 2; eb++) {
-						const gap = angularDistance(endsA[ea], endsB[eb])
+				const branchB = result[b]
+				const bStart = branchB[0]
+				const bEnd = branchB.at(-1)!
+				for (const ea of BRANCH_ENDPOINTS) {
+					const endA = ea === 0 ? aStart : aEnd
+					for (const eb of BRANCH_ENDPOINTS) {
+						const endB = eb === 0 ? bStart : bEnd
+						const gap = angularDistance(endA, endB)
 						if (gap > CUSP_RECONNECT_LIMIT || gap >= bestGap) continue
 						if (!allowTouchingMerge && gap < CURVE_SPATIAL_EPSILON) continue
 
-						const bridge = gap <= maxAngularStep ? [] : solveContinuousBridge(pbe, endsA[ea], endsB[eb], i, G, maxAngularStep, maxDrawableGap, refractionMode)
-						if (!bridge || !canReconnectPolarCusp(endsA[ea], endsB[eb], bridge, gap, maxDrawableGap)) continue
+						const bridge = gap <= maxAngularStep ? EMPTY_GEO_POINTS : solveContinuousBridge(pbe, endA, endB, i, G, maxAngularStep, maxDrawableGap, refractionMode)
+						if (!bridge || !canReconnectPolarCusp(endA, endB, bridge, gap, maxDrawableGap)) continue
 
 						// Orient A so endpoint ea is the joint (reverse when it is the start) and B so endpoint eb
 						// is the joint (reverse when it is the end), then splice the bridge between them.
-						const aOriented = ea === 0 ? result[a].toReversed() : result[a]
-						const bOriented = eb === 1 ? result[b].toReversed() : result[b]
-						const merged = cleanCurveBranch([...aOriented, ...bridge, ...bOriented])
+						const merged = mergeBranchesAtCusp(branchA, branchB, bridge, ea, eb)
 						if (branchRetraces(merged, maxAngularStep, CUSP_RECONNECT_OVERLAP_ARC)) continue
 
 						bestGap = gap
@@ -2619,51 +2646,64 @@ function penumbralLimitEndpointsByTime(pbe: PolynomialBesselianElements, curve: 
 // recomputed for every candidate pairing.
 interface FillBranchInfo {
 	readonly branch: readonly GeoPoint[]
+	readonly from: number
+	readonly to: number
 	readonly start: GeoPoint
 	readonly end: GeoPoint
 }
 
-function fillBranchInfo(branch: readonly GeoPoint[]): FillBranchInfo {
-	return { branch, start: branch[0], end: branch.at(-1)! }
+function fillBranchInfo(branch: readonly GeoPoint[], from = 0, to = branch.length - 1): FillBranchInfo {
+	return { branch, from, to, start: branch[from], end: branch[to] }
 }
 
-function splitFillBranchAtContacts(branch: readonly GeoPoint[], contacts: readonly (GeoPoint | undefined)[]) {
-	const indices: number[] = []
+const UMBRA_CONTACT_KEYS = ['U1', 'U2', 'U3', 'U4'] as const
+const EMPTY_INDICES: readonly number[] = []
 
-	for (const contact of contacts) {
+function fillBranchContactSplitIndices(branch: readonly GeoPoint[], contacts: SolarEclipseContactPoints) {
+	let indices: number[] | undefined
+
+	for (const key of UMBRA_CONTACT_KEYS) {
+		const contact = contacts[key]
 		if (!contact) continue
 
 		for (let i = 1; i < branch.length - 1; i++) {
 			if (angularDistance(contact, branch[i]) <= CURVE_SPATIAL_EPSILON) {
+				indices ??= []
 				if (!indices.includes(i)) indices.push(i)
 				break
 			}
 		}
 	}
 
-	if (indices.length === 0) return [branch]
+	if (!indices) return EMPTY_INDICES
 
 	indices.sort(NumberComparator)
-	const pieces: GeoPoint[][] = []
-	let start = 0
+	return indices
+}
 
+function pushFillBranchInfos(out: FillBranchInfo[], branch: readonly GeoPoint[], contacts: SolarEclipseContactPoints) {
+	if (branch.length < 2) return
+
+	const indices = fillBranchContactSplitIndices(branch, contacts)
+
+	if (indices.length === 0) {
+		out.push(fillBranchInfo(branch))
+		return
+	}
+
+	let start = 0
 	for (const index of indices) {
-		const piece = branch.slice(start, index + 1)
-		if (piece.length >= 2) pieces.push(piece)
+		if (index - start >= 1) out.push(fillBranchInfo(branch, start, index))
 		start = index
 	}
 
-	const tail = branch.slice(start)
-	if (tail.length >= 2) pieces.push(tail)
-
-	return pieces
+	if (branch.length - 1 - start >= 1) out.push(fillBranchInfo(branch, start, branch.length - 1))
 }
 
 function fillBranches(branches: readonly (readonly GeoPoint[])[], contacts: SolarEclipseContactPoints) {
-	return branches
-		.filter(SegmentLengthGreaterThanOneFilter)
-		.flatMap((branch) => splitFillBranchAtContacts(branch, [contacts.U1, contacts.U2, contacts.U3, contacts.U4]))
-		.map(fillBranchInfo)
+	const out: FillBranchInfo[] = []
+	for (const branch of branches) pushFillBranchInfos(out, branch, contacts)
+	return out
 }
 
 // Maximum accepted north/south branch pairing cost (radians, sum of the two end gaps). Compatible band
@@ -2691,54 +2731,48 @@ function branchPairScore(north: FillBranchInfo, south: FillBranchInfo) {
 	return Math.min(aligned, reversed)
 }
 
-// Largest spherical edge between consecutive ring vertices, skipping antimeridian wraps (handled at
-// serialization). Used to reject a fill ring that would close across a gap rather than hug the band.
-function maxRingAngularEdge(ring: readonly GeoPoint[]) {
-	let max = 0
+function validFillRing(ring: readonly GeoPoint[]) {
+	if (ring.length < 3) return false
 
 	for (let i = 0; i < ring.length; i++) {
 		const a = ring[i]
 		const b = ring[(i + 1) % ring.length]
-		if (Math.abs(a.x - b.x) > PI) continue
+		const rawLongitudeGap = Math.abs(a.x - b.x)
+		const crossesAntimeridian = rawLongitudeGap > PI
+		const longitudeGap = crossesAntimeridian ? TAU - rawLongitudeGap : rawLongitudeGap
+		const minAbsLatitude = Math.min(Math.abs(a.y), Math.abs(b.y))
+		const maxAbsLatitude = Math.max(Math.abs(a.y), Math.abs(b.y))
+
+		if (longitudeGap > MAX_FILL_POLAR_CONNECTOR_LONGITUDE && minAbsLatitude > FILL_POLAR_CONNECTOR_LATITUDE) return false
+
+		if (crossesAntimeridian) continue
+
 		const edge = angularDistance(a, b)
-		if (edge > max) max = edge
+		if (edge > MAX_FILL_RING_EDGE) return false
+		if (maxAbsLatitude > FILL_EXTREME_POLAR_EDGE_LATITUDE && edge > MAX_FILL_EXTREME_POLAR_EDGE) return false
 	}
 
-	return max
-}
-
-function hasPolarFillConnector(ring: readonly GeoPoint[]) {
-	for (let i = 0; i < ring.length; i++) {
-		const a = ring[i]
-		const b = ring[(i + 1) % ring.length]
-		let longitudeGap = Math.abs(a.x - b.x)
-		if (longitudeGap > PI) longitudeGap = TAU - longitudeGap
-		if (longitudeGap > MAX_FILL_POLAR_CONNECTOR_LONGITUDE && Math.min(Math.abs(a.y), Math.abs(b.y)) > FILL_POLAR_CONNECTOR_LATITUDE) return true
-
-		if (Math.abs(a.x - b.x) <= PI && Math.max(Math.abs(a.y), Math.abs(b.y)) > FILL_EXTREME_POLAR_EDGE_LATITUDE && angularDistance(a, b) > MAX_FILL_EXTREME_POLAR_EDGE) return true
-	}
-
-	return false
+	return true
 }
 
 // Builds one fill ring from a north branch and its paired south branch: the north traversed forward,
 // then the south oriented so it returns from the north's end back toward the north's start.
-function buildFillRing(north: readonly GeoPoint[], south: readonly GeoPoint[]) {
+function buildFillRing(north: FillBranchInfo, south: FillBranchInfo) {
 	const ring: GeoPoint[] = []
-	for (const point of north) pushDistinct(ring, point)
+	for (let i = north.from; i <= north.to; i++) pushDistinct(ring, north.branch[i])
 
-	const northStart = north[0]
-	const northEnd = north.at(-1)!
-	const southStart = south[0]
-	const southEnd = south.at(-1)!
+	const northStart = north.start
+	const northEnd = north.end
+	const southStart = south.start
+	const southEnd = south.end
 	// Compare both orientations by endpoint distance without allocating a reversed copy.
 	const forwardScore = angularDistance(northEnd, southStart) + angularDistance(northStart, southEnd)
 	const backwardScore = angularDistance(northEnd, southEnd) + angularDistance(northStart, southStart)
 
 	if (forwardScore <= backwardScore) {
-		for (const point of south) pushDistinct(ring, point)
+		for (let i = south.from; i <= south.to; i++) pushDistinct(ring, south.branch[i])
 	} else {
-		for (let i = south.length - 1; i >= 0; i--) pushDistinct(ring, south[i])
+		for (let i = south.to; i >= south.from; i--) pushDistinct(ring, south.branch[i])
 	}
 
 	// Drop a trailing point duplicating the first; the ring is closed at serialization time.
@@ -2747,30 +2781,19 @@ function buildFillRing(north: readonly GeoPoint[], south: readonly GeoPoint[]) {
 }
 
 interface FillPair {
-	readonly northIndex: number
 	readonly southIndex: number
 	readonly score: number
-	readonly ring: readonly GeoPoint[]
+	readonly ring: GeoPoint[]
 }
 
-interface FillPairSelection {
-	readonly pairs: readonly FillPair[]
-	readonly score: number
-}
-
-function betterFillPairSelection(a: FillPairSelection, b: FillPairSelection) {
-	if (a.pairs.length !== b.pairs.length) return a.pairs.length > b.pairs.length ? a : b
-	return a.score <= b.score ? a : b
-}
-
-function viableFillPair(north: FillBranchInfo, south: FillBranchInfo, northIndex: number, southIndex: number): FillPair | undefined {
+function viableFillPair(north: FillBranchInfo, south: FillBranchInfo, southIndex: number): FillPair | undefined {
 	const score = branchPairScore(north, south)
 	if (!Number.isFinite(score) || score > MAX_FILL_PAIR_COST) return undefined
 
-	const ring = buildFillRing(north.branch, south.branch)
-	if (ring.length < 3 || maxRingAngularEdge(ring) > MAX_FILL_RING_EDGE || hasPolarFillConnector(ring)) return undefined
+	const ring = buildFillRing(north, south)
+	if (!validFillRing(ring)) return undefined
 
-	return { northIndex, southIndex, score, ring }
+	return { southIndex, score, ring }
 }
 
 function selectFillPairs(norths: readonly FillBranchInfo[], souths: readonly FillBranchInfo[]) {
@@ -2779,30 +2802,41 @@ function selectFillPairs(norths: readonly FillBranchInfo[], souths: readonly Fil
 	for (let n = 0; n < norths.length; n++) {
 		const candidates: FillPair[] = []
 		for (let s = 0; s < souths.length; s++) {
-			const pair = viableFillPair(norths[n], souths[s], n, s)
+			const pair = viableFillPair(norths[n], souths[s], s)
 			if (pair) candidates.push(pair)
 		}
 		candidates.sort((a, b) => a.score - b.score)
 		candidatesByNorth.push(candidates)
 	}
 
-	function choose(northIndex: number, usedSouth: Set<number>): FillPairSelection {
-		if (northIndex >= norths.length) return { pairs: [], score: 0 }
+	let bestPairs: readonly FillPair[] = []
+	let bestScore = Infinity
+	const current: FillPair[] = []
+	const usedSouth = new Array<boolean>(souths.length).fill(false)
 
-		let best = choose(northIndex + 1, usedSouth)
-
-		for (const pair of candidatesByNorth[northIndex]) {
-			if (usedSouth.has(pair.southIndex)) continue
-			usedSouth.add(pair.southIndex)
-			const tail = choose(northIndex + 1, usedSouth)
-			usedSouth.delete(pair.southIndex)
-			best = betterFillPairSelection({ pairs: [pair, ...tail.pairs], score: pair.score + tail.score }, best)
+	function choose(northIndex: number, score: number) {
+		if (northIndex >= norths.length) {
+			if (current.length > bestPairs.length || (current.length === bestPairs.length && score <= bestScore)) {
+				bestPairs = current.slice()
+				bestScore = score
+			}
+			return
 		}
 
-		return best
+		choose(northIndex + 1, score)
+
+		for (const pair of candidatesByNorth[northIndex]) {
+			if (usedSouth[pair.southIndex]) continue
+			usedSouth[pair.southIndex] = true
+			current.push(pair)
+			choose(northIndex + 1, score + pair.score)
+			current.pop()
+			usedSouth[pair.southIndex] = false
+		}
 	}
 
-	return choose(0, new Set()).pairs
+	choose(0, 0)
+	return bestPairs
 }
 
 // Derives visual-only fill rings for the totality/annularity band by pairing each northern umbra-limit
@@ -2818,7 +2852,7 @@ export function computeSolarEclipseFillGeometry(geometry: SolarEclipseMapGeometr
 	if (norths.length === 0 || souths.length === 0) return []
 
 	const rings: GeoPoint[][] = []
-	for (const pair of selectFillPairs(norths, souths)) rings.push(pair.ring.slice())
+	for (const pair of selectFillPairs(norths, souths)) rings.push(pair.ring)
 
 	return rings
 }
