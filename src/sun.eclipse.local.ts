@@ -1568,7 +1568,7 @@ function solarAzimuthAtPoint(pbe: PolynomialBesselianElements, point: GeoPoint) 
 // inside the cone at jdCenter (no central phase there).
 function centralPhaseDurationSeconds(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jdCenter: number) {
 	const gapAtJd = (jd: number) => centralConeGap(besselianSampleAtJulianDay(pbe, jd), longitude, latitude)
-	if (!(gapAtJd(jdCenter) > 0)) return null
+	if (!(gapAtJd(jdCenter) > CENTRAL_CONE_TOLERANCE)) return null
 
 	const enter = findConeCrossingJd(gapAtJd, jdCenter, -CENTRAL_DURATION_STEP_DAYS)
 	const exit = findConeCrossingJd(gapAtJd, jdCenter, CENTRAL_DURATION_STEP_DAYS)
@@ -1613,7 +1613,7 @@ export function computeGreatestDurationCircumstances(pbe: PolynomialBesselianEle
 
 	const julianDay0 = toJulianDay(pbe.time0)
 	const tMaximum = (toJulianDay(pbe.maximumTime) - julianDay0) / pbe.stepDays
-	const span = validPositive(options?.contactSearchSpan, DEFAULT_CONTACT_SEARCH_SPAN_SECONDS) / pbe.stepDays
+	const span = validPositive(options?.contactSearchSpan, DEFAULT_CONTACT_SEARCH_SPAN_SECONDS) / DAYSEC / pbe.stepDays
 
 	// Central-phase duration (seconds) at the central-line point reached at normalized time t, or 0 when the
 	// axis misses the Earth or the point is not central there (so the maximizer steers away from those t).
@@ -1641,10 +1641,15 @@ export function computeGreatestDurationCircumstances(pbe: PolynomialBesselianEle
 
 	try {
 		const minimum = brentMinimize((t) => -durationAtT(t), Math.max(tMaximum - span, bestT - half), Math.min(tMaximum + span, bestT + half))
-		if (-minimum.value > bestDuration) bestT = minimum.minimum
+		if (-minimum.value > bestDuration) {
+			bestT = minimum.minimum
+			bestDuration = -minimum.value
+		}
 	} catch {
 		// Keep the coarse-scan argmax when the refinement bracket is rejected.
 	}
+
+	if (!(bestDuration > 0)) return undefined
 
 	const be = besselianSampleAtJulianDay(pbe, julianDay0 + bestT * pbe.stepDays)
 	const point = projectFundamentalPoint(be, be.x, be.y)
