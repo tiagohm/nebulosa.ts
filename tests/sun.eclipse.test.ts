@@ -1667,6 +1667,23 @@ describe('branch-aware curve topology', () => {
 		expect(Math.min(...geometry.lines.umbraSouth.flat().map((point) => sphericalSeparation(U3.x, U3.y, point.x, point.y)))).toBeLessThan(1e-9)
 	})
 
+	// 1957-10-23 is a non-central total eclipse (|gamma| > 1): the shadow axis misses Earth, so the umbra
+	// only grazes the limb and the G = 1 limit is a tiny closed loop near the south pole. The curve tracer
+	// used to append a stray closure vertex duplicating an interior point, leaving a ~4 deg chord from U1
+	// back into the loop (a visible spike). Every umbra edge must now stay near the sample spacing, well
+	// below the fold threshold that the spurious chord exceeded.
+	test('1957-10-23 grazing umbra loop has no fold-back spike', () => {
+		const { geometry } = geometryFor(1957, 10, 20)
+		const branches = [...geometry.lines.umbraNorth, ...geometry.lines.umbraSouth]
+
+		expect(branches.length).toBeGreaterThan(0)
+		// The fold threshold (maxAngularStep * CURVE_GAP_SPLIT_FACTOR = 0.5 deg * 4); the historical spike was ~4 deg.
+		const foldThreshold = STEP * 4
+		for (const branch of branches) {
+			for (let k = 1; k < branch.length; k++) expect(sphericalSeparation(branch[k - 1].x, branch[k - 1].y, branch[k].x, branch[k].y)).toBeLessThan(foldThreshold)
+		}
+	})
+
 	test('2024-04-08 connects N2 to the northern penumbral limit', () => {
 		const { geometry } = geometryFor(2024, 4, 1)
 		const N2 = geometry.points.N2!

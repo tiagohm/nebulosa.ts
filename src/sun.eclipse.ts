@@ -1609,10 +1609,34 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 	const reconnected = reconnectBranchCusps(deduped, pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
 	const pieces = reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
 	const reconnectedPieces = reconnectBranchCusps(deduplicateBranches(pieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
+	const foldStep = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
 	return deduplicateBranches(
 		reconnectedPieces.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap)),
 		maxAngularStep,
-	)
+	).map((branch) => trimFoldBackEndpoints(branch, foldStep))
+}
+
+// Drops a stray endpoint vertex that folds the branch back onto an earlier part of itself. At a longitude
+// fold of a grazing limit (a tiny closed loop, e.g. a non-central total eclipse whose umbra only grazes the
+// limb) the curve tracer can append a single closure vertex that duplicates an interior vertex, leaving a
+// long chord from the true endpoint back to a visited location — a visible spike. Such a vertex coincides
+// (within CURVE_SPATIAL_EPSILON) with a non-adjacent vertex of the branch and is reached by a step larger
+// than the fold threshold; trimming it keeps the branch a simple open arc without moving any retained point.
+// foldStep: minimum step (radians) that flags an endpoint connection as an anomalous fold-back jump.
+function trimFoldBackEndpoints(branch: GeoPoint[], foldStep: Angle): GeoPoint[] {
+	let start = 0
+	let end = branch.length - 1
+
+	while (end - start >= 2 && angularDistance(branch[end - 1], branch[end]) > foldStep && coincidesWithRange(branch, branch[end], start, end - 2)) end--
+	while (end - start >= 2 && angularDistance(branch[start], branch[start + 1]) > foldStep && coincidesWithRange(branch, branch[start], start + 2, end)) start++
+
+	return start === 0 && end === branch.length - 1 ? branch : branch.slice(start, end + 1)
+}
+
+// Whether point coincides geographically (within CURVE_SPATIAL_EPSILON) with any branch vertex in [from, to].
+function coincidesWithRange(branch: readonly GeoPoint[], point: GeoPoint, from: number, to: number) {
+	for (let k = from; k <= to; k++) if (angularDistance(branch[k], point) <= CURVE_SPATIAL_EPSILON) return true
+	return false
 }
 
 // Removes consecutive points that coincide geographically (ignoring jd), preserving the branch's order.
