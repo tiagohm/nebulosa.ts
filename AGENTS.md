@@ -184,7 +184,8 @@ Before finishing a change:
 Commit messages must be precise, English, and easy to scan.
 
 - Use lowercase text, except for acronyms, proper nouns, package names, and file names.
-- Start the subject with a present-tense imperative verb such as `implement`, `fix`, `improve`, `update`, `use`, `remove`, `rename`, or `refactor`.
+- Start the subject directly with a present-tense imperative verb such as `implement`, `fix`, `improve`, `update`, `use`, `remove`, `rename`, or `refactor`.
+- Do not prefix the subject with Conventional Commit-style labels such as `feat:`, `fix:`, `perf:`, `docs:`, `refactor:`, `test:`, or scoped variants such as `feat(image):`.
 - Keep the subject concise and specific; prefer 72 characters or fewer when practical.
 - Do not end the subject with a period.
 - Describe the user-visible or technical effect, not the amount of work.
@@ -195,6 +196,21 @@ Commit messages must be precise, English, and easy to scan.
 - In the body, explain why the change was made and mention important side effects, limitations, or follow-up work.
 - Reference issues, tickets, or follow-up tasks when applicable.
 - Mention breaking changes explicitly.
+
+## After Finishing
+
+After the change is complete:
+
+- Always create a commit for the completed task unless the user explicitly asks not to commit.
+- Commit only the changes made for the current task.
+- Do not include unrelated edits, incidental formatting, generated files, debug logs, temporary files, or local-only configuration.
+- Inspect the final state with `git status --short` before staging.
+- Review the final diff with `git diff` and confirm every changed line belongs to the task.
+- Stage files explicitly by path. Avoid broad staging commands such as `git add .` unless every changed file has been reviewed and belongs to the task.
+- Before committing, inspect staged changes with `git diff --staged`.
+- Do not amend, squash, rebase, or rewrite existing commits unless the task explicitly requests it.
+- If verification could not be fully completed because of environment limits, the commit message may still be created for the finished change, but the final response must list the skipped or failed verification command and the reason.
+- If unresolved errors remain, do not commit. Explain what is blocking the commit and which files are affected.
 
 ## Code Review Mode
 
