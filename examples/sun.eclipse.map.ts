@@ -2,12 +2,12 @@ import { deg } from '../src/angle'
 import { TAU, PIOVERTWO } from '../src/constants'
 import { PlateCarree } from '../src/projection'
 import { nearestSolarEclipse } from '../src/sun'
-import { type SolarEclipseMapSvgPaths, type SolarEclipseMapPoints, computeSunMoonPositionAt, type SolarEclipseMapGeometryOptions, computePolynomialBesselianElements, computeSolarEclipseFillGeometry, computeSolarEclipseMapGeometry, geoPolygonsToSvgPathData, solarEclipseMapToSvgPaths } from '../src/sun.eclipse'
+import { type SolarEclipseMapSvgPaths, type SolarEclipseMapPoints, computeSunMoonPositionAt, type SolarEclipseMapGeometryOptions, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, solarEclipseMapToSvgPaths } from '../src/sun.eclipse'
 import { timeYMD, timeToDate, type Time } from '../src/time'
 import * as vsop87e from '../src/vsop87e'
 import * as elpmpp02 from '../src/elpmpp02'
 
-function makeSvg(paths: SolarEclipseMapSvgPaths, fill: string, width: number, height: number) {
+function makeSvg(paths: SolarEclipseMapSvgPaths, width: number, height: number) {
 	function marker(point: SolarEclipseMapPoints[keyof SolarEclipseMapPoints], label: string, color: string) {
 		return point ? `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="3" fill="${color}" /><text x="${(point.x + 5).toFixed(2)}" y="${(point.y - 5).toFixed(2)}">${label}</text>` : ''
 	}
@@ -15,7 +15,6 @@ function makeSvg(paths: SolarEclipseMapSvgPaths, fill: string, width: number, he
 	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
 <style>
 .ocean { fill: #103099; }
-.umbrafill { fill: gray; stroke: none; }
 .umbra { fill: none; stroke: #FFE66D; stroke-width: 2; stroke-linecap: round; }
 .center { fill: none; stroke: #FF2ED1; stroke-width: 2; stroke-linecap: round; }
 .penumbra { fill: none; stroke: #FF9F1C; stroke-width: 2; stroke-linecap: round; }
@@ -26,7 +25,6 @@ text { font: 14px sans-serif; font-weight: bold; fill: #fff; }
 <path class="penumbra" d="${paths.penumbraNorth}" />
 <path class="penumbra" d="${paths.penumbraSouth}" />
 <path class="riseset" d="${paths.riseSetCurves}" />
-<path class="umbrafill" d="${fill}" />
 <path class="umbra" d="${paths.umbraNorth}" />
 <path class="umbra" d="${paths.umbraSouth}" />
 <path class="center" d="${paths.centerLine}" />
@@ -161,9 +159,7 @@ while (date[0] <= 2030) {
 		const pbe = computePolynomialBesselianElements(maximalTime, getSunMoonPosition)
 		const geo = computeSolarEclipseMapGeometry(eclipse, pbe, options)
 		const paths = solarEclipseMapToSvgPaths(geo, projection)
-		// The visual-only totality/annularity fill is derived from the umbra limits, isolated from the physical lines.
-		const fill = geoPolygonsToSvgPathData(computeSolarEclipseFillGeometry(geo), projection)
-		const svg = makeSvg(paths, fill, WIDTH, HEIGHT)
+		const svg = makeSvg(paths, WIDTH, HEIGHT)
 
 		async function execute() {
 			await Bun.write(`data/${name}.svg`, svg)

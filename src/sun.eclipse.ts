@@ -23,7 +23,7 @@ import { vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMu
 //   F. Public assembly and optional SVG serialization.
 //
 // Every physical curve family comes only from the curve solver (D); the umbra and penumbra limits are
-// never capped, bridged, or welded. Visual fill geometry is isolated in computeSolarEclipseFillGeometry.
+// never capped, bridged, or welded.
 //
 // Unit conventions (audited):
 //   - angles (right ascension, declination, d, mu, longitude, latitude) in radians;
@@ -2642,221 +2642,6 @@ function penumbralLimitEndpointsByTime(pbe: PolynomialBesselianElements, curve: 
 	return a.y <= b.y ? [a, b] : [b, a]
 }
 
-// Per-branch fill metadata computed once up front, so a branch's endpoints are not
-// recomputed for every candidate pairing.
-interface FillBranchInfo {
-	readonly branch: readonly GeoPoint[]
-	readonly from: number
-	readonly to: number
-	readonly start: GeoPoint
-	readonly end: GeoPoint
-}
-
-function fillBranchInfo(branch: readonly GeoPoint[], from = 0, to = branch.length - 1): FillBranchInfo {
-	return { branch, from, to, start: branch[from], end: branch[to] }
-}
-
-const UMBRA_CONTACT_KEYS = ['U1', 'U2', 'U3', 'U4'] as const
-const EMPTY_INDICES: readonly number[] = []
-
-function fillBranchContactSplitIndices(branch: readonly GeoPoint[], contacts: SolarEclipseContactPoints) {
-	let indices: number[] | undefined
-
-	for (const key of UMBRA_CONTACT_KEYS) {
-		const contact = contacts[key]
-		if (!contact) continue
-
-		for (let i = 1; i < branch.length - 1; i++) {
-			if (angularDistance(contact, branch[i]) <= CURVE_SPATIAL_EPSILON) {
-				indices ??= []
-				if (!indices.includes(i)) indices.push(i)
-				break
-			}
-		}
-	}
-
-	if (!indices) return EMPTY_INDICES
-
-	indices.sort(NumberComparator)
-	return indices
-}
-
-function pushFillBranchInfos(out: FillBranchInfo[], branch: readonly GeoPoint[], contacts: SolarEclipseContactPoints) {
-	if (branch.length < 2) return
-
-	const indices = fillBranchContactSplitIndices(branch, contacts)
-
-	if (indices.length === 0) {
-		out.push(fillBranchInfo(branch))
-		return
-	}
-
-	let start = 0
-	for (const index of indices) {
-		if (index - start >= 1) out.push(fillBranchInfo(branch, start, index))
-		start = index
-	}
-
-	if (branch.length - 1 - start >= 1) out.push(fillBranchInfo(branch, start, branch.length - 1))
-}
-
-function fillBranches(branches: readonly (readonly GeoPoint[])[], contacts: SolarEclipseContactPoints) {
-	const out: FillBranchInfo[] = []
-	for (const branch of branches) pushFillBranchInfos(out, branch, contacts)
-	return out
-}
-
-// Maximum accepted north/south branch pairing cost (radians, sum of the two end gaps). Compatible band
-// edges meet near the contacts where the band narrows, so the cost is small; a pair this far apart is not the
-// two sides of one band and must not be filled between.
-const MAX_FILL_PAIR_COST = 30 * DEG2RAD
-
-// Maximum accepted angular edge (radians) inside a fill ring. The band is narrow, so every ring edge — the
-// along-limit steps and the two end connectors — stays small; an edge this large would be a connector welding
-// the ring across a gap or the whole map, so such a ring is dropped rather than drawn.
-const MAX_FILL_RING_EDGE = 20 * DEG2RAD
-// Polar fill rings are projection-sensitive: a connector that is short on the sphere can become a long
-// horizontal edge across the top/bottom of a cylindrical map. Such a ring is visual-only and unreliable, so
-// it is dropped rather than filling a polar cap that is not bounded by the physical curves.
-const MAX_FILL_POLAR_CONNECTOR_LONGITUDE = 30 * DEG2RAD
-const FILL_POLAR_CONNECTOR_LATITUDE = 80 * DEG2RAD
-const MAX_FILL_EXTREME_POLAR_EDGE = 10 * DEG2RAD
-const FILL_EXTREME_POLAR_EDGE_LATITUDE = 85 * DEG2RAD
-
-// Pairing cost between a north and a south umbra-limit branch: the smaller of the two endpoint-to-endpoint
-// matchings. A pair this far apart spatially is not the two sides of one band and is gated by MAX_FILL_PAIR_COST.
-function branchPairScore(north: FillBranchInfo, south: FillBranchInfo) {
-	const aligned = angularDistance(north.start, south.start) + angularDistance(north.end, south.end)
-	const reversed = angularDistance(north.start, south.end) + angularDistance(north.end, south.start)
-	return Math.min(aligned, reversed)
-}
-
-function validFillRing(ring: readonly GeoPoint[]) {
-	if (ring.length < 3) return false
-
-	for (let i = 0; i < ring.length; i++) {
-		const a = ring[i]
-		const b = ring[(i + 1) % ring.length]
-		const rawLongitudeGap = Math.abs(a.x - b.x)
-		const crossesAntimeridian = rawLongitudeGap > PI
-		const longitudeGap = crossesAntimeridian ? TAU - rawLongitudeGap : rawLongitudeGap
-		const minAbsLatitude = Math.min(Math.abs(a.y), Math.abs(b.y))
-		const maxAbsLatitude = Math.max(Math.abs(a.y), Math.abs(b.y))
-
-		if (longitudeGap > MAX_FILL_POLAR_CONNECTOR_LONGITUDE && minAbsLatitude > FILL_POLAR_CONNECTOR_LATITUDE) return false
-
-		if (crossesAntimeridian) continue
-
-		const edge = angularDistance(a, b)
-		if (edge > MAX_FILL_RING_EDGE) return false
-		if (maxAbsLatitude > FILL_EXTREME_POLAR_EDGE_LATITUDE && edge > MAX_FILL_EXTREME_POLAR_EDGE) return false
-	}
-
-	return true
-}
-
-// Builds one fill ring from a north branch and its paired south branch: the north traversed forward,
-// then the south oriented so it returns from the north's end back toward the north's start.
-function buildFillRing(north: FillBranchInfo, south: FillBranchInfo) {
-	const ring: GeoPoint[] = []
-	for (let i = north.from; i <= north.to; i++) pushDistinct(ring, north.branch[i])
-
-	const northStart = north.start
-	const northEnd = north.end
-	const southStart = south.start
-	const southEnd = south.end
-	// Compare both orientations by endpoint distance without allocating a reversed copy.
-	const forwardScore = angularDistance(northEnd, southStart) + angularDistance(northStart, southEnd)
-	const backwardScore = angularDistance(northEnd, southEnd) + angularDistance(northStart, southStart)
-
-	if (forwardScore <= backwardScore) {
-		for (let i = south.from; i <= south.to; i++) pushDistinct(ring, south.branch[i])
-	} else {
-		for (let i = south.to; i >= south.from; i--) pushDistinct(ring, south.branch[i])
-	}
-
-	// Drop a trailing point duplicating the first; the ring is closed at serialization time.
-	if (ring.length > 1 && samePoint(ring[0], ring.at(-1)!)) ring.pop()
-	return ring
-}
-
-interface FillPair {
-	readonly southIndex: number
-	readonly score: number
-	readonly ring: GeoPoint[]
-}
-
-function viableFillPair(north: FillBranchInfo, south: FillBranchInfo, southIndex: number): FillPair | undefined {
-	const score = branchPairScore(north, south)
-	if (!Number.isFinite(score) || score > MAX_FILL_PAIR_COST) return undefined
-
-	const ring = buildFillRing(north, south)
-	if (!validFillRing(ring)) return undefined
-
-	return { southIndex, score, ring }
-}
-
-function selectFillPairs(norths: readonly FillBranchInfo[], souths: readonly FillBranchInfo[]) {
-	const candidatesByNorth: FillPair[][] = []
-
-	for (let n = 0; n < norths.length; n++) {
-		const candidates: FillPair[] = []
-		for (let s = 0; s < souths.length; s++) {
-			const pair = viableFillPair(norths[n], souths[s], s)
-			if (pair) candidates.push(pair)
-		}
-		candidates.sort((a, b) => a.score - b.score)
-		candidatesByNorth.push(candidates)
-	}
-
-	let bestPairs: readonly FillPair[] = []
-	let bestScore = Infinity
-	const current: FillPair[] = []
-	const usedSouth = new Array<boolean>(souths.length).fill(false)
-
-	function choose(northIndex: number, score: number) {
-		if (northIndex >= norths.length) {
-			if (current.length > bestPairs.length || (current.length === bestPairs.length && score <= bestScore)) {
-				bestPairs = current.slice()
-				bestScore = score
-			}
-			return
-		}
-
-		choose(northIndex + 1, score)
-
-		for (const pair of candidatesByNorth[northIndex]) {
-			if (usedSouth[pair.southIndex]) continue
-			usedSouth[pair.southIndex] = true
-			current.push(pair)
-			choose(northIndex + 1, score + pair.score)
-			current.pop()
-			usedSouth[pair.southIndex] = false
-		}
-	}
-
-	choose(0, 0)
-	return bestPairs
-}
-
-// Derives visual-only fill rings for the totality/annularity band by pairing each northern umbra-limit
-// branch with the southern branch it overlaps in time and space, instead of flattening all branches
-// into one ring. Flattening (the previous approach) reconnected pieces that the curve solver had
-// correctly separated at discontinuities, antimeridian wraps or polar folds, producing rings that cross
-// the map; pairing keeps each disconnected band closed on its own. It is a
-// secondary, presentational artifact: the physical boundary polylines are never mutated.
-export function computeSolarEclipseFillGeometry(geometry: SolarEclipseMapGeometry) {
-	const norths = fillBranches(geometry.lines.umbraNorth, geometry.points)
-	const souths = fillBranches(geometry.lines.umbraSouth, geometry.points)
-
-	if (norths.length === 0 || souths.length === 0) return []
-
-	const rings: GeoPoint[][] = []
-	for (const pair of selectFillPairs(norths, souths)) rings.push(pair.ring)
-
-	return rings
-}
-
 // Splits a geographic polyline into drawable antimeridian-safe segments.
 export function splitPolylineAtAntimeridian(line: readonly GeoPoint[]) {
 	return splitGeoLineAtAntimeridian(line, false)
@@ -3059,21 +2844,12 @@ export function geoPolylinesToSvgPathData(lines: readonly (readonly GeoPoint[])[
 	return pointsToSvgPathData(pieces, false, precision)
 }
 
-// Projects geographic polygon rings and serializes them into one SVG path data string of closed
-// subpaths, split at the antimeridian during projection only.
-export function geoPolygonsToSvgPathData(rings: readonly (readonly GeoPoint[])[], projection: Projection, { precision = 2, ...options }: SolarEclipseMapSvgProjectionOptions = {}) {
-	const pieces: Point[][] = []
-	for (const ring of rings) for (const piece of projectSplitPieces(ring, true, projection, options)) pieces.push(piece)
-	return pointsToSvgPathData(pieces, true, precision)
-}
-
 // Projects solar eclipse map geometry and serializes each polyline feature into SVG path data strings,
 // aligned to the given projection. Antimeridian wraps are split into separate subpaths at projection time
 // only; no synthetic connector is ever added. Each penumbra limit is a set of continuity branches, and every
 // branch is serialized as its own subpath (M ... L ...): the end of one branch is never connected to the
 // start of another, so a near-pole fold the solver could not trace through is drawn as separate arcs rather
-// than a straight spike. The geometry itself is never mutated. Fill rings (computeSolarEclipseFillGeometry)
-// are serialized separately with geoPolygonsToSvgPathData.
+// than a straight spike. The geometry itself is never mutated.
 export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, projection: Projection, options: SolarEclipseMapSvgProjectionOptions = {}): SolarEclipseMapSvgPaths {
 	// Project named points with the same options as the curves, so points and lines stay aligned (P0.3).
 	function projectPoint(point: GeoPoint | undefined) {

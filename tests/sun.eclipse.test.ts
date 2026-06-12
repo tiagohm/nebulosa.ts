@@ -2,7 +2,7 @@ import { expect, test, describe } from 'bun:test'
 import { deg } from '../src/angle'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseFillGeometry, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolygonsToSvgPathData, geoPolylinesToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse'
+import { centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolylinesToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse'
 import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../src/time'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
@@ -936,7 +936,6 @@ test('partial eclipse geometry omits central and umbral path data', () => {
 	expect(geometry.lines.centerLine).toHaveLength(0)
 	expect(geometry.lines.umbraNorth).toHaveLength(0)
 	expect(geometry.lines.umbraSouth).toHaveLength(0)
-	expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(0)
 })
 
 test('central total eclipse geometry exposes a populated central and umbral path when enabled', () => {
@@ -1295,39 +1294,6 @@ test('solarEclipseMapToSvgPaths serializes lines and skips empty features', () =
 	expect(paths.points.U1).toBeUndefined()
 })
 
-test('computeSolarEclipseFillGeometry derives a closed visual ring from the umbra limits', () => {
-	const north: GeoPoint[] = [
-		{ x: deg(-10), y: deg(1), jd: 1 },
-		{ x: 0, y: deg(1.5), jd: 2 },
-		{ x: deg(10), y: deg(2), jd: 3 },
-	]
-	const south: GeoPoint[] = [
-		{ x: deg(-10), y: deg(-1), jd: 1 },
-		{ x: 0, y: deg(-1.5), jd: 2 },
-		{ x: deg(10), y: deg(-2), jd: 3 },
-	]
-	const map = geometry({ umbraNorth: [north], umbraSouth: [south] })
-	const rings = computeSolarEclipseFillGeometry(map)
-
-	// One ring: north traversed forward then south traversed backward. The physical limit polylines
-	// are not mutated by the fill derivation.
-	expect(rings).toHaveLength(1)
-	expect(rings[0]).toHaveLength(6)
-	expect(rings[0].slice(0, 3)).toEqual(north)
-	expect(rings[0].slice(3)).toEqual([south[2], south[1], south[0]])
-	expect(map.lines.umbraNorth[0]).toHaveLength(3)
-	expect(map.lines.umbraSouth[0]).toHaveLength(3)
-
-	// The fill serializes as a closed SVG subpath.
-	const path = geoPolygonsToSvgPathData(rings, equirectangularProjection(360, 180))
-	expect(path.startsWith('M')).toBe(true)
-	expect(path.endsWith('Z')).toBe(true)
-
-	// No fill without both limits.
-	expect(computeSolarEclipseFillGeometry(geometry({ umbraNorth: [north] }))).toHaveLength(0)
-	expect(computeSolarEclipseFillGeometry(geometry())).toHaveLength(0)
-})
-
 test('antimeridian-crossing lines split into multiple subpaths', () => {
 	const map = geometry({
 		centerLine: [
@@ -1399,13 +1365,11 @@ test('solarEclipseMapToSvgPaths places the 2024-04-08 totality over North Americ
 	const height = 360
 	const projection = equirectangularProjection(width, height)
 	const paths = solarEclipseMapToSvgPaths(map, projection)
-	const fill = geoPolygonsToSvgPathData(computeSolarEclipseFillGeometry(map), projection)
 
-	for (const feature of [paths.centerLine, paths.umbraNorth, paths.umbraSouth, fill]) {
+	for (const feature of [paths.centerLine, paths.umbraNorth, paths.umbraSouth]) {
 		expect(feature.length).toBeGreaterThan(0)
 		expect(feature.startsWith('M')).toBe(true)
 	}
-	expect(fill.endsWith('Z')).toBe(true)
 
 	// The Max marker matches a direct projection and lands over Mexico (lon ~ -104, lat ~ +25).
 	const expectedMax = projection.project(map.points.Max!.x, map.points.Max!.y)!
@@ -1550,17 +1514,6 @@ describe('solar eclipse map validation cases', () => {
 				if (points.N1?.jd !== undefined && points.N2?.jd !== undefined) expect(points.N1.jd).toBeLessThanOrEqual(points.N2.jd)
 				if (points.S1?.jd !== undefined && points.S2?.jd !== undefined) expect(points.S1.jd).toBeLessThanOrEqual(points.S2.jd)
 			})
-
-			test('visual fill is isolated from the physical boundary lines', () => {
-				const before = JSON.stringify(lines)
-				const rings = computeSolarEclipseFillGeometry(geometry)
-				// A closed fill ring requires both limits; a single-edge grazing path has none.
-				if (fixture.hasBothUmbraLimits) expect(rings.length).toBeGreaterThan(0)
-				else expect(rings).toHaveLength(0)
-				for (const ring of rings) for (const point of ring) expectGeoPoint(point)
-				// Deriving the fill does not mutate the physical polylines.
-				expect(JSON.stringify(lines)).toBe(before)
-			})
 		})
 	}
 })
@@ -1631,18 +1584,6 @@ describe('branch-aware curve topology', () => {
 		{ name: '2021-12-04', date: [2021, 12, 1] },
 	] as const
 
-	// A forked/folded totality band (the 2008-02-07 annular over Antarctica) splits each limit into matching
-	// north and south branches. The fill must pair every band segment: the north and south edge of one
-	// cross-section are reached at slightly different instants, so a strict temporal-overlap gate used to drop
-	// the middle segment and leave an unfilled wedge. Each length>=2 north branch must therefore be paired.
-	test('2008-02-07 forked band is fully filled (no unpaired segment)', () => {
-		const { geometry } = geometryFor(2008, 2, 1)
-		const norths = geometry.lines.umbraNorth.filter((branch) => branch.length >= 2).length
-		const souths = geometry.lines.umbraSouth.filter((branch) => branch.length >= 2).length
-		expect(norths).toBeGreaterThan(1)
-		expect(computeSolarEclipseFillGeometry(geometry).length).toBe(Math.min(norths, souths))
-	})
-
 	test('2005-10-03 keeps the lower northern penumbral arc between N1 and N2', () => {
 		const { elements, geometry } = geometryFor(2005, 10, 1)
 		const expected = findEclipseCurvePoint(elements, deg(55), 0, 1, 0)
@@ -1685,21 +1626,7 @@ describe('branch-aware curve topology', () => {
 		expect(geometry.lines.penumbraSouth).toHaveLength(1)
 	})
 
-	test('2021-06-10 omits the unreliable polar fill ring', () => {
-		const { geometry } = geometryFor(2021, 6, 1)
-		expect(geometry.lines.umbraNorth.length + geometry.lines.umbraSouth.length).toBeGreaterThan(0)
-		expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(0)
-	})
-
-	test('2026-02-17 fills both tip and main segments of the south-polar annular path', () => {
-		const { geometry } = geometryFor(2026, 2, 1)
-		const norths = geometry.lines.umbraNorth.filter((branch) => branch.length >= 2).length
-		expect(norths).toBeGreaterThan(1)
-		expect(geometry.lines.umbraSouth.filter((branch) => branch.length >= 2)).toHaveLength(1)
-		expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(2)
-	})
-
-	test('2026-08-12 fills the north-polar totality cap and keeps the partial boundary anchored', () => {
+	test('2026-08-12 keeps the north-polar partial boundary anchored', () => {
 		const { eclipse, elements } = geometryFor(2026, 8, 1)
 		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: STEP, maxAngularStep: STEP, includeRiseSetCurves: true, riseSetStep: 600 })
 		const { N1, S1 } = geometry.points
@@ -1715,7 +1642,6 @@ describe('branch-aware curve topology', () => {
 				sphericalSeparation(southA.at(-1)!.x, southA.at(-1)!.y, southB.at(-1)!.x, southB.at(-1)!.y),
 			),
 		).toBeLessThan(1e-9)
-		expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(2)
 		expect(geometry.lines.penumbraNorth).toHaveLength(0)
 		expect(geometry.lines.penumbraSouth).toHaveLength(1)
 		expect(N1).toBeDefined()
@@ -1733,22 +1659,12 @@ describe('branch-aware curve topology', () => {
 		expect(longestProjectedSegment(paths.riseSetCurves)).toBeLessThan(MAP_WIDTH / 2)
 	})
 
-	test('2021-12-04 keeps the south-polar umbra fold connected without clipped fill', () => {
+	test('2021-12-04 keeps the south-polar umbra fold connected at U3', () => {
 		const { geometry } = geometryFor(2021, 12, 1)
-		const rings = computeSolarEclipseFillGeometry(geometry)
 		const U3 = geometry.points.U3!
 
 		expect(geometry.lines.umbraSouth).toHaveLength(2)
-		expect(rings).toHaveLength(2)
 		expect(Math.min(...geometry.lines.umbraSouth.flat().map((point) => sphericalSeparation(U3.x, U3.y, point.x, point.y)))).toBeLessThan(1e-9)
-		for (const ring of rings) {
-			for (let i = 0; i < ring.length; i++) {
-				const a = ring[i]
-				const b = ring[(i + 1) % ring.length]
-				if (Math.abs(a.x - b.x) > PI) continue
-				expect(sphericalSeparation(a.x, a.y, b.x, b.y)).toBeLessThanOrEqual(deg(4))
-			}
-		}
 	})
 
 	test('2024-04-08 connects N2 to the northern penumbral limit', () => {
@@ -1801,18 +1717,6 @@ describe('branch-aware curve topology', () => {
 				const { N1, N2, S1, S2 } = geometry.points
 				if (N1?.jd !== undefined && N2?.jd !== undefined) expect(N1.jd).toBeLessThanOrEqual(N2.jd)
 				if (S1?.jd !== undefined && S2?.jd !== undefined) expect(S1.jd).toBeLessThanOrEqual(S2.jd)
-			})
-
-			// Fill rings hug the band: no ring edge welds the fill across a gap or the map.
-			test('fill rings contain no giant connector edge', () => {
-				for (const ring of computeSolarEclipseFillGeometry(geometry)) {
-					for (let i = 0; i < ring.length; i++) {
-						const a = ring[i]
-						const b = ring[(i + 1) % ring.length]
-						if (Math.abs(a.x - b.x) > PI) continue
-						expect(sphericalSeparation(a.x, a.y, b.x, b.y)).toBeLessThanOrEqual(deg(20))
-					}
-				}
 			})
 		})
 	}
@@ -1894,7 +1798,6 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(geometry.lines.centerLine).toHaveLength(0)
 		expect(geometry.lines.umbraNorth).toHaveLength(0)
 		expect(geometry.lines.umbraSouth).toHaveLength(0)
-		expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(0)
 
 		// The penumbral limit is produced (at least one of the two tangent branches) on the magnitude-0 locus.
 		const penumbra = [...geometry.lines.penumbraNorth.flat(), ...geometry.lines.penumbraSouth.flat()]
@@ -2086,66 +1989,6 @@ describe('hybrid central line classification', () => {
 		const kinds = new Set(geometry.lines.centerLine.map((point) => point.kind))
 		expect(kinds.has('annular')).toBe(false)
 		expect(kinds.has('total')).toBe(true)
-	})
-})
-
-describe('fill geometry pairs disconnected branches', () => {
-	test('global branch matching fills every compatible band', () => {
-		// A greedy north-by-north match pairs the first north branch with the nearby middle south branch,
-		// leaving the second north branch unpaired. The global optimum fills both rings.
-		const northA: GeoPoint[] = [
-			{ x: deg(5), y: deg(1), jd: 1 },
-			{ x: deg(15), y: deg(1), jd: 2 },
-		]
-		const northB: GeoPoint[] = [
-			{ x: deg(12), y: deg(1), jd: 1 },
-			{ x: deg(22), y: deg(1), jd: 2 },
-		]
-		const southA: GeoPoint[] = [
-			{ x: deg(10), y: deg(-1), jd: 1 },
-			{ x: deg(20), y: deg(-1), jd: 2 },
-		]
-		const southB: GeoPoint[] = [
-			{ x: deg(-5), y: deg(-1), jd: 1 },
-			{ x: deg(5), y: deg(-1), jd: 2 },
-		]
-		const map = geometry({ umbraNorth: [northA, northB], umbraSouth: [southA, southB] })
-
-		expect(computeSolarEclipseFillGeometry(map)).toHaveLength(2)
-	})
-
-	test('two separated north/south branch pairs produce two rings, never one welded ring', () => {
-		// Two disconnected totality bands (e.g. split by a discontinuity): each north branch must pair with
-		// its own south branch, so the fill yields two rings rather than flattening into one that crosses
-		// the map (report section 4.1).
-		const northA: GeoPoint[] = [
-			{ x: deg(-120), y: deg(1), jd: 1 },
-			{ x: deg(-110), y: deg(1.5), jd: 2 },
-		]
-		const southA: GeoPoint[] = [
-			{ x: deg(-120), y: deg(-1), jd: 1 },
-			{ x: deg(-110), y: deg(-1.5), jd: 2 },
-		]
-		const northB: GeoPoint[] = [
-			{ x: deg(110), y: deg(1), jd: 10 },
-			{ x: deg(120), y: deg(1.5), jd: 11 },
-		]
-		const southB: GeoPoint[] = [
-			{ x: deg(110), y: deg(-1), jd: 10 },
-			{ x: deg(120), y: deg(-1.5), jd: 11 },
-		]
-		const map = geometry({ umbraNorth: [northA, northB], umbraSouth: [southA, southB] })
-		const rings = computeSolarEclipseFillGeometry(map)
-
-		expect(rings).toHaveLength(2)
-		// Each ring stays within its own band's longitude neighborhood; no ring spans both bands.
-		for (const ring of rings) {
-			const lons = ring.map((point) => point.x)
-			expect(Math.max(...lons) - Math.min(...lons)).toBeLessThan(deg(60))
-		}
-		// The physical limit polylines are untouched.
-		expect(map.lines.umbraNorth).toHaveLength(2)
-		expect(map.lines.umbraSouth).toHaveLength(2)
 	})
 })
 
