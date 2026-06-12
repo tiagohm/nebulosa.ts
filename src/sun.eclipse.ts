@@ -1609,9 +1609,15 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 	const reconnected = reconnectBranchCusps(deduped, pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
 	const pieces = reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
 	const reconnectedPieces = reconnectBranchCusps(deduplicateBranches(pieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
+	const finalPieces = trimRetracedBranchEnds(
+		reconnectedPieces.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap)),
+		maxAngularStep,
+		maxDrawableGap,
+	)
+	const finalReconnected = reconnectBranchCusps(deduplicateBranches(finalPieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
 	const foldStep = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
 	return deduplicateBranches(
-		reconnectedPieces.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap)),
+		finalReconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap)),
 		maxAngularStep,
 	).map((branch) => trimFoldBackEndpoints(branch, foldStep))
 }
@@ -1746,6 +1752,74 @@ function branchRetraces(branch: readonly GeoPoint[], tolerance: Angle, minArcSep
 	}
 
 	return false
+}
+
+// Removes endpoint loops that trace away from an endpoint, return to it, then continue along the real
+// outgoing arc. These are not physical closed limits: they are artifacts left after reconnecting longitude
+// folds where one seed branch already covered the first arm. Trimming to the farthest point of the loop
+// exposes the missing cusp endpoint so the final reconnection can bridge the adjacent branch without
+// drawing a visible gap.
+// tolerance: endpoint coincidence threshold in radians; minLoopArc: minimum along-branch loop length.
+function trimRetracedBranchEnds(branches: readonly GeoPoint[][], tolerance: Angle, minLoopArc: Angle): GeoPoint[][] {
+	const out: GeoPoint[][] = []
+
+	for (const branch of branches) {
+		const trimmedStart = trimRetracedBranchStart(branch, tolerance, minLoopArc)
+		const trimmedEnd = trimRetracedBranchEnd(trimmedStart, tolerance, minLoopArc)
+		if (trimmedEnd.length >= 2) out.push(trimmedEnd)
+	}
+
+	return out
+}
+
+// Trims a loop at the start of a branch when a later point revisits the start after a meaningful arc and
+// the remaining tail leaves that endpoint. The returned array aliases the original points.
+function trimRetracedBranchStart(branch: GeoPoint[], tolerance: Angle, minLoopArc: Angle): GeoPoint[] {
+	if (branch.length < 4) return branch
+
+	const start = branch[0]
+	const minTailDistance = tolerance * CURVE_GAP_SPLIT_FACTOR
+	let arc = 0
+	let farthestDistance = 0
+	let farthestIndex = 0
+
+	for (let k = 1; k < branch.length - 1; k++) {
+		arc += angularDistance(branch[k - 1], branch[k])
+		const distanceFromStart = angularDistance(start, branch[k])
+		if (distanceFromStart > farthestDistance) {
+			farthestDistance = distanceFromStart
+			farthestIndex = k
+		}
+
+		if (arc >= minLoopArc && distanceFromStart <= tolerance && farthestDistance > tolerance && angularDistance(branch[k], branch.at(-1)!) > minTailDistance) return branch.slice(farthestIndex)
+	}
+
+	return branch
+}
+
+// Trims a loop at the end of a branch using the same criterion as trimRetracedBranchStart, scanning the
+// branch in reverse. The returned array aliases the original points.
+function trimRetracedBranchEnd(branch: GeoPoint[], tolerance: Angle, minLoopArc: Angle): GeoPoint[] {
+	if (branch.length < 4) return branch
+
+	const end = branch.at(-1)!
+	const minTailDistance = tolerance * CURVE_GAP_SPLIT_FACTOR
+	let arc = 0
+	let farthestDistance = 0
+	let farthestIndex = branch.length - 1
+
+	for (let k = branch.length - 2; k > 0; k--) {
+		arc += angularDistance(branch[k + 1], branch[k])
+		const distanceFromEnd = angularDistance(end, branch[k])
+		if (distanceFromEnd > farthestDistance) {
+			farthestDistance = distanceFromEnd
+			farthestIndex = k
+		}
+
+		if (arc >= minLoopArc && distanceFromEnd <= tolerance && farthestDistance > tolerance && angularDistance(branch[k], branch[0]) > minTailDistance) return branch.slice(0, farthestIndex + 1)
+	}
+
+	return branch
 }
 
 // Merges branches that are one physical limit the solver under-sampled across a fold cusp. At a longitude

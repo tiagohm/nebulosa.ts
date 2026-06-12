@@ -1629,6 +1629,18 @@ describe('branch-aware curve topology', () => {
 		expect(geometry.lines.penumbraSouth).toHaveLength(1)
 	})
 
+	test('2082-08-24 keeps the southern penumbral fold connected through S2', () => {
+		const { geometry } = geometryFor(2082, 8, 1)
+		const S2 = geometry.points.S2!
+
+		expect(geometry.lines.penumbraSouth).toHaveLength(1)
+		expect(Math.min(sphericalSeparation(S2.x, S2.y, geometry.lines.penumbraSouth[0][0].x, geometry.lines.penumbraSouth[0][0].y), sphericalSeparation(S2.x, S2.y, geometry.lines.penumbraSouth[0].at(-1)!.x, geometry.lines.penumbraSouth[0].at(-1)!.y))).toBeLessThan(1e-9)
+		expect(maxBranchSegment(geometry.lines.penumbraSouth)).toBeLessThanOrEqual(MAX_DRAWABLE_GAP)
+
+		const paths = solarEclipseMapToSvgPaths(geometry, projection)
+		expect(longestProjectedSegment(paths.penumbraSouth)).toBeLessThan(MAP_WIDTH / 2)
+	}, 3000)
+
 	test('2026-08-12 keeps the north-polar partial boundary anchored', () => {
 		const { eclipse, elements } = geometryFor(2026, 8, 1)
 		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: STEP, maxAngularStep: STEP, includeRiseSetCurves: true, riseSetStep: 600 })
