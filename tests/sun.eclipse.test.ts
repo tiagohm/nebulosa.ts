@@ -1684,6 +1684,28 @@ describe('branch-aware curve topology', () => {
 		}
 	})
 
+	// 1977-04-08 (S1) and 1994-05-10 (N2) are oblique partial limits whose penumbral terminator cusp is the
+	// upper limb crossing while the traced rise/set branch follows the lower crossing ~2-3 deg away. Forcing
+	// the cusp onto that branch used to splice a spurious triangular spike (a ~3 deg detour edge) up to the
+	// cusp. The cusp insertion must now be rejected when it is off the curve, so every rise/set edge stays
+	// near the 1 deg sample spacing and never spikes to the cusp.
+	for (const [name, year, month, day] of [
+		['1977-04-08', 1977, 4, 8],
+		['1994-05-10', 1994, 5, 10],
+	] as const) {
+		test(`${name} rise/set curve has no off-curve cusp spike`, () => {
+			const eclipse = nearestSolarEclipse(timeYMD(year, month, day), true)
+			const elements = computePolynomialBesselianElements(eclipse.maximalTime, getSunMoonPosition)
+			const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: STEP, maxAngularStep: STEP, includeRiseSetCurves: true, riseSetStep: 600 })
+
+			expect(geometry.lines.riseSetCurves.length).toBeGreaterThan(0)
+			// The historical spikes were ~2-3 deg; a correctly sampled rise/set edge stays near the 1 deg step.
+			for (const branch of geometry.lines.riseSetCurves) {
+				for (let k = 1; k < branch.length; k++) expect(sphericalSeparation(branch[k - 1].x, branch[k - 1].y, branch[k].x, branch[k].y)).toBeLessThan(deg(1.5))
+			}
+		})
+	}
+
 	test('2024-04-08 connects N2 to the northern penumbral limit', () => {
 		const { geometry } = geometryFor(2024, 4, 1)
 		const N2 = geometry.points.N2!

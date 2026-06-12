@@ -2371,6 +2371,13 @@ function nearestContactByJd(jd: number | undefined, contacts: readonly GeoPoint[
 
 const RISE_SET_CUSP_INSERT_MAX_GAP = DEFAULT_MAX_ANGULAR_STEP * CURVE_GAP_SPLIT_FACTOR
 
+// Maximum detour (radians) a cusp insertion may add to a rise/set curve. A penumbral-limit terminator cusp
+// lies on the rise/set locus where that locus is correctly traced, so a genuine insertion barely bends the
+// curve (the detour is near zero). A large detour means the cusp is the OTHER limb crossing at that instant
+// — an upper track the branch tracer did not follow — so splicing it in would draw a spurious triangular
+// spike from the curve up to the cusp. Such an insertion is rejected; the cusp remains a marker only.
+const RISE_SET_CUSP_MAX_DETOUR = DEFAULT_MAX_ANGULAR_STEP
+
 function insertRiseSetCuspPoints(curves: readonly GeoPoint[][], cusps: readonly (GeoPoint | undefined)[]) {
 	const out = curves.map((curve) => curve.slice())
 
@@ -2401,7 +2408,8 @@ function insertRiseSetCuspPoints(curves: readonly GeoPoint[][], cusps: readonly 
 			}
 		}
 
-		if (bestCurve < 0) continue
+		// Reject an off-curve cusp whose insertion would spike the rise/set curve toward a point it does not pass through.
+		if (bestCurve < 0 || bestCost > RISE_SET_CUSP_MAX_DETOUR) continue
 
 		const curve = out[bestCurve]
 		if (!samePoint(curve[bestIndex - 1], cusp) && !samePoint(curve[bestIndex], cusp)) curve.splice(bestIndex, 0, cusp)
