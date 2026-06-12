@@ -122,6 +122,11 @@ export function toHms(angle: Angle): [number, number, number] {
 	return [Math.trunc(h), Math.trunc(m), s]
 }
 
+// Wrap-safe angular difference in [-PI, PI]; never compare longitudes with a plain subtraction.
+export function safeAngularDifference(a: Angle, b: Angle) {
+	return Math.atan2(Math.sin(a - b), Math.cos(a - b))
+}
+
 const ANGLE = '\\d+(?:\\.\\d+)?'
 const SIGNED_ANGLE = `[-+]?${ANGLE}`
 const UNIT = '[^\\d-+\\s]'

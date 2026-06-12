@@ -5,7 +5,7 @@ import type { Point } from './geometry'
 import { clamp } from './math'
 import { bisection, brentMinimize } from './optimization'
 // oxfmt-ignore
-import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, evaluateBesselian, F, findMaximumPoint, hourAngleFromLongitude, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type GeoPoint, type InstantBesselianElements, type PolynomialBesselianElements, type SolarEclipseContactOptions, type SunMoonPosition } from './sun.eclipse'
+import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, evaluateBesselian, F, findMaximumPoint, hourAngleFromLongitude, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type GeoPoint, type InstantBesselianElements, type PolynomialBesselianElements, type SolarEclipseContactOptions, type SunMoonPosition } from './sun.eclipse.map'
 import { type Time, timeShift, toJulianDay, tt } from './time'
 
 // Local solar eclipse circumstances ("Local View"): for a single geographic point this module resolves

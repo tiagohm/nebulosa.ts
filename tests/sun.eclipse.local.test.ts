@@ -2,18 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import { deg, normalizeAngle } from '../src/angle'
 import { ASEC2RAD, PI, RAD2DEG, TAU } from '../src/constants'
 import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
-import { computePolynomialBesselianElements, computeSunMoonPositionAt, type PolynomialBesselianElements } from '../src/sun.eclipse'
+import { computePolynomialBesselianElements, type PolynomialBesselianElements } from '../src/sun.eclipse.map'
 // oxfmt-ignore
 import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, } from '../src/sun.eclipse.local'
-import { timeToDate, timeYMD, toJulianDay, type Time } from '../src/time'
-import * as elpmpp02 from '../src/elpmpp02'
-import * as vsop87e from '../src/vsop87e'
+import { timeToDate, timeYMD, toJulianDay } from '../src/time'
 import { sphericalSeparation } from '../src/geometry'
-
-// Same physical Sun/Moon source used to build the elements, as the local layer prefers.
-function sunMoonPosition(t: Time) {
-	return computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
-}
+import { sunMoonPosition } from './sun.eclipse.test'
 
 function viewOptions(overrides: Partial<LocalSolarEclipseViewOptions> = {}): LocalSolarEclipseViewOptions {
 	return { width: 450, height: 160, selectedEvent: 'MAX', orientationMode: 'zenith', solarRadiusPx: 34, includeGhostDisks: true, includeHorizon: true, horizonBandPaddingPx: 4, ...overrides }

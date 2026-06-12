@@ -1,16 +1,16 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
 import type { PositionAndVelocityOverTime } from './astrometry'
-import { AU_KM, DAYSEC, DAYSPERJY, DEG2RAD, EARTH_RADIUS_KM, J2000, LIGHT_TIME_AU, PI, PIOVERTWO, RAD2DEG, SPEED_OF_LIGHT_AU_DAY, TAU } from './constants'
+import { AU_KM, DAYSEC, DAYSPERJY, DEG2RAD, EARTH_RADIUS_KM, J2000, LIGHT_TIME_AU, PI, PIOVERTWO, RAD2DEG, SPEED_OF_LIGHT_AU_DAY, TAU, WGS84_FLATTENING } from './constants'
 import { deltaTByEspenakMeeus2006 } from './deltat'
 import { eraAb, eraGst06a, eraP2s, eraS2p } from './erfa'
-import { sphericalDestination, sphericalInterpolate, sphericalSeparation, type Point } from './geometry'
+import { sphericalInterpolate, sphericalSeparation, type Point } from './geometry'
 import { matMulVec } from './mat3'
 import { clamp, type NumberArray } from './math'
 import { bisection, brentMinimize, brentRoot, type RootFindingOptions } from './optimization'
 import type { Projection, ProjectionPolylineOptions } from './projection'
 import { polynomialRegression } from './regression'
 import type { SolarEclipse } from './sun'
-import { precessionNutationMatrix, Timescale, timeShift, timeSubtract, toJulianDay, tt, type Time } from './time'
+import { precessionNutationMatrix, timeShift, timeSubtract, toJulianDay, tt, type Time } from './time'
 import type { Writable } from './types'
 import { vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMut } from './vec3'
 
@@ -31,15 +31,12 @@ import { vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMu
 //   - Delta T in seconds; times as Time or Julian Day; distances in Earth equatorial radii;
 //   - longitude is east-positive in [-PI, PI].
 
-// All Earth-ellipsoid constants derive from a single flattening definition (WGS84) so the limb,
-// projection and contact geometry stay mutually consistent.
-export const EARTH_FLATTENING = 1 / 298.257223563
 // Earth polar/equatorial radius ratio (1 - flattening).
-export const F = 1 - EARTH_FLATTENING
+export const F = 1 - WGS84_FLATTENING
 // Reciprocal of F, used by the geographic-latitude conversion.
-const INV_F = 1 / F
+export const INV_F = 1 / F
 // Squared eccentricity of the Earth ellipsoid used for limb flattening, e^2 = 1 - (b/a)^2.
-const EARTH_E2 = 1 - F * F
+export const EARTH_E2 = 1 - F * F
 // Callers building PolynomialBesselianElements from a dynamical-time (TDT) tabulation set deltaTLongitudeCorrection to
 // DELTA_T_LONGITUDE_FACTOR * deltaT; elements with UT-based mu (this module's own) use 0.
 export const DELTA_T_LONGITUDE_FACTOR = 0.00417807 * DEG2RAD
@@ -1581,7 +1578,7 @@ function solveCurveMidpointBetween(pbe: PolynomialBesselianElements, a: GeoPoint
 // as a drawable discontinuity and split. Normal cusp sparsity stays around the angular step (~2 deg at the
 // default resolution), well below this, so clean eclipses are never split; only a solver jump or an
 // unsampled fold cusp (e.g. the 2005-04-08 southern penumbral spike) exceeds it.
-const BRANCH_MAX_DRAWABLE_GAP = 5 * DEG2RAD
+export const BRANCH_MAX_DRAWABLE_GAP = 5 * DEG2RAD
 
 // Traces one drawable eclipse curve family as branches, preserving the solver's continuity arcs instead of
 // flattening them into a single polyline. Each branch from findCurveBranches is already a densified,
@@ -1607,19 +1604,14 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 
 	const deduped = deduplicateBranches(branches, maxAngularStep)
 	const reconnected = reconnectBranchCusps(deduped, pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
-	const pieces = reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	let pieces = reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
 	const reconnectedPieces = reconnectBranchCusps(deduplicateBranches(pieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
-	const finalPieces = trimRetracedBranchEnds(
-		reconnectedPieces.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap)),
-		maxAngularStep,
-		maxDrawableGap,
-	)
+	pieces = reconnectedPieces.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	const finalPieces = trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap)
 	const finalReconnected = reconnectBranchCusps(deduplicateBranches(finalPieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
 	const foldStep = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
-	return deduplicateBranches(
-		finalReconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap)),
-		maxAngularStep,
-	).map((branch) => trimFoldBackEndpoints(branch, foldStep))
+	pieces = finalReconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	return deduplicateBranches(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), maxAngularStep).map((branch) => trimFoldBackEndpoints(branch, foldStep))
 }
 
 // Drops a stray endpoint vertex that folds the branch back onto an earlier part of itself. At a longitude
@@ -1833,7 +1825,7 @@ function trimRetracedBranchEnd(branch: GeoPoint[], tolerance: Angle, minLoopArc:
 function reconnectBranchCusps(branches: readonly GeoPoint[][], pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, maxDrawableGap: Angle, refractionMode: RefractionMode, allowTouchingMerge = true): GeoPoint[][] {
 	const result = branches.map((branch) => branch.slice())
 
-	for (;;) {
+	while (true) {
 		let bestGap = Infinity
 		let bestA = -1
 		let bestB = -1
@@ -2157,10 +2149,8 @@ export function splitAtMaxAbsLatitude(points: readonly GeoPoint[]) {
 function reconnectSplitCurveCusps(branches: readonly GeoPoint[][], pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode) {
 	const maxDrawableGap = Math.max(BRANCH_MAX_DRAWABLE_GAP, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
 	const reconnected = reconnectBranchCusps(deduplicateBranches(branches, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode, false)
-	return deduplicateBranches(
-		reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap)),
-		maxAngularStep,
-	)
+	const pieces = reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	return deduplicateBranches(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), maxAngularStep)
 }
 
 function nearestCurveSample(point: GeoPoint, branches: readonly (readonly GeoPoint[])[], maxDistance: Angle) {
