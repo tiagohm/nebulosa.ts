@@ -362,7 +362,23 @@ Do not report:
 
 # Before finishing a change
 
-- Leave the touched area with zero TypeScript errors and passing related tests.
-- Run the closest targeted tests, then `bun run lint`.
-- Commit messages: English, all lowercase except acronyms and file names, and starting with a present-tense verb such as `implement`, `fix`, `improve`, `update`, or `use`.
-- After all green, commit only the touched changes.
+* Leave the touched area with zero TypeScript errors and passing related tests.
+* Run the closest targeted tests first, then run `bun run lint` and `bun run fmt`.
+* Fix any regression introduced by the change before committing.
+* Review the diff and make sure it contains only intentional changes.
+* Do not commit unrelated formatting, generated files, debug logs, temporary code, or local-only configuration.
+* Commit only the touched changes after all relevant checks are green.
+
+## Commit message guidelines
+
+* Write commit messages in English.
+* Use lowercase text, except for acronyms, proper nouns, package names, and file names.
+* Start with a present-tense imperative verb, such as `implement`, `fix`, `improve`, `update`, `use`, `remove`, `rename`, or `refactor`.
+* Keep the subject concise and specific. Prefer describing the actual change over a generic action.
+* Avoid vague subjects such as `fix bug`, `update code`, `changes`, or `wip`.
+* Use one logical change per commit.
+* Do not mention implementation noise unless it is relevant to the change.
+* Add a commit body when the reason, trade-off, migration step, or behavior change is not obvious from the subject.
+* In the body, explain why the change was made and any important side effects.
+* Reference issues, tickets, or follow-up work when applicable.
+* Mention breaking changes explicitly.
