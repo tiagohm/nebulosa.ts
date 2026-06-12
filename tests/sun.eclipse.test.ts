@@ -1686,6 +1686,16 @@ describe('branch-aware curve topology', () => {
 		}
 	})
 
+	test('2024-04-08 connects N2 to the northern penumbral limit', () => {
+		const { geometry } = geometryFor(2024, 4, 1)
+		const N2 = geometry.points.N2!
+		const branch = geometry.lines.penumbraNorth.find((piece) => piece.some((point) => sphericalSeparation(N2.x, N2.y, point.x, point.y) < 1e-9))
+
+		expect(branch).toBeDefined()
+		expect(branch!.length).toBeGreaterThan(100)
+		expect(Math.min(sphericalSeparation(N2.x, N2.y, branch![0].x, branch![0].y), sphericalSeparation(N2.x, N2.y, branch!.at(-1)!.x, branch!.at(-1)!.y))).toBeLessThan(1e-9)
+	})
+
 	for (const fixture of CASES) {
 		describe(fixture.name, () => {
 			const { elements, geometry } = geometryFor(fixture.date[0], fixture.date[1], fixture.date[2])

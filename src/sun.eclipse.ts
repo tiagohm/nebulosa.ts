@@ -92,6 +92,9 @@ const BOUNDARY_REFINEMENT_STEPS = 18
 // maxAngularStep, so a wider gap is a genuine discontinuity (the curve left the sunlit hemisphere)
 // that must not be bridged by a straight chord.
 const CURVE_GAP_SPLIT_FACTOR = 4
+// Near the poles, a short great-circle step can still span many degrees of longitude and render as a kink
+// in cylindrical maps, so bridge densification also watches longitude above this latitude.
+const CURVE_POLAR_LONGITUDE_REFINEMENT_LATITUDE = 80 * DEG2RAD
 // Minimum Julian Day separation between distinct points on a time-parametrized curve; points closer
 // than this in time (~0.1 s, far below the minutes-apart sampling of any curve) are the same instant
 // reached from different seeds and are collapsed to one.
@@ -422,6 +425,22 @@ function fitCubic(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 
 function angularDistance(a: GeoPoint, b: GeoPoint) {
 	return sphericalSeparation(a.x, a.y, b.x, b.y)
+}
+
+function longitudeGap(a: GeoPoint, b: GeoPoint) {
+	const gap = Math.abs(a.x - b.x)
+	return gap > PI ? TAU - gap : gap
+}
+
+function curveGapNeedsRefinement(a: GeoPoint, b: GeoPoint, maxAngularStep: Angle) {
+	if (angularDistance(a, b) > maxAngularStep) return true
+	if (Math.max(Math.abs(a.y), Math.abs(b.y)) <= CURVE_POLAR_LONGITUDE_REFINEMENT_LATITUDE) return false
+	return Math.hypot(longitudeGap(a, b), a.y - b.y) > maxAngularStep
+}
+
+function curveBridgeGapNeedsRefinement(a: GeoPoint, b: GeoPoint, maxAngularStep: Angle) {
+	if (curveGapNeedsRefinement(a, b, maxAngularStep)) return true
+	return Math.max(Math.abs(a.y), Math.abs(b.y)) > CURVE_POLAR_LONGITUDE_REFINEMENT_LATITUDE && Math.hypot(longitudeGap(a, b), a.y - b.y) > maxAngularStep * 0.25
 }
 
 function interpolateGreatCirclePoint(a: GeoPoint, b: GeoPoint, fraction: number): GeoPoint {
@@ -1523,7 +1542,7 @@ function mendCurveCusps(points: GeoPoint[], pbe: PolynomialBesselianElements, i:
 // then each endpoint) and the first one that satisfies betweenness is kept, preventing a seed from
 // snapping onto the other arc and dropping the bridge.
 function bridgeCurveGap(out: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode, depth: number) {
-	if (depth >= SEGMENT_REFINEMENT_MAX_DEPTH || !(angularDistance(a, b) > maxAngularStep)) return
+	if (depth >= SEGMENT_REFINEMENT_MAX_DEPTH || !curveBridgeGapNeedsRefinement(a, b, maxAngularStep)) return
 
 	const mid = solveCurveMidpointBetween(pbe, a, b, i, G, refractionMode)
 	if (!mid) return
@@ -1621,6 +1640,7 @@ const CUSP_RECONNECT_OVERLAP_ARC = 10 * DEG2RAD
 // cap can zigzag across the seam. The gate is local to the proposed bridge: a branch may later reach the
 // polar cap and still be reconnected through a lower-latitude endpoint.
 const CUSP_RECONNECT_POLE_LATITUDE = 85 * DEG2RAD
+const CUSP_RECONNECT_POLAR_LONGITUDE_LIMIT = 30 * DEG2RAD
 
 function pointInReconnectPolarCap(point: GeoPoint) {
 	return Math.abs(point.y) > CUSP_RECONNECT_POLE_LATITUDE
@@ -1629,6 +1649,22 @@ function pointInReconnectPolarCap(point: GeoPoint) {
 function bridgeEntersReconnectPolarCap(bridge: readonly GeoPoint[]) {
 	for (const point of bridge) if (pointInReconnectPolarCap(point)) return true
 	return false
+}
+
+function bridgeHasLargePolarLongitudeStep(a: GeoPoint, b: GeoPoint, bridge: readonly GeoPoint[]) {
+	let previous = a
+
+	for (const point of bridge) {
+		if (Math.min(Math.abs(previous.y), Math.abs(point.y)) > CUSP_RECONNECT_POLE_LATITUDE && longitudeGap(previous, point) > CUSP_RECONNECT_POLAR_LONGITUDE_LIMIT) return true
+		previous = point
+	}
+
+	return Math.min(Math.abs(previous.y), Math.abs(b.y)) > CUSP_RECONNECT_POLE_LATITUDE && longitudeGap(previous, b) > CUSP_RECONNECT_POLAR_LONGITUDE_LIMIT
+}
+
+function canReconnectPolarCusp(a: GeoPoint, b: GeoPoint, bridge: readonly GeoPoint[], gap: Angle, maxDrawableGap: Angle) {
+	if (!pointInReconnectPolarCap(a) && !pointInReconnectPolarCap(b) && !bridgeEntersReconnectPolarCap(bridge)) return true
+	return gap <= maxDrawableGap && !bridgeHasLargePolarLongitudeStep(a, b, bridge)
 }
 
 // Re-solves the densified arc strictly between a and b, returning it only when the whole chain a -> arc -> b
@@ -1691,10 +1727,9 @@ function reconnectBranchCusps(branches: readonly GeoPoint[][], pbe: PolynomialBe
 						const gap = angularDistance(endsA[ea], endsB[eb])
 						if (gap > CUSP_RECONNECT_LIMIT || gap >= bestGap) continue
 						if (!allowTouchingMerge && gap < CURVE_SPATIAL_EPSILON) continue
-						if (pointInReconnectPolarCap(endsA[ea]) || pointInReconnectPolarCap(endsB[eb])) continue
 
 						const bridge = gap <= maxAngularStep ? [] : solveContinuousBridge(pbe, endsA[ea], endsB[eb], i, G, maxAngularStep, maxDrawableGap, refractionMode)
-						if (!bridge || bridgeEntersReconnectPolarCap(bridge)) continue
+						if (!bridge || !canReconnectPolarCusp(endsA[ea], endsB[eb], bridge, gap, maxDrawableGap)) continue
 
 						// Orient A so endpoint ea is the joint (reverse when it is the start) and B so endpoint eb
 						// is the joint (reverse when it is the end), then splice the bridge between them.
@@ -1893,7 +1928,7 @@ const SEGMENT_REFINEMENT_MAX_DEPTH = 8
 // great-circle-interpolated coordinates and solved, so the inserted points are physical solutions
 // (never interpolated artifacts) and every emitted step honors maxAngularStep up to the depth limit.
 function appendRefinedSegment(points: GeoPoint[], pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE, depth = 0) {
-	if (depth >= SEGMENT_REFINEMENT_MAX_DEPTH || !(angularDistance(a, b) > maxAngularStep)) return
+	if (depth >= SEGMENT_REFINEMENT_MAX_DEPTH || !curveGapNeedsRefinement(a, b, maxAngularStep)) return
 
 	const intermediate = interpolateGreatCirclePoint(a, b, 0.5)
 	const mid = findEclipseCurvePoint(pbe, intermediate.x, intermediate.y, i, G, refractionMode)
