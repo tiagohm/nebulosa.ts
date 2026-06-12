@@ -1671,9 +1671,11 @@ describe('branch-aware curve topology', () => {
 	test('2021-12-04 keeps the south-polar umbra fold connected without clipped fill', () => {
 		const { geometry } = geometryFor(2021, 12, 1)
 		const rings = computeSolarEclipseFillGeometry(geometry)
+		const U3 = geometry.points.U3!
 
 		expect(geometry.lines.umbraSouth).toHaveLength(2)
 		expect(rings).toHaveLength(2)
+		expect(Math.min(...geometry.lines.umbraSouth.flat().map((point) => sphericalSeparation(U3.x, U3.y, point.x, point.y)))).toBeLessThan(1e-9)
 		for (const ring of rings) {
 			for (let i = 0; i < ring.length; i++) {
 				const a = ring[i]

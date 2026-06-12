@@ -2003,6 +2003,33 @@ function reconnectSplitCurveCusps(branches: readonly GeoPoint[][], pbe: Polynomi
 	)
 }
 
+function nearestCurveSample(point: GeoPoint, branches: readonly (readonly GeoPoint[])[], maxDistance: Angle) {
+	let best: GeoPoint | undefined
+	let bestDistance = maxDistance
+
+	for (const branch of branches) {
+		for (const sample of branch) {
+			const distance = angularDistance(point, sample)
+			if (distance < bestDistance) {
+				best = sample
+				bestDistance = distance
+			}
+		}
+	}
+
+	return best
+}
+
+function alignUmbralContactPoints(points: Writable<SolarEclipseContactPoints>, branches: readonly (readonly GeoPoint[])[], maxAngularStep: Angle) {
+	for (const key of ['U1', 'U2', 'U3', 'U4'] as const) {
+		const point = points[key]
+		if (!point) continue
+
+		const sample = nearestCurveSample(point, branches, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
+		if (sample) points[key] = { x: sample.x, y: sample.y, jd: point.jd }
+	}
+}
+
 // E. RISE/SET CURVES
 
 // Maximum recursion depth when subdividing a rise/set step in time to trace the true curve.
@@ -2407,6 +2434,7 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		// two sub-polylines that meet at the apex. Branches are never joined across a discontinuity.
 		umbraNorth = reconnectSplitCurveCusps(findCurveBranchPoints(pbe, 1, 1, curveOptions).flatMap(splitAtMaxAbsLatitude), pbe, 1, 1, maxAngularStep, refractionMode)
 		umbraSouth = reconnectSplitCurveCusps(findCurveBranchPoints(pbe, -1, 1, curveOptions).flatMap(splitAtMaxAbsLatitude), pbe, -1, 1, maxAngularStep, refractionMode)
+		alignUmbralContactPoints(points, [...umbraNorth, ...umbraSouth], maxAngularStep)
 	}
 
 	if (hasCentralLine) {
