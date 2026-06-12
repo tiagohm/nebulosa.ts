@@ -1673,7 +1673,7 @@ function branchRetraces(branch: readonly GeoPoint[], tolerance: Angle, minArcSep
 // succeeds) and the merged branch does not retrace itself: a true discontinuity has no connecting curve, and
 // a pole-degenerate bridge folds back, so both are left as separate branches and no spike is ever drawn.
 // Pairs that already touch are skipped so nothing is retraced.
-function reconnectBranchCusps(branches: readonly GeoPoint[][], pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, maxDrawableGap: Angle, refractionMode: RefractionMode): GeoPoint[][] {
+function reconnectBranchCusps(branches: readonly GeoPoint[][], pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, maxDrawableGap: Angle, refractionMode: RefractionMode, allowTouchingMerge = true): GeoPoint[][] {
 	const result = branches.map((branch) => branch.slice())
 
 	for (;;) {
@@ -1690,6 +1690,7 @@ function reconnectBranchCusps(branches: readonly GeoPoint[][], pbe: PolynomialBe
 					for (let eb = 0; eb < 2; eb++) {
 						const gap = angularDistance(endsA[ea], endsB[eb])
 						if (gap > CUSP_RECONNECT_LIMIT || gap >= bestGap) continue
+						if (!allowTouchingMerge && gap < CURVE_SPATIAL_EPSILON) continue
 						if (pointInReconnectPolarCap(endsA[ea]) || pointInReconnectPolarCap(endsB[eb])) continue
 
 						const bridge = gap <= maxAngularStep ? [] : solveContinuousBridge(pbe, endsA[ea], endsB[eb], i, G, maxAngularStep, maxDrawableGap, refractionMode)
@@ -1807,7 +1808,7 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 				if (seededContinues) {
 					point = seeded
 				} else {
-					if (activeBySeed[seedIndex]) pushDistinct(activeBySeed[seedIndex]!, refineCurveBoundary(pbe, previous.x, lon, previous.y, true, i, G, refractionMode))
+					if (activeBySeed[seedIndex]) pushDistinct(activeBySeed[seedIndex]!, refineCurveBoundary(pbe, previous.x, lon, previous, true, i, G, refractionMode))
 					activeBySeed[seedIndex] = undefined
 					previous = undefined
 				}
@@ -1817,11 +1818,11 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 
 			if (previous && !point) {
 				// The family just disappeared: refine the exit longitude into the open branch, then close it.
-				if (activeBySeed[seedIndex]) pushDistinct(activeBySeed[seedIndex]!, refineCurveBoundary(pbe, previous.x, lon, previous.y, true, i, G, refractionMode))
+				if (activeBySeed[seedIndex]) pushDistinct(activeBySeed[seedIndex]!, refineCurveBoundary(pbe, previous.x, lon, previous, true, i, G, refractionMode))
 				activeBySeed[seedIndex] = undefined
 			} else if (!previous && point && lon > -PI) {
 				// The family just appeared: open a new branch and refine the entry longitude into it first.
-				pushDistinct(openBranch(seedIndex), refineCurveBoundary(pbe, lon - longitudeStep, lon, point.y, false, i, G, refractionMode))
+				pushDistinct(openBranch(seedIndex), refineCurveBoundary(pbe, lon - longitudeStep, lon, point, false, i, G, refractionMode))
 			}
 
 			if (point) {
@@ -1837,16 +1838,36 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 	return branches
 }
 
+function findNearestCurvePointAtLongitude(pbe: PolynomialBesselianElements, longitude: Angle, anchor: GeoPoint, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode) {
+	let best: GeoPoint | undefined
+	let bestDistance = Infinity
+
+	for (const seedLatitude of [anchor.y, ...CURVE_SEED_LATITUDES]) {
+		const point = findEclipseCurvePoint(pbe, longitude, seedLatitude, i, G, refractionMode)
+		if (!point) continue
+
+		const distance = angularDistance(anchor, point)
+		if (distance < bestDistance) {
+			best = point
+			bestDistance = distance
+		}
+	}
+
+	return best
+}
+
 // Refines the longitude where a curve family appears or disappears by bisection between the last
-// longitude where the solver converged and the first where it did not.
-function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, seed: Angle, validLow: boolean, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE) {
+// longitude where the solver converged and the first where it did not. A fold can have two roots at the
+// same longitude, so each midpoint is selected by proximity to the branch anchor instead of a single Newton
+// seed; otherwise the endpoint can jump to the other side of the fold and leave a visible cusp gap.
+function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, anchor: GeoPoint, validLow: boolean, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE) {
 	let low = aLon
 	let high = bLon
 	let best: GeoPoint | undefined
 
 	for (let step = 0; step < BOUNDARY_REFINEMENT_STEPS; step++) {
 		const mid = (low + high) * 0.5
-		const point = findEclipseCurvePoint(pbe, mid, seed, i, G, refractionMode)
+		const point = G === 1 ? findNearestCurvePointAtLongitude(pbe, mid, anchor, i, G, refractionMode) : findEclipseCurvePoint(pbe, mid, anchor.y, i, G, refractionMode)
 
 		if (point && validLow) {
 			best = point
@@ -1971,6 +1992,15 @@ export function splitAtMaxAbsLatitude(points: readonly GeoPoint[]) {
 
 	// Share the apex point between both branches so they meet without a visible gap.
 	return [points.slice(0, index + 1), points.slice(index)]
+}
+
+function reconnectSplitCurveCusps(branches: readonly GeoPoint[][], pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode) {
+	const maxDrawableGap = Math.max(BRANCH_MAX_DRAWABLE_GAP, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
+	const reconnected = reconnectBranchCusps(deduplicateBranches(branches, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode, false)
+	return deduplicateBranches(
+		reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap)),
+		maxAngularStep,
+	)
 }
 
 // E. RISE/SET CURVES
@@ -2375,8 +2405,8 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		Object.assign(points, findUmbraContactPoints(pbe, options))
 		// Each G = 1 branch is a continuity arc; split only at its latitude apex so a polar fold renders as
 		// two sub-polylines that meet at the apex. Branches are never joined across a discontinuity.
-		umbraNorth = findCurveBranchPoints(pbe, 1, 1, curveOptions).flatMap(splitAtMaxAbsLatitude)
-		umbraSouth = findCurveBranchPoints(pbe, -1, 1, curveOptions).flatMap(splitAtMaxAbsLatitude)
+		umbraNorth = reconnectSplitCurveCusps(findCurveBranchPoints(pbe, 1, 1, curveOptions).flatMap(splitAtMaxAbsLatitude), pbe, 1, 1, maxAngularStep, refractionMode)
+		umbraSouth = reconnectSplitCurveCusps(findCurveBranchPoints(pbe, -1, 1, curveOptions).flatMap(splitAtMaxAbsLatitude), pbe, -1, 1, maxAngularStep, refractionMode)
 	}
 
 	if (hasCentralLine) {

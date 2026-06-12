@@ -1605,6 +1605,7 @@ describe('branch-aware curve topology', () => {
 		{ name: '2003-11-23', date: [2003, 11, 1] },
 		{ name: '2008-02-07', date: [2008, 2, 1] },
 		{ name: '2009-01-26', date: [2009, 1, 1] },
+		{ name: '2021-12-04', date: [2021, 12, 1] },
 	] as const
 
 	// A forked/folded totality band (the 2008-02-07 annular over Antarctica) splits each limit into matching
@@ -1665,6 +1666,22 @@ describe('branch-aware curve topology', () => {
 		const { geometry } = geometryFor(2021, 6, 1)
 		expect(geometry.lines.umbraNorth.length + geometry.lines.umbraSouth.length).toBeGreaterThan(0)
 		expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(0)
+	})
+
+	test('2021-12-04 keeps the south-polar umbra fold connected without clipped fill', () => {
+		const { geometry } = geometryFor(2021, 12, 1)
+		const rings = computeSolarEclipseFillGeometry(geometry)
+
+		expect(geometry.lines.umbraSouth).toHaveLength(2)
+		expect(rings).toHaveLength(2)
+		for (const ring of rings) {
+			for (let i = 0; i < ring.length; i++) {
+				const a = ring[i]
+				const b = ring[(i + 1) % ring.length]
+				if (Math.abs(a.x - b.x) > PI) continue
+				expect(sphericalSeparation(a.x, a.y, b.x, b.y)).toBeLessThanOrEqual(deg(4))
+			}
+		}
 	})
 
 	for (const fixture of CASES) {
