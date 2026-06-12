@@ -557,7 +557,7 @@ function evaluateBesselianSample(pbe: PolynomialBesselianElements, time: Time): 
 	}
 }
 
-function besselianSampleAtJulianDay(pbe: PolynomialBesselianElements, jd: number) {
+export function besselianSampleAtJulianDay(pbe: PolynomialBesselianElements, jd: number) {
 	return evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
 }
 
@@ -1282,253 +1282,6 @@ export function findMaximumPoint(pbe: PolynomialBesselianElements) {
 
 	const beBest = besselianSampleAtJulianDay(pbe, julianDay0 + tBest * pbe.stepDays)
 	return projectClosestEarthLimbPoint(beBest, beBest.x, beBest.y) ?? atMaximum
-}
-
-// Summary circumstances of a globally distinguished central-eclipse point (greatest eclipse or greatest
-// duration), matching the NASA/Espenak "Greatest Eclipse and Greatest Duration" table.
-export interface SolarEclipseExtremeCircumstances {
-	// Geographic longitude, east-positive radians, normalized to [-PI, PI].
-	readonly longitude: Angle
-	// Geodetic latitude in radians.
-	readonly latitude: Angle
-	// Terrestrial (Dynamical) Time of the event (TT, i.e. TD).
-	readonly timeTD: Time
-	// Universal Time of the event (UT1 = TD - deltaT).
-	readonly timeUT1: Time
-	// Delta T applied (TT - UT1) in seconds.
-	readonly deltaT: number
-	// Geometric solar altitude at the event in radians.
-	readonly sunAltitude: Angle
-	// Solar azimuth at the event in radians, measured from North through East, normalized to [0, TAU).
-	readonly sunAzimuth: Angle
-	// Width of the central (umbral/antumbral) path on the ground in km; null when the point is not central.
-	readonly pathWidthKm: number | null
-	// Duration of the central (total/annular) phase in seconds; null when the point is not central.
-	readonly centralDurationSeconds: number | null
-	// Local eclipse character at the event; null when the point is not central.
-	readonly kind: HybridEclipseKind | null
-}
-
-// Local fundamental-plane "central gap" |L2| - distance (Earth equatorial radii) of a ground observer at
-// one instant: positive inside the umbral/antumbral cone, zero on the path edge, negative outside. Mirrors
-// the observer projection in sun.eclipse.local.ts; kept here so the core summary computations stay
-// self-contained (core never imports the local layer).
-// longitude: east-positive radians; latitude: geodetic radians.
-function centralConeGap(be: BesselianSample, longitude: Angle, latitude: Angle) {
-	const H = hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection)
-	const sinD = Math.sin(be.d)
-	const cosD = Math.cos(be.d)
-	const cosH = Math.cos(H)
-	const U = Math.atan(F * Math.tan(latitude))
-	const rhoSinPhi = F * Math.sin(U)
-	const rhoCosPhi = Math.cos(U)
-	const ksi = rhoCosPhi * Math.sin(H)
-	const eta = rhoSinPhi * cosD - rhoCosPhi * cosH * sinD
-	const zeta = rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
-	const distance = Math.hypot(be.x - ksi, be.y - eta)
-	return Math.abs(be.l2 - zeta * be.tanF2) - distance
-}
-
-// Solar azimuth (radians, from North through East, [0, TAU)) at a point and its instant, using the
-// shadow-axis declination as the Sun direction (exact on the central line). The standard horizontal
-// transform gives azimuth from the South through West; adding PI rotates it to the North-through-East
-// convention used by the NASA tables.
-function solarAzimuthAtPoint(pbe: PolynomialBesselianElements, point: GeoPoint) {
-	const be = besselianSampleAtJulianDay(pbe, point.jd!)
-	const H = hourAngleFromLongitude(point.x, be.mu, be.deltaTLongitudeCorrection)
-	const sinPhi = Math.sin(point.y)
-	const cosPhi = Math.cos(point.y)
-	return normalizeAngle(Math.atan2(Math.sin(H), Math.cos(H) * sinPhi - Math.tan(be.d) * cosPhi) + PI)
-}
-
-// Maximum half-window (days) searched on either side of the central instant for a cone crossing; longer
-// than any real central phase so the entry/exit are always bracketed.
-const MAX_CENTRAL_HALF_DURATION_DAYS = (20 * 60) / DAYSEC
-// Coarse step (days) for bracketing the cone crossings before bisection.
-const CENTRAL_DURATION_STEP_DAYS = 4 / DAYSEC
-
-// Bisects the cone crossing (where the central gap changes sign) between the central instant and the first
-// stepped sample that lies outside the cone, marching with the given signed step. Returns the crossing
-// Julian Day, or undefined when no crossing is found within the search half-window.
-function findConeCrossingJd(gapAtJd: (jd: number) => number, jdCenter: number, stepDays: number) {
-	let previousJd = jdCenter
-	for (let jd = jdCenter + stepDays; Math.abs(jd - jdCenter) <= MAX_CENTRAL_HALF_DURATION_DAYS; jd += stepDays) {
-		if (gapAtJd(jd) <= 0) {
-			let inside = previousJd
-			let outside = jd
-			for (let i = 0; i < 50 && Math.abs(outside - inside) > 1e-9; i++) {
-				const mid = (inside + outside) * 0.5
-				if (gapAtJd(mid) > 0) inside = mid
-				else outside = mid
-			}
-			return (inside + outside) * 0.5
-		}
-		previousJd = jd
-	}
-	return undefined
-}
-
-// Duration (seconds) of the central (total/annular) phase for a ground point under the shadow axis at
-// jdCenter: the span the point stays inside the umbral/antumbral cone. Returns null when the point is not
-// inside the cone at jdCenter (no central phase there).
-function centralPhaseDurationSeconds(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jdCenter: number) {
-	const gapAtJd = (jd: number) => centralConeGap(besselianSampleAtJulianDay(pbe, jd), longitude, latitude)
-	if (!(gapAtJd(jdCenter) > 0)) return null
-
-	const enter = findConeCrossingJd(gapAtJd, jdCenter, -CENTRAL_DURATION_STEP_DAYS)
-	const exit = findConeCrossingJd(gapAtJd, jdCenter, CENTRAL_DURATION_STEP_DAYS)
-	return enter === undefined || exit === undefined ? null : (exit - enter) * DAYSEC
-}
-
-// Surface step (km) marched outward when locating a shadow-path edge.
-const SHADOW_EDGE_STEP_KM = 2
-// Maximum half-width (km) searched for a path edge before giving up.
-const MAX_SHADOW_HALF_WIDTH_KM = 600
-// Number of bearings (over a half turn) probed for the narrowest central-shadow chord.
-const SHADOW_CHORD_BEARING_COUNT = 24
-
-// Distance (km) from a central point to the shadow-path edge along a bearing at a fixed instant: marches
-// outward until the central gap turns non-positive (leaves the cone) and bisects. Returns undefined when no
-// edge is found within MAX_SHADOW_HALF_WIDTH_KM.
-function centralShadowEdgeKm(gapAtGround: (longitude: Angle, latitude: Angle) => number, longitude: Angle, latitude: Angle, bearing: Angle) {
-	let previousKm = 0
-	for (let km = SHADOW_EDGE_STEP_KM; km <= MAX_SHADOW_HALF_WIDTH_KM; km += SHADOW_EDGE_STEP_KM) {
-		const [lon, lat] = sphericalDestination(longitude, latitude, bearing, km / EARTH_RADIUS_KM)
-		if (gapAtGround(lon, lat) <= 0) {
-			let inside = previousKm
-			let outside = km
-			for (let i = 0; i < 40 && outside - inside > 1e-3; i++) {
-				const mid = (inside + outside) * 0.5
-				const [mLon, mLat] = sphericalDestination(longitude, latitude, bearing, mid / EARTH_RADIUS_KM)
-				if (gapAtGround(mLon, mLat) > 0) inside = mid
-				else outside = mid
-			}
-			return (inside + outside) * 0.5
-		}
-		previousKm = km
-	}
-	return undefined
-}
-
-// Width (km) of the central (total/annular) shadow path on the ground at a central point and instant: the
-// narrowest bidirectional chord through the point, scanned over several bearings and refined around the best
-// one. Measuring on the surface keeps the near-horizon foreshortening implicit, avoiding the 1 / sin(altitude)
-// blow-up of a fundamental-plane estimate. Returns null when the point is not inside the central cone or no
-// opposite pair of edges is found.
-function computeCentralPathWidthKm(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jd: number) {
-	const be = besselianSampleAtJulianDay(pbe, jd)
-	const gapAtGround = (lon: Angle, lat: Angle) => centralConeGap(be, lon, lat)
-	if (!(gapAtGround(longitude, latitude) > 0)) return null
-
-	const chordWidthAtBearing = (bearing: Angle) => {
-		const forward = centralShadowEdgeKm(gapAtGround, longitude, latitude, bearing)
-		const backward = centralShadowEdgeKm(gapAtGround, longitude, latitude, bearing + PI)
-		return forward === undefined || backward === undefined ? undefined : forward + backward
-	}
-
-	const step = PI / SHADOW_CHORD_BEARING_COUNT
-	let best: number | null = null
-	let bestBearing = 0
-
-	for (let i = 0; i < SHADOW_CHORD_BEARING_COUNT; i++) {
-		const bearing = i * step
-		const width = chordWidthAtBearing(bearing)
-		if (width === undefined) continue
-		if (best === null || width < best) {
-			best = width
-			bestBearing = bearing
-		}
-	}
-
-	if (best === null) return null
-
-	try {
-		const refined = brentMinimize((bearing) => chordWidthAtBearing(normalizeAngle(bearing)) ?? MAX_SHADOW_HALF_WIDTH_KM * 4, bestBearing - step, bestBearing + step, { tolerance: 1e-4 })
-		if (Number.isFinite(refined.value) && refined.value < best) best = refined.value
-	} catch {
-		// Keep the discrete minimum when the refinement bracket is rejected.
-	}
-
-	return best
-}
-
-// Assembles the full summary circumstances at one central-eclipse point: geographic location, TD/UT1 times,
-// solar altitude and azimuth, and (when the point is central) the path width, central duration and character.
-function extremeCircumstancesAt(pbe: PolynomialBesselianElements, point: GeoPoint): SolarEclipseExtremeCircumstances {
-	const jd = point.jd!
-	const timeTD = timeAtJulianDay(pbe.time0, jd)
-	const shifted = timeShift(timeTD, -pbe.deltaT / DAYSEC, false)
-	const timeUT1: Time = { day: shifted.day, fraction: shifted.fraction, scale: Timescale.UT1, providers: pbe.time0.providers }
-	const centralDurationSeconds = centralPhaseDurationSeconds(pbe, point.x, point.y, jd)
-
-	return {
-		longitude: point.x,
-		latitude: point.y,
-		timeTD,
-		timeUT1,
-		deltaT: pbe.deltaT,
-		sunAltitude: solarAltitudeAtPoint(pbe, point),
-		sunAzimuth: solarAzimuthAtPoint(pbe, point),
-		pathWidthKm: computeCentralPathWidthKm(pbe, point.x, point.y, jd),
-		centralDurationSeconds,
-		kind: centralDurationSeconds === null ? null : centralLineKind(pbe, jd),
-	}
-}
-
-// Circumstances at the greatest eclipse: the instant the shadow axis passes closest to the Earth's center
-// (maximum magnitude). For a central eclipse this is the central point at that instant; for a partial or
-// non-central eclipse it is the limb point nearest the axis, and the path width / central duration are null.
-// Returns undefined only when no greatest-eclipse point can be projected.
-export function computeGreatestEclipseCircumstances(pbe: PolynomialBesselianElements): SolarEclipseExtremeCircumstances | undefined {
-	const point = findMaximumPoint(pbe)
-	return point ? extremeCircumstancesAt(pbe, point) : undefined
-}
-
-// Circumstances at the greatest duration: the point on the central line where the central (total/annular)
-// phase lasts longest, which is generally not the greatest-eclipse point. Searches the central line over the
-// contact window, evaluating the local central duration at each sampled central point and refining the
-// maximum. Returns undefined for an eclipse with no central line (partial or non-central).
-export function computeGreatestDurationCircumstances(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions): SolarEclipseExtremeCircumstances | undefined {
-	if (!centralAxisIntersectsEarth(pbe, options)) return undefined
-
-	const julianDay0 = toJulianDay(pbe.time0)
-	const tMaximum = (toJulianDay(pbe.maximumTime) - julianDay0) / pbe.stepDays
-	const span = contactSearchSpanDays(options) / pbe.stepDays
-
-	// Central-phase duration (seconds) at the central-line point reached at normalized time t, or 0 when the
-	// axis misses the Earth or the point is not central there (so the maximizer steers away from those t).
-	const durationAtT = (t: number) => {
-		const be = besselianSampleAtJulianDay(pbe, julianDay0 + t * pbe.stepDays)
-		const point = projectFundamentalPoint(be, be.x, be.y)
-		if (!point) return 0
-		return centralPhaseDurationSeconds(pbe, point.x, point.y, point.jd!) ?? 0
-	}
-
-	const steps = 128
-	let bestT = tMaximum
-	let bestDuration = -Infinity
-
-	for (let k = 0; k <= steps; k++) {
-		const t = tMaximum - span + (2 * span * k) / steps
-		const duration = durationAtT(t)
-		if (duration > bestDuration) {
-			bestDuration = duration
-			bestT = t
-		}
-	}
-
-	const half = (2 * span) / steps
-
-	try {
-		const minimum = brentMinimize((t) => -durationAtT(t), Math.max(tMaximum - span, bestT - half), Math.min(tMaximum + span, bestT + half))
-		if (-minimum.value > bestDuration) bestT = minimum.minimum
-	} catch {
-		// Keep the coarse-scan argmax when the refinement bracket is rejected.
-	}
-
-	const be = besselianSampleAtJulianDay(pbe, julianDay0 + bestT * pbe.stepDays)
-	const point = projectFundamentalPoint(be, be.x, be.y)
-	return point ? extremeCircumstancesAt(pbe, point) : undefined
 }
 
 // Finds one extreme endpoint of the central line (C1 when begin is true, C2 otherwise): the instant
@@ -2679,7 +2432,7 @@ function centralLineKindResidual(pbe: PolynomialBesselianElements, jd: number) {
 
 // Local eclipse character on the central line at one instant: total where the local umbral radius is
 // negative, annular otherwise.
-function centralLineKind(pbe: PolynomialBesselianElements, jd: number) {
+export function centralLineKind(pbe: PolynomialBesselianElements, jd: number) {
 	return centralLineKindResidual(pbe, jd) < 0 ? 'total' : 'annular'
 }
 
@@ -2867,7 +2620,7 @@ function assembleCenterLine(pbe: PolynomialBesselianElements, C1: GeoPoint | und
 
 // Geometric solar altitude (radians) of an observer at a limit point at its own instant. The two named
 // extremes of a grazing penumbral limit are its terminator cusps, where this drops to ~0.
-function solarAltitudeAtPoint(pbe: PolynomialBesselianElements, point: GeoPoint) {
+export function solarAltitudeAtPoint(pbe: PolynomialBesselianElements, point: GeoPoint) {
 	const be = besselianSampleAtJulianDay(pbe, point.jd!)
 	const H = hourAngleFromLongitude(point.x, be.mu, be.deltaTLongitudeCorrection)
 	const sinh = Math.sin(be.d) * Math.sin(point.y) + Math.cos(be.d) * Math.cos(point.y) * Math.cos(H)

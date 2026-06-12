@@ -1,16 +1,17 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, normalizeAngle } from '../src/angle'
-import { ASEC2RAD, PI, TAU } from '../src/constants'
+import { ASEC2RAD, PI, RAD2DEG, TAU } from '../src/constants'
 import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
 import { computePolynomialBesselianElements, computeSunMoonPositionAt, type PolynomialBesselianElements } from '../src/sun.eclipse'
 // oxfmt-ignore
-import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, } from '../src/sun.eclipse.local'
-import { timeYMD, toJulianDay } from '../src/time'
+import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, } from '../src/sun.eclipse.local'
+import { timeToDate, timeYMD, toJulianDay, type Time } from '../src/time'
 import * as elpmpp02 from '../src/elpmpp02'
 import * as vsop87e from '../src/vsop87e'
+import { sphericalSeparation } from '../src/geometry'
 
 // Same physical Sun/Moon source used to build the elements, as the local layer prefers.
-function sunMoonPosition(t: Parameters<typeof computeSunMoonPositionAt>[0]) {
+function sunMoonPosition(t: Time) {
 	return computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
 }
 
@@ -20,14 +21,21 @@ function viewOptions(overrides: Partial<LocalSolarEclipseViewOptions> = {}): Loc
 
 // The 2024-04-08 total eclipse, with elements and a consistent Sun/Moon source.
 const total2024 = (() => {
-	const eclipse = nearestSolarEclipse(timeYMD(2024, 4, 1), true)
+	const eclipse = nearestSolarEclipse(timeYMD(2024, 4, 8), true)
 	const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
 	return { eclipse, pbe }
 })()
 
 // The 2023-10-14 annular eclipse.
 const annular2023 = (() => {
-	const eclipse = nearestSolarEclipse(timeYMD(2023, 10, 1), true)
+	const eclipse = nearestSolarEclipse(timeYMD(2023, 10, 14), true)
+	const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+	return { eclipse, pbe }
+})()
+
+// The 2025-09-21 partial eclipse.
+const partial2025 = (() => {
+	const eclipse = nearestSolarEclipse(timeYMD(2025, 9, 21), true)
 	const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
 	return { eclipse, pbe }
 })()
@@ -614,5 +622,80 @@ describe('local view robustness', () => {
 		expect(max).toBeDefined()
 		expect(max!).toBeGreaterThan(fromJd - 0.15)
 		expect(max!).toBeLessThan(fromJd + 0.15)
+	})
+})
+
+describe('greatest eclipse and greatest duration circumstances', () => {
+	const eclipse = nearestSolarEclipse(timeYMD(1995, 4, 29), true)
+	const pbe = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+	const ge = computeGreatestEclipseCircumstances(pbe)!
+	const gd = computeGreatestDurationCircumstances(pbe)!
+
+	// Seconds elapsed since midnight of the time's own scale, for comparing against the published clock times.
+	function secondsOfDay(t: Parameters<typeof timeToDate>[0]) {
+		const [, , , hour, minute, second] = timeToDate(t)
+		return hour * 3600 + minute * 60 + second
+	}
+
+	// Reference values from NASA/GSFC for the 1995-04-29 annular eclipse ("Greatest Eclipse and Greatest
+	// Duration" table). The library fits approximate Besselian elements from VSOP87E/ELPMPP02 rather than the
+	// DE ephemeris, so the tolerances absorb that element-accuracy gap (largest on the small annular antumbra
+	// width) while still pinning every quantity to its physical value.
+	test('1995-04-29 greatest eclipse matches the published circumstances', () => {
+		expect(eclipse.type).toBe('annular')
+		expect(ge.kind).toBe('annular')
+
+		// TD 17:33:20.5, UT1 17:32:19.5.
+		expect(Math.abs(secondsOfDay(ge.time) - (17 * 3600 + 33 * 60 + 20.5))).toBeLessThan(30)
+		// TD - UT1 reproduces the applied Delta T, which matches the published 61 s for 1995.
+		expect(ge.deltaT).toBeCloseTo(61, 0)
+
+		// Latitude 04°51.0'S, Longitude 079°23.8'W.
+		expect(Math.abs(ge.latitude * RAD2DEG - -(4 + 51 / 60))).toBeLessThan(0.1)
+		expect(Math.abs(ge.longitude * RAD2DEG - -(79 + 23.8 / 60))).toBeLessThan(0.1)
+		// Sun altitude 70.2°, azimuth 347.5°.
+		expect(Math.abs(ge.sunAltitude * RAD2DEG - 70.2)).toBeLessThan(0.5)
+		expect(Math.abs(ge.sunAzimuth * RAD2DEG - 347.5)).toBeLessThan(1)
+		// Path width 195.5 km, central (annular) duration 06m36.74s = 396.74 s.
+		expect(ge.pathWidthKm!).toBeGreaterThan(175)
+		expect(ge.pathWidthKm!).toBeLessThan(205)
+		expect(Math.abs(ge.centralDurationSeconds! - 396.74)).toBeLessThan(8)
+	})
+
+	test('1995-04-29 greatest duration matches the published circumstances', () => {
+		expect(gd.kind).toBe('annular')
+
+		// TD 17:43:41.0, UT1 17:42:40.0.
+		expect(Math.abs(secondsOfDay(gd.time) - (17 * 3600 + 43 * 60 + 41))).toBeLessThan(30)
+
+		// Latitude 03°48.4'S, Longitude 077°00.9'W.
+		expect(Math.abs(gd.latitude * RAD2DEG - -(3 + 48.4 / 60))).toBeLessThan(0.1)
+		expect(Math.abs(gd.longitude * RAD2DEG - -(77 + 0.9 / 60))).toBeLessThan(0.1)
+		// Sun altitude 69.5°, azimuth 333.4°.
+		expect(Math.abs(gd.sunAltitude * RAD2DEG - 69.5)).toBeLessThan(0.5)
+		expect(Math.abs(gd.sunAzimuth * RAD2DEG - 333.4)).toBeLessThan(1)
+		// Path width 197.2 km, central (annular) duration 06m37.07s = 397.07 s.
+		expect(gd.pathWidthKm!).toBeGreaterThan(175)
+		expect(gd.pathWidthKm!).toBeLessThan(207)
+		expect(Math.abs(gd.centralDurationSeconds! - 397.07)).toBeLessThan(8)
+	})
+
+	test('greatest duration lasts at least as long as greatest eclipse and is a distinct, later point', () => {
+		// By definition the greatest-duration point maximizes the central phase, so it is not shorter than the
+		// duration at greatest eclipse, and for this eclipse it lies further along the path and later in time.
+		expect(gd.centralDurationSeconds!).toBeGreaterThanOrEqual(ge.centralDurationSeconds! - 1e-6)
+		expect(secondsOfDay(gd.time)).toBeGreaterThan(secondsOfDay(ge.time))
+		expect(sphericalSeparation(ge.longitude, ge.latitude, gd.longitude, gd.latitude)).toBeGreaterThan(deg(1))
+	})
+
+	test('a partial eclipse has no central line, so greatest duration is undefined', () => {
+		const partialPbe = partial2025.pbe
+		expect(computeGreatestDurationCircumstances(partialPbe)).toBeUndefined()
+		// Greatest eclipse still resolves a point for a partial eclipse, but without central path/duration.
+		const partialGe = computeGreatestEclipseCircumstances(partialPbe)!
+		expect(partialGe).toBeDefined()
+		expect(partialGe.centralDurationSeconds).toBeNull()
+		expect(partialGe.pathWidthKm).toBeNull()
+		expect(partialGe.kind).toBeNull()
 	})
 })

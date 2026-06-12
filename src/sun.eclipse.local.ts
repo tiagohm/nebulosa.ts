@@ -4,7 +4,8 @@ import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
 import { clamp } from './math'
 import { bisection, brentMinimize } from './optimization'
-import { evaluateBesselian, F, hourAngleFromLongitude, SUN_RADIUS_EARTH_RADII, type InstantBesselianElements, type PolynomialBesselianElements, type SunMoonPosition } from './sun.eclipse'
+// oxfmt-ignore
+import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, evaluateBesselian, F, findMaximumPoint, hourAngleFromLongitude, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type GeoPoint, type InstantBesselianElements, type PolynomialBesselianElements, type SolarEclipseContactOptions, type SunMoonPosition } from './sun.eclipse'
 import { type Time, timeShift, toJulianDay, tt } from './time'
 
 // Local solar eclipse circumstances ("Local View"): for a single geographic point this module resolves
@@ -77,8 +78,7 @@ export type LocalVisibilityKind = 'notVisible' | 'geometricOnlyBelowHorizon' | '
 export type LocalEventVisibility = 'aboveHorizon' | 'belowHorizon'
 
 // Vertical trend of the Sun over the eclipse, for composing "on sunrise/sunset" qualifiers: `setting` when
-// the Sun is descending across the contacts, `rising` when ascending, `none` when flat (near culmination) or
-// undetermined.
+// the Sun is descending across the contacts, `rising` when ascending, `none` when flat (near culmination) or undetermined.
 export type LocalSunMotion = 'rising' | 'setting' | 'none'
 
 // Orientation frame for the Local View geometry.
@@ -102,11 +102,8 @@ export interface LocalSolarEclipseCircumstancesOptions {
 	readonly includeLocalView?: boolean
 	// Local View geometry overrides merged onto the defaults.
 	readonly localView?: Partial<LocalSolarEclipseViewOptions>
-
 	// Strongly preferred for accurate Sun altitude, P/Z, apparent diameters and Local View.
-	//
-	// This should be the same physical source used to build the PolynomialBesselianElements, e.g.
-	// VSOP/ELP + ERFA.
+	// This should be the same physical source used to build the PolynomialBesselianElements, e.g. VSOP/ELP + ERFA.
 	readonly sunMoonPosition?: (time: Time) => SunMoonPosition
 }
 
@@ -203,31 +200,25 @@ export interface LocalSolarEclipseEvent {
 	readonly time: Time
 	// Julian Day of the event.
 	readonly jd: number
-
 	// Solar altitude at the event in radians.
 	// Uses apparent Sun center altitude if sunMoonPosition is available, otherwise a Besselian approximation.
 	readonly sunAltitude: Angle
-
 	// Position angle of the contact point on the solar limb, from celestial north toward east, normalized to
 	// [0, TAU). This is the table/circumstances angle: it coincides with the lunar-center angle at C1/MAX/C4
 	// and at annular C2/C3, but is opposite (center + PI) at total C2/C3 (internal tangency on the far limb).
 	readonly positionAngleP: Angle | null
-
 	// Same contact-point angle in the local zenith-oriented frame, normalized to [0, TAU).
 	readonly zenithAngleZ: Angle | null
-
 	// Whether the Sun is above or below the horizon at the event.
 	readonly visibility: LocalEventVisibility
 	// Whether the event is observable (Sun at or above the configured horizon altitude).
 	readonly observable: boolean
-
 	// Local magnitude at the event.
 	readonly magnitude: number
 	// Moon/Sun apparent diameter ratio at the event, or null when unavailable.
 	readonly moonSunDiameterRatio: number | null
 	// Central-phase character at the event.
 	readonly centralPhaseKind: LocalCentralPhaseKind
-
 	// Internal geometry cache consumed by the Local View builder.
 	readonly localViewState?: LocalViewEventState
 }
@@ -240,28 +231,23 @@ export interface LocalFundamentalState {
 	readonly jd: number
 	// Besselian elements evaluated at this instant.
 	readonly be: InstantBesselianElements
-
 	// Observer longitude in radians, east-positive.
 	readonly longitude: Angle
 	// Observer geodetic latitude in radians.
 	readonly latitude: Angle
-
 	// Local hour angle of the shadow axis, normalized to [0, TAU).
 	readonly hourAngle: Angle
 	// Observer fundamental-plane coordinates (Earth equatorial radii).
 	readonly ksi: number
 	readonly eta: number
 	readonly zeta: number
-
 	// Observer-to-axis offset components and their magnitude in the fundamental plane (Earth equatorial radii).
 	readonly u: number
 	readonly v: number
 	readonly distance: number
-
 	// Local penumbral and umbral cone radii at the observer (Earth equatorial radii).
 	readonly L1: number
 	readonly L2: number
-
 	// Local magnitude (L1 - distance) / (L1 + L2).
 	readonly magnitude: number
 	// Moon/Sun apparent diameter ratio, or null when the solar radius is non-positive.
@@ -276,10 +262,8 @@ export interface LocalSolarEclipseViewOptions {
 	readonly width: number
 	// Diagram height in SVG pixels.
 	readonly height: number
-
 	// Which instant is drawn as the primary state.
 	readonly selectedEvent: LocalEclipseContactKind
-
 	// Orientation of the diagram.
 	//
 	// - `zenith`: zenith/up frame.
@@ -287,20 +271,15 @@ export interface LocalSolarEclipseViewOptions {
 	//
 	// This only controls geometry. Do not create UI buttons.
 	readonly orientationMode: LocalViewOrientationMode
-
 	// Horizontal handedness of the diagram. Defaults to `eastRight`. Set `eastLeft` to match the
 	// conventional naked-eye / sky-chart orientation (east to the left when north is up).
 	readonly handedness?: LocalViewHandedness
-
 	// Radius of the solar disk in SVG pixels.
 	readonly solarRadiusPx: number
-
 	// Whether to include ghost geometry for all available contacts. No labels.
 	readonly includeGhostDisks: boolean
-
 	// Whether to include the apparent horizon geometry.
 	readonly includeHorizon: boolean
-
 	// Optional padding for horizon band polygon generation, in SVG pixels.
 	readonly horizonBandPaddingPx?: number
 }
@@ -365,6 +344,29 @@ export interface LocalSolarEclipseViewGeometry {
 	readonly solarRadiusPx: number
 	// All drawable shapes.
 	readonly shapes: readonly LocalSolarEclipseSvgShape[]
+}
+
+// Summary circumstances of a globally distinguished central-eclipse point (greatest eclipse or greatest
+// duration), matching the NASA/Espenak "Greatest Eclipse and Greatest Duration" table.
+export interface SolarEclipseExtremeCircumstances {
+	// Geographic longitude, east-positive radians, normalized to [-PI, PI].
+	readonly longitude: Angle
+	// Geodetic latitude in radians.
+	readonly latitude: Angle
+	// Terrestrial (Dynamical) Time of the event (TT, i.e. TD).
+	readonly time: Time
+	// Delta T applied (TT - UT1) in seconds.
+	readonly deltaT: number
+	// Geometric solar altitude at the event in radians.
+	readonly sunAltitude: Angle
+	// Solar azimuth at the event in radians, measured from North through East, normalized to [0, TAU).
+	readonly sunAzimuth: Angle
+	// Width of the central (umbral/antumbral) path on the ground in km; null when the point is not central.
+	readonly pathWidthKm: number | null
+	// Duration of the central (total/annular) phase in seconds; null when the point is not central.
+	readonly centralDurationSeconds: number | null
+	// Local eclipse character at the event; null when the point is not central.
+	readonly kind: GeoPoint['kind'] | null
 }
 
 // Default Local View options.
@@ -1278,10 +1280,8 @@ function computeCentralShadowChordWidthByBearingsKm(centralValueAt: (longitude: 
 // estimate, and the multi-bearing scan stays well defined even at the exact center of the shadow. Returns
 // null when the maximum is not central, the observer is not inside the central shadow, or no edge is found
 // within MAX_SHADOW_HALF_WIDTH_KM.
-export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, maxEvent: LocalSolarEclipseEvent) {
-	if (maxEvent.centralPhaseKind === 'none') return null
-
-	const time = timeAtJulianDay(pbe.maximumTime, maxEvent.jd)
+export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jd: number) {
+	const time = timeAtJulianDay(pbe.maximumTime, jd)
 	const metrics: [distance: number, L1: number, L2: number] = [0, 0, 0]
 	const centralValueAt = (lon: Angle, lat: Angle) => {
 		const [distance, , L2] = computeLocalFundamentalMetrics(pbe, lon, lat, time, metrics)
@@ -1481,7 +1481,7 @@ export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSola
 export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions = {}) {
 	const events = computeLocalEclipseEvents(pbe, longitude, latitude, options)
 	const visibility = computeLocalVisibility(events, pbe, longitude, latitude, options)
-	const shadowPathWidthKm = events.MAX ? computeLocalShadowPathWidthKm(pbe, longitude, latitude, events.MAX) : null
+	const shadowPathWidthKm = events.MAX && events.MAX.centralPhaseKind !== 'none' ? computeLocalShadowPathWidthKm(pbe, longitude, latitude, events.MAX.jd) : null
 	const details = computeLocalDetails(events, shadowPathWidthKm)
 
 	const result: LocalSolarEclipseCircumstances = {
@@ -1497,4 +1497,156 @@ export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianEl
 	}
 
 	return result
+}
+
+// Maximum half-window (days) searched on either side of the central instant for a cone crossing; longer
+// than any real central phase so the entry/exit are always bracketed.
+const MAX_CENTRAL_HALF_DURATION_DAYS = (20 * 60) / DAYSEC
+// Coarse step (days) for bracketing the cone crossings before bisection.
+const CENTRAL_DURATION_STEP_DAYS = 4 / DAYSEC
+
+// Bisects the cone crossing (where the central gap changes sign) between the central instant and the first
+// stepped sample that lies outside the cone, marching with the given signed step. Returns the crossing
+// Julian Day, or undefined when no crossing is found within the search half-window.
+function findConeCrossingJd(gapAtJd: (jd: number) => number, jdCenter: number, stepDays: number) {
+	let previousJd = jdCenter
+
+	for (let jd = jdCenter + stepDays; Math.abs(jd - jdCenter) <= MAX_CENTRAL_HALF_DURATION_DAYS; jd += stepDays) {
+		if (gapAtJd(jd) <= 0) {
+			let inside = previousJd
+			let outside = jd
+
+			for (let i = 0; i < 50 && Math.abs(outside - inside) > 1e-9; i++) {
+				const mid = (inside + outside) * 0.5
+				if (gapAtJd(mid) > 0) inside = mid
+				else outside = mid
+			}
+
+			return (inside + outside) * 0.5
+		}
+
+		previousJd = jd
+	}
+
+	return undefined
+}
+
+// Local fundamental-plane "central gap" |L2| - distance (Earth equatorial radii) of a ground observer at
+// one instant: positive inside the umbral/antumbral cone, zero on the path edge, negative outside. Mirrors
+// the observer projection in sun.eclipse.local.ts; kept here so the core summary computations stay
+// self-contained (core never imports the local layer).
+// longitude: east-positive radians; latitude: geodetic radians.
+function centralConeGap(be: Pick<InstantBesselianElements, 'mu' | 'deltaT' | 'deltaTLongitudeCorrection' | 'd' | 'x' | 'y' | 'l2' | 'tanF2'>, longitude: Angle, latitude: Angle) {
+	const H = hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection)
+	const sinD = Math.sin(be.d)
+	const cosD = Math.cos(be.d)
+	const cosH = Math.cos(H)
+	const U = Math.atan(F * Math.tan(latitude))
+	const rhoSinPhi = F * Math.sin(U)
+	const rhoCosPhi = Math.cos(U)
+	const ksi = rhoCosPhi * Math.sin(H)
+	const eta = rhoSinPhi * cosD - rhoCosPhi * cosH * sinD
+	const zeta = rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
+	const distance = Math.hypot(be.x - ksi, be.y - eta)
+	return Math.abs(be.l2 - zeta * be.tanF2) - distance
+}
+
+// Solar azimuth (radians, from North through East, [0, TAU)) at a point and its instant, using the
+// shadow-axis declination as the Sun direction (exact on the central line). The standard horizontal
+// transform gives azimuth from the South through West; adding PI rotates it to the North-through-East
+// convention used by the NASA tables.
+function solarAzimuthAtPoint(pbe: PolynomialBesselianElements, point: GeoPoint) {
+	const be = besselianSampleAtJulianDay(pbe, point.jd!)
+	const H = hourAngleFromLongitude(point.x, be.mu, be.deltaTLongitudeCorrection)
+	const sinPhi = Math.sin(point.y)
+	const cosPhi = Math.cos(point.y)
+	return normalizeAngle(Math.atan2(Math.sin(H), Math.cos(H) * sinPhi - Math.tan(be.d) * cosPhi) + PI)
+}
+
+// Duration (seconds) of the central (total/annular) phase for a ground point under the shadow axis at
+// jdCenter: the span the point stays inside the umbral/antumbral cone. Returns null when the point is not
+// inside the cone at jdCenter (no central phase there).
+function centralPhaseDurationSeconds(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jdCenter: number) {
+	const gapAtJd = (jd: number) => centralConeGap(besselianSampleAtJulianDay(pbe, jd), longitude, latitude)
+	if (!(gapAtJd(jdCenter) > 0)) return null
+
+	const enter = findConeCrossingJd(gapAtJd, jdCenter, -CENTRAL_DURATION_STEP_DAYS)
+	const exit = findConeCrossingJd(gapAtJd, jdCenter, CENTRAL_DURATION_STEP_DAYS)
+	return enter === undefined || exit === undefined ? null : (exit - enter) * DAYSEC
+}
+
+// Assembles the full summary circumstances at one central-eclipse point: geographic location, TD/UT1 times,
+// solar altitude and azimuth, and (when the point is central) the path width, central duration and character.
+function extremeCircumstancesAt(pbe: PolynomialBesselianElements, point: GeoPoint): SolarEclipseExtremeCircumstances {
+	const jd = point.jd!
+	const time = timeAtJulianDay(pbe.time0, jd)
+	const centralDurationSeconds = centralPhaseDurationSeconds(pbe, point.x, point.y, jd)
+
+	return {
+		longitude: point.x,
+		latitude: point.y,
+		time,
+		deltaT: pbe.deltaT,
+		sunAltitude: solarAltitudeAtPoint(pbe, point),
+		sunAzimuth: solarAzimuthAtPoint(pbe, point),
+		pathWidthKm: centralDurationSeconds === null ? null : computeLocalShadowPathWidthKm(pbe, point.x, point.y, jd),
+		centralDurationSeconds,
+		kind: centralDurationSeconds === null ? null : centralLineKind(pbe, jd),
+	}
+}
+
+// Circumstances at the greatest eclipse: the instant the shadow axis passes closest to the Earth's center
+// (maximum magnitude). For a central eclipse this is the central point at that instant; for a partial or
+// non-central eclipse it is the limb point nearest the axis, and the path width / central duration are null.
+// Returns undefined only when no greatest-eclipse point can be projected.
+export function computeGreatestEclipseCircumstances(pbe: PolynomialBesselianElements): SolarEclipseExtremeCircumstances | undefined {
+	const point = findMaximumPoint(pbe)
+	return point ? extremeCircumstancesAt(pbe, point) : undefined
+}
+
+// Circumstances at the greatest duration: the point on the central line where the central (total/annular)
+// phase lasts longest, which is generally not the greatest-eclipse point. Searches the central line over the
+// contact window, evaluating the local central duration at each sampled central point and refining the
+// maximum. Returns undefined for an eclipse with no central line (partial or non-central).
+export function computeGreatestDurationCircumstances(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions): SolarEclipseExtremeCircumstances | undefined {
+	if (!centralAxisIntersectsEarth(pbe, options)) return undefined
+
+	const julianDay0 = toJulianDay(pbe.time0)
+	const tMaximum = (toJulianDay(pbe.maximumTime) - julianDay0) / pbe.stepDays
+	const span = validPositive(options?.contactSearchSpan, DEFAULT_CONTACT_SEARCH_SPAN_SECONDS) / pbe.stepDays
+
+	// Central-phase duration (seconds) at the central-line point reached at normalized time t, or 0 when the
+	// axis misses the Earth or the point is not central there (so the maximizer steers away from those t).
+	function durationAtT(t: number) {
+		const be = besselianSampleAtJulianDay(pbe, julianDay0 + t * pbe.stepDays)
+		const point = projectFundamentalPoint(be, be.x, be.y)
+		if (!point) return 0
+		return centralPhaseDurationSeconds(pbe, point.x, point.y, point.jd!) ?? 0
+	}
+
+	const steps = 128
+	let bestT = tMaximum
+	let bestDuration = -Infinity
+
+	for (let k = 0; k <= steps; k++) {
+		const t = tMaximum - span + (2 * span * k) / steps
+		const duration = durationAtT(t)
+		if (duration > bestDuration) {
+			bestDuration = duration
+			bestT = t
+		}
+	}
+
+	const half = (2 * span) / steps
+
+	try {
+		const minimum = brentMinimize((t) => -durationAtT(t), Math.max(tMaximum - span, bestT - half), Math.min(tMaximum + span, bestT + half))
+		if (-minimum.value > bestDuration) bestT = minimum.minimum
+	} catch {
+		// Keep the coarse-scan argmax when the refinement bracket is rejected.
+	}
+
+	const be = besselianSampleAtJulianDay(pbe, julianDay0 + bestT * pbe.stepDays)
+	const point = projectFundamentalPoint(be, be.x, be.y)
+	return point ? extremeCircumstancesAt(pbe, point) : undefined
 }

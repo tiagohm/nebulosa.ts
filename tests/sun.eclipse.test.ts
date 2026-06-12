@@ -2,9 +2,9 @@ import { expect, test, describe } from 'bun:test'
 import { deg } from '../src/angle'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { centralAxisIntersectsEarth, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolylinesToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse'
-import { time, Timescale, timeSubtract, timeToDate, timeYMD, toJulianDay } from '../src/time'
-import { PI, PIOVERTWO, RAD2DEG, TAU } from '../src/constants'
+import { centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolylinesToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse'
+import { time, Timescale, timeSubtract, timeYMD, toJulianDay, type Time } from '../src/time'
+import { PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
 import { PlateCarree, type Projection, type ProjectionOptions } from '../src/projection'
 import * as vsop87e from '../src/vsop87e'
@@ -24,6 +24,11 @@ function geometry(overrides: Partial<SolarEclipseMapGeometry['lines']> = {}, poi
 		points,
 		lines: { centerLine: [], umbraNorth: [], umbraSouth: [], penumbraNorth: [], penumbraSouth: [], riseSetCurves: [], ...overrides },
 	}
+}
+
+// Same physical Sun/Moon source used to build the elements, as the local layer prefers.
+function sunMoonPosition(t: Time) {
+	return computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
 }
 
 function equirectangularProjection(width: number, height: number, options?: ProjectionOptions) {
@@ -1414,7 +1419,6 @@ describe('eclipse geometry physical and topological invariants', () => {
 // eclipses of the refactor checklist: a near-grazing annular (2003-05-31), a circumpolar total over
 // Antarctica (2003-11-23) and a hybrid (2023-04-20).
 describe('solar eclipse map validation cases', () => {
-	const getSunMoonPosition = (t: Parameters<typeof computeSunMoonPositionAt>[0]) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
 	const MAX_STEP = deg(3)
 
 	const CASES = [
@@ -1432,7 +1436,7 @@ describe('solar eclipse map validation cases', () => {
 	for (const fixture of CASES) {
 		describe(fixture.name, () => {
 			const eclipse = nearestSolarEclipse(fixture.date, true)
-			const elements = computePolynomialBesselianElements(eclipse.maximalTime, getSunMoonPosition)
+			const elements = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
 			const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: deg(1), maxAngularStep: MAX_STEP, includeRiseSetCurves: true, riseSetStep: 600 })
 			const { points, lines } = geometry
 
@@ -1524,7 +1528,6 @@ describe('solar eclipse map validation cases', () => {
 // the 2024-04-08 north-pole spike from global endpoint chaining, and assorted normal eclipses that must stay
 // stable.
 describe('branch-aware curve topology', () => {
-	const getSunMoonPosition = (t: Parameters<typeof computeSunMoonPositionAt>[0]) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
 	const STEP = deg(0.5)
 	// Matches the engine's BRANCH_MAX_DRAWABLE_GAP floor (5 deg) at this resolution: no intra-branch segment
 	// may exceed it. A pre-fix spike was 16-17 deg, far above this.
@@ -1565,7 +1568,7 @@ describe('branch-aware curve topology', () => {
 
 	function geometryFor(year: number, month: number, day: number) {
 		const eclipse = nearestSolarEclipse(timeYMD(year, month, day), true)
-		const elements = computePolynomialBesselianElements(eclipse.maximalTime, getSunMoonPosition)
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
 		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: STEP, maxAngularStep: STEP, includeRiseSetCurves: false })
 		return { eclipse, elements, geometry }
 	}
@@ -1609,7 +1612,7 @@ describe('branch-aware curve topology', () => {
 
 	test('2005-10-03 rise/set curve passes through N1 without a visible cusp gap', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2005, 10, 1), true)
-		const elements = computePolynomialBesselianElements(eclipse.maximalTime, getSunMoonPosition)
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
 		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: STEP, maxAngularStep: STEP, includeRiseSetCurves: true, riseSetStep: 600 })
 		const N1 = geometry.points.N1!
 
@@ -1657,7 +1660,7 @@ describe('branch-aware curve topology', () => {
 
 		const paths = solarEclipseMapToSvgPaths(geometry, projection)
 		expect(longestProjectedSegment(paths.riseSetCurves)).toBeLessThan(MAP_WIDTH / 2)
-	})
+	}, 3000)
 
 	test('2021-12-04 keeps the south-polar umbra fold connected at U3', () => {
 		const { geometry } = geometryFor(2021, 12, 1)
@@ -1695,7 +1698,7 @@ describe('branch-aware curve topology', () => {
 	] as const) {
 		test(`${name} rise/set curve has no off-curve cusp spike`, () => {
 			const eclipse = nearestSolarEclipse(timeYMD(year, month, day), true)
-			const elements = computePolynomialBesselianElements(eclipse.maximalTime, getSunMoonPosition)
+			const elements = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
 			const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: STEP, maxAngularStep: STEP, includeRiseSetCurves: true, riseSetStep: 600 })
 
 			expect(geometry.lines.riseSetCurves.length).toBeGreaterThan(0)
@@ -2093,85 +2096,6 @@ describe('greatest eclipse uses closest-approach minimization for an inconsisten
 		for (const fixture of NASA_ECLIPSES) {
 			expect(findMaximumPoint(nasaPbe(fixture))!.jd).toBe(fixture.greatestEclipse[2])
 		}
-	})
-})
-
-describe('greatest eclipse and greatest duration circumstances', () => {
-	const getSunMoonPosition = (t: Parameters<typeof computeSunMoonPositionAt>[0]) => computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
-	const eclipse = nearestSolarEclipse(timeYMD(1995, 4, 29), true)
-	const pbe = computePolynomialBesselianElements(eclipse.maximalTime, getSunMoonPosition)
-	const ge = computeGreatestEclipseCircumstances(pbe)!
-	const gd = computeGreatestDurationCircumstances(pbe)!
-
-	// Seconds elapsed since midnight of the time's own scale, for comparing against the published clock times.
-	function secondsOfDay(t: Parameters<typeof timeToDate>[0]) {
-		const [, , , hour, minute, second] = timeToDate(t)
-		return hour * 3600 + minute * 60 + second
-	}
-
-	// Reference values from NASA/GSFC for the 1995-04-29 annular eclipse ("Greatest Eclipse and Greatest
-	// Duration" table). The library fits approximate Besselian elements from VSOP87E/ELPMPP02 rather than the
-	// DE ephemeris, so the tolerances absorb that element-accuracy gap (largest on the small annular antumbra
-	// width) while still pinning every quantity to its physical value.
-	test('1995-04-29 greatest eclipse matches the published circumstances', () => {
-		expect(eclipse.type).toBe('annular')
-		expect(ge.kind).toBe('annular')
-
-		// TD 17:33:20.5, UT1 17:32:19.5.
-		expect(Math.abs(secondsOfDay(ge.timeTD) - (17 * 3600 + 33 * 60 + 20.5))).toBeLessThan(30)
-		expect(Math.abs(secondsOfDay(ge.timeUT1) - (17 * 3600 + 32 * 60 + 19.5))).toBeLessThan(30)
-		// TD - UT1 reproduces the applied Delta T, which matches the published 61 s for 1995.
-		expect(secondsOfDay(ge.timeTD) - secondsOfDay(ge.timeUT1)).toBeCloseTo(61, 0)
-		expect(ge.deltaT).toBeCloseTo(61, 0)
-
-		// Latitude 04°51.0'S, Longitude 079°23.8'W.
-		expect(Math.abs(ge.latitude * RAD2DEG - -(4 + 51 / 60))).toBeLessThan(0.1)
-		expect(Math.abs(ge.longitude * RAD2DEG - -(79 + 23.8 / 60))).toBeLessThan(0.1)
-		// Sun altitude 70.2°, azimuth 347.5°.
-		expect(Math.abs(ge.sunAltitude * RAD2DEG - 70.2)).toBeLessThan(0.5)
-		expect(Math.abs(ge.sunAzimuth * RAD2DEG - 347.5)).toBeLessThan(1)
-		// Path width 195.5 km, central (annular) duration 06m36.74s = 396.74 s.
-		expect(ge.pathWidthKm!).toBeGreaterThan(175)
-		expect(ge.pathWidthKm!).toBeLessThan(205)
-		expect(Math.abs(ge.centralDurationSeconds! - 396.74)).toBeLessThan(8)
-	})
-
-	test('1995-04-29 greatest duration matches the published circumstances', () => {
-		expect(gd.kind).toBe('annular')
-
-		// TD 17:43:41.0, UT1 17:42:40.0.
-		expect(Math.abs(secondsOfDay(gd.timeTD) - (17 * 3600 + 43 * 60 + 41))).toBeLessThan(30)
-		expect(Math.abs(secondsOfDay(gd.timeUT1) - (17 * 3600 + 42 * 60 + 40))).toBeLessThan(30)
-
-		// Latitude 03°48.4'S, Longitude 077°00.9'W.
-		expect(Math.abs(gd.latitude * RAD2DEG - -(3 + 48.4 / 60))).toBeLessThan(0.1)
-		expect(Math.abs(gd.longitude * RAD2DEG - -(77 + 0.9 / 60))).toBeLessThan(0.1)
-		// Sun altitude 69.5°, azimuth 333.4°.
-		expect(Math.abs(gd.sunAltitude * RAD2DEG - 69.5)).toBeLessThan(0.5)
-		expect(Math.abs(gd.sunAzimuth * RAD2DEG - 333.4)).toBeLessThan(1)
-		// Path width 197.2 km, central (annular) duration 06m37.07s = 397.07 s.
-		expect(gd.pathWidthKm!).toBeGreaterThan(175)
-		expect(gd.pathWidthKm!).toBeLessThan(207)
-		expect(Math.abs(gd.centralDurationSeconds! - 397.07)).toBeLessThan(8)
-	})
-
-	test('greatest duration lasts at least as long as greatest eclipse and is a distinct, later point', () => {
-		// By definition the greatest-duration point maximizes the central phase, so it is not shorter than the
-		// duration at greatest eclipse, and for this eclipse it lies further along the path and later in time.
-		expect(gd.centralDurationSeconds!).toBeGreaterThanOrEqual(ge.centralDurationSeconds! - 1e-6)
-		expect(secondsOfDay(gd.timeTD)).toBeGreaterThan(secondsOfDay(ge.timeTD))
-		expect(sphericalSeparation(ge.longitude, ge.latitude, gd.longitude, gd.latitude)).toBeGreaterThan(deg(1))
-	})
-
-	test('a partial eclipse has no central line, so greatest duration is undefined', () => {
-		const partialPbe = nasaPbe(NASA_ECLIPSES[2])
-		expect(computeGreatestDurationCircumstances(partialPbe)).toBeUndefined()
-		// Greatest eclipse still resolves a point for a partial eclipse, but without central path/duration.
-		const partialGe = computeGreatestEclipseCircumstances(partialPbe)!
-		expect(partialGe).toBeDefined()
-		expect(partialGe.centralDurationSeconds).toBeNull()
-		expect(partialGe.pathWidthKm).toBeNull()
-		expect(partialGe.kind).toBeNull()
 	})
 })
 
