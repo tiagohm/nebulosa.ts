@@ -431,14 +431,41 @@ export function computeLocalFundamentalState(pbe: PolynomialBesselianElements, l
 	return { time, jd: toJulianDay(time), be, longitude, latitude, hourAngle: normalizeAngle(H), ksi, eta, zeta, u, v, distance, L1, L2, magnitude, moonSunDiameterRatio, centralPhaseKind }
 }
 
-// Partial-contact scalar: <= 0 inside the penumbra. Roots are C1 (ingress) and C4 (egress).
-function partialContactFunction(state: LocalFundamentalState) {
-	return state.distance - state.L1
+// Computes only the local scalar geometry needed by hot root/minimum searches. The returned tuple aliases
+// `o` and contains distance, L1 and L2 in Earth equatorial radii.
+function computeLocalFundamentalMetrics(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, time: Time, o: [distance: number, L1: number, L2: number]) {
+	const be = evaluateBesselian(pbe, time)
+	const H = hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection)
+
+	const sinD = Math.sin(be.d)
+	const cosD = Math.cos(be.d)
+	const sinH = Math.sin(H)
+	const cosH = Math.cos(H)
+
+	const U = Math.atan(F * Math.tan(latitude))
+	const rhoSinPhi = F * Math.sin(U)
+	const rhoCosPhi = Math.cos(U)
+
+	const ksi = rhoCosPhi * sinH
+	const eta = rhoSinPhi * cosD - rhoCosPhi * cosH * sinD
+	const zeta = rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
+
+	o[0] = Math.hypot(be.x - ksi, be.y - eta)
+	o[1] = be.l1 - zeta * be.tanF1
+	o[2] = be.l2 - zeta * be.tanF2
+	return o
 }
 
-// Central-contact scalar: <= 0 inside the umbra/antumbra. Roots are C2 (ingress) and C3 (egress).
-function centralContactFunction(state: LocalFundamentalState) {
-	return state.distance - Math.abs(state.L2)
+// Local magnitude at a Julian Day, reusing `metrics` to avoid per-sample LocalFundamentalState allocation.
+function localMagnitudeAtJulianDay(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jd: number, metrics: [distance: number, L1: number, L2: number]) {
+	const [distance, L1, L2] = computeLocalFundamentalMetrics(pbe, longitude, latitude, timeAtJulianDay(pbe.maximumTime, jd), metrics)
+	return (L1 - distance) / (L1 + L2)
+}
+
+// Contact scalar at a Julian Day, reusing `metrics`; partial roots use L1, central roots use |L2|.
+function localContactValueAtJulianDay(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jd: number, central: boolean, metrics: [distance: number, L1: number, L2: number]) {
+	const [distance, L1, L2] = computeLocalFundamentalMetrics(pbe, longitude, latitude, timeAtJulianDay(pbe.maximumTime, jd), metrics)
+	return central ? distance - Math.abs(L2) : distance - L1
 }
 
 // Builds the local fundamental state at a Julian Day, reusing maximumTime as the time-scale reference.
@@ -450,7 +477,7 @@ function localStateAtJulianDay(pbe: PolynomialBesselianElements, longitude: Angl
 // right ascension/declination and Greenwich apparent sidereal time; without it, it falls back to the
 // Besselian shadow-axis altitude (an approximation: the axis is treated as the Sun direction and the
 // geodetic latitude is used directly, matching solarAltitudeAtPoint in sun.eclipse.ts).
-function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, sample: SunMoonPosition | undefined, fallbackBesselian: InstantBesselianElements) {
+function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, sample: SunMoonPosition | undefined, fallbackBesselian?: InstantBesselianElements) {
 	if (sample) {
 		const deltaT = sample.deltaT ?? 0
 		const ttTime = tt(time)
@@ -461,6 +488,7 @@ function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, sam
 		return Math.asin(clamp(sinAltitude, -1, 1))
 	}
 
+	if (!fallbackBesselian) throw new Error('computeSolarAltitude requires fallback Besselian elements when no Sun/Moon sample is supplied')
 	const be = fallbackBesselian
 	const H = hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection)
 	const sinAltitude = Math.sin(be.d) * Math.sin(latitude) + Math.cos(be.d) * Math.cos(latitude) * Math.cos(H)
@@ -629,28 +657,6 @@ function bisectRoot(f: (jd: number) => number, lo: number, hi: number) {
 	}
 }
 
-// Uniform sample Julian Days over [fromJd, toJd], always including toJd exactly even when stepDays does not
-// divide the window. Without the guaranteed endpoint, a root or peak in the final partial sub-interval (right
-// at toJd) could fall past the last sample and be missed.
-function buildSampleJds(fromJd: number, toJd: number, stepDays: number) {
-	if (!Number.isFinite(fromJd) || !Number.isFinite(toJd)) {
-		return []
-	}
-
-	if (toJd < fromJd) {
-		return []
-	}
-
-	if (!(stepDays > 0) || !Number.isFinite(stepDays)) {
-		return fromJd === toJd ? [fromJd] : [fromJd, toJd]
-	}
-
-	const jds: number[] = []
-	for (let jd = fromJd; jd < toJd; jd += stepDays) jds.push(jd)
-	if (jds.length === 0 || Math.abs(jds.at(-1)! - toJd) > CONTACT_TOLERANCE_DAYS) jds.push(toJd)
-	return jds
-}
-
 // Finds the Julian Day of the local magnitude maximum within [fromJd, toJd]. A uniform coarse scan brackets
 // the best sample, then the one-step bracket around it is densified at a bounded absolute resolution before
 // Brent refinement: with a coarse localSearchStepSeconds the magnitude peak (especially the narrow central
@@ -663,18 +669,21 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 	}
 
 	const effectiveStepDays = stepDays > 0 && Number.isFinite(stepDays) ? stepDays : Math.max((toJd - fromJd) * 0.5, CONTACT_REFINE_SUBSTEP_DAYS)
-
-	const magnitudeAt = (jd: number) => localStateAtJulianDay(pbe, longitude, latitude, jd).magnitude
+	const metrics: [distance: number, L1: number, L2: number] = [0, 0, 0]
+	const magnitudeAt = (jd: number) => localMagnitudeAtJulianDay(pbe, longitude, latitude, jd, metrics)
 
 	let bestJd: number | undefined
 	let bestMagnitude = -Infinity
 
-	for (const jd of buildSampleJds(fromJd, toJd, effectiveStepDays)) {
+	for (let jd = fromJd; ; ) {
 		const magnitude = magnitudeAt(jd)
 		if (Number.isFinite(magnitude) && magnitude > bestMagnitude) {
 			bestMagnitude = magnitude
 			bestJd = jd
 		}
+		if (jd === toJd) break
+		const nextJd = jd + effectiveStepDays
+		jd = nextJd > jd && nextJd < toJd ? nextJd : toJd
 	}
 
 	if (bestJd === undefined) return undefined
@@ -708,7 +717,10 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 
 // Inserts a root unless an equal one (within ~10x the time tolerance) is already present.
 function pushUniqueRoot(roots: number[], root: number) {
-	if (!roots.some((existing) => Math.abs(existing - root) < CONTACT_TOLERANCE_DAYS * 10)) roots.push(root)
+	for (let i = 0; i < roots.length; i++) {
+		if (Math.abs(roots[i] - root) < CONTACT_TOLERANCE_DAYS * 10) return
+	}
+	roots.push(root)
 }
 
 function NumberComparator(a: number, b: number) {
@@ -788,55 +800,79 @@ function refineMissedContactInterval(evaluate: (jd: number) => number, lo: numbe
 	}
 }
 
-// Finds every Julian Day in [fromJd, toJd] where the scalar contact function fn reaches zero, by uniform
-// scan plus refinement. Transversal roots (sign changes) are bracketed directly; grazing roots and short
-// phases whose two contacts fall entirely between two samples (no sign change, a sub-sample negative dip)
-// are recovered from interior local minima. Roots are deduplicated and returned sorted ascending.
-export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number, fn: (state: LocalFundamentalState) => number) {
-	const evaluate = (jd: number) => fn(localStateAtJulianDay(pbe, longitude, latitude, jd))
+// Finds every Julian Day in [fromJd, toJd] where an already scalar contact function reaches zero, by uniform
+// scan plus refinement. The `evaluate` callback returns Earth-equatorial-radii residuals, negative inside
+// the phase. Roots are deduplicated and returned sorted ascending.
+function findLocalContactValueRoots(fromJd: number, toJd: number, stepDays: number, evaluate: (jd: number) => number) {
 	const roots: number[] = []
 
-	// Sample the whole window once (toJd always included) so neighboring triplets can be inspected for extrema.
-	const jds = buildSampleJds(fromJd, toJd, stepDays)
-	if (jds.length === 0) return []
-	const values = jds.map(evaluate)
+	if (!Number.isFinite(fromJd) || !Number.isFinite(toJd) || toJd < fromJd) return roots
 
-	// Transversal roots: exact zeros on a sample and sign changes between neighbors.
-	for (let k = 0; k < jds.length; k++) {
-		if (values[k] === 0) {
-			pushUniqueRoot(roots, jds[k])
-		} else if (k + 1 < jds.length && values[k] * values[k + 1] < 0) {
-			const root = bisectRoot(evaluate, jds[k], jds[k + 1])
+	let previousJd = fromJd
+	let previousValue = evaluate(previousJd)
+	if (previousValue === 0) pushUniqueRoot(roots, previousJd)
+	if (fromJd === toJd) return roots
+
+	const effectiveStepDays = stepDays > 0 && Number.isFinite(stepDays) ? stepDays : toJd - fromJd
+	let beforePreviousJd: number | undefined
+	let beforePreviousValue: number | undefined
+	let firstIntervalEnd: number | undefined
+	let lastIntervalStart = fromJd
+
+	// Transversal roots are caught between adjacent samples. Grazing/sub-sample roots are recovered by
+	// refining each interior local minimum as soon as the triplet is available, without storing the whole
+	// sampled window.
+	for (let jd = Math.min(fromJd + effectiveStepDays, toJd); ; ) {
+		if (jd <= previousJd) jd = toJd
+		const value = evaluate(jd)
+
+		// Transversal roots: exact zeros on a sample and sign changes between neighbors.
+		if (value === 0) {
+			pushUniqueRoot(roots, jd)
+		} else if (previousValue === 0) {
+			pushUniqueRoot(roots, previousJd)
+		} else if (previousValue * value < 0) {
+			const root = bisectRoot(evaluate, previousJd, jd)
 			if (root !== undefined) pushUniqueRoot(roots, root)
 		}
-	}
 
-	// Grazing/sub-sample roots: every interior local MINIMUM is refined. These contact functions are negative
-	// inside the phase, so a contact is always a minimum touching/dipping below zero from positive values;
-	// only minima are inspected (a near-maximum near zero has no root and could invent one). The test is
-	// tie-tolerant so a tied valley bottom straddling the true instant is still caught. No absolute pre-filter
-	// is applied: a short phase whose negative dip lies between two samples that are both far from zero (likely
-	// with a coarse localSearchStepSeconds or a fast shadow) would otherwise be skipped and its contacts lost.
-	// The functions are smooth with essentially one minimum per window, so this is at most a few refinements,
-	// and refineMissedContactInterval adds nothing for a deep minimum whose bracket ends are already inside the
-	// phase. Overlaps with transversal roots dedup away.
-	for (let k = 1; k + 1 < jds.length; k++) {
-		const nearMinimum = values[k] <= values[k - 1] + CONTACT_SAMPLE_EXTREMUM_EPS && values[k] <= values[k + 1] + CONTACT_SAMPLE_EXTREMUM_EPS
-		if (!nearMinimum) continue
+		// Grazing/sub-sample roots: refine every interior local minimum as soon as its right neighbor exists.
+		if (beforePreviousJd !== undefined && beforePreviousValue !== undefined) {
+			const nearMinimum = previousValue <= beforePreviousValue + CONTACT_SAMPLE_EXTREMUM_EPS && previousValue <= value + CONTACT_SAMPLE_EXTREMUM_EPS
+			if (nearMinimum) refineMissedContactInterval(evaluate, beforePreviousJd, jd, roots)
+		}
 
-		refineMissedContactInterval(evaluate, jds[k - 1], jds[k + 1], roots)
+		firstIntervalEnd ??= jd
+		lastIntervalStart = previousJd
+		beforePreviousJd = previousJd
+		beforePreviousValue = previousValue
+		previousJd = jd
+		previousValue = value
+
+		if (jd === toJd) break
+		const nextJd = jd + effectiveStepDays
+		jd = nextJd > jd && nextJd < toJd ? nextJd : toJd
 	}
 
 	// The interior-minimum pass needs a triple, so a very short dip wholly inside the first or last interval
 	// (both endpoints positive, no interior sample) would be missed. Refine those two boundary intervals
 	// explicitly so the detector is symmetric at the window edges (e.g. a contact right at fromJd/toJd at the
 	// adaptive expansion limit). Overlaps with the interior pass dedup away.
-	if (jds.length >= 2) {
-		refineMissedContactInterval(evaluate, jds[0], jds[1], roots)
-		refineMissedContactInterval(evaluate, jds.at(-2)!, jds.at(-1)!, roots)
+	if (firstIntervalEnd !== undefined) {
+		refineMissedContactInterval(evaluate, fromJd, firstIntervalEnd, roots)
+		refineMissedContactInterval(evaluate, lastIntervalStart, toJd, roots)
 	}
 
 	return roots.sort(NumberComparator)
+}
+
+// Finds every Julian Day in [fromJd, toJd] where the scalar contact function fn reaches zero, by uniform
+// scan plus refinement. Transversal roots (sign changes) are bracketed directly; grazing roots and short
+// phases whose two contacts fall entirely between two samples (no sign change, a sub-sample negative dip)
+// are recovered from interior local minima. Roots are deduplicated and returned sorted ascending.
+export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number, fn: (state: LocalFundamentalState) => number) {
+	const evaluate = (jd: number) => fn(localStateAtJulianDay(pbe, longitude, latitude, jd))
+	return findLocalContactValueRoots(fromJd, toJd, stepDays, evaluate)
 }
 
 // Closest root strictly before a reference Julian Day, or undefined.
@@ -899,15 +935,17 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 	// Resolves the two contacts (ingress before / egress after the maximum) bracketing the maximum for a
 	// contact function, expanding the search window toward `maxSpan` while either is still missing. Expansion
 	// is bounded so the Besselian polynomial is never evaluated far past its +-3 h fit.
-	const resolveContacts = (fn: (state: LocalFundamentalState) => number) => {
+	const resolveContacts = (central: boolean) => {
 		let currentSpan = minimumContactSearchSpan
 		let before: number | undefined
 		let after: number | undefined
+		const metrics: [distance: number, L1: number, L2: number] = [0, 0, 0]
+		const evaluate = (jd: number) => localContactValueAtJulianDay(pbe, longitude, latitude, jd, central, metrics)
 
 		while (true) {
 			const fromJd = centerJd - currentSpan
 			const toJd = centerJd + currentSpan
-			const roots = findLocalContactRoots(pbe, longitude, latitude, fromJd, toJd, stepDays, fn)
+			const roots = findLocalContactValueRoots(fromJd, toJd, stepDays, evaluate)
 			before = rootBefore(roots, maximumJd)
 			after = rootAfter(roots, maximumJd)
 			if ((before !== undefined && after !== undefined) || currentSpan >= maxSpan) break
@@ -916,8 +954,8 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 			// the corresponding window edge is still inside the phase (fn <= 0), so the contact is beyond it. If
 			// neither missing edge is inside the phase, expanding cannot reveal a contact, so stop. This keeps a
 			// window lying entirely inside a long phase (no roots, no sign change) from stopping the expansion.
-			const expandForBefore = before === undefined && fn(localStateAtJulianDay(pbe, longitude, latitude, fromJd)) <= 0
-			const expandForAfter = after === undefined && fn(localStateAtJulianDay(pbe, longitude, latitude, toJd)) <= 0
+			const expandForBefore = before === undefined && evaluate(fromJd) <= 0
+			const expandForAfter = after === undefined && evaluate(toJd) <= 0
 			if (!expandForBefore && !expandForAfter) break
 
 			currentSpan = Math.min(currentSpan * 1.5, maxSpan)
@@ -926,7 +964,7 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 		return { before, after }
 	}
 
-	const partial = resolveContacts(partialContactFunction)
+	const partial = resolveContacts(false)
 	const C1 = partial.before !== undefined ? buildLocalEvent('C1', partial.before, pbe, longitude, latitude, options) : null
 	const C4 = partial.after !== undefined ? buildLocalEvent('C4', partial.after, pbe, longitude, latitude, options) : null
 
@@ -934,7 +972,7 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 	let C3: LocalSolarEclipseEvent | null = null
 
 	if (maximumState.centralPhaseKind !== 'none') {
-		const central = resolveContacts(centralContactFunction)
+		const central = resolveContacts(true)
 		C2 = central.before !== undefined ? buildLocalEvent('C2', central.before, pbe, longitude, latitude, options) : null
 		C3 = central.after !== undefined ? buildLocalEvent('C3', central.after, pbe, longitude, latitude, options) : null
 	}
@@ -971,9 +1009,16 @@ const SUN_MOTION_ALTITUDE_EPSILON = 1e-3
 // Vertical trend of the Sun across the present contacts, by comparing the earliest and latest event altitudes
 // (the events are already time-ordered). Lets the UI compose an "on sunset"/"on sunrise" qualifier.
 function computeSunMotion(events: LocalSolarEclipseCircumstances['events']): LocalSunMotion {
-	const ordered = [events.C1, events.C2, events.MAX, events.C3, events.C4].filter((event) => event !== null)
-	if (ordered.length < 2) return 'none'
-	const delta = ordered.at(-1)!.sunAltitude - ordered[0].sunAltitude
+	let first: LocalSolarEclipseEvent | null = null
+	let last: LocalSolarEclipseEvent | null = null
+	for (const kind of CONTACT_ORDER) {
+		const event = events[kind]
+		if (!event) continue
+		first ??= event
+		last = event
+	}
+	if (!first || !last || first === last) return 'none'
+	const delta = last.sunAltitude - first.sunAltitude
 	if (delta < -SUN_MOTION_ALTITUDE_EPSILON) return 'setting'
 	if (delta > SUN_MOTION_ALTITUDE_EPSILON) return 'rising'
 	return 'none'
@@ -985,9 +1030,12 @@ function computeSunMotion(events: LocalSolarEclipseCircumstances['events']): Loc
 // of the true peak). Used to detect an observable instant between contacts even when every contact itself is
 // below the horizon.
 function extremeSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, options: LocalSolarEclipseCircumstancesOptions, minimize: boolean) {
+	if (!Number.isFinite(fromJd) || !Number.isFinite(toJd) || toJd < fromJd) return minimize ? Infinity : -Infinity
+
 	const altitudeAt = (jd: number) => {
 		const time = timeAtJulianDay(pbe.maximumTime, jd)
-		return computeSolarAltitude(time, longitude, latitude, options.sunMoonPosition?.(time), evaluateBesselian(pbe, time))
+		const sample = options.sunMoonPosition?.(time)
+		return computeSolarAltitude(time, longitude, latitude, sample, sample ? undefined : evaluateBesselian(pbe, time))
 	}
 	// Orient so the wanted extremum is always a maximum of `oriented`.
 	const oriented = (jd: number) => (minimize ? -altitudeAt(jd) : altitudeAt(jd))
@@ -997,12 +1045,15 @@ function extremeSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longit
 	const stepDays = Math.max(validPositive(options.localSearchStepSeconds, DEFAULT_LOCAL_SEARCH_STEP_SECONDS), ALTITUDE_SCAN_MIN_STEP_SECONDS) / DAYSEC
 	let best = -Infinity
 	let bestJd = fromJd
-	for (const jd of buildSampleJds(fromJd, toJd, stepDays)) {
+	for (let jd = fromJd; ; ) {
 		const value = oriented(jd)
 		if (value > best) {
 			best = value
 			bestJd = jd
 		}
+		if (jd === toJd) break
+		const nextJd = jd + stepDays
+		jd = nextJd > jd && nextJd < toJd ? nextJd : toJd
 	}
 
 	try {
@@ -1078,16 +1129,15 @@ function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']
 
 	// The events expected for this eclipse character. `completelyVisible` requires this full set to exist and
 	// be above the horizon, so a missing contact never masquerades as a fully visible eclipse.
-	const expected = hasCentralPhase ? [C1, C2, MAX, C3, C4] : [C1, MAX, C4]
-	const completeEventSet = expected.every((event) => event !== null)
-	const allExpectedAbove = expected.every((event) => event?.observable === true)
+	const completeEventSet = hasCentralPhase ? C1 !== null && C2 !== null && C3 !== null && C4 !== null : C1 !== null && C4 !== null
+	const allExpectedAbove = hasCentralPhase ? C1?.observable === true && C2?.observable === true && MAX.observable && C3?.observable === true && C4?.observable === true : C1?.observable === true && MAX.observable && C4?.observable === true
 
 	// Common case: any contact above the horizon means the eclipse is observable. Only when every contact is
 	// below the horizon, and the partial interval is known, do we pay for a continuous check of the altitude
 	// maximum between contacts (a culmination sliver above the horizon). The interval [C1, C4] contains every
 	// contact, so this never lowers observability below the event-based answer.
 	const horizonAltitude = options.horizonAltitude ?? 0
-	const eventAnyAbove = [C1, C2, MAX, C3, C4].some((event) => event?.observable === true)
+	const eventAnyAbove = C1?.observable === true || C2?.observable === true || MAX.observable || C3?.observable === true || C4?.observable === true
 	const anyAbove = eventAnyAbove || (C1 !== null && C4 !== null && maxSunAltitudeOverInterval(pbe, longitude, latitude, C1.jd, C4.jd, options) >= horizonAltitude)
 
 	// `completelyVisible` requires the full expected event set above the horizon AND no interior dip below it.
@@ -1127,8 +1177,9 @@ const MAX_SHADOW_HALF_WIDTH_KM = 600
 const SHADOW_EDGE_STEP_KM = 5
 
 // Destination geographic point reached from (lon, lat) along a great-circle bearing (from north toward
-// east) after a surface distance, on a sphere of radius EARTH_RADIUS_KM.
-function destinationPoint(longitude: Angle, latitude: Angle, bearing: Angle, distanceKm: number) {
+// east) after a surface distance, on a sphere of radius EARTH_RADIUS_KM. Writes [longitude, latitude] into
+// `o` and returns the same tuple to avoid allocations during shadow-edge marches.
+function destinationPoint(longitude: Angle, latitude: Angle, bearing: Angle, distanceKm: number, o: [longitude: Angle, latitude: Angle]) {
 	const angular = distanceKm / EARTH_RADIUS_KM
 	const sinLat = Math.sin(latitude)
 	const cosLat = Math.cos(latitude)
@@ -1136,7 +1187,9 @@ function destinationPoint(longitude: Angle, latitude: Angle, bearing: Angle, dis
 	const cosAng = Math.cos(angular)
 	const lat2 = Math.asin(clamp(sinLat * cosAng + cosLat * sinAng * Math.cos(bearing), -1, 1))
 	const lon2 = longitude + Math.atan2(Math.sin(bearing) * sinAng * cosLat, cosAng - sinLat * Math.sin(lat2))
-	return [lon2, lat2] as const
+	o[0] = lon2
+	o[1] = lat2
+	return o
 }
 
 // Distance (km) from the observer to the central-shadow edge along a bearing at a fixed instant: marches
@@ -1145,18 +1198,19 @@ function destinationPoint(longitude: Angle, latitude: Angle, bearing: Angle, dis
 function findCentralShadowEdgeKm(centralValueAt: (longitude: Angle, latitude: Angle) => number, longitude: Angle, latitude: Angle, bearing: Angle) {
 	let previousKm = 0
 	let previousValue = centralValueAt(longitude, latitude)
+	const point: [longitude: Angle, latitude: Angle] = [longitude, latitude]
 
 	for (let distanceKm = SHADOW_EDGE_STEP_KM; distanceKm <= MAX_SHADOW_HALF_WIDTH_KM; distanceKm += SHADOW_EDGE_STEP_KM) {
-		const [lon, lat] = destinationPoint(longitude, latitude, bearing, distanceKm)
-		const value = centralValueAt(lon, lat)
+		destinationPoint(longitude, latitude, bearing, distanceKm, point)
+		const value = centralValueAt(point[0], point[1])
 
 		if (previousValue < 0 && value >= 0) {
 			let lo = previousKm
 			let hi = distanceKm
 			for (let i = 0; i < 40 && hi - lo > 1e-3; i++) {
 				const mid = (lo + hi) * 0.5
-				const [midLon, midLat] = destinationPoint(longitude, latitude, bearing, mid)
-				if (centralValueAt(midLon, midLat) < 0) lo = mid
+				destinationPoint(longitude, latitude, bearing, mid, point)
+				if (centralValueAt(point[0], point[1]) < 0) lo = mid
 				else hi = mid
 			}
 			return (lo + hi) * 0.5
@@ -1228,7 +1282,11 @@ export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, 
 	if (maxEvent.centralPhaseKind === 'none') return null
 
 	const time = timeAtJulianDay(pbe.maximumTime, maxEvent.jd)
-	const centralValueAt = (lon: Angle, lat: Angle) => centralContactFunction(computeLocalFundamentalState(pbe, lon, lat, time))
+	const metrics: [distance: number, L1: number, L2: number] = [0, 0, 0]
+	const centralValueAt = (lon: Angle, lat: Angle) => {
+		const [distance, , L2] = computeLocalFundamentalMetrics(pbe, lon, lat, time, metrics)
+		return distance - Math.abs(L2)
+	}
 
 	// The observer must be strictly inside the central shadow, using the same margin as the central-phase
 	// classification so a tangential (zero-duration) edge is treated consistently as not central.
