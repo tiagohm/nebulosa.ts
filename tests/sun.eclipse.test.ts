@@ -1661,6 +1661,12 @@ describe('branch-aware curve topology', () => {
 		expect(geometry.lines.penumbraSouth).toHaveLength(1)
 	})
 
+	test('2021-06-10 omits the unreliable polar fill ring', () => {
+		const { geometry } = geometryFor(2021, 6, 1)
+		expect(geometry.lines.umbraNorth.length + geometry.lines.umbraSouth.length).toBeGreaterThan(0)
+		expect(computeSolarEclipseFillGeometry(geometry)).toHaveLength(0)
+	})
+
 	for (const fixture of CASES) {
 		describe(fixture.name, () => {
 			const { elements, geometry } = geometryFor(fixture.date[0], fixture.date[1], fixture.date[2])

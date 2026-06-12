@@ -2558,6 +2558,11 @@ const MAX_FILL_PAIR_COST = 30 * DEG2RAD
 // along-limit steps and the two end connectors — stays small; an edge this large would be a connector welding
 // the ring across a gap or the whole map, so such a ring is dropped rather than drawn.
 const MAX_FILL_RING_EDGE = 20 * DEG2RAD
+// Polar fill rings are projection-sensitive: a connector that is short on the sphere can become a long
+// horizontal edge across the top/bottom of a cylindrical map. Such a ring is visual-only and unreliable, so
+// it is dropped rather than filling a polar cap that is not bounded by the physical curves.
+const MAX_FILL_POLAR_CONNECTOR_LONGITUDE = 30 * DEG2RAD
+const FILL_POLAR_CONNECTOR_LATITUDE = 80 * DEG2RAD
 
 // Pairing cost between a north and a south umbra-limit branch: the smaller of the two endpoint-to-endpoint
 // matchings, or Infinity when the two branches are separated in time by more than their own extent. The
@@ -2591,6 +2596,18 @@ function maxRingAngularEdge(ring: readonly GeoPoint[]) {
 	}
 
 	return max
+}
+
+function hasPolarFillConnector(ring: readonly GeoPoint[]) {
+	for (let i = 0; i < ring.length; i++) {
+		const a = ring[i]
+		const b = ring[(i + 1) % ring.length]
+		let longitudeGap = Math.abs(a.x - b.x)
+		if (longitudeGap > PI) longitudeGap = TAU - longitudeGap
+		if (longitudeGap > MAX_FILL_POLAR_CONNECTOR_LONGITUDE && Math.min(Math.abs(a.y), Math.abs(b.y)) > FILL_POLAR_CONNECTOR_LATITUDE) return true
+	}
+
+	return false
 }
 
 // Builds one fill ring from a north branch and its paired south branch: the north traversed forward,
@@ -2653,7 +2670,7 @@ export function computeSolarEclipseFillGeometry(geometry: SolarEclipseMapGeometr
 		const ring = buildFillRing(north.branch, souths[bestIndex].branch)
 		// Drop a ring that would close across a large gap (a connector edge welding the band across the map),
 		// keeping only rings that hug the narrow totality band.
-		if (ring.length >= 3 && maxRingAngularEdge(ring) <= MAX_FILL_RING_EDGE) rings.push(ring)
+		if (ring.length >= 3 && maxRingAngularEdge(ring) <= MAX_FILL_RING_EDGE && !hasPolarFillConnector(ring)) rings.push(ring)
 	}
 
 	return rings
