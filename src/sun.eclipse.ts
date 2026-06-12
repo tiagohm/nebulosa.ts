@@ -1535,10 +1535,10 @@ function bridgeCurveGap(out: GeoPoint[], pbe: PolynomialBesselianElements, a: Ge
 
 // Solves a curve point on the great-circle meridian halfway between a and b and returns it only when it
 // lies strictly between them (both sub-distances shrink). A longitude fold places two arcs at the same
-// intermediate longitude, so several latitude seeds are tried (the interpolated latitude, then each
-// endpoint) and the first in-between solution is returned; undefined means no curve point connects a and b
-// there, i.e. they belong to disconnected arcs. Shared by the cusp-mend densifier and the silent-arc-switch
-// detector, so both decide continuity the same way.
+// intermediate longitude, so several latitude seeds are tried (the interpolated latitude, each endpoint,
+// then the global curve seeds) and the first in-between solution is returned; undefined means no curve point
+// connects a and b there, i.e. they belong to disconnected arcs. Shared by the cusp-mend densifier and the
+// silent-arc-switch detector, so both decide continuity the same way.
 // Fraction of the endpoint gap that the larger sub-distance of an accepted midpoint may reach. A real
 // in-between point roughly bisects (both sub-distances near half the gap); a midpoint hugging one endpoint
 // (the solver landed on the far endpoint's own arc) is rejected, so a silent arc switch is not mistaken for
@@ -1550,7 +1550,7 @@ function solveCurveMidpointBetween(pbe: PolynomialBesselianElements, a: GeoPoint
 	const limit = MIDPOINT_BALANCE * ab
 	const intermediate = interpolateGreatCirclePoint(a, b, 0.5)
 
-	for (const seedLatitude of [intermediate.y, b.y, a.y]) {
+	for (const seedLatitude of [intermediate.y, b.y, a.y, ...CURVE_SEED_LATITUDES]) {
 		const candidate = findEclipseCurvePoint(pbe, intermediate.x, seedLatitude, i, G, refractionMode)
 		if (candidate && angularDistance(a, candidate) <= limit && angularDistance(candidate, b) <= limit) return candidate
 	}
@@ -1588,7 +1588,12 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 
 	const deduped = deduplicateBranches(branches, maxAngularStep)
 	const reconnected = reconnectBranchCusps(deduped, pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
-	return reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	const pieces = reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	const reconnectedPieces = reconnectBranchCusps(deduplicateBranches(pieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
+	return deduplicateBranches(
+		reconnectedPieces.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap)),
+		maxAngularStep,
+	)
 }
 
 // Removes consecutive points that coincide geographically (ignoring jd), preserving the branch's order.
@@ -1611,16 +1616,18 @@ const CUSP_RECONNECT_LIMIT = 20 * DEG2RAD
 // far away in arc length and is.
 const CUSP_RECONNECT_OVERLAP_ARC = 10 * DEG2RAD
 
-// Latitude (radians) beyond which a branch is not reconnected. Near a pole the longitude/latitude
-// representation degenerates (meridians converge), so a limit merely passing close to the pole fragments and
-// a merged crossing zigzags across the seam; any branch reaching past this is kept as separate render pieces.
-// A genuine longitude-fold cusp sits well away from the pole (the 2005-04-08 penumbra-south reaches only
-// ~82 deg at S1), so it is unaffected.
+// Latitude (radians) beyond which a cusp reconnection is not attempted. Near a pole the longitude/latitude
+// representation degenerates (meridians converge), so a bridge whose joint or inserted points enter this
+// cap can zigzag across the seam. The gate is local to the proposed bridge: a branch may later reach the
+// polar cap and still be reconnected through a lower-latitude endpoint.
 const CUSP_RECONNECT_POLE_LATITUDE = 85 * DEG2RAD
 
-// Whether a branch reaches into the polar cap where reconnection is unsafe.
-function branchReachesPole(branch: readonly GeoPoint[]) {
-	for (const point of branch) if (Math.abs(point.y) > CUSP_RECONNECT_POLE_LATITUDE) return true
+function pointInReconnectPolarCap(point: GeoPoint) {
+	return Math.abs(point.y) > CUSP_RECONNECT_POLE_LATITUDE
+}
+
+function bridgeEntersReconnectPolarCap(bridge: readonly GeoPoint[]) {
+	for (const point of bridge) if (pointInReconnectPolarCap(point)) return true
 	return false
 }
 
@@ -1640,16 +1647,6 @@ function solveContinuousBridge(pbe: PolynomialBesselianElements, a: GeoPoint, b:
 	}
 
 	return angularDistance(previous, b) > continuityGap ? undefined : bridge
-}
-
-// Whether two branches already touch (some endpoint pair within one angular step), i.e. they are adjacent
-// pieces of one curve the renderer already draws continuously (an antimeridian seam split, say). Such a pair
-// must not be reconnected through its far endpoints, which would retrace one of the branches.
-function branchesAlreadyTouch(a: readonly GeoPoint[], b: readonly GeoPoint[], maxAngularStep: Angle) {
-	const endsA = [a[0], a.at(-1)!]
-	const endsB = [b[0], b.at(-1)!]
-	for (const ea of endsA) for (const eb of endsB) if (angularDistance(ea, eb) <= maxAngularStep) return true
-	return false
 }
 
 // Whether a branch doubles back over itself: two points close in space but far apart in arc length. Near the
@@ -1687,28 +1684,23 @@ function reconnectBranchCusps(branches: readonly GeoPoint[][], pbe: PolynomialBe
 
 		for (let a = 0; a < result.length; a++) {
 			for (let b = a + 1; b < result.length; b++) {
-				if (branchesAlreadyTouch(result[a], result[b], maxAngularStep)) continue
-				// Keep pole-reaching pieces separate: near a pole the lon/lat geometry degenerates and a merge zigzags.
-				if (branchReachesPole(result[a]) || branchReachesPole(result[b])) continue
-
 				const endsA = [result[a][0], result[a].at(-1)!]
 				const endsB = [result[b][0], result[b].at(-1)!]
 				for (let ea = 0; ea < 2; ea++) {
 					for (let eb = 0; eb < 2; eb++) {
 						const gap = angularDistance(endsA[ea], endsB[eb])
-						if (gap <= maxAngularStep || gap > CUSP_RECONNECT_LIMIT || gap >= bestGap) continue
+						if (gap > CUSP_RECONNECT_LIMIT || gap >= bestGap) continue
+						if (pointInReconnectPolarCap(endsA[ea]) || pointInReconnectPolarCap(endsB[eb])) continue
 
-						const bridge = solveContinuousBridge(pbe, endsA[ea], endsB[eb], i, G, maxAngularStep, maxDrawableGap, refractionMode)
-						if (!bridge) continue
+						const bridge = gap <= maxAngularStep ? [] : solveContinuousBridge(pbe, endsA[ea], endsB[eb], i, G, maxAngularStep, maxDrawableGap, refractionMode)
+						if (!bridge || bridgeEntersReconnectPolarCap(bridge)) continue
 
 						// Orient A so endpoint ea is the joint (reverse when it is the start) and B so endpoint eb
 						// is the joint (reverse when it is the end), then splice the bridge between them.
 						const aOriented = ea === 0 ? result[a].toReversed() : result[a]
 						const bOriented = eb === 1 ? result[b].toReversed() : result[b]
 						const merged = cleanCurveBranch([...aOriented, ...bridge, ...bOriented])
-						// Reject a merge whose re-solved bridge bulges into the degenerate polar cap (even when
-						// the source branches did not), or that folds the arc back over itself.
-						if (branchReachesPole(merged) || branchRetraces(merged, maxAngularStep, CUSP_RECONNECT_OVERLAP_ARC)) continue
+						if (branchRetraces(merged, maxAngularStep, CUSP_RECONNECT_OVERLAP_ARC)) continue
 
 						bestGap = gap
 						bestA = a
@@ -1800,7 +1792,6 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 			// Continuation from the previous latitude keeps the Newton iteration on the same branch;
 			// when it fails (or there is no previous point) retry from the fixed seed.
 			let point = previous && findEclipseCurvePoint(pbe, lon, previous.y, i, G, refractionMode)
-			point ??= findEclipseCurvePoint(pbe, lon, seeds[seedIndex], i, G, refractionMode)
 
 			// Silent arc switch: at a longitude fold the seed's arc terminates while the other arc still
 			// exists, and the Newton continuation snaps onto that far arc. Detect the jump (a large step with
@@ -1808,10 +1799,21 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 			// the two arcs are never welded by an internal chord; the block below then opens a fresh branch for
 			// the new arc, and the missing fold segment is recovered later by the continuity assembler/mend.
 			if (previous && point && angularDistance(previous, point) > maxAngularStep * CURVE_GAP_SPLIT_FACTOR && !solveCurveMidpointBetween(pbe, previous, point, i, G, refractionMode)) {
-				if (activeBySeed[seedIndex]) pushDistinct(activeBySeed[seedIndex]!, refineCurveBoundary(pbe, previous.x, lon, previous.y, true, i, G, refractionMode))
-				activeBySeed[seedIndex] = undefined
-				previous = undefined
+				const seeded = findEclipseCurvePoint(pbe, lon, seeds[seedIndex], i, G, refractionMode)
+				const seededGap = seeded ? angularDistance(previous, seeded) : Infinity
+				const switchedGap = angularDistance(previous, point)
+				const seededContinues = seeded !== undefined && seededGap < switchedGap && (seededGap <= maxAngularStep * CURVE_GAP_SPLIT_FACTOR || solveCurveMidpointBetween(pbe, previous, seeded, i, G, refractionMode) !== undefined)
+
+				if (seededContinues) {
+					point = seeded
+				} else {
+					if (activeBySeed[seedIndex]) pushDistinct(activeBySeed[seedIndex]!, refineCurveBoundary(pbe, previous.x, lon, previous.y, true, i, G, refractionMode))
+					activeBySeed[seedIndex] = undefined
+					previous = undefined
+				}
 			}
+
+			point ??= findEclipseCurvePoint(pbe, lon, seeds[seedIndex], i, G, refractionMode)
 
 			if (previous && !point) {
 				// The family just disappeared: refine the exit longitude into the open branch, then close it.
@@ -2043,7 +2045,7 @@ function RiseSetBranchComparatorByHigherLatitude(a: RiseSetBranch, b: RiseSetBra
 // at the day-side gap, its variable set of crossings (0..4) is tracked into continuity branches, and each
 // branch is anchored to the P1/P2/P3/P4 contacts so it passes through them. Fast-moving stretches near the
 // cusps are densified by subdividing in time so the curve follows the geometry rather than a straight chord.
-export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPoint, P4: GeoPoint, optionalContacts: Pick<SolarEclipseContactPoints, 'P2' | 'P3'> = {}, options: SolarEclipseRiseSetCurveOptions = {}) {
+export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPoint, P4: GeoPoint, optionalContacts: Pick<SolarEclipseContactPoints, 'P2' | 'P3' | 'N1' | 'N2' | 'S1' | 'S2'> = {}, options: SolarEclipseRiseSetCurveOptions = {}) {
 	if (P1.jd === undefined || P4.jd === undefined || P4.jd < P1.jd) return []
 
 	const stepDays = validStep(options.step, DEFAULT_RISE_SET_STEP_SECONDS) / DAYSEC
@@ -2092,7 +2094,7 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 		}
 	}
 
-	return curves
+	return insertRiseSetCuspPoints(curves, [optionalContacts.N1, optionalContacts.N2, optionalContacts.S1, optionalContacts.S2])
 }
 
 function RiseSetBranchFilter(branch: RiseSetBranch) {
@@ -2222,6 +2224,47 @@ function nearestContactByJd(jd: number | undefined, contacts: readonly GeoPoint[
 	}
 
 	return best
+}
+
+const RISE_SET_CUSP_INSERT_MAX_GAP = DEFAULT_MAX_ANGULAR_STEP * CURVE_GAP_SPLIT_FACTOR
+
+function insertRiseSetCuspPoints(curves: readonly GeoPoint[][], cusps: readonly (GeoPoint | undefined)[]) {
+	const out = curves.map((curve) => curve.slice())
+
+	for (const cusp of cusps) {
+		if (cusp?.jd === undefined) continue
+
+		let bestCurve = -1
+		let bestIndex = -1
+		let bestCost = Infinity
+
+		for (let c = 0; c < out.length; c++) {
+			const curve = out[c]
+			for (let i = 1; i < curve.length; i++) {
+				const a = curve[i - 1]
+				const b = curve[i]
+				if (a.jd === undefined || b.jd === undefined || cusp.jd < a.jd - CURVE_TIME_EPSILON_DAYS || cusp.jd > b.jd + CURVE_TIME_EPSILON_DAYS) continue
+
+				const da = angularDistance(a, cusp)
+				const db = angularDistance(cusp, b)
+				if (da > RISE_SET_CUSP_INSERT_MAX_GAP || db > RISE_SET_CUSP_INSERT_MAX_GAP) continue
+
+				const cost = da + db - angularDistance(a, b)
+				if (cost < bestCost) {
+					bestCost = cost
+					bestCurve = c
+					bestIndex = i
+				}
+			}
+		}
+
+		if (bestCurve < 0) continue
+
+		const curve = out[bestCurve]
+		if (!samePoint(curve[bestIndex - 1], cusp) && !samePoint(curve[bestIndex], cusp)) curve.splice(bestIndex, 0, cusp)
+	}
+
+	return out
 }
 
 // F. PUBLIC ASSEMBLY
@@ -2375,7 +2418,7 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		;[points.N1, points.S1] = penumbralLimitEndpointsByTime(pbe, limit)
 	}
 
-	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, contacts, { step: options.riseSetStep }) : []
+	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, points, { step: options.riseSetStep }) : []
 
 	return {
 		points,

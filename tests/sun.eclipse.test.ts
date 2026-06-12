@@ -1596,6 +1596,8 @@ describe('branch-aware curve topology', () => {
 
 	const CASES = [
 		{ name: '2005-04-08', date: [2005, 4, 1] },
+		{ name: '2005-10-03', date: [2005, 10, 1] },
+		{ name: '2006-09-22', date: [2006, 9, 1] },
 		{ name: '2024-04-08', date: [2024, 4, 1] },
 		{ name: '2000-07-01', date: [2000, 7, 1] },
 		{ name: '2001-12-14', date: [2001, 12, 1] },
@@ -1613,8 +1615,50 @@ describe('branch-aware curve topology', () => {
 		const { geometry } = geometryFor(2008, 2, 1)
 		const norths = geometry.lines.umbraNorth.filter((branch) => branch.length >= 2).length
 		const souths = geometry.lines.umbraSouth.filter((branch) => branch.length >= 2).length
-		expect(norths).toBeGreaterThan(2)
+		expect(norths).toBeGreaterThan(1)
 		expect(computeSolarEclipseFillGeometry(geometry).length).toBe(Math.min(norths, souths))
+	})
+
+	test('2005-10-03 keeps the lower northern penumbral arc between N1 and N2', () => {
+		const { elements, geometry } = geometryFor(2005, 10, 1)
+		const expected = findEclipseCurvePoint(elements, deg(55), 0, 1, 0)
+
+		expect(expected).toBeDefined()
+		expect(expected!.y).toBeLessThan(deg(70))
+
+		let nearest = Infinity
+		let branchWithLowerArc: readonly GeoPoint[] | undefined
+		for (const branch of geometry.lines.penumbraNorth) {
+			for (const point of branch) {
+				const distance = sphericalSeparation(expected!.x, expected!.y, point.x, point.y)
+				if (distance < nearest) {
+					nearest = distance
+					branchWithLowerArc = branch
+				}
+			}
+		}
+
+		expect(nearest).toBeLessThan(STEP)
+		expect(branchWithLowerArc).toContain(geometry.points.N1)
+	})
+
+	test('2005-10-03 rise/set curve passes through N1 without a visible cusp gap', () => {
+		const eclipse = nearestSolarEclipse(timeYMD(2005, 10, 1), true)
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, getSunMoonPosition)
+		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: STEP, maxAngularStep: STEP, includeRiseSetCurves: true, riseSetStep: 600 })
+		const N1 = geometry.points.N1!
+
+		let nearest = Infinity
+		for (const point of geometry.lines.riseSetCurves.flat()) {
+			nearest = Math.min(nearest, sphericalSeparation(N1.x, N1.y, point.x, point.y))
+		}
+
+		expect(nearest).toBeLessThan(1e-9)
+	})
+
+	test('2006-09-22 southern penumbral limit joins its cusp fragments', () => {
+		const { geometry } = geometryFor(2006, 9, 1)
+		expect(geometry.lines.penumbraSouth).toHaveLength(1)
 	})
 
 	for (const fixture of CASES) {
