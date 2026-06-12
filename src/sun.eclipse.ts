@@ -2615,31 +2615,16 @@ function penumbralLimitEndpointsByTime(pbe: PolynomialBesselianElements, curve: 
 	return a.y <= b.y ? [a, b] : [b, a]
 }
 
-// Julian Day span of a branch, or undefined when its points carry no time.
-function branchTimeRange(branch: readonly GeoPoint[]) {
-	let start = Infinity
-	let end = -Infinity
-
-	for (const point of branch) {
-		if (point.jd === undefined) return undefined
-		if (point.jd < start) start = point.jd
-		if (point.jd > end) end = point.jd
-	}
-
-	return start <= end ? { start, end } : undefined
-}
-
-// Per-branch fill metadata computed once up front, so a branch's time range and endpoints are not
+// Per-branch fill metadata computed once up front, so a branch's endpoints are not
 // recomputed for every candidate pairing.
 interface FillBranchInfo {
 	readonly branch: readonly GeoPoint[]
-	readonly range?: { readonly start: number; readonly end: number }
 	readonly start: GeoPoint
 	readonly end: GeoPoint
 }
 
 function fillBranchInfo(branch: readonly GeoPoint[]): FillBranchInfo {
-	return { branch, range: branchTimeRange(branch), start: branch[0], end: branch.at(-1)! }
+	return { branch, start: branch[0], end: branch.at(-1)! }
 }
 
 // Maximum accepted north/south branch pairing cost (radians, sum of the two end gaps). Compatible band
@@ -2658,18 +2643,8 @@ const MAX_FILL_POLAR_CONNECTOR_LONGITUDE = 30 * DEG2RAD
 const FILL_POLAR_CONNECTOR_LATITUDE = 80 * DEG2RAD
 
 // Pairing cost between a north and a south umbra-limit branch: the smaller of the two endpoint-to-endpoint
-// matchings, or Infinity when the two branches are separated in time by more than their own extent. The
-// moving shadow reaches the north and south edge of one band cross-section at slightly different instants,
-// and the latitude-apex split offsets the two sides further, so the time spans of a genuine pair overlap OR
-// merely abut; only an unrelated polar/antimeridian piece is far apart in time. The spatial separation is
-// gated separately by MAX_FILL_PAIR_COST.
+// matchings. A pair this far apart spatially is not the two sides of one band and is gated by MAX_FILL_PAIR_COST.
 function branchPairScore(north: FillBranchInfo, south: FillBranchInfo) {
-	if (north.range && south.range) {
-		const gap = Math.max(north.range.start, south.range.start) - Math.min(north.range.end, south.range.end)
-		const maxDuration = Math.max(north.range.end - north.range.start, south.range.end - south.range.start)
-		if (gap > maxDuration) return Infinity
-	}
-
 	const aligned = angularDistance(north.start, south.start) + angularDistance(north.end, south.end)
 	const reversed = angularDistance(north.start, south.end) + angularDistance(north.end, south.start)
 	return Math.min(aligned, reversed)
