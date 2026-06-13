@@ -1604,7 +1604,9 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 	const maxDrawableGap = Math.max(BRANCH_MAX_DRAWABLE_GAP, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
 	const branches: GeoPoint[][] = []
 
-	for (const branch of findCurveBranches(pbe, i, G, options)) {
+	// The continuation scan traces smooth arcs; the fixed-seed scan recovers arcs it orphans at near-polar
+	// folds. Both feed the same cleanup/dedup/reconnect pipeline, which collapses the arcs they share.
+	for (const branch of [...findCurveBranches(pbe, i, G, options), ...findFixedSeedCurveArcs(pbe, i, G, options)]) {
 		const cleaned = cleanCurveBranch(branch)
 		if (cleaned.length >= 2) branches.push(cleaned)
 	}
@@ -2036,6 +2038,48 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 			}
 
 			previousBySeed[seedIndex] = point
+		}
+	}
+
+	return branches
+}
+
+// Independent fixed-seed longitude scan that recovers limit arcs the continuation scan in findCurveBranches
+// can orphan. When a limit folds near a pole the two arcs of the fold meet at the entry longitude, so every
+// seed's continuation commits to whichever arc Newton picks there (typically the poleward one) and the
+// fixed-seed fallback never fires because continuation keeps converging. The far arc, although reachable
+// from a fixed seed nearer its own latitude band, is then never traced (e.g. the C2-side annularity limit of
+// the near-polar 2471-03-22 annular eclipse, leaving U3/U4 with no curve to attach to). Solving each fixed
+// seed independently at every longitude re-anchors it to the arc nearest its band; consecutive in-longitude
+// solutions are linked while within the fold step and split otherwise. Every emitted point already satisfies
+// the magnitude, altitude and residual gates of findEclipseCurvePoint, so the worst case is a duplicate of an
+// arc the continuation scan already found; the caller merges both through deduplicateBranches/reconnect.
+function findFixedSeedCurveArcs(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: SolarEclipseCurveOptions = {}) {
+	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
+	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
+	const refractionMode = options.refractionMode ?? DEFAULT_REFRACTION_MODE
+	const foldStep = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
+	const branches: GeoPoint[][] = []
+
+	for (const seed of CURVE_SEED_LATITUDES) {
+		let current: GeoPoint[] | undefined
+		let previous: GeoPoint | undefined
+
+		for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
+			const lon = Math.min(longitude, PI)
+			const point = findEclipseCurvePoint(pbe, lon, seed, i, G, refractionMode)
+
+			if (point && previous && angularDistance(previous, point) <= foldStep) {
+				appendRefinedSegment(current!, pbe, previous, point, i, G, maxAngularStep, refractionMode)
+				pushDistinct(current!, point)
+			} else if (point) {
+				current = [point]
+				branches.push(current)
+			} else {
+				current = undefined
+			}
+
+			previous = point
 		}
 	}
 
