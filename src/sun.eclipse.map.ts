@@ -2064,6 +2064,10 @@ function overhangArcLength(branch: GeoBranch, from: number, to: number) {
 	return arc
 }
 
+function BranchComparatorByLengthDescending(a: GeoBranch, b: GeoBranch) {
+	return b.length - a.length
+}
+
 // Drops redundant branches that another kept branch already covers. Several latitude seeds converge to one
 // limit, emitting the same arc as a full copy and as shorter sub-arcs that start where each seed first
 // acquired the solution; left in, the continuity chainer would retrace those overlaps and fold the arc back
@@ -2074,11 +2078,20 @@ function deduplicateBranches(branches: GeoCurve, maxAngularStep: Angle) {
 	// A redundant sub-arc may overshoot the host's endpoint by a short stub (a seed tracing the same limit a
 	// few steps further); tolerate an overhang up to the fold-gap threshold so the duplicate is still dropped.
 	const maxOverhang = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
-	const byLength = branches.slice().sort((a, b) => b.length - a.length)
+	const byLength = branches.toSorted(BranchComparatorByLengthDescending)
 	const kept: GeoCurve = []
 
 	for (const branch of byLength) {
-		if (!kept.some((host) => branchCoveredBy(branch, host, tolerance, maxOverhang))) kept.push(branch)
+		let found = false
+
+		for (let i = 0; i < kept.length; i++) {
+			if (branchCoveredBy(branch, kept[i], tolerance, maxOverhang)) {
+				found = true
+				break
+			}
+		}
+
+		if (!found) kept.push(branch)
 	}
 
 	return kept

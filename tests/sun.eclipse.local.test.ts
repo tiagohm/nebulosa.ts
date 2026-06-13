@@ -7,7 +7,7 @@ import { computePolynomialBesselianElements, type PolynomialBesselianElements } 
 import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, } from '../src/sun.eclipse.local'
 import { sphericalSeparation } from '../src/geometry'
 import { timeToDate, timeYMD, toJulianDay, type Time } from '../src/time'
-import { sunMoonPosition } from './sun.eclipse.test'
+import { sunMoonPosition } from './sun.eclipse.util'
 
 function viewOptions(overrides: Partial<LocalSolarEclipseViewOptions> = {}): LocalSolarEclipseViewOptions {
 	return { width: 450, height: 160, selectedEvent: 'MAX', orientationMode: 'zenith', solarRadiusPx: 34, includeGhostDisks: true, includeHorizon: true, horizonBandPaddingPx: 4, ...overrides }
