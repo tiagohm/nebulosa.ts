@@ -70,6 +70,22 @@ function validatePointAnchor(point: GeoPoint | undefined, name: string, curve: G
 	catalogAssert(minDistanceToBranches(point, curve) <= tolerance, `${name} is not attached to its drawable family`)
 }
 
+// Minimum Sun altitude for a U-contact to be required to lie on the drawable umbra family. The umbra limit is
+// a day-side curve (the solver gates Sun altitude >= 0), so an antumbral cone tangency that occurs at or below
+// the horizon has no day-side limit to attach to: it is still a real geometric contact, reported at its true
+// position, but requiring attachment there is unsatisfiable (e.g. the 5968-05-24 annular, whose U4 lands
+// exactly on the terminator ~8.7 deg from the nearest family point). Above-horizon U-contacts must still attach.
+const UMBRAL_CONTACT_ATTACH_MIN_ALTITUDE = deg(0.5)
+
+// Validates a U-contact's attachment to the umbra family, but only when it occurs above the horizon, where a
+// day-side umbra limit can exist; a contact at or below the horizon is exempt (see the constant above).
+function validateUmbralContactAnchor(elements: PolynomialBesselianElements, point: GeoPoint | undefined, name: string, curve: GeoCurve) {
+	if (!point) return
+	validateCatalogPoint(point, name, true)
+	if (solarAltitudeAtPoint(elements, point) < UMBRAL_CONTACT_ATTACH_MIN_ALTITUDE) return
+	validatePointAnchor(point, name, curve, CATALOG_ANCHOR_TOLERANCE)
+}
+
 function validateNoBridgeableEndpointGaps(elements: PolynomialBesselianElements, curve: GeoCurve, name: string, i: -1 | 1, G: number) {
 	for (let a = 0; a < curve.length; a++) {
 		const branchA = curve[a]
@@ -185,10 +201,10 @@ function validateCatalogGeometry(elements: PolynomialBesselianElements, geometry
 	validatePointAnchor(points.S2, 'S2', penumbra, CATALOG_ANCHOR_TOLERANCE)
 
 	if (umbra.length > 0) {
-		validatePointAnchor(points.U1, 'U1', umbra, CATALOG_ANCHOR_TOLERANCE)
-		validatePointAnchor(points.U2, 'U2', umbra, CATALOG_ANCHOR_TOLERANCE)
-		validatePointAnchor(points.U3, 'U3', umbra, CATALOG_ANCHOR_TOLERANCE)
-		validatePointAnchor(points.U4, 'U4', umbra, CATALOG_ANCHOR_TOLERANCE)
+		validateUmbralContactAnchor(elements, points.U1, 'U1', umbra)
+		validateUmbralContactAnchor(elements, points.U2, 'U2', umbra)
+		validateUmbralContactAnchor(elements, points.U3, 'U3', umbra)
+		validateUmbralContactAnchor(elements, points.U4, 'U4', umbra)
 	}
 
 	if (lines.riseSetCurves.length > 0) {
