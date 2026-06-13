@@ -2309,11 +2309,38 @@ function nearestCurveSample(point: GeoPoint, branches: readonly (readonly GeoPoi
 
 const UMBRA_CONTACT_POINTS = ['U1', 'U2', 'U3', 'U4'] as const
 
+// Branch endpoint nearest in time to a contact, within timeTolerance (days), or undefined when none is.
+// U1..U4 mark terminator cusps that coincide with umbra-limit branch endpoints, so when the grazing-limb
+// geometry makes spatial distance unreliable the cusp is identified by endpoint time. Considers only the two
+// endpoints of each branch, since an interior sample at a coincidentally close time is not the cusp.
+function nearestEndpointByTime(point: GeoPoint, branches: readonly (readonly GeoPoint[])[], timeTolerance: number) {
+	if (point.jd === undefined) return undefined
+
+	let best: GeoPoint | undefined
+	let bestDelta = timeTolerance
+
+	for (const branch of branches) {
+		if (branch.length === 0) continue
+
+		for (const sample of [branch[0], branch.at(-1)!]) {
+			if (sample.jd === undefined) continue
+			const delta = Math.abs(sample.jd - point.jd)
+			if (delta < bestDelta) {
+				best = sample
+				bestDelta = delta
+			}
+		}
+	}
+
+	return best
+}
+
 // Snaps the informational U1..U4 markers onto the drawn (refracted) umbra-limit family so they sit on the
 // curve rather than at their unrefracted geometric position. A contact is snapped to the nearest curve
-// sample when that sample is spatially close, or when it is the same terminator cusp by time: near a grazing
-// limb the refracted curve runs almost tangent to the limb, so the matching cusp is the temporally nearest
-// curve point even though it is several degrees away spatially. The contact instant (jd) is preserved.
+// sample when that sample is spatially close; otherwise, near a grazing limb where the refracted curve runs
+// almost tangent to the limb, it is snapped to the branch endpoint nearest in time. The temporally nearest
+// cusp can be several degrees away and need not be the spatially nearest sample (another branch's flank may
+// pass marginally closer), so the time match is required, not just probed on the spatial pick. jd is preserved.
 function alignUmbralContactPoints(points: Writable<SolarEclipseContactPoints>, branches: readonly (readonly GeoPoint[])[], maxAngularStep: Angle) {
 	const spatialLimit = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
 	const best: Parameters<typeof nearestCurveSample>[2] = { sample: undefined as never, distance: 0 }
@@ -2323,11 +2350,13 @@ function alignUmbralContactPoints(points: Writable<SolarEclipseContactPoints>, b
 		if (!point) continue
 
 		const nearest = nearestCurveSample(point, branches, best)
-		if (!nearest) continue
+		if (nearest && nearest.distance <= spatialLimit) {
+			points[key] = { x: nearest.sample.x, y: nearest.sample.y, jd: point.jd }
+			continue
+		}
 
-		const { sample, distance } = nearest
-		const sameCuspByTime = point.jd !== undefined && sample.jd !== undefined && Math.abs(sample.jd - point.jd) <= UMBRAL_CONTACT_TIME_TOLERANCE_DAYS
-		if (distance <= spatialLimit || sameCuspByTime) points[key] = { x: sample.x, y: sample.y, jd: point.jd }
+		const cusp = nearestEndpointByTime(point, branches, UMBRAL_CONTACT_TIME_TOLERANCE_DAYS)
+		if (cusp) points[key] = { x: cusp.x, y: cusp.y, jd: point.jd }
 	}
 }
 
