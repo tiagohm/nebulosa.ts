@@ -2,12 +2,12 @@ import { expect, test, describe } from 'bun:test'
 import { deg } from '../src/angle'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { BRANCH_MAX_DRAWABLE_GAP, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, EARTH_E2, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolylinesToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse.map'
+import { BRANCH_MAX_DRAWABLE_GAP, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, EARTH_E2, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolylinesToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarAltitudeAtPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse.map'
 import { DEG2RAD, PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
 import { PlateCarree, type Projection, type ProjectionOptions } from '../src/projection'
 import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../src/time'
-import { catalogBranchRetraces, countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment, solarAltitude, sunMoonPosition, validateCatalogRiseSetCurves } from './sun.eclipse.test'
+import { catalogBranchRetraces, countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment, sunMoonPosition, validateCatalogRiseSetCurves } from './sun.eclipse.test'
 
 const JD0 = 2460409.25
 const TIME0 = time(JD0)
@@ -1311,7 +1311,7 @@ describe('eclipse geometry physical and topological invariants', () => {
 			// Sun altitude: every drawn curve point lies on the sunlit side, with the Sun above the horizon
 			// (a small negative tolerance absorbs refraction at the contacts, where the Sun grazes the horizon).
 			for (const point of [...umbraNorth.flat(), ...umbraSouth.flat(), ...penumbraNorth.flat(), ...penumbraSouth.flat(), ...centerLine]) {
-				expect(solarAltitude(elements, point)).toBeGreaterThan(deg(-1))
+				expect(solarAltitudeAtPoint(elements, point)).toBeGreaterThan(deg(-1))
 			}
 
 			// Smoothness: each physical limit branch bends without sharp kinks.
@@ -1410,7 +1410,7 @@ describe('solar eclipse map validation cases', () => {
 				for (const curve of lines.riseSetCurves) {
 					expect(curve.length).toBeGreaterThan(1)
 					expectNonDecreasingJd(curve)
-					for (const point of curve) expect(Math.abs(solarAltitude(elements, point))).toBeLessThan(deg(2))
+					for (const point of curve) expect(Math.abs(solarAltitudeAtPoint(elements, point))).toBeLessThan(deg(2))
 				}
 			})
 
@@ -1691,7 +1691,7 @@ describe('solar eclipse map acceptance criteria', () => {
 
 			// Greatest eclipse is on the sunlit side and near the central line.
 			test('greatest eclipse is near the central line', () => {
-				expect(solarAltitude(elements, points.Max!)).toBeGreaterThan(deg(-1))
+				expect(solarAltitudeAtPoint(elements, points.Max!)).toBeGreaterThan(deg(-1))
 				let nearest = Number.POSITIVE_INFINITY
 				for (const point of lines.centerLine) nearest = Math.min(nearest, sphericalSeparation(points.Max!.x, points.Max!.y, point.x, point.y))
 				expect(nearest).toBeLessThan(deg(2))
@@ -1699,7 +1699,7 @@ describe('solar eclipse map acceptance criteria', () => {
 
 			// Rise/set curves are horizon-contact curves, so the Sun is near the horizon along them.
 			test('rise/set curves sit near the solar horizon', () => {
-				for (const curve of lines.riseSetCurves) for (const point of curve) expect(Math.abs(solarAltitude(elements, point))).toBeLessThan(deg(2))
+				for (const curve of lines.riseSetCurves) for (const point of curve) expect(Math.abs(solarAltitudeAtPoint(elements, point))).toBeLessThan(deg(2))
 			})
 
 			// The named penumbral-limit extremes, when present, lie on a magnitude-0 limit branch and
@@ -1731,7 +1731,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(penumbra.length).toBeGreaterThan(0)
 		for (const point of geometry.lines.penumbraNorth.flat()) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
 		for (const point of geometry.lines.penumbraSouth.flat()) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
-		for (const point of penumbra) expect(solarAltitude(elements, point)).toBeGreaterThan(deg(-1))
+		for (const point of penumbra) expect(solarAltitudeAtPoint(elements, point)).toBeGreaterThan(deg(-1))
 	})
 
 	// A pure partial eclipse draws the penumbral limit (magnitude 0), and that limit spans the
@@ -1748,7 +1748,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		// Every point is on the magnitude-0 locus with the Sun above the horizon.
 		for (const point of limit) {
 			expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
-			expect(solarAltitude(elements, point)).toBeGreaterThan(deg(-1))
+			expect(solarAltitudeAtPoint(elements, point)).toBeGreaterThan(deg(-1))
 		}
 
 		// A grazing partial has a single penumbral limit, so its named extremes are its two terminator

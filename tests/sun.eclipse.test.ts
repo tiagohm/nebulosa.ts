@@ -4,7 +4,7 @@ import { DEG2RAD, PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation, type Point } from '../src/geometry'
 import { type SolarEclipse, nearestSolarEclipse } from '../src/sun'
 // oxfmt-ignore
-import { type GeoPoint, type PolynomialBesselianElements, intermediateGreatCircle, findEclipseCurvePoint, type SolarEclipseMapGeometry, centralAxisIntersectsEarth, solarEclipseMapToSvgPaths, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, evaluateBesselian, BRANCH_MAX_DRAWABLE_GAP, F, type SolarEclipseMapSvgPaths } from '../src/sun.eclipse.map'
+import { type GeoPoint, type PolynomialBesselianElements, intermediateGreatCircle, findEclipseCurvePoint, type SolarEclipseMapGeometry, centralAxisIntersectsEarth, solarEclipseMapToSvgPaths, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, evaluateBesselian, BRANCH_MAX_DRAWABLE_GAP, F, type SolarEclipseMapSvgPaths, solarAltitudeAtPoint } from '../src/sun.eclipse.map'
 import * as elpmpp02 from '../src/elpmpp02'
 import { PlateCarree } from '../src/projection'
 import { toJulianDay, timeYMD, type Time, time, Timescale, timeToDate } from '../src/time'
@@ -56,15 +56,6 @@ export function limitTangencyResidual(elements: PolynomialBesselianElements, poi
 	const dL2 = be.l2 - zeta * be.tanF2
 	const E = dL1 - G * (dL1 + dL2)
 	return Math.abs(W + i * Math.abs(E))
-}
-
-// Geometric solar altitude (radians) at a curve point's instant. Curve points must lie on the sunlit side,
-// where the Sun is above the horizon (a small negative tolerance absorbs refraction near the contacts).
-export function solarAltitude(elements: PolynomialBesselianElements, point: GeoPoint) {
-	const be = evaluateBesselian(elements, time(point.jd!, 0, Timescale.TT))
-	const H = point.x + be.mu - be.deltaTLongitudeCorrection
-	const sinh = Math.sin(be.d) * Math.sin(point.y) + Math.cos(be.d) * Math.cos(point.y) * Math.cos(H)
-	return Math.asin(Math.max(-1, Math.min(1, sinh)))
 }
 
 // Counts interior vertices whose direction turns by more than threshold radians: the serrilhado detector.
@@ -197,7 +188,7 @@ function validateCatalogBranches(eclipse: Readonly<SolarEclipse>, elements: Poly
 			const point = branch[k]
 			validateCatalogPoint(eclipse, point, `${name}[${b}][${k}]`, true)
 			catalogAssert(eclipse, limitTangencyResidual(elements, point, i, G) < 2e-3, `${name}[${b}][${k}] is off its magnitude locus`)
-			catalogAssert(eclipse, solarAltitude(elements, point) > deg(-2), `${name}[${b}][${k}] is below the drawable sunlit limb`)
+			catalogAssert(eclipse, solarAltitudeAtPoint(elements, point) > deg(-2), `${name}[${b}][${k}] is below the drawable sunlit limb`)
 			if (k > 0) catalogAssert(eclipse, sphericalSeparation(branch[k - 1].x, branch[k - 1].y, point.x, point.y) <= CATALOG_MAX_DRAWABLE_GAP, `${name}[${b}] has a large drawable gap`)
 		}
 	}
@@ -309,7 +300,7 @@ export function validateCatalogRiseSetCurves(eclipse: Readonly<SolarEclipse>, el
 			const point = branch[k]
 
 			validateCatalogPoint(eclipse, point, `riseSetCurves[${b}][${k}]`, true)
-			catalogAssert(eclipse, Math.abs(solarAltitude(elements, point)) < deg(2.5), `riseSetCurves[${b}][${k}] is off the solar horizon`)
+			catalogAssert(eclipse, Math.abs(solarAltitudeAtPoint(elements, point)) < deg(2.5), `riseSetCurves[${b}][${k}] is off the solar horizon`)
 
 			if (k > 0) {
 				catalogAssert(eclipse, point.jd! >= branch[k - 1].jd!, `riseSetCurves[${b}] moves backward in time`)
