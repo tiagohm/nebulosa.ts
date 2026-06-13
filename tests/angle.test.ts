@@ -187,6 +187,19 @@ describe('parseAngle', () => {
 		expect(parseAngle('-23 48.40308"')).toBeCloseTo(deg(-23.0134453), 18)
 	})
 
+	test('negative angle with a zero degree/hour field keeps its sign', () => {
+		// Regression: the sign came from `parsedField < 0`, but a zero integer field parses to -0 and
+		// `-0 < 0` is false, so the sign was dropped and the angle flipped hemisphere (e.g. NASA "-000 38 00").
+		expect(parseAngle('-000 38 00')).toBeCloseTo(deg(-(38 / 60)), 18)
+		expect(parseAngle('-0 30')).toBeCloseTo(deg(-0.5), 18)
+		expect(parseAngle('-00 00 02.1')).toBeCloseTo(arcsec(-2.1), 18)
+		expect(parseAngle('-0h 30m')).toBeCloseTo(hour(-0.5), 18)
+		expect(parseAngle('-0 0 2.1', true)).toBeCloseTo(arcsec(-2.1) * 15, 18)
+		// A positive (or unsigned) zero-degree field stays positive.
+		expect(parseAngle('00 38 00')).toBeCloseTo(deg(38 / 60), 18)
+		expect(parseAngle('+00 38 00')).toBeCloseTo(deg(38 / 60), 18)
+	})
+
 	test('hour, minute and second', () => {
 		expect(parseAngle('23h 33m 48.40308s')).toBeCloseTo(hour(23.5634453), 18)
 		expect(parseAngle('23 33m 48.40308s', true)).toBeCloseTo(hour(23.5634453), 18)

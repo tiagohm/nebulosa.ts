@@ -196,7 +196,11 @@ export function parseAngle(input?: string | number, options?: ParseAngleOptions 
 		const b = res[3] ? +res[3] : 0
 		const c = res[5] ? +res[5] : 0
 
-		neg = a < 0
+		// Read the sign from the matched degree/hour token, not from `a < 0`: a negative angle whose integer
+		// field is zero (e.g. "-000 38 00", "-0 30") parses to negative zero, and `-0 < 0` is false, which
+		// would silently drop the sign and flip the angle to the wrong hemisphere. The unicode sign was already
+		// normalized to ASCII above, so a leading '-' is reliable.
+		neg = res[1].startsWith('-')
 
 		if (isHourSign(res[2])) isHour = true
 		else if (isDegSign(res[2])) isHour = false

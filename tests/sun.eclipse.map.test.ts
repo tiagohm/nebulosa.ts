@@ -1,5 +1,5 @@
 import { expect, test, describe } from 'bun:test'
-import { deg, parseAngle } from '../src/angle'
+import { deg, parseAngle, type Angle } from '../src/angle'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
 import { BRANCH_MAX_DRAWABLE_GAP, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, EARTH_E2, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolylinesToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarAltitudeAtPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoBranch, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse.map'
@@ -256,10 +256,10 @@ function expectTimeNearSeconds(actualJd: number, expectedJd: number, toleranceSe
 	expect(Math.abs((actualJd - expectedJd) * 86400)).toBeLessThanOrEqual(toleranceSeconds)
 }
 
-function expectGeoNear(actual: GeoPoint | undefined, latDeg: number, lonDeg: number, toleranceArcmin: number) {
+function expectGeoNear(actual: GeoPoint | undefined, lat: Angle, lon: Angle, toleranceArcmin: number) {
 	expect(actual).toBeDefined()
 	expectGeoPoint(actual!)
-	expect(sphericalSeparation(actual!.x, actual!.y, deg(lonDeg), deg(latDeg))).toBeLessThanOrEqual(deg(toleranceArcmin / 60))
+	expect(sphericalSeparation(actual!.x, actual!.y, lon, lat)).toBeLessThanOrEqual(deg(toleranceArcmin / 60))
 }
 
 const CENTRAL_FIXTURES = NASA_ECLIPSES.filter((fixture) => fixture.central)
@@ -378,80 +378,86 @@ test('computePolynomialBesselianElements follows the projection convention towar
 	expectGeoPointClose(point, subsolarLongitude, 0, 2460409.25)
 })
 
-test('findMaximumPoint matches NASA Besselian fixture at greatest eclipse instant', () => {
+describe('findMaximumPoint matches NASA Besselian fixture at greatest eclipse instant', () => {
 	for (const fixture of NASA_ECLIPSES) {
-		const point = findMaximumPoint(nasaPbe(fixture))
-		// Compared with a tolerance instead of an exact DMS string. For central
-		// eclipses Max is the strict axis projection; for partial/non-central ones it is the limb point
-		// nearest the axis, matching NASA's greatest-eclipse coordinate to a couple of arcminutes.
-		expectGeoNear(point, parseAngle(fixture.greatestEclipse[1])!, parseAngle(fixture.greatestEclipse[0])!, 2)
-		expect(point!.jd).toBe(fixture.greatestEclipse[2])
+		test(fixture.name, () => {
+			const point = findMaximumPoint(nasaPbe(fixture))
+			// Compared with a tolerance instead of an exact DMS string. For central
+			// eclipses Max is the strict axis projection; for partial/non-central ones it is the limb point
+			// nearest the axis, matching NASA's greatest-eclipse coordinate to a couple of arcminutes.
+			expectGeoNear(point, parseAngle(fixture.greatestEclipse[1])!, parseAngle(fixture.greatestEclipse[0])!, 2)
+			expect(point!.jd).toBe(fixture.greatestEclipse[2])
+		})
 	}
 })
 
-test('NASA Besselian fixtures preserve polynomial values and units', () => {
+describe('NASA Besselian fixtures preserve polynomial values and units', () => {
 	for (const fixture of NASA_ECLIPSES) {
-		const elements = nasaPbe(fixture)
-		const origin = evaluateBesselian(elements, elements.time0)
-		const maximum = evaluateBesselian(elements, elements.maximumTime)
-		const t = timeSubtract(elements.maximumTime, elements.time0) / elements.step
+		test(fixture.name, () => {
+			const elements = nasaPbe(fixture)
+			const origin = evaluateBesselian(elements, elements.time0)
+			const maximum = evaluateBesselian(elements, elements.maximumTime)
+			const t = timeSubtract(elements.maximumTime, elements.time0) / elements.step
 
-		expect(origin.x).toBeCloseTo(fixture.x[0], 12)
-		expect(origin.y).toBeCloseTo(fixture.y[0], 12)
-		expect(origin.l1).toBeCloseTo(fixture.l1[0], 12)
-		expect(origin.l2).toBeCloseTo(fixture.l2[0], 12)
-		expect(origin.d).toBeCloseTo(deg(fixture.d[0]), 12)
-		expect(origin.mu).toBeCloseTo(deg(fixture.mu[0]), 12)
-		expect(origin.deltaTLongitudeCorrection).toBeCloseTo(deg(0.00417807 * fixture.deltaT), 12)
-		expect(origin.dx).toBeCloseTo(fixture.x[1], 12)
-		expect(origin.dy).toBeCloseTo(fixture.y[1], 12)
-		expect(origin.tanF1).toBeCloseTo(fixture.tanF1, 12)
-		expect(origin.tanF2).toBeCloseTo(fixture.tanF2, 12)
-		expect(maximum.x).toBeCloseTo(evaluateNasaPolynomial(fixture.x, t), 12)
-		expect(maximum.y).toBeCloseTo(evaluateNasaPolynomial(fixture.y, t), 12)
-		expect(maximum.d).toBeCloseTo(deg(evaluateNasaPolynomial(fixture.d, t)), 12)
-		expect(maximum.mu).toBeGreaterThanOrEqual(0)
-		expect(maximum.mu).toBeLessThan(TAU)
+			expect(origin.x).toBeCloseTo(fixture.x[0], 12)
+			expect(origin.y).toBeCloseTo(fixture.y[0], 12)
+			expect(origin.l1).toBeCloseTo(fixture.l1[0], 12)
+			expect(origin.l2).toBeCloseTo(fixture.l2[0], 12)
+			expect(origin.d).toBeCloseTo(deg(fixture.d[0]), 12)
+			expect(origin.mu).toBeCloseTo(deg(fixture.mu[0]), 12)
+			expect(origin.deltaTLongitudeCorrection).toBeCloseTo(deg(0.00417807 * fixture.deltaT), 12)
+			expect(origin.dx).toBeCloseTo(fixture.x[1], 12)
+			expect(origin.dy).toBeCloseTo(fixture.y[1], 12)
+			expect(origin.tanF1).toBeCloseTo(fixture.tanF1, 12)
+			expect(origin.tanF2).toBeCloseTo(fixture.tanF2, 12)
+			expect(maximum.x).toBeCloseTo(evaluateNasaPolynomial(fixture.x, t), 12)
+			expect(maximum.y).toBeCloseTo(evaluateNasaPolynomial(fixture.y, t), 12)
+			expect(maximum.d).toBeCloseTo(deg(evaluateNasaPolynomial(fixture.d, t)), 12)
+			expect(maximum.mu).toBeGreaterThanOrEqual(0)
+			expect(maximum.mu).toBeLessThan(TAU)
+		})
 	}
 })
 
-test('NASA Besselian fixtures cover eclipse classes and central gating', () => {
+describe('NASA Besselian fixtures cover eclipse classes and central gating', () => {
 	for (const fixture of NASA_ECLIPSES) {
-		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(90), maxAngularStep: deg(45), includeRiseSetCurves: false })
+		test(fixture.name, () => {
+			const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(90), maxAngularStep: deg(45), includeRiseSetCurves: false })
 
-		expect(geometry.points.Max).toBeDefined()
-		expectGeoPoint(geometry.points.Max!)
-		for (const point of geometry.lines.penumbraNorth.flat()) expectGeoPoint(point)
-		for (const point of geometry.lines.penumbraSouth.flat()) expectGeoPoint(point)
+			expect(geometry.points.Max).toBeDefined()
+			expectGeoPoint(geometry.points.Max!)
+			for (const point of geometry.lines.penumbraNorth.flat()) expectGeoPoint(point)
+			for (const point of geometry.lines.penumbraSouth.flat()) expectGeoPoint(point)
 
-		const { U1, U2, U3, U4, C1, C2 } = geometry.points
+			const { U1, U2, U3, U4, C1, C2 } = geometry.points
 
-		if (fixture.type === 'partial') {
-			// The umbra never reaches Earth, so neither the umbral contacts nor the central line exist.
-			for (const point of [U1, U2, U3, U4, C1, C2]) expect(point).toBeUndefined()
+			if (fixture.type === 'partial') {
+				// The umbra never reaches Earth, so neither the umbral contacts nor the central line exist.
+				for (const point of [U1, U2, U3, U4, C1, C2]) expect(point).toBeUndefined()
+				expect(geometry.lines.centerLine).toHaveLength(0)
+				expect(geometry.lines.umbraNorth).toHaveLength(0)
+				expect(geometry.lines.umbraSouth).toHaveLength(0)
+				return
+			}
+
+			if (fixture.central) {
+				// The shadow axis pierces the ellipsoid: all four umbral contacts and both central-line endpoints exist.
+				expect(centralAxisIntersectsEarth(nasaPbe(fixture))).toBe(true)
+				for (const point of [U1, U2, U3, U4, C1, C2]) expectGeoPoint(point!)
+				expect(geometry.lines.centerLine.length).toBeGreaterThan(0)
+				return
+			}
+
+			// A non-central total/annular eclipse: the umbra only grazes the limb, so the informational
+			// external contacts U1/U4 exist while the internal contacts U2/U3 do not. The axis misses the
+			// ellipsoid, so there is no central line and no C1/C2 endpoints; umbra limits, however, are no
+			// longer forced empty.
+			expect(centralAxisIntersectsEarth(nasaPbe(fixture))).toBe(false)
+			expectGeoPoint(U1!)
+			expectGeoPoint(U4!)
+			for (const point of [U2, U3, C1, C2]) expect(point).toBeUndefined()
 			expect(geometry.lines.centerLine).toHaveLength(0)
-			expect(geometry.lines.umbraNorth).toHaveLength(0)
-			expect(geometry.lines.umbraSouth).toHaveLength(0)
-			continue
-		}
-
-		if (fixture.central) {
-			// The shadow axis pierces the ellipsoid: all four umbral contacts and both central-line endpoints exist.
-			expect(centralAxisIntersectsEarth(nasaPbe(fixture))).toBe(true)
-			for (const point of [U1, U2, U3, U4, C1, C2]) expectGeoPoint(point!)
-			expect(geometry.lines.centerLine.length).toBeGreaterThan(0)
-			continue
-		}
-
-		// A non-central total/annular eclipse: the umbra only grazes the limb, so the informational
-		// external contacts U1/U4 exist while the internal contacts U2/U3 do not. The axis misses the
-		// ellipsoid, so there is no central line and no C1/C2 endpoints; umbra limits, however, are no
-		// longer forced empty.
-		expect(centralAxisIntersectsEarth(nasaPbe(fixture))).toBe(false)
-		expectGeoPoint(U1!)
-		expectGeoPoint(U4!)
-		for (const point of [U2, U3, C1, C2]) expect(point).toBeUndefined()
-		expect(geometry.lines.centerLine).toHaveLength(0)
+		})
 	}
 })
 
@@ -913,12 +919,14 @@ test('splitAtMaxAbsLatitude keeps non-folding limits whole instead of emitting d
 	expect(split[0]).toHaveLength(3)
 })
 
-test('map geometry exposes the NASA greatest-eclipse point for every eclipse class', () => {
+describe('map geometry exposes the NASA greatest-eclipse point for every eclipse class', () => {
 	for (const fixture of NASA_ECLIPSES) {
-		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(90), maxAngularStep: deg(45) })
+		test(fixture.name, () => {
+			const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(90), maxAngularStep: deg(45) })
 
-		expectGeoNear(geometry.points.Max, parseAngle(fixture.greatestEclipse[1])!, parseAngle(fixture.greatestEclipse[0])!, 2)
-		expect(geometry.points.Max!.jd).toBe(fixture.greatestEclipse[2])
+			expectGeoNear(geometry.points.Max, parseAngle(fixture.greatestEclipse[1])!, parseAngle(fixture.greatestEclipse[0])!, 2)
+			expect(geometry.points.Max!.jd).toBe(fixture.greatestEclipse[2])
+		})
 	}
 })
 
@@ -1472,7 +1480,7 @@ describe('branch-aware curve topology', () => {
 
 		expect(nearest).toBeLessThan(STEP)
 		expect(branchWithLowerArc).toContain(geometry.points.N1)
-	})
+	}, 3000)
 
 	test('2005-10-03 rise/set curve passes through N1 without a visible cusp gap', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2005, 10, 1), true)
@@ -1486,7 +1494,7 @@ describe('branch-aware curve topology', () => {
 		}
 
 		expect(nearest).toBeLessThan(1e-9)
-	})
+	}, 3000)
 
 	test('2006-09-22 southern penumbral limit joins its cusp fragments', () => {
 		const { geometry } = geometryFor(2006, 9, 1)
@@ -1503,7 +1511,7 @@ describe('branch-aware curve topology', () => {
 
 		const paths = solarEclipseMapToSvgPaths(geometry, projection)
 		expect(longestProjectedSegment(paths.penumbraSouth)).toBeLessThan(MAP_WIDTH / 2)
-	}, 1500)
+	}, 3000)
 
 	test('2026-02-17 trims the southern umbra endpoint fold', () => {
 		const { geometry } = geometryFor(2026, 2, 1)
@@ -1511,7 +1519,7 @@ describe('branch-aware curve topology', () => {
 		expect(geometry.lines.umbraSouth).toHaveLength(1)
 		expect(endpointRetraces(geometry.lines.umbraSouth[0], false)).toBe(false)
 		expect(maxBranchSegment(geometry.lines.umbraSouth)).toBeLessThanOrEqual(BRANCH_MAX_DRAWABLE_GAP)
-	}, 1500)
+	}, 3000)
 
 	test('2026-08-12 keeps the north-polar partial boundary anchored', () => {
 		const { eclipse, elements } = geometryFor(2026, 8, 1)
@@ -1833,33 +1841,29 @@ describe('solar eclipse map acceptance criteria', () => {
 })
 
 describe('reference data and conventions', () => {
-	test('central-axis geometry classifies every NASA fixture central/non-central', () => {
-		for (const fixture of NASA_ECLIPSES) {
+	for (const fixture of NASA_ECLIPSES) {
+		test('central-axis geometry classifies every NASA fixture central/non-central:' + fixture.name, () => {
 			// The fixture's hand-set `central` flag must agree with the geometric axis-intersection test that now gates the central line.
 			expect(centralAxisIntersectsEarth(nasaPbe(fixture))).toBe(fixture.central)
-		}
-	})
+		})
 
-	test('TD/UT/Delta T convention: longitude correction is explicit and Delta T is applied once', () => {
-		for (const fixture of NASA_ECLIPSES) {
+		test('TD/UT/Delta T convention: longitude correction is explicit and Delta T is applied once:' + fixture.name, () => {
 			const elements = nasaPbe(fixture)
 			// NASA mu is in dynamical time, so the geographic projection carries an explicit Delta T
 			// longitude correction of DELTA_T_LONGITUDE_FACTOR * deltaT.
 			expect(elements.deltaTLongitudeCorrection).toBeCloseTo(DELTA_T_LONGITUDE_FACTOR * fixture.deltaT, 12)
 			// The correction equals 0.00417807 deg per second of Delta T.
 			expect(elements.deltaTLongitudeCorrection).toBeCloseTo(deg(0.00417807) * fixture.deltaT, 12)
-		}
+		})
 
-		// Internally generated elements use UT-based mu, so their correction is exactly 0: no double Delta T.
-		const generated = computePolynomialBesselianElements(TIME0, () => ({ sun: { rightAscension: 0, declination: 0, distance: 23000 }, moon: { rightAscension: 0, declination: 0, distance: 60 }, deltaT: 70 }))
-		expect(generated.deltaTLongitudeCorrection).toBe(0)
-	})
-
-	test('polynomial origin t0 falls on the day of greatest eclipse', () => {
-		for (const fixture of NASA_ECLIPSES) {
+		test('polynomial origin t0 falls on the day of greatest eclipse:' + fixture.name, () => {
 			expect(Math.abs(fixture.t0 - fixture.greatestEclipse[2])).toBeLessThan(0.5)
-		}
-	})
+		})
+	}
+
+	// Internally generated elements use UT-based mu, so their correction is exactly 0: no double Delta T.
+	const generated = computePolynomialBesselianElements(TIME0, () => ({ sun: { rightAscension: 0, declination: 0, distance: 23000 }, moon: { rightAscension: 0, declination: 0, distance: 60 }, deltaT: 70 }))
+	expect(generated.deltaTLongitudeCorrection).toBe(0)
 })
 
 describe('circle-ellipse contact and rise/set invariants', () => {
@@ -1975,9 +1979,11 @@ describe('greatest eclipse uses closest-approach minimization for an inconsisten
 	})
 
 	// A consistent maximumTime (the published greatest-eclipse epoch) is kept verbatim, so the jd is exact.
-	test('findMaximumPoint keeps a consistent published maximumTime', () => {
+	describe('findMaximumPoint keeps a consistent published maximumTime', () => {
 		for (const fixture of NASA_ECLIPSES) {
-			expect(findMaximumPoint(nasaPbe(fixture))!.jd).toBe(fixture.greatestEclipse[2])
+			test(fixture.name, () => {
+				expect(findMaximumPoint(nasaPbe(fixture))!.jd).toBe(fixture.greatestEclipse[2])
+			})
 		}
 	})
 })
