@@ -1473,7 +1473,9 @@ export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSola
 		shapes.push(pair.sun, pair.moon)
 	}
 
-	if (primary && options.includeHorizon) shapes.push(...buildLocalViewHorizonGeometry(primary, options))
+	if (primary && options.includeHorizon) {
+		for (const shape of buildLocalViewHorizonGeometry(primary, options)) shapes.push(shape)
+	}
 
 	return { width: options.width, height: options.height, orientationMode: options.orientationMode, requestedEvent: options.selectedEvent, selectedEvent: primary?.kind ?? null, solarRadiusPx: options.solarRadiusPx, shapes }
 }

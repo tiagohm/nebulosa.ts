@@ -967,7 +967,9 @@ export function earthLimbCircleIntersections(cx: number, cy: number, omega: numb
 		}
 	}
 
-	const points = deduplicateAngularRoots(thetas, 1e-7).map((theta) => earthLimbPoint(theta, omega))
+	const roots = deduplicateAngularRoots(thetas, 1e-7)
+	const points: (readonly [number, number])[] = []
+	for (const theta of roots) points.push(earthLimbPoint(theta, omega))
 	points.sort(EarthLimbCircleIntersectionPointComparator)
 	return points
 }
@@ -1921,7 +1923,8 @@ function trimRetracedBranchEnd(branch: GeoPoint[], tolerance: Angle, minLoopArc:
 // a pole-degenerate bridge folds back, so both are left as separate branches and no spike is ever drawn.
 // Pairs that already touch are skipped so nothing is retraced.
 function reconnectBranchCusps(branches: readonly GeoPoint[][], pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, maxDrawableGap: Angle, refractionMode: RefractionMode, allowTouchingMerge = true): GeoPoint[][] {
-	const result = branches.map((branch) => branch.slice())
+	const result: GeoPoint[][] = []
+	for (const branch of branches) result.push(branch.slice())
 
 	while (true) {
 		let bestGap = Infinity
@@ -2307,6 +2310,15 @@ export function splitAtMaxAbsLatitude(points: readonly GeoPoint[]) {
 	return [points.slice(0, index + 1), points.slice(index)]
 }
 
+// Splits each branch at its latitude apex without allocating a callback fan-out pass.
+function splitBranchesAtMaxAbsLatitude(branches: readonly GeoPoint[][]) {
+	const out: GeoPoint[][] = []
+	for (const branch of branches) {
+		for (const piece of splitAtMaxAbsLatitude(branch)) out.push(piece)
+	}
+	return out
+}
+
 function reconnectSplitCurveCusps(branches: readonly GeoPoint[][], pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode) {
 	const maxDrawableGap = Math.max(BRANCH_MAX_DRAWABLE_GAP, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
 	const reconnected = reconnectBranchCusps(deduplicateBranches(branches, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode, false)
@@ -2529,8 +2541,9 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 	return splitCurveBranches(withCusps, BRANCH_MAX_DRAWABLE_GAP)
 }
 
-function RiseSetBranchFilter(branch: RiseSetBranch) {
-	return branch.points.length >= 2
+// Keeps only drawable rise/set branches, matching the previous final filter without an extra pass.
+function pushDrawableRiseSetBranch(out: RiseSetBranch[], branch: RiseSetBranch) {
+	if (branch.points.length >= 2) out.push(branch)
 }
 
 // Tracks the variable set of limb crossings of one phase into continuity branches. Each sample's crossings
@@ -2583,15 +2596,18 @@ function traceRiseSetBranches(pbe: PolynomialBesselianElements, phase: readonly 
 
 		// Close branches with no crossing this step, then open a branch for every unmatched crossing.
 		for (let b = active.length - 1; b >= 0; b--) {
-			if ((matchedBranchMask & (1 << b)) === 0) completed.push(...active.splice(b, 1))
+			if ((matchedBranchMask & (1 << b)) === 0) {
+				pushDrawableRiseSetBranch(completed, active[b])
+				active.splice(b, 1)
+			}
 		}
 		for (let c = 0; c < crossings.length; c++) {
 			if ((matchedCrossingMask & (1 << c)) === 0) active.push({ points: [crossings[c]], last: crossings[c] })
 		}
 	}
 
-	for (const branch of active) completed.push(branch)
-	return completed.filter(RiseSetBranchFilter)
+	for (const branch of active) pushDrawableRiseSetBranch(completed, branch)
+	return completed
 }
 
 // Prepends and appends the phase's tangency-cusp contacts to a traced branch, densifying the cusp
@@ -2764,8 +2780,9 @@ export interface CentralLineByKind {
 	readonly annular: readonly GeoPoint[][]
 }
 
-function SegmentLengthGreaterThanOneFilter(segment: readonly GeoPoint[]) {
-	return segment.length >= 2
+// Keeps only drawable central-line segments, matching the previous final filter without an extra pass.
+function pushDrawableSegment(out: GeoPoint[][], segment: GeoPoint[]) {
+	if (segment.length >= 2) out.push(segment)
 }
 
 // Splits a kind-tagged central line into total and annular sub-polylines so a hybrid eclipse can be drawn
@@ -2804,7 +2821,11 @@ export function splitCentralLineByKind(centerLine: readonly GeoPoint[], pbe?: Po
 		previous = point
 	}
 
-	return { total: total.filter(SegmentLengthGreaterThanOneFilter), annular: annular.filter(SegmentLengthGreaterThanOneFilter) }
+	const drawableTotal: GeoPoint[][] = []
+	const drawableAnnular: GeoPoint[][] = []
+	for (const segment of total) pushDrawableSegment(drawableTotal, segment)
+	for (const segment of annular) pushDrawableSegment(drawableAnnular, segment)
+	return { total: drawableTotal, annular: drawableAnnular }
 }
 
 // Computes serializable geographic geometry for a solar eclipse map. Every curve family comes from
@@ -2836,9 +2857,12 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		Object.assign(points, findUmbraContactPoints(pbe, options))
 		// Each G = 1 branch is a continuity arc; split only at its latitude apex so a polar fold renders as
 		// two sub-polylines that meet at the apex. Branches are never joined across a discontinuity.
-		umbraNorth = reconnectSplitCurveCusps(findCurveBranchPoints(pbe, 1, 1, curveOptions).flatMap(splitAtMaxAbsLatitude), pbe, 1, 1, maxAngularStep, refractionMode)
-		umbraSouth = reconnectSplitCurveCusps(findCurveBranchPoints(pbe, -1, 1, curveOptions).flatMap(splitAtMaxAbsLatitude), pbe, -1, 1, maxAngularStep, refractionMode)
-		alignUmbralContactPoints(points, [...umbraNorth, ...umbraSouth], maxAngularStep)
+		umbraNorth = reconnectSplitCurveCusps(splitBranchesAtMaxAbsLatitude(findCurveBranchPoints(pbe, 1, 1, curveOptions)), pbe, 1, 1, maxAngularStep, refractionMode)
+		umbraSouth = reconnectSplitCurveCusps(splitBranchesAtMaxAbsLatitude(findCurveBranchPoints(pbe, -1, 1, curveOptions)), pbe, -1, 1, maxAngularStep, refractionMode)
+		const umbraBranches: GeoPoint[][] = []
+		for (const branch of umbraNorth) umbraBranches.push(branch)
+		for (const branch of umbraSouth) umbraBranches.push(branch)
+		alignUmbralContactPoints(points, umbraBranches, maxAngularStep)
 	}
 
 	if (hasCentralLine) {
@@ -3038,7 +3062,10 @@ function splitGeoLineAtAntimeridian(line: readonly GeoPoint[], close: boolean) {
 
 		if (samePoint(firstSegment[0], lastSegment.at(-1)!)) {
 			lastSegment.pop()
-			segments[0] = [...lastSegment, ...firstSegment]
+			const joined: GeoPoint[] = []
+			for (const point of lastSegment) joined.push(point)
+			for (const point of firstSegment) joined.push(point)
+			segments[0] = joined
 			segments.pop()
 		}
 	}
