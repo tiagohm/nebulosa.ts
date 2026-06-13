@@ -308,8 +308,6 @@ export interface SolarEclipseMapGeometryOptions {
 	readonly longitudeStep?: Angle
 	// Maximum angular spacing between neighboring curve points in radians.
 	readonly maxAngularStep?: Angle
-	// Half-width of the contact root search window around maximumTime, in seconds.
-	readonly contactSearchSpan?: number
 	// Rise/set curve sampling step in seconds.
 	readonly riseSetStep?: number
 	// Whether to include sunrise and sunset curves.
@@ -326,12 +324,6 @@ export interface SolarEclipseCurveOptions {
 	readonly maxAngularStep?: Angle
 	// Atmospheric-refraction model for the curve solver. Defaults to 'empirical' (refracted references).
 	readonly refractionMode?: RefractionMode
-}
-
-// Options for finding eclipse contact roots.
-export interface SolarEclipseContactOptions {
-	// Half-width of the root search window around maximumTime, in seconds.
-	readonly contactSearchSpan?: number
 }
 
 // Options for computing rise and set curves.
@@ -475,10 +467,6 @@ function interpolateGreatCirclePoint(a: GeoPoint, b: GeoPoint, fraction: number)
 
 function validStep(value: number | undefined, fallback: number) {
 	return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback
-}
-
-function contactSearchSpanDays(options?: SolarEclipseContactOptions) {
-	return validStep(options?.contactSearchSpan, DEFAULT_CONTACT_SEARCH_SPAN_SECONDS) / DAYSEC
 }
 
 function timeAtJulianDay(reference: Time, julianDay: number) {
@@ -1143,14 +1131,10 @@ function projectContactRoot(pbe: PolynomialBesselianElements, jd: number | undef
 // internal roots of signedDistance(x, y) + r = 0 (shadow wholly on Earth, axis inside), scanned across
 // the whole search window so grazing contacts are not missed. signedDistance is the ellipse counterpart
 // of the unit-circle hypot - 1 used previously.
-function findShadowContactPoints(pbe: PolynomialBesselianElements, radius: (be: BesselianSample) => number, options?: SolarEclipseContactOptions) {
+function findShadowContactPoints(pbe: PolynomialBesselianElements, radius: (be: BesselianSample) => number) {
 	const julianDay0 = toJulianDay(pbe.time0)
 	const publishedMaximumJulianDay = toJulianDay(pbe.maximumTime)
-	const searchSpanDays = contactSearchSpanDays(options)
-	// An explicit contactSearchSpan means the caller wants exactly the window around maximumTime (the
-	// documented contract, and what synthetic fixtures rely on to bound the search); the default span is the
-	// engine's own best effort and may be recentered/expanded below.
-	const explicitSpan = options?.contactSearchSpan !== undefined && Number.isFinite(options.contactSearchSpan) && options.contactSearchSpan > 0
+	const searchSpanDays = DEFAULT_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC
 	// Center the contact window on the fitted closest approach when the published maximumTime is materially
 	// inconsistent with it (the same recentering findMaximumPoint and findCentralLineExtremePoint apply). A
 	// maximumTime offset by hours from the true closest approach pushes the far external contact past the
@@ -1160,7 +1144,7 @@ function findShadowContactPoints(pbe: PolynomialBesselianElements, radius: (be: 
 	// so an explicit-span caller still gets the window centered exactly on maximumTime.
 	const tMaximum = (publishedMaximumJulianDay - julianDay0) / pbe.step
 	const tBest = findGreatestEclipseT(pbe)
-	const maximumJulianDay = explicitSpan || Math.abs(tBest - tMaximum) * pbe.step <= MAXIMUM_TIME_CONSISTENCY_DAYS ? publishedMaximumJulianDay : julianDay0 + tBest * pbe.step
+	const maximumJulianDay = Math.abs(tBest - tMaximum) * pbe.step <= MAXIMUM_TIME_CONSISTENCY_DAYS ? publishedMaximumJulianDay : julianDay0 + tBest * pbe.step
 
 	function external(jd: number) {
 		const be = besselianSampleAtJulianDay(pbe, jd)
@@ -1178,7 +1162,7 @@ function findShadowContactPoints(pbe: PolynomialBesselianElements, radius: (be: 
 	// other one. Edges where the shadow has already left are kept. Expansion applies only to the default span:
 	// a caller that passes an explicit contactSearchSpan gets exactly that window, so it is never widened past
 	// the request.
-	const maxSpanDays = explicitSpan ? searchSpanDays : Math.max(searchSpanDays, CONTACT_SEARCH_MAX_SPAN_SECONDS / DAYSEC)
+	const maxSpanDays = CONTACT_SEARCH_MAX_SPAN_SECONDS / DAYSEC
 	const stepDays = CONTACT_SEARCH_EXPANSION_STEP_SECONDS / DAYSEC
 	// Gate the expansion on the edge reaching its cap, using the exact cap the Math.min clamps to, not on
 	// `to - maximumJulianDay < maxSpanDays`. Once the edge saturates at the cap, that algebraic guard can stay
@@ -1193,7 +1177,7 @@ function findShadowContactPoints(pbe: PolynomialBesselianElements, radius: (be: 
 	while (from > fromCap && external(from) < 0) from = Math.max(from - stepDays, fromCap)
 
 	// Keep the scan resolution constant as the window grows so a narrow internal bracket is never skipped.
-	const steps = Math.max(CONTACT_SCAN_STEPS, Math.round((CONTACT_SCAN_STEPS * (to - from)) / (2 * searchSpanDays)))
+	const steps = Math.max(CONTACT_SCAN_STEPS, Math.round((CONTACT_SCAN_STEPS * (to - from)) / ((2 * DEFAULT_CONTACT_SEARCH_SPAN_SECONDS) / DAYSEC)))
 	const externalRoots = findRootsInInterval(external, from, to, steps, CONTACT_RESIDUAL_TOLERANCE)
 	const internalRoots = findRootsInInterval(internal, from, to, steps, CONTACT_RESIDUAL_TOLERANCE)
 
@@ -1209,8 +1193,8 @@ function findShadowContactPoints(pbe: PolynomialBesselianElements, radius: (be: 
 // center to the Earth-limb ellipse, external (P1/P4: signedDistance - l1 = 0) and internal
 // (P2/P3: signedDistance + l1 = 0), before and after the eclipse maximum. The classical unit-circle
 // hypot - 1 -+ l1 is replaced by the ellipse signed distance so Earth flattening is honored.
-export function findPenumbraContactPoints(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions) {
-	const contacts = findShadowContactPoints(pbe, (be) => be.l1, options)
+export function findPenumbraContactPoints(pbe: PolynomialBesselianElements) {
+	const contacts = findShadowContactPoints(pbe, (be) => be.l1)
 	return { P1: contacts.first, P2: contacts.firstInternal, P3: contacts.lastInternal, P4: contacts.last } as const
 }
 
@@ -1218,8 +1202,8 @@ export function findPenumbraContactPoints(pbe: PolynomialBesselianElements, opti
 // distance from the shadow-axis center to the Earth-limb ellipse, external (U1/U4: signedDistance - |l2|
 // = 0) and internal (U2/U3: signedDistance + |l2| = 0). l2 is negative for a total eclipse, positive for
 // an annular one. They are informational markers only and never control the umbra-limit polylines.
-export function findUmbraContactPoints(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions) {
-	const contacts = findShadowContactPoints(pbe, (be) => Math.abs(be.l2), options)
+export function findUmbraContactPoints(pbe: PolynomialBesselianElements) {
+	const contacts = findShadowContactPoints(pbe, (be) => Math.abs(be.l2))
 	return { U1: contacts.first, U2: contacts.firstInternal, U3: contacts.lastInternal, U4: contacts.last } as const
 }
 
@@ -1235,9 +1219,9 @@ function centralAxisDistanceSquaredAtT(pbe: PolynomialBesselianElements, t: numb
 // the gamma-threshold heuristic with the actual geometry: minimize x^2 + (omega y)^2 over the search span
 // and report central when the minimum drops to or below 1. Uses the same contactSearchSpan window policy as
 // the contact/endpoint searches, so the central classification and the central-line endpoints agree (P3.3).
-export function centralAxisIntersectsEarth(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions) {
+export function centralAxisIntersectsEarth(pbe: PolynomialBesselianElements) {
 	const f = (t: number) => centralAxisDistanceSquaredAtT(pbe, t)
-	const span = contactSearchSpanDays(options) / pbe.step
+	const span = DEFAULT_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC / pbe.step
 	// Center the scan on maximumTime, exactly like the contact/endpoint searches, so the central
 	// classification and the central-line endpoints share one window (P3.3). t = 0 is time0 (the rounded
 	// hour), which can sit up to half an hour from maximumTime; scanning around tMaximum keeps the closest
@@ -1352,11 +1336,11 @@ export function findMaximumPoint(pbe: PolynomialBesselianElements) {
 //   S = (a*v - u*b) / n, t1 = -(u*a + v*b) / n^2, t2 = sqrt(1 - S^2) / n, tau = t1 -+ t2,
 // converging when |tau| is below CONTACT_TOLERANCE_DAYS. A sign-bisection on the limb residual is
 // kept as fallback for when the iteration leaves the fitted span or S^2 exceeds 1 near tangency.
-export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, begin: boolean, options?: SolarEclipseContactOptions) {
+export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, begin: boolean) {
 	const be = BESSELIAN_ELEMENTS_SCRATCH
 	const julianDay0 = toJulianDay(pbe.time0)
 	const maximumJulianDay = toJulianDay(pbe.maximumTime)
-	const searchSpanDays = contactSearchSpanDays(options)
+	const searchSpanDays = DEFAULT_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC
 	const tMaximum = (maximumJulianDay - julianDay0) / pbe.step
 	// Center the endpoint search on the fitted closest approach when the published maximumTime is materially
 	// inconsistent with it (the same recentering findMaximumPoint applies). The closest approach is where the
@@ -2551,11 +2535,11 @@ function RiseSetBranchComparatorByHigherLatitude(a: RiseSetBranch, b: RiseSetBra
 // at the day-side gap, its variable set of crossings (0..4) is tracked into continuity branches, and each
 // branch is anchored to the P1/P2/P3/P4 contacts so it passes through them. Fast-moving stretches near the
 // cusps are densified by subdividing in time so the curve follows the geometry rather than a straight chord.
-export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPoint, P4: GeoPoint, optionalContacts: Pick<SolarEclipseContactPoints, 'P2' | 'P3' | 'N1' | 'N2' | 'S1' | 'S2'> = {}, options: SolarEclipseRiseSetCurveOptions = {}) {
+export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPoint, P4: GeoPoint, optionalContacts: Pick<SolarEclipseContactPoints, 'P2' | 'P3' | 'N1' | 'N2' | 'S1' | 'S2'> = {}, options?: SolarEclipseRiseSetCurveOptions) {
 	if (P1.jd === undefined || P4.jd === undefined || P4.jd < P1.jd) return []
 
-	const stepDays = validStep(options.step, DEFAULT_RISE_SET_STEP_SECONDS) / DAYSEC
-	const adaptive = options.adaptive ?? true
+	const stepDays = validStep(options?.step, DEFAULT_RISE_SET_STEP_SECONDS) / DAYSEC
+	const adaptive = options?.adaptive ?? true
 	const contacts: GeoBranch = []
 	if (isGeoPoint(P1)) contacts.push(P1)
 	if (isGeoPoint(optionalContacts.P2)) contacts.push(optionalContacts.P2)
@@ -2900,12 +2884,12 @@ export function splitCentralLineByKind(centerLine: GeoBranch, pbe?: PolynomialBe
 // eclipse (including non-central total/annular ones whose axis misses the Earth), while the central
 // line and its C1/C2 endpoints exist only when the shadow axis actually pierces the ellipsoid. The
 // penumbra limits exist for every eclipse.
-export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, options: SolarEclipseMapGeometryOptions = {}): SolarEclipseMapGeometry {
-	const contacts = findPenumbraContactPoints(pbe, options)
+export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, options?: SolarEclipseMapGeometryOptions): SolarEclipseMapGeometry {
+	const contacts = findPenumbraContactPoints(pbe)
 	const points: Writable<SolarEclipseContactPoints> = { ...contacts, Max: findMaximumPoint(pbe) }
-	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
-	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
-	const refractionMode = options.refractionMode ?? DEFAULT_REFRACTION_MODE
+	const longitudeStep = validStep(options?.longitudeStep, DEFAULT_LONGITUDE_STEP)
+	const maxAngularStep = validStep(options?.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
+	const refractionMode = options?.refractionMode ?? DEFAULT_REFRACTION_MODE
 	const curveOptions: SolarEclipseCurveOptions = { longitudeStep, maxAngularStep, refractionMode }
 
 	let centerLine: GeoBranch = []
@@ -2915,13 +2899,13 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	// Whether the umbra/antumbra touches Earth at all, and whether the shadow axis truly intersects the
 	// ellipsoid (the latter is the real geometric test that replaces the former gamma threshold).
 	const hasUmbralLimits = eclipse.type !== 'partial'
-	const hasCentralLine = hasUmbralLimits && centralAxisIntersectsEarth(pbe, options)
+	const hasCentralLine = hasUmbralLimits && centralAxisIntersectsEarth(pbe)
 
 	if (hasUmbralLimits) {
 		// The umbral/antumbral cone tangency contacts exist whenever the umbra reaches Earth; they are
 		// informational markers and never control the umbra-limit polylines. The G = 1 limits are traced
 		// for every non-partial eclipse, even non-central ones with no central line.
-		Object.assign(points, findUmbraContactPoints(pbe, options))
+		Object.assign(points, findUmbraContactPoints(pbe))
 		// Each G = 1 branch is a continuity arc; split only at its latitude apex so a polar fold renders as
 		// two sub-polylines that meet at the apex. Branches are never joined across a discontinuity.
 		umbraNorth = reconnectSplitCurveCusps(splitBranchesAtMaxAbsLatitude(findCurveBranchPoints(pbe, 1, 1, curveOptions)), pbe, 1, 1, maxAngularStep, refractionMode)
@@ -2933,8 +2917,8 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	}
 
 	if (hasCentralLine) {
-		const C1 = findCentralLineExtremePoint(pbe, true, options)
-		const C2 = findCentralLineExtremePoint(pbe, false, options)
+		const C1 = findCentralLineExtremePoint(pbe, true)
+		const C2 = findCentralLineExtremePoint(pbe, false)
 		if (C1) points.C1 = C1
 		if (C2) points.C2 = C2
 
@@ -2973,7 +2957,7 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		;[points.N1, points.S1] = penumbralLimitEndpointsByTime(pbe, limit)
 	}
 
-	const riseSetCurves = (options.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, points, { step: options.riseSetStep }) : []
+	const riseSetCurves = (options?.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, points, { step: options?.riseSetStep }) : []
 
 	return {
 		points,

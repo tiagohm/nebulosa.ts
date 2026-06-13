@@ -5,7 +5,7 @@ import type { Point } from './geometry'
 import { clamp } from './math'
 import { bisection, brentMinimize, type RootFindingOptions } from './optimization'
 // oxfmt-ignore
-import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, evaluateBesselian, F, findMaximumPoint, hourAngleFromLongitude, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type GeoPoint, type InstantBesselianElements, type PolynomialBesselianElements, type SolarEclipseContactOptions, type SunMoonPosition } from './sun.eclipse.map'
+import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, evaluateBesselian, F, findMaximumPoint, hourAngleFromLongitude, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type GeoPoint, type InstantBesselianElements, type PolynomialBesselianElements, type SunMoonPosition } from './sun.eclipse.map'
 import { type Time, timeShift, toJulianDay, tt } from './time'
 
 // Local solar eclipse circumstances ("Local View"): for a single geographic point this module resolves
@@ -1624,12 +1624,12 @@ export function computeGreatestEclipseCircumstances(pbe: PolynomialBesselianElem
 // phase lasts longest, which is generally not the greatest-eclipse point. Searches the central line over the
 // contact window, evaluating the local central duration at each sampled central point and refining the
 // maximum. Returns undefined for an eclipse with no central line (partial or non-central).
-export function computeGreatestDurationCircumstances(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions): SolarEclipseExtremeCircumstances | undefined {
-	if (!centralAxisIntersectsEarth(pbe, options)) return undefined
+export function computeGreatestDurationCircumstances(pbe: PolynomialBesselianElements): SolarEclipseExtremeCircumstances | undefined {
+	if (!centralAxisIntersectsEarth(pbe)) return undefined
 
 	const julianDay0 = toJulianDay(pbe.time0)
 	const tMaximum = (toJulianDay(pbe.maximumTime) - julianDay0) / pbe.step
-	const span = validPositive(options?.contactSearchSpan, DEFAULT_CONTACT_SEARCH_SPAN_SECONDS) / DAYSEC / pbe.step
+	const span = DEFAULT_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC / pbe.step
 
 	// Central-phase duration (seconds) at the central-line point reached at normalized time t, or 0 when the
 	// axis misses the Earth or the point is not central there (so the maximizer steers away from those t).

@@ -687,13 +687,6 @@ describe('greatest eclipse and greatest duration circumstances', () => {
 		expect(sphericalSeparation(ge.longitude, ge.latitude, gd.longitude, gd.latitude)).toBeGreaterThan(deg(1))
 	})
 
-	test('greatest duration search span is interpreted in seconds', () => {
-		const constrained = computeGreatestDurationCircumstances(pbe, { contactSearchSpan: 60 })!
-
-		expect(Math.abs(secondsOfDay(constrained.time) - secondsOfDay(ge.time))).toBeLessThan(90)
-		expect(secondsOfDay(gd.time) - secondsOfDay(constrained.time)).toBeGreaterThan(300)
-	})
-
 	test('a partial eclipse has no central line, so greatest duration is undefined', () => {
 		const partialPbe = partial2025.pbe
 		expect(computeGreatestDurationCircumstances(partialPbe)).toBeUndefined()

@@ -464,7 +464,7 @@ describe('NASA Besselian fixtures cover eclipse classes and central gating', () 
 test('computeSolarEclipseMapGeometry produces ordered partial contacts and anchored rise-set curves', () => {
 	// The synthetic axis (0.125-day step) takes longer than 3 h to clear the limb, so the search window
 	// is widened explicitly rather than relying on the default tuned to the 6 h NASA fit.
-	const geometry = computeSolarEclipseMapGeometry(eclipse('partial'), pbe(), { longitudeStep: deg(90), contactSearchSpan: 6 * 3600, includeRiseSetCurves: true, riseSetStep: 1800 })
+	const geometry = computeSolarEclipseMapGeometry(eclipse('partial'), pbe(), { longitudeStep: deg(90), includeRiseSetCurves: true, riseSetStep: 1800 })
 	const { points, lines } = geometry
 
 	// Existence, finiteness and chronological order replace the frozen synthetic coordinates.
@@ -606,26 +606,6 @@ test('non-central total and annular eclipses have no central line but may keep u
 		// The penumbral limit remains the main physical contour.
 		expect(geometry.lines.penumbraNorth.length + geometry.lines.penumbraSouth.length).toBeGreaterThan(0)
 	}
-})
-
-test('computeSolarEclipseMapGeometry contact search span is independent from polynomial step', () => {
-	const fixture = NASA_ECLIPSES[0]
-	const elements = nasaPbe(fixture)
-	expect(elements.step).toBe(1 / 24)
-
-	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { contactSearchSpan: 2 * 3600, longitudeStep: deg(30), maxAngularStep: deg(12), includeRiseSetCurves: true })
-
-	// With a 2 h half-window, the external contacts P1/P4 (~2.6 h from the maximum) fall outside it and
-	// are not found, while the internal contacts P2/P3 (nearer the maximum) are. This proves the search
-	// window is driven by contactSearchSpan, independently of the polynomial step.
-	expect(geometry.points.P1).toBeUndefined()
-	expect(geometry.points.P4).toBeUndefined()
-	expectGeoPoint(geometry.points.P2!)
-	expectGeoPoint(geometry.points.P3!)
-	expectTimeNearSeconds(geometry.points.P2!.jd!, fixture.greatestEclipse[2], 2 * 3600)
-	expectTimeNearSeconds(geometry.points.P3!.jd!, fixture.greatestEclipse[2], 2 * 3600)
-	// Rise/set needs both P1 and P4, so it yields nothing here.
-	expect(geometry.lines.riseSetCurves).toHaveLength(0)
 })
 
 test('projectFundamentalPoint is strict outside the limb and projectClosestEarthLimbPoint clamps explicitly', () => {
@@ -853,7 +833,7 @@ test('partial eclipse geometry omits central and umbral path data', () => {
 })
 
 test('central total eclipse geometry exposes a populated central and umbral path when enabled', () => {
-	const geometry = computeSolarEclipseMapGeometry(eclipse('total'), pbe({ x: [0, 0.25], y: [0.05], mu: [0, deg(8)] }), { longitudeStep: deg(60), maxAngularStep: deg(30), contactSearchSpan: 18 * 3600, includeRiseSetCurves: true, riseSetStep: 1800 })
+	const geometry = computeSolarEclipseMapGeometry(eclipse('total'), pbe({ x: [0, 0.25], y: [0.05], mu: [0, deg(8)] }), { longitudeStep: deg(60), maxAngularStep: deg(30), includeRiseSetCurves: true, riseSetStep: 1800 })
 
 	expect(geometry.points.Max).toBeDefined()
 	expectGeoPoint(geometry.points.Max!)
@@ -875,7 +855,7 @@ test('central total eclipse geometry exposes a populated central and umbral path
 
 test('rise set curves are separate drawable arrays', () => {
 	const elements = pbe()
-	const contacts = computeSolarEclipseMapGeometry(eclipse('partial'), elements, { longitudeStep: deg(90), contactSearchSpan: 6 * 3600 }).points
+	const contacts = computeSolarEclipseMapGeometry(eclipse('partial'), elements, { longitudeStep: deg(90) }).points
 
 	expect(contacts.P1).toBeDefined()
 	expect(contacts.P4).toBeDefined()
