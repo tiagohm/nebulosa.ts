@@ -1287,7 +1287,13 @@ const MAXIMUM_TIME_CONSISTENCY_DAYS = 60 / DAYSEC
 // and refined with Brent inside the span.
 function findGreatestEclipseT(pbe: PolynomialBesselianElements) {
 	const f = (t: number) => centralAxisDistanceSquaredAtT(pbe, t)
-	const span = contactSearchSpanDays() / pbe.step
+	// Search out to the contact expansion cap, not just the default contact span: a published maximumTime can
+	// sit hours from the true closest approach (far-future eclipses with a coarse maximumTime), and a window of
+	// only +-contactSearchSpan around it can end just short of the real minimum, pinning the greatest-eclipse
+	// instant to the window edge (e.g. the 5208-03-22 hybrid, whose closest approach is ~3.6 h past a
+	// maximumTime-centered 3.5 h edge, which then placed Max ~5 min before the internal contact P2). The
+	// contact search already brackets contacts out to this cap, so matching it keeps Max consistent with them.
+	const span = CONTACT_SEARCH_MAX_SPAN_SECONDS / DAYSEC / pbe.step
 	// Search the closest approach in the window centered on maximumTime, matching centralAxisIntersectsEarth
 	// and the contact searches, rather than around time0 (t = 0).
 	const tMaximum = (toJulianDay(pbe.maximumTime) - toJulianDay(pbe.time0)) / pbe.step
