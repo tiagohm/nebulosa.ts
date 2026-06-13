@@ -7,7 +7,7 @@ import { DEG2RAD, PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
 import { PlateCarree, type Projection, type ProjectionOptions } from '../src/projection'
 import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../src/time'
-import { countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment, solarAltitude, sunMoonPosition, validateCatalogRiseSetCurves } from './sun.eclipse.test'
+import { catalogBranchRetraces, countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment, solarAltitude, sunMoonPosition, validateCatalogRiseSetCurves } from './sun.eclipse.test'
 
 const JD0 = 2460409.25
 const TIME0 = time(JD0)
@@ -2083,4 +2083,16 @@ test('1807-06-06 rise/set curves split the near-cusp crossing swap', () => {
 
 	expect(geometry.lines.riseSetCurves.length).toBeGreaterThan(0)
 	validateCatalogRiseSetCurves(eclipse, elements, geometry.lines.riseSetCurves)
+})
+
+test('1862-11-21 trims the penumbral single-vertex branch switch near S1', () => {
+	const { geometry } = geometryFor(1862, 11, 1)
+
+	expect(geometry.lines.penumbraNorth.length).toBeGreaterThan(0)
+	expect(geometry.points.S1).toBeDefined()
+
+	for (const branch of geometry.lines.penumbraNorth) {
+		expect(catalogBranchRetraces(branch, deg(0.5), deg(5))).toBe(false)
+		expect(maxBranchSegment([branch])).toBeLessThanOrEqual(BRANCH_MAX_DRAWABLE_GAP)
+	}
 })

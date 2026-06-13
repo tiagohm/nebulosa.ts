@@ -1607,11 +1607,11 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 	let pieces = reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
 	const reconnectedPieces = reconnectBranchCusps(deduplicateBranches(pieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
 	pieces = reconnectedPieces.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
-	const finalPieces = trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap)
-	const finalReconnected = reconnectBranchCusps(deduplicateBranches(finalPieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
 	const foldStep = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
+	const finalPieces = trimCurveBranchArtifacts(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), foldStep, maxAngularStep)
+	const finalReconnected = reconnectBranchCusps(deduplicateBranches(finalPieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
 	pieces = finalReconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
-	return deduplicateBranches(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), maxAngularStep).map((branch) => trimFoldBackEndpoints(branch, foldStep))
+	return deduplicateBranches(trimCurveBranchArtifacts(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), foldStep, maxAngularStep), maxAngularStep)
 }
 
 // Drops a stray endpoint vertex that folds the branch back onto an earlier part of itself. At a longitude
@@ -1629,6 +1629,51 @@ function trimFoldBackEndpoints(branch: GeoPoint[], foldStep: Angle): GeoPoint[] 
 	while (end - start >= 2 && angularDistance(branch[start], branch[start + 1]) > foldStep && coincidesWithRange(branch, branch[start], start + 2, end)) start++
 
 	return start === 0 && end === branch.length - 1 ? branch : branch.slice(start, end + 1)
+}
+
+// Applies branch-level cleanup that removes drawable solver artifacts without changing valid samples.
+// foldStep is the minimum angular jump treated as a fold; closeTolerance joins near-coincident neighbours.
+function trimCurveBranchArtifacts(branches: readonly GeoPoint[][], foldStep: Angle, closeTolerance: Angle): GeoPoint[][] {
+	const out: GeoPoint[][] = []
+
+	for (const branch of branches) {
+		const trimmed = trimInteriorFoldBackSpikes(trimFoldBackEndpoints(branch, foldStep), foldStep, closeTolerance)
+		if (trimmed.length >= 2) out.push(trimmed)
+	}
+
+	return out
+}
+
+// Drops isolated one-vertex solver branch switches inside a curve. The pattern A -> B -> C with A and C
+// nearly coincident but B several angular steps away is not a sampled cusp; it is a transient jump to the
+// neighbouring solution that would draw a short spike and then return to the original arc.
+// foldStep: minimum distance from the spike vertex to both neighbours; closeTolerance: A/C coincidence.
+function trimInteriorFoldBackSpikes(branch: GeoPoint[], foldStep: Angle, closeTolerance: Angle): GeoPoint[] {
+	let current = branch
+
+	while (current.length >= 3) {
+		let removed = false
+		const out: GeoPoint[] = [current[0]]
+
+		for (let k = 1; k < current.length - 1; k++) {
+			const previous = out.at(-1)!
+			const point = current[k]
+			const next = current[k + 1]
+
+			if (angularDistance(previous, next) <= closeTolerance && angularDistance(previous, point) > foldStep && angularDistance(point, next) > foldStep) {
+				removed = true
+				continue
+			}
+
+			out.push(point)
+		}
+
+		out.push(current.at(-1)!)
+		if (!removed) return current
+		current = out
+	}
+
+	return current
 }
 
 // Whether point coincides geographically (within CURVE_SPATIAL_EPSILON) with any branch vertex in [from, to].
