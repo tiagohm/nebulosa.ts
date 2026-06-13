@@ -111,6 +111,16 @@ const CURVE_TIME_EPSILON_DAYS = 1e-6
 // non-central and hybrid families are not missed by a single shadow-side seed.
 // The poleward seeds stay short of +-90 deg to keep tan(phi) finite.
 const CURVE_SEED_LATITUDES = [0, 30 * DEG2RAD, -30 * DEG2RAD, 60 * DEG2RAD, -60 * DEG2RAD, 80 * DEG2RAD, -80 * DEG2RAD, 89.5 * DEG2RAD, -89.5 * DEG2RAD] as const
+const CURVE_SEED_LATITUDES_LENGTH = CURVE_SEED_LATITUDES.length
+// Denser latitude seeds (radians) used only by the midpoint-bridging solver (solveCurveMidpointBetween),
+// not by the per-longitude scan. Reconnecting two branches across a near-pole fold needs a finer sweep than
+// CURVE_SEED_LATITUDES: the in-between curve point can sit in a narrow Newton convergence basin between the
+// coarse seeds (notably the 80..89.5 deg gap), and missing it leaves a genuinely continuous limit drawn as
+// two split arcs (e.g. the 4671-01-16 grazing annular umbra-north limit, whose bridge point converges only
+// near -82 deg). The 3 deg grid spans -88..89 deg so both poles and that gap are covered; kept off the hot
+// scan so the common case pays nothing.
+const CURVE_BRIDGE_SEED_LATITUDES: number[] = []
+for (let degrees = -88; degrees <= 89; degrees += 3) CURVE_BRIDGE_SEED_LATITUDES.push(degrees * DEG2RAD)
 // Two curve points reached from different seeds at the same instant are the same location; they are
 // collapsed only when also within this angular distance (~0.6 km), so a genuine time fold that places
 // two distinct locations at nearly the same instant keeps both.
@@ -1634,8 +1644,10 @@ function solveCurveMidpointBetween(pbe: PolynomialBesselianElements, a: GeoPoint
 	candidate = findEclipseCurvePoint(pbe, intermediate.x, a.y, i, G, refractionMode)
 	if (candidate && angularDistance(a, candidate) <= limit && angularDistance(candidate, b) <= limit) return candidate
 
-	for (const seedLatitude of CURVE_SEED_LATITUDES) {
-		const candidate = findEclipseCurvePoint(pbe, intermediate.x, seedLatitude, i, G, refractionMode)
+	// Denser fallback sweep (off the hot scan): a near-pole fold's in-between point can sit in a narrow basin
+	// the coarse seeds skip, which would otherwise leave a continuous limit split into two arcs.
+	for (let s = 0; s < CURVE_BRIDGE_SEED_LATITUDES.length; s++) {
+		const candidate = findEclipseCurvePoint(pbe, intermediate.x, CURVE_BRIDGE_SEED_LATITUDES[s], i, G, refractionMode)
 		if (candidate && angularDistance(a, candidate) <= limit && angularDistance(candidate, b) <= limit) return candidate
 	}
 
@@ -2063,8 +2075,8 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 	const refractionMode = options.refractionMode ?? DEFAULT_REFRACTION_MODE
 	const seeds = CURVE_SEED_LATITUDES
 	const branches: GeoCurve = []
-	const previousBySeed = new Array<GeoPoint | undefined>(seeds.length)
-	const activeBySeed = new Array<GeoBranch | undefined>(seeds.length)
+	const previousBySeed = new Array<GeoPoint | undefined>(CURVE_SEED_LATITUDES_LENGTH)
+	const activeBySeed = new Array<GeoBranch | undefined>(CURVE_SEED_LATITUDES_LENGTH)
 
 	// Returns the seed's open branch, starting a new one when it has none (a branch begins or reappears).
 	function openBranch(seedIndex: number) {
@@ -2082,7 +2094,7 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
 		const lon = Math.min(longitude, PI)
 
-		for (let seedIndex = 0; seedIndex < seeds.length; seedIndex++) {
+		for (let seedIndex = 0; seedIndex < CURVE_SEED_LATITUDES_LENGTH; seedIndex++) {
 			let previous = previousBySeed[seedIndex]
 			// Continuation from the previous latitude keeps the Newton iteration on the same branch;
 			// when it fails (or there is no previous point) retry from the fixed seed.
@@ -2149,13 +2161,13 @@ function findFixedSeedCurveArcs(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 	const foldStep = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
 	const branches: GeoCurve = []
 
-	for (const seed of CURVE_SEED_LATITUDES) {
+	for (let s = 0; s < CURVE_SEED_LATITUDES_LENGTH; s++) {
 		let current: GeoBranch | undefined
 		let previous: GeoPoint | undefined
 
 		for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
 			const lon = Math.min(longitude, PI)
-			const point = findEclipseCurvePoint(pbe, lon, seed, i, G, refractionMode)
+			const point = findEclipseCurvePoint(pbe, lon, CURVE_SEED_LATITUDES[s], i, G, refractionMode)
 
 			if (point && previous && angularDistance(previous, point) <= foldStep) {
 				appendRefinedSegment(current!, pbe, previous, point, i, G, maxAngularStep, refractionMode)
