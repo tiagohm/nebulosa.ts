@@ -2596,7 +2596,16 @@ function insertRiseSetCuspPoints(curves: readonly GeoPoint[][], cusps: readonly 
 		if (bestCurve < 0 || bestCost > RISE_SET_CUSP_MAX_DETOUR) continue
 
 		const curve = out[bestCurve]
-		if (!samePoint(curve[bestIndex - 1], cusp) && !samePoint(curve[bestIndex], cusp)) curve.splice(bestIndex, 0, cusp)
+		// Slide to the jd-sorted slot before splicing. The +-CURVE_TIME_EPSILON_DAYS slack in the segment test
+		// can select a slot where the cusp is a fraction of CURVE_TIME_EPSILON_DAYS out of order with the traced
+		// sample nearest it (the same instant, a sampling step apart in space): splicing there would make the
+		// rise/set curve step backward in time. Sliding keeps the polyline chronological without moving any point.
+		let index = bestIndex
+		while (index < curve.length && curve[index].jd! < cusp.jd) index++
+		while (index > 0 && curve[index - 1].jd! > cusp.jd) index--
+		const before = index > 0 ? curve[index - 1] : undefined
+		const after = index < curve.length ? curve[index] : undefined
+		if ((!before || !samePoint(before, cusp)) && (!after || !samePoint(after, cusp))) curve.splice(index, 0, cusp)
 	}
 
 	return out
