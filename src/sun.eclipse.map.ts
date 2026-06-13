@@ -1596,7 +1596,16 @@ function solveCurveMidpointBetween(pbe: PolynomialBesselianElements, a: GeoPoint
 	const limit = MIDPOINT_BALANCE * ab
 	const intermediate = interpolateGreatCirclePoint(a, b, 0.5)
 
-	for (const seedLatitude of [intermediate.y, b.y, a.y, ...CURVE_SEED_LATITUDES]) {
+	let candidate = findEclipseCurvePoint(pbe, intermediate.x, intermediate.y, i, G, refractionMode)
+	if (candidate && angularDistance(a, candidate) <= limit && angularDistance(candidate, b) <= limit) return candidate
+
+	candidate = findEclipseCurvePoint(pbe, intermediate.x, b.y, i, G, refractionMode)
+	if (candidate && angularDistance(a, candidate) <= limit && angularDistance(candidate, b) <= limit) return candidate
+
+	candidate = findEclipseCurvePoint(pbe, intermediate.x, a.y, i, G, refractionMode)
+	if (candidate && angularDistance(a, candidate) <= limit && angularDistance(candidate, b) <= limit) return candidate
+
+	for (const seedLatitude of CURVE_SEED_LATITUDES) {
 		const candidate = findEclipseCurvePoint(pbe, intermediate.x, seedLatitude, i, G, refractionMode)
 		if (candidate && angularDistance(a, candidate) <= limit && angularDistance(candidate, b) <= limit) return candidate
 	}
@@ -1629,20 +1638,24 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 
 	// The continuation scan traces smooth arcs; the fixed-seed scan recovers arcs it orphans at near-polar
 	// folds. Both feed the same cleanup/dedup/reconnect pipeline, which collapses the arcs they share.
-	for (const branch of [...findCurveBranches(pbe, i, G, options), ...findFixedSeedCurveArcs(pbe, i, G, options)]) {
+	for (const branch of findCurveBranches(pbe, i, G, options)) {
+		const cleaned = cleanCurveBranch(branch)
+		if (cleaned.length >= 2) branches.push(cleaned)
+	}
+	for (const branch of findFixedSeedCurveArcs(pbe, i, G, options)) {
 		const cleaned = cleanCurveBranch(branch)
 		if (cleaned.length >= 2) branches.push(cleaned)
 	}
 
 	const deduped = deduplicateBranches(branches, maxAngularStep)
 	const reconnected = reconnectBranchCusps(deduped, pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
-	let pieces = reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	let pieces = splitCurveBranches(reconnected, maxDrawableGap)
 	const reconnectedPieces = reconnectBranchCusps(deduplicateBranches(pieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
-	pieces = reconnectedPieces.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	pieces = splitCurveBranches(reconnectedPieces, maxDrawableGap)
 	const foldStep = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
 	const finalPieces = trimCurveBranchArtifacts(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), foldStep, maxAngularStep)
 	const finalReconnected = reconnectBranchCusps(deduplicateBranches(finalPieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
-	pieces = finalReconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	pieces = splitCurveBranches(finalReconnected, maxDrawableGap)
 	const trimmed = trimCurveBranchArtifacts(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), foldStep, maxAngularStep)
 	// Reconnect once more after the final trim. Trimming a retrace loop exposes a branch's true cusp
 	// endpoint, which can be bridgeable to a neighbour even though it was buried inside the loop (and so
@@ -1650,7 +1663,7 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 	// genuinely continuous gap (e.g. the near-polar 3160-09-22 penumbra-south limit, whose trimmed endpoint
 	// sits ~5.9 deg from the adjacent branch with a continuous curve between them).
 	const reconnectedTrimmed = reconnectBranchCusps(deduplicateBranches(trimmed, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
-	pieces = reconnectedTrimmed.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	pieces = splitCurveBranches(reconnectedTrimmed, maxDrawableGap)
 	return deduplicateBranches(trimCurveBranchArtifacts(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), foldStep, maxAngularStep), maxAngularStep)
 }
 
@@ -2121,7 +2134,13 @@ function findNearestCurvePointAtLongitude(pbe: PolynomialBesselianElements, long
 	let best: GeoPoint | undefined
 	let bestDistance = Infinity
 
-	for (const seedLatitude of [anchor.y, ...CURVE_SEED_LATITUDES]) {
+	const point = findEclipseCurvePoint(pbe, longitude, anchor.y, i, G, refractionMode)
+	if (point) {
+		best = point
+		bestDistance = angularDistance(anchor, point)
+	}
+
+	for (const seedLatitude of CURVE_SEED_LATITUDES) {
 		const point = findEclipseCurvePoint(pbe, longitude, seedLatitude, i, G, refractionMode)
 		if (!point) continue
 
@@ -2189,10 +2208,6 @@ function deduplicatePoints(points: readonly GeoPoint[]) {
 	return out
 }
 
-function HasGeoPointJD(p: GeoPoint) {
-	return p.jd !== undefined
-}
-
 function GeoPointComparatorByJDAscending(a: GeoPoint, b: GeoPoint) {
 	return a.jd! - b.jd!
 }
@@ -2204,7 +2219,15 @@ function GeoPointComparatorByXOrYAscending(a: GeoPoint, b: GeoPoint) {
 function orderCurvePoints(points: GeoPoint[]) {
 	if (points.length <= 2) return points
 
-	if (points.every(HasGeoPointJD)) {
+	let allHaveJulianDay = true
+	for (const point of points) {
+		if (point.jd === undefined) {
+			allHaveJulianDay = false
+			break
+		}
+	}
+
+	if (allHaveJulianDay) {
 		points.sort(GeoPointComparatorByJDAscending)
 
 		// Two seeds reaching the same instant yield the same location, so collapse a point only when it
@@ -2225,27 +2248,38 @@ function orderCurvePoints(points: GeoPoint[]) {
 	return deduplicatePoints(points)
 }
 
-// Splits a curve into separate polylines at genuine discontinuities: wherever two consecutive points
-// are farther apart than maxGap the curve has left the sunlit hemisphere (or the solver family is
-// physically disconnected there), so the pieces must not be joined by a straight chord. Pieces with
-// fewer than two points are dropped as undrawable.
-export function splitDisconnectedPolylines(points: readonly GeoPoint[], maxGap: Angle) {
-	if (points.length === 0) return []
+// Appends the drawable pieces of one curve to `out`, splitting only at physical discontinuities.
+function pushSplitDisconnectedPolylines(out: GeoPoint[][], points: readonly GeoPoint[], maxGap: Angle) {
+	if (points.length === 0) return
 
-	const pieces: GeoPoint[][] = []
 	let current: GeoPoint[] = [points[0]]
 
 	for (let i = 1; i < points.length; i++) {
 		if (angularDistance(points[i - 1], points[i]) > maxGap) {
-			if (current.length > 1) pieces.push(current)
+			if (current.length > 1) out.push(current)
 			current = []
 		}
 
 		current.push(points[i])
 	}
 
-	if (current.length > 1) pieces.push(current)
+	if (current.length > 1) out.push(current)
+}
 
+// Splits every branch into drawable pieces without allocating a callback result per branch.
+function splitCurveBranches(branches: readonly (readonly GeoPoint[])[], maxGap: Angle) {
+	const pieces: GeoPoint[][] = []
+	for (const branch of branches) pushSplitDisconnectedPolylines(pieces, branch, maxGap)
+	return pieces
+}
+
+// Splits a curve into separate polylines at genuine discontinuities: wherever two consecutive points
+// are farther apart than maxGap the curve has left the sunlit hemisphere (or the solver family is
+// physically disconnected there), so the pieces must not be joined by a straight chord. Pieces with
+// fewer than two points are dropped as undrawable.
+export function splitDisconnectedPolylines(points: readonly GeoPoint[], maxGap: Angle) {
+	const pieces: GeoPoint[][] = []
+	pushSplitDisconnectedPolylines(pieces, points, maxGap)
 	return pieces
 }
 
@@ -2276,7 +2310,7 @@ export function splitAtMaxAbsLatitude(points: readonly GeoPoint[]) {
 function reconnectSplitCurveCusps(branches: readonly GeoPoint[][], pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode) {
 	const maxDrawableGap = Math.max(BRANCH_MAX_DRAWABLE_GAP, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
 	const reconnected = reconnectBranchCusps(deduplicateBranches(branches, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode, false)
-	const pieces = reconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	const pieces = splitCurveBranches(reconnected, maxDrawableGap)
 	return deduplicateBranches(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), maxAngularStep)
 }
 
@@ -2413,9 +2447,15 @@ export function findCircleIntersections(cx: number, cy: number, radius: number) 
 // the unit circle, so the oblique projection of the ellipsoid is honored.
 function riseSetCrossings(pbe: PolynomialBesselianElements, jd: number) {
 	const be = besselianSampleAtJulianDay(pbe, jd)
-	return earthLimbCircleIntersections(be.x, be.y, earthLimbOmega(be.d), Math.abs(be.l1))
-		.map((p) => projectFundamentalPoint(be, p[0], p[1]))
-		.filter(finitePoint)
+	const crossings = earthLimbCircleIntersections(be.x, be.y, earthLimbOmega(be.d), Math.abs(be.l1))
+	const points: GeoPoint[] = []
+
+	for (const crossing of crossings) {
+		const point = projectFundamentalPoint(be, crossing[0], crossing[1])
+		if (finitePoint(point)) points.push(point)
+	}
+
+	return points
 }
 
 function IsGeoPoint(point?: Point | GeoPoint): point is GeoPoint {
@@ -2437,7 +2477,11 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 
 	const stepDays = validStep(options.step, DEFAULT_RISE_SET_STEP_SECONDS) / DAYSEC
 	const adaptive = options.adaptive ?? true
-	const contacts = [P1, optionalContacts.P2, optionalContacts.P3, P4].filter(IsGeoPoint)
+	const contacts: GeoPoint[] = []
+	if (IsGeoPoint(P1)) contacts.push(P1)
+	if (IsGeoPoint(optionalContacts.P2)) contacts.push(optionalContacts.P2)
+	if (IsGeoPoint(optionalContacts.P3)) contacts.push(optionalContacts.P3)
+	if (IsGeoPoint(P4)) contacts.push(P4)
 
 	// Split the P1..P4 span into phases: maximal runs of sampled instants where the penumbra circle meets
 	// the limb at all. The day-side gap P2..P3, where the penumbra lies wholly on Earth, yields no crossing
@@ -2481,7 +2525,8 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 		}
 	}
 
-	return insertRiseSetCuspPoints(curves, [optionalContacts.N1, optionalContacts.N2, optionalContacts.S1, optionalContacts.S2]).flatMap((curve) => splitDisconnectedPolylines(curve, BRANCH_MAX_DRAWABLE_GAP))
+	const withCusps = insertRiseSetCuspPoints(curves, [optionalContacts.N1, optionalContacts.N2, optionalContacts.S1, optionalContacts.S2])
+	return splitCurveBranches(withCusps, BRANCH_MAX_DRAWABLE_GAP)
 }
 
 function RiseSetBranchFilter(branch: RiseSetBranch) {
@@ -2500,8 +2545,8 @@ function traceRiseSetBranches(pbe: PolynomialBesselianElements, phase: readonly 
 
 	for (let s = 1; s < phase.length; s++) {
 		const { jd, crossings } = phase[s]
-		const matchedBranch = new Array<boolean>(active.length)
-		const matchedCrossing = new Array<boolean>(crossings.length)
+		let matchedBranchMask = 0
+		let matchedCrossingMask = 0
 
 		// Greedy minimum-cost assignment without allocating pair objects or sorting: repeatedly take the
 		// cheapest unmatched branch/crossing pair. This yields the same assignment as sorting all pairs by
@@ -2513,9 +2558,9 @@ function traceRiseSetBranches(pbe: PolynomialBesselianElements, phase: readonly 
 			let bestCost = Infinity
 
 			for (let b = 0; b < active.length; b++) {
-				if (matchedBranch[b]) continue
+				if ((matchedBranchMask & (1 << b)) !== 0) continue
 				for (let c = 0; c < crossings.length; c++) {
-					if (matchedCrossing[c]) continue
+					if ((matchedCrossingMask & (1 << c)) !== 0) continue
 					const cost = angularDistance(active[b].last, crossings[c])
 					if (cost < bestCost) {
 						bestCost = cost
@@ -2527,8 +2572,8 @@ function traceRiseSetBranches(pbe: PolynomialBesselianElements, phase: readonly 
 
 			if (bestBranch < 0) break
 
-			matchedBranch[bestBranch] = true
-			matchedCrossing[bestCrossing] = true
+			matchedBranchMask |= 1 << bestBranch
+			matchedCrossingMask |= 1 << bestCrossing
 			const branch = active[bestBranch]
 			const crossing = crossings[bestCrossing]
 			if (adaptive) refineRiseSetBranchGap(pbe, branch.last.jd!, branch.last, jd, crossing, branch.points, 0)
@@ -2538,10 +2583,10 @@ function traceRiseSetBranches(pbe: PolynomialBesselianElements, phase: readonly 
 
 		// Close branches with no crossing this step, then open a branch for every unmatched crossing.
 		for (let b = active.length - 1; b >= 0; b--) {
-			if (!matchedBranch[b]) completed.push(...active.splice(b, 1))
+			if ((matchedBranchMask & (1 << b)) === 0) completed.push(...active.splice(b, 1))
 		}
 		for (let c = 0; c < crossings.length; c++) {
-			if (!matchedCrossing[c]) active.push({ points: [crossings[c]], last: crossings[c] })
+			if ((matchedCrossingMask & (1 << c)) === 0) active.push({ points: [crossings[c]], last: crossings[c] })
 		}
 	}
 
@@ -2634,7 +2679,8 @@ const RISE_SET_CUSP_INSERT_MAX_GAP = DEFAULT_MAX_ANGULAR_STEP * CURVE_GAP_SPLIT_
 const RISE_SET_CUSP_MAX_DETOUR = DEFAULT_MAX_ANGULAR_STEP
 
 function insertRiseSetCuspPoints(curves: readonly GeoPoint[][], cusps: readonly (GeoPoint | undefined)[]) {
-	const out = curves.map((curve) => curve.slice())
+	const out: GeoPoint[][] = []
+	for (const curve of curves) out.push(curve.slice())
 
 	for (const cusp of cusps) {
 		if (cusp?.jd === undefined) continue
@@ -2804,7 +2850,9 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		const line = assembleCenterLine(pbe, C1, C2, findCurvePoints(pbe, 0, 0, curveOptions), maxAngularStep, refractionMode)
 		// Tag each central-line point with its local total/annular character so a hybrid eclipse's
 		// transition is recoverable from the geometry.
-		centerLine = line.map((point) => (point.jd === undefined ? point : { x: point.x, y: point.y, jd: point.jd, kind: centralLineKind(pbe, point.jd) }))
+		const taggedCenterLine: GeoPoint[] = []
+		for (const point of line) taggedCenterLine.push(point.jd === undefined ? point : { x: point.x, y: point.y, jd: point.jd, kind: centralLineKind(pbe, point.jd) })
+		centerLine = taggedCenterLine
 	}
 
 	// Partial-eclipse (penumbra) north/south limits: the day-side curves where the penumbral cone
@@ -2855,17 +2903,14 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 // scan points within the time-collapse epsilon of an endpoint are dropped in favor of the exact
 // C1/C2 contact, keeping them as the true endpoints of the polyline.
 function assembleCenterLine(pbe: PolynomialBesselianElements, C1: GeoPoint | undefined, C2: GeoPoint | undefined, scan: readonly GeoPoint[], maxAngularStep: Angle, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE) {
-	function InsideWindowFilter(point: GeoPoint) {
-		return point.jd !== undefined && (C1?.jd === undefined || point.jd > C1.jd + CURVE_TIME_EPSILON_DAYS) && (C2?.jd === undefined || point.jd < C2.jd - CURVE_TIME_EPSILON_DAYS)
-	}
-
-	const interior = scan.filter(InsideWindowFilter)
+	const interior: GeoPoint[] = []
+	for (const point of scan) if (isCenterLineInteriorPoint(point, C1, C2)) interior.push(point)
 	const assembled: GeoPoint[] = []
 
 	if (C1 && interior.length > 0) {
 		const head: GeoPoint[] = []
 		appendRefinedSegment(head, pbe, C1, interior[0], 0, 0, maxAngularStep, refractionMode)
-		for (const p of head) if (InsideWindowFilter(p)) assembled.push(p)
+		for (const p of head) if (isCenterLineInteriorPoint(p, C1, C2)) assembled.push(p)
 	}
 
 	for (const p of interior) assembled.push(p)
@@ -2873,13 +2918,18 @@ function assembleCenterLine(pbe: PolynomialBesselianElements, C1: GeoPoint | und
 	if (C2 && interior.length > 0) {
 		const tail: GeoPoint[] = []
 		appendRefinedSegment(tail, pbe, interior.at(-1)!, C2, 0, 0, maxAngularStep, refractionMode)
-		for (const p of tail) if (InsideWindowFilter(p)) assembled.push(p)
+		for (const p of tail) if (isCenterLineInteriorPoint(p, C1, C2)) assembled.push(p)
 	}
 
 	const ordered = orderCurvePoints(deduplicatePoints(assembled))
 	if (C1) ordered.unshift(C1)
 	if (C2) ordered.push(C2)
 	return deduplicatePoints(ordered)
+}
+
+// Whether a scanned central-line point belongs strictly between the solved C1/C2 endpoint instants.
+function isCenterLineInteriorPoint(point: GeoPoint, C1: GeoPoint | undefined, C2: GeoPoint | undefined) {
+	return point.jd !== undefined && (C1?.jd === undefined || point.jd > C1.jd + CURVE_TIME_EPSILON_DAYS) && (C2?.jd === undefined || point.jd < C2.jd - CURVE_TIME_EPSILON_DAYS)
 }
 
 // Geometric solar altitude (radians) of an observer at a limit point at its own instant. The two named
@@ -2949,7 +2999,7 @@ export function splitPolygonAtAntimeridian(ring: readonly GeoPoint[]) {
 }
 
 function splitGeoLineAtAntimeridian(line: readonly GeoPoint[], close: boolean) {
-	if (line.length === 0) return []
+	if (line.length < 2) return []
 
 	const segments: GeoPoint[][] = []
 	let current: GeoPoint[] = [line[0]]
@@ -2964,8 +3014,9 @@ function splitGeoLineAtAntimeridian(line: readonly GeoPoint[], close: boolean) {
 			const crossingLon = delta > 0 ? -PI : PI
 			const oppositeLon = -crossingLon
 			const t = (crossingLon - previous.x) / (point.x + (delta > 0 ? -TAU : TAU) - previous.x)
-			const lat = previous.y + (point.y - previous.y) * clamp(t, 0, 1)
-			const jd = previous.jd !== undefined && point.jd !== undefined ? previous.jd + (point.jd - previous.jd) * clamp(t, 0, 1) : undefined
+			const clampedT = clamp(t, 0, 1)
+			const lat = previous.y + (point.y - previous.y) * clampedT
+			const jd = previous.jd !== undefined && point.jd !== undefined ? previous.jd + (point.jd - previous.jd) * clampedT : undefined
 			current.push({ x: crossingLon, y: lat, jd })
 			if (current.length > 1) segments.push(current)
 			current = [{ x: oppositeLon, y: lat, jd }, point]

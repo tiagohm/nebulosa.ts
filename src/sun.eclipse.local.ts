@@ -719,6 +719,7 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 
 // Inserts a root unless an equal one (within ~10x the time tolerance) is already present.
 function pushUniqueRoot(roots: number[], root: number) {
+	if (!Number.isFinite(root)) return
 	for (let i = 0; i < roots.length; i++) {
 		if (Math.abs(roots[i] - root) < CONTACT_TOLERANCE_DAYS * 10) return
 	}
@@ -862,7 +863,7 @@ function findLocalContactValueRoots(fromJd: number, toJd: number, stepDays: numb
 	// adaptive expansion limit). Overlaps with the interior pass dedup away.
 	if (firstIntervalEnd !== undefined) {
 		refineMissedContactInterval(evaluate, fromJd, firstIntervalEnd, roots)
-		refineMissedContactInterval(evaluate, lastIntervalStart, toJd, roots)
+		if (lastIntervalStart !== fromJd || firstIntervalEnd !== toJd) refineMissedContactInterval(evaluate, lastIntervalStart, toJd, roots)
 	}
 
 	return roots.sort(NumberComparator)
@@ -880,15 +881,17 @@ export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitud
 // Closest root strictly before a reference Julian Day, or undefined.
 function rootBefore(roots: readonly number[], reference: number) {
 	let best: number | undefined
-	for (const root of roots) if (root < reference && (best === undefined || root > best)) best = root
+	for (const root of roots) {
+		if (root >= reference) break
+		best = root
+	}
 	return best
 }
 
 // Closest root strictly after a reference Julian Day, or undefined.
 function rootAfter(roots: readonly number[], reference: number) {
-	let best: number | undefined
-	for (const root of roots) if (root > reference && (best === undefined || root < best)) best = root
-	return best
+	for (const root of roots) if (root > reference) return root
+	return undefined
 }
 
 // Resolves the local C1/C2/MAX/C3/C4 events. C2/C3 are only sought when the local maximum is central, so
@@ -1459,7 +1462,7 @@ export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSola
 			const event = events[kind]
 			if (!event || event === primary) continue
 			const { moon } = computeLocalViewDiskPair(event, options, primary)
-			shapes.push({ ...moon, role: 'ghostMoonDisk' })
+			shapes.push({ kind: 'circle', role: 'ghostMoonDisk', event: moon.event, cx: moon.cx, cy: moon.cy, r: moon.r })
 		}
 	}
 

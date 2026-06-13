@@ -807,6 +807,10 @@ test('split helpers avoid direct antimeridian joins', () => {
 	expect(rings.length).toBeGreaterThan(1)
 	expect(segments[0].at(-1)!.x).toBe(PI)
 	expect(segments[1][0].x).toBe(-PI)
+
+	const point = [{ x: 0, y: 0 }]
+	expect(splitPolylineAtAntimeridian(point)).toHaveLength(0)
+	expect(splitPolygonAtAntimeridian(point)).toHaveLength(0)
 })
 
 test('splitDisconnectedPolylines breaks a curve at gaps and drops undrawable pieces', () => {
