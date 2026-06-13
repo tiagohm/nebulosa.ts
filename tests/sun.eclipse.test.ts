@@ -402,6 +402,11 @@ if (RUN_FULL_CATALOG) {
 		const endJd = toJulianDay(timeYMD(CATALOG_TO_YEAR + 1, 1, 1))
 		let cursor = start
 
+		async function draw(file: Bun.BunFile, paths: SolarEclipseMapSvgPaths) {
+			const svg = makeSvg(paths, MAP_WIDTH, MAP_HEIGHT)
+			await Bun.write(file, svg)
+		}
+
 		for (let prevJd = -Infinity, prevLunation = -Infinity; ; ) {
 			const eclipse = nearestSolarEclipse(cursor, true)
 			const jd = toJulianDay(eclipse.maximalTime)
@@ -425,11 +430,10 @@ if (RUN_FULL_CATALOG) {
 						validateCatalogGeometry(eclipse, elements, geometry, paths)
 						await removeFileIfExists(file)
 					} catch (e) {
-						const paths = solarEclipseMapToSvgPaths(geometry, projection)
-						const svg = makeSvg(paths, MAP_WIDTH, MAP_HEIGHT)
-						await Bun.write(file, svg)
-						console.error((e as CatalogError).message)
+						await draw(file, paths)
+						console.error(name, (e as CatalogError).message)
 						failed++
+						throw e
 					}
 				},
 				5000,
@@ -445,6 +449,6 @@ if (RUN_FULL_CATALOG) {
 
 if (RUN_FULL_CATALOG) {
 	afterAll(() => {
-		console.info(failed, 'failed of ', total, 'eclipses')
+		console.info(failed, 'failed of', total, 'eclipses')
 	})
 }
