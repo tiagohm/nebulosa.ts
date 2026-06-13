@@ -1,5 +1,59 @@
 import { spline } from './spline'
 
+// Computes Delta T (TT - UT1) in seconds from the Espenak and Meeus 2006 polynomial expressions.
+// The piecewise fit spans roughly -1999 to +3000; beyond +2150 and before -500 it reduces to the
+// long-term parabola, so the function stays finite and monotonic for any year.
+// https://eclipse.gsfc.nasa.gov/SEhelp/deltatpoly2004.html
+//   year: decimal calendar year, for example 2024.5 for the middle of 2024.
+export function deltaTByEspenakMeeus2006(year: number) {
+	if (year < -500) {
+		const u = (year - 1820) / 100
+		return -20 + 32 * u * u
+	} else if (year < 500) {
+		const u = year / 100
+		return 10583.6 + u * (-1014.41 + u * (33.78311 + u * (-5.952053 + u * (-0.1798452 + u * (0.022174192 + u * 0.0090316521)))))
+	} else if (year < 1600) {
+		const u = (year - 1000) / 100
+		return 1574.2 + u * (-556.01 + u * (71.23472 + u * (0.319781 + u * (-0.8503463 + u * (-0.005050998 + u * 0.0083572073)))))
+	} else if (year < 1700) {
+		const t = year - 1600
+		return 120 + t * (-0.9808 + t * (-0.01532 + t / 7129))
+	} else if (year < 1800) {
+		const t = year - 1700
+		return 8.83 + t * (0.1603 + t * (-0.0059285 + t * (0.00013336 + t * (-1 / 1174000))))
+	} else if (year < 1860) {
+		const t = year - 1800
+		return 13.72 + t * (-0.332447 + t * (0.0068612 + t * (0.0041116 + t * (-0.00037436 + t * (0.0000121272 + t * (-0.0000001699 + t * 0.000000000875))))))
+	} else if (year < 1900) {
+		const t = year - 1860
+		return 7.62 + t * (0.5737 + t * (-0.251754 + t * (0.01680668 + t * (-0.0004473624 + t / 233174))))
+	} else if (year < 1920) {
+		const t = year - 1900
+		return -2.79 + t * (1.494119 + t * (-0.0598939 + t * (0.0061966 + t * -0.000197)))
+	} else if (year < 1941) {
+		const t = year - 1920
+		return 21.2 + t * (0.84493 + t * (-0.0761 + t * 0.0020936))
+	} else if (year < 1961) {
+		const t = year - 1950
+		return 29.07 + t * (0.407 + t * (-1 / 233 + t / 2547))
+	} else if (year < 1986) {
+		const t = year - 1975
+		return 45.45 + t * (1.067 + t * (-1 / 260 + t * (-1 / 718)))
+	} else if (year < 2005) {
+		const t = year - 2000
+		return 63.86 + t * (0.3345 + t * (-0.060374 + t * (0.0017275 + t * (0.000651814 + t * 0.00002373599))))
+	} else if (year < 2050) {
+		const t = year - 2000
+		return 62.92 + t * (0.32217 + t * 0.005589)
+	} else if (year < 2150) {
+		const u = (year - 1820) / 100
+		return -20 + 32 * u * u - 0.5628 * (2150 - year)
+	} else {
+		const u = (year - 1820) / 100
+		return -20 + 32 * u * u
+	}
+}
+
 // Evaluates the Stephenson and Morrison 2004 parabola outside the historical fit interval.
 export const parabolaOfStephensonMorrison2004 = spline(1820, 1920, [0, 32, 0, -20])
 

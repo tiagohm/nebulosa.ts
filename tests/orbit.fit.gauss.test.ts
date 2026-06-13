@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { normalizeAngle } from '../src/angle'
 import { KeplerOrbit } from '../src/asteroid'
-import { GM_SUN_PITJEVA_2005, TAU } from '../src/constants'
+import { DAYSPERJY, GM_SUN_PITJEVA_2005, TAU } from '../src/constants'
 import type { EquatorialCoordinate } from '../src/coordinate'
 import { matIdentity } from '../src/mat3'
 import { gauss, type GaussObservation } from '../src/orbit.fit.gauss'
@@ -14,7 +14,7 @@ const IDENTITY_ROTATION = matIdentity()
 const ORBIT = KeplerOrbit.trueAnomaly(1.9, 0.18, 0.12, 0.8, 1.1, 0.35, EPOCH, MU, IDENTITY_ROTATION)
 
 function observerPositionAt(offsetDays: number): MutVec3 {
-	const angle = (TAU * offsetDays) / 365.25 + 0.4
+	const angle = (TAU * offsetDays) / DAYSPERJY + 0.4
 	return [Math.cos(angle), Math.sin(angle), 0.04 * Math.sin(2 * angle)]
 }
 
@@ -40,7 +40,7 @@ function observations(spacingDays: number = 4): readonly [GaussObservation, Gaus
 function circularObservations(inclination: number, anomaly: number, observerPhase: number = 0, observerZ: number = 0) {
 	const orbit = KeplerOrbit.trueAnomaly(1.1, 0, inclination, 0.2, 0.5, anomaly, EPOCH, MU, IDENTITY_ROTATION)
 	const observer = (offsetDays: number): MutVec3 => {
-		const angle = (TAU * offsetDays) / 365.25 + observerPhase
+		const angle = (TAU * offsetDays) / DAYSPERJY + observerPhase
 		return [Math.cos(angle), Math.sin(angle), observerZ * Math.sin(2 * angle)]
 	}
 	const observation = (offsetDays: number): GaussObservation => {

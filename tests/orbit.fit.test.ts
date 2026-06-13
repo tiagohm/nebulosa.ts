@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { normalizeAngle, normalizePI } from '../src/angle'
 import { KeplerOrbit } from '../src/asteroid'
-import { ASEC2RAD, TAU } from '../src/constants'
+import { ASEC2RAD, DAYSPERJY, TAU } from '../src/constants'
 import { matIdentity } from '../src/mat3'
 import { type OrbitFitAngularResidual, type OrbitFitOptions, fitOrbit, type OrbitFitObservation } from '../src/orbit.fit'
 import { type Time, Timescale, timeShift, timeYMDHMS } from '../src/time'
@@ -52,7 +52,7 @@ function makeSyntheticObservations(options: SyntheticOptions = {}) {
 }
 
 function observerPositionAt(offsetDays: number): MutVec3 {
-	const angle = (TAU * offsetDays) / 365.25 + 0.4
+	const angle = (TAU * offsetDays) / DAYSPERJY + 0.4
 	return [Math.cos(angle), Math.sin(angle), 0.04 * Math.sin(2 * angle)]
 }
 

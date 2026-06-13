@@ -26,6 +26,10 @@ const SOLAR_ECLIPSE_CENTRAL_LIMIT = 0.9972
 const SOLAR_ECLIPSE_SURFACE_LIMIT = 1.5433
 const SOLAR_ECLIPSE_PARTIAL_DENOMINATOR = 0.5461
 const SOLAR_ECLIPSE_HYBRID_LIMIT = 0.00464
+// Sine of the Moon's mean horizontal parallax (mean Earth-Moon distance ~60.27 equatorial radii). Lifts
+// the geocentric Moon/Sun diameter ratio to the topocentric magnitude an observer at greatest eclipse
+// sees, standing up to one Earth radius nearer the Moon.
+const MEAN_LUNAR_PARALLAX = 0.01659
 
 // Computes the parallax of the Sun at a given distance
 export function sunParallax(distance: Distance) {
@@ -232,15 +236,25 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 				eclipse.magnitude = (SOLAR_ECLIPSE_SURFACE_LIMIT + u - absG) / (SOLAR_ECLIPSE_PARTIAL_DENOMINATOR + 2 * u)
 				eclipse.type = absG < SOLAR_ECLIPSE_CENTRAL_LIMIT + Math.abs(u) ? (u < 0 ? 'total' : 'annular') : 'partial'
 			}
-			// central eclipse
-			else if (u < 0) {
-				eclipse.type = 'total'
-			} else if (u > 0.0047) {
-				eclipse.type = 'annular'
-			} else if (u < SOLAR_ECLIPSE_HYBRID_LIMIT * Math.sqrt(1 - gamma * gamma)) {
-				eclipse.type = 'hybrid'
-			} else {
-				eclipse.type = 'annular'
+			// Central eclipse: the shadow axis reaches Earth, so the greatest-eclipse magnitude is the Moon/Sun
+			// apparent-diameter ratio, not the partial fraction of formula 54.2 (Meeus leaves it undefined here).
+			// Geocentrically that ratio is (l1 - l2)/(l1 + l2); since l1 - l2 ~ 2*k_moon ~ the partial denominator
+			// (distance-independent, as the lunar radius and parallax scale together) and l2 = u, it reduces to
+			// the form below. The observer at greatest eclipse stands ~sqrt(1 - gamma^2) Earth radii nearer the
+			// Moon, scaling the geocentric ratio up to the topocentric magnitude that is reported for eclipses.
+			else {
+				const diameterRatio = SOLAR_ECLIPSE_PARTIAL_DENOMINATOR / (SOLAR_ECLIPSE_PARTIAL_DENOMINATOR + 2 * u)
+				eclipse.magnitude = diameterRatio / (1 - Math.sqrt(1 - gamma * gamma) * MEAN_LUNAR_PARALLAX)
+
+				if (u < 0) {
+					eclipse.type = 'total'
+				} else if (u > 0.0047) {
+					eclipse.type = 'annular'
+				} else if (u < SOLAR_ECLIPSE_HYBRID_LIMIT * Math.sqrt(1 - gamma * gamma)) {
+					eclipse.type = 'hybrid'
+				} else {
+					eclipse.type = 'annular'
+				}
 			}
 		} else if (next) {
 			k++

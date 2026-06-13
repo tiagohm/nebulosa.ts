@@ -1153,6 +1153,16 @@ const pv = sgp4(time, source)
 const [header, ...data] = simbadQuery(query, options) // Search on Simbad TAP service
 ```
 
+### Solar Eclipse Map ![](bun.webp) ![](browser.webp)
+
+```ts
+const geometry = computeSolarEclipseMapGeometry(eclipse, pbe, options)
+const paths = solarEclipseMapToSvgPaths(geometry, projection, options)
+const { total, annular } = splitCentralLineByKind(geometry.lines.centerLine, pbe) // Per-character hybrid segments
+const greatestEclipse = computeGreatestEclipseCircumstances(pbe) // Time (TD/UT1), location, Sun altitude/azimuth, path width, central duration
+const greatestDuration = computeGreatestDurationCircumstances(pbe) // Same circumstances at the point of longest central phase
+```
+
 ### Spk ![](bun.webp) ![](browser.webp)
 
 ```ts

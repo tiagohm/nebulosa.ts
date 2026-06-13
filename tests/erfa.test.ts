@@ -987,3 +987,11 @@ test('eraAtoc13', () => {
 	expect(rc).toBeCloseTo(2.709956744659734086, 13)
 	expect(dc).toBeCloseTo(0.1741696500898471366, 13)
 })
+
+test('eraEpb', () => {
+	expect(erfa.eraEpb(2415019.8135, 30103.18648)).toBeCloseTo(1982.41842415927858, 11)
+})
+
+test('eraEpj', () => {
+	expect(erfa.eraEpj(2451545, -7392.5)).toBeCloseTo(1979.760438056125941, 13)
+})

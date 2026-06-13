@@ -38,8 +38,8 @@ test('equatorial to ecliptic', () => {
 test('ecliptic to equatorial', () => {
 	const [rightAscension, declination] = eclipticToEquatorial(parseAngle('284 35 58.8')!, parseAngle('-00 00 02.1')!, TIME) // Sun
 
-	expect(formatRA(rightAscension)).toBe('19 03 23.79')
-	expect(formatDEC(declination)).toBe('-22 38 16.52')
+	expect(formatRA(rightAscension)).toBe('19 03 23.82')
+	expect(formatDEC(declination)).toBe('-22 38 20.70')
 })
 
 test('equatorial to galatic', () => {

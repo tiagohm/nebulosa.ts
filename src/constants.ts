@@ -105,6 +105,9 @@ export const SCHWARZSCHILD_RADIUS_OF_THE_SUN = 1.974125743363687131156424e-8
 // Speed of light (AU per day).
 export const SPEED_OF_LIGHT_AU_DAY = (SPEED_OF_LIGHT * DAYSEC) / AU_M
 
+// Earth radius in km
+export const EARTH_RADIUS_KM = 6378.135
+
 // Radians to degrees.
 export const RAD2DEG = 180 / PI
 
