@@ -2,7 +2,7 @@ import { expect, test, describe } from 'bun:test'
 import { deg, parseAngle } from '../src/angle'
 import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '../src/sun'
 // oxfmt-ignore
-import { BRANCH_MAX_DRAWABLE_GAP, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, EARTH_E2, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolylinesToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarAltitudeAtPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse.map'
+import { BRANCH_MAX_DRAWABLE_GAP, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, DELTA_T_LONGITUDE_FACTOR, derivativeEarthLimbOmega, EARTH_E2, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, geoPolylinesToSvgPathData, hourAngleFromLongitude, intermediateGreatCircle, longitudeFromHourAngle, pointsToSvgPathData, projectClosestEarthLimbPoint, projectFundamentalPoint, solarAltitudeAtPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, splitPolygonAtAntimeridian, splitPolylineAtAntimeridian, type GeoBranch, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SunMoonPosition } from '../src/sun.eclipse.map'
 import { DEG2RAD, PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
 import { PlateCarree, type Projection, type ProjectionOptions } from '../src/projection'
@@ -208,18 +208,18 @@ function expectGeoPointClose(point: GeoPoint | undefined, longitude: number, lat
 	if (jd !== undefined) expect(Math.abs(point!.jd! - jd)).toBeLessThan(1e-8)
 }
 
-function expectIncreasingJd(points: readonly GeoPoint[]) {
-	for (let i = 1; i < points.length; i++) expect(points[i].jd!).toBeGreaterThan(points[i - 1].jd!)
+function expectIncreasingJd(branch: GeoBranch) {
+	for (let i = 1; i < branch.length; i++) expect(branch[i].jd!).toBeGreaterThan(branch[i - 1].jd!)
 }
 
 // Rise/set branches may hold two distinct points at the same instant (a tangency cusp anchored at a
 // contact plus the first sampled crossing), so time only needs to be non-decreasing along them.
-function expectNonDecreasingJd(points: readonly GeoPoint[]) {
-	for (let i = 1; i < points.length; i++) expect(points[i].jd!).toBeGreaterThanOrEqual(points[i - 1].jd!)
+function expectNonDecreasingJd(branch: GeoBranch) {
+	for (let i = 1; i < branch.length; i++) expect(branch[i].jd!).toBeGreaterThanOrEqual(branch[i - 1].jd!)
 }
 
-function expectMaxAngularStep(points: readonly GeoPoint[], maxStep: number) {
-	for (let i = 1; i < points.length; i++) expect(sphericalSeparation(points[i - 1].x, points[i - 1].y, points[i].x, points[i].y)).toBeLessThanOrEqual(maxStep)
+function expectMaxAngularStep(branch: GeoBranch, maxStep: number) {
+	for (let i = 1; i < branch.length; i++) expect(sphericalSeparation(branch[i - 1].x, branch[i - 1].y, branch[i].x, branch[i].y)).toBeLessThanOrEqual(maxStep)
 }
 
 // Residual of the shadow-axis tangency condition x^2 + (omega*y)^2 = 1 that defines the central
@@ -788,7 +788,7 @@ test('findCurvePoints refines exit boundaries away from the last valid longitude
 })
 
 test('split helpers avoid direct antimeridian joins', () => {
-	const line: GeoPoint[] = [
+	const line: GeoBranch = [
 		{ x: deg(170), y: deg(10) },
 		{ x: deg(-170), y: deg(12) },
 		{ x: deg(-160), y: deg(15) },
@@ -808,7 +808,7 @@ test('split helpers avoid direct antimeridian joins', () => {
 })
 
 test('splitDisconnectedPolylines breaks a curve at gaps and drops undrawable pieces', () => {
-	const points: GeoPoint[] = [
+	const points: GeoBranch = [
 		{ x: 0, y: 0 },
 		{ x: deg(1), y: 0 },
 		{ x: deg(2), y: 0 },
@@ -1019,7 +1019,7 @@ test('computeSolarEclipseMapGeometry is deterministic for identical inputs', () 
 })
 
 test('antimeridian splitting keeps segments within a hemisphere and continuous across the seam', () => {
-	const line: GeoPoint[] = [
+	const line: GeoBranch = [
 		{ x: deg(150), y: deg(5) },
 		{ x: deg(178), y: deg(8) },
 		{ x: deg(-176), y: deg(11) },
@@ -1425,7 +1425,7 @@ describe('solar eclipse map validation cases', () => {
 	}
 })
 
-// Branch-aware topology: penumbra and umbra limits are GeoPoint[][] continuity branches. Points inside a
+// Branch-aware topology: penumbra and umbra limits are GeoBranch[] continuity branches. Points inside a
 // branch may connect; separate branches never do. These cases (computed from the VSOP87E/ELPMPP02
 // ephemerides) cover the eclipses that previously produced topology defects: the 2005-04-08 jd-order spike,
 // the 2024-04-08 north-pole spike from global endpoint chaining, and assorted normal eclipses that must stay
@@ -1458,7 +1458,8 @@ describe('branch-aware curve topology', () => {
 		expect(expected!.y).toBeLessThan(deg(70))
 
 		let nearest = Infinity
-		let branchWithLowerArc: readonly GeoPoint[] | undefined
+		let branchWithLowerArc: GeoBranch | undefined
+
 		for (const branch of geometry.lines.penumbraNorth) {
 			for (const point of branch) {
 				const distance = sphericalSeparation(expected!.x, expected!.y, point.x, point.y)

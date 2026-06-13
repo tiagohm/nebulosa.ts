@@ -4,7 +4,7 @@ import { DEG2RAD, PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation, type Point } from '../src/geometry'
 import { type SolarEclipse, nearestSolarEclipse } from '../src/sun'
 // oxfmt-ignore
-import { type GeoPoint, type PolynomialBesselianElements, intermediateGreatCircle, findEclipseCurvePoint, type SolarEclipseMapGeometry, centralAxisIntersectsEarth, solarEclipseMapToSvgPaths, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, evaluateBesselian, BRANCH_MAX_DRAWABLE_GAP, F, type SolarEclipseMapSvgPaths, solarAltitudeAtPoint } from '../src/sun.eclipse.map'
+import { type GeoPoint, type PolynomialBesselianElements, intermediateGreatCircle, findEclipseCurvePoint, type SolarEclipseMapGeometry, centralAxisIntersectsEarth, solarEclipseMapToSvgPaths, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, evaluateBesselian, BRANCH_MAX_DRAWABLE_GAP, F, type SolarEclipseMapSvgPaths, solarAltitudeAtPoint, type GeoCurve, type GeoBranch } from '../src/sun.eclipse.map'
 import * as elpmpp02 from '../src/elpmpp02'
 import { PlateCarree } from '../src/projection'
 import { toJulianDay, timeYMD, type Time, time, Timescale, timeToDate } from '../src/time'
@@ -60,14 +60,14 @@ export function limitTangencyResidual(elements: PolynomialBesselianElements, poi
 
 // Counts interior vertices whose direction turns by more than threshold radians: the serrilhado detector.
 // Antimeridian-wrapping and zero-length steps are skipped. Zero means a smooth physical curve.
-export function countKinks(points: readonly GeoPoint[], threshold: number) {
+export function countKinks(branch: GeoBranch, threshold: number) {
 	let count = 0
 
-	for (let i = 1; i < points.length - 1; i++) {
-		const v1x = points[i].x - points[i - 1].x
-		const v1y = points[i].y - points[i - 1].y
-		const v2x = points[i + 1].x - points[i].x
-		const v2y = points[i + 1].y - points[i].y
+	for (let i = 1; i < branch.length - 1; i++) {
+		const v1x = branch[i].x - branch[i - 1].x
+		const v1y = branch[i].y - branch[i - 1].y
+		const v2x = branch[i + 1].x - branch[i].x
+		const v2y = branch[i + 1].y - branch[i].y
 		if (Math.abs(v1x) > PI || Math.abs(v2x) > PI) continue
 		const d1 = Math.hypot(v1x, v1y)
 		const d2 = Math.hypot(v2x, v2y)
@@ -79,7 +79,7 @@ export function countKinks(points: readonly GeoPoint[], threshold: number) {
 }
 
 // Great-circle interpolation of a time-parametrized curve at an arbitrary Julian Day.
-export function interpolateAtJulianDay(line: readonly GeoPoint[], jd: number) {
+export function interpolateAtJulianDay(line: GeoBranch, jd: number) {
 	for (let i = 1; i < line.length; i++) {
 		if (line[i - 1].jd! <= jd && jd <= line[i].jd!) {
 			const fraction = (jd - line[i - 1].jd!) / (line[i].jd! - line[i - 1].jd!)
@@ -110,10 +110,10 @@ export function longestProjectedSegment(pathData: string) {
 }
 
 // Largest spherical edge between consecutive points within any branch, skipping antimeridian wraps.
-export function maxBranchSegment(branches: readonly (readonly GeoPoint[])[]) {
+export function maxBranchSegment(curve: GeoCurve) {
 	let max = 0
 
-	for (const branch of branches) {
+	for (const branch of curve) {
 		for (let i = 1; i < branch.length; i++) {
 			if (Math.abs(branch[i - 1].x - branch[i].x) > PI) continue
 			max = Math.max(max, sphericalSeparation(branch[i - 1].x, branch[i - 1].y, branch[i].x, branch[i].y))
@@ -165,22 +165,22 @@ function validateCatalogPoint(eclipse: Readonly<SolarEclipse>, point: GeoPoint, 
 	else if (point.jd !== undefined) catalogAssert(eclipse, Number.isFinite(point.jd), `${name} has non-finite jd`)
 }
 
-function minDistanceToBranches(point: GeoPoint, branches: readonly (readonly GeoPoint[])[]) {
+function minDistanceToBranches(point: GeoPoint, curve: GeoCurve) {
 	let min = Infinity
-	for (const branch of branches) for (const sample of branch) min = Math.min(min, sphericalSeparation(point.x, point.y, sample.x, sample.y))
+	for (const branch of curve) for (const sample of branch) min = Math.min(min, sphericalSeparation(point.x, point.y, sample.x, sample.y))
 	return min
 }
 
-function validatePointAnchor(eclipse: Readonly<SolarEclipse>, point: GeoPoint | undefined, name: string, branches: readonly (readonly GeoPoint[])[], tolerance: Angle) {
+function validatePointAnchor(eclipse: Readonly<SolarEclipse>, point: GeoPoint | undefined, name: string, curve: GeoCurve, tolerance: Angle) {
 	if (!point) return
 	validateCatalogPoint(eclipse, point, name, true)
-	catalogAssert(eclipse, branches.length > 0, `${name} exists but its drawable family is empty`)
-	catalogAssert(eclipse, minDistanceToBranches(point, branches) <= tolerance, `${name} is not attached to its drawable family`)
+	catalogAssert(eclipse, curve.length > 0, `${name} exists but its drawable family is empty`)
+	catalogAssert(eclipse, minDistanceToBranches(point, curve) <= tolerance, `${name} is not attached to its drawable family`)
 }
 
-function validateCatalogBranches(eclipse: Readonly<SolarEclipse>, elements: PolynomialBesselianElements, branches: readonly (readonly GeoPoint[])[], name: string, i: -1 | 1, G: number) {
-	for (let b = 0; b < branches.length; b++) {
-		const branch = branches[b]
+function validateCatalogBranches(eclipse: Readonly<SolarEclipse>, elements: PolynomialBesselianElements, curve: GeoCurve, name: string, i: -1 | 1, G: number) {
+	for (let b = 0; b < curve.length; b++) {
+		const branch = curve[b]
 		catalogAssert(eclipse, branch.length >= 2, `${name}[${b}] is not drawable`)
 		validateNoEndpointRetrace(eclipse, branch, `${name}[${b}]`)
 
@@ -193,15 +193,15 @@ function validateCatalogBranches(eclipse: Readonly<SolarEclipse>, elements: Poly
 		}
 	}
 
-	validateNoBridgeableEndpointGaps(eclipse, elements, branches, name, i, G)
+	validateNoBridgeableEndpointGaps(eclipse, elements, curve, name, i, G)
 }
 
-function validateNoEndpointRetrace(eclipse: Readonly<SolarEclipse>, branch: readonly GeoPoint[], name: string) {
+function validateNoEndpointRetrace(eclipse: Readonly<SolarEclipse>, branch: GeoBranch, name: string) {
 	catalogAssert(eclipse, !endpointRetraces(branch, true), `${name} retraces a loop from its start endpoint`)
 	catalogAssert(eclipse, !endpointRetraces(branch, false), `${name} retraces a loop from its end endpoint`)
 }
 
-export function endpointRetraces(branch: readonly GeoPoint[], fromStart: boolean) {
+export function endpointRetraces(branch: GeoBranch, fromStart: boolean) {
 	if (branch.length < 4) return false
 
 	const endpoint = fromStart ? branch[0] : branch.at(-1)!
@@ -222,13 +222,13 @@ export function endpointRetraces(branch: readonly GeoPoint[], fromStart: boolean
 	return false
 }
 
-export function validateNoBridgeableEndpointGaps(eclipse: Readonly<SolarEclipse>, elements: PolynomialBesselianElements, branches: readonly (readonly GeoPoint[])[], name: string, i: -1 | 1, G: number) {
-	for (let a = 0; a < branches.length; a++) {
-		const branchA = branches[a]
+export function validateNoBridgeableEndpointGaps(eclipse: Readonly<SolarEclipse>, elements: PolynomialBesselianElements, curve: GeoCurve, name: string, i: -1 | 1, G: number) {
+	for (let a = 0; a < curve.length; a++) {
+		const branchA = curve[a]
 		const endpointsA = [branchA[0], branchA.at(-1)!] as const
 
-		for (let b = a + 1; b < branches.length; b++) {
-			const branchB = branches[b]
+		for (let b = a + 1; b < curve.length; b++) {
+			const branchB = curve[b]
 			const endpointsB = [branchB[0], branchB.at(-1)!] as const
 
 			for (let ea = 0; ea < endpointsA.length; ea++) {
@@ -243,11 +243,11 @@ export function validateNoBridgeableEndpointGaps(eclipse: Readonly<SolarEclipse>
 	}
 }
 
-function pushCatalogBranchPoint(out: GeoPoint[], point: GeoPoint) {
+function pushCatalogBranchPoint(out: GeoBranch, point: GeoPoint) {
 	if (out.length === 0 || sphericalSeparation(out.at(-1)!.x, out.at(-1)!.y, point.x, point.y) > 1e-12) out.push(point)
 }
 
-function appendCatalogBranchPoints(out: GeoPoint[], branch: readonly GeoPoint[], reverse: boolean) {
+function appendCatalogBranchPoints(out: GeoBranch, branch: GeoBranch, reverse: boolean) {
 	if (reverse) {
 		for (let k = branch.length - 1; k >= 0; k--) pushCatalogBranchPoint(out, branch[k])
 	} else {
@@ -255,14 +255,14 @@ function appendCatalogBranchPoints(out: GeoPoint[], branch: readonly GeoPoint[],
 	}
 }
 
-function mergeCatalogBranches(a: readonly GeoPoint[], b: readonly GeoPoint[], endpointA: 0 | 1, endpointB: 0 | 1) {
-	const out: GeoPoint[] = []
+function mergeCatalogBranches(a: GeoBranch, b: GeoBranch, endpointA: 0 | 1, endpointB: 0 | 1) {
+	const out: GeoBranch = []
 	appendCatalogBranchPoints(out, a, endpointA === 0)
 	appendCatalogBranchPoints(out, b, endpointB === 1)
 	return out
 }
 
-export function catalogBranchRetraces(branch: readonly GeoPoint[], tolerance: Angle, minArcSeparation: Angle) {
+export function catalogBranchRetraces(branch: GeoBranch, tolerance: Angle, minArcSeparation: Angle) {
 	const arc = new Float64Array(branch.length)
 
 	for (let k = 1; k < branch.length; k++) arc[k] = arc[k - 1] + sphericalSeparation(branch[k - 1].x, branch[k - 1].y, branch[k].x, branch[k].y)
@@ -291,9 +291,9 @@ export function hasContinuousCurveBetween(elements: PolynomialBesselianElements,
 	return false
 }
 
-export function validateCatalogRiseSetCurves(eclipse: Readonly<SolarEclipse>, elements: PolynomialBesselianElements, branches: readonly (readonly GeoPoint[])[]) {
-	for (let b = 0; b < branches.length; b++) {
-		const branch = branches[b]
+export function validateCatalogRiseSetCurves(eclipse: Readonly<SolarEclipse>, elements: PolynomialBesselianElements, curve: GeoCurve) {
+	for (let b = 0; b < curve.length; b++) {
+		const branch = curve[b]
 		catalogAssert(eclipse, branch.length >= 2, `riseSetCurves[${b}] is not drawable`)
 
 		for (let k = 0; k < branch.length; k++) {
