@@ -179,6 +179,135 @@ Before finishing a change:
 - Commit only touched changes after relevant checks are green.
 - If network access, missing fixtures, or environment limitations prevent full verification, state that explicitly with the exact command that could not be completed.
 
+## Performance Review Checklist
+
+When reviewing or before commiting TypeScript changes, check for avoidable performance issues, especially in hot paths, numerical code, rendering loops, data-processing pipelines, and frequently called functions.
+
+Prefer readable code by default, but avoid unnecessary allocations, copies, callbacks, and repeated work when the code is performance-sensitive.
+
+### Arrays and collections
+
+- Avoid `.slice()` when no real copy is needed.
+- Avoid `[...array]` when the array is only being iterated, passed through, or defensively copied without a clear reason.
+- Avoid `target.push(...source)` for large arrays. Prefer an indexed loop to avoid argument-spread overhead and stack limits.
+- Avoid repeated `concat()` inside loops.
+- Avoid chaining `.filter().map().reduce()` in hot paths when a single loop can do the same work without intermediate arrays.
+- Avoid `.find()` inside loops. Build a `Map` when repeated lookup by key is needed.
+- Avoid `.includes()` on large arrays when repeated membership checks are needed. Use a `Set`.
+- Preallocate arrays when the final size is known.
+- Avoid `Array.from()` in hot paths when a simple loop is cheaper.
+
+### Object copies and allocations
+
+- Avoid object spread inside loops unless a copy is required.
+- Avoid array spread inside loops.
+- Avoid creating temporary objects in functions called very frequently.
+- Avoid creating closures, lambdas, or bound functions inside hot loops.
+- Avoid `JSON.parse(JSON.stringify(...))` for cloning.
+- Avoid `structuredClone()` unless a deep copy is explicitly required and acceptable for the path.
+- Reuse temporary objects or output buffers when the function is called repeatedly.
+- Avoid repeatedly creating `Date`, `RegExp`, `Intl.*`, `URL`, `TextEncoder`, or `TextDecoder` instances in hot paths. Hoist or cache them when possible.
+
+### Strings
+
+- Avoid incremental string concatenation for large outputs inside loops. Collect parts and use `.join("")`.
+- Avoid `.split()` when only a prefix, suffix, or single separator lookup is needed. Prefer `indexOf()`, `startsWith()`, `endsWith()`, or direct slicing.
+- Avoid repeated `.toLowerCase()` / `.toUpperCase()` on the same value. Normalize once and reuse.
+- Avoid building expensive log messages when the log level may be disabled.
+
+### Loops and algorithms
+
+- Check for accidental `O(n²)` behavior from nested loops, repeated `.find()`, repeated `.filter()`, or repeated scans.
+- Use `Map`, `Set`, indexing, bucketing, spatial grids, or caches when repeated lookup is required.
+- Move loop-invariant calculations outside the loop.
+- Avoid repeated unit conversions inside loops.
+- Avoid `try/catch` inside hot loops. Put error handling outside the loop when possible.
+- Avoid unnecessary function calls inside tight numerical loops when inlining or direct operations would be clearer and faster.
+- Avoid logging inside high-volume loops.
+
+### Math and numerical code
+
+- Avoid `Math.pow(x, 2)` for squaring. Use `x * x`.
+- Avoid `Math.sqrt()` when only comparing distances. Compare squared distances instead.
+- Reuse expensive trigonometric results such as `sin`, `cos`, `tan`, `atan2`, and `sqrt` when possible.
+- Precompute constants such as degree/radian conversion factors.
+- Avoid formatting numbers or converting them to strings inside computational paths.
+
+### Typed arrays and buffers
+
+- Use `Float32Array`, `Float64Array`, `Uint8Array`, or other typed arrays for large numeric datasets.
+- Avoid converting typed arrays to regular arrays unless required.
+- Prefer `typedArray.subarray(start, end)` when a view is enough.
+- Use `typedArray.slice(start, end)` only when a real copy is required.
+- Reuse buffers for repeated computations.
+- Avoid creating typed-array views repeatedly inside tight loops.
+- For large numeric structures, consider separate typed arrays instead of arrays of objects when memory layout and throughput matter.
+
+### Async and promises
+
+- Avoid marking functions as `async` when they do not await or need to return a promise.
+- Avoid unnecessary manual `new Promise(...)` wrappers.
+- Avoid sequential `await` inside loops when operations are independent.
+- Use `Promise.all` only when unbounded parallelism is safe.
+- Use concurrency limits for large batches of async work.
+- Batch I/O operations when possible.
+
+### Maps, sets, and caches
+
+- Use `Map` for repeated key-based lookup.
+- Use `Set` for repeated membership checks.
+- Avoid recreating `Map` or `Set` inside functions called frequently when the source data is stable.
+- Do not add unbounded caches without an eviction or size policy.
+- Avoid memoizing cheap computations.
+- Avoid using newly created objects as cache keys when their identity changes on every call.
+
+### Object shapes and JIT friendliness
+
+- Keep object shapes stable.
+- Initialize all expected properties when creating objects or class instances.
+- Avoid adding properties dynamically after object creation in hot paths.
+- Avoid mixing different value types in the same property.
+- Avoid heterogeneous arrays in performance-critical code.
+- Avoid sparse arrays and large index gaps.
+
+### Immutability
+
+- Avoid blind immutability in hot paths.
+- Avoid repeated `{ ...state }` or `[...items]` patterns when local mutation would be safe and contained.
+- Prefer controlled local mutation for temporary data that does not escape the function.
+- Keep immutable patterns where they improve correctness, but do not use them automatically in high-volume code without considering allocation cost.
+
+### Backend code
+
+- Avoid blocking the event loop with heavy CPU work.
+- Move heavy CPU-bound work to worker threads, queues, or separate processes when needed.
+- Avoid reading large files fully into memory when streaming is suitable.
+- Avoid parsing the same large JSON payload repeatedly.
+- Reuse clients, pools, and long-lived resources instead of recreating them per operation.
+- Avoid excessive synchronous logging in high-throughput paths.
+
+### Validation and errors
+
+- Avoid using exceptions as normal control flow.
+- Validate at system boundaries instead of repeatedly validating the same trusted data deep inside hot paths.
+- Avoid repeated deep validation of objects that were already validated.
+- Avoid constructing expensive error messages unless they are actually needed.
+
+### Approval rule
+
+Before accepting a performance-sensitive change, verify:
+
+- The algorithmic complexity is appropriate.
+- There are no avoidable array or object copies.
+- There are no avoidable allocations inside critical loops.
+- Repeated lookups use the right data structure.
+- Buffers are reused where appropriate.
+- Async work is not accidentally serialized.
+- Parallel async work has a safe concurrency limit when needed.
+- Numerical code avoids unnecessary expensive operations.
+- The implementation remains readable enough to maintain.
+- Any performance-motivated complexity is justified by the code path.
+
 ## Commit Message Guidelines
 
 Commit messages must be precise, English, and easy to scan.
