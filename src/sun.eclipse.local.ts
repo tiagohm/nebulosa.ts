@@ -433,10 +433,11 @@ export function computeLocalFundamentalState(pbe: PolynomialBesselianElements, l
 	return { time, jd: toJulianDay(time), be, longitude, latitude, hourAngle: normalizeAngle(H), ksi, eta, zeta, u, v, distance, L1, L2, magnitude, moonSunDiameterRatio, centralPhaseKind }
 }
 
-// Computes only the local scalar geometry needed by hot root/minimum searches. The returned tuple aliases
-// `o` and contains distance, L1 and L2 in Earth equatorial radii.
-function computeLocalFundamentalMetrics(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, time: Time, o: [distance: number, L1: number, L2: number]) {
-	const be = evaluateBesselian(pbe, time)
+// Computes the local scalar geometry (distance, L1, L2 in Earth equatorial radii) from an already evaluated
+// Besselian sample. The sample depends only on the instant, so callers probing many (longitude, latitude)
+// points at one time can evaluate it once and reuse it here instead of re-running the polynomial per probe.
+// The returned tuple aliases `o`.
+function localFundamentalMetricsFromSample(be: Pick<InstantBesselianElements, 'mu' | 'deltaTLongitudeCorrection' | 'd' | 'x' | 'y' | 'l1' | 'l2' | 'tanF1' | 'tanF2'>, longitude: Angle, latitude: Angle, o: [distance: number, L1: number, L2: number]) {
 	const H = hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection)
 
 	const sinD = Math.sin(be.d)
@@ -456,6 +457,12 @@ function computeLocalFundamentalMetrics(pbe: PolynomialBesselianElements, longit
 	o[1] = be.l1 - zeta * be.tanF1
 	o[2] = be.l2 - zeta * be.tanF2
 	return o
+}
+
+// Computes only the local scalar geometry needed by hot root/minimum searches. The returned tuple aliases
+// `o` and contains distance, L1 and L2 in Earth equatorial radii.
+function computeLocalFundamentalMetrics(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, time: Time, o: [distance: number, L1: number, L2: number]) {
+	return localFundamentalMetricsFromSample(evaluateBesselian(pbe, time), longitude, latitude, o)
 }
 
 // Local magnitude at a Julian Day, reusing `metrics` to avoid per-sample LocalFundamentalState allocation.
@@ -1284,10 +1291,12 @@ function computeCentralShadowChordWidthByBearingsKm(centralValueAt: (longitude: 
 // null when the maximum is not central, the observer is not inside the central shadow, or no edge is found
 // within MAX_SHADOW_HALF_WIDTH_KM.
 export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jd: number) {
-	const time = timeAtJulianDay(pbe.maximumTime, jd)
+	// The Besselian sample depends only on the instant; evaluate it once and reuse it across every
+	// (longitude, latitude) chord probe instead of re-running the polynomial (and its derivatives) per probe.
+	const sample = besselianSampleAtJulianDay(pbe, jd)
 	const metrics: [distance: number, L1: number, L2: number] = [0, 0, 0]
 	const centralValueAt = (lon: Angle, lat: Angle) => {
-		const [distance, , L2] = computeLocalFundamentalMetrics(pbe, lon, lat, time, metrics)
+		const [distance, , L2] = localFundamentalMetricsFromSample(sample, lon, lat, metrics)
 		return distance - Math.abs(L2)
 	}
 
