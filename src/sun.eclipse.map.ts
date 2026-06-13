@@ -1265,27 +1265,26 @@ function findGreatestEclipseT(pbe: PolynomialBesselianElements) {
 	return bestT
 }
 
-// Finds the greatest eclipse point. For a central eclipse the shadow axis pierces the ellipsoid, so the
-// greatest-eclipse location is the strict projection of the axis at maximum time. For a partial or
-// non-central eclipse the axis misses the Earth, so the greatest eclipse is the limb point nearest the
-// axis — the minimum shadow-to-surface distance — rather than an implicit clamp inside the projector.
-// The instant stays the authoritative maximumTime (the published greatest-eclipse epoch) whenever it
-// agrees with the fitted closest approach; only a materially inconsistent maximumTime is replaced by the
-// minimized instant, so partial/non-central Max never drifts from the true geometry.
+// Finds the greatest eclipse point. The greatest-eclipse instant stays the authoritative maximumTime (the
+// published greatest-eclipse epoch) whenever it agrees with the fitted closest approach; a materially
+// inconsistent maximumTime (more than MAXIMUM_TIME_CONSISTENCY_DAYS from the fitted minimum of
+// x^2 + (omega y)^2) is replaced by the fitted instant, so Max comes from the same Besselian fit as the
+// contacts and central line. Otherwise a maximumTime offset by minutes from the fit can leave Max out of
+// chronological order with the penumbral internal contacts P2/P3 (e.g. the 2732-03-18 total eclipse, whose
+// maximumTime sits ~11 min before the fitted closest approach that P2/P3 bracket). At the chosen instant a
+// central eclipse projects the axis strictly (it pierces the ellipsoid); a partial or non-central one
+// projects the nearest limb point instead, since the axis misses the Earth.
 export function findMaximumPoint(pbe: PolynomialBesselianElements) {
-	const be = evaluateBesselianSample(pbe, pbe.maximumTime)
-	const strict = projectFundamentalPoint(be, be.x, be.y)
-	if (strict) return strict
-
-	const atMaximum = projectClosestEarthLimbPoint(be, be.x, be.y)
 	const julianDay0 = toJulianDay(pbe.time0)
 	const tMaximum = (toJulianDay(pbe.maximumTime) - julianDay0) / pbe.stepDays
 	const tBest = findGreatestEclipseT(pbe)
 
+	const be = evaluateBesselianSample(pbe, pbe.maximumTime)
+	const atMaximum = projectFundamentalPoint(be, be.x, be.y) ?? projectClosestEarthLimbPoint(be, be.x, be.y)
 	if (Math.abs(tBest - tMaximum) * pbe.stepDays <= MAXIMUM_TIME_CONSISTENCY_DAYS) return atMaximum
 
 	const beBest = besselianSampleAtJulianDay(pbe, julianDay0 + tBest * pbe.stepDays)
-	return projectClosestEarthLimbPoint(beBest, beBest.x, beBest.y) ?? atMaximum
+	return projectFundamentalPoint(beBest, beBest.x, beBest.y) ?? projectClosestEarthLimbPoint(beBest, beBest.x, beBest.y) ?? atMaximum
 }
 
 // Finds one extreme endpoint of the central line (C1 when begin is true, C2 otherwise): the instant
