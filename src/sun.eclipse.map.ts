@@ -1619,6 +1619,14 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 	const finalPieces = trimCurveBranchArtifacts(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), foldStep, maxAngularStep)
 	const finalReconnected = reconnectBranchCusps(deduplicateBranches(finalPieces, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
 	pieces = finalReconnected.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
+	const trimmed = trimCurveBranchArtifacts(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), foldStep, maxAngularStep)
+	// Reconnect once more after the final trim. Trimming a retrace loop exposes a branch's true cusp
+	// endpoint, which can be bridgeable to a neighbour even though it was buried inside the loop (and so
+	// unbridgeable) during the previous reconnection pass. Without this the branches stay split across a
+	// genuinely continuous gap (e.g. the near-polar 3160-09-22 penumbra-south limit, whose trimmed endpoint
+	// sits ~5.9 deg from the adjacent branch with a continuous curve between them).
+	const reconnectedTrimmed = reconnectBranchCusps(deduplicateBranches(trimmed, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode)
+	pieces = reconnectedTrimmed.flatMap((branch) => splitDisconnectedPolylines(branch, maxDrawableGap))
 	return deduplicateBranches(trimCurveBranchArtifacts(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), foldStep, maxAngularStep), maxAngularStep)
 }
 
