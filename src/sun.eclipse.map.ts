@@ -2028,11 +2028,40 @@ function pointOnBranch(point: GeoPoint, branch: GeoBranch, tolerance: Angle) {
 	return false
 }
 
-// Whether every point of branch already lies on host: branch is a sub-arc host fully covers. Independent of
-// orientation, since proximity ignores order.
-function branchCoveredBy(branch: GeoBranch, host: GeoBranch, tolerance: Angle) {
-	for (const point of branch) if (!pointOnBranch(point, host, tolerance)) return false
-	return true
+// Whether host makes branch redundant: branch is the same arc as part of host, up to a short overhang the
+// host did not reach. Every interior point of branch must lie on host (so two genuinely distinct arcs that
+// merely meet at a shared cusp, diverging immediately, are never collapsed), while a contiguous uncovered run
+// at either end is tolerated as long as its arc length stays within maxOverhang — a seed that traced the same
+// limit a couple of steps past the host's endpoint (e.g. the 5578-05-13 penumbra-south sub-arc that lies on
+// the main branch but overshoots its start by ~1.5 deg). Independent of orientation, since proximity ignores
+// order.
+function branchCoveredBy(branch: GeoBranch, host: GeoBranch, tolerance: Angle, maxOverhang: Angle) {
+	let firstCovered = -1
+	let lastCovered = -1
+
+	for (let k = 0; k < branch.length; k++) {
+		if (pointOnBranch(branch[k], host, tolerance)) {
+			if (firstCovered < 0) firstCovered = k
+			lastCovered = k
+		}
+	}
+
+	if (firstCovered < 0) return false
+
+	// Reject an interior uncovered point: branch leaves host in the middle, so it is a distinct arc.
+	for (let k = firstCovered + 1; k < lastCovered; k++) {
+		if (!pointOnBranch(branch[k], host, tolerance)) return false
+	}
+
+	// The remaining uncovered points are the contiguous end overhangs [0, firstCovered) and (lastCovered, end].
+	return overhangArcLength(branch, 0, firstCovered) <= maxOverhang && overhangArcLength(branch, lastCovered, branch.length - 1) <= maxOverhang
+}
+
+// Arc length (radians) of the branch points in [from, to], used to bound an uncovered end overhang.
+function overhangArcLength(branch: GeoBranch, from: number, to: number) {
+	let arc = 0
+	for (let k = from + 1; k <= to; k++) arc += angularDistance(branch[k - 1], branch[k])
+	return arc
 }
 
 // Drops redundant branches that another kept branch already covers. Several latitude seeds converge to one
@@ -2042,11 +2071,14 @@ function branchCoveredBy(branch: GeoBranch, host: GeoBranch, tolerance: Angle) {
 // copy and discards every sub-arc covered by it.
 function deduplicateBranches(branches: GeoCurve, maxAngularStep: Angle) {
 	const tolerance = maxAngularStep * BRANCH_CONTAINMENT_STEPS
+	// A redundant sub-arc may overshoot the host's endpoint by a short stub (a seed tracing the same limit a
+	// few steps further); tolerate an overhang up to the fold-gap threshold so the duplicate is still dropped.
+	const maxOverhang = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
 	const byLength = branches.slice().sort((a, b) => b.length - a.length)
 	const kept: GeoCurve = []
 
 	for (const branch of byLength) {
-		if (!kept.some((host) => branchCoveredBy(branch, host, tolerance))) kept.push(branch)
+		if (!kept.some((host) => branchCoveredBy(branch, host, tolerance, maxOverhang))) kept.push(branch)
 	}
 
 	return kept
