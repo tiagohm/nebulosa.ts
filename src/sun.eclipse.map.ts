@@ -2552,13 +2552,31 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 	const phases: RiseSetSample[][] = []
 	let current: RiseSetSample[] | undefined
 
+	// Force the phase break across the known internal-contact interval [P2, P3] even when no sample lands in
+	// it: for a near-threshold hybrid that gap can be shorter than the sampling step (the 5309-10-09 gap is
+	// ~6.5 min under a 10 min step), so the no-crossing test alone never splits the phases. Left merged, the
+	// sunrise and sunset tracks join through one coarse step that jumps across the cusp, and P2/P3 (the
+	// tangency cusps on the rise/set locus) are neither branch endpoints nor close enough to a sample to be
+	// inserted, so they end up detached from the drawn curve. Breaking here makes the sunrise phase end at P2
+	// and the sunset phase begin at P3, which anchorRiseSetBranch then bends the curve into.
+	const gapStartJd = optionalContacts.P2?.jd
+	const gapEndJd = optionalContacts.P3?.jd
+	let previousSampleJd: number | undefined
+
 	for (let jd = P1.jd; jd <= P4.jd + stepDays * 0.5; jd += stepDays) {
 		const sampleJd = Math.min(jd, P4.jd)
 		const crossings = riseSetCrossings(pbe, sampleJd)
 
 		if (crossings.length === 0) {
 			current = undefined
+			previousSampleJd = sampleJd
 			continue
+		}
+
+		// A step that jumps over the whole [P2, P3] day-side gap (previous sample at/before P2, this one
+		// at/after P3) closes the sunrise phase so the sunset phase reopens at P3.
+		if (gapStartJd !== undefined && gapEndJd !== undefined && previousSampleJd !== undefined && previousSampleJd <= gapStartJd + CURVE_TIME_EPSILON_DAYS && sampleJd >= gapEndJd - CURVE_TIME_EPSILON_DAYS) {
+			current = undefined
 		}
 
 		if (!current) {
@@ -2567,6 +2585,7 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 		}
 
 		current.push({ jd: sampleJd, crossings })
+		previousSampleJd = sampleJd
 	}
 
 	// The tangency cusp bounding a phase falls within one sampling step of the phase's last crossing, so
