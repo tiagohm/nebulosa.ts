@@ -2301,7 +2301,7 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 		}
 	}
 
-	return insertRiseSetCuspPoints(curves, [optionalContacts.N1, optionalContacts.N2, optionalContacts.S1, optionalContacts.S2])
+	return insertRiseSetCuspPoints(curves, [optionalContacts.N1, optionalContacts.N2, optionalContacts.S1, optionalContacts.S2]).flatMap((curve) => splitDisconnectedPolylines(curve, BRANCH_MAX_DRAWABLE_GAP))
 }
 
 function RiseSetBranchFilter(branch: RiseSetBranch) {

@@ -231,7 +231,7 @@ export function endpointRetraces(branch: readonly GeoPoint[], fromStart: boolean
 	return false
 }
 
-function validateNoBridgeableEndpointGaps(eclipse: Readonly<SolarEclipse>, elements: PolynomialBesselianElements, branches: readonly (readonly GeoPoint[])[], name: string, i: -1 | 1, G: number) {
+export function validateNoBridgeableEndpointGaps(eclipse: Readonly<SolarEclipse>, elements: PolynomialBesselianElements, branches: readonly (readonly GeoPoint[])[], name: string, i: -1 | 1, G: number) {
 	for (let a = 0; a < branches.length; a++) {
 		const branchA = branches[a]
 		const endpointsA = [branchA[0], branchA.at(-1)!] as const
@@ -271,7 +271,7 @@ function mergeCatalogBranches(a: readonly GeoPoint[], b: readonly GeoPoint[], en
 	return out
 }
 
-function catalogBranchRetraces(branch: readonly GeoPoint[], tolerance: Angle, minArcSeparation: Angle) {
+export function catalogBranchRetraces(branch: readonly GeoPoint[], tolerance: Angle, minArcSeparation: Angle) {
 	const arc = new Float64Array(branch.length)
 
 	for (let k = 1; k < branch.length; k++) arc[k] = arc[k - 1] + sphericalSeparation(branch[k - 1].x, branch[k - 1].y, branch[k].x, branch[k].y)
@@ -286,7 +286,7 @@ function catalogBranchRetraces(branch: readonly GeoPoint[], tolerance: Angle, mi
 	return false
 }
 
-function hasContinuousCurveBetween(elements: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 1, G: number, gap: Angle) {
+export function hasContinuousCurveBetween(elements: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 1, G: number, gap: Angle) {
 	const limit = CATALOG_BRIDGE_BALANCE * gap
 	const midpoint = intermediateGreatCircle(a, b, 0.5)
 	if (Math.max(Math.abs(a.y), Math.abs(b.y), Math.abs(midpoint.y)) > CATALOG_RECONNECT_POLE_LATITUDE) return false
@@ -300,7 +300,7 @@ function hasContinuousCurveBetween(elements: PolynomialBesselianElements, a: Geo
 	return false
 }
 
-function validateCatalogRiseSetCurves(eclipse: Readonly<SolarEclipse>, elements: PolynomialBesselianElements, branches: readonly (readonly GeoPoint[])[]) {
+export function validateCatalogRiseSetCurves(eclipse: Readonly<SolarEclipse>, elements: PolynomialBesselianElements, branches: readonly (readonly GeoPoint[])[]) {
 	for (let b = 0; b < branches.length; b++) {
 		const branch = branches[b]
 		catalogAssert(eclipse, branch.length >= 2, `riseSetCurves[${b}] is not drawable`)

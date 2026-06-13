@@ -7,7 +7,7 @@ import { DEG2RAD, PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
 import { PlateCarree, type Projection, type ProjectionOptions } from '../src/projection'
 import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../src/time'
-import { countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment, solarAltitude, sunMoonPosition } from './sun.eclipse.test'
+import { countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment, solarAltitude, sunMoonPosition, validateCatalogRiseSetCurves } from './sun.eclipse.test'
 
 const JD0 = 2460409.25
 const TIME0 = time(JD0)
@@ -2074,4 +2074,13 @@ describe('splitCentralLineByKind segments a hybrid central line', () => {
 		for (const segment of withPbe.total) for (const point of segment) expect(point.kind).toBe('total')
 		for (const segment of withPbe.annular) for (const point of segment) expect(point.kind).toBe('annular')
 	})
+})
+
+test('1807-06-06 rise/set curves split the near-cusp crossing swap', () => {
+	const eclipse = nearestSolarEclipse(timeYMD(1807, 6, 1), true)
+	const elements = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+	const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: deg(0.5), maxAngularStep: deg(0.5), includeRiseSetCurves: true, riseSetStep: 600 })
+
+	expect(geometry.lines.riseSetCurves.length).toBeGreaterThan(0)
+	validateCatalogRiseSetCurves(eclipse, elements, geometry.lines.riseSetCurves)
 })
