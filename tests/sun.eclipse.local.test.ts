@@ -5,8 +5,8 @@ import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
 import { computePolynomialBesselianElements, type PolynomialBesselianElements } from '../src/sun.eclipse.map'
 // oxfmt-ignore
 import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, } from '../src/sun.eclipse.local'
-import { timeToDate, timeYMD, toJulianDay } from '../src/time'
 import { sphericalSeparation } from '../src/geometry'
+import { timeToDate, timeYMD, toJulianDay } from '../src/time'
 import { sunMoonPosition } from './sun.eclipse.test'
 
 function viewOptions(overrides: Partial<LocalSolarEclipseViewOptions> = {}): LocalSolarEclipseViewOptions {
