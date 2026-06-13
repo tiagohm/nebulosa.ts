@@ -1134,8 +1134,23 @@ function projectContactRoot(pbe: PolynomialBesselianElements, jd: number | undef
 // the whole search window so grazing contacts are not missed. signedDistance is the ellipse counterpart
 // of the unit-circle hypot - 1 used previously.
 function findShadowContactPoints(pbe: PolynomialBesselianElements, radius: (be: BesselianSample) => number, options?: SolarEclipseContactOptions) {
-	const maximumJulianDay = toJulianDay(pbe.maximumTime)
+	const julianDay0 = toJulianDay(pbe.time0)
+	const publishedMaximumJulianDay = toJulianDay(pbe.maximumTime)
 	const searchSpanDays = contactSearchSpanDays(options)
+	// An explicit contactSearchSpan means the caller wants exactly the window around maximumTime (the
+	// documented contract, and what synthetic fixtures rely on to bound the search); the default span is the
+	// engine's own best effort and may be recentered/expanded below.
+	const explicitSpan = options?.contactSearchSpan !== undefined && Number.isFinite(options.contactSearchSpan) && options.contactSearchSpan > 0
+	// Center the contact window on the fitted closest approach when the published maximumTime is materially
+	// inconsistent with it (the same recentering findMaximumPoint and findCentralLineExtremePoint apply). A
+	// maximumTime offset by hours from the true closest approach pushes the far external contact past the
+	// window cap measured from maximumTime, so it is never bracketed and the egress contact collapses onto the
+	// ingress one (P3/P4 then out of chronological order, e.g. the 4621-03-28 annular whose published maximum
+	// is ~2.4 h before the closest approach, leaving P4 just past the +5.5 h cap). Only for the default span,
+	// so an explicit-span caller still gets the window centered exactly on maximumTime.
+	const tMaximum = (publishedMaximumJulianDay - julianDay0) / pbe.step
+	const tBest = findGreatestEclipseT(pbe)
+	const maximumJulianDay = explicitSpan || Math.abs(tBest - tMaximum) * pbe.step <= MAXIMUM_TIME_CONSISTENCY_DAYS ? publishedMaximumJulianDay : julianDay0 + tBest * pbe.step
 
 	function external(jd: number) {
 		const be = besselianSampleAtJulianDay(pbe, jd)
@@ -1151,15 +1166,21 @@ function findShadowContactPoints(pbe: PolynomialBesselianElements, radius: (be: 
 	// edge means the external contact (P1/P4, U1/U4) lies beyond it; push that edge outward (bounded by the
 	// expansion cap) until the shadow has left, so the contact is bracketed instead of being clamped to the
 	// other one. Edges where the shadow has already left are kept. Expansion applies only to the default span:
-	// a caller that passes an explicit contactSearchSpan gets exactly that window (the documented contract,
-	// and what synthetic fixtures rely on to bound the search), so it is never widened past the request.
-	const explicitSpan = options?.contactSearchSpan !== undefined && Number.isFinite(options.contactSearchSpan) && options.contactSearchSpan > 0
+	// a caller that passes an explicit contactSearchSpan gets exactly that window, so it is never widened past
+	// the request.
 	const maxSpanDays = explicitSpan ? searchSpanDays : Math.max(searchSpanDays, CONTACT_SEARCH_MAX_SPAN_SECONDS / DAYSEC)
 	const stepDays = CONTACT_SEARCH_EXPANSION_STEP_SECONDS / DAYSEC
+	// Gate the expansion on the edge reaching its cap, using the exact cap the Math.min clamps to, not on
+	// `to - maximumJulianDay < maxSpanDays`. Once the edge saturates at the cap, that algebraic guard can stay
+	// true forever from floating-point rounding ((cap - maximumJulianDay) rounding just under maxSpanDays),
+	// and when the shadow still covers the cap (external < 0 there, e.g. the wide penumbra of the 4621-03-28
+	// annular) the loop would spin in place. Comparing against the cap directly always terminates.
+	const toCap = maximumJulianDay + maxSpanDays
+	const fromCap = maximumJulianDay - maxSpanDays
 	let from = maximumJulianDay - searchSpanDays
 	let to = maximumJulianDay + searchSpanDays
-	while (to - maximumJulianDay < maxSpanDays && external(to) < 0) to = Math.min(to + stepDays, maximumJulianDay + maxSpanDays)
-	while (maximumJulianDay - from < maxSpanDays && external(from) < 0) from = Math.max(from - stepDays, maximumJulianDay - maxSpanDays)
+	while (to < toCap && external(to) < 0) to = Math.min(to + stepDays, toCap)
+	while (from > fromCap && external(from) < 0) from = Math.max(from - stepDays, fromCap)
 
 	// Keep the scan resolution constant as the window grows so a narrow internal bracket is never skipped.
 	const steps = Math.max(CONTACT_SCAN_STEPS, Math.round((CONTACT_SCAN_STEPS * (to - from)) / (2 * searchSpanDays)))
