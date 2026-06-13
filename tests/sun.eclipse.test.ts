@@ -10,9 +10,10 @@ import { PlateCarree } from '../src/projection'
 import { toJulianDay, timeYMD, type Time, time, Timescale, timeToDate } from '../src/time'
 import * as vsop87e from '../src/vsop87e'
 
+const RUN_FULL_CATALOG = Bun.env.SOLAR_ECLIPSE_FULL_CATALOG === 'true'
 const CATALOG_FROM_YEAR = Number.parseInt(Bun.env.SOLAR_ECLIPSE_CATALOG_FROM_YEAR || '1800', 10)
 const CATALOG_TO_YEAR = Number.parseInt(Bun.env.SOLAR_ECLIPSE_CATALOG_TO_YEAR || '3000', 10)
-const CATALOG_STEP = Number.parseInt(Bun.env.SOLAR_ECLIPSE_CATALOG_STEP_DEG || '0.5', 10)
+const CATALOG_STEP = deg(Number.parseFloat(Bun.env.SOLAR_ECLIPSE_CATALOG_STEP_DEG || '0.5'))
 const CATALOG_RISE_SET_STEP = Number.parseInt(Bun.env.SOLAR_ECLIPSE_CATALOG_RISE_SET_STEP_SECONDS || '600', 10)
 const CATALOG_MAX_DRAWABLE_GAP = Math.max(BRANCH_MAX_DRAWABLE_GAP, CATALOG_STEP * 4)
 const CATALOG_BRIDGE_LIMIT = deg(20)
@@ -148,7 +149,7 @@ class CatalogError extends Error {
 		readonly eclipse: Readonly<SolarEclipse>,
 		readonly description: string,
 	) {
-		super(`lunation=${eclipse.lunation}, time=${timeToDate(eclipse.maximalTime)}, type=${eclipse.type}, gamma=${eclipse.gamma.toFixed(6)}`)
+		super(`${description}: lunation=${eclipse.lunation}, time=${timeToDate(eclipse.maximalTime).join('-')}, type=${eclipse.type}, gamma=${eclipse.gamma.toFixed(6)}`)
 	}
 }
 
@@ -399,53 +400,55 @@ async function removeFileIfExists(file: Bun.BunFile) {
 let total = 0
 let failed = 0
 
-describe.skipIf(Bun.env.SOLAR_ECLIPSE_FULL_CATALOG !== 'true')('validates solar eclipse map topology across the configured catalog range', () => {
-	const start = timeYMD(CATALOG_FROM_YEAR, 1, 1)
-	const endJd = toJulianDay(timeYMD(CATALOG_TO_YEAR + 1, 1, 1))
-	let cursor = start
+if (RUN_FULL_CATALOG) {
+	describe('validates solar eclipse map topology across the configured catalog range', () => {
+		const start = timeYMD(CATALOG_FROM_YEAR, 1, 1)
+		const endJd = toJulianDay(timeYMD(CATALOG_TO_YEAR + 1, 1, 1))
+		let cursor = start
 
-	for (let prevJd = -Infinity, prevLunation = -Infinity; ; ) {
-		const eclipse = nearestSolarEclipse(cursor, true)
-		const jd = toJulianDay(eclipse.maximalTime)
-		if (jd >= endJd) break
+		for (let prevJd = -Infinity, prevLunation = -Infinity; ; ) {
+			const eclipse = nearestSolarEclipse(cursor, true)
+			const jd = toJulianDay(eclipse.maximalTime)
+			if (jd >= endJd) break
 
-		catalogAssert(eclipse, jd > prevJd, 'catalog enumeration did not advance in time')
-		catalogAssert(eclipse, eclipse.lunation > prevLunation, 'catalog enumeration did not advance in lunation')
+			catalogAssert(eclipse, jd > prevJd, 'catalog enumeration did not advance in time')
+			catalogAssert(eclipse, eclipse.lunation > prevLunation, 'catalog enumeration did not advance in lunation')
 
-		const date = timeToDate(eclipse.maximalTime)
-		const name = `${date[0].toFixed(0).padStart(4, '0')}-${date[1].toFixed(0).padStart(2, '0')}-${date[2].toFixed(0).padStart(2, '0')}`
+			const date = timeToDate(eclipse.maximalTime)
+			const name = `${date[0].toFixed(0).padStart(4, '0')}-${date[1].toFixed(0).padStart(2, '0')}-${date[2].toFixed(0).padStart(2, '0')}`
 
-		test(
-			name,
-			() => {
-				const elements = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
-				const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: CATALOG_STEP, maxAngularStep: CATALOG_STEP, includeRiseSetCurves: true, riseSetStep: CATALOG_RISE_SET_STEP })
-				const paths = solarEclipseMapToSvgPaths(geometry, projection)
-				const file = Bun.file(`data/eclipse/${name}.svg`)
-
-				try {
-					validateCatalogGeometry(eclipse, elements, geometry, paths)
-					void removeFileIfExists(file)
-				} catch (e) {
+			test(
+				name,
+				async () => {
+					const elements = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+					const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: CATALOG_STEP, maxAngularStep: CATALOG_STEP, includeRiseSetCurves: true, riseSetStep: CATALOG_RISE_SET_STEP })
 					const paths = solarEclipseMapToSvgPaths(geometry, projection)
-					const svg = makeSvg(paths, MAP_WIDTH, MAP_HEIGHT)
-					void Bun.write(file, svg)
+					const file = Bun.file(`data/eclipse/${name}.svg`)
 
-					const error = e as CatalogError
-					console.error(error.description, error.message)
-					failed++
-				}
-			},
-			5000,
-		)
+					try {
+						validateCatalogGeometry(eclipse, elements, geometry, paths)
+						await removeFileIfExists(file)
+					} catch (e) {
+						const paths = solarEclipseMapToSvgPaths(geometry, projection)
+						const svg = makeSvg(paths, MAP_WIDTH, MAP_HEIGHT)
+						await Bun.write(file, svg)
+						console.error((e as CatalogError).message)
+						failed++
+					}
+				},
+				5000,
+			)
 
-		prevJd = jd
-		prevLunation = eclipse.lunation
-		cursor = eclipse.maximalTime
-		total++
-	}
-})
+			prevJd = jd
+			prevLunation = eclipse.lunation
+			cursor = eclipse.maximalTime
+			total++
+		}
+	})
+}
 
-afterAll(() => {
-	console.info(failed, 'failed of ', total, 'eclipses')
-})
+if (RUN_FULL_CATALOG) {
+	afterAll(() => {
+		console.info(failed, 'failed of ', total, 'eclipses')
+	})
+}
