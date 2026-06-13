@@ -1852,9 +1852,20 @@ function trimRetracedBranchEnds(branches: GeoCurve, tolerance: Angle, minLoopArc
 	const out: GeoCurve = []
 
 	for (const branch of branches) {
-		const trimmedStart = trimRetracedBranchStart(branch, tolerance, minLoopArc)
-		const trimmedEnd = trimRetracedBranchEnd(trimmedStart, tolerance, minLoopArc)
-		if (trimmedEnd.length >= 2) out.push(trimmedEnd)
+		// Start-trim and end-trim each gate on the OTHER endpoint leaving the trimmed loop, so a branch that
+		// winds back near both ends (a near-pole double fold, e.g. the 0994-02-18 grazing annular umbra) can
+		// hide a start retrace behind a tail that loops back near the start: the start-trim's "tail leaves the
+		// endpoint" guard fails until the tail is trimmed, but a single start-then-end pass trims the tail only
+		// after the start-trim already gave up. Iterate both to a fixed point so an exposed retrace at either
+		// end is still removed. Every successful trim strictly shortens the branch, so the branch length bounds
+		// the iteration.
+		let trimmed = branch
+		for (let pass = 0; pass < branch.length; pass++) {
+			const next = trimRetracedBranchEnd(trimRetracedBranchStart(trimmed, tolerance, minLoopArc), tolerance, minLoopArc)
+			if (next.length === trimmed.length) break
+			trimmed = next
+		}
+		if (trimmed.length >= 2) out.push(trimmed)
 	}
 
 	return out
@@ -2322,7 +2333,15 @@ function reconnectSplitCurveCusps(branches: GeoCurve, pbe: PolynomialBesselianEl
 	const maxDrawableGap = Math.max(BRANCH_MAX_DRAWABLE_GAP, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
 	const reconnected = reconnectBranchCusps(deduplicateBranches(branches, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode, false)
 	const pieces = splitCurveBranches(reconnected, maxDrawableGap)
-	return deduplicateBranches(trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap), maxAngularStep)
+	const trimmed = trimRetracedBranchEnds(pieces, maxAngularStep, maxDrawableGap)
+	// Trimming a retrace loop exposes a branch's true cusp endpoint, which can now be bridgeable to the
+	// neighbour it was buried behind during the reconnection above (e.g. the near-pole 0994-02-18 grazing
+	// annular umbra, whose two G = 1 arcs join through a continuous curve only after the winding loop on one
+	// arc is trimmed). Reconnect once more, then split and trim again so an exposed-but-unbridged gap is
+	// closed without re-introducing a loop. Mirrors the post-trim reconnection in findCurveBranchPoints.
+	const reconnectedTrimmed = reconnectBranchCusps(deduplicateBranches(trimmed, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode, false)
+	const finalPieces = splitCurveBranches(reconnectedTrimmed, maxDrawableGap)
+	return deduplicateBranches(trimRetracedBranchEnds(finalPieces, maxAngularStep, maxDrawableGap), maxAngularStep)
 }
 
 // Nearest curve sample to a point across every branch, with its angular distance. Unlike a capped search
