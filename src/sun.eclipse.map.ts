@@ -51,6 +51,16 @@ const DEFAULT_RISE_SET_STEP_SECONDS = 30
 // This is a default, NOT a hard cap: a caller may pass any contactSearchSpan (synthetic fixtures fit over a
 // much wider range and do), in which case the search follows the supplied span.
 const DEFAULT_CONTACT_SEARCH_SPAN_SECONDS = 3.5 * 3600
+// Maximum half-width (seconds) the external contact search may grow to. A near-central eclipse's large
+// penumbra keeps the partial phase longer than the default 3.5 h, so a P1/P4 can sit just past it (e.g. the
+// 3163-07-23 annular at gamma -0.014, whose P4 lands at +3.51 h while P1 stays at -2.6 h). The Besselian
+// cubic stays accurate a little past its +-3 h fit (it matches the true Sun/Moon external residual to five
+// digits out to ~4.5 h there), so expanding the window to bracket such a contact is reliable; this cap
+// bounds the extrapolation so a degenerate residual can never drive an unbounded search.
+const CONTACT_SEARCH_MAX_SPAN_SECONDS = 5.5 * 3600
+// Step (seconds) by which each external contact-search edge is pushed outward while the shadow is still on
+// Earth there. Small enough to land just past the contact, then the root scan refines within the bracket.
+const CONTACT_SEARCH_EXPANSION_STEP_SECONDS = 15 * 60
 // Root tolerance for contact and central-endpoint instants, in days (~1 ms, affordable because the iterations converge quadratically).
 const CONTACT_TOLERANCE_DAYS = 1e-8
 const SOLVER_MAX_ITERATIONS = 50
@@ -1128,8 +1138,6 @@ function projectContactRoot(pbe: PolynomialBesselianElements, jd: number | undef
 function findShadowContactPoints(pbe: PolynomialBesselianElements, radius: (be: BesselianSample) => number, options?: SolarEclipseContactOptions) {
 	const maximumJulianDay = toJulianDay(pbe.maximumTime)
 	const searchSpanDays = contactSearchSpanDays(options)
-	const from = maximumJulianDay - searchSpanDays
-	const to = maximumJulianDay + searchSpanDays
 
 	function external(jd: number) {
 		const be = besselianSampleAtJulianDay(pbe, jd)
@@ -1141,8 +1149,24 @@ function findShadowContactPoints(pbe: PolynomialBesselianElements, radius: (be: 
 		return earthLimbSignedDistance(be.x, be.y, earthLimbOmega(be.d)) + radius(be)
 	}
 
-	const externalRoots = findRootsInInterval(external, from, to, CONTACT_SCAN_STEPS, CONTACT_RESIDUAL_TOLERANCE)
-	const internalRoots = findRootsInInterval(internal, from, to, CONTACT_SCAN_STEPS, CONTACT_RESIDUAL_TOLERANCE)
+	// The external residual is negative while the shadow is still on Earth, so a negative value at a window
+	// edge means the external contact (P1/P4, U1/U4) lies beyond it; push that edge outward (bounded by the
+	// expansion cap) until the shadow has left, so the contact is bracketed instead of being clamped to the
+	// other one. Edges where the shadow has already left are kept. Expansion applies only to the default span:
+	// a caller that passes an explicit contactSearchSpan gets exactly that window (the documented contract,
+	// and what synthetic fixtures rely on to bound the search), so it is never widened past the request.
+	const explicitSpan = options?.contactSearchSpan !== undefined && Number.isFinite(options.contactSearchSpan) && options.contactSearchSpan > 0
+	const maxSpanDays = explicitSpan ? searchSpanDays : Math.max(searchSpanDays, CONTACT_SEARCH_MAX_SPAN_SECONDS / DAYSEC)
+	const stepDays = CONTACT_SEARCH_EXPANSION_STEP_SECONDS / DAYSEC
+	let from = maximumJulianDay - searchSpanDays
+	let to = maximumJulianDay + searchSpanDays
+	while (to - maximumJulianDay < maxSpanDays && external(to) < 0) to = Math.min(to + stepDays, maximumJulianDay + maxSpanDays)
+	while (maximumJulianDay - from < maxSpanDays && external(from) < 0) from = Math.max(from - stepDays, maximumJulianDay - maxSpanDays)
+
+	// Keep the scan resolution constant as the window grows so a narrow internal bracket is never skipped.
+	const steps = Math.max(CONTACT_SCAN_STEPS, Math.round((CONTACT_SCAN_STEPS * (to - from)) / (2 * searchSpanDays)))
+	const externalRoots = findRootsInInterval(external, from, to, steps, CONTACT_RESIDUAL_TOLERANCE)
+	const internalRoots = findRootsInInterval(internal, from, to, steps, CONTACT_RESIDUAL_TOLERANCE)
 
 	return {
 		first: projectContactRoot(pbe, externalRoots[0]),
