@@ -1321,10 +1321,20 @@ export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, be
 	const maximumJulianDay = toJulianDay(pbe.maximumTime)
 	const searchSpanDays = contactSearchSpanDays(options)
 	const tMaximum = (maximumJulianDay - julianDay0) / pbe.step
+	// Center the endpoint search on the fitted closest approach when the published maximumTime is materially
+	// inconsistent with it (the same recentering findMaximumPoint applies). The closest approach is where the
+	// axis is deepest inside the limb and the central chord is widest, so begin (t1 - t2) and end (t1 + t2)
+	// diverge to the two real limb crossings from there. Seeding both at a maximumTime that actually sits at
+	// one crossing collapses them onto it: e.g. the 4245-06-08 total, whose published maximum is ~1.75 h before
+	// the true closest approach and lands on C1, so the end search (bounded to maximumTime + span) stops just
+	// short of C2 and brackets C1 instead, leaving C1/C2 coincident and out of chronological order.
+	const tBest = findGreatestEclipseT(pbe)
+	const tCenter = Math.abs(tBest - tMaximum) * pbe.step <= MAXIMUM_TIME_CONSISTENCY_DAYS ? tMaximum : tBest
+	const centerJulianDay = julianDay0 + tCenter * pbe.step
 	// Normalized half-width of the fitted contact window: the same span the bisection fallback below
-	// brackets. The endpoint must lie inside it.
+	// brackets. The endpoint must lie inside it (measured from the search center).
 	const spanNormalized = searchSpanDays / pbe.step
-	let t = tMaximum
+	let t = tCenter
 
 	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
 		evaluateBesselianAtTInto(be, pbe, t)
@@ -1354,19 +1364,19 @@ export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, be
 		// outside the fitted window. The documented contract is to fall back to the bracketed bisection
 		// when the iteration leaves the fitted span, so detect that here instead of returning the stray
 		// root.
-		if (!Number.isFinite(t) || Math.abs(t - tMaximum) > spanNormalized) break
+		if (!Number.isFinite(t) || Math.abs(t - tCenter) > spanNormalized) break
 		if (Math.abs(tau) * pbe.step <= CONTACT_TOLERANCE_DAYS) return projectCentralAxisPoint(pbe, julianDay0 + t * pbe.step)
 	}
 
-	// Fallback: bisection of the limb residual between the maximum and the search window edge.
+	// Fallback: bisection of the limb residual between the search center and the window edge.
 	function residual(jd: number) {
 		const be = besselianSampleAtJulianDay(pbe, jd)
 		const y1 = earthLimbOmega(be.d) * be.y
 		return be.x * be.x + y1 * y1 - 1
 	}
 
-	const from = begin ? maximumJulianDay - searchSpanDays : maximumJulianDay
-	const to = begin ? maximumJulianDay : maximumJulianDay + searchSpanDays
+	const from = begin ? centerJulianDay - searchSpanDays : centerJulianDay
+	const to = begin ? centerJulianDay : centerJulianDay + searchSpanDays
 	const jd = bisectRoot(residual, from, to)
 
 	return jd === undefined ? undefined : projectCentralAxisPoint(pbe, jd)
