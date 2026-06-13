@@ -325,7 +325,12 @@ function validateCatalogGeometry(eclipse: Readonly<SolarEclipse>, elements: Poly
 	const penumbra = [...lines.penumbraNorth, ...lines.penumbraSouth]
 	const umbra = [...lines.umbraNorth, ...lines.umbraSouth]
 
-	catalogAssert(eclipse, penumbra.length > 0, 'penumbral drawable family is empty')
+	// The penumbral limit exists only when the penumbra actually reaches Earth. An extreme grazing partial
+	// whose penumbral cone misses the ellipsoid (e.g. the 3205-11-03 partial at gamma 1.534, magnitude
+	// 0.0013, whose penumbra clears the limb by ~0.0003 Earth radii) has no drawable limit and no external
+	// contacts, so require the family only when a P1/P4 contact is present. An empty family with a contact
+	// present is still a real defect and fails.
+	if (points.P1 || points.P4) catalogAssert(eclipse, penumbra.length > 0, 'penumbral drawable family is empty')
 	validateCatalogBranches(eclipse, elements, lines.penumbraNorth, 'penumbraNorth', 1, 0)
 	validateCatalogBranches(eclipse, elements, lines.penumbraSouth, 'penumbraSouth', -1, 0)
 	validateCatalogBranches(eclipse, elements, lines.umbraNorth, 'umbraNorth', 1, 1)
