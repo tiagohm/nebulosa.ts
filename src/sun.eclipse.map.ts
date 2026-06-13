@@ -2413,8 +2413,8 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 		branches.sort(RiseSetBranchComparatorByHigherLatitude)
 
 		for (const branch of branches) {
-			const start = nearestContactByJd(branch.points[0].jd, contacts, snapJd)
-			const end = nearestContactByJd(branch.points.at(-1)!.jd, contacts, snapJd)
+			const start = nearestContactByJd(branch.points[0].jd, contacts, snapJd, -1)
+			const end = nearestContactByJd(branch.points.at(-1)!.jd, contacts, snapJd, 1)
 			const curve = anchorRiseSetBranch(pbe, branch.points, start, end, adaptive)
 			if (curve.length > 1) curves.push(curve)
 		}
@@ -2535,14 +2535,25 @@ function refineRiseSetBranchGap(pbe: PolynomialBesselianElements, jdA: number, a
 	refineRiseSetBranchGap(pbe, jd, mid, jdB, bPoint, out, depth + 1)
 }
 
-function nearestContactByJd(jd: number | undefined, contacts: readonly GeoPoint[], toleranceJd: number) {
+// Nearest contact in time to a branch endpoint, within toleranceJd. direction pins which side of the
+// endpoint the contact must lie on so the anchored curve stays chronological: -1 for a phase start (the
+// contact is at or before the branch's first sample), +1 for a phase end (at or after the last sample), 0
+// for either side. A tiny CURVE_TIME_EPSILON_DAYS slack admits a bounding cusp that sits a hair past the
+// endpoint. Without the direction guard a single-sample phase (a very short grazing partial) can snap both
+// its start and end to the same contact whichever is nearest, drawing a backward then forward spike (e.g.
+// the 2893-12-29 partial, whose lone sunset crossing is closest to P4, so P4 was used as the start too).
+function nearestContactByJd(jd: number | undefined, contacts: readonly GeoPoint[], toleranceJd: number, direction: -1 | 0 | 1 = 0) {
 	if (jd === undefined) return undefined
 
 	let best: GeoPoint | undefined
 	let bestDelta = toleranceJd
 
 	for (const contact of contacts) {
-		const delta = Math.abs(contact.jd! - jd)
+		const signed = contact.jd! - jd
+		if (direction < 0 && signed > CURVE_TIME_EPSILON_DAYS) continue
+		if (direction > 0 && signed < -CURVE_TIME_EPSILON_DAYS) continue
+
+		const delta = Math.abs(signed)
 		if (delta < bestDelta) {
 			bestDelta = delta
 			best = contact
