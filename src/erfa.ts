@@ -1,5 +1,5 @@
 import { type Angle, arcsec, deg, normalizeAngle } from './angle'
-import { ASEC2RAD, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, ELB, ELG, J2000, LIGHT_TIME_AU, MILLIASEC2RAD, MJD0, MJD1977, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI, TURNAS, WGS84_FLATTENING, WGS84_RADIUS } from './constants'
+import { ASEC2RAD, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, DAYSPERTY, ELB, ELG, J2000, LIGHT_TIME_AU, MILLIASEC2RAD, MJD0, MJD1977, PI, PIOVERTWO, SCHWARZSCHILD_RADIUS_OF_THE_SUN, SPEED_OF_LIGHT_AU_DAY, TAU, TDB0, TTMINUSTAI, TURNAS, WGS84_FLATTENING, WGS84_RADIUS } from './constants'
 import { type Distance, toKilometer } from './distance'
 import { FAIRHEAD, IAU2000A_LS, IAU2000A_PL, IAU2000B_LS, IAU2006_S, IAU2006_SP } from './erfa.data'
 import { type Mat3, type MutMat3, matClone, matCopy, matIdentity, matMul, matMulTranspose, matMulVec, matRotX, matRotY, matRotZ, matTransposeMulVec } from './mat3'
@@ -161,6 +161,16 @@ export function eraS2p(theta: Angle, phi: Angle, r: Distance, out?: MutVec3): [D
 	u[1] *= r
 	u[2] *= r
 	return u
+}
+
+// Julian Date to Besselian Epoch.
+export function eraEpb(jd1: number, jd2: number) {
+	return 1900 + (jd1 - J2000 + (jd2 + 36524.68648)) / DAYSPERTY
+}
+
+// Julian Date to Julian Epoch.
+export function eraEpj(jd1: number, jd2: number) {
+	return 2000 + (jd1 - J2000 + jd2) / DAYSPERJY
 }
 
 // Barycentric Coordinate Time, TCB, to Barycentric Dynamical Time, TDB.

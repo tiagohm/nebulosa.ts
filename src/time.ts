@@ -270,21 +270,12 @@ export function toJulianDay(time: Time) {
 	return time.day + time.fraction
 }
 
-// Converts the time to fraction of year.
-export function timeToFractionOfYear(time: Time) {
-	time = utc(time)
-	const [year] = eraJdToCal(time.day, time.fraction)
-	// const jd = MJD0 + eraCalToJd(year, 1, 1)
-	const jd = Math.trunc(DAYSPERJY * (year + 4799)) - Math.trunc((3 * Math.trunc((year + 4899) / 100)) / 4) + (MJD0 + 336 + 1 - 2432076)
-	return year + (time.day - jd + time.fraction) / DAYSPERJY
-}
-
 // Clones a nearby sample instant while preserving custom Earth-orientation providers.
-export function timeShift(time: Time, fraction: number, normalize: boolean = true): Time {
-	const normalizedTime = normalize ? timeNormalize(time.day, time.fraction + fraction, undefined, time.scale) : { day: time.day, fraction: time.fraction + fraction, scale: time.scale }
-	normalizedTime.providers = time.providers
-	normalizedTime.location = time.location
-	return normalizedTime
+export function timeShift(time: Time, fraction: number): Time {
+	const normalized = timeNormalize(time.day, time.fraction + fraction, undefined, time.scale)
+	normalized.providers = time.providers
+	normalized.location = time.location
+	return normalized
 }
 
 // Caches the timescale for target based on source.

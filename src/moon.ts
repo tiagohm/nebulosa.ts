@@ -1,7 +1,7 @@
 import { type Angle, arcsec, deg } from './angle'
-import { ASEC2RAD, AU_KM, DEG2RAD, EARTH_RADIUS_KM, MOON_SYNODIC_DAYS } from './constants'
+import { ASEC2RAD, AU_KM, DAYSPERJY, DEG2RAD, EARTH_RADIUS_KM, J2000, MOON_SYNODIC_DAYS } from './constants'
 import { type Distance, kilometer } from './distance'
-import { type Time, Timescale, time, timeNormalize, timeToFractionOfYear, toJulianDay, tt } from './time'
+import { type Time, Timescale, time, timeNormalize, toJulianDay, tt } from './time'
 
 export type LunarEclipseType = 'TOTAL' | 'PARTIAL' | 'PENUMBRAL'
 
@@ -64,12 +64,16 @@ export function lunarSaros(time: Time) {
 	return SNL < 0 ? SNL + 223 : SNL
 }
 
+function timeToMeeusApproxYear(time: Time) {
+	return 2000 + (time.day - J2000 + time.fraction) / DAYSPERJY
+}
+
 // Computes the nearest (previous or next) lunar phase for a given time
 export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean): Time {
 	time = tt(time)
 	const jd = toJulianDay(time)
 
-	const year = timeToFractionOfYear(time)
+	const year = timeToMeeusApproxYear(time)
 	const phaseFraction = phase === 'NEW' ? 0 : phase === 'FIRST_QUARTER' ? 0.25 : phase === 'FULL' ? 0.5 : 0.75
 	let k = Math.floor((year - 2000) * 12.3685) + phaseFraction + (next ? 0 : 1)
 
@@ -445,7 +449,7 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 export function nearestLunarApsis(time: Time, apsis: LunarApsis, next: boolean): readonly [Time, Distance, Angle] {
 	time = tt(time)
 	const jd = toJulianDay(time)
-	const year = timeToFractionOfYear(time)
+	const year = timeToMeeusApproxYear(time)
 	let k = Math.floor((year - 1999.97) * 13.2555)
 	if (apsis === 'APOGEE') k += 0.5
 

@@ -27,7 +27,7 @@ const CATALOG_SEED_LATITUDES = [0, deg(20), deg(-20), deg(45), deg(-45), deg(70)
 export function muRate(elements: PolynomialBesselianElements, jd: number) {
 	const a = evaluateBesselian(elements, time(jd, 0, Timescale.TT))
 	const b = evaluateBesselian(elements, time(jd + 1e-4, 0, Timescale.TT))
-	return (((b.mu - a.mu + 3 * PI) % TAU) - PI) / (1e-4 / elements.stepDays)
+	return (((b.mu - a.mu + 3 * PI) % TAU) - PI) / (1e-4 / elements.step)
 }
 
 // Tangency residual of a limit point in Earth radii: |W + i*|E||, the eclipse-condition residual the

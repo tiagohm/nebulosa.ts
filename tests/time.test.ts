@@ -4,7 +4,7 @@ import { DAYSEC, J2000 } from '../src/constants'
 import { meter } from '../src/distance'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 // oxfmt-ignore
-import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToFractionOfYear, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc, DEFAULT_TIME_PROVIDERS, dut1 } from '../src/time'
+import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc, DEFAULT_TIME_PROVIDERS, dut1 } from '../src/time'
 import { downloadPerTag } from './download'
 
 await downloadPerTag('time')
@@ -175,11 +175,6 @@ test('to unix with scale', () => {
 	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.TDB))).toBe(1577879930)
 	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.UT1))).toBe(1577880000)
 	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0, Timescale.UTC))).toBe(1577880000)
-})
-
-test('time to fraction of year', () => {
-	expect(timeToFractionOfYear(timeYMDHMS(2022, 1, 1, 0, 0, 0, Timescale.UTC))).toBeCloseTo(2022, 3)
-	expect(timeToFractionOfYear(timeYMDHMS(2022, 12, 31, 23, 59, 59, Timescale.UTC))).toBeCloseTo(2022.999, 3)
 })
 
 test('ut1', () => {

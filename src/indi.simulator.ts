@@ -75,7 +75,7 @@ type CatalogSourceType = 'RANDOM' | (string & {})
 
 export type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
 
-export type CatalogSourceStar = Omit<AstronomicalImageStar, 'x' | 'y'> & Required<EquatorialCoordinate>
+export type CatalogSourceStar = Omit<AstronomicalImageStar, 'x' | 'y'> & Readonly<EquatorialCoordinate>
 
 export type CatalogSource = (rightAscension: Angle, declination: Angle, radius: Angle) => PromiseLike<readonly CatalogSourceStar[]> | readonly CatalogSourceStar[]
 

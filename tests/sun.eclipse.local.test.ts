@@ -6,7 +6,7 @@ import { computePolynomialBesselianElements, type PolynomialBesselianElements } 
 // oxfmt-ignore
 import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, } from '../src/sun.eclipse.local'
 import { sphericalSeparation } from '../src/geometry'
-import { timeToDate, timeYMD, toJulianDay } from '../src/time'
+import { timeToDate, timeYMD, toJulianDay, type Time } from '../src/time'
 import { sunMoonPosition } from './sun.eclipse.test'
 
 function viewOptions(overrides: Partial<LocalSolarEclipseViewOptions> = {}): LocalSolarEclipseViewOptions {
@@ -575,7 +575,12 @@ describe('local view robustness', () => {
 
 	test('falls back to the mean solar angular radius for a non-finite Sun distance', () => {
 		// A degraded ephemeris reporting an infinite Sun distance must not yield a zero angular radius.
-		const infiniteSunDistance = (t: Parameters<typeof sunMoonPosition>[0]) => ({ ...sunMoonPosition(t), sunDistance: Infinity })
+		const infiniteSunDistance: typeof sunMoonPosition = (t) => {
+			const position = sunMoonPosition(t)
+			position.sun.distance = Infinity
+			return position
+		}
+
 		const c = computeLocalSolarEclipseCircumstances(total2024.pbe, deg(-106.4), deg(23.25), { sunMoonPosition: infiniteSunDistance })
 		expect(c.events.MAX!.localViewState!.solarAngularRadius).toBeCloseTo(959.63 * ASEC2RAD, 9)
 	})
@@ -626,7 +631,7 @@ describe('greatest eclipse and greatest duration circumstances', () => {
 	const gd = computeGreatestDurationCircumstances(pbe)!
 
 	// Seconds elapsed since midnight of the time's own scale, for comparing against the published clock times.
-	function secondsOfDay(t: Parameters<typeof timeToDate>[0]) {
+	function secondsOfDay(t: Time) {
 		const [, , , hour, minute, second] = timeToDate(t)
 		return hour * 3600 + minute * 60 + second
 	}

@@ -1,8 +1,9 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
 import type { PositionAndVelocityOverTime } from './astrometry'
-import { AU_KM, DAYSEC, DAYSPERJY, DEG2RAD, EARTH_RADIUS_KM, J2000, LIGHT_TIME_AU, PI, PIOVERTWO, RAD2DEG, SPEED_OF_LIGHT_AU_DAY, TAU, WGS84_FLATTENING } from './constants'
+import { AU_KM, DAYSEC, DEG2RAD, EARTH_RADIUS_KM, LIGHT_TIME_AU, PI, PIOVERTWO, RAD2DEG, SPEED_OF_LIGHT_AU_DAY, TAU, WGS84_FLATTENING } from './constants'
+import type { EquatorialCoordinate } from './coordinate'
 import { deltaTByEspenakMeeus2006 } from './deltat'
-import { eraAb, eraGst06a, eraP2s, eraS2p } from './erfa'
+import { eraAb, eraEpj, eraGst06a, eraP2s, eraS2p } from './erfa'
 import { sphericalInterpolate, sphericalSeparation, type Point } from './geometry'
 import { matMulVec } from './mat3'
 import { clamp, type NumberArray } from './math'
@@ -89,9 +90,9 @@ const CONTACT_RESIDUAL_TOLERANCE = 1e-8
 // Sun radius in Earth equatorial radii (NASA/Espenak convention), used for the apparent solar angular radius.
 export const SUN_RADIUS_EARTH_RADII = 109.076370706
 // Lunar radius k1 used for penumbral contacts and the penumbral cone, per NASA/Espenak convention.
-const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272488
+export const MOON_RADIUS_PENUMBRA_EARTH_RADII = 0.272488
 // Lunar radius k2 used for umbral contacts and the umbral cone, per NASA/Espenak convention.
-const MOON_RADIUS_UMBRA_EARTH_RADII = 0.272281
+export const MOON_RADIUS_UMBRA_EARTH_RADII = 0.272281
 // Bisection steps used to refine the longitude where a curve family appears or disappears.
 const BOUNDARY_REFINEMENT_STEPS = 18
 // A solved curve is split into separate polylines wherever two consecutive points (in time order) are
@@ -136,7 +137,7 @@ export interface PolynomialBesselianElements {
 	// from an ephemeris/TDT tabulation whose mu is in dynamical time.
 	readonly deltaTLongitudeCorrection: Angle
 	// Polynomial time unit in days.
-	readonly stepDays: number
+	readonly step: number
 	// X coordinate of the shadow axis in Earth equatorial radii.
 	readonly x: readonly number[]
 	// Y coordinate of the shadow axis in Earth equatorial radii.
@@ -187,19 +188,11 @@ export interface InstantBesselianElements {
 
 // Apparent or geocentric Sun and Moon position sample used to generate Besselian elements.
 export interface SunMoonPosition {
-	// Apparent or geocentric Sun right ascension in radians.
-	readonly sunRightAscension: Angle
-	// Apparent or geocentric Sun declination in radians.
-	readonly sunDeclination: Angle
-	// Sun distance from the observer origin in Earth equatorial radii.
-	readonly sunDistance: number
-	// Apparent or geocentric Moon right ascension in radians.
-	readonly moonRightAscension: Angle
-	// Apparent or geocentric Moon declination in radians.
-	readonly moonDeclination: Angle
-	// Moon distance from the observer origin in Earth equatorial radii.
-	readonly moonDistance: number
-	// Optional Delta T in seconds for this sample.
+	// Apparent or geocentric Sun equatorial coordinate.
+	readonly sun: Required<EquatorialCoordinate>
+	// Apparent or geocentric Moon equatorial coordinate.
+	readonly moon: Required<EquatorialCoordinate>
+	// Delta T in seconds for this sample.
 	readonly deltaT?: number
 }
 
@@ -476,7 +469,7 @@ function contactSearchSpanDays(options?: SolarEclipseContactOptions) {
 }
 
 function timeAtJulianDay(reference: Time, julianDay: number) {
-	return timeShift(reference, julianDay - reference.day - reference.fraction, false)
+	return timeShift(reference, julianDay - reference.day - reference.fraction)
 }
 
 // Interpolates between two geographic points along the great-circle arc.
@@ -554,7 +547,7 @@ function evaluateBesselianAtTInto(out: BesselianElements, pbe: PolynomialBesseli
 
 // Evaluates Besselian element positions at one time, skipping the velocity derivatives.
 function evaluateBesselianSample(pbe: PolynomialBesselianElements, time: Time): BesselianSample {
-	const t = timeSubtract(time, pbe.time0) / pbe.stepDays
+	const t = timeSubtract(time, pbe.time0) / pbe.step
 
 	return {
 		time,
@@ -577,7 +570,7 @@ export function besselianSampleAtJulianDay(pbe: PolynomialBesselianElements, jd:
 
 // Evaluates polynomial Besselian elements at one time, including velocity derivatives.
 export function evaluateBesselian(pbe: PolynomialBesselianElements, time: Time): InstantBesselianElements {
-	const t = timeSubtract(time, pbe.time0) / pbe.stepDays
+	const t = timeSubtract(time, pbe.time0) / pbe.step
 	const be = evaluateBesselianSample(pbe, time) as Writable<InstantBesselianElements>
 	be.dx = evaluatePolynomialDerivative(pbe.x, t)
 	be.dy = evaluatePolynomialDerivative(pbe.y, t)
@@ -610,8 +603,8 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 	for (let i = 0; i < n; i++) {
 		const offset = PBE_OFFSETS[i]
 		const sampleTime = timeShift(time0, offset * PBE_STEP_DAYS)
-		const sample = getSunMoonPosition(sampleTime)
-		const instant = instantBesselianFromSunMoon(sampleTime, sample)
+		const position = getSunMoonPosition(sampleTime)
+		const instant = instantBesselianFromSunMoon(sampleTime, position)
 		x[i] = instant.x
 		y[i] = instant.y
 		l1[i] = instant.l1
@@ -620,7 +613,7 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 		mu[i] = instant.mu
 		tanF1 += instant.tanF1
 		tanF2 += instant.tanF2
-		deltaT += sample.deltaT ?? 0
+		deltaT += position.deltaT ?? 0
 	}
 
 	return {
@@ -628,7 +621,7 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 		maximumTime,
 		deltaT: deltaT / n,
 		deltaTLongitudeCorrection: 0,
-		stepDays: PBE_STEP_DAYS,
+		step: PBE_STEP_DAYS,
 		x: fitCubic(t, x),
 		y: fitCubic(t, y),
 		l1: fitCubic(t, l1),
@@ -646,9 +639,9 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 // sit at zv1 = zm + rMoon / sinF1 and zv2 = zm - rMoon / sinF2 along the axis, and the fundamental
 // plane radii are l1 = zv1 * tanF1 and l2 = zv2 * tanF2. The NASA k1/k2 lunar radii are kept for the
 // penumbral/umbral cones respectively (an intentional refinement).
-export function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition): InstantBesselianElements {
-	const projection = besselianShadowProjection(sample)
-	const deltaT = sample.deltaT ?? 0
+export function instantBesselianFromSunMoon(time: Time, position: SunMoonPosition): InstantBesselianElements {
+	const projection = besselianShadowProjection(position)
+	const deltaT = position.deltaT ?? 0
 	const sunMoonDistance = projection.sunMoonDistance
 	let tanF1 = 0
 	let tanF2 = 0
@@ -694,18 +687,18 @@ export function instantBesselianFromSunMoon(time: Time, sample: SunMoonPosition)
 
 // Projects the Moon onto the fundamental plane of the Sun-Moon shadow axis, returning the axis
 // right ascension/declination, the Moon's (x, y) in the plane and its zm coordinate along the axis.
-function besselianShadowProjection(sample: SunMoonPosition) {
-	if (!(sample.sunDistance > 0) || !(sample.moonDistance > 0)) {
-		return { x: 0, y: 0, zm: 0, rightAscension: sample.sunRightAscension, declination: sample.sunDeclination, sunMoonDistance: 0 }
+function besselianShadowProjection(position: SunMoonPosition) {
+	if (!(position.sun.distance > 0) || !(position.moon.distance > 0)) {
+		return { x: 0, y: 0, zm: 0, rightAscension: position.sun.rightAscension, declination: position.sun.declination, sunMoonDistance: 0 }
 	}
 
-	const sun = eraS2p(sample.sunRightAscension, sample.sunDeclination, sample.sunDistance)
-	const moon = eraS2p(sample.moonRightAscension, sample.moonDeclination, sample.moonDistance)
+	const sun = eraS2p(position.sun.rightAscension, position.sun.declination, position.sun.distance)
+	const moon = eraS2p(position.moon.rightAscension, position.moon.declination, position.moon.distance)
 	const sunMinusMoon = vecMinus(sun, moon)
 	const sunMoonDistance = vecLength(sunMinusMoon)
 
 	if (!(sunMoonDistance > 0) || !Number.isFinite(sunMoonDistance)) {
-		return { x: 0, y: 0, zm: 0, rightAscension: sample.sunRightAscension, declination: sample.sunDeclination, sunMoonDistance: 0 }
+		return { x: 0, y: 0, zm: 0, rightAscension: position.sun.rightAscension, declination: position.sun.declination, sunMoonDistance: 0 }
 	}
 
 	const axis = vecNormalizeMut(sunMinusMoon)
@@ -767,7 +760,7 @@ function earthLimbDistanceSquared(theta: number, cx: number, cy: number, omega: 
 }
 
 // Precomputed cos/sin of the uniform limb scan grid (theta = TAU*k/LIMB_SCAN_STEPS), since those angles are
-// always the same; the continuous refinements still call Math.cos/sin on off-grid theta (report P2.1).
+// always the same; the continuous refinements still call Math.cos/sin on off-grid theta.
 const LIMB_SCAN_COS = new Float64Array(LIMB_SCAN_STEPS)
 const LIMB_SCAN_SIN = new Float64Array(LIMB_SCAN_STEPS)
 
@@ -778,7 +771,7 @@ for (let k = 0; k < LIMB_SCAN_STEPS; k++) {
 }
 
 // Reused scan buffer for earthLimbCircleIntersections, avoiding a Float64Array allocation per call. Safe as
-// a single module workspace: the function is synchronous and never re-enters itself (report P2.2).
+// a single module workspace: the function is synchronous and never re-enters itself.
 const LIMB_SCAN_VALUES = new Float64Array(LIMB_SCAN_STEPS)
 
 // Squared distance to (cx, cy) from a limb-scan grid point given its precomputed cos/sin.
@@ -1210,12 +1203,12 @@ function centralAxisDistanceSquaredAtT(pbe: PolynomialBesselianElements, t: numb
 // the contact/endpoint searches, so the central classification and the central-line endpoints agree (P3.3).
 export function centralAxisIntersectsEarth(pbe: PolynomialBesselianElements, options?: SolarEclipseContactOptions) {
 	const f = (t: number) => centralAxisDistanceSquaredAtT(pbe, t)
-	const span = contactSearchSpanDays(options) / pbe.stepDays
+	const span = contactSearchSpanDays(options) / pbe.step
 	// Center the scan on maximumTime, exactly like the contact/endpoint searches, so the central
 	// classification and the central-line endpoints share one window (P3.3). t = 0 is time0 (the rounded
 	// hour), which can sit up to half an hour from maximumTime; scanning around tMaximum keeps the closest
 	// approach symmetric in the window even for callers passing a tight custom span.
-	const tMaximum = (toJulianDay(pbe.maximumTime) - toJulianDay(pbe.time0)) / pbe.stepDays
+	const tMaximum = (toJulianDay(pbe.maximumTime) - toJulianDay(pbe.time0)) / pbe.step
 	const from = tMaximum - span
 	const to = tMaximum + span
 	const steps = 64
@@ -1260,10 +1253,10 @@ const MAXIMUM_TIME_CONSISTENCY_DAYS = 60 / DAYSEC
 // and refined with Brent inside the span.
 function findGreatestEclipseT(pbe: PolynomialBesselianElements) {
 	const f = (t: number) => centralAxisDistanceSquaredAtT(pbe, t)
-	const span = contactSearchSpanDays() / pbe.stepDays
+	const span = contactSearchSpanDays() / pbe.step
 	// Search the closest approach in the window centered on maximumTime, matching centralAxisIntersectsEarth
 	// and the contact searches, rather than around time0 (t = 0).
-	const tMaximum = (toJulianDay(pbe.maximumTime) - toJulianDay(pbe.time0)) / pbe.stepDays
+	const tMaximum = (toJulianDay(pbe.maximumTime) - toJulianDay(pbe.time0)) / pbe.step
 	const from = tMaximum - span
 	const to = tMaximum + span
 	const steps = 64
@@ -1302,14 +1295,14 @@ function findGreatestEclipseT(pbe: PolynomialBesselianElements) {
 // projects the nearest limb point instead, since the axis misses the Earth.
 export function findMaximumPoint(pbe: PolynomialBesselianElements) {
 	const julianDay0 = toJulianDay(pbe.time0)
-	const tMaximum = (toJulianDay(pbe.maximumTime) - julianDay0) / pbe.stepDays
+	const tMaximum = (toJulianDay(pbe.maximumTime) - julianDay0) / pbe.step
 	const tBest = findGreatestEclipseT(pbe)
 
 	const be = evaluateBesselianSample(pbe, pbe.maximumTime)
 	const atMaximum = projectFundamentalPoint(be, be.x, be.y) ?? projectClosestEarthLimbPoint(be, be.x, be.y)
-	if (Math.abs(tBest - tMaximum) * pbe.stepDays <= MAXIMUM_TIME_CONSISTENCY_DAYS) return atMaximum
+	if (Math.abs(tBest - tMaximum) * pbe.step <= MAXIMUM_TIME_CONSISTENCY_DAYS) return atMaximum
 
-	const beBest = besselianSampleAtJulianDay(pbe, julianDay0 + tBest * pbe.stepDays)
+	const beBest = besselianSampleAtJulianDay(pbe, julianDay0 + tBest * pbe.step)
 	return projectFundamentalPoint(beBest, beBest.x, beBest.y) ?? projectClosestEarthLimbPoint(beBest, beBest.x, beBest.y) ?? atMaximum
 }
 
@@ -1324,10 +1317,10 @@ export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, be
 	const julianDay0 = toJulianDay(pbe.time0)
 	const maximumJulianDay = toJulianDay(pbe.maximumTime)
 	const searchSpanDays = contactSearchSpanDays(options)
-	const tMaximum = (maximumJulianDay - julianDay0) / pbe.stepDays
+	const tMaximum = (maximumJulianDay - julianDay0) / pbe.step
 	// Normalized half-width of the fitted contact window: the same span the bisection fallback below
 	// brackets. The endpoint must lie inside it.
-	const spanNormalized = searchSpanDays / pbe.stepDays
+	const spanNormalized = searchSpanDays / pbe.step
 	let t = tMaximum
 
 	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
@@ -1359,7 +1352,7 @@ export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, be
 		// when the iteration leaves the fitted span, so detect that here instead of returning the stray
 		// root.
 		if (!Number.isFinite(t) || Math.abs(t - tMaximum) > spanNormalized) break
-		if (Math.abs(tau) * pbe.stepDays <= CONTACT_TOLERANCE_DAYS) return projectCentralAxisPoint(pbe, julianDay0 + t * pbe.stepDays)
+		if (Math.abs(tau) * pbe.step <= CONTACT_TOLERANCE_DAYS) return projectCentralAxisPoint(pbe, julianDay0 + t * pbe.step)
 	}
 
 	// Fallback: bisection of the limb residual between the maximum and the search window edge.
@@ -1489,7 +1482,7 @@ function evaluateCurveIterationState(state: CurveIterationState, be: BesselianEl
 // match the refracted EclipseWise/Espenak references. Pass refractionMode 'none' for a pure geometric
 // solve. A negative solar altitude is rejected only after convergence, so intermediate night-side iterates
 // can still converge to a day-side solution. On convergence the final (t, phi) is re-evaluated so the
-// altitude and residual gate the actual returned point, not the previous iterate (report P0.1).
+// altitude and residual gate the actual returned point, not the previous iterate.
 export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitude: Angle, initialLatitude: Angle, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE) {
 	let t = 0
 	let phi = initialLatitude
@@ -1509,13 +1502,13 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 		if (!Number.isFinite(nextT) || !Number.isFinite(nextPhi) || Math.abs(nextPhi) > PIOVERTWO) return undefined
 
 		// Time convergence is tested in days (independent of the polynomial step), latitude in radians.
-		if (Math.abs(tau) * pbe.stepDays < SOLVER_TIME_TOLERANCE_DAYS && Math.abs(deltaPhi) < SOLVER_TOLERANCE * DEG2RAD) {
+		if (Math.abs(tau) * pbe.step < SOLVER_TIME_TOLERANCE_DAYS && Math.abs(deltaPhi) < SOLVER_TOLERANCE * DEG2RAD) {
 			// Re-evaluate at the final (nextT, nextPhi) and gate on THAT altitude/residual: the curve point
 			// must lie on the sunlit hemisphere and actually satisfy the eclipse condition (a tiny step in an
 			// ill-conditioned zone is not a real solution).
 			if (!evaluateCurveIterationState(state, be, pbe, longitude, longitudeCorrection, nextT, nextPhi, i, G, refractionMode)) return undefined
 			if (state.h < 0 || Math.abs(state.residual) > CURVE_RESIDUAL_TOLERANCE) return undefined
-			return { x: normalizeLongitude(longitude), y: nextPhi, jd: julianDay0 + nextT * pbe.stepDays }
+			return { x: normalizeLongitude(longitude), y: nextPhi, jd: julianDay0 + nextT * pbe.step }
 		}
 
 		t = nextT
@@ -2470,7 +2463,7 @@ function riseSetCrossings(pbe: PolynomialBesselianElements, jd: number) {
 	return points
 }
 
-function IsGeoPoint(point?: Point | GeoPoint): point is GeoPoint {
+function isGeoPoint(point?: Point | GeoPoint): point is GeoPoint {
 	return finitePoint(point) && point.jd !== undefined
 }
 
@@ -2490,10 +2483,10 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 	const stepDays = validStep(options.step, DEFAULT_RISE_SET_STEP_SECONDS) / DAYSEC
 	const adaptive = options.adaptive ?? true
 	const contacts: GeoPoint[] = []
-	if (IsGeoPoint(P1)) contacts.push(P1)
-	if (IsGeoPoint(optionalContacts.P2)) contacts.push(optionalContacts.P2)
-	if (IsGeoPoint(optionalContacts.P3)) contacts.push(optionalContacts.P3)
-	if (IsGeoPoint(P4)) contacts.push(P4)
+	if (isGeoPoint(P1)) contacts.push(P1)
+	if (isGeoPoint(optionalContacts.P2)) contacts.push(optionalContacts.P2)
+	if (isGeoPoint(optionalContacts.P3)) contacts.push(optionalContacts.P3)
+	if (isGeoPoint(P4)) contacts.push(P4)
 
 	// Split the P1..P4 span into phases: maximal runs of sampled instants where the penumbra circle meets
 	// the limb at all. The day-side gap P2..P3, where the penumbra lies wholly on Earth, yields no crossing
@@ -2790,8 +2783,8 @@ function pushDrawableSegment(out: GeoPoint[][], segment: GeoPoint[]) {
 // every point of a returned segment carries that segment's kind. Untagged points (no jd, so no kind) are
 // skipped, and runs shorter than two points (undrawable) are dropped. When pbe is given, the exact
 // total<->annular crossover (where the local umbral radius is zero) is root-solved between the two
-// bracketing samples and inserted as a shared seam, so the total and annular segments meet without a gap
-// (report P1.3); each side gets its own copy tagged with that side's kind to keep segments homogeneous.
+// bracketing samples and inserted as a shared seam, so the total and annular segments meet without a gap;
+// each side gets its own copy tagged with that side's kind to keep segments homogeneous.
 export function splitCentralLineByKind(centerLine: readonly GeoPoint[], pbe?: PolynomialBesselianElements): CentralLineByKind {
 	const total: GeoPoint[][] = []
 	const annular: GeoPoint[][] = []
@@ -3145,15 +3138,19 @@ export function computeSunMoonPositionAt(time: Time, sun: PositionAndVelocityOve
 
 	// Decimal year for the Delta T model. The sub-minute scale difference between time scales is irrelevant
 	// for Delta T, which varies on the order of a second per year.
-	const year = 2000 + (toJulianDay(time) - J2000) / DAYSPERJY
+	const year = eraEpj(time.day, time.fraction)
 
 	return {
-		sunRightAscension: sRA,
-		sunDeclination: sDEC,
-		sunDistance: sD * AU_IN_EARTH_RADII,
-		moonRightAscension: mRA,
-		moonDeclination: mDEC,
-		moonDistance: mD * AU_IN_EARTH_RADII,
+		sun: {
+			rightAscension: sRA,
+			declination: sDEC,
+			distance: sD * AU_IN_EARTH_RADII,
+		},
+		moon: {
+			rightAscension: mRA,
+			declination: mDEC,
+			distance: mD * AU_IN_EARTH_RADII,
+		},
 		deltaT: deltaTByEspenakMeeus2006(year),
 	}
 }

@@ -3,7 +3,7 @@ import { ASEC2RAD, DAYSEC, EARTH_RADIUS_KM, PI } from './constants'
 import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
 import { clamp } from './math'
-import { bisection, brentMinimize } from './optimization'
+import { bisection, brentMinimize, type RootFindingOptions } from './optimization'
 // oxfmt-ignore
 import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, evaluateBesselian, F, findMaximumPoint, hourAngleFromLongitude, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type GeoPoint, type InstantBesselianElements, type PolynomialBesselianElements, type SolarEclipseContactOptions, type SunMoonPosition } from './sun.eclipse.map'
 import { type Time, timeShift, toJulianDay, tt } from './time'
@@ -115,7 +115,6 @@ export interface LocalSolarEclipseCircumstances {
 		// Geodetic latitude in radians.
 		readonly latitude: Angle
 	}
-
 	readonly visibility: {
 		// Coarse local visibility classification.
 		readonly kind: LocalVisibilityKind
@@ -142,7 +141,6 @@ export interface LocalSolarEclipseCircumstances {
 			readonly centralContactsComplete: boolean
 		}
 	}
-
 	readonly details: {
 		// Maximal local magnitude, or null when there is no local eclipse.
 		readonly maximalMagnitude: number | null
@@ -159,7 +157,6 @@ export interface LocalSolarEclipseCircumstances {
 		// found within MAX_SHADOW_HALF_WIDTH_KM.
 		readonly shadowPathWidthKm: number | null
 	}
-
 	readonly events: {
 		readonly C1: LocalSolarEclipseEvent | null
 		readonly C2: LocalSolarEclipseEvent | null
@@ -167,7 +164,6 @@ export interface LocalSolarEclipseCircumstances {
 		readonly C3: LocalSolarEclipseEvent | null
 		readonly C4: LocalSolarEclipseEvent | null
 	}
-
 	// Optional Local View geometry, present when includeLocalView is set.
 	readonly localView?: LocalSolarEclipseViewGeometry
 }
@@ -384,7 +380,7 @@ const DEFAULT_LOCAL_VIEW_OPTIONS: LocalSolarEclipseViewOptions = {
 
 // Builds a Time at a Julian Day, preserving the reference time scale and providers.
 function timeAtJulianDay(reference: Time, julianDay: number) {
-	return timeShift(reference, julianDay - reference.day - reference.fraction, false)
+	return timeShift(reference, julianDay - reference.day - reference.fraction)
 }
 
 // Computes the local fundamental-plane geometry for one observer at one instant, following the same
@@ -486,18 +482,19 @@ function localStateAtJulianDay(pbe: PolynomialBesselianElements, longitude: Angl
 // right ascension/declination and Greenwich apparent sidereal time; without it, it falls back to the
 // Besselian shadow-axis altitude (an approximation: the axis is treated as the Sun direction and the
 // geodetic latitude is used directly, matching solarAltitudeAtPoint in sun.eclipse.ts).
-function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, sample: SunMoonPosition | undefined, fallbackBesselian?: InstantBesselianElements) {
-	if (sample) {
-		const deltaT = sample.deltaT ?? 0
+function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, position: SunMoonPosition | undefined, fallbackBesselian?: InstantBesselianElements) {
+	if (position) {
+		const deltaT = position.deltaT ?? 0
 		const ttTime = tt(time)
 		const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
 		const gast = eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
-		const H = normalizePI(gast + longitude - sample.sunRightAscension)
-		const sinAltitude = Math.sin(latitude) * Math.sin(sample.sunDeclination) + Math.cos(latitude) * Math.cos(sample.sunDeclination) * Math.cos(H)
+		const H = normalizePI(gast + longitude - position.sun.rightAscension)
+		const sinAltitude = Math.sin(latitude) * Math.sin(position.sun.declination) + Math.cos(latitude) * Math.cos(position.sun.declination) * Math.cos(H)
 		return Math.asin(clamp(sinAltitude, -1, 1))
 	}
 
 	if (!fallbackBesselian) throw new Error('computeSolarAltitude requires fallback Besselian elements when no Sun/Moon sample is supplied')
+
 	const be = fallbackBesselian
 	const H = hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection)
 	const sinAltitude = Math.sin(be.d) * Math.sin(latitude) + Math.cos(be.d) * Math.cos(latitude) * Math.cos(H)
@@ -538,14 +535,14 @@ function contactAngleFromCenter(kind: LocalEclipseContactKind, centralKind: Loca
 // Solar parallactic angle (radians, [-PI, PI]). Uses the apparent Sun right ascension/declination and
 // Greenwich apparent sidereal time when a SunMoonPosition sample is available, so it shares the exact source
 // the Sun altitude uses; otherwise it falls back to the Besselian shadow-axis declination and hour angle.
-function computeSolarParallacticAngle(time: Time, longitude: Angle, latitude: Angle, state: LocalFundamentalState, sample: SunMoonPosition | undefined) {
-	if (sample) {
-		const deltaT = sample.deltaT ?? 0
+function computeSolarParallacticAngle(time: Time, longitude: Angle, latitude: Angle, state: LocalFundamentalState, position: SunMoonPosition | undefined) {
+	if (position) {
+		const deltaT = position.deltaT ?? 0
 		const ttTime = tt(time)
 		const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
 		const gast = eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
-		const H = normalizePI(gast + longitude - sample.sunRightAscension)
-		return normalizePI(Math.atan2(Math.sin(H), Math.tan(latitude) * Math.cos(sample.sunDeclination) - Math.sin(sample.sunDeclination) * Math.cos(H)))
+		const H = normalizePI(gast + longitude - position.sun.rightAscension)
+		return normalizePI(Math.atan2(Math.sin(H), Math.tan(latitude) * Math.cos(position.sun.declination) - Math.sin(position.sun.declination) * Math.cos(H)))
 	}
 
 	const H = state.hourAngle
@@ -561,8 +558,8 @@ function isLocalViewAngleUndefined(state: LocalFundamentalState) {
 	return state.distance / solarRadius < ANGLE_UNDEFINED_SEPARATION_SOLAR_RADII
 }
 
-function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: LocalFundamentalState, time: Time, longitude: Angle, latitude: Angle, sample: SunMoonPosition | undefined): LocalTopocentricAspect {
-	const q = computeSolarParallacticAngle(time, longitude, latitude, state, sample)
+function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: LocalFundamentalState, time: Time, longitude: Angle, latitude: Angle, position: SunMoonPosition | undefined): LocalTopocentricAspect {
+	const q = computeSolarParallacticAngle(time, longitude, latitude, state, position)
 
 	// At a near-exact central alignment the lunar-center direction is undefined (atan2(0, 0)); report null
 	// rather than a spurious 0. The Local View is unaffected because the separation is ~0 there anyway.
@@ -585,14 +582,14 @@ function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: Loc
 
 // Apparent solar angular radius (radians) from the Sun distance, falling back to the mean value. The distance
 // must be finite and positive: an infinite distance would yield 0 instead of the mean fallback.
-function computeSolarAngularRadius(sample: SunMoonPosition | undefined) {
-	if (sample && Number.isFinite(sample.sunDistance) && sample.sunDistance > 0) return Math.asin(clamp(SUN_RADIUS_EARTH_RADII / sample.sunDistance, -1, 1))
+export function computeSolarAngularRadius(distance?: number) {
+	if (distance !== undefined && Number.isFinite(distance) && distance > 0) return Math.asin(clamp(SUN_RADIUS_EARTH_RADII / distance, -1, 1))
 	return SUN_MEAN_ANGULAR_RADIUS
 }
 
 // Sun-Moon center separation in local solar radii, guarded so degraded Besselian values never leak a
 // non-finite or negative separation into the Local View geometry (cx/cy). Returns 0 when undefined.
-function computeSeparationSolarRadii(state: LocalFundamentalState) {
+export function computeSeparationSolarRadii(state: LocalFundamentalState) {
 	const solarRadius = (state.L1 + state.L2) * 0.5
 	if (!(solarRadius > 0) || !Number.isFinite(solarRadius)) return 0
 	if (!(state.distance >= 0) || !Number.isFinite(state.distance)) return 0
@@ -627,11 +624,11 @@ function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: Polynom
 	const time = timeAtJulianDay(pbe.maximumTime, jd)
 	const state = computeLocalFundamentalState(pbe, longitude, latitude, time)
 	// One ephemeris sample per event, shared by altitude and angular-radius (was up to three calls).
-	const sample = options.sunMoonPosition?.(time)
+	const position = options.sunMoonPosition?.(time)
 
-	const sunAltitude = computeSolarAltitude(time, longitude, latitude, sample, state.be)
-	const solarAngularRadius = computeSolarAngularRadius(sample)
-	const aspect = computeLocalTopocentricAspect(kind, state, time, longitude, latitude, sample)
+	const sunAltitude = computeSolarAltitude(time, longitude, latitude, position, state.be)
+	const solarAngularRadius = computeSolarAngularRadius(position?.sun.distance)
+	const aspect = computeLocalTopocentricAspect(kind, state, time, longitude, latitude, position)
 
 	const horizonAltitude = options.horizonAltitude ?? 0
 	const observable = sunAltitude >= horizonAltitude
@@ -657,10 +654,12 @@ function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: Polynom
 	}
 }
 
+const CONTACT_TOLERANCE_ROOT_FIND_OPTIONS: RootFindingOptions = { tolerance: CONTACT_TOLERANCE_DAYS }
+
 // Refines a bracketed contact root, returning undefined when the bracket is rejected.
 function bisectRoot(f: (jd: number) => number, lo: number, hi: number) {
 	try {
-		return bisection(f, lo, hi, { tolerance: CONTACT_TOLERANCE_DAYS }).root
+		return bisection(f, lo, hi, CONTACT_TOLERANCE_ROOT_FIND_OPTIONS).root
 	} catch {
 		return undefined
 	}
@@ -714,8 +713,9 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 	// Final Brent refinement within the tight sub-bracket around the densified best.
 	const refineLo = Math.max(fromJd, bestJd - subStep)
 	const refineHi = Math.min(toJd, bestJd + subStep)
+
 	try {
-		const result = brentMinimize((jd) => -magnitudeAt(jd), refineLo, refineHi, { tolerance: CONTACT_TOLERANCE_DAYS })
+		const result = brentMinimize((jd) => -magnitudeAt(jd), refineLo, refineHi, CONTACT_TOLERANCE_ROOT_FIND_OPTIONS)
 		if (Number.isFinite(result.minimum) && magnitudeAt(result.minimum) >= bestMagnitude) return result.minimum
 	} catch {
 		// Fall back to the densified best.
@@ -779,7 +779,7 @@ function refineMissedContactInterval(evaluate: (jd: number) => number, lo: numbe
 	const refineHi = Math.min(hi, minJd + subStep)
 	let mid: number
 	try {
-		mid = brentMinimize(evaluate, refineLo, refineHi, { tolerance: CONTACT_TOLERANCE_DAYS }).minimum
+		mid = brentMinimize(evaluate, refineLo, refineHi, CONTACT_TOLERANCE_ROOT_FIND_OPTIONS).minimum
 	} catch {
 		return
 	}
@@ -1046,9 +1046,10 @@ function extremeSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longit
 
 	const altitudeAt = (jd: number) => {
 		const time = timeAtJulianDay(pbe.maximumTime, jd)
-		const sample = options.sunMoonPosition?.(time)
-		return computeSolarAltitude(time, longitude, latitude, sample, sample ? undefined : evaluateBesselian(pbe, time))
+		const position = options.sunMoonPosition?.(time)
+		return computeSolarAltitude(time, longitude, latitude, position, position ? undefined : evaluateBesselian(pbe, time))
 	}
+
 	// Orient so the wanted extremum is always a maximum of `oriented`.
 	const oriented = (jd: number) => (minimize ? -altitudeAt(jd) : altitudeAt(jd))
 
@@ -1069,12 +1070,13 @@ function extremeSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longit
 	}
 
 	try {
-		const result = brentMinimize((jd) => -oriented(jd), Math.max(fromJd, bestJd - stepDays), Math.min(toJd, bestJd + stepDays), { tolerance: CONTACT_TOLERANCE_DAYS })
+		const result = brentMinimize((jd) => -oriented(jd), Math.max(fromJd, bestJd - stepDays), Math.min(toJd, bestJd + stepDays), CONTACT_TOLERANCE_ROOT_FIND_OPTIONS)
 		const refined = oriented(result.minimum)
 		if (Number.isFinite(refined) && refined > best) best = refined
 	} catch {
 		// Keep the sampled extremum.
 	}
+
 	return minimize ? -best : best
 }
 
@@ -1095,14 +1097,14 @@ function minSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longitude:
 // what makes the valley detector consistent with the continuous altitude it gates.
 function solarHourAngleAt(pbe: PolynomialBesselianElements, longitude: Angle, jd: number, options: LocalSolarEclipseCircumstancesOptions) {
 	const time = timeAtJulianDay(pbe.maximumTime, jd)
-	const sample = options.sunMoonPosition?.(time)
+	const position = options.sunMoonPosition?.(time)
 
-	if (sample) {
-		const deltaT = sample.deltaT ?? 0
+	if (position) {
+		const deltaT = position.deltaT ?? 0
 		const ttTime = tt(time)
 		const ut1Fraction = ttTime.fraction - deltaT / DAYSEC
 		const gast = eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
-		return normalizePI(gast + longitude - sample.sunRightAscension)
+		return normalizePI(gast + longitude - position.sun.rightAscension)
 	}
 
 	const be = evaluateBesselian(pbe, time)
@@ -1626,13 +1628,13 @@ export function computeGreatestDurationCircumstances(pbe: PolynomialBesselianEle
 	if (!centralAxisIntersectsEarth(pbe, options)) return undefined
 
 	const julianDay0 = toJulianDay(pbe.time0)
-	const tMaximum = (toJulianDay(pbe.maximumTime) - julianDay0) / pbe.stepDays
-	const span = validPositive(options?.contactSearchSpan, DEFAULT_CONTACT_SEARCH_SPAN_SECONDS) / DAYSEC / pbe.stepDays
+	const tMaximum = (toJulianDay(pbe.maximumTime) - julianDay0) / pbe.step
+	const span = validPositive(options?.contactSearchSpan, DEFAULT_CONTACT_SEARCH_SPAN_SECONDS) / DAYSEC / pbe.step
 
 	// Central-phase duration (seconds) at the central-line point reached at normalized time t, or 0 when the
 	// axis misses the Earth or the point is not central there (so the maximizer steers away from those t).
 	function durationAtT(t: number) {
-		const be = besselianSampleAtJulianDay(pbe, julianDay0 + t * pbe.stepDays)
+		const be = besselianSampleAtJulianDay(pbe, julianDay0 + t * pbe.step)
 		const point = projectFundamentalPoint(be, be.x, be.y)
 		if (!point) return 0
 		return centralPhaseDurationSeconds(pbe, point.x, point.y, point.jd!) ?? 0
@@ -1665,7 +1667,7 @@ export function computeGreatestDurationCircumstances(pbe: PolynomialBesselianEle
 
 	if (!(bestDuration > 0)) return undefined
 
-	const be = besselianSampleAtJulianDay(pbe, julianDay0 + bestT * pbe.stepDays)
+	const be = besselianSampleAtJulianDay(pbe, julianDay0 + bestT * pbe.step)
 	const point = projectFundamentalPoint(be, be.x, be.y)
 	return point ? extremeCircumstancesAt(pbe, point) : undefined
 }
