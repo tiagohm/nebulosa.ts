@@ -4,9 +4,11 @@ import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
 import { clamp } from './math'
 import { bisection, brentMinimize, type RootFindingOptions } from './optimization'
+import { nearestSolarEclipse, type SolarEclipse } from './sun'
 // oxfmt-ignore
-import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, evaluateBesselian, F, findMaximumPoint, hourAngleFromLongitude, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type GeoPoint, type InstantBesselianElements, type PolynomialBesselianElements, type SunMoonPosition } from './sun.eclipse.map'
+import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, computePolynomialBesselianElements, evaluateBesselian, F, findMaximumPoint, hourAngleFromLongitude, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type GeoPoint, type InstantBesselianElements, type PolynomialBesselianElements, type SunMoonPosition } from './sun.eclipse.map'
 import { type Time, timeShift, toJulianDay, tt } from './time'
+import type { Writable } from './types'
 
 // Local solar eclipse circumstances ("Local View"): for a single geographic point this module resolves
 // the local contacts C1/C2/MAX/C3/C4, the local magnitude, durations, the Sun altitude and the position
@@ -376,7 +378,7 @@ function timeAtJulianDay(reference: Time, julianDay: number) {
 
 // Computes the local fundamental-plane geometry for one observer at one instant, following the same
 // projection used by the global curve solver in sun.eclipse.ts.
-export function computeLocalFundamentalState(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, time: Time): LocalFundamentalState {
+export function computeLocalFundamentalState(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, time: Time, state?: Writable<LocalFundamentalState>): LocalFundamentalState {
 	const be = evaluateBesselian(pbe, time)
 	const H = hourAngleFromLongitude(longitude, be.mu, be.deltaTLongitudeCorrection)
 
@@ -417,7 +419,27 @@ export function computeLocalFundamentalState(pbe: PolynomialBesselianElements, l
 	const inCentralCone = Math.abs(L2) - distance > CENTRAL_CONE_TOLERANCE
 	const centralPhaseKind: LocalCentralPhaseKind = inCentralCone ? (L2 < 0 ? 'total' : 'annular') : 'none'
 
-	return { time, jd: toJulianDay(time), be, longitude, latitude, hourAngle: normalizeAngle(H), ksi, eta, zeta, u, v, distance, L1, L2, magnitude, moonSunDiameterRatio, centralPhaseKind }
+	state ??= {} as Writable<LocalFundamentalState>
+
+	state.time = time
+	state.jd = toJulianDay(time)
+	state.be = be
+	state.longitude = longitude
+	state.latitude = latitude
+	state.hourAngle = normalizeAngle(H)
+	state.ksi = ksi
+	state.eta = eta
+	state.zeta = zeta
+	state.u = u
+	state.v = v
+	state.distance = distance
+	state.L1 = L1
+	state.L2 = L2
+	state.magnitude = magnitude
+	state.moonSunDiameterRatio = moonSunDiameterRatio
+	state.centralPhaseKind = centralPhaseKind
+
+	return state
 }
 
 // Computes the local scalar geometry (distance, L1, L2 in Earth equatorial radii) from an already evaluated
@@ -465,8 +487,8 @@ function localContactValueAtJulianDay(pbe: PolynomialBesselianElements, longitud
 }
 
 // Builds the local fundamental state at a Julian Day, reusing maximumTime as the time-scale reference.
-function localStateAtJulianDay(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jd: number) {
-	return computeLocalFundamentalState(pbe, longitude, latitude, timeAtJulianDay(pbe.maximumTime, jd))
+function localStateAtJulianDay(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jd: number, state?: LocalFundamentalState) {
+	return computeLocalFundamentalState(pbe, longitude, latitude, timeAtJulianDay(pbe.maximumTime, jd), state)
 }
 
 // Solar altitude (radians) at one instant. With a SunMoonPosition sample it uses the apparent Sun
@@ -611,9 +633,9 @@ function describeEvent(kind: LocalEclipseContactKind, centralKind: LocalCentralP
 }
 
 // Builds one resolved local event at a Julian Day, including altitude, P/Z and the Local View cache.
-function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions): LocalSolarEclipseEvent {
+function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions, state?: LocalFundamentalState): LocalSolarEclipseEvent {
 	const time = timeAtJulianDay(pbe.maximumTime, jd)
-	const state = computeLocalFundamentalState(pbe, longitude, latitude, time)
+	state = computeLocalFundamentalState(pbe, longitude, latitude, time, state)
 	// One ephemeris sample per event, shared by altitude and angular-radius (was up to three calls).
 	const position = options.sunMoonPosition?.(time)
 
@@ -870,8 +892,9 @@ function findLocalContactValueRoots(fromJd: number, toJd: number, stepDays: numb
 // scan plus refinement. Transversal roots (sign changes) are bracketed directly; grazing roots and short
 // phases whose two contacts fall entirely between two samples (no sign change, a sub-sample negative dip)
 // are recovered from interior local minima. Roots are deduplicated and returned sorted ascending.
-export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number, fn: (state: LocalFundamentalState) => number) {
-	const evaluate = (jd: number) => fn(localStateAtJulianDay(pbe, longitude, latitude, jd))
+export function findLocalContactRoots(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number, fn: (state: LocalFundamentalState) => number, state?: Writable<LocalFundamentalState>) {
+	state ??= {} as Writable<LocalFundamentalState>
+	const evaluate = (jd: number) => fn(localStateAtJulianDay(pbe, longitude, latitude, jd, state))
 	return findLocalContactValueRoots(fromJd, toJd, stepDays, evaluate)
 }
 
@@ -891,23 +914,15 @@ function rootAfter(roots: readonly number[], reference: number) {
 	return undefined
 }
 
-// Resolves the local C1/C2/MAX/C3/C4 events. C2/C3 are only sought when the local maximum is central, so
-// a partial-only local eclipse never invents central contacts. Every event is computed geometrically even
-// when the Sun is below the horizon; only its observability flag reflects the horizon.
-export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions): LocalSolarEclipseCircumstances['events'] {
-	const empty = { C1: null, C2: null, MAX: null, C3: null, C4: null } as const
-
-	const span = DEFAULT_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC
-	const stepDays = DEFAULT_LOCAL_SEARCH_STEP_SECONDS / DAYSEC
-	const maxSpan = Math.max(span, MAX_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC)
-	const centerJd = toJulianDay(pbe.maximumTime)
-
-	// The maximum search is adaptive too: if the sampled maximum lands on the window edge the true maximum may
-	// lie just outside, which would also misplace the contacts around it. Widen (bounded by maxSpan) until the
-	// maximum sits clear of the boundary.
+// Adaptively locates the Julian Day of the local magnitude maximum around the eclipse maximumTime. If the
+// sampled maximum lands on a window edge the true maximum may lie just outside, which would also misplace the
+// contacts around it, so the window is widened (bounded by maxSpan) until the maximum sits clear of the
+// boundary. Returns undefined when no maximum can be located. Shared by the contact resolver and the
+// location-visibility test so both bracket the maximum identically.
+function findLocalEclipseMaximumJd(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, centerJd: number, span: number, maxSpan: number, stepDays: number) {
 	let maximumSpan = span
 	let maximumJd = findLocalMaximumTime(pbe, longitude, latitude, centerJd - maximumSpan, centerJd + maximumSpan, stepDays)
-	if (maximumJd === undefined) return empty
+	if (maximumJd === undefined) return undefined
 
 	while (maximumSpan < maxSpan) {
 		const margin = stepDays * 2
@@ -919,14 +934,33 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 		maximumJd = widened
 	}
 
-	const maximumState = localStateAtJulianDay(pbe, longitude, latitude, maximumJd)
+	return maximumJd
+}
+
+const EMPTY_LOCAL_ECLIPSE_EVENTS: LocalSolarEclipseCircumstances['events'] = Object.freeze({ C1: null, C2: null, MAX: null, C3: null, C4: null })
+
+// Resolves the local C1/C2/MAX/C3/C4 events. C2/C3 are only sought when the local maximum is central, so
+// a partial-only local eclipse never invents central contacts. Every event is computed geometrically even
+// when the Sun is below the horizon; only its observability flag reflects the horizon.
+export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions): LocalSolarEclipseCircumstances['events'] {
+	const span = DEFAULT_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC
+	const stepDays = DEFAULT_LOCAL_SEARCH_STEP_SECONDS / DAYSEC
+	const maxSpan = MAX_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC
+	const centerJd = toJulianDay(pbe.maximumTime)
+
+	const maximumJd = findLocalEclipseMaximumJd(pbe, longitude, latitude, centerJd, span, maxSpan, stepDays)
+	if (maximumJd === undefined) return EMPTY_LOCAL_ECLIPSE_EVENTS
+
+	const state = {} as Writable<LocalFundamentalState>
+
+	const { L1, distance, centralPhaseKind } = localStateAtJulianDay(pbe, longitude, latitude, maximumJd, state)
 	// No resolvable local eclipse unless the partial depth at closest approach (L1 - distance) exceeds the
 	// root finder's tolerance. A shallower grazing touch is treated by the contact search as a single
 	// tangency rather than two distinct C1/C4, so reporting a MAX without partial contacts would be
 	// inconsistent. This mirrors CENTRAL_CONE_TOLERANCE = CONTACT_FUNCTION_TOLERANCE for the central phase.
-	if (!(maximumState.L1 - maximumState.distance > CONTACT_FUNCTION_TOLERANCE)) return empty
+	if (!(L1 - distance > CONTACT_FUNCTION_TOLERANCE)) return EMPTY_LOCAL_ECLIPSE_EVENTS
 
-	const MAX = buildLocalEvent('MAX', maximumJd, pbe, longitude, latitude, options)
+	const MAX = buildLocalEvent('MAX', maximumJd, pbe, longitude, latitude, options, state)
 
 	// The contact search must start with a window that already contains the maximum: the adaptive maximum
 	// search above can find a maximum beyond `span`, and if the contact search restarted at `span` the whole
@@ -967,23 +1001,19 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 	}
 
 	const partial = resolveContacts(false)
-	const C1 = partial.before !== undefined ? buildLocalEvent('C1', partial.before, pbe, longitude, latitude, options) : null
-	const C4 = partial.after !== undefined ? buildLocalEvent('C4', partial.after, pbe, longitude, latitude, options) : null
+	const C1 = partial.before !== undefined ? buildLocalEvent('C1', partial.before, pbe, longitude, latitude, options, state) : null
+	const C4 = partial.after !== undefined ? buildLocalEvent('C4', partial.after, pbe, longitude, latitude, options, state) : null
 
 	let C2: LocalSolarEclipseEvent | null = null
 	let C3: LocalSolarEclipseEvent | null = null
 
-	if (maximumState.centralPhaseKind !== 'none') {
+	if (centralPhaseKind !== 'none') {
 		const central = resolveContacts(true)
-		C2 = central.before !== undefined ? buildLocalEvent('C2', central.before, pbe, longitude, latitude, options) : null
-		C3 = central.after !== undefined ? buildLocalEvent('C3', central.after, pbe, longitude, latitude, options) : null
+		C2 = central.before !== undefined ? buildLocalEvent('C2', central.before, pbe, longitude, latitude, options, state) : null
+		C3 = central.after !== undefined ? buildLocalEvent('C3', central.after, pbe, longitude, latitude, options, state) : null
 	}
 
 	return { C1, C2, MAX, C3, C4 }
-}
-
-function validPositive(value: number | undefined, fallback: number) {
-	return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback
 }
 
 // Human-readable text for a visibility classification.
@@ -1657,4 +1687,76 @@ export function computeGreatestDurationCircumstances(pbe: PolynomialBesselianEle
 	const be = besselianSampleAtJulianDay(pbe, julianDay0 + bestT * pbe.step)
 	const point = projectFundamentalPoint(be, be.x, be.y)
 	return point ? extremeCircumstancesAt(pbe, point) : undefined
+}
+
+// Whether a geometric solar eclipse reaches the given location for these Besselian elements, regardless of the
+// horizon: true when the local magnitude maximum has a partial depth (L1 - distance) above the contact
+// tolerance. Reuses the same adaptive maximum search and gate as computeLocalEclipseEvents, so any location
+// this returns true for resolves at least the C1/C4 partial contacts there. Cheap: one polynomial-based
+// maximum search over the contact window, no ephemeris sampling and no full event/aspect build.
+// longitude: east-positive radians; latitude: geodetic radians.
+function hasLocalGeometricEclipse(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, state?: LocalFundamentalState) {
+	const span = DEFAULT_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC
+	const stepDays = DEFAULT_LOCAL_SEARCH_STEP_SECONDS / DAYSEC
+	const maxSpan = Math.max(span, MAX_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC)
+
+	const maximumJd = findLocalEclipseMaximumJd(pbe, longitude, latitude, toJulianDay(pbe.maximumTime), span, maxSpan, stepDays)
+	if (maximumJd === undefined) return false
+
+	state = localStateAtJulianDay(pbe, longitude, latitude, maximumJd, state)
+	return state.L1 - state.distance > CONTACT_FUNCTION_TOLERANCE
+}
+
+// One eclipse in a listLocalSolarEclipses result.
+export interface LocalSolarEclipseListEntry {
+	// The eclipse as returned by nearestSolarEclipse (global circumstances: maximalTime, gamma, type, magnitude).
+	readonly eclipse: SolarEclipse
+	// Polynomial Besselian elements for this eclipse.
+	readonly elements: PolynomialBesselianElements
+	// Local geometry on the fundamental plane at one instant for one observer.
+	readonly state: LocalFundamentalState
+}
+
+// Lists the solar eclipses whose maximal time falls in (startTime, endTime] that reach the given location.
+//
+// Eclipses are enumerated with nearestSolarEclipse, walking forward one eclipse per step (the Meeus series is
+// cheap, ~2-3 eclipses per scanned year, and only the eclipses that touch the Earth's surface are emitted).
+// When a sunMoonPosition provider is given, each candidate is filtered by a geometric local-visibility test:
+// the Besselian elements are built once and returned as `elements`, so a caller computing full local
+// circumstances afterwards never rebuilds them. This is the performant path -- the costly ephemeris work (the
+// Besselian fit) happens exactly once per eclipse and is handed back. Without a provider the elements cannot be
+// evaluated, so no location test runs and every eclipse in the interval is returned with `elements` undefined.
+//
+// The test is purely geometric: an eclipse is included when its shadow reaches the location even if the Sun is
+// below the local horizon there. Pass the returned `elements` to computeLocalSolarEclipseCircumstances to
+// refine observability, magnitude, contacts and the Local View. longitude is east-positive radians, latitude
+// geodetic radians; the results are ordered earliest-first.
+export function listLocalSolarEclipses(longitude: Angle, latitude: Angle, startTime: Time, endTime: Time, sunMoonPosition: (time: Time) => SunMoonPosition): LocalSolarEclipseListEntry[] {
+	const result: LocalSolarEclipseListEntry[] = []
+
+	const startJd = toJulianDay(startTime)
+	const endJd = toJulianDay(endTime)
+	if (!Number.isFinite(startJd) || !Number.isFinite(endJd) || endJd < startJd) return result
+
+	// nearestSolarEclipse(t, true) returns the first eclipse strictly after t, so seeding the cursor with the
+	// previous maximalTime advances exactly one eclipse per step. previousMaxJd guards against a non-advancing
+	// series (which should never happen) so the loop can never spin.
+	let cursor = startTime
+	let previousMaxJd = -Infinity
+
+	while (true) {
+		const eclipse = nearestSolarEclipse(cursor, true)
+		const maxJd = toJulianDay(eclipse.maximalTime)
+		if (!Number.isFinite(maxJd) || maxJd <= previousMaxJd || maxJd > endJd) break
+
+		// Build the Besselian elements once; reuse them for both the location test and the returned entry.
+		const elements = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
+		const state = {} as Writable<LocalFundamentalState>
+		if (hasLocalGeometricEclipse(elements, longitude, latitude, state)) result.push({ eclipse, elements, state })
+
+		previousMaxJd = maxJd
+		cursor = eclipse.maximalTime
+	}
+
+	return result
 }

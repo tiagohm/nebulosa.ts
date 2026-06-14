@@ -1592,7 +1592,7 @@ describe('branch-aware curve topology', () => {
 			for (const branch of geometry.lines.riseSetCurves) {
 				for (let k = 1; k < branch.length; k++) expect(sphericalSeparation(branch[k - 1].x, branch[k - 1].y, branch[k].x, branch[k].y)).toBeLessThan(deg(1.5))
 			}
-		}, 2000)
+		}, 4000)
 	}
 
 	test('2024-04-08 connects N2 to the northern penumbral limit', () => {

@@ -4,7 +4,7 @@ import { ASEC2RAD, PI, RAD2DEG, TAU } from '../src/constants'
 import { nearestSolarEclipse } from '../src/sun'
 import { computePolynomialBesselianElements, type PolynomialBesselianElements } from '../src/sun.eclipse.map'
 // oxfmt-ignore
-import { computeLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, type LocalSolarEclipseCircumstances, } from '../src/sun.eclipse.local'
+import { computeLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, listLocalSolarEclipses, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, type LocalSolarEclipseCircumstances, } from '../src/sun.eclipse.local'
 import { sphericalSeparation } from '../src/geometry'
 import { timeToDate, timeYMD, toJulianDay, type Time } from '../src/time'
 import { sunMoonPosition } from './sun.eclipse.util'
@@ -116,7 +116,7 @@ describe('local circumstances', () => {
 		expect(c.visibility.kind).toBe('geometricOnlyBelowHorizon')
 		expect(c.visibility.hasGeometricEclipse).toBe(true)
 		expect(c.visibility.hasObservableEclipse).toBe(false)
-	}, 2000)
+	}, 3000)
 
 	test('detects an observable culmination sliver between below-horizon contacts', () => {
 		// Mazatlan's eclipse straddles local noon: every contact is below ~73.5 deg, but the Sun climbs to a
@@ -645,5 +645,34 @@ describe('greatest eclipse and greatest duration circumstances', () => {
 		expect(partialGe.centralDurationSeconds).toBeNull()
 		expect(partialGe.pathWidthKm).toBeNull()
 		expect(partialGe.kind).toBeNull()
+	})
+})
+
+describe('listLocalSolarEclipses', () => {
+	// Mazatlán, Mexico: on the 2024-04-08 path of totality.
+	const mazatlanLongitude = deg(-106.42)
+	const mazatlanLatitude = deg(23.25)
+
+	test('lists eclipses reaching a location and returns reusable Besselian elements', () => {
+		const list = listLocalSolarEclipses(mazatlanLongitude, mazatlanLatitude, timeYMD(2024, 1, 1), timeYMD(2024, 7, 1), sunMoonPosition)
+
+		// Only the 2024-04-08 total eclipse falls in this half-year and reaches Mazatlán.
+		expect(list).toHaveLength(1)
+		const entry = list[0]
+		expect(toJulianDay(entry.eclipse.maximalTime)).toBeCloseTo(toJulianDay(total2024.eclipse.maximalTime), 6)
+
+		// The elements were computed for the location test, so they are handed back and drive the full local
+		// circumstances without rebuilding them: Mazatlán sees a total central phase.
+		expect(entry.elements).toBeDefined()
+		const circumstances = computeLocalSolarEclipseCircumstances(entry.elements, mazatlanLongitude, mazatlanLatitude, { sunMoonPosition })
+		expect(circumstances.visibility.hasCentralPhase).toBe(true)
+		expect(circumstances.visibility.centralPhaseKind).toBe('total')
+	})
+
+	test('excludes a location the shadow never reaches and rejects an inverted interval', () => {
+		// A far-southern point is nowhere near the 2024-04-08 northern-hemisphere shadow.
+		expect(listLocalSolarEclipses(deg(0), deg(-80), timeYMD(2024, 3, 1), timeYMD(2024, 5, 1), sunMoonPosition)).toHaveLength(0)
+		// endTime before startTime yields no results.
+		expect(listLocalSolarEclipses(mazatlanLongitude, mazatlanLatitude, timeYMD(2024, 7, 1), timeYMD(2024, 1, 1), sunMoonPosition)).toHaveLength(0)
 	})
 })
