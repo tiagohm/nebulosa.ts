@@ -14,33 +14,35 @@ export type SphericalCoordinate = Vec3
 export type CartesianCoordinate = Vec3
 
 // Right ascension and declination in the current equatorial frame.
-export interface EquatorialCoordinate<T = Angle> {
-	rightAscension: T
-	declination: T
+export interface EquatorialCoordinate {
+	rightAscension: Angle
+	declination: Angle
+	distance?: number // AU, km, Earth radii, etc
 }
 
 // Right ascension and declination in the J2000 equatorial frame.
-export interface EquatorialCoordinateJ2000<T = Angle> {
-	rightAscensionJ2000: T
-	declinationJ2000: T
+export interface EquatorialCoordinateJ2000 {
+	rightAscensionJ2000: Angle
+	declinationJ2000: Angle
+	distance?: number // AU, km, Earth radii, etc
 }
 
 // Local azimuth and altitude.
-export interface HorizontalCoordinate<T = Angle> {
-	azimuth: T
-	altitude: T
+export interface HorizontalCoordinate {
+	azimuth: Angle
+	altitude: Angle
 }
 
 // Ecliptic longitude and latitude.
-export interface EclipticCoordinate<T = Angle> {
-	longitude: T // λ, measured eastward from the vernal equinox along the ecliptic
-	latitude: T // β, measured north/south from the ecliptic
+export interface EclipticCoordinate {
+	longitude: Angle // λ, measured eastward from the vernal equinox along the ecliptic
+	latitude: Angle // β, measured north/south from the ecliptic
 }
 
 // The Sun as the center and the galactic plane (the Milky Way's disk) as the equator
-export interface GalacticCoordinate<T = Angle> {
-	longitude: T // The angle eastward from the Galactic Center (0°)
-	latitude: T // The angle north or south of the plane (±90°)
+export interface GalacticCoordinate {
+	longitude: Angle // The angle eastward from the Galactic Center (0°)
+	latitude: Angle // The angle north or south of the plane (±90°)
 }
 
 // Computes the angular separation between two equatorial coordinates.

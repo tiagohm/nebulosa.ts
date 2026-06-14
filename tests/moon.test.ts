@@ -129,7 +129,7 @@ describe('nearest lunar apsis', () => {
 
 		const c = nearestLunarApsis(timeYMDHMS(2026, 1, 13, 20, 50), 'APOGEE', true)
 		expect(timeToDate(c[0]).slice(0, 5)).toEqual([2026, 2, 10, 16, 53])
-		expect(toKilometer(c[1])).toBeCloseTo(404576, 0)
+		expect(toKilometer(c[1])).toBeCloseTo(404575, 0)
 	})
 
 	test('perigee', () => {

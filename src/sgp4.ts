@@ -1,15 +1,14 @@
 import type { Angle } from './angle'
 import type { PositionAndVelocity } from './astrometry'
-import { DAYMIN, DEG2RAD, PI, TAU } from './constants'
+import { DAYMIN, DEG2RAD, EARTH_RADIUS_KM, PI, TAU } from './constants'
 import { kilometer } from './distance'
 import { isLeapYear } from './temporal'
 import { greenwichMeanSiderealTime, type Time, Timescale, timeSubtract, timeYMDHMS } from './time'
 import { kilometerPerSecond } from './velocity'
 
 const MU = 398600.8 // in km3 / s2
-const EARTH_RADIUS = 6378.135 // in km
-const XKE = 60 / Math.sqrt((EARTH_RADIUS * EARTH_RADIUS * EARTH_RADIUS) / MU)
-const VKMPERSEC = (EARTH_RADIUS * XKE) / 60
+const XKE = 60 / Math.sqrt((EARTH_RADIUS_KM * EARTH_RADIUS_KM * EARTH_RADIUS_KM) / MU)
+const VKMPERSEC = (EARTH_RADIUS_KM * XKE) / 60
 const tumin = 1 / XKE
 const J2 = 0.001082616
 const J3 = -0.00000253881
@@ -1783,9 +1782,9 @@ function sgp4Propagate(satrec: SatRec, tsince: number, meanElements?: MeanElemen
 
 	// position and velocity (in km and km/sec)
 	const position = {
-		x: mrt * ux * EARTH_RADIUS,
-		y: mrt * uy * EARTH_RADIUS,
-		z: mrt * uz * EARTH_RADIUS,
+		x: mrt * ux * EARTH_RADIUS_KM,
+		y: mrt * uy * EARTH_RADIUS_KM,
+		z: mrt * uz * EARTH_RADIUS_KM,
 	}
 	const velocity = {
 		x: (mvt * ux + rvdot * vx) * VKMPERSEC,
@@ -1928,9 +1927,9 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 	// earth constants
 	// sgp4fix identify constants and allow alternate values
 
-	const ss = 78 / EARTH_RADIUS + 1
+	const ss = 78 / EARTH_RADIUS_KM + 1
 	// sgp4fix use multiply for speed instead of pow
-	const qzms2ttemp = (120 - 78) / EARTH_RADIUS
+	const qzms2ttemp = (120 - 78) / EARTH_RADIUS_KM
 	const qzms2t = qzms2ttemp * qzms2ttemp * qzms2ttemp * qzms2ttemp
 
 	satrec.init = 'y'
@@ -1964,13 +1963,13 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 	if (omeosq >= 0 || satrec.no >= 0) {
 		satrec.isimp = 0
 
-		if (rp < 220 / EARTH_RADIUS + 1) {
+		if (rp < 220 / EARTH_RADIUS_KM + 1) {
 			satrec.isimp = 1
 		}
 
 		let sfour = ss
 		let qzms24 = qzms2t
-		const perige = (rp - 1) * EARTH_RADIUS
+		const perige = (rp - 1) * EARTH_RADIUS_KM
 
 		// for perigees below 156 km, s and qoms2t are altered
 		if (perige < 156) {
@@ -1981,9 +1980,9 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 			}
 
 			// sgp4fix use multiply for speed instead of pow
-			const qzms24temp = (120 - sfour) / EARTH_RADIUS
+			const qzms24temp = (120 - sfour) / EARTH_RADIUS_KM
 			qzms24 = qzms24temp * qzms24temp * qzms24temp * qzms24temp
-			sfour = sfour / EARTH_RADIUS + 1
+			sfour = sfour / EARTH_RADIUS_KM + 1
 		}
 
 		const pinvsq = 1 / posq

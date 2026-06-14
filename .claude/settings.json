@@ -1,0 +1,19 @@
+{
+	"$schema": "https://json.schemastore.org/claude-code-settings.json",
+	"enableAllProjectMcpServers": true,
+	"permissions": {
+		"allow": ["Bash(bun i)", "Bash(bun install)", "Bash(bun run lint)", "Bash(bun run lint:fix)", "Bash(bun run fmt)", "Bash(bun run fmt:check)", "Bash(bun run index)", "Bash(bun test:*)", "Bash(oxlint:*)", "Bash(oxfmt:*)"]
+	},
+	"hooks": {
+		"UserPromptSubmit": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "bun run index"
+					}
+				]
+			}
+		]
+	}
+}
