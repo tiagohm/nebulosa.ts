@@ -3119,15 +3119,14 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	const hasNorthPenumbraLimit = penumbraNorth.length > 0
 	const hasSouthPenumbraLimit = penumbraSouth.length > 0
 	if (hasNorthPenumbraLimit && hasSouthPenumbraLimit) {
-		;[points.N1, points.N2] = penumbralLimitEndpointsByTime(pbe, penumbraNorth.flat())
-		;[points.S1, points.S2] = penumbralLimitEndpointsByTime(pbe, penumbraSouth.flat())
+		;[points.N1, points.N2] = penumbralCurveEndpointsByTime(pbe, penumbraNorth)
+		;[points.S1, points.S2] = penumbralCurveEndpointsByTime(pbe, penumbraSouth)
 	} else if (hasNorthPenumbraLimit || hasSouthPenumbraLimit) {
 		// A grazing partial with a single penumbral limit: its two terminator cusps are named
 		// chronologically (N1 begins, S1 ends), matching EclipseWise. This is NOT a poleward/equatorward
 		// rule: for 2003-05-31 both cusps are in the northern hemisphere and the equatorward one (N1)
 		// comes first in time, so a latitude-based label would swap them.
-		const limit = (hasNorthPenumbraLimit ? penumbraNorth : penumbraSouth).flat()
-		;[points.N1, points.S1] = penumbralLimitEndpointsByTime(pbe, limit)
+		;[points.N1, points.S1] = penumbralCurveEndpointsByTime(pbe, hasNorthPenumbraLimit ? penumbraNorth : penumbraSouth)
 	}
 
 	const riseSetCurves = (options?.includeRiseSetCurves ?? false) && points.P1 && points.P4 ? computeRiseSetCurves(pbe, points.P1, points.P4, points, { step: options?.riseSetStep }) : []
@@ -3193,45 +3192,55 @@ export function solarAltitudeAtPoint(pbe: PolynomialBesselianElements, point: Ge
 // limit, so both end up on different terminator cusps rather than two samples of the same one.
 const PENUMBRAL_CUSP_MIN_SEPARATION = 5 * DEG2RAD
 
-// The two terminator cusps of a single grazing penumbral limit: the points where the limit meets the
-// horizon (lowest solar altitude). This is robust against the curve solver returning the points in
-// Julian-Day order, which can interleave two spatial branches near a fold and bury a cusp in the middle
-// of the array (so the raw first/last endpoints are not the cusps).
-function penumbralLimitCusps(pbe: PolynomialBesselianElements, curve: GeoBranch) {
-	if (curve.length <= 2) return [curve[0], curve.at(-1)!]
+// Penumbral-limit cusps for a multi-branch curve, found without flattening the branches into a temporary
+// array. This mirrors penumbralLimitCusps: choose the lowest-altitude point, then the lowest-altitude point
+// spatially separated from it; fall back to the first/last drawable endpoints when no separated cusp exists.
+function penumbralCurveCusps(pbe: PolynomialBesselianElements, curve: GeoCurve) {
+	let first: GeoPoint | undefined
+	let firstAltitude = Infinity
+	let fallbackStart: GeoPoint | undefined
+	let fallbackEnd: GeoPoint | undefined
 
-	// Compute each point's altitude once, then take the two cusps by two linear scans instead of a full
-	// sort: the lowest-altitude point, then the lowest-altitude point at least PENUMBRAL_CUSP_MIN_SEPARATION
-	// away from it. This is the same result as sorting by altitude and taking the first separated pair.
-	const altitudes = new Float64Array(curve.length)
-	for (let k = 0; k < curve.length; k++) altitudes[k] = solarAltitudeAtPoint(pbe, curve[k])
-	let firstIndex = 0
-	for (let k = 1; k < curve.length; k++) {
-		if (altitudes[k] < altitudes[firstIndex]) firstIndex = k
-	}
+	for (let b = 0; b < curve.length; b++) {
+		const branch = curve[b]
+		if (branch.length === 0) continue
+		fallbackStart ??= branch[0]
+		fallbackEnd = branch.at(-1)!
 
-	const first = curve[firstIndex]
-	let second: GeoPoint | undefined
-	let secondAltitude = Infinity
-
-	for (let k = 0; k < curve.length; k++) {
-		if (altitudes[k] < secondAltitude && sphericalSeparation(first.x, first.y, curve[k].x, curve[k].y) > PENUMBRAL_CUSP_MIN_SEPARATION) {
-			secondAltitude = altitudes[k]
-			second = curve[k]
+		for (let k = 0; k < branch.length; k++) {
+			const point = branch[k]
+			const altitude = solarAltitudeAtPoint(pbe, point)
+			if (altitude < firstAltitude) {
+				firstAltitude = altitude
+				first = point
+			}
 		}
 	}
 
-	// Fall back to the chronological endpoints if the curve never folds into two separated cusps.
-	return second ? [first, second] : [curve[0], curve.at(-1)!]
+	if (!first) return [undefined, undefined] as const
+
+	let second: GeoPoint | undefined
+	let secondAltitude = Infinity
+	for (let b = 0; b < curve.length; b++) {
+		const branch = curve[b]
+		for (let k = 0; k < branch.length; k++) {
+			const point = branch[k]
+			const altitude = solarAltitudeAtPoint(pbe, point)
+			if (altitude < secondAltitude && sphericalSeparation(first.x, first.y, point.x, point.y) > PENUMBRAL_CUSP_MIN_SEPARATION) {
+				secondAltitude = altitude
+				second = point
+			}
+		}
+	}
+
+	return second ? [first, second] : ([fallbackStart!, fallbackEnd!] as const)
 }
 
-// The two terminator cusps of a penumbral limit ordered by ascending time (earliest first), falling
-// back to ascending latitude when either lacks a Julian Day. The penumbral-limit extremes are named by
-// the eclipse chronology (N1/S1 begin, N2/S2 end), matching the EclipseWise/Espenak convention. Using
-// the cusps rather than the raw array endpoints keeps the markers on the horizon even when the curve
-// solver returns the limit's points jd-interleaved across a fold.
-function penumbralLimitEndpointsByTime(pbe: PolynomialBesselianElements, curve: GeoBranch) {
-	const [a, b] = penumbralLimitCusps(pbe, curve)
+// Multi-branch penumbral endpoints ordered by eclipse chronology, avoiding the allocation that flat() would
+// create in the map assembly hot path.
+function penumbralCurveEndpointsByTime(pbe: PolynomialBesselianElements, curve: GeoCurve) {
+	const [a, b] = penumbralCurveCusps(pbe, curve)
+	if (!a || !b) return [undefined, undefined] as const
 	if (a.jd !== undefined && b.jd !== undefined) return a.jd <= b.jd ? [a, b] : [b, a]
 	return a.y <= b.y ? [a, b] : [b, a]
 }
