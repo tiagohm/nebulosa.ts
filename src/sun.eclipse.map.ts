@@ -3069,10 +3069,14 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	let umbraNorth: GeoCurve = []
 	let umbraSouth: GeoCurve = []
 
-	// Whether the umbra/antumbra touches Earth at all, and whether the shadow axis truly intersects the
-	// ellipsoid (the latter is the real geometric test that replaces the former gamma threshold).
-	const hasUmbralLimits = eclipse.type !== 'partial'
-	const hasCentralLine = hasUmbralLimits && centralAxisIntersectsEarth(pbe)
+	// Whether the shadow axis truly intersects the ellipsoid (the precise geometric test that replaces the
+	// gamma threshold), and whether the umbra/antumbra touches Earth at all. The axis test is authoritative
+	// for the central line: at the grazing boundary the Meeus magnitude classification can label an eclipse
+	// partial (|gamma| just past the spherical 0.9972 limit) while the axis still pierces the flattened
+	// ellipsoid (e.g. the 5885-05-11 eclipse at gamma -0.99788, central line empty before this). A central
+	// eclipse necessarily has umbral limits, so the axis test also forces those on even when Meeus says partial.
+	const hasCentralLine = centralAxisIntersectsEarth(pbe)
+	const hasUmbralLimits = eclipse.type !== 'partial' || hasCentralLine
 
 	if (hasUmbralLimits) {
 		// The umbral/antumbral cone tangency contacts exist whenever the umbra reaches Earth; they are

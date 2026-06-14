@@ -462,28 +462,30 @@ describe('NASA Besselian fixtures cover eclipse classes and central gating', () 
 })
 
 test('computeSolarEclipseMapGeometry produces ordered partial contacts and anchored rise-set curves', () => {
-	// The synthetic axis (0.125-day step) takes longer than 3 h to clear the limb, so the search window
-	// is widened explicitly rather than relying on the default tuned to the 6 h NASA fit.
-	const geometry = computeSolarEclipseMapGeometry(eclipse('partial'), pbe(), { longitudeStep: deg(90), includeRiseSetCurves: true, riseSetStep: 1800 })
+	// A genuine partial: the y offset 1.2 keeps the shadow axis closest approach outside the limb (the axis
+	// misses the Earth, so no central line or umbral cone), while the penumbra still grazes the surface. Only
+	// the external penumbral contacts P1/P4 exist; the internal P2/P3 require the penumbra to sweep fully onto
+	// Earth, which only happens when the axis pierces it. The synthetic axis (0.125-day step) takes longer than
+	// 3 h to clear the limb, so the search window is widened explicitly rather than relying on the default.
+	const geometry = computeSolarEclipseMapGeometry(eclipse('partial'), pbe({ y: [1.2] }), { longitudeStep: deg(90), includeRiseSetCurves: true, riseSetStep: 1800 })
 	const { points, lines } = geometry
 
 	// Existence, finiteness and chronological order replace the frozen synthetic coordinates.
-	for (const point of [points.P1, points.P2, points.P3, points.P4, points.Max]) expectGeoPoint(point!)
-	expectIncreasingJd([points.P1!, points.P2!, points.Max!, points.P3!, points.P4!])
-	// A pure partial eclipse: no umbral cone contacts and no central line.
-	for (const point of [points.U1, points.U2, points.U3, points.U4, points.C1, points.C2]) expect(point).toBeUndefined()
+	for (const point of [points.P1, points.P4, points.Max]) expectGeoPoint(point!)
+	expectIncreasingJd([points.P1!, points.Max!, points.P4!])
+	// A pure partial eclipse: no internal penumbral contacts, no umbral cone contacts and no central line.
+	for (const point of [points.P2, points.P3, points.U1, points.U2, points.U3, points.U4, points.C1, points.C2]) expect(point).toBeUndefined()
 	expect(lines.centerLine).toHaveLength(0)
 	expect(lines.umbraNorth).toHaveLength(0)
 	expect(lines.umbraSouth).toHaveLength(0)
 	for (const point of [...lines.penumbraNorth.flat(), ...lines.penumbraSouth.flat()]) expectGeoPoint(point)
 
-	// Two sunrise branches (P1->P2) and two sunset branches (P3->P4), each anchored at its cusp contacts.
-	expect(lines.riseSetCurves).toHaveLength(4)
-	expectGeoPointClose(lines.riseSetCurves[0][0], points.P1!.x, points.P1!.y, points.P1!.jd)
-	expectGeoPointClose(lines.riseSetCurves[0].at(-1), points.P2!.x, points.P2!.y, points.P2!.jd)
-	expectGeoPointClose(lines.riseSetCurves[2][0], points.P3!.x, points.P3!.y, points.P3!.jd)
-	expectGeoPointClose(lines.riseSetCurves[3].at(-1), points.P4!.x, points.P4!.y, points.P4!.jd)
+	// The day-side and night-side terminator arcs, each anchored at the external cusp contacts P1 (begin) and
+	// P4 (end). A two-contact partial has no internal contacts to split the rise-set family further.
+	expect(lines.riseSetCurves).toHaveLength(2)
 	for (const curve of lines.riseSetCurves) {
+		expectGeoPointClose(curve[0], points.P1!.x, points.P1!.y, points.P1!.jd)
+		expectGeoPointClose(curve.at(-1), points.P4!.x, points.P4!.y, points.P4!.jd)
 		expect(curve.length).toBeGreaterThan(1)
 		for (const point of curve) expectGeoPoint(point)
 	}
@@ -823,7 +825,9 @@ test('splitDisconnectedPolylines breaks a curve at gaps and drops undrawable pie
 })
 
 test('partial eclipse geometry omits central and umbral path data', () => {
-	const geometry = computeSolarEclipseMapGeometry(eclipse('partial', 1.1), pbe(), { longitudeStep: deg(60), maxAngularStep: deg(30), includeRiseSetCurves: false })
+	// Axis misses the Earth (y offset 1.2): a genuine partial whose geometry, not just the Meeus type tag,
+	// has no central or umbral path. A central-geometry fixture would now (correctly) draw both.
+	const geometry = computeSolarEclipseMapGeometry(eclipse('partial', 1.1), pbe({ y: [1.2] }), { longitudeStep: deg(60), maxAngularStep: deg(30), includeRiseSetCurves: false })
 
 	expect(geometry.points.Max).toBeDefined()
 	for (const point of [geometry.points.U1, geometry.points.U2, geometry.points.U3, geometry.points.U4, geometry.points.C1, geometry.points.C2]) expect(point).toBeUndefined()
