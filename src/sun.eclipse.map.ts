@@ -59,6 +59,13 @@ const DEFAULT_CONTACT_SEARCH_SPAN_SECONDS = 3.5 * 3600
 // digits out to ~4.5 h there), so expanding the window to bracket such a contact is reliable; this cap
 // bounds the extrapolation so a degenerate residual can never drive an unbounded search.
 const CONTACT_SEARCH_MAX_SPAN_SECONDS = 5.5 * 3600
+// Hard cap (seconds) on the half-width the greatest-eclipse closest-approach search may grow to. Unlike the
+// contacts, the greatest-eclipse instant must be found even when a far-future maximumTime sits many hours
+// before the actual eclipse (the published epoch is only a coarse label), so the search window grows past the
+// contact cap until the minimum is bracketed. This bounds that growth: 12 h covers the worst observed offset
+// (the 6100-09-30 closest approach ~5.9 h out) with margin, while a genuinely monotone residual stops here
+// instead of extrapolating the cubic without limit.
+const GREATEST_ECLIPSE_SEARCH_MAX_SPAN_SECONDS = 12 * 3600
 // Step (seconds) by which each external contact-search edge is pushed outward while the shadow is still on
 // Earth there. Small enough to land just past the contact, then the root scan refines within the bracket.
 const CONTACT_SEARCH_EXPANSION_STEP_SECONDS = 15 * 60
@@ -1271,29 +1278,44 @@ const MAXIMUM_TIME_CONSISTENCY_DAYS = 60 / DAYSEC
 // and refined with Brent inside the span.
 function findGreatestEclipseT(pbe: PolynomialBesselianElements) {
 	const f = (t: number) => centralAxisDistanceSquaredAtT(pbe, t)
-	// Search out to the contact expansion cap, not just the default contact span: a published maximumTime can
-	// sit hours from the true closest approach (far-future eclipses with a coarse maximumTime), and a window of
-	// only +-contactSearchSpan around it can end just short of the real minimum, pinning the greatest-eclipse
-	// instant to the window edge (e.g. the 5208-03-22 hybrid, whose closest approach is ~3.6 h past a
-	// maximumTime-centered 3.5 h edge, which then placed Max ~5 min before the internal contact P2). The
-	// contact search already brackets contacts out to this cap, so matching it keeps Max consistent with them.
-	const span = CONTACT_SEARCH_MAX_SPAN_SECONDS / DAYSEC / pbe.step
-	// Search the closest approach in the window centered on maximumTime, matching centralAxisIntersectsEarth
+	// Search the closest approach in a window centered on maximumTime, matching centralAxisIntersectsEarth
 	// and the contact searches, rather than around time0 (t = 0).
 	const tMaximum = (toJulianDay(pbe.maximumTime) - toJulianDay(pbe.time0)) / pbe.step
-	const from = tMaximum - span
-	const to = tMaximum + span
+	// Start at the contact expansion cap and grow while the minimum sits at a window edge: a far-future
+	// maximumTime can sit hours before the eclipse, past even that cap, so a fixed window ends short of the
+	// real minimum and pins the greatest-eclipse instant to the edge — leaving Max out of order with the
+	// internal contacts P2/P3 the contact search reaches by recentering (e.g. the 6100-09-30 total, whose
+	// closest approach is ~5.9 h past maximumTime, beyond the 5.5 h cap, with P1 itself ~3.4 h after it). The
+	// window grows until the minimum is interior or the hard cap is reached, so the search walks out to the
+	// eclipse the same way the recentered contact search does.
+	const maxSpan = GREATEST_ECLIPSE_SEARCH_MAX_SPAN_SECONDS / DAYSEC / pbe.step
 	const steps = 64
+	let span = Math.min(CONTACT_SEARCH_MAX_SPAN_SECONDS / DAYSEC / pbe.step, maxSpan)
+	let from = tMaximum - span
+	let to = tMaximum + span
 	let bestT = tMaximum
 	let best = Infinity
 
-	for (let k = 0; k <= steps; k++) {
-		const t = from + ((to - from) * k) / steps
-		const value = f(t)
-		if (value < best) {
-			best = value
-			bestT = t
+	while (true) {
+		from = tMaximum - span
+		to = tMaximum + span
+		best = Infinity
+		bestT = tMaximum
+
+		for (let k = 0; k <= steps; k++) {
+			const t = from + ((to - from) * k) / steps
+			const value = f(t)
+			if (value < best) {
+				best = value
+				bestT = t
+			}
 		}
+
+		const edge = (to - from) / steps
+		// Stop once the minimum is strictly interior (the closest approach is bracketed) or the window has
+		// reached the cap, so a genuinely monotone residual cannot grow the window without bound.
+		if ((bestT > from + edge && bestT < to - edge) || span >= maxSpan) break
+		span = Math.min(span * 2, maxSpan)
 	}
 
 	const half = (to - from) / steps
