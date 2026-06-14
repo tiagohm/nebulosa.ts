@@ -2,7 +2,7 @@ import { deg, type Angle } from '../src/angle'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 import { sphericalSeparation, type Point } from '../src/geometry'
 import { PlateCarree } from '../src/projection'
-import { nearestSolarEclipse } from '../src/sun'
+import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
 // oxfmt-ignore
 import { BRANCH_MAX_DRAWABLE_GAP, type GeoBranch, type GeoCurve, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SolarEclipseMapGeometryOptions, type SolarEclipseMapSvgPaths, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, solarAltitudeAtPoint, solarEclipseMapToSvgPaths } from '../src/sun.eclipse.map'
 import { parseArgs } from 'node:util'
@@ -15,21 +15,31 @@ const CATALOG_ANCHOR_TOLERANCE = Math.max(CATALOG_STEP, 1e-9)
 const CATALOG_RISE_SET_STEP = 600
 const CATALOG_BRIDGE_LIMIT = deg(20)
 const CATALOG_OVERLAP_ARC = deg(10)
+// gamma bounds (axis distance from Earth's center, equatorial radii) bracketing the central/non-central
+// boundary at |gamma| ~ 0.9972: below CLEARLY_CENTRAL_GAMMA the shadow axis pierces the ellipsoid (a central
+// line must exist), above CLEARLY_NON_CENTRAL_GAMMA the umbra no longer touches Earth on the axis (no central
+// line). The margin around 0.9972..1.0266 leaves the grazing band unasserted, where central existence is
+// genuinely geometry-dependent. gamma comes from nearestSolarEclipse, independent of the map engine, so these
+// bound the engine's own central classifier from outside it.
+const CLEARLY_CENTRAL_GAMMA = 0.99
+const CLEARLY_NON_CENTRAL_GAMMA = 1.05
 const SOLAR_ECLIPSE_MAP_GEOMETRY_OPTIONS: SolarEclipseMapGeometryOptions = { longitudeStep: CATALOG_STEP, maxAngularStep: CATALOG_STEP, includeRiseSetCurves: true, riseSetStep: CATALOG_RISE_SET_STEP }
 
 const CURRENT_YEAR = new Date().getFullYear().toFixed(0)
 
-const args = parseArgs({
+const { values: args } = parseArgs({
 	args: Bun.argv,
-	options: {
-		from: { type: 'string', short: 'f' },
-		to: { type: 'string', short: 't' },
-	},
 	allowPositionals: true,
+	options: {
+		from: { type: 'string' },
+		to: { type: 'string' },
+		success: { type: 'boolean', default: false },
+		save: { type: 'boolean', default: false },
+	},
 })
 
-const FROM_YEAR = +(args.values.from || CURRENT_YEAR)
-const TO_YEAR = +(args.values.to || FROM_YEAR)
+const FROM_YEAR = +(args.from?.trim() || CURRENT_YEAR)
+const TO_YEAR = +(args.to?.trim() || FROM_YEAR)
 
 if (!Number.isFinite(FROM_YEAR) || !Number.isFinite(TO_YEAR)) {
 	console.error('invalid from/to year:', FROM_YEAR, TO_YEAR)
@@ -172,7 +182,7 @@ const MAP_WIDTH = 2400
 const MAP_HEIGHT = 1200
 const projection = new PlateCarree(0, { scale: MAP_WIDTH / TAU, falseEasting: MAP_WIDTH / 2, falseNorthing: MAP_HEIGHT / 2, yAxisDirection: 'southUp', centralMeridian: 0, longitudeWrapMode: 'pi', maxLatitude: PIOVERTWO })
 
-function validateCatalogGeometry(elements: PolynomialBesselianElements, geometry: SolarEclipseMapGeometry, paths: SolarEclipseMapSvgPaths) {
+function validateCatalogGeometry(eclipse: SolarEclipse, elements: PolynomialBesselianElements, geometry: SolarEclipseMapGeometry, paths: SolarEclipseMapSvgPaths) {
 	for (const [name, point] of Object.entries(geometry.points)) {
 		if (point) {
 			validateCatalogPoint(point, name, true)
@@ -214,7 +224,17 @@ function validateCatalogGeometry(elements: PolynomialBesselianElements, geometry
 		validatePointAnchor(points.P4, 'P4', lines.riseSetCurves, CATALOG_ANCHOR_TOLERANCE)
 	}
 
-	if (centralAxisIntersectsEarth(elements)) {
+	// Cross-check the engine's central classifier against gamma, computed independently by nearestSolarEclipse.
+	// Otherwise a misclassification is self-consistent and invisible: a central eclipse wrongly called
+	// non-central draws no central line, the else branch only confirms the (empty) line is empty, and nothing
+	// fails (the 6255-06-02 total, gamma 0.899, slipped through this way). A clearly central eclipse must pierce
+	// the ellipsoid; a clearly non-central / partial one must not.
+	const absGamma = Math.abs(eclipse.gamma)
+	const isCentral = centralAxisIntersectsEarth(elements)
+	if (eclipse.type !== 'partial' && absGamma < CLEARLY_CENTRAL_GAMMA) catalogAssert(isCentral, 'central eclipse misclassified as non-central')
+	if (absGamma > CLEARLY_NON_CENTRAL_GAMMA) catalogAssert(!isCentral, 'non-central eclipse misclassified as central')
+
+	if (isCentral) {
 		validatePointAnchor(points.C1, 'C1', [lines.centerLine], 1e-9)
 		validatePointAnchor(points.C2, 'C2', [lines.centerLine], 1e-9)
 		catalogAssert(lines.centerLine.length >= 2, 'central line is empty for a central eclipse')
@@ -271,6 +291,11 @@ for (let prevJd = -Infinity, prevLunation = -Infinity; ; ) {
 
 	if (jd >= endJD) break
 
+	const abortTimer = setTimeout(() => {
+		console.info('❌', name, ':', 'timed out', '|', (endTime - startTime).toFixed(0), 'ms', '| time:', eclipse.maximalTime.day + eclipse.maximalTime.fraction, '| type:', eclipse.type, '| gamma:', eclipse.gamma.toFixed(6), '| magnitude:', eclipse.magnitude.toFixed(4))
+		process.exit(-1)
+	}, 5000)
+
 	catalogAssert(jd > prevJd, 'catalog enumeration did not advance in time')
 	catalogAssert(eclipse.lunation > prevLunation, 'catalog enumeration did not advance in lunation')
 
@@ -282,16 +307,19 @@ for (let prevJd = -Infinity, prevLunation = -Infinity; ; ) {
 	const geometry = computeSolarEclipseMapGeometry(eclipse, elements, SOLAR_ECLIPSE_MAP_GEOMETRY_OPTIONS)
 	const paths = solarEclipseMapToSvgPaths(geometry, projection)
 	const endTime = performance.now()
-	const file = Bun.file(`data/eclipse/${name}.svg`)
+	const file = Bun.file(`data/eclipse/${name}-${eclipse.type}.svg`)
 
 	try {
-		validateCatalogGeometry(elements, geometry, paths)
-		await removeFileIfExists(file)
-		console.info('✅', name, '|', (endTime - startTime).toFixed(0), 'ms')
+		validateCatalogGeometry(eclipse, elements, geometry, paths)
+		if (args.save) await draw(file, paths)
+		else await removeFileIfExists(file)
+		if (args.success) console.info('✅', name, '| type:', eclipse.type, '| gamma:', eclipse.gamma.toFixed(6), '| magnitude:', eclipse.magnitude.toFixed(4), '|', (endTime - startTime).toFixed(0), 'ms')
 	} catch (e) {
 		await draw(file, paths)
-		console.info('❌', name, ':', (e as Error).message, '|', (endTime - startTime).toFixed(0), 'ms', '| time:', eclipse.maximalTime.day + eclipse.maximalTime.fraction, '| type:', eclipse.type, '| gamma:', eclipse.gamma.toFixed(6), '| magnitude:', eclipse.gamma.toFixed(4))
+		console.info('❌', name, ':', (e as Error).message, '|', (endTime - startTime).toFixed(0), 'ms', '| time:', eclipse.maximalTime.day + eclipse.maximalTime.fraction, '| type:', eclipse.type, '| gamma:', eclipse.gamma.toFixed(6), '| magnitude:', eclipse.magnitude.toFixed(4))
 		failed++
+	} finally {
+		clearInterval(abortTimer)
 	}
 
 	prevJd = jd
@@ -301,3 +329,5 @@ for (let prevJd = -Infinity, prevLunation = -Infinity; ; ) {
 }
 
 console.info(failed, 'failed of', total, 'eclipses')
+
+process.exitCode = failed
