@@ -112,7 +112,7 @@ describe('local circumstances', () => {
 		expect(c.visibility.kind).toBe('geometricOnlyBelowHorizon')
 		expect(c.visibility.hasGeometricEclipse).toBe(true)
 		expect(c.visibility.hasObservableEclipse).toBe(false)
-	})
+	}, 2000)
 
 	test('detects an observable culmination sliver between below-horizon contacts', () => {
 		// Mazatlan's eclipse straddles local noon: every contact is below ~73.5 deg, but the Sun climbs to a

@@ -517,17 +517,13 @@ interface BesselianElements {
 	dmu: number
 	// Derivative of the declination d with respect to normalized polynomial time.
 	dd: number
-	// Derivative of l1 with respect to normalized polynomial time.
-	dl1: number
-	// Derivative of l2 with respect to normalized polynomial time.
-	dl2: number
 	tanF1: number
 	tanF2: number
 }
 
 // Allocates a zeroed BesselianElements buffer for reuse across hot solver iterations.
 function createBesselianElements(): BesselianElements {
-	return { x: 0, y: 0, l1: 0, l2: 0, d: 0, mu: 0, dx: 0, dy: 0, dmu: 0, dd: 0, dl1: 0, dl2: 0, tanF1: 0, tanF2: 0 }
+	return { x: 0, y: 0, l1: 0, l2: 0, d: 0, mu: 0, dx: 0, dy: 0, dmu: 0, dd: 0, tanF1: 0, tanF2: 0 }
 }
 
 // Reused buffer. Safe as a single module scratch: those scans are sequential and never re-enter each other.
@@ -546,8 +542,6 @@ function evaluateBesselianAtTInto(out: BesselianElements, pbe: PolynomialBesseli
 	out.dy = evaluatePolynomialDerivative(pbe.y, t)
 	out.dmu = evaluatePolynomialDerivative(pbe.mu, t)
 	out.dd = evaluatePolynomialDerivative(pbe.d, t)
-	out.dl1 = evaluatePolynomialDerivative(pbe.l1, t)
-	out.dl2 = evaluatePolynomialDerivative(pbe.l2, t)
 	out.tanF1 = pbe.tanF1
 	out.tanF2 = pbe.tanF2
 	return out
@@ -1429,9 +1423,15 @@ function evaluateCurveIterationState(state: CurveIterationState, be: BesselianEl
 	const cosH = Math.cos(H)
 	const sinPhi = Math.sin(phi)
 	const cosPhi = Math.cos(phi)
-	const U = Math.atan(F * Math.tan(phi))
-	const rhoSinPhi = F * Math.sin(U)
-	const rhoCosPhi = Math.cos(U)
+	// Reduced (geocentric) latitude functions rho*sin(phi') and rho*cos(phi') with phi' = atan(F tan phi).
+	// Computed directly from sin/cos phi as cosPhi / sqrt(latDenom) and F^2 sinPhi / sqrt(latDenom), where
+	// latDenom = cos^2 phi + F^2 sin^2 phi (the same denominator the dphi derivatives below reuse). This avoids
+	// the tan/atan/sin/cos of the intermediate reduced latitude on every Newton iteration (a hot path), and is
+	// more stable near the poles where tan(phi) blows up. Algebraically identical to F sin(U) and cos(U).
+	const latDenom = cosPhi * cosPhi + F * F * sinPhi * sinPhi
+	const latDenomRoot = Math.sqrt(latDenom)
+	const rhoSinPhi = (F * F * sinPhi) / latDenomRoot
+	const rhoCosPhi = cosPhi / latDenomRoot
 	let ksi = rhoCosPhi * sinH
 	let eta = rhoSinPhi * cosD - rhoCosPhi * cosH * sinD
 	let zeta = rhoSinPhi * sinD + rhoCosPhi * cosH * cosD
@@ -1471,7 +1471,6 @@ function evaluateCurveIterationState(state: CurveIterationState, be: BesselianEl
 	// spherical approximation -d(rhoCosPhi)/dphi ~ rhoSinPhi and d(rhoSinPhi)/dphi ~ rhoCosPhi:
 	//   -d(rhoCosPhi)/dphi = rhoSinPhi / (cos^2 phi + F^2 sin^2 phi)
 	//    d(rhoSinPhi)/dphi = F^2 rhoCosPhi / (cos^2 phi + F^2 sin^2 phi)
-	const latDenom = cosPhi * cosPhi + F * F * sinPhi * sinPhi
 	const dRhoCos = rhoSinPhi / latDenom
 	const dRhoSin = (F * F * rhoCosPhi) / latDenom
 	const Q1 = b * sinH * dRhoCos

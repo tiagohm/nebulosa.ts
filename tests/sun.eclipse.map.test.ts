@@ -1479,7 +1479,7 @@ describe('branch-aware curve topology', () => {
 	test('2006-09-22 southern penumbral limit joins its cusp fragments', () => {
 		const { geometry } = geometryFor(2006, 9, 1)
 		expect(geometry.lines.penumbraSouth).toHaveLength(1)
-	})
+	}, 2000)
 
 	test('2082-08-24 keeps the southern penumbral fold connected through S2', () => {
 		const { geometry } = geometryFor(2082, 8, 1)
@@ -1557,7 +1557,7 @@ describe('branch-aware curve topology', () => {
 		for (const branch of branches) {
 			for (let k = 1; k < branch.length; k++) expect(sphericalSeparation(branch[k - 1].x, branch[k - 1].y, branch[k].x, branch[k].y)).toBeLessThan(foldThreshold)
 		}
-	})
+	}, 1500)
 
 	// 1977-04-08 (S1) and 1994-05-10 (N2) are oblique partial limits whose penumbral terminator cusp is the
 	// upper limb crossing while the traced rise/set branch follows the lower crossing ~2-3 deg away. Forcing
@@ -1578,7 +1578,7 @@ describe('branch-aware curve topology', () => {
 			for (const branch of geometry.lines.riseSetCurves) {
 				for (let k = 1; k < branch.length; k++) expect(sphericalSeparation(branch[k - 1].x, branch[k - 1].y, branch[k].x, branch[k].y)).toBeLessThan(deg(1.5))
 			}
-		})
+		}, 2000)
 	}
 
 	test('2024-04-08 connects N2 to the northern penumbral limit', () => {
@@ -1589,7 +1589,7 @@ describe('branch-aware curve topology', () => {
 		expect(branch).toBeDefined()
 		expect(branch!.length).toBeGreaterThan(100)
 		expect(Math.min(sphericalSeparation(N2.x, N2.y, branch![0].x, branch![0].y), sphericalSeparation(N2.x, N2.y, branch!.at(-1)!.x, branch!.at(-1)!.y))).toBeLessThan(1e-9)
-	})
+	}, 2500)
 
 	for (const fixture of CASES) {
 		describe(fixture.name, () => {
@@ -1794,7 +1794,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(geometry.points.N1!.y).toBeLessThan(geometry.points.S1!.y)
 		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(52.005), deg(10.858))).toBeLessThan(deg(0.5))
 		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(-164.075), deg(37.093))).toBeLessThan(deg(0.5))
-	})
+	}, 2000)
 
 	// An annular (both-limit) eclipse names the penumbral extremes chronologically -- N1/S1 where
 	// each limit begins, N2/S2 where it ends -- not by latitude. Regression for the 2001-12-14 annular, where
@@ -1817,7 +1817,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(sphericalSeparation(geometry.points.N2!.x, geometry.points.N2!.y, deg(-95.3), deg(57.93))).toBeLessThan(deg(0.5))
 		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(160.89), deg(0.6))).toBeLessThan(deg(0.5))
 		expect(sphericalSeparation(geometry.points.S2!.x, geometry.points.S2!.y, deg(-62.29), deg(-15.54))).toBeLessThan(deg(0.5))
-	})
+	}, 3000)
 })
 
 describe('reference data and conventions', () => {
