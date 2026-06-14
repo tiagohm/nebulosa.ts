@@ -2311,8 +2311,10 @@ function findFixedSeedCurveArcs(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const refractionMode = options.refractionMode ?? DEFAULT_REFRACTION_MODE
 	const coverageTolerance = CURVE_SPATIAL_EPSILON
+	const n = knownBranches.length
+	const coverageBranches = new Array<GeoBranch>(n)
+	for (let b = 0; b < n; b++) coverageBranches[b] = knownBranches[b]
 	const branches: GeoCurve = []
-	const coverageBranches = knownBranches.slice()
 
 	for (let s = 0; s < CURVE_SEED_LATITUDES_LENGTH; s++) {
 		const seedLatitude = CURVE_SEED_LATITUDES[s]
