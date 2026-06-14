@@ -1788,6 +1788,37 @@ function mergeBranchesAtCusp(a: GeoBranch, b: GeoBranch, bridge: GeoBranch, endp
 	return out
 }
 
+// Re-anchors a bridge that solved between endA and b's far endpoint but actually threads through b's near
+// endpoint first. A limit folding around a pole connects branchA's endpoint to b's near endpoint by an arc
+// that does not cross the great-circle meridian between those two near endpoints (so bridging them directly
+// finds nothing), yet bridging to b's FAR endpoint succeeds — its midpoint meridian does cross the fold — and
+// then runs along b to reach it. Splicing that whole bridge doubles back over b (a retrace). Instead keep the
+// bridge only up to where it first reaches b's near endpoint (the genuine fold arc) and append b forward from
+// there, giving branchA -> fold -> b as one arc. Returns undefined when the bridge never reaches that
+// endpoint, i.e. the overlap is a real retrace and not a fold. e.g. the 6174-10-22 annular umbra-north limit.
+function mergeFoldThroughBranchEndpoint(branchA: GeoBranch, branchB: GeoBranch, bridge: GeoBranch, endpointA: 0 | 1, endpointB: 0 | 1, tolerance: Angle) {
+	if (bridge.length === 0) return undefined
+
+	// b's near (re-anchor) endpoint is the one opposite the joint endB.
+	const nearEndpoint = endpointB === 1 ? branchB[0] : branchB.at(-1)!
+	let cut = -1
+	let cutDistance = tolerance
+
+	for (let k = 1; k < bridge.length; k++) {
+		const distance = angularDistance(bridge[k], nearEndpoint)
+		if (distance <= cutDistance) {
+			cutDistance = distance
+			cut = k
+		}
+	}
+
+	// The bridge must reach b's near endpoint after a real fold prefix; otherwise this is a genuine retrace.
+	if (cut <= 0) return undefined
+
+	const foldBridge = bridge.slice(0, cut)
+	return mergeBranchesAtCusp(branchA, branchB, foldBridge, endpointA, endpointB === 1 ? 0 : 1)
+}
+
 // Maximum endpoint gap (radians) a cusp reconnection will attempt to bridge. The fully continuous re-solve
 // below is the real gate; this only bounds the work so obviously unrelated far branches are not probed.
 const CUSP_RECONNECT_LIMIT = 20 * DEG2RAD
@@ -1985,8 +2016,18 @@ function reconnectBranchCusps(branches: GeoCurve, pbe: PolynomialBesselianElemen
 
 						// Orient A so endpoint ea is the joint (reverse when it is the start) and B so endpoint eb
 						// is the joint (reverse when it is the end), then splice the bridge between them.
-						const merged = mergeBranchesAtCusp(branchA, branchB, bridge, ea, eb)
-						if (branchRetraces(merged, maxAngularStep, CUSP_RECONNECT_OVERLAP_ARC)) continue
+						let merged = mergeBranchesAtCusp(branchA, branchB, bridge, ea, eb)
+						if (branchRetraces(merged, maxAngularStep, CUSP_RECONNECT_OVERLAP_ARC)) {
+							// A pole-encircling fold's bridge reaches branchB's far endpoint by running along it,
+							// so the straight splice doubles back. Retry anchoring at branchB's near endpoint with
+							// just the fold arc; if that still retraces it is a real overlap, so leave them split.
+							// Only in the pre-split reconnect (allowTouchingMerge true): the post-split pass must
+							// keep the apex-split halves of one limit separate, and they touch at the apex with a
+							// fold continuity that this would otherwise re-merge, undoing the split.
+							const folded = allowTouchingMerge ? mergeFoldThroughBranchEndpoint(branchA, branchB, bridge, ea, eb, maxAngularStep) : undefined
+							if (!folded || branchRetraces(folded, maxAngularStep, CUSP_RECONNECT_OVERLAP_ARC)) continue
+							merged = folded
+						}
 
 						bestGap = gap
 						bestA = a
