@@ -121,13 +121,15 @@ const CURVE_SEED_LATITUDES = [0, 30 * DEG2RAD, -30 * DEG2RAD, 60 * DEG2RAD, -60 
 const CURVE_SEED_LATITUDES_LENGTH = CURVE_SEED_LATITUDES.length
 // Denser latitude seeds (radians) used only by the midpoint-bridging solver (solveCurveMidpointBetween),
 // not by the per-longitude scan. Reconnecting two branches across a near-pole fold needs a finer sweep than
-// CURVE_SEED_LATITUDES: the in-between curve point can sit in a narrow Newton convergence basin between the
-// coarse seeds (notably the 80..89.5 deg gap), and missing it leaves a genuinely continuous limit drawn as
-// two split arcs (e.g. the 4671-01-16 grazing annular umbra-north limit, whose bridge point converges only
-// near -82 deg). The 3 deg grid spans -88..89 deg so both poles and that gap are covered; kept off the hot
-// scan so the common case pays nothing.
+// CURVE_SEED_LATITUDES: the in-between curve point sits in a narrow Newton convergence basin that the coarse
+// scan seeds miss, leaving a genuinely continuous limit drawn as two split arcs. Near-pole basins are the
+// narrowest and most erratically placed (meridians converge), so they get 1 deg spacing for |lat| >= 70 deg
+// (the 4671-01-16 bridge point converges only near -82 deg, the 6452-11-08 only near -84 deg, which a 3 deg
+// grid straddles); the rest stays at 3 deg. Off the hot scan, so the common case pays nothing.
 const CURVE_BRIDGE_SEED_LATITUDES: number[] = []
-for (let degrees = -88; degrees <= 89; degrees += 3) CURVE_BRIDGE_SEED_LATITUDES.push(degrees * DEG2RAD)
+for (let degrees = -89; degrees <= 89; degrees++) {
+	if (Math.abs(degrees) >= 70 || degrees % 3 === 0) CURVE_BRIDGE_SEED_LATITUDES.push(degrees * DEG2RAD)
+}
 // Two curve points reached from different seeds at the same instant are the same location; they are
 // collapsed only when also within this angular distance (~0.6 km), so a genuine time fold that places
 // two distinct locations at nearly the same instant keeps both.
