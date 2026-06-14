@@ -72,6 +72,19 @@ const CONTACT_SEARCH_EXPANSION_STEP_SECONDS = 15 * 60
 // Root tolerance for contact and central-endpoint instants, in days (~1 ms, affordable because the iterations converge quadratically).
 const CONTACT_TOLERANCE_DAYS = 1e-8
 const SOLVER_MAX_ITERATIONS = 50
+// Per-iteration cap on the curve solver's latitude Newton step, in radians. Near a grazing high-latitude
+// partial limit (e.g. the shallow 7662-04-28 partial, magnitude 0.22) the coupled Newton step can be tens of
+// degrees on the first iterations and overshoot the pole, after which every seed is rejected and the limit
+// renders empty. Clamping the step magnitude keeps the iterate in a sane region so it can still converge; it
+// never triggers near a well-conditioned solution because converged steps are far smaller.
+const SOLVER_MAX_LATITUDE_STEP = 10 * DEG2RAD
+// Per-iteration cap on the curve solver's normalized-time Newton step. Same rationale as the latitude clamp:
+// an ill-conditioned shallow-eclipse seed can predict a huge jump to closest approach that lands far outside
+// the fitted polynomial window; limiting it lets the iteration walk in instead of diverging.
+const SOLVER_MAX_TIME_STEP = 2
+// Latitude (radians) a Newton iterate is clamped to when it lands on or beyond a pole, a hair inside
+// +/-PI/2 so the reduced-latitude functions stay finite and the iteration can recover toward the interior.
+const POLE_LATITUDE_CLAMP = PIOVERTWO - 1e-6
 // Curve solver latitude convergence threshold: |deltaPhi| < 1e-4 deg expressed in radians.
 const SOLVER_TOLERANCE = 1e-4
 // Curve solver time convergence threshold, expressed directly in days (~0.1 s) instead of normalized
@@ -1517,10 +1530,18 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 	for (let iteration = 0; iteration < SOLVER_MAX_ITERATIONS; iteration++) {
 		if (!evaluateCurveIterationState(state, be, pbe, longitude, longitudeCorrection, t, phi, i, G, refractionMode)) return undefined
 
-		const tau = state.tau
-		const deltaPhi = state.deltaPhi
+		// Clamp the raw Newton steps so an ill-conditioned shallow/high-latitude seed cannot overshoot the
+		// pole or jump outside the polynomial window on a single iteration (see SOLVER_MAX_* constants). A
+		// clamped step is large, so it never satisfies the convergence test below; it only damps the path.
+		let tau = state.tau
+		let deltaPhi = state.deltaPhi
+		if (Math.abs(deltaPhi) > SOLVER_MAX_LATITUDE_STEP) deltaPhi = Math.sign(deltaPhi) * SOLVER_MAX_LATITUDE_STEP
+		if (Math.abs(tau) > SOLVER_MAX_TIME_STEP) tau = Math.sign(tau) * SOLVER_MAX_TIME_STEP
 		const nextT = t + tau
-		const nextPhi = phi + deltaPhi
+		let nextPhi = phi + deltaPhi
+		// Keep a latitude iterate that lands on or past a pole just inside it instead of rejecting outright,
+		// so the next iteration can step back toward an interior solution.
+		if (Math.abs(nextPhi) > POLE_LATITUDE_CLAMP) nextPhi = Math.sign(nextPhi) * POLE_LATITUDE_CLAMP
 
 		if (!Number.isFinite(nextT) || !Number.isFinite(nextPhi) || Math.abs(nextPhi) > PIOVERTWO) return undefined
 
