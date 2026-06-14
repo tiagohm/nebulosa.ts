@@ -1222,49 +1222,16 @@ function centralAxisDistanceSquaredAtT(pbe: PolynomialBesselianElements, t: numb
 	return be.x * be.x + y1 * y1
 }
 
-// Tests whether the shadow axis intersects the Earth ellipsoid anywhere in the fitted window, replacing
-// the gamma-threshold heuristic with the actual geometry: minimize x^2 + (omega y)^2 over the search span
-// and report central when the minimum drops to or below 1. Uses the same contactSearchSpan window policy as
-// the contact/endpoint searches, so the central classification and the central-line endpoints agree (P3.3).
+// Tests whether the shadow axis intersects the Earth ellipsoid, replacing the gamma-threshold heuristic with
+// the actual geometry: the axis pierces the ellipsoid exactly when its closest approach to the limb center,
+// min x^2 + (omega y)^2, drops to or below 1. The minimum is located by findGreatestEclipseT, whose window
+// grows to track a far-future maximumTime that sits hours from the eclipse; evaluating the distance there
+// keeps the central classification, the greatest-eclipse point and the central-line endpoints (all built on
+// findGreatestEclipseT) consistent. A fixed window centered on a coarse maximumTime would miss the real
+// closest approach and wrongly classify a central eclipse as non-central (e.g. the 6255-06-02 total at
+// gamma 0.899, whose axis closest approach of 0.90 sits ~6.4 h past maximumTime, well beyond a 3.5 h window).
 export function centralAxisIntersectsEarth(pbe: PolynomialBesselianElements) {
-	const f = (t: number) => centralAxisDistanceSquaredAtT(pbe, t)
-	const span = DEFAULT_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC / pbe.step
-	// Center the scan on maximumTime, exactly like the contact/endpoint searches, so the central
-	// classification and the central-line endpoints share one window (P3.3). t = 0 is time0 (the rounded
-	// hour), which can sit up to half an hour from maximumTime; scanning around tMaximum keeps the closest
-	// approach symmetric in the window even for callers passing a tight custom span.
-	const tMaximum = (toJulianDay(pbe.maximumTime) - toJulianDay(pbe.time0)) / pbe.step
-	const from = tMaximum - span
-	const to = tMaximum + span
-	const steps = 64
-	let bestT = tMaximum
-	let best = Infinity
-
-	for (let k = 0; k <= steps; k++) {
-		const t = from + ((to - from) * k) / steps
-		const value = f(t)
-		if (value < best) {
-			best = value
-			bestT = t
-		}
-	}
-
-	if (best <= 1) return true
-
-	const half = (to - from) / steps
-	// Clamp the refinement bracket to the fitted span so a minimum found at the scan edge never
-	// extrapolates the cubic beyond [from, to].
-	const lo = Math.max(from, bestT - half)
-	const hi = Math.min(to, bestT + half)
-
-	try {
-		const minimum = brentMinimize(f, lo, hi)
-		if (minimum.value < best) best = minimum.value
-	} catch {
-		// Keep the coarse-scan minimum if the refinement bracket is rejected.
-	}
-
-	return best <= 1
+	return centralAxisDistanceSquaredAtT(pbe, findGreatestEclipseT(pbe)) <= 1
 }
 
 // Maximum allowed gap (days) between maximumTime and the fitted closest-approach instant before

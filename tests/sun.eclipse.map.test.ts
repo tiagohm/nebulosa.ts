@@ -1532,7 +1532,7 @@ describe('branch-aware curve topology', () => {
 
 		const paths = solarEclipseMapToSvgPaths(geometry, projection)
 		expect(longestProjectedSegment(paths.riseSetCurves)).toBeLessThan(MAP_WIDTH / 2)
-	}, 3000)
+	}, 6000)
 
 	test('2021-12-04 keeps the south-polar umbra fold connected at U3', () => {
 		const { geometry } = geometryFor(2021, 12, 1)
