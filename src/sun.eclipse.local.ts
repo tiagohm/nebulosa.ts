@@ -1721,11 +1721,10 @@ export interface LocalSolarEclipseListEntry {
 //
 // Eclipses are enumerated with nearestSolarEclipse, walking forward one eclipse per step (the Meeus series is
 // cheap, ~2-3 eclipses per scanned year, and only the eclipses that touch the Earth's surface are emitted).
-// When a sunMoonPosition provider is given, each candidate is filtered by a geometric local-visibility test:
+// Each candidate is filtered by a geometric local-visibility test using the required sunMoonPosition provider:
 // the Besselian elements are built once and returned as `elements`, so a caller computing full local
-// circumstances afterwards never rebuilds them. This is the performant path -- the costly ephemeris work (the
-// Besselian fit) happens exactly once per eclipse and is handed back. Without a provider the elements cannot be
-// evaluated, so no location test runs and every eclipse in the interval is returned with `elements` undefined.
+// circumstances afterwards never rebuilds them. The costly ephemeris work (the Besselian fit) happens exactly
+// once per eclipse and is handed back.
 //
 // The test is purely geometric: an eclipse is included when its shadow reaches the location even if the Sun is
 // below the local horizon there. Pass the returned `elements` to computeLocalSolarEclipseCircumstances to
