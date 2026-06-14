@@ -34,6 +34,8 @@ jobs:
 
             - name: Setup Bun
               uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: canary
 
             - name: Install Dependencies
               if: ${{ matrix.os == 'ubuntu-24.04' }}
@@ -58,7 +60,7 @@ jobs:
 
             - name: Run Tests
               if: ${{ matrix.os == 'ubuntu-24.04' }}
-              run: RUN_SKIPPED_TESTS=false bun test --timeout 1000
+              run: RUN_SKIPPED_TESTS=false bun test --timeout 1000 --parallel
 
             - name: Run Tests
               if: ${{ matrix.os != 'ubuntu-24.04' }}
