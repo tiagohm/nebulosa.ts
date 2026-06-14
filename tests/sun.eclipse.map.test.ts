@@ -880,16 +880,31 @@ test('rise set curves are separate drawable arrays', () => {
 })
 
 test('splitAtMaxAbsLatitude splits circumpolar-like limit arrays', () => {
+	// A true fold-back: longitude rises to the apex then reverses, so the limit doubles back near the pole.
 	const split = splitAtMaxAbsLatitude([
 		{ x: 0, y: deg(10) },
 		{ x: deg(1), y: deg(80) },
-		{ x: deg(2), y: deg(20) },
+		{ x: 0, y: deg(20) },
 	])
 
 	expect(split).toHaveLength(2)
 	// The fold apex is shared between both branches so they meet without a gap.
 	expect(split[0].map((point) => point.y)).toEqual([deg(10), deg(80)])
 	expect(split[1].map((point) => point.y)).toEqual([deg(80), deg(20)])
+})
+
+test('splitAtMaxAbsLatitude keeps a latitude peak with monotonic longitude whole', () => {
+	// Longitude is monotonic across the apex, so the arc merely peaks in latitude without folding back: it
+	// is one continuous limit and must not be split into two apex-sharing branches (which would look like a
+	// bridgeable gap), as for the 8291-08-05 umbra-north and 6026-10-07 umbra-south limits.
+	const split = splitAtMaxAbsLatitude([
+		{ x: 0, y: deg(10) },
+		{ x: deg(1), y: deg(80) },
+		{ x: deg(2), y: deg(20) },
+	])
+
+	expect(split).toHaveLength(1)
+	expect(split[0]).toHaveLength(3)
 })
 
 test('splitAtMaxAbsLatitude keeps non-folding limits whole instead of emitting degenerate segments', () => {
@@ -1510,17 +1525,10 @@ describe('branch-aware curve topology', () => {
 		const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: STEP, maxAngularStep: STEP, includeRiseSetCurves: true, riseSetStep: 600 })
 		const { N1, S1 } = geometry.points
 
-		expect(geometry.lines.umbraNorth.filter((branch) => branch.length >= 2)).toHaveLength(2)
-		expect(geometry.lines.umbraSouth.filter((branch) => branch.length >= 2)).toHaveLength(2)
-		const [southA, southB] = geometry.lines.umbraSouth
-		expect(
-			Math.min(
-				sphericalSeparation(southA[0].x, southA[0].y, southB[0].x, southB[0].y),
-				sphericalSeparation(southA[0].x, southA[0].y, southB.at(-1)!.x, southB.at(-1)!.y),
-				sphericalSeparation(southA.at(-1)!.x, southA.at(-1)!.y, southB[0].x, southB[0].y),
-				sphericalSeparation(southA.at(-1)!.x, southA.at(-1)!.y, southB.at(-1)!.x, southB.at(-1)!.y),
-			),
-		).toBeLessThan(1e-9)
+		// Each umbral limit sweeps near the pole but stays monotonic in longitude, so it is one continuous
+		// arc, not a fold split at its latitude apex.
+		expect(geometry.lines.umbraNorth.filter((branch) => branch.length >= 2)).toHaveLength(1)
+		expect(geometry.lines.umbraSouth.filter((branch) => branch.length >= 2)).toHaveLength(1)
 		expect(geometry.lines.penumbraNorth).toHaveLength(0)
 		expect(geometry.lines.penumbraSouth).toHaveLength(1)
 		expect(N1).toBeDefined()
@@ -1538,11 +1546,13 @@ describe('branch-aware curve topology', () => {
 		expect(longestProjectedSegment(paths.riseSetCurves)).toBeLessThan(MAP_WIDTH / 2)
 	}, 6000)
 
-	test('2021-12-04 keeps the south-polar umbra fold connected at U3', () => {
+	test('2021-12-04 keeps the south-polar umbra connected at U3', () => {
 		const { geometry } = geometryFor(2021, 12, 1)
 		const U3 = geometry.points.U3!
 
-		expect(geometry.lines.umbraSouth).toHaveLength(2)
+		// The south-polar umbra limit is monotonic in longitude across its latitude apex, so it stays a
+		// single connected arc (no fold-back to split), with the U3 contact lying on it.
+		expect(geometry.lines.umbraSouth).toHaveLength(1)
 		expect(Math.min(...geometry.lines.umbraSouth.flat().map((point) => sphericalSeparation(U3.x, U3.y, point.x, point.y)))).toBeLessThan(1e-9)
 	}, 3000)
 

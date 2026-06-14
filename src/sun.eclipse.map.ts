@@ -2503,6 +2503,16 @@ export function splitAtMaxAbsLatitude(points: GeoBranch) {
 	// instead of emitting a degenerate single-point segment.
 	if (index <= 0 || index >= points.length - 1) return [points.slice()]
 
+	// A latitude apex only marks a true circumpolar fold when the curve doubles back in longitude there.
+	// A smooth arc that merely peaks in latitude with monotonic longitude is one continuous limit; splitting
+	// it leaves two branches sharing the apex whose far endpoints look bridgeable to each other through the
+	// shared apex -- a false split flagged as a gap (e.g. the 8291-08-05 umbra-north and 6026-10-07
+	// umbra-south limits, both monotonic in longitude across a sub-polar latitude maximum). Only split when
+	// the longitude step reverses sign across the apex (wrap-aware), the signature of an actual fold-back.
+	const before = normalizePI(points[index].x - points[index - 1].x)
+	const after = normalizePI(points[index + 1].x - points[index].x)
+	if (before === 0 || after === 0 || before > 0 === after > 0) return [points.slice()]
+
 	// Share the apex point between both branches so they meet without a visible gap.
 	return [points.slice(0, index + 1), points.slice(index)]
 }
