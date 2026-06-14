@@ -140,9 +140,9 @@ export interface LocalSolarEclipseCircumstances {
 		// Moon/Sun apparent diameter ratio at maximum, or null when unavailable.
 		readonly moonSunDiameterRatio: number | null
 		// Partial-phase duration in seconds (C4 - C1), or null.
-		readonly partialPhaseDurationSeconds: number | null
+		readonly partialPhaseDuration: number | null
 		// Central-phase duration in seconds (C3 - C2), or null.
-		readonly centralPhaseDurationSeconds: number | null
+		readonly centralPhaseDuration: number | null
 		// Width (km) of the local central-shadow chord through the observer at maximum, measured across the
 		// path on a spherical Earth. This is NOT necessarily the canonical path width reported on the central
 		// line (Astrarium/EclipseWise): for an off-center observer it is the chord through their own location.
@@ -351,7 +351,7 @@ export interface SolarEclipseExtremeCircumstances {
 	// Width of the central (umbral/antumbral) path on the ground in km; null when the point is not central.
 	readonly pathWidthKm: number | null
 	// Duration of the central (total/annular) phase in seconds; null when the point is not central.
-	readonly centralDurationSeconds: number | null
+	readonly centralDuration: number | null
 	// Local eclipse character at the event; null when the point is not central.
 	readonly kind: GeoPoint['kind'] | null
 }
@@ -1337,8 +1337,8 @@ function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], s
 	return {
 		maximalMagnitude: MAX ? MAX.magnitude : null,
 		moonSunDiameterRatio: MAX ? MAX.moonSunDiameterRatio : null,
-		partialPhaseDurationSeconds: C1 && C4 ? (C4.jd - C1.jd) * DAYSEC : null,
-		centralPhaseDurationSeconds: C2 && C3 ? (C3.jd - C2.jd) * DAYSEC : null,
+		partialPhaseDuration: C1 && C4 ? (C4.jd - C1.jd) * DAYSEC : null,
+		centralPhaseDuration: C2 && C3 ? (C3.jd - C2.jd) * DAYSEC : null,
 		shadowPathWidthKm,
 	}
 }
@@ -1613,7 +1613,7 @@ function centralPhaseDurationSeconds(pbe: PolynomialBesselianElements, longitude
 function extremeCircumstancesAt(pbe: PolynomialBesselianElements, point: GeoPoint): SolarEclipseExtremeCircumstances {
 	const jd = point.jd!
 	const time = timeAtJulianDay(pbe.time0, jd)
-	const centralDurationSeconds = centralPhaseDurationSeconds(pbe, point.x, point.y, jd)
+	const centralDuration = centralPhaseDurationSeconds(pbe, point.x, point.y, jd)
 
 	return {
 		longitude: point.x,
@@ -1622,9 +1622,9 @@ function extremeCircumstancesAt(pbe: PolynomialBesselianElements, point: GeoPoin
 		deltaT: pbe.deltaT,
 		sunAltitude: solarAltitudeAtPoint(pbe, point),
 		sunAzimuth: solarAzimuthAtPoint(pbe, point),
-		pathWidthKm: centralDurationSeconds === null ? null : computeLocalShadowPathWidthKm(pbe, point.x, point.y, jd),
-		centralDurationSeconds,
-		kind: centralDurationSeconds === null ? null : centralLineKind(pbe, jd),
+		pathWidthKm: centralDuration === null ? null : computeLocalShadowPathWidthKm(pbe, point.x, point.y, jd),
+		centralDuration,
+		kind: centralDuration === null ? null : centralLineKind(pbe, jd),
 	}
 }
 

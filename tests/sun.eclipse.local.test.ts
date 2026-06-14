@@ -58,8 +58,8 @@ describe('local circumstances', () => {
 		expect(c.visibility.kind).toBe('notVisible')
 		expect(c.visibility.hasGeometricEclipse).toBe(false)
 		expect(c.details.maximalMagnitude).toBeNull()
-		expect(c.details.partialPhaseDurationSeconds).toBeNull()
-		expect(c.details.centralPhaseDurationSeconds).toBeNull()
+		expect(c.details.partialPhaseDuration).toBeNull()
+		expect(c.details.centralPhaseDuration).toBeNull()
 		expect(c.details.shadowPathWidthKm).toBeNull()
 	})
 
@@ -74,9 +74,9 @@ describe('local circumstances', () => {
 		expect(c.events.MAX!.magnitude).toBeGreaterThan(0)
 		expect(c.events.MAX!.magnitude).toBeLessThan(1)
 		// Partial duration is C4 - C1 and is several thousand seconds; the central duration is undefined.
-		expect(c.details.partialPhaseDurationSeconds).toBeCloseTo((c.events.C4!.jd - c.events.C1!.jd) * 86400, 6)
-		expect(c.details.partialPhaseDurationSeconds!).toBeGreaterThan(3600)
-		expect(c.details.centralPhaseDurationSeconds).toBeNull()
+		expect(c.details.partialPhaseDuration).toBeCloseTo((c.events.C4!.jd - c.events.C1!.jd) * 86400, 6)
+		expect(c.details.partialPhaseDuration!).toBeGreaterThan(3600)
+		expect(c.details.centralPhaseDuration).toBeNull()
 	})
 
 	test('total location resolves all five contacts with magnitude above one', () => {
@@ -87,7 +87,7 @@ describe('local circumstances', () => {
 		expect(c.events.MAX!.moonSunDiameterRatio!).toBeGreaterThan(1)
 		expect(c.visibility.hasCentralPhase).toBe(true)
 		expect(c.visibility.centralPhaseKind).toBe('total')
-		expect(c.details.centralPhaseDurationSeconds!).toBeGreaterThan(0)
+		expect(c.details.centralPhaseDuration!).toBeGreaterThan(0)
 		// Contacts are time-ordered C1 < C2 < MAX < C3 < C4.
 		const jds = [c.events.C1!, c.events.C2!, c.events.MAX!, c.events.C3!, c.events.C4!].map((e) => e.jd)
 		for (let i = 1; i < jds.length; i++) expect(jds[i]).toBeGreaterThan(jds[i - 1])
@@ -104,7 +104,7 @@ describe('local circumstances', () => {
 		expect(c.events.MAX!.moonSunDiameterRatio!).toBeLessThan(1)
 		expect(c.events.MAX!.moonSunDiameterRatio!).toBeGreaterThan(0)
 		expect(c.visibility.centralPhaseKind).toBe('annular')
-		expect(c.details.centralPhaseDurationSeconds!).toBeGreaterThan(0)
+		expect(c.details.centralPhaseDuration!).toBeGreaterThan(0)
 	})
 
 	test('an eclipse whose maximum is below the horizon stays geometric but not observable', () => {
@@ -607,7 +607,7 @@ describe('greatest eclipse and greatest duration circumstances', () => {
 		// Path width 195.5 km, central (annular) duration 06m36.74s = 396.74 s.
 		expect(ge.pathWidthKm!).toBeGreaterThan(175)
 		expect(ge.pathWidthKm!).toBeLessThan(205)
-		expect(Math.abs(ge.centralDurationSeconds! - 396.74)).toBeLessThan(8)
+		expect(Math.abs(ge.centralDuration! - 396.74)).toBeLessThan(8)
 	})
 
 	test('1995-04-29 greatest duration matches the published circumstances', () => {
@@ -625,13 +625,13 @@ describe('greatest eclipse and greatest duration circumstances', () => {
 		// Path width 197.2 km, central (annular) duration 06m37.07s = 397.07 s.
 		expect(gd.pathWidthKm!).toBeGreaterThan(175)
 		expect(gd.pathWidthKm!).toBeLessThan(207)
-		expect(Math.abs(gd.centralDurationSeconds! - 397.07)).toBeLessThan(8)
+		expect(Math.abs(gd.centralDuration! - 397.07)).toBeLessThan(8)
 	})
 
 	test('greatest duration lasts at least as long as greatest eclipse and is a distinct, later point', () => {
 		// By definition the greatest-duration point maximizes the central phase, so it is not shorter than the
 		// duration at greatest eclipse, and for this eclipse it lies further along the path and later in time.
-		expect(gd.centralDurationSeconds!).toBeGreaterThanOrEqual(ge.centralDurationSeconds! - 1e-6)
+		expect(gd.centralDuration!).toBeGreaterThanOrEqual(ge.centralDuration! - 1e-6)
 		expect(secondsOfDay(gd.time)).toBeGreaterThan(secondsOfDay(ge.time))
 		expect(sphericalSeparation(ge.longitude, ge.latitude, gd.longitude, gd.latitude)).toBeGreaterThan(deg(1))
 	})
@@ -642,7 +642,7 @@ describe('greatest eclipse and greatest duration circumstances', () => {
 		// Greatest eclipse still resolves a point for a partial eclipse, but without central path/duration.
 		const partialGe = computeGreatestEclipseCircumstances(partialPbe)!
 		expect(partialGe).toBeDefined()
-		expect(partialGe.centralDurationSeconds).toBeNull()
+		expect(partialGe.centralDuration).toBeNull()
 		expect(partialGe.pathWidthKm).toBeNull()
 		expect(partialGe.kind).toBeNull()
 	})
