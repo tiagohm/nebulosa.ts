@@ -59,15 +59,23 @@ const DEFAULT_CONTACT_SEARCH_SPAN_SECONDS = 3.5 * 3600
 // digits out to ~4.5 h there), so expanding the window to bracket such a contact is reliable; this cap
 // bounds the extrapolation so a degenerate residual can never drive an unbounded search.
 const CONTACT_SEARCH_MAX_SPAN_SECONDS = 5.5 * 3600
-// Hard cap (seconds) on the half-width the greatest-eclipse closest-approach search may grow to. Unlike the
+// Floor (seconds) on the half-width the greatest-eclipse closest-approach search may grow to. Unlike the
 // contacts, the greatest-eclipse instant must be found even when a far-future maximumTime sits many hours
 // before the actual eclipse (the published epoch is only a coarse label), so the search window grows past the
-// contact cap until the minimum is bracketed. This bounds that growth: 18 h covers the worst observed offset
-// (the 7855-06-24 closest approach ~12.5 h past a maximumTime ~half a day before the eclipse, where the
-// Besselian x = -6.30 + 0.52 t per hour crosses zero only near +12 h; the 6100-09-30 offset is ~5.9 h) with
-// margin, while a genuinely monotone residual stops here instead of extrapolating the cubic without limit. The
-// fit stays a clean single-well parabola this far out, so a wider window cannot introduce a spurious minimum.
+// contact cap until the minimum is bracketed. The actual cap is max(this, Delta T) (see greatestEclipseSearch-
+// MaxSpan): the offset between the Meeus maximumTime and the true closest approach is empirically ~0.37 * Delta
+// T and rises with it (both are driven by the lunar secular acceleration), e.g. ~5.9 h at 6100-09-30, ~12.5 h
+// at 7855-06-24 (Delta T ~32 h), ~19 h at 9380-02-08 (Delta T ~51 h). Scaling the cap with Delta T brackets the
+// offset with a wide margin (offset < Delta T always) without per-eclipse retuning, while this floor keeps the
+// historical-era cap unchanged where Delta T is small. The window only ever grows until the minimum is interior,
+// so the cap bounds a genuinely monotone residual but does not add work for a real eclipse; the fit stays a
+// clean single-well parabola out to the bracket, so a wider window cannot introduce a spurious minimum.
 const GREATEST_ECLIPSE_SEARCH_MAX_SPAN_SECONDS = 18 * 3600
+// Effective greatest-eclipse search half-width (seconds): the floor above, or Delta T when that is larger, so a
+// far-future maximumTime offset (which scales with Delta T) is always bracketed. deltaT is in seconds.
+function greatestEclipseSearchMaxSpan(deltaT: number) {
+	return Math.max(GREATEST_ECLIPSE_SEARCH_MAX_SPAN_SECONDS, deltaT)
+}
 // Step (seconds) by which each external contact-search edge is pushed outward while the shadow is still on
 // Earth there. Small enough to land just past the contact, then the root scan refines within the bracket.
 const CONTACT_SEARCH_EXPANSION_STEP_SECONDS = 15 * 60
@@ -1272,7 +1280,7 @@ function findGreatestEclipseT(pbe: PolynomialBesselianElements) {
 	// closest approach is ~5.9 h past maximumTime, beyond the 5.5 h cap, with P1 itself ~3.4 h after it). The
 	// window grows until the minimum is interior or the hard cap is reached, so the search walks out to the
 	// eclipse the same way the recentered contact search does.
-	const maxSpan = GREATEST_ECLIPSE_SEARCH_MAX_SPAN_SECONDS / DAYSEC / pbe.step
+	const maxSpan = greatestEclipseSearchMaxSpan(pbe.deltaT) / DAYSEC / pbe.step
 	const steps = 64
 	let span = Math.min(CONTACT_SEARCH_MAX_SPAN_SECONDS / DAYSEC / pbe.step, maxSpan)
 	let from = tMaximum - span
