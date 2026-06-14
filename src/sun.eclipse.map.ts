@@ -134,6 +134,13 @@ const CURVE_TIME_EPSILON_DAYS = 1e-6
 // The poleward seeds stay short of +-90 deg to keep tan(phi) finite.
 const CURVE_SEED_LATITUDES = [0, 30 * DEG2RAD, -30 * DEG2RAD, 60 * DEG2RAD, -60 * DEG2RAD, 80 * DEG2RAD, -80 * DEG2RAD, 89.5 * DEG2RAD, -89.5 * DEG2RAD] as const
 const CURVE_SEED_LATITUDES_LENGTH = CURVE_SEED_LATITUDES.length
+// Fixed-seed fallback rows at or beyond this latitude are scanned densely: documented orphaned arcs occur
+// at near-polar folds, where a missed row can detach U/P contacts from their limit branch.
+const FIXED_SEED_DENSE_MIN_ABS_LATITUDE = 80 * DEG2RAD
+// Non-polar fixed-seed rows are first probed at this longitude spacing. The dense scan runs only when a
+// probe lands on a point not already covered by continuation branches, preserving rare mid-latitude orphans
+// without paying the full redundant scan for every seed row.
+const FIXED_SEED_PROBE_LONGITUDE_STEP = 2 * DEG2RAD
 // Latitude seeds (radians) used only by the midpoint-bridging solver (solveCurveMidpointBetween), not by the
 // per-longitude scan. Reconnecting two branches across a fold needs a finer sweep than CURVE_SEED_LATITUDES:
 // the in-between curve point sits in a narrow Newton convergence basin the coarse scan seeds miss, leaving a
@@ -1685,7 +1692,7 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 		const cleaned = cleanCurveBranch(branch)
 		if (cleaned.length >= 2) branches.push(cleaned)
 	}
-	for (const branch of findFixedSeedCurveArcs(pbe, i, G, options)) {
+	for (const branch of findFixedSeedCurveArcs(pbe, i, G, branches, options)) {
 		const cleaned = cleanCurveBranch(branch)
 		if (cleaned.length >= 2) branches.push(cleaned)
 	}
@@ -2081,6 +2088,14 @@ function pointOnBranch(point: GeoPoint, branch: GeoBranch, tolerance: Angle) {
 	return false
 }
 
+// Whether a point is covered by any known branch within the same angular tolerance pointOnBranch uses.
+function pointOnAnyBranch(point: GeoPoint, branches: GeoCurve, tolerance: Angle) {
+	for (let b = 0; b < branches.length; b++) {
+		if (pointOnBranch(point, branches[b], tolerance)) return true
+	}
+	return false
+}
+
 // Whether host makes branch redundant: branch is the same arc as part of host, up to a short overhang the
 // host did not reach. Every interior point of branch must lie on host (so two genuinely distinct arcs that
 // merely meet at a shared cusp, diverging immediately, are never collapsed), while a contiguous uncovered run
@@ -2238,36 +2253,68 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 // fixed-seed fallback never fires because continuation keeps converging. The far arc, although reachable
 // from a fixed seed nearer its own latitude band, is then never traced (e.g. the C2-side annularity limit of
 // the near-polar 2471-03-22 annular eclipse, leaving U3/U4 with no curve to attach to). Solving each fixed
-// seed independently at every longitude re-anchors it to the arc nearest its band; consecutive in-longitude
-// solutions are linked while within the fold step and split otherwise. Every emitted point already satisfies
-// the magnitude, altitude and residual gates of findEclipseCurvePoint, so the worst case is a duplicate of an
-// arc the continuation scan already found; the caller merges both through deduplicateBranches/reconnect.
-function findFixedSeedCurveArcs(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: SolarEclipseCurveOptions = {}) {
+// seed independently re-anchors it to the arc nearest its band; consecutive in-longitude solutions are linked
+// while within the fold step and split otherwise. Near-polar seed rows always run the dense scan. Non-polar
+// rows first run a coarse probe and densify only when the probe reaches an uncovered point, avoiding the
+// common all-duplicate fallback without dropping rare mid-latitude orphans. Every emitted point already
+// satisfies the magnitude, altitude and residual gates of findEclipseCurvePoint, so the remaining duplicates
+// are merged by deduplicateBranches/reconnect.
+// Probes a non-polar fixed seed at coarse longitudes and returns true when it can reach a curve point not
+// already covered by continuation/fallback branches; such a seed earns the full dense fallback scan.
+function fixedSeedProbeFindsUncoveredArc(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, seedLatitude: Angle, longitudeStep: Angle, refractionMode: RefractionMode, knownBranches: GeoCurve, tolerance: Angle) {
+	const probeStep = Math.max(longitudeStep, FIXED_SEED_PROBE_LONGITUDE_STEP)
+
+	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += probeStep) {
+		const point = findEclipseCurvePoint(pbe, Math.min(longitude, PI), seedLatitude, i, G, refractionMode)
+		if (point && !pointOnAnyBranch(point, knownBranches, tolerance)) return true
+	}
+
+	return false
+}
+
+// Traces one fixed seed densely at every longitude sample, appending continuity arcs to out.
+function pushFixedSeedCurveArcsForSeed(out: GeoCurve, pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, seedLatitude: Angle, longitudeStep: Angle, maxAngularStep: Angle, refractionMode: RefractionMode) {
+	const foldStep = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
+	let current: GeoBranch | undefined
+	let previous: GeoPoint | undefined
+
+	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
+		const lon = Math.min(longitude, PI)
+		const point = findEclipseCurvePoint(pbe, lon, seedLatitude, i, G, refractionMode)
+
+		if (point && previous && angularDistance(previous, point) <= foldStep) {
+			appendRefinedSegment(current!, pbe, previous, point, i, G, maxAngularStep, refractionMode)
+			pushDistinct(current!, point)
+		} else if (point) {
+			current = [point]
+			out.push(current)
+		} else {
+			current = undefined
+		}
+
+		previous = point
+	}
+}
+
+// Runs the adaptive fixed-seed fallback, using knownBranches as the coverage baseline and returning only the
+// dense fallback arcs that were worth tracing for this curve family.
+function findFixedSeedCurveArcs(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, knownBranches: GeoCurve, options: SolarEclipseCurveOptions = {}) {
 	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const refractionMode = options.refractionMode ?? DEFAULT_REFRACTION_MODE
-	const foldStep = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
+	const coverageTolerance = CURVE_SPATIAL_EPSILON
 	const branches: GeoCurve = []
+	const coverageBranches = knownBranches.slice()
 
 	for (let s = 0; s < CURVE_SEED_LATITUDES_LENGTH; s++) {
-		let current: GeoBranch | undefined
-		let previous: GeoPoint | undefined
-
-		for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
-			const lon = Math.min(longitude, PI)
-			const point = findEclipseCurvePoint(pbe, lon, CURVE_SEED_LATITUDES[s], i, G, refractionMode)
-
-			if (point && previous && angularDistance(previous, point) <= foldStep) {
-				appendRefinedSegment(current!, pbe, previous, point, i, G, maxAngularStep, refractionMode)
-				pushDistinct(current!, point)
-			} else if (point) {
-				current = [point]
-				branches.push(current)
-			} else {
-				current = undefined
+		const seedLatitude = CURVE_SEED_LATITUDES[s]
+		const denseScan = Math.abs(seedLatitude) >= FIXED_SEED_DENSE_MIN_ABS_LATITUDE || fixedSeedProbeFindsUncoveredArc(pbe, i, G, seedLatitude, longitudeStep, refractionMode, coverageBranches, coverageTolerance)
+		if (denseScan) {
+			const before = branches.length
+			pushFixedSeedCurveArcsForSeed(branches, pbe, i, G, seedLatitude, longitudeStep, maxAngularStep, refractionMode)
+			for (let b = before; b < branches.length; b++) {
+				coverageBranches.push(branches[b])
 			}
-
-			previous = point
 		}
 	}
 
