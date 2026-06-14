@@ -13,7 +13,6 @@ const CATALOG_MAX_DRAWABLE_GAP = Math.max(BRANCH_MAX_DRAWABLE_GAP, CATALOG_STEP 
 const CATALOG_BRIDGE_BALANCE = 0.75
 const CATALOG_RECONNECT_POLE_LATITUDE = deg(85)
 const CATALOG_ANCHOR_TOLERANCE = Math.max(CATALOG_STEP, 1e-9)
-const CATALOG_SEED_LATITUDES = [0, deg(20), deg(-20), deg(45), deg(-45), deg(70), deg(-70), deg(82), deg(-82)] as const
 
 // Finite-difference d(mu)/d(normalized time); InstantBesselianElements omits the mu derivative.
 export function muRate(elements: PolynomialBesselianElements, jd: number) {
@@ -165,16 +164,47 @@ export function catalogBranchRetraces(branch: GeoBranch, tolerance: Angle, minAr
 	return false
 }
 
-export function hasContinuousCurveBetween(elements: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 1, G: number, gap: Angle) {
-	const limit = CATALOG_BRIDGE_BALANCE * gap
-	const midpoint = intermediateGreatCircle(a, b, 0.5)
-	if (Math.max(Math.abs(a.y), Math.abs(b.y), Math.abs(midpoint.y)) > CATALOG_RECONNECT_POLE_LATITUDE) return false
+// Dense latitude seeds for the recursive continuity probe, finer than the coarse meridian-scan seeds so a near-pole
+// in-between point sitting in a narrow Newton convergence basin is still found. Kept at least as dense as the
+// engine's own bridge seeds, so the probe is ground truth for "a continuous drawable curve exists": if it
+// finds one the engine left unbridged, that is a real engine defect, not a probe artifact.
+const CATALOG_BRIDGE_SEED_LATITUDES: number[] = []
+for (let degrees = -88; degrees <= 88; degrees += 2) CATALOG_BRIDGE_SEED_LATITUDES.push(degrees * DEG2RAD)
 
-	for (const seed of [midpoint.y, a.y, b.y, ...CATALOG_SEED_LATITUDES]) {
+// Maximum recursion depth of the continuity probe; 20 deg (CATALOG_BRIDGE_LIMIT) bisected to CATALOG_STEP
+// needs ~6 levels, so 10 leaves margin.
+const CATALOG_BRIDGE_MAX_DEPTH = 10
+
+// Solves an in-between curve point on the great-circle-midpoint meridian of a..b that lies strictly between
+// them (both sub-distances within CATALOG_BRIDGE_BALANCE of the gap), or undefined when none is found.
+function solveCatalogBridgeMidpoint(elements: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 1, G: number) {
+	const limit = CATALOG_BRIDGE_BALANCE * sphericalSeparation(a.x, a.y, b.x, b.y)
+	const midpoint = intermediateGreatCircle(a, b, 0.5)
+
+	for (const seed of [midpoint.y, a.y, b.y, ...CATALOG_BRIDGE_SEED_LATITUDES]) {
 		const candidate = findEclipseCurvePoint(elements, midpoint.x, seed, i, G)
-		if (candidate && Math.abs(candidate.y) > CATALOG_RECONNECT_POLE_LATITUDE) continue
-		if (candidate && sphericalSeparation(a.x, a.y, candidate.x, candidate.y) <= limit && sphericalSeparation(candidate.x, candidate.y, b.x, b.y) <= limit) return true
+		if (candidate && Math.abs(candidate.y) <= CATALOG_RECONNECT_POLE_LATITUDE && sphericalSeparation(a.x, a.y, candidate.x, candidate.y) <= limit && sphericalSeparation(candidate.x, candidate.y, b.x, b.y) <= limit) return candidate
 	}
 
-	return false
+	return undefined
+}
+
+// Whether a continuous drawable curve connects a and b: recursively bisect, solving an in-between curve point
+// on each half until the sub-gaps fall to the sampling step. A single lenient midpoint within a fraction of a
+// large gap (the previous test) is not enough — over a near-pole 13 deg gap it accepts a coincidental point
+// that no continuous limit actually links (the 6255-06-02 umbra-south branches), a false positive that demands
+// a merge the engine correctly refuses. Requiring every recursive half to be bridgeable, down to a step that
+// can still hold an irreducible fold cusp (CATALOG_MAX_DRAWABLE_GAP), matches the engine's drawable-continuity
+// definition and only ever makes the probe stricter, so it can remove false positives but never invent gaps.
+export function hasContinuousCurveBetween(elements: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 1, G: number, _gap: Angle, depth = 0): boolean {
+	const gap = sphericalSeparation(a.x, a.y, b.x, b.y)
+	if (gap <= CATALOG_STEP) return true
+	if (Math.max(Math.abs(a.y), Math.abs(b.y)) > CATALOG_RECONNECT_POLE_LATITUDE) return false
+
+	const midpoint = depth < CATALOG_BRIDGE_MAX_DEPTH ? solveCatalogBridgeMidpoint(elements, a, b, i, G) : undefined
+	// No further subdivision possible: continuous only if the remaining gap is already a single drawable step
+	// (a vertical-tangent fold cusp leaves one irreducible step), otherwise it is a real discontinuity.
+	if (!midpoint) return gap <= CATALOG_MAX_DRAWABLE_GAP
+
+	return hasContinuousCurveBetween(elements, a, midpoint, i, G, 0, depth + 1) && hasContinuousCurveBetween(elements, midpoint, b, i, G, 0, depth + 1)
 }
