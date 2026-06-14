@@ -2318,6 +2318,15 @@ function appendRefinedSegment(points: GeoBranch, pbe: PolynomialBesselianElement
 	const mid = findEclipseCurvePoint(pbe, intermediate.x, intermediate.y, i, G, refractionMode)
 	if (!mid) return
 
+	// Reject a divergent midpoint. Near a fold the Newton solve seeded from the interpolated point can jump to
+	// another arc and converge there, landing farther from an endpoint than the two endpoints are from each
+	// other -- a point that is not between them. Splicing it draws a one-vertex spike (e.g. the 6831-12-21
+	// penumbra-south limit, where densifying a ~1.85 deg fold-cusp step inserted a vertex ~3.85 deg out). A real
+	// in-between point sits within the endpoint gap; leaving the drawable a->b step instead correctly renders
+	// the turn at this resolution.
+	const gap = angularDistance(a, b)
+	if (angularDistance(a, mid) > gap || angularDistance(mid, b) > gap) return
+
 	appendRefinedSegment(points, pbe, a, mid, i, G, maxAngularStep, refractionMode, depth + 1)
 	pushDistinct(points, mid)
 	appendRefinedSegment(points, pbe, mid, b, i, G, maxAngularStep, refractionMode, depth + 1)
