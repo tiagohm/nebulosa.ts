@@ -1121,6 +1121,8 @@ function findRootsInInterval(f: (x: number) => number, from: number, to: number,
 
 	// Grazing roots: a strict interior local extremum whose minimized |f| is within tolerance of zero.
 	if (tangencyTolerance !== undefined) {
+		const absoluteValue = (x: number) => Math.abs(f(x))
+
 		for (let k = 1; k < steps; k++) {
 			const isMinimum = values[k] < values[k - 1] && values[k] < values[k + 1]
 			const isMaximum = values[k] > values[k - 1] && values[k] > values[k + 1]
@@ -1128,7 +1130,7 @@ function findRootsInInterval(f: (x: number) => number, from: number, to: number,
 			if (!isMinimum && !isMaximum) continue
 
 			try {
-				const minimum = brentMinimize((x) => Math.abs(f(x)), xs[k - 1], xs[k + 1])
+				const minimum = brentMinimize(absoluteValue, xs[k - 1], xs[k + 1])
 				if (minimum.value <= tangencyTolerance) roots.push(minimum.minimum)
 			} catch {
 				// Bracket rejected: keep the transversal roots already collected.
@@ -2173,6 +2175,19 @@ function deduplicateBranches(branches: GeoCurve, maxAngularStep: Angle) {
 	return kept
 }
 
+// Returns the seed's open branch, starting a new one when it has none because a curve branch begins or reappears.
+function openCurveSeedBranch(branches: GeoCurve, activeBySeed: Array<GeoBranch | undefined>, seedIndex: number): GeoBranch {
+	let branch = activeBySeed[seedIndex]
+
+	if (!branch) {
+		branch = []
+		branches.push(branch)
+		activeBySeed[seedIndex] = branch
+	}
+
+	return branch
+}
+
 // Traces one eclipse curve family as separate continuity branches, one per uninterrupted stretch a seed
 // stays on a solution. Each seed keeps its own active branch: while its solver keeps converging the points
 // accumulate in that branch; when the solution disappears the branch is closed (its exit longitude refined
@@ -2188,19 +2203,6 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 	const branches: GeoCurve = []
 	const previousBySeed = new Array<GeoPoint | undefined>(CURVE_SEED_LATITUDES_LENGTH)
 	const activeBySeed = new Array<GeoBranch | undefined>(CURVE_SEED_LATITUDES_LENGTH)
-
-	// Returns the seed's open branch, starting a new one when it has none (a branch begins or reappears).
-	function openBranch(seedIndex: number) {
-		let branch = activeBySeed[seedIndex]
-
-		if (!branch) {
-			branch = []
-			branches.push(branch)
-			activeBySeed[seedIndex] = branch
-		}
-
-		return branch
-	}
 
 	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
 		const lon = Math.min(longitude, PI)
@@ -2239,11 +2241,11 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 				activeBySeed[seedIndex] = undefined
 			} else if (!previous && point && lon > -PI) {
 				// The family just appeared: open a new branch and refine the entry longitude into it first.
-				pushDistinct(openBranch(seedIndex), refineCurveBoundary(pbe, lon - longitudeStep, lon, point, false, i, G, refractionMode))
+				pushDistinct(openCurveSeedBranch(branches, activeBySeed, seedIndex), refineCurveBoundary(pbe, lon - longitudeStep, lon, point, false, i, G, refractionMode))
 			}
 
 			if (point) {
-				const branch = openBranch(seedIndex)
+				const branch = openCurveSeedBranch(branches, activeBySeed, seedIndex)
 				if (previous) appendRefinedSegment(branch, pbe, previous, point, i, G, maxAngularStep, refractionMode)
 				pushDistinct(branch, point)
 			}
