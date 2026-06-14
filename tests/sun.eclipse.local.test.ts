@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, normalizeAngle } from '../src/angle'
 import { ASEC2RAD, PI, RAD2DEG, TAU } from '../src/constants'
-import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
+import { nearestSolarEclipse } from '../src/sun'
 import { computePolynomialBesselianElements, type PolynomialBesselianElements } from '../src/sun.eclipse.map'
 // oxfmt-ignore
-import { buildLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, } from '../src/sun.eclipse.local'
+import { computeLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, type LocalSolarEclipseCircumstances, } from '../src/sun.eclipse.local'
 import { sphericalSeparation } from '../src/geometry'
 import { timeToDate, timeYMD, toJulianDay, type Time } from '../src/time'
 import { sunMoonPosition } from './sun.eclipse.util'
@@ -34,8 +34,12 @@ const partial2025 = (() => {
 	return { eclipse, pbe }
 })()
 
-function local(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, lon: number, lat: number, options: LocalSolarEclipseCircumstancesOptions = {}) {
+function localCircumstances(pbe: PolynomialBesselianElements, lon: number, lat: number, options: LocalSolarEclipseCircumstancesOptions = {}) {
 	return computeLocalSolarEclipseCircumstances(pbe, deg(lon), deg(lat), { sunMoonPosition, ...options })
+}
+
+function localView(c: LocalSolarEclipseCircumstances, options?: Partial<LocalSolarEclipseViewOptions>) {
+	return computeLocalSolarEclipseViewGeometry(c, options)
 }
 
 function expectContactKind(event: LocalSolarEclipseEvent | null, kind: string) {
@@ -45,7 +49,7 @@ function expectContactKind(event: LocalSolarEclipseEvent | null, kind: string) {
 
 describe('local circumstances', () => {
 	test('point outside the eclipse region has no events and is not visible', () => {
-		const c = local(total2024.eclipse, total2024.pbe, 115, -32) // Perth: nowhere near the 2024 penumbra.
+		const c = localCircumstances(total2024.pbe, 115, -32) // Perth: nowhere near the 2024 penumbra.
 		expect(c.events.C1).toBeNull()
 		expect(c.events.C2).toBeNull()
 		expect(c.events.MAX).toBeNull()
@@ -60,7 +64,7 @@ describe('local circumstances', () => {
 	})
 
 	test('partial-only location resolves C1/MAX/C4 but no central contacts', () => {
-		const c = local(total2024.eclipse, total2024.pbe, -74, 40.71) // New York: deep partial, not on the path.
+		const c = localCircumstances(total2024.pbe, -74, 40.71) // New York: deep partial, not on the path.
 		expectContactKind(c.events.C1, 'C1')
 		expectContactKind(c.events.MAX, 'MAX')
 		expectContactKind(c.events.C4, 'C4')
@@ -76,7 +80,7 @@ describe('local circumstances', () => {
 	})
 
 	test('total location resolves all five contacts with magnitude above one', () => {
-		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25) // Mazatlan: on the central line.
+		const c = localCircumstances(total2024.pbe, -106.4, 23.25) // Mazatlan: on the central line.
 		for (const kind of ['C1', 'C2', 'MAX', 'C3', 'C4'] as const) expectContactKind(c.events[kind], kind)
 		expect(c.events.MAX!.centralPhaseKind).toBe('total')
 		expect(c.events.MAX!.magnitude).toBeGreaterThan(1)
@@ -92,7 +96,7 @@ describe('local circumstances', () => {
 	})
 
 	test('annular location resolves all five contacts with a sub-unity diameter ratio', () => {
-		const c = local(annular2023.eclipse, annular2023.pbe, -123, 43) // Oregon: on the 2023 annular path.
+		const c = localCircumstances(annular2023.pbe, -123, 43) // Oregon: on the 2023 annular path.
 		for (const kind of ['C1', 'C2', 'MAX', 'C3', 'C4'] as const) expectContactKind(c.events[kind], kind)
 		expect(c.events.MAX!.centralPhaseKind).toBe('annular')
 		// For an annular eclipse the Moon is smaller than the Sun, so the diameter ratio stays below one and
@@ -104,7 +108,7 @@ describe('local circumstances', () => {
 	})
 
 	test('an eclipse whose maximum is below the horizon stays geometric but not observable', () => {
-		const c = local(total2024.eclipse, total2024.pbe, -0.13, 51.5) // London: a small partial at/after sunset.
+		const c = localCircumstances(total2024.pbe, -0.13, 51.5) // London: a small partial at/after sunset.
 		expect(c.events.MAX).not.toBeNull()
 		expect(c.events.MAX!.sunAltitude).toBeLessThan(0)
 		expect(c.events.MAX!.observable).toBe(false)
@@ -119,12 +123,12 @@ describe('local circumstances', () => {
 		// ~74.35 deg culmination BETWEEN C3 and C4. With a raised horizon between those values the eclipse is
 		// still observable at culmination even though every contact is below the (raised) horizon -- a case the
 		// event-only check would miss. A higher horizon than the culmination leaves nothing observable.
-		const justBelowCulmination = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { horizonAltitude: deg(73.8) })
+		const justBelowCulmination = localCircumstances(total2024.pbe, -106.4, 23.25, { horizonAltitude: deg(73.8) })
 		for (const kind of ['C1', 'C2', 'MAX', 'C3', 'C4'] as const) expect(justBelowCulmination.events[kind]!.observable).toBe(false)
 		expect(justBelowCulmination.visibility.hasObservableEclipse).toBe(true)
 		expect(justBelowCulmination.visibility.kind).not.toBe('geometricOnlyBelowHorizon')
 
-		const aboveCulmination = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { horizonAltitude: deg(75) })
+		const aboveCulmination = localCircumstances(total2024.pbe, -106.4, 23.25, { horizonAltitude: deg(75) })
 		expect(aboveCulmination.visibility.hasObservableEclipse).toBe(false)
 		expect(aboveCulmination.visibility.kind).toBe('geometricOnlyBelowHorizon')
 	}, 8000)
@@ -133,28 +137,28 @@ describe('local circumstances', () => {
 		// Mazatlan's eclipse is a daytime hump (no lower-culmination valley), so the interior-minimum check must
 		// not run / must not spuriously break completelyVisible. Raising the horizon to just below the lowest
 		// contact keeps every contact above it, so the eclipse stays completely visible.
-		const c1Altitude = local(total2024.eclipse, total2024.pbe, -106.4, 23.25).events.C1!.sunAltitude
-		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { horizonAltitude: c1Altitude - deg(1) })
+		const c1Altitude = localCircumstances(total2024.pbe, -106.4, 23.25).events.C1!.sunAltitude
+		const c = localCircumstances(total2024.pbe, -106.4, 23.25, { horizonAltitude: c1Altitude - deg(1) })
 		expect(c.visibility.kind).toBe('completelyVisible')
 		expect(c.visibility.hasObservableEclipse).toBe(true)
 	})
 
 	test('reports the Sun vertical trend across the eclipse', () => {
 		// New York saw the 2024 eclipse in the afternoon (Sun descending) -> setting.
-		const afternoon = local(total2024.eclipse, total2024.pbe, -74, 40.71)
+		const afternoon = localCircumstances(total2024.pbe, -74, 40.71)
 		expect(afternoon.visibility.sunMotion).toBe('setting')
 		expect(afternoon.events.C4!.sunAltitude).toBeLessThan(afternoon.events.C1!.sunAltitude)
 		// Honolulu saw it in the morning (Sun ascending) -> rising.
-		const morning = local(total2024.eclipse, total2024.pbe, -157.86, 21.3)
+		const morning = localCircumstances(total2024.pbe, -157.86, 21.3)
 		expect(morning.visibility.sunMotion).toBe('rising')
 		expect(morning.events.C4!.sunAltitude).toBeGreaterThan(morning.events.C1!.sunAltitude)
 		// No eclipse -> no defined motion.
-		const none = local(total2024.eclipse, total2024.pbe, 115, -32)
+		const none = localCircumstances(total2024.pbe, 115, -32)
 		expect(none.visibility.sunMotion).toBe('none')
 	})
 
 	test('a fully visible total eclipse reports complete contacts', () => {
-		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
+		const c = localCircumstances(total2024.pbe, -106.4, 23.25)
 		expect(c.visibility.kind).toBe('completelyVisible')
 		expect(c.visibility.completeness.partialContactsComplete).toBe(true)
 		expect(c.visibility.completeness.centralContactsComplete).toBe(true)
@@ -163,77 +167,22 @@ describe('local circumstances', () => {
 	test('event observability honors a configured horizon altitude', () => {
 		// Raising the horizon just above the maximum's altitude makes the maximum unobservable, even though it
 		// is geometrically far above the true (zero) horizon.
-		const base = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
+		const base = localCircumstances(total2024.pbe, -106.4, 23.25)
 		const raisedHorizon = base.events.MAX!.sunAltitude + deg(0.1)
-		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { horizonAltitude: raisedHorizon })
+		const c = localCircumstances(total2024.pbe, -106.4, 23.25, { horizonAltitude: raisedHorizon })
 		expect(c.events.MAX!.observable).toBe(false)
 		expect(c.events.MAX!.visibility).toBe('belowHorizon')
 	})
 
 	test('a partial-only eclipse has no central shadow-path width', () => {
-		const c = local(total2024.eclipse, total2024.pbe, -74, 40.71) // New York: partial only.
+		const c = localCircumstances(total2024.pbe, -74, 40.71) // New York: partial only.
 		expect(c.events.MAX).not.toBeNull()
 		expect(c.events.MAX!.centralPhaseKind).toBe('none')
 		expect(c.details.shadowPathWidthKm).toBeNull()
 	})
 
-	describe('recovers C2/C3 for any search step, even far coarser than the central phase', () => {
-		// The 2024 totality at Mazatlan lasts ~259 s. For a search step much larger than that, the whole
-		// central phase sits between two positive samples with no sign change, and the magnitude peak is much
-		// narrower than the step. Both the maximum search and the contact search must stay robust regardless of
-		// localSearchStepSeconds, so every step recovers the same central contacts and duration.
-		const fine = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { localSearchStepSeconds: 30 })
-		for (const localSearchStepSeconds of [400, 700, 900, 1300, 1800, 3000]) {
-			test(localSearchStepSeconds.toFixed(0), () => {
-				const coarse = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { localSearchStepSeconds })
-				expect(coarse.events.C2).not.toBeNull()
-				expect(coarse.events.C3).not.toBeNull()
-				expect(coarse.events.C3!.jd).toBeGreaterThan(coarse.events.C2!.jd)
-				expect(coarse.events.MAX!.centralPhaseKind).toBe('total')
-				// The coarse-step central duration matches the fine-step one to within a second.
-				expect(coarse.details.centralPhaseDurationSeconds!).toBeCloseTo(fine.details.centralPhaseDurationSeconds!, 0)
-			})
-		}
-	})
-
-	describe('recovers contacts even when the search window starts entirely inside the phase', () => {
-		// The 2024 partial at Mazatlan lasts ~9641 s (half ~4820 s). A small contactSearchSpan puts the whole
-		// initial window inside the partial phase, where the contact function never changes sign (no roots), so
-		// the window must keep expanding instead of stopping early. Every span recovers the same contacts.
-		const reference = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
-		for (const contactSearchSpan of [3600, 1800, 600]) {
-			test(contactSearchSpan.toFixed(0), () => {
-				const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { contactSearchSpan })
-				expect(c.events.C1).not.toBeNull()
-				expect(c.events.C4).not.toBeNull()
-				expect(c.events.C2).not.toBeNull()
-				expect(c.events.C3).not.toBeNull()
-				expect(c.details.partialPhaseDurationSeconds!).toBeCloseTo(reference.details.partialPhaseDurationSeconds!, 0)
-				expect(c.details.centralPhaseDurationSeconds!).toBeCloseTo(reference.details.centralPhaseDurationSeconds!, 0)
-			})
-		}
-	})
-
-	describe('recovers contacts when the local maximum lies far outside the initial search window', () => {
-		// Honolulu's 2024 local maximum is ~65 min before the global maximum (the eclipse is seen in the
-		// morning, far from the central path). With a small contactSearchSpan the initial window around the
-		// global maximum is entirely outside the phase, so the contact search must seed its window from the
-		// (adaptively found) local maximum rather than from the small initial span.
-		const reference = local(total2024.eclipse, total2024.pbe, -157.86, 21.3)
-		for (const contactSearchSpan of [1800, 600]) {
-			test(contactSearchSpan.toFixed(0), () => {
-				const c = local(total2024.eclipse, total2024.pbe, -157.86, 21.3, { contactSearchSpan })
-				expect(c.events.C1).not.toBeNull()
-				expect(c.events.C4).not.toBeNull()
-				expect(c.events.C1!.jd).toBeLessThan(c.events.MAX!.jd)
-				expect(c.events.C4!.jd).toBeGreaterThan(c.events.MAX!.jd)
-				expect(c.details.partialPhaseDurationSeconds!).toBeCloseTo(reference.details.partialPhaseDurationSeconds!, 0)
-			})
-		}
-	})
-
 	test('observability of every event matches its solar altitude against the horizon', () => {
-		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
+		const c = localCircumstances(total2024.pbe, -106.4, 23.25)
 		for (const kind of ['C1', 'C2', 'MAX', 'C3', 'C4'] as const) {
 			const event = c.events[kind]!
 			expect(event.observable).toBe(event.sunAltitude >= 0)
@@ -246,11 +195,11 @@ describe('local circumstances', () => {
 })
 
 describe('local view geometry', () => {
-	const base = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
+	const base = localCircumstances(total2024.pbe, -106.4, 23.25)
 
 	test('emits only geometric shapes (no labels, no buttons) with Sun and Moon disks', () => {
-		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { includeLocalView: true })
-		const view = c.localView!
+		const c = localCircumstances(total2024.pbe, -106.4, 23.25)
+		const view = localView(c)
 		expect(view.shapes.length).toBeGreaterThan(0)
 		// Every shape is a known geometric primitive; there is no text/label/button kind.
 		const allowedKinds = new Set(['circle', 'line', 'path', 'polygon'])
@@ -267,15 +216,15 @@ describe('local view geometry', () => {
 	})
 
 	test('includes horizon geometry only when requested', () => {
-		const withHorizon = buildLocalSolarEclipseViewGeometry(base, viewOptions({ includeHorizon: true }))
-		const withoutHorizon = buildLocalSolarEclipseViewGeometry(base, viewOptions({ includeHorizon: false }))
+		const withHorizon = computeLocalSolarEclipseViewGeometry(base, viewOptions({ includeHorizon: true }))
+		const withoutHorizon = computeLocalSolarEclipseViewGeometry(base, viewOptions({ includeHorizon: false }))
 		expect(withHorizon.shapes.some((s) => s.role === 'horizonLine')).toBe(true)
 		expect(withoutHorizon.shapes.some((s) => s.role === 'horizonLine')).toBe(false)
 	})
 
 	test('orientation mode selects the zenith angle Z or the position angle P', () => {
-		const zenith = buildLocalSolarEclipseViewGeometry(base, viewOptions({ orientationMode: 'zenith', includeGhostDisks: false, includeHorizon: false }))
-		const north = buildLocalSolarEclipseViewGeometry(base, viewOptions({ orientationMode: 'north', includeGhostDisks: false, includeHorizon: false }))
+		const zenith = computeLocalSolarEclipseViewGeometry(base, viewOptions({ orientationMode: 'zenith', includeGhostDisks: false, includeHorizon: false }))
+		const north = computeLocalSolarEclipseViewGeometry(base, viewOptions({ orientationMode: 'north', includeGhostDisks: false, includeHorizon: false }))
 		const zenithMoon = zenith.shapes.find((s) => s.role === 'moonDisk')!
 		const northMoon = north.shapes.find((s) => s.role === 'moonDisk')!
 		expect(zenithMoon.kind).toBe('circle')
@@ -290,8 +239,8 @@ describe('local view geometry', () => {
 	test('projects ghost disks in the primary event frame in zenith mode', () => {
 		// New York sees a partial: ghosts are C1 and C4 with MAX as primary. The parallactic angle drifts over
 		// the eclipse, so a ghost must use the PRIMARY (MAX) zenith, not its own instantaneous vertical.
-		const c = local(total2024.eclipse, total2024.pbe, -74, 40.71, { includeLocalView: true, localView: { selectedEvent: 'MAX', orientationMode: 'zenith', includeHorizon: false } })
-		const view = c.localView!
+		const c = localCircumstances(total2024.pbe, -74, 40.71)
+		const view = localView(c, { selectedEvent: 'MAX', orientationMode: 'zenith', includeHorizon: false })
 		const c1 = c.events.C1!
 		const max = c.events.MAX!
 		// The choice of frame is observable only because q differs between C1 and MAX.
@@ -313,16 +262,16 @@ describe('local view geometry', () => {
 
 	test('reports the actually-drawn event, falling back when the requested one is absent', () => {
 		// A partial-only location has no C2; the builder falls back to MAX and reports it honestly.
-		const partial = local(total2024.eclipse, total2024.pbe, -74, 40.71)
-		const view = buildLocalSolarEclipseViewGeometry(partial, viewOptions({ selectedEvent: 'C2' }))
+		const partial = localCircumstances(total2024.pbe, -74, 40.71)
+		const view = computeLocalSolarEclipseViewGeometry(partial, viewOptions({ selectedEvent: 'C2' }))
 		expect(view.requestedEvent).toBe('C2')
 		expect(view.selectedEvent).toBe('MAX')
 	})
 
 	test('tags every disk with its contact so the UI can label them', () => {
-		const c = local(total2024.eclipse, total2024.pbe, -106.4, 23.25, { includeLocalView: true, localView: { selectedEvent: 'MAX' } })
-		const shapes = c.localView!.shapes
-		const circles = shapes.filter((s): s is Extract<(typeof shapes)[number], { kind: 'circle' }> => s.kind === 'circle')
+		const c = localCircumstances(total2024.pbe, -106.4, 23.25)
+		const shapes = localView(c, { selectedEvent: 'MAX' }).shapes
+		const circles = shapes.filter((s) => s.kind === 'circle')
 		// Primary Sun and Moon are tagged with the selected event.
 		const sun = circles.find((s) => s.role === 'sunDisk')!
 		const moon = circles.find((s) => s.role === 'moonDisk')!
@@ -335,7 +284,7 @@ describe('local view geometry', () => {
 	})
 
 	test('draws the horizon as foreground over the primary disks', () => {
-		const view = buildLocalSolarEclipseViewGeometry(base, viewOptions())
+		const view = computeLocalSolarEclipseViewGeometry(base, viewOptions())
 		const roles = view.shapes.map((s) => s.role)
 		// The ground band and horizon line are painted after the Sun/Moon disks so they can occlude them.
 		expect(roles.indexOf('horizonBand')).toBeGreaterThan(roles.indexOf('moonDisk'))
@@ -345,8 +294,8 @@ describe('local view geometry', () => {
 	})
 
 	test('handedness mirrors only the horizontal axis', () => {
-		const right = buildLocalSolarEclipseViewGeometry(base, viewOptions({ handedness: 'eastRight', includeGhostDisks: false, includeHorizon: false }))
-		const left = buildLocalSolarEclipseViewGeometry(base, viewOptions({ handedness: 'eastLeft', includeGhostDisks: false, includeHorizon: false }))
+		const right = computeLocalSolarEclipseViewGeometry(base, viewOptions({ handedness: 'eastRight', includeGhostDisks: false, includeHorizon: false }))
+		const left = computeLocalSolarEclipseViewGeometry(base, viewOptions({ handedness: 'eastLeft', includeGhostDisks: false, includeHorizon: false }))
 		const rightMoon = right.shapes.find((s) => s.role === 'moonDisk') as Extract<(typeof right.shapes)[number], { kind: 'circle' }>
 		const leftMoon = left.shapes.find((s) => s.role === 'moonDisk') as Extract<(typeof left.shapes)[number], { kind: 'circle' }>
 		const sunCx = 450 / 2
@@ -356,16 +305,16 @@ describe('local view geometry', () => {
 	})
 
 	test('a location with no eclipse produces an empty Local View', () => {
-		const c = local(total2024.eclipse, total2024.pbe, 115, -32) // Perth: no eclipse.
-		const view = buildLocalSolarEclipseViewGeometry(c, viewOptions())
+		const c = localCircumstances(total2024.pbe, 115, -32) // Perth: no eclipse.
+		const view = computeLocalSolarEclipseViewGeometry(c, viewOptions())
 		expect(view.selectedEvent).toBeNull()
 		expect(view.shapes).toHaveLength(0)
 	})
 })
 
 describe('local view topocentric invariants', () => {
-	const total = local(total2024.eclipse, total2024.pbe, -106.4, 23.25)
-	const annular = local(annular2023.eclipse, annular2023.pbe, -123, 43)
+	const total = localCircumstances(total2024.pbe, -106.4, 23.25)
+	const annular = localCircumstances(annular2023.pbe, -123, 43)
 
 	describe('separations match the tangency geometry at every contact', () => {
 		for (const c of [total, annular]) {
@@ -517,7 +466,7 @@ describe('local view robustness', () => {
 	test('the central-shadow width is defined on the central line', () => {
 		// A point essentially on the 2024 central line: the separation is tiny but the width is still resolved
 		// (the multi-bearing chord is defined even where the gradient direction would vanish).
-		const c = local(total2024.eclipse, total2024.pbe, -104.13, 25.28)
+		const c = localCircumstances(total2024.pbe, -104.13, 25.28)
 		expect(c.events.MAX!.centralPhaseKind).toBe('total')
 		expect(c.events.MAX!.localViewState!.separationSolarRadii).toBeLessThan(0.05)
 		expect(c.details.shadowPathWidthKm).not.toBeNull()

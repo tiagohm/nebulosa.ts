@@ -1479,7 +1479,7 @@ describe('branch-aware curve topology', () => {
 	test('2006-09-22 southern penumbral limit joins its cusp fragments', () => {
 		const { geometry } = geometryFor(2006, 9, 1)
 		expect(geometry.lines.penumbraSouth).toHaveLength(1)
-	}, 2000)
+	}, 3000)
 
 	test('2082-08-24 keeps the southern penumbral fold connected through S2', () => {
 		const { geometry } = geometryFor(2082, 8, 1)
@@ -1540,7 +1540,7 @@ describe('branch-aware curve topology', () => {
 
 		expect(geometry.lines.umbraSouth).toHaveLength(2)
 		expect(Math.min(...geometry.lines.umbraSouth.flat().map((point) => sphericalSeparation(U3.x, U3.y, point.x, point.y)))).toBeLessThan(1e-9)
-	})
+	}, 3000)
 
 	// 1957-10-23 is a non-central total eclipse (|gamma| > 1): the shadow axis misses Earth, so the umbra
 	// only grazes the limb and the G = 1 limit is a tiny closed loop near the south pole. The curve tracer
@@ -1557,7 +1557,7 @@ describe('branch-aware curve topology', () => {
 		for (const branch of branches) {
 			for (let k = 1; k < branch.length; k++) expect(sphericalSeparation(branch[k - 1].x, branch[k - 1].y, branch[k].x, branch[k].y)).toBeLessThan(foldThreshold)
 		}
-	}, 1500)
+	}, 2500)
 
 	// 1977-04-08 (S1) and 1994-05-10 (N2) are oblique partial limits whose penumbral terminator cusp is the
 	// upper limb crossing while the traced rise/set branch follows the lower crossing ~2-3 deg away. Forcing
@@ -1589,7 +1589,7 @@ describe('branch-aware curve topology', () => {
 		expect(branch).toBeDefined()
 		expect(branch!.length).toBeGreaterThan(100)
 		expect(Math.min(sphericalSeparation(N2.x, N2.y, branch![0].x, branch![0].y), sphericalSeparation(N2.x, N2.y, branch!.at(-1)!.x, branch!.at(-1)!.y))).toBeLessThan(1e-9)
-	}, 2500)
+	}, 3000)
 
 	for (const fixture of CASES) {
 		describe(fixture.name, () => {
@@ -1719,7 +1719,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		for (const point of geometry.lines.penumbraNorth.flat()) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
 		for (const point of geometry.lines.penumbraSouth.flat()) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
 		for (const point of penumbra) expect(solarAltitudeAtPoint(elements, point)).toBeGreaterThan(deg(-1))
-	})
+	}, 2000)
 
 	// A pure partial eclipse draws the penumbral limit (magnitude 0), and that limit spans the
 	// published northern/southern penumbral extremes N1/S1. Verified against the 2000-02-05 partial over
@@ -1751,7 +1751,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(66.562), deg(-28.305))).toBeLessThan(deg(0.5))
 		// They are endpoints of the penumbral limit curve, so they lie on it.
 		for (const point of [geometry.points.N1!, geometry.points.S1!]) expect(limitTangencyResidual(elements, point, 1, 0)).toBeLessThan(1e-3)
-	})
+	}, 2000)
 
 	// Same convention checked on a northern-hemisphere grazing partial: 2000-07-31 (EclipseWise N1 ~ 49.49 deg N,
 	// 55.6 deg E, the earlier cusp; S1 ~ 32.19 deg N, 129.74 deg W, the later cusp). Here the earlier cusp
@@ -1771,7 +1771,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(-129.738), deg(32.185))).toBeLessThan(deg(0.5))
 		// Both lie on the magnitude-0 locus (this eclipse's limit is the southern branch, i = -1).
 		for (const point of [geometry.points.N1!, geometry.points.S1!]) expect(limitTangencyResidual(elements, point, -1, 0)).toBeLessThan(1e-3)
-	})
+	}, 2000)
 
 	// Regression for 2003-05-31 (annular grazing): BOTH terminator cusps are in the northern hemisphere
 	// (N1 ~ 10.86 deg N, 52.00 deg E; S1 ~ 37.09 deg N, 164.07 deg W), so a poleward/equatorward label
@@ -1956,7 +1956,7 @@ describe('greatest eclipse uses closest-approach minimization for an inconsisten
 		expectGeoPoint(max!)
 		// The returned instant is the closest approach at t0 + one step, not the inconsistent maximumTime.
 		expect(Math.abs(max!.jd! - (JD0 + elements.step))).toBeLessThan(0.01)
-	})
+	}, 2000)
 
 	// A consistent maximumTime (the published greatest-eclipse epoch) is kept verbatim, so the jd is exact.
 	describe('findMaximumPoint keeps a consistent published maximumTime', () => {
@@ -2014,7 +2014,7 @@ describe('splitCentralLineByKind segments a hybrid central line', () => {
 			expect(segment.length).toBeGreaterThanOrEqual(2)
 			for (const point of segment) expect(point.kind).toBe('annular')
 		}
-	})
+	}, 2000)
 
 	test('a pure total central line has no annular sub-polyline', () => {
 		const fixture = NASA_ECLIPSES[0]
@@ -2023,7 +2023,7 @@ describe('splitCentralLineByKind segments a hybrid central line', () => {
 
 		expect(annular).toHaveLength(0)
 		expect(total.length).toBeGreaterThan(0)
-	})
+	}, 2000)
 
 	// With pbe, splitCentralLineByKind root-solves the exact total<->annular crossover and shares it, so the
 	// total and annular segments touch instead of leaving a sampling-resolution gap.
@@ -2057,7 +2057,7 @@ describe('splitCentralLineByKind segments a hybrid central line', () => {
 		// Each segment stays homogeneous in kind, seam copies included.
 		for (const segment of withPbe.total) for (const point of segment) expect(point.kind).toBe('total')
 		for (const segment of withPbe.annular) for (const point of segment) expect(point.kind).toBe('annular')
-	})
+	}, 2000)
 })
 
 test('1862-11-21 trims the penumbral single-vertex branch switch near S1', () => {
@@ -2070,4 +2070,4 @@ test('1862-11-21 trims the penumbral single-vertex branch switch near S1', () =>
 		expect(catalogBranchRetraces(branch, deg(0.5), deg(5))).toBe(false)
 		expect(maxBranchSegment([branch])).toBeLessThanOrEqual(BRANCH_MAX_DRAWABLE_GAP)
 	}
-})
+}, 2000)

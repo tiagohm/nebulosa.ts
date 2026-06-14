@@ -36,8 +36,7 @@ const DEFAULT_LOCAL_SEARCH_STEP_SECONDS = 60
 const ALTITUDE_SCAN_MIN_STEP_SECONDS = 300
 // Root tolerance for local contact instants, in days (~1 ms).
 const CONTACT_TOLERANCE_DAYS = 1e-8
-// Absolute resolution (days, ~30 s) used to densify a candidate contact bracket before refining it, so a
-// phase much shorter than localSearchStepSeconds is still bracketed regardless of the configured step.
+// Absolute resolution (days, ~30 s) used to densify a candidate contact bracket before refining it
 const CONTACT_REFINE_SUBSTEP_DAYS = 30 / DAYSEC
 // Physical tolerance (Earth equatorial radii) for a grazing (tangential) contact: a local extremum of the
 // contact function whose refined |value| stays within this is accepted as a double root even without a sign
@@ -92,16 +91,8 @@ export type LocalViewHandedness = 'eastRight' | 'eastLeft'
 
 // Options controlling the local circumstances computation.
 export interface LocalSolarEclipseCircumstancesOptions {
-	// Half-width of the contact search window around maximumTime, in seconds.
-	readonly contactSearchSpan?: number
-	// Sampling step for the local contact/maximum search, in seconds.
-	readonly localSearchStepSeconds?: number
 	// Altitude (radians) of the apparent horizon; an event is observable when the Sun is at or above it.
 	readonly horizonAltitude?: Angle
-	// Whether to also build the Local View geometry.
-	readonly includeLocalView?: boolean
-	// Local View geometry overrides merged onto the defaults.
-	readonly localView?: Partial<LocalSolarEclipseViewOptions>
 	// Strongly preferred for accurate Sun altitude, P/Z, apparent diameters and Local View.
 	// This should be the same physical source used to build the PolynomialBesselianElements, e.g. VSOP/ELP + ERFA.
 	readonly sunMoonPosition?: (time: Time) => SunMoonPosition
@@ -164,8 +155,6 @@ export interface LocalSolarEclipseCircumstances {
 		readonly C3: LocalSolarEclipseEvent | null
 		readonly C4: LocalSolarEclipseEvent | null
 	}
-	// Optional Local View geometry, present when includeLocalView is set.
-	readonly localView?: LocalSolarEclipseViewGeometry
 }
 
 // Internal per-event state needed to draw the Local View without recomputing the fundamental geometry. The
@@ -364,6 +353,8 @@ export interface SolarEclipseExtremeCircumstances {
 	// Local eclipse character at the event; null when the point is not central.
 	readonly kind: GeoPoint['kind'] | null
 }
+
+const DEFAULT_LOCAL_SOLAR_ECLIPSE_CIRCUMSTANCES_OPTIONS: LocalSolarEclipseCircumstancesOptions = {}
 
 // Default Local View options.
 const DEFAULT_LOCAL_VIEW_OPTIONS: LocalSolarEclipseViewOptions = {
@@ -667,10 +658,6 @@ function bisectRoot(f: (jd: number) => number, lo: number, hi: number) {
 
 // Finds the Julian Day of the local magnitude maximum within [fromJd, toJd]. A uniform coarse scan brackets
 // the best sample, then the one-step bracket around it is densified at a bounded absolute resolution before
-// Brent refinement: with a coarse localSearchStepSeconds the magnitude peak (especially the narrow central
-// spike) is much narrower than the step, and a single minimization over the wide bracket can settle off the
-// true peak — which would place the maximum just outside the central cone and suppress the C2/C3 search.
-// Returns the best found, or undefined when nothing finite is found.
 export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, fromJd: number, toJd: number, stepDays: number) {
 	if (!Number.isFinite(fromJd) || !Number.isFinite(toJd) || toJd < fromJd) {
 		return undefined
@@ -701,6 +688,7 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 	const hi = Math.min(toJd, bestJd + effectiveStepDays)
 	const subSteps = Math.max(2, Math.ceil((hi - lo) / CONTACT_REFINE_SUBSTEP_DAYS))
 	const subStep = (hi - lo) / subSteps
+
 	for (let i = 0; i <= subSteps; i++) {
 		const jd = i === subSteps ? hi : lo + i * subStep
 		const magnitude = magnitudeAt(jd)
@@ -727,9 +715,11 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 // Inserts a root unless an equal one (within ~10x the time tolerance) is already present.
 function pushUniqueRoot(roots: number[], root: number) {
 	if (!Number.isFinite(root)) return
+
 	for (let i = 0; i < roots.length; i++) {
 		if (Math.abs(roots[i] - root) < CONTACT_TOLERANCE_DAYS * 10) return
 	}
+
 	roots.push(root)
 }
 
@@ -907,8 +897,8 @@ function rootAfter(roots: readonly number[], reference: number) {
 export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions): LocalSolarEclipseCircumstances['events'] {
 	const empty = { C1: null, C2: null, MAX: null, C3: null, C4: null } as const
 
-	const span = validPositive(options.contactSearchSpan, DEFAULT_CONTACT_SEARCH_SPAN_SECONDS) / DAYSEC
-	const stepDays = validPositive(options.localSearchStepSeconds, DEFAULT_LOCAL_SEARCH_STEP_SECONDS) / DAYSEC
+	const span = DEFAULT_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC
+	const stepDays = DEFAULT_LOCAL_SEARCH_STEP_SECONDS / DAYSEC
 	const maxSpan = Math.max(span, MAX_CONTACT_SEARCH_SPAN_SECONDS / DAYSEC)
 	const centerJd = toJulianDay(pbe.maximumTime)
 
@@ -1055,9 +1045,10 @@ function extremeSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longit
 
 	// The extremum is broad, so a coarse scan (>= 5 min) brackets it cheaply; Brent then refines to the exact
 	// value. This caps the ephemeris cost of the check.
-	const stepDays = Math.max(validPositive(options.localSearchStepSeconds, DEFAULT_LOCAL_SEARCH_STEP_SECONDS), ALTITUDE_SCAN_MIN_STEP_SECONDS) / DAYSEC
+	const stepDays = Math.max(DEFAULT_LOCAL_SEARCH_STEP_SECONDS, ALTITUDE_SCAN_MIN_STEP_SECONDS) / DAYSEC
 	let best = -Infinity
 	let bestJd = fromJd
+
 	for (let jd = fromJd; ; ) {
 		const value = oriented(jd)
 		if (value > best) {
@@ -1459,20 +1450,21 @@ function selectPrimaryEvent(events: LocalSolarEclipseCircumstances['events'], se
 
 // Builds the serializable Local View geometry from the resolved events. Emits only geometric shapes: no
 // labels, no text primitives and no UI controls.
-export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSolarEclipseCircumstances, 'events'>, options: LocalSolarEclipseViewOptions): LocalSolarEclipseViewGeometry {
+export function computeLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSolarEclipseCircumstances, 'events'>, options: Partial<LocalSolarEclipseViewOptions> = DEFAULT_LOCAL_VIEW_OPTIONS): LocalSolarEclipseViewGeometry {
 	const events = circumstances.events
+	const resolvedOptions = Object.assign({}, DEFAULT_LOCAL_VIEW_OPTIONS, options)
 	const shapes: LocalSolarEclipseSvgShape[] = []
-	const primary = selectPrimaryEvent(events, options.selectedEvent)
+	const primary = selectPrimaryEvent(events, resolvedOptions.selectedEvent)
 
 	// Ghost MOON disks for every other available contact, drawn behind the primary state. The Sun is fixed
 	// at the diagram center, so a per-contact ghost Sun would only stack redundant circles; what differs
 	// between contacts is the lunar position, so only the Moon is ghosted.
 	// Ghost disks are projected into the PRIMARY event's frame, so the whole diagram shares one zenith.
-	if (options.includeGhostDisks && primary) {
+	if (resolvedOptions.includeGhostDisks && primary) {
 		for (const kind of CONTACT_ORDER) {
 			const event = events[kind]
 			if (!event || event === primary) continue
-			const { moon } = computeLocalViewDiskPair(event, options, primary)
+			const { moon } = computeLocalViewDiskPair(event, resolvedOptions, primary)
 			shapes.push({ kind: 'circle', role: 'ghostMoonDisk', event: moon.event, cx: moon.cx, cy: moon.cy, r: moon.r })
 		}
 	}
@@ -1480,21 +1472,21 @@ export function buildLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSola
 	// Primary Sun and Moon disks first, then the horizon on top, so the ground band occludes the part of the
 	// disks below the horizon (e.g. a sunrise/sunset eclipse), matching the Astrarium foreground convention.
 	if (primary) {
-		const pair = computeLocalViewDiskPair(primary, options, primary)
+		const pair = computeLocalViewDiskPair(primary, resolvedOptions, primary)
 		shapes.push(pair.sun, pair.moon)
 	}
 
-	if (primary && options.includeHorizon) {
-		for (const shape of buildLocalViewHorizonGeometry(primary, options)) shapes.push(shape)
+	if (primary && resolvedOptions.includeHorizon) {
+		for (const shape of buildLocalViewHorizonGeometry(primary, resolvedOptions)) shapes.push(shape)
 	}
 
-	return { width: options.width, height: options.height, orientationMode: options.orientationMode, requestedEvent: options.selectedEvent, selectedEvent: primary?.kind ?? null, solarRadiusPx: options.solarRadiusPx, shapes }
+	return { width: resolvedOptions.width, height: resolvedOptions.height, orientationMode: resolvedOptions.orientationMode, requestedEvent: resolvedOptions.selectedEvent, selectedEvent: primary?.kind ?? null, solarRadiusPx: resolvedOptions.solarRadiusPx, shapes }
 }
 
 // Computes the full local circumstances for a geographic point: resolves contacts, summarizes details,
 // classifies visibility, and optionally builds the Local View. The result is immutable and serializable;
 // times are returned as Time/Julian Day and durations in seconds (the UI formats them).
-export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions = {}) {
+export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions = DEFAULT_LOCAL_SOLAR_ECLIPSE_CIRCUMSTANCES_OPTIONS): LocalSolarEclipseCircumstances {
 	const events = computeLocalEclipseEvents(pbe, longitude, latitude, options)
 	const visibility = computeLocalVisibility(events, pbe, longitude, latitude, options)
 	const shadowPathWidthKm = events.MAX && events.MAX.centralPhaseKind !== 'none' ? computeLocalShadowPathWidthKm(pbe, longitude, latitude, events.MAX.jd) : null
@@ -1505,11 +1497,6 @@ export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianEl
 		visibility,
 		details,
 		events,
-	}
-
-	if (options.includeLocalView) {
-		const viewOptions: LocalSolarEclipseViewOptions = { ...DEFAULT_LOCAL_VIEW_OPTIONS, ...options.localView }
-		return { ...result, localView: buildLocalSolarEclipseViewGeometry({ events }, viewOptions) }
 	}
 
 	return result
