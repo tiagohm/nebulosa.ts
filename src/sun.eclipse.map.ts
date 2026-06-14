@@ -62,10 +62,12 @@ const CONTACT_SEARCH_MAX_SPAN_SECONDS = 5.5 * 3600
 // Hard cap (seconds) on the half-width the greatest-eclipse closest-approach search may grow to. Unlike the
 // contacts, the greatest-eclipse instant must be found even when a far-future maximumTime sits many hours
 // before the actual eclipse (the published epoch is only a coarse label), so the search window grows past the
-// contact cap until the minimum is bracketed. This bounds that growth: 12 h covers the worst observed offset
-// (the 6100-09-30 closest approach ~5.9 h out) with margin, while a genuinely monotone residual stops here
-// instead of extrapolating the cubic without limit.
-const GREATEST_ECLIPSE_SEARCH_MAX_SPAN_SECONDS = 12 * 3600
+// contact cap until the minimum is bracketed. This bounds that growth: 18 h covers the worst observed offset
+// (the 7855-06-24 closest approach ~12.5 h past a maximumTime ~half a day before the eclipse, where the
+// Besselian x = -6.30 + 0.52 t per hour crosses zero only near +12 h; the 6100-09-30 offset is ~5.9 h) with
+// margin, while a genuinely monotone residual stops here instead of extrapolating the cubic without limit. The
+// fit stays a clean single-well parabola this far out, so a wider window cannot introduce a spurious minimum.
+const GREATEST_ECLIPSE_SEARCH_MAX_SPAN_SECONDS = 18 * 3600
 // Step (seconds) by which each external contact-search edge is pushed outward while the shadow is still on
 // Earth there. Small enough to land just past the contact, then the root scan refines within the bracket.
 const CONTACT_SEARCH_EXPANSION_STEP_SECONDS = 15 * 60
