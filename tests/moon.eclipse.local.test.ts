@@ -184,6 +184,53 @@ describe('visibility classification', () => {
 		expect(local.details.observableDuration).toBeLessThanOrEqual(local.details.penumbralPhaseDuration + 1e-6)
 	}, 15000)
 
+	// The hard case a discrete monotonic-window test would skip: an upper-transit peak inside the FIRST scan step,
+	// after which the samples descend monotonically. The duration must still integrate the brief stretch.
+	test('a peak in the first step with monotonic neighbours still yields a positive duration', () => {
+		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
+		const p1ev = geometry.events.find((e) => e.kind === 'P1')!
+		const u1ev = geometry.events.find((e) => e.kind === 'U1')!
+
+		const p1jd = toJulianDay(TOTAL.firstContactPenumbraTime)
+		const p4jd = toJulianDay(TOTAL.lastContactPenumbraTime)
+		const samples = 48
+		const step = (p4jd - p1jd) / samples
+
+		// Place the Moon's zenith transit a quarter step after P1: the sublunar longitude there, extrapolated from
+		// the near-P1 linear rate. Latitude = declination makes that transit a sharp ~90 deg peak.
+		const wrap = (x: number) => ((((x + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI
+		const sublunarRate = wrap(u1ev.sublunar.x - p1ev.sublunar.x) / (u1ev.jd - p1ev.jd)
+		const targetJd = p1jd + 0.25 * step
+		const longitude = p1ev.sublunar.x + sublunarRate * (targetJd - p1jd)
+		const latitude = p1ev.declination
+
+		// On the coarse default grid P1 is the highest sample and the grid descends monotonically afterwards: the
+		// window the discrete monotonic test would (wrongly) skip.
+		let coarseMax = -Infinity
+		let imax = 0
+		for (let i = 0; i <= samples; i++) {
+			const altitude = gridAltitude(p1jd + i * step, longitude, latitude)
+			if (altitude > coarseMax) {
+				coarseMax = altitude
+				imax = i
+			}
+		}
+		expect(imax).toBe(0)
+		expect(gridAltitude(p1jd, longitude, latitude)).toBeGreaterThan(gridAltitude(p1jd + step, longitude, latitude))
+		expect(gridAltitude(p1jd + step, longitude, latitude)).toBeGreaterThan(gridAltitude(p1jd + 2 * step, longitude, latitude))
+
+		// The true peak in the first step exceeds every coarse sample.
+		let fineMax = -Infinity
+		for (let i = 0; i <= 40; i++) fineMax = Math.max(fineMax, gridAltitude(p1jd + (i / 40) * step, longitude, latitude))
+		expect(fineMax).toBeGreaterThan(coarseMax)
+
+		const horizonAltitude = (coarseMax + fineMax) / 2
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { horizonAltitude })
+		expect(local.visibility.hasObservableEclipse).toBe(true)
+		expect(local.details.observableDuration).toBeGreaterThan(0)
+		expect(local.details.observableDuration).toBeLessThanOrEqual(local.details.penumbralPhaseDuration + 1e-6)
+	}, 15000)
+
 	// Every contact can be above the horizon while the Moon still dips below it between contacts (a high-latitude
 	// lower culmination during the multi-hour penumbral interval). 'completelyVisible' must check the whole
 	// interval, not just the contact samples.

@@ -322,23 +322,6 @@ const EARTH_ROTATION_RATE_PER_DAY = TAU / 0.99726966
 // Sub-steps used to integrate a suspect interval that may hide a horizon crossing pair.
 const REFINE_SUBSTEPS = 16
 
-// Whether the altitude is monotonic across the window around interval [i, i+1] (its neighbours i-1..i+2). A
-// same-side interval can only hide a horizon crossing pair when it is non-monotonic (an interior extremum pokes
-// across), so this restricts the costly refinement to the at most one turning point of the penumbral scan.
-function isMonotonicWindow(altitudes: number[], i: number) {
-	const lo = Math.max(0, i - 1)
-	const hi = Math.min(altitudes.length - 1, i + 2)
-	let nonDecreasing = true
-	let nonIncreasing = true
-
-	for (let k = lo; k < hi; k++) {
-		if (altitudes[k + 1] > altitudes[k]) nonIncreasing = false
-		if (altitudes[k + 1] < altitudes[k]) nonDecreasing = false
-	}
-
-	return nonDecreasing || nonIncreasing
-}
-
 // Above-horizon time (days) within one suspect sample interval, by subdividing it and summing the linear
 // horizon-crossing fraction of each sub-step. The interval spans at most one scan step, over which the altitude
 // is unimodal, so a fixed subdivision resolves a brief peak above the horizon (or a brief dip below it) that the
@@ -364,14 +347,27 @@ function aboveHorizonDaysInInterval(fromJd: number, toJd: number, horizonAltitud
 
 // Total time (days) the Moon is at or above the horizon within the scanned interval. Each sample interval
 // contributes its above-horizon fraction: 1 when both endpoints are above, 0 when both are below, and the
-// linearly interpolated horizon-crossing fraction when they straddle the horizon. A same-side interval whose
-// nearer endpoint is within one step's altitude change of the horizon is refined by subdivision, so a short
-// above-horizon stretch that falls between two coarse samples (the same case phaseReachesHorizon catches for
-// the classification) is integrated rather than dropped to zero. The result is capped at the scanned span so it
-// can never exceed P4 - P1.
+// linearly interpolated horizon-crossing fraction when they straddle the horizon.
+//
+// A same-side interval can still hide a horizon crossing pair (a brief peak above the horizon, or a brief dip
+// below it). Because the altitude is unimodal over the penumbral interval (its hour-angle span is well under a
+// full turn, so it has at most one interior extremum), such a hidden excursion can only sit at that extremum,
+// i.e. in an interval touching the highest or lowest sample. Those intervals are refined by subdivision when an
+// endpoint is within one step's altitude change of the horizon; this catches a stretch that falls between two
+// coarse samples even when the surrounding samples are monotonic, without scanning every near-horizon interval.
+// The result is capped at the scanned span so it can never exceed P4 - P1.
 function observableDaysFromScan(scan: AltitudeScan, horizonAltitude: Angle, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, reference: Time) {
 	const { jds, altitudes, step } = scan
 	if (!(step > 0) || altitudes.length < 2) return 0
+
+	// Highest and lowest samples: the single interior extremum (where a hidden crossing pair can sit) lies within
+	// one step of one of them.
+	let highest = 0
+	let lowest = 0
+	for (let i = 1; i < altitudes.length; i++) {
+		if (altitudes[i] > altitudes[highest]) highest = i
+		if (altitudes[i] < altitudes[lowest]) lowest = i
+	}
 
 	// A same-side interval can hide a crossing pair only when an endpoint is within this much of the horizon.
 	const refineMargin = EARTH_ROTATION_RATE_PER_DAY * step
@@ -383,10 +379,11 @@ function observableDaysFromScan(scan: AltitudeScan, horizonAltitude: Angle, long
 
 		if (a >= 0 === b >= 0) {
 			// Both endpoints on the same side of the horizon: confidently the whole step (above) or nothing
-			// (below), unless an endpoint is within one step's altitude change of the horizon AND the window is
-			// non-monotonic, so a brief excursion across the horizon could hide between the samples; then
+			// (below), unless this interval touches the extremum sample and an endpoint is within one step's
+			// altitude change of the horizon, so a brief excursion across it could hide between the samples; then
 			// integrate the sub-interval.
-			if (Math.min(Math.abs(a), Math.abs(b)) < refineMargin && !isMonotonicWindow(altitudes, i)) days += aboveHorizonDaysInInterval(jds[i], jds[i + 1], horizonAltitude, longitude, latitude, getPosition, reference)
+			const touchesExtremum = i === highest || i + 1 === highest || i === lowest || i + 1 === lowest
+			if (touchesExtremum && Math.min(Math.abs(a), Math.abs(b)) < refineMargin) days += aboveHorizonDaysInInterval(jds[i], jds[i + 1], horizonAltitude, longitude, latitude, getPosition, reference)
 			else days += a >= 0 ? step : 0
 		} else {
 			// The endpoints straddle the horizon: the crossing is at t = a / (a - b) of the step (a - b != 0).
