@@ -60,6 +60,10 @@ describe('visibility classification', () => {
 		expect(local.events.MAX!.observable).toBe(true)
 		expect(local.events.MAX!.altitude).toBeGreaterThan(0)
 		expect(local.visibility.kind).toBe('completelyVisible')
+		// The whole eclipse is above the horizon here, so the observable time must equal the penumbral phase
+		// duration, never exceed it (the previous sample-count formula overcounted by one step).
+		expect(local.details.observableDuration).toBeLessThanOrEqual(local.details.penumbralPhaseDuration + 1e-6)
+		expect(local.details.observableDuration).toBeGreaterThan(local.details.penumbralPhaseDuration * 0.99)
 	}, 6000)
 
 	test('observer at the antipode has the Moon below the horizon throughout', () => {

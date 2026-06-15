@@ -108,8 +108,8 @@ export interface LocalLunarEclipseDetails {
 	readonly partialPhaseDuration: number | null
 	// Total phase duration U3 - U2 in seconds, or null when there is no total phase.
 	readonly totalPhaseDuration: number | null
-	// Total time (seconds) the Moon is at or above the horizon within the penumbral interval. Approximated from
-	// the altitude samples used by the continuous visibility check.
+	// Total time (seconds) the Moon is at or above the horizon within the penumbral interval, integrated from
+	// the altitude samples used by the continuous visibility check. Never exceeds penumbralPhaseDuration.
 	readonly observableDuration: number
 }
 
@@ -303,6 +303,37 @@ function scanAltitudes(fromJd: number, toJd: number, longitude: Angle, latitude:
 	return { jds, altitudes, step }
 }
 
+// Total time (days) the Moon is at or above the horizon within the scanned interval. Each sample interval
+// contributes its above-horizon fraction: 1 when both endpoints are above, 0 when both are below, and the
+// linearly interpolated horizon-crossing fraction otherwise. Integrating intervals (not counting samples)
+// avoids the off-by-one-step overcount of a sample count (the scan has samples + 1 points but step =
+// span / samples); the result is capped at the scanned span so it can never exceed P4 - P1.
+function observableDaysFromScan(scan: AltitudeScan, horizonAltitude: Angle) {
+	const { jds, altitudes, step } = scan
+	if (!(step > 0) || altitudes.length < 2) return 0
+
+	let days = 0
+
+	for (let i = 0; i + 1 < altitudes.length; i++) {
+		const a = altitudes[i] - horizonAltitude
+		const b = altitudes[i + 1] - horizonAltitude
+
+		let fraction: number
+		if (a >= 0 && b >= 0) fraction = 1
+		else if (a < 0 && b < 0) fraction = 0
+		// One endpoint above, one below: the crossing is at t = a / (a - b) of the step (a - b != 0 here). The
+		// above-horizon part is [0, t] when starting above, else [t, 1].
+		else {
+			const t = a / (a - b)
+			fraction = a >= 0 ? t : 1 - t
+		}
+
+		days += fraction * step
+	}
+
+	return Math.min(days, jds.at(-1)! - jds[0])
+}
+
 // Whether the Moon is at or above the horizon at any sample within [fromJd, toJd].
 function anyAboveDuring(scan: AltitudeScan, fromJd: number, toJd: number, horizonAltitude: Angle) {
 	const { jds, altitudes } = scan
@@ -360,10 +391,9 @@ export function computeLocalLunarEclipseCircumstances(eclipse: LunarEclipse, lon
 	else if (umbralVisible) kind = 'partialVisible'
 	else kind = 'penumbralOnlyVisible'
 
-	// Observable duration: count samples above the horizon, scaled by the sample spacing.
-	let aboveCount = 0
-	for (const altitude of scan.altitudes) if (altitude >= horizonAltitude) aboveCount++
-	const observableDuration = aboveCount * scan.step * DAYSEC
+	// Observable duration: integrate the above-horizon fraction of each sample interval (capped at the scanned
+	// span), so a fully-above eclipse reports exactly P4 - P1 rather than one sample step more.
+	const observableDuration = observableDaysFromScan(scan, horizonAltitude) * DAYSEC
 
 	const [, maximalPenumbralMagnitude] = shadowMagnitudes(Math.abs(eclipse.gamma), eclipse.u)
 
