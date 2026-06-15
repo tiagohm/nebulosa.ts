@@ -528,10 +528,11 @@ function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: GeoCurv
 	const direction: RaAxisDirection = projection.options?.raAxisDirection ?? 'east'
 	const wrappedRing = recenterRing(ring, centralMeridian, direction)
 
-	if (ringEnclosesPole(wrappedRing)) return polarCapFillPath(wrappedRing, event?.declination ?? 0, projection, region, precision, POLAR_CAP_FILL_PROJECTION_OPTIONS)
+	const wrappedOptions: ProjectionOptions = { ...projection.options, ...POLAR_CAP_FILL_PROJECTION_OPTIONS }
+	if (ringEnclosesPole(wrappedRing)) return polarCapFillPath(wrappedRing, event?.declination ?? 0, projection, region, precision, wrappedOptions)
 
 	const capExceedsHemisphere = event ? capRadius(event.horizonAltitude, event.distance) > PIOVERTWO : false
-	return nonPolarCapFillPath(wrappedRing, projection, region, capExceedsHemisphere, precision, POLAR_CAP_FILL_PROJECTION_OPTIONS)
+	return nonPolarCapFillPath(wrappedRing, projection, region, capExceedsHemisphere, precision, wrappedOptions)
 }
 
 // Projects the lunar eclipse map geometry and serializes each contact's horizon curve into an SVG path data
