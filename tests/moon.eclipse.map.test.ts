@@ -58,6 +58,27 @@ describe('events by type', () => {
 	})
 })
 
+describe('maxAngularStep validation', () => {
+	// An invalid spacing must fall back to the default, not make the per-curve sample count non-finite and throw
+	// a RangeError from new Array(...).
+	test('invalid maxAngularStep falls back to the default instead of throwing', () => {
+		for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+			const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { maxAngularStep: bad })
+			const branch = geometry.lines.moonRiseSet.MAX![0]
+			expect(branch.length).toBeGreaterThan(1)
+			for (const point of branch) {
+				expect(Number.isFinite(point.x)).toBe(true)
+				expect(Number.isFinite(point.y)).toBe(true)
+			}
+		}
+
+		// The fallback produces exactly the default-spacing curve.
+		const fallback = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { maxAngularStep: 0 }).lines.moonRiseSet.MAX![0]
+		const byDefault = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition).lines.moonRiseSet.MAX![0]
+		expect(fallback.length).toBe(byDefault.length)
+	}, 4000)
+})
+
 describe('horizon curve geometry', () => {
 	const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
 

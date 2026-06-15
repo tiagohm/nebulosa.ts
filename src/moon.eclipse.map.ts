@@ -314,7 +314,10 @@ function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: (time: Tim
 //   sunMoonPosition: apparent Sun/Moon position provider at a dynamical time (see computeSunMoonPositionAt).
 //   options: curve sampling and visibility-horizon options.
 export function computeLunarEclipseMapGeometry(eclipse: LunarEclipse, sunMoonPosition: (time: Time) => SunMoonPosition, options: LunarEclipseMapGeometryOptions = {}): LunarEclipseMapGeometry {
-	const maxAngularStep = options.maxAngularStep ?? DEFAULT_MAX_ANGULAR_STEP
+	// Use the requested spacing only when it is a finite positive angle; otherwise fall back to the default, so an
+	// invalid maxAngularStep (0, negative, NaN or Infinity) can never make a curve's sample count non-finite and
+	// throw a RangeError from new Array(...) before any geometry is returned.
+	const maxAngularStep = options.maxAngularStep !== undefined && Number.isFinite(options.maxAngularStep) && options.maxAngularStep > 0 ? options.maxAngularStep : DEFAULT_MAX_ANGULAR_STEP
 	const baseHorizon = baseHorizonAltitude(options.horizonAltitude ?? 0, options.refraction ?? false)
 	const limbVisibility = options.limbVisibility ?? 'center'
 
