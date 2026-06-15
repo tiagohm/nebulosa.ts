@@ -8,7 +8,7 @@ import { clamp } from './math'
 import type { LunarEclipse } from './moon'
 import { lunarEclipseEvents, type LunarEclipseContact, type LunarEclipseContactKind, MOON_RADIUS_EARTH_RADII } from './moon.eclipse.map'
 import type { SunMoonPosition } from './sun.eclipse.map'
-import { timeShift, tt, type Time } from './time'
+import { timeAtJulianDay, tt, type Time } from './time'
 import type { Writable } from './types'
 
 // Local lunar eclipse circumstances and Local View geometry.
@@ -605,11 +605,6 @@ function phaseStaysAboveHorizon(scan: AltitudeScan, fromJd: number, toJd: number
 	}
 
 	return true
-}
-
-// Builds a Time at a Julian Day, preserving the reference time scale and providers.
-function timeAtJulianDay(reference: Time, julianDay: number) {
-	return timeShift(reference, julianDay - reference.day - reference.fraction)
 }
 
 // Topocentric Moon altitude (radians) at a Julian Day, preserving the reference time scale and providers.

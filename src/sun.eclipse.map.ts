@@ -11,7 +11,7 @@ import { bisection, brentMinimize, brentRoot, type RootFindingOptions } from './
 import type { CylindricalProjection, ProjectionOptions } from './projection'
 import { polynomialRegression } from './regression'
 import type { SolarEclipse } from './sun'
-import { precessionNutationMatrix, timeShift, timeSubtract, toJulianDay, tt, type Time } from './time'
+import { precessionNutationMatrix, timeAtJulianDay, timeShift, timeSubtract, toJulianDay, tt, type Time } from './time'
 import type { Writable } from './types'
 import { vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMut } from './vec3'
 
@@ -511,10 +511,6 @@ function interpolateGreatCirclePoint(a: GeoPoint, b: GeoPoint, fraction: number)
 
 function validStep(value: number | undefined, fallback: number) {
 	return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback
-}
-
-function timeAtJulianDay(reference: Time, julianDay: number) {
-	return timeShift(reference, julianDay - reference.day - reference.fraction)
 }
 
 // Interpolates between two geographic points along the great-circle arc.

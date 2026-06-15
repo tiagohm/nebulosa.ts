@@ -7,7 +7,7 @@ import { bisection, brentMinimize, type RootFindingOptions } from './optimizatio
 import { nearestSolarEclipse, type SolarEclipse } from './sun'
 // oxfmt-ignore
 import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, computePolynomialBesselianElements, evaluateBesselian, F, findMaximumPoint, hourAngleFromLongitude, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type GeoPoint, type InstantBesselianElements, type PolynomialBesselianElements, type SunMoonPosition } from './sun.eclipse.map'
-import { type Time, timeShift, toJulianDay, tt } from './time'
+import { type Time, timeAtJulianDay, toJulianDay, tt } from './time'
 import type { Writable } from './types'
 
 // Local solar eclipse circumstances ("Local View"): for a single geographic point this module resolves
@@ -369,11 +369,6 @@ const DEFAULT_LOCAL_VIEW_OPTIONS: LocalSolarEclipseViewOptions = {
 	includeGhostDisks: true,
 	includeHorizon: true,
 	horizonBandPaddingPx: 4,
-}
-
-// Builds a Time at a Julian Day, preserving the reference time scale and providers.
-function timeAtJulianDay(reference: Time, julianDay: number) {
-	return timeShift(reference, julianDay - reference.day - reference.fraction)
 }
 
 // Computes the local fundamental-plane geometry for one observer at one instant, following the same

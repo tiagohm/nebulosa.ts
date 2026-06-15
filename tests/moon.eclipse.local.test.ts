@@ -1,32 +1,44 @@
 import { describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { PIOVERTWO, TAU } from '../src/constants'
-import * as elpmpp02 from '../src/elpmpp02'
-import { nearestLunarEclipse, type LunarEclipse } from '../src/moon'
+import { nearestLunarEclipse } from '../src/moon'
 import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry, moonAltitudeAt, type LocalLunarEclipseSvgCircle, type LocalLunarEclipseSvgPolygon } from '../src/moon.eclipse.local'
 import { computeLunarEclipseMapGeometry } from '../src/moon.eclipse.map'
-import { computeSunMoonPositionAt } from '../src/sun.eclipse.map'
-import { timeShift, toJulianDay, type Time, timeYMDHMS } from '../src/time'
-import * as vsop87e from '../src/vsop87e'
+import type { SunMoonPosition } from '../src/sun.eclipse.map'
+import { toJulianDay, type Time, timeYMDHMS, greenwichApparentSiderealTime, timeAtJulianDay } from '../src/time'
 
-function sunMoonPosition(t: Time) {
-	return computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
+const FAST_LONGITUDE = deg(5)
+const FAST_LATITUDE = 0
+
+// Cheap deterministic position provider for tests that exercise local-circumstance plumbing rather than the
+// analytical VSOP87/ELP ephemerides. The Moon stays high for FAST_LONGITUDE/FAST_LATITUDE, keeping visibility
+// and duration assertions stable while avoiding hundreds of expensive series evaluations.
+function fastSunMoonPosition(time: Time) {
+	const gast = greenwichApparentSiderealTime(time)
+
+	return {
+		sun: { rightAscension: gast - Math.PI + deg(0.1), declination: 0, distance: 1 },
+		moon: { rightAscension: gast, declination: 0, distance: 60 },
+		deltaT: 0,
+	}
+}
+
+function fixedSunMoonPosition(rightAscension: number, declination: number = 0) {
+	return (time: Time): SunMoonPosition => ({
+		sun: { rightAscension: rightAscension - Math.PI + deg(0.1), declination: 0, distance: 1 },
+		moon: { rightAscension, declination, distance: 60 },
+		deltaT: 0,
+	})
 }
 
 const PENUMBRAL = nearestLunarEclipse(timeYMDHMS(1973, 6, 1), true)
 const TOTAL = nearestLunarEclipse(timeYMDHMS(1997, 7, 1), true)
 const PARTIAL = nearestLunarEclipse(timeYMDHMS(1994, 5, 25), true)
 
-// Sublunar point (longitude, latitude) at maximal eclipse, where the Moon is at the zenith.
-function sublunarAtMax(eclipse: LunarEclipse) {
-	const geometry = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition)
-	const max = geometry.events.find((e) => e.kind === 'MAX')!
-	return { longitude: max.sublunar.x, latitude: max.sublunar.y }
-}
-
 // Ray-casting point-in-polygon test.
 function pointInPolygon(px: number, py: number, polygon: readonly { readonly x: number; readonly y: number }[]) {
 	let inside = false
+
 	for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
 		const xi = polygon[i].x
 		const yi = polygon[i].y
@@ -34,6 +46,7 @@ function pointInPolygon(px: number, py: number, polygon: readonly { readonly x: 
 		const yj = polygon[j].y
 		if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside
 	}
+
 	return inside
 }
 
@@ -42,51 +55,47 @@ describe('ancient dates', () => {
 	// real geometric eclipse instead of nothing.
 	test('local circumstances resolve for an eclipse before JD 0', () => {
 		const ancient = nearestLunarEclipse(timeYMDHMS(-5000, 1, 1), true)
-		const local = computeLocalLunarEclipseCircumstances(ancient, 0, 0, sunMoonPosition, { altitudeSamples: 12 })
+		const local = computeLocalLunarEclipseCircumstances(ancient, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 4 })
 		expect(local.visibility.hasGeometricEclipse).toBe(true)
 		expect(Object.keys(local.events)).toEqual(['P1', 'U1', 'MAX', 'U4', 'P4'])
 		expect(local.events.MAX!.time.day).toBeLessThan(0)
-	}, 6000)
+	})
 })
 
 describe('altitudeSamples normalization', () => {
-	// The sublunar point at MAX sees the whole eclipse above the horizon, so observableDuration equals the full
+	// The synthetic Moon stays above the horizon throughout the eclipse, so observableDuration equals the full
 	// penumbral phase only when the scan reaches P4. A fractional sample count must not make it stop short, and a
 	// non-finite count must neither hang (Infinity) nor skip the scan (NaN); all normalize to the default 48.
-	const { longitude, latitude } = sublunarAtMax(TOTAL)
-	const reference = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition).details.observableDuration
+	const reference = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition).details.observableDuration
 
 	test('fractional altitudeSamples is floored and still reaches P4', () => {
-		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: 48.5 })
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 48.5 })
 		expect(local.details.observableDuration).toBeCloseTo(reference, 6)
 		expect(local.details.observableDuration).toBeGreaterThan(local.details.penumbralPhaseDuration * 0.99)
-	}, 6000)
+	})
 
 	test('non-finite altitudeSamples falls back to the default without hanging', () => {
 		for (const bad of [Number.POSITIVE_INFINITY, Number.NaN]) {
-			const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: bad })
+			const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: bad })
 			expect(local.details.observableDuration).toBeCloseTo(reference, 6)
 		}
-	}, 8000)
+	})
 })
 
 describe('horizonAltitude normalization', () => {
-	const { longitude, latitude } = sublunarAtMax(TOTAL)
-
 	test('non-finite horizonAltitude falls back to the geometric horizon', () => {
-		const reference = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: 12 })
+		const reference = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 12 })
 		for (const bad of [Number.POSITIVE_INFINITY, Number.NaN]) {
-			const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: 12, horizonAltitude: bad })
+			const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 12, horizonAltitude: bad })
 			expect(local.visibility.kind).toBe(reference.visibility.kind)
 			expect(local.details.observableDuration).toBeCloseTo(reference.details.observableDuration, 6)
 			expect(local.events.MAX!.observable).toBe(reference.events.MAX!.observable)
 		}
-	}, 8000)
+	})
 })
 
 describe('per-contact magnitudes', () => {
-	const { longitude, latitude } = sublunarAtMax(TOTAL)
-	const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition)
+	const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 4 })
 
 	test('umbral magnitude is 0 at U1/U4 and 1 at U2/U3', () => {
 		expect(local.events.U1!.umbralMagnitude).toBeCloseTo(0, 6)
@@ -105,17 +114,15 @@ describe('per-contact magnitudes', () => {
 	})
 
 	test('penumbral-only eclipse exposes its penumbral magnitude at MAX', () => {
-		const sub = sublunarAtMax(PENUMBRAL)
-		const localPen = computeLocalLunarEclipseCircumstances(PENUMBRAL, sub.longitude, sub.latitude, sunMoonPosition)
+		const localPen = computeLocalLunarEclipseCircumstances(PENUMBRAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 4 })
 		expect(localPen.events.MAX!.penumbralMagnitude).toBeCloseTo(PENUMBRAL.magnitude, 6)
 		expect(localPen.details.maximalUmbralMagnitude).toBeNull()
-	}, 6000)
+	})
 })
 
 describe('visibility classification', () => {
 	test('observer at the sublunar point sees the whole eclipse above the horizon', () => {
-		const { longitude, latitude } = sublunarAtMax(TOTAL)
-		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition)
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition)
 		expect(local.visibility.hasObservableEclipse).toBe(true)
 		expect(local.events.MAX!.observable).toBe(true)
 		expect(local.events.MAX!.altitude).toBeGreaterThan(0)
@@ -124,72 +131,66 @@ describe('visibility classification', () => {
 		// duration, never exceed it (the previous sample-count formula overcounted by one step).
 		expect(local.details.observableDuration).toBeLessThanOrEqual(local.details.penumbralPhaseDuration + 1e-6)
 		expect(local.details.observableDuration).toBeGreaterThan(local.details.penumbralPhaseDuration * 0.99)
-	}, 6000)
+	})
 
 	test('observer at the antipode has the Moon below the horizon throughout', () => {
-		const sub = sublunarAtMax(TOTAL)
-		const longitude = sub.longitude > 0 ? sub.longitude - Math.PI : sub.longitude + Math.PI
-		const latitude = -sub.latitude
-		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition)
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE + Math.PI, -FAST_LATITUDE, fastSunMoonPosition)
 		expect(local.visibility.hasObservableEclipse).toBe(false)
 		expect(local.visibility.kind).toBe('geometricOnlyBelowHorizon')
 		expect(local.events.MAX!.observable).toBe(false)
 		expect(local.details.observableDuration).toBe(0)
-	}, 6000)
+	})
 
 	test('hasGeometricEclipse is true regardless of horizon', () => {
-		const sub = sublunarAtMax(TOTAL)
-		const longitude = sub.longitude > 0 ? sub.longitude - Math.PI : sub.longitude + Math.PI
-		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, -sub.latitude, sunMoonPosition)
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE + Math.PI, -FAST_LATITUDE, fastSunMoonPosition)
 		expect(local.visibility.hasGeometricEclipse).toBe(true)
-	}, 6000)
+	})
 
 	// An observer a hair inside the geocentric MAX horizon curve: the geocentric Moon center is above the
 	// horizon, but once diurnal parallax (~0.95 deg) is applied the topocentric center is below it. The old
 	// geocentric conversion marked this location observable; the topocentric one must not.
 	test('observer just inside the geocentric horizon is below the topocentric horizon', () => {
-		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
+		const geometry = computeLunarEclipseMapGeometry(TOTAL, fastSunMoonPosition)
 		const max = geometry.events.find((e) => e.kind === 'MAX')!
 		// On the sublunar meridian (hour angle 0), geocentric altitude = 90 deg - |latitude - declination|; place
-		// the observer 0.3 deg inside the 90 deg horizon. (declination < 0 here keeps the latitude within range.)
+		// the observer 0.3 deg inside the 90 deg horizon.
 		const longitude = max.sublunar.x
 		const latitude = max.declination + (PIOVERTWO - deg(0.3))
 		const H = max.gast + longitude - max.rightAscension
 		const geocentricAltitude = Math.asin(Math.sin(latitude) * Math.sin(max.declination) + Math.cos(latitude) * Math.cos(max.declination) * Math.cos(H))
 		expect(geocentricAltitude).toBeGreaterThan(0)
 
-		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition)
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, fastSunMoonPosition)
 		expect(local.events.MAX!.altitude).toBeLessThan(0)
 		expect(local.events.MAX!.altitude).toBeLessThan(geocentricAltitude)
 		expect(local.events.MAX!.observable).toBe(false)
-	}, 8000)
+	})
 
 	// Replicates one point of the module's exact penumbral sample grid (reference = maximalTime, see scanAltitudes).
-	function gridAltitude(jd: number, longitude: number, latitude: number) {
-		const reference = TOTAL.maximalTime
-		return moonAltitudeAt(timeShift(reference, jd - reference.day - reference.fraction), longitude, latitude, sunMoonPosition)
+	function gridAltitude(jd: number, longitude: number, latitude: number, sunMoonPosition: (time: Time) => SunMoonPosition = fastSunMoonPosition) {
+		return moonAltitudeAt(timeAtJulianDay(TOTAL.maximalTime, jd), longitude, latitude, sunMoonPosition)
 	}
 
 	// A short above-horizon stretch (here the sharp upper-transit peak) can fall between two fixed samples, so a
 	// sample-only check would report it unobservable; the interior search must still catch it.
 	test('Moon above the horizon only between two default samples is still classified observable', () => {
-		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
-		const max = geometry.events.find((e) => e.kind === 'MAX')!
 		// Latitude = declination puts the Moon through the zenith at its transit (a sharp altitude peak);
 		// offsetting the longitude by ~half a sample step moves that peak between two default samples.
-		const latitude = max.declination
-		const longitude = max.sublunar.x + deg(0.94)
+		const latitude = 0
+		const longitude = 0
 
 		const p1jd = toJulianDay(TOTAL.firstContactPenumbraTime)
 		const p4jd = toJulianDay(TOTAL.lastContactPenumbraTime)
 		const samples = 48
 		const step = (p4jd - p1jd) / samples
+		const targetJd = p1jd + 20.5 * step
+		const sunMoonPosition = fixedSunMoonPosition(greenwichApparentSiderealTime(timeAtJulianDay(TOTAL.maximalTime, targetJd)))
 
 		// Maximum over the exact default sample grid (what a sample-only check would see), and its location.
 		let coarseMax = -Infinity
 		let imax = 0
 		for (let i = 0; i <= samples; i++) {
-			const altitude = gridAltitude(p1jd + i * step, longitude, latitude)
+			const altitude = gridAltitude(p1jd + i * step, longitude, latitude, sunMoonPosition)
 			if (altitude > coarseMax) {
 				coarseMax = altitude
 				imax = i
@@ -200,7 +201,7 @@ describe('visibility classification', () => {
 		const loZoom = p1jd + Math.max(0, imax - 1) * step
 		const hiZoom = p1jd + Math.min(samples, imax + 1) * step
 		let fineMax = -Infinity
-		for (let i = 0; i <= 40; i++) fineMax = Math.max(fineMax, gridAltitude(loZoom + (i / 40) * (hiZoom - loZoom), longitude, latitude))
+		for (let i = 0; i <= 40; i++) fineMax = Math.max(fineMax, gridAltitude(loZoom + (i / 40) * (hiZoom - loZoom), longitude, latitude, sunMoonPosition))
 
 		// The peak genuinely falls between samples: it exceeds every default sample.
 		expect(fineMax).toBeGreaterThan(coarseMax)
@@ -217,46 +218,41 @@ describe('visibility classification', () => {
 		// two coarse samples is integrated, not dropped to zero.
 		expect(local.details.observableDuration).toBeGreaterThan(0)
 		expect(local.details.observableDuration).toBeLessThanOrEqual(local.details.penumbralPhaseDuration + 1e-6)
-	}, 15000)
+	})
 
 	// The hard case a discrete monotonic-window test would skip: an upper-transit peak inside the FIRST scan step,
 	// after which the samples descend monotonically. The duration must still integrate the brief stretch.
 	test('a peak in the first step with monotonic neighbours still yields a positive duration', () => {
-		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
-		const p1ev = geometry.events.find((e) => e.kind === 'P1')!
-		const u1ev = geometry.events.find((e) => e.kind === 'U1')!
-
 		const p1jd = toJulianDay(TOTAL.firstContactPenumbraTime)
 		const p4jd = toJulianDay(TOTAL.lastContactPenumbraTime)
 		const samples = 48
 		const step = (p4jd - p1jd) / samples
 
-		// Place the Moon's zenith transit a quarter step after P1: the sublunar longitude there, extrapolated from
-		// the near-P1 linear rate. Latitude = declination makes that transit a sharp ~90 deg peak.
-		const wrap = (x: number) => ((((x + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) - Math.PI
-		const sublunarRate = wrap(u1ev.sublunar.x - p1ev.sublunar.x) / (u1ev.jd - p1ev.jd)
+		// Place the Moon's zenith transit a quarter step after P1. Latitude = declination makes that transit a
+		// sharp ~90 deg peak while the coarse grid samples descend monotonically after P1.
 		const targetJd = p1jd + 0.25 * step
-		const longitude = p1ev.sublunar.x + sublunarRate * (targetJd - p1jd)
-		const latitude = p1ev.declination
+		const longitude = 0
+		const latitude = 0
+		const sunMoonPosition = fixedSunMoonPosition(greenwichApparentSiderealTime(timeAtJulianDay(TOTAL.maximalTime, targetJd)))
 
 		// On the coarse default grid P1 is the highest sample and the grid descends monotonically afterwards: the
 		// window the discrete monotonic test would (wrongly) skip.
 		let coarseMax = -Infinity
 		let imax = 0
 		for (let i = 0; i <= samples; i++) {
-			const altitude = gridAltitude(p1jd + i * step, longitude, latitude)
+			const altitude = gridAltitude(p1jd + i * step, longitude, latitude, sunMoonPosition)
 			if (altitude > coarseMax) {
 				coarseMax = altitude
 				imax = i
 			}
 		}
 		expect(imax).toBe(0)
-		expect(gridAltitude(p1jd, longitude, latitude)).toBeGreaterThan(gridAltitude(p1jd + step, longitude, latitude))
-		expect(gridAltitude(p1jd + step, longitude, latitude)).toBeGreaterThan(gridAltitude(p1jd + 2 * step, longitude, latitude))
+		expect(gridAltitude(p1jd, longitude, latitude, sunMoonPosition)).toBeGreaterThan(gridAltitude(p1jd + step, longitude, latitude, sunMoonPosition))
+		expect(gridAltitude(p1jd + step, longitude, latitude, sunMoonPosition)).toBeGreaterThan(gridAltitude(p1jd + 2 * step, longitude, latitude, sunMoonPosition))
 
 		// The true peak in the first step exceeds every coarse sample.
 		let fineMax = -Infinity
-		for (let i = 0; i <= 40; i++) fineMax = Math.max(fineMax, gridAltitude(p1jd + (i / 40) * step, longitude, latitude))
+		for (let i = 0; i <= 40; i++) fineMax = Math.max(fineMax, gridAltitude(p1jd + (i / 40) * step, longitude, latitude, sunMoonPosition))
 		expect(fineMax).toBeGreaterThan(coarseMax)
 
 		const horizonAltitude = (coarseMax + fineMax) / 2
@@ -264,7 +260,7 @@ describe('visibility classification', () => {
 		expect(local.visibility.hasObservableEclipse).toBe(true)
 		expect(local.details.observableDuration).toBeGreaterThan(0)
 		expect(local.details.observableDuration).toBeLessThanOrEqual(local.details.penumbralPhaseDuration + 1e-6)
-	}, 15000)
+	})
 
 	// A high-latitude grazing moonrise/moonset whose entire above-horizon window is far shorter than scan.step / 16.
 	// With a coarse scan (2 samples, one ~2.5 h step), a fixed 16-piece subdivision of the suspect step would find
@@ -273,31 +269,38 @@ describe('visibility classification', () => {
 	// horizon roots around it recovers the brief duration, keeping observableDuration consistent with observability.
 	test('a grazing window shorter than a refinement sub-step still yields a positive duration', () => {
 		const samples = 2
-		const longitude = deg(-180)
-		const latitude = deg(79)
-		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: samples })
+		const longitude = 0
+		const latitude = 0
+		const p1jd = toJulianDay(TOTAL.firstContactPenumbraTime)
+		const p4jd = toJulianDay(TOTAL.lastContactPenumbraTime)
+		const step = (p4jd - p1jd) / samples
+		const targetJd = p1jd + 0.5 * step
+		const sunMoonPosition = fixedSunMoonPosition(greenwichApparentSiderealTime(timeAtJulianDay(TOTAL.maximalTime, targetJd)))
+		const fineMax = gridAltitude(targetJd, longitude, latitude, sunMoonPosition)
+		const horizonAltitude = fineMax - deg(0.5)
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: samples, horizonAltitude })
 
 		const subStepSeconds = local.details.penumbralPhaseDuration / samples / 16
 		expect(local.visibility.hasObservableEclipse).toBe(true)
 		// The window is real but shorter than one refinement sub-step, so a both-below sub-step integration misses it.
 		expect(local.details.observableDuration).toBeGreaterThan(0)
 		expect(local.details.observableDuration).toBeLessThan(subStepSeconds)
-	}, 6000)
+	})
 
 	// Every contact can be above the horizon while the Moon still dips below it between contacts (a high-latitude
 	// lower culmination during the multi-hour penumbral interval). 'completelyVisible' must check the whole
 	// interval, not just the contact samples.
 	test('contacts above the horizon with a dip below between them is not completelyVisible', () => {
-		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
-		const max = geometry.events.find((e) => e.kind === 'MAX')!
-		// High southern latitude keeps the full Moon up but low; the longitude places its lower culmination
+		// High latitude keeps the full Moon up but low; the fixed right ascension places its lower culmination
 		// roughly midway between U1 and U2, so the altitude dips to an interior minimum between contacts.
-		const latitude = -deg(70)
-		const longitude = max.sublunar.x + Math.PI + deg(16.2)
+		const latitude = deg(70)
+		const declination = deg(30)
+		const longitude = 0
+		const targetJd = (toJulianDay(TOTAL.firstContactUmbraTime) + toJulianDay(TOTAL.totalBeginTime)) * 0.5
+		const sunMoonPosition = fixedSunMoonPosition(greenwichApparentSiderealTime(timeAtJulianDay(TOTAL.maximalTime, targetJd)) + longitude - Math.PI, declination)
 
 		function altAt(jd: number) {
-			const reference = TOTAL.maximalTime
-			return moonAltitudeAt(timeShift(reference, jd - reference.day - reference.fraction), longitude, latitude, sunMoonPosition)
+			return gridAltitude(jd, longitude, latitude, sunMoonPosition)
 		}
 
 		// Topocentric contact altitudes (P1, U1, U2, MAX, U3, U4, P4).
@@ -321,12 +324,11 @@ describe('visibility classification', () => {
 		// ...but the Moon drops below the horizon between contacts, so the eclipse is not entirely visible.
 		expect(local.visibility.kind).not.toBe('completelyVisible')
 		expect(local.visibility.hasObservableEclipse).toBe(true)
-	}, 15000)
+	})
 })
 
 describe('P/Z orientation angles and Alt/Az', () => {
-	const { longitude, latitude } = sublunarAtMax(TOTAL)
-	const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition)
+	const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 4 })
 
 	test('every event angle is finite and normalized to [0, TAU)', () => {
 		for (const kind of Object.keys(local.events) as (keyof typeof local.events)[]) {
@@ -347,15 +349,14 @@ describe('P/Z orientation angles and Alt/Az', () => {
 	})
 
 	test('partial eclipse has no total phase duration', () => {
-		const sub = sublunarAtMax(PARTIAL)
-		const localPartial = computeLocalLunarEclipseCircumstances(PARTIAL, sub.longitude, sub.latitude, sunMoonPosition)
+		const localPartial = computeLocalLunarEclipseCircumstances(PARTIAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 4 })
 		expect(localPartial.details.totalPhaseDuration).toBeNull()
 		expect(localPartial.details.partialPhaseDuration).toBeGreaterThan(0)
-	}, 6000)
+	})
 
 	// Position angle of the Earth-shadow center on the lunar disk at a given instant (geocentric, antisolar).
 	function shadowCenterPositionAngle(time: Time) {
-		const position = sunMoonPosition(time)
+		const position = fastSunMoonPosition(time)
 		const moonRA = position.moon.rightAscension
 		const moonDEC = position.moon.declination
 		// Mirror positionAngleBetween(moon, antisolar) with shadowDEC = -sunDEC: y = cos(dec2) sin(dRA),
@@ -382,8 +383,7 @@ describe('P/Z orientation angles and Alt/Az', () => {
 })
 
 describe('Local View geometry', () => {
-	const { longitude, latitude } = sublunarAtMax(TOTAL)
-	const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition)
+	const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 4 })
 	const view = computeLocalLunarEclipseViewGeometry(local, TOTAL, { selectedEvent: 'MAX' })
 
 	function circles(role: LocalLunarEclipseSvgCircle['role']) {
@@ -421,23 +421,22 @@ describe('Local View geometry', () => {
 	})
 
 	test('falls back to MAX when the requested contact is absent', () => {
-		const sub = sublunarAtMax(PENUMBRAL)
-		const localPen = computeLocalLunarEclipseCircumstances(PENUMBRAL, sub.longitude, sub.latitude, sunMoonPosition)
+		const localPen = computeLocalLunarEclipseCircumstances(PENUMBRAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 4 })
 		const penView = computeLocalLunarEclipseViewGeometry(localPen, PENUMBRAL, { selectedEvent: 'U2' })
 		expect(penView.requestedEvent).toBe('U2')
 		expect(penView.selectedEvent).toBe('MAX')
-	}, 6000)
+	})
 
 	// With an obstructed horizon the view horizon must track horizonAltitude, not true altitude 0: a Moon above
 	// the true horizon but below the configured one is not observable and must be drawn below the band.
 	test('selected event below a custom horizon is drawn below the band', () => {
-		const max = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition).events.find((e) => e.kind === 'MAX')!
-		// High latitude so the Moon transits low at MAX: a few degrees up, between 0 and a 10 deg obstructed horizon.
-		const longitude = max.sublunar.x
-		const latitude = max.declination + deg(83)
+		// Fixed right ascension puts MAX a few degrees up, between 0 and a 10 deg obstructed horizon.
+		const longitude = 0
+		const latitude = 0
 		const customHorizon = deg(10)
+		const sunMoonPosition = fixedSunMoonPosition(greenwichApparentSiderealTime(TOTAL.maximalTime) + longitude - deg(85))
 
-		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { horizonAltitude: customHorizon })
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: 4, horizonAltitude: customHorizon })
 		const maxEvent = local.events.MAX!
 		// Above the true horizon but below the obstructed one, hence not observable.
 		expect(maxEvent.altitude).toBeGreaterThan(0)
@@ -455,15 +454,16 @@ describe('Local View geometry', () => {
 		expect(primaryInsideBand(0)).toBe(false)
 		// Drawn against the configured 10 deg horizon the Moon is below it: inside the band, matching observable=false.
 		expect(primaryInsideBand(customHorizon)).toBe(true)
-	}, 7000)
+	})
 
 	// A non-MAX selected contact whose disk is offset from the shadow center: the horizon must be anchored at the
-	// disk, not the shadow center, so the band agrees with the contact's observable flag. The 1997-09-16 total
-	// eclipse P1 at ~142 W, 80 S has a slightly negative topocentric altitude (not observable).
+	// disk, not the shadow center, so the band agrees with the contact's observable flag. The synthetic P1 altitude
+	// is slightly negative (not observable).
 	test('a non-MAX contact just below the horizon is drawn inside the band', () => {
-		const longitude = deg(-142)
-		const latitude = deg(-80)
-		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: 12 })
+		const longitude = 0
+		const latitude = 0
+		const sunMoonPosition = fixedSunMoonPosition(greenwichApparentSiderealTime(TOTAL.firstContactPenumbraTime) + longitude - deg(90.5))
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: 4 })
 		expect(local.events.P1!.altitude).toBeLessThan(0)
 		expect(local.events.P1!.observable).toBe(false)
 
@@ -473,5 +473,5 @@ describe('Local View geometry', () => {
 		const moon = view.shapes.find((s): s is LocalLunarEclipseSvgCircle => s.kind === 'circle' && s.role === 'moonDisk')!
 		// The below-horizon disk lands inside the below-horizon band, consistent with observable === false.
 		expect(pointInPolygon(moon.cx, moon.cy, band.points)).toBe(true)
-	}, 6000)
+	})
 })
