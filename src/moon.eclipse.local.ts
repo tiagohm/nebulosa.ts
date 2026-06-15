@@ -1,6 +1,6 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
 import { parallacticAngle } from './astrometry'
-import { DAYSEC, PI } from './constants'
+import { DAYSEC, PI, WGS84_FLATTENING } from './constants'
 import { equatorialToHorizontal } from './coordinate'
 import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
@@ -38,6 +38,8 @@ const MOON_RADIUS_EARTH_RADII = 0.2725
 // Mean angular size (radians) of one Earth equatorial radius seen from the Moon (mean distance ~60.27 Earth
 // radii). Used only to scale the schematic Local View horizon offset; not a precise per-event value.
 const MEAN_EARTH_RADIUS_ANGULAR_AT_MOON: Angle = Math.asin(1 / 60.27)
+// Earth polar/equatorial radius ratio (1 - flattening).
+const F = 1 - WGS84_FLATTENING
 
 // Coarse local visibility classification of a lunar eclipse for one observer.
 export type LocalLunarEclipseVisibilityKind = 'notVisible' | 'penumbralOnlyVisible' | 'partialVisible' | 'totalVisible' | 'completelyVisible' | 'geometricOnlyBelowHorizon'
@@ -63,11 +65,11 @@ export interface LocalLunarEclipseEvent {
 	readonly time: Time
 	// Julian Day of the contact.
 	readonly jd: number
-	// Whether the Moon is at or above the configured horizon at the contact.
+	// Whether the Moon is at or above the configured horizon at the contact (topocentric center altitude).
 	readonly observable: boolean
-	// Apparent Moon altitude (radians) at the contact for this observer.
+	// Topocentric apparent Moon altitude (radians) at the contact for this observer (diurnal parallax applied).
 	readonly altitude: Angle
-	// Apparent Moon azimuth (radians) at the contact, measured from North through East, in [0, TAU).
+	// Topocentric apparent Moon azimuth (radians) at the contact, measured from North through East, in [0, TAU).
 	readonly azimuth: Angle
 	// Position angle of the Earth-shadow center on the lunar disk, from celestial north toward east, in
 	// [0, TAU). This is the P angle of the contact tables.
@@ -176,12 +178,38 @@ function shadowMagnitudes(shadowDistance: number, u: number): [umbral: number, p
 	return [umbral, penumbral]
 }
 
-// Apparent Moon altitude (radians) at one instant for one observer, from the apparent Moon position and the
-// Greenwich apparent sidereal time. Used by the continuous visibility scan.
+// Topocentric Moon equatorial coordinates (radians) corrected for diurnal parallax. The geocentric apparent
+// Moon direction is shifted by the observer's geocentric position before re-deriving right ascension and
+// declination. Omitting this (~0.95 deg horizontal parallax) would overstate the altitude near the horizon by
+// up to one parallax, marking sub-horizon locations as observable, and would bias the Alt/Az and zenith angle.
+//   moonRA, moonDEC: geocentric apparent Moon right ascension/declination (radians).
+//   moonDistance: geocentric Moon distance in Earth equatorial radii (position.moon.distance).
+//   latitude: observer geodetic latitude (radians).
+//   lst: local apparent sidereal time (radians) = GAST + longitude.
+//   returns: [topocentric right ascension, topocentric declination] in radians.
+function moonTopocentric(moonRA: Angle, moonDEC: Angle, moonDistance: number, latitude: Angle, lst: Angle): [ra: Angle, dec: Angle] {
+	// Observer geocentric coordinates (Earth equatorial radii), reduced for Earth flattening (F = b / a). The
+	// observer's zenith points to right ascension = lst, geocentric declination = phi'.
+	const u = Math.atan(F * Math.tan(latitude))
+	const rhoSinPhi = F * Math.sin(u)
+	const rhoCosPhi = Math.cos(u)
+
+	const cosD = Math.cos(moonDEC)
+	const x = moonDistance * cosD * Math.cos(moonRA) - rhoCosPhi * Math.cos(lst)
+	const y = moonDistance * cosD * Math.sin(moonRA) - rhoCosPhi * Math.sin(lst)
+	const z = moonDistance * Math.sin(moonDEC) - rhoSinPhi
+	const r = Math.hypot(x, y, z)
+
+	return [Math.atan2(y, x), Math.asin(clamp(z / r, -1, 1))]
+}
+
+// Topocentric apparent Moon altitude (radians) at one instant for one observer. Applies diurnal parallax, then
+// converts to horizontal coordinates. Used by the continuous visibility scan.
 function moonAltitudeAt(time: Time, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider) {
 	const position = getPosition(time)
 	const lst = contactGast(time, position.deltaT ?? 0) + longitude
-	const [, altitude] = equatorialToHorizontal(position.moon.rightAscension, position.moon.declination, latitude, lst)
+	const [topoRA, topoDEC] = moonTopocentric(position.moon.rightAscension, position.moon.declination, position.moon.distance, latitude, lst)
+	const [, altitude] = equatorialToHorizontal(topoRA, topoDEC, latitude, lst)
 	return altitude
 }
 
@@ -193,17 +221,22 @@ function computeLocalEvent(contact: LunarEclipseContact, eclipse: LunarEclipse, 
 	const lst = gast + longitude
 
 	const moonRA = position.moon.rightAscension
-	const moonDec = position.moon.declination
-	const [azimuth, altitude] = equatorialToHorizontal(moonRA, moonDec, latitude, lst)
+	const moonDEC = position.moon.declination
+
+	// Topocentric (parallax-corrected) Moon position drives the observer-dependent quantities: altitude,
+	// azimuth and the parallactic angle. The shadow-disk position angle P stays geocentric (the conventional
+	// table value): parallax shifts the Moon and the shadow, which lies at the Moon's distance, almost equally.
+	const [topoRA, topoDEC] = moonTopocentric(moonRA, moonDEC, position.moon.distance, latitude, lst)
+	const [azimuth, altitude] = equatorialToHorizontal(topoRA, topoDEC, latitude, lst)
 
 	// Earth-shadow center = antisolar point. Its position angle on the lunar disk is the table P angle.
 	const shadowRA = position.sun.rightAscension + PI
-	const shadowDec = -position.sun.declination
-	const positionAngle = positionAngleBetween(moonRA, moonDec, shadowRA, shadowDec)
+	const shadowDEC = -position.sun.declination
+	const positionAngle = positionAngleBetween(moonRA, moonDEC, shadowRA, shadowDEC)
 
 	// Lunar parallactic angle converts the celestial-north P angle into the zenith-oriented Z angle.
-	const hourAngle = normalizePI(lst - moonRA)
-	const q = parallacticAngle(hourAngle, moonDec, latitude)
+	const hourAngle = normalizePI(lst - topoRA)
+	const q = parallacticAngle(hourAngle, topoDEC, latitude)
 	const zenithAngle = normalizeAngle(positionAngle - q)
 
 	const shadowDistance = contactShadowDistance(contact.kind, eclipse.u, eclipse.gamma)

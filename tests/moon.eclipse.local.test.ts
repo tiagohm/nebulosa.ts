@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { TAU } from '../src/constants'
+import { deg } from '../src/angle'
+import { PIOVERTWO, TAU } from '../src/constants'
 import * as elpmpp02 from '../src/elpmpp02'
 import { nearestLunarEclipse, type LunarEclipse } from '../src/moon'
 import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry, type LocalLunarEclipseSvgCircle } from '../src/moon.eclipse.local'
@@ -77,6 +78,26 @@ describe('visibility classification', () => {
 		const longitude = sub.longitude > 0 ? sub.longitude - Math.PI : sub.longitude + Math.PI
 		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, -sub.latitude, sunMoonPosition)
 		expect(local.visibility.hasGeometricEclipse).toBe(true)
+	}, 6000)
+
+	// An observer a hair inside the geocentric MAX horizon curve: the geocentric Moon center is above the
+	// horizon, but once diurnal parallax (~0.95 deg) is applied the topocentric center is below it. The old
+	// geocentric conversion marked this location observable; the topocentric one must not.
+	test('observer just inside the geocentric horizon is below the topocentric horizon', () => {
+		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
+		const max = geometry.events.find((e) => e.kind === 'MAX')!
+		// On the sublunar meridian (hour angle 0), geocentric altitude = 90 deg - |latitude - declination|; place
+		// the observer 0.3 deg inside the 90 deg horizon. (declination < 0 here keeps the latitude within range.)
+		const longitude = max.sublunar.x
+		const latitude = max.declination + (PIOVERTWO - deg(0.3))
+		const H = max.gast + longitude - max.rightAscension
+		const geocentricAltitude = Math.asin(Math.sin(latitude) * Math.sin(max.declination) + Math.cos(latitude) * Math.cos(max.declination) * Math.cos(H))
+		expect(geocentricAltitude).toBeGreaterThan(0)
+
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition)
+		expect(local.events.MAX!.altitude).toBeLessThan(0)
+		expect(local.events.MAX!.altitude).toBeLessThan(geocentricAltitude)
+		expect(local.events.MAX!.observable).toBe(false)
 	}, 6000)
 })
 
