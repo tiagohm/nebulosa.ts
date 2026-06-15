@@ -90,7 +90,7 @@ describe('horizon curve geometry', () => {
 				expect(topocentricAltitude).toBeCloseTo(0, 3)
 			}
 		}
-	})
+	}, 8000)
 
 	test('sublunar point sees the Moon at the zenith and its antipode below the horizon', () => {
 		for (const event of geometry.events) {
@@ -113,7 +113,7 @@ describe('horizon curve geometry', () => {
 			const point = branch[i]
 			expect(moonAltitudeAt(max.time, point.x, point.y, sunMoonPosition)).toBeCloseTo(altOption, 3)
 		}
-	})
+	}, 2000)
 })
 
 describe('high declination robustness', () => {

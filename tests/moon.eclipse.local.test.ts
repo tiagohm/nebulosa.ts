@@ -339,5 +339,5 @@ describe('Local View geometry', () => {
 		expect(primaryInsideBand(0)).toBe(false)
 		// Drawn against the configured 10 deg horizon the Moon is below it: inside the band, matching observable=false.
 		expect(primaryInsideBand(customHorizon)).toBe(true)
-	}, 10000)
+	}, 7000)
 })
