@@ -151,9 +151,9 @@ export class AzimuthalEquidistant extends AzimuthalProjection {
 export abstract class CylindricalProjection implements Projection {
 	constructor(readonly options?: ProjectionOptions) {}
 
-	abstract project(lambda: Angle, phi: Angle, out?: Point): Point | undefined
+	abstract project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions): Point | undefined
 
-	abstract unproject(x: number, y: number, out?: Point): Point | undefined
+	abstract unproject(x: number, y: number, out?: Point, options?: ProjectionOptions): Point | undefined
 }
 
 export class Mercator extends CylindricalProjection {

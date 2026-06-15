@@ -4,7 +4,7 @@ import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
 import { clamp } from './math'
 import type { LunarEclipse } from './moon'
-import type { Projection } from './projection'
+import type { CylindricalProjection, ProjectionOptions, RaAxisDirection } from './projection'
 import { geoPolylinesToSvgPathData, normalizeLongitude, pointsToSvgPathData, splitPolygonAtAntimeridian, type GeoBranch, type GeoCurve, type GeoPoint, type SolarEclipseMapSvgProjectionOptions, type SunMoonPosition } from './sun.eclipse.map'
 import { tt, type Time, toJulianDay } from './time'
 import type { Writable } from './types'
@@ -181,6 +181,12 @@ export interface LunarEclipseMapSvgPaths {
 	readonly sublunarPoints: LunarEclipseMapPoints
 }
 
+const DEFAULT_LUNAR_ECLIPSE_MAP_SVG_OPTIONS: LunarEclipseMapSvgOptions = {
+	fill: false,
+	fillRegion: 'belowHorizon',
+	precision: 2,
+}
+
 // Maps each contact kind to the LunarEclipse time field that holds its instant. A field left at the default
 // minimal time (day 0) signals that contact does not exist for this eclipse.
 const CONTACT_TIME_FIELDS = {
@@ -353,7 +359,7 @@ export function computeLunarEclipseMapGeometry(eclipse: LunarEclipse, sunMoonPos
 }
 
 // Serializes one optional contact curve into SVG path data, splitting at the antimeridian during projection.
-function curveToSvgPath(curve: GeoCurve | undefined, projection: Projection, options: SolarEclipseMapSvgProjectionOptions) {
+function curveToSvgPath(curve: GeoCurve | undefined, projection: CylindricalProjection, options: SolarEclipseMapSvgProjectionOptions) {
 	return curve && curve.length > 0 ? geoPolylinesToSvgPathData(curve, projection, options) : ''
 }
 
@@ -375,33 +381,39 @@ function ringEnclosesPole(ring: GeoBranch) {
 
 // Projects a closed geographic ring into pixel polygon pieces, splitting at the antimeridian first so each
 // piece is a self-contained drawable ring.
-function projectRingPieces(ring: GeoBranch, projection: Projection, options: SolarEclipseMapSvgProjectionOptions): Point[][] {
+function projectRingPieces(ring: GeoBranch, projection: CylindricalProjection, options: ProjectionOptions) {
 	const pieces: Point[][] = []
 
 	for (const sub of splitPolygonAtAntimeridian(ring)) {
 		const piece: Point[] = []
+
 		for (const point of sub) {
 			const projected = projection.project(point.x, point.y, undefined, options)
-			if (projected) piece.push({ x: projected.x, y: projected.y })
+			if (projected) piece.push(projected)
 		}
+
 		if (piece.length >= 3) pieces.push(piece)
 	}
 
 	return pieces
 }
 
+const WORLD_RECT_BORDERS = [
+	[-PI, -PIOVERTWO],
+	[PI, -PIOVERTWO],
+	[PI, PIOVERTWO],
+	[-PI, PIOVERTWO],
+] as const
+
 // Projects the four geographic corners of the full map (the +-PI longitude, +-90 deg latitude rectangle).
-function projectedWorldRect(projection: Projection, options: SolarEclipseMapSvgProjectionOptions): Point[] {
+function projectedWorldRect(projection: CylindricalProjection, options: ProjectionOptions) {
 	const rect: Point[] = []
-	for (const [lon, lat] of [
-		[-PI, -PIOVERTWO],
-		[PI, -PIOVERTWO],
-		[PI, PIOVERTWO],
-		[-PI, PIOVERTWO],
-	] as const) {
+
+	for (const [lon, lat] of WORLD_RECT_BORDERS) {
 		const projected = projection.project(lon, lat, undefined, options)
-		if (projected) rect.push({ x: projected.x, y: projected.y })
+		projected && rect.push(projected)
 	}
+
 	return rect
 }
 
@@ -409,25 +421,26 @@ function projectedWorldRect(projection: Projection, options: SolarEclipseMapSvgP
 // once), so the points are sorted into a left-to-right profile and closed along a map pole edge: the enclosed
 // pole for the 'aboveHorizon' cap, the opposite pole for its 'belowHorizon' complement. The result is one
 // simple polygon.
-function polarCapFillPath(ring: GeoBranch, declination: Angle, projection: Projection, region: LunarEclipseFillRegion, precision: number, options: SolarEclipseMapSvgProjectionOptions): string {
+function polarCapFillPath(ring: GeoBranch, declination: Angle, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number, options: ProjectionOptions) {
 	const capPoleLat = declination >= 0 ? PIOVERTWO : -PIOVERTWO
 	const edgeLat = region === 'aboveHorizon' ? capPoleLat : -capPoleLat
 
 	// Sort the boundary into a left-to-right profile, dropping the duplicated closing vertex.
 	const sorted = ring.slice(0, ring.length - 1).sort((a, b) => a.x - b.x)
-
 	const polygon: Point[] = []
+
 	for (const point of sorted) {
 		const projected = projection.project(point.x, point.y, undefined, options)
-		if (projected) polygon.push({ x: projected.x, y: projected.y })
+		if (projected) polygon.push(projected)
 	}
+
 	if (polygon.length < 2) return ''
 
 	// Close along the pole edge: from the rightmost boundary point to the +PI corner, across to the -PI corner.
 	const right = projection.project(PI, edgeLat, undefined, options)
 	const left = projection.project(-PI, edgeLat, undefined, options)
-	if (right) polygon.push({ x: right.x, y: right.y })
-	if (left) polygon.push({ x: left.x, y: left.y })
+	if (right) polygon.push(right)
+	if (left) polygon.push(left)
 	if (polygon.length < 3) return ''
 
 	return pointsToSvgPathData([polygon], true, precision)
@@ -442,7 +455,7 @@ function polarCapFillPath(ring: GeoBranch, declination: Angle, projection: Proje
 // ring punched out as a hole, which (like the ring's own antimeridian pieces) fills correctly under fill-rule
 // "evenodd": a point inside the ring is covered by the rectangle and a ring piece (even -> not filled), a point
 // outside only by the rectangle (odd -> filled).
-function nonPolarCapFillPath(ring: GeoBranch, projection: Projection, region: LunarEclipseFillRegion, capExceedsHemisphere: boolean, precision: number, options: SolarEclipseMapSvgProjectionOptions): string {
+function nonPolarCapFillPath(ring: GeoBranch, projection: CylindricalProjection, region: LunarEclipseFillRegion, capExceedsHemisphere: boolean, precision: number, options: ProjectionOptions) {
 	const ringPieces = projectRingPieces(ring, projection, options)
 	if (ringPieces.length === 0) return ''
 
@@ -457,40 +470,81 @@ function nonPolarCapFillPath(ring: GeoBranch, projection: Projection, region: Lu
 	return pointsToSvgPathData([rect, ...ringPieces], true, precision)
 }
 
+// Recenters a geographic ring's longitudes on the projection's central meridian, mapping each into the signed
+// wrapped offset in (-PI, PI] (east-positive). Latitudes and jd are preserved. After recentering, the projection's
+// antimeridian seam and its +-PI map edges sit at +-PI in the ring's own longitudes, so the fill's raw-longitude
+// split, left-to-right sort and pole-edge close operate in the actual map frame rather than in geographic
+// longitude. A zero central meridian with an east axis is the identity and returns the input ring unchanged
+// (no allocation), preserving the common-case behavior exactly.
+//   ring: closed geographic ring (first vertex repeated as last), longitudes east-positive in [-PI, PI].
+//   centralMeridian: projection central meridian (radians): the geographic longitude drawn at the map center.
+//   direction: 'east' when longitude increases to the right (the usual map), 'west' otherwise.
+function recenterRing(ring: GeoBranch, centralMeridian: Angle, direction: RaAxisDirection): GeoBranch {
+	if (centralMeridian === 0 && direction === 'east') return ring
+
+	const out: GeoBranch = new Array(ring.length)
+	for (let i = 0; i < ring.length; i++) {
+		const point = ring[i]
+		const delta = direction === 'west' ? centralMeridian - point.x : point.x - centralMeridian
+		out[i] = { x: normalizeLongitude(delta), y: point.y, jd: point.jd }
+	}
+	return out
+}
+
+// Serialize the recentered geometry in a central-meridian-neutral frame: recenterRing already shifted every
+// longitude by the central meridian, so projecting must NOT subtract it again. Without this override project()
+// re-applies the projection's central meridian (a double shift) and the +-PI pole-edge corners and complement
+// rectangle collapse onto the map center, inverting the fill. Scale, false origin and y-axis still come from
+// the projection. The fill contract assumes a 'pi'-wrap full-longitude cylindrical map.
+const POLAR_CAP_FILL_PROJECTION_OPTIONS: ProjectionOptions = { centralMeridian: 0, raAxisDirection: 'east', longitudeWrapMode: 'pi' }
+
 // Closes one contact's horizon curve into a fillable region polygon and serializes it. The visibility cap either
 // encloses a geographic pole (closed along the pole edge, correct whatever its size) or encloses neither pole; in
 // the latter case the cap radius distinguishes the usual sub-hemisphere cap from a larger-than-hemisphere cap
 // (whose ring is the antipodal below-horizon hole), so the correct side is filled in every case. The geographic
 // geometry is not mutated; the closing happens here.
+//
+// The ring is first recentered into the projection's wrapped-longitude frame and the closing is done with the
+// central meridian neutralized to 0 and an east axis, so the +-PI raw-longitude seam, the +-PI map edges (the
+// pole-edge corners and the complement rectangle) and the left-to-right ordering coincide with the actual map for
+// any cylindrical central meridian. Without this a non-zero central meridian would order and close the cap in the
+// geographic frame and fill the side opposite the open curve. The fill contract assumes a 'pi'-wrap cylindrical
+// full-longitude projection, so the wrapped serialization forces that mode.
 //   event: the map event for the contact (declination selects the enclosed pole; horizon and distance set the
 //   cap radius), or undefined.
 //   curve: the contact's horizon curve (a single closed ring as its first branch), or undefined.
 //   region: which side of the curve to fill.
 //   precision: SVG coordinate precision.
 //   options: projection polyline options shared with the open-curve serialization.
-function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: GeoCurve | undefined, projection: Projection, region: LunarEclipseFillRegion, precision: number, options: SolarEclipseMapSvgProjectionOptions): string {
+function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: GeoCurve | undefined, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number): string {
 	if (!curve || curve.length === 0) return ''
 
 	const ring = curve[0]
 	if (ring.length < 4) return ''
 
-	if (ringEnclosesPole(ring)) return polarCapFillPath(ring, event?.declination ?? 0, projection, region, precision, options)
+	// Resolve the projection's central meridian and longitude axis, then recenter the ring so its antimeridian
+	// seam and +-PI map edges land at +-PI in the ring's own longitudes.
+	const centralMeridian = projection.options?.centralMeridian ?? 0
+	const direction: RaAxisDirection = projection.options?.raAxisDirection ?? 'east'
+	const wrappedRing = recenterRing(ring, centralMeridian, direction)
+
+	if (ringEnclosesPole(wrappedRing)) return polarCapFillPath(wrappedRing, event?.declination ?? 0, projection, region, precision, POLAR_CAP_FILL_PROJECTION_OPTIONS)
 
 	const capExceedsHemisphere = event ? capRadius(event.horizonAltitude, event.distance) > PIOVERTWO : false
-	return nonPolarCapFillPath(ring, projection, region, capExceedsHemisphere, precision, options)
+	return nonPolarCapFillPath(wrappedRing, projection, region, capExceedsHemisphere, precision, POLAR_CAP_FILL_PROJECTION_OPTIONS)
 }
 
 // Projects the lunar eclipse map geometry and serializes each contact's horizon curve into an SVG path data
 // string, plus the projected sublunar points. Antimeridian wraps are split into separate subpaths at
 // projection time only; the geometry itself is never mutated. When options.fill is set, also returns closed
 // region polygons per contact (see contactFillPath).
-export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, projection: Projection, options: LunarEclipseMapSvgOptions = {}): LunarEclipseMapSvgPaths {
+export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, projection: CylindricalProjection, options: LunarEclipseMapSvgOptions = DEFAULT_LUNAR_ECLIPSE_MAP_SVG_OPTIONS): LunarEclipseMapSvgPaths {
 	const { moonRiseSet } = geometry.lines
-	const sublunarPoints: Writable<LunarEclipseMapPoints> = {}
+	const sublunarPoints: Writable<LunarEclipseMapPoints> = Object.create(null)
 
 	for (const event of geometry.events) {
-		const projected = projection.project(event.sublunar.x, event.sublunar.y, undefined, options)
-		if (projected) sublunarPoints[event.kind] = { x: projected.x, y: projected.y }
+		const projected = projection.project(event.sublunar.x, event.sublunar.y)
+		if (projected) sublunarPoints[event.kind] = projected
 	}
 
 	if (options.fill) {
@@ -499,19 +553,19 @@ export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, pro
 
 		// The event per contact drives the fill topology (declination for the enclosed pole, horizon and distance
 		// for the cap radius). Absent contacts have no event and no curve, so contactFillPath returns ''.
-		const eventByKind: Partial<Record<LunarEclipseContactKind, LunarEclipseMapEvent>> = {}
-		for (const event of geometry.events) eventByKind[event.kind] = event
+		const events: Partial<Record<LunarEclipseContactKind, LunarEclipseMapEvent>> = Object.create(null)
+		for (const event of geometry.events) events[event.kind] = event
 
 		return {
 			sublunarPoints,
 			moonRiseSet: {
-				P1: contactFillPath(eventByKind.P1, moonRiseSet.P1, projection, region, precision, options),
-				U1: contactFillPath(eventByKind.U1, moonRiseSet.U1, projection, region, precision, options),
-				U2: contactFillPath(eventByKind.U2, moonRiseSet.U2, projection, region, precision, options),
-				MAX: contactFillPath(eventByKind.MAX, moonRiseSet.MAX, projection, region, precision, options),
-				U3: contactFillPath(eventByKind.U3, moonRiseSet.U3, projection, region, precision, options),
-				U4: contactFillPath(eventByKind.U4, moonRiseSet.U4, projection, region, precision, options),
-				P4: contactFillPath(eventByKind.P4, moonRiseSet.P4, projection, region, precision, options),
+				P1: contactFillPath(events.P1, moonRiseSet.P1, projection, region, precision),
+				U1: contactFillPath(events.U1, moonRiseSet.U1, projection, region, precision),
+				U2: contactFillPath(events.U2, moonRiseSet.U2, projection, region, precision),
+				MAX: contactFillPath(events.MAX, moonRiseSet.MAX, projection, region, precision),
+				U3: contactFillPath(events.U3, moonRiseSet.U3, projection, region, precision),
+				U4: contactFillPath(events.U4, moonRiseSet.U4, projection, region, precision),
+				P4: contactFillPath(events.P4, moonRiseSet.P4, projection, region, precision),
 			},
 		}
 	} else {

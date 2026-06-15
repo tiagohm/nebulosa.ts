@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, type Angle } from '../src/angle'
-import { PIOVERTWO, TAU } from '../src/constants'
+import { PI, PIOVERTWO, TAU } from '../src/constants'
 import * as elpmpp02 from '../src/elpmpp02'
 import { nearestLunarEclipse } from '../src/moon'
 import { moonAltitudeAt } from '../src/moon.eclipse.local'
@@ -388,5 +388,26 @@ describe('fill region polygons', () => {
 		expect(pointInPath(northPole.x, northPole.y, above)).toBe(true)
 		expect(pointInPath(southPole.x, southPole.y, above)).toBe(true)
 		expect(pointInPath(anti.x, anti.y, above)).toBe(false)
+	})
+
+	// The fill must follow the projection's central meridian exactly like the open curves: a polar cap ordered and
+	// closed in raw [-PI, PI] longitude (ignoring the central meridian) fills the wrong side. With a map centered on
+	// 180 deg, the MAX cap of the 1997-09-16 total eclipse must still place the sublunar point inside aboveHorizon,
+	// its antipode outside, and the enclosed pole inside.
+	test('a non-zero central meridian fills the same side of the curve', () => {
+		const centered = new PlateCarree(undefined, { scale: 720 / TAU, falseEasting: 360, falseNorthing: 180, yAxisDirection: 'southUp', centralMeridian: PI, longitudeWrapMode: 'pi', maxLatitude: PIOVERTWO })
+		const max = geometry.events.find((e) => e.kind === 'MAX')!
+		const above = lunarEclipseMapToSvgPaths(geometry, centered, { fill: true, fillRegion: 'aboveHorizon' }).moonRiseSet.MAX
+
+		const sub = centered.project(max.sublunar.x, max.sublunar.y)!
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - PI : max.sublunar.x + PI
+		const anti = centered.project(antiLon, -max.sublunar.y)!
+		// Project the enclosed pole at the central meridian so it lands in the map interior, not on the +-PI edge
+		// where a point-in-polygon test would be ambiguous.
+		const enclosedPole = centered.project(PI, max.declination >= 0 ? PIOVERTWO - 1e-6 : -(PIOVERTWO - 1e-6))!
+
+		expect(pointInPath(sub.x, sub.y, above)).toBe(true)
+		expect(pointInPath(anti.x, anti.y, above)).toBe(false)
+		expect(pointInPath(enclosedPole.x, enclosedPole.y, above)).toBe(true)
 	})
 })

@@ -8,7 +8,7 @@ import { sphericalInterpolate, sphericalSeparation, type Point } from './geometr
 import { matMulVec } from './mat3'
 import { clamp, type NumberArray } from './math'
 import { bisection, brentMinimize, brentRoot, type RootFindingOptions } from './optimization'
-import type { Projection, ProjectionPolylineOptions } from './projection'
+import type { CylindricalProjection, ProjectionOptions } from './projection'
 import { polynomialRegression } from './regression'
 import type { SolarEclipse } from './sun'
 import { precessionNutationMatrix, timeShift, timeSubtract, toJulianDay, tt, type Time } from './time'
@@ -373,9 +373,10 @@ export interface SolarEclipseRiseSetCurveOptions {
 }
 
 // Options for projecting eclipse map geometry onto a (cylindrical) SVG.
-export interface SolarEclipseMapSvgProjectionOptions extends ProjectionPolylineOptions {
+export interface SolarEclipseMapSvgProjectionOptions {
 	// Number of decimal places kept in the path coordinates (default 2).
 	readonly precision?: number
+	readonly projectionOptions?: ProjectionOptions | undefined
 }
 
 export interface SolarEclipseMapPoints {
@@ -412,6 +413,11 @@ export interface SolarEclipseMapSvgPaths {
 	readonly riseSetCurves: string
 	// Projected pixel coordinates of the named contact and greatest-eclipse points, when present.
 	readonly points: SolarEclipseMapPoints
+}
+
+const DEFAULT_SOLAR_ECLIPSE_MAP_SVG_PROJECTION_OPTIONS: SolarEclipseMapSvgProjectionOptions = {
+	precision: 2,
+	projectionOptions: undefined,
 }
 
 function finitePoint(point: GeoPoint | undefined): point is GeoPoint {
@@ -3424,7 +3430,7 @@ export function computeSunMoonPositionAt(time: Time, sun: PositionAndVelocityOve
 // Serializes projected polyline or polygon pieces into an SVG path data string. Each piece becomes one
 // subpath (M ... L ...); pieces with fewer than two points are skipped. When close is true each subpath
 // is closed with Z, suitable for filled polygons.
-export function pointsToSvgPathData(pieces: readonly (readonly Point[])[], close = false, precision = 2) {
+export function pointsToSvgPathData(pieces: readonly (readonly Point[])[], close = false, precision: number = 2) {
 	const subpaths: string[] = []
 
 	function formatCoordinate(value: number) {
@@ -3451,7 +3457,7 @@ export function pointsToSvgPathData(pieces: readonly (readonly Point[])[], close
 // angular "beak" near +-180. The 'pi'-mode projection preserves an exact +-PI seam vertex, so the post-wrap
 // piece resumes on the left edge (-PI) rather than being folded back onto the right one (+PI). The split
 // happens only here, at serialization time: the geographic geometry itself is never mutated.
-function projectSplitPieces(geo: GeoBranch, close: boolean, projection: Projection, options: ProjectionPolylineOptions) {
+function projectSplitPieces(geo: GeoBranch, close: boolean, projection: CylindricalProjection, options?: ProjectionOptions) {
 	const pieces: Point[][] = []
 
 	for (const segment of splitGeoLineAtAntimeridian(geo, close)) {
@@ -3459,11 +3465,12 @@ function projectSplitPieces(geo: GeoBranch, close: boolean, projection: Projecti
 
 		for (const point of segment) {
 			const projected = projection.project(point.x, point.y, undefined, options)
+
 			if (projected === undefined) {
 				if (piece.length >= 2) pieces.push(piece)
 				piece = []
 			} else {
-				piece.push({ x: projected.x, y: projected.y })
+				piece.push(projected)
 			}
 		}
 
@@ -3475,10 +3482,10 @@ function projectSplitPieces(geo: GeoBranch, close: boolean, projection: Projecti
 
 // Projects geographic polylines and serializes them into one SVG path data string of open subpaths,
 // split at the antimeridian during projection only.
-export function geoPolylinesToSvgPathData(lines: readonly GeoBranch[], projection: Projection, { precision = 2, ...options }: SolarEclipseMapSvgProjectionOptions = {}) {
+export function geoPolylinesToSvgPathData(lines: readonly GeoBranch[], projection: CylindricalProjection, options: SolarEclipseMapSvgProjectionOptions = DEFAULT_SOLAR_ECLIPSE_MAP_SVG_PROJECTION_OPTIONS) {
 	const pieces: Point[][] = []
-	for (const line of lines) for (const piece of projectSplitPieces(line, false, projection, options)) pieces.push(piece)
-	return pointsToSvgPathData(pieces, false, precision)
+	for (const line of lines) for (const piece of projectSplitPieces(line, false, projection, options.projectionOptions)) pieces.push(piece)
+	return pointsToSvgPathData(pieces, false)
 }
 
 // Projects solar eclipse map geometry and serializes each polyline feature into SVG path data strings,
@@ -3487,10 +3494,10 @@ export function geoPolylinesToSvgPathData(lines: readonly GeoBranch[], projectio
 // branch is serialized as its own subpath (M ... L ...): the end of one branch is never connected to the
 // start of another, so a near-pole fold the solver could not trace through is drawn as separate arcs rather
 // than a straight spike. The geometry itself is never mutated.
-export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, projection: Projection, options: SolarEclipseMapSvgProjectionOptions = {}): SolarEclipseMapSvgPaths {
+export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, projection: CylindricalProjection, options: SolarEclipseMapSvgProjectionOptions = DEFAULT_SOLAR_ECLIPSE_MAP_SVG_PROJECTION_OPTIONS): SolarEclipseMapSvgPaths {
 	// Project named points with the same options as the curves, so points and lines stay aligned (P0.3).
 	function projectPoint(point: GeoPoint | undefined) {
-		return point ? projection.project(point.x, point.y, undefined, options) : undefined
+		return point ? projection.project(point.x, point.y, undefined, options.projectionOptions) : undefined
 	}
 
 	const { points, lines } = geometry
