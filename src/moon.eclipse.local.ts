@@ -51,7 +51,8 @@ export interface LocalLunarEclipseCircumstancesOptions {
 	readonly horizonAltitude?: Angle
 	// Number of altitude samples across the penumbral interval for the continuous visibility check. The check
 	// detects observable stretches even when every contact is below the horizon (e.g. moonrise mid-eclipse).
-	// Default 48 (~7 min spacing for a 6 h eclipse), which resolves any lunar phase comfortably.
+	// Default 48 (~7 min spacing for a 6 h eclipse), which resolves any lunar phase comfortably. Normalized to a
+	// finite positive integer (fractional values floored, non-finite values replaced by the default, capped).
 	readonly altitudeSamples?: number
 }
 
@@ -295,8 +296,24 @@ interface AltitudeScan {
 	readonly step: number
 }
 
+// Default number of altitude samples across the penumbral interval for the continuous visibility scan.
+const DEFAULT_ALTITUDE_SAMPLES = 48
+// Safety ceiling on the requested sample count, so a pathological value cannot make the scan effectively
+// unbounded (each sample is one apparent-position evaluation).
+const MAX_ALTITUDE_SAMPLES = 100000
+
+// Normalizes the public altitudeSamples option to a finite positive integer in [1, MAX_ALTITUDE_SAMPLES]. A
+// fractional value is floored (48.5 would otherwise make scanAltitudes stop one step short of P4 and under-report
+// the observable duration); a non-finite or undefined value uses the default (Infinity would otherwise loop
+// forever, NaN would skip the scan entirely).
+function normalizeAltitudeSamples(value: number | undefined) {
+	if (value === undefined || !Number.isFinite(value)) return DEFAULT_ALTITUDE_SAMPLES
+	return Math.min(Math.max(Math.floor(value), 1), MAX_ALTITUDE_SAMPLES)
+}
+
 // Samples the Moon altitude across the penumbral interval [P1, P4] so the classifier can detect observable
-// stretches between contacts. Returns empty arrays when the interval is degenerate.
+// stretches between contacts. Returns empty arrays when the interval is degenerate. Expects samples to be a
+// finite positive integer (see normalizeAltitudeSamples).
 function scanAltitudes(fromJd: number, toJd: number, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, samples: number, reference: Time): AltitudeScan {
 	const jds: number[] = []
 	const altitudes: number[] = []
@@ -531,7 +548,7 @@ function timeAtJulianDay(reference: Time, julianDay: number) {
 //   options: horizon altitude and altitude-sampling options.
 export function computeLocalLunarEclipseCircumstances(eclipse: LunarEclipse, longitude: Angle, latitude: Angle, getSunMoonPosition: LunarEclipsePositionProvider, options: LocalLunarEclipseCircumstancesOptions = {}): LocalLunarEclipseCircumstances {
 	const horizonAltitude = options.horizonAltitude ?? 0
-	const samples = options.altitudeSamples ?? 48
+	const samples = normalizeAltitudeSamples(options.altitudeSamples)
 
 	const contacts = lunarEclipseEvents(eclipse)
 	const events: Writable<Partial<Record<LunarEclipseContactKind, LocalLunarEclipseEvent>>> = {}

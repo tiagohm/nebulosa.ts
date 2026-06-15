@@ -49,6 +49,27 @@ describe('ancient dates', () => {
 	}, 6000)
 })
 
+describe('altitudeSamples normalization', () => {
+	// The sublunar point at MAX sees the whole eclipse above the horizon, so observableDuration equals the full
+	// penumbral phase only when the scan reaches P4. A fractional sample count must not make it stop short, and a
+	// non-finite count must neither hang (Infinity) nor skip the scan (NaN); all normalize to the default 48.
+	const { longitude, latitude } = sublunarAtMax(TOTAL)
+	const reference = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition).details.observableDuration
+
+	test('fractional altitudeSamples is floored and still reaches P4', () => {
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: 48.5 })
+		expect(local.details.observableDuration).toBeCloseTo(reference, 6)
+		expect(local.details.observableDuration).toBeGreaterThan(local.details.penumbralPhaseDuration * 0.99)
+	}, 6000)
+
+	test('non-finite altitudeSamples falls back to the default without hanging', () => {
+		for (const bad of [Number.POSITIVE_INFINITY, Number.NaN]) {
+			const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: bad })
+			expect(local.details.observableDuration).toBeCloseTo(reference, 6)
+		}
+	}, 8000)
+})
+
 describe('per-contact magnitudes', () => {
 	const { longitude, latitude } = sublunarAtMax(TOTAL)
 	const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition)
