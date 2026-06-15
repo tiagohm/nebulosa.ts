@@ -133,6 +133,33 @@ describe('P/Z orientation angles and Alt/Az', () => {
 		expect(localPartial.details.totalPhaseDuration).toBeNull()
 		expect(localPartial.details.partialPhaseDuration).toBeGreaterThan(0)
 	}, 6000)
+
+	// Position angle of the Earth-shadow center on the lunar disk at a given instant (geocentric, antisolar).
+	function shadowCenterPositionAngle(time: Time) {
+		const position = sunMoonPosition(time)
+		const moonRA = position.moon.rightAscension
+		const moonDEC = position.moon.declination
+		// Mirror positionAngleBetween(moon, antisolar) with shadowDEC = -sunDEC: y = cos(dec2) sin(dRA),
+		// x = cos(dec1) sin(dec2) - sin(dec1) cos(dec2) cos(dRA).
+		const dRA = position.sun.rightAscension + Math.PI - moonRA
+		const y = Math.cos(position.sun.declination) * Math.sin(dRA)
+		const x = -Math.cos(moonDEC) * Math.sin(position.sun.declination) - Math.sin(moonDEC) * Math.cos(position.sun.declination) * Math.cos(dRA)
+		return Math.atan2(y, x)
+	}
+
+	// Smallest absolute angular separation (radians) between two angles, accounting for wrap.
+	function angleSeparation(a: number, b: number) {
+		const d = Math.abs(((a - b) % TAU) + TAU) % TAU
+		return Math.min(d, TAU - d)
+	}
+
+	// The U2/U3 internal tangency of a total eclipse contacts the umbra on the far side of the disk, so the
+	// reported P angle must be opposite the shadow-center direction; the external U1 contact must equal it.
+	test('total-eclipse U2/U3 contact point is opposite the shadow-center direction', () => {
+		expect(angleSeparation(local.events.U1!.positionAngle, shadowCenterPositionAngle(TOTAL.firstContactUmbraTime))).toBeLessThan(1e-9)
+		expect(angleSeparation(local.events.U2!.positionAngle, shadowCenterPositionAngle(TOTAL.totalBeginTime) + Math.PI)).toBeLessThan(1e-9)
+		expect(angleSeparation(local.events.U3!.positionAngle, shadowCenterPositionAngle(TOTAL.totalEndTime) + Math.PI)).toBeLessThan(1e-9)
+	})
 })
 
 describe('Local View geometry', () => {

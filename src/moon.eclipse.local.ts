@@ -71,10 +71,12 @@ export interface LocalLunarEclipseEvent {
 	readonly altitude: Angle
 	// Topocentric apparent Moon azimuth (radians) at the contact, measured from North through East, in [0, TAU).
 	readonly azimuth: Angle
-	// Position angle of the Earth-shadow center on the lunar disk, from celestial north toward east, in
-	// [0, TAU). This is the P angle of the contact tables.
+	// Position angle of the limb CONTACT point on the lunar disk, from celestial north toward east, in
+	// [0, TAU). This is the P angle of the contact tables: the Earth-shadow-center direction at the external
+	// contacts (P1/U1/U4/P4), and its opposite (shadow center + PI) at the U2/U3 internal tangency of a total
+	// eclipse, where the limb touches the umbra on the far side of the disk.
 	readonly positionAngle: Angle
-	// Same direction in the local zenith-oriented frame (Z = P - parallacticAngle), in [0, TAU).
+	// Same CONTACT-point direction in the local zenith-oriented frame (Z = P - parallacticAngle), in [0, TAU).
 	readonly zenithAngle: Angle
 	// Umbral magnitude at the contact. 0 at U1/U4, 1 at U2/U3, the eclipse magnitude at MAX; negative when the
 	// Moon is wholly outside the umbra (e.g. at the penumbral contacts P1/P4).
@@ -146,6 +148,13 @@ function positionAngleBetween(ra1: Angle, dec1: Angle, ra2: Angle, dec2: Angle) 
 	const y = Math.cos(dec2) * sinDRA
 	const x = Math.cos(dec1) * Math.sin(dec2) - Math.sin(dec1) * Math.cos(dec2) * cosDRA
 	return normalizeAngle(Math.atan2(y, x))
+}
+
+// Whether the contact is the internal (totality) tangency U2/U3 of a total eclipse. There the lunar limb is
+// tangent to the umbra from the inside, so the limb contact point lies on the far side of the disk from the
+// Earth-shadow center; the external contacts (P1/U1/U4/P4) touch on the shadow-center side instead.
+function isInternalTangencyContact(kind: LunarEclipseContactKind, type: LunarEclipse['type']) {
+	return type === 'TOTAL' && (kind === 'U2' || kind === 'U3')
 }
 
 // |shadow-axis distance| (plane Earth radii) of the Moon at one contact, fixed by the contact kind in the
@@ -229,10 +238,13 @@ function computeLocalEvent(contact: LunarEclipseContact, eclipse: LunarEclipse, 
 	const [topoRA, topoDEC] = moonTopocentric(moonRA, moonDEC, position.moon.distance, latitude, lst)
 	const [azimuth, altitude] = equatorialToHorizontal(topoRA, topoDEC, latitude, lst)
 
-	// Earth-shadow center = antisolar point. Its position angle on the lunar disk is the table P angle.
+	// Earth-shadow center = antisolar point; positionAngleBetween gives the shadow-center direction on the
+	// lunar disk. The reported P angle is the limb CONTACT-point angle: the shadow-center direction at the
+	// external contacts, flipped by PI at the U2/U3 internal tangency of a total eclipse (far side of the disk).
 	const shadowRA = position.sun.rightAscension + PI
 	const shadowDEC = -position.sun.declination
-	const positionAngle = positionAngleBetween(moonRA, moonDEC, shadowRA, shadowDEC)
+	const shadowCenterAngle = positionAngleBetween(moonRA, moonDEC, shadowRA, shadowDEC)
+	const positionAngle = isInternalTangencyContact(contact.kind, eclipse.type) ? normalizeAngle(shadowCenterAngle + PI) : shadowCenterAngle
 
 	// Lunar parallactic angle converts the celestial-north P angle into the zenith-oriented Z angle.
 	const hourAngle = normalizePI(lst - topoRA)
@@ -536,18 +548,26 @@ function selectPrimaryEvent(events: Partial<Record<LunarEclipseContactKind, Loca
 	return null
 }
 
-// SVG screen offset (px) of a Moon disk from the shadow center. The Moon sits opposite the shadow-center
-// direction (position angle P + PI) at distance ell. In the zenith frame the celestial-north angle is rotated
+// Shadow-center (disk-placement) direction of a resolved event: the reported limb-contact P angle, undoing the
+// U2/U3 internal-tangency flip so the Moon disk is placed by the geometric shadow-center direction, not the
+// contact-point direction.
+function eventShadowCenterAngle(event: LocalLunarEclipseEvent, type: LunarEclipse['type']) {
+	return isInternalTangencyContact(event.kind, type) ? normalizeAngle(event.positionAngle - PI) : event.positionAngle
+}
+
+// SVG screen offset (px) of a Moon disk from the shadow center. The Moon center sits opposite the shadow-center
+// direction (shadowCenterAngle + PI) at distance ell. In the zenith frame the celestial-north angle is rotated
 // by the frame parallactic angle q so the zenith is up; in the north frame q is 0.
-//   event: the contact to place.
+//   shadowCenterAngle: position angle (radians) of the Earth-shadow center as seen from the Moon. This is the
+//   disk-placement direction, distinct from the reported limb-contact P angle (which is flipped at U2/U3).
 //   ell: shadow-axis distance (plane Earth radii).
 //   scale: pixels per plane Earth radius.
 //   frameParallactic: parallactic angle (radians) of the frame's selected event, applied in zenith mode.
 //   orientationMode: diagram orientation.
 //   eastSign: +1 for eastRight, -1 for eastLeft.
-function moonDiskOffset(event: LocalLunarEclipseEvent, ell: number, scale: number, frameParallactic: Angle, orientationMode: LocalLunarViewOrientationMode, eastSign: number): Point {
+function moonDiskOffset(shadowCenterAngle: Angle, ell: number, scale: number, frameParallactic: Angle, orientationMode: LocalLunarViewOrientationMode, eastSign: number): Point {
 	const q = orientationMode === 'zenith' ? frameParallactic : 0
-	const angle = event.positionAngle + PI - q
+	const angle = shadowCenterAngle + PI - q
 	return { x: eastSign * scale * ell * Math.sin(angle), y: -scale * ell * Math.cos(angle) }
 }
 
@@ -639,7 +659,7 @@ export function computeLocalLunarEclipseViewGeometry(circumstances: Pick<LocalLu
 		const event = events[kind]
 		if (!event) continue
 		const ell = contactShadowDistance(kind, eclipse.u, eclipse.gamma)
-		const offset = moonDiskOffset(event, ell, scale, frameParallactic, resolved.orientationMode, eastSign)
+		const offset = moonDiskOffset(eventShadowCenterAngle(event, eclipse.type), ell, scale, frameParallactic, resolved.orientationMode, eastSign)
 		trajectory.push({ x: cx + offset.x, y: cy + offset.y })
 	}
 	if (trajectory.length >= 2) {
@@ -654,14 +674,14 @@ export function computeLocalLunarEclipseViewGeometry(circumstances: Pick<LocalLu
 			const event = events[kind]
 			if (!event || event === primary) continue
 			const ell = contactShadowDistance(kind, eclipse.u, eclipse.gamma)
-			const offset = moonDiskOffset(event, ell, scale, frameParallactic, resolved.orientationMode, eastSign)
+			const offset = moonDiskOffset(eventShadowCenterAngle(event, eclipse.type), ell, scale, frameParallactic, resolved.orientationMode, eastSign)
 			shapes.push({ kind: 'circle', role: 'ghostMoonDisk', event: kind, cx: cx + offset.x, cy: cy + offset.y, r: moonRadiusPx })
 		}
 	}
 
 	if (primary) {
 		const ell = contactShadowDistance(primary.kind, eclipse.u, eclipse.gamma)
-		const offset = moonDiskOffset(primary, ell, scale, frameParallactic, resolved.orientationMode, eastSign)
+		const offset = moonDiskOffset(eventShadowCenterAngle(primary, eclipse.type), ell, scale, frameParallactic, resolved.orientationMode, eastSign)
 		shapes.push({ kind: 'circle', role: 'moonDisk', event: primary.kind, cx: cx + offset.x, cy: cy + offset.y, r: moonRadiusPx })
 	}
 
