@@ -3485,7 +3485,7 @@ function projectSplitPieces(geo: GeoBranch, close: boolean, projection: Cylindri
 export function geoPolylinesToSvgPathData(lines: readonly GeoBranch[], projection: CylindricalProjection, options: SolarEclipseMapSvgProjectionOptions = DEFAULT_SOLAR_ECLIPSE_MAP_SVG_PROJECTION_OPTIONS) {
 	const pieces: Point[][] = []
 	for (const line of lines) for (const piece of projectSplitPieces(line, false, projection, options.projectionOptions)) pieces.push(piece)
-	return pointsToSvgPathData(pieces, false)
+	return pointsToSvgPathData(pieces, false, options.precision)
 }
 
 // Projects solar eclipse map geometry and serializes each polyline feature into SVG path data strings,
