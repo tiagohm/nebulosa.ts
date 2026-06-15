@@ -70,6 +70,20 @@ describe('altitudeSamples normalization', () => {
 	}, 8000)
 })
 
+describe('horizonAltitude normalization', () => {
+	const { longitude, latitude } = sublunarAtMax(TOTAL)
+
+	test('non-finite horizonAltitude falls back to the geometric horizon', () => {
+		const reference = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: 12 })
+		for (const bad of [Number.POSITIVE_INFINITY, Number.NaN]) {
+			const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: 12, horizonAltitude: bad })
+			expect(local.visibility.kind).toBe(reference.visibility.kind)
+			expect(local.details.observableDuration).toBeCloseTo(reference.details.observableDuration, 6)
+			expect(local.events.MAX!.observable).toBe(reference.events.MAX!.observable)
+		}
+	}, 8000)
+})
+
 describe('per-contact magnitudes', () => {
 	const { longitude, latitude } = sublunarAtMax(TOTAL)
 	const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition)

@@ -339,8 +339,8 @@ function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: (time: Tim
 //   options: curve sampling and visibility-horizon options.
 export function computeLunarEclipseMapGeometry(eclipse: LunarEclipse, sunMoonPosition: (time: Time) => SunMoonPosition, options: LunarEclipseMapGeometryOptions = {}): LunarEclipseMapGeometry {
 	const maxAngularStep = options.maxAngularStep !== undefined && Number.isFinite(options.maxAngularStep) && options.maxAngularStep > 0 ? options.maxAngularStep : DEFAULT_MAX_ANGULAR_STEP
-	const horizonAltitude = options.horizonAltitude !== undefined && Number.isFinite(options.horizonAltitude) && options.horizonAltitude > 0 ? options.horizonAltitude : 0
-	const baseHorizon = baseHorizonAltitude(horizonAltitude ?? 0, options.refraction ?? false)
+	const horizonAltitude = options.horizonAltitude !== undefined && Number.isFinite(options.horizonAltitude) ? options.horizonAltitude : 0
+	const baseHorizon = baseHorizonAltitude(horizonAltitude, options.refraction ?? false)
 	const limbVisibility = options.limbVisibility ?? 'center'
 
 	const contacts = lunarEclipseEvents(eclipse)
@@ -513,8 +513,8 @@ const POLAR_CAP_FILL_PROJECTION_OPTIONS: ProjectionOptions = { centralMeridian: 
 //   curve: the contact's horizon curve (a single closed ring as its first branch), or undefined.
 //   region: which side of the curve to fill.
 //   precision: SVG coordinate precision.
-//   options: projection polyline options shared with the open-curve serialization.
-function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: GeoCurve | undefined, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number): string {
+//   projectionOptions: projection options with the ring's central-meridian-neutral frame already applied.
+function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: GeoCurve | undefined, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number, projectionOptions: ProjectionOptions) {
 	if (!curve || curve.length === 0) return ''
 
 	const ring = curve[0]
@@ -526,11 +526,10 @@ function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: GeoCurv
 	const direction: RaAxisDirection = projection.options?.raAxisDirection ?? 'east'
 	const wrappedRing = recenterRing(ring, centralMeridian, direction)
 
-	const wrappedOptions: ProjectionOptions = { ...projection.options, ...POLAR_CAP_FILL_PROJECTION_OPTIONS }
-	if (ringEnclosesPole(wrappedRing)) return polarCapFillPath(wrappedRing, event?.declination ?? 0, projection, region, precision, wrappedOptions)
+	if (ringEnclosesPole(wrappedRing)) return polarCapFillPath(wrappedRing, event?.declination ?? 0, projection, region, precision, projectionOptions)
 
 	const capExceedsHemisphere = event ? capRadius(event.horizonAltitude, event.distance) > PIOVERTWO : false
-	return nonPolarCapFillPath(wrappedRing, projection, region, capExceedsHemisphere, precision, wrappedOptions)
+	return nonPolarCapFillPath(wrappedRing, projection, region, capExceedsHemisphere, precision, projectionOptions)
 }
 
 // Projects the lunar eclipse map geometry and serializes each contact's horizon curve into an SVG path data
@@ -549,6 +548,7 @@ export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, pro
 	if (options.fill) {
 		const region = options.fillRegion ?? 'belowHorizon'
 		const precision = options.precision ?? 2
+		const projectionOptions: ProjectionOptions = { ...projection.options, ...POLAR_CAP_FILL_PROJECTION_OPTIONS }
 
 		// The event per contact drives the fill topology (declination for the enclosed pole, horizon and distance
 		// for the cap radius). Absent contacts have no event and no curve, so contactFillPath returns ''.
@@ -558,13 +558,13 @@ export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, pro
 		return {
 			sublunarPoints,
 			moonRiseSet: {
-				P1: contactFillPath(events.P1, moonRiseSet.P1, projection, region, precision),
-				U1: contactFillPath(events.U1, moonRiseSet.U1, projection, region, precision),
-				U2: contactFillPath(events.U2, moonRiseSet.U2, projection, region, precision),
-				MAX: contactFillPath(events.MAX, moonRiseSet.MAX, projection, region, precision),
-				U3: contactFillPath(events.U3, moonRiseSet.U3, projection, region, precision),
-				U4: contactFillPath(events.U4, moonRiseSet.U4, projection, region, precision),
-				P4: contactFillPath(events.P4, moonRiseSet.P4, projection, region, precision),
+				P1: contactFillPath(events.P1, moonRiseSet.P1, projection, region, precision, projectionOptions),
+				U1: contactFillPath(events.U1, moonRiseSet.U1, projection, region, precision, projectionOptions),
+				U2: contactFillPath(events.U2, moonRiseSet.U2, projection, region, precision, projectionOptions),
+				MAX: contactFillPath(events.MAX, moonRiseSet.MAX, projection, region, precision, projectionOptions),
+				U3: contactFillPath(events.U3, moonRiseSet.U3, projection, region, precision, projectionOptions),
+				U4: contactFillPath(events.U4, moonRiseSet.U4, projection, region, precision, projectionOptions),
+				P4: contactFillPath(events.P4, moonRiseSet.P4, projection, region, precision, projectionOptions),
 			},
 		}
 	} else {

@@ -214,8 +214,8 @@ function moonTopocentric(moonRA: Angle, moonDEC: Angle, moonDistance: number, la
 
 // Topocentric apparent Moon altitude (radians) at one instant for one observer. Applies diurnal parallax, then
 // converts to horizontal coordinates. Used by the continuous visibility scan and the phase-visibility search.
-export function moonAltitudeAt(time: Time, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider) {
-	const position = getPosition(time)
+export function moonAltitudeAt(time: Time, longitude: Angle, latitude: Angle, sunMoonPosition: LunarEclipsePositionProvider) {
+	const position = sunMoonPosition(time)
 	const lst = contactGast(time, position.deltaT ?? 0) + longitude
 	const [topoRA, topoDEC] = moonTopocentric(position.moon.rightAscension, position.moon.declination, position.moon.distance, latitude, lst)
 	const [, altitude] = equatorialToHorizontal(topoRA, topoDEC, latitude, lst)
@@ -224,8 +224,8 @@ export function moonAltitudeAt(time: Time, longitude: Angle, latitude: Angle, ge
 
 // Builds one resolved local event: altitude/azimuth, the P/Z orientation angles, and the per-contact
 // magnitudes.
-function computeLocalEvent(contact: LunarEclipseContact, eclipse: LunarEclipse, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, horizonAltitude: Angle): LocalLunarEclipseEvent {
-	const position = getPosition(contact.time)
+function computeLocalEvent(contact: LunarEclipseContact, eclipse: LunarEclipse, longitude: Angle, latitude: Angle, sunMoonPosition: LunarEclipsePositionProvider, horizonAltitude: Angle): LocalLunarEclipseEvent {
+	const position = sunMoonPosition(contact.time)
 	const gast = contactGast(contact.time, position.deltaT ?? 0)
 	const lst = gast + longitude
 
@@ -311,21 +311,28 @@ function normalizeAltitudeSamples(value: number | undefined) {
 	return Math.min(Math.max(Math.floor(value), 1), MAX_ALTITUDE_SAMPLES)
 }
 
+// Normalizes a public horizon-altitude option to a finite angular threshold in radians. Non-finite values fall
+// back to the geometric horizon so NaN/Infinity cannot leak into observability, duration, or SVG geometry.
+function normalizeHorizonAltitude(value: Angle | undefined) {
+	return value !== undefined && Number.isFinite(value) ? value : 0
+}
+
 // Samples the Moon altitude across the penumbral interval [P1, P4] so the classifier can detect observable
 // stretches between contacts. Returns empty arrays when the interval is degenerate. Expects samples to be a
 // finite positive integer (see normalizeAltitudeSamples).
-function scanAltitudes(fromJd: number, toJd: number, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, samples: number, reference: Time): AltitudeScan {
-	const jds: number[] = []
-	const altitudes: number[] = []
+function scanAltitudes(fromJd: number, toJd: number, longitude: Angle, latitude: Angle, sunMoonPosition: LunarEclipsePositionProvider, samples: number, reference: Time): AltitudeScan {
 	const span = toJd - fromJd
-	if (!(span > 0) || samples < 1) return { jds, altitudes, step: 0 }
+	if (!(span > 0) || samples < 1) return { jds: [], altitudes: [], step: 0 }
 
 	const step = span / samples
+	const count = samples + 1
+	const jds = new Array<number>(count)
+	const altitudes = new Array<number>(count)
+
 	for (let i = 0; i <= samples; i++) {
 		const jd = fromJd + i * step
-		const time = timeAtJulianDay(reference, jd)
-		jds.push(jd)
-		altitudes.push(moonAltitudeAt(time, longitude, latitude, getPosition))
+		jds[i] = jd
+		altitudes[i] = moonAltitudeAtJulianDay(jd, reference, longitude, latitude, sunMoonPosition)
 	}
 
 	return { jds, altitudes, step }
@@ -345,31 +352,30 @@ const EARTH_ROTATION_RATE_PER_DAY = TAU / 0.99726966
 // bisection, so an above-horizon window narrower than any fixed subdivision is still measured exactly (a fixed
 // 16-piece subdivision missed a peak shorter than one sub-step that fell between subdivision points, leaving
 // observableDuration at 0 while phaseReachesHorizon classified the eclipse observable from the same maximum).
-function aboveHorizonDaysInInterval(fromJd: number, toJd: number, horizonAltitude: Angle, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, reference: Time) {
+function aboveHorizonDaysInInterval(fromJd: number, toJd: number, horizonAltitude: Angle, longitude: Angle, latitude: Angle, sunMoonPosition: LunarEclipsePositionProvider, reference: Time) {
 	const span = toJd - fromJd
 	if (!(span > 0)) return 0
 
-	const altitudeAt = (jd: number) => moonAltitudeAt(timeAtJulianDay(reference, jd), longitude, latitude, getPosition) - horizonAltitude
-	const startsAbove = altitudeAt(fromJd) >= 0
-	const endsAbove = altitudeAt(toJd) >= 0
+	const startsAbove = altitudeOffsetAtJulianDay(fromJd, horizonAltitude, reference, longitude, latitude, sunMoonPosition) >= 0
+	const endsAbove = altitudeOffsetAtJulianDay(toJd, horizonAltitude, reference, longitude, latitude, sunMoonPosition) >= 0
 
 	// Both endpoints below: the only above-horizon time is a peak that pokes above between them, so seek the
 	// interior maximum. Both endpoints above: the only below-horizon time is a dip, so seek the interior minimum.
 	const seekMaximum = !startsAbove && !endsAbove
-	const extremumJd = goldenSectionExtremum(fromJd, toJd, altitudeAt, seekMaximum)
+	const extremumJd = goldenSectionAltitudeExtremum(fromJd, toJd, longitude, latitude, sunMoonPosition, reference, seekMaximum)
 
 	if (seekMaximum) {
 		// No peak reaches the horizon: nothing is above. Otherwise the peak is bracketed by a rise and a set root.
-		if (altitudeAt(extremumJd) < 0) return 0
-		const rise = bisectHorizonCrossing(fromJd, extremumJd, altitudeAt)
-		const set = bisectHorizonCrossing(extremumJd, toJd, altitudeAt)
+		if (altitudeOffsetAtJulianDay(extremumJd, horizonAltitude, reference, longitude, latitude, sunMoonPosition) < 0) return 0
+		const rise = bisectHorizonCrossing(fromJd, extremumJd, horizonAltitude, longitude, latitude, sunMoonPosition, reference)
+		const set = bisectHorizonCrossing(extremumJd, toJd, horizonAltitude, longitude, latitude, sunMoonPosition, reference)
 		return set - rise
 	}
 
 	// No dip reaches the horizon: the whole step is above. Otherwise subtract the bracketed below-horizon window.
-	if (altitudeAt(extremumJd) >= 0) return span
-	const set = bisectHorizonCrossing(fromJd, extremumJd, altitudeAt)
-	const rise = bisectHorizonCrossing(extremumJd, toJd, altitudeAt)
+	if (altitudeOffsetAtJulianDay(extremumJd, horizonAltitude, reference, longitude, latitude, sunMoonPosition) >= 0) return span
+	const set = bisectHorizonCrossing(fromJd, extremumJd, horizonAltitude, longitude, latitude, sunMoonPosition, reference)
+	const rise = bisectHorizonCrossing(extremumJd, toJd, horizonAltitude, longitude, latitude, sunMoonPosition, reference)
 	return span - (rise - set)
 }
 
@@ -385,7 +391,7 @@ function aboveHorizonDaysInInterval(fromJd: number, toJd: number, horizonAltitud
 // this catches a stretch that falls between two coarse samples even when the surrounding samples are monotonic,
 // without scanning every near-horizon interval.
 // The result is capped at the scanned span so it can never exceed P4 - P1.
-function observableDaysFromScan(scan: AltitudeScan, horizonAltitude: Angle, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, reference: Time) {
+function observableDaysFromScan(scan: AltitudeScan, horizonAltitude: Angle, longitude: Angle, latitude: Angle, sunMoonPosition: LunarEclipsePositionProvider, reference: Time) {
 	const { jds, altitudes, step } = scan
 	if (!(step > 0) || altitudes.length < 2) return 0
 
@@ -412,7 +418,7 @@ function observableDaysFromScan(scan: AltitudeScan, horizonAltitude: Angle, long
 			// altitude change of the horizon, so a brief excursion across it could hide between the samples; then
 			// integrate the sub-interval.
 			const touchesExtremum = i === highest || i + 1 === highest || i === lowest || i + 1 === lowest
-			if (touchesExtremum && Math.min(Math.abs(a), Math.abs(b)) < refineMargin) days += aboveHorizonDaysInInterval(jds[i], jds[i + 1], horizonAltitude, longitude, latitude, getPosition, reference)
+			if (touchesExtremum && Math.min(Math.abs(a), Math.abs(b)) < refineMargin) days += aboveHorizonDaysInInterval(jds[i], jds[i + 1], horizonAltitude, longitude, latitude, sunMoonPosition, reference)
 			else days += a >= 0 ? step : 0
 		} else {
 			// The endpoints straddle the horizon: the crossing is at t = a / (a - b) of the step (a - b != 0).
@@ -433,16 +439,18 @@ const INVERSE_GOLDEN_RATIO = 0.61803398874989484820458683436564 // (Math.sqrt(5)
 // well under one second for any realistic scan step.
 const HORIZON_ROOT_ITERATIONS = 40
 
-// Abscissa of the single interior extremum of a unimodal function f over [lo, hi], by golden-section. seekMaximum
-// selects the maximum; otherwise the minimum. Used to bracket a hidden horizon excursion inside one scan step.
+// Abscissa of the single interior extremum of the topocentric Moon altitude over [lo, hi], by golden-section.
+// seekMaximum selects the maximum; otherwise the minimum. Used to bracket hidden horizon excursions without
+// allocating a per-call altitude closure in the refinement path.
 //   lo, hi: search bounds (Julian Days), lo < hi.
-//   f: unimodal function over [lo, hi].
+//   longitude, latitude: observer position in radians, east-positive longitude and geodetic latitude.
+//   reference: time-scale reference for building instants from Julian Days.
 //   seekMaximum: true to locate the maximum, false for the minimum.
-function goldenSectionExtremum(lo: number, hi: number, f: (jd: number) => number, seekMaximum: boolean) {
+function goldenSectionAltitudeExtremum(lo: number, hi: number, longitude: Angle, latitude: Angle, sunMoonPosition: LunarEclipsePositionProvider, reference: Time, seekMaximum: boolean) {
 	let c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
 	let d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
-	let fc = f(c)
-	let fd = f(d)
+	let fc = moonAltitudeAtJulianDay(c, reference, longitude, latitude, sunMoonPosition)
+	let fd = moonAltitudeAtJulianDay(d, reference, longitude, latitude, sunMoonPosition)
 
 	for (let i = 0; i < PHASE_MAX_ITERATIONS && hi - lo > PHASE_MIN_SPAN_DAYS; i++) {
 		// Keep the bracket on the side of the better candidate (higher for a maximum, lower for a minimum).
@@ -451,13 +459,13 @@ function goldenSectionExtremum(lo: number, hi: number, f: (jd: number) => number
 			d = c
 			fd = fc
 			c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
-			fc = f(c)
+			fc = moonAltitudeAtJulianDay(c, reference, longitude, latitude, sunMoonPosition)
 		} else {
 			lo = c
 			c = d
 			fc = fd
 			d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
-			fd = f(d)
+			fd = moonAltitudeAtJulianDay(d, reference, longitude, latitude, sunMoonPosition)
 		}
 	}
 
@@ -466,13 +474,13 @@ function goldenSectionExtremum(lo: number, hi: number, f: (jd: number) => number
 
 // Julian Day of the horizon crossing within [lo, hi] where altitudeAt changes sign, by bisection. Requires
 // altitudeAt(lo) and altitudeAt(hi) to straddle zero (opposite signs); returns the bracket midpoint on convergence.
-//   altitudeAt: topocentric altitude minus the horizon (signed) at a Julian Day.
-function bisectHorizonCrossing(lo: number, hi: number, altitudeAt: (jd: number) => number) {
-	let loBelow = altitudeAt(lo) < 0
+//   horizonAltitude: topocentric horizon threshold in radians.
+function bisectHorizonCrossing(lo: number, hi: number, horizonAltitude: Angle, longitude: Angle, latitude: Angle, sunMoonPosition: LunarEclipsePositionProvider, reference: Time) {
+	let loBelow = altitudeOffsetAtJulianDay(lo, horizonAltitude, reference, longitude, latitude, sunMoonPosition) < 0
 
 	for (let i = 0; i < HORIZON_ROOT_ITERATIONS && hi - lo > PHASE_MIN_SPAN_DAYS; i++) {
 		const mid = (lo + hi) / 2
-		const midBelow = altitudeAt(mid) < 0
+		const midBelow = altitudeOffsetAtJulianDay(mid, horizonAltitude, reference, longitude, latitude, sunMoonPosition) < 0
 		if (midBelow === loBelow) {
 			lo = mid
 			loBelow = midBelow
@@ -496,7 +504,7 @@ function bisectHorizonCrossing(lo: number, hi: number, altitudeAt: (jd: number) 
 //   fromJd, toJd: the phase interval (Julian Days); endpoints are the phase contacts.
 //   altFrom, altTo: topocentric Moon altitudes at the endpoints (already resolved on the contact events).
 //   reference: time-scale reference for building instants from Julian Days.
-function phaseReachesHorizon(scan: AltitudeScan, fromJd: number, toJd: number, altFrom: Angle, altTo: Angle, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, horizonAltitude: Angle, reference: Time) {
+function phaseReachesHorizon(scan: AltitudeScan, fromJd: number, toJd: number, altFrom: Angle, altTo: Angle, longitude: Angle, latitude: Angle, sunMoonPosition: LunarEclipsePositionProvider, horizonAltitude: Angle, reference: Time) {
 	// Exact phase endpoints first: a short phase whose whole above-horizon stretch is its endpoints is caught here.
 	if (altFrom >= horizonAltitude || altTo >= horizonAltitude) return true
 	if (!(toJd > fromJd)) return false
@@ -508,13 +516,12 @@ function phaseReachesHorizon(scan: AltitudeScan, fromJd: number, toJd: number, a
 	}
 
 	// Interior maximum search (the altitude is unimodal over the interval): golden-section, early-exit on reach.
-	const altitudeAt = (jd: number) => moonAltitudeAt(timeAtJulianDay(reference, jd), longitude, latitude, getPosition)
 	let lo = fromJd
 	let hi = toJd
 	let c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
 	let d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
-	let fc = altitudeAt(c)
-	let fd = altitudeAt(d)
+	let fc = moonAltitudeAtJulianDay(c, reference, longitude, latitude, sunMoonPosition)
+	let fd = moonAltitudeAtJulianDay(d, reference, longitude, latitude, sunMoonPosition)
 	if (fc >= horizonAltitude || fd >= horizonAltitude) return true
 
 	for (let i = 0; i < PHASE_MAX_ITERATIONS && hi - lo > PHASE_MIN_SPAN_DAYS; i++) {
@@ -523,13 +530,13 @@ function phaseReachesHorizon(scan: AltitudeScan, fromJd: number, toJd: number, a
 			d = c
 			fd = fc
 			c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
-			fc = altitudeAt(c)
+			fc = moonAltitudeAtJulianDay(c, reference, longitude, latitude, sunMoonPosition)
 		} else {
 			lo = c
 			c = d
 			fc = fd
 			d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
-			fd = altitudeAt(d)
+			fd = moonAltitudeAtJulianDay(d, reference, longitude, latitude, sunMoonPosition)
 		}
 
 		if (fc >= horizonAltitude || fd >= horizonAltitude) return true
@@ -548,7 +555,7 @@ function phaseReachesHorizon(scan: AltitudeScan, fromJd: number, toJd: number, a
 // returns false as soon as any evaluated altitude is below the horizon.
 //   scan: precomputed penumbral-interval samples, used to reject an obvious below-horizon sample and to bracket.
 //   altFrom, altTo: topocentric Moon altitudes at the endpoints (already resolved on the contact events).
-function phaseStaysAboveHorizon(scan: AltitudeScan, fromJd: number, toJd: number, altFrom: Angle, altTo: Angle, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, horizonAltitude: Angle, reference: Time) {
+function phaseStaysAboveHorizon(scan: AltitudeScan, fromJd: number, toJd: number, altFrom: Angle, altTo: Angle, longitude: Angle, latitude: Angle, sunMoonPosition: LunarEclipsePositionProvider, horizonAltitude: Angle, reference: Time) {
 	if (altFrom < horizonAltitude || altTo < horizonAltitude) return false
 	if (!(toJd > fromJd)) return true
 
@@ -573,11 +580,10 @@ function phaseStaysAboveHorizon(scan: AltitudeScan, fromJd: number, toJd: number
 	}
 
 	// Golden-section minimum search, early-exit on a below-horizon point.
-	const altitudeAt = (jd: number) => moonAltitudeAt(timeAtJulianDay(reference, jd), longitude, latitude, getPosition)
 	let c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
 	let d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
-	let fc = altitudeAt(c)
-	let fd = altitudeAt(d)
+	let fc = moonAltitudeAtJulianDay(c, reference, longitude, latitude, sunMoonPosition)
+	let fd = moonAltitudeAtJulianDay(d, reference, longitude, latitude, sunMoonPosition)
 	if (fc < horizonAltitude || fd < horizonAltitude) return false
 
 	for (let i = 0; i < PHASE_MAX_ITERATIONS && hi - lo > PHASE_MIN_SPAN_DAYS; i++) {
@@ -586,13 +592,13 @@ function phaseStaysAboveHorizon(scan: AltitudeScan, fromJd: number, toJd: number
 			d = c
 			fd = fc
 			c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
-			fc = altitudeAt(c)
+			fc = moonAltitudeAtJulianDay(c, reference, longitude, latitude, sunMoonPosition)
 		} else {
 			lo = c
 			c = d
 			fc = fd
 			d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
-			fd = altitudeAt(d)
+			fd = moonAltitudeAtJulianDay(d, reference, longitude, latitude, sunMoonPosition)
 		}
 
 		if (fc < horizonAltitude || fd < horizonAltitude) return false
@@ -606,6 +612,20 @@ function timeAtJulianDay(reference: Time, julianDay: number) {
 	return timeShift(reference, julianDay - reference.day - reference.fraction)
 }
 
+// Topocentric Moon altitude (radians) at a Julian Day, preserving the reference time scale and providers.
+//   julianDay: sample instant as a Julian Day.
+//   reference: time-scale reference used to construct the sample Time.
+//   longitude, latitude: observer position in radians, east-positive longitude and geodetic latitude.
+function moonAltitudeAtJulianDay(julianDay: number, reference: Time, longitude: Angle, latitude: Angle, sunMoonPosition: LunarEclipsePositionProvider) {
+	return moonAltitudeAt(timeAtJulianDay(reference, julianDay), longitude, latitude, sunMoonPosition)
+}
+
+// Signed topocentric Moon altitude relative to a horizon threshold at a Julian Day. Positive means observable.
+//   horizonAltitude: observer's horizon threshold in radians.
+function altitudeOffsetAtJulianDay(julianDay: number, horizonAltitude: Angle, reference: Time, longitude: Angle, latitude: Angle, sunMoonPosition: LunarEclipsePositionProvider) {
+	return moonAltitudeAtJulianDay(julianDay, reference, longitude, latitude, sunMoonPosition) - horizonAltitude
+}
+
 // Computes the full local circumstances of a lunar eclipse for one geographic point.
 //   eclipse: lunar eclipse with its TT contact times, magnitude, u and gamma.
 //   longitude: observer geographic longitude (radians, east-positive).
@@ -613,7 +633,7 @@ function timeAtJulianDay(reference: Time, julianDay: number) {
 //   getSunMoonPosition: apparent Sun/Moon position provider at a dynamical time.
 //   options: horizon altitude and altitude-sampling options.
 export function computeLocalLunarEclipseCircumstances(eclipse: LunarEclipse, longitude: Angle, latitude: Angle, getSunMoonPosition: LunarEclipsePositionProvider, options: LocalLunarEclipseCircumstancesOptions = {}): LocalLunarEclipseCircumstances {
-	const horizonAltitude = options.horizonAltitude ?? 0
+	const horizonAltitude = normalizeHorizonAltitude(options.horizonAltitude)
 	const samples = normalizeAltitudeSamples(options.altitudeSamples)
 
 	const contacts = lunarEclipseEvents(eclipse)
@@ -845,14 +865,15 @@ function buildHorizonShapes(primary: LocalLunarEclipseEvent, options: LocalLunar
 	// Altitude offset (px) from the disk center along the zenith direction, measured from the CONFIGURED horizon
 	// (not true altitude 0) so the line matches the observable flag for a raised/obstructed horizon: the disk
 	// sits above the line exactly when altitude >= horizonAltitude.
-	const horizonAltitude = options.horizonAltitude ?? 0
-	const offsetPx = clamp(((primary.altitude - horizonAltitude) / MEAN_EARTH_RADIUS_ANGULAR_AT_MOON) * scale, -Math.hypot(options.width, options.height) * 2, Math.hypot(options.width, options.height) * 2)
+	const horizonAltitude = normalizeHorizonAltitude(options.horizonAltitude)
+	const half = Math.hypot(options.width, options.height)
+	const maxOffsetPx = half * 2
+	const offsetPx = clamp(((primary.altitude - horizonAltitude) / MEAN_EARTH_RADIUS_ANGULAR_AT_MOON) * scale, -maxOffsetPx, maxOffsetPx)
 	const horizonX = diskCx - offsetPx * zenithX
 	const horizonY = diskCy - offsetPx * zenithY
 
 	const tangentX = -zenithY
 	const tangentY = zenithX
-	const half = Math.hypot(options.width, options.height)
 	const line: LocalLunarEclipseSvgLine = {
 		kind: 'line',
 		role: 'horizonLine',
@@ -907,20 +928,21 @@ export function computeLocalLunarEclipseViewGeometry(circumstances: Pick<LocalLu
 
 	// Selected disk center: the horizon must be anchored here (not at the shadow center) so the band agrees with
 	// the contact's observable flag despite the disk's own zenith-direction offset from the shadow center.
-	let primaryDiskCenter: Point = { x: cx, y: cy }
+	let primaryDiskX = cx
+	let primaryDiskY = cy
 	if (primary) {
 		const ell = contactShadowDistance(primary.kind, eclipse.u, eclipse.gamma)
 		const offset = moonDiskOffset(eventShadowCenterAngle(primary, eclipse.type), ell, scale, frameParallactic, resolved.orientationMode, eastSign)
-		primaryDiskCenter = { x: cx + offset.x, y: cy + offset.y }
+		primaryDiskX = cx + offset.x
+		primaryDiskY = cy + offset.y
 	}
 
 	const shapes: LocalLunarEclipseSvgShape[] = []
+	const horizonShapes = resolved.includeHorizon && primary ? buildHorizonShapes(primary, resolved, primaryDiskX, primaryDiskY, scale, eastSign) : undefined
 
 	// Below-horizon band first (painted behind), then shadow rings, ghosts, trajectory, primary disk, then the
 	// horizon line on top.
-	if (resolved.includeHorizon && primary) {
-		shapes.push(buildHorizonShapes(primary, resolved, primaryDiskCenter.x, primaryDiskCenter.y, scale, eastSign)[0])
-	}
+	if (horizonShapes) shapes.push(horizonShapes[0])
 
 	shapes.push({ kind: 'circle', role: 'penumbra', cx, cy, r: penumbraRadiusPx })
 	shapes.push({ kind: 'circle', role: 'umbra', cx, cy, r: resolved.umbraRadiusPx })
@@ -952,13 +974,11 @@ export function computeLocalLunarEclipseViewGeometry(circumstances: Pick<LocalLu
 	}
 
 	if (primary) {
-		shapes.push({ kind: 'circle', role: 'moonDisk', event: primary.kind, cx: primaryDiskCenter.x, cy: primaryDiskCenter.y, r: moonRadiusPx })
+		shapes.push({ kind: 'circle', role: 'moonDisk', event: primary.kind, cx: primaryDiskX, cy: primaryDiskY, r: moonRadiusPx })
 	}
 
 	// Horizon line on top of the disks, so the ground occludes the part of the diagram below it.
-	if (resolved.includeHorizon && primary) {
-		shapes.push(buildHorizonShapes(primary, resolved, primaryDiskCenter.x, primaryDiskCenter.y, scale, eastSign)[1])
-	}
+	if (horizonShapes) shapes.push(horizonShapes[1])
 
 	return {
 		width: resolved.width,

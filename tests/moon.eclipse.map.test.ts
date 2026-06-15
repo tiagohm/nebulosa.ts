@@ -166,6 +166,19 @@ describe('horizon curve geometry', () => {
 			expect(moonAltitudeAt(max.time, point.x, point.y, sunMoonPosition)).toBeCloseTo(altOption, 3)
 		}
 	}, 2000)
+
+	test('negative horizon altitude option lowers the topocentric curve', () => {
+		const altOption: Angle = deg(-2)
+		const geo = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { horizonAltitude: altOption })
+		const max = geo.events.find((e) => e.kind === 'MAX')!
+		const branch = geo.lines.moonRiseSet.MAX![0]
+		const stepN = Math.max(1, Math.floor(branch.length / 12))
+		expect(max.horizonAltitude).toBeCloseTo(altOption, 12)
+		for (let i = 0; i < branch.length; i += stepN) {
+			const point = branch[i]
+			expect(moonAltitudeAt(max.time, point.x, point.y, sunMoonPosition)).toBeCloseTo(altOption, 3)
+		}
+	}, 2000)
 })
 
 describe('upper-limb visibility', () => {
