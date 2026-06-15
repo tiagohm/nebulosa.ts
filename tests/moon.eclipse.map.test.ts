@@ -192,6 +192,18 @@ function pointInPolygon(px: number, py: number, polygon: { x: number; y: number 
 	return inside
 }
 
+// Even-odd point-in-path test across every "M ... Z" subpath, matching the fill-rule the polygons require.
+function pointInPath(px: number, py: number, path: string): boolean {
+	let inside = false
+	for (const part of path.split('M')) {
+		const trimmed = part.trim()
+		if (!trimmed) continue
+		const polygon = parsePolygon(`M${trimmed}`)
+		if (polygon.length >= 3 && pointInPolygon(px, py, polygon)) inside = !inside
+	}
+	return inside
+}
+
 describe('fill region polygons', () => {
 	const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
 	const projection = equirectangular(720, 360)
@@ -229,5 +241,38 @@ describe('fill region polygons', () => {
 		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - Math.PI : max.sublunar.x + Math.PI
 		const anti = projection.project(antiLon, -max.sublunar.y)!
 		expect(pointInPolygon(anti.x, anti.y, parsePolygon(above.moonRiseSet.MAX))).toBe(false)
+	})
+
+	// Near the celestial equator (|declination| below the lunar parallax) the cap encloses neither pole, so the
+	// pole-edge closure is wrong; the ring-topology path must still put the sublunar point inside the cap.
+	test('near-equatorial eclipse: aboveHorizon fill contains the sublunar point', () => {
+		const eclipse = nearestLunarEclipse(timeYMDHMS(2016, 3, 1), true)
+		const geo = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition)
+		const max = geo.events.find((e) => e.kind === 'MAX')!
+		// 2016-03-23 penumbral eclipse: MAX declination ~ -0.31 deg, smaller than the ~0.95 deg lunar parallax.
+		expect(Math.abs(max.declination)).toBeLessThan(deg(0.95))
+
+		const above = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'aboveHorizon' }).moonRiseSet.MAX
+		const sub = projection.project(max.sublunar.x, max.sublunar.y)!
+		expect(pointInPath(sub.x, sub.y, above)).toBe(true)
+
+		// The antipodal point is below the horizon, so it must be outside the cap.
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - Math.PI : max.sublunar.x + Math.PI
+		const anti = projection.project(antiLon, -max.sublunar.y)!
+		expect(pointInPath(anti.x, anti.y, above)).toBe(false)
+	})
+
+	// The belowHorizon complement of a near-equatorial cap is the map rectangle with the cap punched out:
+	// the antipode is inside it, the sublunar point is not (with the required even-odd fill rule).
+	test('near-equatorial eclipse: belowHorizon fill is the cap complement', () => {
+		const eclipse = nearestLunarEclipse(timeYMDHMS(2016, 3, 1), true)
+		const geo = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition)
+		const max = geo.events.find((e) => e.kind === 'MAX')!
+		const below = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'belowHorizon' }).moonRiseSet.MAX
+		const sub = projection.project(max.sublunar.x, max.sublunar.y)!
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - Math.PI : max.sublunar.x + Math.PI
+		const anti = projection.project(antiLon, -max.sublunar.y)!
+		expect(pointInPath(anti.x, anti.y, below)).toBe(true)
+		expect(pointInPath(sub.x, sub.y, below)).toBe(false)
 	})
 })
