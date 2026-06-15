@@ -761,10 +761,14 @@ function moonDiskOffset(shadowCenterAngle: Angle, ell: number, scale: number, fr
 	return { x: eastSign * scale * ell * Math.sin(angle), y: -scale * ell * Math.cos(angle) }
 }
 
-// Builds the apparent-horizon line and below-horizon band for the selected contact. The horizon sits at the
-// Moon altitude away from the zenith; its distance from the shadow center is scaled by the mean angular size of
-// one Earth radius at the Moon, which is a schematic approximation (the shadow is tiny next to the altitude).
-function buildHorizonShapes(primary: LocalLunarEclipseEvent, options: LocalLunarEclipseViewOptions, cx: number, cy: number, scale: number, eastSign: number): LocalLunarEclipseSvgShape[] {
+// Builds the apparent-horizon line and below-horizon band for the selected contact, anchored at the Moon DISK
+// center (not the shadow center). The horizon sits (altitude - horizonAltitude) below the disk along the zenith
+// direction, so the selected disk is above the band exactly when altitude >= horizonAltitude (matching
+// event.observable), accounting for the disk's own zenith-direction offset from the shadow center. The offset is
+// scaled by the mean angular size of one Earth radius at the Moon, a schematic approximation (the shadow is tiny
+// next to the altitude).
+//   diskCx, diskCy: SVG pixel center of the selected Moon disk.
+function buildHorizonShapes(primary: LocalLunarEclipseEvent, options: LocalLunarEclipseViewOptions, diskCx: number, diskCy: number, scale: number, eastSign: number): LocalLunarEclipseSvgShape[] {
 	// Zenith direction in SVG pixels (y grows downward). In the north frame the zenith is rotated from "up" by
 	// the frame parallactic angle; here the zenith frame keeps it straight up, so the rotation is folded into
 	// the disk angles instead and the horizon is drawn straight.
@@ -772,13 +776,13 @@ function buildHorizonShapes(primary: LocalLunarEclipseEvent, options: LocalLunar
 	const zenithX = eastSign * Math.sin(q)
 	const zenithY = -Math.cos(q)
 
-	// Altitude offset (px) from the shadow center along the zenith direction, measured from the CONFIGURED
-	// horizon (not true altitude 0) so the line matches the observable flag for a raised/obstructed horizon: the
-	// Moon sits above the line exactly when altitude >= horizonAltitude.
+	// Altitude offset (px) from the disk center along the zenith direction, measured from the CONFIGURED horizon
+	// (not true altitude 0) so the line matches the observable flag for a raised/obstructed horizon: the disk
+	// sits above the line exactly when altitude >= horizonAltitude.
 	const horizonAltitude = options.horizonAltitude ?? 0
 	const offsetPx = clamp(((primary.altitude - horizonAltitude) / MEAN_EARTH_RADIUS_ANGULAR_AT_MOON) * scale, -Math.hypot(options.width, options.height) * 2, Math.hypot(options.width, options.height) * 2)
-	const horizonX = cx - offsetPx * zenithX
-	const horizonY = cy - offsetPx * zenithY
+	const horizonX = diskCx - offsetPx * zenithX
+	const horizonY = diskCy - offsetPx * zenithY
 
 	const tangentX = -zenithY
 	const tangentY = zenithX
@@ -835,12 +839,21 @@ export function computeLocalLunarEclipseViewGeometry(circumstances: Pick<LocalLu
 	const primary = selectPrimaryEvent(events, resolved.selectedEvent)
 	const frameParallactic = primary ? primary.positionAngle - primary.zenithAngle : 0
 
+	// Selected disk center: the horizon must be anchored here (not at the shadow center) so the band agrees with
+	// the contact's observable flag despite the disk's own zenith-direction offset from the shadow center.
+	let primaryDiskCenter: Point = { x: cx, y: cy }
+	if (primary) {
+		const ell = contactShadowDistance(primary.kind, eclipse.u, eclipse.gamma)
+		const offset = moonDiskOffset(eventShadowCenterAngle(primary, eclipse.type), ell, scale, frameParallactic, resolved.orientationMode, eastSign)
+		primaryDiskCenter = { x: cx + offset.x, y: cy + offset.y }
+	}
+
 	const shapes: LocalLunarEclipseSvgShape[] = []
 
 	// Below-horizon band first (painted behind), then shadow rings, ghosts, trajectory, primary disk, then the
 	// horizon line on top.
 	if (resolved.includeHorizon && primary) {
-		shapes.push(buildHorizonShapes(primary, resolved, cx, cy, scale, eastSign)[0])
+		shapes.push(buildHorizonShapes(primary, resolved, primaryDiskCenter.x, primaryDiskCenter.y, scale, eastSign)[0])
 	}
 
 	shapes.push({ kind: 'circle', role: 'penumbra', cx, cy, r: penumbraRadiusPx })
@@ -873,14 +886,12 @@ export function computeLocalLunarEclipseViewGeometry(circumstances: Pick<LocalLu
 	}
 
 	if (primary) {
-		const ell = contactShadowDistance(primary.kind, eclipse.u, eclipse.gamma)
-		const offset = moonDiskOffset(eventShadowCenterAngle(primary, eclipse.type), ell, scale, frameParallactic, resolved.orientationMode, eastSign)
-		shapes.push({ kind: 'circle', role: 'moonDisk', event: primary.kind, cx: cx + offset.x, cy: cy + offset.y, r: moonRadiusPx })
+		shapes.push({ kind: 'circle', role: 'moonDisk', event: primary.kind, cx: primaryDiskCenter.x, cy: primaryDiskCenter.y, r: moonRadiusPx })
 	}
 
 	// Horizon line on top of the disks, so the ground occludes the part of the diagram below it.
 	if (resolved.includeHorizon && primary) {
-		shapes.push(buildHorizonShapes(primary, resolved, cx, cy, scale, eastSign)[1])
+		shapes.push(buildHorizonShapes(primary, resolved, primaryDiskCenter.x, primaryDiskCenter.y, scale, eastSign)[1])
 	}
 
 	return {

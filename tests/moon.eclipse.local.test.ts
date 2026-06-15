@@ -424,4 +424,22 @@ describe('Local View geometry', () => {
 		// Drawn against the configured 10 deg horizon the Moon is below it: inside the band, matching observable=false.
 		expect(primaryInsideBand(customHorizon)).toBe(true)
 	}, 7000)
+
+	// A non-MAX selected contact whose disk is offset from the shadow center: the horizon must be anchored at the
+	// disk, not the shadow center, so the band agrees with the contact's observable flag. The 1997-09-16 total
+	// eclipse P1 at ~142 W, 80 S has a slightly negative topocentric altitude (not observable).
+	test('a non-MAX contact just below the horizon is drawn inside the band', () => {
+		const longitude = deg(-142)
+		const latitude = deg(-80)
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: 12 })
+		expect(local.events.P1!.altitude).toBeLessThan(0)
+		expect(local.events.P1!.observable).toBe(false)
+
+		const view = computeLocalLunarEclipseViewGeometry(local, TOTAL, { selectedEvent: 'P1' })
+		expect(view.selectedEvent).toBe('P1')
+		const band = view.shapes.find((s): s is LocalLunarEclipseSvgPolygon => s.kind === 'polygon' && s.role === 'horizonBand')!
+		const moon = view.shapes.find((s): s is LocalLunarEclipseSvgCircle => s.kind === 'circle' && s.role === 'moonDisk')!
+		// The below-horizon disk lands inside the below-horizon band, consistent with observable === false.
+		expect(pointInPolygon(moon.cx, moon.cy, band.points)).toBe(true)
+	}, 6000)
 })
