@@ -17,11 +17,17 @@ import type { Writable } from './types'
 // hemisphere that sees the Moon above the horizon and the hemisphere that does not. The physical umbra and
 // penumbra geometry belongs to the Moon's plane and is exposed by the local view, not by this global map.
 //
-// Geometry of one contact curve: the locus where the apparent Moon altitude equals a chosen visibility
-// horizon h0 is a small circle on the sphere centered at the sublunar point (the place where the Moon is at
-// the zenith) at angular radius (PI/2 - h0). The sublunar point is at latitude = declination and longitude =
-// rightAscension - GAST. This is computed by a direct bearing sweep, which is robust at high declination and
-// near the poles, where a longitude scan would be double-valued or undefined.
+// Geometry of one contact curve: rise/set is a TOPOCENTRIC condition, so the curve is the locus where the
+// observer's topocentric Moon altitude equals a chosen visibility horizon h0. That locus is still a small
+// circle on the sphere centered at the sublunar point (the place where the Moon is at the zenith), but its
+// geocentric angular radius is (PI/2 - h0 - p), where p = asin(cos(h0) / d) is the lunar parallax in altitude
+// at zenith distance (90 deg - h0) and d is the Moon distance in Earth equatorial radii. Folding the parallax
+// into the radius keeps the topocentric center on the horizon h0; using the bare geocentric radius (PI/2 - h0)
+// would leave every point about one horizontal parallax (~0.95 deg) above the rise/set boundary it should mark.
+// The reduction uses a spherical observer (geocentric radius 1 equatorial Earth radius); the residual flattening
+// term is well under the curve resolution. The sublunar point is at latitude = declination and longitude =
+// rightAscension - GAST. The circle is swept by bearing, which is robust at high declination and near the poles,
+// where a longitude scan would be double-valued or undefined.
 //
 // Unit conventions:
 //   - angles (right ascension, declination, longitude, latitude, altitudes) in radians;
@@ -79,15 +85,17 @@ export interface LunarEclipseMapEvent extends LunarEclipseContact {
 	readonly declination: Angle
 	// Greenwich apparent sidereal time (radians) at the contact.
 	readonly gast: Angle
+	// Apparent geocentric Moon distance in Earth equatorial radii, used for the parallax-reduced curve radius.
+	readonly distance: number
 	// Effective visibility-horizon altitude (radians) used to draw this contact's curve.
 	readonly horizonAltitude: Angle
 	// Sublunar point: where the Moon is at the local zenith (latitude = declination, longitude = RA - GAST).
 	readonly sublunar: GeoPoint
 }
 
-// Per-contact moon rise/set (horizon) curves. Each curve is the small circle where the Moon altitude equals
-// the contact's visibility horizon; it is kept unsplit (one closed branch) and projection-agnostic, the
-// antimeridian split happening only at serialization time.
+// Per-contact moon rise/set (horizon) curves. Each curve is the small circle where the observer's topocentric
+// Moon altitude equals the contact's visibility horizon; it is kept unsplit (one closed branch) and
+// projection-agnostic, the antimeridian split happening only at serialization time.
 export interface LunarEclipseContactCurves {
 	readonly P1?: GeoCurve
 	readonly U1?: GeoCurve
@@ -223,17 +231,23 @@ function effectiveHorizonAltitude(horizonAltitude: Angle, refraction: boolean, l
 	return h0
 }
 
-// Generates the small circle where the Moon altitude equals h0, centered at the sublunar point. The circle has
-// spherical radius (PI/2 - h0); points are swept by bearing so spacing stays near maxAngularStep along the
-// circle and the curve is well behaved at high declination and near the poles. The returned branch is closed
-// (first point repeated) and projection-agnostic; the antimeridian split happens at serialization time.
+// Generates the small circle where the observer's TOPOCENTRIC Moon altitude equals h0, centered at the sublunar
+// point. The geocentric angular radius is (PI/2 - h0 - p), where p = asin(cos(h0) / distance) is the parallax in
+// altitude that pushes the Moon down for a surface observer; this keeps the topocentric center on the horizon h0
+// rather than ~one horizontal parallax above it. Points are swept by bearing so spacing stays near maxAngularStep
+// along the circle and the curve is well behaved at high declination and near the poles. The returned branch is
+// closed (first point repeated) and projection-agnostic; the antimeridian split happens at serialization time.
 //   sublunarLat: latitude of the sublunar point (= Moon declination), radians.
 //   sublunarLon: longitude of the sublunar point (= RA - GAST), radians, east-positive.
-//   h0: visibility-horizon altitude, radians.
+//   h0: topocentric visibility-horizon altitude, radians.
+//   distance: apparent geocentric Moon distance in Earth equatorial radii (sets the parallax reduction).
 //   jd: Julian Day stamped on every point of the curve.
 //   maxAngularStep: target geodesic spacing between neighboring points, radians.
-function horizonCircle(sublunarLat: Angle, sublunarLon: Angle, h0: Angle, jd: number, maxAngularStep: Angle) {
-	const rho = PIOVERTWO - h0
+function horizonCircle(sublunarLat: Angle, sublunarLon: Angle, h0: Angle, distance: number, jd: number, maxAngularStep: Angle) {
+	// Lunar parallax in altitude at zenith distance (90 deg - h0): sin(p) = cos(h0) / d for a spherical observer.
+	// A degraded distance (non-finite or <= 1) falls back to the geocentric circle.
+	const parallax = distance > 1 && Number.isFinite(distance) ? Math.asin(clamp(Math.cos(h0) / distance, -1, 1)) : 0
+	const rho = PIOVERTWO - h0 - parallax
 	const sinClat = Math.sin(sublunarLat)
 	const cosClat = Math.cos(sublunarLat)
 	const sinRho = Math.sin(rho)
@@ -272,6 +286,7 @@ function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: (time: Tim
 		rightAscension,
 		declination,
 		gast,
+		distance: position.moon.distance,
 		horizonAltitude: h0,
 		sublunar: { x: sublunarLon, y: declination, jd: contact.jd },
 	}
@@ -293,7 +308,7 @@ export function computeLunarEclipseMapGeometry(eclipse: LunarEclipse, sunMoonPos
 	for (let i = 0; i < contacts.length; i++) {
 		const event = buildMapEvent(contacts[i], sunMoonPosition, h0)
 		events[i] = event
-		moonRiseSet[event.kind] = [horizonCircle(event.declination, event.sublunar.x, h0, event.jd, maxAngularStep)]
+		moonRiseSet[event.kind] = [horizonCircle(event.declination, event.sublunar.x, h0, event.distance, event.jd, maxAngularStep)]
 	}
 
 	return { eclipse, events, lines: { moonRiseSet } }

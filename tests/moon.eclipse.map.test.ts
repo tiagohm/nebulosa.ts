@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import type { Angle } from '../src/angle'
+import { deg, type Angle } from '../src/angle'
 import { PIOVERTWO, TAU } from '../src/constants'
 import * as elpmpp02 from '../src/elpmpp02'
 import { nearestLunarEclipse } from '../src/moon'
+import { moonAltitudeAt } from '../src/moon.eclipse.local'
 import { computeLunarEclipseMapGeometry, lunarEclipseEvents, lunarEclipseMapToSvgPaths, type LunarEclipseContactKind } from '../src/moon.eclipse.map'
 import { PlateCarree } from '../src/projection'
 import { computeSunMoonPositionAt } from '../src/sun.eclipse.map'
@@ -60,7 +61,7 @@ describe('events by type', () => {
 describe('horizon curve geometry', () => {
 	const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
 
-	test('every curve point has Moon altitude on the horizon', () => {
+	test('every curve point is finite and within latitude bounds', () => {
 		for (const event of geometry.events) {
 			const curve = geometry.lines.moonRiseSet[event.kind]!
 			expect(curve.length).toBeGreaterThan(0)
@@ -71,9 +72,22 @@ describe('horizon curve geometry', () => {
 					expect(point.x).toBeGreaterThanOrEqual(-Math.PI - 1e-9)
 					expect(point.x).toBeLessThanOrEqual(Math.PI + 1e-9)
 					expect(Math.abs(point.y)).toBeLessThanOrEqual(PIOVERTWO + 1e-9)
-					const alt = moonAltitude(event.rightAscension, event.declination, event.gast, point.x, point.y)
-					expect(alt).toBeCloseTo(0, 5)
 				}
+			}
+		}
+	})
+
+	test('every curve point has topocentric Moon altitude on the horizon', () => {
+		// Rise/set is a topocentric condition. The parallax-reduced circle must put the topocentric Moon center
+		// on the horizon (h0 = 0); the bare geocentric circle would leave it ~one horizontal parallax (~0.95 deg)
+		// above the boundary. The geocentric altitude (moonAltitude) at these points is now h0 + parallax, not h0.
+		for (const event of geometry.events) {
+			const branch = geometry.lines.moonRiseSet[event.kind]![0]
+			const stepN = Math.max(1, Math.floor(branch.length / 12))
+			for (let i = 0; i < branch.length; i += stepN) {
+				const point = branch[i]
+				const topocentricAltitude = moonAltitudeAt(event.time, point.x, point.y, sunMoonPosition)
+				expect(topocentricAltitude).toBeCloseTo(0, 3)
 			}
 		}
 	})
@@ -89,13 +103,15 @@ describe('horizon curve geometry', () => {
 		}
 	})
 
-	test('horizon altitude option shifts the curve to that altitude', () => {
-		const altOption: Angle = (10 / 180) * Math.PI
+	test('horizon altitude option shifts the curve to that topocentric altitude', () => {
+		const altOption: Angle = deg(10)
 		const geo = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { horizonAltitude: altOption })
 		const max = geo.events.find((e) => e.kind === 'MAX')!
-		for (const point of geo.lines.moonRiseSet.MAX![0]) {
-			const alt = moonAltitude(max.rightAscension, max.declination, max.gast, point.x, point.y)
-			expect(alt).toBeCloseTo(altOption, 5)
+		const branch = geo.lines.moonRiseSet.MAX![0]
+		const stepN = Math.max(1, Math.floor(branch.length / 12))
+		for (let i = 0; i < branch.length; i += stepN) {
+			const point = branch[i]
+			expect(moonAltitudeAt(max.time, point.x, point.y, sunMoonPosition)).toBeCloseTo(altOption, 3)
 		}
 	})
 })
