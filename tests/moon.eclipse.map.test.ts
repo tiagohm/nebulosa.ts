@@ -94,6 +94,20 @@ describe('maxAngularStep validation', () => {
 		const byDefault = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition).lines.moonRiseSet.MAX![0]
 		expect(fallback.length).toBe(byDefault.length)
 	}, 4000)
+
+	// A pathologically small but finite maxAngularStep passes the finite-positive check, yet would derive an
+	// unsafe array length and throw a RangeError; the per-curve point count must be capped instead.
+	test('a tiny maxAngularStep is capped instead of throwing', () => {
+		for (const tiny of [Number.MIN_VALUE, 1e-300, 1e-12]) {
+			const geometry = computeLunarEclipseMapGeometry(PENUMBRAL, sunMoonPosition, { maxAngularStep: tiny })
+			const branch = geometry.lines.moonRiseSet.MAX![0]
+			// Many points (a fine curve), but bounded by the safety ceiling (+ the repeated closing vertex).
+			expect(branch.length).toBeGreaterThan(1000)
+			expect(branch.length).toBeLessThanOrEqual(100001)
+			expect(Number.isFinite(branch[0].x)).toBe(true)
+			expect(Number.isFinite(branch.at(-1)!.y)).toBe(true)
+		}
+	}, 8000)
 })
 
 describe('horizon curve geometry', () => {

@@ -54,6 +54,12 @@ const MEAN_MOON_SEMIDIAMETER: Angle = 0.259 * DEG2RAD
 // Default angular spacing (radians, 1 deg) between neighboring horizon-curve points.
 const DEFAULT_MAX_ANGULAR_STEP: Angle = DEG2RAD
 
+// Hard ceiling on the number of points per horizon circle. A pathologically small but finite maxAngularStep
+// (e.g. a unit-conversion typo, or Number.MIN_VALUE) passes the finite-positive option check yet would derive a
+// count that overflows the maximum safe array length and throw a RangeError from new Array(...). Capping keeps
+// geometry generation robust; the ceiling is far above any useful map resolution (~0.0036 deg spacing).
+const MAX_HORIZON_CIRCLE_POINTS = 100000
+
 // Visibility criterion for the horizon curve.
 //   'center': the Moon's center is on the horizon h0 (the conventional reference-map choice);
 //   'upperLimb': the horizon is lowered by the Moon's semidiameter so the curve marks where the upper limb
@@ -275,9 +281,11 @@ function horizonCircle(sublunarLat: Angle, sublunarLon: Angle, h0: Angle, distan
 	const cosRho = Math.cos(rho)
 
 	// Bearing step so the along-circle spacing (~sinRho * dTheta) stays within maxAngularStep; clamped so a
-	// degenerate tiny circle (h0 near PI/2) still produces a bounded number of samples.
+	// degenerate tiny circle (h0 near PI/2) still produces a bounded number of samples. The count is also capped
+	// at MAX_HORIZON_CIRCLE_POINTS so an extremely small maxAngularStep (which makes bearingStep underflow toward
+	// zero) cannot derive a non-finite or unsafe array length and throw a RangeError from new Array(...).
 	const bearingStep = maxAngularStep / Math.max(sinRho, 0.05)
-	const count = Math.max(24, Math.ceil(TAU / bearingStep))
+	const count = Math.min(Math.max(24, Math.ceil(TAU / bearingStep)), MAX_HORIZON_CIRCLE_POINTS)
 	const points: GeoBranch = new Array(count + 1)
 
 	for (let i = 0; i <= count; i++) {
