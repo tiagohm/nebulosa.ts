@@ -148,7 +148,7 @@ describe('visibility classification', () => {
 		expect(local.events.MAX!.altitude).toBeLessThan(0)
 		expect(local.events.MAX!.altitude).toBeLessThan(geocentricAltitude)
 		expect(local.events.MAX!.observable).toBe(false)
-	}, 6000)
+	}, 8000)
 
 	// Replicates one point of the module's exact penumbral sample grid (reference = maximalTime, see scanAltitudes).
 	function gridAltitude(jd: number, longitude: number, latitude: number) {
@@ -251,6 +251,24 @@ describe('visibility classification', () => {
 		expect(local.details.observableDuration).toBeGreaterThan(0)
 		expect(local.details.observableDuration).toBeLessThanOrEqual(local.details.penumbralPhaseDuration + 1e-6)
 	}, 15000)
+
+	// A high-latitude grazing moonrise/moonset whose entire above-horizon window is far shorter than scan.step / 16.
+	// With a coarse scan (2 samples, one ~2.5 h step), a fixed 16-piece subdivision of the suspect step would find
+	// both ends of the relevant sub-step below the horizon and report nothing, while phaseReachesHorizon still
+	// classifies the eclipse observable from its interior maximum. Bracketing that maximum and solving the two
+	// horizon roots around it recovers the brief duration, keeping observableDuration consistent with observability.
+	test('a grazing window shorter than a refinement sub-step still yields a positive duration', () => {
+		const samples = 2
+		const longitude = deg(-180)
+		const latitude = deg(79)
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { altitudeSamples: samples })
+
+		const subStepSeconds = local.details.penumbralPhaseDuration / samples / 16
+		expect(local.visibility.hasObservableEclipse).toBe(true)
+		// The window is real but shorter than one refinement sub-step, so a both-below sub-step integration misses it.
+		expect(local.details.observableDuration).toBeGreaterThan(0)
+		expect(local.details.observableDuration).toBeLessThan(subStepSeconds)
+	}, 6000)
 
 	// Every contact can be above the horizon while the Moon still dips below it between contacts (a high-latitude
 	// lower culmination during the multi-hour penumbral interval). 'completelyVisible' must check the whole

@@ -336,30 +336,41 @@ function scanAltitudes(fromJd: number, toJd: number, longitude: Angle, latitude:
 // endpoints are on the same side of the horizon can hide a crossing pair only when an endpoint is within that
 // bound of the horizon.
 const EARTH_ROTATION_RATE_PER_DAY = TAU / 0.99726966
-// Sub-steps used to integrate a suspect interval that may hide a horizon crossing pair.
-const REFINE_SUBSTEPS = 16
 
-// Above-horizon time (days) within one suspect sample interval, by subdividing it and summing the linear
-// horizon-crossing fraction of each sub-step. The interval spans at most one scan step, over which the altitude
-// is unimodal, so a fixed subdivision resolves a brief peak above the horizon (or a brief dip below it) that the
-// coarse endpoints alone miss.
+// Above-horizon time (days) within one suspect sample interval. Both endpoints are on the same side of the horizon
+// (this is only called for same-side intervals), and the interval spans at most one scan step, over which the
+// altitude is unimodal (at most one interior extremum). A hidden above-horizon excursion is therefore either a
+// brief peak above the horizon (both endpoints below) or the whole step minus a brief dip below it (both endpoints
+// above). The interior extremum is bracketed by golden-section and the two horizon roots around it are solved by
+// bisection, so an above-horizon window narrower than any fixed subdivision is still measured exactly (a fixed
+// 16-piece subdivision missed a peak shorter than one sub-step that fell between subdivision points, leaving
+// observableDuration at 0 while phaseReachesHorizon classified the eclipse observable from the same maximum).
 function aboveHorizonDaysInInterval(fromJd: number, toJd: number, horizonAltitude: Angle, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, reference: Time) {
-	const dt = (toJd - fromJd) / REFINE_SUBSTEPS
-	let previous = moonAltitudeAt(timeAtJulianDay(reference, fromJd), longitude, latitude, getPosition) - horizonAltitude
-	let days = 0
+	const span = toJd - fromJd
+	if (!(span > 0)) return 0
 
-	for (let k = 1; k <= REFINE_SUBSTEPS; k++) {
-		const current = moonAltitudeAt(timeAtJulianDay(reference, fromJd + k * dt), longitude, latitude, getPosition) - horizonAltitude
-		if (previous >= 0 && current >= 0) days += dt
-		else if (previous < 0 && current < 0) days += 0
-		else {
-			const t = previous / (previous - current)
-			days += (previous >= 0 ? t : 1 - t) * dt
-		}
-		previous = current
+	const altitudeAt = (jd: number) => moonAltitudeAt(timeAtJulianDay(reference, jd), longitude, latitude, getPosition) - horizonAltitude
+	const startsAbove = altitudeAt(fromJd) >= 0
+	const endsAbove = altitudeAt(toJd) >= 0
+
+	// Both endpoints below: the only above-horizon time is a peak that pokes above between them, so seek the
+	// interior maximum. Both endpoints above: the only below-horizon time is a dip, so seek the interior minimum.
+	const seekMaximum = !startsAbove && !endsAbove
+	const extremumJd = goldenSectionExtremum(fromJd, toJd, altitudeAt, seekMaximum)
+
+	if (seekMaximum) {
+		// No peak reaches the horizon: nothing is above. Otherwise the peak is bracketed by a rise and a set root.
+		if (altitudeAt(extremumJd) < 0) return 0
+		const rise = bisectHorizonCrossing(fromJd, extremumJd, altitudeAt)
+		const set = bisectHorizonCrossing(extremumJd, toJd, altitudeAt)
+		return set - rise
 	}
 
-	return days
+	// No dip reaches the horizon: the whole step is above. Otherwise subtract the bracketed below-horizon window.
+	if (altitudeAt(extremumJd) >= 0) return span
+	const set = bisectHorizonCrossing(fromJd, extremumJd, altitudeAt)
+	const rise = bisectHorizonCrossing(extremumJd, toJd, altitudeAt)
+	return span - (rise - set)
 }
 
 // Total time (days) the Moon is at or above the horizon within the scanned interval. Each sample interval
@@ -369,9 +380,10 @@ function aboveHorizonDaysInInterval(fromJd: number, toJd: number, horizonAltitud
 // A same-side interval can still hide a horizon crossing pair (a brief peak above the horizon, or a brief dip
 // below it). Because the altitude is unimodal over the penumbral interval (its hour-angle span is well under a
 // full turn, so it has at most one interior extremum), such a hidden excursion can only sit at that extremum,
-// i.e. in an interval touching the highest or lowest sample. Those intervals are refined by subdivision when an
-// endpoint is within one step's altitude change of the horizon; this catches a stretch that falls between two
-// coarse samples even when the surrounding samples are monotonic, without scanning every near-horizon interval.
+// i.e. in an interval touching the highest or lowest sample. Those intervals are refined (the interior extremum
+// bracketed and its horizon roots solved) when an endpoint is within one step's altitude change of the horizon;
+// this catches a stretch that falls between two coarse samples even when the surrounding samples are monotonic,
+// without scanning every near-horizon interval.
 // The result is capped at the scanned span so it can never exceed P4 - P1.
 function observableDaysFromScan(scan: AltitudeScan, horizonAltitude: Angle, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, reference: Time) {
 	const { jds, altitudes, step } = scan
@@ -417,6 +429,60 @@ const PHASE_MAX_ITERATIONS = 32
 const PHASE_MIN_SPAN_DAYS = 2 / DAYSEC
 // Reciprocal golden ratio, 1 / phi.
 const INVERSE_GOLDEN_RATIO = 0.61803398874989484820458683436564 // (Math.sqrt(5) - 1) / 2
+// Bisection cap for a horizon-crossing root; combined with the PHASE_MIN_SPAN_DAYS (~2 s) span guard it converges
+// well under one second for any realistic scan step.
+const HORIZON_ROOT_ITERATIONS = 40
+
+// Abscissa of the single interior extremum of a unimodal function f over [lo, hi], by golden-section. seekMaximum
+// selects the maximum; otherwise the minimum. Used to bracket a hidden horizon excursion inside one scan step.
+//   lo, hi: search bounds (Julian Days), lo < hi.
+//   f: unimodal function over [lo, hi].
+//   seekMaximum: true to locate the maximum, false for the minimum.
+function goldenSectionExtremum(lo: number, hi: number, f: (jd: number) => number, seekMaximum: boolean) {
+	let c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
+	let d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
+	let fc = f(c)
+	let fd = f(d)
+
+	for (let i = 0; i < PHASE_MAX_ITERATIONS && hi - lo > PHASE_MIN_SPAN_DAYS; i++) {
+		// Keep the bracket on the side of the better candidate (higher for a maximum, lower for a minimum).
+		if (seekMaximum ? fc > fd : fc < fd) {
+			hi = d
+			d = c
+			fd = fc
+			c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
+			fc = f(c)
+		} else {
+			lo = c
+			c = d
+			fc = fd
+			d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
+			fd = f(d)
+		}
+	}
+
+	return (lo + hi) / 2
+}
+
+// Julian Day of the horizon crossing within [lo, hi] where altitudeAt changes sign, by bisection. Requires
+// altitudeAt(lo) and altitudeAt(hi) to straddle zero (opposite signs); returns the bracket midpoint on convergence.
+//   altitudeAt: topocentric altitude minus the horizon (signed) at a Julian Day.
+function bisectHorizonCrossing(lo: number, hi: number, altitudeAt: (jd: number) => number) {
+	let loBelow = altitudeAt(lo) < 0
+
+	for (let i = 0; i < HORIZON_ROOT_ITERATIONS && hi - lo > PHASE_MIN_SPAN_DAYS; i++) {
+		const mid = (lo + hi) / 2
+		const midBelow = altitudeAt(mid) < 0
+		if (midBelow === loBelow) {
+			lo = mid
+			loBelow = midBelow
+		} else {
+			hi = mid
+		}
+	}
+
+	return (lo + hi) / 2
+}
 
 // Whether the topocentric Moon altitude reaches the horizon anywhere within [fromJd, toJd].
 //
