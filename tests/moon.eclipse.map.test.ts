@@ -370,4 +370,23 @@ describe('fill region polygons', () => {
 		expect(pointInPath(anti.x, anti.y, below)).toBe(true)
 		expect(pointInPath(sub.x, sub.y, below)).toBe(false)
 	})
+
+	// A lowered horizon on a near-equatorial eclipse makes the cap exceed a hemisphere AND enclose BOTH poles
+	// (the ring then winds neither pole, winding ~ 0). aboveHorizon must contain both poles - the Moon is above
+	// the threshold there - and exclude only the small antipodal below-horizon hole. (When the cap exceeds a
+	// hemisphere but encloses just one pole, the ring winds that pole and the polar branch handles it; the two
+	// conditions "ring winds a pole" and "both poles above the threshold" cannot hold together.)
+	test('lowered horizon on a near-equatorial eclipse: both poles are inside aboveHorizon', () => {
+		const geo = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { horizonAltitude: deg(-5) })
+		const max = geo.events.find((e) => e.kind === 'MAX')!
+		const above = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'aboveHorizon' }).moonRiseSet.MAX
+		const northPole = projection.project(0, PIOVERTWO - 1e-6)!
+		const southPole = projection.project(0, -(PIOVERTWO - 1e-6))!
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - Math.PI : max.sublunar.x + Math.PI
+		const anti = projection.project(antiLon, -max.sublunar.y)!
+
+		expect(pointInPath(northPole.x, northPole.y, above)).toBe(true)
+		expect(pointInPath(southPole.x, southPole.y, above)).toBe(true)
+		expect(pointInPath(anti.x, anti.y, above)).toBe(false)
+	})
 })
