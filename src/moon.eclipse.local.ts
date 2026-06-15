@@ -213,8 +213,8 @@ function moonTopocentric(moonRA: Angle, moonDEC: Angle, moonDistance: number, la
 }
 
 // Topocentric apparent Moon altitude (radians) at one instant for one observer. Applies diurnal parallax, then
-// converts to horizontal coordinates. Used by the continuous visibility scan.
-function moonAltitudeAt(time: Time, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider) {
+// converts to horizontal coordinates. Used by the continuous visibility scan and the phase-visibility search.
+export function moonAltitudeAt(time: Time, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider) {
 	const position = getPosition(time)
 	const lst = contactGast(time, position.deltaT ?? 0) + longitude
 	const [topoRA, topoDEC] = moonTopocentric(position.moon.rightAscension, position.moon.declination, position.moon.distance, latitude, lst)
@@ -346,13 +346,61 @@ function observableDaysFromScan(scan: AltitudeScan, horizonAltitude: Angle) {
 	return Math.min(days, jds.at(-1)! - jds[0])
 }
 
-// Whether the Moon is at or above the horizon at any sample within [fromJd, toJd].
-function anyAboveDuring(scan: AltitudeScan, fromJd: number, toJd: number, horizonAltitude: Angle) {
-	const { jds, altitudes } = scan
+// Golden-section iteration cap and minimum interval (days, ~2 s) for the phase-visibility interior search.
+const PHASE_MAX_ITERATIONS = 32
+const PHASE_MIN_SPAN_DAYS = 2 / DAYSEC
+// Reciprocal golden ratio, 1 / phi.
+const INVERSE_GOLDEN_RATIO = (Math.sqrt(5) - 1) / 2
 
-	for (let i = 0; i < jds.length; i++) {
-		if (jds[i] < fromJd || jds[i] > toJd) continue
-		if (altitudes[i] >= horizonAltitude) return true
+// Whether the topocentric Moon altitude reaches the horizon anywhere within [fromJd, toJd].
+//
+// A sample-only test misses a short above-horizon stretch that falls entirely between two fixed samples (a very
+// short total phase, or a grazing high-latitude moonrise/moonset), so this also tests the exact interval
+// endpoints (the phase contacts) and, when every sampled point is below the horizon, searches the interior for
+// the single altitude maximum. The altitude is unimodal over a phase interval (its hour-angle span is well
+// under a full turn, so there is at most one upper transit), so a golden-section search locates that maximum;
+// it returns as soon as any evaluated altitude reaches the horizon.
+//   scan: the precomputed penumbral-interval altitude samples, used only as a cheap interior pre-check.
+//   fromJd, toJd: the phase interval (Julian Days); endpoints are the phase contacts.
+//   altFrom, altTo: topocentric Moon altitudes at the endpoints (already resolved on the contact events).
+//   reference: time-scale reference for building instants from Julian Days.
+function phaseReachesHorizon(scan: AltitudeScan, fromJd: number, toJd: number, altFrom: Angle, altTo: Angle, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, horizonAltitude: Angle, reference: Time) {
+	// Exact phase endpoints first: a short phase whose whole above-horizon stretch is its endpoints is caught here.
+	if (altFrom >= horizonAltitude || altTo >= horizonAltitude) return true
+	if (!(toJd > fromJd)) return false
+
+	// Cheap pre-check: any precomputed sample strictly inside the interval that is already above the horizon.
+	for (let i = 0; i < scan.jds.length; i++) {
+		if (scan.jds[i] <= fromJd || scan.jds[i] >= toJd) continue
+		if (scan.altitudes[i] >= horizonAltitude) return true
+	}
+
+	// Interior maximum search (the altitude is unimodal over the interval): golden-section, early-exit on reach.
+	const altitudeAt = (jd: number) => moonAltitudeAt(timeAtJulianDay(reference, jd), longitude, latitude, getPosition)
+	let lo = fromJd
+	let hi = toJd
+	let c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
+	let d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
+	let fc = altitudeAt(c)
+	let fd = altitudeAt(d)
+	if (fc >= horizonAltitude || fd >= horizonAltitude) return true
+
+	for (let i = 0; i < PHASE_MAX_ITERATIONS && hi - lo > PHASE_MIN_SPAN_DAYS; i++) {
+		if (fc > fd) {
+			hi = d
+			d = c
+			fd = fc
+			c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
+			fc = altitudeAt(c)
+		} else {
+			lo = c
+			c = d
+			fc = fd
+			d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
+			fd = altitudeAt(d)
+		}
+
+		if (fc >= horizonAltitude || fd >= horizonAltitude) return true
 	}
 
 	return false
@@ -384,15 +432,18 @@ export function computeLocalLunarEclipseCircumstances(eclipse: LunarEclipse, lon
 	const p4 = events.P4
 	const reference = eclipse.maximalTime
 
-	// Continuous altitude scan across the penumbral interval, reused for every phase visibility test.
+	// Continuous altitude scan across the penumbral interval, reused for the observable duration and as a cheap
+	// pre-check inside the phase-visibility search.
 	const scan = p1 && p4 ? scanAltitudes(p1.jd, p4.jd, longitude, latitude, getSunMoonPosition, samples, reference) : { jds: [], altitudes: [], step: 0 }
 
 	const hasGeometricEclipse = contacts.length > 0
-	const penumbralVisible = p1 && p4 ? anyAboveDuring(scan, p1.jd, p4.jd, horizonAltitude) : false
+	const penumbralVisible = p1 && p4 ? phaseReachesHorizon(scan, p1.jd, p4.jd, p1.altitude, p4.altitude, longitude, latitude, getSunMoonPosition, horizonAltitude, reference) : false
 	const hasObservableEclipse = penumbralVisible
 
-	const umbralVisible = events.U1 && events.U4 ? anyAboveDuring(scan, events.U1.jd, events.U4.jd, horizonAltitude) : false
-	const totalVisible = events.U2 && events.U3 ? anyAboveDuring(scan, events.U2.jd, events.U3.jd, horizonAltitude) : false
+	// The umbral and total intervals lie inside [P1, P4]: if the Moon never reaches the horizon across the whole
+	// penumbral interval it cannot in a sub-interval, so this guard also avoids the extra search cost there.
+	const umbralVisible = penumbralVisible && events.U1 && events.U4 ? phaseReachesHorizon(scan, events.U1.jd, events.U4.jd, events.U1.altitude, events.U4.altitude, longitude, latitude, getSunMoonPosition, horizonAltitude, reference) : false
+	const totalVisible = penumbralVisible && events.U2 && events.U3 ? phaseReachesHorizon(scan, events.U2.jd, events.U3.jd, events.U2.altitude, events.U3.altitude, longitude, latitude, getSunMoonPosition, horizonAltitude, reference) : false
 	const allContactsObservable = contacts.length > 0 && contacts.every((c) => events[c.kind]!.observable)
 
 	let kind: LocalLunarEclipseVisibilityKind

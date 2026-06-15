@@ -3,10 +3,10 @@ import { deg } from '../src/angle'
 import { PIOVERTWO, TAU } from '../src/constants'
 import * as elpmpp02 from '../src/elpmpp02'
 import { nearestLunarEclipse, type LunarEclipse } from '../src/moon'
-import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry, type LocalLunarEclipseSvgCircle } from '../src/moon.eclipse.local'
+import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry, moonAltitudeAt, type LocalLunarEclipseSvgCircle } from '../src/moon.eclipse.local'
 import { computeLunarEclipseMapGeometry } from '../src/moon.eclipse.map'
 import { computeSunMoonPositionAt } from '../src/sun.eclipse.map'
-import { type Time, timeYMDHMS } from '../src/time'
+import { timeShift, toJulianDay, type Time, timeYMDHMS } from '../src/time'
 import * as vsop87e from '../src/vsop87e'
 
 function sunMoonPosition(t: Time) {
@@ -103,6 +103,57 @@ describe('visibility classification', () => {
 		expect(local.events.MAX!.altitude).toBeLessThan(geocentricAltitude)
 		expect(local.events.MAX!.observable).toBe(false)
 	}, 6000)
+
+	// Replicates one point of the module's exact penumbral sample grid (reference = maximalTime, see scanAltitudes).
+	function gridAltitude(jd: number, longitude: number, latitude: number) {
+		const reference = TOTAL.maximalTime
+		return moonAltitudeAt(timeShift(reference, jd - reference.day - reference.fraction), longitude, latitude, sunMoonPosition)
+	}
+
+	// A short above-horizon stretch (here the sharp upper-transit peak) can fall between two fixed samples, so a
+	// sample-only check would report it unobservable; the interior search must still catch it.
+	test('Moon above the horizon only between two default samples is still classified observable', () => {
+		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
+		const max = geometry.events.find((e) => e.kind === 'MAX')!
+		// Latitude = declination puts the Moon through the zenith at its transit (a sharp altitude peak);
+		// offsetting the longitude by ~half a sample step moves that peak between two default samples.
+		const latitude = max.declination
+		const longitude = max.sublunar.x + deg(0.94)
+
+		const p1jd = toJulianDay(TOTAL.firstContactPenumbraTime)
+		const p4jd = toJulianDay(TOTAL.lastContactPenumbraTime)
+		const samples = 48
+		const step = (p4jd - p1jd) / samples
+
+		// Maximum over the exact default sample grid (what a sample-only check would see), and its location.
+		let coarseMax = -Infinity
+		let imax = 0
+		for (let i = 0; i <= samples; i++) {
+			const altitude = gridAltitude(p1jd + i * step, longitude, latitude)
+			if (altitude > coarseMax) {
+				coarseMax = altitude
+				imax = i
+			}
+		}
+
+		// True peak between the two samples bracketing the coarse maximum.
+		const loZoom = p1jd + Math.max(0, imax - 1) * step
+		const hiZoom = p1jd + Math.min(samples, imax + 1) * step
+		let fineMax = -Infinity
+		for (let i = 0; i <= 40; i++) fineMax = Math.max(fineMax, gridAltitude(loZoom + (i / 40) * (hiZoom - loZoom), longitude, latitude))
+
+		// The peak genuinely falls between samples: it exceeds every default sample.
+		expect(fineMax).toBeGreaterThan(coarseMax)
+
+		// Horizon set between the coarse samples and the true peak: every default sample is below it (a
+		// sample-only check would report 'geometricOnlyBelowHorizon'), yet the Moon does rise above it.
+		const horizonAltitude = (coarseMax + fineMax) / 2
+		expect(coarseMax).toBeLessThan(horizonAltitude)
+
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { horizonAltitude })
+		expect(local.visibility.hasObservableEclipse).toBe(true)
+		expect(local.visibility.kind).not.toBe('geometricOnlyBelowHorizon')
+	}, 15000)
 })
 
 describe('P/Z orientation angles and Alt/Az', () => {
