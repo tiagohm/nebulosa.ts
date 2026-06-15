@@ -35,7 +35,7 @@ const LUNAR_ECLIPSE_PENUMBRA_LIMIT = 1.5573
 const LUNAR_ECLIPSE_MAGNITUDE_DENOMINATOR = 0.545
 // Mean angular size (radians) of one Earth equatorial radius seen from the Moon (mean distance ~60.27 Earth
 // radii). Used only to scale the schematic Local View horizon offset; not a precise per-event value.
-const MEAN_EARTH_RADIUS_ANGULAR_AT_MOON: Angle = Math.asin(1 / 60.27)
+const MEAN_EARTH_RADIUS_ANGULAR_AT_MOON: Angle = 0.01659276403036854845767088434102 // Math.asin(1 / 60.27)
 // Earth polar/equatorial radius ratio (1 - flattening).
 const F = 1 - WGS84_FLATTENING
 
@@ -402,7 +402,7 @@ function observableDaysFromScan(scan: AltitudeScan, horizonAltitude: Angle, long
 const PHASE_MAX_ITERATIONS = 32
 const PHASE_MIN_SPAN_DAYS = 2 / DAYSEC
 // Reciprocal golden ratio, 1 / phi.
-const INVERSE_GOLDEN_RATIO = (Math.sqrt(5) - 1) / 2
+const INVERSE_GOLDEN_RATIO = 0.61803398874989484820458683436564 // (Math.sqrt(5) - 1) / 2
 
 // Whether the topocentric Moon altitude reaches the horizon anywhere within [fromJd, toJd].
 //
