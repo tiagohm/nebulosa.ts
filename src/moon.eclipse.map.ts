@@ -244,6 +244,17 @@ function moonSemidiameter(distance: number): Angle {
 	return distance > MOON_RADIUS_EARTH_RADII && Number.isFinite(distance) ? Math.asin(MOON_RADIUS_EARTH_RADII / distance) : MEAN_MOON_SEMIDIAMETER
 }
 
+// Geocentric angular radius (radians) of the topocentric horizon circle: PI/2 - h0 - p, where p =
+// asin(cos(h0) / distance) is the lunar parallax in altitude (a degraded distance falls back to no parallax).
+// It exceeds PI/2 (a visibility cap larger than a hemisphere, enclosing the sublunar point and both poles) when
+// h0 is below the negative parallax, e.g. a sufficiently negative configured horizon.
+//   h0: topocentric visibility-horizon altitude (radians).
+//   distance: apparent geocentric Moon distance in Earth equatorial radii.
+function capRadius(h0: Angle, distance: number): Angle {
+	const parallax = distance > 1 && Number.isFinite(distance) ? Math.asin(clamp(Math.cos(h0) / distance, -1, 1)) : 0
+	return PIOVERTWO - h0 - parallax
+}
+
 // Generates the small circle where the observer's TOPOCENTRIC Moon altitude equals h0, centered at the sublunar
 // point. The geocentric angular radius is (PI/2 - h0 - p), where p = asin(cos(h0) / distance) is the parallax in
 // altitude that pushes the Moon down for a surface observer; this keeps the topocentric center on the horizon h0
@@ -257,10 +268,7 @@ function moonSemidiameter(distance: number): Angle {
 //   jd: Julian Day stamped on every point of the curve.
 //   maxAngularStep: target geodesic spacing between neighboring points, radians.
 function horizonCircle(sublunarLat: Angle, sublunarLon: Angle, h0: Angle, distance: number, jd: number, maxAngularStep: Angle) {
-	// Lunar parallax in altitude at zenith distance (90 deg - h0): sin(p) = cos(h0) / d for a spherical observer.
-	// A degraded distance (non-finite or <= 1) falls back to the geocentric circle.
-	const parallax = distance > 1 && Number.isFinite(distance) ? Math.asin(clamp(Math.cos(h0) / distance, -1, 1)) : 0
-	const rho = PIOVERTWO - h0 - parallax
+	const rho = capRadius(h0, distance)
 	const sinClat = Math.sin(sublunarLat)
 	const cosClat = Math.cos(sublunarLat)
 	const sinRho = Math.sin(rho)
@@ -417,39 +425,51 @@ function polarCapFillPath(ring: GeoBranch, declination: Angle, projection: Proje
 	return pointsToSvgPathData([polygon], true, precision)
 }
 
-// Fill polygon for a cap that encloses NEITHER pole (a near-equatorial eclipse). The cap is the bounded ring
-// itself, so 'aboveHorizon' is just the projected ring; 'belowHorizon' (the complement, which contains both
-// poles) is the map rectangle with the cap punched out as a hole. Both rely on fill-rule "evenodd": for
-// 'belowHorizon' a point inside the cap is covered by the rectangle and a cap piece (even -> not filled), and a
-// point outside is covered only by the rectangle (odd -> filled).
-function nonPolarCapFillPath(ring: GeoBranch, projection: Projection, region: LunarEclipseFillRegion, precision: number, options: SolarEclipseMapSvgProjectionOptions): string {
-	const capPieces = projectRingPieces(ring, projection, options)
-	if (capPieces.length === 0) return ''
+// Fill polygon for a horizon ring that encloses NEITHER pole. Two topologies share this branch:
+//   - the usual near-equatorial cap, a bounded ring smaller than a hemisphere around the sublunar point, so the
+//     ring bounds the 'aboveHorizon' region;
+//   - a cap larger than a hemisphere (a sufficiently negative horizon), where the above-horizon region contains
+//     the sublunar point AND both poles and the bounded ring is instead the small antipodal 'belowHorizon' hole.
+// The capExceedsHemisphere flag selects which side the ring bounds; the other side is the map rectangle with the
+// ring punched out as a hole, which (like the ring's own antimeridian pieces) fills correctly under fill-rule
+// "evenodd": a point inside the ring is covered by the rectangle and a ring piece (even -> not filled), a point
+// outside only by the rectangle (odd -> filled).
+function nonPolarCapFillPath(ring: GeoBranch, projection: Projection, region: LunarEclipseFillRegion, capExceedsHemisphere: boolean, precision: number, options: SolarEclipseMapSvgProjectionOptions): string {
+	const ringPieces = projectRingPieces(ring, projection, options)
+	if (ringPieces.length === 0) return ''
 
-	if (region === 'aboveHorizon') return pointsToSvgPathData(capPieces, true, precision)
+	// The ring bounds the above-horizon region for a sub-hemisphere cap, and the below-horizon region otherwise;
+	// fill it directly when the side it bounds is the requested side, else fill the complement.
+	const ringIsAbove = !capExceedsHemisphere
+	const wantAbove = region === 'aboveHorizon'
+	if (ringIsAbove === wantAbove) return pointsToSvgPathData(ringPieces, true, precision)
 
 	const rect = projectedWorldRect(projection, options)
 	if (rect.length < 3) return ''
-	return pointsToSvgPathData([rect, ...capPieces], true, precision)
+	return pointsToSvgPathData([rect, ...ringPieces], true, precision)
 }
 
-// Closes one contact's horizon curve into a fillable region polygon and serializes it. The visibility cap
-// either encloses a geographic pole (closed along the pole edge) or encloses neither pole for a near-equatorial
-// eclipse (filled as the bounded ring, or its complement); the topology is read from the ring's winding so the
-// correct side is filled in both cases. The geographic geometry is not mutated; the closing happens here.
-//   declination: Moon declination at the contact (radians), selecting the enclosed pole for a polar cap.
+// Closes one contact's horizon curve into a fillable region polygon and serializes it. The visibility cap either
+// encloses a geographic pole (closed along the pole edge, correct whatever its size) or encloses neither pole; in
+// the latter case the cap radius distinguishes the usual sub-hemisphere cap from a larger-than-hemisphere cap
+// (whose ring is the antipodal below-horizon hole), so the correct side is filled in every case. The geographic
+// geometry is not mutated; the closing happens here.
+//   event: the map event for the contact (declination selects the enclosed pole; horizon and distance set the
+//   cap radius), or undefined.
 //   curve: the contact's horizon curve (a single closed ring as its first branch), or undefined.
 //   region: which side of the curve to fill.
 //   precision: SVG coordinate precision.
 //   options: projection polyline options shared with the open-curve serialization.
-function contactFillPath(declination: Angle, curve: GeoCurve | undefined, projection: Projection, region: LunarEclipseFillRegion, precision: number, options: SolarEclipseMapSvgProjectionOptions): string {
+function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: GeoCurve | undefined, projection: Projection, region: LunarEclipseFillRegion, precision: number, options: SolarEclipseMapSvgProjectionOptions): string {
 	if (!curve || curve.length === 0) return ''
 
 	const ring = curve[0]
 	if (ring.length < 4) return ''
 
-	if (ringEnclosesPole(ring)) return polarCapFillPath(ring, declination, projection, region, precision, options)
-	return nonPolarCapFillPath(ring, projection, region, precision, options)
+	if (ringEnclosesPole(ring)) return polarCapFillPath(ring, event?.declination ?? 0, projection, region, precision, options)
+
+	const capExceedsHemisphere = event ? capRadius(event.horizonAltitude, event.distance) > PIOVERTWO : false
+	return nonPolarCapFillPath(ring, projection, region, capExceedsHemisphere, precision, options)
 }
 
 // Projects the lunar eclipse map geometry and serializes each contact's horizon curve into an SVG path data
@@ -469,20 +489,21 @@ export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, pro
 		const region = options.fillRegion ?? 'belowHorizon'
 		const precision = options.precision ?? 2
 
-		// Declination per contact drives the enclosed pole; fall back to 0 (north) for an absent contact.
-		const declination: Partial<Record<LunarEclipseContactKind, Angle>> = {}
-		for (const event of geometry.events) declination[event.kind] = event.declination
+		// The event per contact drives the fill topology (declination for the enclosed pole, horizon and distance
+		// for the cap radius). Absent contacts have no event and no curve, so contactFillPath returns ''.
+		const eventByKind: Partial<Record<LunarEclipseContactKind, LunarEclipseMapEvent>> = {}
+		for (const event of geometry.events) eventByKind[event.kind] = event
 
 		return {
 			sublunarPoints,
 			moonRiseSet: {
-				P1: contactFillPath(declination.P1 ?? 0, moonRiseSet.P1, projection, region, precision, options),
-				U1: contactFillPath(declination.U1 ?? 0, moonRiseSet.U1, projection, region, precision, options),
-				U2: contactFillPath(declination.U2 ?? 0, moonRiseSet.U2, projection, region, precision, options),
-				MAX: contactFillPath(declination.MAX ?? 0, moonRiseSet.MAX, projection, region, precision, options),
-				U3: contactFillPath(declination.U3 ?? 0, moonRiseSet.U3, projection, region, precision, options),
-				U4: contactFillPath(declination.U4 ?? 0, moonRiseSet.U4, projection, region, precision, options),
-				P4: contactFillPath(declination.P4 ?? 0, moonRiseSet.P4, projection, region, precision, options),
+				P1: contactFillPath(eventByKind.P1, moonRiseSet.P1, projection, region, precision, options),
+				U1: contactFillPath(eventByKind.U1, moonRiseSet.U1, projection, region, precision, options),
+				U2: contactFillPath(eventByKind.U2, moonRiseSet.U2, projection, region, precision, options),
+				MAX: contactFillPath(eventByKind.MAX, moonRiseSet.MAX, projection, region, precision, options),
+				U3: contactFillPath(eventByKind.U3, moonRiseSet.U3, projection, region, precision, options),
+				U4: contactFillPath(eventByKind.U4, moonRiseSet.U4, projection, region, precision, options),
+				P4: contactFillPath(eventByKind.P4, moonRiseSet.P4, projection, region, precision, options),
 			},
 		}
 	} else {

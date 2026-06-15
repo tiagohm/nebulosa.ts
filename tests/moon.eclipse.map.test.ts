@@ -335,4 +335,25 @@ describe('fill region polygons', () => {
 		expect(pointInPath(anti.x, anti.y, below)).toBe(true)
 		expect(pointInPath(sub.x, sub.y, below)).toBe(false)
 	})
+
+	// A sufficiently negative horizon makes the visibility cap larger than a hemisphere: the above-horizon region
+	// contains the sublunar point AND both poles, and the bounded ring is the small antipodal below-horizon hole.
+	// aboveHorizon must fill the complement of that ring, not the ring (which would invert the regions).
+	test('near-equatorial eclipse with a lowered horizon fills the larger-than-hemisphere cap', () => {
+		const eclipse = nearestLunarEclipse(timeYMDHMS(2016, 3, 1), true)
+		const geo = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition, { horizonAltitude: deg(-2) })
+		const max = geo.events.find((e) => e.kind === 'MAX')!
+		const above = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'aboveHorizon' }).moonRiseSet.MAX
+		const below = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'belowHorizon' }).moonRiseSet.MAX
+		const sub = projection.project(max.sublunar.x, max.sublunar.y)!
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - Math.PI : max.sublunar.x + Math.PI
+		const anti = projection.project(antiLon, -max.sublunar.y)!
+
+		// Above-horizon contains the sublunar point and excludes its antipode.
+		expect(pointInPath(sub.x, sub.y, above)).toBe(true)
+		expect(pointInPath(anti.x, anti.y, above)).toBe(false)
+		// Below-horizon is the antipodal hole: the antipode is inside, the sublunar point outside.
+		expect(pointInPath(anti.x, anti.y, below)).toBe(true)
+		expect(pointInPath(sub.x, sub.y, below)).toBe(false)
+	})
 })
