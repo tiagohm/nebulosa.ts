@@ -936,6 +936,7 @@ Base.horner(x, coefficients) // Polynomial evaluation with Horner's method
 const events = lunarEclipseEvents(eclipse) // Contact sequence (P1, U1, U2, MAX, U3, U4, P4) by eclipse type
 const geometry = computeLunarEclipseMapGeometry(eclipse, getSunMoonPosition, options) // Per-contact Moon rise/set horizon curves
 const paths = lunarEclipseMapToSvgPaths(geometry, projection, options) // Project and serialize the curves to SVG path data
+const filled = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true, fillRegion: 'belowHorizon' }) // Closed region polygons (moonRiseSetFill) for shading/gradients
 
 const local = computeLocalLunarEclipseCircumstances(eclipse, longitude, latitude, getSunMoonPosition, options) // Alt/Az, P/Z angles, magnitudes, visibility
 const view = computeLocalLunarEclipseViewGeometry(local, eclipse, options) // Local View shapes: umbra/penumbra rings, Moon disks, horizon

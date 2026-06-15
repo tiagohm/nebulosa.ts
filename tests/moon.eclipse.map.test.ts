@@ -150,3 +150,68 @@ describe('SVG serialization', () => {
 		expect(paths.moonRiseSet.MAX.length).toBeGreaterThan(0)
 	})
 })
+
+// Parses an "M x y L x y ... Z" path into its vertices.
+function parsePolygon(path: string): { x: number; y: number }[] {
+	const points: { x: number; y: number }[] = []
+	for (const token of path.replaceAll('Z', '').split(/[ML]/)) {
+		const trimmed = token.trim()
+		if (!trimmed) continue
+		const [x, y] = trimmed.split(/\s+/).map(Number)
+		if (Number.isFinite(x) && Number.isFinite(y)) points.push({ x, y })
+	}
+	return points
+}
+
+// Ray-casting point-in-polygon test.
+function pointInPolygon(px: number, py: number, polygon: { x: number; y: number }[]): boolean {
+	let inside = false
+	for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+		const xi = polygon[i].x
+		const yi = polygon[i].y
+		const xj = polygon[j].x
+		const yj = polygon[j].y
+		if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside
+	}
+	return inside
+}
+
+describe('fill region polygons', () => {
+	const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
+	const projection = equirectangular(720, 360)
+
+	test('fill replaces the open curves with closed polygons', () => {
+		// Without fill the curves are open polylines; with fill moonRiseSet holds closed region polygons.
+		expect(lunarEclipseMapToSvgPaths(geometry, projection).moonRiseSet.MAX.endsWith('Z')).toBe(false)
+		expect(lunarEclipseMapToSvgPaths(geometry, projection, { fill: true }).moonRiseSet.MAX.endsWith('Z')).toBe(true)
+	})
+
+	test('each region polygon is closed and finite', () => {
+		const paths = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true })
+		for (const kind of ['P1', 'U1', 'U2', 'MAX', 'U3', 'U4', 'P4'] as LunarEclipseContactKind[]) {
+			const path = paths.moonRiseSet[kind]
+			expect(path.startsWith('M')).toBe(true)
+			expect(path.endsWith('Z')).toBe(true)
+			expect(path).not.toContain('NaN')
+			expect(path).not.toContain('Infinity')
+		}
+	})
+
+	test('aboveHorizon fill contains the sublunar point and belowHorizon does not', () => {
+		const above = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true, fillRegion: 'aboveHorizon' })
+		const below = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true, fillRegion: 'belowHorizon' })
+		const max = geometry.events.find((e) => e.kind === 'MAX')!
+		const sub = projection.project(max.sublunar.x, max.sublunar.y)!
+
+		expect(pointInPolygon(sub.x, sub.y, parsePolygon(above.moonRiseSet.MAX))).toBe(true)
+		expect(pointInPolygon(sub.x, sub.y, parsePolygon(below.moonRiseSet.MAX))).toBe(false)
+	})
+
+	test('aboveHorizon fill excludes the antipodal (below-horizon) point', () => {
+		const above = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true, fillRegion: 'aboveHorizon' })
+		const max = geometry.events.find((e) => e.kind === 'MAX')!
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - Math.PI : max.sublunar.x + Math.PI
+		const anti = projection.project(antiLon, -max.sublunar.y)!
+		expect(pointInPolygon(anti.x, anti.y, parsePolygon(above.moonRiseSet.MAX))).toBe(false)
+	})
+})

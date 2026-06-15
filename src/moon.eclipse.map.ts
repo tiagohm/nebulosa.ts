@@ -1,11 +1,11 @@
 import type { Angle } from './angle'
-import { DAYSEC, DEG2RAD, PIOVERTWO, TAU } from './constants'
+import { DAYSEC, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
 import { clamp } from './math'
 import type { LunarEclipse } from './moon'
 import type { Projection } from './projection'
-import { geoPolylinesToSvgPathData, normalizeLongitude, type GeoBranch, type GeoCurve, type GeoPoint, type SolarEclipseMapSvgProjectionOptions, type SunMoonPosition } from './sun.eclipse.map'
+import { geoPolylinesToSvgPathData, normalizeLongitude, pointsToSvgPathData, type GeoBranch, type GeoCurve, type GeoPoint, type SolarEclipseMapSvgProjectionOptions, type SunMoonPosition } from './sun.eclipse.map'
 import { tt, type Time, toJulianDay } from './time'
 import type { Writable } from './types'
 
@@ -122,18 +122,40 @@ export interface LunarEclipseMapPoints {
 	readonly P4?: Point
 }
 
+// One SVG path data string per contact (empty string when the contact does not exist).
+export interface LunarEclipseContactPaths {
+	readonly P1: string
+	readonly U1: string
+	readonly U2: string
+	readonly MAX: string
+	readonly U3: string
+	readonly U4: string
+	readonly P4: string
+}
+
+// Which side of a contact's horizon curve a fill polygon covers.
+//   'aboveHorizon': the visibility cap (where the Moon is up), closed against the enclosed pole;
+//   'belowHorizon': the complementary region (where the Moon is down), closed against the opposite pole.
+export type LunarEclipseFillRegion = 'aboveHorizon' | 'belowHorizon'
+
+// Options for serializing the lunar eclipse map to SVG, extending the shared projection/polyline options.
+export interface LunarEclipseMapSvgOptions extends SolarEclipseMapSvgProjectionOptions {
+	// When true, also emit closed region polygons (moonRiseSetFill) per contact, suitable for filling or
+	// gradients. Each polygon is the horizon curve closed against a map pole edge.
+	//
+	// This assumes a cylindrical, full-longitude projection (e.g. PlateCarree) able to represent the +-90 deg
+	// latitude edges: the visibility cap of a near-90 deg horizon circle always encloses a geographic pole, so
+	// the region is closed along that pole's map edge rather than across the map interior.
+	readonly fill?: boolean
+	// Which side of each horizon curve to fill. Default 'belowHorizon' (the not-visible region, for shading).
+	readonly fillRegion?: LunarEclipseFillRegion
+}
+
 // SVG path data strings per contact horizon curve, plus projected sublunar points.
 export interface LunarEclipseMapSvgPaths {
-	// Horizon-curve path data per contact (empty string when the contact does not exist).
-	readonly moonRiseSet: {
-		readonly P1: string
-		readonly U1: string
-		readonly U2: string
-		readonly MAX: string
-		readonly U3: string
-		readonly U4: string
-		readonly P4: string
-	}
+	// When fill=false, open horizon-curve path data per contact, split at the antimeridian.
+	// When fill=true, closed region-polygon path data per contact, present only when the fill option is set.
+	readonly moonRiseSet: LunarEclipseContactPaths
 	// Projected sublunar points, when present.
 	readonly sublunarPoints: LunarEclipseMapPoints
 }
@@ -265,7 +287,7 @@ export function computeLunarEclipseMapGeometry(eclipse: LunarEclipse, sunMoonPos
 	const h0 = effectiveHorizonAltitude(options.horizonAltitude ?? 0, options.refraction ?? false, options.limbVisibility ?? 'center')
 
 	const contacts = lunarEclipseEvents(eclipse)
-	const events: LunarEclipseMapEvent[] = new Array(contacts.length)
+	const events = new Array<LunarEclipseMapEvent>(contacts.length)
 	const moonRiseSet: Writable<LunarEclipseContactCurves> = {}
 
 	for (let i = 0; i < contacts.length; i++) {
@@ -282,10 +304,56 @@ function curveToSvgPath(curve: GeoCurve | undefined, projection: Projection, opt
 	return curve && curve.length > 0 ? geoPolylinesToSvgPathData(curve, projection, options) : ''
 }
 
+// Closes one contact's horizon curve into a fillable region polygon and serializes it.
+//
+// A near-90 deg horizon circle's visibility cap always encloses the geographic pole in the Moon's hemisphere
+// (north when declination >= 0, south otherwise), so the boundary is single-valued in longitude: each meridian
+// crosses it once. The boundary points are therefore sorted by longitude into a left-to-right profile and the
+// polygon is closed along a map pole edge (at +-PI longitude and +-90 deg latitude): the enclosed pole for the
+// 'aboveHorizon' cap, the opposite pole for its 'belowHorizon' complement. The geographic geometry is not
+// mutated; the closing happens here, at serialization time.
+//   declination: Moon declination at the contact (radians), selecting the enclosed pole.
+//   curve: the contact's horizon curve (a single closed ring as its first branch), or undefined.
+//   region: which side of the curve to fill.
+//   precision: SVG coordinate precision.
+//   options: projection polyline options shared with the open-curve serialization.
+function contactFillPath(declination: Angle, curve: GeoCurve | undefined, projection: Projection, region: LunarEclipseFillRegion, precision: number, options: SolarEclipseMapSvgProjectionOptions): string {
+	if (!curve || curve.length === 0) return ''
+
+	const ring = curve[0]
+	if (ring.length < 4) return ''
+
+	// Latitude of the closing pole edge: the enclosed pole for the cap, the opposite pole for its complement.
+	const capPoleLat = declination >= 0 ? PIOVERTWO : -PIOVERTWO
+	const edgeLat = region === 'aboveHorizon' ? capPoleLat : -capPoleLat
+
+	// Sort the boundary into a left-to-right profile, dropping the duplicated closing vertex.
+	const sorted = ring.slice(0, ring.length - 1).sort((a, b) => a.x - b.x)
+
+	const polygon: Point[] = []
+
+	for (const point of sorted) {
+		const projected = projection.project(point.x, point.y, undefined, options)
+		if (projected) polygon.push({ x: projected.x, y: projected.y })
+	}
+
+	if (polygon.length < 2) return ''
+
+	// Close along the pole edge: from the rightmost boundary point to the +PI corner, across to the -PI corner.
+	const right = projection.project(PI, edgeLat, undefined, options)
+	const left = projection.project(-PI, edgeLat, undefined, options)
+	if (right) polygon.push({ x: right.x, y: right.y })
+	if (left) polygon.push({ x: left.x, y: left.y })
+	if (polygon.length < 3) return ''
+
+	return pointsToSvgPathData([polygon], true, precision)
+}
+
 // Projects the lunar eclipse map geometry and serializes each contact's horizon curve into an SVG path data
 // string, plus the projected sublunar points. Antimeridian wraps are split into separate subpaths at
-// projection time only; the geometry itself is never mutated.
-export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, projection: Projection, options: SolarEclipseMapSvgProjectionOptions = {}): LunarEclipseMapSvgPaths {
+// projection time only; the geometry itself is never mutated. When options.fill is set, also returns closed
+// region polygons per contact (see contactFillPath).
+export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, projection: Projection, options: LunarEclipseMapSvgOptions = {}): LunarEclipseMapSvgPaths {
 	const { moonRiseSet } = geometry.lines
 	const sublunarPoints: Writable<LunarEclipseMapPoints> = {}
 
@@ -294,16 +362,38 @@ export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, pro
 		if (projected) sublunarPoints[event.kind] = { x: projected.x, y: projected.y }
 	}
 
-	return {
-		moonRiseSet: {
-			P1: curveToSvgPath(moonRiseSet.P1, projection, options),
-			U1: curveToSvgPath(moonRiseSet.U1, projection, options),
-			U2: curveToSvgPath(moonRiseSet.U2, projection, options),
-			MAX: curveToSvgPath(moonRiseSet.MAX, projection, options),
-			U3: curveToSvgPath(moonRiseSet.U3, projection, options),
-			U4: curveToSvgPath(moonRiseSet.U4, projection, options),
-			P4: curveToSvgPath(moonRiseSet.P4, projection, options),
-		},
-		sublunarPoints,
+	if (options.fill) {
+		const region = options.fillRegion ?? 'belowHorizon'
+		const precision = options.precision ?? 2
+
+		// Declination per contact drives the enclosed pole; fall back to 0 (north) for an absent contact.
+		const declination: Partial<Record<LunarEclipseContactKind, Angle>> = {}
+		for (const event of geometry.events) declination[event.kind] = event.declination
+
+		return {
+			sublunarPoints,
+			moonRiseSet: {
+				P1: contactFillPath(declination.P1 ?? 0, moonRiseSet.P1, projection, region, precision, options),
+				U1: contactFillPath(declination.U1 ?? 0, moonRiseSet.U1, projection, region, precision, options),
+				U2: contactFillPath(declination.U2 ?? 0, moonRiseSet.U2, projection, region, precision, options),
+				MAX: contactFillPath(declination.MAX ?? 0, moonRiseSet.MAX, projection, region, precision, options),
+				U3: contactFillPath(declination.U3 ?? 0, moonRiseSet.U3, projection, region, precision, options),
+				U4: contactFillPath(declination.U4 ?? 0, moonRiseSet.U4, projection, region, precision, options),
+				P4: contactFillPath(declination.P4 ?? 0, moonRiseSet.P4, projection, region, precision, options),
+			},
+		}
+	} else {
+		return {
+			sublunarPoints,
+			moonRiseSet: {
+				P1: curveToSvgPath(moonRiseSet.P1, projection, options),
+				U1: curveToSvgPath(moonRiseSet.U1, projection, options),
+				U2: curveToSvgPath(moonRiseSet.U2, projection, options),
+				MAX: curveToSvgPath(moonRiseSet.MAX, projection, options),
+				U3: curveToSvgPath(moonRiseSet.U3, projection, options),
+				U4: curveToSvgPath(moonRiseSet.U4, projection, options),
+				P4: curveToSvgPath(moonRiseSet.P4, projection, options),
+			},
+		}
 	}
 }
