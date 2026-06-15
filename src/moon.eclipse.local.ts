@@ -572,6 +572,11 @@ export interface LocalLunarEclipseViewOptions {
 	readonly includeHorizon: boolean
 	// Optional padding (px) for the horizon band polygon.
 	readonly horizonBandPaddingPx?: number
+	// Apparent-horizon altitude (radians) the diagram is drawn against: the horizon line is placed at this
+	// altitude, so a Moon disk is drawn above it exactly when altitude >= horizonAltitude (matching the event's
+	// observable flag). Pass the same value used for the circumstances so an obstructed horizon (e.g. 10 deg)
+	// stays consistent with observability. Default 0 (the true horizon).
+	readonly horizonAltitude?: Angle
 }
 
 // A circle shape: shadow rings or a Moon disk.
@@ -646,6 +651,7 @@ const DEFAULT_LOCAL_LUNAR_VIEW_OPTIONS: LocalLunarEclipseViewOptions = {
 	includeGhostDisks: true,
 	includeHorizon: true,
 	horizonBandPaddingPx: 4,
+	horizonAltitude: 0,
 }
 
 // Chronological contact order used to lay out the trajectory and pick a fallback primary contact.
@@ -699,8 +705,11 @@ function buildHorizonShapes(primary: LocalLunarEclipseEvent, options: LocalLunar
 	const zenithX = eastSign * Math.sin(q)
 	const zenithY = -Math.cos(q)
 
-	// Altitude offset (px) from the shadow center along the zenith direction.
-	const offsetPx = clamp((primary.altitude / MEAN_EARTH_RADIUS_ANGULAR_AT_MOON) * scale, -Math.hypot(options.width, options.height) * 2, Math.hypot(options.width, options.height) * 2)
+	// Altitude offset (px) from the shadow center along the zenith direction, measured from the CONFIGURED
+	// horizon (not true altitude 0) so the line matches the observable flag for a raised/obstructed horizon: the
+	// Moon sits above the line exactly when altitude >= horizonAltitude.
+	const horizonAltitude = options.horizonAltitude ?? 0
+	const offsetPx = clamp(((primary.altitude - horizonAltitude) / MEAN_EARTH_RADIUS_ANGULAR_AT_MOON) * scale, -Math.hypot(options.width, options.height) * 2, Math.hypot(options.width, options.height) * 2)
 	const horizonX = cx - offsetPx * zenithX
 	const horizonY = cy - offsetPx * zenithY
 

@@ -3,7 +3,7 @@ import { deg } from '../src/angle'
 import { PIOVERTWO, TAU } from '../src/constants'
 import * as elpmpp02 from '../src/elpmpp02'
 import { nearestLunarEclipse, type LunarEclipse } from '../src/moon'
-import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry, moonAltitudeAt, type LocalLunarEclipseSvgCircle } from '../src/moon.eclipse.local'
+import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry, moonAltitudeAt, type LocalLunarEclipseSvgCircle, type LocalLunarEclipseSvgPolygon } from '../src/moon.eclipse.local'
 import { computeLunarEclipseMapGeometry } from '../src/moon.eclipse.map'
 import { computeSunMoonPositionAt } from '../src/sun.eclipse.map'
 import { timeShift, toJulianDay, type Time, timeYMDHMS } from '../src/time'
@@ -22,6 +22,19 @@ function sublunarAtMax(eclipse: LunarEclipse) {
 	const geometry = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition)
 	const max = geometry.events.find((e) => e.kind === 'MAX')!
 	return { longitude: max.sublunar.x, latitude: max.sublunar.y }
+}
+
+// Ray-casting point-in-polygon test.
+function pointInPolygon(px: number, py: number, polygon: readonly { readonly x: number; readonly y: number }[]) {
+	let inside = false
+	for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+		const xi = polygon[i].x
+		const yi = polygon[i].y
+		const xj = polygon[j].x
+		const yj = polygon[j].y
+		if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside
+	}
+	return inside
 }
 
 describe('per-contact magnitudes', () => {
@@ -298,4 +311,33 @@ describe('Local View geometry', () => {
 		expect(penView.requestedEvent).toBe('U2')
 		expect(penView.selectedEvent).toBe('MAX')
 	}, 6000)
+
+	// With an obstructed horizon the view horizon must track horizonAltitude, not true altitude 0: a Moon above
+	// the true horizon but below the configured one is not observable and must be drawn below the band.
+	test('selected event below a custom horizon is drawn below the band', () => {
+		const max = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition).events.find((e) => e.kind === 'MAX')!
+		// High latitude so the Moon transits low at MAX: a few degrees up, between 0 and a 10 deg obstructed horizon.
+		const longitude = max.sublunar.x
+		const latitude = max.declination + deg(83)
+		const customHorizon = deg(10)
+
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { horizonAltitude: customHorizon })
+		const maxEvent = local.events.MAX!
+		// Above the true horizon but below the obstructed one, hence not observable.
+		expect(maxEvent.altitude).toBeGreaterThan(0)
+		expect(maxEvent.altitude).toBeLessThan(customHorizon)
+		expect(maxEvent.observable).toBe(false)
+
+		function primaryInsideBand(horizonAltitude: number) {
+			const view = computeLocalLunarEclipseViewGeometry(local, TOTAL, { selectedEvent: 'MAX', horizonAltitude })
+			const band = view.shapes.find((s): s is LocalLunarEclipseSvgPolygon => s.kind === 'polygon' && s.role === 'horizonBand')!
+			const moon = view.shapes.find((s): s is LocalLunarEclipseSvgCircle => s.kind === 'circle' && s.role === 'moonDisk')!
+			return pointInPolygon(moon.cx, moon.cy, band.points)
+		}
+
+		// Drawn against the true horizon (0 deg) the Moon is above it: outside the below-horizon band.
+		expect(primaryInsideBand(0)).toBe(false)
+		// Drawn against the configured 10 deg horizon the Moon is below it: inside the band, matching observable=false.
+		expect(primaryInsideBand(customHorizon)).toBe(true)
+	}, 10000)
 })
