@@ -166,6 +166,10 @@ describe('visibility classification', () => {
 		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { horizonAltitude })
 		expect(local.visibility.hasObservableEclipse).toBe(true)
 		expect(local.visibility.kind).not.toBe('geometricOnlyBelowHorizon')
+		// The observable duration must agree with the classification: the brief above-horizon stretch between the
+		// two coarse samples is integrated, not dropped to zero.
+		expect(local.details.observableDuration).toBeGreaterThan(0)
+		expect(local.details.observableDuration).toBeLessThanOrEqual(local.details.penumbralPhaseDuration + 1e-6)
 	}, 15000)
 
 	// Every contact can be above the horizon while the Moon still dips below it between contacts (a high-latitude

@@ -1,6 +1,6 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
 import { parallacticAngle } from './astrometry'
-import { DAYSEC, PI, WGS84_FLATTENING } from './constants'
+import { DAYSEC, PI, TAU, WGS84_FLATTENING } from './constants'
 import { equatorialToHorizontal } from './coordinate'
 import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
@@ -108,8 +108,9 @@ export interface LocalLunarEclipseDetails {
 	readonly partialPhaseDuration: number | null
 	// Total phase duration U3 - U2 in seconds, or null when there is no total phase.
 	readonly totalPhaseDuration: number | null
-	// Total time (seconds) the Moon is at or above the horizon within the penumbral interval, integrated from
-	// the altitude samples used by the continuous visibility check. Never exceeds penumbralPhaseDuration.
+	// Total time (seconds) the Moon is at or above the horizon within the penumbral interval, integrated from the
+	// continuous visibility samples (refining any interval that may hide a sub-sample horizon crossing, so it
+	// stays consistent with hasObservableEclipse). Never exceeds penumbralPhaseDuration.
 	readonly observableDuration: number
 }
 
@@ -313,32 +314,85 @@ function scanAltitudes(fromJd: number, toJd: number, longitude: Angle, latitude:
 	return { jds, altitudes, step }
 }
 
+// Sidereal Earth rotation rate (radians per day). The diurnal altitude rate is bounded by this, so over one
+// scan step the altitude can change by at most EARTH_ROTATION_RATE_PER_DAY * step: a sample interval whose
+// endpoints are on the same side of the horizon can hide a crossing pair only when an endpoint is within that
+// bound of the horizon.
+const EARTH_ROTATION_RATE_PER_DAY = TAU / 0.99726966
+// Sub-steps used to integrate a suspect interval that may hide a horizon crossing pair.
+const REFINE_SUBSTEPS = 16
+
+// Whether the altitude is monotonic across the window around interval [i, i+1] (its neighbours i-1..i+2). A
+// same-side interval can only hide a horizon crossing pair when it is non-monotonic (an interior extremum pokes
+// across), so this restricts the costly refinement to the at most one turning point of the penumbral scan.
+function isMonotonicWindow(altitudes: number[], i: number) {
+	const lo = Math.max(0, i - 1)
+	const hi = Math.min(altitudes.length - 1, i + 2)
+	let nonDecreasing = true
+	let nonIncreasing = true
+
+	for (let k = lo; k < hi; k++) {
+		if (altitudes[k + 1] > altitudes[k]) nonIncreasing = false
+		if (altitudes[k + 1] < altitudes[k]) nonDecreasing = false
+	}
+
+	return nonDecreasing || nonIncreasing
+}
+
+// Above-horizon time (days) within one suspect sample interval, by subdividing it and summing the linear
+// horizon-crossing fraction of each sub-step. The interval spans at most one scan step, over which the altitude
+// is unimodal, so a fixed subdivision resolves a brief peak above the horizon (or a brief dip below it) that the
+// coarse endpoints alone miss.
+function aboveHorizonDaysInInterval(fromJd: number, toJd: number, horizonAltitude: Angle, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, reference: Time) {
+	const dt = (toJd - fromJd) / REFINE_SUBSTEPS
+	let previous = moonAltitudeAt(timeAtJulianDay(reference, fromJd), longitude, latitude, getPosition) - horizonAltitude
+	let days = 0
+
+	for (let k = 1; k <= REFINE_SUBSTEPS; k++) {
+		const current = moonAltitudeAt(timeAtJulianDay(reference, fromJd + k * dt), longitude, latitude, getPosition) - horizonAltitude
+		if (previous >= 0 && current >= 0) days += dt
+		else if (previous < 0 && current < 0) days += 0
+		else {
+			const t = previous / (previous - current)
+			days += (previous >= 0 ? t : 1 - t) * dt
+		}
+		previous = current
+	}
+
+	return days
+}
+
 // Total time (days) the Moon is at or above the horizon within the scanned interval. Each sample interval
 // contributes its above-horizon fraction: 1 when both endpoints are above, 0 when both are below, and the
-// linearly interpolated horizon-crossing fraction otherwise. Integrating intervals (not counting samples)
-// avoids the off-by-one-step overcount of a sample count (the scan has samples + 1 points but step =
-// span / samples); the result is capped at the scanned span so it can never exceed P4 - P1.
-function observableDaysFromScan(scan: AltitudeScan, horizonAltitude: Angle) {
+// linearly interpolated horizon-crossing fraction when they straddle the horizon. A same-side interval whose
+// nearer endpoint is within one step's altitude change of the horizon is refined by subdivision, so a short
+// above-horizon stretch that falls between two coarse samples (the same case phaseReachesHorizon catches for
+// the classification) is integrated rather than dropped to zero. The result is capped at the scanned span so it
+// can never exceed P4 - P1.
+function observableDaysFromScan(scan: AltitudeScan, horizonAltitude: Angle, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, reference: Time) {
 	const { jds, altitudes, step } = scan
 	if (!(step > 0) || altitudes.length < 2) return 0
 
+	// A same-side interval can hide a crossing pair only when an endpoint is within this much of the horizon.
+	const refineMargin = EARTH_ROTATION_RATE_PER_DAY * step
 	let days = 0
 
 	for (let i = 0; i + 1 < altitudes.length; i++) {
 		const a = altitudes[i] - horizonAltitude
 		const b = altitudes[i + 1] - horizonAltitude
 
-		let fraction: number
-		if (a >= 0 && b >= 0) fraction = 1
-		else if (a < 0 && b < 0) fraction = 0
-		// One endpoint above, one below: the crossing is at t = a / (a - b) of the step (a - b != 0 here). The
-		// above-horizon part is [0, t] when starting above, else [t, 1].
-		else {
+		if (a >= 0 === b >= 0) {
+			// Both endpoints on the same side of the horizon: confidently the whole step (above) or nothing
+			// (below), unless an endpoint is within one step's altitude change of the horizon AND the window is
+			// non-monotonic, so a brief excursion across the horizon could hide between the samples; then
+			// integrate the sub-interval.
+			if (Math.min(Math.abs(a), Math.abs(b)) < refineMargin && !isMonotonicWindow(altitudes, i)) days += aboveHorizonDaysInInterval(jds[i], jds[i + 1], horizonAltitude, longitude, latitude, getPosition, reference)
+			else days += a >= 0 ? step : 0
+		} else {
+			// The endpoints straddle the horizon: the crossing is at t = a / (a - b) of the step (a - b != 0).
 			const t = a / (a - b)
-			fraction = a >= 0 ? t : 1 - t
+			days += (a >= 0 ? t : 1 - t) * step
 		}
-
-		days += fraction * step
 	}
 
 	return Math.min(days, jds.at(-1)! - jds[0])
@@ -518,9 +572,10 @@ export function computeLocalLunarEclipseCircumstances(eclipse: LunarEclipse, lon
 	else if (umbralVisible) kind = 'partialVisible'
 	else kind = 'penumbralOnlyVisible'
 
-	// Observable duration: integrate the above-horizon fraction of each sample interval (capped at the scanned
-	// span), so a fully-above eclipse reports exactly P4 - P1 rather than one sample step more.
-	const observableDuration = observableDaysFromScan(scan, horizonAltitude) * DAYSEC
+	// Observable duration: integrate the above-horizon fraction of each sample interval (refining intervals that
+	// may hide a sub-sample horizon crossing, and capped at the scanned span), so it stays consistent with
+	// hasObservableEclipse even when the Moon only rises above the horizon between two coarse samples.
+	const observableDuration = observableDaysFromScan(scan, horizonAltitude, longitude, latitude, getSunMoonPosition, reference) * DAYSEC
 
 	const [, maximalPenumbralMagnitude] = shadowMagnitudes(Math.abs(eclipse.gamma), eclipse.u)
 
