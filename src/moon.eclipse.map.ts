@@ -544,7 +544,7 @@ export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, pro
 	const sublunarPoints: Writable<LunarEclipseMapPoints> = Object.create(null)
 
 	for (const event of geometry.events) {
-		const projected = projection.project(event.sublunar.x, event.sublunar.y)
+		const projected = projection.project(event.sublunar.x, event.sublunar.y, undefined, projection.options)
 		if (projected) sublunarPoints[event.kind] = projected
 	}
 
