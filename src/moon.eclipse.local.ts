@@ -6,7 +6,7 @@ import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
 import { clamp } from './math'
 import type { LunarEclipse } from './moon'
-import { lunarEclipseEvents, type LunarEclipseContact, type LunarEclipseContactKind } from './moon.eclipse.map'
+import { lunarEclipseEvents, type LunarEclipseContact, type LunarEclipseContactKind, MOON_RADIUS_EARTH_RADII } from './moon.eclipse.map'
 import type { SunMoonPosition } from './sun.eclipse.map'
 import { timeShift, tt, type Time } from './time'
 import type { Writable } from './types'
@@ -33,8 +33,6 @@ const LUNAR_ECLIPSE_TOTAL_LIMIT = 0.4678
 const LUNAR_ECLIPSE_PENUMBRA_LIMIT = 1.5573
 // Magnitude denominator: twice the lunar plane radius (the Moon spans 0..1 magnitude over 2 * 0.2725).
 const LUNAR_ECLIPSE_MAGNITUDE_DENOMINATOR = 0.545
-// Lunar radius in plane Earth radii (half the magnitude denominator); constant in the Meeus model.
-const MOON_RADIUS_EARTH_RADII = 0.2725
 // Mean angular size (radians) of one Earth equatorial radius seen from the Moon (mean distance ~60.27 Earth
 // radii). Used only to scale the schematic Local View horizon offset; not a precise per-event value.
 const MEAN_EARTH_RADIUS_ANGULAR_AT_MOON: Angle = Math.asin(1 / 60.27)

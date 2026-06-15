@@ -4,7 +4,7 @@ import { PIOVERTWO, TAU } from '../src/constants'
 import * as elpmpp02 from '../src/elpmpp02'
 import { nearestLunarEclipse } from '../src/moon'
 import { moonAltitudeAt } from '../src/moon.eclipse.local'
-import { computeLunarEclipseMapGeometry, lunarEclipseEvents, lunarEclipseMapToSvgPaths, type LunarEclipseContactKind } from '../src/moon.eclipse.map'
+import { computeLunarEclipseMapGeometry, lunarEclipseEvents, lunarEclipseMapToSvgPaths, MOON_RADIUS_EARTH_RADII, type LunarEclipseContactKind } from '../src/moon.eclipse.map'
 import { PlateCarree } from '../src/projection'
 import { computeSunMoonPositionAt } from '../src/sun.eclipse.map'
 import { type Time, timeYMDHMS } from '../src/time'
@@ -114,6 +114,28 @@ describe('horizon curve geometry', () => {
 			expect(moonAltitudeAt(max.time, point.x, point.y, sunMoonPosition)).toBeCloseTo(altOption, 3)
 		}
 	}, 2000)
+})
+
+describe('upper-limb visibility', () => {
+	// TOTAL is the 1997-07 eclipse, near perigee: its apparent semidiameter (~0.279 deg) is distinctly larger
+	// than the mean (~0.259 deg), so the upper-limb curve must use the per-event semidiameter from the distance.
+	test('upper-limb curve uses the per-event semidiameter from the Moon distance', () => {
+		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { limbVisibility: 'upperLimb' })
+		for (const event of geometry.events) {
+			const semidiameter = Math.asin(MOON_RADIUS_EARTH_RADII / event.distance)
+			// Near perigee, distinctly above the 0.259 deg mean a fixed lift would have used.
+			expect(semidiameter).toBeGreaterThan(deg(0.27))
+			// The effective horizon is one semidiameter below the true horizon (upper limb on the horizon).
+			expect(event.horizonAltitude).toBeCloseTo(-semidiameter, 9)
+			// Sampled curve points have topocentric Moon-center altitude = -asin(moonRadius / distance).
+			const branch = geometry.lines.moonRiseSet[event.kind]![0]
+			const stepN = Math.max(1, Math.floor(branch.length / 8))
+			for (let i = 0; i < branch.length; i += stepN) {
+				const point = branch[i]
+				expect(moonAltitudeAt(event.time, point.x, point.y, sunMoonPosition)).toBeCloseTo(-semidiameter, 3)
+			}
+		}
+	}, 8000)
 })
 
 describe('high declination robustness', () => {

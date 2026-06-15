@@ -41,9 +41,14 @@ export type LunarEclipseContactKind = 'P1' | 'U1' | 'U2' | 'MAX' | 'U3' | 'U4' |
 // the curve marks where the Moon is seen on the apparent horizon rather than the true horizon.
 const HORIZON_REFRACTION: Angle = (34 / 60) * DEG2RAD
 
-// Mean lunar semidiameter (radians) used as a fallback upper-limb lift when no distance is available. The
-// Moon's geocentric semidiameter is ~0.259 deg on average; the sublunar-point altitude criterion uses the
-// geocentric direction, so a mean value is sufficient for the visibility horizon.
+// Mean lunar radius as a fraction of the Earth's equatorial radius (the IAU k factor for the apparent disk).
+// The apparent lunar semidiameter at geocentric Moon distance d (Earth equatorial radii) is
+// asin(MOON_RADIUS_EARTH_RADII / d): ~0.259 deg at the mean distance, ~0.279 deg near perigee. This is the
+// physical disk radius, distinct from the Meeus shadow-plane lunar radius used by the local magnitudes.
+export const MOON_RADIUS_EARTH_RADII = 0.2725076
+
+// Mean lunar semidiameter (radians, ~0.259 deg), used only as the upper-limb fallback when the Moon distance is
+// unusable. With a usable distance the per-event semidiameter asin(MOON_RADIUS_EARTH_RADII / distance) is used.
 const MEAN_MOON_SEMIDIAMETER: Angle = 0.259 * DEG2RAD
 
 // Default angular spacing (radians, 1 deg) between neighboring horizon-curve points.
@@ -224,13 +229,17 @@ function contactGast(time: Time, deltaT: number) {
 	return eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
 }
 
-// Effective visibility-horizon altitude (radians) for the Moon center, combining the configured horizon, the
-// optional refraction lift, and the optional upper-limb lowering by the Moon semidiameter.
-function effectiveHorizonAltitude(horizonAltitude: Angle, refraction: boolean, limbVisibility: LunarLimbVisibility) {
-	let h0 = horizonAltitude
-	if (refraction) h0 -= HORIZON_REFRACTION
-	if (limbVisibility === 'upperLimb') h0 -= MEAN_MOON_SEMIDIAMETER
-	return h0
+// Distance-independent base visibility-horizon altitude (radians): the configured horizon lowered by the
+// standard atmospheric refraction when enabled. The distance-dependent upper-limb lowering is applied per event
+// (see buildMapEvent), because the apparent semidiameter varies by ~0.02 deg between apogee and perigee.
+function baseHorizonAltitude(horizonAltitude: Angle, refraction: boolean) {
+	return refraction ? horizonAltitude - HORIZON_REFRACTION : horizonAltitude
+}
+
+// Apparent lunar semidiameter (radians) from the geocentric Moon distance in Earth equatorial radii. Falls back
+// to the mean value when the distance is unusable (non-finite, or not larger than the Moon radius).
+function moonSemidiameter(distance: number): Angle {
+	return distance > MOON_RADIUS_EARTH_RADII && Number.isFinite(distance) ? Math.asin(MOON_RADIUS_EARTH_RADII / distance) : MEAN_MOON_SEMIDIAMETER
 }
 
 // Generates the small circle where the observer's TOPOCENTRIC Moon altitude equals h0, centered at the sublunar
@@ -275,20 +284,25 @@ function horizonCircle(sublunarLat: Angle, sublunarLon: Angle, h0: Angle, distan
 }
 
 // Builds one map event from a contact: computes the apparent Moon position, GAST, the effective horizon and
-// the sublunar point.
-function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: (time: Time) => SunMoonPosition, h0: Angle): LunarEclipseMapEvent {
+// the sublunar point. For 'upperLimb' the base horizon is lowered by this event's actual apparent semidiameter
+// (from the Moon distance), not a mean, so a near-perigee eclipse marks the upper limb on the right boundary.
+//   baseHorizon: distance-independent horizon altitude (configured horizon minus refraction).
+//   limbVisibility: 'center' marks the Moon center on the horizon; 'upperLimb' marks the upper limb.
+function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: (time: Time) => SunMoonPosition, baseHorizon: Angle, limbVisibility: LunarLimbVisibility): LunarEclipseMapEvent {
 	const position = sunMoonPosition(contact.time)
 	const gast = contactGast(contact.time, position.deltaT ?? 0)
 	const rightAscension = position.moon.rightAscension
 	const declination = position.moon.declination
+	const distance = position.moon.distance
 	const sublunarLon = normalizeLongitude(rightAscension - gast)
+	const h0 = limbVisibility === 'upperLimb' ? baseHorizon - moonSemidiameter(distance) : baseHorizon
 
 	return {
 		...contact,
 		rightAscension,
 		declination,
 		gast,
-		distance: position.moon.distance,
+		distance,
 		horizonAltitude: h0,
 		sublunar: { x: sublunarLon, y: declination, jd: contact.jd },
 	}
@@ -301,16 +315,17 @@ function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: (time: Tim
 //   options: curve sampling and visibility-horizon options.
 export function computeLunarEclipseMapGeometry(eclipse: LunarEclipse, sunMoonPosition: (time: Time) => SunMoonPosition, options: LunarEclipseMapGeometryOptions = {}): LunarEclipseMapGeometry {
 	const maxAngularStep = options.maxAngularStep ?? DEFAULT_MAX_ANGULAR_STEP
-	const h0 = effectiveHorizonAltitude(options.horizonAltitude ?? 0, options.refraction ?? false, options.limbVisibility ?? 'center')
+	const baseHorizon = baseHorizonAltitude(options.horizonAltitude ?? 0, options.refraction ?? false)
+	const limbVisibility = options.limbVisibility ?? 'center'
 
 	const contacts = lunarEclipseEvents(eclipse)
 	const events = new Array<LunarEclipseMapEvent>(contacts.length)
 	const moonRiseSet: Writable<LunarEclipseContactCurves> = {}
 
 	for (let i = 0; i < contacts.length; i++) {
-		const event = buildMapEvent(contacts[i], sunMoonPosition, h0)
+		const event = buildMapEvent(contacts[i], sunMoonPosition, baseHorizon, limbVisibility)
 		events[i] = event
-		moonRiseSet[event.kind] = [horizonCircle(event.declination, event.sublunar.x, h0, event.distance, event.jd, maxAngularStep)]
+		moonRiseSet[event.kind] = [horizonCircle(event.declination, event.sublunar.x, event.horizonAltitude, event.distance, event.jd, maxAngularStep)]
 	}
 
 	return { eclipse, events, lines: { moonRiseSet } }
