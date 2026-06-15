@@ -197,9 +197,11 @@ const CONTACT_SEQUENCE = {
 	TOTAL: ['P1', 'U1', 'U2', 'MAX', 'U3', 'U4', 'P4'],
 } as const satisfies Record<LunarEclipse['type'], readonly LunarEclipseContactKind[]>
 
-// Whether a Time refers to an existing contact: the absent contacts keep the default minimal time (day 0).
+// Whether a Time refers to an existing contact. Absent contacts keep the default minimal time (Julian Day 0, i.e.
+// day 0 and fraction 0), so the test is for that exact sentinel rather than a positive day: real contacts before
+// JD 0 (ancient eclipses) have negative days and must not be dropped.
 function isExistingContactTime(time: Time) {
-	return time.day > 0
+	return !(time.day === 0 && time.fraction === 0)
 }
 
 // Resolves the ordered contact sequence of an eclipse from its type and existing contact times. Absent

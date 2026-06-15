@@ -56,6 +56,23 @@ describe('events by type', () => {
 		const events = lunarEclipseEvents(TOTAL)
 		for (let i = 1; i < events.length; i++) expect(events[i].jd).toBeGreaterThan(events[i - 1].jd)
 	})
+
+	// Before JD 0 the contact Time.day values are negative; the absent-contact sentinel is day 0 AND fraction 0,
+	// so real ancient contacts must not be dropped (a positive-day test would discard them all).
+	test('eclipse before JD 0 keeps its contacts', () => {
+		const ancient = nearestLunarEclipse(timeYMDHMS(-5000, 1, 1), true)
+		expect(ancient.type).toBe('PARTIAL')
+		const events = lunarEclipseEvents(ancient)
+		expect(events.map((e) => e.kind)).toEqual(['P1', 'U1', 'MAX', 'U4', 'P4'])
+		// The resolved contacts have negative days (real), while the absent totality contact keeps the sentinel.
+		expect(events[0].time.day).toBeLessThan(0)
+		expect(ancient.totalBeginTime.day).toBe(0)
+		expect(ancient.totalBeginTime.fraction).toBe(0)
+		// Map geometry is built for the ancient eclipse rather than reporting nothing.
+		const geometry = computeLunarEclipseMapGeometry(ancient, sunMoonPosition)
+		expect(geometry.events).toHaveLength(events.length)
+		expect(geometry.lines.moonRiseSet.MAX![0].length).toBeGreaterThan(0)
+	})
 })
 
 describe('maxAngularStep validation', () => {

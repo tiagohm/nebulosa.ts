@@ -37,6 +37,18 @@ function pointInPolygon(px: number, py: number, polygon: readonly { readonly x: 
 	return inside
 }
 
+describe('ancient dates', () => {
+	// Contacts before JD 0 have negative days; lunarEclipseEvents must keep them, so local circumstances report a
+	// real geometric eclipse instead of nothing.
+	test('local circumstances resolve for an eclipse before JD 0', () => {
+		const ancient = nearestLunarEclipse(timeYMDHMS(-5000, 1, 1), true)
+		const local = computeLocalLunarEclipseCircumstances(ancient, 0, 0, sunMoonPosition, { altitudeSamples: 12 })
+		expect(local.visibility.hasGeometricEclipse).toBe(true)
+		expect(Object.keys(local.events)).toEqual(['P1', 'U1', 'MAX', 'U4', 'P4'])
+		expect(local.events.MAX!.time.day).toBeLessThan(0)
+	}, 6000)
+})
+
 describe('per-contact magnitudes', () => {
 	const { longitude, latitude } = sublunarAtMax(TOTAL)
 	const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition)
