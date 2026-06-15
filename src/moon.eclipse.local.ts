@@ -406,6 +406,69 @@ function phaseReachesHorizon(scan: AltitudeScan, fromJd: number, toJd: number, a
 	return false
 }
 
+// Whether the topocentric Moon stays at or above the horizon across the ENTIRE interval [fromJd, toJd].
+//
+// "Entire eclipse visible" cannot be decided from the contact samples alone: every contact can be above the
+// horizon while the Moon still dips below it between contacts (a high-latitude lower culmination during the
+// several-hour penumbral interval). The altitude has at most one interior extremum over a phase interval (its
+// hour-angle span is well under a full turn), so the minimum is at an endpoint or at the single lower
+// culmination; a golden-section minimum search (bracketed around the lowest precomputed sample) finds it and
+// returns false as soon as any evaluated altitude is below the horizon.
+//   scan: precomputed penumbral-interval samples, used to reject an obvious below-horizon sample and to bracket.
+//   altFrom, altTo: topocentric Moon altitudes at the endpoints (already resolved on the contact events).
+function phaseStaysAboveHorizon(scan: AltitudeScan, fromJd: number, toJd: number, altFrom: Angle, altTo: Angle, longitude: Angle, latitude: Angle, getPosition: LunarEclipsePositionProvider, horizonAltitude: Angle, reference: Time) {
+	if (altFrom < horizonAltitude || altTo < horizonAltitude) return false
+	if (!(toJd > fromJd)) return true
+
+	// Lowest precomputed sample strictly inside: a below-horizon one settles it; otherwise it brackets the
+	// continuous minimum (which lies within one step of the lowest sample for an at-most-one-extremum altitude).
+	let lowIndex = -1
+	let lowAltitude = Infinity
+	for (let i = 0; i < scan.jds.length; i++) {
+		if (scan.jds[i] <= fromJd || scan.jds[i] >= toJd) continue
+		if (scan.altitudes[i] < horizonAltitude) return false
+		if (scan.altitudes[i] < lowAltitude) {
+			lowAltitude = scan.altitudes[i]
+			lowIndex = i
+		}
+	}
+
+	let lo = fromJd
+	let hi = toJd
+	if (lowIndex >= 0 && scan.step > 0) {
+		lo = Math.max(fromJd, scan.jds[lowIndex] - scan.step)
+		hi = Math.min(toJd, scan.jds[lowIndex] + scan.step)
+	}
+
+	// Golden-section minimum search, early-exit on a below-horizon point.
+	const altitudeAt = (jd: number) => moonAltitudeAt(timeAtJulianDay(reference, jd), longitude, latitude, getPosition)
+	let c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
+	let d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
+	let fc = altitudeAt(c)
+	let fd = altitudeAt(d)
+	if (fc < horizonAltitude || fd < horizonAltitude) return false
+
+	for (let i = 0; i < PHASE_MAX_ITERATIONS && hi - lo > PHASE_MIN_SPAN_DAYS; i++) {
+		if (fc < fd) {
+			hi = d
+			d = c
+			fd = fc
+			c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
+			fc = altitudeAt(c)
+		} else {
+			lo = c
+			c = d
+			fc = fd
+			d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
+			fd = altitudeAt(d)
+		}
+
+		if (fc < horizonAltitude || fd < horizonAltitude) return false
+	}
+
+	return true
+}
+
 // Builds a Time at a Julian Day, preserving the reference time scale and providers.
 function timeAtJulianDay(reference: Time, julianDay: number) {
 	return timeShift(reference, julianDay - reference.day - reference.fraction)
@@ -444,12 +507,15 @@ export function computeLocalLunarEclipseCircumstances(eclipse: LunarEclipse, lon
 	// penumbral interval it cannot in a sub-interval, so this guard also avoids the extra search cost there.
 	const umbralVisible = penumbralVisible && events.U1 && events.U4 ? phaseReachesHorizon(scan, events.U1.jd, events.U4.jd, events.U1.altitude, events.U4.altitude, longitude, latitude, getSunMoonPosition, horizonAltitude, reference) : false
 	const totalVisible = penumbralVisible && events.U2 && events.U3 ? phaseReachesHorizon(scan, events.U2.jd, events.U3.jd, events.U2.altitude, events.U3.altitude, longitude, latitude, getSunMoonPosition, horizonAltitude, reference) : false
-	const allContactsObservable = contacts.length > 0 && contacts.every((c) => events[c.kind]!.observable)
+
+	// "Entire eclipse visible" requires the Moon to stay above the horizon for the whole [P1, P4] interval, not
+	// merely at the contacts: a high-latitude lower culmination can drop it below the horizon between contacts.
+	const fullyAbove = penumbralVisible && p1 && p4 ? phaseStaysAboveHorizon(scan, p1.jd, p4.jd, p1.altitude, p4.altitude, longitude, latitude, getSunMoonPosition, horizonAltitude, reference) : false
 
 	let kind: LocalLunarEclipseVisibilityKind
 	if (!hasGeometricEclipse) kind = 'notVisible'
 	else if (!penumbralVisible) kind = 'geometricOnlyBelowHorizon'
-	else if (allContactsObservable) kind = 'completelyVisible'
+	else if (fullyAbove) kind = 'completelyVisible'
 	else if (totalVisible) kind = 'totalVisible'
 	else if (umbralVisible) kind = 'partialVisible'
 	else kind = 'penumbralOnlyVisible'

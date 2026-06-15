@@ -154,6 +154,45 @@ describe('visibility classification', () => {
 		expect(local.visibility.hasObservableEclipse).toBe(true)
 		expect(local.visibility.kind).not.toBe('geometricOnlyBelowHorizon')
 	}, 15000)
+
+	// Every contact can be above the horizon while the Moon still dips below it between contacts (a high-latitude
+	// lower culmination during the multi-hour penumbral interval). 'completelyVisible' must check the whole
+	// interval, not just the contact samples.
+	test('contacts above the horizon with a dip below between them is not completelyVisible', () => {
+		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
+		const max = geometry.events.find((e) => e.kind === 'MAX')!
+		// High southern latitude keeps the full Moon up but low; the longitude places its lower culmination
+		// roughly midway between U1 and U2, so the altitude dips to an interior minimum between contacts.
+		const latitude = -deg(70)
+		const longitude = max.sublunar.x + Math.PI + deg(16.2)
+
+		function altAt(jd: number) {
+			const reference = TOTAL.maximalTime
+			return moonAltitudeAt(timeShift(reference, jd - reference.day - reference.fraction), longitude, latitude, sunMoonPosition)
+		}
+
+		// Topocentric contact altitudes (P1, U1, U2, MAX, U3, U4, P4).
+		const contactTimes = [TOTAL.firstContactPenumbraTime, TOTAL.firstContactUmbraTime, TOTAL.totalBeginTime, TOTAL.maximalTime, TOTAL.totalEndTime, TOTAL.lastContactUmbraTime, TOTAL.lastContactPenumbraTime]
+		const contactAltitudes = contactTimes.map((t) => altAt(toJulianDay(t)))
+		const minContact = Math.min(...contactAltitudes)
+
+		// Interior minimum over (P1, P4): the lower culmination, sampled finely between the contacts.
+		const p1jd = toJulianDay(TOTAL.firstContactPenumbraTime)
+		const p4jd = toJulianDay(TOTAL.lastContactPenumbraTime)
+		let interiorMin = Infinity
+		for (let i = 1; i < 200; i++) interiorMin = Math.min(interiorMin, altAt(p1jd + (i / 200) * (p4jd - p1jd)))
+
+		// The dip is strictly below the lowest contact: an interior below-horizon stretch with every contact above.
+		expect(interiorMin).toBeLessThan(minContact)
+		const horizonAltitude = interiorMin + 0.3 * (minContact - interiorMin)
+
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, longitude, latitude, sunMoonPosition, { horizonAltitude })
+		// Every contact is above the configured horizon, so a contacts-only test would report completelyVisible...
+		for (const event of Object.values(local.events)) expect(event.altitude).toBeGreaterThanOrEqual(horizonAltitude)
+		// ...but the Moon drops below the horizon between contacts, so the eclipse is not entirely visible.
+		expect(local.visibility.kind).not.toBe('completelyVisible')
+		expect(local.visibility.hasObservableEclipse).toBe(true)
+	}, 15000)
 })
 
 describe('P/Z orientation angles and Alt/Az', () => {
