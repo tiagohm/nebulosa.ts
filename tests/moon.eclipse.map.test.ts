@@ -430,4 +430,27 @@ describe('fill region polygons', () => {
 		expect(pointInPath(anti.x, anti.y, above)).toBe(false)
 		expect(pointInPath(enclosedPole.x, enclosedPole.y, above)).toBe(true)
 	})
+
+	// Same requirement, but with the central meridian supplied through options.projectionOptions (the documented
+	// call-time channel) on a projection built at meridian 0. The fill must resolve the central meridian the same
+	// way the open curves and sublunar points do, so the shadow follows them; the bug left the fill at the
+	// projection's own meridian (0) while the sublunar point shifted, so the shadow excluded it.
+	test('central meridian from options.projectionOptions still fills the same side', () => {
+		const projectionOptions = { centralMeridian: PI }
+		const max = geometry.events.find((e) => e.kind === 'MAX')!
+		const paths = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true, fillRegion: 'aboveHorizon', projectionOptions })
+		const above = paths.moonRiseSet.MAX
+
+		const sub = projection.project(max.sublunar.x, max.sublunar.y, undefined, projectionOptions)!
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - PI : max.sublunar.x + PI
+		const anti = projection.project(antiLon, -max.sublunar.y, undefined, projectionOptions)!
+		const enclosedPole = projection.project(PI, max.declination >= 0 ? PIOVERTWO - 1e-6 : -(PIOVERTWO - 1e-6), undefined, projectionOptions)!
+
+		// The sublunar point (projected with the call-time options) shifts with the central meridian, and the fill
+		// must shift with it.
+		expect(paths.sublunarPoints.MAX).toEqual(sub)
+		expect(pointInPath(sub.x, sub.y, above)).toBe(true)
+		expect(pointInPath(anti.x, anti.y, above)).toBe(false)
+		expect(pointInPath(enclosedPole.x, enclosedPole.y, above)).toBe(true)
+	})
 })

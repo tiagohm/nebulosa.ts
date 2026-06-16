@@ -517,16 +517,17 @@ const POLAR_CAP_FILL_PROJECTION_OPTIONS: ProjectionOptions = { centralMeridian: 
 //   region: which side of the curve to fill.
 //   precision: SVG coordinate precision.
 //   projectionOptions: projection options with the ring's central-meridian-neutral frame already applied.
-function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: EclipseGeoCurve | undefined, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number, projectionOptions: ProjectionOptions) {
+//   centralMeridian: effective central meridian (radians) the open curves and sublunar points are projected with
+//   (call-time options.projectionOptions first, then the projection's own options); recenters the ring into it.
+//   direction: effective longitude axis ('east'/'west'), resolved the same way, so the fill follows the curves.
+function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: EclipseGeoCurve | undefined, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number, projectionOptions: ProjectionOptions, centralMeridian: Angle, direction: RaAxisDirection) {
 	if (!curve || curve.length === 0) return ''
 
 	const ring = curve[0]
 	if (ring.length < 4) return ''
 
-	// Resolve the projection's central meridian and longitude axis, then recenter the ring so its antimeridian
-	// seam and +-PI map edges land at +-PI in the ring's own longitudes.
-	const centralMeridian = projection.options?.centralMeridian ?? 0
-	const direction: RaAxisDirection = projection.options?.raAxisDirection ?? 'east'
+	// Recenter the ring so its antimeridian seam and +-PI map edges land at +-PI in the ring's own longitudes,
+	// using the SAME effective central meridian and axis the open curves and sublunar points are projected with.
 	const wrappedRing = recenterRing(ring, centralMeridian, direction)
 
 	if (ringEnclosesPole(wrappedRing)) return polarCapFillPath(wrappedRing, event?.declination ?? 0, projection, region, precision, projectionOptions)
@@ -544,14 +545,21 @@ export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, pro
 	const sublunarPoints: Writable<LunarEclipseMapPoints> = Object.create(null)
 
 	for (const event of geometry.events) {
-		const projected = projection.project(event.sublunar.x, event.sublunar.y, undefined, projection.options)
+		const projected = projection.project(event.sublunar.x, event.sublunar.y, undefined, options.projectionOptions)
 		if (projected) sublunarPoints[event.kind] = projected
 	}
 
 	if (options.fill) {
 		const region = options.fillRegion ?? 'belowHorizon'
 		const precision = options.precision ?? 2
-		const projectionOptions: ProjectionOptions = { ...projection.options, ...POLAR_CAP_FILL_PROJECTION_OPTIONS }
+		const projectionOptions: ProjectionOptions = { ...options.projectionOptions, ...POLAR_CAP_FILL_PROJECTION_OPTIONS }
+
+		// Effective central meridian and longitude axis: call-time projection options first, then the projection's
+		// own options, then the defaults - the same resolution project() uses for the open curves and sublunar
+		// points, so the recentered fill follows them (reading only projection.options here left the fill at the
+		// projection's central meridian while the curves shifted with options.projectionOptions).
+		const centralMeridian = options.projectionOptions?.centralMeridian ?? projection.options?.centralMeridian ?? 0
+		const direction: RaAxisDirection = options.projectionOptions?.raAxisDirection ?? projection.options?.raAxisDirection ?? 'east'
 
 		// The event per contact drives the fill topology (declination for the enclosed pole, horizon and distance
 		// for the cap radius). Absent contacts have no event and no curve, so contactFillPath returns ''.
@@ -561,13 +569,13 @@ export function lunarEclipseMapToSvgPaths(geometry: LunarEclipseMapGeometry, pro
 		return {
 			sublunarPoints,
 			moonRiseSet: {
-				P1: contactFillPath(events.P1, moonRiseSet.P1, projection, region, precision, projectionOptions),
-				U1: contactFillPath(events.U1, moonRiseSet.U1, projection, region, precision, projectionOptions),
-				U2: contactFillPath(events.U2, moonRiseSet.U2, projection, region, precision, projectionOptions),
-				MAX: contactFillPath(events.MAX, moonRiseSet.MAX, projection, region, precision, projectionOptions),
-				U3: contactFillPath(events.U3, moonRiseSet.U3, projection, region, precision, projectionOptions),
-				U4: contactFillPath(events.U4, moonRiseSet.U4, projection, region, precision, projectionOptions),
-				P4: contactFillPath(events.P4, moonRiseSet.P4, projection, region, precision, projectionOptions),
+				P1: contactFillPath(events.P1, moonRiseSet.P1, projection, region, precision, projectionOptions, centralMeridian, direction),
+				U1: contactFillPath(events.U1, moonRiseSet.U1, projection, region, precision, projectionOptions, centralMeridian, direction),
+				U2: contactFillPath(events.U2, moonRiseSet.U2, projection, region, precision, projectionOptions, centralMeridian, direction),
+				MAX: contactFillPath(events.MAX, moonRiseSet.MAX, projection, region, precision, projectionOptions, centralMeridian, direction),
+				U3: contactFillPath(events.U3, moonRiseSet.U3, projection, region, precision, projectionOptions, centralMeridian, direction),
+				U4: contactFillPath(events.U4, moonRiseSet.U4, projection, region, precision, projectionOptions, centralMeridian, direction),
+				P4: contactFillPath(events.P4, moonRiseSet.P4, projection, region, precision, projectionOptions, centralMeridian, direction),
 			},
 		}
 	} else {
