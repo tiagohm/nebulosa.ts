@@ -7,6 +7,7 @@ import { moonAltitudeAt } from '../src/moon.eclipse.local'
 import { computeLunarEclipseMapGeometry, lunarEclipseEvents, lunarEclipseMapToSvgPaths, MOON_RADIUS_EARTH_RADII, type LunarEclipseContactKind } from '../src/moon.eclipse.map'
 import { PlateCarree } from '../src/projection'
 import { greenwichApparentSiderealTime, type Time, timeYMDHMS } from '../src/time'
+import { longestProjectedSegment } from './eclipse.util'
 
 // Cheap deterministic position provider for tests that exercise local-circumstance plumbing rather than the
 // analytical VSOP87/ELP ephemerides. The Moon stays high for FAST_LONGITUDE/FAST_LATITUDE, keeping visibility
@@ -243,6 +244,17 @@ describe('SVG serialization', () => {
 		// A horizon circle spans all longitudes, so it must cross the antimeridian and split into >= 2 subpaths.
 		const subpaths = svg.moonRiseSet.MAX.split('M').length - 1
 		expect(subpaths).toBeGreaterThanOrEqual(2)
+	})
+
+	// With a non-zero central meridian supplied via projectionOptions, the open curve must split on the shifted
+	// seam (central meridian +- PI), not raw +- PI; otherwise a segment crossing the real seam is drawn as a
+	// full-width horizontal line across the map. The longest projected segment must stay well under the map width.
+	test('open curves follow a non-zero central meridian without a map-spanning segment', () => {
+		const centered = lunarEclipseMapToSvgPaths(geometry, projection, { projectionOptions: { centralMeridian: PI } }).moonRiseSet.MAX
+		expect(centered.length).toBeGreaterThan(0)
+		expect(longestProjectedSegment(centered)).toBeLessThan(720 / 2)
+		// It still crosses the (shifted) seam, so it splits into multiple subpaths.
+		expect(centered.split('M').length - 1).toBeGreaterThanOrEqual(2)
 	})
 
 	test('projects the sublunar points', () => {

@@ -416,6 +416,10 @@ function projectedWorldRect(projection: CylindricalProjection, options: Projecti
 	return rect
 }
 
+function ringPointComparatorByX(a: EclipseGeoPoint, b: EclipseGeoPoint) {
+	return a.x - b.x
+}
+
 // Fill polygon for a POLE-ENCLOSING cap. The boundary is single-valued in longitude (each meridian crosses it
 // once), so the points are sorted into a left-to-right profile and closed along a map pole edge: the enclosed
 // pole for the 'aboveHorizon' cap, the opposite pole for its 'belowHorizon' complement. The result is one
@@ -425,7 +429,7 @@ function polarCapFillPath(ring: EclipseGeoBranch, declination: Angle, projection
 	const edgeLat = region === 'aboveHorizon' ? capPoleLat : -capPoleLat
 
 	// Sort the boundary into a left-to-right profile, dropping the duplicated closing vertex.
-	const sorted = ring.slice(0, ring.length - 1).sort((a, b) => a.x - b.x)
+	const sorted = ring.slice(0, ring.length - 1).sort(ringPointComparatorByX)
 	const polygon: Point[] = []
 
 	for (const point of sorted) {

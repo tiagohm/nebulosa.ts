@@ -11,7 +11,7 @@ import type { Point } from './geometry'
 import { matMulVec } from './mat3'
 import { clamp } from './math'
 import { type RootFindingOptions, bisection, brentRoot } from './optimization'
-import type { CylindricalProjection, ProjectionOptions } from './projection'
+import type { CylindricalProjection, ProjectionOptions, RaAxisDirection } from './projection'
 import { vecDivScalar, vecDot, vecMinus, vecLength, vecMulScalar } from './vec3'
 
 // Earth polar/equatorial radius ratio (1 - flattening).
@@ -510,20 +510,49 @@ export function splitGeoLineAtAntimeridian(line: EclipseGeoBranch, close: boolea
 	return segments
 }
 
+// Recenters a geographic line's longitudes onto the central meridian, mapping each into the signed wrapped offset
+// in (-PI, PI] (east-positive). Latitude and jd are preserved. After recentering, the projection's antimeridian
+// seam sits at +-PI, so the raw-+-PI antimeridian split lands where the map actually wraps.
+//   centralMeridian: geographic longitude (radians) drawn at the map center.
+//   direction: 'east' when longitude increases to the right (the usual map), 'west' otherwise.
+function recenterGeoLine(line: EclipseGeoBranch, centralMeridian: Angle, direction: RaAxisDirection): EclipseGeoBranch {
+	const out: EclipseGeoBranch = new Array(line.length)
+
+	for (let i = 0; i < line.length; i++) {
+		const point = line[i]
+		const delta = direction === 'west' ? centralMeridian - point.x : point.x - centralMeridian
+		out[i] = { x: normalizeLongitude(delta), y: point.y, jd: point.jd }
+	}
+
+	return out
+}
+
 // Splits one geographic line (or ring when close is true) at the antimeridian with the exact +-180
 // crossing inserted, then projects each piece. Inserting the crossing keeps every piece reaching the map
 // edge instead of stopping at the last sample before the wrap, which otherwise leaves a visible gap or
 // angular "beak" near +-180. The 'pi'-mode projection preserves an exact +-PI seam vertex, so the post-wrap
 // piece resumes on the left edge (-PI) rather than being folded back onto the right one (+PI). The split
 // happens only here, at serialization time: the geographic geometry itself is never mutated.
+//
+// The split must land on the projection's antimeridian seam, which for a non-zero central meridian (or a west
+// axis) is NOT at raw +-PI. The line is then recentered onto the central meridian (placing the seam at +-PI) and
+// projected in a central-meridian-neutral frame; otherwise a segment crossing the real seam would be left unsplit
+// and drawn as a full-width horizontal line across the map, with a spurious split appearing at the map center. A
+// zero central meridian on an east axis is the identity and keeps the original behavior (and allocation) exactly.
 export function projectSplitPieces(geo: EclipseGeoBranch, close: boolean, projection: CylindricalProjection, options?: ProjectionOptions) {
 	const pieces: Point[][] = []
 
-	for (const segment of splitGeoLineAtAntimeridian(geo, close)) {
+	const centralMeridian = options?.centralMeridian ?? projection.options?.centralMeridian ?? 0
+	const direction: RaAxisDirection = options?.raAxisDirection ?? projection.options?.raAxisDirection ?? 'east'
+	const neutral = centralMeridian === 0 && direction === 'east'
+	const line = neutral ? geo : recenterGeoLine(geo, centralMeridian, direction)
+	const projectOptions = neutral ? options : { ...options, centralMeridian: 0, raAxisDirection: 'east' as RaAxisDirection, longitudeWrapMode: 'pi' as const }
+
+	for (const segment of splitGeoLineAtAntimeridian(line, close)) {
 		let piece: Point[] = []
 
 		for (const point of segment) {
-			const projected = projection.project(point.x, point.y, undefined, options)
+			const projected = projection.project(point.x, point.y, undefined, projectOptions)
 
 			if (projected === undefined) {
 				if (piece.length >= 2) pieces.push(piece)
