@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
-import { PIOVERTWO, TAU } from '../src/constants'
+import { PI, PIOVERTWO, TAU } from '../src/constants'
+import type { SunMoonPosition } from '../src/eclipse'
 import { nearestLunarEclipse } from '../src/moon'
 import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry, moonAltitudeAt, type LocalLunarEclipseSvgCircle, type LocalLunarEclipseSvgPolygon } from '../src/moon.eclipse.local'
 import { computeLunarEclipseMapGeometry } from '../src/moon.eclipse.map'
-import type { SunMoonPosition } from '../src/sun.eclipse.map'
 import { toJulianDay, type Time, timeYMDHMS, greenwichApparentSiderealTime, timeAtJulianDay } from '../src/time'
+import { fixedSunMoonPosition } from './eclipse.util'
 
 const FAST_LONGITUDE = deg(5)
 const FAST_LATITUDE = 0
@@ -17,18 +18,10 @@ function fastSunMoonPosition(time: Time) {
 	const gast = greenwichApparentSiderealTime(time)
 
 	return {
-		sun: { rightAscension: gast - Math.PI + deg(0.1), declination: 0, distance: 1 },
+		sun: { rightAscension: gast - PI + deg(0.1), declination: 0, distance: 1 },
 		moon: { rightAscension: gast, declination: 0, distance: 60 },
 		deltaT: 0,
 	}
-}
-
-function fixedSunMoonPosition(rightAscension: number, declination: number = 0) {
-	return (time: Time): SunMoonPosition => ({
-		sun: { rightAscension: rightAscension - Math.PI + deg(0.1), declination: 0, distance: 1 },
-		moon: { rightAscension, declination, distance: 60 },
-		deltaT: 0,
-	})
 }
 
 const PENUMBRAL = nearestLunarEclipse(timeYMDHMS(1973, 6, 1), true)
@@ -134,7 +127,7 @@ describe('visibility classification', () => {
 	})
 
 	test('observer at the antipode has the Moon below the horizon throughout', () => {
-		const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE + Math.PI, -FAST_LATITUDE, fastSunMoonPosition)
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE + PI, -FAST_LATITUDE, fastSunMoonPosition)
 		expect(local.visibility.hasObservableEclipse).toBe(false)
 		expect(local.visibility.kind).toBe('geometricOnlyBelowHorizon')
 		expect(local.events.MAX!.observable).toBe(false)
@@ -142,7 +135,7 @@ describe('visibility classification', () => {
 	})
 
 	test('hasGeometricEclipse is true regardless of horizon', () => {
-		const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE + Math.PI, -FAST_LATITUDE, fastSunMoonPosition)
+		const local = computeLocalLunarEclipseCircumstances(TOTAL, FAST_LONGITUDE + PI, -FAST_LATITUDE, fastSunMoonPosition)
 		expect(local.visibility.hasGeometricEclipse).toBe(true)
 	})
 
@@ -297,7 +290,7 @@ describe('visibility classification', () => {
 		const declination = deg(30)
 		const longitude = 0
 		const targetJd = (toJulianDay(TOTAL.firstContactUmbraTime) + toJulianDay(TOTAL.totalBeginTime)) * 0.5
-		const sunMoonPosition = fixedSunMoonPosition(greenwichApparentSiderealTime(timeAtJulianDay(TOTAL.maximalTime, targetJd)) + longitude - Math.PI, declination)
+		const sunMoonPosition = fixedSunMoonPosition(greenwichApparentSiderealTime(timeAtJulianDay(TOTAL.maximalTime, targetJd)) + longitude - PI, declination)
 
 		function altAt(jd: number) {
 			return gridAltitude(jd, longitude, latitude, sunMoonPosition)
@@ -361,7 +354,7 @@ describe('P/Z orientation angles and Alt/Az', () => {
 		const moonDEC = position.moon.declination
 		// Mirror positionAngleBetween(moon, antisolar) with shadowDEC = -sunDEC: y = cos(dec2) sin(dRA),
 		// x = cos(dec1) sin(dec2) - sin(dec1) cos(dec2) cos(dRA).
-		const dRA = position.sun.rightAscension + Math.PI - moonRA
+		const dRA = position.sun.rightAscension + PI - moonRA
 		const y = Math.cos(position.sun.declination) * Math.sin(dRA)
 		const x = -Math.cos(moonDEC) * Math.sin(position.sun.declination) - Math.sin(moonDEC) * Math.cos(position.sun.declination) * Math.cos(dRA)
 		return Math.atan2(y, x)
@@ -377,8 +370,8 @@ describe('P/Z orientation angles and Alt/Az', () => {
 	// reported P angle must be opposite the shadow-center direction; the external U1 contact must equal it.
 	test('total-eclipse U2/U3 contact point is opposite the shadow-center direction', () => {
 		expect(angleSeparation(local.events.U1!.positionAngle, shadowCenterPositionAngle(TOTAL.firstContactUmbraTime))).toBeLessThan(1e-9)
-		expect(angleSeparation(local.events.U2!.positionAngle, shadowCenterPositionAngle(TOTAL.totalBeginTime) + Math.PI)).toBeLessThan(1e-9)
-		expect(angleSeparation(local.events.U3!.positionAngle, shadowCenterPositionAngle(TOTAL.totalEndTime) + Math.PI)).toBeLessThan(1e-9)
+		expect(angleSeparation(local.events.U2!.positionAngle, shadowCenterPositionAngle(TOTAL.totalBeginTime) + PI)).toBeLessThan(1e-9)
+		expect(angleSeparation(local.events.U3!.positionAngle, shadowCenterPositionAngle(TOTAL.totalEndTime) + PI)).toBeLessThan(1e-9)
 	})
 })
 

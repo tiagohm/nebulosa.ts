@@ -1,12 +1,13 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
 import { ASEC2RAD, DAYSEC, EARTH_RADIUS_KM, PI } from './constants'
+import { F, hourAngleFromLongitude, type SunMoonPosition } from './eclipse'
 import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
 import { clamp } from './math'
 import { bisection, brentMinimize, type RootFindingOptions } from './optimization'
 import { nearestSolarEclipse, type SolarEclipse } from './sun'
 // oxfmt-ignore
-import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, computePolynomialBesselianElements, evaluateBesselian, F, findMaximumPoint, hourAngleFromLongitude, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type GeoPoint, type InstantBesselianElements, type PolynomialBesselianElements, type SunMoonPosition } from './sun.eclipse.map'
+import { besselianSampleAtJulianDay, centralAxisIntersectsEarth, centralLineKind, computePolynomialBesselianElements, evaluateBesselian, findMaximumPoint, projectFundamentalPoint, solarAltitudeAtPoint, SUN_RADIUS_EARTH_RADII, type SolarEclipseGeoPoint, type InstantBesselianElements, type PolynomialBesselianElements } from './sun.eclipse.map'
 import { type Time, timeAtJulianDay, toJulianDay, tt } from './time'
 import type { Writable } from './types'
 
@@ -353,7 +354,7 @@ export interface SolarEclipseExtremeCircumstances {
 	// Duration of the central (total/annular) phase in seconds; null when the point is not central.
 	readonly centralDuration: number | null
 	// Local eclipse character at the event; null when the point is not central.
-	readonly kind: GeoPoint['kind'] | null
+	readonly kind: SolarEclipseGeoPoint['kind'] | null
 }
 
 const DEFAULT_LOCAL_SOLAR_ECLIPSE_CIRCUMSTANCES_OPTIONS: LocalSolarEclipseCircumstancesOptions = {}
@@ -490,7 +491,7 @@ function localStateAtJulianDay(pbe: PolynomialBesselianElements, longitude: Angl
 // right ascension/declination and Greenwich apparent sidereal time; without it, it falls back to the
 // Besselian shadow-axis altitude (an approximation: the axis is treated as the Sun direction and the
 // geodetic latitude is used directly, matching solarAltitudeAtPoint in sun.eclipse.ts).
-function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, position: SunMoonPosition | undefined, fallbackBesselian?: InstantBesselianElements) {
+function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, position?: SunMoonPosition, fallbackBesselian?: InstantBesselianElements) {
 	if (position) {
 		const deltaT = position.deltaT ?? 0
 		const ttTime = tt(time)
@@ -1583,7 +1584,7 @@ function centralConeGap(be: Pick<InstantBesselianElements, 'mu' | 'deltaT' | 'de
 // shadow-axis declination as the Sun direction (exact on the central line). The standard horizontal
 // transform gives azimuth from the South through West; adding PI rotates it to the North-through-East
 // convention used by the NASA tables.
-function solarAzimuthAtPoint(pbe: PolynomialBesselianElements, point: GeoPoint) {
+function solarAzimuthAtPoint(pbe: PolynomialBesselianElements, point: SolarEclipseGeoPoint) {
 	const be = besselianSampleAtJulianDay(pbe, point.jd!)
 	const H = hourAngleFromLongitude(point.x, be.mu, be.deltaTLongitudeCorrection)
 	const sinPhi = Math.sin(point.y)
@@ -1605,7 +1606,7 @@ function centralPhaseDurationSeconds(pbe: PolynomialBesselianElements, longitude
 
 // Assembles the full summary circumstances at one central-eclipse point: geographic location, TD/UT1 times,
 // solar altitude and azimuth, and (when the point is central) the path width, central duration and character.
-function extremeCircumstancesAt(pbe: PolynomialBesselianElements, point: GeoPoint): SolarEclipseExtremeCircumstances {
+function extremeCircumstancesAt(pbe: PolynomialBesselianElements, point: SolarEclipseGeoPoint): SolarEclipseExtremeCircumstances {
 	const jd = point.jd!
 	const time = timeAtJulianDay(pbe.time0, jd)
 	const centralDuration = centralPhaseDurationSeconds(pbe, point.x, point.y, jd)

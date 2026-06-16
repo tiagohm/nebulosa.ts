@@ -1,18 +1,24 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, type Angle } from '../src/angle'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
-import * as elpmpp02 from '../src/elpmpp02'
 import { nearestLunarEclipse } from '../src/moon'
 import { moonAltitudeAt } from '../src/moon.eclipse.local'
 import { computeLunarEclipseMapGeometry, lunarEclipseEvents, lunarEclipseMapToSvgPaths, MOON_RADIUS_EARTH_RADII, type LunarEclipseContactKind } from '../src/moon.eclipse.map'
 import { PlateCarree } from '../src/projection'
-import { computeSunMoonPositionAt } from '../src/sun.eclipse.map'
-import { type Time, timeYMDHMS } from '../src/time'
-import * as vsop87e from '../src/vsop87e'
+import { greenwichApparentSiderealTime, type Time, timeYMDHMS } from '../src/time'
+import { cachedSunMoonPosition } from './eclipse.util'
 
-// Apparent Sun/Moon position provider from the analytical VSOP87E + ELP/MPP02 ephemerides (no fixtures).
-function sunMoonPosition(t: Time) {
-	return computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
+// Cheap deterministic position provider for tests that exercise local-circumstance plumbing rather than the
+// analytical VSOP87/ELP ephemerides. The Moon stays high for FAST_LONGITUDE/FAST_LATITUDE, keeping visibility
+// and duration assertions stable while avoiding hundreds of expensive series evaluations.
+function fastSunMoonPosition(time: Time) {
+	const gast = greenwichApparentSiderealTime(time)
+
+	return {
+		sun: { rightAscension: gast - Math.PI + deg(0.1), declination: 0, distance: 1 },
+		moon: { rightAscension: gast, declination: 0, distance: 60 },
+		deltaT: 0,
+	}
 }
 
 // Known eclipses (see tests/moon.test.ts): types verified against timeanddate.com.
@@ -69,7 +75,7 @@ describe('events by type', () => {
 		expect(ancient.totalBeginTime.day).toBe(0)
 		expect(ancient.totalBeginTime.fraction).toBe(0)
 		// Map geometry is built for the ancient eclipse rather than reporting nothing.
-		const geometry = computeLunarEclipseMapGeometry(ancient, sunMoonPosition)
+		const geometry = computeLunarEclipseMapGeometry(ancient, fastSunMoonPosition)
 		expect(geometry.events).toHaveLength(events.length)
 		expect(geometry.lines.moonRiseSet.MAX![0].length).toBeGreaterThan(0)
 	})
@@ -80,7 +86,7 @@ describe('maxAngularStep validation', () => {
 	// a RangeError from new Array(...).
 	test('invalid maxAngularStep falls back to the default instead of throwing', () => {
 		for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-			const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { maxAngularStep: bad })
+			const geometry = computeLunarEclipseMapGeometry(TOTAL, fastSunMoonPosition, { maxAngularStep: bad })
 			const branch = geometry.lines.moonRiseSet.MAX![0]
 			expect(branch.length).toBeGreaterThan(1)
 			for (const point of branch) {
@@ -90,8 +96,8 @@ describe('maxAngularStep validation', () => {
 		}
 
 		// The fallback produces exactly the default-spacing curve.
-		const fallback = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { maxAngularStep: 0 }).lines.moonRiseSet.MAX![0]
-		const byDefault = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition).lines.moonRiseSet.MAX![0]
+		const fallback = computeLunarEclipseMapGeometry(TOTAL, fastSunMoonPosition, { maxAngularStep: 0 }).lines.moonRiseSet.MAX![0]
+		const byDefault = computeLunarEclipseMapGeometry(TOTAL, fastSunMoonPosition).lines.moonRiseSet.MAX![0]
 		expect(fallback.length).toBe(byDefault.length)
 	}, 4000)
 
@@ -99,7 +105,7 @@ describe('maxAngularStep validation', () => {
 	// unsafe array length and throw a RangeError; the per-curve point count must be capped instead.
 	test('a tiny maxAngularStep is capped instead of throwing', () => {
 		for (const tiny of [Number.MIN_VALUE, 1e-300, 1e-12]) {
-			const geometry = computeLunarEclipseMapGeometry(PENUMBRAL, sunMoonPosition, { maxAngularStep: tiny })
+			const geometry = computeLunarEclipseMapGeometry(PENUMBRAL, fastSunMoonPosition, { maxAngularStep: tiny })
 			const branch = geometry.lines.moonRiseSet.MAX![0]
 			// Many points (a fine curve), but bounded by the safety ceiling (+ the repeated closing vertex).
 			expect(branch.length).toBeGreaterThan(1000)
@@ -111,7 +117,7 @@ describe('maxAngularStep validation', () => {
 })
 
 describe('horizon curve geometry', () => {
-	const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
+	const geometry = computeLunarEclipseMapGeometry(TOTAL, fastSunMoonPosition)
 
 	test('every curve point is finite and within latitude bounds', () => {
 		for (const event of geometry.events) {
@@ -138,7 +144,7 @@ describe('horizon curve geometry', () => {
 			const stepN = Math.max(1, Math.floor(branch.length / 12))
 			for (let i = 0; i < branch.length; i += stepN) {
 				const point = branch[i]
-				const topocentricAltitude = moonAltitudeAt(event.time, point.x, point.y, sunMoonPosition)
+				const topocentricAltitude = moonAltitudeAt(event.time, point.x, point.y, fastSunMoonPosition)
 				expect(topocentricAltitude).toBeCloseTo(0, 3)
 			}
 		}
@@ -157,26 +163,26 @@ describe('horizon curve geometry', () => {
 
 	test('horizon altitude option shifts the curve to that topocentric altitude', () => {
 		const altOption: Angle = deg(10)
-		const geo = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { horizonAltitude: altOption })
+		const geo = computeLunarEclipseMapGeometry(TOTAL, fastSunMoonPosition, { horizonAltitude: altOption })
 		const max = geo.events.find((e) => e.kind === 'MAX')!
 		const branch = geo.lines.moonRiseSet.MAX![0]
 		const stepN = Math.max(1, Math.floor(branch.length / 12))
 		for (let i = 0; i < branch.length; i += stepN) {
 			const point = branch[i]
-			expect(moonAltitudeAt(max.time, point.x, point.y, sunMoonPosition)).toBeCloseTo(altOption, 3)
+			expect(moonAltitudeAt(max.time, point.x, point.y, fastSunMoonPosition)).toBeCloseTo(altOption, 3)
 		}
 	}, 2000)
 
 	test('negative horizon altitude option lowers the topocentric curve', () => {
 		const altOption: Angle = deg(-2)
-		const geo = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { horizonAltitude: altOption })
+		const geo = computeLunarEclipseMapGeometry(TOTAL, fastSunMoonPosition, { horizonAltitude: altOption })
 		const max = geo.events.find((e) => e.kind === 'MAX')!
 		const branch = geo.lines.moonRiseSet.MAX![0]
 		const stepN = Math.max(1, Math.floor(branch.length / 12))
 		expect(max.horizonAltitude).toBeCloseTo(altOption, 12)
 		for (let i = 0; i < branch.length; i += stepN) {
 			const point = branch[i]
-			expect(moonAltitudeAt(max.time, point.x, point.y, sunMoonPosition)).toBeCloseTo(altOption, 3)
+			expect(moonAltitudeAt(max.time, point.x, point.y, fastSunMoonPosition)).toBeCloseTo(altOption, 3)
 		}
 	}, 2000)
 })
@@ -185,7 +191,7 @@ describe('upper-limb visibility', () => {
 	// TOTAL is the 1997-07 eclipse, near perigee: its apparent semidiameter (~0.279 deg) is distinctly larger
 	// than the mean (~0.259 deg), so the upper-limb curve must use the per-event semidiameter from the distance.
 	test('upper-limb curve uses the per-event semidiameter from the Moon distance', () => {
-		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { limbVisibility: 'upperLimb' })
+		const geometry = computeLunarEclipseMapGeometry(TOTAL, cachedSunMoonPosition, { limbVisibility: 'upperLimb' })
 		for (const event of geometry.events) {
 			const semidiameter = Math.asin(MOON_RADIUS_EARTH_RADII / event.distance)
 			// Near perigee, distinctly above the 0.259 deg mean a fixed lift would have used.
@@ -195,9 +201,10 @@ describe('upper-limb visibility', () => {
 			// Sampled curve points have topocentric Moon-center altitude = -asin(moonRadius / distance).
 			const branch = geometry.lines.moonRiseSet[event.kind]![0]
 			const stepN = Math.max(1, Math.floor(branch.length / 8))
+
 			for (let i = 0; i < branch.length; i += stepN) {
 				const point = branch[i]
-				expect(moonAltitudeAt(event.time, point.x, point.y, sunMoonPosition)).toBeCloseTo(-semidiameter, 3)
+				expect(moonAltitudeAt(event.time, point.x, point.y, cachedSunMoonPosition)).toBeCloseTo(-semidiameter, 3)
 			}
 		}
 	}, 8000)
@@ -206,7 +213,7 @@ describe('upper-limb visibility', () => {
 describe('high declination robustness', () => {
 	// A northern-declination total eclipse: the sublunar point is far north, exercising a near-polar circle.
 	test('curve stays finite and within latitude bounds', () => {
-		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
+		const geometry = computeLunarEclipseMapGeometry(TOTAL, fastSunMoonPosition)
 		const max = geometry.events.find((e) => e.kind === 'MAX')!
 		for (const point of geometry.lines.moonRiseSet.MAX![0]) {
 			expect(Number.isFinite(point.x)).toBe(true)
@@ -218,7 +225,7 @@ describe('high declination robustness', () => {
 })
 
 describe('SVG serialization', () => {
-	const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
+	const geometry = computeLunarEclipseMapGeometry(TOTAL, cachedSunMoonPosition)
 	const projection = equirectangular(720, 360)
 	const svg = lunarEclipseMapToSvgPaths(geometry, projection)
 
@@ -245,7 +252,7 @@ describe('SVG serialization', () => {
 	})
 
 	test('penumbral eclipse omits umbral contact paths', () => {
-		const geo = computeLunarEclipseMapGeometry(PENUMBRAL, sunMoonPosition)
+		const geo = computeLunarEclipseMapGeometry(PENUMBRAL, fastSunMoonPosition)
 		const paths = lunarEclipseMapToSvgPaths(geo, projection)
 		expect(paths.moonRiseSet.P1.length).toBeGreaterThan(0)
 		expect(paths.moonRiseSet.U1).toBe('')
@@ -292,7 +299,7 @@ function pointInPath(px: number, py: number, path: string): boolean {
 }
 
 describe('fill region polygons', () => {
-	const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
+	const geometry = computeLunarEclipseMapGeometry(TOTAL, cachedSunMoonPosition)
 	const projection = equirectangular(720, 360)
 
 	test('fill replaces the open curves with closed polygons', () => {
@@ -334,7 +341,7 @@ describe('fill region polygons', () => {
 	// pole-edge closure is wrong; the ring-topology path must still put the sublunar point inside the cap.
 	test('near-equatorial eclipse: aboveHorizon fill contains the sublunar point', () => {
 		const eclipse = nearestLunarEclipse(timeYMDHMS(2016, 3, 1), true)
-		const geo = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition)
+		const geo = computeLunarEclipseMapGeometry(eclipse, fastSunMoonPosition)
 		const max = geo.events.find((e) => e.kind === 'MAX')!
 		// 2016-03-23 penumbral eclipse: MAX declination ~ -0.31 deg, smaller than the ~0.95 deg lunar parallax.
 		expect(Math.abs(max.declination)).toBeLessThan(deg(0.95))
@@ -353,7 +360,7 @@ describe('fill region polygons', () => {
 	// the antipode is inside it, the sublunar point is not (with the required even-odd fill rule).
 	test('near-equatorial eclipse: belowHorizon fill is the cap complement', () => {
 		const eclipse = nearestLunarEclipse(timeYMDHMS(2016, 3, 1), true)
-		const geo = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition)
+		const geo = computeLunarEclipseMapGeometry(eclipse, fastSunMoonPosition)
 		const max = geo.events.find((e) => e.kind === 'MAX')!
 		const below = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'belowHorizon' }).moonRiseSet.MAX
 		const sub = projection.project(max.sublunar.x, max.sublunar.y)!
@@ -368,7 +375,7 @@ describe('fill region polygons', () => {
 	// aboveHorizon must fill the complement of that ring, not the ring (which would invert the regions).
 	test('near-equatorial eclipse with a lowered horizon fills the larger-than-hemisphere cap', () => {
 		const eclipse = nearestLunarEclipse(timeYMDHMS(2016, 3, 1), true)
-		const geo = computeLunarEclipseMapGeometry(eclipse, sunMoonPosition, { horizonAltitude: deg(-2) })
+		const geo = computeLunarEclipseMapGeometry(eclipse, fastSunMoonPosition, { horizonAltitude: deg(-2) })
 		const max = geo.events.find((e) => e.kind === 'MAX')!
 		const above = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'aboveHorizon' }).moonRiseSet.MAX
 		const below = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'belowHorizon' }).moonRiseSet.MAX
@@ -390,7 +397,7 @@ describe('fill region polygons', () => {
 	// hemisphere but encloses just one pole, the ring winds that pole and the polar branch handles it; the two
 	// conditions "ring winds a pole" and "both poles above the threshold" cannot hold together.)
 	test('lowered horizon on a near-equatorial eclipse: both poles are inside aboveHorizon', () => {
-		const geo = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { horizonAltitude: deg(-5) })
+		const geo = computeLunarEclipseMapGeometry(TOTAL, fastSunMoonPosition, { horizonAltitude: deg(-5) })
 		const max = geo.events.find((e) => e.kind === 'MAX')!
 		const above = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'aboveHorizon' }).moonRiseSet.MAX
 		const northPole = projection.project(0, PIOVERTWO - 1e-6)!

@@ -4,10 +4,11 @@ import { sphericalSeparation, type Point } from '../src/geometry'
 import { PlateCarree } from '../src/projection'
 import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
 // oxfmt-ignore
-import { BRANCH_MAX_DRAWABLE_GAP, type GeoBranch, type GeoCurve, type GeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SolarEclipseMapGeometryOptions, type SolarEclipseMapSvgPaths, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, solarAltitudeAtPoint, solarEclipseMapToSvgPaths } from '../src/sun.eclipse.map'
+import { BRANCH_MAX_DRAWABLE_GAP, type SolarEclipseGeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SolarEclipseMapGeometryOptions, type SolarEclipseMapSvgPaths, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, solarAltitudeAtPoint, solarEclipseMapToSvgPaths, type SolarEclipseGeoCurve, type SolarEclipseGeoBranch } from '../src/sun.eclipse.map'
 import { parseArgs } from 'node:util'
+import { sunMoonPosition } from '../src/eclipse'
 import { timeYMD, toJulianDay, timeToDate } from '../src/time'
-import { catalogBranchRetraces, endpointRetraces, hasContinuousCurveBetween, limitTangencyResidual, longestProjectedSegment, sunMoonPosition } from '../tests/sun.eclipse.util'
+import { catalogBranchRetraces, endpointRetraces, hasContinuousCurveBetween, limitTangencyResidual, longestProjectedSegment } from '../tests/eclipse.util'
 
 const CATALOG_STEP = deg(0.5)
 const CATALOG_MAX_DRAWABLE_GAP = Math.max(BRANCH_MAX_DRAWABLE_GAP, CATALOG_STEP * 4)
@@ -58,7 +59,7 @@ function makeSvg(paths: SolarEclipseMapSvgPaths, width: number, height: number) 
 	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}"><style>.ocean { fill: #103099; } .umbra { fill: none; stroke: #FFE66D; stroke-width: 2; stroke-linecap: round; } .center { fill: none; stroke: #FF2ED1; stroke-width: 2; stroke-linecap: round; } .penumbra { fill: none; stroke: #FF9F1C; stroke-width: 2; stroke-linecap: round; } .riseset { fill: none; stroke: #00E5FF; stroke-width: 2; }text { font: 14px sans-serif; font-weight: bold; fill: #fff; }</style><rect class="ocean" x="0" y="0" width="${width}" height="${height}"/><path class="penumbra" d="${paths.penumbraNorth}"/><path class="penumbra" d="${paths.penumbraSouth}"/><path class="riseset" d="${paths.riseSetCurves}"/><path class="umbra" d="${paths.umbraNorth}"/><path class="umbra" d="${paths.umbraSouth}"/><path class="center" d="${paths.centerLine}"/>${marker(paths.points.P1, 'P1', '#FF9F1C')}${marker(paths.points.P4, 'P4', '#FF9F1C')}${marker(paths.points.P2, 'P2', '#FF9F1C')}${marker(paths.points.P3, 'P3', '#FF9F1C')}${marker(paths.points.U1, 'U1', '#FFE66D')}${marker(paths.points.U4, 'U4', '#FFE66D')}${marker(paths.points.U2, 'U2', '#FFE66D')}${marker(paths.points.U3, 'U3', '#FFE66D')}${marker(paths.points.C1, 'C1', '#FF7BEA')}${marker(paths.points.C2, 'C2', '#FF7BEA')}${marker(paths.points.N1, 'N1', '#35FF7A')}${marker(paths.points.N2, 'N2', '#35FF7A')}${marker(paths.points.S1, 'S1', '#FF4D4D')}${marker(paths.points.S2, 'S2', '#FF4D4D')}${marker(paths.points.Max, 'Max', '#FFFFFF')}</svg>`
 }
 
-function validateCatalogPoint(point: GeoPoint, name: string, requireJd: boolean) {
+function validateCatalogPoint(point: SolarEclipseGeoPoint, name: string, requireJd: boolean) {
 	catalogAssert(Number.isFinite(point.x), `${name} has non-finite longitude`)
 	catalogAssert(Number.isFinite(point.y), `${name} has non-finite latitude`)
 	catalogAssert(point.x >= -PI && point.x <= PI, `${name} longitude is out of range`)
@@ -67,13 +68,13 @@ function validateCatalogPoint(point: GeoPoint, name: string, requireJd: boolean)
 	else if (point.jd !== undefined) catalogAssert(Number.isFinite(point.jd), `${name} has non-finite jd`)
 }
 
-function minDistanceToBranches(point: GeoPoint, curve: GeoCurve) {
+function minDistanceToBranches(point: SolarEclipseGeoPoint, curve: SolarEclipseGeoCurve) {
 	let min = Infinity
 	for (const branch of curve) for (const sample of branch) min = Math.min(min, sphericalSeparation(point.x, point.y, sample.x, sample.y))
 	return min
 }
 
-function validatePointAnchor(point: GeoPoint | undefined, name: string, curve: GeoCurve, tolerance: Angle) {
+function validatePointAnchor(point: SolarEclipseGeoPoint | undefined, name: string, curve: SolarEclipseGeoCurve, tolerance: Angle) {
 	if (!point) return
 	validateCatalogPoint(point, name, true)
 	catalogAssert(curve.length > 0, `${name} exists but its drawable family is empty`)
@@ -89,14 +90,14 @@ const UMBRAL_CONTACT_ATTACH_MIN_ALTITUDE = deg(0.5)
 
 // Validates a U-contact's attachment to the umbra family, but only when it occurs above the horizon, where a
 // day-side umbra limit can exist; a contact at or below the horizon is exempt (see the constant above).
-function validateUmbralContactAnchor(elements: PolynomialBesselianElements, point: GeoPoint | undefined, name: string, curve: GeoCurve) {
+function validateUmbralContactAnchor(elements: PolynomialBesselianElements, point: SolarEclipseGeoPoint | undefined, name: string, curve: SolarEclipseGeoCurve) {
 	if (!point) return
 	validateCatalogPoint(point, name, true)
 	if (solarAltitudeAtPoint(elements, point) < UMBRAL_CONTACT_ATTACH_MIN_ALTITUDE) return
 	validatePointAnchor(point, name, curve, CATALOG_ANCHOR_TOLERANCE)
 }
 
-function validateNoBridgeableEndpointGaps(elements: PolynomialBesselianElements, curve: GeoCurve, name: string, i: -1 | 1, G: number) {
+function validateNoBridgeableEndpointGaps(elements: PolynomialBesselianElements, curve: SolarEclipseGeoCurve, name: string, i: -1 | 1, G: number) {
 	for (let a = 0; a < curve.length; a++) {
 		const branchA = curve[a]
 		const endpointsA = [branchA[0], branchA.at(-1)!] as const
@@ -117,7 +118,7 @@ function validateNoBridgeableEndpointGaps(elements: PolynomialBesselianElements,
 	}
 }
 
-function validateCatalogBranches(elements: PolynomialBesselianElements, curve: GeoCurve, name: string, i: -1 | 1, G: number) {
+function validateCatalogBranches(elements: PolynomialBesselianElements, curve: SolarEclipseGeoCurve, name: string, i: -1 | 1, G: number) {
 	for (let b = 0; b < curve.length; b++) {
 		const branch = curve[b]
 		catalogAssert(branch.length >= 2, `${name}[${b}] is not drawable`)
@@ -135,16 +136,16 @@ function validateCatalogBranches(elements: PolynomialBesselianElements, curve: G
 	validateNoBridgeableEndpointGaps(elements, curve, name, i, G)
 }
 
-function validateNoEndpointRetrace(branch: GeoBranch, name: string) {
+function validateNoEndpointRetrace(branch: SolarEclipseGeoBranch, name: string) {
 	catalogAssert(!endpointRetraces(branch, true), `${name} retraces a loop from its start endpoint`)
 	catalogAssert(!endpointRetraces(branch, false), `${name} retraces a loop from its end endpoint`)
 }
 
-function pushCatalogBranchPoint(out: GeoBranch, point: GeoPoint) {
+function pushCatalogBranchPoint(out: SolarEclipseGeoBranch, point: SolarEclipseGeoPoint) {
 	if (out.length === 0 || sphericalSeparation(out.at(-1)!.x, out.at(-1)!.y, point.x, point.y) > 1e-12) out.push(point)
 }
 
-function appendCatalogBranchPoints(out: GeoBranch, branch: GeoBranch, reverse: boolean) {
+function appendCatalogBranchPoints(out: SolarEclipseGeoBranch, branch: SolarEclipseGeoBranch, reverse: boolean) {
 	if (reverse) {
 		for (let k = branch.length - 1; k >= 0; k--) pushCatalogBranchPoint(out, branch[k])
 	} else {
@@ -152,14 +153,14 @@ function appendCatalogBranchPoints(out: GeoBranch, branch: GeoBranch, reverse: b
 	}
 }
 
-function mergeCatalogBranches(a: GeoBranch, b: GeoBranch, endpointA: 0 | 1, endpointB: 0 | 1) {
-	const out: GeoBranch = []
+function mergeCatalogBranches(a: SolarEclipseGeoBranch, b: SolarEclipseGeoBranch, endpointA: 0 | 1, endpointB: 0 | 1) {
+	const out: SolarEclipseGeoBranch = []
 	appendCatalogBranchPoints(out, a, endpointA === 0)
 	appendCatalogBranchPoints(out, b, endpointB === 1)
 	return out
 }
 
-function validateCatalogRiseSetCurves(elements: PolynomialBesselianElements, curve: GeoCurve) {
+function validateCatalogRiseSetCurves(elements: PolynomialBesselianElements, curve: SolarEclipseGeoCurve) {
 	for (let b = 0; b < curve.length; b++) {
 		const branch = curve[b]
 		catalogAssert(branch.length >= 2, `riseSetCurves[${b}] is not drawable`)
@@ -263,7 +264,7 @@ function validateCatalogGeometry(eclipse: SolarEclipse, elements: PolynomialBess
 	}
 }
 
-function validateOptionalOrder(a: GeoPoint | undefined, b: GeoPoint | undefined, name: string) {
+function validateOptionalOrder(a: SolarEclipseGeoPoint | undefined, b: SolarEclipseGeoPoint | undefined, name: string) {
 	if (a?.jd !== undefined && b?.jd !== undefined) catalogAssert(a.jd <= b.jd, `${name} is out of chronological order`)
 }
 

@@ -1,11 +1,12 @@
 import type { Angle } from './angle'
 import { DAYSEC, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
+import { geoPolylinesToSvgPathData, normalizeLongitude, pointsToSvgPathData, splitPolygonAtAntimeridian, type EclipseGeoBranch, type EclipseGeoCurve, type EclipseGeoPoint, type SunMoonProvider } from './eclipse'
 import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
 import { clamp } from './math'
 import type { LunarEclipse } from './moon'
 import type { CylindricalProjection, ProjectionOptions, RaAxisDirection } from './projection'
-import { geoPolylinesToSvgPathData, normalizeLongitude, pointsToSvgPathData, splitPolygonAtAntimeridian, type GeoBranch, type GeoCurve, type GeoPoint, type SolarEclipseMapSvgProjectionOptions, type SunMoonPosition } from './sun.eclipse.map'
+import type { SolarEclipseMapSvgProjectionOptions } from './sun.eclipse.map'
 import { tt, type Time, toJulianDay } from './time'
 import type { Writable } from './types'
 
@@ -101,20 +102,20 @@ export interface LunarEclipseMapEvent extends LunarEclipseContact {
 	// Effective visibility-horizon altitude (radians) used to draw this contact's curve.
 	readonly horizonAltitude: Angle
 	// Sublunar point: where the Moon is at the local zenith (latitude = declination, longitude = RA - GAST).
-	readonly sublunar: GeoPoint
+	readonly sublunar: EclipseGeoPoint
 }
 
 // Per-contact moon rise/set (horizon) curves. Each curve is the small circle where the observer's topocentric
 // Moon altitude equals the contact's visibility horizon; it is kept unsplit (one closed branch) and
 // projection-agnostic, the antimeridian split happening only at serialization time.
 export interface LunarEclipseContactCurves {
-	readonly P1?: GeoCurve
-	readonly U1?: GeoCurve
-	readonly U2?: GeoCurve
-	readonly MAX?: GeoCurve
-	readonly U3?: GeoCurve
-	readonly U4?: GeoCurve
-	readonly P4?: GeoCurve
+	readonly P1?: EclipseGeoCurve
+	readonly U1?: EclipseGeoCurve
+	readonly U2?: EclipseGeoCurve
+	readonly MAX?: EclipseGeoCurve
+	readonly U3?: EclipseGeoCurve
+	readonly U4?: EclipseGeoCurve
+	readonly P4?: EclipseGeoCurve
 }
 
 // Projection-agnostic lunar eclipse map geometry: the contact events and their horizon curves.
@@ -292,7 +293,7 @@ function horizonCircle(sublunarLat: Angle, sublunarLon: Angle, h0: Angle, distan
 	// zero) cannot derive a non-finite or unsafe array length and throw a RangeError from new Array(...).
 	const bearingStep = maxAngularStep / Math.max(sinRho, 0.05)
 	const count = Math.min(Math.max(24, Math.ceil(TAU / bearingStep)), MAX_HORIZON_CIRCLE_POINTS)
-	const points: GeoBranch = new Array(count + 1)
+	const points: EclipseGeoBranch = new Array(count + 1)
 
 	for (let i = 0; i <= count; i++) {
 		const theta = (i % count) * (TAU / count)
@@ -312,7 +313,7 @@ function horizonCircle(sublunarLat: Angle, sublunarLon: Angle, h0: Angle, distan
 // (from the Moon distance), not a mean, so a near-perigee eclipse marks the upper limb on the right boundary.
 //   baseHorizon: distance-independent horizon altitude (configured horizon minus refraction).
 //   limbVisibility: 'center' marks the Moon center on the horizon; 'upperLimb' marks the upper limb.
-function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: (time: Time) => SunMoonPosition, baseHorizon: Angle, limbVisibility: LunarLimbVisibility): LunarEclipseMapEvent {
+function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: SunMoonProvider, baseHorizon: Angle, limbVisibility: LunarLimbVisibility): LunarEclipseMapEvent {
 	const position = sunMoonPosition(contact.time)
 	const gast = contactGast(contact.time, position.deltaT ?? 0)
 	const rightAscension = position.moon.rightAscension
@@ -337,7 +338,7 @@ function buildMapEvent(contact: LunarEclipseContact, sunMoonPosition: (time: Tim
 //   eclipse: lunar eclipse with its TT contact times.
 //   sunMoonPosition: apparent Sun/Moon position provider at a dynamical time (see computeSunMoonPositionAt).
 //   options: curve sampling and visibility-horizon options.
-export function computeLunarEclipseMapGeometry(eclipse: LunarEclipse, sunMoonPosition: (time: Time) => SunMoonPosition, options: LunarEclipseMapGeometryOptions = {}): LunarEclipseMapGeometry {
+export function computeLunarEclipseMapGeometry(eclipse: LunarEclipse, sunMoonPosition: SunMoonProvider, options: LunarEclipseMapGeometryOptions = {}): LunarEclipseMapGeometry {
 	const maxAngularStep = options.maxAngularStep !== undefined && Number.isFinite(options.maxAngularStep) && options.maxAngularStep > 0 ? options.maxAngularStep : DEFAULT_MAX_ANGULAR_STEP
 	const horizonAltitude = options.horizonAltitude !== undefined && Number.isFinite(options.horizonAltitude) ? options.horizonAltitude : 0
 	const baseHorizon = baseHorizonAltitude(horizonAltitude, options.refraction ?? false)
@@ -357,14 +358,14 @@ export function computeLunarEclipseMapGeometry(eclipse: LunarEclipse, sunMoonPos
 }
 
 // Serializes one optional contact curve into SVG path data, splitting at the antimeridian during projection.
-function curveToSvgPath(curve: GeoCurve | undefined, projection: CylindricalProjection, options: SolarEclipseMapSvgProjectionOptions) {
-	return curve && curve.length > 0 ? geoPolylinesToSvgPathData(curve, projection, options) : ''
+function curveToSvgPath(curve: EclipseGeoCurve | undefined, projection: CylindricalProjection, options: SolarEclipseMapSvgProjectionOptions) {
+	return curve && curve.length > 0 ? geoPolylinesToSvgPathData(curve, projection, options.precision, options.projectionOptions) : ''
 }
 
 // Whether the horizon ring encircles a geographic pole, from its total signed longitude winding: a cap that
 // contains a pole sweeps all longitudes (winding ~ +-TAU), while a cap that contains neither pole (a
 // near-equatorial eclipse, |declination| below the lunar parallax) is a bounded loop (winding ~ 0).
-function ringEnclosesPole(ring: GeoBranch) {
+function ringEnclosesPole(ring: EclipseGeoBranch) {
 	let winding = 0
 
 	for (let i = 1; i < ring.length; i++) {
@@ -379,7 +380,7 @@ function ringEnclosesPole(ring: GeoBranch) {
 
 // Projects a closed geographic ring into pixel polygon pieces, splitting at the antimeridian first so each
 // piece is a self-contained drawable ring.
-function projectRingPieces(ring: GeoBranch, projection: CylindricalProjection, options: ProjectionOptions) {
+function projectRingPieces(ring: EclipseGeoBranch, projection: CylindricalProjection, options: ProjectionOptions) {
 	const pieces: Point[][] = []
 
 	for (const sub of splitPolygonAtAntimeridian(ring)) {
@@ -419,7 +420,7 @@ function projectedWorldRect(projection: CylindricalProjection, options: Projecti
 // once), so the points are sorted into a left-to-right profile and closed along a map pole edge: the enclosed
 // pole for the 'aboveHorizon' cap, the opposite pole for its 'belowHorizon' complement. The result is one
 // simple polygon.
-function polarCapFillPath(ring: GeoBranch, declination: Angle, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number, options: ProjectionOptions) {
+function polarCapFillPath(ring: EclipseGeoBranch, declination: Angle, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number, options: ProjectionOptions) {
 	const capPoleLat = declination >= 0 ? PIOVERTWO : -PIOVERTWO
 	const edgeLat = region === 'aboveHorizon' ? capPoleLat : -capPoleLat
 
@@ -453,7 +454,7 @@ function polarCapFillPath(ring: GeoBranch, declination: Angle, projection: Cylin
 // ring punched out as a hole, which (like the ring's own antimeridian pieces) fills correctly under fill-rule
 // "evenodd": a point inside the ring is covered by the rectangle and a ring piece (even -> not filled), a point
 // outside only by the rectangle (odd -> filled).
-function nonPolarCapFillPath(ring: GeoBranch, projection: CylindricalProjection, region: LunarEclipseFillRegion, capExceedsHemisphere: boolean, precision: number, options: ProjectionOptions) {
+function nonPolarCapFillPath(ring: EclipseGeoBranch, projection: CylindricalProjection, region: LunarEclipseFillRegion, capExceedsHemisphere: boolean, precision: number, options: ProjectionOptions) {
 	const ringPieces = projectRingPieces(ring, projection, options)
 	if (ringPieces.length === 0) return ''
 
@@ -477,15 +478,17 @@ function nonPolarCapFillPath(ring: GeoBranch, projection: CylindricalProjection,
 //   ring: closed geographic ring (first vertex repeated as last), longitudes east-positive in [-PI, PI].
 //   centralMeridian: projection central meridian (radians): the geographic longitude drawn at the map center.
 //   direction: 'east' when longitude increases to the right (the usual map), 'west' otherwise.
-function recenterRing(ring: GeoBranch, centralMeridian: Angle, direction: RaAxisDirection): GeoBranch {
+function recenterRing(ring: EclipseGeoBranch, centralMeridian: Angle, direction: RaAxisDirection): EclipseGeoBranch {
 	if (centralMeridian === 0 && direction === 'east') return ring
 
-	const out: GeoBranch = new Array(ring.length)
+	const out: EclipseGeoBranch = new Array(ring.length)
+
 	for (let i = 0; i < ring.length; i++) {
 		const point = ring[i]
 		const delta = direction === 'west' ? centralMeridian - point.x : point.x - centralMeridian
 		out[i] = { x: normalizeLongitude(delta), y: point.y, jd: point.jd }
 	}
+
 	return out
 }
 
@@ -514,7 +517,7 @@ const POLAR_CAP_FILL_PROJECTION_OPTIONS: ProjectionOptions = { centralMeridian: 
 //   region: which side of the curve to fill.
 //   precision: SVG coordinate precision.
 //   projectionOptions: projection options with the ring's central-meridian-neutral frame already applied.
-function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: GeoCurve | undefined, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number, projectionOptions: ProjectionOptions) {
+function contactFillPath(event: LunarEclipseMapEvent | undefined, curve: EclipseGeoCurve | undefined, projection: CylindricalProjection, region: LunarEclipseFillRegion, precision: number, projectionOptions: ProjectionOptions) {
 	if (!curve || curve.length === 0) return ''
 
 	const ring = curve[0]
