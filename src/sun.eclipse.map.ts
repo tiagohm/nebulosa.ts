@@ -1,19 +1,17 @@
 import { type Angle, normalizeAngle, normalizePI } from './angle'
-import type { PositionAndVelocityOverTime } from './astrometry'
-import { AU_KM, DAYSEC, DEG2RAD, EARTH_RADIUS_KM, LIGHT_TIME_AU, PI, PIOVERTWO, RAD2DEG, SPEED_OF_LIGHT_AU_DAY, TAU, WGS84_FLATTENING } from './constants'
-import type { EquatorialCoordinate } from './coordinate'
-import { deltaTByEspenakMeeus2006 } from './deltat'
-import { eraAb, eraEpj, eraGst06a, eraP2s, eraS2p } from './erfa'
+import { DAYSEC, DEG2RAD, PI, PIOVERTWO, RAD2DEG, TAU } from './constants'
+// oxfmt-ignore
+import { bisectRoot, derivativeEarthLimbOmega, earthLimbCircleIntersections, earthLimbExtremes, earthLimbOmega, earthLimbPoint, earthLimbSignedDistance, F, GEOMETRY_TANGENCY_EPSILON, geoPolylinesToSvgPathData, hourAngleFromLongitude, INV_F, longitudeFromHourAngle, normalizeLongitude, refineRoot, type EclipseGeoBranch, type EclipseGeoCurve, type EclipseGeoPoint, type SunMoonPosition, type SunMoonProvider } from './eclipse'
+import { eraGst06a, eraS2p } from './erfa'
 import { sphericalInterpolate, sphericalSeparation, type Point } from './geometry'
-import { matMulVec } from './mat3'
 import { clamp, type NumberArray } from './math'
-import { bisection, brentMinimize, brentRoot, type RootFindingOptions } from './optimization'
-import type { Projection, ProjectionPolylineOptions } from './projection'
+import { brentMinimize } from './optimization'
+import type { CylindricalProjection, ProjectionOptions } from './projection'
 import { polynomialRegression } from './regression'
 import type { SolarEclipse } from './sun'
-import { precessionNutationMatrix, timeShift, timeSubtract, toJulianDay, tt, type Time } from './time'
+import { timeAtJulianDay, timeShift, timeSubtract, toJulianDay, tt, type Time } from './time'
 import type { Writable } from './types'
-import { vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMut } from './vec3'
+import { vecDot, vecLength, vecMinus, vecNormalizeMut } from './vec3'
 
 // Solar eclipse map geometry engine. The module is layered as:
 //   A. Besselian elements (polynomial fit, instant elements, evaluation).
@@ -32,15 +30,6 @@ import { vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalizeMu
 //   - Delta T in seconds; times as Time or Julian Day; distances in Earth equatorial radii;
 //   - longitude is east-positive in [-PI, PI].
 
-// Earth polar/equatorial radius ratio (1 - flattening).
-export const F = 1 - WGS84_FLATTENING
-// Reciprocal of F, used by the geographic-latitude conversion.
-export const INV_F = 1 / F
-// Squared eccentricity of the Earth ellipsoid used for limb flattening, e^2 = 1 - (b/a)^2.
-export const EARTH_E2 = 1 - F * F
-// Callers building PolynomialBesselianElements from a dynamical-time (TDT) tabulation set deltaTLongitudeCorrection to
-// DELTA_T_LONGITUDE_FACTOR * deltaT; elements with UT-based mu (this module's own) use 0.
-export const DELTA_T_LONGITUDE_FACTOR = 0.00417807 * DEG2RAD
 const DEFAULT_LONGITUDE_STEP = 1 * DEG2RAD
 const DEFAULT_MAX_ANGULAR_STEP = 1 * DEG2RAD
 const DEFAULT_RISE_SET_STEP_SECONDS = 30
@@ -105,13 +94,6 @@ const SOLVER_TIME_TOLERANCE_DAYS = 0.1 / DAYSEC
 // is still far from zero; such a false positive is rejected. Kept looser than the < 1e-3 tangency tolerance
 // the acceptance tests assert, so every genuine solution is preserved.
 const CURVE_RESIDUAL_TOLERANCE = 1e-4
-// Numerical tolerance for tangential circle/ellipse intersections: a squared half-chord slightly below
-// zero is treated as a grazing (single) contact rather than no contact.
-const GEOMETRY_TANGENCY_EPSILON = 1e-14
-// Residual tolerance (squared Earth radii) for a tangential circle/limb-ellipse intersection detected as
-// a near-zero local extremum of g(theta) = distanceSquared - radius^2 that never changes sign. A genuine
-// tangency is a double root; this catches it when it does not land exactly on a scan sample.
-const LIMB_TANGENCY_RESIDUAL = 1e-9
 // Residual tolerance (Earth radii) for a grazing temporal contact: a local extremum of the contact
 // residual whose |value| drops to or below this is taken as a tangential (double) root even without a
 // sign change. Kept tight so a non-central eclipse, whose internal residual stays well above zero, never
@@ -234,16 +216,6 @@ export interface InstantBesselianElements {
 	readonly tanF2: number
 }
 
-// Apparent or geocentric Sun and Moon position sample used to generate Besselian elements.
-export interface SunMoonPosition {
-	// Apparent or geocentric Sun equatorial coordinate.
-	readonly sun: Required<EquatorialCoordinate>
-	// Apparent or geocentric Moon equatorial coordinate.
-	readonly moon: Required<EquatorialCoordinate>
-	// Delta T in seconds for this sample.
-	readonly deltaT?: number
-}
-
 // Local eclipse character along the central line, used to mark the total/annular transition of a hybrid eclipse.
 export type HybridEclipseKind = 'total' | 'annular'
 
@@ -259,59 +231,47 @@ export type RefractionMode = 'none' | 'empirical'
 // Default refraction model: the empirical horizon lift, matching the published refracted references.
 const DEFAULT_REFRACTION_MODE: RefractionMode = 'empirical'
 
-// Geographic point returned by the eclipse geometry engine.
-export interface GeoPoint {
-	// Longitude in radians, east-positive, normalized to [-PI, PI].
-	readonly x: Angle
-	// Latitude in radians, normalized to [-PI/2, PI/2].
-	readonly y: Angle
-	// Optional Julian Day associated with this point.
-	readonly jd?: number
-	// Optional local eclipse character at this point; set on central-line points so a hybrid eclipse's
-	// total and annular stretches can be distinguished where the local umbral cone radius changes sign.
-	readonly kind?: HybridEclipseKind
-}
-
-export type GeoBranch = GeoPoint[]
-export type GeoCurve = GeoBranch[]
+export type SolarEclipseGeoPoint = EclipseGeoPoint<{ kind?: HybridEclipseKind }>
+export type SolarEclipseGeoBranch = EclipseGeoBranch<SolarEclipseGeoPoint>
+export type SolarEclipseGeoCurve = EclipseGeoCurve<SolarEclipseGeoPoint>
 
 // Named eclipse contact and central-path endpoints.
 export interface SolarEclipseContactPoints {
 	// First external penumbral contact (partial eclipse begins on Earth).
-	readonly P1?: GeoPoint
+	readonly P1?: SolarEclipseGeoPoint
 	// First internal penumbral contact (penumbra wholly on Earth).
-	readonly P2?: GeoPoint
+	readonly P2?: SolarEclipseGeoPoint
 	// Last internal penumbral contact (penumbra wholly on Earth).
-	readonly P3?: GeoPoint
+	readonly P3?: SolarEclipseGeoPoint
 	// Last external penumbral contact (partial eclipse ends on Earth).
-	readonly P4?: GeoPoint
+	readonly P4?: SolarEclipseGeoPoint
 	// First external umbral/antumbral cone tangency with the limb. Informational only: it never
 	// controls the umbra-limit polylines.
-	readonly U1?: GeoPoint
+	readonly U1?: SolarEclipseGeoPoint
 	// First internal umbral/antumbral cone tangency with the limb (umbra wholly on Earth). Informational only.
-	readonly U2?: GeoPoint
+	readonly U2?: SolarEclipseGeoPoint
 	// Last internal umbral/antumbral cone tangency with the limb. Informational only.
-	readonly U3?: GeoPoint
+	readonly U3?: SolarEclipseGeoPoint
 	// Last external umbral/antumbral cone tangency with the limb. Informational only.
-	readonly U4?: GeoPoint
+	readonly U4?: SolarEclipseGeoPoint
 	// First central-line contact with Earth (the shadow axis grazes the limb where the central line begins).
-	readonly C1?: GeoPoint
+	readonly C1?: SolarEclipseGeoPoint
 	// Last central-line contact with Earth (the shadow axis grazes the limb where the central line ends).
-	readonly C2?: GeoPoint
+	readonly C2?: SolarEclipseGeoPoint
 	// Greatest eclipse point.
-	readonly Max?: GeoPoint
+	readonly Max?: SolarEclipseGeoPoint
 	// Northern penumbral-limit extreme. Informational only: it never controls the penumbra-limit
 	// polylines. When both penumbral limits reach Earth, N1/N2 are the northern limit's two terminator
 	// cusps ordered chronologically; for a grazing partial, N1 is the earlier cusp of the single limit
 	// (chronological, not poleward — both cusps may share a hemisphere).
-	readonly N1?: GeoPoint
+	readonly N1?: SolarEclipseGeoPoint
 	// Second endpoint of the northern penumbral limit. Absent for a grazing partial. Informational only.
-	readonly N2?: GeoPoint
+	readonly N2?: SolarEclipseGeoPoint
 	// Southern penumbral-limit extreme; for a grazing partial, S1 is the later cusp of the single limit.
 	// S1/S2 otherwise mirror N1/N2 for the southern limit. Informational only.
-	readonly S1?: GeoPoint
+	readonly S1?: SolarEclipseGeoPoint
 	// Second endpoint of the southern penumbral limit. Absent for a grazing partial. Informational only.
-	readonly S2?: GeoPoint
+	readonly S2?: SolarEclipseGeoPoint
 }
 
 // Projection-agnostic solar eclipse map geometry: the physically meaningful points and polylines only.
@@ -321,22 +281,22 @@ export interface SolarEclipseMapGeometry {
 	// Drawable geographic polylines, still unprojected.
 	readonly lines: {
 		// Central line of totality or annularity. Empty for partial and non-central eclipses.
-		readonly centerLine: GeoBranch
+		readonly centerLine: SolarEclipseGeoBranch
 		// Northern totality or annularity limit (G = 1), split at discontinuities and at its latitude
 		// apex. Empty for partial eclipses; may still exist for non-central total/annular eclipses whose
 		// axis misses the Earth (so centerLine is empty) but whose umbra still grazes the limb.
-		readonly umbraNorth: GeoCurve
+		readonly umbraNorth: SolarEclipseGeoCurve
 		// Southern totality or annularity limit (G = 1), split like umbraNorth.
-		readonly umbraSouth: GeoCurve
+		readonly umbraSouth: SolarEclipseGeoCurve
 		// Northern partial eclipse limit (G = 0), as continuity branches. Points within a branch may be
 		// connected; separate branches (e.g. the two arcs meeting at a longitude-fold cusp the solver could
 		// not trace through) must never be joined, so a near-pole fold is drawn as distinct arcs rather than a
 		// straight spike across the map.
-		readonly penumbraNorth: GeoCurve
+		readonly penumbraNorth: SolarEclipseGeoCurve
 		// Southern partial eclipse limit (G = 0), as continuity branches like penumbraNorth.
-		readonly penumbraSouth: GeoCurve
+		readonly penumbraSouth: SolarEclipseGeoCurve
 		// Sunrise and sunset eclipse curves.
-		readonly riseSetCurves: GeoCurve
+		readonly riseSetCurves: SolarEclipseGeoCurve
 	}
 }
 
@@ -373,9 +333,10 @@ export interface SolarEclipseRiseSetCurveOptions {
 }
 
 // Options for projecting eclipse map geometry onto a (cylindrical) SVG.
-export interface SolarEclipseMapSvgProjectionOptions extends ProjectionPolylineOptions {
+export interface SolarEclipseMapSvgProjectionOptions {
 	// Number of decimal places kept in the path coordinates (default 2).
 	readonly precision?: number
+	readonly projectionOptions?: ProjectionOptions | undefined
 }
 
 export interface SolarEclipseMapPoints {
@@ -414,22 +375,27 @@ export interface SolarEclipseMapSvgPaths {
 	readonly points: SolarEclipseMapPoints
 }
 
-function finitePoint(point: GeoPoint | undefined): point is GeoPoint {
+const DEFAULT_SOLAR_ECLIPSE_MAP_SVG_PROJECTION_OPTIONS: SolarEclipseMapSvgProjectionOptions = {
+	precision: 2,
+	projectionOptions: undefined,
+}
+
+function finitePoint(point: EclipseGeoPoint | undefined): point is EclipseGeoPoint {
 	return !!point && Number.isFinite(point.x) && Number.isFinite(point.y) && point.y >= -PIOVERTWO && point.y <= PIOVERTWO && point.x >= -PI && point.x <= PI
 }
 
-function samePoint(a: GeoPoint, b: GeoPoint) {
+function samePoint(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9 && Math.abs((a.jd ?? 0) - (b.jd ?? 0)) < 1e-10
 }
 
 // Geographic-only point equality (ignores jd and uses spherical separation, so +PI and -PI on the
 // antimeridian and points coincident only in space are treated as one). Used when chaining curve branches
 // by spatial continuity, where two branches can meet at the same location carrying slightly different times.
-function sameGeoPoint(a: GeoPoint, b: GeoPoint) {
+function sameGeoPoint(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return angularDistance(a, b) < 1e-9
 }
 
-function pushDistinct(points: GeoBranch, point: GeoPoint | undefined) {
+function pushDistinct(points: EclipseGeoBranch, point: EclipseGeoPoint | undefined) {
 	if (!finitePoint(point)) return
 	if (points.length === 0 || !samePoint(points.at(-1)!, point)) points.push(point)
 }
@@ -473,27 +439,27 @@ function fitCubic(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 	return polynomialRegression(x, y, 3).coefficients
 }
 
-function angularDistance(a: GeoPoint, b: GeoPoint) {
+function angularDistance(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return sphericalSeparation(a.x, a.y, b.x, b.y)
 }
 
-function longitudeGap(a: GeoPoint, b: GeoPoint) {
+function longitudeGap(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	const gap = Math.abs(a.x - b.x)
 	return gap > PI ? TAU - gap : gap
 }
 
-function curveGapNeedsRefinement(a: GeoPoint, b: GeoPoint, maxAngularStep: Angle) {
+function curveGapNeedsRefinement(a: EclipseGeoPoint, b: EclipseGeoPoint, maxAngularStep: Angle) {
 	if (angularDistance(a, b) > maxAngularStep) return true
 	if (Math.max(Math.abs(a.y), Math.abs(b.y)) <= CURVE_POLAR_LONGITUDE_REFINEMENT_LATITUDE) return false
 	return Math.hypot(longitudeGap(a, b), a.y - b.y) > maxAngularStep
 }
 
-function curveBridgeGapNeedsRefinement(a: GeoPoint, b: GeoPoint, maxAngularStep: Angle) {
+function curveBridgeGapNeedsRefinement(a: EclipseGeoPoint, b: EclipseGeoPoint, maxAngularStep: Angle) {
 	if (curveGapNeedsRefinement(a, b, maxAngularStep)) return true
 	return Math.max(Math.abs(a.y), Math.abs(b.y)) > CURVE_POLAR_LONGITUDE_REFINEMENT_LATITUDE && Math.hypot(longitudeGap(a, b), a.y - b.y) > maxAngularStep * 0.25
 }
 
-function interpolateGreatCirclePoint(a: GeoPoint, b: GeoPoint, fraction: number): GeoPoint {
+function interpolateGreatCirclePoint(a: EclipseGeoPoint, b: EclipseGeoPoint, fraction: number): EclipseGeoPoint {
 	const [longitude, latitude] = sphericalInterpolate(a.x, a.y, b.x, b.y, fraction)
 
 	return {
@@ -507,12 +473,8 @@ function validStep(value: number | undefined, fallback: number) {
 	return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback
 }
 
-function timeAtJulianDay(reference: Time, julianDay: number) {
-	return timeShift(reference, julianDay - reference.day - reference.fraction)
-}
-
 // Interpolates between two geographic points along the great-circle arc.
-export function intermediateGreatCircle(a: GeoPoint, b: GeoPoint, fraction: number) {
+export function intermediateGreatCircle(a: EclipseGeoPoint, b: EclipseGeoPoint, fraction: number) {
 	return interpolateGreatCirclePoint(a, b, clamp(fraction, 0, 1))
 }
 
@@ -617,7 +579,7 @@ const PBE_STEP_DAYS = 1 / 24
 const PBE_OFFSETS = [-3, -1.5, 0, 1.5, 3] as const
 
 // Computes approximate polynomial Besselian elements from caller-provided Sun and Moon samples.
-export function computePolynomialBesselianElements(maximumTime: Time, getSunMoonPosition: (time: Time) => SunMoonPosition): PolynomialBesselianElements {
+export function computePolynomialBesselianElements(maximumTime: Time, sunMoonPosition: SunMoonProvider): PolynomialBesselianElements {
 	const maximumJulianDay = toJulianDay(maximumTime)
 	const julianDay0 = Math.round(maximumJulianDay * 24) / 24
 	const time0 = timeAtJulianDay(maximumTime, julianDay0)
@@ -636,7 +598,7 @@ export function computePolynomialBesselianElements(maximumTime: Time, getSunMoon
 	for (let i = 0; i < n; i++) {
 		const offset = PBE_OFFSETS[i]
 		const sampleTime = timeShift(time0, offset * PBE_STEP_DAYS)
-		const position = getSunMoonPosition(sampleTime)
+		const position = sunMoonPosition(sampleTime)
 		const instant = instantBesselianFromSunMoon(sampleTime, position)
 		x[i] = instant.x
 		y[i] = instant.y
@@ -758,271 +720,13 @@ function besselianShadowProjection(position: SunMoonPosition) {
 
 // B. PROJECTION AND EARTH GEOMETRY
 
-// Computes the flattening scale for the Earth-limb ellipse in the fundamental plane:
-// the limb is x^2 + (omega*y)^2 = 1 with omega = 1 / sqrt(1 - e^2 cos^2 d).
-export function earthLimbOmega(d: Angle) {
-	const cosD = Math.cos(d)
-	return 1 / Math.sqrt(1 - EARTH_E2 * cosD * cosD)
-}
-
-// Derivative d(omega)/d(d) of the limb flattening scale, used to carry the d-dependence of the limb
-// into the central-line endpoint solver: omega = s^(-1/2), s = 1 - e^2 cos^2 d,
-// so d(omega)/dd = -e^2 cos d sin d * s^(-3/2).
-export function derivativeEarthLimbOmega(d: Angle) {
-	const cosD = Math.cos(d)
-	const sinD = Math.sin(d)
-	const s = 1 - EARTH_E2 * cosD * cosD
-	return (-EARTH_E2 * cosD * sinD) / (s * Math.sqrt(s))
-}
-
-// Number of uniform theta samples used to bracket extrema and crossings on the Earth-limb ellipse. The
-// limb is smooth and nearly circular (flattening ~1/298), so a 2 deg scan reliably brackets every
-// extremum/intersection basin before local refinement (ternary search for extrema, bisection for
-// crossings), which then converges to full precision independently of this resolution.
-const LIMB_SCAN_STEPS = 180
-
-// Returns the point on the Earth-limb ellipse x^2 + (omega y)^2 = 1 at parameter theta.
-export function earthLimbPoint(theta: number, omega: number) {
-	return [Math.cos(theta), Math.sin(theta) / omega] as const
-}
-
-function earthLimbDistanceSquared(theta: number, cx: number, cy: number, omega: number) {
-	const dx = Math.cos(theta) - cx
-	const dy = Math.sin(theta) / omega - cy
-	return dx * dx + dy * dy
-}
-
-// Precomputed cos/sin of the uniform limb scan grid (theta = TAU*k/LIMB_SCAN_STEPS), since those angles are
-// always the same; the continuous refinements still call Math.cos/sin on off-grid theta.
-const LIMB_SCAN_COS = new Float64Array(LIMB_SCAN_STEPS)
-const LIMB_SCAN_SIN = new Float64Array(LIMB_SCAN_STEPS)
-
-for (let k = 0; k < LIMB_SCAN_STEPS; k++) {
-	const theta = (TAU * k) / LIMB_SCAN_STEPS
-	LIMB_SCAN_COS[k] = Math.cos(theta)
-	LIMB_SCAN_SIN[k] = Math.sin(theta)
-}
-
-// Reused scan buffer for earthLimbCircleIntersections, avoiding a Float64Array allocation per call. Safe as
-// a single module workspace: the function is synchronous and never re-enters itself.
-const LIMB_SCAN_VALUES = new Float64Array(LIMB_SCAN_STEPS)
-
-// Squared distance to (cx, cy) from a limb-scan grid point given its precomputed cos/sin.
-function limbDistanceSquaredFromCosSin(cos: number, sin: number, cx: number, cy: number, omega: number) {
-	const dx = cos - cx
-	const dy = sin / omega - cy
-	return dx * dx + dy * dy
-}
-
-// Ternary search of a unimodal limb extremum within a one-step bracket. Robust fallback for refineLimbExtreme.
-function ternaryLimbExtreme(thetaGuess: number, halfWidth: number, cx: number, cy: number, omega: number, minimize: boolean) {
-	let lo = thetaGuess - halfWidth
-	let hi = thetaGuess + halfWidth
-
-	for (let i = 0; i < 60 && hi - lo > 1e-12; i++) {
-		const m1 = lo + (hi - lo) / 3
-		const m2 = hi - (hi - lo) / 3
-		const f1 = earthLimbDistanceSquared(m1, cx, cy, omega)
-		const f2 = earthLimbDistanceSquared(m2, cx, cy, omega)
-		if (minimize ? f1 < f2 : f1 > f2) hi = m2
-		else lo = m1
-	}
-
-	return (lo + hi) * 0.5
-}
-
-// Refines a limb extremum (minimum or maximum of the squared distance to (cx, cy)) from a scan guess.
-// Newton on the first derivative of D^2(theta) converges in a handful of evaluations (the limb is nearly
-// circular, so the basin is convex), replacing the 60-step ternary search; it falls back to ternary
-// whenever the curvature has the wrong sign or a step would leave the one-step bracket.
-function refineLimbExtreme(thetaGuess: number, halfWidth: number, cx: number, cy: number, omega: number, minimize: boolean) {
-	const lo = thetaGuess - halfWidth
-	const hi = thetaGuess + halfWidth
-	let theta = thetaGuess
-
-	for (let i = 0; i < 12; i++) {
-		const cos = Math.cos(theta)
-		const sin = Math.sin(theta)
-		const dx = cos - cx
-		const dy = sin / omega - cy
-		// First and second derivatives of D^2(theta) = dx^2 + dy^2.
-		const first = 2 * (dx * -sin + (dy * cos) / omega)
-		const second = 2 * (sin * sin - dx * cos + (cos * cos) / (omega * omega) - (dy * sin) / omega)
-
-		// A minimum needs positive curvature, a maximum negative; otherwise Newton would walk the wrong way.
-		if (!Number.isFinite(second) || second === 0 || (minimize ? second < 0 : second > 0)) break
-
-		const step = first / second
-		theta -= step
-
-		if (!Number.isFinite(theta) || theta < lo || theta > hi) break
-		if (Math.abs(step) < 1e-13) return theta
-	}
-
-	return ternaryLimbExtreme(thetaGuess, halfWidth, cx, cy, omega, minimize)
-}
-
-// Nearest and farthest points of the Earth-limb ellipse to a fundamental-plane point, with the signed
-// inside/outside flag. This replaces the unit-circle distance used previously for
-// contacts and rise/set, so the oblique projection of the ellipsoid is honored exactly.
-export interface EarthLimbExtremes {
-	// Distance to the nearest limb point, in Earth equatorial radii.
-	readonly minDistance: number
-	// Distance to the farthest limb point, in Earth equatorial radii.
-	readonly maxDistance: number
-	// theta of the nearest limb point, in radians.
-	readonly nearestTheta: number
-	// theta of the farthest limb point, in radians.
-	readonly farthestTheta: number
-	// Whether (cx, cy) lies inside the limb ellipse.
-	readonly inside: boolean
-}
-
-export function earthLimbExtremes(cx: number, cy: number, omega: number): EarthLimbExtremes {
-	const step = TAU / LIMB_SCAN_STEPS
-	let minTheta = 0
-	let maxTheta = 0
-	let minD2 = Infinity
-	let maxD2 = -Infinity
-
-	for (let k = 0; k < LIMB_SCAN_STEPS; k++) {
-		const d2 = limbDistanceSquaredFromCosSin(LIMB_SCAN_COS[k], LIMB_SCAN_SIN[k], cx, cy, omega)
-		if (d2 < minD2) {
-			minD2 = d2
-			minTheta = k * step
-		}
-		if (d2 > maxD2) {
-			maxD2 = d2
-			maxTheta = k * step
-		}
-	}
-
-	const nearestTheta = refineLimbExtreme(minTheta, step, cx, cy, omega, true)
-	const farthestTheta = refineLimbExtreme(maxTheta, step, cx, cy, omega, false)
-	const omegaCy = omega * cy
-
-	return {
-		minDistance: Math.sqrt(earthLimbDistanceSquared(nearestTheta, cx, cy, omega)),
-		maxDistance: Math.sqrt(earthLimbDistanceSquared(farthestTheta, cx, cy, omega)),
-		nearestTheta,
-		farthestTheta,
-		inside: cx * cx + omegaCy * omegaCy < 1,
-	}
-}
-
-// Signed distance from a fundamental-plane point to the Earth-limb ellipse boundary: negative inside,
-// positive outside. The classical contact equations on the unit circle (hypot - 1 -+ r) become
-// signedDistance -+ r on the ellipse.
-function earthLimbSignedDistance(cx: number, cy: number, omega: number) {
-	const extremes = earthLimbExtremes(cx, cy, omega)
-	return extremes.inside ? -extremes.minDistance : extremes.minDistance
-}
-
-// Collapses thetas that are within tolerance of each other (also across the 0/TAU wrap) into a single
-// representative, keeping the input order. Used to drop duplicate circle/limb intersection angles that a
-// sign-change and a tangency pass can both report for the same root.
-function deduplicateAngularRoots(thetas: readonly number[], tolerance: number) {
-	const out: number[] = []
-
-	for (const theta of thetas) {
-		const wrapped = normalizeAngle(theta)
-		let duplicate = false
-
-		for (const kept of out) {
-			const delta = Math.abs(normalizePI(wrapped - kept))
-			if (delta <= tolerance) {
-				duplicate = true
-				break
-			}
-		}
-
-		if (!duplicate) out.push(wrapped)
-	}
-
-	return out
-}
-
-function EarthLimbCircleIntersectionPointComparator(a: readonly [number, number], b: readonly [number, number]) {
-	return b[1] - a[1]
-}
-
-// Intersections of a circle of the given radius centered at (cx, cy) with the Earth-limb ellipse,
-// returned as limb points (cos theta, sin theta / omega) ordered by descending y. The circle and the
-// ellipse can meet in up to four points, so g(theta) = earthLimbDistanceSquared(theta) - radius^2 is
-// scanned uniformly and every root is captured: exact zeros and sign changes (the transversal crossings),
-// plus near-zero local extrema that never change sign (tangencies, which are double roots and would
-// otherwise be missed unless they landed exactly on a sample). This is the ellipse counterpart of
-// findCircleIntersections for rise/set.
-export function earthLimbCircleIntersections(cx: number, cy: number, omega: number, radius: number) {
-	if (!Number.isFinite(radius) || radius < 0 || !Number.isFinite(cx) || !Number.isFinite(cy)) return []
-
-	const r2 = radius * radius
-	const g = (theta: number) => earthLimbDistanceSquared(theta, cx, cy, omega) - r2
-	const step = TAU / LIMB_SCAN_STEPS
-
-	// g is TAU-periodic, so sample [0, TAU) once (reusing the scan buffer) and read neighbors modularly.
-	const values = LIMB_SCAN_VALUES
-	for (let k = 0; k < LIMB_SCAN_STEPS; k++) values[k] = limbDistanceSquaredFromCosSin(LIMB_SCAN_COS[k], LIMB_SCAN_SIN[k], cx, cy, omega) - r2
-
-	const thetas: number[] = []
-
-	// Transversal crossings: exact zeros on a sample and sign changes between neighbors.
-	for (let k = 0; k < LIMB_SCAN_STEPS; k++) {
-		const value = values[k]
-		const next = values[(k + 1) % LIMB_SCAN_STEPS]
-
-		if (Math.abs(value) <= GEOMETRY_TANGENCY_EPSILON) thetas.push(k * step)
-		else if (value * next < 0) {
-			const root = bisectRoot(g, k * step, (k + 1) * step)
-			if (root !== undefined) thetas.push(root)
-		}
-	}
-
-	// Tangencies: a strict local minimum or maximum of g whose refined extremum value is within tolerance
-	// of zero is a grazing (double) contact that the sign-change pass cannot see.
-	for (let k = 0; k < LIMB_SCAN_STEPS; k++) {
-		const previous = values[(k - 1 + LIMB_SCAN_STEPS) % LIMB_SCAN_STEPS]
-		const value = values[k]
-		const next = values[(k + 1) % LIMB_SCAN_STEPS]
-		const isMinimum = value < previous && value < next
-		const isMaximum = value > previous && value > next
-
-		if (isMinimum || isMaximum) {
-			const extreme = refineLimbExtreme(k * step, step, cx, cy, omega, isMinimum)
-			if (Math.abs(g(extreme)) <= LIMB_TANGENCY_RESIDUAL) thetas.push(extreme)
-		}
-	}
-
-	const roots = deduplicateAngularRoots(thetas, 1e-7)
-	const points: (readonly [number, number])[] = []
-	for (const theta of roots) points.push(earthLimbPoint(theta, omega))
-	points.sort(EarthLimbCircleIntersectionPointComparator)
-	return points
-}
-
-// Single source of truth for the hour-angle -> longitude conversion. The project uses east-positive
-// longitude, so lambda = H - mu + correction, where the correction is 0.00417807 deg per second of
-// Delta T in radians. The sign is pinned by tests against NASA eclipse path tables and the subsolar point.
-export function longitudeFromHourAngle(hourAngle: Angle, mu: Angle, correction: Angle) {
-	return normalizeLongitude(hourAngle - mu + correction)
-}
-
-export function normalizeLongitude(longitude: Angle) {
-	return longitude === PI || longitude === -PI ? longitude : normalizePI(longitude)
-}
-
-// Inverse of longitudeFromHourAngle: local hour angle of the shadow axis at an east-positive longitude.
-export function hourAngleFromLongitude(longitude: Angle, mu: Angle, correction: Angle) {
-	return longitude + mu - correction
-}
-
 // Projects one fundamental-plane point on or inside the Earth limb to geographic longitude and latitude.
 // This is the single source of truth for the fundamental plane -> geographic conversion: every contact,
 // curve and rise/set point goes through it. A point outside the limb returns undefined (only a
 // numerically grazing point, within GEOMETRY_TANGENCY_EPSILON, is snapped to the limb): callers that
 // need a representative on-Earth point for an outside input must request it explicitly via
 // projectClosestEarthLimbPoint, instead of relying on a hidden clamp.
-export function projectFundamentalPoint(be: BesselianSample, x: number, y: number): GeoPoint | undefined {
+export function projectFundamentalPoint(be: BesselianSample, x: number, y: number): EclipseGeoPoint | undefined {
 	if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined
 
 	const sinD = Math.sin(be.d)
@@ -1062,25 +766,6 @@ export function projectClosestEarthLimbPoint(be: BesselianSample, x: number, y: 
 }
 
 // C. CONTACTS AND CENTRAL ENDPOINTS
-
-const BISECT_ROOT_OPTIONS: RootFindingOptions = { tolerance: CONTACT_TOLERANCE_DAYS }
-
-function bisectRoot(f: (x: number) => number, min: number, max: number) {
-	try {
-		return bisection(f, min, max, BISECT_ROOT_OPTIONS).root
-	} catch {
-		return undefined
-	}
-}
-
-// Refines a bracketed root, preferring Brent (superlinear) and falling back to bisection if Brent rejects the bracket.
-function refineRoot(f: (x: number) => number, min: number, max: number) {
-	try {
-		return brentRoot(f, min, max, BISECT_ROOT_OPTIONS).root
-	} catch {
-		return bisectRoot(f, min, max)
-	}
-}
 
 function NumberComparator(a: number, b: number) {
 	return a - b
@@ -1593,7 +1278,7 @@ export function findEclipseCurvePoint(pbe: PolynomialBesselianElements, longitud
 export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, options: SolarEclipseCurveOptions = {}) {
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const refractionMode = options.refractionMode ?? DEFAULT_REFRACTION_MODE
-	const points: GeoBranch = []
+	const points: EclipseGeoBranch = []
 	for (const branch of findCurveBranches(pbe, i, G, options)) for (const point of branch) points.push(point)
 	return mendCurveCusps(orderCurvePoints(deduplicatePoints(points)), pbe, i, G, maxAngularStep, refractionMode)
 }
@@ -1603,10 +1288,10 @@ export function findCurvePoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 // Julian Day; consecutive points are physically adjacent and a wide gap between them is either a re-solvable
 // cusp (continuous) or a genuine discontinuity (not re-solvable). bridgeCurveGap inserts solved points only
 // for the former, leaving real discontinuities as gaps.
-function mendCurveCusps(points: GeoBranch, pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode) {
+function mendCurveCusps(points: EclipseGeoBranch, pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode) {
 	if (points.length < 2) return points
 
-	const out: GeoBranch = [points[0]]
+	const out: EclipseGeoBranch = [points[0]]
 
 	for (let k = 1; k < points.length; k++) {
 		bridgeCurveGap(out, pbe, points[k - 1], points[k], i, G, maxAngularStep, refractionMode, 0)
@@ -1626,7 +1311,7 @@ function mendCurveCusps(points: GeoBranch, pbe: PolynomialBesselianElements, i: 
 // intermediate longitude, so the midpoint is sought from several latitude seeds (the interpolated latitude,
 // then each endpoint) and the first one that satisfies betweenness is kept, preventing a seed from
 // snapping onto the other arc and dropping the bridge.
-function bridgeCurveGap(out: GeoBranch, pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode, depth: number) {
+function bridgeCurveGap(out: EclipseGeoBranch, pbe: PolynomialBesselianElements, a: EclipseGeoPoint, b: EclipseGeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode, depth: number) {
 	if (depth >= SEGMENT_REFINEMENT_MAX_DEPTH || !curveBridgeGapNeedsRefinement(a, b, maxAngularStep)) return
 
 	const mid = solveCurveMidpointBetween(pbe, a, b, i, G, refractionMode)
@@ -1649,7 +1334,7 @@ function bridgeCurveGap(out: GeoBranch, pbe: PolynomialBesselianElements, a: Geo
 // a bridgeable cusp.
 const MIDPOINT_BALANCE = 0.75
 
-function solveCurveMidpointBetween(pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode) {
+function solveCurveMidpointBetween(pbe: PolynomialBesselianElements, a: EclipseGeoPoint, b: EclipseGeoPoint, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode) {
 	const ab = angularDistance(a, b)
 	const limit = MIDPOINT_BALANCE * ab
 	const intermediate = interpolateGreatCirclePoint(a, b, 0.5)
@@ -1694,7 +1379,7 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const refractionMode = options.refractionMode ?? DEFAULT_REFRACTION_MODE
 	const maxDrawableGap = Math.max(BRANCH_MAX_DRAWABLE_GAP, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
-	const branches: GeoCurve = []
+	const branches: EclipseGeoCurve = []
 
 	// The continuation scan traces smooth arcs; the fixed-seed scan recovers arcs it orphans at near-polar
 	// folds. Both feed the same cleanup/dedup/reconnect pipeline, which collapses the arcs they share.
@@ -1734,7 +1419,7 @@ function findCurveBranchPoints(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, 
 // (within CURVE_SPATIAL_EPSILON) with a non-adjacent vertex of the branch and is reached by a step larger
 // than the fold threshold; trimming it keeps the branch a simple open arc without moving any retained point.
 // foldStep: minimum step (radians) that flags an endpoint connection as an anomalous fold-back jump.
-function trimFoldBackEndpoints(branch: GeoBranch, foldStep: Angle) {
+function trimFoldBackEndpoints(branch: EclipseGeoBranch, foldStep: Angle) {
 	let start = 0
 	let end = branch.length - 1
 
@@ -1746,8 +1431,8 @@ function trimFoldBackEndpoints(branch: GeoBranch, foldStep: Angle) {
 
 // Applies branch-level cleanup that removes drawable solver artifacts without changing valid samples.
 // foldStep is the minimum angular jump treated as a fold; closeTolerance joins near-coincident neighbours.
-function trimCurveBranchArtifacts(branches: GeoCurve, foldStep: Angle, closeTolerance: Angle) {
-	const out: GeoCurve = []
+function trimCurveBranchArtifacts(branches: EclipseGeoCurve, foldStep: Angle, closeTolerance: Angle) {
+	const out: EclipseGeoCurve = []
 
 	for (const branch of branches) {
 		const trimmed = trimInteriorFoldBackSpikes(trimFoldBackEndpoints(branch, foldStep), foldStep, closeTolerance)
@@ -1761,12 +1446,12 @@ function trimCurveBranchArtifacts(branches: GeoCurve, foldStep: Angle, closeTole
 // nearly coincident but B several angular steps away is not a sampled cusp; it is a transient jump to the
 // neighbouring solution that would draw a short spike and then return to the original arc.
 // foldStep: minimum distance from the spike vertex to both neighbours; closeTolerance: A/C coincidence.
-function trimInteriorFoldBackSpikes(branch: GeoBranch, foldStep: Angle, closeTolerance: Angle) {
+function trimInteriorFoldBackSpikes(branch: EclipseGeoBranch, foldStep: Angle, closeTolerance: Angle) {
 	let current = branch
 
 	while (current.length >= 3) {
 		let removed = false
-		const out: GeoBranch = [current[0]]
+		const out: EclipseGeoBranch = [current[0]]
 
 		for (let k = 1; k < current.length - 1; k++) {
 			const previous = out.at(-1)!
@@ -1790,7 +1475,7 @@ function trimInteriorFoldBackSpikes(branch: GeoBranch, foldStep: Angle, closeTol
 }
 
 // Whether point coincides geographically (within CURVE_SPATIAL_EPSILON) with any branch vertex in [from, to].
-function coincidesWithRange(branch: GeoBranch, point: GeoPoint, from: number, to: number) {
+function coincidesWithRange(branch: EclipseGeoBranch, point: EclipseGeoPoint, from: number, to: number) {
 	for (let k = from; k <= to; k++) if (angularDistance(branch[k], point) <= CURVE_SPATIAL_EPSILON) return true
 	return false
 }
@@ -1799,20 +1484,20 @@ function coincidesWithRange(branch: GeoBranch, point: GeoPoint, from: number, to
 // Where two seed tracks meet they can deposit the same vertex with slightly different times; collapsing the
 // duplicate keeps the branch a clean polyline without moving any point. Never sorts and never reverses, so
 // the solver's continuity order is preserved.
-function cleanCurveBranch(branch: GeoBranch) {
-	const out: GeoBranch = []
+function cleanCurveBranch(branch: EclipseGeoBranch) {
+	const out: EclipseGeoBranch = []
 	for (const point of branch) pushCleanCurvePoint(out, point)
 	return out
 }
 
-const EMPTY_GEO_POINTS: GeoBranch = []
+const EMPTY_GEO_POINTS: EclipseGeoBranch = []
 const BRANCH_ENDPOINTS = [0, 1] as const
 
-function pushCleanCurvePoint(out: GeoBranch, point: GeoPoint) {
+function pushCleanCurvePoint(out: EclipseGeoBranch, point: EclipseGeoPoint) {
 	if (out.length === 0 || !sameGeoPoint(out.at(-1)!, point)) out.push(point)
 }
 
-function appendBranchPoints(out: GeoBranch, branch: GeoBranch, reverse: boolean) {
+function appendBranchPoints(out: EclipseGeoBranch, branch: EclipseGeoBranch, reverse: boolean) {
 	if (reverse) {
 		for (let k = branch.length - 1; k >= 0; k--) pushCleanCurvePoint(out, branch[k])
 	} else {
@@ -1820,8 +1505,8 @@ function appendBranchPoints(out: GeoBranch, branch: GeoBranch, reverse: boolean)
 	}
 }
 
-function mergeBranchesAtCusp(a: GeoBranch, b: GeoBranch, bridge: GeoBranch, endpointA: 0 | 1, endpointB: 0 | 1) {
-	const out: GeoBranch = []
+function mergeBranchesAtCusp(a: EclipseGeoBranch, b: EclipseGeoBranch, bridge: EclipseGeoBranch, endpointA: 0 | 1, endpointB: 0 | 1) {
+	const out: EclipseGeoBranch = []
 	appendBranchPoints(out, a, endpointA === 0)
 	for (const point of bridge) pushCleanCurvePoint(out, point)
 	appendBranchPoints(out, b, endpointB === 1)
@@ -1836,7 +1521,7 @@ function mergeBranchesAtCusp(a: GeoBranch, b: GeoBranch, bridge: GeoBranch, endp
 // bridge only up to where it first reaches b's near endpoint (the genuine fold arc) and append b forward from
 // there, giving branchA -> fold -> b as one arc. Returns undefined when the bridge never reaches that
 // endpoint, i.e. the overlap is a real retrace and not a fold. e.g. the 6174-10-22 annular umbra-north limit.
-function mergeFoldThroughBranchEndpoint(branchA: GeoBranch, branchB: GeoBranch, bridge: GeoBranch, endpointA: 0 | 1, endpointB: 0 | 1, tolerance: Angle) {
+function mergeFoldThroughBranchEndpoint(branchA: EclipseGeoBranch, branchB: EclipseGeoBranch, bridge: EclipseGeoBranch, endpointA: 0 | 1, endpointB: 0 | 1, tolerance: Angle) {
 	if (bridge.length === 0) return undefined
 
 	// b's near (re-anchor) endpoint is the one opposite the joint endB.
@@ -1876,16 +1561,16 @@ const CUSP_RECONNECT_OVERLAP_ARC = 10 * DEG2RAD
 const CUSP_RECONNECT_POLE_LATITUDE = 85 * DEG2RAD
 const CUSP_RECONNECT_POLAR_LONGITUDE_LIMIT = 30 * DEG2RAD
 
-function pointInReconnectPolarCap(point: GeoPoint) {
+function pointInReconnectPolarCap(point: EclipseGeoPoint) {
 	return Math.abs(point.y) > CUSP_RECONNECT_POLE_LATITUDE
 }
 
-function bridgeEntersReconnectPolarCap(bridge: GeoBranch) {
+function bridgeEntersReconnectPolarCap(bridge: EclipseGeoBranch) {
 	for (const point of bridge) if (pointInReconnectPolarCap(point)) return true
 	return false
 }
 
-function bridgeHasLargePolarLongitudeStep(a: GeoPoint, b: GeoPoint, bridge: GeoBranch) {
+function bridgeHasLargePolarLongitudeStep(a: EclipseGeoPoint, b: EclipseGeoPoint, bridge: EclipseGeoBranch) {
 	let previous = a
 
 	for (const point of bridge) {
@@ -1896,7 +1581,7 @@ function bridgeHasLargePolarLongitudeStep(a: GeoPoint, b: GeoPoint, bridge: GeoB
 	return Math.min(Math.abs(previous.y), Math.abs(b.y)) > CUSP_RECONNECT_POLE_LATITUDE && longitudeGap(previous, b) > CUSP_RECONNECT_POLAR_LONGITUDE_LIMIT
 }
 
-function canReconnectPolarCusp(a: GeoPoint, b: GeoPoint, bridge: GeoBranch, gap: Angle, maxDrawableGap: Angle) {
+function canReconnectPolarCusp(a: EclipseGeoPoint, b: EclipseGeoPoint, bridge: EclipseGeoBranch, gap: Angle, maxDrawableGap: Angle) {
 	if (!pointInReconnectPolarCap(a) && !pointInReconnectPolarCap(b) && !bridgeEntersReconnectPolarCap(bridge)) return true
 	return (gap <= maxDrawableGap || bridge.length > 0) && !bridgeHasLargePolarLongitudeStep(a, b, bridge)
 }
@@ -1906,8 +1591,8 @@ function canReconnectPolarCusp(a: GeoPoint, b: GeoPoint, bridge: GeoBranch, gap:
 // a vertical-tangent fold cusp leaves one irreducible step near the tip, so continuityGap is the looser
 // drawable-gap threshold; a true discontinuity inserts no points and leaves the full (larger) gap, so it is
 // still rejected.
-function solveContinuousBridge(pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, continuityGap: Angle, refractionMode: RefractionMode) {
-	const bridge: GeoBranch = []
+function solveContinuousBridge(pbe: PolynomialBesselianElements, a: EclipseGeoPoint, b: EclipseGeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, continuityGap: Angle, refractionMode: RefractionMode) {
+	const bridge: EclipseGeoBranch = []
 	bridgeCurveGap(bridge, pbe, a, b, i, G, maxAngularStep, refractionMode, 0)
 
 	let previous = a
@@ -1921,7 +1606,7 @@ function solveContinuousBridge(pbe: PolynomialBesselianElements, a: GeoPoint, b:
 
 // Whether a branch doubles back over itself: two points close in space but far apart in arc length. Near the
 // degenerate poles a re-solved bridge can fold an arc back onto an existing one; such a merge is rejected.
-function branchRetraces(branch: GeoBranch, tolerance: Angle, minArcSeparation: Angle) {
+function branchRetraces(branch: EclipseGeoBranch, tolerance: Angle, minArcSeparation: Angle) {
 	const arc = new Float64Array(branch.length)
 	for (let k = 1; k < branch.length; k++) arc[k] = arc[k - 1] + angularDistance(branch[k - 1], branch[k])
 
@@ -1941,8 +1626,8 @@ function branchRetraces(branch: GeoBranch, tolerance: Angle, minArcSeparation: A
 // exposes the missing cusp endpoint so the final reconnection can bridge the adjacent branch without
 // drawing a visible gap.
 // tolerance: endpoint coincidence threshold in radians; minLoopArc: minimum along-branch loop length.
-function trimRetracedBranchEnds(branches: GeoCurve, tolerance: Angle, minLoopArc: Angle) {
-	const out: GeoCurve = []
+function trimRetracedBranchEnds(branches: EclipseGeoCurve, tolerance: Angle, minLoopArc: Angle) {
+	const out: EclipseGeoCurve = []
 
 	for (const branch of branches) {
 		// Start-trim and end-trim each gate on the OTHER endpoint leaving the trimmed loop, so a branch that
@@ -1966,7 +1651,7 @@ function trimRetracedBranchEnds(branches: GeoCurve, tolerance: Angle, minLoopArc
 
 // Trims a loop at the start of a branch when a later point revisits the start after a meaningful arc and
 // the remaining tail leaves that endpoint. The returned array aliases the original points.
-function trimRetracedBranchStart(branch: GeoBranch, tolerance: Angle, minLoopArc: Angle) {
+function trimRetracedBranchStart(branch: EclipseGeoBranch, tolerance: Angle, minLoopArc: Angle) {
 	if (branch.length < 4) return branch
 
 	const start = branch[0]
@@ -1991,7 +1676,7 @@ function trimRetracedBranchStart(branch: GeoBranch, tolerance: Angle, minLoopArc
 
 // Trims a loop at the end of a branch using the same criterion as trimRetracedBranchStart, scanning the
 // branch in reverse. The returned array aliases the original points.
-function trimRetracedBranchEnd(branch: GeoBranch, tolerance: Angle, minLoopArc: Angle) {
+function trimRetracedBranchEnd(branch: EclipseGeoBranch, tolerance: Angle, minLoopArc: Angle) {
 	if (branch.length < 4) return branch
 
 	const end = branch.at(-1)!
@@ -2022,15 +1707,15 @@ function trimRetracedBranchEnd(branch: GeoBranch, tolerance: Angle, minLoopArc: 
 // succeeds) and the merged branch does not retrace itself: a true discontinuity has no connecting curve, and
 // a pole-degenerate bridge folds back, so both are left as separate branches and no spike is ever drawn.
 // Pairs that already touch are skipped so nothing is retraced.
-function reconnectBranchCusps(branches: GeoCurve, pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, maxDrawableGap: Angle, refractionMode: RefractionMode, allowTouchingMerge = true) {
-	const result: GeoCurve = []
+function reconnectBranchCusps(branches: EclipseGeoCurve, pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, maxDrawableGap: Angle, refractionMode: RefractionMode, allowTouchingMerge = true) {
+	const result: EclipseGeoCurve = []
 	for (const branch of branches) result.push(branch.slice())
 
 	while (true) {
 		let bestGap = Infinity
 		let bestA = -1
 		let bestB = -1
-		let bestMerged: GeoBranch | undefined
+		let bestMerged: EclipseGeoBranch | undefined
 
 		for (let a = 0; a < result.length; a++) {
 			const branchA = result[a]
@@ -2093,13 +1778,13 @@ function reconnectBranchCusps(branches: GeoCurve, pbe: PolynomialBesselianElemen
 const BRANCH_CONTAINMENT_STEPS = 1.5
 
 // Whether a point lies on a branch, i.e. within tolerance of any of its samples.
-function pointOnBranch(point: GeoPoint, branch: GeoBranch, tolerance: Angle) {
+function pointOnBranch(point: EclipseGeoPoint, branch: EclipseGeoBranch, tolerance: Angle) {
 	for (const sample of branch) if (angularDistance(point, sample) <= tolerance) return true
 	return false
 }
 
 // Whether a point is covered by any known branch within the same angular tolerance pointOnBranch uses.
-function pointOnAnyBranch(point: GeoPoint, branches: GeoCurve, tolerance: Angle) {
+function pointOnAnyBranch(point: EclipseGeoPoint, branches: EclipseGeoCurve, tolerance: Angle) {
 	for (let b = 0; b < branches.length; b++) {
 		if (pointOnBranch(point, branches[b], tolerance)) return true
 	}
@@ -2113,7 +1798,7 @@ function pointOnAnyBranch(point: GeoPoint, branches: GeoCurve, tolerance: Angle)
 // limit a couple of steps past the host's endpoint (e.g. the 5578-05-13 penumbra-south sub-arc that lies on
 // the main branch but overshoots its start by ~1.5 deg). Independent of orientation, since proximity ignores
 // order.
-function branchCoveredBy(branch: GeoBranch, host: GeoBranch, tolerance: Angle, maxOverhang: Angle) {
+function branchCoveredBy(branch: EclipseGeoBranch, host: EclipseGeoBranch, tolerance: Angle, maxOverhang: Angle) {
 	let firstCovered = -1
 	let lastCovered = -1
 
@@ -2136,13 +1821,13 @@ function branchCoveredBy(branch: GeoBranch, host: GeoBranch, tolerance: Angle, m
 }
 
 // Arc length (radians) of the branch points in [from, to], used to bound an uncovered end overhang.
-function overhangArcLength(branch: GeoBranch, from: number, to: number) {
+function overhangArcLength(branch: EclipseGeoBranch, from: number, to: number) {
 	let arc = 0
 	for (let k = from + 1; k <= to; k++) arc += angularDistance(branch[k - 1], branch[k])
 	return arc
 }
 
-function BranchComparatorByLengthDescending(a: GeoBranch, b: GeoBranch) {
+function BranchComparatorByLengthDescending(a: EclipseGeoBranch, b: EclipseGeoBranch) {
 	return b.length - a.length
 }
 
@@ -2151,13 +1836,13 @@ function BranchComparatorByLengthDescending(a: GeoBranch, b: GeoBranch) {
 // acquired the solution; left in, the continuity chainer would retrace those overlaps and fold the arc back
 // on itself (sharp 180-degree kinks). Considering branches longest first keeps the densest, most complete
 // copy and discards every sub-arc covered by it.
-function deduplicateBranches(branches: GeoCurve, maxAngularStep: Angle) {
+function deduplicateBranches(branches: EclipseGeoCurve, maxAngularStep: Angle) {
 	const tolerance = maxAngularStep * BRANCH_CONTAINMENT_STEPS
 	// A redundant sub-arc may overshoot the host's endpoint by a short stub (a seed tracing the same limit a
 	// few steps further); tolerate an overhang up to the fold-gap threshold so the duplicate is still dropped.
 	const maxOverhang = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
 	const byLength = branches.toSorted(BranchComparatorByLengthDescending)
-	const kept: GeoCurve = []
+	const kept: EclipseGeoCurve = []
 
 	for (const branch of byLength) {
 		let found = false
@@ -2176,7 +1861,7 @@ function deduplicateBranches(branches: GeoCurve, maxAngularStep: Angle) {
 }
 
 // Returns the seed's open branch, starting a new one when it has none because a curve branch begins or reappears.
-function openCurveSeedBranch(branches: GeoCurve, activeBySeed: Array<GeoBranch | undefined>, seedIndex: number): GeoBranch {
+function openCurveSeedBranch(branches: EclipseGeoCurve, activeBySeed: Array<EclipseGeoBranch | undefined>, seedIndex: number): EclipseGeoBranch {
 	let branch = activeBySeed[seedIndex]
 
 	if (!branch) {
@@ -2200,9 +1885,9 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const refractionMode = options.refractionMode ?? DEFAULT_REFRACTION_MODE
 	const seeds = CURVE_SEED_LATITUDES
-	const branches: GeoCurve = []
-	const previousBySeed = new Array<GeoPoint | undefined>(CURVE_SEED_LATITUDES_LENGTH)
-	const activeBySeed = new Array<GeoBranch | undefined>(CURVE_SEED_LATITUDES_LENGTH)
+	const branches: EclipseGeoCurve = []
+	const previousBySeed = new Array<EclipseGeoPoint | undefined>(CURVE_SEED_LATITUDES_LENGTH)
+	const activeBySeed = new Array<EclipseGeoBranch | undefined>(CURVE_SEED_LATITUDES_LENGTH)
 
 	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
 		const lon = Math.min(longitude, PI)
@@ -2271,7 +1956,7 @@ function findCurveBranches(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: n
 // are merged by deduplicateBranches/reconnect.
 // Probes a non-polar fixed seed at coarse longitudes and returns true when it can reach a curve point not
 // already covered by continuation/fallback branches; such a seed earns the full dense fallback scan.
-function fixedSeedProbeFindsUncoveredArc(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, seedLatitude: Angle, longitudeStep: Angle, refractionMode: RefractionMode, knownBranches: GeoCurve, tolerance: Angle) {
+function fixedSeedProbeFindsUncoveredArc(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, seedLatitude: Angle, longitudeStep: Angle, refractionMode: RefractionMode, knownBranches: EclipseGeoCurve, tolerance: Angle) {
 	const probeStep = Math.max(longitudeStep, FIXED_SEED_PROBE_LONGITUDE_STEP)
 
 	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += probeStep) {
@@ -2283,10 +1968,10 @@ function fixedSeedProbeFindsUncoveredArc(pbe: PolynomialBesselianElements, i: -1
 }
 
 // Traces one fixed seed densely at every longitude sample, appending continuity arcs to out.
-function pushFixedSeedCurveArcsForSeed(out: GeoCurve, pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, seedLatitude: Angle, longitudeStep: Angle, maxAngularStep: Angle, refractionMode: RefractionMode) {
+function pushFixedSeedCurveArcsForSeed(out: EclipseGeoCurve, pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, seedLatitude: Angle, longitudeStep: Angle, maxAngularStep: Angle, refractionMode: RefractionMode) {
 	const foldStep = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
-	let current: GeoBranch | undefined
-	let previous: GeoPoint | undefined
+	let current: EclipseGeoBranch | undefined
+	let previous: EclipseGeoPoint | undefined
 
 	for (let longitude = -PI; longitude <= PI + 1e-12; longitude += longitudeStep) {
 		const lon = Math.min(longitude, PI)
@@ -2308,15 +1993,15 @@ function pushFixedSeedCurveArcsForSeed(out: GeoCurve, pbe: PolynomialBesselianEl
 
 // Runs the adaptive fixed-seed fallback, using knownBranches as the coverage baseline and returning only the
 // dense fallback arcs that were worth tracing for this curve family.
-function findFixedSeedCurveArcs(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, knownBranches: GeoCurve, options: SolarEclipseCurveOptions = {}) {
+function findFixedSeedCurveArcs(pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, knownBranches: EclipseGeoCurve, options: SolarEclipseCurveOptions = {}) {
 	const longitudeStep = validStep(options.longitudeStep, DEFAULT_LONGITUDE_STEP)
 	const maxAngularStep = validStep(options.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const refractionMode = options.refractionMode ?? DEFAULT_REFRACTION_MODE
 	const coverageTolerance = CURVE_SPATIAL_EPSILON
 	const n = knownBranches.length
-	const coverageBranches = new Array<GeoBranch>(n)
+	const coverageBranches = new Array<EclipseGeoBranch>(n)
 	for (let b = 0; b < n; b++) coverageBranches[b] = knownBranches[b]
-	const branches: GeoCurve = []
+	const branches: EclipseGeoCurve = []
 
 	for (let s = 0; s < CURVE_SEED_LATITUDES_LENGTH; s++) {
 		const seedLatitude = CURVE_SEED_LATITUDES[s]
@@ -2333,8 +2018,8 @@ function findFixedSeedCurveArcs(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 	return branches
 }
 
-function findNearestCurvePointAtLongitude(pbe: PolynomialBesselianElements, longitude: Angle, anchor: GeoPoint, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode) {
-	let best: GeoPoint | undefined
+function findNearestCurvePointAtLongitude(pbe: PolynomialBesselianElements, longitude: Angle, anchor: EclipseGeoPoint, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode) {
+	let best: EclipseGeoPoint | undefined
 	let bestDistance = Infinity
 
 	const point = findEclipseCurvePoint(pbe, longitude, anchor.y, i, G, refractionMode)
@@ -2361,10 +2046,10 @@ function findNearestCurvePointAtLongitude(pbe: PolynomialBesselianElements, long
 // longitude where the solver converged and the first where it did not. A fold can have two roots at the
 // same longitude, so each midpoint is selected by proximity to the branch anchor instead of a single Newton
 // seed; otherwise the endpoint can jump to the other side of the fold and leave a visible cusp gap.
-function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, anchor: GeoPoint, validLow: boolean, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE) {
+function refineCurveBoundary(pbe: PolynomialBesselianElements, aLon: Angle, bLon: Angle, anchor: EclipseGeoPoint, validLow: boolean, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE) {
 	let low = aLon
 	let high = bLon
-	let best: GeoPoint | undefined
+	let best: EclipseGeoPoint | undefined
 
 	for (let step = 0; step < BOUNDARY_REFINEMENT_STEPS; step++) {
 		const mid = (low + high) * 0.5
@@ -2393,7 +2078,7 @@ const SEGMENT_REFINEMENT_MAX_DEPTH = 8
 // apart than maxAngularStep, by recursive bisection: each midpoint is seeded from the
 // great-circle-interpolated coordinates and solved, so the inserted points are physical solutions
 // (never interpolated artifacts) and every emitted step honors maxAngularStep up to the depth limit.
-function appendRefinedSegment(points: GeoBranch, pbe: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE, depth = 0) {
+function appendRefinedSegment(points: EclipseGeoBranch, pbe: PolynomialBesselianElements, a: EclipseGeoPoint, b: EclipseGeoPoint, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE, depth = 0) {
 	if (depth >= SEGMENT_REFINEMENT_MAX_DEPTH || !curveGapNeedsRefinement(a, b, maxAngularStep)) return
 
 	const intermediate = interpolateGreatCirclePoint(a, b, 0.5)
@@ -2414,21 +2099,21 @@ function appendRefinedSegment(points: GeoBranch, pbe: PolynomialBesselianElement
 	appendRefinedSegment(points, pbe, mid, b, i, G, maxAngularStep, refractionMode, depth + 1)
 }
 
-function deduplicatePoints(points: GeoBranch) {
-	const out: GeoBranch = []
+function deduplicatePoints(points: EclipseGeoBranch) {
+	const out: EclipseGeoBranch = []
 	for (const point of points) pushDistinct(out, point)
 	return out
 }
 
-function GeoPointComparatorByJDAscending(a: GeoPoint, b: GeoPoint) {
+function GeoPointComparatorByJDAscending(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return a.jd! - b.jd!
 }
 
-function GeoPointComparatorByXOrYAscending(a: GeoPoint, b: GeoPoint) {
+function GeoPointComparatorByXOrYAscending(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return a.x - b.x || a.y - b.y
 }
 
-function orderCurvePoints(points: GeoBranch) {
+function orderCurvePoints(points: EclipseGeoBranch) {
 	if (points.length <= 2) return points
 
 	let allHaveJulianDay = true
@@ -2445,7 +2130,7 @@ function orderCurvePoints(points: GeoBranch) {
 		// Two seeds reaching the same instant yield the same location, so collapse a point only when it
 		// coincides with the previous one both in time AND space. A fold can place two distinct locations
 		// at nearly the same instant; those are kept so the branch is not silently merged (section 2.2).
-		const ordered: GeoBranch = []
+		const ordered: EclipseGeoBranch = []
 
 		for (const point of points) {
 			const last = ordered.at(-1)
@@ -2461,10 +2146,10 @@ function orderCurvePoints(points: GeoBranch) {
 }
 
 // Appends the drawable pieces of one curve to `out`, splitting only at physical discontinuities.
-function pushSplitDisconnectedPolylines(out: GeoCurve, points: GeoBranch, maxGap: Angle) {
+function pushSplitDisconnectedPolylines(out: EclipseGeoCurve, points: EclipseGeoBranch, maxGap: Angle) {
 	if (points.length === 0) return
 
-	let current: GeoBranch = [points[0]]
+	let current: EclipseGeoBranch = [points[0]]
 
 	for (let i = 1; i < points.length; i++) {
 		if (angularDistance(points[i - 1], points[i]) > maxGap) {
@@ -2479,8 +2164,8 @@ function pushSplitDisconnectedPolylines(out: GeoCurve, points: GeoBranch, maxGap
 }
 
 // Splits every branch into drawable pieces without allocating a callback result per branch.
-function splitCurveBranches(branches: readonly GeoBranch[], maxGap: Angle) {
-	const pieces: GeoCurve = []
+function splitCurveBranches(branches: readonly EclipseGeoBranch[], maxGap: Angle) {
+	const pieces: EclipseGeoCurve = []
 	for (const branch of branches) pushSplitDisconnectedPolylines(pieces, branch, maxGap)
 	return pieces
 }
@@ -2489,15 +2174,15 @@ function splitCurveBranches(branches: readonly GeoBranch[], maxGap: Angle) {
 // are farther apart than maxGap the curve has left the sunlit hemisphere (or the solver family is
 // physically disconnected there), so the pieces must not be joined by a straight chord. Pieces with
 // fewer than two points are dropped as undrawable.
-export function splitDisconnectedPolylines(points: GeoBranch, maxGap: Angle) {
-	const pieces: GeoCurve = []
+export function splitDisconnectedPolylines(points: EclipseGeoBranch, maxGap: Angle) {
+	const pieces: EclipseGeoCurve = []
 	pushSplitDisconnectedPolylines(pieces, points, maxGap)
 	return pieces
 }
 
 // Splits a polar/circumpolar limit at its largest absolute latitude, a two-piece
 // rendering of a limit that folds back over itself near a pole.
-export function splitAtMaxAbsLatitude(points: GeoBranch) {
+export function splitAtMaxAbsLatitude(points: EclipseGeoBranch) {
 	if (points.length <= 2) return [points.slice()]
 
 	let index = 0
@@ -2530,15 +2215,15 @@ export function splitAtMaxAbsLatitude(points: GeoBranch) {
 }
 
 // Splits each branch at its latitude apex without allocating a callback fan-out pass.
-function splitBranchesAtMaxAbsLatitude(branches: GeoCurve) {
-	const out: GeoCurve = []
+function splitBranchesAtMaxAbsLatitude(branches: EclipseGeoCurve) {
+	const out: EclipseGeoCurve = []
 	for (const branch of branches) {
 		for (const piece of splitAtMaxAbsLatitude(branch)) out.push(piece)
 	}
 	return out
 }
 
-function reconnectSplitCurveCusps(branches: GeoCurve, pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode) {
+function reconnectSplitCurveCusps(branches: EclipseGeoCurve, pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode) {
 	const maxDrawableGap = Math.max(BRANCH_MAX_DRAWABLE_GAP, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
 	const reconnected = reconnectBranchCusps(deduplicateBranches(branches, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode, false)
 	const pieces = splitCurveBranches(reconnected, maxDrawableGap)
@@ -2556,8 +2241,8 @@ function reconnectSplitCurveCusps(branches: GeoCurve, pbe: PolynomialBesselianEl
 // Nearest curve sample to a point across every branch, with its angular distance. Unlike a capped search
 // the caller decides acceptance, so a spatially distant but temporally matching grazing cusp can still be
 // taken (see alignUmbralContactPoints).
-function nearestCurveSample(point: GeoPoint, branches: readonly GeoBranch[], out: { sample: GeoPoint; distance: number }) {
-	let best: GeoPoint | undefined
+function nearestCurveSample(point: EclipseGeoPoint, branches: readonly EclipseGeoBranch[], out: { sample: EclipseGeoPoint; distance: number }) {
+	let best: EclipseGeoPoint | undefined
 	let bestDistance = Infinity
 
 	for (const branch of branches) {
@@ -2586,10 +2271,10 @@ const UMBRA_CONTACT_POINTS = ['U1', 'U2', 'U3', 'U4'] as const
 // U1..U4 mark terminator cusps that coincide with umbra-limit branch endpoints, so when the grazing-limb
 // geometry makes spatial distance unreliable the cusp is identified by endpoint time. Considers only the two
 // endpoints of each branch, since an interior sample at a coincidentally close time is not the cusp.
-function nearestEndpointByTime(point: GeoPoint, branches: readonly GeoBranch[], timeTolerance: number) {
+function nearestEndpointByTime(point: EclipseGeoPoint, branches: readonly EclipseGeoBranch[], timeTolerance: number) {
 	if (point.jd === undefined) return undefined
 
-	let best: GeoPoint | undefined
+	let best: EclipseGeoPoint | undefined
 	let bestDelta = timeTolerance
 
 	for (const branch of branches) {
@@ -2614,7 +2299,7 @@ function nearestEndpointByTime(point: GeoPoint, branches: readonly GeoBranch[], 
 // almost tangent to the limb, it is snapped to the branch endpoint nearest in time. The temporally nearest
 // cusp can be several degrees away and need not be the spatially nearest sample (another branch's flank may
 // pass marginally closer), so the time match is required, not just probed on the spatial pick. jd is preserved.
-function alignUmbralContactPoints(points: Writable<SolarEclipseContactPoints>, branches: readonly GeoBranch[], maxAngularStep: Angle) {
+function alignUmbralContactPoints(points: Writable<SolarEclipseContactPoints>, branches: readonly EclipseGeoBranch[], maxAngularStep: Angle) {
 	const spatialLimit = maxAngularStep * CURVE_GAP_SPLIT_FACTOR
 	const best: Parameters<typeof nearestCurveSample>[2] = { sample: undefined as never, distance: 0 }
 
@@ -2643,14 +2328,14 @@ const RISE_SET_REFINE_MAX_DEPTH = 10
 // points, so the crossings are kept as a list instead of a fixed upper/lower pair.
 interface RiseSetSample {
 	readonly jd: number
-	readonly crossings: GeoBranch
+	readonly crossings: EclipseGeoBranch
 }
 
 // One traced rise/set branch: a continuous run of limb crossings with the last appended point cached for
 // the nearest-neighbour continuity match against the next sample's crossings.
 interface RiseSetBranch {
-	points: GeoBranch
-	last: GeoPoint
+	points: EclipseGeoBranch
+	last: EclipseGeoPoint
 }
 
 // Finds the intersections of the Earth unit circle with a circle of the given radius centered at
@@ -2687,7 +2372,7 @@ export function findCircleIntersections(cx: number, cy: number, radius: number) 
 function riseSetCrossings(pbe: PolynomialBesselianElements, jd: number) {
 	const be = besselianSampleAtJulianDay(pbe, jd)
 	const crossings = earthLimbCircleIntersections(be.x, be.y, earthLimbOmega(be.d), Math.abs(be.l1))
-	const points: GeoBranch = []
+	const points: EclipseGeoBranch = []
 
 	for (const crossing of crossings) {
 		const point = projectFundamentalPoint(be, crossing[0], crossing[1])
@@ -2697,7 +2382,7 @@ function riseSetCrossings(pbe: PolynomialBesselianElements, jd: number) {
 	return points
 }
 
-function isGeoPoint(point?: Point | GeoPoint): point is GeoPoint {
+function isGeoPoint(point?: Point | EclipseGeoPoint): point is EclipseGeoPoint {
 	return finitePoint(point) && point.jd !== undefined
 }
 
@@ -2711,12 +2396,12 @@ function RiseSetBranchComparatorByHigherLatitude(a: RiseSetBranch, b: RiseSetBra
 // at the day-side gap, its variable set of crossings (0..4) is tracked into continuity branches, and each
 // branch is anchored to the P1/P2/P3/P4 contacts so it passes through them. Fast-moving stretches near the
 // cusps are densified by subdividing in time so the curve follows the geometry rather than a straight chord.
-export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPoint, P4: GeoPoint, optionalContacts: Pick<SolarEclipseContactPoints, 'P2' | 'P3' | 'N1' | 'N2' | 'S1' | 'S2'> = {}, options?: SolarEclipseRiseSetCurveOptions) {
+export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: EclipseGeoPoint, P4: EclipseGeoPoint, optionalContacts: Pick<SolarEclipseContactPoints, 'P2' | 'P3' | 'N1' | 'N2' | 'S1' | 'S2'> = {}, options?: SolarEclipseRiseSetCurveOptions) {
 	if (P1.jd === undefined || P4.jd === undefined || P4.jd < P1.jd) return []
 
 	const stepDays = validStep(options?.step, DEFAULT_RISE_SET_STEP_SECONDS) / DAYSEC
 	const adaptive = options?.adaptive ?? true
-	const contacts: GeoBranch = []
+	const contacts: EclipseGeoBranch = []
 	if (isGeoPoint(P1)) contacts.push(P1)
 	if (isGeoPoint(optionalContacts.P2)) contacts.push(optionalContacts.P2)
 	if (isGeoPoint(optionalContacts.P3)) contacts.push(optionalContacts.P3)
@@ -2767,7 +2452,7 @@ export function computeRiseSetCurves(pbe: PolynomialBesselianElements, P1: GeoPo
 	// The tangency cusp bounding a phase falls within one sampling step of the phase's last crossing, so
 	// match cusps to contacts by time (near the tangent the crossings can still be far apart in space).
 	const snapJd = 2 * stepDays
-	const curves: GeoCurve = []
+	const curves: EclipseGeoCurve = []
 
 	for (const phase of phases) {
 		const branches = traceRiseSetBranches(pbe, phase, adaptive)
@@ -2858,8 +2543,8 @@ function traceRiseSetBranches(pbe: PolynomialBesselianElements, phase: readonly 
 
 // Prepends and appends the phase's tangency-cusp contacts to a traced branch, densifying the cusp
 // approaches in time so the branch bends into the contacts rather than jumping in a straight chord.
-function anchorRiseSetBranch(pbe: PolynomialBesselianElements, points: GeoBranch, start: GeoPoint | undefined, end: GeoPoint | undefined, adaptive: boolean) {
-	const out: GeoBranch = []
+function anchorRiseSetBranch(pbe: PolynomialBesselianElements, points: EclipseGeoBranch, start: EclipseGeoPoint | undefined, end: EclipseGeoPoint | undefined, adaptive: boolean) {
+	const out: EclipseGeoBranch = []
 
 	if (start) {
 		out.push(start)
@@ -2879,7 +2564,7 @@ function anchorRiseSetBranch(pbe: PolynomialBesselianElements, points: GeoBranch
 // Recursively inserts true limb crossings between two consecutive points of one branch while the step
 // exceeds the angular limit, so the curve bends smoothly into the cusps instead of jumping in a straight
 // line. At each midpoint the crossing nearest the great-circle-interpolated target stays on the branch.
-function refineRiseSetBranchGap(pbe: PolynomialBesselianElements, jdA: number, aPoint: GeoPoint, jdB: number, bPoint: GeoPoint, out: GeoBranch, depth: number) {
+function refineRiseSetBranchGap(pbe: PolynomialBesselianElements, jdA: number, aPoint: EclipseGeoPoint, jdB: number, bPoint: EclipseGeoPoint, out: EclipseGeoBranch, depth: number) {
 	if (depth >= RISE_SET_REFINE_MAX_DEPTH || !(angularDistance(aPoint, bPoint) > DEFAULT_MAX_ANGULAR_STEP)) return
 
 	const jd = (jdA + jdB) * 0.5
@@ -2910,10 +2595,10 @@ function refineRiseSetBranchGap(pbe: PolynomialBesselianElements, jdA: number, a
 // endpoint. Without the direction guard a single-sample phase (a very short grazing partial) can snap both
 // its start and end to the same contact whichever is nearest, drawing a backward then forward spike (e.g.
 // the 2893-12-29 partial, whose lone sunset crossing is closest to P4, so P4 was used as the start too).
-function nearestContactByJd(jd: number | undefined, contacts: GeoBranch, toleranceJd: number, direction: -1 | 0 | 1 = 0) {
+function nearestContactByJd(jd: number | undefined, contacts: EclipseGeoBranch, toleranceJd: number, direction: -1 | 0 | 1 = 0) {
 	if (jd === undefined) return undefined
 
-	let best: GeoPoint | undefined
+	let best: EclipseGeoPoint | undefined
 	let bestDelta = toleranceJd
 
 	for (const contact of contacts) {
@@ -2940,8 +2625,8 @@ const RISE_SET_CUSP_INSERT_MAX_GAP = DEFAULT_MAX_ANGULAR_STEP * CURVE_GAP_SPLIT_
 // spike from the curve up to the cusp. Such an insertion is rejected; the cusp remains a marker only.
 const RISE_SET_CUSP_MAX_DETOUR = DEFAULT_MAX_ANGULAR_STEP
 
-function insertRiseSetCuspPoints(curves: GeoCurve, cusps: readonly (GeoPoint | undefined)[]) {
-	const out: GeoCurve = []
+function insertRiseSetCuspPoints(curves: EclipseGeoCurve, cusps: readonly (EclipseGeoPoint | undefined)[]) {
+	const out: EclipseGeoCurve = []
 	for (const curve of curves) out.push(curve.slice())
 
 	for (const cusp of cusps) {
@@ -3021,13 +2706,13 @@ function solveCentralLineTransition(pbe: PolynomialBesselianElements, jdA: numbe
 // compatibility; this is the per-character view of a hybrid eclipse, whose central line alternates total <-> annular.
 export interface CentralLineByKind {
 	// Total-eclipse sub-polylines of the central line, in chronological order.
-	readonly total: GeoCurve
+	readonly total: SolarEclipseGeoCurve
 	// Annular-eclipse sub-polylines of the central line, in chronological order.
-	readonly annular: GeoCurve
+	readonly annular: SolarEclipseGeoCurve
 }
 
 // Keeps only drawable central-line segments, matching the previous final filter without an extra pass.
-function pushDrawableSegment(out: GeoCurve, segment: GeoBranch) {
+function pushDrawableSegment(out: EclipseGeoCurve, segment: EclipseGeoBranch) {
 	if (segment.length >= 2) out.push(segment)
 }
 
@@ -3038,12 +2723,12 @@ function pushDrawableSegment(out: GeoCurve, segment: GeoBranch) {
 // total<->annular crossover (where the local umbral radius is zero) is root-solved between the two
 // bracketing samples and inserted as a shared seam, so the total and annular segments meet without a gap;
 // each side gets its own copy tagged with that side's kind to keep segments homogeneous.
-export function splitCentralLineByKind(centerLine: GeoBranch, pbe?: PolynomialBesselianElements): CentralLineByKind {
-	const total: GeoCurve = []
-	const annular: GeoCurve = []
-	let current: GeoBranch | undefined
+export function splitCentralLineByKind(centerLine: SolarEclipseGeoBranch, pbe?: PolynomialBesselianElements): CentralLineByKind {
+	const total: EclipseGeoCurve = []
+	const annular: EclipseGeoCurve = []
+	let current: SolarEclipseGeoBranch | undefined
 	let currentKind: HybridEclipseKind | undefined
-	let previous: GeoPoint | undefined
+	let previous: SolarEclipseGeoPoint | undefined
 
 	for (const point of centerLine) {
 		const kind = point.kind
@@ -3067,8 +2752,8 @@ export function splitCentralLineByKind(centerLine: GeoBranch, pbe?: PolynomialBe
 		previous = point
 	}
 
-	const drawableTotal: GeoCurve = []
-	const drawableAnnular: GeoCurve = []
+	const drawableTotal: EclipseGeoCurve = []
+	const drawableAnnular: EclipseGeoCurve = []
 	for (const segment of total) pushDrawableSegment(drawableTotal, segment)
 	for (const segment of annular) pushDrawableSegment(drawableAnnular, segment)
 	return { total: drawableTotal, annular: drawableAnnular }
@@ -3087,9 +2772,9 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 	const refractionMode = options?.refractionMode ?? DEFAULT_REFRACTION_MODE
 	const curveOptions: SolarEclipseCurveOptions = { longitudeStep, maxAngularStep, refractionMode }
 
-	let centerLine: GeoBranch = []
-	let umbraNorth: GeoCurve = []
-	let umbraSouth: GeoCurve = []
+	let centerLine: SolarEclipseGeoBranch = []
+	let umbraNorth: SolarEclipseGeoCurve = []
+	let umbraSouth: SolarEclipseGeoCurve = []
 
 	// Whether the shadow axis truly intersects the ellipsoid (the precise geometric test that replaces the
 	// gamma threshold), and whether the umbra/antumbra touches Earth at all. The axis test is authoritative
@@ -3109,7 +2794,7 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		// two sub-polylines that meet at the apex. Branches are never joined across a discontinuity.
 		umbraNorth = reconnectSplitCurveCusps(splitBranchesAtMaxAbsLatitude(findCurveBranchPoints(pbe, 1, 1, curveOptions)), pbe, 1, 1, maxAngularStep, refractionMode)
 		umbraSouth = reconnectSplitCurveCusps(splitBranchesAtMaxAbsLatitude(findCurveBranchPoints(pbe, -1, 1, curveOptions)), pbe, -1, 1, maxAngularStep, refractionMode)
-		const umbraBranches: GeoCurve = []
+		const umbraBranches: EclipseGeoCurve = []
 		for (const branch of umbraNorth) umbraBranches.push(branch)
 		for (const branch of umbraSouth) umbraBranches.push(branch)
 		alignUmbralContactPoints(points, umbraBranches, maxAngularStep)
@@ -3124,7 +2809,7 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 		const line = assembleCenterLine(pbe, C1, C2, findCurvePoints(pbe, 0, 0, curveOptions), maxAngularStep, refractionMode)
 		// Tag each central-line point with its local total/annular character so a hybrid eclipse's
 		// transition is recoverable from the geometry.
-		const taggedCenterLine: GeoBranch = []
+		const taggedCenterLine: SolarEclipseGeoBranch = []
 		for (const point of line) taggedCenterLine.push(point.jd === undefined ? point : { x: point.x, y: point.y, jd: point.jd, kind: centralLineKind(pbe, point.jd) })
 		centerLine = taggedCenterLine
 	}
@@ -3175,13 +2860,13 @@ export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: Polyn
 // points (never artificial connectors). Near the limb the projected line moves arbitrarily fast, so
 // scan points within the time-collapse epsilon of an endpoint are dropped in favor of the exact
 // C1/C2 contact, keeping them as the true endpoints of the polyline.
-function assembleCenterLine(pbe: PolynomialBesselianElements, C1: GeoPoint | undefined, C2: GeoPoint | undefined, scan: GeoBranch, maxAngularStep: Angle, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE) {
-	const interior: GeoBranch = []
+function assembleCenterLine(pbe: PolynomialBesselianElements, C1: EclipseGeoPoint | undefined, C2: EclipseGeoPoint | undefined, scan: EclipseGeoBranch, maxAngularStep: Angle, refractionMode: RefractionMode = DEFAULT_REFRACTION_MODE) {
+	const interior: EclipseGeoBranch = []
 	for (const point of scan) if (isCenterLineInteriorPoint(point, C1, C2)) interior.push(point)
-	const assembled: GeoBranch = []
+	const assembled: EclipseGeoBranch = []
 
 	if (C1 && interior.length > 0) {
-		const head: GeoBranch = []
+		const head: EclipseGeoBranch = []
 		appendRefinedSegment(head, pbe, C1, interior[0], 0, 0, maxAngularStep, refractionMode)
 		for (const p of head) if (isCenterLineInteriorPoint(p, C1, C2)) assembled.push(p)
 	}
@@ -3189,7 +2874,7 @@ function assembleCenterLine(pbe: PolynomialBesselianElements, C1: GeoPoint | und
 	for (const p of interior) assembled.push(p)
 
 	if (C2 && interior.length > 0) {
-		const tail: GeoBranch = []
+		const tail: EclipseGeoBranch = []
 		appendRefinedSegment(tail, pbe, interior.at(-1)!, C2, 0, 0, maxAngularStep, refractionMode)
 		for (const p of tail) if (isCenterLineInteriorPoint(p, C1, C2)) assembled.push(p)
 	}
@@ -3201,13 +2886,13 @@ function assembleCenterLine(pbe: PolynomialBesselianElements, C1: GeoPoint | und
 }
 
 // Whether a scanned central-line point belongs strictly between the solved C1/C2 endpoint instants.
-function isCenterLineInteriorPoint(point: GeoPoint, C1: GeoPoint | undefined, C2: GeoPoint | undefined) {
+function isCenterLineInteriorPoint(point: EclipseGeoPoint, C1: EclipseGeoPoint | undefined, C2: EclipseGeoPoint | undefined) {
 	return point.jd !== undefined && (C1?.jd === undefined || point.jd > C1.jd + CURVE_TIME_EPSILON_DAYS) && (C2?.jd === undefined || point.jd < C2.jd - CURVE_TIME_EPSILON_DAYS)
 }
 
 // Geometric solar altitude (radians) of an observer at a limit point at its own instant. The two named
 // extremes of a grazing penumbral limit are its terminator cusps, where this drops to ~0.
-export function solarAltitudeAtPoint(pbe: PolynomialBesselianElements, point: GeoPoint) {
+export function solarAltitudeAtPoint(pbe: PolynomialBesselianElements, point: EclipseGeoPoint) {
 	const be = besselianSampleAtJulianDay(pbe, point.jd!)
 	const H = hourAngleFromLongitude(point.x, be.mu, be.deltaTLongitudeCorrection)
 	const sinh = Math.sin(be.d) * Math.sin(point.y) + Math.cos(be.d) * Math.cos(point.y) * Math.cos(H)
@@ -3221,11 +2906,11 @@ const PENUMBRAL_CUSP_MIN_SEPARATION = 5 * DEG2RAD
 // Penumbral-limit cusps for a multi-branch curve, found without flattening the branches into a temporary
 // array. This mirrors penumbralLimitCusps: choose the lowest-altitude point, then the lowest-altitude point
 // spatially separated from it; fall back to the first/last drawable endpoints when no separated cusp exists.
-function penumbralCurveCusps(pbe: PolynomialBesselianElements, curve: GeoCurve) {
-	let first: GeoPoint | undefined
+function penumbralCurveCusps(pbe: PolynomialBesselianElements, curve: EclipseGeoCurve) {
+	let first: EclipseGeoPoint | undefined
 	let firstAltitude = Infinity
-	let fallbackStart: GeoPoint | undefined
-	let fallbackEnd: GeoPoint | undefined
+	let fallbackStart: EclipseGeoPoint | undefined
+	let fallbackEnd: EclipseGeoPoint | undefined
 
 	for (let b = 0; b < curve.length; b++) {
 		const branch = curve[b]
@@ -3245,7 +2930,7 @@ function penumbralCurveCusps(pbe: PolynomialBesselianElements, curve: GeoCurve) 
 
 	if (!first) return [undefined, undefined] as const
 
-	let second: GeoPoint | undefined
+	let second: EclipseGeoPoint | undefined
 	let secondAltitude = Infinity
 	for (let b = 0; b < curve.length; b++) {
 		const branch = curve[b]
@@ -3264,221 +2949,11 @@ function penumbralCurveCusps(pbe: PolynomialBesselianElements, curve: GeoCurve) 
 
 // Multi-branch penumbral endpoints ordered by eclipse chronology, avoiding the allocation that flat() would
 // create in the map assembly hot path.
-function penumbralCurveEndpointsByTime(pbe: PolynomialBesselianElements, curve: GeoCurve) {
+function penumbralCurveEndpointsByTime(pbe: PolynomialBesselianElements, curve: EclipseGeoCurve) {
 	const [a, b] = penumbralCurveCusps(pbe, curve)
 	if (!a || !b) return [undefined, undefined] as const
 	if (a.jd !== undefined && b.jd !== undefined) return a.jd <= b.jd ? [a, b] : [b, a]
 	return a.y <= b.y ? [a, b] : [b, a]
-}
-
-// Splits a geographic polyline into drawable antimeridian-safe segments.
-export function splitPolylineAtAntimeridian(line: GeoBranch) {
-	return splitGeoLineAtAntimeridian(line, false)
-}
-
-// Splits a geographic polygon ring into antimeridian-safe drawable rings.
-export function splitPolygonAtAntimeridian(ring: GeoBranch) {
-	return splitGeoLineAtAntimeridian(ring, true)
-}
-
-function splitGeoLineAtAntimeridian(line: GeoBranch, close: boolean) {
-	if (line.length < 2) return []
-
-	const segments: GeoCurve = []
-	let current: GeoBranch = [line[0]]
-	const count = close ? line.length + 1 : line.length
-
-	for (let i = 1; i < count; i++) {
-		const previous = line[(i - 1) % line.length]
-		const point = line[i % line.length]
-		const delta = point.x - previous.x
-
-		if (Math.abs(delta) > PI) {
-			const crossingLon = delta > 0 ? -PI : PI
-			const oppositeLon = -crossingLon
-			const t = (crossingLon - previous.x) / (point.x + (delta > 0 ? -TAU : TAU) - previous.x)
-			const clampedT = clamp(t, 0, 1)
-			const lat = previous.y + (point.y - previous.y) * clampedT
-			const jd = previous.jd !== undefined && point.jd !== undefined ? previous.jd + (point.jd - previous.jd) * clampedT : undefined
-			current.push({ x: crossingLon, y: lat, jd })
-			if (current.length > 1) segments.push(current)
-			current = [{ x: oppositeLon, y: lat, jd }, point]
-		} else {
-			current.push(point)
-		}
-	}
-
-	if (current.length > 1) segments.push(current)
-
-	// For a closed ring whose first vertex is not on the seam, the opening arc (the first segment) and
-	// the closing arc (the last segment) both belong to the start hemisphere and were split apart at
-	// line[0]; rejoin them so the hemisphere closes along the antimeridian seam rather than across the
-	// map interior. Each remaining segment already enters and leaves on the same seam, so closing it with
-	// Z follows the seam edge.
-	if (close && segments.length >= 2) {
-		const firstSegment = segments[0]
-		const lastSegment = segments.at(-1)!
-
-		if (samePoint(firstSegment[0], lastSegment.at(-1)!)) {
-			lastSegment.pop()
-			const joined: GeoBranch = []
-			for (const point of lastSegment) joined.push(point)
-			for (const point of firstSegment) joined.push(point)
-			segments[0] = joined
-			segments.pop()
-		}
-	}
-
-	return segments
-}
-
-const AU_IN_EARTH_RADII = AU_KM / EARTH_RADIUS_KM
-// Light travel time per AU in days, used to retard body positions to their emission epoch.
-const LIGHT_TIME_DAYS_PER_AU = LIGHT_TIME_AU / DAYSEC
-// Light-time iterations. Two passes converge the retarded geocentric position well below the map's
-// angular resolution for the Sun (~8.3 min one-way) and the Moon (~1.3 s one-way).
-const LIGHT_TIME_ITERATIONS = 2
-
-// Computes the apparent geocentric Sun and Moon positions used to derive Besselian elements. Both bodies
-// are corrected for light-time (retarded emission position) and annual aberration (the geocenter's
-// barycentric velocity), then rotated from ICRF/J2000 into the true equator and equinox of date. Delta T
-// is taken from the Espenak and Meeus 2006 polynomials for the sample epoch.
-//
-// Time-scale contract: the dynamical steps (ephemeris sampling, precession and nutation) are
-// dynamical-time operations, so the input time should be TT/TDB; the providers and
-// precessionNutationMatrix convert internally and the scale difference is sub-millisecond either way.
-// Earth rotation enters only later, in instantBesselianFromSunMoon, where mu is built from UT1 (= TT -
-// Delta T) and Greenwich apparent sidereal time, keeping the rotation strictly in UT.
-//   time: instant of evaluation in a dynamical scale (TT or TDB); other scales convert internally.
-//   sun: barycentric Sun position and velocity provider, in AU and AU/day, equatorial ICRF/J2000.
-//   earth: barycentric Earth position and velocity provider, in AU and AU/day, equatorial ICRF/J2000.
-//   moon: geocentric Moon position and velocity provider, in AU and AU/day, equatorial ICRF/J2000.
-export function computeSunMoonPositionAt(time: Time, sun: PositionAndVelocityOverTime, earth: PositionAndVelocityOverTime, moon: PositionAndVelocityOverTime): SunMoonPosition {
-	const earthBarycentric = earth(time)
-	const earthPosition = earthBarycentric[0]
-
-	// Observer (geocenter) barycentric velocity in units of the speed of light, plus the reciprocal Lorentz
-	// factor, both consumed by eraAb for annual aberration.
-	const aberrationVelocity = vecDivScalar(earthBarycentric[1], SPEED_OF_LIGHT_AU_DAY)
-	const reciprocalLorentz = Math.sqrt(1 - vecDot(aberrationVelocity, aberrationVelocity))
-
-	// Light-time corrected geocentric Sun position: seen where it was when its light departed.
-	let sunGeometric = vecMinus(sun(time)[0], earthPosition)
-
-	for (let i = 0; i < LIGHT_TIME_ITERATIONS; i++) {
-		const tau = vecLength(sunGeometric) * LIGHT_TIME_DAYS_PER_AU
-		sunGeometric = vecMinus(sun(timeShift(time, -tau))[0], earthPosition)
-	}
-
-	const sunDistance = vecLength(sunGeometric)
-
-	// Light-time corrected geocentric Moon position. The Moon provider is geocentric (Moon - Earth at the
-	// sampled epoch); retarding it alone would also recede the origin, yielding Moon(t - tau) - Earth(t -
-	// tau). The apparent geocentric vector must keep the observer at the geocenter of the observation
-	// epoch, so the Earth displacement Earth(t) - Earth(t - tau) is added back.
-	let moonGeometric = moon(time)[0]
-
-	for (let i = 0; i < LIGHT_TIME_ITERATIONS; i++) {
-		const tau = vecLength(moonGeometric) * LIGHT_TIME_DAYS_PER_AU
-		const retarded = timeShift(time, -tau)
-		moonGeometric = vecMinus(moon(retarded)[0], vecMinus(earthPosition, earth(retarded)[0]))
-	}
-
-	const moonDistance = vecLength(moonGeometric)
-	const pnm = precessionNutationMatrix(time)
-
-	// Apply annual aberration to the unit direction (the Sun-observer distance drives the relativistic
-	// deflection term), restore the body distance, then rotate ICRF/J2000 into the true equator of date.
-	const sunApparent = vecDivScalar(sunGeometric, sunDistance)
-	eraAb(sunApparent, aberrationVelocity, sunDistance, reciprocalLorentz, sunApparent)
-	vecMulScalar(sunApparent, sunDistance, sunApparent)
-	matMulVec(pnm, sunApparent, sunApparent)
-
-	const moonApparent = vecDivScalar(moonGeometric, moonDistance)
-	eraAb(moonApparent, aberrationVelocity, sunDistance, reciprocalLorentz, moonApparent)
-	vecMulScalar(moonApparent, moonDistance, moonApparent)
-	matMulVec(pnm, moonApparent, moonApparent)
-
-	const [sRA, sDEC, sD] = eraP2s(...sunApparent)
-	const [mRA, mDEC, mD] = eraP2s(...moonApparent)
-
-	// Decimal year for the Delta T model. The sub-minute scale difference between time scales is irrelevant
-	// for Delta T, which varies on the order of a second per year.
-	const year = eraEpj(time.day, time.fraction)
-
-	return {
-		sun: {
-			rightAscension: sRA,
-			declination: sDEC,
-			distance: sD * AU_IN_EARTH_RADII,
-		},
-		moon: {
-			rightAscension: mRA,
-			declination: mDEC,
-			distance: mD * AU_IN_EARTH_RADII,
-		},
-		deltaT: deltaTByEspenakMeeus2006(year),
-	}
-}
-
-// Serializes projected polyline or polygon pieces into an SVG path data string. Each piece becomes one
-// subpath (M ... L ...); pieces with fewer than two points are skipped. When close is true each subpath
-// is closed with Z, suitable for filled polygons.
-export function pointsToSvgPathData(pieces: readonly (readonly Point[])[], close = false, precision = 2) {
-	const subpaths: string[] = []
-
-	function formatCoordinate(value: number) {
-		return Number(value.toFixed(precision)).toString()
-	}
-
-	for (const piece of pieces) {
-		if (piece.length < 2) continue
-
-		// Build each subpath from tokens joined once, instead of growing a string with repeated `+=`.
-		const tokens: string[] = [`M${formatCoordinate(piece[0].x)} ${formatCoordinate(piece[0].y)}`]
-		for (let i = 1; i < piece.length; i++) tokens.push(`L${formatCoordinate(piece[i].x)} ${formatCoordinate(piece[i].y)}`)
-		if (close) tokens.push('Z')
-
-		subpaths.push(tokens.join(''))
-	}
-
-	return subpaths.join('')
-}
-
-// Splits one geographic line (or ring when close is true) at the antimeridian with the exact +-180
-// crossing inserted, then projects each piece. Inserting the crossing keeps every piece reaching the map
-// edge instead of stopping at the last sample before the wrap, which otherwise leaves a visible gap or
-// angular "beak" near +-180. The 'pi'-mode projection preserves an exact +-PI seam vertex, so the post-wrap
-// piece resumes on the left edge (-PI) rather than being folded back onto the right one (+PI). The split
-// happens only here, at serialization time: the geographic geometry itself is never mutated.
-function projectSplitPieces(geo: GeoBranch, close: boolean, projection: Projection, options: ProjectionPolylineOptions) {
-	const pieces: Point[][] = []
-
-	for (const segment of splitGeoLineAtAntimeridian(geo, close)) {
-		let piece: Point[] = []
-
-		for (const point of segment) {
-			const projected = projection.project(point.x, point.y, undefined, options)
-			if (projected === undefined) {
-				if (piece.length >= 2) pieces.push(piece)
-				piece = []
-			} else {
-				piece.push({ x: projected.x, y: projected.y })
-			}
-		}
-
-		if (piece.length >= 2) pieces.push(piece)
-	}
-
-	return pieces
-}
-
-// Projects geographic polylines and serializes them into one SVG path data string of open subpaths,
-// split at the antimeridian during projection only.
-export function geoPolylinesToSvgPathData(lines: readonly GeoBranch[], projection: Projection, { precision = 2, ...options }: SolarEclipseMapSvgProjectionOptions = {}) {
-	const pieces: Point[][] = []
-	for (const line of lines) for (const piece of projectSplitPieces(line, false, projection, options)) pieces.push(piece)
-	return pointsToSvgPathData(pieces, false, precision)
 }
 
 // Projects solar eclipse map geometry and serializes each polyline feature into SVG path data strings,
@@ -3487,21 +2962,22 @@ export function geoPolylinesToSvgPathData(lines: readonly GeoBranch[], projectio
 // branch is serialized as its own subpath (M ... L ...): the end of one branch is never connected to the
 // start of another, so a near-pole fold the solver could not trace through is drawn as separate arcs rather
 // than a straight spike. The geometry itself is never mutated.
-export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, projection: Projection, options: SolarEclipseMapSvgProjectionOptions = {}): SolarEclipseMapSvgPaths {
+export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, projection: CylindricalProjection, options: SolarEclipseMapSvgProjectionOptions = DEFAULT_SOLAR_ECLIPSE_MAP_SVG_PROJECTION_OPTIONS): SolarEclipseMapSvgPaths {
 	// Project named points with the same options as the curves, so points and lines stay aligned (P0.3).
-	function projectPoint(point: GeoPoint | undefined) {
-		return point ? projection.project(point.x, point.y, undefined, options) : undefined
+	function projectPoint(point: EclipseGeoPoint | undefined) {
+		return point ? projection.project(point.x, point.y, undefined, options.projectionOptions) : undefined
 	}
 
 	const { points, lines } = geometry
+	const { precision, projectionOptions } = options
 
 	return {
-		centerLine: geoPolylinesToSvgPathData([lines.centerLine], projection, options),
-		umbraNorth: geoPolylinesToSvgPathData(lines.umbraNorth, projection, options),
-		umbraSouth: geoPolylinesToSvgPathData(lines.umbraSouth, projection, options),
-		penumbraNorth: geoPolylinesToSvgPathData(lines.penumbraNorth, projection, options),
-		penumbraSouth: geoPolylinesToSvgPathData(lines.penumbraSouth, projection, options),
-		riseSetCurves: geoPolylinesToSvgPathData(lines.riseSetCurves, projection, options),
+		centerLine: geoPolylinesToSvgPathData([lines.centerLine], projection, precision, projectionOptions),
+		umbraNorth: geoPolylinesToSvgPathData(lines.umbraNorth, projection, precision, projectionOptions),
+		umbraSouth: geoPolylinesToSvgPathData(lines.umbraSouth, projection, precision, projectionOptions),
+		penumbraNorth: geoPolylinesToSvgPathData(lines.penumbraNorth, projection, precision, projectionOptions),
+		penumbraSouth: geoPolylinesToSvgPathData(lines.penumbraSouth, projection, precision, projectionOptions),
+		riseSetCurves: geoPolylinesToSvgPathData(lines.riseSetCurves, projection, precision, projectionOptions),
 		points: {
 			P1: projectPoint(points.P1),
 			P2: projectPoint(points.P2),

@@ -3,10 +3,9 @@ import { DEG2RAD, PI, TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
 import { nearestSolarEclipse } from '../src/sun'
 // oxfmt-ignore
-import { type GeoPoint, type PolynomialBesselianElements, intermediateGreatCircle, findEclipseCurvePoint, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, computeSunMoonPositionAt, evaluateBesselian, BRANCH_MAX_DRAWABLE_GAP, F, type GeoCurve, type GeoBranch } from '../src/sun.eclipse.map'
-import * as elpmpp02 from '../src/elpmpp02'
-import { timeYMD, type Time, time, Timescale } from '../src/time'
-import * as vsop87e from '../src/vsop87e'
+import { type SolarEclipseGeoPoint, type PolynomialBesselianElements, intermediateGreatCircle, findEclipseCurvePoint, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, evaluateBesselian, BRANCH_MAX_DRAWABLE_GAP } from '../src/sun.eclipse.map'
+import { F, sunMoonPosition, type EclipseGeoBranch, type EclipseGeoCurve, type SunMoonProvider } from '../src/eclipse'
+import { timeYMD, time, Timescale } from '../src/time'
 
 const CATALOG_STEP = deg(Number.parseFloat(Bun.env.SOLAR_ECLIPSE_CATALOG_STEP_DEG || '0.5'))
 const CATALOG_MAX_DRAWABLE_GAP = Math.max(BRANCH_MAX_DRAWABLE_GAP, CATALOG_STEP * 4)
@@ -25,7 +24,7 @@ export function muRate(elements: PolynomialBesselianElements, jd: number) {
 // curve solver drives to zero (W is the cross-track offset of the observer from the shadow axis, |E| the
 // shadow-edge radius). Near zero means the point lies exactly on the requested magnitude curve: the umbra
 // edge for G = 1, the penumbra edge for G = 0. Detects points that did not converge onto the physical limit.
-export function limitTangencyResidual(elements: PolynomialBesselianElements, point: GeoPoint, i: -1 | 1, G: number) {
+export function limitTangencyResidual(elements: PolynomialBesselianElements, point: SolarEclipseGeoPoint, i: -1 | 1, G: number) {
 	const be = evaluateBesselian(elements, time(point.jd!, 0, Timescale.TT))
 	const dmu = muRate(elements, point.jd!)
 	const sinD = Math.sin(be.d)
@@ -51,7 +50,7 @@ export function limitTangencyResidual(elements: PolynomialBesselianElements, poi
 
 // Counts interior vertices whose direction turns by more than threshold radians: the serrilhado detector.
 // Antimeridian-wrapping and zero-length steps are skipped. Zero means a smooth physical curve.
-export function countKinks(branch: GeoBranch, threshold: number) {
+export function countKinks(branch: EclipseGeoBranch, threshold: number) {
 	let count = 0
 
 	for (let i = 1; i < branch.length - 1; i++) {
@@ -70,7 +69,7 @@ export function countKinks(branch: GeoBranch, threshold: number) {
 }
 
 // Great-circle interpolation of a time-parametrized curve at an arbitrary Julian Day.
-export function interpolateAtJulianDay(line: GeoBranch, jd: number) {
+export function interpolateAtJulianDay(line: EclipseGeoBranch, jd: number) {
 	for (let i = 1; i < line.length; i++) {
 		if (line[i - 1].jd! <= jd && jd <= line[i].jd!) {
 			const fraction = (jd - line[i - 1].jd!) / (line[i].jd! - line[i - 1].jd!)
@@ -103,7 +102,7 @@ export function longestProjectedSegment(pathData: string) {
 }
 
 // Largest spherical edge between consecutive points within any branch, skipping antimeridian wraps.
-export function maxBranchSegment(curve: GeoCurve) {
+export function maxBranchSegment(curve: EclipseGeoCurve) {
 	let max = 0
 
 	for (const branch of curve) {
@@ -124,11 +123,15 @@ export function geometryFor(year: number, month: number, day: number) {
 	return { eclipse, elements, geometry }
 }
 
-export function sunMoonPosition(t: Time) {
-	return computeSunMoonPositionAt(t, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
+export function fixedSunMoonPosition(rightAscension: number, declination: number = 0): SunMoonProvider {
+	return () => ({
+		sun: { rightAscension: rightAscension - PI + deg(0.1), declination: 0, distance: 1 },
+		moon: { rightAscension, declination, distance: 60 },
+		deltaT: 0,
+	})
 }
 
-export function endpointRetraces(branch: GeoBranch, fromStart: boolean) {
+export function endpointRetraces(branch: EclipseGeoBranch, fromStart: boolean) {
 	if (branch.length < 4) return false
 
 	const endpoint = fromStart ? branch[0] : branch.at(-1)!
@@ -149,7 +152,7 @@ export function endpointRetraces(branch: GeoBranch, fromStart: boolean) {
 	return false
 }
 
-export function catalogBranchRetraces(branch: GeoBranch, tolerance: Angle, minArcSeparation: Angle) {
+export function catalogBranchRetraces(branch: EclipseGeoBranch, tolerance: Angle, minArcSeparation: Angle) {
 	const arc = new Float64Array(branch.length)
 
 	for (let k = 1; k < branch.length; k++) arc[k] = arc[k - 1] + sphericalSeparation(branch[k - 1].x, branch[k - 1].y, branch[k].x, branch[k].y)
@@ -177,7 +180,7 @@ const CATALOG_BRIDGE_MAX_DEPTH = 10
 
 // Solves an in-between curve point on the great-circle-midpoint meridian of a..b that lies strictly between
 // them (both sub-distances within CATALOG_BRIDGE_BALANCE of the gap), or undefined when none is found.
-function solveCatalogBridgeMidpoint(elements: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 1, G: number) {
+function solveCatalogBridgeMidpoint(elements: PolynomialBesselianElements, a: SolarEclipseGeoPoint, b: SolarEclipseGeoPoint, i: -1 | 1, G: number) {
 	const limit = CATALOG_BRIDGE_BALANCE * sphericalSeparation(a.x, a.y, b.x, b.y)
 	const midpoint = intermediateGreatCircle(a, b, 0.5)
 
@@ -196,7 +199,7 @@ function solveCatalogBridgeMidpoint(elements: PolynomialBesselianElements, a: Ge
 // a merge the engine correctly refuses. Requiring every recursive half to be bridgeable, down to a step that
 // can still hold an irreducible fold cusp (CATALOG_MAX_DRAWABLE_GAP), matches the engine's drawable-continuity
 // definition and only ever makes the probe stricter, so it can remove false positives but never invent gaps.
-export function hasContinuousCurveBetween(elements: PolynomialBesselianElements, a: GeoPoint, b: GeoPoint, i: -1 | 1, G: number, _gap: Angle, depth = 0): boolean {
+export function hasContinuousCurveBetween(elements: PolynomialBesselianElements, a: SolarEclipseGeoPoint, b: SolarEclipseGeoPoint, i: -1 | 1, G: number, _gap: Angle, depth = 0): boolean {
 	const gap = sphericalSeparation(a.x, a.y, b.x, b.y)
 	if (gap <= CATALOG_STEP) return true
 	if (Math.max(Math.abs(a.y), Math.abs(b.y)) > CATALOG_RECONNECT_POLE_LATITUDE) return false

@@ -278,6 +278,11 @@ export function timeShift(time: Time, fraction: number): Time {
 	return normalized
 }
 
+// Builds a Time at a Julian Day, preserving the reference time scale and providers.
+export function timeAtJulianDay(reference: Time, julianDay: number) {
+	return timeShift(reference, julianDay - reference.day - reference.fraction)
+}
+
 // Caches the timescale for target based on source.
 function timescale(target: Time, source: Time) {
 	const c = cache(target, source.cache)
