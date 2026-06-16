@@ -1,12 +1,12 @@
-import * as elpmpp02 from '../src/elpmpp02'
-import { precessionNutationMatrix, timeShift, type Time } from '../src/time'
-import * as vsop87e from '../src/vsop87e'
+import { precessionNutationMatrix, timeShift, tt, type Time } from '../src/time'
 import { normalizeAngle, normalizePI, type Angle } from './angle'
-import type { PositionAndVelocityOverTime } from './astrometry'
+import type { PositionAndVelocity, PositionAndVelocityOverTime } from './astrometry'
 import { AU_KM, DAYSEC, DEG2RAD, EARTH_RADIUS_KM, LIGHT_TIME_AU, PI, SPEED_OF_LIGHT_AU_DAY, TAU, WGS84_FLATTENING } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { deltaTByEspenakMeeus2006 } from './deltat'
 import { eraAb, eraP2s, eraEpj } from './erfa'
+import { eraEpv00 } from './erfa.earth'
+import { eraMoon98 } from './erfa.moon'
 import type { Point } from './geometry'
 import { matMulVec } from './mat3'
 import { clamp } from './math'
@@ -164,9 +164,24 @@ export function computeSunMoonPositionAt(time: Time, sun: PositionAndVelocityOve
 	}
 }
 
-// Apparent Sun/Moon position provider from the analytical VSOP87E + ELP/MPP02 ephemerides.
+function earth(time: Time) {
+	const { day, fraction } = tt(time)
+	return eraEpv00(day, fraction)[0]
+}
+
+function sun(time: Time): PositionAndVelocity {
+	const { day, fraction } = tt(time)
+	const [pvb, pvh] = eraEpv00(day, fraction)
+	return [vecMinus(pvb[0], pvh[0]), vecMinus(pvb[1], pvh[1])]
+}
+
+function moon(time: Time) {
+	return eraMoon98(time.day, time.fraction) as PositionAndVelocity
+}
+
+// Apparent Sun/Moon position provider from the analytical ERFA/Meeus ephemerides (significantly faster).
 export function sunMoonPosition(time: Time) {
-	return computeSunMoonPositionAt(time, vsop87e.sun, vsop87e.earth, elpmpp02.moon)
+	return computeSunMoonPositionAt(time, sun, earth, moon)
 }
 
 const BISECT_ROOT_OPTIONS: RootFindingOptions = { tolerance: 1e-8 }

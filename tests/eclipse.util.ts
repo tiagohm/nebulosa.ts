@@ -4,8 +4,8 @@ import { sphericalSeparation } from '../src/geometry'
 import { nearestSolarEclipse } from '../src/sun'
 // oxfmt-ignore
 import { type SolarEclipseGeoPoint, type PolynomialBesselianElements, intermediateGreatCircle, findEclipseCurvePoint, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, evaluateBesselian, BRANCH_MAX_DRAWABLE_GAP } from '../src/sun.eclipse.map'
-import { F, sunMoonPosition, type EclipseGeoBranch, type EclipseGeoCurve, type SunMoonPosition, type SunMoonProvider } from '../src/eclipse'
-import { timeYMD, type Time, time, Timescale } from '../src/time'
+import { F, sunMoonPosition, type EclipseGeoBranch, type EclipseGeoCurve, type SunMoonProvider } from '../src/eclipse'
+import { timeYMD, time, Timescale } from '../src/time'
 
 const CATALOG_STEP = deg(Number.parseFloat(Bun.env.SOLAR_ECLIPSE_CATALOG_STEP_DEG || '0.5'))
 const CATALOG_MAX_DRAWABLE_GAP = Math.max(BRANCH_MAX_DRAWABLE_GAP, CATALOG_STEP * 4)
@@ -118,17 +118,9 @@ export function maxBranchSegment(curve: EclipseGeoCurve) {
 export function geometryFor(year: number, month: number, day: number) {
 	const STEP = 0.5 * DEG2RAD
 	const eclipse = nearestSolarEclipse(timeYMD(year, month, day), true)
-	const elements = computePolynomialBesselianElements(eclipse.maximalTime, cachedSunMoonPosition)
+	const elements = computePolynomialBesselianElements(eclipse.maximalTime, sunMoonPosition)
 	const geometry = computeSolarEclipseMapGeometry(eclipse, elements, { longitudeStep: STEP, maxAngularStep: STEP, includeRiseSetCurves: false })
 	return { eclipse, elements, geometry }
-}
-
-const SUN_MOON_POSITION_CACHE = new Map<string, SunMoonPosition>()
-
-// Cached apparent Sun/Moon position provider from the analytical VSOP87E + ELP/MPP02 ephemerides.
-export function cachedSunMoonPosition(time: Time) {
-	const key = `${time.scale}-${time.day}-${time.fraction}`
-	return SUN_MOON_POSITION_CACHE.getOrInsertComputed(key, () => sunMoonPosition(time))
 }
 
 export function fixedSunMoonPosition(rightAscension: number, declination: number = 0): SunMoonProvider {

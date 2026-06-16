@@ -4,11 +4,11 @@ import { nearestSolarEclipse, type SolarEclipse, type SolarEclipseType } from '.
 // oxfmt-ignore
 import { BRANCH_MAX_DRAWABLE_GAP, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeRiseSetCurves, computeSolarEclipseMapGeometry, evaluateBesselian, findCentralLineExtremePoint, findCircleIntersections, findCurvePoints, findEclipseCurvePoint, findMaximumPoint, findPenumbraContactPoints, intermediateGreatCircle, projectClosestEarthLimbPoint, projectFundamentalPoint, solarAltitudeAtPoint, solarEclipseMapToSvgPaths, splitAtMaxAbsLatitude, splitCentralLineByKind, splitDisconnectedPolylines, type SolarEclipseGeoBranch, type SolarEclipseGeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry } from '../src/sun.eclipse.map'
 import { DEG2RAD, PI, PIOVERTWO, TAU } from '../src/constants'
-import { DELTA_T_LONGITUDE_FACTOR, EARTH_E2, earthLimbExtremes, earthLimbOmega, type SunMoonPosition } from '../src/eclipse'
+import { DELTA_T_LONGITUDE_FACTOR, EARTH_E2, earthLimbExtremes, earthLimbOmega, sunMoonPosition, type SunMoonPosition } from '../src/eclipse'
 import { sphericalSeparation } from '../src/geometry'
 import { PlateCarree, type ProjectionOptions } from '../src/projection'
 import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../src/time'
-import { catalogBranchRetraces, countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment, cachedSunMoonPosition as sunMoonPosition } from './eclipse.util'
+import { catalogBranchRetraces, countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment } from './eclipse.util'
 
 const JD0 = 2460409.25
 const TIME0 = time(JD0)

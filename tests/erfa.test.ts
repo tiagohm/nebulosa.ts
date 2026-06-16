@@ -3,6 +3,7 @@ import { arcsec, toArcsec } from '../src/angle'
 import { kilometer, meter } from '../src/distance'
 import * as erfa from '../src/erfa'
 import { eraEpv00 } from '../src/erfa.earth'
+import { eraMoon98 } from '../src/erfa.moon'
 import type { Mat3, MutMat3 } from '../src/mat3'
 import { kilometerPerSecond, meterPerSecond, toKilometerPerSecond } from '../src/velocity'
 
@@ -994,4 +995,16 @@ test('eraEpb', () => {
 
 test('eraEpj', () => {
 	expect(erfa.eraEpj(2451545, -7392.5)).toBeCloseTo(1979.760438056125941, 13)
+})
+
+test('eraMoon98', () => {
+	const [p, v] = eraMoon98(2400000.5, 43999.9)
+
+	expect(p[0]).toBeCloseTo(-0.260129595997104418e-2, 13)
+	expect(p[1]).toBeCloseTo(0.6139750944302742189e-3, 13)
+	expect(p[2]).toBeCloseTo(0.2640794528229828909e-3, 13)
+
+	expect(v[0]).toBeCloseTo(-0.1244321506649895021e-3, 13)
+	expect(v[1]).toBeCloseTo(-0.5219076942678119398e-3, 13)
+	expect(v[2]).toBeCloseTo(-0.1716132214378462047e-3, 13)
 })

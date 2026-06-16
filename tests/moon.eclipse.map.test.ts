@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, type Angle } from '../src/angle'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
+import { sunMoonPosition } from '../src/eclipse'
 import { nearestLunarEclipse } from '../src/moon'
 import { moonAltitudeAt } from '../src/moon.eclipse.local'
 import { computeLunarEclipseMapGeometry, lunarEclipseEvents, lunarEclipseMapToSvgPaths, MOON_RADIUS_EARTH_RADII, type LunarEclipseContactKind } from '../src/moon.eclipse.map'
 import { PlateCarree } from '../src/projection'
 import { greenwichApparentSiderealTime, type Time, timeYMDHMS } from '../src/time'
-import { cachedSunMoonPosition } from './eclipse.util'
 
 // Cheap deterministic position provider for tests that exercise local-circumstance plumbing rather than the
 // analytical VSOP87/ELP ephemerides. The Moon stays high for FAST_LONGITUDE/FAST_LATITUDE, keeping visibility
@@ -191,7 +191,7 @@ describe('upper-limb visibility', () => {
 	// TOTAL is the 1997-07 eclipse, near perigee: its apparent semidiameter (~0.279 deg) is distinctly larger
 	// than the mean (~0.259 deg), so the upper-limb curve must use the per-event semidiameter from the distance.
 	test('upper-limb curve uses the per-event semidiameter from the Moon distance', () => {
-		const geometry = computeLunarEclipseMapGeometry(TOTAL, cachedSunMoonPosition, { limbVisibility: 'upperLimb' })
+		const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition, { limbVisibility: 'upperLimb' })
 		for (const event of geometry.events) {
 			const semidiameter = Math.asin(MOON_RADIUS_EARTH_RADII / event.distance)
 			// Near perigee, distinctly above the 0.259 deg mean a fixed lift would have used.
@@ -204,7 +204,7 @@ describe('upper-limb visibility', () => {
 
 			for (let i = 0; i < branch.length; i += stepN) {
 				const point = branch[i]
-				expect(moonAltitudeAt(event.time, point.x, point.y, cachedSunMoonPosition)).toBeCloseTo(-semidiameter, 3)
+				expect(moonAltitudeAt(event.time, point.x, point.y, sunMoonPosition)).toBeCloseTo(-semidiameter, 3)
 			}
 		}
 	}, 8000)
@@ -225,7 +225,7 @@ describe('high declination robustness', () => {
 })
 
 describe('SVG serialization', () => {
-	const geometry = computeLunarEclipseMapGeometry(TOTAL, cachedSunMoonPosition)
+	const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
 	const projection = equirectangular(720, 360)
 	const svg = lunarEclipseMapToSvgPaths(geometry, projection)
 
@@ -299,7 +299,7 @@ function pointInPath(px: number, py: number, path: string): boolean {
 }
 
 describe('fill region polygons', () => {
-	const geometry = computeLunarEclipseMapGeometry(TOTAL, cachedSunMoonPosition)
+	const geometry = computeLunarEclipseMapGeometry(TOTAL, sunMoonPosition)
 	const projection = equirectangular(720, 360)
 
 	test('fill replaces the open curves with closed polygons', () => {
