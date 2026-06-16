@@ -6,9 +6,9 @@ import type { SunMoonProvider } from './eclipse'
 import { eraGst06a } from './erfa'
 import type { Point } from './geometry'
 import { clamp } from './math'
-import type { LunarEclipse } from './moon'
+import { nearestLunarEclipse, type LunarEclipse } from './moon'
 import { lunarEclipseEvents, type LunarEclipseContact, type LunarEclipseContactKind, MOON_RADIUS_EARTH_RADII } from './moon.eclipse.map'
-import { timeAtJulianDay, tt, type Time } from './time'
+import { timeAtJulianDay, toJulianDay, tt, type Time } from './time'
 import type { Writable } from './types'
 
 // Local lunar eclipse circumstances and Local View geometry.
@@ -686,6 +686,54 @@ export function computeLocalLunarEclipseCircumstances(eclipse: LunarEclipse, lon
 		details,
 		events,
 	}
+}
+
+// One eclipse in a listLocalLunarEclipses result.
+export interface LocalLunarEclipseListEntry {
+	// The eclipse as returned by nearestLunarEclipse (global circumstances: contact times, type, gamma, magnitude).
+	readonly eclipse: LunarEclipse
+	// Full local circumstances at the location (visibility, magnitudes, durations, per-contact events), already
+	// computed during the visibility filter so the caller never recomputes them.
+	readonly circumstances: LocalLunarEclipseCircumstances
+}
+
+// Lists the lunar eclipses whose maximal time falls in (startTime, endTime] that are observable from the location.
+//
+// A lunar eclipse is global - it happens on the Moon, so every observer shares its contact times - and the only
+// locality is whether the Moon is above the configured horizon during the eclipse. Eclipses are enumerated with
+// nearestLunarEclipse, walking forward one eclipse per step (the Meeus series is cheap), and each candidate's full
+// local circumstances are computed once; an eclipse is kept when hasObservableEclipse is true (the Moon reaches the
+// horizon during the penumbral interval, including a moonrise/moonset mid-eclipse). The computed circumstances are
+// returned so a caller never recomputes them; an eclipse that stays below the horizon at this location is omitted.
+//
+// longitude is east-positive radians, latitude geodetic radians; options set the horizon altitude and altitude
+// sampling (see computeLocalLunarEclipseCircumstances). Results are ordered earliest-first. previousMaxJd guards
+// against a non-advancing series so the loop can never spin.
+export function listLocalLunarEclipses(longitude: Angle, latitude: Angle, startTime: Time, endTime: Time, sunMoonPosition: SunMoonProvider, options: LocalLunarEclipseCircumstancesOptions = {}): LocalLunarEclipseListEntry[] {
+	const result: LocalLunarEclipseListEntry[] = []
+
+	const startJd = toJulianDay(startTime)
+	const endJd = toJulianDay(endTime)
+	if (!Number.isFinite(startJd) || !Number.isFinite(endJd) || endJd < startJd) return result
+
+	// nearestLunarEclipse(t, true) returns the first eclipse strictly after t, so seeding the cursor with the
+	// previous maximalTime advances exactly one eclipse per step.
+	let cursor = startTime
+	let previousMaxJd = -Infinity
+
+	while (true) {
+		const eclipse = nearestLunarEclipse(cursor, true)
+		const maxJd = toJulianDay(eclipse.maximalTime)
+		if (!Number.isFinite(maxJd) || maxJd <= previousMaxJd || maxJd > endJd) break
+
+		const circumstances = computeLocalLunarEclipseCircumstances(eclipse, longitude, latitude, sunMoonPosition, options)
+		if (circumstances.visibility.hasObservableEclipse) result.push({ eclipse, circumstances })
+
+		previousMaxJd = maxJd
+		cursor = eclipse.maximalTime
+	}
+
+	return result
 }
 
 // Local View geometry

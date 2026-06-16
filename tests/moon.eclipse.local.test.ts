@@ -3,7 +3,7 @@ import { deg } from '../src/angle'
 import { PI, PIOVERTWO, TAU } from '../src/constants'
 import type { SunMoonPosition } from '../src/eclipse'
 import { nearestLunarEclipse } from '../src/moon'
-import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry, moonAltitudeAt, type LocalLunarEclipseSvgCircle, type LocalLunarEclipseSvgPolygon } from '../src/moon.eclipse.local'
+import { computeLocalLunarEclipseCircumstances, computeLocalLunarEclipseViewGeometry, listLocalLunarEclipses, moonAltitudeAt, type LocalLunarEclipseSvgCircle, type LocalLunarEclipseSvgPolygon } from '../src/moon.eclipse.local'
 import { computeLunarEclipseMapGeometry } from '../src/moon.eclipse.map'
 import { toJulianDay, type Time, timeYMDHMS, greenwichApparentSiderealTime, timeAtJulianDay } from '../src/time'
 import { fixedSunMoonPosition } from './eclipse.util'
@@ -317,6 +317,45 @@ describe('visibility classification', () => {
 		// ...but the Moon drops below the horizon between contacts, so the eclipse is not entirely visible.
 		expect(local.visibility.kind).not.toBe('completelyVisible')
 		expect(local.visibility.hasObservableEclipse).toBe(true)
+	})
+})
+
+describe('listLocalLunarEclipses', () => {
+	// In the fast provider the Moon's hour angle equals the observer longitude (constant in time), so at
+	// FAST_LONGITUDE (latitude 0) it stays high - every eclipse observable - and at the antimeridian it stays
+	// below the horizon - none observable. Contact times still come from the real Meeus series.
+	const start = timeYMDHMS(1997, 1, 1)
+	const end = timeYMDHMS(2000, 1, 1)
+	const startJd = toJulianDay(start)
+	const endJd = toJulianDay(end)
+	const antiLongitude = FAST_LONGITUDE + PI
+
+	test('lists every eclipse in (start, end] observable from the location, earliest-first', () => {
+		const list = listLocalLunarEclipses(FAST_LONGITUDE, FAST_LATITUDE, start, end, fastSunMoonPosition)
+		expect(list.length).toBeGreaterThan(0)
+
+		for (let i = 0; i < list.length; i++) {
+			const jd = toJulianDay(list[i].eclipse.maximalTime)
+			expect(jd).toBeGreaterThan(startJd)
+			expect(jd).toBeLessThanOrEqual(endJd)
+			expect(list[i].circumstances.visibility.hasObservableEclipse).toBe(true)
+			if (i > 0) expect(jd).toBeGreaterThan(toJulianDay(list[i - 1].eclipse.maximalTime))
+		}
+	})
+
+	test('omits eclipses with the Moon below the horizon throughout', () => {
+		expect(listLocalLunarEclipses(antiLongitude, FAST_LATITUDE, start, end, fastSunMoonPosition)).toEqual([])
+	})
+
+	test('an inverted interval returns no eclipses', () => {
+		expect(listLocalLunarEclipses(FAST_LONGITUDE, FAST_LATITUDE, end, start, fastSunMoonPosition)).toEqual([])
+	})
+
+	test('returns the same circumstances a direct call would compute', () => {
+		const first = listLocalLunarEclipses(FAST_LONGITUDE, FAST_LATITUDE, start, end, fastSunMoonPosition)[0]
+		const direct = computeLocalLunarEclipseCircumstances(first.eclipse, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition)
+		expect(first.circumstances.visibility.kind).toBe(direct.visibility.kind)
+		expect(first.circumstances.details.observableDuration).toBeCloseTo(direct.details.observableDuration, 6)
 	})
 })
 

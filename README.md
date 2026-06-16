@@ -940,6 +940,7 @@ const filled = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true, fil
 
 const local = computeLocalLunarEclipseCircumstances(eclipse, longitude, latitude, getSunMoonPosition, options) // Alt/Az, P/Z angles, magnitudes, visibility
 const view = computeLocalLunarEclipseViewGeometry(local, eclipse, options) // Local View shapes: umbra/penumbra rings, Moon disks, horizon
+const list = listLocalLunarEclipses(longitude, latitude, startTime, endTime, getSunMoonPosition, options) // Eclipses observable from a location in a date range, with their local circumstances
 ```
 
 ### Moon ![](bun.webp) ![](browser.webp)
