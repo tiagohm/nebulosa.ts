@@ -136,7 +136,7 @@ export const ANGVEL = 7.292115e-5
 export const TURNAS = 1296000
 
 // 1 parsec in AU.
-export const ONE_PARSEC = 206264.806245480309552772371736702884
+export const ONE_PARSEC = 206264.80624709635515647335733078
 export const ARCSEC_PER_RADIAN = ONE_PARSEC // same as TURNAS / TAU
 
 // 1000 parsecs in AU.

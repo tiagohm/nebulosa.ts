@@ -1,9 +1,12 @@
-import { AU_KM, AU_M, G, ONE_ATM, ONE_PARSEC, SPEED_OF_LIGHT } from './constants'
+import { AU_KM, AU_M, ONE_ATM, ONE_PARSEC, SPEED_OF_LIGHT } from './constants'
 import type { Pressure } from './pressure'
 import { type Temperature, toKelvin } from './temperature'
 
 // Represents a distance value in AU.
 export type Distance = number
+
+const JULIAN_YEAR_SECONDS = 31557600
+const LIGHT_YEAR_AU = (SPEED_OF_LIGHT * JULIAN_YEAR_SECONDS) / AU_M
 
 // Creates a new Distance from meters.
 export function meter(value: number): Distance {
@@ -17,7 +20,7 @@ export function kilometer(value: number): Distance {
 
 // Creates a new Distance from light years.
 export function lightYear(value: number): Distance {
-	return value * ((SPEED_OF_LIGHT * 31557600) / AU_M)
+	return value * LIGHT_YEAR_AU
 }
 
 // Creates a new Distance from parsecs.
@@ -37,7 +40,7 @@ export function toKilometer(distance: Distance): number {
 
 // Converts the distance to light years.
 export function toLightYear(distance: Distance): number {
-	return distance / ((SPEED_OF_LIGHT * 31557600) / AU_M)
+	return distance / LIGHT_YEAR_AU
 }
 
 // Converts the distance to parsecs.
@@ -45,9 +48,14 @@ export function toParsec(distance: Distance): number {
 	return distance / ONE_PARSEC
 }
 
-// Computes the altitude given the pressure and temperature.
+const GAS_CONSTANT = 8.31446261815324
+const STANDARD_LAPSE_RATE = 0.0065
+const STANDARD_GRAVITY = 9.80665
+const DRY_AIR_MOLAR_MASS = 0.0289644
+
+const PRESSURE_ALTITUDE_EXPONENT = (GAS_CONSTANT * STANDARD_LAPSE_RATE) / (STANDARD_GRAVITY * DRY_AIR_MOLAR_MASS)
+
+// Computes approximate pressure altitude using the barometric formula with a constant tropospheric lapse rate.
 export function fromPressure(pressure: Pressure, temperature: Temperature = 15): Distance {
-	const k = toKelvin(temperature) / 0.0065
-	const e = (8.31447 * 0.0065) / (G * 0.0289644) // R * L / (g * M)
-	return meter(k * (1 - (pressure / ONE_ATM) ** e))
+	return meter((toKelvin(temperature) / STANDARD_LAPSE_RATE) * (1 - (pressure / ONE_ATM) ** PRESSURE_ALTITUDE_EXPONENT))
 }
