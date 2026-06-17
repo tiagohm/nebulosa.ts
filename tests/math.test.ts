@@ -11,6 +11,9 @@ test('pmod', () => {
 	expect(pmod(-1.6868146928204135, TAU)).toBeCloseTo(4.596370614359173, 15)
 	expect(pmod(-5, -3)).toBe(1)
 	expect(Object.is(pmod(-6, -3), 0)).toBeTrue()
+	expect(pmod(-1, 360)).toBe(359)
+	expect(pmod(360, 360)).toBe(0)
+	expect(pmod(-0, 360)).toBe(0)
 })
 
 test('amod', () => {
@@ -19,6 +22,9 @@ test('amod', () => {
 	expect(amod(0, PI)).toBeCloseTo(PI, 15)
 	expect(amod(3, -3)).toBe(3)
 	expect(amod(-6, -3)).toBe(3)
+	expect(amod(0, 12)).toBe(12)
+	expect(amod(12, 12)).toBe(12)
+	expect(amod(13, 12)).toBe(1)
 })
 
 test('divmod', () => {
@@ -31,6 +37,15 @@ test('divmod', () => {
 	expect(quotient).toBe(1)
 	expect(remainder).toBeCloseTo(0.018407346410207026, 15)
 	expect(quotient * PI + remainder).toBeCloseTo(3.16, 15)
+
+	for (const num of [-25, -13, -1, 0, 1, 13, 25]) {
+		for (const den of [-12, 12]) {
+			const [q, r] = divmod(num, den)
+			expect(q * den + r).toBe(num)
+			expect(r).toBeGreaterThanOrEqual(0)
+			expect(r).toBeLessThan(Math.abs(den))
+		}
+	}
 })
 
 test('floorDiv', () => {
@@ -60,11 +75,18 @@ test('roundToNearestWholeNumber', () => {
 test('roundToNthDecimal', () => {
 	expect(roundToNthDecimal(1.005, 2)).toBeCloseTo(1.01, 15)
 	expect(roundToNthDecimal(-1.005, 2)).toBeCloseTo(-1.01, 15)
+	expect(roundToNthDecimal(1.335, 2)).toBe(1.34)
 	expect(roundToNthDecimal(12.3456, 3)).toBeCloseTo(12.346, 15)
 	expect(roundToNthDecimal(-12.3456, 3)).toBeCloseTo(-12.346, 15)
 	expect(roundToNthDecimal(149, -2)).toBe(100)
 	expect(roundToNthDecimal(-149, -2)).toBe(-100)
 	expect(roundToNthDecimal(Number.POSITIVE_INFINITY, 2)).toBe(Number.POSITIVE_INFINITY)
+	expect(roundToNthDecimal(10000000000000000, 0)).toBe(10000000000000000)
+	expect(roundToNthDecimal(-10000000000000000, 0)).toBe(-10000000000000000)
+	expect(roundToNthDecimal(9007199254740991, 0)).toBe(9007199254740991)
+
+	expect(roundToNthDecimal(1234.56, -1)).toBe(1230)
+	expect(roundToNthDecimal(1234.56, -2)).toBe(1200)
 })
 
 test('signed 8-bit', () => {
@@ -115,6 +137,10 @@ test('inverseLerp', () => {
 	expect(inverseLerp(10, 20, 15)).toBeCloseTo(0.5, 15)
 	expect(inverseLerp(20, 10, 15)).toBeCloseTo(0.5, 15)
 	expect(inverseLerp(5, 5, 42)).toBe(0)
+	expect(inverseLerp(0, 10, 5)).toBe(0.5)
+	expect(inverseLerp(10, 0, 5)).toBe(0.5)
+	expect(inverseLerp(1e9, 1e9 + 1e-4, 1e9 + 5e-5)).toBeCloseTo(0.5)
+	expect(inverseLerp(1, 1, 2)).toBe(0)
 })
 
 test('remap', () => {

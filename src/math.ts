@@ -20,16 +20,26 @@ export function split(a: number) {
 	return [ah, a - ah] as const
 }
 
-// Multiplies a and b exactly, returning the result as two 64-bit floats.
-// The first is the approximate product (with some floating point error)
-// and the second is the error of the product.
+// Multiplies finite double values using Dekker splitting.
+// Returns [product, error] such that product + error approximates the exact product,
+// assuming no overflow/underflow occurs during the split/product operations.
 export function twoProduct(a: number, b: number) {
 	const x = a * b
-	const [ah, al] = split(a)
-	const [bh, bl] = split(b)
+
+	const ca = SPLITTER * a
+	const abig = ca - a
+	const ah = ca - abig
+	const al = a - ah
+
+	const cb = SPLITTER * b
+	const bbig = cb - b
+	const bh = cb - bbig
+	const bl = b - bh
+
 	let y = x - ah * bh
 	y -= al * bh
 	y -= ah * bl
+
 	return [x, al * bl - y] as const
 }
 
@@ -59,23 +69,52 @@ export function floorDiv(x: number, y: number) {
 	return Math.floor(x / y)
 }
 
-// Rounds to the nearest integer using half-away-from-zero semantics.
+const TWO_POW_52 = 4503599627370496 // 2 ** 52
+
 export function roundToNearestWholeNumber(a: number) {
-	return Math.abs(a) < 0.5 ? 0 : a < 0 ? Math.ceil(a - 0.5) : Math.floor(a + 0.5)
+	if (!Number.isFinite(a)) return a
+
+	const abs = Math.abs(a)
+
+	if (abs < 0.5) return 0
+
+	// At and above 2^52, binary64 numbers have no fractional precision below 1.
+	// Adding/subtracting 0.5 can incorrectly change an already integral value.
+	if (abs >= TWO_POW_52) return a
+
+	return a < 0 ? Math.ceil(a - 0.5) : Math.floor(a + 0.5)
 }
 
-// Rounds a decimal value to n places using sign-symmetric half-away-from-zero semantics.
 export function roundToNthDecimal(a: number, n: number) {
 	if (!Number.isFinite(a)) return a
+	if (!Number.isInteger(n)) n = Math.trunc(n)
 
 	const factor = 10 ** n
 
 	if (!Number.isFinite(factor)) return a
-	if (factor <= 0) return roundToNearestWholeNumber(a * factor)
+	if (factor === 0) return 0
 
 	const scaled = a * factor
-	const correction = Math.abs(scaled) * Number.EPSILON
-	return roundToNearestWholeNumber(scaled + (scaled < 0 ? -correction : correction)) / factor
+
+	if (!Number.isFinite(scaled)) return a
+
+	const abs = Math.abs(scaled)
+
+	// Avoid adding/subtracting 0.5 or epsilon around values where fractional
+	// precision is already unavailable or unsafe.
+	if (abs >= TWO_POW_52) return scaled / factor
+
+	const sign = scaled < 0 ? -1 : 1
+	const floor = Math.floor(abs)
+	const fraction = abs - floor
+
+	const tolerance = Math.max(Number.EPSILON, abs * Number.EPSILON)
+
+	if (Math.abs(fraction - 0.5) <= tolerance) {
+		return sign * (floor + 1) / factor
+	}
+
+	return sign * Math.floor(abs + 0.5) / factor
 }
 
 // Converts the low 8 bits of num to a signed integer.
@@ -90,8 +129,8 @@ export function signed16(num: number) {
 
 // Checks whether two numbers are equal within absolute/relative tolerances.
 export function isNearlyEqual(a: number, b: number, relativeTolerance: number = Number.EPSILON, absoluteTolerance: number = Number.EPSILON) {
-	// oxlint-disable-next-line oxc/double-comparisons
-	if (!Number.isFinite(a) || !Number.isFinite(b)) return a <= b && a >= b
+	if (a === b) return true
+	if (!Number.isFinite(a) || !Number.isFinite(b)) return false
 
 	const tolerance = Math.max(absoluteTolerance, Math.max(Math.abs(a), Math.abs(b)) * relativeTolerance)
 	return Math.abs(a - b) <= tolerance
@@ -113,18 +152,21 @@ export function lerp(a: number, b: number, t: number) {
 
 // Computes the interpolation factor of value between a and b, returning 0 for nearly degenerate spans.
 export function inverseLerp(a: number, b: number, value: number) {
-	if (isNearlyEqual(a, b)) return 0
-	return (value - a) / (b - a)
+	const d = b - a
+	if (d === 0) return 0
+	return (value - a) / d
 }
 
 // Remaps a value from one linear range to another.
 export function remap(value: number, inputMin: number, inputMax: number, outputMin: number, outputMax: number) {
-	return lerp(outputMin, outputMax, inverseLerp(inputMin, inputMax, value))
+	const d = inputMax - inputMin
+	if (d === 0) return outputMin
+	return outputMin + (outputMax - outputMin) * ((value - inputMin) / d)
 }
 
 // Returns the fractional part in the [0, 1) interval.
 export function fract(value: number) {
-	return pmod(value, 1)
+	return value - Math.floor(value)
 }
 
 // Applies a cubic Hermite interpolation between edges with clamped endpoints.

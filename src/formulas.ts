@@ -1,5 +1,5 @@
 import type { Angle } from './angle'
-import { ARCSEC_PER_RADIAN, DEG2RAD, PIOVERTWO, RAD2DEG, SIDEREAL_ARCSEC_PER_SECOND } from './constants'
+import { ARCSEC_PER_RADIAN, DEG2RAD, PIOVERTWO, RAD2DEG, SIDEREAL_RATE } from './constants'
 import type { Distance } from './distance'
 import { validateDeclination, validateFinite, validateInRange, validateNonNegativeFinite, validatePositiveAltitude, validatePositiveFinite } from './validation'
 
@@ -221,7 +221,7 @@ export function periodicErrorInPixels(periodicErrorArcsec: number, imageScaleArc
 // Returns: star trail length in pixels.
 export function starTrailLength(declination: Angle, exposureSeconds: number, imageScaleArcsecPerPixel: number) {
 	declination = validateDeclination(declination)
-	return (SIDEREAL_ARCSEC_PER_SECOND * Math.cos(declination) * validateNonNegativeFinite(exposureSeconds)) / validatePositiveFinite(imageScaleArcsecPerPixel)
+	return (SIDEREAL_RATE * Math.cos(declination) * validateNonNegativeFinite(exposureSeconds)) / validatePositiveFinite(imageScaleArcsecPerPixel)
 }
 
 // Max Exposure Before Trail. Planning formula t_max = trail_limit_px * image_scale / (15.041 * cos(dec)).
@@ -230,7 +230,7 @@ export function starTrailLength(declination: Angle, exposureSeconds: number, ima
 export function maxExposureBeforeTrail(trailLimitPixels: number, imageScaleArcsecPerPixel: number, declination: Angle) {
 	const cosine = Math.cos(validateDeclination(declination))
 	if (cosine <= MAX_EXPOSURE_COSINE_EPSILON) throw new RangeError('declination is too close to the celestial pole')
-	return (validateNonNegativeFinite(trailLimitPixels) * validatePositiveFinite(imageScaleArcsecPerPixel)) / (SIDEREAL_ARCSEC_PER_SECOND * cosine)
+	return (validateNonNegativeFinite(trailLimitPixels) * validatePositiveFinite(imageScaleArcsecPerPixel)) / (SIDEREAL_RATE * cosine)
 }
 
 // Signal-to-Noise Ratio. Planning formula SNR = S / sqrt(S + n_pix * (B + D + RN^2)).

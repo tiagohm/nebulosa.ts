@@ -1,6 +1,6 @@
 import { type Angle, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from './astrometry'
-import { PI, PIOVERTWO, SIDEREAL_ARCSEC_PER_SECOND } from './constants'
+import { PI, PIOVERTWO, SIDEREAL_RATE } from './constants'
 import type { HorizontalCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
 import type { GeographicPosition } from './location'
@@ -295,7 +295,7 @@ function computeDarvRaVelocity(declination: Angle, guideRateSidereal: number) {
 	if (cosDeclination <= MIN_RA_COS_DECLINATION) throw new RangeError('stars too close to the celestial pole are not recommended for DARV because RA motion becomes too small')
 
 	// DARV reverses RA between legs, so expose the speed magnitude instead of a signed direction.
-	return SIDEREAL_ARCSEC_PER_SECOND * guideRateSidereal * cosDeclination
+	return SIDEREAL_RATE * guideRateSidereal * cosDeclination
 }
 
 function computeDarvDriftDec(targetPolarErrorArcmin: number, geometryFactor: number) {
