@@ -123,6 +123,12 @@ export const ASEC2RAD = PI / 180 / 3600
 // Milliarcsecconds to radians.
 export const MILLIASEC2RAD = PI / 180 / 3600000
 
+// Hour angle to radians.
+export const HOUR2RAD = PI / 12
+
+// Radians to hour angle.
+export const RAD2HOUR = 12 / PI
+
 // Angular velocity in radians/s.
 export const ANGVEL = 7.292115e-5
 

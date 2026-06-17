@@ -1,4 +1,4 @@
-import { AMIN2RAD, ASEC2RAD, DEG2RAD, MILLIASEC2RAD, PI, RAD2DEG, TAU } from './constants'
+import { AMIN2RAD, ASEC2RAD, DEG2RAD, HOUR2RAD, MILLIASEC2RAD, PI, RAD2DEG, RAD2HOUR, TAU } from './constants'
 import { pmod } from './math'
 
 const DEFAULT_FORMAT_ANGLE_OPTIONS: Required<FormatAngleOptions> = {
@@ -31,12 +31,12 @@ export interface FormatAngleOptions {
 	padLength?: number
 }
 
-// Normalizes the angle to the range [0, TAU].
+// Normalizes the angle to the range [0, TAU).
 export function normalizeAngle(angle: Angle): Angle {
 	return pmod(angle, TAU)
 }
 
-// Normalizes the angle to the range [-PI, PI].
+// Normalizes the angle to the range (-PI, PI].
 export function normalizePI(angle: Angle): Angle {
 	const rem = pmod(angle + PI, TAU)
 	return rem === 0 ? PI : rem - PI
@@ -49,7 +49,7 @@ export function deg(value: number): Angle {
 
 // Creates a new Angle from hours.
 export function hour(value: number): Angle {
-	return value * (PI / 12)
+	return value * HOUR2RAD
 }
 
 // Creates a new Angle from arcmin.
@@ -69,14 +69,14 @@ export function mas(value: number): Angle {
 
 // Creates a new Angle from degress, minutes and seconds.
 export function dms(d: number, min: number = 0, sec: number = 0): Angle {
-	const neg = d < 0
+	const neg = d < 0 || Object.is(d, -0)
 	const angle = deg(Math.abs(d) + Math.abs(min) / 60 + Math.abs(sec) / 3600)
 	return neg ? -angle : angle
 }
 
 // Creates a new Angle from hours, minutes and seconds.
 export function hms(h: number, min: number = 0, sec: number = 0): Angle {
-	const neg = h < 0
+	const neg = h < 0 || Object.is(h, -0)
 	const angle = hour(Math.abs(h) + Math.abs(min) / 60 + Math.abs(sec) / 3600)
 	return neg ? -angle : angle
 }
@@ -88,7 +88,7 @@ export function toDeg(angle: Angle): number {
 
 // Converts the angle to hours.
 export function toHour(angle: Angle): number {
-	return angle * (12 / PI)
+	return angle * RAD2HOUR
 }
 
 // Converts the angle to arcmin.
@@ -143,19 +143,19 @@ function replaceUnicodeSign(s: string) {
 }
 
 function isHourSign(input?: string) {
-	return !!input && input === 'h'
+	return input === 'h' || input === 'H'
 }
 
 function isDegSign(input?: string) {
-	return !!input && (input === 'd' || input === '°')
+	return input === 'd' || input === 'D' || input === '°'
 }
 
 function isMinuteSign(input?: string) {
-	return !!input && (input === 'm' || input === "'")
+	return input === 'm' || input === 'M' || input === "'"
 }
 
 function isSecondSign(input?: string) {
-	return !!input && (input === 's' || input === '"')
+	return input === 's' || input === 'S' || input === '"'
 }
 
 // Parses an angle from a string or number input.
@@ -173,6 +173,7 @@ export function parseAngle(input?: string | number, options?: ParseAngleOptions 
 	}
 
 	if (typeof input === 'number') {
+		if (!Number.isFinite(input)) return defaultValue
 		return isHour ? hour(input) : deg(input)
 	}
 
@@ -182,16 +183,20 @@ export function parseAngle(input?: string | number, options?: ParseAngleOptions 
 
 	const numericInput = +input
 
-	if (!Number.isNaN(numericInput)) {
+	if (Number.isFinite(numericInput)) {
 		return isHour ? hour(numericInput) : deg(numericInput)
 	}
 
 	const res = PARSE_ANGLE_DHMS_REGEX.exec(input)
 
+	if (res === null || res.index !== 0 || res[0].length !== input.length) {
+		return defaultValue
+	}
+
 	let neg = false
 	let angle = 0
 
-	if (res?.[1]) {
+	if (res[1]) {
 		const a = +res[1]
 		const b = res[3] ? +res[3] : 0
 		const c = res[5] ? +res[5] : 0
@@ -226,6 +231,17 @@ export function parseAngle(input?: string | number, options?: ParseAngleOptions 
 	return defaultValue
 }
 
+function carryMinute(hdms: number[], isHour: boolean) {
+	if (hdms[1] >= 60) {
+		hdms[1] = 0
+		hdms[0]++
+
+		if (isHour && hdms[0] === 24) {
+			hdms[0] = 0
+		}
+	}
+}
+
 // Formats the angle as a string.
 export function formatAngle(angle: Angle, options?: FormatAngleOptions) {
 	const isHour = options?.isHour ?? DEFAULT_FORMAT_ANGLE_OPTIONS.isHour
@@ -246,16 +262,13 @@ export function formatAngle(angle: Angle, options?: FormatAngleOptions) {
 	if (noSecond) {
 		if (hdms[2] >= 30) {
 			hdms[1]++
-
-			if (hdms[1] >= 60) {
-				hdms[1] = 0
-				hdms[0]++
-
-				if (isHour && hdms[0] === 24) {
-					hdms[0] = 0
-				}
-			}
+			carryMinute(hdms, isHour)
 		}
+
+		const d = `${Math.abs(hdms[0])}`.padStart(padLength, '0')
+		const m = `${Math.abs(hdms[1])}`.padStart(2, '0')
+
+		return `${sign}${d}${sa}${m}${sb}${sc}`
 	}
 
 	let s = hdms[2].toFixed(fractionDigits)
@@ -263,17 +276,8 @@ export function formatAngle(angle: Angle, options?: FormatAngleOptions) {
 	if (s.startsWith('60')) {
 		hdms[2] = 0
 		hdms[1]++
-
-		if (!noSecond) s = hdms[2].toFixed(fractionDigits)
-
-		if (hdms[1] >= 60) {
-			hdms[1] = 0
-			hdms[0]++
-
-			if (isHour && hdms[0] === 24) {
-				hdms[0] = 0
-			}
-		}
+		carryMinute(hdms, isHour)
+		s = hdms[2].toFixed(fractionDigits)
 	}
 
 	const d = `${Math.abs(hdms[0])}`.padStart(padLength, '0')
