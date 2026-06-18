@@ -687,7 +687,9 @@ export class FirmataClient implements Disposable {
 	readonly #pinStateRequestQueue: number[] = []
 	readonly #pinMap = new Map<number, Pin>()
 	readonly #analogPins: AnalogMapping = {}
-	readonly #initialization = Promise.withResolvers<boolean>()
+	// Re-armed on reset()/close() so a reconnect handshake can emit ready again. The handshake's
+	// analog-mapping step resolves it once, so without re-arming it would stay resolved one-shot.
+	#initialization = Promise.withResolvers<boolean>()
 
 	readonly #handler: FirmataClientHandler = {
 		customMessage: (client: FirmataClient, data: Buffer) => {
@@ -813,6 +815,12 @@ export class FirmataClient implements Disposable {
 	}
 
 	reset() {
+		// Re-arm the one-shot initialization gate so a subsequent (re)connect handshake runs the full
+		// firmware/capability/analog-mapping sequence and emits ready again, and ensureInitializationIsDone
+		// resolves freshly. Without this a reconnect on the same client would never become ready.
+		this.#initializing = true
+		this.#initialization = Promise.withResolvers<boolean>()
+		this.#pinStateRequestQueue.length = 0
 		this.#fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 	}
 
@@ -1032,6 +1040,8 @@ export class FirmataClient implements Disposable {
 
 	close() {
 		this.#fsm.close()
+		// Re-arm initialization so a reconnect on the same client handshakes and becomes ready again.
+		this.reset()
 	}
 }
 

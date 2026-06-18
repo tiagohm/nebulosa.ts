@@ -785,6 +785,29 @@ describe('firmata indi client', () => {
 		expect(peripheral.started).toBe(1)
 	})
 
+	test('a device reconnects after a transport close once the board is ready again', async () => {
+		const firmata = new FakeFirmata()
+		using client = new FirmataIndiClient(firmata as never, 'Board')
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+		expect(device.isConnected).toBeTrue()
+		expect(peripheral.started).toBe(1)
+
+		// The transport closes: the device disconnects and readiness is cleared.
+		firmata.fireClose()
+		expect(device.isConnected).toBeFalse()
+		expect(client.ready).toBeFalse()
+
+		// The transport reconnects and the board completes a fresh handshake, re-emitting ready (which
+		// the FirmataClient now does because close re-arms its initialization gate).
+		firmata.fireReady()
+		await device.connect()
+		expect(device.isConnected).toBeTrue()
+		expect(peripheral.started).toBe(2)
+	})
+
 	test('a real FirmataClient stays usable after a system-reset byte', async () => {
 		const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
 		const firmata = new FirmataClient(transport, new ESP8266())

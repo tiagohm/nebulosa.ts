@@ -215,6 +215,28 @@ describe('command decoding', () => {
 	})
 })
 
+test('a reconnect handshake re-emits ready after the client is closed', () => {
+	const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
+	using client = new FirmataClient(transport, new ESP8266())
+	let readyCount = 0
+	client.addHandler({ ready: () => readyCount++ })
+
+	const handshake = () => {
+		client.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7])) // firmware
+		client.process(Buffer.from([0xf0, 0x6c, 0x7f, 0x7f, 0xf7])) // pin capability (no modes)
+		client.process(Buffer.from([0xf0, 0x6a, 0x7f, 0x7f, 1, 0xf7])) // analog mapping -> ready
+	}
+
+	handshake()
+	expect(readyCount).toBe(1)
+
+	// A transport close must re-arm the one-shot initialization gate so the next handshake re-emits
+	// ready; otherwise a reconnect on the same client would stay perpetually un-ready.
+	client.close()
+	handshake()
+	expect(readyCount).toBe(2)
+})
+
 describe('command encoding', () => {
 	const transport: Transport = {
 		write: () => {},
