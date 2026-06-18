@@ -12,6 +12,9 @@ import type { DefNumberVector, DelProperty, SetNumberVector, SetSwitchVector } f
 class FakeFirmata {
 	readonly handlers = new Set<FirmataClientHandler>()
 	ready = true
+	// When set, ensureInitializationIsDone resolves with this controllable promise instead of `ready`,
+	// to model a board that is still initializing.
+	initPromise?: Promise<boolean>
 
 	addHandler(handler: FirmataClientHandler) {
 		this.handlers.add(handler)
@@ -22,7 +25,7 @@ class FakeFirmata {
 	}
 
 	ensureInitializationIsDone(timeout: number) {
-		return Promise.resolve(this.ready)
+		return this.initPromise ?? Promise.resolve(this.ready)
 	}
 
 	fireReady() {
@@ -622,6 +625,25 @@ describe('firmata indi client', () => {
 		expect(a.stopped).toBe(1)
 		expect(a.listenerCount).toBe(0)
 		expect(tagsFor(events, 'A', 'TEMPERATURE')).toContain('del')
+	})
+
+	test('a readiness seed resolving after dispose does not mark a disposed adapter ready', async () => {
+		const firmata = new FakeFirmata()
+		const init = Promise.withResolvers<boolean>()
+		firmata.initPromise = init.promise // board still initializing when the adapter is constructed
+		const client = new FirmataIndiClient(firmata as never, 'Board')
+
+		expect(client.ready).toBeFalse()
+
+		client.dispose()
+
+		// The board finishes initializing only after disposal; the late seed must not revive readiness.
+		init.resolve(true)
+		await init.promise
+		await Bun.sleep(0)
+
+		expect(client.ready).toBeFalse()
+		expect(await client.whenReady()).toBeFalse()
 	})
 
 	test('rejects registration after the client is disposed', async () => {

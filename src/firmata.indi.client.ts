@@ -150,9 +150,12 @@ export class FirmataIndiClient implements Client {
 		return Promise.race(candidates).finally(() => clearTimeout(timer))
 	}
 
-	// Marks the board ready and unblocks any pending readiness waiters for this generation.
+	// Marks the board ready and unblocks any pending readiness waiters for this generation. A disposed
+	// adapter stays permanently unready: the seed/reseed callbacks are async and may resolve after
+	// disposal, but the Firmata handler is detached and new registrations are rejected, so it must never
+	// report ready again.
 	#markReady() {
-		if (this.#ready) return
+		if (this.#ready || this.#disposed) return
 		this.#ready = true
 		this.#readyResolvers.resolve()
 	}
