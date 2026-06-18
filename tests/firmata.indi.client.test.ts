@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import type { FirmataClient, FirmataClientHandler } from '../src/firmata'
+import { FirmataClient, type FirmataClientHandler, type Transport } from '../src/firmata'
+import { ESP8266 } from '../src/firmata.board'
 import { FirmataIndiClient } from '../src/firmata.indi.client'
 import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, ListenablePeripheral, Luxmeter, Magnetometer, Peripheral, PeripheralListener, RealTimeClock, Thermometer } from '../src/firmata.peripheral'
+import { LM35 } from '../src/firmata.thermometer'
 import type { IndiClientHandler } from '../src/indi.client'
 import type { DefNumberVector, DelProperty, SetNumberVector, SetSwitchVector } from '../src/indi.types'
 
@@ -680,10 +682,9 @@ describe('firmata indi client', () => {
 		expect(connStates).toEqual(['Busy', 'Alert'])
 	})
 
-	test('connect after systemReset waits for a fresh ready before connecting', async () => {
+	test('reconnects after a systemReset without requiring a fresh ready event', async () => {
 		const firmata = new FakeFirmata()
-		const { events, handler } = createRecorder()
-		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+		using client = new FirmataIndiClient(firmata as never, 'Board')
 
 		const peripheral = new FakeThermometer('LM35', firmata as never)
 		const device = client.createPeripheral(peripheral)
@@ -693,24 +694,43 @@ describe('firmata indi client', () => {
 		expect(device.isConnected).toBeTrue()
 		expect(peripheral.started).toBe(1)
 
-		// A reset disconnects and invalidates readiness; the stale one-shot init must not satisfy it.
+		// A board reset disconnects the device. A real FirmataClient stays initialized and never
+		// re-emits ready, so the adapter must re-derive readiness rather than wait forever.
 		firmata.fireSystemReset()
 		expect(device.isConnected).toBeFalse()
-		expect(client.ready).toBeFalse()
 
-		// Connecting before a new ready must not start the peripheral nor publish a connected state.
-		events.length = 0
-		const pending = device.connect()
-		await Bun.sleep(0)
-		expect(device.isConnected).toBeFalse()
-		expect(peripheral.started).toBe(1)
-		expect(events.some((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION' && e.state === 'Idle')).toBeFalse()
+		await waitUntil(() => client.ready)
 
-		// A fresh ready completes the pending connect.
-		firmata.fireReady()
-		await pending
+		// The reconnect succeeds with no new ready event; the peripheral re-establishes its config.
+		await device.connect()
 		expect(device.isConnected).toBeTrue()
 		expect(peripheral.started).toBe(2)
+	})
+
+	test('a real FirmataClient stays usable after a system-reset byte', async () => {
+		const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
+		const firmata = new FirmataClient(transport, new ESP8266())
+		using client = new FirmataIndiClient(firmata, 'Board')
+
+		// Drive the client through its initialization handshake until it reports ready.
+		firmata.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7])) // firmware
+		firmata.process(Buffer.from([0xf0, 0x6c, 0x7f, 0x7f, 0xf7])) // pin capability (no modes)
+		firmata.process(Buffer.from([0xf0, 0x6a, 0x7f, 0x7f, 1, 0xf7])) // analog mapping -> ready
+		await waitUntil(() => client.ready)
+
+		const lm35 = new LM35(firmata, ESP8266.A0)
+		const device = client.createPeripheral(lm35)
+		await device.connect()
+		expect(device.isConnected).toBeTrue()
+
+		// A board system-reset byte disconnects the device. The client stays initialized and will not
+		// re-emit ready, so the adapter must remain usable rather than waiting for a ready that never comes.
+		firmata.process(Buffer.from([0xff]))
+		expect(device.isConnected).toBeFalse()
+
+		await waitUntil(() => client.ready)
+		await device.connect()
+		expect(device.isConnected).toBeTrue()
 	})
 
 	test('a peripheral whose start() throws after arming is stopped and left in Alert', async () => {

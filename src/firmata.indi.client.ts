@@ -84,8 +84,12 @@ export class FirmataIndiClient implements Client {
 			this.#markReady()
 		},
 		systemReset: () => {
-			this.#markNotReady()
+			// A board reset drops the devices' hardware configuration, so disconnect them; they
+			// re-establish it on reconnect. Readiness is then re-derived from the client rather than
+			// permanently invalidated: a real FirmataClient stays initialized across a reset and never
+			// re-emits ready, so marking it not-ready forever would strand every later connect.
 			this.#handleTransportLost()
+			this.#reseedReady()
 		},
 		error: (_, command: number) => {
 			console.warn(`Firmata reported an error for command 0x${command.toString(16).padStart(2, '0')}`)
@@ -162,6 +166,15 @@ export class FirmataIndiClient implements Client {
 		this.#ready = false
 		this.#readyResolvers.resolve()
 		this.#readyResolvers = Promise.withResolvers<void>()
+	}
+
+	// Re-derives readiness from the Firmata client after a board reset. Invalidates the current gate
+	// (waking any in-flight waiter) and re-seeds from the client's initialization: a still-initialized
+	// client resolves it immediately, keeping the adapter usable, while a board that genuinely
+	// re-initializes settles it when its next ready arrives. Either way a reconnect is not stranded.
+	#reseedReady() {
+		this.#markNotReady()
+		void this.firmata.ensureInitializationIsDone(0).then((ok) => ok && this.#markReady())
 	}
 
 	// Consumer handler used by the virtual devices, or a no-op handler when none was supplied.
