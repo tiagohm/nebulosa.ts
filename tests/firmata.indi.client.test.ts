@@ -472,25 +472,32 @@ describe('firmata indi client', () => {
 		expect(rtc.updates[1][3]).toBe(5)
 	})
 
-	test('a partial TIME write while the clock is still Busy uses in-range defaults, not zeroed fields', async () => {
+	test('ignores a partial TIME write while the clock is still a Busy placeholder', async () => {
 		const firmata = new FakeFirmata()
 		using client = new FirmataIndiClient(firmata as never, 'Board')
 
 		// Zeroed calendar fields, as on a real DS3231/DS1307 before its first I2C reply.
 		const rtc = new FakeRtc('DS3231', firmata as never)
 		const device = client.createPeripheral(rtc)
-		await device.connect() // TIME is published Busy with in-range defaults (MONTH=1, DAY=1)
+		await device.connect() // TIME is published Busy with placeholder defaults, not hardware time
 
-		// Partial write before any valid reading must not forward the peripheral's zeroed month/day.
-		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024 } })
+		// A partial write (no date) must not write the placeholder date back, resetting the clock.
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { HOUR: 12 } })
+		expect(rtc.updates).toHaveLength(0)
 
+		// A complete date is accepted even while Busy.
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 6, DAY: 18, HOUR: 12 } })
 		expect(rtc.updates).toHaveLength(1)
-		const [year, month, day] = rtc.updates[0]
-		expect(year).toBe(2024)
-		expect(month).toBe(1)
-		expect(day).toBe(1)
-		expect(month).toBeGreaterThanOrEqual(1)
-		expect(day).toBeGreaterThanOrEqual(1)
+		expect(rtc.updates[0].slice(0, 3)).toEqual([2024, 6, 18])
+
+		// After a valid reading settles TIME to Idle, partial writes preserve the hardware date.
+		rtc.year = 2030
+		rtc.month = 9
+		rtc.day = 5
+		rtc.emit()
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { HOUR: 8 } })
+		expect(rtc.updates).toHaveLength(2)
+		expect(rtc.updates[1].slice(0, 3)).toEqual([2030, 9, 5])
 	})
 
 	test('an RTC with default (zero) calendar fields publishes TIME busy until a valid reading', async () => {
