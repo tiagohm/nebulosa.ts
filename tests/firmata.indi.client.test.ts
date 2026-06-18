@@ -198,6 +198,31 @@ describe('firmata indi client', () => {
 		expect(device.isConnected).toBeFalse()
 	})
 
+	test('a handler can auto-connect the device synchronously from its CONNECTION definition', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+
+		// React to the CONNECTION definition by immediately requesting a connect, exercising the path
+		// where the command must route back to the just-registered device.
+		const autoConnect: IndiClientHandler = {
+			...handler,
+			defSwitchVector: (c, m) => {
+				handler.defSwitchVector?.(c, m)
+				if (m.name === 'CONNECTION') c.sendSwitch({ device: m.device, name: 'CONNECTION', elements: { CONNECT: true } })
+			},
+		}
+
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler: autoConnect })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		peripheral.temperature = 12
+		const device = client.createPeripheral(peripheral)
+
+		await waitUntil(() => device.isConnected)
+		expect(peripheral.started).toBe(1)
+		expect(events.some((e) => e.tag === 'defNumber' && e.device === 'LM35' && e.name === 'TEMPERATURE')).toBeTrue()
+	})
+
 	test('connecting starts the peripheral once, defines TEMPERATURE and publishes its value', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()

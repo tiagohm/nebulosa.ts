@@ -186,6 +186,10 @@ export class FirmataIndiClient implements Client {
 
 		this.#devices.set(peripheral.name, device as never)
 		this.#peripherals.add(peripheral)
+
+		// Publish the initial definitions only after registration so a handler that auto-connects on the
+		// CONNECTION definition can route the command back to this now-registered device.
+		device.announce()
 		return device
 	}
 
@@ -272,14 +276,18 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		for (const measurement of this.measurements) {
 			measurement.vector.device = name
 		}
-
-		// Publish only the general/control vectors before any connection.
-		handleDefTextVector(this.client, this.handler, this.#driverInfo)
-		handleDefSwitchVector(this.client, this.handler, this.#connection)
 	}
 
 	get handler() {
 		return this.client.handler
+	}
+
+	// Publishes the standard general/control vectors that exist before any connection. Called by the
+	// client after the device is registered, so a handler that reacts to the CONNECTION definition by
+	// routing a command back to this device finds it already present in the client's device map.
+	announce() {
+		handleDefTextVector(this.client, this.handler, this.#driverInfo)
+		handleDefSwitchVector(this.client, this.handler, this.#connection)
 	}
 
 	get isConnected() {
