@@ -224,6 +224,10 @@ export class FirmataIndiClient implements Client {
 		this.#devices.clear()
 		this.#peripherals.clear()
 
+		// Unblock any connect still waiting on readiness so it observes disposal and aborts, rather
+		// than hanging until its timeout now that the firmata handler is detached.
+		this.#readyResolvers.resolve()
+
 		this.#notifyClose(false)
 	}
 
@@ -246,6 +250,10 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	readonly #listener: PeripheralListener<D>
 	#started = false
 	#connecting = false
+	// Set when a disconnect or dispose arrives while a connect is awaiting board readiness, so the
+	// in-flight connect aborts instead of starting the peripheral after the user cancelled.
+	#cancelPending = false
+	#disposed = false
 
 	constructor(
 		readonly client: FirmataIndiClient,
@@ -324,8 +332,9 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// vectors with their current values, and returns the connection to Idle. On failure it cleans up
 	// partial work, marks the connection Alert and leaves the device safely disconnected.
 	async connect() {
-		if (this.isConnected || this.#connecting) return
+		if (this.isConnected || this.#connecting || this.#disposed) return
 		this.#connecting = true
+		this.#cancelPending = false
 
 		this.#connection.state = 'Busy'
 		handleSetSwitchVector(this.client, this.handler, this.#connection)
@@ -334,6 +343,19 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 			// Reset-aware readiness gate: after a systemReset/close this waits for a fresh ready instead
 			// of reusing the board's already-resolved one-shot initialization promise.
 			const ready = await this.client.whenReady()
+
+			// A disconnect or dispose may have arrived while waiting. Honor the cancellation before
+			// touching the peripheral so a late readiness resolution cannot start a cancelled device.
+			if (this.#cancelPending || this.#disposed) {
+				if (!this.#disposed) {
+					selectOnSwitch(this.#connection, 'DISCONNECT')
+					this.#connection.state = 'Idle'
+					handleSetSwitchVector(this.client, this.handler, this.#connection)
+				}
+
+				return
+			}
+
 			if (!ready) throw new Error(`Firmata board for "${this.name}" is not ready`)
 
 			this.peripheral.addListener(this.#listener)
@@ -373,6 +395,13 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// Disconnects the virtual device: detaches the listener, stops the peripheral if this adapter
 	// started it, deletes the dynamic measurement properties and returns the connection to Idle.
 	disconnect(publishConnection: boolean = true) {
+		// A connect awaiting board readiness is not yet connected; flag the cancellation so the pending
+		// connect settles disconnected instead of starting the peripheral once it resumes.
+		if (this.#connecting && !this.isConnected) {
+			this.#cancelPending = true
+			return
+		}
+
 		if (!this.isConnected) return
 
 		this.peripheral.removeListener(this.#listener)
@@ -399,8 +428,10 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		this.disconnect()
 	}
 
-	// Tears the device down completely: disconnects and removes the entire device view.
+	// Tears the device down completely: disconnects and removes the entire device view. Marking the
+	// device disposed also aborts any connect still waiting on board readiness.
 	dispose() {
+		this.#disposed = true
 		this.disconnect(false)
 		this.handler.delProperty?.(this.client, { device: this.name })
 	}

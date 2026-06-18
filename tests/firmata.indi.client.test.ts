@@ -471,6 +471,56 @@ describe('firmata indi client', () => {
 		expect(peripheral.started).toBe(2)
 	})
 
+	test('disconnect during a pending connect cancels it before the peripheral starts', async () => {
+		const firmata = new FakeFirmata()
+		firmata.ready = false // board still initializing, so whenReady stays pending
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+
+		// CONNECT requested while the board is still initializing.
+		const pending = device.connect()
+		await Bun.sleep(0)
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(0)
+
+		// DISCONNECT requested before initialization completes.
+		client.sendSwitch({ device: 'LM35', name: 'CONNECTION', elements: { DISCONNECT: true } })
+
+		// Initialization now completes; the cancelled connect must not start the peripheral.
+		firmata.fireReady()
+		await pending
+
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(0)
+		expect(peripheral.listenerCount).toBe(0)
+
+		// The connection settled back to a published Idle/DISCONNECT, never reporting connected.
+		const connStates = events.filter((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION').map((e) => e.state)
+		expect(connStates).toEqual(['Busy', 'Idle'])
+	})
+
+	test('dispose during a pending connect aborts it before the peripheral starts', async () => {
+		const firmata = new FakeFirmata()
+		firmata.ready = false
+		const client = new FirmataIndiClient(firmata as never, 'Board')
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+
+		const pending = device.connect()
+		await Bun.sleep(0)
+
+		client.dispose()
+		await pending
+
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(0)
+		expect(peripheral.listenerCount).toBe(0)
+	})
+
 	test('firmata reset and close disconnect devices, and dispose is idempotent', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
