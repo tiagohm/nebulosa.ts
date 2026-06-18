@@ -148,8 +148,13 @@ export class FirmataIndiClient implements Client {
 	}
 
 	// Marks the board not ready and arms a fresh gate so waiters require the next `ready` event.
+	// Settles the outgoing gate before replacing it: a whenReady() already racing the previous
+	// generation would otherwise be orphaned and only unblock at its timeout. Waiters resumed this way
+	// re-check cancellation/disposal (a reset/close always cancels in-flight connects), so an unready
+	// board is never treated as connectable.
 	#markNotReady() {
 		this.#ready = false
+		this.#readyResolvers.resolve()
 		this.#readyResolvers = Promise.withResolvers<void>()
 	}
 

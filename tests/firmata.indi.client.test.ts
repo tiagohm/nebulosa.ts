@@ -648,6 +648,29 @@ describe('firmata indi client', () => {
 		expect(peripheral.listenerCount).toBe(0)
 	})
 
+	test('a connect waiting on readiness settles immediately when the board closes mid-wait', async () => {
+		const firmata = new FakeFirmata()
+		firmata.ready = false // board not ready, so whenReady stays pending on the current generation
+		const client = new FirmataIndiClient(firmata as never, 'Board') // default (long) connection timeout
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+
+		const pending = device.connect()
+		await Bun.sleep(0)
+		expect(device.isConnected).toBeFalse()
+
+		// Board closes (replacing the readiness gate) and the caller disposes the client. The in-flight
+		// connect must settle via the gate, not linger until connectionTimeout.
+		firmata.fireClose()
+		client.dispose()
+
+		const outcome = await Promise.race([pending.then(() => 'settled'), Bun.sleep(100).then(() => 'timeout')])
+		expect(outcome).toBe('settled')
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(0)
+	})
+
 	test('firmata reset and close disconnect devices, and dispose is idempotent', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
