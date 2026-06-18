@@ -23,6 +23,10 @@ class FakeFirmata {
 		return Promise.resolve(this.ready)
 	}
 
+	fireReady() {
+		for (const handler of this.handlers) handler.ready?.(this as never)
+	}
+
 	fireSystemReset() {
 		for (const handler of this.handlers) handler.systemReset?.(this as never)
 	}
@@ -420,7 +424,7 @@ describe('firmata indi client', () => {
 		const firmata = new FakeFirmata()
 		firmata.ready = false
 		const { events, handler } = createRecorder()
-		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler, connectionTimeout: 0 })
 
 		const peripheral = new FakeThermometer('LM35', firmata as never)
 		const device = client.createPeripheral(peripheral)
@@ -432,6 +436,39 @@ describe('firmata indi client', () => {
 		expect(peripheral.listenerCount).toBe(0)
 		const connStates = events.filter((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION').map((e) => e.state)
 		expect(connStates).toEqual(['Busy', 'Alert'])
+	})
+
+	test('connect after systemReset waits for a fresh ready before connecting', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+
+		// Initial connect succeeds once the board is ready.
+		await device.connect()
+		expect(device.isConnected).toBeTrue()
+		expect(peripheral.started).toBe(1)
+
+		// A reset disconnects and invalidates readiness; the stale one-shot init must not satisfy it.
+		firmata.fireSystemReset()
+		expect(device.isConnected).toBeFalse()
+		expect(client.ready).toBeFalse()
+
+		// Connecting before a new ready must not start the peripheral nor publish a connected state.
+		events.length = 0
+		const pending = device.connect()
+		await Bun.sleep(0)
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(1)
+		expect(events.some((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION' && e.state === 'Idle')).toBeFalse()
+
+		// A fresh ready completes the pending connect.
+		firmata.fireReady()
+		await pending
+		expect(device.isConnected).toBeTrue()
+		expect(peripheral.started).toBe(2)
 	})
 
 	test('firmata reset and close disconnect devices, and dispose is idempotent', async () => {
@@ -449,7 +486,8 @@ describe('firmata indi client', () => {
 		expect(peripheral.listenerCount).toBe(0)
 		expect(tagsFor(events, 'LM35', 'TEMPERATURE')).toContain('del')
 
-		// Reconnect, then verify close also disconnects.
+		// Reconnect after a fresh ready, then verify close also disconnects.
+		firmata.fireReady()
 		await device.connect()
 		expect(device.isConnected).toBeTrue()
 		firmata.fireClose()

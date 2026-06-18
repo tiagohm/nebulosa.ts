@@ -17,8 +17,9 @@ const GENERAL_INFO = 'General Info'
 const WEATHER = 'Weather'
 const SENSORS = 'Sensors'
 
-// Maximum time, in milliseconds, the adapter waits for the Firmata board initialization to complete
-// before failing a connection attempt. Prevents a connect from hanging forever on a dead transport.
+// Maximum time, in milliseconds, the adapter waits for the Firmata board to become ready before
+// failing a connection attempt. Prevents a connect from hanging forever on a dead transport. A
+// non-positive timeout fails immediately when the board is not currently ready.
 const DEFAULT_CONNECTION_TIMEOUT = 5000
 
 // One element of a measurement vector, bound to the peripheral reading that fills it.
@@ -45,6 +46,9 @@ const EMPTY_HANDLER: IndiClientHandler = {}
 export interface FirmataIndiClientOptions {
 	// Optional consumer of the INDI events emitted by the virtual devices.
 	readonly handler?: IndiClientHandler
+	// Time, in milliseconds, a connect waits for the board to become ready. Defaults to
+	// DEFAULT_CONNECTION_TIMEOUT. A non-positive value fails immediately when not currently ready.
+	readonly connectionTimeout?: number
 }
 
 // Local, event-driven INDI adapter that exposes Firmata peripherals as virtual INDI devices.
@@ -61,25 +65,28 @@ export class FirmataIndiClient implements Client {
 	readonly #devices = new Map<string, FirmataVirtualDevice<never>>()
 	readonly #peripherals = new Set<Peripheral>()
 	#ready = false
+	// Resolves when the board becomes ready for the current generation. Replaced on every reset/close
+	// so a connect after a reset waits for a fresh `ready` rather than reusing a stale resolution.
+	#readyResolvers = Promise.withResolvers<void>()
 	#closed = false
 	#disposed = false
 
 	// Registered with the Firmata client to track board lifecycle. A reset/close must not leave stale
 	// INDI devices or peripheral listeners behind, so both transition connected devices to a safe
-	// disconnected state.
+	// disconnected state and invalidate the readiness gate.
 	readonly #firmataHandler: FirmataClientHandler = {
 		ready: () => {
-			this.#ready = true
+			this.#markReady()
 		},
 		systemReset: () => {
-			this.#ready = false
+			this.#markNotReady()
 			this.#handleTransportLost()
 		},
 		error: (_, command: number) => {
 			console.warn(`Firmata reported an error for command 0x${command.toString(16).padStart(2, '0')}`)
 		},
 		close: () => {
-			this.#ready = false
+			this.#markNotReady()
 			this.#handleTransportLost()
 			this.#notifyClose(true)
 		},
@@ -98,11 +105,47 @@ export class FirmataIndiClient implements Client {
 		this.description = `Firmata Client (${name})`
 
 		this.firmata.addHandler(this.#firmataHandler)
+
+		// Seed readiness from the board's one-shot initialization, covering a board that became ready
+		// before this adapter attached its handler. All later transitions come from the ready,
+		// systemReset and close events, which keep the gate reset-aware.
+		void this.firmata.ensureInitializationIsDone(0).then((ok) => ok && this.#markReady())
 	}
 
-	// Whether the underlying Firmata board has finished its initialization handshake.
+	// Whether the underlying Firmata board is currently ready (since the last reset/close).
 	get ready() {
 		return this.#ready
+	}
+
+	// Resolves true once the board is ready for the current generation, or false if the configured
+	// connection timeout elapses first. A non-positive timeout fails immediately when not ready. This
+	// gate is reset-aware: a stale ready from a previous generation cannot satisfy a post-reset connect.
+	whenReady(): Promise<boolean> {
+		if (this.#ready) return Promise.resolve(true)
+
+		const timeout = this.options?.connectionTimeout ?? DEFAULT_CONNECTION_TIMEOUT
+		if (timeout <= 0) return Promise.resolve(false)
+
+		let timer: ReturnType<typeof setTimeout> | undefined
+		const ready = this.#readyResolvers.promise.then(() => true)
+		const timedOut = new Promise<boolean>((resolve) => {
+			timer = setTimeout(resolve, timeout, false)
+		})
+
+		return Promise.race([ready, timedOut]).finally(() => clearTimeout(timer))
+	}
+
+	// Marks the board ready and unblocks any pending readiness waiters for this generation.
+	#markReady() {
+		if (this.#ready) return
+		this.#ready = true
+		this.#readyResolvers.resolve()
+	}
+
+	// Marks the board not ready and arms a fresh gate so waiters require the next `ready` event.
+	#markNotReady() {
+		this.#ready = false
+		this.#readyResolvers = Promise.withResolvers<void>()
 	}
 
 	// Consumer handler used by the virtual devices, or a no-op handler when none was supplied.
@@ -288,10 +331,10 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		handleSetSwitchVector(this.client, this.handler, this.#connection)
 
 		try {
-			if (!this.client.ready) {
-				const ready = await this.client.firmata.ensureInitializationIsDone(DEFAULT_CONNECTION_TIMEOUT)
-				if (!ready) throw new Error(`Firmata board for "${this.name}" is not ready`)
-			}
+			// Reset-aware readiness gate: after a systemReset/close this waits for a fresh ready instead
+			// of reusing the board's already-resolved one-shot initialization promise.
+			const ready = await this.client.whenReady()
+			if (!ready) throw new Error(`Firmata board for "${this.name}" is not ready`)
 
 			this.peripheral.addListener(this.#listener)
 			this.peripheral.start()
