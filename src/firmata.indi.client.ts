@@ -465,6 +465,13 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 			selectOnSwitch(this.#connection, 'CONNECT')
 			this.#connection.state = 'Idle'
 			handleSetSwitchVector(this.client, this.handler, this.#connection)
+
+			// Publishing the connected state can synchronously re-enter via a handler that disconnects or
+			// disposes the device. #connecting is still set, so disconnect() only flagged the request;
+			// honor it here as the final check rather than leaving the peripheral started and connected.
+			if (this.#cancelPending || this.#disposed) {
+				this.#teardown(!this.#disposed)
+			}
 		} catch (e) {
 			// Roll back whatever was set up (listener, peripheral, published definitions) when the
 			// connect reached the start/definition phase; a pre-start failure (not ready) started none.

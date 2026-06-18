@@ -827,6 +827,37 @@ describe('firmata indi client', () => {
 		expect(connStates).toEqual(['Busy', 'Idle'])
 	})
 
+	test('a disconnect from the connected notification tears the device back down', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+
+		// React to CONNECTION settling to Idle with CONNECT selected by requesting DISCONNECT, the very
+		// last step of connect() after its final cancellation check.
+		const disconnectOnConnected: IndiClientHandler = {
+			...handler,
+			setSwitchVector: (c, m) => {
+				handler.setSwitchVector?.(c, m)
+				if (m.name === 'CONNECTION' && m.state === 'Idle' && m.elements.CONNECT?.value === true) {
+					c.sendSwitch({ device: m.device, name: 'CONNECTION', elements: { DISCONNECT: true } })
+				}
+			},
+		}
+
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler: disconnectOnConnected })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+
+		await device.connect()
+
+		// The reactive disconnect must win: the device ends disconnected and fully cleaned up.
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(1)
+		expect(peripheral.stopped).toBe(1)
+		expect(peripheral.listenerCount).toBe(0)
+		expect(tagsFor(events, 'LM35', 'TEMPERATURE')).toContain('del')
+	})
+
 	test('disconnect during a pending connect cancels it before the peripheral starts', async () => {
 		const firmata = new FakeFirmata()
 		firmata.ready = false // board still initializing, so whenReady stays pending
