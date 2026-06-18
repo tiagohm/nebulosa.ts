@@ -631,7 +631,7 @@ class RealTimeClockVirtualDevice<D extends ListenablePeripheral<D>> extends Firm
 		const millisecond = e.MILLISECOND ?? current.MILLISECOND.value
 		const dayOfWeek = e.DAY_OF_WEEK ?? weekdayOf(year, month, day)
 
-		this.#rtc.update(year, month, day, dayOfWeek, hour, minute, second, millisecond)
+		this.#rtc.update(year, month, day, hour, minute, second, millisecond, dayOfWeek)
 	}
 
 	// Syncs the clock to the host date when TIME_SYNC is selected, then resets the momentary switch.

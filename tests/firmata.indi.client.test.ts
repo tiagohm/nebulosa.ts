@@ -166,8 +166,8 @@ class FakeRtc extends FakeListenable<FakeRtc> implements RealTimeClock {
 	readonly updates: number[][] = []
 	syncs = 0
 
-	update(year = this.year, month = this.month, day = this.day, dayOfWeek = this.dayOfWeek, hour = this.hour, minute = this.minute, second = this.second, millisecond = this.millisecond) {
-		this.updates.push([year, month, day, dayOfWeek, hour, minute, second, millisecond])
+	update(year = this.year, month = this.month, day = this.day, hour = this.hour, minute = this.minute, second = this.second, millisecond = this.millisecond, dayOfWeek = this.dayOfWeek) {
+		this.updates.push([year, month, day, hour, minute, second, millisecond, dayOfWeek])
 	}
 
 	sync(date: Date = new Date()) {
@@ -514,14 +514,14 @@ describe('firmata indi client', () => {
 		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 6, DAY: 18 } })
 
 		expect(rtc.updates).toHaveLength(1)
-		const [year, month, day, dayOfWeek] = rtc.updates[0]
-		expect([year, month, day]).toEqual([2024, 6, 18])
-		// 2024-06-18 is a Tuesday (getDay() === 2), not the previous weekday (3).
-		expect(dayOfWeek).toBe(2)
+		expect(rtc.updates[0].slice(0, 3)).toEqual([2024, 6, 18])
+		// dayOfWeek is the trailing update argument. 2024-06-18 is a Tuesday (getDay() === 2), not the
+		// previous weekday (3).
+		expect(rtc.updates[0].at(-1)).toBe(2)
 
 		// An explicit DAY_OF_WEEK is still honored as sent.
 		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 6, DAY: 19, DAY_OF_WEEK: 5 } })
-		expect(rtc.updates[1][3]).toBe(5)
+		expect(rtc.updates[1].at(-1)).toBe(5)
 	})
 
 	test('ignores a partial TIME write while the clock is still a Busy placeholder', async () => {
