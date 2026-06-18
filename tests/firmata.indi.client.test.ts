@@ -581,6 +581,34 @@ describe('firmata indi client', () => {
 		expect(set?.elements?.DAY).toBe(18)
 	})
 
+	test('an RTC ignores a later corrupt frame that decodes month/day as zero', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const rtc = new FakeRtc('DS3231', firmata as never)
+		const device = client.createPeripheral(rtc)
+		await device.connect()
+
+		// A valid frame settles TIME to Idle with real values.
+		rtc.year = 2024
+		rtc.month = 6
+		rtc.day = 18
+		rtc.emit()
+		const settled = events.find((e) => e.tag === 'setNumber' && e.name === 'TIME')
+		expect(settled?.state).toBe('Idle')
+		expect(settled?.elements?.MONTH).toBe(6)
+		expect(settled?.elements?.DAY).toBe(18)
+
+		// A later corrupt frame decodes month/day as 0 (outside the vector range). It must be ignored,
+		// not published as an Idle TIME with out-of-range values.
+		events.length = 0
+		rtc.month = 0
+		rtc.day = 0
+		rtc.emit()
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'TIME')).toHaveLength(0)
+	})
+
 	test('getProperties filters by device and name and re-emits def plus value', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()

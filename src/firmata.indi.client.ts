@@ -547,8 +547,11 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// setNumberVector per vector that actually changed. No event is emitted when nothing changed.
 	#onReading(peripheral: D) {
 		for (const measurement of this.measurements) {
-			// A guarded vector stays Busy until its source produces valid values; skip until then.
-			if (measurement.vector.state === 'Busy' && measurement.isValid && !measurement.isValid(peripheral)) continue
+			// Ignore any reading a measurement deems invalid, not just while still Busy: before the first
+			// valid sample this keeps the vector Busy, and afterwards it rejects a later corrupt frame (for
+			// example a DS3231/DS1307 frame decoding month/day as 0, outside the vector range) instead of
+			// publishing out-of-range values. The vector keeps its last valid values.
+			if (measurement.isValid && !measurement.isValid(peripheral)) continue
 
 			let changed = false
 
