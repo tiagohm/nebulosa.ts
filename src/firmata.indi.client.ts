@@ -132,7 +132,10 @@ export class FirmataIndiClient implements Client {
 		if (timeout <= 0) return Promise.resolve(false)
 
 		let timer: ReturnType<typeof setTimeout> | undefined
-		const ready = this.#readyResolvers.promise.then(() => true)
+		// Report the readiness state at settlement, not an unconditional true: #markNotReady() resolves
+		// the gate on reset/close to unblock waiters, and they must observe that the board is no longer
+		// ready rather than proceeding as if it were usable.
+		const ready = this.#readyResolvers.promise.then(() => this.#ready)
 		const timedOut = new Promise<boolean>((resolve) => {
 			timer = setTimeout(resolve, timeout, false)
 		})
@@ -246,7 +249,9 @@ export class FirmataIndiClient implements Client {
 		this.#peripherals.clear()
 
 		// Unblock any connect still waiting on readiness so it observes disposal and aborts, rather
-		// than hanging until its timeout now that the firmata handler is detached.
+		// than hanging until its timeout now that the firmata handler is detached. Clearing #ready first
+		// makes whenReady() resolve false for those waiters: a disposed client is never usable.
+		this.#ready = false
 		this.#readyResolvers.resolve()
 
 		this.#notifyClose(false)

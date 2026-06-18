@@ -796,6 +796,29 @@ describe('firmata indi client', () => {
 		expect(peripheral.listenerCount).toBe(0)
 	})
 
+	test('whenReady() reflects readiness when the board signals while the call is pending', async () => {
+		const firmata = new FakeFirmata()
+		firmata.ready = false // board not ready, so whenReady() stays pending on the current generation
+		using client = new FirmataIndiClient(firmata as never, 'Board')
+
+		// A reset while pending must resolve false, not the gate's settlement-as-true.
+		const pendingReset = client.whenReady()
+		firmata.fireSystemReset()
+		expect(await pendingReset).toBeFalse()
+		expect(client.ready).toBeFalse()
+
+		// A close while pending must also resolve false.
+		const pendingClose = client.whenReady()
+		firmata.fireClose()
+		expect(await pendingClose).toBeFalse()
+
+		// A genuine ready while pending resolves true.
+		const pendingReady = client.whenReady()
+		firmata.fireReady()
+		expect(await pendingReady).toBeTrue()
+		expect(client.ready).toBeTrue()
+	})
+
 	test('a connect waiting on readiness settles immediately when the board closes mid-wait', async () => {
 		const firmata = new FakeFirmata()
 		firmata.ready = false // board not ready, so whenReady stays pending on the current generation
