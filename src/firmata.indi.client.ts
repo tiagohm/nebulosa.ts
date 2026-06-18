@@ -37,6 +37,11 @@ interface FirmataMeasurement<D extends ListenablePeripheral<D>> {
 	readonly vector: DefNumberVector & SetNumberVector & { type: 'NUMBER' }
 	// Element readers, one per element of `vector`.
 	readonly reads: readonly FirmataElementRead<D>[]
+	// Optional guard for sources that are not valid immediately after start() (for example an RTC whose
+	// start() only queues an I2C read, leaving zeroed calendar fields below the vector's min). When it
+	// returns false the vector is published Busy with its declared defaults rather than sampled, and it
+	// settles to Idle on the first reading for which this returns true.
+	readonly isValid?: (peripheral: D) => boolean
 }
 
 // Shared, empty handler used when no consumer handler is supplied, so the def*/set* helpers can run
@@ -374,11 +379,18 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 			this.peripheral.start()
 
 			for (const measurement of this.measurements) {
-				for (const { element, read } of measurement.reads) {
-					measurement.vector.elements[element].value = read(this.peripheral)
+				if (measurement.isValid && !measurement.isValid(this.peripheral)) {
+					// Source not producing valid values yet (e.g. an RTC before its first read). Keep the
+					// vector's declared defaults and publish it Busy; #onReading settles it on first reading.
+					measurement.vector.state = 'Busy'
+				} else {
+					for (const { element, read } of measurement.reads) {
+						measurement.vector.elements[element].value = read(this.peripheral)
+					}
+
+					measurement.vector.state = 'Idle'
 				}
 
-				measurement.vector.state = 'Idle'
 				handleDefNumberVector(this.client, this.handler, measurement.vector)
 			}
 
@@ -451,6 +463,9 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// setNumberVector per vector that actually changed. No event is emitted when nothing changed.
 	#onReading(peripheral: D) {
 		for (const measurement of this.measurements) {
+			// A deferred vector stays Busy until its source produces valid values; skip until then.
+			if (measurement.vector.state === 'Busy' && measurement.isValid && !measurement.isValid(peripheral)) continue
+
 			let changed = false
 
 			for (const { element, read } of measurement.reads) {
@@ -461,6 +476,12 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 					target.value = value
 					changed = true
 				}
+			}
+
+			// Settle a deferred vector once its first valid reading arrives.
+			if (measurement.vector.state === 'Busy') {
+				measurement.vector.state = 'Idle'
+				changed = true
 			}
 
 			if (changed) handleSetNumberVector(this.client, this.handler, measurement.vector)
@@ -555,6 +576,12 @@ function timeMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasuremen
 			{ element: 'SECOND', read: (peripheral) => (peripheral as unknown as RealTimeClock).second },
 			{ element: 'MILLISECOND', read: (peripheral) => (peripheral as unknown as RealTimeClock).millisecond },
 		],
+		// The clock fields are zero until the first I2C read completes; month/day below 1 are out of
+		// range, so keep TIME at its defaults and Busy until a real calendar reading arrives.
+		isValid: (peripheral) => {
+			const rtc = peripheral as unknown as RealTimeClock
+			return rtc.month >= 1 && rtc.day >= 1
+		},
 	}
 }
 

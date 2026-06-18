@@ -137,9 +137,10 @@ class FakeMagnetometer extends FakeListenable<FakeMagnetometer> implements Magne
 }
 
 class FakeRtc extends FakeListenable<FakeRtc> implements RealTimeClock {
-	year = 2000
-	month = 1
-	day = 1
+	// Zero calendar fields mirror the real DS3231/DS1307 drivers, whose start() only queues an I2C read.
+	year = 0
+	month = 0
+	day = 0
 	dayOfWeek = 0
 	hour = 0
 	minute = 0
@@ -165,6 +166,14 @@ interface RecordedEvent {
 	readonly value?: number
 	readonly state?: string
 	readonly server?: boolean
+	readonly elements?: Record<string, number>
+}
+
+// Snapshots a number vector's element values for assertions.
+function snapshot(m: DefNumberVector | SetNumberVector) {
+	const out: Record<string, number> = {}
+	for (const name in m.elements) out[name] = m.elements[name].value
+	return out
 }
 
 // Records the INDI events emitted by the adapter for assertions.
@@ -173,9 +182,9 @@ function createRecorder() {
 
 	const handler: IndiClientHandler = {
 		defTextVector: (_, m) => events.push({ tag: 'defText', device: m.device, name: m.name }),
-		defNumberVector: (_, m: DefNumberVector) => events.push({ tag: 'defNumber', device: m.device, name: m.name, state: m.state, value: Object.values(m.elements)[0]?.value }),
+		defNumberVector: (_, m: DefNumberVector) => events.push({ tag: 'defNumber', device: m.device, name: m.name, state: m.state, value: Object.values(m.elements)[0]?.value, elements: snapshot(m) }),
 		defSwitchVector: (_, m) => events.push({ tag: 'defSwitch', device: m.device, name: m.name, state: m.state }),
-		setNumberVector: (_, m: SetNumberVector) => events.push({ tag: 'setNumber', device: m.device, name: m.name, value: Object.values(m.elements)[0]?.value }),
+		setNumberVector: (_, m: SetNumberVector) => events.push({ tag: 'setNumber', device: m.device, name: m.name, state: m.state, value: Object.values(m.elements)[0]?.value, elements: snapshot(m) }),
 		setSwitchVector: (_, m: SetSwitchVector) => events.push({ tag: 'setSwitch', device: m.device, name: m.name, state: m.state }),
 		delProperty: (_, m: DelProperty) => events.push({ tag: 'del', device: m.device, name: m.name }),
 		close: (_, server) => events.push({ tag: 'close', device: '', server }),
@@ -405,6 +414,35 @@ describe('firmata indi client', () => {
 		client.sendSwitch({ device: 'DS3231', name: 'TIME_SYNC', elements: { SYNC: true } })
 		expect(rtc.updates).toHaveLength(1)
 		expect(rtc.syncs).toBe(1)
+	})
+
+	test('an RTC with default (zero) calendar fields publishes TIME busy until a valid reading', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		// Calendar fields are still the constructor defaults (zero) at connect, as on the real drivers.
+		const rtc = new FakeRtc('DS3231', firmata as never)
+		const device = client.createPeripheral(rtc)
+		await device.connect()
+
+		// TIME is defined Busy with its in-range defaults, not the out-of-range zero month/day.
+		const def = events.find((e) => e.tag === 'defNumber' && e.device === 'DS3231' && e.name === 'TIME')
+		expect(def?.state).toBe('Busy')
+		expect(def?.elements?.MONTH).toBe(1)
+		expect(def?.elements?.DAY).toBe(1)
+
+		// The first valid reading settles TIME to Idle with the real values.
+		rtc.year = 2024
+		rtc.month = 6
+		rtc.day = 18
+		rtc.emit()
+
+		const set = events.find((e) => e.tag === 'setNumber' && e.name === 'TIME')
+		expect(set?.state).toBe('Idle')
+		expect(set?.elements?.YEAR).toBe(2024)
+		expect(set?.elements?.MONTH).toBe(6)
+		expect(set?.elements?.DAY).toBe(18)
 	})
 
 	test('getProperties filters by device and name and re-emits def plus value', async () => {
