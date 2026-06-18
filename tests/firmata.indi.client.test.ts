@@ -761,18 +761,19 @@ describe('firmata indi client', () => {
 		expect(device.isConnected).toBeFalse()
 		expect(peripheral.started).toBe(0)
 
-		// DISCONNECT requested before initialization completes.
+		// DISCONNECT requested before initialization completes. The pending connect must settle promptly
+		// off the cancel signal, without waiting for a later ready event or the connection timeout.
 		client.sendSwitch({ device: 'LM35', name: 'CONNECTION', elements: { DISCONNECT: true } })
 
-		// Initialization now completes; the cancelled connect must not start the peripheral.
-		firmata.fireReady()
-		await pending
+		const outcome = await Promise.race([pending.then(() => 'settled'), Bun.sleep(100).then(() => 'timeout')])
+		expect(outcome).toBe('settled')
 
 		expect(device.isConnected).toBeFalse()
 		expect(peripheral.started).toBe(0)
 		expect(peripheral.listenerCount).toBe(0)
 
-		// The connection settled back to a published Idle/DISCONNECT, never reporting connected.
+		// The connection settled back to a published Idle/DISCONNECT, never reporting connected, and no
+		// ready event was needed.
 		const connStates = events.filter((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION').map((e) => e.state)
 		expect(connStates).toEqual(['Busy', 'Idle'])
 	})

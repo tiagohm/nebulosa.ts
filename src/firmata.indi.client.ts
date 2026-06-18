@@ -125,7 +125,9 @@ export class FirmataIndiClient implements Client {
 	// Resolves true once the board is ready for the current generation, or false if the configured
 	// connection timeout elapses first. A non-positive timeout fails immediately when not ready. This
 	// gate is reset-aware: a stale ready from a previous generation cannot satisfy a post-reset connect.
-	whenReady(): Promise<boolean> {
+	// An optional cancel signal lets a caller abandon the wait promptly (resolving with the current
+	// readiness, i.e. false while unready); racing it here also clears the timeout timer.
+	whenReady(cancel?: Promise<unknown>): Promise<boolean> {
 		if (this.#ready) return Promise.resolve(true)
 
 		const timeout = this.options?.connectionTimeout ?? DEFAULT_CONNECTION_TIMEOUT
@@ -140,7 +142,8 @@ export class FirmataIndiClient implements Client {
 			timer = setTimeout(resolve, timeout, false)
 		})
 
-		return Promise.race([ready, timedOut]).finally(() => clearTimeout(timer))
+		const candidates = cancel ? [ready, timedOut, cancel.then(() => this.#ready)] : [ready, timedOut]
+		return Promise.race(candidates).finally(() => clearTimeout(timer))
 	}
 
 	// Marks the board ready and unblocks any pending readiness waiters for this generation.
@@ -280,6 +283,9 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// in-flight connect aborts instead of starting the peripheral after the user cancelled.
 	#cancelPending = false
 	#disposed = false
+	// Signal raced against the readiness wait so a cancellation wakes connect() immediately rather than
+	// leaving CONNECTION Busy until a later ready event or the full connection timeout.
+	#cancel?: ReturnType<typeof Promise.withResolvers<void>>
 
 	constructor(
 		readonly client: FirmataIndiClient,
@@ -365,14 +371,16 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		if (this.isConnected || this.#connecting || this.#disposed) return
 		this.#connecting = true
 		this.#cancelPending = false
+		this.#cancel = Promise.withResolvers<void>()
 
 		this.#connection.state = 'Busy'
 		handleSetSwitchVector(this.client, this.handler, this.#connection)
 
 		try {
 			// Reset-aware readiness gate: after a systemReset/close this waits for a fresh ready instead
-			// of reusing the board's already-resolved one-shot initialization promise.
-			const ready = await this.client.whenReady()
+			// of reusing the board's already-resolved one-shot initialization promise. The cancel signal
+			// is raced in so a disconnect/dispose wakes this wait at once instead of lingering Busy.
+			const ready = await this.client.whenReady(this.#cancel.promise)
 
 			// A disconnect or dispose may have arrived while waiting. Honor the cancellation before
 			// touching the peripheral so a late readiness resolution cannot start a cancelled device.
@@ -439,6 +447,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 			handleSetSwitchVector(this.client, this.handler, this.#connection)
 		} finally {
 			this.#connecting = false
+			this.#cancel = undefined
 		}
 	}
 
@@ -449,6 +458,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	disconnect(publishConnection: boolean = true) {
 		if (this.#connecting) {
 			this.#cancelPending = true
+			this.#cancel?.resolve()
 			return
 		}
 
