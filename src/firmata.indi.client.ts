@@ -519,11 +519,24 @@ class RealTimeClockVirtualDevice<D extends ListenablePeripheral<D>> extends Firm
 	}
 
 	// Writes a new date/time to the clock. Missing elements fall back to the peripheral's current
-	// values through update()'s own defaults.
+	// values, and an omitted DAY_OF_WEEK is recomputed from the effective date so a partial date change
+	// cannot leave chips that store the weekday separately with a stale, inconsistent weekday.
 	sendNumber(vector: NewNumberVector) {
 		if (!this.isConnected || vector.name !== 'TIME') return
+
 		const e = vector.elements
-		this.#rtc.update(e.YEAR, e.MONTH, e.DAY, e.DAY_OF_WEEK, e.HOUR, e.MINUTE, e.SECOND, e.MILLISECOND)
+		const rtc = this.#rtc
+
+		const year = e.YEAR ?? rtc.year
+		const month = e.MONTH ?? rtc.month
+		const day = e.DAY ?? rtc.day
+		const hour = e.HOUR ?? rtc.hour
+		const minute = e.MINUTE ?? rtc.minute
+		const second = e.SECOND ?? rtc.second
+		const millisecond = e.MILLISECOND ?? rtc.millisecond
+		const dayOfWeek = e.DAY_OF_WEEK ?? weekdayOf(year, month, day)
+
+		rtc.update(year, month, day, dayOfWeek, hour, minute, second, millisecond)
 	}
 
 	// Syncs the clock to the host date when TIME_SYNC is selected, then resets the momentary switch.
@@ -557,6 +570,15 @@ function sensorMeasurements<D extends ListenablePeripheral<D>>(peripheral: D): F
 // Picks the closest INDI interface for a sensor: WEATHER for weather-oriented quantities, otherwise AUXILIARY.
 function sensorInterfaceType<D extends ListenablePeripheral<D>>(peripheral: D) {
 	return isThermometer(peripheral) || isHygrometer(peripheral) || isBarometer(peripheral) || isAltimeter(peripheral) ? DeviceInterfaceType.WEATHER | DeviceInterfaceType.AUXILIARY : DeviceInterfaceType.AUXILIARY
+}
+
+// Computes the day of week (0=Sunday..6=Saturday) for a calendar date, matching Date.getDay() and the
+// project's RTC weekday convention. setFullYear avoids the Date constructor remapping years 0..99 into
+// 1900..1999. year is the full year, month is 1..12, day is 1..31.
+function weekdayOf(year: number, month: number, day: number) {
+	const date = new Date(year, month - 1, day)
+	date.setFullYear(year)
+	return date.getDay()
 }
 
 // Builds the writable TIME measurement (calendar fields). Polled readings keep it current; client

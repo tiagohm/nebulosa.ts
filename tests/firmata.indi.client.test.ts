@@ -416,6 +416,33 @@ describe('firmata indi client', () => {
 		expect(rtc.syncs).toBe(1)
 	})
 
+	test('a partial TIME write without DAY_OF_WEEK recomputes the weekday from the new date', async () => {
+		const firmata = new FakeFirmata()
+		using client = new FirmataIndiClient(firmata as never, 'Board')
+
+		const rtc = new FakeRtc('DS3231', firmata as never)
+		// Existing valid reading with a stale weekday that must not leak into the new date.
+		rtc.year = 2020
+		rtc.month = 1
+		rtc.day = 1
+		rtc.dayOfWeek = 3
+		const device = client.createPeripheral(rtc)
+		await device.connect()
+
+		// Change only the date; omit DAY_OF_WEEK.
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 6, DAY: 18 } })
+
+		expect(rtc.updates).toHaveLength(1)
+		const [year, month, day, dayOfWeek] = rtc.updates[0]
+		expect([year, month, day]).toEqual([2024, 6, 18])
+		// 2024-06-18 is a Tuesday (getDay() === 2), not the previous weekday (3).
+		expect(dayOfWeek).toBe(2)
+
+		// An explicit DAY_OF_WEEK is still honored as sent.
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 6, DAY: 19, DAY_OF_WEEK: 5 } })
+		expect(rtc.updates[1][3]).toBe(5)
+	})
+
 	test('an RTC with default (zero) calendar fields publishes TIME busy until a valid reading', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
