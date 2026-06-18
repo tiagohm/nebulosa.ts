@@ -366,9 +366,12 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 
 			if (!ready) throw new Error(`Firmata board for "${this.name}" is not ready`)
 
+			// Mark started before start() so a throw mid-start (several peripherals register their
+			// Firmata handler/reports before their first transport write) still triggers stop() cleanup
+			// in the catch below.
 			this.peripheral.addListener(this.#listener)
-			this.peripheral.start()
 			this.#started = true
+			this.peripheral.start()
 
 			for (const measurement of this.measurements) {
 				for (const { element, read } of measurement.reads) {

@@ -80,6 +80,24 @@ class FakeThermometer extends FakeListenable<FakeThermometer> implements Thermom
 	temperature = 0
 }
 
+// Thermometer whose start() arms itself (as real peripherals register their handler/reports) and then
+// throws, to exercise cleanup of partially-started peripherals.
+class FakeThrowingThermometer extends FakeListenable<FakeThrowingThermometer> implements Thermometer {
+	temperature = 0
+	armed = false
+
+	start() {
+		super.start()
+		this.armed = true
+		throw new Error('start failed')
+	}
+
+	stop() {
+		super.stop()
+		this.armed = false
+	}
+}
+
 class FakeBarometer extends FakeListenable<FakeBarometer> implements Barometer, Altimeter, Thermometer {
 	pressure = 0
 	altitude = 0
@@ -494,6 +512,25 @@ describe('firmata indi client', () => {
 		await pending
 		expect(device.isConnected).toBeTrue()
 		expect(peripheral.started).toBe(2)
+	})
+
+	test('a peripheral whose start() throws after arming is stopped and left in Alert', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThrowingThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+
+		await device.connect()
+
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(1) // start was attempted
+		expect(peripheral.stopped).toBe(1) // cleanup ran despite the throw
+		expect(peripheral.armed).toBeFalse() // stop() undid the partial setup
+		expect(peripheral.listenerCount).toBe(0)
+		const connStates = events.filter((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION').map((e) => e.state)
+		expect(connStates).toEqual(['Busy', 'Alert'])
 	})
 
 	test('disconnect during a pending connect cancels it before the peripheral starts', async () => {
