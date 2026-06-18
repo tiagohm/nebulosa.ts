@@ -750,6 +750,41 @@ describe('firmata indi client', () => {
 		expect(peripheral.started).toBe(2)
 	})
 
+	test('an auto-reconnect from the reset disconnect notification is gated by readiness', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+
+		// Auto-reconnect: when CONNECTION settles to disconnected, immediately request CONNECT again.
+		const autoReconnect: IndiClientHandler = {
+			...handler,
+			setSwitchVector: (c, m) => {
+				handler.setSwitchVector?.(c, m)
+				if (m.name === 'CONNECTION' && m.state === 'Idle' && m.elements.DISCONNECT?.value === true) {
+					c.sendSwitch({ device: m.device, name: 'CONNECTION', elements: { CONNECT: true } })
+				}
+			},
+		}
+
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler: autoReconnect })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+		expect(device.isConnected).toBeTrue()
+		expect(peripheral.started).toBe(1)
+
+		// The board resets and is not ready again. Readiness is invalidated before the disconnect is
+		// published, so the reactive reconnect is gated on the (still unready) board and must not start
+		// the peripheral. If connect captured the stale ready state during the transport-lost pass it
+		// would start a second time on the just-reset board.
+		firmata.ready = false
+		firmata.fireSystemReset()
+		await Bun.sleep(0)
+
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(1)
+	})
+
 	test('a real FirmataClient stays usable after a system-reset byte', async () => {
 		const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
 		const firmata = new FirmataClient(transport, new ESP8266())

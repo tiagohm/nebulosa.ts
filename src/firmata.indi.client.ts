@@ -84,12 +84,14 @@ export class FirmataIndiClient implements Client {
 			this.#markReady()
 		},
 		systemReset: () => {
-			// A board reset drops the devices' hardware configuration, so disconnect them; they
-			// re-establish it on reconnect. Readiness is then re-derived from the client rather than
-			// permanently invalidated: a real FirmataClient stays initialized across a reset and never
-			// re-emits ready, so marking it not-ready forever would strand every later connect.
-			this.#handleTransportLost()
+			// Invalidate and re-derive readiness BEFORE disconnecting the devices. A board reset drops the
+			// devices' hardware configuration, so they must disconnect and re-establish it on reconnect.
+			// But disconnecting publishes DISCONNECT, and a handler that auto-reconnects from it would
+			// otherwise observe whenReady() still true and start the peripheral on the just-reset board,
+			// with no further transport-lost pass to tear it down. Reseeding first (which marks the board
+			// not-ready until re-derived) gates any such reconnect on the fresh readiness instead.
 			this.#reseedReady()
+			this.#handleTransportLost()
 		},
 		error: (_, command: number) => {
 			console.warn(`Firmata reported an error for command 0x${command.toString(16).padStart(2, '0')}`)
