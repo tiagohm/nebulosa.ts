@@ -507,6 +507,24 @@ test('peripheral fires on the first completed read even when the value equals th
 	expect(updates).toBe(2)
 })
 
+test('re-adding an already-registered listener does not re-arm its first read', () => {
+	const client = new MockFirmataClient()
+	const lm35 = new LM35(client as never, 2)
+	let updates = 0
+	const listener = () => updates++
+
+	lm35.addListener(listener)
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	expect(updates).toBe(1)
+	expect(lm35.initialized).toBeTrue()
+
+	// Adding the same listener again must not owe it another first read.
+	lm35.addListener(listener)
+	expect(lm35.initialized).toBeTrue()
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	expect(updates).toBe(1)
+})
+
 test('a listener attached after the peripheral is initialized still receives a first read', () => {
 	const client = new MockFirmataClient()
 	const lm35 = new LM35(client as never, 2)

@@ -164,8 +164,12 @@ export abstract class PeripheralBase<D extends Peripheral = never> implements Fi
 	}
 
 	addListener(listener: PeripheralListener<D>) {
-		this.#listeners.add(listener)
-		this.#pendingFirstRead.add(listener)
+		// Only owe a first read to a genuinely new listener. Re-adding an already-registered one must not
+		// re-arm it, which would flip `initialized` back and emit a duplicate first-read on the next read.
+		if (!this.#listeners.has(listener)) {
+			this.#listeners.add(listener)
+			this.#pendingFirstRead.add(listener)
+		}
 	}
 
 	removeListener(listener: PeripheralListener<D>) {
