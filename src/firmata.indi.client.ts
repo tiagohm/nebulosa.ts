@@ -203,11 +203,15 @@ export class FirmataIndiClient implements Client {
 		return device
 	}
 
-	// Validates that a peripheral can be registered. Rejects empty names, duplicate device names and
-	// reuse of the same peripheral instance, so one adapter cannot stop a peripheral another needs.
+	// Validates that a peripheral can be registered. Rejects empty names, duplicate device names, reuse
+	// of the same peripheral instance, and peripherals bound to a different Firmata client. The last
+	// check matters because connect()/readiness are gated on this.firmata while start() writes to
+	// peripheral.client: a mismatch would drive one board yet observe another's reset/close, leaving
+	// the INDI device logically connected to unavailable hardware.
 	#ensureRegistrable(peripheral: Peripheral) {
 		const { name } = peripheral
 		if (!name) throw new Error('virtual device name must not be empty')
+		if (peripheral.client !== this.firmata) throw new Error(`peripheral "${name}" belongs to a different Firmata client`)
 		if (this.#devices.has(name)) throw new Error(`a virtual device named "${name}" is already registered`)
 		if (this.#peripherals.has(peripheral)) throw new Error(`peripheral "${name}" is already registered with this client`)
 	}

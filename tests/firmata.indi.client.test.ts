@@ -539,6 +539,21 @@ describe('firmata indi client', () => {
 		expect(tagsFor(events, 'A', 'TEMPERATURE')).toContain('del')
 	})
 
+	test('rejects a peripheral bound to a different firmata client', () => {
+		const boardA = new FakeFirmata()
+		const boardB = new FakeFirmata()
+		using client = new FirmataIndiClient(boardA as never, 'Board A')
+
+		// Sensor lives on board B; gating connects on board A while writing to board B (and missing
+		// board B's reset/close) must be rejected up front.
+		const foreign = new FakeThermometer('LM35', boardB as never)
+		expect(() => client.createPeripheral(foreign)).toThrow(/different Firmata client/)
+
+		// A peripheral on this adapter's own client still registers.
+		const own = new FakeThermometer('LM35b', boardA as never)
+		expect(() => client.createPeripheral(own)).not.toThrow()
+	})
+
 	test('rejects duplicate device names and duplicate peripheral registration', () => {
 		const firmata = new FakeFirmata()
 		using client = new FirmataIndiClient(firmata as never, 'Board')
