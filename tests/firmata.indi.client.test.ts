@@ -664,6 +664,27 @@ describe('firmata indi client', () => {
 		expect(() => client.createPeripheral(peripheral)).toThrow(/already registered/)
 	})
 
+	test('disposing one virtual device unregisters it so it can be re-registered', () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+
+		device.dispose()
+		expect(tagsFor(events, 'LM35')).toContain('del')
+
+		// getProperties must not re-announce the disposed device.
+		events.length = 0
+		client.getProperties({ device: 'LM35' })
+		expect(events).toHaveLength(0)
+
+		// The same peripheral and name can be registered again without a duplicate error.
+		expect(() => client.createPeripheral(peripheral)).not.toThrow()
+		expect(tagsFor(events, 'LM35', 'CONNECTION')).toContain('defSwitch')
+	})
+
 	test('connection failure leaves the device safely disconnected', async () => {
 		const firmata = new FakeFirmata()
 		firmata.ready = false

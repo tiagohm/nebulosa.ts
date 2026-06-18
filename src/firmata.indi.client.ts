@@ -222,6 +222,16 @@ export class FirmataIndiClient implements Client {
 		return device
 	}
 
+	// Removes a virtual device's registrations. Called by the device's own disposal so a disposed device
+	// is no longer announced by getProperties and its name/peripheral become available again. Guarded so
+	// it only clears entries that still belong to the given device.
+	unregister<D extends ListenablePeripheral<D>>(device: FirmataVirtualDevice<D>) {
+		if (this.#devices.get(device.name) === (device as never)) {
+			this.#devices.delete(device.name)
+			this.#peripherals.delete(device.peripheral)
+		}
+	}
+
 	// Validates that a peripheral can be registered. Rejects empty names, duplicate device names, reuse
 	// of the same peripheral instance, and peripherals bound to a different Firmata client. The last
 	// check matters because connect()/readiness are gated on this.firmata while start() writes to
@@ -260,6 +270,8 @@ export class FirmataIndiClient implements Client {
 
 		this.firmata.removeHandler(this.#firmataHandler)
 
+		// Each device.dispose() unregisters itself, deleting its own (current) entry; Map iteration
+		// tolerates that, and the clear() below covers any that did not.
 		for (const device of this.#devices.values()) device.dispose()
 		this.#devices.clear()
 		this.#peripherals.clear()
@@ -508,12 +520,15 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		this.disconnect()
 	}
 
-	// Tears the device down completely: disconnects and removes the entire device view. Marking the
-	// device disposed also aborts any connect still waiting on board readiness.
+	// Tears the device down completely: disconnects, removes the entire device view and unregisters
+	// from the owning client so it is no longer announced and its name/peripheral can be reused.
+	// Marking the device disposed also aborts any connect still waiting on board readiness. Idempotent.
 	dispose() {
+		if (this.#disposed) return
 		this.#disposed = true
 		this.disconnect(false)
 		this.handler.delProperty?.(this.client, { device: this.name })
+		this.client.unregister(this)
 	}
 
 	// Applies a peripheral reading: updates only changed element values and publishes one
