@@ -143,8 +143,11 @@ export const DEFAULT_POLLING_INTERVAL = 5000
 
 export abstract class PeripheralBase<D extends Peripheral = never> implements FirmataClientHandler {
 	readonly #listeners = new Set<PeripheralListener<D>>()
+	// Listeners that have not yet received a completed read. Tracked per listener so a listener attached
+	// after the peripheral was already sampled still receives a first reading even when the value is
+	// unchanged. A shared flag would suppress that for the newcomer (and is wrong when listeners differ).
+	readonly #pendingFirstRead = new Set<PeripheralListener<D>>()
 	readonly #pendingTwoWireReads = new Map<string, PendingTwoWireRead[]>()
-	#initialized = false
 
 	abstract readonly client: FirmataClient
 
@@ -155,34 +158,39 @@ export abstract class PeripheralBase<D extends Peripheral = never> implements Fi
 		this.stop()
 	}
 
-	// Whether at least one completed reading has been delivered since the last listener was attached.
+	// Whether every attached listener has received at least one completed reading.
 	get initialized() {
-		return this.#initialized
+		return this.#listeners.size > 0 && this.#pendingFirstRead.size === 0
 	}
 
 	addListener(listener: PeripheralListener<D>) {
 		this.#listeners.add(listener)
+		this.#pendingFirstRead.add(listener)
 	}
 
 	removeListener(listener: PeripheralListener<D>) {
 		this.#listeners.delete(listener)
-
-		// Once no consumer remains, require a fresh first sample so the next consumer is notified of the
-		// first completed read even if the stored value has not changed since.
-		if (this.#listeners.size === 0) this.#initialized = false
+		this.#pendingFirstRead.delete(listener)
 	}
 
 	protected fire() {
-		this.#initialized = true
+		this.#pendingFirstRead.clear()
 		for (const listener of this.#listeners) listener(this as never)
 	}
 
-	// Notifies listeners when a reading changed, or on the first completed read after a listener is
-	// attached even if the value equals the previous/default one. This lets consumers settle an initial
-	// pending state for sensors whose first hardware sample happens to match their constructor default
-	// (for example a DS18B20 reading exactly 0 C), which would otherwise never fire on change alone.
+	// Notifies listeners when a reading changed; otherwise delivers the first completed read to any
+	// listener that has not received one yet, even if the value equals the previous/default one. This
+	// lets a consumer settle an initial pending state for sensors whose first hardware sample happens to
+	// match their constructor default (for example a DS18B20 reading exactly 0 C, which would otherwise
+	// never fire on change alone), including a listener attached after an earlier one already initialized.
 	protected commit(changed: boolean) {
-		if (changed || !this.#initialized) this.fire()
+		if (changed) {
+			this.fire()
+		} else if (this.#pendingFirstRead.size > 0) {
+			const pending = Array.from(this.#pendingFirstRead)
+			this.#pendingFirstRead.clear()
+			for (const listener of pending) listener(this as never)
+		}
 	}
 
 	// Resolves one queued I2C register read for the current device instance.

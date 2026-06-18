@@ -507,6 +507,35 @@ test('peripheral fires on the first completed read even when the value equals th
 	expect(updates).toBe(2)
 })
 
+test('a listener attached after the peripheral is initialized still receives a first read', () => {
+	const client = new MockFirmataClient()
+	const lm35 = new LM35(client as never, 2)
+	let a = 0
+	let b = 0
+
+	const listenerA = () => a++
+	const listenerB = () => b++
+
+	lm35.addListener(listenerA)
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	expect(a).toBe(1)
+	expect(lm35.initialized).toBeTrue()
+
+	// B is attached after the peripheral already produced a reading. The next sample has the same value
+	// (unchanged), but B must still receive its first read; A must not be re-fired.
+	lm35.addListener(listenerB)
+	expect(lm35.initialized).toBeFalse()
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	expect(b).toBe(1)
+	expect(a).toBe(1)
+	expect(lm35.initialized).toBeTrue()
+
+	// A real change fires both listeners.
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 51.15 })
+	expect(a).toBe(2)
+	expect(b).toBe(2)
+})
+
 test('TEMT6000 converts ADC counts to lux', () => {
 	const temt6000 = new TEMT6000(undefined as never, 0)
 	expect(temt6000.calculate(1023)).toBeTrue()
