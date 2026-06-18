@@ -98,7 +98,7 @@ export interface RealTimeClock extends Peripheral {
 	readonly minute: number
 	readonly second: number
 	readonly millisecond: number
-	readonly update: (year?: number, month?: number, day?: number, hour?: number, minute?: number, second?: number, millisecond?: number, dayOfWeek?: number) => void
+	readonly update: (year?: number, month?: number, day?: number, dayOfWeek?: number, hour?: number, minute?: number, second?: number, millisecond?: number) => void
 	readonly sync: (date?: Date) => void
 }
 

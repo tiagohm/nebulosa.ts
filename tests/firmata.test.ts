@@ -1525,21 +1525,6 @@ test('DS3231 sync writes staged fields in 24-hour mode', () => {
 	expect(rtc.millisecond).toBe(0)
 })
 
-test('DS3231 update keeps the date/time positional order with dayOfWeek trailing', () => {
-	const client = new MockFirmataClient()
-	const rtc = new DS3231(client as never)
-
-	// Legacy 7-argument call: year, month, day, hour, minute, second, millisecond. The hour (10) must
-	// still land in the hour register, not be misread as the weekday.
-	rtc.update(2024, 6, 18, 10, 20, 30, 0)
-
-	expect(client.messages.slice(0, 2)).toEqual([
-		['config', 0],
-		// second=30, minute=20, hour=10, dayOfWeek+1=1 (default), day=18, month=6, year%100=24
-		['write', DS3231.ADDRESS, Buffer.from([DS3231.TIME_REG, 0x30, 0x20, 0x10, 0x01, 0x18, 0x06, 0x24])],
-	])
-})
-
 test('DS1307 configures i2c reads and decodes RTC updates', () => {
 	const client = new MockFirmataClient()
 	const rtc = new DS1307(client as never, DS1307.ADDRESS, 1000)

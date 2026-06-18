@@ -73,10 +73,8 @@ export class DS3231 extends PeripheralBase<DS3231> implements RealTimeClock {
 		}
 	}
 
-	// Writes the date and time. dayOfWeek is an optional trailing field (0=Sunday..6=Saturday); when
-	// omitted it keeps the device's current weekday. Kept last so the date/time positional order is not
-	// disturbed.
-	update(year: number = this.year, month: number = this.month, day: number = this.day, hour: number = this.hour, minute: number = this.minute, second: number = this.second, millisecond: number = this.millisecond, dayOfWeek: number = this.dayOfWeek) {
+	// Writes the date and time.
+	update(year: number = this.year, month: number = this.month, day: number = this.day, dayOfWeek: number = this.dayOfWeek, hour: number = this.hour, minute: number = this.minute, second: number = this.second, millisecond: number = this.millisecond) {
 		this.client.twoWireConfig(0)
 		this.client.twoWireWrite(this.address, [DS3231.TIME_REG, encodeBCD(second), encodeBCD(minute), encodeBCD(hour), dayOfWeek + 1, encodeBCD(day), encodeBCD(month) | (year >= 2100 ? DS3231.CENTURY_MASK : 0), encodeBCD(year % 100)])
 		this.#readTime()
@@ -84,7 +82,7 @@ export class DS3231 extends PeripheralBase<DS3231> implements RealTimeClock {
 
 	// Writes the date and time, or the host clock if unset, in 24-hour format.
 	sync(date: Date = new Date()) {
-		this.update(date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes(), date.getSeconds(), date.getMilliseconds(), date.getDay())
+		this.update(date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getDay(), date.getHours(), date.getMinutes(), date.getSeconds(), date.getMilliseconds())
 	}
 
 	// Requests one clock-register frame from the RTC.
@@ -171,10 +169,8 @@ export class DS1307 extends PeripheralBase<DS1307> implements RealTimeClock {
 		}
 	}
 
-	// Writes the date and time. dayOfWeek is an optional trailing field (0=Sunday..6=Saturday); when
-	// omitted it keeps the device's current weekday. Kept last so the date/time positional order is not
-	// disturbed.
-	update(year: number = this.year, month: number = this.month, day: number = this.day, hour: number = this.hour, minute: number = this.minute, second: number = this.second, millisecond: number = this.millisecond, dayOfWeek: number = this.dayOfWeek) {
+	// Writes the date and time.
+	update(year: number = this.year, month: number = this.month, day: number = this.day, dayOfWeek: number = this.dayOfWeek, hour: number = this.hour, minute: number = this.minute, second: number = this.second, millisecond: number = this.millisecond) {
 		this.client.twoWireConfig(0)
 		this.client.twoWireWrite(this.address, [DS1307.TIME_REG, encodeBCD(second), encodeBCD(minute), encodeBCD(hour), dayOfWeek + 1, encodeBCD(day), encodeBCD(month), encodeBCD(year % 100)])
 		this.#readTime()
@@ -182,7 +178,7 @@ export class DS1307 extends PeripheralBase<DS1307> implements RealTimeClock {
 
 	// Writes the date and time, or the host clock if unset, in 24-hour format.
 	sync(date: Date = new Date()) {
-		this.update(date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes(), date.getSeconds(), date.getMilliseconds(), date.getDay())
+		this.update(date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getDay(), date.getHours(), date.getMinutes(), date.getSeconds(), date.getMilliseconds())
 	}
 
 	// Requests one clock-register frame from the RTC.
