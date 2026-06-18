@@ -568,6 +568,21 @@ describe('firmata indi client', () => {
 		expect(tagsFor(events, 'A', 'TEMPERATURE')).toContain('del')
 	})
 
+	test('rejects registration after the client is disposed', async () => {
+		const firmata = new FakeFirmata()
+		const client = new FirmataIndiClient(firmata as never, 'Board')
+
+		client.dispose()
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		expect(() => client.createPeripheral(peripheral)).toThrow(/disposed/)
+
+		// No device exists to connect, and the peripheral was never started.
+		client.sendSwitch({ device: 'LM35', name: 'CONNECTION', elements: { CONNECT: true } })
+		await Bun.sleep(0)
+		expect(peripheral.started).toBe(0)
+	})
+
 	test('rejects a peripheral bound to a different firmata client', () => {
 		const boardA = new FakeFirmata()
 		const boardB = new FakeFirmata()

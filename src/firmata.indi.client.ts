@@ -210,6 +210,9 @@ export class FirmataIndiClient implements Client {
 	// the INDI device logically connected to unavailable hardware.
 	#ensureRegistrable(peripheral: Peripheral) {
 		const { name } = peripheral
+		// A disposed client has detached its Firmata handler and no longer observes board reset/close, so
+		// a device registered now could connect and drive hardware the adapter can never clean up.
+		if (this.#disposed) throw new Error('client has been disposed')
 		if (!name) throw new Error('virtual device name must not be empty')
 		if (peripheral.client !== this.firmata) throw new Error(`peripheral "${name}" belongs to a different Firmata client`)
 		if (this.#devices.has(name)) throw new Error(`a virtual device named "${name}" is already registered`)
