@@ -98,6 +98,17 @@ class FakeThrowingThermometer extends FakeListenable<FakeThrowingThermometer> im
 	}
 }
 
+// Thermometer that delivers its first reading synchronously inside start(), as some drivers may.
+class FakeSyncThermometer extends FakeListenable<FakeSyncThermometer> implements Thermometer {
+	temperature = 0
+
+	start() {
+		super.start()
+		this.temperature = 19.25
+		this.emit()
+	}
+}
+
 class FakeBarometer extends FakeListenable<FakeBarometer> implements Barometer, Altimeter, Thermometer {
 	pressure = 0
 	altitude = 0
@@ -298,6 +309,24 @@ describe('firmata indi client', () => {
 		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
 		expect(sets).toHaveLength(2)
 		expect(sets[1].value).toBe(26)
+	})
+
+	test('a synchronous first reading during start settles the vector to Idle, def before set', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeSyncThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		// The definition must precede the value set, and the synchronous reading must settle the vector
+		// to Idle instead of leaving it stuck Busy.
+		const temp = events.filter((e) => (e.tag === 'defNumber' || e.tag === 'setNumber') && e.name === 'TEMPERATURE')
+		expect(temp.map((e) => e.tag)).toEqual(['defNumber', 'setNumber'])
+		expect(temp[0].state).toBe('Busy')
+		expect(temp.at(-1)?.state).toBe('Idle')
+		expect(temp.at(-1)?.value).toBe(19.25)
 	})
 
 	test('a sensor vector stays Busy until the first reading instead of announcing a default 0 as valid', async () => {

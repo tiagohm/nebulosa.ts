@@ -383,12 +383,11 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 
 			if (!ready) throw new Error(`Firmata board for "${this.name}" is not ready`)
 
-			// Mark started before start() so a throw mid-start (several peripherals register their
-			// Firmata handler/reports before their first transport write) still triggers stop() cleanup
-			// in the catch below.
+			// Attach the listener and publish every definition (Busy) before start(). Marking started
+			// here also ensures a throw mid-start (several peripherals register their Firmata
+			// handler/reports before their first transport write) triggers cleanup in the catch below.
 			this.peripheral.addListener(this.#listener)
 			this.#started = true
-			this.peripheral.start()
 
 			for (const measurement of this.measurements) {
 				// start() only queues asynchronous reads on real peripherals, whose reading fields are
@@ -408,9 +407,15 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 
 			this.onConnect()
 
-			// A disconnect or dispose may have arrived while publishing definitions (handlers can
-			// re-enter through the def events). Roll the started peripheral back instead of reporting
-			// connected, since everything after the await ran synchronously without another flag check.
+			// Start only after the definitions exist, so a peripheral that emits its first reading
+			// synchronously inside start() delivers it to already-defined vectors: #onReading then
+			// settles them to Idle (def before set) instead of a set racing ahead of the def and the
+			// vector being left stuck Busy.
+			this.peripheral.start()
+
+			// A disconnect or dispose may have arrived while publishing definitions or during start()
+			// (handlers and synchronous readings can re-enter). Roll the started peripheral back instead
+			// of reporting connected, since everything after the await ran synchronously.
 			if (this.#cancelPending || this.#disposed) {
 				this.#teardown(!this.#disposed)
 				return
@@ -420,12 +425,9 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 			this.#connection.state = 'Idle'
 			handleSetSwitchVector(this.client, this.handler, this.#connection)
 		} catch (e) {
-			this.peripheral.removeListener(this.#listener)
-
-			if (this.#started) {
-				this.peripheral.stop()
-				this.#started = false
-			}
+			// Roll back whatever was set up (listener, peripheral, published definitions) when the
+			// connect reached the start/definition phase; a pre-start failure (not ready) started none.
+			if (this.#started) this.#teardown(false)
 
 			selectOnSwitch(this.#connection, 'DISCONNECT')
 			this.#connection.state = 'Alert'
