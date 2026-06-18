@@ -140,11 +140,9 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 		if (!DS18B20.isScratchpadValid(data)) return
 
 		const temperature = data.readInt16LE(0) * 0.0625
-
-		if (temperature !== this.temperature) {
-			this.temperature = temperature
-			this.fire()
-		}
+		const changed = temperature !== this.temperature
+		if (changed) this.temperature = temperature
+		this.commit(changed)
 	}
 
 	oneWireSearchReply(client: FirmataClient, pin: number, addresses: readonly Buffer[], alarms: boolean) {

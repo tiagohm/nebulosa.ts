@@ -144,6 +144,7 @@ export const DEFAULT_POLLING_INTERVAL = 5000
 export abstract class PeripheralBase<D extends Peripheral = never> implements FirmataClientHandler {
 	readonly #listeners = new Set<PeripheralListener<D>>()
 	readonly #pendingTwoWireReads = new Map<string, PendingTwoWireRead[]>()
+	#initialized = false
 
 	abstract readonly client: FirmataClient
 
@@ -154,16 +155,34 @@ export abstract class PeripheralBase<D extends Peripheral = never> implements Fi
 		this.stop()
 	}
 
+	// Whether at least one completed reading has been delivered since the last listener was attached.
+	get initialized() {
+		return this.#initialized
+	}
+
 	addListener(listener: PeripheralListener<D>) {
 		this.#listeners.add(listener)
 	}
 
 	removeListener(listener: PeripheralListener<D>) {
 		this.#listeners.delete(listener)
+
+		// Once no consumer remains, require a fresh first sample so the next consumer is notified of the
+		// first completed read even if the stored value has not changed since.
+		if (this.#listeners.size === 0) this.#initialized = false
 	}
 
 	protected fire() {
+		this.#initialized = true
 		for (const listener of this.#listeners) listener(this as never)
+	}
+
+	// Notifies listeners when a reading changed, or on the first completed read after a listener is
+	// attached even if the value equals the previous/default one. This lets consumers settle an initial
+	// pending state for sensors whose first hardware sample happens to match their constructor default
+	// (for example a DS18B20 reading exactly 0 C), which would otherwise never fire on change alone.
+	protected commit(changed: boolean) {
+		if (changed || !this.#initialized) this.fire()
 	}
 
 	// Resolves one queued I2C register read for the current device instance.
@@ -237,8 +256,8 @@ export abstract class ADCPeripheral<D extends Peripheral = never> extends Periph
 	abstract calculate(value: number): boolean
 
 	pinChange(client: FirmataClient, pin: Pin) {
-		if (this.client === client && pin.id === this.pin && this.calculate(pin.value)) {
-			this.fire()
+		if (this.client === client && pin.id === this.pin) {
+			this.commit(this.calculate(pin.value))
 		}
 	}
 }

@@ -296,12 +296,15 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		const pressure = pascal(this.compensatePressure(adcP))
 		const altitude = fromPressure(pressure, temperature)
 
-		if (temperature !== this.temperature || pressure !== this.pressure || altitude !== this.altitude) {
+		const changed = temperature !== this.temperature || pressure !== this.pressure || altitude !== this.altitude
+
+		if (changed) {
 			this.temperature = temperature
 			this.pressure = pressure
 			this.altitude = altitude
-			this.fire()
 		}
+
+		this.commit(changed)
 	}
 
 	#readCalibrationData() {

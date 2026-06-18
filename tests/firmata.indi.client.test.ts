@@ -329,6 +329,24 @@ describe('firmata indi client', () => {
 		expect(temp.at(-1)?.value).toBe(19.25)
 	})
 
+	test('a first reading equal to the default still settles the vector to Idle', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		// Default reading is 0; the peripheral fires its first completed read even though the value did
+		// not change, so the vector must settle instead of staying Busy forever.
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		peripheral.emit()
+
+		const set = events.find((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		expect(set?.state).toBe('Idle')
+		expect(set?.value).toBe(0)
+	})
+
 	test('a sensor vector stays Busy until the first reading instead of announcing a default 0 as valid', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()

@@ -94,15 +94,18 @@ export class MPU6050 extends PeripheralBase<MPU6050> implements Accelerometer, G
 		const gy = this.calculateAngularVelocity(data.readInt16BE(10))
 		const gz = this.calculateAngularVelocity(data.readInt16BE(12))
 
-		if (ax !== this.ax || ay !== this.ay || az !== this.az || gx !== this.gx || gy !== this.gy || gz !== this.gz) {
+		const changed = ax !== this.ax || ay !== this.ay || az !== this.az || gx !== this.gx || gy !== this.gy || gz !== this.gz
+
+		if (changed) {
 			this.ax = ax
 			this.ay = ay
 			this.az = az
 			this.gx = gx
 			this.gy = gy
 			this.gz = gz
-			this.fire()
 		}
+
+		this.commit(changed)
 	}
 
 	// Converts one raw accelerometer axis sample into m/s^2.

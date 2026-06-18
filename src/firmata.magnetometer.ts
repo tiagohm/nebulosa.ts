@@ -100,12 +100,15 @@ export class HMC5883L extends PeripheralBase<HMC5883L> implements Magnetometer {
 		const y = this.rawToGauss(rawY)
 		const z = this.rawToGauss(rawZ)
 
-		if (x !== this.x || y !== this.y || z !== this.z) {
+		const changed = x !== this.x || y !== this.y || z !== this.z
+
+		if (changed) {
 			this.x = x
 			this.y = y
 			this.z = z
-			this.fire()
 		}
+
+		this.commit(changed)
 	}
 
 	// Converts a raw signed register value into gauss using the configured gain.
