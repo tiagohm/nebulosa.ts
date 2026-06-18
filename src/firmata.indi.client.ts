@@ -1,6 +1,6 @@
 import { toMeter } from './distance'
 import type { FirmataClient, FirmataClientHandler } from './firmata'
-import type { Altimeter, Barometer, Hygrometer, ListenablePeripheral, Peripheral, PeripheralListener, Thermometer } from './firmata.peripheral'
+import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, ListenablePeripheral, Luxmeter, Magnetometer, Peripheral, PeripheralListener, Thermometer } from './firmata.peripheral'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleSetNumberVector, handleSetSwitchVector, type IndiClientHandler } from './indi.client'
 import { type Client, DeviceInterfaceType } from './indi.device'
 import { type DefNumberVector, type EnableBlob, type GetProperties, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetNumberVector, selectOnSwitch } from './indi.types'
@@ -15,20 +15,27 @@ const DRIVER_VERSION = '1.0'
 const MAIN_CONTROL = 'Main Control'
 const GENERAL_INFO = 'General Info'
 const WEATHER = 'Weather'
+const SENSORS = 'Sensors'
 
 // Maximum time, in milliseconds, the adapter waits for the Firmata board initialization to complete
 // before failing a connection attempt. Prevents a connect from hanging forever on a dead transport.
 const DEFAULT_CONNECTION_TIMEOUT = 5000
 
-// A single read-only measurement exposed by a virtual device. Each measurement maps one INDI number
-// vector element to a scalar reading sampled from the owned peripheral.
-interface FirmataMeasurement<D extends ListenablePeripheral<D>> {
-	// Number vector that carries the measurement. Created with an empty device, filled on registration.
-	readonly vector: DefNumberVector & SetNumberVector & { type: 'NUMBER' }
-	// Name of the single element within `vector` that holds the value.
+// One element of a measurement vector, bound to the peripheral reading that fills it.
+interface FirmataElementRead<D extends ListenablePeripheral<D>> {
+	// Name of the element within the owning vector.
 	readonly element: string
 	// Reads the current value from the peripheral in the element's documented unit.
 	readonly read: (peripheral: D) => number
+}
+
+// A read-only measurement exposed by a virtual device. Each measurement maps one INDI number vector
+// (single- or multi-element) to scalar readings sampled from the owned peripheral.
+interface FirmataMeasurement<D extends ListenablePeripheral<D>> {
+	// Number vector that carries the measurement. Created with an empty device, filled on registration.
+	readonly vector: DefNumberVector & SetNumberVector & { type: 'NUMBER' }
+	// Element readers, one per element of `vector`.
+	readonly reads: readonly FirmataElementRead<D>[]
 }
 
 // Shared, empty handler used when no consumer handler is supplied, so the def*/set* helpers can run
@@ -126,14 +133,22 @@ export class FirmataIndiClient implements Client {
 		this.#devices.get(vector.device)?.sendSwitch(vector)
 	}
 
-	// Registers a listenable peripheral as a virtual device.
+	// Registers a listenable peripheral as a virtual device, auto-detecting which read-only
+	// measurement vectors to publish from the sensor interfaces the peripheral implements.
 	createPeripheral<D extends ListenablePeripheral<D>>(peripheral: D) {
 		const measurements: FirmataMeasurement<D>[] = []
+		let type = DeviceInterfaceType.AUXILIARY
 		if (isThermometer(peripheral)) measurements.push(temperatureMeasurement<D>())
 		if (isHygrometer(peripheral)) measurements.push(humidityMeasurement<D>())
 		if (isBarometer(peripheral)) measurements.push(pressureMeasurement<D>())
 		if (isAltimeter(peripheral)) measurements.push(altitudeMeasurement<D>())
-		return this.#register(peripheral, DeviceInterfaceType.AUXILIARY, measurements)
+		if (isAmmeter(peripheral)) measurements.push(currentMeasurement<D>())
+		if (isLuxmeter(peripheral)) measurements.push(illuminanceMeasurement<D>())
+		if (isAccelerometer(peripheral)) measurements.push(accelerationMeasurement<D>())
+		if (isGyroscope(peripheral)) measurements.push(angularVelocityMeasurement<D>())
+		if (isMagnetometer(peripheral)) measurements.push(magneticFieldMeasurement<D>())
+		if (isThermometer(peripheral) || isThermometer(peripheral) || isBarometer(peripheral)) type ||= DeviceInterfaceType.WEATHER
+		return this.#register(peripheral, type, measurements)
 	}
 
 	// Generic registration path. Keeps client routing independent from the concrete peripheral so new
@@ -283,7 +298,10 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 			this.#started = true
 
 			for (const measurement of this.measurements) {
-				measurement.vector.elements[measurement.element].value = measurement.read(this.peripheral)
+				for (const { element, read } of measurement.reads) {
+					measurement.vector.elements[element].value = read(this.peripheral)
+				}
+
 				measurement.vector.state = 'Idle'
 				handleDefNumberVector(this.client, this.handler, measurement.vector)
 			}
@@ -344,13 +362,19 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// setNumberVector per vector that actually changed. No event is emitted when nothing changed.
 	#onReading(peripheral: D) {
 		for (const measurement of this.measurements) {
-			const element = measurement.vector.elements[measurement.element]
-			const value = measurement.read(peripheral)
+			let changed = false
 
-			if (element.value !== value) {
-				element.value = value
-				handleSetNumberVector(this.client, this.handler, measurement.vector)
+			for (const { element, read } of measurement.reads) {
+				const target = measurement.vector.elements[element]
+				const value = read(peripheral)
+
+				if (target.value !== value) {
+					target.value = value
+					changed = true
+				}
 			}
+
+			if (changed) handleSetNumberVector(this.client, this.handler, measurement.vector)
 		}
 	}
 }
@@ -359,25 +383,76 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 // interface; callers gate optional measurements with the runtime guards below.
 function temperatureMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
 	const vector = makeNumberVector('', 'TEMPERATURE', 'Temperature', WEATHER, 'ro', ['TEMPERATURE', 'Temperature', 0, -50, 70, 0.01, '%.2f'])
-	return { vector, element: 'TEMPERATURE', read: (peripheral) => (peripheral as unknown as Thermometer).temperature }
+	return { vector, reads: [{ element: 'TEMPERATURE', read: (peripheral) => (peripheral as unknown as Thermometer).temperature }] }
 }
 
 // Builds the PRESSURE measurement (hPa, the project's Pressure unit).
 function pressureMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
 	const vector = makeNumberVector('', 'PRESSURE', 'Pressure', WEATHER, 'ro', ['PRESSURE', 'Pressure (hPa)', 0, 0, 2000, 0.01, '%.2f'])
-	return { vector, element: 'PRESSURE', read: (peripheral) => (peripheral as unknown as Barometer).pressure }
+	return { vector, reads: [{ element: 'PRESSURE', read: (peripheral) => (peripheral as unknown as Barometer).pressure }] }
 }
 
 // Builds the ALTITUDE measurement (meters, converted from the project's Distance unit in AU).
 function altitudeMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
 	const vector = makeNumberVector('', 'ALTITUDE', 'Altitude', WEATHER, 'ro', ['ALTITUDE', 'Altitude (m)', 0, -1000, 100000, 0.01, '%.2f'])
-	return { vector, element: 'ALTITUDE', read: (peripheral) => toMeter((peripheral as unknown as Altimeter).altitude) }
+	return { vector, reads: [{ element: 'ALTITUDE', read: (peripheral) => toMeter((peripheral as unknown as Altimeter).altitude) }] }
 }
 
 // Builds the RELATIVE_HUMIDITY measurement (percent, 0..100).
 function humidityMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
 	const vector = makeNumberVector('', 'RELATIVE_HUMIDITY', 'Relative Humidity', WEATHER, 'ro', ['HUMIDITY', 'Humidity (%)', 0, 0, 100, 0.1, '%.1f'])
-	return { vector, element: 'HUMIDITY', read: (peripheral) => (peripheral as unknown as Hygrometer).humidity }
+	return { vector, reads: [{ element: 'HUMIDITY', read: (peripheral) => (peripheral as unknown as Hygrometer).humidity }] }
+}
+
+// Builds the CURRENT measurement (amperes).
+function currentMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
+	const vector = makeNumberVector('', 'CURRENT', 'Current', SENSORS, 'ro', ['CURRENT', 'Current (A)', 0, -1000, 1000, 0.001, '%.3f'])
+	return { vector, reads: [{ element: 'CURRENT', read: (peripheral) => (peripheral as unknown as Ammeter).current }] }
+}
+
+// Builds the ILLUMINANCE measurement (lux).
+function illuminanceMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
+	const vector = makeNumberVector('', 'ILLUMINANCE', 'Illuminance', SENSORS, 'ro', ['LUX', 'Illuminance (lx)', 0, 0, 200000, 0.1, '%.1f'])
+	return { vector, reads: [{ element: 'LUX', read: (peripheral) => (peripheral as unknown as Luxmeter).lux }] }
+}
+
+// Builds the ACCELERATION measurement (m/s^2 on three axes).
+function accelerationMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
+	const vector = makeNumberVector('', 'ACCELERATION', 'Acceleration', SENSORS, 'ro', ['ACCEL_X', 'X (m/s²)', 0, -160, 160, 0.0001, '%.4f'], ['ACCEL_Y', 'Y (m/s²)', 0, -160, 160, 0.0001, '%.4f'], ['ACCEL_Z', 'Z (m/s²)', 0, -160, 160, 0.0001, '%.4f'])
+	return {
+		vector,
+		reads: [
+			{ element: 'ACCEL_X', read: (peripheral) => (peripheral as unknown as Accelerometer).ax },
+			{ element: 'ACCEL_Y', read: (peripheral) => (peripheral as unknown as Accelerometer).ay },
+			{ element: 'ACCEL_Z', read: (peripheral) => (peripheral as unknown as Accelerometer).az },
+		],
+	}
+}
+
+// Builds the ANGULAR_VELOCITY measurement (rad/s on three axes).
+function angularVelocityMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
+	const vector = makeNumberVector('', 'ANGULAR_VELOCITY', 'Angular Velocity', SENSORS, 'ro', ['GYRO_X', 'X (rad/s)', 0, -40, 40, 0.00001, '%.5f'], ['GYRO_Y', 'Y (rad/s)', 0, -40, 40, 0.00001, '%.5f'], ['GYRO_Z', 'Z (rad/s)', 0, -40, 40, 0.00001, '%.5f'])
+	return {
+		vector,
+		reads: [
+			{ element: 'GYRO_X', read: (peripheral) => (peripheral as unknown as Gyroscope).gx },
+			{ element: 'GYRO_Y', read: (peripheral) => (peripheral as unknown as Gyroscope).gy },
+			{ element: 'GYRO_Z', read: (peripheral) => (peripheral as unknown as Gyroscope).gz },
+		],
+	}
+}
+
+// Builds the MAGNETIC_FIELD measurement (gauss on three axes).
+function magneticFieldMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
+	const vector = makeNumberVector('', 'MAGNETIC_FIELD', 'Magnetic Field', SENSORS, 'ro', ['MAG_X', 'X (G)', 0, -100, 100, 0.00001, '%.5f'], ['MAG_Y', 'Y (G)', 0, -100, 100, 0.00001, '%.5f'], ['MAG_Z', 'Z (G)', 0, -100, 100, 0.00001, '%.5f'])
+	return {
+		vector,
+		reads: [
+			{ element: 'MAG_X', read: (peripheral) => (peripheral as unknown as Magnetometer).x },
+			{ element: 'MAG_Y', read: (peripheral) => (peripheral as unknown as Magnetometer).y },
+			{ element: 'MAG_Z', read: (peripheral) => (peripheral as unknown as Magnetometer).z },
+		],
+	}
 }
 
 // Narrows a peripheral to a thermometer based on its reported reading field.
@@ -398,4 +473,32 @@ function isBarometer<D extends ListenablePeripheral<D>>(peripheral: D): peripher
 // Narrows a peripheral to an hygrometer based on its reported reading field.
 function isHygrometer<D extends ListenablePeripheral<D>>(peripheral: D): peripheral is D & Hygrometer {
 	return typeof (peripheral as Partial<Hygrometer>).humidity === 'number'
+}
+
+// Narrows a peripheral to an ammeter based on its reported reading field.
+function isAmmeter<D extends ListenablePeripheral<D>>(peripheral: D): peripheral is D & Ammeter {
+	return typeof (peripheral as Partial<Ammeter>).current === 'number'
+}
+
+// Narrows a peripheral to a luxmeter based on its reported reading field.
+function isLuxmeter<D extends ListenablePeripheral<D>>(peripheral: D): peripheral is D & Luxmeter {
+	return typeof (peripheral as Partial<Luxmeter>).lux === 'number'
+}
+
+// Narrows a peripheral to an accelerometer based on its reported reading fields.
+function isAccelerometer<D extends ListenablePeripheral<D>>(peripheral: D): peripheral is D & Accelerometer {
+	const p = peripheral as Partial<Accelerometer>
+	return typeof p.ax === 'number' && typeof p.ay === 'number' && typeof p.az === 'number'
+}
+
+// Narrows a peripheral to a gyroscope based on its reported reading fields.
+function isGyroscope<D extends ListenablePeripheral<D>>(peripheral: D): peripheral is D & Gyroscope {
+	const p = peripheral as Partial<Gyroscope>
+	return typeof p.gx === 'number' && typeof p.gy === 'number' && typeof p.gz === 'number'
+}
+
+// Narrows a peripheral to a magnetometer based on its reported reading fields.
+function isMagnetometer<D extends ListenablePeripheral<D>>(peripheral: D): peripheral is D & Magnetometer {
+	const p = peripheral as Partial<Magnetometer>
+	return typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number'
 }

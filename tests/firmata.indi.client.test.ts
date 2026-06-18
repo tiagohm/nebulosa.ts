@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { FirmataClient, FirmataClientHandler } from '../src/firmata'
 import { FirmataIndiClient } from '../src/firmata.indi.client'
-import type { Altimeter, Barometer, Hygrometer, ListenablePeripheral, Peripheral, PeripheralListener, Thermometer } from '../src/firmata.peripheral'
+import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, ListenablePeripheral, Luxmeter, Magnetometer, Peripheral, PeripheralListener, Thermometer } from '../src/firmata.peripheral'
 import type { IndiClientHandler } from '../src/indi.client'
 import type { DefNumberVector, DelProperty, SetNumberVector, SetSwitchVector } from '../src/indi.types'
 
@@ -91,6 +91,29 @@ class FakeHygrometer extends FakeListenable<FakeHygrometer> implements Hygromete
 	temperature = 0
 }
 
+class FakeAmmeter extends FakeListenable<FakeAmmeter> implements Ammeter {
+	current = 0
+}
+
+class FakeLuxmeter extends FakeListenable<FakeLuxmeter> implements Luxmeter {
+	lux = 0
+}
+
+class FakeImu extends FakeListenable<FakeImu> implements Accelerometer, Gyroscope {
+	ax = 0
+	ay = 0
+	az = 0
+	gx = 0
+	gy = 0
+	gz = 0
+}
+
+class FakeMagnetometer extends FakeListenable<FakeMagnetometer> implements Magnetometer {
+	x = 0
+	y = 0
+	z = 0
+}
+
 interface RecordedEvent {
 	readonly tag: string
 	readonly device: string
@@ -106,7 +129,7 @@ function createRecorder() {
 
 	const handler: IndiClientHandler = {
 		defTextVector: (_, m) => events.push({ tag: 'defText', device: m.device, name: m.name }),
-		defNumberVector: (_, m: DefNumberVector) => events.push({ tag: 'defNumber', device: m.device, name: m.name, state: m.state }),
+		defNumberVector: (_, m: DefNumberVector) => events.push({ tag: 'defNumber', device: m.device, name: m.name, state: m.state, value: Object.values(m.elements)[0]?.value }),
 		defSwitchVector: (_, m) => events.push({ tag: 'defSwitch', device: m.device, name: m.name, state: m.state }),
 		setNumberVector: (_, m: SetNumberVector) => events.push({ tag: 'setNumber', device: m.device, name: m.name, value: Object.values(m.elements)[0]?.value }),
 		setSwitchVector: (_, m: SetSwitchVector) => events.push({ tag: 'setSwitch', device: m.device, name: m.name, state: m.state }),
@@ -233,6 +256,51 @@ describe('firmata indi client', () => {
 		const hygroDefs = events.filter((e) => e.tag === 'defNumber' && e.device === 'AM2320').map((e) => e.name)
 		expect(hygroDefs).toContain('RELATIVE_HUMIDITY')
 		expect(hygroDefs).toContain('TEMPERATURE')
+	})
+
+	test('ammeter and luxmeter expose single-axis measurements', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const ammeter = new FakeAmmeter('ACS712', firmata as never)
+		ammeter.current = 1.5
+		await client.createPeripheral(ammeter).connect()
+
+		const lux = new FakeLuxmeter('BH1750', firmata as never)
+		lux.lux = 320
+		await client.createPeripheral(lux).connect()
+
+		expect(events.find((e) => e.tag === 'defNumber' && e.device === 'ACS712' && e.name === 'CURRENT')?.value).toBe(1.5)
+		expect(events.find((e) => e.tag === 'defNumber' && e.device === 'BH1750' && e.name === 'ILLUMINANCE')?.value).toBe(320)
+	})
+
+	test('imu and magnetometer expose multi-axis measurements with single change events', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const imu = new FakeImu('MPU6050', firmata as never)
+		const imuDevice = client.createPeripheral(imu)
+		await imuDevice.connect()
+
+		const imuDefs = events.filter((e) => e.tag === 'defNumber' && e.device === 'MPU6050').map((e) => e.name)
+		expect(imuDefs).toContain('ACCELERATION')
+		expect(imuDefs).toContain('ANGULAR_VELOCITY')
+
+		// Several axes of one vector changing produce exactly one set event for that vector.
+		imu.ax = 9.81
+		imu.az = -1
+		imu.emit()
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'ACCELERATION')).toHaveLength(1)
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'ANGULAR_VELOCITY')).toHaveLength(0)
+
+		const mag = new FakeMagnetometer('HMC5883L', firmata as never)
+		mag.x = 0.2
+		mag.y = -0.1
+		mag.z = 0.4
+		await client.createPeripheral(mag).connect()
+		expect(events.find((e) => e.tag === 'defNumber' && e.device === 'HMC5883L' && e.name === 'MAGNETIC_FIELD')?.value).toBe(0.2)
 	})
 
 	test('getProperties filters by device and name and re-emits def plus value', async () => {
