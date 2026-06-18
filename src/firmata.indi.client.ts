@@ -388,18 +388,18 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 			this.peripheral.start()
 
 			for (const measurement of this.measurements) {
-				if (measurement.isValid && !measurement.isValid(this.peripheral)) {
-					// Source not producing valid values yet (e.g. an RTC before its first read). Keep the
-					// vector's declared defaults and publish it Busy; #onReading settles it on first reading.
-					measurement.vector.state = 'Busy'
-				} else {
+				// start() only queues asynchronous reads on real peripherals, whose reading fields are
+				// still zero until the first reply. Publish every vector Busy and let #onReading settle it
+				// to Idle on the first listener event, so a bogus 0 is never announced as a valid reading.
+				// Vectors with an isValid guard that is not yet satisfied keep their declared in-range
+				// defaults instead of sampling out-of-range zeros (e.g. an RTC's MONTH/DAY).
+				if (!measurement.isValid || measurement.isValid(this.peripheral)) {
 					for (const { element, read } of measurement.reads) {
 						measurement.vector.elements[element].value = read(this.peripheral)
 					}
-
-					measurement.vector.state = 'Idle'
 				}
 
+				measurement.vector.state = 'Busy'
 				handleDefNumberVector(this.client, this.handler, measurement.vector)
 			}
 
@@ -487,7 +487,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// setNumberVector per vector that actually changed. No event is emitted when nothing changed.
 	#onReading(peripheral: D) {
 		for (const measurement of this.measurements) {
-			// A deferred vector stays Busy until its source produces valid values; skip until then.
+			// A guarded vector stays Busy until its source produces valid values; skip until then.
 			if (measurement.vector.state === 'Busy' && measurement.isValid && !measurement.isValid(peripheral)) continue
 
 			let changed = false
@@ -502,7 +502,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 				}
 			}
 
-			// Settle a deferred vector once its first valid reading arrives.
+			// Settle the vector to Idle on its first reading, confirming the value came from hardware.
 			if (measurement.vector.state === 'Busy') {
 				measurement.vector.state = 'Idle'
 				changed = true

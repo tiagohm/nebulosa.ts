@@ -300,6 +300,28 @@ describe('firmata indi client', () => {
 		expect(sets[1].value).toBe(26)
 	})
 
+	test('a sensor vector stays Busy until the first reading instead of announcing a default 0 as valid', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		// Default reading field is 0, mirroring a real sensor before its first asynchronous reply.
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		// The initial definition is Busy, so the bogus 0 is not presented as a valid reading.
+		const def = events.find((e) => e.tag === 'defNumber' && e.name === 'TEMPERATURE')
+		expect(def?.state).toBe('Busy')
+
+		// The first reading (arriving after start()) settles the vector to Idle with the real value.
+		peripheral.temperature = 23.5
+		peripheral.emit()
+		const set = events.find((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		expect(set?.state).toBe('Idle')
+		expect(set?.value).toBe(23.5)
+	})
+
 	test('hygrometer and barometer factories define required and optional measurements', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
@@ -366,9 +388,16 @@ describe('firmata indi client', () => {
 		expect(imuDefs).toContain('ACCELERATION')
 		expect(imuDefs).toContain('ANGULAR_VELOCITY')
 
-		// Several axes of one vector changing produce exactly one set event for that vector.
+		// The first reading settles both vectors to Idle, one set each (confirming hardware values).
 		imu.ax = 9.81
 		imu.az = -1
+		imu.emit()
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'ACCELERATION')).toHaveLength(1)
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'ANGULAR_VELOCITY')).toHaveLength(1)
+
+		// A later reading that changes only acceleration produces one ACCELERATION set and no gyro set.
+		events.length = 0
+		imu.ax = 1
 		imu.emit()
 		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'ACCELERATION')).toHaveLength(1)
 		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'ANGULAR_VELOCITY')).toHaveLength(0)
