@@ -667,7 +667,7 @@ function timeMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasuremen
 // Builds the TEMPERATURE measurement (degrees Celsius). The peripheral is read through the marker
 // interface; callers gate optional measurements with the runtime guards below.
 function temperatureMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
-	const vector = makeNumberVector('', 'TEMPERATURE', 'Temperature', WEATHER, 'ro', ['TEMPERATURE', 'Temperature', 0, -50, 70, 0.01, '%.2f'])
+	const vector = makeNumberVector('', 'TEMPERATURE', 'Temperature', WEATHER, 'ro', ['TEMPERATURE', 'Temperature', 0, -55, 125, 0.01, '%.2f'])
 	return { vector, reads: [{ element: 'TEMPERATURE', read: (peripheral) => (peripheral as unknown as Thermometer).temperature }] }
 }
 
