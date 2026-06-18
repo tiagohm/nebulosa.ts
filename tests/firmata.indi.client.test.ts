@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { FirmataClient, FirmataClientHandler } from '../src/firmata'
 import { FirmataIndiClient } from '../src/firmata.indi.client'
-import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, ListenablePeripheral, Luxmeter, Magnetometer, Peripheral, PeripheralListener, Thermometer } from '../src/firmata.peripheral'
+import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, ListenablePeripheral, Luxmeter, Magnetometer, Peripheral, PeripheralListener, RealTimeClock, Thermometer } from '../src/firmata.peripheral'
 import type { IndiClientHandler } from '../src/indi.client'
 import type { DefNumberVector, DelProperty, SetNumberVector, SetSwitchVector } from '../src/indi.types'
 
@@ -112,6 +112,28 @@ class FakeMagnetometer extends FakeListenable<FakeMagnetometer> implements Magne
 	x = 0
 	y = 0
 	z = 0
+}
+
+class FakeRtc extends FakeListenable<FakeRtc> implements RealTimeClock {
+	year = 2000
+	month = 1
+	day = 1
+	dayOfWeek = 0
+	hour = 0
+	minute = 0
+	second = 0
+	millisecond = 0
+
+	readonly updates: number[][] = []
+	syncs = 0
+
+	update(year = this.year, month = this.month, day = this.day, dayOfWeek = this.dayOfWeek, hour = this.hour, minute = this.minute, second = this.second, millisecond = this.millisecond) {
+		this.updates.push([year, month, day, dayOfWeek, hour, minute, second, millisecond])
+	}
+
+	sync(date: Date = new Date()) {
+		this.syncs++
+	}
 }
 
 interface RecordedEvent {
@@ -301,6 +323,41 @@ describe('firmata indi client', () => {
 		mag.z = 0.4
 		await client.createPeripheral(mag).connect()
 		expect(events.find((e) => e.tag === 'defNumber' && e.device === 'HMC5883L' && e.name === 'MAGNETIC_FIELD')?.value).toBe(0.2)
+	})
+
+	test('real-time clock publishes a writable TIME vector and routes writes to update/sync', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const rtc = new FakeRtc('DS3231', firmata as never)
+		rtc.year = 2024
+		rtc.month = 6
+		rtc.day = 18
+		const device = client.createPeripheral(rtc)
+		await device.connect()
+
+		// TIME is defined with current values; TIME_SYNC switch becomes available once connected.
+		expect(events.find((e) => e.tag === 'defNumber' && e.device === 'DS3231' && e.name === 'TIME')?.value).toBe(2024)
+		expect(events.some((e) => e.tag === 'defSwitch' && e.device === 'DS3231' && e.name === 'TIME_SYNC')).toBeTrue()
+
+		// sendNumber routes to update() with the supplied fields.
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2030, MONTH: 12, DAY: 25, HOUR: 10, MINUTE: 20, SECOND: 30 } })
+		expect(rtc.updates).toHaveLength(1)
+		expect(rtc.updates[0].slice(0, 3)).toEqual([2030, 12, 25])
+
+		// sendSwitch on TIME_SYNC calls sync() and resets the momentary switch.
+		client.sendSwitch({ device: 'DS3231', name: 'TIME_SYNC', elements: { SYNC: true } })
+		expect(rtc.syncs).toBe(1)
+		expect(events.some((e) => e.tag === 'setSwitch' && e.name === 'TIME_SYNC')).toBeTrue()
+
+		// Writes are ignored while disconnected and TIME_SYNC is removed on disconnect.
+		device.disconnect()
+		expect(tagsFor(events, 'DS3231', 'TIME_SYNC')).toContain('del')
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 1999 } })
+		client.sendSwitch({ device: 'DS3231', name: 'TIME_SYNC', elements: { SYNC: true } })
+		expect(rtc.updates).toHaveLength(1)
+		expect(rtc.syncs).toBe(1)
 	})
 
 	test('getProperties filters by device and name and re-emits def plus value', async () => {

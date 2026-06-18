@@ -93,6 +93,7 @@ export interface RealTimeClock extends Peripheral {
 	readonly year: number
 	readonly month: number
 	readonly day: number
+	readonly dayOfWeek: number
 	readonly hour: number
 	readonly minute: number
 	readonly second: number

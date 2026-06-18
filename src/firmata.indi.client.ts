@@ -1,6 +1,6 @@
 import { toMeter } from './distance'
 import type { FirmataClient, FirmataClientHandler } from './firmata'
-import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, ListenablePeripheral, Luxmeter, Magnetometer, Peripheral, PeripheralListener, Thermometer } from './firmata.peripheral'
+import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygrometer, ListenablePeripheral, Luxmeter, Magnetometer, Peripheral, PeripheralListener, RealTimeClock, Thermometer } from './firmata.peripheral'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleSetNumberVector, handleSetSwitchVector, type IndiClientHandler } from './indi.client'
 import { type Client, DeviceInterfaceType } from './indi.device'
 import { type DefNumberVector, type EnableBlob, type GetProperties, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type SetNumberVector, selectOnSwitch } from './indi.types'
@@ -133,37 +133,26 @@ export class FirmataIndiClient implements Client {
 		this.#devices.get(vector.device)?.sendSwitch(vector)
 	}
 
-	// Registers a listenable peripheral as a virtual device, auto-detecting which read-only
-	// measurement vectors to publish from the sensor interfaces the peripheral implements.
+	// Registers a listenable peripheral as a virtual device, auto-detecting which vectors to publish
+	// from the interfaces the peripheral implements. A real-time clock yields a writable virtual
+	// device; sensors yield read-only measurement vectors.
 	createPeripheral<D extends ListenablePeripheral<D>>(peripheral: D) {
-		const measurements: FirmataMeasurement<D>[] = []
-		let type = DeviceInterfaceType.AUXILIARY
-		if (isThermometer(peripheral)) measurements.push(temperatureMeasurement<D>())
-		if (isHygrometer(peripheral)) measurements.push(humidityMeasurement<D>())
-		if (isBarometer(peripheral)) measurements.push(pressureMeasurement<D>())
-		if (isAltimeter(peripheral)) measurements.push(altitudeMeasurement<D>())
-		if (isAmmeter(peripheral)) measurements.push(currentMeasurement<D>())
-		if (isLuxmeter(peripheral)) measurements.push(illuminanceMeasurement<D>())
-		if (isAccelerometer(peripheral)) measurements.push(accelerationMeasurement<D>())
-		if (isGyroscope(peripheral)) measurements.push(angularVelocityMeasurement<D>())
-		if (isMagnetometer(peripheral)) measurements.push(magneticFieldMeasurement<D>())
-		if (isThermometer(peripheral) || isThermometer(peripheral) || isBarometer(peripheral)) type ||= DeviceInterfaceType.WEATHER
-		return this.#register(peripheral, type, measurements)
+		this.#ensureRegistrable(peripheral)
+
+		const device = isRealTimeClock(peripheral) ? new RealTimeClockVirtualDevice<D>(this, peripheral.name, peripheral) : new FirmataVirtualDevice(this, peripheral.name, peripheral, sensorInterfaceType(peripheral), sensorMeasurements(peripheral))
+
+		this.#devices.set(peripheral.name, device as never)
+		this.#peripherals.add(peripheral)
+		return device
 	}
 
-	// Generic registration path. Keeps client routing independent from the concrete peripheral so new
-	// adapters can be added without rewriting it. Rejects duplicate device names and reuse of the same
-	// peripheral instance to avoid one adapter stopping a peripheral another adapter still needs.
-	#register<D extends ListenablePeripheral<D>>(peripheral: D, interfaceType: DeviceInterfaceType, measurements: readonly FirmataMeasurement<D>[]) {
+	// Validates that a peripheral can be registered. Rejects empty names, duplicate device names and
+	// reuse of the same peripheral instance, so one adapter cannot stop a peripheral another needs.
+	#ensureRegistrable(peripheral: Peripheral) {
 		const { name } = peripheral
 		if (!name) throw new Error('virtual device name must not be empty')
 		if (this.#devices.has(name)) throw new Error(`a virtual device named "${name}" is already registered`)
-		if (this.#peripherals.has(peripheral)) throw new Error(`peripheral "${peripheral.name}" is already registered with this client`)
-
-		const device = new FirmataVirtualDevice(this, name, peripheral, interfaceType, measurements)
-		this.#devices.set(name, device as never)
-		this.#peripherals.add(peripheral)
-		return device
+		if (this.#peripherals.has(peripheral)) throw new Error(`peripheral "${name}" is already registered with this client`)
 	}
 
 	// Transitions every connected virtual device to a safe disconnected state without removing it,
@@ -258,6 +247,8 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 				handleDefNumberVector(this.client, this.handler, measurement.vector)
 				handleSetNumberVector(this.client, this.handler, measurement.vector)
 			}
+
+			this.sendExtraProperties(name)
 		}
 	}
 
@@ -275,6 +266,15 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 				else if (vector.elements.DISCONNECT === true) this.disconnect()
 		}
 	}
+
+	// Hook for subclasses to define extra device-specific vectors once the device is connected.
+	protected onConnect() {}
+
+	// Hook for subclasses to delete the vectors they defined in onConnect on disconnect.
+	protected onDisconnect() {}
+
+	// Hook for subclasses to re-emit their extra vectors from getProperties while connected.
+	protected sendExtraProperties(name?: string) {}
 
 	// Connects the virtual device: verifies the board is ready, starts the peripheral once, attaches
 	// the listener before starting so the first reading cannot be lost, defines the measurement
@@ -305,6 +305,8 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 				measurement.vector.state = 'Idle'
 				handleDefNumberVector(this.client, this.handler, measurement.vector)
 			}
+
+			this.onConnect()
 
 			selectOnSwitch(this.#connection, 'CONNECT')
 			this.#connection.state = 'Idle'
@@ -341,6 +343,8 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 			this.handler.delProperty?.(this.client, { device: this.name, name: measurement.vector.name })
 		}
 
+		this.onDisconnect()
+
 		selectOnSwitch(this.#connection, 'DISCONNECT')
 		this.#connection.state = 'Idle'
 		if (publishConnection) handleSetSwitchVector(this.client, this.handler, this.#connection)
@@ -376,6 +380,96 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 
 			if (changed) handleSetNumberVector(this.client, this.handler, measurement.vector)
 		}
+	}
+}
+
+// Writable virtual device for a real-time clock. Reuses the base lifecycle and exposes the clock as a
+// writable TIME number vector plus a momentary TIME_SYNC switch. Writes route to the peripheral's
+// update()/sync() methods; the polled readings keep TIME current through the base change detection.
+class RealTimeClockVirtualDevice<D extends ListenablePeripheral<D>> extends FirmataVirtualDevice<D> {
+	// Main Control: momentary switch that writes the host clock to the device.
+	readonly #sync = makeSwitchVector('', 'TIME_SYNC', 'Sync', MAIN_CONTROL, 'AtMostOne', 'rw', ['SYNC', 'Sync to host clock', false])
+
+	constructor(client: FirmataIndiClient, name: string, peripheral: D) {
+		super(client, name, peripheral, DeviceInterfaceType.AUXILIARY, [timeMeasurement<D>()])
+		this.#sync.device = name
+	}
+
+	// Returns the owned peripheral as a real-time clock for write routing.
+	get #rtc() {
+		return this.peripheral as unknown as RealTimeClock
+	}
+
+	protected onConnect() {
+		handleDefSwitchVector(this.client, this.handler, this.#sync)
+	}
+
+	protected onDisconnect() {
+		this.handler.delProperty?.(this.client, { device: this.name, name: this.#sync.name })
+	}
+
+	protected sendExtraProperties(name?: string) {
+		if (!name || name === this.#sync.name) handleDefSwitchVector(this.client, this.handler, this.#sync)
+	}
+
+	// Writes a new date/time to the clock. Missing elements fall back to the peripheral's current
+	// values through update()'s own defaults.
+	sendNumber(vector: NewNumberVector) {
+		if (!this.isConnected || vector.name !== 'TIME') return
+		const e = vector.elements
+		this.#rtc.update(e.YEAR, e.MONTH, e.DAY, e.DAY_OF_WEEK, e.HOUR, e.MINUTE, e.SECOND, e.MILLISECOND)
+	}
+
+	// Syncs the clock to the host date when TIME_SYNC is selected, then resets the momentary switch.
+	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
+		if (this.isConnected && vector.name === this.#sync.name && vector.elements.SYNC === true) {
+			this.#rtc.sync()
+			this.#sync.elements.SYNC.value = false
+			this.#sync.state = 'Ok'
+			handleSetSwitchVector(this.client, this.handler, this.#sync)
+		}
+	}
+}
+
+// Builds the read-only sensor measurements implied by the interfaces a peripheral implements.
+function sensorMeasurements<D extends ListenablePeripheral<D>>(peripheral: D): FirmataMeasurement<D>[] {
+	const measurements: FirmataMeasurement<D>[] = []
+	if (isThermometer(peripheral)) measurements.push(temperatureMeasurement<D>())
+	if (isHygrometer(peripheral)) measurements.push(humidityMeasurement<D>())
+	if (isBarometer(peripheral)) measurements.push(pressureMeasurement<D>())
+	if (isAltimeter(peripheral)) measurements.push(altitudeMeasurement<D>())
+	if (isAmmeter(peripheral)) measurements.push(currentMeasurement<D>())
+	if (isLuxmeter(peripheral)) measurements.push(illuminanceMeasurement<D>())
+	if (isAccelerometer(peripheral)) measurements.push(accelerationMeasurement<D>())
+	if (isGyroscope(peripheral)) measurements.push(angularVelocityMeasurement<D>())
+	if (isMagnetometer(peripheral)) measurements.push(magneticFieldMeasurement<D>())
+	return measurements
+}
+
+// Picks the closest INDI interface for a sensor: WEATHER for weather-oriented quantities, otherwise AUXILIARY.
+function sensorInterfaceType<D extends ListenablePeripheral<D>>(peripheral: D) {
+	return isThermometer(peripheral) || isHygrometer(peripheral) || isBarometer(peripheral) || isAltimeter(peripheral) ? DeviceInterfaceType.WEATHER | DeviceInterfaceType.AUXILIARY : DeviceInterfaceType.AUXILIARY
+}
+
+// Builds the writable TIME measurement (calendar fields). Polled readings keep it current; client
+// writes are routed to the peripheral by RtcVirtualDevice.
+function timeMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
+	// oxfmt-ignore
+	const vector = makeNumberVector('', 'TIME', 'Time', MAIN_CONTROL, 'rw', ['YEAR', 'Year', 0, 0, 9999, 1, '%.0f'], ['MONTH', 'Month', 1, 1, 12, 1, '%.0f'], ['DAY', 'Day', 1, 1, 31, 1, '%.0f'], ['DAY_OF_WEEK', 'Day of Week', 0, 0, 6, 1, '%.0f'], ['HOUR', 'Hour', 0, 0, 23, 1, '%.0f'], ['MINUTE', 'Minute', 0, 0, 59, 1, '%.0f'], ['SECOND', 'Second', 0, 0, 59, 1, '%.0f'], ['MILLISECOND', 'Millisecond', 0, 0, 999, 1, '%.0f'])
+	return {
+		vector,
+		reads: [
+			{ element: 'YEAR', read: (peripheral) => (peripheral as unknown as RealTimeClock).year },
+			{ element: 'MONTH', read: (peripheral) => (peripheral as unknown as RealTimeClock).month },
+			{ element: 'DAY', read: (peripheral) => (peripheral as unknown as RealTimeClock).day },
+			{ element: 'DAY_OF_WEEK', read: (peripheral) => (peripheral as unknown as RealTimeClock).dayOfWeek },
+			{ element: 'HOUR', read: (peripheral) => (peripheral as unknown as RealTimeClock).hour },
+			{ element: 'MINUTE', read: (peripheral) => (peripheral as unknown as RealTimeClock).minute },
+			{ element: 'SECOND', read: (peripheral) => (peripheral as unknown as RealTimeClock).second },
+			{ element: 'MILLISECOND', read: (peripheral) => (peripheral as unknown as RealTimeClock).millisecond },
+		],
 	}
 }
 
@@ -501,4 +595,10 @@ function isGyroscope<D extends ListenablePeripheral<D>>(peripheral: D): peripher
 function isMagnetometer<D extends ListenablePeripheral<D>>(peripheral: D): peripheral is D & Magnetometer {
 	const p = peripheral as Partial<Magnetometer>
 	return typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number'
+}
+
+// Narrows a peripheral to a real-time clock based on its write/sync methods.
+function isRealTimeClock<D extends ListenablePeripheral<D>>(peripheral: D): peripheral is D & RealTimeClock {
+	const p = peripheral as Partial<RealTimeClock>
+	return typeof p.year === 'number' && typeof p.month === 'number' && typeof p.day === 'number' && typeof p.dayOfWeek === 'number' && typeof p.hour === 'number' && typeof p.minute === 'number' && typeof p.second === 'number' && typeof p.update === 'function' && typeof p.sync === 'function'
 }
