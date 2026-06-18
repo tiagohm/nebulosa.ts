@@ -15,6 +15,11 @@ export interface Peripheral extends Disposable {
 	readonly stop: () => void
 }
 
+export interface ListenablePeripheral<D extends Peripheral = never> extends Peripheral {
+	readonly addListener: (listener: PeripheralListener<D>) => void
+	readonly removeListener: (listener: PeripheralListener<D>) => void
+}
+
 export interface Thermometer extends Peripheral {
 	readonly temperature: Temperature
 }

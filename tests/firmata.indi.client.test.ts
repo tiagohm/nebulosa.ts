@@ -1,0 +1,353 @@
+import { describe, expect, test } from 'bun:test'
+import type { FirmataClient, FirmataClientHandler } from '../src/firmata'
+import { FirmataIndiClient } from '../src/firmata.indi.client'
+import type { Altimeter, Barometer, Hygrometer, ListenablePeripheral, Peripheral, PeripheralListener, Thermometer } from '../src/firmata.peripheral'
+import type { IndiClientHandler } from '../src/indi.client'
+import type { DefNumberVector, DelProperty, SetNumberVector, SetSwitchVector } from '../src/indi.types'
+
+// Deterministic Firmata stand-in. Only the methods the adapter actually uses are implemented:
+// handler registration and the initialization gate. `ready` controls the connection outcome.
+class FakeFirmata {
+	readonly handlers = new Set<FirmataClientHandler>()
+	ready = true
+
+	addHandler(handler: FirmataClientHandler) {
+		this.handlers.add(handler)
+	}
+
+	removeHandler(handler: FirmataClientHandler) {
+		this.handlers.delete(handler)
+	}
+
+	ensureInitializationIsDone(timeout: number) {
+		return Promise.resolve(this.ready)
+	}
+
+	fireSystemReset() {
+		for (const handler of this.handlers) handler.systemReset?.(this as never)
+	}
+
+	fireClose() {
+		for (const handler of this.handlers) handler.close?.(this as never)
+	}
+}
+
+// Minimal listenable peripheral test double that pushes readings through listeners on demand.
+abstract class FakeListenable<D extends ListenablePeripheral<D>> implements Peripheral {
+	started = 0
+	stopped = 0
+	readonly #listeners = new Set<PeripheralListener<D>>()
+
+	constructor(
+		readonly name: string,
+		readonly client: FirmataClient,
+	) {}
+
+	addListener(listener: PeripheralListener<D>) {
+		this.#listeners.add(listener)
+	}
+
+	removeListener(listener: PeripheralListener<D>) {
+		this.#listeners.delete(listener)
+	}
+
+	start() {
+		this.started++
+	}
+
+	stop() {
+		this.stopped++
+	}
+
+	get listenerCount() {
+		return this.#listeners.size
+	}
+
+	emit() {
+		for (const listener of this.#listeners) listener(this as never)
+	}
+
+	[Symbol.dispose]() {
+		this.stop()
+	}
+}
+
+class FakeThermometer extends FakeListenable<FakeThermometer> implements Thermometer {
+	temperature = 0
+}
+
+class FakeBarometer extends FakeListenable<FakeBarometer> implements Barometer, Altimeter, Thermometer {
+	pressure = 0
+	altitude = 0
+	temperature = 0
+}
+
+class FakePureBarometer extends FakeListenable<FakePureBarometer> implements Barometer {
+	pressure = 0
+}
+
+class FakeHygrometer extends FakeListenable<FakeHygrometer> implements Hygrometer, Thermometer {
+	humidity = 0
+	temperature = 0
+}
+
+interface RecordedEvent {
+	readonly tag: string
+	readonly device: string
+	readonly name?: string
+	readonly value?: number
+	readonly state?: string
+	readonly server?: boolean
+}
+
+// Records the INDI events emitted by the adapter for assertions.
+function createRecorder() {
+	const events: RecordedEvent[] = []
+
+	const handler: IndiClientHandler = {
+		defTextVector: (_, m) => events.push({ tag: 'defText', device: m.device, name: m.name }),
+		defNumberVector: (_, m: DefNumberVector) => events.push({ tag: 'defNumber', device: m.device, name: m.name, state: m.state }),
+		defSwitchVector: (_, m) => events.push({ tag: 'defSwitch', device: m.device, name: m.name, state: m.state }),
+		setNumberVector: (_, m: SetNumberVector) => events.push({ tag: 'setNumber', device: m.device, name: m.name, value: Object.values(m.elements)[0]?.value }),
+		setSwitchVector: (_, m: SetSwitchVector) => events.push({ tag: 'setSwitch', device: m.device, name: m.name, state: m.state }),
+		delProperty: (_, m: DelProperty) => events.push({ tag: 'del', device: m.device, name: m.name }),
+		close: (_, server) => events.push({ tag: 'close', device: '', server }),
+	}
+
+	return { events, handler }
+}
+
+function tagsFor(events: readonly RecordedEvent[], device: string, name?: string) {
+	return events.filter((e) => e.device === device && (name === undefined || e.name === name)).map((e) => e.tag)
+}
+
+describe('firmata indi client', () => {
+	test('satisfies the client contract with stable identity metadata', () => {
+		const firmata = new FakeFirmata()
+		using client = new FirmataIndiClient(firmata as never, 'Arduino Uno')
+
+		expect(client.type).toBe('FIRMATA')
+		expect(client.id).toMatch(/^[0-9a-f]{32}$/)
+		expect(client.id).toBe(new FirmataIndiClient(new FakeFirmata() as never, 'Arduino Uno').id)
+		expect(client.description).toContain('Arduino Uno')
+		expect(typeof client.getProperties).toBe('function')
+		expect(typeof client.enableBlob).toBe('function')
+		expect(() => client.enableBlob({ device: 'Arduino Uno', value: 'Never' })).not.toThrow()
+		expect(firmata.handlers.size).toBe(1)
+	})
+
+	test('creating a thermometer publishes general/control defs and starts disconnected', () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const device = client.createPeripheral(new FakeThermometer('LM35', firmata as never))
+
+		expect(tagsFor(events, 'LM35', 'DRIVER_INFO')).toContain('defText')
+		expect(tagsFor(events, 'LM35', 'CONNECTION')).toContain('defSwitch')
+		expect(tagsFor(events, 'LM35', 'TEMPERATURE')).toHaveLength(0)
+		expect(device.isConnected).toBeFalse()
+	})
+
+	test('connecting starts the peripheral once, defines TEMPERATURE and publishes its value', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		peripheral.temperature = 21.5
+		const device = client.createPeripheral(peripheral)
+
+		await device.connect()
+
+		expect(device.isConnected).toBeTrue()
+		expect(peripheral.started).toBe(1)
+		expect(peripheral.listenerCount).toBe(1)
+
+		const def = events.find((e) => e.tag === 'defNumber' && e.name === 'TEMPERATURE')
+		expect(def).toBeDefined()
+		const connStates = events.filter((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION').map((e) => e.state)
+		expect(connStates).toEqual(['Busy', 'Idle'])
+	})
+
+	test('a listener update publishes a changed setNumberVector but not a duplicate', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		peripheral.temperature = 25
+		peripheral.emit()
+
+		let sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		expect(sets).toHaveLength(1)
+		expect(sets[0].value).toBe(25)
+
+		// Same value: no duplicate event.
+		peripheral.emit()
+		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		expect(sets).toHaveLength(1)
+
+		// New value: another event.
+		peripheral.temperature = 26
+		peripheral.emit()
+		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		expect(sets).toHaveLength(2)
+		expect(sets[1].value).toBe(26)
+	})
+
+	test('hygrometer and barometer factories define required and optional measurements', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const baro = new FakeBarometer('BMP280', firmata as never)
+		baro.pressure = 1013.25
+		baro.altitude = 0 // AU
+		baro.temperature = 18
+		const baroDevice = client.createPeripheral(baro)
+		await baroDevice.connect()
+
+		const pureBaro = new FakePureBarometer('PURE', firmata as never)
+		const pureDevice = client.createPeripheral(pureBaro)
+		await pureDevice.connect()
+
+		const hygro = new FakeHygrometer('AM2320', firmata as never)
+		hygro.humidity = 55
+		hygro.temperature = 19
+		const hygroDevice = client.createPeripheral(hygro)
+		await hygroDevice.connect()
+
+		const baroDefs = events.filter((e) => e.tag === 'defNumber' && e.device === 'BMP280').map((e) => e.name)
+		expect(baroDefs).toContain('PRESSURE')
+		expect(baroDefs).toContain('ALTITUDE')
+		expect(baroDefs).toContain('TEMPERATURE')
+
+		// Pure barometer exposes only PRESSURE.
+		const pureDefs = events.filter((e) => e.tag === 'defNumber' && e.device === 'PURE').map((e) => e.name)
+		expect(pureDefs).toEqual(['PRESSURE'])
+
+		const hygroDefs = events.filter((e) => e.tag === 'defNumber' && e.device === 'AM2320').map((e) => e.name)
+		expect(hygroDefs).toContain('RELATIVE_HUMIDITY')
+		expect(hygroDefs).toContain('TEMPERATURE')
+	})
+
+	test('getProperties filters by device and name and re-emits def plus value', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		peripheral.temperature = 10
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		// Unrelated device that must not respond to the filtered query.
+		client.createPeripheral(new FakeThermometer('LM35b', firmata as never))
+
+		events.length = 0
+		client.getProperties({ device: 'LM35', name: 'TEMPERATURE' })
+
+		expect(tagsFor(events, 'LM35', 'TEMPERATURE').sort()).toEqual(['defNumber', 'setNumber'])
+		expect(events.every((e) => e.device === 'LM35')).toBeTrue()
+		expect(events.find((e) => e.tag === 'setNumber')?.value).toBe(10)
+	})
+
+	test('sendSwitch routes CONNECTION only to the matching device and supports disconnect cleanup', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const a = new FakeThermometer('A', firmata as never)
+		const b = new FakeThermometer('B', firmata as never)
+		const deviceA = client.createPeripheral(a)
+		client.createPeripheral(b)
+
+		client.sendSwitch({ device: 'A', name: 'CONNECTION', elements: { CONNECT: true } })
+		await waitUntil(() => deviceA.isConnected)
+
+		expect(a.started).toBe(1)
+		expect(b.started).toBe(0)
+
+		events.length = 0
+		client.sendSwitch({ device: 'A', name: 'CONNECTION', elements: { DISCONNECT: true } })
+
+		expect(deviceA.isConnected).toBeFalse()
+		expect(a.stopped).toBe(1)
+		expect(a.listenerCount).toBe(0)
+		expect(tagsFor(events, 'A', 'TEMPERATURE')).toContain('del')
+	})
+
+	test('rejects duplicate device names and duplicate peripheral registration', () => {
+		const firmata = new FakeFirmata()
+		using client = new FirmataIndiClient(firmata as never, 'Board')
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		client.createPeripheral(peripheral)
+
+		expect(() => client.createPeripheral(peripheral)).toThrow(/already registered/)
+	})
+
+	test('connection failure leaves the device safely disconnected', async () => {
+		const firmata = new FakeFirmata()
+		firmata.ready = false
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+
+		await device.connect()
+
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(0)
+		expect(peripheral.listenerCount).toBe(0)
+		const connStates = events.filter((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION').map((e) => e.state)
+		expect(connStates).toEqual(['Busy', 'Alert'])
+	})
+
+	test('firmata reset and close disconnect devices, and dispose is idempotent', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		const client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		firmata.fireSystemReset()
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.stopped).toBe(1)
+		expect(peripheral.listenerCount).toBe(0)
+		expect(tagsFor(events, 'LM35', 'TEMPERATURE')).toContain('del')
+
+		// Reconnect, then verify close also disconnects.
+		await device.connect()
+		expect(device.isConnected).toBeTrue()
+		firmata.fireClose()
+		expect(device.isConnected).toBeFalse()
+
+		const closeBefore = events.filter((e) => e.tag === 'close').length
+		client.dispose()
+		client.dispose()
+		const closeAfter = events.filter((e) => e.tag === 'close').length
+
+		// close fired once by fireClose (server=true); dispose must not fire it again.
+		expect(closeBefore).toBe(1)
+		expect(closeAfter).toBe(1)
+		expect(firmata.handlers.size).toBe(0)
+	})
+})
+
+// Polls a predicate until it holds or the timeout elapses.
+async function waitUntil(predicate: () => boolean, timeout: number = 1000) {
+	const start = performance.now()
+
+	while (!predicate()) {
+		if (performance.now() - start > timeout) throw new Error('waitUntil timed out')
+		await Bun.sleep(10)
+	}
+}
