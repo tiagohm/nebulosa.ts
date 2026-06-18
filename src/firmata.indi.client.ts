@@ -613,17 +613,20 @@ class RealTimeClockVirtualDevice<D extends ListenablePeripheral<D>> extends Firm
 	// Writes a new date/time to the clock. Omitted elements fall back to the TIME vector's current
 	// element values. Once TIME is Idle those are the hardware-confirmed values, so partial writes
 	// preserve the rest of the calendar. While TIME is still a Busy placeholder (no read yet) the
-	// element values are only defaults, so a partial write would overwrite the stored date with them;
-	// in that state a full date (YEAR/MONTH/DAY) is required and incomplete writes are ignored. An
-	// omitted DAY_OF_WEEK is recomputed from the effective date so a partial date change cannot leave
-	// chips that store the weekday separately with a stale weekday.
+	// element values are only zeroed defaults, so any omitted field would overwrite real hardware state
+	// with them; in that state every hardware-backed field must be supplied and incomplete writes are
+	// ignored. DAY_OF_WEEK is recomputed from the effective date (and MILLISECOND is not stored by these
+	// RTCs), so neither is required.
 	sendNumber(vector: NewNumberVector) {
 		if (!this.isConnected || vector.name !== 'TIME') return
 
 		const e = vector.elements
 
-		// Before the first reading settles TIME, refuse partial writes that omit any date field.
-		if (this.#timeVector.state !== 'Idle' && (e.YEAR === undefined || e.MONTH === undefined || e.DAY === undefined)) return
+		// Before the first reading settles TIME, the vector holds placeholder zeros rather than the
+		// hardware state, so a partial write would reset the unspecified fields. Require the full set of
+		// hardware-backed fields (DAY_OF_WEEK is recomputable, MILLISECOND is not stored) and otherwise
+		// ignore the write.
+		if (this.#timeVector.state !== 'Idle' && (e.YEAR === undefined || e.MONTH === undefined || e.DAY === undefined || e.HOUR === undefined || e.MINUTE === undefined || e.SECOND === undefined)) return
 
 		const current = this.#timeVector.elements
 

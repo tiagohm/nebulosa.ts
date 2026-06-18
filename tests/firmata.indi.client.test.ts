@@ -509,6 +509,7 @@ describe('firmata indi client', () => {
 		rtc.dayOfWeek = 3
 		const device = client.createPeripheral(rtc)
 		await device.connect()
+		rtc.emit() // settle TIME to Idle so partial (date-only) writes are accepted
 
 		// Change only the date; omit DAY_OF_WEEK.
 		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 6, DAY: 18 } })
@@ -533,12 +534,17 @@ describe('firmata indi client', () => {
 		const device = client.createPeripheral(rtc)
 		await device.connect() // TIME is published Busy with placeholder defaults, not hardware time
 
-		// A partial write (no date) must not write the placeholder date back, resetting the clock.
+		// A time-only write must not write the placeholder date back, resetting the clock.
 		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { HOUR: 12 } })
 		expect(rtc.updates).toHaveLength(0)
 
-		// A complete date is accepted even while Busy.
-		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 6, DAY: 18, HOUR: 12 } })
+		// A date-only write is also rejected while Busy: the omitted HOUR/MINUTE/SECOND would be filled
+		// from placeholder zeros, resetting the current time.
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 6, DAY: 18 } })
+		expect(rtc.updates).toHaveLength(0)
+
+		// A complete date and time is accepted even while Busy.
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 6, DAY: 18, HOUR: 12, MINUTE: 30, SECOND: 15 } })
 		expect(rtc.updates).toHaveLength(1)
 		expect(rtc.updates[0].slice(0, 3)).toEqual([2024, 6, 18])
 
