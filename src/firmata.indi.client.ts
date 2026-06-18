@@ -401,6 +401,14 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 
 			this.onConnect()
 
+			// A disconnect or dispose may have arrived while publishing definitions (handlers can
+			// re-enter through the def events). Roll the started peripheral back instead of reporting
+			// connected, since everything after the await ran synchronously without another flag check.
+			if (this.#cancelPending || this.#disposed) {
+				this.#teardown(!this.#disposed)
+				return
+			}
+
 			selectOnSwitch(this.#connection, 'CONNECT')
 			this.#connection.state = 'Idle'
 			handleSetSwitchVector(this.client, this.handler, this.#connection)
@@ -420,18 +428,25 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		}
 	}
 
-	// Disconnects the virtual device: detaches the listener, stops the peripheral if this adapter
-	// started it, deletes the dynamic measurement properties and returns the connection to Idle.
+	// Disconnects the virtual device. While a connect is in flight (its only await is whenReady(), so
+	// everything after runs synchronously, including the definition phase where handlers may re-enter
+	// here) it just flags the cancellation and lets connect() roll back consistently at its checks.
+	// Otherwise it tears down an established connection.
 	disconnect(publishConnection: boolean = true) {
-		// A connect awaiting board readiness is not yet connected; flag the cancellation so the pending
-		// connect settles disconnected instead of starting the peripheral once it resumes.
-		if (this.#connecting && !this.isConnected) {
+		if (this.#connecting) {
 			this.#cancelPending = true
 			return
 		}
 
 		if (!this.isConnected) return
 
+		this.#teardown(publishConnection)
+	}
+
+	// Tears down an active or partially-established connection: detaches the listener, stops the
+	// peripheral if it was started, deletes the dynamic measurement properties, runs onDisconnect and
+	// returns the connection switch to DISCONNECT/Idle, optionally publishing it.
+	#teardown(publishConnection: boolean) {
 		this.peripheral.removeListener(this.#listener)
 
 		if (this.#started) {
@@ -511,6 +526,11 @@ class RealTimeClockVirtualDevice<D extends ListenablePeripheral<D>> extends Firm
 		return this.peripheral as unknown as RealTimeClock
 	}
 
+	// The single TIME measurement vector owned by this device.
+	get #timeVector() {
+		return this.measurements[0].vector
+	}
+
 	protected onConnect() {
 		handleDefSwitchVector(this.client, this.handler, this.#sync)
 	}
@@ -523,25 +543,27 @@ class RealTimeClockVirtualDevice<D extends ListenablePeripheral<D>> extends Firm
 		if (!name || name === this.#sync.name) handleDefSwitchVector(this.client, this.handler, this.#sync)
 	}
 
-	// Writes a new date/time to the clock. Missing elements fall back to the peripheral's current
-	// values, and an omitted DAY_OF_WEEK is recomputed from the effective date so a partial date change
-	// cannot leave chips that store the weekday separately with a stale, inconsistent weekday.
+	// Writes a new date/time to the clock. Omitted elements fall back to the TIME vector's current
+	// element values rather than the peripheral fields: those are in range even while the vector is
+	// still Busy before the first read (the peripheral fields are zero then, which would write invalid
+	// MONTH=0/DAY=0 registers). An omitted DAY_OF_WEEK is recomputed from the effective date so a
+	// partial date change cannot leave chips that store the weekday separately with a stale weekday.
 	sendNumber(vector: NewNumberVector) {
 		if (!this.isConnected || vector.name !== 'TIME') return
 
 		const e = vector.elements
-		const rtc = this.#rtc
+		const current = this.#timeVector.elements
 
-		const year = e.YEAR ?? rtc.year
-		const month = e.MONTH ?? rtc.month
-		const day = e.DAY ?? rtc.day
-		const hour = e.HOUR ?? rtc.hour
-		const minute = e.MINUTE ?? rtc.minute
-		const second = e.SECOND ?? rtc.second
-		const millisecond = e.MILLISECOND ?? rtc.millisecond
+		const year = e.YEAR ?? current.YEAR.value
+		const month = e.MONTH ?? current.MONTH.value
+		const day = e.DAY ?? current.DAY.value
+		const hour = e.HOUR ?? current.HOUR.value
+		const minute = e.MINUTE ?? current.MINUTE.value
+		const second = e.SECOND ?? current.SECOND.value
+		const millisecond = e.MILLISECOND ?? current.MILLISECOND.value
 		const dayOfWeek = e.DAY_OF_WEEK ?? weekdayOf(year, month, day)
 
-		rtc.update(year, month, day, dayOfWeek, hour, minute, second, millisecond)
+		this.#rtc.update(year, month, day, dayOfWeek, hour, minute, second, millisecond)
 	}
 
 	// Syncs the clock to the host date when TIME_SYNC is selected, then resets the momentary switch.

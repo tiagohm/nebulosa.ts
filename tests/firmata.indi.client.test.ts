@@ -443,6 +443,27 @@ describe('firmata indi client', () => {
 		expect(rtc.updates[1][3]).toBe(5)
 	})
 
+	test('a partial TIME write while the clock is still Busy uses in-range defaults, not zeroed fields', async () => {
+		const firmata = new FakeFirmata()
+		using client = new FirmataIndiClient(firmata as never, 'Board')
+
+		// Zeroed calendar fields, as on a real DS3231/DS1307 before its first I2C reply.
+		const rtc = new FakeRtc('DS3231', firmata as never)
+		const device = client.createPeripheral(rtc)
+		await device.connect() // TIME is published Busy with in-range defaults (MONTH=1, DAY=1)
+
+		// Partial write before any valid reading must not forward the peripheral's zeroed month/day.
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024 } })
+
+		expect(rtc.updates).toHaveLength(1)
+		const [year, month, day] = rtc.updates[0]
+		expect(year).toBe(2024)
+		expect(month).toBe(1)
+		expect(day).toBe(1)
+		expect(month).toBeGreaterThanOrEqual(1)
+		expect(day).toBeGreaterThanOrEqual(1)
+	})
+
 	test('an RTC with default (zero) calendar fields publishes TIME busy until a valid reading', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
@@ -596,6 +617,38 @@ describe('firmata indi client', () => {
 		expect(peripheral.listenerCount).toBe(0)
 		const connStates = events.filter((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION').map((e) => e.state)
 		expect(connStates).toEqual(['Busy', 'Alert'])
+	})
+
+	test('a disconnect from the first measurement definition rolls back the started connection', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+
+		// React to the first measurement definition by requesting DISCONNECT, which happens after the
+		// peripheral has already been started but before connect() reports connected.
+		const cancelOnFirstDef: IndiClientHandler = {
+			...handler,
+			defNumberVector: (c, m) => {
+				handler.defNumberVector?.(c, m)
+				if (m.name === 'TEMPERATURE') c.sendSwitch({ device: m.device, name: 'CONNECTION', elements: { DISCONNECT: true } })
+			},
+		}
+
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler: cancelOnFirstDef })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+
+		await device.connect()
+
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(1) // it did start...
+		expect(peripheral.stopped).toBe(1) // ...and was rolled back
+		expect(peripheral.listenerCount).toBe(0)
+		expect(tagsFor(events, 'LM35', 'TEMPERATURE')).toContain('del')
+
+		// Never reported connected: the only connection sets are the initial Busy and the rollback Idle.
+		const connStates = events.filter((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION').map((e) => e.state)
+		expect(connStates).toEqual(['Busy', 'Idle'])
 	})
 
 	test('disconnect during a pending connect cancels it before the peripheral starts', async () => {
