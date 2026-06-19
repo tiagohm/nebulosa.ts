@@ -1079,6 +1079,29 @@ describe('firmata indi client', () => {
 		expect(closeAfter).toBe(1)
 		expect(firmata.handlers.size).toBe(0)
 	})
+
+	test('a reconnected transport closing again notifies consumers a second time', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		// First transport close notifies consumers.
+		firmata.fireClose()
+		expect(events.filter((e) => e.tag === 'close')).toHaveLength(1)
+
+		// The transport reconnects (fresh ready) and the device connects again.
+		firmata.fireReady()
+		await device.connect()
+		expect(device.isConnected).toBeTrue()
+
+		// A second close must notify again so consumers tear down the new generation.
+		firmata.fireClose()
+		expect(events.filter((e) => e.tag === 'close')).toHaveLength(2)
+	})
 })
 
 // Polls a predicate until it holds or the timeout elapses.

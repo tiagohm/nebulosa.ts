@@ -159,6 +159,10 @@ export class FirmataIndiClient implements Client {
 	#markReady() {
 		if (this.#ready || this.#disposed) return
 		this.#ready = true
+		// A new ready generation re-arms close notification: a previous transport close consumed the
+		// one-shot guard, but a reconnected transport that closes again must notify consumers (so they
+		// remove the second generation's devices/properties). Disposal stays terminal via #disposed.
+		this.#closed = false
 		this.#readyResolvers.resolve()
 	}
 
@@ -259,7 +263,9 @@ export class FirmataIndiClient implements Client {
 		for (const device of this.#devices.values()) device.handleTransportLost()
 	}
 
-	// Emits the consumer `close` callback at most once across the whole client lifetime.
+	// Emits the consumer `close` callback once per ready generation: the guard collapses a close
+	// followed by a dispose into a single notification, but a fresh ready (#markReady) re-arms it so a
+	// reconnected transport's later close notifies again.
 	#notifyClose(server: boolean) {
 		if (this.#closed) return
 		this.#closed = true
