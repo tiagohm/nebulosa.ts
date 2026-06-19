@@ -1112,6 +1112,33 @@ describe('firmata indi client', () => {
 		expect(connStates).toEqual(['Busy', 'Idle'])
 	})
 
+	test('CONNECT after a pending cancellation retries once the board is ready', async () => {
+		const firmata = new FakeFirmata()
+		firmata.ready = false
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+
+		const pending = device.connect()
+		await Bun.sleep(0)
+
+		client.sendSwitch({ device: 'LM35', name: 'CONNECTION', elements: { DISCONNECT: true } })
+		client.sendSwitch({ device: 'LM35', name: 'CONNECTION', elements: { CONNECT: true } })
+		await pending
+
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(0)
+
+		firmata.fireReady()
+		await waitUntil(() => device.isConnected)
+
+		expect(peripheral.started).toBe(1)
+		expect(peripheral.listenerCount).toBe(1)
+		expect(events.findLast((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION')?.state).toBe('Idle')
+	})
+
 	test('dispose during a pending connect aborts it before the peripheral starts', async () => {
 		const firmata = new FakeFirmata()
 		firmata.ready = false

@@ -335,6 +335,9 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// Set when a disconnect or dispose arrives while a connect is awaiting board readiness, so the
 	// in-flight connect aborts instead of starting the peripheral after the user cancelled.
 	#cancelPending = false
+	// Set when CONNECT is requested again while a canceled connect is still unwinding, preserving the
+	// user's latest command instead of letting the older DISCONNECT cancellation win.
+	#reconnectPending = false
 	#disposed = false
 	// Signal raced against the readiness wait so a cancellation wakes connect() immediately rather than
 	// leaving CONNECTION Busy until a later ready event or the full connection timeout.
@@ -421,9 +424,15 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// vectors with their current values, and returns the connection to Idle. On failure it cleans up
 	// partial work, marks the connection Alert and leaves the device safely disconnected.
 	async connect() {
-		if (this.isConnected || this.#connecting || this.#disposed) return
+		if (this.isConnected || this.#disposed) return
+		if (this.#connecting) {
+			if (this.#cancelPending) this.#reconnectPending = true
+			return
+		}
+
 		this.#connecting = true
 		this.#cancelPending = false
+		this.#reconnectPending = false
 		this.#cancel = Promise.withResolvers<void>()
 
 		this.#connection.state = 'Busy'
@@ -515,8 +524,10 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 			this.#connection.state = 'Alert'
 			handleSetSwitchVector(this.client, this.handler, this.#connection)
 		} finally {
+			const reconnect = this.#reconnectPending && !this.#disposed && !this.isConnected
 			this.#connecting = false
 			this.#cancel = undefined
+			if (reconnect) void this.connect()
 		}
 	}
 
@@ -525,6 +536,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// here) it just flags the cancellation and lets connect() roll back consistently at its checks.
 	// Otherwise it tears down an established connection.
 	disconnect(publishConnection: boolean = true) {
+		this.#reconnectPending = false
 		if (this.#connecting) {
 			this.#cancelPending = true
 			this.#cancel?.resolve()
