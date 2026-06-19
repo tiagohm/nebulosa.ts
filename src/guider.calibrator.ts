@@ -293,6 +293,13 @@ const EMPTY_GUIDING_CALIBRATOR_STATE: Readonly<GuidingCalibratorState> = {
 	raSamples: [],
 	decSamples: [],
 	clearingSamples: [],
+	// Explicit undefined so reset()'s Object.assign clears these optional fields. Without the keys present,
+	// a stale solution or a stale completed/failure result would survive reset and be surfaced by
+	// #makeStepResult on every step of the next calibration run.
+	raSolution: undefined,
+	decSolution: undefined,
+	result: undefined,
+	failure: undefined,
 	badFrames: 0,
 	decMotionDetected: false,
 	decBacklashMs: 0,

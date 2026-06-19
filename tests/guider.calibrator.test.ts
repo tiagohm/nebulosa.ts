@@ -154,6 +154,21 @@ test('completes RA clear and DEC backlash calibration with invertible matrix', (
 	expect(product[3]).toBeCloseTo(1, 6)
 })
 
+test('reset clears the previous completed result before a new calibration run', () => {
+	const first = runCalibration({}, { raVector: [0.8, 0.2], decVector: [-0.15, 0.75], decBacklashSteps: 2 })
+	expect(first.step.completed).toBeDefined()
+
+	const calibrator = first.calibrator
+	calibrator.reset()
+
+	// The first frame of the new run only acquires the lock and queues the first RA pulse, so it must not
+	// surface the previous run's completed result or failure.
+	const step = calibrator.processFrame(guideFrame(BASE_STARS, 99999, 500))
+	expect(step.phase).toBe('raForwardPulse')
+	expect(step.completed).toBeUndefined()
+	expect(step.failure).toBeUndefined()
+})
+
 test('fails when RA travel never reaches the configured threshold', () => {
 	const simulation = runCalibration({ maxRaSteps: 3, maxRaNoMotionSteps: 8, minNetRaTravelPx: 2 }, { raVector: [0.2, 0.02], decVector: [-0.1, 0.6] })
 	expect(simulation.step.completed).toBeUndefined()
