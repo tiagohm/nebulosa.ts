@@ -456,6 +456,15 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 
 			this.onConnect()
 
+			// A handler reacting to a definition (a measurement or TIME_SYNC) may have already requested
+			// disconnect/dispose. Honor it before start() so a canceled device never has its hardware
+			// configured. start() has not run, so undo without stopping the peripheral.
+			if (this.#cancelPending || this.#disposed) {
+				this.#started = false
+				this.#teardown(!this.#disposed)
+				return
+			}
+
 			// Start only after the definitions exist, so a peripheral that emits its first reading
 			// synchronously inside start() delivers it to already-defined vectors: #onReading then
 			// settles them to Idle (def before set) instead of a set racing ahead of the def and the

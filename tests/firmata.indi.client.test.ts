@@ -917,12 +917,12 @@ describe('firmata indi client', () => {
 		expect(connStates).toEqual(['Busy', 'Alert'])
 	})
 
-	test('a disconnect from the first measurement definition rolls back the started connection', async () => {
+	test('a disconnect from the first measurement definition leaves the peripheral unstarted', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
 
 		// React to the first measurement definition by requesting DISCONNECT, which happens after the
-		// peripheral has already been started but before connect() reports connected.
+		// definitions are published but before connect() starts the peripheral.
 		const cancelOnFirstDef: IndiClientHandler = {
 			...handler,
 			defNumberVector: (c, m) => {
@@ -939,8 +939,8 @@ describe('firmata indi client', () => {
 		await device.connect()
 
 		expect(device.isConnected).toBeFalse()
-		expect(peripheral.started).toBe(1) // it did start...
-		expect(peripheral.stopped).toBe(1) // ...and was rolled back
+		expect(peripheral.started).toBe(0) // never started: cancellation honored before start()
+		expect(peripheral.stopped).toBe(0) // and therefore never stopped
 		expect(peripheral.listenerCount).toBe(0)
 		expect(tagsFor(events, 'LM35', 'TEMPERATURE')).toContain('del')
 
