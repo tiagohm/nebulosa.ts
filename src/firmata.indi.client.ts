@@ -435,10 +435,10 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		this.#reconnectPending = false
 		this.#cancel = Promise.withResolvers<void>()
 
-		this.#connection.state = 'Busy'
-		handleSetSwitchVector(this.client, this.handler, this.#connection)
-
 		try {
+			this.#connection.state = 'Busy'
+			handleSetSwitchVector(this.client, this.handler, this.#connection)
+
 			// Reset-aware readiness gate: after a systemReset/close this waits for a fresh ready instead
 			// of reusing the board's already-resolved one-shot initialization promise. The cancel signal
 			// is raced in so a disconnect/dispose wakes this wait at once instead of lingering Busy.

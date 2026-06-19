@@ -1017,6 +1017,35 @@ describe('firmata indi client', () => {
 		expect(connStates).toEqual(['Busy', 'Alert'])
 	})
 
+	test('a handler throwing on the Busy connection update leaves connect retryable', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		let throwBusy = true
+		const throwingHandler: IndiClientHandler = {
+			...handler,
+			setSwitchVector: (client, vector) => {
+				handler.setSwitchVector?.(client, vector)
+				if (throwBusy && vector.name === 'CONNECTION' && vector.state === 'Busy') {
+					throwBusy = false
+					throw new Error('busy handler failed')
+				}
+			},
+		}
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler: throwingHandler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+
+		await device.connect()
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.started).toBe(0)
+
+		await device.connect()
+		expect(device.isConnected).toBeTrue()
+		expect(peripheral.started).toBe(1)
+		expect(events.filter((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION').map((e) => e.state)).toEqual(['Busy', 'Alert', 'Busy', 'Idle'])
+	})
+
 	test('a disconnect from the first measurement definition leaves the peripheral unstarted', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
