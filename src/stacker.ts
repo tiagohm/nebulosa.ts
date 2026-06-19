@@ -646,7 +646,8 @@ function buildOnlineResult(referenceFrame: StackingFrame, referenceIndex: number
 		rejectedFrames,
 		referenceFrameIndex: referenceIndex,
 		effectiveCropBounds: cropBounds,
-		diagnostics,
+		// Copy the live diagnostics so the snapshot stays a stable point-in-time view that later add() calls cannot mutate.
+		diagnostics: diagnostics.slice(),
 		statistics: {
 			method: options.combinationMethod,
 			normalizationMode: options.normalizationMode,
@@ -655,7 +656,8 @@ function buildOnlineResult(referenceFrame: StackingFrame, referenceIndex: number
 			acceptedWeightSum: sumAcceptedWeights(diagnostics),
 			minimumCoverage: options.cropMode === 'intersection' ? 1 : options.minimumCoverage,
 		},
-		coverageMap: options.keepPerPixelStatistics ? coverageMap : undefined,
+		// Copy the live coverage buffer so the snapshot is not mutated in place by subsequent add() calls.
+		coverageMap: options.keepPerPixelStatistics ? coverageMap.slice() : undefined,
 		validityMask: buildValidityMask(coverageMap, acceptedFrames, options, referenceFrame.image.metadata.width, referenceFrame.image.metadata.height, cropBounds),
 	}
 }

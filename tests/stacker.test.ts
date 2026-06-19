@@ -90,6 +90,27 @@ describe('stacker live mode', () => {
 		expectRawClose(snapshot!.finalImage!.raw, reference.raw)
 	})
 
+	test('snapshot is an independent point-in-time view not mutated by later frames', () => {
+		const reference = makeImage(18, 18, 1, (x, y) => (x === y || x + y === 17 ? 1 : ((x * 3 + y * 5) % 11) / 32))
+		const current = translateImage(reference, 2, -1)
+		const stacker = new LiveStacker({ ...DEFAULT_STACK_OPTIONS, combinationMethod: 'average', interpolationMode: 'nearest', keepPerPixelStatistics: true })
+
+		stacker.add(makeFrame(reference, makeStars()))
+		stacker.add(makeFrame(current, makeStars(-2, 1)))
+
+		const snapshot = stacker.snapshot()!
+		expect(snapshot.acceptedFrames).toBe(2)
+		const diagnosticsLength = snapshot.diagnostics.length
+		const coverageBefore = Array.from(snapshot.coverageMap!)
+
+		// Continue stacking after the snapshot was taken; the earlier snapshot must not change.
+		stacker.add(makeFrame(current, makeStars(-2, 1)))
+
+		expect(snapshot.acceptedFrames).toBe(2)
+		expect(snapshot.diagnostics.length).toBe(diagnosticsLength)
+		expect(Array.from(snapshot.coverageMap!)).toEqual(coverageBefore)
+	})
+
 	test('rejects live methods that are not exact online', () => {
 		const image = makeImage(8, 8, 1, () => 1)
 		const stacker = new LiveStacker({ ...DEFAULT_STACK_OPTIONS, combinationMethod: 'median' })
