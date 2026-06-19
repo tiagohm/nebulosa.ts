@@ -1,6 +1,6 @@
 import type { Angle } from './angle'
 import type { Distance } from './distance'
-import type { FirmataClient, FirmataClientHandler, Pin, PinMode } from './firmata'
+import { type FirmataClient, type FirmataClientHandler, type Pin, PinMode } from './firmata'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 
@@ -13,6 +13,11 @@ export interface Peripheral extends Disposable {
 	readonly client: FirmataClient
 	readonly start: () => void
 	readonly stop: () => void
+}
+
+export interface ListenablePeripheral<D extends Peripheral = never> extends Peripheral {
+	readonly addListener: (listener: PeripheralListener<D>) => void
+	readonly removeListener: (listener: PeripheralListener<D>) => void
 }
 
 export interface Thermometer extends Peripheral {
@@ -88,6 +93,7 @@ export interface RealTimeClock extends Peripheral {
 	readonly year: number
 	readonly month: number
 	readonly day: number
+	readonly dayOfWeek: number
 	readonly hour: number
 	readonly minute: number
 	readonly second: number
@@ -137,6 +143,10 @@ export const DEFAULT_POLLING_INTERVAL = 5000
 
 export abstract class PeripheralBase<D extends Peripheral = never> implements FirmataClientHandler {
 	readonly #listeners = new Set<PeripheralListener<D>>()
+	// Listeners that have not yet received a completed read. Tracked per listener so a listener attached
+	// after the peripheral was already sampled still receives a first reading even when the value is
+	// unchanged. A shared flag would suppress that for the newcomer (and is wrong when listeners differ).
+	readonly #pendingFirstRead = new Set<PeripheralListener<D>>()
 	readonly #pendingTwoWireReads = new Map<string, PendingTwoWireRead[]>()
 
 	abstract readonly client: FirmataClient
@@ -148,16 +158,43 @@ export abstract class PeripheralBase<D extends Peripheral = never> implements Fi
 		this.stop()
 	}
 
+	// Whether every attached listener has received at least one completed reading.
+	get initialized() {
+		return this.#listeners.size > 0 && this.#pendingFirstRead.size === 0
+	}
+
 	addListener(listener: PeripheralListener<D>) {
-		this.#listeners.add(listener)
+		// Only owe a first read to a genuinely new listener. Re-adding an already-registered one must not
+		// re-arm it, which would flip `initialized` back and emit a duplicate first-read on the next read.
+		if (!this.#listeners.has(listener)) {
+			this.#listeners.add(listener)
+			this.#pendingFirstRead.add(listener)
+		}
 	}
 
 	removeListener(listener: PeripheralListener<D>) {
 		this.#listeners.delete(listener)
+		this.#pendingFirstRead.delete(listener)
 	}
 
 	protected fire() {
+		this.#pendingFirstRead.clear()
 		for (const listener of this.#listeners) listener(this as never)
+	}
+
+	// Notifies listeners when a reading changed; otherwise delivers the first completed read to any
+	// listener that has not received one yet, even if the value equals the previous/default one. This
+	// lets a consumer settle an initial pending state for sensors whose first hardware sample happens to
+	// match their constructor default (for example a DS18B20 reading exactly 0 C, which would otherwise
+	// never fire on change alone), including a listener attached after an earlier one already initialized.
+	protected commit(changed: boolean) {
+		if (changed) {
+			this.fire()
+		} else if (this.#pendingFirstRead.size > 0) {
+			const pending = Array.from(this.#pendingFirstRead)
+			this.#pendingFirstRead.clear()
+			for (const listener of pending) listener(this as never)
+		}
 	}
 
 	// Resolves one queued I2C register read for the current device instance.
@@ -230,9 +267,29 @@ export abstract class ADCPeripheral<D extends Peripheral = never> extends Periph
 
 	abstract calculate(value: number): boolean
 
+	// Enables analog reporting for the configured pin and delivers an initial sample.
+	start() {
+		this.client.addHandler(this)
+		this.client.pinMode(this.pin, PinMode.ANALOG)
+		this.client.requestAnalogPinReport(this.pin, true)
+
+		// The board only emits an analogMessage (and thus pinChange) when the pin's cached value changes,
+		// so a pin already sitting at its value (for example 0) would never produce a first reading.
+		// Deliver an initial sample from the pin's currently cached value so a consumer awaiting a first
+		// read can settle even when the first hardware report equals the cached value.
+		const pin = this.client.pinAt(this.pin)
+		if (pin !== undefined) this.commit(this.calculate(pin.value))
+	}
+
+	// Disables analog reporting and detaches the Firmata handler.
+	stop() {
+		this.client.removeHandler(this)
+		this.client.requestAnalogPinReport(this.pin, false)
+	}
+
 	pinChange(client: FirmataClient, pin: Pin) {
-		if (this.client === client && pin.id === this.pin && this.calculate(pin.value)) {
-			this.fire()
+		if (this.client === client && pin.id === this.pin) {
+			this.commit(this.calculate(pin.value))
 		}
 	}
 }

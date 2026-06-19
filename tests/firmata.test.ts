@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { G } from '../src/constants'
 import { CRC } from '../src/crc'
-import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
+import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, type Pin, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { MPU6050 } from '../src/firmata.accelerometer'
 import { ACS712 } from '../src/firmata.ammeter'
 import { BMP180, BMP280 } from '../src/firmata.barometer'
@@ -36,8 +36,14 @@ interface DecodedHD44780Transfer {
 class MockFirmataClient {
 	readonly messages: MockFirmataMessage[] = []
 	readonly handlers = new Set<FirmataClientHandler>()
+	// Cached pin values keyed by id; empty by default so pinAt returns undefined (no initial sample).
+	readonly pins = new Map<number, Pin>()
 
 	#oneWireCorrelationId = 0x4000
+
+	pinAt(id: number) {
+		return this.pins.get(id)
+	}
 
 	addHandler(handler: FirmataClientHandler) {
 		this.handlers.add(handler)
@@ -213,6 +219,60 @@ describe('command decoding', () => {
 		expect(result[1]).toBe(0x1234)
 		expect(result[2]).toEqual(Buffer.from([0xaa, 0xbb, 0xcc]))
 	})
+})
+
+test('a reconnect handshake re-emits ready after the client is closed', () => {
+	const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
+	using client = new FirmataClient(transport, new ESP8266())
+	let readyCount = 0
+	client.addHandler({ ready: () => readyCount++ })
+
+	const handshake = () => {
+		client.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7])) // firmware
+		client.process(Buffer.from([0xf0, 0x6c, 0x7f, 0x7f, 0xf7])) // pin capability (no modes)
+		client.process(Buffer.from([0xf0, 0x6a, 0x7f, 0x7f, 1, 0xf7])) // analog mapping -> ready
+	}
+
+	handshake()
+	expect(readyCount).toBe(1)
+
+	// A transport close must re-arm the one-shot initialization gate so the next handshake re-emits
+	// ready; otherwise a reconnect on the same client would stay perpetually un-ready.
+	client.close()
+	handshake()
+	expect(readyCount).toBe(2)
+})
+
+test('an untimed initialization wait settles when the client resets before the handshake completes', async () => {
+	const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
+	using client = new FirmataClient(transport, new ESP8266())
+
+	// A zero timeout means there is no rescue timer; the wait must instead be settled by the reset.
+	const pending = client.ensureInitializationIsDone(0)
+	client.reset()
+
+	expect(await pending).toBeFalse()
+})
+
+test('a reconnect handshake does not inherit pins from the previous one', () => {
+	const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
+	using client = new FirmataClient(transport, new ESP8266())
+
+	const firmware = () => client.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7]))
+
+	// First handshake exposes two analog pins (0 and 1).
+	firmware()
+	client.process(Buffer.from([0xf0, 0x6c, 0x02, 0x0a, 0x7f, 0x02, 0x0a, 0x7f, 0xf7]))
+	expect(client.pinCount).toBe(2)
+	expect(client.pinAt(1)).toBeDefined()
+
+	// The transport closes (clearing cached board metadata) and reconnects exposing only pin 0.
+	client.close()
+	firmware()
+	client.process(Buffer.from([0xf0, 0x6c, 0x02, 0x0a, 0x7f, 0xf7]))
+
+	expect(client.pinCount).toBe(1)
+	expect(client.pinAt(1)).toBeUndefined()
 })
 
 describe('command encoding', () => {
@@ -474,6 +534,105 @@ test('LM35 configures analog reporting and emits temperature updates', () => {
 	lm35.stop()
 	expect(client.handlers.size).toBe(0)
 	expect(client.messages.at(-1)).toEqual(['analogReport', 2, false])
+})
+
+test('peripheral fires on the first completed read even when the value equals the default', () => {
+	const client = new MockFirmataClient()
+	const lm35 = new LM35(client as never, 2)
+	let updates = 0
+
+	const listener = () => {
+		updates++
+	}
+
+	lm35.addListener(listener)
+	expect(lm35.initialized).toBeFalse()
+
+	// First sample reads 0 -> temperature stays at its default 0, but the first completed read must
+	// still notify so a consumer can settle its initial state (e.g. a DS18B20 reading exactly 0 C).
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	expect(lm35.temperature).toBe(0)
+	expect(updates).toBe(1)
+	expect(lm35.initialized).toBeTrue()
+
+	// A subsequent identical sample does not fire again.
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	expect(updates).toBe(1)
+
+	// Detaching the last listener resets the first-sample signal so a new consumer is notified again.
+	lm35.removeListener(listener)
+	expect(lm35.initialized).toBeFalse()
+	lm35.addListener(listener)
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	expect(updates).toBe(2)
+})
+
+test('an ADC peripheral delivers an initial reading from a cached value of 0 on a real FirmataClient', () => {
+	const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
+	using client = new FirmataClient(transport, new ESP8266())
+
+	// Handshake far enough to register pin 0 as analog and have the board report pin state 0, leaving
+	// pin 0 cached at value 0.
+	client.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7])) // firmware
+	client.process(Buffer.from([0xf0, 0x6c, 0x02, 0x0a, 0x7f, 0xf7])) // pin capability: pin 0 = analog
+	client.process(Buffer.from([0xf0, 0x6e, 0x00, 0x02, 0x00, 0xf7])) // pin state: pin 0 analog, value 0
+
+	const lm35 = new LM35(client, 0)
+	let updates = 0
+	lm35.addListener(() => updates++)
+	lm35.start()
+
+	// The first analog report would equal the cached value 0, so the board emits no analogMessage and
+	// pinChange never fires; start() must still deliver an initial reading from the cached value.
+	expect(updates).toBe(1)
+	expect(lm35.temperature).toBe(0)
+})
+
+test('re-adding an already-registered listener does not re-arm its first read', () => {
+	const client = new MockFirmataClient()
+	const lm35 = new LM35(client as never, 2)
+	let updates = 0
+	const listener = () => updates++
+
+	lm35.addListener(listener)
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	expect(updates).toBe(1)
+	expect(lm35.initialized).toBeTrue()
+
+	// Adding the same listener again must not owe it another first read.
+	lm35.addListener(listener)
+	expect(lm35.initialized).toBeTrue()
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	expect(updates).toBe(1)
+})
+
+test('a listener attached after the peripheral is initialized still receives a first read', () => {
+	const client = new MockFirmataClient()
+	const lm35 = new LM35(client as never, 2)
+	let a = 0
+	let b = 0
+
+	const listenerA = () => a++
+	const listenerB = () => b++
+
+	lm35.addListener(listenerA)
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	expect(a).toBe(1)
+	expect(lm35.initialized).toBeTrue()
+
+	// B is attached after the peripheral already produced a reading. The next sample has the same value
+	// (unchanged), but B must still receive its first read; A must not be re-fired.
+	lm35.addListener(listenerB)
+	expect(lm35.initialized).toBeFalse()
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
+	expect(b).toBe(1)
+	expect(a).toBe(1)
+	expect(lm35.initialized).toBeTrue()
+
+	// A real change fires both listeners.
+	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 51.15 })
+	expect(a).toBe(2)
+	expect(b).toBe(2)
 })
 
 test('TEMT6000 converts ADC counts to lux', () => {

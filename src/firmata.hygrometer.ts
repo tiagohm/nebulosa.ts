@@ -67,11 +67,14 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 		const rawTemperature = data.readUint16BE(4) & 0x7fff
 		const temperature = (data[4] & 0x80 ? -rawTemperature : rawTemperature) / 10
 
-		if (humidity !== this.humidity || temperature !== this.temperature) {
+		const changed = humidity !== this.humidity || temperature !== this.temperature
+
+		if (changed) {
 			this.humidity = humidity
 			this.temperature = temperature
-			this.fire()
 		}
+
+		this.commit(changed)
 	}
 }
 
@@ -137,12 +140,14 @@ export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermome
 		} else if (register === SHT21.#READ_HUM_HOLD_CMD) {
 			const raw = data.readUInt16BE(0) & 0xfffc
 			const humidity = -6 + (125 * raw) / 65536
+			const changed = humidity !== this.humidity || this.#temperatureChanged
 
-			if (humidity !== this.humidity || this.#temperatureChanged) {
+			if (changed) {
 				this.humidity = humidity
 				this.#temperatureChanged = false
-				this.fire()
 			}
+
+			this.commit(changed)
 		}
 	}
 }

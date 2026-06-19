@@ -6,12 +6,12 @@ import { localSiderealTime } from '../src/location'
 import { clamp, lerp, type NumberArray } from '../src/math'
 // oxfmt-ignore
 import { buildEmpiricalPointingFeatureNames, computePointingError, correctPointingCoordinate, extractEmpiricalPointingFeatures, extractPointingContext, type FittedPointingModel, fitPointingModel, MountPointing, type PointingFeatureConfiguration, type PointingModelInput, type PointingModelStrategy, type PointingOffset, type PointingSample, predictPointingModelError, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_PARAMETER_NAMES, type SemiPhysicalParameterName, } from '../src/mount.pointing'
-import { gaussian, mulberry32 } from '../src/random'
+import { eraC2s, eraS2c } from '../src/erfa'
+import { sphericalUnprojectTangentPlane } from '../src/geometry'
 import { predictLinearLeastSquares } from '../src/least.squares'
+import { gaussian, mulberry32 } from '../src/random'
 import { type Time, timeYMDHMS } from '../src/time'
 import { medianOf } from '../src/util'
-import { sphericalUnprojectTangentPlane } from '../src/geometry'
-import { eraC2s, eraS2c } from '../src/erfa'
 
 interface SyntheticPointingOptions {
 	readonly count?: number

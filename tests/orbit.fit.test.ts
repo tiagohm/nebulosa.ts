@@ -2,12 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import { normalizeAngle, normalizePI } from '../src/angle'
 import { KeplerOrbit } from '../src/asteroid'
 import { ASEC2RAD, DAYSPERJY, TAU } from '../src/constants'
+import type { EquatorialCoordinate } from '../src/coordinate'
 import { matIdentity } from '../src/mat3'
 import { type OrbitFitAngularResidual, type OrbitFitOptions, fitOrbit, type OrbitFitObservation } from '../src/orbit.fit'
+import { mulberry32, normal } from '../src/random'
 import { type Time, Timescale, timeShift, timeYMDHMS } from '../src/time'
 import { vecDistance, type MutVec3, type Vec3 } from '../src/vec3'
-import { mulberry32, normal } from '../src/random'
-import type { EquatorialCoordinate } from '../src/coordinate'
 
 const IDENTITY_ROTATION = matIdentity()
 const EPOCH = timeYMDHMS(2026, 1, 1, 0, 0, 0, Timescale.TT)

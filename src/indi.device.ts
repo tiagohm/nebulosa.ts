@@ -32,7 +32,7 @@ export type GuideDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
 
 export type MinMaxValueProperty = Pick<DefNumber, 'min' | 'max' | 'value' | 'step'>
 
-export type ClientType = 'INDI' | 'ALPACA' | 'SIMULATOR'
+export type ClientType = 'INDI' | 'ALPACA' | 'SIMULATOR' | 'FIRMATA'
 
 export enum DeviceInterfaceType {
 	TELESCOPE = 0x0001, // Telescope interface, must subclass INDI::Telescope.

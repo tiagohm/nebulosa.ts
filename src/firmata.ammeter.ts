@@ -1,4 +1,4 @@
-import { type FirmataClient, PinMode } from './firmata'
+import type { FirmataClient } from './firmata'
 import { ADCPeripheral, type Ammeter } from './firmata.peripheral'
 
 export type ACS712Range = 5 | 20 | 30 // A
@@ -56,18 +56,5 @@ export class ACS712 extends ADCPeripheral<ACS712> implements Ammeter {
 		}
 
 		return false
-	}
-
-	// Enables analog reporting for the configured pin.
-	start() {
-		this.client.addHandler(this)
-		this.client.pinMode(this.pin, PinMode.ANALOG)
-		this.client.requestAnalogPinReport(this.pin, true)
-	}
-
-	// Disables analog reporting and detaches the Firmata handler.
-	stop() {
-		this.client.removeHandler(this)
-		this.client.requestAnalogPinReport(this.pin, false)
 	}
 }

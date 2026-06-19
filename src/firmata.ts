@@ -686,8 +686,11 @@ export class FirmataClient implements Disposable {
 
 	readonly #pinStateRequestQueue: number[] = []
 	readonly #pinMap = new Map<number, Pin>()
-	readonly #analogPins: AnalogMapping = {}
-	readonly #initialization = Promise.withResolvers<boolean>()
+	// Reassigned on reset()/close() so a reconnect handshake does not inherit a stale analog mapping.
+	#analogPins: AnalogMapping = {}
+	// Re-armed on reset()/close() so a reconnect handshake can emit ready again. The handshake's
+	// analog-mapping step resolves it once, so without re-arming it would stay resolved one-shot.
+	#initialization = Promise.withResolvers<boolean>()
 
 	readonly #handler: FirmataClientHandler = {
 		customMessage: (client: FirmataClient, data: Buffer) => {
@@ -813,6 +816,20 @@ export class FirmataClient implements Disposable {
 	}
 
 	reset() {
+		// Re-arm the one-shot initialization gate so a subsequent (re)connect handshake runs the full
+		// firmware/capability/analog-mapping sequence and emits ready again, and ensureInitializationIsDone
+		// resolves freshly. Without this a reconnect on the same client would never become ready.
+		this.#initializing = true
+		// Settle the outgoing promise before replacing it: a caller awaiting ensureInitializationIsDone(0)
+		// has no rescue timer, so without this it would be orphaned forever instead of observing the reset.
+		this.#initialization.resolve(false)
+		this.#initialization = Promise.withResolvers<boolean>()
+		// Drop cached board metadata so a fresh handshake does not inherit stale pins/analog mapping:
+		// pinCapability only adds/updates entries and analogMapping only assigns supplied ports, so a
+		// reconnect to firmware with fewer pins or a different map would otherwise keep the old ones.
+		this.#pinStateRequestQueue.length = 0
+		this.#pinMap.clear()
+		this.#analogPins = {}
 		this.#fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 	}
 
@@ -1032,6 +1049,8 @@ export class FirmataClient implements Disposable {
 
 	close() {
 		this.#fsm.close()
+		// Re-arm initialization so a reconnect on the same client handshakes and becomes ready again.
+		this.reset()
 	}
 }
 

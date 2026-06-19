@@ -1,4 +1,4 @@
-import { type FirmataClient, PinMode } from './firmata'
+import type { FirmataClient } from './firmata'
 import { ADCPeripheral, DEFAULT_POLLING_INTERVAL, type Luxmeter, PeripheralBase } from './firmata.peripheral'
 
 export type BH1750Mode = 'continuousHighResolution' | 'continuousHighResolution2' | 'continuousLowResolution' | 'oneTimeHighResolution' | 'oneTimeHighResolution2' | 'oneTimeLowResolution'
@@ -146,12 +146,14 @@ export class BH1750 extends PeripheralBase<BH1750> implements Luxmeter {
 
 		const raw = data.readUInt16BE(0)
 		const lux = this.calculateLux(raw)
+		const changed = raw !== this.raw || lux !== this.lux
 
-		if (raw !== this.raw || lux !== this.lux) {
+		if (changed) {
 			this.raw = raw
 			this.lux = lux
-			this.fire()
 		}
+
+		this.commit(changed)
 	}
 
 	// Converts the raw measurement value into lux, compensating for MTreg and mode.
@@ -268,12 +270,15 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
 		const infrared = data.readUInt16LE(2)
 		const lux = this.calculateLux(broadband, infrared)
 
-		if (broadband !== this.broadband || infrared !== this.infrared || lux !== this.lux) {
+		const changed = broadband !== this.broadband || infrared !== this.infrared || lux !== this.lux
+
+		if (changed) {
 			this.broadband = broadband
 			this.infrared = infrared
 			this.lux = lux
-			this.fire()
 		}
+
+		this.commit(changed)
 	}
 
 	// Converts raw channel counts into lux using the T package coefficients from the datasheet.
@@ -353,11 +358,11 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 		if (client !== this.client || address !== this.address || register !== MAX44009.LUX_HIGH_REG || data.byteLength !== 2) return
 
 		const lux = this.calculateLux(data[0], data[1])
+		const changed = lux !== this.lux
 
-		if (lux !== this.lux) {
-			this.lux = lux
-			this.fire()
-		}
+		if (changed) this.lux = lux
+
+		this.commit(changed)
 	}
 
 	// Decodes the exponent and mantissa registers into the ambient light level in lux.
@@ -409,18 +414,5 @@ export class TEMT6000 extends ADCPeripheral<TEMT6000> implements Luxmeter {
 		}
 
 		return false
-	}
-
-	// Enables analog reporting for the configured pin.
-	start() {
-		this.client.addHandler(this)
-		this.client.pinMode(this.pin, PinMode.ANALOG)
-		this.client.requestAnalogPinReport(this.pin, true)
-	}
-
-	// Disables analog reporting and detaches the Firmata handler.
-	stop() {
-		this.client.removeHandler(this)
-		this.client.requestAnalogPinReport(this.pin, false)
 	}
 }
