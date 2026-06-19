@@ -165,7 +165,19 @@ export class FirmataIndiClient implements Client {
 		// A new ready generation re-arms close notification: a previous transport close consumed the
 		// one-shot guard, but a reconnected transport that closes again must notify consumers (so they
 		// remove the second generation's devices/properties). Disposal stays terminal via #disposed.
+		const reconnected = this.#closed
 		this.#closed = false
+
+		// A transport close prompts consumers (for example DeviceManager.close()) to drop this client's
+		// devices and their properties. A fresh ready after such a close must re-announce the registered
+		// devices so those consumers rediscover them; otherwise a later device.connect() would route
+		// set/measurement messages to handlers that no longer know the device. A systemReset does not
+		// drop devices (it leaves #closed false), so it needs no reannounce. Done before waking the
+		// readiness waiters so definitions precede any resumed connect.
+		if (reconnected) {
+			for (const device of this.#devices.values()) device.announce()
+		}
+
 		this.#readyResolvers.resolve()
 	}
 

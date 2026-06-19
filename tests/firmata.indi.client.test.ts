@@ -1324,6 +1324,53 @@ describe('firmata indi client', () => {
 		expect(firmata.handlers.size).toBe(0)
 	})
 
+	test('a fresh ready after a transport close re-announces the registered devices', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		// A transport close prompts a consumer (DeviceManager.close()) to drop the device and its
+		// properties; the device itself stays registered but disconnected.
+		firmata.fireClose()
+		expect(device.isConnected).toBeFalse()
+
+		// A fresh ready must re-emit the device's DRIVER_INFO/CONNECTION definitions so the consumer can
+		// rediscover it before a later connect() routes set/measurement messages back to it.
+		events.length = 0
+		firmata.fireReady()
+
+		expect(tagsFor(events, 'LM35', 'DRIVER_INFO')).toContain('defText')
+		expect(tagsFor(events, 'LM35', 'CONNECTION')).toContain('defSwitch')
+
+		// The device still reconnects cleanly afterwards.
+		await device.connect()
+		expect(device.isConnected).toBeTrue()
+		expect(peripheral.started).toBe(2)
+	})
+
+	test('a systemReset and its fresh readiness do not re-announce devices', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		// A board reset does not prompt consumers to drop devices, so re-deriving readiness must not
+		// re-announce the still-known device definitions.
+		events.length = 0
+		firmata.fireSystemReset()
+		await waitUntil(() => client.ready)
+
+		expect(tagsFor(events, 'LM35', 'DRIVER_INFO')).not.toContain('defText')
+		expect(tagsFor(events, 'LM35', 'CONNECTION')).not.toContain('defSwitch')
+	})
+
 	test('a reconnected transport closing again notifies consumers a second time', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
