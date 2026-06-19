@@ -1,6 +1,7 @@
 import type { Angle } from './angle'
 import { DAYSEC, DAYSPERJC, DAYSPERJY, DAYSPERTY, J2000, MJD0 } from './constants'
-import { eraC2teqx, eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+// oxfmt-ignore
+import { eraC2i06a, eraC2teqx, eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import * as iers from './iers'
 import { itrs } from './itrs'
 import type { GeographicPosition } from './location'
@@ -39,6 +40,7 @@ export interface TimeCache {
 	nutation?: readonly [Angle, Angle]
 	precession?: Mat3
 	precessionNutation?: Mat3
+	cirsRotation?: Mat3
 	pmAngles?: readonly [Angle, Angle, Angle] // sprime, x, y
 	pmAnglesPolarMotion?: PolarMotion
 	pmMatrix?: Mat3
@@ -546,6 +548,20 @@ export function precessionNutationMatrix(time: Time): Mat3 {
 	const precessionNutation = time.providers?.pnm?.(t) ?? eraPnm06a(t.day, t.fraction)
 	cache(time).precessionNutation = precessionNutation
 	return precessionNutation
+}
+
+// Computes the 3x3 CIO-based GCRS -> CIRS (celestial-to-intermediate) rotation matrix.
+// Unlike precessionNutationMatrix, which is equinox based and places right ascension on the
+// true equinox, this matrix places it on the CIO. It is the correct companion to the CIO/ERA
+// based observed conversions (cirsToObserved/observedToCirs, which use eraAtioq/eraAtoiq):
+// pairing the equinox matrix with those routines offsets RA by the equation of origins, which
+// is zero at J2000 but grows ~50 arcsec/year. Cached on the time instance.
+export function cirsRotationMatrix(time: Time): Mat3 {
+	if (time.cache?.cirsRotation) return time.cache.cirsRotation
+	const t = tt(time)
+	const cirsRotation = eraC2i06a(t.day, t.fraction)
+	cache(time).cirsRotation = cirsRotation
+	return cirsRotation
 }
 
 // Computes the 3x3 matrix of Equation of Origins in cycles.
