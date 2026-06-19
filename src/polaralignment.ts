@@ -2,10 +2,10 @@ import { type Angle, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from './astrometry'
 import { PI, PIOVERTWO, SIDEREAL_ARCSEC_PER_SECOND } from './constants'
 import type { HorizontalCoordinate } from './coordinate'
-import { eraS2c } from './erfa'
+import { eraC2i06a, eraS2c } from './erfa'
 import type { GeographicPosition } from './location'
 import { matMulVec, matTransposeMulVec } from './mat3'
-import { gcrsToItrsRotationMatrix, precessionNutationMatrix, type Time } from './time'
+import { gcrsToItrsRotationMatrix, type Time, tt } from './time'
 import { angularSizeOfPixel } from './util'
 import { validateInRange, validateLatitude, validatePositiveFinite } from './validation'
 import { type Vec3, vecCross, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues } from './vec3'
@@ -28,6 +28,18 @@ export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoord
 
 function referencePoleAltitude(location: GeographicPosition, refraction: RefractionParameters | false) {
 	return refraction === false ? Math.abs(location.latitude) : refractedAltitude(Math.abs(location.latitude), refraction)
+}
+
+// Builds the CIO-based GCRS/ICRF -> CIRS rotation matrix for the instant.
+// This is the correct companion to cirsToObserved, whose observed conversion is
+// CIO/ERA based (eraAtioq measures RA from the CIO). The equinox-based
+// precession-nutation matrix places RA on the true equinox instead, offsetting
+// it by the equation of origins: zero at J2000 but growing ~50 arcsec/year, it
+// rotates the reported azimuth/altitude error split about the celestial pole and
+// contaminates each component by up to ~|error|*sin(EO).
+function gcrsToCirsMatrix(time: Time) {
+	const t = tt(time)
+	return eraC2i06a(t.day, t.fraction)
 }
 
 // https://sourceforge.net/p/sky-simulator/code/ci/default/tree/sky_annotation.pas#l1189
@@ -57,7 +69,7 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle], p2: r
 	if ((pole[2] < 0 && isNorthern) || (pole[2] > 0 && !isNorthern)) vecNegateMut(pole)
 
 	// Find the azimuth and altitude of the mount pole (normal to the plane defined by the three reference stars)
-	const { azimuth, altitude } = cirsToObserved(matMulVec(precessionNutationMatrix(time), pole), time, refraction, location)
+	const { azimuth, altitude } = cirsToObserved(matMulVec(gcrsToCirsMatrix(time), pole), time, refraction, location)
 
 	// Compute the azimuth and altitude error
 	const latitude = referencePoleAltitude(location, refraction)
@@ -95,7 +107,7 @@ export function threePointPolarAlignmentAfterAdjustment(
 
 	// Apply constrained correction on the current pole: azimuth around local up, altitude around local east-west.
 	const newPole = vecRotateByRodrigues(vecRotateByRodrigues(result.pole, upAxis, azimuthAdjustment), eastAxis, altitudeAdjustment)
-	const { azimuth, altitude } = cirsToObserved(matMulVec(precessionNutationMatrix(time), newPole), time, refraction, location)
+	const { azimuth, altitude } = cirsToObserved(matMulVec(gcrsToCirsMatrix(time), newPole), time, refraction, location)
 
 	// Recompute the azimuth and altitude error
 	const latitude = referencePoleAltitude(location, refraction)
