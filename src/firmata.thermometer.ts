@@ -1,5 +1,5 @@
 import { CRC } from './crc'
-import { type FirmataClient, type OneWirePowerMode, PinMode } from './firmata'
+import type { FirmataClient, OneWirePowerMode } from './firmata'
 import { ADCPeripheral, DEFAULT_POLLING_INTERVAL, PeripheralBase, type Thermometer } from './firmata.peripheral'
 import type { NumberArray } from './math'
 
@@ -40,17 +40,6 @@ export class LM35 extends ADCPeripheral<LM35> implements Thermometer {
 		}
 
 		return false
-	}
-
-	start() {
-		this.client.addHandler(this)
-		this.client.pinMode(this.pin, PinMode.ANALOG)
-		this.client.requestAnalogPinReport(this.pin, true)
-	}
-
-	stop() {
-		this.client.removeHandler(this)
-		this.client.requestAnalogPinReport(this.pin, false)
 	}
 }
 

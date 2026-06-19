@@ -1,4 +1,4 @@
-import { type FirmataClient, PinMode } from './firmata'
+import type { FirmataClient } from './firmata'
 import { ADCPeripheral, DEFAULT_POLLING_INTERVAL, type Luxmeter, PeripheralBase } from './firmata.peripheral'
 
 export type BH1750Mode = 'continuousHighResolution' | 'continuousHighResolution2' | 'continuousLowResolution' | 'oneTimeHighResolution' | 'oneTimeHighResolution2' | 'oneTimeLowResolution'
@@ -414,18 +414,5 @@ export class TEMT6000 extends ADCPeripheral<TEMT6000> implements Luxmeter {
 		}
 
 		return false
-	}
-
-	// Enables analog reporting for the configured pin.
-	start() {
-		this.client.addHandler(this)
-		this.client.pinMode(this.pin, PinMode.ANALOG)
-		this.client.requestAnalogPinReport(this.pin, true)
-	}
-
-	// Disables analog reporting and detaches the Firmata handler.
-	stop() {
-		this.client.removeHandler(this)
-		this.client.requestAnalogPinReport(this.pin, false)
 	}
 }

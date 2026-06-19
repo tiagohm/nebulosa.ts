@@ -1,6 +1,6 @@
 import type { Angle } from './angle'
 import type { Distance } from './distance'
-import type { FirmataClient, FirmataClientHandler, Pin, PinMode } from './firmata'
+import { type FirmataClient, type FirmataClientHandler, type Pin, PinMode } from './firmata'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 
@@ -266,6 +266,26 @@ export abstract class ADCPeripheral<D extends Peripheral = never> extends Periph
 	abstract readonly pin: number
 
 	abstract calculate(value: number): boolean
+
+	// Enables analog reporting for the configured pin and delivers an initial sample.
+	start() {
+		this.client.addHandler(this)
+		this.client.pinMode(this.pin, PinMode.ANALOG)
+		this.client.requestAnalogPinReport(this.pin, true)
+
+		// The board only emits an analogMessage (and thus pinChange) when the pin's cached value changes,
+		// so a pin already sitting at its value (for example 0) would never produce a first reading.
+		// Deliver an initial sample from the pin's currently cached value so a consumer awaiting a first
+		// read can settle even when the first hardware report equals the cached value.
+		const pin = this.client.pinAt(this.pin)
+		if (pin !== undefined) this.commit(this.calculate(pin.value))
+	}
+
+	// Disables analog reporting and detaches the Firmata handler.
+	stop() {
+		this.client.removeHandler(this)
+		this.client.requestAnalogPinReport(this.pin, false)
+	}
 
 	pinChange(client: FirmataClient, pin: Pin) {
 		if (this.client === client && pin.id === this.pin) {

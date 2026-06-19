@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { G } from '../src/constants'
 import { CRC } from '../src/crc'
-import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
+import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, type Pin, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../src/firmata'
 import { MPU6050 } from '../src/firmata.accelerometer'
 import { ACS712 } from '../src/firmata.ammeter'
 import { BMP180, BMP280 } from '../src/firmata.barometer'
@@ -36,8 +36,14 @@ interface DecodedHD44780Transfer {
 class MockFirmataClient {
 	readonly messages: MockFirmataMessage[] = []
 	readonly handlers = new Set<FirmataClientHandler>()
+	// Cached pin values keyed by id; empty by default so pinAt returns undefined (no initial sample).
+	readonly pins = new Map<number, Pin>()
 
 	#oneWireCorrelationId = 0x4000
+
+	pinAt(id: number) {
+		return this.pins.get(id)
+	}
 
 	addHandler(handler: FirmataClientHandler) {
 		this.handlers.add(handler)
@@ -527,6 +533,27 @@ test('peripheral fires on the first completed read even when the value equals th
 	lm35.addListener(listener)
 	lm35.pinChange(client as never, { id: 2, modes: new Set([PinMode.ANALOG]), mode: PinMode.ANALOG, value: 0 })
 	expect(updates).toBe(2)
+})
+
+test('an ADC peripheral delivers an initial reading from a cached value of 0 on a real FirmataClient', () => {
+	const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
+	using client = new FirmataClient(transport, new ESP8266())
+
+	// Handshake far enough to register pin 0 as analog and have the board report pin state 0, leaving
+	// pin 0 cached at value 0.
+	client.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7])) // firmware
+	client.process(Buffer.from([0xf0, 0x6c, 0x02, 0x0a, 0x7f, 0xf7])) // pin capability: pin 0 = analog
+	client.process(Buffer.from([0xf0, 0x6e, 0x00, 0x02, 0x00, 0xf7])) // pin state: pin 0 analog, value 0
+
+	const lm35 = new LM35(client, 0)
+	let updates = 0
+	lm35.addListener(() => updates++)
+	lm35.start()
+
+	// The first analog report would equal the cached value 0, so the board emits no analogMessage and
+	// pinChange never fires; start() must still deliver an initial reading from the cached value.
+	expect(updates).toBe(1)
+	expect(lm35.temperature).toBe(0)
 })
 
 test('re-adding an already-registered listener does not re-arm its first read', () => {
