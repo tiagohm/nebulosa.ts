@@ -695,23 +695,32 @@ function weekdayOf(year: number, month: number, day: number) {
 function timeMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
 	// oxfmt-ignore
 	const vector = makeNumberVector('', 'TIME', 'Time', MAIN_CONTROL, 'rw', ['YEAR', 'Year', 0, 0, 9999, 1, '%.0f'], ['MONTH', 'Month', 1, 1, 12, 1, '%.0f'], ['DAY', 'Day', 1, 1, 31, 1, '%.0f'], ['DAY_OF_WEEK', 'Day of Week', 0, 0, 6, 1, '%.0f'], ['HOUR', 'Hour', 0, 0, 23, 1, '%.0f'], ['MINUTE', 'Minute', 0, 0, 59, 1, '%.0f'], ['SECOND', 'Second', 0, 0, 59, 1, '%.0f'], ['MILLISECOND', 'Millisecond', 0, 0, 999, 1, '%.0f'])
+	const reads: FirmataElementRead<D>[] = [
+		{ element: 'YEAR', read: (peripheral) => (peripheral as unknown as RealTimeClock).year },
+		{ element: 'MONTH', read: (peripheral) => (peripheral as unknown as RealTimeClock).month },
+		{ element: 'DAY', read: (peripheral) => (peripheral as unknown as RealTimeClock).day },
+		{ element: 'DAY_OF_WEEK', read: (peripheral) => (peripheral as unknown as RealTimeClock).dayOfWeek },
+		{ element: 'HOUR', read: (peripheral) => (peripheral as unknown as RealTimeClock).hour },
+		{ element: 'MINUTE', read: (peripheral) => (peripheral as unknown as RealTimeClock).minute },
+		{ element: 'SECOND', read: (peripheral) => (peripheral as unknown as RealTimeClock).second },
+		{ element: 'MILLISECOND', read: (peripheral) => (peripheral as unknown as RealTimeClock).millisecond },
+	]
+
 	return {
 		vector,
-		reads: [
-			{ element: 'YEAR', read: (peripheral) => (peripheral as unknown as RealTimeClock).year },
-			{ element: 'MONTH', read: (peripheral) => (peripheral as unknown as RealTimeClock).month },
-			{ element: 'DAY', read: (peripheral) => (peripheral as unknown as RealTimeClock).day },
-			{ element: 'DAY_OF_WEEK', read: (peripheral) => (peripheral as unknown as RealTimeClock).dayOfWeek },
-			{ element: 'HOUR', read: (peripheral) => (peripheral as unknown as RealTimeClock).hour },
-			{ element: 'MINUTE', read: (peripheral) => (peripheral as unknown as RealTimeClock).minute },
-			{ element: 'SECOND', read: (peripheral) => (peripheral as unknown as RealTimeClock).second },
-			{ element: 'MILLISECOND', read: (peripheral) => (peripheral as unknown as RealTimeClock).millisecond },
-		],
-		// The clock fields are zero until the first I2C read completes; month/day below 1 are out of
-		// range, so keep TIME at its defaults and Busy until a real calendar reading arrives.
+		reads,
+		// Accept a frame only when every field is finite and within its declared min/max. The clock
+		// fields are zero before the first I2C read (month/day below 1), and a corrupt BCD/register frame
+		// can decode an impossible weekday (-1), month (13) or day (45); either way TIME stays at its
+		// in-range defaults and Busy rather than publishing out-of-range calendar values.
 		isValid: (peripheral) => {
-			const rtc = peripheral as unknown as RealTimeClock
-			return rtc.month >= 1 && rtc.day >= 1
+			for (const { element, read } of reads) {
+				const value = read(peripheral)
+				const { min, max } = vector.elements[element]
+				if (!Number.isFinite(value) || value < min || value > max) return false
+			}
+
+			return true
 		},
 	}
 }

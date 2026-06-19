@@ -615,6 +615,36 @@ describe('firmata indi client', () => {
 		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'TIME')).toHaveLength(0)
 	})
 
+	test('an RTC ignores frames with an out-of-range weekday or month', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const rtc = new FakeRtc('DS3231', firmata as never)
+		const device = client.createPeripheral(rtc)
+		await device.connect()
+
+		// Settle with a valid frame.
+		rtc.year = 2024
+		rtc.month = 6
+		rtc.day = 18
+		rtc.dayOfWeek = 2
+		rtc.emit()
+		expect(events.some((e) => e.tag === 'setNumber' && e.name === 'TIME')).toBeTrue()
+
+		// A corrupt weekday register (0) decodes to dayOfWeek -1, below the declared min; ignore it.
+		events.length = 0
+		rtc.dayOfWeek = -1
+		rtc.emit()
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'TIME')).toHaveLength(0)
+
+		// A corrupt month (13) is above the declared max; ignore it too.
+		rtc.dayOfWeek = 2
+		rtc.month = 13
+		rtc.emit()
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'TIME')).toHaveLength(0)
+	})
+
 	test('getProperties filters by device and name and re-emits def plus value', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
