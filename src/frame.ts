@@ -1,5 +1,5 @@
 import type { PositionAndVelocity } from './astrometry'
-import { EARTH_ANGULAR_VELOCITY_MATRIX, ECLIPTIC_B9150_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from './constants'
+import { EARTH_ANGULAR_VELOCITY_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa'
 import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, matRotX, matRotZ, matTransposeMulVec } from './mat3'
@@ -28,7 +28,7 @@ export const MEAN_EQUATOR_AND_EQUINOX_AT_B1950: Frame = {
 
 // Ecliptic coordinates based upon the B1950 frame.
 export const ECLIPTIC_B1950: Frame = {
-	rotationAt: () => ECLIPTIC_B9150_MATRIX,
+	rotationAt: () => ECLIPTIC_B1950_MATRIX,
 }
 
 // Ecliptic coordinates based upon the J2000 frame.

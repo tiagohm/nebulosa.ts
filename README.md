@@ -1389,6 +1389,7 @@ vecDistance(v, u) // Distance between vectors
 vecAngle(v, u) // Angle between vectors
 vecDot(v, u) // Dot product between vectors
 vecCross(v, u) // Cross product between vectors
+vecPolarAngle(v)
 vecLatitude(v)
 vecLongitude(v)
 vecNegate(v) // Negate the vector

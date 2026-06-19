@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import { deg } from '../src/angle'
 import { PI, PIOVERTWO } from '../src/constants'
-import { type MutVec3, type Vec3, vecAngle, vecCross, vecDiv, vecDivScalar, vecDot, vecMinus, vecMinusScalar, vecMul, vecMulScalar, vecNegate, vecNormalize, vecPlane, vecPlus, vecPlusScalar, vecRotateByRodrigues, vecRotX, vecRotY, vecRotZ, vecXAxis, vecYAxis, vecZAxis } from '../src/vec3'
+// oxfmt-ignore
+import { type MutVec3, type Vec3, vecAngle, vecCross, vecDiv, vecDivScalar, vecDot, vecLatitude, vecLongitude, vecMinus, vecMinusScalar, vecMul, vecMulScalar, vecNegate, vecNormalize, vecNormalizeMut, vecPlane, vecPlus, vecPlusScalar, vecPolarAngle, vecRotateByRodrigues, vecRotX, vecRotY, vecRotZ, vecXAxis, vecYAxis, vecZAxis } from '../src/vec3'
 
 test('angle', () => {
 	expect(vecAngle(vecXAxis(), vecYAxis())).toBe(PIOVERTWO)
@@ -10,18 +11,23 @@ test('angle', () => {
 	expect(vecAngle([3, 4, 5], [1, 2, 2])).toBeCloseTo(Math.acos(1.4 / Math.sqrt(2)), 14)
 	expect(vecAngle([1, 1e-8, 0], [1, 0, 0])).toBeCloseTo(1e-8, 15)
 	expect(vecAngle([0, 0, 0], [1, 0, 0])).toBe(0)
+	expect(vecAngle([1, 0, 0], [1, 0, 0])).toBe(0)
+	expect(vecAngle([1, 0, 0], [0, 1, 0])).toBe(PI / 2)
+	expect(vecAngle([1, 0, 0], [-1, 0, 0])).toBe(PI)
+	expect(vecAngle([0, 0, 0], [1, 0, 0])).toBe(0)
+	expect(vecAngle([1e308, 0, 0], [1e308, 0, 0])).toBe(0)
+	expect(vecAngle([1e308, 0, 0], [0, 1e308, 0])).toBe(PI / 2)
 })
 
 test('normalize', () => {
-	const a = Math.sqrt(14)
-	expect(vecNormalize([3, 2, -1])).toEqual([3 / a, 2 / a, -1 / a])
+	expect(vecNormalize([3, 4, 0])).toEqual([0.6, 0.8, 0])
+	expect(vecNormalize([0, 0, 0])).toEqual([0, 0, 0])
 
-	const o: MutVec3 = [0, 0, 0]
-	expect(vecNormalize(o)).toEqual([0, 0, 0])
-
-	vecNormalize([3, 2, -1], o)
-	expect(o).not.toEqual(a)
-	expect(o).toEqual([3 / a, 2 / a, -1 / a])
+	const v: MutVec3 = [3, 4, 0]
+	expect(vecNormalizeMut(v)).toBe(v)
+	expect(v[0]).toBeCloseTo(0.6)
+	expect(v[1]).toBeCloseTo(0.8)
+	expect(v[2]).toBeCloseTo(0)
 })
 
 test('plus', () => {
@@ -51,6 +57,32 @@ test('dot', () => {
 
 test('cross', () => {
 	expect(vecCross([2, 3, 2], [3, 2, 3])).toEqual([5, 0, -5])
+
+	expect(vecCross([1, 0, 0], [0, 1, 0])).toEqual([0, 0, 1])
+	expect(vecCross([0, 1, 0], [1, 0, 0])).toEqual([0, 0, -1])
+
+	expect(vecDot(vecCross([1, 0, 0], [0, 1, 0]), [1, 0, 0])).toBe(0)
+	expect(vecDot(vecCross([1, 0, 0], [0, 1, 0]), [0, 1, 0])).toBe(0)
+})
+
+test('vecPolarAngle', () => {
+	expect(vecPolarAngle([0, 0, -1])).toBe(PI)
+})
+
+test('vecLatitude', () => {
+	expect(vecLatitude([0, 0, 1])).toBe(PI / 2)
+	expect(vecLatitude([1, 0, 0])).toBe(0)
+	expect(vecLatitude([0, 0, -1])).toBe(-PI / 2)
+	expect(vecLatitude([0, 0, 2])).toBe(PI / 2)
+	expect(vecLatitude([10, 0, 0])).toBe(0)
+	expect(vecLatitude([0, 0, -5])).toBe(-PI / 2)
+})
+
+test('vecLongitude', () => {
+	expect(vecLongitude([1, 0, 0])).toBe(0)
+	expect(vecLongitude([0, 1, 0])).toBe(PI / 2)
+	expect(vecLongitude([-1, 0, 0])).toBe(PI)
+	expect(vecLongitude([0, -1, 0])).toBe((3 * PI) / 2)
 })
 
 test('rotate by rodrigues', () => {
@@ -91,6 +123,36 @@ test('rotate by rodrigues', () => {
 
 test('plane', () => {
 	expect(vecPlane([1, -2, 1], [4, -2, -2], [4, 1, 4])).toEqual([9, -18, 9])
+
+	expect(vecPlane([0, 0, 0], [1, 0, 0], [0, 1, 0])).toEqual([0, 0, 1])
+	expect(vecPlane([0, 0, 0], [0, 1, 0], [1, 0, 0])).toEqual([0, 0, -1])
+
+	{
+		const a: MutVec3 = [0, 0, 0]
+		const b: MutVec3 = [1, 0, 0]
+		const c: MutVec3 = [0, 1, 0]
+
+		expect(vecPlane(a, b, c, a)).toBe(a)
+		expect(a).toEqual([0, 0, 1])
+	}
+
+	{
+		const a: MutVec3 = [0, 0, 0]
+		const b: MutVec3 = [1, 0, 0]
+		const c: MutVec3 = [0, 1, 0]
+
+		expect(vecPlane(a, b, c, b)).toBe(b)
+		expect(b).toEqual([0, 0, 1])
+	}
+
+	{
+		const a: MutVec3 = [0, 0, 0]
+		const b: MutVec3 = [1, 0, 0]
+		const c: MutVec3 = [0, 1, 0]
+
+		expect(vecPlane(a, b, c, c)).toBe(c)
+		expect(c).toEqual([0, 0, 1])
+	}
 })
 
 test('rotate around X', () => {

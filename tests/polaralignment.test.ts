@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { arcmin, deg, hour, parseAngle, toArcmin, toArcsec, toDeg } from '../src/angle'
 import { DEFAULT_REFRACTION_PARAMETERS } from '../src/astrometry'
-import { SIDEREAL_ARCSEC_PER_SECOND } from '../src/constants'
+import { SIDEREAL_RATE } from '../src/constants'
 import { meter } from '../src/distance'
 import { geodeticLocation, localSiderealTime } from '../src/location'
 import { estimateDarvExposure, type DarvExposureInput, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentError, COARSE_DARV_EXPOSURE_PRESET } from '../src/polaralignment'
@@ -15,7 +15,7 @@ describe('darv exposure estimator', () => {
 	test('computes RA velocity at the celestial equator', () => {
 		const estimate = estimateDarvExposure(darvInput({ declination: 0, preset: { targetTrail: 1, detectableSeparation: 1, targetPolarError: 10, guideRateSidereal: 1 } }))
 
-		expect(estimate.raVelocity).toBeCloseTo(SIDEREAL_ARCSEC_PER_SECOND, 12)
+		expect(estimate.raVelocity).toBeCloseTo(SIDEREAL_RATE, 12)
 	})
 
 	test('exposure increases for smaller detectable polar error', () => {
@@ -56,7 +56,7 @@ describe('darv exposure estimator', () => {
 		const preset = { targetTrail: 10, detectableSeparation: 4, targetPolarError: 8, guideRateSidereal: 0.25 }
 		const estimate = estimateDarvExposure(darvInput({ preset }))
 
-		expect(estimate.raVelocity).toBeCloseTo(SIDEREAL_ARCSEC_PER_SECOND * preset.guideRateSidereal, 12)
+		expect(estimate.raVelocity).toBeCloseTo(SIDEREAL_RATE * preset.guideRateSidereal, 12)
 		expect(estimate.raTrailTime).toBeCloseTo((preset.targetTrail * estimate.imageScale) / estimate.raVelocity, 12)
 		expect(estimate.driftDec).toBeCloseTo(0.004375 * preset.targetPolarError, 12)
 	})

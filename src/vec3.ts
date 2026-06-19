@@ -21,7 +21,9 @@ export function vecFill(v: MutVec3, a: number, b: number, c: number): MutVec3 {
 
 // Fills the vector with the given value.
 export function vecFillWith(v: MutVec3, value: number): MutVec3 {
-	v.fill(value)
+	v[0] = value
+	v[1] = value
+	v[2] = value
 	return v
 }
 
@@ -37,20 +39,17 @@ export function vecCross(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 
 // Computes the length of the vector.
 export function vecLength(v: Vec3) {
-	return Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+	return Math.hypot(v[0], v[1], v[2])
 }
 
 // Computes the distance between the vectors.
 export function vecDistance(a: Vec3, b: Vec3) {
-	const c = a[0] - b[0]
-	const d = a[1] - b[1]
-	const e = a[2] - b[2]
-	return Math.sqrt(c * c + d * d + e * e)
+	return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
 }
 
 // Creates a new mutable vector from the given vector.
 export function vecClone(v: Vec3): MutVec3 {
-	return [...v]
+	return [v[0], v[1], v[2]]
 }
 
 // Computes the angle between the vectors.
@@ -59,22 +58,27 @@ export function vecAngle(a: Vec3, b: Vec3): Angle {
 	const blen = vecLength(b)
 
 	if (alen === 0 || blen === 0) return 0
+	if (!Number.isFinite(alen) || !Number.isFinite(blen)) return Number.NaN
 
 	// Kahan's formula is more accurate than acos(dot / |a||b|) near 0 and PI.
-	const ax = a[0] * blen
-	const ay = a[1] * blen
-	const az = a[2] * blen
-	const bx = b[0] * alen
-	const by = b[1] * alen
-	const bz = b[2] * alen
-	const cx = ax - bx
-	const cy = ay - by
-	const cz = az - bz
-	const dx = ax + bx
-	const dy = ay + by
-	const dz = az + bz
+	const ax = a[0] / alen
+	const ay = a[1] / alen
+	const az = a[2] / alen
 
-	return 2 * Math.atan2(Math.sqrt(cx * cx + cy * cy + cz * cz), Math.sqrt(dx * dx + dy * dy + dz * dz))
+	const bx = b[0] / blen
+	const by = b[1] / blen
+	const bz = b[2] / blen
+
+	return 2 * Math.atan2(Math.hypot(ax - bx, ay - by, az - bz), Math.hypot(ax + bx, ay + by, az + bz))
+}
+
+// Computes the angle between the unit vectors.
+export function vecAngleUnit(a: Vec3, b: Vec3): Angle {
+	const cx = a[1] * b[2] - a[2] * b[1]
+	const cy = a[2] * b[0] - a[0] * b[2]
+	const cz = a[0] * b[1] - a[1] * b[0]
+	const dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+	return Math.atan2(Math.hypot(cx, cy, cz), dot) // atan2(crossLength, dot)
 }
 
 // Creates a new zeroed vector.
@@ -97,10 +101,17 @@ export function vecZAxis(): MutVec3 {
 	return [0, 0, 1]
 }
 
-export function vecLatitude(v: Vec3) {
+// Computes the polar angle/colatitude of the vector.
+export function vecPolarAngle(v: Vec3) {
 	return Math.acos(v[2])
 }
 
+// Computes the latitude of the vector.
+export function vecLatitude(v: Vec3): Angle {
+	return Math.atan2(v[2], Math.hypot(v[0], v[1]))
+}
+
+// Computes the longitude of the vector.
 export function vecLongitude(v: Vec3) {
 	return normalizeAngle(Math.atan2(v[1], v[0]))
 }
@@ -167,7 +178,7 @@ export function vecDiv(a: Vec3, b: Vec3, o?: MutVec3): MutVec3 {
 // Normalizes the vector.
 export function vecNormalize(v: Vec3, o?: MutVec3): MutVec3 {
 	const len = vecLength(v)
-	if (len === 0) return o ? vecFill(o, ...v) : vecClone(v)
+	if (len === 0) return o ? vecFill(o, v[0], v[1], v[2]) : vecClone(v)
 	else return vecDivScalar(v, len, o)
 }
 
@@ -178,11 +189,10 @@ export function vecNormalizeMut(v: MutVec3): MutVec3 {
 
 // Efficient algorithm for rotating a vector in space, given an axis and angle of rotation.
 export function vecRotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
-	const cosa = Math.cos(angle)
 	const ax = axis[0]
 	const ay = axis[1]
 	const az = axis[2]
-	const len = Math.sqrt(ax * ax + ay * ay + az * az)
+	const len = Math.hypot(ax, ay, az)
 
 	if (len === 0) {
 		return o ? vecFill(o, v[0], v[1], v[2]) : vecClone(v)
@@ -192,21 +202,34 @@ export function vecRotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, o?: MutV
 	const kx = ax * invLen
 	const ky = ay * invLen
 	const kz = az * invLen
+
+	const cosa = Math.cos(angle)
 	const sina = Math.sin(angle)
 	const omc = 1 - cosa
-	const kv = kx * v[0] + ky * v[1] + kz * v[2]
-	const cx = ky * v[2] - kz * v[1]
-	const cy = kz * v[0] - kx * v[2]
-	const cz = kx * v[1] - ky * v[0]
 
-	return vecFill(o ?? [0, 0, 0], v[0] * cosa + cx * sina + kx * kv * omc, v[1] * cosa + cy * sina + ky * kv * omc, v[2] * cosa + cz * sina + kz * kv * omc)
+	const vx = v[0]
+	const vy = v[1]
+	const vz = v[2]
+
+	const kv = kx * vx + ky * vy + kz * vz
+	const cx = ky * vz - kz * vy
+	const cy = kz * vx - kx * vz
+	const cz = kx * vy - ky * vx
+
+	return vecFill(o ?? [0, 0, 0], vx * cosa + cx * sina + kx * kv * omc, vy * cosa + cy * sina + ky * kv * omc, vz * cosa + cz * sina + kz * kv * omc)
 }
 
-// Obtains the normal vector of the plane defined by three points.
+// Obtains the unnormalized normal vector of the plane defined by three points.
 export function vecPlane(a: Vec3, b: Vec3, c: Vec3, o?: MutVec3): MutVec3 {
-	const d = vecMinus(b, a, o)
-	const e = vecMinus(c, b)
-	return vecCross(d, e, o)
+	const ux = b[0] - a[0]
+	const uy = b[1] - a[1]
+	const uz = b[2] - a[2]
+
+	const vx = c[0] - a[0]
+	const vy = c[1] - a[1]
+	const vz = c[2] - a[2]
+
+	return vecFill(o ?? [0, 0, 0], uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
 }
 
 // Rotates the vector around the x axis.

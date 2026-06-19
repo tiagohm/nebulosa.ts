@@ -20,7 +20,8 @@ export function vec2Fill(v: MutVec2, a: number, b: number): MutVec2 {
 
 // Fills the vector with the given value.
 export function vec2FillWith(v: MutVec2, value: number): MutVec2 {
-	v.fill(value)
+	v[0] = value
+	v[1] = value
 	return v
 }
 
@@ -31,39 +32,32 @@ export function vec2Cross(a: Vec2, b: Vec2) {
 
 // Computes the length of the vector.
 export function vec2Length(v: Vec2) {
-	return Math.sqrt(v[0] * v[0] + v[1] * v[1])
+	return Math.hypot(v[0], v[1])
 }
 
 // Computes the distance between the vectors.
 export function vec2Distance(a: Vec2, b: Vec2) {
-	const c = a[0] - b[0]
-	const d = a[1] - b[1]
-	return Math.sqrt(c * c + d * d)
+	return Math.hypot(a[0] - b[0], a[1] - b[1])
 }
 
 // Creates a new mutable vector from the given vector.
 export function vec2Clone(v: Vec2): MutVec2 {
-	return [...v]
+	return [v[0], v[1]]
 }
 
 // Computes the angle between the vectors.
 export function vec2Angle(a: Vec2, b: Vec2): Angle {
-	const alen = vec2Length(a)
-	const blen = vec2Length(b)
+	const ax = a[0]
+	const ay = a[1]
+	const bx = b[0]
+	const by = b[1]
 
-	if (alen === 0 || blen === 0) return 0
+	if ((ax === 0 && ay === 0) || (bx === 0 && by === 0)) return 0
 
-	// Kahan's formula avoids the precision loss of acos near parallel and anti-parallel vectors.
-	const ax = a[0] * blen
-	const ay = a[1] * blen
-	const bx = b[0] * alen
-	const by = b[1] * alen
-	const cx = ax - bx
-	const cy = ay - by
-	const dx = ax + bx
-	const dy = ay + by
+	const cross = ax * by - ay * bx
+	const dot = ax * bx + ay * by
 
-	return 2 * Math.atan2(Math.sqrt(cx * cx + cy * cy), Math.sqrt(dx * dx + dy * dy))
+	return Math.atan2(Math.abs(cross), dot)
 }
 
 // Creates a new zeroed vector.
@@ -148,7 +142,7 @@ export function vec2Div(a: Vec2, b: Vec2, o?: MutVec2): MutVec2 {
 // Normalizes the vector.
 export function vec2Normalize(v: Vec2, o?: MutVec2): MutVec2 {
 	const len = vec2Length(v)
-	if (len === 0) return o ? vec2Fill(o, ...v) : vec2Clone(v)
+	if (len === 0) return o ? vec2Fill(o, v[0], v[1]) : vec2Clone(v)
 	else return vec2DivScalar(v, len, o)
 }
 

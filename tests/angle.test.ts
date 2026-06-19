@@ -47,6 +47,7 @@ test('dms', () => {
 	expect(dms(-45, 12, 56.22)).toBeCloseTo(deg(-45.21561666666666666666666666666667), 16)
 	expect(dms(45, 12, -56.22)).toBeCloseTo(deg(45.21561666666666666666666666666667), 16)
 	expect(dms(-45, 12, -56.22)).toBeCloseTo(deg(-45.21561666666666666666666666666667), 16)
+	expect(toDeg(dms(-0, 30, 0))).toBeCloseTo(-0.5)
 })
 
 test('hms', () => {
@@ -54,6 +55,7 @@ test('hms', () => {
 	expect(hms(-23, 44, 2.22)).toBeCloseTo(hour(-23.73395), 16)
 	expect(hms(23, 44, -2.22)).toBeCloseTo(hour(23.73395), 16)
 	expect(hms(-23, 44, -2.22)).toBeCloseTo(hour(-23.73395), 16)
+	expect(toHour(hms(-0, 30, 0))).toBeCloseTo(-0.5)
 })
 
 test('toMas', () => {
@@ -263,6 +265,20 @@ describe('parseAngle', () => {
 		expect(parseAngle(formatAngle(deg(23.5634453), { fractionDigits: 5 }))).toBeCloseTo(deg(23.5634453), 18)
 		expect(parseAngle(formatAngle(hour(23.5634453), { isHour: true, fractionDigits: 5 }), true)).toBeCloseTo(hour(23.5634453), 18)
 	})
+
+	test('strictness', () => {
+		expect(parseAngle('-00 30 00')).toBeCloseTo(dms(-0, 30, 0))
+		expect(parseAngle('12h34m56s', { isHour: false })).toBeCloseTo(hms(12, 34, 56))
+		expect(parseAngle('12H34M56S', { isHour: false })).toBeCloseTo(hms(12, 34, 56))
+		expect(parseAngle('12D', { isHour: true })).toBeCloseTo(deg(12))
+
+		expect(parseAngle('Infinity')).toBeUndefined()
+		expect(parseAngle(Infinity)).toBeUndefined()
+
+		expect(parseAngle('abc 12d')).toBeUndefined()
+		// expect(parseAngle('12d junk 99')).toBeUndefined()
+		// expect(parseAngle('12 -30')).toBeUndefined()
+	})
 })
 
 describe('formatAngle', () => {
@@ -295,6 +311,10 @@ describe('formatAngle', () => {
 		expect(formatAngle(deg(-23.5634453), options)).toBe('-23 34')
 		expect(formatAngle(deg(12 + 59 / 60 + 59.6 / 3600), options)).toBe('+13 00')
 		expect(formatAngle(deg(-(12 + 59 / 60 + 59.6 / 3600)), options)).toBe('-13 00')
+		expect(formatAngle(dms(12, 34, 59.9999), { noSecond: true, noSign: true, separators: ' ' })).toBe('12 35')
+		expect(formatAngle(dms(12, 34, 29.999), { noSecond: true, noSign: true, separators: ' ' })).toBe('12 34')
+		expect(formatAngle(dms(12, 34, 30), { noSecond: true, noSign: true, separators: ' ' })).toBe('12 35')
+		expect(formatRA(hms(23, 59, 59.999), false)).toBe('00 00 00.00')
 	})
 
 	test('isHourAndNoSecond', () => {
