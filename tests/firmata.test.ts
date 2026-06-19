@@ -243,6 +243,17 @@ test('a reconnect handshake re-emits ready after the client is closed', () => {
 	expect(readyCount).toBe(2)
 })
 
+test('an untimed initialization wait settles when the client resets before the handshake completes', async () => {
+	const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
+	using client = new FirmataClient(transport, new ESP8266())
+
+	// A zero timeout means there is no rescue timer; the wait must instead be settled by the reset.
+	const pending = client.ensureInitializationIsDone(0)
+	client.reset()
+
+	expect(await pending).toBeFalse()
+})
+
 describe('command encoding', () => {
 	const transport: Transport = {
 		write: () => {},

@@ -819,6 +819,9 @@ export class FirmataClient implements Disposable {
 		// firmware/capability/analog-mapping sequence and emits ready again, and ensureInitializationIsDone
 		// resolves freshly. Without this a reconnect on the same client would never become ready.
 		this.#initializing = true
+		// Settle the outgoing promise before replacing it: a caller awaiting ensureInitializationIsDone(0)
+		// has no rescue timer, so without this it would be orphaned forever instead of observing the reset.
+		this.#initialization.resolve(false)
 		this.#initialization = Promise.withResolvers<boolean>()
 		this.#pinStateRequestQueue.length = 0
 		this.#fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
