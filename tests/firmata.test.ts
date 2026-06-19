@@ -254,6 +254,27 @@ test('an untimed initialization wait settles when the client resets before the h
 	expect(await pending).toBeFalse()
 })
 
+test('a reconnect handshake does not inherit pins from the previous one', () => {
+	const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
+	using client = new FirmataClient(transport, new ESP8266())
+
+	const firmware = () => client.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7]))
+
+	// First handshake exposes two analog pins (0 and 1).
+	firmware()
+	client.process(Buffer.from([0xf0, 0x6c, 0x02, 0x0a, 0x7f, 0x02, 0x0a, 0x7f, 0xf7]))
+	expect(client.pinCount).toBe(2)
+	expect(client.pinAt(1)).toBeDefined()
+
+	// The transport closes (clearing cached board metadata) and reconnects exposing only pin 0.
+	client.close()
+	firmware()
+	client.process(Buffer.from([0xf0, 0x6c, 0x02, 0x0a, 0x7f, 0xf7]))
+
+	expect(client.pinCount).toBe(1)
+	expect(client.pinAt(1)).toBeUndefined()
+})
+
 describe('command encoding', () => {
 	const transport: Transport = {
 		write: () => {},

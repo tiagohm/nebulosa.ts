@@ -686,7 +686,8 @@ export class FirmataClient implements Disposable {
 
 	readonly #pinStateRequestQueue: number[] = []
 	readonly #pinMap = new Map<number, Pin>()
-	readonly #analogPins: AnalogMapping = {}
+	// Reassigned on reset()/close() so a reconnect handshake does not inherit a stale analog mapping.
+	#analogPins: AnalogMapping = {}
 	// Re-armed on reset()/close() so a reconnect handshake can emit ready again. The handshake's
 	// analog-mapping step resolves it once, so without re-arming it would stay resolved one-shot.
 	#initialization = Promise.withResolvers<boolean>()
@@ -823,7 +824,12 @@ export class FirmataClient implements Disposable {
 		// has no rescue timer, so without this it would be orphaned forever instead of observing the reset.
 		this.#initialization.resolve(false)
 		this.#initialization = Promise.withResolvers<boolean>()
+		// Drop cached board metadata so a fresh handshake does not inherit stale pins/analog mapping:
+		// pinCapability only adds/updates entries and analogMapping only assigns supplied ports, so a
+		// reconnect to firmware with fewer pins or a different map would otherwise keep the old ones.
 		this.#pinStateRequestQueue.length = 0
+		this.#pinMap.clear()
+		this.#analogPins = {}
 		this.#fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 	}
 
