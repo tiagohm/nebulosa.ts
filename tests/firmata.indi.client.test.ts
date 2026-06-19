@@ -790,6 +790,18 @@ describe('firmata indi client', () => {
 		expect(await client.whenReady()).toBeFalse()
 	})
 
+	test('a stale readiness seed after transport close does not mark the adapter ready', async () => {
+		const firmata = new FakeFirmata()
+		const client = new FirmataIndiClient(firmata as never, 'Board')
+
+		// Constructor queued an already-ready seed, but the transport closes before that microtask runs.
+		firmata.fireClose()
+		await Bun.sleep(0)
+
+		expect(client.ready).toBeFalse()
+		client.dispose()
+	})
+
 	test('rejects registration after the client is disposed', async () => {
 		const firmata = new FakeFirmata()
 		const client = new FirmataIndiClient(firmata as never, 'Board')

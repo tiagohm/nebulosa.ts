@@ -70,6 +70,9 @@ export class FirmataIndiClient implements Client {
 	readonly #devices = new Map<string, FirmataVirtualDevice<never>>()
 	readonly #peripherals = new Set<Peripheral>()
 	#ready = false
+	// Monotonic readiness generation used to ignore stale initialization seeds that settle after a
+	// reset or close has invalidated the current transport.
+	#readyGeneration = 0
 	// Resolves when the board becomes ready for the current generation. Replaced on every reset/close
 	// so a connect after a reset waits for a fresh `ready` rather than reusing a stale resolution.
 	#readyResolvers = Promise.withResolvers<void>()
@@ -120,7 +123,7 @@ export class FirmataIndiClient implements Client {
 		// Seed readiness from the board's one-shot initialization, covering a board that became ready
 		// before this adapter attached its handler. All later transitions come from the ready,
 		// systemReset and close events, which keep the gate reset-aware.
-		void this.firmata.ensureInitializationIsDone(0).then((ok) => ok && this.#markReady())
+		this.#seedReady(this.#readyGeneration)
 	}
 
 	// Whether the underlying Firmata board is currently ready (since the last reset/close).
@@ -172,9 +175,19 @@ export class FirmataIndiClient implements Client {
 	// re-check cancellation/disposal (a reset/close always cancels in-flight connects), so an unready
 	// board is never treated as connectable.
 	#markNotReady() {
+		this.#readyGeneration++
 		this.#ready = false
 		this.#readyResolvers.resolve()
 		this.#readyResolvers = Promise.withResolvers<void>()
+	}
+
+	// Replays the Firmata client's initialization state for a specific readiness generation. If a
+	// reset/close advances the generation before this async seed settles, the result is stale and must
+	// not mark a closed or reset transport ready again.
+	#seedReady(generation: number) {
+		void this.firmata.ensureInitializationIsDone(0).then((ok) => {
+			if (ok && generation === this.#readyGeneration) this.#markReady()
+		})
 	}
 
 	// Re-derives readiness from the Firmata client after a board reset. Invalidates the current gate
@@ -183,7 +196,7 @@ export class FirmataIndiClient implements Client {
 	// re-initializes settles it when its next ready arrives. Either way a reconnect is not stranded.
 	#reseedReady() {
 		this.#markNotReady()
-		void this.firmata.ensureInitializationIsDone(0).then((ok) => ok && this.#markReady())
+		this.#seedReady(this.#readyGeneration)
 	}
 
 	// Consumer handler used by the virtual devices, or a no-op handler when none was supplied.
