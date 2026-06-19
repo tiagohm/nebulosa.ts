@@ -548,6 +548,37 @@ describe('firmata indi client', () => {
 		expect(rtc.syncs).toBe(1)
 	})
 
+	test('writing the current TIME values still acknowledges the accepted write', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const rtc = new FakeRtc('DS3231', firmata as never)
+		rtc.year = 2024
+		rtc.month = 6
+		rtc.day = 18
+		rtc.dayOfWeek = 2
+		rtc.hour = 10
+		rtc.minute = 20
+		rtc.second = 30
+		const device = client.createPeripheral(rtc)
+		await device.connect()
+		rtc.emit() // settle TIME to Idle with the hardware values
+
+		// Writing the current values leaves the cached clock fields unchanged, so a real DS3231/DS1307
+		// driver fires no listener event. The adapter must still publish a setNumberVector so the client's
+		// Busy TIME vector settles instead of waiting indefinitely for an update that never comes.
+		events.length = 0
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 6, DAY: 18, HOUR: 10, MINUTE: 20, SECOND: 30 } })
+
+		expect(rtc.updates).toHaveLength(1)
+		const ack = events.find((e) => e.tag === 'setNumber' && e.name === 'TIME')
+		expect(ack?.state).toBe('Idle')
+		expect(ack?.elements?.YEAR).toBe(2024)
+		expect(ack?.elements?.HOUR).toBe(10)
+		expect(ack?.elements?.SECOND).toBe(30)
+	})
+
 	test('a partial TIME write without DAY_OF_WEEK recomputes the weekday from the new date', async () => {
 		const firmata = new FakeFirmata()
 		using client = new FirmataIndiClient(firmata as never, 'Board')

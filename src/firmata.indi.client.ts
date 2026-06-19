@@ -700,6 +700,23 @@ class RealTimeClockVirtualDevice<D extends ListenablePeripheral<D>> extends Firm
 		const dayOfWeek = weekdayOf(year, month, day)
 
 		this.#rtc.update(year, month, day, dayOfWeek, hour, minute, second, millisecond)
+
+		// The DS3231/DS1307 drivers only fire a listener event when a confirmation read changes a cached
+		// field, so writing the current time (or any value the next read echoes back) would never settle
+		// the submitted vector, which INDI clients hold Busy until a set update arrives. Acknowledge the
+		// accepted write directly by adopting the effective values and publishing them. The state settles
+		// to Idle (the vector's confirmed steady state, which partial-write logic keys on) since the
+		// values are now known; a later differing hardware reading still updates through #onReading.
+		current.YEAR.value = year
+		current.MONTH.value = month
+		current.DAY.value = day
+		current.DAY_OF_WEEK.value = dayOfWeek
+		current.HOUR.value = hour
+		current.MINUTE.value = minute
+		current.SECOND.value = second
+		current.MILLISECOND.value = millisecond
+		this.#timeVector.state = 'Idle'
+		handleSetNumberVector(this.client, this.handler, this.#timeVector)
 	}
 
 	// Syncs the clock to the host date when TIME_SYNC is selected, then resets the momentary switch.
