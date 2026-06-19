@@ -220,7 +220,11 @@ export class FirmataIndiClient implements Client {
 	createPeripheral<D extends ListenablePeripheral<D>>(peripheral: D) {
 		this.#ensureRegistrable(peripheral)
 
-		const device = isRealTimeClock(peripheral) ? new RealTimeClockVirtualDevice<D>(this, peripheral.name, peripheral) : new FirmataVirtualDevice(this, peripheral.name, peripheral, sensorInterfaceType(peripheral), sensorMeasurements(peripheral))
+		const rtc = isRealTimeClock(peripheral)
+		const measurements = sensorMeasurements(peripheral)
+		if (!rtc && measurements.length === 0) throw new Error(`peripheral "${peripheral.name}" does not expose supported INDI measurements`)
+
+		const device = rtc ? new RealTimeClockVirtualDevice<D>(this, peripheral.name, peripheral) : new FirmataVirtualDevice(this, peripheral.name, peripheral, sensorInterfaceType(peripheral), measurements)
 
 		this.#devices.set(peripheral.name, device as never)
 		this.#peripherals.add(peripheral)
@@ -444,7 +448,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 				// to Idle on the first listener event, so a bogus 0 is never announced as a valid reading.
 				// Vectors with an isValid guard that is not yet satisfied keep their declared in-range
 				// defaults instead of sampling out-of-range zeros (e.g. an RTC's MONTH/DAY).
-				if (!measurement.isValid || measurement.isValid(this.peripheral)) {
+				if (canSampleMeasurement(measurement, this.peripheral)) {
 					for (const { element, read } of measurement.reads) {
 						measurement.vector.elements[element].value = read(this.peripheral)
 					}
@@ -566,7 +570,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 			// valid sample this keeps the vector Busy, and afterwards it rejects a later corrupt frame (for
 			// example a DS3231/DS1307 frame decoding month/day as 0, outside the vector range) instead of
 			// publishing out-of-range values. The vector keeps its last valid values.
-			if (measurement.isValid && !measurement.isValid(peripheral)) continue
+			if (!canSampleMeasurement(measurement, peripheral)) continue
 
 			let changed = false
 
@@ -652,7 +656,20 @@ class RealTimeClockVirtualDevice<D extends ListenablePeripheral<D>> extends Firm
 		const minute = e.MINUTE ?? current.MINUTE.value
 		const second = e.SECOND ?? current.SECOND.value
 		const millisecond = e.MILLISECOND ?? current.MILLISECOND.value
-		const dayOfWeek = e.DAY_OF_WEEK ?? weekdayOf(year, month, day)
+		if (
+			!hasStoredTimeElement(e) ||
+			!isValidTimeValue(this.#timeVector, 'YEAR', year) ||
+			!isValidTimeValue(this.#timeVector, 'MONTH', month) ||
+			!isValidTimeValue(this.#timeVector, 'DAY', day) ||
+			!isValidTimeValue(this.#timeVector, 'HOUR', hour) ||
+			!isValidTimeValue(this.#timeVector, 'MINUTE', minute) ||
+			!isValidTimeValue(this.#timeVector, 'SECOND', second) ||
+			!isValidTimeValue(this.#timeVector, 'MILLISECOND', millisecond) ||
+			!isValidCalendarDate(year, month, day)
+		)
+			return
+
+		const dayOfWeek = weekdayOf(year, month, day)
 
 		this.#rtc.update(year, month, day, dayOfWeek, hour, minute, second, millisecond)
 	}
@@ -690,6 +707,21 @@ function sensorInterfaceType<D extends ListenablePeripheral<D>>(peripheral: D) {
 	return isThermometer(peripheral) || isHygrometer(peripheral) || isBarometer(peripheral) || isAltimeter(peripheral) ? DeviceInterfaceType.WEATHER | DeviceInterfaceType.AUXILIARY : DeviceInterfaceType.AUXILIARY
 }
 
+// Checks whether every element can be sampled without publishing non-finite or out-of-range values.
+// The optional measurement guard handles device-specific validity, while the vector bounds provide a
+// final public-output boundary for all sensor and RTC readings.
+function canSampleMeasurement<D extends ListenablePeripheral<D>>(measurement: FirmataMeasurement<D>, peripheral: D) {
+	if (measurement.isValid && !measurement.isValid(peripheral)) return false
+
+	for (const { element, read } of measurement.reads) {
+		const value = read(peripheral)
+		const { min, max } = measurement.vector.elements[element]
+		if (!Number.isFinite(value) || value < min || value > max) return false
+	}
+
+	return true
+}
+
 // Computes the day of week (0=Sunday..6=Saturday) for a calendar date, matching Date.getDay() and the
 // project's RTC weekday convention. setFullYear avoids the Date constructor remapping years 0..99 into
 // 1900..1999. year is the full year, month is 1..12, day is 1..31.
@@ -697,6 +729,27 @@ function weekdayOf(year: number, month: number, day: number) {
 	const date = new Date(year, month - 1, day)
 	date.setFullYear(year)
 	return date.getDay()
+}
+
+// Whether a TIME write includes at least one field stored by DS3231/DS1307 hardware. DAY_OF_WEEK is
+// derived from the date, and MILLISECOND is not stored by these RTCs, so either field alone is a no-op.
+function hasStoredTimeElement(elements: NewNumberVector['elements']) {
+	return elements.YEAR !== undefined || elements.MONTH !== undefined || elements.DAY !== undefined || elements.HOUR !== undefined || elements.MINUTE !== undefined || elements.SECOND !== undefined
+}
+
+// Validates one integer TIME value against the advertised vector bounds before it reaches RTC BCD
+// encoding. This rejects non-finite, fractional, and out-of-range client writes.
+function isValidTimeValue(vector: DefNumberVector, element: string, value: number) {
+	const { min, max } = vector.elements[element]
+	return Number.isInteger(value) && value >= min && value <= max
+}
+
+// Validates the effective calendar date without allowing JavaScript Date normalization (for example
+// February 31 becoming March 2) to turn an invalid client write into a different hardware date.
+function isValidCalendarDate(year: number, month: number, day: number) {
+	const date = new Date(year, month - 1, day)
+	date.setFullYear(year)
+	return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
 }
 
 // Builds the writable TIME measurement (calendar fields). Polled readings keep it current; client
@@ -861,5 +914,16 @@ function isMagnetometer<D extends ListenablePeripheral<D>>(peripheral: D): perip
 // Narrows a peripheral to a real-time clock based on its write/sync methods.
 function isRealTimeClock<D extends ListenablePeripheral<D>>(peripheral: D): peripheral is D & RealTimeClock {
 	const p = peripheral as Partial<RealTimeClock>
-	return typeof p.year === 'number' && typeof p.month === 'number' && typeof p.day === 'number' && typeof p.dayOfWeek === 'number' && typeof p.hour === 'number' && typeof p.minute === 'number' && typeof p.second === 'number' && typeof p.update === 'function' && typeof p.sync === 'function'
+	return (
+		typeof p.year === 'number' &&
+		typeof p.month === 'number' &&
+		typeof p.day === 'number' &&
+		typeof p.dayOfWeek === 'number' &&
+		typeof p.hour === 'number' &&
+		typeof p.minute === 'number' &&
+		typeof p.second === 'number' &&
+		typeof p.millisecond === 'number' &&
+		typeof p.update === 'function' &&
+		typeof p.sync === 'function'
+	)
 }

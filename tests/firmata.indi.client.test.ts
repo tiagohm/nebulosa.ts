@@ -175,6 +175,22 @@ class FakeRtc extends FakeListenable<FakeRtc> implements RealTimeClock {
 	}
 }
 
+class FakeUnsupported extends FakeListenable<FakeUnsupported> {}
+
+class FakeIncompleteRtc extends FakeListenable<FakeIncompleteRtc> {
+	year = 2024
+	month = 6
+	day = 18
+	dayOfWeek = 2
+	hour = 12
+	minute = 30
+	second = 15
+
+	update() {}
+
+	sync() {}
+}
+
 interface RecordedEvent {
 	readonly tag: string
 	readonly device: string
@@ -374,6 +390,41 @@ describe('firmata indi client', () => {
 		expect(set?.value).toBe(23.5)
 	})
 
+	test('sensor readings ignore non-finite and out-of-range values', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		peripheral.temperature = Number.NaN
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		const def = events.find((e) => e.tag === 'defNumber' && e.name === 'TEMPERATURE')
+		expect(def?.state).toBe('Busy')
+		expect(def?.value).toBe(0)
+
+		peripheral.emit()
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')).toHaveLength(0)
+
+		peripheral.temperature = 20
+		peripheral.emit()
+		let set = events.find((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		expect(set?.state).toBe('Idle')
+		expect(set?.value).toBe(20)
+
+		events.length = 0
+		peripheral.temperature = Number.POSITIVE_INFINITY
+		peripheral.emit()
+		peripheral.temperature = 200
+		peripheral.emit()
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')).toHaveLength(0)
+
+		client.getProperties({ device: 'LM35', name: 'TEMPERATURE' })
+		set = events.find((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		expect(set?.value).toBe(20)
+	})
+
 	test('hygrometer and barometer factories define required and optional measurements', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
@@ -520,9 +571,38 @@ describe('firmata indi client', () => {
 		// 2024-06-18 is a Tuesday (getDay() === 2), not the previous weekday (3).
 		expect(dayOfWeek).toBe(2)
 
-		// An explicit DAY_OF_WEEK is still honored as sent.
+		// An explicit DAY_OF_WEEK is ignored; the adapter derives the weekday from the effective date.
 		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 6, DAY: 19, DAY_OF_WEEK: 5 } })
-		expect(rtc.updates[1][3]).toBe(5)
+		expect(rtc.updates[1][3]).toBe(3)
+	})
+
+	test('ignores invalid RTC writes before they reach BCD encoding', async () => {
+		const firmata = new FakeFirmata()
+		using client = new FirmataIndiClient(firmata as never, 'Board')
+
+		const rtc = new FakeRtc('DS3231', firmata as never)
+		rtc.year = 2024
+		rtc.month = 6
+		rtc.day = 18
+		rtc.dayOfWeek = 2
+		rtc.hour = 10
+		rtc.minute = 20
+		rtc.second = 30
+		const device = client.createPeripheral(rtc)
+		await device.connect()
+		rtc.emit()
+
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { MONTH: 13 } })
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 2, DAY: 31 } })
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { HOUR: 12.5 } })
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: Number.NaN } })
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { DAY_OF_WEEK: 5 } })
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { MILLISECOND: 250 } })
+		expect(rtc.updates).toHaveLength(0)
+
+		client.sendNumber({ device: 'DS3231', name: 'TIME', elements: { YEAR: 2024, MONTH: 2, DAY: 29, HOUR: 12 } })
+		expect(rtc.updates).toHaveLength(1)
+		expect(rtc.updates[0].slice(0, 4)).toEqual([2024, 2, 29, 4])
 	})
 
 	test('ignores a partial TIME write while the clock is still a Busy placeholder', async () => {
@@ -748,6 +828,14 @@ describe('firmata indi client', () => {
 		client.createPeripheral(peripheral)
 
 		expect(() => client.createPeripheral(peripheral)).toThrow(/already registered/)
+	})
+
+	test('rejects listenable peripherals without supported INDI measurements', () => {
+		const firmata = new FakeFirmata()
+		using client = new FirmataIndiClient(firmata as never, 'Board')
+
+		expect(() => client.createPeripheral(new FakeUnsupported('GPIO', firmata as never))).toThrow(/does not expose supported INDI measurements/)
+		expect(() => client.createPeripheral(new FakeIncompleteRtc('RTC', firmata as never))).toThrow(/does not expose supported INDI measurements/)
 	})
 
 	test('disposing one virtual device unregisters it so it can be re-registered', () => {
