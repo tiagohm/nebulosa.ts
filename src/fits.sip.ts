@@ -1,9 +1,9 @@
-import { Matrix, QrDecomposition } from './matrix'
-import type { NumberArray } from './math'
-import { NumberComparator, percentileOf } from './util'
 import type { FitsHeader } from './fits'
 import { heightKeyword, numericKeyword, widthKeyword } from './fits.util'
 import { DEC_TAN, DEC_TAN_SIP, RA_TAN, RA_TAN_SIP } from './fits.wcs'
+import type { NumberArray } from './math'
+import { Matrix, QrDecomposition } from './matrix'
+import { NumberComparator, percentileOf } from './util'
 import { validateFinite } from './validation'
 
 const MIN_SIP_ORDER = 2
