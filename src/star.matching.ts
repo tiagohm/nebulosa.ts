@@ -1000,14 +1000,18 @@ function refineAffineFromPairs(seedPairs: readonly MatchPair[], referenceStars: 
 
 		current.length = clipped.length
 		reference.length = clipped.length
+		// The global rematch can find more inliers than the seed (it runs at a larger radius), so the
+		// weight buffer must be sized to the current inlier set; reusing the seed-sized buffer would drop
+		// out-of-bounds writes and silently weight the extra inliers as 1.
+		const clippedWeights = new Float64Array(clipped.length)
 
 		for (let i = 0; i < clipped.length; i++) {
 			current[i] = clipped[i].currentStar
 			reference[i] = clipped[i].referenceStar
-			weights[i] = clipped[i].weight
+			clippedWeights[i] = clipped[i].weight
 		}
 
-		const refit = fitAffinePoints(current, reference, weights)
+		const refit = fitAffinePoints(current, reference, clippedWeights)
 		if (refit === undefined || !affinePlausible(refit, config)) return best
 		transform = refit
 		radius = interpolateRadius(radius, config.finalMatchRadius, iteration + 1, config.refineIterations)
