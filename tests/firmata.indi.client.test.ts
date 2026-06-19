@@ -1109,6 +1109,33 @@ describe('firmata indi client', () => {
 		expect(tagsFor(events, 'LM35', 'TEMPERATURE')).toContain('del')
 	})
 
+	test('a disconnect from one reading stops later measurement publications', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		const disconnectOnTemperature: IndiClientHandler = {
+			...handler,
+			setNumberVector: (client, vector) => {
+				handler.setNumberVector?.(client, vector)
+				if (vector.name === 'TEMPERATURE') client.sendSwitch({ device: vector.device, name: 'CONNECTION', elements: { DISCONNECT: true } })
+			},
+		}
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler: disconnectOnTemperature })
+
+		const peripheral = new FakeHygrometer('AM2320', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		events.length = 0
+		peripheral.temperature = 22
+		peripheral.humidity = 55
+		peripheral.emit()
+
+		expect(device.isConnected).toBeFalse()
+		expect(peripheral.listenerCount).toBe(0)
+		expect(events.filter((e) => e.tag === 'setNumber').map((e) => e.name)).toEqual(['TEMPERATURE'])
+		expect(tagsFor(events, 'AM2320', 'RELATIVE_HUMIDITY')).toContain('del')
+	})
+
 	test('disconnect during a pending connect cancels it before the peripheral starts', async () => {
 		const firmata = new FakeFirmata()
 		firmata.ready = false // board still initializing, so whenReady stays pending

@@ -615,7 +615,10 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 				changed = true
 			}
 
-			if (changed) handleSetNumberVector(this.client, this.handler, measurement.vector)
+			if (changed) {
+				handleSetNumberVector(this.client, this.handler, measurement.vector)
+				if (!this.#started || this.#disposed) return
+			}
 		}
 	}
 }
