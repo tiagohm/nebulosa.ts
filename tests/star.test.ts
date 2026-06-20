@@ -2,11 +2,11 @@ import { expect, test } from 'bun:test'
 import { deg, mas, normalizeAngle, toDeg } from '../src/angle'
 import { equatorial } from '../src/astrometry'
 import { meter } from '../src/distance'
-import { eraC2s } from '../src/erfa'
+import { eraC2s, eraStarpm } from '../src/erfa'
 import { precessFk5FromJ2000 } from '../src/fk5'
 import { Ellipsoid, geodeticLocation } from '../src/location'
 import { observeStar, type Star, spaceMotion, star } from '../src/star'
-import { Timescale, timeYMDHMS } from '../src/time'
+import { Timescale, timeJulianYear, timeYMDHMS, tt } from '../src/time'
 import { kilometerPerSecond } from '../src/velocity'
 
 const STAR = {
@@ -78,6 +78,27 @@ test('observed altaz', () => {
 
 	expect(toDeg(c.azimuth)).toBeCloseTo(116.449852106047814004, 16)
 	expect(toDeg(c.altitude)).toBeCloseTo(89.798489836226210059, 16)
+})
+
+test('observe propagates non-J2000 epoch to J2000', () => {
+	// Reference: observe the J2000 catalog directly.
+	const ref = observeStar(STAR, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
+
+	// Propagate the same catalog forward from J2000.0 to epoch 1991.25 (TDB).
+	const epoch = timeYMDHMS(1991, 4, 2, 13, 30, 0, Timescale.TDB)
+	const j = tt(timeJulianYear(2000, Timescale.TDB))
+	const e = tt(epoch)
+	const pm = eraStarpm(STAR.rightAscension, STAR.declination, STAR.pmRA, STAR.pmDEC, STAR.parallax, STAR.rv, j.day, j.fraction, e.day, e.fraction)
+	expect(pm).not.toBe(false)
+	if (!pm) return
+
+	// A star whose catalog is referenced to 1991.25 must be propagated back to
+	// J2000.0 by observeStar, recovering the reference observed place.
+	const moved = star(pm[0], pm[1], pm[2], pm[3], pm[4], pm[5], epoch)
+	const c = observeStar(moved, TIME, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)
+
+	expect(toDeg(c.hourAngle)).toBeCloseTo(toDeg(ref.hourAngle), 9)
+	expect(toDeg(c.declination)).toBeCloseTo(toDeg(ref.declination), 9)
 })
 
 test('sirius', () => {
