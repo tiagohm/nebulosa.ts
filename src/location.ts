@@ -87,8 +87,11 @@ export function localSiderealTime(time: Time, location: GeographicCoordinate | A
 
 // Computes rotation from GCRS to this location's altazimuth system.
 export function gcrsRotationAt(location: GeographicPosition, time: Time) {
-	const m = gcrsToItrsRotationMatrix(time) as MutMat3
-	return matMul(rLatLon(location), m, m)
+	// gcrsToItrsRotationMatrix returns a matrix cached on `time`; multiply into a
+	// fresh matrix instead of in place so the shared GCRS->ITRS cache is preserved
+	// (instantaneousEarthAngularVelocity and other consumers read it afterwards).
+	const m = gcrsToItrsRotationMatrix(time)
+	return matMul(rLatLon(location), m)
 }
 
 const CENTRAL_DIFFERENCE_SCALE = 0.5 / ONE_SECOND
