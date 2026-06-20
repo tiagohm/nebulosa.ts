@@ -4,7 +4,6 @@ import type { Distance } from './distance'
 import { validateDeclination, validateFinite, validateInRange, validateNonNegativeFinite, validatePositiveAltitude, validatePositiveFinite } from './validation'
 
 const ARCSECONDS_PER_PIXEL_FACTOR = ARCSEC_PER_RADIAN / 1000
-const DEGREES_PER_RADIAN_APPROX = 57.2958
 const MAX_EXPOSURE_COSINE_EPSILON = 1e-12
 const MAGNUS_A_WATER = 17.625
 const MAGNUS_B_CELSIUS = 243.04
@@ -94,11 +93,11 @@ export function exitPupilFromEyepieceAndFocalRatio(eyepieceFocalLengthMm: number
 	return exitPupil(eyepieceFocalLengthMm, focalRatio)
 }
 
-// Eyepiece True FOV via Field Stop. Planning formula TFOV = 57.2958 * field_stop / F_telescope.
+// Eyepiece True FOV via Field Stop. Planning formula TFOV = RAD2DEG * field_stop / F_telescope.
 // Parameters: fieldStopDiameterMm and telescopeFocalLengthMm are positive lengths in millimeters.
-// Returns: true field of view in degrees; the 57.2958 constant is the traditional degree-per-radian approximation.
+// Returns: true field of view in degrees, using the small-angle approximation field_stop / F_telescope for the angle in radians.
 export function eyepieceTrueFovViaFieldStop(fieldStopDiameterMm: number, telescopeFocalLengthMm: number) {
-	return (DEGREES_PER_RADIAN_APPROX * validatePositiveFinite(fieldStopDiameterMm)) / validatePositiveFinite(telescopeFocalLengthMm)
+	return (RAD2DEG * validatePositiveFinite(fieldStopDiameterMm)) / validatePositiveFinite(telescopeFocalLengthMm)
 }
 
 // Plate Scale. Planning formula arcsec/mm = 206265 / F_telescope.
@@ -178,11 +177,11 @@ export function sensorDiagonalFov(sensorDiagonal: number, focalLength: number) {
 	return 2 * Math.atan(validatePositiveFinite(sensorDiagonal) / (2 * validatePositiveFinite(focalLength)))
 }
 
-// Sensor Field Of View. Planning formula FOV = sensor_size / focal_length * 57.2958.
+// Sensor Field Of View. Planning formula FOV = sensor_size / focal_length * RAD2DEG.
 // Parameters: sensorSizeMm and focalLengthMm are positive lengths in millimeters.
-// Returns: angular field of view in degrees along one sensor axis.
+// Returns: angular field of view in degrees along one sensor axis, using the small-angle approximation for the angle in radians.
 export function sensorFieldOfView(sensorSizeMm: number, focalLengthMm: number) {
-	return (validatePositiveFinite(sensorSizeMm) / validatePositiveFinite(focalLengthMm)) * DEGREES_PER_RADIAN_APPROX
+	return (validatePositiveFinite(sensorSizeMm) / validatePositiveFinite(focalLengthMm)) * RAD2DEG
 }
 
 // Eyepiece View. Planning formula magnification = telescope_focal_length / eyepiece_focal_length.
