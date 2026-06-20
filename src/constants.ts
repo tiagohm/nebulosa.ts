@@ -160,7 +160,10 @@ export const SIDEREAL_RATE = 1296000 / SIDEREAL_DAYSEC // 360° = 1296000 arcsec
 // Earth's angular velocity in radians per day.
 export const ANGVEL_PER_DAY = DAYSEC * ANGVEL
 export const EARTH_ANGULAR_VELOCITY_VECTOR = [0, 0, ANGVEL_PER_DAY] as const
-export const EARTH_ANGULAR_VELOCITY_MATRIX = [0, ANGVEL_PER_DAY, 0, -ANGVEL_PER_DAY, 0, 0, 0, 0, 0] as const
+// Earth rotation operator dR/dt * R^T for the GCRS->ITRS spin about Z, in radians per day. Applied to an
+// ITRS/PEF position r it yields the rotating-frame velocity correction (dR/dt * R^T) r = -(omega x r). Note
+// this is the negative of the angular-velocity cross-product matrix [omega x], not [omega x] itself.
+export const EARTH_DRDT_TIMES_RT_MATRIX = [0, ANGVEL_PER_DAY, 0, -ANGVEL_PER_DAY, 0, 0, 0, 0, 0] as const
 
 // Obliquity of the Ecliptic at J2000.0.
 export const OBL_J2000 = (23 + 26 / 60 + 21.41146 / 3600) * DEG2RAD

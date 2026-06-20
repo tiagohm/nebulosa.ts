@@ -1,8 +1,12 @@
 import { expect, test } from 'bun:test'
 import { formatAZ, normalizeAngle, parseAngle } from '../src/angle'
+import type { PositionAndVelocity } from '../src/astrometry'
+import { ANGVEL_PER_DAY } from '../src/constants'
 import { eraC2s, eraS2c } from '../src/erfa'
-import { ecliptic, eclipticJ2000, galactic, precessionMatrixCapitaine, supergalactic } from '../src/frame'
+import { ecliptic, eclipticJ2000, galactic, itrfToTeme, itrfToTemeByGmst, precessionMatrixCapitaine, supergalactic, temeToItrf, temeToItrfByGmst } from '../src/frame'
+import { matMul, matRotX, matRotZ } from '../src/mat3'
 import { Timescale, timeYMDHMS } from '../src/time'
+import type { Vec3 } from '../src/vec3'
 
 test('precession matrix capitaine', () => {
 	const a = timeYMDHMS(2014, 10, 7, 12, 0, 0, Timescale.TT)
@@ -50,4 +54,54 @@ test('ecliptic', () => {
 
 	expect(formatAZ(normalizeAngle(lng))).toBe('239 47 53.71')
 	expect(formatAZ(lat)).toBe('-042 36 34.23')
+})
+
+test('teme<->itrf position round trip without polar motion', () => {
+	const p: Vec3 = [4123, -5234, 3045]
+	const back = itrfToTemeByGmst(temeToItrfByGmst(p, 1.7), 1.7)
+
+	expect(back[0]).toBeCloseTo(p[0], 9)
+	expect(back[1]).toBeCloseTo(p[1], 9)
+	expect(back[2]).toBeCloseTo(p[2], 9)
+})
+
+test('teme<->itrf state round trip with polar motion', () => {
+	// Any proper rotation works as a stand-in polar-motion matrix because the inverse uses its transpose.
+	const polarMotion = matMul(matRotX(1.5e-6), matRotZ(2e-6))
+	const pv: PositionAndVelocity = [
+		[4123, -5234, 3045],
+		[2.1, 3.4, -1.2],
+	]
+	const back = itrfToTemeByGmst(temeToItrfByGmst(pv, 2.3, polarMotion), 2.3, polarMotion)
+
+	for (let i = 0; i < 3; i++) {
+		expect(back[0][i]).toBeCloseTo(pv[0][i], 9)
+		expect(back[1][i]).toBeCloseTo(pv[1][i], 9)
+	}
+})
+
+test('teme to itrf adds the earth-rotation velocity term', () => {
+	// With zero TEME velocity the ITRF velocity is purely the rotating-frame term (dR/dt R^T) r = -(omega x r).
+	const state: PositionAndVelocity = [
+		[7000, 1000, -2000],
+		[0, 0, 0],
+	]
+	const [pPef, vPef] = temeToItrfByGmst(state, 1.234)
+
+	expect(vPef[0]).toBeCloseTo(ANGVEL_PER_DAY * pPef[1], 9)
+	expect(vPef[1]).toBeCloseTo(-ANGVEL_PER_DAY * pPef[0], 9)
+	expect(vPef[2]).toBeCloseTo(0, 12)
+})
+
+test('teme<->itrf state round trip through time with earth rotation', () => {
+	const pv: PositionAndVelocity = [
+		[4123, -5234, 3045],
+		[2.1, 3.4, -1.2],
+	]
+	const back = itrfToTeme(temeToItrf(pv, TIME, false), TIME, false)
+
+	for (let i = 0; i < 3; i++) {
+		expect(back[0][i]).toBeCloseTo(pv[0][i], 9)
+		expect(back[1][i]).toBeCloseTo(pv[1][i], 9)
+	}
 })

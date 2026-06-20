@@ -1,5 +1,5 @@
 import type { PositionAndVelocity } from './astrometry'
-import { EARTH_ANGULAR_VELOCITY_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from './constants'
+import { EARTH_DRDT_TIMES_RT_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa'
 import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, matRotX, matRotZ, matTransposeMulVec } from './mat3'
@@ -100,7 +100,7 @@ export function precessionMatrixCapitaine(from: Time, to: Time) {
 // to the Earth’s pole of rotation.
 export const ITRS: Frame = {
 	rotationAt: gcrsToItrsRotationMatrix,
-	dRdtTimesRtAt: () => EARTH_ANGULAR_VELOCITY_MATRIX,
+	dRdtTimesRtAt: () => EARTH_DRDT_TIMES_RT_MATRIX,
 }
 
 // Applies a TEME-to-ITRF rotation using a supplied GMST angle and optional polar-motion matrix.
@@ -109,15 +109,15 @@ export function temeToItrfByGmst<T extends Readonly<PositionAndVelocity> | Vec3>
 
 	if (pv.length === 3) {
 		const p = matMulVec(r, pv)
-		return (polarMotion ? matMulVec(polarMotion, p) : p) as never
+		return (polarMotion ? matMulVec(polarMotion, p, p) : p) as never
 	}
 
 	const pPef = matMulVec(r, pv[0])
 	const vPef = matMulVec(r, pv[1])
-	vecPlus(vPef, matMulVec(EARTH_ANGULAR_VELOCITY_MATRIX, pPef), vPef)
+	vecPlus(vPef, matMulVec(EARTH_DRDT_TIMES_RT_MATRIX, pPef), vPef)
 
 	if (polarMotion) {
-		return [matMulVec(polarMotion, pPef), matMulVec(polarMotion, vPef)] as never
+		return [matMulVec(polarMotion, pPef, pPef), matMulVec(polarMotion, vPef, vPef)] as never
 	}
 
 	return [pPef, vPef] as never
@@ -129,13 +129,13 @@ export function itrfToTemeByGmst<T extends Readonly<PositionAndVelocity> | Vec3>
 
 	if (pv.length === 3) {
 		const pPef = polarMotion ? matTransposeMulVec(polarMotion, pv) : ([pv[0], pv[1], pv[2]] as MutVec3)
-		return matTransposeMulVec(r, pPef) as never
+		return matTransposeMulVec(r, pPef, pPef) as never
 	}
 
 	const pPef = polarMotion ? matTransposeMulVec(polarMotion, pv[0]) : ([pv[0][0], pv[0][1], pv[0][2]] as MutVec3)
 	const vPef = polarMotion ? matTransposeMulVec(polarMotion, pv[1]) : ([pv[1][0], pv[1][1], pv[1][2]] as MutVec3)
-	vecMinus(vPef, matMulVec(EARTH_ANGULAR_VELOCITY_MATRIX, pPef), vPef)
-	return [matTransposeMulVec(r, pPef), matTransposeMulVec(r, vPef)] as never
+	vecMinus(vPef, matMulVec(EARTH_DRDT_TIMES_RT_MATRIX, pPef), vPef)
+	return [matTransposeMulVec(r, pPef, pPef), matTransposeMulVec(r, vPef, vPef)] as never
 }
 
 // Converts a TEME vector or state into ITRF at the requested time.
