@@ -157,7 +157,8 @@ export class KeplerOrbit implements OsculatingElements {
 
 	get inclination() {
 		if (this.#oe.inclination !== undefined) return this.#oe.inclination
-		this.#oe.inclination = clampedAcos(this.#propagation.hv[2] / this.#propagation.hvl)
+		const hv = this.#propagation.hv
+		this.#oe.inclination = Math.atan2(Math.hypot(hv[0], hv[1]), hv[2])
 		return this.#oe.inclination
 	}
 
@@ -415,13 +416,6 @@ function propagationKepler(x: number, f: number, br0: number, b2rv: number, bq: 
 	return x * (br0 * c[1] + x * (b2rv * c[2] + x * bq * c[3]))
 }
 
-// Clamps a cosine-like value before acos to avoid NaN from tiny roundoff overshoots.
-function clampedAcos(value: number) {
-	if (value <= -1) return Math.PI
-	if (value >= 1) return 0
-	return Math.acos(value)
-}
-
 /**
  * Propagates a `position` and `velocity` vector over time.
  *
@@ -589,9 +583,9 @@ export function eccentricityVector(position: CartesianCoordinate, velocity: Cart
 }
 
 export function inclination(hv: Vec3) {
-	// return vecAngle(hv, [0, 0, 1])
-	const hvl = vecLength(hv)
-	return hvl !== 0 ? clampedAcos(hv[2] / hvl) : 0
+	// atan2(|h_xy|, h_z) is the angle between the orbital momentum and the +Z axis and stays accurate
+	// near i = 0 and i = PI, unlike acos(h_z/|h|) whose slope diverges there.
+	return Math.atan2(Math.hypot(hv[0], hv[1]), hv[2])
 }
 
 export function longitudeOfAscendingNode(hv: Vec3, i: Angle): Angle {
