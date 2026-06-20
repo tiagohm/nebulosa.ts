@@ -28,3 +28,25 @@ test('refracted altitude', () => {
 	refract(70, 21.2, 1)
 	refract(80, 10.27, 1)
 })
+
+// Regression: the previous A*tan(z) + B*tan^3(z) brute-force inversion returned
+// wildly wrong, non-monotonic values below ~5 deg and NaN below ~1.5 deg. The
+// bounded ERFA model must stay finite and physical all the way to the horizon.
+test('refracted altitude stays finite and lifts the object at low altitude', () => {
+	for (const altitude of [5, 3, 2, 1, 0.5, 0.01]) {
+		const a = deg(altitude)
+		const refracted = refractedAltitude(a)
+
+		expect(Number.isNaN(refracted)).toBe(false)
+		// Refraction always lifts the object: apparent altitude > true altitude.
+		expect(refracted).toBeGreaterThan(a)
+	}
+
+	// 2 deg previously collapsed to a spurious ~164"; the bounded model caps it near
+	// the ~3 deg value instead (a few hundred arcsec), never NaN or sub-true.
+	expect(toArcsec(refractedAltitude(deg(2)) - deg(2))).toBeGreaterThan(500)
+})
+
+test('no refraction model below the horizon', () => {
+	expect(refractedAltitude(deg(-1))).toBe(deg(-1))
+})
