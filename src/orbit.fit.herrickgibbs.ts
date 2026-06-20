@@ -1,9 +1,8 @@
 import type { Angle } from './angle'
 import { DEG2RAD } from './constants'
 import type { CartesianCoordinate } from './coordinate'
-import { clamp } from './math'
 import { type Time, type Timescale, timeSubtract } from './time'
-import { type MutVec3, type Vec3, vecCrossLength, vecDot, vecLength, vecTripleProduct } from './vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecCrossLength, vecLength, vecTripleProduct } from './vec3'
 
 const DEFAULT_MIN_TIME_INTERVAL = 1e-9
 const DEFAULT_MAX_TIME_INTERVAL = 5
@@ -192,7 +191,7 @@ function isValidPositionNorm(norm: number, config: ResolvedHerrickGibbsOptions) 
 function angleBetween(a: Vec3, b: Vec3, amag: number, bmag: number): Angle {
 	const denominator = amag * bmag
 	if (!(Number.isFinite(denominator) && denominator > 0)) return Number.NaN
-	return Math.acos(clamp(vecDot(a, b) / denominator, -1, 1))
+	return vecAngleUnit(a, b)
 }
 
 function normalizedCoplanarity(r1: Vec3, r2: Vec3, r3: Vec3, crossNorm12: number, r3mag: number) {

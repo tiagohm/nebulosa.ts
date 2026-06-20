@@ -78,7 +78,8 @@ export function vecAngleUnit(a: Vec3, b: Vec3): Angle {
 	const cy = a[2] * b[0] - a[0] * b[2]
 	const cz = a[0] * b[1] - a[1] * b[0]
 	const dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-	return Math.atan2(Math.hypot(cx, cy, cz), dot) // atan2(crossLength, dot)
+	// atan2(|a x b|, a . b) is stable for the small separations of short arcs, unlike acos(dot) whose slope diverges near zero.
+	return Math.atan2(Math.hypot(cx, cy, cz), dot)
 }
 
 // Creates a new zeroed vector.
