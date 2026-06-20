@@ -1070,7 +1070,8 @@ export class GuiderClient {
 
 		this.emitEvent('StarLost', {
 			Frame: frame.frameId ?? 0,
-			Time: frame.timestamp ?? 0,
+			// Seconds, matching GuideStep.Time and PHD2's convention (frame.timestamp is Date.now() in ms).
+			Time: (frame.timestamp ?? 0) / 1000,
 			// Uses zero defaults when the lost-lock frame has no guide star measurement.
 			StarMass: star?.flux ?? 0,
 			SNR: star?.snr ?? 0,
