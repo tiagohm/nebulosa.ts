@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readDaf } from '../src/daf'
-import { fileHandleSource } from '../src/io'
+import { bufferSource, fileHandleSource } from '../src/io'
 import { downloadPerTag } from './download'
 
 await downloadPerTag('daf')
@@ -56,6 +56,36 @@ test('DAF/SPK', async () => {
 	expect(daf.summaries[12].ints).toEqual(new Int32Array([199, 1, 1, 2, 2098609, 2098620]))
 	expect(daf.summaries[13].ints).toEqual(new Int32Array([299, 2, 1, 2, 2098621, 2098632]))
 	expect(daf.summaries[14].ints).toEqual(new Int32Array([499, 4, 1, 2, 2098633, 2098644]))
+})
+
+test('truncated file record is rejected', async () => {
+	// A NAIF/DAF header in a buffer too short to hold the 1024-byte file record.
+	const buffer = Buffer.alloc(500)
+	buffer.write('NAIF/DAF', 0, 'ascii')
+
+	let message = ''
+	try {
+		await readDaf(bufferSource(buffer))
+	} catch (e) {
+		message = (e as Error).message
+	}
+
+	expect(message).toContain('unexpected end of DAF file')
+})
+
+test('reading past the end of file is rejected', async () => {
+	await using source = fileHandleSource(await fs.open('data/de421.bsp'))
+	const daf = await readDaf(source)
+
+	// A range far beyond EOF must throw instead of returning zeroed/garbage data.
+	let message = ''
+	try {
+		await daf.read(1_000_000_000, 1_000_000_004)
+	} catch (e) {
+		message = (e as Error).message
+	}
+
+	expect(message).toContain('unexpected end of DAF file')
 })
 
 test('DAF/PCK', async () => {
