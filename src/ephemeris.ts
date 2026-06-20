@@ -41,7 +41,11 @@ export function ellipticToRectangular(a: Distance, n: Angle, elem: Readonly<Numb
 	//    x[j + 1] = x[j] - f(x[j])/f'(x[j])
 	let LE = L - elem[2] * Math.sin(L) + elem[3] * Math.cos(L)
 
-	while (true) {
+	// Newton converges quadratically for eccentricity < 1 (the elliptic domain),
+	// reaching the 1e-14 tolerance in well under 10 steps. The iteration cap is a
+	// safety net so a non-elliptic (e >= 1) or non-finite element set terminates
+	// instead of looping forever; valid inputs always break before reaching it.
+	for (let iteration = 0; iteration < 100; iteration++) {
 		const cLE = Math.cos(LE)
 		const sLE = Math.sin(LE)
 
