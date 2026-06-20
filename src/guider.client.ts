@@ -1,4 +1,3 @@
-import { TAU } from './constants'
 import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
 import { flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './guider.calibrator'
 import { readImageFromBuffer, readImageFromSource } from './image'
@@ -265,7 +264,7 @@ export class GuiderClient {
 		if (this.#calibration === undefined || this.#guider.currentState.state !== 'guiding' || amount <= 0 || !Number.isFinite(amount)) return false
 
 		const { referenceX, referenceY } = this.#guider.currentState
-		const [dx, dy] = raOnly ? makeRaOnlyDither(this.#calibration, amount) : makeRandomDither(amount)
+		const [dx, dy] = makeRandomDither(this.#calibration, amount, raOnly)
 
 		this.#ditherOffsetX += dx
 		this.#ditherOffsetY += dy
@@ -1117,16 +1116,14 @@ function calibrationResultToPHD2Data(calibration: GuidingCalibrationResult): PHD
 	}
 }
 
-// Generates a random image-space dither offset with the requested amplitude in pixels.
-function makeRandomDither(amount: number) {
-	const angle = Math.random() * TAU
-	return [Math.cos(angle) * amount, Math.sin(angle) * amount] as const
-}
-
-// Generates a random RA-only dither offset along the calibrated RA image vector.
-function makeRaOnlyDither(calibration: GuidingCalibrationResult, amount: number) {
-	const sign = Math.random() < 0.5 ? -1 : 1
-	return [calibration.ra.unitX * amount * sign, calibration.ra.unitY * amount * sign] as const
+// Generates a PHD2-style random dither offset in image coordinates. Following PHD2's DITHER_RANDOM,
+// each mount axis is sampled independently and uniformly in [-amount, amount] pixels (DEC is held at
+// zero for RA-only dithers), then the RA/DEC offset is rotated into image X/Y with the calibrated axis
+// unit vectors.
+function makeRandomDither(calibration: GuidingCalibrationResult, amount: number, raOnly: boolean) {
+	const dRa = amount * (Math.random() * 2 - 1)
+	const dDec = raOnly ? 0 : amount * (Math.random() * 2 - 1)
+	return [calibration.ra.unitX * dRa + calibration.dec.unitX * dDec, calibration.ra.unitY * dRa + calibration.dec.unitY * dDec] as const
 }
 
 // Moves the nearest star to the first slot so Guider/GuidingCalibrator lock onto the requested target.
