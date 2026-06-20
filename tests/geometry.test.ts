@@ -54,6 +54,15 @@ test('intersect line and sphere', () => {
 	const res = intersectLineAndSphere([1, 0, 0], [0, 0, 0], 3)
 	expect(res).not.toBeFalse()
 	res && expect(res).toEqual([-3, 3])
+
+	// A non-unit endpoint must still yield true distances along the ray.
+	const scaled = intersectLineAndSphere([2, 0, 0], [4, 0, 0], 1)
+	expect(scaled).not.toBeFalse()
+	scaled && expect(scaled[0]).toBeCloseTo(3, 12)
+	scaled && expect(scaled[1]).toBeCloseTo(5, 12)
+
+	// A degenerate zero-length endpoint has no direction.
+	expect(intersectLineAndSphere([0, 0, 0], [0, 0, 0], 1)).toBeFalse()
 })
 
 test('spherical separation stays stable near the pole', () => {
