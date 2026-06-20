@@ -31,11 +31,15 @@ const DEFAULT_LOCK_SHIFT_PARAMS: Readonly<PHD2LockShiftParams> = {
 	axes: 'X/Y',
 }
 
+// PHD2 dither patterns: independent per-axis uniform random, or an expanding lattice spiral.
+export type GuiderDitherMode = 'random' | 'spiral'
+
 export interface GuiderClientOptions {
 	readonly handler?: GuiderClientHandler
 	readonly reverseDecOutputAfterMeridianFlip?: boolean
 	readonly searchRegion?: number // pixels
 	readonly stickyLockPosition?: boolean
+	readonly ditherMode?: GuiderDitherMode
 }
 
 export interface GuiderClientConnectOptions {
@@ -77,6 +81,8 @@ export class GuiderClient {
 	#settleStableSince = 0
 	#settleFrameCount = 0
 	#settleDroppedFrameCount = 0
+	#ditherMode: GuiderDitherMode = 'random'
+	#spiralDither = makeSpiralDitherState()
 	#ditherOffsetX = 0
 	#ditherOffsetY = 0
 	#lockShiftOffsetX = 0
@@ -108,6 +114,7 @@ export class GuiderClient {
 	) {
 		this.#searchRegion = clamp(options?.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
 		this.#stickyLockPosition = options?.stickyLockPosition === true
+		this.#ditherMode = options?.ditherMode ?? 'random'
 		this.#eventHandler = options?.handler?.event
 	}
 
@@ -218,6 +225,7 @@ export class GuiderClient {
 		this.#guider = this.#makeGuider(undefined)
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
+		this.#spiralDither = makeSpiralDitherState()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -240,6 +248,7 @@ export class GuiderClient {
 		this.#exactLockPosition = false
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
+		this.#spiralDither = makeSpiralDitherState()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -264,7 +273,8 @@ export class GuiderClient {
 		if (this.#calibration === undefined || this.#guider.currentState.state !== 'guiding' || amount <= 0 || !Number.isFinite(amount)) return false
 
 		const { referenceX, referenceY } = this.#guider.currentState
-		const [dx, dy] = makeRandomDither(this.#calibration, amount, raOnly)
+		const [dRa, dDec] = this.#ditherMode === 'spiral' ? nextSpiralDither(this.#spiralDither, amount, raOnly) : makeRandomDither(amount, raOnly)
+		const [dx, dy] = ditherImageOffset(this.#calibration, dRa, dDec)
 
 		this.#ditherOffsetX += dx
 		this.#ditherOffsetY += dy
@@ -498,6 +508,7 @@ export class GuiderClient {
 		const [lockX, lockY] = this.#lockPosition
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
+		this.#spiralDither = makeSpiralDitherState()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -514,6 +525,19 @@ export class GuiderClient {
 		}
 
 		return true
+	}
+
+	// Returns the configured dither pattern used by dither().
+	getDitherMode() {
+		return this.#ditherMode
+	}
+
+	// Selects the dither pattern (PHD2 random or spiral) and restarts the spiral generator.
+	setDitherMode(mode: GuiderDitherMode) {
+		this.#ditherMode = mode
+		this.#spiralDither = makeSpiralDitherState()
+		this.emitEvent('GuideParamChange', { Name: 'DitherMode', Value: mode })
+		this.emitEvent('ConfigurationChange')
 	}
 
 	// Enables or disables preserving the current lock target across guider initialization.
@@ -930,6 +954,7 @@ export class GuiderClient {
 		this.#settleDroppedFrameCount = 0
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
+		this.#spiralDither = makeSpiralDitherState()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -1116,13 +1141,68 @@ function calibrationResultToPHD2Data(calibration: GuidingCalibrationResult): PHD
 	}
 }
 
-// Generates a PHD2-style random dither offset in image coordinates. Following PHD2's DITHER_RANDOM,
-// each mount axis is sampled independently and uniformly in [-amount, amount] pixels (DEC is held at
-// zero for RA-only dithers), then the RA/DEC offset is rotated into image X/Y with the calibrated axis
-// unit vectors.
-function makeRandomDither(calibration: GuidingCalibrationResult, amount: number, raOnly: boolean) {
+// PHD2 DitherSpiral generator state, advanced across successive dithers to walk an expanding lattice spiral.
+interface SpiralDitherState {
+	x: number
+	y: number
+	dx: number
+	dy: number
+	prevRaOnly: boolean
+}
+
+// Creates the initial PHD2 DitherSpiral state.
+function makeSpiralDitherState(): SpiralDitherState {
+	return { x: 0, y: 0, dx: -1, dy: 0, prevRaOnly: false }
+}
+
+// Draws a per-axis uniform random RA/DEC dither in pixels along the mount axes, following PHD2's
+// DITHER_RANDOM (DEC held at zero for RA-only dithers).
+function makeRandomDither(amount: number, raOnly: boolean) {
 	const dRa = amount * (Math.random() * 2 - 1)
 	const dDec = raOnly ? 0 : amount * (Math.random() * 2 - 1)
+	return [dRa, dDec] as const
+}
+
+// Advances PHD2's DitherSpiral one step and returns the RA/DEC offset in pixels along the mount axes.
+// The generator resets when toggling between RA-only and RA/DEC, mirroring DitherSpiral::GetDither.
+function nextSpiralDither(state: SpiralDitherState, amount: number, raOnly: boolean) {
+	if (raOnly !== state.prevRaOnly) {
+		state.x = 0
+		state.y = 0
+		state.dx = -1
+		state.dy = 0
+		state.prevRaOnly = raOnly
+	}
+
+	if (raOnly) {
+		// ROT(dx, dy): rotate the step direction 90 degrees.
+		const t = -state.dx
+		state.dx = state.dy
+		state.dy = t
+
+		// x = 0, 1, -1, -2, 2, 3, -3, -4, 4, 5, ...
+		const x0 = state.x
+		if (state.dy === 0) state.x = -state.x
+		else state.x += state.dy
+
+		return [(state.x - x0) * amount, 0] as const
+	}
+
+	if (state.x === state.y || (state.x > 0 && state.x === -state.y) || (state.x <= 0 && state.y === 1 - state.x)) {
+		// ROT(dx, dy): turn at the spiral arm boundary.
+		const t = -state.dx
+		state.dx = state.dy
+		state.dy = t
+	}
+
+	state.x += state.dx
+	state.y += state.dy
+
+	return [state.dx * amount, state.dy * amount] as const
+}
+
+// Rotates a mount-axis RA/DEC dither offset (pixels) into image X/Y with the calibrated axis unit vectors.
+function ditherImageOffset(calibration: GuidingCalibrationResult, dRa: number, dDec: number) {
 	return [calibration.ra.unitX * dRa + calibration.dec.unitX * dDec, calibration.ra.unitY * dRa + calibration.dec.unitY * dDec] as const
 }
 
