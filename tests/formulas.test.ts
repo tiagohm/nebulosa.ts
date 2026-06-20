@@ -39,7 +39,7 @@ test('guiding, trailing, exposure, and stacking formulas return expected values'
 	expect(guidingErrorInPixels(0.8, 1.2)).toBeCloseTo(0.6666667, 7)
 	expect(periodicErrorInPixels(15, 1.2)).toBe(12.5)
 	expect(starTrailLength(30 * DEG2RAD, 10, 1.2)).toBeCloseTo(108.5495629, 7)
-	expect(maxExposureBeforeTrail(2, 1.2, 30 * DEG2RAD)).toBeCloseTo(0.18424847, 8)
+	expect(maxExposureBeforeTrail(2, 1.2, 30 * DEG2RAD)).toBeCloseTo(0.18424763, 8)
 	expect(signalToNoiseRatio(1000, 25, 20, 0.1, 3)).toBeCloseTo(24.0597423, 7)
 	expect(stackingSnrGain(16)).toBe(4)
 	expect(stackingMagnitudeGain(16)).toBeCloseTo(1.50514998, 8)

@@ -3,7 +3,6 @@ import { ARCSEC_PER_RADIAN, DEG2RAD, PIOVERTWO, RAD2DEG, SIDEREAL_RATE } from '.
 import type { Distance } from './distance'
 import { validateDeclination, validateFinite, validateInRange, validateNonNegativeFinite, validatePositiveAltitude, validatePositiveFinite } from './validation'
 
-const ARCSECONDS_PER_MILLIMETER_AT_ONE_METER = ARCSEC_PER_RADIAN
 const ARCSECONDS_PER_PIXEL_FACTOR = ARCSEC_PER_RADIAN / 1000
 const DEGREES_PER_RADIAN_APPROX = 57.2958
 const MAX_EXPOSURE_COSINE_EPSILON = 1e-12
@@ -106,7 +105,7 @@ export function eyepieceTrueFovViaFieldStop(fieldStopDiameterMm: number, telesco
 // Parameters: telescopeFocalLengthMm is a positive focal length in millimeters.
 // Returns: focal-plane scale in arcseconds per millimeter.
 export function plateScale(telescopeFocalLengthMm: number) {
-	return ARCSECONDS_PER_MILLIMETER_AT_ONE_METER / validatePositiveFinite(telescopeFocalLengthMm)
+	return ARCSEC_PER_RADIAN / validatePositiveFinite(telescopeFocalLengthMm)
 }
 
 // Pixel Scale. Planning formula arcsec/pixel = 206.265 * pixel_size_microns / F_telescope_mm.
