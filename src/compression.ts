@@ -244,7 +244,8 @@ export function compressRice(input: Readonly<RiceCompressionTypedArray>, blockSi
 			}
 		}
 
-		let dpsum = (pixelSum - thisBlock / 2 - 1) / thisBlock
+		// Matches CFITSIO: thisblock/2 is integer (floored) division, not floating-point.
+		let dpsum = (pixelSum - (thisBlock >> 1) - 1) / thisBlock
 		if (dpsum < 0) dpsum = 0
 
 		let psum = (dpsum >>> 0) >>> 1
