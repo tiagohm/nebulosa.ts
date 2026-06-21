@@ -165,7 +165,68 @@ test('stf', () => readImageTransformAndSave((i) => stf(i, 0.005), 'stf', '82161a
 
 test('auto stf', () => readImageTransformAndSave((i) => stf(i, ...adf(i)), 'stf-auto', 'c89314c7f303599568199398d7312372'), 5000)
 
-test('auto stf with sigma clip', () => readImageTransformAndSave((i) => stf(i, ...adf(i, { sigmaClip: sigmaClip(i) })), 'stf-auto-sigma-clip', 'eb8b02dbcd56dd364a4e0411f8e3029b'), 5000)
+test('auto stf with sigma clip', () => readImageTransformAndSave((i) => stf(i, ...adf(i, { sigmaClip: sigmaClip(i) })), 'stf-auto-sigma-clip', 'c5a13d1826c35bf30667b95222560ae0'), 5000)
+
+test('sigma clip excludes rejected pixels from the iteration statistics', () => {
+	// Continuous background plus a bright tail: rejection is marginal, so a biased
+	// dispersion (e.g. counting rejected pixels at bin 0) changes which pixels survive.
+	const w = 300
+	const h = 300
+	const n = w * h
+	const raw = new Float32Array(n)
+	let seed = 999
+	const u = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff
+	const gauss = () => {
+		let x = 0
+		for (let k = 0; k < 12; k++) x += u()
+		return x - 6
+	}
+	for (let i = 0; i < n; i++) {
+		let v = 0.45 + gauss() * 0.08
+		if (u() < 0.12) v += u() * 0.5
+		raw[i] = Math.max(0, Math.min(1, v))
+	}
+
+	const image = { raw, metadata: { width: w, height: h, channels: 1, stride: w, pixelCount: n } } as Parameters<typeof sigmaClip>[0]
+	const options = { centerMethod: 'mean', dispersionMethod: 'std', sigmaLower: 2, sigmaUpper: 2, maxIterations: 8, tolerance: 0 } as const
+
+	// Brute-force reference: exact mean/std over surviving pixels, iterated to convergence.
+	const reference = new Uint8Array(n)
+	for (let it = 0; it < options.maxIterations; it++) {
+		let sum = 0
+		let c = 0
+		for (let i = 0; i < n; i++)
+			if (!reference[i]) {
+				sum += raw[i]
+				c++
+			}
+		const mean = sum / c
+		let variance = 0
+		for (let i = 0; i < n; i++)
+			if (!reference[i]) {
+				const d = raw[i] - mean
+				variance += d * d
+			}
+		const std = Math.sqrt(variance / c)
+		const lower = mean - options.sigmaLower * std
+		const upper = mean + options.sigmaUpper * std
+		let count = 0
+		for (let i = 0; i < n; i++)
+			if (!reference[i] && (raw[i] < lower || raw[i] > upper)) {
+				reference[i] = 1
+				count++
+			}
+		if (count === 0) break
+	}
+
+	const mask = sigmaClip(image, options)
+	let rejected = 0
+	for (let i = 0; i < n; i++) {
+		expect(!!mask[i]).toBe(!!reference[i])
+		if (mask[i]) rejected++
+	}
+	expect(rejected).toBeGreaterThan(n * 0.1)
+})
 
 test('adf honors explicit zero options', () => {
 	const image = {
