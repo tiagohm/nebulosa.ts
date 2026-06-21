@@ -298,7 +298,9 @@ export function quadraticRegression(x: Readonly<NumberArray>, y: Readonly<Number
 	const d = 2 * a
 	const e = 2 * d // 4a
 	const b2 = b * b
-	regression.minimum = { x: -b / d, y: c - b2 / e }
+	// Only a convex parabola (a > 0) has a true minimum at its vertex. When a <= 0 the parabola opens
+	// downward or degenerates to a line, so no minimum exists and the point is reported as non-finite.
+	regression.minimum = a > 0 ? { x: -b / d, y: c - b2 / e } : { x: Number.NaN, y: Number.NaN }
 	return regression
 }
 

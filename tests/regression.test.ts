@@ -197,6 +197,17 @@ test('quadractic regression with origin on 0', () => {
 	expect(regression.minimum.y).toBeCloseTo(-0.0000806064070280051, 10)
 })
 
+test('quadratic regression reports no minimum for a downward parabola', () => {
+	// A downward-opening parabola (peak at x = 2) has a maximum, not a minimum.
+	const x = [0, 1, 2, 3, 4]
+	const y = [0, 3, 4, 3, 0]
+	const regression = quadraticRegression(x, y)
+
+	expect(regression.coefficients[2]).toBeLessThan(0)
+	expect(Number.isNaN(regression.minimum.x)).toBe(true)
+	expect(Number.isNaN(regression.minimum.y)).toBe(true)
+})
+
 test('exponential regression', () => {
 	const x = [0, 1, 2, 3, 4]
 	const y = [1.5, 2.5, 3.5, 5, 7.5]
