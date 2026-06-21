@@ -3,7 +3,7 @@ import { normalizeAngle, normalizePI, type Angle } from './angle'
 import type { PositionAndVelocity, PositionAndVelocityOverTime } from './astrometry'
 import { AU_KM, DAYSEC, DEG2RAD, EARTH_RADIUS_KM, LIGHT_TIME_AU, PI, SPEED_OF_LIGHT_AU_DAY, TAU, WGS84_FLATTENING } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
-import { deltaTByEspenakMeeus2006 } from './deltat'
+import { deltaT } from './deltat'
 import { eraAb, eraP2s, eraEpj } from './erfa'
 import { eraEpv00 } from './erfa.earth'
 import { eraMoon98 } from './erfa.moon'
@@ -160,7 +160,7 @@ export function computeSunMoonPositionAt(time: Time, sun: PositionAndVelocityOve
 			declination: mDEC,
 			distance: mD * AU_IN_EARTH_RADII,
 		},
-		deltaT: deltaTByEspenakMeeus2006(year),
+		deltaT: deltaT(year),
 	}
 }
 
