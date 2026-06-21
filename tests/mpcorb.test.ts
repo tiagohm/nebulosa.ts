@@ -83,6 +83,13 @@ test('invalid packed date', () => {
 	expect(() => packDate(2025, 1, 0)).toThrow(RangeError)
 })
 
+test('accepts all MPC comet orbit types', () => {
+	for (const type of ['P', 'C', 'D', 'X', 'A', 'I'] as const) {
+		const comet = mpcorbComet(`${HALLEY.slice(0, 4)}${type}${HALLEY.slice(5)}`)
+		expect(comet!.orbitType).toBe(type)
+	}
+})
+
 test('invalid comet orbit type', () => {
-	expect(() => mpcorbComet(`${HALLEY.slice(0, 4)}X${HALLEY.slice(5)}`)).toThrow(RangeError)
+	expect(() => mpcorbComet(`${HALLEY.slice(0, 4)}Z${HALLEY.slice(5)}`)).toThrow(RangeError)
 })
