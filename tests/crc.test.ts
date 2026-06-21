@@ -315,6 +315,18 @@ test('crc32xfer', () => {
 	expect(CRC.crc32xfer.compute(buffer)).toBe(0xbd0be338)
 })
 
+test('crc honors offset/length relative to a non-zero byteOffset view', () => {
+	// Place the canonical "123456789" message inside a larger buffer so the view has a non-zero byteOffset.
+	const backing = Buffer.alloc(20, 0xaa)
+	buffer.copy(backing, 5)
+	const view = backing.subarray(5, 5 + buffer.byteLength)
+
+	expect(view.byteOffset).toBe(5)
+	expect(CRC.crc32.compute(view)).toBe(0xcbf43926)
+	// Explicit window must also be measured from the start of the view.
+	expect(CRC.crc8maxim.compute(view, undefined, 0, view.byteLength)).toBe(CRC.crc8maxim.compute(buffer))
+})
+
 test('crc32 should match Bun.hash.crc32', () => {
 	for (let i = 0; i < 1024; i++) {
 		const buffer = Buffer.alloc(1 + Math.floor(Math.random() * 100))
