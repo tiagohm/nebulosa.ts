@@ -824,11 +824,13 @@ function bracketLineMinimum(f: (params: Readonly<NumberArray>) => number, point:
 	validateFiniteValue(reverse, fReverse)
 
 	if (fReverse < fb) {
+		// Backward is downhill: make it the bracket end and reuse the already-evaluated forward value
+		// (f at +step) as the opposite probe instead of recomputing it.
+		const forward = fb
 		b = reverse
 		fb = fReverse
 		reverse = step
-		fReverse = f(pointAlongDirection(point, direction, reverse))
-		validateFiniteValue(reverse, fReverse)
+		fReverse = forward
 	}
 
 	if (fb >= fa && fReverse >= fa) {
