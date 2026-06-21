@@ -117,6 +117,23 @@ test('write uncompressed FITS from a compressed image header', async () => {
 	expect(Object.keys(fits!.hdus[0].header).some((key) => key.includes('\u0014'))).toBeFalse()
 })
 
+test('declares unsigned-integer BZERO/BSCALE when the source header omits them', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2, 0)
+	// 16-bit header without BZERO/BSCALE, as produced from an XISF UInt16 source.
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 2, NAXIS2: 1 }
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float32Array([0, 1]) }], { type: false })
+
+	const fits = await readFits(bufferSource(buffer))
+	expect(fits!.hdus[0].header.BZERO).toBe(32768)
+	expect(fits!.hdus[0].header.BSCALE).toBe(1)
+
+	// The stored signed samples plus the declared BZERO must reproduce the unsigned range.
+	const data = buffer.subarray(FITS_BLOCK_SIZE, FITS_BLOCK_SIZE + 4)
+	expect(data.readInt16BE(0) + 32768).toBe(0)
+	expect(data.readInt16BE(2) + 32768).toBe(65535)
+})
+
 test('read keyword', () => {
 	const reader = new FitsKeywordReader()
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE * 2)
