@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { deltaTByEspenakMeeus2006, s15 } from '../src/deltat'
+import { deltaT, deltaTByEspenakMeeus2006, parabolaOfStephensonMorrisonHohenkerk2016, s15 } from '../src/deltat'
 
 test('s15', () => {
 	const s = s15(2018)
@@ -23,6 +23,29 @@ test('s15 segment selection', () => {
 	expect(s15(9999).lower).toBe(2016)
 	// Years in the same segment return the shared precomputed spline instance (no per-call allocation).
 	expect(s15(2017)).toBe(s15(2018))
+})
+
+test('deltaT picks the most reliable model per regime', () => {
+	// Within the S15 range it matches the spline (the authoritative fit).
+	expect(deltaT(2000)).toBeCloseTo(s15(2000).compute(2000), 9)
+	expect(deltaT(-720)).toBeCloseTo(s15(-720).compute(-720), 9)
+	expect(deltaT(1000)).toBeCloseTo(s15(1000).compute(1000), 9)
+
+	// Before the spline it uses the long-term parabola, continuous with the spline lower edge.
+	expect(deltaT(-1000)).toBeCloseTo(parabolaOfStephensonMorrisonHohenkerk2016.compute(-1000), 9)
+
+	// After the spline it uses Espenak-Meeus forward expressions.
+	expect(deltaT(2025)).toBeCloseTo(deltaTByEspenakMeeus2006(2025), 9)
+	expect(deltaT(3000)).toBeCloseTo(deltaTByEspenakMeeus2006(3000), 9)
+
+	// Reliable against observed ΔT in the modern era, and closer than Espenak-Meeus (which drifts high).
+	const observed2016 = 68.6
+	expect(deltaT(2016)).toBeCloseTo(observed2016, 0)
+	expect(Math.abs(deltaT(2016) - observed2016)).toBeLessThan(Math.abs(deltaTByEspenakMeeus2006(2016) - observed2016))
+
+	// Finite and well-ordered at the seams.
+	expect(Number.isFinite(deltaT(-1e6))).toBe(true)
+	expect(Number.isFinite(deltaT(1e6))).toBe(true)
 })
 
 test('espenak-meeus 2006', () => {

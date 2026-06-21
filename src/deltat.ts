@@ -88,6 +88,10 @@ const S15_D = [
 
 const S15_LAST_INDEX = S15_LOWER.length - 1
 
+// First and last decimal years covered by the tabulated S15 spline segments.
+const S15_MIN_YEAR = S15_LOWER[0]
+const S15_MAX_YEAR = S15_UPPER[S15_LAST_INDEX]
+
 // Precomputed cubic spline for every S15 segment, evaluated as A*t^3 + B*t^2 + C*t + D over each
 // normalized segment interval. Building them once at module load avoids per-call allocation.
 const S15_SPLINES = S15_LOWER.map((lower, i) => spline(lower, S15_UPPER[i], [S15_A[i], S15_B[i], S15_C[i], S15_D[i]]))
@@ -111,4 +115,23 @@ function s15SegmentIndex(year: number) {
 // Selects the precomputed S15 cubic spline segment that contains the requested decimal year.
 export function s15(year: number) {
 	return S15_SPLINES[s15SegmentIndex(year)]
+}
+
+// Best-estimate Delta T (TT - UT1) in seconds for any decimal calendar year. Picks the most reliable
+// model per regime instead of a single all-purpose fit:
+//   - year < -720:          Stephenson, Morrison and Hohenkerk 2016 long-term parabola, which is built
+//                           to join the spline at its lower edge (continuous to ~38 s on a ~20000 s value).
+//   - -720 <= year <= 2019: the S15 cubic spline, the modern authoritative fit to historical eclipse
+//                           records and recent observations (more accurate than Espenak-Meeus for the
+//                           last few decades, where Espenak-Meeus drifts ~1-1.5 s high).
+//   - year > 2019:          the Espenak and Meeus 2006 expressions, which extrapolate the recent trend
+//                           forward and blend into a long-term parabola beyond +2150. The S15 edge cubic
+//                           is deliberately not extrapolated here because it diverges within a few years.
+// A small (~1.8 s) step exists at the +2019 boundary, reflecting the switch from observation-constrained
+// data to forward prediction. The result is finite and continuous-enough for any input year.
+//   year: decimal calendar year, for example 2024.5 for the middle of 2024.
+export function deltaT(year: number) {
+	if (year < S15_MIN_YEAR) return parabolaOfStephensonMorrisonHohenkerk2016.compute(year)
+	if (year > S15_MAX_YEAR) return deltaTByEspenakMeeus2006(year)
+	return s15(year).compute(year)
 }
