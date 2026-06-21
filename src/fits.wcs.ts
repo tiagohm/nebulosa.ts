@@ -187,13 +187,19 @@ export function cd(header: FitsHeader, i: number, j: number) {
 }
 
 // Converts CDELT and CROTA2 keywords into a row-major CD matrix, optionally flipping axes.
+// Uses the canonical WCS Paper II conversion (eqs. 186-189): CD1_1 = CDELT1·cos, CD1_2 = -CDELT2·sin,
+// CD2_1 = CDELT1·sin, CD2_2 = CDELT2·cos. A flip negates the corresponding axis scale. This is valid
+// for every sign combination of the CDELTs; a sign/abs formulation mirrors the rotation when both
+// CDELTs share a sign.
 export function cdFromCdelt(cdelt1: number, cdelt2: number, crota: Angle, flipH: boolean = false, flipV: boolean = false): CDMatrix {
 	const cos0 = Math.cos(crota)
 	const sin0 = Math.sin(crota)
-	const cd11 = (flipH ? -cdelt1 : cdelt1) * cos0
-	const cd12 = (flipV ? -Math.abs(cdelt2) : Math.abs(cdelt2)) * Math.sign(cdelt1) * sin0
-	const cd21 = (flipH ? Math.abs(cdelt1) : -Math.abs(cdelt1)) * Math.sign(cdelt2) * sin0
-	const cd22 = (flipV ? -cdelt2 : cdelt2) * cos0
+	const scale1 = flipH ? -cdelt1 : cdelt1
+	const scale2 = flipV ? -cdelt2 : cdelt2
+	const cd11 = scale1 * cos0
+	const cd12 = -scale2 * sin0
+	const cd21 = scale1 * sin0
+	const cd22 = scale2 * cos0
 	return [cd11, cd12, cd21, cd22]
 }
 
