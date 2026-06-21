@@ -9,6 +9,22 @@ test('s15', () => {
 	expect(s.compute(2020)).toBeCloseTo(69, 0)
 })
 
+test('s15 segment selection', () => {
+	// A year on a segment lower bound selects that segment (t = 0), not the previous one.
+	expect(s15(400).lower).toBe(400)
+	// A year just below a bound stays in the previous segment.
+	expect(s15(399).lower).toBe(-100)
+	expect(s15(399).upper).toBe(400)
+	// The upper endpoint of the whole table maps to the last segment at t = 1.
+	expect(s15(2019).lower).toBe(2016)
+	expect(s15(2019).upper).toBe(2019)
+	// Out-of-range years clamp to the first/last segment (extrapolation).
+	expect(s15(-5000).lower).toBe(-720)
+	expect(s15(9999).lower).toBe(2016)
+	// Years in the same segment return the shared precomputed spline instance (no per-call allocation).
+	expect(s15(2017)).toBe(s15(2018))
+})
+
 test('espenak-meeus 2006', () => {
 	// Polynomial origins evaluate to their leading constant term.
 	expect(deltaTByEspenakMeeus2006(0)).toBeCloseTo(10583.6, 1)

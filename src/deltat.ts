@@ -86,21 +86,29 @@ const S15_D = [
 	33.621, 35.093, 37.956, 40.951, 44.244, 47.291, 50.361, 52.936, 54.984, 56.373, 58.453, 60.678, 62.898, 64.083, 64.553, 65.197, 66.061, 66.92, 68.109,
 ] as const
 
-const S15_MIN_YEAR = S15_LOWER[0]
-const S15_MAX_YEAR = S15_UPPER.at(-1)
 const S15_LAST_INDEX = S15_LOWER.length - 1
 
-// Selects the S15 cubic spline segment that contains the requested decimal year.
+// Precomputed cubic spline for every S15 segment, evaluated as A*t^3 + B*t^2 + C*t + D over each
+// normalized segment interval. Building them once at module load avoids per-call allocation.
+const S15_SPLINES = S15_LOWER.map((lower, i) => spline(lower, S15_UPPER[i], [S15_A[i], S15_B[i], S15_C[i], S15_D[i]]))
+
+// Finds the segment whose lower bound is the greatest tabulated year not exceeding `year`, using a
+// binary search over the ascending S15_LOWER bounds. Years before the first or after the last
+// segment clamp to the nearest segment (edge-cubic extrapolation).
+function s15SegmentIndex(year: number) {
+	let lo = 0
+	let hi = S15_LAST_INDEX
+
+	while (lo < hi) {
+		const mid = (lo + hi + 1) >>> 1
+		if (S15_LOWER[mid] <= year) lo = mid
+		else hi = mid - 1
+	}
+
+	return lo
+}
+
+// Selects the precomputed S15 cubic spline segment that contains the requested decimal year.
 export function s15(year: number) {
-	let i = 0
-	while (i < S15_LOWER.length && year >= S15_LOWER[i]) i++
-	i = Math.max(0, Math.min(i - 1, S15_LAST_INDEX))
-
-	const c = new Float64Array(4)
-	c[0] = S15_A[i]
-	c[1] = S15_B[i]
-	c[2] = S15_C[i]
-	c[3] = S15_D[i]
-
-	return spline(S15_LOWER[i], S15_UPPER[i], c)
+	return S15_SPLINES[s15SegmentIndex(year)]
 }
