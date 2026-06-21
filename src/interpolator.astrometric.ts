@@ -52,81 +52,35 @@ function validateCubicTension(value: number | undefined) {
 	return value
 }
 
-function interpolateNearest(grid: Float64Array, gx: number, gy: number, width: number, height: number) {
-	const col = clampIndex(Math.round(gx), width - 1)
-	const row = clampIndex(Math.round(gy), height - 1)
-	return grid[rowMajorIndex(row, col, width)]
-}
-
-function interpolateBilinear(grid: Float64Array, gx: number, gy: number, width: number, height: number) {
-	const maxCol = width - 1
-	const maxRow = height - 1
-	const ix = Math.floor(gx)
-	const iy = Math.floor(gy)
-	const tx = gx - ix
-	const ty = gy - iy
-	const col0 = clampIndex(ix, maxCol)
-	const col1 = clampIndex(ix + 1, maxCol)
-	const row0 = clampIndex(iy, maxRow)
-	const row1 = clampIndex(iy + 1, maxRow)
-	const p00 = grid[rowMajorIndex(row0, col0, width)]
-	const p10 = grid[rowMajorIndex(row0, col1, width)]
-	const p01 = grid[rowMajorIndex(row1, col0, width)]
-	const p11 = grid[rowMajorIndex(row1, col1, width)]
+// Blends one grid bilinearly from a precomputed stencil. `o0`/`o1` are the row base offsets
+// (row * width) and `c0`/`c1` the column indices; `tx`/`ty` are the fractional cell positions.
+function bilinearAt(grid: Float64Array, o0: number, o1: number, c0: number, c1: number, tx: number, ty: number) {
+	const p00 = grid[o0 + c0]
+	const p10 = grid[o0 + c1]
+	const p01 = grid[o1 + c0]
+	const p11 = grid[o1 + c1]
 	const a = p00 + (p10 - p00) * tx
 	const b = p01 + (p11 - p01) * tx
 	return a + (b - a) * ty
 }
 
-function interpolateBicubicCatmullRom(grid: Float64Array, gx: number, gy: number, width: number, height: number) {
-	const maxCol = width - 1
-	const maxRow = height - 1
-	const ix = Math.floor(gx)
-	const iy = Math.floor(gy)
-	const tx = gx - ix
-	const ty = gy - iy
-	const col0 = clampIndex(ix - 1, maxCol)
-	const col1 = clampIndex(ix, maxCol)
-	const col2 = clampIndex(ix + 1, maxCol)
-	const col3 = clampIndex(ix + 2, maxCol)
-	const row0 = clampIndex(iy - 1, maxRow)
-	const row1 = clampIndex(iy, maxRow)
-	const row2 = clampIndex(iy + 1, maxRow)
-	const row3 = clampIndex(iy + 2, maxRow)
-	const offset0 = row0 * width
-	const offset1 = row1 * width
-	const offset2 = row2 * width
-	const offset3 = row3 * width
-	const a = cubicCatmullRom(grid[offset0 + col0], grid[offset0 + col1], grid[offset0 + col2], grid[offset0 + col3], tx)
-	const b = cubicCatmullRom(grid[offset1 + col0], grid[offset1 + col1], grid[offset1 + col2], grid[offset1 + col3], tx)
-	const c = cubicCatmullRom(grid[offset2 + col0], grid[offset2 + col1], grid[offset2 + col2], grid[offset2 + col3], tx)
-	const d = cubicCatmullRom(grid[offset3 + col0], grid[offset3 + col1], grid[offset3 + col2], grid[offset3 + col3], tx)
+// Blends one grid with a bicubic Catmull-Rom kernel from a precomputed 4x4 stencil. `o0..o3` are the
+// row base offsets (row * width) and `c0..c3` the column indices; `tx`/`ty` are the fractional positions.
+function bicubicCatmullRomAt(grid: Float64Array, o0: number, o1: number, o2: number, o3: number, c0: number, c1: number, c2: number, c3: number, tx: number, ty: number) {
+	const a = cubicCatmullRom(grid[o0 + c0], grid[o0 + c1], grid[o0 + c2], grid[o0 + c3], tx)
+	const b = cubicCatmullRom(grid[o1 + c0], grid[o1 + c1], grid[o1 + c2], grid[o1 + c3], tx)
+	const c = cubicCatmullRom(grid[o2 + c0], grid[o2 + c1], grid[o2 + c2], grid[o2 + c3], tx)
+	const d = cubicCatmullRom(grid[o3 + c0], grid[o3 + c1], grid[o3 + c2], grid[o3 + c3], tx)
 	return cubicCatmullRom(a, b, c, d, ty)
 }
 
-function interpolateBicubicConvolution(grid: Float64Array, gx: number, gy: number, width: number, height: number, tension: number) {
-	const maxCol = width - 1
-	const maxRow = height - 1
-	const ix = Math.floor(gx)
-	const iy = Math.floor(gy)
-	const tx = gx - ix
-	const ty = gy - iy
-	const col0 = clampIndex(ix - 1, maxCol)
-	const col1 = clampIndex(ix, maxCol)
-	const col2 = clampIndex(ix + 1, maxCol)
-	const col3 = clampIndex(ix + 2, maxCol)
-	const row0 = clampIndex(iy - 1, maxRow)
-	const row1 = clampIndex(iy, maxRow)
-	const row2 = clampIndex(iy + 1, maxRow)
-	const row3 = clampIndex(iy + 2, maxRow)
-	const offset0 = row0 * width
-	const offset1 = row1 * width
-	const offset2 = row2 * width
-	const offset3 = row3 * width
-	const a = cubicConvolution(grid[offset0 + col0], grid[offset0 + col1], grid[offset0 + col2], grid[offset0 + col3], tx, tension)
-	const b = cubicConvolution(grid[offset1 + col0], grid[offset1 + col1], grid[offset1 + col2], grid[offset1 + col3], tx, tension)
-	const c = cubicConvolution(grid[offset2 + col0], grid[offset2 + col1], grid[offset2 + col2], grid[offset2 + col3], tx, tension)
-	const d = cubicConvolution(grid[offset3 + col0], grid[offset3 + col1], grid[offset3 + col2], grid[offset3 + col3], tx, tension)
+// Blends one grid with a Keys bicubic convolution kernel from a precomputed 4x4 stencil. `o0..o3` are
+// the row base offsets (row * width) and `c0..c3` the column indices; `tension` is the kernel parameter.
+function bicubicConvolutionAt(grid: Float64Array, o0: number, o1: number, o2: number, o3: number, c0: number, c1: number, c2: number, c3: number, tx: number, ty: number, tension: number) {
+	const a = cubicConvolution(grid[o0 + c0], grid[o0 + c1], grid[o0 + c2], grid[o0 + c3], tx, tension)
+	const b = cubicConvolution(grid[o1 + c0], grid[o1 + c1], grid[o1 + c2], grid[o1 + c3], tx, tension)
+	const c = cubicConvolution(grid[o2 + c0], grid[o2 + c1], grid[o2 + c2], grid[o2 + c3], tx, tension)
+	const d = cubicConvolution(grid[o3 + c0], grid[o3 + c1], grid[o3 + c2], grid[o3 + c3], tx, tension)
 	return cubicConvolution(a, b, c, d, ty, tension)
 }
 
@@ -153,6 +107,8 @@ export class AstrometricInterpolator {
 
 	private readonly interpolation: AstrometricInterpolationMethod
 	private readonly cubicTension: number
+	// Reusable output buffer for the interpolated Cartesian vector, avoiding per-query allocation.
+	private readonly scratch: MutVec3 = [0, 0, 0]
 
 	constructor(
 		raGrid: NumberArray,
@@ -191,9 +147,10 @@ export class AstrometricInterpolator {
 	pixelToSky(x: number, y: number, out: [Angle, Angle] = [0, 0]): [Angle, Angle] {
 		const gx = clamp(x / this.stepX, 0, this.width - 1)
 		const gy = clamp(y / this.stepY, 0, this.height - 1)
-		const vx = this.interpolateComponent(this.xGrid, gx, gy)
-		const vy = this.interpolateComponent(this.yGrid, gx, gy)
-		const vz = this.interpolateComponent(this.zGrid, gx, gy)
+		const vector = this.interpolateVector(gx, gy)
+		const vx = vector[0]
+		const vy = vector[1]
+		const vz = vector[2]
 		const length = Math.sqrt(vx * vx + vy * vy + vz * vz)
 
 		if (!(length > 0) || !Number.isFinite(length)) return this.nearestSky(gx, gy, out)
@@ -214,16 +171,66 @@ export class AstrometricInterpolator {
 		return out
 	}
 
-	private interpolateComponent(grid: Float64Array, gx: number, gy: number) {
+	// Interpolates the x/y/z Cartesian grids at grid coordinate (gx, gy) into the reusable scratch buffer.
+	// The integer stencil and method dispatch are computed once and shared across all three components.
+	private interpolateVector(gx: number, gy: number): MutVec3 {
+		const width = this.width
+		const out = this.scratch
+
 		switch (this.interpolation) {
-			case 'nearest':
-				return interpolateNearest(grid, gx, gy, this.width, this.height)
-			case 'bilinear':
-				return interpolateBilinear(grid, gx, gy, this.width, this.height)
-			case 'cubicConvolution':
-				return interpolateBicubicConvolution(grid, gx, gy, this.width, this.height, this.cubicTension)
+			case 'nearest': {
+				const index = rowMajorIndex(clampIndex(Math.round(gy), this.height - 1), clampIndex(Math.round(gx), width - 1), width)
+				out[0] = this.xGrid[index]
+				out[1] = this.yGrid[index]
+				out[2] = this.zGrid[index]
+				return out
+			}
+			case 'bilinear': {
+				const maxCol = width - 1
+				const maxRow = this.height - 1
+				const ix = Math.floor(gx)
+				const iy = Math.floor(gy)
+				const tx = gx - ix
+				const ty = gy - iy
+				const c0 = clampIndex(ix, maxCol)
+				const c1 = clampIndex(ix + 1, maxCol)
+				const o0 = clampIndex(iy, maxRow) * width
+				const o1 = clampIndex(iy + 1, maxRow) * width
+				out[0] = bilinearAt(this.xGrid, o0, o1, c0, c1, tx, ty)
+				out[1] = bilinearAt(this.yGrid, o0, o1, c0, c1, tx, ty)
+				out[2] = bilinearAt(this.zGrid, o0, o1, c0, c1, tx, ty)
+				return out
+			}
 			case 'catmullRom':
-				return interpolateBicubicCatmullRom(grid, gx, gy, this.width, this.height)
+			case 'cubicConvolution': {
+				const maxCol = width - 1
+				const maxRow = this.height - 1
+				const ix = Math.floor(gx)
+				const iy = Math.floor(gy)
+				const tx = gx - ix
+				const ty = gy - iy
+				const c0 = clampIndex(ix - 1, maxCol)
+				const c1 = clampIndex(ix, maxCol)
+				const c2 = clampIndex(ix + 1, maxCol)
+				const c3 = clampIndex(ix + 2, maxCol)
+				const o0 = clampIndex(iy - 1, maxRow) * width
+				const o1 = clampIndex(iy, maxRow) * width
+				const o2 = clampIndex(iy + 1, maxRow) * width
+				const o3 = clampIndex(iy + 2, maxRow) * width
+
+				if (this.interpolation === 'cubicConvolution') {
+					const tension = this.cubicTension
+					out[0] = bicubicConvolutionAt(this.xGrid, o0, o1, o2, o3, c0, c1, c2, c3, tx, ty, tension)
+					out[1] = bicubicConvolutionAt(this.yGrid, o0, o1, o2, o3, c0, c1, c2, c3, tx, ty, tension)
+					out[2] = bicubicConvolutionAt(this.zGrid, o0, o1, o2, o3, c0, c1, c2, c3, tx, ty, tension)
+				} else {
+					out[0] = bicubicCatmullRomAt(this.xGrid, o0, o1, o2, o3, c0, c1, c2, c3, tx, ty)
+					out[1] = bicubicCatmullRomAt(this.yGrid, o0, o1, o2, o3, c0, c1, c2, c3, tx, ty)
+					out[2] = bicubicCatmullRomAt(this.zGrid, o0, o1, o2, o3, c0, c1, c2, c3, tx, ty)
+				}
+
+				return out
+			}
 		}
 	}
 }
