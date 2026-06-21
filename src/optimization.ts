@@ -590,9 +590,12 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 
 	const J = new Array<Float64Array>(m)
 	const PJ = new Float64Array(m)
-	const JTJ = Matrix.square(m)
+	const JTJ = Matrix.square(m) // base (undamped) JᵀJ, reused across rejected steps
 	const JTJData = JTJ.data
-	const JTR = new Float64Array(m)
+	const damped = Matrix.square(m) // working damped copy consumed by the linear solve
+	const dampedData = damped.data
+	const JTR = new Float64Array(m) // base JᵀR
+	const JTRWork = new Float64Array(m) // working copy consumed by the linear solve
 
 	const R = new Float64Array(n)
 	const UP = new Float64Array(m)
@@ -609,50 +612,67 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		for (let i = 0; i < o.length; i++) o[i] = model(x[i], params)
 	}
 
+	// Residuals and the Jacobian depend only on the parameters, so they are rebuilt on acceptance (and
+	// initially) but reused across rejected steps, which only re-damp the diagonal and re-solve.
+	let needsJacobian = true
+	let error = 0
+
 	while (maxIterations-- > 0) {
-		predict(params, YP)
+		if (needsJacobian) {
+			predict(params, YP)
 
-		// residual
-		for (let i = 0; i < n; i++) R[i] = y[i] - YP[i]
-
-		// Jacobian
-		for (let j = 0; j < m; j++) {
-			for (let k = 0; k < m; k++) PJ[k] = params[k]
-			PJ[j] += LEVENBERG_MARQUARDT_DELTA
-			predict(PJ, YPJ)
-
-			for (let k = 0; k < n; k++) {
-				J[j][k] = (YPJ[k] - YP[k]) / LEVENBERG_MARQUARDT_DELTA
+			// residual and current sum of squares
+			error = 0
+			for (let i = 0; i < n; i++) {
+				const ri = y[i] - YP[i]
+				R[i] = ri
+				error += ri * ri
 			}
+
+			// Jacobian
+			for (let j = 0; j < m; j++) {
+				for (let k = 0; k < m; k++) PJ[k] = params[k]
+				PJ[j] += LEVENBERG_MARQUARDT_DELTA
+				predict(PJ, YPJ)
+
+				for (let k = 0; k < n; k++) {
+					J[j][k] = (YPJ[k] - YP[k]) / LEVENBERG_MARQUARDT_DELTA
+				}
+			}
+
+			// J' * J and J' * r
+			for (let i = 0; i < m; i++) {
+				const Ji = J[i]
+
+				let sum = 0
+				for (let k = 0; k < n; k++) sum += Ji[k] * R[k]
+				JTR[i] = sum
+
+				const iOffset = i * m
+
+				for (let j = i; j < m; j++) {
+					const Jj = J[j]
+
+					let dot = 0
+					for (let k = 0; k < n; k++) dot += Ji[k] * Jj[k]
+
+					JTJData[iOffset + j] = dot
+					JTJData[j * m + i] = dot
+				}
+			}
+
+			needsJacobian = false
 		}
 
-		// J' * J and J' * r
-		for (let i = 0; i < m; i++) {
-			const Ji = J[i]
-
-			let sum = 0
-			for (let k = 0; k < n; k++) sum += Ji[k] * R[k]
-			JTR[i] = sum
-
-			const iOffset = i * m
-
-			for (let j = i; j < m; j++) {
-				const Jj = J[j]
-
-				let dot = 0
-				for (let k = 0; k < n; k++) dot += Ji[k] * Jj[k]
-
-				JTJData[iOffset + j] = dot
-				JTJData[j * m + i] = dot
-			}
-		}
-
+		// Damp a fresh copy of JᵀJ so the base matrix survives a possible rejected retry.
+		for (let i = 0; i < dampedData.length; i++) dampedData[i] = JTJData[i]
 		for (let i = 0, p = 0; i < m; i++, p += m) {
-			JTJData[p + i] *= 1 + lambda
+			dampedData[p + i] *= 1 + lambda
 		}
 
-		// Solve JTJ * dp = JTr.
-		gaussianElimination(JTJ, JTR, DP)
+		// Solve (JᵀJ + λ·diag) * dp = Jᵀr on working copies (the solver mutates them).
+		JTRWork.set(JTR)
+		gaussianElimination(damped, JTRWork, DP)
 
 		if (Number.isNaN(DP[0])) break
 
@@ -660,19 +680,18 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		for (let i = 0; i < m; i++) UP[i] = params[i] + DP[i]
 		predict(UP, YPJ)
 
-		let error = 0
 		let newError = 0
-
 		for (let i = 0; i < n; i++) {
-			const ri = R[i]
 			const di = y[i] - YPJ[i]
-			error += ri * ri
 			newError += di * di
 		}
 
 		if (newError < error) {
+			const improvement = error - newError
 			for (let i = 0; i < m; i++) params[i] = UP[i]
-			if (Math.abs(error - newError) <= tolerance) break
+			error = newError
+			needsJacobian = true
+			if (improvement <= tolerance) break
 			lambda /= 10
 		} else {
 			lambda *= 10
