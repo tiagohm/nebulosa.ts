@@ -326,7 +326,10 @@ export function parseXisfHeader(data: Buffer) {
 	return images
 }
 
-const NUMERIC_VALUE_REGEX = /^[-+]?([0-9]*\.[0-9]+|[0-9]+)$/
+// Matches FITS numeric values, including scientific notation such as `1.5e-10`,
+// `3E+8`, or `1e21`. The full-string anchors keep quoted string values (which the
+// writer wraps in `'...'`) from being misread as numbers.
+const NUMERIC_VALUE_REGEX = /^[-+]?([0-9]*\.[0-9]+|[0-9]+)([eE][-+]?[0-9]+)?$/
 
 function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeometry = parseGeometry(image.geometry)!) {
 	const header: FitsHeader = { SIMPLE: true, BITPIX: bitpixFromSampleFormat(image.sampleFormat), NAXIS: geometry.channels >= 3 ? 3 : 2, NAXIS1: geometry.width, NAXIS2: geometry.height }
