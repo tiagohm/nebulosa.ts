@@ -61,6 +61,17 @@ export function predictLinearLeastSquares(coefficients: Readonly<NumberArray>, f
 	return value
 }
 
+// Computes target-minus-fitted residuals for the given coefficients over `rows` design rows.
+function leastSquaresResiduals(design: readonly Readonly<NumberArray>[], target: Readonly<NumberArray>, coefficients: Readonly<NumberArray>, rows: number) {
+	const residuals = new Float64Array(rows)
+
+	for (let i = 0; i < rows; i++) {
+		residuals[i] = target[i] - predictLinearLeastSquares(coefficients, design[i])
+	}
+
+	return residuals
+}
+
 // Solves a weighted linear least-squares problem using QR with a regularized fallback.
 export function linearLeastSquares(design: readonly Readonly<NumberArray>[], target: Readonly<NumberArray>, { weights, ridge = 0 }: LinearLeastSquaresOptions = {}): LinearLeastSquaresResult {
 	if (design.length !== target.length) throw new Error('design matrix row count must match target length')
@@ -112,18 +123,22 @@ export function robustLinearLeastSquares(
 	let scale = 0
 
 	for (; iterations < maxIterations; iterations++) {
-		const result = linearLeastSquares(design, target, { weights: currentWeights, ridge })
-		scale = robustResidualScale(result.residuals)
+		// Intermediate iterations only need coefficients and residuals, so solve directly and skip the
+		// expensive condition-number estimate; it is computed once for the returned result below.
+		const coefficients = solveLinearLeastSquares(design, target, currentWeights, ridge)
+		const residuals = leastSquaresResiduals(design, target, coefficients, rows)
+		scale = robustResidualScale(residuals)
 
 		if (!Number.isFinite(scale) || scale === 0) {
+			const result = linearLeastSquares(design, target, { weights: currentWeights, ridge })
 			return { ...result, weights: currentWeights, iterations: iterations + 1, scale }
 		}
 
-		const nextWeights = reweightLeastSquares(baseWeights, result.residuals, scale, method, tuning)
-		const coefficientDelta = previousCoefficients.length === result.coefficients.length ? maxCoefficientDelta(previousCoefficients, result.coefficients) : Number.POSITIVE_INFINITY
+		const nextWeights = reweightLeastSquares(baseWeights, residuals, scale, method, tuning)
+		const coefficientDelta = previousCoefficients.length === coefficients.length ? maxCoefficientDelta(previousCoefficients, coefficients) : Number.POSITIVE_INFINITY
 		const weightDelta = maxWeightDelta(currentWeights, nextWeights)
 
-		previousCoefficients = result.coefficients
+		previousCoefficients = coefficients
 		currentWeights = nextWeights
 
 		if (coefficientDelta <= tolerance && weightDelta <= tolerance) {
