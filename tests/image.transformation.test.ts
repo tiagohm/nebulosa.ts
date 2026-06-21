@@ -890,6 +890,17 @@ test('saturation is a no-op for monochrome data and unity gain', () => {
 	expectImageValues(color, beforeColor, 6)
 })
 
+test('saturation clamps oversaturated channels to the normalized range', () => {
+	// A channel darker than the luminance extrapolates below 0 when value > 1.
+	const image = makeImage(1, 1, 3, [0.1, 0.5, 0.5])
+	saturation(image, 2)
+
+	for (const value of image.raw) {
+		expect(value).toBeGreaterThanOrEqual(0)
+		expect(value).toBeLessThanOrEqual(1)
+	}
+})
+
 test('linear applies slope and intercept with clamping', () => {
 	const image = makeImage(3, 1, 1, [0, 0.5, 1])
 	linear(image, 2, -0.25)

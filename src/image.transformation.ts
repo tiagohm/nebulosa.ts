@@ -1831,9 +1831,9 @@ export function saturation(image: Image, value: number, channel: ImageChannelOrG
 			const b = raw[i + 2]
 			const gray = red * r + green * g + blue * b
 
-			raw[i] = Math.min(1, gray + (r - gray) * value)
-			raw[i + 1] = Math.min(1, gray + (g - gray) * value)
-			raw[i + 2] = Math.min(1, gray + (b - gray) * value)
+			raw[i] = clamp(gray + (r - gray) * value, 0, 1)
+			raw[i + 1] = clamp(gray + (g - gray) * value, 0, 1)
+			raw[i + 2] = clamp(gray + (b - gray) * value, 0, 1)
 		}
 	}
 
