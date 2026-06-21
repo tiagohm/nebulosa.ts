@@ -161,26 +161,35 @@ export function chebyshevLeastSquares(x: Readonly<NumberArray>, y: Readonly<Numb
 	}
 }
 
-// Computes intercept and slope using the ordinary least squares method
+// Computes intercept and slope using the ordinary least squares method.
+// Uses a two-pass, mean-subtracted formulation to avoid the catastrophic cancellation that the
+// textbook nΣxy - ΣxΣy form suffers when x has a large mean and small variance.
 // https://en.wikipedia.org/wiki/Ordinary_least_squares
 export function simpleLinearRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): LinearRegression {
 	const n = Math.min(x.length, y.length)
 
-	let xSum = 0
-	let ySum = 0
-	let xSquared = 0
-	let xy = 0
+	let xMean = 0
+	let yMean = 0
 
 	for (let i = 0; i < n; i++) {
-		xSum += x[i]
-		ySum += y[i]
-		xSquared += x[i] * x[i]
-		xy += x[i] * y[i]
+		xMean += x[i]
+		yMean += y[i]
 	}
 
-	const numerator = n * xy - xSum * ySum
-	const slope = numerator / (n * xSquared - xSum * xSum)
-	const intercept = (1 / n) * ySum - slope * (1 / n) * xSum
+	xMean /= n
+	yMean /= n
+
+	let sxy = 0
+	let sxx = 0
+
+	for (let i = 0; i < n; i++) {
+		const dx = x[i] - xMean
+		sxy += dx * (y[i] - yMean)
+		sxx += dx * dx
+	}
+
+	const slope = sxy / sxx
+	const intercept = yMean - slope * xMean
 
 	return {
 		xPoints: x,

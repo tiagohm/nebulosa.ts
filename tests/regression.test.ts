@@ -30,6 +30,16 @@ test('simple linear', () => {
 	expect(regression.x(28.088235294117649)).toBeCloseTo(85, 0)
 })
 
+test('simple linear stays accurate for large-x offsets', () => {
+	// With a large mean and tiny variance the textbook nΣxy - ΣxΣy form loses the slope to cancellation.
+	const x = [1e8, 1e8 + 1, 1e8 + 2, 1e8 + 3]
+	const y = x.map((xi) => 2 * xi + 5)
+	const regression = simpleLinearRegression(x, y)
+
+	expect(regression.slope).toBeCloseTo(2, 9)
+	expect(regression.predict(1e8 + 10)).toBeCloseTo(2 * (1e8 + 10) + 5, 3)
+})
+
 // https://github.com/mljs/regression-polynomial/blob/main/src/__tests__/index.test.ts
 describe('polynomial', () => {
 	test('degree 1', () => {
