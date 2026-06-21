@@ -3,13 +3,21 @@ export type NumberArray = Float16Array | Float32Array | Float64Array | Int32Arra
 const SPLITTER = 134217729
 
 // Adds a and b exactly, returning the result as two 64-bit floats.
-export function twoSum(a: number, b: number) {
+export function twoSum(a: number, b: number, out?: NumberArray) {
 	const x = a + b
 	let eb = x - a
 	let ea = x - eb
 	eb = b - eb
 	ea = a - ea
-	return [x, ea + eb] as const
+
+	if (out === undefined) {
+		out = [x, ea + eb]
+	} else {
+		out[0] = x
+		out[1] = ea + eb
+	}
+
+	return out
 }
 
 // Splits a in two aligned parts.
@@ -23,7 +31,7 @@ export function split(a: number) {
 // Multiplies finite double values using Dekker splitting.
 // Returns [product, error] such that product + error approximates the exact product,
 // assuming no overflow/underflow occurs during the split/product operations.
-export function twoProduct(a: number, b: number) {
+export function twoProduct(a: number, b: number, out?: NumberArray) {
 	const x = a * b
 
 	const ca = SPLITTER * a
@@ -40,7 +48,14 @@ export function twoProduct(a: number, b: number) {
 	y -= al * bh
 	y -= ah * bl
 
-	return [x, al * bl - y] as const
+	if (out === undefined) {
+		out = [x, al * bl - y]
+	} else {
+		out[0] = x
+		out[1] = al * bl - y
+	}
+
+	return out
 }
 
 // Computes the Euclidean modulo where the result is always non-negative.
@@ -111,10 +126,10 @@ export function roundToNthDecimal(a: number, n: number) {
 	const tolerance = Math.max(Number.EPSILON, abs * Number.EPSILON)
 
 	if (Math.abs(fraction - 0.5) <= tolerance) {
-		return sign * (floor + 1) / factor
+		return (sign * (floor + 1)) / factor
 	}
 
-	return sign * Math.floor(abs + 0.5) / factor
+	return (sign * Math.floor(abs + 0.5)) / factor
 }
 
 // Converts the low 8 bits of num to a signed integer.
