@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { Bitpix } from '../src/fits'
-import { readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../src/image'
+import { readImageFromJpeg, readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../src/image'
+import { Jpeg } from '../src/libturbojpeg'
 import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../src/image.computation'
 // oxfmt-ignore
 import { approximateArcsinhStretchParameters, arcsinhStretch, backgroundNeutralization, bayer, blur3x3, blur5x5, blur7x7, blurConvolutionKernel, brightness, calibrate, clone, contrast, convolution, convolutionKernel, curvesTransformation, debayer, edges, emboss, FFTWorkspace, fft, gamma, gaussianBlur, grayscale, horizontalFlip, invert, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, multiscaleMedianTransform, psf, saturation, scnr, sharpen, stf, verticalFlip } from '../src/image.transformation'
@@ -14,6 +15,30 @@ await downloadPerTag('image')
 function autoStf(image: Image) {
 	return stf(image, ...adf(image))
 }
+
+test('reads a color JPEG as luminance when no pixel format is given', () => {
+	// Build a small color JPEG with distinct per-channel content.
+	const width = 8
+	const height = 8
+	const rgb = new Uint8Array(width * height * 3)
+	for (let i = 0, p = 0; i < width * height; i++) {
+		rgb[p++] = (i * 7) & 0xff
+		rgb[p++] = (i * 13) & 0xff
+		rgb[p++] = (i * 29) & 0xff
+	}
+
+	const jpeg = new Jpeg().compress(rgb, width, height, 'RGB', 100, '4:4:4')!
+
+	const noFormat = readImageFromJpeg(jpeg)!
+	const gray = readImageFromJpeg(jpeg, undefined, 'GRAY')!
+
+	// The default path must produce the same single-channel luminance image as an explicit GRAY decode.
+	expect(noFormat.metadata.channels).toBe(1)
+	expect(noFormat.raw.length).toBe(width * height)
+	for (let i = 0; i < gray.raw.length; i++) {
+		expect(noFormat.raw[i]).toBeCloseTo(gray.raw[i], 6)
+	}
+})
 
 test('read image from fits', async () => {
 	for (const bitpix of BITPIXES) {
