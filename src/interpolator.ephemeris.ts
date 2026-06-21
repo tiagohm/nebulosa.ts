@@ -100,9 +100,6 @@ abstract class BaseEphemerisInterpolator implements UpdatableEphemerisInterpolat
 	protected time0Day = 0
 	protected time0Fraction = 0
 	protected duration = 0
-	protected evaluationTimes: Float64Array = new Float64Array(0)
-	protected raSamples: Float64Array = new Float64Array(0)
-	protected decSamples: Float64Array = new Float64Array(0)
 	protected raInterpolator!: ScalarInterpolator
 	protected decInterpolator!: ScalarInterpolator
 
@@ -146,9 +143,6 @@ abstract class BaseEphemerisInterpolator implements UpdatableEphemerisInterpolat
 		this.time0Day = prepared.startDay
 		this.time0Fraction = prepared.startFraction
 		this.duration = prepared.normalizedTimes[lastSample]
-		this.evaluationTimes = evaluationTimes
-		this.raSamples = prepared.rightAscension
-		this.decSamples = prepared.declination
 
 		this.createScalarInterpolators(evaluationTimes, prepared.rightAscension, prepared.declination)
 		this.diagnostics = this.computeRmsError ? computeDiagnostics(evaluationTimes, prepared.rightAscension, prepared.declination, this.raInterpolator, this.decInterpolator) : undefined
@@ -257,14 +251,14 @@ export class ChebyshevEphemerisInterpolator extends BaseEphemerisInterpolator {
 }
 
 class ChebyshevPolynomialFit implements ScalarInterpolator {
-	private readonly cheebyshev: ChebyshevRegression
+	private readonly chebyshev: ChebyshevRegression
 
 	constructor(x: Float64Array, y: Float64Array, degree: number) {
-		this.cheebyshev = chebyshevLeastSquares(x, y, degree)
+		this.chebyshev = chebyshevLeastSquares(x, y, degree)
 	}
 
 	compute(x: number) {
-		return this.cheebyshev.predict(x)
+		return this.chebyshev.predict(x)
 	}
 
 	reset() {}
