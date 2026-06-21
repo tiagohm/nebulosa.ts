@@ -512,12 +512,14 @@ export function coordinateDescent(
 			value = result.value
 		}
 
+		// A full pass that no longer improves means the current step size is exhausted. Shrink it to
+		// refine the search, and only declare convergence once the step itself drops below tolerance.
 		if (Math.abs(previousValue - value) <= tolerance) {
-			step *= stepReduction
-		}
+			if (step <= tolerance) {
+				return { minimum: current, value, iterations, converged: true }
+			}
 
-		if (step <= tolerance || Math.abs(previousValue - value) <= tolerance) {
-			return { minimum: current, value, iterations, converged: true }
+			step *= stepReduction
 		}
 	}
 

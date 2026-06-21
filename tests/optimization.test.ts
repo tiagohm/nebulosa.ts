@@ -85,6 +85,16 @@ describe('multivariate minimization', () => {
 		expect(result.value).toBeCloseTo(0, 8)
 	})
 
+	test('coordinate descent refines through step reduction', () => {
+		// A large initial step forces several non-improving passes that shrink the step before convergence.
+		const result = coordinateDescent(([x, y]) => (x - 4) ** 2 + (y + 2) ** 2, [0, 0], { initialStep: 64, stepReduction: 0.25 })
+
+		expect(result.converged).toBe(true)
+		expect(result.iterations).toBeGreaterThan(1)
+		expect(result.minimum[0]).toBeCloseTo(4, 6)
+		expect(result.minimum[1]).toBeCloseTo(-2, 6)
+	})
+
 	test('minimizes a coupled function with Powell method', () => {
 		const result = powell(([x, y]) => (1 - x) ** 2 + 100 * (y - x * x) ** 2, [-1.2, 1], { maxIterations: 1000, tolerance: 1e-8, initialStep: 0.5 })
 
