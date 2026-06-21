@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { NumberArray } from '../src/math'
-import { exponentialRegression, chebyshevLeastSquares, hyperbolicRegression, polynomialRegression, powerRegression, quadraticRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
+import { exponentialRegression, chebyshevLeastSquares, hyperbolicRegression, intersect, polynomialRegression, powerRegression, quadraticRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../src/regression'
 
 function chebyshevSeries(x: number, coefficients: Readonly<NumberArray>) {
 	let previous = 1
@@ -135,6 +135,21 @@ describe('theil-sen', () => {
 	})
 })
 
+test('intersect returns null for parallel lines', () => {
+	const a = simpleLinearRegression([0, 1, 2], [0, 1, 2])
+	const b = simpleLinearRegression([0, 1, 2], [1, 2, 3])
+
+	expect(a.slope).toBeCloseTo(b.slope, 12)
+	expect(intersect(a, b)).toBeNull()
+
+	const c = simpleLinearRegression([0, 1, 2], [0, 1, 2])
+	const d = simpleLinearRegression([0, 1, 2], [2, 1, 0])
+	const point = intersect(c, d)
+
+	expect(point).not.toBeNull()
+	expect(point!.x).toBeCloseTo(1, 12)
+})
+
 describe('trend line regression', () => {
 	describe('perfect v-curve with only one minimum point', () => {
 		const x = [1, 2, 3, 4, 9, 8, 7, 6, 5]
@@ -143,15 +158,15 @@ describe('trend line regression', () => {
 		test('simple', () => {
 			const regression = trendLineRegression(x, y)
 
-			expect(regression.intersection.x).toBeCloseTo(5, 8)
-			expect(regression.intersection.y).toBeCloseTo(2, 8)
+			expect(regression.intersection!.x).toBeCloseTo(5, 8)
+			expect(regression.intersection!.y).toBeCloseTo(2, 8)
 		})
 
 		test('theil-sen', () => {
 			const regression = trendLineRegression(x, y, 'theil-sen')
 
-			expect(regression.intersection.x).toBeCloseTo(5, 8)
-			expect(regression.intersection.y).toBeCloseTo(2, 8)
+			expect(regression.intersection!.x).toBeCloseTo(5, 8)
+			expect(regression.intersection!.y).toBeCloseTo(2, 8)
 		})
 	})
 
@@ -162,15 +177,15 @@ describe('trend line regression', () => {
 		test('simple', () => {
 			const regression = trendLineRegression(x, y)
 
-			expect(regression.intersection.x).toBeCloseTo(6, 8)
-			expect(regression.intersection.y).toBeCloseTo(0, 0)
+			expect(regression.intersection!.x).toBeCloseTo(6, 8)
+			expect(regression.intersection!.y).toBeCloseTo(0, 0)
 		})
 
 		test('theil-sen', () => {
 			const regression = trendLineRegression(x, y, 'theil-sen')
 
-			expect(regression.intersection.x).toBeCloseTo(6, 8)
-			expect(regression.intersection.y).toBeCloseTo(0, 8)
+			expect(regression.intersection!.x).toBeCloseTo(6, 8)
+			expect(regression.intersection!.y).toBeCloseTo(0, 8)
 		})
 	})
 })

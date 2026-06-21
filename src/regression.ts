@@ -53,7 +53,8 @@ export interface HyperbolicRegression extends Regression, InverseRegression, Min
 export interface TrendLineRegression extends Regression, MinimumPointRegression {
 	readonly left: LinearRegression
 	readonly right: LinearRegression
-	readonly intersection: Readonly<Point>
+	// Intersection of the left and right trend lines, or null when they are parallel or degenerate.
+	readonly intersection: Readonly<Point> | null
 }
 
 export interface ChebyshevRegression extends Regression {
@@ -509,12 +510,17 @@ export function regressionScore(regression: Regression, x: Readonly<NumberArray>
 	return { r, r2, rss, rmsd }
 }
 
-export function intersect(a: LinearRegression, b: LinearRegression): Readonly<Point> {
-	// Parallel lines do not intersect
-	if (a.slope === b.slope) return { x: 0, y: 0 }
+// Computes the intersection point of two lines, or null when they are parallel or degenerate.
+export function intersect(a: LinearRegression, b: LinearRegression): Readonly<Point> | null {
+	const denominator = a.slope - b.slope
 
-	const x = (b.intercept - a.intercept) / (a.slope - b.slope)
+	// Parallel lines (equal slopes) and degenerate fits (non-finite slope difference) have no intersection.
+	if (denominator === 0 || !Number.isFinite(denominator)) return null
+
+	const x = (b.intercept - a.intercept) / denominator
 	const y = a.slope * x + a.intercept
+
+	if (!Number.isFinite(x) || !Number.isFinite(y)) return null
 
 	return { x, y }
 }
