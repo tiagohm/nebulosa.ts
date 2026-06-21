@@ -314,17 +314,21 @@ function estimateLeastSquaresConditionNumber(design: readonly Readonly<NumberArr
 		return Number.POSITIVE_INFINITY
 	}
 
+	// Eigenvalues at or below this relative threshold are numerically indistinguishable from zero
+	// (the Jacobi noise floor), so a smallest eigenvalue under it signals a rank-deficient matrix.
 	const threshold = maxEigenvalue * 1e-12
 	let minEigenvalue = Number.POSITIVE_INFINITY
 
 	for (let i = 0; i < eigenvalues.length; i++) {
-		const eigenvalue = eigenvalues[i]
-		if (eigenvalue > threshold && eigenvalue < minEigenvalue) {
-			minEigenvalue = eigenvalue
+		if (eigenvalues[i] < minEigenvalue) {
+			minEigenvalue = eigenvalues[i]
 		}
 	}
 
-	return Number.isFinite(minEigenvalue) ? Math.sqrt(maxEigenvalue / minEigenvalue) : Number.POSITIVE_INFINITY
+	// A near-zero (or negative-noise) smallest eigenvalue means an effectively infinite condition number.
+	if (minEigenvalue <= threshold) return Number.POSITIVE_INFINITY
+
+	return Math.sqrt(maxEigenvalue / minEigenvalue)
 }
 
 // Computes the eigenvalues of a symmetric matrix using Jacobi rotations.
