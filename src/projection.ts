@@ -59,7 +59,10 @@ export abstract class AzimuthalProjection implements Projection {
 	project(longitude: Angle, latitude: Angle, out?: Point, options?: ProjectionOptions) {
 		const sinLatitude = Math.sin(latitude)
 		const cosLatitude = Math.cos(latitude)
-		const dLongitude = normalizePI(longitude - this.centerLongitude)
+		// 'west' mirrors the projection about the declination axis (RA increasing to the left), which
+		// is just a sign flip of the longitude delta; only x changes since y/sinC/cosC use cos(dLon).
+		const direction = raAxisDirectionFrom(options, this.options)
+		const dLongitude = direction === 'west' ? normalizePI(this.centerLongitude - longitude) : normalizePI(longitude - this.centerLongitude)
 		const sinDLongitude = Math.sin(dLongitude)
 		const cosDLongitude = Math.cos(dLongitude)
 		const x = cosLatitude * sinDLongitude
@@ -103,7 +106,10 @@ export abstract class AzimuthalProjection implements Projection {
 		const cosC = Math.cos(c)
 		const latitude = Math.asin(clamp(cosC * this.#sCenterLatitude + (py * sinC * this.#cCenterLatitude) / rho, -1, 1))
 		const dLongitude = Math.atan2(px * sinC, rho * this.#cCenterLatitude * cosC - py * this.#sCenterLatitude * sinC)
-		return fillPoint(out, normalizeAngle(this.centerLongitude + dLongitude), latitude)
+		// Undo the 'west' mirror applied in project so the recovered longitude matches the input.
+		const direction = raAxisDirectionFrom(options, this.options)
+		const longitude = direction === 'west' ? this.centerLongitude - dLongitude : this.centerLongitude + dLongitude
+		return fillPoint(out, normalizeAngle(longitude), latitude)
 	}
 }
 

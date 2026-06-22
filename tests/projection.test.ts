@@ -117,6 +117,35 @@ test('azimuthal projections apply linear plane options like cylindrical', () => 
 	expect(withDefaults.project(deg(45), 0, undefined, { scale: 3 })?.x).toBeCloseTo(3, 12)
 })
 
+test('azimuthal projections support an east/west RA flip', () => {
+	const projection = new Stereographic(deg(10), deg(0))
+	const longitude = deg(25) // 15 degrees east of the center
+	const latitude = deg(0)
+
+	const east = projection.project(longitude, latitude, undefined, { raAxisDirection: 'east' })
+	const west = projection.project(longitude, latitude, undefined, { raAxisDirection: 'west' })
+	expect(east).toBeDefined()
+	expect(west).toBeDefined()
+	if (east === undefined || west === undefined) return
+
+	// 'west' mirrors x about the declination axis and leaves y untouched.
+	expect(east.x).toBeGreaterThan(0)
+	expect(west.x).toBeCloseTo(-east.x, 12)
+	expect(west.y).toBeCloseTo(east.y, 12)
+
+	// The flipped projection still round-trips.
+	const unprojected = projection.unproject(west.x, west.y, undefined, { raAxisDirection: 'west' })
+	expect(unprojected).toBeDefined()
+	if (unprojected === undefined) return
+	expect(normalizePI(unprojected.x - longitude)).toBeCloseTo(0, 12)
+	expect(unprojected.y).toBeCloseTo(latitude, 12)
+
+	// Constructor-level direction is honored and overridable per call.
+	const westDefault = new Gnomonic(0, 0, { raAxisDirection: 'west' })
+	expect(westDefault.project(deg(45), 0)?.x).toBeCloseTo(-1, 12)
+	expect(westDefault.project(deg(45), 0, undefined, { raAxisDirection: 'east' })?.x).toBeCloseTo(1, 12)
+})
+
 describe('cylindrical projections round-trip', () => {
 	const points: readonly Point[] = [
 		{ x: 0, y: 0 },
