@@ -48,7 +48,10 @@ export function toParsec(distance: Distance): number {
 	return distance / ONE_PARSEC
 }
 
-const GAS_CONSTANT = 8.31446261815324
+// Gas constant of the 1976 US Standard Atmosphere (J/(mol·K)). Must match the value used by
+// pressureFrom in pressure.ts so fromPressure stays an exact inverse; the modern CODATA value
+// (8.314462618) would break the round-trip by ~0.1 m per several km of altitude.
+const GAS_CONSTANT = 8.31432
 const STANDARD_LAPSE_RATE = 0.0065
 const STANDARD_GRAVITY = 9.80665
 const DRY_AIR_MOLAR_MASS = 0.0289644
