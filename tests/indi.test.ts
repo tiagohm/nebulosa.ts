@@ -5,6 +5,7 @@ import { CameraManager, CoverManager, type DeviceHandler, FlatPanelManager, Focu
 import type { DefSwitchVector, DefTextVector, PropertyState } from '../src/indi.types'
 // oxfmt-ignore
 import { SimpleXmlParser } from '../src/xml'
+import { PI, SIDEREAL_DAYSEC, TAU } from '../src/constants'
 import { downloadPerTag } from './download'
 
 await downloadPerTag('indi')
@@ -222,10 +223,6 @@ describe('write', () => {
 })
 
 describe('meridianTimeIn', () => {
-	const PI = Math.PI
-	const TAU = 2 * PI
-	const SIDEREAL_DAYSEC = 86164.0905
-
 	test('returns seconds until the next upper transit', () => {
 		// On the meridian now -> no remaining time.
 		expect(meridianTimeIn(0, 0)).toBe(0)
@@ -244,7 +241,6 @@ describe('meridianTimeIn', () => {
 })
 
 describe('expectedPierSide', () => {
-	const PI = Math.PI
 	const lst = PI // arbitrary local sidereal time
 
 	test('east of the meridian implies a west pier and vice versa', () => {

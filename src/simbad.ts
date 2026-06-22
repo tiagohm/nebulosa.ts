@@ -245,7 +245,7 @@ export interface SimbadCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'ma
 	readonly id: number // The max id in the Simbad is 28400265 (bigint is unnecessary)
 	readonly epoch: 2000
 	readonly magnitude: number
-	readonly plx?: number
+	readonly parallax?: number
 	readonly type?: SimbadObjectCode
 }
 
@@ -312,6 +312,7 @@ function parseSimbadCatalogRow(row: Readonly<CsvRow>): SimbadCatalogEntry | unde
 
 	const rawPmDEC = parseSimbadNumber(pmDecMasYr)
 	const rawRadialVelocity = parseSimbadNumber(radialVelocityKmS)
+	const parallax = parseSimbadNumber(plx)
 
 	return {
 		id: objectId,
@@ -323,7 +324,7 @@ function parseSimbadCatalogRow(row: Readonly<CsvRow>): SimbadCatalogEntry | unde
 		pmRA,
 		pmDEC: rawPmDEC !== undefined ? mas(rawPmDEC) : undefined,
 		rv: rawRadialVelocity !== undefined ? kilometerPerSecond(rawRadialVelocity) : undefined,
-		plx: parseSimbadNumber(plx),
+		parallax: parallax !== undefined ? mas(parallax) : undefined,
 	}
 }
 
