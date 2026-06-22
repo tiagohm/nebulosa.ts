@@ -1041,7 +1041,7 @@ export class AlpacaServer {
 	#mountGetAltitude(id: number) {
 		const { state, device } = this.#telescope(id)
 		const [, altitude] = equatorialToHorizontal(device.equatorialCoordinate.rightAscension, device.equatorialCoordinate.declination, state.latitude, state.lst)
-		return makeAlpacaResponse(toHour(altitude))
+		return makeAlpacaResponse(toDeg(altitude))
 	}
 
 	#mountGetApertureArea() {
@@ -1063,7 +1063,7 @@ export class AlpacaServer {
 	#mountGetAzimuth(id: number) {
 		const { state, device } = this.#telescope(id)
 		const [azimuth] = equatorialToHorizontal(device.equatorialCoordinate.rightAscension, device.equatorialCoordinate.declination, state.latitude, state.lst)
-		return makeAlpacaResponse(toHour(azimuth))
+		return makeAlpacaResponse(toDeg(azimuth))
 	}
 
 	#mountCanFindHome(id: number) {
@@ -1232,7 +1232,7 @@ export class AlpacaServer {
 	}
 
 	#mountGetSiteLatitude(id: number) {
-		return makeAlpacaResponse(toMeter(this.#telescope(id).device.geographicCoordinate.elevation))
+		return makeAlpacaResponse(toDeg(this.#telescope(id).device.geographicCoordinate.latitude))
 	}
 
 	#mountSetSiteLatitude(id: number, data: { SiteLatitude: string }) {
@@ -1243,7 +1243,7 @@ export class AlpacaServer {
 	}
 
 	#mountGetSiteLongitude(id: number) {
-		return makeAlpacaResponse(toMeter(this.#telescope(id).device.geographicCoordinate.elevation))
+		return makeAlpacaResponse(toDeg(this.#telescope(id).device.geographicCoordinate.longitude))
 	}
 
 	#mountSetSiteLongitude(id: number, data: { SiteLongitude: string }) {
@@ -1589,7 +1589,6 @@ export class AlpacaServer {
 		if (isCamera(device)) {
 			state.frame = [device.frame.x.value, device.frame.y.value, device.frame.width.value, device.frame.height.value]
 		} else if (isMount(device)) {
-			const state = structuredClone(DEFAULT_ALPACA_DEVICE_STATE)
 			Object.assign(state, device.geographicCoordinate)
 			Object.assign(state, device.equatorialCoordinate)
 		}
