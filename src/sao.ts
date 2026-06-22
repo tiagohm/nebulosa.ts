@@ -102,6 +102,11 @@ export async function* readSaoCatalog(source: Source, bigEndian: boolean): Async
 		const declination = readDouble()
 		const spType = readString(2)
 		const magnitude = readShort() / 100
+		// The SAO binary catalog stores XRPM/XDPM as the coordinate rates dα/dt and dδ/dt in radians/year.
+		// XRPM is already dα/dt (no cosδ factor), matching what StarCatalogEntry.pmRA and ERFA's star
+		// routines expect, so unlike μα·cosδ catalogs (hyg, simbad, ucac4, vizier) it must NOT be divided
+		// by cosδ. Verified against SAO 62738 (Groombridge 1830): stored dα/dt·cosδ ≈ 4004 mas/yr matches
+		// the catalogued μα·cosδ.
 		const pmRA = mprop ? readFloat() : undefined
 		const pmDEC = mprop ? readFloat() : undefined
 
