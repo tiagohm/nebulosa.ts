@@ -172,7 +172,13 @@ export class Matrix {
 	// Checks if the matrix is singular (determinant is zero).
 	// A singular matrix cannot be inverted.
 	get isSingular() {
-		return this.isSquare && new LuDecomposition(this).isSingular
+		if (!this.isSquare) return false
+		// For small matrices the direct determinant is exact and far cheaper than
+		// building an LU decomposition. For larger matrices a zero pivot from LU is
+		// more reliable than testing the determinant product (which can over/underflow)
+		// against zero.
+		if (this.rows <= 3) return this.determinant === 0
+		return new LuDecomposition(this).isSingular
 	}
 
 	// Computes the trace of the matrix.
@@ -187,6 +193,8 @@ export class Matrix {
 	}
 
 	// Computes the inverse of the matrix.
+	// Throws if the matrix is not square or is singular.
+	// Supports in-place inversion (o === this); source values are captured before writing.
 	invert(o?: Matrix) {
 		o ??= new Matrix(this.rows, this.cols)
 		checkMatrixShape(o, this.rows, this.cols)
@@ -195,13 +203,63 @@ export class Matrix {
 			throw new Error('matrix must be square to compute inverse')
 		}
 
-		const lu = new LuDecomposition(this)
+		const data = this.data
+		const output = o.data
 
-		if (lu.isSingular) {
-			throw new Error('matrix is singular and cannot be inverted')
+		// Direct inversion for small matrices avoids the cost of an LU decomposition
+		// (a full clone plus O(n³) elimination and substitution).
+		if (this.rows === 1) {
+			const a = data[0]
+			if (a === 0) throw new Error('matrix is singular and cannot be inverted')
+			output[0] = 1 / a
+			return o
+		} else if (this.rows === 2) {
+			const a = data[0]
+			const b = data[1]
+			const c = data[2]
+			const d = data[3]
+			const det = a * d - b * c
+			if (det === 0) throw new Error('matrix is singular and cannot be inverted')
+			const invDet = 1 / det
+			output[0] = d * invDet
+			output[1] = -b * invDet
+			output[2] = -c * invDet
+			output[3] = a * invDet
+			return o
+		} else if (this.rows === 3) {
+			const a = data[0]
+			const b = data[1]
+			const c = data[2]
+			const d = data[3]
+			const e = data[4]
+			const f = data[5]
+			const g = data[6]
+			const h = data[7]
+			const i = data[8]
+
+			// Cofactors of the first column, reused for the determinant.
+			const a00 = e * i - f * h
+			const a10 = f * g - d * i
+			const a20 = d * h - e * g
+			const det = a * a00 + b * a10 + c * a20
+			if (det === 0) throw new Error('matrix is singular and cannot be inverted')
+			const invDet = 1 / det
+
+			// Inverse is the transpose of the cofactor matrix divided by the determinant.
+			output[0] = a00 * invDet
+			output[1] = (c * h - b * i) * invDet
+			output[2] = (b * f - c * e) * invDet
+			output[3] = a10 * invDet
+			output[4] = (a * i - c * g) * invDet
+			output[5] = (c * d - a * f) * invDet
+			output[6] = a20 * invDet
+			output[7] = (b * g - a * h) * invDet
+			output[8] = (a * e - b * d) * invDet
+			return o
 		}
 
-		return lu.invert(o)
+		// lu.invert throws when the matrix is singular.
+		return new LuDecomposition(this).invert(o)
 	}
 
 	// Computes the negation of the matrix.
@@ -741,8 +799,12 @@ function hypotenuse(a: number, b: number) {
 	}
 }
 
-// Solves a system of linear equations using Gaussian elimination
-// A is a matrix of coefficients, b is a vector of constants
+// Solves a system of linear equations using Gaussian elimination with partial pivoting.
+// A is the square matrix of coefficients, B is the vector of constants.
+// WARNING: mutates A.data and B in place (row swaps, pivot scaling, and elimination), so pass
+// copies if the originals must be preserved. Passing B as `o` to solve in place is supported.
+// The solution is written to `o` (or a new Float64Array) and returned.
+// When A is singular (a fully zero pivot column is found), the output is filled with NaN.
 // https://en.wikipedia.org/wiki/Gaussian_elimination
 export function gaussianElimination(A: Matrix, B: NumberArray, o?: NumberArray) {
 	if (!A.isSquare) {
