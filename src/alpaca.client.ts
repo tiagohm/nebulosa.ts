@@ -1957,6 +1957,8 @@ class AlpacaApiRunner {
 			this.#endpoints.splice(index, 1)
 			this.#enabled.splice(index, 1)
 			this.#result.splice(index, 1)
+			this.#interval.splice(index, 1)
+			this.#count.splice(index, 1)
 		}
 	}
 
