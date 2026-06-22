@@ -127,7 +127,14 @@ export class AstrometryNet implements Disposable {
 
 	#load() {
 		this.#pointer = this.#lib.solver_new()!
-		if (this.#pointer) return
+
+		if (this.#pointer) {
+			// #reset() disposes then reloads, so clear the disposed flag or a reused instance would
+			// fail #assertOpen on the next solve.
+			this.#disposed = false
+			return
+		}
+
 		throw new Error('failed to create astrometry.net solver')
 	}
 
