@@ -94,7 +94,7 @@ test.skipIf(SKIP)('vizier', async () => {
 })
 
 describe.serial.skipIf(SKIP)('vizier gaia catalog', () => {
-	const catalog = new VizierGaiaCatalog()
+	const catalog = new VizierGaiaCatalog({ timeout: 2000 })
 	const sourceId = '5271055243163629056'
 	const centerRA = 2.1734891657691073
 	const centerDEC = -1.1922867981518974
