@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { FitsKeywordReader, FitsKeywordWriter } from '../src/fits'
-import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readUntil } from '../src/io'
+import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readUntil, type Source } from '../src/io'
 
 test('bufferSink', () => {
 	const buffer = Buffer.allocUnsafe(16)
@@ -319,6 +319,57 @@ describe('base64', () => {
 
 			expect(n).toBe(i)
 			expect(raw.subarray(0, n)).toEqual(output.subarray(0, n))
+		}
+	})
+
+	// A 4-char base64 group may straddle a refill boundary when the input contains
+	// whitespace (PEM/MIME line wrapping) or when the backing source yields chunks whose
+	// size is not a multiple of 4. The decoder must keep the partial group across refills.
+	test('decodes line-wrapped input crossing the fill boundary', async () => {
+		const raw = Buffer.allocUnsafe(2000)
+		for (let i = 0; i < raw.byteLength; i++) raw[i] = i & 0xff
+
+		const base64 = raw.toString('base64')
+		let wrapped = ''
+		for (let i = 0; i < base64.length; i += 64) wrapped += `${base64.slice(i, i + 64)}\n`
+
+		const out = Buffer.allocUnsafe(raw.byteLength)
+		const n = await readUntil(base64Source(wrapped), out, raw.byteLength)
+
+		expect(n).toBe(raw.byteLength)
+		expect(out.subarray(0, n)).toEqual(raw)
+	})
+
+	test('decodes a source yielding non-multiple-of-4 chunks', async () => {
+		const raw = Buffer.allocUnsafe(2000)
+		for (let i = 0; i < raw.byteLength; i++) raw[i] = (i * 7) & 0xff
+
+		const encoded = Buffer.from(raw.toString('base64'), 'ascii')
+
+		// Source that hands out at most `chunk` bytes per read to force misaligned refills.
+		class ChunkedSource implements Source {
+			#pos = 0
+
+			constructor(
+				readonly data: Buffer,
+				readonly chunk: number,
+			) {}
+
+			read(buffer: Buffer, offset = 0, size = buffer.byteLength - offset) {
+				const m = Math.min(size, this.chunk, this.data.byteLength - this.#pos)
+				if (m <= 0) return 0
+				this.data.copy(buffer, offset, this.#pos, this.#pos + m)
+				this.#pos += m
+				return m
+			}
+		}
+
+		for (const chunk of [1, 2, 3, 5, 1023]) {
+			const out = Buffer.allocUnsafe(raw.byteLength)
+			const n = await readUntil(base64Source(new ChunkedSource(encoded, chunk)), out, raw.byteLength)
+
+			expect(n).toBe(raw.byteLength)
+			expect(out.subarray(0, n)).toEqual(raw)
 		}
 	})
 
