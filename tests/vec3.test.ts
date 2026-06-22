@@ -66,7 +66,12 @@ test('cross', () => {
 })
 
 test('vecPolarAngle', () => {
+	expect(vecPolarAngle([0, 0, 1])).toBe(0)
 	expect(vecPolarAngle([0, 0, -1])).toBe(PI)
+	expect(vecPolarAngle([1, 0, 0])).toBe(PI / 2)
+	// Must handle non-unit vectors (acos(2) would be NaN).
+	expect(vecPolarAngle([0, 0, 2])).toBe(0)
+	expect(vecPolarAngle([10, 0, 0])).toBe(PI / 2)
 })
 
 test('vecLatitude', () => {

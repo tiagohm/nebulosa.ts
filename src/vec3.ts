@@ -102,9 +102,11 @@ export function vecZAxis(): MutVec3 {
 	return [0, 0, 1]
 }
 
-// Computes the polar angle/colatitude of the vector.
-export function vecPolarAngle(v: Vec3) {
-	return Math.acos(v[2])
+// Computes the polar angle (colatitude) of the vector, measured from the +z axis, in radians [0, PI].
+// Uses atan2 so it is stable at the poles and valid for any non-zero vector, not only unit vectors;
+// acos(z) would return NaN when |z| > 1 from rounding error or from an unnormalized input.
+export function vecPolarAngle(v: Vec3): Angle {
+	return Math.atan2(Math.hypot(v[0], v[1]), v[2])
 }
 
 // Computes the latitude of the vector.
