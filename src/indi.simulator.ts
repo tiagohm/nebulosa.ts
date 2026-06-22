@@ -2522,7 +2522,7 @@ export class CameraSimulator extends DeviceSimulator {
 			const latitude = mount.geographicCoordinate.latitude
 			const longitude = mount.geographicCoordinate.longitude
 
-			if (elements.PAE_AZ.value > 0 || elements.PAE_AL.value > 0) {
+			if (elements.PAE_AZ.value !== 0 || elements.PAE_AL.value !== 0) {
 				;[centerRightAscension, centerDeclination] = polarAlignmentError(centerRightAscension!, centerDeclination!, latitude, this.#siderealTime(now, longitude), elements.PAE_AZ.value * ASEC2RAD, elements.PAE_AL.value * ASEC2RAD)
 			}
 
