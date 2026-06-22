@@ -160,12 +160,12 @@ export class Jpeg {
 
 		const isGray = format === 'GRAY'
 		const pitch = width * PIXEL_FORMAT_MAP[format][1]
-		let flag = FASTDCT
+		// Always disable TurboJPEG (re)allocation: the destination is a JS-owned Buffer (whether
+		// caller-supplied or allocated here) that TurboJPEG must never realloc or free. A too-small
+		// buffer then fails gracefully (tjCompress2 returns an error) instead of corrupting the heap.
+		const flag = FASTDCT | NOREALLOC
 
-		if (jpeg === undefined) {
-			jpeg = Buffer.allocUnsafe(this.estimateBufferSize(width, height, chrominanceSubsampling))
-			flag |= NOREALLOC
-		}
+		jpeg ??= Buffer.allocUnsafe(this.estimateBufferSize(width, height, chrominanceSubsampling))
 
 		const p = new BigInt64Array(2)
 		p[0] = BigInt(ptr(jpeg)) // ubyte** jpegBuf
