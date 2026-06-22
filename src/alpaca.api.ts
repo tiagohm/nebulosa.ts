@@ -191,7 +191,7 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 	}
 
 	hasShutter(id: number) {
-		return request<number>(this.url, `${id}/hasshutter`, 'GET')
+		return request<boolean>(this.url, `${id}/hasshutter`, 'GET')
 	}
 
 	getHeatSinkTemperature(id: number) {
@@ -616,8 +616,8 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 		return request<boolean>(this.url, `${id}/canmoveaxis?Axis=${Axis}`, 'GET')
 	}
 
-	getDestinationSideOfPier(id: number) {
-		return request<number>(this.url, `${id}/destinationsideofpier`, 'GET')
+	getDestinationSideOfPier(id: number, RightAscension: number, Declination: number) {
+		return request<AlpacaTelescopePierSide>(this.url, `${id}/destinationsideofpier?RightAscension=${RightAscension}&Declination=${Declination}`, 'GET')
 	}
 
 	findHome(id: number) {
@@ -837,7 +837,7 @@ export class AlpacaRotatorApi extends AlpacaDeviceApi {
 	}
 
 	getStepSize(id: number) {
-		return request<boolean>(this.url, `${id}/stepsize`, 'GET')
+		return request<number>(this.url, `${id}/stepsize`, 'GET')
 	}
 
 	getTargetPosition(id: number) {
