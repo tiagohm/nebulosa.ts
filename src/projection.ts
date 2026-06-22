@@ -284,8 +284,10 @@ export class CylindricalEqualArea extends CylindricalProjection {
 	}
 
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
-		const longitude = longitudeFromLambda(lambda * this.cosStandardParallel, options, this.options)
-		return longitude === undefined ? undefined : projectPoint(out, longitude, (Math.sin(phi) - Math.sin(this.latitudeOfOrigin)) / this.cosStandardParallel, options, this.options)
+		// Wrap the longitude delta first, then apply the standard-parallel scale, so a non-zero
+		// central meridian round-trips (scaling lambda before subtracting it does not).
+		const longitude = longitudeFromLambda(lambda, options, this.options)
+		return longitude === undefined ? undefined : projectPoint(out, longitude * this.cosStandardParallel, (Math.sin(phi) - Math.sin(this.latitudeOfOrigin)) / this.cosStandardParallel, options, this.options)
 	}
 
 	unproject(x: number, y: number, out?: Point, options?: ProjectionOptions) {
@@ -341,17 +343,19 @@ export class CylindricalStereographic extends CylindricalProjection {
 	}
 
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
-		const longitude = longitudeFromLambda(lambda * this.cosStandardParallel, options, this.options)
+		// Wrap the longitude delta first, then apply the standard-parallel scale, so a non-zero
+		// central meridian round-trips (scaling lambda before subtracting it does not).
+		const longitude = longitudeFromLambda(lambda, options, this.options)
 		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE)
 		if (latitude === undefined) return undefined
-		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude, (1 + this.cosStandardParallel) * Math.tan(latitude / 2), options, this.options)
+		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude * this.cosStandardParallel, (1 + this.cosStandardParallel) * Math.tan(latitude / 2), options, this.options)
 	}
 
 	unproject(x: number, y: number, out?: Point, options?: ProjectionOptions) {
 		out = unprojectPoint(out, x, y, options, this.options)
 		if (out === undefined) return undefined
 
-		const longitude = longitudeFromDelta(out.x / this.cosStandardParallel, this.options)
+		const longitude = longitudeFromDelta(out.x / this.cosStandardParallel, options, this.options)
 		if (longitude === undefined) return undefined
 
 		const yLimit = 1 + this.cosStandardParallel

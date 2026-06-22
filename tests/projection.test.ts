@@ -138,6 +138,39 @@ describe('cylindrical projections round-trip', () => {
 	}
 })
 
+test('standard-parallel projections round-trip with a non-zero central meridian', () => {
+	// These previously failed: the equal-area and stereographic projects scaled the longitude by
+	// cos(standardParallel) before subtracting the central meridian, and the stereographic inverse
+	// dropped the per-call options. Both break the round-trip unless the central meridian is zero.
+	const samples: Point[] = [
+		{ x: deg(10), y: deg(20) },
+		{ x: deg(-30), y: deg(-15) },
+		{ x: deg(120), y: deg(40) },
+	]
+
+	const cases = [
+		{ projection: new CylindricalEqualArea(deg(30)), options: { centralMeridian: deg(45) } },
+		{ projection: new GallPeters(), options: { centralMeridian: deg(60) } },
+		{ projection: new CylindricalStereographic(deg(20)), options: { centralMeridian: deg(10) } },
+		{ projection: new Braun(), options: { centralMeridian: deg(45) } },
+	] as const
+
+	for (const { projection, options } of cases) {
+		for (const point of samples) {
+			const projected = projection.project(point.x, point.y, undefined, options)
+			expect(projected).toBeDefined()
+			if (projected === undefined) continue
+
+			const unprojected = projection.unproject(projected.x, projected.y, undefined, options)
+			expect(unprojected).toBeDefined()
+			if (unprojected === undefined) continue
+
+			expect(normalizePI(unprojected.x - point.x)).toBeCloseTo(0, 12)
+			expect(unprojected.y).toBeCloseTo(point.y, 12)
+		}
+	}
+})
+
 describe('cylindrical projections match expected known values', () => {
 	const projections = [
 		{ name: 'plateCarree', projection: new PlateCarree(0, { centralMeridian: deg(10) }), longitude: deg(20), latitude: deg(30), x: deg(10), y: deg(30) },
