@@ -46,6 +46,7 @@ export abstract class AzimuthalProjection implements Projection {
 	constructor(
 		readonly centerLongitude: Angle,
 		readonly centerLatitude: Angle,
+		readonly options?: ProjectionOptions,
 	) {
 		this.#sCenterLatitude = Math.sin(centerLatitude)
 		this.#cCenterLatitude = Math.cos(centerLatitude)
@@ -55,7 +56,7 @@ export abstract class AzimuthalProjection implements Projection {
 
 	protected abstract angularDistance(rho: number): number | false
 
-	project(longitude: Angle, latitude: Angle, out?: Point) {
+	project(longitude: Angle, latitude: Angle, out?: Point, options?: ProjectionOptions) {
 		const sinLatitude = Math.sin(latitude)
 		const cosLatitude = Math.cos(latitude)
 		const dLongitude = normalizePI(longitude - this.centerLongitude)
@@ -66,9 +67,11 @@ export abstract class AzimuthalProjection implements Projection {
 		const sinC = Math.hypot(x, y)
 		const cosC = this.#sCenterLatitude * sinLatitude + this.#cCenterLatitude * cosLatitude * cosDLongitude
 
+		// Apply the shared linear plane transform (scale, radius, false easting/northing, y-axis
+		// direction) the same way the cylindrical projections do, instead of emitting raw units.
 		if (sinC <= GEOMETRY_EPSILON) {
 			if (cosC < 0) return undefined
-			return fillPoint(out, 0, 0)
+			return projectPoint(out, 0, 0, options, this.options)
 		}
 
 		const rho = this.radialDistance(sinC, cosC)
@@ -77,21 +80,29 @@ export abstract class AzimuthalProjection implements Projection {
 
 		const scale = rho / sinC
 
-		return fillPoint(out, x * scale, y * scale)
+		return projectPoint(out, x * scale, y * scale, options, this.options)
 	}
 
 	unproject(x: number, y: number, out?: Point, options?: ProjectionOptions) {
-		if (x === 0 && y === 0) return fillPoint(out, 0, this.centerLatitude)
+		// Undo the linear plane transform first, then invert the spherical geometry on the
+		// normalized coordinates.
+		out = unprojectPoint(out, x, y, options, this.options)
+		if (out === undefined) return undefined
 
-		const rho = Math.hypot(x, y)
+		const px = out.x
+		const py = out.y
+
+		if (px === 0 && py === 0) return fillPoint(out, normalizeAngle(this.centerLongitude), this.centerLatitude)
+
+		const rho = Math.hypot(px, py)
 		const c = this.angularDistance(rho)
 
 		if (c === false) return undefined
 
 		const sinC = Math.sin(c)
 		const cosC = Math.cos(c)
-		const latitude = Math.asin(clamp(cosC * this.#sCenterLatitude + (y * sinC * this.#cCenterLatitude) / rho, -1, 1))
-		const dLongitude = Math.atan2(x * sinC, rho * this.#cCenterLatitude * cosC - y * this.#sCenterLatitude * sinC)
+		const latitude = Math.asin(clamp(cosC * this.#sCenterLatitude + (py * sinC * this.#cCenterLatitude) / rho, -1, 1))
+		const dLongitude = Math.atan2(px * sinC, rho * this.#cCenterLatitude * cosC - py * this.#sCenterLatitude * sinC)
 		return fillPoint(out, normalizeAngle(this.centerLongitude + dLongitude), latitude)
 	}
 }

@@ -90,6 +90,33 @@ test('azimuthal projection singularities and inverse domains are rejected', () =
 	expect(new AzimuthalEquidistant(0, 0).unproject(PI + 0.000001, 0)).toBeUndefined()
 })
 
+test('azimuthal projections apply linear plane options like cylindrical', () => {
+	const projection = new Stereographic(deg(10), deg(-20))
+	const options = { scale: 100, radius: 2, falseEasting: 5, falseNorthing: -7, yAxisDirection: 'southUp' } as const
+
+	// The projection center maps to (falseEasting, falseNorthing) instead of the raw origin.
+	const center = projection.project(deg(10), deg(-20), undefined, options)
+	expect(center?.x).toBeCloseTo(5, 12)
+	expect(center?.y).toBeCloseTo(-7, 12)
+
+	// The full linear transform (scale, radius, false offsets, y-axis flip) round-trips.
+	const projected = projection.project(deg(11.5), deg(-19.25), undefined, options)
+	expect(projected).toBeDefined()
+	if (projected === undefined) return
+
+	const unprojected = projection.unproject(projected.x, projected.y, undefined, options)
+	expect(unprojected).toBeDefined()
+	if (unprojected === undefined) return
+
+	expect(normalizePI(unprojected.x - deg(11.5))).toBeCloseTo(0, 11)
+	expect(unprojected.y).toBeCloseTo(deg(-19.25), 11)
+
+	// Constructor options are honored and overridden by per-call options.
+	const withDefaults = new Gnomonic(0, 0, { scale: 10 })
+	expect(withDefaults.project(deg(45), 0)?.x).toBeCloseTo(10, 12)
+	expect(withDefaults.project(deg(45), 0, undefined, { scale: 3 })?.x).toBeCloseTo(3, 12)
+})
+
 describe('cylindrical projections round-trip', () => {
 	const points: readonly Point[] = [
 		{ x: 0, y: 0 },
