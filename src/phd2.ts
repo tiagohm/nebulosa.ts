@@ -443,7 +443,7 @@ export class PHD2Client implements Disposable {
 
 	dither(amount: number, raOnly: boolean = false, settle: Partial<PHD2Settle> = DEFAULT_PHD2_SETTLE) {
 		settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
-		return this.send<number>('shutdown', { amount, raOnly, settle })
+		return this.send<number>('dither', { amount, raOnly, settle })
 	}
 
 	flipCalibration() {
@@ -597,8 +597,8 @@ export class PHD2Client implements Disposable {
 	}
 
 	setLockShiftParams(params: PartialOnly<Omit<Writable<PHD2LockShiftParams>, 'enabled'>, 'units'>) {
-		params.units ||= params.axes === 'RA/Dec' ? 'arcsec/hr' : 'pixels/hr'
-		return this.send<number>('set_lock_shift_params', params)
+		const units = params.units || (params.axes === 'RA/Dec' ? 'arcsec/hr' : 'pixels/hr')
+		return this.send<number>('set_lock_shift_params', { ...params, units })
 	}
 
 	setPaused(paused: boolean, full: boolean = true) {
