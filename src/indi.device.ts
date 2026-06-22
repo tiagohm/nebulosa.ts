@@ -1,5 +1,5 @@
 import { type Angle, normalizeAngle, toHour } from './angle'
-import { DAYSEC, SIDEREAL_DAYSEC } from './constants'
+import { SIDEREAL_DAYSEC, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import type { Point } from './geometry'
 import type { CfaPattern } from './image.types'
@@ -585,7 +585,10 @@ export function expectedPierSide(rightAscension: Angle, declination: Angle, lst:
 	return (toHour(rightAscension - lst) + 24) % 24 < 12 ? 'WEST' : 'EAST'
 }
 
-// Remaining time to meridian
+// Remaining clock time, in seconds, until the object next transits the upper meridian.
+// The hour angle advances TAU radians per sidereal day (SIDEREAL_DAYSEC seconds), so the
+// normalized angle the LST must still advance (RA - LST, wrapped to [0, TAU)) maps to
+// seconds by angle / TAU * SIDEREAL_DAYSEC.
 export function meridianTimeIn(rightAscension: Angle, lst: Angle) {
-	return normalizeAngle(rightAscension - lst) * (SIDEREAL_DAYSEC / DAYSEC)
+	return (normalizeAngle(rightAscension - lst) / TAU) * SIDEREAL_DAYSEC
 }
