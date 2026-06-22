@@ -43,7 +43,10 @@ function processRow(row: CsvRow): HygCatalogEntry {
 	const spType = row[15] || undefined
 	const rightAscension = +row[23]
 	const declination = +row[24]
-	const pmRA = +row[25]
+	// HYG's pmrarad is μα·cosδ (proper motion on the sky), but StarCatalogEntry.pmRA and ERFA's star
+	// routines expect dα/dt, so divide out cosδ as ucac4 and simbad do. Guard the pole where cosδ → 0.
+	const cosDec = Math.cos(declination)
+	const pmRA = Math.abs(cosDec) > 1e-9 ? +row[25] / cosDec : 0
 	const pmDEC = +row[26]
 	const bayer = row[27] || undefined
 	const flamsteed = +row[28]
