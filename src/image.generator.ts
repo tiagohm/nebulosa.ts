@@ -388,6 +388,11 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 	const sharedReadNoiseSigma = Math.sqrt(clamp(resolved.channelCorrelation, 0, 1))
 	const independentReadNoiseSigma = Math.sqrt(Math.max(0, 1 - sharedReadNoiseSigma * sharedReadNoiseSigma))
 
+	// Pixel-invariant sky and dark-current terms. These depend only on the resolved config, so
+	// evaluating them inside the per-pixel loop wasted a pow plus several multiplies on every pixel.
+	const { baseSkyElectrons, diffuseBoost } = computeSkyInvariants(resolved)
+	const darkCurrentElectrons = evaluateDarkCurrentElectrons(resolved)
+
 	const spatial: SkySpatialFields = { sharedSkyElectrons: 0, lightPollutionElectrons: 0, moonElectrons: 0, ampGlowElectrons: 0 }
 	const defect: SensorDefect = { signalScale: 0, extraSignalElectrons: 0, kind: 0 }
 
@@ -400,7 +405,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 			const pixelIndex = rowBase + x
 			const xc = xCentered[x]
 			const columnStructuredElectrons = columnNoise[x] + columnBanding[x]
-			evaluateSkySpatialFields(xc, yc, resolved, spatial)
+			evaluateSkySpatialFields(xc, yc, resolved, baseSkyElectrons, diffuseBoost, spatial)
 			sampleSensorDefect(resolved, random, defect)
 
 			if (defect.kind === 1) hotPixelCount++
@@ -410,7 +415,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 			const fixedPatternGain = 1 + resolved.fixedPatternNoiseStrength * sampleGaussian(random, gaussianState)
 			const dsnuGain = 1 + resolved.darkSignalNonUniformity * sampleGaussian(random, gaussianState)
 			const skyElectrons = Math.max(0, spatial.sharedSkyElectrons)
-			const darkElectrons = Math.max(0, evaluateDarkCurrentElectrons(resolved) * dsnuGain)
+			const darkElectrons = Math.max(0, darkCurrentElectrons * dsnuGain)
 			const ampGlowElectrons = spatial.ampGlowElectrons
 			const sharedReadNoise = sampleGaussian(random, gaussianState) * sharedReadNoiseSigma
 
@@ -601,17 +606,25 @@ function resolveAstronomicalImageNoiseConfig(raw: ImageRawType, width: number, h
 	}
 }
 
-// Evaluates the smooth sky, moon, light-pollution, and amp-glow fields for a pixel.
-function evaluateSkySpatialFields(xc: number, yc: number, config: ResolvedAstronomicalImageNoiseConfig, out: SkySpatialFields): SkySpatialFields {
-	const radius2 = xc * xc + yc * yc
-	const linearGradient = (xc * config.skyGradientCos + yc * config.skyGradientSin) * 2
-	const lowFrequency = evaluateLowFrequencyVariation(xc, yc, config)
-	const horizonFactor = clamp(1 - (yc + 0.5), 0, 1)
+// Precomputes the pixel-invariant sky brightness scale and diffuse-boost factor once per image.
+// Both depend only on the resolved config; computing them per pixel wasted a pow plus several
+// multiplies. The expressions are kept identical so the result is bit-for-bit unchanged.
+function computeSkyInvariants(config: ResolvedAstronomicalImageNoiseConfig) {
 	const atmosphericPathScale = Math.max(0.35, config.airmass) ** 0.38
 	const transparencyScale = 0.35 + 0.65 * clamp(config.transparency, 0, 1.5)
 	const naturalSkyScale = 1 + config.airglowStrength + config.zodiacalLightFactor * 0.55 + config.milkyWayBackgroundFactor * 0.35 + config.humidity * 0.12
 	const diffuseBoost = 1 + config.haze * 0.9 + config.humidity * 0.35 + config.thinCloudVeil * 1.6
 	const baseSkyElectrons = config.skyEnabled ? config.skyBaseRate * config.exposureTime * atmosphericPathScale * transparencyScale * naturalSkyScale : 0
+	return { baseSkyElectrons, diffuseBoost } as const
+}
+
+// Evaluates the smooth sky, moon, light-pollution, and amp-glow fields for a pixel. The
+// pixel-invariant baseSkyElectrons and diffuseBoost are precomputed once via computeSkyInvariants.
+function evaluateSkySpatialFields(xc: number, yc: number, config: ResolvedAstronomicalImageNoiseConfig, baseSkyElectrons: number, diffuseBoost: number, out: SkySpatialFields): SkySpatialFields {
+	const radius2 = xc * xc + yc * yc
+	const linearGradient = (xc * config.skyGradientCos + yc * config.skyGradientSin) * 2
+	const lowFrequency = evaluateLowFrequencyVariation(xc, yc, config)
+	const horizonFactor = clamp(1 - (yc + 0.5), 0, 1)
 	const skyField = Math.max(0, 1 + config.skyGlobalOffset + config.skyGradientStrength * linearGradient + config.skyRadialGradientStrength * radius2 + config.skyLowFrequencyVariationStrength * lowFrequency)
 	const sharedNaturalSkyElectrons = Math.max(0, baseSkyElectrons * skyField)
 
