@@ -129,6 +129,33 @@ describe('parseXml', () => {
 	})
 })
 
+describe('manager replay', () => {
+	// Replays the recorded session offline (no live server) so the camera state is exercised in CI.
+	test('applies the range carried by a set vector (IUUpdateMinMax)', () => {
+		const camera = new CameraManager()
+		const handler: IndiClientHandler = {
+			textVector: (c, m, t) => camera.textVector(c, m, t),
+			numberVector: (c, m, t) => camera.numberVector(c, m, t),
+			switchVector: (c, m, t) => camera.switchVector(c, m, t),
+			delProperty: (c, m) => camera.delProperty(c, m),
+		}
+
+		const client = new IndiClient({ handler })
+		client.parse(Buffer.from(text, 'ascii'))
+
+		const device = camera.get(client, 'CCD Simulator')!
+
+		// CCD_FRAME is defined once with max=0 and only refined through set vectors whose
+		// oneNumber elements carry the real range. The value must not be clamped to [0, 0].
+		expect(device.frame.width.value).toBe(1280)
+		expect(device.frame.height.value).toBe(1024)
+		expect(device.frame.width.max).toBe(1280)
+		expect(device.frame.height.max).toBe(1024)
+		expect(device.frame.x.max).toBe(1279)
+		expect(device.frame.y.max).toBe(1023)
+	})
+})
+
 describe('parse', () => {
 	const client = new IndiClient()
 

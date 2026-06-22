@@ -269,6 +269,10 @@ export interface OneText {
 export interface OneNumber {
 	name: string
 	value: number
+	// A set vector may carry an updated range (INDI's IUUpdateMinMax). Present together or not at all.
+	min?: number
+	max?: number
+	step?: number
 }
 
 // One member of a Switch vector.

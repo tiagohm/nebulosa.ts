@@ -2235,19 +2235,23 @@ function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | O
 
 	let update = false
 
-	if (tag[0] === 'd') {
-		const { min, max, step } = element as DefNumber
+	// Bounds arrive on a def vector and, per INDI's IUUpdateMinMax, may also arrive on a set
+	// vector's oneNumber. Read them whenever the range is present and meaningful (max !== 0).
+	const { min, max, step } = element as DefNumber
 
-		if (max !== 0) {
-			update = min !== property.min || max !== property.max || step !== property.step
+	if ((tag[0] === 'd' || max !== undefined) && max !== 0) {
+		if (min !== property.min || max !== property.max || step !== property.step) {
 			property.min = min
 			property.max = max
 			property.step = step
+			update = true
 		}
 	}
 
 	if (property.value !== element.value) {
-		property.value = Math.max(property.min, Math.min(element.value, property.max))
+		// Clamp only when a real range is known; otherwise keep the reported value as-is so a
+		// still-unbounded property (max === 0) is not forced to zero.
+		property.value = property.max > property.min ? Math.max(property.min, Math.min(element.value, property.max)) : element.value
 		update = true
 	}
 
