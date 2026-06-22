@@ -11,7 +11,9 @@ export function open() {
 		wcspih: { args: ['buffer', 'int', 'int', 'int', 'ptr', 'ptr', 'ptr'], returns: 'int' },
 		wcsp2s: { args: ['usize', 'int', 'int', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'], returns: 'int' },
 		wcss2p: { args: ['usize', 'int', 'int', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'], returns: 'int' },
-		wcsfree: { args: ['usize'], returns: 'int' },
+		// int wcsvfree(int *nwcs, struct wcsprm **wcs): frees the wcsprm array allocated by wcspih,
+		// including the calloc'd container that plain wcsfree leaves behind.
+		wcsvfree: { args: ['ptr', 'ptr'], returns: 'int' },
 	})
 }
 
@@ -46,10 +48,15 @@ export class Wcs implements Disposable {
 			const wcsprm = ptr(mem, 8)
 			const ret = this.#lib.wcspih(buffer, n, 0x000fffff, 0, nreject, nwcs, wcsprm)
 
-			if (ret === 0 && read.i32(nwcs) === 1) {
-				this[Symbol.dispose]()
-				this.#pointer = read.ptr(wcsprm) as Pointer
-				return true
+			if (ret === 0) {
+				if (read.i32(nwcs) === 1) {
+					this[Symbol.dispose]()
+					this.#pointer = read.ptr(wcsprm) as Pointer
+					return true
+				}
+
+				// wcspih allocated WCS structs we won't keep (0 or >1); release them to avoid a leak.
+				this.#lib.wcsvfree(nwcs, wcsprm)
 			}
 		}
 
@@ -108,7 +115,13 @@ export class Wcs implements Disposable {
 
 	[Symbol.dispose]() {
 		if (this.#pointer) {
-			this.#lib.wcsfree(this.#pointer)
+			// Free both the wcsprm internals and the calloc'd array container from wcspih. nwcs is 1
+			// (load only keeps the single-WCS case) and the wcsprm pointer is written into the slot
+			// that wcsvfree dereferences and then clears.
+			const mem = Buffer.allocUnsafe(16)
+			mem.writeInt32LE(1, 0)
+			mem.writeBigUInt64LE(BigInt(this.#pointer), 8)
+			this.#lib.wcsvfree(ptr(mem, 0), ptr(mem, 8))
 			this.#pointer = undefined
 		}
 	}
