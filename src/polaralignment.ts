@@ -3,10 +3,10 @@ import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameter
 import { PI, PIOVERTWO, SIDEREAL_RATE } from './constants'
 import type { HorizontalCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
+import { pixelScale } from './formulas'
 import type { GeographicPosition } from './location'
 import { matMulVec, matTransposeMulVec } from './mat3'
 import { cirsRotationMatrix, gcrsToItrsRotationMatrix, type Time } from './time'
-import { angularSizeOfPixel } from './util'
 import { validateInRange, validateLatitude, validatePositiveFinite } from './validation'
 import { type Vec3, vecCross, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues } from './vec3'
 
@@ -243,7 +243,7 @@ export const DARV_EXPOSURE_PRESETS = {
 export interface DarvExposureInput {
 	// Telescope focal length, in millimeters.
 	focalLength: number
-	// Camera pixel size, in the unit expected by angularSizeOfPixel.
+	// Camera pixel size, in the unit expected by pixelScale.
 	pixelSize: number
 	// Star declination, in radians. Stars very close to the celestial pole are not suitable DARV targets.
 	declination: Angle
@@ -313,7 +313,7 @@ export function estimateDarvExposure(input: Readonly<DarvExposureInput>): DarvEx
 	validateLatitude(input.latitude)
 	const preset = validateDarvExposurePreset(input.preset)
 	const geometryFactor = computeDarvGeometryFactor(input.mode, input.latitude)
-	const imageScale = angularSizeOfPixel(input.focalLength, input.pixelSize)
+	const imageScale = pixelScale(input.pixelSize, input.focalLength)
 	const raVelocity = computeDarvRaVelocity(input.declination, preset.guideRateSidereal)
 	const driftDec = computeDarvDriftDec(preset.targetPolarError, geometryFactor)
 	const raTrailTime = (preset.targetTrail * imageScale) / raVelocity

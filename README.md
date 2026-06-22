@@ -1367,7 +1367,6 @@ await catalog.close()
 ### Util ![](bun.webp) ![](browser.webp)
 
 ```ts
-angularSizeOfPixel(focalLength, pixelSize) // CCD Resolution in arcsec/pixel
 minOf(array) // Minimum value of the array
 maxOf(array) // Maximum value of the array
 meanOf(array) // Mean value of the array

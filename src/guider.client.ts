@@ -1,3 +1,4 @@
+import { pixelScale } from './formulas'
 import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
 import { flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './guider.calibrator'
 import { readImageFromBuffer, readImageFromSource } from './image'
@@ -9,7 +10,6 @@ import { clamp } from './math'
 import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from './phd2'
 import { detectStars } from './star.detector'
 import type { PartialOnly, Writable } from './types'
-import { angularSizeOfPixel } from './util'
 
 const DEFAULT_GUIDER_EXPOSURE = 1
 const DEFAULT_SEARCH_REGION = 64
@@ -378,7 +378,7 @@ export class GuiderClient {
 		if (this.#camera === undefined || this.#focalLength <= 0) return 0
 
 		const pixelSize = resolveEffectivePixelSize(this.#camera, this.#pixelSize)
-		return pixelSize <= 0 ? 0 : angularSizeOfPixel(this.#focalLength, pixelSize)
+		return pixelSize <= 0 ? 0 : pixelScale(pixelSize, this.#focalLength)
 	}
 
 	getSearchRegion() {
