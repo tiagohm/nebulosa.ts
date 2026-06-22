@@ -617,7 +617,7 @@ class AlpacaCamera extends AlpacaDevice {
 
 			if (CanGetCoolerPower && CoolerPower !== undefined) {
 				this.#coolerPower.elements.CCD_COOLER_POWER.value = CoolerPower
-				this.sendDefProperty(this.#temperature)
+				this.sendDefProperty(this.#coolerPower)
 			}
 
 			if (MaxBinX) {
@@ -684,7 +684,7 @@ class AlpacaCamera extends AlpacaDevice {
 			// RGGB
 			if (SensorType === 2) {
 				this.#cfa.elements.CFA_OFFSET_X.value = BayerOffsetX?.toFixed(0) ?? '0'
-				this.#cfa.elements.CFA_OFFSET_X.value = BayerOffsetY?.toFixed(0) ?? '0'
+				this.#cfa.elements.CFA_OFFSET_Y.value = BayerOffsetY?.toFixed(0) ?? '0'
 				this.#cfa.elements.CFA_TYPE.value = 'RGGB'
 				this.sendDefProperty(this.#cfa)
 			}
