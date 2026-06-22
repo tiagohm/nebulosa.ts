@@ -151,8 +151,9 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 	const timeout = options.timeout ?? 0
 	const downsample = options.downsample ?? 2
 	const r = options?.radius ? Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180)) : 0
-	const ra = options?.rightAscension ? toDeg(normalizeAngle(options.rightAscension)) : 0
-	const dec = options?.declination ? toDeg(options.declination) : 90
+	const ra = options?.rightAscension !== undefined ? toDeg(normalizeAngle(options.rightAscension)) : 0
+	// declination 0 is the celestial equator, a valid hint; only fall back to the pole when it is absent.
+	const dec = options?.declination !== undefined ? toDeg(options.declination) : 90
 	const fov = Math.max(0, Math.min(toDeg(options?.fov ?? 0), 360))
 	const outDir = join(tmpdir(), Bun.randomUUIDv7())
 	const wcs = join(outDir, 'nebulosa.wcs')
