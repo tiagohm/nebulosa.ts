@@ -129,6 +129,8 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 
 		if (submission?.status === 'success') {
 			const timeout = AbortSignal.timeout(options?.timeout || 300000)
+			// Wake the inter-poll wait as soon as the overall timeout or the caller's signal aborts.
+			const wait = signal ? AbortSignal.any([timeout, signal]) : timeout
 
 			while (!timeout.aborted) {
 				const status = await submissionStatus(submission, { session }, signal)
@@ -159,7 +161,7 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 					// Otherwise the job is still solving; keep polling until it resolves or times out.
 				}
 
-				await Bun.sleep(15000)
+				await abortableSleep(15000, wait)
 			}
 		}
 	}
@@ -235,6 +237,29 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 	}
 
 	return undefined
+}
+
+// Resolves after the given delay, or earlier if the signal aborts. Never rejects.
+function abortableSleep(ms: number, signal?: AbortSignal) {
+	return new Promise<void>((resolve) => {
+		let settled = false
+
+		// Whichever of the timer or the abort fires first resolves the promise exactly once;
+		// the `settled` guard makes the second caller a no-op (false positive for the lint rule).
+		const finish = () => {
+			if (settled) return
+			settled = true
+			clearTimeout(timer)
+			signal?.removeEventListener('abort', finish)
+			// oxlint-disable-next-line promise/no-multiple-resolved
+			resolve()
+		}
+
+		const timer = setTimeout(finish, ms)
+
+		if (signal?.aborted) finish()
+		else signal?.addEventListener('abort', finish, { once: true })
+	})
 }
 
 async function request<T>(url: string | URL, method: string, body?: BodyInit, signal?: AbortSignal): Promise<T | undefined> {
