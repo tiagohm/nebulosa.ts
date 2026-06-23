@@ -396,26 +396,31 @@ export class GuidingAssistant {
 
 	// Returns the latest computed result snapshot.
 	result(timestamp: number = Date.now()): GuidingAssistantResult {
-		const metrics = computeMotionMetrics(this.samples, this.config)
-		const minMove = computeMinMove(this.samples, this.config, metrics.decCorrectedRmsPx)
-		const recommendations = makeRecommendations(this.samples, this.config, metrics, this.#backlash.result, minMove)
+		const seeingPx = bestDecSeeingEstimate(this.samples)
+		const minMove = computeMinMove(this.samples, this.config, seeingPx)
+		const metrics = computeMotionMetrics(this.samples, this.config, seeingPx, minMove.ra)
 		const exposure = exposureRange(this.config, metrics, minMove.ra)
+		const meanSnr = meanOf(this.samples, 'snr')
+		const meanStarMass = meanOf(this.samples, 'starMass')
+		const meanHfd = meanOf(this.samples, 'hfd')
+		const recommendations = makeRecommendations(this.samples, this.config, metrics, this.#backlash.result, minMove, exposure, meanSnr, meanHfd)
+		const elapsedSeconds = elapsedSecondsOf(this.samples, timestamp, this.#startTime)
 		const notes: string[] = []
 
 		if (this.samples.length === 0) notes.push('no_samples')
-		if (this.samples.length > 0 && elapsedSecondsOf(this.samples, timestamp, this.#startTime) < this.config.minSamplingSeconds) notes.push('sampling_interval_short')
+		if (this.samples.length > 0 && elapsedSeconds < this.config.minSamplingSeconds) notes.push('sampling_interval_short')
 		if (!hasPositiveScale(this.config)) notes.push('image_scale_unavailable')
 		if (this.config.declination === undefined) notes.push('declination_unavailable')
 
 		const result: GuidingAssistantResult = {
 			status: this.#status,
 			startTime: this.#startTime,
-			elapsedSeconds: elapsedSecondsOf(this.samples, timestamp, this.#startTime),
+			elapsedSeconds,
 			exposureSeconds: this.config.exposureSeconds,
 			sampleCount: this.samples.length,
-			meanSnr: meanOf(this.samples, 'snr'),
-			meanStarMass: meanOf(this.samples, 'starMass'),
-			meanHfd: meanOf(this.samples, 'hfd'),
+			meanSnr,
+			meanStarMass,
+			meanHfd,
 			motion: metrics,
 			backlash: this.#backlash.result,
 			recommendedRaMinMove: minMove.ra,
@@ -537,11 +542,12 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number)
 	}
 }
 
-function computeMotionMetrics(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig): GuidingAssistantMotionMetrics {
+// Derives passive motion metrics. `decCorrectedRmsPx` is the precomputed drift-removed DEC
+// seeing estimate and `raMinMovePx` the recommended RA min-move, both passed in so a snapshot
+// computes them once instead of repeating the work here.
+function computeMotionMetrics(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, decCorrectedRmsPx: number, raMinMovePx: number): GuidingAssistantMotionMetrics {
 	const raFit = linearFit(samples, 'raPx')
 	const decFit = linearFit(samples, 'decPx')
-	const decCorrectedRmsPx = bestDecSeeingEstimate(samples)
-	const recommended = computeMinMove(samples, config, decCorrectedRmsPx)
 	const maxRateRA = maxAdjacentRate(samples, 'raPx')
 	const scale = scaleOrNull(config)
 	const raPeakPx = peakFromOrigin(samples, 'raPx')
@@ -572,7 +578,7 @@ function computeMotionMetrics(samples: readonly GuidingAssistantSample[], config
 		raPeakPeakArcsec: scaleValue(raPeakPeakPx, scale),
 		raMaxDriftRatePxPerSecond: maxRateRA,
 		raMaxDriftRateArcsecPerSecond: scaleValue(maxRateRA, scale),
-		driftLimitingExposureSeconds: maxRateRA > 0 ? recommended.ra / maxRateRA : null,
+		driftLimitingExposureSeconds: maxRateRA > 0 ? raMinMovePx / maxRateRA : null,
 		polarAlignmentErrorArcmin,
 		decCorrectedRmsPx,
 	}
@@ -590,11 +596,10 @@ function computeMinMove(samples: readonly GuidingAssistantSample[], config: Guid
 	return { ra: recRa, dec: recDec }
 }
 
-function makeRecommendations(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, metrics: GuidingAssistantMotionMetrics, backlash: GuidingAssistantBacklashResult | null, minMove: ReturnType<typeof computeMinMove>): readonly GuidingAssistantRecommendation[] {
+// Builds the recommendation list. `exposure`, `meanSnr`, and `meanHfd` are precomputed by the
+// caller so a snapshot does not recompute the exposure range or sample means twice.
+function makeRecommendations(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, metrics: GuidingAssistantMotionMetrics, backlash: GuidingAssistantBacklashResult | null, minMove: ReturnType<typeof computeMinMove>, exposure: ReturnType<typeof exposureRange>, meanSnr: number, meanHfd: number): readonly GuidingAssistantRecommendation[] {
 	const recommendations: GuidingAssistantRecommendation[] = []
-	const exposure = exposureRange(config, metrics, minMove.ra)
-	const meanSnr = meanOf(samples, 'snr')
-	const meanHfd = meanOf(samples, 'hfd')
 
 	recommendations.push({ kind: 'exposure', message: `Use exposure times in the range of ${exposure.min.toFixed(1)}s to ${exposure.max.toFixed(1)}s`, appliesTo: 'exposure', value: exposure.min, unit: 's', actionable: true })
 
