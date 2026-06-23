@@ -552,7 +552,7 @@ function computeMinMove(samples: readonly GuidingAssistantSample[], config: Guid
 	const multiplierDec = (config.imageScaleArcsecPerPixel ?? Number.POSITIVE_INFINITY) < config.fineScaleThresholdArcsecPerPixel ? config.fineScaleDecMultiplier : config.coarseScaleDecMultiplier
 	const minMoveFloor = config.multiStar ? MULTISTAR_MIN_MOVE_FLOOR_PX : DEFAULT_MIN_MOVE_FLOOR_PX
 	const adjustedSeeing = config.multiStar ? seeingPx * 0.9 : seeingPx
-	const dec = roundUpToUnit(Math.max(adjustedSeeing * multiplierDec, MIN_MOVE_UNIT_PX), MIN_MOVE_UNIT_PX)
+	const dec = roundUpToUnit(Math.max(adjustedSeeing * multiplierDec, minMoveFloor), MIN_MOVE_UNIT_PX)
 	const sane = !hasPositiveScale(config) || dec * config.imageScaleArcsecPerPixel! <= config.minMoveArcsecSanityLimit
 	const recDec = sane && Number.isFinite(dec) ? dec : config.fallbackDecMinMove
 	const raMultiplier = config.hasHighPrecisionEncoders ? 1 : config.raMinMoveMultiplier

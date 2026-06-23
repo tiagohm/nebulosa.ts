@@ -117,6 +117,19 @@ test('generates PHD2-like recommendations for exposure, min-move, star quality, 
 	expect(result.recommendedDecMinMove).toBeGreaterThanOrEqual(result.recommendedRaMinMove)
 })
 
+test('applies the single-star min-move floor to DEC recommendations', () => {
+	const result = run(
+		[
+			[0, 0, 0],
+			[1000, 0, 0],
+		],
+		{ multiStar: false },
+	)
+
+	expect(result.recommendedRaMinMove).toBeCloseTo(0.1, 8)
+	expect(result.recommendedDecMinMove).toBeCloseTo(0.1, 8)
+})
+
 test('measures compensable DEC backlash from delayed south motion', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1, backlashReturnTolerancePx: 0.2, backlashPulseMs: 100, backlashMaxPulsesPerDirection: 8 })
 	assistant.start(0)
