@@ -1,4 +1,4 @@
-import type { AxisPulse, GuideCommand, GuideDirectionDEC, GuideFrame } from './guider'
+import { type GuideCommand, type GuideDirectionDEC, type GuideFrame, NO_PULSE, oppositeDEC } from './guider'
 import type { CalibrationPulseCommand } from './guider.calibrator'
 
 // Minimum sampling interval used by PHD2 before final recommendations are trusted, in seconds.
@@ -30,9 +30,6 @@ const DEFAULT_MIN_MOVE_FLOOR_PX = 0.1
 
 // Default lower bound for seeing-based multi-star min-move recommendations.
 const MULTISTAR_MIN_MOVE_FLOOR_PX = 0.05
-
-// Axis pulse with no movement used when only one axis should be driven.
-const NO_PULSE: AxisPulse = { direction: null, duration: 0 }
 
 // Guiding assistant state while collecting passive guide samples and optional backlash measurements.
 export type GuidingAssistantStatus = 'idle' | 'measuring' | 'backlash' | 'completed' | 'failed'
@@ -832,8 +829,4 @@ function finiteOrZero(value: number | undefined) {
 function decSignedDistance(direction: GuideDirectionDEC, decPositiveDirection: GuideDirectionDEC, from: number, to: number) {
 	const sign = direction === decPositiveDirection ? 1 : -1
 	return (to - from) * sign
-}
-
-function oppositeDEC(direction: GuideDirectionDEC): GuideDirectionDEC {
-	return direction === 'north' ? 'south' : 'north'
 }
