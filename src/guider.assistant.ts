@@ -522,10 +522,13 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number)
 
 	const timestamp = frame.timestamp ?? Date.now()
 	const star = frame.stars[0]
-	const raPx = command.diagnostics.axisErrorRA ?? command.diagnostics.dx
-	const decPx = command.diagnostics.axisErrorDEC ?? command.diagnostics.dy
+	const hasAxisErrors = isFiniteNumber(command.diagnostics.axisErrorRA) && isFiniteNumber(command.diagnostics.axisErrorDEC)
+	const hasImageDeltas = isFiniteNumber(command.diagnostics.dx) && isFiniteNumber(command.diagnostics.dy)
 
-	if (raPx === undefined || decPx === undefined || !Number.isFinite(raPx) || !Number.isFinite(decPx)) return null
+	if (!hasAxisErrors && !hasImageDeltas) return null
+
+	const raPx = hasAxisErrors ? command.diagnostics.axisErrorRA! : command.diagnostics.dx!
+	const decPx = hasAxisErrors ? command.diagnostics.axisErrorDEC! : command.diagnostics.dy!
 
 	return {
 		frameId: frame.frameId,
@@ -827,6 +830,10 @@ function roundUpToUnit(value: number, unit: number) {
 
 function finiteOrZero(value: number | undefined) {
 	return value !== undefined && Number.isFinite(value) ? value : 0
+}
+
+function isFiniteNumber(value: number | undefined) {
+	return value !== undefined && Number.isFinite(value)
 }
 
 function decSignedDistance(direction: GuideDirectionDEC, decPositiveDirection: GuideDirectionDEC, from: number, to: number) {

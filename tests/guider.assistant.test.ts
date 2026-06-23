@@ -454,18 +454,19 @@ test('produces finite baseline recommendations with no samples', () => {
 	expect(Number.isFinite(result.recommendedMaxExposureSeconds)).toBeTrue()
 })
 
-test('falls back to image-space displacement only when calibrated axis errors are missing', () => {
+test('keeps calibrated axes paired when falling back to image deltas', () => {
 	const assistant = new GuidingAssistant()
 	assistant.start(0)
 
 	// axis-resolved errors missing: the image-space dx/dy fallback is used.
 	assistant.addSample(frame(0, 1), command(0, 0, { axisErrorRA: undefined, axisErrorDEC: undefined, dx: 0.3, dy: -0.2 }))
-	// non-finite axis errors are rejected even when dx/dy are present.
+	// partial/non-finite axis errors fall back to the complete dx/dy pair instead of mixing frames.
 	assistant.addSample(frame(1000, 2), command(0, 0, { axisErrorRA: Number.NaN, dx: 0.5, dy: 0.5 }))
-	// fully missing displacement is rejected.
+	// no complete axis or image-space pair is rejected.
+	assistant.addSample(frame(2000, 3), command(0, 0, { axisErrorRA: 0.7, axisErrorDEC: undefined, dx: 0.9, dy: undefined }))
 	assistant.addSample(frame(2000, 3), command(0, 0, { axisErrorRA: undefined, axisErrorDEC: undefined, dx: undefined, dy: undefined }))
 
-	expect(assistant.result(2000).sampleCount).toBe(1)
+	expect(assistant.result(2000).sampleCount).toBe(2)
 })
 
 test('exposes backlash readiness through its getters', () => {
