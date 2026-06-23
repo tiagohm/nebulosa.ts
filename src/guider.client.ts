@@ -823,7 +823,7 @@ export class GuiderClient {
 			this.#guidingAssistantPendingPulse = undefined
 			this.#guidingAssistantResult = assistant.alignBacklashOrigin(frame, command)
 			this.emitEvent('GuidingAssistantUpdated', { Result: this.#guidingAssistantResult })
-			return this.#pulseCalibration(pulse.ra.direction, pulse.ra.duration, pulse.dec.direction, pulse.dec.duration, true)
+			return this.#pulseCalibration(pulse.ra.direction, pulse.ra.duration, pulse.dec.direction, pulse.dec.duration, this.#guidingAssistantSavedGuideOutputEnabled)
 		}
 
 		const step = assistant.addSample(frame, command)
@@ -831,7 +831,7 @@ export class GuiderClient {
 		this.emitEvent('GuidingAssistantUpdated', { Result: step.result })
 
 		if (step.pulse !== undefined) {
-			return this.#pulseCalibration(step.pulse.ra.direction, step.pulse.ra.duration, step.pulse.dec.direction, step.pulse.dec.duration, true)
+			return this.#pulseCalibration(step.pulse.ra.direction, step.pulse.ra.duration, step.pulse.dec.direction, step.pulse.dec.duration, this.#guidingAssistantSavedGuideOutputEnabled)
 		}
 
 		if (step.result.status === 'completed') {
