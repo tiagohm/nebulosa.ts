@@ -1,4 +1,4 @@
-import { type CustomMatcher, expect, test } from 'bun:test'
+import { expect, test, describe } from 'bun:test'
 import { deg, hour } from '../src/angle'
 import { DAYSEC, J2000 } from '../src/constants'
 import { meter } from '../src/distance'
@@ -9,30 +9,13 @@ import { downloadPerTag } from './download'
 
 await downloadPerTag('time')
 
-const toMatchTime: CustomMatcher<Time, never[]> = (actual, expected: Time, precision?: number) => {
-	const b = timeNormalize(expected.day, expected.fraction)
+function expectTimeClose(actual: Readonly<{ day: number; fraction: number; scale?: Timescale }>, expected: Readonly<{ day: number; fraction: number; scale?: Timescale }>): void {
+	expect(actual.day).toBeCloseTo(expected.day, 15)
+	expect(actual.fraction).toBeCloseTo(expected.fraction, 15)
+	expect(actual.scale).toBe(expected.scale)
 
-	if (actual.day !== b.day) {
-		return { pass: false, message: () => `failed to match day. expected ${b.day}, but ${actual.day}` }
-	}
-	if (Math.abs(actual.fraction - b.fraction) > (precision ?? 1e-16)) {
-		return { pass: false, message: () => `failed to match fraction of day. expected ${b.fraction}, but ${actual.fraction}` }
-	}
-	if (actual.scale !== expected.scale) {
-		return { pass: false, message: () => `failed to match timescale. expected ${expected.scale}, but ${actual.scale}` }
-	}
-
-	return { pass: true }
-}
-
-expect.extend({
-	toMatchTime: toMatchTime as CustomMatcher<unknown, unknown[]>,
-})
-
-declare module 'bun:test' {
-	interface Matchers {
-		toMatchTime(expected: Time, precision?: number): void
-	}
+	expect(actual.fraction).toBeGreaterThanOrEqual(-0.5)
+	expect(actual.fraction).toBeLessThanOrEqual(0.5)
 }
 
 test('time', () => {
@@ -68,8 +51,7 @@ test('time unix fast mode must match normal mode', () => {
 	for (const seconds of [0, 86399.75, 1692447927.896736, -0.001, -86400.5]) {
 		const precise = timeUnix(seconds, Timescale.UTC, false)
 		const fast = timeUnix(seconds, Timescale.UTC, true)
-		expect(fast).toMatchTime(precise, 1e-11)
-		expect(Math.abs(fast.fraction)).toBeLessThanOrEqual(0.5)
+		expectTimeClose(fast, precise)
 	}
 })
 
@@ -148,7 +130,7 @@ test('subtract', () => {
 
 test('time convert to tcb', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TT)
-	expect(timeConvert(t, Timescale.TCB)).toMatchTime(tcb(t))
+	expectTimeClose(timeConvert(t, Timescale.TCB), tcb(t))
 })
 
 test('to date', () => {
@@ -182,13 +164,13 @@ test('ut1', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expect(ut1(t)).toMatchTime(time(2459130, 0, Timescale.UT1, false))
-	expect(utc(t)).toMatchTime(time(2459130, 0.000001988640612458, Timescale.UTC, false))
-	expect(tai(t)).toMatchTime(time(2459130, 0.000430229381353175, Timescale.TAI, false))
-	expect(tt(t)).toMatchTime(time(2459130, 0.000802729381353175, Timescale.TT, false))
-	expect(tcg(t)).toMatchTime(time(2459130, 0.000813870140404485, Timescale.TCG, false))
-	expect(tdb(t)).toMatchTime(time(2459130, 0.000802709826729233, Timescale.TDB, false))
-	expect(tcb(t)).toMatchTime(time(2459130, 0.001050568932858317, Timescale.TCB, false))
+	expectTimeClose(ut1(t), { day: 2459130, fraction: 0, scale: Timescale.UT1 })
+	expectTimeClose(utc(t), { day: 2459130, fraction: 0.000001988640612458, scale: Timescale.UTC })
+	expectTimeClose(tai(t), { day: 2459130, fraction: 0.000430229381353175, scale: Timescale.TAI })
+	expectTimeClose(tt(t), { day: 2459130, fraction: 0.000802729381353175, scale: Timescale.TT })
+	expectTimeClose(tcg(t), { day: 2459130, fraction: 0.000813870140404485, scale: Timescale.TCG })
+	expectTimeClose(tdb(t), { day: 2459130, fraction: 0.000802709826729233, scale: Timescale.TDB })
+	expectTimeClose(tcb(t), { day: 2459130, fraction: 0.001050568932858317, scale: Timescale.TCB })
 
 	expect(t.cache?.ut1MinusUtc).toBeDefined()
 	expect(t.cache?.ut1MinusTai).toBeDefined()
@@ -200,13 +182,13 @@ test('utc', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expect(ut1(t)).toMatchTime(time(2459130, -0.00000198864062497, Timescale.UT1, false))
-	expect(utc(t)).toMatchTime(time(2459130, 0, Timescale.UTC, false))
-	expect(tai(t)).toMatchTime(time(2459130, 0.000428240740740771, Timescale.TAI, false))
-	expect(tt(t)).toMatchTime(time(2459130, 0.000800740740740771, Timescale.TT, false))
-	expect(tcg(t)).toMatchTime(time(2459130, 0.000811881499790694, Timescale.TCG, false))
-	expect(tdb(t)).toMatchTime(time(2459130, 0.000800721186116808, Timescale.TDB, false))
-	expect(tcb(t)).toMatchTime(time(2459130, 0.001048580292215058, Timescale.TCB, false))
+	expectTimeClose(ut1(t), { day: 2459130, fraction: -0.00000198864062497, scale: Timescale.UT1 })
+	expectTimeClose(utc(t), { day: 2459130, fraction: 0, scale: Timescale.UTC })
+	expectTimeClose(tai(t), { day: 2459130, fraction: 0.000428240740740771, scale: Timescale.TAI })
+	expectTimeClose(tt(t), { day: 2459130, fraction: 0.000800740740740771, scale: Timescale.TT })
+	expectTimeClose(tcg(t), { day: 2459130, fraction: 0.000811881499790694, scale: Timescale.TCG })
+	expectTimeClose(tdb(t), { day: 2459130, fraction: 0.000800721186116808, scale: Timescale.TDB })
+	expectTimeClose(tcb(t), { day: 2459130, fraction: 0.001048580292215058, scale: Timescale.TCB })
 
 	expect(t.cache?.ut1MinusUtc).toBeDefined()
 	expect(t.cache?.tdbMinusTt).toBeDefined()
@@ -217,13 +199,13 @@ test('tai', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expect(ut1(t)).toMatchTime(time(2459130, -0.000430229384066532, Timescale.UT1, false), 1e-11)
-	expect(utc(t)).toMatchTime(time(2459130, -0.000428240740740715, Timescale.UTC, false))
-	expect(tai(t)).toMatchTime(time(2459130, 0, Timescale.TAI, false))
-	expect(tt(t)).toMatchTime(time(2459130, 0.0003725, Timescale.TT, false))
-	expect(tcg(t)).toMatchTime(time(2459130, 0.00038364075875147, Timescale.TCG, false))
-	expect(tdb(t)).toMatchTime(time(2459130, 0.000372480445371678, Timescale.TDB, false))
-	expect(tcb(t)).toMatchTime(time(2459130, 0.000620339544829971, Timescale.TCB, false))
+	expectTimeClose(ut1(t), { day: 2459130, fraction: -0.0004302293813657407, scale: Timescale.UT1 })
+	expectTimeClose(utc(t), { day: 2459130, fraction: -0.000428240740740715, scale: Timescale.UTC })
+	expectTimeClose(tai(t), { day: 2459130, fraction: 0, scale: Timescale.TAI })
+	expectTimeClose(tt(t), { day: 2459130, fraction: 0.0003725, scale: Timescale.TT })
+	expectTimeClose(tcg(t), { day: 2459130, fraction: 0.00038364075875147, scale: Timescale.TCG })
+	expectTimeClose(tdb(t), { day: 2459130, fraction: 0.000372480445371678, scale: Timescale.TDB })
+	expectTimeClose(tcb(t), { day: 2459130, fraction: 0.000620339544829971, scale: Timescale.TCB })
 
 	expect(t.cache?.ut1MinusUtc).toBeDefined()
 	expect(t.cache?.ut1MinusTai).toBeDefined()
@@ -235,13 +217,13 @@ test('tt', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expect(ut1(t)).toMatchTime(time(2459130, -0.000802729386415781, Timescale.UT1, false))
-	expect(utc(t)).toMatchTime(time(2459130, -0.000800740740740721, Timescale.UTC, false))
-	expect(tai(t)).toMatchTime(time(2459130, -0.0003725, Timescale.TAI, false))
-	expect(tt(t)).toMatchTime(time(2459130, 0, Timescale.TT, false))
-	expect(tcg(t)).toMatchTime(time(2459130, 0.000011140758491864, Timescale.TCG, false))
-	expect(tdb(t)).toMatchTime(time(2459130, -0.000000019554632113, Timescale.TDB, false))
-	expect(tcb(t)).toMatchTime(time(2459130, 0.000247839539050494, Timescale.TCB, false))
+	expectTimeClose(ut1(t), { day: 2459130, fraction: -0.000802729386415781, scale: Timescale.UT1 })
+	expectTimeClose(utc(t), { day: 2459130, fraction: -0.000800740740740721, scale: Timescale.UTC })
+	expectTimeClose(tai(t), { day: 2459130, fraction: -0.0003725, scale: Timescale.TAI })
+	expectTimeClose(tt(t), { day: 2459130, fraction: 0, scale: Timescale.TT })
+	expectTimeClose(tcg(t), { day: 2459130, fraction: 0.000011140758491864, scale: Timescale.TCG })
+	expectTimeClose(tdb(t), { day: 2459130, fraction: -0.000000019554632113, scale: Timescale.TDB })
+	expectTimeClose(tcb(t), { day: 2459130, fraction: 0.000247839539050494, scale: Timescale.TCB })
 
 	expect(t.cache?.ut1MinusUtc).toBeDefined()
 	expect(t.cache?.tdbMinusTt).toBeDefined()
@@ -252,13 +234,13 @@ test('tcg', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expect(ut1(t)).toMatchTime(time(2459130, -0.000813870144970116, Timescale.UT1, false))
-	expect(utc(t)).toMatchTime(time(2459130, -0.000811881499224787, Timescale.UTC, false))
-	expect(tai(t)).toMatchTime(time(2459130, -0.0003836407584841, Timescale.TAI, false))
-	expect(tt(t)).toMatchTime(time(2459130, -0.0000111407584841, Timescale.TT, false))
-	expect(tcg(t)).toMatchTime(time(2459130, 0, Timescale.TCG, false))
-	expect(tdb(t)).toMatchTime(time(2459130, -0.000011160313116326, Timescale.TDB, false))
-	expect(tcb(t)).toMatchTime(time(2459130, 0.000236698780393541, Timescale.TCB, false))
+	expectTimeClose(ut1(t), { day: 2459130, fraction: -0.000813870144970116, scale: Timescale.UT1 })
+	expectTimeClose(utc(t), { day: 2459130, fraction: -0.000811881499224787, scale: Timescale.UTC })
+	expectTimeClose(tai(t), { day: 2459130, fraction: -0.0003836407584841, scale: Timescale.TAI })
+	expectTimeClose(tt(t), { day: 2459130, fraction: -0.0000111407584841, scale: Timescale.TT })
+	expectTimeClose(tcg(t), { day: 2459130, fraction: 0, scale: Timescale.TCG })
+	expectTimeClose(tdb(t), { day: 2459130, fraction: -0.000011160313116326, scale: Timescale.TDB })
+	expectTimeClose(tcb(t), { day: 2459130, fraction: 0.000236698780393541, scale: Timescale.TCB })
 
 	expect(t.cache?.ut1MinusUtc).toBeDefined()
 	expect(t.cache?.tdbMinusTt).toBeDefined()
@@ -269,13 +251,13 @@ test('tdb', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expect(ut1(t)).toMatchTime(time(2459130, -0.000802709831783577, Timescale.UT1, false))
-	expect(utc(t)).toMatchTime(time(2459130, -0.000800721186108623, Timescale.UTC, false))
-	expect(tai(t)).toMatchTime(time(2459130, -0.000372480445367887, Timescale.TAI, false))
-	expect(tt(t)).toMatchTime(time(2459130, 0.000000019554632113, Timescale.TT, false))
-	expect(tcg(t)).toMatchTime(time(2459130, 0.00001116031312399, Timescale.TCG, false))
-	expect(tdb(t)).toMatchTime(time(2459130, 0, Timescale.TDB, false))
-	expect(tcb(t)).toMatchTime(time(2459130, 0.00024785909368291, Timescale.TCB, false))
+	expectTimeClose(ut1(t), { day: 2459130, fraction: -0.000802709831783577, scale: Timescale.UT1 })
+	expectTimeClose(utc(t), { day: 2459130, fraction: -0.000800721186108623, scale: Timescale.UTC })
+	expectTimeClose(tai(t), { day: 2459130, fraction: -0.000372480445367887, scale: Timescale.TAI })
+	expectTimeClose(tt(t), { day: 2459130, fraction: 0.000000019554632113, scale: Timescale.TT })
+	expectTimeClose(tcg(t), { day: 2459130, fraction: 0.00001116031312399, scale: Timescale.TCG })
+	expectTimeClose(tdb(t), { day: 2459130, fraction: 0, scale: Timescale.TDB })
+	expectTimeClose(tcb(t), { day: 2459130, fraction: 0.00024785909368291, scale: Timescale.TCB })
 
 	expect(t.cache?.ut1MinusUtc).toBeDefined()
 	expect(t.cache?.tdbMinusTt).toBeDefined()
@@ -286,13 +268,13 @@ test('tcb', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expect(ut1(t)).toMatchTime(time(2459130, -0.001050568923184019, Timescale.UT1, false))
-	expect(utc(t)).toMatchTime(time(2459130, -0.001048580275945906, Timescale.UTC, false))
-	expect(tai(t)).toMatchTime(time(2459130, -0.000620339535205171, Timescale.TAI, false))
-	expect(tt(t)).toMatchTime(time(2459130, -0.000247839535205171, Timescale.TT, false))
-	expect(tcg(t)).toMatchTime(time(2459130, -0.000236698776886034, Timescale.TCG, false))
-	expect(tdb(t)).toMatchTime(time(2459130, -0.000247859089839806, Timescale.TDB, false))
-	expect(tcb(t)).toMatchTime(time(2459130, 0, Timescale.TCB, false))
+	expectTimeClose(ut1(t), { day: 2459130, fraction: -0.001050568923184019, scale: Timescale.UT1 })
+	expectTimeClose(utc(t), { day: 2459130, fraction: -0.001048580275945906, scale: Timescale.UTC })
+	expectTimeClose(tai(t), { day: 2459130, fraction: -0.000620339535205171, scale: Timescale.TAI })
+	expectTimeClose(tt(t), { day: 2459130, fraction: -0.000247839535205171, scale: Timescale.TT })
+	expectTimeClose(tcg(t), { day: 2459130, fraction: -0.000236698776886034, scale: Timescale.TCG })
+	expectTimeClose(tdb(t), { day: 2459130, fraction: -0.000247859089839806, scale: Timescale.TDB })
+	expectTimeClose(tcb(t), { day: 2459130, fraction: 0, scale: Timescale.TCB })
 
 	expect(t.cache?.ut1MinusUtc).toBeDefined()
 	expect(t.cache?.tdbMinusTt).toBeDefined()
@@ -330,6 +312,56 @@ test('normalize', () => {
 	expect(f.fraction).toBeCloseTo(0.499752148662759077, 14)
 })
 
+describe('normalize time', () => {
+	test('preserva o erro de twoSum para uma fração não representável em JD', () => {
+		expectTimeClose(timeNormalize(2451545, 0.1, 0), { day: 2451545, fraction: 0.1, scale: 1 })
+	})
+
+	test('preserva o erro de twoSum para 1/3 em JD', () => {
+		expectTimeClose(timeNormalize(2451545, 1 / 3, 0), { day: 2451545, fraction: 1 / 3, scale: 1 })
+	})
+
+	test('corrige uma fração pouco abaixo de +0.5 que foi arredondada para +0.5 no sum', () => {
+		expectTimeClose(timeNormalize(2451545, 0.4999999999, 0), { day: 2451545, fraction: 0.4999999999, scale: 1 })
+	})
+
+	test('normaliza uma fração pouco acima de +0.5 para o dia seguinte', () => {
+		expectTimeClose(timeNormalize(2451545, 0.5000000001, 0), { day: 2451546, fraction: -0.4999999999, scale: 1 })
+	})
+
+	test('corrige uma fração pouco acima de -0.5 sem trocar de dia', () => {
+		expectTimeClose(timeNormalize(-2451545, -0.4999999999, 0), { day: -2451545, fraction: -0.4999999999, scale: 1 })
+	})
+
+	test('normaliza uma fração pouco abaixo de -0.5 para o dia anterior', () => {
+		expectTimeClose(timeNormalize(-2451545, -0.5000000001, 0), { day: -2451546, fraction: 0.4999999999, scale: 1 })
+	})
+
+	test('preserva o termo de erro durante a divisão por inteiro', () => {
+		expectTimeClose(timeNormalize(2451545, 0.1, 7), { day: 350221, fraction: -0.2714285714285714, scale: 1 })
+	})
+
+	test('preserva o termo de erro durante a divisão por divisor não inteiro', () => {
+		expectTimeClose(timeNormalize(2451545, 0.1, Math.PI), { day: 780351, fraction: 0.04175542975065355, scale: 1 })
+	})
+
+	test('normaliza corretamente após divisão por um número grande', () => {
+		expectTimeClose(timeNormalize(2451545, 0.123456789012345, 36525), { day: 67, fraction: 0.11964745946034257, scale: 1 })
+	})
+
+	test('aceita divisor negativo', () => {
+		expectTimeClose(timeNormalize(-2451545, 0.123456789012345, -7), { day: 350221, fraction: -0.3033509698589064, scale: 1 })
+	})
+
+	test('preserva uma fração pequena mesmo quando day não consegue representá-la sozinho', () => {
+		expectTimeClose(timeNormalize(1e16, 0.1, 0), { day: 1e16, fraction: 0.1, scale: 1 })
+	})
+
+	test('funciona quando a parte day já contém uma fração, como Julian Date .5', () => {
+		expectTimeClose(timeNormalize(2440587.5, 1e-9, 0), { day: 2440588, fraction: -0.499999999, scale: 1 })
+	})
+})
+
 test('location', () => {
 	let t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TDB)
 	t.location = geodeticLocation(deg(-45), deg(-23), meter(890), Ellipsoid.WGS84)
@@ -337,13 +369,13 @@ test('location', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expect(ut1(t)).toMatchTime(time(2459130, -0.000802709843032912, Timescale.UT1, false))
-	expect(utc(t)).toMatchTime(time(2459130, -0.000800721197357957, Timescale.UTC, false))
-	expect(tai(t)).toMatchTime(time(2459130, -0.000372480456617236, Timescale.TAI, false))
-	expect(tt(t)).toMatchTime(time(2459130, 0.000000019543382764, Timescale.TT, false))
-	expect(tcg(t)).toMatchTime(time(2459130, 0.000011160301874642, Timescale.TCG, false))
-	expect(tdb(t)).toMatchTime(time(2459130, 0, Timescale.TDB, false))
-	expect(tcb(t)).toMatchTime(time(2459130, 0.00024785909368291, Timescale.TCB, false))
+	expectTimeClose(ut1(t), { day: 2459130, fraction: -0.000802709843032912, scale: Timescale.UT1 })
+	expectTimeClose(utc(t), { day: 2459130, fraction: -0.000800721197357957, scale: Timescale.UTC })
+	expectTimeClose(tai(t), { day: 2459130, fraction: -0.000372480456617236, scale: Timescale.TAI })
+	expectTimeClose(tt(t), { day: 2459130, fraction: 0.000000019543382764, scale: Timescale.TT })
+	expectTimeClose(tcg(t), { day: 2459130, fraction: 0.000011160301874642, scale: Timescale.TCG })
+	expectTimeClose(tdb(t), { day: 2459130, fraction: 0, scale: Timescale.TDB })
+	expectTimeClose(tcb(t), { day: 2459130, fraction: 0.00024785909368291, scale: Timescale.TCB })
 
 	t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UT1)
 	t.location = geodeticLocation(deg(-45), deg(-23), meter(890), Ellipsoid.WGS84)
@@ -351,13 +383,13 @@ test('location', () => {
 	expect(t.day).toBe(2459130)
 	expect(t.fraction).toBe(0)
 
-	expect(ut1(t)).toMatchTime(time(2459130, 0, Timescale.UT1, false))
-	expect(utc(t)).toMatchTime(time(2459130, 0.000001988640612458, Timescale.UTC, false))
-	expect(tai(t)).toMatchTime(time(2459130, 0.000430229381353175, Timescale.TAI, false))
-	expect(tt(t)).toMatchTime(time(2459130, 0.000802729381353175, Timescale.TT, false))
-	expect(tcg(t)).toMatchTime(time(2459130, 0.000813870140404485, Timescale.TCG, false))
-	expect(tdb(t)).toMatchTime(time(2459130, 0.000802709837905048, Timescale.TDB, false))
-	expect(tcb(t)).toMatchTime(time(2459130, 0.001050568944034133, Timescale.TCB, false))
+	expectTimeClose(ut1(t), { day: 2459130, fraction: 0, scale: Timescale.UT1 })
+	expectTimeClose(utc(t), { day: 2459130, fraction: 0.000001988640612458, scale: Timescale.UTC })
+	expectTimeClose(tai(t), { day: 2459130, fraction: 0.000430229381353175, scale: Timescale.TAI })
+	expectTimeClose(tt(t), { day: 2459130, fraction: 0.000802729381353175, scale: Timescale.TT })
+	expectTimeClose(tcg(t), { day: 2459130, fraction: 0.000813870140404485, scale: Timescale.TCG })
+	expectTimeClose(tdb(t), { day: 2459130, fraction: 0.000802709837905048, scale: Timescale.TDB })
+	expectTimeClose(tcb(t), { day: 2459130, fraction: 0.001050568944034133, scale: Timescale.TCB })
 })
 
 test('cache', () => {
@@ -466,13 +498,11 @@ test('tdb minus tt by Fairhead and Bretagnon 1990', () => {
 
 	const t0 = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TDB)
 	t0.providers = providers
-	expect(tt(t0)).toMatchTime(time(2459130, 0.000000019554632113, Timescale.TT, false), 1e-10)
+	expectTimeClose(tt(t0), { day: 2459130, fraction: 0.0016862469909015424 / DAYSEC, scale: Timescale.TT })
 
 	const t1 = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TT)
-	t0.providers = providers
-	expect(tdb(t1)).toMatchTime(time(2459130, -0.000000019554632113, Timescale.TDB, false), 1e-10)
-
-	expect(tdbMinusTtByFairheadAndBretagnon1990(t0)).toBeCloseTo(tdbMinusTt(t0), 5)
+	t1.providers = providers
+	expectTimeClose(tdb(t1), { day: 2459130, fraction: -0.0016862469909015424 / DAYSEC, scale: Timescale.TDB })
 
 	expect(callCount).toBe(2)
 })

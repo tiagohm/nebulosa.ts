@@ -205,7 +205,12 @@ export class IndiClient implements Client {
 					break
 				}
 				case 'oneNumber': {
-					const element = { name: child.attributes.name, value: +child.text } as OneNumber
+					const a = child.attributes
+					const element = { name: a.name, value: +child.text } as OneNumber
+					// INDI's IUUpdateMinMax updates a number's range through a set vector; keep it.
+					if (a.min !== undefined) element.min = +a.min
+					if (a.max !== undefined) element.max = +a.max
+					if (a.step !== undefined) element.step = +a.step
 					;(message as SetNumberVector).elements[element.name] = element
 					break
 				}

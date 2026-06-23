@@ -15,7 +15,8 @@ export function fk5(ra: Angle, dec: Angle, distance: Distance = ONE_KILOPARSEC):
 	return eraS2p(ra, dec, distance)
 }
 
-// Convert the FK5 cartesian coordinate at equinox to ICRS cartesian coordinate.
+// Convert the FK5 J2000 cartesian coordinate to ICRS cartesian coordinate by removing the frame bias.
+// This applies only the J2000 ICRS/FK5 bias rotation; precess to J2000 first for coordinates at another equinox.
 export function fk5ToIcrs(p: CartesianCoordinate): CartesianCoordinate {
 	return matTransposeMulVec(FK5_MATRIX, p)
 }

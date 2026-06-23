@@ -256,8 +256,11 @@ export class Base64Source implements Source, Seekable {
 	#decodedPosition = 0 // current decoded byte position
 	#n = 0 // remaining bytes in buffer
 	#skip = 0 // decoded bytes to discard after seek
-	#state = -1 // current base64 decoding state
+	#state = -1 // index of the next ready decoded byte (0..2) or <0 when none is pending
 	#spos = 0 // current position for string source
+	#word = 0 // accumulated bits of the in-progress 4-char group (up to 24 bits)
+	#group = 0 // base64 chars accumulated in the in-progress group (0..3)
+	#flushed = false // whether the trailing partial group has already been emitted at end of input
 
 	constructor(readonly source: Source | string) {}
 
@@ -293,10 +296,15 @@ export class Base64Source implements Source, Seekable {
 	async read(buffer: Buffer, offset?: number, size?: number) {
 		size ??= buffer.byteLength - (offset ?? 0)
 		offset ??= 0
+		if (size <= 0) return 0
 		let written = 0
 
 		while (written < size) {
-			if (!(await this.#fill())) break
+			// Refill only when no decoded byte is pending and the buffer is fully consumed.
+			// On true end of input, emit the trailing partial group once, then stop.
+			if (!(this.#state >= 0 && this.#state <= 2) && this.#bpos >= this.#n) {
+				if (!(await this.#fill()) && !this.#flush()) break
+			}
 
 			while (this.#skip > 0) {
 				const d = this.#decode(this.#n)
@@ -343,20 +351,21 @@ export class Base64Source implements Source, Seekable {
 		this.#n = 0
 		this.#skip = 0
 		this.#state = -1
+		this.#word = 0
+		this.#group = 0
+		this.#flushed = false
 	}
 
+	// Returns the next decoded byte available from the current buffer, or -1 when the
+	// buffer is exhausted. The in-progress group is kept in #word/#group across calls so
+	// a 4-char group may legitimately span a buffer refill without being truncated. A
+	// partial trailing group is never finalized here; #flush handles it at end of input.
 	#decode(limit: number) {
 		if (this.#state >= 0 && this.#state <= 2) {
 			return this.#decoded[this.#state++]
 		} else if (this.#bpos >= limit) {
 			return -1
 		}
-
-		this.#decoded.fill(-1)
-		this.#state = 0
-
-		let inCount = 0
-		let word = 0
 
 		while (this.#bpos < limit) {
 			const c = this.#buffer.readUInt8(this.#bpos++)
@@ -391,37 +400,46 @@ export class Base64Source implements Source, Seekable {
 			}
 
 			// Append this char's 6 bits to the word.
-			word = (word << 6) | bits
+			this.#word = (this.#word << 6) | bits
 
 			// For every 4 chars of input, we accumulate 24 bits of output. Emit 3 bytes.
-			inCount++
-
-			if (inCount % 4 === 0) {
-				this.#decoded[0] = (word >> 16) & 0xff
-				this.#decoded[1] = (word >> 8) & 0xff
-				this.#decoded[2] = word & 0xff
-				break
+			if (++this.#group === 4) {
+				this.#decoded[0] = (this.#word >> 16) & 0xff
+				this.#decoded[1] = (this.#word >> 8) & 0xff
+				this.#decoded[2] = this.#word & 0xff
+				this.#word = 0
+				this.#group = 0
+				this.#state = 0
+				return this.#decoded[this.#state++]
 			}
 		}
 
-		switch (inCount % 4) {
-			case 1:
-				// We read 1 char followed by "===". But 6 bits is a truncated byte! Fail.
-				throw new Error('truncated byte')
-			case 2:
-				// We read 2 chars followed by "==". Emit 1 byte with 8 of those 12 bits.
-				word = word << 12
-				this.#decoded[0] = (word >> 16) & 0xff
-				break
-			case 3:
-				// We read 3 chars, followed by "=". Emit 2 bytes for 16 of those 18 bits.
-				word = word << 6
-				this.#decoded[0] = (word >> 16) & 0xff
-				this.#decoded[1] = (word >> 8) & 0xff
-				break
-		}
+		return -1
+	}
 
-		return this.#decoded[this.#state++]
+	// Finalizes the trailing partial group at end of input. Padding ('=') is ignored while
+	// decoding, so the group size alone determines how many bytes remain. Returns true when
+	// at least one byte was produced (made available through #decode), false otherwise.
+	#flush() {
+		if (this.#flushed) return false
+		this.#flushed = true
+
+		const group = this.#group
+		if (group === 0) return false
+		this.#group = 0
+
+		// 1 leftover char carries only 6 bits, not enough for a byte.
+		if (group === 1) throw new Error('truncated byte')
+
+		const word = this.#word
+		this.#word = 0
+
+		// 2 chars -> 1 byte (top 8 of 12 bits); 3 chars -> 2 bytes (top 16 of 18 bits).
+		this.#decoded[0] = (word >> (group === 2 ? 4 : 10)) & 0xff
+		this.#decoded[1] = group === 3 ? (word >> 2) & 0xff : -1
+		this.#decoded[2] = -1
+		this.#state = 0
+		return true
 	}
 }
 

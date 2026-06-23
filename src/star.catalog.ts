@@ -1,7 +1,6 @@
 import { type Angle, normalizeAngle } from './angle'
 import { DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
-import { sphericalSeparation } from './geometry'
 import { clamp } from './math'
 import { GEOMETRY_EPSILON, validateLatitude } from './validation'
 import type { Velocity } from './velocity'
@@ -84,6 +83,9 @@ interface NormalizedConeQuery extends NormalizedQueryBase {
 	readonly centerRA: Angle
 	readonly centerDEC: Angle
 	readonly radius: Angle
+	// Cached sin/cos of the cone center declination, reused by the per-candidate exact test.
+	readonly sinCenterDEC: number
+	readonly cosCenterDEC: number
 }
 
 interface NormalizedTriangleQuery extends NormalizedQueryBase {
@@ -91,6 +93,8 @@ interface NormalizedTriangleQuery extends NormalizedQueryBase {
 	readonly projectedVertices: readonly Vertex[]
 	readonly tangentCenterRA: Angle
 	readonly tangentCenterDEC: Angle
+	// Cached cos of the tangent center declination, reused when projecting each candidate.
+	readonly cosTangentCenterDEC: number
 }
 
 interface NormalizedBoxQuery extends NormalizedQueryBase {
@@ -103,6 +107,8 @@ interface NormalizedPolygonQuery extends NormalizedQueryBase {
 	readonly projectedVertices: readonly Vertex[]
 	readonly tangentCenterRA: Angle
 	readonly tangentCenterDEC: Angle
+	// Cached cos of the tangent center declination, reused when projecting each candidate.
+	readonly cosTangentCenterDEC: number
 }
 
 export type NormalizedStarCatalogQuery = NormalizedConeQuery | NormalizedTriangleQuery | NormalizedBoxQuery | NormalizedPolygonQuery
@@ -240,6 +246,8 @@ function normalizeConeQuery(query: StarCatalogConeQuery): NormalizedConeQuery {
 		centerRA,
 		centerDEC,
 		radius,
+		sinCenterDEC: Math.sin(centerDEC),
+		cosCenterDEC: Math.cos(centerDEC),
 		geometryMode: 'spherical',
 		wrapAround,
 		preselectionBoxes,
@@ -266,6 +274,7 @@ function normalizeTriangleQuery(query: StarCatalogTriangleQuery): NormalizedTria
 		projectedVertices,
 		tangentCenterRA: tangentCenterRA,
 		tangentCenterDEC: tangentCenterDEC,
+		cosTangentCenterDEC: Math.cos(tangentCenterDEC),
 		geometryMode: 'planarTangent',
 		wrapAround,
 		preselectionBoxes,
@@ -318,6 +327,7 @@ function normalizePolygonQuery(query: StarCatalogPolygonQuery): NormalizedPolygo
 		projectedVertices,
 		tangentCenterRA: tangentCenterRA,
 		tangentCenterDEC: tangentCenterDEC,
+		cosTangentCenterDEC: Math.cos(tangentCenterDEC),
 		geometryMode: 'planarTangent',
 		wrapAround,
 		preselectionBoxes,
@@ -329,15 +339,32 @@ function normalizePolygonQuery(query: StarCatalogPolygonQuery): NormalizedPolygo
 function matchesNormalizedGeometry(entry: StarCatalogEntry, query: NormalizedStarCatalogQuery) {
 	switch (query.kind) {
 		case 'cone':
-			return sphericalSeparation(query.centerRA, query.centerDEC, entry.rightAscension, entry.declination) <= query.radius + GEOMETRY_EPSILON
+			return coneContainsEntry(entry.rightAscension, entry.declination, query)
 		case 'box':
 			return query.boxes.some((box) => matchesBox(entry.rightAscension, entry.declination, box))
 		case 'triangle':
-		case 'polygon':
-			return pointInProjectedPolygon(projectPolygonVertex(entry.rightAscension, entry.declination, query.tangentCenterRA, query.tangentCenterDEC), query.projectedVertices)
+		case 'polygon': {
+			// Inline the tangent-plane projection using the cached cos(centerDEC) and avoid a per-candidate tuple allocation.
+			const deltaRa = shortestSignedRaDelta(entry.rightAscension, query.tangentCenterRA)
+			return pointInProjectedPolygon(deltaRa * query.cosTangentCenterDEC, entry.declination - query.tangentCenterDEC, query.projectedVertices)
+		}
 		default:
 			return false
 	}
+}
+
+// Tests cone membership reusing the cached center sin/cos, mirroring sphericalSeparation's atan2 formulation
+// so small-cone numerical robustness is preserved. RA/Dec in radians; tolerant by GEOMETRY_EPSILON.
+function coneContainsEntry(ra: Angle, dec: Angle, query: NormalizedConeQuery) {
+	const dLongitude = ra - query.centerRA
+	const sinDec = Math.sin(dec)
+	const cosDec = Math.cos(dec)
+	const sinDLongitude = Math.sin(dLongitude)
+	const cosDLongitude = Math.cos(dLongitude)
+	const x = cosDec * sinDLongitude
+	const y = query.cosCenterDEC * sinDec - query.sinCenterDEC * cosDec * cosDLongitude
+	const z = query.sinCenterDEC * sinDec + query.cosCenterDEC * cosDec * cosDLongitude
+	return Math.atan2(Math.hypot(x, y), z) <= query.radius + GEOMETRY_EPSILON
 }
 
 // Checks whether a normalized entry falls inside a non-wrapping box.
@@ -383,8 +410,8 @@ function projectedPolygonToBoxes(minProjectedX: number, maxProjectedX: number, m
 	return splitRaBox(minRA, maxRA, minDEC, maxDEC)
 }
 
-// Checks whether a tangent-plane point falls inside a polygon using ray casting.
-function pointInProjectedPolygon(point: Vertex, polygon: readonly Vertex[]) {
+// Checks whether a tangent-plane point (px, py) falls inside a polygon using ray casting.
+function pointInProjectedPolygon(px: number, py: number, polygon: readonly Vertex[]) {
 	let inside = false
 	let j = polygon.length - 1
 
@@ -393,10 +420,10 @@ function pointInProjectedPolygon(point: Vertex, polygon: readonly Vertex[]) {
 		const yi = polygon[i][1]
 		const xj = polygon[j][0]
 		const yj = polygon[j][1]
-		const crosses = yi > point[1] !== yj > point[1]
-		const xIntersection = ((xj - xi) * (point[1] - yi)) / (yj - yi || Number.MIN_VALUE) + xi
+		const crosses = yi > py !== yj > py
+		const xIntersection = ((xj - xi) * (py - yi)) / (yj - yi || Number.MIN_VALUE) + xi
 
-		if (crosses && point[0] <= xIntersection + GEOMETRY_EPSILON) {
+		if (crosses && px <= xIntersection + GEOMETRY_EPSILON) {
 			inside = !inside
 		}
 

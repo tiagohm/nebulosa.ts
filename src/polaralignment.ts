@@ -1,12 +1,12 @@
 import { type Angle, normalizePI } from './angle'
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from './astrometry'
-import { PI, PIOVERTWO, SIDEREAL_ARCSEC_PER_SECOND } from './constants'
+import { PI, PIOVERTWO, SIDEREAL_RATE } from './constants'
 import type { HorizontalCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
+import { pixelScale } from './formulas'
 import type { GeographicPosition } from './location'
 import { matMulVec, matTransposeMulVec } from './mat3'
-import { gcrsToItrsRotationMatrix, precessionNutationMatrix, type Time } from './time'
-import { angularSizeOfPixel } from './util'
+import { cirsRotationMatrix, gcrsToItrsRotationMatrix, type Time } from './time'
 import { validateInRange, validateLatitude, validatePositiveFinite } from './validation'
 import { type Vec3, vecCross, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues } from './vec3'
 
@@ -57,7 +57,7 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle], p2: r
 	if ((pole[2] < 0 && isNorthern) || (pole[2] > 0 && !isNorthern)) vecNegateMut(pole)
 
 	// Find the azimuth and altitude of the mount pole (normal to the plane defined by the three reference stars)
-	const { azimuth, altitude } = cirsToObserved(matMulVec(precessionNutationMatrix(time), pole), time, refraction, location)
+	const { azimuth, altitude } = cirsToObserved(matMulVec(cirsRotationMatrix(time), pole), time, refraction, location)
 
 	// Compute the azimuth and altitude error
 	const latitude = referencePoleAltitude(location, refraction)
@@ -95,7 +95,7 @@ export function threePointPolarAlignmentAfterAdjustment(
 
 	// Apply constrained correction on the current pole: azimuth around local up, altitude around local east-west.
 	const newPole = vecRotateByRodrigues(vecRotateByRodrigues(result.pole, upAxis, azimuthAdjustment), eastAxis, altitudeAdjustment)
-	const { azimuth, altitude } = cirsToObserved(matMulVec(precessionNutationMatrix(time), newPole), time, refraction, location)
+	const { azimuth, altitude } = cirsToObserved(matMulVec(cirsRotationMatrix(time), newPole), time, refraction, location)
 
 	// Recompute the azimuth and altitude error
 	const latitude = referencePoleAltitude(location, refraction)
@@ -243,7 +243,7 @@ export const DARV_EXPOSURE_PRESETS = {
 export interface DarvExposureInput {
 	// Telescope focal length, in millimeters.
 	focalLength: number
-	// Camera pixel size, in the unit expected by angularSizeOfPixel.
+	// Camera pixel size, in the unit expected by pixelScale.
 	pixelSize: number
 	// Star declination, in radians. Stars very close to the celestial pole are not suitable DARV targets.
 	declination: Angle
@@ -295,7 +295,7 @@ function computeDarvRaVelocity(declination: Angle, guideRateSidereal: number) {
 	if (cosDeclination <= MIN_RA_COS_DECLINATION) throw new RangeError('stars too close to the celestial pole are not recommended for DARV because RA motion becomes too small')
 
 	// DARV reverses RA between legs, so expose the speed magnitude instead of a signed direction.
-	return SIDEREAL_ARCSEC_PER_SECOND * guideRateSidereal * cosDeclination
+	return SIDEREAL_RATE * guideRateSidereal * cosDeclination
 }
 
 function computeDarvDriftDec(targetPolarErrorArcmin: number, geometryFactor: number) {
@@ -313,7 +313,7 @@ export function estimateDarvExposure(input: Readonly<DarvExposureInput>): DarvEx
 	validateLatitude(input.latitude)
 	const preset = validateDarvExposurePreset(input.preset)
 	const geometryFactor = computeDarvGeometryFactor(input.mode, input.latitude)
-	const imageScale = angularSizeOfPixel(input.focalLength, input.pixelSize)
+	const imageScale = pixelScale(input.pixelSize, input.focalLength)
 	const raVelocity = computeDarvRaVelocity(input.declination, preset.guideRateSidereal)
 	const driftDec = computeDarvDriftDec(preset.targetPolarError, geometryFactor)
 	const raTrailTime = (preset.targetTrail * imageScale) / raVelocity

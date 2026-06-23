@@ -46,6 +46,7 @@ export abstract class AzimuthalProjection implements Projection {
 	constructor(
 		readonly centerLongitude: Angle,
 		readonly centerLatitude: Angle,
+		readonly options?: ProjectionOptions,
 	) {
 		this.#sCenterLatitude = Math.sin(centerLatitude)
 		this.#cCenterLatitude = Math.cos(centerLatitude)
@@ -55,10 +56,13 @@ export abstract class AzimuthalProjection implements Projection {
 
 	protected abstract angularDistance(rho: number): number | false
 
-	project(longitude: Angle, latitude: Angle, out?: Point) {
+	project(longitude: Angle, latitude: Angle, out?: Point, options?: ProjectionOptions) {
 		const sinLatitude = Math.sin(latitude)
 		const cosLatitude = Math.cos(latitude)
-		const dLongitude = normalizePI(longitude - this.centerLongitude)
+		// 'west' mirrors the projection about the declination axis (RA increasing to the left), which
+		// is just a sign flip of the longitude delta; only x changes since y/sinC/cosC use cos(dLon).
+		const direction = raAxisDirectionFrom(options, this.options)
+		const dLongitude = direction === 'west' ? normalizePI(this.centerLongitude - longitude) : normalizePI(longitude - this.centerLongitude)
 		const sinDLongitude = Math.sin(dLongitude)
 		const cosDLongitude = Math.cos(dLongitude)
 		const x = cosLatitude * sinDLongitude
@@ -66,9 +70,11 @@ export abstract class AzimuthalProjection implements Projection {
 		const sinC = Math.hypot(x, y)
 		const cosC = this.#sCenterLatitude * sinLatitude + this.#cCenterLatitude * cosLatitude * cosDLongitude
 
+		// Apply the shared linear plane transform (scale, radius, false easting/northing, y-axis
+		// direction) the same way the cylindrical projections do, instead of emitting raw units.
 		if (sinC <= GEOMETRY_EPSILON) {
 			if (cosC < 0) return undefined
-			return fillPoint(out, 0, 0)
+			return projectPoint(out, 0, 0, options, this.options)
 		}
 
 		const rho = this.radialDistance(sinC, cosC)
@@ -77,22 +83,33 @@ export abstract class AzimuthalProjection implements Projection {
 
 		const scale = rho / sinC
 
-		return fillPoint(out, x * scale, y * scale)
+		return projectPoint(out, x * scale, y * scale, options, this.options)
 	}
 
 	unproject(x: number, y: number, out?: Point, options?: ProjectionOptions) {
-		if (x === 0 && y === 0) return fillPoint(out, 0, this.centerLatitude)
+		// Undo the linear plane transform first, then invert the spherical geometry on the
+		// normalized coordinates.
+		out = unprojectPoint(out, x, y, options, this.options)
+		if (out === undefined) return undefined
 
-		const rho = Math.hypot(x, y)
+		const px = out.x
+		const py = out.y
+
+		if (px === 0 && py === 0) return fillPoint(out, normalizeAngle(this.centerLongitude), this.centerLatitude)
+
+		const rho = Math.hypot(px, py)
 		const c = this.angularDistance(rho)
 
 		if (c === false) return undefined
 
 		const sinC = Math.sin(c)
 		const cosC = Math.cos(c)
-		const latitude = Math.asin(clamp(cosC * this.#sCenterLatitude + (y * sinC * this.#cCenterLatitude) / rho, -1, 1))
-		const dLongitude = Math.atan2(x * sinC, rho * this.#cCenterLatitude * cosC - y * this.#sCenterLatitude * sinC)
-		return fillPoint(out, normalizeAngle(this.centerLongitude + dLongitude), latitude)
+		const latitude = Math.asin(clamp(cosC * this.#sCenterLatitude + (py * sinC * this.#cCenterLatitude) / rho, -1, 1))
+		const dLongitude = Math.atan2(px * sinC, rho * this.#cCenterLatitude * cosC - py * this.#sCenterLatitude * sinC)
+		// Undo the 'west' mirror applied in project so the recovered longitude matches the input.
+		const direction = raAxisDirectionFrom(options, this.options)
+		const longitude = direction === 'west' ? this.centerLongitude - dLongitude : this.centerLongitude + dLongitude
+		return fillPoint(out, normalizeAngle(longitude), latitude)
 	}
 }
 
@@ -284,8 +301,10 @@ export class CylindricalEqualArea extends CylindricalProjection {
 	}
 
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
-		const longitude = longitudeFromLambda(lambda * this.cosStandardParallel, options, this.options)
-		return longitude === undefined ? undefined : projectPoint(out, longitude, (Math.sin(phi) - Math.sin(this.latitudeOfOrigin)) / this.cosStandardParallel, options, this.options)
+		// Wrap the longitude delta first, then apply the standard-parallel scale, so a non-zero
+		// central meridian round-trips (scaling lambda before subtracting it does not).
+		const longitude = longitudeFromLambda(lambda, options, this.options)
+		return longitude === undefined ? undefined : projectPoint(out, longitude * this.cosStandardParallel, (Math.sin(phi) - Math.sin(this.latitudeOfOrigin)) / this.cosStandardParallel, options, this.options)
 	}
 
 	unproject(x: number, y: number, out?: Point, options?: ProjectionOptions) {
@@ -341,17 +360,19 @@ export class CylindricalStereographic extends CylindricalProjection {
 	}
 
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
-		const longitude = longitudeFromLambda(lambda * this.cosStandardParallel, options, this.options)
+		// Wrap the longitude delta first, then apply the standard-parallel scale, so a non-zero
+		// central meridian round-trips (scaling lambda before subtracting it does not).
+		const longitude = longitudeFromLambda(lambda, options, this.options)
 		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE)
 		if (latitude === undefined) return undefined
-		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude, (1 + this.cosStandardParallel) * Math.tan(latitude / 2), options, this.options)
+		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude * this.cosStandardParallel, (1 + this.cosStandardParallel) * Math.tan(latitude / 2), options, this.options)
 	}
 
 	unproject(x: number, y: number, out?: Point, options?: ProjectionOptions) {
 		out = unprojectPoint(out, x, y, options, this.options)
 		if (out === undefined) return undefined
 
-		const longitude = longitudeFromDelta(out.x / this.cosStandardParallel, this.options)
+		const longitude = longitudeFromDelta(out.x / this.cosStandardParallel, options, this.options)
 		if (longitude === undefined) return undefined
 
 		const yLimit = 1 + this.cosStandardParallel

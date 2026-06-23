@@ -745,7 +745,8 @@ function fitSemiPhysicalModel(samples: readonly PreparedPointingSample[], option
 		const residuals = new Float64Array(samples.length)
 
 		for (let i = 0; i < samples.length; i++) {
-			const predicted = evaluateSemiPhysicalBasis(parameters, semiPhysicalBasis(samples[i].context))
+			// Reuse the design rows built once above instead of recomputing the basis (trig + allocations) each iteration.
+			const predicted = evaluateSemiPhysicalBasis(parameters, { dx: designRows[i * 2], dy: designRows[i * 2 + 1] })
 			residuals[i] = Math.hypot(samples[i].error.dx - predicted.dx, samples[i].error.dy - predicted.dy)
 		}
 
@@ -810,7 +811,7 @@ function semiPhysicalBasis(context: PointingContext): Readonly<{ dx: Float64Arra
 }
 
 // Evaluates one semi-physical basis instance.
-function evaluateSemiPhysicalBasis(parameters: Readonly<NumberArray>, basis: Readonly<{ dx: Float64Array; dy: Float64Array }>): PointingOffset {
+function evaluateSemiPhysicalBasis(parameters: Readonly<NumberArray>, basis: Readonly<{ dx: Readonly<NumberArray>; dy: Readonly<NumberArray> }>): PointingOffset {
 	let dx = 0
 	let dy = 0
 

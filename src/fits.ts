@@ -195,6 +195,19 @@ const COMPRESSION_EXTENSION_EXCLUDED_KEYS = new Set([
 	'END',
 ])
 
+// Emits the unsigned-integer BZERO/BSCALE convention keywords when an integer
+// encoding applies a nonzero zero-point that the header does not already declare.
+// writeInterleavedToPlanar stores unsigned samples as signed integers offset by
+// BZERO (32768 for 16-bit, 2147483648 for 32-bit); without these cards a
+// standards-compliant reader interprets the samples as signed and shifts every
+// pixel by the missing zero-point. Skips 8-bit and float data, which apply no
+// offset, and leaves an existing BZERO untouched (it is copied by the caller).
+function appendUnsignedIntegerScaling(cards: FitsHeaderCard[], header: Readonly<FitsHeader>, bitpix: BitpixOrZero) {
+	if ((bitpix !== 16 && bitpix !== 32) || header.BZERO !== undefined) return
+	cards.push(['BZERO', bitpix === 16 ? 32768 : 2147483648])
+	if (header.BSCALE === undefined) cards.push(['BSCALE', 1])
+}
+
 // Builds canonical image HDU cards and strips stale compressed-table keywords.
 function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean): FitsHeaderCard[] {
 	const cards: FitsHeaderCard[] = [[primary ? 'SIMPLE' : 'XTENSION', primary ? true : 'IMAGE']]
@@ -212,6 +225,8 @@ function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean): 
 	}
 
 	if (!primary) cards.push(['PCOUNT', 0], ['GCOUNT', 1])
+
+	appendUnsignedIntegerScaling(cards, header, bitpix)
 
 	for (const key in header) {
 		if (COMPRESSION_EXTENSION_EXCLUDED_KEYS.has(key)) continue
@@ -330,6 +345,8 @@ async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: Image
 	if (channels > 1) {
 		cards.push(['ZNAXIS3', channels], ['ZTILE3', 1])
 	}
+
+	appendUnsignedIntegerScaling(cards, header, bitpix)
 
 	for (const key in header) {
 		if (COMPRESSION_EXTENSION_EXCLUDED_KEYS.has(key)) continue

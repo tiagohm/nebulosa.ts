@@ -257,8 +257,8 @@ describe('cd', () => {
 	test('CROTA2', () => {
 		const header = { CROTA2: -1.101214133109e2, CDELT1: 7.602831325648e-4, CDELT2: 7.597431522795e-4 }
 		expect(cd(header, 1, 1)).toBeCloseTo(-2.618428778471e-4, 5)
-		expect(cd(header, 1, 2)).toBeCloseTo(-7.137707958324e-4, 5)
-		expect(cd(header, 2, 1)).toBeCloseTo(7.133727984992e-4, 5)
+		expect(cd(header, 1, 2)).toBeCloseTo(7.137707958324e-4, 5)
+		expect(cd(header, 2, 1)).toBeCloseTo(-7.133727984992e-4, 5)
 		expect(cd(header, 2, 2)).toBeCloseTo(-2.613597287207e-4, 15)
 	})
 })

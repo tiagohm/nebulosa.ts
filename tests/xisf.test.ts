@@ -243,3 +243,17 @@ Created with libXISF - https://nouspiro.space
 	expect(header.GAIN).toBe(0)
 	expect(header.OFFSET).toBe(0)
 })
+
+test('parses FITS keyword values in scientific notation as numbers', () => {
+	const xml = `<xisf version="1.0"><Image geometry="1:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:2473:2"><FITSKeyword name="CD1_1" value="-2.8e-7" comment=""/><FITSKeyword name="CDELT1" value="1.5E-10" comment=""/><FITSKeyword name="BIGNUM" value="1e21" comment=""/><FITSKeyword name="PLAIN" value="2.9" comment=""/></Image></xisf>`
+	const images = parseXisfHeader(Buffer.from(xml))
+
+	expect(images).toHaveLength(1)
+
+	const header = images[0].header
+
+	expect(header.CD1_1).toBe(-2.8e-7)
+	expect(header.CDELT1).toBe(1.5e-10)
+	expect(header.BIGNUM).toBe(1e21)
+	expect(header.PLAIN).toBe(2.9)
+})

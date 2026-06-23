@@ -1367,7 +1367,6 @@ await catalog.close()
 ### Util ![](bun.webp) ![](browser.webp)
 
 ```ts
-angularSizeOfPixel(focalLength, pixelSize) // CCD Resolution in arcsec/pixel
 minOf(array) // Minimum value of the array
 maxOf(array) // Maximum value of the array
 meanOf(array) // Mean value of the array
@@ -1389,6 +1388,7 @@ vecDistance(v, u) // Distance between vectors
 vecAngle(v, u) // Angle between vectors
 vecDot(v, u) // Dot product between vectors
 vecCross(v, u) // Cross product between vectors
+vecPolarAngle(v)
 vecLatitude(v)
 vecLongitude(v)
 vecNegate(v) // Negate the vector

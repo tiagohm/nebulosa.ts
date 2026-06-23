@@ -908,14 +908,16 @@ export class FirmataClient implements Disposable {
 
 	samplingInterval(milliseconds: number) {
 		const message = new Uint8Array([START_SYSEX, SAMPLING_INTERVAL, 0, 0, END_SYSEX])
-		encodeByteAs7Bit(Math.max(MIN_SAMPLING_INTERVAL, Math.min(milliseconds, MAX_SAMPLING_INTERVAL)), message, 2)
+		// The interval is a 14-bit field (LSB+MSB, both 7-bit); encodeByteAs7Bit only keeps 8 bits.
+		writeValueAsTwo7bitBytes(message, 2, Math.max(MIN_SAMPLING_INTERVAL, Math.min(milliseconds, MAX_SAMPLING_INTERVAL)))
 		this.send(message)
 	}
 
 	twoWireConfig(delayInMicroseconds: number) {
 		this.#maxTwoWireDelay = Math.max(this.#maxTwoWireDelay, delayInMicroseconds)
 		const message = new Uint8Array([START_SYSEX, TWO_WIRE_CONFIG, 0, 0, END_SYSEX])
-		encodeByteAs7Bit(this.#maxTwoWireDelay, message, 2)
+		// The I2C delay is a 14-bit field (LSB+MSB, both 7-bit); encodeByteAs7Bit only keeps 8 bits.
+		writeValueAsTwo7bitBytes(message, 2, this.#maxTwoWireDelay)
 		this.send(message)
 	}
 

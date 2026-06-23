@@ -361,6 +361,12 @@ describe('command encoding', () => {
 		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x7a, 1, 0, 0xf7]))
 	})
 
+	test('sampling interval encodes the full 14-bit value', () => {
+		// 1000 ms needs both 7-bit bytes (LSB 0x68, MSB 0x07); an 8-bit encoder would drop bits 8-9.
+		client.samplingInterval(1000)
+		expect(messages[0]).toEqual(Buffer.from([0xf0, 0x7a, 1000 & 0x7f, (1000 >> 7) & 0x7f, 0xf7]))
+	})
+
 	test('two-wire config keeps max delay', () => {
 		client.twoWireConfig(10)
 		client.twoWireConfig(4)

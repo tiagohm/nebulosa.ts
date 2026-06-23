@@ -2,12 +2,11 @@ import type { Angle } from './angle'
 import { DEG2RAD } from './constants'
 import type { CartesianCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
-import { clamp } from './math'
 import { gibbs, type GibbsWarning } from './orbit.fit.gibbs'
 import { herrickGibbs, type HerrickGibbsWarning } from './orbit.fit.herrickgibbs'
 import { type Time, timeSubtract } from './time'
 import { validateFinite, validateLatitude, validateNonNegativeFinite, validatePositiveFinite, validateTime, validateVector } from './validation'
-import { type MutVec3, type Vec3, vecCross, vecCrossLength, vecDot, vecLength, vecNormalizeMut, vecTripleProduct } from './vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecCrossLength, vecDot, vecLength, vecNormalizeMut, vecTripleProduct } from './vec3'
 
 const DEFAULT_MIN_POSITIVE_RHO = 1e-12
 const DEFAULT_MAX_ITERATIONS = 96
@@ -528,14 +527,10 @@ function selectCandidate(candidates: readonly Candidate[]) {
 
 function angularDiagnostics(rhoHat1: Vec3, rhoHat2: Vec3, rhoHat3: Vec3): GaussResult['diagnostics']['angles'] {
 	return {
-		theta12: angleBetweenUnit(rhoHat1, rhoHat2),
-		theta23: angleBetweenUnit(rhoHat2, rhoHat3),
-		theta13: angleBetweenUnit(rhoHat1, rhoHat3),
+		theta12: vecAngleUnit(rhoHat1, rhoHat2),
+		theta23: vecAngleUnit(rhoHat2, rhoHat3),
+		theta13: vecAngleUnit(rhoHat1, rhoHat3),
 	}
-}
-
-function angleBetweenUnit(a: Vec3, b: Vec3): Angle {
-	return Math.acos(clamp(vecDot(a, b), -1, 1))
 }
 
 function geometryWarnings(angles: GaussResult['diagnostics']['angles']) {

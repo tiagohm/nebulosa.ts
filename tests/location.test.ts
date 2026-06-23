@@ -107,6 +107,36 @@ test('gcrs dRdtTimesRtAt matches finite difference of rotationAt', () => {
 	for (let i = 0; i < 9; i++) expect(actual[i]).toBeCloseTo(expected[i], 8)
 })
 
+test('gcrsRotationAt does not corrupt the cached GCRS-to-ITRS matrix', () => {
+	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+
+	const before = Array.from(gcrsToItrsRotationMatrix(t))
+	gcrsRotationAt(p, t)
+	const after = gcrsToItrsRotationMatrix(t)
+
+	for (let i = 0; i < 9; i++) expect(after[i]).toBe(before[i])
+})
+
+test('gcrs dRdtTimesRtAt stays correct after rotationAt (frameAt order)', () => {
+	const p = geodeticLocation(1, 0.5, 0)
+	const t = timeYMDHMS(2020, 1, 1, 0, 0, 0, Timescale.UTC)
+	const frame = gcrs(p)
+
+	// frameAt calls rotationAt before dRdtTimesRtAt; the latter must not read a
+	// matrix that the former corrupted in the shared time cache.
+	frame.rotationAt(t)
+	const actual = frame.dRdtTimesRtAt!(t)
+
+	// Independent finite difference using fresh time objects (clean caches).
+	const r = gcrsRotationAt(p, { day: t.day, fraction: t.fraction, scale: t.scale })
+	const rp = gcrsRotationAt(p, { day: t.day, fraction: t.fraction + ONE_SECOND, scale: t.scale })
+	const rm = gcrsRotationAt(p, { day: t.day, fraction: t.fraction - ONE_SECOND, scale: t.scale })
+	const expected = matMulTranspose(matMulScalar(matMinus(rp, rm), 0.5 / ONE_SECOND), r)
+
+	for (let i = 0; i < 9; i++) expect(actual[i]).toBeCloseTo(expected[i], 8)
+})
+
 test('gcrs rotationAt is orthonormal', () => {
 	const p = geodeticLocation(deg(-45), deg(-23), meter(890))
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)

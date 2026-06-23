@@ -292,6 +292,7 @@ Prefer readable code by default, but avoid unnecessary allocations, copies, call
 - Validate at system boundaries instead of repeatedly validating the same trusted data deep inside hot paths.
 - Avoid repeated deep validation of objects that were already validated.
 - Avoid constructing expensive error messages unless they are actually needed.
+- Use the most performant formula instead of the most readable or usual one.
 
 ### Approval rule
 

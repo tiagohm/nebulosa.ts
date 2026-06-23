@@ -53,7 +53,8 @@ export interface HyperbolicRegression extends Regression, InverseRegression, Min
 export interface TrendLineRegression extends Regression, MinimumPointRegression {
 	readonly left: LinearRegression
 	readonly right: LinearRegression
-	readonly intersection: Readonly<Point>
+	// Intersection of the left and right trend lines, or null when they are parallel or degenerate.
+	readonly intersection: Readonly<Point> | null
 }
 
 export interface ChebyshevRegression extends Regression {
@@ -160,26 +161,35 @@ export function chebyshevLeastSquares(x: Readonly<NumberArray>, y: Readonly<Numb
 	}
 }
 
-// Computes intercept and slope using the ordinary least squares method
+// Computes intercept and slope using the ordinary least squares method.
+// Uses a two-pass, mean-subtracted formulation to avoid the catastrophic cancellation that the
+// textbook nΣxy - ΣxΣy form suffers when x has a large mean and small variance.
 // https://en.wikipedia.org/wiki/Ordinary_least_squares
 export function simpleLinearRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): LinearRegression {
 	const n = Math.min(x.length, y.length)
 
-	let xSum = 0
-	let ySum = 0
-	let xSquared = 0
-	let xy = 0
+	let xMean = 0
+	let yMean = 0
 
 	for (let i = 0; i < n; i++) {
-		xSum += x[i]
-		ySum += y[i]
-		xSquared += x[i] * x[i]
-		xy += x[i] * y[i]
+		xMean += x[i]
+		yMean += y[i]
 	}
 
-	const numerator = n * xy - xSum * ySum
-	const slope = numerator / (n * xSquared - xSum * xSum)
-	const intercept = (1 / n) * ySum - slope * (1 / n) * xSum
+	xMean /= n
+	yMean /= n
+
+	let sxy = 0
+	let sxx = 0
+
+	for (let i = 0; i < n; i++) {
+		const dx = x[i] - xMean
+		sxy += dx * (y[i] - yMean)
+		sxx += dx * dx
+	}
+
+	const slope = sxy / sxx
+	const intercept = yMean - slope * xMean
 
 	return {
 		xPoints: x,
@@ -298,7 +308,9 @@ export function quadraticRegression(x: Readonly<NumberArray>, y: Readonly<Number
 	const d = 2 * a
 	const e = 2 * d // 4a
 	const b2 = b * b
-	regression.minimum = { x: -b / d, y: c - b2 / e }
+	// Only a convex parabola (a > 0) has a true minimum at its vertex. When a <= 0 the parabola opens
+	// downward or degenerates to a line, so no minimum exists and the point is reported as non-finite.
+	regression.minimum = a > 0 ? { x: -b / d, y: c - b2 / e } : { x: Number.NaN, y: Number.NaN }
 	return regression
 }
 
@@ -507,12 +519,17 @@ export function regressionScore(regression: Regression, x: Readonly<NumberArray>
 	return { r, r2, rss, rmsd }
 }
 
-export function intersect(a: LinearRegression, b: LinearRegression): Readonly<Point> {
-	// Parallel lines do not intersect
-	if (a.slope === b.slope) return { x: 0, y: 0 }
+// Computes the intersection point of two lines, or null when they are parallel or degenerate.
+export function intersect(a: LinearRegression, b: LinearRegression): Readonly<Point> | null {
+	const denominator = a.slope - b.slope
 
-	const x = (b.intercept - a.intercept) / (a.slope - b.slope)
+	// Parallel lines (equal slopes) and degenerate fits (non-finite slope difference) have no intersection.
+	if (denominator === 0 || !Number.isFinite(denominator)) return null
+
+	const x = (b.intercept - a.intercept) / denominator
 	const y = a.slope * x + a.intercept
+
+	if (!Number.isFinite(x) || !Number.isFinite(y)) return null
 
 	return { x, y }
 }

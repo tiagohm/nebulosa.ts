@@ -660,6 +660,13 @@ const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	ditherOffsetY: 0,
 	ditherActive: false,
 	consecutiveBadFrames: 0,
+	// Explicit undefined so reset()'s Object.assign actually clears these optional fields.
+	// Without the keys present, Object.assign would leave stale values: a stale lastGoodMeasurement
+	// makes the first frame after a re-lock look like an impossible jump, and a stale lastTimestamp
+	// corrupts the dropped-frame cadence check.
+	lastTimestamp: undefined,
+	lastGoodMeasurementX: undefined,
+	lastGoodMeasurementY: undefined,
 	filteredRA: 0,
 	filteredDEC: 0,
 	lastDecDirection: null,

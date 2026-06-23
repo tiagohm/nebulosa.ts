@@ -3,6 +3,7 @@ import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYS
 import { type EquatorialCoordinate, equatorialToJ2000 } from './coordinate'
 import { meter } from './distance'
 import type { FitsHeader } from './fits'
+import { pixelScale } from './formulas'
 import type { Point } from './geometry'
 import { writeImageToFits, writeImageToXisf } from './image'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from './image.generator'
@@ -20,7 +21,6 @@ import { mulberry32 } from './random'
 import type { PlotStarOptions } from './star.generator'
 import { formatTemporal, TIMEZONE } from './temporal'
 import { timeUnix } from './time'
-import { angularSizeOfPixel } from './util'
 
 const TICK_INTERVAL_MS = 100
 const SIDEREAL_DRIFT_RATE = TAU / SIDEREAL_DAYSEC
@@ -2522,7 +2522,7 @@ export class CameraSimulator extends DeviceSimulator {
 			const latitude = mount.geographicCoordinate.latitude
 			const longitude = mount.geographicCoordinate.longitude
 
-			if (elements.PAE_AZ.value > 0 || elements.PAE_AL.value > 0) {
+			if (elements.PAE_AZ.value !== 0 || elements.PAE_AL.value !== 0) {
 				;[centerRightAscension, centerDeclination] = polarAlignmentError(centerRightAscension!, centerDeclination!, latitude, this.#siderealTime(now, longitude), elements.PAE_AZ.value * ASEC2RAD, elements.PAE_AL.value * ASEC2RAD)
 			}
 
@@ -2530,8 +2530,8 @@ export class CameraSimulator extends DeviceSimulator {
 			;[centerRightAscension, centerDeclination] = equatorialToJ2000(centerRightAscension, centerDeclination)
 		}
 
-		const pixelScale = arcsec(angularSizeOfPixel(this.telescopeFocalLength, CAMERA_PIXEL_SIZE))
-		const radius = Math.hypot(this.sensorWidth, this.sensorHeight) * pixelScale * 0.5
+		const ps = arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength))
+		const radius = Math.hypot(this.sensorWidth, this.sensorHeight) * ps * 0.5
 		const key = this.#makeCatalogKey(centerRightAscension, centerDeclination, radius)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
@@ -2539,7 +2539,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const catalogSource = this.options?.catalogSources?.[type]
 		const stars =
 			catalogSource !== undefined && catalogSource !== null && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0
-				? this.#mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, pixelScale)
+				? this.#mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, ps)
 				: this.#randomSource()
 		this.#catalog = stars
 		this.#catalogKey = key

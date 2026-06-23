@@ -58,14 +58,23 @@ export function maxOf(a: Readonly<NumberArray>): readonly [number, number] {
 
 // Computes the mean value of an numeric array.
 // If the array is empty, it returns NaN.
+// Uses Neumaier compensated summation so the mean stays accurate for large or wide-ranging inputs.
 export function meanOf(a: Readonly<NumberArray>) {
 	const n = a.length
 	if (n === 0) return Number.NaN
 	if (n === 1) return a[0]
 
 	let sum = 0
-	for (let i = 0; i < n; i++) sum += a[i]
-	return sum / n
+	let compensation = 0
+
+	for (let i = 0; i < n; i++) {
+		const value = a[i]
+		const t = sum + value
+		compensation += Math.abs(sum) >= Math.abs(value) ? sum - t + value : value - t + sum
+		sum = t
+	}
+
+	return (sum + compensation) / n
 }
 
 // Computes the median value of a sorted numeric array.
@@ -120,9 +129,10 @@ export function percentileOf(values: Readonly<NumberArray>, percentile: number) 
 }
 
 // Computes the root-mean-square of a numeric array.
+// If the array is empty, it returns NaN, consistent with the other reducers.
 export function rmsOf(values: Readonly<NumberArray>) {
 	const n = values.length
-	if (n === 0) return 0
+	if (n === 0) return Number.NaN
 
 	let sumSquares = 0
 
@@ -146,10 +156,8 @@ export function binarySearch(a: Readonly<NumberArray>, key: number, { from = 0, 
 			from = index + 1
 		} else if (value > key || Number.isNaN(value)) {
 			right = index - 1
-		} else if (value === key) {
-			return index
 		} else {
-			right = index - 1
+			return index
 		}
 	}
 
@@ -170,19 +178,12 @@ export function binarySearchWithComparator<T>(a: readonly T[], comparator: Binar
 			from = index + 1
 		} else if (cmp > 0 || Number.isNaN(cmp)) {
 			right = index - 1
-		} else if (cmp === 0) {
-			return index
 		} else {
-			right = index - 1
+			return index
 		}
 	}
 
 	return positive ? from : -(from + 1)
-}
-
-// Computes the angular size of pixel in arcsec given the `focalLength` in mm and `pixelSize` in µm.
-export function angularSizeOfPixel(focalLength: number, pixelSize: number) {
-	return focalLength <= 0 ? 0 : (pixelSize / focalLength) * 206.265
 }
 
 // Sorts numeric identifiers in ascending order.
@@ -191,11 +192,6 @@ export function NumberComparator<T extends number | bigint>(left: T, right: T) {
 }
 
 // Sorts numeric identifiers in descending order.
-export function NumberComparatorDescensing<T extends number | bigint>(left: T, right: T) {
-	return left < right ? 1 : left > right ? -1 : 0
-}
-
-// Sorts numeric identifiers in descending order.
 export function NumberComparatorDescending<T extends number | bigint>(left: T, right: T) {
-	return NumberComparatorDescensing(left, right)
+	return left < right ? 1 : left > right ? -1 : 0
 }

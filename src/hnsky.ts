@@ -502,12 +502,13 @@ function decodeStar(area: number, recordNumber: number, raRaw: number, decRaw: n
 function* decodeHnsky290AreaRecords(header: Hnsky290FileHeader, buffer: Buffer, area: number): Generator<DecodedHnsky290Star, void> {
 	const { recordSize } = header
 	let start = HNSKY_290_HEADER_SIZE
+	// Largest offset at which a full record still fits; inclusive so the final record is not dropped.
 	const end = buffer.byteLength - recordSize
 	let recordNumber = 1
 	let currentMagnitude = Number.NaN
 	let currentDecHigh = 0
 
-	while (start < end) {
+	while (start <= end) {
 		const offset = start
 		const currentRecordNumber = recordNumber
 		const raRaw = buffer.readUIntLE(offset + (recordSize >= 9 ? 4 : 0), 3)

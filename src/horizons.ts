@@ -373,8 +373,6 @@ function makeParametersFromInput(parameters: HorizonsQueryParameters, input: str
 			parameters.N = toDeg(tpqr.n)
 		}
 
-		parameters.H = input.h
-		parameters.G = input.g
 		parameters.M1 = input.m1
 		parameters.M2 = input.m2
 		parameters.K1 = input.k1

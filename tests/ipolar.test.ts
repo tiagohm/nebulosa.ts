@@ -8,7 +8,7 @@ import { type GeographicPosition, geodeticLocation } from '../src/location'
 import { matMulVec, matTransposeMulVec } from '../src/mat3'
 import { type PlateSolution, plateSolutionFrom } from '../src/platesolver'
 import { mountAdjustmentAxes } from '../src/polaralignment'
-import { precessionNutationMatrix, type Time, timeYMDHMS } from '../src/time'
+import { cirsRotationMatrix, type Time, timeYMDHMS } from '../src/time'
 import { type Vec3, vecCross, vecDot, vecNormalizeMut, vecRotateByRodrigues } from '../src/vec3'
 
 test('solve similarity fixed point', () => {
@@ -54,11 +54,11 @@ test('celestialPoleVector uses refracted pole altitude when refraction is enable
 	time.location = location
 
 	const pole = celestialPoleVector(time, location)
-	const observedPole = cirsToObserved(matMulVec(precessionNutationMatrix(time), pole), time, undefined, location)
+	const observedPole = cirsToObserved(matMulVec(cirsRotationMatrix(time), pole), time, undefined, location)
 	const expectedAltitude = refractedAltitude(Math.abs(location.latitude), { pressure: 1013.25, temperature: 15, relativeHumidity: 0.5, wl: 0.55 })
 	expect(observedPole.altitude).toBeCloseTo(expectedAltitude, 9)
 
-	const geometricPole = cirsToObserved(matMulVec(precessionNutationMatrix(time), pole), time, false, location)
+	const geometricPole = cirsToObserved(matMulVec(cirsRotationMatrix(time), pole), time, false, location)
 	expect(Math.abs(geometricPole.altitude - Math.abs(location.latitude))).toBeLessThan(arcsec(1))
 })
 
@@ -399,7 +399,7 @@ function scenarioNamed(name: string): PracticalScenario {
 
 function inertialVectorFromObserved(azimuth: Angle, altitude: Angle, time: Time, location: GeographicPosition): Vec3 {
 	const [rightAscension, declination] = observedToCirs(azimuth, altitude, time, false, location)
-	return vecNormalizeMut(matTransposeMulVec(precessionNutationMatrix(time), eraS2c(rightAscension, declination)))
+	return vecNormalizeMut(matTransposeMulVec(cirsRotationMatrix(time), eraS2c(rightAscension, declination)))
 }
 
 function buildPracticalScenario({ name, location, start, steps, cameraOffset = deg(1.6), pixelScale = arcsec(30), baseRoll = deg(33), width = 1280, height = 1024, minimumAcceptedRaRotation = deg(0.5), completionThreshold = arcmin(4), calibrationExpectation = 'accept' }: PracticalScenarioDefinition): PracticalScenario {

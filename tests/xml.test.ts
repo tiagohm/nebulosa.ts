@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { SimpleXmlParser } from '../src/xml'
+import { SimpleXmlParser, type XmlNode } from '../src/xml'
 
 const input = `
 <person id="1" type="student">
@@ -191,5 +191,104 @@ describe('parse', () => {
 		expect(node).toHaveLength(1)
 		expect(node[0].name).toBe('person')
 		expect(node[0].attributes.status).toBe('😎')
+	})
+})
+
+describe('behavior', () => {
+	test('an opening tag with attributes is only emitted when it closes', () => {
+		const parser = new SimpleXmlParser()
+
+		// Regression guard: the opening tag must not complete a top-level node before its close.
+		expect(parser.parse('<person id="1">')).toBeEmpty()
+		expect(parser.parse('text</person>')).toEqual([{ name: 'person', attributes: { id: '1' }, children: [], text: 'text' }])
+	})
+
+	test('trims surrounding whitespace and drops whitespace-only text', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<a>  hello  </a>')[0].text).toBe('hello')
+		expect(parser.parse('<a> \t\n </a>')[0].text).toBe('')
+		// Internal whitespace inside the trimmed segment is preserved verbatim.
+		expect(parser.parse('<a>two  words</a>')[0].text).toBe('two  words')
+	})
+
+	test('keeps tag delimiters and equals literal inside quoted attribute values', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<a b="1<2>3/=4"/>')).toEqual([{ name: 'a', attributes: { b: '1<2>3/=4' }, children: [], text: '' }])
+	})
+
+	test('reads an empty attribute value followed by another attribute', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<a b="" c="2"/>')).toEqual([{ name: 'a', attributes: { b: '', c: '2' }, children: [], text: '' }])
+	})
+
+	test('allows whitespace inside closing and self-closing tags', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<person></person >')).toEqual([{ name: 'person', attributes: {}, children: [], text: '' }])
+		expect(parser.parse('<person/ >')).toEqual([{ name: 'person', attributes: {}, children: [], text: '' }])
+	})
+
+	test('ignores stray characters between and before top-level nodes', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('garbage<a/>between<b/>trailing')).toEqual([
+			{ name: 'a', attributes: {}, children: [], text: '' },
+			{ name: 'b', attributes: {}, children: [], text: '' },
+		])
+	})
+
+	test('parses Buffer and Uint8Array input', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse(Buffer.from('<a x="1"/>'))).toEqual([{ name: 'a', attributes: { x: '1' }, children: [], text: '' }])
+		expect(parser.parse(new TextEncoder().encode('<b y="2"/>'))).toEqual([{ name: 'b', attributes: { y: '2' }, children: [], text: '' }])
+	})
+
+	test('streams multibyte characters split one byte per chunk', () => {
+		const parser = new SimpleXmlParser()
+		const bytes = new TextEncoder().encode('<a x="café 😎">hï</a>')
+		const out: XmlNode[] = []
+
+		// Feeding a single byte at a time splits multibyte UTF-8 sequences across parse() calls.
+		for (const byte of bytes) {
+			for (const node of parser.parse(Uint8Array.of(byte))) out.push(node)
+		}
+
+		expect(out).toEqual([{ name: 'a', attributes: { x: 'café 😎' }, children: [], text: 'hï' }])
+	})
+})
+
+describe('errors and recovery', () => {
+	test('rejects malformed structures', () => {
+		expect(() => new SimpleXmlParser().parse('<a></a b>')).toThrow('invalid closing tag syntax')
+		expect(() => new SimpleXmlParser().parse('<a></a=b>')).toThrow('invalid closing tag character')
+		expect(() => new SimpleXmlParser().parse('<a/x>')).toThrow('invalid self-closing tag character')
+		expect(() => new SimpleXmlParser().parse('<a b@="1"/>')).toThrow('invalid attribute name character')
+		expect(() => new SimpleXmlParser().parse('</>')).toThrow('missing closing tag name')
+		expect(() => new SimpleXmlParser().parse('</person>')).toThrow('mismatched closing tag: expected none, received person')
+	})
+
+	test('rejects XML declarations and comments (outside the supported subset)', () => {
+		expect(() => new SimpleXmlParser().parse('<?xml version="1.0"?>')).toThrow('invalid tag start character')
+		expect(() => new SimpleXmlParser().parse('<!-- comment -->')).toThrow('invalid tag start character')
+	})
+
+	test('resets internal state after a failure so the parser stays reusable', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(() => parser.parse('<a></b>')).toThrow('mismatched closing tag')
+		// #fail() calls reset(), so a fresh well-formed document parses cleanly afterwards.
+		expect(parser.parse('<a/>')).toEqual([{ name: 'a', attributes: {}, children: [], text: '' }])
+	})
+
+	test('reset() clears a partially parsed tree', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<a><b>')).toBeEmpty()
+		parser.reset()
+		expect(parser.parse('<c/>')).toEqual([{ name: 'c', attributes: {}, children: [], text: '' }])
 	})
 })

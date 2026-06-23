@@ -4,7 +4,10 @@ import type { Distance } from './distance'
 
 // https://www.minorplanetcenter.net/iau/info/MPOrbitFormat.html
 
-export type CometOrbitType = 'P' | 'C' | 'D'
+// MPC comet orbit type marker (CometEls column 5): P periodic, C non-periodic, D defunct/disappeared,
+// X uncertain or undetermined orbit, A object on a cometary designation found to be asteroidal,
+// I interstellar object.
+export type CometOrbitType = 'P' | 'C' | 'D' | 'X' | 'A' | 'I'
 
 export interface MPCOrbit {
 	readonly designationPacked: string
@@ -162,14 +165,20 @@ function parseOptionalNumberSlice(line: string, start: number, end: number) {
 }
 
 // Parses and validates the comet orbit type marker.
-function parseCometOrbitType(line: string) {
+function parseCometOrbitType(line: string): CometOrbitType {
 	switch (line.charCodeAt(4)) {
+		case 65:
+			return 'A'
 		case 67:
 			return 'C'
 		case 68:
 			return 'D'
+		case 73:
+			return 'I'
 		case 80:
 			return 'P'
+		case 88:
+			return 'X'
 		default:
 			throw new RangeError(`invalid comet orbit type "${line.slice(4, 5)}"`)
 	}

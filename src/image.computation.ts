@@ -96,7 +96,11 @@ export function sigmaClip(image: Image, options: Partial<SigmaClipOptions> = DEF
 
 	const transform = options.transform ?? DEFAULT_SIGMA_CLIP_OPTIONS.transform
 	const bits = options.bits === undefined || typeof options.bits === 'number' ? new Int32Array(1 << (options.bits ?? 16)) : options.bits
-	options = { ...options, bits, transform: (p, i) => (mask[i] === 1 ? 0 : transform(p, i)), sigmaClip: undefined } as HistogramOptions
+	// Exclude already-rejected pixels from the iteration statistics through the histogram
+	// skip path. Mapping them into the histogram (e.g. to bin 0, or to |median| in the MAD)
+	// instead of excluding them biases the center, dispersion, and clip bounds once the
+	// rejected fraction grows, weakening convergence.
+	options = { ...options, bits, transform, sigmaClip: mask } as HistogramOptions
 
 	const isMono = channels === 1
 

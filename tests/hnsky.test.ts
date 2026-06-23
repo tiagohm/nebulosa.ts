@@ -104,6 +104,25 @@ test('readHnsky290Area decodes documented record formats', () => {
 	}
 })
 
+test('readHnsky290Area decodes the final record of a tile', () => {
+	const field: SyntheticStar = { rightAscension: hour(2.02), declination: deg(5.1), magnitude: 1.4 }
+	const outside: SyntheticStar = { rightAscension: hour(4), declination: deg(5.12), magnitude: 1.3 }
+
+	// Full record format with the in-field star placed last: a loop that stops one record early
+	// would silently drop it and decode zero matches.
+	const fullBuffer = Buffer.concat([makeHeader(7), makeFullRecord(outside, 7), makeFullRecord(field, 7)])
+	const fullStars = [...readHnsky290Area(readHnsky290Header(fullBuffer), fullBuffer, 146, REGION_QUERY)]
+	expect(fullStars).toHaveLength(1)
+	expect(fullStars[0].rightAscension).toBeCloseTo(field.rightAscension, 6)
+	expect(fullStars[0].declination).toBeCloseTo(field.declination, 6)
+
+	// Compact format where the single in-field star is the last record after its header record.
+	const compactBuffer = Buffer.concat([makeHeader(5), makeCompactHeaderRecord(field), makeCompactRecord(field)])
+	const compactStars = [...readHnsky290Area(readHnsky290Header(compactBuffer), compactBuffer, 146, REGION_QUERY)]
+	expect(compactStars).toHaveLength(1)
+	expect(compactStars[0].magnitude).toBeCloseTo(field.magnitude, 6)
+})
+
 test('findHnsky290Region merges stars from intersecting files', async () => {
 	const query: Hnsky290RegionQuery = { rightAscension: deg(11.1), declination: deg(5), radius: deg(2) }
 

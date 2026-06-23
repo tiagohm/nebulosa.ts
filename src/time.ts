@@ -1,6 +1,7 @@
 import type { Angle } from './angle'
 import { DAYSEC, DAYSPERJC, DAYSPERJY, DAYSPERTY, J2000, MJD0 } from './constants'
-import { eraC2teqx, eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
+// oxfmt-ignore
+import { eraC2i06a, eraC2teqx, eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from './erfa'
 import * as iers from './iers'
 import { itrs } from './itrs'
 import type { GeographicPosition } from './location'
@@ -39,6 +40,7 @@ export interface TimeCache {
 	nutation?: readonly [Angle, Angle]
 	precession?: Mat3
 	precessionNutation?: Mat3
+	cirsRotation?: Mat3
 	pmAngles?: readonly [Angle, Angle, Angle] // sprime, x, y
 	pmAnglesPolarMotion?: PolarMotion
 	pmMatrix?: Mat3
@@ -209,30 +211,34 @@ export function timeGPS(seconds: number) {
 	return timeFromEpoch(seconds, DAYSEC, 2444245, -0.4997800925925926, Timescale.TAI)
 }
 
+const NORMALIZED_TIME = new Float64Array(2)
+
 // Returns the sum of day and fraction as two 64-bit floats,
 // with the latter guaranteed to be within -0.5 and 0.5 (inclusive on either side).
 // The arithmetic is all done with exact floating point operations so no
 // precision is lost to rounding error. It is assumed the sum is less
 // than about 1E16, otherwise the remainder will be greater than 1.
 export function timeNormalize(day: number, fraction: number, divisor: number = 0, scale: Timescale = Timescale.UTC): Time {
-	let [sum, err] = twoSum(day, fraction)
+	twoSum(day, fraction, NORMALIZED_TIME)
 
-	if (divisor && Number.isFinite(divisor)) {
-		const q = sum / divisor
+	if (divisor !== 0 && Number.isFinite(divisor)) {
+		const q = NORMALIZED_TIME[0] / divisor
 		const [a, b] = twoProduct(q, divisor)
-		const [c, d] = twoSum(sum, -a)
-		;[sum, err] = twoSum(q, (c + (d + err - b)) / divisor)
+		const [c, d] = twoSum(NORMALIZED_TIME[0], -a)
+		twoSum(q, (c + (d + NORMALIZED_TIME[1] - b)) / divisor, NORMALIZED_TIME)
 	}
 
+	const sum = NORMALIZED_TIME[0]
+	const err = NORMALIZED_TIME[1]
 	day = Math.round(sum)
-	let [extra, frac] = twoSum(sum, -day)
-	frac += extra + err
+	twoSum(sum, -day, NORMALIZED_TIME)
+	NORMALIZED_TIME[1] += NORMALIZED_TIME[0] + err
 
 	// Our fraction can now have gotten >0.5 or <-0.5, which means we would
 	// lose one bit of precision. So, correct for that.
-	day += Math.round(frac)
-	;[extra, frac] = twoSum(sum, -day)
-	fraction = frac + extra + err
+	day += Math.round(NORMALIZED_TIME[1])
+	twoSum(sum, -day, NORMALIZED_TIME)
+	fraction = NORMALIZED_TIME[1] + NORMALIZED_TIME[0] + err
 
 	return { day, fraction, scale }
 }
@@ -304,7 +310,7 @@ export function cache(target: Time, cache?: TimeCache) {
 }
 
 // Copies the day and fraction from source to a new Time.
-function newTime(source: [number, number], time: Time, scale: Timescale = time.scale, normalize: boolean = false): Time {
+function newTime(source: [number, number], time: Time, scale: Timescale = time.scale, normalize: boolean = true): Time {
 	const [day, fraction] = source
 
 	if (normalize) {
@@ -329,7 +335,7 @@ export function timeConvert(time: Time, scale: Timescale) {
 }
 
 // Converts the given time to UT1 Time.
-export function ut1(time: Time, normalize: boolean = false): Time {
+export function ut1(time: Time, normalize: boolean = true): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UT1) return time
 	if (time.cache?.ut1) return time.cache.ut1
@@ -349,7 +355,7 @@ export function ut1(time: Time, normalize: boolean = false): Time {
 }
 
 // Converts the given time to UTC Time.
-export function utc(time: Time, normalize: boolean = false): Time {
+export function utc(time: Time, normalize: boolean = true): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UTC) return time
 	if (time.cache?.utc) return time.cache.utc
@@ -369,7 +375,7 @@ export function utc(time: Time, normalize: boolean = false): Time {
 }
 
 // Converts the given time to TAI Time.
-export function tai(time: Time, normalize: boolean = false): Time {
+export function tai(time: Time, normalize: boolean = true): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TAI) return time
 	if (time.cache?.tai) return time.cache.tai
@@ -390,7 +396,7 @@ export function tai(time: Time, normalize: boolean = false): Time {
 }
 
 // Converts the given time to TT Time.
-export function tt(time: Time, normalize: boolean = false): Time {
+export function tt(time: Time, normalize: boolean = true): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TT) return time
 	if (time.cache?.tt) return time.cache.tt
@@ -412,7 +418,7 @@ export function tt(time: Time, normalize: boolean = false): Time {
 }
 
 // Converts the given time to TCG Time.
-export function tcg(time: Time, normalize: boolean = false): Time {
+export function tcg(time: Time, normalize: boolean = true): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCG) return time
 	if (time.cache?.tcg) return time.cache.tcg
@@ -431,7 +437,7 @@ export function tcg(time: Time, normalize: boolean = false): Time {
 }
 
 // Converts the given time to TDB Time.
-export function tdb(time: Time, normalize: boolean = false): Time {
+export function tdb(time: Time, normalize: boolean = true): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TDB) return time
 	if (time.cache?.tdb) return time.cache.tdb
@@ -451,7 +457,7 @@ export function tdb(time: Time, normalize: boolean = false): Time {
 }
 
 // Converts the given time to TCB Time.
-export function tcb(time: Time, normalize: boolean = false): Time {
+export function tcb(time: Time, normalize: boolean = true): Time {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCB) return time
 	if (time.cache?.tcb) return time.cache.tcb
@@ -546,6 +552,20 @@ export function precessionNutationMatrix(time: Time): Mat3 {
 	const precessionNutation = time.providers?.pnm?.(t) ?? eraPnm06a(t.day, t.fraction)
 	cache(time).precessionNutation = precessionNutation
 	return precessionNutation
+}
+
+// Computes the 3x3 CIO-based GCRS -> CIRS (celestial-to-intermediate) rotation matrix.
+// Unlike precessionNutationMatrix, which is equinox based and places right ascension on the
+// true equinox, this matrix places it on the CIO. It is the correct companion to the CIO/ERA
+// based observed conversions (cirsToObserved/observedToCirs, which use eraAtioq/eraAtoiq):
+// pairing the equinox matrix with those routines offsets RA by the equation of origins, which
+// is zero at J2000 but grows ~50 arcsec/year. Cached on the time instance.
+export function cirsRotationMatrix(time: Time): Mat3 {
+	if (time.cache?.cirsRotation) return time.cache.cirsRotation
+	const t = tt(time)
+	const cirsRotation = eraC2i06a(t.day, t.fraction)
+	cache(time).cirsRotation = cirsRotation
+	return cirsRotation
 }
 
 // Computes the 3x3 matrix of Equation of Origins in cycles.

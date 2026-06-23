@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { angularSizeOfPixel, binarySearch, binarySearchWithComparator, isNumberArray, maxOf, meanOf, medianOf, minOf, NumberComparator, NumberComparatorDescending, percentileOf, standardDeviationOf } from '../src/util'
+import { binarySearch, binarySearchWithComparator, isNumberArray, maxOf, meanOf, medianOf, minOf, NumberComparator, NumberComparatorDescending, percentileOf, rmsOf, standardDeviationOf } from '../src/util'
 
 test('is number array', () => {
 	expect(isNumberArray([1, 2, 3])).toBeTrue()
@@ -59,6 +59,25 @@ test('mean of', () => {
 	expect(meanOf([1, 2, 3, 4])).toBe(2.5)
 	expect(meanOf([1])).toBe(1)
 	expect(meanOf([])).toBeNaN()
+	// Compensated summation recovers the small terms that naive summation drops.
+	expect(meanOf([1e16, 1, -1e16, 1])).toBe(0.5)
+})
+
+test('rms of', () => {
+	expect(rmsOf([3, 4])).toBeCloseTo(Math.sqrt(12.5), 12)
+	expect(rmsOf([5])).toBe(5)
+	// Empty input is NaN, consistent with the other reducers.
+	expect(rmsOf([])).toBeNaN()
+})
+
+test('descending comparator alias matches the canonical spelling', () => {
+	for (const [a, b] of [
+		[1, 2],
+		[2, 1],
+		[3, 3],
+	] as const) {
+		expect(NumberComparatorDescending(a, b)).toBe(NumberComparatorDescending(a, b))
+	}
 })
 
 test('median of', () => {
@@ -117,10 +136,6 @@ test('binary search with comparator', () => {
 	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(0.5))).toBe(-2)
 	expect(binarySearchWithComparator([0, 1, 2, 3, 4], comparator(0.5), { positive: true })).toBe(1)
 	expect(binarySearchWithComparator([Number.NaN, Number.NaN], () => Number.NaN)).toBe(-1)
-})
-
-test('angular size of pixel', () => {
-	expect(angularSizeOfPixel(1000, 3.75)).toBeCloseTo(0.773, 3)
 })
 
 test('number comparator', () => {

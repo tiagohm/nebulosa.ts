@@ -66,7 +66,10 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | 32 | 64 | 'auto' = 'auto', format?: PixelFormat): Image | undefined {
 	if (!isJpeg(buffer)) return undefined
 
-	const image = new Jpeg().decompress(buffer, format)
+	// The output is a single-channel image, so decode as luminance. Without this a color
+	// JPEG would decode to interleaved RGB and the mono-sized copy below would read
+	// R,G,B,... as a raster, producing a garbled frame.
+	const image = new Jpeg().decompress(buffer, format ?? 'GRAY')
 	if (!image) return undefined
 
 	const { data, width, height } = image

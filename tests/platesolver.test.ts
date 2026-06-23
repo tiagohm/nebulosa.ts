@@ -82,7 +82,7 @@ test('anisotropic cd matrix', () => {
 
 	expect(solution).toBeDefined()
 	expect(toDeg(solution!.orientation)).toBeCloseTo(30, 12)
-	expect(toDeg(solution!.scale)).toBeCloseTo(0.02, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(Math.SQRT2 / 100, 12)
 	expect(toDeg(solution!.width)).toBeCloseTo(1, 12)
 	expect(toDeg(solution!.height)).toBeCloseTo(1, 12)
 	expect(toDeg(solution!.radius)).toBeCloseTo(Math.SQRT2 / 2, 12)
@@ -97,7 +97,7 @@ test('90 degree cd matrix', () => {
 
 	expect(solution).toBeDefined()
 	expect(toDeg(solution!.orientation)).toBeCloseTo(90, 12)
-	expect(toDeg(solution!.scale)).toBeCloseTo(0.02, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(Math.SQRT2 / 100, 12)
 	expect(toDeg(solution!.width)).toBeCloseTo(1, 12)
 	expect(toDeg(solution!.height)).toBeCloseTo(1, 12)
 	expect(toDeg(solution!.radius)).toBeCloseTo(Math.SQRT2 / 2, 12)

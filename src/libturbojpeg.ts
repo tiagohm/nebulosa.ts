@@ -8,8 +8,8 @@ export type PixelFormat =
 	| 'BGR' // The red, green, and blue components in the image are stored in 3-sample pixels in the order B, G, R from lowest to highest memory address within each pixel.
 	| 'RGBX' // The red, green, and blue components in the image are stored in 4-sample pixels in the order R, G, B from lowest to highest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
 	| 'BGRX' // The red, green, and blue components in the image are stored in 4-sample pixels in the order B, G, R from lowest to highest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
-	| 'XBGR' // The red, green, and blue components in the image are stored in 4-sample pixels in the order R, G, B from highest to lowest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
-	| 'XRGB' // The red, green, and blue components in the image are stored in 4-sample pixels in the order B, G, R from highest to lowest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
+	| 'XBGR' // The red, green, and blue components in the image are stored in 4-sample pixels in the order B, G, R from highest to lowest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
+	| 'XRGB' // The red, green, and blue components in the image are stored in 4-sample pixels in the order R, G, B from highest to lowest memory address within each pixel. The X component is ignored when compressing/encoding and undefined when decompressing/decoding.
 	| 'GRAY' // Each 1-sample pixel represents a luminance (brightness) level from 0 to the maximum sample value (which is, for instance, 255 for 8-bit samples or 4095 for 12-bit samples or 65535 for 16-bit samples.)
 	| 'RGBA' // This is the same as @ref RGBX, except that when decompressing/decoding, the X component is guaranteed to be equal to the maximum sample value, which can be interpreted as an opaque alpha channel.
 	| 'BGRA' // This is the same as @ref BGRX, except that when decompressing/decoding, the X component is guaranteed to be equal to the maximum sample value, which can be interpreted as an opaque alpha channel.
@@ -160,12 +160,12 @@ export class Jpeg {
 
 		const isGray = format === 'GRAY'
 		const pitch = width * PIXEL_FORMAT_MAP[format][1]
-		let flag = FASTDCT
+		// Always disable TurboJPEG (re)allocation: the destination is a JS-owned Buffer (whether
+		// caller-supplied or allocated here) that TurboJPEG must never realloc or free. A too-small
+		// buffer then fails gracefully (tjCompress2 returns an error) instead of corrupting the heap.
+		const flag = FASTDCT | NOREALLOC
 
-		if (jpeg === undefined) {
-			jpeg = Buffer.allocUnsafe(this.estimateBufferSize(width, height, chrominanceSubsampling))
-			flag |= NOREALLOC
-		}
+		jpeg ??= Buffer.allocUnsafe(this.estimateBufferSize(width, height, chrominanceSubsampling))
 
 		const p = new BigInt64Array(2)
 		p[0] = BigInt(ptr(jpeg)) // ubyte** jpegBuf

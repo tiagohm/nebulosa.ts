@@ -49,7 +49,7 @@ test.skipIf(SKIP)(
 		// https://nova.astrometry.net/status/14909666
 		expect(solution).toBeDefined()
 		expect(toDeg(solution!.orientation)).toBeCloseTo(58.440371, 3)
-		expect(toArcsec(solution!.scale)).toBeCloseTo(170.968998, 3)
+		expect(toArcsec(solution!.scale)).toBeCloseTo(170.8, 1)
 		expect(toHour(solution!.rightAscension)).toBeCloseTo(12.474879, 3)
 		expect(toDeg(solution!.declination)).toBeCloseTo(56.719269, 3)
 		expect(toDeg(solution!.width)).toBeCloseTo(34.086917, 3)

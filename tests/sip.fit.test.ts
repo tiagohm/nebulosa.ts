@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { FitsHeader } from '../src/fits'
-import { type MatchedStar, type SipFitResult, type SipModel, applySipCorrection, buildSipDesignMatrix, countSipTerms, evaluateSipCorrection, fitSipDistortion, listSipTerms, sipModelIntoFitsHeader } from '../src/fits.sip'
 import { DEC_TAN_SIP, RA_TAN_SIP, tanProject, tanUnproject } from '../src/fits.wcs'
+import { type MatchedStar, type SipFitResult, type SipModel, applySipCorrection, buildSipDesignMatrix, countSipTerms, evaluateSipCorrection, fitSipDistortion, listSipTerms, sipModelIntoFitsHeader } from '../src/sip.fit'
 
 const WCS = { CRPIX1: 512, CRPIX2: 384, NAXIS1: 1024, NAXIS2: 768 } as const
 const TAN_WCS = { ...WCS, CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRVAL1: 187.5, CRVAL2: -22.5, CD1_1: -2.7e-4, CD1_2: 1.3e-6, CD2_1: 1.1e-6, CD2_2: 2.7e-4 } as const

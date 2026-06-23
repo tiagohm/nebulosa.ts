@@ -306,15 +306,19 @@ export function sphericalMountDeclinationAxisVector(origin: Vec3, polarAxis: Vec
 }
 
 // Computes distance to intersections of a line and a sphere.
-// Given a line through the origin (0,0,0) and an |xyz| endpoint,
-// and a sphere with the |xyz| center and radius,
-// return the distance from the origin to their two intersections.
-// If the line is tangent to the sphere, the two intersections will be
-// at the same distance. If the line does not intersect the sphere,
-// two NaNs values will be returned.
+// Given a line through the origin (0,0,0) along the direction of `endpoint`,
+// and a sphere with the given center and radius, returns the signed distances
+// from the origin to the two intersections (negative means behind the origin).
+// `endpoint` is normalized internally, so the returned values are true
+// distances regardless of its magnitude; a zero-length endpoint returns false.
+// If the line is tangent, both distances are equal. If the line misses the
+// sphere, false is returned.
 // http://paulbourke.net/geometry/circlesphere/index.html#linesphere
 export function intersectLineAndSphere(endpoint: Vec3, center: Vec3, radius: number): readonly [number, number] | false {
-	const minusB = vecDot(endpoint, center) * 2
+	const length = Math.hypot(endpoint[0], endpoint[1], endpoint[2])
+	if (length === 0) return false
+	const inverseLength = 1 / length
+	const minusB = (endpoint[0] * center[0] + endpoint[1] * center[1] + endpoint[2] * center[2]) * inverseLength * 2
 	const c = vecDot(center, center) - radius * radius
 	const discriminant = minusB * minusB - 4 * c
 	if (discriminant < 0) return false

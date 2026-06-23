@@ -25,18 +25,32 @@ export function toAtm(value: Pressure): number {
 	return value / ONE_ATM
 }
 
+// Molar mass of dry air (kg/mol).
+const AIR_MOLAR_MASS = 0.0289644
+// Universal gas constant (J/(mol·K)).
+const GAS_CONSTANT = 8.31432
+// Temperature lapse rate in the troposphere (K/m).
+const LAPSE_RATE = -0.0065
+// Altitude of the tropopause where the lapse-rate model gives way to the isothermal layer (m).
+const TROPOPAUSE_ALTITUDE = 11000
+// g·M product reused by both atmospheric layers (kg·m/(mol·s²)).
+const G_TIMES_MOLAR_MASS = G * AIR_MOLAR_MASS
+// Barometric exponent g·M/(R·L) for the troposphere power law.
+const BAROMETRIC_EXPONENT = G_TIMES_MOLAR_MASS / (GAS_CONSTANT * LAPSE_RATE)
+
 // Converts the altitude to pressure at specific temperature.
+// `temperature` is the sea-level base temperature in Celsius (default 15 °C), not the temperature at altitude.
 // https://www.mide.com/air-pressure-at-altitude-calculator
 export function pressureFrom(altitude: Distance, temperature: Temperature = 15): Pressure {
-	const e = (G * 0.0289644) / (8.31432 * -0.0065)
 	const k = toKelvin(temperature)
 	const m = toMeter(altitude)
 
-	if (m < 11000) {
-		return ONE_ATM * (k / (k - 0.0065 * m)) ** e
+	if (m < TROPOPAUSE_ALTITUDE) {
+		return ONE_ATM * (k / (k + LAPSE_RATE * m)) ** BAROMETRIC_EXPONENT
 	} else {
-		const a = ONE_ATM * (k / (k + -0.0065 * 11000)) ** e
-		const c = k + 11000 * -0.0065
-		return a * Math.exp((-G * 0.0289644 * (m - 11000)) / (8.31432 * c))
+		// Temperature at the tropopause; the stratosphere is modeled as an isothermal layer.
+		const c = k + LAPSE_RATE * TROPOPAUSE_ALTITUDE
+		const a = ONE_ATM * (k / c) ** BAROMETRIC_EXPONENT
+		return a * Math.exp((-G_TIMES_MOLAR_MASS * (m - TROPOPAUSE_ALTITUDE)) / (GAS_CONSTANT * c))
 	}
 }

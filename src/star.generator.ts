@@ -40,6 +40,10 @@ const DEFAULT_MAX_RADIUS = 24
 const DEFAULT_CUTOFF_SIGMA = 4.25
 const FAST_PATH_ELLIPTICITY_EPSILON = 1e-6
 const MAX_FOCUS_STEP = 100000
+// Maximum half-width of the plotted box, in units of the steepest Gaussian scale. Beyond this the
+// incremental exp() recurrence seed exp(-0.5 * n^2) underflows (n^2 / 2 > ~745) and the row march
+// breaks down; the dropped pixels carry less than exp(-648) of the star flux, so capping is lossless.
+const SAFE_RADIUS_SIGMA = 36
 
 const COLOR_INDEX_LUT = [
 	[-0.4, 0.72, 0.86, 1.42],
@@ -139,8 +143,18 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 	const minPlotRadius = Math.max(0, sanitizePositive(options.minPlotRadius, DEFAULT_MIN_RADIUS))
 	const maxPlotRadius = Math.max(minPlotRadius, sanitizePositive(options.maxPlotRadius, DEFAULT_MAX_RADIUS))
 	const wingsScale = psfModel === 'moffat' ? 1.35 : 1
-	const sigmaExtent = Math.max(sigma / Math.sqrt(axisRatio), haloStrength > 0 ? haloSigma / Math.sqrt(axisRatio) : 0)
-	const radius = Math.ceil(clamp(cutoffSigma * wingsScale * sigmaExtent * (1 - lowSnr * 0.08), minPlotRadius, maxPlotRadius))
+	const axisRatioSqrt = Math.sqrt(axisRatio)
+	const sigmaExtent = Math.max(sigma / axisRatioSqrt, haloStrength > 0 ? haloSigma / axisRatioSqrt : 0)
+	// Smallest Gaussian scale evaluated by the incremental exponential recurrence used in the
+	// plotting loops. Each row seeds the recurrence at the box edge as exp(-0.5 * (edge/scale)^2);
+	// far enough into the tail that seed underflows to 0, and the multiplicative march then
+	// collapses the whole row to 0 or NaN (0 * overflowing step), erasing even the core. Cap the
+	// radius at SAFE_RADIUS_SIGMA scales so the edge seed stays representable. The Moffat core is
+	// evaluated additively and never underflows, so only its optional Gaussian halo constrains it.
+	const haloScaleMinor = haloStrength > 0 ? haloSigma * axisRatioSqrt : Number.POSITIVE_INFINITY
+	const recurrenceScale = psfModel === 'moffat' ? haloScaleMinor : Math.min(sigma * axisRatioSqrt, haloScaleMinor)
+	const safeRadius = Number.isFinite(recurrenceScale) ? Math.max(1, Math.floor(SAFE_RADIUS_SIGMA * recurrenceScale)) : Number.POSITIVE_INFINITY
+	const radius = Math.min(Math.ceil(clamp(cutoffSigma * wingsScale * sigmaExtent * (1 - lowSnr * 0.08), minPlotRadius, maxPlotRadius)), safeRadius)
 	const plotMinX = Math.ceil(centerX - radius)
 	const plotMaxX = Math.floor(centerX + radius)
 	const plotMinY = Math.ceil(centerY - radius)
@@ -168,8 +182,6 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 
 		return true
 	}
-
-	const axisRatioSqrt = Math.sqrt(axisRatio)
 
 	if (psfModel === 'gaussian') {
 		const majorSigma = sigma / axisRatioSqrt

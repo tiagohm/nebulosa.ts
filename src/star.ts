@@ -2,13 +2,18 @@ import type { Angle } from './angle'
 import { DEFAULT_REFRACTION_PARAMETERS, type Observed, type PositionAndVelocity, type RefractionParameters } from './astrometry'
 import { ELLIPSOID_PARAMETERS, PIOVERTWO } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
-import { eraAtco13, eraStarpmpv, eraStarpv } from './erfa'
+import { eraAtco13, eraStarpm, eraStarpmpv, eraStarpv } from './erfa'
 import { pmAngles, type Time, Timescale, timeJulianYear, tt, ut1 } from './time'
 import type { Writable } from './types'
 import type { Vec3 } from './vec3'
 import type { Velocity } from './velocity'
 
 const DEFAULT_EPOCH = timeJulianYear(2000, Timescale.TDB)
+
+// J2000.0 expressed on the TT scale. `eraAtco13` measures its internal
+// proper-motion baseline (astrom.pmt) from J2000.0, so a star whose catalog
+// epoch differs from J2000.0 must first be propagated to this reference.
+const J2000_TT = tt(DEFAULT_EPOCH)
 
 export interface Star extends Readonly<EquatorialCoordinate> {
 	readonly pmRA: Angle
@@ -47,6 +52,14 @@ export function spaceMotion(star: StarPositionAndVelocity, time: Time): Position
 	return [p, star[1]]
 }
 
+// Computes the observed place (azimuth/altitude, hour angle, apparent RA/Dec)
+// of a star for the given time and Earth ephemeris.
+// `ebpv` is the barycentric position+velocity of the Earth (AU, AU/day) and
+// `ehp` its heliocentric position (AU). `refraction` selects the atmospheric
+// model: `false` disables refraction, `undefined` uses the default parameters.
+// The catalog data is assumed to be referenced to J2000.0; a star carrying a
+// different epoch is propagated to J2000.0 first so the internal proper-motion
+// baseline stays consistent.
 export function observeStar<T extends Star | StarPositionAndVelocity>(star: T, time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], refraction?: RefractionParameters | false): ObservedStar<T> {
 	if (!time.location) throw new Error('time.location is required')
 	const a = tt(time)
@@ -55,38 +68,24 @@ export function observeStar<T extends Star | StarPositionAndVelocity>(star: T, t
 	const [sp, xp, yp] = pmAngles(time)
 	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
 
+	// eraAtco13 expects the catalog referenced to J2000.0. When the star carries
+	// a different epoch, propagate its catalog data (position, proper motion,
+	// parallax, radial velocity) to J2000.0 before the transform; otherwise the
+	// proper motion would be applied over the wrong interval.
+	let { rightAscension, declination, pmRA, pmDEC, parallax, rv } = star
+	if ('epoch' in star && star.epoch !== DEFAULT_EPOCH) {
+		const e = tt(star.epoch)
+		const pm = eraStarpm(rightAscension, declination, pmRA, pmDEC, parallax, rv, e.day, e.fraction, J2000_TT.day, J2000_TT.fraction)
+		if (pm) [rightAscension, declination, pmRA, pmDEC, parallax, rv] = pm
+	}
+
 	// First set up the astrometry context for ICRS<->observed
 	const pressure = refraction === false ? 0 : (refraction?.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure)
 	const temperature = refraction === false ? 0 : (refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
 	const relativeHumidity = refraction === false ? 0 : (refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity)
 	const wl = refraction === false ? 0 : (refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl)
 
-	const [azimuth, zenith, hourAngle, rightAscension, declination, astrom] = eraAtco13(
-		a.day,
-		a.fraction,
-		b.day,
-		b.fraction,
-		star.rightAscension,
-		star.declination,
-		star.pmRA,
-		star.pmDEC,
-		star.parallax,
-		star.rv,
-		longitude,
-		latitude,
-		elevation,
-		xp,
-		yp,
-		sp,
-		pressure,
-		temperature,
-		relativeHumidity,
-		wl,
-		ebpv,
-		ehp,
-		radius,
-		flattening,
-	)
+	const [azimuth, zenith, hourAngle, observedRA, observedDEC, astrom] = eraAtco13(a.day, a.fraction, b.day, b.fraction, rightAscension, declination, pmRA, pmDEC, parallax, rv, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)
 
-	return { star, azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination, rightAscension, equationOfOrigins: astrom.eo } as const
+	return { star, azimuth, altitude: PIOVERTWO - zenith, hourAngle, declination: observedDEC, rightAscension: observedRA, equationOfOrigins: astrom.eo } as const
 }

@@ -97,7 +97,9 @@ export function season(year: number, name: Season) {
 		9 * Math.cos(deg(227.73 + 1222.114 * T)) +
 		8 * Math.cos(deg(15.45 + 16859.074 * T))
 
-	return time(jd0, (0.00001 * S) / deltaLambda)
+	// Meeus' method yields the JDE (dynamical time), so tag the instant as TT; otherwise a
+	// later utc()/tt() conversion would mishandle it by ~ΔT.
+	return time(jd0, (0.00001 * S) / deltaLambda, Timescale.TT)
 }
 
 // Computes the saros series number for the solar eclipse.

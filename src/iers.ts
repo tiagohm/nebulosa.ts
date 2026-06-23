@@ -31,11 +31,19 @@ function modifiedJulianDate(time: Time) {
 	return time.day - MJD0 + time.fraction
 }
 
-// Linearly interpolates one EOP column and clamps outside the tabulated range.
-function interpolate(time: Time, input: NumberArray, data: NumberArray) {
+// Bracketing samples and linear weight for one time within an EOP table; lo === hi marks a clamped edge.
+interface EopInterpolation {
+	readonly lo: number
+	readonly hi: number
+	readonly t: number
+}
+
+// Locates the bracketing rows and linear weight for the given time so the lookup can be shared across
+// columns. Clamps to the nearest edge outside the tabulated range and returns undefined for an empty table.
+function interpolationAt(time: Time, input: NumberArray): EopInterpolation | undefined {
 	const n = input.length
 
-	if (!n) return Number.NaN
+	if (!n) return undefined
 
 	const mjd = modifiedJulianDate(time)
 	const day = Math.floor(mjd)
@@ -45,26 +53,25 @@ function interpolate(time: Time, input: NumberArray, data: NumberArray) {
 		const k = -(i + 1)
 
 		// Do not extrapolate outside range, instead just propagate edge values.
-		if (k <= 0) return data[0]
-		if (k >= n) return data[n - 1]
+		if (k <= 0) return { lo: 0, hi: 0, t: 0 }
+		if (k >= n) return { lo: n - 1, hi: n - 1, t: 0 }
 
 		const t0 = input[k - 1]
-		const t1 = input[k]
-		const a = data[k - 1]
-		const b = data[k]
-
-		return Number.isFinite(a) && Number.isFinite(b) ? a + ((mjd - t0) / (t1 - t0)) * (b - a) : Number.NaN
+		return { lo: k - 1, hi: k, t: (mjd - t0) / (input[k] - t0) }
 	}
 
 	// Exact hits on the final row must clamp to the last known value.
-	if (i >= n - 1) return data[n - 1]
+	if (i >= n - 1) return { lo: n - 1, hi: n - 1, t: 0 }
 
 	const t0 = input[i]
-	const t1 = input[i + 1]
-	const a = data[i]
-	const b = data[i + 1]
+	return { lo: i, hi: i + 1, t: (mjd - t0) / (input[i + 1] - t0) }
+}
 
-	return Number.isFinite(a) && Number.isFinite(b) ? a + ((mjd - t0) / (t1 - t0)) * (b - a) : Number.NaN
+// Applies a precomputed bracket to one EOP column with linear interpolation; clamped edges return the edge value.
+function interpolateColumn(bracket: EopInterpolation, data: NumberArray) {
+	const a = data[bracket.lo]
+	if (bracket.lo === bracket.hi) return a
+	return a + bracket.t * (data[bracket.hi] - a)
 }
 
 export abstract class IersBase implements Iers {
@@ -74,19 +81,25 @@ export abstract class IersBase implements Iers {
 	protected ut1MinusUtc: NumberArray = EMPTY_TABLE
 
 	dut1(time: Time): number {
-		const dut1 = interpolate(time, this.mjd, this.ut1MinusUtc)
+		const bracket = interpolationAt(time, this.mjd)
+		const dut1 = bracket === undefined ? Number.NaN : interpolateColumn(bracket, this.ut1MinusUtc)
 		return Number.isFinite(dut1) ? dut1 : 0
 	}
 
 	xy(time: Time): [Angle, Angle] {
-		const x = interpolate(time, this.mjd, this.pmX)
-		const y = interpolate(time, this.mjd, this.pmY)
+		// Resolve the bracketing rows once and reuse it for both polar-motion columns.
+		const bracket = interpolationAt(time, this.mjd)
 
-		if (Number.isFinite(x) && Number.isFinite(y)) {
-			return [arcsec(x), arcsec(y)]
-		} else {
-			return [0, 0]
+		if (bracket !== undefined) {
+			const x = interpolateColumn(bracket, this.pmX)
+			const y = interpolateColumn(bracket, this.pmY)
+
+			if (Number.isFinite(x) && Number.isFinite(y)) {
+				return [arcsec(x), arcsec(y)]
+			}
 		}
+
+		return [0, 0]
 	}
 
 	abstract load(source: Source): Promise<void>

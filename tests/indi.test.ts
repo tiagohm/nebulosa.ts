@@ -1,10 +1,11 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { IndiClient, type IndiClientHandler } from '../src/indi.client'
-import type { Camera, Cover, FlatPanel, Focuser, GuideOutput, Mount, Power, Rotator, Thermometer, Wheel } from '../src/indi.device'
+import { type Camera, type Cover, expectedPierSide, type FlatPanel, type Focuser, type GuideOutput, meridianTimeIn, type Mount, type Power, type Rotator, type Thermometer, type Wheel } from '../src/indi.device'
 import { CameraManager, CoverManager, type DeviceHandler, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../src/indi.manager'
 import type { DefSwitchVector, DefTextVector, PropertyState } from '../src/indi.types'
 // oxfmt-ignore
 import { SimpleXmlParser } from '../src/xml'
+import { PI, SIDEREAL_DAYSEC, TAU } from '../src/constants'
 import { downloadPerTag } from './download'
 
 await downloadPerTag('indi')
@@ -129,6 +130,33 @@ describe('parseXml', () => {
 	})
 })
 
+describe('manager replay', () => {
+	// Replays the recorded session offline (no live server) so the camera state is exercised in CI.
+	test('applies the range carried by a set vector (IUUpdateMinMax)', () => {
+		const camera = new CameraManager()
+		const handler: IndiClientHandler = {
+			textVector: (c, m, t) => camera.textVector(c, m, t),
+			numberVector: (c, m, t) => camera.numberVector(c, m, t),
+			switchVector: (c, m, t) => camera.switchVector(c, m, t),
+			delProperty: (c, m) => camera.delProperty(c, m),
+		}
+
+		const client = new IndiClient({ handler })
+		client.parse(Buffer.from(text, 'ascii'))
+
+		const device = camera.get(client, 'CCD Simulator')!
+
+		// CCD_FRAME is defined once with max=0 and only refined through set vectors whose
+		// oneNumber elements carry the real range. The value must not be clamped to [0, 0].
+		expect(device.frame.width.value).toBe(1280)
+		expect(device.frame.height.value).toBe(1024)
+		expect(device.frame.width.max).toBe(1280)
+		expect(device.frame.height.max).toBe(1024)
+		expect(device.frame.x.max).toBe(1279)
+		expect(device.frame.y.max).toBe(1023)
+	})
+})
+
 describe('parse', () => {
 	const client = new IndiClient()
 
@@ -191,6 +219,40 @@ describe('write', () => {
 		expect(payload).toContain('<getProperties version="1.7"></getProperties>')
 		expect(payload).toContain('<getProperties version="1.7" device="CCD &amp; &quot;A&quot;" name="PROP&lt;1&gt;"></getProperties>')
 		expect(payload).toContain('<enableBLOB device="CCD &amp; &quot;A&quot;" name="CCD&gt;1">Also</enableBLOB>')
+	})
+})
+
+describe('meridianTimeIn', () => {
+	test('returns seconds until the next upper transit', () => {
+		// On the meridian now -> no remaining time.
+		expect(meridianTimeIn(0, 0)).toBe(0)
+		// A quarter turn east (6 sidereal hours) -> a quarter sidereal day.
+		expect(meridianTimeIn(PI / 2, 0)).toBeCloseTo(SIDEREAL_DAYSEC / 4, 3)
+		// Half a turn (12 sidereal hours) -> half a sidereal day (~11.97 solar hours).
+		expect(meridianTimeIn(PI, 0)).toBeCloseTo(SIDEREAL_DAYSEC / 2, 3)
+	})
+
+	test('wraps so a just-passed meridian waits almost a full sidereal day', () => {
+		// LST slightly past RA: the object just transited, so the wait is nearly one whole turn.
+		const justPassed = meridianTimeIn(0, 0.001)
+		expect(justPassed).toBeCloseTo(((TAU - 0.001) / TAU) * SIDEREAL_DAYSEC, 3)
+		expect(justPassed).toBeGreaterThan(SIDEREAL_DAYSEC * 0.99)
+	})
+})
+
+describe('expectedPierSide', () => {
+	const lst = PI // arbitrary local sidereal time
+
+	test('east of the meridian implies a west pier and vice versa', () => {
+		// Object one hour east of the meridian: not yet transited, HA = LST - RA < 0, so RA > LST.
+		expect(expectedPierSide(lst + PI / 12, 0, lst)).toBe('WEST')
+		// Object one hour west of the meridian: already transited, HA > 0, so RA < LST.
+		expect(expectedPierSide(lst - PI / 12, 0, lst)).toBe('EAST')
+	})
+
+	test('the pole is undefined', () => {
+		expect(expectedPierSide(0, PI / 2, lst)).toBe('NEITHER')
+		expect(expectedPierSide(0, -PI / 2, lst)).toBe('NEITHER')
 	})
 })
 

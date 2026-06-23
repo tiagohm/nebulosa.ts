@@ -10,7 +10,7 @@ import { matMulVec, matTransposeMulVec } from './mat3'
 import type { PlateSolution } from './platesolver'
 import type { DetectedStar } from './star.detector'
 import { fitSimilarityTransform, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from './star.matching'
-import { precessionNutationMatrix, type Time } from './time'
+import { cirsRotationMatrix, type Time } from './time'
 import { type Vec3, vecAngle, vecDot, vecMinus, vecMulScalar, vecNormalizeMut } from './vec3'
 
 export type IPolarPolarAlignmentStage = 'WAITING_FOR_POSITION_1' | 'WAITING_FOR_POSITION_2' | 'INITIAL_AXIS_ESTIMATION' | 'REFINEMENT' | 'COMPLETE' | 'FAILED'
@@ -201,13 +201,14 @@ export function celestialPoleVector(time: Time, location: GeographicPosition = t
 	const trueAltitude = Math.abs(location.latitude)
 	const altitude = refraction === false ? trueAltitude : refractedAltitude(trueAltitude, refraction)
 	const [rightAscension, declination] = observedToCirs(azimuth, altitude, time, refraction, location)
-	return vecNormalizeMut(matTransposeMulVec(precessionNutationMatrix(time), eraS2c(rightAscension, declination)))
+	return vecNormalizeMut(matTransposeMulVec(cirsRotationMatrix(time), eraS2c(rightAscension, declination)))
 }
 
 // Splits the small polar error into altitude and azimuth tangent components in the current topocentric frame.
 export function decomposePolarError(axisVector: Vec3, targetVector: Vec3, time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicPosition = time.location!): IPolarPolarAlignmentErrorMetrics {
-	const axisObserved = cirsToObserved(matMulVec(precessionNutationMatrix(time), axisVector), time, refraction, location)
-	const targetObserved = cirsToObserved(matMulVec(precessionNutationMatrix(time), targetVector), time, refraction, location)
+	const gcrsToCirs = cirsRotationMatrix(time)
+	const axisObserved = cirsToObserved(matMulVec(gcrsToCirs, axisVector), time, refraction, location)
+	const targetObserved = cirsToObserved(matMulVec(gcrsToCirs, targetVector), time, refraction, location)
 	const axisHorizontal = eraS2c(axisObserved.azimuth, axisObserved.altitude)
 	const targetHorizontal = eraS2c(targetObserved.azimuth, targetObserved.altitude)
 	const basis = horizontalBasis(targetObserved.azimuth, targetObserved.altitude)

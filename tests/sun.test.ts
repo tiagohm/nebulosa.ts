@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { arcsec } from '../src/angle'
 import { carringtonRotationNumber, nearestSolarEclipse, season, solarSaros, sunParallax, sunSemidiameter } from '../src/sun'
-import { time, timeToDate, timeYMD, timeYMDHMS, toJulianDay, utc } from '../src/time'
+import { time, Timescale, timeToDate, timeYMD, timeYMDHMS, toJulianDay, utc } from '../src/time'
 
 test('parallax', () => {
 	expect(sunParallax(1)).toBeCloseTo(arcsec(8.794), 7)
@@ -25,6 +25,14 @@ test('season', () => {
 	expect(timeToDate(season(1991, 'summer'))).toEqual([1991, 6, 21, 21, 19, 36, 114155028])
 	expect(timeToDate(season(1991, 'autumn'))).toEqual([1991, 9, 23, 12, 48, 56, 140399989])
 	expect(timeToDate(season(1991, 'winter'))).toEqual([1991, 12, 22, 8, 54, 53, 684271186])
+})
+
+test('season is reported in dynamical time (TT)', () => {
+	const s = season(2024, 'spring')
+	// Meeus' method yields the JDE, so the instant must be tagged TT, not UTC.
+	expect(s.scale).toBe(Timescale.TT)
+	// Converting to civil UTC must move the instant earlier by ΔT (~69 s in 2024), not be a no-op.
+	expect(toJulianDay(s) - toJulianDay(utc(s))).toBeCloseTo(69 / 86400, 4)
 })
 
 test('saros', () => {

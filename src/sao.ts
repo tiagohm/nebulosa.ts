@@ -6,7 +6,6 @@ import type { StarCatalogEntry } from './star.catalog'
 
 const SAO_EPOCH = 'B1950'
 const SAO_CATALOG_BUFFER_SIZE = 64 * 1024
-const SAO_CATALOG_REFILL_THRESHOLD = SAO_CATALOG_BUFFER_SIZE - 64
 
 export interface SaoCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
 	readonly id: number
@@ -84,11 +83,17 @@ export async function* readSaoCatalog(source: Source, bigEndian: boolean): Async
 
 	readHeader()
 
+	// Bytes consumed per star entry, derived from the header flags so the parser
+	// and the buffer guard agree. Matches nbent for well-formed catalogs.
+	const entrySize = (stnum ? 4 : 0) + 8 + 8 + 2 + 2 + (mprop ? 8 : 0)
+
 	while (true) {
-		if (position > SAO_CATALOG_REFILL_THRESHOLD) {
+		// Only parse when a full entry is buffered; refill (compact + read) when
+		// short. This stops a truncated or trailing-padded file from decoding a
+		// bogus entry out of stale buffer memory past the valid data.
+		if (size - position < entrySize) {
 			if (!(await read())) break
-		} else if (position >= size) {
-			break
+			if (size - position < entrySize) break
 		}
 
 		const xno = stnum ? readFloat() : star1++
@@ -97,6 +102,11 @@ export async function* readSaoCatalog(source: Source, bigEndian: boolean): Async
 		const declination = readDouble()
 		const spType = readString(2)
 		const magnitude = readShort() / 100
+		// The SAO binary catalog stores XRPM/XDPM as the coordinate rates dα/dt and dδ/dt in radians/year.
+		// XRPM is already dα/dt (no cosδ factor), matching what StarCatalogEntry.pmRA and ERFA's star
+		// routines expect, so unlike μα·cosδ catalogs (hyg, simbad, ucac4, vizier) it must NOT be divided
+		// by cosδ. Verified against SAO 62738 (Groombridge 1830): stored dα/dt·cosδ ≈ 4004 mas/yr matches
+		// the catalogued μα·cosδ.
 		const pmRA = mprop ? readFloat() : undefined
 		const pmDEC = mprop ? readFloat() : undefined
 

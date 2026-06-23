@@ -126,6 +126,35 @@ test('preserves flux for undersampled gaussian stars', () => {
 	}
 })
 
+test('keeps flux finite for sharp stars forced into a large plot radius', () => {
+	// A minimum plot radius far beyond a sharp star's natural support pushes the recurrence
+	// seed deep into the Gaussian tail. Without a safe-radius cap the seed underflows to 0 and
+	// the whole stamp collapses to 0/NaN, silently losing the star while still returning true.
+	const size = 96
+	const buffer = new Float64Array(size * size * 3)
+
+	const scenarios: PlotStarOptions[] = [{ minPlotRadius: 20 }, { minPlotRadius: 24, ellipticity: 0.8, theta: Math.PI / 2 }, { minPlotRadius: 22, psfModel: 'moffat', haloStrength: 0.3 }]
+
+	for (const channels of [1, 3] as const) {
+		for (const options of scenarios) {
+			buffer.fill(0)
+			expect(plotStar(buffer, size, size, channels, size / 2, size / 2, 1, 1, 50, 0, 0.4, options)).toBe(true)
+
+			let sum = 0
+			let nonFinite = 0
+			const used = size * size * channels
+			for (let i = 0; i < used; i++) {
+				const v = buffer[i]
+				if (Number.isFinite(v)) sum += v
+				else nonFinite++
+			}
+
+			expect(nonFinite).toBe(0)
+			expect(sum).toBeCloseTo(1, 5)
+		}
+	}
+})
+
 test('plots centered RGB stars with normalized color energy', () => {
 	const redBuffer = new Float64Array(WIDTH * HEIGHT * 3)
 	const blueBuffer = new Float64Array(WIDTH * HEIGHT * 3)

@@ -5,6 +5,9 @@ import { type Time, timeToUnixMillis } from './time'
 export const DATE_FORMAT = 'YYYY-MM-DD'
 export const TIME_FORMAT = 'HH:mm:ss.SSS'
 export const DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss.SSS'
+// The trailing `Z` is a literal UTC designator, not an offset token: the pattern language has no
+// timezone field. Always format with `timezone = 0`, otherwise the rendered wall-clock time is
+// shifted into the given offset while still being tagged `Z`, mislabeling local time as UTC.
 export const ISO8601_FORMAT = 'YYYY-MM-DDTHH:mm:ss.SSSZ'
 
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]

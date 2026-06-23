@@ -579,6 +579,26 @@ describe('configuration and regression tests', () => {
 		expect(reacquired.ra.duration).toBe(0)
 		expect(reacquired.dec.duration).toBe(0)
 	})
+
+	test('reset clears lastGoodMeasurement so a far re-lock is not rejected as a jump', () => {
+		const g = guider({ maxFrameJumpPx: 12 })
+		// Guide at the original position so lastGoodMeasurement is recorded near the base stars.
+		g.processFrame(guideFrame(BASE_STARS, 0))
+		g.processFrame(guideFrame(shiftStars(BASE_STARS, 0.3, 0.2), 1000))
+
+		g.reset()
+
+		// Reacquire far from the previous position: ~300 px away, well beyond maxFrameJumpPx.
+		const farStars = shiftStars(BASE_STARS, 300, 300)
+		g.processFrame(guideFrame(farStars, 2000)) // re-lock frame
+		const guided = g.processFrame(guideFrame(shiftStars(farStars, 0.4, 0.3), 3000))
+
+		// A stale lastGoodMeasurement would flag this as an impossible jump and refuse to guide.
+		expect(guided.diagnostics.notes).not.toContain('jump_rejected')
+		expect(guided.diagnostics.badFrame).toBeFalse()
+		expect(guided.diagnostics.measurementX).toBeDefined()
+		expect(guided.state).toBe('guiding')
+	})
 })
 
 describe('deterministic simulation scenarios', () => {

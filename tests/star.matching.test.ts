@@ -418,6 +418,17 @@ describe('star matching synthetic registration', () => {
 		expect(withAffine.model).toBe('affine')
 		expect(withAffine.rmsError ?? Infinity).toBeLessThan((similarityOnly.rmsError ?? Infinity) * 0.8)
 	})
+
+	test('affine refinement recovers a strong shear when the rematch grows past the seed', () => {
+		// Strong shear: the similarity seed keeps few inliers while the affine rematch (run at a larger
+		// radius) grows the inlier set well past it, exercising the affine refit over the extra inliers.
+		const scenario = generateScenario({ seed: 21, transform: affine(1, 0.12, 40, -0.09, 1, -28), noiseStd: 0.05, count: 90, minSeparation: 14, currentOutliers: 8 })
+		const result = matchStars(scenario.reference, scenario.current, { maxStars: 120, minInliers: 12, allowAffineFallback: true, modelPreference: 'affine' })
+		expect(result.success).toBeTrue()
+		expect(result.model).toBe('affine')
+		expect(result.inlierCount).toBeGreaterThanOrEqual(40)
+		expectRecovered(result, scenario.reference, scenario.current, 40, 0.6)
+	})
 })
 
 describe('property-style randomized recovery', () => {

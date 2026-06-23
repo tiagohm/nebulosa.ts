@@ -62,7 +62,7 @@ test('SimbadCatalog preserves zero-valued numeric columns', async () => {
 		expect(toDeg(star!.declination)).toBe(0)
 		expect(toMas(star!.pmRA!)).toBe(0)
 		expect(toMas(star!.pmDEC!)).toBe(0)
-		expect(star!.plx).toBe(0)
+		expect(star!.parallax).toBe(0)
 		expect(toKilometerPerSecond(star!.rv!)).toBe(0)
 	})
 })
@@ -116,7 +116,7 @@ describe.serial.skipIf(SKIP)('simbad catalog', () => {
 		expect(toMas(star!.pmRA!)).toBeCloseTo(-546.01 / Math.cos(centerDEC), 0)
 		expect(toMas(star!.pmDEC!)).toBeCloseTo(-1223.07, 0)
 		expect(toKilometerPerSecond(star!.rv!)).toBeCloseTo(-5.5, 0)
-		expect(star!.plx!).toBeCloseTo(379.21, 0)
+		expect(toMas(star!.parallax!)).toBeCloseTo(379.21, 0)
 	})
 
 	test('query around cone region', async () => {

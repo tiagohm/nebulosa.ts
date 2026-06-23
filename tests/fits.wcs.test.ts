@@ -140,7 +140,8 @@ describe('cd', () => {
 
 describe('cd from cdelt', () => {
 	test('converts scale and rotation into a CD matrix', () => {
-		expectMatrixCloseTo(cdFromCdelt(2, 3, PI / 2), [0, 3, -2, 0])
+		// Canonical WCS conversion: CD1_2 = -CDELT2·sin, CD2_1 = CDELT1·sin.
+		expectMatrixCloseTo(cdFromCdelt(2, 3, PI / 2), [0, -3, 2, 0])
 	})
 
 	test('applies axis flips to the rotated matrix', () => {
@@ -196,6 +197,11 @@ describe('tan project', () => {
 
 	test('matches the native WCS projection for CROTA2 headers', () => {
 		expectTanMatchesNativeProject(TAN_CROTA_HEADER, deg(211.82), deg(54.29), 8)
+	})
+
+	test('matches the native WCS projection for CROTA2 headers with same-sign CDELT', () => {
+		const header = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 100, CRPIX2: 100, CRVAL1: 150, CRVAL2: 20, CDELT1: 2e-4, CDELT2: 2e-4, CROTA2: 20 } as const
+		expectTanMatchesNativeProject(header, deg(150.02), deg(20.015), 8)
 	})
 
 	test('matches the native WCS projection for SIP headers', () => {

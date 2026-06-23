@@ -4,7 +4,7 @@ import type { EquatorialCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
 import { clamp, pmod } from './math'
 import { type StarCatalog, type StarCatalogQuery, type StarCatalogRaDecBox, splitRaBox, type Vertex } from './star.catalog'
-import { type MutVec3, type Vec3, vecCross, vecDot, vecLength, vecNegateMut, vecNormalize, vecTripleProduct } from './vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNegateMut, vecNormalize, vecTripleProduct } from './vec3'
 
 const HEALPIX_MAX_NSIDE = 2 ** 24
 const HEALPIX_FACE_COUNT = 12
@@ -477,11 +477,6 @@ function lonLatToVecInto(rightAscension: number, declination: number, out: MutVe
 	out[2] = Math.sin(declination)
 }
 
-// Computes the angular separation between two unit vectors.
-function angularDistance(a: Vec3, b: Vec3) {
-	return Math.acos(clamp(vecDot(a, b), -1, 1))
-}
-
 // Converts normalized spherical coordinates to a nested HEALPix pixel.
 function lonLatToPixel(nside: number, order: number, rightAscension: number, declination: number) {
 	const z = Math.sin(declination)
@@ -891,31 +886,54 @@ function distanceToRegion(point: Vec3, region: HealpixRegion) {
 	return distance
 }
 
+// Scratch unit vector reused by pointToArcDistance to avoid per-call allocation.
+const ARC_CLOSEST_SCRATCH: MutVec3 = [0, 0, 0]
+
 // Computes the angular distance from a point to a great-circle arc.
+// All inputs must be unit vectors. Uses the stable atan2-based vecAngleUnit instead of acos and
+// avoids allocations so it stays cheap inside the cover recursion.
 function pointToArcDistance(point: Vec3, start: Vec3, end: Vec3) {
-	const normal = vecCross(start, end)
-	const normalLength = Math.hypot(normal[0], normal[1], normal[2])
+	// Normal of the plane containing the arc (start x end), computed inline to avoid allocating.
+	const nx = start[1] * end[2] - start[2] * end[1]
+	const ny = start[2] * end[0] - start[0] * end[2]
+	const nz = start[0] * end[1] - start[1] * end[0]
+	const normalLength = Math.hypot(nx, ny, nz)
 
 	if (normalLength <= EPSILON) {
-		return Math.min(angularDistance(point, start), angularDistance(point, end))
+		return Math.min(vecAngleUnit(point, start), vecAngleUnit(point, end))
 	}
 
-	const unitNormal = [normal[0] / normalLength, normal[1] / normalLength, normal[2] / normalLength] as const
-	const projection = [point[0] - unitNormal[0] * vecDot(point, unitNormal), point[1] - unitNormal[1] * vecDot(point, unitNormal), point[2] - unitNormal[2] * vecDot(point, unitNormal)] as const
-	const projectionLength = Math.hypot(projection[0], projection[1], projection[2])
+	const invNormalLength = 1 / normalLength
+	const ux = nx * invNormalLength
+	const uy = ny * invNormalLength
+	const uz = nz * invNormalLength
+
+	// Project the point onto the arc plane by removing its component along the unit normal.
+	const along = point[0] * ux + point[1] * uy + point[2] * uz
+	const px = point[0] - ux * along
+	const py = point[1] - uy * along
+	const pz = point[2] - uz * along
+	const projectionLength = Math.hypot(px, py, pz)
 
 	if (projectionLength <= EPSILON) {
-		return Math.min(angularDistance(point, start), angularDistance(point, end))
+		return Math.min(vecAngleUnit(point, start), vecAngleUnit(point, end))
 	}
 
-	const closest = [projection[0] / projectionLength, projection[1] / projectionLength, projection[2] / projectionLength] as const
-	const arcLength = angularDistance(start, end)
+	// Closest point on the great circle, normalized onto the unit sphere into a reused buffer.
+	const invProjectionLength = 1 / projectionLength
+	const closest = ARC_CLOSEST_SCRATCH
+	closest[0] = px * invProjectionLength
+	closest[1] = py * invProjectionLength
+	closest[2] = pz * invProjectionLength
 
-	if (angularDistance(start, closest) + angularDistance(closest, end) <= arcLength + 1e-12) {
-		return angularDistance(point, closest)
+	const arcLength = vecAngleUnit(start, end)
+
+	// Use the closest point only when it lies on the arc segment, not its great-circle extension.
+	if (vecAngleUnit(start, closest) + vecAngleUnit(closest, end) <= arcLength + 1e-12) {
+		return vecAngleUnit(point, closest)
 	}
 
-	return Math.min(angularDistance(point, start), angularDistance(point, end))
+	return Math.min(vecAngleUnit(point, start), vecAngleUnit(point, end))
 }
 
 // Converts an RA/Dec box to a conservative HEALPix cover.

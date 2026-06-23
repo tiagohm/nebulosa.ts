@@ -1,8 +1,7 @@
 import type { Angle } from './angle'
 import { DEG2RAD } from './constants'
 import type { CartesianCoordinate } from './coordinate'
-import { clamp } from './math'
-import { type MutVec3, type Vec3, vecCross, vecCrossLength, vecDot, vecLength, vecTripleProduct } from './vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecCrossLength, vecLength, vecTripleProduct } from './vec3'
 
 const DEFAULT_MIN_POSITION_NORM = 1e-15
 const DEFAULT_COPLANARITY_TOLERANCE = 1e-5
@@ -187,7 +186,7 @@ function isValidPositionNorm(norm: number, config: ResolvedGibbsOptions) {
 function angleBetween(a: Vec3, b: Vec3, amag: number, bmag: number): Angle {
 	const denominator = amag * bmag
 	if (!(Number.isFinite(denominator) && denominator > 0)) return Number.NaN
-	return Math.acos(clamp(vecDot(a, b) / denominator, -1, 1))
+	return vecAngleUnit(a, b)
 }
 
 function normalizedCoplanarity(r1: Vec3, r2: Vec3, r3: Vec3, r1mag: number, crossNorm23: number) {

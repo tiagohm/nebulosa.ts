@@ -66,7 +66,9 @@ export function plateSolutionFrom(header: FitsHeader): PlateSolution | undefined
 	return {
 		...header,
 		orientation,
-		scale: deg(cdelt2),
+		// Geometric-mean plate scale: sqrt of the solid angle per pixel, robust to anisotropic or
+		// sheared pixels. Equals cdelt1 = cdelt2 for square, unsheared images.
+		scale: deg(Math.sqrt(Math.abs(determinant))),
 		rightAscension: crval1,
 		declination: crval2,
 		width,

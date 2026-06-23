@@ -67,15 +67,20 @@ async function readFloat64Array(source: Source & Seekable, start: number, end: n
 
 	const length = 1 + end - start
 	const data = new Float64Array(length)
+	const expected = data.byteLength
 
 	// Fast path: read directly into the Float64Array when file and host endianness match.
 	if (be !== HOST_LITTLE_ENDIAN) {
-		await readUntil(source, Buffer.from(data.buffer, data.byteOffset, data.byteLength))
+		const n = await readUntil(source, Buffer.from(data.buffer, data.byteOffset, data.byteLength))
+		// Guard against truncated files: a short read would otherwise leave the tail zeroed.
+		if (n !== expected) throw new Error(`unexpected end of DAF file: read ${n} of ${expected} bytes`)
 		return data
 	}
 
 	const buffer = Buffer.allocUnsafe(data.byteLength)
-	await readUntil(source, buffer)
+	const n = await readUntil(source, buffer)
+	// Guard against truncated files: a short read would otherwise decode uninitialized memory.
+	if (n !== expected) throw new Error(`unexpected end of DAF file: read ${n} of ${expected} bytes`)
 
 	for (let i = 0, offset = 0; i < length; i++, offset += FLOAT64_BYTES) {
 		data[i] = be ? buffer.readDoubleBE(offset) : buffer.readDoubleLE(offset)
@@ -93,10 +98,13 @@ function hasFtpValidationString(buffer: Buffer) {
 	return true
 }
 
-// Reads a fixed-size DAF record.
-async function readRecord(source: Source & Seekable, index: number, buffer: Buffer) {
+// Reads a fixed-size DAF record into buffer.
+// Throws when the record cannot be filled completely, so a truncated file is
+// rejected instead of being parsed from stale or uninitialized buffer contents.
+async function readRecord(source: Source & Seekable, index: number, buffer: Buffer): Promise<void> {
 	source.seek((index - 1) * RECORD_SIZE)
-	return (await readUntil(source, buffer)) === RECORD_SIZE
+	const n = await readUntil(source, buffer)
+	if (n !== RECORD_SIZE) throw new Error(`unexpected end of DAF file: incomplete record ${index} (${n} of ${RECORD_SIZE} bytes)`)
 }
 
 // Parses the DAF file record metadata and byte order.

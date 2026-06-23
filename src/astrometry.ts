@@ -1,4 +1,4 @@
-import { type Angle, arcsec, normalizeAngle } from './angle'
+import { type Angle, normalizeAngle } from './angle'
 import { AU_M, DAYSEC, ELLIPSOID_PARAMETERS, PIOVERTWO, SPEED_OF_LIGHT } from './constants'
 import type { CartesianCoordinate, EquatorialCoordinate, SphericalCoordinate } from './coordinate'
 import type { Distance } from './distance'
@@ -148,10 +148,25 @@ export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time,
 	return { azimuth, altitude: PIOVERTWO - zenith, hourAngle, rightAscension, declination, equationOfOrigins: astrom.eo } as const
 }
 
-// https://bitbucket.org/Isbeorn/nina/src/master/NINA.Astrometry/AstroUtil.cs
-// Computes the refracted altitude given the true altitude and refraction parameters
-export function refractedAltitude(altitude: Angle, refraction?: RefractionParameters, iterationIncrementInArcsec = 1, maxIterations = 1000) {
-	if (altitude < Number.EPSILON) return altitude
+// Computes the apparent (refracted) altitude from the geometric (true) altitude.
+// `altitude` is the true altitude in radians; the returned value is the larger,
+// apparent altitude, in radians.
+//
+// Applies exactly the refraction model ERFA uses in the observed-place transform
+// (eraAtioq): from the refraction constants A, B (eraRefco) it forms the bounded,
+// Newton-corrected deflection
+//   dZ = (A + w)*tanZ / (1 + (A + 3w)/cosZ^2),  w = B*tan^2(Z),  Z = true zenith distance
+// with cosZ floored at 0.05 (Z <= ~87 deg). The raw A*tanZ + B*tan^3(Z) polynomial
+// has a negative cubic term that makes it non-monotonic and unbounded past
+// Z ~= 80 deg; this bounded form instead stays finite and well-behaved down to the
+// horizon (refraction is capped near the horizon, as in ERFA). Because it shares
+// ERFA's model, it is the consistent inverse of observedToCirs/cirsToObserved, so
+// pole and altitude round trips do not drift.
+//
+// Below the horizon (altitude < 0) the model is not applied and the input is
+// returned unchanged.
+export function refractedAltitude(altitude: Angle, refraction?: RefractionParameters): Angle {
+	if (altitude < 0) return altitude
 
 	const pressure = refraction?.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure
 	const temperature = refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature
@@ -159,27 +174,13 @@ export function refractedAltitude(altitude: Angle, refraction?: RefractionParame
 	const wl = refraction?.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl
 	const [refa, refb] = eraRefco(pressure, temperature, relativeHumidity, wl)
 
-	const z = PIOVERTWO - altitude
-	const increment = arcsec(iterationIncrementInArcsec)
-	let roller = increment
-
-	while (maxIterations-- > 0) {
-		const refractedZenithDistance = z - roller
-		// dZ = A tan Z + B tan^3 Z.
-		const dZ = refa * Math.tan(refractedZenithDistance) + refb * Math.tan(refractedZenithDistance) ** 3
-
-		if (Number.isNaN(dZ)) {
-			return Number.NaN
-		}
-
-		const originalZenithDistance = refractedZenithDistance + dZ
-
-		if (Math.abs(originalZenithDistance - z) < increment) {
-			return PIOVERTWO - refractedZenithDistance
-		}
-
-		roller += increment
-	}
-
-	return Number.NaN
+	const zd = PIOVERTWO - altitude
+	// sin and (floored) cos of the true zenith distance; flooring cos at 0.05 caps
+	// the refraction near the horizon exactly as eraAtioq does (Z <= ~87 deg).
+	const r = Math.max(1e-6, Math.sin(zd))
+	const z = Math.max(0.05, Math.cos(zd))
+	const tz = r / z
+	const w = refb * tz * tz
+	const del = ((refa + w) * tz) / (1 + (refa + 3 * w) / (z * z))
+	return altitude + del
 }

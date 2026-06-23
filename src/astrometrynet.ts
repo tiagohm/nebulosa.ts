@@ -52,9 +52,16 @@ export interface SubmissionStatus {
 	readonly processing_started: string
 	readonly processing_finished: string
 	readonly job_calibrations: number[][]
-	readonly jobs: number[]
+	// Job slots for the submission. An entry is null until its job has been created, and a created
+	// job stays 'solving' until it resolves, so a non-null id alone does not mean a result is ready.
+	readonly jobs: (number | null)[]
 	readonly user: number
 	readonly user_images: number[]
+}
+
+export interface Job {
+	// 'solving' while in progress, then 'success' or 'failure'.
+	readonly status: string
 }
 
 export interface NovaAstrometryNetPlateSolveOptions extends PlateSolveOptions, RequestOptions {}
@@ -106,6 +113,10 @@ export function submissionStatus(submission: number | Submission, options: Requi
 	return request<SubmissionStatus>(`${options.apiUrl || NOVA_ASTROMETRY_NET_URL}/api/submissions/${subId}`, 'GET', undefined, signal ?? options.signal)
 }
 
+export function jobStatus(jobId: number, options: RequiredOnly<Omit<RequestOptions, 'apiKey'>, 'session'>, signal?: AbortSignal) {
+	return request<Job>(`${options.apiUrl || NOVA_ASTROMETRY_NET_URL}/api/jobs/${jobId}`, 'GET', undefined, signal ?? options.signal)
+}
+
 export function wcsFile(jobId: number, options: RequiredOnly<Omit<RequestOptions, 'apiKey'>, 'session'>, signal?: AbortSignal) {
 	return requestBlob(`${options.apiUrl || NOVA_ASTROMETRY_NET_URL}/wcs_file/${jobId}`, 'GET', undefined, signal ?? options.signal)
 }
@@ -118,26 +129,39 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 
 		if (submission?.status === 'success') {
 			const timeout = AbortSignal.timeout(options?.timeout || 300000)
+			// Wake the inter-poll wait as soon as the overall timeout or the caller's signal aborts.
+			const wait = signal ? AbortSignal.any([timeout, signal]) : timeout
 
 			while (!timeout.aborted) {
 				const status = await submissionStatus(submission, { session }, signal)
 
-				if (status?.jobs.length) {
-					const blob = await wcsFile(status.jobs[0], { session }, signal)
+				// A job slot is null until created and a created job stays 'solving' until it finishes,
+				// so wait for a real job id and poll its status instead of grabbing the WCS too early.
+				const jobId = status?.jobs.find((id): id is number => typeof id === 'number')
 
-					if (blob) {
-						const buffer = Buffer.from(await blob.arrayBuffer())
-						const fits = await readFits(bufferSource(buffer))
+				if (jobId !== undefined) {
+					const job = await jobStatus(jobId, { session }, signal)
 
-						if (fits?.hdus.length) {
-							return plateSolutionFrom(fits.hdus[0].header)
+					if (job?.status === 'success') {
+						const blob = await wcsFile(jobId, { session }, signal)
+
+						if (blob) {
+							const buffer = Buffer.from(await blob.arrayBuffer())
+							const fits = await readFits(bufferSource(buffer))
+
+							if (fits?.hdus.length) {
+								return plateSolutionFrom(fits.hdus[0].header)
+							}
 						}
-					}
 
-					break
+						break
+					} else if (job?.status === 'failure') {
+						break
+					}
+					// Otherwise the job is still solving; keep polling until it resolves or times out.
 				}
 
-				await Bun.sleep(15000)
+				await abortableSleep(15000, wait)
 			}
 		}
 	}
@@ -151,8 +175,9 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 	const timeout = options.timeout ?? 0
 	const downsample = options.downsample ?? 2
 	const r = options?.radius ? Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180)) : 0
-	const ra = options?.rightAscension ? toDeg(normalizeAngle(options.rightAscension)) : 0
-	const dec = options?.declination ? toDeg(options.declination) : 90
+	const ra = options?.rightAscension !== undefined ? toDeg(normalizeAngle(options.rightAscension)) : 0
+	// declination 0 is the celestial equator, a valid hint; only fall back to the pole when it is absent.
+	const dec = options?.declination !== undefined ? toDeg(options.declination) : 90
 	const fov = Math.max(0, Math.min(toDeg(options?.fov ?? 0), 360))
 	const outDir = join(tmpdir(), Bun.randomUUIDv7())
 	const wcs = join(outDir, 'nebulosa.wcs')
@@ -212,6 +237,29 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 	}
 
 	return undefined
+}
+
+// Resolves after the given delay, or earlier if the signal aborts. Never rejects.
+function abortableSleep(ms: number, signal?: AbortSignal) {
+	return new Promise<void>((resolve) => {
+		let settled = false
+
+		// Whichever of the timer or the abort fires first resolves the promise exactly once;
+		// the `settled` guard makes the second caller a no-op (false positive for the lint rule).
+		const finish = () => {
+			if (settled) return
+			settled = true
+			clearTimeout(timer)
+			signal?.removeEventListener('abort', finish)
+			// oxlint-disable-next-line promise/no-multiple-resolved
+			resolve()
+		}
+
+		const timer = setTimeout(finish, ms)
+
+		if (signal?.aborted) finish()
+		else signal?.addEventListener('abort', finish, { once: true })
+	})
 }
 
 async function request<T>(url: string | URL, method: string, body?: BodyInit, signal?: AbortSignal): Promise<T | undefined> {

@@ -226,16 +226,11 @@ export class SimpleXmlParser {
 				this.#flushAttributeName()
 				this.#state = XmlState.SELF_CLOSE
 			} else if (code === CLOSE_ANGLE) {
+				// An opening tag with attributes is always pushed onto the tree and only emitted when
+				// it closes, so unlike the self-closing path it never completes a top-level node here.
 				this.#flushAttributeName()
-				const node = this.#appendNode(this.#attributes)
+				this.#appendNode(this.#attributes)
 				this.#attributes = {}
-
-				if (this.#tree.length === 0) {
-					this.#state = XmlState.START
-					this.#prevCode = undefined
-					return node
-				}
-
 				this.#state = XmlState.TEXT
 			} else {
 				this.#fail(`invalid attribute name character: ${code}`)

@@ -90,6 +90,62 @@ test('azimuthal projection singularities and inverse domains are rejected', () =
 	expect(new AzimuthalEquidistant(0, 0).unproject(PI + 0.000001, 0)).toBeUndefined()
 })
 
+test('azimuthal projections apply linear plane options like cylindrical', () => {
+	const projection = new Stereographic(deg(10), deg(-20))
+	const options = { scale: 100, radius: 2, falseEasting: 5, falseNorthing: -7, yAxisDirection: 'southUp' } as const
+
+	// The projection center maps to (falseEasting, falseNorthing) instead of the raw origin.
+	const center = projection.project(deg(10), deg(-20), undefined, options)
+	expect(center?.x).toBeCloseTo(5, 12)
+	expect(center?.y).toBeCloseTo(-7, 12)
+
+	// The full linear transform (scale, radius, false offsets, y-axis flip) round-trips.
+	const projected = projection.project(deg(11.5), deg(-19.25), undefined, options)
+	expect(projected).toBeDefined()
+	if (projected === undefined) return
+
+	const unprojected = projection.unproject(projected.x, projected.y, undefined, options)
+	expect(unprojected).toBeDefined()
+	if (unprojected === undefined) return
+
+	expect(normalizePI(unprojected.x - deg(11.5))).toBeCloseTo(0, 11)
+	expect(unprojected.y).toBeCloseTo(deg(-19.25), 11)
+
+	// Constructor options are honored and overridden by per-call options.
+	const withDefaults = new Gnomonic(0, 0, { scale: 10 })
+	expect(withDefaults.project(deg(45), 0)?.x).toBeCloseTo(10, 12)
+	expect(withDefaults.project(deg(45), 0, undefined, { scale: 3 })?.x).toBeCloseTo(3, 12)
+})
+
+test('azimuthal projections support an east/west RA flip', () => {
+	const projection = new Stereographic(deg(10), deg(0))
+	const longitude = deg(25) // 15 degrees east of the center
+	const latitude = deg(0)
+
+	const east = projection.project(longitude, latitude, undefined, { raAxisDirection: 'east' })
+	const west = projection.project(longitude, latitude, undefined, { raAxisDirection: 'west' })
+	expect(east).toBeDefined()
+	expect(west).toBeDefined()
+	if (east === undefined || west === undefined) return
+
+	// 'west' mirrors x about the declination axis and leaves y untouched.
+	expect(east.x).toBeGreaterThan(0)
+	expect(west.x).toBeCloseTo(-east.x, 12)
+	expect(west.y).toBeCloseTo(east.y, 12)
+
+	// The flipped projection still round-trips.
+	const unprojected = projection.unproject(west.x, west.y, undefined, { raAxisDirection: 'west' })
+	expect(unprojected).toBeDefined()
+	if (unprojected === undefined) return
+	expect(normalizePI(unprojected.x - longitude)).toBeCloseTo(0, 12)
+	expect(unprojected.y).toBeCloseTo(latitude, 12)
+
+	// Constructor-level direction is honored and overridable per call.
+	const westDefault = new Gnomonic(0, 0, { raAxisDirection: 'west' })
+	expect(westDefault.project(deg(45), 0)?.x).toBeCloseTo(-1, 12)
+	expect(westDefault.project(deg(45), 0, undefined, { raAxisDirection: 'east' })?.x).toBeCloseTo(1, 12)
+})
+
 describe('cylindrical projections round-trip', () => {
 	const points: readonly Point[] = [
 		{ x: 0, y: 0 },
@@ -135,6 +191,39 @@ describe('cylindrical projections round-trip', () => {
 				expect(unprojected.y).toBeCloseTo(point.y, 12)
 			}
 		})
+	}
+})
+
+test('standard-parallel projections round-trip with a non-zero central meridian', () => {
+	// These previously failed: the equal-area and stereographic projects scaled the longitude by
+	// cos(standardParallel) before subtracting the central meridian, and the stereographic inverse
+	// dropped the per-call options. Both break the round-trip unless the central meridian is zero.
+	const samples: Point[] = [
+		{ x: deg(10), y: deg(20) },
+		{ x: deg(-30), y: deg(-15) },
+		{ x: deg(120), y: deg(40) },
+	]
+
+	const cases = [
+		{ projection: new CylindricalEqualArea(deg(30)), options: { centralMeridian: deg(45) } },
+		{ projection: new GallPeters(), options: { centralMeridian: deg(60) } },
+		{ projection: new CylindricalStereographic(deg(20)), options: { centralMeridian: deg(10) } },
+		{ projection: new Braun(), options: { centralMeridian: deg(45) } },
+	] as const
+
+	for (const { projection, options } of cases) {
+		for (const point of samples) {
+			const projected = projection.project(point.x, point.y, undefined, options)
+			expect(projected).toBeDefined()
+			if (projected === undefined) continue
+
+			const unprojected = projection.unproject(projected.x, projected.y, undefined, options)
+			expect(unprojected).toBeDefined()
+			if (unprojected === undefined) continue
+
+			expect(normalizePI(unprojected.x - point.x)).toBeCloseTo(0, 12)
+			expect(unprojected.y).toBeCloseTo(point.y, 12)
+		}
 	}
 })
 
