@@ -937,6 +937,11 @@ export class GuiderClient {
 	#updateLockShift(frame: GuideFrame) {
 		const timestamp = frame.timestamp ?? Date.now()
 
+		if (this.#guidingAssistant !== undefined) {
+			this.#lockShiftTimestamp = timestamp
+			return
+		}
+
 		if (!this.#lockShiftParams.enabled || this.#paused || this.#guider.currentState.state !== 'guiding') {
 			this.#lockShiftTimestamp = timestamp
 			return
