@@ -676,7 +676,10 @@ function bestDecSeeingEstimate(samples: readonly GuidingAssistantSample[]) {
 		start += SEEING_WINDOW_SECONDS / 2
 	}
 
-	return Number.isFinite(best) ? best : Math.min(linearFit(samples, 'decPx').simpleRms, linearFit(samples, 'decPx').residualRms)
+	if (Number.isFinite(best)) return best
+
+	const fit = linearFit(samples, 'decPx')
+	return Math.min(fit.simpleRms, fit.residualRms)
 }
 
 function linearFit(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'decPx'): LinearFit {
