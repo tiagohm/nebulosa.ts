@@ -581,6 +581,7 @@ test('recommends single-direction guiding for excessive DEC backlash', () => {
 
 	expect(step.result.status).toBe('completed')
 	expect(step.result.backlash?.backlashMs).toBe(4000)
+	expect(step.result.backlash?.recommendedCompensationMs).toBeNull()
 
 	const decMode = step.result.recommendations.find((recommendation) => recommendation.kind === 'dec-mode')
 	expect(decMode?.appliesTo).toBe('decGuideMode')

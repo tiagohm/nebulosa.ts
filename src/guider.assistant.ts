@@ -771,8 +771,9 @@ function computePolarAlignmentError(decDriftPxPerMinute: number, config: Guiding
 }
 
 function makeBacklashResult(phase: GuidingAssistantBacklashPhase, backlashMs: number | null, northDistancePx: number, southDistancePx: number, northPulses: number, southPulses: number, message: string): GuidingAssistantBacklashResult {
-	const compensation = backlashMs === null ? null : Math.max(0, Math.floor(backlashMs / 10) * 10)
-	return { phase, backlashMs, recommendedCompensationMs: compensation === 0 ? null : compensation, northDistancePx, southDistancePx, northPulses, southPulses, message }
+	const compensable = backlashMs !== null && backlashMs >= SMALL_BACKLASH_MS && backlashMs <= MAX_BACKLASH_COMPENSATION_MS
+	const compensation = compensable ? Math.floor(backlashMs / 10) * 10 : null
+	return { phase, backlashMs, recommendedCompensationMs: compensation, northDistancePx, southDistancePx, northPulses, southPulses, message }
 }
 
 // Converts the active backlash state into a terminal result while keeping partial measurements.
