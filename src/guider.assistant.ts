@@ -399,10 +399,9 @@ export class GuidingAssistant {
 	// Returns the latest computed result snapshot.
 	result(timestamp: number = Date.now()): GuidingAssistantResult {
 		const metrics = computeMotionMetrics(this.samples, this.config)
-		const recommendations = makeRecommendations(this.samples, this.config, metrics, this.#backlash.result)
-		const recommendedRaMinMove = recommendationValue(recommendations, 'ra-min-move', metrics)
-		const recommendedDecMinMove = recommendationValue(recommendations, 'dec-min-move', metrics)
-		const exposure = exposureRange(this.config, metrics)
+		const minMove = computeMinMove(this.samples, this.config, metrics.decCorrectedRmsPx)
+		const recommendations = makeRecommendations(this.samples, this.config, metrics, this.#backlash.result, minMove)
+		const exposure = exposureRange(this.config, metrics, minMove.ra)
 		const notes: string[] = []
 
 		if (this.samples.length === 0) notes.push('no_samples')
@@ -421,8 +420,8 @@ export class GuidingAssistant {
 			meanHfd: meanOf(this.samples, 'hfd'),
 			motion: metrics,
 			backlash: this.#backlash.result,
-			recommendedRaMinMove,
-			recommendedDecMinMove,
+			recommendedRaMinMove: minMove.ra,
+			recommendedDecMinMove: minMove.dec,
 			recommendedMinExposureSeconds: exposure.min,
 			recommendedMaxExposureSeconds: exposure.max,
 			recommendations,
@@ -593,10 +592,9 @@ function computeMinMove(samples: readonly GuidingAssistantSample[], config: Guid
 	return { ra: recRa, dec: recDec }
 }
 
-function makeRecommendations(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, metrics: GuidingAssistantMotionMetrics, backlash: GuidingAssistantBacklashResult | null): readonly GuidingAssistantRecommendation[] {
+function makeRecommendations(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, metrics: GuidingAssistantMotionMetrics, backlash: GuidingAssistantBacklashResult | null, minMove: ReturnType<typeof computeMinMove>): readonly GuidingAssistantRecommendation[] {
 	const recommendations: GuidingAssistantRecommendation[] = []
-	const exposure = exposureRange(config, metrics)
-	const minMove = computeMinMove(samples, config, metrics.decCorrectedRmsPx)
+	const exposure = exposureRange(config, metrics, minMove.ra)
 	const meanSnr = meanOf(samples, 'snr')
 	const meanHfd = meanOf(samples, 'hfd')
 
@@ -638,10 +636,10 @@ function makeRecommendations(samples: readonly GuidingAssistantSample[], config:
 	return recommendations
 }
 
-function exposureRange(config: GuidingAssistantConfig, metrics: GuidingAssistantMotionMetrics) {
+function exposureRange(config: GuidingAssistantConfig, metrics: GuidingAssistantMotionMetrics, raMinMovePx: number) {
 	const idealMin = config.hasHighPrecisionEncoders ? 4 : 2
 	const idealMax = config.hasHighPrecisionEncoders ? 8 : 4
-	const driftExposure = metrics.raMaxDriftRatePxPerSecond > 0 ? Math.ceil(metrics.ra.rmsPx / metrics.raMaxDriftRatePxPerSecond / 0.5) * 0.5 : idealMax
+	const driftExposure = metrics.raMaxDriftRatePxPerSecond > 0 ? Math.ceil(raMinMovePx / metrics.raMaxDriftRatePxPerSecond / 0.5) * 0.5 : idealMax
 	const min = Math.max(1, Math.min(driftExposure, idealMin))
 	let max: number
 
@@ -788,12 +786,6 @@ function makeBacklashState(): BacklashState {
 		lastPulseDuration: 0,
 		result: null,
 	}
-}
-
-function recommendationValue(recommendations: readonly GuidingAssistantRecommendation[], kind: GuidingAssistantRecommendationKind, metrics: GuidingAssistantMotionMetrics) {
-	const recommendation = recommendations.find((recommendation) => recommendation.kind === kind && recommendation.value !== undefined)
-	if (recommendation?.value !== undefined) return recommendation.value
-	return kind === 'ra-min-move' ? metrics.decCorrectedRmsPx * 0.65 : metrics.decCorrectedRmsPx
 }
 
 function elapsedSecondsOf(samples: readonly GuidingAssistantSample[], timestamp: number, startTime: number) {

@@ -144,6 +144,21 @@ test('uses the high-precision exposure ceiling when RA drift is absent', () => {
 	expect(result.recommendedMaxExposureSeconds).toBe(8)
 })
 
+test('bases drift-limited exposure on RA min-move instead of residual RMS', () => {
+	const result = run([
+		[0, 0, 0],
+		[1000, 0.01, 0],
+		[2000, 0.02, 0],
+		[3000, 0.03, 0],
+	])
+
+	expect(result.motion.ra.rmsPx).toBeCloseTo(0, 8)
+	expect(result.motion.raMaxDriftRatePxPerSecond).toBeCloseTo(0.01, 8)
+	expect(result.recommendedRaMinMove).toBeCloseTo(0.05, 8)
+	expect(result.recommendedMinExposureSeconds).toBe(2)
+	expect(result.recommendedMaxExposureSeconds).toBe(4)
+})
+
 test('skips non-guiding and bad frames before recording samples', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: true })
 	assistant.start(0)
