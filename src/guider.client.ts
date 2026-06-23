@@ -488,6 +488,13 @@ export class GuiderClient {
 		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
+		// Drop any dither/lock-shift target offset from a prior session so a fresh guiding run does
+		// not inherit a stale constant offset once lock-shift is later applied.
+		this.#ditherOffsetX = 0
+		this.#ditherOffsetY = 0
+		this.#spiralDither = makeSpiralDitherState()
+		this.#lockShiftOffsetX = 0
+		this.#lockShiftOffsetY = 0
 		this.emitEvent('SettleBegin')
 
 		if (recalibrate || this.#calibration === undefined) {
@@ -530,6 +537,13 @@ export class GuiderClient {
 		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
+		// Drop any dither/lock-shift target offset from a prior session so it cannot carry over into
+		// a subsequent guiding run.
+		this.#ditherOffsetX = 0
+		this.#ditherOffsetY = 0
+		this.#spiralDither = makeSpiralDitherState()
+		this.#lockShiftOffsetX = 0
+		this.#lockShiftOffsetY = 0
 		this.#setAppState(this.#lockPosition === undefined ? 'Looping' : 'Selected')
 		this.startCapture(this.#exposure)
 
