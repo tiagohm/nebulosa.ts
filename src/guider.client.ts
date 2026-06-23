@@ -145,6 +145,11 @@ export class GuiderClient {
 		if (!this.#connected) return false
 
 		const camera = this.#camera
+		const hadGuidingAssistant = this.#guidingAssistant !== undefined
+
+		if (hadGuidingAssistant) {
+			this.#finishGuidingAssistant(false, 'device disconnected', this.#guidingAssistant?.measuringBacklash === true)
+		}
 
 		this.#connected = false
 		this.cameraManager.removeHandler(this.#cameraHandler)
@@ -158,7 +163,7 @@ export class GuiderClient {
 		this.#guideOutput = undefined
 		this.#focalLength = 0
 		this.#pixelSize = 0
-		this.#resetRuntimeState(true)
+		this.#resetRuntimeState(true, hadGuidingAssistant)
 		this.emitEvent('ConfigurationChange')
 
 		return true
@@ -1049,7 +1054,8 @@ export class GuiderClient {
 	}
 
 	// Resets transient guider state while optionally dropping calibration.
-	#resetRuntimeState(clearCalibration: boolean) {
+	#resetRuntimeState(clearCalibration: boolean, preserveGuidingAssistantResult: boolean = false) {
+		const guidingAssistantResult = preserveGuidingAssistantResult ? this.#guidingAssistantResult : undefined
 		this.#frame = undefined
 		this.#image = undefined
 		this.#frameId = 0
@@ -1063,7 +1069,7 @@ export class GuiderClient {
 		this.#guideOutputEnabled = true
 		this.#guidingAssistant = undefined
 		this.#guidingAssistantPendingPulse = undefined
-		this.#guidingAssistantResult = undefined
+		this.#guidingAssistantResult = guidingAssistantResult
 		this.#guidingAssistantSavedGuideOutputEnabled = true
 		this.#declinationGuideMode = 'Auto'
 		this.#exposure = DEFAULT_GUIDER_EXPOSURE
