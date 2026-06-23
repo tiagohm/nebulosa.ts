@@ -17,9 +17,9 @@ function frame(timestamp: number, frameId: number, patch: Partial<GuideStar> = {
 }
 
 // Builds a guide command with mount-axis diagnostics in pixels.
-function command(raPx: number, decPx: number, patch: Partial<GuideCommand['diagnostics']> = {}): GuideCommand {
+function command(raPx: number, decPx: number, patch: Partial<GuideCommand['diagnostics']> = {}, state: GuideCommand['state'] = 'guiding'): GuideCommand {
 	return {
-		state: 'guiding',
+		state,
 		ra: { direction: null, duration: 0 },
 		dec: { direction: null, duration: 0 },
 		diagnostics: {
@@ -128,6 +128,24 @@ test('applies the single-star min-move floor to DEC recommendations', () => {
 
 	expect(result.recommendedRaMinMove).toBeCloseTo(0.1, 8)
 	expect(result.recommendedDecMinMove).toBeCloseTo(0.1, 8)
+})
+
+test('skips non-guiding and bad frames before recording samples', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0, {}, 'initializing'))
+	assistant.addSample(frame(1000, 2), command(0, 0, { badFrame: true }))
+
+	let result = assistant.result(1000)
+	expect(result.sampleCount).toBe(0)
+	expect(result.notes).toContain('no_samples')
+
+	assistant.addSample(frame(2000, 3), command(0.3, -0.2))
+	result = assistant.result(2000)
+
+	expect(result.sampleCount).toBe(1)
+	expect(result.motion.ra.peakPx).toBeCloseTo(0, 8)
+	expect(result.motion.dec.peakPx).toBeCloseTo(0, 8)
 })
 
 test('measures compensable DEC backlash from delayed south motion', () => {

@@ -504,6 +504,8 @@ export class GuidingAssistant {
 }
 
 function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number): GuidingAssistantSample | null {
+	if (command.state !== 'guiding' || command.diagnostics.badFrame) return null
+
 	const timestamp = frame.timestamp ?? Date.now()
 	const star = frame.stars[0]
 	const raPx = command.diagnostics.axisErrorRA ?? command.diagnostics.dx
