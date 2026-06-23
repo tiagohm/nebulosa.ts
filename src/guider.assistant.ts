@@ -311,6 +311,10 @@ export class GuidingAssistant {
 
 	// Records one guide frame and optionally advances the DEC backlash state machine.
 	addSample(frame: GuideFrame, command: GuideCommand): GuidingAssistantStep {
+		if (this.#status === 'completed' || this.#status === 'failed') {
+			return { result: this.result(frame.timestamp ?? Date.now()) }
+		}
+
 		if (this.#status === 'idle') this.start(frame.timestamp ?? Date.now())
 
 		const sample = makeSample(frame, command, this.#startTime)

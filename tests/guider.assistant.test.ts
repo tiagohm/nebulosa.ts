@@ -372,6 +372,21 @@ test('auto-starts from idle and resets samples on a fresh start', () => {
 	expect(restarted.sampleCount).toBe(0)
 })
 
+test('does not accept samples after completion', () => {
+	const assistant = new GuidingAssistant()
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	assistant.addSample(frame(1000, 2), command(0.5, -0.25))
+
+	const completed = assistant.complete(1000)
+	const late = assistant.addSample(frame(2000, 3), command(10, 10)).result
+
+	expect(late.status).toBe('completed')
+	expect(late.sampleCount).toBe(completed.sampleCount)
+	expect(late.motion.ra.peakPx).toBeCloseTo(completed.motion.ra.peakPx, 8)
+	expect(late.motion.dec.peakPx).toBeCloseTo(completed.motion.dec.peakPx, 8)
+})
+
 test('produces finite baseline recommendations with no samples', () => {
 	const result = new GuidingAssistant().complete(0)
 
