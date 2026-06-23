@@ -379,7 +379,7 @@ export class GuidingAssistant {
 	fail(message: string, timestamp: number = Date.now()) {
 		const backlashWasActive = this.#status === 'backlash' || this.#backlash.phase !== 'idle'
 		this.#status = 'failed'
-		if (backlashWasActive) this.#backlash.result ??= makeBacklashResult('failed', null, 0, 0, 0, 0, message)
+		if (backlashWasActive) this.#backlash.result ??= makeBacklashResultFromState('failed', this.#backlash, message)
 		const result = this.result(timestamp)
 		return result
 	}
@@ -770,6 +770,11 @@ function computePolarAlignmentError(decDriftPxPerMinute: number, config: Guiding
 function makeBacklashResult(phase: GuidingAssistantBacklashPhase, backlashMs: number | null, northDistancePx: number, southDistancePx: number, northPulses: number, southPulses: number, message: string): GuidingAssistantBacklashResult {
 	const compensation = backlashMs === null ? null : Math.max(0, Math.floor(backlashMs / 10) * 10)
 	return { phase, backlashMs, recommendedCompensationMs: compensation === 0 ? null : compensation, northDistancePx, southDistancePx, northPulses, southPulses, message }
+}
+
+// Converts the active backlash state into a terminal result while keeping partial measurements.
+function makeBacklashResultFromState(phase: GuidingAssistantBacklashPhase, state: BacklashState, message: string) {
+	return makeBacklashResult(phase, null, state.northDistancePx, state.southDistancePx, state.northPulses, state.southPulses, message)
 }
 
 function makeBacklashState(): BacklashState {

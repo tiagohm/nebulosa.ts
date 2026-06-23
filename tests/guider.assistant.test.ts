@@ -308,6 +308,23 @@ test('aborts active DEC backlash instead of completing it', () => {
 	expect(result.recommendations.some((recommendation) => recommendation.kind === 'backlash')).toBeFalse()
 })
 
+test('preserves partial DEC backlash data when an active test fails', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1, backlashPulseMs: 100, backlashMaxPulsesPerDirection: 8 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	assistant.startBacklashTest()
+	assistant.addSample(frame(1000, 2), command(0, 1.2))
+	assistant.addSample(frame(2000, 3), command(0, 1.2))
+
+	const result = assistant.fail('guide star lost', 3000)
+
+	expect(result.status).toBe('failed')
+	expect(result.backlash?.phase).toBe('failed')
+	expect(result.backlash?.northDistancePx).toBeCloseTo(1.2, 8)
+	expect(result.backlash?.northPulses).toBe(1)
+	expect(result.backlash?.southPulses).toBe(2)
+})
+
 test('does not report passive guide failures as backlash failures', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: false })
 	assistant.start(0)
