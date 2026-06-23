@@ -265,6 +265,20 @@ test('fails DEC backlash when south motion never returns', () => {
 	expect(step.result.recommendations.some((recommendation) => recommendation.kind === 'backlash')).toBeTrue()
 })
 
+test('aborts active DEC backlash instead of completing it', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1, backlashPulseMs: 100 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	assistant.startBacklashTest()
+
+	const result = assistant.abortBacklash('backlash test aborted', 1000)
+
+	expect(result.status).toBe('failed')
+	expect(result.backlash?.phase).toBe('aborted')
+	expect(result.backlash?.northPulses).toBe(1)
+	expect(result.recommendations.some((recommendation) => recommendation.kind === 'backlash')).toBeFalse()
+})
+
 test('does not report passive guide failures as backlash failures', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: false })
 	assistant.start(0)

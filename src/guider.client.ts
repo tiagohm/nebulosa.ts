@@ -392,6 +392,8 @@ export class GuiderClient {
 		const assistant = this.#guidingAssistant
 		if (assistant === undefined) return undefined
 
+		if (assistant.measuringBacklash) return this.#finishGuidingAssistant(false, 'backlash test aborted', true)
+
 		if (assistant.canMeasureBacklash) {
 			const step = assistant.startBacklashTest()
 			this.#guidingAssistantResult = step.result
@@ -836,11 +838,11 @@ export class GuiderClient {
 	}
 
 	// Restores guide output and emits the final guiding assistant event.
-	#finishGuidingAssistant(completed: boolean, message?: string) {
+	#finishGuidingAssistant(completed: boolean, message?: string, abortBacklash: boolean = false) {
 		const assistant = this.#guidingAssistant
 		if (assistant === undefined) return this.#guidingAssistantResult
 
-		const result = completed ? assistant.complete() : assistant.fail(message ?? 'guiding assistant failed')
+		const result = completed ? assistant.complete() : abortBacklash ? assistant.abortBacklash(message) : assistant.fail(message ?? 'guiding assistant failed')
 		this.#guidingAssistant = undefined
 		this.#guidingAssistantPendingPulse = undefined
 		this.#guidingAssistantResult = result

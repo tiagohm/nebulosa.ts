@@ -384,6 +384,18 @@ export class GuidingAssistant {
 		return result
 	}
 
+	// Aborts an in-progress DEC backlash measurement without marking the assistant as completed.
+	abortBacklash(message: string = 'backlash test aborted', timestamp: number = Date.now()) {
+		if (this.#status !== 'backlash') return this.fail(message, timestamp)
+
+		const state = this.#backlash
+		this.#status = 'failed'
+		state.phase = 'aborted'
+		state.result = makeBacklashResult('aborted', null, state.northDistancePx, state.southDistancePx, state.northPulses, state.southPulses, message)
+
+		return this.result(timestamp)
+	}
+
 	// Returns the latest computed result snapshot.
 	result(timestamp: number = Date.now()): GuidingAssistantResult {
 		const metrics = computeMotionMetrics(this.samples, this.config)
