@@ -451,6 +451,13 @@ describe('lock-shift parameters', () => {
 		expect(eventsOf(harness.events, 'GuideParamChange').at(-1)).toMatchObject({ Name: 'LockShiftParams' })
 	})
 
+	test('rejects non-finite drift rates and leaves the previous rate untouched', () => {
+		harness.client.setLockShiftParams({ rate: [3, -4], axes: 'X/Y' })
+		expect(harness.client.setLockShiftParams({ rate: [Number.NaN, 0], axes: 'X/Y' })).toBeFalse()
+		expect(harness.client.setLockShiftParams({ rate: [0, Number.POSITIVE_INFINITY], axes: 'X/Y' })).toBeFalse()
+		expect(harness.client.getLockShiftParams().rate).toEqual([3, -4])
+	})
+
 	test('pixels-per-hour shifting can be enabled without a known pixel scale', () => {
 		expect(harness.client.setLockShiftParams({ rate: [1, 1], axes: 'X/Y' })).toBeTrue()
 		expect(harness.client.setLockShiftEnabled(true)).toBeTrue()

@@ -641,6 +641,13 @@ export class GuiderClient {
 	// Stores the lock-shift drift rate used to incrementally move the guider target between frames.
 	setLockShiftParams(params: PartialOnly<Omit<Writable<PHD2LockShiftParams>, 'enabled'>, 'units'>) {
 		const { rate, axes } = params
+
+		// Reject non-finite drift rates so they cannot accumulate NaN into the lock position and
+		// leak into getLockPosition or the emitted lock-shift events.
+		if (rate !== undefined && (!Number.isFinite(rate[0]) || !Number.isFinite(rate[1]))) {
+			return false
+		}
+
 		const units = params.units ?? (axes === undefined ? this.#lockShiftParams.units : axes === 'RA/Dec' ? 'arcsec/hr' : 'pixels/hr')
 
 		if (units === 'arcsec/hr' && this.#lockShiftParams.enabled && this.getPixelScale() <= 0) {
