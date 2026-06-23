@@ -189,6 +189,10 @@ export class ThreePointPolarAlignment {
 	}
 }
 
+// DEC drift rate produced by a 1-arcmin polar-alignment error, in arcseconds per second.
+// Worst-case meridian geometry gives dDEC/dt ≈ ω⊕ · error, with ω⊕ = 15.041 arcsec/s (sidereal)
+// and 1 arcmin = 2.9089e-4 rad, so 15.041 · 2.9089e-4 ≈ 0.004375. Used only as a visibility
+// threshold for DARV exposure estimation, not as a precise drift model.
 export const DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN = 0.004375
 export const MIN_RA_COS_DECLINATION = 1e-3
 export const MIN_DRIFT_RATE_ARCSEC_PER_SECOND = 1e-9
