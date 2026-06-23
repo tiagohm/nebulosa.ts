@@ -130,6 +130,20 @@ test('applies the single-star min-move floor to DEC recommendations', () => {
 	expect(result.recommendedDecMinMove).toBeCloseTo(0.1, 8)
 })
 
+test('uses the high-precision exposure ceiling when RA drift is absent', () => {
+	const result = run(
+		[
+			[0, 0, 0],
+			[1000, 0, 0],
+		],
+		{ hasHighPrecisionEncoders: true },
+	)
+
+	expect(result.motion.raMaxDriftRatePxPerSecond).toBe(0)
+	expect(result.recommendedMinExposureSeconds).toBe(4)
+	expect(result.recommendedMaxExposureSeconds).toBe(8)
+})
+
 test('skips non-guiding and bad frames before recording samples', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: true })
 	assistant.start(0)
