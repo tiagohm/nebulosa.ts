@@ -374,6 +374,7 @@ export class GuiderClient {
 			exposureSeconds: this.getExposure(),
 			multiStar: this.#guider.config.mode === 'multi-star',
 			suspectCalibration: this.#calibration === undefined,
+			decPositiveDirection: this.#calibration?.dec.direction ?? 'north',
 			...config,
 		})
 

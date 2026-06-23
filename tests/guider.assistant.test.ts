@@ -147,6 +147,28 @@ test('measures compensable DEC backlash from delayed south motion', () => {
 	expect(step.result.recommendations.some((recommendation) => recommendation.kind === 'backlash' && recommendation.actionable)).toBeTrue()
 })
 
+test('uses DEC calibration sign when measuring backlash motion', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, decPositiveDirection: 'south', backlashTargetPx: 1, backlashReturnTolerancePx: 0.2, backlashPulseMs: 100, backlashMaxPulsesPerDirection: 8 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+
+	let step = assistant.startBacklashTest()
+	expect(step.pulse?.dec.direction).toBe('north')
+
+	step = assistant.addSample(frame(1000, 2), command(0, -0.6))
+	expect(step.pulse?.dec.direction).toBe('north')
+
+	step = assistant.addSample(frame(2000, 3), command(0, -1.2))
+	expect(step.pulse?.dec.direction).toBe('south')
+
+	step = assistant.addSample(frame(3000, 4), command(0, -0.6))
+	expect(step.pulse?.dec.direction).toBe('south')
+
+	step = assistant.addSample(frame(4000, 5), command(0, -0.1))
+	expect(step.result.status).toBe('completed')
+	expect(step.result.backlash?.northDistancePx).toBeCloseTo(1.2, 8)
+})
+
 test('keeps backlash frames out of passive guiding metrics', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1, backlashReturnTolerancePx: 0.2, backlashPulseMs: 100, backlashMaxPulsesPerDirection: 8 })
 	assistant.start(0)

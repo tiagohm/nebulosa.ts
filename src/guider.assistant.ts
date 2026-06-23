@@ -61,6 +61,8 @@ export interface GuidingAssistantConfig {
 	readonly suspectCalibration: boolean
 	// Whether to run a DEC backlash test after passive sampling stops.
 	readonly measureBacklash: boolean
+	// DEC output direction represented by positive DEC-axis guide error.
+	readonly decPositiveDirection: GuideDirectionDEC
 	// Minimum mean SNR expected for the selected guide star.
 	readonly minSnr: number
 	// HFD threshold above which focus should be improved when image scale is coarse enough.
@@ -249,6 +251,7 @@ export const DEFAULT_GUIDING_ASSISTANT_CONFIG: GuidingAssistantConfig = {
 	hasHighPrecisionEncoders: false,
 	suspectCalibration: false,
 	measureBacklash: false,
+	decPositiveDirection: 'north',
 	minSnr: 10,
 	focusHfdThreshold: 4.5,
 	focusImageScaleThreshold: 1,
@@ -415,7 +418,7 @@ export class GuidingAssistant {
 		const state = this.#backlash
 
 		if (state.phase === 'north') {
-			const signedMotion = decSignedDistance(this.config.backlashNorthDirection, state.originDec, sample.decPx)
+			const signedMotion = decSignedDistance(this.config.backlashNorthDirection, this.config.decPositiveDirection, state.originDec, sample.decPx)
 			state.northDistancePx = Math.max(state.northDistancePx, signedMotion)
 			state.northPeakDec = sample.decPx
 			state.previousDec = sample.decPx
@@ -796,8 +799,8 @@ function finiteOrZero(value: number | undefined) {
 	return value !== undefined && Number.isFinite(value) ? value : 0
 }
 
-function decSignedDistance(northDirection: GuideDirectionDEC, from: number, to: number) {
-	const sign = northDirection === 'north' ? 1 : -1
+function decSignedDistance(direction: GuideDirectionDEC, decPositiveDirection: GuideDirectionDEC, from: number, to: number) {
+	const sign = direction === decPositiveDirection ? 1 : -1
 	return (to - from) * sign
 }
 
