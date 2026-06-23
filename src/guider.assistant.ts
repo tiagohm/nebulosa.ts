@@ -632,7 +632,7 @@ function makeRecommendations(
 		} else if (backlash.backlashMs <= MAX_BACKLASH_COMPENSATION_MS) {
 			recommendations.push({ kind: 'backlash', message: `Try starting with a Dec backlash compensation of ${backlash.recommendedCompensationMs} ms`, appliesTo: 'decBacklashCompensation', value: backlash.recommendedCompensationMs ?? undefined, unit: 'ms', actionable: backlash.recommendedCompensationMs !== null })
 		} else {
-			const direction = metrics.dec.driftRatePxPerMinute >= 0 ? 'South' : 'North'
+			const direction = metrics.dec.driftRatePxPerMinute >= 0 ? config.decPositiveDirection : oppositeDEC(config.decPositiveDirection)
 			recommendations.push({ kind: 'dec-mode', message: `Backlash is >= ${Math.round(backlash.backlashMs)} ms; you may need to guide in only one Dec direction (currently ${direction})`, appliesTo: 'decGuideMode', actionable: true })
 		}
 	} else if (backlash !== null && backlash.phase === 'failed') {

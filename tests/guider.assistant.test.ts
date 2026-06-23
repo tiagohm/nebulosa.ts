@@ -571,6 +571,25 @@ test('recommends single-direction guiding for excessive DEC backlash', () => {
 	expect(decMode?.appliesTo).toBe('decGuideMode')
 	expect(decMode?.actionable).toBeTrue()
 	expect(decMode?.message).toContain('one Dec direction')
+	expect(decMode?.message).toContain('currently north')
+})
+
+test('maps excessive-backlash one-direction advice through south-positive DEC calibration', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, decPositiveDirection: 'south', backlashTargetPx: 1, backlashReturnTolerancePx: 0.2, backlashPulseMs: 2000, backlashMaxPulsesPerDirection: 20 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	assistant.startBacklashTest()
+
+	assistant.addSample(frame(1000, 2), command(0, -1)) // north target reached with south-positive calibration
+	assistant.addSample(frame(2000, 3), command(0, -1))
+	assistant.addSample(frame(3000, 4), command(0, -1))
+	const step = assistant.addSample(frame(4000, 5), command(0, -0.1))
+
+	expect(step.result.status).toBe('completed')
+	expect(step.result.backlash?.backlashMs).toBe(4000)
+
+	const decMode = step.result.recommendations.find((recommendation) => recommendation.kind === 'dec-mode')
+	expect(decMode?.message).toContain('currently south')
 })
 
 test('floors recommended DEC backlash compensation to 10 ms', () => {
