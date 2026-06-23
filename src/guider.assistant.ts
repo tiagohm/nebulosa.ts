@@ -784,6 +784,9 @@ function makeBacklashState(): BacklashState {
 	}
 }
 
+// Elapsed passive-sampling time in seconds. Once any sample exists this tracks the last
+// accepted sample, so it intentionally freezes during the backlash phase (which records no
+// passive samples) and ignores `timestamp`; `timestamp` is only used before the first sample.
 function elapsedSecondsOf(samples: readonly GuidingAssistantSample[], timestamp: number, startTime: number) {
 	if (samples.length > 0) return Math.max(0, samples.at(-1)!.elapsedSeconds)
 	if (startTime <= 0) return 0
