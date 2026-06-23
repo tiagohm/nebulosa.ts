@@ -618,3 +618,32 @@ describe('frame-driven behavior', () => {
 		expect(harness.client.getAppState()).toBe('Looping')
 	})
 })
+
+describe('frame processing robustness', () => {
+	// Waits until the recorded LoopingExposures count grows past a baseline.
+	async function waitForLoopingExposures(target: number) {
+		for (let i = 0; i < 1000; i++) {
+			if (eventsOf(harness.events, 'LoopingExposures').length >= target) return
+			await Bun.sleep(1)
+		}
+		throw new Error('expected looping exposures were not emitted in time')
+	}
+
+	test('drops a concurrent BLOB while a previous frame is still being processed', async () => {
+		connect(harness)
+		harness.client.loop()
+		const handler = harness.cameraManager.handler!
+
+		// Two BLOBs delivered back-to-back: the second must be dropped because the first is still
+		// decoding, so only one frame is processed and the stateful guider is not mutated twice.
+		handler.blobReceived!(harness.camera, FRAME_BUFFER as Buffer<ArrayBuffer>)
+		handler.blobReceived!(harness.camera, FRAME_BUFFER as Buffer<ArrayBuffer>)
+
+		await waitForLoopingExposures(1)
+		// Give any erroneously-spawned second processing a chance to surface before asserting.
+		await Bun.sleep(20)
+
+		expect(eventsOf(harness.events, 'LoopingExposures')).toHaveLength(1)
+		expect(harness.client.getStarImage()!.frame).toBe(1)
+	})
+})

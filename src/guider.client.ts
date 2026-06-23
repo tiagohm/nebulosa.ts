@@ -64,6 +64,7 @@ export class GuiderClient {
 	#frame?: GuideFrame
 	#image?: Image
 	#frameId = 0
+	#processingBlob = false
 	#lockPosition?: readonly [number, number]
 	#lockSearchPosition?: readonly [number, number]
 	#exactLockPosition = false
@@ -687,26 +688,35 @@ export class GuiderClient {
 	async #processBlob(device: Camera, data: string | Buffer<ArrayBuffer>): Promise<void> {
 		if (!this.#connected || device !== this.#camera) return
 
-		let image: Image | undefined
+		// The calibrator and guider are stateful and not reentrant, so a BLOB that arrives while a
+		// previous frame is still being decoded/processed is dropped to avoid interleaved mutation.
+		if (this.#processingBlob) return
+		this.#processingBlob = true
 
 		try {
-			if (typeof data === 'string') {
-				const source = base64Source(data)
-				image = await readImageFromSource(source)
-			} else {
-				image = await readImageFromBuffer(data)
+			let image: Image | undefined
+
+			try {
+				if (typeof data === 'string') {
+					const source = base64Source(data)
+					image = await readImageFromSource(source)
+				} else {
+					image = await readImageFromBuffer(data)
+				}
+			} catch (e) {
+				console.error('guide image decode failed:', e)
 			}
-		} catch (e) {
-			console.error('guide image decode failed:', e)
+
+			if (image !== undefined) this.#image = image
+
+			const frame = this.#makeGuideFrame(image)
+			this.#frame = frame
+
+			const pulseDelay = this.#processFrame(frame)
+			await this.#queueNextExposure(pulseDelay)
+		} finally {
+			this.#processingBlob = false
 		}
-
-		if (image !== undefined) this.#image = image
-
-		const frame = this.#makeGuideFrame(image)
-		this.#frame = frame
-
-		const pulseDelay = this.#processFrame(frame)
-		await this.#queueNextExposure(pulseDelay)
 	}
 
 	// Converts a decoded image into a guide frame and prioritizes the selected lock star.
