@@ -206,7 +206,7 @@ export class GuiderClient {
 	// Stops camera exposure and clears active guiding/looping state.
 	stopCapture() {
 		if (this.#guidingAssistant !== undefined) {
-			this.#finishGuidingAssistant(false, 'capture stopped')
+			this.#finishGuidingAssistant(false, 'capture stopped', this.#guidingAssistant.measuringBacklash)
 		}
 
 		this.#emitCaptureStoppedEvent()
