@@ -278,7 +278,6 @@ interface BacklashState {
 	phase: GuidingAssistantBacklashPhase
 	originDec: number
 	previousDec: number
-	northPeakDec: number
 	noMotionMs: number
 	northPulses: number
 	southPulses: number
@@ -343,7 +342,6 @@ export class GuidingAssistant {
 			phase: 'north',
 			originDec: last.decPx,
 			previousDec: last.decPx,
-			northPeakDec: last.decPx,
 		}
 
 		const pulse = this.#makeBacklashPulse(this.config.backlashNorthDirection)
@@ -361,7 +359,6 @@ export class GuidingAssistant {
 
 		this.#backlash.originDec = sample.decPx
 		this.#backlash.previousDec = sample.decPx
-		this.#backlash.northPeakDec = sample.decPx
 
 		return this.result(frame.timestamp ?? Date.now())
 	}
@@ -450,7 +447,6 @@ export class GuidingAssistant {
 		if (state.phase === 'north') {
 			const signedMotion = decSignedDistance(this.config.backlashNorthDirection, this.config.decPositiveDirection, state.originDec, sample.decPx)
 			state.northDistancePx = Math.max(state.northDistancePx, signedMotion)
-			state.northPeakDec = sample.decPx
 			state.previousDec = sample.decPx
 
 			if (state.northDistancePx >= this.config.backlashTargetPx) {
@@ -778,7 +774,6 @@ function makeBacklashState(): BacklashState {
 		phase: 'idle',
 		originDec: 0,
 		previousDec: 0,
-		northPeakDec: 0,
 		noMotionMs: 0,
 		northPulses: 0,
 		southPulses: 0,
