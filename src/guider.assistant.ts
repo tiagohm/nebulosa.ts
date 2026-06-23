@@ -651,13 +651,7 @@ function exposureRange(config: GuidingAssistantConfig, metrics: GuidingAssistant
 	const idealMax = config.hasHighPrecisionEncoders ? 8 : 4
 	const driftExposure = metrics.raMaxDriftRatePxPerSecond > 0 ? Math.ceil(raMinMovePx / metrics.raMaxDriftRatePxPerSecond / 0.5) * 0.5 : idealMax
 	const min = Math.max(1, Math.min(driftExposure, idealMin))
-	let max: number
-
-	if (driftExposure > min) {
-		max = driftExposure < idealMax ? Math.max(driftExposure, min + 2) : idealMax
-	} else {
-		max = min + 2
-	}
+	const max = Math.max(min, Math.min(driftExposure, idealMax))
 
 	return { min, max }
 }

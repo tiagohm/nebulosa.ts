@@ -173,6 +173,20 @@ test('bases drift-limited exposure on RA min-move instead of residual RMS', () =
 	expect(result.recommendedMaxExposureSeconds).toBe(4)
 })
 
+test('caps exposure recommendations at the RA drift limit', () => {
+	const result = run([
+		[0, 0, 0],
+		[1000, 0.05, 0],
+		[2000, 0.1, 0],
+	])
+
+	expect(result.motion.raMaxDriftRatePxPerSecond).toBeCloseTo(0.05, 8)
+	expect(result.recommendedRaMinMove).toBeCloseTo(0.05, 8)
+	expect(result.motion.driftLimitingExposureSeconds).toBeCloseTo(1, 8)
+	expect(result.recommendedMinExposureSeconds).toBe(1)
+	expect(result.recommendedMaxExposureSeconds).toBe(1)
+})
+
 test('skips non-guiding and bad frames before recording samples', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: true })
 	assistant.start(0)
