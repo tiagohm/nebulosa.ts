@@ -1,7 +1,7 @@
 import { pixelScale } from './formulas'
 import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './guider.assistant'
-import { flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './guider.calibrator'
+import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './guider.calibrator'
 import { readImageFromBuffer, readImageFromSource } from './image'
 import { type Image, type ImageRawType, makeImageRawTypedArray } from './image.types'
 import type { Camera, GuideDirection, GuideOutput } from './indi.device'
@@ -75,6 +75,7 @@ export class GuiderClient {
 	#exposure = DEFAULT_GUIDER_EXPOSURE
 	#guideOutputEnabled = true
 	#guidingAssistant?: GuidingAssistant
+	#guidingAssistantPendingPulse?: CalibrationPulseCommand
 	#guidingAssistantResult?: GuidingAssistantResult
 	#guidingAssistantSavedGuideOutputEnabled = true
 	#paused = false
@@ -393,8 +394,8 @@ export class GuiderClient {
 		if (assistant.canMeasureBacklash) {
 			const step = assistant.startBacklashTest()
 			this.#guidingAssistantResult = step.result
+			this.#guidingAssistantPendingPulse = step.pulse
 			this.emitEvent('GuidingAssistantUpdated', { Result: step.result })
-			if (step.pulse !== undefined) this.#pulseCalibration(step.pulse.ra.direction, step.pulse.ra.duration, step.pulse.dec.direction, step.pulse.dec.duration, true)
 			return step.result
 		}
 
@@ -808,6 +809,12 @@ export class GuiderClient {
 		const assistant = this.#guidingAssistant
 		if (assistant === undefined) return undefined
 
+		if (this.#guidingAssistantPendingPulse !== undefined) {
+			const pulse = this.#guidingAssistantPendingPulse
+			this.#guidingAssistantPendingPulse = undefined
+			return this.#pulseCalibration(pulse.ra.direction, pulse.ra.duration, pulse.dec.direction, pulse.dec.duration, true)
+		}
+
 		const step = assistant.addSample(frame, command)
 		this.#guidingAssistantResult = step.result
 		this.emitEvent('GuidingAssistantUpdated', { Result: step.result })
@@ -832,6 +839,7 @@ export class GuiderClient {
 
 		const result = completed ? assistant.complete() : assistant.fail(message ?? 'guiding assistant failed')
 		this.#guidingAssistant = undefined
+		this.#guidingAssistantPendingPulse = undefined
 		this.#guidingAssistantResult = result
 		this.setGuideOutputEnabled(this.#guidingAssistantSavedGuideOutputEnabled)
 		this.emitEvent(completed ? 'GuidingAssistantCompleted' : 'GuidingAssistantFailed', { Result: result })
@@ -1038,6 +1046,7 @@ export class GuiderClient {
 		this.#fullPause = true
 		this.#guideOutputEnabled = true
 		this.#guidingAssistant = undefined
+		this.#guidingAssistantPendingPulse = undefined
 		this.#guidingAssistantResult = undefined
 		this.#guidingAssistantSavedGuideOutputEnabled = true
 		this.#declinationGuideMode = 'Auto'
