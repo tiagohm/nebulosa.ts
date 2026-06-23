@@ -439,8 +439,11 @@ export class GuidingAssistant {
 		}
 
 		if (state.phase === 'south') {
-			const before = Math.abs(state.previousDec - state.originDec)
-			const after = Math.abs(sample.decPx - state.originDec)
+			const previousOffset = state.previousDec - state.originDec
+			const currentOffset = sample.decPx - state.originDec
+			const crossedOrigin = previousOffset !== 0 && currentOffset !== 0 && Math.sign(previousOffset) !== Math.sign(currentOffset)
+			const before = Math.abs(previousOffset)
+			const after = crossedOrigin ? 0 : Math.abs(currentOffset)
 			const moved = Math.max(0, before - after)
 			state.southDistancePx += moved
 			state.previousDec = sample.decPx
@@ -449,7 +452,7 @@ export class GuidingAssistant {
 				state.noMotionMs += state.lastPulseDuration
 			}
 
-			const remaining = Math.abs(sample.decPx - state.originDec)
+			const remaining = crossedOrigin ? 0 : Math.abs(currentOffset)
 			if (remaining <= this.config.backlashReturnTolerancePx || state.southDistancePx >= state.northDistancePx * 0.9) {
 				const backlashMs = state.noMotionMs
 				state.phase = 'completed'
