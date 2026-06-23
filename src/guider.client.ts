@@ -398,7 +398,7 @@ export class GuiderClient {
 
 		if (assistant.measuringBacklash) return this.#finishGuidingAssistant(false, 'backlash test aborted', true)
 
-		if (assistant.canMeasureBacklash) {
+		if (assistant.canMeasureBacklash && this.#guidingAssistantSavedGuideOutputEnabled) {
 			const step = assistant.startBacklashTest()
 			this.#guidingAssistantResult = step.result
 			this.#guidingAssistantPendingPulse = step.pulse
