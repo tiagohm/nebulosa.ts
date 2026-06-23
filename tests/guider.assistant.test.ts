@@ -147,6 +147,24 @@ test('measures compensable DEC backlash from delayed south motion', () => {
 	expect(step.result.recommendations.some((recommendation) => recommendation.kind === 'backlash' && recommendation.actionable)).toBeTrue()
 })
 
+test('keeps backlash frames out of passive guiding metrics', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1, backlashReturnTolerancePx: 0.2, backlashPulseMs: 100, backlashMaxPulsesPerDirection: 8 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	assistant.addSample(frame(1000, 2), command(0.2, 0.1))
+
+	const before = assistant.result(1000)
+	assistant.startBacklashTest()
+	assistant.addSample(frame(2000, 3), command(0, 2))
+	assistant.addSample(frame(3000, 4), command(0, 4))
+	const after = assistant.result(3000)
+
+	expect(after.sampleCount).toBe(before.sampleCount)
+	expect(after.motion.dec.peakPx).toBeCloseTo(before.motion.dec.peakPx, 8)
+	expect(after.motion.dec.driftRatePxPerMinute).toBeCloseTo(before.motion.dec.driftRatePxPerMinute, 8)
+	expect(after.recommendedDecMinMove).toBeCloseTo(before.recommendedDecMinMove, 8)
+})
+
 test('fails DEC backlash when south motion never returns', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 0.5, backlashMaxPulsesPerDirection: 2, backlashPulseMs: 100 })
 	assistant.start(0)

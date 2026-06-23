@@ -314,12 +314,13 @@ export class GuidingAssistant {
 		if (this.#status === 'idle') this.start(frame.timestamp ?? Date.now())
 
 		const sample = makeSample(frame, command, this.#startTime)
-		if (sample !== null) this.samples.push(sample)
 
 		let pulse: CalibrationPulseCommand | undefined
 
 		if (sample !== null && this.#status === 'backlash') {
 			pulse = this.#advanceBacklash(sample)
+		} else if (sample !== null) {
+			this.samples.push(sample)
 		}
 
 		return { result: this.result(frame.timestamp ?? Date.now()), pulse }
