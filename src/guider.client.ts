@@ -229,6 +229,8 @@ export class GuiderClient {
 
 	// Clears the solved calibration and resets the guider/calibrator state machines.
 	clearCalibration() {
+		this.#abortGuidingAssistantForTransition('calibration cleared')
+
 		this.#calibration = undefined
 		this.#calibrator.reset()
 		this.#guider = this.#makeGuider(undefined)
@@ -252,6 +254,8 @@ export class GuiderClient {
 
 	// Drops the preferred lock position and returns to plain looping if capture is still active.
 	deselectStar() {
+		this.#abortGuidingAssistantForTransition('guide star deselected')
+
 		this.#lockPosition = undefined
 		this.#lockSearchPosition = undefined
 		this.#exactLockPosition = false
@@ -466,6 +470,7 @@ export class GuiderClient {
 	guide(recalibrate: boolean = false, settle?: Partial<PHD2Settle>) {
 		if (!this.#connected || this.#camera === undefined || this.#guideOutput === undefined) return false
 
+		this.#abortGuidingAssistantForTransition('guiding restarted')
 		this.#paused = false
 		this.#fullPause = true
 		this.#resumeState = 'Guiding'
@@ -508,6 +513,7 @@ export class GuiderClient {
 	loop() {
 		if (!this.#connected || this.#camera === undefined) return false
 
+		this.#abortGuidingAssistantForTransition('looping started')
 		this.#paused = false
 		this.#fullPause = true
 		this.#resumeState = 'Looping'
@@ -850,6 +856,11 @@ export class GuiderClient {
 		this.emitEvent(completed ? 'GuidingAssistantCompleted' : 'GuidingAssistantFailed', { Result: result })
 
 		return result
+	}
+
+	// Fails any active guiding assistant before public mode switches that own guide-output state.
+	#abortGuidingAssistantForTransition(message: string) {
+		if (this.#guidingAssistant !== undefined) this.#finishGuidingAssistant(false, message, this.#guidingAssistant.measuringBacklash)
 	}
 
 	// Updates settle state from current guide error and elapsed settle timing.
