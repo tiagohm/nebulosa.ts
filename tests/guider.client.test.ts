@@ -646,4 +646,19 @@ describe('frame processing robustness', () => {
 		expect(eventsOf(harness.events, 'LoopingExposures')).toHaveLength(1)
 		expect(harness.client.getStarImage()!.frame).toBe(1)
 	})
+
+	test('a failed decode clears the cached star image instead of reusing stale pixels', async () => {
+		connect(harness)
+		harness.client.loop()
+		await feedFrame(harness)
+		expect(harness.client.getStarImage()).toBeDefined()
+
+		const before = eventsOf(harness.events, 'LoopingExposures').length
+		const handler = harness.cameraManager.handler!
+		// An undecodable BLOB still advances the looping frame, but must not leave a stale image behind.
+		handler.blobReceived!(harness.camera, Buffer.from('not a valid fits or xisf payload'))
+
+		await waitForLoopingExposures(before + 1)
+		expect(harness.client.getStarImage()).toBeUndefined()
+	})
 })

@@ -707,7 +707,9 @@ export class GuiderClient {
 				console.error('guide image decode failed:', e)
 			}
 
-			if (image !== undefined) this.#image = image
+			// Clear the cached image on a failed decode so getStarImage cannot return stale pixels
+			// tagged with the new (empty) frame id instead of the last successfully decoded frame.
+			this.#image = image
 
 			const frame = this.#makeGuideFrame(image)
 			this.#frame = frame
