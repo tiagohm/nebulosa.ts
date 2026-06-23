@@ -352,6 +352,22 @@ export class GuidingAssistant {
 		return { result: this.result(), pulse }
 	}
 
+	// Moves a just-started backlash origin to the next frame boundary before the first pulse is applied.
+	alignBacklashOrigin(frame: GuideFrame, command: GuideCommand) {
+		if (this.#status !== 'backlash' || this.#backlash.phase !== 'north' || this.#backlash.northPulses !== 1 || this.#backlash.southPulses !== 0 || this.#backlash.northDistancePx !== 0) {
+			return this.result(frame.timestamp ?? Date.now())
+		}
+
+		const sample = makeSample(frame, command, this.#startTime)
+		if (sample === null) return this.result(frame.timestamp ?? Date.now())
+
+		this.#backlash.originDec = sample.decPx
+		this.#backlash.previousDec = sample.decPx
+		this.#backlash.northPeakDec = sample.decPx
+
+		return this.result(frame.timestamp ?? Date.now())
+	}
+
 	// Completes the run and freezes the final recommendation snapshot.
 	complete(timestamp: number = Date.now()) {
 		if (this.#status !== 'failed') this.#status = 'completed'
