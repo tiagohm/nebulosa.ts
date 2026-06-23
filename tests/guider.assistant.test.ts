@@ -276,6 +276,21 @@ test('completes DEC backlash when south return overshoots the origin', () => {
 	expect(step.result.backlash?.southDistancePx).toBeCloseTo(1, 8)
 })
 
+test('keeps DEC backlash running until the south return is within tolerance', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 4, backlashReturnTolerancePx: 0.05, backlashPulseMs: 100, backlashMaxPulsesPerDirection: 8 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	assistant.startBacklashTest()
+
+	let step = assistant.addSample(frame(1000, 2), command(0, 4))
+	expect(step.pulse?.dec.direction).toBe('south')
+
+	step = assistant.addSample(frame(2000, 3), command(0, 0.4))
+	expect(step.result.status).toBe('backlash')
+	expect(step.result.backlash).toBeNull()
+	expect(step.pulse?.dec.direction).toBe('south')
+})
+
 test('aligns the first backlash pulse to the current frame boundary', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1.2, backlashReturnTolerancePx: 0.2, backlashPulseMs: 100, backlashMaxPulsesPerDirection: 8 })
 	assistant.start(0)

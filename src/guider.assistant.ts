@@ -483,7 +483,7 @@ export class GuidingAssistant {
 			}
 
 			const remaining = crossedOrigin ? 0 : Math.abs(currentOffset)
-			if (remaining <= this.config.backlashReturnTolerancePx || state.southDistancePx >= state.northDistancePx * 0.9) {
+			if (remaining <= this.config.backlashReturnTolerancePx) {
 				const backlashMs = state.noMotionMs
 				state.phase = 'completed'
 				this.#status = 'completed'
