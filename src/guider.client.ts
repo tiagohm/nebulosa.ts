@@ -857,6 +857,7 @@ export class GuiderClient {
 		this.#guidingAssistant = undefined
 		this.#guidingAssistantPendingPulse = undefined
 		this.#guidingAssistantResult = result
+		if (result.backlash !== null) this.#guider = this.#makeGuider(this.#calibration)
 		this.setGuideOutputEnabled(this.#guidingAssistantSavedGuideOutputEnabled)
 		this.emitEvent(completed ? 'GuidingAssistantCompleted' : 'GuidingAssistantFailed', { Result: result })
 
