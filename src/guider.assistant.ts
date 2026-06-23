@@ -270,7 +270,6 @@ interface LinearFit {
 	readonly slope: number
 	readonly intercept: number
 	readonly residualRms: number
-	readonly simpleRms: number
 }
 
 interface BacklashState {
@@ -656,8 +655,7 @@ function bestDecSeeingEstimate(samples: readonly GuidingAssistantSample[]) {
 	const last = samples.at(-1)!.elapsedSeconds
 
 	if (last - first <= 1.2 * SEEING_WINDOW_SECONDS) {
-		const fit = linearFit(samples, 'decPx')
-		return Math.min(fit.simpleRms, fit.residualRms)
+		return linearFit(samples, 'decPx').residualRms
 	}
 
 	let best = Number.POSITIVE_INFINITY
@@ -669,22 +667,18 @@ function bestDecSeeingEstimate(samples: readonly GuidingAssistantSample[]) {
 		const span = window.length > 1 ? window.at(-1)!.elapsedSeconds - window[0].elapsedSeconds : 0
 
 		if (span >= SEEING_WINDOW_SECONDS || (end >= last && span >= MIN_FINAL_SEEING_WINDOW_SECONDS)) {
-			const fit = linearFit(window, 'decPx')
-			best = Math.min(best, fit.simpleRms, fit.residualRms)
+			best = Math.min(best, linearFit(window, 'decPx').residualRms)
 		}
 
 		start += SEEING_WINDOW_SECONDS / 2
 	}
 
-	if (Number.isFinite(best)) return best
-
-	const fit = linearFit(samples, 'decPx')
-	return Math.min(fit.simpleRms, fit.residualRms)
+	return Number.isFinite(best) ? best : linearFit(samples, 'decPx').residualRms
 }
 
 function linearFit(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'decPx'): LinearFit {
-	if (samples.length === 0) return { slope: 0, intercept: 0, residualRms: 0, simpleRms: 0 }
-	if (samples.length === 1) return { slope: 0, intercept: samples[0][key], residualRms: 0, simpleRms: 0 }
+	if (samples.length === 0) return { slope: 0, intercept: 0, residualRms: 0 }
+	if (samples.length === 1) return { slope: 0, intercept: samples[0][key], residualRms: 0 }
 
 	let sumT = 0
 	let sumY = 0
@@ -702,22 +696,17 @@ function linearFit(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'de
 	const denominator = count * sumTT - sumT * sumT
 	const slope = Math.abs(denominator) <= Number.EPSILON ? 0 : (count * sumTY - sumT * sumY) / denominator
 	const intercept = (sumY - slope * sumT) / count
-	const mean = sumY / count
 	let residualSum = 0
-	let simpleSum = 0
 
 	for (const sample of samples) {
 		const residual = sample[key] - (slope * sample.elapsedSeconds + intercept)
-		const centered = sample[key] - mean
 		residualSum += residual * residual
-		simpleSum += centered * centered
 	}
 
 	return {
 		slope,
 		intercept,
 		residualRms: Math.sqrt(residualSum / count),
-		simpleRms: Math.sqrt(simpleSum / count),
 	}
 }
 
