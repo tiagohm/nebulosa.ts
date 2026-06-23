@@ -343,3 +343,260 @@ test('guider client exposes guiding-assistant hooks without starting outside gui
 	expect(client.startGuidingAssistant()).toBeFalse()
 	expect(client.stopGuidingAssistant()).toBeUndefined()
 })
+
+test('auto-starts from idle and resets samples on a fresh start', () => {
+	const assistant = new GuidingAssistant()
+	const step = assistant.addSample(frame(5000, 1), command(0.3, -0.2))
+
+	expect(step.result.status).toBe('measuring')
+	expect(step.result.startTime).toBe(5000)
+	expect(step.result.sampleCount).toBe(1)
+
+	const restarted = assistant.start(0)
+	expect(restarted.status).toBe('measuring')
+	expect(restarted.startTime).toBe(0)
+	expect(restarted.sampleCount).toBe(0)
+})
+
+test('produces finite baseline recommendations with no samples', () => {
+	const result = new GuidingAssistant().complete(0)
+
+	expect(result.status).toBe('completed')
+	expect(result.sampleCount).toBe(0)
+	expect(result.notes).toContain('no_samples')
+	expect(result.meanSnr).toBe(0)
+	expect(result.meanHfd).toBe(0)
+	expect(result.motion.totalRmsPx).toBe(0)
+	expect(result.motion.driftLimitingExposureSeconds).toBeNull()
+
+	const kinds = result.recommendations.map((recommendation) => recommendation.kind)
+	expect(kinds).toContain('exposure')
+	expect(kinds).toContain('ra-min-move')
+	expect(kinds).toContain('dec-min-move')
+	expect(kinds).not.toContain('star')
+	expect(Number.isFinite(result.recommendedDecMinMove)).toBeTrue()
+	expect(Number.isFinite(result.recommendedRaMinMove)).toBeTrue()
+	expect(Number.isFinite(result.recommendedMinExposureSeconds)).toBeTrue()
+	expect(Number.isFinite(result.recommendedMaxExposureSeconds)).toBeTrue()
+})
+
+test('falls back to image-space displacement and skips non-finite axis errors', () => {
+	const assistant = new GuidingAssistant()
+	assistant.start(0)
+
+	// axis-resolved errors missing: the image-space dx/dy fallback is used.
+	assistant.addSample(frame(0, 1), command(0, 0, { axisErrorRA: undefined, axisErrorDEC: undefined, dx: 0.3, dy: -0.2 }))
+	// NaN axis error is rejected even though dx/dy are present.
+	assistant.addSample(frame(1000, 2), command(0, 0, { axisErrorRA: Number.NaN, dx: 0.5, dy: 0.5 }))
+	// fully missing displacement is rejected.
+	assistant.addSample(frame(2000, 3), command(0, 0, { axisErrorRA: undefined, axisErrorDEC: undefined, dx: undefined, dy: undefined }))
+
+	expect(assistant.result(2000).sampleCount).toBe(1)
+})
+
+test('exposes backlash readiness through its getters', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1, backlashPulseMs: 100 })
+	assistant.start(0)
+
+	expect(assistant.canMeasureBacklash).toBeFalse()
+
+	assistant.addSample(frame(0, 1), command(0, 0))
+	expect(assistant.canMeasureBacklash).toBeTrue()
+	expect(assistant.measuringBacklash).toBeFalse()
+
+	assistant.startBacklashTest()
+	expect(assistant.canMeasureBacklash).toBeFalse()
+	expect(assistant.measuringBacklash).toBeTrue()
+})
+
+test('never reports backlash readiness when measurement is disabled', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: false })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	expect(assistant.canMeasureBacklash).toBeFalse()
+})
+
+test('flags short sampling intervals and clears the flag once satisfied', () => {
+	const short = run([
+		[0, 0, 0],
+		[1000, 0.1, 0.1],
+	])
+	expect(short.notes).toContain('sampling_interval_short')
+
+	const enough = run(
+		[
+			[0, 0, 0],
+			[2000, 0.1, 0.1],
+		],
+		{ minSamplingSeconds: 1 },
+	)
+	expect(enough.notes).not.toContain('sampling_interval_short')
+	expect(enough.notes).not.toContain('no_samples')
+})
+
+test('reports drift-limited exposure from RA min-move and clears it without drift', () => {
+	const drifting = run([
+		[0, 0, 0],
+		[1000, 0.01, 0],
+		[2000, 0.02, 0],
+		[3000, 0.03, 0],
+	])
+	// recommended RA min-move 0.05 px / max adjacent RA rate 0.01 px/s = 5 s.
+	expect(drifting.motion.driftLimitingExposureSeconds).toBeCloseTo(5, 6)
+
+	const calm = run([
+		[0, 0, 0],
+		[1000, 0, 0],
+	])
+	expect(calm.motion.driftLimitingExposureSeconds).toBeNull()
+})
+
+test('estimates seeing from the quietest window on long runs', () => {
+	// Calm first two minutes, noisy zig-zag tail; the run spans > 144 s so the
+	// overlapping-window seeing estimator (not the single-fit branch) is exercised.
+	const series: [number, number, number][] = []
+
+	for (let i = 0; i <= 20; i++) {
+		const dec = i <= 12 ? 0 : i % 2 === 0 ? 1 : -1
+		series.push([i * 10000, 0, dec])
+	}
+
+	const result = run(series)
+
+	expect(result.elapsedSeconds).toBeCloseTo(200, 6)
+	// the quiet [0, 120] s window drives the seeing estimate toward zero...
+	expect(result.motion.decCorrectedRmsPx).toBeCloseTo(0, 6)
+	// ...while the whole-run residual still carries the noisy tail.
+	expect(result.motion.dec.rmsPx).toBeGreaterThan(0.1)
+	expect(result.recommendedDecMinMove).toBeCloseTo(0.05, 8)
+})
+
+test('falls back to a safe DEC min-move when seeing fails the sanity check', () => {
+	const result = run(
+		[
+			[0, 0, 1],
+			[1000, 0, -1],
+			[2000, 0, -1],
+			[3000, 0, 1],
+		],
+		{ imageScaleArcsecPerPixel: 2 },
+	)
+
+	// DEC residual RMS is 1 px; 0.9 * 1.65 -> 1.5 px which at 2"/px exceeds the 1.25"/px sanity limit.
+	expect(result.motion.decCorrectedRmsPx).toBeCloseTo(1, 8)
+	expect(result.recommendedDecMinMove).toBeCloseTo(0.2, 8)
+	expect(result.recommendedRaMinMove).toBeCloseTo(0.15, 8)
+})
+
+test('returns no polar alignment estimate near the celestial pole', () => {
+	const result = run(
+		[
+			[0, 0, 0],
+			[60000, 0, 2],
+			[120000, 0, 4],
+		],
+		{ imageScaleArcsecPerPixel: 1, declination: Math.PI / 2 },
+	)
+
+	expect(result.motion.dec.driftRatePxPerMinute).toBeCloseTo(2, 8)
+	expect(result.motion.polarAlignmentErrorArcmin).toBeNull()
+	expect(result.notes).not.toContain('declination_unavailable')
+	expect(result.recommendations.some((recommendation) => recommendation.kind === 'polar-alignment')).toBeFalse()
+})
+
+test('recommends drift alignment for large polar alignment error', () => {
+	const result = run(
+		[
+			[0, 0, 0],
+			[60000, 0, 4],
+			[120000, 0, 8],
+		],
+		{ imageScaleArcsecPerPixel: 1, declination: 0 },
+	)
+
+	expect(result.motion.polarAlignmentErrorArcmin).toBeCloseTo(15.2788, 3)
+
+	const polar = result.recommendations.find((recommendation) => recommendation.kind === 'polar-alignment')
+	expect(polar?.message).toContain('drift alignment')
+	expect(polar?.value).toBeCloseTo(15.2788, 3)
+})
+
+test('recommends no compensation for negligible DEC backlash', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1, backlashReturnTolerancePx: 0.2, backlashPulseMs: 100, backlashMaxPulsesPerDirection: 8 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	assistant.startBacklashTest()
+
+	assistant.addSample(frame(1000, 2), command(0, 1)) // north reaches target immediately
+	const step = assistant.addSample(frame(2000, 3), command(0, 0.1)) // south returns with no dead zone
+
+	expect(step.result.status).toBe('completed')
+	expect(step.result.backlash?.backlashMs).toBe(0)
+	expect(step.result.backlash?.recommendedCompensationMs).toBeNull()
+
+	const backlash = step.result.recommendations.find((recommendation) => recommendation.kind === 'backlash')
+	expect(backlash?.message).toContain('no compensation needed')
+	expect(backlash?.actionable).toBeFalse()
+})
+
+test('recommends single-direction guiding for excessive DEC backlash', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1, backlashReturnTolerancePx: 0.2, backlashPulseMs: 2000, backlashMaxPulsesPerDirection: 20 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	assistant.startBacklashTest()
+
+	assistant.addSample(frame(1000, 2), command(0, 1)) // north target reached -> first south pulse
+	assistant.addSample(frame(2000, 3), command(0, 1)) // no return: +2000 ms dead zone
+	assistant.addSample(frame(3000, 4), command(0, 1)) // no return: +2000 ms dead zone
+	const step = assistant.addSample(frame(4000, 5), command(0, 0.1)) // finally returns
+
+	expect(step.result.status).toBe('completed')
+	expect(step.result.backlash?.backlashMs).toBe(4000)
+
+	const decMode = step.result.recommendations.find((recommendation) => recommendation.kind === 'dec-mode')
+	expect(decMode?.appliesTo).toBe('decGuideMode')
+	expect(decMode?.actionable).toBeTrue()
+	expect(decMode?.message).toContain('one Dec direction')
+})
+
+test('floors recommended DEC backlash compensation to 10 ms', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1, backlashReturnTolerancePx: 0.2, backlashPulseMs: 255, backlashMaxPulsesPerDirection: 8 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	assistant.startBacklashTest()
+
+	assistant.addSample(frame(1000, 2), command(0, 1)) // north target -> first south pulse (255 ms)
+	assistant.addSample(frame(2000, 3), command(0, 1)) // dead zone: +255 ms
+	const step = assistant.addSample(frame(3000, 4), command(0, 0.1)) // returns
+
+	expect(step.result.backlash?.backlashMs).toBe(255)
+	expect(step.result.backlash?.recommendedCompensationMs).toBe(250)
+})
+
+test('fails the backlash test when north motion is insufficient', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 5, backlashMaxPulsesPerDirection: 2, backlashPulseMs: 100 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	assistant.startBacklashTest() // north pulse #1
+
+	assistant.addSample(frame(1000, 2), command(0, 0.5)) // north pulse #2
+	const step = assistant.addSample(frame(2000, 3), command(0, 1)) // pulse cap hit before target
+
+	expect(step.result.status).toBe('failed')
+	expect(step.result.backlash?.phase).toBe('failed')
+	expect(step.result.backlash?.message).toContain('insufficient north')
+	expect(step.result.backlash?.northDistancePx).toBeCloseTo(1, 8)
+	expect(step.result.backlash?.southPulses).toBe(0)
+})
+
+test('fails immediately when no samples precede the backlash test', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true })
+	assistant.start(0)
+
+	const step = assistant.startBacklashTest()
+
+	expect(step.result.status).toBe('failed')
+	expect(step.result.backlash?.phase).toBe('failed')
+	expect(step.result.backlash?.message).toContain('no guide samples')
+	expect(step.pulse).toBeUndefined()
+})
