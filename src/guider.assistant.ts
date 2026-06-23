@@ -518,8 +518,8 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number)
 
 	const timestamp = frame.timestamp ?? Date.now()
 	const star = frame.stars[0]
-	const raPx = command.diagnostics.axisErrorRA ?? command.diagnostics.dx
-	const decPx = command.diagnostics.axisErrorDEC ?? command.diagnostics.dy
+	const raPx = command.diagnostics.dx ?? command.diagnostics.axisErrorRA
+	const decPx = command.diagnostics.dy ?? command.diagnostics.axisErrorDEC
 
 	if (raPx === undefined || decPx === undefined || !Number.isFinite(raPx) || !Number.isFinite(decPx)) return null
 

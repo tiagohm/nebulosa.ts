@@ -78,6 +78,20 @@ test('computes guide-assistant motion metrics and arc-second conversions', () =>
 	expect(result.meanStarMass).toBeCloseTo(3000, 8)
 })
 
+test('uses image-space pixel motion instead of calibrated guide-axis units', () => {
+	const assistant = new GuidingAssistant({ imageScaleArcsecPerPixel: 2 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0, { axisErrorRA: 0, axisErrorDEC: 0, dx: 0, dy: 0 }))
+	assistant.addSample(frame(1000, 2), command(100, 100, { axisErrorRA: 100, axisErrorDEC: 100, dx: 1, dy: -1 }))
+
+	const result = assistant.complete(1000)
+
+	expect(result.motion.ra.peakPx).toBeCloseTo(1, 8)
+	expect(result.motion.dec.peakPx).toBeCloseTo(1, 8)
+	expect(result.motion.ra.peakArcsec).toBeCloseTo(2, 8)
+	expect(result.motion.dec.peakArcsec).toBeCloseTo(2, 8)
+})
+
 test('requires declination and image scale for polar alignment error', () => {
 	const samples: readonly [number, number, number][] = [
 		[0, 0, 0],
@@ -380,18 +394,18 @@ test('produces finite baseline recommendations with no samples', () => {
 	expect(Number.isFinite(result.recommendedMaxExposureSeconds)).toBeTrue()
 })
 
-test('falls back to image-space displacement and skips non-finite axis errors', () => {
+test('prioritizes image-space displacement and skips missing pixel motion', () => {
 	const assistant = new GuidingAssistant()
 	assistant.start(0)
 
 	// axis-resolved errors missing: the image-space dx/dy fallback is used.
 	assistant.addSample(frame(0, 1), command(0, 0, { axisErrorRA: undefined, axisErrorDEC: undefined, dx: 0.3, dy: -0.2 }))
-	// NaN axis error is rejected even though dx/dy are present.
+	// non-finite axis errors are ignored when dx/dy are present.
 	assistant.addSample(frame(1000, 2), command(0, 0, { axisErrorRA: Number.NaN, dx: 0.5, dy: 0.5 }))
 	// fully missing displacement is rejected.
 	assistant.addSample(frame(2000, 3), command(0, 0, { axisErrorRA: undefined, axisErrorDEC: undefined, dx: undefined, dy: undefined }))
 
-	expect(assistant.result(2000).sampleCount).toBe(1)
+	expect(assistant.result(2000).sampleCount).toBe(2)
 })
 
 test('exposes backlash readiness through its getters', () => {
