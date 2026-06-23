@@ -1,5 +1,6 @@
 import { pixelScale } from './formulas'
 import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
+import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './guider.assistant'
 import { flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './guider.calibrator'
 import { readImageFromBuffer, readImageFromSource } from './image'
 import { type Image, type ImageRawType, makeImageRawTypedArray } from './image.types'
@@ -73,6 +74,9 @@ export class GuiderClient {
 	#guider = this.#makeGuider(undefined)
 	#exposure = DEFAULT_GUIDER_EXPOSURE
 	#guideOutputEnabled = true
+	#guidingAssistant?: GuidingAssistant
+	#guidingAssistantResult?: GuidingAssistantResult
+	#guidingAssistantSavedGuideOutputEnabled = true
 	#paused = false
 	#fullPause = true
 	#settling = false
@@ -195,6 +199,10 @@ export class GuiderClient {
 
 	// Stops camera exposure and clears active guiding/looping state.
 	stopCapture() {
+		if (this.#guidingAssistant !== undefined) {
+			this.#finishGuidingAssistant(false, 'capture stopped')
+		}
+
 		this.#emitCaptureStoppedEvent()
 
 		if (this.#camera !== undefined) {
@@ -351,6 +359,51 @@ export class GuiderClient {
 	// Returns whether pulse output is enabled.
 	getGuideOutputEnabled() {
 		return this.#guideOutputEnabled
+	}
+
+	// Starts a PHD2-style guiding assistant run while ordinary guide output is disabled.
+	startGuidingAssistant(config: Partial<GuidingAssistantConfig> = {}) {
+		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
+
+		if (this.#guidingAssistant !== undefined || (appState !== 'Guiding' && appState !== 'LostLock')) return false
+
+		const imageScale = this.getPixelScale()
+		const assistant = new GuidingAssistant({
+			imageScaleArcsecPerPixel: imageScale > 0 ? imageScale : undefined,
+			exposureSeconds: this.getExposure(),
+			multiStar: this.#guider.config.mode === 'multi-star',
+			suspectCalibration: this.#calibration === undefined,
+			...config,
+		})
+
+		this.#guidingAssistant = assistant
+		this.#guidingAssistantSavedGuideOutputEnabled = this.#guideOutputEnabled
+		this.setGuideOutputEnabled(false)
+		this.#guidingAssistantResult = assistant.start()
+		this.emitEvent('GuidingAssistantStarted', { Result: this.#guidingAssistantResult })
+
+		return true
+	}
+
+	// Stops the guiding assistant or starts the optional DEC backlash phase before completing.
+	stopGuidingAssistant() {
+		const assistant = this.#guidingAssistant
+		if (assistant === undefined) return undefined
+
+		if (assistant.canMeasureBacklash) {
+			const step = assistant.startBacklashTest()
+			this.#guidingAssistantResult = step.result
+			this.emitEvent('GuidingAssistantUpdated', { Result: step.result })
+			if (step.pulse !== undefined) this.#pulseCalibration(step.pulse.ra.direction, step.pulse.ra.duration, step.pulse.dec.direction, step.pulse.dec.duration, true)
+			return step.result
+		}
+
+		return this.#finishGuidingAssistant(true)
+	}
+
+	// Returns the latest guiding assistant result snapshot, if a run has produced one.
+	guidingAssistantResult() {
+		return this.#guidingAssistantResult
 	}
 
 	// Returns the current lock target if one has been selected or acquired.
@@ -717,10 +770,12 @@ export class GuiderClient {
 			this.#resumeState = 'LostLock'
 			if (!this.#paused) this.#setAppState('LostLock')
 			this.#updateSettling(undefined, undefined, true, true, timestamp)
+			if (this.#guidingAssistant !== undefined) this.#finishGuidingAssistant(false, 'guide star lost')
 			return 0
 		}
 
 		this.#emitGuideStepEvent(frame, command)
+		const assistantDelay = this.#processGuidingAssistantFrame(frame, command)
 
 		this.#resumeState = 'Guiding'
 		if (!this.#paused) this.#setAppState('Guiding')
@@ -728,22 +783,60 @@ export class GuiderClient {
 		this.#updateSettling(command.diagnostics.dx, command.diagnostics.dy, command.diagnostics.badFrame, command.diagnostics.lost, timestamp)
 		this.#updateLockShift(frame)
 
+		if (assistantDelay !== undefined) return assistantDelay
+
 		return Math.max(this.#pulseAxis(command.ra.direction, command.ra.duration), this.#pulseAxis(command.dec.direction, command.dec.duration))
 	}
 
 	// Sends one calibration pulse pair and returns the largest applied delay.
-	#pulseCalibration(raDirection?: AxisPulse['direction'], raDuration?: number, decDirection?: AxisPulse['direction'], decDuration?: number) {
-		return Math.max(this.#pulseAxis(raDirection, raDuration), this.#pulseAxis(decDirection, decDuration))
+	#pulseCalibration(raDirection?: AxisPulse['direction'], raDuration?: number, decDirection?: AxisPulse['direction'], decDuration?: number, force: boolean = false) {
+		return Math.max(this.#pulseAxis(raDirection, raDuration, force), this.#pulseAxis(decDirection, decDuration, force))
 	}
 
 	// Sends one axis pulse if guide output is enabled and returns the applied delay.
-	#pulseAxis(direction?: AxisPulse['direction'], duration?: number) {
-		if (this.#guideOutput === undefined || this.#paused || !this.#guideOutputEnabled || direction === undefined || direction === null || duration === undefined || duration <= 0 || !Number.isFinite(duration)) return 0
+	#pulseAxis(direction?: AxisPulse['direction'], duration?: number, force: boolean = false) {
+		if (this.#guideOutput === undefined || this.#paused || (!force && !this.#guideOutputEnabled) || direction === undefined || direction === null || duration === undefined || duration <= 0 || !Number.isFinite(duration)) return 0
 
 		const pulseDuration = Math.max(1, Math.round(duration))
 		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, pulseDuration)
 
 		return pulseDuration
+	}
+
+	// Feeds one guiding frame into the active assistant and applies assistant-owned backlash pulses.
+	#processGuidingAssistantFrame(frame: GuideFrame, command: GuideCommand) {
+		const assistant = this.#guidingAssistant
+		if (assistant === undefined) return undefined
+
+		const step = assistant.addSample(frame, command)
+		this.#guidingAssistantResult = step.result
+		this.emitEvent('GuidingAssistantUpdated', { Result: step.result })
+
+		if (step.pulse !== undefined) {
+			return this.#pulseCalibration(step.pulse.ra.direction, step.pulse.ra.duration, step.pulse.dec.direction, step.pulse.dec.duration, true)
+		}
+
+		if (step.result.status === 'completed') {
+			this.#finishGuidingAssistant(true)
+		} else if (step.result.status === 'failed') {
+			this.#finishGuidingAssistant(false, 'guiding assistant failed')
+		}
+
+		return 0
+	}
+
+	// Restores guide output and emits the final guiding assistant event.
+	#finishGuidingAssistant(completed: boolean, message?: string) {
+		const assistant = this.#guidingAssistant
+		if (assistant === undefined) return this.#guidingAssistantResult
+
+		const result = completed ? assistant.complete() : assistant.fail(message ?? 'guiding assistant failed')
+		this.#guidingAssistant = undefined
+		this.#guidingAssistantResult = result
+		this.setGuideOutputEnabled(this.#guidingAssistantSavedGuideOutputEnabled)
+		this.emitEvent(completed ? 'GuidingAssistantCompleted' : 'GuidingAssistantFailed', { Result: result })
+
+		return result
 	}
 
 	// Updates settle state from current guide error and elapsed settle timing.
@@ -944,6 +1037,9 @@ export class GuiderClient {
 		this.#paused = false
 		this.#fullPause = true
 		this.#guideOutputEnabled = true
+		this.#guidingAssistant = undefined
+		this.#guidingAssistantResult = undefined
+		this.#guidingAssistantSavedGuideOutputEnabled = true
 		this.#declinationGuideMode = 'Auto'
 		this.#exposure = DEFAULT_GUIDER_EXPOSURE
 		this.#settling = false

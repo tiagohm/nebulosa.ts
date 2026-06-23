@@ -1,4 +1,5 @@
 import type { Point, Size } from './geometry'
+import type { GuidingAssistantResult } from './guider.assistant'
 import type { ImageRawType } from './image.types'
 import type { PartialOnly, Writable } from './types'
 
@@ -16,6 +17,10 @@ export type PHD2EventType =
 	| 'ConfigurationChange'
 	| 'GuideParamChange'
 	| 'GuideStep'
+	| 'GuidingAssistantCompleted'
+	| 'GuidingAssistantFailed'
+	| 'GuidingAssistantStarted'
+	| 'GuidingAssistantUpdated'
 	| 'GuidingDithered'
 	| 'GuidingStopped'
 	| 'LockPositionLost'
@@ -144,6 +149,22 @@ export interface PHD2GuideStepEvent extends PHD2Event<'GuideStep'> {
 	readonly ErrorCode: number
 }
 
+export interface PHD2GuidingAssistantStartedEvent extends PHD2Event<'GuidingAssistantStarted'> {
+	readonly Result: GuidingAssistantResult
+}
+
+export interface PHD2GuidingAssistantUpdatedEvent extends PHD2Event<'GuidingAssistantUpdated'> {
+	readonly Result: GuidingAssistantResult
+}
+
+export interface PHD2GuidingAssistantCompletedEvent extends PHD2Event<'GuidingAssistantCompleted'> {
+	readonly Result: GuidingAssistantResult
+}
+
+export interface PHD2GuidingAssistantFailedEvent extends PHD2Event<'GuidingAssistantFailed'> {
+	readonly Result: GuidingAssistantResult
+}
+
 export interface PHD2GuidingDitheredEvent extends PHD2Event<'GuidingDithered'> {
 	readonly dx: number
 	readonly dy: number
@@ -204,6 +225,10 @@ export interface PHD2EventMap {
 	readonly CalibrationFailed: PHD2CalibrationFailedEvent
 	readonly GuideParamChange: PHD2GuideParamChangeEvent
 	readonly GuideStep: PHD2GuideStepEvent
+	readonly GuidingAssistantCompleted: PHD2GuidingAssistantCompletedEvent
+	readonly GuidingAssistantFailed: PHD2GuidingAssistantFailedEvent
+	readonly GuidingAssistantStarted: PHD2GuidingAssistantStartedEvent
+	readonly GuidingAssistantUpdated: PHD2GuidingAssistantUpdatedEvent
 	readonly GuidingDithered: PHD2GuidingDitheredEvent
 	readonly LockPositionSet: PHD2LockPositionSetEvent
 	readonly LoopingExposures: PHD2LoopingExposuresEvent
@@ -245,6 +270,10 @@ export type PHD2Events =
 	| PHD2ConfigurationChangeEvent
 	| PHD2GuideParamChangeEvent
 	| PHD2GuideStepEvent
+	| PHD2GuidingAssistantCompletedEvent
+	| PHD2GuidingAssistantFailedEvent
+	| PHD2GuidingAssistantStartedEvent
+	| PHD2GuidingAssistantUpdatedEvent
 	| PHD2GuidingDitheredEvent
 	| PHD2GuidingStoppedEvent
 	| PHD2LockPositionLostEvent
