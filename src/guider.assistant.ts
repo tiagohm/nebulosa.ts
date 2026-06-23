@@ -594,10 +594,17 @@ function computeMinMove(samples: readonly GuidingAssistantSample[], config: Guid
 
 // Builds the recommendation list. `exposure`, `meanSnr`, and `meanHfd` are precomputed by the
 // caller so a snapshot does not recompute the exposure range or sample means twice.
-function makeRecommendations(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, metrics: GuidingAssistantMotionMetrics, backlash: GuidingAssistantBacklashResult | null, minMove: ReturnType<typeof computeMinMove>, exposure: ReturnType<typeof exposureRange>, meanSnr: number, meanHfd: number): readonly GuidingAssistantRecommendation[] {
-	const recommendations: GuidingAssistantRecommendation[] = []
-
-	recommendations.push({ kind: 'exposure', message: `Use exposure times in the range of ${exposure.min.toFixed(1)}s to ${exposure.max.toFixed(1)}s`, appliesTo: 'exposure', value: exposure.min, unit: 's', actionable: true })
+function makeRecommendations(
+	samples: readonly GuidingAssistantSample[],
+	config: GuidingAssistantConfig,
+	metrics: GuidingAssistantMotionMetrics,
+	backlash: GuidingAssistantBacklashResult | null,
+	minMove: ReturnType<typeof computeMinMove>,
+	exposure: ReturnType<typeof exposureRange>,
+	meanSnr: number,
+	meanHfd: number,
+): readonly GuidingAssistantRecommendation[] {
+	const recommendations: GuidingAssistantRecommendation[] = [{ kind: 'exposure', message: `Use exposure times in the range of ${exposure.min.toFixed(1)}s to ${exposure.max.toFixed(1)}s`, appliesTo: 'exposure', value: exposure.min, unit: 's', actionable: true }]
 
 	if (config.suspectCalibration) {
 		recommendations.push({ kind: 'calibration', message: 'Consider re-doing your calibration', appliesTo: 'calibration', actionable: false })
