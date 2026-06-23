@@ -180,6 +180,18 @@ test('fails DEC backlash when south motion never returns', () => {
 	expect(step.result.recommendations.some((recommendation) => recommendation.kind === 'backlash')).toBeTrue()
 })
 
+test('does not report passive guide failures as backlash failures', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: false })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+
+	const result = assistant.fail('guide star lost', 1000)
+
+	expect(result.status).toBe('failed')
+	expect(result.backlash).toBeNull()
+	expect(result.recommendations.some((recommendation) => recommendation.kind === 'backlash')).toBeFalse()
+})
+
 test('guider client exposes guiding-assistant hooks without starting outside guiding', () => {
 	const client = new GuiderClient({} as never, {} as never)
 	expect(client.guidingAssistantResult()).toBeUndefined()

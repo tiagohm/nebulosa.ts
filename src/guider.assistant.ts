@@ -358,8 +358,9 @@ export class GuidingAssistant {
 
 	// Fails the run with a status note while preserving measured data.
 	fail(message: string, timestamp: number = Date.now()) {
+		const backlashWasActive = this.#status === 'backlash' || this.#backlash.phase !== 'idle'
 		this.#status = 'failed'
-		this.#backlash.result ??= makeBacklashResult('failed', null, 0, 0, 0, 0, message)
+		if (backlashWasActive) this.#backlash.result ??= makeBacklashResult('failed', null, 0, 0, 0, 0, message)
 		const result = this.result(timestamp)
 		return result
 	}
