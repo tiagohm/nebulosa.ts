@@ -7,8 +7,10 @@ const DEFAULT_MIN_SAMPLING_SECONDS = 120
 // Long-run seeing windows use two-minute spans with one-minute overlap, matching PHD2's guiding assistant.
 const SEEING_WINDOW_SECONDS = 120
 
-// Final partial seeing windows shorter than this are ignored to avoid unstable RMS estimates.
-const MIN_FINAL_SEEING_WINDOW_SECONDS = 96
+// Seeing windows covering less than this span are ignored to avoid unstable RMS estimates.
+// A discrete [start, start+120] window can only reach a full 120 s span when samples land
+// exactly on both edges, so this floor lets interior windows qualify like the trailing one.
+const MIN_SEEING_WINDOW_SECONDS = 96
 
 // Backlash compensation above this value is treated as too large for ordinary DEC compensation.
 const MAX_BACKLASH_COMPENSATION_MS = 3000
@@ -666,7 +668,7 @@ function bestDecSeeingEstimate(samples: readonly GuidingAssistantSample[]) {
 		const window = samples.filter((sample) => sample.elapsedSeconds >= start && sample.elapsedSeconds <= end)
 		const span = window.length > 1 ? window.at(-1)!.elapsedSeconds - window[0].elapsedSeconds : 0
 
-		if (span >= SEEING_WINDOW_SECONDS || (end >= last && span >= MIN_FINAL_SEEING_WINDOW_SECONDS)) {
+		if (span >= MIN_SEEING_WINDOW_SECONDS) {
 			best = Math.min(best, linearFit(window, 'decPx').residualRms)
 		}
 
