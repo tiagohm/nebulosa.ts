@@ -26,31 +26,26 @@ test('time', () => {
 })
 
 test('time unix', () => {
-	let t = timeUnix(0, undefined, false)
+	let t = timeUnix(0, undefined)
 	expect(t.day).toBe(2440588)
 	expect(t.fraction).toBe(-0.5)
 	expect(t.scale).toBe(Timescale.UTC)
 
-	t = timeUnix(946684800, Timescale.TAI, false)
+	t = timeUnix(946684800)
 	expect(t.day).toBe(J2000)
-	expect(t.fraction).toBe(-0.5)
-	expect(t.scale).toBe(Timescale.TAI)
-
-	t = timeUnix(0, undefined, true)
-	expect(t.day).toBe(2440588)
 	expect(t.fraction).toBe(-0.5)
 	expect(t.scale).toBe(Timescale.UTC)
 
-	t = timeUnix(946684800, Timescale.TAI, true)
+	t = timeUnix(946684800, true)
 	expect(t.day).toBe(J2000)
 	expect(t.fraction).toBe(-0.5)
-	expect(t.scale).toBe(Timescale.TAI)
+	expect(t.scale).toBe(Timescale.UTC)
 })
 
 test('time unix fast mode must match normal mode', () => {
 	for (const seconds of [0, 86399.75, 1692447927.896736, -0.001, -86400.5]) {
-		const precise = timeUnix(seconds, Timescale.UTC, false)
-		const fast = timeUnix(seconds, Timescale.UTC, true)
+		const precise = timeUnix(seconds, false)
+		const fast = timeUnix(seconds, true)
 		expectTimeClose(fast, precise)
 	}
 })
@@ -137,8 +132,8 @@ test('to date', () => {
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toEqual([2020, 1, 1, 12, 0, 0, 0])
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59))).toEqual([2020, 1, 1, 23, 59, 59, 0])
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))).toEqual([2020, 1, 1, 23, 59, 59, 500000000])
-	expect(timeToDate(time(2460677, 0.503116, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
-	expect(timeToDate(time(2460678, -0.496884, 0, false))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
+	expect(timeToDate(time(2460677, 0.503116, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
+	expect(timeToDate(time(2460678, -0.496884, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
 	expect(timeToDate(timeJulianYear(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
 })
 
@@ -287,27 +282,27 @@ test('normalize', () => {
 
 	const t = timeYMDHMS(2020, 10, 7, 0, 0, 0, Timescale.TCB)
 
-	const a = ut1(t, true)
+	const a = ut1(t)
 	expect(a.day).toBe(2459129)
 	expect(a.fraction).toBeCloseTo(0.498949435681883102, 14)
 
-	const b = utc(t, true)
+	const b = utc(t)
 	expect(b.day).toBe(2459129)
 	expect(b.fraction).toBeCloseTo(0.498951427480941123, 14)
 
-	const c = tai(t, true)
+	const c = tai(t)
 	expect(c.day).toBe(2459129)
 	expect(c.fraction).toBeCloseTo(0.499379668221681894, 14)
 
-	const d = tt(t, true)
+	const d = tt(t)
 	expect(d.day).toBe(2459129)
 	expect(d.fraction).toBeCloseTo(0.499752168221681892, 14)
 
-	const e = tcg(t, true)
+	const e = tcg(t)
 	expect(e.day).toBe(2459129)
 	expect(e.fraction).toBeCloseTo(0.499763308631536507, 14)
 
-	const f = tdb(t, true)
+	const f = tdb(t)
 	expect(f.day).toBe(2459129)
 	expect(f.fraction).toBeCloseTo(0.499752148662759077, 14)
 })

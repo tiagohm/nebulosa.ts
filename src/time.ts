@@ -6,7 +6,7 @@ import * as iers from './iers'
 import { itrs } from './itrs'
 import type { GeographicPosition } from './location'
 import { type Mat3, matClone, matIdentity, matMul, matRotX, matRotZ } from './mat3'
-import { twoProduct, twoSum } from './math'
+import { twoProduct, twoSum, type NumberArray } from './math'
 
 // The specification for measuring time.
 export enum Timescale {
@@ -129,8 +129,8 @@ export function pmMatrix(time: Time, pm?: PolarMotion): Mat3 {
 	return m
 }
 
-export function time(day: number, fraction: number = 0, scale: Timescale = Timescale.UTC, normalize: boolean = true): Time {
-	return normalize ? timeNormalize(day, fraction, 0, scale) : { day, fraction, scale }
+export function time(day: number, fraction: number = 0, scale: Timescale = Timescale.UTC) {
+	return timeNormalize(day, fraction, 0, scale)
 }
 
 // Times that represent the interval from a particular epoch as
@@ -154,7 +154,7 @@ export function timeFromEpoch(epoch: number, unit: number, day: number, fraction
 // by up to 1 second on days with a leap second. POSIX unix time actually jumps backward by 1
 // second at midnight on leap second days while this class value is monotonically increasing
 // at 86400 seconds per UTC day.
-export function timeUnix(seconds: number, scale: Timescale = Timescale.UTC, fast: boolean = false) {
+export function timeUnix(seconds: number, fast: boolean = false) {
 	if (fast) {
 		const offsetDays = Math.trunc(seconds / DAYSEC)
 		let day = UNIX_EPOCH_DAY + offsetDays
@@ -168,15 +168,15 @@ export function timeUnix(seconds: number, scale: Timescale = Timescale.UTC, fast
 			fraction++
 		}
 
-		return { day, fraction, scale }
+		return { day, fraction, scale: Timescale.UTC }
 	} else {
-		return timeFromEpoch(seconds, DAYSEC, UNIX_EPOCH_DAY, UNIX_EPOCH_FRACTION, scale)
+		return timeFromEpoch(seconds, DAYSEC, UNIX_EPOCH_DAY, UNIX_EPOCH_FRACTION, Timescale.UTC)
 	}
 }
 
 // Current time as Unix time.
 export function timeNow(fast: boolean = false) {
-	return timeUnix(Date.now() / 1000, Timescale.UTC, fast)
+	return timeUnix(Date.now() / 1000, fast)
 }
 
 // Modified Julian Date time format.
@@ -213,12 +213,7 @@ export function timeGPS(seconds: number) {
 
 const NORMALIZED_TIME = new Float64Array(2)
 
-// Returns the sum of day and fraction as two 64-bit floats,
-// with the latter guaranteed to be within -0.5 and 0.5 (inclusive on either side).
-// The arithmetic is all done with exact floating point operations so no
-// precision is lost to rounding error. It is assumed the sum is less
-// than about 1E16, otherwise the remainder will be greater than 1.
-export function timeNormalize(day: number, fraction: number, divisor: number = 0, scale: Timescale = Timescale.UTC): Time {
+function normalizeDayAndFraction(day: number, fraction: number, divisor: number, out: NumberArray) {
 	twoSum(day, fraction, NORMALIZED_TIME)
 
 	if (divisor !== 0 && Number.isFinite(divisor)) {
@@ -240,7 +235,20 @@ export function timeNormalize(day: number, fraction: number, divisor: number = 0
 	twoSum(sum, -day, NORMALIZED_TIME)
 	fraction = NORMALIZED_TIME[1] + NORMALIZED_TIME[0] + err
 
-	return { day, fraction, scale }
+	out[0] = day
+	out[1] = fraction
+
+	return out
+}
+
+// Returns the sum of day and fraction as two 64-bit floats,
+// with the latter guaranteed to be within -0.5 and 0.5 (inclusive on either side).
+// The arithmetic is all done with exact floating point operations so no
+// precision is lost to rounding error. It is assumed the sum is less
+// than about 1E16, otherwise the remainder will be greater than 1.
+export function timeNormalize(day: number, fraction: number, divisor: number = 0, scale: Timescale = Timescale.UTC): Time {
+	normalizeDayAndFraction(day, fraction, divisor, NORMALIZED_TIME)
+	return { day: NORMALIZED_TIME[0], fraction: NORMALIZED_TIME[1], scale }
 }
 
 // Subtracts two Times.
@@ -309,18 +317,6 @@ export function cache(target: Time, cache?: TimeCache) {
 	return (target.cache ??= cache ?? {})
 }
 
-// Copies the day and fraction from source to a new Time.
-function newTime(source: [number, number], time: Time, scale: Timescale = time.scale, normalize: boolean = true): Time {
-	const [day, fraction] = source
-
-	if (normalize) {
-		const n = timeNormalize(day, fraction, 0, scale)
-		return { ...time, ...n }
-	}
-
-	return { ...time, day, fraction, scale }
-}
-
 // Converts the given time to the specified scale.
 export function timeConvert(time: Time, scale: Timescale) {
 	if (time.scale === scale) return time
@@ -334,143 +330,175 @@ export function timeConvert(time: Time, scale: Timescale) {
 	return time
 }
 
+const DAY_FRACTION: [number, number] = [0, 0]
+
 // Converts the given time to UT1 Time.
-export function ut1(time: Time, normalize: boolean = true): Time {
+export function ut1(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UT1) return time
 	if (time.cache?.ut1) return time.cache.ut1
 
-	let ret: Time
+	if (scale === Timescale.TAI) {
+		eraTaiUt1(day, fraction, (time.providers?.ut1MinusTai ?? ut1MinusTai)(time), DAY_FRACTION)
+	} else if (scale === Timescale.UTC) {
+		eraUtcUt1(day, fraction, (time.providers?.dut1 ?? dut1)(time), DAY_FRACTION)
+	} else {
+		const u = utc(time)
+		eraUtcUt1(u.day, u.fraction, (time.providers?.dut1 ?? dut1)(u), DAY_FRACTION)
+	}
 
-	if (scale === Timescale.TAI) ret = newTime(eraTaiUt1(day, fraction, (time.providers?.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.UT1, normalize)
-	else if (scale === Timescale.UTC) ret = newTime(eraUtcUt1(day, fraction, (time.providers?.dut1 ?? dut1)(time)), time, Timescale.UT1, normalize)
-	else ret = ut1(utc(time, normalize), normalize)
+	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
+	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.UT1 }
 
 	timescale(ret, time)
 	timescale(time, ret)
-
-	ret.providers = time.providers
 
 	return ret
 }
 
 // Converts the given time to UTC Time.
-export function utc(time: Time, normalize: boolean = true): Time {
+export function utc(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UTC) return time
 	if (time.cache?.utc) return time.cache.utc
 
-	let ret: Time
+	if (scale === Timescale.UT1) {
+		eraUt1Utc(day, fraction, (time.providers?.dut1 ?? dut1)(time), DAY_FRACTION)
+	} else if (scale === Timescale.TAI) {
+		eraTaiUtc(day, fraction, DAY_FRACTION)
+	} else {
+		const t = tai(time)
+		eraTaiUtc(t.day, t.fraction, DAY_FRACTION)
+	}
 
-	if (scale === Timescale.UT1) ret = newTime(eraUt1Utc(day, fraction, (time.providers?.dut1 ?? dut1)(time)), time, Timescale.UTC, normalize)
-	else if (scale === Timescale.TAI) ret = newTime(eraTaiUtc(day, fraction), time, Timescale.UTC, normalize)
-	else ret = utc(tai(time, normalize), normalize)
+	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
+	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.UTC }
 
 	timescale(ret, time)
 	timescale(time, ret)
-
-	ret.providers = time.providers
 
 	return ret
 }
 
 // Converts the given time to TAI Time.
-export function tai(time: Time, normalize: boolean = true): Time {
+export function tai(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TAI) return time
 	if (time.cache?.tai) return time.cache.tai
 
-	let ret: Time
+	if (scale === Timescale.UT1) {
+		eraUt1Tai(day, fraction, (time.providers?.ut1MinusTai ?? ut1MinusTai)(time), DAY_FRACTION)
+	} else if (scale === Timescale.UTC) {
+		eraUtcTai(day, fraction, DAY_FRACTION)
+	} else if (scale === Timescale.TT) {
+		eraTtTai(day, fraction, DAY_FRACTION)
+	} else {
+		const t = tt(time)
+		eraTtTai(t.day, t.fraction, DAY_FRACTION)
+	}
 
-	if (scale === Timescale.UT1) ret = newTime(eraUt1Tai(day, fraction, (time.providers?.ut1MinusTai ?? ut1MinusTai)(time)), time, Timescale.TAI, normalize)
-	else if (scale === Timescale.UTC) ret = newTime(eraUtcTai(day, fraction), time, Timescale.TAI, normalize)
-	else if (scale === Timescale.TT) ret = newTime(eraTtTai(day, fraction), time, Timescale.TAI, normalize)
-	else ret = tai(tt(time, normalize), normalize)
+	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
+	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.TAI }
 
 	timescale(ret, time)
 	timescale(time, ret)
-
-	ret.providers = time.providers
 
 	return ret
 }
 
 // Converts the given time to TT Time.
-export function tt(time: Time, normalize: boolean = true): Time {
+export function tt(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TT) return time
 	if (time.cache?.tt) return time.cache.tt
 
-	let ret: Time
+	if (scale === Timescale.TAI) {
+		eraTaiTt(day, fraction, DAY_FRACTION)
+	} else if (scale === Timescale.TCG) {
+		eraTcgTt(day, fraction, DAY_FRACTION)
+	} else if (scale === Timescale.TDB) {
+		eraTdbTt(day, fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(time), DAY_FRACTION)
+	} else if (scale < Timescale.TAI) {
+		const t = tai(time)
+		eraTaiTt(t.day, t.fraction, DAY_FRACTION)
+	} else {
+		const t = tdb(time)
+		eraTdbTt(t.day, t.fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(t), DAY_FRACTION)
+	}
 
-	if (scale === Timescale.TAI) ret = newTime(eraTaiTt(day, fraction), time, Timescale.TT, normalize)
-	else if (scale === Timescale.TCG) ret = newTime(eraTcgTt(day, fraction), time, Timescale.TT, normalize)
-	else if (scale === Timescale.TDB) ret = newTime(eraTdbTt(day, fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TT, normalize)
-	else if (scale < Timescale.TAI) return tt(tai(time, normalize), normalize)
-	else ret = tt(tdb(time, normalize), normalize)
+	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
+	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.TT }
 
 	timescale(ret, time)
 	timescale(time, ret)
-
-	ret.providers = time.providers
 
 	return ret
 }
 
 // Converts the given time to TCG Time.
-export function tcg(time: Time, normalize: boolean = true): Time {
+export function tcg(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCG) return time
 	if (time.cache?.tcg) return time.cache.tcg
 
-	let ret: Time
+	if (scale === Timescale.TT) {
+		eraTtTcg(day, fraction, DAY_FRACTION)
+	} else {
+		const t = tt(time)
+		eraTtTcg(t.day, t.fraction, DAY_FRACTION)
+	}
 
-	if (scale === Timescale.TT) ret = newTime(eraTtTcg(day, fraction), time, Timescale.TCG, normalize)
-	else ret = tcg(tt(time, normalize), normalize)
+	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
+	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.TCG }
 
 	timescale(ret, time)
 	timescale(time, ret)
-
-	ret.providers = time.providers
 
 	return ret
 }
 
 // Converts the given time to TDB Time.
-export function tdb(time: Time, normalize: boolean = true): Time {
+export function tdb(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TDB) return time
 	if (time.cache?.tdb) return time.cache.tdb
 
-	let ret: Time
+	if (scale === Timescale.TT) {
+		eraTtTdb(day, fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(time), DAY_FRACTION)
+	} else if (scale === Timescale.TCB) {
+		eraTcbTdb(day, fraction, DAY_FRACTION)
+	} else {
+		const t = tt(time)
+		eraTtTdb(t.day, t.fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(t), DAY_FRACTION)
+	}
 
-	if (scale === Timescale.TT) ret = newTime(eraTtTdb(day, fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(time)), time, Timescale.TDB, normalize)
-	else if (scale === Timescale.TCB) ret = newTime(eraTcbTdb(day, fraction), time, Timescale.TDB, normalize)
-	else ret = tdb(tt(time, normalize), normalize)
+	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
+	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.TDB }
 
 	timescale(ret, time)
 	timescale(time, ret)
-
-	ret.providers = time.providers
 
 	return ret
 }
 
 // Converts the given time to TCB Time.
-export function tcb(time: Time, normalize: boolean = true): Time {
+export function tcb(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCB) return time
 	if (time.cache?.tcb) return time.cache.tcb
 
-	let ret: Time
+	if (scale === Timescale.TDB) {
+		eraTdbTcb(day, fraction, DAY_FRACTION)
+	} else {
+		const t = tdb(time)
+		eraTdbTcb(t.day, t.fraction, DAY_FRACTION)
+	}
 
-	if (scale === Timescale.TDB) ret = newTime(eraTdbTcb(day, fraction), time, Timescale.TCB, normalize)
-	else ret = tcb(tdb(time, normalize), normalize)
+	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
+	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.TCB }
 
 	timescale(ret, time)
 	timescale(time, ret)
-
-	ret.providers = time.providers
 
 	return ret
 }
@@ -598,7 +626,7 @@ export const dut1: TimeDelta = (time) => {
 	// If we interpolated using UT1, we may be off by one
 	// second near leap seconds (and very slightly off elsewhere)
 	if (time.scale === Timescale.UT1) {
-		const a = eraUt1Utc(time.day, time.fraction, dt)
+		const a = eraUt1Utc(time.day, time.fraction, dt, DAY_FRACTION)
 		// Calculate a better estimate using the nearly correct UTC
 		dt = ut1MinusUtc({ day: a[0], fraction: a[1], scale: Timescale.UTC })
 	}
@@ -621,10 +649,11 @@ export const tdbMinusTt: TimeDelta = (time) => {
 		// pretty close (few msec?), assume TT. Similarly, since the
 		// UT1 terms are very small, use UTC instead of UT1.
 		// https://github.com/astropy/astropy/blob/71a2eafd6c09f1992f8b4132e6e40ba68a675bde/astropy/time/core.py#L2597
-		const a = eraTaiUtc(...eraTtTai(day, fraction))
+		eraTtTai(day, fraction, DAY_FRACTION)
+		const a = eraTaiUtc(DAY_FRACTION[0], DAY_FRACTION[1], DAY_FRACTION)
 
 		// Subtract 0.5, so UT is fraction of the day from midnight
-		const ut = timeNormalize(a[0] - 0.5, a[1]).fraction
+		const ut = normalizeDayAndFraction(a[0] - 0.5, a[1], 0, DAY_FRACTION)[1]
 
 		let dt = 0
 

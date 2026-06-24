@@ -3,7 +3,7 @@ import { ASEC2RAD, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, DAYSPERTY, ELB, ELG,
 import { type Distance, toKilometer } from './distance'
 import { FAIRHEAD, IAU2000A_LS, IAU2000A_PL, IAU2000B_LS, IAU2006_S, IAU2006_SP } from './erfa.data'
 import { type Mat3, type MutMat3, matClone, matCopy, matIdentity, matMul, matMulTranspose, matMulVec, matRotX, matRotY, matRotZ, matTransposeMulVec } from './mat3'
-import { pmod, roundToNearestWholeNumber } from './math'
+import { pmod, roundToNearestWholeNumber, type NumberArray } from './math'
 import type { Pressure } from './pressure'
 import type { Temperature } from './temperature'
 import { type MutVec3, type Vec3, vecClone, vecCross, vecDivScalar, vecDot, vecFill, vecLength, vecMinus, vecMulScalar, vecNormalize, vecNormalizeMut, vecPlus } from './vec3'
@@ -173,65 +173,81 @@ export function eraEpj(jd1: number, jd2: number) {
 	return 2000 + (jd1 - J2000 + jd2) / DAYSPERJY
 }
 
+function fillDayAndFraction(out: NumberArray, day: number, fraction: number) {
+	out[0] = day
+	out[1] = fraction
+	return out
+}
+
 // Barycentric Coordinate Time, TCB, to Barycentric Dynamical Time, TDB.
-export function eraTcbTdb(tcb1: number, tcb2: number): [number, number] {
+export function eraTcbTdb(tcb1: number, tcb2: number, out?: NumberArray): NumberArray {
 	const d = tcb1 - (MJD0 + MJD1977)
 	const tdb2 = tcb2 + TDB0 / DAYSEC - (d + (tcb2 - TTMINUSTAI / DAYSEC)) * ELB
+	if (out !== undefined) return fillDayAndFraction(out, tcb1, tdb2)
 	return [tcb1, tdb2]
 }
 
 // Geocentric Coordinate Time, TCG, to Terrestrial Time, TT.
-export function eraTcgTt(tcg1: number, tcg2: number): [number, number] {
+export function eraTcgTt(tcg1: number, tcg2: number, out?: NumberArray): NumberArray {
 	const tt2 = tcg2 - (tcg1 - MJD0 + (tcg2 - (MJD1977 + TTMINUSTAI / DAYSEC))) * ELG
+	if (out !== undefined) return fillDayAndFraction(out, tcg1, tt2)
 	return [tcg1, tt2]
 }
 
 // Barycentric Dynamical Time, TDB, to Barycentric Coordinate Time, TCB.
-export function eraTdbTcb(tdb1: number, tdb2: number): [number, number] {
+export function eraTdbTcb(tdb1: number, tdb2: number, out?: NumberArray): NumberArray {
 	const d = MJD0 + MJD1977 - tdb1
 	const f = tdb2 - TDB0 / DAYSEC
 	const tcb2 = f - (d - (f - TTMINUSTAI / DAYSEC)) * (ELB / (1 - ELB))
+	if (out !== undefined) return fillDayAndFraction(out, tdb1, tcb2)
 	return [tdb1, tcb2]
 }
 
 // Terrestrial Time, TT, to Geocentric Coordinate Time, TCG.
-export function eraTtTcg(tt1: number, tt2: number): [number, number] {
+export function eraTtTcg(tt1: number, tt2: number, out?: NumberArray): NumberArray {
 	const tcg2 = tt2 + (tt1 - MJD0 + (tt2 - (MJD1977 + TTMINUSTAI / DAYSEC))) * (ELG / (1 - ELG))
+	if (out !== undefined) return fillDayAndFraction(out, tt1, tcg2)
 	return [tt1, tcg2]
 }
 
 // International Atomic Time, TAI, to Universal Time, UT1.
-export function eraTaiUt1(tai1: number, tai2: number, ut1MinusTai: number): [number, number] {
+export function eraTaiUt1(tai1: number, tai2: number, ut1MinusTai: number, out?: NumberArray): NumberArray {
+	if (out !== undefined) return fillDayAndFraction(out, tai1, tai2 + ut1MinusTai / DAYSEC)
 	return [tai1, tai2 + ut1MinusTai / DAYSEC]
 }
 
 // Universal Time, UT1, to International Atomic Time, TAI.
-export function eraUt1Tai(ut11: number, ut12: number, ut1MinusTai: number): [number, number] {
+export function eraUt1Tai(ut11: number, ut12: number, ut1MinusTai: number, out?: NumberArray): NumberArray {
+	if (out !== undefined) return fillDayAndFraction(out, ut11, ut12 - ut1MinusTai / DAYSEC)
 	return [ut11, ut12 - ut1MinusTai / DAYSEC]
 }
 
 // International Atomic Time, TAI, to Terrestrial Time, TT.
-export function eraTaiTt(tai1: number, tai2: number): [number, number] {
+export function eraTaiTt(tai1: number, tai2: number, out?: NumberArray): NumberArray {
+	if (out !== undefined) return fillDayAndFraction(out, tai1, tai2 + TTMINUSTAI / DAYSEC)
 	return [tai1, tai2 + TTMINUSTAI / DAYSEC]
 }
 
 // Terrestrial Time, TT, to International Atomic Time, TAI.
-export function eraTtTai(tt1: number, tt2: number): [number, number] {
+export function eraTtTai(tt1: number, tt2: number, out?: NumberArray): NumberArray {
+	if (out !== undefined) return fillDayAndFraction(out, tt1, tt2 - TTMINUSTAI / DAYSEC)
 	return [tt1, tt2 - TTMINUSTAI / DAYSEC]
 }
 
 // Terrestrial Time, TT, to Barycentric Dynamical Time, TDB.
-export function eraTtTdb(tt1: number, tt2: number, tdbMinusTt: number): [number, number] {
+export function eraTtTdb(tt1: number, tt2: number, tdbMinusTt: number, out?: NumberArray): NumberArray {
+	if (out !== undefined) return fillDayAndFraction(out, tt1, tt2 + tdbMinusTt / DAYSEC)
 	return [tt1, tt2 + tdbMinusTt / DAYSEC]
 }
 
 // Barycentric Dynamical Time, TDB, to Terrestrial Time, TT.
-export function eraTdbTt(tdb1: number, tdb2: number, tdbMinusTt: number): [number, number] {
+export function eraTdbTt(tdb1: number, tdb2: number, tdbMinusTt: number, out?: NumberArray): NumberArray {
+	if (out !== undefined) return fillDayAndFraction(out, tdb1, tdb2 - tdbMinusTt / DAYSEC)
 	return [tdb1, tdb2 - tdbMinusTt / DAYSEC]
 }
 
 // International Atomic Time, TAI, to Coordinated Universal Time, UTC.
-export function eraTaiUtc(tai1: number, tai2: number): [number, number] {
+export function eraTaiUtc(tai1: number, tai2: number, out?: NumberArray): NumberArray {
 	let u2 = tai2
 
 	// Iterate(though in most cases just once is enough).
@@ -243,10 +259,11 @@ export function eraTaiUtc(tai1: number, tai2: number): [number, number] {
 		u2 += tai2 - g2
 	}
 
+	if (out !== undefined) return fillDayAndFraction(out, tai1, u2)
 	return [tai1, u2]
 }
 
-export function eraUtcTai(utc1: number, utc2: number): [number, number] {
+export function eraUtcTai(utc1: number, utc2: number, out?: NumberArray): NumberArray {
 	const u1 = Math.max(utc1, utc2)
 	const u2 = Math.min(utc1, utc2)
 
@@ -277,21 +294,22 @@ export function eraUtcTai(utc1: number, utc2: number): [number, number] {
 	// Assemble the TAI result, preserving the UTC split and order.
 	const a2 = MJD0 - u1 + z + (fd + dat0 / DAYSEC)
 
+	if (out !== undefined) return fillDayAndFraction(out, u1, a2)
 	return [u1, a2]
 }
 
-export function eraUtcUt1(utc1: number, utc2: number, dut1: number) {
+export function eraUtcUt1(utc1: number, utc2: number, dut1: number, out?: NumberArray): NumberArray {
 	const cal = eraJdToCal(utc1, utc2)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
 
 	// Form UT1-TAI
 	const dta = dut1 - dat
 
-	const [tai1, tai2] = eraUtcTai(utc1, utc2)
-	return eraTaiUt1(tai1, tai2, dta)
+	out = eraUtcTai(utc1, utc2, out)
+	return eraTaiUt1(out[0], out[1], dta, out)
 }
 
-export function eraUt1Utc(ut11: number, ut12: number, dut1: number): [number, number] {
+export function eraUt1Utc(ut11: number, ut12: number, dut1: number, out?: NumberArray): NumberArray {
 	const u1 = Math.max(ut11, ut12)
 	let u2 = Math.min(ut11, ut12)
 
@@ -301,9 +319,11 @@ export function eraUt1Utc(ut11: number, ut12: number, dut1: number): [number, nu
 	let d1 = u1
 	let dats1 = 0
 
+	const cal: [number, number, number, number] = [0, 0, 0, 0]
+
 	for (let i = -1; i < 4; i++) {
 		let d2 = u2 + i
-		const cal = eraJdToCal(d1, d2)
+		eraJdToCal(d1, d2, cal)
 		const dats2 = eraDat(cal[0], cal[1], cal[2], 0)
 
 		if (i === -1) dats1 = dats2
@@ -341,10 +361,11 @@ export function eraUt1Utc(ut11: number, ut12: number, dut1: number): [number, nu
 	// Subtract the (possibly adjusted) UT1-UTC from UT1 to give UTC.
 	u2 -= duts / DAYSEC
 
+	if (out !== undefined) return fillDayAndFraction(out, u1, u2)
 	return [u1, u2]
 }
 
-export function eraJdToCal(dj1: number, dj2: number): [number, number, number, number] {
+export function eraJdToCal(dj1: number, dj2: number, out?: [number, number, number, number]): [number, number, number, number] {
 	// Separate day and fraction (where -0.5 <= fraction < 0.5).
 	let d = roundToNearestWholeNumber(dj1)
 	const f1 = dj1 - d
@@ -409,6 +430,14 @@ export function eraJdToCal(dj1: number, dj2: number): [number, number, number, n
 	l = Math.trunc(k / 11)
 	const im = Math.trunc(k + 2 - 12 * l)
 	const iy = Math.trunc(100 * (n - 49) + i + l)
+
+	if (out !== undefined) {
+		out[0] = iy
+		out[1] = im
+		out[2] = id
+		out[3] = f
+		return out
+	}
 
 	return [iy, im, id, f]
 }
