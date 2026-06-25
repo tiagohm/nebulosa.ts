@@ -218,6 +218,8 @@ test('invalid lifecycle transitions throw RangeError', () => {
 		[{ phase: 'FLIPPING', attempts: 1, preparationCompleted: true }, { type: 'RECENTER_COMPLETED' }],
 		[{ phase: 'READY', attempts: 0, preparationCompleted: false }, { type: 'FLIP_STARTED' }],
 		[{ phase: 'FAILED', attempts: 0, preparationCompleted: false, failure: 'EXECUTION_FAILED' }, { type: 'FLIP_STARTED' }],
+		[{ phase: 'COMPLETED', attempts: 1, preparationCompleted: true }, { type: 'FAILED' }],
+		[{ phase: 'FAILED', attempts: 1, preparationCompleted: true, failure: 'EXECUTION_FAILED' }, { type: 'FAILED' }],
 		[{ phase: 'WAITING', attempts: 0, preparationCompleted: false }, { type: 'BOGUS' } as never],
 	]
 
@@ -252,4 +254,45 @@ test('evaluation and transition do not mutate inputs and reuse unchanged states'
 	const reset = transitionMeridianFlip(policy, state, event)
 	expect(reset).toBe(state)
 	expect(event).toEqual({ type: 'RESET' })
+})
+
+test('evaluation reports in-progress phases and preserves their persisted state', () => {
+	const cases: readonly [MeridianFlipState, MeridianFlipPhase, MeridianFlipAction, MeridianFlipReason][] = [
+		[{ phase: 'FLIPPING', attempts: 1, preparationCompleted: true }, 'FLIPPING', 'NONE', 'FLIP_IN_PROGRESS'],
+		[{ phase: 'RECENTERING', attempts: 1, preparationCompleted: true }, 'RECENTERING', 'RECENTER', 'RECENTER_REQUIRED'],
+		[{ phase: 'SETTLING', attempts: 1, preparationCompleted: true }, 'SETTLING', 'RESUME_GUIDING', 'GUIDING_SETTLE_REQUIRED'],
+	]
+
+	for (const [input, phase, action, reason] of cases) {
+		const state = Object.freeze(input) as MeridianFlipState
+		const result = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(2)), state)
+		expectDecision(result, phase, action, reason)
+		expect(result.state).toBe(state)
+	}
+})
+
+test('hour angle past flip up to PI is treated as past the flip threshold', () => {
+	const nearLowerCulmination = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(170)))
+	expectDecision(nearLowerCulmination, 'READY', 'PAUSE_GUIDING', 'LATEST_THRESHOLD_REACHED')
+	expect(nearLowerCulmination.isOverdue).toBeTrue()
+	expect(nearLowerCulmination.hourAngle).toBeCloseTo(deg(170), 14)
+})
+
+test('failed state without an accepted flip cannot retry', () => {
+	const state: MeridianFlipState = { phase: 'FAILED', attempts: 0, preparationCompleted: false, failure: 'PIER_SIDE_MISMATCH' }
+	expectDecision(evaluateMeridianFlip(basePolicy({ maxRetries: 1 }), snapshotAt(deg(2)), state), 'FAILED', 'FAIL', 'RETRY_LIMIT_REACHED')
+})
+
+test('pier-side confirmation and recenter completion honor optional phase toggles', () => {
+	const settleOnly = transitionMeridianFlip(basePolicy({ requireRecentering: false }), { phase: 'VERIFYING_PIER_SIDE', attempts: 1, preparationCompleted: true }, { type: 'PIER_SIDE_CONFIRMED' })
+	expect(settleOnly.phase).toBe('SETTLING')
+
+	const recenterToComplete = transitionMeridianFlip(basePolicy({ requireGuidingSettle: false }), { phase: 'RECENTERING', attempts: 1, preparationCompleted: true }, { type: 'RECENTER_COMPLETED' })
+	expect(recenterToComplete.phase).toBe('COMPLETED')
+})
+
+test('flip start beyond the retry limit is rejected', () => {
+	const policy = basePolicy({ maxRetries: 1 })
+	const exhausted: MeridianFlipState = { phase: 'FAILED', attempts: 2, preparationCompleted: true, failure: 'EXECUTION_FAILED' }
+	expect(() => transitionMeridianFlip(policy, exhausted, { type: 'FLIP_STARTED' })).toThrow(RangeError)
 })
