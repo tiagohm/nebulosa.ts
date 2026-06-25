@@ -375,8 +375,9 @@ export class GuiderClient {
 	// Starts a PHD2-style guiding assistant run while ordinary guide output is disabled.
 	startGuidingAssistant(config: Partial<GuidingAssistantConfig> = {}) {
 		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
+		const guiderState = this.#guider.currentState
 
-		if (this.#guidingAssistant !== undefined || this.#guider.currentState.state !== 'guiding' || (appState !== 'Guiding' && appState !== 'LostLock')) return false
+		if (this.#guidingAssistant !== undefined || this.#settling || guiderState.ditherActive || guiderState.state !== 'guiding' || (appState !== 'Guiding' && appState !== 'LostLock')) return false
 
 		const imageScale = this.getPixelScale()
 		const assistant = new GuidingAssistant({
