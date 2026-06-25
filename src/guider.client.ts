@@ -579,6 +579,8 @@ export class GuiderClient {
 	setLockPosition(x: number, y: number, exact: boolean = false) {
 		if (!Number.isFinite(x) || !Number.isFinite(y)) return false
 
+		this.#abortGuidingAssistantForTransition('lock position changed')
+
 		if (this.#frame !== undefined && this.#frame.stars.length > 0) {
 			const nearest = nearestGuideStar(this.#frame.stars, x, y)
 			this.#lockSearchPosition = nearest === undefined ? ([x, y] as const) : ([nearest.x, nearest.y] as const)
