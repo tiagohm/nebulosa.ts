@@ -102,7 +102,7 @@ export interface MosaicPlan {
 	// Normalized central coordinate used by the plan.
 	readonly center: MosaicCoordinate
 
-	// Position angle in radians, normalized to [-PI, PI).
+	// Position angle in radians, normalized to (-PI, PI].
 	readonly positionAngle: Angle
 
 	// Field of view of one panel in radians.
@@ -188,12 +188,6 @@ function validateDeclination(value: Angle, field: string) {
 function validateTraversal(value: MosaicTraversal) {
 	if (value !== 'ROW_MAJOR' && value !== 'SERPENTINE') throw new RangeError('traversal must be ROW_MAJOR or SERPENTINE')
 	return value
-}
-
-// Normalizes an angle to the half-open signed range required by the planner API.
-function normalizeSignedAngle(angle: Angle): Angle {
-	const normalized = normalizePI(angle)
-	return normalized === PI ? -PI : normalized
 }
 
 // Converts an angular field size in radians to its shared tangent-plane size.
@@ -331,7 +325,7 @@ export function planMosaic(input: MosaicPlanInput): MosaicPlan {
 		x: validateOverlap(input.overlap?.x ?? 0, 'overlap.x'),
 		y: validateOverlap(input.overlap?.y ?? 0, 'overlap.y'),
 	}
-	const positionAngle = normalizeSignedAngle(validateFiniteField(input.positionAngle ?? 0, 'positionAngle'))
+	const positionAngle = normalizePI(validateFiniteField(input.positionAngle ?? 0, 'positionAngle'))
 	const traversal = validateTraversal(input.traversal ?? 'ROW_MAJOR')
 	const panelPlaneWidth = planeSize(panel.width)
 	const panelPlaneHeight = planeSize(panel.height)

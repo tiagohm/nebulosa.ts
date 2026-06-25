@@ -248,7 +248,7 @@ test('input right ascension is normalized without mutating input objects', () =>
 	const plan = planMosaic(input)
 
 	expect(plan.center.ra).toBeCloseTo(deg(15), 14)
-	expect(plan.positionAngle).toBe(-Math.PI)
+	expect(plan.positionAngle).toBe(Math.PI)
 	expect(input).toEqual(snapshot)
 	expect(plan.center).not.toBe(input.center)
 	expect(plan.panel).not.toBe(input.panel)
