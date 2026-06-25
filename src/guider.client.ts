@@ -1,6 +1,7 @@
 import { pixelScale } from './formulas'
 import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
-import { flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './guider.calibrator'
+import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './guider.assistant'
+import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './guider.calibrator'
 import { readImageFromBuffer, readImageFromSource } from './image'
 import { type Image, type ImageRawType, makeImageRawTypedArray } from './image.types'
 import type { Camera, GuideDirection, GuideOutput } from './indi.device'
@@ -63,6 +64,7 @@ export class GuiderClient {
 	#frame?: GuideFrame
 	#image?: Image
 	#frameId = 0
+	#processingBlob = false
 	#lockPosition?: readonly [number, number]
 	#lockSearchPosition?: readonly [number, number]
 	#exactLockPosition = false
@@ -73,6 +75,10 @@ export class GuiderClient {
 	#guider = this.#makeGuider(undefined)
 	#exposure = DEFAULT_GUIDER_EXPOSURE
 	#guideOutputEnabled = true
+	#guidingAssistant?: GuidingAssistant
+	#guidingAssistantPendingPulse?: CalibrationPulseCommand
+	#guidingAssistantResult?: GuidingAssistantResult
+	#guidingAssistantSuppressingGuideOutput = false
 	#paused = false
 	#fullPause = true
 	#settling = false
@@ -140,6 +146,11 @@ export class GuiderClient {
 		if (!this.#connected) return false
 
 		const camera = this.#camera
+		const hadGuidingAssistant = this.#guidingAssistant !== undefined
+
+		if (hadGuidingAssistant) {
+			this.#finishGuidingAssistant(false, 'device disconnected', this.#guidingAssistant?.measuringBacklash === true)
+		}
 
 		this.#connected = false
 		this.cameraManager.removeHandler(this.#cameraHandler)
@@ -153,7 +164,7 @@ export class GuiderClient {
 		this.#guideOutput = undefined
 		this.#focalLength = 0
 		this.#pixelSize = 0
-		this.#resetRuntimeState(true)
+		this.#resetRuntimeState(true, hadGuidingAssistant)
 		this.emitEvent('ConfigurationChange')
 
 		return true
@@ -195,6 +206,10 @@ export class GuiderClient {
 
 	// Stops camera exposure and clears active guiding/looping state.
 	stopCapture() {
+		if (this.#guidingAssistant !== undefined) {
+			this.#finishGuidingAssistant(false, 'capture stopped', this.#guidingAssistant.measuringBacklash)
+		}
+
 		this.#emitCaptureStoppedEvent()
 
 		if (this.#camera !== undefined) {
@@ -220,6 +235,8 @@ export class GuiderClient {
 
 	// Clears the solved calibration and resets the guider/calibrator state machines.
 	clearCalibration() {
+		this.#abortGuidingAssistantForTransition('calibration cleared')
+
 		this.#calibration = undefined
 		this.#calibrator.reset()
 		this.#guider = this.#makeGuider(undefined)
@@ -243,6 +260,8 @@ export class GuiderClient {
 
 	// Drops the preferred lock position and returns to plain looping if capture is still active.
 	deselectStar() {
+		this.#abortGuidingAssistantForTransition('guide star deselected')
+
 		this.#lockPosition = undefined
 		this.#lockSearchPosition = undefined
 		this.#exactLockPosition = false
@@ -270,7 +289,7 @@ export class GuiderClient {
 
 	// Applies a random image-space dither and tracks local settle status.
 	dither(amount: number, raOnly: boolean = false, settle?: Partial<PHD2Settle>) {
-		if (this.#calibration === undefined || this.#guider.currentState.state !== 'guiding' || amount <= 0 || !Number.isFinite(amount)) return false
+		if (this.#guidingAssistant !== undefined || this.#calibration === undefined || this.#guider.currentState.state !== 'guiding' || amount <= 0 || !Number.isFinite(amount)) return false
 
 		const { referenceX, referenceY } = this.#guider.currentState
 		const [dRa, dDec] = this.#ditherMode === 'spiral' ? nextSpiralDither(this.#spiralDither, amount, raOnly) : makeRandomDither(amount, raOnly)
@@ -353,6 +372,54 @@ export class GuiderClient {
 		return this.#guideOutputEnabled
 	}
 
+	// Starts a PHD2-style guiding assistant run while ordinary guide output is disabled.
+	startGuidingAssistant(config: Partial<GuidingAssistantConfig> = {}) {
+		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
+		const guiderState = this.#guider.currentState
+
+		if (this.#guidingAssistant !== undefined || this.#settling || guiderState.ditherActive || guiderState.state !== 'guiding' || (appState !== 'Guiding' && appState !== 'LostLock')) return false
+
+		const imageScale = this.getPixelScale()
+		const assistant = new GuidingAssistant({
+			imageScale: imageScale > 0 ? imageScale : undefined,
+			exposure: this.getExposure(),
+			multiStar: this.#guider.config.mode === 'multi-star',
+			suspectCalibration: this.#calibration === undefined,
+			decPositiveDirection: this.#calibration?.dec.direction ?? 'north',
+			...config,
+		})
+
+		this.#guidingAssistant = assistant
+		this.#guidingAssistantSuppressingGuideOutput = true
+		this.#guidingAssistantResult = assistant.start()
+		this.emitEvent('GuidingAssistantStarted', { Result: this.#guidingAssistantResult })
+
+		return true
+	}
+
+	// Stops the guiding assistant or starts the optional DEC backlash phase before completing.
+	stopGuidingAssistant() {
+		const assistant = this.#guidingAssistant
+		if (assistant === undefined) return undefined
+
+		if (assistant.measuringBacklash) return this.#finishGuidingAssistant(false, 'backlash test aborted', true)
+
+		if (assistant.canMeasureBacklash && this.#guideOutputEnabled && !this.#paused) {
+			const step = assistant.startBacklashTest()
+			this.#guidingAssistantResult = step.result
+			this.#guidingAssistantPendingPulse = step.pulse
+			this.emitEvent('GuidingAssistantUpdated', { Result: step.result })
+			return step.result
+		}
+
+		return this.#finishGuidingAssistant(true)
+	}
+
+	// Returns the latest guiding assistant result snapshot, if a run has produced one.
+	guidingAssistantResult() {
+		return this.#guidingAssistantResult
+	}
+
 	// Returns the current lock target if one has been selected or acquired.
 	getLockPosition() {
 		return this.#lockPosition ?? null
@@ -409,6 +476,7 @@ export class GuiderClient {
 	guide(recalibrate: boolean = false, settle?: Partial<PHD2Settle>) {
 		if (!this.#connected || this.#camera === undefined || this.#guideOutput === undefined) return false
 
+		this.#abortGuidingAssistantForTransition('guiding restarted')
 		this.#paused = false
 		this.#fullPause = true
 		this.#resumeState = 'Guiding'
@@ -420,6 +488,13 @@ export class GuiderClient {
 		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
+		// Drop any dither/lock-shift target offset from a prior session so a fresh guiding run does
+		// not inherit a stale constant offset once lock-shift is later applied.
+		this.#ditherOffsetX = 0
+		this.#ditherOffsetY = 0
+		this.#spiralDither = makeSpiralDitherState()
+		this.#lockShiftOffsetX = 0
+		this.#lockShiftOffsetY = 0
 		this.emitEvent('SettleBegin')
 
 		if (recalibrate || this.#calibration === undefined) {
@@ -440,7 +515,7 @@ export class GuiderClient {
 
 	// Sends a direct single-axis pulse through the active guide output.
 	guidePulse(amount: number, direction: PHD2GuideDirection) {
-		if (this.#guideOutput === undefined || !this.#guideOutputEnabled || amount <= 0 || !Number.isFinite(amount)) return false
+		if (this.#guideOutput === undefined || !this.#guideOutputActive || amount <= 0 || !Number.isFinite(amount)) return false
 
 		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, Math.max(1, Math.round(amount)))
 
@@ -451,6 +526,7 @@ export class GuiderClient {
 	loop() {
 		if (!this.#connected || this.#camera === undefined) return false
 
+		this.#abortGuidingAssistantForTransition('looping started')
 		this.#paused = false
 		this.#fullPause = true
 		this.#resumeState = 'Looping'
@@ -461,6 +537,13 @@ export class GuiderClient {
 		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
+		// Drop any dither/lock-shift target offset from a prior session so it cannot carry over into
+		// a subsequent guiding run.
+		this.#ditherOffsetX = 0
+		this.#ditherOffsetY = 0
+		this.#spiralDither = makeSpiralDitherState()
+		this.#lockShiftOffsetX = 0
+		this.#lockShiftOffsetY = 0
 		this.#setAppState(this.#lockPosition === undefined ? 'Looping' : 'Selected')
 		this.startCapture(this.#exposure)
 
@@ -487,6 +570,7 @@ export class GuiderClient {
 	// Enables or disables guide pulses while keeping frame processing active.
 	setGuideOutputEnabled(enabled: boolean) {
 		this.#guideOutputEnabled = enabled
+		if (!enabled && this.#guidingAssistant?.measuringBacklash === true) this.#finishGuidingAssistant(false, 'guide output disabled', true)
 		this.emitEvent('GuideParamChange', { Name: 'GuideOutputEnabled', Value: enabled })
 		this.emitEvent('ConfigurationChange')
 	}
@@ -494,6 +578,8 @@ export class GuiderClient {
 	// Stores the requested lock target and relocks to the nearest detected star unless exact matching is requested.
 	setLockPosition(x: number, y: number, exact: boolean = false) {
 		if (!Number.isFinite(x) || !Number.isFinite(y)) return false
+
+		this.#abortGuidingAssistantForTransition('lock position changed')
 
 		if (this.#frame !== undefined && this.#frame.stars.length > 0) {
 			const nearest = nearestGuideStar(this.#frame.stars, x, y)
@@ -572,6 +658,13 @@ export class GuiderClient {
 	// Stores the lock-shift drift rate used to incrementally move the guider target between frames.
 	setLockShiftParams(params: PartialOnly<Omit<Writable<PHD2LockShiftParams>, 'enabled'>, 'units'>) {
 		const { rate, axes } = params
+
+		// Reject non-finite drift rates so they cannot accumulate NaN into the lock position and
+		// leak into getLockPosition or the emitted lock-shift events.
+		if (rate !== undefined && (!Number.isFinite(rate[0]) || !Number.isFinite(rate[1]))) {
+			return false
+		}
+
 		const units = params.units ?? (axes === undefined ? this.#lockShiftParams.units : axes === 'RA/Dec' ? 'arcsec/hr' : 'pixels/hr')
 
 		if (units === 'arcsec/hr' && this.#lockShiftParams.enabled && this.getPixelScale() <= 0) {
@@ -597,6 +690,7 @@ export class GuiderClient {
 			this.#fullPause = full || this.#resumeState === 'Calibrating'
 			this.#lockShiftTimestamp = 0
 			this.emitEvent('Paused')
+			if (this.#guidingAssistant?.measuringBacklash === true) this.#finishGuidingAssistant(false, 'backlash test paused', true)
 			this.#setAppState('Paused')
 			if (this.#fullPause && this.#camera !== undefined) this.cameraManager.stopExposure(this.#camera)
 			return true
@@ -619,26 +713,37 @@ export class GuiderClient {
 	async #processBlob(device: Camera, data: string | Buffer<ArrayBuffer>): Promise<void> {
 		if (!this.#connected || device !== this.#camera) return
 
-		let image: Image | undefined
+		// The calibrator and guider are stateful and not reentrant, so a BLOB that arrives while a
+		// previous frame is still being decoded/processed is dropped to avoid interleaved mutation.
+		if (this.#processingBlob) return
+		this.#processingBlob = true
 
 		try {
-			if (typeof data === 'string') {
-				const source = base64Source(data)
-				image = await readImageFromSource(source)
-			} else {
-				image = await readImageFromBuffer(data)
+			let image: Image | undefined
+
+			try {
+				if (typeof data === 'string') {
+					const source = base64Source(data)
+					image = await readImageFromSource(source)
+				} else {
+					image = await readImageFromBuffer(data)
+				}
+			} catch (e) {
+				console.error('guide image decode failed:', e)
 			}
-		} catch (e) {
-			console.error('guide image decode failed:', e)
+
+			// Clear the cached image on a failed decode so getStarImage cannot return stale pixels
+			// tagged with the new (empty) frame id instead of the last successfully decoded frame.
+			this.#image = image
+
+			const frame = this.#makeGuideFrame(image)
+			this.#frame = frame
+
+			const pulseDelay = this.#processFrame(frame)
+			await this.#queueNextExposure(pulseDelay)
+		} finally {
+			this.#processingBlob = false
 		}
-
-		if (image !== undefined) this.#image = image
-
-		const frame = this.#makeGuideFrame(image)
-		this.#frame = frame
-
-		const pulseDelay = this.#processFrame(frame)
-		await this.#queueNextExposure(pulseDelay)
 	}
 
 	// Converts a decoded image into a guide frame and prioritizes the selected lock star.
@@ -717,10 +822,12 @@ export class GuiderClient {
 			this.#resumeState = 'LostLock'
 			if (!this.#paused) this.#setAppState('LostLock')
 			this.#updateSettling(undefined, undefined, true, true, timestamp)
+			if (this.#guidingAssistant !== undefined) this.#finishGuidingAssistant(false, 'guide star lost')
 			return 0
 		}
 
 		this.#emitGuideStepEvent(frame, command)
+		const assistantDelay = this.#processGuidingAssistantFrame(frame, command)
 
 		this.#resumeState = 'Guiding'
 		if (!this.#paused) this.#setAppState('Guiding')
@@ -728,22 +835,87 @@ export class GuiderClient {
 		this.#updateSettling(command.diagnostics.dx, command.diagnostics.dy, command.diagnostics.badFrame, command.diagnostics.lost, timestamp)
 		this.#updateLockShift(frame)
 
+		if (assistantDelay !== undefined) return assistantDelay
+
 		return Math.max(this.#pulseAxis(command.ra.direction, command.ra.duration), this.#pulseAxis(command.dec.direction, command.dec.duration))
 	}
 
 	// Sends one calibration pulse pair and returns the largest applied delay.
-	#pulseCalibration(raDirection?: AxisPulse['direction'], raDuration?: number, decDirection?: AxisPulse['direction'], decDuration?: number) {
-		return Math.max(this.#pulseAxis(raDirection, raDuration), this.#pulseAxis(decDirection, decDuration))
+	#pulseCalibration(raDirection?: AxisPulse['direction'], raDuration?: number, decDirection?: AxisPulse['direction'], decDuration?: number, force: boolean = false) {
+		return Math.max(this.#pulseAxis(raDirection, raDuration, force), this.#pulseAxis(decDirection, decDuration, force))
 	}
 
 	// Sends one axis pulse if guide output is enabled and returns the applied delay.
-	#pulseAxis(direction?: AxisPulse['direction'], duration?: number) {
-		if (this.#guideOutput === undefined || this.#paused || !this.#guideOutputEnabled || direction === undefined || direction === null || duration === undefined || duration <= 0 || !Number.isFinite(duration)) return 0
+	#pulseAxis(direction?: AxisPulse['direction'], duration?: number, force: boolean = false) {
+		if (this.#guideOutput === undefined || this.#paused || (!force && !this.#guideOutputActive) || direction === undefined || direction === null || duration === undefined || duration <= 0 || !Number.isFinite(duration)) return 0
 
 		const pulseDuration = Math.max(1, Math.round(duration))
 		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, pulseDuration)
 
 		return pulseDuration
+	}
+
+	// Feeds one guiding frame into the active assistant and applies assistant-owned backlash pulses.
+	#processGuidingAssistantFrame(frame: GuideFrame, command: GuideCommand) {
+		const assistant = this.#guidingAssistant
+		if (assistant === undefined) return undefined
+
+		if (this.#paused && assistant.measuringBacklash) {
+			this.#finishGuidingAssistant(false, 'backlash test paused', true)
+			return 0
+		}
+
+		if (this.#guidingAssistantPendingPulse !== undefined) {
+			const pulse = this.#guidingAssistantPendingPulse
+			const alignment = assistant.alignBacklashOrigin(frame, command)
+			this.#guidingAssistantResult = alignment.result
+			this.emitEvent('GuidingAssistantUpdated', { Result: this.#guidingAssistantResult })
+			if (!alignment.aligned) return 0
+			this.#guidingAssistantPendingPulse = undefined
+			return this.#pulseCalibration(pulse.ra.direction, pulse.ra.duration, pulse.dec.direction, pulse.dec.duration, this.#guideOutputEnabled)
+		}
+
+		const step = assistant.addSample(frame, command)
+		this.#guidingAssistantResult = step.result
+		this.emitEvent('GuidingAssistantUpdated', { Result: step.result })
+
+		if (step.pulse !== undefined) {
+			return this.#pulseCalibration(step.pulse.ra.direction, step.pulse.ra.duration, step.pulse.dec.direction, step.pulse.dec.duration, this.#guideOutputEnabled)
+		}
+
+		if (step.result.status === 'completed') {
+			this.#finishGuidingAssistant(true)
+		} else if (step.result.status === 'failed') {
+			this.#finishGuidingAssistant(false, 'guiding assistant failed')
+		}
+
+		return 0
+	}
+
+	// Restores guide output and emits the final guiding assistant event.
+	#finishGuidingAssistant(completed: boolean, message?: string, abortBacklash: boolean = false) {
+		const assistant = this.#guidingAssistant
+		if (assistant === undefined) return this.#guidingAssistantResult
+
+		const result = completed ? assistant.complete() : abortBacklash ? assistant.abortBacklash(message) : assistant.fail(message ?? 'guiding assistant failed')
+		this.#guidingAssistant = undefined
+		this.#guidingAssistantPendingPulse = undefined
+		this.#guidingAssistantResult = result
+		this.#guidingAssistantSuppressingGuideOutput = false
+		this.#guider = this.#makeGuider(this.#calibration)
+		this.emitEvent(completed ? 'GuidingAssistantCompleted' : 'GuidingAssistantFailed', { Result: result })
+
+		return result
+	}
+
+	// Fails any active guiding assistant before public mode switches that own guide-output state.
+	#abortGuidingAssistantForTransition(message: string) {
+		if (this.#guidingAssistant !== undefined) this.#finishGuidingAssistant(false, message, this.#guidingAssistant.measuringBacklash)
+	}
+
+	// Returns true when ordinary guide pulses are currently allowed to reach the mount.
+	get #guideOutputActive() {
+		return this.#guideOutputEnabled && !this.#guidingAssistantSuppressingGuideOutput
 	}
 
 	// Updates settle state from current guide error and elapsed settle timing.
@@ -813,6 +985,11 @@ export class GuiderClient {
 	// Advances the lock-shift offset using elapsed time and the configured X/Y or RA/DEC drift rates.
 	#updateLockShift(frame: GuideFrame) {
 		const timestamp = frame.timestamp ?? Date.now()
+
+		if (this.#guidingAssistant !== undefined) {
+			this.#lockShiftTimestamp = timestamp
+			return
+		}
 
 		if (!this.#lockShiftParams.enabled || this.#paused || this.#guider.currentState.state !== 'guiding') {
 			this.#lockShiftTimestamp = timestamp
@@ -932,7 +1109,8 @@ export class GuiderClient {
 	}
 
 	// Resets transient guider state while optionally dropping calibration.
-	#resetRuntimeState(clearCalibration: boolean) {
+	#resetRuntimeState(clearCalibration: boolean, preserveGuidingAssistantResult: boolean = false) {
+		const guidingAssistantResult = preserveGuidingAssistantResult ? this.#guidingAssistantResult : undefined
 		this.#frame = undefined
 		this.#image = undefined
 		this.#frameId = 0
@@ -944,6 +1122,10 @@ export class GuiderClient {
 		this.#paused = false
 		this.#fullPause = true
 		this.#guideOutputEnabled = true
+		this.#guidingAssistant = undefined
+		this.#guidingAssistantPendingPulse = undefined
+		this.#guidingAssistantResult = guidingAssistantResult
+		this.#guidingAssistantSuppressingGuideOutput = false
 		this.#declinationGuideMode = 'Auto'
 		this.#exposure = DEFAULT_GUIDER_EXPOSURE
 		this.#settling = false
@@ -1056,8 +1238,9 @@ export class GuiderClient {
 		const star = frame.stars[0]
 		const dx = diagnostics.dx ?? 0
 		const dy = diagnostics.dy ?? 0
-		const raDuration = this.#paused || !this.#guideOutputEnabled ? 0 : Math.round(ra.duration)
-		const decDuration = this.#paused || !this.#guideOutputEnabled ? 0 : Math.round(dec.duration)
+		const outputActive = !this.#paused && this.#guideOutputActive
+		const raDuration = outputActive ? Math.round(ra.duration) : 0
+		const decDuration = outputActive ? Math.round(dec.duration) : 0
 
 		this.emitEvent('GuideStep', {
 			Frame: frame.frameId ?? 0,
@@ -1068,8 +1251,8 @@ export class GuiderClient {
 			dy,
 			RADistanceRaw: diagnostics.axisErrorRA ?? 0,
 			DECDistanceRaw: diagnostics.axisErrorDEC ?? 0,
-			RADistanceGuide: this.#paused || !this.#guideOutputEnabled ? 0 : (diagnostics.filteredRA ?? 0),
-			DECDistanceGuide: this.#paused || !this.#guideOutputEnabled ? 0 : (diagnostics.filteredDEC ?? 0),
+			RADistanceGuide: outputActive ? (diagnostics.filteredRA ?? 0) : 0,
+			DECDistanceGuide: outputActive ? (diagnostics.filteredDEC ?? 0) : 0,
 			RADuration: raDuration,
 			// PHD2 directions are mandatory, so no-pulse frames fall back to west/north defaults.
 			RADirection: toPHD2GuideDirection(ra.direction, 'West'),

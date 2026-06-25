@@ -646,7 +646,8 @@ export function applyDeadband(error: number, minMove: number) {
 	return Math.abs(error) < minMove ? 0 : error
 }
 
-const NO_PULSE: AxisPulse = { direction: null, duration: 0 }
+// Sentinel axis pulse representing no commanded motion on one axis.
+export const NO_PULSE: AxisPulse = { direction: null, duration: 0 }
 
 const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	state: 'idle',
