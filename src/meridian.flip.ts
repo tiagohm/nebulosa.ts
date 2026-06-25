@@ -261,6 +261,8 @@ export function transitionMeridianFlip(policy: MeridianFlipPolicy, state: Meridi
 
 	if (event.type === 'RESET') return updateState(state, 'WAITING', 0, false)
 
+	// PREPARED confirms the guiding pause requested by the READY-phase PAUSE_GUIDING action,
+	// not the advisory PREPARE action emitted during PREPARING; it is only valid once READY.
 	if (event.type === 'PREPARED') {
 		if (state.phase !== 'READY') throwInvalidTransition()
 		return updateState(state, 'READY', state.attempts, true)
