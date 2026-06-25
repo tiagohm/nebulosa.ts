@@ -389,6 +389,20 @@ test('aborts active DEC backlash instead of completing it', () => {
 	expect(result.recommendations.some((recommendation) => recommendation.kind === 'backlash')).toBeFalse()
 })
 
+test('does not complete successfully while DEC backlash is active', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1, backlashPulseMs: 100 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+	assistant.startBacklashTest()
+
+	const result = assistant.complete(1000)
+
+	expect(result.status).toBe('failed')
+	expect(result.backlash?.phase).toBe('aborted')
+	expect(result.backlash?.northPulses).toBe(1)
+	expect(result.recommendations.some((recommendation) => recommendation.kind === 'backlash')).toBeFalse()
+})
+
 test('preserves partial DEC backlash data when an active test fails', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1, backlashPulseMs: 100, backlashMaxPulsesPerDirection: 8 })
 	assistant.start(0)

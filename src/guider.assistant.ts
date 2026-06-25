@@ -371,6 +371,7 @@ export class GuidingAssistant {
 
 	// Completes the run and freezes the final recommendation snapshot.
 	complete(timestamp: number = Date.now()) {
+		if (this.#status === 'backlash') return this.abortBacklash('backlash test aborted', timestamp)
 		if (this.#status !== 'failed') this.#status = 'completed'
 		const result = this.result(timestamp)
 		return result
