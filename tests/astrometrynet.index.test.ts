@@ -132,6 +132,20 @@ describe('astrometry.net healpix xy', () => {
 		expect(() => distanceToTile(-1, 2, deg(0), deg(0))).toThrow(RangeError)
 	})
 
+	test('oversized resolutions throw instead of overflowing tile arithmetic', () => {
+		// Number.isInteger(1e308) is true, but the tile count and tile-id math overflow there, so the
+		// bounded validator must reject it rather than return Infinity or a plausible-but-wrong value.
+		expect(() => coordinateToTile(deg(0), deg(0), 1e308)).toThrow(RangeError)
+		expect(() => distanceToTile(0, 1e308, deg(0), deg(0))).toThrow(RangeError)
+		expect(() => coordinateToTile(deg(0), deg(0), 2 ** 24 + 1)).toThrow(RangeError)
+		expect(() => coordinateToTile(deg(0), deg(0), Number.MAX_SAFE_INTEGER)).toThrow(RangeError)
+		// The maximum supported resolution stays valid and yields a finite tile id.
+		const tile = coordinateToTile(deg(0), deg(0), 2 ** 24)
+		expect(Number.isInteger(tile)).toBe(true)
+		expect(tile).toBeGreaterThanOrEqual(0)
+		expect(tile).toBeLessThan(12 * 2 ** 24 * 2 ** 24)
+	})
+
 	test('non-finite or out-of-range coordinates throw RangeError', () => {
 		// Without validation eraS2c would turn these into NaN or a mirrored, plausible-but-wrong tile.
 		expect(() => coordinateToTile(Number.NaN, 0, 2)).toThrow(RangeError)

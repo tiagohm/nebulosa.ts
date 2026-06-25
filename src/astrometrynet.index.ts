@@ -191,6 +191,11 @@ const EDGE_REFINE_TOLERANCE = 1e-13
 // Reciprocal golden ratio, used by the golden-section edge minimizer.
 const INVERSE_GOLDEN_RATIO = (Math.sqrt(5) - 1) / 2
 
+// Maximum supported HEALPix resolution (Nside). Matches the bounded Nside ceiling used by the
+// standard HEALPix module: at 2^24 the tile count 12 * Nside^2 and the (bighp * Nside + x) * Nside
+// + y arithmetic stay well inside the safe-integer range, so tile ids remain finite and exact.
+const MAX_RESOLUTION = 2 ** 24
+
 // Inclusive boundary tolerance for disc/tile intersection, in radians. Small enough to only
 // absorb floating-point rounding near exact boundary contact.
 const INTERSECTION_EPSILON = 1e-9
@@ -503,10 +508,12 @@ function tileDistanceFromUnitVector(tileId: number, nside: number, vx: number, v
 	return 2 * Math.asin(clamp(Math.sqrt(bestSq) / 2, 0, 1))
 }
 
-// Validates a HEALPix resolution (Nside). Must be a positive integer.
+// Validates a HEALPix resolution (Nside). Must be a positive integer within [1, MAX_RESOLUTION] so
+// the tile count and tile-id arithmetic stay finite and exact; Number.isInteger alone accepts huge
+// floats like 1e308 that overflow those computations.
 function validateResolution(resolution: number) {
-	if (!Number.isInteger(resolution) || resolution < 1) {
-		throw new RangeError(`invalid HEALPix resolution: ${resolution}. Expected a positive integer`)
+	if (!Number.isInteger(resolution) || resolution < 1 || resolution > MAX_RESOLUTION) {
+		throw new RangeError(`invalid HEALPix resolution: ${resolution}. Expected an integer in [1, ${MAX_RESOLUTION}]`)
 	}
 }
 
