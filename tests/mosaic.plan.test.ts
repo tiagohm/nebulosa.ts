@@ -46,10 +46,10 @@ function expectCoordinateValid(coordinate: MosaicCoordinate) {
 function expectPlanFinite(plan: MosaicPlan) {
 	for (const panel of plan.panels) {
 		expectCoordinateValid(panel.center)
-		expectCoordinateValid(panel.footprint.northWest)
-		expectCoordinateValid(panel.footprint.northEast)
-		expectCoordinateValid(panel.footprint.southEast)
-		expectCoordinateValid(panel.footprint.southWest)
+		expectCoordinateValid(panel.footprint.topLeft)
+		expectCoordinateValid(panel.footprint.topRight)
+		expectCoordinateValid(panel.footprint.bottomRight)
+		expectCoordinateValid(panel.footprint.bottomLeft)
 	}
 }
 
@@ -79,10 +79,10 @@ test('single panel is centered and footprint uses the shared plane', () => {
 	expect(sphericalSeparation(plan.center.ra, plan.center.dec, plan.panels[0].center.ra, plan.panels[0].center.dec)).toBeCloseTo(0, 14)
 	expect(plan.coverage.width).toBeCloseTo(plan.panel.width, 14)
 	expect(plan.coverage.height).toBeCloseTo(plan.panel.height, 14)
-	expectPlanePointClose(projectToPlane(basis, plan.panels[0].footprint.northWest), -halfWidth, halfHeight)
-	expectPlanePointClose(projectToPlane(basis, plan.panels[0].footprint.northEast), halfWidth, halfHeight)
-	expectPlanePointClose(projectToPlane(basis, plan.panels[0].footprint.southEast), halfWidth, -halfHeight)
-	expectPlanePointClose(projectToPlane(basis, plan.panels[0].footprint.southWest), -halfWidth, -halfHeight)
+	expectPlanePointClose(projectToPlane(basis, plan.panels[0].footprint.topLeft), -halfWidth, halfHeight)
+	expectPlanePointClose(projectToPlane(basis, plan.panels[0].footprint.topRight), halfWidth, halfHeight)
+	expectPlanePointClose(projectToPlane(basis, plan.panels[0].footprint.bottomRight), halfWidth, -halfHeight)
+	expectPlanePointClose(projectToPlane(basis, plan.panels[0].footprint.bottomLeft), -halfWidth, -halfHeight)
 })
 
 test('overlap determines counts and coverage on the shared plane', () => {
@@ -159,7 +159,7 @@ test('right ascension wraps to the positive range', () => {
 	let hasSmallPositiveRa = false
 
 	for (const panel of plan.panels) {
-		const coordinates = [panel.center, panel.footprint.northWest, panel.footprint.northEast, panel.footprint.southEast, panel.footprint.southWest]
+		const coordinates = [panel.center, panel.footprint.topLeft, panel.footprint.topRight, panel.footprint.bottomRight, panel.footprint.bottomLeft]
 		for (const coordinate of coordinates) {
 			expectCoordinateValid(coordinate)
 			hasSmallPositiveRa ||= coordinate.ra > 0 && coordinate.ra < deg(1)
@@ -175,15 +175,15 @@ test('near-pole panels remain finite and locally ordered', () => {
 
 	expectPlanFinite(plan)
 	for (const panel of plan.panels) {
-		const northWest = projectToPlane(basis, panel.footprint.northWest)
-		const northEast = projectToPlane(basis, panel.footprint.northEast)
-		const southEast = projectToPlane(basis, panel.footprint.southEast)
-		const southWest = projectToPlane(basis, panel.footprint.southWest)
+		const topLeft = projectToPlane(basis, panel.footprint.topLeft)
+		const topRight = projectToPlane(basis, panel.footprint.topRight)
+		const bottomRight = projectToPlane(basis, panel.footprint.bottomRight)
+		const bottomLeft = projectToPlane(basis, panel.footprint.bottomLeft)
 
-		expect(northWest.x).toBeLessThan(northEast.x)
-		expect(southWest.x).toBeLessThan(southEast.x)
-		expect(northWest.y).toBeGreaterThan(southWest.y)
-		expect(northEast.y).toBeGreaterThan(southEast.y)
+		expect(topLeft.x).toBeLessThan(topRight.x)
+		expect(bottomLeft.x).toBeLessThan(bottomRight.x)
+		expect(topLeft.y).toBeGreaterThan(bottomLeft.y)
+		expect(topRight.y).toBeGreaterThan(bottomRight.y)
 	}
 })
 
@@ -193,13 +193,13 @@ test('footprint corners match the central panel and diagonals are longer', () =>
 	const panel = plan.panels.find((candidate) => candidate.row === 1 && candidate.column === 1)!
 	const halfWidth = planeSize(plan.panel.width) / 2
 	const halfHeight = planeSize(plan.panel.height) / 2
-	const adjacent = sphericalSeparation(panel.footprint.northWest.ra, panel.footprint.northWest.dec, panel.footprint.northEast.ra, panel.footprint.northEast.dec)
-	const diagonal = sphericalSeparation(panel.footprint.northWest.ra, panel.footprint.northWest.dec, panel.footprint.southEast.ra, panel.footprint.southEast.dec)
+	const adjacent = sphericalSeparation(panel.footprint.topLeft.ra, panel.footprint.topLeft.dec, panel.footprint.topRight.ra, panel.footprint.topRight.dec)
+	const diagonal = sphericalSeparation(panel.footprint.topLeft.ra, panel.footprint.topLeft.dec, panel.footprint.bottomRight.ra, panel.footprint.bottomRight.dec)
 
-	expectPlanePointClose(projectToPlane(basis, panel.footprint.northWest), -halfWidth, halfHeight)
-	expectPlanePointClose(projectToPlane(basis, panel.footprint.northEast), halfWidth, halfHeight)
-	expectPlanePointClose(projectToPlane(basis, panel.footprint.southEast), halfWidth, -halfHeight)
-	expectPlanePointClose(projectToPlane(basis, panel.footprint.southWest), -halfWidth, -halfHeight)
+	expectPlanePointClose(projectToPlane(basis, panel.footprint.topLeft), -halfWidth, halfHeight)
+	expectPlanePointClose(projectToPlane(basis, panel.footprint.topRight), halfWidth, halfHeight)
+	expectPlanePointClose(projectToPlane(basis, panel.footprint.bottomRight), halfWidth, -halfHeight)
+	expectPlanePointClose(projectToPlane(basis, panel.footprint.bottomLeft), -halfWidth, -halfHeight)
 	expect(diagonal).toBeGreaterThan(adjacent)
 })
 
@@ -256,21 +256,46 @@ test('input right ascension is normalized without mutating input objects', () =>
 	expect(plan.overlap).not.toBe(input.overlap)
 })
 
-test('footprint corners follow celestial directions at zero position angle', () => {
+test('at zero position angle the detector frame aligns with sky directions', () => {
 	const plan = planMosaic(defaultInput({ center: { ra: deg(10), dec: 0 }, panel: { width: deg(2), height: deg(2) } }))
 	const { footprint, center } = plan.panels[0]
 
-	// North corners must lie north of the center and south corners south of it.
-	expect(footprint.northWest.dec).toBeGreaterThan(center.dec)
-	expect(footprint.northEast.dec).toBeGreaterThan(center.dec)
-	expect(footprint.southEast.dec).toBeLessThan(center.dec)
-	expect(footprint.southWest.dec).toBeLessThan(center.dec)
+	// With positionAngle zero, +y is celestial north and +x is celestial east,
+	// so top corners lie north and right corners lie east of the center.
+	expect(footprint.topLeft.dec).toBeGreaterThan(center.dec)
+	expect(footprint.topRight.dec).toBeGreaterThan(center.dec)
+	expect(footprint.bottomRight.dec).toBeLessThan(center.dec)
+	expect(footprint.bottomLeft.dec).toBeLessThan(center.dec)
 
-	// East corners must lie at greater right ascension and west corners at smaller.
-	expect(footprint.northEast.ra).toBeGreaterThan(center.ra)
-	expect(footprint.southEast.ra).toBeGreaterThan(center.ra)
-	expect(footprint.northWest.ra).toBeLessThan(center.ra)
-	expect(footprint.southWest.ra).toBeLessThan(center.ra)
+	expect(footprint.topRight.ra).toBeGreaterThan(center.ra)
+	expect(footprint.bottomRight.ra).toBeGreaterThan(center.ra)
+	expect(footprint.topLeft.ra).toBeLessThan(center.ra)
+	expect(footprint.bottomLeft.ra).toBeLessThan(center.ra)
+})
+
+test('corner names are detector-local, not fixed sky directions, when rotated', () => {
+	// At positionAngle 90 deg the panel up axis (+y) points celestial east and
+	// the +x axis points celestial south, so the panel top-left corner (-x, +y)
+	// actually lands north-east of the center, not north-west. This locks the
+	// detector-frame semantics and guards against re-attaching sky-fixed names.
+	const plan = planMosaic(defaultInput({ center: { ra: deg(10), dec: 0 }, panel: { width: deg(2), height: deg(2) }, positionAngle: Math.PI / 2 }))
+	const { footprint, center } = plan.panels[0]
+
+	// topLeft (-x, +y) -> north and east.
+	expect(footprint.topLeft.dec).toBeGreaterThan(center.dec)
+	expect(footprint.topLeft.ra).toBeGreaterThan(center.ra)
+
+	// topRight (+x, +y) -> south and east.
+	expect(footprint.topRight.dec).toBeLessThan(center.dec)
+	expect(footprint.topRight.ra).toBeGreaterThan(center.ra)
+
+	// bottomRight (+x, -y) -> south and west.
+	expect(footprint.bottomRight.dec).toBeLessThan(center.dec)
+	expect(footprint.bottomRight.ra).toBeLessThan(center.ra)
+
+	// bottomLeft (-x, -y) -> north and west.
+	expect(footprint.bottomLeft.dec).toBeGreaterThan(center.dec)
+	expect(footprint.bottomLeft.ra).toBeLessThan(center.ra)
 })
 
 test('coverage matches the shared-plane panel spacing', () => {
