@@ -137,6 +137,12 @@ localAstrometryNetPlateSolve(input, options)
 libAstrometryNetPlateSolve(stars, width, height, options)
 ```
 
+### Astrometry.net Index ![](bun.webp) ![](browser.webp)
+
+```ts
+selectAstrometryIndexes(request) // Compute the minimal set of index-file descriptors to plate-solve an image
+```
+
 ### AutoFocus ![](bun.webp) ![](browser.webp)
 
 ```ts
