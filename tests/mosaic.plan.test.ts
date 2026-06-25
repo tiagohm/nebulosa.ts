@@ -256,6 +256,47 @@ test('input right ascension is normalized without mutating input objects', () =>
 	expect(plan.overlap).not.toBe(input.overlap)
 })
 
+test('footprint corners follow celestial directions at zero position angle', () => {
+	const plan = planMosaic(defaultInput({ center: { ra: deg(10), dec: 0 }, panel: { width: deg(2), height: deg(2) } }))
+	const { footprint, center } = plan.panels[0]
+
+	// North corners must lie north of the center and south corners south of it.
+	expect(footprint.northWest.dec).toBeGreaterThan(center.dec)
+	expect(footprint.northEast.dec).toBeGreaterThan(center.dec)
+	expect(footprint.southEast.dec).toBeLessThan(center.dec)
+	expect(footprint.southWest.dec).toBeLessThan(center.dec)
+
+	// East corners must lie at greater right ascension and west corners at smaller.
+	expect(footprint.northEast.ra).toBeGreaterThan(center.ra)
+	expect(footprint.southEast.ra).toBeGreaterThan(center.ra)
+	expect(footprint.northWest.ra).toBeLessThan(center.ra)
+	expect(footprint.southWest.ra).toBeLessThan(center.ra)
+})
+
+test('coverage matches the shared-plane panel spacing', () => {
+	const plan = planMosaic(defaultInput({ region: { width: deg(4), height: deg(2) }, overlap: { x: 0.1, y: 0.1 } }))
+	const panelPlaneWidth = planeSize(plan.panel.width)
+	const panelPlaneHeight = planeSize(plan.panel.height)
+	const stepX = panelPlaneWidth * (1 - plan.overlap.x)
+	const stepY = panelPlaneHeight * (1 - plan.overlap.y)
+	const expectedWidth = 2 * Math.atan((panelPlaneWidth + (plan.columns - 1) * stepX) / 2)
+	const expectedHeight = 2 * Math.atan((panelPlaneHeight + (plan.rows - 1) * stepY) / 2)
+
+	expect(plan.coverage.width).toBeCloseTo(expectedWidth, 14)
+	expect(plan.coverage.height).toBeCloseTo(expectedHeight, 14)
+	expect(plan.coverage.width).toBeGreaterThanOrEqual(plan.region.width)
+	expect(plan.coverage.height).toBeGreaterThanOrEqual(plan.region.height)
+})
+
+test('position angle is normalized into (-PI, PI]', () => {
+	// The lower bound wraps to the upper bound, matching normalizePI and atan2.
+	expect(planMosaic(defaultInput({ positionAngle: -Math.PI })).positionAngle).toBe(Math.PI)
+	expect(planMosaic(defaultInput({ positionAngle: Math.PI })).positionAngle).toBe(Math.PI)
+	expect(planMosaic(defaultInput({ positionAngle: Math.PI / 2 })).positionAngle).toBeCloseTo(Math.PI / 2, 14)
+	expect(planMosaic(defaultInput({ positionAngle: TAU + deg(30) })).positionAngle).toBeCloseTo(deg(30), 14)
+	expect(planMosaic(defaultInput({ positionAngle: -TAU - deg(30) })).positionAngle).toBeCloseTo(-deg(30), 14)
+})
+
 test('invalid inputs are rejected with field-specific range errors', () => {
 	const invalidInputs: MosaicPlanInput[] = [
 		defaultInput({ center: { ra: Number.NaN, dec: 0 } }),
