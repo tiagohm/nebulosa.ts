@@ -332,6 +332,8 @@ export class GuidingAssistant {
 
 	// Starts the optional DEC backlash test after passive sampling has collected guide drift.
 	startBacklashTest(): GuidingAssistantStep {
+		if (this.#status !== 'measuring') return { result: this.result() }
+
 		const last = this.samples.at(-1)
 
 		if (last === undefined) {
