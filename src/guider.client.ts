@@ -856,6 +856,11 @@ export class GuiderClient {
 		const assistant = this.#guidingAssistant
 		if (assistant === undefined) return undefined
 
+		if (this.#paused && assistant.measuringBacklash) {
+			this.#finishGuidingAssistant(false, 'backlash test paused', true)
+			return 0
+		}
+
 		if (this.#guidingAssistantPendingPulse !== undefined) {
 			const pulse = this.#guidingAssistantPendingPulse
 			this.#guidingAssistantPendingPulse = undefined
