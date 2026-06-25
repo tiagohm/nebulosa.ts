@@ -633,6 +633,13 @@ export function selectAstrometryIndexes(request: AstrometryNetIndexRequest): Ast
 	const pitchInMillimetres = pixelPitch / 1000
 	const sensorWidth = width * pitchInMillimetres
 	const sensorHeight = height * pitchInMillimetres
+	// Finite inputs can still overflow to Infinity (e.g. a huge pitch times a huge dimension). The
+	// atan-based fields below would clamp such an overflow to a plausible finite angle, hiding the
+	// bad request, so reject it here before any diagnostic is computed from non-finite geometry.
+	if (!Number.isFinite(sensorWidth) || !Number.isFinite(sensorHeight)) {
+		throw new RangeError('derived sensor dimensions are not finite; reduce pixelPitch, width, or height')
+	}
+
 	const pixelScale = 2 * Math.atan(pitchInMillimetres / (2 * focalLength))
 	const fieldWidth = 2 * Math.atan(sensorWidth / (2 * focalLength))
 	const fieldHeight = 2 * Math.atan(sensorHeight / (2 * focalLength))
@@ -642,6 +649,9 @@ export function selectAstrometryIndexes(request: AstrometryNetIndexRequest): Ast
 
 	const minimumRequiredQuadDiameter = largestFieldDimension * minQuadFraction
 	const maximumRequiredQuadDiameter = largestFieldDimension * maxQuadFraction
+	if (!Number.isFinite(minimumRequiredQuadDiameter) || !Number.isFinite(maximumRequiredQuadDiameter)) {
+		throw new RangeError('derived quad-diameter interval is not finite')
+	}
 
 	// Normalize and validate the optional field center.
 	let center: EquatorialCoordinate | undefined

@@ -298,6 +298,14 @@ describe('scale selection and coverage', () => {
 		expect(() => selectAstrometryIndexes(request({ pointingUncertainty: -0.1, center: { rightAscension: 0, declination: 0 } }))).toThrow(RangeError)
 		expect(() => selectAstrometryIndexes(request({ safetyMargin: Number.NaN, center: { rightAscension: 0, declination: 0 } }))).toThrow(RangeError)
 	})
+
+	test('finite inputs that overflow derived geometry throw RangeError', () => {
+		// pixelPitch * width overflows to Infinity even though both inputs are finite and pass the
+		// per-field checks. The atan-based fields would stay finite, so the overflow must be caught
+		// at the sensor dimensions rather than leaking Infinity into public geometry.
+		expect(() => selectAstrometryIndexes(request({ pixelPitch: 1e300, width: Number.MAX_SAFE_INTEGER }))).toThrow(RangeError)
+		expect(() => selectAstrometryIndexes(request({ pixelPitch: 1e300, height: Number.MAX_SAFE_INTEGER }))).toThrow(RangeError)
+	})
 })
 
 describe('tile selection', () => {
