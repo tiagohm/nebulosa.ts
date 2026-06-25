@@ -555,6 +555,7 @@ export function distanceToTile(tileId: number, resolution: number, rightAscensio
 // Returns true when the closed disc of the given radius (radians) intersects the closed tile.
 // Boundary contact counts as intersection, with a minimal rounding tolerance.
 export function tileIntersectsDisc(tileId: number, resolution: number, rightAscension: Angle, declination: Angle, radius: Angle): boolean {
+	requireNonNegativeFinite(radius, 'radius')
 	return distanceToTile(tileId, resolution, rightAscension, declination) <= radius + INTERSECTION_EPSILON
 }
 

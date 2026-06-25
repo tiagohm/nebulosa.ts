@@ -146,6 +146,18 @@ describe('astrometry.net healpix xy', () => {
 		expect(() => coordinateToTile(0, PI / 2, 2)).not.toThrow()
 		expect(() => coordinateToTile(0, -PI / 2, 2)).not.toThrow()
 	})
+
+	test('non-finite or negative search radius throws RangeError', () => {
+		// A NaN radius would otherwise silently return false; a tiny negative radius would otherwise
+		// be rescued by INTERSECTION_EPSILON into a false positive for a center inside the tile.
+		const inside = coordinateToTile(deg(33), deg(12), 2)
+		expect(() => tileIntersectsDisc(inside, 2, deg(33), deg(12), Number.NaN)).toThrow(RangeError)
+		expect(() => tileIntersectsDisc(inside, 2, deg(33), deg(12), Number.POSITIVE_INFINITY)).toThrow(RangeError)
+		expect(() => tileIntersectsDisc(inside, 2, deg(33), deg(12), -5e-10)).toThrow(RangeError)
+		expect(() => tileIntersectsDisc(inside, 2, deg(33), deg(12), -1)).toThrow(RangeError)
+		// A zero radius is valid: the center lies inside its own tile, distance 0.
+		expect(tileIntersectsDisc(inside, 2, deg(33), deg(12), 0)).toBe(true)
+	})
 })
 
 // Builds a request, filling required geometry fields with sensible defaults.
