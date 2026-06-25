@@ -62,18 +62,21 @@ export interface MosaicPlanInput {
 }
 
 // Describes one panel footprint projected from the shared reference tangent plane.
+// Corners are named by celestial direction to avoid screen-space ambiguity: the
+// local x axis points celestial east and the local y axis points celestial north,
+// so positive local x is east and positive local y is north.
 export interface MosaicFootprint {
-	// Corner at negative local x and positive local y.
-	readonly topLeft: MosaicCoordinate
+	// Corner at negative local x and positive local y, i.e. celestial north-west.
+	readonly northWest: MosaicCoordinate
 
-	// Corner at positive local x and positive local y.
-	readonly topRight: MosaicCoordinate
+	// Corner at positive local x and positive local y, i.e. celestial north-east.
+	readonly northEast: MosaicCoordinate
 
-	// Corner at positive local x and negative local y.
-	readonly bottomRight: MosaicCoordinate
+	// Corner at positive local x and negative local y, i.e. celestial south-east.
+	readonly southEast: MosaicCoordinate
 
-	// Corner at negative local x and negative local y.
-	readonly bottomLeft: MosaicCoordinate
+	// Corner at negative local x and negative local y, i.e. celestial south-west.
+	readonly southWest: MosaicCoordinate
 }
 
 // Describes one planned mosaic panel in both geometric and capture-order terms.
@@ -298,10 +301,10 @@ function projectPlanePoint(basis: MosaicBasis, x: number, y: number): MosaicCoor
 // Projects all four panel corners from the shared reference tangent plane.
 function projectFootprint(basis: MosaicBasis, x: number, y: number, halfWidth: number, halfHeight: number): MosaicFootprint {
 	return {
-		topLeft: projectPlanePoint(basis, x - halfWidth, y + halfHeight),
-		topRight: projectPlanePoint(basis, x + halfWidth, y + halfHeight),
-		bottomRight: projectPlanePoint(basis, x + halfWidth, y - halfHeight),
-		bottomLeft: projectPlanePoint(basis, x - halfWidth, y - halfHeight),
+		northWest: projectPlanePoint(basis, x - halfWidth, y + halfHeight),
+		northEast: projectPlanePoint(basis, x + halfWidth, y + halfHeight),
+		southEast: projectPlanePoint(basis, x + halfWidth, y - halfHeight),
+		southWest: projectPlanePoint(basis, x - halfWidth, y - halfHeight),
 	}
 }
 
