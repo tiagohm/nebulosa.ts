@@ -131,6 +131,21 @@ describe('astrometry.net healpix xy', () => {
 		expect(() => distanceToTile(48, 2, deg(0), deg(0))).toThrow(RangeError)
 		expect(() => distanceToTile(-1, 2, deg(0), deg(0))).toThrow(RangeError)
 	})
+
+	test('non-finite or out-of-range coordinates throw RangeError', () => {
+		// Without validation eraS2c would turn these into NaN or a mirrored, plausible-but-wrong tile.
+		expect(() => coordinateToTile(Number.NaN, 0, 2)).toThrow(RangeError)
+		expect(() => coordinateToTile(0, Number.NaN, 2)).toThrow(RangeError)
+		expect(() => coordinateToTile(Number.POSITIVE_INFINITY, 0, 2)).toThrow(RangeError)
+		expect(() => coordinateToTile(0, PI / 2 + 1e-6, 2)).toThrow(RangeError)
+		expect(() => coordinateToTile(0, -PI / 2 - 1e-6, 2)).toThrow(RangeError)
+		expect(() => distanceToTile(0, 2, Number.NaN, 0)).toThrow(RangeError)
+		expect(() => distanceToTile(0, 2, 0, PI)).toThrow(RangeError)
+		expect(() => tileIntersectsDisc(0, 2, 0, Number.NaN, 0)).toThrow(RangeError)
+		// The exact poles remain valid.
+		expect(() => coordinateToTile(0, PI / 2, 2)).not.toThrow()
+		expect(() => coordinateToTile(0, -PI / 2, 2)).not.toThrow()
+	})
 })
 
 // Builds a request, filling required geometry fields with sensible defaults.

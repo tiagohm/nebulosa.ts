@@ -518,6 +518,19 @@ function validateTileId(tileId: number, resolution: number) {
 	}
 }
 
+// Validates a sky coordinate, both components in radians. Right ascension must be finite (it is
+// normalized to [0, TAU) by callers) and declination must be finite and within [-PI/2, PI/2].
+// Rejecting here prevents NaN from leaking through eraS2c and prevents an out-of-range declination
+// from silently aliasing to a mirrored point and a wrong tile id.
+function validateCoordinate(rightAscension: Angle, declination: Angle) {
+	if (!Number.isFinite(rightAscension) || !Number.isFinite(declination)) {
+		throw new RangeError('rightAscension and declination must be finite')
+	}
+	if (declination < -PIOVERTWO || declination > PIOVERTWO) {
+		throw new RangeError('declination must be within [-PI/2, PI/2]')
+	}
+}
+
 // Scratch unit vector reused by the public HEALPix XY operations.
 const COORD_SCRATCH: MutVec3 = [0, 0, 0]
 
@@ -525,6 +538,7 @@ const COORD_SCRATCH: MutVec3 = [0, 0, 0]
 // Right ascension is normalized to [0, TAU); declination is used as supplied.
 export function coordinateToTile(rightAscension: Angle, declination: Angle, resolution: number): number {
 	validateResolution(resolution)
+	validateCoordinate(rightAscension, declination)
 	eraS2c(normalizeAngle(rightAscension), declination, COORD_SCRATCH)
 	return unitVectorToTile(COORD_SCRATCH[0], COORD_SCRATCH[1], COORD_SCRATCH[2], resolution)
 }
@@ -533,6 +547,7 @@ export function coordinateToTile(rightAscension: Angle, declination: Angle, reso
 export function distanceToTile(tileId: number, resolution: number, rightAscension: Angle, declination: Angle): Angle {
 	validateResolution(resolution)
 	validateTileId(tileId, resolution)
+	validateCoordinate(rightAscension, declination)
 	eraS2c(normalizeAngle(rightAscension), declination, COORD_SCRATCH)
 	return tileDistanceFromUnitVector(tileId, resolution, COORD_SCRATCH[0], COORD_SCRATCH[1], COORD_SCRATCH[2])
 }
@@ -635,12 +650,7 @@ export function selectAstrometryIndexes(request: AstrometryNetIndexRequest): Ast
 	if (request.center !== undefined) {
 		const ra = request.center.rightAscension
 		const dec = request.center.declination
-		if (!Number.isFinite(ra) || !Number.isFinite(dec)) {
-			throw new RangeError('center.rightAscension and center.declination must be finite')
-		}
-		if (dec < -PIOVERTWO || dec > PIOVERTWO) {
-			throw new RangeError('center.declination must be within [-PI/2, PI/2]')
-		}
+		validateCoordinate(ra, dec)
 		normalizedRA = normalizeAngle(ra)
 		declination = dec
 		center = { rightAscension: normalizedRA, declination }
