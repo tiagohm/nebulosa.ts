@@ -1,20 +1,8 @@
 import { expect, test } from 'bun:test'
-import { deg, normalizeAngle, type Angle } from '../src/angle'
+import { deg, type Angle } from '../src/angle'
 import { TAU } from '../src/constants'
 import { sphericalSeparation } from '../src/geometry'
-import { planMosaic, type MosaicCoordinate, type MosaicPlan, type MosaicPlanInput } from '../src/mosaic.plan'
-
-interface TestBasis {
-	readonly cx: number
-	readonly cy: number
-	readonly cz: number
-	readonly ux: number
-	readonly uy: number
-	readonly uz: number
-	readonly vx: number
-	readonly vy: number
-	readonly vz: number
-}
+import { mosaicBasis, planMosaic, type MosaicBasis, type MosaicCoordinate, type MosaicPlan, type MosaicPlanInput } from '../src/mosaic.plan'
 
 interface PlanePoint {
 	readonly x: number
@@ -27,36 +15,6 @@ function planeSize(angle: Angle) {
 	return 2 * Math.tan(angle / 2)
 }
 
-function testBasis(center: MosaicCoordinate, positionAngle: Angle = 0): TestBasis {
-	const ra = normalizeAngle(center.ra)
-	const sinRa = Math.sin(ra)
-	const cosRa = Math.cos(ra)
-	const sinDec = Math.sin(center.dec)
-	const cosDec = Math.cos(center.dec)
-	const sinPositionAngle = Math.sin(positionAngle)
-	const cosPositionAngle = Math.cos(positionAngle)
-	const cx = cosDec * cosRa
-	const cy = cosDec * sinRa
-	const cz = sinDec
-	const ex = -sinRa
-	const ey = cosRa
-	const nx = -cosRa * sinDec
-	const ny = -sinRa * sinDec
-	const nz = cosDec
-
-	return {
-		cx,
-		cy,
-		cz,
-		ux: ex * cosPositionAngle - nx * sinPositionAngle,
-		uy: ey * cosPositionAngle - ny * sinPositionAngle,
-		uz: -nz * sinPositionAngle,
-		vx: ex * sinPositionAngle + nx * cosPositionAngle,
-		vy: ey * sinPositionAngle + ny * cosPositionAngle,
-		vz: nz * cosPositionAngle,
-	}
-}
-
 function coordinateVector(coordinate: MosaicCoordinate) {
 	const cosDec = Math.cos(coordinate.dec)
 	return {
@@ -66,7 +24,7 @@ function coordinateVector(coordinate: MosaicCoordinate) {
 	}
 }
 
-function projectToPlane(basis: TestBasis, coordinate: MosaicCoordinate): PlanePoint {
+function projectToPlane(basis: MosaicBasis, coordinate: MosaicCoordinate): PlanePoint {
 	const p = coordinateVector(coordinate)
 	const denominator = p.x * basis.cx + p.y * basis.cy + p.z * basis.cz
 
@@ -111,7 +69,7 @@ function defaultInput(input: Partial<MosaicPlanInput> = {}): MosaicPlanInput {
 
 test('single panel is centered and footprint uses the shared plane', () => {
 	const plan = planMosaic(defaultInput())
-	const basis = testBasis(plan.center, plan.positionAngle)
+	const basis = mosaicBasis(plan.center, plan.positionAngle)
 	const halfWidth = planeSize(plan.panel.width) / 2
 	const halfHeight = planeSize(plan.panel.height) / 2
 
@@ -163,7 +121,7 @@ test('odd grid has a central panel at the mosaic center', () => {
 
 test('even grid is centered around the requested target', () => {
 	const plan = planMosaic(defaultInput({ panel: { width: deg(2), height: deg(2) }, region: { width: deg(3.8), height: deg(3.8) } }))
-	const basis = testBasis(plan.center, plan.positionAngle)
+	const basis = mosaicBasis(plan.center, plan.positionAngle)
 	let sumX = 0
 	let sumY = 0
 
@@ -180,7 +138,7 @@ test('even grid is centered around the requested target', () => {
 
 test('zero position angle increases columns east and rows south', () => {
 	const plan = planMosaic(defaultInput({ center: { ra: deg(10), dec: 0 }, panel: { width: deg(2), height: deg(2) }, region: { width: deg(3.8), height: deg(3.8) } }))
-	const basis = testBasis(plan.center, plan.positionAngle)
+	const basis = mosaicBasis(plan.center, plan.positionAngle)
 	const first = projectToPlane(basis, plan.panels[0].center)
 	const nextColumn = projectToPlane(basis, plan.panels[1].center)
 	const lastRow = projectToPlane(basis, plan.panels[2].center)
@@ -213,7 +171,7 @@ test('right ascension wraps to the positive range', () => {
 
 test('near-pole panels remain finite and locally ordered', () => {
 	const plan = planMosaic(defaultInput({ center: { ra: deg(40), dec: deg(89) }, region: { width: deg(4), height: deg(2) }, overlap: { x: 0.1, y: 0.1 } }))
-	const basis = testBasis(plan.center, plan.positionAngle)
+	const basis = mosaicBasis(plan.center, plan.positionAngle)
 
 	expectPlanFinite(plan)
 	for (const panel of plan.panels) {
@@ -231,7 +189,7 @@ test('near-pole panels remain finite and locally ordered', () => {
 
 test('footprint corners match the central panel and diagonals are longer', () => {
 	const plan = planMosaic(defaultInput({ region: { width: deg(4), height: deg(2) }, overlap: { x: 0.1, y: 0.1 } }))
-	const basis = testBasis(plan.center, plan.positionAngle)
+	const basis = mosaicBasis(plan.center, plan.positionAngle)
 	const panel = plan.panels.find((candidate) => candidate.row === 1 && candidate.column === 1)!
 	const halfWidth = planeSize(plan.panel.width) / 2
 	const halfHeight = planeSize(plan.panel.height) / 2

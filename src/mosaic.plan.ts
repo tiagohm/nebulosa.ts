@@ -128,7 +128,7 @@ export interface MosaicPlan {
 }
 
 // Orthonormal basis for the shared reference tangent plane.
-interface MosaicBasis {
+export interface MosaicBasis {
 	// Unit vector toward the mosaic center.
 	readonly cx: number
 
@@ -253,7 +253,7 @@ function validateTotalPanelCount(rows: number, columns: number) {
 }
 
 // Builds the rotated tangent-plane basis from the normalized center and position angle.
-function mosaicBasis(center: MosaicCoordinate, positionAngle: Angle): MosaicBasis {
+export function mosaicBasis(center: MosaicCoordinate, positionAngle: Angle): MosaicBasis {
 	const sinRa = Math.sin(center.ra)
 	const cosRa = Math.cos(center.ra)
 	const sinDec = Math.sin(center.dec)
