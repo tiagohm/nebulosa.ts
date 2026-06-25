@@ -12,6 +12,9 @@ const SEEING_WINDOW_SECONDS = 120
 // exactly on both edges, so this floor lets interior windows qualify like the trailing one.
 const MIN_SEEING_WINDOW_SECONDS = 96
 
+// Minimum accepted samples in a seeing window before trusting its residual fit.
+const MIN_SEEING_WINDOW_SAMPLES = 4
+
 // Backlash compensation above this value is treated as too large for ordinary DEC compensation.
 const MAX_BACKLASH_COMPENSATION_MS = 3000
 
@@ -686,7 +689,7 @@ function bestDecSeeingEstimate(samples: readonly GuidingAssistantSample[]) {
 		const window = samples.filter((sample) => sample.elapsedSeconds >= start && sample.elapsedSeconds <= end)
 		const span = window.length > 1 ? window.at(-1)!.elapsedSeconds - window[0].elapsedSeconds : 0
 
-		if (span >= MIN_SEEING_WINDOW_SECONDS) {
+		if (window.length >= MIN_SEEING_WINDOW_SAMPLES && span >= MIN_SEEING_WINDOW_SECONDS) {
 			best = Math.min(best, linearFit(window, 'decPx').residualRms)
 		}
 

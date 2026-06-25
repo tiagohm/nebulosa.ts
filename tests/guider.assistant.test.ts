@@ -609,6 +609,20 @@ test('estimates seeing from the quietest window on long runs', () => {
 	expect(result.recommendedDecMinMove).toBeCloseTo(0.1, 8)
 })
 
+test('ignores sparse two-point seeing windows', () => {
+	const result = run([
+		[0, 0, 0],
+		[120000, 0, 0],
+		[180000, 0, 1],
+		[240000, 0, -1],
+		[300000, 0, 1],
+	])
+
+	expect(result.elapsedSeconds).toBeCloseTo(300, 6)
+	expect(result.motion.decCorrectedRmsPx).toBeGreaterThan(0.1)
+	expect(result.recommendedDecMinMove).toBeGreaterThan(0.1)
+})
+
 test('falls back to a safe DEC min-move when seeing fails the sanity check', () => {
 	const result = run(
 		[
