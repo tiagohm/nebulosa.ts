@@ -216,6 +216,10 @@ export function createMeridianFlipState(): MeridianFlipState {
 }
 
 // Evaluates the current policy, telemetry snapshot, and lifecycle state without side effects.
+// Hour angle, normalized to (-PI, PI], is compared linearly against the thresholds, which are
+// bounded to [-PI / 2, PI / 2]. The function assumes evaluation near the upper meridian: any
+// hour angle past flipAt up to PI (toward lower culmination) is intentionally treated as
+// "past the flip threshold", so callers must not feed snapshots far west of the meridian.
 export function evaluateMeridianFlip(policy: MeridianFlipPolicy, snapshot: MeridianFlipSnapshot, state: MeridianFlipState = createMeridianFlipState()): MeridianFlipDecision {
 	const resolved = resolvePolicy(policy)
 	validateSnapshot(snapshot)
