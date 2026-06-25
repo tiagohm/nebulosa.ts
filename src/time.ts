@@ -46,6 +46,7 @@ export interface TimeCache {
 	pmMatrix?: Mat3
 	pmMatrixPolarMotion?: PolarMotion
 	equationOfOrigins?: Mat3
+	gcrsToItrsRotationMatrix?: Mat3
 }
 
 export interface TimeProviders {
@@ -76,7 +77,6 @@ export interface Time {
 	providers?: TimeProviders
 
 	location?: GeographicPosition
-	gcrsToItrsRotationMatrix?: Mat3
 	cache?: TimeCache
 }
 
@@ -106,7 +106,7 @@ function polarMotionProvider(time: Time, pm?: PolarMotion): PolarMotion {
 // Computes the motion angles (sprime, x, y) from the given time.
 export function pmAngles(time: Time, pm?: PolarMotion): readonly [Angle, Angle, Angle] {
 	const polarMotion = polarMotionProvider(time, pm)
-	if (time.cache?.pmAngles && time.cache.pmAnglesPolarMotion === polarMotion) return time.cache.pmAngles
+	if (time.cache?.pmAngles !== undefined && time.cache.pmAnglesPolarMotion === polarMotion) return time.cache.pmAngles
 	const t = tt(time)
 	const sprime = time.providers?.sp?.(t) ?? eraSp00(t.day, t.fraction)
 	const [x, y] = polarMotion(time)
@@ -120,7 +120,7 @@ export function pmAngles(time: Time, pm?: PolarMotion): readonly [Angle, Angle, 
 // Computes the polar motion matrix from the given time.
 export function pmMatrix(time: Time, pm?: PolarMotion): Mat3 {
 	const polarMotion = polarMotionProvider(time, pm)
-	if (time.cache?.pmMatrix && time.cache.pmMatrixPolarMotion === polarMotion) return time.cache.pmMatrix
+	if (time.cache?.pmMatrix !== undefined && time.cache.pmMatrixPolarMotion === polarMotion) return time.cache.pmMatrix
 	const [sprime, x, y] = pmAngles(time, polarMotion)
 	const m = time.providers?.pom?.(x, y, sprime) ?? eraPom00(x, y, sprime)
 	const c = cache(time)
@@ -336,7 +336,7 @@ const DAY_FRACTION: [number, number] = [0, 0]
 export function ut1(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UT1) return time
-	if (time.cache?.ut1) return time.cache.ut1
+	if (time.cache?.ut1 !== undefined) return time.cache.ut1
 
 	if (scale === Timescale.TAI) {
 		eraTaiUt1(day, fraction, (time.providers?.ut1MinusTai ?? ut1MinusTai)(time), DAY_FRACTION)
@@ -360,7 +360,7 @@ export function ut1(time: Time) {
 export function utc(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.UTC) return time
-	if (time.cache?.utc) return time.cache.utc
+	if (time.cache?.utc !== undefined) return time.cache.utc
 
 	if (scale === Timescale.UT1) {
 		eraUt1Utc(day, fraction, (time.providers?.dut1 ?? dut1)(time), DAY_FRACTION)
@@ -384,7 +384,7 @@ export function utc(time: Time) {
 export function tai(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TAI) return time
-	if (time.cache?.tai) return time.cache.tai
+	if (time.cache?.tai !== undefined) return time.cache.tai
 
 	if (scale === Timescale.UT1) {
 		eraUt1Tai(day, fraction, (time.providers?.ut1MinusTai ?? ut1MinusTai)(time), DAY_FRACTION)
@@ -410,7 +410,7 @@ export function tai(time: Time) {
 export function tt(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TT) return time
-	if (time.cache?.tt) return time.cache.tt
+	if (time.cache?.tt !== undefined) return time.cache.tt
 
 	if (scale === Timescale.TAI) {
 		eraTaiTt(day, fraction, DAY_FRACTION)
@@ -439,7 +439,7 @@ export function tt(time: Time) {
 export function tcg(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCG) return time
-	if (time.cache?.tcg) return time.cache.tcg
+	if (time.cache?.tcg !== undefined) return time.cache.tcg
 
 	if (scale === Timescale.TT) {
 		eraTtTcg(day, fraction, DAY_FRACTION)
@@ -461,7 +461,7 @@ export function tcg(time: Time) {
 export function tdb(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TDB) return time
-	if (time.cache?.tdb) return time.cache.tdb
+	if (time.cache?.tdb !== undefined) return time.cache.tdb
 
 	if (scale === Timescale.TT) {
 		eraTtTdb(day, fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(time), DAY_FRACTION)
@@ -485,7 +485,7 @@ export function tdb(time: Time) {
 export function tcb(time: Time) {
 	const { day, fraction, scale } = time
 	if (scale === Timescale.TCB) return time
-	if (time.cache?.tcb) return time.cache.tcb
+	if (time.cache?.tcb !== undefined) return time.cache.tcb
 
 	if (scale === Timescale.TDB) {
 		eraTdbTcb(day, fraction, DAY_FRACTION)
@@ -557,7 +557,7 @@ export function trueEclipticRotation(time: Time) {
 
 // Computes the nutation angles.
 export function nutationAngles(time: Time): readonly [Angle, Angle] {
-	if (time.cache?.nutation) return time.cache.nutation
+	if (time.cache?.nutation !== undefined) return time.cache.nutation
 	const t = tt(time)
 	const nutation = time.providers?.nut?.(t) ?? eraNut06a(t.day, t.fraction)
 	cache(time).nutation = nutation
@@ -566,7 +566,7 @@ export function nutationAngles(time: Time): readonly [Angle, Angle] {
 
 // Computes the 3x3 precession matrix.
 export function precessionMatrix(time: Time): Mat3 {
-	if (time.cache?.precession) return time.cache.precession
+	if (time.cache?.precession !== undefined) return time.cache.precession
 	const t = tt(time)
 	const precession = time.providers?.pmat?.(t) ?? eraPmat06(t.day, t.fraction)
 	cache(time).precession = precession
@@ -575,7 +575,7 @@ export function precessionMatrix(time: Time): Mat3 {
 
 // Computes the 3x3 precession-nutation matrix (including frame bias).
 export function precessionNutationMatrix(time: Time): Mat3 {
-	if (time.cache?.precessionNutation) return time.cache.precessionNutation
+	if (time.cache?.precessionNutation !== undefined) return time.cache.precessionNutation
 	const t = tt(time)
 	const precessionNutation = time.providers?.pnm?.(t) ?? eraPnm06a(t.day, t.fraction)
 	cache(time).precessionNutation = precessionNutation
@@ -589,7 +589,7 @@ export function precessionNutationMatrix(time: Time): Mat3 {
 // pairing the equinox matrix with those routines offsets RA by the equation of origins, which
 // is zero at J2000 but grows ~50 arcsec/year. Cached on the time instance.
 export function cirsRotationMatrix(time: Time): Mat3 {
-	if (time.cache?.cirsRotation) return time.cache.cirsRotation
+	if (time.cache?.cirsRotation !== undefined) return time.cache.cirsRotation
 	const t = tt(time)
 	const cirsRotation = eraC2i06a(t.day, t.fraction)
 	cache(time).cirsRotation = cirsRotation
@@ -598,7 +598,7 @@ export function cirsRotationMatrix(time: Time): Mat3 {
 
 // Computes the 3x3 matrix of Equation of Origins in cycles.
 export function equationOfOrigins(time: Time): Mat3 {
-	if (time.cache?.equationOfOrigins) return time.cache.equationOfOrigins
+	if (time.cache?.equationOfOrigins !== undefined) return time.cache.equationOfOrigins
 	const equationOfOrigins = matIdentity()
 	matMul(matRotZ(greenwichApparentSiderealTime(time) - earthRotationAngle(time), equationOfOrigins), precessionNutationMatrix(time), equationOfOrigins)
 	cache(time).equationOfOrigins = equationOfOrigins
@@ -607,9 +607,10 @@ export function equationOfOrigins(time: Time): Mat3 {
 
 // Computes the GCRS to ITRS rotation matrix at time.
 export function gcrsToItrsRotationMatrix(time: Time) {
-	if (time.gcrsToItrsRotationMatrix) return time.gcrsToItrsRotationMatrix
-	time.gcrsToItrsRotationMatrix = eraC2teqx(precessionNutationMatrix(time), greenwichApparentSiderealTime(time), pmMatrix(time))
-	return time.gcrsToItrsRotationMatrix
+	if (time.cache?.gcrsToItrsRotationMatrix !== undefined) return time.cache.gcrsToItrsRotationMatrix
+	const gcrsToItrsRotationMatrix = eraC2teqx(precessionNutationMatrix(time), greenwichApparentSiderealTime(time), pmMatrix(time))
+	cache(time).gcrsToItrsRotationMatrix = gcrsToItrsRotationMatrix
+	return gcrsToItrsRotationMatrix
 }
 
 // Computes UT1 - UTC in seconds at time.
