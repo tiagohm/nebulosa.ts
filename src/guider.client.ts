@@ -381,8 +381,8 @@ export class GuiderClient {
 
 		const imageScale = this.getPixelScale()
 		const assistant = new GuidingAssistant({
-			imageScaleArcsecPerPixel: imageScale > 0 ? imageScale : undefined,
-			exposureSeconds: this.getExposure(),
+			imageScale: imageScale > 0 ? imageScale : undefined,
+			exposure: this.getExposure(),
 			multiStar: this.#guider.config.mode === 'multi-star',
 			suspectCalibration: this.#calibration === undefined,
 			decPositiveDirection: this.#calibration?.dec.direction ?? 'north',

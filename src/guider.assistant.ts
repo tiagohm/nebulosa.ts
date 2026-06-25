@@ -48,11 +48,11 @@ export type GuidingAssistantRecommendationKind = 'exposure' | 'binning' | 'calib
 // Configuration for one guiding assistant run.
 export interface GuidingAssistantConfig {
 	// Minimum passive measurement time in seconds before recommendations are marked as sufficiently sampled.
-	readonly minSamplingSeconds: number
+	readonly minSampling: number
 	// Current guide exposure in seconds; used for exposure recommendations and filter cadence.
-	readonly exposureSeconds: number
+	readonly exposure: number
 	// Image scale in arc-seconds per pixel; when omitted, arc-second values are returned as null.
-	readonly imageScaleArcsecPerPixel?: number
+	readonly imageScale?: number
 	// Current pointing declination in radians; required for polar alignment error estimates.
 	readonly declination?: number
 	// Whether the current guiding run uses multi-star tracking.
@@ -66,7 +66,7 @@ export interface GuidingAssistantConfig {
 	// DEC output direction represented by positive DEC-axis guide error.
 	readonly decPositiveDirection: GuideDirectionDEC
 	// Minimum mean SNR expected for the selected guide star.
-	readonly minSnr: number
+	readonly minSNR: number
 	// HFD threshold above which focus should be improved when image scale is coarse enough.
 	readonly focusHfdThreshold: number
 	// Image-scale threshold in arc-seconds per pixel where HFD focus advice is meaningful.
@@ -77,8 +77,8 @@ export interface GuidingAssistantConfig {
 	readonly fineScaleDecMultiplier: number
 	// DEC min-move multiplier for coarser image scales.
 	readonly coarseScaleDecMultiplier: number
-	// Image scale below which the fine DEC min-move multiplier is used.
-	readonly fineScaleThresholdArcsecPerPixel: number
+	// Image scale in arc-seconds per pixel below which the fine DEC min-move multiplier is used.
+	readonly fineScaleThreshold: number
 	// RA min-move multiplier relative to DEC when the mount has no high-precision encoders.
 	readonly raMinMoveMultiplier: number
 	// Fallback DEC min-move in pixels when seeing-based estimation fails sanity checks.
@@ -86,13 +86,13 @@ export interface GuidingAssistantConfig {
 	// North pulse direction used by the DEC backlash test.
 	readonly backlashNorthDirection: GuideDirectionDEC
 	// Duration of each DEC backlash test pulse in milliseconds.
-	readonly backlashPulseMs: number
+	readonly backlashPulse: number
 	// Target north motion in DEC-axis pixels before starting the south return.
-	readonly backlashTargetPx: number
+	readonly backlashTarget: number
 	// Return tolerance in DEC-axis pixels for completing the south return.
-	readonly backlashReturnTolerancePx: number
+	readonly backlashReturnTolerance: number
 	// Minimum DEC-axis motion per pulse that counts as backlash movement.
-	readonly backlashMinMotionPx: number
+	readonly backlashMinMotion: number
 	// Maximum pulse count per backlash direction.
 	readonly backlashMaxPulsesPerDirection: number
 }
@@ -104,7 +104,7 @@ export interface GuidingAssistantSample {
 	// Sample timestamp in milliseconds.
 	readonly timestamp: number
 	// Elapsed seconds from the beginning of the run.
-	readonly elapsedSeconds: number
+	readonly elapsed: number
 	// RA-axis guide displacement in pixels.
 	readonly raPx: number
 	// DEC-axis guide displacement in pixels.
@@ -160,9 +160,9 @@ export interface GuidingAssistantMotionMetrics {
 	// Maximum adjacent RA drift rate in arc-seconds per second, or null when image scale is unknown.
 	readonly raMaxDriftRateArcsecPerSecond: number | null
 	// Drift-limiting exposure in seconds from recommended RA min-move and maximum RA drift rate.
-	readonly driftLimitingExposureSeconds: number | null
+	readonly driftLimitingExposure: number | null
 	// Polar alignment error in arc-minutes, or null when declination/image scale is unavailable.
-	readonly polarAlignmentErrorArcmin: number | null
+	readonly polarAlignmentError: number | null
 	// Drift-corrected DEC RMS used as the seeing estimate for min-move recommendations.
 	readonly decCorrectedRmsPx: number
 }
@@ -172,13 +172,13 @@ export interface GuidingAssistantBacklashResult {
 	// Final backlash sub-state.
 	readonly phase: GuidingAssistantBacklashPhase
 	// Measured backlash in milliseconds, or null when measurement failed or was not run.
-	readonly backlashMs: number | null
+	readonly backlash: number | null
 	// Backlash compensation value recommended for DEC, or null when not applicable.
-	readonly recommendedCompensationMs: number | null
+	readonly recommendedCompensation: number | null
 	// North motion covered during the measurement in DEC-axis pixels.
-	readonly northDistancePx: number
+	readonly northDistance: number
 	// South return motion covered during the measurement in DEC-axis pixels.
-	readonly southDistancePx: number
+	readonly southDistance: number
 	// Number of north pulses issued.
 	readonly northPulses: number
 	// Number of south pulses issued.
@@ -210,9 +210,9 @@ export interface GuidingAssistantResult {
 	// Start time in milliseconds since Unix epoch.
 	readonly startTime: number
 	// Elapsed time in seconds.
-	readonly elapsedSeconds: number
+	readonly elapsed: number
 	// Current exposure in seconds.
-	readonly exposureSeconds: number
+	readonly exposure: number
 	// Number of guide samples accepted into the statistics.
 	readonly sampleCount: number
 	// Mean selected-star SNR.
@@ -230,9 +230,9 @@ export interface GuidingAssistantResult {
 	// Recommended DEC min-move in pixels.
 	readonly recommendedDecMinMove: number
 	// Recommended minimum guide exposure in seconds.
-	readonly recommendedMinExposureSeconds: number
+	readonly recommendedMinExposure: number
 	// Recommended maximum guide exposure in seconds.
-	readonly recommendedMaxExposureSeconds: number
+	readonly recommendedMaxExposure: number
 	// Recommendations generated from the current result.
 	readonly recommendations: readonly GuidingAssistantRecommendation[]
 	// Notes about unavailable inputs or low-confidence estimates.
@@ -249,27 +249,27 @@ export interface GuidingAssistantStep {
 
 // PHD2-like defaults for guiding assistant analysis and recommendations.
 export const DEFAULT_GUIDING_ASSISTANT_CONFIG: GuidingAssistantConfig = {
-	minSamplingSeconds: DEFAULT_MIN_SAMPLING_SECONDS,
-	exposureSeconds: 1,
+	minSampling: DEFAULT_MIN_SAMPLING_SECONDS,
+	exposure: 1,
 	multiStar: true,
 	hasHighPrecisionEncoders: false,
 	suspectCalibration: false,
 	measureBacklash: false,
 	decPositiveDirection: 'north',
-	minSnr: 10,
+	minSNR: 10,
 	focusHfdThreshold: 4.5,
 	focusImageScaleThreshold: 1,
 	minMoveArcsecSanityLimit: 1.25,
 	fineScaleDecMultiplier: 1.28,
 	coarseScaleDecMultiplier: 1.65,
-	fineScaleThresholdArcsecPerPixel: 1.5,
+	fineScaleThreshold: 1.5,
 	raMinMoveMultiplier: 0.65,
 	fallbackDecMinMove: 0.2,
 	backlashNorthDirection: 'north',
-	backlashPulseMs: 100,
-	backlashTargetPx: 4,
-	backlashReturnTolerancePx: 0.5,
-	backlashMinMotionPx: 0.05,
+	backlashPulse: 100,
+	backlashTarget: 4,
+	backlashReturnTolerance: 0.5,
+	backlashMinMotion: 0.05,
 	backlashMaxPulsesPerDirection: 40,
 }
 
@@ -419,15 +419,15 @@ export class GuidingAssistant {
 		const notes: string[] = []
 
 		if (this.samples.length === 0) notes.push('no_samples')
-		if (this.samples.length > 0 && elapsedSeconds < this.config.minSamplingSeconds) notes.push('sampling_interval_short')
+		if (this.samples.length > 0 && elapsedSeconds < this.config.minSampling) notes.push('sampling_interval_short')
 		if (!hasPositiveScale(this.config)) notes.push('image_scale_unavailable')
 		if (this.config.declination === undefined) notes.push('declination_unavailable')
 
 		const result: GuidingAssistantResult = {
 			status: this.#status,
 			startTime: this.#startTime,
-			elapsedSeconds,
-			exposureSeconds: this.config.exposureSeconds,
+			elapsed: elapsedSeconds,
+			exposure: this.config.exposure,
 			sampleCount: this.samples.length,
 			meanSnr,
 			meanStarMass,
@@ -436,8 +436,8 @@ export class GuidingAssistant {
 			backlash: this.#backlash.result,
 			recommendedRaMinMove: minMove.ra,
 			recommendedDecMinMove: minMove.dec,
-			recommendedMinExposureSeconds: exposure.min,
-			recommendedMaxExposureSeconds: exposure.max,
+			recommendedMinExposure: exposure.min,
+			recommendedMaxExposure: exposure.max,
 			recommendations,
 			notes,
 		}
@@ -463,7 +463,7 @@ export class GuidingAssistant {
 			state.northDistancePx = Math.max(state.northDistancePx, signedMotion)
 			state.previousDec = sample.decPx
 
-			if (state.northDistancePx >= this.config.backlashTargetPx) {
+			if (state.northDistancePx >= this.config.backlashTarget) {
 				state.phase = 'south'
 				return this.#makeBacklashPulse(oppositeDEC(this.config.backlashNorthDirection))
 			}
@@ -488,12 +488,12 @@ export class GuidingAssistant {
 			state.southDistancePx += moved
 			state.previousDec = sample.decPx
 
-			if (moved <= this.config.backlashMinMotionPx) {
+			if (moved <= this.config.backlashMinMotion) {
 				state.noMotionMs += state.lastPulseDuration
 			}
 
 			const remaining = crossedOrigin ? 0 : Math.abs(currentOffset)
-			if (remaining <= this.config.backlashReturnTolerancePx) {
+			if (remaining <= this.config.backlashReturnTolerance) {
 				const backlashMs = state.noMotionMs
 				state.phase = 'completed'
 				this.#status = 'completed'
@@ -522,8 +522,8 @@ export class GuidingAssistant {
 		}
 
 		this.#backlash.lastPulseDirection = direction
-		this.#backlash.lastPulseDuration = this.config.backlashPulseMs
-		return { ra: NO_PULSE, dec: { direction, duration: this.config.backlashPulseMs } }
+		this.#backlash.lastPulseDuration = this.config.backlashPulse
+		return { ra: NO_PULSE, dec: { direction, duration: this.config.backlashPulse } }
 	}
 }
 
@@ -543,7 +543,7 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number)
 	return {
 		frameId: frame.frameId,
 		timestamp,
-		elapsedSeconds: Math.max(0, (timestamp - startTime) / 1000),
+		elapsed: Math.max(0, (timestamp - startTime) / 1000),
 		raPx,
 		decPx,
 		dx: command.diagnostics.dx,
@@ -592,19 +592,19 @@ function computeMotionMetrics(samples: readonly GuidingAssistantSample[], config
 		raPeakPeakArcsec: scaleValue(raPeakPeakPx, scale),
 		raMaxDriftRatePxPerSecond: maxRateRA,
 		raMaxDriftRateArcsecPerSecond: scaleValue(maxRateRA, scale),
-		driftLimitingExposureSeconds: maxRateRA > 0 ? raMinMovePx / maxRateRA : null,
-		polarAlignmentErrorArcmin,
+		driftLimitingExposure: maxRateRA > 0 ? raMinMovePx / maxRateRA : null,
+		polarAlignmentError: polarAlignmentErrorArcmin,
 		decCorrectedRmsPx,
 	}
 }
 
 function computeMinMove(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, seeingPx = bestDecSeeingEstimate(samples)) {
-	const multiplierDec = (config.imageScaleArcsecPerPixel ?? Number.POSITIVE_INFINITY) < config.fineScaleThresholdArcsecPerPixel ? config.fineScaleDecMultiplier : config.coarseScaleDecMultiplier
+	const multiplierDec = (config.imageScale ?? Number.POSITIVE_INFINITY) < config.fineScaleThreshold ? config.fineScaleDecMultiplier : config.coarseScaleDecMultiplier
 	const multiStarMeasured = config.multiStar && samples.length > 0 && samples.every((sample) => sample.modeUsed === 'multi-star')
 	const minMoveFloor = multiStarMeasured ? MULTISTAR_MIN_MOVE_FLOOR_PX : DEFAULT_MIN_MOVE_FLOOR_PX
 	const adjustedSeeing = multiStarMeasured ? seeingPx * 0.9 : seeingPx
 	const dec = roundUpToUnit(Math.max(adjustedSeeing * multiplierDec, minMoveFloor), MIN_MOVE_UNIT_PX)
-	const sane = !hasPositiveScale(config) || dec * config.imageScaleArcsecPerPixel! <= config.minMoveArcsecSanityLimit
+	const sane = !hasPositiveScale(config) || dec * config.imageScale! <= config.minMoveArcsecSanityLimit
 	const recDec = sane && Number.isFinite(dec) ? dec : config.fallbackDecMinMove
 	const raMultiplier = config.hasHighPrecisionEncoders ? 1 : config.raMinMoveMultiplier
 	const recRa = Math.max(minMoveFloor, roundUpToUnit(recDec * raMultiplier, MIN_MOVE_UNIT_PX))
@@ -629,30 +629,30 @@ function makeRecommendations(
 		recommendations.push({ kind: 'calibration', message: 'Consider re-doing your calibration', appliesTo: 'calibration', actionable: false })
 	}
 
-	if (samples.length > 0 && meanSnr < config.minSnr) {
+	if (samples.length > 0 && meanSnr < config.minSNR) {
 		recommendations.push({ kind: 'star', message: 'Consider using a brighter star for the test or increasing the exposure time', actionable: false })
 	}
 
-	if (hasPositiveScale(config) && config.imageScaleArcsecPerPixel! > config.focusImageScaleThreshold && meanHfd > config.focusHfdThreshold) {
+	if (hasPositiveScale(config) && config.imageScale! > config.focusImageScaleThreshold && meanHfd > config.focusHfdThreshold) {
 		recommendations.push({ kind: 'focus', message: 'Consider trying to improve focus on the guide camera', actionable: false })
 	}
 
-	if (metrics.polarAlignmentErrorArcmin !== null && metrics.polarAlignmentErrorArcmin > 5) {
-		const threshold = metrics.polarAlignmentErrorArcmin < 10 ? 5 : 10
-		recommendations.push({ kind: 'polar-alignment', message: `Polar alignment error > ${threshold} arc-min; ${threshold === 5 ? 'that could probably be improved.' : 'try using drift alignment to improve alignment.'}`, value: metrics.polarAlignmentErrorArcmin, unit: 'arc-min', actionable: false })
+	if (metrics.polarAlignmentError !== null && metrics.polarAlignmentError > 5) {
+		const threshold = metrics.polarAlignmentError < 10 ? 5 : 10
+		recommendations.push({ kind: 'polar-alignment', message: `Polar alignment error > ${threshold} arc-min; ${threshold === 5 ? 'that could probably be improved.' : 'try using drift alignment to improve alignment.'}`, value: metrics.polarAlignmentError, unit: 'arc-min', actionable: false })
 	}
 
 	recommendations.push({ kind: 'ra-min-move', message: `Try setting RA min-move to ${minMove.ra.toFixed(2)}`, appliesTo: 'raMinMove', value: minMove.ra, unit: 'px', actionable: true })
 	recommendations.push({ kind: 'dec-min-move', message: `Try setting Dec min-move to ${minMove.dec.toFixed(2)}`, appliesTo: 'decMinMove', value: minMove.dec, unit: 'px', actionable: true })
 
-	if (backlash !== null && backlash.phase === 'completed' && backlash.backlashMs !== null) {
-		if (backlash.backlashMs < SMALL_BACKLASH_MS) {
+	if (backlash !== null && backlash.phase === 'completed' && backlash.backlash !== null) {
+		if (backlash.backlash < SMALL_BACKLASH_MS) {
 			recommendations.push({ kind: 'backlash', message: 'Backlash is small, no compensation needed', actionable: false })
-		} else if (backlash.backlashMs <= MAX_BACKLASH_COMPENSATION_MS) {
-			recommendations.push({ kind: 'backlash', message: `Try starting with a Dec backlash compensation of ${backlash.recommendedCompensationMs} ms`, appliesTo: 'decBacklashCompensation', value: backlash.recommendedCompensationMs ?? undefined, unit: 'ms', actionable: backlash.recommendedCompensationMs !== null })
+		} else if (backlash.backlash <= MAX_BACKLASH_COMPENSATION_MS) {
+			recommendations.push({ kind: 'backlash', message: `Try starting with a Dec backlash compensation of ${backlash.recommendedCompensation} ms`, appliesTo: 'decBacklashCompensation', value: backlash.recommendedCompensation ?? undefined, unit: 'ms', actionable: backlash.recommendedCompensation !== null })
 		} else {
 			const direction = metrics.dec.driftRatePxPerMinute >= 0 ? config.decPositiveDirection : oppositeDEC(config.decPositiveDirection)
-			recommendations.push({ kind: 'dec-mode', message: `Backlash is >= ${Math.round(backlash.backlashMs)} ms; you may need to guide in only one Dec direction (currently ${direction})`, appliesTo: 'decGuideMode', actionable: true })
+			recommendations.push({ kind: 'dec-mode', message: `Backlash is >= ${Math.round(backlash.backlash)} ms; you may need to guide in only one Dec direction (currently ${direction})`, appliesTo: 'decGuideMode', actionable: true })
 		}
 	} else if (backlash !== null && backlash.phase === 'failed') {
 		recommendations.push({ kind: 'backlash', message: `DEC backlash test failed: ${backlash.message}`, actionable: false })
@@ -674,8 +674,8 @@ function exposureRange(config: GuidingAssistantConfig, metrics: GuidingAssistant
 function bestDecSeeingEstimate(samples: readonly GuidingAssistantSample[]) {
 	if (samples.length <= 1) return 0
 
-	const first = samples[0].elapsedSeconds
-	const last = samples.at(-1)!.elapsedSeconds
+	const first = samples[0].elapsed
+	const last = samples.at(-1)!.elapsed
 
 	if (last - first <= 1.2 * SEEING_WINDOW_SECONDS) {
 		return linearFit(samples, 'decPx').residualRms
@@ -686,8 +686,8 @@ function bestDecSeeingEstimate(samples: readonly GuidingAssistantSample[]) {
 
 	while (start <= last) {
 		const end = start + SEEING_WINDOW_SECONDS
-		const window = samples.filter((sample) => sample.elapsedSeconds >= start && sample.elapsedSeconds <= end)
-		const span = window.length > 1 ? window.at(-1)!.elapsedSeconds - window[0].elapsedSeconds : 0
+		const window = samples.filter((sample) => sample.elapsed >= start && sample.elapsed <= end)
+		const span = window.length > 1 ? window.at(-1)!.elapsed - window[0].elapsed : 0
 
 		if (window.length >= MIN_SEEING_WINDOW_SAMPLES && span >= MIN_SEEING_WINDOW_SECONDS) {
 			best = Math.min(best, linearFit(window, 'decPx').residualRms)
@@ -709,10 +709,10 @@ function linearFit(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'de
 	let sumTY = 0
 
 	for (const sample of samples) {
-		sumT += sample.elapsedSeconds
+		sumT += sample.elapsed
 		sumY += sample[key]
-		sumTT += sample.elapsedSeconds * sample.elapsedSeconds
-		sumTY += sample.elapsedSeconds * sample[key]
+		sumTT += sample.elapsed * sample.elapsed
+		sumTY += sample.elapsed * sample[key]
 	}
 
 	const count = samples.length
@@ -722,7 +722,7 @@ function linearFit(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'de
 	let residualSum = 0
 
 	for (const sample of samples) {
-		const residual = sample[key] - (slope * sample.elapsedSeconds + intercept)
+		const residual = sample[key] - (slope * sample.elapsed + intercept)
 		residualSum += residual * residual
 	}
 
@@ -764,7 +764,7 @@ function maxAdjacentRate(samples: readonly GuidingAssistantSample[], key: 'raPx'
 	let maxRate = 0
 
 	for (let i = 1; i < samples.length; i++) {
-		const dt = samples[i].elapsedSeconds - samples[i - 1].elapsedSeconds
+		const dt = samples[i].elapsed - samples[i - 1].elapsed
 		if (dt > 0) maxRate = Math.max(maxRate, Math.abs(samples[i][key] - samples[i - 1][key]) / dt)
 	}
 
@@ -776,13 +776,13 @@ function computePolarAlignmentError(decDriftPxPerMinute: number, config: Guiding
 
 	const cosDec = Math.cos(config.declination)
 	if (Math.abs(cosDec) < MIN_ABS_COS_DECLINATION) return null
-	return (POLAR_ALIGNMENT_DRIFT_FACTOR * Math.abs(decDriftPxPerMinute) * config.imageScaleArcsecPerPixel!) / Math.abs(cosDec)
+	return (POLAR_ALIGNMENT_DRIFT_FACTOR * Math.abs(decDriftPxPerMinute) * config.imageScale!) / Math.abs(cosDec)
 }
 
 function makeBacklashResult(phase: GuidingAssistantBacklashPhase, backlashMs: number | null, northDistancePx: number, southDistancePx: number, northPulses: number, southPulses: number, message: string): GuidingAssistantBacklashResult {
 	const compensable = backlashMs !== null && backlashMs >= SMALL_BACKLASH_MS && backlashMs <= MAX_BACKLASH_COMPENSATION_MS
 	const compensation = compensable ? Math.floor(backlashMs / 10) * 10 : null
-	return { phase, backlashMs, recommendedCompensationMs: compensation, northDistancePx, southDistancePx, northPulses, southPulses, message }
+	return { phase, backlash: backlashMs, recommendedCompensation: compensation, northDistance: northDistancePx, southDistance: southDistancePx, northPulses, southPulses, message }
 }
 
 // Converts the active backlash state into a terminal result while keeping partial measurements.
@@ -809,7 +809,7 @@ function makeBacklashState(): BacklashState {
 // accepted sample, so it intentionally freezes during the backlash phase (which records no
 // passive samples) and ignores `timestamp`; `timestamp` is only used before the first sample.
 function elapsedSecondsOf(samples: readonly GuidingAssistantSample[], timestamp: number, startTime: number) {
-	if (samples.length > 0) return Math.max(0, samples.at(-1)!.elapsedSeconds)
+	if (samples.length > 0) return Math.max(0, samples.at(-1)!.elapsed)
 	if (startTime <= 0) return 0
 	return Math.max(0, (timestamp - startTime) / 1000)
 }
@@ -829,11 +829,11 @@ function scaleValue(value: number, scale: number | null) {
 }
 
 function scaleOrNull(config: GuidingAssistantConfig) {
-	return hasPositiveScale(config) ? config.imageScaleArcsecPerPixel! : null
+	return hasPositiveScale(config) ? config.imageScale! : null
 }
 
 function hasPositiveScale(config: GuidingAssistantConfig) {
-	return config.imageScaleArcsecPerPixel !== undefined && Number.isFinite(config.imageScaleArcsecPerPixel) && config.imageScaleArcsecPerPixel > 0
+	return config.imageScale !== undefined && Number.isFinite(config.imageScale) && config.imageScale > 0
 }
 
 function roundUpToUnit(value: number, unit: number) {
