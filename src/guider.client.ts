@@ -289,7 +289,7 @@ export class GuiderClient {
 
 	// Applies a random image-space dither and tracks local settle status.
 	dither(amount: number, raOnly: boolean = false, settle?: Partial<PHD2Settle>) {
-		if (this.#calibration === undefined || this.#guider.currentState.state !== 'guiding' || amount <= 0 || !Number.isFinite(amount)) return false
+		if (this.#guidingAssistant !== undefined || this.#calibration === undefined || this.#guider.currentState.state !== 'guiding' || amount <= 0 || !Number.isFinite(amount)) return false
 
 		const { referenceX, referenceY } = this.#guider.currentState
 		const [dRa, dDec] = this.#ditherMode === 'spiral' ? nextSpiralDither(this.#spiralDither, amount, raOnly) : makeRandomDither(amount, raOnly)
