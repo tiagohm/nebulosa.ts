@@ -501,6 +501,13 @@ describe('mode transitions', () => {
 		expect(eventsOf(harness.events, 'SettleBegin')).toHaveLength(1)
 	})
 
+	test('guiding assistant requires the internal guider to be locked', () => {
+		connect(harness)
+		expect(harness.client.guide(false)).toBeTrue()
+		expect(harness.client.startGuidingAssistant()).toBeFalse()
+		expect(eventsOf(harness.events, 'GuidingAssistantStarted')).toHaveLength(0)
+	})
+
 	test('clearCalibration leaves an uncalibrated client and emits configuration changes', () => {
 		connect(harness)
 		harness.client.clearCalibration()

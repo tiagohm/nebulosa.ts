@@ -376,7 +376,7 @@ export class GuiderClient {
 	startGuidingAssistant(config: Partial<GuidingAssistantConfig> = {}) {
 		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
 
-		if (this.#guidingAssistant !== undefined || (appState !== 'Guiding' && appState !== 'LostLock')) return false
+		if (this.#guidingAssistant !== undefined || this.#guider.currentState.state !== 'guiding' || (appState !== 'Guiding' && appState !== 'LostLock')) return false
 
 		const imageScale = this.getPixelScale()
 		const assistant = new GuidingAssistant({
