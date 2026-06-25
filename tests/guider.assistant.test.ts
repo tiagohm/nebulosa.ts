@@ -144,6 +144,19 @@ test('applies the single-star min-move floor to DEC recommendations', () => {
 	expect(result.recommendedDecMinMove).toBeCloseTo(0.1, 8)
 })
 
+test('uses the single-star min-move floor when multi-star guiding falls back', () => {
+	const result = run(
+		[
+			[0, 0, 0],
+			[1000, 0, 0],
+		],
+		{ multiStar: true },
+	)
+
+	expect(result.recommendedRaMinMove).toBeCloseTo(0.1, 8)
+	expect(result.recommendedDecMinMove).toBeCloseTo(0.1, 8)
+})
+
 test('uses the high-precision exposure ceiling when RA drift is absent', () => {
 	const result = run(
 		[
@@ -168,7 +181,7 @@ test('bases drift-limited exposure on RA min-move instead of residual RMS', () =
 
 	expect(result.motion.ra.rmsPx).toBeCloseTo(0, 8)
 	expect(result.motion.raMaxDriftRatePxPerSecond).toBeCloseTo(0.01, 8)
-	expect(result.recommendedRaMinMove).toBeCloseTo(0.05, 8)
+	expect(result.recommendedRaMinMove).toBeCloseTo(0.1, 8)
 	expect(result.recommendedMinExposureSeconds).toBe(2)
 	expect(result.recommendedMaxExposureSeconds).toBe(4)
 })
@@ -181,10 +194,10 @@ test('caps exposure recommendations at the RA drift limit', () => {
 	])
 
 	expect(result.motion.raMaxDriftRatePxPerSecond).toBeCloseTo(0.05, 8)
-	expect(result.recommendedRaMinMove).toBeCloseTo(0.05, 8)
-	expect(result.motion.driftLimitingExposureSeconds).toBeCloseTo(1, 8)
-	expect(result.recommendedMinExposureSeconds).toBe(1)
-	expect(result.recommendedMaxExposureSeconds).toBe(1)
+	expect(result.recommendedRaMinMove).toBeCloseTo(0.1, 8)
+	expect(result.motion.driftLimitingExposureSeconds).toBeCloseTo(2, 8)
+	expect(result.recommendedMinExposureSeconds).toBe(2)
+	expect(result.recommendedMaxExposureSeconds).toBe(2)
 })
 
 test('skips non-guiding and bad frames before recording samples', () => {
@@ -566,8 +579,8 @@ test('reports drift-limited exposure from RA min-move and clears it without drif
 		[2000, 0.02, 0],
 		[3000, 0.03, 0],
 	])
-	// recommended RA min-move 0.05 px / max adjacent RA rate 0.01 px/s = 5 s.
-	expect(drifting.motion.driftLimitingExposureSeconds).toBeCloseTo(5, 6)
+	// recommended RA min-move 0.10 px / max adjacent RA rate 0.01 px/s = 10 s.
+	expect(drifting.motion.driftLimitingExposureSeconds).toBeCloseTo(10, 6)
 
 	const calm = run([
 		[0, 0, 0],
@@ -593,7 +606,7 @@ test('estimates seeing from the quietest window on long runs', () => {
 	expect(result.motion.decCorrectedRmsPx).toBeCloseTo(0, 6)
 	// ...while the whole-run residual still carries the noisy tail.
 	expect(result.motion.dec.rmsPx).toBeGreaterThan(0.1)
-	expect(result.recommendedDecMinMove).toBeCloseTo(0.05, 8)
+	expect(result.recommendedDecMinMove).toBeCloseTo(0.1, 8)
 })
 
 test('falls back to a safe DEC min-move when seeing fails the sanity check', () => {

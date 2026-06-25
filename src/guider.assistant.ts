@@ -1,4 +1,4 @@
-import { type GuideCommand, type GuideDirectionDEC, type GuideFrame, NO_PULSE, oppositeDEC } from './guider'
+import { type GuideCommand, type GuideDirectionDEC, type GuideFrame, type GuidingMode, NO_PULSE, oppositeDEC } from './guider'
 import type { CalibrationPulseCommand } from './guider.calibrator'
 
 // Minimum sampling interval used by PHD2 before final recommendations are trusted, in seconds.
@@ -118,6 +118,8 @@ export interface GuidingAssistantSample {
 	readonly hfd: number
 	// Whether the guider considered this a bad frame.
 	readonly badFrame: boolean
+	// Actual guide mode used by the guider for this accepted sample.
+	readonly modeUsed: GuidingMode | null
 }
 
 // RMS and peak motion statistics for one axis.
@@ -547,6 +549,7 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number)
 		starMass: finiteOrZero(star?.flux),
 		hfd: finiteOrZero(star?.hfd),
 		badFrame: command.diagnostics.badFrame,
+		modeUsed: command.diagnostics.modeUsed,
 	}
 }
 
@@ -594,8 +597,9 @@ function computeMotionMetrics(samples: readonly GuidingAssistantSample[], config
 
 function computeMinMove(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, seeingPx = bestDecSeeingEstimate(samples)) {
 	const multiplierDec = (config.imageScaleArcsecPerPixel ?? Number.POSITIVE_INFINITY) < config.fineScaleThresholdArcsecPerPixel ? config.fineScaleDecMultiplier : config.coarseScaleDecMultiplier
-	const minMoveFloor = config.multiStar ? MULTISTAR_MIN_MOVE_FLOOR_PX : DEFAULT_MIN_MOVE_FLOOR_PX
-	const adjustedSeeing = config.multiStar ? seeingPx * 0.9 : seeingPx
+	const multiStarMeasured = config.multiStar && samples.length > 0 && samples.every((sample) => sample.modeUsed === 'multi-star')
+	const minMoveFloor = multiStarMeasured ? MULTISTAR_MIN_MOVE_FLOOR_PX : DEFAULT_MIN_MOVE_FLOOR_PX
+	const adjustedSeeing = multiStarMeasured ? seeingPx * 0.9 : seeingPx
 	const dec = roundUpToUnit(Math.max(adjustedSeeing * multiplierDec, minMoveFloor), MIN_MOVE_UNIT_PX)
 	const sane = !hasPositiveScale(config) || dec * config.imageScaleArcsecPerPixel! <= config.minMoveArcsecSanityLimit
 	const recDec = sane && Number.isFinite(dec) ? dec : config.fallbackDecMinMove
