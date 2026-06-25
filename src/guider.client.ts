@@ -78,7 +78,7 @@ export class GuiderClient {
 	#guidingAssistant?: GuidingAssistant
 	#guidingAssistantPendingPulse?: CalibrationPulseCommand
 	#guidingAssistantResult?: GuidingAssistantResult
-	#guidingAssistantSavedGuideOutputEnabled = true
+	#guidingAssistantSuppressingGuideOutput = false
 	#paused = false
 	#fullPause = true
 	#settling = false
@@ -389,8 +389,7 @@ export class GuiderClient {
 		})
 
 		this.#guidingAssistant = assistant
-		this.#guidingAssistantSavedGuideOutputEnabled = this.#guideOutputEnabled
-		this.setGuideOutputEnabled(false)
+		this.#guidingAssistantSuppressingGuideOutput = true
 		this.#guidingAssistantResult = assistant.start()
 		this.emitEvent('GuidingAssistantStarted', { Result: this.#guidingAssistantResult })
 
@@ -404,7 +403,7 @@ export class GuiderClient {
 
 		if (assistant.measuringBacklash) return this.#finishGuidingAssistant(false, 'backlash test aborted', true)
 
-		if (assistant.canMeasureBacklash && this.#guidingAssistantSavedGuideOutputEnabled && !this.#paused) {
+		if (assistant.canMeasureBacklash && this.#guideOutputEnabled && !this.#paused) {
 			const step = assistant.startBacklashTest()
 			this.#guidingAssistantResult = step.result
 			this.#guidingAssistantPendingPulse = step.pulse
@@ -515,7 +514,7 @@ export class GuiderClient {
 
 	// Sends a direct single-axis pulse through the active guide output.
 	guidePulse(amount: number, direction: PHD2GuideDirection) {
-		if (this.#guideOutput === undefined || !this.#guideOutputEnabled || amount <= 0 || !Number.isFinite(amount)) return false
+		if (this.#guideOutput === undefined || !this.#guideOutputEnabled || this.#guidingAssistantSuppressingGuideOutput || amount <= 0 || !Number.isFinite(amount)) return false
 
 		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, Math.max(1, Math.round(amount)))
 
@@ -843,7 +842,7 @@ export class GuiderClient {
 
 	// Sends one axis pulse if guide output is enabled and returns the applied delay.
 	#pulseAxis(direction?: AxisPulse['direction'], duration?: number, force: boolean = false) {
-		if (this.#guideOutput === undefined || this.#paused || (!force && !this.#guideOutputEnabled) || direction === undefined || direction === null || duration === undefined || duration <= 0 || !Number.isFinite(duration)) return 0
+		if (this.#guideOutput === undefined || this.#paused || (!force && (!this.#guideOutputEnabled || this.#guidingAssistantSuppressingGuideOutput)) || direction === undefined || direction === null || duration === undefined || duration <= 0 || !Number.isFinite(duration)) return 0
 
 		const pulseDuration = Math.max(1, Math.round(duration))
 		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, pulseDuration)
@@ -868,7 +867,7 @@ export class GuiderClient {
 			this.emitEvent('GuidingAssistantUpdated', { Result: this.#guidingAssistantResult })
 			if (!alignment.aligned) return 0
 			this.#guidingAssistantPendingPulse = undefined
-			return this.#pulseCalibration(pulse.ra.direction, pulse.ra.duration, pulse.dec.direction, pulse.dec.duration, this.#guidingAssistantSavedGuideOutputEnabled)
+			return this.#pulseCalibration(pulse.ra.direction, pulse.ra.duration, pulse.dec.direction, pulse.dec.duration, this.#guideOutputEnabled)
 		}
 
 		const step = assistant.addSample(frame, command)
@@ -876,7 +875,7 @@ export class GuiderClient {
 		this.emitEvent('GuidingAssistantUpdated', { Result: step.result })
 
 		if (step.pulse !== undefined) {
-			return this.#pulseCalibration(step.pulse.ra.direction, step.pulse.ra.duration, step.pulse.dec.direction, step.pulse.dec.duration, this.#guidingAssistantSavedGuideOutputEnabled)
+			return this.#pulseCalibration(step.pulse.ra.direction, step.pulse.ra.duration, step.pulse.dec.direction, step.pulse.dec.duration, this.#guideOutputEnabled)
 		}
 
 		if (step.result.status === 'completed') {
@@ -897,8 +896,8 @@ export class GuiderClient {
 		this.#guidingAssistant = undefined
 		this.#guidingAssistantPendingPulse = undefined
 		this.#guidingAssistantResult = result
+		this.#guidingAssistantSuppressingGuideOutput = false
 		if (result.backlash !== null) this.#guider = this.#makeGuider(this.#calibration)
-		this.setGuideOutputEnabled(this.#guidingAssistantSavedGuideOutputEnabled)
 		this.emitEvent(completed ? 'GuidingAssistantCompleted' : 'GuidingAssistantFailed', { Result: result })
 
 		return result
@@ -1116,7 +1115,7 @@ export class GuiderClient {
 		this.#guidingAssistant = undefined
 		this.#guidingAssistantPendingPulse = undefined
 		this.#guidingAssistantResult = guidingAssistantResult
-		this.#guidingAssistantSavedGuideOutputEnabled = true
+		this.#guidingAssistantSuppressingGuideOutput = false
 		this.#declinationGuideMode = 'Auto'
 		this.#exposure = DEFAULT_GUIDER_EXPOSURE
 		this.#settling = false
