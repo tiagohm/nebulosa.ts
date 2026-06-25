@@ -515,7 +515,7 @@ export class GuiderClient {
 
 	// Sends a direct single-axis pulse through the active guide output.
 	guidePulse(amount: number, direction: PHD2GuideDirection) {
-		if (this.#guideOutput === undefined || !this.#guideOutputEnabled || this.#guidingAssistantSuppressingGuideOutput || amount <= 0 || !Number.isFinite(amount)) return false
+		if (this.#guideOutput === undefined || !this.#guideOutputActive || amount <= 0 || !Number.isFinite(amount)) return false
 
 		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, Math.max(1, Math.round(amount)))
 
@@ -843,7 +843,7 @@ export class GuiderClient {
 
 	// Sends one axis pulse if guide output is enabled and returns the applied delay.
 	#pulseAxis(direction?: AxisPulse['direction'], duration?: number, force: boolean = false) {
-		if (this.#guideOutput === undefined || this.#paused || (!force && (!this.#guideOutputEnabled || this.#guidingAssistantSuppressingGuideOutput)) || direction === undefined || direction === null || duration === undefined || duration <= 0 || !Number.isFinite(duration)) return 0
+		if (this.#guideOutput === undefined || this.#paused || (!force && !this.#guideOutputActive) || direction === undefined || direction === null || duration === undefined || duration <= 0 || !Number.isFinite(duration)) return 0
 
 		const pulseDuration = Math.max(1, Math.round(duration))
 		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, pulseDuration)
@@ -907,6 +907,11 @@ export class GuiderClient {
 	// Fails any active guiding assistant before public mode switches that own guide-output state.
 	#abortGuidingAssistantForTransition(message: string) {
 		if (this.#guidingAssistant !== undefined) this.#finishGuidingAssistant(false, message, this.#guidingAssistant.measuringBacklash)
+	}
+
+	// Returns true when ordinary guide pulses are currently allowed to reach the mount.
+	get #guideOutputActive() {
+		return this.#guideOutputEnabled && !this.#guidingAssistantSuppressingGuideOutput
 	}
 
 	// Updates settle state from current guide error and elapsed settle timing.
@@ -1229,8 +1234,9 @@ export class GuiderClient {
 		const star = frame.stars[0]
 		const dx = diagnostics.dx ?? 0
 		const dy = diagnostics.dy ?? 0
-		const raDuration = this.#paused || !this.#guideOutputEnabled ? 0 : Math.round(ra.duration)
-		const decDuration = this.#paused || !this.#guideOutputEnabled ? 0 : Math.round(dec.duration)
+		const outputActive = !this.#paused && this.#guideOutputActive
+		const raDuration = outputActive ? Math.round(ra.duration) : 0
+		const decDuration = outputActive ? Math.round(dec.duration) : 0
 
 		this.emitEvent('GuideStep', {
 			Frame: frame.frameId ?? 0,
@@ -1241,8 +1247,8 @@ export class GuiderClient {
 			dy,
 			RADistanceRaw: diagnostics.axisErrorRA ?? 0,
 			DECDistanceRaw: diagnostics.axisErrorDEC ?? 0,
-			RADistanceGuide: this.#paused || !this.#guideOutputEnabled ? 0 : (diagnostics.filteredRA ?? 0),
-			DECDistanceGuide: this.#paused || !this.#guideOutputEnabled ? 0 : (diagnostics.filteredDEC ?? 0),
+			RADistanceGuide: outputActive ? (diagnostics.filteredRA ?? 0) : 0,
+			DECDistanceGuide: outputActive ? (diagnostics.filteredDEC ?? 0) : 0,
 			RADuration: raDuration,
 			// PHD2 directions are mandatory, so no-pulse frames fall back to west/north defaults.
 			RADirection: toPHD2GuideDirection(ra.direction, 'West'),
