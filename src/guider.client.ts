@@ -687,6 +687,7 @@ export class GuiderClient {
 			this.#fullPause = full || this.#resumeState === 'Calibrating'
 			this.#lockShiftTimestamp = 0
 			this.emitEvent('Paused')
+			if (this.#guidingAssistant?.measuringBacklash === true) this.#finishGuidingAssistant(false, 'backlash test paused', true)
 			this.#setAppState('Paused')
 			if (this.#fullPause && this.#camera !== undefined) this.cameraManager.stopExposure(this.#camera)
 			return true
