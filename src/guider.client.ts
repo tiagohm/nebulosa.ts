@@ -570,6 +570,7 @@ export class GuiderClient {
 	// Enables or disables guide pulses while keeping frame processing active.
 	setGuideOutputEnabled(enabled: boolean) {
 		this.#guideOutputEnabled = enabled
+		if (!enabled && this.#guidingAssistant?.measuringBacklash === true) this.#finishGuidingAssistant(false, 'guide output disabled', true)
 		this.emitEvent('GuideParamChange', { Name: 'GuideOutputEnabled', Value: enabled })
 		this.emitEvent('ConfigurationChange')
 	}
