@@ -305,6 +305,26 @@ test('keeps DEC backlash running until the south return is within tolerance', ()
 	expect(step.pulse?.dec.direction).toBe('south')
 })
 
+test('waits for a valid frame before aligning the first backlash pulse', () => {
+	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1.2, backlashReturnTolerancePx: 0.2, backlashPulseMs: 100, backlashMaxPulsesPerDirection: 8 })
+	assistant.start(0)
+	assistant.addSample(frame(0, 1), command(0, 0))
+
+	let step = assistant.startBacklashTest()
+	expect(step.pulse?.dec.direction).toBe('north')
+
+	const badAlignment = assistant.alignBacklashOrigin(frame(1000, 2), command(0, 3, { badFrame: true }))
+	expect(badAlignment.aligned).toBeFalse()
+	expect(badAlignment.result.status).toBe('backlash')
+
+	const goodAlignment = assistant.alignBacklashOrigin(frame(2000, 3), command(0, 0.4))
+	expect(goodAlignment.aligned).toBeTrue()
+
+	step = assistant.addSample(frame(3000, 4), command(0, 1.4))
+	expect(step.pulse?.dec.direction).toBe('north')
+	expect(step.result.status).toBe('backlash')
+})
+
 test('aligns the first backlash pulse to the current frame boundary', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: true, backlashTargetPx: 1.2, backlashReturnTolerancePx: 0.2, backlashPulseMs: 100, backlashMaxPulsesPerDirection: 8 })
 	assistant.start(0)
@@ -313,7 +333,9 @@ test('aligns the first backlash pulse to the current frame boundary', () => {
 	let step = assistant.startBacklashTest()
 	expect(step.pulse?.dec.direction).toBe('north')
 
-	assistant.alignBacklashOrigin(frame(1000, 2), command(0, 0.4))
+	const alignment = assistant.alignBacklashOrigin(frame(1000, 2), command(0, 0.4))
+	expect(alignment.aligned).toBeTrue()
+
 	step = assistant.addSample(frame(2000, 3), command(0, 1.4))
 
 	expect(step.pulse?.dec.direction).toBe('north')

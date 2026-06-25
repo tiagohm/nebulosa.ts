@@ -354,17 +354,19 @@ export class GuidingAssistant {
 
 	// Moves a just-started backlash origin to the next frame boundary before the first pulse is applied.
 	alignBacklashOrigin(frame: GuideFrame, command: GuideCommand) {
+		const timestamp = frame.timestamp ?? Date.now()
+
 		if (this.#status !== 'backlash' || this.#backlash.phase !== 'north' || this.#backlash.northPulses !== 1 || this.#backlash.southPulses !== 0 || this.#backlash.northDistancePx !== 0) {
-			return this.result(frame.timestamp ?? Date.now())
+			return { result: this.result(timestamp), aligned: false }
 		}
 
 		const sample = makeSample(frame, command, this.#startTime)
-		if (sample === null) return this.result(frame.timestamp ?? Date.now())
+		if (sample === null) return { result: this.result(timestamp), aligned: false }
 
 		this.#backlash.originDec = sample.decPx
 		this.#backlash.previousDec = sample.decPx
 
-		return this.result(frame.timestamp ?? Date.now())
+		return { result: this.result(timestamp), aligned: true }
 	}
 
 	// Completes the run and freezes the final recommendation snapshot.

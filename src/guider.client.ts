@@ -863,9 +863,11 @@ export class GuiderClient {
 
 		if (this.#guidingAssistantPendingPulse !== undefined) {
 			const pulse = this.#guidingAssistantPendingPulse
-			this.#guidingAssistantPendingPulse = undefined
-			this.#guidingAssistantResult = assistant.alignBacklashOrigin(frame, command)
+			const alignment = assistant.alignBacklashOrigin(frame, command)
+			this.#guidingAssistantResult = alignment.result
 			this.emitEvent('GuidingAssistantUpdated', { Result: this.#guidingAssistantResult })
+			if (!alignment.aligned) return 0
+			this.#guidingAssistantPendingPulse = undefined
 			return this.#pulseCalibration(pulse.ra.direction, pulse.ra.duration, pulse.dec.direction, pulse.dec.duration, this.#guidingAssistantSavedGuideOutputEnabled)
 		}
 
