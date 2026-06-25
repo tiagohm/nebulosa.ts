@@ -200,6 +200,21 @@ test('caps exposure recommendations at the RA drift limit', () => {
 	expect(result.recommendedMaxExposureSeconds).toBe(2)
 })
 
+test('rounds drift-limited exposure down to the supported cadence step', () => {
+	const result = run([
+		[0, 0, 0],
+		[1000, 0.047, 0],
+		[2000, 0.094, 0],
+	])
+
+	expect(result.recommendedRaMinMove).toBeCloseTo(0.1, 8)
+	expect(result.motion.raMaxDriftRatePxPerSecond).toBeCloseTo(0.047, 8)
+	expect(result.motion.driftLimitingExposureSeconds).toBeCloseTo(0.1 / 0.047, 8)
+	expect(result.recommendedMaxExposureSeconds).toBeLessThanOrEqual(result.motion.driftLimitingExposureSeconds!)
+	expect(result.recommendedMinExposureSeconds).toBe(2)
+	expect(result.recommendedMaxExposureSeconds).toBe(2)
+})
+
 test('skips non-guiding and bad frames before recording samples', () => {
 	const assistant = new GuidingAssistant({ measureBacklash: true })
 	assistant.start(0)

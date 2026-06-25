@@ -664,7 +664,7 @@ function makeRecommendations(
 function exposureRange(config: GuidingAssistantConfig, metrics: GuidingAssistantMotionMetrics, raMinMovePx: number) {
 	const idealMin = config.hasHighPrecisionEncoders ? 4 : 2
 	const idealMax = config.hasHighPrecisionEncoders ? 8 : 4
-	const driftExposure = metrics.raMaxDriftRatePxPerSecond > 0 ? Math.ceil(raMinMovePx / metrics.raMaxDriftRatePxPerSecond / 0.5) * 0.5 : idealMax
+	const driftExposure = metrics.raMaxDriftRatePxPerSecond > 0 ? Math.max(1, Math.floor(raMinMovePx / metrics.raMaxDriftRatePxPerSecond / 0.5) * 0.5) : idealMax
 	const min = Math.max(1, Math.min(driftExposure, idealMin))
 	const max = Math.max(min, Math.min(driftExposure, idealMax))
 
