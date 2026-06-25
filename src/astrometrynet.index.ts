@@ -17,7 +17,7 @@ import { AMIN2RAD, DEG2RAD, PI, PIOVERTWO, TAU } from './constants'
 import type { EquatorialCoordinate } from './coordinate'
 import { eraS2c } from './erfa'
 import { clamp } from './math'
-import type { MutVec3, Vec3 } from './vec3'
+import type { MutVec3 } from './vec3'
 
 // Request describing the imaging system and the desired quad-diameter window.
 export interface AstrometryNetIndexRequest {
@@ -177,9 +177,19 @@ const FOUR_THIRDS = 4 / 3
 // Quarter turn in radians, the angular width of a HEALPix base-pixel column in longitude.
 const PIOVERFOUR = PI / 4
 
-// Convergence tolerance (in dx/dy units) for the closed-tile edge distance binary search.
-// Matches Astrometry.net's `healpix_distance_to_xyz` EPS.
-const DISTANCE_SEARCH_EPSILON = 1e-16
+// Number of coarse samples per tile edge used to bracket the closest boundary point. Each edge
+// spans at most ~0.9 rad at resolution 2, so 24 segments bound the bracket to ~0.04 rad before
+// refinement; this is the conservative scan that prevents discarding the closer edge.
+const EDGE_SCAN_SAMPLES = 24
+
+// Maximum golden-section refinement iterations once the closest edge segment is bracketed.
+const EDGE_REFINE_ITERATIONS = 80
+
+// Parameter-space tolerance (in dx/dy units) at which the edge refinement stops.
+const EDGE_REFINE_TOLERANCE = 1e-13
+
+// Reciprocal golden ratio, used by the golden-section edge minimizer.
+const INVERSE_GOLDEN_RATIO = (Math.sqrt(5) - 1) / 2
 
 // Inclusive boundary tolerance for disc/tile intersection, in radians. Small enough to only
 // absorb floating-point rounding near exact boundary contact.
@@ -199,12 +209,6 @@ const DEFAULT_MAX_QUAD_FRACTION = 1
 
 // Default conservative safety margin added to the search disc radius, in radians (0.25 degrees).
 const DEFAULT_SAFETY_MARGIN = 0.25 * DEG2RAD
-
-// Per-corner dx offsets for a tile's four corners, ordered as Astrometry.net's i/2 (i in 0..3).
-const CORNER_DX = [0, 0, 1, 1] as const
-
-// Per-corner dy offsets for a tile's four corners, ordered as Astrometry.net's i%2 (i in 0..3).
-const CORNER_DY = [0, 1, 0, 1] as const
 
 // Immutable manifest of every supported scale, with quad-diameter limits converted from the
 // documented arcminute reference values to radians once, here at module initialization.
@@ -246,16 +250,6 @@ function square(value: number) {
 // Normalizes a HEALPix base-pixel column offset into [0, 3].
 function normalizeColumnOffset(offset: number) {
 	return ((offset % 4) + 4) % 4
-}
-
-// Computes the angle, in radians, between a unit vector given as scalars and a unit vector `b`.
-// Uses the stable atan2(|a x b|, a . b) form instead of acos to preserve small separations.
-function unitAngle(ax: number, ay: number, az: number, b: Vec3): Angle {
-	const cx = ay * b[2] - az * b[1]
-	const cy = az * b[0] - ax * b[2]
-	const cz = ax * b[1] - ay * b[0]
-	const dot = ax * b[0] + ay * b[1] + az * b[2]
-	return Math.atan2(Math.hypot(cx, cy, cz), dot)
 }
 
 // Converts a unit direction (vx, vy, vz) to an Astrometry.net HEALPix XY tile id at resolution
@@ -414,102 +408,99 @@ function tileToUnitVector(tileId: number, nside: number, dx: number, dy: number,
 	return out
 }
 
-// Reusable scratch unit vector for the closest point on a tile during distance evaluation.
-const DISTANCE_BEST_SCRATCH: MutVec3 = [0, 0, 0]
+// Reusable scratch unit vector for an edge-point probe during distance evaluation.
+const DISTANCE_EDGE_SCRATCH: MutVec3 = [0, 0, 0]
 
-// Reusable scratch unit vector for the midpoint probe during distance evaluation.
-const DISTANCE_MID_SCRATCH: MutVec3 = [0, 0, 0]
+// Maps an edge index and a parameter t in [0, 1] to a tile sub-tile offset (dx, dy) and returns
+// the squared chord distance from the unit direction (vx, vy, vz) to that boundary point. The four
+// edges of a tile are dx=0, dx=1, dy=0, and dy=1, each swept by t.
+function edgePointDistanceSq(tileId: number, nside: number, edge: number, t: number, vx: number, vy: number, vz: number): number {
+	let dx: number
+	let dy: number
+	if (edge === 0) {
+		dx = 0
+		dy = t
+	} else if (edge === 1) {
+		dx = 1
+		dy = t
+	} else if (edge === 2) {
+		dx = t
+		dy = 0
+	} else {
+		dx = t
+		dy = 1
+	}
 
-// Reusable squared chord distances to the four tile corners.
-const CORNER_DISTANCES = [0, 0, 0, 0]
+	tileToUnitVector(tileId, nside, dx, dy, DISTANCE_EDGE_SCRATCH)
+	const ddx = vx - DISTANCE_EDGE_SCRATCH[0]
+	const ddy = vy - DISTANCE_EDGE_SCRATCH[1]
+	const ddz = vz - DISTANCE_EDGE_SCRATCH[2]
+	return ddx * ddx + ddy * ddy + ddz * ddz
+}
 
-// Computes the minimum spherical angular distance, in radians, from a unit direction to the
-// closed HEALPix tile. Clean-room port of Astrometry.net `healpix_distance_to_xyz`: it finds the
-// two nearest corners and binary-searches the shared edge for the closest boundary point.
-// Returns 0 when the point lies inside the tile.
+// Minimizes the squared chord distance from the unit direction to one closed tile edge.
+//
+// A coarse scan first brackets the global minimum so the closer side of the edge is never
+// discarded; golden-section refinement then converges inside that bracket. The returned value is
+// the minimum over the scan and the refinement, so it is always a conservative (never larger than
+// the coarse best) estimate of the true edge minimum. The per-point distance to a single HEALPix
+// edge has one closest approach, so the bracket around the coarse minimizer contains the true min.
+function edgeMinimumDistanceSq(tileId: number, nside: number, edge: number, vx: number, vy: number, vz: number): number {
+	let bestT = 0
+	let bestSq = Number.POSITIVE_INFINITY
+
+	for (let i = 0; i <= EDGE_SCAN_SAMPLES; i++) {
+		const t = i / EDGE_SCAN_SAMPLES
+		const sq = edgePointDistanceSq(tileId, nside, edge, t, vx, vy, vz)
+		if (sq < bestSq) {
+			bestSq = sq
+			bestT = t
+		}
+	}
+
+	// Refine within one scan step on each side of the coarse minimizer.
+	const step = 1 / EDGE_SCAN_SAMPLES
+	let lo = Math.max(0, bestT - step)
+	let hi = Math.min(1, bestT + step)
+	let c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
+	let d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
+	let fc = edgePointDistanceSq(tileId, nside, edge, c, vx, vy, vz)
+	let fd = edgePointDistanceSq(tileId, nside, edge, d, vx, vy, vz)
+
+	for (let iteration = 0; iteration < EDGE_REFINE_ITERATIONS && hi - lo > EDGE_REFINE_TOLERANCE; iteration++) {
+		if (fc < fd) {
+			hi = d
+			d = c
+			fd = fc
+			c = hi - INVERSE_GOLDEN_RATIO * (hi - lo)
+			fc = edgePointDistanceSq(tileId, nside, edge, c, vx, vy, vz)
+		} else {
+			lo = c
+			c = d
+			fc = fd
+			d = lo + INVERSE_GOLDEN_RATIO * (hi - lo)
+			fd = edgePointDistanceSq(tileId, nside, edge, d, vx, vy, vz)
+		}
+	}
+
+	return Math.min(bestSq, fc, fd)
+}
+
+// Computes the minimum spherical angular distance, in radians, from a unit direction to the closed
+// HEALPix tile. Minimizes the distance over all four tile edges (corners are their endpoints) and
+// returns 0 when the point lies inside the tile. Unlike Astrometry.net's edge bisection, this never
+// discards the closer edge, so it is conservative for disc/tile intersection near tile boundaries.
 function tileDistanceFromUnitVector(tileId: number, nside: number, vx: number, vy: number, vz: number): Angle {
 	if (unitVectorToTile(vx, vy, vz, nside) === tileId) return 0
 
-	for (let i = 0; i < 4; i++) {
-		tileToUnitVector(tileId, nside, CORNER_DX[i], CORNER_DY[i], DISTANCE_MID_SCRATCH)
-		const ddx = vx - DISTANCE_MID_SCRATCH[0]
-		const ddy = vy - DISTANCE_MID_SCRATCH[1]
-		const ddz = vz - DISTANCE_MID_SCRATCH[2]
-		CORNER_DISTANCES[i] = ddx * ddx + ddy * ddy + ddz * ddz
+	let bestSq = Number.POSITIVE_INFINITY
+	for (let edge = 0; edge < 4; edge++) {
+		const sq = edgeMinimumDistanceSq(tileId, nside, edge, vx, vy, vz)
+		if (sq < bestSq) bestSq = sq
 	}
 
-	// Index of the nearest corner and the second nearest corner (stable on ties).
-	let nearest = 0
-	for (let i = 1; i < 4; i++) {
-		if (CORNER_DISTANCES[i] < CORNER_DISTANCES[nearest]) nearest = i
-	}
-	let second = -1
-	for (let i = 0; i < 4; i++) {
-		if (i === nearest) continue
-		if (second < 0 || CORNER_DISTANCES[i] < CORNER_DISTANCES[second]) second = i
-	}
-
-	let dxA: number = CORNER_DX[nearest]
-	let dyA: number = CORNER_DY[nearest]
-	let dist2A = CORNER_DISTANCES[nearest]
-	let dxB: number = CORNER_DX[second]
-	let dyB: number = CORNER_DY[second]
-	let dist2B = CORNER_DISTANCES[second]
-
-	// The two nearest corners should share an edge. If they do not (a degenerate, near-antipodal
-	// configuration), the closest corner is the answer.
-	if (dxA !== dxB && dyA !== dyB) {
-		tileToUnitVector(tileId, nside, dxA, dyA, DISTANCE_BEST_SCRATCH)
-		return unitAngle(vx, vy, vz, DISTANCE_BEST_SCRATCH)
-	}
-
-	// Initialize the running best with the nearest corner, then binary-search the shared edge.
-	tileToUnitVector(tileId, nside, dxA, dyA, DISTANCE_BEST_SCRATCH)
-	let dist2mid = dist2A
-
-	while (true) {
-		const dxmid = (dxA + dxB) / 2
-		const dymid = (dyA + dyB) / 2
-
-		if ((dxA !== dxB && (Math.abs(dxmid - dxA) < DISTANCE_SEARCH_EPSILON || Math.abs(dxmid - dxB) < DISTANCE_SEARCH_EPSILON)) || (dyA !== dyB && (Math.abs(dymid - dyA) < DISTANCE_SEARCH_EPSILON || Math.abs(dymid - dyB) < DISTANCE_SEARCH_EPSILON))) {
-			break
-		}
-
-		tileToUnitVector(tileId, nside, dxmid, dymid, DISTANCE_MID_SCRATCH)
-		const ddx = vx - DISTANCE_MID_SCRATCH[0]
-		const ddy = vy - DISTANCE_MID_SCRATCH[1]
-		const ddz = vz - DISTANCE_MID_SCRATCH[2]
-		dist2mid = ddx * ddx + ddy * ddy + ddz * ddz
-
-		// The midpoint is a local minimum along the edge; stop when it stops improving.
-		if (dist2mid >= dist2A && dist2mid >= dist2B) {
-			DISTANCE_BEST_SCRATCH[0] = DISTANCE_MID_SCRATCH[0]
-			DISTANCE_BEST_SCRATCH[1] = DISTANCE_MID_SCRATCH[1]
-			DISTANCE_BEST_SCRATCH[2] = DISTANCE_MID_SCRATCH[2]
-			break
-		}
-
-		DISTANCE_BEST_SCRATCH[0] = DISTANCE_MID_SCRATCH[0]
-		DISTANCE_BEST_SCRATCH[1] = DISTANCE_MID_SCRATCH[1]
-		DISTANCE_BEST_SCRATCH[2] = DISTANCE_MID_SCRATCH[2]
-
-		if (dist2A < dist2B) {
-			dist2B = dist2mid
-			dxB = dxmid
-			dyB = dymid
-		} else {
-			dist2A = dist2mid
-			dxA = dxmid
-			dyA = dymid
-		}
-	}
-
-	// The nearest corner can still beat the converged edge point.
-	if (CORNER_DISTANCES[nearest] < dist2mid) {
-		tileToUnitVector(tileId, nside, CORNER_DX[nearest], CORNER_DY[nearest], DISTANCE_BEST_SCRATCH)
-	}
-
-	return unitAngle(vx, vy, vz, DISTANCE_BEST_SCRATCH)
+	// Convert the squared chord distance between unit vectors to a great-circle angle.
+	return 2 * Math.asin(clamp(Math.sqrt(bestSq) / 2, 0, 1))
 }
 
 // Validates a HEALPix resolution (Nside). Must be a positive integer.
