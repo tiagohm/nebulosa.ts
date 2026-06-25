@@ -214,6 +214,13 @@ export function timeGPS(seconds: number) {
 const NORMALIZED_TIME = new Float64Array(2)
 
 function normalizeDayAndFraction(day: number, fraction: number, divisor: number, out: NumberArray) {
+	if ((day === 0 && fraction === 0) || (divisor === 0 && Number.isInteger(day) && fraction >= -0.5 && fraction < 0.5)) {
+		out[0] = day
+		out[1] = fraction
+
+		return out
+	}
+
 	twoSum(day, fraction, NORMALIZED_TIME)
 
 	if (divisor !== 0 && Number.isFinite(divisor)) {

@@ -355,6 +355,21 @@ describe('normalize time', () => {
 	test('funciona quando a parte day já contém uma fração, como Julian Date .5', () => {
 		expectTimeClose(timeNormalize(2440587.5, 1e-9, 0), { day: 2440588, fraction: -0.499999999, scale: 1 })
 	})
+
+	test('returns an already normalized time unchanged', () => {
+		for (const [day, fraction, divisor] of [
+			[0, 0, 0],
+			[2451545, 0.1, 0],
+			[1e16, 0.1, 0],
+			[-2451545, -0.5, 0],
+			[2451545, 0.49999999999999994, 0],
+		]) {
+			const result = timeNormalize(day, fraction, divisor)
+
+			expect(result.day).toBeCloseTo(day, 15)
+			expect(result.fraction).toBeCloseTo(fraction, 15)
+		}
+	})
 })
 
 test('location', () => {
