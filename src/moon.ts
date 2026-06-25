@@ -28,7 +28,7 @@ export interface LunarEclipse {
 	u: number // Radius of the Earth umbral cone in the eclipse plane, in units of equatorial radius of the Earth.
 }
 
-const DEFAULT_MINIMAL_LUNAR_ECLIPSE_TIME = time(0, 0, Timescale.TT, false)
+const DEFAULT_MINIMAL_LUNAR_ECLIPSE_TIME = time(0, 0, Timescale.TT)
 const LUNAR_ECLIPSE_UMBRA_LIMIT = 1.0128
 const LUNAR_ECLIPSE_PENUMBRA_LIMIT = 1.5573
 const LUNAR_ECLIPSE_MAGNITUDE_DENOMINATOR = 0.545

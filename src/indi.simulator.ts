@@ -835,7 +835,7 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Computes the current local sidereal time from the simulated clock.
 	#siderealTime() {
-		return localSiderealTime(timeUnix(this.#utcTime / 1000, undefined, true), this.longitude)
+		return localSiderealTime(timeUnix(this.#utcTime / 1000, true), this.longitude)
 	}
 
 	// Returns the active free-slew speed in radians per second.
@@ -2507,7 +2507,7 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Computes the current local sidereal time from the simulated clock.
 	#siderealTime(utcTime: number, longitude: Angle) {
-		return localSiderealTime(timeUnix(utcTime / 1000, undefined, true), longitude)
+		return localSiderealTime(timeUnix(utcTime / 1000, true), longitude)
 	}
 
 	// Rebuilds the deterministic catalog only when scene parameters change.

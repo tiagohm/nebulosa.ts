@@ -21,7 +21,7 @@ export interface SolarEclipse {
 	type: SolarEclipseType
 }
 
-const DEFAULT_MINIMAL_SOLAR_ECLIPSE_TIME = time(0, 0, Timescale.TT, false)
+const DEFAULT_MINIMAL_SOLAR_ECLIPSE_TIME = time(0, 0, Timescale.TT)
 const SOLAR_ECLIPSE_CENTRAL_LIMIT = 0.9972
 const SOLAR_ECLIPSE_SURFACE_LIMIT = 1.5433
 const SOLAR_ECLIPSE_PARTIAL_DENOMINATOR = 0.5461

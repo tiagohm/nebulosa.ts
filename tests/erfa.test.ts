@@ -789,12 +789,15 @@ test('eraApco', () => {
 	expect(astrom.refb).toBeCloseTo(-0.236140831e-6, 19)
 })
 
+const DAY_FRACTION_SCRATCH = [0, 0]
+
 test('eraApco13', () => {
 	const ebp = [-0.974170437669016342, -0.211520082035387968, -0.091758302425478583] as const
 	const ebv = [0.003643658242375083, -0.015428731944935825, -0.006689220237864495] as const
 	const ehp = [-0.973458265012157486, -0.209215306558769298, -0.090699647709202746] as const
 
-	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
+	erfa.eraUtcTai(2456384.5, 0.969254051, DAY_FRACTION_SCRATCH)
+	const [tt1, tt2] = erfa.eraTaiTt(DAY_FRACTION_SCRATCH[0], DAY_FRACTION_SCRATCH[1])
 	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
 	const astrom = erfa.eraApco13(tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731, 12.8, 0.59, 0.55, [ebp, ebv], ehp)
 
@@ -852,7 +855,8 @@ test('eraApio', () => {
 })
 
 test('eraApio13', () => {
-	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
+	erfa.eraUtcTai(2456384.5, 0.969254051, DAY_FRACTION_SCRATCH)
+	const [tt1, tt2] = erfa.eraTaiTt(DAY_FRACTION_SCRATCH[0], DAY_FRACTION_SCRATCH[1])
 	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
 	const astrom = erfa.eraApio13(tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731, 12.8, 0.59, 0.55)
 
@@ -868,7 +872,8 @@ test('eraApio13', () => {
 })
 
 test('eraAtioq', () => {
-	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
+	erfa.eraUtcTai(2456384.5, 0.969254051, DAY_FRACTION_SCRATCH)
+	const [tt1, tt2] = erfa.eraTaiTt(DAY_FRACTION_SCRATCH[0], DAY_FRACTION_SCRATCH[1])
 	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
 	const astrom = erfa.eraApio13(tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731, 12.8, 0.59, 0.55)
 	const [aob, zob, hob, rob, dob] = erfa.eraAtioq(2.710121572969038991, 0.1729371367218230438, astrom)
@@ -888,7 +893,8 @@ test('eraBi00', () => {
 })
 
 test('eraAtoiq', () => {
-	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
+	erfa.eraUtcTai(2456384.5, 0.969254051, DAY_FRACTION_SCRATCH)
+	const [tt1, tt2] = erfa.eraTaiTt(DAY_FRACTION_SCRATCH[0], DAY_FRACTION_SCRATCH[1])
 	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
 
 	const astrom = erfa.eraApio13(tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731, 12.8, 0.59, 0.55)
@@ -955,7 +961,8 @@ test('eraAtco13', () => {
 	const vb = [0.003643658242375083, -0.015428731944935825, -0.006689220237864495] as const
 	const ph = [-0.973458265012157486, -0.209215306558769298, -0.090699647709202746] as const
 
-	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
+	erfa.eraUtcTai(2456384.5, 0.969254051, DAY_FRACTION_SCRATCH)
+	const [tt1, tt2] = erfa.eraTaiTt(DAY_FRACTION_SCRATCH[0], DAY_FRACTION_SCRATCH[1])
 	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
 
 	const [aob, zob, hob, rob, dob, astrom] = erfa.eraAtco13(tt1, tt2, ut11, ut12, 2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731, 12.8, 0.59, 0.55, [pb, vb], ph)
@@ -973,7 +980,8 @@ test('eraAtoc13', () => {
 	const vb = [0.003643658242375083, -0.015428731944935825, -0.006689220237864495] as const
 	const ph = [-0.973458265012157486, -0.209215306558769298, -0.090699647709202746] as const
 
-	const [tt1, tt2] = erfa.eraTaiTt(...erfa.eraUtcTai(2456384.5, 0.969254051))
+	erfa.eraUtcTai(2456384.5, 0.969254051, DAY_FRACTION_SCRATCH)
+	const [tt1, tt2] = erfa.eraTaiTt(DAY_FRACTION_SCRATCH[0], DAY_FRACTION_SCRATCH[1])
 	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
 
 	let [rc, dc] = erfa.eraAtoc13('R', 2.710085107986886201, 0.1717653435758265198, tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731, 12.8, 0.59, 0.55, [pb, vb], ph)
