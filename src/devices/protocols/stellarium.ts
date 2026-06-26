@@ -1,0 +1,374 @@
+import type { Socket, TCPSocketListener } from 'bun'
+import { eraAnpm } from '../../astronomy/coordinates/erfa/erfa'
+import { HealpixIndex, type HealpixIndexOptions } from '../../astronomy/sky/spatial/healpix'
+import type { StarCatalogEntry } from '../../catalogs/stars/star.catalog'
+import { PI } from '../../core/constants'
+import type { Source } from '../../io/io'
+import { type Angle, deg, mas, normalizeAngle } from '../../math/units/angle'
+import { type Distance, parsec } from '../../math/units/distance'
+
+export interface StellariumProtocolHandler {
+	readonly connect?: (server: StellariumProtocolServer) => void
+	readonly goto?: (server: StellariumProtocolServer, ra: Angle, dec: Angle) => void
+	readonly disconnect?: (server: StellariumProtocolServer) => void
+}
+
+export interface StellariumProtocolServerOptions {
+	handler: StellariumProtocolHandler
+}
+
+// https://free-astro.org/images/b/b7/Stellarium_telescope_protocol.txt
+// https://github.com/Stellarium/stellarium/blob/master/plugins/TelescopeControl/src/TelescopeClient.cpp
+
+export class StellariumProtocolServer {
+	readonly #sockets: Socket<unknown>[] = []
+	#server?: TCPSocketListener
+
+	constructor(readonly options: Readonly<StellariumProtocolServerOptions>) {}
+
+	get hostname() {
+		return this.#server?.hostname
+	}
+
+	get port() {
+		return this.#server?.port ?? -1
+	}
+
+	start(hostname: string, port: number) {
+		if (this.#server) return false
+
+		this.#server = Bun.listen({
+			hostname,
+			port,
+			allowHalfOpen: false,
+			socket: {
+				data: (_, data) => {
+					this.#processData(data)
+				},
+				open: (socket) => {
+					console.info('connection open')
+					this.#sockets.push(socket)
+					this.options.handler.connect?.(this)
+				},
+				close: (socket) => {
+					console.warn('connection closed')
+					const index = this.#sockets.indexOf(socket)
+					if (index >= 0) this.#sockets.splice(index, 1)
+					this.options.handler.disconnect?.(this)
+				},
+				error: (_, error) => {
+					console.error('socket error:', error)
+				},
+				connectError: (_, error) => {
+					console.error('connection failed:', error)
+				},
+				timeout: () => {
+					console.warn('connection timed out')
+				},
+			},
+		})
+
+		return true
+	}
+
+	stop() {
+		this.#server?.stop(true)
+		this.#server = undefined
+		this.#sockets.length = 0
+	}
+
+	send(ra: Angle, dec: Angle) {
+		if (this.#sockets.length > 0) {
+			const buffer = Buffer.allocUnsafe(24)
+			buffer.writeInt16LE(24, 0) // length
+			buffer.writeInt16LE(0, 2) // type
+			// buffer.writeBigInt64LE(BigInt(Date.now() * 1000)) // time
+			buffer.writeInt32LE(0, 4) // time (unused)
+			buffer.writeInt32LE(0, 8) // time (unused)
+			buffer.writeInt32LE(Math.trunc((eraAnpm(ra) / PI) * 0x80000000), 12)
+			buffer.writeInt32LE(Math.trunc((dec / PI) * 0x80000000), 16)
+			buffer.writeInt32LE(0, 20) // status = OK
+
+			for (const socket of this.#sockets) {
+				socket.write(buffer)
+				socket.flush()
+			}
+		}
+	}
+
+	#processData(buffer: Buffer) {
+		if (buffer.byteLength >= 20 && this.options.handler.goto) {
+			const ra = normalizeAngle((buffer.readUInt32LE(12) * PI) / 0x80000000)
+			const dec = (buffer.readInt32LE(16) * PI) / 0x80000000
+			this.options.handler.goto(this, ra, dec)
+		}
+	}
+}
+
+export interface StellariumCatalogEntry extends StarCatalogEntry {
+	readonly id: number
+	readonly type: StellariumObjectType
+	readonly majorAxis: Angle
+	readonly minorAxis: Angle
+	readonly orientation: Angle
+	readonly redshift: number
+	readonly px: Angle
+	readonly distance: Distance
+	readonly mType?: string
+	readonly ngc: number
+	readonly ic: number
+	readonly m: number
+	readonly c: number
+	readonly b: number
+	readonly sh2: number
+	readonly vdb: number
+	readonly rcw: number
+	readonly ldn: number
+	readonly lbn: number
+	readonly cr: number
+	readonly mel: number
+	readonly pgc: number
+	readonly ugc: number
+	readonly ced?: string
+	readonly arp: number
+	readonly vv: number
+	readonly pk?: string
+	readonly png?: string
+	readonly snrg?: string
+	readonly aco?: string
+	readonly hcg?: string
+	readonly eso?: string
+	readonly vdbh?: string
+	readonly dwb: number
+	readonly tr: number
+	readonly st: number
+	readonly ru: number
+	readonly vdbha: number
+}
+
+export enum StellariumObjectType {
+	UNKNOWN,
+	GALAXY,
+	ACTIVE_GALAXY,
+	RADIO_GALAXY,
+	INTERACTING_GALAXY,
+	QUASAR,
+	STAR_CLUSTER,
+	OPEN_STAR_CLUSTER,
+	GLOBULAR_STAR_CLUSTER,
+	STELLAR_ASSOCIATION,
+	STAR_CLOUD,
+	NEBULA,
+	PLANETARY_NEBULA,
+	DARK_NEBULA,
+	REFLECTION_NEBULA,
+	BIPOLAR_NEBULA,
+	EMISSION_NEBULA,
+	CLUSTER_ASSOCIATED_WITH_NEBULOSITY,
+	HII_REGION,
+	SUPERNOVA_REMNANT,
+	INTERSTELLAR_MATTER,
+	EMISSION_OBJECT,
+	BL_LACERTAE_OBJECT,
+	BLAZAR,
+	MOLECULAR_CLOUD,
+	YOUNG_STELLAR_OBJECT,
+	POSSIBLE_QUASAR,
+	POSSIBLE_PLANETARY_NEBULA,
+	PROTOPLANETARY_NEBULA,
+	STAR,
+	SYMBIOTIC_STAR,
+	EMISSION_LINE_STAR,
+	SUPERNOVA_CANDIDATE,
+	SUPER_NOVA_REMNANT_CANDIDATE,
+	CLUSTER_OF_GALAXIES,
+	PART_OF_GALAXY,
+	REGION_OF_THE_SKY,
+}
+
+// https://github.com/Stellarium/stellarium/blob/master/nebulae/default/catalog.dat
+
+const STELLARIUM_CATALOG_BUFFER_SIZE = 64 * 1024
+const STELLARIUM_CATALOG_REFILL_THRESHOLD = STELLARIUM_CATALOG_BUFFER_SIZE - 1024
+
+export async function* readCatalogDat(source: Source): AsyncIterable<StellariumCatalogEntry> {
+	const buffer = Buffer.allocUnsafe(STELLARIUM_CATALOG_BUFFER_SIZE)
+	let position = 0
+	let size = 0
+
+	// Refill the parser buffer while preserving unread bytes to avoid overlapping source reads.
+	async function read() {
+		const remaining = size - position
+
+		if (remaining > 0) buffer.copy(buffer, 0, position, size)
+
+		position = 0
+		size = remaining + (await source.read(buffer, remaining, buffer.byteLength - remaining))
+		return size > 0
+	}
+
+	function readInt() {
+		const value = buffer.readUint32BE(position)
+		position += 4
+		return value
+	}
+
+	function readDouble() {
+		const value = buffer.readDoubleBE(position)
+		position += 8
+		return value
+	}
+
+	const decoder = new TextDecoder('utf-16be', { ignoreBOM: true })
+
+	function readText() {
+		const n = readInt()
+
+		if (n > 0) {
+			const value = decoder.decode(buffer.subarray(position, position + n))
+			position += n
+			return value
+		} else {
+			return ''
+		}
+	}
+
+	await read()
+
+	readText() // version
+	readText() // edition
+
+	while (true) {
+		if (position > STELLARIUM_CATALOG_REFILL_THRESHOLD) {
+			if (!(await read())) break
+		} else if (position >= size) {
+			break
+		}
+
+		const id = readInt()
+		const rightAscension = readDouble()
+		const declination = readDouble()
+		const mB = readDouble()
+		const mV = readDouble()
+		const type = (readInt() + 1) % 37
+		const mType = readText() || undefined // Morphological type
+		const majorAxis = deg(readDouble())
+		const minorAxis = deg(readDouble())
+		const orientation = deg(readInt())
+		const redshift = readDouble()
+		readDouble() // Redshift error
+		const px = mas(readDouble())
+		readDouble() // Parallax error
+		const distance = parsec(readDouble() * 1000) // Distance
+		readDouble() // Distance error
+		const ngc = readInt()
+		const ic = readInt()
+		const m = readInt()
+		const c = readInt()
+		const b = readInt()
+		const sh2 = readInt()
+		const vdb = readInt()
+		const rcw = readInt()
+		const ldn = readInt()
+		const lbn = readInt()
+		const cr = readInt()
+		const mel = readInt()
+		const pgc = readInt()
+		const ugc = readInt()
+		const ced = readText() || undefined
+		const arp = readInt()
+		const vv = readInt()
+		const pk = readText() || undefined
+		const png = readText() || undefined
+		const snrg = readText() || undefined
+		const aco = readText() || undefined
+		const hcg = readText() || undefined
+		const eso = readText() || undefined
+		const vdbh = readText() || undefined
+		const dwb = readInt()
+		const tr = readInt()
+		const st = readInt()
+		const ru = readInt()
+		const vdbha = readInt()
+		const magnitude = mV === 99 ? (mB === 99 ? undefined : mB) : mV
+
+		yield { id, epoch: 2000, rightAscension, declination, magnitude, type, majorAxis, minorAxis, orientation, redshift, px, distance, mType, ngc, ic, m, c, b, sh2, vdb, rcw, ldn, lbn, cr, mel, pgc, ugc, ced, arp, vv, pk, png, snrg, aco, hcg, eso, vdbh, dwb, tr, st, ru, vdbha }
+	}
+}
+
+export interface StellariumNameEntry {
+	readonly prefix: string
+	readonly id: string
+	readonly name: string
+}
+
+const NAME_FORMAT_REGEX = /^_\("([^"]+)"\).*$/
+const STELLARIUM_NAMES_BUFFER_SIZE = 1024
+const STELLARIUM_NAMES_REFILL_THRESHOLD = 300
+
+export async function* readNamesDat(source: Source) {
+	const buffer = Buffer.allocUnsafe(STELLARIUM_NAMES_BUFFER_SIZE)
+	let position = 0
+	let size = 0
+
+	async function read() {
+		const remaining = size - position
+
+		if (remaining > 0) buffer.copy(buffer, 0, position, size)
+
+		position = 0
+		size = remaining + (await source.read(buffer, remaining, buffer.byteLength - remaining))
+		return size > 0
+	}
+
+	async function checkAvailableSpaceToRead(n: number) {
+		if (position > size - n) {
+			if (!(await read())) return false
+		}
+
+		return true
+	}
+
+	async function readLine() {
+		if (!(await checkAvailableSpaceToRead(STELLARIUM_NAMES_REFILL_THRESHOLD))) return false
+
+		const index = buffer.indexOf(0x0a, position)
+
+		if (index >= 0) {
+			const line = buffer.subarray(position, index).toString('utf-8')
+			position = index + 1
+			return line
+		}
+
+		return false
+	}
+
+	await read()
+
+	while (true) {
+		const line = await readLine()
+
+		if (!line) break
+		if (line.startsWith('#')) continue
+
+		const prefix = line.slice(0, 5).trim()
+		const id = line.slice(5, 20).trim()
+		const name = NAME_FORMAT_REGEX.exec(line.slice(20).trim())?.[1] ?? ''
+
+		if (!name) continue
+
+		yield { prefix, id, name } as StellariumNameEntry
+	}
+}
+
+export class StellariumCatalog extends HealpixIndex<StellariumCatalogEntry> {
+	constructor({ nside = 8, ordering }: Partial<HealpixIndexOptions> = {}) {
+		super({ nside, ordering })
+	}
+
+	async load(source: Source) {
+		for await (const entry of readCatalogDat(source)) {
+			this.add(entry.id, entry.rightAscension, entry.declination, entry)
+		}
+	}
+}

@@ -1,13 +1,13 @@
-import { PI, PIOVERTWO, TAU } from '../src/constants'
-import { sphericalSeparation, type Point } from '../src/geometry'
-import { PlateCarree } from '../src/projection'
+import { PlateCarree } from '../src/astronomy/projections/projection'
+import { PI, PIOVERTWO, TAU } from '../src/core/constants'
+import { sphericalSeparation, type Point } from '../src/math/numerical/geometry'
 // oxfmt-ignore
 import { parseArgs } from 'node:util'
-import { deg } from '../src/angle'
-import { sunMoonPosition, type EclipseGeoCurve, type EclipseGeoPoint } from '../src/eclipse'
-import { nearestLunarEclipse } from '../src/moon'
-import { computeLunarEclipseMapGeometry, lunarEclipseMapToSvgPaths, type LunarEclipseContactKind, type LunarEclipseMapGeometry, type LunarEclipseMapGeometryOptions, type LunarEclipseMapSvgPaths } from '../src/moon.eclipse.map'
-import { timeYMD, toJulianDay, timeToDate } from '../src/time'
+import { nearestLunarEclipse } from '../src/astronomy/bodies/moon'
+import { sunMoonPosition, type EclipseGeoCurve, type EclipseGeoPoint } from '../src/astronomy/events/eclipse/eclipse'
+import { computeLunarEclipseMapGeometry, lunarEclipseMapToSvgPaths, type LunarEclipseContactKind, type LunarEclipseMapGeometry, type LunarEclipseMapGeometryOptions, type LunarEclipseMapSvgPaths } from '../src/astronomy/events/eclipse/lunar/moon.eclipse.map'
+import { timeYMD, toJulianDay, timeToDate } from '../src/astronomy/time/time'
+import { deg } from '../src/math/units/angle'
 import { longestProjectedSegment } from '../tests/eclipse.util'
 
 const CATALOG_STEP = deg(0.5)

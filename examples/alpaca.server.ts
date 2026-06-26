@@ -1,7 +1,7 @@
-import { AlpacaDiscoveryServer } from '../src/alpaca.discovery'
-import { AlpacaServer } from '../src/alpaca.server'
-import { IndiClient } from '../src/indi.client'
-import { CameraManager, CoverManager, FlatPanelManager, FocuserManager, MountManager, WheelManager } from '../src/indi.manager'
+import { AlpacaDiscoveryServer } from '../src/devices/alpaca/alpaca.discovery'
+import { AlpacaServer } from '../src/devices/alpaca/alpaca.server'
+import { IndiClient } from '../src/devices/indi/indi.client'
+import { CameraManager, CoverManager, FlatPanelManager, FocuserManager, MountManager, WheelManager } from '../src/devices/indi/indi.manager'
 
 const camera = new CameraManager()
 const wheel = new WheelManager()

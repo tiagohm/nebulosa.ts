@@ -1,0 +1,141 @@
+import { expect, test } from 'bun:test'
+import type { CartesianCoordinate } from '../../../src/astronomy/coordinates/coordinate'
+import { KeplerOrbit, eccentricAnomaly, meanAnomaly, mpcAsteroid, mpcComet, stumpff, timeSincePeriapsis, trueAnomalyHyperbolic, trueAnomalyParabolic } from '../../../src/astronomy/orbits/asteroid'
+import { mpcorb, mpcorbComet } from '../../../src/astronomy/orbits/mpcorb'
+import { Timescale, time, timeYMDHMS } from '../../../src/astronomy/time/time'
+
+const t = timeYMDHMS(2025, 4, 21, 12, 0, 0, Timescale.TT)
+
+test('ceres', () => {
+	const line = '00001    3.34  0.15 K2555 188.70269   73.27343   80.25221   10.58780  0.0794013  0.21424651   2.7660512  0 E2024-V47  7330 125 1801-2024 0.80 M-v 30k MPCLINUX   4000      (1) Ceres              20241101'
+	const orbit = mpcAsteroid(mpcorb(line)!)
+
+	expect(orbit.position[0]).toBeCloseTo(2.7711317322713196, 16)
+	expect(orbit.position[1]).toBeCloseTo(-0.9640727738162009, 16)
+	expect(orbit.position[2]).toBeCloseTo(-0.5410254680767607, 16)
+	expect(orbit.velocity[0]).toBeCloseTo(0.0029909542981365854, 14)
+	expect(orbit.velocity[1]).toBeCloseTo(0.009075787938406748, 14)
+	expect(orbit.velocity[2]).toBeCloseTo(-0.00026377621922747067, 14)
+
+	const [p, v] = orbit.at(t)
+
+	// Skyfield: Ecliptic J2000 frame matrix is slighty different
+	expect(p[0]).toBeCloseTo(2.727955537227552, 12)
+	expect(p[1]).toBeCloseTo(-0.7824234893676645, 6)
+	expect(p[2]).toBeCloseTo(-0.9244288479272925, 6)
+	expect(v[0]).toBeCloseTo(0.0034043538954961496, 8)
+	expect(v[1]).toBeCloseTo(0.008322662957715119, 8)
+	expect(v[2]).toBeCloseTo(0.00323249221831575, 8)
+
+	// JPL Horizons: Sun(500@10) -> 1 Ceres (A801 AA), 2025-04-21 12:00:00.0000 TDB, x-y axes
+	expect(p[0]).toBeCloseTo(2.727955368904768, 6)
+	expect(p[1]).toBeCloseTo(-7.824235389148068e-1, 6)
+	expect(p[2]).toBeCloseTo(-9.244287343918847e-1, 6)
+	expect(v[0]).toBeCloseTo(3.404362861965615e-3, 7)
+	expect(v[1]).toBeCloseTo(8.322702821554456e-3, 7)
+	expect(v[2]).toBeCloseTo(3.232500291084344e-3, 7)
+})
+
+test('halley MPC', () => {
+	const line = '0001P         2061 08 31.8266  0.583972  0.967311  112.5470   59.6368  162.2146  20250501   4.0  6.0  1P/Halley                                                 98, 1083'
+	const orbit = mpcComet(mpcorbComet(line)!)
+
+	expect(orbit.position[0]).toBeCloseTo(0.32993281659388435, 15)
+	expect(orbit.position[1]).toBeCloseTo(-0.4527999587342976, 15)
+	expect(orbit.position[2]).toBeCloseTo(0.16474170901336713, 15)
+	expect(orbit.velocity[0]).toBeCloseTo(-0.02468661744861757, 13)
+	expect(orbit.velocity[1]).toBeCloseTo(-0.019333342849647606, 13)
+	expect(orbit.velocity[2]).toBeCloseTo(-0.00369798043960384, 13)
+
+	const [p, v] = orbit.at(t)
+
+	// Skyfield: Ecliptic J2000 frame matrix is slighty different
+	expect(p[0]).toBeCloseTo(-19.63028062054738, 11)
+	expect(p[1]).toBeCloseTo(29.057694647856728, 6)
+	expect(p[2]).toBeCloseTo(1.835299573869067, 4)
+	expect(v[0]).toBeCloseTo(0.00047867828425305313, 8)
+	expect(v[1]).toBeCloseTo(0.000169695439166974, 8)
+	expect(v[2]).toBeCloseTo(0.00017795270279699423, 8)
+
+	// JPL Horizons: Sun(500@10) -> 1P/Halley [1968] (74) - default, 2025-04-21 12:00:00.0000 TDB, x-y axes
+	expect(p[0]).toBeCloseTo(-1.962565156680985e1, 2)
+	expect(p[1]).toBeCloseTo(2.906218512875295e1, 2)
+	expect(p[2]).toBeCloseTo(1.794376916775462, 1)
+	expect(v[0]).toBeCloseTo(4.758928502386304e-4, 5)
+	expect(v[1]).toBeCloseTo(1.673641477296569e-4, 5)
+	expect(v[2]).toBeCloseTo(1.769586237358669e-4, 5)
+})
+
+test('osculating elements', () => {
+	// JPL Horizons: Sun(500@10) -> 4 Vesta (A807 FA), 2025-04-21 12:00:00.0000 TDB, x-y axes
+	const position: CartesianCoordinate = [-1.70317472297052, -1.333843040283118, -3.086709149679688e-1]
+	const velocity: CartesianCoordinate = [7.882762615954012e-3, -8.079478592200335e-3, -4.254433056153772e-3]
+	const vesta = new KeplerOrbit(position, velocity, time(2460787, 0, Timescale.TDB))
+
+	// Skyfield
+	expect(vesta.apoapsisDistance).toBeCloseTo(2.5741322772196766, 11)
+	expect(vesta.argumentOfLatitude).toBeCloseTo(3.5152170741718365, 11)
+	expect(vesta.argumentOfPeriapsis).toBeCloseTo(4.163206069737825, 11)
+	expect(vesta.eccentricAnomaly).toBeCloseTo(-0.5954010507161356, 11)
+	expect(vesta.eccentricityVector[0]).toBeCloseTo(-0.022557010570126906, 12)
+	expect(vesta.eccentricityVector[1]).toBeCloseTo(-0.08200292925792708, 12)
+	expect(vesta.eccentricityVector[2]).toBeCloseTo(-0.029741309829624623, 12)
+	expect(vesta.eccentricity).toBeCloseTo(0.0900990823655998, 12)
+	expect(vesta.inclination).toBeCloseTo(0.39738020913353744, 12)
+	expect(vesta.longitudeOfAscendingNode).toBeCloseTo(0.3175081502734694, 12)
+	expect(vesta.longitudeOfPeriapsis).toBeCloseTo(4.480714220011294, 11)
+	expect(vesta.nodeVector[0]).toBeCloseTo(0.9500163228199269, 12)
+	expect(vesta.nodeVector[1]).toBeCloseTo(0.3122002344260888, 12)
+	expect(vesta.nodeVector[2]).toBeCloseTo(0, 12)
+	expect(vesta.meanAnomaly).toBeCloseTo(5.738315501407061, 11)
+	expect(vesta.meanLongitude).toBeCloseTo(3.935844414238769, 11)
+	expect(vesta.meanMotionPerDay).toBeCloseTo(0.004740608732256189, 11)
+	expect(vesta.periapsisDistance).toBeCloseTo(2.1486169092737373, 11)
+	expect(vesta.periapsisTime.day + vesta.periapsisTime.fraction).toBeCloseTo(2459576.540368018, 9)
+	expect(vesta.periodInDays).toBeCloseTo(1325.3963071086948, 8)
+	expect(vesta.semiLatusRectum).toBeCloseTo(2.342205321154512, 11)
+	expect(vesta.semiMajorAxis).toBeCloseTo(2.361374593246707, 11)
+	expect(vesta.semiMinorAxis).toBeCloseTo(2.3517704261984225, 11)
+	expect(vesta.trueAnomaly).toBeCloseTo(5.635196311613598, 11)
+	expect(vesta.trueLongitude).toBeCloseTo(3.832725224445305, 11)
+})
+
+test('stumpff', () => {
+	expect(stumpff(-2)).toEqual([2.178183556608571, 1.368298872008591, 0.5890917783042855, 0.18414943600429545])
+	expect(stumpff(0.5)).toEqual([0.7602445970756302, 0.9187253698655684, 0.4795108058487397, 0.16254926026886313])
+	expect(stumpff(2)).toEqual([0.15594369476537437, 0.6984559986366083, 0.4220281526173128, 0.15077200068169583])
+})
+
+test('hyperbolic mean anomaly', () => {
+	const orbit = KeplerOrbit.meanAnomaly(1.5, 1.5, 0.2, 0.3, 0.4, 8, t)
+
+	expect(orbit.eccentricity).toBeCloseTo(1.5, 14)
+	expect(orbit.meanAnomaly).toBeCloseTo(8, 12)
+
+	const H = 4
+	const v = trueAnomalyHyperbolic(1.5, H)
+
+	expect(eccentricAnomaly(v, 1.5)).toBeCloseTo(H, 14)
+	expect(meanAnomaly(H, 1.5)).toBeCloseTo(1.5 * Math.sinh(H) - H, 14)
+
+	expect(() => KeplerOrbit.trueAnomaly(1.5, 1.5, 0.2, 0.3, 0.4, -2.4, t)).toThrow('if eccentricity is > 1, abs(true anomaly) cannot be more than acos(-1/e)')
+	expect(() => KeplerOrbit.trueAnomaly(1.5, 1.5, 0.2, 0.3, 0.4, 2 * Math.PI - 0.2, t)).not.toThrow()
+})
+
+test('parabolic mean anomaly', () => {
+	const p = 2
+	const v = 1.2
+	const M = timeSincePeriapsis(0, 0, v, p, 1) / Math.sqrt((2 * (p * p * p)) / 1)
+
+	expect(trueAnomalyParabolic(p, 1, M)).toBeCloseTo(v, 14)
+	expect(trueAnomalyParabolic(p, 1, -M)).toBeCloseTo(-v, 14)
+})
+
+test('circular equatorial true anomaly', () => {
+	const prograde = KeplerOrbit.trueAnomaly(1, 0, 0, 0, 0, Math.PI / 2, t)
+	const retrograde = KeplerOrbit.trueAnomaly(1, 0, Math.PI, 0, 0, Math.PI / 2, t)
+
+	expect(prograde.trueAnomaly).toBeCloseTo(Math.PI / 2, 14)
+	expect(prograde.trueLongitude).toBeCloseTo(Math.PI / 2, 14)
+	expect(retrograde.trueAnomaly).toBeCloseTo(Math.PI / 2, 14)
+})

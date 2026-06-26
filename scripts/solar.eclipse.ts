@@ -1,13 +1,13 @@
-import { deg, type Angle } from '../src/angle'
-import { PI, PIOVERTWO, TAU } from '../src/constants'
-import { sphericalSeparation, type Point } from '../src/geometry'
-import { PlateCarree } from '../src/projection'
-import { nearestSolarEclipse, type SolarEclipse } from '../src/sun'
+import { nearestSolarEclipse, type SolarEclipse } from '../src/astronomy/bodies/sun'
+import { PlateCarree } from '../src/astronomy/projections/projection'
+import { PI, PIOVERTWO, TAU } from '../src/core/constants'
+import { sphericalSeparation, type Point } from '../src/math/numerical/geometry'
+import { deg, type Angle } from '../src/math/units/angle'
 // oxfmt-ignore
-import { BRANCH_MAX_DRAWABLE_GAP, type SolarEclipseGeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SolarEclipseMapGeometryOptions, type SolarEclipseMapSvgPaths, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, solarAltitudeAtPoint, solarEclipseMapToSvgPaths, type SolarEclipseGeoCurve, type SolarEclipseGeoBranch } from '../src/sun.eclipse.map'
+import { BRANCH_MAX_DRAWABLE_GAP, type SolarEclipseGeoPoint, type PolynomialBesselianElements, type SolarEclipseMapGeometry, type SolarEclipseMapGeometryOptions, type SolarEclipseMapSvgPaths, centralAxisIntersectsEarth, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, solarAltitudeAtPoint, solarEclipseMapToSvgPaths, type SolarEclipseGeoCurve, type SolarEclipseGeoBranch } from '../src/astronomy/events/eclipse/solar/sun.eclipse.map'
 import { parseArgs } from 'node:util'
-import { sunMoonPosition } from '../src/eclipse'
-import { timeYMD, toJulianDay, timeToDate } from '../src/time'
+import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
+import { timeYMD, toJulianDay, timeToDate } from '../src/astronomy/time/time'
 import { catalogBranchRetraces, endpointRetraces, hasContinuousCurveBetween, limitTangencyResidual, longestProjectedSegment } from '../tests/eclipse.util'
 
 const CATALOG_STEP = deg(0.5)
