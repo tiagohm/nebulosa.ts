@@ -8,7 +8,7 @@ import { approximateArcsinhStretchParameters, arcsinhStretch, backgroundNeutrali
 import type { CurvesTransformationCurve, Image, MultiscaleMedianTransformOptions } from '../../../src/imaging/model/image.types'
 import { bufferSink, bufferSource } from '../../../src/io/io'
 import { downloadPerTag } from '../../download'
-import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from '../../image.util'
+import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from '../../util/image.util'
 
 await downloadPerTag('image')
 

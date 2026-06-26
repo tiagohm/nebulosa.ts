@@ -9,7 +9,7 @@ await downloadPerTag('astap')
 const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
 
 test.skipIf(SKIP)('detect stars', async () => {
-	const stars = await astapDetectStars(join(dirname(__dirname), 'data', 'apod4.jpg'))
+	const stars = await astapDetectStars(join(dirname(__dirname), '..', '..', 'data', 'apod4.jpg'))
 
 	expect(stars.length).toBeGreaterThanOrEqual(200)
 	expect(stars[0].x).toBeGreaterThan(0)
@@ -22,7 +22,7 @@ test.skipIf(SKIP)('detect stars', async () => {
 test.skipIf(SKIP)('plate solve', async () => {
 	const rightAscension = hour(10.7345)
 	const declination = deg(-59.6022)
-	const solution = await astapPlateSolve(join(dirname(__dirname), 'data', 'NGC3372--32.1.fit'), { rightAscension, declination, radius: deg(4), fov: deg(0.54) })
+	const solution = await astapPlateSolve(join(dirname(__dirname), '..', '..', 'data', 'NGC3372--32.1.fit'), { rightAscension, declination, radius: deg(4), fov: deg(0.54) })
 
 	expect(solution).toBeDefined()
 	expect(toDeg(solution!.orientation)).toBeCloseTo(110.1, 1)

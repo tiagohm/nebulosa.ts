@@ -4,7 +4,7 @@ import { readImageFromBuffer, readImageFromPath, readImageFromXisf } from '../..
 import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf, XisfImageReader, XisfImageWriter } from '../../../../src/io/formats/xisf/xisf'
 import { bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
 import { downloadPerTag } from '../../../download'
-import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../image.util'
+import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../util/image.util'
 
 await downloadPerTag('xisf')
 

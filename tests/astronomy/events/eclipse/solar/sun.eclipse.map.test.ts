@@ -8,7 +8,7 @@ import { PlateCarree, type ProjectionOptions } from '../../../../../src/astronom
 import { time, Timescale, timeSubtract, timeYMD, toJulianDay } from '../../../../../src/astronomy/time/time'
 import { DEG2RAD, PI, PIOVERTWO, TAU } from '../../../../../src/core/constants'
 import { sphericalSeparation } from '../../../../../src/math/numerical/geometry'
-import { catalogBranchRetraces, countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment } from '../../../../eclipse.util'
+import { catalogBranchRetraces, countKinks, endpointRetraces, geometryFor, interpolateAtJulianDay, limitTangencyResidual, longestProjectedSegment, maxBranchSegment } from '../../../../util/eclipse.util'
 
 const JD0 = 2460409.25
 const TIME0 = time(JD0)

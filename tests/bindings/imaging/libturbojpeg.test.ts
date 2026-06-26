@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Jpeg } from '../../../src/bindings/imaging/libturbojpeg'
-import { saveAndCompareHash } from '../../image.util'
+import { saveAndCompareHash } from '../../util/image.util'
 
 describe('compress', () => {
 	const jpeg = new Jpeg()

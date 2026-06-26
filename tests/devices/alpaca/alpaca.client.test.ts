@@ -11,7 +11,7 @@ import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { roundToNthDecimal } from '../../../src/math/numerical/math'
 import { deg, hour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
-import { saveImageAndCompareHash } from '../../image.util'
+import { saveImageAndCompareHash } from '../../util/image.util'
 
 await downloadPerTag('alpaca.client')
 

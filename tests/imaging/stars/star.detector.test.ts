@@ -7,7 +7,7 @@ import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { mulberry32 } from '../../../src/math/numerical/random'
 import { downloadPerTag } from '../../download'
-import { readImage } from '../../image.util'
+import { readImage } from '../../util/image.util'
 
 await downloadPerTag('stardetector')
 

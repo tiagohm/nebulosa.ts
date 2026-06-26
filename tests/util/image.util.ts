@@ -1,9 +1,9 @@
 import { expect } from 'bun:test'
 import fs from 'fs/promises'
-import { readImageFromFits, writeImageToFormat } from '../src/imaging/model/image'
-import type { Image } from '../src/imaging/model/image.types'
-import { Bitpix, type Fits, readFits } from '../src/io/formats/fits/fits'
-import { bufferSource, type FileHandleSource, fileHandleSource } from '../src/io/io'
+import { readImageFromFits, writeImageToFormat } from '../../src/imaging/model/image'
+import type { Image } from '../../src/imaging/model/image.types'
+import { Bitpix, type Fits, readFits } from '../../src/io/formats/fits/fits'
+import { bufferSource, type FileHandleSource, fileHandleSource } from '../../src/io/io'
 
 export type ImageFormat = 'fit' | 'xisf'
 

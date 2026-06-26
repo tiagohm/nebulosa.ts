@@ -6,7 +6,7 @@ import { vecDistance } from '../../../src/math/linear-algebra/vec3'
 import type { Rect } from '../../../src/math/numerical/geometry'
 import { gaussian, mulberry32, type Random, shuffle } from '../../../src/math/numerical/random'
 import { downloadPerTag } from '../../download'
-import { readImage } from '../../image.util'
+import { readImage } from '../../util/image.util'
 
 await downloadPerTag('starmatching')
 

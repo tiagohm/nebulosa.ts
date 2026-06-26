@@ -9,7 +9,7 @@ import { sphericalDestination, sphericalSeparation, type Point } from '../../../
 import { mulberry32, type Random } from '../../../src/math/numerical/random'
 import { type Angle, arcsec, deg, formatAZ, formatDEC, formatRA, normalizeAngle, toArcsec } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
-import { readImage } from '../../image.util'
+import { readImage } from '../../util/image.util'
 
 await downloadPerTag('hnsky')
 

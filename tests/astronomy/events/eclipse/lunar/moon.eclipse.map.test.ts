@@ -7,7 +7,7 @@ import { PlateCarree } from '../../../../../src/astronomy/projections/projection
 import { greenwichApparentSiderealTime, type Time, timeYMDHMS } from '../../../../../src/astronomy/time/time'
 import { PI, PIOVERTWO, TAU } from '../../../../../src/core/constants'
 import { deg, type Angle } from '../../../../../src/math/units/angle'
-import { longestProjectedSegment } from '../../../../eclipse.util'
+import { longestProjectedSegment } from '../../../../util/eclipse.util'
 
 // Cheap deterministic position provider for tests that exercise local-circumstance plumbing rather than the
 // analytical VSOP87/ELP ephemerides. The Moon stays high for FAST_LONGITUDE/FAST_LATITUDE, keeping visibility

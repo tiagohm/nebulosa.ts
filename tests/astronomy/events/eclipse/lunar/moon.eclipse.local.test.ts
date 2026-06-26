@@ -6,7 +6,7 @@ import { computeLunarEclipseMapGeometry } from '../../../../../src/astronomy/eve
 import { toJulianDay, type Time, timeYMDHMS, greenwichApparentSiderealTime, timeAtJulianDay } from '../../../../../src/astronomy/time/time'
 import { PI, PIOVERTWO, TAU } from '../../../../../src/core/constants'
 import { deg } from '../../../../../src/math/units/angle'
-import { fixedSunMoonPosition } from '../../../../eclipse.util'
+import { fixedSunMoonPosition } from '../../../../util/eclipse.util'
 
 const FAST_LONGITUDE = deg(5)
 const FAST_LATITUDE = 0

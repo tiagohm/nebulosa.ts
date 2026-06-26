@@ -3,7 +3,7 @@ import { Jpeg } from '../../../src/bindings/imaging/libturbojpeg'
 import { makeImageBytesFromFits } from '../../../src/devices/alpaca/alpaca.server'
 import { bitpixInBytes } from '../../../src/io/formats/fits/fits.util'
 import { downloadPerTag } from '../../download'
-import { saveAndCompareHash } from '../../image.util'
+import { saveAndCompareHash } from '../../util/image.util'
 
 await downloadPerTag('alpaca.server')
 

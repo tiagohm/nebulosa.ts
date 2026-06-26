@@ -5,7 +5,7 @@ import { adf } from '../../../src/imaging/processing/image.computation'
 import { stf } from '../../../src/imaging/processing/image.transformation'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, generateNoiseImage, generateStarImage } from '../../../src/imaging/synthetic/image.generator'
 import { mulberry32 } from '../../../src/math/numerical/random'
-import { saveImageAndCompareHash } from '../../image.util'
+import { saveImageAndCompareHash } from '../../util/image.util'
 
 interface GenerateImageScenario {
 	readonly name: string

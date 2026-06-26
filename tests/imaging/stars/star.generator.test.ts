@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { Image, ImageMetadata } from '../../../src/imaging/model/image.types'
 import { brightness, gamma } from '../../../src/imaging/processing/image.transformation'
 import { colorIndexToRgbWeights, effectiveGaussianSigma, focusDefocusAmount, type PlotStarOptions, plotStar } from '../../../src/imaging/stars/star.generator'
-import { saveImageAndCompareHash } from '../../image.util'
+import { saveImageAndCompareHash } from '../../util/image.util'
 
 const WIDTH = 48
 const HEIGHT = 48
