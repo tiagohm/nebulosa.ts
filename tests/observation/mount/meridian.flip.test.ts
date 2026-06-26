@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
-import { type Angle, deg, normalizeAngle } from '../src/angle'
-import { PI } from '../src/constants'
+import { PI } from '../../../src/core/constants'
+import { deg, type Angle, normalizeAngle } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { computeHourAngle, computeLocalSiderealTime, createMeridianFlipState, evaluateMeridianFlip, type MeridianFlipAction, type MeridianFlipEvent, type MeridianFlipPhase, type MeridianFlipPolicy, type MeridianFlipReason, type MeridianFlipSnapshot, type MeridianFlipState, transitionMeridianFlip } from '../src/meridian.flip'
+import { computeHourAngle, computeLocalSiderealTime, createMeridianFlipState, evaluateMeridianFlip, type MeridianFlipAction, type MeridianFlipEvent, type MeridianFlipPhase, type MeridianFlipPolicy, type MeridianFlipReason, type MeridianFlipSnapshot, type MeridianFlipState, transitionMeridianFlip } from '../../../src/observation/mount/meridian.flip'
 
 const TARGET_RA = deg(40)
 
@@ -237,7 +237,7 @@ test('disabled policy returns a disabled decision while preserving existing stat
 })
 
 test('evaluation and transition do not mutate inputs and reuse unchanged states', () => {
-	const policy = Object.freeze(basePolicy({ beforeFlipPierSide: 'EAST', allowUnknownPierSide: true })) as MeridianFlipPolicy
+	const policy = Object.freeze(basePolicy({ beforeFlipPierSide: 'EAST', allowUnknownPierSide: true }))
 	const snapshot = Object.freeze({
 		localSiderealTime: normalizeAngle(TARGET_RA + deg(-3)),
 		target: Object.freeze({ rightAscension: TARGET_RA }),
@@ -264,7 +264,7 @@ test('evaluation reports in-progress phases and preserves their persisted state'
 	]
 
 	for (const [input, phase, action, reason] of cases) {
-		const state = Object.freeze(input) as MeridianFlipState
+		const state = Object.freeze(input)
 		const result = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(2)), state)
 		expectDecision(result, phase, action, reason)
 		expect(result.state).toBe(state)

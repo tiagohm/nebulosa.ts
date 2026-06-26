@@ -1,6 +1,6 @@
-import { type Angle, normalizeAngle, normalizePI } from './angle'
-import { PIOVERTWO } from './constants'
-import type { PierSide } from './indi.device'
+import { PIOVERTWO } from '../../core/constants'
+import type { PierSide } from '../../devices/indi/device'
+import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 
 // Logical Meridian Flip lifecycle phase, including the non-persisted disabled decision phase.
 export type MeridianFlipPhase = 'DISABLED' | 'WAITING' | 'PREPARING' | 'READY' | 'FLIPPING' | 'VERIFYING_PIER_SIDE' | 'RECENTERING' | 'SETTLING' | 'COMPLETED' | 'FAILED'
