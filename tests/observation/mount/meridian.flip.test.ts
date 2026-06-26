@@ -83,7 +83,7 @@ test('threshold decisions classify preparation, flip, latest, and signed distanc
 	const atPrepare = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(-2)))
 	expectDecision(atPrepare, 'PREPARING', 'PREPARE', 'PREPARE_WINDOW_REACHED')
 
-	const atFlip = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(1)))
+	const atFlip = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(1), { isGuiding: true }))
 	expectDecision(atFlip, 'READY', 'PAUSE_GUIDING', 'FLIP_THRESHOLD_REACHED')
 
 	const exposingAtFlip = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(2), { isExposing: true }))
@@ -97,13 +97,21 @@ test('threshold decisions classify preparation, flip, latest, and signed distanc
 	expectDecision(overdueExposure, 'READY', 'ABORT_EXPOSURE', 'LATEST_THRESHOLD_REACHED')
 	expect(overdueExposure.isOverdue).toBeTrue()
 
-	const overdueUnprepared = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(6)))
+	const overdueUnprepared = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(6), { isGuiding: true }))
 	expectDecision(overdueUnprepared, 'READY', 'PAUSE_GUIDING', 'LATEST_THRESHOLD_REACHED')
 
 	const overduePrepared = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(6)), prepared)
 	expectDecision(overduePrepared, 'READY', 'START_FLIP', 'LATEST_THRESHOLD_REACHED')
 	expect(overduePrepared.untilFlip).toBeCloseTo(deg(-5), 14)
 	expect(overduePrepared.untilLatest).toBeCloseTo(deg(-1), 14)
+})
+
+test('flip threshold without active guiding can start without a fabricated preparation event', () => {
+	for (const isGuiding of [false, undefined]) {
+		const result = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(2), { isGuiding }))
+		expectDecision(result, 'READY', 'START_FLIP', 'FLIP_THRESHOLD_REACHED')
+		expect(result.state.preparationCompleted).toBeTrue()
+	}
 })
 
 test('configured post-flip side completes active pre-flip states without recommending another flip', () => {
@@ -147,7 +155,7 @@ test('state machine completes full lifecycle with recentering and guiding settle
 	state = evaluateMeridianFlip(policy, snapshotAt(deg(-1)), state).state
 	expect(state.phase).toBe('PREPARING')
 
-	state = evaluateMeridianFlip(policy, snapshotAt(deg(1)), state).state
+	state = evaluateMeridianFlip(policy, snapshotAt(deg(1), { isGuiding: true }), state).state
 	expect(state.phase).toBe('READY')
 	expect(state.preparationCompleted).toBeFalse()
 
@@ -272,7 +280,7 @@ test('evaluation reports in-progress phases and preserves their persisted state'
 })
 
 test('hour angle past flip up to PI is treated as past the flip threshold', () => {
-	const nearLowerCulmination = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(170)))
+	const nearLowerCulmination = evaluateMeridianFlip(basePolicy(), snapshotAt(deg(170), { isGuiding: true }))
 	expectDecision(nearLowerCulmination, 'READY', 'PAUSE_GUIDING', 'LATEST_THRESHOLD_REACHED')
 	expect(nearLowerCulmination.isOverdue).toBeTrue()
 	expect(nearLowerCulmination.hourAngle).toBeCloseTo(deg(170), 14)

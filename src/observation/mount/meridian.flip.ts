@@ -399,7 +399,7 @@ function evaluatePreFlipThresholds(resolved: ResolvedMeridianFlipPolicy, snapsho
 		return decision('READY', isOverdue ? 'ABORT_EXPOSURE' : 'WAIT_FOR_EXPOSURE', isOverdue ? 'LATEST_THRESHOLD_REACHED' : 'WAITING_FOR_EXPOSURE', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, state.preparationCompleted))
 	}
 
-	if (!state.preparationCompleted) return decision('READY', 'PAUSE_GUIDING', reason, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, false))
+	if (!state.preparationCompleted && snapshot.isGuiding === true) return decision('READY', 'PAUSE_GUIDING', reason, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, false))
 	return decision('READY', 'START_FLIP', reason, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, true))
 }
 
