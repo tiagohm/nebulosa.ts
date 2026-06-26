@@ -1,6 +1,6 @@
 import fs from 'fs/promises'
-import { iersb } from '../src/iers'
-import { fileHandleSource } from '../src/io'
+import { iersb } from '../src/astronomy/time/iers'
+import { fileHandleSource } from '../src/io/io'
 import { download } from './download'
 
 Bun.dns.prefetch('github.com')

@@ -1,4 +1,4 @@
-import { PHD2Client, type PHD2ClientHandler } from '../src/phd2'
+import { PHD2Client, type PHD2ClientHandler } from '../src/devices/guiding/phd2'
 
 const handler: PHD2ClientHandler = {
 	event: (client, event) => {

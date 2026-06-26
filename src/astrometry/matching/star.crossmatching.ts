@@ -1,0 +1,502 @@
+import { AzimuthalProjection, Gnomonic, type Projection } from '../../astronomy/projections/projection'
+import type { StarCatalog, StarCatalogEntry } from '../../catalogs/stars/catalog'
+import { ASEC2RAD, PI, PIOVERTWO } from '../../core/constants'
+import { medianOf } from '../../core/util'
+import { validateInRangeExclusive, validatePositiveFinite } from '../../core/validation'
+import type { DetectedStar } from '../../imaging/stars/detector'
+import { type Point, type Size, sphericalSeparation } from '../../math/numerical/geometry'
+import { clamp } from '../../math/numerical/math'
+import { type Angle, normalizeAngle } from '../../math/units/angle'
+import { type AffineTransform, applyTransformToPoint, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from './star.matching'
+
+const DEFAULT_CENTER_TOLERANCE = 1 * ASEC2RAD
+const DEFAULT_MAX_CATALOG_STARS = 256
+const DEFAULT_PROJECTION_PADDING_FACTOR = 1
+const GEOMETRY_EPSILON = 1e-12
+
+const DEFAULT_STAR_CROSSMATCH_CONFIG: Required<StarMatchingConfig> = {
+	maxStars: DEFAULT_MAX_CATALOG_STARS,
+	minStars: 6,
+	allowMirror: true,
+	initialMatchRadius: 18,
+	finalMatchRadius: 3.5,
+	maxScaleRatio: 64,
+	minScaleRatio: 0.01,
+	maxRotation: null,
+	ransacIterations: 128,
+	minInliers: 6,
+	maxResidual: 4,
+	useWeightedFit: true,
+	refineIterations: 5,
+	descriptorTolerance: 0.03,
+	localNeighborCount: 8,
+	preferCompactPatterns: true,
+	modelPreference: 'similarity',
+	allowAffineFallback: false,
+	dedupeDistance: 2,
+	minPatternSide: 4,
+	minPatternAreaRatio: 0.01,
+	symmetricPatternTolerance: 0.02,
+	maxPatternMatchesPerPattern: 4,
+	maxHypotheses: 128,
+}
+
+export type StarCrossmatchStatus = 'matched' | 'unmatched'
+
+export interface StarCrossmatchCameraInfo extends Readonly<Size> {
+	readonly pixelSize?: number // µm
+	readonly focalLength?: number // mm
+}
+
+export interface StarCrossmatchOptions {
+	readonly centerRA: Angle
+	readonly centerDEC: Angle
+	readonly radius: Angle
+	readonly camera: StarCrossmatchCameraInfo
+	readonly refinementIterations?: number
+	readonly centerTolerance?: Angle
+	readonly maxCatalogStars?: number
+	readonly projectionPaddingFactor?: number
+	readonly matchingConfig?: StarMatchingConfig
+}
+
+export interface StarCrossmatchSolution {
+	readonly rightAscension: Angle
+	readonly declination: Angle
+	readonly scale: Angle // radians per pixel
+	readonly rotation: Angle
+	readonly mirrored: boolean
+	readonly fieldRadius: Angle
+}
+
+export interface StarCrossmatchRecord<S extends StarCatalogEntry> {
+	readonly detectedStar: DetectedStar
+	readonly detectedIndex: number
+	readonly status: StarCrossmatchStatus
+	readonly catalogStar?: S
+	readonly catalogIndex?: number
+	readonly residual?: number // px
+	readonly skySeparation?: Angle
+}
+
+export interface StarCrossmatchSummary {
+	readonly totalDetected: number
+	readonly matchedCount: number
+	readonly unmatchedCount: number
+	readonly catalogCount: number
+	readonly projectedCatalogCount: number
+	readonly inlierCount: number
+	readonly averageResidual?: number
+	readonly medianResidual?: number
+	readonly averageSkySeparation?: Angle
+	readonly medianSkySeparation?: Angle
+}
+
+export interface StarCrossmatchResult<S extends StarCatalogEntry> {
+	readonly success: boolean
+	readonly solution?: StarCrossmatchSolution
+	readonly catalogStars: readonly S[]
+	readonly matches: readonly StarCrossmatchRecord<S>[]
+	readonly summary: StarCrossmatchSummary
+	readonly starMatch?: StarMatchingResult
+	readonly failureReason?: string
+}
+
+interface ResolvedStarCrossmatchOptions {
+	readonly centerRA: Angle
+	readonly centerDEC: Angle
+	readonly radius: Angle
+	readonly camera: StarCrossmatchCameraInfo
+	readonly refinementIterations: number
+	readonly centerTolerance: Angle
+	readonly maxCatalogStars: number
+	readonly projectionPadding: number
+	readonly nominalPixelsPerRadian: number
+	readonly matchingConfig: Required<StarMatchingConfig>
+}
+
+interface ProjectedCatalogStar<S extends StarCatalogEntry> {
+	readonly catalogStar: S
+	readonly catalogIndex: number
+	readonly detectedStar: DetectedStar
+	readonly planeX: number
+	readonly planeY: number
+	readonly projectedRadius: number
+}
+
+interface MatchAttempt<S extends StarCatalogEntry> {
+	readonly projectionCenterRA: Angle
+	readonly projectionCenterDEC: Angle
+	readonly projectedCatalogStars: readonly ProjectedCatalogStar<S>[]
+	readonly starMatch: StarMatchingResult
+	readonly transform: SimilarityTransform | AffineTransform
+	readonly imageCenterX: number
+	readonly imageCenterY: number
+	readonly nominalPixelsPerRadian: number
+	readonly solution: StarCrossmatchSolution
+}
+
+interface MatchAttemptResolution<S extends StarCatalogEntry> {
+	readonly projectedCatalogCount: number
+	readonly attempt?: MatchAttempt<S>
+}
+
+// Matches detected image stars against a queried catalog region and returns an approximate image-center RA/Dec.
+export async function crossMatchStars<S extends StarCatalogEntry>(detectedStars: readonly DetectedStar[], catalog: StarCatalog<S>, options: StarCrossmatchOptions): Promise<StarCrossmatchResult<S>> {
+	const resolved = resolveStarCrossmatchOptions(options)
+
+	if (detectedStars.length === 0) {
+		return failureStarCrossmatchResult(detectedStars, [], 0, 'no detected stars')
+	}
+
+	const catalogStars = await catalog.queryCone(resolved.centerRA, resolved.centerDEC, resolved.radius)
+
+	if (catalogStars.length === 0) {
+		return failureStarCrossmatchResult(detectedStars, catalogStars, 0, 'no catalog stars in query region')
+	}
+
+	let centerRA = resolved.centerRA
+	let centerDEC = resolved.centerDEC
+	let bestAttempt: MatchAttempt<S> | undefined
+	let lastProjectedCatalogCount = 0
+	let projection = new Gnomonic(centerRA, centerDEC)
+
+	for (let iteration = 0; iteration <= resolved.refinementIterations; iteration++) {
+		const resolution = solveProjectedCatalogMatch(detectedStars, catalogStars, projection, resolved)
+		const attempt = resolution.attempt
+		lastProjectedCatalogCount = resolution.projectedCatalogCount
+		if (attempt === undefined) break
+		if (bestAttempt === undefined || isBetterMatchAttempt(attempt, bestAttempt)) bestAttempt = attempt
+
+		const solution = attempt.solution
+		const centerOffset = sphericalSeparation(centerRA, centerDEC, solution.rightAscension, solution.declination)
+
+		if (centerRA !== solution.rightAscension || centerDEC !== solution.declination) {
+			centerRA = solution.rightAscension
+			centerDEC = solution.declination
+			projection = new Gnomonic(centerRA, centerDEC)
+		}
+
+		if (centerOffset <= resolved.centerTolerance) break
+	}
+
+	if (bestAttempt === undefined) {
+		return failureStarCrossmatchResult(detectedStars, catalogStars, lastProjectedCatalogCount, 'no geometric catalog match found')
+	}
+
+	const matches = materializeStarCrossmatchRecords(detectedStars, bestAttempt)
+
+	return {
+		success: true,
+		solution: bestAttempt.solution,
+		catalogStars,
+		matches,
+		summary: summarizeStarCrossmatch(catalogStars.length, bestAttempt.projectedCatalogStars.length, bestAttempt.starMatch.inlierCount, matches),
+		starMatch: bestAttempt.starMatch,
+	}
+}
+
+// Validates inputs and resolves defaults for the image-based crossmatcher.
+function resolveStarCrossmatchOptions(options: StarCrossmatchOptions): ResolvedStarCrossmatchOptions {
+	const centerRA = normalizeCoordinateRightAscension(options.centerRA)
+	const centerDEC = validateDeclination(options.centerDEC)
+	const radius = validateInRangeExclusive(options.radius, 0, PIOVERTWO)
+	const camera = validateCameraInfo(options.camera)
+	const maxCatalogStars = Math.max(6, Math.trunc(options.maxCatalogStars ?? DEFAULT_MAX_CATALOG_STARS))
+	const matchingConfig = resolveStarMatchingConfig(options.matchingConfig, maxCatalogStars)
+
+	return {
+		centerRA,
+		centerDEC,
+		radius,
+		camera,
+		refinementIterations: Math.max(0, Math.trunc(options.refinementIterations ?? 2)),
+		centerTolerance: options.centerTolerance === undefined ? DEFAULT_CENTER_TOLERANCE : validateInRangeExclusive(options.centerTolerance, 0, PI + GEOMETRY_EPSILON),
+		maxCatalogStars,
+		projectionPadding: Math.max(camera.width, camera.height) * Math.max(0, options.projectionPaddingFactor ?? DEFAULT_PROJECTION_PADDING_FACTOR),
+		nominalPixelsPerRadian: nominalPixelsPerRadian(camera, radius),
+		matchingConfig,
+	}
+}
+
+// Merges the geometric matcher defaults with caller overrides.
+function resolveStarMatchingConfig(config: StarMatchingConfig | undefined, maxCatalogStars: number): Required<StarMatchingConfig> {
+	return {
+		...DEFAULT_STAR_CROSSMATCH_CONFIG,
+		...config,
+		maxStars: Math.max(6, Math.trunc(config?.maxStars ?? maxCatalogStars)),
+		minStars: Math.max(3, Math.trunc(config?.minStars ?? DEFAULT_STAR_CROSSMATCH_CONFIG.minStars)),
+		localNeighborCount: Math.max(3, Math.trunc(config?.localNeighborCount ?? DEFAULT_STAR_CROSSMATCH_CONFIG.localNeighborCount)),
+		ransacIterations: Math.max(8, Math.trunc(config?.ransacIterations ?? DEFAULT_STAR_CROSSMATCH_CONFIG.ransacIterations)),
+		minInliers: Math.max(3, Math.trunc(config?.minInliers ?? DEFAULT_STAR_CROSSMATCH_CONFIG.minInliers)),
+		refineIterations: Math.max(1, Math.trunc(config?.refineIterations ?? DEFAULT_STAR_CROSSMATCH_CONFIG.refineIterations)),
+		maxPatternMatchesPerPattern: Math.max(1, Math.trunc(config?.maxPatternMatchesPerPattern ?? DEFAULT_STAR_CROSSMATCH_CONFIG.maxPatternMatchesPerPattern)),
+		maxHypotheses: Math.max(8, Math.trunc(config?.maxHypotheses ?? DEFAULT_STAR_CROSSMATCH_CONFIG.maxHypotheses)),
+	}
+}
+
+// Solves one geometric match attempt around the given projection center.
+function solveProjectedCatalogMatch<S extends StarCatalogEntry>(detectedStars: readonly DetectedStar[], catalogStars: readonly S[], projection: AzimuthalProjection, options: ResolvedStarCrossmatchOptions): MatchAttemptResolution<S> {
+	const projectedCatalogStars = projectCatalogStars(catalogStars, projection, options)
+	if (projectedCatalogStars.length < options.matchingConfig.minStars) return { projectedCatalogCount: projectedCatalogStars.length }
+
+	const referenceStars = new Array<DetectedStar>(projectedCatalogStars.length)
+	for (let index = 0; index < projectedCatalogStars.length; index++) referenceStars[index] = projectedCatalogStars[index].detectedStar
+	const starMatch = matchStars(referenceStars, detectedStars, options.matchingConfig)
+	if (!starMatch.success) return { projectedCatalogCount: projectedCatalogStars.length }
+
+	const transform = starMatchingTransform(starMatch)
+	if (transform === undefined) return { projectedCatalogCount: projectedCatalogStars.length }
+
+	return {
+		projectedCatalogCount: projectedCatalogStars.length,
+		attempt: {
+			projectionCenterRA: projection.centerLongitude,
+			projectionCenterDEC: projection.centerLatitude,
+			projectedCatalogStars,
+			starMatch,
+			transform,
+			imageCenterX: options.camera.width * 0.5,
+			imageCenterY: options.camera.height * 0.5,
+			nominalPixelsPerRadian: options.nominalPixelsPerRadian,
+			solution: buildStarCrossmatchSolution(transform, projection, options),
+		},
+	}
+}
+
+// Projects query-region catalog stars into an image-like tangent plane around the current center estimate.
+function projectCatalogStars<S extends StarCatalogEntry>(catalogStars: readonly S[], projection: Projection, options: ResolvedStarCrossmatchOptions): ProjectedCatalogStar<S>[] {
+	const imageCenterX = options.camera.width * 0.5
+	const imageCenterY = options.camera.height * 0.5
+	const projectedCatalogStars: ProjectedCatalogStar<S>[] = []
+	const p: Point = { x: 0, y: 0 }
+
+	for (let catalogIndex = 0; catalogIndex < catalogStars.length; catalogIndex++) {
+		const catalogStar = catalogStars[catalogIndex]
+		const projected = projection.project(catalogStar.rightAscension, catalogStar.declination, p)
+		if (projected === undefined) continue
+
+		const x = imageCenterX + projected.x * options.nominalPixelsPerRadian
+		const y = imageCenterY - projected.y * options.nominalPixelsPerRadian
+		if (x < -options.projectionPadding || x > options.camera.width + options.projectionPadding || y < -options.projectionPadding || y > options.camera.height + options.projectionPadding) continue
+
+		projectedCatalogStars.push({
+			catalogStar,
+			catalogIndex,
+			detectedStar: syntheticCatalogPatternStar(x, y, catalogStar.magnitude),
+			planeX: projected.x,
+			planeY: projected.y,
+			projectedRadius: Math.hypot(projected.x, projected.y),
+		})
+	}
+
+	projectedCatalogStars.sort(ProjectedCatalogStarComparator)
+	if (projectedCatalogStars.length > options.maxCatalogStars) projectedCatalogStars.length = options.maxCatalogStars
+	return projectedCatalogStars
+}
+
+// Synthesizes positive photometry so the triangle matcher can rank catalog stars deterministically.
+function syntheticCatalogPatternStar(x: number, y: number, magnitude?: number): DetectedStar {
+	const brightness = magnitude === undefined ? 1 : Math.max(1, 16 - magnitude)
+	return { x, y, flux: brightness * brightness, snr: brightness, hfd: 1.5 }
+}
+
+// Sorts projected catalog stars by brightness when available, then by projected radius.
+function ProjectedCatalogStarComparator<S extends StarCatalogEntry>(left: ProjectedCatalogStar<S>, right: ProjectedCatalogStar<S>) {
+	if (left.catalogStar.magnitude !== right.catalogStar.magnitude) return compareOptionalAscending(left.catalogStar.magnitude, right.catalogStar.magnitude)
+	if (left.projectedRadius !== right.projectedRadius) return left.projectedRadius - right.projectedRadius
+	return 0
+}
+
+// Builds the approximate sky solution from the fitted image-to-tangent transform.
+function buildStarCrossmatchSolution(transform: SimilarityTransform | AffineTransform, projection: Projection, options: ResolvedStarCrossmatchOptions): StarCrossmatchSolution {
+	const imageCenter = { x: options.camera.width * 0.5, y: options.camera.height * 0.5 }
+	const projectedCenter = applyTransformToPoint(imageCenter.x, imageCenter.y, transform)
+	const planeX = (projectedCenter.x - imageCenter.x) / options.nominalPixelsPerRadian
+	const planeY = -(projectedCenter.y - imageCenter.y) / options.nominalPixelsPerRadian
+	const skyCenter = projection.unproject(planeX, planeY)
+
+	if (skyCenter === undefined) {
+		throw new Error('failed to unproject the fitted image center')
+	}
+
+	const scale = transformAngularScale(transform, options.nominalPixelsPerRadian)
+	const fieldRadius = 0.5 * Math.hypot(options.camera.width, options.camera.height) * scale
+
+	return { rightAscension: skyCenter.x, declination: skyCenter.y, scale, rotation: transformRotation(transform), mirrored: transformMirrored(transform), fieldRadius }
+}
+
+// Materializes per-detection associations from the best geometric solution.
+function materializeStarCrossmatchRecords<S extends StarCatalogEntry>(detectedStars: readonly DetectedStar[], attempt: MatchAttempt<S>): StarCrossmatchRecord<S>[] {
+	const records = new Array<StarCrossmatchRecord<S>>(detectedStars.length)
+	const projection = new Gnomonic(attempt.projectionCenterRA, attempt.projectionCenterDEC)
+	const p: Point = { x: 0, y: 0 }
+
+	for (let detectedIndex = 0; detectedIndex < detectedStars.length; detectedIndex++) {
+		records[detectedIndex] = { detectedStar: detectedStars[detectedIndex], detectedIndex, status: 'unmatched' }
+	}
+
+	for (let matchIndex = 0; matchIndex < attempt.starMatch.matches.length; matchIndex++) {
+		const match = attempt.starMatch.matches[matchIndex]
+		const projectedCatalogStar = attempt.projectedCatalogStars[match.referenceIndex]
+		if (projectedCatalogStar === undefined) continue
+
+		const skyPosition = approximateDetectedSkyPosition(detectedStars[match.currentIndex], attempt, projection, p)
+		const skySeparation = skyPosition === undefined ? undefined : sphericalSeparation(skyPosition.x, skyPosition.y, projectedCatalogStar.catalogStar.rightAscension, projectedCatalogStar.catalogStar.declination)
+
+		records[match.currentIndex] = {
+			detectedStar: detectedStars[match.currentIndex],
+			detectedIndex: match.currentIndex,
+			status: 'matched',
+			catalogStar: projectedCatalogStar.catalogStar,
+			catalogIndex: projectedCatalogStar.catalogIndex,
+			residual: match.residual,
+			skySeparation,
+		}
+	}
+
+	return records
+}
+
+// Converts one detected image star into an approximate sky coordinate from the solved transform.
+function approximateDetectedSkyPosition<S extends StarCatalogEntry>(detectedStar: DetectedStar, attempt: MatchAttempt<S>, projection: Projection, out: Point) {
+	const projected = applyTransformToPoint(detectedStar.x, detectedStar.y, attempt.transform)
+	const planeX = (projected.x - attempt.imageCenterX) / attempt.nominalPixelsPerRadian
+	const planeY = -(projected.y - attempt.imageCenterY) / attempt.nominalPixelsPerRadian
+	return projection.unproject(planeX, planeY, out)
+}
+
+// Builds failure payloads while keeping per-detection status explicit.
+function failureStarCrossmatchResult<S extends StarCatalogEntry>(detectedStars: readonly DetectedStar[], catalogStars: readonly S[], projectedCatalogCount: number, failureReason: string): StarCrossmatchResult<S> {
+	const matches = new Array<StarCrossmatchRecord<S>>(detectedStars.length)
+
+	for (let detectedIndex = 0; detectedIndex < detectedStars.length; detectedIndex++) {
+		matches[detectedIndex] = { detectedStar: detectedStars[detectedIndex], detectedIndex, status: 'unmatched' }
+	}
+
+	return { success: false, catalogStars, matches, summary: summarizeStarCrossmatch(catalogStars.length, projectedCatalogCount, 0, matches), failureReason }
+}
+
+// Summarizes residual and sky-separation statistics for matched detections.
+function summarizeStarCrossmatch<S extends StarCatalogEntry>(catalogCount: number, projectedCatalogCount: number, inlierCount: number, matches: readonly StarCrossmatchRecord<S>[]): StarCrossmatchSummary {
+	let matchedCount = 0
+	let residualSum = 0
+	let skySeparationSum = 0
+	const residuals = new Float64Array(matches.length)
+	const skySeparations = new Float64Array(matches.length)
+	let skySeparationCount = 0
+
+	for (let index = 0; index < matches.length; index++) {
+		const match = matches[index]
+		if (match.status !== 'matched' || match.residual === undefined) continue
+		residuals[matchedCount] = match.residual
+		residualSum += match.residual
+
+		if (match.skySeparation !== undefined) {
+			skySeparations[skySeparationCount] = match.skySeparation
+			skySeparationSum += match.skySeparation
+			skySeparationCount++
+		}
+
+		matchedCount++
+	}
+
+	const matchedResiduals = residuals.subarray(0, matchedCount).sort()
+	const matchedSkySeparations = skySeparations.subarray(0, skySeparationCount).sort()
+
+	return {
+		totalDetected: matches.length,
+		matchedCount,
+		unmatchedCount: matches.length - matchedCount,
+		catalogCount,
+		projectedCatalogCount,
+		inlierCount,
+		averageResidual: matchedCount === 0 ? undefined : residualSum / matchedCount,
+		medianResidual: matchedCount === 0 ? undefined : medianOf(matchedResiduals),
+		averageSkySeparation: skySeparationCount === 0 ? undefined : skySeparationSum / skySeparationCount,
+		medianSkySeparation: skySeparationCount === 0 ? undefined : medianOf(matchedSkySeparations),
+	}
+}
+
+// Chooses the strongest successful iterative attempt.
+function isBetterMatchAttempt<S extends StarCatalogEntry>(left: MatchAttempt<S>, right: MatchAttempt<S>) {
+	if (left.starMatch.score !== right.starMatch.score) return left.starMatch.score > right.starMatch.score
+	if (left.starMatch.inlierCount !== right.starMatch.inlierCount) return left.starMatch.inlierCount > right.starMatch.inlierCount
+	return (left.starMatch.rmsError ?? Number.POSITIVE_INFINITY) < (right.starMatch.rmsError ?? Number.POSITIVE_INFINITY)
+}
+
+// Extracts the fitted image-to-reference transform from a successful star match.
+function starMatchingTransform(result: StarMatchingResult) {
+	if (!result.success) return undefined
+	if (result.model === 'similarity' && result.similarity !== undefined) return result.similarity
+	if (result.model === 'affine' && result.affine !== undefined) return result.affine
+	return undefined
+}
+
+// Returns the angular scale represented by one image pixel.
+function transformAngularScale(transform: SimilarityTransform | AffineTransform, nominalPixelsPerRadian: number) {
+	return nominalPixelsPerRadian <= 0 ? 0 : transformScale(transform) / nominalPixelsPerRadian
+}
+
+// Returns the linear scale of the fitted transform in projected pixels per image pixel.
+function transformScale(transform: SimilarityTransform | AffineTransform) {
+	if ('mirrored' in transform) return Math.hypot(transform.a, transform.b)
+	const determinant = transform.m00 * transform.m11 - transform.m01 * transform.m10
+	return Math.sqrt(Math.abs(determinant))
+}
+
+// Returns the approximate image rotation carried by the fitted transform.
+function transformRotation(transform: SimilarityTransform | AffineTransform) {
+	return 'mirrored' in transform ? Math.atan2(transform.b, transform.a) : Math.atan2(transform.m10, transform.m00)
+}
+
+// Returns whether the fitted transform includes a parity flip.
+function transformMirrored(transform: SimilarityTransform | AffineTransform) {
+	return 'mirrored' in transform ? transform.mirrored : transform.m00 * transform.m11 - transform.m01 * transform.m10 < 0
+}
+
+// Computes a nominal tangent-plane scale from optics when available or from the query footprint otherwise.
+function nominalPixelsPerRadian(camera: Readonly<StarCrossmatchCameraInfo>, queryRadius: Angle) {
+	if (camera.pixelSize !== undefined && camera.focalLength !== undefined) {
+		const pixelSize = validatePositiveFinite(camera.pixelSize)
+		const focalLength = validatePositiveFinite(camera.focalLength)
+		return (focalLength * 1000) / pixelSize
+	}
+
+	return Math.max(1, Math.min(camera.width, camera.height) / (2 * Math.max(queryRadius, GEOMETRY_EPSILON)))
+}
+
+// Validates the camera geometry needed to convert the solved transform into a center coordinate.
+function validateCameraInfo(camera: Readonly<StarCrossmatchCameraInfo>): Readonly<StarCrossmatchCameraInfo> {
+	const width = validatePositiveFinite(camera.width)
+	const height = validatePositiveFinite(camera.height)
+	if (camera.pixelSize !== undefined) validatePositiveFinite(camera.pixelSize)
+	if (camera.focalLength !== undefined) validatePositiveFinite(camera.focalLength)
+	return { ...camera, width, height }
+}
+
+// Normalizes required right ascension input or throws on invalid values.
+function normalizeCoordinateRightAscension(value: Angle) {
+	if (!Number.isFinite(value)) {
+		throw new TypeError(`invalid right ascension: ${value}`)
+	}
+
+	return normalizeAngle(value)
+}
+
+// Validates a declination value in radians.
+function validateDeclination(declination: Angle) {
+	if (!Number.isFinite(declination) || declination < -PIOVERTWO - GEOMETRY_EPSILON || declination > PIOVERTWO + GEOMETRY_EPSILON) {
+		throw new TypeError(`invalid declination: ${declination}`)
+	}
+
+	return clamp(declination, -PIOVERTWO, PIOVERTWO)
+}
+
+// Orders optional numeric values with undefined consistently placed last.
+function compareOptionalAscending(left: number | undefined, right: number | undefined) {
+	if (left === right) return 0
+	if (left === undefined) return 1
+	if (right === undefined) return -1
+	return left - right
+}

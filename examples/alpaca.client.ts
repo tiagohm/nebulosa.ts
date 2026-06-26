@@ -1,8 +1,8 @@
-import { AlpacaClient, type AlpacaClientHandler } from '../src/alpaca.client'
-import { AlpacaDiscoveryClient } from '../src/alpaca.discovery'
-import type { Client, Device, DeviceType } from '../src/indi.device'
-import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/indi.manager'
-import type { PropertyState } from '../src/indi.types'
+import { AlpacaClient, type AlpacaClientHandler } from '../src/devices/alpaca/client'
+import { AlpacaDiscoveryClient } from '../src/devices/alpaca/discovery'
+import type { Client, Device, DeviceType } from '../src/devices/indi/device'
+import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/devices/indi/manager'
+import type { PropertyState } from '../src/devices/indi/types'
 
 const alpacaDiscoveryClient = new AlpacaDiscoveryClient()
 // await alpacaDiscoveryClient.discovery(console.info, { timeout: 1000, wait: true })

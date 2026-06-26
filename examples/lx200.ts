@@ -1,5 +1,5 @@
-import { Lx200ProtocolServer } from '../src/lx200'
-import { temporalAdd, temporalNow } from '../src/temporal'
+import { temporalAdd, temporalNow } from '../src/astronomy/time/temporal'
+import { Lx200ProtocolServer } from '../src/devices/protocols/lx200'
 
 const UTC_OFFSET = -180
 
