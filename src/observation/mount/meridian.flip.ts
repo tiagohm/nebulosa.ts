@@ -400,6 +400,7 @@ function evaluatePreFlipThresholds(resolved: ResolvedMeridianFlipPolicy, snapsho
 	}
 
 	if (!state.preparationCompleted && snapshot.isGuiding === true) return decision('READY', 'PAUSE_GUIDING', reason, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, false))
+	if (!isMountReadyForFlip(snapshot)) return decision('READY', 'NONE', reason, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, true))
 	return decision('READY', 'START_FLIP', reason, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, updateState(state, 'READY', state.attempts, true))
 }
 
@@ -423,6 +424,7 @@ function evaluateFailedState(resolved: ResolvedMeridianFlipPolicy, snapshot: Mer
 		if (isAtOrAfterThreshold(hourAngle, resolved.flipAt) && snapshot.isExposing !== true && !isAlreadyFlipped) {
 			const pierSideFailure = evaluatePreFlipPierSide(resolved, snapshot, state, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped)
 			if (pierSideFailure) return pierSideFailure
+			if (!isMountReadyForFlip(snapshot)) return decision('FAILED', 'NONE', 'EXECUTION_FAILED', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
 			return decision('FAILED', 'START_FLIP', 'RETRY_AVAILABLE', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
 		}
 		return decision('FAILED', 'NONE', 'EXECUTION_FAILED', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
@@ -451,6 +453,11 @@ function isBeforeThreshold(value: Angle, threshold: Angle) {
 // Returns true when value is at or materially after a signed threshold.
 function isAtOrAfterThreshold(value: Angle, threshold: Angle) {
 	return value > threshold || threshold - value <= ANGULAR_THRESHOLD_EPSILON
+}
+
+// Returns whether mount telemetry permits issuing a new flip-inducing slew.
+function isMountReadyForFlip(snapshot: MeridianFlipSnapshot) {
+	return snapshot.isSlewing !== true && snapshot.isMountSettled !== false
 }
 
 // Creates a decision object from already-computed angular fields and state.

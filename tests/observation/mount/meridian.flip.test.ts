@@ -114,6 +114,16 @@ test('flip threshold without active guiding can start without a fabricated prepa
 	}
 })
 
+test('flip threshold waits while the mount is slewing or unsettled', () => {
+	const state: MeridianFlipState = { phase: 'READY', attempts: 0, preparationCompleted: true }
+
+	for (const snapshot of [snapshotAt(deg(2), { isSlewing: true }), snapshotAt(deg(2), { isMountSettled: false })]) {
+		const result = evaluateMeridianFlip(basePolicy(), snapshot, state)
+		expectDecision(result, 'READY', 'NONE', 'FLIP_THRESHOLD_REACHED')
+		expect(result.state.preparationCompleted).toBeTrue()
+	}
+})
+
 test('configured post-flip side completes active pre-flip states without recommending another flip', () => {
 	const policy = basePolicy({ beforeFlipPierSide: 'EAST', afterFlipPierSide: 'WEST' })
 
@@ -226,6 +236,14 @@ test('failed retry rechecks pre-flip pier-side guards before starting another fl
 	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2)), state), 'FAILED', 'FAIL', 'PIER_SIDE_NEITHER')
 	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { pierSide: 'EAST' }), state), 'FAILED', 'START_FLIP', 'RETRY_AVAILABLE')
 	expectDecision(evaluateMeridianFlip(basePolicy({ beforeFlipPierSide: 'EAST', allowUnknownPierSide: true, maxRetries: 1 }), snapshotAt(deg(2)), state), 'FAILED', 'START_FLIP', 'RETRY_AVAILABLE')
+})
+
+test('failed retry waits while the mount is slewing or unsettled', () => {
+	const state: MeridianFlipState = { phase: 'FAILED', attempts: 1, preparationCompleted: true, failure: 'EXECUTION_FAILED' }
+	const policy = basePolicy({ maxRetries: 1 })
+
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { isSlewing: true }), state), 'FAILED', 'NONE', 'EXECUTION_FAILED')
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { isMountSettled: false }), state), 'FAILED', 'NONE', 'EXECUTION_FAILED')
 })
 
 test('invalid lifecycle transitions throw RangeError', () => {
