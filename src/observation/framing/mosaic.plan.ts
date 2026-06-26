@@ -1,5 +1,5 @@
-import { type Angle, normalizeAngle, normalizePI } from './angle'
-import { PI, PIOVERTWO } from './constants'
+import { PI, PIOVERTWO } from '../../core/constants'
+import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 
 // Maximum sparse-array length accepted by JavaScript engines.
 const MAX_ARRAY_LENGTH = 0xffffffff

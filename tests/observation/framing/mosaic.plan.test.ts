@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
-import { deg, type Angle } from '../src/angle'
-import { TAU } from '../src/constants'
-import { sphericalSeparation } from '../src/geometry'
-import { mosaicBasis, planMosaic, type MosaicBasis, type MosaicCoordinate, type MosaicPlan, type MosaicPlanInput } from '../src/mosaic.plan'
+import { TAU } from '../../../src/core/constants'
+import { sphericalSeparation } from '../../../src/math/numerical/geometry'
+import { deg, type Angle } from '../../../src/math/units/angle'
+import { mosaicBasis, planMosaic, type MosaicBasis, type MosaicCoordinate, type MosaicPlan, type MosaicPlanInput } from '../../../src/observation/framing/mosaic.plan'
 
 interface PlanePoint {
 	readonly x: number
