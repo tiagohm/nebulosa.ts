@@ -4,7 +4,7 @@
 
 Nebulosa is a Bun-first, ESM-only TypeScript astronomy library.
 
-The codebase is intentionally flat and module-oriented. Most numerical, coordinate, ephemeris, image, and geometry code lives in top-level `src/*.ts` files. Protocol and device integrations use the same flat naming scheme with dot-separated domains, such as `alpaca.*`, `firmata.*`, `image.*`, `indi.*`, and `star.*`.
+The codebase is module-oriented and organized under `src/` into domain-and-responsibility folders that follow the direction of dependencies. Low-level layers (`core`, `math`, `io`) never import from higher ones (`astronomy`, `imaging`, `astrometry`, `catalogs`, `observation`); runtime edges (`devices`, `adapters`, `bindings`) sit on top. Within a folder, related modules keep dot-separated domain names, such as `alpaca.*`, `firmata.*`, `image.*`, `indi.*`, and `star.*`. `tests/` mirrors the `src/` folder layout.
 
 ## Working Principles
 
@@ -29,22 +29,23 @@ Prefer the MCP graph tools for code discovery:
 
 ## Repository Map
 
-- `src/*.ts`: library source files. Keep new implementation code here and preserve the flat layout.
-- `src/*.data.ts`: large static numeric tables. Do not rewrite, reformat, or regenerate them unless the task explicitly requires it.
-- `tests/*.test.ts`: Bun tests, usually mirroring source module names.
-- `tests/setup.ts`: Bun preload for shared test state and fixture-backed resources.
-- `tests/download.ts`: downloads missing fixtures into `data/` from GitHub when tests need them.
+- `src/`: library source, grouped into domain folders. Top layers: `core`, `math/*`, `io/*`. Domain layers: `astronomy/*`, `imaging/*`, `astrometry/*`, `catalogs/*`. Runtime edges: `devices/*`, `adapters/*`, `bindings/*`, and the high-level `observation/*` algorithms. Place new implementation code in the folder that matches its domain and respects the dependency direction.
+- `src/**/*.data.ts`: large static numeric tables, co-located with the model that consumes them. Do not rewrite, reformat, or regenerate them unless the task explicitly requires it.
+- `tests/**/*.test.ts`: Bun tests mirroring the `src/` folder layout and module names.
+- `tests/setup.ts`: Bun preload for shared test state and fixture-backed resources. Kept at the `tests/` root.
+- `tests/download.ts`, `tests/*.util.ts`: shared test helpers kept at the `tests/` root; downloads missing fixtures into `data/` from GitHub when tests need them.
 - `data/`: test fixtures such as FITS, XISF, SPK, catalogs, and Earth orientation files.
-- `examples/`: runnable usage examples. Update these when public APIs or workflows change.
-- `native/`: native/runtime support used by `postinstall`. Treat changes here as high-risk.
+- `examples/`, `scripts/`: runnable usage examples and maintenance scripts that import from `src/`. Update their imports when modules move.
+- `native/`: native/runtime support used by `postinstall` (distinct from `src/bindings/`, which holds the TypeScript FFI bindings). Treat changes here as high-risk.
 - `README.md`: public API documentation. Update it when exported behavior or examples change.
 - `main.ts`: not the main implementation surface of the library. Prefer editing `src/` and `tests/`.
 
 ## Project Structure Rules
 
-- Do not create new top-level directories.
-- Keep the existing flat file organization in `src/` and `tests/`.
-- Prefer dot-separated filenames for new modules, for example `image.processing.ts` instead of nested folders.
+- Place new modules in the existing `src/` domain folder that matches their responsibility; do not add new top-level `src/` categories without a clear domain need.
+- Respect the layer dependency direction: `core`, `math`, and `io` must not import from `astronomy`, `imaging`, `astrometry`, `catalogs`, `observation`, `devices`, `adapters`, or `bindings`. `observation` may import `devices`/`adapters`, never the reverse.
+- Keep `tests/` mirroring the `src/` folder layout, with shared test helpers (`setup.ts`, `download.ts`, `*.util.ts`) at the `tests/` root.
+- Within a folder, prefer dot-separated filenames for related modules of the same domain, for example `firmata.barometer.ts`, rather than deeper nesting.
 - Prefer direct module imports over new barrel files unless the task explicitly requires an aggregated entrypoint.
 - Preserve existing relative import style without `.ts` extensions.
 - Reuse existing modules before creating new ones, especially in math, time, image, catalog, and coordinate code.
