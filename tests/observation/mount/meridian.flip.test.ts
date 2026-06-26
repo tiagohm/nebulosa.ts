@@ -218,6 +218,16 @@ test('failed state exposes retry only after threshold, not while exposing or alr
 	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { pierSide: 'WEST' }), state), 'FAILED', 'NONE', 'EXECUTION_FAILED')
 })
 
+test('failed retry rechecks pre-flip pier-side guards before starting another flip', () => {
+	const state: MeridianFlipState = { phase: 'FAILED', attempts: 1, preparationCompleted: true, failure: 'EXECUTION_FAILED' }
+	const policy = basePolicy({ beforeFlipPierSide: 'EAST', maxRetries: 1 })
+
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { pierSide: 'WEST' }), state), 'FAILED', 'FAIL', 'PIER_SIDE_MISMATCH')
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2)), state), 'FAILED', 'FAIL', 'PIER_SIDE_NEITHER')
+	expectDecision(evaluateMeridianFlip(policy, snapshotAt(deg(2), { pierSide: 'EAST' }), state), 'FAILED', 'START_FLIP', 'RETRY_AVAILABLE')
+	expectDecision(evaluateMeridianFlip(basePolicy({ beforeFlipPierSide: 'EAST', allowUnknownPierSide: true, maxRetries: 1 }), snapshotAt(deg(2)), state), 'FAILED', 'START_FLIP', 'RETRY_AVAILABLE')
+})
+
 test('invalid lifecycle transitions throw RangeError', () => {
 	const policy = basePolicy()
 	const cases: readonly [MeridianFlipState, MeridianFlipEvent][] = [
