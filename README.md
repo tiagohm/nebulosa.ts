@@ -184,6 +184,14 @@ meridianEcliptic(longitude, time) // Current equatorial coordinates where the me
 equatorEcliptic(longitude, time) // Nearer equinox node where the equator crosses the ecliptic
 ```
 
+### Correction ![](bun.webp) ![](browser.webp)
+
+```ts
+observerState(time, pv, location) // Observer BCRS position (AU) & velocity (AU/day) referred to the barycenter or Sun
+radialVelocityCorrection(ra, dec, time, pv, location) // Barycentric/heliocentric radial-velocity correction in AU/day
+lightTravelTime(ra, dec, time, pv, location) // Light-travel-time correction in days to add to an observed time
+```
+
 ### CRC ![](bun.webp) ![](browser.webp)
 
 ```ts

@@ -1,0 +1,103 @@
+import { describe, expect, test } from 'bun:test'
+import { carringtonRotationNumber, nearestSolarEclipse, season, solarSaros, sunParallax, sunSemidiameter } from '../../../src/astronomy/bodies/sun'
+import { time, Timescale, timeToDate, timeYMD, timeYMDHMS, toJulianDay, utc } from '../../../src/astronomy/time/time'
+import { arcsec } from '../../../src/math/units/angle'
+
+test('parallax', () => {
+	expect(sunParallax(1)).toBeCloseTo(arcsec(8.794), 7)
+	expect(sunParallax(1.0167)).toBeCloseTo(arcsec(8.65), 7)
+	expect(sunParallax(0.98329)).toBeCloseTo(arcsec(8.943), 7)
+})
+
+test('semi-diameter', () => {
+	expect(sunSemidiameter(1)).toBeCloseTo(arcsec(959.63), 7)
+	expect(sunSemidiameter(1.0167)).toBeCloseTo(arcsec(943.87), 7)
+	expect(sunSemidiameter(0.98329)).toBeCloseTo(arcsec(975.94), 7)
+})
+
+test('carrington rotation number', () => {
+	expect(carringtonRotationNumber(time(2442439, 0.5))).toBe(1624)
+})
+
+test('season', () => {
+	expect(toJulianDay(season(1962, 'summer'))).toBeCloseTo(2437837.39245, 5)
+	expect(timeToDate(season(1991, 'spring'))).toEqual([1991, 3, 21, 3, 3, 9, 268713029])
+	expect(timeToDate(season(1991, 'summer'))).toEqual([1991, 6, 21, 21, 19, 36, 114155028])
+	expect(timeToDate(season(1991, 'autumn'))).toEqual([1991, 9, 23, 12, 48, 56, 140399989])
+	expect(timeToDate(season(1991, 'winter'))).toEqual([1991, 12, 22, 8, 54, 53, 684271186])
+})
+
+test('season is reported in dynamical time (TT)', () => {
+	const s = season(2024, 'spring')
+	// Meeus' method yields the JDE, so the instant must be tagged TT, not UTC.
+	expect(s.scale).toBe(Timescale.TT)
+	// Converting to civil UTC must move the instant earlier by ΔT (~69 s in 2024), not be a no-op.
+	expect(toJulianDay(s) - toJulianDay(utc(s))).toBeCloseTo(69 / 86400, 4)
+})
+
+test('saros', () => {
+	expect(solarSaros(time(2451401))).toBe(145)
+	expect(solarSaros(timeYMD(2013, 11, 3))).toBe(143)
+	expect(solarSaros(timeYMD(2009, 7, 22))).toBe(136)
+	expect(solarSaros(time(2270969.5))).toBe(108)
+})
+
+describe('nearest solar eclipse', () => {
+	test('total', () => {
+		// https://www.timeanddate.com/eclipse/solar/2024-april-8
+		const eclipse = nearestSolarEclipse(timeYMD(2024, 3, 1), true)
+		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 4, 8, 18, 17])
+		expect(eclipse.type).toBe('total')
+		// Central eclipse: magnitude is the topocentric Moon/Sun diameter ratio (> 1 for total).
+		expect(eclipse.magnitude).toBeCloseTo(1.0566, 2)
+	})
+
+	test('annular', () => {
+		// https://www.timeanddate.com/eclipse/solar/2024-october-2
+		const eclipse = nearestSolarEclipse(timeYMD(2024, 4, 9), true)
+		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
+		expect(eclipse.type).toBe('annular')
+		// Central eclipse: magnitude is the topocentric Moon/Sun diameter ratio (< 1 for annular).
+		expect(eclipse.magnitude).toBeCloseTo(0.9326, 2)
+	})
+
+	test('partial', () => {
+		// https://www.timeanddate.com/eclipse/solar/2025-september-21
+		const eclipse = nearestSolarEclipse(timeYMD(2025, 9, 21), true)
+		expect(eclipse.lunation).toBe(318)
+		expect(eclipse.type).toBe('partial')
+		expect(eclipse.magnitude).toBeCloseTo(0.8557, 4)
+		expect(eclipse.gamma).toBeCloseTo(-1.0643, 4)
+		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2025, 9, 21, 19, 41])
+	})
+
+	test('non-central annular', () => {
+		// https://eclipse.gsfc.nasa.gov/SEsearch/SEdata.php?Ecl=20140429
+		const eclipse = nearestSolarEclipse(timeYMD(2014, 1, 1), true)
+		expect(eclipse.type).toBe('annular')
+		expect(eclipse.magnitude).toBeCloseTo(0.9868, 2)
+		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2014, 4, 29, 6, 3])
+	})
+
+	test('non-central total', () => {
+		// https://eclipse.gsfc.nasa.gov/SEsearch/SEdata.php?Ecl=20430409
+		const eclipse = nearestSolarEclipse(timeYMD(2043, 1, 1), true)
+		expect(eclipse.type).toBe('total')
+		expect(eclipse.magnitude).toBeCloseTo(1.0095, 2)
+		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2043, 4, 9, 18, 56])
+	})
+
+	test('previous', () => {
+		const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 46), false)
+		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
+		expect(eclipse.type).toBe('annular')
+		expect(timeToDate(utc(nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 44), false).maximalTime)).slice(0, 5)).toEqual([2024, 4, 8, 18, 17])
+	})
+
+	test('next', () => {
+		const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 44), true)
+		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
+		expect(eclipse.type).toBe('annular')
+		expect(timeToDate(utc(nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 46), true).maximalTime)).slice(0, 5)).toEqual([2025, 3, 29, 10, 48])
+	})
+})
