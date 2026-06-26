@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { Image } from '../../../src/imaging/model/image.types'
+import type { Image } from '../../../src/imaging/model/types'
 import { applyCalibration, estimateTranslation, filterGuideStars, type GuideFrame, Guider, type GuiderConfig, type GuideStar, invertCalibration, selectGuideStar, validateCalibration } from '../../../src/observation/guiding/guider'
 
 const WIDTH = 800

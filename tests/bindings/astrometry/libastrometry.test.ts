@@ -5,7 +5,7 @@ import { join } from 'path'
 import { DEC_TAN_SIP, RA_TAN_SIP } from '../../../src/astrometry/wcs/fits.wcs'
 import { astrometryNetIndexFiles, libAstrometryNetPlateSolve } from '../../../src/bindings/astrometry/libastrometry'
 import { readImageFromJpeg } from '../../../src/imaging/model/image'
-import { detectStars } from '../../../src/imaging/stars/star.detector'
+import { detectStars } from '../../../src/imaging/stars/detector'
 import { deg, toArcsec, toDeg, toHour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 

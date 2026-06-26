@@ -1,7 +1,7 @@
 import { NumberComparator, percentileOf } from '../../core/util'
 import { validateFinite } from '../../core/validation'
 import type { FitsHeader } from '../../io/formats/fits/fits'
-import { heightKeyword, numericKeyword, widthKeyword } from '../../io/formats/fits/fits.util'
+import { heightKeyword, numericKeyword, widthKeyword } from '../../io/formats/fits/util'
 import { Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
 import type { NumberArray } from '../../math/numerical/math'
 import { DEC_TAN, DEC_TAN_SIP, RA_TAN, RA_TAN_SIP } from './fits.wcs'

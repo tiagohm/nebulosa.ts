@@ -1,11 +1,11 @@
 import { type AffineTransform, invertTransform, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from '../../astrometry/matching/star.matching'
 import { meanOf, medianAbsoluteDeviationOf, medianOf } from '../../core/util'
 import { Bitpix, type FitsHeader } from '../../io/formats/fits/fits'
-import { bitpixInBytes } from '../../io/formats/fits/fits.util'
+import { bitpixInBytes } from '../../io/formats/fits/util'
 import type { Rect, Size } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
-import type { Image, ImageRawType, SigmaClipCenterMethod, SigmaClipDispersionMethod } from '../model/image.types'
-import type { DetectedStar } from '../stars/star.detector'
+import type { Image, ImageRawType, SigmaClipCenterMethod, SigmaClipDispersionMethod } from '../model/types'
+import type { DetectedStar } from '../stars/detector'
 
 export type StackingCombinationMethod = 'sum' | 'average' | 'weighted-average' | 'median' | 'sigma-clip' | 'min-max-average' | 'winsorized-mean' | 'percentile-clip-average'
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { Image } from '../../../src/imaging/model/image.types'
+import type { Image } from '../../../src/imaging/model/types'
 import { LiveStacker, type StackingFrame, type StackingOptions, stackFrames } from '../../../src/imaging/processing/stacker'
-import type { DetectedStar } from '../../../src/imaging/stars/star.detector'
+import type { DetectedStar } from '../../../src/imaging/stars/detector'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 
 const DEFAULT_STACK_OPTIONS = {

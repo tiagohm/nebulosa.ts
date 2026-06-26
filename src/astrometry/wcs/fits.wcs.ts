@@ -1,6 +1,6 @@
 import { PI, RAD2DEG } from '../../core/constants'
 import type { FitsHeader } from '../../io/formats/fits/fits'
-import { hasKeyword, numericKeyword, textKeyword } from '../../io/formats/fits/fits.util'
+import { hasKeyword, numericKeyword, textKeyword } from '../../io/formats/fits/util'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, deg, normalizeAngle, normalizePI } from '../../math/units/angle'
 

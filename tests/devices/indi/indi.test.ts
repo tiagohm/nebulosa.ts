@@ -1,8 +1,8 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
-import { IndiClient, type IndiClientHandler } from '../../../src/devices/indi/indi.client'
-import { type Camera, type Cover, expectedPierSide, type FlatPanel, type Focuser, type GuideOutput, meridianTimeIn, type Mount, type Power, type Rotator, type Thermometer, type Wheel } from '../../../src/devices/indi/indi.device'
-import { CameraManager, CoverManager, type DeviceHandler, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/indi.manager'
-import type { DefSwitchVector, DefTextVector, PropertyState } from '../../../src/devices/indi/indi.types'
+import { IndiClient, type IndiClientHandler } from '../../../src/devices/indi/client'
+import { type Camera, type Cover, expectedPierSide, type FlatPanel, type Focuser, type GuideOutput, meridianTimeIn, type Mount, type Power, type Rotator, type Thermometer, type Wheel } from '../../../src/devices/indi/device'
+import { CameraManager, CoverManager, type DeviceHandler, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
+import type { DefSwitchVector, DefTextVector, PropertyState } from '../../../src/devices/indi/types'
 // oxfmt-ignore
 import { SimpleXmlParser } from '../../../src/io/xml'
 import { PI, SIDEREAL_DAYSEC, TAU } from '../../../src/core/constants'

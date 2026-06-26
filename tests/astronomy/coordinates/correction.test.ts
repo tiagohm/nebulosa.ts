@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { lightTravelTime, observerState, radialVelocityCorrection } from '../../../src/astronomy/coordinates/correction'
+import { eraEpv00 } from '../../../src/astronomy/coordinates/erfa/earth'
 import { eraC2s } from '../../../src/astronomy/coordinates/erfa/erfa'
-import { eraEpv00 } from '../../../src/astronomy/coordinates/erfa/erfa.earth'
 import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { tdb, Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PI } from '../../../src/core/constants'

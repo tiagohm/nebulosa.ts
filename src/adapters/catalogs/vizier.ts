@@ -1,4 +1,4 @@
-import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type StarCatalogRaDecBox } from '../../catalogs/stars/star.catalog'
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type StarCatalogRaDecBox } from '../../catalogs/stars/catalog'
 import { type CsvRow, type ReadCsvOptions, readCsv, TSV_DELIMITER } from '../../io/csv'
 import { type Angle, deg, mas, toDeg } from '../../math/units/angle'
 import { kilometerPerSecond } from '../../math/units/velocity'

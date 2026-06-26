@@ -1,6 +1,6 @@
 import { medianAbsoluteDeviationOf, medianOf } from '../../core/util'
-import type { Image } from '../../imaging/model/image.types'
-import type { DetectedStar } from '../../imaging/stars/star.detector'
+import type { Image } from '../../imaging/model/types'
+import type { DetectedStar } from '../../imaging/stars/detector'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
 

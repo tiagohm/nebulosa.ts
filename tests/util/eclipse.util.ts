@@ -3,7 +3,7 @@ import { DEG2RAD, PI, TAU } from '../../src/core/constants'
 import { sphericalSeparation } from '../../src/math/numerical/geometry'
 import { deg, type Angle } from '../../src/math/units/angle'
 // oxfmt-ignore
-import { type SolarEclipseGeoPoint, type PolynomialBesselianElements, intermediateGreatCircle, findEclipseCurvePoint, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, evaluateBesselian, BRANCH_MAX_DRAWABLE_GAP } from '../../src/astronomy/events/eclipse/solar/sun.eclipse.map'
+import { type SolarEclipseGeoPoint, type PolynomialBesselianElements, intermediateGreatCircle, findEclipseCurvePoint, computePolynomialBesselianElements, computeSolarEclipseMapGeometry, evaluateBesselian, BRANCH_MAX_DRAWABLE_GAP } from '../../src/astronomy/events/eclipse/solar/map'
 import { F, sunMoonPosition, type EclipseGeoBranch, type EclipseGeoCurve, type SunMoonProvider } from '../../src/astronomy/events/eclipse/eclipse'
 import { timeYMD, time, Timescale } from '../../src/astronomy/time/time'
 

@@ -1,6 +1,6 @@
 import { tmpdir } from 'os'
 import { basename, dirname, extname, join } from 'path'
-import type { DetectedStar } from '../../imaging/stars/star.detector'
+import type { DetectedStar } from '../../imaging/stars/detector'
 import { readCsv } from '../../io/csv'
 import type { FitsHeader } from '../../io/formats/fits/fits'
 import { type Angle, normalizeAngle, toDeg, toHour } from '../../math/units/angle'

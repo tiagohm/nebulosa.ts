@@ -1,6 +1,6 @@
 import { HealpixIndex, type HealpixIndexOptions } from '../../astronomy/sky/spatial/healpix'
 import type { Source } from '../../io/io'
-import type { StarCatalogEntry } from './star.catalog'
+import type { StarCatalogEntry } from './catalog'
 
 // http://tdc-www.harvard.edu/catalogs/sao.html
 

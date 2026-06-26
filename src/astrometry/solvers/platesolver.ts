@@ -1,6 +1,6 @@
 import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import type { FitsHeader } from '../../io/formats/fits/fits'
-import { heightKeyword, numericKeyword, widthKeyword } from '../../io/formats/fits/fits.util'
+import { heightKeyword, numericKeyword, widthKeyword } from '../../io/formats/fits/util'
 import { type Angle, deg } from '../../math/units/angle'
 import { cdMatrix } from '../wcs/fits.wcs'
 

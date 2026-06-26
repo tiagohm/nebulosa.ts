@@ -1,7 +1,7 @@
 import type { Socket, TCPSocketListener } from 'bun'
 import { eraAnpm } from '../../astronomy/coordinates/erfa/erfa'
 import { HealpixIndex, type HealpixIndexOptions } from '../../astronomy/sky/spatial/healpix'
-import type { StarCatalogEntry } from '../../catalogs/stars/star.catalog'
+import type { StarCatalogEntry } from '../../catalogs/stars/catalog'
 import { PI } from '../../core/constants'
 import type { Source } from '../../io/io'
 import { type Angle, deg, mas, normalizeAngle } from '../../math/units/angle'

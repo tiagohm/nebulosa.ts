@@ -1,7 +1,7 @@
 import type { PartialOnly, Writable } from '../../core/types'
-import type { ImageRawType } from '../../imaging/model/image.types'
+import type { ImageRawType } from '../../imaging/model/types'
 import type { Point, Size } from '../../math/numerical/geometry'
-import type { GuidingAssistantResult } from '../../observation/guiding/guider.assistant'
+import type { GuidingAssistantResult } from '../../observation/guiding/assistant'
 
 export const DEFAULT_PHD2_PORT = 4400
 

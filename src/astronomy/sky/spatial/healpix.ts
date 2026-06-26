@@ -1,4 +1,4 @@
-import { type StarCatalog, type StarCatalogQuery, type StarCatalogRaDecBox, splitRaBox, type Vertex } from '../../../catalogs/stars/star.catalog'
+import { type StarCatalog, type StarCatalogQuery, type StarCatalogRaDecBox, splitRaBox, type Vertex } from '../../../catalogs/stars/catalog'
 import { PI, PIOVERTWO, TAU } from '../../../core/constants'
 import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNegateMut, vecNormalize, vecTripleProduct } from '../../../math/linear-algebra/vec3'
 import { clamp, pmod } from '../../../math/numerical/math'

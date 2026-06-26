@@ -1,11 +1,11 @@
 import { type X2jOptions, XMLParser } from 'fast-xml-parser'
-import type { Image, ImageRawType } from '../../../imaging/model/image.types'
+import type { Image, ImageRawType } from '../../../imaging/model/types'
 import type { Size } from '../../../math/numerical/geometry'
 import type { NumberArray } from '../../../math/numerical/math'
 import { deflate, inflate } from '../../compression'
 import { readUntil, type Seekable, type Sink, type Source } from '../../io'
 import type { Bitpix, FitsHeader, FitsHeaderValue } from '../fits/fits'
-import { bitpixInBytes, formatFitsHeaderValue, unescapeQuotedText } from '../fits/fits.util'
+import { bitpixInBytes, formatFitsHeaderValue, unescapeQuotedText } from '../fits/util'
 
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html
 

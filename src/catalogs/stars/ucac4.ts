@@ -4,7 +4,7 @@ import { join } from 'path'
 import { DEG2RAD, PIOVERTWO } from '../../core/constants'
 import { NumberComparator } from '../../core/util'
 import { type Angle, mas } from '../../math/units/angle'
-import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type Vertex } from './star.catalog'
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type Vertex } from './catalog'
 
 // https://cdsarc.cds.unistra.fr/ftp/I/322A/UCAC4/
 // https://irsa.ipac.caltech.edu/data/USNO/UCAC4/ucac4.html

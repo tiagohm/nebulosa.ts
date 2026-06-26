@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { type AffineTransform, applyTransformToPoint, applyTransformToStars, canonicalTrianglePattern, fitAffineTransform, fitSimilarityTransform, invertSimilarityTransform, invertTransform, matchStars, type SimilarityTransform, type StarMatchingResult } from '../../../src/astrometry/matching/star.matching'
 import { medianOf } from '../../../src/core/util'
-import { type DetectedStar, detectStars } from '../../../src/imaging/stars/star.detector'
+import { type DetectedStar, detectStars } from '../../../src/imaging/stars/detector'
 import { vecDistance } from '../../../src/math/linear-algebra/vec3'
 import type { Rect } from '../../../src/math/numerical/geometry'
 import { gaussian, mulberry32, type Random, shuffle } from '../../../src/math/numerical/random'

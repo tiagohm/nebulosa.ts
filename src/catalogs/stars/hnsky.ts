@@ -1,7 +1,7 @@
 import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import { PIOVERTWO, TAU } from '../../core/constants'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
-import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type StarCatalogRaDecBox } from './star.catalog'
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type StarCatalogRaDecBox } from './catalog'
 
 const HNSKY_290_HEADER_SIZE = 110
 const HNSKY_290_RA_SCALE = TAU / 0xffffff

@@ -4,7 +4,7 @@ import { type CsvRow, readCsvStream } from '../../io/csv'
 import type { Source } from '../../io/io'
 import { type Distance, parsec } from '../../math/units/distance'
 import { kilometerPerSecond, type Velocity } from '../../math/units/velocity'
-import type { StarCatalogEntry } from './star.catalog'
+import type { StarCatalogEntry } from './catalog'
 
 // https://codeberg.org/astronexus/hyg/src/branch/main/data/hyg/CURRENT
 

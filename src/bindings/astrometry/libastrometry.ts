@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { basename, join } from 'path'
 import path from '../../../native/libastrometry.shared' with { type: 'file' }
 import { type Parity, type PlateSolution, plateSolutionFrom } from '../../astrometry/solvers/platesolver'
-import type { DetectStarOptions, DetectedStar } from '../../imaging/stars/star.detector'
+import type { DetectStarOptions, DetectedStar } from '../../imaging/stars/detector'
 import { readFits } from '../../io/formats/fits/fits'
 import { fileHandleSource } from '../../io/io'
 import { type Angle, normalizeAngle, toArcsec, toDeg } from '../../math/units/angle'

@@ -1,9 +1,9 @@
-import { type FitsKeyword, KEYWORDS } from './fits.headers'
+import { type FitsKeyword, KEYWORDS } from './headers'
 // oxfmt-ignore
-import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedWidthKeyword, unescapeQuotedText, widthKeyword } from './fits.util'
+import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedWidthKeyword, unescapeQuotedText, widthKeyword } from './util'
 import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
-import type { Image, ImageRawType } from '../../../imaging/model/image.types'
+import type { Image, ImageRawType } from '../../../imaging/model/types'
 import type { NumberArray } from '../../../math/numerical/math'
 import { readUntil, type Seekable, type Sink, type Source } from '../../io'
 
