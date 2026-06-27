@@ -103,17 +103,14 @@ export const CIRS: Frame = {
 	},
 }
 
-// Computes the TIRS rotation matrix at time.
-export function tirsRotationAt(time: Time) {
-	const m = matRotZ(greenwichApparentSiderealTime(time))
-	return matMul(m, precessionNutationMatrix(time), m)
-}
-
 // The Terrestrial Intermediate Reference System (TIRS): Earth-fixed apart from
 // polar motion (true equator and equinox of date rotated by GAST about the
 // pole). ITRS adds the polar-motion wobble on top of this.
 export const TIRS: Frame = {
-	rotationAt: tirsRotationAt,
+	rotationAt: (time) => {
+		const m = matRotZ(greenwichApparentSiderealTime(time))
+		return matMul(m, precessionNutationMatrix(time), m)
+	},
 }
 
 // Computes the precession matrix from one time to another, per IAU 2006.

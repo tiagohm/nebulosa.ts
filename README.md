@@ -544,7 +544,6 @@ precessionMatrixCapitaine(from, to) // Precession matrix using Capitaine et al. 
 frameAt(pv, frame, time) // Apply a frame rotation (base -> frame) to position and velocity at time
 frameToBase(pv, frame, time) // Inverse of frameAt (frame -> base)
 frameToFrame(pv, from, to, time) // Transform a state from one frame to another, composed through the base
-tirsRotationAt(time) // TIRS rotation matrix at time
 galactic(pv)
 supergalactic(pv)
 eclipticJ2000(pv)

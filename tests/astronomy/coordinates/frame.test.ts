@@ -1,28 +1,8 @@
 import { expect, test } from 'bun:test'
 import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
-import {
-	CIRS,
-	ecliptic,
-	ECLIPTIC_J2000,
-	eclipticJ2000,
-	frameAt,
-	frameToBase,
-	frameToFrame,
-	GALACTIC,
-	galactic,
-	ICRS,
-	ITRS,
-	itrfToTeme,
-	itrfToTemeByGmst,
-	MEAN_EQUATOR_AND_EQUINOX_OF_DATE,
-	precessionMatrixCapitaine,
-	supergalactic,
-	temeToItrf,
-	temeToItrfByGmst,
-	TIRS,
-	TRUE_EQUATOR_AND_EQUINOX_OF_DATE,
-} from '../../../src/astronomy/coordinates/frame'
+// oxfmt-ignore
+import { CIRS, ecliptic, ECLIPTIC_J2000, eclipticJ2000, frameAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, ITRS, itrfToTeme, itrfToTemeByGmst, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, precessionMatrixCapitaine, supergalactic, temeToItrf, temeToItrfByGmst, TIRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE } from '../../../src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ANGVEL_PER_DAY } from '../../../src/core/constants'
 import { type Mat3, matMul, matMulTranspose, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
