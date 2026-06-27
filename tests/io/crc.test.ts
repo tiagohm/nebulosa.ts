@@ -315,6 +315,18 @@ test('crc32xfer', () => {
 	expect(CRC.crc32xfer.compute(buffer)).toBe(0xbd0be338)
 })
 
+test('every algorithm returns a finite, in-range checksum for an empty buffer', () => {
+	const empty = Buffer.alloc(0)
+	// crc32 of no data reduces to init XOR xorout = 0.
+	expect(CRC.crc32.compute(empty)).toBe(0)
+
+	for (const algorithm of CRC_ALGORITHMS) {
+		const value = CRC[algorithm].compute(empty)
+		expect(Number.isInteger(value)).toBeTrue()
+		expect(value).toBeGreaterThanOrEqual(0)
+	}
+})
+
 test('crc honors offset/length relative to a non-zero byteOffset view', () => {
 	// Place the canonical "123456789" message inside a larger buffer so the view has a non-zero byteOffset.
 	const backing = Buffer.alloc(20, 0xaa)
