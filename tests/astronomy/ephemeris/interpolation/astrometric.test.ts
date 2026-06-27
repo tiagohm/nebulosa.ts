@@ -121,6 +121,16 @@ test('normalizes the interpolated vector before converting to declination', () =
 	expect(sky[1]).toBeCloseTo(Math.PI / 4, 14)
 })
 
+test('falls back to nearest sample when interpolation cancels to zero vector', () => {
+	const { ra, dec } = makeGrid(2, 1, (col) => [col === 0 ? 0 : Math.PI, 0])
+	const interpolator = new AstrometricInterpolator(ra, dec, 2, 1, 10, 10, { interpolation: 'bilinear' })
+	const sky = interpolator.pixelToSky(5, 0)
+
+	expectFiniteSky(sky)
+	expect(sky[0]).toBeCloseTo(Math.PI, 14)
+	expect(sky[1]).toBeCloseTo(0, 14)
+})
+
 test('constructs derived Cartesian grids once as Float64Array', () => {
 	const { ra, dec } = makeGrid(2, 2, (col, row) => [deg(col), deg(row)])
 	const interpolator = new AstrometricInterpolator(ra, dec, 2, 2, 10, 10)
