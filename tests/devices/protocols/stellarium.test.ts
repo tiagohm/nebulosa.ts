@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readCatalogDat, readNamesDat, StellariumCatalog, type StellariumCatalogEntry, type StellariumNameEntry, StellariumObjectType } from '../../../src/devices/protocols/stellarium'
 import { fileHandleSource } from '../../../src/io/io'
+import { sphericalSeparation } from '../../../src/math/numerical/geometry'
 import { deg, parseAngle } from '../../../src/math/units/angle'
 import { toLightYear } from '../../../src/math/units/distance'
 import { downloadPerTag } from '../../download'
@@ -65,7 +66,16 @@ test('catalog', async () => {
 	const catalog = new StellariumCatalog()
 	catalog.addMany(entries)
 
-	expect(catalog.queryCone(parseAngle('05h 35 16.8')!, parseAngle('-05 23 24')!, deg(1))).toHaveLength(11)
+	const centerRA = parseAngle('05h 35 16.8')!
+	const centerDEC = parseAngle('-05 23 24')!
+	const radius = deg(1)
+	const results = catalog.queryCone(centerRA, centerDEC, radius)
+	expect(results).toHaveLength(11)
+	// Every returned entry must actually lie within the queried cone.
+	for (const entry of results) {
+		expect(sphericalSeparation(centerRA, centerDEC, entry.rightAscension, entry.declination)).toBeLessThanOrEqual(radius + 1e-9)
+	}
+
 	expect(catalog.queryCone(parseAngle('18h 02 42.0')!, parseAngle('-22 58 18')!, deg(1))).toHaveLength(19)
 }, 5000)
 
