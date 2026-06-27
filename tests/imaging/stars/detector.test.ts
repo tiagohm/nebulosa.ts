@@ -163,6 +163,7 @@ describe('detect stars I', () => {
 		expect(stars.find((s) => s.x === 350 && s.y === 50)).toBeDefined()
 		expect(stars.find((s) => s.x === 350 && s.y === 150)).toBeDefined()
 		expect(stars.length).toBe(5)
+		expect(detectStars(image, { maxStars: 2000, minSNR: Number.POSITIVE_INFINITY })).toHaveLength(0)
 	})
 
 	test('high noise', () => {
