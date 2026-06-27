@@ -79,6 +79,17 @@ test('returns a plausible initial state for a synthetic two-body orbit', () => {
 	expect(Math.abs(result.diagnostics.selectedRoot - vecLength(truePosition))).toBeLessThan(3e-4)
 })
 
+test('does not mutate observation vectors', () => {
+	const [obs1, obs2, obs3] = observations(4)
+	const before: readonly [MutVec3, MutVec3, MutVec3] = [[...obs1.observer], [...obs2.observer], [...obs3.observer]]
+
+	gauss(obs1, obs2, obs3, { mu: MU })
+
+	expect(obs1.observer).toEqual(before[0])
+	expect(obs2.observer).toEqual(before[1])
+	expect(obs3.observer).toEqual(before[2])
+})
+
 test('does not select the far branch for multiple-root circular arcs', () => {
 	const cases = [circularObservations(0.1, 0.2), circularObservations(0.7, 0.8, 0.4, 0.04)]
 
