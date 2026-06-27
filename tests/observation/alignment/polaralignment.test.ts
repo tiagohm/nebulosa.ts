@@ -160,6 +160,19 @@ test('three-point alignment yields no error until the third point is added', () 
 	expect(pa.add(deg(90), deg(42), time)).not.toBeFalse()
 })
 
+test('three-point alignment reset clears accumulated points', () => {
+	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
+	time.location = geodeticLocation(deg(7), deg(49), meter(250))
+
+	const pa = new ThreePointPolarAlignment(false)
+	expect(pa.add(deg(20), deg(40), time)).toBeFalse()
+	expect(pa.add(deg(60), deg(41), time)).toBeFalse()
+	pa.reset()
+	expect(pa.add(deg(90), deg(42), time)).toBeFalse()
+	expect(pa.add(deg(60), deg(41), time)).toBeFalse()
+	expect(pa.add(deg(20), deg(40), time)).not.toBeFalse()
+})
+
 test('initial mount error for both point directions', () => {
 	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
 	time.location = geodeticLocation(deg(7), deg(49), meter(250))
