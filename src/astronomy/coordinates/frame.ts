@@ -1,10 +1,10 @@
 import { EARTH_DRDT_TIMES_RT_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from '../../core/constants'
 import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, type MutMat3, matRotX, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecMinus, vecPlus } from '../../math/linear-algebra/vec3'
-import { gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
+import { cirsRotationMatrix, gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
 import type { PositionAndVelocity } from './astrometry'
 import type { CartesianCoordinate } from './coordinate'
-import { eraBp06, eraC2i06a } from './erfa/erfa'
+import { eraBp06 } from './erfa/erfa'
 
 export type CoordinateFrame = CartesianCoordinate
 
@@ -93,14 +93,12 @@ export const MEAN_EQUATOR_AND_EQUINOX_OF_DATE: Frame = {
 
 // The Celestial Intermediate Reference System (CIRS): the geometric, CIO-based
 // equator-of-date frame, given by the celestial-to-intermediate rotation
-// (eraC2i06a). This is the pure rotation from the base to CIRS and does NOT
-// include aberration, light deflection, parallax, or refraction; for the
-// apparent place use the transforms in astrometry.ts.
+// (eraC2i06a, cached per Time via cirsRotationMatrix). This is the pure rotation
+// from the base to CIRS and does NOT include aberration, light deflection,
+// parallax, or refraction; for the apparent place use the transforms in
+// astrometry.ts.
 export const CIRS: Frame = {
-	rotationAt: (time) => {
-		const t = tt(time)
-		return eraC2i06a(t.day, t.fraction)
-	},
+	rotationAt: cirsRotationMatrix,
 }
 
 // The Terrestrial Intermediate Reference System (TIRS): Earth-fixed apart from
