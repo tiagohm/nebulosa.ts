@@ -22,6 +22,11 @@ test('solve similarity fixed point', () => {
 	expect(y).toBeCloseTo(fixed.y, 8)
 })
 
+test('solve similarity fixed point fails for a pure translation', () => {
+	// An identity-rotation similarity with a non-zero shift has no fixed point.
+	expect(solveSimilarityFixedPoint({ a: 1, b: 0, tx: 5, ty: 3, mirrored: false })).toBeFalse()
+})
+
 test('project guide point clamps off-screen points to the border', () => {
 	const guide = projectGuidePoint({ x: 1600, y: -200 }, 800, 600, 20)
 	expect(guide.onScreen).toBeFalse()
