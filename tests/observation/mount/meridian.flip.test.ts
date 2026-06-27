@@ -34,6 +34,14 @@ test('angular utilities compute signed hour angle and local sidereal time', () =
 	expect(computeLocalSiderealTime(deg(350), deg(20))).toBeCloseTo(deg(10), 14)
 })
 
+test('hour angle and local sidereal time are inverse operations', () => {
+	const rightAscension = deg(40)
+	for (const hourAngle of [deg(-30), 0, deg(15), deg(120)]) {
+		const lst = computeLocalSiderealTime(rightAscension, hourAngle)
+		expect(computeHourAngle(lst, rightAscension)).toBeCloseTo(normalizeAngle(hourAngle) > PI ? normalizeAngle(hourAngle) - 2 * PI : normalizeAngle(hourAngle), 12)
+	}
+})
+
 test('angular utilities reject non-finite input', () => {
 	expect(() => computeHourAngle(Number.NaN, 0)).toThrow(RangeError)
 	expect(() => computeHourAngle(0, Number.POSITIVE_INFINITY)).toThrow(RangeError)
