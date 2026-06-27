@@ -113,6 +113,16 @@ test('colorIndexToRgbWeights returns positive weights that sum to one', () => {
 	}
 })
 
+test('colorIndexToRgbWeights keeps gamma-compensated weights normalized', () => {
+	const [r, g, b] = colorIndexToRgbWeights(1.2, 2.2)
+
+	expect(r).toBeGreaterThan(0)
+	expect(g).toBeGreaterThan(0)
+	expect(b).toBeGreaterThan(0)
+	expect(r + g + b).toBeCloseTo(1, 6)
+	expect(r).toBeGreaterThan(b)
+})
+
 test('focusDefocusAmount is monotone and bounded in [0, 1]', () => {
 	const best = 50000
 	let previous = -1
