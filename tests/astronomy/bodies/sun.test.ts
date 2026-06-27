@@ -47,7 +47,9 @@ describe('nearest solar eclipse', () => {
 		// https://www.timeanddate.com/eclipse/solar/2024-april-8
 		const eclipse = nearestSolarEclipse(timeYMD(2024, 3, 1), true)
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 4, 8, 18, 17])
+		expect(eclipse.maximalTime.scale).toBe(Timescale.TT)
 		expect(eclipse.type).toBe('total')
+		expect(eclipse.u).toBeLessThan(0)
 		// Central eclipse: magnitude is the topocentric Moon/Sun diameter ratio (> 1 for total).
 		expect(eclipse.magnitude).toBeCloseTo(1.0566, 2)
 	})
@@ -57,6 +59,7 @@ describe('nearest solar eclipse', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2024, 4, 9), true)
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
 		expect(eclipse.type).toBe('annular')
+		expect(eclipse.u).toBeGreaterThan(0)
 		// Central eclipse: magnitude is the topocentric Moon/Sun diameter ratio (< 1 for annular).
 		expect(eclipse.magnitude).toBeCloseTo(0.9326, 2)
 	})
@@ -75,6 +78,7 @@ describe('nearest solar eclipse', () => {
 		// https://eclipse.gsfc.nasa.gov/SEsearch/SEdata.php?Ecl=20140429
 		const eclipse = nearestSolarEclipse(timeYMD(2014, 1, 1), true)
 		expect(eclipse.type).toBe('annular')
+		expect(eclipse.u).toBeGreaterThan(0)
 		expect(eclipse.magnitude).toBeCloseTo(0.9868, 2)
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2014, 4, 29, 6, 3])
 	})
@@ -83,6 +87,7 @@ describe('nearest solar eclipse', () => {
 		// https://eclipse.gsfc.nasa.gov/SEsearch/SEdata.php?Ecl=20430409
 		const eclipse = nearestSolarEclipse(timeYMD(2043, 1, 1), true)
 		expect(eclipse.type).toBe('total')
+		expect(eclipse.u).toBeLessThan(0)
 		expect(eclipse.magnitude).toBeCloseTo(1.0095, 2)
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2043, 4, 9, 18, 56])
 	})
@@ -91,6 +96,8 @@ describe('nearest solar eclipse', () => {
 		// https://www.timeanddate.com/eclipse/solar/2023-april-20
 		const eclipse = nearestSolarEclipse(timeYMD(2023, 4, 1), true)
 		expect(eclipse.type).toBe('hybrid')
+		expect(eclipse.u).toBeGreaterThan(0)
+		expect(eclipse.u).toBeLessThan(0.00464)
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2023, 4, 20, 4, 16])
 		expect(eclipse.magnitude).toBeCloseTo(1.013, 2)
 	})
