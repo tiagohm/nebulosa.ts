@@ -35,6 +35,26 @@ test('robust linear least squares resists outliers', () => {
 	expect(robust.weights[4]).toBeLessThan(1)
 })
 
+test('zero-weighted samples are excluded from the fit', () => {
+	const design = [new Float64Array([1, 0]), new Float64Array([1, 1]), new Float64Array([1, 2]), new Float64Array([1, 3]), new Float64Array([1, 4])]
+	const target = new Float64Array([1, 3, 5, 7, 100])
+	// The fifth sample is a gross outlier; weighting it to zero must recover the clean line.
+	const fit = linearLeastSquares(design, target, { weights: new Float64Array([1, 1, 1, 1, 0]) })
+
+	expect(fit.coefficients[0]).toBeCloseTo(1, 6)
+	expect(fit.coefficients[1]).toBeCloseTo(2, 6)
+})
+
+test('robust huber fit also resists outliers', () => {
+	const design = [new Float64Array([1, 0]), new Float64Array([1, 1]), new Float64Array([1, 2]), new Float64Array([1, 3]), new Float64Array([1, 4])]
+	const target = new Float64Array([1, 3, 5, 7, 100])
+	const plain = linearLeastSquares(design, target)
+	const robust = robustLinearLeastSquares(design, target, { method: 'huber' })
+
+	expect(Math.abs(robust.coefficients[1] - 2)).toBeLessThan(Math.abs(plain.coefficients[1] - 2))
+	expect(robust.weights[4]).toBeLessThan(1)
+})
+
 test('linear least squares rejects invalid weights', () => {
 	const design = [new Float64Array([1, 0]), new Float64Array([1, 1])]
 	const target = new Float64Array([1, 3])
