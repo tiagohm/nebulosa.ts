@@ -212,6 +212,20 @@ test('carries rounded sexagesimal fields in coordinate responses', async () => {
 	)
 })
 
+test('ignores an unknown command without breaking the following valid command', async () => {
+	await withLx200Server(
+		async (client) => {
+			const response = readUntil(client, (value) => value === '01:02:03#')
+
+			// An unsupported command must not desync the parser; the next valid getter still answers.
+			client.write('#:ZZZ##:GR#', 'ascii')
+
+			expect(await response).toBe('01:02:03#')
+		},
+		makeHandler({ rightAscension: () => hms(1, 2, 3) }),
+	)
+})
+
 async function withLx200Server(run: (client: Socket) => Promise<void>, handler = makeHandler(), options: Omit<ConstructorParameters<typeof Lx200ProtocolServer>[0], 'handler'> = {}) {
 	const server = new Lx200ProtocolServer({ handler, ...options })
 	server.start('127.0.0.1', 0)
