@@ -2,7 +2,7 @@ import { describe, expect, onTestFinished, test } from 'bun:test'
 import { IndiClient, type IndiClientHandler } from '../../../src/devices/indi/client'
 import { type Camera, type Cover, expectedPierSide, type FlatPanel, type Focuser, type GuideOutput, meridianTimeIn, type Mount, type Power, type Rotator, type Thermometer, type Wheel } from '../../../src/devices/indi/device'
 import { CameraManager, CoverManager, type DeviceHandler, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
-import type { DefSwitchVector, DefTextVector, PropertyState } from '../../../src/devices/indi/types'
+import type { DefNumberVector, DefSwitchVector, DefTextVector, PropertyState } from '../../../src/devices/indi/types'
 // oxfmt-ignore
 import { SimpleXmlParser } from '../../../src/io/xml'
 import { PI, SIDEREAL_DAYSEC, TAU } from '../../../src/core/constants'
@@ -180,6 +180,27 @@ describe('parse', () => {
 		expect(vector.elements.DISCONNECT.name).toBe('DISCONNECT')
 		expect(vector.elements.DISCONNECT.label).toBe('Disconnect')
 		expect(vector.elements.DISCONNECT.value).toBeTrue()
+	})
+
+	test('defNumberVector parses numeric value, min, max, and step', () => {
+		const node = tags.find((e) => e.name === 'defNumberVector' && e.attributes.name === 'SIMULATOR_SETTINGS')!
+		const vector = client.parseDefVector(node) as DefNumberVector
+
+		expect(vector.device).toBe('CCD Simulator')
+		expect(vector.name).toBe('SIMULATOR_SETTINGS')
+		expect(vector.permission).toBe('rw')
+		expect(vector.timeout).toBe(60)
+
+		const xres = vector.elements.SIM_XRES
+		expect(xres.name).toBe('SIM_XRES')
+		expect(xres.value).toBe(1280)
+		expect(xres.min).toBe(512)
+		expect(xres.max).toBe(8192)
+		expect(xres.step).toBe(512)
+
+		const rotation = vector.elements.SIM_ROTATION
+		expect(rotation.value).toBe(0)
+		expect(rotation.max).toBe(360)
 	})
 
 	test('keeps element names that collide with object prototype keys', () => {
