@@ -198,4 +198,19 @@ describe('mul transpose', () => {
 	test('AT * BT', () => {
 		expect(mat2TransposeMulTranspose(m, m)).toEqual([7, 15, 10, 22])
 	})
+
+	test('supports output aliasing the left operand', () => {
+		const atb: MutMat2 = [1, 2, 3, 4]
+		const abt: MutMat2 = [1, 2, 3, 4]
+		const atbt: MutMat2 = [1, 2, 3, 4]
+
+		expect(mat2TransposeMul(atb, m, atb)).toBe(atb)
+		expect(atb).toEqual([10, 14, 14, 20])
+
+		expect(mat2MulTranspose(abt, m, abt)).toBe(abt)
+		expect(abt).toEqual([5, 11, 11, 25])
+
+		expect(mat2TransposeMulTranspose(atbt, m, atbt)).toBe(atbt)
+		expect(atbt).toEqual([7, 15, 10, 22])
+	})
 })
