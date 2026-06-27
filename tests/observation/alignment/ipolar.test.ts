@@ -27,6 +27,17 @@ test('solve similarity fixed point fails for a pure translation', () => {
 	expect(solveSimilarityFixedPoint({ a: 1, b: 0, tx: 5, ty: 3, mirrored: false })).toBeFalse()
 })
 
+test('solve similarity fixed point supports mirrored transforms', () => {
+	const transform = { a: 0.8, b: 0.1, tx: -7, ty: 11, mirrored: true } as const
+	const fixed = solveSimilarityFixedPoint(transform)
+	expect(fixed).not.toBeFalse()
+	if (!fixed) return
+	const x = transform.a * fixed.x + transform.b * fixed.y + transform.tx
+	const y = transform.b * fixed.x - transform.a * fixed.y + transform.ty
+	expect(x).toBeCloseTo(fixed.x, 8)
+	expect(y).toBeCloseTo(fixed.y, 8)
+})
+
 test('project guide point clamps off-screen points to the border', () => {
 	const guide = projectGuidePoint({ x: 1600, y: -200 }, 800, 600, 20)
 	expect(guide.onScreen).toBeFalse()
