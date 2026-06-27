@@ -88,6 +88,36 @@ test('reading past the end of file is rejected', async () => {
 	expect(message).toContain('unexpected end of DAF file')
 })
 
+test('unsupported magic word is rejected', async () => {
+	// A full 1024-byte record whose magic is neither NAIF/DAF nor DAF/*.
+	const buffer = Buffer.alloc(1024)
+	buffer.write('BADMAGIC', 0, 'ascii')
+
+	let message = ''
+	try {
+		await readDaf(bufferSource(buffer))
+	} catch (e) {
+		message = (e as Error).message
+	}
+
+	expect(message).toContain('unsupported format')
+})
+
+test('DAF/ file with a missing FTP validation string is rejected as damaged', async () => {
+	// Valid DAF/ magic but the FTP validation block is zeroed out.
+	const buffer = Buffer.alloc(1024)
+	buffer.write('DAF/SPK ', 0, 'ascii')
+
+	let message = ''
+	try {
+		await readDaf(bufferSource(buffer))
+	} catch (e) {
+		message = (e as Error).message
+	}
+
+	expect(message).toContain('file has been damaged')
+})
+
 test('DAF/PCK', async () => {
 	await using source = fileHandleSource(await fs.open('data/moon_pa_de421_1900-2050.bpc'))
 	const daf = await readDaf(source)
