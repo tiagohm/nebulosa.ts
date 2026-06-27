@@ -1,6 +1,45 @@
 import { expect, test } from 'bun:test'
-import { refractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
-import { deg, toArcsec } from '../../../src/math/units/angle'
+import { distance, equatorial, lightTime, parallacticAngle, refractedAltitude, separationFrom } from '../../../src/astronomy/coordinates/astrometry'
+import { PIOVERTWO } from '../../../src/core/constants'
+import { deg, toArcsec, toDeg } from '../../../src/math/units/angle'
+
+test('distance is the position vector length in AU', () => {
+	expect(distance([3, 4, 0])).toBeCloseTo(5, 12)
+	expect(distance([0, 0, 0])).toBe(0)
+})
+
+test('light time of one AU is about 499 seconds', () => {
+	// One AU of light travel time is ~0.00577552 days (~499 s).
+	expect(lightTime([1, 0, 0])).toBeCloseTo(0.00577552, 8)
+})
+
+test('equatorial recovers spherical coordinates from a cartesian position', () => {
+	const [ra, dec, r] = equatorial([1, 0, 0])
+	expect(toDeg(ra)).toBeCloseTo(0, 12)
+	expect(toDeg(dec)).toBeCloseTo(0, 12)
+	expect(r).toBeCloseTo(1, 12)
+
+	const [ra2, dec2] = equatorial([0, 0, 1])
+	expect(toDeg(dec2)).toBeCloseTo(90, 12)
+	expect(Number.isFinite(ra2)).toBeTrue()
+})
+
+test('separationFrom returns the angle between two positions', () => {
+	expect(toDeg(separationFrom([1, 0, 0], [0, 1, 0]))).toBeCloseTo(90, 12)
+	expect(separationFrom([1, 0, 0], [2, 0, 0])).toBeCloseTo(0, 12)
+	expect(toDeg(separationFrom([1, 0, 0], [-1, 0, 0]))).toBeCloseTo(180, 12)
+})
+
+test('parallactic angle is zero at the zenith and symmetric across the meridian', () => {
+	const latitude = deg(40)
+	// Object on the meridian at the observer latitude lies in the zenith.
+	expect(parallacticAngle(0, latitude, latitude)).toBe(0)
+	// Equal hour angles east and west give opposite-sign parallactic angles.
+	const east = parallacticAngle(deg(-30), deg(10), latitude)
+	const west = parallacticAngle(deg(30), deg(10), latitude)
+	expect(west).toBeCloseTo(-east, 12)
+	expect(Math.abs(west)).toBeLessThanOrEqual(PIOVERTWO * 2)
+})
 
 // https://bitbucket.org/Isbeorn/nina/src/master/NINA.Test/AstrometryTest/AstrometryTest.cs
 test('refracted altitude', () => {
