@@ -23,3 +23,10 @@ test('conversions round-trip and stay mutually consistent', () => {
 	// One km/s is a thousand m/s.
 	expect(kilometerPerSecond(1)).toBeCloseTo(meterPerSecond(1000), 15)
 })
+
+test('conversions preserve zero and signed velocities', () => {
+	expect(kilometerPerSecond(0)).toBe(0)
+	expect(meterPerSecond(0)).toBe(0)
+	expect(toKilometerPerSecond(kilometerPerSecond(-12.5))).toBeCloseTo(-12.5, 12)
+	expect(toMeterPerSecond(meterPerSecond(-250))).toBeCloseTo(-250, 9)
+})
