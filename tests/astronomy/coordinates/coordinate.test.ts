@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
 	angularDistance,
 	angularDistanceHaversine,
+	eclipticJ2000ToEquatorial,
 	eclipticToEquatorial,
 	equatorEcliptic,
 	equatorialFromJ2000,
@@ -41,6 +42,14 @@ test('equatorial J2000 to ecliptic J2000', () => {
 
 	expect(formatDEC(longitude)).toBe('+104 05 03.86')
 	expect(formatDEC(latitude)).toBe('-39 36 50.73')
+})
+
+test('ecliptic J2000 to equatorial J2000 round-trips', () => {
+	const [longitude, latitude] = equatorialToEclipticJ2000(...SIRIUS_J2000)
+	const [rightAscension, declination] = eclipticJ2000ToEquatorial(longitude, latitude)
+
+	expect(formatRA(rightAscension)).toBe(formatRA(SIRIUS_J2000[0]))
+	expect(formatDEC(declination)).toBe(formatDEC(SIRIUS_J2000[1]))
 })
 
 test('equatorial to ecliptic', () => {
