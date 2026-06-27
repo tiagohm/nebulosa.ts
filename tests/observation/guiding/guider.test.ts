@@ -207,6 +207,8 @@ describe('math and calibration foundations', () => {
 		expect(p2.dec).toBeCloseTo(-1, 8)
 		expect(validateCalibration([1, 2, 2, 4]).valid).toBeFalse()
 		expect(validateCalibration([1, 0.999999, 1.000001, 1], 1e-3).valid).toBeFalse()
+		// A well-conditioned, near-orthogonal matrix is accepted.
+		expect(validateCalibration([0.3, 0.1, -0.2, 0.4]).valid).toBeTrue()
 	})
 
 	test('preserves sign conventions and zero/small vectors', () => {
