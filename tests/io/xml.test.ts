@@ -240,6 +240,13 @@ describe('behavior', () => {
 		expect(parser.parse('<a b="" c="2"/>')).toEqual([{ name: 'a', attributes: { b: '', c: '2' }, children: [], text: '' }])
 	})
 
+	test('streams an empty attribute value split across chunks', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<a b="')).toBeEmpty()
+		expect(parser.parse('" c="2"/>')).toEqual([{ name: 'a', attributes: { b: '', c: '2' }, children: [], text: '' }])
+	})
+
 	test('allows whitespace inside closing and self-closing tags', () => {
 		const parser = new SimpleXmlParser()
 
