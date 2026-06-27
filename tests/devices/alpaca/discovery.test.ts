@@ -98,6 +98,47 @@ test('AlpacaDiscoveryServer ignores invalid discovery request payloads', async (
 	}
 })
 
+test('AlpacaDiscoveryServer stops responding for a removed port', async () => {
+	const server = new AlpacaDiscoveryServer({ ignoreLocalhost: false })
+	const client = await bindUdpClient('127.0.0.1')
+
+	server.addPort(11111)
+	server.addPort(22222)
+	server.removePort(22222)
+
+	try {
+		expect(await server.start('127.0.0.1', 0, false)).toBe(true)
+
+		const messagesPromise = readUdpMessages(client, 2, 250)
+		await sendUdpMessage(client, ALPACA_DISCOVERY_DATA, server.port, '127.0.0.1')
+
+		expect(await messagesPromise).toEqual(['{"AlpacaPort":11111}'])
+	} finally {
+		server.stop()
+		client.close()
+	}
+})
+
+test('AlpacaDiscoveryServer ignores loopback requests when ignoreLocalhost is enabled', async () => {
+	const server = new AlpacaDiscoveryServer({ ignoreLocalhost: false })
+	const client = await bindUdpClient('127.0.0.1')
+
+	server.addPort(11111)
+
+	try {
+		// Start with ignoreLocalhost = true: a request from the loopback address must be dropped.
+		expect(await server.start('127.0.0.1', 0, true)).toBe(true)
+
+		const messagesPromise = readUdpMessages(client, 1, 200)
+		await sendUdpMessage(client, ALPACA_DISCOVERY_DATA, server.port, '127.0.0.1')
+
+		expect(await messagesPromise).toEqual([])
+	} finally {
+		server.stop()
+		client.close()
+	}
+})
+
 test('AlpacaDiscoveryServer allows multiple instances to share the same discovery port', async () => {
 	const first = new AlpacaDiscoveryServer({ ignoreLocalhost: false })
 	const second = new AlpacaDiscoveryServer({ ignoreLocalhost: false })
