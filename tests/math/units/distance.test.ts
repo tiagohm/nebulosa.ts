@@ -22,6 +22,13 @@ test('parsec converts using AU per parsec', () => {
 	expect(toParsec(parsec(1))).toBeCloseTo(1, 15)
 })
 
+test('units are mutually consistent', () => {
+	// One kilometer is a thousand meters.
+	expect(kilometer(1)).toBeCloseTo(meter(1000), 15)
+	// One parsec is about 3.2616 light years.
+	expect(toLightYear(parsec(1))).toBeCloseTo(3.2615637769, 6)
+})
+
 describe('fromPressure', () => {
 	test('returns zero altitude at standard pressure', () => {
 		expect(toMeter(fromPressure(ONE_ATM, 15))).toBeCloseTo(0, 12)
