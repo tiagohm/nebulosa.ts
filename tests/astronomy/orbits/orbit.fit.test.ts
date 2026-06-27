@@ -95,6 +95,16 @@ test('recovers a synthetic two-body orbit from noisy astrometry', () => {
 	expect(result.rms).toBeLessThan(2 * ASTROMETRY_ERR)
 })
 
+test('recovers a noiseless orbit to near machine precision', () => {
+	const observations = makeSyntheticObservations({ noiseSigma: 0 })
+	const result = fitOrbit(observations, EPOCH, perturbedPosition(), perturbedVelocity(), fitOptions())
+
+	expect(result.converged).toBeTrue()
+	expect(vecDistance(result.state.position, TRUE_ORBIT.position)).toBeLessThan(1e-9)
+	expect(vecDistance(result.state.velocity, TRUE_ORBIT.velocity)).toBeLessThan(1e-10)
+	expect(result.rms).toBeLessThan(1e-9)
+})
+
 test('uses the short residual across the RA wrap boundary', () => {
 	const p: MutVec3 = [1, 1e-6, 0]
 	const v: MutVec3 = [0, 0.017, 0.001]
