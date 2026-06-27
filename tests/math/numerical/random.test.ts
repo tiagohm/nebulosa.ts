@@ -198,6 +198,21 @@ test('inverse-transform samplers stay finite at unit endpoints', () => {
 	expect(values).toEqual([1, 2, 3])
 })
 
+test('degenerate distribution parameters return deterministic constants', () => {
+	const random = sequenceRandom([0.25, 0.75])
+
+	expect(bernoulli(random, 0)()).toBe(0)
+	expect(bernoulli(random, 1)()).toBe(1)
+	expect(weibull(random, 0, 2)()).toBe(0)
+	expect(exponential(random, 0)()).toBe(0)
+	expect(geometric(random, 0)()).toBe(Number.POSITIVE_INFINITY)
+	expect(pareto(random, 0)()).toBe(Number.POSITIVE_INFINITY)
+	expect(normal(random, 2, 0)()).toBe(2)
+	expect(triangular(random, 4, 4, 4)()).toBe(4)
+	expect(rayleigh(random, 0)()).toBe(0)
+	expect(cauchy(random, 3, 0)()).toBe(3)
+})
+
 test('shuffle', () => {
 	const random = mulberry32(5)
 	const values = [1, 2, 3, 4, 5]
