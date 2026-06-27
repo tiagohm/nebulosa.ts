@@ -79,6 +79,14 @@ test('overlapping segments use the latest matching segment in file order', async
 	expect(v[2]).toBeCloseTo(0, 15)
 })
 
+test('segment lookup returns undefined for an unknown center/target pair', () => {
+	const spk = readSpk(dafFrom([10, 10, 1, 0, 0, 0, 20, 5, 1], [summary(0, 1, 0, 20, 2, 1, 9)]))
+
+	expect(spk.segment(0, 1)).toBeDefined()
+	expect(spk.segment(0, 2)).toBeUndefined()
+	expect(spk.segment(7, 9)).toBeUndefined()
+})
+
 test('DE405', async () => {
 	await using source = fileHandleSource(await fs.open('data/de405.bsp'))
 	const daf = await readDaf(source)
