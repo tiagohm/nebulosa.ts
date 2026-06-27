@@ -128,6 +128,16 @@ test('roundtrip int32 and uint32', () => {
 	roundTrip(u32, 32)
 })
 
+test('roundtrips an all-zero array spanning many blocks', () => {
+	roundTrip(new Int16Array(200), 16)
+	roundTrip(new Int32Array(200), 32)
+})
+
+test('roundtrips a single-element array', () => {
+	roundTrip(new Int16Array([0x2a]), 32)
+	roundTrip(new Int8Array([-1]), 4)
+})
+
 test('decodes into caller-provided output buffer', () => {
 	const input = new Int16Array([1, 1, 1, 2, 3, 5, 8, 13, 21])
 	const compressed = compressRice(input, 4)
