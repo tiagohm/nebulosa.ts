@@ -288,6 +288,26 @@ test('computes optional RMS diagnostics on the unwrapped RA domain', () => {
 	expect(interpolator.diagnostics?.maxAbsDEC).toBeCloseTo(0, 15)
 })
 
+test('spline and chebyshev clamp out-of-range queries by default', () => {
+	const spline = splineInterpolator([point(0, 1, 0), point(1, 2, 1), point(2, 3, 2)])
+	expect(spline.compute(jd(-1))).toEqual([1, 0])
+	expect(spline.compute(jd(3))).toEqual([3, 2])
+
+	const chebyshev = chebyshevInterpolator([point(0, 1, 0), point(1, 2, 1), point(2, 3, 2)], 2)
+	const below = chebyshev.compute(jd(-1))
+	const above = chebyshev.compute(jd(3))
+	expect(below[0]).toBeCloseTo(1, 10)
+	expect(above[0]).toBeCloseTo(3, 10)
+})
+
+test('spline and chebyshev throw on out-of-range queries when requested', () => {
+	const spline = splineInterpolator([point(0, 1, 0), point(1, 2, 1), point(2, 3, 2)], 'naturalCubic', { outOfRange: 'throw' })
+	expect(() => spline.compute(jd(-1))).toThrow(RangeError)
+
+	const chebyshev = chebyshevInterpolator([point(0, 1, 0), point(1, 2, 1), point(2, 3, 2)], 2, { outOfRange: 'throw' })
+	expect(() => chebyshev.compute(jd(3))).toThrow(RangeError)
+})
+
 test('rejects invalid input', () => {
 	expect(() => linearInterpolator([])).toThrow('ephemeris interpolation requires at least 2 samples')
 	expect(() => splineInterpolator([point(0, 1, 0), point(1, 2, 1)])).toThrow('ephemeris interpolation requires at least 3 samples')
