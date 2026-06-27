@@ -62,3 +62,10 @@ test('linear least squares rejects invalid weights', () => {
 	expect(() => linearLeastSquares(design, target, { weights: new Float64Array([1, -1]) })).toThrow('weight at index 1 must be finite and non-negative')
 	expect(() => linearLeastSquares(design, target, { weights: new Float64Array([1, Number.NaN]) })).toThrow('weight at index 1 must be finite and non-negative')
 })
+
+test('linear least squares rejects non-rectangular design matrices', () => {
+	const design = [new Float64Array([1, 0]), new Float64Array([1])]
+	const target = new Float64Array([1, 3])
+
+	expect(() => linearLeastSquares(design, target)).toThrow('design matrix must be rectangular')
+})
