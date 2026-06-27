@@ -82,4 +82,9 @@ test('rotate', () => {
 	vec2Rot([1, 0], PIOVERTWO, o)
 	expect(o[0]).toBeCloseTo(0, 15)
 	expect(o[1]).toBeCloseTo(1, 15)
+
+	const a: MutVec2 = [1, 0]
+	expect(vec2Rot(a, PIOVERTWO, a)).toBe(a)
+	expect(a[0]).toBeCloseTo(0, 15)
+	expect(a[1]).toBeCloseTo(1, 15)
 })
