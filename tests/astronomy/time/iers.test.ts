@@ -89,6 +89,21 @@ test('iers interpolation boundaries', () => {
 	expectXY(iers.xy(t), arcsec(2), arcsec(4))
 })
 
+test('iers clamps queries outside the tabulated range to the endpoints', () => {
+	const iers = new IersATest()
+	iers.set([60000, 60002], [0, 2], [0, 4], [0, 6])
+
+	// Before the first row clamps to the first sample.
+	let t = timeMJD(59000, Timescale.UTC)
+	expectDut1(iers.dut1(t), 0)
+	expectXY(iers.xy(t), 0, 0)
+
+	// After the last row clamps to the last sample.
+	t = timeMJD(61000, Timescale.UTC)
+	expectDut1(iers.dut1(t), 6)
+	expectXY(iers.xy(t), arcsec(2), arcsec(4))
+})
+
 test('iersAB prefers B in range and falls back to A outside B coverage', () => {
 	const a = new IersATest()
 	const b = new IersBTest()
