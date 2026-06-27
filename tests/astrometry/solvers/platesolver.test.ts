@@ -123,6 +123,30 @@ test('flipped parity cd matrix', () => {
 	expect(toDeg(solution!.height)).toBeCloseTo(0.5, 12)
 })
 
+test('cdelt and crota keywords', () => {
+	const header: FitsHeader = { CRVAL1: 42, CRVAL2: -17, CDELT1: 0.02, CDELT2: 0.01, CROTA2: 30, IMAGEW: 100, IMAGEH: 50 }
+	const solution = plateSolutionFrom(header)
+
+	expect(solution).toBeDefined()
+	expect(toDeg(solution!.orientation)).toBeCloseTo(-30, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(Math.SQRT2 / 100, 12)
+	expect(toDeg(solution!.width)).toBeCloseTo(2, 12)
+	expect(toDeg(solution!.height)).toBeCloseTo(0.5, 12)
+	expect(solution!.parity).toBe('NORMAL')
+})
+
+test('pc and cdelt keywords', () => {
+	const header: FitsHeader = { CRVAL1: 42, CRVAL2: -17, CDELT1: 0.02, CDELT2: 0.01, PC1_1: 0, PC1_2: -1, PC2_1: 1, PC2_2: 0, IMAGEW: 100, IMAGEH: 50 }
+	const solution = plateSolutionFrom(header)
+
+	expect(solution).toBeDefined()
+	expect(toDeg(solution!.orientation)).toBeCloseTo(-90, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(Math.SQRT2 / 100, 12)
+	expect(toDeg(solution!.width)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.height)).toBeCloseTo(1, 12)
+	expect(solution!.parity).toBe('NORMAL')
+})
+
 test('missing reference coordinate keywords yield no solution', () => {
 	const base = plateHeaderFromCd(0.01, 0, 0, 0.01)
 	const noRa = { ...base }
