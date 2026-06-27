@@ -152,6 +152,7 @@ test('before-flip pier-side validation handles completed, mismatch, and unknown 
 	const mismatchPolicy = basePolicy({ beforeFlipPierSide: 'EAST' })
 	expectDecision(evaluateMeridianFlip(mismatchPolicy, snapshotAt(deg(-3), { pierSide: 'WEST' })), 'FAILED', 'FAIL', 'PIER_SIDE_MISMATCH')
 	expectDecision(evaluateMeridianFlip(mismatchPolicy, snapshotAt(deg(-3))), 'FAILED', 'FAIL', 'PIER_SIDE_NEITHER')
+	expectDecision(evaluateMeridianFlip(basePolicy({ beforeFlipPierSide: 'EAST', allowUnknownPierSide: true }), snapshotAt(deg(-3), { pierSide: 'WEST' })), 'FAILED', 'FAIL', 'PIER_SIDE_MISMATCH')
 	expectDecision(evaluateMeridianFlip(basePolicy({ beforeFlipPierSide: 'EAST', allowUnknownPierSide: true }), snapshotAt(deg(-3))), 'WAITING', 'NONE', 'BEFORE_PREPARE_WINDOW')
 })
 
