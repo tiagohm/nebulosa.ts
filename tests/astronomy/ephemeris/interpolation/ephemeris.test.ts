@@ -1,6 +1,6 @@
 import { expect, test, describe } from 'bun:test'
 import { angularDistance } from '../../../../src/astronomy/coordinates/coordinate'
-import { type EphemerisPoint, chebyshevInterpolator, linearInterpolator, splineInterpolator } from '../../../../src/astronomy/ephemeris/interpolation/ephemeris'
+import { type EphemerisPoint, type UpdatableEphemerisInterpolator, chebyshevInterpolator, linearInterpolator, splineInterpolator } from '../../../../src/astronomy/ephemeris/interpolation/ephemeris'
 import { earth, mars } from '../../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { Timescale, time, timeConvert, timeYMDHMS } from '../../../../src/astronomy/time/time'
 import { DAYSEC, TAU } from '../../../../src/core/constants'
@@ -50,6 +50,20 @@ test('sorts input points by time', () => {
 	expect(value[1]).toBeCloseTo(1, 15)
 	expect(interpolator.startTime).toBeCloseTo(J0, 15)
 	expect(interpolator.endTime).toBeCloseTo(J0 + 2, 15)
+})
+
+test('updates interpolation state from new samples', () => {
+	const interpolator = linearInterpolator([point(0, 1, 0), point(1, 2, 1)]) as UpdatableEphemerisInterpolator
+
+	interpolator.update([point(2, 1, -1), point(4, 3, 1)])
+
+	const value = interpolator.compute(jd(3))
+
+	expect(interpolator.sampleCount).toBe(2)
+	expect(interpolator.startTime).toBeCloseTo(J0 + 2, 15)
+	expect(interpolator.endTime).toBeCloseTo(J0 + 4, 15)
+	expect(value[0]).toBeCloseTo(2, 15)
+	expect(value[1]).toBeCloseTo(0, 15)
 })
 
 test('unwraps RA across the zero boundary', () => {
