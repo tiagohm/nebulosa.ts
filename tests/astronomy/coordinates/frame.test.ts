@@ -199,3 +199,42 @@ test('mean and true equator of date differ only by nutation', () => {
 	expect(separation).toBeGreaterThan(0)
 	expect(separation).toBeLessThan(2e-4) // ~40 arcsec
 })
+
+test('frameAt and frameToBase write into an output parameter', () => {
+	const state: PositionAndVelocity = [
+		[0.4, -0.6, 0.3],
+		[1e-4, 2e-4, -3e-4],
+	]
+	const outVec: MutVec3 = [0, 0, 0]
+	const fresh = frameAt(XYZ, ITRS, TIME)
+	const written = frameAt(XYZ, ITRS, TIME, outVec)
+	expect(written).toBe(outVec)
+	for (let i = 0; i < 3; i++) expect(outVec[i]).toBeCloseTo(fresh[i], 15)
+
+	const outState: PositionAndVelocity = [
+		[0, 0, 0],
+		[0, 0, 0],
+	]
+	const freshState = frameAt(state, ITRS, TIME)
+	const writtenState = frameAt(state, ITRS, TIME, outState)
+	expect(writtenState).toBe(outState)
+	for (let i = 0; i < 3; i++) {
+		expect(outState[0][i]).toBeCloseTo(freshState[0][i], 15)
+		expect(outState[1][i]).toBeCloseTo(freshState[1][i], 15)
+	}
+})
+
+test('frameToFrame supports an in-place state transform through a rotating frame', () => {
+	const original: PositionAndVelocity = [
+		[0.4, -0.6, 0.3],
+		[1e-4, 2e-4, -3e-4],
+	]
+	const inPlace: PositionAndVelocity = [[...original[0]], [...original[1]]]
+	const expected = frameToFrame(original, ICRS, ITRS, TIME)
+	const result = frameToFrame(inPlace, ICRS, ITRS, TIME, inPlace)
+	expect(result).toBe(inPlace)
+	for (let i = 0; i < 3; i++) {
+		expect(inPlace[0][i]).toBeCloseTo(expected[0][i], 15)
+		expect(inPlace[1][i]).toBeCloseTo(expected[1][i], 15)
+	}
+})

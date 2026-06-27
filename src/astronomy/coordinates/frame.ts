@@ -181,59 +181,91 @@ export function itrfToTeme<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T
 	return itrfToTemeByGmst(pv, greenwichMeanSiderealTime(time), polarMotion ? pmMatrix(time) : undefined)
 }
 
-// Applies a frame rotation to a position and velocity at time.
-export function frameAt<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, frame: Frame, time: Time): T extends Vec3 ? Vec3 : PositionAndVelocity {
+// Applies a frame rotation (base -> frame) to a position or full state at time.
+// Pass `o` to write the result into an existing vector or state and avoid
+// allocation; `o` may alias `pv` for an in-place transform.
+export function frameAt<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, frame: Frame, time: Time, o?: T extends Vec3 ? MutVec3 : PositionAndVelocity): T extends Vec3 ? Vec3 : PositionAndVelocity {
 	const r = frame.rotationAt(time)
 
 	if (pv.length === 3) {
-		return matMulVec(r, pv) as never
-	} else {
-		const p = matMulVec(r, pv[0])
-		const v = matMulVec(r, pv[1])
-
-		if (frame.dRdtTimesRtAt) {
-			const w = frame.dRdtTimesRtAt(time)
-			vecPlus(v, matMulVec(w, p), v)
-		}
-
-		return [p, v] as never
+		return matMulVec(r, pv, o as MutVec3 | undefined) as never
 	}
+
+	const out = o as PositionAndVelocity | undefined
+	const p = matMulVec(r, pv[0], out?.[0])
+	const v = matMulVec(r, pv[1], out?.[1])
+
+	if (frame.dRdtTimesRtAt) {
+		// p is already the transformed (frame) position, so W · p adds the drag term.
+		vecPlus(v, matMulVec(frame.dRdtTimesRtAt(time), p), v)
+	}
+
+	if (out) {
+		out[0] = p
+		out[1] = v
+		return out as never
+	}
+
+	return [p, v] as never
 }
 
-// Rotates a position (and optional velocity) from `frame` back into the base
-// (GCRS/ICRS-oriented) frame. This is the exact inverse of `frameAt`.
+// Rotates a position or full state from `frame` back into the base
+// (GCRS/ICRS-oriented) frame. This is the exact inverse of `frameAt`. Pass `o`
+// to avoid allocation; `o` may alias `pv` for an in-place transform.
 //
 // For position:  p_base = Rᵀ · p_frame.
 // For a rotating frame (R = R(t)) the velocity must undo the drag term first:
 //   v_frame = R · v_base + (dR/dt) · p_base = R · v_base + W · p_frame,
 //   so v_base = Rᵀ · (v_frame − W · p_frame),  with W = dRdtTimesRtAt.
-// Returns a freshly allocated vector/state; the inputs are not mutated.
-export function frameToBase<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, frame: Frame, time: Time): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function frameToBase<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, frame: Frame, time: Time, o?: T extends Vec3 ? MutVec3 : PositionAndVelocity): T extends Vec3 ? Vec3 : PositionAndVelocity {
 	const r = frame.rotationAt(time)
 
 	if (pv.length === 3) {
-		return matTransposeMulVec(r, pv) as never
+		return matTransposeMulVec(r, pv, o as MutVec3 | undefined) as never
 	}
 
-	const p = matTransposeMulVec(r, pv[0])
+	const out = o as PositionAndVelocity | undefined
 
 	if (frame.dRdtTimesRtAt) {
-		// Undo the rotating-frame drag term before removing the rotation.
-		const v = vecMinus(pv[1], matMulVec(frame.dRdtTimesRtAt(time), pv[0]))
-		return [p, matTransposeMulVec(r, v, v)] as never
+		// Build the drag-corrected velocity from the original position first, since
+		// computing p may overwrite pv[0] when `o` aliases `pv`.
+		const v = vecMinus(pv[1], matMulVec(frame.dRdtTimesRtAt(time), pv[0]), out?.[1])
+		matTransposeMulVec(r, v, v)
+		const p = matTransposeMulVec(r, pv[0], out?.[0])
+
+		if (out) {
+			out[0] = p
+			out[1] = v
+			return out as never
+		}
+
+		return [p, v] as never
 	}
 
-	return [p, matTransposeMulVec(r, pv[1])] as never
+	const p = matTransposeMulVec(r, pv[0], out?.[0])
+	const v = matTransposeMulVec(r, pv[1], out?.[1])
+
+	if (out) {
+		out[0] = p
+		out[1] = v
+		return out as never
+	}
+
+	return [p, v] as never
 }
 
-// Transforms a position (and optional velocity) from one frame into another,
-// composing through the common base:  pv_to = R_to · R_fromᵀ · pv_from.
-// Rotating frames (e.g. ITRS) contribute their angular-velocity term on both
-// legs. Handles only orientation; origin shifts (barycentric/geocentric/
-// topocentric) and the non-linear apparent-place transforms (aberration, light
-// deflection, refraction) are not frame rotations and live elsewhere.
-export function frameToFrame<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, from: Frame, to: Frame, time: Time): T extends Vec3 ? Vec3 : PositionAndVelocity {
-	return frameAt(frameToBase(pv, from, time), to, time) as never
+// Transforms a position or full state from one frame into another, composing
+// through the common base:  pv_to = R_to · R_fromᵀ · pv_from. Rotating frames
+// (e.g. ITRS) contribute their angular-velocity term on both legs. Pass `o` to
+// avoid allocation. Handles only orientation; origin shifts (barycentric/
+// geocentric/topocentric) and the non-linear apparent-place transforms
+// (aberration, light deflection, refraction) are not frame rotations and live
+// elsewhere. To transform many states between the same pair at one time,
+// precompute the matrix once with `frameRotationAt`.
+export function frameToFrame<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, from: Frame, to: Frame, time: Time, o?: T extends Vec3 ? MutVec3 : PositionAndVelocity): T extends Vec3 ? Vec3 : PositionAndVelocity {
+	// Stage the intermediate base state in `o` (when given), then rotate in place.
+	const base = frameToBase(pv, from, time, o)
+	return frameAt(base, to, time, o as never) as never
 }
 
 const NO_TIME: Time = { day: 0, fraction: 0, scale: 0 }

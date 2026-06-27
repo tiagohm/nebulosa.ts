@@ -541,9 +541,9 @@ precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to 
 
 ```ts
 precessionMatrixCapitaine(from, to) // Precession matrix using Capitaine et al. 2003
-frameAt(pv, frame, time) // Apply a frame rotation (base -> frame) to position and velocity at time
-frameToBase(pv, frame, time) // Inverse of frameAt (frame -> base)
-frameToFrame(pv, from, to, time) // Transform a state from one frame to another, composed through the base
+frameAt(pv, frame, time, o?) // Apply a frame rotation (base -> frame) to position and velocity at time
+frameToBase(pv, frame, time, o?) // Inverse of frameAt (frame -> base)
+frameToFrame(pv, from, to, time, o?) // Transform a state from one frame to another, composed through the base
 galactic(pv)
 supergalactic(pv)
 eclipticJ2000(pv)
