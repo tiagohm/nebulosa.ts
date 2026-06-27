@@ -56,6 +56,21 @@ test('ecliptic', () => {
 	expect(formatAZ(lat)).toBe('-042 36 34.23')
 })
 
+test('galactic transforms a state by rotating both position and velocity', () => {
+	// A constant-rotation frame has no rotating-frame term, so position and velocity
+	// rotate by the same matrix; the state path must agree with the vector path.
+	const velocity: Vec3 = [0.0021, -0.0034, 0.0012]
+	const state: PositionAndVelocity = [[...XYZ], velocity]
+	const [position, transformedVelocity] = galactic(state)
+	const positionOnly = galactic(XYZ)
+	const velocityOnly = galactic(velocity)
+
+	for (let i = 0; i < 3; i++) {
+		expect(position[i]).toBeCloseTo(positionOnly[i], 15)
+		expect(transformedVelocity[i]).toBeCloseTo(velocityOnly[i], 15)
+	}
+})
+
 test('teme<->itrf position round trip without polar motion', () => {
 	const p: Vec3 = [4123, -5234, 3045]
 	const back = itrfToTemeByGmst(temeToItrfByGmst(p, 1.7), 1.7)
