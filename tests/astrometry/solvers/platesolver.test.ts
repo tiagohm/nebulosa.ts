@@ -110,6 +110,30 @@ test('singular cd matrix', () => {
 	expect(plateSolutionFrom(header)).toBeUndefined()
 })
 
+test('flipped parity cd matrix', () => {
+	// Negative determinant flips parity; orientation negates cd22 before atan2.
+	const header = plateHeaderFromCd(0.01, 0, 0, -0.01)
+	const solution = plateSolutionFrom(header)
+
+	expect(solution).toBeDefined()
+	expect(solution!.parity).toBe('FLIPPED')
+	expect(toDeg(solution!.orientation)).toBeCloseTo(0, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(0.01, 12)
+	expect(toDeg(solution!.width)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.height)).toBeCloseTo(0.5, 12)
+})
+
+test('missing reference coordinate keywords yield no solution', () => {
+	const base = plateHeaderFromCd(0.01, 0, 0, 0.01)
+	const noRa = { ...base }
+	delete noRa.CRVAL1
+	const noDec = { ...base }
+	delete noDec.CRVAL2
+
+	expect(plateSolutionFrom(noRa)).toBeUndefined()
+	expect(plateSolutionFrom(noDec)).toBeUndefined()
+})
+
 // Builds a minimal TAN-like header around a custom CD matrix.
 function plateHeaderFromCd(cd11: number, cd12: number, cd21: number, cd22: number): FitsHeader {
 	return { CRVAL1: 42, CRVAL2: -17, CD1_1: cd11, CD1_2: cd12, CD2_1: cd21, CD2_2: cd22, IMAGEW: 100, IMAGEH: 50 }
