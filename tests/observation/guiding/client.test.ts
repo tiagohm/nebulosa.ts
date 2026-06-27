@@ -403,6 +403,15 @@ describe('pixel scale', () => {
 		connect(harness, { focalLength: 1000, pixelSize: 5 })
 		expect(harness.client.getPixelScale()).toBeCloseTo(pixelScale(3.8 * 2, 1000), 10)
 	})
+
+	test('averages asymmetric binned camera pixel metadata', () => {
+		harness.camera.pixelSize.x = 3
+		harness.camera.pixelSize.y = 5
+		harness.camera.bin.x.value = 2
+		harness.camera.bin.y.value = 3
+		connect(harness, { focalLength: 1000, pixelSize: 4 })
+		expect(harness.client.getPixelScale()).toBeCloseTo(pixelScale((3 * 2 + 5 * 3) / 2, 1000), 10)
+	})
 })
 
 describe('camera metadata', () => {
