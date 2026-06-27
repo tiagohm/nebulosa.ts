@@ -101,6 +101,29 @@ test('observe propagates non-J2000 epoch to J2000', () => {
 	expect(toDeg(c.declination)).toBeCloseTo(toDeg(ref.declination), 9)
 })
 
+test('star defaults to a static J2000 catalog entry', () => {
+	const s = star(STAR.rightAscension, STAR.declination)
+
+	expect(s.pmRA).toBe(0)
+	expect(s.pmDEC).toBe(0)
+	expect(s.parallax).toBe(0)
+	expect(s.rv).toBe(0)
+	expect(s.rightAscension).toBe(STAR.rightAscension)
+	expect(s.declination).toBe(STAR.declination)
+
+	// With no proper motion, parallax, or radial velocity the BCRS position is
+	// time-invariant: space motion over decades leaves it unchanged.
+	const moved = spaceMotion(s, timeYMDHMS(2050, 1, 1, 0, 0, 0, Timescale.TDB))
+	expect(moved[0][0]).toBeCloseTo(s[0][0], 9)
+	expect(moved[0][1]).toBeCloseTo(s[0][1], 9)
+	expect(moved[0][2]).toBeCloseTo(s[0][2], 9)
+})
+
+test('observeStar requires a location on the time', () => {
+	const noLocation = timeYMDHMS(2003, 8, 26, 0, 37, 38.97381, Timescale.UTC)
+	expect(() => observeStar(STAR, noLocation, [EARTH_BARYCENTRIC_POSITION, EARTH_BARYCENTRIC_VELOCITY], EARTH_HELIOCENTRIC_POSITION, false)).toThrow('time.location is required')
+})
+
 test('sirius', () => {
 	const sirius = star(deg(101.27724), deg(-16.7225), mas(-415.12), mas(-1163.79), mas(378.932), kilometerPerSecond(-10))
 	const time = timeYMDHMS(2025, 7, 27, 15, 0, 0, Timescale.UTC)
