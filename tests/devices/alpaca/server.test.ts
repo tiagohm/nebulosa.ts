@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { Jpeg } from '../../../src/bindings/imaging/libturbojpeg'
 import { makeImageBytesFromFits } from '../../../src/devices/alpaca/server'
+import { AlpacaImageElementType } from '../../../src/devices/alpaca/types'
 import { bitpixInBytes } from '../../../src/io/formats/fits/util'
 import { downloadPerTag } from '../../download'
 import { saveAndCompareHash } from '../../util/image.util'
@@ -21,6 +22,15 @@ test('image bytes metadata header encodes version, rank, and dimensions', async 
 		expect(bytes.readInt32LE(36)).toBe(706) // second dimension
 		expect(bytes.readInt32LE(40)).toBe(channel === 1 ? 0 : 3) // third dimension
 	}
+})
+
+test('image bytes metadata aligns 64-bit payloads', async () => {
+	const buffer = await Bun.file('data/NGC3372--64.1.fit').arrayBuffer()
+	const bytes = makeImageBytesFromFits(Buffer.from(buffer))
+
+	expect(bytes.readInt32LE(16)).toBe(48) // 64-bit payloads start on an 8-byte boundary.
+	expect(bytes.readInt32LE(24)).toBe(AlpacaImageElementType.Double)
+	expect(bytes.byteLength - 48).toBe(1037 * 706 * bitpixInBytes(-64))
 })
 
 test('make image bytes from fits', async () => {
