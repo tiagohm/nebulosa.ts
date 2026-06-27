@@ -893,6 +893,7 @@ describe('firmata indi client', () => {
 		client.createPeripheral(peripheral)
 
 		expect(() => client.createPeripheral(peripheral)).toThrow(/already registered/)
+		expect(() => client.createPeripheral(new FakeThermometer('LM35', firmata as never))).toThrow(/already registered/)
 	})
 
 	test('rejects listenable peripherals without supported INDI measurements', () => {
