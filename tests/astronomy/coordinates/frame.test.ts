@@ -5,7 +5,7 @@ import { ecliptic, eclipticJ2000, galactic, itrfToTeme, itrfToTemeByGmst, preces
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ANGVEL_PER_DAY } from '../../../src/core/constants'
 import { matMul, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
-import type { Vec3 } from '../../../src/math/linear-algebra/vec3'
+import type { MutVec3, Vec3 } from '../../../src/math/linear-algebra/vec3'
 import { formatAZ, normalizeAngle, parseAngle } from '../../../src/math/units/angle'
 
 test('precession matrix capitaine', () => {
@@ -59,7 +59,7 @@ test('ecliptic', () => {
 test('galactic transforms a state by rotating both position and velocity', () => {
 	// A constant-rotation frame has no rotating-frame term, so position and velocity
 	// rotate by the same matrix; the state path must agree with the vector path.
-	const velocity: Vec3 = [0.0021, -0.0034, 0.0012]
+	const velocity: MutVec3 = [0.0021, -0.0034, 0.0012]
 	const state: PositionAndVelocity = [[...XYZ], velocity]
 	const [position, transformedVelocity] = galactic(state)
 	const positionOnly = galactic(XYZ)

@@ -263,7 +263,7 @@ describe('image-based star crossmatching', () => {
 		expect(result.summary.matchedCount).toBe(0)
 	})
 
-	test('rejects invalid right ascension, declination, radius, and camera geometry', async () => {
+	test('rejects invalid right ascension, declination, radius, and camera geometry', () => {
 		const catalog = new MockCatalog([])
 		const camera = { width: 1200, height: 900 }
 		const detectedStars: readonly DetectedStar[] = [{ x: 200, y: 250, flux: 2000, snr: 20, hfd: 2.2 }]
