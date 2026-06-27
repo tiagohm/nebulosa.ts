@@ -143,6 +143,7 @@ describe('add', () => {
 	test('leap day and negative year', () => {
 		const leap = temporalFromDate(2024, 2, 29, 12, 0, 0, 0)
 		expect(temporalToDate(temporalAdd(leap, 1, 'y'))).toEqual([2025, 2, 28, 12, 0, 0, 0])
+		expect(temporalToDate(temporalAdd(temporalFromDate(2024, 1, 31, 0, 0, 0, 0), 1, 'mo'))).toEqual([2024, 2, 29, 0, 0, 0, 0])
 		expect(temporalToDate(temporalAdd(temporalFromDate(0, 1, 31, 0, 0, 0, 0), -1, 'mo'))).toEqual([-1, 12, 31, 0, 0, 0, 0])
 	})
 })

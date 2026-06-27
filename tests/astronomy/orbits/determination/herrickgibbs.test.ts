@@ -36,6 +36,16 @@ test('returns a finite state for a valid smooth short arc', () => {
 	expect(result.diagnostics.warnings).toHaveLength(0)
 })
 
+test('returns a defensive copy of the middle position', () => {
+	const { r1, r2, r3, t1, t2, t3 } = sampleCircular()
+	const result = herrickGibbs(r1, r2, r3, t1, t2, t3, MU)
+
+	;(result.r as MutVec3)[0] = 99
+
+	expect(r2[0]).toBe(1)
+	expect(result.r).not.toBe(r2)
+})
+
 test('keeps AU/day unit consistency with a circular heliocentric sample', () => {
 	const radius = 1.7
 	const { r1, r2, r3, t1, t2, t3 } = sampleCircular(0.04, radius)

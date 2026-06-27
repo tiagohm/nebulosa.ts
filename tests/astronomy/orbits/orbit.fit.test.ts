@@ -137,6 +137,19 @@ test('weights high-uncertainty observations less than precise observations', () 
 	expect(biasedMean).toBeGreaterThan(1e-4)
 })
 
+test('does not mutate the initial state vectors', () => {
+	const observations = makeSyntheticObservations({ count: 3, noiseSigma: 0 })
+	const position = perturbedPosition()
+	const velocity = perturbedVelocity()
+	const positionBefore: MutVec3 = [...position]
+	const velocityBefore: MutVec3 = [...velocity]
+
+	fitOrbit(observations, EPOCH, position, velocity, { maxIterations: 0, computeCovariance: false })
+
+	expect(position).toEqual(positionBefore)
+	expect(velocity).toEqual(velocityBefore)
+})
+
 test('rejects fewer than three observations', () => {
 	const observations = makeSyntheticObservations({ count: 2 })
 

@@ -35,6 +35,16 @@ test('recovers the middle velocity for a circular orbit', () => {
 	expect(result.diagnostics.coplanarityError).toBeLessThan(1e-12)
 })
 
+test('returns a defensive copy of the middle position', () => {
+	const r2 = circularPosition(0)
+	const result = gibbs(circularPosition(-5 * DEG2RAD), r2, circularPosition(5 * DEG2RAD), 1)
+
+	;(result.r as MutVec3)[0] = 99
+
+	expect(r2[0]).toBe(1)
+	expect(result.r).not.toBe(r2)
+})
+
 test('recovers the middle velocity for an elliptical orbit sample', () => {
 	const spacing = 6 * DEG2RAD
 	const middleAnomaly = 0.45

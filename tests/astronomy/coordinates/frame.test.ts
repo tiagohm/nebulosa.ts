@@ -23,6 +23,11 @@ test('precession matrix capitaine', () => {
 	expect(m[8]).toBeCloseTo(0.999999830006320645, 15)
 })
 
+test('precession matrix is identity for the same epoch', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TT)
+	expect(precessionMatrixCapitaine(t, t)).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1])
+})
+
 const RA = parseAngle('14h 39 20.75')!
 const DEC = parseAngle('-60 49 57.9')!
 const XYZ = eraS2c(RA, DEC)

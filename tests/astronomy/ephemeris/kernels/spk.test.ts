@@ -68,9 +68,16 @@ test('type 9 odd interpolation window is centered on the closest epoch', async (
 })
 
 test('overlapping segments use the latest matching segment in file order', async () => {
-	const spk = readSpk(dafFrom([10, 10, 1, 0, 0, 0, 20, 5, 1, 10, 10, 2, 0, 0, 0, 20, 5, 1], [summary(0, 1, 0, 20, 2, 1, 9), summary(0, 1, 0, 20, 2, 10, 18)]))
+	const spk = readSpk(dafFrom([10, 10, 1, 0, 0, 0, 20, 5, 1, 10, 10, 2, 0, 0, 0, 20, 5, 1], [summary(0, 1, 0, 20, 2, 1, 9), summary(0, 1, 10, 20, 2, 10, 18)]))
+	const [earlyPosition, earlyVelocity] = await spk.segment(0, 1)!.at({ day: J2000, fraction: 5 / DAYSEC, scale: Timescale.TDB })
 	const [p, v] = await spk.segment(0, 1)!.at({ day: J2000, fraction: 10 / DAYSEC, scale: Timescale.TDB })
 
+	expect(earlyPosition[0]).toBeCloseTo(1 / AU_KM, 15)
+	expect(earlyPosition[1]).toBeCloseTo(0, 15)
+	expect(earlyPosition[2]).toBeCloseTo(0, 15)
+	expect(earlyVelocity[0]).toBeCloseTo(0, 15)
+	expect(earlyVelocity[1]).toBeCloseTo(0, 15)
+	expect(earlyVelocity[2]).toBeCloseTo(0, 15)
 	expect(p[0]).toBeCloseTo(2 / AU_KM, 15)
 	expect(p[1]).toBeCloseTo(0, 15)
 	expect(p[2]).toBeCloseTo(0, 15)

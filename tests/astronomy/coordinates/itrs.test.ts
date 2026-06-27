@@ -37,6 +37,15 @@ test('places equatorial prime-meridian point on the +x axis', () => {
 	expect(toMeter(z)).toBeCloseTo(0, 6)
 })
 
+test('adds elevation along the local geodetic normal', () => {
+	const p = geodeticLocation(deg(0), deg(0), meter(1000), Ellipsoid.WGS84)
+	const [x, y, z] = itrs(p)
+
+	expect(toMeter(x)).toBeCloseTo(6379137, 3)
+	expect(toMeter(y)).toBeCloseTo(0, 6)
+	expect(toMeter(z)).toBeCloseTo(0, 6)
+})
+
 test('places the north pole on the +z axis below the equatorial radius', () => {
 	const p = geodeticLocation(deg(0), deg(90), meter(0), Ellipsoid.WGS84)
 	const [x, y, z] = itrs(p)

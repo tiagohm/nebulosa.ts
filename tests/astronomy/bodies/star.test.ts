@@ -53,6 +53,7 @@ test('space motion', () => {
 	expect(b[0][0]).toBeCloseTo(5448758.569350527599453926, 5)
 	expect(b[0][1]).toBeCloseTo(-646839.923422771040350199, 5)
 	expect(b[0][2]).toBeCloseTo(7093562.290912019088864326, 5)
+	expect(b[1]).toEqual(s[1])
 
 	const eq = equatorial(b[0])
 	expect(toDeg(normalizeAngle(eq[0]))).toBeCloseTo(353.229915499721528249, 11)

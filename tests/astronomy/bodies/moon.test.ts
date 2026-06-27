@@ -133,6 +133,7 @@ describe('nearest lunar apsis', () => {
 		const a = nearestLunarApsis(timeYMDHMS(2026, 1, 1), 'APOGEE', true)
 		expect(timeToDate(a[0]).slice(0, 5)).toEqual([2026, 1, 13, 20, 48])
 		expect(toKilometer(a[1])).toBeCloseTo(405436, 0)
+		expect(toArcsec(a[2])).toBeCloseTo(1768.337, 3)
 
 		const b = nearestLunarApsis(timeYMDHMS(2026, 1, 13, 20, 50), 'APOGEE', false)
 		expect(timeToDate(b[0]).slice(0, 5)).toEqual([2026, 1, 13, 20, 48])
@@ -147,6 +148,7 @@ describe('nearest lunar apsis', () => {
 		const a = nearestLunarApsis(timeYMDHMS(2026, 1, 1), 'PERIGEE', true)
 		expect(timeToDate(a[0]).slice(0, 5)).toEqual([2026, 1, 1, 21, 44])
 		expect(toKilometer(a[1])).toBeCloseTo(360347, 0)
+		expect(toArcsec(a[2])).toBeCloseTo(1989.603, 3)
 
 		const b = nearestLunarApsis(timeYMDHMS(2026, 1, 1, 21, 46), 'PERIGEE', false)
 		expect(timeToDate(b[0]).slice(0, 5)).toEqual([2026, 1, 1, 21, 44])

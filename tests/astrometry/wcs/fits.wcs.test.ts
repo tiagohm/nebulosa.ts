@@ -162,6 +162,8 @@ describe('is wcs fits keyword', () => {
 		expect(isWcsFitsKeyword('PV1_0')).toBeTrue()
 		expect(isWcsFitsKeyword('AP_2_1')).toBeTrue()
 		expect(isWcsFitsKeyword('BP_ORDER')).toBeTrue()
+		expect(isWcsFitsKeyword('A_DMAX')).toBeTrue()
+		expect(isWcsFitsKeyword('B_DMAX')).toBeTrue()
 	})
 
 	test('rejects unrelated or malformed FITS keywords', () => {

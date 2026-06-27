@@ -242,6 +242,15 @@ describe('SIP fitting', () => {
 		expect(() => fitSipDistortion(syntheticStars().slice(0, countSipTerms(3)), WCS, { order: 3, spatialDistribution: 'off' })).toThrow('more stars than coefficients')
 	})
 
+	test('warns or fails when stars are below the recommended coefficient ratio', () => {
+		const stars = [0, 9, 10, 19, 30, 49, 60, 79].map((index) => syntheticStars()[index])
+		const result = fitSipDistortion(stars, WCS, { order: 3, spatialDistribution: 'off' })
+
+		expect(result.usedStarCount).toBe(stars.length)
+		expect(result.diagnostics.warnings.some((warning) => warning.includes('recommended'))).toBeTrue()
+		expect(() => fitSipDistortion(stars, WCS, { order: 3, requireRecommendedStarCount: true, spatialDistribution: 'off' })).toThrow('recommended')
+	})
+
 	test('fails for spatially clustered stars by default', () => {
 		expect(() => fitSipDistortion(clusteredStars(), WCS, { order: 3 })).toThrow('poorly distributed')
 	})
