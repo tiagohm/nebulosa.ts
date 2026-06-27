@@ -175,6 +175,10 @@ test('add many, update, and remove keep the index consistent', () => {
 	expect(index.remove('b')).toBeTrue()
 	expect(index.remove('missing')).toBeFalse()
 	expect(idsOf(index.queryCone(deg(30), 0, deg(10)))).toEqual([])
+
+	index.clear()
+	expect(index.size).toBe(0)
+	expect(idsOf(index.queryCone(deg(120), deg(20), deg(1)))).toEqual([])
 })
 
 test('add many validates the whole batch before mutating the index', () => {
