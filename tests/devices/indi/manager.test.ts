@@ -15,10 +15,10 @@ describe('del property', () => {
 		[Symbol.dispose]() {},
 	}
 
-	function setupDevice<D extends Device>(device: D) {
+	function setupDevice<D extends Device>(device: D, owner: Client = client) {
 		device.id = Bun.randomUUIDv7()
 		device.name = device.type
-		Object.defineProperty(device, CLIENT, { value: client })
+		Object.defineProperty(device, CLIENT, { value: owner })
 		return device
 	}
 
@@ -41,6 +41,22 @@ describe('del property', () => {
 		expect(manager).toHaveLength(0)
 		expect(manager.get(client, device.name)).toBeUndefined()
 		expect(removed).toBe(device)
+	})
+
+	test('close clears only devices owned by the closing client', () => {
+		const otherClient: Client = { ...client, id: 'other' }
+		const manager = new CameraManager()
+		const closing = setupDevice(structuredClone(DEFAULT_CAMERA))
+		const remaining = setupDevice(structuredClone(DEFAULT_CAMERA), otherClient)
+		remaining.name = 'other camera'
+
+		manager.add(closing)
+		manager.add(remaining)
+		manager.close(client, true)
+
+		expect(manager).toHaveLength(1)
+		expect(manager.get(client, closing.name)).toBeUndefined()
+		expect(manager.get(otherClient, remaining.name)).toBe(remaining)
 	})
 
 	test('CameraManager resets deleted INDI properties to defaults', () => {
