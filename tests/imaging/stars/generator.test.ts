@@ -103,6 +103,28 @@ function ringEnergy(buffer: Float64Array, width: number, height: number, centerX
 	return sum
 }
 
+test('colorIndexToRgbWeights returns positive weights that sum to one', () => {
+	for (const colorIndex of [-0.4, 0, 0.5, 1.2, 2]) {
+		const [r, g, b] = colorIndexToRgbWeights(colorIndex)
+		expect(r).toBeGreaterThan(0)
+		expect(g).toBeGreaterThan(0)
+		expect(b).toBeGreaterThan(0)
+		expect(r + g + b).toBeCloseTo(1, 6)
+	}
+})
+
+test('focusDefocusAmount is monotone and bounded in [0, 1]', () => {
+	const best = 50000
+	let previous = -1
+	for (const step of [50000, 60000, 75000, 90000, 100000]) {
+		const amount = focusDefocusAmount(step, best)
+		expect(amount).toBeGreaterThanOrEqual(0)
+		expect(amount).toBeLessThanOrEqual(1)
+		expect(amount).toBeGreaterThanOrEqual(previous)
+		previous = amount
+	}
+})
+
 test('plots a centered mono star with stable flux and sigma mapping', () => {
 	const buffer = new Float64Array(WIDTH * HEIGHT)
 	const flux = 0.3
