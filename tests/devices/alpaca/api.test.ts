@@ -11,6 +11,17 @@ const filterWheel = isAlpacaTestEnabled && configuredDevices?.find((e) => e.Devi
 const focuser = isAlpacaTestEnabled && configuredDevices?.find((e) => e.DeviceType === 'focuser')
 const coverCalibrator = isAlpacaTestEnabled && configuredDevices?.find((e) => e.DeviceType === 'covercalibrator')
 
+test('builds device API endpoint roots without contacting a server', () => {
+	const api = new AlpacaApi('http://example.test:11111/root')
+
+	expect(api.camera.url.toString()).toBe('http://example.test:11111/api/v1/camera/')
+	expect(api.telescope.url.toString()).toBe('http://example.test:11111/api/v1/telescope/')
+	expect(api.filterWheel.url.toString()).toBe('http://example.test:11111/api/v1/filterwheel/')
+	expect(api.focuser.url.toString()).toBe('http://example.test:11111/api/v1/focuser/')
+	expect(api.coverCalibrator.url.toString()).toBe('http://example.test:11111/api/v1/covercalibrator/')
+	expect(api.rotator.url.toString()).toBe('http://example.test:11111/api/v1/rotator/')
+})
+
 if (filterWheel) {
 	test('filter wheel', async () => {
 		await alpaca.filterWheel.connect(filterWheel.DeviceNumber)
