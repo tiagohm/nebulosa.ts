@@ -23,6 +23,17 @@ test('lunation', () => {
 	expect(lunation(timeYMDHMS(2025, 6, 26))).toBe(1268)
 })
 
+test('lunation systems apply their calendar offsets relative to MEEUS', () => {
+	const t = timeYMDHMS(2001, 1, 24, 13, 6)
+	const meeus = lunation(t, 'MEEUS')
+	expect(lunation(t, 'BROWN')).toBe(meeus + 953)
+	expect(lunation(t)).toBe(meeus + 953) // BROWN is the default
+	expect(lunation(t, 'GOLDSTINE')).toBe(meeus + 37105)
+	expect(lunation(t, 'HEBREW')).toBe(meeus + 71234)
+	expect(lunation(t, 'ISLAMIC')).toBe(meeus + 17038)
+	expect(lunation(t, 'THAI')).toBe(meeus + 16843)
+})
+
 test('saros', () => {
 	expect(lunarSaros(timeYMD(2016, 8, 18))).toBe(109)
 	expect(lunarSaros(timeYMD(2016, 9, 16))).toBe(147)
