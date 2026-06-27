@@ -1,7 +1,7 @@
 import { EARTH_DRDT_TIMES_RT_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from '../../core/constants'
 import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, type MutMat3, matRotX, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecMinus, vecPlus } from '../../math/linear-algebra/vec3'
-import { cirsRotationMatrix, gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
+import { cirsRotationMatrix, gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthRotationMatrix, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
 import type { PositionAndVelocity } from './astrometry'
 import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa/erfa'
@@ -132,6 +132,17 @@ export function precessionMatrixCapitaine(from: Time, to: Time) {
 export const ITRS: Frame = {
 	rotationAt: gcrsToItrsRotationMatrix,
 	dRdtTimesRtAt: () => EARTH_DRDT_TIMES_RT_MATRIX,
+}
+
+// Like ITRS, but the velocity drag term uses the exact instantaneous
+// Earth-rotation matrix (dR/dt · Rᵀ at time) instead of the constant mean-rate
+// approximation EARTH_DRDT_TIMES_RT_MATRIX. This captures the small precession,
+// nutation, and polar-motion rate contributions at the cost of three extra
+// rotation evaluations per call. Prefer ITRS unless that velocity precision is
+// required.
+export const ITRS_INSTANTANEOUS: Frame = {
+	rotationAt: gcrsToItrsRotationMatrix,
+	dRdtTimesRtAt: instantaneousEarthRotationMatrix,
 }
 
 // Applies a TEME-to-ITRF rotation using a supplied GMST angle and optional polar-motion matrix.

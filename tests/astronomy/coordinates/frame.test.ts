@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 // oxfmt-ignore
-import { CIRS, ecliptic, ECLIPTIC_J2000, eclipticJ2000, FK5, frameAt, frameRotationAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, ITRS, itrfToTeme, itrfToTemeByGmst, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, precessionMatrixCapitaine, supergalactic, temeToItrf, temeToItrfByGmst, TIRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE } from '../../../src/astronomy/coordinates/frame'
+import { CIRS, ecliptic, ECLIPTIC_J2000, eclipticJ2000, FK5, frameAt, frameRotationAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, ITRS, ITRS_INSTANTANEOUS, itrfToTeme, itrfToTemeByGmst, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, precessionMatrixCapitaine, supergalactic, temeToItrf, temeToItrfByGmst, TIRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE } from '../../../src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ANGVEL_PER_DAY } from '../../../src/core/constants'
 import { type Mat3, matMul, matMulTranspose, matMulVec, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
@@ -265,5 +265,31 @@ test('frameRotationAt transforms the velocity of an inertial frame pair', () => 
 	for (let i = 0; i < 3; i++) {
 		expect(rp[i]).toBeCloseTo(position[i], 15)
 		expect(rv[i]).toBeCloseTo(velocity[i], 15)
+	}
+})
+
+test('ITRS_INSTANTANEOUS matches ITRS closely but uses the exact drift term', () => {
+	const state: PositionAndVelocity = [
+		[0.4, -0.6, 0.3],
+		[1e-4, 2e-4, -3e-4],
+	]
+	const approx = frameAt(state, ITRS, TIME)
+	const exact = frameAt(state, ITRS_INSTANTANEOUS, TIME)
+
+	// Positions are identical (same rotationAt); velocities differ only by the
+	// small precession/nutation/polar-motion rate contributions to the drag term.
+	for (let i = 0; i < 3; i++) {
+		expect(exact[0][i]).toBeCloseTo(approx[0][i], 15)
+		expect(exact[1][i]).toBeCloseTo(approx[1][i], 4)
+	}
+	const dv = Math.abs(exact[1][0] - approx[1][0]) + Math.abs(exact[1][1] - approx[1][1]) + Math.abs(exact[1][2] - approx[1][2])
+	expect(dv).toBeGreaterThan(0)
+	expect(dv).toBeLessThan(1e-4)
+
+	// The exact frame still round trips.
+	const back = frameToFrame(frameToFrame(state, ICRS, ITRS_INSTANTANEOUS, TIME), ITRS_INSTANTANEOUS, ICRS, TIME)
+	for (let i = 0; i < 3; i++) {
+		expect(back[0][i]).toBeCloseTo(state[0][i], 12)
+		expect(back[1][i]).toBeCloseTo(state[1][i], 12)
 	}
 })
