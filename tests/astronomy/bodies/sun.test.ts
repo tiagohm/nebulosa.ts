@@ -87,6 +87,14 @@ describe('nearest solar eclipse', () => {
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2043, 4, 9, 18, 56])
 	})
 
+	test('hybrid', () => {
+		// https://www.timeanddate.com/eclipse/solar/2023-april-20
+		const eclipse = nearestSolarEclipse(timeYMD(2023, 4, 1), true)
+		expect(eclipse.type).toBe('hybrid')
+		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2023, 4, 20, 4, 16])
+		expect(eclipse.magnitude).toBeCloseTo(1.013, 2)
+	})
+
 	test('previous', () => {
 		const eclipse = nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 46), false)
 		expect(timeToDate(utc(eclipse.maximalTime)).slice(0, 5)).toEqual([2024, 10, 2, 18, 45])
