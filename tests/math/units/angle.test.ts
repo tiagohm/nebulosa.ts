@@ -391,6 +391,14 @@ test('formatSignedDms', () => {
 	expect(formatSignedDMS(deg(-10))).toBe('-10d00m00.00s')
 })
 
+test('formatRA and formatDEC round-trip through parseAngle', () => {
+	const ra = hour(13.123456)
+	expect(parseAngle(formatRA(ra), true)).toBeCloseTo(ra, 6)
+
+	const dec = deg(-41.987654)
+	expect(parseAngle(formatDEC(dec))).toBeCloseTo(dec, 6)
+})
+
 test('formatRA', () => {
 	expect(formatRA(hour(23.5634453))).toBe('23 33 48.40')
 	expect(formatRA(hour(-23.5634453))).toBe('00 26 11.60')
