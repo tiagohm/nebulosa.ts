@@ -532,7 +532,6 @@ sipModelIntoFitsHeader(model, header)
 
 ```ts
 fk5(ra, dec, distance) // FK5 coordinate from given spherical coordinate
-fk5ToIcrs(frame) // Convert FK5 coordinate to ICRS coordinate
 precessFk5(frame, from, to) // Precess the FK5 coordinate from equinox to other
 precessFk5FromJ2000(frame, equinox) // Precess the FK5 coordinate from J2000 to equinox
 precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to J2000
@@ -550,6 +549,8 @@ galactic(pv)
 supergalactic(pv)
 eclipticJ2000(pv)
 ecliptic(pv, time)
+icrsToFk5(pv) // Convert ICRS to FK5 (J2000) by applying the frame bias
+fk5ToIcrs(pv) // Convert FK5 (J2000) to ICRS by removing the frame bias
 
 // Centralized frames (all implement the Frame interface):
 // ICRS, FK4, FK5, fk5Frame(equinox), GALACTIC, SUPERGALACTIC,
@@ -669,7 +670,6 @@ const rows = await readHygDatabase(source) // Read HYG star database from source
 
 ```ts
 icrs(ra, dec, distance) // ICRS coordinate from given spherical coordinate
-icrsToFk5(frame) // Convert ICRS coordinate to FK5 coordinate
 ```
 
 ### IERS ![](bun.webp) ![](browser.webp)

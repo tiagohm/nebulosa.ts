@@ -1,5 +1,5 @@
-import { FK5_MATRIX, ONE_KILOPARSEC } from '../../core/constants'
-import { matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
+import { ONE_KILOPARSEC } from '../../core/constants'
+import { matMulVec } from '../../math/linear-algebra/mat3'
 import type { MutVec3 } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
@@ -13,12 +13,6 @@ const J2000 = timeJulianYear(2000, Timescale.TT)
 // Convert the FK5 spherical coordinate to FK5 cartesian coordinate.
 export function fk5(ra: Angle, dec: Angle, distance: Distance = ONE_KILOPARSEC): CartesianCoordinate {
 	return eraS2p(ra, dec, distance)
-}
-
-// Convert the FK5 J2000 cartesian coordinate to ICRS cartesian coordinate by removing the frame bias.
-// This applies only the J2000 ICRS/FK5 bias rotation; precess to J2000 first for coordinates at another equinox.
-export function fk5ToIcrs(p: CartesianCoordinate): CartesianCoordinate {
-	return matTransposeMulVec(FK5_MATRIX, p)
 }
 
 // Precess the FK5 cartesian coordinate from equinox to other.

@@ -256,3 +256,16 @@ export function eclipticJ2000<T extends Readonly<PositionAndVelocity> | Vec3>(pv
 export function ecliptic<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, time: Time): T extends Vec3 ? Vec3 : PositionAndVelocity {
 	return frameAt(pv, ECLIPTIC, time)
 }
+
+// Converts an ICRS cartesian coordinate (or state) to FK5 (J2000) by applying
+// the constant frame bias.
+export function icrsToFk5<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T): T extends Vec3 ? Vec3 : PositionAndVelocity {
+	return frameToFrame(pv, ICRS, FK5, NO_TIME)
+}
+
+// Converts an FK5 (J2000) cartesian coordinate (or state) to ICRS by removing
+// the constant frame bias. Precess to J2000 first for coordinates at another
+// equinox.
+export function fk5ToIcrs<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T): T extends Vec3 ? Vec3 : PositionAndVelocity {
+	return frameToFrame(pv, FK5, ICRS, NO_TIME)
+}
