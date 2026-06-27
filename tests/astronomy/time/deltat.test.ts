@@ -35,6 +35,8 @@ test('deltaT picks the most reliable model per regime', () => {
 	expect(deltaT(-1000)).toBeCloseTo(parabolaOfStephensonMorrisonHohenkerk2016.compute(-1000), 9)
 
 	// After the spline it uses Espenak-Meeus forward expressions.
+	expect(deltaT(2019)).toBeCloseTo(s15(2019).compute(2019), 9)
+	expect(deltaT(2020)).toBeCloseTo(deltaTByEspenakMeeus2006(2020), 9)
 	expect(deltaT(2025)).toBeCloseTo(deltaTByEspenakMeeus2006(2025), 9)
 	expect(deltaT(3000)).toBeCloseTo(deltaTByEspenakMeeus2006(3000), 9)
 

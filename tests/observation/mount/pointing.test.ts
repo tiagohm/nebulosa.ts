@@ -82,6 +82,19 @@ test('feature extraction degrades gracefully without observing context', () => {
 	expect(Array.from(features.values).every(Number.isFinite)).toBeTrue()
 })
 
+test('feature configuration preserves explicitly disabled defaults', () => {
+	const configuration = resolveFeatureConfiguration({ includeBias: false, includeAltitudeTerms: false, includeCrossTerms: false, includePierSideTerms: false })
+	const names = buildEmpiricalPointingFeatureNames(configuration)
+
+	expect(configuration.includeBias).toBeFalse()
+	expect(configuration.includeAltitudeTerms).toBeFalse()
+	expect(configuration.includeCrossTerms).toBeFalse()
+	expect(configuration.includePierSideTerms).toBeFalse()
+	expect(names).not.toContain('bias')
+	expect(names).not.toContain('sinAlt')
+	expect(names).not.toContain('pierSide')
+})
+
 test('empirical fit recovers synthetic coefficients and serialization preserves predictions', () => {
 	const featureNames = buildEmpiricalPointingFeatureNames(FEATURE_CONFIGURATION)
 	const dx = coefficientsByName(featureNames, { bias: arcmin(2.5), sinHA: arcmin(-1.4), cosHA: arcmin(0.8), sinDec: arcmin(0.6), pierSide: arcmin(1.2) })

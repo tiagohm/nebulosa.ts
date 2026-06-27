@@ -6,7 +6,7 @@ import { type Angle, deg, normalizeAngle, normalizePI } from '../../math/units/a
 
 const DIRECT_CD_KEY_PATTERN = /^CD\d+_\d+$/
 const PC_KEY_PATTERN = /^PC\d+_\d+$/
-const WCS_FITS_KEY_PATTERN = /^(?:WCSAXES|CUNIT\d+|CTYPE\d+|CRPIX\d+|CRVAL\d+|PS\d+_\d+|PV\d+_\d+|CD\d+_\d+|PC\d+_\d+|CDELT\d+|CROTA\d+|RADESYS|LONPOLE|LATPOLE|EQUINOX|A_\d+_\d+|AP_\d+_\d+|B_\d+_\d+|BP_\d+_\d+|A_ORDER|AP_ORDER|B_ORDER|BP_ORDER)$/
+const WCS_FITS_KEY_PATTERN = /^(?:WCSAXES|CUNIT\d+|CTYPE\d+|CRPIX\d+|CRVAL\d+|PS\d+_\d+|PV\d+_\d+|CD\d+_\d+|PC\d+_\d+|CDELT\d+|CROTA\d+|RADESYS|LONPOLE|LATPOLE|EQUINOX|A_\d+_\d+|AP_\d+_\d+|B_\d+_\d+|BP_\d+_\d+|A_ORDER|AP_ORDER|B_ORDER|BP_ORDER|A_DMAX|B_DMAX)$/
 const SIP_MAX_ITERATIONS = 20
 const SIP_TOLERANCE = 1e-9
 
@@ -34,6 +34,8 @@ export type WcsFitsKeywords =
 	| 'AP_ORDER'
 	| 'B_ORDER'
 	| 'BP_ORDER'
+	| 'A_DMAX'
+	| 'B_DMAX'
 
 export type TanHeader = readonly [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number] // crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, aOrder, bOrder, apOrder, bpOrder
 

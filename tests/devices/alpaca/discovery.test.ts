@@ -79,6 +79,28 @@ test('AlpacaDiscoveryServer responds with one message per registered valid Alpac
 	}
 })
 
+test('AlpacaDiscoveryServer reports lifecycle state and refuses a second start', async () => {
+	const server = new AlpacaDiscoveryServer({ ignoreLocalhost: false })
+
+	try {
+		expect(server.running).toBeFalse()
+		expect(server.port).toBe(-1)
+		expect(await server.start('127.0.0.1', 0, false)).toBe(true)
+		expect(await server.start('127.0.0.1', 0, false)).toBe(false)
+		expect(server.running).toBeTrue()
+		expect(server.port).toBeGreaterThan(0)
+		expect(server.host).toBe('127.0.0.1')
+		expect(server.ip).toBe('127.0.0.1')
+	} finally {
+		server.stop()
+	}
+
+	expect(server.running).toBeFalse()
+	expect(server.port).toBe(-1)
+	expect(server.host).toBeUndefined()
+	expect(server.ip).toBeUndefined()
+})
+
 test('AlpacaDiscoveryServer ignores invalid discovery request payloads', async () => {
 	const server = new AlpacaDiscoveryServer({ ignoreLocalhost: false })
 	const client = await bindUdpClient('127.0.0.1')

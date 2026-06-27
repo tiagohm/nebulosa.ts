@@ -91,6 +91,12 @@ test('overlap defaults to zero when omitted', () => {
 	expect(plan.overlap.y).toBe(0)
 })
 
+test('partial overlap defaults the omitted axis to zero', () => {
+	const plan = planMosaic(defaultInput({ overlap: { x: 0.25 } }))
+	expect(plan.overlap.x).toBe(0.25)
+	expect(plan.overlap.y).toBe(0)
+})
+
 test('overlap determines counts and coverage on the shared plane', () => {
 	const plan = planMosaic(defaultInput({ region: { width: deg(4), height: deg(2) }, overlap: { x: 0.1, y: 0.1 } }))
 	const coverageWidth = planeSize(plan.coverage.width)

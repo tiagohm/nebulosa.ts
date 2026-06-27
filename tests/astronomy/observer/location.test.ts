@@ -49,6 +49,17 @@ test('geodetic and geocentric locations are inverses', () => {
 	expect(q.elevation).toBeCloseTo(p.elevation, 16)
 })
 
+test('geocentric location preserves the selected ellipsoid', () => {
+	const p = geodeticLocation(deg(-70.6693), deg(-33.4489), meter(520), Ellipsoid.WGS84)
+	const [x, y, z] = itrs(p)
+	const q = geocentricLocation(x, y, z, Ellipsoid.WGS84)
+
+	expect(q.ellipsoid).toBe(Ellipsoid.WGS84)
+	expect(q.longitude).toBeCloseTo(p.longitude, 15)
+	expect(q.latitude).toBeCloseTo(p.latitude, 15)
+	expect(q.elevation).toBeCloseTo(p.elevation, 16)
+})
+
 test('polar radius', () => {
 	expect(polarRadius(Ellipsoid.IERS2010)).toBeCloseTo(0.000042492261609253282, 20)
 	expect(polarRadius(Ellipsoid.WGS84)).toBeCloseTo(0.000042492264659253469, 20)

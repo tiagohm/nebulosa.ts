@@ -22,6 +22,8 @@ test('known reference points', () => {
 	expect(toFahrenheit(0)).toBeCloseTo(32, 12)
 	expect(toKelvin(0)).toBeCloseTo(273.15, 12)
 	expect(toFahrenheit(-40)).toBeCloseTo(-40, 12)
+	expect(kelvin(0)).toBeCloseTo(-273.15, 12)
+	expect(kelvin(273.15)).toBeCloseTo(0, 12)
 })
 
 test('conversions round-trip', () => {

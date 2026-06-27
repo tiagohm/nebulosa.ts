@@ -58,6 +58,14 @@ test('DAF/SPK', async () => {
 	expect(daf.summaries[14].ints).toEqual(new Int32Array([499, 4, 1, 2, 2098633, 2098644]))
 })
 
+test('DAF/SPK from buffer source', async () => {
+	const daf = await readDaf(bufferSource(await fs.readFile('data/de421.bsp')))
+
+	expect(daf.summaries).toHaveLength(15)
+	expect(daf.summaries[0].name).toBe('DE-0421LE-0421')
+	expect(daf.summaries[0].ints).toEqual(new Int32Array([1, 0, 1, 2, 641, 310404]))
+})
+
 test('truncated file record is rejected', async () => {
 	// A NAIF/DAF header in a buffer too short to hold the 1024-byte file record.
 	const buffer = Buffer.alloc(500)

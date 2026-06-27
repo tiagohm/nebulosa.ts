@@ -68,6 +68,16 @@ describe('parse header', () => {
 		expect(hdus[1].compression).toEqual({ format: 'zstd', shuffled: true, uncompressedSize: 1464244, itemSize: 2 })
 		expect(hdus[1].header).toEqual({ SIMPLE: true, NAXIS: 3, NAXIS1: 4096, NAXIS2: 4096, NAXIS3: 4, BITPIX: -32 })
 	})
+
+	test('unsupported images are skipped without aborting the header', () => {
+		const XML = `<xisf version="1.0"><Image geometry="1:1:1" sampleFormat="UInt64" colorSpace="Gray" location="attachment:16:8"></Image><Image geometry="2:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:24:4"></Image><Image geometry="1:1:3" sampleFormat="UInt8" colorSpace="CIELab" location="attachment:28:3"></Image></xisf>`
+		const hdus = parseXisfHeader(Buffer.from(XML))
+
+		expect(hdus).toHaveLength(1)
+		expect(hdus[0].geometry).toEqual({ width: 2, height: 1, channels: 1 })
+		expect(hdus[0].sampleFormat).toBe('UInt16')
+		expect(hdus[0].location).toEqual({ offset: 24, size: 4 })
+	})
 })
 
 describe('read', () => {

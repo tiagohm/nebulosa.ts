@@ -57,6 +57,15 @@ test('comet', () => {
 	expect(halley!.perihelionDayFraction).toBeCloseTo(0.8266, 14)
 })
 
+test('unnumbered comet has no parsed number', () => {
+	const comet = mpcorbComet(`    C${HALLEY.slice(5)}`)
+
+	expect(comet).toBeDefined()
+	expect(comet!.number).toBeUndefined()
+	expect(comet!.orbitType).toBe('C')
+	expect(comet!.designation).toBe('1P/Halley')
+})
+
 test('empty lines yield no orbit', () => {
 	expect(mpcorb('')).toBeUndefined()
 	expect(mpcorbComet('')).toBeUndefined()

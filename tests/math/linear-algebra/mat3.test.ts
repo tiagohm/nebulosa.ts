@@ -183,6 +183,21 @@ describe('mul transpose', () => {
 	test('AT * BT', () => {
 		expect(matTransposeMulTranspose(m, m)).toEqual([30, 66, 102, 36, 81, 126, 42, 96, 150])
 	})
+
+	test('supports output aliasing the left operand', () => {
+		const atb: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+		const abt: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+		const atbt: MutMat3 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+		expect(matTransposeMul(atb, m, atb)).toBe(atb)
+		expect(atb).toEqual([66, 78, 90, 78, 93, 108, 90, 108, 126])
+
+		expect(matMulTranspose(abt, m, abt)).toBe(abt)
+		expect(abt).toEqual([14, 32, 50, 32, 77, 122, 50, 122, 194])
+
+		expect(matTransposeMulTranspose(atbt, m, atbt)).toBe(atbt)
+		expect(atbt).toEqual([30, 66, 102, 36, 81, 126, 42, 96, 150])
+	})
 })
 
 test('rodrigues rotation matrix', () => {

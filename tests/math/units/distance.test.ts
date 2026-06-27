@@ -1,6 +1,7 @@
 import { expect, test, describe } from 'bun:test'
 import { ONE_ATM } from '../../../src/core/constants'
 import { fromPressure, kilometer, lightYear, meter, parsec, toKilometer, toLightYear, toMeter, toParsec } from '../../../src/math/units/distance'
+import { pressureFrom } from '../../../src/math/units/pressure'
 
 test('meter converts meters to AU and back', () => {
 	expect(toMeter(meter(1))).toBeCloseTo(1, 15)
@@ -42,5 +43,10 @@ describe('fromPressure', () => {
 	test('estimates 1000 m altitude pressure', () => {
 		// Standard atmosphere pressure around 1000 m.
 		expect(toMeter(fromPressure(898.746, 15))).toBeCloseTo(1000, 1)
+	})
+
+	test('round-trips tropospheric pressure altitude', () => {
+		const altitude = meter(2500)
+		expect(toMeter(fromPressure(pressureFrom(altitude, 12), 12))).toBeCloseTo(toMeter(altitude), 9)
 	})
 })

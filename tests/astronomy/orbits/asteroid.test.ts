@@ -3,6 +3,8 @@ import type { CartesianCoordinate } from '../../../src/astronomy/coordinates/coo
 import { KeplerOrbit, eccentricAnomaly, meanAnomaly, mpcAsteroid, mpcComet, stumpff, timeSincePeriapsis, trueAnomalyHyperbolic, trueAnomalyParabolic } from '../../../src/astronomy/orbits/asteroid'
 import { mpcorb, mpcorbComet } from '../../../src/astronomy/orbits/mpcorb'
 import { Timescale, time, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { GM_SUN_PITJEVA_2005 } from '../../../src/core/constants'
+import { matIdentity } from '../../../src/math/linear-algebra/mat3'
 
 const t = timeYMDHMS(2025, 4, 21, 12, 0, 0, Timescale.TT)
 
@@ -98,6 +100,19 @@ test('osculating elements', () => {
 	expect(vesta.semiMinorAxis).toBeCloseTo(2.3517704261984225, 11)
 	expect(vesta.trueAnomaly).toBeCloseTo(5.635196311613598, 11)
 	expect(vesta.trueLongitude).toBeCloseTo(3.832725224445305, 11)
+})
+
+test('propagation at epoch preserves the input state without rotation', () => {
+	const position: CartesianCoordinate = [-1.70317472297052, -1.333843040283118, -3.086709149679688e-1]
+	const velocity: CartesianCoordinate = [7.882762615954012e-3, -8.079478592200335e-3, -4.254433056153772e-3]
+	const epoch = time(2460787, 0, Timescale.TDB)
+	const orbit = new KeplerOrbit(position, velocity, epoch, GM_SUN_PITJEVA_2005, matIdentity())
+	const [p, v] = orbit.at(epoch)
+
+	for (let i = 0; i < 3; i++) {
+		expect(p[i]).toBeCloseTo(position[i], 15)
+		expect(v[i]).toBeCloseTo(velocity[i], 15)
+	}
 })
 
 test('stumpff', () => {

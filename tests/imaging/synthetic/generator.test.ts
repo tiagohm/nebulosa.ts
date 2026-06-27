@@ -197,6 +197,7 @@ describe('generate astronomical image noise', () => {
 	test('validates the buffer length against dimensions and layout', () => {
 		expect(() => generateNoiseImage(new Float64Array(3), 2, 2, 1, baseConfig())).toThrow()
 		expect(() => generateNoiseImage(new Float64Array(4), 2, 2, 3, { ...baseConfig() })).toThrow()
+		expect(() => generateNoiseImage(new Float64Array(4), 2, 2, 1, baseConfig({ seed: Number.NaN }))).toThrow('seed must be finite')
 	})
 
 	test('keeps RGB channel means aligned under neutral channel settings', () => {

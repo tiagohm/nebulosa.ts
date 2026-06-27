@@ -241,6 +241,8 @@ test('PCHIP boundary behavior is explicit', () => {
 	expect(extrapolated.compute(-5)).toBeCloseTo(-10, 15)
 	expect(extrapolated.compute(15)).toBeCloseTo(30, 15)
 	expect(booleanExtrapolated.compute(15)).toBeCloseTo(30, 15)
+	expect(thrown.compute(0)).toBeCloseTo(0, 15)
+	expect(thrown.compute(10)).toBeCloseTo(20, 15)
 	expect(() => thrown.compute(-1)).toThrow('pchip value is outside interpolation range')
 })
 

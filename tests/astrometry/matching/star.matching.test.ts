@@ -399,6 +399,14 @@ describe('star matching synthetic registration', () => {
 		expect(result.similarity?.mirrored).toBeTrue()
 	})
 
+	test('rejects mirrored data when mirror matching is disabled', () => {
+		const scenario = generateScenario({ seed: 31, transform: similarity(1.01, 0.44, 130, 42, true), noiseStd: 0.12 })
+		const result = matchStars(scenario.reference, scenario.current, { allowMirror: false, allowAffineFallback: false, minInliers: 12 })
+		expect(result.success).toBeFalse()
+		expect(result.failureReason).toBeDefined()
+		expect(result.matches).toHaveLength(0)
+	})
+
 	test('handles partial overlap, missing stars, outliers, and centroid noise', () => {
 		const scenario = generateScenario({ seed: 4, transform: similarity(0.99, -0.38, 95, 28), noiseStd: 0.35, currentDropFraction: 0.35, referenceDropFraction: 0.15, currentOutliers: 18, referenceOutliers: 8, currentCrop: { left: 40, top: 30, right: 620, bottom: 520 } })
 		const result = matchStars(scenario.reference, scenario.current, { maxStars: 120, finalMatchRadius: 3, initialMatchRadius: 12, minInliers: 10 })

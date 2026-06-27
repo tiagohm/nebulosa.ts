@@ -59,6 +59,14 @@ test('precessing to and from J2000 round-trips', () => {
 	expect(back[2]).toBeCloseTo(original[2], 14)
 })
 
+test('frame rotations preserve vector length', () => {
+	const e = timeYMDHMS(1975, 1, 1, 12, 0, 0, Timescale.TT)
+	const p = fk5(deg(10.625), deg(41.2), 3)
+
+	expect(vecLength(precessFk5FromJ2000(p, e))).toBeCloseTo(vecLength(p), 14)
+	expect(vecLength(fk5ToIcrs(p))).toBeCloseTo(vecLength(p), 14)
+})
+
 test('precessFk5 matches the J2000 convenience wrappers', () => {
 	const from = timeYMDHMS(2000, 1, 1, 12, 0, 0, Timescale.TT)
 	const to = timeYMDHMS(1975, 1, 1, 12, 0, 0, Timescale.TT)

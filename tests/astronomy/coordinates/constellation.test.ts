@@ -33,6 +33,11 @@ test('covers the canonical 88 IAU constellations', () => {
 	expect(Object.keys(CONSTELLATIONS)).toHaveLength(88)
 })
 
+test('normalizes right ascension before lookup', () => {
+	expect(constellation(hour(-1), deg(10), false)).toBe(constellation(hour(23), deg(10), false))
+	expect(constellation(hour(25), deg(-20), false)).toBe(constellation(hour(1), deg(-20), false))
+})
+
 test('returns a valid constellation across the whole sky', () => {
 	// Every RA/Dec lies in exactly one constellation, so a dense sweep must never
 	// fall outside the lookup table (guards the RA_TO_INDEX bounds).

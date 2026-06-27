@@ -137,6 +137,17 @@ describe('stacker batch mode', () => {
 		expectRawClose(result.finalImage!.raw, image.raw)
 	})
 
+	test('rejects an invalid reference image shape with diagnostics', () => {
+		const image = makeImage(0, 10, 1, () => 1)
+		const result = stackFrames([makeFrame(image, makeStars())], DEFAULT_STACK_OPTIONS)
+
+		expect(result.acceptedFrames).toBe(0)
+		expect(result.rejectedFrames).toBe(1)
+		expect(result.referenceFrameIndex).toBe(0)
+		expect(result.finalImage).toBeUndefined()
+		expect(result.diagnostics[0].reason).toBe('invalid-image-shape')
+	})
+
 	test('uses explicit reference selection and weighted average', () => {
 		const stars = makeStars()
 		const frames = [makeFrame(makeImage(12, 12, 1, 1), stars, 1), makeFrame(makeImage(12, 12, 1, 2), stars, 2), makeFrame(makeImage(12, 12, 1, 4), stars, 1)]

@@ -1001,6 +1001,16 @@ test('calibrate applies flat normalization even without dark or bias frames', ()
 	expectImageValues(light, [0.9, 0.3], 6)
 })
 
+test('calibrate subtracts dark-flat from flat normalization without bias', () => {
+	const light = makeImage(2, 1, 1, [0.8, 0.4])
+	const flat = makeImage(2, 1, 1, [0.5, 1])
+	const darkFlat = makeImage(2, 1, 1, [0.1, 0.2])
+
+	calibrate(light, undefined, flat, undefined, darkFlat)
+
+	expectImageValues(light, [1.2, 0.3], 6)
+})
+
 test('calibrate rescales the dark background when exposure times differ', () => {
 	const light = makeImage(1, 1, 1, [0.8])
 	const dark = makeImage(1, 1, 1, [0.3])

@@ -12,6 +12,7 @@ export interface AstrometricInterpolatorOptions {
 }
 
 const CUBIC_CONVOLUTION_DEFAULT_TENSION = -0.5
+const MIN_INTERPOLATED_VECTOR_LENGTH = 1e-12
 
 // Returns an integer grid index clamped to [0, max].
 function clampIndex(value: number, max: number) {
@@ -153,7 +154,7 @@ export class AstrometricInterpolator {
 		const vz = vector[2]
 		const length = Math.sqrt(vx * vx + vy * vy + vz * vz)
 
-		if (!(length > 0) || !Number.isFinite(length)) return this.nearestSky(gx, gy, out)
+		if (!(length > MIN_INTERPOLATED_VECTOR_LENGTH) || !Number.isFinite(length)) return this.nearestSky(gx, gy, out)
 
 		const nx = vx / length
 		const ny = vy / length

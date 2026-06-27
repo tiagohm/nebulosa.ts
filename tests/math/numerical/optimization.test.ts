@@ -43,6 +43,15 @@ describe('root finding', () => {
 		expect(result.value).toBe(0)
 	})
 
+	test('bisection accepts a root at a bracket endpoint', () => {
+		const result = bisection((x) => x * x - 4, 2, 5)
+
+		expect(result.converged).toBe(true)
+		expect(result.root).toBe(2)
+		expect(result.value).toBe(0)
+		expect(result.iterations).toBe(0)
+	})
+
 	test('accepts a root at the upper bracket endpoint', () => {
 		const result = brentRoot((x) => x * x - 4, -5, 2)
 

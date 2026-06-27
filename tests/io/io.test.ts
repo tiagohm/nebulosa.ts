@@ -487,6 +487,21 @@ describe('rangeHttpSource', () => {
 		}
 	})
 
+	test('honors destination offset and size', async () => {
+		const restore = mockRangeFetch(Buffer.from('abcdefghijklmnopqrstuvwxyz'))
+
+		try {
+			const source = rangeHttpSource('https://example.test/data')
+			const output = Buffer.alloc(8, 32)
+
+			expect(await source.read(output, 2, 4)).toBe(4)
+			expect(output.toString('ascii')).toBe('  abcd  ')
+			expect(source.position).toBe(4)
+		} finally {
+			globalThis.fetch = restore
+		}
+	})
+
 	test('reads large ranges across multiple stream chunks', async () => {
 		const data = Buffer.allocUnsafe(0x10000 + 257)
 		for (let i = 0; i < data.byteLength; i++) data[i] = i & 0xff

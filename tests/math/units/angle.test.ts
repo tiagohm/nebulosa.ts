@@ -336,6 +336,11 @@ describe('formatAngle', () => {
 		expect(formatAngle(deg(-23.5634453), options)).toBe('-23 33 48.40308000')
 	})
 
+	test('padLength', () => {
+		expect(formatAngle(deg(7.5), { padLength: 3, noSign: true })).toBe('007 30 00.00')
+		expect(formatAngle(hour(3.25), { isHour: true, padLength: 3, noSign: true })).toBe('003 15 00.00')
+	})
+
 	test('ishourAndFractionDigits', () => {
 		const options: FormatAngleOptions = { isHour: true, fractionDigits: 8 }
 		expect(formatAngle(hour(23.5634453), options)).toBe('+23 33 48.40308000')

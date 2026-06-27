@@ -36,6 +36,8 @@ test('observerState falls back to the geocenter when no location is given', () =
 	expect(geocentric).toBe(BARYCENTRIC)
 
 	const topocentric = observerState(TIME, BARYCENTRIC, LOCATION)
+	expect(topocentric[0]).not.toBe(BARYCENTRIC[0])
+	expect(topocentric[1]).not.toBe(BARYCENTRIC[1])
 	const offset = vecLength([topocentric[0][0] - BARYCENTRIC[0][0], topocentric[0][1] - BARYCENTRIC[0][1], topocentric[0][2] - BARYCENTRIC[0][2]])
 	// La Silla sits ~6378 km from the geocenter, i.e. ~4.3e-5 AU.
 	expect(offset).toBeGreaterThan(3e-5)

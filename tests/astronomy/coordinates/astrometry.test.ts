@@ -89,3 +89,8 @@ test('refracted altitude stays finite and lifts the object at low altitude', () 
 test('no refraction model below the horizon', () => {
 	expect(refractedAltitude(deg(-1))).toBe(deg(-1))
 })
+
+test('zero pressure disables atmospheric refraction', () => {
+	const altitude = deg(35)
+	expect(refractedAltitude(altitude, { pressure: 0 })).toBeCloseTo(altitude, 15)
+})

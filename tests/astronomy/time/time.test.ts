@@ -145,6 +145,12 @@ test('time convert dispatches to the matching scale converter', () => {
 	}
 })
 
+test('time convert returns the same object for an unchanged scale', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TT)
+
+	expect(timeConvert(t, Timescale.TT)).toBe(t)
+})
+
 test('to date', () => {
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toEqual([2020, 1, 1, 12, 0, 0, 0])
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59))).toEqual([2020, 1, 1, 23, 59, 59, 0])

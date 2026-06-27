@@ -19,6 +19,14 @@ describe('backlash compensation', () => {
 		expect(compensator.compute(0, 1100)).toEqual([100])
 	})
 
+	test('absolute clamps compensated target to maximum position', () => {
+		const compensator = new BacklashCompensator({ mode: 'ABSOLUTE', backlashIn: 100, backlashOut: 100 }, 1050)
+
+		expect(compensator.compute(1000, 0)).toEqual([1000])
+		expect(compensator.compute(900, 1000)).toEqual([800])
+		expect(compensator.compute(1050, 800)).toEqual([1050])
+	})
+
 	test('overshoot in', () => {
 		const compensator = new BacklashCompensator({ mode: 'OVERSHOOT', backlashIn: 100, backlashOut: 0 }, 10000)
 

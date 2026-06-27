@@ -86,6 +86,7 @@ test('median of', () => {
 	expect(medianOf([1, 2])).toBe(1.5)
 	expect(medianOf([1, 2, 3])).toBe(2)
 	expect(medianOf([1, 2, 3, 4])).toBe(2.5)
+	expect(medianOf([1, 2, 100, 200], 2)).toBe(1.5)
 	expect(medianOf([])).toBeNaN()
 })
 

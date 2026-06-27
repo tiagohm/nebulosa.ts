@@ -65,6 +65,13 @@ describe('linux', () => {
 		await readCsvAndTest(CSV_WITH_COMMENTS)
 	})
 
+	test('csv with indented comments', () => {
+		expect(readCsv(`name,value\n  # ignored\nalpha,1`, { skipFirstLine: false })).toEqual([
+			['name', 'value'],
+			['alpha', '1'],
+		])
+	})
+
 	test('csv with quoted columns', async () => {
 		await readCsvAndTest(CSV_QUOTED)
 	})

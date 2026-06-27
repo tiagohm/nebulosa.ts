@@ -339,6 +339,15 @@ test('crc honors offset/length relative to a non-zero byteOffset view', () => {
 	expect(CRC.crc8maxim.compute(view, undefined, 0, view.byteLength)).toBe(CRC.crc8maxim.compute(buffer))
 })
 
+test('crc accepts DataView windows', () => {
+	const backing = Buffer.alloc(20, 0xaa)
+	buffer.copy(backing, 4)
+	const view = new DataView(backing.buffer, backing.byteOffset + 4, buffer.byteLength)
+
+	expect(CRC.crc32.compute(view)).toBe(0xcbf43926)
+	expect(CRC.crc8.compute(view, undefined, 0, view.byteLength)).toBe(CRC.crc8.compute(buffer))
+})
+
 test('crc32 should match Bun.hash.crc32', () => {
 	for (let i = 0; i < 1024; i++) {
 		const buffer = Buffer.alloc(1 + Math.floor(Math.random() * 100))

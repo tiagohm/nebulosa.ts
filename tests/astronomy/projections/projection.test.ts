@@ -408,6 +408,15 @@ test('batch projection reuses the provided output buffer', () => {
 	expect(projected![1].y).toBeCloseTo(deg(5), 12)
 })
 
+test('batch projection rejects points outside the projection domain', () => {
+	const projected = projectMany(new Orthographic(0, 0), [
+		{ x: 0, y: 0 },
+		{ x: PI, y: 0 },
+	])
+
+	expect(projected).toBeUndefined()
+})
+
 test('anti-meridian polylines are split before projection', () => {
 	const projection = new PlateCarree()
 

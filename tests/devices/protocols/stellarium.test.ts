@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readCatalogDat, readNamesDat, StellariumCatalog, type StellariumCatalogEntry, type StellariumNameEntry, StellariumObjectType } from '../../../src/devices/protocols/stellarium'
-import { fileHandleSource } from '../../../src/io/io'
+import { BufferSource, fileHandleSource } from '../../../src/io/io'
 import { sphericalSeparation } from '../../../src/math/numerical/geometry'
 import { deg, parseAngle } from '../../../src/math/units/angle'
 import { toLightYear } from '../../../src/math/units/distance'
@@ -98,4 +98,19 @@ test('names', async () => {
 	expect(entries[1382].prefix).toBe('')
 	expect(entries[1382].id).toBe('49')
 	expect(entries[1382].name).toBe('Norma Star Cloud')
+})
+
+test('names skips comments and entries without translated names', async () => {
+	const line = (prefix: string, id: string, name: string) => `${prefix.padEnd(5)}${id.padEnd(15)}${name}`
+	const source = new BufferSource(Buffer.from(['# comment', line('NGC', '40', '_("Bow-Tie Nebula")'), line('IC', '1', 'Plain text name'), line('', '49', '_("Norma Star Cloud")')].join('\n') + '\n'))
+	const entries: StellariumNameEntry[] = []
+
+	for await (const entry of readNamesDat(source)) {
+		entries.push(entry)
+	}
+
+	expect(entries).toEqual([
+		{ prefix: 'NGC', id: '40', name: 'Bow-Tie Nebula' },
+		{ prefix: '', id: '49', name: 'Norma Star Cloud' },
+	])
 })

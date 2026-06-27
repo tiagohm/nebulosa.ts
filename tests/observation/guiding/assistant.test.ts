@@ -93,6 +93,15 @@ test('uses calibrated axis errors when image motion is in a rotated frame', () =
 	expect(result.motion.dec.peakArcsec).toBeCloseTo(2, 8)
 })
 
+test('normalizes non-finite guide-star photometry in sample means', () => {
+	const result = run([[0, 0, 0, { snr: Number.NaN, flux: Number.POSITIVE_INFINITY, hfd: Number.NaN }]])
+
+	expect(result.sampleCount).toBe(1)
+	expect(result.meanSnr).toBe(0)
+	expect(result.meanStarMass).toBe(0)
+	expect(result.meanHfd).toBe(0)
+})
+
 test('requires declination and image scale for polar alignment error', () => {
 	const samples: readonly [number, number, number][] = [
 		[0, 0, 0],
