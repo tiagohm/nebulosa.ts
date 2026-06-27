@@ -194,6 +194,28 @@ test('add many validates the whole batch before mutating the index', () => {
 	expect(index.get('existing')?.rightAscension).toBeCloseTo(deg(20), 14)
 })
 
+test('rejects invalid NSIDE, pixel indices, and radii', () => {
+	// NSIDE must be a power of two in range.
+	expect(() => coordToPixel(3, 0, 0)).toThrow('invalid HEALPix NSIDE')
+	expect(() => coordToPixel(0, 0, 0)).toThrow('invalid HEALPix NSIDE')
+	// Pixel index must lie within [0, 12*nside^2).
+	expect(() => pixelToCenter(4, 12 * 4 * 4)).toThrow('invalid HEALPix pixel index')
+	expect(() => pixelToCenter(4, -1)).toThrow('invalid HEALPix pixel index')
+	// Radius must be a finite value in [0, PI].
+	expect(() => circleToPixels(8, 0, 0, -1)).toThrow('invalid spherical radius')
+	expect(() => circleToPixels(8, 0, 0, PI + 0.1)).toThrow('invalid spherical radius')
+})
+
+test('supports bigint identifiers', () => {
+	const index = new HealpixIndex<string>({ nside: 8 })
+	const id = 9_007_199_254_740_993n // beyond Number.MAX_SAFE_INTEGER
+
+	index.add(id, deg(5), deg(2))
+	index.add(123n, deg(90), deg(45))
+
+	expect(idsOf(index.queryCone(deg(5), deg(2), deg(1)))).toEqual([id])
+})
+
 test('circle cover includes the center pixel for a zero-radius query', () => {
 	const pixel = coordToPixel(8, deg(15), deg(-10))
 	const [longitude, latitude] = pixelToCenter(8, pixel)
