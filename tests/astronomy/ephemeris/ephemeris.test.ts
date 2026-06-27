@@ -82,6 +82,18 @@ test('writes into and returns the provided output buffer', () => {
 	expect(o[1][1]).toBeCloseTo(1, 15)
 })
 
+test('wrapper entry points also write into the provided output buffer', () => {
+	const o: PositionAndVelocity = [
+		[9, 9, 9],
+		[9, 9, 9],
+	]
+	const result = ellipticToRectangularA(2, [2, 0, 0, 0, 0, 0], 0, o)
+
+	expect(result).toBe(o)
+	expect(o[0][0]).toBeCloseTo(2, 15)
+	expect(o[1][1]).toBeCloseTo(1, 15)
+})
+
 test('terminates on a non-finite element instead of looping forever', () => {
 	// A NaN element makes the Newton step non-finite; without the iteration cap
 	// the convergence test never passes and the call would hang. The cap makes it
