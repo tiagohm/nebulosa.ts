@@ -141,6 +141,16 @@ const isEqual = (a: unknown, b: unknown) => a === b
 const isNotEqual = (a: unknown, b: unknown) => a !== b
 const isCloseTo = (decimalPlaces: number) => (a: number, b: number) => roundToNthDecimal(a, decimalPlaces) === b
 
+test('client derives connection metadata from the configured URL', () => {
+	const client = new AlpacaClient('https://example.test/alpaca', { handler }, deviceProvider)
+	const sameUrl = new AlpacaClient('https://example.test/alpaca', { handler }, deviceProvider)
+
+	expect(client.remoteHost).toBe('example.test')
+	expect(client.remotePort).toBe(443)
+	expect(client.description).toBe('Alpaca Client at https://example.test/alpaca')
+	expect(client.id).toBe(sameUrl.id)
+})
+
 const TEST_OPTIONS: TestOptions = { retry: 5, timeout: 60000 }
 
 // ASCOM Omni-Simulators
