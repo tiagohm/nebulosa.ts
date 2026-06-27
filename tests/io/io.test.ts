@@ -161,6 +161,15 @@ test('fileHandleSource', async () => {
 	expect(buffer.toString()).toBe('gabcdef          ')
 })
 
+test('readUntil returns the available bytes when the source ends early', async () => {
+	const source = bufferSource(Buffer.from('abc'))
+	const buffer = Buffer.alloc(10, 32)
+
+	// Requesting more than the source holds must return only what is available.
+	expect(await readUntil(source, buffer, 10)).toBe(3)
+	expect(buffer.toString('ascii', 0, 3)).toBe('abc')
+})
+
 describe('readableStreamSource', async () => {
 	const path = join(tmpdir(), 'c.txt')
 	const handle = await fs.open(path, 'w+', 0o666)
