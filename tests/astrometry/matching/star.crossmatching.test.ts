@@ -276,6 +276,20 @@ describe('image-based star crossmatching', () => {
 		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: deg(1), camera: { width: 1200, height: 900, pixelSize: -1, focalLength: 400 } })).rejects.toThrow()
 	})
 
+	test('keeps extra detected stars unmatched while preserving solved associations', async () => {
+		const scenario = createScenario({ seed: 12, centerRA: deg(132), centerDEC: deg(22), queryOffset: arcsec(190), queryOffsetAngle: 1.4 })
+		const extraDetectedStar: DetectedStar = { x: scenario.camera.width - 40, y: scenario.camera.height - 35, flux: 1500, snr: 12, hfd: 2.8 }
+		const detectedStars = [...scenario.detectedStars, extraDetectedStar]
+		const result = await crossMatchStars(detectedStars, new MockCatalog(scenario.catalogStars), { centerRA: scenario.queryCenterRA, centerDEC: scenario.queryCenterDEC, radius: scenario.queryRadius, camera: scenario.camera })
+
+		expect(result.success).toBeTrue()
+		expect(result.summary.totalDetected).toBe(detectedStars.length)
+		expect(result.summary.matchedCount).toBe(scenario.truthIds.length)
+		expect(result.summary.unmatchedCount).toBe(1)
+		expect(result.matches.at(-1)).toEqual({ detectedStar: extraDetectedStar, detectedIndex: detectedStars.length - 1, status: 'unmatched' })
+		expect(matchedIds(result).slice(0, scenario.truthIds.length)).toEqual([...scenario.truthIds])
+	})
+
 	test('non-mirrored geometry reports mirrored as false with consistent summary counts', async () => {
 		const scenario = createScenario({ seed: 11, centerRA: deg(75), centerDEC: deg(-30), queryOffset: arcsec(160), queryOffsetAngle: 1.1 })
 		const result = await crossMatchStars(scenario.detectedStars, new MockCatalog(scenario.catalogStars), { centerRA: scenario.queryCenterRA, centerDEC: scenario.queryCenterDEC, radius: scenario.queryRadius, camera: scenario.camera })
