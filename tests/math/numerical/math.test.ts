@@ -142,6 +142,17 @@ test('twoProduct', () => {
 	expect(err).toBe(1)
 })
 
+test('exact arithmetic helpers write into provided output buffers', () => {
+	const sum = new Float64Array(2)
+	const product = new Float64Array(2)
+
+	expect(twoSum(1e16, 1, sum)).toBe(sum)
+	expect(Array.from(sum)).toEqual([1e16, 1])
+
+	expect(twoProduct(134217729, 134217729, product)).toBe(product)
+	expect(Array.from(product)).toEqual([18014398777917440, 1])
+})
+
 test('isNearlyEqual', () => {
 	expect(isNearlyEqual(1, 1 + Number.EPSILON)).toBeTrue()
 	expect(isNearlyEqual(1, 1.0000001)).toBeFalse()
