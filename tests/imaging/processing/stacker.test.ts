@@ -121,6 +121,22 @@ describe('stacker live mode', () => {
 })
 
 describe('stacker batch mode', () => {
+	test('returns an empty result for no frames', () => {
+		const result = stackFrames([], DEFAULT_STACK_OPTIONS)
+		expect(result.acceptedFrames).toBe(0)
+		expect(result.rejectedFrames).toBe(0)
+		expect(result.referenceFrameIndex).toBe(-1)
+		expect(result.finalImage).toBeUndefined()
+	})
+
+	test('a single frame stacks to itself as the reference', () => {
+		const image = makeImage(10, 10, 1, (x, y) => ((x * 3 + y * 5) % 11) / 32)
+		const result = stackFrames([makeFrame(image, makeStars())], { ...DEFAULT_STACK_OPTIONS, combinationMethod: 'average' })
+		expect(result.acceptedFrames).toBe(1)
+		expect(result.referenceFrameIndex).toBe(0)
+		expectRawClose(result.finalImage!.raw, image.raw)
+	})
+
 	test('uses explicit reference selection and weighted average', () => {
 		const stars = makeStars()
 		const frames = [makeFrame(makeImage(12, 12, 1, 1), stars, 1), makeFrame(makeImage(12, 12, 1, 2), stars, 2), makeFrame(makeImage(12, 12, 1, 4), stars, 1)]
