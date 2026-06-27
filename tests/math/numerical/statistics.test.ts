@@ -44,6 +44,17 @@ test('histogram cdf is monotonically non-decreasing', () => {
 	}
 })
 
+test('histogram reset clears a selected cached statistic', () => {
+	const data = [1, 0, 0]
+	const hist = new Histogram(data, 2)
+
+	expect(hist.mean).toBe(0)
+	data[2] = 1
+	expect(hist.mean).toBe(0)
+	hist.reset('mean')
+	expect(hist.mean).toBe(1)
+})
+
 test('empty histogram statistics fall back to zero', () => {
 	const hist = new Histogram([], 0)
 	expect(hist.mode).toEqual([0, 0])
