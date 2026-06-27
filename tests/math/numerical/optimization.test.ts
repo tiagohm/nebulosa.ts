@@ -43,6 +43,14 @@ describe('root finding', () => {
 		expect(result.value).toBe(0)
 	})
 
+	test('accepts a root at the upper bracket endpoint', () => {
+		const result = brentRoot((x) => x * x - 4, -5, 2)
+
+		expect(result.converged).toBe(true)
+		expect(result.root).toBe(2)
+		expect(result.value).toBe(0)
+	})
+
 	test('rejects root brackets without a sign change', () => {
 		expect(() => brentRoot((x) => x * x + 1, -1, 1)).toThrow('root bracket endpoints must have opposite signs')
 	})
