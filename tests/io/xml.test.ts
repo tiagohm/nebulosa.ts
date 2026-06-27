@@ -135,6 +135,22 @@ describe('parse', () => {
 		expect(parser.parse('<person gender=""/>')).toEqual([{ name: 'person', attributes: { gender: '' }, children: [], text: '' }])
 	})
 
+	test('parses deeply nested tags', () => {
+		const parser = new SimpleXmlParser()
+		const [root] = parser.parse('<a><b><c><d><e>deep</e></d></c></b></a>')
+
+		let node = root
+		for (const name of ['a', 'b', 'c', 'd', 'e']) {
+			expect(node.name).toBe(name)
+			if (name !== 'e') {
+				expect(node.children).toHaveLength(1)
+				node = node.children[0]
+			}
+		}
+		expect(node.text).toBe('deep')
+		expect(node.children).toBeEmpty()
+	})
+
 	test('mixed content after child tags', () => {
 		const parser = new SimpleXmlParser()
 
