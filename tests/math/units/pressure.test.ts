@@ -16,3 +16,8 @@ test('toPascal', () => {
 test('toAtm', () => {
 	expect(toAtm(45)).toBeCloseTo(0.044411547, 9)
 })
+
+test('conversions round-trip', () => {
+	expect(toPascal(pascal(123.4))).toBeCloseTo(123.4, 9)
+	expect(toAtm(atm(2.5))).toBeCloseTo(2.5, 9)
+})
