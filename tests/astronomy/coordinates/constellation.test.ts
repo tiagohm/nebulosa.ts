@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { constellation } from '../../../src/astronomy/coordinates/constellation'
+import { CONSTELLATIONS, constellation } from '../../../src/astronomy/coordinates/constellation'
 import { Timescale, timeBesselianYear } from '../../../src/astronomy/time/time'
 import { deg, hour } from '../../../src/math/units/angle'
 
@@ -27,4 +27,25 @@ test('constellation', () => {
 
 	expect(constellation(deg(135), deg(65))).toBe('UMA')
 	expect(constellation(hour(15), deg(30))).toBe('BOO')
+})
+
+test('covers the canonical 88 IAU constellations', () => {
+	expect(Object.keys(CONSTELLATIONS)).toHaveLength(88)
+})
+
+test('returns a valid constellation across the whole sky', () => {
+	// Every RA/Dec lies in exactly one constellation, so a dense sweep must never
+	// fall outside the lookup table (guards the RA_TO_INDEX bounds).
+	const seen = new Set<string>()
+
+	for (let raHour = 0; raHour < 24; raHour += 0.5) {
+		for (let decDeg = -89; decDeg <= 89; decDeg += 2) {
+			const result = constellation(hour(raHour), deg(decDeg), false)
+			expect(CONSTELLATIONS[result]).toBeDefined()
+			seen.add(result)
+		}
+	}
+
+	// A sweep this dense should land in a large fraction of the 88 constellations.
+	expect(seen.size).toBeGreaterThan(80)
 })
